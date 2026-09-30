@@ -1,0 +1,7 @@
+error: 's' was moved earlier (by move, an assignment, an argument or a return), so it can't be used here
+  ┌─ tests/diag/use_after_move.volt:9:24
+  │
+8 │     eat(s);
+  │         - moved here
+9 │     std::println("{}", s);
+  │                        ^

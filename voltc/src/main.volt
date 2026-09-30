@@ -1,0 +1,928 @@
+// voltc: the command line. A port of bootstrap/main.rs.
+// It adds emit-llvm and --backend llvm (lgen.volt); `parse` only prints the canonical --sexp form.
+use std::io;
+use { "dirent.h", "poll.h", "unistd.h" } as sys;
+
+// a --pkg or --link argument: NAME=PATH
+struct pkg_arg {
+    name: str;
+    path: str;
+}
+
+// the parsed command line
+struct cli {
+    cmd: str;
+    // the positional arguments: source files (for `lib`, the package name)
+    files: std::vec<str> = {};
+    out: str? = null;
+    std_dir: str? = null;
+    no_std: bool = false;
+    pkgs: std::vec<pkg_arg> = {};
+    links: std::vec<pkg_arg> = {};
+    cc_args: std::vec<str> = {};
+    cfg: std::vec<cfg_arg> = {}; // --cfg [PKG:]KEY[=VALUE]
+    lib: str? = null;             // check --lib NAME
+    shared: bool = false;         // lib --shared: a self-contained shared library, for any language
+    standalone: bool = false;     // lib --static: a self-contained static library, for any language
+    lang: str = "c";              // bindings --lang
+    release: bool = false;
+    leak_check: bool = false;
+    sexp: bool = false;
+    llvm: bool = false; // --backend llvm
+    format: u8 = 0;     // --message-format (FORMAT_HUMAN, FORMAT_SHORT, FORMAT_JSON)
+    color: str = "auto"; // --color auto|always|never
+    error_limit: usize = 20; // --error-limit: errors shown (0: all)
+    // everything after `--`: the arguments for `run`'s program
+    prog_args: std::vec<str> = {};
+}
+
+fn usage() -> never {
+    std::eprintln("usage: voltc <command> FILES... [options]\ncommands:\n  parse FILE --sexp       parse only\n  check FILES            type check\n  emit-c FILES [-o DIR]  print the generated C, or write it as files to DIR\n  emit-llvm FILES        print the generated LLVM IR\n  build FILES [-o OUT]   compile to an executable\n  run FILES [-- ARGS]    build and run\n  lib NAME [-o OUT.a]    precompile package NAME's non-generic code into a static library; with\n                         --shared (OUT.so) or --static, a self-contained library other languages link\n  bindings NAME --lang L declarations of package NAME's export fns for L: c, cpp, rust, zig, python\n  std-dir                print where the std package is\n  lsp                    the language server for editors (JSON-RPC on stdin and stdout)\n  doc NAME               package NAME's declarations and their comments, as JSON\noptions:\n  --release              optimize, wrap on overflow instead of trapping\n  --leak-check           debug: exit 102 if runtime allocations were never freed\n  --std DIR | --no-std   where the std package is (default: $VOLT_STD, then next to voltc)\n  --pkg NAME=PATH        a package: PATH's .volt files, wrapped in namespace NAME\n  --cfg [PKG:]KEY[=VAL]  set KEY (to VAL) for @cfg in the program's files, or in package PKG's\n  --lib NAME             check: package NAME alone, as a library (no program files, no main)\n  --link NAME=LIB.a      take package NAME's non-generic code from a library built by voltc lib\n  --cc ARG               pass ARG to the C compiler when linking (a .c file, -lNAME, ...)\n  --message-format F     how errors are printed: human (default), short (one line each) or json\n  --color WHEN           colour errors: auto (default: on a terminal, unless NO_COLOR is set), always, never\n  --error-limit N        show at most N errors (default 20; 0: all of them)\n  --backend c|llvm       generate C (the default) or native code through LLVM");
+    std::process::exit(2);
+}
+
+// print an error, remove this run's build directories and stop
+fn die(msg: std::string) -> never {
+    std::eprintln("voltc: {}", msg);
+    remove_build_dirs();
+    std::process::exit(1);
+}
+
+// the build directories this run made (fresh_dir): a failed build removes them and their files
+var build_dirs: std::vec<std::string> = {};
+
+fn remove_build_dirs() -> void {
+    for (d&) in build_dirs.items() {
+        val names = list_dir(d.as_str()) ?? continue;
+        for (n&) in names.items() {
+            var p = copy *d;
+            p.push('/');
+            p.append(n.as_str());
+            unlink_path(p.as_str());
+        }
+        rmdir_path(d.as_str());
+    }
+}
+
+// the command, then files and options in any order; a malformed line prints the usage and exits
+fn parse_cli() -> cli {
+    var c: cli = { cmd: std::process::arg(1) ?? usage() };
+    var i: usize = 2;
+    while (i < std::process::arg_count()) {
+        val a = std::process::arg(i) ?? "";
+        i += 1;
+        if (a == "--shared") {
+            c.shared = true;
+        } else if (a == "--static") {
+            c.standalone = true;
+        } else if (a == "--release") {
+            c.release = true;
+        } else if (a == "--leak-check") {
+            c.leak_check = true;
+        } else if (a == "--sexp") {
+            c.sexp = true;
+        } else if (a == "--no-std") {
+            c.no_std = true;
+        } else if (a == "-o" || a == "--std" || a == "--cc" || a == "--pkg" || a == "--link" || a == "--backend" || a == "--message-format" || a == "--color" || a == "--error-limit" || a == "--cfg" || a == "--lib" || a == "--lang") {
+            val v = std::process::arg(i) ?? usage();
+            i += 1;
+            if (a == "--message-format") {
+                if (v == "human") {
+                    c.format = FORMAT_HUMAN;
+                } else if (v == "short") {
+                    c.format = FORMAT_SHORT;
+                } else if (v == "json") {
+                    c.format = FORMAT_JSON;
+                } else {
+                    die(S("--message-format takes human, short or json"));
+                }
+            } else if (a == "--error-limit") {
+                if (v.len == 0) {
+                    die(S("--error-limit takes a number (0: no limit)"));
+                }
+                var n: usize = 0;
+                for (ch) in v {
+                    if (ch < '0' || ch > '9') {
+                        die(S("--error-limit takes a number (0: no limit)"));
+                    }
+                    n = n * 10 + (ch - '0') as usize;
+                }
+                c.error_limit = n;
+            } else if (a == "--color") {
+                if (v != "auto" && v != "always" && v != "never") {
+                    die(S("--color takes auto, always or never"));
+                }
+                c.color = v;
+            } else if (a == "--backend") {
+                if (v != "c" && v != "llvm") {
+                    die(fmt("--backend takes c or llvm, not '{}'", S(v)));
+                }
+                c.llvm = v == "llvm";
+            } else if (a == "-o") {
+                c.out = v;
+            } else if (a == "--std") {
+                c.std_dir = v;
+            } else if (a == "--cc") {
+                put(&c.cc_args, v);
+            } else if (a == "--lib") {
+                c.lib = v;
+            } else if (a == "--lang") {
+                c.lang = v;
+            } else if (a == "--cfg") {
+                // PKG: scopes it, when the part before ':' is a name (a value may hold ':' too)
+                var colon: usize? = null;
+                for (k) in 0..v.len {
+                    if (colon == null && v[k] == '=') {
+                        break;
+                    }
+                    if (colon == null && v[k] == ':') {
+                        colon = k;
+                    }
+                }
+                val at = colon ?? 0;
+                if (at > 0) {
+                    put(&c.cfg, { pkg: v[0..at], set: v[at + 1..v.len] });
+                } else {
+                    put(&c.cfg, { pkg: null, set: v });
+                }
+            } else {
+                var eq: usize? = null;
+                for (k) in 0..v.len {
+                    if (v[k] == '=' && eq == null) {
+                        eq = k;
+                    }
+                }
+                val at = eq ?? die(fmt2("{} wants NAME=PATH, got '{}'", S(a), S(v)));
+                val p: pkg_arg = { name: v[0..at], path: v[at + 1..v.len] };
+                if (a == "--pkg") {
+                    put(&c.pkgs, p);
+                } else {
+                    put(&c.links, p);
+                }
+            }
+        } else if (a == "--") {
+            while (i < std::process::arg_count()) {
+                put(&c.prog_args, std::process::arg(i) ?? "");
+                i += 1;
+            }
+        } else if (a.len > 0 && a[0] == '-') {
+            die(fmt("unknown option '{}'", S(a)));
+        } else {
+            put(&c.files, a);
+        }
+    }
+    if (c.files.len == 0 && c.cmd != "std-dir" && c.cmd != "lsp" && !(c.cmd == "check" && c.lib != null)) {
+        usage();
+    }
+    return move c;
+}
+
+// the names in a directory, or none when it isn't one
+fn list_dir(path: str) -> std::vec<std::string>? {
+    var p = S(path);
+    val d = sys::opendir(p.c_str()) ?? return null;
+    var out: std::vec<std::string> = {};
+    loop {
+        val e = sys::readdir(d) ?? break;
+        var name: std::string = {};
+        for (b) in e.d_name {
+            if (b == 0) {
+                break;
+            }
+            name.push(@cast<u8>(b));
+        }
+        if (name.as_str() != "." && name.as_str() != "..") {
+            put(&out, move name);
+        }
+    }
+    sys::closedir(d);
+    return move out;
+}
+
+// sorts by bytes (an insertion sort: a package has few files)
+fn sort_strings(v: std::vec<std::string>&) -> void {
+    for (i) in 1..v.len {
+        var j = i;
+        while (j > 0 && str_less(v.at(j).as_str(), v.at(j - 1).as_str())) {
+            swap(v.at(j - 1), v.at(j));
+            j -= 1;
+        }
+    }
+}
+
+// byte order; a prefix sorts first
+fn str_less(a: str, b: str) -> bool {
+    var i: usize = 0;
+    while (i < a.len && i < b.len) {
+        if (a[i] != b[i]) {
+            return a[i] < b[i];
+        }
+        i += 1;
+    }
+    return a.len < b.len;
+}
+
+// every .volt file under path (sorted, so builds are reproducible), or path itself
+fn volt_files(path: str) -> std::vec<std::string> {
+    var out: std::vec<std::string> = {};
+    var dirs: std::vec<std::string> = {};
+    val top = list_dir(path);
+    if (top == null) {
+        put(&out, S(path));
+        return move out;
+    }
+    put(&dirs, S(path));
+    while (dirs.len > 0) {
+        val d = dirs.pop() ?? break;
+        val names = list_dir(d.as_str()) ?? die(fmt("can't read package directory {}", copy d));
+        for (n&) in names.items() {
+            var full = copy d;
+            full.push('/');
+            full.append(n.as_str());
+            if (list_dir(full.as_str()) != null) {
+                put(&dirs, move full);
+            } else if (ends_with(n.as_str(), ".volt")) {
+                put(&out, move full);
+            }
+        }
+    }
+    sort_strings(&out);
+    return move out;
+}
+
+// the std package: --std, $VOLT_STD, or a std/ directory next to (or above) voltc
+fn find_std(c: cli&) -> std::string? {
+    if (c.no_std) {
+        return null;
+    }
+    if (c.std_dir) {
+        return S(c.std_dir);
+    }
+    val e = std::process::env("VOLT_STD");
+    if (e) {
+        return S(e);
+    }
+    var buf: u8[4096];
+    val n = sys::readlink("/proc/self/exe", @cast<cstr>(&buf[0]), 4095);
+    if (n > 0) {
+        val exe = @cast<str>(@slice(&buf[0], @cast<usize>(n)));
+        var dir_end = exe.len;
+        while (dir_end > 0 && exe[dir_end - 1] != '/') {
+            dir_end -= 1;
+        }
+        val dir = exe[0..dir_end];
+        val cands: str[4] = { "std", "../std", "../../std", "../lib/volt/std" };
+        for (cand) in cands {
+            var p = S(dir);
+            p.append(cand);
+            if (list_dir(p.as_str()) != null) {
+                // without the ../ steps: file names in messages and panics read plainly
+                var real: u8[4096];
+                val r = realpath(p.c_str(), &real[0]);
+                if (r) {
+                    return S(@cast<str>(@slice(@cast<u8*>(r), strlen(r))));
+                }
+                return move p;
+            }
+        }
+    }
+    die(S("can't find the std package; pass --std DIR (or --no-std)"));
+}
+
+// a source file and the package it belongs to (none: the program's own)
+struct unit {
+    file: u32;
+    pkg: str?;
+}
+
+// the program's sources: its own files, std and packages
+struct sources {
+    // names and texts own the files' contents; files, toks and asts point into them
+    names: std::vec<std::string> = {};
+    texts: std::vec<std::string> = {};
+    files: std::vec<source_file> = {};
+    units: std::vec<unit> = {};
+    toks: std::vec<std::vec<token>> = {};
+    asts: std::vec<std::vec<item>> = {}; // the checked program points into these (names, string literals)
+    guard_names: std::vec<std::string> = {}; // packages' guard symbols (the program's globals name them)
+    pkg_names: std::vec<std::string> = {};   // package names the units point into (the language server's)
+}
+
+// read path as a unit of package pkg (none: the program's own)
+fn add_file(s: sources&, path: str, pkg: str?) -> void {
+    val text = std::fs::read_file(path) catch |e| {
+        die(fmt("can't read {}", S(path)));
+    };
+    put(&s.names, S(path));
+    put(&s.texts, move text);
+    put(&s.units, { file: @cast<u32>(s.names.len - 1), pkg: pkg });
+}
+
+// print diagnostics (errors and warnings) the way the command line asked
+fn report_diags(c: cli&, files: std::vec<source_file>&, diags: std::vec<diag>&) -> void {
+    var color = c.color == "always";
+    if (c.color == "auto") {
+        val term = std::process::env("TERM");
+        color = sys::isatty(2) != 0 && std::process::env("NO_COLOR") == null && (term == null || (term ?? "") != "dumb");
+    }
+    std::eprint("{}", report(files, diags, c.format, color, c.error_limit));
+}
+
+// print one error and stop
+fn fail_diag(c: cli&, files: std::vec<source_file>&, e: compile_error&) -> never {
+    var diags: std::vec<diag> = {};
+    put(&diags, err_diag(e));
+    report_diags(c, files, &diags);
+    std::process::exit(1);
+}
+
+// parse the program, std and packages, then check; the checked program
+fn compile_cli(c: cli&, s: sources&) -> std::box<checker> {
+    var pkgs: std::vec<pkg_arg> = {};
+    var std_path = find_std(c);
+    if (std_path) {
+        put(&pkgs, { name: "std", path: std_path.as_str() });
+    }
+    for (p&) in c.pkgs.items() {
+        // the name becomes a namespace and part of C symbol names
+        var ident = p.name.len > 0 && (is_alpha(p.name[0]) || p.name[0] == '_');
+        for (b) in p.name {
+            if (!(is_alpha(b) || is_digit(b) || b == '_')) {
+                ident = false;
+            }
+        }
+        if (!ident) {
+            die(fmt("package name '{}' has to be a Volt name (letters, digits, _): it becomes a namespace", S(p.name)));
+        }
+        for (q&) in pkgs.items() {
+            if (q.name == p.name) {
+                var hint = "";
+                if (p.name == "std") {
+                    hint = " (pick another std with --std DIR)";
+                }
+                die(fmt2("package '{}' is given twice{}", S(p.name), S(hint)));
+            }
+        }
+        put(&pkgs, *p);
+    }
+    // a package's guard symbol names its exact sources and build flavor
+    var guards: std::vec<guard> = {};
+    for (p&) in pkgs.items() {
+        var all: std::string = {};
+        for (f&) in volt_files(p.path).items() {
+            add_file(s, f.as_str(), p.name);
+            all.append(s.texts.at(s.texts.len - 1).as_str());
+            all.push(0);
+        }
+        // and its --cfg settings: a library built with other features doesn't link either
+        var cfg: std::vec<std::string> = {};
+        for (x&) in c.cfg.items() {
+            if (same_pkg(x.pkg, p.name)) {
+                put(&cfg, S(x.set));
+            }
+        }
+        sort_strings(&cfg);
+        for (x&) in cfg.items() {
+            all.append(x.as_str());
+            all.push(0);
+        }
+        var flavor = "d";
+        if (c.release) {
+            flavor = "r";
+        }
+        var g = S("volt_pkg_");
+        g.append(p.name);
+        g.push('_');
+        g.append(hex8(fnv32(all.as_str())).as_str());
+        g.push('_');
+        g.append(flavor);
+        put(&s.guard_names, move g);
+    }
+    // `lib NAME` (and `check --lib NAME`) builds package NAME alone: there are no program files
+    var lib: str? = c.lib;
+    if (c.cmd == "lib" || c.cmd == "bindings") {
+        lib = *c.files.at(0);
+    }
+    if (lib) {
+        val l = lib;
+        var known = false;
+        for (p&) in pkgs.items() {
+            if (p.name == l) {
+                known = true;
+            }
+        }
+        if (!known) {
+            die(fmt("no package '{}' to build (std, or one given with --pkg)", S(l)));
+        }
+    } else {
+        for (f&) in c.files.items() {
+            add_file(s, *f, null);
+        }
+    }
+    // a linked package's sources are still read: its generic code and declarations come from them
+    for (l&) in c.links.items() {
+        var known = false;
+        for (p&) in pkgs.items() {
+            if (p.name == l.name) {
+                known = true;
+            }
+        }
+        if (!known) {
+            die(fmt2("--link {}=...: the package's sources are needed too (std, or --pkg {}=DIR)", S(l.name), S(l.name)));
+        }
+    }
+    for (i) in 0..s.names.len {
+        put(&s.files, { name: s.names.at(i).as_str(), text: s.texts.at(i).as_str() });
+    }
+    for (i) in 0..pkgs.len {
+        put(&guards, { pkg: pkgs.at(i).name, sym: s.guard_names.at(i).as_str() });
+    }
+    // parse all units together (generic names are shared between files); a package's files live
+    // in namespace <package>
+    val bad = parse_sources(s);
+    if (bad.len > 0) {
+        report_diags(c, &s.files, &bad);
+        std::process::exit(1);
+    }
+    // the runtime lives in the program's own C unit, never in a library
+    var o: opts = { release: c.release, leak_check: c.leak_check, guards: move guards, lib: lib, runtime: lib == null || c.shared || c.standalone, cfg: copy c.cfg, pp_flags: preprocessor_flags(&c.cc_args) };
+    for (u&) in s.units.items() {
+        if (u.pkg) {
+            put(&o.pkg_files, { file: u.file, pkg: u.pkg});
+        }
+    }
+    for (l&) in c.links.items() {
+        put(&o.linked, l.name);
+    }
+    val chk = compile(&s.files, &s.asts, move o);
+    val diags = all_diags(&*chk);
+    report_diags(c, &s.files, &diags);
+    if (chk.errors.len > 0) {
+        std::process::exit(1);
+    }
+    return move chk;
+}
+
+// print a parse error in the canonical form: (error @lo:hi "msg"), with " as '
+fn print_error(d: diag&) -> i32 {
+    var msg: std::string = {};
+    val m = d.msg.as_str();
+    for (i) in 0..m.len {
+        if (m[i] == '"') {
+            msg.push('\'');
+        } else {
+            msg.push(m[i]);
+        }
+    }
+    std::println("(error @{}:{} \"{}\")", d.span.lo, d.span.hi, msg);
+    return 1;
+}
+
+// `parse FILE --sexp`: the parse tree (or the parse error) in the canonical form tests/selfhost.rs
+// compares with the bootstrap's
+fn parse_sexp(file: str) -> i32 {
+    val text = std::fs::read_file(file) catch |e| {
+        std::eprintln("voltc: can't read {}", file);
+        return 1;
+    };
+    val src = text.as_str();
+    var toks = lex(src, 0) catch |e| {
+        val d = err_diag(&e);
+        return print_error(&d);
+    };
+    var names: std::map<str, bool> = {};
+    collect_generic_names(&toks, &names);
+    var p: parser = { src: src, toks: &toks, pos: 0, generics: &names };
+    val items = p.parse_file() catch |e| {
+        for (d&) in p.errors.items() {
+            print_error(d);
+        }
+        return 1;
+    };
+    var w: sexp_writer = { out: {} };
+    w.items(&items);
+    std::print("{}", w.out);
+    return 0;
+}
+
+fn main() -> i32 {
+    val c = parse_cli();
+    if (c.cmd == "parse") {
+        if (!c.sexp) {
+            usage();
+        }
+        return parse_sexp(*c.files.at(0));
+    }
+    if (c.cmd == "lsp") {
+        return lsp_main(find_std(&c));
+    }
+    if (c.cmd == "doc") {
+        return doc_cmd(&c);
+    }
+    if (c.cmd == "std-dir") {
+        val d = find_std(&c) ?? return 1;
+        std::println("{}", d);
+        return 0;
+    }
+    if (c.cmd == "check") {
+        var s: sources = {};
+        compile_cli(&c, &s);
+        return 0;
+    }
+    if (c.cmd == "emit-c") {
+        var s: sources = {};
+        val chk = compile_cli(&c, &s);
+        val files = chk.c_files();
+        val dir = c.out;
+        if (dir) {
+            // -o DIR: the files, ready to build with cc DIR/program.c
+            var d = S(dir);
+            mkdir(d.c_str(), 493); // 0755; an existing directory is fine
+            for (f&) in files.items() {
+                var p = S(dir);
+                p.push('/');
+                p.append(f.name.as_str());
+                std::fs::write_file(p.as_str(), f.text.as_str()) catch |e| {
+                    die(fmt("can't write {}", copy p));
+                };
+            }
+            return 0;
+        }
+        // on stdout: the files program.c includes, in order, each under a line naming it
+        for (k) in 0..files.len - 1 {
+            std::println("// ==================== {} ====================", files.at(k).name);
+            std::print("{}", files.at(k).text);
+            std::println("");
+        }
+        return 0;
+    }
+    if (c.cmd == "emit-llvm") {
+        var s: sources = {};
+        val chk = compile_cli(&c, &s);
+        var ir: std::string = {};
+        val e = chk.llvm_ir(&ir);
+        if (e.len() > 0) {
+            die(move e);
+        }
+        std::print("{}", ir);
+        return 0;
+    }
+    if (c.cmd == "build") {
+        var s: sources = {};
+        val chk = compile_cli(&c, &s);
+        var out = S(c.out ?? "");
+        if (c.out == null) {
+            out = S(without_ext(*c.files.at(0)));
+        }
+        var lc = copy c;
+        val cdir = fresh_dir();
+        val cpp_o = cpp_object(&*chk, &c, cdir.as_str());
+        if (cpp_o) {
+            put(&lc.cc_args, cpp_o.as_str());
+            put(&lc.cc_args, "-lstdc++");
+        }
+        if (c.llvm) {
+            llvm_exe(&*chk, out.as_str(), &lc);
+        } else {
+            cc(chk.c_unit().as_str(), out.as_str(), &lc, false);
+        }
+        if (cpp_o) {
+            unlink_path(cpp_o.as_str());
+        }
+        rmdir_path(cdir.as_str());
+        return 0;
+    }
+    if (c.cmd == "bindings") {
+        var s: sources = {};
+        val chk = compile_cli(&c, &s);
+        val text = chk.bindings(*c.files.at(0), c.lang) catch |e| {
+            fail_diag(&c, &s.files, &e);
+        };
+        val out = c.out;
+        if (out) {
+            std::fs::write_file(out, text.as_str()) catch |e| {
+                die(fmt("can't write {}", S(out)));
+            };
+        } else {
+            std::print("{}", text);
+        }
+        return 0;
+    }
+    if (c.cmd == "lib" && c.shared) {
+        // everything in one shared object: the package, what it uses from std and other packages,
+        // and the runtime; its export fns are the interface (voltc bindings describes them)
+        var s: sources = {};
+        val chk = compile_cli(&c, &s);
+        var out = S(c.out ?? "");
+        if (c.out == null) {
+            out = S("lib");
+            out.append(*c.files.at(0));
+            out.append(".so");
+        }
+        var lc = copy c;
+        val cdir = fresh_dir();
+        val cpp_o = cpp_object(&*chk, &c, cdir.as_str());
+        if (cpp_o) {
+            put(&lc.cc_args, cpp_o.as_str());
+            put(&lc.cc_args, "-lstdc++");
+        }
+        if (c.llvm) {
+            llvm_exe(&*chk, out.as_str(), &lc);
+        } else {
+            cc(chk.c_unit().as_str(), out.as_str(), &lc, false);
+        }
+        if (cpp_o) {
+            unlink_path(cpp_o.as_str());
+        }
+        rmdir_path(cdir.as_str());
+        return 0;
+    }
+    if (c.cmd == "lib") {
+        var s: sources = {};
+        val chk = compile_cli(&c, &s);
+        var out = S(c.out ?? "");
+        if (c.out == null) {
+            out = S("lib");
+            out.append(*c.files.at(0));
+            out.append(".a");
+        }
+        // build the object in a private directory, archive it, then remove the temporaries either way
+        var dir = fresh_dir();
+        var obj = copy dir;
+        obj.push('/');
+        obj.append(*c.files.at(0));
+        obj.append(".o");
+        var o_c = S(without_ext(obj.as_str()));
+        o_c.append(".c");
+        var rt_o = copy dir;
+        rt_o.append("/volt_rt.o");
+        var rt_c = copy dir;
+        rt_c.append("/volt_rt.c");
+        var ar: std::vec<str> = {};
+        put(&ar, "ar");
+        put(&ar, "rcs");
+        put(&ar, out.as_str());
+        put(&ar, obj.as_str());
+        val cpp_o = cpp_object(&*chk, &c, dir.as_str());
+        if (cpp_o) {
+            put(&ar, cpp_o.as_str()); // the program links -lstdc++ too
+        }
+        if (c.llvm) {
+            // the object, plus the prelude's helpers (weak) for programs built by either backend
+            var hdr: std::vec<str> = {};
+            val e = chk.llvm_object(obj.as_str(), &hdr);
+            if (e.len() > 0) {
+                die(move e);
+            }
+            cc(llvm_runtime_c(&*chk, &hdr, c.standalone).as_str(), rt_o.as_str(), &c, true);
+            put(&ar, rt_o.as_str());
+        } else {
+            cc(chk.c_unit().as_str(), obj.as_str(), &c, true);
+        }
+        unlink_path(out.as_str()); // ar would add to an old archive
+        val st = std::process::run(ar.items()) catch |e| 1;
+        unlink_path(obj.as_str());
+        unlink_path(o_c.as_str());
+        unlink_path(rt_o.as_str());
+        unlink_path(rt_c.as_str());
+        if (cpp_o) {
+            unlink_path(cpp_o.as_str());
+        }
+        rmdir_path(dir.as_str());
+        if (st != 0) {
+            die(fmt("ar couldn't write {}", copy out));
+        }
+        return 0;
+    }
+    if (c.cmd == "run") {
+        var s: sources = {};
+        val chk = compile_cli(&c, &s);
+        var dir = fresh_dir();
+        var exe = copy dir;
+        exe.append("/prog");
+        var lc = copy c;
+        val cpp_o = cpp_object(&*chk, &c, dir.as_str());
+        if (cpp_o) {
+            put(&lc.cc_args, cpp_o.as_str());
+            put(&lc.cc_args, "-lstdc++");
+        }
+        if (c.llvm) {
+            llvm_exe(&*chk, exe.as_str(), &lc);
+        } else {
+            cc(chk.c_unit().as_str(), exe.as_str(), &lc, false);
+        }
+        if (cpp_o) {
+            unlink_path(cpp_o.as_str());
+        }
+        var argv: std::vec<str> = {};
+        put(&argv, exe.as_str());
+        for (a&) in c.prog_args.items() {
+            put(&argv, *a);
+        }
+        val code = std::process::run(argv.items()) catch |e| 1;
+        var cf = copy exe;
+        cf.append(".c");
+        unlink_path(exe.as_str());
+        unlink_path(cf.as_str());
+        rmdir_path(dir.as_str());
+        return code;
+    }
+    usage();
+}
+
+// a path without its extension (the last .xyz after the last /)
+fn without_ext(p: str) -> str {
+    var dot: usize? = null;
+    for (i) in 0..p.len {
+        if (p[i] == '.') {
+            dot = i;
+        } else if (p[i] == '/') {
+            dot = null;
+        }
+    }
+    if (dot) {
+        if (dot > 0) {
+            return p[0..dot];
+        }
+    }
+    return p;
+}
+
+extern "C" fn mkdtemp(template: u8*) -> cstr?;
+extern "C" fn unlink(path: cstr) -> i32;
+extern "C" fn rmdir(path: cstr) -> i32;
+extern "C" fn mkdir(path: cstr, mode: u32) -> i32;
+extern "C" fn realpath(path: cstr, resolved: u8*) -> cstr?;
+
+// a new private build directory (mkdtemp makes it 0700, under a fresh name)
+fn fresh_dir() -> std::string {
+    var t = S("/tmp/voltc-XXXXXX");
+    t.push(0);
+    val made = mkdtemp(@cast<u8*>(t.as_str().ptr)) ?? die(S("can't make a build directory in /tmp"));
+    put(&build_dirs, S(t.as_str()[0..t.len() - 1]));
+    return S(t.as_str()[0..t.len() - 1]);
+}
+
+fn unlink_path(p: str) -> void {
+    var s = S(p);
+    unlink(s.c_str());
+}
+
+fn rmdir_path(p: str) -> void {
+    var s = S(p);
+    rmdir(s.c_str());
+}
+
+// compile C (written next to out as a .c file): to an executable (linked with the --link libraries),
+// or with `object` to a .o
+fn cc(src: str, out: str, c: cli&, object: bool) -> void {
+    var c_path = S(without_ext(out));
+    if (without_ext(out).len == out.len) {
+        c_path = S(out);
+    }
+    c_path.append(".c");
+    std::fs::write_file(c_path.as_str(), src) catch |e| {
+        die(fmt("can't write {}", copy c_path));
+    };
+    var inputs: std::vec<str> = {};
+    put(&inputs, c_path.as_str());
+    cc_run(&inputs, out, c, object);
+}
+
+// the program's C++ wrappers (use cpp) compiled with $CXX (c++ unless set) into dir: the object, when
+// the program calls C++ at all
+fn cpp_object(chk: checker&, c: cli&, dir: str) -> std::string? {
+    val text = chk.cpp_unit();
+    if (text.len() == 0) {
+        return null;
+    }
+    var src = S(dir);
+    src.append("/volt_cpp.cpp");
+    var obj = S(dir);
+    obj.append("/volt_cpp.o");
+    std::fs::write_file(src.as_str(), text.as_str()) catch |e| {
+        die(fmt("can't write {}", copy src));
+    };
+    var argv: std::vec<str> = {};
+    val cxx = std::process::env("CXX") ?? "c++";
+    var start: usize = 0;
+    for (i) in 0..cxx.len + 1 {
+        if (i == cxx.len || cxx[i] == ' ') {
+            if (i > start) {
+                put(&argv, cxx[start..i]);
+            }
+            start = i + 1;
+        }
+    }
+    if (argv.len == 0) {
+        put(&argv, "c++");
+    }
+    val fixed: str[4] = { "-std=c++17", "-fPIC", "-w", "-c" };
+    for (f) in fixed {
+        put(&argv, f);
+    }
+    put(&argv, src.as_str());
+    put(&argv, "-o");
+    put(&argv, obj.as_str());
+    for (f&) in preprocessor_flags(&c.cc_args).items() {
+        put(&argv, *f);
+    }
+    if (c.release) {
+        put(&argv, "-O2");
+    } else {
+        put(&argv, "-O0");
+        put(&argv, "-g");
+    }
+    val r = std::process::capture(argv.items(), "") catch |e| {
+        die(fmt("can't run the C++ compiler '{}'", S(cxx)));
+    };
+    unlink_path(src.as_str());
+    if (r.code != 0) {
+        die(fmt("the C++ compiler failed on the wrappers for use cpp:\n{}", copy r.err));
+    }
+    return move obj;
+}
+
+// the LLVM backend's executable: the program's object and the runtime (C), linked by cc
+fn llvm_exe(chk: checker&, out: str, c: cli&) -> void {
+    var dir = fresh_dir();
+    var obj = copy dir;
+    obj.append("/prog.o");
+    var rt_c = copy dir;
+    rt_c.append("/volt_rt.c");
+    var hdr: std::vec<str> = {};
+    val e = chk.llvm_object(obj.as_str(), &hdr);
+    if (e.len() > 0) {
+        rmdir_path(dir.as_str());
+        die(move e);
+    }
+    std::fs::write_file(rt_c.as_str(), llvm_runtime_c(chk, &hdr, true).as_str()) catch |x| {
+        die(fmt("can't write {}", copy rt_c));
+    };
+    var inputs: std::vec<str> = {};
+    put(&inputs, obj.as_str());
+    put(&inputs, rt_c.as_str());
+    cc_run(&inputs, out, c, false);
+    unlink_path(obj.as_str());
+    unlink_path(rt_c.as_str());
+    rmdir_path(dir.as_str());
+}
+
+// run the C compiler on these inputs (C files, objects): an executable, or with `object` a .o
+fn cc_run(inputs: std::vec<str>&, out: str, c: cli&, object: bool) -> void {
+    // imported headers' prototypes are C's own: a Volt void*/cstr for their const void*/char* is fine
+    var argv: std::vec<str> = {};
+    val compiler = c_command(&argv);
+    put(&argv, "-std=gnu11");
+    put(&argv, "-w");
+    put(&argv, "-Wno-error=incompatible-pointer-types");
+    put(&argv, "-Wno-error=int-conversion");
+    put(&argv, "-o");
+    put(&argv, out);
+    for (x&) in inputs.items() {
+        put(&argv, *x);
+    }
+    if (object) {
+        put(&argv, "-c");
+    } else {
+        for (a&) in c.cc_args.items() {
+            put(&argv, *a);
+        }
+        for (l&) in c.links.items() {
+            put(&argv, l.path);
+        }
+        put(&argv, "-lm");
+        if (c.shared) {
+            put(&argv, "-shared");
+        }
+    }
+    if (c.shared || c.standalone) {
+        put(&argv, "-fPIC");
+    }
+    if (c.release) {
+        put(&argv, "-O2");
+        put(&argv, "-fwrapv");
+    } else {
+        put(&argv, "-O0");
+        put(&argv, "-g");
+    }
+    val r = std::process::capture(argv.items(), "") catch |e| {
+        die(fmt("can't run {}", S(compiler)));
+    };
+    // a volt_pkg_ guard symbol that doesn't resolve means a --link library doesn't match its package
+    if (r.code != 0) {
+        val msg = r.err.as_str();
+        for (i) in 0..msg.len {
+            if (starts_at(msg, i, "volt_pkg_")) {
+                var e = i + 9;
+                while (e < msg.len && msg[e] != '_') {
+                    e += 1;
+                }
+                val pkg = msg[i + 9..e];
+                die(fmt2("the library linked for package '{}' was built from other sources or in the other mode (debug/release); rebuild it with voltc lib {}", S(pkg), S(pkg)));
+            }
+        }
+        std::eprint("{}", r.err);
+        die(fmt("the C compiler failed on {} (this is a voltc bug)", S(*inputs.at(0))));
+    }
+}

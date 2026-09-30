@@ -1,0 +1,19 @@
+error: expected i32, found str
+  ┌─ tests/diag/multi.volt:3:12
+  │
+3 │     return "not a number";
+  │            ^^^^^^^^^^^^^^
+
+error: unknown name 'undefined_thing'
+  ┌─ tests/diag/multi.volt:7:5
+  │
+7 │     undefined_thing();
+  │     ^^^^^^^^^^^^^^^
+
+error: mismatched types bool and i32
+   ┌─ tests/diag/multi.volt:11:13
+   │
+11 │     val t = true + 1;
+   │             ^^^^^^^^
+
+error: aborting due to 3 errors

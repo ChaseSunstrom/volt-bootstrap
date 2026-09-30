@@ -1,0 +1,13 @@
+[package]
+name = "voltc"
+version = "0.1.0"
+description = "the Volt compiler, written in Volt"
+
+# the repository's std (the one the compiler is tested against)
+[std]
+path = "../std"
+
+# `bolt build bootstrap`: stage1 (built by the bootstrap voltc) builds stage2, stage2 builds stage3,
+# they must be identical, and stage2 must pass the golden suite
+[build]
+files = ["build.volt"]

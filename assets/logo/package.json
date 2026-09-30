@@ -1,0 +1,12 @@
+{
+  "name": "volt-logo",
+  "private": true,
+  "type": "module",
+  "description": "Generates the Volt logo (SVG and PNG) from logo.ts",
+  "scripts": {
+    "build": "node logo.ts"
+  },
+  "dependencies": {
+    "@resvg/resvg-js": "^2.6.2"
+  }
+}

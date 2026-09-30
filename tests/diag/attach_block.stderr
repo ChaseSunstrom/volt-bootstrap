@@ -1,0 +1,39 @@
+error: a trait fn is only a signature; its body goes in each attach block
+  ┌─ tests/diag/attach_block.volt:8:8
+  │
+8 │     fn name(this) -> str { return "?"; }
+  │        ^^^^
+
+error: unknown trait 't_shpae'
+   ┌─ tests/diag/attach_block.volt:15:8
+   │
+15 │ attach t_shpae -> square {
+   │        ^^^^^^^
+   │
+   = help: did you mean 't_shape'?
+
+error: this attach block is missing fn 'scale', which trait 't_shape' requires
+   ┌─ tests/diag/attach_block.volt:19:8
+   │
+ 4 │     fn scale(this, k: f64) -> f64;
+   │        ----- required here
+   ·
+19 │ attach t_shape -> circle {
+   │        ^^^^^^^
+
+error: 'scale' takes no arguments here but 1 argument in trait 't_shape'
+   ┌─ tests/diag/attach_block.volt:25:8
+   │
+ 4 │     fn scale(this, k: f64) -> f64;
+   │        ----- declared here
+   ·
+25 │     fn scale(this) -> f64 { return 0.0; }
+   │        ^^^^^
+
+error: 'circle' isn't a trait
+   ┌─ tests/diag/attach_block.volt:37:8
+   │
+37 │ attach circle -> dot {
+   │        ^^^^^^
+
+error: aborting due to 5 errors

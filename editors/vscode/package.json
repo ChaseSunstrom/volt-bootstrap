@@ -1,0 +1,129 @@
+{
+  "name": "volt-lang",
+  "displayName": "Volt",
+  "description": "Volt language support: highlighting, diagnostics, hover, go to definition, references, completion and bolt tasks",
+  "version": "0.1.0",
+  "publisher": "volt-lang",
+  "license": "(MIT OR Apache-2.0)",
+  "icon": "images/icon.png",
+  "galleryBanner": {
+    "color": "#1E1B4B",
+    "theme": "dark"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ChaseSunstrom/volt-bootstrap"
+  },
+  "engines": {
+    "vscode": "^1.91.0"
+  },
+  "categories": ["Programming Languages", "Snippets"],
+  "keywords": ["volt", "bolt", "language server"],
+  "main": "./out/extension.js",
+  "activationEvents": ["workspaceContains:**/bolt.toml"],
+  "contributes": {
+    "languages": [
+      {
+        "id": "volt",
+        "aliases": ["Volt", "volt"],
+        "extensions": [".volt"],
+        "icon": {
+          "light": "./images/volt-file.svg",
+          "dark": "./images/volt-file.svg"
+        },
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "volt",
+        "scopeName": "source.volt",
+        "path": "./syntaxes/volt.tmLanguage.json"
+      }
+    ],
+    "snippets": [
+      {
+        "language": "volt",
+        "path": "./snippets/volt.json"
+      }
+    ],
+    "configuration": {
+      "title": "Volt",
+      "properties": {
+        "volt.serverPath": {
+          "type": "string",
+          "default": "voltc",
+          "description": "The voltc to run as the language server (`voltc lsp`): a path, or a name on PATH."
+        },
+        "volt.stdPath": {
+          "type": "string",
+          "default": "",
+          "description": "The std package to check against (voltc --std). Empty: voltc finds it ($VOLT_STD, or next to voltc)."
+        },
+        "volt.boltPath": {
+          "type": "string",
+          "default": "bolt",
+          "description": "The bolt that runs build, run, test and check tasks."
+        }
+      }
+    },
+    "commands": [
+      {
+        "command": "volt.restartServer",
+        "title": "Volt: Restart Language Server"
+      }
+    ],
+    "taskDefinitions": [
+      {
+        "type": "bolt",
+        "required": ["command"],
+        "properties": {
+          "command": {
+            "type": "string",
+            "description": "The bolt command: build, run, test, check, clean..."
+          },
+          "args": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "More arguments for bolt (--release, -p NAME...)"
+          }
+        }
+      }
+    ],
+    "problemMatchers": [
+      {
+        "name": "volt",
+        "owner": "volt",
+        "fileLocation": ["autoDetect", "${workspaceFolder}"],
+        "pattern": [
+          {
+            "regexp": "^(error|warning): (.*)$",
+            "severity": 1,
+            "message": 2
+          },
+          {
+            "regexp": "^\\s*┌─ (.*):(\\d+):(\\d+)$",
+            "file": 1,
+            "line": 2,
+            "column": 3
+          }
+        ]
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "tsc -p .",
+    "build": "tsc -p .",
+    "test": "vscode-tmgrammar-test 'tests/grammar/*.test.volt' && vscode-tmgrammar-snap 'tests/snap/*.volt'"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^10.1.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/vscode": "~1.91.0",
+    "@vscode/vsce": "^4.0.0",
+    "typescript": "^5.9.0",
+    "vscode-tmgrammar-test": "^0.1.3"
+  }
+}

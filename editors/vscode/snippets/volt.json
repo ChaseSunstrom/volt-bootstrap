@@ -1,0 +1,72 @@
+{
+  "main": {
+    "prefix": "main",
+    "body": ["use std::io;", "", "fn main() -> void {", "\t$0", "}"],
+    "description": "a program's entry point"
+  },
+  "fn": {
+    "prefix": "fn",
+    "body": ["fn ${1:name}(${2}) -> ${3:void} {", "\t$0", "}"],
+    "description": "a function"
+  },
+  "attach fn": {
+    "prefix": "attach",
+    "body": ["attach fn ${1:name}(this: ${2:type}&${3}) -> ${4:void} {", "\t$0", "}"],
+    "description": "a method: a function attached to a type"
+  },
+  "struct": {
+    "prefix": "struct",
+    "body": ["struct ${1:name} {", "\t${2:field}: ${3:i32};", "}"],
+    "description": "a struct"
+  },
+  "enum": {
+    "prefix": "enum",
+    "body": ["enum ${1:name} {", "\t${2:A},", "\t${3:B},", "}"],
+    "description": "an enum (variants may carry a payload: NAME: type)"
+  },
+  "error": {
+    "prefix": "error",
+    "body": ["error ${1:name}_error {", "\t${2:FAILED},", "}"],
+    "description": "an error set (functions return it as name_error!T)"
+  },
+  "generic fn": {
+    "prefix": "gfn",
+    "body": ["<${1:T}: type>", "fn ${2:name}(${3:x}: ${1:T}) -> ${1:T} {", "\t$0", "}"],
+    "description": "a generic function"
+  },
+  "if": {
+    "prefix": "if",
+    "body": ["if (${1:condition}) {", "\t$0", "}"]
+  },
+  "if else": {
+    "prefix": "ife",
+    "body": ["if (${1:condition}) {", "\t$2", "} else {", "\t$0", "}"]
+  },
+  "for": {
+    "prefix": "for",
+    "body": ["for (${1:x}) in ${2:items} {", "\t$0", "}"],
+    "description": "a for loop over a range (0..n), an array or a slice"
+  },
+  "while": {
+    "prefix": "while",
+    "body": ["while (${1:condition}) {", "\t$0", "}"]
+  },
+  "match": {
+    "prefix": "match",
+    "body": ["match (${1:value}) {", "\t.${2:VARIANT} => { $0 },", "\tdefault => {},", "}"]
+  },
+  "catch": {
+    "prefix": "catch",
+    "body": ["catch |${1:e}| {", "\t$0", "}"],
+    "description": "handle an error from E!T"
+  },
+  "use C header": {
+    "prefix": "usec",
+    "body": ["use { \"${1:stdio.h}\" } as ${2:c};"],
+    "description": "import a C header's declarations"
+  },
+  "namespace": {
+    "prefix": "namespace",
+    "body": ["namespace ${1:name} {", "\t$0", "}"]
+  }
+}

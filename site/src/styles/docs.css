@@ -1,0 +1,28 @@
+/* The docs' colours (Starlight's theme variables): the logo's amber accents on its indigo. */
+
+:root {
+  --sl-color-accent-low: #2a1f0a;
+  --sl-color-accent: #f59e0b;
+  --sl-color-accent-high: #fde68a;
+  --sl-color-bg-nav: #0a0e1f;
+  --sl-color-bg-sidebar: #0a0e1f;
+  --sl-color-bg: #070a16;
+  --sl-color-hairline: rgba(148, 163, 255, 0.14);
+  --sl-color-hairline-light: rgba(148, 163, 255, 0.2);
+}
+
+:root[data-theme="light"] {
+  --sl-color-accent-low: #fef3c7;
+  --sl-color-accent: #b45309;
+  --sl-color-accent-high: #78350f;
+  --sl-color-bg-nav: #ffffff;
+  --sl-color-bg-sidebar: #ffffff;
+  --sl-color-bg: #ffffff;
+  --sl-color-hairline: rgba(49, 46, 129, 0.12);
+  --sl-color-hairline-light: rgba(49, 46, 129, 0.08);
+}
+
+.site-title {
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}

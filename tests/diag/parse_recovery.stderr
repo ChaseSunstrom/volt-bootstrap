@@ -1,0 +1,25 @@
+error: expected an expression, found ';'
+  ┌─ tests/diag/parse_recovery.volt:3:15
+  │
+3 │     return 1 +;
+  │               ^
+
+error: expected ';' after field, found 'y'
+   ┌─ tests/diag/parse_recovery.volt:12:5
+   │
+12 │     y: i32;
+   │     ^
+
+error: expected ';', found '}'
+   ┌─ tests/diag/parse_recovery.volt:18:5
+   │
+18 │     }
+   │     ^
+
+error: expected an expression, found ';'
+   ┌─ tests/diag/parse_recovery.volt:24:13
+   │
+24 │     val x = ;
+   │             ^
+
+error: aborting due to 4 errors

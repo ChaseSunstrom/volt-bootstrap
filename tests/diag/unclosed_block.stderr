@@ -1,0 +1,28 @@
+error: this '{' is never closed
+  ┌─ tests/diag/unclosed_block.volt:4:16
+  │
+4 │     if (x > 0) {
+  │                ^
+  ·
+7 │ }
+  │ - this '}' doesn't line up with it, but closes it
+  ·
+9 │ fn broken() -> i32 {
+  │ -- the next item starts here
+
+error: expected an expression, found ';'
+   ┌─ tests/diag/unclosed_block.volt:10:15
+   │
+10 │     return 2 +;
+   │               ^
+
+error: this '{' is never closed
+   ┌─ tests/diag/unclosed_block.volt:13:19
+   │
+13 │ fn tail() -> void {
+   │                   ^
+   ·
+15 │ 
+   │ - the file ends here
+
+error: aborting due to 3 errors

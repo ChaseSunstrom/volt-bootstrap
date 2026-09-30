@@ -1,0 +1,13 @@
+error: expected i32, found bool
+  ┌─ tests/diag/error_limit.volt:3:24
+  │
+3 │ fn a() -> i32 { return true; }
+  │                        ^^^^
+
+error: expected i32, found str
+  ┌─ tests/diag/error_limit.volt:4:24
+  │
+4 │ fn b() -> i32 { return "b"; }
+  │                        ^^^
+
+error: aborting due to 3 errors (2 shown; --error-limit 0 shows every one)

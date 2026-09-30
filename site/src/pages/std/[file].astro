@@ -1,0 +1,204 @@
+---
+// The std reference: a page per std source file, from src/data/std.json (`voltc doc std`, kept in
+// sync by tests/docs.rs). Each type gets its fields or variants and the methods attached to it.
+import StarlightPage from "@astrojs/starlight/components/StarlightPage.astro";
+import { Code } from "@astrojs/starlight/components";
+import std from "../../data/std.json";
+
+type Member = { name: string; signature: string; doc: string };
+type Item = {
+  kind: string;
+  name: string;
+  namespace: string[];
+  receiver?: string;
+  trait?: string;
+  signature: string;
+  doc: string;
+  file: string;
+  line: number;
+  fields?: Member[];
+  variants?: Member[];
+  methods?: Member[];
+};
+
+export function getStaticPaths() {
+  return std.files.map((f) => ({ params: { file: f.file.replace(/\.volt$/, "") } }));
+}
+
+const { file } = Astro.params;
+const items = std.items as Item[];
+const here = items.filter((i) => i.file === `${file}.volt`);
+const typeKinds = ["struct", "enum", "error", "trait"];
+const types = here.filter((i) => typeKinds.includes(i.kind));
+const typeNames = new Set(items.filter((i) => typeKinds.includes(i.kind)).map((i) => i.name));
+const fns = here.filter((i) => i.kind === "fn");
+const globals = here.filter((i) => i.kind === "global");
+// methods on a std type are listed with the type (wherever they're declared); the rest here
+const methodsOf = (t: string) => items.filter((i) => i.kind === "method" && i.receiver === t);
+const otherMethods = here.filter((i) => i.kind === "method" && !typeNames.has(i.receiver ?? ""));
+const impls = (t: string) => items.filter((i) => i.kind === "impl" && i.name === t);
+
+const fileDoc = (std.files.find((f) => f.file === `${file}.volt`)?.doc ?? "")
+  .split("\n")
+  .filter((l) => !l.startsWith("(Part of package std"))
+  .join(" ")
+  .replace(/^std::\w+:\s*/, "")
+  .replace(/^./, (c) => c.toUpperCase());
+const title = `std::${file}`;
+
+const qual = (i: Item) => ["std", ...i.namespace, i.name].join("::");
+const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9_]+/g, "-");
+
+// doc comments are plain text with `code` spans; wrapped lines join into one paragraph
+function prose(text: string): string {
+  const esc = text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  return esc.replace(/`([^`]+)`/g, "<code>$1</code>").replace(/\n/g, " ");
+}
+
+const headings = [
+  ...(types.length ? [{ depth: 2, slug: "types", text: "Types" }] : []),
+  ...types.map((t) => ({ depth: 3, slug: slug(t.name), text: t.name })),
+  ...(fns.length ? [{ depth: 2, slug: "functions", text: "Functions" }] : []),
+  ...(otherMethods.length ? [{ depth: 2, slug: "methods-on-other-types", text: "Methods on other types" }] : []),
+  ...(globals.length ? [{ depth: 2, slug: "globals", text: "Globals" }] : []),
+];
+---
+
+<StarlightPage frontmatter={{ title, description: fileDoc }} headings={headings}>
+  <p set:html={prose(fileDoc)} />
+  <p class="std-source">Source: <code>std/{file}.volt</code></p>
+
+  {
+    types.length > 0 && (
+      <>
+        <h2 id="types">Types</h2>
+        {types.map((t) => (
+          <section class="std-item">
+            <h3 id={slug(t.name)}>
+              <span class="std-kind">{t.kind}</span> {qual(t)}
+            </h3>
+            <Code code={t.signature} lang="volt" wrap />
+            {t.doc && <p set:html={prose(t.doc)} />}
+            {impls(t.name).map((i) => (
+              <p>
+                Implements <code>{i.trait}</code>.
+              </p>
+            ))}
+            {(t.fields ?? t.variants ?? []).length > 0 && (
+              <table>
+                <thead>
+                  <tr>
+                    <th>{t.fields ? "Field" : "Variant"}</th>
+                    <th />
+                  </tr>
+                </thead>
+                <tbody>
+                  {(t.fields ?? t.variants ?? []).map((m) => (
+                    <tr>
+                      <td>
+                        <code>{m.signature}</code>
+                      </td>
+                      <td set:html={prose(m.doc)} />
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+            {(t.methods ?? []).length > 0 && (
+              <>
+                <h4>Required functions</h4>
+                {(t.methods ?? []).map((m) => (
+                  <div class="std-fn">
+                    <Code code={m.signature} lang="volt" wrap />
+                    {m.doc && <p set:html={prose(m.doc)} />}
+                  </div>
+                ))}
+              </>
+            )}
+            {methodsOf(t.name).length > 0 && (
+              <>
+                <h4>Methods</h4>
+                {methodsOf(t.name).map((m) => (
+                  <div class="std-fn">
+                    <Code code={m.signature} lang="volt" wrap />
+                    {m.doc && <p set:html={prose(m.doc)} />}
+                  </div>
+                ))}
+              </>
+            )}
+          </section>
+        ))}
+      </>
+    )
+  }
+
+  {
+    fns.length > 0 && (
+      <>
+        <h2 id="functions">Functions</h2>
+        {fns.map((f) => (
+          <div class="std-fn">
+            <p class="std-name">
+              <code>{qual(f)}</code>
+            </p>
+            <Code code={f.signature} lang="volt" wrap />
+            {f.doc && <p set:html={prose(f.doc)} />}
+          </div>
+        ))}
+      </>
+    )
+  }
+
+  {
+    otherMethods.length > 0 && (
+      <>
+        <h2 id="methods-on-other-types">Methods on other types</h2>
+        <p>Attached to built-in types, or to every type (<code>T</code>).</p>
+        {otherMethods.map((m) => (
+          <div class="std-fn">
+            <Code code={m.signature} lang="volt" wrap />
+            {m.doc && <p set:html={prose(m.doc)} />}
+          </div>
+        ))}
+      </>
+    )
+  }
+
+  {
+    globals.length > 0 && (
+      <>
+        <h2 id="globals">Globals</h2>
+        {globals.map((g) => (
+          <div class="std-fn">
+            <Code code={g.signature} lang="volt" wrap />
+            {g.doc && <p set:html={prose(g.doc)} />}
+          </div>
+        ))}
+      </>
+    )
+  }
+</StarlightPage>
+
+<style>
+  .std-kind {
+    font-size: 0.75em;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--sl-color-accent);
+    margin-right: 0.3em;
+  }
+  .std-source {
+    color: var(--sl-color-gray-3);
+    font-size: var(--sl-text-sm);
+  }
+  .std-item {
+    margin-top: 2.5rem;
+  }
+  .std-fn {
+    margin-top: 1.25rem;
+  }
+  .std-name {
+    margin-bottom: 0.25rem;
+  }
+</style>

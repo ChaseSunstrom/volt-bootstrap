@@ -1,0 +1,364 @@
+// Calls (direct, through fn values, variadic) and the @builtins.
+// A port of bootstrap/check/calls.rs.
+use std::mem;
+
+// ---------- calls ----------
+
+// Mark a fn instance used. The first time, its ir fn gets its linkage and a place in the output
+// order, and its body is queued for gen_fn (not for an intrinsic, or a fn a linked library defines).
+attach fn use_fn(this: checker&, idx: u32) -> void {
+    if (*this.used.at(@cast<usize>(idx))) {
+        return;
+    }
+    *this.used.at(@cast<usize>(idx)) = true;
+    if (this.fi(idx).intrinsic != null) {
+        return; // provided by the prelude
+    }
+    val irf = this.fi(idx).ir;
+    val link = this.fn_linkage(idx);
+    val f = this.ir.fn_at(irf);
+    f.link = link;
+    f.used = true;
+    put(&this.ir.order, irf);
+    if (this.is_async_fn(idx)) {
+        this.async_fns(idx); // its helpers are declared next to it
+    }
+    val fd = this.fn_decl_of(this.fi(idx).decl);
+    var has_body = false;
+    if (fd) {
+        has_body = (fd).body != null;
+    }
+    if (has_body && link != linkage::EXTERNAL) {
+        put(&this.queue, idx);
+    }
+}
+
+// `f(args)`: .VARIANT(...), a method call, a named fn (overloads resolved), Type::f() or an enum
+// variant; any other callee is a value, called through call_value
+attach fn call(this: checker&, callee: expr&, args: std::vec<expr>&, want: u32?, span: span) -> compile_error!tval {
+    match (callee.kind) {
+        .DOT_VARIANT(n) => { return this.dot_variant(n, args, want, span); },
+        .FIELD(base, name, gargs) => {
+            val recv = try this.expr(base, null);
+            var none: std::vec<garg> = {};
+            if (gargs) {
+                return this.method_call(recv, name, &gargs, args, want, span);
+            }
+            return this.method_call(recv, name, &none, args, want, span);
+        },
+        .PATH(p&) => {
+            if (!(p.is_single() && this.lookup_local(p.segs.at(0).name) != null)) {
+                val ns = this.env_at(this.cx.env).ns;
+                var f: found? = null;
+                if (p.segs.len == 1) {
+                    f = this.lookup(ns, p.segs.at(0).name);
+                } else {
+                    f = this.lookup_path_ns(ns, p);
+                }
+                var explicit: std::vec<garg> = {};
+                val last = p.segs.at(p.segs.len - 1);
+                val ex = &explicit;
+                var exp: std::vec<garg>& = ex;
+                if (last.args) {
+                    exp = &last.args;
+                }
+                if (f) {
+                    match (f) {
+                        .DECLS(l) => {
+                            var fns: std::vec<u32> = {};
+                            for (d&) in this.list(l).items() {
+                                if (this.fn_decl_of(*d) != null) {
+                                    put(&fns, *d);
+                                }
+                            }
+                            if (fns.len > 0) {
+                                return this.resolve_call(p.last(), &fns, null, null, exp, args, want, span);
+                            }
+                        },
+                        default => {},
+                    }
+                } else {
+                    val m = try this.member_path(p);
+                    if (m) {
+                        match (m) {
+                            .OF(t, mem) => {
+                                val eid = this.enum_of(t);
+                                if (eid) {
+                                    val idx = this.variant_index(eid, mem);
+                                    if (idx) {
+                                        return this.make_variant(t, idx, args, span);
+                                    }
+                                }
+                                return this.static_call(t, mem, exp, args, want, span);
+                            },
+                            .GENERIC_ENUM(d, mem) => {
+                                val t = try this.infer_enum(d, mem, args, want, span);
+                                return this.type_member_value(t, mem, args, span);
+                            },
+                        }
+                    }
+                }
+            }
+        },
+        default => {},
+    }
+    val fv = try this.expr(callee, null);
+    return this.call_value(fv, args, span);
+}
+
+// call through a value: a C fn pointer, a fn(...) value (its fn and env) or a closure
+attach fn call_value(this: checker&, f: tval, args: std::vec<expr>&, span: span) -> compile_error!tval {
+    var ps: std::vec<u32> = {};
+    var ret: u32 = VOID;
+    var va = false;
+    var kind = 0;
+    var closure: u32 = 0;
+    match (*this.t.get(f.ty)) {
+        .FN_PTR(p, r, v) => {
+            ps = copy p;
+            ret = r;
+            va = v;
+            kind = 0;
+        },
+        .FN_VAL(p, r) => {
+            ps = copy p;
+            ret = r;
+            kind = 1;
+        },
+        .CLOSURE(c) => {
+            ps = copy this.ci(c).params;
+            ret = this.ci(c).ret;
+            kind = 2;
+            closure = c;
+        },
+        default => { return fail(span, fmt("can't call a {}", this.ty_name(f.ty))); },
+    }
+    if (args.len < ps.len || (!va && args.len > ps.len)) {
+        return fail(span, fmt2("expected {} arguments, found {}", unum(@cast<u64>(ps.len)), unum(@cast<u64>(args.len))));
+    }
+    val fty = f.ty;
+    var vals: std::vec<tval> = {};
+    put(&vals, f);
+    for (i) in 0..args.len {
+        val a = args.at(i);
+        if (i < ps.len) {
+            val p = *ps.at(i);
+            val v = try this.expr(a, p);
+            put(&vals, try this.take_into(v, p, a.span));
+        } else {
+            val v = try this.expr(a, null);
+            put(&vals, try this.vararg_val(v, a.span));
+        }
+    }
+    val pre = this.seq_vals(&vals);
+    var cs: std::vec<u32> = {};
+    for (i) in 1..vals.len {
+        put(&cs, vals.at(i).c);
+    }
+    var c: u32 = 0;
+    if (kind == 0) {
+        c = this.ir.call(vals.at(0).c, move cs, ret);
+    } else if (kind == 1) {
+        val tf = this.tmp_local("f", fty);
+        var all: std::vec<u32> = {};
+        put(&all, this.ir.field(tf.c, 1, VOIDPTR));
+        for (x&) in cs.items() {
+            put(&all, *x);
+        }
+        val call = this.ir.call(this.ir.field(tf.c, 0, VOIDPTR), move all, ret);
+        c = this.ir.seq(nodes(this.ir.decl(tf.id, vals.at(0).c)), call, ret);
+        if (ret == VOID || ret == NEVER) {
+            c = this.ir.seq(nodes2(this.ir.decl(tf.id, vals.at(0).c), call), null, ret);
+        }
+    } else {
+        val fir = this.ci(closure).fn_ir;
+        val pt = this.t.ref_to(fty);
+        var all: std::vec<u32> = {};
+        if (vals.at(0).lv) {
+            put(&all, this.ir.addr(vals.at(0).c, pt));
+            for (x&) in cs.items() {
+                put(&all, *x);
+            }
+            c = this.call_fn(fir, move all, ret);
+        } else {
+            val tcl = this.tmp_local("cl", fty);
+            put(&all, this.ir.addr(tcl.c, pt));
+            for (x&) in cs.items() {
+                put(&all, *x);
+            }
+            val call = this.call_fn(fir, move all, ret);
+            if (ret == VOID || ret == NEVER) {
+                c = this.ir.seq(nodes2(this.ir.decl(tcl.id, vals.at(0).c), call), null, ret);
+            } else {
+                c = this.ir.seq(nodes(this.ir.decl(tcl.id, vals.at(0).c)), call, ret);
+            }
+        }
+    }
+    return vnew(ret, this.wrap_pre(move pre, c, ret));
+}
+
+// an argument for C varargs: a str literal becomes a cstr, a float narrower than f64 is promoted
+attach fn vararg_val(this: checker&, v: tval, span: span) -> compile_error!tval {
+    match (*this.t.get(v.ty)) {
+        .STR => {
+            if (v.lit != null) {
+                return this.coerce(v, CSTR, span);
+            }
+            return fails(span, "C varargs can't take a str; pass a cstr");
+        },
+        .FLOAT(b) => {
+            if (b < 64) {
+                var r = v;
+                r.c = this.ir.conv(v.c, F64);
+                r.ty = F64;
+                r.lit = null;
+                return r;
+            }
+        },
+        default => {},
+    }
+    return v;
+}
+
+// ---------- builtins ----------
+
+// a generic arg read as a type in the current fn's env
+attach fn garg_type(this: checker&, g: garg&) -> compile_error!u32 {
+    return this.garg_type_env(g, this.cx.env);
+}
+
+// a builtin's argument checked as an expression
+attach fn garg_expr(this: checker&, g: garg&, want: u32?) -> compile_error!tval {
+    val e = try this.garg_value(g);
+    return this.expr(e, want);
+}
+
+// a scalar for @cast: converts as a value, not by reinterpreting bytes
+attach fn cast_scalar(this: checker&, t: u32) -> bool {
+    match (*this.t.get(t)) {
+        .INT(k) => { return true; },
+        .FLOAT(b) => { return true; },
+        .BOOL => { return true; },
+        .REF(x) => { return true; },
+        .PTR(x) => { return true; },
+        .VOIDPTR => { return true; },
+        .CSTR => { return true; },
+        .FN_PTR(a, b, c) => { return true; },
+        .OPT(i) => { return this.t.is_niche(i); },
+        default => { return false; },
+    }
+}
+
+// The @builtins that generate code: sizeof, alignof, offsetof, cast, write, slice, read, panic.
+// The compile-time ones (@typeinfo...) are evaluated by comptime instead.
+attach fn builtin(this: checker&, name: str, gargs: std::vec<garg>&, args_opt: std::vec<garg>*, want: u32?, span: span) -> compile_error!tval {
+    var none: std::vec<garg> = {};
+    var args: std::vec<garg>& = &none;
+    if (args_opt) {
+        args = args_opt;
+    }
+    if (name == "cpp") {
+        return this.cpp_call(gargs, args, span);
+    }
+    if (name == "sizeof" || name == "alignof") {
+        if (args.len != 1) {
+            return fail(span, fmt("@{} takes 1 argument(s)", S(name)));
+        }
+        val t = try this.garg_type(args.at(0));
+        if (name == "sizeof") {
+            return vpure(USIZE, this.ir.node(ir_kind::SIZEOF(t), USIZE));
+        }
+        return vpure(USIZE, this.ir.node(ir_kind::ALIGNOF(t), USIZE));
+    }
+    if (name == "offsetof") {
+        if (args.len != 2) {
+            return fail(span, fmt("@{} takes 2 argument(s)", S(name)));
+        }
+        val t = try this.garg_type(args.at(0));
+        val f = garg_name(args.at(1)) ?? return fails(span, "@offsetof(T, field) needs a field name");
+        match (*this.t.get(t)) {
+            .STRUCT(sid) => {
+                val fs = try this.struct_fields(sid, span);
+                for (i) in 0..fs.len {
+                    if (fs.at(i).name == f) {
+                        return vpure(USIZE, this.ir.node(ir_kind::OFFSETOF(t, @cast<u32>(i)), USIZE));
+                    }
+                }
+            },
+            default => {},
+        }
+        return fail(span, fmt2("{} has no field '{}'", this.ty_name(t), S(f)));
+    }
+    if (name == "cast") {
+        if (args.len != 1) {
+            return fail(span, fmt("@{} takes 1 argument(s)", S(name)));
+        }
+        if (gargs.len != 1) {
+            return fails(span, "@cast<T>(x) needs one type");
+        }
+        val to = try this.garg_type(gargs.at(0));
+        val v = try this.garg_expr(args.at(0), null);
+        if (this.cast_scalar(v.ty) && this.cast_scalar(to)) {
+            var r = vnew(to, this.ir.conv(v.c, to));
+            r.pure = v.pure;
+            return r;
+        }
+        return vnew(to, this.ir.bitcast(v.c, to));
+    }
+    if (name == "write") {
+        // store into memory without deleting what was there (it isn't a value yet)
+        if (args.len != 2) {
+            return fail(span, fmt("@{} takes 2 argument(s)", S(name)));
+        }
+        val p = try this.garg_expr(args.at(0), null);
+        val t = this.pointee(p.ty) ?? return fails(span, "@write(p, v) needs a T* first");
+        var v = try this.garg_expr(args.at(1), t);
+        v = try this.take(v, span);
+        v = try this.coerce(v, t, span);
+        val tw = this.tmp_local("w", p.ty);
+        return this.vstmt(this.ir.seq(nodes2(this.ir.decl(tw.id, p.c), this.ir.assign(this.ir.deref(tw.c, t), v.c)), null, VOID));
+    }
+    if (name == "slice") {
+        // unchecked: a slice over len values starting at ptr
+        if (args.len != 2) {
+            return fail(span, fmt("@{} takes 2 argument(s)", S(name)));
+        }
+        val p = try this.garg_expr(args.at(0), null);
+        val t = this.pointee(p.ty) ?? return fails(span, "@slice(p, len) needs a T* first");
+        var n = try this.garg_expr(args.at(1), USIZE);
+        n = try this.coerce(n, USIZE, span);
+        val st = this.t.intern(tyk::SLICE(t));
+        var inits: std::vec<field_init> = {};
+        put(&inits, { field: 0, value: p.c });
+        put(&inits, { field: 1, value: n.c });
+        return vnew(st, this.ir.node(ir_kind::AGG(move inits), st));
+    }
+    if (name == "read") {
+        // move the value out of memory without copying or deleting it (the opposite of @write)
+        if (args.len != 1) {
+            return fail(span, fmt("@{} takes 1 argument(s)", S(name)));
+        }
+        val p = try this.garg_expr(args.at(0), null);
+        val t = this.pointee(p.ty) ?? return fails(span, "@read(p) needs a T*");
+        return vnew(t, this.ir.deref(p.c, t));
+    }
+    if (name == "panic") {
+        if (args.len != 1) {
+            return fail(span, fmt("@{} takes 1 argument(s)", S(name)));
+        }
+        var v = try this.garg_expr(args.at(0), STR);
+        v = try this.coerce(v, STR, span);
+        val loc = this.ir.node(ir_kind::CSTR(this.loc(span)), CSTR);
+        return vnew(NEVER, this.ir.rt_call("volt_panic_str", nodes2(v.c, loc), NEVER));
+    }
+    return fail(span, fmt("unknown builtin @{}", S(name)));
+}
+
+// what a T& or T* points at
+attach fn pointee(this: checker&, t: u32) -> u32? {
+    match (*this.t.get(t)) {
+        .REF(x) => { return x; },
+        .PTR(x) => { return x; },
+        default => { return null; },
+    }
+}

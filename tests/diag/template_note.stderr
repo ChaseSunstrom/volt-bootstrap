@@ -1,0 +1,8 @@
+error: can't use + on bool
+  ┌─ tests/diag/template_note.volt:4:12
+  │
+4 │     return x + x;
+  │            ^^^^^
+  ·
+9 │     val b = twice(true);
+  │             ----------- twice<bool> is instantiated here

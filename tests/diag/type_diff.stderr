@@ -1,0 +1,13 @@
+[1;31merror[0m[1m: expected std::vec<[1;33mi32[0m[1m, std::mem::default_allocator>, found std::vec<[1;33mi64[0m[1m, std::mem::default_allocator>[0m
+  [1;34m┌─[0m tests/diag/type_diff.volt:6:12
+  [1;34m│[0m
+[1;34m6[0m [1;34m│[0m     return m;
+  [1;34m│[0m            [1;31m^[0m
+
+[1;31merror[0m[1m: mismatched types [1;33mi32[0m[1m* and [1;33mi64[0m[1m*[0m
+   [1;34m┌─[0m tests/diag/type_diff.volt:10:12
+   [1;34m│[0m
+[1;34m10[0m [1;34m│[0m     return a == b;
+   [1;34m│[0m            [1;31m^^^^^^[0m
+
+[1;31merror[0m[1m: aborting due to 2 errors[0m

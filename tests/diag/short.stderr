@@ -1,0 +1,1 @@
+tests/diag/short.volt:3:18: error: expected i32, found bool

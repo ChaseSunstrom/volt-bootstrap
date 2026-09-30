@@ -1,0 +1,136 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Volt",
+  "scopeName": "source.volt",
+  "fileTypes": ["volt"],
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#strings" },
+    { "include": "#chars" },
+    { "include": "#builtins" },
+    { "include": "#declarations" },
+    { "include": "#keywords" },
+    { "include": "#types" },
+    { "include": "#constants" },
+    { "include": "#numbers" },
+    { "include": "#calls" },
+    { "include": "#paths" },
+    { "include": "#operators" },
+    { "include": "#punctuation" }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        { "name": "comment.block.volt", "begin": "/\\*", "end": "\\*/" },
+        { "name": "comment.line.double-slash.volt", "match": "//.*$" }
+      ]
+    },
+    "escapes": {
+      "name": "constant.character.escape.volt",
+      "match": "\\\\(?:x[0-9a-fA-F]{2}|u\\{[0-9a-fA-F]+\\}|[nrt0\\\\\"'])"
+    },
+    "strings": {
+      "name": "string.quoted.double.volt",
+      "begin": "\"",
+      "end": "\"",
+      "patterns": [
+        { "include": "#escapes" },
+        { "name": "constant.character.escape.volt", "match": "\\{\\{|\\}\\}" },
+        { "name": "constant.other.placeholder.volt", "match": "\\{\\}" }
+      ]
+    },
+    "chars": {
+      "name": "string.quoted.single.volt",
+      "match": "'(?:[^'\\\\]|\\\\(?:x[0-9a-fA-F]{2}|u\\{[0-9a-fA-F]+\\}|[nrt0\\\\\"']))'"
+    },
+    "builtins": {
+      "name": "support.function.builtin.volt",
+      "match": "@[A-Za-z_][A-Za-z0-9_]*"
+    },
+    "declarations": {
+      "patterns": [
+        {
+          "match": "\\b(fn)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": { "name": "storage.type.function.volt" },
+            "2": { "name": "entity.name.function.volt" }
+          }
+        },
+        {
+          "match": "\\b(struct|enum|error|trait)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": { "name": "storage.type.volt" },
+            "2": { "name": "entity.name.type.volt" }
+          }
+        },
+        {
+          "match": "\\b(namespace)\\s+([A-Za-z_][A-Za-z0-9_]*(?:::[A-Za-z_][A-Za-z0-9_]*)*)",
+          "captures": {
+            "1": { "name": "storage.type.volt" },
+            "2": { "name": "entity.name.namespace.volt" }
+          }
+        }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.volt",
+          "match": "\\b(if|else|for|in|while|loop|break|continue|return|match|default|try|catch|defer|errdefer|await|suspend|resume)\\b"
+        },
+        { "name": "storage.type.function.volt", "match": "\\bfn\\b" },
+        { "name": "storage.type.volt", "match": "\\b(val|var|struct|enum|error|trait|namespace)\\b" },
+        { "name": "storage.modifier.volt", "match": "\\b(public|internal|static|extern|export|comptime|async)\\b" },
+        { "name": "keyword.other.volt", "match": "\\b(use|as|attach|move|copy)\\b" },
+        { "name": "variable.language.this.volt", "match": "\\bthis\\b" }
+      ]
+    },
+    "types": {
+      "name": "support.type.primitive.volt",
+      "match": "\\b(i8|i16|i32|i64|i128|isize|u8|u16|u32|u64|u128|usize|f16|f32|f64|f128|bool|str|cstr|void|never|type)\\b"
+    },
+    "constants": {
+      "patterns": [
+        { "name": "constant.language.volt", "match": "\\b(true|false|null)\\b" },
+        { "name": "constant.other.caps.volt", "match": "\\b[A-Z][A-Z0-9_]+\\b" }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        { "name": "constant.numeric.hex.volt", "match": "\\b0x[0-9a-fA-F_]+\\b" },
+        { "name": "constant.numeric.binary.volt", "match": "\\b0b[01_]+\\b" },
+        { "name": "constant.numeric.octal.volt", "match": "\\b0o[0-7_]+\\b" },
+        {
+          "name": "constant.numeric.float.volt",
+          "match": "\\b[0-9][0-9_]*(?:\\.[0-9][0-9_]*(?:[eE][+-]?[0-9]+)?|[eE][+-]?[0-9]+)\\b"
+        },
+        { "name": "constant.numeric.integer.volt", "match": "\\b[0-9][0-9_]*\\b" }
+      ]
+    },
+    "calls": {
+      "match": "\\b([A-Za-z_][A-Za-z0-9_]*)\\s*(?=\\()",
+      "captures": {
+        "1": { "name": "entity.name.function.call.volt" }
+      }
+    },
+    "paths": {
+      "name": "entity.name.namespace.volt",
+      "match": "\\b[A-Za-z_][A-Za-z0-9_]*(?=::)"
+    },
+    "operators": {
+      "patterns": [
+        { "name": "punctuation.separator.namespace.volt", "match": "::" },
+        {
+          "name": "keyword.operator.volt",
+          "match": "->|=>|\\?\\?|\\.\\.\\.|\\.\\.=|\\.\\.|<<=|>>=|[+\\-*]%=?|[+\\-*/%&|^]=|==|!=|<=|>=|&&|\\|\\||<<|>>|\\+\\+|--|[+\\-*/%&|^~!<>=?]"
+        }
+      ]
+    },
+    "punctuation": {
+      "patterns": [
+        { "name": "punctuation.terminator.volt", "match": ";" },
+        { "name": "punctuation.separator.volt", "match": "," }
+      ]
+    }
+  }
+}

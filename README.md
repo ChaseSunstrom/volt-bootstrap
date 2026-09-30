@@ -1,1 +1,116 @@
-# volt-bootstrap
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/logo/volt-logo-dark.svg">
+    <img alt="Volt" src="assets/logo/volt-logo-light.svg" width="340">
+  </picture>
+</p>
+
+<p align="center">
+  <b>A systems language with no runtime and nothing hidden.</b><br>
+  <a href="https://chasesunstrom.github.io/volt-bootstrap/">Website</a> ·
+  <a href="https://chasesunstrom.github.io/volt-bootstrap/start/install/">Install</a> ·
+  <a href="https://chasesunstrom.github.io/volt-bootstrap/start/tour/">Tour</a> ·
+  <a href="https://chasesunstrom.github.io/volt-bootstrap/guide/basics/">Language guide</a> ·
+  <a href="https://chasesunstrom.github.io/volt-bootstrap/bolt/overview/">bolt</a>
+</p>
+
+Volt is a compiled language with no garbage collector, no vtables, no exceptions and no scheduler:
+every call is resolved at compile time. Values are owned and deleted when their scope ends, errors
+are values, generics are templates, and code can run in the compiler. It compiles to readable C or,
+through LLVM, to native code; it reads C and C++ headers directly; and its compiler, `voltc`, is
+written in Volt and builds itself.
+
+```volt
+use std::io;
+
+error parse_error { EMPTY, BAD_DIGIT }
+
+fn parse(s: str) -> parse_error!i32 {           // an error, or a value
+    if (s.len == 0) {
+        return parse_error::EMPTY;
+    }
+    var n = 0;
+    for (ch) in s {
+        if (ch < '0' || ch > '9') {
+            return parse_error::BAD_DIGIT;
+        }
+        n = n * 10 + (ch - '0') as i32;         // overflow stops the program in debug builds
+    }
+    return n;
+}
+
+fn main() -> !void {
+    val a = try parse("42");                    // try passes an error up
+    val b = parse("4x") catch -1;               // catch handles it
+    var seen: std::vec<i32> = {};               // owned: deleted at the end of main
+    try seen.push(a);
+    std::println("{} {} {}", a, b, seen.len);
+}
+// expect: 42 -1 1
+```
+
+## What's in it
+
+- **Ownership** without a collector: deletes run at scope end, moves are tracked, copies are
+  explicit, `box<T>` owns heap memory.
+- **Errors as values** (`E!T`, `try`, `catch`, `errdefer`) and **optionals** (`T?`, `??`, narrowing).
+- **Templates** with specialization, packs and constant parameters; **traits** as constraints, and
+  as tagged unions instead of vtables.
+- **Comptime**: functions, `if`, `match` and `for` that run in the compiler, types as values,
+  `@typeinfo`.
+- **Async** as stackless frames of known size, driven by hand.
+- **Interop**: real C headers, C++ classes and templates, and libraries with bindings for C, C++,
+  Rust, Zig and Python.
+- **Tooling**: diagnostics that point at the problem, the **bolt** build tool, a language server,
+  and a VS Code extension.
+
+## Build
+
+You need stable Rust, a C compiler, and LLVM 22 with libclang (`llvm-c/` and `clang-c/` headers).
+
+```sh
+cargo build --release                                        # voltc-bootstrap and bolt
+cd voltc && ../target/release/bolt build --release && cd ..  # voltc, the compiler
+export PATH="$PWD/voltc/target/release:$PWD/target/release:$PATH"
+export VOLT_STD="$PWD/std"
+voltc run examples/tour.volt
+```
+
+Then `bolt new hello && cd hello && bolt run`. The
+[install guide](https://chasesunstrom.github.io/volt-bootstrap/start/install/) has the details.
+
+## Repository
+
+| Path | |
+| --- | --- |
+| [`voltc/`](voltc) | the compiler, in Volt: checker, typed IR, C and LLVM backends, C/C++ import, language server |
+| [`bootstrap/`](bootstrap) | `voltc-bootstrap`, the stage0 compiler in Rust that builds voltc the first time |
+| [`std/`](std) | the standard library, an ordinary package |
+| [`runtime/`](runtime) | the small C prelude and runtime every program includes |
+| [`bolt/`](bolt) | the build tool, and the API its build files use |
+| [`editors/vscode/`](editors/vscode) | the VS Code extension |
+| [`site/`](site) | the website and documentation |
+| [`examples/`](examples), [`tests/`](tests) | the tour and example programs; the test suites |
+| [`assets/logo/`](assets/logo) | the logo, drawn by `logo.ts` |
+
+## Testing
+
+```sh
+cargo test                  # goldens, compiler parity, bolt, interop, the language server, the docs
+cd voltc && VOLTC=../target/release/voltc-bootstrap ../target/release/bolt build bootstrap
+```
+
+The second command is the bootstrap check: voltc rebuilds itself until two stages produce the same C,
+then through LLVM, and runs the golden suite on both backends. See
+[Internals](https://chasesunstrom.github.io/volt-bootstrap/internals/architecture/) and
+[Contributing](https://chasesunstrom.github.io/volt-bootstrap/internals/contributing/).
+
+## Status
+
+Volt is young. The LLVM backend targets x86-64 for now and has no debug info yet; there's no package
+registry (bolt uses paths and git).
+
+## License
+
+Volt is licensed under either of the [MIT License](LICENSE-MIT) or the
+[Apache License, Version 2.0](LICENSE-APACHE), at your option.

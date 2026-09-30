@@ -1,0 +1,8 @@
+error: 'limit' is already declared in this namespace
+  ┌─ tests/diag/duplicate.volt:4:4
+  │
+2 │ val limit: i32 = 1;
+  │     ----- first declared here
+  ·
+4 │ fn limit() -> i32 {
+  │    ^^^^^

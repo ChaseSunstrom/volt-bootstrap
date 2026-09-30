@@ -1,0 +1,7 @@
+error: unknown name 'cuont'
+  ┌─ tests/diag/did_you_mean.volt:4:12
+  │
+4 │     return cuont;
+  │            ^^^^^
+  │
+  = help: did you mean 'count'?

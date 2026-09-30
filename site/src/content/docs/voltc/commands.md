@@ -1,0 +1,62 @@
+---
+title: Commands and options
+description: Every voltc command and flag.
+sidebar:
+  order: 1
+---
+
+`voltc` is the compiler. Every file named on the command line is part of one program.
+`voltc-bootstrap`, the stage0 compiler, takes the same commands except where noted.
+
+## Commands
+
+| Command | What it does |
+| --- | --- |
+| `voltc run FILES... [-- ARGS]` | build and run; everything after `--` goes to the program |
+| `voltc build FILES... [-o OUT]` | build an executable |
+| `voltc check FILES...` | type check only |
+| `voltc emit-c FILES... [-o DIR]` | print the generated C, or with `-o DIR` write it as separate files |
+| `voltc emit-llvm FILES...` | print the LLVM IR (self-hosted voltc) |
+| `voltc lib NAME [-o OUT]` | precompile package NAME's non-generic code into `libNAME.a` (see [Packages](/volt-bootstrap/voltc/packages/)) |
+| `voltc bindings NAME --lang L` | declarations of package NAME's `export fn`s for C, C++, Rust, Zig or Python |
+| `voltc doc NAME` | package NAME's declarations and doc comments, as JSON |
+| `voltc parse FILE --sexp` | print the parse tree (used to compare the two compilers) |
+| `voltc lsp` | the [language server](/volt-bootstrap/editors/lsp/) |
+| `voltc std-dir` | print where the std package is |
+
+## Options
+
+| Flag | Effect |
+| --- | --- |
+| `--release` | optimize (`-O2`); drop the debug checks, so integer overflow wraps |
+| `--leak-check` | debug builds: exit with 102 if any allocation was never freed |
+| `--std DIR`, `--no-std` | the std package (default: `$VOLT_STD`, then a `std/` next to voltc) |
+| `--pkg NAME=DIR` | a package: DIR's `.volt` files, in `namespace NAME` |
+| `--link NAME=LIB.a` | take package NAME's non-generic code from a `voltc lib` build |
+| `--cfg [PKG:]KEY[=VALUE]` | set KEY for `@cfg` in the program's files, or in package PKG's |
+| `--lib NAME` | with `check`: check package NAME alone, as a library (no `main`) |
+| `--shared`, `--static` | with `lib`: a self-contained `.so` or `.a` for other languages |
+| `--lang L` | with `bindings`: `c`, `cpp`, `rust`, `zig` or `python` |
+| `--cc ARG` | pass ARG to the C compiler: a `.c` file, `-lNAME`, `-I`, `-D`... (repeatable) |
+| `--backend c\|llvm` | self-hosted voltc: generate C (default) or native code through LLVM |
+| `--message-format F` | `human` (default), `short` or `json`: see [Diagnostics](/volt-bootstrap/voltc/diagnostics/) |
+| `--color WHEN` | `auto` (default), `always` or `never` |
+| `--error-limit N` | show at most N errors, the first in source order (default 20; `0`: all) |
+| `-o PATH` | output file (or directory, for `emit-c`) |
+
+## Environment
+
+| Variable | Used for |
+| --- | --- |
+| `VOLT_STD` | where std is, when `--std` isn't given |
+| `CC` | the C compiler (default `cc`); it may be a command with words, like `ccache gcc` |
+| `CXX` | the C++ compiler for `use cpp` wrappers (default `c++`) |
+| `VOLT_CLANG_RESOURCE_DIR` | libclang's resource directory, when `clang -print-resource-dir` can't find it |
+| `NO_COLOR` | turn colour off (with `--color auto`) |
+| `VOLT_SHOW_CPP` | `1`: print the Volt declarations generated from C++ headers |
+
+## Exit codes
+
+`0` on success, `1` for compile errors, `2` for a bad command line. A program built by voltc exits
+with what `main` returns, `1` when `main` returns an error, `101` on a panic and `102` for a leak
+under `--leak-check`.

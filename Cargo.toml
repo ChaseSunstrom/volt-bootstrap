@@ -1,0 +1,15 @@
+[package]
+name = "volt"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+
+# The stage0 compiler (Rust): builds the self-hosted voltc in voltc/.
+[[bin]]
+name = "voltc-bootstrap"
+path = "bootstrap/main.rs"
+
+# The build tool.
+[[bin]]
+name = "bolt"
+path = "bolt/main.rs"

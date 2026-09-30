@@ -1,0 +1,27 @@
+// std::compare: eq and cmp, the methods std's collections and algorithms compare values with.
+// Every type with == and < has them here; a type of your own attaches its own
+// (eq(this: T&, other: T&) -> bool, cmp(this: T&, other: T&) -> i32), and those win over these.
+// (Part of package std: the package loader wraps every file in `namespace std`.)
+
+// whether this and other are equal, by ==
+<T: type>
+attach fn eq(this: T&, other: T&) -> bool {
+    return *this == *other;
+}
+
+// -1, 0 or 1: how this sorts against other, by <
+<T: type>
+attach fn cmp(this: T&, other: T&) -> i32 {
+    if (*this < *other) {
+        return -1;
+    }
+    if (*other < *this) {
+        return 1;
+    }
+    return 0;
+}
+
+// str sorts byte by byte (see str's cmp in std::text)
+attach fn cmp(this: str&, other: str&) -> i32 {
+    return this.cmp(*other);
+}

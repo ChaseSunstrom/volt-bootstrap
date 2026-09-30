@@ -1,0 +1,8 @@
+error: argument 1 is a oops!i32&, but 'takes' wants a oops!(i32&)
+  ┌─ tests/diag/arg_mismatch.volt:8:11
+  │
+4 │ fn takes(r: oops!(i32&)) -> void {}
+  │          -------------- parameter declared here
+  ·
+8 │     takes(&x);
+  │           ^^

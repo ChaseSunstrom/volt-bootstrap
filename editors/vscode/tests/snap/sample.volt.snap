@@ -1,0 +1,367 @@
+>// A little of everything, for the grammar snapshot (tests/snap/sample.volt.snap)
+#^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ source.volt comment.line.double-slash.volt
+>use std::io;
+#^^^ source.volt keyword.other.volt
+#   ^ source.volt
+#    ^^^ source.volt entity.name.namespace.volt
+#       ^^ source.volt punctuation.separator.namespace.volt
+#         ^^ source.volt
+#           ^ source.volt punctuation.terminator.volt
+>use { "stdio.h" } as c;
+#^^^ source.volt keyword.other.volt
+#   ^^^ source.volt
+#      ^ source.volt string.quoted.double.volt
+#       ^^^^^^^ source.volt string.quoted.double.volt
+#              ^ source.volt string.quoted.double.volt
+#               ^^^ source.volt
+#                  ^^ source.volt keyword.other.volt
+#                    ^^ source.volt
+#                      ^ source.volt punctuation.terminator.volt
+>
+>/* shapes: a trait, two types that attach to it */
+#^^ source.volt comment.block.volt
+#  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ source.volt comment.block.volt
+#                                                ^^ source.volt comment.block.volt
+>trait shape {
+#^^^^^ source.volt storage.type.volt
+#     ^ source.volt
+#      ^^^^^ source.volt entity.name.type.volt
+#           ^^^ source.volt
+>    fn area(this: Self&) -> f64;
+#^^^^ source.volt
+#    ^^ source.volt storage.type.function.volt
+#      ^ source.volt
+#       ^^^^ source.volt entity.name.function.volt
+#           ^ source.volt
+#            ^^^^ source.volt variable.language.this.volt
+#                ^^^^^^ source.volt
+#                      ^ source.volt keyword.operator.volt
+#                       ^^ source.volt
+#                         ^^ source.volt keyword.operator.volt
+#                           ^ source.volt
+#                            ^^^ source.volt support.type.primitive.volt
+#                               ^ source.volt punctuation.terminator.volt
+>}
+#^^ source.volt
+>
+>struct circle { r: f64 = 1.0; }
+#^^^^^^ source.volt storage.type.volt
+#      ^ source.volt
+#       ^^^^^^ source.volt entity.name.type.volt
+#             ^^^^^^ source.volt
+#                   ^^^ source.volt support.type.primitive.volt
+#                      ^ source.volt
+#                       ^ source.volt keyword.operator.volt
+#                        ^ source.volt
+#                         ^^^ source.volt constant.numeric.float.volt
+#                            ^ source.volt punctuation.terminator.volt
+#                             ^^^ source.volt
+>
+>attach shape -> circle {
+#^^^^^^ source.volt keyword.other.volt
+#      ^^^^^^^ source.volt
+#             ^^ source.volt keyword.operator.volt
+#               ^^^^^^^^^^ source.volt
+>    fn area(this: circle&) -> f64 { return 3.14159 * this.r * this.r; }
+#^^^^ source.volt
+#    ^^ source.volt storage.type.function.volt
+#      ^ source.volt
+#       ^^^^ source.volt entity.name.function.volt
+#           ^ source.volt
+#            ^^^^ source.volt variable.language.this.volt
+#                ^^^^^^^^ source.volt
+#                        ^ source.volt keyword.operator.volt
+#                         ^^ source.volt
+#                           ^^ source.volt keyword.operator.volt
+#                             ^ source.volt
+#                              ^^^ source.volt support.type.primitive.volt
+#                                 ^^^ source.volt
+#                                    ^^^^^^ source.volt keyword.control.volt
+#                                          ^ source.volt
+#                                           ^^^^^^^ source.volt constant.numeric.float.volt
+#                                                  ^ source.volt
+#                                                   ^ source.volt keyword.operator.volt
+#                                                    ^ source.volt
+#                                                     ^^^^ source.volt variable.language.this.volt
+#                                                         ^^^ source.volt
+#                                                            ^ source.volt keyword.operator.volt
+#                                                             ^ source.volt
+#                                                              ^^^^ source.volt variable.language.this.volt
+#                                                                  ^^ source.volt
+#                                                                    ^ source.volt punctuation.terminator.volt
+#                                                                     ^^^ source.volt
+>}
+#^^ source.volt
+>
+>enum color: u8 { RED = 1, GREEN, BLUE, }
+#^^^^ source.volt storage.type.volt
+#    ^ source.volt
+#     ^^^^^ source.volt entity.name.type.volt
+#          ^^ source.volt
+#            ^^ source.volt support.type.primitive.volt
+#              ^^^ source.volt
+#                 ^^^ source.volt constant.other.caps.volt
+#                    ^ source.volt
+#                     ^ source.volt keyword.operator.volt
+#                      ^ source.volt
+#                       ^ source.volt constant.numeric.integer.volt
+#                        ^ source.volt punctuation.separator.volt
+#                         ^ source.volt
+#                          ^^^^^ source.volt constant.other.caps.volt
+#                               ^ source.volt punctuation.separator.volt
+#                                ^ source.volt
+#                                 ^^^^ source.volt constant.other.caps.volt
+#                                     ^ source.volt punctuation.separator.volt
+#                                      ^^^ source.volt
+>
+>@attributes([@deprecated("use total")])
+#^^^^^^^^^^^ source.volt support.function.builtin.volt
+#           ^^ source.volt
+#             ^^^^^^^^^^^ source.volt support.function.builtin.volt
+#                        ^ source.volt
+#                         ^ source.volt string.quoted.double.volt
+#                          ^^^^^^^^^ source.volt string.quoted.double.volt
+#                                   ^ source.volt string.quoted.double.volt
+#                                    ^^^^ source.volt
+><T: type, N: usize>
+#^ source.volt keyword.operator.volt
+# ^^^ source.volt
+#    ^^^^ source.volt support.type.primitive.volt
+#        ^ source.volt punctuation.separator.volt
+#         ^^^^ source.volt
+#             ^^^^^ source.volt support.type.primitive.volt
+#                  ^ source.volt keyword.operator.volt
+>fn sum(xs: T[N]) -> T {
+#^^ source.volt storage.type.function.volt
+#  ^ source.volt
+#   ^^^ source.volt entity.name.function.volt
+#      ^^^^^^^^^^^ source.volt
+#                 ^^ source.volt keyword.operator.volt
+#                   ^^^^^ source.volt
+>    var s: T = 0;
+#^^^^ source.volt
+#    ^^^ source.volt storage.type.volt
+#       ^^^^^^ source.volt
+#             ^ source.volt keyword.operator.volt
+#              ^ source.volt
+#               ^ source.volt constant.numeric.integer.volt
+#                ^ source.volt punctuation.terminator.volt
+>    for (x) in xs {
+#^^^^ source.volt
+#    ^^^ source.volt keyword.control.volt
+#       ^^^^^ source.volt
+#            ^^ source.volt keyword.control.volt
+#              ^^^^^^ source.volt
+>        s += x;
+#^^^^^^^^^^ source.volt
+#          ^^ source.volt keyword.operator.volt
+#            ^^ source.volt
+#              ^ source.volt punctuation.terminator.volt
+>    }
+#^^^^^^ source.volt
+>    return s;
+#^^^^ source.volt
+#    ^^^^^^ source.volt keyword.control.volt
+#          ^^ source.volt
+#            ^ source.volt punctuation.terminator.volt
+>}
+#^^ source.volt
+>
+>async fn fetch(id: u32) -> str? {
+#^^^^^ source.volt storage.modifier.volt
+#     ^ source.volt
+#      ^^ source.volt storage.type.function.volt
+#        ^ source.volt
+#         ^^^^^ source.volt entity.name.function.volt
+#              ^^^^^ source.volt
+#                   ^^^ source.volt support.type.primitive.volt
+#                      ^^ source.volt
+#                        ^^ source.volt keyword.operator.volt
+#                          ^ source.volt
+#                           ^^^ source.volt support.type.primitive.volt
+#                              ^ source.volt keyword.operator.volt
+#                               ^^^ source.volt
+>    comptime val limit = 10;
+#^^^^ source.volt
+#    ^^^^^^^^ source.volt storage.modifier.volt
+#            ^ source.volt
+#             ^^^ source.volt storage.type.volt
+#                ^^^^^^^ source.volt
+#                       ^ source.volt keyword.operator.volt
+#                        ^ source.volt
+#                         ^^ source.volt constant.numeric.integer.volt
+#                           ^ source.volt punctuation.terminator.volt
+>    if (id > limit) {
+#^^^^ source.volt
+#    ^^ source.volt keyword.control.volt
+#      ^^^^^ source.volt
+#           ^ source.volt keyword.operator.volt
+#            ^^^^^^^^^^ source.volt
+>        return null;
+#^^^^^^^^ source.volt
+#        ^^^^^^ source.volt keyword.control.volt
+#              ^ source.volt
+#               ^^^^ source.volt constant.language.volt
+#                   ^ source.volt punctuation.terminator.volt
+>    }
+#^^^^^^ source.volt
+>    return "ok";
+#^^^^ source.volt
+#    ^^^^^^ source.volt keyword.control.volt
+#          ^ source.volt
+#           ^ source.volt string.quoted.double.volt
+#            ^^ source.volt string.quoted.double.volt
+#              ^ source.volt string.quoted.double.volt
+#               ^ source.volt punctuation.terminator.volt
+>}
+#^^ source.volt
+>
+>export fn volt_add(a: i32, b: i32) -> i32 {
+#^^^^^^ source.volt storage.modifier.volt
+#      ^ source.volt
+#       ^^ source.volt storage.type.function.volt
+#         ^ source.volt
+#          ^^^^^^^^ source.volt entity.name.function.volt
+#                  ^^^^ source.volt
+#                      ^^^ source.volt support.type.primitive.volt
+#                         ^ source.volt punctuation.separator.volt
+#                          ^^^^ source.volt
+#                              ^^^ source.volt support.type.primitive.volt
+#                                 ^^ source.volt
+#                                   ^^ source.volt keyword.operator.volt
+#                                     ^ source.volt
+#                                      ^^^ source.volt support.type.primitive.volt
+#                                         ^^^ source.volt
+>    return a +% b;
+#^^^^ source.volt
+#    ^^^^^^ source.volt keyword.control.volt
+#          ^^^ source.volt
+#             ^^ source.volt keyword.operator.volt
+#               ^^ source.volt
+#                 ^ source.volt punctuation.terminator.volt
+>}
+#^^ source.volt
+>
+>fn main() -> void {
+#^^ source.volt storage.type.function.volt
+#  ^ source.volt
+#   ^^^^ source.volt entity.name.function.volt
+#       ^^^ source.volt
+#          ^^ source.volt keyword.operator.volt
+#            ^ source.volt
+#             ^^^^ source.volt support.type.primitive.volt
+#                 ^^^ source.volt
+>    val shapes: circle[2] = { { r: 2.0 }, {} };
+#^^^^ source.volt
+#    ^^^ source.volt storage.type.volt
+#       ^^^^^^^^^^^^^^^^ source.volt
+#                       ^ source.volt constant.numeric.integer.volt
+#                        ^^ source.volt
+#                          ^ source.volt keyword.operator.volt
+#                           ^^^^^^^^ source.volt
+#                                   ^^^ source.volt constant.numeric.float.volt
+#                                      ^^ source.volt
+#                                        ^ source.volt punctuation.separator.volt
+#                                         ^^^^^ source.volt
+#                                              ^ source.volt punctuation.terminator.volt
+>    val n = @sizeof(circle);
+#^^^^ source.volt
+#    ^^^ source.volt storage.type.volt
+#       ^^^ source.volt
+#          ^ source.volt keyword.operator.volt
+#           ^ source.volt
+#            ^^^^^^^ source.volt support.function.builtin.volt
+#                   ^^^^^^^^ source.volt
+#                           ^ source.volt punctuation.terminator.volt
+>    val f = fetch(3) ?? "none";
+#^^^^ source.volt
+#    ^^^ source.volt storage.type.volt
+#       ^^^ source.volt
+#          ^ source.volt keyword.operator.volt
+#           ^ source.volt
+#            ^^^^^ source.volt entity.name.function.call.volt
+#                 ^ source.volt
+#                  ^ source.volt constant.numeric.integer.volt
+#                   ^^ source.volt
+#                     ^^ source.volt keyword.operator.volt
+#                       ^ source.volt
+#                        ^ source.volt string.quoted.double.volt
+#                         ^^^^ source.volt string.quoted.double.volt
+#                             ^ source.volt string.quoted.double.volt
+#                              ^ source.volt punctuation.terminator.volt
+>    c::printf("%d\n", 0b1010);
+#^^^^ source.volt
+#    ^ source.volt entity.name.namespace.volt
+#     ^^ source.volt punctuation.separator.namespace.volt
+#       ^^^^^^ source.volt entity.name.function.call.volt
+#             ^ source.volt
+#              ^ source.volt string.quoted.double.volt
+#               ^^ source.volt string.quoted.double.volt
+#                 ^^ source.volt string.quoted.double.volt constant.character.escape.volt
+#                   ^ source.volt string.quoted.double.volt
+#                    ^ source.volt punctuation.separator.volt
+#                     ^ source.volt
+#                      ^^^^^^ source.volt constant.numeric.binary.volt
+#                            ^ source.volt
+#                             ^ source.volt punctuation.terminator.volt
+>    std::println("{} {} {}", shapes[0].area(), n, f);
+#^^^^ source.volt
+#    ^^^ source.volt entity.name.namespace.volt
+#       ^^ source.volt punctuation.separator.namespace.volt
+#         ^^^^^^^ source.volt entity.name.function.call.volt
+#                ^ source.volt
+#                 ^ source.volt string.quoted.double.volt
+#                  ^^ source.volt string.quoted.double.volt constant.other.placeholder.volt
+#                    ^ source.volt string.quoted.double.volt
+#                     ^^ source.volt string.quoted.double.volt constant.other.placeholder.volt
+#                       ^ source.volt string.quoted.double.volt
+#                        ^^ source.volt string.quoted.double.volt constant.other.placeholder.volt
+#                          ^ source.volt string.quoted.double.volt
+#                           ^ source.volt punctuation.separator.volt
+#                            ^^^^^^^^ source.volt
+#                                    ^ source.volt constant.numeric.integer.volt
+#                                     ^^ source.volt
+#                                       ^^^^ source.volt entity.name.function.call.volt
+#                                           ^^ source.volt
+#                                             ^ source.volt punctuation.separator.volt
+#                                              ^^ source.volt
+#                                                ^ source.volt punctuation.separator.volt
+#                                                 ^^^ source.volt
+#                                                    ^ source.volt punctuation.terminator.volt
+>    match (color::RED) {
+#^^^^ source.volt
+#    ^^^^^ source.volt keyword.control.volt
+#         ^^ source.volt
+#           ^^^^^ source.volt entity.name.namespace.volt
+#                ^^ source.volt punctuation.separator.namespace.volt
+#                  ^^^ source.volt constant.other.caps.volt
+#                     ^^^^ source.volt
+>        .RED => { std::println("red"); },
+#^^^^^^^^^ source.volt
+#         ^^^ source.volt constant.other.caps.volt
+#            ^ source.volt
+#             ^^ source.volt keyword.operator.volt
+#               ^^^ source.volt
+#                  ^^^ source.volt entity.name.namespace.volt
+#                     ^^ source.volt punctuation.separator.namespace.volt
+#                       ^^^^^^^ source.volt entity.name.function.call.volt
+#                              ^ source.volt
+#                               ^ source.volt string.quoted.double.volt
+#                                ^^^ source.volt string.quoted.double.volt
+#                                   ^ source.volt string.quoted.double.volt
+#                                    ^ source.volt
+#                                     ^ source.volt punctuation.terminator.volt
+#                                      ^^ source.volt
+#                                        ^ source.volt punctuation.separator.volt
+>        default => {},
+#^^^^^^^^ source.volt
+#        ^^^^^^^ source.volt keyword.control.volt
+#               ^ source.volt
+#                ^^ source.volt keyword.operator.volt
+#                  ^^^ source.volt
+#                     ^ source.volt punctuation.separator.volt
+>    }
+#^^^^^^ source.volt
+>}
+#^^ source.volt
+>
