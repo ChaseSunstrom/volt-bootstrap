@@ -112,13 +112,22 @@ export fn each(xs: i32[..], f: fn(i32) -> void) -> void {
 
 Each language gets these in its own style:
 
-| | C | C++ | Rust | Python | Zig | JavaScript | C# | Java | Go | Lua | Dart |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| errors | a struct of the code and the value | throws `error` | `Result<T, Error>` | raises a class per error set, all deriving from `Error` | `Error!T` | throws an `Error` whose `code` is the name | throws a `VoltException` subclass per error set | throws a `VoltException` subclass per error set | `(T, error)`, with an `*Error` value per code for `errors.Is` | raises a table with its `name` and `code` | throws a `VoltError` subclass per error set |
-| owned text | `volt_text`, freed with `volt_text_free` | `std::string` | `String` | `str` | `VoltText`, with `bytes()` and `deinit()` | a string | `string` | `String` | `string` | a string | `String` |
-| slices, optionals | structs | from vectors and arrays; `std::optional` | `&mut [T]`, `Option` | lists, `None` | `[]T`, `?T` | arrays, `null` | `Span<T>`, `T?` | arrays, `null` | slices; `*T` in, `(T, bool)` out | sequences (written back), `nil` | `List`s (written back), `null` |
-| an export struct | a pointer, and `NAME_free` | a class that frees itself | a type that frees itself when dropped | a class with `close()` and `with` | a type with `deinit()` | a class with `close()` and `Symbol.dispose` | an `IDisposable` class over a `SafeHandle` | an `AutoCloseable` class, freed by a `Cleaner` if not closed | a type with `Close`, and a finalizer | a userdata with `close()`, `<close>` and `__gc` | a class with `close()`, and a `NativeFinalizer` |
-| callbacks | a function and a `void *` | `std::function` | `&mut dyn FnMut` | any callable | a context and a function | any function | `Action` or `Func` | a functional interface | a `func` | any function | any function |
+| | errors | owned text | slices, optionals | an export struct | callbacks |
+| --- | --- | --- | --- | --- | --- |
+| C | a struct of the code and the value | `volt_text`, freed with `volt_text_free` | structs | a pointer, and `NAME_free` | a function and a `void *` |
+| C++ | throws `error` | `std::string` | from vectors and arrays; `std::optional` | a class that frees itself | `std::function` |
+| Rust | `Result<T, Error>` | `String` | `&mut [T]`, `Option` | a type that frees itself when dropped | `&mut dyn FnMut` |
+| Python | raises a class per error set, all deriving from `Error` | `str` | lists, `None` | a class with `close()` and `with` | any callable |
+| Zig | `Error!T` | `VoltText`, with `bytes()` and `deinit()` | `[]T`, `?T` | a type with `deinit()` | a context and a function |
+| JavaScript | throws an `Error` whose `code` is the name | a string | arrays, `null` | a class with `close()` and `Symbol.dispose` | any function |
+| C# | throws a `VoltException` subclass per error set | `string` | `Span<T>`, `T?` | an `IDisposable` class over a `SafeHandle` | `Action` or `Func` |
+| Java | throws a `VoltException` subclass per error set | `String` | arrays, `null` | an `AutoCloseable` class, freed by a `Cleaner` if not closed | a functional interface |
+| Go | `(T, error)`, with an `*Error` value per code for `errors.Is` | `string` | slices; `*T` in, `(T, bool)` out | a type with `Close`, and a finalizer | a `func` |
+| Lua | raises a table with its `name` and `code` | a string | sequences (written back), `nil` | a userdata with `close()`, `<close>` and `__gc` | any function |
+| Dart | throws a `VoltError` subclass per error set | `String` | `List`s (written back), `null` | a class with `close()`, and a `NativeFinalizer` | any function |
+| Swift | throws its error set's enum | `String` | `inout` arrays (written back), `T?` | a class with `close()`, freed by `deinit` | a closure |
+| Kotlin/Native | throws a `VoltException` subclass per error set | `String` | primitive arrays (in place) or `List`s, `T?` | an `AutoCloseable` class, freed by a `Cleaner` if not closed | a lambda |
+| Ruby | raises a `Mod::Error` subclass per error set | a `String` | `Array`s (written back), `nil` | a class with `close`, freed by the GC | a block or a `Proc` |
 
 ### JavaScript and TypeScript
 
@@ -251,6 +260,100 @@ Volt writes into one comes back. Enums are Dart enums, error sets are `VoltError
 their codes as constants, and callbacks are functions: an exception one throws comes out of the
 Volt call. The plain C functions are in class `Native`.
 
+### Swift
+
+`--lang swift` writes Swift over the C header, which Swift imports as module `C<package>`: put
+`--lang c`'s header in a directory with a `module.modulemap`, and point `swiftc` at it.
+
+```sh
+mkdir Cmathlib
+voltc bindings mathlib --pkg mathlib=lib --lang c > Cmathlib/mathlib.h
+printf 'module Cmathlib {\n    header "mathlib.h"\n    export *\n}\n' > Cmathlib/module.modulemap
+voltc bindings mathlib --pkg mathlib=lib --lang swift > mathlib.swift
+swiftc -I Cmathlib mathlib.swift main.swift -L. -lmathlib
+```
+
+```swift
+print(ml_greet("volt"))                       // hello, volt
+var v = vec2(x: 1, y: 2)
+ml_scale(&v, 2)                               // v is now (2, 4)
+do {
+    _ = try ml_sqrt(-1)
+} catch math_error.NEGATIVE {
+    print("negative")
+}
+let c = counter("clicks")
+_ = c.add(2)
+c.close()                                     // or leave it to deinit
+```
+
+Structs are the C structs; slices are `inout` arrays, so what Volt writes comes back. Enums and
+error sets are Swift enums (an error set's raw values are its codes); a function that can fail
+`throws`. Callbacks are closures.
+
+### Kotlin/Native
+
+`--lang kotlin` writes Kotlin over `cinterop`'s view of the C header, in package `c<package>`:
+
+```sh
+voltc bindings mathlib --pkg mathlib=lib --lang c > mathlib.h
+printf 'headers = mathlib.h\npackage = cmathlib\n' > mathlib.def
+voltc bindings mathlib --pkg mathlib=lib --lang kotlin > mathlib.kt
+cinterop -def mathlib.def -compiler-option -I. -o mathlib_c
+kotlinc-native mathlib.kt main.kt -l mathlib_c.klib -linker-options "-L. -lmathlib" -o main
+```
+
+On Linux, Kotlin/Native links against its own, older glibc; a library built against a newer one
+needs `--allow-shlib-undefined` in the linker options too.
+
+```kotlin
+println(ml_greet("volt"))                     // hello, volt
+val v = vec2(1.0, 2.0)
+ml_scale(v, 2.0)                              // v is now vec2(x=2.0, y=4.0)
+try {
+    ml_sqrt(-1.0)
+} catch (e: math_error) {
+    println(e.code == math_error.NEGATIVE)    // true
+}
+counter("clicks").use { it.add(2) }           // freed by use, close or a Cleaner
+```
+
+Structs are data classes, copied in and out (and back, when Volt takes one by reference). A slice
+of numbers is a primitive array (`IntArray`, `DoubleArray`, ...), which Volt reads and writes in
+place; a slice of structs is a `List`. Enums are enum classes, error sets `VoltException`
+subclasses, and callbacks are lambdas: an exception one throws comes out of the Volt call.
+
+### Ruby
+
+`--lang ruby` writes a C extension. Build it against the library and Ruby's headers, then
+`require` it:
+
+```sh
+voltc bindings mathlib --pkg mathlib=lib --lang ruby > mathlib_ruby.c
+cc -shared -fPIC -I"$(ruby -e 'print RbConfig::CONFIG["rubyhdrdir"]')" \
+   -I"$(ruby -e 'print RbConfig::CONFIG["rubyarchhdrdir"]')" mathlib_ruby.c -L. -lmathlib -o mathlib.so
+```
+
+```ruby
+require "mathlib"
+puts Mathlib.ml_greet("volt")                 # hello, volt
+v = Mathlib::Vec2.new(1.0, 2.0)
+Mathlib.ml_scale(v, 2.0)                      # v is now (2.0, 4.0)
+begin
+  Mathlib.ml_sqrt(-1.0)
+rescue Mathlib::MathError => e
+  puts e.code == Mathlib::MathError::NEGATIVE # true
+end
+c = Mathlib::Counter.new("clicks")
+c.add(2)
+c.close                                       # or leave it to the GC
+```
+
+The package is a module (its name capitalized), structs are `Struct` classes (a `Hash` with the
+fields works too), enums are modules of constants, and error sets are `Mathlib::Error` subclasses
+holding their codes. A callback is a block or a `Proc`; an exception it raises comes out of the
+Volt call. Integers that don't fit the parameter, and wrong types, raise.
+
 ### Go
 
 `--lang go` writes a cgo package. Put it in a directory of your module, and point the C linker at
@@ -274,7 +377,7 @@ Every binding also has the plain C functions: in C++ they're in namespace `raw`,
 `raw`, in Zig in struct `raw`, in C# and Dart in class `Native`, and in Java as the `H_NAME` method
 handles.
 `--lang` is one of `c`, `cpp`, `rust`, `zig`, `python`, `pyi`, `csharp`, `java`, `go`, `lua`,
-`dart`, `node`, `js`, `ts` or `json`. The Python bindings use `ctypes` and load the shared library.
+`dart`, `swift`, `kotlin`, `ruby`, `node`, `js`, `ts` or `json`. The Python bindings use `ctypes` and load the shared library.
 `--lang pyi` writes their type stubs, for editors and type checkers such as mypy.
 
 ### The model, for generators of your own

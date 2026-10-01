@@ -1,6 +1,7 @@
-// Bindings for other languages: `voltc bindings NAME --lang c|cpp|rust|zig|python|pyi|csharp|java|go|lua|dart|node|js|ts|json` describes package
-// NAME's export fns and the types they use, for programs that call a library built with
-// `voltc lib NAME --shared` (or `--static`). Every type crosses in a C form:
+// Bindings for other languages: `voltc bindings NAME --lang L` describes package NAME's export fns
+// and the types they use, for programs that call a library built with `voltc lib NAME --shared`
+// (or `--static`); L is c, cpp, rust, zig, python, pyi, csharp, java, go, lua, dart, swift, kotlin,
+// ruby, node, js, ts or json. Every type crosses in a C form:
 // - numbers, bool, pointers (T* and T&), cstr, str (volt_str: a pointer and a length), structs whose
 //   fields cross, plain enums (their tag type), error sets (u32 codes), E!T (a struct of the error
 //   code and the value) and extern "C" fns, as Volt lays them out;
@@ -1358,6 +1359,44 @@ attach fn all_codes(this: bind&) -> std::vec<code_name> {
         }
     }
     return move out;
+}
+
+// the struct a pointer parameter points to, when the API takes the struct (and copies it back)
+attach fn ref_struct(this: bind&, t: u32) -> u32? {
+    match (this.shape_of(t) ?? shape::VOID) {
+        .PTR(x) => {
+            if (x != VOID) {
+                match (this.shape_of(x) ?? shape::VOID) {
+                    .STRUCT(s) => { return s; },
+                    default => {},
+                }
+            }
+        },
+        default => {},
+    }
+    return null;
+}
+
+// can the pointer be null (a T*, not a T&)?
+attach fn nullable_ptr(this: bind&, t: u32) -> bool {
+    match (*this.c.t.get(t)) {
+        .REF(y) => { return false; },
+        default => { return true; },
+    }
+}
+
+// can a value of type t cross as itself (in a list, an optional, a callback): numbers, bool, enums,
+// structs
+attach fn simple_value(this: bind&, t: u32) -> bool {
+    match (this.shape_of(t) ?? shape::VOID) {
+        .BOOL => { return true; },
+        .INT(k) => { return true; },
+        .FLOAT(b) => { return true; },
+        .ENUM(e) => { return true; },
+        .CODE => { return true; },
+        .STRUCT(s) => { return true; },
+        default => { return false; },
+    }
 }
 
 // ---------- Rust ----------
@@ -5543,10 +5582,6 @@ attach fn ts_text(this: bind&) -> std::string {
     return move out;
 }
 
-// ---------- the command ----------
-
-// the bindings of package pkg in lang (c, cpp, rust, zig, python and its pyi stubs; node, js and ts: a Node-API addon,
-// its loader and its types; json: the model itself)
 // ---------- Lua (5.4 and later): a C module ----------
 // A Lua error longjmps, so nothing is held across one: a slice's elements live in a userdata (the
 // collector frees them), and an owned result is freed before a callback's error is raised. A
@@ -6107,7 +6142,7 @@ attach fn dart_ty(this: bind&, t: u32) -> std::string {
         .TEXT(x) => { return S("String"); },
         .ENUM(e) => { return this.local(this.c.ei(e).name); },
         .PTR(x) => {
-            val s = this.dart_ref(t);
+            val s = this.ref_struct(t);
             if (s) {
                 var n = this.local(this.c.si(s).name);
                 if (this.nullable_ptr(t)) {
@@ -6140,30 +6175,6 @@ attach fn dart_ty(this: bind&, t: u32) -> std::string {
     }
 }
 
-// the struct a pointer parameter points to, when the API takes the struct (and copies it back)
-attach fn dart_ref(this: bind&, t: u32) -> u32? {
-    match (this.shape_of(t) ?? shape::VOID) {
-        .PTR(x) => {
-            if (x != VOID) {
-                match (this.shape_of(x) ?? shape::VOID) {
-                    .STRUCT(s) => { return s; },
-                    default => {},
-                }
-            }
-        },
-        default => {},
-    }
-    return null;
-}
-
-// can the pointer be null (a T*, not a T&)?
-attach fn nullable_ptr(this: bind&, t: u32) -> bool {
-    match (*this.c.t.get(t)) {
-        .REF(y) => { return false; },
-        default => { return true; },
-    }
-}
-
 // an expression turning API value v (of type t) into what the C function takes, for the simple
 // types (numbers, bool, enums, structs)
 attach fn dart_in(this: bind&, t: u32, v: str) -> std::string {
@@ -6179,19 +6190,6 @@ attach fn dart_out(this: bind&, t: u32, r: str) -> std::string {
         .ENUM(e) => { return fmt2("{}.of({})", this.local(this.c.ei(e).name), S(r)); },
         .STR => { return fmt("_text({})", S(r)); },
         default => { return S(r); },
-    }
-}
-
-// can a value of type t sit in a List (or go to a callback) as itself: numbers, bool, enums, structs
-attach fn simple_value(this: bind&, t: u32) -> bool {
-    match (this.shape_of(t) ?? shape::VOID) {
-        .BOOL => { return true; },
-        .INT(k) => { return true; },
-        .FLOAT(b) => { return true; },
-        .ENUM(e) => { return true; },
-        .CODE => { return true; },
-        .STRUCT(s) => { return true; },
-        default => { return false; },
     }
 }
 
@@ -6229,7 +6227,7 @@ attach fn dart_arg_of(this: bind&, t: u32, name0: str, a: dart_arg&) -> compile_
             a.held = true;
         },
         .PTR(x) => {
-            val s = this.dart_ref(t);
+            val s = this.ref_struct(t);
             if (s) {
                     // a copy goes in, and what Volt changed comes back
                     val sn = this.local(this.c.si(s).name);
@@ -6746,6 +6744,1631 @@ attach fn dart_text(this: bind&) -> compile_error!std::string {
     return move out;
 }
 
+// ---------- Swift (over the C header, imported as Clang module C<pkg>) ----------
+
+fn swift_keyword(s: str) -> bool {
+    val words: str[] = { "associatedtype", "class", "deinit", "enum", "extension", "fileprivate", "func", "import", "init", "inout", "internal", "let", "open", "operator", "private", "protocol", "public", "rethrows", "static", "struct", "subscript", "typealias", "var", "break", "case", "continue", "default", "defer", "do", "else", "fallthrough", "for", "guard", "if", "in", "repeat", "return", "switch", "where", "while", "as", "Any", "catch", "false", "is", "nil", "super", "self", "Self", "throw", "throws", "true", "try" };
+    for (w) in words {
+        if (w == s) {
+            return true;
+        }
+    }
+    return false;
+}
+
+fn swift_ident(s: str) -> std::string {
+    if (swift_keyword(s)) {
+        return fmt("`{}`", S(s));
+    }
+    return S(s);
+}
+
+fn swift_int(k: int_ty) -> str {
+    match (k) {
+        .I8 => { return "Int8"; },
+        .I16 => { return "Int16"; },
+        .I32 => { return "Int32"; },
+        .I64 => { return "Int64"; },
+        .U8 => { return "UInt8"; },
+        .U16 => { return "UInt16"; },
+        .U32 => { return "UInt32"; },
+        .U64 => { return "UInt64"; },
+        default => { return "Int"; },
+    }
+}
+
+// the module the C header is imported as
+attach fn swift_cmod(this: bind&) -> std::string {
+    return fmt("C{}", S(this.pkg));
+}
+
+// a type as Swift imports its C form (named C types keep their C names)
+attach fn swift_c(this: bind&, t: u32) -> std::string {
+    match (this.shape_of(t) ?? shape::VOID) {
+        .VOID => { return S("Void"); },
+        .BOOL => { return S("Bool"); },
+        .INT(k) => { return S(swift_int(k)); },
+        .FLOAT(b) => {
+            if (b == 32) {
+                return S("Float");
+            }
+            return S("Double");
+        },
+        .CSTR => { return S("UnsafePointer<CChar>?"); },
+        .PTR(x) => {
+            if (x == VOID) {
+                return S("UnsafeMutableRawPointer?");
+            }
+            match (this.shape_of(x) ?? shape::VOID) {
+                .HANDLE(s) => { return S("OpaquePointer?"); },
+                default => {},
+            }
+            return fmt("UnsafeMutablePointer<{}>?", this.swift_c(x));
+        },
+        .HANDLE(s) => { return S("OpaquePointer?"); },
+        .CODE => { return S("UInt32"); },
+        default => { return this.c_prim(t, false); },
+    }
+}
+
+// a type as the Swift API shows it
+attach fn swift_ty(this: bind&, t: u32) -> std::string {
+    val h = this.lent_handle(t);
+    if (h) {
+        return this.local(this.c.si(h).name);
+    }
+    match (this.shape_of(t) ?? shape::VOID) {
+        .CSTR => { return S("String?"); },
+        .STR => { return S("String"); },
+        .TEXT(x) => { return S("String"); },
+        .STRUCT(s) => { return this.local(this.c.si(s).name); },
+        .ENUM(e) => { return this.local(this.c.ei(e).name); },
+        .PTR(x) => {
+            if (x != VOID && !this.nullable_ptr(t)) {
+                match (this.shape_of(x) ?? shape::VOID) {
+                    .STRUCT(s) => { return fmt("inout {}", this.local(this.c.si(s).name)); },
+                    default => {},
+                }
+            }
+            return this.swift_c(t);
+        },
+        .HANDLE(s) => { return this.local(this.c.si(s).name); },
+        .SLICE(x) => { return fmt("inout [{}]", this.swift_elem(x)); },
+        .OPT(x) => { return fmt("{}?", this.swift_ty(x)); },
+        .RESULT(e, x) => { return this.swift_ty(x); },
+        .CLOSURE(i) => {
+            match (*this.c.t.get(t)) {
+                .FN_VAL(ps&, r) => {
+                    var args: std::string = {};
+                    for (p&) in ps.items() {
+                        if (args.len() > 0) {
+                            args.append(", ");
+                        }
+                        args.append(this.swift_ty(*p).as_str());
+                    }
+                    return fmt2("({}) -> {}", move args, this.swift_ty(r));
+                },
+                default => { return S("() -> Void"); },
+            }
+        },
+        default => { return this.swift_c(t); },
+    }
+}
+
+// a slice's element type: the C one (an enum's tag type), or the struct's name
+attach fn swift_elem(this: bind&, t: u32) -> std::string {
+    match (this.shape_of(t) ?? shape::VOID) {
+        .STRUCT(s) => { return this.local(this.c.si(s).name); },
+        default => { return this.swift_c(t); },
+    }
+}
+
+// an expression turning API value v (of type t) into its C form, for numbers, bool, enums, structs
+attach fn swift_in(this: bind&, t: u32, v: str) -> std::string {
+    match (this.shape_of(t) ?? shape::VOID) {
+        .ENUM(e) => { return fmt("{}.rawValue", S(v)); },
+        default => { return S(v); },
+    }
+}
+
+// an expression turning C value r (of type t) into the API's, for the plain types and str
+attach fn swift_out(this: bind&, t: u32, r: str) -> std::string {
+    match (this.shape_of(t) ?? shape::VOID) {
+        .ENUM(e) => { return fmt2("{}(rawValue: {})!", this.local(this.c.ei(e).name), S(r)); },
+        .STR => { return fmt("voltString({})", S(r)); },
+        default => { return S(r); },
+    }
+}
+
+// one parameter of a wrapper: its declaration, what the call passes, statements at the top (pre),
+// and the scopes the call runs in (each `X { p in`, closed by `}`), with what starts each scope
+struct swift_arg {
+    decl: std::string = {};
+    pass: std::string = {};
+    pre: std::string = {};
+    scopes: std::vec<std::string> = {};
+    inside: std::vec<std::string> = {}; // statements at the start of each scope
+}
+
+attach fn swift_arg_of(this: bind&, t: u32, name0: str, a: swift_arg&) -> compile_error!void {
+    val nm = swift_ident(name0);
+    val n = nm.as_str();
+    a.decl = fmt3("_ {}: {}", S(n), this.swift_ty(t), S(""));
+    val h = this.lent_handle(t);
+    if (h) {
+        a.pass = fmt("{}.voltHandle()", S(n));
+        return;
+    }
+    match (this.shape_of(t) ?? shape::VOID) {
+        .STR => {
+            a.pre = fmt2("var {}_s = {}\n", S(name0), S(n));
+            put(&a.scopes, fmt2("{}_s.withUTF8 {{ {}_p in", S(name0), S(name0)));
+            put(&a.inside, {});
+            a.pass = fmt2("volt_str(ptr: {}_p.baseAddress, len: {}_p.count)", S(name0), S(name0));
+        },
+        .CSTR => {
+            put(&a.scopes, fmt2("voltWithCString({}) {{ {}_p in", S(n), S(name0)));
+            put(&a.inside, {});
+            a.pass = fmt("{}_p", S(name0));
+        },
+        .PTR(x) => {
+            if (x != VOID && !this.nullable_ptr(t)) {
+                match (this.shape_of(x) ?? shape::VOID) {
+                    .STRUCT(s) => {
+                        a.pass = fmt("&{}", S(n));
+                        return;
+                    },
+                    default => {},
+                }
+            }
+            a.pass = S(n);
+        },
+        .SLICE(x) => {
+            put(&a.scopes, fmt2("{}.withUnsafeMutableBufferPointer {{ {}_p in", S(n), S(name0)));
+            put(&a.inside, {});
+            a.pass = fmt3("{}(ptr: {}_p.baseAddress, len: {}_p.count)", this.c_prim(t, false), S(name0), S(name0));
+        },
+        .OPT(x) => {
+            if (!this.simple_value(x)) {
+                return fail(NO_SPAN, fmt("an optional {} can't come from Swift", this.c.ty_name(x)));
+            }
+            a.pre = fmt2("var {}_o = {}()\n", S(name0), this.c_prim(t, false));
+            a.pre.append(fmt3("if let v = {} {{\n    {}_o.value = {}\n", S(n), S(name0), this.swift_in(x, "v")).as_str());
+            a.pre.append(fmt("    {}_o.has = true\n}\n", S(name0)).as_str());
+            a.pass = fmt("{}_o", S(name0));
+        },
+        .CLOSURE(i) => {
+            match (*this.c.t.get(t)) {
+                .FN_VAL(ps&, r) => {
+                    // the closure, in a box the C function finds through its user pointer
+                    put(&a.scopes, fmt2("withoutActuallyEscaping({}) {{ {}_f in", S(n), S(name0)));
+                    put(&a.inside, fmt2("let {}_box = VoltBox({}_f)\n", S(name0), S(name0)));
+                    put(&a.scopes, fmt("withExtendedLifetime({}_box) {", S(name0)));
+                    put(&a.inside, {});
+                    var params = S("u");
+                    var args: std::string = {};
+                    for (k) in 0..ps.len {
+                        val ak = fmt("a{}", unum(@cast<u64>(k)));
+                        params.append(fmt(", {}", copy ak).as_str());
+                        if (k > 0) {
+                            args.append(", ");
+                        }
+                        match (this.shape_of(*ps.at(k)) ?? shape::VOID) {
+                            .STR => {},
+                            default => {
+                                if (!this.simple_value(*ps.at(k))) {
+                                    return fail(NO_SPAN, fmt("a callback taking {} can't call Swift", this.c.ty_name(*ps.at(k))));
+                                }
+                            },
+                        }
+                        args.append(this.swift_out(*ps.at(k), ak.as_str()).as_str());
+                    }
+                    if (r != VOID && !this.simple_value(r)) {
+                        return fail(NO_SPAN, fmt("a callback returning {} can't call Swift", this.c.ty_name(r)));
+                    }
+                    val call = fmt4("Unmanaged<VoltBox<{}>>.fromOpaque(u!).takeUnretainedValue().f({}){}", this.swift_ty(t), move args, S(""), S(""));
+                    a.pass = fmt3("{{ {} in {} }}, Unmanaged.passUnretained({}_box).toOpaque()", move params, this.swift_in(r, call.as_str()), S(name0));
+                },
+                default => {},
+            }
+        },
+        default => { a.pass = this.swift_in(t, n); },
+    }
+    return;
+}
+
+// does a call to f throw (it returns an error union)?
+attach fn swift_throws(this: bind&, t: u32) -> bool {
+    match (this.shape_of(t) ?? shape::VOID) {
+        .RESULT(e, x) => { return true; },
+        default => { return false; },
+    }
+}
+
+// statements turning C result r (of type t) into what the wrapper returns (raw: a handle stays a
+// pointer, for an init)
+attach fn swift_result(this: bind&, t: u32, r: str, raw: bool) -> compile_error!std::string {
+    match (this.shape_of(t) ?? shape::VOID) {
+        .VOID => { return {}; },
+        .CSTR => { return fmt("return {}.map {{ String(cString: $0) }}\n", S(r)); },
+        .TEXT(x) => { return fmt("return voltTake({})\n", S(r)); },
+        .HANDLE(s) => {
+            if (raw) {
+                return fmt("return {}!\n", S(r));
+            }
+            return fmt2("return {}(handle: {})\n", this.local(this.c.si(s).name), S(r));
+        },
+        .OPT(x) => {
+            if (!this.simple_value(x)) {
+                return fail(NO_SPAN, fmt("an optional {} can't go to Swift", this.c.ty_name(x)));
+            }
+            return fmt2("return {}.has ? {} : nil\n", S(r), this.swift_out(x, fmt("{}.value", S(r)).as_str()));
+        },
+        .SLICE(x) => {
+            if (!this.simple_value(x)) {
+                return fail(NO_SPAN, fmt("a slice of {} can't go to Swift", this.c.ty_name(x)));
+            }
+            return fmt2("return Array(UnsafeBufferPointer(start: {}.ptr, count: {}.len))\n", S(r), S(r));
+        },
+        .RESULT(e, x) => {
+            var out = fmt("if {}.error != 0 {{\n", S(r));
+            match (*this.c.t.get(e)) {
+                .ENUM(id) => { out.append(fmt3("    throw voltError({}.error, {}.self)\n}}\n", S(r), this.local(this.c.ei(id).name), S("")).as_str()); },
+                default => { out.append(fmt("    throw voltAnyError({}.error)\n}\n", S(r)).as_str()); },
+            }
+            out.append((try this.swift_result(x, fmt("{}.value", S(r)).as_str(), raw)).as_str());
+            return move out;
+        },
+        default => { return fmt("return {}\n", this.swift_out(t, r)); },
+    }
+}
+
+attach fn swift_doc(this: bind&, f: u32, ind: str) -> std::string {
+    val sp = this.c.dl(this.c.fi(f).decl).item.span;
+    val d = doc_above(this.c.files.at(sp.file).text, @cast<usize>(sp.lo));
+    if (d.len() == 0) {
+        return {};
+    }
+    return fmt2("{}/// {}\n", S(ind), move d);
+}
+
+// a wrapper: its head (with the parameters from first on spliced in at {}), and its body, which
+// calls the C function inside its parameters' scopes; first == 1: a method (self's handle first)
+attach fn swift_fn(this: bind&, f: u32, first: usize, head: str, raw: bool, ind: str) -> compile_error!std::string {
+    val info = this.c.fi(f);
+    var decls: std::string = {};
+    var passes: std::string = {};
+    var pre: std::string = {};
+    var scopes: std::vec<std::string> = {};
+    var inside: std::vec<std::string> = {};
+    if (first == 1) {
+        passes = S("voltHandle()");
+    }
+    for (k) in first..info.params.len {
+        val p = info.params.at(k);
+        var a: swift_arg = {};
+        try this.swift_arg_of(p.ty, p.name, &a);
+        if (decls.len() > 0) {
+            decls.append(", ");
+        }
+        decls.append(a.decl.as_str());
+        if (passes.len() > 0) {
+            passes.append(", ");
+        }
+        passes.append(a.pass.as_str());
+        pre.append(a.pre.as_str());
+        for (i) in 0..a.scopes.len {
+            put(&scopes, copy *a.scopes.at(i));
+            put(&inside, copy *a.inside.at(i));
+        }
+    }
+    val throws = this.swift_throws(info.ret);
+    var rt = S("return ");
+    if (throws) {
+        rt = S("return try ");
+    }
+    // the innermost body: the call, the error check, the result
+    var inner: std::string = {};
+    if (info.ret == VOID) {
+        inner = fmt2("{}.{}(", this.swift_cmod(), S(info.c_name));
+        inner.append(fmt("{})\n", move passes).as_str());
+    } else {
+        inner = fmt3("let r = {}.{}({})\n", this.swift_cmod(), S(info.c_name), move passes);
+        inner.append((try this.swift_result(info.ret, "r", raw)).as_str());
+    }
+    var k = scopes.len;
+    while (k > 0) {
+        k -= 1;
+        var level = fmt2("{}{}\n", copy rt, copy *scopes.at(k));
+        var body = copy *inside.at(k);
+        body.append(inner.as_str());
+        level.append(indent_n(body.as_str(), 4).as_str());
+        level.append("}\n");
+        inner = move level;
+    }
+    var body = move pre;
+    body.append(inner.as_str());
+    var spec = S("");
+    if (throws) {
+        spec = S(" throws");
+    }
+    var out = this.swift_doc(f, ind);
+    out.append(fmt2("{}{}\n", S(ind), replace_all(replace_all(head, "{}", decls.as_str()).as_str(), " THROWS", spec.as_str())).as_str());
+    out.append(indent_n(body.as_str(), ind.len + 4).as_str());
+    out.append(fmt("{}}\n", S(ind)).as_str());
+    return move out;
+}
+
+// " -> T" for a wrapper's result (nothing for void)
+attach fn swift_ret(this: bind&, t: u32) -> std::string {
+    match (this.shape_of(t) ?? shape::VOID) {
+        .VOID => { return {}; },
+        .RESULT(e, x) => { return this.swift_ret(x); },
+        .SLICE(x) => { return fmt(" -> [{}]", this.swift_elem(x)); },
+        .PTR(x) => { return fmt(" -> {}", this.swift_c(t)); },
+        default => { return fmt(" -> {}", this.swift_ty(t)); },
+    }
+}
+
+attach fn swift_text(this: bind&) -> compile_error!std::string {
+    val ents = this.entries();
+    val p = this.pkg;
+    val cm = this.swift_cmod();
+    var out = fmt("// {}: generated by voltc bindings; the Volt package for Swift. It calls the C functions\n", S(p));
+    out.append(fmt3("// of --lang c's header, imported as module {}: put {}.h in a directory with a module.modulemap\n", copy cm, S(p), S("")).as_str());
+    out.append(fmt3("//   module {} {{ header \"{}.h\" export * }}\n// and build with -I <that directory> -L <the library's> -l", copy cm, S(p), S("")).as_str());
+    out.append(fmt("{}. Errors are thrown as their error set's\n// enum; an export struct is a class (close(), or deinit, frees it).\n", S(p)).as_str());
+    out.append(fmt("import {}\n", copy cm).as_str());
+    out.append("\n/// an error code no error set here names\npublic struct VoltError: Error, CustomStringConvertible {\n    public let code: UInt32\n    public var description: String { \"error \\(code)\" }\n}\n");
+    out.append("\nfunc voltError<E: RawRepresentable & Error>(_ code: UInt32, _ set: E.Type) -> Error where E.RawValue == UInt32 {\n    return E(rawValue: code) ?? VoltError(code: code)\n}\n");
+    out.append("\nfunc voltAnyError(_ code: UInt32) -> Error {\n    switch code {\n");
+    for (c&) in this.all_codes().items() {
+        out.append(fmt3("    case {}: return {}.{}\n", num(c.code), copy c.set, S(c.name)).as_str());
+    }
+    out.append("    default: return VoltError(code: code)\n    }\n}\n");
+    out.append("\nfunc voltString(_ s: volt_str) -> String {\n    return String(decoding: UnsafeBufferPointer(start: s.ptr, count: s.len), as: UTF8.self)\n}\n");
+    out.append("\nfunc voltWithCString<R>(_ s: String?, _ body: (UnsafePointer<CChar>?) throws -> R) rethrows -> R {\n    guard let s else {\n        return try body(nil)\n    }\n    return try s.withCString(body)\n}\n");
+    if (this.texts.len > 0) {
+        out.append("\n// owned text: copied into a String, then freed\nfunc voltTake(_ t: volt_text) -> String {\n    let s = String(decoding: UnsafeBufferPointer(start: t.ptr, count: t.len), as: UTF8.self)\n    volt_text_free(t)\n    return s\n}\n");
+    }
+    if (this.closures.len > 0) {
+        out.append("\n// a closure passed for a callback, which the C function finds through its user pointer\nfinal class VoltBox<F> {\n    let f: F\n\n    init(_ f: F) {\n        self.f = f\n    }\n}\n");
+    }
+    for (et&) in this.codes.items() {
+        match (*this.c.t.get(*et)) {
+            .ENUM(e) => {
+                val info = this.c.ei(e);
+                out.append(fmt2("\n/// error set {}\npublic enum {}: UInt32, Error {{\n", S(info.name), this.local(info.name)).as_str());
+                for (i) in 0..info.names.len {
+                    out.append(fmt2("    case {} = {}\n", swift_ident(*info.names.at(i)), num(*info.values.at(i))).as_str());
+                }
+                out.append("}\n");
+            },
+            default => {},
+        }
+    }
+    for (e&) in this.enums.items() {
+        val info = this.c.ei(*e);
+        out.append(fmt2("\npublic enum {}: {} {{\n", this.local(info.name), S(swift_int(info.tag))).as_str());
+        for (i) in 0..info.names.len {
+            out.append(fmt2("    case {} = {}\n", swift_ident(*info.names.at(i)), num(*info.values.at(i))).as_str());
+        }
+        out.append("}\n");
+    }
+    for (s&) in this.structs.items() {
+        val info = this.c.si(*s);
+        out.append(fmt2("\npublic typealias {} = {}\n", this.local(info.name), this.c_named(info.name, false)).as_str());
+    }
+    // a class per export struct
+    for (s&) in this.handles.items() {
+        val cls = this.local(this.c.si(*s).name);
+        out.append(fmt2("\n/// export struct {}; close() (or deinit) frees it\npublic final class {} {{\n    private var voltRaw: OpaquePointer?\n\n", S(this.c.si(*s).name), copy cls).as_str());
+        out.append("    init(handle: OpaquePointer?) {\n        voltRaw = handle\n    }\n\n    deinit {\n        close()\n    }\n\n");
+        out.append(fmt3("    public func close() {{\n        if let h = voltRaw {{\n            {}.{}(h)\n            voltRaw = nil\n        }}\n    }}\n\n", copy cm, this.free_name(*s), S("")).as_str());
+        out.append(fmt("    func voltHandle() -> OpaquePointer {\n        guard let h = voltRaw else {\n            preconditionFailure(\"this {} is closed\")\n        }\n        return h\n    }\n", copy cls).as_str());
+        for (e&) in ents.items() {
+            if (e.free_of != null) {
+                continue;
+            }
+            val m = this.member_of(e.f, *s) ?? continue;
+            val info = this.c.fi(e.f);
+            out.append("\n");
+            if (this.node_is_method(e.f, *s)) {
+                val head = fmt2("public func {}({{}}) THROWS{} {{", swift_ident(m), this.swift_ret(info.ret));
+                out.append((try this.swift_fn(e.f, 1, head.as_str(), false, "    ")).as_str());
+            } else if (m == "new" && this.made_by(e.f, *s)) {
+                // an init: make the handle, then the instance holding it
+                var names: std::string = {};
+                var tr = S("");
+                if (this.swift_throws(info.ret)) {
+                    tr = S("try ");
+                }
+                for (k) in 0..info.params.len {
+                    if (k > 0) {
+                        names.append(", ");
+                    }
+                    names.append(swift_ident(info.params.at(k).name).as_str());
+                }
+                out.append(this.swift_doc(e.f, "    ").as_str());
+                var args: std::string = {};
+                for (k) in 0..info.params.len {
+                    if (k > 0) {
+                        args.append(", ");
+                    }
+                    args.append(fmt2("_ {}: {}", swift_ident(info.params.at(k).name), this.swift_ty(info.params.at(k).ty)).as_str());
+                }
+                var spec = S("");
+                if (this.swift_throws(info.ret)) {
+                    spec = S(" throws");
+                }
+                out.append(fmt3("    public convenience init({}){} {{\n        self.init(handle: ", move args, move spec, S("")).as_str());
+                out.append(fmt3("{}{}.voltMake({}))\n    }}\n\n", move tr, copy cls, move names).as_str());
+                out.append((try this.swift_fn(e.f, 0, "private static func voltMake({}) THROWS -> OpaquePointer {", true, "    ")).as_str());
+            } else {
+                val head = fmt2("public static func {}({{}}) THROWS{} {{", swift_ident(m), this.swift_ret(info.ret));
+                out.append((try this.swift_fn(e.f, 0, head.as_str(), false, "    ")).as_str());
+            }
+        }
+        out.append("}\n");
+    }
+    // the functions
+    for (e&) in ents.items() {
+        if (e.free_of != null || this.class_of(e.f) != null) {
+            continue;
+        }
+        val info = this.c.fi(e.f);
+        out.append("\n");
+        val head = fmt2("public func {}({{}}) THROWS{} {{", swift_ident(info.c_name), this.swift_ret(info.ret));
+        out.append((try this.swift_fn(e.f, 0, head.as_str(), false, "")).as_str());
+    }
+    return move out;
+}
+
+// ---------- Kotlin/Native (over the C header, through cinterop as package c<pkg>) ----------
+
+fn kt_keyword(s: str) -> bool {
+    val words: str[] = { "as", "break", "class", "continue", "do", "else", "false", "for", "fun", "if", "in", "interface", "is", "null", "object", "package", "return", "super", "this", "throw", "true", "try", "typealias", "typeof", "val", "var", "when", "while" };
+    for (w) in words {
+        if (w == s) {
+            return true;
+        }
+    }
+    return false;
+}
+
+fn kt_ident(s: str) -> std::string {
+    if (kt_keyword(s)) {
+        return fmt("`{}`", S(s));
+    }
+    return S(s);
+}
+
+fn kt_int(k: int_ty) -> str {
+    match (k) {
+        .I8 => { return "Byte"; },
+        .I16 => { return "Short"; },
+        .I32 => { return "Int"; },
+        .I64 => { return "Long"; },
+        .ISIZE => { return "Long"; },
+        .U8 => { return "UByte"; },
+        .U16 => { return "UShort"; },
+        .U32 => { return "UInt"; },
+        default => { return "ULong"; },
+    }
+}
+
+// the package cinterop puts the C declarations in
+attach fn kt_cpkg(this: bind&) -> std::string {
+    return fmt("c{}", S(this.pkg));
+}
+
+// a type as cinterop gives its C form
+attach fn kt_c(this: bind&, t: u32) -> std::string {
+    match (this.shape_of(t) ?? shape::VOID) {
+        .VOID => { return S("Unit"); },
+        .BOOL => { return S("Boolean"); },
+        .INT(k) => { return S(kt_int(k)); },
+        .FLOAT(b) => {
+            if (b == 32) {
+                return S("Float");
+            }
+            return S("Double");
+        },
+        .ENUM(e) => { return S(kt_int(this.c.ei(e).tag)); },
+        .CODE => { return S("UInt"); },
+        .CSTR => { return S("CPointer<ByteVar>?"); },
+        .PTR(x) => {
+            if (x == VOID) {
+                return S("COpaquePointer?");
+            }
+            match (this.shape_of(x) ?? shape::VOID) {
+                .HANDLE(s) => { return fmt("CPointer<cnames.structs.{}>?", this.c_named(this.c.si(s).name, false)); },
+                default => {},
+            }
+            return fmt("CPointer<{}>?", this.kt_var(x));
+        },
+        .HANDLE(s) => { return fmt("CPointer<cnames.structs.{}>?", this.c_named(this.c.si(s).name, false)); },
+        default => { return fmt("CValue<{}>", this.c_prim(t, false)); },
+    }
+}
+
+// the C variable type cinterop has for a type (IntVar, a struct's class, CPointerVar<...>)
+attach fn kt_var(this: bind&, t: u32) -> std::string {
+    match (this.shape_of(t) ?? shape::VOID) {
+        .BOOL => { return S("BooleanVar"); },
+        .INT(k) => { return fmt("{}Var", S(kt_int(k))); },
+        .FLOAT(b) => {
+            if (b == 32) {
+                return S("FloatVar");
+            }
+            return S("DoubleVar");
+        },
+        .ENUM(e) => { return fmt("{}Var", S(kt_int(this.c.ei(e).tag))); },
+        .CODE => { return S("UIntVar"); },
+        .PTR(x) => { return fmt("CPointerVar<{}>", this.kt_var(x)); },
+        .CSTR => { return S("CPointerVar<ByteVar>"); },
+        .HANDLE(s) => { return fmt("CPointerVar<cnames.structs.{}>", this.c_named(this.c.si(s).name, false)); },
+        default => { return this.c_prim(t, false); },
+    }
+}
+
+// the primitive array a slice of t is in Kotlin (none: a List of structs)
+fn kt_array(k: str) -> std::string {
+    return fmt("{}Array", S(k));
+}
+
+// a type as the Kotlin API shows it
+attach fn kt_ty(this: bind&, t: u32) -> std::string {
+    val h = this.lent_handle(t);
+    if (h) {
+        return this.local(this.c.si(h).name);
+    }
+    match (this.shape_of(t) ?? shape::VOID) {
+        .CSTR => { return S("String?"); },
+        .STR => { return S("String"); },
+        .TEXT(x) => { return S("String"); },
+        .STRUCT(s) => { return this.local(this.c.si(s).name); },
+        .ENUM(e) => { return this.local(this.c.ei(e).name); },
+        .PTR(x) => {
+            val s = this.ref_struct(t);
+            if (s) {
+                var n = this.local(this.c.si(s).name);
+                if (this.nullable_ptr(t)) {
+                    n.push('?');
+                }
+                return move n;
+            }
+            return this.kt_c(t);
+        },
+        .HANDLE(s) => { return this.local(this.c.si(s).name); },
+        .SLICE(x) => {
+            match (this.shape_of(x) ?? shape::VOID) {
+                .STRUCT(s) => { return fmt("List<{}>", this.local(this.c.si(s).name)); },
+                default => { return kt_array(this.kt_c(x).as_str()); },
+            }
+        },
+        .OPT(x) => { return fmt("{}?", this.kt_ty(x)); },
+        .RESULT(e, x) => { return this.kt_ty(x); },
+        .CLOSURE(i) => {
+            match (*this.c.t.get(t)) {
+                .FN_VAL(ps&, r) => {
+                    var args: std::string = {};
+                    for (p&) in ps.items() {
+                        if (args.len() > 0) {
+                            args.append(", ");
+                        }
+                        args.append(this.kt_ty(*p).as_str());
+                    }
+                    return fmt2("({}) -> {}", move args, this.kt_ty(r));
+                },
+                default => { return S("() -> Unit"); },
+            }
+        },
+        default => { return this.kt_c(t); },
+    }
+}
+
+// an expression turning API value v (of type t) into its C form, for numbers, bool, enums, structs
+attach fn kt_in(this: bind&, t: u32, v: str) -> std::string {
+    match (this.shape_of(t) ?? shape::VOID) {
+        .ENUM(e) => { return fmt("{}.value", S(v)); },
+        .STRUCT(s) => { return fmt("{}.toC()", S(v)); },
+        default => { return S(v); },
+    }
+}
+
+// an expression turning C value r (of type t) into the API's, for the plain types and str (r is a
+// CValue for a struct or str, or the struct's variable when var_ is true)
+attach fn kt_out(this: bind&, t: u32, r: str, var_: bool) -> std::string {
+    match (this.shape_of(t) ?? shape::VOID) {
+        .ENUM(e) => { return fmt2("{}.of({})", this.local(this.c.ei(e).name), S(r)); },
+        .STRUCT(s) => {
+            if (var_) {
+                return fmt("{}.toKotlin()", S(r));
+            }
+            return fmt("{}.useContents {{ toKotlin() }}", S(r));
+        },
+        .STR => {
+            if (var_) {
+                return fmt("voltString({}.readValue())", S(r));
+            }
+            return fmt("voltString({})", S(r));
+        },
+        default => { return S(r); },
+    }
+}
+
+// one parameter of a wrapper: its declaration, what the call passes, the statements before the call
+// (inside memScoped), what copies changes back, and the callbacks' boxes (rethrown after the call)
+struct kt_arg {
+    decl: std::string = {};
+    pass: std::string = {};
+    pre: std::string = {};
+    after: std::string = {};
+    scope: std::string = {}; // a usePinned block the call runs in
+    box: std::string = {}; // a callback: the name its box and StableRef are named after
+    box_ty: std::string = {};
+    scoped: bool = false; // it needs memScoped
+}
+
+attach fn kt_arg_of(this: bind&, t: u32, name0: str, a: kt_arg&) -> compile_error!void {
+    val nm = kt_ident(name0);
+    val n = nm.as_str();
+    a.decl = fmt2("{}: {}", S(n), this.kt_ty(t));
+    val h = this.lent_handle(t);
+    if (h) {
+        a.pass = fmt("{}.voltHandle()", S(n));
+        return;
+    }
+    match (this.shape_of(t) ?? shape::VOID) {
+        .STR => {
+            a.pass = fmt("voltStr({})", S(n));
+            a.scoped = true;
+        },
+        .CSTR => { a.pass = S(n); },
+        .PTR(x) => {
+            val s = this.ref_struct(t);
+            if (s) {
+                // a copy goes in, and what Volt changed comes back
+                val cn = this.c_named(this.c.si(s).name, false);
+                a.scoped = true;
+                if (this.nullable_ptr(t)) {
+                    a.pre = fmt4("val {}_p = if ({} == null) null else alloc<{}>().also {{ {}.write(it) }}\n", S(name0), S(n), copy cn, S(n));
+                    a.pass = fmt("{}_p?.ptr", S(name0));
+                    a.after = fmt3("if ({} != null) {{\n    {}.readFrom({}_p!!)\n}}\n", S(n), S(n), S(name0));
+                } else {
+                    a.pre = fmt3("val {}_p = alloc<{}>().also {{ {}.write(it) }}\n", S(name0), copy cn, S(n));
+                    a.pass = fmt("{}_p.ptr", S(name0));
+                    a.after = fmt2("{}.readFrom({}_p)\n", S(n), S(name0));
+                }
+                return;
+            }
+            a.pass = S(n);
+        },
+        .SLICE(x) => {
+            val sc = this.c_prim(t, false);
+            match (this.shape_of(x) ?? shape::VOID) {
+                .STRUCT(s) => {
+                    // the elements copied into C memory, and back
+                    val cn = this.c_named(this.c.si(s).name, false);
+                    a.scoped = true;
+                    a.pre = fmt3("val {}_p = allocArray<{}>({}.size.coerceAtLeast(1))\n", S(name0), copy cn, S(n));
+                    a.pre.append(fmt2("{}.forEachIndexed {{ i, e -> e.write({}_p[i]) }}\n", S(n), S(name0)).as_str());
+                    a.pass = fmt4("cValue<{}> {{ ptr = {}_p; len = {}.size.convert() }}", copy sc, S(name0), S(n), S(""));
+                    a.after = fmt2("{}.forEachIndexed {{ i, e -> e.readFrom({}_p[i]) }}\n", S(n), S(name0));
+                },
+                default => {
+                    if (!this.simple_value(x)) {
+                        return fail(NO_SPAN, fmt("a slice of {} can't come from Kotlin", this.c.ty_name(x)));
+                    }
+                    // the array itself, pinned: what Volt writes is in it
+                    a.scope = fmt2("{}.usePinned {{ {}_pin ->", S(n), S(name0));
+                    a.pass = fmt4("cValue<{}> {{ ptr = if ({}.isEmpty()) null else {}_pin.addressOf(0); len = ", copy sc, S(n), S(name0), S(""));
+                    a.pass.append(fmt("{}.size.convert() }", S(n)).as_str());
+                },
+            }
+        },
+        .OPT(x) => {
+            if (!this.simple_value(x)) {
+                return fail(NO_SPAN, fmt("an optional {} can't come from Kotlin", this.c.ty_name(x)));
+            }
+            var set = fmt2("value = {}", this.kt_in(x, n), S(""));
+            match (this.shape_of(x) ?? shape::VOID) {
+                .STRUCT(s) => { set = fmt("{}.write(value)", S(n)); },
+                default => {},
+            }
+            a.pass = fmt4("cValue<{}> {{ if ({} != null) {{ {}; has = true }} }}", this.c_prim(t, false), S(n), move set, S(""));
+        },
+        .CLOSURE(i) => {
+            match (*this.c.t.get(t)) {
+                .FN_VAL(ps&, r) => {
+                    // the function, in a box the C function finds through a StableRef; what it
+                    // throws is kept (the later calls are skipped) and thrown once the call is back
+                    var params = S("u: COpaquePointer?");
+                    var args: std::string = {};
+                    for (k) in 0..ps.len {
+                        val ak = fmt("a{}", unum(@cast<u64>(k)));
+                        match (this.shape_of(*ps.at(k)) ?? shape::VOID) {
+                            .STR => {},
+                            default => {
+                                if (!this.simple_value(*ps.at(k))) {
+                                    return fail(NO_SPAN, fmt("a callback taking {} can't call Kotlin", this.c.ty_name(*ps.at(k))));
+                                }
+                            },
+                        }
+                        params.append(fmt2(", {}: {}", copy ak, this.kt_c(*ps.at(k))).as_str());
+                        if (k > 0) {
+                            args.append(", ");
+                        }
+                        args.append(this.kt_out(*ps.at(k), ak.as_str(), false).as_str());
+                    }
+                    var dflt: std::string = {};
+                    match (this.shape_of(r) ?? shape::VOID) {
+                        .VOID => {},
+                        .BOOL => { dflt = S("false"); },
+                        .FLOAT(b) => {
+                            dflt = S("0.0");
+                            if (b == 32) {
+                                dflt = S("0.0f");
+                            }
+                        },
+                        .INT(k) => { dflt = fmt("0.to{}()", S(kt_int(k))); },
+                        .ENUM(e) => { dflt = fmt("0.to{}()", S(kt_int(this.c.ei(e).tag))); },
+                        .CODE => { dflt = S("0u"); },
+                        default => { return fail(NO_SPAN, fmt("a callback returning {} can't call Kotlin", this.c.ty_name(r))); },
+                    }
+                    var ret = S("Unit");
+                    if (dflt.len() > 0) {
+                        ret = copy dflt;
+                    }
+                    val call = fmt2("b.f({})", move args, S(""));
+                    val ft = this.kt_ty(t);
+                    a.box = S(name0);
+                    a.box_ty = fmt2("VoltBox<{}>({})", copy ft, S(n));
+                    a.pass = fmt4("staticCFunction {{ {} ->\n    val b = u!!.asStableRef<VoltBox<{}>>().get()\n    if (b.error != null) {}", move params, copy ft, copy ret, S(""));
+                    a.pass.append(fmt3(" else try {{\n        {}\n    }} catch (e: Throwable) {{\n        b.error = e\n        {}\n    }}\n}}", this.kt_in(r, call.as_str()), copy ret, S("")).as_str());
+                    a.pass.append(fmt(", {}_ref.asCPointer()", S(name0)).as_str());
+                },
+                default => {},
+            }
+        },
+        default => { a.pass = this.kt_in(t, n); },
+    }
+    return;
+}
+
+// does a call to f throw (it returns an error union)?
+attach fn kt_throws(this: bind&, t: u32) -> bool {
+    match (this.shape_of(t) ?? shape::VOID) {
+        .RESULT(e, x) => { return true; },
+        default => { return false; },
+    }
+}
+
+// an expression turning C result r (of type t) into the API's value (raw: a handle stays a pointer)
+attach fn kt_result(this: bind&, t: u32, r: str, raw: bool) -> compile_error!std::string {
+    match (this.shape_of(t) ?? shape::VOID) {
+        .VOID => { return S("Unit"); },
+        .CSTR => { return fmt("{}?.toKString()", S(r)); },
+        .TEXT(x) => { return fmt("voltTake({})", S(r)); },
+        .HANDLE(s) => {
+            if (raw) {
+                return fmt("{}!!", S(r));
+            }
+            return fmt2("{}({}!!)", this.local(this.c.si(s).name), S(r));
+        },
+        .OPT(x) => {
+            if (!this.simple_value(x)) {
+                return fail(NO_SPAN, fmt("an optional {} can't go to Kotlin", this.c.ty_name(x)));
+            }
+            return fmt2("{}.useContents {{ if (has) {} else null }}", S(r), this.kt_out(x, "value", true));
+        },
+        .SLICE(x) => {
+            match (this.shape_of(x) ?? shape::VOID) {
+                .STRUCT(s) => { return fmt("{}.useContents {{ List(len.toInt()) {{ ptr!![it].toKotlin() }} }", S(r)); },
+                default => {},
+            }
+            if (!this.simple_value(x)) {
+                return fail(NO_SPAN, fmt("a slice of {} can't go to Kotlin", this.c.ty_name(x)));
+            }
+            return fmt2("{}.useContents {{ {}(len.toInt()) {{ ptr!![it] }} }", S(r), kt_array(this.kt_c(x).as_str()));
+        },
+        .RESULT(e, x) => {
+            // the value is read inside useContents: a text or a handle by its fields
+            var v: std::string = {};
+            match (this.shape_of(x) ?? shape::VOID) {
+                .VOID => { v = S("Unit"); },
+                .TEXT(y) => { v = S("voltTakeVar(value)"); },
+                .STRUCT(s) => { v = S("value.toKotlin()"); },
+                .STR => { v = S("voltString(value.readValue())"); },
+                .HANDLE(s) => {
+                    if (raw) {
+                        v = S("value!!");
+                    } else {
+                        v = fmt("{}(value!!)", this.local(this.c.si(s).name));
+                    }
+                },
+                .OPT(y) => { v = fmt("if (value.has) {} else null", this.kt_out(y, "value.value", true)); },
+                default => {
+                    if (!this.simple_value(x)) {
+                        return fail(NO_SPAN, fmt("{} can't go to Kotlin", this.c.ty_name(x)));
+                    }
+                    v = this.kt_out(x, "value", true);
+                },
+            }
+            return fmt2("{}.useContents {{\n    if (error != 0u) throw voltError(error)\n    {}\n}}", S(r), move v);
+        },
+        default => { return this.kt_out(t, r, false); },
+    }
+}
+
+// ": T" for a wrapper's result (nothing for Unit)
+attach fn kt_ret(this: bind&, t: u32) -> std::string {
+    match (this.shape_of(t) ?? shape::VOID) {
+        .VOID => { return {}; },
+        .RESULT(e, x) => { return this.kt_ret(x); },
+        .SLICE(x) => { return fmt(": {}", this.kt_ty(t)); },
+        .PTR(x) => { return fmt(": {}", this.kt_c(t)); },
+        default => { return fmt(": {}", this.kt_ty(t)); },
+    }
+}
+
+attach fn kt_doc(this: bind&, f: u32, ind: str) -> std::string {
+    val sp = this.c.dl(this.c.fi(f).decl).item.span;
+    val d = doc_above(this.c.files.at(sp.file).text, @cast<usize>(sp.lo));
+    if (d.len() == 0) {
+        return {};
+    }
+    return fmt2("{}/** {} */\n", S(ind), move d);
+}
+
+// a wrapper: its head (the parameters from first on spliced in at {}) and body; first == 1: a
+// method (its own handle first)
+attach fn kt_fn(this: bind&, f: u32, first: usize, head: str, raw: bool, ind: str) -> compile_error!std::string {
+    val info = this.c.fi(f);
+    var decls: std::string = {};
+    var passes: std::string = {};
+    var pre: std::string = {};
+    var after: std::string = {};
+    var scopes: std::vec<std::string> = {};
+    var boxes: std::vec<std::string> = {};
+    var box_tys: std::vec<std::string> = {};
+    var scoped = false;
+    if (first == 1) {
+        passes = S("voltHandle()");
+    }
+    for (k) in first..info.params.len {
+        val p = info.params.at(k);
+        var a: kt_arg = {};
+        try this.kt_arg_of(p.ty, p.name, &a);
+        if (decls.len() > 0) {
+            decls.append(", ");
+        }
+        decls.append(a.decl.as_str());
+        if (passes.len() > 0) {
+            passes.append(", ");
+        }
+        passes.append(a.pass.as_str());
+        pre.append(a.pre.as_str());
+        after.append(a.after.as_str());
+        if (a.scope.len() > 0) {
+            put(&scopes, copy a.scope);
+        }
+        if (a.box.len() > 0) {
+            put(&boxes, copy a.box);
+            put(&box_tys, copy a.box_ty);
+        }
+        scoped = scoped || a.scoped;
+    }
+    // the innermost body: the call, a callback's error, the result, what comes back
+    var inner = copy pre;
+    val call = fmt3("{}.{}({})", this.kt_cpkg(), S(info.c_name), move passes);
+    if (info.ret == VOID) {
+        inner.append(fmt("{}\n", copy call).as_str());
+    } else {
+        inner.append(fmt("val volt_r = {}\n", copy call).as_str());
+    }
+    for (b&) in boxes.items() {
+        inner.append(fmt("{}_box.error?.let { throw it }\n", copy *b).as_str());
+    }
+    if (info.ret != VOID) {
+        inner.append(fmt("val volt_v = {}\n", try this.kt_result(info.ret, "volt_r", raw)).as_str());
+    }
+    inner.append(after.as_str());
+    if (info.ret != VOID) {
+        inner.append("volt_v\n");
+    }
+    var k = scopes.len;
+    while (k > 0) {
+        k -= 1;
+        var level = fmt("{}\n", copy *scopes.at(k));
+        level.append(indent_n(inner.as_str(), 4).as_str());
+        level.append("}\n");
+        inner = move level;
+    }
+    if (scoped) {
+        var level = S("memScoped {\n");
+        level.append(indent_n(inner.as_str(), 4).as_str());
+        level.append("}\n");
+        inner = move level;
+    }
+    // callbacks: a StableRef to each box, disposed after the call
+    k = boxes.len;
+    while (k > 0) {
+        k -= 1;
+        val bn = boxes.at(k);
+        var level = fmt2("val {}_box = {}\n", copy *bn, copy *box_tys.at(k));
+        level.append(fmt2("val {}_ref = StableRef.create({}_box)\ntry {{\n", copy *bn, copy *bn).as_str());
+        level.append(indent_n(inner.as_str(), 4).as_str());
+        level.append(fmt("}} finally {{\n    {}_ref.dispose()\n}}\n", copy *bn).as_str());
+        inner = move level;
+    }
+    var out = this.kt_doc(f, ind);
+    out.append(fmt2("{}{}\n", S(ind), replace_all(head, "{}", decls.as_str())).as_str());
+    out.append(indent_n(inner.as_str(), ind.len + 4).as_str());
+    out.append(fmt("{}}\n", S(ind)).as_str());
+    return move out;
+}
+
+attach fn kt_text(this: bind&) -> compile_error!std::string {
+    val ents = this.entries();
+    val p = this.pkg;
+    val cp = this.kt_cpkg();
+    var out = fmt("// {}: generated by voltc bindings; the Volt package for Kotlin/Native. It calls the C\n", S(p));
+    out.append(fmt3("// functions of --lang c's header through cinterop, in package {}: a {}.def of\n//   headers = {}.h\n", copy cp, S(p), S(p)).as_str());
+    out.append(fmt3("//   package = {}\n// (cinterop -def {}.def -compiler-option -I<dir> -o {}.klib; then kotlinc-native -l ", copy cp, S(p), S(p)).as_str());
+    out.append(fmt3("{}.klib\n// -linker-options \"-L<dir> -l{}\"). Errors are thrown as VoltException, one subclass per error set;\n// an export struct is an AutoCloseable class (a Cleaner frees it too, once it's collected).\n", S(p), S(p), S("")).as_str());
+    out.append("@file:OptIn(kotlinx.cinterop.ExperimentalForeignApi::class, kotlin.experimental.ExperimentalNativeApi::class, ExperimentalUnsignedTypes::class)\n@file:Suppress(\"ClassName\", \"FunctionName\", \"EnumEntryName\", \"LocalVariableName\", \"PropertyName\")\n\n");
+    out.append(fmt2("package {}\n\nimport {}.*\nimport kotlinx.cinterop.*\nimport kotlin.native.ref.createCleaner\n", S(p), copy cp).as_str());
+    out.append("\n/** an error a Volt function returned: its code and name */\nopen class VoltException(val code: UInt, val name: String) : Exception(name)\n");
+    out.append("\ninternal fun voltError(code: UInt): VoltException = when (code) {\n");
+    for (c&) in this.all_codes().items() {
+        out.append(fmt3("    {}u -> {}(code, \"{}\")\n", num(c.code), copy c.set, S(c.name)).as_str());
+    }
+    out.append("    else -> VoltException(code, \"error\")\n}\n");
+    for (et&) in this.codes.items() {
+        match (*this.c.t.get(*et)) {
+            .ENUM(e) => {
+                val info = this.c.ei(e);
+                val n = this.local(info.name);
+                out.append(fmt3("\n/** error set {}: thrown for its errors; its codes */\nclass {}(code: UInt, name: String) : VoltException(code, name) {{\n    companion object {{\n", S(info.name), copy n, S("")).as_str());
+                for (i) in 0..info.names.len {
+                    out.append(fmt2("        const val {}: UInt = {}u\n", S(*info.names.at(i)), num(*info.values.at(i))).as_str());
+                }
+                out.append("    }\n}\n");
+            },
+            default => {},
+        }
+    }
+    out.append("\ninternal fun voltString(s: CValue<volt_str>): String = s.useContents { if (len == 0UL) \"\" else ptr!!.readBytes(len.toInt()).decodeToString() }\n");
+    out.append("\n// a String's UTF-8 bytes, in the memScoped block's memory\ninternal fun MemScope.voltStr(s: String): CValue<volt_str> {\n    val b = s.encodeToByteArray()\n    val p = allocArray<UByteVar>(b.size.coerceAtLeast(1))\n    b.forEachIndexed { i, x -> p[i] = x.toUByte() }\n    return cValue<volt_str> {\n        ptr = p\n        len = b.size.convert()\n    }\n}\n");
+    if (this.texts.len > 0) {
+        out.append("\n// owned text: copied into a String, then freed\ninternal fun voltTakeVar(t: volt_text): String {\n    val s = if (t.len == 0UL) \"\" else t.ptr!!.readBytes(t.len.toInt()).decodeToString()\n    t.drop?.invoke(t.owner)\n    return s\n}\n\ninternal fun voltTake(t: CValue<volt_text>): String = t.useContents { voltTakeVar(this) }\n");
+    }
+    if (this.closures.len > 0) {
+        out.append("\n// a function passed for a callback, and what it threw\ninternal class VoltBox<F>(val f: F) {\n    var error: Throwable? = null\n}\n");
+    }
+    for (e&) in this.enums.items() {
+        val info = this.c.ei(*e);
+        val n = this.local(info.name);
+        val tag = S(kt_int(info.tag));
+        out.append(fmt2("\nenum class {}(val value: {}) {{\n", copy n, copy tag).as_str());
+        for (i) in 0..info.names.len {
+            var sep = ",";
+            if (i + 1 == info.names.len) {
+                sep = ";";
+            }
+            out.append(fmt4("    {}({}.to{}()){}\n", kt_ident(*info.names.at(i)), num(*info.values.at(i)), copy tag, S(sep)).as_str());
+        }
+        out.append(fmt2("\n    companion object {{\n        fun of(v: {}): {} = entries.first {{ it.value == v }}\n    }}\n}}\n", copy tag, copy n).as_str());
+    }
+    // structs: data classes, copied to and from C
+    for (s&) in this.structs.items() {
+        val info = this.c.si(*s);
+        val n = this.local(info.name);
+        val cn = this.c_named(info.name, false);
+        var fields: std::string = {};
+        var writes: std::string = {};
+        var reads: std::string = {};
+        var news: std::string = {};
+        for (f&) in info.fields.items() {
+            val fname = kt_ident(f.name);
+            match (*this.c.t.get(f.ty)) {
+                .ARRAY(e, k) => { return fail(NO_SPAN, fmt2("struct {} has an array field ({}), which Kotlin bindings can't copy", S(info.name), S(f.name))); },
+                default => {},
+            }
+            if (fields.len() > 0) {
+                fields.append(", ");
+                news.append(", ");
+            }
+            match (this.shape_of(f.ty) ?? shape::VOID) {
+                .STRUCT(fs) => {
+                    fields.append(fmt2("var {}: {}", copy fname, this.local(this.c.si(fs).name)).as_str());
+                    writes.append(fmt2("    {}.write(c.{})\n", copy fname, copy fname).as_str());
+                    reads.append(fmt2("    {}.readFrom(c.{})\n", copy fname, copy fname).as_str());
+                    news.append(fmt("{}.toKotlin()", copy fname).as_str());
+                },
+                default => {
+                    fields.append(fmt2("var {}: {}", copy fname, this.kt_c(f.ty)).as_str());
+                    writes.append(fmt2("    c.{} = {}\n", copy fname, copy fname).as_str());
+                    reads.append(fmt2("    {} = c.{}\n", copy fname, copy fname).as_str());
+                    news.append(fname.as_str());
+                },
+            }
+        }
+        out.append(fmt2("\ndata class {}({})\n", copy n, move fields).as_str());
+        out.append(fmt3("\ninternal fun {}.write(c: {}) {{\n{}}}\n", copy n, copy cn, move writes).as_str());
+        out.append(fmt3("\ninternal fun {}.readFrom(c: {}) {{\n{}}}\n", copy n, copy cn, move reads).as_str());
+        out.append(fmt3("\ninternal fun {}.toKotlin(): {} = {}(", copy cn, copy n, copy n).as_str());
+        out.append(fmt("{})\n", move news).as_str());
+        out.append(fmt3("\ninternal fun {}.toC(): CValue<{}> = cValue {{ this@toC.write(this) }}\n", copy n, copy cn, S("")).as_str());
+    }
+    // a class per export struct: AutoCloseable, and a Cleaner for when it's collected
+    for (s&) in this.handles.items() {
+        val cls = this.local(this.c.si(*s).name);
+        val cn = fmt("cnames.structs.{}", this.c_named(this.c.si(*s).name, false));
+        val fr = this.free_name(*s);
+        out.append(fmt3("\n// what a {} holds, freed once (by close or the cleaner)\ninternal class {}_raw(var p: CPointer<{}>?) {{\n", copy cls, copy cls, copy cn).as_str());
+        out.append(fmt2("    fun free() {{\n        p?.let {{ {}.{}(it) }}\n        p = null\n    }}\n}}\n", copy cp, copy fr).as_str());
+        out.append(fmt3("\n/** export struct {}; close() (or the cleaner, once it's collected) frees it */\nclass {} internal constructor(h: CPointer<{}>) : AutoCloseable {{\n", S(this.c.si(*s).name), copy cls, copy cn).as_str());
+        out.append(fmt2("    private val voltRaw = {}_raw(h)\n    private val voltCleaner = createCleaner(voltRaw) {{ it.free() }}\n\n    override fun close() = voltRaw.free()\n\n", copy cls, S("")).as_str());
+        out.append(fmt2("    internal fun voltHandle(): CPointer<{}> = voltRaw.p ?: throw IllegalStateException(\"this {} is closed\")\n", copy cn, copy cls).as_str());
+        var statics: std::string = {};
+        for (e&) in ents.items() {
+            if (e.free_of != null) {
+                continue;
+            }
+            val m = this.member_of(e.f, *s) ?? continue;
+            val info = this.c.fi(e.f);
+            if (this.node_is_method(e.f, *s)) {
+                out.append("\n");
+                val head = fmt2("fun {}({{}}){} = run {{", kt_ident(m), this.kt_ret(info.ret));
+                out.append((try this.kt_fn(e.f, 1, head.as_str(), false, "    ")).as_str());
+            } else if (m == "new" && this.made_by(e.f, *s)) {
+                // a constructor: make the handle, then the instance holding it
+                var args: std::string = {};
+                var names: std::string = {};
+                for (k) in 0..info.params.len {
+                    if (k > 0) {
+                        args.append(", ");
+                        names.append(", ");
+                    }
+                    args.append(fmt2("{}: {}", kt_ident(info.params.at(k).name), this.kt_ty(info.params.at(k).ty)).as_str());
+                    names.append(kt_ident(info.params.at(k).name).as_str());
+                }
+                out.append("\n");
+                out.append(this.kt_doc(e.f, "    ").as_str());
+                out.append(fmt2("    constructor({}) : this(voltMake({}))\n", move args, move names).as_str());
+                statics.append("\n");
+                statics.append((try this.kt_fn(e.f, 0, fmt("private fun voltMake({{}}): CPointer<{}> = run {{", copy cn).as_str(), true, "        ")).as_str());
+            } else {
+                statics.append("\n");
+                val head = fmt2("fun {}({{}}){} = run {{", kt_ident(m), this.kt_ret(info.ret));
+                statics.append((try this.kt_fn(e.f, 0, head.as_str(), false, "        ")).as_str());
+            }
+        }
+        if (statics.len() > 0) {
+            out.append(fmt("\n    companion object {{{}    }\n", move statics).as_str());
+        }
+        out.append("}\n");
+    }
+    // the functions
+    for (e&) in ents.items() {
+        if (e.free_of != null || this.class_of(e.f) != null) {
+            continue;
+        }
+        val info = this.c.fi(e.f);
+        out.append("\n");
+        val head = fmt2("fun {}({{}}){} = run {{", kt_ident(info.c_name), this.kt_ret(info.ret));
+        out.append((try this.kt_fn(e.f, 0, head.as_str(), false, "")).as_str());
+    }
+    return move out;
+}
+
+// ---------- Ruby: a C extension ----------
+// A Ruby exception longjmps, so nothing malloc'd is held across one: temporaries are ALLOCV
+// buffers (the GC frees them), callbacks run (and convert their result) under rb_protect, and their
+// exception is raised again once the Volt call is back (an owned result freed first)
+
+// a Ruby constant's name: vec2 is Vec2, math_error is MathError
+fn rb_const(s: str) -> std::string {
+    var out: std::string = {};
+    var up = true;
+    for (c) in s {
+        if (c == '_') {
+            up = true;
+        } else if (up && c >= 'a' && c <= 'z') {
+            out.push(c - 32);
+            up = false;
+        } else {
+            out.push(c);
+            up = false;
+        }
+    }
+    return move out;
+}
+
+// C statements reading Ruby value v into C lvalue c (simple types: numbers, bool, enums, error
+// codes and structs of those); what (a C string expression) names it in the error raised
+attach fn rb_get(this: bind&, t: u32, v: str, c: str, what: str) -> std::string {
+    match (this.shape_of(t) ?? shape::VOID) {
+        .BOOL => { return fmt3("{} = vr_bool({}, {});", S(c), S(v), S(what)); },
+        .FLOAT(b) => { return fmt4("{} = ({})vr_num({}, {});", S(c), this.c_prim(t, false), S(v), S(what)); },
+        .INT(k) => { return fmt4("{} = ({}){}, {});", S(c), this.c_prim(t, false), rb_int_call(k, v), S(what)); },
+        .ENUM(e) => { return fmt4("{} = ({}){}, {});", S(c), this.c_prim(t, false), rb_int_call(this.c.ei(e).tag, v), S(what)); },
+        .CODE => { return fmt3("{} = (uint32_t)vr_uint({}, UINT32_MAX, {});", S(c), S(v), S(what)); },
+        .STRUCT(s) => { return fmt4("vr_get_{}({}, &{}, {});", this.node_sname(s), S(v), S(c), S(what)); },
+        default => { return S("rb_raise(rb_eTypeError, \"unsupported\");"); },
+    }
+}
+
+// the call reading an integer of kind k from v, up to its last argument (what)
+fn rb_int_call(k: int_ty, v: str) -> std::string {
+    match (k) {
+        .I8 => { return fmt("vr_int({}, INT8_MIN, INT8_MAX", S(v)); },
+        .I16 => { return fmt("vr_int({}, INT16_MIN, INT16_MAX", S(v)); },
+        .I32 => { return fmt("vr_int({}, INT32_MIN, INT32_MAX", S(v)); },
+        .U8 => { return fmt("vr_uint({}, UINT8_MAX", S(v)); },
+        .U16 => { return fmt("vr_uint({}, UINT16_MAX", S(v)); },
+        .U32 => { return fmt("vr_uint({}, UINT32_MAX", S(v)); },
+        .U64 => { return fmt("vr_uint({}, UINT64_MAX", S(v)); },
+        .USIZE => { return fmt("vr_uint({}, SIZE_MAX", S(v)); },
+        .ISIZE => { return fmt("vr_int({}, PTRDIFF_MIN, PTRDIFF_MAX", S(v)); },
+        default => { return fmt("vr_int({}, INT64_MIN, INT64_MAX", S(v)); },
+    }
+}
+
+// an expression making the Ruby value of simple C value c (of type t)
+attach fn rb_put(this: bind&, t: u32, c: str) -> std::string {
+    match (this.shape_of(t) ?? shape::VOID) {
+        .BOOL => { return fmt("({} ? Qtrue : Qfalse)", S(c)); },
+        .FLOAT(b) => { return fmt("DBL2NUM((double)({}))", S(c)); },
+        .STRUCT(s) => { return fmt2("vr_new_{}(&{})", this.node_sname(s), S(c)); },
+        .INT(k) => {
+            if (k.signed()) {
+                return fmt("LL2NUM((long long)({}))", S(c));
+            }
+            return fmt("ULL2NUM((unsigned long long)({}))", S(c));
+        },
+        .ENUM(e) => { return fmt("LL2NUM((long long)({}))", S(c)); },
+        default => { return fmt("ULL2NUM((unsigned long long)({}))", S(c)); },
+    }
+}
+
+// one argument of an export fn: its C locals (decl), the statements filling them from argv (get),
+// what the call passes (pass), what writes changes back (after), and a callback's vr_cb (cb)
+struct rb_arg {
+    decl: std::string = {};
+    get: std::string = {};
+    pass: std::string = {};
+    after: std::string = {};
+    cb: std::string = {};
+}
+
+attach fn rb_arg_of(this: bind&, t: u32, v: str, c: str, what: str, a: rb_arg&) -> compile_error!void {
+    if (this.node_simple(t)) {
+        a.decl = fmt2("{} {};", this.c_prim(t, false), S(c));
+        a.get = this.rb_get(t, v, c, what);
+        a.pass = S(c);
+        return;
+    }
+    val h = this.lent_handle(t);
+    if (h) {
+        a.decl = fmt2("{}{};", spaced(this.handle_c(h, false)), S(c));
+        a.get = fmt3("{} = vr_check_{}({});", S(c), this.node_sname(h), S(v));
+        a.pass = S(c);
+        return;
+    }
+    match (this.shape_of(t) ?? shape::VOID) {
+        .STR => {
+            a.decl = fmt("volt_str {};", S(c));
+            a.get = fmt4("{}.ptr = (const uint8_t *)vr_str({}, &{}.len, {});", S(c), S(v), S(c), S(what));
+            a.pass = S(c);
+        },
+        .CSTR => {
+            a.decl = fmt("const char *{} = NULL;", S(c));
+            a.get = fmt3("if (!NIL_P({})) {{ VALUE s_ = {}; {} = StringValueCStr(s_); }}", S(v), S(v), S(c));
+            a.pass = S(c);
+        },
+        .PTR(x) => {
+            if (x != VOID && this.node_simple(x)) {
+                // a struct (or number) by reference: a copy goes in, and what Volt changed comes back
+                val vv = fmt("{}_val", S(c));
+                a.decl = fmt2("{} {};", this.c_prim(x, false), copy vv);
+                var back: std::string = {};
+                match (this.shape_of(x) ?? shape::VOID) {
+                    .STRUCT(s) => { back = fmt3("vr_set_{}({}, &{});", this.node_sname(s), S(v), copy vv); },
+                    default => {},
+                }
+                if (this.nullable_ptr(t)) {
+                    a.decl.append(fmt(" bool {}_null;", S(c)).as_str());
+                    a.get = fmt4("{}_null = NIL_P({}); if (!{}_null) {{ {} }}", S(c), S(v), S(c), this.rb_get(x, v, vv.as_str(), what));
+                    a.pass = fmt2("({}_null ? NULL : &{})", S(c), copy vv);
+                    if (back.len() > 0) {
+                        a.after = fmt2("if (!{}_null) {{ {} }}", S(c), move back);
+                    }
+                } else {
+                    a.get = this.rb_get(x, v, vv.as_str(), what);
+                    a.pass = fmt("&{}", copy vv);
+                    a.after = move back;
+                }
+                return;
+            }
+            a.decl = fmt2("{}{} = NULL;", spaced(this.c_prim(t, false)), S(c));
+            a.get = fmt3("if (!NIL_P({})) {{ {} = vr_pointer({}); }}", S(v), S(c), S(v));
+            a.pass = S(c);
+        },
+        .SLICE(x) => {
+            if (!this.node_simple(x)) {
+                return fail(NO_SPAN, fmt("a slice of {} can't come from Ruby (numbers, bool, enums and structs of those can)", this.c.ty_name(x)));
+            }
+            a.decl = fmt3("{} {}; VALUE {}_tmp = 0;", this.c_prim(t, false), S(c), S(c));
+            a.get = fmt3("Check_Type({}, T_ARRAY); {}.len = (size_t)RARRAY_LEN({}); ", S(v), S(c), S(v));
+            a.get.append(fmt3("{}.ptr = ALLOCV({}_tmp, sizeof *{}.ptr * ", S(c), S(c), S(c)).as_str());
+            a.get.append(fmt2("({}.len ? {}.len : 1));", S(c), S(c)).as_str());
+            a.get.append(fmt3(" for (size_t i = 0; i < {}.len; i++) {{ {} }}", S(c), this.rb_get(x, fmt("rb_ary_entry({}, (long)i)", S(v)).as_str(), fmt("{}.ptr[i]", S(c)).as_str(), what), S("")).as_str());
+            a.pass = S(c);
+            // what Volt wrote into the elements comes back
+            a.after = fmt3("for (size_t i = 0; i < {}.len; i++) {{ rb_ary_store({}, (long)i, {}); }}", S(c), S(v), this.rb_put(x, fmt("{}.ptr[i]", S(c)).as_str()));
+        },
+        .OPT(x) => {
+            if (!this.node_simple(x)) {
+                return fail(NO_SPAN, fmt("an optional {} can't come from Ruby (numbers, bool, enums and structs of those can)", this.c.ty_name(x)));
+            }
+            a.decl = fmt2("{} {};", this.c_prim(t, false), S(c));
+            a.get = fmt4("memset(&{}, 0, sizeof {}); if (!NIL_P({})) {{ {}.has = true; ", S(c), S(c), S(v), S(c));
+            a.get.append(fmt("{} }", this.rb_get(x, v, fmt("{}.value", S(c)).as_str(), what)).as_str());
+            a.pass = S(c);
+        },
+        .CLOSURE(i) => {
+            a.decl = fmt("struct vr_cb {}_cb;", S(c));
+            a.get = fmt3("{}_cb.fn = vr_callable({}); {}_cb.state = 0;", S(c), S(v), S(c));
+            a.pass = fmt2("vr_cb{}, &{}_cb", unum(@cast<u64>(i)), S(c));
+            a.cb = fmt("{}_cb", S(c));
+        },
+        default => { return fail(NO_SPAN, fmt("{} can't come from Ruby", this.c.ty_name(t))); },
+    }
+    return;
+}
+
+// an expression making the Ruby value of C result r (of type t); statements before it (pre) raise
+// the result's error
+attach fn rb_result(this: bind&, t: u32, r: str, pre: std::string&) -> compile_error!std::string {
+    if (t == VOID) {
+        return S("Qnil");
+    }
+    if (this.node_simple(t)) {
+        return this.rb_put(t, r);
+    }
+    match (this.shape_of(t) ?? shape::VOID) {
+        .STR => { return fmt2("rb_utf8_str_new((const char *){}.ptr, (long){}.len)", S(r), S(r)); },
+        .CSTR => { return fmt2("({} ? rb_utf8_str_new_cstr({}) : Qnil)", S(r), S(r)); },
+        .TEXT(x) => { return fmt("vr_take({})", S(r)); },
+        .HANDLE(s) => { return fmt2("vr_wrap_{}({})", this.node_sname(s), S(r)); },
+        .OPT(x) => {
+            if (!this.node_simple(x)) {
+                return fail(NO_SPAN, fmt("an optional {} can't go to Ruby", this.c.ty_name(x)));
+            }
+            return fmt2("({}.has ? {} : Qnil)", S(r), this.rb_put(x, fmt("{}.value", S(r)).as_str()));
+        },
+        .SLICE(x) => {
+            if (!this.node_simple(x)) {
+                return fail(NO_SPAN, fmt("a slice of {} can't go to Ruby", this.c.ty_name(x)));
+            }
+            pre.append(fmt3("    VALUE list = rb_ary_new_capa((long){}.len);\n    for (size_t i = 0; i < {}.len; i++) {{\n        rb_ary_push(list, {});\n    }}\n", S(r), S(r), this.rb_put(x, fmt("{}.ptr[i]", S(r)).as_str())).as_str());
+            return S("list");
+        },
+        .RESULT(e, x) => {
+            pre.append(fmt2("    if ({}.error != 0) {{\n        vr_raise({}.error);\n    }}\n", S(r), S(r)).as_str());
+            return this.rb_result(x, fmt("{}.value", S(r)).as_str(), pre);
+        },
+        .PTR(x) => { return fmt2("({} ? vr_from_pointer((void *){}) : Qnil)", S(r), S(r)); },
+        default => { return fail(NO_SPAN, fmt("{} can't go to Ruby", this.c.ty_name(t))); },
+    }
+}
+
+// what frees owned C result r (of type t) when a callback's exception is raised instead
+attach fn rb_drop(this: bind&, t: u32, r: str) -> std::string {
+    match (this.shape_of(t) ?? shape::VOID) {
+        .TEXT(x) => { return fmt("volt_text_free({}); ", S(r)); },
+        .HANDLE(s) => { return fmt2("{}({}); ", this.free_name(s), S(r)); },
+        .RESULT(e, x) => {
+            val inner = this.rb_drop(x, fmt("{}.value", S(r)).as_str());
+            if (inner.len() == 0) {
+                return {};
+            }
+            return fmt2("if ({}.error == 0) {{ {}}} ", S(r), move inner);
+        },
+        default => { return {}; },
+    }
+}
+
+// the C function behind one Ruby method (self_first: an instance method, whose self is the first
+// parameter); it takes argc/argv, so the last callback can be a block
+attach fn rb_fn(this: bind&, f: u32, self_first: bool, out: std::string&) -> compile_error!void {
+    val info = this.c.fi(f);
+    var first: usize = 0;
+    if (self_first) {
+        first = 1;
+    }
+    var decls: std::string = {};
+    var gets: std::string = {};
+    var passes: std::string = {};
+    var afters: std::string = {};
+    var raises: std::string = {};
+    val drop = this.rb_drop(info.ret, "r");
+    val n = info.params.len - first;
+    var block_last = false;
+    if (n > 0) {
+        match (this.shape_of(info.params.at(info.params.len - 1).ty) ?? shape::VOID) {
+            .CLOSURE(i) => { block_last = true; },
+            default => {},
+        }
+    }
+    for (k) in 0..info.params.len {
+        val p = info.params.at(k);
+        var a: rb_arg = {};
+        var v = S("self");
+        if (k >= first) {
+            v = fmt("argv[{}]", unum(@cast<u64>(k - first)));
+        }
+        val what = fmt2("\"argument {} of {}\"", S(p.name), S(info.c_name));
+        val cname = fmt("p_{}", S(p.name));
+        try this.rb_arg_of(p.ty, v.as_str(), cname.as_str(), what.as_str(), &a);
+        decls.append(fmt("    {}\n", copy a.decl).as_str());
+        gets.append(fmt("    {}\n", copy a.get).as_str());
+        if (passes.len() > 0) {
+            passes.append(", ");
+        }
+        passes.append(a.pass.as_str());
+        if (a.after.len() > 0) {
+            afters.append(fmt("    {}\n", copy a.after).as_str());
+        }
+        if (a.cb.len() > 0) {
+            raises.append(fmt3("    if ({}.state) {{\n        {}rb_jump_tag({}.state);\n    }}\n", copy a.cb, copy drop, copy a.cb).as_str());
+        }
+    }
+    out.append(fmt("\nstatic VALUE vr_f_{}(int argc, VALUE *argv, VALUE self) {{\n", S(info.c_name)).as_str());
+    if (n == 0) {
+        out.append("    (void)argv;\n");
+    }
+    if (!self_first) {
+        out.append("    (void)self;\n");
+    }
+    if (block_last) {
+        // the last callback can be a block
+        out.append(fmt3("    VALUE args[{}];\n    if (argc == {} && rb_block_given_p()) {{\n", unum(@cast<u64>(n)), unum(@cast<u64>(n - 1)), S("")).as_str());
+        out.append(fmt3("        for (int i = 0; i < argc; i++) {{\n            args[i] = argv[i];\n        }}\n        args[{}] = rb_block_proc();\n        argc = {};\n        argv = args;\n    }}\n", unum(@cast<u64>(n - 1)), unum(@cast<u64>(n)), S("")).as_str());
+    }
+    out.append(fmt2("    rb_check_arity(argc, {}, {});\n", unum(@cast<u64>(n)), unum(@cast<u64>(n))).as_str());
+    out.append(decls.as_str());
+    out.append(gets.as_str());
+    val call = fmt2("{}({})", S(info.c_name), move passes);
+    if (info.ret == VOID) {
+        out.append(fmt("    {};\n", move call).as_str());
+    } else {
+        out.append(fmt2("    {}r = {};\n", spaced(this.c_prim(info.ret, false)), move call).as_str());
+    }
+    // a callback's exception first, then the result (or its error), then what Volt changed comes back
+    out.append(raises.as_str());
+    var pre: std::string = {};
+    val res = try this.rb_result(info.ret, "r", &pre);
+    out.append(pre.as_str());
+    out.append(fmt("    VALUE result = {};\n", copy res).as_str());
+    out.append(afters.as_str());
+    out.append("    return result;\n}\n");
+    return;
+}
+
+attach fn rb_text(this: bind&) -> compile_error!std::string {
+    val ents = this.entries();
+    val p = this.pkg;
+    val mod = rb_const(p);
+    var out = fmt("// {}: generated by voltc bindings; a Ruby C extension for the Volt package. Build it\n", S(p));
+    out.append(fmt3("// against the library and Ruby's headers:\n//   cc -shared -fPIC -I<rubyhdrdir> -I<rubyarchhdrdir> {}_ruby.c -L. -l{} -o {}.so\n", S(p), S(p), S(p)).as_str());
+    out.append(fmt3("// then require \"{}\": module {}. Errors are raised as {}::Error, one subclass per error set.\n#include <ruby.h>\n#include <stdint.h>\n#include <stdio.h>\n#include <string.h>\n\n", S(p), copy mod, copy mod).as_str());
+    out.append(this.c_text().as_str());
+    out.append(fmt("\nstatic VALUE vr_module, vr_error;\n", S("")).as_str());
+    out.append("\n// ---------- conversions: each raises naming what didn't fit ----------\n\n");
+    out.append("static inline long long vr_int(VALUE v, long long lo, long long hi, const char *what) {\n    if (!RB_INTEGER_TYPE_P(v)) {\n        rb_raise(rb_eTypeError, \"%s: expected an Integer, got %\" PRIsVALUE, what, rb_obj_class(v));\n    }\n    long long x = NUM2LL(v);\n    if (x < lo || x > hi) {\n        rb_raise(rb_eRangeError, \"%s: %lld doesn't fit\", what, x);\n    }\n    return x;\n}\n\n");
+    out.append("static inline unsigned long long vr_uint(VALUE v, unsigned long long hi, const char *what) {\n    if (!RB_INTEGER_TYPE_P(v)) {\n        rb_raise(rb_eTypeError, \"%s: expected an Integer, got %\" PRIsVALUE, what, rb_obj_class(v));\n    }\n    if (RTEST(rb_funcall(v, '<', 1, INT2FIX(0)))) {\n        rb_raise(rb_eRangeError, \"%s: %\" PRIsVALUE \" is negative\", what, v);\n    }\n    unsigned long long x = NUM2ULL(v);\n    if (x > hi) {\n        rb_raise(rb_eRangeError, \"%s: %llu doesn't fit\", what, x);\n    }\n    return x;\n}\n\n");
+    out.append("static inline double vr_num(VALUE v, const char *what) {\n    if (!RB_FLOAT_TYPE_P(v) && !RB_INTEGER_TYPE_P(v)) {\n        rb_raise(rb_eTypeError, \"%s: expected a number, got %\" PRIsVALUE, what, rb_obj_class(v));\n    }\n    return NUM2DBL(v);\n}\n\n");
+    out.append("static inline bool vr_bool(VALUE v, const char *what) {\n    if (v != Qtrue && v != Qfalse) {\n        rb_raise(rb_eTypeError, \"%s: expected true or false, got %\" PRIsVALUE, what, rb_obj_class(v));\n    }\n    return v == Qtrue;\n}\n\n");
+    out.append("// a String's bytes (the String stays on the caller's stack for the call)\nstatic inline const char *vr_str(VALUE v, size_t *len, const char *what) {\n    if (!RB_TYPE_P(v, T_STRING)) {\n        rb_raise(rb_eTypeError, \"%s: expected a String, got %\" PRIsVALUE, what, rb_obj_class(v));\n    }\n    *len = (size_t)RSTRING_LEN(v);\n    return RSTRING_PTR(v);\n}\n\n");
+    out.append("// a struct's field, from a Struct (or anything with the reader) or a Hash\nstatic inline VALUE vr_field(VALUE v, const char *name) {\n    if (RB_TYPE_P(v, T_HASH)) {\n        return rb_hash_aref(v, ID2SYM(rb_intern(name)));\n    }\n    return rb_funcall(v, rb_intern(name), 0);\n}\n\nstatic inline void vr_set_field(VALUE v, const char *name, VALUE x) {\n    if (RB_TYPE_P(v, T_HASH)) {\n        rb_hash_aset(v, ID2SYM(rb_intern(name)), x);\n    } else {\n        char setter[128];\n        snprintf(setter, sizeof setter, \"%s=\", name);\n        rb_funcall(v, rb_intern(setter), 1, x);\n    }\n}\n\n");
+    out.append(fmt("// a pointer from another call (an opaque object)\nstatic VALUE vr_cPointer;\nstatic const rb_data_type_t vr_type_pointer = {{.wrap_struct_name = \"{}::Pointer\", .flags = RUBY_TYPED_FREE_IMMEDIATELY}};\n\nstatic inline VALUE vr_from_pointer(void *p) {{\n    return TypedData_Wrap_Struct(vr_cPointer, &vr_type_pointer, p);\n}}\n\nstatic inline void *vr_pointer(VALUE v) {{\n    return rb_check_typeddata(v, &vr_type_pointer);\n}}\n", copy mod).as_str());
+    if (this.texts.len > 0) {
+        out.append("\n// owned text: a String, and the text freed\nstatic inline VALUE vr_take(volt_text t) {\n    VALUE s = rb_utf8_str_new((const char *)t.ptr, (long)t.len);\n    volt_text_free(t);\n    return s;\n}\n");
+    }
+    // errors: Mod::Error (code, and the name as the message) and a subclass per error set
+    out.append("\nstatic inline const char *vr_error_name(uint32_t code) {\n    switch (code) {\n");
+    for (c&) in this.all_codes().items() {
+        out.append(fmt2("    case {}u: return \"{}\";\n", num(c.code), S(c.name)).as_str());
+    }
+    out.append("    }\n    return \"error\";\n}\n\nstatic inline VALUE vr_error_class(uint32_t code);\n\n// raises the exception for a Volt error code\nstatic inline void vr_raise(uint32_t code) {\n    VALUE e = rb_exc_new_cstr(vr_error_class(code), vr_error_name(code));\n    rb_iv_set(e, \"@code\", UINT2NUM(code));\n    rb_exc_raise(e);\n}\n");
+    var classes: std::string = {};
+    for (et&) in this.codes.items() {
+        match (*this.c.t.get(*et)) {
+            .ENUM(e) => { classes.append(fmt("static VALUE vr_error_{};\n", this.local(this.c.ei(e).name)).as_str()); },
+            default => {},
+        }
+    }
+    out.append(fmt("\n{}\nstatic inline VALUE vr_error_class(uint32_t code) {{\n    switch (code) {{\n", move classes).as_str());
+    for (c&) in this.all_codes().items() {
+        out.append(fmt2("    case {}u: return vr_error_{};\n", num(c.code), copy c.set).as_str());
+    }
+    out.append("    }\n    return vr_error;\n}\n");
+    // structs: Struct classes (a Hash with the fields works too)
+    for (s&) in this.structs.items() {
+        if (!this.node_simple(this.c.t.intern(tyk::STRUCT(*s)))) {
+            continue;
+        }
+        val sn = this.node_sname(*s);
+        val cn = this.c_named(this.c.si(*s).name, false);
+        out.append(fmt2("\nstatic VALUE vr_class_{};\n\nstatic inline void vr_get_{}(VALUE v, ", copy sn, copy sn).as_str());
+        out.append(fmt("{} *out, const char *what) {{\n    (void)what;\n", copy cn).as_str());
+        for (f&) in this.c.si(*s).fields.items() {
+            val fw = fmt2("\"field {} of {}\"", S(f.name), copy sn);
+            out.append(fmt3("    {{\n        VALUE f = vr_field(v, \"{}\");\n        {}\n    }}\n", S(f.name), this.rb_get(f.ty, "f", fmt("out->{}", S(f.name)).as_str(), fw.as_str()), S("")).as_str());
+        }
+        out.append("}\n");
+        out.append(fmt2("\nstatic inline void vr_set_{}(VALUE v, const {} *in) {{\n", copy sn, copy cn).as_str());
+        for (f&) in this.c.si(*s).fields.items() {
+            out.append(fmt2("    vr_set_field(v, \"{}\", {});\n", S(f.name), this.rb_put(f.ty, fmt("in->{}", S(f.name)).as_str())).as_str());
+        }
+        out.append("}\n");
+        out.append(fmt2("\nstatic inline VALUE vr_new_{}(const {} *in) {{\n", copy sn, copy cn).as_str());
+        out.append(fmt("    VALUE args[{}];\n", unum(@cast<u64>(this.c.si(*s).fields.len))).as_str());
+        var k: usize = 0;
+        for (f&) in this.c.si(*s).fields.items() {
+            out.append(fmt2("    args[{}] = {};\n", unum(@cast<u64>(k)), this.rb_put(f.ty, fmt("in->{}", S(f.name)).as_str())).as_str());
+            k += 1;
+        }
+        out.append(fmt2("    return rb_class_new_instance({}, args, vr_class_{});\n}\n", unum(@cast<u64>(k)), copy sn).as_str());
+    }
+    // callbacks: run (with the result converted) under rb_protect; the first exception is kept and
+    // the later calls skipped
+    if (this.closures.len > 0) {
+        out.append("\n// a Proc passed for a callback, and the state of the exception it raised\nstruct vr_cb {\n    VALUE fn;\n    int state;\n};\n\nstatic inline VALUE vr_callable(VALUE v) {\n    if (!rb_respond_to(v, rb_intern(\"call\"))) {\n        rb_raise(rb_eTypeError, \"expected a Proc (or a block)\");\n    }\n    return v;\n}\n");
+    }
+    for (i) in 0..this.closures.len {
+        match (*this.c.t.get(*this.closures.at(i))) {
+            .FN_VAL(ps&, r) => {
+                val n = unum(@cast<u64>(i));
+                out.append(fmt2("\nstruct vr_run{} {{\n    VALUE fn;\n    VALUE argv[{}];\n", copy n, unum(@cast<u64>(ps.len + 1))).as_str());
+                if (r != VOID) {
+                    if (!this.node_simple(r)) {
+                        return fail(NO_SPAN, fmt("a callback returning {} can't call Ruby", this.c.ty_name(r)));
+                    }
+                    out.append(fmt("    {}out;\n", spaced(this.c_prim(r, false))).as_str());
+                }
+                out.append(fmt3("}};\n\nstatic VALUE vr_run{}(VALUE arg) {{\n    struct vr_run{} *a = (struct vr_run{} *)arg;\n", copy n, copy n, copy n).as_str());
+                out.append(fmt("    VALUE ret = rb_funcallv(a->fn, rb_intern(\"call\"), {}, a->argv);\n", unum(@cast<u64>(ps.len))).as_str());
+                if (r != VOID) {
+                    out.append(fmt("    {}\n", this.rb_get(r, "ret", "a->out", "\"the callback's result\"")).as_str());
+                } else {
+                    out.append("    (void)ret;\n");
+                }
+                out.append("    return Qnil;\n}\n");
+                var params = S("void *user");
+                for (k) in 0..ps.len {
+                    params.append(fmt2(", {}a{}", spaced(this.c_prim(*ps.at(k), false)), unum(@cast<u64>(k))).as_str());
+                }
+                out.append(fmt3("\nstatic {}vr_cb{}({}) {{\n    struct vr_cb *c = user;\n", spaced(this.c_prim(r, false)), copy n, move params).as_str());
+                out.append(fmt2("    struct vr_run{} a;\n    memset(&a, 0, sizeof a);\n    a.fn = c->fn;\n", copy n, S("")).as_str());
+                for (k) in 0..ps.len {
+                    val ak = fmt("a{}", unum(@cast<u64>(k)));
+                    match (this.shape_of(*ps.at(k)) ?? shape::VOID) {
+                        .STR => { out.append(fmt3("    a.argv[{}] = rb_utf8_str_new((const char *){}.ptr, (long){}.len);\n", unum(@cast<u64>(k)), copy ak, copy ak).as_str()); },
+                        default => {
+                            if (!this.node_simple(*ps.at(k))) {
+                                return fail(NO_SPAN, fmt("a callback taking {} can't call Ruby", this.c.ty_name(*ps.at(k))));
+                            }
+                            out.append(fmt2("    a.argv[{}] = {};\n", unum(@cast<u64>(k)), this.rb_put(*ps.at(k), ak.as_str())).as_str());
+                        },
+                    }
+                }
+                out.append(fmt("    if (!c->state) {{\n        rb_protect(vr_run{}, (VALUE)&a, &c->state);\n    }}\n", copy n).as_str());
+                if (r != VOID) {
+                    out.append("    return a.out;\n");
+                }
+                out.append("}\n");
+            },
+            default => {},
+        }
+    }
+    // classes: a TypedData object holding the handle (NULL once closed)
+    for (s&) in this.handles.items() {
+        val sn = this.node_sname(*s);
+        val cn = this.handle_c(*s, false);
+        out.append(fmt3("\n// export struct {}\nstatic VALUE vr_class_{};\n\nstatic void vr_dfree_{}(void *h) {{\n", S(this.c.si(*s).name), copy sn, copy sn).as_str());
+        out.append(fmt("    if (h) {{\n        {}(h);\n    }}\n}}\n", this.free_name(*s)).as_str());
+        out.append(fmt4("\nstatic const rb_data_type_t vr_type_{} = {{.wrap_struct_name = \"{}::{}\", .function = {{.dfree = vr_dfree_{}}}, .flags = RUBY_TYPED_FREE_IMMEDIATELY}};\n", copy sn, copy mod, rb_const(sn.as_str()), copy sn).as_str());
+        out.append(fmt4("\nstatic inline {}vr_check_{}(VALUE v) {{\n    {}h = rb_check_typeddata(v, &vr_type_{});\n", spaced(copy cn), copy sn, spaced(copy cn), copy sn).as_str());
+        out.append(fmt("    if (!h) {{\n        rb_raise(rb_eRuntimeError, \"this {} is closed\");\n    }}\n    return h;\n}}\n", copy sn).as_str());
+        out.append(fmt4("\nstatic inline VALUE vr_wrap_{}({}h) {{\n    return TypedData_Wrap_Struct(vr_class_{}, &vr_type_{}, h);\n}}\n", copy sn, spaced(copy cn), copy sn, copy sn).as_str());
+        out.append(fmt3("\n// close: frees the handle now (otherwise the GC does)\nstatic VALUE vr_close_{}(VALUE self) {{\n    void *h = rb_check_typeddata(self, &vr_type_{});\n    if (h) {{\n        {}(h);\n", copy sn, copy sn, this.free_name(*s)).as_str());
+        out.append("        DATA_PTR(self) = NULL;\n    }\n    return Qnil;\n}\n");
+    }
+    // the functions
+    for (e&) in ents.items() {
+        if (e.free_of != null) {
+            continue;
+        }
+        val cls = this.class_of(e.f);
+        var method = false;
+        if (cls) {
+            method = this.node_is_method(e.f, cls);
+        }
+        try this.rb_fn(e.f, method, &out);
+    }
+    // Init: the module, its functions, enums and error sets (modules of constants), structs and classes
+    out.append(fmt3("\nRUBY_FUNC_EXPORTED void Init_{}(void) {{\n    vr_module = rb_define_module(\"{}\");\n    vr_error = rb_define_class_under(vr_module, \"Error\", rb_eStandardError);\n    rb_define_attr(vr_error, \"code\", 1, 0);\n", S(p), copy mod, S("")).as_str());
+    out.append("    vr_cPointer = rb_define_class_under(vr_module, \"Pointer\", rb_cObject);\n    rb_undef_alloc_func(vr_cPointer);\n");
+    for (et&) in this.codes.items() {
+        match (*this.c.t.get(*et)) {
+            .ENUM(e) => {
+                val info = this.c.ei(e);
+                val ln = this.local(info.name);
+                out.append(fmt2("    vr_error_{} = rb_define_class_under(vr_module, \"{}\", vr_error);\n", copy ln, rb_const(ln.as_str())).as_str());
+                for (i) in 0..info.names.len {
+                    out.append(fmt3("    rb_define_const(vr_error_{}, \"{}\", UINT2NUM({}u));\n", copy ln, S(*info.names.at(i)), num(*info.values.at(i))).as_str());
+                }
+            },
+            default => {},
+        }
+    }
+    for (en&) in this.enums.items() {
+        val info = this.c.ei(*en);
+        out.append(fmt("    {\n        VALUE m = rb_define_module_under(vr_module, \"{}\");\n", rb_const(this.local(info.name).as_str())).as_str());
+        for (i) in 0..info.names.len {
+            out.append(fmt2("        rb_define_const(m, \"{}\", LL2NUM({}));\n", S(*info.names.at(i)), num(*info.values.at(i))).as_str());
+        }
+        out.append("    }\n");
+    }
+    for (s&) in this.structs.items() {
+        if (!this.node_simple(this.c.t.intern(tyk::STRUCT(*s)))) {
+            continue;
+        }
+        val sn = this.node_sname(*s);
+        var members: std::string = {};
+        for (f&) in this.c.si(*s).fields.items() {
+            members.append(fmt(", ID2SYM(rb_intern(\"{}\"))", S(f.name)).as_str());
+        }
+        out.append(fmt3("    vr_class_{} = rb_funcall(rb_cStruct, rb_intern(\"new\"), {}{});\n", copy sn, unum(@cast<u64>(this.c.si(*s).fields.len)), move members).as_str());
+        out.append(fmt2("    rb_define_const(vr_module, \"{}\", vr_class_{});\n", rb_const(sn.as_str()), copy sn).as_str());
+    }
+    for (e&) in ents.items() {
+        if (e.free_of != null || this.class_of(e.f) != null) {
+            continue;
+        }
+        val n = S(this.c.fi(e.f).c_name);
+        out.append(fmt2("    rb_define_module_function(vr_module, \"{}\", vr_f_{}, -1);\n", copy n, copy n).as_str());
+    }
+    for (s&) in this.handles.items() {
+        val sn = this.node_sname(*s);
+        out.append(fmt2("    vr_class_{} = rb_define_class_under(vr_module, \"{}\", rb_cObject);\n", copy sn, rb_const(sn.as_str())).as_str());
+        out.append(fmt3("    rb_undef_alloc_func(vr_class_{});\n    rb_define_method(vr_class_{}, \"close\", vr_close_{}, 0);\n", copy sn, copy sn, copy sn).as_str());
+        for (e&) in ents.items() {
+            if (e.free_of != null) {
+                continue;
+            }
+            val m = this.member_of(e.f, *s) ?? continue;
+            if (this.node_is_method(e.f, *s)) {
+                out.append(fmt3("    rb_define_method(vr_class_{}, \"{}\", vr_f_{}, -1);\n", copy sn, S(m), S(this.c.fi(e.f).c_name)).as_str());
+            } else {
+                out.append(fmt3("    rb_define_singleton_method(vr_class_{}, \"{}\", vr_f_{}, -1);\n", copy sn, S(m), S(this.c.fi(e.f).c_name)).as_str());
+            }
+        }
+    }
+    out.append("}\n");
+    return move out;
+}
+
+// ---------- the command ----------
+
+// the bindings of package pkg in lang (see the top of the file; node, js and ts are a Node-API
+// addon, its loader and its types; json is the model itself)
 attach fn bindings(this: checker&, pkg: str, lang: str) -> compile_error!std::string {
     var b: bind = { c: this, pkg: pkg };
     val fns = b.exports();
@@ -6789,6 +8412,15 @@ attach fn bindings(this: checker&, pkg: str, lang: str) -> compile_error!std::st
     if (lang == "dart") {
         return b.dart_text();
     }
+    if (lang == "swift") {
+        return b.swift_text();
+    }
+    if (lang == "kotlin") {
+        return b.kt_text();
+    }
+    if (lang == "ruby") {
+        return b.rb_text();
+    }
     if (lang == "node") {
         return b.node_text();
     }
@@ -6798,5 +8430,5 @@ attach fn bindings(this: checker&, pkg: str, lang: str) -> compile_error!std::st
     if (lang == "ts") {
         return b.ts_text();
     }
-    return fail(NO_SPAN, fmt("--lang takes c, cpp, rust, zig, python, pyi, csharp, java, go, lua, dart, node, js, ts or json, not '{}'", S(lang)));
+    return fail(NO_SPAN, fmt("--lang takes c, cpp, rust, zig, python, pyi, csharp, java, go, lua, dart, swift, kotlin, ruby, node, js, ts or json, not '{}'", S(lang)));
 }

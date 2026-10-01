@@ -5,6 +5,9 @@ use crate::toml::{self, Table, Value};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+/// what [lib] bindings can name: voltc bindings' --lang
+const BINDINGS: [&str; 18] = ["c", "cpp", "rust", "zig", "python", "pyi", "csharp", "java", "go", "lua", "dart", "swift", "kotlin", "ruby", "node", "js", "ts", "json"];
+
 // ---------- versions ----------
 
 /// a package version, MAJOR.MINOR.PATCH (a -pre or +build suffix is kept for display, not compared)
@@ -309,8 +312,8 @@ fn package(dir: &Path, t: &Table) -> Result<Manifest, String> {
                 return Err(format!("[lib] kind '{k}' isn't volt, shared or static"));
             }
             bindings = get_strs(l, "bindings", "lib")?;
-            if let Some(b) = bindings.iter().find(|b| !["c", "cpp", "rust", "zig", "python", "pyi", "csharp", "java", "go", "lua", "dart", "node", "js", "ts", "json"].contains(&b.as_str())) {
-                return Err(format!("[lib] bindings '{b}' isn't c, cpp, rust, zig, python, pyi, csharp, java, go, lua, dart, node, js, ts or json"));
+            if let Some(b) = bindings.iter().find(|b| !BINDINGS.contains(&b.as_str())) {
+                return Err(format!("[lib] bindings '{b}' isn't one of {}", BINDINGS.join(", ")));
             }
             Some(dir.join(get_str(l, "path", "lib")?.unwrap_or("lib".into())))
         }

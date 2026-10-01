@@ -1,8 +1,8 @@
 // Interop both ways, with the self-hosted voltc (it links libLLVM and libclang): a Volt library
 // built with `voltc lib --shared/--static` and called from C, C++, Rust and Python (and Zig,
-// JavaScript, C#, Java, Go, Lua and Dart, when they're installed) through `voltc bindings`; Volt
-// calling a Rust static library and embedding Python; and Volt importing C++ headers (`use cpp`).
-// Every Volt side runs on both backends.
+// JavaScript, C#, Java, Go, Lua, Dart, Swift, Kotlin/Native and Ruby, when they're installed)
+// through `voltc bindings`; Volt calling a Rust static library and embedding Python; and Volt
+// importing C++ headers (`use cpp`). Every Volt side runs on both backends.
 mod common;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -102,6 +102,14 @@ fn lua_include() -> Option<&'static str> {
     ["/usr/include", "/usr/include/lua5.5", "/usr/include/lua5.4", "/usr/local/include"].into_iter().find(|d| Path::new(d).join("lua.h").is_file())
 }
 
+/// ruby, and the directories of its headers (ruby.h and its config.h), when both are installed
+fn ruby_headers() -> Option<(PathBuf, Vec<String>)> {
+    let ruby = local_tool("ruby", "-v")?;
+    let o = Command::new(&ruby).args(["-e", "print RbConfig::CONFIG['rubyhdrdir'], ' ', RbConfig::CONFIG['rubyarchhdrdir']"]).output().ok()?;
+    let dirs: Vec<String> = String::from_utf8_lossy(&o.stdout).split_whitespace().map(String::from).collect();
+    (dirs.len() == 2 && Path::new(&dirs[0]).join("ruby.h").is_file()).then_some((ruby, dirs))
+}
+
 fn run(cmd: &mut Command) -> Output {
     cmd.current_dir(Path::new(ROOT).join("tests/interop")).output().unwrap()
 }
@@ -116,7 +124,7 @@ fn bindings_round_trip() {
         ok(e.voltc(&["lib", "mathlib", "--pkg", pkg, "--shared", "--backend", backend, "-o", &so]), "voltc lib --shared");
         ok(e.voltc(&["lib", "mathlib", "--pkg", pkg, "--static", "--backend", backend, "-o", &e.path(&format!("{backend}/libmathlib_static.a"))]), "voltc lib --static");
     }
-    for (lang, file) in [("c", "mathlib.h"), ("cpp", "mathlib.hpp"), ("rust", "mathlib.rs"), ("python", "mathlib.py"), ("pyi", "mathlib.pyi"), ("csharp", "mathlib.cs"), ("java", "mathlib.java"), ("go", "mathlib.go"), ("lua", "mathlib_lua.c"), ("dart", "mathlib.dart"), ("zig", "mathlib.zig"), ("node", "mathlib_node.c"), ("js", "mathlib.js"), ("ts", "mathlib.d.ts")] {
+    for (lang, file) in [("c", "mathlib.h"), ("cpp", "mathlib.hpp"), ("rust", "mathlib.rs"), ("python", "mathlib.py"), ("pyi", "mathlib.pyi"), ("csharp", "mathlib.cs"), ("java", "mathlib.java"), ("go", "mathlib.go"), ("lua", "mathlib_lua.c"), ("dart", "mathlib.dart"), ("swift", "mathlib.swift"), ("kotlin", "mathlib.kt"), ("ruby", "mathlib_ruby.c"), ("zig", "mathlib.zig"), ("node", "mathlib_node.c"), ("js", "mathlib.js"), ("ts", "mathlib.d.ts")] {
         ok(e.voltc(&["bindings", "mathlib", "--pkg", pkg, "--lang", lang, "-o", &e.path(file)]), &format!("voltc bindings --lang {lang}"));
     }
     // the model the generators share, as JSON for generators of other people's
@@ -246,6 +254,55 @@ fn bindings_round_trip() {
             assert_eq!(ok(o, "dart run client.dart"), MATHLIB_OUT, "Dart ({backend})");
         } else {
             eprintln!("dart isn't installed: skipping the Dart client");
+        }
+        // Swift: mathlib.swift over the C header, which Swift imports as module Cmathlib
+        if let Some(swiftc) = local_tool("swiftc", "--version") {
+            let sdir = e.dir.join(format!("swift-{backend}"));
+            std::fs::create_dir_all(sdir.join("Cmathlib")).unwrap();
+            std::fs::copy(e.dir.join("mathlib.h"), sdir.join("Cmathlib/mathlib.h")).unwrap();
+            std::fs::write(sdir.join("Cmathlib/module.modulemap"), "module Cmathlib {\n    header \"mathlib.h\"\n    export *\n}\n").unwrap();
+            std::fs::copy(e.dir.join("mathlib.swift"), sdir.join("mathlib.swift")).unwrap();
+            std::fs::copy(Path::new(ROOT).join("tests/interop/client.swift"), sdir.join("main.swift")).unwrap();
+            let o = Command::new(&swiftc).args(["-warnings-as-errors", "-I", "Cmathlib", "mathlib.swift", "main.swift", "-L", &lib_dir, "-lmathlib", "-Xlinker", "-rpath", "-Xlinker", &lib_dir, "-o", "client"]).current_dir(&sdir).output().unwrap();
+            ok(o, "swiftc");
+            assert_eq!(ok(Command::new(sdir.join("client")).output().unwrap(), "Swift program"), MATHLIB_OUT, "Swift ({backend})");
+        } else {
+            eprintln!("swiftc isn't installed: skipping the Swift client");
+        }
+        // Kotlin/Native: cinterop makes the C header package cmathlib; mathlib.kt wraps it. Its own
+        // sysroot has an older glibc than the library may have been linked against
+        if let Some(konanc) = local_tool("kotlinc-native", "-version") {
+            let kdir = e.dir.join(format!("kotlin-{backend}"));
+            std::fs::create_dir_all(&kdir).unwrap();
+            std::fs::copy(e.dir.join("mathlib.h"), kdir.join("mathlib.h")).unwrap();
+            std::fs::write(kdir.join("mathlib.def"), "headers = mathlib.h\npackage = cmathlib\n").unwrap();
+            std::fs::copy(e.dir.join("mathlib.kt"), kdir.join("mathlib.kt")).unwrap();
+            std::fs::copy(Path::new(ROOT).join("tests/interop/client.kt"), kdir.join("client.kt")).unwrap();
+            let k = |tool: &Path, args: &[&str]| Command::new(tool).args(args).current_dir(&kdir).output().unwrap();
+            ok(k(&konanc.with_file_name("cinterop"), &["-def", "mathlib.def", "-compiler-option", "-I.", "-o", "mathlib_c"]), "cinterop");
+            let link = format!("-L{lib_dir} -lmathlib -rpath {lib_dir} --allow-shlib-undefined");
+            let o = k(&konanc, &["mathlib.kt", "client.kt", "-l", "mathlib_c.klib", "-linker-options", &link, "-o", "client"]);
+            assert!(!String::from_utf8_lossy(&o.stderr).contains("warning:"), "kotlinc-native warns: {}", String::from_utf8_lossy(&o.stderr));
+            ok(o, "kotlinc-native");
+            assert_eq!(ok(Command::new(kdir.join("client.kexe")).output().unwrap(), "Kotlin program"), MATHLIB_OUT, "Kotlin ({backend})");
+        } else {
+            eprintln!("kotlinc-native isn't installed: skipping the Kotlin client");
+        }
+        // Ruby: the C extension, built against Ruby's headers; client.rb also asserts what it rejects
+        match ruby_headers() {
+            Some((ruby, hdrs)) => {
+                let rdir = e.dir.join(format!("ruby-{backend}"));
+                std::fs::create_dir_all(&rdir).unwrap();
+                let mut cc = Command::new("cc");
+                cc.args(["-shared", "-fPIC", "-Wall", "-Wextra", "-Wno-unused-parameter", "-Werror"]);
+                for h in &hdrs {
+                    cc.arg("-I").arg(h);
+                }
+                ok(run(cc.arg(e.dir.join("mathlib_ruby.c")).args(["-I", &e.path(""), "-L", &lib_dir, "-lmathlib", &rpath, "-o"]).arg(rdir.join("mathlib.so"))), "cc mathlib_ruby.c");
+                let o = Command::new(&ruby).arg("-I").arg(&rdir).arg(Path::new(ROOT).join("tests/interop/client.rb")).output().unwrap();
+                assert_eq!(ok(o, "ruby client.rb"), MATHLIB_OUT, "Ruby ({backend})");
+            }
+            None => eprintln!("ruby (with its headers) isn't installed: skipping the Ruby client"),
         }
         if let Some(zig) = zig() {
             std::fs::copy(Path::new(ROOT).join("tests/interop/client.zig"), e.dir.join("client.zig")).unwrap();
