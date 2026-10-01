@@ -1,0 +1,13 @@
+error: the package sees windows
+   ┌─ tests/pkgs/plat/plat.volt:30:9
+   │
+30 │         @compile_error("the package sees windows");
+   │         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: the program sees windows on aarch64, and not the host
+  ┌─ tests/diag/cfg_target_override.volt:6:9
+  │
+6 │         @compile_error("the program sees windows on aarch64, and not the host");
+  │         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: aborting due to 2 errors

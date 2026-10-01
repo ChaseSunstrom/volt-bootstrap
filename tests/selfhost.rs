@@ -277,6 +277,23 @@ fn runtime_compiles_for_every_target() {
     }
 }
 
+/// std's code for other systems (picked with @cfg("os")) compiles there: a program using it is emitted
+/// as C with --cfg os=X and compiled for that system's target (not linked: those systems aren't here)
+#[test]
+fn std_compiles_for_other_systems() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("std-targets");
+    std::fs::create_dir_all(&dir).unwrap();
+    for (os, target) in [("windows", "x86_64-pc-windows-msvc"), ("macos", "arm64-apple-macos11"), ("freebsd", "x86_64-unknown-freebsd")] {
+        let c = dir.join(format!("net-{os}.c"));
+        let o = Command::new(env!("CARGO_BIN_EXE_voltc-bootstrap")).args(["emit-c", "tests/run/std_net.volt", "--cfg"]).arg(format!("os={os}")).current_dir(root).output().unwrap();
+        assert!(o.status.success(), "emit-c for {os}: {}", String::from_utf8_lossy(&o.stderr));
+        std::fs::write(&c, &o.stdout).unwrap();
+        let cc = Command::new("clang").arg(format!("--target={target}")).args(["-ffreestanding", "-w", "-c"]).arg(&c).arg("-o").arg(dir.join(format!("net-{os}.o"))).output().unwrap();
+        assert!(cc.status.success(), "std's {os} code doesn't compile for {target}:\n{}", String::from_utf8_lossy(&cc.stderr));
+    }
+}
+
 /// the self-hosted compiler reproduces itself (stage2 == stage3) and stage2 passes the golden suite.
 /// LLVM is found through an llvm-config for a relocated copy of it, as on Debian and Ubuntu, so the
 /// build file's flags and the bootstrap tool's $BOLT_CC_ARGS are what make it link

@@ -23,3 +23,10 @@ fn built_for() -> str {
     }
     return "other";
 }
+
+// under --cfg os=windows (tests/diag/cfg_target_override), the package sees it too
+fn windows_check() -> void {
+    comptime if (@cfg("os", "windows")) {
+        @compile_error("the package sees windows");
+    }
+}
