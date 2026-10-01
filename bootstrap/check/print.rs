@@ -121,6 +121,11 @@ impl Checker {
             }
             temps.push((t, v.ty, a.span));
         }
+        // the program's streams are held for the whole output, so threads' lines don't mix
+        let stream = !matches!(name, "write" | "format");
+        if stream {
+            code.push_str("volt_lock_out(); ");
+        }
         for p in pieces {
             match p {
                 Ok(text) if text.is_empty() => {}
@@ -137,6 +142,9 @@ impl Checker {
         }
         if newline {
             code.push_str("volt_out(VOLT_E, \"\\n\");");
+        }
+        if stream {
+            code.push_str(" volt_unlock_out(); ");
         }
         code.push_str(&drops);
         Ok(match result {

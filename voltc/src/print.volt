@@ -164,6 +164,11 @@ attach fn intrinsic(this: checker&, name: str, all_args: std::vec<expr>&, ret: u
         put(&temps, t);
         put(&tys, v.ty);
     }
+    // the program's streams are held for the whole output, so threads' lines don't mix
+    val stream = name != "write" && name != "format";
+    if (stream) {
+        put(&code, this.ir.rt_call("volt_lock_out", {}, VOID));
+    }
     for (p&) in pieces.items() {
         match (*p) {
             .TEXT(s) => {
@@ -182,6 +187,9 @@ attach fn intrinsic(this: checker&, name: str, all_args: std::vec<expr>&, ret: u
     }
     if (newline) {
         put(&code, this.out_s(sink, "\n"));
+    }
+    if (stream) {
+        put(&code, this.ir.rt_call("volt_unlock_out", {}, VOID));
     }
     for (d&) in drops.items() {
         put(&code, *d);

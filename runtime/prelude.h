@@ -55,6 +55,17 @@ VOLT_CHECKED(i8, int8_t) VOLT_CHECKED(i16, int16_t) VOLT_CHECKED(i32, int32_t) V
 VOLT_CHECKED(i128, __int128) VOLT_CHECKED(isize, ptrdiff_t)
 VOLT_CHECKED(u8, uint8_t) VOLT_CHECKED(u16, uint16_t) VOLT_CHECKED(u32, uint32_t) VOLT_CHECKED(u64, uint64_t)
 VOLT_CHECKED(u128, unsigned __int128) VOLT_CHECKED(usize, size_t)
+/* Atomics for libraries (std::thread binds them with @intrinsic): sequentially consistent load, store,
+   swap, add (giving the old value) and compare-and-swap on 32- and 64-bit words */
+#define VOLT_ATOMICS(N, T) \
+    VOLT_RT_LINKAGE T volt_rt_atomic_load##N(T *p) { return __atomic_load_n(p, __ATOMIC_SEQ_CST); } \
+    VOLT_RT_LINKAGE void volt_rt_atomic_store##N(T *p, T v) { __atomic_store_n(p, v, __ATOMIC_SEQ_CST); } \
+    VOLT_RT_LINKAGE T volt_rt_atomic_swap##N(T *p, T v) { return __atomic_exchange_n(p, v, __ATOMIC_SEQ_CST); } \
+    VOLT_RT_LINKAGE T volt_rt_atomic_add##N(T *p, T v) { return __atomic_fetch_add(p, v, __ATOMIC_SEQ_CST); } \
+    VOLT_RT_LINKAGE bool volt_rt_atomic_cas##N(T *p, T expected, T desired) { \
+        return __atomic_compare_exchange_n(p, &expected, desired, false, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST); \
+    }
+VOLT_ATOMICS(32, int32_t) VOLT_ATOMICS(64, int64_t)
 VOLT_RT_LINKAGE bool volt_str_eq(volt_str a, volt_str b) {
     return a.len == b.len && (a.len == 0 || volt_memcmp(a.ptr, b.ptr, a.len) == 0);
 }
@@ -296,3 +307,12 @@ extern int volt_argc;
 extern char **volt_argv;
 int volt_rt_argc(void);
 volt_str volt_rt_arg(int i);
+/* threads (std::thread binds these with @intrinsic): see runtime.h */
+int volt_rt_thread_start(void *job, uint64_t *handle);
+void volt_rt_thread_join(uint64_t handle);
+void volt_rt_thread_yield(void);
+void volt_rt_wait(int32_t *word, int32_t expected);
+void volt_rt_wake(int32_t *word, bool all);
+/* held around each print statement's output to the program's streams */
+void volt_lock_out(void);
+void volt_unlock_out(void);

@@ -244,6 +244,39 @@ fn runtime_text_in_sync() {
     assert!(have == want, "voltc/src/runtime_c.volt is stale: VOLT_REGEN=1 cargo test --test selfhost runtime_text_in_sync");
 }
 
+/// the runtime (its threads, atomics and allocator included) compiles for every 64-bit OS and CPU it
+/// supports, debug and release. It includes no libc headers, so clang's own freestanding ones do
+#[test]
+fn runtime_compiles_for_every_target() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("runtime-targets");
+    std::fs::create_dir_all(&dir).unwrap();
+    let unit = dir.join("unit.c");
+    std::fs::write(&unit, "#include \"prelude.h\"\n#include \"runtime.h\"\n").unwrap();
+    let targets = [
+        "x86_64-linux-gnu", "aarch64-linux-gnu", "riscv64-linux-gnu", "x86_64-apple-macos11", "arm64-apple-macos11",
+        "x86_64-pc-windows-msvc", "aarch64-pc-windows-msvc", "x86_64-w64-windows-gnu", "x86_64-unknown-freebsd",
+    ];
+    for t in targets {
+        for debug in [true, false] {
+            let mut cc = Command::new("clang");
+            cc.args([&format!("--target={t}"), "-ffreestanding", "-std=c11", "-Werror", "-Wall", "-Wno-unused-function", "-c"]);
+            if debug {
+                cc.arg("-DVOLT_DEBUG_ALLOC");
+            }
+            let o = cc.arg("-I").arg(root.join("runtime")).arg(&unit).arg("-o").arg(dir.join(format!("{t}.o"))).output().unwrap();
+            assert!(o.status.success(), "the runtime doesn't compile for {t} (debug {debug}):\n{}", String::from_utf8_lossy(&o.stderr));
+            // every print takes a lock that can wait, so what the runtime imports, every program links:
+            // on Windows that's kernel32 only (WaitOnAddress is looked up; MinGW won't link it by default)
+            if t.contains("windows") {
+                let nm = Command::new("llvm-nm").arg("-u").arg(dir.join(format!("{t}.o"))).output().unwrap();
+                let undefined = String::from_utf8_lossy(&nm.stdout);
+                assert!(!undefined.contains("WaitOnAddress") && !undefined.contains("WakeByAddress"), "{t}: the runtime links WaitOnAddress:\n{undefined}");
+            }
+        }
+    }
+}
+
 /// the self-hosted compiler reproduces itself (stage2 == stage3) and stage2 passes the golden suite.
 /// LLVM is found through an llvm-config for a relocated copy of it, as on Debian and Ubuntu, so the
 /// build file's flags and the bootstrap tool's $BOLT_CC_ARGS are what make it link

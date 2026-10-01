@@ -763,7 +763,23 @@ attach fn path_expr(this: checker&, p: path&, want: u32?, span: span) -> compile
                     if (many) {
                         return fail(span, fmt("'{}' is overloaded, so it can't be used as a value here", S(fd.name)));
                     }
-                    val i = try this.fn_inst(d, {}, span);
+                    // f<Args>: that instance (generic args bound as in a call with none to infer from)
+                    var binds: std::vec<gval> = {};
+                    val last = p.segs.at(p.segs.len - 1);
+                    if (last.args) {
+                        var unknown: std::vec<tval?> = {};
+                        for (pa&) in fd.params.items() {
+                            if (pa.name != "this") {
+                                put(&unknown, null);
+                            }
+                        }
+                        val b = try this.bind_cand(d, null, null, &last.args, &unknown);
+                        match (b) {
+                            .OK(bs, x) => { binds = copy bs; },
+                            .NO(r) => { return fail(span, copy r); },
+                        }
+                    }
+                    val i = try this.fn_inst(d, move binds, span);
                     this.use_fn(i);
                     if (this.opts.lsp) {
                         this.lsp_fn_use(d, i, span);

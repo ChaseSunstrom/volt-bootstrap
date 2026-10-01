@@ -39,7 +39,8 @@ voltc bindings mathlib --pkg mathlib=lib --lang python > mathlib.py
 ```
 
 A shared or static library built this way is self-contained: the package, what it uses from std,
-and the runtime.
+and the runtime. A program that links the static one also links `-lm -lpthread`. The runtime has
+threads, and before glibc 2.34 they're in libpthread; elsewhere the flag does no harm.
 
 ```volt
 struct vec2 {

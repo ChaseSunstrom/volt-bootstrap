@@ -428,7 +428,18 @@ impl Checker {
                         if ds.len() > 1 {
                             return err(span, format!("'{}' is overloaded, so it can't be used as a value here", f.name));
                         }
-                        let i = self.fn_inst(d, Vec::new(), span)?;
+                        // f<Args>: that instance (generic args bound as in a call with none to infer from)
+                        let binds = match p.segs.last().unwrap().args.clone() {
+                            Some(explicit) => {
+                                let unknown = vec![None; f.params.iter().filter(|p| p.name != "this").count()];
+                                match self.bind_cand(d, None, None, &explicit, &unknown)? {
+                                    Ok((b, _)) => b,
+                                    Err(m) => return err(span, m),
+                                }
+                            }
+                            None => Vec::new(),
+                        };
+                        let i = self.fn_inst(d, binds, span)?;
                         self.use_fn(i);
                         let inst = self.fns[i].clone();
                         let ps: Vec<TyId> = inst.params.iter().map(|p| p.ty).collect();

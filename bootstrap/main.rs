@@ -303,7 +303,7 @@ fn cc(c_src: &str, out: &PathBuf, release: bool, libs: &[(String, PathBuf)], ext
     if object {
         cmd.arg("-c");
     } else {
-        cmd.args(extra).args(libs.iter().map(|l| &l.1)).arg("-lm");
+        cmd.args(extra).args(libs.iter().map(|l| &l.1)).args(["-lm", "-lpthread"]); // the runtime has threads (libpthread before glibc 2.34)
     }
     if release {
         cmd.args(["-O2", "-fwrapv"]);

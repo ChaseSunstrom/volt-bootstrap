@@ -32,6 +32,7 @@ Each file is wrapped in `namespace std`, and most declare a namespace of their o
 | [`std::path`](/volt-bootstrap/std/path/) | paths as text: `join`, `parent`, `file_name`, `extension`, `normalize` |
 | [`std::process`](/volt-bootstrap/std/process/) | running programs, arguments, the environment and the working directory, `exit` |
 | [`std::time`](/volt-bootstrap/std/time/) | the monotonic clock, the wall clock, `sleep`, durations, UTC dates in ISO 8601 |
+| [`std::thread`](/volt-bootstrap/std/thread/) | threads (`spawn`, `join`), `mutex<T>` and its guard, `cond`, `atomic_i64`/`atomic_bool`, `shared<T>`, `channel<T>` ([Threads](/volt-bootstrap/std/threads/)) |
 | [`std::json`](/volt-bootstrap/std/json/) | JSON values: parse, build and print |
 
 ## Reaching the names
@@ -60,7 +61,9 @@ fn main() -> !void {
 A std binds what only the compiler can do through two attributes:
 
 - `@attributes([@intrinsic("println")])` on a body-less `fn` makes it a compiler builtin (the
-  formatted print functions) or, for a name starting with `volt_`, a function of the C runtime.
+  formatted print functions) or, for a name starting with `volt_`, a function of the C runtime. The
+  runtime's functions include allocation, atomics, and threads with a wait and wake on a word, so
+  another std can build threads too.
 - `@attributes([@owns("ptr")])` on a struct makes it an owning pointer like `box`: it's used like a
   `T&`, and when it goes out of scope the value it points at is deleted first.
 

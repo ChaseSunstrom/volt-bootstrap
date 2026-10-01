@@ -114,3 +114,24 @@ fn main() -> void {
 }
 // expect: { 1, 3, 5, 9 }
 ```
+
+A generic function is a value once its generic arguments are given: `name<Args>` is that instance,
+as a `fn` value or as a C function pointer.
+
+```volt
+use std::io;
+
+extern "C" fn qsort(base: void*, n: usize, size: usize, cmp: extern "C" fn(void*, void*) -> i32) -> void;
+
+<T: type>
+fn ascending(a: void*, b: void*) -> i32 {
+    return @cast<T&>(a).cmp(@cast<T&>(b));
+}
+
+fn main() -> void {
+    var xs: f64[] = { 2.5, -1.0, 0.5 };
+    qsort(@cast<void*>(&xs), 3, 8, ascending<f64>);
+    std::println(xs);
+}
+// expect: { -1, 0.5, 2.5 }
+```

@@ -893,6 +893,7 @@ fn cc_run(inputs: std::vec<str>&, out: str, c: cli&, object: bool) -> void {
             put(&argv, l.path);
         }
         put(&argv, "-lm");
+        put(&argv, "-lpthread"); // the runtime has threads (libpthread before glibc 2.34)
         if (c.shared) {
             put(&argv, "-shared");
         }
