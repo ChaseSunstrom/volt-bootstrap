@@ -1,0 +1,64 @@
+-- Lua calls the Volt library through voltc bindings --lang lua (a C module): an error is raised as
+-- a table with its name and code, owned text comes back as a string, an export struct is a userdata
+-- (close() or a to-be-closed variable frees it now; otherwise it's freed when collected)
+local m = require("mathlib")
+
+local function say(...)
+    local parts = {}
+    for i = 1, select("#", ...) do
+        local v = select(i, ...)
+        if math.type(v) == "float" and v == math.floor(v) then
+            v = string.format("%d", v)
+        end
+        parts[#parts + 1] = tostring(v)
+    end
+    print(table.concat(parts, " "))
+end
+
+say("add", m.ml_add(2, 3))
+local a, b = { x = 1, y = 2 }, { x = 3, y = 4 }
+say("dot", m.ml_dot(a, b))
+m.ml_scale(a, 2)
+say("scale", a.x, a.y)
+say("len", m.ml_len("hello"))
+say("next", m.ml_next(m.color.GREEN))
+say("sqrt", m.ml_sqrt(9), 1)
+local ok, err = pcall(m.ml_sqrt, -1)
+say("error", (not ok and err.name == m.math_error.NEGATIVE) and "negative" or "?")
+say("greet", m.ml_greet("volt"))
+say("repeat", m.ml_repeat("ab", 2))
+ok, err = pcall(m.ml_repeat, "ab", -1)
+say("repeat", tostring(err):lower())
+say("sum", m.ml_sum({ 1, 2, 3.5 }))
+local ys = { 4, 5, 6 }
+say("find", m.ml_find(ys, 6), m.ml_find(ys, 9) == nil and "none" or "?")
+local seen, total = {}, 0
+m.ml_each(ys, function(x)
+    seen[#seen + 1] = x
+    total = total + x
+end)
+say("each", table.concat(seen, " "), "=", total)
+do
+    local c <close> = m.counter.new("clicks")
+    c:add(2)
+    say("counter", c:name(), c:add(3))
+    ok, err = pcall(c.take, c, 9)
+    say("take", err.name:lower())
+end
+
+-- what the module rejects: numbers that don't fit, wrong types, a closed counter; and a callback's
+-- error comes out of the call (the later calls are skipped)
+assert(not pcall(m.ml_add, 5000000000, 1), "too big for i32")
+assert(not pcall(m.ml_add, 1.5, 1), "fraction for i32")
+assert(not pcall(m.ml_add, {}, 1), "table for a number")
+assert(not pcall(m.ml_dot, { x = 1 }, b), "a field missing")
+local c = m.counter.new("x")
+c:close()
+assert(not pcall(c.add, c, 1), "closed counter")
+assert(not pcall(m.counter.new("y").add, {}, 1), "not a counter")
+local calls = 0
+ok, err = pcall(m.ml_each, ys, function(x)
+    calls = calls + 1
+    error("stop at " .. x)
+end)
+assert(not ok and tostring(err):find("stop at 4") and calls == 1, "callback error")

@@ -1,7 +1,8 @@
 // Interop both ways, with the self-hosted voltc (it links libLLVM and libclang): a Volt library
-// built with `voltc lib --shared/--static` and called from C, C++, Rust, Python (and Zig, when it's
-// installed) through `voltc bindings`; Volt calling a Rust static library and embedding Python;
-// and Volt importing C++ headers (`use cpp`). Every Volt side runs on both backends.
+// built with `voltc lib --shared/--static` and called from C, C++, Rust and Python (and Zig,
+// JavaScript, C#, Java, Go and Lua, when they're installed) through `voltc bindings`; Volt calling
+// a Rust static library and embedding Python; and Volt importing C++ headers (`use cpp`). Every
+// Volt side runs on both backends.
 mod common;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -95,6 +96,12 @@ fn zig() -> Option<PathBuf> {
     local_tool("zig", "version")
 }
 
+/// where Lua's headers are (lua.h), when lua is installed
+fn lua_include() -> Option<&'static str> {
+    Command::new("lua").arg("-v").output().ok().filter(|o| o.status.success())?;
+    ["/usr/include", "/usr/include/lua5.5", "/usr/include/lua5.4", "/usr/local/include"].into_iter().find(|d| Path::new(d).join("lua.h").is_file())
+}
+
 fn run(cmd: &mut Command) -> Output {
     cmd.current_dir(Path::new(ROOT).join("tests/interop")).output().unwrap()
 }
@@ -109,7 +116,7 @@ fn bindings_round_trip() {
         ok(e.voltc(&["lib", "mathlib", "--pkg", pkg, "--shared", "--backend", backend, "-o", &so]), "voltc lib --shared");
         ok(e.voltc(&["lib", "mathlib", "--pkg", pkg, "--static", "--backend", backend, "-o", &e.path(&format!("{backend}/libmathlib_static.a"))]), "voltc lib --static");
     }
-    for (lang, file) in [("c", "mathlib.h"), ("cpp", "mathlib.hpp"), ("rust", "mathlib.rs"), ("python", "mathlib.py"), ("pyi", "mathlib.pyi"), ("csharp", "mathlib.cs"), ("java", "mathlib.java"), ("go", "mathlib.go"), ("zig", "mathlib.zig"), ("node", "mathlib_node.c"), ("js", "mathlib.js"), ("ts", "mathlib.d.ts")] {
+    for (lang, file) in [("c", "mathlib.h"), ("cpp", "mathlib.hpp"), ("rust", "mathlib.rs"), ("python", "mathlib.py"), ("pyi", "mathlib.pyi"), ("csharp", "mathlib.cs"), ("java", "mathlib.java"), ("go", "mathlib.go"), ("lua", "mathlib_lua.c"), ("zig", "mathlib.zig"), ("node", "mathlib_node.c"), ("js", "mathlib.js"), ("ts", "mathlib.d.ts")] {
         ok(e.voltc(&["bindings", "mathlib", "--pkg", pkg, "--lang", lang, "-o", &e.path(file)]), &format!("voltc bindings --lang {lang}"));
     }
     // the model the generators share, as JSON for generators of other people's
@@ -217,6 +224,16 @@ fn bindings_round_trip() {
             assert_eq!(ok(go(&["run", "."]), "go run"), MATHLIB_OUT, "Go ({backend})");
         } else {
             eprintln!("go isn't installed: skipping the Go client");
+        }
+        // Lua: the C module, built against Lua's headers; client.lua also asserts what it rejects
+        if let Some(inc) = lua_include() {
+            let ldir = e.dir.join(format!("lua-{backend}"));
+            std::fs::create_dir_all(&ldir).unwrap();
+            ok(run(Command::new("cc").args(["-shared", "-fPIC", "-Wall", "-Wextra", "-Werror", "-I", inc]).arg(e.dir.join("mathlib_lua.c")).args(["-I", &e.path(""), "-L", &lib_dir, "-lmathlib", &rpath, "-o"]).arg(ldir.join("mathlib.so"))), "cc mathlib_lua.c");
+            let l = Command::new("lua").arg(Path::new(ROOT).join("tests/interop/client.lua")).env("LUA_CPATH", ldir.join("?.so")).output().unwrap();
+            assert_eq!(ok(l, "lua client.lua"), MATHLIB_OUT, "Lua ({backend})");
+        } else {
+            eprintln!("lua (5.4 or later, with its headers) isn't installed: skipping the Lua client");
         }
         if let Some(zig) = zig() {
             std::fs::copy(Path::new(ROOT).join("tests/interop/client.zig"), e.dir.join("client.zig")).unwrap();

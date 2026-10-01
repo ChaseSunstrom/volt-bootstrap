@@ -112,13 +112,13 @@ export fn each(xs: i32[..], f: fn(i32) -> void) -> void {
 
 Each language gets these in its own style:
 
-| | C | C++ | Rust | Python | Zig | JavaScript | C# | Java | Go |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| errors | a struct of the code and the value | throws `error` | `Result<T, Error>` | raises a class per error set, all deriving from `Error` | `Error!T` | throws an `Error` whose `code` is the name | throws a `VoltException` subclass per error set | throws a `VoltException` subclass per error set | `(T, error)`, with an `*Error` value per code for `errors.Is` |
-| owned text | `volt_text`, freed with `volt_text_free` | `std::string` | `String` | `str` | `VoltText`, with `bytes()` and `deinit()` | a string | `string` | `String` | `string` |
-| slices, optionals | structs | from vectors and arrays; `std::optional` | `&mut [T]`, `Option` | lists, `None` | `[]T`, `?T` | arrays, `null` | `Span<T>`, `T?` | arrays, `null` | slices; `*T` in, `(T, bool)` out |
-| an export struct | a pointer, and `NAME_free` | a class that frees itself | a type that frees itself when dropped | a class with `close()` and `with` | a type with `deinit()` | a class with `close()` and `Symbol.dispose` | an `IDisposable` class over a `SafeHandle` | an `AutoCloseable` class, freed by a `Cleaner` if not closed | a type with `Close`, and a finalizer |
-| callbacks | a function and a `void *` | `std::function` | `&mut dyn FnMut` | any callable | a context and a function | any function | `Action` or `Func` | a functional interface | a `func` |
+| | C | C++ | Rust | Python | Zig | JavaScript | C# | Java | Go | Lua |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| errors | a struct of the code and the value | throws `error` | `Result<T, Error>` | raises a class per error set, all deriving from `Error` | `Error!T` | throws an `Error` whose `code` is the name | throws a `VoltException` subclass per error set | throws a `VoltException` subclass per error set | `(T, error)`, with an `*Error` value per code for `errors.Is` | raises a table with its `name` and `code` |
+| owned text | `volt_text`, freed with `volt_text_free` | `std::string` | `String` | `str` | `VoltText`, with `bytes()` and `deinit()` | a string | `string` | `String` | `string` | a string |
+| slices, optionals | structs | from vectors and arrays; `std::optional` | `&mut [T]`, `Option` | lists, `None` | `[]T`, `?T` | arrays, `null` | `Span<T>`, `T?` | arrays, `null` | slices; `*T` in, `(T, bool)` out | sequences (written back), `nil` |
+| an export struct | a pointer, and `NAME_free` | a class that frees itself | a type that frees itself when dropped | a class with `close()` and `with` | a type with `deinit()` | a class with `close()` and `Symbol.dispose` | an `IDisposable` class over a `SafeHandle` | an `AutoCloseable` class, freed by a `Cleaner` if not closed | a type with `Close`, and a finalizer | a userdata with `close()`, `<close>` and `__gc` |
+| callbacks | a function and a `void *` | `std::function` | `&mut dyn FnMut` | any callable | a context and a function | any function | `Action` or `Func` | a functional interface | a `func` | any function |
 
 ### JavaScript and TypeScript
 
@@ -200,6 +200,31 @@ try {
 Structs are mutable classes: what Volt changes through a `T&` comes back to the object. Unsigned
 integers use the Java type of the same size, as `int` for `u32`.
 
+### Lua
+
+`--lang lua` writes a C module for Lua 5.4 or later. Build it against the library and Lua's headers,
+then `require` it:
+
+```sh
+voltc bindings mathlib --pkg mathlib=lib --lang lua > mathlib_lua.c
+cc -shared -fPIC mathlib_lua.c -L. -lmathlib -o mathlib.so
+```
+
+```lua
+local m = require("mathlib")
+print(m.ml_greet("volt"))                     -- hello, volt
+local ok, err = pcall(m.ml_sqrt, -1)
+print(err.name == m.math_error.NEGATIVE)      -- true: err is {name = "NEGATIVE", code = ...}
+local c <close> = m.counter.new("clicks")     -- closed at the end of the block
+c:add(2)
+```
+
+Structs are tables with their fields; what Volt changes in one passed by reference comes back
+into the table, and so do the elements of a slice (a sequence). An enum is a table of its values,
+an error set a table of its names. Integers that don't fit the parameter's type raise an error,
+as do wrong types. A callback is any function; an error it raises comes out of the Volt call
+(the calls after it are skipped).
+
 ### Go
 
 `--lang go` writes a cgo package. Put it in a directory of your module, and point the C linker at
@@ -221,9 +246,9 @@ A library that returns owned text also exports `NAME_text_free`, which frees it 
 
 Every binding also has the plain C functions: in C++ they're in namespace `raw`, in Rust in module
 `raw`, in Zig in struct `raw`, in C# in class `Native`, and in Java as the `H_NAME` method handles.
-`--lang` is one of `c`, `cpp`, `rust`, `zig`, `python`, `pyi`, `csharp`, `java`, `go`, `node`, `js`,
-`ts` or `json`. The Python bindings use `ctypes` and load the shared library. `--lang pyi`
-writes their type stubs, for editors and type checkers such as mypy.
+`--lang` is one of `c`, `cpp`, `rust`, `zig`, `python`, `pyi`, `csharp`, `java`, `go`, `lua`,
+`node`, `js`, `ts` or `json`. The Python bindings use `ctypes` and load the shared library.
+`--lang pyi` writes their type stubs, for editors and type checkers such as mypy.
 
 ### The model, for generators of your own
 
