@@ -170,7 +170,7 @@ attach fn make_lt(this: lg&, t: u32) -> llvm::LLVMOpaqueType* {
         .STRUCT(s) => {
             // ponytail: ask the C compiler for such a struct's layout instead of refusing it
             if (this.c.partial_struct(s) && this.err.len() == 0) {
-                this.err = fmt("the LLVM backend can't lay out the C struct '{}': the header gives it members Volt can't read (a bitfield, a union, or a type it can't parse), so only C knows where its fields are; use --backend c", S(this.c.si(s).c_name));
+                this.err = fmt("the LLVM backend can't lay out the C struct '{}': the header gives it members Volt can't read or place (a type it can't parse), so only C knows where its fields are; use --backend c", S(this.c.si(s).c_name));
             }
         },
         default => {},
@@ -180,7 +180,12 @@ attach fn make_lt(this: lg&, t: u32) -> llvm::LLVMOpaqueType* {
     val n = this.member_count(t);
     if (this.is_union(t)) {
         put(&elems, this.lt(this.member_ty(t, 0)));
-        put(&elems, this.union_lt(t));
+        put(&elems, this.union_lt(t, 1));
+    } else if (this.c_union(t)) {
+        return this.union_lt(t, 0);
+    } else if (this.overlay(t).0 > 0) {
+        val ov = this.overlay(t);
+        return this.blob_lt(ov.0, @cast<u32>(ov.1));
     } else {
         for (i) in 0..n {
             val mt = this.member_ty(t, @cast<u32>(i));
@@ -209,13 +214,37 @@ attach fn is_union(this: lg&, t: u32) -> bool {
     }
 }
 
-// C's union of the payloads: an integer as wide as its alignment, then bytes up to its size. No
-// member's type: an aggregate load or store copies fields only, never padding, and one payload's
-// bytes may sit in another's padding.
-attach fn union_lt(this: lg&, t: u32) -> llvm::LLVMOpaqueType* {
+// a C union imported from a header: its members share offset 0
+attach fn c_union(this: lg&, t: u32) -> bool {
+    match (*this.c.t.get(t)) {
+        .STRUCT(s) => { return this.c.union_struct(s); },
+        default => { return false; },
+    }
+}
+
+// a header struct whose fields share bytes: C's size and alignment (size 0: it isn't one)
+attach fn overlay(this: lg&, t: u32) -> (u64, u64) {
+    match (*this.c.t.get(t)) {
+        .STRUCT(s) => { return this.c.overlay_size(s); },
+        default => { return (0, 0); },
+    }
+}
+
+// field i's byte offset in such a struct
+attach fn overlay_offset(this: lg&, t: u32, i: u32) -> u64? {
+    match (*this.c.t.get(t)) {
+        .STRUCT(s) => { return this.c.overlay_offset(s, i); },
+        default => { return null; },
+    }
+}
+
+// C's union of members `from`..: an integer as wide as its alignment, then bytes up to its size.
+// No member's type: an aggregate load or store copies fields only, never padding, and one
+// member's bytes may sit in another's padding.
+attach fn union_lt(this: lg&, t: u32, from: usize) -> llvm::LLVMOpaqueType* {
     var size: u64 = 0;
     var align: u32 = 1;
-    for (i) in 1..this.member_count(t) {
+    for (i) in from..this.member_count(t) {
         val mt = this.member_ty(t, @cast<u32>(i));
         if (this.is_void(mt)) {
             continue;
@@ -230,6 +259,11 @@ attach fn union_lt(this: lg&, t: u32) -> llvm::LLVMOpaqueType* {
             align = a;
         }
     }
+    return this.blob_lt(size, align);
+}
+
+// size bytes aligned to align: an integer as wide as the alignment, then bytes
+attach fn blob_lt(this: lg&, size: u64, align: u32) -> llvm::LLVMOpaqueType* {
     var elems: std::vec<llvm::LLVMOpaqueType*> = {};
     if (size == 0) {
         return struct_ty(this.ctx, &elems, false);
@@ -252,8 +286,12 @@ attach fn member_ty(this: lg&, agg: u32, i: u32) -> u32 {
     return this.c.field_ty(agg, i);
 }
 
-// the LLVM struct element member i lives in (void members have none; a union's payloads share 1)
+// the LLVM struct element member i lives in (void members have none; a union's payloads share 1,
+// a C union's members 0)
 attach fn elem(this: lg&, agg: u32, i: u32) -> u32 {
+    if (this.c_union(agg)) {
+        return 0;
+    }
     if (this.is_union(agg)) {
         if (i == 0) {
             return 0;
@@ -271,6 +309,10 @@ attach fn elem(this: lg&, agg: u32, i: u32) -> u32 {
 
 // the byte offset of member i
 attach fn offset_of(this: lg&, agg: u32, i: u32) -> u64 {
+    val off = this.overlay_offset(agg, i);
+    if (off) {
+        return off;
+    }
     return llvm::LLVMOffsetOfElement(this.td, this.lt(agg), this.elem(agg, i));
 }
 
@@ -1008,6 +1050,10 @@ attach fn byte_gep(this: lg&, p: llvm::LLVMOpaqueValue*, off: u64) -> llvm::LLVM
 
 // the address of member i of the aggregate at p
 attach fn field_ptr(this: lg&, agg: u32, p: llvm::LLVMOpaqueValue*, i: u32) -> llvm::LLVMOpaqueValue* {
+    val off = this.overlay_offset(agg, i);
+    if (off) {
+        return this.byte_gep(p, off);
+    }
     return llvm::LLVMBuildStructGEP2(this.b, this.lt(agg), p, this.elem(agg, i), "");
 }
 
@@ -1376,7 +1422,7 @@ attach fn agg(this: lg&, inits: std::vec<field_init>&, t: u32) -> llvm::LLVMOpaq
     if (this.is_void(t)) {
         return null;
     }
-    if (this.is_union(t)) {
+    if (this.is_union(t) || this.c_union(t) || this.overlay(t).0 > 0) {
         // payloads share memory: build it there
         val a = this.alloca(this.lt(t));
         this.store(llvm::LLVMConstNull(this.lt(t)), a);
@@ -1386,11 +1432,7 @@ attach fn agg(this: lg&, inits: std::vec<field_init>&, t: u32) -> llvm::LLVMOpaq
             if (this.is_void(mt) || v == null) {
                 continue;
             }
-            var e: u32 = 0;
-            if (fi.field > 0) {
-                e = 1;
-            }
-            this.store(v, llvm::LLVMBuildStructGEP2(this.b, this.lt(t), a, e, ""));
+            this.store(v, this.field_ptr(t, a, fi.field));
         }
         return this.load(t, a);
     }

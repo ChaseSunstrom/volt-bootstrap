@@ -105,14 +105,17 @@ fn self_hosted_checker_matches() {
     assert!(bad.is_empty(), "self-hosted checker differs on:\n{}", bad.join("\n"));
 }
 
-/// C structs Volt can't read all of (a bitfield, a __typeof__ field): libclang gives their layout, so
-/// both backends build them
+/// C structs Volt can't read all of (a bitfield, a __typeof__ field, an anonymous member): libclang
+/// gives their layout, so both backends build them; and C unions, laid out as C does
 #[test]
 fn partial_struct_layouts() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let std_dir = root.join("std");
     let exe = Stage1::build("partial");
-    for (file, want) in [("tests/llvm/partial_struct.volt", "3"), ("tests/llvm/partial_typeof.volt", "4")] {
+    let unions = std::fs::read_to_string(root.join("tests/run/c_union.volt")).unwrap();
+    let unions: Vec<&str> = unions.lines().filter_map(|l| l.strip_prefix("// expect: ")).collect();
+    let unions = unions.join("\n");
+    for (file, want) in [("tests/llvm/partial_struct.volt", "3"), ("tests/llvm/partial_typeof.volt", "4"), ("tests/run/c_union.volt", unions.as_str())] {
         for backend in ["c", "llvm"] {
             let o = Command::new(&exe.0).args(["run", file, "--std"]).arg(&std_dir).args(["--backend", backend]).current_dir(root).output().unwrap();
             assert!(o.status.success() && String::from_utf8_lossy(&o.stdout).trim() == want, "{file}, {backend} backend: {}", String::from_utf8_lossy(&o.stderr));

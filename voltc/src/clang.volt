@@ -148,8 +148,16 @@ attach fn record_type(this: clang_tu&, c_name: str) -> clang::CXType? {
 // the size of record type rt's field `name` (0 when it has none)
 fn field_size(rt: clang::CXType, name: str) -> i64 {
     for (c&) in children(clang::clang_getTypeDeclaration(rt)).items() {
-        if (clang::clang_getCursorKind(*c) == clang::CXCursor_FieldDecl && cursor_name(*c).as_str() == name) {
+        val k = clang::clang_getCursorKind(*c);
+        if (k == clang::CXCursor_FieldDecl && cursor_name(*c).as_str() == name) {
             return clang::clang_Type_getSizeOf(clang::clang_getCursorType(*c));
+        }
+        // an anonymous struct or union member: its fields are the outer one's
+        if ((k == clang::CXCursor_StructDecl || k == clang::CXCursor_UnionDecl) && clang::clang_Cursor_isAnonymousRecordDecl(*c) != 0) {
+            val size = field_size(clang::clang_getCursorType(*c), name);
+            if (size > 0) {
+                return size;
+            }
         }
     }
     return 0;
@@ -172,19 +180,24 @@ attach fn pad_fields(this: checker&, from: u64, to: u64, n: u32&, span: span, ou
         if (size == 8) {
             count = (to - at) / 8;
         }
-        var name = S("@pad");
-        name.append_uint(@cast<u64>(*n));
-        *n += 1;
-        var elem = S("u");
-        elem.append_uint(size * 8);
-        var segs: std::vec<path_seg> = {};
-        put(&segs, { name: this.intern(move elem), args: null });
-        var t: ty = { kind: type_kind::PATH({ segs: move segs, span: span }), span: span };
-        if (count > 1) {
-            val len: expr = { kind: expr_kind::INT(@cast<u128>(count)), span: span };
-            t = { kind: type_kind::ARRAY(bx(move t), bx(move len)), span: span };
-        }
-        put(out, { name: this.intern(move name), ty: move t, fallback: null, vis: vis::PUBLIC, span: span });
+        put(out, this.pad_field(n, size, count, span));
         at += size * count;
     }
+}
+
+// padding field @padN: count unsigned ints of `size` bytes
+attach fn pad_field(this: checker&, n: u32&, size: u64, count: u64, span: span) -> field {
+    var name = S("@pad");
+    name.append_uint(@cast<u64>(*n));
+    *n += 1;
+    var elem = S("u");
+    elem.append_uint(size * 8);
+    var segs: std::vec<path_seg> = {};
+    put(&segs, { name: this.intern(move elem), args: null });
+    var t: ty = { kind: type_kind::PATH({ segs: move segs, span: span }), span: span };
+    if (count > 1) {
+        val len: expr = { kind: expr_kind::INT(@cast<u128>(count)), span: span };
+        t = { kind: type_kind::ARRAY(bx(move t), bx(move len)), span: span };
+    }
+    return { name: this.intern(move name), ty: move t, fallback: null, vis: vis::PUBLIC, span: span };
 }

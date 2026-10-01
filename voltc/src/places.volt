@@ -527,6 +527,9 @@ attach fn literal(this: checker&, entries: std::vec<lit_entry>&, want: u32?, spa
             return this.coerce(v, w, span);
         },
         .STRUCT(sid) => {
+            if (entries.len > 1 && this.union_struct(sid)) {
+                return fails(span, "a C union's literal sets one member; assign another afterwards");
+            }
             val fs = try this.struct_fields(sid, span);
             var given: std::vec<tval?> = {};
             for (i) in 0..fs.len {

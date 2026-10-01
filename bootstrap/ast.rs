@@ -319,6 +319,7 @@ pub struct StructDecl {
     pub is_extern: bool,
     pub is_comptime: bool,
     pub c_name: Option<String>, // defined by an imported C header under this C type name
+    pub c_union: bool,          // ...a C union: its fields share offset 0
 }
 
 /// an enum variant: `NAME: payload` or `NAME = value`

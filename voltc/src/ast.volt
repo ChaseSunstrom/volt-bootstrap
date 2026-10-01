@@ -305,6 +305,12 @@ struct struct_decl {
     is_comptime: bool;
     c_name: str?; // defined by an imported C header under this C type name
     c_partial: bool = false; // ...with members Volt can't read (bitfields, unions): layout only C knows
+    c_union: bool = false; // ...a C union: its fields share offset 0
+    // ...whose fields share bytes (an anonymous union member): each field's byte offset, and C's size
+    // and alignment, for the LLVM backend to place them
+    c_offsets: std::vec<u64>? = null;
+    c_size: u64 = 0;
+    c_align: u64 = 0;
     is_export: bool = false; // export struct: other languages hold it by a handle (voltc bindings)
 }
 

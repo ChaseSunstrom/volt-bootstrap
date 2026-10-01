@@ -249,6 +249,9 @@ impl Checker {
                 self.coerce(v, w, span)
             }
             Ty::Struct(sid) => {
+                if entries.len() > 1 && self.union_struct(sid) {
+                    return err(span, "a C union's literal sets one member; assign another afterwards");
+                }
                 let fields = self.struct_fields(sid, span)?;
                 let mut given: Vec<Option<Val>> = vec![None; fields.len()];
                 for (name, e) in entries {

@@ -55,6 +55,11 @@ impl Checker {
         matches!(&self.decls[self.structs[sid as usize].decl].item.kind, ItemKind::Struct(d) if d.c_name.is_some())
     }
 
+    /// a C union: its fields share offset 0
+    pub fn union_struct(&self, sid: u32) -> bool {
+        matches!(&self.decls[self.structs[sid as usize].decl].item.kind, ItemKind::Struct(d) if d.c_union)
+    }
+
     /// types that must be complete before this one can be defined
     fn value_deps(&mut self, id: TyId) -> Res<Vec<TyId>> {
         Ok(match self.t.get(id).clone() {

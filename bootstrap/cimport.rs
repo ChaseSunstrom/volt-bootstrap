@@ -1,10 +1,11 @@
 // C header import: `use { "stdio.h" } as c;` runs the C preprocessor over the headers and reads
 // back what maps to Volt: functions (static inline ones too), structs, enum constants, numeric
 // #defines and extern variables, as ordinary items of namespace `c`. The headers are #included in
-// the generated C, so calls go through C's own prototypes and structs keep C's layout. The parser
-// is tolerant: a declaration it can't read or map (unions, bitfields, long double, va_list...)
-// is skipped, not an error. C pointers can be null: raw T*, a char* is a cstr?, a function pointer
-// an optional fn.
+// the generated C, so calls go through C's own prototypes and structs keep C's layout. A union is a
+// struct whose fields share offset 0; a bitfield gets two static inline C functions, S_get_F and
+// S_set_F, next to the #include. The parser is tolerant: a declaration it can't read or map (long
+// double, va_list...) is skipped, not an error. C pointers can be null: raw T*, a char* is a cstr?,
+// a function pointer an optional fn.
 use crate::ast::*;
 use crate::diag::{err, Res, Span};
 use std::collections::HashMap;
@@ -275,15 +276,28 @@ enum CT {
     Ptr(Box<CT>),
     Array(Box<CT>, Option<u64>),
     Func(Vec<CT>, Box<CT>, bool),
-    Bad, // unions, long double, va_list...: can't be used by value
+    Bad, // long double, va_list...: can't be used by value
 }
+
+/// a C struct or union read from the headers
+struct CStruct {
+    tag: String,
+    fields: Option<Vec<(String, CT)>>, // None: only declared
+    union: bool,
+    /// its bitfields: name, the C text of its type (for their accessors)
+    bits: Vec<(String, String)>,
+}
+
+/// a struct's fields and bitfields, as fields() reads them
+type Fields = (Vec<(String, CT)>, Vec<(String, String)>);
 
 /// everything read from the preprocessed headers
 #[derive(Default)]
 struct Decls {
     typedefs: HashMap<String, CT>,
-    structs: Vec<(String, Option<Vec<(String, CT)>>)>, // tag, fields (None = only declared)
-    typedef_of: HashMap<String, String>,               // struct tag -> first typedef naming it
+    structs: Vec<CStruct>,
+    typedef_of: HashMap<String, String>, // struct tag -> first typedef naming it
+    anon_in: HashMap<String, (String, String)>, // anonymous tag -> the struct tag and named field it types
     /// enum constants and numeric #defines, in order
     consts: Vec<(String, Num)>,
     /// every constant by name, for evaluating later ones
@@ -298,14 +312,20 @@ struct Decls {
 
 impl Decls {
     /// records a struct tag; a later definition fills in the fields of an earlier declaration
-    fn define_struct(&mut self, tag: &str, fields: Option<Vec<(String, CT)>>) {
-        match self.structs.iter_mut().find(|s| s.0 == tag) {
+    fn define_struct(&mut self, tag: &str, fields: Option<Fields>, union: bool) {
+        let (fields, bits) = match fields {
+            Some((f, b)) => (Some(f), b),
+            None => (None, Vec::new()),
+        };
+        match self.structs.iter_mut().find(|s| s.tag == tag) {
             Some(s) => {
                 if fields.is_some() {
-                    s.1 = fields;
+                    s.fields = fields;
+                    s.bits = bits;
+                    s.union = union;
                 }
             }
-            None => self.structs.push((tag.to_string(), fields)),
+            None => self.structs.push(CStruct { tag: tag.to_string(), fields, union, bits }),
         }
     }
 }
@@ -417,14 +437,12 @@ impl DeclParser<'_> {
                         format!("#anon{}", self.d.anon)
                     });
                     if self.is("{") {
-                        let fields = self.fields();
-                        if !union {
-                            self.d.define_struct(&tag, fields);
-                        }
-                    } else if !union {
-                        self.d.define_struct(&tag, None);
+                        let fields = self.fields(&tag);
+                        self.d.define_struct(&tag, fields, union);
+                    } else {
+                        self.d.define_struct(&tag, None, union);
                     }
-                    base = Some(if union { CT::Bad } else { CT::Struct(tag) });
+                    base = Some(CT::Struct(tag));
                     continue;
                 }
                 "enum" => {
@@ -466,18 +484,21 @@ impl DeclParser<'_> {
         }))
     }
 
-    /// `{ int a; char b[4]; ... }`: fields that can't be read are dropped
-    fn fields(&mut self) -> Option<Vec<(String, CT)>> {
+    /// `{ int a; char b[4]; ... }` of struct or union `tag`: fields that can't be read are dropped,
+    /// bitfields are kept apart (for their accessors), and an anonymous struct or union member's
+    /// fields are the outer one's, as in C
+    fn fields(&mut self, tag: &str) -> Option<Fields> {
         let open = self.i;
         self.skip_group()?;
         let end = self.i - 1;
-        let mut out = Vec::new();
+        let (mut out, mut bits) = (Vec::new(), Vec::new());
         let mut i = open + 1;
         while i < end {
             let stop = decl_end(self.t, i).min(end);
             let mut sub = DeclParser { t: &self.t[i..stop], i: 0, d: self.d };
             let mut stat = false;
             if let Some(base) = sub.specs(&mut stat) {
+                let spec_end = sub.i;
                 loop {
                     let Some((name, ty)) = sub.declarator(base.clone()) else { break };
                     let bitfield = sub.eat(":");
@@ -486,9 +507,29 @@ impl DeclParser<'_> {
                             sub.i += 1;
                         }
                     }
-                    let anon_ty = matches!(&ty, CT::Struct(t) if t.starts_with('#'));
-                    if let (Some(n), false, false) = (name, bitfield, anon_ty) {
-                        out.push((n, ty));
+                    let anon = match &ty {
+                        CT::Struct(t) if t.starts_with('#') => Some(t.clone()),
+                        _ => None,
+                    };
+                    match (name, bitfield, anon) {
+                        (Some(n), true, _) => {
+                            if let Some(t) = text_of(&sub.t[..spec_end]) {
+                                bits.push((n, t));
+                            }
+                        }
+                        (None, false, Some(a)) => {
+                            if let Some(s) = sub.d.structs.iter().find(|s| s.tag == a) {
+                                out.extend(s.fields.iter().flatten().cloned());
+                                bits.extend(s.bits.iter().cloned());
+                            }
+                        }
+                        (Some(n), false, anon) => {
+                            if let Some(a) = anon {
+                                sub.d.anon_in.insert(a, (tag.to_string(), n.clone()));
+                            }
+                            out.push((n, ty));
+                        }
+                        _ => {}
                     }
                     if !sub.eat(",") {
                         break;
@@ -497,7 +538,7 @@ impl DeclParser<'_> {
             }
             i = stop + 1;
         }
-        Some(out)
+        Some((out, bits))
     }
 
     /// `{ A, B = 5, ... }`: each constant goes into consts and env
@@ -897,16 +938,27 @@ pub fn c_compiler() -> (Command, String) {
     (cmd, text)
 }
 
-/// reads `headers` into Volt items: structs, fns, extern variables and constants (see the top of the file)
-pub fn import(headers: &[String], dir: &FsPath, flags: &[String], span: Span) -> Res<Imported> {
-    let (src, macros, includes) = preprocess(headers, dir, flags, span)?;
-    let toks = lex(&src);
-    let mut d = Decls::default();
+/// tokens as C text (a bitfield's type, for its accessors); None if one has no text kept
+fn text_of(t: &[Tok]) -> Option<String> {
+    let words: Option<Vec<&str>> = t
+        .iter()
+        .map(|k| match k {
+            Tok::Id(n) | Tok::Num(n) => Some(n.as_str()),
+            Tok::P(p) => Some(*p),
+            _ => None,
+        })
+        .collect();
+    Some(words?.join(" "))
+}
+
+/// reads C declarations (preprocessed) into d; function bodies are skipped
+fn parse_decls(src: &str, d: &mut Decls) {
+    let toks = lex(src);
     let mut i = 0;
     // the declarations, one at a time
     while i < toks.len() {
         let end = decl_end(&toks, i);
-        let mut p = DeclParser { t: &toks[i..end], i: 0, d: &mut d };
+        let mut p = DeclParser { t: &toks[i..end], i: 0, d };
         p.top();
         i = end;
         if matches!(toks.get(i), Some(Tok::P("{"))) {
@@ -927,6 +979,13 @@ pub fn import(headers: &[String], dir: &FsPath, flags: &[String], span: Span) ->
             i += 1;
         }
     }
+}
+
+/// reads `headers` into Volt items: structs, fns, extern variables and constants (see the top of the file)
+pub fn import(headers: &[String], dir: &FsPath, flags: &[String], span: Span) -> Res<Imported> {
+    let (src, macros, mut includes) = preprocess(headers, dir, flags, span)?;
+    let mut d = Decls::default();
+    parse_decls(&src, &mut d);
     // numeric object-like #defines (EOF, SEEK_SET, RAND_MAX, M_PI...). They may use macros defined
     // after them (INT_MAX is __INT_MAX__), so repeat until nothing new resolves; _names stay hidden
     let defs: Vec<(&str, Vec<Tok>)> = macros
@@ -959,31 +1018,72 @@ pub fn import(headers: &[String], dir: &FsPath, flags: &[String], span: Span) ->
         }
     }
 
-    // one Volt struct per C struct: named by its first typedef, else by its tag
-    let mut m = Mapper { d: &d, names: HashMap::new(), span };
-    let mut items = Vec::new();
+    // one Volt struct per C struct: named by its first typedef, else by its tag (also when the
+    // typedef is reserved and the tag isn't: __sigval_t, union sigval)
+    let mut names = HashMap::new();
     let mut taken = std::collections::HashSet::new();
     let mut c_names = HashMap::new();
-    for (tag, _) in &d.structs {
-        let (name, c) = match d.typedef_of.get(tag) {
-            Some(t) => (t.clone(), t.clone()),
-            None if tag.starts_with('#') => continue, // anonymous and never typedef'd: unreachable
-            None => (tag.clone(), format!("struct {tag}")),
+    for s in &d.structs {
+        let anon = s.tag.starts_with('#');
+        let (name, c) = match d.typedef_of.get(&s.tag) {
+            Some(t) if !(t.starts_with("__") && !anon && !s.tag.starts_with("__")) => (t.clone(), t.clone()),
+            None if anon => continue, // anonymous and never typedef'd: unreachable
+            _ => (s.tag.clone(), format!("{} {}", if s.union { "union" } else { "struct" }, s.tag)),
         };
         if name.starts_with("__") || !taken.insert(name.clone()) {
             continue;
         }
-        m.names.insert(tag.clone(), name.clone());
-        c_names.insert(tag.clone(), c);
+        names.insert(s.tag.clone(), name);
+        c_names.insert(s.tag.clone(), c);
     }
-    for (tag, fields) in &d.structs {
-        let (Some(name), Some(c)) = (m.names.get(tag), c_names.get(tag)) else { continue };
-        let fields = fields
+    // an anonymous struct or union typing a named field is OUTER_FIELD: a typedef of the field's
+    // __typeof__ in the generated C (outer ones first, so nested ones can name them)
+    loop {
+        let mut progress = false;
+        for s in &d.structs {
+            if names.contains_key(&s.tag) {
+                continue;
+            }
+            let Some((outer, field)) = d.anon_in.get(&s.tag) else { continue };
+            let (Some(on), Some(oc)) = (names.get(outer), c_names.get(outer)) else { continue };
+            let name = format!("{on}_{field}");
+            if !taken.insert(name.clone()) {
+                continue;
+            }
+            includes.push(format!("typedef __typeof__((({oc} *)0)->{field}) {name};"));
+            names.insert(s.tag.clone(), name.clone());
+            c_names.insert(s.tag.clone(), name.clone());
+            d.typedefs.insert(name, CT::Struct(s.tag.clone()));
+            progress = true;
+        }
+        if !progress {
+            break;
+        }
+    }
+    // each bitfield's accessors: C reads and writes it, so the backends never need its bits
+    let mut protos = String::new();
+    for s in &d.structs {
+        let (Some(name), Some(c)) = (names.get(&s.tag), c_names.get(&s.tag)) else { continue };
+        for (f, ty) in &s.bits {
+            let get = format!("static inline {ty} {name}_get_{f}(const {c} *s)");
+            let set = format!("static inline void {name}_set_{f}({c} *s, {ty} v)");
+            protos.push_str(&format!("{get};\n{set};\n"));
+            includes.push(format!("{get} {{ return s->{f}; }}"));
+            includes.push(format!("{set} {{ s->{f} = v; }}"));
+        }
+    }
+    parse_decls(&protos, &mut d);
+    let m = Mapper { d: &d, names, span };
+    let mut items = Vec::new();
+    for s in &d.structs {
+        let (Some(name), Some(c)) = (m.names.get(&s.tag), c_names.get(&s.tag)) else { continue };
+        let fields = s
+            .fields
             .iter()
             .flatten()
             .filter_map(|(n, t)| Some(Field { name: n.clone(), ty: m.ty(t)?, default: None, vis: Vis::Public, span }))
             .collect();
-        items.push(m.item(ItemKind::Struct(StructDecl { name: name.clone(), spec: None, fields, is_extern: true, is_comptime: false, c_name: Some(c.clone()) })));
+        items.push(m.item(ItemKind::Struct(StructDecl { name: name.clone(), spec: None, fields, is_extern: true, is_comptime: false, c_name: Some(c.clone()), c_union: s.union })));
     }
     // functions (the first declaration wins); one with a param or return type Volt can't use is skipped
     let mut seen_fns = std::collections::HashSet::new();
@@ -1098,8 +1198,9 @@ mod tests {
         assert!(matches!(&d.fns[1].1[3].1, CT::Ptr(f) if matches!(**f, CT::Func(ref ps, _, false) if ps.len() == 2)));
         let c: Vec<(String, i128)> = d.consts.iter().map(|(n, v)| (n.clone(), if let Num::Int(x, ..) = v { *x } else { -1 })).collect();
         assert_eq!(c, [("A".into(), 0), ("B".into(), 5), ("C".into(), 6), ("D".into(), 20)]);
-        let tm = d.structs.iter().find(|s| s.0 == "tm").unwrap().1.as_ref().unwrap();
-        assert_eq!(tm.iter().map(|f| f.0.as_str()).collect::<Vec<_>>(), ["tm_sec", "name"], "bitfields are dropped");
+        let tm = d.structs.iter().find(|s| s.tag == "tm").unwrap();
+        assert_eq!(tm.fields.iter().flatten().map(|f| f.0.as_str()).collect::<Vec<_>>(), ["tm_sec", "name"], "bitfields are kept apart");
+        assert_eq!(tm.bits, [("bits".to_string(), "int".to_string())]);
         assert_eq!(d.vars.len(), 1);
         assert_eq!(d.typedef_of["_IO_FILE"], "FILE", "public typedef names win");
         assert!(matches!(d.fns[3].2, CT::Bad), "long double can't map");

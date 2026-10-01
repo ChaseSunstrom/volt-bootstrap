@@ -333,7 +333,7 @@ impl<'a> Parser<'a> {
                     fields.push(Field { name: fname, ty, default, vis: fvis, span: fstart.to(self.prev_span()) });
                 }
             }
-            ItemKind::Struct(StructDecl { name, spec, fields, is_extern, is_comptime, c_name: None })
+            ItemKind::Struct(StructDecl { name, spec, fields, is_extern, is_comptime, c_name: None, c_union: false })
         } else if self.is_kw("enum") || self.is_kw("error") {
             let is_error = self.bump().tok == Tok::Ident("error".into());
             let (name, _) = self.ident()?;

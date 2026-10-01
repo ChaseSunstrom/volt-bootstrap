@@ -2,9 +2,10 @@
 // the headers and reads back what maps to Volt: functions (static inline ones too), structs, enum
 // constants, numeric #defines and extern variables, as ordinary items of namespace `c`. The headers
 // are #included in the generated C, so calls go through C's own prototypes and structs keep C's
-// layout. The parser is tolerant: a declaration it can't read or map (unions, bitfields, long
-// double, va_list...) is skipped, not an error. C pointers can be null: raw T*, a char* is a
-// cstr?, a function pointer an optional fn.
+// layout. A union is a struct whose fields share offset 0; a bitfield gets two static inline C
+// functions, S_get_F and S_set_F, next to the #include (C does the bit work on both backends). The
+// parser is tolerant: a declaration it can't read or map (long double, va_list...) is skipped, not
+// an error. C pointers can be null: raw T*, a char* is a cstr?, a function pointer an optional fn.
 use std::mem;
 
 // the extern_abi of fns declared by an imported header (C's own prototype is used)
@@ -503,17 +504,28 @@ enum ctype {
     PTR: std::box<ctype>,
     ARRAY: (std::box<ctype>, u64?),
     FUNC: (std::vec<ctype>, std::box<ctype>, bool),
-    BAD,          // unions, long double, va_list...: can't be used by value
+    BAD,          // long double, va_list...: can't be used by value
 }
 
 struct cfield_decl {
     name: str;
     ty: ctype;
+    // a bitfield (a nameless placeholder for the layout): its name and its type's C text, for its
+    // accessors
+    bit_name: str = "";
+    bits: str? = null;
 }
 
 struct cstruct {
     tag: str;
     fields: std::vec<cfield_decl>?; // none: only declared
+    is_union: bool = false;
+}
+
+// an anonymous struct or union that is the type of a named field: where it is
+struct anon_field {
+    outer: str; // the enclosing struct's tag
+    field: str;
 }
 
 struct cparam {
@@ -553,10 +565,11 @@ struct cdecls {
     anon: u32 = 0;
     last_params: std::vec<str?> = {}; // names in the param list read last (the declared fn's own)
     names: std::vec<std::string> = {}; // made-up names (anonymous tags) the others point into
+    anon_in: std::map<str, anon_field> = {}; // anonymous tag -> the named field it types
 }
 
 // records a struct tag; a later definition fills in the fields of an earlier declaration
-attach fn define_struct(this: cdecls&, tag: str, fields: std::vec<cfield_decl>?) -> void {
+attach fn define_struct(this: cdecls&, tag: str, fields: std::vec<cfield_decl>?, is_union: bool) -> void {
     var at: usize? = null;
     for (i) in 0..this.structs.len {
         if (this.structs.at(i).tag == tag) {
@@ -566,10 +579,29 @@ attach fn define_struct(this: cdecls&, tag: str, fields: std::vec<cfield_decl>?)
     if (at) {
         if (fields != null) {
             this.structs.at(at).fields = move fields;
+            this.structs.at(at).is_union = is_union;
         }
         return;
     }
-    put(&this.structs, { tag: tag, fields: move fields });
+    put(&this.structs, { tag: tag, fields: move fields, is_union: is_union });
+}
+
+// tokens as C text (a bitfield's type, for its accessors); none if one has no text kept
+attach fn text_of(this: cdecls&, t: ctok[..]) -> str? {
+    var out = S("");
+    for (k&) in t {
+        if (out.len() > 0) {
+            out.push(' ');
+        }
+        match (*k) {
+            .ID(n) => { out.append(n); },
+            .NUM(n) => { out.append(n); },
+            .P(p) => { out.append(p); },
+            default => { return null; },
+        }
+    }
+    put(&this.names, move out);
+    return this.names.at(this.names.len - 1).as_str();
 }
 
 // a parser over one declaration's tokens, adding what it reads to `d`; a method that returns
@@ -740,18 +772,12 @@ attach fn specs(this: cparser&, stat: bool&) -> ctype? {
             while (this.skip_noise() ?? return null) {}
             val is_union = n == "union";
             if (this.is("{")) {
-                val fields = this.fields();
-                if (!is_union) {
-                    this.d.define_struct(tag, move fields);
-                }
-            } else if (!is_union) {
-                this.d.define_struct(tag, null);
-            }
-            if (is_union) {
-                base = ctype::BAD;
+                val fields = this.fields(tag);
+                this.d.define_struct(tag, move fields, is_union);
             } else {
-                base = ctype::STRUCT(tag);
+                this.d.define_struct(tag, null, is_union);
             }
+            base = ctype::STRUCT(tag);
             continue;
         } else if (n == "enum") {
             this.i += 1;
@@ -819,9 +845,11 @@ attach fn specs(this: cparser&, stat: bool&) -> ctype? {
     return ctype::PRIM("i64");
 }
 
-// `{ int a; char b[4]; ... }`; a bitfield, an unnamed member or one of an anonymous struct type
-// becomes a nameless BAD placeholder, so c_items knows the layout is partial
-attach fn fields(this: cparser&) -> std::vec<cfield_decl>? {
+// `{ int a; char b[4]; ... }` of struct or union `tag`. A bitfield or a member Volt can't read
+// becomes a nameless BAD placeholder, so c_items knows the layout is partial (a bitfield's
+// placeholder keeps what its accessors need); an anonymous struct or union member's fields are the
+// outer one's, as in C
+attach fn fields(this: cparser&, tag: str) -> std::vec<cfield_decl>? {
     val open = this.i;
     if (!this.skip_group()) {
         return null;
@@ -837,6 +865,7 @@ attach fn fields(this: cparser&) -> std::vec<cfield_decl>? {
         var sub: cparser = { t: this.t[i..stop], i: 0, d: this.d };
         var stat = false;
         val b = sub.specs(&stat);
+        val spec_end = sub.i;
         if (b) {
             loop {
                 val got = sub.declarator(copy b);
@@ -851,12 +880,39 @@ attach fn fields(this: cparser&) -> std::vec<cfield_decl>? {
                         sub.i += 1;
                     }
                 }
-                var anon_ty = false;
+                var anon: str? = null;
                 match (dc.ty) {
-                    .STRUCT(t) => { anon_ty = t.len > 0 && t[0] == '#'; },
+                    .STRUCT(t) => {
+                        if (t.len > 0 && t[0] == '#') {
+                            anon = t;
+                        }
+                    },
                     default => {},
                 }
-                if (dc.name != null && !bitfield && !anon_ty) {
+                if (bitfield) {
+                    var f: cfield_decl = { name: "", ty: ctype::BAD };
+                    if (dc.name != null) {
+                        f.bit_name = dc.name ?? "";
+                        f.bits = this.d.text_of(sub.t[0..spec_end]);
+                    }
+                    put(&out, move f);
+                } else if (dc.name == null && anon != null) {
+                    // C reaches its fields through the outer struct; only libclang knows where they are
+                    for (s&) in this.d.structs.items() {
+                        if (s.tag != (anon ?? "")) {
+                            continue;
+                        }
+                        if (s.fields) {
+                            for (f&) in s.fields.items() {
+                                put(&out, { name: f.name, ty: copy f.ty, bit_name: f.bit_name, bits: f.bits });
+                            }
+                        }
+                    }
+                    put(&out, { name: "", ty: ctype::BAD });
+                } else if (dc.name != null) {
+                    if (anon) {
+                        this.d.anon_in.put(anon, { outer: tag, field: dc.name ?? "" });
+                    }
                     put(&out, { name: dc.name ?? "", ty: copy dc.ty });
                 } else {
                     put(&out, { name: "", ty: ctype::BAD }); // dropped: the layout is partial
@@ -1431,28 +1487,61 @@ attach fn lay_out_partial(this: checker&, res: c_imported&, items: std::vec<usiz
                 if (size <= 0) {
                     continue;
                 }
-                var fields: std::vec<field> = {};
-                var at: u64 = 0;
-                var pads: u32 = 0;
-                var placed = true;
+                if (sd.c_union) {
+                    // its members all sit at 0: one padding member as big and as aligned as C's
+                    // union stands for the ones Volt can't read
+                    val align = clang::clang_Type_getAlignOf(rt);
+                    if (align <= 0 || align > 16 || size % align != 0) {
+                        continue;
+                    }
+                    var pads: u32 = 0;
+                    put(&sd.fields, this.pad_field(&pads, @cast<u64>(align), @cast<u64>(size / align), span));
+                    sd.c_partial = false;
+                    continue;
+                }
+                var offs: std::vec<u64> = {};
+                var sizes: std::vec<u64> = {};
+                var known = true;
+                var overlap = false;
+                var end: u64 = 0;
                 for (f&) in sd.fields.items() {
                     var n = S(f.name);
                     val bits = clang::clang_Type_getOffsetOf(rt, n.c_str());
-                    if (bits < 0 || bits % 8 != 0 || @cast<u64>(bits / 8) < at) {
-                        placed = false;
-                        break;
-                    }
-                    this.pad_fields(at, @cast<u64>(bits / 8), &pads, span, &fields);
                     val fsize = field_size(rt, f.name);
-                    if (fsize <= 0) {
-                        placed = false;
+                    if (bits < 0 || bits % 8 != 0 || fsize <= 0) {
+                        known = false;
                         break;
                     }
-                    put(&fields, copy *f);
-                    at = @cast<u64>(bits / 8) + @cast<u64>(fsize);
+                    val off = @cast<u64>(bits / 8);
+                    overlap = overlap || off < end;
+                    end = off + @cast<u64>(fsize);
+                    put(&offs, off);
+                    put(&sizes, @cast<u64>(fsize));
                 }
-                if (!placed) {
+                if (!known) {
                     continue;
+                }
+                if (overlap) {
+                    // fields that share bytes (an anonymous union member): the LLVM backend places
+                    // each at its offset in a block of C's size and alignment
+                    val align = clang::clang_Type_getAlignOf(rt);
+                    if (align <= 0) {
+                        continue;
+                    }
+                    sd.c_offsets = move offs;
+                    sd.c_size = @cast<u64>(size);
+                    sd.c_align = @cast<u64>(align);
+                    sd.c_partial = false;
+                    continue;
+                }
+                // padding fields fill the gaps, so Volt's own layout is C's
+                var fields: std::vec<field> = {};
+                var at: u64 = 0;
+                var pads: u32 = 0;
+                for (i) in 0..sd.fields.len {
+                    this.pad_fields(at, *offs.at(i), &pads, span, &fields);
+                    put(&fields, copy *sd.fields.at(i));
+                    at = *offs.at(i) + *sizes.at(i);
                 }
                 this.pad_fields(at, @cast<u64>(size), &pads, span, &fields);
                 sd.fields = move fields;
@@ -1516,14 +1605,22 @@ attach fn import_headers(this: checker&, headers: std::vec<std::string>&, dir: s
     val dtext = this.c_texts.at(this.c_texts.len - 1).as_str();
     put(&this.c_texts, move macros);
     val mtext = this.c_texts.at(this.c_texts.len - 1).as_str();
-    val toks = c_lex(dtext);
-    val all = toks.items();
     var d: cdecls = {};
+    parse_decls(dtext, &d);
+    try this.c_macros(&d, mtext);
+    this.c_items(&d, &res, span);
+    return move res;
+}
+
+// reads C declarations (preprocessed) into d; function bodies are skipped
+fn parse_decls(text: str, d: cdecls&) -> void {
+    val toks = c_lex(text);
+    val all = toks.items();
     // the declarations, one at a time
     var i: usize = 0;
     while (i < toks.len) {
         val end = decl_end(all, i);
-        var p: cparser = { t: all[i..end], i: 0, d: &d };
+        var p: cparser = { t: all[i..end], i: 0, d: d };
         p.top();
         i = end;
         if (i < toks.len && is_p(toks.at(i), "{")) {
@@ -1549,9 +1646,6 @@ attach fn import_headers(this: checker&, headers: std::vec<std::string>&, dir: s
             i += 1;
         }
     }
-    try this.c_macros(&d, mtext);
-    this.c_items(&d, &res, src.as_str(), span);
-    return move res;
 }
 
 // an object-like #define: its name and body tokens
@@ -1610,23 +1704,31 @@ attach fn c_macros(this: checker&, d: cdecls&, macros: str) -> compile_error!voi
 }
 
 // one Volt item per C struct, fn, variable and constant
-attach fn c_items(this: checker&, d: cdecls&, res: c_imported&, src: str, span: span) -> void {
+attach fn c_items(this: checker&, d: cdecls&, res: c_imported&, span: span) -> void {
     var m: cmapper = { d: d, span: span };
     var taken: std::map<str, bool> = {};
     var c_names: std::map<str, str> = {};
-    // one Volt struct per C struct: named by its first typedef, else by its tag
+    // one Volt struct per C struct: named by its first typedef, else by its tag (also when the
+    // typedef is reserved and the tag isn't: __sigval_t, union sigval)
     for (s&) in d.structs.items() {
         var name: str = "";
         var c: str = "";
+        val anon = s.tag.len > 0 && s.tag[0] == '#';
         val td = d.typedef_of.get(s.tag);
+        var by_tag = true;
         if (td) {
+            by_tag = starts_with(*td, "__") && !anon && !starts_with(s.tag, "__");
             name = *td;
             c = *td;
-        } else if (s.tag.len > 0 && s.tag[0] == '#') {
+        } else if (anon) {
             continue; // anonymous and never typedef'd: unreachable
-        } else {
+        }
+        if (by_tag) {
             name = s.tag;
             var cn = S("struct ");
+            if (s.is_union) {
+                cn = S("union ");
+            }
             cn.append(s.tag);
             c = this.intern(move cn);
         }
@@ -1636,6 +1738,87 @@ attach fn c_items(this: checker&, d: cdecls&, res: c_imported&, src: str, span: 
         taken.put(name, true);
         m.names.put(s.tag, name);
         c_names.put(s.tag, c);
+    }
+    // an anonymous struct or union typing a named field is OUTER_FIELD: a typedef of the field's
+    // __typeof__ in the generated C (outer ones first, so nested ones can name them)
+    loop {
+        var progress = false;
+        for (s&) in d.structs.items() {
+            if (m.names.get(s.tag) != null) {
+                continue;
+            }
+            val link = d.anon_in.get(s.tag) ?? continue;
+            val outer = m.names.get(link.outer) ?? continue;
+            val outer_c = c_names.get(link.outer) ?? continue;
+            var nm = S(*outer);
+            nm.push('_');
+            nm.append(link.field);
+            val name = this.intern(move nm);
+            if (taken.get(name) != null) {
+                continue;
+            }
+            taken.put(name, true);
+            var td = S("typedef __typeof__(((");
+            td.append(*outer_c);
+            td.append(" *)0)->");
+            td.append(link.field);
+            td.append(") ");
+            td.append(name);
+            td.push(';');
+            put(&res.includes, move td);
+            m.names.put(s.tag, name);
+            c_names.put(s.tag, name);
+            d.typedefs.put(name, ctype::STRUCT(s.tag));
+            progress = true;
+        }
+        if (!progress) {
+            break;
+        }
+    }
+    // each bitfield's accessors: C reads and writes it, so neither backend needs its bits
+    var protos = S("");
+    for (s&) in d.structs.items() {
+        val name = m.names.get(s.tag) ?? continue;
+        val c = c_names.get(s.tag) ?? continue;
+        if (s.fields) {
+            for (f&) in s.fields.items() {
+                val ty = f.bits ?? continue;
+                var get = S("static inline ");
+                get.append(ty);
+                get.push(' ');
+                get.append(*name);
+                get.append("_get_");
+                get.append(f.bit_name);
+                get.append("(const ");
+                get.append(*c);
+                get.append(" *s)");
+                var set = S("static inline void ");
+                set.append(*name);
+                set.append("_set_");
+                set.append(f.bit_name);
+                set.push('(');
+                set.append(*c);
+                set.append(" *s, ");
+                set.append(ty);
+                set.append(" v)");
+                protos.append(get.as_str());
+                protos.append(";\n");
+                protos.append(set.as_str());
+                protos.append(";\n");
+                get.append(" { return s->");
+                get.append(f.bit_name);
+                get.append("; }");
+                set.append(" { s->");
+                set.append(f.bit_name);
+                set.append(" = v; }");
+                put(&res.includes, move get);
+                put(&res.includes, move set);
+            }
+        }
+    }
+    if (protos.len() > 0) {
+        put(&this.c_texts, move protos);
+        parse_decls(this.c_texts.at(this.c_texts.len - 1).as_str(), d);
     }
     var partial_items: std::vec<usize> = {};
     for (s&) in d.structs.items() {
@@ -1653,12 +1836,18 @@ attach fn c_items(this: checker&, d: cdecls&, res: c_imported&, src: str, span: 
                 put(&fields, { name: f.name, ty: t ?? @panic("ty"), fallback: null, vis: vis::PUBLIC, span: span });
             }
         }
-        put(&res.items, m.citem(item_kind::STRUCT({ name: *name, spec: null, fields: move fields, is_extern: true, is_comptime: false, c_name: *c, c_partial: partial })));
+        put(&res.items, m.citem(item_kind::STRUCT({ name: *name, spec: null, fields: move fields, is_extern: true, is_comptime: false, c_name: *c, c_partial: partial, c_union: s.is_union })));
         if (partial && s.fields != null) {
             put(&partial_items, res.items.len - 1);
         }
     }
-    this.lay_out_partial(res, &partial_items, src, span);
+    // libclang sees what the C compiler will: the headers, then the typedefs and accessors above
+    var all_c = S("");
+    for (inc&) in res.includes.items() {
+        all_c.append(inc.as_str());
+        all_c.push('\n');
+    }
+    this.lay_out_partial(res, &partial_items, all_c.as_str(), span);
     // functions (the first declaration wins); one with a param or return type Volt can't use is skipped
     var seen_fns: std::map<str, bool> = {};
     for (f&) in d.fns.items() {

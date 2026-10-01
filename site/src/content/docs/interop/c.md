@@ -48,12 +48,59 @@ How C's types come in:
 | `char *`, `const char *` | `cstr?` (string literals convert to `cstr`) |
 | `void *` | `void*` |
 | a function pointer | `extern "C" fn(...) -> R` |
-| `struct`, `union`, `enum` | the same, with C's layout |
+| `struct`, `union` | the same, with C's layout |
+| `enum` | its integer type, and a constant per enumerator |
 | `static inline` functions | callable: voltc compiles a small C unit that exports them |
 
 Flags for the preprocessor (`-I`, `-D`, `-U`) come from `--cc`: `voltc run app.volt --cc -Iinclude
---cc -DDEBUG`. A struct Volt can only partly read (bitfields, a type it can't parse) still works:
-voltc asks libclang for its size, alignment and field offsets, and skips what it can't name.
+--cc -DDEBUG`. A struct Volt can only partly read (a type it can't parse) still works: voltc asks
+libclang for its size, alignment and field offsets, and skips what it can't name.
+
+### Unions, bitfields and anonymous members
+
+A union is a struct whose fields share their memory: `u.word = 1` writes it, `u.bytes[0]` reads it
+back, and a literal sets one member. An anonymous struct or union member's fields are the outer
+struct's, as in C, and an anonymous struct that types a named field is `OUTER_FIELD`. A bitfield
+has no address, so C reads and writes it: each one gets `STRUCT_get_FIELD(&s)` and
+`STRUCT_set_FIELD(&s, v)`.
+
+```c
+/* packet.h */
+typedef union { unsigned int word; unsigned char bytes[4]; } raw32;
+struct header {
+    unsigned int version : 4;
+    unsigned int urgent : 1;
+    struct { unsigned short port; unsigned short length; };
+    raw32 checksum;
+};
+```
+
+```volt
+use std::io;
+use { "packet.h" } as p;
+
+fn main() -> void {
+    var h: p::header = { port: 8080, checksum: { word: 0x01020304 } };
+    p::header_set_version(&h, 3);
+    p::header_set_urgent(&h, 1);
+    h.length = 512;
+    std::println("{} {}", p::header_get_version(&h), p::header_get_urgent(&h));
+    std::println("{} {} {}", h.port, h.length, h.checksum.bytes[0]);
+}
+// expect: 3 1
+// expect: 8080 512 4
+```
+
+Both backends build all of these: the LLVM backend lays out unions, bitfields' neighbours and
+anonymous members where libclang says C puts them.
+
+### What doesn't come in
+
+- Function-like macros (`#define MAX(a, b) ...`): they have no types until they're used. Wrap one
+  in a `static inline` function in a header of your own and import that.
+- A named C enum is its integer type (`i32`), with a constant per enumerator, not a Volt enum: C
+  code passes any integer there.
+- `long double`, `_Complex` and `va_list`: functions using them are left out.
 
 Importing the same header in two places gives the same types: a `FILE*` from one import is the
 same type as from another.

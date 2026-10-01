@@ -2548,6 +2548,35 @@ attach fn partial_struct(this: checker&, sid: u32) -> bool {
     }
 }
 
+// a header struct whose fields share bytes (an anonymous union member): field i's byte offset
+attach fn overlay_offset(this: checker&, sid: u32, i: u32) -> u64? {
+    match (this.item_of(this.si(sid).decl).kind) {
+        .STRUCT(d&) => {
+            if (d.c_offsets) {
+                return *d.c_offsets.at(@cast<usize>(i));
+            }
+        },
+        default => {},
+    }
+    return null;
+}
+
+// ...and its C size and alignment (size 0: it isn't one)
+attach fn overlay_size(this: checker&, sid: u32) -> (u64, u64) {
+    match (this.item_of(this.si(sid).decl).kind) {
+        .STRUCT(d&) => { return (d.c_size, d.c_align); },
+        default => { return (0, 0); },
+    }
+}
+
+// a C union: its fields share offset 0
+attach fn union_struct(this: checker&, sid: u32) -> bool {
+    match (this.item_of(this.si(sid).decl).kind) {
+        .STRUCT(d) => { return d.c_union; },
+        default => { return false; },
+    }
+}
+
 // ---------- comptime match / for inside a runtime fn ----------
 
 // comptime match inside a runtime fn: pick the arm now, check only its body
