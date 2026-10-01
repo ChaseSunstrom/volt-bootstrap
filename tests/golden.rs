@@ -1,6 +1,6 @@
 // Golden tests. tests/run/*.volt and examples/*.volt: compiled and run, stdout must equal the `// expect: ` lines
-// (and exit code the `// exit: N` line, default 0; `// flags: --release` passes flags). tests/fail/*.volt: `voltc check` must fail
-// with every `// error: ` substring in its stderr.
+// (and exit code the `// exit: N` line, default 0; `// flags: --release` passes flags; each `// expect-stderr: ` line must be
+// in stderr). tests/fail/*.volt: `voltc check` must fail with every `// error: ` substring in its stderr.
 use std::path::Path;
 use std::process::Command;
 
@@ -36,7 +36,9 @@ fn golden() {
         let out = Command::new(bin).arg("run").arg(&f).args(&flags).output().unwrap();
         let got = String::from_utf8_lossy(&out.stdout);
         let code = out.status.code().unwrap_or(-1);
-        if got.trim_end() != want.trim_end() || code != want_code {
+        let err = String::from_utf8_lossy(&out.stderr);
+        let err_missing = directives(&src, "expect-stderr").iter().any(|w| !err.contains(w.as_str()));
+        if got.trim_end() != want.trim_end() || code != want_code || err_missing {
             failures.push(format!(
                 "{}: exit {code} (want {want_code})\n--- want\n{want}\n--- got\n{got}\n--- stderr\n{}",
                 f.display(),
