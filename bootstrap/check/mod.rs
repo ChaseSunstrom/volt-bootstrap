@@ -10,6 +10,8 @@ mod enums;
 mod errors;
 mod expr;
 mod generics;
+mod lends;
+pub use lends::{Body, Via};
 mod matching;
 mod operators;
 mod ownership;
@@ -122,6 +124,12 @@ pub struct Local {
     pub c: String,
     pub ty: TyId,
     pub mutable: bool,
+    /// a reference (or pointer, or slice) local: what it points at (see Val's ro, via, root)
+    pub ro: u32,
+    pub via: Via,
+    pub root: Option<String>,
+    /// a parameter of the fn (for messages: "a parameter without var")
+    pub param: bool,
     pub orig: Option<(String, TyId)>, // narrowed by if/while: the original variable (a pointer one re-checks on read: narrow_recheck)
     pub flag: Option<String>,          // owned local that needs delete: its C "still live" flag
     pub loops: usize,                  // loops around the declaration
@@ -179,6 +187,7 @@ pub struct FnCx {
     pub suspends: Vec<Span>,                       // suspend points so far (state n = index + 1)
     pub no_suspend: u32,                           // inside code where suspend can't go (defers)
     pub call_mode: Option<(Span, bool)>,           // the call at this span starts a frame (true) or is awaited
+    pub body: Option<Body>,                        // the fn instance or closure being checked (lends.rs)
 }
 
 impl FnCx {
@@ -199,6 +208,7 @@ impl FnCx {
             suspends: Vec::new(),
             no_suspend: 0,
             call_mode: None,
+            body: None,
         }
     }
 }
@@ -213,6 +223,28 @@ pub struct Val {
     pub pure: bool,    // no side effects, safe to evaluate in any order
     pub lit: Option<Lit>,
     pub owner: Option<String>, // set when this is an owned local (so using it by value moves it)
+    /// A reference, pointer or slice value: where it points at what can't change (ro, by depth: a
+    /// val, a parameter without var, or through another such reference), and which of the fn's
+    /// reference parameters' memory it points at (via). A place: it was reached through a read-only
+    /// reference (rop), and which parameter memory it is (pvia). root: the variable it all belongs
+    /// to, for messages. See lends.rs
+    pub ro: u32,
+    pub via: Via,
+    pub rop: bool,
+    pub pvia: Via,
+    pub root: Option<String>,
+}
+
+/// a call lending a read-only reference to a parameter, an error if the callee writes through it
+#[derive(Clone)]
+pub struct Lend {
+    pub span: Span,
+    pub callee: Body,
+    pub param: usize,
+    pub mask: u32, // the depths that can't change
+    pub root: String,
+    /// the root is a parameter (without var), not a val
+    pub root_param: bool,
 }
 
 /// a literal's value, kept on a Val so the literal can still adapt to the type it ends up as
@@ -225,7 +257,7 @@ pub enum Lit {
 
 impl Val {
     pub fn new(ty: TyId, c: impl Into<String>) -> Val {
-        Val { ty, c: c.into(), lv: false, mutable: false, pure: false, lit: None, owner: None }
+        Val { ty, c: c.into(), lv: false, mutable: false, pure: false, lit: None, owner: None, ro: 0, via: None, rop: false, pvia: None, root: None }
     }
     pub fn pure(ty: TyId, c: impl Into<String>) -> Val {
         Val { pure: true, ..Val::new(ty, c) }
@@ -305,6 +337,14 @@ pub struct Checker {
     pub warnings: Vec<Diag>,
     /// errors from functions already checked (the run goes on to the others)
     pub errors: Vec<Diag>,
+    /// what each body writes through its reference parameters (one flag a parameter), the
+    /// parameters it passes on to others' (caller, its param, callee, its param), and the calls
+    /// lending a read-only reference, checked once every body is (check_lends)
+    pub writes: HashMap<Body, Vec<u64>>,
+    pub edges: Vec<(Body, usize, i32, Body, usize)>,
+    pub lends: Vec<Lend>,
+    /// copy and as_str hooks: called on vals (to copy or print them), so they only read this
+    pub ro_hooks: Vec<usize>,
     pub frames: HashMap<usize, Vec<(String, TyId)>>, // async fn instance -> frame fields (params, locals, flags)
     pub c_includes: Vec<String>,                     // #include lines for imported C headers
     pub c_imports: HashMap<(u8, String), DeclId>,    // an imported C symbol shared by every import of it
@@ -352,6 +392,10 @@ impl Checker {
             warned: Default::default(),
             warnings: Vec::new(),
             errors: Vec::new(),
+            writes: HashMap::new(),
+            edges: Vec::new(),
+            lends: Vec::new(),
+            ro_hooks: Vec::new(),
             frames: HashMap::new(),
             c_includes: Vec::new(),
             c_imports: HashMap::new(),
@@ -1293,6 +1337,7 @@ impl Checker {
         let ItemKind::Fn(f) = &item.kind else { unreachable!() };
         let body = f.body.as_ref().unwrap();
         self.cx = FnCx::new(inst.ret, inst.env.clone());
+        self.cx.body = Some(Body::Fn(idx));
         if f.is_async {
             if f.extern_abi.is_some() || f.is_export || inst.c_name == "v_main" {
                 return err(item.span, "main, extern and export fns can't be async");
@@ -1309,7 +1354,9 @@ impl Checker {
             // frame fields share one struct with the locals, so they take unique ids too
             let c = if f.is_async { self.slot(&p.name, p.ty) } else { format!("{}_{i}", p.name) };
             param_cs.push(c.clone());
-            let mut local = Local { c: c.clone(), ty: p.ty, mutable: p.mutable, orig: None, flag: None, loops: 0 };
+            // a reference (pointer, slice) parameter: what it reaches is reached through parameter i
+            let via = self.reaches(p.ty).then_some((i as u32, 0));
+            let mut local = Local { c: c.clone(), ty: p.ty, mutable: p.mutable, orig: None, flag: None, loops: 0, ro: 0, via, root: Some(p.name.clone()), param: true };
             if self.needs_drop(p.ty)? {
                 // by-value params are owned by the callee
                 let flag = self.flag_for(&c);
@@ -1474,6 +1521,8 @@ impl Checker {
                 self.errors.push(e);
             }
         }
+        // what can't change, lent to fns that write through it (lends.rs)
+        self.check_lends();
         if !self.errors.is_empty() {
             return Ok(String::new()); // compile() reports self.errors
         }

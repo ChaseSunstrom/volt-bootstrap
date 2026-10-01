@@ -137,6 +137,11 @@ attach fn call_value(this: checker&, f: tval, args: std::vec<expr>&, span: span)
         return fail(span, fmt2("expected {} arguments, found {}", unum(@cast<u64>(ps.len)), unum(@cast<u64>(args.len))));
     }
     val fty = f.ty;
+    // what the call runs: this closure's body, or what any fn of this type made into a value does
+    var callee = body_key(BODY_VALUE, this.value_key(fty));
+    if (kind == 2) {
+        callee = body_key(BODY_CLOSURE, closure);
+    }
     var vals: std::vec<tval> = {};
     put(&vals, f);
     for (i) in 0..args.len {
@@ -144,7 +149,11 @@ attach fn call_value(this: checker&, f: tval, args: std::vec<expr>&, span: span)
         if (i < ps.len) {
             val p = *ps.at(i);
             val v = try this.expr(a, p);
-            put(&vals, try this.take_into(v, p, a.span));
+            val tv = try this.take_into(v, p, a.span);
+            if (this.reaches(p)) {
+                this.note_arg(callee, i, &tv, a.span);
+            }
+            put(&vals, tv);
         } else {
             val v = try this.expr(a, null);
             put(&vals, try this.vararg_val(v, a.span));
@@ -312,6 +321,15 @@ attach fn builtin(this: checker&, name: str, gargs: std::vec<garg>&, args_opt: s
         }
         val p = try this.garg_expr(args.at(0), null);
         val t = this.pointee(p.ty) ?? return fails(span, "@write(p, v) needs a T* first");
+        // a store through p, like *p = v (lends.volt)
+        var place = vnew(t, 0);
+        place.lv = true;
+        place.mutable = true;
+        through(&place, p);
+        if (!place.mutable) {
+            return fails(span, "can't assign through this; it reaches a val (or a parameter without var)");
+        }
+        this.note_write(&place);
         var v = try this.garg_expr(args.at(1), t);
         v = try this.take(v, span);
         v = try this.coerce(v, t, span);
@@ -331,7 +349,12 @@ attach fn builtin(this: checker&, name: str, gargs: std::vec<garg>&, args_opt: s
         var inits: std::vec<field_init> = {};
         put(&inits, { field: 0, value: p.c });
         put(&inits, { field: 1, value: n.c });
-        return vnew(st, this.ir.node(ir_kind::AGG(move inits), st));
+        // the slice points where p does
+        var r = vnew(st, this.ir.node(ir_kind::AGG(move inits), st));
+        r.ro = p.ro;
+        r.via = p.via;
+        r.root = p.root;
+        return r;
     }
     if (name == "read") {
         // move the value out of memory without copying or deleting it (the opposite of @write)
@@ -340,7 +363,12 @@ attach fn builtin(this: checker&, name: str, gargs: std::vec<garg>&, args_opt: s
         }
         val p = try this.garg_expr(args.at(0), null);
         val t = this.pointee(p.ty) ?? return fails(span, "@read(p) needs a T*");
-        return vnew(t, this.ir.deref(p.c, t));
+        // what's read points where *p does
+        var r = vnew(t, this.ir.deref(p.c, t));
+        r.ro = p.ro >> 1;
+        r.via = deeper(p.via, 1);
+        r.root = p.root;
+        return r;
     }
     if (name == "panic") {
         if (args.len != 1) {

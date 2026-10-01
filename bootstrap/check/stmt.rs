@@ -6,7 +6,7 @@ impl Checker {
     /// declare a local in the innermost scope and return its C name (a frame field in an async fn: slot)
     pub fn new_local(&mut self, name: &str, ty: TyId, mutable: bool) -> String {
         let c = self.slot(name, ty);
-        self.cx.scopes.last_mut().unwrap().vars.insert(name.to_string(), Local { c: c.clone(), ty, mutable, orig: None, flag: None, loops: self.cx.loops.iter().filter(|l| !l.is_block).count() });
+        self.cx.scopes.last_mut().unwrap().vars.insert(name.to_string(), Local { c: c.clone(), ty, mutable, orig: None, flag: None, loops: self.cx.loops.iter().filter(|l| !l.is_block).count(), ro: 0, via: None, root: Some(name.to_string()), param: false });
         c
     }
 
@@ -170,6 +170,12 @@ impl Checker {
                     return Ok((format!("{storage}{cty} {c} = {};", v.c), false));
                 }
                 let (c, flag) = self.owned_local(name, ty, l.mutable)?;
+                // a reference local reaches what its value does
+                if self.reaches(ty) {
+                    if let Some(x) = self.cx.scopes.last_mut().unwrap().vars.get_mut(name) {
+                        (x.ro, x.via, x.root) = (v.ro, v.via, v.root.clone());
+                    }
+                }
                 Ok((format!("{};{flag}", Self::decl(&cty, &c, &v.c)), false))
             }
             PatKind::Tuple(pats) => {
@@ -539,6 +545,8 @@ impl Checker {
         let (mut kept_decls, mut after) = (String::new(), String::new());
         // the element is a value the loop owns (an iterator's next gave it), deleted each round
         let mut owned_elem = false;
+        // what (x&) reaches: read-only, through a parameter, and its root (lends.rs)
+        let mut eprov: (u32, Via, Option<String>) = (0, None, None);
         let mut acc_decl = String::new();
         let acc = match &f.acc {
             Some(a) => {
@@ -587,6 +595,12 @@ impl Checker {
                 let (ty, base_ty) = match self.t.get(v.ty).clone() {
                     Ty::Ref(inner) => (inner, Some(v.ty)),
                     _ => (v.ty, None),
+                };
+                // the iterable as a place (through the reference it may be), and so its elements
+                let bp = if base_ty.is_some() { Self::through(Val { ty, lv: true, mutable: true, ..v.clone() }, &v) } else { v.clone() };
+                eprov = match self.t.get(ty) {
+                    Ty::Slice(_) => (bp.ro, bp.via, bp.root.clone()),
+                    _ => ((bp.lv && !bp.mutable) as u32, bp.pvia, bp.root.clone()),
                 };
                 let (elem_ty, len, access) = match self.t.get(ty).clone() {
                     Ty::Array(t, n) => {
@@ -642,6 +656,12 @@ impl Checker {
                         let pt = self.t.intern(Ty::Ref(ty));
                         let p = self.slot("_ip", pt);
                         // a var (or a reference to one) is advanced in place; a val or a temporary is copied
+                        if base_ty.is_some() {
+                            self.note_arg(Body::Fn(h), 0, v.ro, v.via, v.root.as_deref(), f.iter.span);
+                        } else if v.lv && v.mutable {
+                            let (ro, via, root) = Self::addr_prov(&v);
+                            self.note_arg(Body::Fn(h), 0, ro, via, root.as_deref(), f.iter.span);
+                        }
                         let addr = if base_ty.is_some() {
                             v.c.clone()
                         } else if v.lv && v.mutable {
@@ -697,6 +717,9 @@ impl Checker {
                     }
                     let rt = self.t.intern(Ty::Ref(elem_ty));
                     let c = self.new_local(name, rt, false);
+                    if let Some(x) = self.cx.scopes.last_mut().unwrap().vars.get_mut(name.as_str()) {
+                        (x.ro, x.via, x.root) = eprov.clone();
+                    }
                     binds.push_str(&format!("{};", Self::decl(&format!("{et}*"), &c, &format!("&{elem}"))));
                 } else if owned_elem {
                     let (c, flag) = self.owned_local(name, elem_ty, false)?;

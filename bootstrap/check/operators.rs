@@ -45,7 +45,8 @@ impl Checker {
                     return err(span, "can't take the address of a temporary value; store it in a variable first");
                 }
                 let ty = self.t.intern(Ty::Ref(v.ty));
-                Ok(Val { pure: v.pure, ..Val::new(ty, format!("(&({}))", v.c)) })
+                let (ro, via, root) = Self::addr_prov(&v);
+                Ok(Val { pure: v.pure, ro, via, root, ..Val::new(ty, format!("(&({}))", v.c)) })
             }
             UnOp::Deref => {
                 let v = self.expr(x, None)?;
@@ -53,7 +54,7 @@ impl Checker {
                     return Ok(Val { lv: true, mutable: true, pure: v.pure, ..Val::new(inner, format!("(*(({}).{}))", v.c, c_field(&pf))) });
                 }
                 match self.t.get(v.ty).clone() {
-                    Ty::Ref(t) => Ok(Val { lv: true, mutable: true, pure: v.pure, ..Val::new(t, format!("(*({}))", v.c)) }),
+                    Ty::Ref(t) => Ok(Self::through(Val { lv: true, mutable: true, pure: v.pure, ..Val::new(t, format!("(*({}))", v.c)) }, &v)),
                     Ty::Ptr(t) => {
                         // a raw pointer may be null: debug builds check, like bounds
                         let c = if self.opts.release {
@@ -62,7 +63,7 @@ impl Checker {
                             let (pc, loc) = (self.cty(v.ty), self.loc(span));
                             format!("(*({{ {pc} _np = {}; if (!_np) volt_panic(\"null pointer dereference\", \"{loc}\"); _np; }}))", v.c)
                         };
-                        Ok(Val { lv: true, mutable: true, pure: v.pure, ..Val::new(t, c) })
+                        Ok(Self::through(Val { lv: true, mutable: true, pure: v.pure, ..Val::new(t, c) }, &v))
                     }
                     Ty::VoidPtr => err(span, "can't dereference a void*; @cast it to a typed pointer first"),
                     Ty::Opt(_) => err(span, "this pointer might be null; check it with if or ?? first"),
@@ -337,8 +338,12 @@ impl Checker {
             return err(le.span, "can't assign to this; it's a temporary value");
         }
         if !l.mutable {
+            if l.rop {
+                return err(le.span, "can't assign through this; it reaches a val (or a parameter without var)");
+            }
             return err(le.span, "can't assign to this; it's immutable (val, or a parameter without var)");
         }
+        self.note_write(&l);
         let Some(op) = op else {
             // a narrowed optional takes either its payload type or the full optional back; a
             // narrowed pointer is always stored whole (its checked read would trap on a null one)

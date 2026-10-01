@@ -27,7 +27,7 @@ attach fn loops_around(this: checker&) -> usize {
 attach fn new_local(this: checker&, name: str, t: u32, mutable: bool) -> u32 {
     val c = this.slot(name, t);
     val loops = this.loops_around();
-    this.scope_top().vars.put(name, { c: c, ty: t, mutable: mutable, loops: loops });
+    this.scope_top().vars.put(name, { c: c, ty: t, mutable: mutable, loops: loops, root: name });
     if (this.opts.lsp) {
         this.lsp_add_local(c, name, t, this.name_span(this.lsp_at, name));
     }
@@ -285,6 +285,15 @@ attach fn let_stmt(this: checker&, l: let_stmt&) -> compile_error!code {
             }
             this.lsp_at = l.pat.span;
             val o = try this.owned_local(name, t, l.mutable);
+            // a reference local reaches what its value does
+            if (this.reaches(t)) {
+                val x = this.scope_top().vars.get(name);
+                if (x) {
+                    x.ro = v.ro;
+                    x.via = v.via;
+                    x.root = v.root;
+                }
+            }
             var stmts: std::vec<u32> = {};
             put(&stmts, this.decl_at(o.c, v.c));
             if (o.flag) {
@@ -798,6 +807,7 @@ attach fn for_inner(this: checker&, f: for_loop&, want: u32?, span: span) -> com
     var init_flags: std::vec<u32> = {}; // the kept temporaries' live flags, set before the iterable
     var acc_decl: u32? = null;
     var acc: local? = null;
+    var ep = vnew(0, 0); // what (x&) reaches: read-only, through a parameter, and its root (lends.volt)
     if (f.acc) {
         val a = &f.acc;
         acc_decl = (try this.let_stmt(a)).c;
@@ -880,6 +890,28 @@ attach fn for_inner(this: checker&, f: for_loop&, want: u32?, span: span) -> com
             t = inner;
             through_ref = true;
         }
+        // the iterable as a place (through the reference it may be), and so its elements
+        var bp = v;
+        if (through_ref) {
+            bp.ty = t;
+            bp.lv = true;
+            bp.mutable = true;
+            through(&bp, v);
+        }
+        match (*this.t.get(t)) {
+            .SLICE(x) => {
+                ep.ro = bp.ro;
+                ep.via = bp.via;
+            },
+            default => {
+                ep.ro = 0;
+                if (bp.lv && !bp.mutable) {
+                    ep.ro = 1;
+                }
+                ep.via = bp.pvia;
+            },
+        }
+        ep.root = bp.root;
         var is_range_val = false;
         var is_iter = false;
         match (*this.t.get(t)) {
@@ -942,6 +974,13 @@ attach fn for_inner(this: checker&, f: for_loop&, want: u32?, span: span) -> com
                 val ot = this.fi(h).ret;
                 val pt = this.t.ref_to(t);
                 val p = this.slot("_ip", pt);
+                if (through_ref) {
+                    this.note_arg(body_key(BODY_FN, h), 0, &v, f.iter.span);
+                } else if (v.lv && v.mutable) {
+                    var a = vnew(0, 0);
+                    addr_prov(&a, &v);
+                    this.note_arg(body_key(BODY_FN, h), 0, &a, f.iter.span);
+                }
                 // a var (or a reference to one) is advanced in place; a val or a temporary is copied
                 var addr = v.c;
                 if (!through_ref) {
@@ -1003,7 +1042,7 @@ attach fn for_inner(this: checker&, f: for_loop&, want: u32?, span: span) -> com
         }
     }
     put(&this.cx.scopes, {});
-    val r = this.for_body(f, elem_ty, elem, index, addressable, owned_elem);
+    val r = this.for_body(f, elem_ty, elem, index, addressable, owned_elem, &ep);
     this.cx.scopes.pop();
     val binds_body = r catch |e| {
         this.cx.loops.pop();
@@ -1049,7 +1088,7 @@ attach fn for_inner(this: checker&, f: for_loop&, want: u32?, span: span) -> com
 }
 
 // the bindings and the body of one round
-attach fn for_body(this: checker&, f: for_loop&, elem_ty: u32, elem: u32, index: u32, addressable: bool, owns: bool) -> compile_error!std::vec<u32> {
+attach fn for_body(this: checker&, f: for_loop&, elem_ty: u32, elem: u32, index: u32, addressable: bool, owns: bool, ep: tval&) -> compile_error!std::vec<u32> {
     var out: std::vec<u32> = {};
     val b0 = f.bindings.at(0);
     if (b0.by_ref) {
@@ -1058,6 +1097,12 @@ attach fn for_body(this: checker&, f: for_loop&, elem_ty: u32, elem: u32, index:
         }
         val rt = this.t.ref_to(elem_ty);
         val c = this.new_local(b0.name, rt, false);
+        val x = this.scope_top().vars.get(b0.name);
+        if (x) {
+            x.ro = ep.ro;
+            x.via = ep.via;
+            x.root = ep.root;
+        }
         put(&out, this.decl_at(c, this.ir.addr(elem, rt)));
     } else if (owns) {
         val o = try this.owned_local(b0.name, elem_ty, false);

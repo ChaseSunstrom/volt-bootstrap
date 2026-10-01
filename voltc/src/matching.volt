@@ -16,6 +16,7 @@ struct pat_bind {
     name: str;
     ty: u32;
     c: u32;
+    by_ref: bool = false; // an x& binding, pointing into the matched place
 }
 
 // a pattern compiled against the scrutinee's place: its test, the locals it binds, and what an unguarded
@@ -35,6 +36,10 @@ attach fn match_expr(this: checker&, scrut: expr&, arms: std::vec<arm>&, want: u
     if (s.ty == VOID || s.ty == NEVER || s.ty == NULL_TY) {
         return fails(scrut.span, "can't match on this; it has no value");
     }
+    // what x& bindings reach: the matched place, as &place would (lends.volt)
+    var mp = vnew(0, 0);
+    addr_prov(&mp, &s);
+    var outp = vnew(0, 0); // the arms' values: read-only where any is
     val st = s.ty;
     // a place is matched where it is (x& bindings point into it; plain ones copy the payload when the
     // arm starts). A temporary gets a slot of its own, read again by the cleanup after the arms
@@ -77,7 +82,7 @@ attach fn match_expr(this: checker&, scrut: expr&, arms: std::vec<arm>&, want: u
     for (a&) in arms.items() {
         this.cx.moved = copy base;
         put(&this.cx.scopes, {});
-        val res = this.match_arm(a, place, st, &result_ty, &r, &cov, &all_never, end, &base, &after);
+        val res = this.match_arm(a, place, st, &result_ty, &r, &cov, &all_never, end, &base, &after, &mp, &outp);
         this.cx.scopes.pop();
         val arm_c = res catch |e| {
             this.cx.scopes.pop();
@@ -103,7 +108,9 @@ attach fn match_expr(this: checker&, scrut: expr&, arms: std::vec<arm>&, want: u
     if (result_ty != null && !all_never) {
         val t = result_ty ?? 0;
         val rl = r ?? this.tmp_local("mr", t);
-        return vnew(t, this.ir.seq(move stmts, rl.c, t));
+        var out = vnew(t, this.ir.seq(move stmts, rl.c, t));
+        merge_prov(&out, &outp);
+        return out;
     }
     var t = VOID;
     if (all_never && arms.len > 0) {
@@ -114,12 +121,20 @@ attach fn match_expr(this: checker&, scrut: expr&, arms: std::vec<arm>&, want: u
 
 // one arm: `if (test) { binds; [if (guard)] { body; goto end; } }`. Updates the shared result type and
 // slot, coverage and move sets
-attach fn match_arm(this: checker&, a: arm&, m: u32, st: u32, result_ty: u32?&, r: local_ref?&, cov: coverage&, all_never: bool&, end: u32, base: idset&, after: idset&) -> compile_error!u32 {
+attach fn match_arm(this: checker&, a: arm&, m: u32, st: u32, result_ty: u32?&, r: local_ref?&, cov: coverage&, all_never: bool&, end: u32, base: idset&, after: idset&, mp: tval&, outp: tval&) -> compile_error!u32 {
     val p = try this.pat_code(&a.pat, m, st);
     var body_stmts: std::vec<u32> = {};
     this.lsp_at = a.pat.span;
     for (b&) in p.binds.items() {
         val local = this.new_local(b.name, b.ty, false);
+        if (b.by_ref) {
+            val x = this.scope_top().vars.get(b.name);
+            if (x) {
+                x.ro = mp.ro;
+                x.via = mp.via;
+                x.root = mp.root;
+            }
+        }
         put(&body_stmts, this.decl_at(local, b.c));
     }
     var guard: u32? = null;
@@ -145,6 +160,7 @@ attach fn match_arm(this: checker&, a: arm&, m: u32, st: u32, result_ty: u32?&, 
             }
             val t = (*result_ty).value;
             val b = try this.coerce(body, t, a.body.span);
+            merge_prov(outp, &b);
             if ((*r).none) {
                 *r = this.tmp_local("mr", t);
             }
@@ -257,7 +273,7 @@ attach fn pat_code(this: checker&, p: pat&, c: u32, t: u32) -> compile_error!pat
         .BIND_REF(n) => {
             val rt = this.t.ref_to(t);
             var o = any_pat();
-            put(&o.binds, { name: n, ty: rt, c: this.ir.addr(c, rt) });
+            put(&o.binds, { name: n, ty: rt, c: this.ir.addr(c, rt), by_ref: true });
             return move o;
         },
         .BIND(n) => {

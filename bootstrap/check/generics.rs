@@ -686,6 +686,16 @@ impl Checker {
         let mut prefix = String::new();
         let mut post = String::new();
         if let Some(r) = recv {
+            // what the receiver lends this: the place itself (Ref), or the reference it is (None)
+            match adj {
+                Adj::Ref => {
+                    // a temporary's slot is fresh, but what it points at may not be
+                    let (ro, via, root) = Self::addr_prov(&r);
+                    self.note_arg(Body::Fn(inst), 0, ro, via, root.as_deref(), span);
+                }
+                Adj::None => self.note_arg(Body::Fn(inst), 0, r.ro, r.via, r.root.as_deref(), span),
+                _ => {}
+            }
             vals.push(match adj {
                 Adj::None => {
                     let pt = f.params[0].ty;
@@ -737,7 +747,9 @@ impl Checker {
                 Some(v) => v.clone(),
                 None => self.expr(a, Some(p.ty))?,
             };
-            vals.push(self.take_into(v, p.ty, a.span)?);
+            let v = self.take_into(v, p.ty, a.span)?;
+            self.note_arg(Body::Fn(inst), i + offset, v.ro, v.via, v.root.as_deref(), a.span);
+            vals.push(v);
         }
         // the rest: one tuple for a pack, else C varargs
         if f.pack {

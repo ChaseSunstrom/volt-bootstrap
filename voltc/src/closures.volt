@@ -9,6 +9,7 @@ struct cap_inner {
     ty: u32;      // its type inside the body
     by_ref: bool; // stored as a T&
     mutable: bool;
+    outer: local = { c: 0, ty: 0, mutable: false }; // the captured local (lends.volt)
 }
 
 // a closure literal: builds its body fn (env: closure&) and an erased twin (env: void*) that forwards to it,
@@ -72,7 +73,7 @@ attach fn closure_expr(this: checker&, cl: closure&, want: u32?, span: span) -> 
             val rt = this.t.ref_to(l.ty);
             put(&stored, { name: c.name, ty: rt });
             put(&inits, { field: i, value: this.ir.addr(l.c, rt) });
-            put(&inner, { name: c.name, ty: l.ty, by_ref: true, mutable: l.mutable });
+            put(&inner, { name: c.name, ty: l.ty, by_ref: true, mutable: l.mutable, outer: l });
         } else {
             var x = vnew(0, 0);
             if (c.mode == cap_mode::MOVE) {
@@ -82,7 +83,7 @@ attach fn closure_expr(this: checker&, cl: closure&, want: u32?, span: span) -> 
             }
             put(&stored, { name: c.name, ty: l.ty });
             put(&inits, { field: i, value: x.c });
-            put(&inner, { name: c.name, ty: l.ty, by_ref: false, mutable: true });
+            put(&inner, { name: c.name, ty: l.ty, by_ref: false, mutable: true, outer: l });
         }
     }
     // the closure's own type, and its two functions (registered before the body is checked)
@@ -117,10 +118,28 @@ attach fn closure_expr(this: checker&, cl: closure&, want: u32?, span: span) -> 
     val ei = @cast<u32>(this.ir.fns.len - 1);
     put(&this.ir.order, fi);
     put(&this.ir.order, ei);
-    put(&this.closures, bx<closure_info>({ c_name: c_name, fn_ir: fi, erased_ir: ei, caps: move stored, params: copy ptys, ret: rty }));
+    var names: std::vec<str> = {};
+    for (p&) in cl.params.items() {
+        put(&names, p.name);
+    }
+    for (c&) in inner.items() {
+        put(&names, c.name);
+    }
+    put(&this.closures, bx<closure_info>({ c_name: c_name, fn_ir: fi, erased_ir: ei, caps: move stored, params: copy ptys, ret: rty, names: move names }));
+    // a captured reference reaching through one of ours is passed on to the closure
+    for (ci) in 0..inner.len {
+        val c = inner.at(ci);
+        val ov = c.outer.via;
+        if (ov) {
+            if (this.cx.body != null && this.reaches(c.ty)) {
+                put(&this.lend_edges, { from: this.cx.body ?? 0, k: @cast<usize>(ov.k), off: ov.off, to: body_key(BODY_CLOSURE, id), j: cl.params.len + ci });
+            }
+        }
+    }
 
     // the body is its own function; it sees its captures and params, not the outer locals
     var saved = new_cx(rty, env, fi);
+    saved.body = body_key(BODY_CLOSURE, id);
     swap(&saved, &this.cx);
     val r = this.closure_body(cl, &inner, &ptys, rty, ty);
     swap(&saved, &this.cx);
@@ -156,14 +175,23 @@ attach fn closure_body(this: checker&, cl: closure&, inner: std::vec<cap_inner>&
         } else {
             place = this.ir.field(obj, @cast<u32>(i), c.ty);
         }
-        this.cx.scopes.at(0).vars.put(c.name, { c: place, ty: c.ty, mutable: c.mutable });
+        var l: local = { c: place, ty: c.ty, mutable: c.mutable, ro: c.outer.ro, root: c.name, param: c.outer.param };
+        if (this.reaches(c.ty)) {
+            val rv: reach = { k: @cast<u32>(cl.params.len + i), off: 0 };
+            l.via = rv;
+        }
+        this.cx.scopes.at(0).vars.put(c.name, l);
     }
     var stmts: std::vec<u32> = {};
     for (i) in 0..cl.params.len {
         val p = cl.params.at(i);
         val t = *ptys.at(i);
         val c = this.ir.node(ir_kind::LOCAL(@cast<u32>(i) + 1), t);
-        var l: local = { c: c, ty: t, mutable: p.mutable };
+        var l: local = { c: c, ty: t, mutable: p.mutable, root: p.name, param: true };
+        if (this.reaches(t)) {
+            val rv: reach = { k: @cast<u32>(i), off: 0 };
+            l.via = rv;
+        }
         if (try this.needs_drop(t)) {
             val flag = this.flag_for(c);
             put(&stmts, this.decl_at(flag, this.ir.boolean(true)));
@@ -243,6 +271,7 @@ attach fn closure_to_fn(this: checker&, v: tval&, fv: u32) -> u32 {
         .CLOSURE(c) => { id = c; },
         default => {},
     }
+    this.escape(body_key(BODY_CLOSURE, id), fv);
     // a closure literal gets storage of its own: the fn value points at it for the rest of the fn
     var place = v.c;
     var pre: std::vec<u32> = {};

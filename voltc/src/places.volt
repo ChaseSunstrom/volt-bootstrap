@@ -58,6 +58,7 @@ attach fn field(this: checker&, b0: tval, name: str, span: span) -> compile_erro
                 v.lv = true;
                 v.mutable = true;
                 v.pure = b.pure;
+                through(&v, b);
                 b = v;
             }
         },
@@ -121,12 +122,16 @@ attach fn field(this: checker&, b0: tval, name: str, span: span) -> compile_erro
     var obj = b.c;
     var lv = b.lv;
     var mutable = b.mutable;
+    var rop = b.rop;
+    var pvia = b.pvia;
     val inner = this.t.ref_inner(b.ty);
     if (inner) {
         t = inner;
         obj = this.ir.deref(b.c, t);
         lv = true;
-        mutable = true;
+        mutable = (b.ro & 1) == 0;
+        rop = (b.ro & 1) != 0;
+        pvia = b.via;
     }
     match (*this.t.get(t)) {
         .STRUCT(sid) => {
@@ -141,6 +146,10 @@ attach fn field(this: checker&, b0: tval, name: str, span: span) -> compile_erro
                     r.lv = lv;
                     r.mutable = mutable;
                     r.pure = b.pure;
+                    r.rop = rop;
+                    r.pvia = pvia;
+                    r.via = deeper(pvia, 1); // what a pointer field points at isn't part of the place
+                    r.root = b.root;
                     return r;
                 }
             }
@@ -162,6 +171,10 @@ attach fn field(this: checker&, b0: tval, name: str, span: span) -> compile_erro
                 r.lv = lv;
                 r.mutable = mutable;
                 r.pure = b.pure;
+                r.rop = rop;
+                r.pvia = pvia;
+                r.via = deeper(pvia, 1);
+                r.root = b.root;
                 return r;
             }
         },
@@ -250,10 +263,12 @@ attach fn index(this: checker&, be: expr&, ie: expr&, span: span) -> compile_err
     var b = try this.expr(be, null);
     val inner = this.t.ref_inner(b.ty);
     if (inner) {
+        val r0 = b;
         b.ty = inner;
         b.c = this.ir.deref(b.c, b.ty);
         b.lv = true;
         b.mutable = true;
+        through(&b, r0);
     }
     val i = try this.expr(ie, USIZE);
     if (this.t.int_of(i.ty) == null) {
@@ -274,6 +289,7 @@ attach fn index(this: checker&, be: expr&, ie: expr&, span: span) -> compile_err
             }
             r.lv = true;
             r.mutable = true;
+            through(&r, b);
             return r;
         },
         default => {},
@@ -340,9 +356,19 @@ attach fn index(this: checker&, be: expr&, ie: expr&, span: span) -> compile_err
         .SLICE(x) => { is_slice = true; },
         default => {},
     }
+    // a slice's elements are what it points at; an array's are part of it
     var r = vnew(elem, c);
     r.lv = lv;
-    r.mutable = lv && (b.mutable || is_slice);
+    r.mutable = lv;
+    if (is_slice) {
+        through(&r, b);
+    } else {
+        r.mutable = lv && b.mutable;
+        r.rop = b.rop;
+        r.pvia = b.pvia;
+        r.via = deeper(b.pvia, 1);
+        r.root = b.root;
+    }
     return r;
 }
 
@@ -352,10 +378,22 @@ attach fn slice_expr(this: checker&, be: expr&, lo: expr*, hi: expr*, incl: bool
     var b = try this.expr(be, null);
     val inner = this.t.ref_inner(b.ty);
     if (inner) {
+        val r0 = b;
         b.ty = inner;
         b.c = this.ir.deref(b.c, b.ty);
         b.lv = true;
         b.mutable = true;
+        through(&b, r0);
+    }
+    // the slice reaches the array (as &array would) or what the sliced slice does
+    var sv = vnew(0, 0);
+    addr_prov(&sv, &b);
+    match (*this.t.get(b.ty)) {
+        .SLICE(x) => {
+            sv.ro = b.ro;
+            sv.via = b.via;
+        },
+        default => {},
     }
     var lo_c = this.ir.int(0, USIZE);
     if (lo) {
@@ -421,7 +459,11 @@ attach fn slice_expr(this: checker&, be: expr&, lo: expr*, hi: expr*, incl: bool
     var inits: std::vec<field_init> = {};
     put(&inits, { field: 0, value: this.ir.binary(binop_ir::ADD, base, tlo.c, pt) });
     put(&inits, { field: 1, value: this.ir.binary(binop_ir::SUB, thi.c, tlo.c, USIZE) });
-    return vnew(out, this.ir.seq(move stmts, this.ir.node(ir_kind::AGG(move inits), out), out));
+    var r = vnew(out, this.ir.seq(move stmts, this.ir.node(ir_kind::AGG(move inits), out), out));
+    r.ro = sv.ro;
+    r.via = sv.via;
+    r.root = sv.root;
+    return r;
 }
 
 // ---------- aggregates ----------

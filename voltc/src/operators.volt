@@ -65,6 +65,7 @@ attach fn unary(this: checker&, op: unop, x: expr&, want: u32?, span: span) -> c
             val t = this.t.ref_to(v.ty);
             var r = vnew(t, this.ir.addr(v.c, t));
             r.pure = v.pure;
+            addr_prov(&r, &v);
             return r;
         },
         .DEREF => {
@@ -85,6 +86,7 @@ attach fn unary(this: checker&, op: unop, x: expr&, want: u32?, span: span) -> c
                     r.lv = true;
                     r.mutable = true;
                     r.pure = v.pure;
+                    through(&r, v);
                     return r;
                 },
                 .PTR(t) => {
@@ -99,6 +101,7 @@ attach fn unary(this: checker&, op: unop, x: expr&, want: u32?, span: span) -> c
                     r.lv = true;
                     r.mutable = true;
                     r.pure = v.pure;
+                    through(&r, v);
                     return r;
                 },
                 .VOIDPTR => { return fails(span, "can't dereference a void*; @cast it to a typed pointer first"); },
@@ -558,8 +561,12 @@ attach fn assign(this: checker&, op: binop?, le: expr&, re: expr&, span: span) -
         return fails(le.span, "can't assign to this; it's a temporary value");
     }
     if (!l.mutable) {
+        if (l.rop) {
+            return fails(le.span, "can't assign through this; it reaches a val (or a parameter without var)");
+        }
         return fails(le.span, "can't assign to this; it's immutable (val, or a parameter without var)");
     }
+    this.note_write(&l);
     if (op == null) {
         // a narrowed optional takes either its payload type or the full optional back; a narrowed
         // pointer is always stored whole (its checked read would trap on a null one)

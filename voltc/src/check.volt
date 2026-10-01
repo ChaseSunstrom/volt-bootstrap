@@ -101,6 +101,7 @@ struct closure_info {
     caps: std::vec<cap_field>;
     params: std::vec<u32>;
     ret: u32;
+    names: std::vec<str> = {}; // its params' names, then its captures' (lends.volt)
 }
 
 struct cap_field {
@@ -149,6 +150,11 @@ struct local {
     orig_ty: u32 = 0;
     flag: u32? = null;   // owned local that needs delete: its "still live" flag (a place)
     loops: usize = 0;    // loops around the declaration
+    // a reference (or pointer, or slice) local: what it points at (see tval's ro, via, root)
+    ro: u32 = 0;
+    via: reach? = null;
+    root: str? = null;
+    param: bool = false; // a parameter of the fn (for messages: "a parameter without var")
 }
 
 // a cleanup registered in a scope: a defer, or deleting an owned local if its flag says it's still live
@@ -214,6 +220,7 @@ struct fn_cx {
     call_span: span = {};
     call_start: bool = false;
     ret_local: local_ref? = null; // fn_exit's _ret
+    body: u64? = null;            // the fn instance or closure being checked (lends.volt)
 }
 
 // a fresh fn context with its outermost scope, lowering into ir fn irf
@@ -232,6 +239,16 @@ struct tval {
     pure: bool = false;    // no side effects, safe to evaluate in any order
     lit: lit? = null;
     owner: str? = null;    // set when this is an owned local (so using it by value moves it)
+    // A reference, pointer or slice value: where it points at what can't change (ro, by depth: a
+    // val, a parameter without var, or through another such reference), and which of the fn's
+    // reference parameters' memory it points at (via). A place: it was reached through a read-only
+    // reference (rop), and which parameter memory it is (pvia). root: the variable it all belongs
+    // to, for messages. See lends.volt
+    ro: u32 = 0;
+    via: reach? = null;
+    rop: bool = false;
+    pvia: reach? = null;
+    root: str? = null;
 }
 
 // a literal's value, kept on a tval so the literal can still adapt to the type it ends up as
@@ -378,6 +395,13 @@ struct checker {
     owned_exprs: std::vec<std::box<expr>> = {}; // expressions made by the checker
     warnings: std::vec<diag> = {}; // printed with the errors (or on their own when there are none)
     errors: std::vec<diag> = {};   // from functions already checked (the run goes on to the others)
+    // what each body writes through its reference parameters (one flag a parameter), the
+    // parameters it passes on to others', and the calls lending a read-only reference, checked
+    // once every body is (check_lends)
+    writes: std::map<u64, std::vec<u64>> = {};
+    lend_edges: std::vec<lend_edge> = {};
+    lends: std::vec<lend> = {};
+    ro_hooks: std::vec<u32> = {}; // copy and as_str hooks: called on vals, so they only read this
     err_name: u32? = null; // volt_err_name's ir fn
     owned_tys: std::vec<std::box<ty>> = {};     // type expressions made by the checker
     owned_gargs: std::vec<std::box<garg>> = {};

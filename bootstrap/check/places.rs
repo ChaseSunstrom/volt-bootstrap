@@ -9,7 +9,7 @@ impl Checker {
     pub fn field(&mut self, b: Val, name: &str, span: Span) -> Res<Val> {
         // .value/.none/.err see through a reference, like struct fields
         let b = match self.t.get(b.ty) {
-            Ty::Ref(d) if matches!(self.t.get(*d), Ty::Opt(_) | Ty::ErrUnion(..)) => Val { lv: true, mutable: true, pure: b.pure, ..Val::new(*d, format!("(*{})", b.c)) },
+            Ty::Ref(d) if matches!(self.t.get(*d), Ty::Opt(_) | Ty::ErrUnion(..)) => Self::through(Val { lv: true, mutable: true, pure: b.pure, ..Val::new(*d, format!("(*{})", b.c)) }, &b),
             _ => b,
         };
         if let Some(v) = self.wrapper_field(&b, name, span)? {
@@ -44,11 +44,13 @@ impl Checker {
         if let Ty::Ptr(_) = self.t.get(b.ty) {
             return err(span, format!("this is a pointer ({}); reach what it points at with ->: p->{name}", self.ty_name(b.ty)));
         }
-        let (ty, access, lv, mutable) = match self.t.get(b.ty).clone() {
-            Ty::Ref(inner) => (inner, format!("({})->", b.c), true, true),
-            _ => (b.ty, format!("({}).", b.c), b.lv, b.mutable),
+        let (ty, access, lv, mutable, rop, pvia) = match self.t.get(b.ty).clone() {
+            Ty::Ref(inner) => (inner, format!("({})->", b.c), true, b.ro & 1 == 0, b.ro & 1 != 0, b.via),
+            _ => (b.ty, format!("({}).", b.c), b.lv, b.mutable, b.rop, b.pvia),
         };
-        let place = |ty, c: String| Val { lv, mutable, pure: b.pure, ..Val::new(ty, c) };
+        let root = b.root.clone();
+        // a field is part of the place; what a pointer field points at isn't (a val is shallow)
+        let place = |ty, c: String| Val { lv, mutable, pure: b.pure, rop, pvia, via: lends::deeper(pvia, 1), root: root.clone(), ..Val::new(ty, c) };
         match self.t.get(ty).clone() {
             Ty::Struct(sid) => {
                 let fields = self.struct_fields(sid, span)?;
@@ -100,7 +102,7 @@ impl Checker {
         }
         let mut b = self.expr(be, None)?;
         if let Ty::Ref(inner) = self.t.get(b.ty).clone() {
-            b = Val { ty: inner, c: format!("(*({}))", b.c), lv: true, mutable: true, ..b };
+            b = Self::through(Val { ty: inner, c: format!("(*({}))", b.c), lv: true, mutable: true, ..b.clone() }, &b);
         }
         let i = self.expr(ie, Some(USIZE))?;
         if self.t.int_of(i.ty).is_none() {
@@ -111,11 +113,12 @@ impl Checker {
             let mut pair = [b, i];
             let pre = self.seq(&mut pair);
             let c = format!("(({})[{}])", pair[0].c, pair[1].c);
+            let r = pair[0].clone();
             if !pre.is_empty() {
                 let et = self.cty(t);
-                return Ok(Val { lv: true, mutable: true, ..Val::new(t, format!("(*({{ {pre}({et}*)&{c}; }}))")) });
+                return Ok(Self::through(Val { lv: true, mutable: true, ..Val::new(t, format!("(*({{ {pre}({et}*)&{c}; }}))")) }, &r));
             }
-            return Ok(Val { lv: true, mutable: true, ..Val::new(t, c) });
+            return Ok(Self::through(Val { lv: true, mutable: true, ..Val::new(t, c) }, &r));
         }
         let loc = self.loc(span);
         let check = |len: &str| if self.opts.release { String::new() } else { format!("if (_i >= {len}) volt_bounds(_i, {len}, \"{loc}\"); ") };
@@ -142,8 +145,11 @@ impl Checker {
             Ty::CStr => (U8, format!("((uint8_t)({})[{}])", b.c, i.c), false),
             _ => return err(span, format!("can't index a {}", self.ty_name(b.ty))),
         };
-        let mutable = lv && (b.mutable || matches!(self.t.get(b.ty), Ty::Slice(_)));
-        Ok(Val { lv, mutable, ..Val::new(elem, c) })
+        // a slice's elements are what it points at; an array's are part of it
+        if matches!(self.t.get(b.ty), Ty::Slice(_)) {
+            return Ok(Self::through(Val { lv, mutable: lv, ..Val::new(elem, c) }, &b));
+        }
+        Ok(Val { lv, mutable: lv && b.mutable, rop: b.rop, pvia: b.pvia, via: lends::deeper(b.pvia, 1), root: b.root.clone(), ..Val::new(elem, c) })
     }
 
     /// `b[lo..hi]` (either end optional): a slice of an array or slice, a str of a str. Debug builds
@@ -151,8 +157,10 @@ impl Checker {
     pub(super) fn slice_expr(&mut self, be: &Expr, lo: Option<&Expr>, hi: Option<&Expr>, incl: bool, span: Span) -> Res<Val> {
         let mut b = self.expr(be, None)?;
         if let Ty::Ref(inner) = self.t.get(b.ty).clone() {
-            b = Val { ty: inner, c: format!("(*({}))", b.c), lv: true, mutable: true, ..b };
+            b = Self::through(Val { ty: inner, c: format!("(*({}))", b.c), lv: true, mutable: true, ..b.clone() }, &b);
         }
+        // the slice reaches the array (as &array would) or what the sliced slice does
+        let (sro, svia, sroot) = if matches!(self.t.get(b.ty), Ty::Slice(_)) { (b.ro, b.via, b.root.clone()) } else { Self::addr_prov(&b) };
         let lo = match lo {
             Some(e) => self.expr_as(e, USIZE)?.c,
             None => "0".into(),
@@ -193,7 +201,7 @@ impl Checker {
             format!("if (_lo > _hi || _hi > {len}) volt_bounds(_hi, {len}, \"{loc}\"); ")
         };
         let oc = self.cty(out);
-        Ok(Val::new(out, format!("({{ {bind}size_t _lo = {lo}, _hi = {hi}; {chk}({oc}){{ {base} + _lo, _hi - _lo }}; }})")))
+        Ok(Val { ro: sro, via: svia, root: sroot, ..Val::new(out, format!("({{ {bind}size_t _lo = {lo}, _hi = {hi}; {chk}({oc}){{ {base} + _lo, _hi - _lo }}; }})")) })
     }
 
     // ---------- aggregates ----------

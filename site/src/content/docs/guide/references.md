@@ -42,6 +42,61 @@ fn main() -> void {
 
 `*r` reads through a reference; printing `r` itself prints the address.
 
+## References to a val
+
+A reference to a `val` (or to a parameter without `var`) can be read through, never written
+through. Passing `&x`, or calling a method on `x`, is fine as long as what's called only reads:
+
+```volt
+use std::io;
+
+struct account {
+    balance: i32;
+}
+
+attach fn report(this: account&) -> i32 {
+    return this.balance;
+}
+
+attach fn deposit(this: account&, amount: i32) -> void {
+    this.balance += amount;
+}
+
+fn main() -> void {
+    val fixed: account = { balance: 10 };
+    var open: account = { balance: 10 };
+    open.deposit(5);
+    std::println("{} {}", fixed.report(), open.report());
+}
+// expect: 10 15
+```
+
+Calling `deposit` on the `val` is an error, found where the call is:
+
+```volt fail
+struct account {
+    balance: i32;
+}
+
+attach fn deposit(this: account&, amount: i32) -> void {
+    this.balance += amount;
+}
+
+fn main() -> void {
+    val fixed: account = { balance: 10 };
+    fixed.deposit(5);
+}
+// error: 'fixed' is a val, and deposit changes it (through this): declare it with var
+```
+
+The compiler follows the reference through every call: a function that passes it on to one that
+writes through it changes it too, and so do closures and fn values that do. Writing through a
+reference made from a `val` (`val r = &x; *r = 1;`) is an error right away, and so is sorting a
+slice of a `val` array. Calls into C and pointers made with `@cast` aren't checked.
+
+A `val` is shallow: what its pointers and slices point at isn't part of it. A `val` slice of a `var`
+array can still change the array's elements; a slice of a `val` array can't.
+
 ## Pointers
 
 Pointers are for C interop and low-level code: they can be null, do arithmetic, and index without

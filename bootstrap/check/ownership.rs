@@ -113,6 +113,10 @@ impl Checker {
         match r {
             Ok(found) => {
                 self.hook_memo.insert((ty, name), found);
+                // copying or printing a val calls these on it (lends.rs)
+                if let (Some(h), "copy" | "as_str") = (found, name) {
+                    self.ro_hooks.push(h);
+                }
                 Ok(found)
             }
             Err(e) => {

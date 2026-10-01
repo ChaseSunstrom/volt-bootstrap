@@ -81,6 +81,8 @@ attach fn program(this: checker&) -> compile_error!void {
             put(&this.errors, err_diag(&e));
         };
     }
+    // what can't change, lent to fns that write through it (lends.volt)
+    this.check_lends();
     if (this.errors.len > 0) {
         return; // compile() reports this.errors
     }
@@ -213,6 +215,7 @@ attach fn gen_fn(this: checker&, idx: u32) -> compile_error!void {
     val irf = inst.ir;
     val ret = inst.ret;
     this.cx = new_cx(ret, inst.env, irf);
+    this.cx.body = body_key(BODY_FN, idx);
     if (f.is_async) {
         if (f.extern_abi != null || f.is_export || inst.c_name == "v_main") {
             return fails(it.span, "main, extern and export fns can't be async");
@@ -247,7 +250,11 @@ attach fn gen_fn(this: checker&, idx: u32) -> compile_error!void {
             c = this.ir.node(ir_kind::LOCAL(lid), p.ty);
             k += 1;
         }
-        var l: local = { c: c, ty: p.ty, mutable: p.mutable };
+        var l: local = { c: c, ty: p.ty, mutable: p.mutable, root: p.name, param: true };
+        if (this.reaches(p.ty)) {
+            val rv: reach = { k: @cast<u32>(i), off: 0 }; // what it reaches is parameter i's memory
+            l.via = rv;
+        }
         if (try this.needs_drop(p.ty)) {
             // by-value params are owned by the callee
             val flag = this.flag_for(c);

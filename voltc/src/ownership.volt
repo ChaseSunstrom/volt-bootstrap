@@ -103,6 +103,10 @@ attach fn hook(this: checker&, t: u32, name: str) -> compile_error!(u32?) {
     };
     if (found) {
         this.hook_memo.put(key, @cast<i64>(found));
+        // copying or printing a val calls these on it (lends.volt)
+        if (name == "copy" || name == "as_str") {
+            put(&this.ro_hooks, found);
+        }
     }
     return found;
 }

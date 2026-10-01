@@ -7,8 +7,11 @@ sidebar:
 
 ## Variables
 
-`val` declares a name that can't be reassigned; `var` one that can. The type comes from the value,
-or is written after a colon. A `var` declared without a value starts at zero.
+`val` declares a name whose value can't change: it can't be reassigned, and nothing changes it
+through a reference either
+([references to a val](/volt-bootstrap/guide/references/#references-to-a-val)). `var` declares one
+that can. The type comes from the value, or is written after a colon. A `var` declared without a
+value starts at zero.
 
 ```volt
 use std::io;

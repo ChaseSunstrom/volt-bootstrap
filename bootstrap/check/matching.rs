@@ -17,7 +17,7 @@ struct Coverage {
 /// unguarded arm with this pattern covers
 pub struct PatOut {
     pub test: String,
-    pub binds: Vec<(String, TyId, String)>,
+    pub binds: Vec<(String, TyId, String, bool)>, // the last: an x& binding, pointing into the matched place
     /// matches every value
     pub irrefutable: bool,
     pub variant: Option<usize>,
@@ -32,6 +32,8 @@ impl Checker {
         if matches!(s.ty, VOID | NEVER | NULL) {
             return err(scrut.span, "can't match on this; it has no value");
         }
+        // what x& bindings reach: the matched place, as &place would (lends.rs)
+        let mprov = Self::addr_prov(&s);
         let st = s.ty;
         let sc = self.cty(st);
         // a place is matched where it is (x& bindings point into it; plain ones copy the payload when
@@ -42,6 +44,8 @@ impl Checker {
         let mc = if s.lv { format!("{sc}*") } else { sc.clone() };
         let (end, r) = (self.tmp("mend"), self.tmp("mr"));
         let mut result_ty: Option<TyId> = want.filter(|w| *w != VOID);
+        // the arms' values: read-only where any is (lends.rs)
+        let mut out_prov: (u32, Via, Option<String>) = (0, None, None);
         let mut code = String::new();
         let mut cov = Coverage::default();
         let mut all_never = true;
@@ -68,9 +72,14 @@ impl Checker {
                 let res = (|| -> Res<String> {
                     let p = self.pat_code(&arm.pat, &place, st)?;
                     let mut binds = String::new();
-                    for (name, ty, c) in &p.binds {
+                    for (name, ty, c, by_ref) in &p.binds {
                         let tc = self.cty(*ty);
                         let local = self.new_local(name, *ty, false);
+                        if *by_ref {
+                            if let Some(x) = self.cx.scopes.last_mut().unwrap().vars.get_mut(name.as_str()) {
+                                (x.ro, x.via, x.root) = mprov.clone();
+                            }
+                        }
                         binds.push_str(&format!("{}; ", Self::decl(&tc, &local, c)));
                     }
                     let guard = match &arm.guard {
@@ -92,6 +101,7 @@ impl Checker {
                         } else {
                             let t = *result_ty.get_or_insert(body.ty);
                             let b = self.coerce(body, t, arm.body.span)?;
+                            Self::merge_prov(&mut out_prov, &b);
                             format!("{r} = {}; goto {end};", b.c)
                         }
                     };
@@ -136,7 +146,8 @@ impl Checker {
         match result_ty {
             Some(t) if !all_never => {
                 let tc = self.cty(t);
-                Ok(Val::new(t, format!("({{ {};{live} {tc} {r};\n{code}{fallthrough} {end}:; {cleanup} {r}; }})", Self::decl(&mc, &m, &init))))
+                let (ro, via, root) = out_prov;
+                Ok(Val { ro, via, root, ..Val::new(t, format!("({{ {};{live} {tc} {r};\n{code}{fallthrough} {end}:; {cleanup} {r}; }})", Self::decl(&mc, &m, &init))) })
             }
             _ => Ok(Val::new(
                 if all_never && !arms.is_empty() { NEVER } else { VOID },
@@ -181,7 +192,7 @@ impl Checker {
             PatKind::Wild => Ok(any(Vec::new())),
             PatKind::BindRef(n) => {
                 let rt = self.t.intern(Ty::Ref(ty));
-                Ok(any(vec![(n.clone(), rt, format!("(&{c})"))]))
+                Ok(any(vec![(n.clone(), rt, format!("(&{c})"), true)]))
             }
             PatKind::Bind(n) => {
                 // a bare name that is one of the enum's variants matches that variant instead of binding
@@ -191,7 +202,7 @@ impl Checker {
                         return self.pat_code(&p, c, ty);
                     }
                 }
-                Ok(any(vec![(n.clone(), ty, c.to_string())]))
+                Ok(any(vec![(n.clone(), ty, c.to_string(), false)]))
             }
             PatKind::Lit(e) => {
                 let v = self.expr(e, Some(ty))?;

@@ -28,6 +28,7 @@ impl Checker {
                 let n = self.ty_name(wt);
                 return err(target.span, format!("std::write needs a writer: {n} doesn't attach write_str(this: {n}&, s: str) -> void"));
             };
+            self.note_arg(Body::Fn(h), 0, w.ro, w.via, w.root.as_deref(), target.span);
             let thunk = self.sink_fn(wt, h);
             setup = format!("volt_sink _sk = {{ {thunk}, (void*)({}) }}; const volt_sink *VOLT_E = &_sk; ", w.c);
             args = &args[1..];

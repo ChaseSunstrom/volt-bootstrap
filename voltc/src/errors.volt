@@ -225,7 +225,11 @@ attach fn orelse(this: checker&, a: expr&, b: expr&, span: span) -> compile_erro
             return vnew(res, this.ir.seq(nodes2(first, this.ir.if_(is_null, bv.c, null)), o.c, res));
         }
         val bc = try this.coerce(bv, res, span);
-        return vnew(res, this.ir.seq(nodes(first), this.ir.node(ir_kind::COND(is_null, bc.c, o.c), res), res));
+        // either one: read-only where either is (lends.volt)
+        var r = vnew(res, this.ir.seq(nodes(first), this.ir.node(ir_kind::COND(is_null, bc.c, o.c), res), res));
+        merge_prov(&r, &av);
+        merge_prov(&r, &bc);
+        return r;
     }
     val inner = this.t.opt_inner(av.ty) ?? return fail(a.span, fmt("?? needs an optional on the left, found {}", this.ty_name(av.ty)));
     val moved_before = copy this.cx.moved;
@@ -241,7 +245,10 @@ attach fn orelse(this: checker&, a: expr&, b: expr&, span: span) -> compile_erro
         return vnew(inner, this.ir.seq(nodes2(first, this.ir.if_(missing, bv.c, null)), p.value, inner));
     }
     val bc = try this.coerce(bv, inner, span);
-    return vnew(inner, this.ir.seq(nodes(first), this.ir.node(ir_kind::COND(p.has, p.value, bc.c), inner), inner));
+    var r = vnew(inner, this.ir.seq(nodes(first), this.ir.node(ir_kind::COND(p.has, p.value, bc.c), inner), inner));
+    merge_prov(&r, &av);
+    merge_prov(&r, &bc);
+    return r;
 }
 
 struct cond_code {
@@ -260,7 +267,7 @@ attach fn cond(this: checker&, c: expr&) -> compile_error!cond_code {
             .PTR(inner) => {
                 val key = this.place_key(c);
                 if (v.lv && key != null) {
-                    n = { key: key ?? "", l: { c: v.c, ty: this.t.ref_to(inner), mutable: v.mutable, orig_c: v.c, orig_ty: v.ty } };
+                    n = { key: key ?? "", l: { c: v.c, ty: this.t.ref_to(inner), mutable: v.mutable, orig_c: v.c, orig_ty: v.ty, ro: v.ro, via: v.via, root: v.root } };
                 }
             },
             default => {},
@@ -273,7 +280,7 @@ attach fn cond(this: checker&, c: expr&) -> compile_error!cond_code {
         var n: narrow? = null;
         val key = this.place_key(c);
         if (v.lv && key != null) {
-            n = { key: key ?? "", l: { c: p.value, ty: inner, mutable: v.mutable, orig_c: v.c, orig_ty: v.ty } };
+            n = { key: key ?? "", l: { c: p.value, ty: inner, mutable: v.mutable, orig_c: v.c, orig_ty: v.ty, ro: v.ro, via: v.via, root: v.root } };
         }
         return { test: p.has, narrow: n };
     }

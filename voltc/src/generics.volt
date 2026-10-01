@@ -1333,6 +1333,17 @@ attach fn emit_call(this: checker&, inst: u32, a: adj, rv: tval?, pre: std::vec<
     var post: u32? = null;
     if (rv) {
         val r = rv;
+        // what the receiver lends this: the place itself (REF), or the reference it is (NONE)
+        match (a) {
+            .REF => {
+                // a temporary's slot is fresh, but what it points at may not be
+                var x = vnew(0, 0);
+                addr_prov(&x, &r);
+                this.note_arg(body_key(BODY_FN, inst), 0, &x, span);
+            },
+            .NONE => { this.note_arg(body_key(BODY_FN, inst), 0, &r, span); },
+            default => {},
+        }
         match (a) {
             .NONE => {
                 var v = try this.take(r, span);
@@ -1394,7 +1405,9 @@ attach fn emit_call(this: checker&, inst: u32, a: adj, rv: tval?, pre: std::vec<
             if (*pre.at(i) == null) {
                 v = try this.expr(args.at(i), p.ty);
             }
-            put(&vals, try this.take_into(v, p.ty, args.at(i).span));
+            val tv = try this.take_into(v, p.ty, args.at(i).span);
+            this.note_arg(body_key(BODY_FN, inst), i + offset, &tv, args.at(i).span);
+            put(&vals, tv);
         }
         i += 1;
     }

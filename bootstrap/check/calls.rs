@@ -76,12 +76,21 @@ impl Checker {
             return err(span, format!("expected {} arguments, found {}", ps.len(), args.len()));
         }
         let fty = f.ty;
+        // what the call runs: this closure's body, or what any fn of this type made into a value does
+        let callee = match self.t.get(fty).clone() {
+            Ty::Closure(c) => Body::Closure(c),
+            _ => Body::Value(self.value_key(fty)),
+        };
         let mut vals = vec![f];
         for (i, a) in args.iter().enumerate() {
             vals.push(match ps.get(i) {
                 Some(p) => {
                     let v = self.expr(a, Some(*p))?;
-                    self.take_into(v, *p, a.span)?
+                    let v = self.take_into(v, *p, a.span)?;
+                    if self.reaches(*p) {
+                        self.note_arg(callee, i, v.ro, v.via, v.root.as_deref(), a.span);
+                    }
+                    v
                 }
                 None => {
                     let v = self.expr(a, None)?;
@@ -207,6 +216,12 @@ impl Checker {
                 n_args(2)?;
                 let p = self.garg_expr(&args[0], None)?;
                 let (Ty::Ref(t) | Ty::Ptr(t)) = self.t.get(p.ty).clone() else { return err(span, "@write(p, v) needs a T* first") };
+                // a store through p, like *p = v (lends.rs)
+                let place = Self::through(Val { lv: true, mutable: true, ..Val::new(t, "") }, &p);
+                if !place.mutable {
+                    return err(span, "can't assign through this; it reaches a val (or a parameter without var)");
+                }
+                self.note_write(&place);
                 let v = self.garg_expr(&args[1], Some(t))?;
                 let v = self.take(v, span)?;
                 let v = self.coerce(v, t, span)?;
@@ -222,14 +237,16 @@ impl Checker {
                 let n = self.coerce(n, USIZE, span)?;
                 let st = self.t.intern(Ty::Slice(t));
                 let sc = self.cty(st);
-                Ok(Val::new(st, format!("(({sc}){{ .ptr = {}, .len = {} }})", p.c, n.c)))
+                // the slice points where p does
+                Ok(Val { ro: p.ro, via: p.via, root: p.root.clone(), ..Val::new(st, format!("(({sc}){{ .ptr = {}, .len = {} }})", p.c, n.c)) })
             }
             "read" => {
                 // move the value out of memory without copying or deleting it (the opposite of @write)
                 n_args(1)?;
                 let p = self.garg_expr(&args[0], None)?;
                 let (Ty::Ref(t) | Ty::Ptr(t)) = self.t.get(p.ty).clone() else { return err(span, "@read(p) needs a T*") };
-                Ok(Val::new(t, format!("(*({}))", p.c)))
+                // what's read points where *p does
+                Ok(Val { ro: p.ro >> 1, via: lends::deeper(p.via, 1), root: p.root.clone(), ..Val::new(t, format!("(*({}))", p.c)) })
             }
             "panic" => {
                 n_args(1)?;

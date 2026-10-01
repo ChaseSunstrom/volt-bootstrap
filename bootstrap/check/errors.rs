@@ -154,7 +154,11 @@ impl Checker {
                 return Ok(Val::new(res, format!("({{ {pc} _o = {}; if (!_o) {{ {}; }} _o; }})", av.c, bv.c)));
             }
             let bv = self.coerce(bv, res, span)?;
-            return Ok(Val::new(res, format!("({{ {pc} _o = {}; _o ? _o : ({}); }})", av.c, bv.c)));
+            // either one: read-only where either is (lends.rs)
+            let mut prov = (av.ro, av.via, av.root.clone());
+            Self::merge_prov(&mut prov, &bv);
+            let (ro, via, root) = prov;
+            return Ok(Val { ro, via, root, ..Val::new(res, format!("({{ {pc} _o = {}; _o ? _o : ({}); }})", av.c, bv.c)) });
         }
         let Ty::Opt(inner) = self.t.get(av.ty).clone() else {
             return err(a.span, format!("?? needs an optional on the left, found {}", self.ty_name(av.ty)));
@@ -170,7 +174,10 @@ impl Checker {
             return Ok(Val::new(inner, format!("({{ {oc} _o = {}; if (!{has}) {{ {}; }} {val}; }})", av.c, bv.c)));
         }
         let bv = self.coerce(bv, inner, span)?;
-        Ok(Val::new(inner, format!("({{ {oc} _o = {}; {has} ? {val} : ({}); }})", av.c, bv.c)))
+        let mut prov = (av.ro, av.via, av.root.clone());
+        Self::merge_prov(&mut prov, &bv);
+        let (ro, via, root) = prov;
+        Ok(Val { ro, via, root, ..Val::new(inner, format!("({{ {oc} _o = {}; {has} ? {val} : ({}); }})", av.c, bv.c)) })
     }
 
     /// condition of if/while: bool, or an optional (present?). A local optional gets narrowed.
@@ -181,7 +188,7 @@ impl Checker {
             let narrow = match (self.t.get(v.ty).clone(), Self::place_key(cond)) {
                 (Ty::Ptr(inner), Some(key)) if v.lv => {
                     let rt = self.t.intern(Ty::Ref(inner));
-                    Some((key, Local { c: v.c.clone(), ty: rt, mutable: v.mutable, orig: Some((v.c.clone(), v.ty)), flag: None, loops: 0 }))
+                    Some((key, Local { c: v.c.clone(), ty: rt, mutable: v.mutable, orig: Some((v.c.clone(), v.ty)), flag: None, loops: 0, ro: v.ro, via: v.via, root: v.root.clone(), param: false }))
                 }
                 _ => None,
             };
@@ -190,7 +197,7 @@ impl Checker {
         if let Ty::Opt(inner) = self.t.get(v.ty).clone() {
             let (has, val) = self.opt_parts(v.ty, &v.c);
             let narrow = match Self::place_key(cond) {
-                Some(key) if v.lv => Some((key, Local { c: val, ty: inner, mutable: v.mutable, orig: Some((v.c.clone(), v.ty)), flag: None, loops: 0 })),
+                Some(key) if v.lv => Some((key, Local { c: val, ty: inner, mutable: v.mutable, orig: Some((v.c.clone(), v.ty)), flag: None, loops: 0, ro: v.ro, via: v.via, root: v.root.clone(), param: false })),
                 _ => None,
             };
             return Ok((has, narrow));

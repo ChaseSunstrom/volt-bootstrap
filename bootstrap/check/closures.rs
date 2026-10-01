@@ -13,6 +13,8 @@ pub struct ClosureInfo {
     pub caps: Vec<(String, TyId)>,
     pub params: Vec<TyId>,
     pub ret: TyId,
+    /// its params' names, then its captures' (lends.rs counts captures as parameters after its own)
+    pub names: Vec<String>,
 }
 
 impl Checker {
@@ -64,29 +66,41 @@ impl Checker {
             };
             stored.push((c.name.clone(), fty));
             inits.push(format!(".{} = {init}", c_field(&c.name)));
-            inner.push((c.name.clone(), l.ty, access, mutable));
+            inner.push((c.name.clone(), l.ty, access, mutable, l.clone()));
         }
         // the closure's own type, and the names of its two C functions
         let id = self.closures.len() as u32;
         let c_name = self.fresh_c_name("volt_closure");
         let (fn_name, erased) = (format!("{c_name}_fn"), format!("{c_name}_erased"));
-        self.closures.push(ClosureInfo { c_name: c_name.clone(), fn_name: fn_name.clone(), erased: erased.clone(), caps: stored, params: ptys.clone(), ret: rty });
+        let names = params.iter().map(|p| p.name.clone()).chain(caps.iter().map(|c| c.name.clone())).collect();
+        self.closures.push(ClosureInfo { c_name: c_name.clone(), fn_name: fn_name.clone(), erased: erased.clone(), caps: stored, params: ptys.clone(), ret: rty, names });
+        // a captured reference reaching through one of ours is passed on to the closure
+        for (ci, (_, t, _, _, l)) in inner.iter().enumerate() {
+            if let (Some((k, off)), Some(b)) = (l.via, self.cx.body) {
+                if self.reaches(*t) {
+                    self.edges.push((b, k as usize, off, Body::Closure(id), params.len() + ci));
+                }
+            }
+        }
         let ty = self.t.intern(Ty::Closure(id));
         self.cty(ty); // registers the capture struct for emission
 
         // the body is its own C function; it sees its captures and params, not the outer locals
-        let fresh = FnCx::new(rty, env.clone());
+        let mut fresh = FnCx::new(rty, env.clone());
+        fresh.body = Some(Body::Closure(id));
         let saved = std::mem::replace(&mut self.cx, fresh);
         let r = (|| -> Res<(String, String)> {
-            for (name, t, access, mutable) in &inner {
-                self.cx.scopes[0].vars.insert(name.clone(), Local { c: access.clone(), ty: *t, mutable: *mutable, orig: None, flag: None, loops: 0 });
+            for (ci, (name, t, access, mutable, l)) in inner.iter().enumerate() {
+                let via = self.reaches(*t).then_some(((params.len() + ci) as u32, 0));
+                self.cx.scopes[0].vars.insert(name.clone(), Local { c: access.clone(), ty: *t, mutable: *mutable, orig: None, flag: None, loops: 0, ro: l.ro, via, root: Some(name.clone()), param: l.param });
             }
             // params are locals of the body; a param that needs a drop gets a live flag, like any owned local
             let mut flags = String::new();
             let mut sig = Vec::new();
             for (i, (p, t)) in params.iter().zip(&ptys).enumerate() {
                 let c = format!("{}_{i}", p.name);
-                let mut local = Local { c: c.clone(), ty: *t, mutable: p.mutable, orig: None, flag: None, loops: 0 };
+                let via = self.reaches(*t).then_some((i as u32, 0));
+                let mut local = Local { c: c.clone(), ty: *t, mutable: p.mutable, orig: None, flag: None, loops: 0, ro: 0, via, root: Some(p.name.clone()), param: true };
                 if self.needs_drop(*t)? {
                     let flag = format!("{c}_live");
                     flags.push_str(&format!("bool {flag} = true; "));
@@ -154,6 +168,7 @@ impl Checker {
         let Ty::Closure(id) = self.t.get(v.ty).clone() else { unreachable!() };
         let tc = self.cty(fv);
         let erased = self.closures[id as usize].erased.clone();
+        self.escape(Body::Closure(id), fv);
         Ok(format!("(({tc}){{ .fn = {erased}, .env = (void*)&({}) }})", v.c))
     }
 

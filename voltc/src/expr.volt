@@ -96,6 +96,9 @@ attach fn local_val(this: checker&, l: local&, span: span) -> tval {
     var v = vpure(l.ty, l.c);
     v.lv = true;
     v.mutable = l.mutable;
+    v.ro = l.ro;
+    v.via = l.via;
+    v.root = l.root;
     if (this.opts.release || !this.narrow_recheck(l)) {
         return v;
     }
@@ -324,6 +327,9 @@ attach fn coercible(this: checker&, v: tval&, to: u32) -> bool {
 fn retyped(v: tval&, to: u32, c: u32) -> tval {
     var r = vnew(to, c);
     r.pure = v.pure;
+    r.ro = v.ro;
+    r.via = v.via;
+    r.root = v.root;
     return r;
 }
 
@@ -436,7 +442,10 @@ attach fn coerce(this: checker&, v: tval, to: u32, span: span) -> compile_error!
                         var inits: std::vec<field_init> = {};
                         put(&inits, { field: 0, value: first });
                         put(&inits, { field: 1, value: this.ir.int(@cast<i128>(n), USIZE) });
-                        return retyped(&v, to, this.ir.node(ir_kind::AGG(move inits), to));
+                        // the slice reaches the array, as &array would
+                        var r = retyped(&v, to, this.ir.node(ir_kind::AGG(move inits), to));
+                        addr_prov(&r, &v);
+                        return r;
                     }
                 },
                 default => {},
@@ -702,6 +711,9 @@ attach fn path_expr(this: checker&, p: path&, want: u32?, span: span) -> compile
             var v = vpure(l.ty, l.c);
             v.lv = true;
             v.mutable = l.mutable;
+            v.ro = l.ro;
+            v.via = l.via;
+            v.root = l.root;
             if (l.flag != null) {
                 v.owner = name;
             }
@@ -808,9 +820,11 @@ attach fn path_expr(this: checker&, p: path&, want: u32?, span: span) -> compile
                     if (wants_ptr || va) {
                         // extern "C" fn(...): a plain C function pointer
                         val t = this.t.intern(tyk::FN_PTR(move ps, ret, va));
+                        this.escape(body_key(BODY_FN, i), t);
                         return vpure(t, this.ir.node(ir_kind::FN(this.fi(i).ir), t));
                     }
                     val t = this.t.intern(tyk::FN_VAL(move ps, ret));
+                    this.escape(body_key(BODY_FN, i), t);
                     return vpure(t, this.fn_value(i, t));
                 },
                 default => { return fail(span, fmt("'{}' is a type, not a value", S(p.last()))); },
