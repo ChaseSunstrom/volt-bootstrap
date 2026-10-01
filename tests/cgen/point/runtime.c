@@ -133,8 +133,8 @@ void volt_unlock_out(void) {
 }
 /* Allocation for libraries (std::mem binds it with @intrinsic). Debug builds add a header so double/invalid frees panic
    (freed blocks are overwritten with 0xDD, so a use after free reads garbage, and sit in a small
-   quarantine before really being freed) and count live
-   allocations for --leak-check. */
+   quarantine before really being freed; realloc always moves, so the same goes for a pointer into a
+   block that grew) and count live allocations for --leak-check. */
 #ifdef VOLT_DEBUG_ALLOC
 size_t volt_live_allocs;
 typedef struct { uint64_t magic, size; } volt_hdr;
@@ -172,10 +172,13 @@ void volt_rt_free(void *p) {
 void *volt_rt_realloc(void *p, size_t n) {
     if (!p) return volt_rt_malloc(n);
     volt_hdr *h = volt_hdr_of(p, "realloc of memory the runtime didn't allocate");
-    volt_hdr *nh = volt_realloc(h, sizeof(volt_hdr) + n);
-    if (!nh) return 0;
-    nh->size = n;
-    return nh + 1;
+    /* always a new block, the old one freed (poisoned, quarantined): a pointer still into it reads
+       0xDD bytes instead of what happened to be left there */
+    void *q = volt_rt_malloc(n);
+    if (!q) return 0;
+    volt_memcpy(q, p, h->size < n ? h->size : n);
+    volt_rt_free(p);
+    return q;
 }
 #else
 size_t volt_live_allocs;

@@ -48,10 +48,23 @@ attach fn push(this: std::string<A>&, byte: u8) -> void {
 // append s
 <A: std::mem::t_allocator>
 attach fn append(this: std::string<A>&, s: str) -> void {
-    this.bytes.reserve(this.bytes.len + s.len) catch @panic("out of memory");
-    for (b) in s {
-        this.bytes.push(b) catch @panic("out of memory");
+    // s can be part of this string (s.append(s.as_str())), and growing moves the buffer it's in:
+    // copy it out first
+    val base = @cast<usize>(this.bytes.ptr);
+    val src = @cast<usize>(s.ptr);
+    if (s.len > 0 && this.bytes.cap > 0 && src >= base && src < base + this.bytes.cap) {
+        val apart = std::string::from(s, copy this.bytes.allocator);
+        this.append(apart.as_str());
+        return;
     }
+    this.bytes.reserve(this.bytes.len + s.len) catch @panic("out of memory");
+    // a plain loop over the room reserved: compilers turn it into memcpy
+    val room = @slice(this.bytes.ptr, this.bytes.cap);
+    val at = this.bytes.len;
+    for (b, i) in s {
+        room[at + i] = b;
+    }
+    this.bytes.len += s.len;
 }
 
 // decimal digits of v
@@ -80,10 +93,12 @@ attach fn append_uint(this: std::string<A>&, v: u64) -> void {
             break;
         }
     }
-    while (n > 0) {
-        n -= 1;
-        this.push(digits[n]);
+    this.bytes.reserve(this.bytes.len + n) catch @panic("out of memory");
+    val room = @slice(this.bytes.ptr, this.bytes.cap);
+    for (k) in 0..n {
+        room[this.bytes.len + k] = digits[n - 1 - k];
     }
+    this.bytes.len += n;
 }
 
 // is it empty?
@@ -119,9 +134,11 @@ attach fn insert(this: std::string<A>&, at: usize, s: str) -> void {
     if (i > this.bytes.len) {
         i = this.bytes.len;
     }
+    // s can be part of this string: take a copy before the text moves
+    val piece = std::string::from(s, copy this.bytes.allocator);
     var tail = std::string::from(this.as_str()[i..this.bytes.len], copy this.bytes.allocator);
     this.truncate(i);
-    this.append(s);
+    this.append(piece.as_str());
     this.append(tail.as_str());
 }
 

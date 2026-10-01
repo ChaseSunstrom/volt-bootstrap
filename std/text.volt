@@ -38,6 +38,18 @@ namespace text {
     }
 
     internal extern "C" fn strtod(s: cstr, end: void*) -> f64;
+
+    // whether what starts at s[i] (which has room for it): the first byte first, since most places
+    // differ there and a whole-slice compare is a call on some backends
+    internal fn at_is(s: str, i: usize, what: str) -> bool {
+        if (what.len == 0) {
+            return true;
+        }
+        if (s[i] != what[0]) {
+            return false;
+        }
+        return s[i..i + what.len] == what;
+    }
 }
 
 // ---------- searching ----------
@@ -49,7 +61,7 @@ attach fn find(this: str&, needle: str) -> usize? {
         return null;
     }
     for (i) in 0..(s.len - needle.len + 1) {
-        if (s[i..i + needle.len] == needle) {
+        if (std::text::at_is(s, i, needle)) {
             return i;
         }
     }
@@ -65,7 +77,7 @@ attach fn rfind(this: str&, needle: str) -> usize? {
     var i = s.len - needle.len + 1;
     while (i > 0) {
         i -= 1;
-        if (s[i..i + needle.len] == needle) {
+        if (std::text::at_is(s, i, needle)) {
             return i;
         }
     }
@@ -96,7 +108,7 @@ attach fn count(this: str&, needle: str) -> usize {
     var n: usize = 0;
     var i: usize = 0;
     while (i + needle.len <= s.len) {
-        if (s[i..i + needle.len] == needle) {
+        if (std::text::at_is(s, i, needle)) {
             n += 1;
             i += needle.len;
         } else {
@@ -176,7 +188,7 @@ attach fn split(this: str&, sep: str, allocator: A = {}) -> std::vec<str, A> {
     var start: usize = 0;
     var i: usize = 0;
     while (i + sep.len <= s.len) {
-        if (s[i..i + sep.len] == sep) {
+        if (std::text::at_is(s, i, sep)) {
             out.push(s[start..i]) catch @panic("out of memory");
             i += sep.len;
             start = i;
@@ -245,7 +257,7 @@ attach fn replace(this: str&, from: str, to: str, allocator: A = {}) -> std::str
     var start: usize = 0;
     var i: usize = 0;
     while (i + from.len <= s.len) {
-        if (s[i..i + from.len] == from) {
+        if (std::text::at_is(s, i, from)) {
             out.append(s[start..i]);
             out.append(to);
             i += from.len;

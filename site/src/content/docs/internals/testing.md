@@ -10,7 +10,7 @@ sidebar:
 | Suite | What it checks |
 | --- | --- |
 | `tests/golden.rs` | every program in `tests/run` and `examples/` compiles, prints its `// expect:` lines and exits with its `// exit:` code; every file in `tests/fail` fails with its `// error:` texts |
-| `tests/diag.rs` | diagnostic snapshots: `tests/diag/NAME.volt` must print exactly `NAME.stderr` |
+| `tests/diag.rs` | diagnostic snapshots: each `.volt` file in `tests/diag` must print exactly the `.stderr` file of the same name |
 | `tests/selfhost.rs` | the two compilers agree (parse trees, diagnostics), the reviewed C output in `tests/cgen`, and the bootstrap |
 | `tests/bolt.rs` | bolt end to end: packages, workspaces, git dependencies, features, build files |
 | `tests/interop.rs` | Volt with C, C++, Rust, Zig and Python, both ways |
@@ -18,6 +18,7 @@ sidebar:
 | `tests/docs.rs` | every code block on this site compiles (and prints what it shows); the std reference is current |
 | `tests/headers.rs` | every source file opens with a comment saying what it is |
 | `tests/cc_env.rs` | `$CC` with a wrapper command or flags |
+| `tests/bench.rs` | ignored by default: Volt against C and C++ on the programs in `bench/` (see [Benchmarks](/volt-bootstrap/internals/benchmarks/)) |
 
 Golden files take directives in comments:
 

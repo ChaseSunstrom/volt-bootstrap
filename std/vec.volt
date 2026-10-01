@@ -52,7 +52,9 @@ attach fn reserve(this: std::vec<T, A>&, n: usize) -> std::mem::mem_error!void {
 // append value (moved in), growing the memory when it's full
 <T: type, A: std::mem::t_allocator>
 attach fn push(this: std::vec<T, A>&, value: T) -> std::mem::mem_error!void {
-    try this.reserve(this.len + 1);
+    if (this.len == this.cap) {
+        try this.reserve(this.len + 1);
+    }
     @write(&(@slice(this.ptr, this.cap)[this.len]), move value);
     this.len += 1;
 }
