@@ -81,7 +81,7 @@ const features = [
   { icon: "box", title: "Ownership & RAII", text: "Deletes run at scope end, moves are tracked, copies are explicit. box<T> owns heap memory." },
   { icon: "cpu", title: "Comptime", text: "Run code in the compiler, pass types around as values, and read any type's shape with @typeinfo." },
   { icon: "clock", title: "Async without a runtime", text: "Stackless frames of known size, driven by hand with async, resume and await. No heap, no executor." },
-  { icon: "plug", title: "Talks to everything", text: "C headers, C++ classes and the C++ standard library, Rust crates and Zig files in; shared libraries with bindings for fifteen languages out." },
+  { icon: "plug", title: "Talks to everything", text: "C headers, C++ classes and the C++ standard library, Rust, Zig and Go code, Python, Java, .NET and Lua in; shared libraries with bindings for fifteen languages out." },
   { icon: "package", title: "bolt", text: "The build tool: packages, workspaces, git dependencies, features, profiles, tests, benches and build files." },
   { icon: "repeat", title: "Self-hosted", text: "voltc is written in Volt and builds itself, byte for byte, through both backends." },
 ];
@@ -329,7 +329,7 @@ const languages = ["C", "C++", "Rust", "Zig", "Python", "JavaScript", "TypeScrip
 
       <section class="interop reveal">
         <h2>Speaks C, and everything that does</h2>
-        <p class="section-lede">Volt meets other languages at the C ABI in both directions, reads C++ headers itself, and builds Rust and Zig code for you.</p>
+        <p class="section-lede">Volt meets other languages at the C ABI in both directions, reads C++ headers itself, and builds Rust, Zig and Go code for you.</p>
         <div class="hub">
           <div class="hub-top">
             <svg viewBox="0 0 600 260" class="hub-lines" aria-hidden="true">
@@ -347,7 +347,7 @@ const languages = ["C", "C++", "Rust", "Zig", "Python", "JavaScript", "TypeScrip
           </div>
         </div>
         <div class="interop-notes">
-          <p><b>In:</b> <code>use &#123; "stdio.h" &#125; as c;</code> imports functions, structs, unions, constants and globals from real C headers. <code>use cpp &#123; "lib.hpp" &#125;</code> brings classes, overloads, templates and the standard library, and bolt's <code>[foreign]</code> table builds Rust crates and Zig files for you.</p>
+          <p><b>In:</b> <code>use &#123; "stdio.h" &#125; as c;</code> imports functions, structs, unions, constants and globals from real C headers. <code>use cpp &#123; "lib.hpp" &#125;</code> brings classes, overloads, templates and the standard library, and bolt's <code>[foreign]</code> table builds Rust crates, Zig files and Go modules for you.</p>
           <p><b>Out:</b> <code>export fn</code> makes C symbols; <code>voltc lib --shared</code> builds a library, and <code>bindings</code> in <code>bolt.toml</code> writes (and builds) its bindings for every language above.</p>
         </div>
       </section>

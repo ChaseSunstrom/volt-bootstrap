@@ -57,9 +57,9 @@ bolt runs `$VOLTC` when set, otherwise a `voltc` next to itself or on `PATH`.
 
 Both directions are a line in `bolt.toml`. `[lib] bindings = ["python", "node", ...]` writes the
 library's bindings for those languages, and builds the ones that need compiling (a Node addon, Lua
-and Ruby modules). `[foreign]` names a Rust crate or a Zig file the package uses: bolt builds it,
+and Ruby modules). `[foreign]` names a Rust crate, a Zig file or a Go module the package uses: bolt builds it,
 writes its C header and links it in. See the [bolt.toml reference](/volt-bootstrap/bolt/manifest/)
-and [Rust and Zig](/volt-bootstrap/interop/rust-and-zig/).
+and [Rust, Zig and Go](/volt-bootstrap/interop/rust-and-zig/).
 
 ## Next
 

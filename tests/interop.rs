@@ -475,6 +475,48 @@ fn dotnet_package() {
     }
 }
 
+/// Volt uses Go: [foreign] names a Go module, bolt builds it with go build -buildmode=c-archive and
+/// imports the header cgo writes, on both backends
+#[test]
+fn go_foreign() {
+    if !Command::new("go").arg("version").output().is_ok_and(|o| o.status.success()) {
+        eprintln!("go isn't installed: skipping the Go library");
+        return;
+    }
+    let e = Env::new("go");
+    let app = e.dir.join("go_app");
+    copy_dir(&Path::new(ROOT).join("tests/interop/go_app"), &app);
+    let toml = std::fs::read_to_string(app.join("bolt.toml")).unwrap() + &format!("\n[std]\npath = \"{}\"\n", Path::new(ROOT).join("std").display());
+    std::fs::write(app.join("bolt.toml"), toml).unwrap();
+    for backend in ["c", "llvm"] {
+        let o = Command::new(env!("CARGO_BIN_EXE_bolt")).args(["run", "-q", "--backend", backend]).current_dir(&app).env("VOLTC", &e.voltc).env("BOLT_HOME", e.dir.join("cache")).env("GOTOOLCHAIN", "local").output().unwrap();
+        assert!(o.status.success(), "bolt run ({backend}): {}", String::from_utf8_lossy(&o.stderr));
+        assert_eq!(String::from_utf8_lossy(&o.stdout), "add 42\nsum 6.5\nupper VOLT\nwords 3\n", "Volt uses Go ({backend})");
+    }
+    let header = std::fs::read_to_string(app.join("target/debug/foreign/include/gomath.h")).unwrap();
+    assert!(header.contains("extern int gm_add(int a, int b);"), "{header}");
+}
+
+/// Volt embeds Lua through the interop/lua package: scripts, calls, tables, a Volt function Lua
+/// calls, and Lua errors as lua_error, on both backends
+#[test]
+fn lua_package() {
+    if !Command::new("pkg-config").args(["--exists", "lua"]).status().is_ok_and(|s| s.success()) && !Command::new("pkg-config").args(["--exists", "lua5.4"]).status().is_ok_and(|s| s.success()) {
+        eprintln!("Lua's development files aren't installed: skipping the lua package");
+        return;
+    }
+    let e = Env::new("lua");
+    let app = e.dir.join("lua_app");
+    copy_dir(&Path::new(ROOT).join("tests/interop/lua_app/src"), &app.join("src"));
+    std::fs::write(app.join("bolt.toml"), format!("[package]\nname = \"lua_app\"\nversion = \"0.1.0\"\n\n[dependencies]\nlua = {{ path = \"{}\" }}\n\n[std]\npath = \"{}\"\n", Path::new(ROOT).join("interop/lua").display(), Path::new(ROOT).join("std").display())).unwrap();
+    let want = "hi volt hi volt \nlen 3 second 9 best volt\neval 42\nmath 314\nhypot 5.0\nhypot bad hypot wants two numbers\ntype table b nil true\ncaught ERROR(run:1: boom)\nsyntax true\nERROR(a string isn't an integer)\n";
+    for backend in ["c", "llvm"] {
+        let o = Command::new(env!("CARGO_BIN_EXE_bolt")).args(["run", "-q", "--backend", backend]).current_dir(&app).env("VOLTC", &e.voltc).env("BOLT_HOME", e.dir.join("cache")).output().unwrap();
+        assert!(o.status.success(), "bolt run ({backend}): {}", String::from_utf8_lossy(&o.stderr));
+        assert_eq!(String::from_utf8_lossy(&o.stdout), want, "Volt embeds Lua ({backend})");
+    }
+}
+
 /// a Node.js addon written in Volt with interop/node: bolt builds it as a shared library, node
 /// loads it (as a .node file), on both backends
 #[test]

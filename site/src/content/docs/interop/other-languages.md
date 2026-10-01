@@ -2,7 +2,7 @@
 title: Other languages
 description: Calling Volt from C, C++, Rust, Zig, Python, JavaScript, C#, Java, Go, Lua, Dart, Swift, Kotlin and Ruby, and calling them from Volt.
 sidebar:
-  order: 8
+  order: 9
 ---
 
 Everything meets at the C ABI.
@@ -11,8 +11,8 @@ Everything meets at the C ABI.
 
 - **C**: import the header, see [C](/volt-bootstrap/interop/c/).
 - **C++**: `use cpp`, see [C++](/volt-bootstrap/interop/cpp/).
-- **Rust** and **Zig**: list the crate or the file under `[foreign]` in `bolt.toml`, see
-  [Rust and Zig](/volt-bootstrap/interop/rust-and-zig/). Without bolt, declare a
+- **Rust**, **Zig** and **Go**: list the crate, the file or the module under `[foreign]` in
+  `bolt.toml`, see [Rust, Zig and Go](/volt-bootstrap/interop/rust-and-zig/). Without bolt, declare a
   `#[no_mangle] pub extern "C" fn` (or a Zig `export fn`) with `extern "C" fn` and link the library
   with `--cc`.
 - **Python**: depend on the `interop/python` package, see [Python](/volt-bootstrap/interop/python/).
@@ -21,6 +21,7 @@ Everything meets at the C ABI.
 - **Node.js**: write the addon in Volt with `interop/node`, see [Node.js addons](/volt-bootstrap/interop/node/).
 - **Java**: depend on the `interop/java` package, see [Java](/volt-bootstrap/interop/java/).
 - **C#** and other .NET languages: depend on the `interop/dotnet` package, see [.NET](/volt-bootstrap/interop/dotnet/).
+- **Lua**: embed it with the `interop/lua` package, see [Lua](/volt-bootstrap/interop/lua/).
 
 ```volt ignore
 extern "C" fn rust_checksum(data: u8*, len: usize) -> u32;   // from a Rust staticlib

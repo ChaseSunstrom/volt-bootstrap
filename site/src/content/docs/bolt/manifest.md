@@ -56,6 +56,7 @@ files = ["build.volt"]       # build files, run before building
 [foreign]                    # libraries in other languages: bolt builds them and writes NAME.h
 geom = { rust = "../geom" }  # a Cargo crate's directory
 fastmath = { zig = "fastmath.zig" }
+gomath = { go = "../gomath" }  # a Go module's directory
 
 [workspace]                  # makes this a workspace root
 members = ["crates/*"]
@@ -135,10 +136,11 @@ release). In a workspace, only the root's profiles count.
 
 ## [foreign]
 
-Each key names a library in another language, `{ rust = "crate dir" }` or `{ zig = "file.zig" }`.
+Each key names a library in another language, `{ rust = "crate dir" }`, `{ zig = "file.zig" }` or
+`{ go = "module dir" }`.
 bolt builds it into a static library, writes its C API to `NAME.h` and links it into the package's
 programs, and the code imports it with `use { "NAME.h" } as NAME;`. See
-[Rust and Zig](/volt-bootstrap/interop/rust-and-zig/).
+[Rust, Zig and Go](/volt-bootstrap/interop/rust-and-zig/).
 
 ## [workspace]
 

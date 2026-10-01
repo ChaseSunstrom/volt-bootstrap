@@ -186,7 +186,8 @@ pub struct Manifest {
     pub foreign: Vec<Foreign>,
 }
 
-/// a library in another language ([foreign] NAME = { rust = "dir" } or { zig = "file.zig" }): bolt
+/// a library in another language ([foreign] NAME = { rust = "dir" }, { zig = "file.zig" } or
+/// { go = "dir" }): bolt
 /// builds it into a static library and writes NAME.h, its C API, which the package's code imports
 pub struct Foreign {
     pub name: String,
@@ -198,6 +199,8 @@ pub enum ForeignKind {
     Rust(PathBuf),
     /// a Zig file
     Zig(PathBuf),
+    /// a Go module's directory (a main package whose //export funcs are the API)
+    Go(PathBuf),
 }
 
 impl Manifest {
@@ -446,12 +449,14 @@ fn package(dir: &Path, t: &Table) -> Result<Manifest, String> {
                 return Err(format!("[foreign] {n}: the name is its header's (NAME.h), so lowercase letters, digits and _"));
             }
             let what = format!("[foreign] {n}");
-            let v = v.as_table().ok_or(format!("{what} should be {{ rust = \"crate dir\" }} or {{ zig = \"file.zig\" }}"))?;
-            only(v, &what, &["rust", "zig"])?;
-            let kind = match (get_str(v, "rust", &what)?, get_str(v, "zig", &what)?) {
-                (Some(p), None) => ForeignKind::Rust(dir.join(p)),
-                (None, Some(p)) => ForeignKind::Zig(dir.join(p)),
-                _ => return Err(format!("{what} needs one of rust = \"crate dir\" or zig = \"file.zig\"")),
+            let kinds = "rust = \"crate dir\", zig = \"file.zig\" or go = \"module dir\"";
+            let v = v.as_table().ok_or(format!("{what} should be {{ {kinds} }}"))?;
+            only(v, &what, &["rust", "zig", "go"])?;
+            let kind = match (get_str(v, "rust", &what)?, get_str(v, "zig", &what)?, get_str(v, "go", &what)?) {
+                (Some(p), None, None) => ForeignKind::Rust(dir.join(p)),
+                (None, Some(p), None) => ForeignKind::Zig(dir.join(p)),
+                (None, None, Some(p)) => ForeignKind::Go(dir.join(p)),
+                _ => return Err(format!("{what} needs one of {kinds}")),
             };
             foreign.push(Foreign { name: n.clone(), kind });
         }
@@ -702,5 +707,21 @@ mod tests {
         assert!(ok(">=0.3.1, <0.4", "0.3.1") && !ok(">=0.3.1, <0.4", "0.4.0") && ok(">1", "2.0.0") && !ok(">1", "1.9.9"));
         assert!(ok("<=1.2", "1.2.9") && !ok("<=1.2", "1.3.0") && ok("*", "7.0.0"));
         assert!(req("1.2.3.4").is_err() && req("abc").is_err() && version("1.2").is_err());
+    }
+
+    #[test]
+    fn foreign_kinds() {
+        let pkg = "[package]\nname = \"app\"\nversion = \"0.1.0\"\n[foreign]\n";
+        let m = |f: &str| parse(Path::new("/p"), &toml::parse(&format!("{pkg}{f}")).unwrap()).map(|f| f.package.unwrap());
+        let ok = m("g = { go = \"gomath\" }\nr = { rust = \"geom\" }\nz = { zig = \"z.zig\" }").unwrap();
+        let kinds: Vec<String> = ok.foreign.iter().map(|f| match &f.kind {
+            ForeignKind::Go(d) => format!("{} go {}", f.name, d.display()),
+            ForeignKind::Rust(d) => format!("{} rust {}", f.name, d.display()),
+            ForeignKind::Zig(d) => format!("{} zig {}", f.name, d.display()),
+        }).collect();
+        assert_eq!(kinds, ["g go /p/gomath", "r rust /p/geom", "z zig /p/z.zig"]);
+        let both = m("x = { go = \"a\", rust = \"b\" }").err().unwrap();
+        assert!(both.contains("needs one of rust = \"crate dir\", zig = \"file.zig\" or go = \"module dir\""), "{both}");
+        assert!(m("x = { python = \"a\" }").is_err());
     }
 }

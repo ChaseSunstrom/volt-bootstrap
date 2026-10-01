@@ -31,8 +31,8 @@ written in Volt and builds itself.
 - **Ownership without lifetimes.** Values are deleted at scope end, moves are tracked and copies are
   explicit: RAII with nothing to annotate.
 - **Every language is one step away.** It reads C and C++ headers (templates and the standard
-  library too) and builds Rust crates and Zig files; one `bindings` line in `bolt.toml` makes a
-  Volt library usable from 15 languages.
+  library too), builds Rust crates, Zig files and Go modules, and embeds Python, Java, .NET and
+  Lua; one `bindings` line in `bolt.toml` makes a Volt library usable from 15 languages.
 - **One toolchain.** bolt, a language server, and diagnostics that point at the problem.
 
 It's young (no 1.0, no package registry) and has no borrow checker: if you need proven memory
@@ -79,8 +79,9 @@ fn main() -> !void {
   `@typeinfo`.
 - **Async** as stackless frames of known size, driven by hand.
 - **Interop**: real C headers (unions and bitfields too), C++ classes, templates and the standard
-  library, Rust crates and Zig files through bolt, and libraries with bindings for C, C++, Rust,
-  Zig, Python, JavaScript and TypeScript, C#, Java, Go, Lua, Dart, Swift, Kotlin and Ruby.
+  library, Rust crates, Zig files and Go modules through bolt, Python, Java, .NET and Lua through
+  packages, and libraries with bindings for C, C++, Rust, Zig, Python, JavaScript and TypeScript,
+  C#, Java, Go, Lua, Dart, Swift, Kotlin and Ruby.
 - **Tooling**: diagnostics that point at the problem, the **bolt** build tool, a language server,
   and a VS Code extension.
 
@@ -109,7 +110,7 @@ Then `bolt new hello && cd hello && bolt run`. The
 | [`runtime/`](runtime) | the small C prelude and runtime every program includes |
 | [`bolt/`](bolt) | the build tool, and the API its build files use |
 | [`editors/vscode/`](editors/vscode) | the VS Code extension |
-| [`interop/`](interop) | `volt-build` (Cargo build scripts) and `volt.zig` (`build.zig`): Rust and Zig projects that use Volt; `python`, `java` and `dotnet`: Volt programs that call Python, Java and .NET; `node`: Node.js addons written in Volt |
+| [`interop/`](interop) | `volt-build` (Cargo build scripts) and `volt.zig` (`build.zig`): Rust and Zig projects that use Volt; `python`, `java`, `dotnet` and `lua`: Volt programs that call Python, Java, .NET and Lua; `node`: Node.js addons written in Volt |
 | [`site/`](site) | the website and documentation |
 | [`examples/`](examples), [`tests/`](tests) | the tour and example programs; the test suites |
 | [`assets/logo/`](assets/logo) | the logo, drawn by `logo.ts` |

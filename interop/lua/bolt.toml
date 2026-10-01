@@ -1,0 +1,7 @@
+[package]
+name = "lua"
+version = "0.1.0"
+description = "Embed Lua in Volt: run scripts, call Lua functions, read tables, give Lua Volt functions"
+
+[build]
+files = ["build.volt"]

@@ -1,26 +1,28 @@
 ---
-title: Rust and Zig
-description: A bolt package that uses a Rust crate or a Zig file, and Cargo and Zig projects that use Volt.
+title: Rust, Zig and Go
+description: A bolt package that uses a Rust crate, a Zig file or a Go module, and Cargo and Zig projects that use Volt.
 sidebar:
   order: 3
 ---
 
-Both meet Volt at the C ABI, and bolt and two small helpers do the plumbing both ways.
+All three meet Volt at the C ABI, and bolt and two small helpers do the plumbing both ways.
 
 ## Volt uses them
 
-Name the crate or the file under `[foreign]` in `bolt.toml`:
+Name the crate, the file or the module under `[foreign]` in `bolt.toml`:
 
 ```toml
 [foreign]
 geom = { rust = "../geom" }        # a Cargo crate's directory
 fastmath = { zig = "fastmath.zig" }
+gomath = { go = "../gomath" }      # a Go module's directory
 ```
 
 bolt builds each one into a static library in `target/<profile>/foreign/`: a crate with
 `cargo rustc --crate-type staticlib` (so any library crate works, with `--release` in an optimized
-profile), a Zig file with `zig build-lib` (`ReleaseSafe` or `Debug`). It also writes `NAME.h`, the
-library's C API read from its source. It links them, and the system libraries rustc says a Rust
+profile), a Zig file with `zig build-lib` (`ReleaseSafe` or `Debug`), a Go module with
+`go build -buildmode=c-archive`. It also writes `NAME.h`, the library's C API: read from the source
+for Rust and Zig, and the header cgo writes for Go ([below](#go)). It links them, and the system libraries rustc says a Rust
 library needs, into the package's programs. The code imports the header like any C header:
 
 ```rust
@@ -73,7 +75,46 @@ What goes into the header:
 
 An enum's values become constants named `Enum_Variant` (`Quadrant_First`). A function whose types
 aren't in that table isn't declared, and the header says so in a comment.
-bolt reads `$CARGO` and `$ZIG` for the tools, else `cargo` and `zig` on the PATH.
+bolt reads `$CARGO`, `$ZIG` and `$GO` for the tools, else `cargo`, `zig` and `go` on the PATH.
+
+### Go
+
+A Go library is a `main` package whose API is its `//export` funcs; cgo writes their C declarations,
+with `GoString` (a pointer and a length), `GoInt` and the other Go types, into the header:
+
+```go
+// ../gomath/gomath.go
+package main
+
+import "C"
+
+import "strings"
+
+//export gm_add
+func gm_add(a, b C.int) C.int { return a + b }
+
+//export gm_upper
+func gm_upper(s *C.char) *C.char { return C.CString(strings.ToUpper(C.GoString(s))) }
+
+func main() {}
+```
+
+```volt ignore
+use std::io;
+use { "gomath.h" } as go;
+
+extern "C" fn free(p: void*) -> void;
+
+fn main() -> void {
+    std::println("{}", go::gm_add(2, 40));                         // 42
+    val up = go::gm_upper(@cast<cstr>("volt\0".ptr)) ?? return;   // C.CString: the C heap's
+    free(@cast<void*>(up));
+}
+```
+
+The program links the Go runtime with it, which starts its threads when the program does. The other
+way round, `voltc bindings --lang go` writes a cgo package for a Volt library, see
+[They call Volt](/volt-bootstrap/interop/other-languages/#they-call-volt).
 
 ## They use Volt
 

@@ -77,13 +77,13 @@ fn crate_lib_name(dir: &Path) -> Result<String, String> {
 }
 
 /// every .zig file under dir
-fn zig_files(dir: &Path, out: &mut Vec<PathBuf>) {
+fn source_files(dir: &Path, exts: &[&str], out: &mut Vec<PathBuf>) {
     let Ok(rd) = std::fs::read_dir(dir) else { return };
     for e in rd.flatten() {
         let p = e.path();
         if p.is_dir() {
-            zig_files(&p, out);
-        } else if p.extension().is_some_and(|x| x == "zig") {
+            source_files(&p, exts, out);
+        } else if p.extension().is_some_and(|x| exts.iter().any(|e| x == *e)) || p.file_name().is_some_and(|n| n == "go.mod" || n == "go.sum") {
             out.push(p);
         }
     }
@@ -611,13 +611,31 @@ impl Build {
                         let out = base.join(format!("lib{}.a", f.name));
                         let mut inputs = Vec::new();
                         if let Some(d) = file.parent() {
-                            zig_files(d, &mut inputs);
+                            source_files(d, &["zig"], &mut inputs);
                         }
                         let mode = if self.profile.optimize { "ReleaseSafe" } else { "Debug" };
                         let args = vec!["build-lib".to_string(), file.display().to_string(), "-O".into(), mode.into(), "-fPIC".into(), "-fcompiler-rt".into(), format!("-femit-bin={}", out.display())];
                         let zig = PathBuf::from(std::env::var("ZIG").unwrap_or_else(|_| "zig".into()));
                         self.run_job(Job { out: out.clone(), inputs, args, what: format!("{} (Zig, {})", f.name, file.display()), program: Some(zig) })?;
                         flags.push(out.display().to_string());
+                    }
+                    ForeignKind::Go(dir) => {
+                        // go build writes the archive and, next to it, the header cgo makes from
+                        // the //export funcs; rebuilt when a .go file, go.mod or go.sum changes
+                        let out = base.join("go").join(format!("lib{}.a", f.name));
+                        let mut inputs = Vec::new();
+                        source_files(dir, &["go"], &mut inputs);
+                        let args = vec!["-C".to_string(), dir.display().to_string(), "build".into(), "-buildmode=c-archive".into(), "-o".into(), out.display().to_string()];
+                        let go = PathBuf::from(std::env::var("GO").unwrap_or_else(|_| "go".into()));
+                        self.run_job(Job { out: out.clone(), inputs, args, what: format!("{} (Go, {})", f.name, dir.display()), program: Some(go) })?;
+                        let made = out.with_extension("h");
+                        let h = std::fs::read_to_string(&made).map_err(|e| format!("go build made no header for {} ({}): {e}", f.name, made.display()))?;
+                        write_if_changed(&header, &h)?;
+                        flags.push(out.display().to_string());
+                        // the Go runtime's threads
+                        if !needs.iter().any(|x| x == "-lpthread") {
+                            needs.push("-lpthread".into());
+                        }
                     }
                 }
             }
