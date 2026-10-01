@@ -112,13 +112,13 @@ export fn each(xs: i32[..], f: fn(i32) -> void) -> void {
 
 Each language gets these in its own style:
 
-| | C | C++ | Rust | Python | Zig | JavaScript | C# | Java |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| errors | a struct of the code and the value | throws `error` | `Result<T, Error>` | raises a class per error set, all deriving from `Error` | `Error!T` | throws an `Error` whose `code` is the name | throws a `VoltException` subclass per error set | throws a `VoltException` subclass per error set |
-| owned text | `volt_text`, freed with `volt_text_free` | `std::string` | `String` | `str` | `VoltText`, with `bytes()` and `deinit()` | a string | `string` | `String` |
-| slices, optionals | structs | from vectors and arrays; `std::optional` | `&mut [T]`, `Option` | lists, `None` | `[]T`, `?T` | arrays, `null` | `Span<T>`, `T?` | arrays, `null` |
-| an export struct | a pointer, and `NAME_free` | a class that frees itself | a type that frees itself when dropped | a class with `close()` and `with` | a type with `deinit()` | a class with `close()` and `Symbol.dispose` | an `IDisposable` class over a `SafeHandle` | an `AutoCloseable` class, freed by a `Cleaner` if not closed |
-| callbacks | a function and a `void *` | `std::function` | `&mut dyn FnMut` | any callable | a context and a function | any function | `Action` or `Func` | a functional interface |
+| | C | C++ | Rust | Python | Zig | JavaScript | C# | Java | Go |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| errors | a struct of the code and the value | throws `error` | `Result<T, Error>` | raises a class per error set, all deriving from `Error` | `Error!T` | throws an `Error` whose `code` is the name | throws a `VoltException` subclass per error set | throws a `VoltException` subclass per error set | `(T, error)`, with an `*Error` value per code for `errors.Is` |
+| owned text | `volt_text`, freed with `volt_text_free` | `std::string` | `String` | `str` | `VoltText`, with `bytes()` and `deinit()` | a string | `string` | `String` | `string` |
+| slices, optionals | structs | from vectors and arrays; `std::optional` | `&mut [T]`, `Option` | lists, `None` | `[]T`, `?T` | arrays, `null` | `Span<T>`, `T?` | arrays, `null` | slices; `*T` in, `(T, bool)` out |
+| an export struct | a pointer, and `NAME_free` | a class that frees itself | a type that frees itself when dropped | a class with `close()` and `with` | a type with `deinit()` | a class with `close()` and `Symbol.dispose` | an `IDisposable` class over a `SafeHandle` | an `AutoCloseable` class, freed by a `Cleaner` if not closed | a type with `Close`, and a finalizer |
+| callbacks | a function and a `void *` | `std::function` | `&mut dyn FnMut` | any callable | a context and a function | any function | `Action` or `Func` | a functional interface | a `func` |
 
 ### JavaScript and TypeScript
 
@@ -200,10 +200,29 @@ try {
 Structs are mutable classes: what Volt changes through a `T&` comes back to the object. Unsigned
 integers use the Java type of the same size, as `int` for `u32`.
 
+### Go
+
+`--lang go` writes a cgo package. Put it in a directory of your module, and point the C linker at
+the library with `CGO_LDFLAGS=-L<dir>`. Names become exported Go names: `ml_greet` is `MlGreet`,
+`vec2` is `Vec2`, `color::GREEN` is `ColorGreen`, and an export struct `counter` gets `NewCounter`
+and methods.
+
+```go
+fmt.Println(mathlib.MlGreet("volt"))          // hello, volt
+c := mathlib.NewCounter("clicks")
+defer c.Close()
+if _, err := mathlib.MlSqrt(-1); errors.Is(err, mathlib.MathErrorNegative) {
+    fmt.Println(err)                          // NEGATIVE
+}
+```
+
+A library that returns owned text also exports `NAME_text_free`, which frees it the way
+`volt_text_free` does, for languages that can't call a C function pointer.
+
 Every binding also has the plain C functions: in C++ they're in namespace `raw`, in Rust in module
 `raw`, in Zig in struct `raw`, in C# in class `Native`, and in Java as the `H_NAME` method handles.
-`--lang` is one of `c`, `cpp`, `rust`, `zig`, `python`, `pyi`, `csharp`, `java`, `node`, `js`, `ts` or
-`json`. The Python bindings use `ctypes` and load the shared library. `--lang pyi`
+`--lang` is one of `c`, `cpp`, `rust`, `zig`, `python`, `pyi`, `csharp`, `java`, `go`, `node`, `js`,
+`ts` or `json`. The Python bindings use `ctypes` and load the shared library. `--lang pyi`
 writes their type stubs, for editors and type checkers such as mypy.
 
 ### The model, for generators of your own

@@ -109,7 +109,7 @@ fn bindings_round_trip() {
         ok(e.voltc(&["lib", "mathlib", "--pkg", pkg, "--shared", "--backend", backend, "-o", &so]), "voltc lib --shared");
         ok(e.voltc(&["lib", "mathlib", "--pkg", pkg, "--static", "--backend", backend, "-o", &e.path(&format!("{backend}/libmathlib_static.a"))]), "voltc lib --static");
     }
-    for (lang, file) in [("c", "mathlib.h"), ("cpp", "mathlib.hpp"), ("rust", "mathlib.rs"), ("python", "mathlib.py"), ("pyi", "mathlib.pyi"), ("csharp", "mathlib.cs"), ("java", "mathlib.java"), ("zig", "mathlib.zig"), ("node", "mathlib_node.c"), ("js", "mathlib.js"), ("ts", "mathlib.d.ts")] {
+    for (lang, file) in [("c", "mathlib.h"), ("cpp", "mathlib.hpp"), ("rust", "mathlib.rs"), ("python", "mathlib.py"), ("pyi", "mathlib.pyi"), ("csharp", "mathlib.cs"), ("java", "mathlib.java"), ("go", "mathlib.go"), ("zig", "mathlib.zig"), ("node", "mathlib_node.c"), ("js", "mathlib.js"), ("ts", "mathlib.d.ts")] {
         ok(e.voltc(&["bindings", "mathlib", "--pkg", pkg, "--lang", lang, "-o", &e.path(file)]), &format!("voltc bindings --lang {lang}"));
     }
     // the model the generators share, as JSON for generators of other people's
@@ -203,6 +203,20 @@ fn bindings_round_trip() {
                 assert_eq!(ok(o, "java Client"), MATHLIB_OUT, "Java ({backend})");
             }
             None => eprintln!("no JDK 22 or later (javac): skipping the Java client"),
+        }
+        // Go: a module with the generated cgo package, built against the library
+        if Command::new("go").arg("version").output().is_ok_and(|o| o.status.success()) {
+            let gdir = e.dir.join(format!("go-{backend}"));
+            std::fs::create_dir_all(gdir.join("mathlib")).unwrap();
+            std::fs::copy(e.dir.join("mathlib.go"), gdir.join("mathlib/mathlib.go")).unwrap();
+            std::fs::copy(Path::new(ROOT).join("tests/interop/client.go"), gdir.join("main.go")).unwrap();
+            std::fs::write(gdir.join("go.mod"), "module client\n\ngo 1.22\n").unwrap();
+            let flags = format!("-L{lib_dir} -Wl,-rpath,{lib_dir}");
+            let go = |args: &[&str]| Command::new("go").args(args).current_dir(&gdir).env("CGO_LDFLAGS", &flags).env("GOFLAGS", "-mod=mod").env("GOPROXY", "off").output().unwrap();
+            ok(go(&["vet", "./..."]), "go vet");
+            assert_eq!(ok(go(&["run", "."]), "go run"), MATHLIB_OUT, "Go ({backend})");
+        } else {
+            eprintln!("go isn't installed: skipping the Go client");
         }
         if let Some(zig) = zig() {
             std::fs::copy(Path::new(ROOT).join("tests/interop/client.zig"), e.dir.join("client.zig")).unwrap();

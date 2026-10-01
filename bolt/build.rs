@@ -454,6 +454,7 @@ impl Build {
                 "pyi" => format!("{}.pyi", m.name),
                 "csharp" => format!("{}.cs", m.name),
                 "java" => format!("{}.java", m.name),
+                "go" => format!("{}.go", m.name),
                 "node" => format!("{}_node.c", m.name),
                 "js" => format!("{}.js", m.name),
                 "ts" => format!("{}.d.ts", m.name),
