@@ -16,17 +16,23 @@ The extension in `editors/vscode` gives VS Code:
 
 ## Install
 
-Build the `.vsix` and install it:
+From a checkout, one command builds the extension and installs it into VS Code:
 
 ```sh
 cd editors/vscode
-npm install
-npx @vscode/vsce package                      # volt-lang-0.1.0.vsix
-code --install-extension volt-lang-0.1.0.vsix
+npm install && npm run install-extension
 ```
 
-The extension runs `voltc lsp`, so `voltc` needs to be on your `PATH` (or set `volt.serverPath`),
-and it needs to find std: through `$VOLT_STD`, a `std/` next to voltc, or `volt.stdPath`.
+The extension finds `voltc` the way a terminal would, so it works when VS Code was started from a
+desktop menu (which doesn't read `~/.bashrc`): `volt.serverPath` when it's a path, then VS Code's
+`PATH`, then your login shell's `PATH`, then `~/.local/bin`, then a Volt checkout in a workspace
+folder or `~/volt` (`voltc/target/release/voltc`, then `debug`). bolt, for tasks, is found the same
+way. The status bar shows **Volt** while the server runs, with the voltc it found in its tooltip;
+click it to restart the server. If no voltc is found, a notice says so, with **Set path** and
+**Install guide**.
+
+The server finds std the way voltc does (`$VOLT_STD`, or a `std/` next to voltc); `volt.stdPath`
+overrides that.
 
 ## Settings
 
@@ -59,6 +65,11 @@ and it needs to find std: through `$VOLT_STD`, a `std/` next to voltc, or `volt.
 
 ## Developing the extension
 
-`npm test`, run in `editors/vscode`, runs the grammar's tests. It checks the assertion files in
-`editors/vscode/tests/grammar`, and a snapshot of `editors/vscode/tests/snap/sample.volt`. After a
-deliberate change, `npx vscode-tmgrammar-snap -u 'tests/snap/*.volt'` updates the snapshot.
+`npm test`, run in `editors/vscode`, runs the grammar's tests (the assertion files in
+`tests/grammar` and a snapshot of `tests/snap/sample.volt`) and the voltc finder's tests. After a
+deliberate grammar change, `npx vscode-tmgrammar-snap -u 'tests/snap/*.volt'` updates the snapshot.
+
+`VOLTC=/path/to/voltc npm run test:e2e` runs the extension in a real VS Code (downloaded into
+`.vscode-test/` the first time; under `xvfb-run` without a display). voltc is only in a checkout
+inside the test's workspace, not on `PATH`, and the test waits for an error in a broken file,
+completion after `std::` and a hover.

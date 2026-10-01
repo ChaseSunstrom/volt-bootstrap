@@ -13,10 +13,22 @@ Language support for [Volt](https://github.com/ChaseSunstrom/volt-bootstrap):
 - **bolt tasks** (check, build, run, test, clean) in folders with a `bolt.toml`, with voltc's errors
   linked to their places (the `$volt` problem matcher)
 
-## Requirements
+## Install
 
-`voltc` (the self-hosted compiler) on your PATH, or set `volt.serverPath`. The server finds std the
-way the compiler does (`$VOLT_STD`, or a `std/` next to voltc); `volt.stdPath` overrides that.
+```sh
+npm install && npm run install-extension   # in editors/vscode: packages the .vsix and installs it
+```
+
+The extension finds `voltc` the way a terminal would, so it works when VS Code was started from a
+desktop menu (which doesn't read `~/.bashrc`): `volt.serverPath` when it's a path, then VS Code's
+`PATH`, then your login shell's `PATH`, then `~/.local/bin`, then a Volt checkout in a workspace
+folder or `~/volt` (`voltc/target/release/voltc`, then `debug`). bolt, for tasks, is found the same
+way. The status bar shows **Volt** while the server runs, with the voltc it found in its tooltip;
+click it to restart the server. If no voltc is found, a notice says so, with **Set path** and
+**Install guide**.
+
+The server finds std the way the compiler does (`$VOLT_STD`, or a `std/` next to voltc);
+`volt.stdPath` overrides that.
 
 In a bolt package, a file under `src/` is checked together with the other files there.
 
@@ -33,14 +45,15 @@ In a bolt package, a file under `src/` is checked together with the other files 
 ## Other editors
 
 The server speaks the Language Server Protocol over stdin and stdout: point any LSP client at
-`voltc lsp`.
+`voltc lsp` (it accepts the `--stdio` flag clients add).
 
 ## Developing
 
 ```sh
 npm install
-npm test                  # grammar tests (tests/grammar) and the snapshot (tests/snap)
-npx @vscode/vsce package  # volt-lang-VERSION.vsix
+npm test                                  # grammar tests, the snapshot, the voltc finder's tests
+VOLTC=/path/to/voltc npm run test:e2e     # in a real VS Code (xvfb-run without a display)
+npx @vscode/vsce package                  # volt-lang-VERSION.vsix
 ```
 
 `npx vscode-tmgrammar-snap -u 'tests/snap/*.volt'` rewrites the snapshot after a deliberate grammar

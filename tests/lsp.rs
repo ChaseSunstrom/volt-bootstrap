@@ -52,8 +52,9 @@ impl Server {
         // bolt on PATH: the server asks it for a package's dependencies
         let bolt_dir = Path::new(env!("CARGO_BIN_EXE_bolt")).parent().unwrap().to_path_buf();
         let path = std::env::join_paths(std::iter::once(bolt_dir).chain(std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()))).unwrap();
+        // started the way VS Code's client starts it: with --stdio
         let mut child = Command::new(&voltc)
-            .arg("lsp")
+            .args(["lsp", "--stdio"])
             .env("VOLT_STD", Path::new(ROOT).join("std"))
             .env("PATH", path)
             .stdin(Stdio::piped())

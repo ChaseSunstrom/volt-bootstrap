@@ -160,6 +160,9 @@ fn parse_cli() -> cli {
                     put(&c.links, p);
                 }
             }
+        } else if (a == "--stdio" && c.cmd == "lsp") {
+            // what LSP clients (VS Code's, Neovim's...) pass to say the protocol goes over stdin
+            // and stdout, which is the only way voltc lsp talks
         } else if (a == "--") {
             while (i < std::process::arg_count()) {
                 put(&c.prog_args, std::process::arg(i) ?? "");
