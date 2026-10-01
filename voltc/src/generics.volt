@@ -232,7 +232,7 @@ attach fn garg_value(this: checker&, g: garg&) -> compile_error!(expr&) {
     }
 }
 
-// the expression a type-shaped arg spells: a name, or a[i] (which parses as an array type)
+// the expression a type-shaped arg spells: a name, a[i] or a[..] (which parse as array and slice types)
 attach fn type_as_value(this: checker&, t: ty&) -> compile_error!(expr&) {
     match (t.kind) {
         .PATH(p) => { return this.keep_expr({ kind: expr_kind::PATH(copy p), span: t.span }); },
@@ -245,6 +245,11 @@ attach fn type_as_value(this: checker&, t: ty&) -> compile_error!(expr&) {
                 val base = try this.type_as_value(elem);
                 return this.keep_expr({ kind: expr_kind::INDEX(bx(copy *base), bx(copy *len.value)), span: t.span });
             }
+        },
+        .SLICE(elem) => {
+            val base = try this.type_as_value(elem);
+            val all: expr = { kind: expr_kind::RANGE(null, null, false), span: t.span };
+            return this.keep_expr({ kind: expr_kind::INDEX(bx(copy *base), bx(move all)), span: t.span });
         },
         default => {},
     }

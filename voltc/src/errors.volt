@@ -152,7 +152,11 @@ attach fn catch_inner(this: checker&, v: tval, e: u32, t: u32, cap: catch_cap*, 
     if (t != VOID) {
         want = t;
     }
+    val moved_before = copy this.cx.moved;
     val h = try this.expr(handler, want);
+    if (h.ty == NEVER) {
+        this.cx.moved = copy moved_before; // a handler that leaves moves nothing on the path that goes on
+    }
     val first = this.ir.decl(tmp.id, v.c);
     val top = this.cx.scopes.len - 1;
     if (h.ty == NEVER || t == VOID) {
@@ -209,7 +213,11 @@ attach fn orelse(this: checker&, a: expr&, b: expr&, span: span) -> compile_erro
             .PTR(inner) => { res = this.t.ref_to(inner); },
             default => {},
         }
+        val moved_before = copy this.cx.moved;
         val bv = try this.expr(b, res);
+        if (bv.ty == NEVER) {
+            this.cx.moved = copy moved_before;
+        }
         val o = this.tmp_local("o", av.ty);
         val first = this.ir.decl(o.id, av.c);
         val is_null = this.ir.binary(binop_ir::EQ, o.c, this.ir.node(ir_kind::NULLPTR, av.ty), BOOL);
@@ -220,7 +228,11 @@ attach fn orelse(this: checker&, a: expr&, b: expr&, span: span) -> compile_erro
         return vnew(res, this.ir.seq(nodes(first), this.ir.node(ir_kind::COND(is_null, bc.c, o.c), res), res));
     }
     val inner = this.t.opt_inner(av.ty) ?? return fail(a.span, fmt("?? needs an optional on the left, found {}", this.ty_name(av.ty)));
+    val moved_before = copy this.cx.moved;
     val bv = try this.expr(b, inner);
+    if (bv.ty == NEVER) {
+        this.cx.moved = copy moved_before; // `?? return x` moves nothing on the path that goes on
+    }
     val o = this.tmp_local("o", av.ty);
     val first = this.ir.decl(o.id, av.c);
     val p = this.opt_parts(av.ty, o.c);

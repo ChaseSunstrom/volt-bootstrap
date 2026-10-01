@@ -82,6 +82,7 @@ impl Checker {
         let tmp = self.tmp("t");
         let vc = self.cty(v.ty);
         let code = self.eu_code(v.ty, &tmp);
+        let moved_before = self.cx.moved.clone();
         self.cx.scopes.push(Scope::default());
         let r = (|| {
             // the handler owns the error: bound or not, one that needs delete is deleted when the
@@ -100,6 +101,9 @@ impl Checker {
                 None => String::new(),
             };
             let h = self.expr(handler, if t == VOID { None } else { Some(t) })?;
+            if h.ty == NEVER {
+                self.cx.moved = moved_before; // a handler that leaves moves nothing on the path that goes on
+            }
             let top = self.cx.scopes.len() - 1;
             Ok(if h.ty == NEVER || t == VOID {
                 if h.ty != NEVER && h.ty != VOID {
@@ -140,7 +144,11 @@ impl Checker {
                 Ty::Ptr(inner) => self.t.intern(Ty::Ref(inner)),
                 _ => av.ty,
             };
+            let moved_before = self.cx.moved.clone();
             let bv = self.expr(b, Some(res))?;
+            if bv.ty == NEVER {
+                self.cx.moved = moved_before;
+            }
             let pc = self.cty(av.ty);
             if bv.ty == NEVER {
                 return Ok(Val::new(res, format!("({{ {pc} _o = {}; if (!_o) {{ {}; }} _o; }})", av.c, bv.c)));
@@ -151,7 +159,11 @@ impl Checker {
         let Ty::Opt(inner) = self.t.get(av.ty).clone() else {
             return err(a.span, format!("?? needs an optional on the left, found {}", self.ty_name(av.ty)));
         };
+        let moved_before = self.cx.moved.clone();
         let bv = self.expr(b, Some(inner))?;
+        if bv.ty == NEVER {
+            self.cx.moved = moved_before; // `?? return x` moves nothing on the path that goes on
+        }
         let oc = self.cty(av.ty);
         let (has, val) = self.opt_parts(av.ty, "_o");
         if bv.ty == NEVER {

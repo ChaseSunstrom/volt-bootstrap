@@ -35,6 +35,8 @@ Each file is wrapped in `namespace std`, and most declare a namespace of their o
 | [`std::net`](/volt-bootstrap/std/net/) | TCP (`listen`, `connect`, streams), UDP, `resolve`, timeouts; the same on Linux, macOS, FreeBSD and Windows ([Networking](/volt-bootstrap/std/networking/)) |
 | [`std::thread`](/volt-bootstrap/std/thread/) | threads (`spawn`, `join`), `mutex<T>` and its guard, `cond`, `atomic_i64`/`atomic_bool`, `shared<T>`, `channel<T>` ([Threads](/volt-bootstrap/std/threads/)) |
 | [`std::json`](/volt-bootstrap/std/json/) | JSON values: parse, build and print |
+| [`std::base64`, `std::hex`](/volt-bootstrap/std/encoding/) | bytes as base64 (standard and URL-safe) or hex text, and back ([Encoding and hashing](/volt-bootstrap/std/encoding/)) |
+| [`std::digest`](/volt-bootstrap/std/digest/) | CRC-32, 64-bit FNV-1a and SHA-256 (in one call, or fed in pieces) |
 
 ## Reaching the names
 

@@ -535,6 +535,18 @@ attach fn is_utf8(this: str&) -> bool {
     return true;
 }
 
+// where the first byte that isn't part of a valid UTF-8 character is (a stray byte, an overlong or
+// cut-off sequence, a surrogate), or null when all of it is valid
+attach fn utf8_error(this: str&) -> usize? {
+    val s = *this;
+    var i: usize = 0;
+    while (i < s.len) {
+        val c = s.char_at(i) ?? return i;
+        i += c.1;
+    }
+    return null;
+}
+
 // how many characters (a byte that isn't valid UTF-8 counts as one)
 attach fn char_count(this: str&) -> usize {
     val s = *this;

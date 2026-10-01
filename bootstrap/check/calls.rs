@@ -151,12 +151,16 @@ impl Checker {
         }
     }
 
-    /// the expression a type-shaped arg spells: a name, or a[i] (which parses as an array type)
+    /// the expression a type-shaped arg spells: a name, a[i] or a[..] (which parse as array and slice types)
     pub(super) fn type_as_value(t: &Type) -> Res<Expr> {
         match &t.kind {
             TypeKind::Path(p) => Ok(Expr { kind: ExprKind::Path(p.clone()), span: t.span }),
             TypeKind::Expr(e) => Ok((**e).clone()),
             TypeKind::Array(elem, Some(len)) => Ok(Expr { kind: ExprKind::Index(P::new(Self::type_as_value(elem)?), len.clone()), span: t.span }),
+            TypeKind::Slice(elem) => {
+                let all = Expr { kind: ExprKind::Range(None, None, false), span: t.span };
+                Ok(Expr { kind: ExprKind::Index(P::new(Self::type_as_value(elem)?), P::new(all)), span: t.span })
+            }
             _ => err(t.span, "expected a value, found a type"),
         }
     }
