@@ -688,8 +688,8 @@ attach fn lookup_path_ns(this: checker&, ns: u32, p: path&) -> found? {
     return f;
 }
 
-// methods are called as x.name(), so when a namespace's own `name` is only methods, the functions
-// a use brings in join them
+// methods are called as x.name(), never by path, so when a namespace's own `name` is only methods,
+// the functions a use brings in take their place
 attach fn with_uses(this: checker&, own: found?, ns: u32, first: str, name: str) -> found? {
     val f = own ?? return null;
     match (f) {
@@ -700,18 +700,9 @@ attach fn with_uses(this: checker&, own: found?, ns: u32, first: str, name: str)
                     default => { return f; },
                 }
             }
-            val more = this.via_uses(ns, first, name) ?? return f;
-            match (more) {
-                .DECLS(extra) => {
-                    var all: std::vec<u32> = {};
-                    for (d&) in this.list(ds).items() {
-                        put(&all, *d);
-                    }
-                    for (d&) in this.list(extra).items() {
-                        put(&all, *d);
-                    }
-                    return found::DECLS(this.new_list(move all));
-                },
+            val fns = this.via_uses(ns, first, name) ?? return f;
+            match (fns) {
+                .DECLS(x) => { return fns; },
                 default => { return f; },
             }
         },

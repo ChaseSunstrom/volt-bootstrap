@@ -553,10 +553,10 @@ impl Checker {
         for (i, seg) in p.segs[1..].iter().enumerate() {
             found = match found {
                 Found::Ns(n) => match self.ns_member(n, &seg.name) {
-                    // methods are called as x.name(), so they don't hide the functions a use brings in
+                    // methods are called as x.name(), never by path: functions a use brings in take their place
                     Some(Found::Decls(ds)) if i == 0 && ds.iter().all(|&d| matches!(self.recv_of(d), generics::Recv::Val(_))) => {
                         match self.via_uses(ns, &p.segs[0].name, &seg.name) {
-                            Some(Found::Decls(more)) => Found::Decls(ds.into_iter().chain(more).collect()),
+                            Some(Found::Decls(fns)) => Found::Decls(fns),
                             _ => Found::Decls(ds),
                         }
                     }

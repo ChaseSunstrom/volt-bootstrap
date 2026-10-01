@@ -23,6 +23,18 @@ namespace text {
         return move out;
     }
 
+    // the parts with sep between them (owned strings, like std::fs::list_dir gives)
+    fn join(parts: std::string[..], sep: str) -> std::string {
+        var out: std::string = {};
+        for (p&, i) in parts {
+            if (i > 0) {
+                out.append(sep);
+            }
+            out.append(p.as_str());
+        }
+        return move out;
+    }
+
     internal extern "C" fn strtod(s: cstr, end: void*) -> f64;
 }
 

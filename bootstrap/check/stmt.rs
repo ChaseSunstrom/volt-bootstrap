@@ -537,6 +537,8 @@ impl Checker {
         let mut pre = String::new();
         // the iterable's temporaries: declared around the loop, deleted once it's done
         let (mut kept_decls, mut after) = (String::new(), String::new());
+        // the element is a value the loop owns (an iterator's next gave it), deleted each round
+        let mut owned_elem = false;
         let mut acc_decl = String::new();
         let acc = match &f.acc {
             Some(a) => {
@@ -658,6 +660,7 @@ impl Checker {
                             Ty::Ptr(t) => (format!("({nx} != 0)"), nx.clone(), self.t.intern(Ty::Ref(t))),
                             Ty::Opt(x) => {
                                 let (has, val) = self.opt_parts(ot, &nx);
+                                owned_elem = true; // moved out of next's result: the binding owns it
                                 (has, val, x)
                             }
                             _ => unreachable!(),
@@ -695,6 +698,9 @@ impl Checker {
                     let rt = self.t.intern(Ty::Ref(elem_ty));
                     let c = self.new_local(name, rt, false);
                     binds.push_str(&format!("{};", Self::decl(&format!("{et}*"), &c, &format!("&{elem}"))));
+                } else if owned_elem {
+                    let (c, flag) = self.owned_local(name, elem_ty, false)?;
+                    binds.push_str(&format!("{};{flag}", Self::decl(&et, &c, &elem)));
                 } else {
                     let c = self.new_local(name, elem_ty, false);
                     binds.push_str(&format!("{};", Self::decl(&et, &c, &elem)));
@@ -709,11 +715,16 @@ impl Checker {
                         return err(m.span, "=> needs a value");
                     }
                     let mt = self.cty(v.ty);
-                    let c = self.new_local(name, v.ty, false);
-                    binds.push_str(&format!(" {};", Self::decl(&mt, &c, &v.c)));
+                    let v = self.take(v, m.span)?;
+                    let (c, flag) = self.owned_local(name, v.ty, false)?;
+                    binds.push_str(&format!(" {};{flag}", Self::decl(&mt, &c, &v.c)));
                 }
                 let (body, _) = self.block_code(&f.body)?;
-                Ok(format!("{} {binds} {body} {cont}:; {} }}", head.0, head.1))
+                // the round's owned bindings, deleted on the way to the next round (break and continue
+                // delete them themselves)
+                let round = self.cx.scopes.len() - 1;
+                let ends = self.scope_exit_code(round, round, false)?;
+                Ok(format!("{} {binds} {body} {ends}{cont}:; {} }}", head.0, head.1))
             })();
             self.cx.scopes.pop();
             r

@@ -46,6 +46,10 @@ namespace process {
     internal extern "C" fn signal(sig: i32, handler: void*) -> void*;
     internal extern "C" fn poll(fds: pollfd*, n: u64, timeout: i32) -> i32;
     internal extern "C" fn __errno_location() -> i32&;
+    internal extern "C" fn setenv(name: cstr, value: cstr, overwrite: i32) -> i32;
+    internal extern "C" fn unsetenv(name: cstr) -> i32;
+    internal extern "C" fn getcwd(buf: u8*, size: usize) -> void*;
+    internal extern "C" fn chdir(path: cstr) -> i32;
 
     // poll.h's struct pollfd
     internal struct pollfd {
@@ -116,6 +120,46 @@ namespace process {
         var n = std::string::from(name);
         val v = getenv(n.c_str()) ?? return null;
         return @cast<str>(@slice(@cast<u8*>(v), strlen(v)));
+    }
+
+    // set environment variable name to value, for this process and the programs it starts
+    fn set_env(name: str, value: str) -> void {
+        var n = std::string::from(name);
+        var v = std::string::from(value);
+        setenv(n.c_str(), v.c_str(), 1);
+    }
+
+    // remove environment variable name
+    fn unset_env(name: str) -> void {
+        var n = std::string::from(name);
+        unsetenv(n.c_str());
+    }
+
+    // the working directory (where relative paths start)
+    fn cwd() -> std::string {
+        var size: usize = 256;
+        loop {
+            val raw = std::mem::c_malloc(size) ?? @panic("out of memory");
+            val buf = @cast<u8*>(raw);
+            if (getcwd(buf, size) != null) {
+                val out = std::string::from(@cast<str>(@slice(buf, strlen(@cast<cstr>(buf)))));
+                std::mem::c_free(raw);
+                return move out;
+            }
+            std::mem::c_free(raw);
+            if (*__errno_location() != 34) { // ERANGE: a bigger buffer helps; nothing else does
+                @panic("std::process::cwd: the working directory can't be read");
+            }
+            size *= 2;
+        }
+    }
+
+    // change the working directory to path
+    fn set_cwd(path: str) -> std::fs::fs_error!void {
+        var p = std::string::from(path);
+        if (chdir(p.c_str()) != 0) {
+            return std::fs::from_errno();
+        }
     }
 
     // run a program (found on PATH) and wait for it; its exit code, or 128 + signal

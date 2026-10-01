@@ -811,6 +811,8 @@ attach fn for_inner(this: checker&, f: for_loop&, want: u32?, span: span) -> com
     var elem: u32 = 0;       // the element (a place when addressable)
     var index: u32 = 0;
     var addressable = false;
+    // the element is a value the loop owns (an iterator's next gave it), deleted each round
+    var owned_elem = false;
     var head: std::vec<u32> = {};  // before the body, inside the loop
     var tail: std::vec<u32> = {};  // after the continue label
     var init: std::vec<u32> = {};  // before the loop
@@ -967,6 +969,7 @@ attach fn for_inner(this: checker&, f: for_loop&, want: u32?, span: span) -> com
                         has = parts.has;
                         elem_ty = this.t.opt_inner(ot) ?? 0;
                         elem = parts.value;
+                        owned_elem = true; // moved out of next's result: the binding owns it
                     },
                 }
                 stop = this.ir.seq(nodes(step), this.ir.unary(unop_ir::NOT, has, BOOL), BOOL);
@@ -1000,7 +1003,7 @@ attach fn for_inner(this: checker&, f: for_loop&, want: u32?, span: span) -> com
         }
     }
     put(&this.cx.scopes, {});
-    val r = this.for_body(f, elem_ty, elem, index, addressable);
+    val r = this.for_body(f, elem_ty, elem, index, addressable, owned_elem);
     this.cx.scopes.pop();
     val binds_body = r catch |e| {
         this.cx.loops.pop();
@@ -1046,7 +1049,7 @@ attach fn for_inner(this: checker&, f: for_loop&, want: u32?, span: span) -> com
 }
 
 // the bindings and the body of one round
-attach fn for_body(this: checker&, f: for_loop&, elem_ty: u32, elem: u32, index: u32, addressable: bool) -> compile_error!std::vec<u32> {
+attach fn for_body(this: checker&, f: for_loop&, elem_ty: u32, elem: u32, index: u32, addressable: bool, owns: bool) -> compile_error!std::vec<u32> {
     var out: std::vec<u32> = {};
     val b0 = f.bindings.at(0);
     if (b0.by_ref) {
@@ -1056,6 +1059,12 @@ attach fn for_body(this: checker&, f: for_loop&, elem_ty: u32, elem: u32, index:
         val rt = this.t.ref_to(elem_ty);
         val c = this.new_local(b0.name, rt, false);
         put(&out, this.decl_at(c, this.ir.addr(elem, rt)));
+    } else if (owns) {
+        val o = try this.owned_local(b0.name, elem_ty, false);
+        put(&out, this.decl_at(o.c, elem));
+        if (o.flag) {
+            put(&out, o.flag);
+        }
     } else {
         val c = this.new_local(b0.name, elem_ty, false);
         put(&out, this.decl_at(c, elem));
@@ -1069,10 +1078,20 @@ attach fn for_body(this: checker&, f: for_loop&, elem_ty: u32, elem: u32, index:
         if (v.ty == VOID || v.ty == NEVER) {
             return fails(f.map.span, "=> needs a value");
         }
-        val c = this.new_local(b0.name, v.ty, false);
-        put(&out, this.decl_at(c, v.c));
+        val tv = try this.take(v, f.map.span);
+        val o = try this.owned_local(b0.name, tv.ty, false);
+        put(&out, this.decl_at(o.c, tv.c));
+        if (o.flag) {
+            put(&out, o.flag);
+        }
     }
     val bc = try this.block_code(&f.body);
     put(&out, bc.c);
+    // the round's owned bindings, deleted on the way to the next round (break and continue delete
+    // them themselves)
+    val round = this.cx.scopes.len - 1;
+    for (x&) in (try this.scope_exit_code(round, round, false)).items() {
+        put(&out, *x);
+    }
     return move out;
 }

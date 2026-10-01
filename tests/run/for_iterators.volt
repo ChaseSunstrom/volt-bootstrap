@@ -1,4 +1,6 @@
+// flags: --leak-check
 use std::io;
+use std::string;
 // a type that attaches next(this: T&) -> X? loops in for: next until it gives null
 
 struct countdown {
@@ -61,6 +63,21 @@ async fn sum_slowly() -> i32 {
     return total;
 }
 
+// yields owned strings: each round's is deleted when the round ends (or breaks, or continues)
+struct names {
+    i: i32;
+}
+
+attach fn next(this: names&) -> std::string? {
+    if (this.i == 5) {
+        return null;
+    }
+    this.i += 1;
+    var s = std::string::from("name-number-");
+    s.append_int(this.i);
+    return move s;
+}
+
 fn main() -> void {
     // a temporary iterator, with the round's index
     for (x, i) in count_from(3) {
@@ -121,9 +138,26 @@ fn main() -> void {
         resume f;
     }
     std::println("{}", await f);
+    var kept: std::vec<std::string> = {};
+    val all: names = { i: 0 };
+    for (n, i) in all => n {
+        if (i == 1) {
+            continue;
+        }
+        if (i == 3) {
+            kept.push(move n) catch @panic("out of memory");
+            continue;
+        }
+        if (i == 4) {
+            break;
+        }
+        std::print("{} ", n.len());
+    }
+    std::println("{} {}", kept.len, kept.at(0).as_str());
 }
 // expect: 3:0 2:1 1:2
 // expect: [the][quick][fox] 0 4
 // expect: 21 3
 // expect: 10 20 30
 // expect: 10
+// expect: 13 13 1 name-number-4

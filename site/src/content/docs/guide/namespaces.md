@@ -59,8 +59,9 @@ fn main() -> void {
 ```
 
 Two `use`s that bring the same name into one namespace merge into one overload set. A method the
-namespace attaches doesn't hide such a name either, since methods are called as `x.name()`: std
-attaches `min` to slices, and after `use std::math;`, `std::min(a, b)` is still math's function.
+namespace attaches doesn't hide such a name either, since methods are called as `x.name()`, never
+by path: std attaches `min` to slices, and after `use std::math;`, `std::min(a, b)` is math's
+function.
 
 `use { "header.h" } as c;` is different: it imports a C header into namespace `c`. See
 [C interop](/volt-bootstrap/interop/c/).

@@ -69,3 +69,31 @@ fn main() -> void {
 - `saturating_add`, `saturating_sub`, `saturating_mul` stop at the type's largest or smallest value.
 - `gcd` and `lcm` are never negative; `gcd(0, 0)` and `lcm(0, x)` are 0. Like `abs`, they overflow
   when the answer doesn't fit in the type: `gcd(i32::min_value(), 0)` is 2147483648.
+
+## Random numbers
+
+`std::random::seeded(n)` makes a generator that gives the same numbers every run (for tests and
+simulations); `os_seeded()` seeds one from the operating system. Each draws with `below(n)` (in
+`0..n`, without modulo bias), `range(lo, hi)`, `float()` (in `[0, 1)`), `chance(p)`, and
+`shuffle` and `choose` on slices.
+
+```volt
+use std::io;
+
+fn main() -> void {
+    var dice = std::random::seeded(2026);
+    var rolls: i32[6];
+    for (k) in 0..6000 {
+        rolls[@cast<usize>(dice.below(6))] += 1;
+    }
+    var cards: i32[] = 1..=5;
+    dice.shuffle(cards[..]);
+    val pick = *(dice.choose(cards[..]) ?? &cards[0]);
+    std::println("{} {} {}", rolls[0] > 900 && rolls[5] < 1100, pick >= 1 && pick <= 5, dice.range(-3, 3) < 3);
+}
+// expect: true true true
+```
+
+The generator is xoshiro256**: fast and good for statistics, but predictable from its output, so
+never for passwords, keys or tokens. `std::random::os_bytes(buf)` fills a buffer from the operating
+system's secure source for those.

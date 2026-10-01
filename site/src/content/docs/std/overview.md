@@ -26,9 +26,12 @@ Each file is wrapped in `namespace std`, and most declare a namespace of their o
 | [`std::slice`](/volt-bootstrap/std/slice/) | on any `T[..]`: stable `sort`, `sort_by`, `binary_search`, `reverse`, `contains`, `min`, `max` |
 | [`std::compare`](/volt-bootstrap/std/compare/) | `eq` and `cmp`, which collections and algorithms compare values with |
 | [`std::math`](/volt-bootstrap/std/math/) | constants, `sqrt`, `pow`, trig and the rest of libm (f64 and f32), `min`/`max`/`clamp`, integer limits, checked and saturating arithmetic, `gcd`/`lcm` |
+| [`std::random`](/volt-bootstrap/std/random/) | random numbers (xoshiro256**), seeded or from the OS; ranges, floats, shuffle, choose; secure OS bytes |
 | [`std::mem`](/volt-bootstrap/std/mem/) | allocators, `box<T>` (an owning pointer), `T::new`, `mem_error` |
-| [`std::fs`](/volt-bootstrap/std/fs/) | reading and writing whole files |
-| [`std::process`](/volt-bootstrap/std/process/) | running programs, arguments, the environment, `exit` |
+| [`std::fs`](/volt-bootstrap/std/fs/) | files and directories: whole files, file streams (`open`, `read_line`, `seek`), listing, walking, creating, removing ([Files](/volt-bootstrap/std/files/)) |
+| [`std::path`](/volt-bootstrap/std/path/) | paths as text: `join`, `parent`, `file_name`, `extension`, `normalize` |
+| [`std::process`](/volt-bootstrap/std/process/) | running programs, arguments, the environment and the working directory, `exit` |
+| [`std::time`](/volt-bootstrap/std/time/) | the monotonic clock, the wall clock, `sleep`, durations, UTC dates in ISO 8601 |
 | [`std::json`](/volt-bootstrap/std/json/) | JSON values: parse, build and print |
 
 ## Reaching the names
