@@ -1,0 +1,45 @@
+// TypeScript calls the Volt library through voltc bindings --lang node, --lang js and --lang ts
+// (node runs it by stripping the types; tsc checks them against mathlib.d.ts)
+import { createRequire } from "node:module";
+import type * as M from "./mathlib.js";
+
+const m: typeof M = createRequire(import.meta.url)("./mathlib.js");
+
+const a: M.vec2 = { x: 1, y: 2 };
+console.log("add", m.ml_add(2, 3));
+console.log("dot", m.ml_dot(a, { x: 3, y: 4 }));
+m.ml_scale(a, 2);
+console.log("scale", a.x, a.y);
+console.log("len", m.ml_len("hello"));
+console.log("next", m.ml_next(m.color.GREEN));
+console.log("sqrt", m.ml_sqrt(9), 1);
+try {
+    m.ml_sqrt(-1);
+} catch (e) {
+    console.log("error", (e as M.VoltError).code === m.math_error.NEGATIVE ? "negative" : "?");
+}
+console.log("greet", m.ml_greet("volt"));
+console.log("repeat", m.ml_repeat("ab", 2));
+try {
+    m.ml_repeat("ab", -1);
+} catch (e) {
+    console.log("repeat", (e as M.VoltError).message.toLowerCase());
+}
+console.log("sum", m.ml_sum([1, 2, 3.5]));
+const ys: number[] = [4, 5, 6];
+const found: number | null = m.ml_find(ys, 6);
+console.log("find", found, m.ml_find(ys, 9) === null ? "none" : "?");
+const seen: number[] = [];
+m.ml_each(ys, (x: number) => {
+    seen.push(x);
+});
+console.log("each", seen.join(" "), "=", seen.reduce((s, x) => s + x, 0));
+const c: M.counter = new m.counter("clicks");
+c.add(2);
+console.log("counter", c.name(), c.add(3));
+try {
+    c.take(9);
+} catch (e) {
+    console.log("take", (e as M.VoltError).code.toLowerCase());
+}
+c.close();

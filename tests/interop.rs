@@ -54,6 +54,18 @@ fn ok(o: Output, what: &str) -> String {
     out
 }
 
+/// node's include directory (with node_api.h), when node is installed
+fn node_include() -> Option<String> {
+    let o = Command::new("node").args(["-p", "require('path').join(process.execPath, '..', '..', 'include', 'node')"]).output().ok()?;
+    let dir = String::from_utf8_lossy(&o.stdout).trim().to_string();
+    for d in [dir.as_str(), "/usr/include/node", "/usr/local/include/node"] {
+        if Path::new(d).join("node_api.h").is_file() {
+            return Some(d.to_string());
+        }
+    }
+    None
+}
+
 /// zig on the PATH, or in ~/.local/bin (where a downloaded toolchain goes)
 fn zig() -> Option<PathBuf> {
     if Command::new("zig").arg("version").output().is_ok_and(|o| o.status.success()) {
@@ -77,7 +89,7 @@ fn bindings_round_trip() {
         ok(e.voltc(&["lib", "mathlib", "--pkg", pkg, "--shared", "--backend", backend, "-o", &so]), "voltc lib --shared");
         ok(e.voltc(&["lib", "mathlib", "--pkg", pkg, "--static", "--backend", backend, "-o", &e.path(&format!("{backend}/libmathlib_static.a"))]), "voltc lib --static");
     }
-    for (lang, file) in [("c", "mathlib.h"), ("cpp", "mathlib.hpp"), ("rust", "mathlib.rs"), ("python", "mathlib.py"), ("zig", "mathlib.zig")] {
+    for (lang, file) in [("c", "mathlib.h"), ("cpp", "mathlib.hpp"), ("rust", "mathlib.rs"), ("python", "mathlib.py"), ("zig", "mathlib.zig"), ("node", "mathlib_node.c"), ("js", "mathlib.js"), ("ts", "mathlib.d.ts")] {
         ok(e.voltc(&["bindings", "mathlib", "--pkg", pkg, "--lang", lang, "-o", &e.path(file)]), &format!("voltc bindings --lang {lang}"));
     }
     // the model the generators share, as JSON for generators of other people's
@@ -112,6 +124,31 @@ fn bindings_round_trip() {
         // Python: the module loads libmathlib.so from $VOLT_MATHLIB_LIB, else next to itself
         let py = run(Command::new("python3").arg("client.py").env("PYTHONPATH", e.path("")).env("VOLT_MATHLIB_LIB", format!("{lib_dir}/libmathlib.so")));
         assert_eq!(ok(py, "python3 client.py"), MATHLIB_OUT, "Python ({backend})");
+        // JavaScript: the Node-API addon, built against node's own headers, then node and bun run the
+        // clients (TypeScript by stripping its types; tsc checks them when it's installed)
+        match node_include() {
+            Some(inc) => {
+                ok(run(Command::new("cc").args(["-shared", "-fPIC", "-I", &inc]).arg(e.dir.join("mathlib_node.c")).args(["-L", &lib_dir, "-lmathlib", &rpath, "-o"]).arg(e.dir.join("mathlib.node"))), "cc mathlib_node.c");
+                for client in ["client.js", "client.mts"] {
+                    std::fs::copy(Path::new(ROOT).join("tests/interop").join(client), e.dir.join(client)).unwrap();
+                    let n = Command::new("node").arg(client).current_dir(&e.dir).output().unwrap();
+                    assert_eq!(ok(n, &format!("node {client}")), MATHLIB_OUT, "node {client} ({backend})");
+                    if Command::new("bun").arg("--version").output().is_ok_and(|o| o.status.success()) {
+                        let b = Command::new("bun").arg(client).current_dir(&e.dir).output().unwrap();
+                        assert_eq!(ok(b, &format!("bun {client}")), MATHLIB_OUT, "bun {client} ({backend})");
+                    }
+                }
+                // what it rejects, and how
+                std::fs::copy(Path::new(ROOT).join("tests/interop/client_edges.js"), e.dir.join("client_edges.js")).unwrap();
+                let n = Command::new("node").arg("client_edges.js").current_dir(&e.dir).output().unwrap();
+                let want = "too big for i32 RangeError\nNaN TypeError\nInfinity TypeError\nfraction for i32 TypeError\nstring for a number TypeError\nnot a counter TypeError\nclosed counter TypeError\nbigint 2\n";
+                assert_eq!(ok(n, "node client_edges.js"), want, "node client_edges.js ({backend})");
+                if Command::new("tsc").arg("--version").output().is_ok_and(|o| o.status.success()) {
+                    ok(Command::new("tsc").args(["--noEmit", "--strict", "--module", "nodenext", "--moduleResolution", "nodenext", "--target", "es2022", "client.mts"]).current_dir(&e.dir).output().unwrap(), "tsc client.mts");
+                }
+            }
+            None => eprintln!("node isn't installed (or has no headers): skipping the JavaScript clients"),
+        }
         if let Some(zig) = zig() {
             std::fs::copy(Path::new(ROOT).join("tests/interop/client.zig"), e.dir.join("client.zig")).unwrap();
             // on Linux, Zig's own glibc start files: newer system ones can have sections Zig's linker
@@ -130,11 +167,11 @@ fn bindings_round_trip() {
     // bolt builds them too: [lib] kind and bindings
     let pkg_dir = e.dir.join("pkg");
     std::fs::create_dir_all(pkg_dir.join("lib")).unwrap();
-    std::fs::write(pkg_dir.join("bolt.toml"), "[package]\nname = \"twice\"\nversion = \"0.1.0\"\n\n[lib]\nkind = [\"volt\", \"shared\", \"static\"]\nbindings = [\"c\", \"python\"]\n\n[std]\npath = \"STD\"\n".replace("STD", &Path::new(ROOT).join("std").display().to_string())).unwrap();
+    std::fs::write(pkg_dir.join("bolt.toml"), "[package]\nname = \"twice\"\nversion = \"0.1.0\"\n\n[lib]\nkind = [\"volt\", \"shared\", \"static\"]\nbindings = [\"c\", \"python\", \"node\", \"ts\"]\n\n[std]\npath = \"STD\"\n".replace("STD", &Path::new(ROOT).join("std").display().to_string())).unwrap();
     std::fs::write(pkg_dir.join("lib/twice.volt"), "export fn twice(x: i32) -> i32 { return x * 2; }\n").unwrap();
     let b = Command::new(env!("CARGO_BIN_EXE_bolt")).arg("build").current_dir(&pkg_dir).env("VOLTC", &e.voltc).env("BOLT_HOME", e.dir.join("cache")).output().unwrap();
     assert!(b.status.success(), "bolt build: {}", String::from_utf8_lossy(&b.stderr));
-    for f in ["libtwice.so", "libtwice.a", "deps/libtwice.a", "bindings/twice.h", "bindings/twice.py"] {
+    for f in ["libtwice.so", "libtwice.a", "deps/libtwice.a", "bindings/twice.h", "bindings/twice.py", "bindings/twice_node.c", "bindings/twice.d.ts"] {
         assert!(pkg_dir.join("target/debug").join(f).is_file(), "bolt didn't make target/debug/{f}");
     }
 

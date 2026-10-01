@@ -112,17 +112,55 @@ export fn each(xs: i32[..], f: fn(i32) -> void) -> void {
 
 Each language gets these in its own style:
 
-| | C | C++ | Rust | Python | Zig |
-| --- | --- | --- | --- | --- | --- |
-| errors | a struct of the code and the value | throws `error` | `Result<T, Error>` | raises a class per error set, all deriving from `Error` | `Error!T` |
-| owned text | `volt_text`, freed with `volt_text_free` | `std::string` | `String` | `str` | `VoltText`, with `bytes()` and `deinit()` |
-| slices, optionals | structs | from vectors and arrays; `std::optional` | `&mut [T]`, `Option` | lists, `None` | `[]T`, `?T` |
-| an export struct | a pointer, and `NAME_free` | a class that frees itself | a type that frees itself when dropped | a class with `close()` and `with` | a type with `deinit()` |
-| callbacks | a function and a `void *` | `std::function` | `&mut dyn FnMut` | any callable | a context and a function |
+| | C | C++ | Rust | Python | Zig | JavaScript |
+| --- | --- | --- | --- | --- | --- | --- |
+| errors | a struct of the code and the value | throws `error` | `Result<T, Error>` | raises a class per error set, all deriving from `Error` | `Error!T` | throws an `Error` whose `code` is the name |
+| owned text | `volt_text`, freed with `volt_text_free` | `std::string` | `String` | `str` | `VoltText`, with `bytes()` and `deinit()` | a string |
+| slices, optionals | structs | from vectors and arrays; `std::optional` | `&mut [T]`, `Option` | lists, `None` | `[]T`, `?T` | arrays, `null` |
+| an export struct | a pointer, and `NAME_free` | a class that frees itself | a type that frees itself when dropped | a class with `close()` and `with` | a type with `deinit()` | a class with `close()` and `Symbol.dispose` |
+| callbacks | a function and a `void *` | `std::function` | `&mut dyn FnMut` | any callable | a context and a function | any function |
+
+### JavaScript and TypeScript
+
+`--lang node` writes the C source of a Node-API addon, which runs in Node.js and in Bun. It
+includes the C declarations, so it's one file to compile against the library and node's headers.
+`--lang js` writes a loader, and `--lang ts` writes the TypeScript types:
+
+```sh
+voltc bindings mathlib --pkg mathlib=lib --lang node > mathlib_node.c
+voltc bindings mathlib --pkg mathlib=lib --lang js   > mathlib.js
+voltc bindings mathlib --pkg mathlib=lib --lang ts   > mathlib.d.ts
+cc -shared -fPIC -I /usr/include/node mathlib_node.c -L. -lmathlib -o mathlib.node
+```
+
+```js
+const m = require("./mathlib");      // mathlib.node next to it, or $VOLT_MATHLIB_NODE
+console.log(m.ml_greet("volt"));     // hello, volt
+const c = new m.counter("clicks");   // an export struct is a class
+c.add(2);
+c.close();                           // or `using c = ...`, or leave it to the garbage collector
+try {
+    m.ml_sqrt(-1);
+} catch (e) {
+    console.log(e.code);             // NEGATIVE: the error's name
+}
+```
+
+Here is how values convert:
+- Numbers and `bool` convert directly. A number that doesn't fit the parameter's type throws a
+  `RangeError`, and a fraction, NaN or infinity given for an integer throws a `TypeError`.
+  64-bit integers also take a `BigInt`. They come back as numbers, which are exact up to 2^53.
+- A struct is a plain object. Passed as `T&`, what Volt changes in it comes back to the object.
+- A slice is an array, and what Volt writes into its elements comes back too.
+- An optional is the value or `null`.
+- A callback is any function. It's called during the call it was passed to.
+- `str` and owned text are strings.
+- An error set's codes are the error names (`m.math_error.NEGATIVE` is `"NEGATIVE"`).
+- Each class checks that its methods get an instance of it.
 
 Every binding also has the plain C functions: in C++ they're in namespace `raw`, in Rust in module
-`raw`, and in Zig in struct `raw`. `--lang` is one of `c`, `cpp`, `rust`, `zig` or `python`. The
-Python bindings use `ctypes` and load the shared library.
+`raw`, and in Zig in struct `raw`. `--lang` is one of `c`, `cpp`, `rust`, `zig`, `python`, `node`,
+`js`, `ts` or `json`. The Python bindings use `ctypes` and load the shared library.
 
 ### The model, for generators of your own
 

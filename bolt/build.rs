@@ -446,14 +446,18 @@ impl Build {
             jobs.push(Job { out, inputs: inputs.clone(), args, what: format!("{} v{} ({kind} library)", m.name, m.version.text) });
         }
         for lang in &m.bindings {
-            let ext = match lang.as_str() {
-                "c" => "h",
-                "cpp" => "hpp",
-                "rust" => "rs",
-                "python" => "py",
-                _ => "zig",
+            let file = match lang.as_str() {
+                "c" => format!("{}.h", m.name),
+                "cpp" => format!("{}.hpp", m.name),
+                "rust" => format!("{}.rs", m.name),
+                "python" => format!("{}.py", m.name),
+                "node" => format!("{}_node.c", m.name),
+                "js" => format!("{}.js", m.name),
+                "ts" => format!("{}.d.ts", m.name),
+                "json" => format!("{}.json", m.name),
+                _ => format!("{}.zig", m.name),
             };
-            let out = self.target.join("bindings").join(format!("{}.{ext}", m.name));
+            let out = self.target.join("bindings").join(file);
             let mut args = self.args("bindings");
             args.push(m.name.clone());
             args.extend(self.pkg_args(&closure, None, false));

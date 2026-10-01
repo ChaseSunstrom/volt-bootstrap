@@ -1,4 +1,4 @@
-// Bindings for other languages: `voltc bindings NAME --lang c|cpp|rust|zig|python|json` describes package
+// Bindings for other languages: `voltc bindings NAME --lang c|cpp|rust|zig|python|node|js|ts|json` describes package
 // NAME's export fns and the types they use, for programs that call a library built with
 // `voltc lib NAME --shared` (or `--static`). Every type crosses in a C form:
 // - numbers, bool, pointers (T* and T&), cstr, str (volt_str: a pointer and a length), structs whose
@@ -2644,9 +2644,741 @@ attach fn json_text(this: bind&) -> std::string {
     return move text;
 }
 
+// ---------- JavaScript: a Node-API addon (Node.js, Bun), its loader and TypeScript types ----------
+
+// the C name a struct's JS converters use
+attach fn node_sname(this: bind&, s: u32) -> std::string {
+    return this.local(this.c.si(s).name);
+}
+
+// can a value of type t come from JS (or go to it) as a plain value: numbers, bool, enums, error
+// codes and structs of those
+attach fn node_simple(this: bind&, t: u32) -> bool {
+    match (this.shape_of(t) ?? shape::VOID) {
+        .BOOL => { return true; },
+        .INT(k) => { return true; },
+        .FLOAT(b) => { return true; },
+        .ENUM(e) => { return true; },
+        .CODE => { return true; },
+        .STRUCT(s) => {
+            for (f&) in this.c.si(s).fields.items() {
+                if (!this.node_simple(f.ty)) {
+                    return false;
+                }
+            }
+            return true;
+        },
+        default => { return false; },
+    }
+}
+
+// C statements that read JS value js into C lvalue c (of type t); they `goto fail` with a JS
+// exception thrown when js doesn't fit. Simple types only (node_simple)
+attach fn node_get_simple(this: bind&, t: u32, js: str, c: str) -> std::string {
+    match (this.shape_of(t) ?? shape::VOID) {
+        .BOOL => { return fmt2("if (!vn_bool(env, {}, &{})) { goto fail; }", S(js), S(c)); },
+        .FLOAT(b) => { return fmt3("{{ double v_; if (!vn_f64(env, {}, &v_)) { goto fail; } {} = ({})v_; }}", S(js), S(c), this.c_prim(t, false)); },
+        .INT(k) => {
+            if (k.signed()) {
+                return fmt4("{{ int64_t v_; if (!vn_i64(env, {}, &v_)) {{ goto fail; }}{} {} = ({})v_; }}", S(js), node_range(k), S(c), this.c_prim(t, false));
+            }
+            return fmt4("{{ uint64_t v_; if (!vn_u64(env, {}, &v_)) {{ goto fail; }}{} {} = ({})v_; }}", S(js), node_range(k), S(c), this.c_prim(t, false));
+        },
+        .ENUM(e) => { return fmt4("{{ uint64_t v_; if (!vn_u64(env, {}, &v_)) {{ goto fail; }}{} {} = ({})v_; }}", S(js), node_range(this.c.ei(e).tag), S(c), this.c_prim(t, false)); },
+        .CODE => { return fmt3("{{ uint64_t v_; if (!vn_u64(env, {}, &v_)) {{ goto fail; }}{} {} = (uint32_t)v_; }}", S(js), node_range(int_ty::U32), S(c)); },
+        .STRUCT(s) => { return fmt3("if (!vn_get_{}(env, {}, &{})) { goto fail; }", this.node_sname(s), S(js), S(c)); },
+        default => { return S("goto fail;"); },
+    }
+}
+
+// the check that an integer read as v_ (64 bits) fits a narrower C type
+fn node_range(k: int_ty) -> std::string {
+    var lo = "";
+    var hi = "";
+    if (k == int_ty::I8) {
+        lo = "INT8_MIN";
+        hi = "INT8_MAX";
+    } else if (k == int_ty::I16) {
+        lo = "INT16_MIN";
+        hi = "INT16_MAX";
+    } else if (k == int_ty::I32) {
+        lo = "INT32_MIN";
+        hi = "INT32_MAX";
+    } else if (k == int_ty::U8) {
+        hi = "UINT8_MAX";
+    } else if (k == int_ty::U16) {
+        hi = "UINT16_MAX";
+    } else if (k == int_ty::U32) {
+        hi = "UINT32_MAX";
+    } else {
+        return {};
+    }
+    if (lo.len > 0) {
+        return fmt2(" if (v_ < {} || v_ > {}) {{ vn_throw_range(env); goto fail; }}", S(lo), S(hi));
+    }
+    return fmt(" if (v_ > {}) { vn_throw_range(env); goto fail; }", S(hi));
+}
+
+// a C expression making the JS value of simple C value c (of type t)
+attach fn node_put_simple(this: bind&, t: u32, c: str) -> std::string {
+    match (this.shape_of(t) ?? shape::VOID) {
+        .BOOL => { return fmt("vn_from_bool(env, {})", S(c)); },
+        .STRUCT(s) => { return fmt2("vn_new_{}(env, &{})", this.node_sname(s), S(c)); },
+        default => { return fmt("vn_num(env, (double)({}))", S(c)); },
+    }
+}
+
+// one argument of an export fn: its C local(s) (decl), the statements that fill them from js
+// (get), what the call passes (pass), what runs after the call (after: writing back into JS
+// objects and arrays) and what frees its temporaries (cleanup)
+struct node_arg {
+    decl: std::string = {};
+    get: std::string = {};
+    pass: std::string = {};
+    after: std::string = {};
+    cleanup: std::string = {};
+}
+
+attach fn node_arg_of(this: bind&, t: u32, js: str, c: str, a: node_arg&) -> compile_error!void {
+    if (this.node_simple(t)) {
+        a.decl = fmt2("{} {};", this.c_prim(t, false), S(c));
+        a.get = this.node_get_simple(t, js, c);
+        a.pass = S(c);
+        return;
+    }
+    val h = this.lent_handle(t);
+    if (h) {
+        a.decl = fmt2("{}{} = NULL;", spaced(this.handle_c(h, false)), S(c));
+        a.get = fmt4("if (!vn_unwrap(env, {}, &vn_tag_{}, (void **)&{}, \"{}\")) { goto fail; }", S(js), this.node_sname(h), S(c), this.node_sname(h));
+        a.pass = S(c);
+        return;
+    }
+    match (this.shape_of(t) ?? shape::VOID) {
+        .STR => {
+            a.decl = fmt2("volt_str {}; char *{}_buf = NULL;", S(c), S(c));
+            a.get = fmt3("if (!vn_str(env, {}, &{}, &{}_buf)) { goto fail; }", S(js), S(c), S(c));
+            a.pass = S(c);
+            a.cleanup = fmt("free({}_buf);", S(c));
+        },
+        .CSTR => {
+            a.decl = fmt2("const char *{} = NULL; char *{}_buf = NULL;", S(c), S(c));
+            a.get = fmt3("if (!vn_cstr(env, {}, &{}, &{}_buf)) { goto fail; }", S(js), S(c), S(c));
+            a.pass = S(c);
+            a.cleanup = fmt("free({}_buf);", S(c));
+        },
+        .PTR(x) => {
+            if (x != VOID && this.node_simple(x)) {
+                // a struct (or number) by reference: a copy goes in, and what Volt changed comes back
+                a.decl = fmt2("{} {}_val;", this.c_prim(x, false), S(c));
+                var nullable = true;
+                match (*this.c.t.get(t)) {
+                    .REF(y) => { nullable = false; },
+                    default => {},
+                }
+                if (nullable) {
+                    a.decl.append(fmt(" bool {}_null = false;", S(c)).as_str());
+                    a.get = fmt2("{}_null = vn_is_nullish(env, {});", S(c), S(js));
+                    a.get.append(fmt2(" if (!{}_null) {{ {} }}", S(c), this.node_get_simple(x, js, fmt("{}_val", S(c)).as_str())).as_str());
+                    a.pass = fmt2("({}_null ? NULL : &{}_val)", S(c), S(c));
+                    a.after = fmt3("if (!{}_null) vn_set_{}(env, {}, ", S(c), this.node_ptr_set_name(x), S(js));
+                    a.after.append(fmt("&{}_val);", S(c)).as_str());
+                } else {
+                    a.get = this.node_get_simple(x, js, fmt("{}_val", S(c)).as_str());
+                    a.pass = fmt("&{}_val", S(c));
+                    a.after = fmt3("vn_set_{}(env, {}, &{}_val);", this.node_ptr_set_name(x), S(js), S(c));
+                }
+                return;
+            }
+            // anything else behind a pointer: an External from another call
+            a.decl = fmt2("{}{} = NULL;", spaced(this.c_prim(t, false)), S(c));
+            a.get = fmt2("if (!vn_external(env, {}, (void **)&{})) { goto fail; }", S(js), S(c));
+            a.pass = S(c);
+        },
+        .SLICE(x) => {
+            if (!this.node_simple(x)) {
+                return fail(NO_SPAN, fmt("a slice of {} can't come from JavaScript (numbers, bool, enums and structs of those can)", this.c.ty_name(x)));
+            }
+            val et = this.c_prim(x, false);
+            a.decl = fmt3("{} {}; {} *", this.c_prim(t, false), S(c), copy et);
+            a.decl.append(fmt2("{}_buf = NULL; uint32_t {}_n = 0;", S(c), S(c)).as_str());
+            a.get = fmt3("if (!vn_array(env, {}, &{}_n)) { goto fail; } {}_buf = ", S(js), S(c), S(c));
+            a.get.append(fmt3("malloc(sizeof({}) * ({}_n ? {}_n : 1));", copy et, S(c), S(c)).as_str());
+            a.get.append(fmt(" if (!{}_buf) {{ vn_throw(env, \"out of memory\"); goto fail; }}", S(c)).as_str());
+            a.get.append(fmt3(" for (uint32_t i = 0; i < {}_n; i++) {{ napi_value e; napi_get_element(env, {}, i, &e); {} }}", S(c), S(js), this.node_get_simple(x, "e", fmt("{}_buf[i]", S(c)).as_str())).as_str());
+            a.get.append(fmt4(" {}.ptr = {}_buf; {}.len = {}_n;", S(c), S(c), S(c), S(c)).as_str());
+            a.pass = S(c);
+            // what Volt wrote into the elements comes back
+            a.after = fmt4("for (uint32_t i = 0; i < {}_n; i++) napi_set_element(env, {}, i, {});", S(c), S(js), this.node_put_simple(x, fmt("{}_buf[i]", S(c)).as_str()), S(""));
+            a.cleanup = fmt("free({}_buf);", S(c));
+        },
+        .OPT(x) => {
+            if (!this.node_simple(x)) {
+                return fail(NO_SPAN, fmt("an optional {} can't come from JavaScript (numbers, bool, enums and structs of those can)", this.c.ty_name(x)));
+            }
+            a.decl = fmt2("{} {};", this.c_prim(t, false), S(c));
+            a.get = fmt4("memset(&{}, 0, sizeof {}); if (!vn_is_nullish(env, {})) {{ {}.has = true; ", S(c), S(c), S(js), S(c));
+            a.get.append(fmt("{} }", this.node_get_simple(x, js, fmt("{}.value", S(c)).as_str())).as_str());
+            a.pass = S(c);
+        },
+        .CLOSURE(i) => {
+            a.decl = fmt("struct vn_cb {}_cb;", S(c));
+            a.get = fmt4("if (!vn_function(env, {})) { goto fail; } {}_cb.env = env; {}_cb.fn = {};", S(js), S(c), S(c), S(js));
+            a.pass = fmt3("vn_cb{}, &{}_cb", unum(@cast<u64>(i)), S(c), S(""));
+        },
+        default => {
+            return fail(NO_SPAN, fmt("{} can't come from JavaScript", this.c.ty_name(t)));
+        },
+    }
+    return;
+}
+
+// which vn_set_ writes a C value back into a JS object (a struct's fields)
+attach fn node_ptr_set_name(this: bind&, x: u32) -> std::string {
+    match (this.shape_of(x) ?? shape::VOID) {
+        .STRUCT(s) => { return this.node_sname(s); },
+        default => { return S("none"); },
+    }
+}
+
+// C statements that turn C result r (of type t) into JS value `result`; an error result throws
+attach fn node_result(this: bind&, t: u32, r: str) -> compile_error!std::string {
+    if (t == VOID) {
+        return S("napi_get_undefined(env, &result);");
+    }
+    if (this.node_simple(t)) {
+        return fmt("result = {};", this.node_put_simple(t, r));
+    }
+    match (this.shape_of(t) ?? shape::VOID) {
+        .STR => { return fmt3("result = vn_from_str(env, {}.ptr, {}.len);", S(r), S(r), S("")); },
+        .CSTR => { return fmt("result = vn_from_cstr(env, {});", S(r)); },
+        .TEXT(x) => { return fmt3("result = vn_from_str(env, {}.ptr, {}.len); volt_text_free({});", S(r), S(r), S(r)); },
+        .HANDLE(s) => { return fmt2("result = vn_wrap_{}(env, {});", this.node_sname(s), S(r)); },
+        .OPT(x) => {
+            if (!this.node_simple(x)) {
+                return fail(NO_SPAN, fmt("an optional {} can't go to JavaScript", this.c.ty_name(x)));
+            }
+            return fmt3("if ({}.has) result = {}; else napi_get_null(env, &result);", S(r), this.node_put_simple(x, fmt("{}.value", S(r)).as_str()), S(""));
+        },
+        .SLICE(x) => {
+            if (!this.node_simple(x)) {
+                return fail(NO_SPAN, fmt("a slice of {} can't go to JavaScript", this.c.ty_name(x)));
+            }
+            return fmt4("napi_create_array_with_length(env, {}.len, &result); for (size_t i = 0; i < {}.len; i++) napi_set_element(env, result, (uint32_t)i, {});", S(r), S(r), this.node_put_simple(x, fmt("{}.ptr[i]", S(r)).as_str()), S(""));
+        },
+        .RESULT(e, x) => {
+            var out = fmt("if ({}.error != 0) { vn_throw_code(env, ", S(r));
+            out.append(fmt("{}.error); goto fail; } ", S(r)).as_str());
+            if (x == VOID) {
+                out.append("napi_get_undefined(env, &result);");
+            } else {
+                out.append((try this.node_result(x, fmt("{}.value", S(r)).as_str())).as_str());
+            }
+            return move out;
+        },
+        .PTR(x) => { return fmt("result = vn_from_external(env, (void *){});", S(r)); },
+        default => { return fail(NO_SPAN, fmt("{} can't go to JavaScript", this.c.ty_name(t))); },
+    }
+}
+
+// the C function behind one JS function (self: the export struct a method's this is, if any)
+attach fn node_fn(this: bind&, f: u32, wname: str, self_class: u32?, out: std::string&) -> compile_error!void {
+    val info = this.c.fi(f);
+    var first: usize = 0;
+    var decls: std::string = {};
+    var gets: std::string = {};
+    var passes: std::string = {};
+    var afters: std::string = {};
+    var cleanups: std::string = {};
+    val sc = self_class;
+    if (sc) {
+        first = 1;
+        decls.append(fmt2("    {}p_self = NULL;\n", spaced(this.handle_c(sc, false)), S("")).as_str());
+        gets.append(fmt2("    if (!vn_unwrap(env, self, &vn_tag_{}, (void **)&p_self, \"{}\")) { goto fail; }\n", this.node_sname(sc), this.node_sname(sc)).as_str());
+        passes.append("p_self");
+    }
+    val n = info.params.len - first;
+    var required: usize = 0;
+    for (k) in first..info.params.len {
+        val p = info.params.at(k);
+        var a: node_arg = {};
+        val js = fmt("argv[{}]", unum(@cast<u64>(k - first)));
+        val cname = fmt("p_{}", S(p.name));
+        try this.node_arg_of(p.ty, js.as_str(), cname.as_str(), &a);
+        decls.append(fmt("    {}\n", copy a.decl).as_str());
+        gets.append(fmt("    {}\n", copy a.get).as_str());
+        if (passes.len() > 0) {
+            passes.append(", ");
+        }
+        passes.append(a.pass.as_str());
+        if (a.after.len() > 0) {
+            afters.append(fmt("        {}\n", copy a.after).as_str());
+        }
+        if (a.cleanup.len() > 0) {
+            cleanups.append(fmt("    {}\n", copy a.cleanup).as_str());
+        }
+        match (this.shape_of(p.ty) ?? shape::VOID) {
+            .OPT(x) => {},
+            default => { required = k - first + 1; },
+        }
+    }
+    var argn = n;
+    if (argn == 0) {
+        argn = 1;
+    }
+    out.append(fmt3("\nstatic napi_value {}(napi_env env, napi_callback_info info) {{\n    size_t argc = {};\n    napi_value argv[{}], self = NULL, result = NULL;\n", S(wname), unum(@cast<u64>(n)), unum(@cast<u64>(argn))).as_str());
+    out.append(decls.as_str());
+    out.append("    if (napi_get_cb_info(env, info, &argc, argv, &self, NULL) != napi_ok) {\n        return NULL;\n    }\n");
+    if (required > 0) {
+        out.append(fmt3("    if (argc < {}) {{\n        napi_throw_type_error(env, NULL, \"{} takes {} arguments\");\n        return NULL;\n    }}\n", unum(@cast<u64>(required)), S(info.c_name), unum(@cast<u64>(required))).as_str());
+    }
+    out.append(gets.as_str());
+    out.append("    if (0) {\n        goto fail;\n    }\n    {\n");
+    val call = fmt2("{}({})", S(info.c_name), move passes);
+    if (info.ret == VOID) {
+        out.append(fmt("        {};\n", move call).as_str());
+    } else {
+        out.append(fmt2("        {}r = {};\n", spaced(this.c_prim(info.ret, false)), move call).as_str());
+    }
+    // the result first: an error throws (goto fail) before anything is written back
+    out.append(fmt("        {}\n", try this.node_result(info.ret, "r")).as_str());
+    out.append(afters.as_str());
+    out.append("    }\nfail:\n");
+    out.append(cleanups.as_str());
+    out.append("    return result;\n}\n");
+    return;
+}
+
+// a stable 128-bit tag for export struct s, so a method can check what its this is
+attach fn node_tag(this: bind&, s: u32) -> std::string {
+    var name = S(this.pkg);
+    name.append("::");
+    name.append(this.node_sname(s).as_str());
+    val a = fnv64(name.as_str());
+    name.append("#");
+    val b = fnv64(name.as_str());
+    return fmt2("{{0x{}ULL, 0x{}ULL}}", hex_u64(a), hex_u64(b));
+}
+
+fn fnv64(s: str) -> u64 {
+    var h: u64 = 14695981039346656037;
+    for (c) in s {
+        h = (h ^ @cast<u64>(c)) *% 1099511628211;
+    }
+    return h;
+}
+
+fn hex_u64(v: u64) -> std::string {
+    val digits = "0123456789abcdef";
+    var out: std::string = {};
+    var i: u64 = 16;
+    while (i > 0) {
+        i -= 1;
+        out.push(digits[@cast<usize>((v >> (i * 4)) & 15)]);
+    }
+    return move out;
+}
+
+attach fn node_text(this: bind&) -> compile_error!std::string {
+    val ents = this.entries();
+    var out: std::string = {};
+    out.append(fmt("// {}: generated by voltc bindings; a Node-API addon (Node.js, Bun) for the Volt package\n", S(this.pkg)).as_str());
+    out.append(fmt3("// {}. Build it against the library and node's headers:\n//   cc -shared -fPIC -I<node's include/node> {}_node.c -L. -l{} -o ", S(this.pkg), S(this.pkg), S(this.pkg)).as_str());
+    out.append(fmt("{}.node\n// then require it (or the loader voltc bindings --lang js writes).\n#include <node_api.h>\n#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\n\n", S(this.pkg)).as_str());
+    out.append(this.c_text().as_str());
+    out.append("\n// ---------- conversions ----------\n\n");
+    out.append("// throw a TypeError, unless something already threw; always 0\nstatic inline int vn_throw(napi_env env, const char *what) {\n    bool pending = false;\n    napi_is_exception_pending(env, &pending);\n    if (!pending) {\n        napi_throw_type_error(env, NULL, what);\n    }\n    return 0;\n}\n\n");
+    out.append("static inline void vn_throw_range(napi_env env) {\n    napi_throw_range_error(env, NULL, \"the number doesn't fit the parameter's type\");\n}\n\n");
+    out.append("static inline int vn_is_nullish(napi_env env, napi_value v) {\n    napi_valuetype t = napi_undefined;\n    napi_typeof(env, v, &t);\n    return t == napi_undefined || t == napi_null;\n}\n\n");
+    out.append("static inline int vn_bool(napi_env env, napi_value v, bool *out) {\n    return napi_get_value_bool(env, v, out) == napi_ok || vn_throw(env, \"expected a boolean\");\n}\n\n");
+    out.append("static inline int vn_f64(napi_env env, napi_value v, double *out) {\n    return napi_get_value_double(env, v, out) == napi_ok || vn_throw(env, \"expected a number\");\n}\n\n");
+    out.append("// a number (whole) or a BigInt\nstatic inline int vn_i64(napi_env env, napi_value v, int64_t *out) {\n    napi_valuetype t = napi_undefined;\n    napi_typeof(env, v, &t);\n    if (t == napi_bigint) {\n        bool lossless = false;\n        return napi_get_value_bigint_int64(env, v, out, &lossless) == napi_ok || vn_throw(env, \"expected an integer\");\n    }\n    double d;\n    // NaN and infinities fail the range test before anything is cast\n    if (t != napi_number || napi_get_value_double(env, v, &d) != napi_ok || !(d >= -9223372036854775808.0 && d < 9223372036854775808.0) || d != (double)(int64_t)d) {\n        return vn_throw(env, \"expected an integer\");\n    }\n    *out = (int64_t)d;\n    return 1;\n}\n\n");
+    out.append("static inline int vn_u64(napi_env env, napi_value v, uint64_t *out) {\n    napi_valuetype t = napi_undefined;\n    napi_typeof(env, v, &t);\n    if (t == napi_bigint) {\n        bool lossless = false;\n        return napi_get_value_bigint_uint64(env, v, out, &lossless) == napi_ok || vn_throw(env, \"expected an integer\");\n    }\n    double d;\n    if (t != napi_number || napi_get_value_double(env, v, &d) != napi_ok || !(d >= 0 && d < 18446744073709551616.0) || d != (double)(uint64_t)d) {\n        return vn_throw(env, \"expected a whole number, 0 or more\");\n    }\n    *out = (uint64_t)d;\n    return 1;\n}\n\n");
+    out.append("// a string's UTF-8 bytes in a buffer the caller frees\nstatic inline int vn_utf8(napi_env env, napi_value v, char **buf, size_t *len) {\n    if (napi_get_value_string_utf8(env, v, NULL, 0, len) != napi_ok) {\n        return vn_throw(env, \"expected a string\");\n    }\n    *buf = malloc(*len + 1);\n    if (!*buf) {\n        return vn_throw(env, \"out of memory\");\n    }\n    napi_get_value_string_utf8(env, v, *buf, *len + 1, len);\n    return 1;\n}\n\n");
+    if (this.uses_str) {
+        out.append("static inline int vn_str(napi_env env, napi_value v, volt_str *out, char **buf) {\n    size_t len = 0;\n    if (!vn_utf8(env, v, buf, &len)) {\n        return 0;\n    }\n    out->ptr = (const uint8_t *)*buf;\n    out->len = len;\n    return 1;\n}\n\n");
+    }
+    out.append("static inline int vn_cstr(napi_env env, napi_value v, const char **out, char **buf) {\n    size_t len = 0;\n    if (vn_is_nullish(env, v)) {\n        *out = NULL;\n        return 1;\n    }\n    if (!vn_utf8(env, v, buf, &len)) {\n        return 0;\n    }\n    *out = *buf;\n    return 1;\n}\n\n");
+    out.append("static inline int vn_array(napi_env env, napi_value v, uint32_t *n) {\n    bool is = false;\n    napi_is_array(env, v, &is);\n    if (!is || napi_get_array_length(env, v, n) != napi_ok) {\n        return vn_throw(env, \"expected an array\");\n    }\n    return 1;\n}\n\n");
+    out.append("static inline int vn_function(napi_env env, napi_value v) {\n    napi_valuetype t = napi_undefined;\n    napi_typeof(env, v, &t);\n    return t == napi_function || vn_throw(env, \"expected a function\");\n}\n\n");
+    out.append("static inline int vn_external(napi_env env, napi_value v, void **out) {\n    if (vn_is_nullish(env, v)) {\n        *out = NULL;\n        return 1;\n    }\n    return napi_get_value_external(env, v, out) == napi_ok || vn_throw(env, \"expected a pointer from this library\");\n}\n\n");
+    out.append("// a class instance's handle (after a check that it is one), or an error once it's closed\nstatic inline int vn_unwrap(napi_env env, napi_value v, const napi_type_tag *tag, void **out, const char *what) {\n    bool is = false;\n    char msg[160];\n    if (napi_check_object_type_tag(env, v, tag, &is) != napi_ok || !is) {\n        snprintf(msg, sizeof msg, \"expected a %s\", what);\n        return vn_throw(env, msg);\n    }\n    if (napi_unwrap(env, v, out) != napi_ok || !*out) {\n        snprintf(msg, sizeof msg, \"this %s is closed\", what);\n        return vn_throw(env, msg);\n    }\n    return 1;\n}\n\n");
+    out.append("static inline napi_value vn_num(napi_env env, double d) {\n    napi_value v = NULL;\n    napi_create_double(env, d, &v);\n    return v;\n}\n\nstatic inline napi_value vn_from_bool(napi_env env, bool b) {\n    napi_value v = NULL;\n    napi_get_boolean(env, b, &v);\n    return v;\n}\n\nstatic inline napi_value vn_from_str(napi_env env, const uint8_t *p, size_t n) {\n    napi_value v = NULL;\n    napi_create_string_utf8(env, (const char *)p, n, &v);\n    return v;\n}\n\nstatic inline napi_value vn_from_cstr(napi_env env, const char *s) {\n    napi_value v = NULL;\n    if (s) {\n        napi_create_string_utf8(env, s, NAPI_AUTO_LENGTH, &v);\n    } else {\n        napi_get_null(env, &v);\n    }\n    return v;\n}\n\nstatic inline napi_value vn_from_external(napi_env env, void *p) {\n    napi_value v = NULL;\n    if (p) {\n        napi_create_external(env, p, NULL, NULL, &v);\n    } else {\n        napi_get_null(env, &v);\n    }\n    return v;\n}\n\n");
+    // errors: an Error whose code is the error's name
+    out.append("static inline const char *vn_error_name(uint32_t code) {\n    switch (code) {\n");
+    for (c&) in this.all_codes().items() {
+        out.append(fmt2("    case {}u: return \"{}\";\n", num(c.code), S(c.name)).as_str());
+    }
+    out.append("    }\n    return \"ERROR\";\n}\n\n// throw an Error for a Volt error code: its code and message are the error's name\nstatic inline void vn_throw_code(napi_env env, uint32_t code) {\n    napi_value msg = NULL, name = NULL, err = NULL, num = NULL;\n    napi_create_string_utf8(env, vn_error_name(code), NAPI_AUTO_LENGTH, &name);\n    napi_create_string_utf8(env, vn_error_name(code), NAPI_AUTO_LENGTH, &msg);\n    napi_create_error(env, name, msg, &err);\n    napi_create_uint32(env, code, &num);\n    napi_set_named_property(env, err, \"errno\", num);\n    napi_throw(env, err);\n}\n");
+    // structs: to and from plain objects
+    for (s&) in this.structs.items() {
+        if (!this.node_simple(this.c.t.intern(tyk::STRUCT(*s)))) {
+            continue;
+        }
+        val sn = this.node_sname(*s);
+        val cn = this.c_named(this.c.si(*s).name, false);
+        out.append(fmt3("\nstatic inline int vn_get_{}(napi_env env, napi_value v, {} *out) {{\n    napi_valuetype t = napi_undefined;\n    napi_typeof(env, v, &t);\n    if (t != napi_object) {{\n        return vn_throw(env, \"expected a {} object\");\n    }}\n", copy sn, copy cn, copy sn).as_str());
+        for (f&) in this.c.si(*s).fields.items() {
+            out.append(fmt3("    {{\n        napi_value f;\n        napi_get_named_property(env, v, \"{}\", &f);\n        {}\n    }}\n", S(f.name), this.node_get_simple(f.ty, "f", fmt("out->{}", S(f.name)).as_str()), S("")).as_str());
+        }
+        out.append("    return 1;\nfail:\n    return 0;\n}\n");
+        out.append(fmt2("\nstatic inline void vn_set_{}(napi_env env, napi_value v, const {} *in) {{\n", copy sn, copy cn).as_str());
+        for (f&) in this.c.si(*s).fields.items() {
+            out.append(fmt2("    napi_set_named_property(env, v, \"{}\", {});\n", S(f.name), this.node_put_simple(f.ty, fmt("in->{}", S(f.name)).as_str())).as_str());
+        }
+        out.append("}\n");
+        out.append(fmt3("\nstatic inline napi_value vn_new_{}(napi_env env, const {} *in) {{\n    napi_value v = NULL;\n    napi_create_object(env, &v);\n    vn_set_{}(env, v, in);\n    return v;\n}}\n", copy sn, copy cn, copy sn).as_str());
+    }
+    // callbacks: the C function a Volt closure parameter calls, which calls the JS function
+    out.append("\n// a JS function passed for a callback (only used during the call)\nstruct vn_cb {\n    napi_env env;\n    napi_value fn;\n};\n");
+    for (i) in 0..this.closures.len {
+        match (*this.c.t.get(*this.closures.at(i))) {
+            .FN_VAL(ps&, r) => {
+                var params = S("void *user");
+                for (k) in 0..ps.len {
+                    params.append(fmt2(", {}a{}", spaced(this.c_prim(*ps.at(k), false)), unum(@cast<u64>(k))).as_str());
+                }
+                out.append(fmt3("\nstatic {}vn_cb{}({}) {{\n    struct vn_cb *c = user;\n    napi_env env = c->env;\n    napi_value global = NULL, ret = NULL;\n", spaced(this.c_prim(r, false)), unum(@cast<u64>(i)), move params).as_str());
+                var argn = ps.len;
+                if (argn == 0) {
+                    argn = 1;
+                }
+                out.append(fmt("    napi_value argv[{}];\n", unum(@cast<u64>(argn))).as_str());
+                if (r != VOID) {
+                    out.append(fmt("    {}out;\n    memset(&out, 0, sizeof out);\n", spaced(this.c_prim(r, false))).as_str());
+                }
+                for (k) in 0..ps.len {
+                    if (!this.node_simple(*ps.at(k))) {
+                        match (this.shape_of(*ps.at(k)) ?? shape::VOID) {
+                            .STR => { out.append(fmt3("    argv[{}] = vn_from_str(env, a{}.ptr, a{}.len);\n", unum(@cast<u64>(k)), unum(@cast<u64>(k)), unum(@cast<u64>(k))).as_str()); },
+                            default => { return fail(NO_SPAN, fmt("a callback taking {} can't call JavaScript", this.c.ty_name(*ps.at(k)))); },
+                        }
+                    } else {
+                        out.append(fmt2("    argv[{}] = {};\n", unum(@cast<u64>(k)), this.node_put_simple(*ps.at(k), fmt("a{}", unum(@cast<u64>(k))).as_str())).as_str());
+                    }
+                }
+                out.append(fmt("    napi_get_global(env, &global);\n    if (napi_call_function(env, global, c->fn, {}, argv, &ret) != napi_ok) {\n        goto fail;\n    }\n", unum(@cast<u64>(ps.len))).as_str());
+                if (r != VOID) {
+                    if (!this.node_simple(r)) {
+                        return fail(NO_SPAN, fmt("a callback returning {} can't call JavaScript", this.c.ty_name(r)));
+                    }
+                    out.append(fmt("    {}\n", this.node_get_simple(r, "ret", "out")).as_str());
+                    out.append("    return out;\nfail:\n    return out;\n}\n");
+                } else {
+                    out.append("fail:\n    return;\n}\n");
+                }
+            },
+            default => {},
+        }
+    }
+    // classes: a JS class per export struct, owning its handle
+    for (s&) in this.handles.items() {
+        val sn = this.node_sname(*s);
+        val cn = this.handle_c(*s, false);
+        out.append(fmt4("\n// export struct {}\nstatic napi_ref vn_class_{};\nstatic const napi_type_tag vn_tag_{} = {};\n", S(this.c.si(*s).name), copy sn, copy sn, this.node_tag(*s)).as_str());
+        out.append(fmt3("\nstatic void vn_finalize_{}(napi_env env, void *data, void *hint) {{\n    (void)env;\n    (void)hint;\n    {}((void *)data);\n}}\n", copy sn, this.free_name(*s), S("")).as_str());
+        out.append(fmt4("\n// an instance owning handle h\nstatic napi_value vn_wrap_{}(napi_env env, {}h) {{\n    napi_value cls = NULL, ext = NULL, obj = NULL;\n    napi_get_reference_value(env, vn_class_{}, &cls);\n    napi_create_external(env, h, NULL, NULL, &ext);\n    napi_new_instance(env, cls, 1, &ext, &obj);\n    return obj;\n}}\n", copy sn, spaced(copy cn), copy sn, S("")).as_str());
+        out.append(fmt2("\n// frees the handle now (it's freed when the object is collected otherwise)\nstatic napi_value vn_close_{}(napi_env env, napi_callback_info info) {{\n    napi_value self = NULL, undef = NULL;\n    void *h = NULL;\n    napi_get_cb_info(env, info, NULL, NULL, &self, NULL);\n    if (napi_remove_wrap(env, self, &h) == napi_ok && h) {{\n        {}(h);\n    }}\n", copy sn, this.free_name(*s)).as_str());
+        out.append("    napi_get_undefined(env, &undef);\n    return undef;\n}\n");
+        // the constructor: a handle from C (an External), or the class's new
+        var maker: u32? = null;
+        for (e&) in ents.items() {
+            if (e.free_of == null && this.member_of(e.f, *s) != null && (this.member_of(e.f, *s) ?? "") == "new" && this.made_by(e.f, *s) && !this.node_is_method(e.f, *s)) {
+                maker = e.f;
+            }
+        }
+        val mk = maker;
+        if (mk) {
+            try this.node_fn(mk, fmt("vn_new_{}", copy sn).as_str(), null, &out);
+        }
+        out.append(fmt2("\nstatic napi_value vn_ctor_{}(napi_env env, napi_callback_info info) {{\n    size_t argc = 1;\n    napi_value argv[1], self = NULL, made = NULL;\n    napi_valuetype t0 = napi_undefined;\n    void *h = NULL;\n    if (napi_get_cb_info(env, info, &argc, argv, &self, NULL) != napi_ok) {{\n        return NULL;\n    }}\n    if (argc >= 1) {{\n        napi_typeof(env, argv[0], &t0);\n    }}\n    if (t0 == napi_external) {{\n        napi_get_value_external(env, argv[0], &h);\n    }} else {{\n", copy sn, S("")).as_str());
+        if (mk) {
+            // run new with the same arguments, then take its handle from the instance it made
+            out.append(fmt2("        made = vn_new_{}(env, info);\n        if (!made || napi_remove_wrap(env, made, &h) != napi_ok) {{\n            return NULL;\n        }}\n", copy sn, S("")).as_str());
+        } else {
+            out.append(fmt("        napi_throw_type_error(env, NULL, \"{} is made by the library's functions\");\n        return NULL;\n", copy sn).as_str());
+        }
+        out.append(fmt3("    }}\n    napi_wrap(env, self, h, vn_finalize_{}, NULL, NULL);\n    napi_type_tag_object(env, self, &vn_tag_{});\n    return self;\n}}\n", copy sn, copy sn, S("")).as_str());
+    }
+    // the functions
+    for (e&) in ents.items() {
+        if (e.free_of != null) {
+            continue;
+        }
+        val cls = this.class_of(e.f);
+        if (cls) {
+            if (!this.node_is_method(e.f, cls) && (this.member_of(e.f, cls) ?? "") == "new") {
+                continue;
+            }
+            if (this.node_is_method(e.f, cls)) {
+                try this.node_fn(e.f, fmt("vn_f_{}", S(this.c.fi(e.f).c_name)).as_str(), cls, &out);
+            } else {
+                try this.node_fn(e.f, fmt("vn_f_{}", S(this.c.fi(e.f).c_name)).as_str(), null, &out);
+            }
+        } else {
+            try this.node_fn(e.f, fmt("vn_f_{}", S(this.c.fi(e.f).c_name)).as_str(), null, &out);
+        }
+    }
+    // the module
+    out.append("\nstatic inline void vn_set_num(napi_env env, napi_value obj, const char *name, double v) {\n    napi_set_named_property(env, obj, name, vn_num(env, v));\n}\n\nstatic inline void vn_set_text(napi_env env, napi_value obj, const char *name, const char *v) {\n    napi_value s = NULL;\n    napi_create_string_utf8(env, v, NAPI_AUTO_LENGTH, &s);\n    napi_set_named_property(env, obj, name, s);\n}\n");
+    out.append("\nNAPI_MODULE_EXPORT napi_value napi_register_module_v1(napi_env env, napi_value exports) {\n");
+    var nfree: usize = 0;
+    for (e&) in ents.items() {
+        if (e.free_of == null && this.class_of(e.f) == null) {
+            nfree += 1;
+        }
+    }
+    if (nfree > 0) {
+        out.append("    napi_property_descriptor fns[] = {\n");
+        for (e&) in ents.items() {
+            if (e.free_of != null || this.class_of(e.f) != null) {
+                continue;
+            }
+            val n = S(this.c.fi(e.f).c_name);
+            out.append(fmt2("        {{\"{}\", NULL, vn_f_{}, NULL, NULL, NULL, napi_enumerable, NULL}},\n", copy n, copy n).as_str());
+        }
+        out.append(fmt("    };\n    napi_define_properties(env, exports, {}, fns);\n", unum(@cast<u64>(nfree))).as_str());
+    }
+    for (en&) in this.enums.items() {
+        val info = this.c.ei(*en);
+        out.append("    {\n        napi_value o = NULL;\n        napi_create_object(env, &o);\n");
+        for (i) in 0..info.names.len {
+            out.append(fmt2("        vn_set_num(env, o, \"{}\", {});\n", S(*info.names.at(i)), num(*info.values.at(i))).as_str());
+        }
+        out.append(fmt("        napi_set_named_property(env, exports, \"{}\", o);\n    }\n", this.local(info.name)).as_str());
+    }
+    for (et&) in this.codes.items() {
+        match (*this.c.t.get(*et)) {
+            .ENUM(e) => {
+                val info = this.c.ei(e);
+                out.append("    {\n        napi_value o = NULL;\n        napi_create_object(env, &o);\n");
+                for (i) in 0..info.names.len {
+                    out.append(fmt2("        vn_set_text(env, o, \"{}\", \"{}\");\n", S(*info.names.at(i)), S(*info.names.at(i))).as_str());
+                }
+                out.append(fmt("        napi_set_named_property(env, exports, \"{}\", o);\n    }\n", this.local(info.name)).as_str());
+            },
+            default => {},
+        }
+    }
+    for (s&) in this.handles.items() {
+        val sn = this.node_sname(*s);
+        out.append("    {\n        napi_property_descriptor ps[] = {\n");
+        out.append(fmt("            {\"close\", NULL, vn_close_{}, NULL, NULL, NULL, napi_default_method, NULL},\n", copy sn).as_str());
+        var nps: usize = 1;
+        for (e&) in ents.items() {
+            if (e.free_of != null) {
+                continue;
+            }
+            val m = this.member_of(e.f, *s) ?? continue;
+            if (!this.node_is_method(e.f, *s) && m == "new") {
+                continue;
+            }
+            var attr = S("napi_default_method");
+            if (!this.node_is_method(e.f, *s)) {
+                attr = S("napi_static");
+            }
+            out.append(fmt3("            {{\"{}\", NULL, vn_f_{}, NULL, NULL, NULL, {}, NULL}},\n", S(m), S(this.c.fi(e.f).c_name), move attr).as_str());
+            nps += 1;
+        }
+        out.append(fmt4("        };\n        napi_value cls = NULL;\n        napi_define_class(env, \"{}\", NAPI_AUTO_LENGTH, vn_ctor_{}, NULL, {}, ps, &cls);\n        napi_create_reference(env, cls, 1, &vn_class_{});\n", copy sn, copy sn, unum(@cast<u64>(nps)), copy sn).as_str());
+        out.append(fmt("        napi_set_named_property(env, exports, \"{}\", cls);\n    }\n", copy sn).as_str());
+    }
+    out.append("    return exports;\n}\n");
+    return move out;
+}
+
+// is f a method of export struct s (it takes s as its first parameter)?
+attach fn node_is_method(this: bind&, f: u32, s: u32) -> bool {
+    val info = this.c.fi(f);
+    return info.params.len > 0 && this.lends(info.params.at(0).ty, s);
+}
+
+// the JS loader: finds NAME.node ($VOLT_NAME_NODE, else next to this file) and gives classes
+// Symbol.dispose, for `using`
+attach fn js_text(this: bind&) -> std::string {
+    var out = fmt("// {}: generated by voltc bindings; loads the Node-API addon (voltc bindings --lang node)\n", S(this.pkg));
+    out.append(fmt2("// from $VOLT_{}_NODE, else {}.node next to this file.\n\"use strict\";\nconst path = require(\"path\");\n", upper(this.pkg), S(this.pkg)).as_str());
+    out.append(fmt2("const addon = require(process.env.VOLT_{}_NODE || path.join(__dirname, \"{}.node\"));\n", upper(this.pkg), S(this.pkg)).as_str());
+    for (s&) in this.handles.items() {
+        val sn = this.node_sname(*s);
+        out.append(fmt2("if (Symbol.dispose) {{\n    addon.{}.prototype[Symbol.dispose] = addon.{}.prototype.close;\n}}\n", copy sn, copy sn).as_str());
+    }
+    out.append("module.exports = addon;\n");
+    return move out;
+}
+
+// TypeScript's view of a type, as a parameter (in) or a result
+attach fn ts_ty(this: bind&, t: u32, incoming: bool) -> std::string {
+    val h = this.lent_handle(t);
+    if (h) {
+        return this.node_sname(h);
+    }
+    match (this.shape_of(t) ?? shape::VOID) {
+        .VOID => { return S("void"); },
+        .BOOL => { return S("boolean"); },
+        .INT(k) => {
+            if (incoming && (k == int_ty::I64 || k == int_ty::U64 || k == int_ty::ISIZE || k == int_ty::USIZE)) {
+                return S("number | bigint");
+            }
+            return S("number");
+        },
+        .FLOAT(b) => { return S("number"); },
+        .CSTR => { return S("string | null"); },
+        .STR => { return S("string"); },
+        .TEXT(x) => { return S("string"); },
+        .ENUM(e) => { return this.local(this.c.ei(e).name); },
+        .CODE => { return S("number"); },
+        .STRUCT(s) => { return this.node_sname(s); },
+        .PTR(x) => {
+            if (x != VOID && this.node_simple(x)) {
+                return this.ts_ty(x, incoming);
+            }
+            return S("unknown");
+        },
+        .SLICE(x) => {
+            var e = this.ts_ty(x, incoming);
+            if (ends_with(e.as_str(), "bigint")) {
+                e = fmt("({})", move e);
+            }
+            e.append("[]");
+            return move e;
+        },
+        .OPT(x) => {
+            var v = this.ts_ty(x, incoming);
+            v.append(" | null");
+            if (incoming) {
+                v.append(" | undefined");
+            }
+            return move v;
+        },
+        .HANDLE(s) => { return this.node_sname(s); },
+        .RESULT(e, x) => { return this.ts_ty(x, incoming); },
+        .CLOSURE(i) => {
+            match (*this.c.t.get(t)) {
+                .FN_VAL(ps&, r) => {
+                    var s = S("(");
+                    for (k) in 0..ps.len {
+                        if (k > 0) {
+                            s.append(", ");
+                        }
+                        s.append(fmt2("a{}: {}", unum(@cast<u64>(k)), this.ts_ty(*ps.at(k), false)).as_str());
+                    }
+                    s.append(") => ");
+                    s.append(this.ts_ty(r, true).as_str());
+                    return move s;
+                },
+                default => { return S("Function"); },
+            }
+        },
+        default => { return S("unknown"); },
+    }
+}
+
+attach fn ts_params(this: bind&, f: u32, first: usize) -> std::string {
+    val info = this.c.fi(f);
+    var ps: std::string = {};
+    for (k) in first..info.params.len {
+        if (ps.len() > 0) {
+            ps.append(", ");
+        }
+        var opt = "";
+        match (this.shape_of(info.params.at(k).ty) ?? shape::VOID) {
+            .OPT(x) => { opt = "?"; },
+            default => {},
+        }
+        ps.append(fmt3("{}{}: {}", S(info.params.at(k).name), S(opt), this.ts_ty(info.params.at(k).ty, true)).as_str());
+    }
+    return move ps;
+}
+
+// the doc comment above an export fn, as a /** */ line (or nothing)
+attach fn ts_doc(this: bind&, f: u32, indent_by: str) -> std::string {
+    val sp = this.c.dl(this.c.fi(f).decl).item.span;
+    val d = doc_above(this.c.files.at(sp.file).text, @cast<usize>(sp.lo));
+    if (d.len() == 0) {
+        return {};
+    }
+    return fmt3("{}/** {} */\n{}", S(indent_by), move d, S(""));
+}
+
+attach fn ts_text(this: bind&) -> std::string {
+    val ents = this.entries();
+    var out = fmt("// {}: generated by voltc bindings; TypeScript types for the Node-API addon\n", S(this.pkg));
+    out.append("// (voltc bindings --lang node) and its loader (--lang js). An error a Volt function returns is\n// thrown as a VoltError: its code is the error's name.\n\n");
+    out.append("export interface VoltError extends Error {\n    code: string;\n    errno: number;\n}\n");
+    for (s&) in this.structs.items() {
+        if (!this.node_simple(this.c.t.intern(tyk::STRUCT(*s)))) {
+            continue;
+        }
+        out.append(fmt("\nexport interface {} {{\n", this.node_sname(*s)).as_str());
+        for (f&) in this.c.si(*s).fields.items() {
+            out.append(fmt2("    {}: {};\n", S(f.name), this.ts_ty(f.ty, false)).as_str());
+        }
+        out.append("}\n");
+    }
+    for (e&) in this.enums.items() {
+        val info = this.c.ei(*e);
+        val n = this.local(info.name);
+        out.append(fmt("\nexport declare const {}: {{\n", copy n).as_str());
+        var union: std::string = {};
+        for (i) in 0..info.names.len {
+            out.append(fmt2("    readonly {}: {};\n", S(*info.names.at(i)), num(*info.values.at(i))).as_str());
+            if (i > 0) {
+                union.append(" | ");
+            }
+            union.append(num(*info.values.at(i)).as_str());
+        }
+        out.append(fmt2("}};\nexport type {} = {};\n", copy n, move union).as_str());
+    }
+    for (et&) in this.codes.items() {
+        match (*this.c.t.get(*et)) {
+            .ENUM(e) => {
+                val info = this.c.ei(e);
+                val n = this.local(info.name);
+                out.append(fmt2("\n/** the names error set {} throws, as VoltError.code */\nexport declare const {}: {{\n", S(info.name), copy n).as_str());
+                for (i) in 0..info.names.len {
+                    out.append(fmt2("    readonly {}: \"{}\";\n", S(*info.names.at(i)), S(*info.names.at(i))).as_str());
+                }
+                out.append("};\n");
+            },
+            default => {},
+        }
+    }
+    for (s&) in this.handles.items() {
+        val sn = this.node_sname(*s);
+        out.append(fmt2("\n/** export struct {}: close() frees it now (or `using`); otherwise it's freed when collected */\nexport declare class {} {{\n", S(this.c.si(*s).name), copy sn).as_str());
+        for (e&) in ents.items() {
+            if (e.free_of != null) {
+                continue;
+            }
+            val m = this.member_of(e.f, *s) ?? continue;
+            val info = this.c.fi(e.f);
+            out.append(this.ts_doc(e.f, "    ").as_str());
+            if (this.node_is_method(e.f, *s)) {
+                out.append(fmt3("    {}({}): {};\n", S(m), this.ts_params(e.f, 1), this.ts_ty(info.ret, false)).as_str());
+            } else if (m == "new") {
+                out.append(fmt("    constructor({});\n", this.ts_params(e.f, 0)).as_str());
+            } else {
+                out.append(fmt3("    static {}({}): {};\n", S(m), this.ts_params(e.f, 0), this.ts_ty(info.ret, false)).as_str());
+            }
+        }
+        out.append("    close(): void;\n    [Symbol.dispose](): void;\n}\n");
+    }
+    out.append("\n");
+    for (e&) in ents.items() {
+        if (e.free_of != null || this.class_of(e.f) != null) {
+            continue;
+        }
+        val info = this.c.fi(e.f);
+        out.append(this.ts_doc(e.f, "").as_str());
+        out.append(fmt3("export declare function {}({}): {};\n", S(info.c_name), this.ts_params(e.f, 0), this.ts_ty(info.ret, false)).as_str());
+    }
+    return move out;
+}
+
 // ---------- the command ----------
 
-// the bindings of package pkg in lang (c, cpp, rust, zig, python, or json: the model itself)
+// the bindings of package pkg in lang (c, cpp, rust, zig, python; node, js and ts: a Node-API addon,
+// its loader and its types; json: the model itself)
 attach fn bindings(this: checker&, pkg: str, lang: str) -> compile_error!std::string {
     var b: bind = { c: this, pkg: pkg };
     val fns = b.exports();
@@ -2672,5 +3404,14 @@ attach fn bindings(this: checker&, pkg: str, lang: str) -> compile_error!std::st
     if (lang == "json") {
         return b.json_text();
     }
-    return fail(NO_SPAN, fmt("--lang takes c, cpp, rust, zig, python or json, not '{}'", S(lang)));
+    if (lang == "node") {
+        return b.node_text();
+    }
+    if (lang == "js") {
+        return b.js_text();
+    }
+    if (lang == "ts") {
+        return b.ts_text();
+    }
+    return fail(NO_SPAN, fmt("--lang takes c, cpp, rust, zig, python, node, js, ts or json, not '{}'", S(lang)));
 }
