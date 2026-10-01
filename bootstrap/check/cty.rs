@@ -65,6 +65,9 @@ impl Checker {
         Ok(match self.t.get(id).clone() {
             Ty::Opt(t) | Ty::Array(t, _) | Ty::Range(t) => vec![t],
             Ty::Tuple(ts, _) => ts,
+            // a function pointer typedef names its parameter and result types, which may be
+            // typedefs too (other function pointers)
+            Ty::FnPtr(ps, r, _) | Ty::FnVal(ps, r) => ps.into_iter().chain([r]).collect(),
             Ty::Struct(s) => self.struct_fields(s, Span::default())?.iter().map(|f| f.ty).collect(),
             Ty::Enum(e) => self.enum_payloads(e, Span::default())?.iter().flatten().copied().collect(),
             Ty::ErrUnion(e, t) => vec![e, t],
@@ -105,6 +108,11 @@ impl Checker {
         }
         for dep in self.value_deps(id)? {
             self.cty(dep);
+            // a niche optional is its payload's C type (a function pointer's typedef, say)
+            let dep = match self.t.get(dep) {
+                Ty::Opt(x) if self.t.is_niche(*x) => *x,
+                _ => dep,
+            };
             if self.needs_def(dep) {
                 self.define(dep, done, fwd, defs)?;
             }

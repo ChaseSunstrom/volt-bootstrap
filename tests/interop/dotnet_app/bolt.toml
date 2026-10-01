@@ -1,0 +1,6 @@
+[package]
+name = "dotnet_app"
+version = "0.1.0"
+
+[dependencies]
+dotnet = { path = "../../../interop/dotnet" }

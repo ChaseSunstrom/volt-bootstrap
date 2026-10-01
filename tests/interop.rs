@@ -441,6 +441,40 @@ fn java_package() {
     }
 }
 
+/// Volt calls .NET through the interop/dotnet package: hostfxr starts the runtime a C# library asks
+/// for and hands out its [UnmanagedCallersOnly] methods as C functions, on both backends
+#[test]
+fn dotnet_package() {
+    let Some(dotnet) = local_tool("dotnet", "--version") else {
+        eprintln!("dotnet isn't installed: skipping the dotnet package");
+        return;
+    };
+    let e = Env::new("dotnet");
+    let app = e.dir.join("dotnet_app");
+    let fx = Path::new(ROOT).join("tests/interop/dotnet_app");
+    copy_dir(&fx.join("src"), &app.join("src"));
+    copy_dir(&fx.join("lib"), &e.dir.join("cs"));
+    std::fs::write(app.join("bolt.toml"), format!("[package]\nname = \"dotnet_app\"\nversion = \"0.1.0\"\n\n[dependencies]\ndotnet = {{ path = \"{}\" }}\n\n[std]\npath = \"{}\"\n", Path::new(ROOT).join("interop/dotnet").display(), Path::new(ROOT).join("std").display())).unwrap();
+    // the C# library, for the installed .NET
+    let v = String::from_utf8_lossy(&Command::new(&dotnet).arg("--version").output().unwrap().stdout).trim().to_string();
+    let framework = format!("-p:TargetFramework=net{}.0", v.split('.').next().unwrap_or("10"));
+    let lib = e.dir.join("cs/bin");
+    let o = Command::new(&dotnet).args(["build", "-c", "Release", "--nologo", &framework, "-o"]).arg(&lib).current_dir(e.dir.join("cs")).env("DOTNET_CLI_TELEMETRY_OPTOUT", "1").env("DOTNET_NOLOGO", "1").env("DOTNET_SKIP_FIRST_TIME_EXPERIENCE", "1").output().unwrap();
+    ok(o, "dotnet build");
+    let want = "add 42\nmean 2.625\nhello, volt from .NET\njson {\"x\":3,\"y\":4}\napply 41\ndivide 0 3\ndivide by zero 1\nmissing true\n";
+    for backend in ["c", "llvm"] {
+        let mut c = Command::new(env!("CARGO_BIN_EXE_bolt"));
+        c.args(["run", "-q", "--backend", backend]).current_dir(&app).env("VOLTC", &e.voltc).env("BOLT_HOME", e.dir.join("cache")).env("DOTNET_APP_LIB", &lib);
+        // a .NET found through ~/.local/bin: the build file finds it through $DOTNET_ROOT
+        if dotnet.parent().is_some_and(|d| !d.as_os_str().is_empty()) {
+            c.env("DOTNET_ROOT", std::fs::canonicalize(&dotnet).unwrap().parent().unwrap());
+        }
+        let o = c.output().unwrap();
+        assert!(o.status.success(), "bolt run ({backend}): {}", String::from_utf8_lossy(&o.stderr));
+        assert_eq!(String::from_utf8_lossy(&o.stdout), want, "Volt calls .NET ({backend})");
+    }
+}
+
 /// a Node.js addon written in Volt with interop/node: bolt builds it as a shared library, node
 /// loads it (as a .node file), on both backends
 #[test]

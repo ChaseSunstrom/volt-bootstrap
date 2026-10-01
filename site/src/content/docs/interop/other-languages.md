@@ -2,7 +2,7 @@
 title: Other languages
 description: Calling Volt from C, C++, Rust, Zig, Python, JavaScript, C#, Java, Go, Lua, Dart, Swift, Kotlin and Ruby, and calling them from Volt.
 sidebar:
-  order: 7
+  order: 8
 ---
 
 Everything meets at the C ABI.
@@ -20,6 +20,7 @@ Everything meets at the C ABI.
   `python3-config --includes` and `--ldflags --embed` passed through `--cc`.
 - **Node.js**: write the addon in Volt with `interop/node`, see [Node.js addons](/volt-bootstrap/interop/node/).
 - **Java**: depend on the `interop/java` package, see [Java](/volt-bootstrap/interop/java/).
+- **C#** and other .NET languages: depend on the `interop/dotnet` package, see [.NET](/volt-bootstrap/interop/dotnet/).
 
 ```volt ignore
 extern "C" fn rust_checksum(data: u8*, len: usize) -> u32;   // from a Rust staticlib

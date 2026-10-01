@@ -1,0 +1,7 @@
+[package]
+name = "dotnet"
+version = "0.1.0"
+description = "Call .NET from Volt through hostfxr: the runtime in the process, [UnmanagedCallersOnly] methods as C functions"
+
+[build]
+files = ["build.volt"]

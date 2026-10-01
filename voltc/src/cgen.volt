@@ -201,6 +201,16 @@ attach fn value_deps(this: cgen&, t: u32) -> std::vec<u32> {
         .ARRAY(x, n) => { put(&out, x); },
         .RANGE(x) => { put(&out, x); },
         .TUPLE(ts, names) => { out = copy ts; },
+        // a function pointer typedef names its parameter and result types, which may be typedefs
+        // too (other function pointers)
+        .FN_PTR(ps, r, va) => {
+            out = copy ps;
+            put(&out, r);
+        },
+        .FN_VAL(ps, r) => {
+            out = copy ps;
+            put(&out, r);
+        },
         .STRUCT(s) => {
             val fs = this.c.struct_fields(s, {}) catch |e| { return {}; };
             for (f&) in fs.items() {
@@ -297,8 +307,18 @@ attach fn define(this: cgen&, t: u32) -> void {
     this.defined.put(t, true);
     for (d&) in this.value_deps(t).items() {
         this.ty(*d);
-        if (this.needs_def(*d)) {
-            this.define(*d);
+        // a niche optional is its payload's C type (a function pointer's typedef, say)
+        var dep = *d;
+        match (*this.c.t.get(dep)) {
+            .OPT(x) => {
+                if (this.c.t.is_niche(x)) {
+                    dep = x;
+                }
+            },
+            default => {},
+        }
+        if (this.needs_def(dep)) {
+            this.define(dep);
         }
     }
     val name = this.ty(t);
