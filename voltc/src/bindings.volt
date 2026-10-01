@@ -1,4 +1,4 @@
-// Bindings for other languages: `voltc bindings NAME --lang c|cpp|rust|zig|python|pyi|node|js|ts|json` describes package
+// Bindings for other languages: `voltc bindings NAME --lang c|cpp|rust|zig|python|pyi|csharp|node|js|ts|json` describes package
 // NAME's export fns and the types they use, for programs that call a library built with
 // `voltc lib NAME --shared` (or `--static`). Every type crosses in a C form:
 // - numbers, bool, pointers (T* and T&), cstr, str (volt_str: a pointer and a length), structs whose
@@ -2822,6 +2822,587 @@ attach fn pyi_text(this: bind&) -> std::string {
     return move out;
 }
 
+// ---------- C# ----------
+
+fn cs_keyword(s: str) -> bool {
+    val words: str[] = { "abstract", "as", "base", "bool", "break", "byte", "case", "catch", "char", "checked", "class", "const", "continue", "decimal", "default", "delegate", "do", "double", "else", "enum", "event", "explicit", "extern", "false", "finally", "fixed", "float", "for", "foreach", "goto", "if", "implicit", "in", "int", "interface", "internal", "is", "lock", "long", "namespace", "new", "null", "object", "operator", "out", "override", "params", "private", "protected", "public", "readonly", "ref", "return", "sbyte", "sealed", "short", "sizeof", "stackalloc", "static", "string", "struct", "switch", "this", "throw", "true", "try", "typeof", "uint", "ulong", "unchecked", "unsafe", "ushort", "using", "virtual", "void", "volatile", "while" };
+    for (w) in words {
+        if (w == s) {
+            return true;
+        }
+    }
+    return false;
+}
+
+fn cs_ident(s: str) -> std::string {
+    if (cs_keyword(s)) {
+        return fmt("@{}", S(s));
+    }
+    return S(s);
+}
+
+fn cs_int(k: int_ty) -> str {
+    if (k == int_ty::I8) {
+        return "sbyte";
+    }
+    if (k == int_ty::U8) {
+        return "byte";
+    }
+    if (k == int_ty::I16) {
+        return "short";
+    }
+    if (k == int_ty::U16) {
+        return "ushort";
+    }
+    if (k == int_ty::I32) {
+        return "int";
+    }
+    if (k == int_ty::U32) {
+        return "uint";
+    }
+    if (k == int_ty::I64) {
+        return "long";
+    }
+    if (k == int_ty::U64) {
+        return "ulong";
+    }
+    if (k == int_ty::ISIZE) {
+        return "nint";
+    }
+    return "nuint";
+}
+
+// a type as the C functions (class Native) see it: blittable, bool as a byte
+attach fn cs_raw(this: bind&, t: u32) -> std::string {
+    match (this.shape_of(t) ?? shape::VOID) {
+        .VOID => { return S("void"); },
+        .BOOL => { return S("byte"); },
+        .INT(k) => { return S(cs_int(k)); },
+        .FLOAT(b) => {
+            if (b == 32) {
+                return S("float");
+            }
+            return S("double");
+        },
+        .CSTR => { return S("byte*"); },
+        .STR => { return S("VoltStr"); },
+        .TEXT(x) => { return S("VoltText"); },
+        .PTR(x) => {
+            if (x == VOID) {
+                return S("void*");
+            }
+            match (this.shape_of(x) ?? shape::VOID) {
+                .HANDLE(s) => { return S("IntPtr"); },
+                default => {},
+            }
+            return fmt("{}*", this.cs_raw(x));
+        },
+        .HANDLE(s) => { return S("IntPtr"); },
+        .STRUCT(s) => { return this.local(this.c.si(s).name); },
+        .ENUM(e) => { return this.local(this.c.ei(e).name); },
+        .CODE => { return S("uint"); },
+        .RESULT(e, x) => { return this.result_name(t); },
+        .ARRAY(elem, n) => { return S("IntPtr"); },
+        .SLICE(x) => { return this.made_name("slice", x, true); },
+        .OPT(x) => { return this.made_name("opt", x, true); },
+        .FN(i) => { return S("IntPtr"); },
+        .CLOSURE(i) => { return this.cs_fnptr(t); },
+    }
+}
+
+// a closure parameter's C function: delegate* unmanaged<IntPtr, A..., R>
+attach fn cs_fnptr(this: bind&, t: u32) -> std::string {
+    var s = S("delegate* unmanaged<IntPtr");
+    match (*this.c.t.get(t)) {
+        .FN_VAL(ps&, r) => {
+            for (p&) in ps.items() {
+                s.append(", ");
+                s.append(this.cs_raw(*p).as_str());
+            }
+            s.append(", ");
+            s.append(this.cs_raw(r).as_str());
+        },
+        default => {},
+    }
+    s.push('>');
+    return move s;
+}
+
+// a type as the C# API shows it
+attach fn cs_ty(this: bind&, t: u32) -> std::string {
+    val h = this.lent_handle(t);
+    if (h) {
+        return this.local(this.c.si(h).name);
+    }
+    match (this.shape_of(t) ?? shape::VOID) {
+        .BOOL => { return S("bool"); },
+        .CSTR => { return S("string?"); },
+        .STR => { return S("string"); },
+        .TEXT(x) => { return S("string"); },
+        .PTR(x) => {
+            if (x != VOID) {
+                match (this.shape_of(x) ?? shape::VOID) {
+                    .STRUCT(s) => { return fmt("ref {}", this.local(this.c.si(s).name)); },
+                    default => {},
+                }
+            }
+            return this.cs_raw(t);
+        },
+        .HANDLE(s) => { return this.local(this.c.si(s).name); },
+        .SLICE(x) => { return fmt("Span<{}>", this.cs_raw(x)); },
+        .OPT(x) => { return fmt("{}?", this.cs_raw(x)); },
+        .RESULT(e, x) => { return this.cs_ty(x); },
+        .CLOSURE(i) => {
+            match (*this.c.t.get(t)) {
+                .FN_VAL(ps&, r) => {
+                    var args: std::string = {};
+                    for (p&) in ps.items() {
+                        if (args.len() > 0) {
+                            args.append(", ");
+                        }
+                        args.append(this.cs_ty(*p).as_str());
+                    }
+                    if (r == VOID) {
+                        if (ps.len == 0) {
+                            return S("Action");
+                        }
+                        return fmt("Action<{}>", move args);
+                    }
+                    if (args.len() > 0) {
+                        args.append(", ");
+                    }
+                    args.append(this.cs_ty(r).as_str());
+                    return fmt("Func<{}>", move args);
+                },
+                default => { return S("Delegate"); },
+            }
+        },
+        default => { return this.cs_raw(t); },
+    }
+}
+
+// one parameter of a wrapper: its C# declaration, what it passes, and the statements that open
+// (fixed blocks, buffers) and close (copy-back, rethrow) around the call
+struct cs_arg {
+    decl: std::string = {};
+    pass: std::string = {};
+    open: std::string = {};
+    close: std::string = {};
+}
+
+attach fn cs_arg_of(this: bind&, t: u32, name0: str, a: cs_arg&) -> void {
+    val nm = cs_ident(name0);
+    val name = nm.as_str();
+    val h = this.lent_handle(t);
+    if (h) {
+        a.decl = fmt2("{} {}", this.local(this.c.si(h).name), S(name));
+        a.pass = fmt("{}.h.DangerousGetHandle()", S(name));
+        // the handle stays alive (and can't be freed) for the call
+        a.open = fmt2("bool {}_ref = false;\n{}.h.DangerousAddRef(ref ", S(name0), S(name));
+        a.open.append(fmt("{}_ref);\ntry {\n", S(name0)).as_str());
+        a.close = fmt2("}\nfinally {{\n    if ({}_ref) {{\n        {}.h.DangerousRelease();\n    }}\n}}\n", S(name0), S(name));
+        return;
+    }
+    match (this.shape_of(t) ?? shape::VOID) {
+        .BOOL => {
+            a.decl = fmt("bool {}", S(name));
+            a.pass = fmt("(byte)({} ? 1 : 0)", S(name));
+        },
+        .STR => {
+            a.decl = fmt("string {}", S(name));
+            a.open = fmt3("byte[] {}_b = Encoding.UTF8.GetBytes({});\nfixed (byte* {}_p = ", S(name0), S(name), S(name0));
+            a.open.append(fmt2("{}_b) {{\n", S(name0), S("")).as_str());
+            a.pass = fmt2("new VoltStr {{ ptr = {}_p, len = (nuint){}_b.Length }}", S(name0), S(name0));
+            a.close = S("}\n");
+        },
+        .CSTR => {
+            a.decl = fmt("string? {}", S(name));
+            a.open = fmt3("byte[]? {}_b = {} == null ? null : Encoding.UTF8.GetBytes({} + \"\\0\");\n", S(name0), S(name), S(name));
+            a.open.append(fmt2("fixed (byte* {}_p = {}_b) {{\n", S(name0), S(name0)).as_str());
+            a.pass = fmt("{}_p", S(name0));
+            a.close = S("}\n");
+        },
+        .PTR(x) => {
+            if (x != VOID) {
+                match (this.shape_of(x) ?? shape::VOID) {
+                    .STRUCT(s) => {
+                        a.decl = fmt2("ref {} {}", this.local(this.c.si(s).name), S(name));
+                        a.open = fmt3("fixed ({}* {}_p = &{}) {{\n", this.local(this.c.si(s).name), S(name0), S(name));
+                        a.pass = fmt("{}_p", S(name0));
+                        a.close = S("}\n");
+                        return;
+                    },
+                    default => {},
+                }
+            }
+            a.decl = fmt2("{} {}", this.cs_raw(t), S(name));
+            a.pass = S(name);
+        },
+        .SLICE(x) => {
+            a.decl = fmt2("Span<{}> {}", this.cs_raw(x), S(name));
+            a.open = fmt3("fixed ({}* {}_p = {}) {{\n", this.cs_raw(x), S(name0), S(name));
+            a.pass = fmt3("new {} {{ ptr = {}_p, len = (nuint){}.Length }}", this.made_name("slice", x, true), S(name0), S(name));
+            a.close = S("}\n");
+        },
+        .OPT(x) => {
+            a.decl = fmt2("{}? {}", this.cs_raw(x), S(name));
+            a.pass = fmt3("new {} {{ value = {}.GetValueOrDefault(), has = (byte)({}.HasValue ? 1 : 0) }}", this.made_name("opt", x, true), S(name), S(name));
+        },
+        .CLOSURE(i) => {
+            a.decl = fmt2("{} {}", this.cs_ty(t), S(name));
+            // the C function finds the delegate through a GCHandle; an exception it throws comes back
+            // out of this call
+            a.open = fmt3("var {}_s = new Callback({});\nGCHandle {}_g = GCHandle.Alloc(", S(name0), S(name), S(name0));
+            a.open.append(fmt2("{}_s);\ntry {{\n", S(name0), S("")).as_str());
+            a.pass = fmt3("&Callbacks.cb{}, GCHandle.ToIntPtr({}_g)", unum(@cast<u64>(i)), S(name0), S(""));
+            a.close = fmt3("}}\nfinally {{\n    {}_g.Free();\n}}\n{}_s.Rethrow();\n", S(name0), S(name0), S(""));
+        },
+        default => {
+            a.decl = fmt2("{} {}", this.cs_ty(t), S(name));
+            a.pass = S(name);
+        },
+    }
+}
+
+// the C# value of C result r (of type t)
+attach fn cs_value(this: bind&, t: u32, r: str) -> std::string {
+    match (this.shape_of(t) ?? shape::VOID) {
+        .BOOL => { return fmt("{} != 0", S(r)); },
+        .STR => { return fmt("VoltStr.Text({})", S(r)); },
+        .CSTR => { return fmt("Marshal.PtrToStringUTF8((IntPtr){})", S(r)); },
+        .TEXT(x) => { return fmt("VoltText.Take({})", S(r)); },
+        .HANDLE(s) => { return fmt3("new {}(new {}Handle({}))", this.local(this.c.si(s).name), this.local(this.c.si(s).name), S(r)); },
+        .OPT(x) => { return fmt3("{}.has != 0 ? {}.value : null", S(r), S(r), S("")); },
+        default => { return S(r); },
+    }
+}
+
+// a wrapper's body: the call inside its parameters' blocks, the error check, the result
+attach fn cs_body(this: bind&, f: u32, args: std::vec<cs_arg>&, ctor: bool) -> std::string {
+    val info = this.c.fi(f);
+    var passes: std::string = {};
+    var open: std::string = {};
+    var close: std::string = {};
+    for (a&) in args.items() {
+        if (passes.len() > 0) {
+            passes.append(", ");
+        }
+        passes.append(a.pass.as_str());
+        open.append(a.open.as_str());
+    }
+    var k = args.len;
+    while (k > 0) {
+        k -= 1;
+        close.append(args.at(k).close.as_str());
+    }
+    var call = fmt2("Native.{}({})", S(info.c_name), move passes);
+    var body: std::string = {};
+    var ret_decl: std::string = {};
+    if (info.ret == VOID) {
+        body = fmt("{};\n", move call);
+    } else {
+        ret_decl = fmt("{} result;\n", this.cs_ty(info.ret));
+        val made = this.makes(f);
+        if (ctor && made != null) {
+            ret_decl = fmt("{}Handle result;\n", this.local(this.c.si(made ?? 0).name));
+        }
+        match (this.shape_of(info.ret) ?? shape::VOID) {
+            .RESULT(e, x) => {
+                body = fmt("var r = {};\nif (r.error != 0) {\n    throw VoltException.For(r.error);\n}\n", move call);
+                if (x == VOID) {
+                    ret_decl = {};
+                } else if (ctor && made != null) {
+                    body.append(fmt2("result = new {}Handle({});\n", this.local(this.c.si(made ?? 0).name), S("r.value")).as_str());
+                } else {
+                    body.append(fmt("result = {};\n", this.cs_value(x, "r.value")).as_str());
+                }
+            },
+            default => {
+                if (ctor && made != null) {
+                    body = fmt2("var r = {};\nresult = new {}Handle(r);\n", move call, this.local(this.c.si(made ?? 0).name));
+                } else {
+                    body = fmt2("var r = {};\nresult = {};\n", move call, this.cs_value(info.ret, "r"));
+                }
+            },
+        }
+    }
+    var out = move ret_decl;
+    out.append(open.as_str());
+    out.append(body.as_str());
+    out.append(close.as_str());
+    if (info.ret != VOID) {
+        match (this.shape_of(info.ret) ?? shape::VOID) {
+            .RESULT(e, x) => {
+                if (x != VOID) {
+                    out.append("return result;\n");
+                }
+            },
+            default => { out.append("return result;\n"); },
+        }
+    }
+    return move out;
+}
+
+// lines of s, indented by n spaces
+fn indent_n(s: str, n: usize) -> std::string {
+    var out: std::string = {};
+    var start = true;
+    for (c) in s {
+        if (start && c != '\n') {
+            for (i) in 0..n {
+                out.push(' ');
+            }
+        }
+        out.push(c);
+        start = c == '\n';
+    }
+    return move out;
+}
+
+attach fn cs_args(this: bind&, f: u32, first: usize) -> std::vec<cs_arg> {
+    val info = this.c.fi(f);
+    var out: std::vec<cs_arg> = {};
+    for (k) in first..info.params.len {
+        var a: cs_arg = {};
+        this.cs_arg_of(info.params.at(k).ty, info.params.at(k).name, &a);
+        put(&out, move a);
+    }
+    return move out;
+}
+
+fn cs_decls(args: std::vec<cs_arg>&) -> std::string {
+    var s: std::string = {};
+    for (a&) in args.items() {
+        if (s.len() > 0) {
+            s.append(", ");
+        }
+        s.append(a.decl.as_str());
+    }
+    return move s;
+}
+
+attach fn cs_doc(this: bind&, f: u32, ind: usize) -> std::string {
+    val sp = this.c.dl(this.c.fi(f).decl).item.span;
+    val d = doc_above(this.c.files.at(sp.file).text, @cast<usize>(sp.lo));
+    if (d.len() == 0) {
+        return {};
+    }
+    var q: std::string = {};
+    for (c) in d.as_str() {
+        if (c == '<') {
+            q.append("&lt;");
+        } else if (c == '&') {
+            q.append("&amp;");
+        } else {
+            q.push(c);
+        }
+    }
+    return indent_n(fmt("/// <summary>{}</summary>\n", move q).as_str(), ind);
+}
+
+attach fn cs_text(this: bind&) -> std::string {
+    val ents = this.entries();
+    var out = fmt("// {}: generated by voltc bindings; the Volt package for C# (.NET 7 or later). It calls\n", S(this.pkg));
+    out.append(fmt2("// lib{}.so (or {}.dll, lib", S(this.pkg), S(this.pkg)).as_str());
+    out.append(fmt("{}.dylib) through LibraryImport; build with AllowUnsafeBlocks. Errors are thrown as\n// VoltException, one subclass per error set.\n", S(this.pkg)).as_str());
+    out.append("#nullable enable\n#pragma warning disable CS8981 // the type names are Volt's (lower case)\nusing System;\nusing System.Runtime.CompilerServices;\nusing System.Runtime.InteropServices;\nusing System.Text;\n\n");
+    out.append(fmt("namespace {};\n", S(this.pkg)).as_str());
+    out.append("\n/// <summary>a Volt str: UTF-8 bytes and a length</summary>\n[StructLayout(LayoutKind.Sequential)]\npublic unsafe struct VoltStr\n{\n    public byte* ptr;\n    public nuint len;\n\n    public static string Text(VoltStr s) => Encoding.UTF8.GetString(s.ptr, (int)s.len);\n}\n");
+    if (this.texts.len > 0) {
+        out.append("\n/// <summary>owned text a Volt function gave out (the wrappers copy it into a string and free it)</summary>\n[StructLayout(LayoutKind.Sequential)]\npublic unsafe struct VoltText\n{\n    public byte* ptr;\n    public nuint len;\n    public IntPtr owner;\n    public delegate* unmanaged<IntPtr, void> drop;\n\n    public static string Take(VoltText t)\n    {\n        string s = Encoding.UTF8.GetString(t.ptr, (int)t.len);\n        if (t.drop != null)\n        {\n            t.drop(t.owner);\n        }\n        return s;\n    }\n}\n");
+    }
+    for (x&) in this.slices.items() {
+        out.append(fmt2("\n/// <summary>a Volt slice: elements and how many</summary>\n[StructLayout(LayoutKind.Sequential)]\npublic unsafe struct {}\n{{\n    public {}* ptr;\n    public nuint len;\n}}\n", this.made_name("slice", *x, true), this.cs_raw(*x)).as_str());
+    }
+    for (x&) in this.opts.items() {
+        out.append(fmt2("\n/// <summary>a Volt optional: has (0 or 1) says whether value is there</summary>\n[StructLayout(LayoutKind.Sequential)]\npublic struct {}\n{{\n    public {} value;\n    public byte has;\n}}\n", this.made_name("opt", *x, true), this.cs_raw(*x)).as_str());
+    }
+    // errors: one exception class per error set, holding its codes too
+    out.append("\n/// <summary>an error a Volt function returned: its code and name</summary>\npublic class VoltException : Exception\n{\n    public uint Code { get; }\n    public string Name { get; }\n\n    public VoltException(uint code, string name) : base(name)\n    {\n        Code = code;\n        Name = name;\n    }\n\n    internal static VoltException For(uint code)\n    {\n        switch (code)\n        {\n");
+    for (c&) in this.all_codes().items() {
+        out.append(fmt4("            case {}u: return new {}(code, \"{}\");\n", num(c.code), copy c.set, S(c.name), S("")).as_str());
+    }
+    out.append("            default: return new VoltException(code, \"error\");\n        }\n    }\n}\n");
+    for (et&) in this.codes.items() {
+        match (*this.c.t.get(*et)) {
+            .ENUM(e) => {
+                val info = this.c.ei(e);
+                val n = this.local(info.name);
+                out.append(fmt3("\n/// <summary>error set {}: thrown for its errors; its codes</summary>\npublic class {} : VoltException\n{{\n    public {}(uint code, string name) : base(code, name) {{ }}\n\n", S(info.name), copy n, copy n).as_str());
+                for (i) in 0..info.names.len {
+                    out.append(fmt2("    public const uint {} = {}u;\n", S(*info.names.at(i)), num(*info.values.at(i))).as_str());
+                }
+                out.append("}\n");
+            },
+            default => {},
+        }
+    }
+    for (e&) in this.enums.items() {
+        val info = this.c.ei(*e);
+        out.append(fmt2("\npublic enum {} : {}\n{{\n", this.local(info.name), S(cs_int(info.tag))).as_str());
+        for (i) in 0..info.names.len {
+            out.append(fmt2("    {} = {},\n", S(*info.names.at(i)), num(*info.values.at(i))).as_str());
+        }
+        out.append("}\n");
+    }
+    for (s&) in this.structs.items() {
+        val info = this.c.si(*s);
+        out.append(fmt("\n[StructLayout(LayoutKind.Sequential)]\npublic unsafe struct {}\n{{\n", this.local(info.name)).as_str());
+        for (f&) in info.fields.items() {
+            match (*this.c.t.get(f.ty)) {
+                .ARRAY(elem, n) => { out.append(fmt3("    public fixed {} {}[{}];\n", this.cs_raw(elem), cs_ident(f.name), unum(n)).as_str()); },
+                default => { out.append(fmt2("    public {} {};\n", this.cs_raw(f.ty), cs_ident(f.name)).as_str()); },
+            }
+        }
+        out.append("}\n");
+    }
+    for (rt&) in this.results.items() {
+        match (*this.c.t.get(*rt)) {
+            .ERR_UNION(e, x) => {
+                out.append(fmt2("\n/// <summary>{}: error is 0, or the error's code</summary>\n[StructLayout(LayoutKind.Sequential)]\npublic unsafe struct {}\n{{\n    public uint error;\n", this.c.ty_name(*rt), this.result_name(*rt)).as_str());
+                if (x != VOID) {
+                    out.append(fmt("    public {} value;\n", this.cs_raw(x)).as_str());
+                }
+                out.append("}\n");
+            },
+            default => {},
+        }
+    }
+    // the C functions
+    out.append(fmt("\n/// <summary>the C functions (the classes below are easier to use)</summary>\npublic static unsafe partial class Native\n{{\n    public const string Lib = \"{}\";\n", S(this.pkg)).as_str());
+    for (e&) in ents.items() {
+        var ps: std::string = {};
+        var ret = S("void");
+        val s = e.free_of;
+        if (s) {
+            ps = S("IntPtr it");
+        } else {
+            val f = this.c.fi(e.f);
+            ret = this.cs_raw(f.ret);
+            for (p&) in f.params.items() {
+                if (ps.len() > 0) {
+                    ps.append(", ");
+                }
+                ps.append(fmt2("{} {}", this.cs_raw(p.ty), cs_ident(p.name)).as_str());
+                match (this.shape_of(p.ty) ?? shape::VOID) {
+                    .CLOSURE(i) => { ps.append(fmt(", IntPtr {}_user", S(p.name)).as_str()); },
+                    default => {},
+                }
+            }
+        }
+        out.append(fmt4("\n    [LibraryImport(Lib, EntryPoint = \"{}\")]\n    public static partial {} {}({});\n", copy e.name, move ret, copy e.name, move ps).as_str());
+    }
+    out.append("}\n");
+    // callbacks: the C functions a closure parameter calls, which call the delegate
+    if (this.closures.len > 0) {
+        out.append("\n// a delegate passed for a callback, and what it threw (rethrown after the call)\ninternal sealed class Callback\n{\n    public readonly Delegate F;\n    public Exception? Error;\n\n    public Callback(Delegate f) => F = f;\n\n    public void Rethrow()\n    {\n        if (Error != null)\n        {\n            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(Error).Throw();\n        }\n    }\n}\n\ninternal static unsafe class Callbacks\n{");
+        for (i) in 0..this.closures.len {
+            val ct = *this.closures.at(i);
+            match (*this.c.t.get(ct)) {
+                .FN_VAL(ps&, r) => {
+                    var params = S("IntPtr user");
+                    var args: std::string = {};
+                    for (k) in 0..ps.len {
+                        params.append(fmt2(", {} a{}", this.cs_raw(*ps.at(k)), unum(@cast<u64>(k))).as_str());
+                        if (k > 0) {
+                            args.append(", ");
+                        }
+                        args.append(this.cs_value(*ps.at(k), fmt("a{}", unum(@cast<u64>(k))).as_str()).as_str());
+                    }
+                    out.append(fmt3("\n    [UnmanagedCallersOnly]\n    public static {} cb{}({})\n    {{\n        var c = (Callback)GCHandle.FromIntPtr(user).Target!;\n        try\n        {{\n", this.cs_raw(r), unum(@cast<u64>(i)), move params).as_str());
+                    val call = fmt3("(({})c.F)({})", this.cs_ty(ct), move args, S(""));
+                    if (r == VOID) {
+                        out.append(fmt("            {};\n", move call).as_str());
+                    } else {
+                        match (this.shape_of(r) ?? shape::VOID) {
+                            .BOOL => { out.append(fmt("            return (byte)({} ? 1 : 0);\n", move call).as_str()); },
+                            default => { out.append(fmt("            return {};\n", move call).as_str()); },
+                        }
+                    }
+                    out.append("        }\n        catch (Exception e)\n        {\n            c.Error ??= e;\n");
+                    if (r != VOID) {
+                        out.append("            return default;\n");
+                    }
+                    out.append("        }\n    }\n");
+                },
+                default => {},
+            }
+        }
+        out.append("}\n");
+    }
+    // a class per export struct, over a SafeHandle
+    for (s&) in this.handles.items() {
+        val cls = this.local(this.c.si(*s).name);
+        out.append(fmt4("\n/// <summary>owns a handle to export struct {}; Dispose (or a using block, or the finalizer) frees it</summary>\npublic sealed class {}Handle : SafeHandle\n{{\n    public {}Handle() : base(IntPtr.Zero, true) {{ }}\n    public {}Handle(IntPtr h) : base(IntPtr.Zero, true) => SetHandle(h);\n", S(this.c.si(*s).name), copy cls, copy cls, copy cls).as_str());
+        out.append(fmt("    public override bool IsInvalid => handle == IntPtr.Zero;\n\n    protected override bool ReleaseHandle()\n    {\n        Native.{}(handle);\n        return true;\n    }\n}\n", this.free_name(*s)).as_str());
+        out.append(fmt3("\n/// <summary>export struct {}</summary>\npublic sealed unsafe class {} : IDisposable\n{{\n    internal readonly {}Handle h;\n\n", S(this.c.si(*s).name), copy cls, copy cls).as_str());
+        out.append(fmt2("    public {}({}Handle h) => this.h = h;\n\n    public void Dispose() => h.Dispose();\n", copy cls, copy cls).as_str());
+        for (e&) in ents.items() {
+            if (e.free_of != null) {
+                continue;
+            }
+            val m = this.member_of(e.f, *s) ?? continue;
+            val info = this.c.fi(e.f);
+            out.append("\n");
+            out.append(this.cs_doc(e.f, 4).as_str());
+            if (this.node_is_method(e.f, *s)) {
+                var args = this.cs_args(e.f, 1);
+                // this instance's handle stays alive (and can't be freed) for the call
+                var self_arg: cs_arg = { decl: {}, pass: S("h.DangerousGetHandle()"), open: S("bool self_ref = false;\nh.DangerousAddRef(ref self_ref);\ntry {\n"), close: S("}\nfinally {\n    if (self_ref) {\n        h.DangerousRelease();\n    }\n}\n") };
+                var all: std::vec<cs_arg> = {};
+                put(&all, move self_arg);
+                for (a&) in args.items() {
+                    put(&all, copy *a);
+                }
+                out.append(fmt3("    public {} {}({})\n    {{\n", this.cs_ty(info.ret), cs_ident(m), cs_decls(&args)).as_str());
+                out.append(indent_n(this.cs_body(e.f, &all, false).as_str(), 8).as_str());
+                out.append("    }\n");
+            } else if (m == "new") {
+                var args = this.cs_args(e.f, 0);
+                out.append(fmt2("    public {}({}) : this(Make(", copy cls, cs_decls(&args)).as_str());
+                var names: std::string = {};
+                for (k) in 0..info.params.len {
+                    if (k > 0) {
+                        names.append(", ");
+                    }
+                    names.append(cs_ident(info.params.at(k).name).as_str());
+                }
+                out.append(fmt2("{})) {{ }}\n\n    private static {}Handle Make(", move names, copy cls).as_str());
+                out.append(fmt("{})\n    {\n", cs_decls(&args)).as_str());
+                var body = this.cs_body(e.f, &args, true);
+                out.append(indent_n(body.as_str(), 8).as_str());
+                out.append("    }\n");
+            } else {
+                var args = this.cs_args(e.f, 0);
+                out.append(fmt3("    public static {} {}({})\n    {{\n", this.cs_ty(info.ret), cs_ident(m), cs_decls(&args)).as_str());
+                out.append(indent_n(this.cs_body(e.f, &args, false).as_str(), 8).as_str());
+                out.append("    }\n");
+            }
+        }
+        out.append("}\n");
+    }
+    // the functions
+    out.append(fmt("\n/// <summary>the package's functions</summary>\npublic static unsafe class Api\n{{\n", S("")).as_str());
+    var firstfn = true;
+    for (e&) in ents.items() {
+        if (e.free_of != null || this.class_of(e.f) != null) {
+            continue;
+        }
+        val info = this.c.fi(e.f);
+        var args = this.cs_args(e.f, 0);
+        if (!firstfn) {
+            out.append("\n");
+        }
+        firstfn = false;
+        out.append(this.cs_doc(e.f, 4).as_str());
+        out.append(fmt3("    public static {} {}({})\n    {{\n", this.cs_ty(info.ret), cs_ident(info.c_name), cs_decls(&args)).as_str());
+        out.append(indent_n(this.cs_body(e.f, &args, false).as_str(), 8).as_str());
+        out.append("    }\n");
+    }
+    out.append("}\n");
+    return move out;
+}
+
 // ---------- JavaScript: a Node-API addon (Node.js, Bun), its loader and TypeScript types ----------
 
 // the C name a struct's JS converters use
@@ -3582,6 +4163,9 @@ attach fn bindings(this: checker&, pkg: str, lang: str) -> compile_error!std::st
     if (lang == "pyi") {
         return b.pyi_text();
     }
+    if (lang == "csharp") {
+        return b.cs_text();
+    }
     if (lang == "json") {
         return b.json_text();
     }
@@ -3594,5 +4178,5 @@ attach fn bindings(this: checker&, pkg: str, lang: str) -> compile_error!std::st
     if (lang == "ts") {
         return b.ts_text();
     }
-    return fail(NO_SPAN, fmt("--lang takes c, cpp, rust, zig, python, pyi, node, js, ts or json, not '{}'", S(lang)));
+    return fail(NO_SPAN, fmt("--lang takes c, cpp, rust, zig, python, pyi, csharp, node, js, ts or json, not '{}'", S(lang)));
 }

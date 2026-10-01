@@ -112,13 +112,13 @@ export fn each(xs: i32[..], f: fn(i32) -> void) -> void {
 
 Each language gets these in its own style:
 
-| | C | C++ | Rust | Python | Zig | JavaScript |
-| --- | --- | --- | --- | --- | --- | --- |
-| errors | a struct of the code and the value | throws `error` | `Result<T, Error>` | raises a class per error set, all deriving from `Error` | `Error!T` | throws an `Error` whose `code` is the name |
-| owned text | `volt_text`, freed with `volt_text_free` | `std::string` | `String` | `str` | `VoltText`, with `bytes()` and `deinit()` | a string |
-| slices, optionals | structs | from vectors and arrays; `std::optional` | `&mut [T]`, `Option` | lists, `None` | `[]T`, `?T` | arrays, `null` |
-| an export struct | a pointer, and `NAME_free` | a class that frees itself | a type that frees itself when dropped | a class with `close()` and `with` | a type with `deinit()` | a class with `close()` and `Symbol.dispose` |
-| callbacks | a function and a `void *` | `std::function` | `&mut dyn FnMut` | any callable | a context and a function | any function |
+| | C | C++ | Rust | Python | Zig | JavaScript | C# |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| errors | a struct of the code and the value | throws `error` | `Result<T, Error>` | raises a class per error set, all deriving from `Error` | `Error!T` | throws an `Error` whose `code` is the name | throws a `VoltException` subclass per error set |
+| owned text | `volt_text`, freed with `volt_text_free` | `std::string` | `String` | `str` | `VoltText`, with `bytes()` and `deinit()` | a string | `string` |
+| slices, optionals | structs | from vectors and arrays; `std::optional` | `&mut [T]`, `Option` | lists, `None` | `[]T`, `?T` | arrays, `null` | `Span<T>`, `T?` |
+| an export struct | a pointer, and `NAME_free` | a class that frees itself | a type that frees itself when dropped | a class with `close()` and `with` | a type with `deinit()` | a class with `close()` and `Symbol.dispose` | an `IDisposable` class over a `SafeHandle` |
+| callbacks | a function and a `void *` | `std::function` | `&mut dyn FnMut` | any callable | a context and a function | any function | `Action` or `Func` |
 
 ### JavaScript and TypeScript
 
@@ -158,9 +158,30 @@ Here is how values convert:
 - An error set's codes are the error names (`m.math_error.NEGATIVE` is `"NEGATIVE"`).
 - Each class checks that its methods get an instance of it.
 
+### C#
+
+`--lang csharp` writes one file for .NET 7 or later. It has the structs and enums, a `Native`
+class of `[LibraryImport]` declarations, and on top of those the package's functions in a static
+class `Api` and a class per export struct. Build it with `AllowUnsafeBlocks`. The library loads as
+`libNAME.so`, `NAME.dll` or `libNAME.dylib`.
+
+```csharp
+using mathlib;
+
+Console.WriteLine(Api.ml_greet("volt"));            // hello, volt
+using (var c = new counter("clicks")) {             // an IDisposable class
+    c.add(2);
+}
+try {
+    Api.ml_sqrt(-1);
+} catch (math_error e) when (e.Code == math_error.NEGATIVE) {
+    Console.WriteLine(e.Name);                      // NEGATIVE
+}
+```
+
 Every binding also has the plain C functions: in C++ they're in namespace `raw`, in Rust in module
-`raw`, and in Zig in struct `raw`. `--lang` is one of `c`, `cpp`, `rust`, `zig`, `python`, `node`,
-`js`, `ts` or `json`. The Python bindings use `ctypes` and load the shared library. `--lang pyi`
+`raw`, in Zig in struct `raw`, and in C# in class `Native`. `--lang` is one of `c`, `cpp`, `rust`,
+`zig`, `python`, `pyi`, `csharp`, `node`, `js`, `ts` or `json`. The Python bindings use `ctypes` and load the shared library. `--lang pyi`
 writes their type stubs, for editors and type checkers such as mypy.
 
 ### The model, for generators of your own

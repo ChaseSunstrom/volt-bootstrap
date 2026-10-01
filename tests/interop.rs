@@ -66,13 +66,18 @@ fn node_include() -> Option<String> {
     None
 }
 
-/// zig on the PATH, or in ~/.local/bin (where a downloaded toolchain goes)
-fn zig() -> Option<PathBuf> {
-    if Command::new("zig").arg("version").output().is_ok_and(|o| o.status.success()) {
-        return Some(PathBuf::from("zig"));
+/// a tool on the PATH, or in ~/.local/bin (where a downloaded toolchain goes); `arg` makes it
+/// succeed when it works
+fn local_tool(name: &str, arg: &str) -> Option<PathBuf> {
+    if Command::new(name).arg(arg).output().is_ok_and(|o| o.status.success()) {
+        return Some(PathBuf::from(name));
     }
-    let local = Path::new(&std::env::var_os("HOME")?).join(".local/bin/zig");
+    let local = Path::new(&std::env::var_os("HOME")?).join(".local/bin").join(name);
     local.is_file().then_some(local)
+}
+
+fn zig() -> Option<PathBuf> {
+    local_tool("zig", "version")
 }
 
 fn run(cmd: &mut Command) -> Output {
@@ -89,7 +94,7 @@ fn bindings_round_trip() {
         ok(e.voltc(&["lib", "mathlib", "--pkg", pkg, "--shared", "--backend", backend, "-o", &so]), "voltc lib --shared");
         ok(e.voltc(&["lib", "mathlib", "--pkg", pkg, "--static", "--backend", backend, "-o", &e.path(&format!("{backend}/libmathlib_static.a"))]), "voltc lib --static");
     }
-    for (lang, file) in [("c", "mathlib.h"), ("cpp", "mathlib.hpp"), ("rust", "mathlib.rs"), ("python", "mathlib.py"), ("pyi", "mathlib.pyi"), ("zig", "mathlib.zig"), ("node", "mathlib_node.c"), ("js", "mathlib.js"), ("ts", "mathlib.d.ts")] {
+    for (lang, file) in [("c", "mathlib.h"), ("cpp", "mathlib.hpp"), ("rust", "mathlib.rs"), ("python", "mathlib.py"), ("pyi", "mathlib.pyi"), ("csharp", "mathlib.cs"), ("zig", "mathlib.zig"), ("node", "mathlib_node.c"), ("js", "mathlib.js"), ("ts", "mathlib.d.ts")] {
         ok(e.voltc(&["bindings", "mathlib", "--pkg", pkg, "--lang", lang, "-o", &e.path(file)]), &format!("voltc bindings --lang {lang}"));
     }
     // the model the generators share, as JSON for generators of other people's
@@ -155,6 +160,21 @@ fn bindings_round_trip() {
                 }
             }
             None => eprintln!("node isn't installed (or has no headers): skipping the JavaScript clients"),
+        }
+        // C#: a console project around the generated mathlib.cs
+        match local_tool("dotnet", "--version") {
+            Some(dotnet) => {
+                let v = String::from_utf8_lossy(&Command::new(&dotnet).arg("--version").output().unwrap().stdout).trim().to_string();
+                let major = v.split('.').next().unwrap_or("10").to_string();
+                let proj = e.dir.join(format!("cs-{backend}"));
+                std::fs::create_dir_all(&proj).unwrap();
+                std::fs::copy(e.dir.join("mathlib.cs"), proj.join("mathlib.cs")).unwrap();
+                std::fs::copy(Path::new(ROOT).join("tests/interop/Client.cs"), proj.join("Client.cs")).unwrap();
+                std::fs::write(proj.join("Client.csproj"), format!("<Project Sdk=\"Microsoft.NET.Sdk\">\n  <PropertyGroup>\n    <OutputType>Exe</OutputType>\n    <TargetFramework>net{major}.0</TargetFramework>\n    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>\n    <Nullable>enable</Nullable>\n    <InvariantGlobalization>true</InvariantGlobalization>\n    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>\n  </PropertyGroup>\n</Project>\n")).unwrap();
+                let o = Command::new(&dotnet).args(["run", "--nologo"]).current_dir(&proj).env("LD_LIBRARY_PATH", &lib_dir).env("DOTNET_CLI_TELEMETRY_OPTOUT", "1").env("DOTNET_NOLOGO", "1").env("DOTNET_SKIP_FIRST_TIME_EXPERIENCE", "1").output().unwrap();
+                assert_eq!(ok(o, "dotnet run"), MATHLIB_OUT, "C# ({backend})");
+            }
+            None => eprintln!("dotnet isn't installed: skipping the C# client"),
         }
         if let Some(zig) = zig() {
             std::fs::copy(Path::new(ROOT).join("tests/interop/client.zig"), e.dir.join("client.zig")).unwrap();
