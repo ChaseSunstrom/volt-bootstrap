@@ -364,4 +364,6 @@ pub enum ItemKind {
     /// `use cpp { "shapes.hpp" } as shapes;`: C++ headers (read by the self-hosted voltc)
     UseCpp { headers: Vec<String>, alias: String },
     Global(Let),
+    /// another name for a type: a C typedef (cimport.rs)
+    Alias(String, Type),
 }

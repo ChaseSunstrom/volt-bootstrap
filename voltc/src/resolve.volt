@@ -157,6 +157,7 @@ attach fn resolve_type_path(this: checker&, p: path&, e: u32) -> compile_error!u
                     .STRUCT(s) => { is_type = s.spec == null; },
                     .ENUM(x) => { is_type = true; },
                     .TRAIT(n, fs) => { is_type = true; },
+                    .ALIAS(n, t) => { is_type = true; },
                     default => {},
                 }
                 if (is_type) {
@@ -166,6 +167,20 @@ attach fn resolve_type_path(this: checker&, p: path&, e: u32) -> compile_error!u
             }
             val d = primary ?? return fail(p.span, fmt("'{}' isn't a type", S(last)));
             try this.visible(d, p.span);
+            // another name: its type, resolved where it's declared (once)
+            match (this.item_of(d).kind) {
+                .ALIAS(n, t&) => {
+                    val have = this.aliases.get(d);
+                    if (have) {
+                        return *have;
+                    }
+                    val ae = this.new_env({ ns: this.decls.at(@cast<usize>(d)).ns });
+                    val r = try this.resolve_type(t, ae);
+                    this.aliases.put(d, r);
+                    return r;
+                },
+                default => {},
+            }
             if (this.opts.lsp) {
                 this.lsp_decl_use(d, last, p.span, this.lsp_type_label(d, last));
             }

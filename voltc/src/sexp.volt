@@ -275,6 +275,14 @@ attach fn item(this: sexp_writer&, it: item&) -> void {
             this.let_stmt(l);
             this.close();
         },
+        .ALIAS(n, t&) => {
+            // only C imports make these; the parser never does
+            this.open("alias");
+            this.name(n);
+            this.sp();
+            this.ty(t);
+            this.close();
+        },
     }
     this.close();
 }

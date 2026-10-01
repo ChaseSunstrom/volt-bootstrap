@@ -555,6 +555,7 @@ struct cdecls {
     typedefs: std::map<str, ctype> = {};
     structs: std::vec<cstruct> = {};
     typedef_of: std::map<str, str> = {}; // struct tag -> first typedef naming it
+    typedef_order: std::vec<str> = {};   // typedef names in the order they're declared
     // consts: enum constants and numeric #defines, in order; env: every constant by name, for
     // evaluating later ones
     consts: std::vec<cconst> = {};
@@ -1167,6 +1168,9 @@ attach fn top(this: cparser&) -> void {
                     }
                 },
                 default => {},
+            }
+            if (this.d.typedefs.get(name) == null) {
+                put(&this.d.typedef_order, name);
             }
             this.d.typedefs.put(name, copy dc.ty);
         } else if (!starts_with(name, "__")) {
@@ -1848,6 +1852,17 @@ attach fn c_items(this: checker&, d: cdecls&, res: c_imported&, span: span) -> v
         all_c.push('\n');
     }
     this.lay_out_partial(res, &partial_items, all_c.as_str(), span);
+    // every other typedef is a type name too: pointers, integers, function pointers, a struct's
+    // second name (one Volt can't map, or whose name is taken, is skipped)
+    for (n) in d.typedef_order.items() {
+        if (starts_with(n, "__") || taken.get(n) != null) {
+            continue;
+        }
+        val t = d.typedefs.get(n) ?? continue;
+        val vt = m.ty_of(t) ?? continue;
+        taken.put(n, true);
+        put(&res.items, m.citem(item_kind::ALIAS(n, move vt)));
+    }
     // functions (the first declaration wins); one with a param or return type Volt can't use is skipped
     var seen_fns: std::map<str, bool> = {};
     for (f&) in d.fns.items() {
@@ -1990,6 +2005,11 @@ attach fn import_c(this: checker&, headers: std::vec<std::string>&, alias: str, 
                     },
                     default => { continue; },
                 }
+            },
+            .ALIAS(a, t) => {
+                kind = 3;
+                key_name = a;
+                name = a;
             },
             default => { continue; },
         }

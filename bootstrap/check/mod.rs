@@ -308,6 +308,7 @@ pub struct Checker {
     pub frames: HashMap<usize, Vec<(String, TyId)>>, // async fn instance -> frame fields (params, locals, flags)
     pub c_includes: Vec<String>,                     // #include lines for imported C headers
     pub c_imports: HashMap<(u8, String), DeclId>,    // an imported C symbol shared by every import of it
+    pub aliases: HashMap<DeclId, TyId>,               // an alias decl's type, once resolved
     pub importing_c: bool,                           // collecting a C import's items
 }
 
@@ -354,6 +355,7 @@ impl Checker {
             frames: HashMap::new(),
             c_includes: Vec::new(),
             c_imports: HashMap::new(),
+            aliases: HashMap::new(),
             importing_c: false,
         }
     }
@@ -415,6 +417,7 @@ impl Checker {
             ItemKind::Fn(f) => Some(f.name.clone()),
             ItemKind::Struct(s) => Some(s.name.clone()),
             ItemKind::Enum(e) => Some(e.name.clone()),
+            ItemKind::Alias(n, _) => Some(n.clone()),
             ItemKind::Trait { name, .. } => Some(name.clone()),
             ItemKind::Global(l) => match &l.pat.kind {
                 PatKind::Bind(n) => Some(n.clone()),
@@ -509,6 +512,7 @@ impl Checker {
                 ItemKind::Fn(f) => ((0, f.name.clone()), f.name.clone()),
                 ItemKind::Struct(s) => ((1, s.c_name.clone().unwrap_or_default()), s.name.clone()),
                 ItemKind::Global(Let { pat: Pat { kind: PatKind::Bind(b), .. }, .. }) => ((2, b.clone()), b.clone()),
+                ItemKind::Alias(a, _) => ((3, a.clone()), a.clone()),
                 _ => continue,
             };
             // the same C symbol imported again (another namespace, or std and the user) is one decl
@@ -818,11 +822,22 @@ impl Checker {
                 let given = p.segs.last().unwrap().args.clone();
                 let primary = ds.iter().copied().find(|d| match &self.decls[*d].item.kind {
                     ItemKind::Struct(s) => s.spec.is_none(),
-                    ItemKind::Enum(_) | ItemKind::Trait { .. } => true,
+                    ItemKind::Enum(_) | ItemKind::Trait { .. } | ItemKind::Alias(..) => true,
                     _ => false,
                 });
                 let Some(d) = primary else { return err(p.span, format!("'{}' isn't a type", p.last())) };
                 self.visible(d, p.span)?;
+                // another name: its type, resolved where it's declared (once)
+                if let ItemKind::Alias(_, t) = &self.decls[d].item.kind {
+                    if let Some(&have) = self.aliases.get(&d) {
+                        return Ok(have);
+                    }
+                    let t = t.clone();
+                    let ae = Rc::new(Env { ns: self.decls[d].ns, generics: Vec::new() });
+                    let r = self.resolve_type(&t, &ae)?;
+                    self.aliases.insert(d, r);
+                    return Ok(r);
+                }
                 let generic = !self.decls[d].item.generics.is_empty();
                 if !generic && given.is_some() {
                     return err(p.span, format!("'{}' isn't generic", p.last()));

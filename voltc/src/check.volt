@@ -361,6 +361,7 @@ struct checker {
     frames: std::vec<fn_frame> = {}; // async fn instance -> frame fields
     c_includes: std::vec<str> = {};
     c_imports: std::map<str, u32> = {}; // an imported C symbol shared by every import of it
+    aliases: std::map<u32, u32> = {}; // an alias decl's type, once resolved
     importing_c: bool = false;          // collecting a C import's items
     owned_items: std::vec<std::box<item>> = {}; // items made by the checker (C imports)
     c_texts: std::vec<std::string> = {};  // preprocessed C headers the imported items' names point into
@@ -559,6 +560,7 @@ attach fn collect_item(this: checker&, it: item&, ns: u32, parent: u32?) -> comp
         },
         .STRUCT(s) => { name = s.name; },
         .ENUM(e) => { name = e.name; },
+        .ALIAS(n, t) => { name = n; },
         .TRAIT(n, fns&) => {
             name = n;
             inner = fns;

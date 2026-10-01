@@ -297,6 +297,7 @@ struct Decls {
     typedefs: HashMap<String, CT>,
     structs: Vec<CStruct>,
     typedef_of: HashMap<String, String>, // struct tag -> first typedef naming it
+    typedef_order: Vec<String>,          // typedef names in the order they're declared
     anon_in: HashMap<String, (String, String)>, // anonymous tag -> the struct tag and named field it types
     /// enum constants and numeric #defines, in order
     consts: Vec<(String, Num)>,
@@ -720,6 +721,9 @@ impl DeclParser<'_> {
                         *e = name.clone();
                     }
                 }
+                if !self.d.typedefs.contains_key(&name) {
+                    self.d.typedef_order.push(name.clone());
+                }
                 self.d.typedefs.insert(name, ty);
             } else if !name.starts_with("__") {
                 match ty {
@@ -1084,6 +1088,17 @@ pub fn import(headers: &[String], dir: &FsPath, flags: &[String], span: Span) ->
             .filter_map(|(n, t)| Some(Field { name: n.clone(), ty: m.ty(t)?, default: None, vis: Vis::Public, span }))
             .collect();
         items.push(m.item(ItemKind::Struct(StructDecl { name: name.clone(), spec: None, fields, is_extern: true, is_comptime: false, c_name: Some(c.clone()), c_union: s.union })));
+    }
+    // every other typedef is a type name too: pointers, integers, function pointers, a struct's
+    // second name (one Volt can't map, or whose name is taken, is skipped)
+    for n in &d.typedef_order {
+        if n.starts_with("__") || taken.contains(n) {
+            continue;
+        }
+        let Some(t) = d.typedefs.get(n) else { continue };
+        let Some(vt) = m.ty(t) else { continue };
+        taken.insert(n.clone());
+        items.push(m.item(ItemKind::Alias(n.clone(), vt)));
     }
     // functions (the first declaration wins); one with a param or return type Volt can't use is skipped
     let mut seen_fns = std::collections::HashSet::new();

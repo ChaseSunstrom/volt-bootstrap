@@ -173,6 +173,14 @@ impl W {
                 self.let_(l);
                 self.close();
             }
+            // only C imports make these; the parser never does
+            ItemKind::Alias(n, t) => {
+                self.open("alias");
+                self.name(n);
+                self.sp();
+                self.ty(t);
+                self.close();
+            }
         }
         self.close();
     }

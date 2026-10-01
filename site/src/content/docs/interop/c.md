@@ -102,6 +102,10 @@ anonymous members where libclang says C puts them.
   code passes any integer there.
 - `long double`, `_Complex` and `va_list`: functions using them are left out.
 
+Every `typedef` is a type name you can write: `c::size_t`, `c::pthread_t`, a pointer typedef like
+Node-API's `napi_env`, a function-pointer typedef (a callback type), or a struct's second name. A
+function-pointer typedef is an optional function, as C's can be null.
+
 Importing the same header in two places gives the same types: a `FILE*` from one import is the
 same type as from another.
 
