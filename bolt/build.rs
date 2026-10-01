@@ -649,6 +649,15 @@ impl Build {
             }
             args.push(m.name.clone());
             args.extend(self.pkg_args(&closure, None, false));
+            // a self-contained library: everything the closure's [foreign] libraries and build files
+            // ask the C compiler for (headers to compile with, libraries to link)
+            for q in &closure {
+                let mut flags = self.foreign_cc.get(q).cloned().unwrap_or_default();
+                flags.extend(self.plan_flags(*q)?);
+                for f in flags {
+                    args.extend(["--cc".into(), f]);
+                }
+            }
             args.extend([format!("--{kind}"), "-o".into(), out.display().to_string()]);
             jobs.push(Job { out, inputs: inputs.clone(), args, what: format!("{} v{} ({kind} library)", m.name, m.version.text), program: None });
         }

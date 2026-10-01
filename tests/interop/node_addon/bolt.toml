@@ -1,0 +1,9 @@
+[package]
+name = "addon"
+version = "0.1.0"
+
+[lib]
+kind = ["shared"]
+
+[dependencies]
+node = { path = "../../../interop/node" }

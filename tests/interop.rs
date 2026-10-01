@@ -412,6 +412,29 @@ fn python_package() {
     }
 }
 
+/// a Node.js addon written in Volt with interop/node: bolt builds it as a shared library, node
+/// loads it (as a .node file), on both backends
+#[test]
+fn node_addon() {
+    if node_include().is_none() {
+        eprintln!("node or its headers aren't installed: skipping the Volt addon");
+        return;
+    }
+    let e = Env::new("node_addon");
+    let pkg = e.dir.join("addon");
+    copy_dir(&Path::new(ROOT).join("tests/interop/node_addon/lib"), &pkg.join("lib"));
+    std::fs::write(pkg.join("bolt.toml"), format!("[package]\nname = \"addon\"\nversion = \"0.1.0\"\n\n[lib]\nkind = [\"shared\"]\n\n[dependencies]\nnode = {{ path = \"{}\" }}\n\n[std]\npath = \"{}\"\n", Path::new(ROOT).join("interop/node").display(), Path::new(ROOT).join("std").display())).unwrap();
+    let want = "add 5.5\nhello, volt hello, 42\nsum 6.5\npoint {\"x\":3,\"y\":4,\"label\":\"point\",\"pair\":[3,4]}\napply 42 from volt\nthrown true volt says no\ncaught THROWN(js says no)\nkinds number string boolean null undefined object object function\n";
+    for backend in ["c", "llvm"] {
+        let o = Command::new(env!("CARGO_BIN_EXE_bolt")).args(["build", "-q", "--backend", backend]).current_dir(&pkg).env("VOLTC", &e.voltc).env("BOLT_HOME", e.dir.join("cache")).output().unwrap();
+        assert!(o.status.success(), "bolt build ({backend}): {}", String::from_utf8_lossy(&o.stderr));
+        let node_file = e.dir.join(format!("addon-{backend}.node"));
+        std::fs::copy(pkg.join("target/debug/libaddon.so"), &node_file).unwrap();
+        let o = Command::new("node").arg(Path::new(ROOT).join("tests/interop/node_addon/test.js")).arg(&node_file).output().unwrap();
+        assert_eq!(ok(o, "node test.js"), want, "a Volt addon ({backend})");
+    }
+}
+
 /// copies directory from into to (made if needed)
 fn copy_dir(from: &Path, to: &Path) {
     std::fs::create_dir_all(to).unwrap();

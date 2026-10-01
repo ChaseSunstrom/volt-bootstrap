@@ -1,0 +1,7 @@
+[package]
+name = "node"
+version = "0.1.0"
+description = "Write Node.js addons in Volt, over Node-API"
+
+[build]
+files = ["build.volt"]
