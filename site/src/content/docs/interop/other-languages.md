@@ -11,10 +11,10 @@ Everything meets at the C ABI.
 
 - **C**: import the header, see [C](/volt-bootstrap/interop/c/).
 - **C++**: `use cpp`, see [C++](/volt-bootstrap/interop/cpp/).
-- **Rust**: `use rust { "crate dir" } as x;` and call its public API, see
-  [Rust, Zig and Go](/volt-bootstrap/interop/rust-and-zig/).
-- **Zig** and **Go**: list the file or the module under `[foreign]` in `bolt.toml`, see
-  [Rust, Zig and Go](/volt-bootstrap/interop/rust-and-zig/#zig-and-go-and-c-apis-you-write-yourself). Without bolt, declare a
+- **Rust** and **Zig**: `use rust { "crate dir" } as x;` or `use zig { "file.zig" } as x;` and
+  call its public API, see [Rust, Zig and Go](/volt-bootstrap/interop/rust-and-zig/).
+- **Go**: list the module under `[foreign]` in `bolt.toml`, see
+  [Rust, Zig and Go](/volt-bootstrap/interop/rust-and-zig/#go-and-c-apis-you-write-yourself). Without bolt, declare a
   `#[no_mangle] pub extern "C" fn` (or a Zig `export fn`) with `extern "C" fn` and link the library
   with `--cc`.
 - **Python**: depend on the `interop/python` package, see [Python](/volt-bootstrap/interop/python/).

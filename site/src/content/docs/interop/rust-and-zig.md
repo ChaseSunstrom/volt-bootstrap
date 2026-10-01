@@ -1,6 +1,6 @@
 ---
 title: Rust, Zig and Go
-description: Calling an ordinary Rust crate with use rust, Zig and Go libraries through bolt, and Cargo and Zig projects that use Volt.
+description: Calling ordinary Rust crates and Zig files with use rust and use zig, Go libraries through bolt, and Cargo and Zig projects that use Volt.
 sidebar:
   order: 3
 ---
@@ -49,10 +49,47 @@ callable from Volt; they're left out, listed in a comment of the generated decla
 in Rust. cargo builds the shim from the crate's directory, so its `rust-toolchain.toml` and
 dependencies apply.
 
-## Zig and Go, and C APIs you write yourself
+## Volt calls Zig
 
-Zig files, Go modules and Rust crates that export a C API (`#[no_mangle] pub extern "C" fn`) can
-be named under `[foreign]` in `bolt.toml`:
+`use zig` does the same for a Zig file, with `zig build-lib` building its shim:
+
+```volt ignore
+use std::io;
+use zig { "fastmath.zig" } as fm;    // the file, from this one; what it imports comes along
+
+fn main() -> !void {
+    var p = fm::Point::init(3.0, 4.0);
+    std::println("{} {}", p.norm(), fm::add(2, 40));        // 5 42
+    std::println("{}", try fm::upper("quiet"));             // QUIET: Zig allocated it, Volt freed it
+
+    var s = try fm::shapes::Shape::init("tri");             // owns memory: delete calls its deinit
+    try s.addSide(3.0);
+}
+```
+
+| Zig | Volt |
+| --- | --- |
+| `pub fn f(...)` | `fn f(...)` |
+| a `pub fn` in a struct whose first parameter is the struct (`T`, `*T`, `*const T`) | a method; otherwise `T::f(...)` |
+| `pub const x = struct { ... }` without fields, `pub const x = @import("x.zig")` | `namespace x` |
+| integers, `f32`, `f64`, `bool`, `c_int` and the like | the same |
+| `[]const u8` | `str` in, `std::string` out |
+| `[]const T`, `[]T`, `[]const []const u8` | `T[..]`, `str[..]` in; `std::vec<T>` out |
+| `?T` | `T?` |
+| `E!T`, `!T` | `zig_error!T`; the error's name is in `zig_error::ERROR` |
+| `std.mem.Allocator` parameter | none: the shim passes `std.heap.c_allocator`, and frees what such a function returns once Volt has copied it |
+| a struct whose fields are all numbers, `bool`s, enums or such structs | a Volt struct with those fields, passed by value |
+| any other struct, or one with a `deinit` | an owned handle: deleting it calls `deinit` (with the allocator when it takes one) and frees it; `copy` copies it when it has no `deinit` |
+| an `enum` | a Volt enum with the same values |
+| `pub const` of a number, `bool` or string | a `val` |
+
+Functions with `comptime` or `anytype` parameters are left out, listed in a comment of the
+generated declarations. bolt reads `$ZIG` for the compiler, else `zig` on the PATH.
+
+## Go, and C APIs you write yourself
+
+Go modules, and Rust crates or Zig files that export a C API (`#[no_mangle] pub extern "C" fn`,
+`export fn`), can be named under `[foreign]` in `bolt.toml`:
 
 ```toml
 [foreign]

@@ -567,6 +567,54 @@ fn rust_direct() {
     assert!(bolt_run("llvm").contains("hi there, volt QUIET"), "rebuilt after its target was cleaned");
 }
 
+/// Volt calls an ordinary Zig file directly: `use zig { "fastmath.zig" } as fm;` and nothing else,
+/// on both backends, from voltc run and from a bolt package, which rebuilds when the file changes
+#[test]
+fn zig_direct() {
+    let Some(zig) = zig() else {
+        eprintln!("zig isn't installed: skipping use zig");
+        return;
+    };
+    let e = Env::new("zig_direct");
+    let dir = e.dir.join("zd");
+    copy_dir(&Path::new(ROOT).join("tests/interop/zig_direct"), &dir);
+    let want = "dist 5 norm 5\nscaled 6 8\n42 fastmath 10 1.5\nfirst QUIET\nsum 7\ndoubled 2 4 6\nsquares 4 last 16\njoin a-b-c\nfind 2 true\nor_default 5 -1\nparse 42\nbad ERROR(InvalidCharacter)\ndiv 3\nzero ERROR(DivisionByZero)\ncolor blue green\npixel 2 green\ntwice 42\nperimeter 7 10 name tri\nside 4\nmissing ERROR(NoSuchSide)\nlongest quad\nconsumed 2\nticks 2 3\n";
+    let tools = |c: &mut Command| {
+        c.env("VOLTC", &e.voltc).env("BOLT", env!("CARGO_BIN_EXE_bolt")).env("VOLT_CACHE", e.dir.join("cache")).env("BOLT_HOME", e.dir.join("bolthome")).env("ZIG", &zig);
+    };
+    for backend in ["c", "llvm"] {
+        let mut c = Command::new(&e.voltc);
+        c.args(["run", "--backend", backend, "main.volt"]).current_dir(&dir).env("VOLT_STD", Path::new(ROOT).join("std"));
+        tools(&mut c);
+        assert_eq!(ok(c.output().unwrap(), "voltc run"), want, "voltc run ({backend})");
+    }
+    // a handle Zig never made stops the program
+    let mut c = Command::new(&e.voltc);
+    c.args(["run", "empty.volt"]).current_dir(&dir).env("VOLT_STD", Path::new(ROOT).join("std"));
+    tools(&mut c);
+    let o = c.output().unwrap();
+    assert_eq!(o.status.code(), Some(101), "an empty handle panics: {}", String::from_utf8_lossy(&o.stderr));
+    assert!(String::from_utf8_lossy(&o.stderr).contains("fm::shapes::Shape is empty"), "{}", String::from_utf8_lossy(&o.stderr));
+    // the same program in a bolt package
+    let app = dir.join("app");
+    std::fs::create_dir_all(app.join("src")).unwrap();
+    std::fs::write(app.join("bolt.toml"), format!("[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[std]\npath = \"{}\"\n", Path::new(ROOT).join("std").display())).unwrap();
+    std::fs::write(app.join("src/main.volt"), std::fs::read_to_string(dir.join("main.volt")).unwrap().replace("use zig { \"fastmath.zig\" }", "use zig { \"../../fastmath.zig\" }")).unwrap();
+    let bolt_run = |backend: &str| {
+        let mut c = Command::new(env!("CARGO_BIN_EXE_bolt"));
+        c.args(["run", "-q", "--backend", backend]).current_dir(&app);
+        tools(&mut c);
+        ok(c.output().unwrap(), "bolt run")
+    };
+    for backend in ["c", "llvm"] {
+        assert_eq!(bolt_run(backend), want, "bolt run ({backend})");
+    }
+    // a change to an imported file reaches the program
+    let f = dir.join("shapes.zig");
+    std::fs::write(&f, std::fs::read_to_string(&f).unwrap().replace("self.n += 1;", "self.n += 10;")).unwrap();
+    assert!(bolt_run("c").contains("ticks 20 30"), "the Zig change is in");
+}
+
 /// a Node.js addon written in Volt with interop/node: bolt builds it as a shared library, node
 /// loads it (as a .node file), on both backends
 #[test]

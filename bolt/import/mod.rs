@@ -9,7 +9,9 @@
 // redone while the sources are as they were.
 use std::path::{Path, PathBuf};
 
+mod glue;
 mod rust;
+mod zig;
 
 /// one import, as voltc asked for it
 pub struct Req {
@@ -64,7 +66,8 @@ fn run(r: &Req) -> Result<(), String> {
     std::fs::create_dir_all(&r.out).map_err(|e| format!("can't make {}: {e}", r.out.display()))?;
     match r.lang.as_str() {
         "rust" => rust::import(r),
-        other => Err(format!("there's no `use {other}`: the languages Volt imports are c (use {{ \"x.h\" }}), cpp and rust")),
+        "zig" => zig::import(r),
+        other => Err(format!("there's no `use {other}`: the languages Volt imports are c (use {{ \"x.h\" }}), cpp, rust and zig")),
     }
 }
 
