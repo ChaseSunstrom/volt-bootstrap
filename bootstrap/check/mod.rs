@@ -411,6 +411,7 @@ impl Checker {
             }
             ItemKind::UseC { headers, alias } => return self.import_c(&headers, &alias, ns, item.span),
             ItemKind::UseCpp { .. } => return err(item.span, "C++ headers (use cpp) are read by the self-hosted voltc; voltc-bootstrap reads only C headers"),
+            ItemKind::UseLang { lang, .. } => return err(item.span, format!("use {lang} {{ ... }}: code in other languages is imported by the self-hosted voltc; voltc-bootstrap reads only C headers")),
             _ => {}
         }
         let name = match &item.kind {

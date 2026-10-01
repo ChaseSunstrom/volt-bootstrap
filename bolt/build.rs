@@ -121,7 +121,7 @@ fn lua_version(dir: &Path) -> Option<u32> {
 
 /// write text to path (and its directory) unless it already holds it, so its time only moves when
 /// it changes
-fn write_if_changed(path: &Path, text: &str) -> Result<(), String> {
+pub(crate) fn write_if_changed(path: &Path, text: &str) -> Result<(), String> {
     if std::fs::read_to_string(path).is_ok_and(|t| t == text) {
         return Ok(());
     }
@@ -357,7 +357,10 @@ impl Build {
         let program = j.program.as_ref().unwrap_or(&self.voltc);
         let stamp = format!("{}\n{}", program.display(), j.args.join("\n"));
         let t = mtime(&j.out);
-        let fresh = t.is_some_and(|t| j.inputs.iter().all(|i| mtime(i).is_some_and(|m| m <= t)));
+        // and the files voltc said the output also came from (OUT.deps: what use rust and the
+        // like read), when it said so
+        let deps: Vec<PathBuf> = std::fs::read_to_string(format!("{}.deps", j.out.display())).map(|s| s.lines().filter(|l| !l.is_empty()).map(PathBuf::from).collect()).unwrap_or_default();
+        let fresh = t.is_some_and(|t| j.inputs.iter().chain(&deps).all(|i| mtime(i).is_some_and(|m| m <= t)));
         if fresh && std::fs::read_to_string(&stamp_path).is_ok_and(|s| s == stamp) {
             return Ok(());
         }

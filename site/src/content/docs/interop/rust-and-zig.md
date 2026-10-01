@@ -1,15 +1,58 @@
 ---
 title: Rust, Zig and Go
-description: A bolt package that uses a Rust crate, a Zig file or a Go module, and Cargo and Zig projects that use Volt.
+description: Calling an ordinary Rust crate with use rust, Zig and Go libraries through bolt, and Cargo and Zig projects that use Volt.
 sidebar:
   order: 3
 ---
 
-All three meet Volt at the C ABI, and bolt and two small helpers do the plumbing both ways.
+## Volt calls Rust
 
-## Volt uses them
+One line imports a crate, and its public API is Volt functions and types:
 
-Name the crate, the file or the module under `[foreign]` in `bolt.toml`:
+```volt ignore
+use std::io;
+use rust { "../geom" } as geom;     // the crate's directory, from this file
+
+fn main() -> !void {
+    val d = geom::dist(geom::Point::new(0.0, 0.0), geom::Point::new(3.0, 4.0));
+    std::println("{} {}", d, geom::greet("volt"));          // 5 hello, volt
+
+    var s = geom::shapes::Shape::new("tri");                // a Rust value, owned by s
+    s.add_side(3.0);
+    std::println("{}", try s.side(0));                      // a Result: Err is an error
+}
+```
+
+The crate is plain Rust: `pub fn`, `pub struct`, `impl` blocks, `String`, `Vec`, `Option`, `Result`.
+Nothing in it is written for Volt, with no `extern "C"`, `#[no_mangle]` or `#[repr(C)]`. voltc runs
+`bolt import`, which reads the crate's public API, builds a small shim crate with cargo, and gives
+voltc the Volt declarations. It caches the result and redoes it when the crate changes. It works the
+same with `voltc run main.volt` and in a bolt package.
+
+| Rust | Volt |
+| --- | --- |
+| `pub fn f(...)` | `fn f(...)`; `pub mod m` is `namespace m` |
+| `impl T { pub fn m(&self) }` | `attach fn m(this: T&)`; without `self`, `T::f(...)` (so `T::new(...)`) |
+| `i8`…`u64`, `isize`, `usize`, `f32`, `f64`, `bool` | the same; `char` is `u32` |
+| `&str`, `String` | `str` in, `std::string` out (a copy) |
+| `&[T]`, `&mut [T]`, `Vec<T>` | `T[..]` in, `std::vec<T>` out; `&[&str]`, `Vec<String>`: `str[..]`, `std::vec<std::string>` |
+| `Option<T>` | `T?` |
+| `Result<T, E>` | `rust_error!T`; the `Err`'s `to_string()` is in `rust_error::ERROR` |
+| a struct whose fields are all `pub` numbers, `bool`s, `char`s, fieldless enums or such structs | a Volt struct with those fields, passed by value |
+| any other struct, or an enum with data | an owned handle: deleting it drops the Rust value, `copy` clones it (when it's `Clone`); a method taking `self` empties it |
+| a fieldless enum | a Volt enum with the same values |
+| `pub const` of a number, `bool` or `&str` | a `val` |
+
+Generic functions, trait objects, closures and references returned into Rust-owned data aren't
+callable from Volt; they're left out, listed in a comment of the generated declarations
+(`VOLT_SHOW_IMPORT=1 voltc check main.volt` prints them). A panic stops the program, as it does
+in Rust. cargo builds the shim from the crate's directory, so its `rust-toolchain.toml` and
+dependencies apply.
+
+## Zig and Go, and C APIs you write yourself
+
+Zig files, Go modules and Rust crates that export a C API (`#[no_mangle] pub extern "C" fn`) can
+be named under `[foreign]` in `bolt.toml`:
 
 ```toml
 [foreign]

@@ -521,18 +521,23 @@ attach fn item(this: parser&) -> compile_error!item {
         }
         kind = item_kind::NAMESPACE(move path, try this.item_block());
     } else if (this.eat_kw("use")) {
-        // `use cpp { ... }`: C++ headers (`use cpp::x;` is still a path)
-        var cpp = false;
+        // `use cpp { ... }`: C++ headers; `use rust { ... }` and the like: another language's code
+        // (`use cpp::x;` is still a path)
+        var lang: str? = null;
         match (*this.tok()) {
             .IDENT(n) => {
                 match (*this.tok_at(1)) {
-                    .PUNCT(p) => { cpp = n == "cpp" && p == "{"; },
+                    .PUNCT(p) => {
+                        if (p == "{") {
+                            lang = n;
+                        }
+                    },
                     default => {},
                 }
             },
             default => {},
         }
-        if (cpp) {
+        if (lang) {
             this.bump();
         }
         if (this.eat("{")) {
@@ -547,6 +552,9 @@ attach fn item(this: parser&) -> compile_error!item {
                     default => {},
                 }
                 if (!got) {
+                    if (lang != null) {
+                        return this.unexpected("a string");
+                    }
                     return this.unexpected("a header name string");
                 }
                 this.bump();
@@ -557,10 +565,13 @@ attach fn item(this: parser&) -> compile_error!item {
             try this.expect_kw("as");
             val alias = (try this.ident()).name;
             try this.expect(";");
-            if (cpp) {
+            val l = lang ?? "";
+            if (lang == null) {
+                kind = item_kind::USE_C(move headers, alias);
+            } else if (l == "cpp") {
                 kind = item_kind::USE_CPP(move headers, alias);
             } else {
-                kind = item_kind::USE_C(move headers, alias);
+                kind = item_kind::USE_LANG(l, move headers, alias);
             }
         } else {
             val p = try this.path(false);

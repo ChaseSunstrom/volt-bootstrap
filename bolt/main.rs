@@ -6,6 +6,7 @@
 mod build;
 mod commands;
 mod foreign;
+mod import;
 mod manifest;
 mod progress;
 mod resolve;
@@ -414,7 +415,19 @@ fn clean_cmd(o: &Opts) {
 }
 
 fn main() {
-    let o = parse(std::env::args().skip(1).collect());
+    // plumbing voltc runs for `use LANG { ... }`: its own arguments
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    // the voltc bolt runs finds this bolt for `use LANG { ... }`
+    if std::env::var_os("BOLT").is_none() {
+        if let Ok(me) = std::env::current_exe() {
+            // SAFETY: nothing else runs yet (no other threads read the environment)
+            unsafe { std::env::set_var("BOLT", me) };
+        }
+    }
+    if args.first().is_some_and(|a| a == "import") {
+        exit(import::main(&args[1..]));
+    }
+    let o = parse(args);
     match o.cmd.as_str() {
         "help" => print!("{USAGE}"),
         "" => {

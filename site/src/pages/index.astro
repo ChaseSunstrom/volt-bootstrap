@@ -347,7 +347,7 @@ const languages = ["C", "C++", "Rust", "Zig", "Python", "JavaScript", "TypeScrip
           </div>
         </div>
         <div class="interop-notes">
-          <p><b>In:</b> <code>use &#123; "stdio.h" &#125; as c;</code> imports functions, structs, unions, constants and globals from real C headers. <code>use cpp &#123; "lib.hpp" &#125;</code> brings classes, overloads, templates and the standard library, and bolt's <code>[foreign]</code> table builds Rust crates, Zig files and Go modules for you.</p>
+          <p><b>In:</b> <code>use &#123; "stdio.h" &#125; as c;</code> imports functions, structs, unions, constants and globals from real C headers. <code>use cpp &#123; "lib.hpp" &#125;</code> brings classes, overloads, templates and the standard library, <code>use rust &#123; "geom" &#125;</code> an ordinary Rust crate's public API, and bolt's <code>[foreign]</code> table builds Zig files and Go modules for you.</p>
           <p><b>Out:</b> <code>export fn</code> makes C symbols; <code>voltc lib --shared</code> builds a library, and <code>bindings</code> in <code>bolt.toml</code> writes (and builds) its bindings for every language above.</p>
         </div>
       </section>

@@ -666,11 +666,15 @@ fn main() -> i32 {
             put(&lc.cc_args, cpp_o.as_str());
             put(&lc.cc_args, "-lstdc++");
         }
+        for (f&) in chk.link_flags.items() {
+            put(&lc.cc_args, f.as_str());
+        }
         if (c.llvm) {
             llvm_exe(&*chk, out.as_str(), &lc);
         } else {
             cc(chk.c_unit().as_str(), out.as_str(), &lc, false);
         }
+        write_deps(out.as_str(), &chk.import_deps);
         if (cpp_o) {
             unlink_path(cpp_o.as_str());
         }
@@ -712,11 +716,15 @@ fn main() -> i32 {
             put(&lc.cc_args, cpp_o.as_str());
             put(&lc.cc_args, "-lstdc++");
         }
+        for (f&) in chk.link_flags.items() {
+            put(&lc.cc_args, f.as_str());
+        }
         if (c.llvm) {
             llvm_exe(&*chk, out.as_str(), &lc);
         } else {
             cc(chk.c_unit().as_str(), out.as_str(), &lc, false);
         }
+        write_deps(out.as_str(), &chk.import_deps);
         if (cpp_o) {
             unlink_path(cpp_o.as_str());
         }
@@ -767,6 +775,22 @@ fn main() -> i32 {
             cc(chk.c_unit().as_str(), obj.as_str(), &c, true);
         }
         unlink_path(out.as_str()); // ar would add to an old archive
+        // what a program linking this library needs too (use rust and the like): LIB.a.flags, which
+        // --link reads
+        var flags_file = copy out;
+        flags_file.append(".flags");
+        if (chk.link_flags.len > 0) {
+            var text: std::string = {};
+            for (f&) in chk.link_flags.items() {
+                text.append(f.as_str());
+                text.push('\n');
+            }
+            std::fs::write_file(flags_file.as_str(), text.as_str()) catch |e| {
+                die(fmt("can't write {}", copy flags_file));
+            };
+        } else {
+            unlink_path(flags_file.as_str());
+        }
         val st = std::process::run(ar.items()) catch |e| 1;
         unlink_path(obj.as_str());
         unlink_path(o_c.as_str());
@@ -779,6 +803,7 @@ fn main() -> i32 {
         if (st != 0) {
             die(fmt("ar couldn't write {}", copy out));
         }
+        write_deps(out.as_str(), &chk.import_deps);
         return 0;
     }
     if (c.cmd == "run") {
@@ -792,6 +817,9 @@ fn main() -> i32 {
         if (cpp_o) {
             put(&lc.cc_args, cpp_o.as_str());
             put(&lc.cc_args, "-lstdc++");
+        }
+        for (f&) in chk.link_flags.items() {
+            put(&lc.cc_args, f.as_str());
         }
         if (c.llvm) {
             llvm_exe(&*chk, exe.as_str(), &lc);
@@ -848,6 +876,25 @@ fn fresh_dir() -> std::string {
     val made = mkdtemp(@cast<u8*>(t.as_str().ptr)) ?? die(S("can't make a build directory in /tmp"));
     put(&build_dirs, S(t.as_str()[0..t.len() - 1]));
     return S(t.as_str()[0..t.len() - 1]);
+}
+
+// OUT.deps: the files other than the Volt sources that out was made from (what use rust and the
+// like read), one a line, for a build tool deciding whether to remake out; none: no file
+fn write_deps(out: str, deps: std::vec<std::string>&) -> void {
+    var f = S(out);
+    f.append(".deps");
+    if (deps.len == 0) {
+        unlink_path(f.as_str());
+        return;
+    }
+    var text: std::string = {};
+    for (d&) in deps.items() {
+        text.append(d.as_str());
+        text.push('\n');
+    }
+    std::fs::write_file(f.as_str(), text.as_str()) catch |e| {
+        die(fmt("can't write {}", copy f));
+    };
 }
 
 fn unlink_path(p: str) -> void {
@@ -959,6 +1006,7 @@ fn llvm_exe(chk: checker&, out: str, c: cli&) -> void {
 fn cc_run(inputs: std::vec<str>&, out: str, c: cli&, object: bool) -> void {
     // imported headers' prototypes are C's own: a Volt void*/cstr for their const void*/char* is fine
     var argv: std::vec<str> = {};
+    var lib_flags: std::vec<std::string> = {}; // the linked libraries' LIB.a.flags lines, which argv points into
     val compiler = c_command(&argv);
     put(&argv, "-std=gnu11");
     put(&argv, "-w");
@@ -981,6 +1029,18 @@ fn cc_run(inputs: std::vec<str>&, out: str, c: cli&, object: bool) -> void {
         }
         for (l&) in c.links.items() {
             put(&argv, l.path);
+            // and what the library's imports link (voltc lib wrote them next to it)
+            var ff = S(l.path);
+            ff.append(".flags");
+            val more = std::fs::read_file(ff.as_str()) catch |e| S("");
+            for (x) in more.as_str().lines().items() {
+                if (x.trim().len > 0) {
+                    put(&lib_flags, S(x.trim()));
+                }
+            }
+        }
+        for (f&) in lib_flags.items() {
+            put(&argv, f.as_str());
         }
         put(&argv, "-lm");
         put(&argv, "-lpthread"); // the runtime has threads (libpthread before glibc 2.34)

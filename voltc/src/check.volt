@@ -369,6 +369,9 @@ struct checker {
     // @cpp calls became (their C++ text, what each wraps, their ir fns)
     cpp_includes: std::vec<str> = {};
     cpp_items: std::vec<std::box<std::vec<item>>> = {};
+    // use LANG (langimport.volt): what the program links for the imports (libraries, -l flags)
+    link_flags: std::vec<std::string> = {};
+    import_deps: std::vec<std::string> = {}; // the files they were made from (OUT.deps, for bolt)
     cpp_shims: std::vec<std::string> = {};
     cpp_shim_keys: std::map<str, u32> = {};
     cpp_shim_fns: std::vec<u32> = {};
@@ -553,6 +556,9 @@ attach fn collect_item(this: checker&, it: item&, ns: u32, parent: u32?) -> comp
         },
         .USE_CPP(headers&, alias) => {
             return this.import_cpp(headers, alias, ns, it.span);
+        },
+        .USE_LANG(lang, args&, alias) => {
+            return this.import_lang(lang, args, alias, ns, it.span);
         },
         .FN(f) => {
             name = f.name;

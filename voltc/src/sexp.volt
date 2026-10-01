@@ -259,6 +259,17 @@ attach fn item(this: sexp_writer&, it: item&) -> void {
             this.name(alias);
             this.close();
         },
+        .USE_LANG(lang, args, alias) => {
+            this.open("uselang");
+            this.name(lang);
+            this.out.append(" [");
+            for (h&) in args.items() {
+                this.name(h.as_str());
+            }
+            this.out.append(" ]");
+            this.name(alias);
+            this.close();
+        },
         .USE_CPP(headers, alias) => {
             this.open("usecpp");
             this.out.append(" [");

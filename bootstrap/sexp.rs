@@ -167,6 +167,13 @@ impl W {
                 self.name(alias);
                 self.close();
             }
+            ItemKind::UseLang { lang, args, alias } => {
+                self.open("uselang");
+                self.name(lang);
+                self.list(args, |w, h| w.name(h));
+                self.name(alias);
+                self.close();
+            }
             ItemKind::Global(l) => {
                 self.open("global");
                 self.sp();

@@ -517,6 +517,56 @@ fn lua_package() {
     }
 }
 
+/// Volt calls an ordinary Rust crate directly: `use rust { "geom" } as geom;` and nothing else, on
+/// both backends, from voltc run and from a bolt package, which rebuilds when the crate changes
+#[test]
+fn rust_direct() {
+    let e = Env::new("rust_direct");
+    let dir = e.dir.join("rd");
+    copy_dir(&Path::new(ROOT).join("tests/interop/rust_direct"), &dir);
+    let want = "dist 5 norm 5\nscaled 6 8\nhello, volt QUIET first\ngeom 10\nsum 7\ndoubled 2 4 6\nsquares 4 last 16\nwords 3 three\njoin a-b-c\nfind 2 true\nnickname lucky true\nor_default 5 -1\nparse 42\nbad ERROR(invalid digit found in string)\ndiv 3\nzero ERROR(1 / 0)\ncolor blue green\npixel 2 green 65\nperimeter 7 12 name tri\nside 4\nmissing ERROR(tri has no side 9)\nlongest tri\ncentroid 4.5\nconsumed 3 into tri\nproblem 3 clash 123\nsettings 4 mode Slow\nticks 2\n";
+    let tools = |c: &mut Command| {
+        c.env("VOLTC", &e.voltc).env("BOLT", env!("CARGO_BIN_EXE_bolt")).env("VOLT_CACHE", e.dir.join("cache")).env("BOLT_HOME", e.dir.join("bolthome")).env("RUSTUP_TOOLCHAIN", rust_toolchain());
+    };
+    for backend in ["c", "llvm"] {
+        let mut c = Command::new(&e.voltc);
+        c.args(["run", "--backend", backend, "main.volt"]).current_dir(&dir).env("VOLT_STD", Path::new(ROOT).join("std"));
+        tools(&mut c);
+        assert_eq!(ok(c.output().unwrap(), "voltc run"), want, "voltc run ({backend})");
+    }
+    // a handle Rust never made stops the program, with no crash inside Rust
+    let mut c = Command::new(&e.voltc);
+    c.args(["run", "empty.volt"]).current_dir(&dir).env("VOLT_STD", Path::new(ROOT).join("std"));
+    tools(&mut c);
+    let o = c.output().unwrap();
+    assert_eq!(o.status.code(), Some(101), "an empty handle panics: {}", String::from_utf8_lossy(&o.stderr));
+    assert!(String::from_utf8_lossy(&o.stderr).contains("geom::shapes::Shape is empty"), "{}", String::from_utf8_lossy(&o.stderr));
+    // the same program in a bolt package: the path is from the file, as a header's is
+    let app = dir.join("app");
+    std::fs::create_dir_all(app.join("src")).unwrap();
+    std::fs::write(app.join("bolt.toml"), format!("[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[std]\npath = \"{}\"\n", Path::new(ROOT).join("std").display())).unwrap();
+    std::fs::write(app.join("src/main.volt"), std::fs::read_to_string(dir.join("main.volt")).unwrap().replace("use rust { \"geom\" }", "use rust { \"../../geom\" }")).unwrap();
+    let bolt_run = |backend: &str| {
+        let mut c = Command::new(env!("CARGO_BIN_EXE_bolt"));
+        c.args(["run", "-q", "--backend", backend]).current_dir(&app);
+        tools(&mut c);
+        ok(c.output().unwrap(), "bolt run")
+    };
+    for backend in ["c", "llvm"] {
+        assert_eq!(bolt_run(backend), want, "bolt run ({backend})");
+    }
+    // a change to the crate reaches the program: bolt rebuilds what imported it
+    let lib = dir.join("geom/src/lib.rs");
+    std::fs::write(&lib, std::fs::read_to_string(&lib).unwrap().replace("format!(\"hello, {who}\")", "format!(\"hi there, {who}\")")).unwrap();
+    assert!(bolt_run("c").contains("hi there, volt QUIET"), "the Rust change is in");
+    // the glue's library cleaned away under its cache: rebuilt, not a link error
+    for d in std::fs::read_dir(e.dir.join("cache/imports")).unwrap().flatten() {
+        let _ = std::fs::remove_dir_all(d.path().join("target"));
+    }
+    std::fs::write(app.join("src/main.volt"), std::fs::read_to_string(app.join("src/main.volt")).unwrap() + "\n").unwrap();
+    assert!(bolt_run("llvm").contains("hi there, volt QUIET"), "rebuilt after its target was cleaned");
+}
+
 /// a Node.js addon written in Volt with interop/node: bolt builds it as a shared library, node
 /// loads it (as a .node file), on both backends
 #[test]

@@ -54,6 +54,9 @@ sidebar:
 | `VOLT_CLANG_RESOURCE_DIR` | libclang's resource directory, when `clang -print-resource-dir` can't find it |
 | `NO_COLOR` | turn colour off (with `--color auto`) |
 | `VOLT_SHOW_CPP` | `1`: print the Volt declarations generated from C++ headers |
+| `BOLT` | the bolt `use rust { ... }` runs (default: the bolt next to voltc, then `bolt` on the PATH) |
+| `VOLT_CACHE` | where `use rust` keeps its work (default `$XDG_CACHE_HOME/volt`, then `~/.cache/volt`) |
+| `VOLT_SHOW_IMPORT` | `1`: print the Volt declarations generated for `use rust { ... }` |
 
 ## Exit codes
 

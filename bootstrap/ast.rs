@@ -363,6 +363,8 @@ pub enum ItemKind {
     UseC { headers: Vec<String>, alias: String },
     /// `use cpp { "shapes.hpp" } as shapes;`: C++ headers (read by the self-hosted voltc)
     UseCpp { headers: Vec<String>, alias: String },
+    /// `use rust { "geom" } as geom;`: code in another language (the self-hosted voltc's)
+    UseLang { lang: String, args: Vec<String>, alias: String },
     Global(Let),
     /// another name for a type: a C typedef (cimport.rs)
     Alias(String, Type),

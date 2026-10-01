@@ -9,7 +9,7 @@ use std::path::Path;
 // ---------- tokens ----------
 
 #[derive(Debug, Clone, PartialEq)]
-enum Tok {
+pub(crate) enum Tok {
     Id(String),
     Num(String),
     Str(String),
@@ -17,7 +17,7 @@ enum Tok {
 }
 
 /// Rust or Zig source as tokens (comments, char literals and lifetimes dropped)
-fn lex(src: &str) -> Vec<Tok> {
+pub(crate) fn lex(src: &str) -> Vec<Tok> {
     let b = src.as_bytes();
     let mut out = Vec::new();
     let mut i = 0;
@@ -92,29 +92,29 @@ fn lex(src: &str) -> Vec<Tok> {
 }
 
 /// a cursor over tokens
-struct Cur<'a> {
-    t: &'a [Tok],
-    i: usize,
+pub(crate) struct Cur<'a> {
+    pub(crate) t: &'a [Tok],
+    pub(crate) i: usize,
 }
 
 impl Cur<'_> {
-    fn peek(&self) -> Option<&Tok> {
+    pub(crate) fn peek(&self) -> Option<&Tok> {
         self.t.get(self.i)
     }
-    fn is(&self, p: &str) -> bool {
+    pub(crate) fn is(&self, p: &str) -> bool {
         matches!(self.peek(), Some(Tok::P(q)) if q == p)
     }
-    fn is_id(&self, w: &str) -> bool {
+    pub(crate) fn is_id(&self, w: &str) -> bool {
         matches!(self.peek(), Some(Tok::Id(q)) if q == w)
     }
-    fn eat(&mut self, p: &str) -> bool {
+    pub(crate) fn eat(&mut self, p: &str) -> bool {
         let y = self.is(p) || self.is_id(p);
         if y {
             self.i += 1;
         }
         y
     }
-    fn id(&mut self) -> Option<String> {
+    pub(crate) fn id(&mut self) -> Option<String> {
         match self.peek() {
             Some(Tok::Id(s)) => {
                 let s = s.clone();
@@ -125,7 +125,7 @@ impl Cur<'_> {
         }
     }
     /// past a group that starts at the current token ((, [, {), nested ones included
-    fn skip_group(&mut self) {
+    pub(crate) fn skip_group(&mut self) {
         let open = match self.peek() {
             Some(Tok::P(p)) => p.clone(),
             _ => return,
@@ -156,7 +156,7 @@ impl Cur<'_> {
         }
     }
     /// the tokens of a group's inside, split at its top-level commas
-    fn group_items(&mut self) -> Vec<Vec<Tok>> {
+    pub(crate) fn group_items(&mut self) -> Vec<Vec<Tok>> {
         let start = self.i;
         self.skip_group();
         let inner = &self.t[start + 1..self.i.saturating_sub(1)];
@@ -478,7 +478,7 @@ fn repr_int(attrs: &[Vec<Tok>]) -> Option<&'static str> {
     None
 }
 
-fn tok_text(t: &Tok) -> String {
+pub(crate) fn tok_text(t: &Tok) -> String {
     match t {
         Tok::Id(s) | Tok::Num(s) | Tok::P(s) => s.clone(),
         Tok::Str(s) => format!("\"{s}\""),
@@ -589,7 +589,7 @@ fn rust_item(api: &mut Api, attrs: &[Vec<Tok>], item: &[Tok]) {
 }
 
 /// an integer literal, maybe negative (-1, 0x10, 0b11)
-fn int_value(t: &[Tok]) -> Option<i128> {
+pub(crate) fn int_value(t: &[Tok]) -> Option<i128> {
     let (neg, rest) = match t {
         [Tok::P(m), rest @ ..] if m == "-" => (true, rest),
         _ => (false, t),

@@ -340,6 +340,7 @@ enum item_kind {
     USE: path,
     USE_C: (std::vec<std::string>, str),
     USE_CPP: (std::vec<std::string>, str), // `use cpp { "shapes.hpp" } as shapes;` (cppimport.volt)
+    USE_LANG: (str, std::vec<std::string>, str), // `use rust { "geom" } as geom;`: language, arguments, alias (langimport.volt)
     GLOBAL: let_stmt,
     ALIAS: (str, ty), // another name for a type: a C typedef (cimport.volt)
 }

@@ -363,7 +363,12 @@ impl<'a> Parser<'a> {
         } else if self.eat_kw("use") {
             // `use cpp { ... }`: C++ headers (`use cpp::x;` is still a path)
             let cpp = matches!(self.tok(), Tok::Ident(n) if n == "cpp") && matches!(self.tok_at(1), Tok::Punct("{"));
-            if cpp {
+            // `use rust { ... }` and the like: code in another language
+            let lang = match (self.tok(), self.tok_at(1)) {
+                (Tok::Ident(n), Tok::Punct("{")) if n != "cpp" => Some(n.clone()),
+                _ => None,
+            };
+            if cpp || lang.is_some() {
                 self.bump();
             }
             if self.eat("{") {
@@ -374,7 +379,7 @@ impl<'a> Parser<'a> {
                             self.bump();
                             headers.push(String::from_utf8_lossy(&s).into_owned());
                         }
-                        _ => return self.unexpected("a header name string"),
+                        _ => return self.unexpected(if lang.is_some() { "a string" } else { "a header name string" }),
                     }
                     if !self.eat(",") && !self.is("}") {
                         return self.unexpected("',' or '}'");
@@ -383,7 +388,11 @@ impl<'a> Parser<'a> {
                 self.expect_kw("as")?;
                 let (alias, _) = self.ident()?;
                 self.expect(";")?;
-                if cpp { ItemKind::UseCpp { headers, alias } } else { ItemKind::UseC { headers, alias } }
+                match lang {
+                    Some(lang) => ItemKind::UseLang { lang, args: headers, alias },
+                    None if cpp => ItemKind::UseCpp { headers, alias },
+                    None => ItemKind::UseC { headers, alias },
+                }
             } else {
                 let p = self.path(false)?;
                 self.expect(";")?;
