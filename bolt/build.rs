@@ -725,7 +725,9 @@ impl Build {
             let exe = dir.join(&stem);
             let mut inputs = vec![f.clone(), self.voltc.clone()];
             inputs.extend(volt_files(&api));
-            let args = vec!["build".into(), f.display().to_string(), "--pkg".into(), format!("bolt={}", api.display()), "-o".into(), exe.display().to_string()];
+            // the build's std, like everything else it compiles (not optimized: it runs once)
+            let mut args: Vec<String> = self.args("build").into_iter().filter(|a| a != "--release").collect();
+            args.extend([f.display().to_string(), "--pkg".into(), format!("bolt={}", api.display()), "-o".into(), exe.display().to_string()]);
             self.run_job(Job { out: exe.clone(), inputs, args, what: format!("build file {}", f.display()), program: None })?;
             let mut c = Command::new(&exe);
             c.args(defines).current_dir(&m.dir).env("BOLT_PROFILE", &self.profile.name).env("BOLT_PACKAGE", &m.name);

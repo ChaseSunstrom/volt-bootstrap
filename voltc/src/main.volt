@@ -261,6 +261,9 @@ fn find_std(c: cli&) -> std::string? {
     }
     val e = std::process::env("VOLT_STD");
     if (e) {
+        if (list_dir(e) == null) {
+            die(fmt("$VOLT_STD is {}, which isn't a directory: point it at std, or unset it", S(e)));
+        }
         return S(e);
     }
     var buf: u8[4096];

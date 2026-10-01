@@ -121,6 +121,20 @@ fn bolt() {
     let o = bolt(&sw, &["build", "t", "-Darg=tab\there"]);
     assert!(!o.status.success() && String::from_utf8_lossy(&o.stderr).contains("can't contain tabs"), "{}", String::from_utf8_lossy(&o.stderr));
 
+    // build files compile against the build's std, whatever $VOLT_STD says; and a $VOLT_STD that
+    // isn't a directory is named as the problem
+    let pinned = tmp.join("pinned");
+    let real_std = Path::new(env!("CARGO_MANIFEST_DIR")).join("std");
+    write(&pinned.join("bolt.toml"), &format!("[package]\nname = \"pinned\"\nversion = \"0.1.0\"\n\n[std]\npath = \"{}\"\n\n[build]\nfiles = [\"build.volt\"]\n", real_std.display()));
+    write(&pinned.join("src/main.volt"), "fn main() -> void {}\n");
+    write(&pinned.join("build.volt"), "fn main() -> void {}\n");
+    let stale = tmp.join("no-such-std");
+    let o = Command::new(env!("CARGO_BIN_EXE_bolt")).arg("build").current_dir(&pinned).env("VOLTC", env!("CARGO_BIN_EXE_voltc-bootstrap")).env("BOLT_HOME", tmp.join("cache")).env("VOLT_STD", &stale).output().unwrap();
+    ok(o, "bolt build ([std] path, a stale $VOLT_STD)");
+    let o = Command::new(env!("CARGO_BIN_EXE_voltc-bootstrap")).arg("std-dir").env("VOLT_STD", &stale).output().unwrap();
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(!o.status.success() && err.contains("$VOLT_STD") && err.contains("no-such-std"), "{err}");
+
     // a dependency can't smuggle git options in through its url
     let evil = tmp.join("evil");
     write(&evil.join("bolt.toml"), "[package]\nname = \"evil\"\nversion = \"0.1.0\"\n\n[dependencies]\nx = { git = \"--upload-pack=touch /tmp/pwned\" }\n");

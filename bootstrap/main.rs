@@ -179,7 +179,11 @@ fn find_std(cli: &Cli) -> Option<PathBuf> {
         return Some(d.clone());
     }
     if let Some(d) = std::env::var_os("VOLT_STD") {
-        return Some(d.into());
+        let d = PathBuf::from(d);
+        if !d.is_dir() {
+            fail(format!("$VOLT_STD is {}, which isn't a directory: point it at std, or unset it", d.display()));
+        }
+        return Some(d);
     }
     let exe = std::env::current_exe().ok()?;
     let dir = exe.parent()?;
