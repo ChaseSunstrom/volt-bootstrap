@@ -17,7 +17,7 @@ Builtins start with `@`. They're part of the language, not a library.
 | `@typeinfo(T)` | typeinfo | a type's description (comptime): names, size, kind, fields... |
 | `@panic("msg")` | `never` | stops the program with a message (exit code 101) |
 | `@compile_error("msg")` | `never` | fails compilation where it's reached |
-| `@cfg("key")`, `@cfg("key", "value")` | `bool` | a `--cfg` setting (comptime) |
+| `@cfg("key")`, `@cfg("key", "value")` | `bool` | a `--cfg` setting, or the target's `os`, `arch` or `pointer_bits` (comptime) |
 | `@slice(ptr, len)` | `T[..]` | a slice over `len` values starting at `ptr`, unchecked |
 | `@write(ptr, value)` | `void` | store into memory without deleting what was there |
 | `@read(ptr)` | `T` | move a value out of memory without copying or deleting it |

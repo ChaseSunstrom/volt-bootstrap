@@ -160,6 +160,40 @@ fn main() -> void {
 
 `--cfg pkg:key=value` sets a key for package `pkg`'s files only.
 
+### The target
+
+Three keys describe the platform being built for. Every package sees them without any `--cfg`:
+
+| Key | Values |
+| --- | --- |
+| `os` | `linux`, `macos`, `windows`, `freebsd` |
+| `arch` | `x86_64`, `aarch64`, `riscv64`, `x86`, `arm` |
+| `pointer_bits` | `64` or `32` |
+
+A library uses them to pick per-platform code, and the branches for other platforms aren't checked.
+At run time, `std::process::os()` and `std::process::arch()` give the same names.
+
+The keys describe the host. Passing one with `--cfg`, such as `--cfg os=windows`, replaces the host's
+value for every package. `voltc check --cfg os=windows` then checks another platform's branches on
+this machine. Only checking makes sense this way: a build still runs on the host, and
+`std::process::os()` still reports the host.
+
+```volt
+use std::io;
+
+fn line_end() -> str {
+    comptime if (@cfg("os", "windows")) {
+        return "\r\n";
+    }
+    return "\n";
+}
+
+fn main() -> void {
+    std::print("{} on {}{}", std::process::os() == "windows", @cfg("pointer_bits", "64"), line_end());
+}
+// expect: false on true
+```
+
 ## Attributes
 
 `@attributes([...])` before a declaration attaches compile-time attributes. Only known ones are

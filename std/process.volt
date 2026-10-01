@@ -10,6 +10,22 @@ namespace process {
     internal fn c_argc() -> i32;
     @attributes([@intrinsic("volt_rt_arg")])
     internal fn c_arg(i: i32) -> str;
+    @attributes([@intrinsic("volt_rt_os")])
+    internal fn c_os() -> str;
+    @attributes([@intrinsic("volt_rt_arch")])
+    internal fn c_arch() -> str;
+
+    // the system this program was built for: "linux", "macos", "windows" or "freebsd" (what
+    // @cfg("os", ...) tests at compile time)
+    fn os() -> str {
+        return c_os();
+    }
+
+    // the CPU this program was built for: "x86_64", "aarch64", "riscv64", "x86" or "arm" (what
+    // @cfg("arch", ...) tests at compile time)
+    fn arch() -> str {
+        return c_arch();
+    }
 
     // ends the program right away: scopes don't run their deletes or defers
     fn exit(code: i32) -> never {

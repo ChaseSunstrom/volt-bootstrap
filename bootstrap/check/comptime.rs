@@ -1282,7 +1282,8 @@ impl Checker {
                 cerr(span, msg)
             }
             "cfg" => {
-                // @cfg(KEY) / @cfg(KEY, VALUE): was --cfg KEY[=VALUE] given for the package this is written in?
+                // @cfg(KEY) / @cfg(KEY, VALUE): was --cfg KEY[=VALUE] given for the package this is written in,
+                // or is it one of the target's keys (os, arch, pointer_bits)?
                 let mut parts = Vec::new();
                 for a in args {
                     match a {
@@ -1300,8 +1301,16 @@ impl Checker {
                     _ => return cerr(span, "@cfg(KEY) or @cfg(KEY, VALUE)"),
                 };
                 let pkg = self.opts.pkg_files.get(&span.file);
-                let set = self.opts.cfg.iter().any(|(p, c)| p.as_ref() == pkg && (*c == want || key_only && c.split('=').next() == Some(want.as_str())));
-                Ok(CVal::Bool(set))
+                let matches = |c: &str| c == want || key_only && c.split('=').next() == Some(want.as_str());
+                // the target's keys, for every package: the host's values (as voltc's runtime names them),
+                // unless --cfg gives one for any package, which replaces it (checking another platform's code)
+                const TARGET: [&str; 3] = ["os", "arch", "pointer_bits"];
+                let given = |k: &str| self.opts.cfg.iter().find_map(|(_, c)| c.strip_prefix(k).and_then(|r| r.strip_prefix('=')).map(String::from));
+                let host = [std::env::consts::OS.to_string(), std::env::consts::ARCH.to_string(), usize::BITS.to_string()];
+                let on_target = TARGET.iter().zip(host).any(|(k, h)| matches(&format!("{k}={}", given(k).unwrap_or(h))));
+                let is_target = |c: &str| TARGET.contains(&c.split('=').next().unwrap_or(""));
+                let set = self.opts.cfg.iter().any(|(p, c)| p.as_ref() == pkg && !is_target(c) && matches(c));
+                Ok(CVal::Bool(set || on_target))
             }
             "sizeof" | "alignof" => {
                 let [g] = args else { return cerr(span, format!("@{name}(T) takes one type")) };

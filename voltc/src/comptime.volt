@@ -2022,6 +2022,32 @@ attach fn ct_ty_arg(this: checker&, g: garg&, env: u32) -> compile_error!u32 {
     }
 }
 
+// is a cfg entry ("KEY" or "KEY=VALUE") for one of the target's keys?
+fn is_target_key(set: str) -> bool {
+    var key = set;
+    val eq = set.find("=");
+    if (eq) {
+        key = set[0..eq];
+    }
+    return key == "os" || key == "arch" || key == "pointer_bits";
+}
+
+// the value --cfg KEY=VALUE gives a target key, for any package
+attach fn cfg_given(this: checker&, key: str) -> str? {
+    for (c&) in this.opts.cfg.items() {
+        if (c.set.len > key.len && c.set[0..key.len] == key && c.set[key.len] == '=') {
+            return c.set[key.len + 1..c.set.len];
+        }
+    }
+    return null;
+}
+
+// does a set cfg entry ("KEY" or "KEY=VALUE") answer @cfg's want? A key alone matches KEY and
+// KEY=anything
+fn cfg_matches(set: str, want: str, key_only: bool) -> bool {
+    return set == want || (key_only && set.len > want.len && set[0..want.len] == want && set[want.len] == '=');
+}
+
 // @typeinfo, @typeof, @compile_error, @cfg, @sizeof, @alignof, @cast and @panic at compile time
 attach fn ct_builtin(this: checker&, name: str, gargs: std::vec<garg>&, args: std::vec<garg>&, want: u32?, span: span) -> compile_error!cval {
     val env = this.ct_top().env;
@@ -2065,7 +2091,8 @@ attach fn ct_builtin(this: checker&, name: str, gargs: std::vec<garg>&, args: st
         return cval::TYPE(this.ct_type_of(&v));
     }
     if (name == "cfg") {
-        // @cfg(KEY) / @cfg(KEY, VALUE): was --cfg KEY[=VALUE] given for the package this is written in?
+        // @cfg(KEY) / @cfg(KEY, VALUE): was --cfg KEY[=VALUE] given for the package this is written in,
+        // or is it one of the target's keys (os, arch, pointer_bits)?
         var parts: std::vec<std::string> = {};
         for (a&) in args.items() {
             match (*a) {
@@ -2090,15 +2117,26 @@ attach fn ct_builtin(this: checker&, name: str, gargs: std::vec<garg>&, args: st
         }
         val pkg = this.pkg_of_file(span.file);
         for (c&) in this.opts.cfg.items() {
-            if (!same_pkg(c.pkg, pkg)) {
+            if (!same_pkg(c.pkg, pkg) || is_target_key(c.set)) {
                 continue;
             }
             // a key alone matches KEY and KEY=anything
-            if (c.set == want.as_str() || (key_only && c.set.len > want.len() && c.set[0..want.len()] == want.as_str() && c.set[want.len()] == '=')) {
+            if (cfg_matches(c.set, want.as_str(), key_only)) {
                 return cval::BOOL(true);
             }
         }
-        return cval::BOOL(false);
+        // the target's keys, for every package: the host's values (this voltc's runtime names them),
+        // unless --cfg gives one for any package, which replaces it (checking another platform's code)
+        var host_bits = S("");
+        host_bits.append_uint(@cast<u64>(@sizeof(usize) * 8));
+        var os = S("os=");
+        os.append(this.cfg_given("os") ?? std::process::os());
+        var arch = S("arch=");
+        arch.append(this.cfg_given("arch") ?? std::process::arch());
+        var bits = S("pointer_bits=");
+        bits.append(this.cfg_given("pointer_bits") ?? host_bits.as_str());
+        val on_target = cfg_matches(os.as_str(), want.as_str(), key_only) || cfg_matches(arch.as_str(), want.as_str(), key_only) || cfg_matches(bits.as_str(), want.as_str(), key_only);
+        return cval::BOOL(on_target);
     }
     if (name == "compile_error") {
         var msg = S("compile error");

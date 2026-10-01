@@ -66,6 +66,36 @@ VOLT_CHECKED(u128, unsigned __int128) VOLT_CHECKED(usize, size_t)
         return __atomic_compare_exchange_n(p, &expected, desired, false, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST); \
     }
 VOLT_ATOMICS(32, int32_t) VOLT_ATOMICS(64, int64_t)
+/* The system and CPU this program was compiled for, by the C compiler's own macros (std::process
+   binds them). The names match what the compilers give @cfg("os") and @cfg("arch") */
+VOLT_RT_LINKAGE volt_str volt_rt_os(void) {
+#if defined(_WIN32)
+    return (volt_str){ (const uint8_t *)"windows", 7 };
+#elif defined(__APPLE__)
+    return (volt_str){ (const uint8_t *)"macos", 5 };
+#elif defined(__linux__)
+    return (volt_str){ (const uint8_t *)"linux", 5 };
+#elif defined(__FreeBSD__)
+    return (volt_str){ (const uint8_t *)"freebsd", 7 };
+#else
+    return (volt_str){ (const uint8_t *)"unknown", 7 };
+#endif
+}
+VOLT_RT_LINKAGE volt_str volt_rt_arch(void) {
+#if defined(__x86_64__) || defined(_M_X64)
+    return (volt_str){ (const uint8_t *)"x86_64", 6 };
+#elif defined(__aarch64__) || defined(_M_ARM64)
+    return (volt_str){ (const uint8_t *)"aarch64", 7 };
+#elif defined(__riscv) && __riscv_xlen == 64
+    return (volt_str){ (const uint8_t *)"riscv64", 7 };
+#elif defined(__i386__) || defined(_M_IX86)
+    return (volt_str){ (const uint8_t *)"x86", 3 };
+#elif defined(__arm__) || defined(_M_ARM)
+    return (volt_str){ (const uint8_t *)"arm", 3 };
+#else
+    return (volt_str){ (const uint8_t *)"unknown", 7 };
+#endif
+}
 VOLT_RT_LINKAGE bool volt_str_eq(volt_str a, volt_str b) {
     return a.len == b.len && (a.len == 0 || volt_memcmp(a.ptr, b.ptr, a.len) == 0);
 }
