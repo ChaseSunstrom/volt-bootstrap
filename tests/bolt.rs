@@ -62,9 +62,10 @@ fn bolt() {
     );
     write(
         &app.join("build.volt"),
-        "fn main() -> void {\n    val word = bolt::option(\"word\", \"plain\");\n    bolt::c_source(\"native/add.c\");\n    bolt::link_c(\"m\");\n    bolt::exe(\"tool\", \"tools\");\n    bolt::step(\"demo\");\n    bolt::cmd(\"demo\", \"echo\", \"step says\", word);\n    bolt::run(\"demo\", \"app\", \"from-step\");\n    bolt::run(\"demo\", \"tool\");\n}\n",
+        "fn main() -> void {\n    val word = bolt::option(\"word\", \"plain\");\n    bolt::c_source(\"native/add.c\");\n    bolt::link_c(\"m\");\n    bolt::cc_arg(\"-DADD_BIAS=0\");\n    bolt::exe(\"tool\", \"tools\");\n    bolt::step(\"demo\");\n    bolt::cmd(\"demo\", \"echo\", \"step says\", word);\n    bolt::cmd(\"demo\", \"sh\", \"-c\", \"IFS=; echo cc: $BOLT_CC_ARGS\");\n    bolt::run(\"demo\", \"app\", \"from-step\");\n    bolt::run(\"demo\", \"tool\");\n}\n",
     );
-    write(&app.join("native/add.c"), "int c_add(int a, int b) { return a + b; }\n");
+    // ADD_BIAS comes from the build file's cc_arg
+    write(&app.join("native/add.c"), "int c_add(int a, int b) { return a + b + ADD_BIAS; }\n");
     write(&app.join("tools/tool.volt"), "use std::io;\nextern \"C\" fn c_add(a: i32, b: i32) -> i32;\nfn main() -> void { std::println(\"tool {}\", c_add(40, 2)); }\n");
     write(&app.join("tests/sums.volt"), "fn main() -> i32 { return mathx::triple(0); }\n");
 
@@ -79,6 +80,8 @@ fn bolt() {
 
     let out = ok(bolt(&app, &["build", "demo", "-Dword=loud"]), "bolt build demo");
     assert!(out.contains("step says loud") && out.contains("15 from-step") && out.contains("tool 42"), "{out}");
+    // steps see what the executables were linked with, one per line
+    assert!(out.contains("native/add.c\n-lm\n-DADD_BIAS=0\n"), "{out}");
 
     let out = ok(bolt(&app, &["run", "--release", "--bin", "app"]), "bolt run --release");
     assert!(out.contains("hello app x6") && app.join("target/release/deps/libstd.a").is_file(), "{out}");

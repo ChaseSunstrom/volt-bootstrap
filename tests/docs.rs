@@ -1,5 +1,6 @@
 // The site's documentation: every code block in it compiles (and the ones that show output print
 // it), and the std reference is `voltc doc std` (site/src/data/std.json; VOLT_REGEN=1 rewrites it).
+mod common;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -10,7 +11,7 @@ fn stage1(dir: &Path) -> PathBuf {
     let voltc = dir.join("voltc");
     let mut srcs: Vec<PathBuf> = std::fs::read_dir(Path::new(ROOT).join("voltc/src")).unwrap().map(|e| e.unwrap().path()).filter(|p| p.extension().is_some_and(|x| x == "volt")).collect();
     srcs.sort();
-    let b = Command::new(env!("CARGO_BIN_EXE_voltc-bootstrap")).arg("build").args(&srcs).args(["--cc", "-lLLVM", "--cc", "-lclang", "-o"]).arg(&voltc).output().unwrap();
+    let b = Command::new(env!("CARGO_BIN_EXE_voltc-bootstrap")).arg("build").args(&srcs).args(common::llvm_cc_args()).arg("-o").arg(&voltc).output().unwrap();
     assert!(b.status.success(), "building voltc/src failed:\n{}", String::from_utf8_lossy(&b.stderr));
     voltc
 }

@@ -169,7 +169,8 @@ fn volt_files(path: &Path) -> Vec<PathBuf> {
     out
 }
 
-/// the std package: --std, $VOLT_STD, or a std/ directory next to (or above) voltc
+/// the std package: --std, $VOLT_STD, or a std/ directory next to (or above) voltc: installed
+/// (prefix/lib/volt/std), in cargo's target/<profile>/, or in bolt's voltc/target/<profile>/
 fn find_std(cli: &Cli) -> Option<PathBuf> {
     if cli.no_std {
         return None;
@@ -182,7 +183,7 @@ fn find_std(cli: &Cli) -> Option<PathBuf> {
     }
     let exe = std::env::current_exe().ok()?;
     let dir = exe.parent()?;
-    for cand in [dir.join("std"), dir.join("../std"), dir.join("../../std"), dir.join("../lib/volt/std")] {
+    for cand in [dir.join("std"), dir.join("../std"), dir.join("../../std"), dir.join("../lib/volt/std"), dir.join("../../../std")] {
         if cand.is_dir() {
             // without the ../ steps: file names in messages and panics read plainly
             return Some(cand.canonicalize().unwrap_or(cand));
@@ -294,6 +295,7 @@ fn compile(cli: &Cli) -> String {
 /// with `object` to a .o
 fn cc(c_src: &str, out: &PathBuf, release: bool, libs: &[(String, PathBuf)], extra: &[String], object: bool) {
     let c_path = out.with_extension("c");
+    let target = out.display().to_string();
     std::fs::write(&c_path, c_src).unwrap_or_else(|e| fail(format!("can't write {}: {e}", c_path.display())));
     let (mut cmd, cc) = cimport::c_compiler();
     // imported headers' prototypes are C's own: a Volt void*/cstr for their const void*/char* is fine
@@ -317,6 +319,13 @@ fn cc(c_src: &str, out: &PathBuf, release: bool, libs: &[(String, PathBuf)], ext
             fail(format!("the library linked for package '{pkg}' was built from other sources or in the other mode (debug/release); rebuild it with voltc lib {pkg}"));
         }
         eprint!("{msg}");
+        // the linker's errors aren't the generated C's: a library it can't find, or an undefined name
+        if msg.contains("cannot find -l") || msg.contains("unable to find library") {
+            fail(format!("linking {target} failed: a library above wasn't found (install it, or pass --cc -L/DIR where it is)"));
+        }
+        if msg.contains("ld returned") || msg.contains("linker command failed") {
+            fail(format!("linking {target} failed (the linker's errors are above): a C library or extern function may be missing; if not, this is a voltc bug"));
+        }
         fail(format!("the C compiler failed on {} (this is a voltc bug)", c_path.display()));
     }
 }

@@ -66,13 +66,13 @@ fn main() -> !void {
 
 ## Build
 
-You need stable Rust, a C compiler, and LLVM 22 with libclang (`llvm-c/` and `clang-c/` headers).
+You need stable Rust, a C compiler, and LLVM 22 with libclang (`llvm-c/` and `clang-c/` headers; on
+Debian and Ubuntu, `llvm-22-dev` and `libclang-22-dev` from [apt.llvm.org](https://apt.llvm.org)).
 
 ```sh
 cargo build --release                                        # voltc-bootstrap and bolt
 cd voltc && ../target/release/bolt build --release && cd ..  # voltc, the compiler
-export PATH="$PWD/voltc/target/release:$PWD/target/release:$PATH"
-export VOLT_STD="$PWD/std"
+export PATH="$PWD/voltc/target/release:$PWD/target/release:$PATH"   # for this shell; see the install guide
 voltc run examples/tour.volt
 ```
 

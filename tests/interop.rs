@@ -2,6 +2,7 @@
 // built with `voltc lib --shared/--static` and called from C, C++, Rust, Python (and Zig, when it's
 // installed) through `voltc bindings`; Volt calling a Rust static library and embedding Python;
 // and Volt importing C++ headers (`use cpp`). Every Volt side runs on both backends.
+mod common;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
@@ -24,7 +25,7 @@ impl Env {
         let voltc = dir.join("voltc");
         let mut srcs: Vec<PathBuf> = std::fs::read_dir(Path::new(ROOT).join("voltc/src")).unwrap().map(|e| e.unwrap().path()).filter(|p| p.extension().is_some_and(|x| x == "volt")).collect();
         srcs.sort();
-        let b = Command::new(env!("CARGO_BIN_EXE_voltc-bootstrap")).arg("build").args(&srcs).args(["--cc", "-lLLVM", "--cc", "-lclang", "-o"]).arg(&voltc).output().unwrap();
+        let b = Command::new(env!("CARGO_BIN_EXE_voltc-bootstrap")).arg("build").args(&srcs).args(common::llvm_cc_args()).arg("-o").arg(&voltc).output().unwrap();
         assert!(b.status.success(), "building voltc/src failed:\n{}", String::from_utf8_lossy(&b.stderr));
         Env { voltc, dir }
     }

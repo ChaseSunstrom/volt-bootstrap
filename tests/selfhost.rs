@@ -1,6 +1,7 @@
 // The self-hosted compiler (voltc/src, built by the bootstrap compiler) must agree with the Rust one:
 // the same canonical parse tree for every .volt file in the repo (errors included), and the same
 // `check` result (diagnostic text and exit code) for every test program and example.
+mod common;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -29,7 +30,7 @@ impl Stage1 {
         let exe = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("voltc-stage1-{tag}-{}", std::process::id()));
         let mut srcs = Vec::new();
         volt_files(&root.join("voltc/src"), &mut srcs);
-        let b = Command::new(bin).arg("build").args(&srcs).args(["--cc", "-lLLVM", "--cc", "-lclang", "-o"]).arg(&exe).output().unwrap();
+        let b = Command::new(bin).arg("build").args(&srcs).args(common::llvm_cc_args()).arg("-o").arg(&exe).output().unwrap();
         assert!(b.status.success(), "building voltc/src failed:\n{}", String::from_utf8_lossy(&b.stderr));
         Stage1(exe)
     }
@@ -119,6 +120,31 @@ fn partial_struct_layouts() {
     }
 }
 
+/// both compilers, built into a package's target/<profile>/ (as bolt builds voltc), find the std three
+/// levels up; and a library the linker can't find is reported as that, not as a voltc bug
+#[test]
+fn toolchain_layout_and_link_errors() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let tmp = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("layout-{}", std::process::id()));
+    let bin_dir = tmp.join("voltc/target/release");
+    std::fs::create_dir_all(&bin_dir).unwrap();
+    std::os::unix::fs::symlink(root.join("std"), tmp.join("std")).unwrap();
+    let tiny = tmp.join("tiny.volt");
+    std::fs::write(&tiny, "fn main() -> void {}\n").unwrap();
+    let stage1 = Stage1::build("layout");
+    for (name, from) in [("voltc-bootstrap", Path::new(env!("CARGO_BIN_EXE_voltc-bootstrap"))), ("voltc", stage1.0.as_path())] {
+        let exe = bin_dir.join(name);
+        std::fs::copy(from, &exe).unwrap();
+        let o = Command::new(&exe).arg("std-dir").env_remove("VOLT_STD").output().unwrap();
+        let found = String::from_utf8_lossy(&o.stdout).trim().to_string();
+        assert!(o.status.success() && Path::new(&found) == root.join("std").canonicalize().unwrap(), "{name} std-dir: {found} {}", String::from_utf8_lossy(&o.stderr));
+        let o = Command::new(&exe).arg("build").arg(&tiny).args(["--cc", "-lvolt_no_such_lib", "-o"]).arg(tmp.join("tiny")).output().unwrap();
+        let err = String::from_utf8_lossy(&o.stderr);
+        assert!(!o.status.success() && err.contains("failed: a library above wasn't found") && !err.contains("voltc bug"), "{name}: {err}");
+    }
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
 /// stage1's `parse --sexp` prints the same tree (or error) as the bootstrap's for every .volt file in the repo
 #[test]
 fn self_hosted_parser_matches() {
@@ -179,11 +205,17 @@ fn runtime_text_in_sync() {
     assert!(have == want, "voltc/src/runtime_c.volt is stale: VOLT_REGEN=1 cargo test --test selfhost runtime_text_in_sync");
 }
 
-/// the self-hosted compiler reproduces itself (stage2 == stage3) and stage2 passes the golden suite
+/// the self-hosted compiler reproduces itself (stage2 == stage3) and stage2 passes the golden suite.
+/// LLVM is found through an llvm-config for a relocated copy of it, as on Debian and Ubuntu, so the
+/// build file's flags and the bootstrap tool's $BOLT_CC_ARGS are what make it link
 #[test]
 fn bootstrap_reproduces_itself() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let o = Command::new(env!("CARGO_BIN_EXE_bolt"))
+    let mut bolt = Command::new(env!("CARGO_BIN_EXE_bolt"));
+    if let Some(cfg) = common::relocated_llvm_config(&Path::new(env!("CARGO_TARGET_TMPDIR")).join("relocated-llvm")) {
+        bolt.env("LLVM_CONFIG", cfg);
+    }
+    let o = bolt
         .args(["build", "bootstrap"])
         .current_dir(root.join("voltc"))
         .env("VOLTC", env!("CARGO_BIN_EXE_voltc-bootstrap"))

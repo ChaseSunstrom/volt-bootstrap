@@ -250,7 +250,8 @@ fn volt_files(path: str) -> std::vec<std::string> {
     return move out;
 }
 
-// the std package: --std, $VOLT_STD, or a std/ directory next to (or above) voltc
+// the std package: --std, $VOLT_STD, or a std/ directory next to (or above) voltc: installed
+// (prefix/lib/volt/std), in cargo's target/<profile>/, or in bolt's voltc/target/<profile>/
 fn find_std(c: cli&) -> std::string? {
     if (c.no_std) {
         return null;
@@ -271,7 +272,7 @@ fn find_std(c: cli&) -> std::string? {
             dir_end -= 1;
         }
         val dir = exe[0..dir_end];
-        val cands: str[4] = { "std", "../std", "../../std", "../lib/volt/std" };
+        val cands: str[5] = { "std", "../std", "../../std", "../lib/volt/std", "../../../std" };
         for (cand) in cands {
             var p = S(dir);
             p.append(cand);
@@ -923,6 +924,13 @@ fn cc_run(inputs: std::vec<str>&, out: str, c: cli&, object: bool) -> void {
             }
         }
         std::eprint("{}", r.err);
+        // the linker's errors aren't the generated C's: a library it can't find, or an undefined name
+        if (msg.contains("cannot find -l") || msg.contains("unable to find library")) {
+            die(fmt("linking {} failed: a library above wasn't found (install it, or pass --cc -L/DIR where it is)", S(out)));
+        }
+        if (msg.contains("ld returned") || msg.contains("linker command failed")) {
+            die(fmt("linking {} failed (the linker's errors are above): a C library or extern function may be missing; if not, this is a voltc bug", S(out)));
+        }
         die(fmt("the C compiler failed on {} (this is a voltc bug)", S(*inputs.at(0))));
     }
 }

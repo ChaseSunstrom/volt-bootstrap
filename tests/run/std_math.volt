@@ -56,6 +56,8 @@ fn main() -> void {
 
     // gcd and lcm
     std::println("{} {} {} {} {} {} {}", std::gcd(48, 18), std::gcd(-48, 18), std::gcd(0, 5), std::gcd(0, 0), std::lcm(4, 6), std::lcm(-4, 6), std::lcm(0, 6));
+    // the most negative value has no positive counterpart, but a gcd that fits still comes out
+    std::println("{} {} {} {} {}", std::gcd(min32, 6), std::gcd(6, min32), std::gcd(i8::min_value(), -1), std::gcd(twenty, 0), std::gcd(i8::min_value(), 64));
 }
 // expect: 3.14159 6.28319 2.71828 1.41421 0.69315 2.30259 true
 // expect: 1.4142 3.0000 1024.0000 2.7183 8.0000 1.0000 3.0000 3.0000
@@ -76,3 +78,4 @@ fn main() -> void {
 // expect: 127 -128 255 0 -128
 // expect: -128 127 255 100
 // expect: 6 6 5 0 12 12 0
+// expect: 2 2 1 20 64

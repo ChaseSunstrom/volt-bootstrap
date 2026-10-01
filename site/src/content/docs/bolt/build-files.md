@@ -40,10 +40,13 @@ Only the selected packages' build files run, never a dependency's.
 | `bolt::source(path)` | one more `.volt` file in every executable |
 | `bolt::c_source(path)` | a C file compiled into every executable |
 | `bolt::link_c(name)` | link a C library (`-lNAME`) into every executable |
+| `bolt::cc_arg(arg)` | one more C compiler argument for every executable (`-I`, `-L`, `-D`, a library) |
 | `bolt::step(name)` | a named step: `bolt build NAME` runs it |
 | `bolt::cmd(step, program, args...)` | the step runs a program |
 | `bolt::run(step, exe, args...)` | the step runs one of this package's executables (built first) |
 | `bolt::depends(step, on)` | `step` runs after `on` (`"install"` builds every executable) |
 
 Each call prints one `@bolt` line that bolt reads after the build file finishes; anything else a
-build file prints is shown as it is.
+build file prints is shown as it is. A step's program sees the C arguments the executables were
+linked with (from `c_source`, `link_c` and `cc_arg`) in `$BOLT_CC_ARGS`, one per line, so a step
+that builds more can use the same ones.

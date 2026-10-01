@@ -594,6 +594,9 @@ impl Build {
                 }
             };
             c.current_dir(&dir);
+            // what the package's executables were linked with, for steps that build more (one per line)
+            let cc: Vec<&str> = self.profile.cc_flags.iter().chain(&plan.cc).map(String::as_str).collect();
+            c.env("BOLT_CC_ARGS", cc.join("\n"));
             status("Running", format!("step {name}"));
             run_checked(c, &format!("step {name}"))?;
         }
@@ -735,6 +738,10 @@ impl Plan {
             "link_c" => {
                 need(1)?;
                 self.cc.push(format!("-l{}", args[0]));
+            }
+            "cc_arg" => {
+                need(1)?;
+                self.cc.push(args[0].to_string());
             }
             "step" => {
                 need(1)?;

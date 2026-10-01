@@ -56,6 +56,13 @@ fn link_c(name: str) -> void {
     std::io::println("@bolt\tlink_c\t{}", name);
 }
 
+// one more argument for the C compiler when linking every executable: -I/-L/-D flags, a library.
+// Steps see them all (with link_c's and c_source's) in $BOLT_CC_ARGS, one per line
+fn cc_arg(arg: str) -> void {
+    check(arg);
+    std::io::println("@bolt\tcc_arg\t{}", arg);
+}
+
 // a named step: `bolt build NAME` runs it (after the steps it depends on)
 fn step(name: str) -> void {
     check(name);

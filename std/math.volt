@@ -317,18 +317,39 @@ namespace math {
         return T::max_value();
     }
 
-    // the greatest common divisor of a and b, never negative (gcd(0, 0) is 0)
+    // the greatest common divisor of a and b, never negative (gcd(0, 0) is 0). Like abs, it overflows
+    // only when the answer doesn't fit: gcd(MIN, 0) and gcd(MIN, MIN) of a signed type
     <T: type>
     fn gcd(a: T, b: T) -> T {
         val zero: T = 0;
-        var x = abs(a);
-        var y = abs(b);
+        var x = a;
+        var y = b;
+        if (!signed<T>()) {
+            while (y != zero) {
+                val t = x % y;
+                x = y;
+                y = t;
+            }
+            return x;
+        }
+        // signed: Euclid on values <= 0, since MIN has no positive counterpart but every positive
+        // value has a negative one
+        val neg_one: T = zero -% 1;
+        if (x > zero) {
+            x = zero - x;
+        }
+        if (y > zero) {
+            y = zero - y;
+        }
         while (y != zero) {
+            if (y == neg_one) {
+                return 1; // and it skips MIN % -1, which overflows
+            }
             val t = x % y;
             x = y;
             y = t;
         }
-        return x;
+        return zero - x;
     }
 
     // the least common multiple of a and b, never negative (0 when either is 0)

@@ -67,4 +67,5 @@ fn main() -> void {
 - `checked_add`, `checked_sub`, `checked_mul`, `checked_div` return `null` when the result doesn't
   fit (or on division by zero).
 - `saturating_add`, `saturating_sub`, `saturating_mul` stop at the type's largest or smallest value.
-- `gcd` and `lcm` are never negative; `gcd(0, 0)` and `lcm(0, x)` are 0.
+- `gcd` and `lcm` are never negative; `gcd(0, 0)` and `lcm(0, x)` are 0. Like `abs`, they overflow
+  when the answer doesn't fit in the type: `gcd(i32::min_value(), 0)` is 2147483648.

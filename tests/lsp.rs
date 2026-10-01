@@ -1,6 +1,7 @@
 // The language server (`voltc lsp`, the self-hosted voltc) in a scripted session over stdio:
 // initialize, diagnostics as the text changes, hover, go to definition, references, document
 // symbols, completion (after `.`, after `::`, and plain) and signature help, then shutdown.
+mod common;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
@@ -46,7 +47,7 @@ impl Server {
         let voltc = dir.join("voltc");
         let mut srcs: Vec<PathBuf> = std::fs::read_dir(Path::new(ROOT).join("voltc/src")).unwrap().map(|e| e.unwrap().path()).filter(|p| p.extension().is_some_and(|x| x == "volt")).collect();
         srcs.sort();
-        let b = Command::new(env!("CARGO_BIN_EXE_voltc-bootstrap")).arg("build").args(&srcs).args(["--cc", "-lLLVM", "--cc", "-lclang", "-o"]).arg(&voltc).output().unwrap();
+        let b = Command::new(env!("CARGO_BIN_EXE_voltc-bootstrap")).arg("build").args(&srcs).args(common::llvm_cc_args()).arg("-o").arg(&voltc).output().unwrap();
         assert!(b.status.success(), "building voltc/src failed:\n{}", String::from_utf8_lossy(&b.stderr));
         // bolt on PATH: the server asks it for a package's dependencies
         let bolt_dir = Path::new(env!("CARGO_BIN_EXE_bolt")).parent().unwrap().to_path_buf();

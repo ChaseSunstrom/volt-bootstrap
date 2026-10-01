@@ -88,8 +88,15 @@ fn must(argv: str[..], what: str) -> std::process::output {
     return move r;
 }
 
-// stage builds the compiler into out, with a backend (c or llvm); the compiler links libLLVM and libclang
+// stage builds the compiler into out, with a backend (c or llvm); the compiler links libLLVM and libclang,
+// with the C args bolt linked stage1 with (build.volt's, from llvm-config), or from the default paths
+// when this runs outside bolt
 fn build(stage: str, srcs: std::vec<std::string>&, std_dir: str, out: str, backend: str) -> void {
+    var given = std::process::env("BOLT_CC_ARGS") ?? "";
+    if (given.len == 0) {
+        given = "-lLLVM\n-lclang";
+    }
+    val cc_args = given.split("\n");
     var argv: std::vec<str> = {};
     argv.push(stage) catch @panic("out of memory");
     argv.push("build") catch @panic("out of memory");
@@ -100,10 +107,12 @@ fn build(stage: str, srcs: std::vec<std::string>&, std_dir: str, out: str, backe
     argv.push(std_dir) catch @panic("out of memory");
     argv.push("--backend") catch @panic("out of memory");
     argv.push(backend) catch @panic("out of memory");
-    argv.push("--cc") catch @panic("out of memory");
-    argv.push("-lLLVM") catch @panic("out of memory");
-    argv.push("--cc") catch @panic("out of memory");
-    argv.push("-lclang") catch @panic("out of memory");
+    for (a) in cc_args.items() {
+        if (a.len > 0) {
+            argv.push("--cc") catch @panic("out of memory");
+            argv.push(a) catch @panic("out of memory");
+        }
+    }
     argv.push("-o") catch @panic("out of memory");
     argv.push(out) catch @panic("out of memory");
     must(argv.items(), out);
