@@ -339,6 +339,70 @@ fn fail_diag(c: cli&, files: std::vec<source_file>&, e: compile_error&) -> never
 
 // parse the program, std and packages, then check; the checked program
 fn compile_cli(c: cli&, s: sources&) -> std::box<checker> {
+    return compile_with(c, s, null);
+}
+
+// voltc lib's second pass: the shims voltc bindings describes (bindings.volt), compiled as one more
+// file of the package, and the package's export fns they stand in for
+struct shim_src {
+    pkg: str;
+    text: std::string;
+    unexport: std::vec<std::string>;
+}
+
+// voltc lib: the package, and for other languages (--shared, --static) again with its shims when its
+// export fns need them (owned text, export structs, closures). first holds the first pass's sources;
+// s the ones the result points into
+fn compile_lib(c: cli&, first: sources&, s: sources&) -> std::box<checker> {
+    val pkg = *c.files.at(0);
+    val chk = compile_with(c, first, null);
+    if (!c.shared && !c.standalone) {
+        // a library for Volt programs: they call its fns as Volt does
+        return move chk;
+    }
+    val plan = chk.shims(pkg) catch |e| {
+        fail_diag(c, &first.files, &e);
+    };
+    if (plan.text.len() == 0) {
+        return move chk;
+    }
+    var shim: shim_src = { pkg: pkg, text: copy plan.text, unexport: copy plan.unexport };
+    return compile_with(c, s, &shim);
+}
+
+// the package's export fns that shims stand in for stop being exports (the shims take their names)
+fn unexport(items: std::vec<item>&, prefix: str, names: std::vec<std::string>&) -> void {
+    for (it&) in items.items() {
+        match (it.kind) {
+            .FN(fd&) => {
+                if (!fd.is_export) {
+                    continue;
+                }
+                var full = S(prefix);
+                full.append("::");
+                full.append(fd.name);
+                for (n&) in names.items() {
+                    if (n.as_str() == full.as_str()) {
+                        fd.is_export = false;
+                    }
+                }
+            },
+            .NAMESPACE(path&, inner&) => {
+                var p = S(prefix);
+                for (seg&) in path.items() {
+                    if (p.len() > 0) {
+                        p.append("::");
+                    }
+                    p.append(*seg);
+                }
+                unexport(inner, p.as_str(), names);
+            },
+            default => {},
+        }
+    }
+}
+
+fn compile_with(c: cli&, s: sources&, shim: shim_src*) -> std::box<checker> {
     var pkgs: std::vec<pkg_arg> = {};
     var std_path = find_std(c);
     if (std_path) {
@@ -373,6 +437,15 @@ fn compile_cli(c: cli&, s: sources&) -> std::box<checker> {
         for (f&) in volt_files(p.path).items() {
             add_file(s, f.as_str(), p.name);
             all.append(s.texts.at(s.texts.len - 1).as_str());
+            all.push(0);
+        }
+        if (shim != null && shim->pkg == p.name) {
+            var name = S(p.path);
+            name.append("/(export shims).volt");
+            put(&s.names, move name);
+            put(&s.texts, copy shim->text);
+            put(&s.units, { file: @cast<u32>(s.names.len - 1), pkg: p.name });
+            all.append(shim->text.as_str());
             all.push(0);
         }
         // and its --cfg settings: a library built with other features doesn't link either
@@ -444,6 +517,11 @@ fn compile_cli(c: cli&, s: sources&) -> std::box<checker> {
     if (bad.len > 0) {
         report_diags(c, &s.files, &bad);
         std::process::exit(1);
+    }
+    if (shim != null) {
+        for (a&) in s.asts.items() {
+            unexport(a, "", &shim->unexport);
+        }
     }
     // the runtime lives in the program's own C unit, never in a library
     var o: opts = { release: c.release, leak_check: c.leak_check, guards: move guards, lib: lib, runtime: lib == null || c.shared || c.standalone, cfg: copy c.cfg, pp_flags: preprocessor_flags(&c.cc_args) };
@@ -612,8 +690,9 @@ fn main() -> i32 {
     if (c.cmd == "lib" && c.shared) {
         // everything in one shared object: the package, what it uses from std and other packages,
         // and the runtime; its export fns are the interface (voltc bindings describes them)
+        var first: sources = {};
         var s: sources = {};
-        val chk = compile_cli(&c, &s);
+        val chk = compile_lib(&c, &first, &s);
         var out = S(c.out ?? "");
         if (c.out == null) {
             out = S("lib");
@@ -639,8 +718,9 @@ fn main() -> i32 {
         return 0;
     }
     if (c.cmd == "lib") {
+        var first: sources = {};
         var s: sources = {};
-        val chk = compile_cli(&c, &s);
+        val chk = compile_lib(&c, &first, &s);
         var out = S(c.out ?? "");
         if (c.out == null) {
             out = S("lib");

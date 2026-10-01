@@ -1,18 +1,45 @@
-// Zig calls the Volt library through voltc bindings --lang zig
+// Zig calls the Volt library through voltc bindings --lang zig: errors come back as Error, owned
+// text as VoltText (deinit frees it), an export struct is a type with deinit
 const std = @import("std");
 const m = @import("mathlib.zig");
+const print = std.debug.print;
+
+const Sum = struct { total: i32 = 0 };
+
+fn add_up(s: *Sum, x: i32) void {
+    s.total += x;
+    print(" {d}", .{x});
+}
 
 pub fn main() void {
-    std.debug.print("add {d}\n", .{m.ml_add(2, 3)});
+    print("add {d}\n", .{m.ml_add(2, 3)});
     var a = m.vec2{ .x = 1, .y = 2 };
     const b = m.vec2{ .x = 3, .y = 4 };
-    std.debug.print("dot {d}\n", .{m.ml_dot(a, b)});
+    print("dot {d}\n", .{m.ml_dot(a, b)});
     m.ml_scale(&a, 2);
-    std.debug.print("scale {d} {d}\n", .{ a.x, a.y });
-    std.debug.print("len {d}\n", .{m.ml_len(m.VoltStr.from("hello"))});
-    std.debug.print("next {d}\n", .{@intFromEnum(m.ml_next(m.color.GREEN))});
-    const r = m.ml_sqrt(9);
-    std.debug.print("sqrt {d} {d}\n", .{ r.value, @intFromBool(r.@"error" == 0) });
-    const e = m.ml_sqrt(-1);
-    std.debug.print("error {s}\n", .{if (e.@"error" == m.math_error.NEGATIVE) "negative" else "?"});
+    print("scale {d} {d}\n", .{ a.x, a.y });
+    print("len {d}\n", .{m.ml_len("hello")});
+    print("next {d}\n", .{@intFromEnum(m.ml_next(m.color.GREEN))});
+    print("sqrt {d} 1\n", .{m.ml_sqrt(9) catch unreachable});
+    if (m.ml_sqrt(-1)) |_| {} else |e| print("error {s}\n", .{if (e == error.NEGATIVE) "negative" else "?"});
+    const g = m.ml_greet("volt");
+    defer g.deinit();
+    print("greet {s}\n", .{g.bytes()});
+    const rp = m.ml_repeat("ab", 2) catch unreachable;
+    defer rp.deinit();
+    print("repeat {s}\n", .{rp.bytes()});
+    if (m.ml_repeat("ab", -1)) |t| t.deinit() else |e| print("repeat {s}\n", .{if (e == error.NEGATIVE) "negative" else "?"});
+    var xs = [_]f64{ 1, 2, 3.5 };
+    print("sum {d}\n", .{m.ml_sum(&xs)});
+    var ys = [_]i32{ 4, 5, 6 };
+    print("find {d} {s}\n", .{ m.ml_find(&ys, 6).?, if (m.ml_find(&ys, 9) == null) "none" else "?" });
+    var s = Sum{};
+    print("each", .{});
+    m.ml_each(&ys, &s, add_up);
+    print(" = {d}\n", .{s.total});
+    const c = m.counter.new("clicks");
+    defer c.deinit();
+    _ = c.add(2);
+    print("counter {s} {d}\n", .{ c.name(), c.add(3) });
+    if (c.take(9)) |_| {} else |e| print("take {s}\n", .{if (e == error.NEGATIVE) "negative" else "?"});
 }

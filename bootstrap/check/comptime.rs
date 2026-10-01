@@ -1670,7 +1670,7 @@ impl Checker {
 
 /// the attributes that exist (enum attribute in the spec); @intrinsic is for packages (a std, or
 /// any library) to bind compiler-provided functions like println
-const ATTRS: &[(&str, usize)] = &[("inline", 0), ("noinline", 0), ("opt", 1), ("section", 1), ("align", 1), ("deprecated", 1), ("owns", 1), ("cpp_type", 1)];
+const ATTRS: &[(&str, usize)] = &[("inline", 0), ("noinline", 0), ("opt", 1), ("section", 1), ("align", 1), ("deprecated", 1), ("owns", 1), ("cpp_type", 1), ("export_text", 1)];
 
 /// an attribute's string argument: @owns("ptr") -> ptr
 pub fn attr_str(a: &Expr) -> Option<String> {

@@ -208,6 +208,7 @@ accepted, so a typo is an error.
 | `@deprecated("use x")` | warn where it's used |
 | `@intrinsic("name")` | a compiler builtin or runtime function (for std-like libraries) |
 | `@owns("field")` | this struct owns what the field points at, like `box` |
+| `@export_text("method")` | an export fn returning this struct hands other languages its text, as `method()` gives it (std's `string` has it) |
 
 ```volt
 use std::io;

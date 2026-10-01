@@ -34,7 +34,9 @@ name. Then build a library and its declarations:
 ```sh
 voltc lib mathlib --pkg mathlib=lib --shared -o libmathlib.so   # or --static: libmathlib.a
 voltc bindings mathlib --pkg mathlib=lib --lang c      > mathlib.h
+voltc bindings mathlib --pkg mathlib=lib --lang cpp    > mathlib.hpp
 voltc bindings mathlib --pkg mathlib=lib --lang rust   > mathlib.rs
+voltc bindings mathlib --pkg mathlib=lib --lang zig    > mathlib.zig
 voltc bindings mathlib --pkg mathlib=lib --lang python > mathlib.py
 ```
 
@@ -62,13 +64,65 @@ export fn safe_div(a: i32, b: i32) -> math_error!i32 {
 }
 ```
 
-What can cross: integers and floats, `bool`, structs made of those, plain enums, error sets (as
-their codes), `E!T` (a struct of the error code and the value), `str` (a pointer and a length),
-pointers, and `extern "C"` function pointers. Anything else in an exported signature is an error
-that names the function.
+These types cross as they are laid out in Volt, which is how C lays them out:
+- integers and floats, `bool`, and pointers;
+- structs made of those, and plain enums;
+- error sets, as their codes, and `E!T`, as a struct of the error code and the value;
+- `str`, as a pointer and a length;
+- slices `T[..]`, as a pointer and a count, and optionals `T?`, as the value and a `has` flag;
+- `extern "C"` function pointers.
 
-`--lang` is one of `c`, `cpp`, `rust`, `zig` or `python`. The Python bindings use `ctypes` and load
-the shared library.
+Three more need converting at the edge. `voltc lib` adds that code when it builds the library:
+- **Owned text.** An export fn can return a `std::string`, or any type with
+  `@attributes([@export_text("method")])`. The caller gets the text and frees it when it's done.
+- **Classes.** Other languages hold an `export struct` by a handle and never see its fields. An
+  export fn that returns one by value makes one, and the caller owns it. Export fns named
+  `NAME_method` that take it as `NAME&` first are its methods. voltc adds `NAME_free`.
+- **Callbacks.** A closure parameter `fn(A) -> R` takes a function from the other language. In C,
+  that's a function pointer that gets the caller's data first, and then the data itself.
+
+```volt
+use std::string;
+
+export fn greet(name: str) -> std::string {
+    var s = std::string::from("hello, ");
+    s.append(name);
+    return move s;
+}
+
+export struct counter {
+    count: i64;
+}
+
+export fn counter_new() -> counter {
+    return { count: 0 };
+}
+
+export fn counter_add(c: counter&, by: i64) -> i64 {
+    c.count += by;
+    return c.count;
+}
+
+export fn each(xs: i32[..], f: fn(i32) -> void) -> void {
+    for (x) in xs {
+        f(x);
+    }
+}
+```
+
+Each language gets these in its own style:
+
+| | C | C++ | Rust | Python | Zig |
+| --- | --- | --- | --- | --- | --- |
+| errors | a struct of the code and the value | throws `error` | `Result<T, Error>` | raises a class per error set, all deriving from `Error` | `Error!T` |
+| owned text | `volt_text`, freed with `volt_text_free` | `std::string` | `String` | `str` | `VoltText`, with `bytes()` and `deinit()` |
+| slices, optionals | structs | from vectors and arrays; `std::optional` | `&mut [T]`, `Option` | lists, `None` | `[]T`, `?T` |
+| an export struct | a pointer, and `NAME_free` | a class that frees itself | a type that frees itself when dropped | a class with `close()` and `with` | a type with `deinit()` |
+| callbacks | a function and a `void *` | `std::function` | `&mut dyn FnMut` | any callable | a context and a function |
+
+Every binding also has the plain C functions: in C++ they're in namespace `raw`, in Rust in module
+`raw`, and in Zig in struct `raw`. `--lang` is one of `c`, `cpp`, `rust`, `zig` or `python`. The
+Python bindings use `ctypes` and load the shared library.
 
 ## In bolt
 

@@ -434,7 +434,7 @@ attach fn item(this: parser&) -> compile_error!item {
         }
     }
     // the modifiers came before we knew what they modify: a fn takes them all, a struct only
-    // extern/comptime, a global comptime; anything else ignores them. `kind` starts as a placeholder
+    // extern/comptime/export, a global comptime; anything else ignores them. `kind` starts as a placeholder
     var kind: item_kind = item_kind::GLOBAL({ mutable: false, is_comptime: false, is_static: false, pat: { kind: pat_kind::WILD, span: start }, ty: null, init: null, span: start });
     if (this.eat_kw("fn")) {
         var f = try this.fn_decl();
@@ -482,7 +482,7 @@ attach fn item(this: parser&) -> compile_error!item {
                 put(&fields, { name: fname, ty: move t, fallback: move fallback, vis: fvis, span: fstart.to(this.prev_span()) });
             }
         }
-        kind = item_kind::STRUCT({ name: name, spec: move spec, fields: move fields, is_extern: is_extern, is_comptime: is_comptime });
+        kind = item_kind::STRUCT({ name: name, spec: move spec, fields: move fields, is_extern: is_extern, is_comptime: is_comptime, is_export: is_export });
     } else if (this.is_kw("enum") || this.is_kw("error")) {
         val is_error = this.is_kw("error");
         this.bump();

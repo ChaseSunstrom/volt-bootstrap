@@ -1,9 +1,18 @@
 // Bindings for other languages: `voltc bindings NAME --lang c|cpp|rust|zig|python` describes package
 // NAME's export fns and the types they use, for programs that call a library built with
-// `voltc lib NAME --shared` (or `--static`). Every type crosses as C sees it: numbers, bool,
-// pointers (T* and T&), cstr, str (volt_str: a pointer and a length), structs whose fields cross,
-// plain enums (their tag type), error sets (u32 codes), E!T (a struct of the error code and the
-// value) and extern "C" fns. Anything else is an error naming the fn and the type.
+// `voltc lib NAME --shared` (or `--static`). Every type crosses in a C form:
+// - numbers, bool, pointers (T* and T&), cstr, str (volt_str: a pointer and a length), structs whose
+//   fields cross, plain enums (their tag type), error sets (u32 codes), E!T (a struct of the error
+//   code and the value) and extern "C" fns, as Volt lays them out;
+// - slices T[..] ({ T *ptr; size_t len }) and optionals T? ({ T value; bool has }; a pointer is
+//   simply null), also as Volt lays them out;
+// - an export struct, which other languages hold by a pointer (a handle) and never look inside:
+//   returned by value, the caller owns it and frees it with X_free; as X& or X*, it's lent;
+// - owned text (a type with @export_text, like std::string), returned as volt_text: the bytes, and
+//   what frees them (volt_text_free);
+// - a closure parameter fn(A) -> R: a C function taking the caller's data first, and that data.
+// The last three differ from how Volt passes them, so voltc lib adds shims (see shims below).
+// Anything else is an error naming the fn and the type.
 use std::mem;
 
 // what a type is on the C side
@@ -21,6 +30,23 @@ enum shape {
     RESULT: (u32, u32), // E!T: the error set type, the value type
     ARRAY: (u32, u64),
     FN: u32,           // an extern "C" fn type (its index in bind.fns)
+    SLICE: u32,        // T[..]: the element type
+    OPT: u32,          // T? (T not a pointer): the value type
+    HANDLE: u32,       // an export struct (struct id), by value: an owned handle
+    TEXT: u32,         // owned text: the Volt type (a struct with @export_text)
+    CLOSURE: u32,      // a fn(A) -> R parameter (its index in bind.closures)
+}
+
+// what can sit inside another type's C form (a field, an element, a fn pointer's parameter): not the
+// shapes that only work at the edge of an export fn
+fn plain(s: shape) -> bool {
+    match (s) {
+        .TEXT(t) => { return false; },
+        .HANDLE(h) => { return false; },
+        .CLOSURE(c) => { return false; },
+        .OPT(t) => { return false; },
+        default => { return true; },
+    }
 }
 
 // one bindings file being written: the package, the types it needs (in the order they're declared)
@@ -33,6 +59,11 @@ struct bind {
     codes: std::vec<u32> = {};
     results: std::vec<u32> = {};
     fns: std::vec<u32> = {};
+    slices: std::vec<u32> = {};   // element types
+    opts: std::vec<u32> = {};     // value types
+    handles: std::vec<u32> = {};  // export struct ids
+    texts: std::vec<u32> = {};    // owned text types
+    closures: std::vec<u32> = {}; // fn(A) -> R types
     uses_str: bool = false;
     // structs whose fields are being looked at (a pointer back to one is fine: C declares them first)
     visiting: std::vec<u32> = {};
@@ -42,6 +73,44 @@ struct bind {
 
 attach fn no_form(this: bind&, t: u32) -> shape? {
     this.bad = t;
+    return null;
+}
+
+// an inner type's form, which has to be plain (see plain)
+attach fn inner(this: bind&, t: u32) -> shape? {
+    val s = this.shape_of(t) ?? return null;
+    if (!plain(s)) {
+        return this.no_form(t);
+    }
+    return s;
+}
+
+fn add_u32(v: std::vec<u32>&, x: u32) -> void {
+    if (!has_u32(v, x)) {
+        put(v, x);
+    }
+}
+
+// is struct s an export struct (other languages hold it by a handle)?
+attach fn is_handle(this: bind&, s: u32) -> bool {
+    match (this.c.item_of(this.c.si(s).decl).kind) {
+        .STRUCT(sd&) => { return sd.is_export; },
+        default => { return false; },
+    }
+}
+
+// the method that gives struct s's text, when it has @export_text("method")
+attach fn text_method(this: bind&, s: u32) -> str? {
+    for (a&) in this.c.item_of(this.c.si(s).decl).attrs.items() {
+        match (a.kind) {
+            .BUILTIN(n, g, x) => {
+                if (n == "export_text") {
+                    return attr_str(a);
+                }
+            },
+            default => {},
+        }
+    }
     return null;
 }
 
@@ -74,23 +143,43 @@ attach fn shape_of(this: bind&, t: u32) -> shape? {
             // a null pointer is "none" for the types that are pointers in C
             match (*this.c.t.get(x)) {
                 .REF(y) => { return this.pointer(y); },
+                .PTR(y) => { return this.pointer(y); },
                 .CSTR => { return shape::CSTR; },
                 .FN_PTR(ps, r, va) => { return this.shape_of(x); },
-                default => { return this.no_form(t); },
+                default => {},
             }
+            if (this.c.t.is_niche(x)) {
+                return this.no_form(t);
+            }
+            this.inner(x) ?? return null;
+            add_u32(&this.opts, x);
+            return shape::OPT(x);
         },
         .ARRAY(elem, n) => {
-            this.shape_of(elem) ?? return null;
+            this.inner(elem) ?? return null;
             return shape::ARRAY(elem, n);
         },
+        .SLICE(elem) => {
+            this.inner(elem) ?? return null;
+            add_u32(&this.slices, elem);
+            return shape::SLICE(elem);
+        },
         .STRUCT(s) => {
+            if (this.is_handle(s)) {
+                add_u32(&this.handles, s);
+                return shape::HANDLE(s);
+            }
+            if (this.text_method(s) != null) {
+                add_u32(&this.texts, t);
+                return shape::TEXT(t);
+            }
             if (has_u32(&this.structs, s) || has_u32(&this.visiting, s)) {
                 return shape::STRUCT(s);
             }
             // its fields' structs are declared first (C needs them complete)
             put(&this.visiting, s);
             for (f&) in this.c.si(s).fields.items() {
-                this.shape_of(f.ty) ?? return null;
+                this.inner(f.ty) ?? return null;
             }
             this.visiting.pop();
             put(&this.structs, s);
@@ -99,26 +188,25 @@ attach fn shape_of(this: bind&, t: u32) -> shape? {
         .ENUM(e) => {
             val info = this.c.ei(e);
             if (info.is_error) {
-                if (!has_u32(&this.codes, t)) {
-                    put(&this.codes, t);
-                }
+                add_u32(&this.codes, t);
                 return shape::CODE;
             }
             if (info.has_payload) {
                 return this.no_form(t);
             }
-            if (!has_u32(&this.enums, e)) {
-                put(&this.enums, e);
-            }
+            add_u32(&this.enums, e);
             return shape::ENUM(e);
         },
         .ANYERR => { return shape::CODE; },
         .ERR_UNION(e, x) => {
             this.shape_of(e) ?? return null;
-            this.shape_of(x) ?? return null;
-            if (!has_u32(&this.results, t)) {
-                put(&this.results, t);
+            val v = this.shape_of(x) ?? return null;
+            match (v) {
+                .CLOSURE(c) => { return this.no_form(x); },
+                .OPT(o) => { return this.no_form(x); },
+                default => {},
             }
+            add_u32(&this.results, t);
             return shape::RESULT(e, x);
         },
         .FN_PTR(ps, r, va) => {
@@ -126,9 +214,9 @@ attach fn shape_of(this: bind&, t: u32) -> shape? {
                 return this.no_form(t);
             }
             for (p&) in ps.items() {
-                this.shape_of(*p) ?? return null;
+                this.inner(*p) ?? return null;
             }
-            this.shape_of(r) ?? return null;
+            this.inner(r) ?? return null;
             for (i) in 0..this.fns.len {
                 if (*this.fns.at(i) == t) {
                     return shape::FN(@cast<u32>(i));
@@ -137,13 +225,33 @@ attach fn shape_of(this: bind&, t: u32) -> shape? {
             put(&this.fns, t);
             return shape::FN(@cast<u32>(this.fns.len - 1));
         },
+        .FN_VAL(ps, r) => {
+            for (p&) in ps.items() {
+                this.inner(*p) ?? return null;
+            }
+            this.inner(r) ?? return null;
+            for (i) in 0..this.closures.len {
+                if (*this.closures.at(i) == t) {
+                    return shape::CLOSURE(@cast<u32>(i));
+                }
+            }
+            put(&this.closures, t);
+            return shape::CLOSURE(@cast<u32>(this.closures.len - 1));
+        },
         default => { return this.no_form(t); },
     }
 }
 
 attach fn pointer(this: bind&, x: u32) -> shape? {
     if (x != VOID) {
-        this.shape_of(x) ?? return null;
+        // a pointer to an export struct is a lent handle
+        val s = this.shape_of(x) ?? return null;
+        match (s) {
+            .TEXT(y) => { return this.no_form(x); },
+            .CLOSURE(y) => { return this.no_form(x); },
+            .OPT(y) => { return this.no_form(x); },
+            default => {},
+        }
     }
     return shape::PTR(x);
 }
@@ -155,6 +263,342 @@ fn has_u32(v: std::vec<u32>&, x: u32) -> bool {
         }
     }
     return false;
+}
+
+// does a type lend export struct s (X& or X*)?
+attach fn lends(this: bind&, t: u32, s: u32) -> bool {
+    val h = this.lent_handle(t) ?? return false;
+    return h == s;
+}
+
+// the export struct a type points at (X& or X*), if any
+attach fn lent_handle(this: bind&, t: u32) -> u32? {
+    match (*this.c.t.get(t)) {
+        .REF(x) => { return this.struct_handle(x); },
+        .PTR(x) => { return this.struct_handle(x); },
+        default => { return null; },
+    }
+}
+
+attach fn struct_handle(this: bind&, t: u32) -> u32? {
+    match (*this.c.t.get(t)) {
+        .STRUCT(s) => {
+            if (this.is_handle(s)) {
+                return s;
+            }
+        },
+        default => {},
+    }
+    return null;
+}
+
+// ---------- the exports ----------
+
+// one function other languages call: a package's export fn, or the X_free that voltc lib adds for
+// an export struct
+struct entry {
+    name: std::string; // the C symbol
+    f: u32;         // the export fn (when free_of is none)
+    free_of: u32?;  // the export struct an added X_free frees
+}
+
+// the export fns of the package, by name
+attach fn exports(this: bind&) -> std::vec<u32> {
+    var out: std::vec<u32> = {};
+    for (i) in 0..this.c.fns.len {
+        val f = this.c.fi(@cast<u32>(i));
+        match (this.c.dl(f.decl).item.kind) {
+            .FN(fd&) => {
+                val p = this.c.pkg_of(f.decl);
+                if (fd.is_export && p != null && (p ?? "") == this.pkg) {
+                    var at = out.len;
+                    while (at > 0 && str_less(f.name, this.c.fi(*out.at(at - 1)).name)) {
+                        at -= 1;
+                    }
+                    insert_at(&out, at, @cast<u32>(i));
+                }
+            },
+            default => {},
+        }
+    }
+    return move out;
+}
+
+// X_free's name for export struct s
+attach fn free_name(this: bind&, s: u32) -> std::string {
+    var n = this.local(this.c.si(s).name);
+    n.append("_free");
+    return move n;
+}
+
+// every function in the bindings: the export fns, then an X_free per export struct without one
+attach fn entries(this: bind&) -> std::vec<entry> {
+    var out: std::vec<entry> = {};
+    for (i&) in this.exports().items() {
+        put(&out, { name: S(this.c.fi(*i).c_name), f: *i, free_of: null });
+    }
+    for (s&) in this.handles.items() {
+        put(&out, { name: this.free_name(*s), f: 0, free_of: *s });
+    }
+    return move out;
+}
+
+// "WHAT is T, which has no C form" (naming the part of T that doesn't cross, when that's inside it)
+attach fn no_c_form(this: bind&, at: span, what: std::string, t: u32) -> compile_error {
+    var msg = fmt2("{} is {}, which has no C form", move what, this.c.ty_name(t));
+    if (this.bad != t) {
+        msg.append(fmt(" (because of the {} in it)", this.c.ty_name(this.bad)).as_str());
+    }
+    return with_help(fail(at, move msg), S("bindings take numbers, bool, pointers and references, cstr, str, slices, optionals, structs of those, plain enums, error sets, E!T, extern \"C\" fns, closures as parameters, and export structs and owned text (@export_text) as results"));
+}
+
+// is a shape an owned result (text, or an export struct by value), directly or as E!T's value?
+attach fn owned_result(this: bind&, s: shape) -> bool {
+    match (s) {
+        .TEXT(t) => { return true; },
+        .HANDLE(h) => { return true; },
+        .RESULT(e, x) => {
+            val v = this.shape_of(x) ?? return false;
+            match (v) {
+                .TEXT(t) => { return true; },
+                .HANDLE(h) => { return true; },
+                default => { return false; },
+            }
+        },
+        default => { return false; },
+    }
+}
+
+// every export fn's types have to cross, each where it's allowed
+attach fn check_all(this: bind&) -> compile_error!void {
+    for (i&) in this.exports().items() {
+        val f = this.c.fi(*i);
+        val at = this.c.dl(f.decl).item.span;
+        for (p&) in f.params.items() {
+            val s = this.shape_of(p.ty) ?? return this.no_c_form(at, fmt2("export fn {}: its parameter {}", S(f.name), S(p.name)), p.ty);
+            if (this.owned_result(s)) {
+                return with_help(fail(at, fmt3("export fn {}: its parameter {} is {}, which only comes out of export fns", S(f.name), S(p.name), this.c.ty_name(p.ty))), S("take an export struct as X& (or X*); take text as str"));
+            }
+        }
+        val r = this.shape_of(f.ret) ?? return this.no_c_form(at, fmt("export fn {}: its return type", S(f.name)), f.ret);
+        match (r) {
+            .CLOSURE(c) => { return fail(at, fmt2("export fn {}: it returns {}, and closures only go into export fns", S(f.name), this.c.ty_name(f.ret))); },
+            default => {},
+        }
+    }
+    // the names voltc lib adds: X_free for each export struct, and the shims' namespace
+    for (i&) in this.exports().items() {
+        val f = this.c.fi(*i);
+        for (h&) in this.handles.items() {
+            if (this.free_name(*h).as_str() == f.c_name) {
+                return with_help(fail(this.c.dl(f.decl).item.span, fmt3("export fn {}: voltc lib makes {} itself, to free export struct {}", S(f.c_name), S(f.c_name), S(this.c.si(*h).name))), S("rename this fn; the generated one runs the struct's delete and frees its memory"));
+            }
+        }
+    }
+    val pkg_ns = this.c.ns(0).children.get(this.pkg);
+    if (pkg_ns != null && this.c.ns(*pkg_ns).children.get("__export") != null) {
+        return fail(NO_SPAN, fmt("package {} declares namespace __export, which voltc lib needs for its shims", S(this.pkg)));
+    }
+    return;
+}
+
+// does export fn f need a shim (its C form differs from how Volt passes it)?
+attach fn needs_shim(this: bind&, f: u32) -> bool {
+    val info = this.c.fi(f);
+    for (p&) in info.params.items() {
+        match (this.shape_of(p.ty) ?? shape::VOID) {
+            .CLOSURE(c) => { return true; },
+            default => {},
+        }
+    }
+    return this.owned_result(this.shape_of(info.ret) ?? shape::VOID);
+}
+
+// ---------- shims ----------
+
+// What voltc lib compiles in front of a package's export fns whose C form differs from Volt's (owned
+// text, export structs by value, closures): Volt source for export fns of the same names in their C
+// forms, in namespace PKG::__export, which call the package's own fns (no longer exported); and an
+// X_free per export struct. It uses only the language and the runtime's allocator, never std.
+struct shim_plan {
+    text: std::string = {};
+    unexport: std::vec<std::string> = {}; // the package's export fns a shim stands in for (their full names)
+}
+
+// a type as Volt source (full names resolve from anywhere)
+attach fn src(this: bind&, t: u32) -> std::string {
+    return this.c.ty_name(t);
+}
+
+// E's spelling before ! in E!T (nothing for anyerror)
+attach fn err_src(this: bind&, e: u32) -> std::string {
+    if (e == ANYERR) {
+        return {};
+    }
+    return this.src(e);
+}
+
+// the expression that turns v (a value of owned type t) into its C form: text_K(v) or own_K(v)
+attach fn wrap_owned(this: bind&, t: u32, v: std::string) -> std::string {
+    match (this.shape_of(t) ?? shape::VOID) {
+        .TEXT(x) => {
+            for (k) in 0..this.texts.len {
+                if (*this.texts.at(k) == t) {
+                    return fmt2("text_{}({})", unum(@cast<u64>(k)), move v);
+                }
+            }
+        },
+        .HANDLE(s) => {
+            for (k) in 0..this.handles.len {
+                if (*this.handles.at(k) == s) {
+                    return fmt2("own_{}({})", unum(@cast<u64>(k)), move v);
+                }
+            }
+        },
+        default => {},
+    }
+    return v;
+}
+
+// owned type t's C form, as Volt source in the shim: text, or X*
+attach fn owned_src(this: bind&, t: u32) -> std::string {
+    match (this.shape_of(t) ?? shape::VOID) {
+        .TEXT(x) => { return S("text"); },
+        .HANDLE(s) => { return fmt("({}*)", this.src(t)); },
+        default => { return this.src(t); },
+    }
+}
+
+// an export fn's full Volt name (mathlib::geo::area), which the shims call it by
+attach fn full_name(this: bind&, f: u32) -> std::string {
+    val info = this.c.fi(f);
+    var n = this.c.ns_path(this.c.dl(info.decl).ns, "::");
+    if (n.len() > 0) {
+        n.append("::");
+    }
+    n.append(info.name);
+    return move n;
+}
+
+attach fn shim_fn(this: bind&, f: u32, out: std::string&) -> void {
+    val info = this.c.fi(f);
+    var params: std::string = {};
+    var args: std::string = {};
+    for (p&) in info.params.items() {
+        if (params.len() > 0) {
+            params.append(", ");
+            args.append(", ");
+        }
+        match (this.shape_of(p.ty) ?? shape::VOID) {
+            .CLOSURE(c) => {
+                // the caller's C function, which takes the caller's data first, and that data
+                match (*this.c.t.get(p.ty)) {
+                    .FN_VAL(ps&, r) => {
+                        var cps = S("void*");
+                        var lps: std::string = {};
+                        var largs = S(p.name);
+                        largs.append("_user");
+                        for (k) in 0..ps.len {
+                            cps.append(", ");
+                            cps.append(this.src(*ps.at(k)).as_str());
+                            if (k > 0) {
+                                lps.append(", ");
+                            }
+                            lps.append(fmt2("a{}: {}", unum(@cast<u64>(k)), this.src(*ps.at(k))).as_str());
+                            largs.append(fmt(", a{}", unum(@cast<u64>(k))).as_str());
+                        }
+                        params.append(fmt4("{}: extern \"C\" fn({}) -> {}, {}_user: void*", S(p.name), move cps, this.src(r), S(p.name)).as_str());
+                        var call = fmt2("{}({})", S(p.name), move largs);
+                        if (r != VOID) {
+                            call = fmt("return {}", move call);
+                        }
+                        args.append(fmt4("|{}, {}_user| ({}) -> {} {{ ", S(p.name), S(p.name), move lps, this.src(r)).as_str());
+                        args.append(call.as_str());
+                        args.append("; }");
+                    },
+                    default => {},
+                }
+            },
+            default => {
+                params.append(fmt2("{}: {}", S(p.name), this.src(p.ty)).as_str());
+                args.append(p.name);
+            },
+        }
+    }
+    val call = fmt2("{}({})", this.full_name(f), move args);
+    var ret = this.src(info.ret);
+    var body: std::string = {};
+    match (this.shape_of(info.ret) ?? shape::VOID) {
+        .TEXT(t) => {
+            ret = this.owned_src(info.ret);
+            body = fmt("return {};", this.wrap_owned(info.ret, move call));
+        },
+        .HANDLE(s) => {
+            ret = this.owned_src(info.ret);
+            body = fmt("return {};", this.wrap_owned(info.ret, move call));
+        },
+        .RESULT(e, x) => {
+            if (this.owned_result(shape::RESULT(e, x))) {
+                ret = fmt2("{}!{}", this.err_src(e), this.owned_src(x));
+                body = fmt("return {};", this.wrap_owned(x, fmt("try {}", move call)));
+            } else {
+                body = fmt("return {};", move call);
+            }
+        },
+        .VOID => { body = fmt("{};", move call); },
+        default => { body = fmt("return {};", move call); },
+    }
+    out.append(fmt4("\n    export fn {}({}) -> {} {{\n        {}\n    }}\n", S(info.c_name), move params, move ret, move body).as_str());
+}
+
+// the shims for package pkg (an empty text when it needs none)
+attach fn shims(this: checker&, pkg: str) -> compile_error!shim_plan {
+    var b: bind = { c: this, pkg: pkg };
+    try b.check_all();
+    var plan: shim_plan = {};
+    var fns: std::string = {};
+    for (i&) in b.exports().items() {
+        if (b.needs_shim(*i)) {
+            b.shim_fn(*i, &fns);
+            put(&plan.unexport, b.full_name(*i));
+        }
+    }
+    val ents = b.entries();
+    if (fns.len() == 0 && b.handles.len == 0) {
+        return move plan;
+    }
+    var out = S("// generated by voltc lib: the package's export fns in the forms other languages call\n// (see voltc bindings)\nnamespace __export {\n    @attributes([@intrinsic(\"volt_rt_malloc\")])\n    internal fn rt_malloc(size: usize) -> void*;\n    @attributes([@intrinsic(\"volt_rt_free\")])\n    internal fn rt_free(ptr: void*) -> void;\n");
+    if (b.texts.len > 0) {
+        out.append("\n    // owned text: the bytes, and what frees them (drop(owner))\n    struct text {\n        ptr: u8*;\n        len: usize;\n        owner: void*;\n        drop: extern \"C\" fn(void*) -> void;\n    }\n");
+    }
+    for (k) in 0..b.texts.len {
+        val t = *b.texts.at(k);
+        val ts = b.src(t);
+        var method = S("as_str");
+        match (*this.t.get(t)) {
+            .STRUCT(s) => { method = S(b.text_method(s) ?? "as_str"); },
+            default => {},
+        }
+        val kk = unum(@cast<u64>(k));
+        out.append(fmt2("\n    extern \"C\" fn drop_text_{}(p: void*) -> void {{\n        val v = @read(@cast<{}*>(p));\n        rt_free(p);\n    }}\n", copy kk, copy ts).as_str());
+        out.append(fmt4("\n    fn text_{}(v: {}) -> text {{\n        val p = @cast<{}*>(rt_malloc(@sizeof({})) ?? @panic(\"out of memory\"));\n", copy kk, copy ts, copy ts, copy ts).as_str());
+        out.append(fmt2("        @write(p, move v);\n        val s = p->{}();\n        return {{ ptr: s.ptr, len: s.len, owner: p, drop: drop_text_{} }};\n    }}\n", move method, copy kk).as_str());
+    }
+    for (k) in 0..b.handles.len {
+        val s = *b.handles.at(k);
+        val xs = S(this.si(s).name);
+        val kk = unum(@cast<u64>(k));
+        out.append(fmt4("\n    fn own_{}(v: {}) -> {}* {{\n        val p = @cast<{}*>(rt_malloc(@sizeof(", copy kk, copy xs, copy xs, copy xs).as_str());
+        out.append(fmt("{})) ?? @panic(\"out of memory\"));\n        @write(p, move v);\n        return p;\n    }\n", copy xs).as_str());
+    }
+    for (e&) in ents.items() {
+        val s = e.free_of ?? continue;
+        out.append(fmt2("\n    // frees what an export fn gave out (null does nothing)\n    export fn {}(it: {}*) -> void {{\n        if (it == null) {{\n            return;\n        }}\n        val v = @read(it);\n        rt_free(@cast<void*>(it));\n    }}\n", copy e.name, S(this.si(s).name)).as_str());
+    }
+    out.append(fns.as_str());
+    out.append("}\n");
+    plan.text = move out;
+    return move plan;
 }
 
 // a declared name as bindings spell it: without the package's own namespace, and as an identifier
@@ -194,10 +638,15 @@ fn upper(s: str) -> std::string {
     return move out;
 }
 
-// the short name of a type in bindings (a struct's or enum's own name, i32, f64...)
+// the short name of a type in bindings (a struct's or enum's own name, i32, f64, text...)
 attach fn short(this: bind&, t: u32) -> std::string {
     match (*this.c.t.get(t)) {
-        .STRUCT(s) => { return this.local(this.c.si(s).name); },
+        .STRUCT(s) => {
+            if (this.text_method(s) != null) {
+                return S("text");
+            }
+            return this.local(this.c.si(s).name);
+        },
         .ENUM(e) => { return this.local(this.c.ei(e).name); },
         .ANYERR => { return S("error"); },
         default => { return ident_of(this.c.ty_name(t).as_str()); },
@@ -217,29 +666,38 @@ attach fn result_name(this: bind&, t: u32) -> std::string {
     }
 }
 
-// the export fns of the package, by name
-attach fn exports(this: bind&) -> std::vec<u32> {
-    var out: std::vec<u32> = {};
-    for (i) in 0..this.c.fns.len {
-        val f = this.c.fi(@cast<u32>(i));
-        match (this.c.dl(f.decl).item.kind) {
-            .FN(fd&) => {
-                val p = this.c.pkg_of(f.decl);
-                if (fd.is_export && p != null && (p ?? "") == this.pkg) {
-                    var at = out.len;
-                    while (at > 0 && str_less(f.name, this.c.fi(*out.at(at - 1)).name)) {
-                        at -= 1;
-                    }
-                    insert_at(&out, at, @cast<u32>(i));
-                }
-            },
-            default => {},
-        }
-    }
-    return move out;
+// the name of a generated type: pkg_KIND_T in C, KIND_T in C++ (inside namespace pkg)
+attach fn made_name(this: bind&, kind: str, t: u32, cpp: bool) -> std::string {
+    var n = S(kind);
+    n.push('_');
+    n.append(this.short(t).as_str());
+    return this.c_named(n.as_str(), cpp);
 }
 
-// ---------- C and C++ ----------
+attach fn cb_name(this: bind&, i: u32, cpp: bool) -> std::string {
+    var n = S("cb");
+    n.append_uint(@cast<u64>(i));
+    return this.c_named(n.as_str(), cpp);
+}
+
+// a declared type's name: pkg_name in C, name in C++ (inside namespace pkg)
+attach fn c_named(this: bind&, name: str, cpp: bool) -> std::string {
+    if (cpp) {
+        return this.local(name);
+    }
+    var n = S(this.pkg);
+    n.push('_');
+    n.append(this.local(name).as_str());
+    return move n;
+}
+
+// an export struct's handle type: a pointer to pkg_X in C, to raw::X in C++
+attach fn handle_c(this: bind&, s: u32, cpp: bool) -> std::string {
+    if (cpp) {
+        return fmt("raw::{} *", this.local(this.c.si(s).name));
+    }
+    return fmt("{} *", this.c_named(this.c.si(s).name, false));
+}
 
 attach fn c_prim(this: bind&, t: u32, cpp: bool) -> std::string {
     val sh = this.shape_of(t) ?? return S("void");
@@ -261,6 +719,12 @@ attach fn c_prim(this: bind&, t: u32, cpp: bool) -> std::string {
             return S("volt_str");
         },
         .PTR(x) => {
+            if (x != VOID) {
+                match (this.shape_of(x) ?? shape::VOID) {
+                    .HANDLE(s) => { return this.handle_c(s, cpp); },
+                    default => {},
+                }
+            }
             var s = this.c_prim(x, cpp);
             if (!ends_with(s.as_str(), "*")) {
                 s.push(' ');
@@ -283,18 +747,26 @@ attach fn c_prim(this: bind&, t: u32, cpp: bool) -> std::string {
             }
             return move n;
         },
+        .SLICE(x) => { return this.made_name("slice", x, cpp); },
+        .OPT(x) => { return this.made_name("opt", x, cpp); },
+        .HANDLE(s) => { return this.handle_c(s, cpp); },
+        .TEXT(x) => {
+            if (cpp) {
+                return S("text");
+            }
+            return S("volt_text");
+        },
+        .CLOSURE(i) => { return this.cb_name(i, cpp); },
     }
 }
 
-// a declared type's name: pkg_name in C, name in C++ (inside namespace pkg)
-attach fn c_named(this: bind&, name: str, cpp: bool) -> std::string {
-    if (cpp) {
-        return this.local(name);
+// a C type ready for a name after it: "int " but "char *"
+fn spaced(t: std::string) -> std::string {
+    var s = move t;
+    if (!ends_with(s.as_str(), "*")) {
+        s.push(' ');
     }
-    var n = S(this.pkg);
-    n.push('_');
-    n.append(this.local(name).as_str());
-    return move n;
+    return move s;
 }
 
 // "T name" (with [N] after the name for arrays)
@@ -303,7 +775,11 @@ attach fn c_decl(this: bind&, t: u32, name: str, cpp: bool) -> std::string {
     if (!ends_with(s.as_str(), "*")) {
         s.push(' ');
     }
-    s.append(name);
+    if (cpp) {
+        s.append(cpp_ident(name).as_str());
+    } else {
+        s.append(name);
+    }
     var cur = t;
     loop {
         match (*this.c.t.get(cur)) {
@@ -319,30 +795,58 @@ attach fn c_decl(this: bind&, t: u32, name: str, cpp: bool) -> std::string {
     return move s;
 }
 
-attach fn c_text(this: bind&, cpp: bool) -> std::string {
-    val guard = upper(this.pkg);
-    var out: std::string = {};
-    out.append(fmt("// {}: generated by voltc bindings; the C interface of the Volt package\n", S(this.pkg)).as_str());
-    out.append(fmt("// {} (build it with voltc lib NAME --shared or --static)\n", S(this.pkg)).as_str());
-    if (cpp) {
-        out.append("#pragma once\n#include <cstddef>\n#include <cstdint>\n#include <cstring>\n#include <string_view>\n\n");
-        out.append(fmt("namespace {} {{\n\n", S(this.pkg)).as_str());
-        if (this.uses_str) {
-            out.append("// a Volt str: bytes and a length (no terminator)\nstruct str {\n    const uint8_t *ptr;\n    size_t len;\n    str(const char *s) : ptr((const uint8_t *)s), len(std::strlen(s)) {}\n    str(std::string_view s) : ptr((const uint8_t *)s.data()), len(s.size()) {}\n    std::string_view view() const { return {(const char *)ptr, len}; }\n};\n\n");
+// an export's C parameter list (a closure is the function and the caller's data)
+attach fn c_params(this: bind&, e: entry&, cpp: bool) -> std::string {
+    var args: std::string = {};
+    val s = e.free_of;
+    if (s) {
+        return this.c_decl_handle(s, cpp);
+    }
+    val f = this.c.fi(e.f);
+    for (p&) in f.params.items() {
+        if (args.len() > 0) {
+            args.append(", ");
         }
-    } else {
-        out.append(fmt2("#ifndef {}_H\n#define {}_H\n#include <stdbool.h>\n#include <stddef.h>\n#include <stdint.h>\n\n#ifdef __cplusplus\nextern \"C\" {{\n#endif\n\n", copy guard, copy guard).as_str());
-        if (this.uses_str) {
-            out.append("#ifndef VOLT_STR_DEFINED\n#define VOLT_STR_DEFINED\n// a Volt str: bytes and a length (no terminator)\ntypedef struct {\n    const uint8_t *ptr;\n    size_t len;\n} volt_str;\n#endif\n\n");
+        args.append(this.c_decl(p.ty, p.name, cpp).as_str());
+        match (this.shape_of(p.ty) ?? shape::VOID) {
+            .CLOSURE(i) => { args.append(fmt(", void *{}_user", S(p.name)).as_str()); },
+            default => {},
         }
     }
-    // declared up front, so pointers between structs work in any order
+    if (f.params.len == 0) {
+        args.append("void");
+    }
+    return move args;
+}
+
+attach fn c_decl_handle(this: bind&, s: u32, cpp: bool) -> std::string {
+    var d = this.handle_c(s, cpp);
+    d.append("it");
+    return move d;
+}
+
+attach fn c_ret(this: bind&, e: entry&, cpp: bool) -> std::string {
+    if (e.free_of != null) {
+        return S("void");
+    }
+    return this.c_prim(this.c.fi(e.f).ret, cpp);
+}
+
+// the declarations both C and C++ share, in an order C accepts: what's only pointed at first
+attach fn c_types(this: bind&, cpp: bool, out: std::string&) -> void {
     for (s&) in this.structs.items() {
         val n = this.c_named(this.c.si(*s).name, cpp);
         if (cpp) {
             out.append(fmt("struct {};\n", copy n).as_str());
         } else {
             out.append(fmt2("typedef struct {} {};\n", copy n, copy n).as_str());
+        }
+    }
+    if (!cpp) {
+        for (s&) in this.handles.items() {
+            val n = this.c_named(this.c.si(*s).name, false);
+            out.append(fmt3("// export struct {}: held by a handle, freed with {}\ntypedef struct {} ", S(this.c.si(*s).name), this.free_name(*s), copy n).as_str());
+            out.append(fmt("{};\n", copy n).as_str());
         }
     }
     for (e&) in this.enums.items() {
@@ -385,6 +889,24 @@ attach fn c_text(this: bind&, cpp: bool) -> std::string {
             default => {},
         }
     }
+    if (cpp) {
+        this.cpp_errors(out);
+    }
+    for (x&) in this.slices.items() {
+        val n = this.made_name("slice", *x, cpp);
+        val elem = this.c_prim(*x, cpp);
+        if (cpp) {
+            out.append(fmt2("\n// a Volt slice: elements and how many (made from a vector or an array)\nstruct {} {{\n    {} *ptr;\n    size_t len;\n", copy n, copy elem).as_str());
+            out.append(fmt3("    {}({} *p, size_t n) : ptr(p), len(n) {{}}\n    template <size_t N> {}(", copy n, copy elem, copy n).as_str());
+            out.append(fmt("{} (&a)[N]) : ptr(a), len(N) {{}}\n", copy elem).as_str());
+            if (elem.as_str() != "bool") {
+                out.append(fmt2("    {}(std::vector<{}> &v) : ptr(v.data()), len(v.size()) {{}}\n", copy n, copy elem).as_str());
+            }
+            out.append("};\n");
+        } else {
+            out.append(fmt2("\n// a Volt slice: elements and how many\ntypedef struct {{\n    {} *ptr;\n    size_t len;\n}} {};\n", copy elem, copy n).as_str());
+        }
+    }
     for (i) in 0..this.fns.len {
         match (*this.c.t.get(*this.fns.at(i))) {
             .FN_PTR(ps, r, va) => {
@@ -403,6 +925,20 @@ attach fn c_text(this: bind&, cpp: bool) -> std::string {
             default => {},
         }
     }
+    for (i) in 0..this.closures.len {
+        match (*this.c.t.get(*this.closures.at(i))) {
+            .FN_VAL(ps, r) => {
+                var args = S("void *user");
+                for (k) in 0..ps.len {
+                    args.append(", ");
+                    args.append(this.c_prim(*ps.at(k), cpp).as_str());
+                }
+                out.append(fmt3("\n// a callback: called with the data passed along with it, then {}'s arguments\ntypedef {} (*{})(", this.c.ty_name(*this.closures.at(i)), this.c_prim(r, cpp), this.cb_name(@cast<u32>(i), cpp)).as_str());
+                out.append(fmt("{});\n", move args).as_str());
+            },
+            default => {},
+        }
+    }
     for (s&) in this.structs.items() {
         val info = this.c.si(*s);
         out.append(fmt("\nstruct {} {{\n", this.c_named(info.name, cpp)).as_str());
@@ -410,6 +946,14 @@ attach fn c_text(this: bind&, cpp: bool) -> std::string {
             out.append(fmt("    {};\n", this.c_decl(f.ty, f.name, cpp)).as_str());
         }
         out.append("};\n");
+    }
+    for (x&) in this.opts.items() {
+        val n = this.made_name("opt", *x, cpp);
+        if (cpp) {
+            out.append(fmt2("\n// a Volt optional: has says whether value is there\nstruct {} {{\n    {} value;\n    bool has;\n}};\n", copy n, this.c_prim(*x, cpp)).as_str());
+        } else {
+            out.append(fmt2("\n// a Volt optional: has says whether value is there\ntypedef struct {{\n    {} value;\n    bool has;\n}} {};\n", this.c_prim(*x, cpp), copy n).as_str());
+        }
     }
     for (rt&) in this.results.items() {
         match (*this.c.t.get(*rt)) {
@@ -428,34 +972,407 @@ attach fn c_text(this: bind&, cpp: bool) -> std::string {
             default => {},
         }
     }
-    out.append("\n");
-    if (cpp) {
-        out.append("extern \"C\" {\n");
+}
+
+attach fn c_text(this: bind&) -> std::string {
+    val guard = upper(this.pkg);
+    val ents = this.entries();
+    var out: std::string = {};
+    out.append(fmt("// {}: generated by voltc bindings; the C interface of the Volt package\n", S(this.pkg)).as_str());
+    out.append(fmt("// {} (build it with voltc lib NAME --shared or --static)\n", S(this.pkg)).as_str());
+    out.append(fmt2("#ifndef {}_H\n#define {}_H\n#include <stdbool.h>\n#include <stddef.h>\n#include <stdint.h>\n\n#ifdef __cplusplus\nextern \"C\" {{\n#endif\n\n", copy guard, copy guard).as_str());
+    if (this.uses_str) {
+        out.append("#ifndef VOLT_STR_DEFINED\n#define VOLT_STR_DEFINED\n// a Volt str: bytes and a length (no terminator)\ntypedef struct {\n    const uint8_t *ptr;\n    size_t len;\n} volt_str;\n#endif\n\n");
     }
-    for (i&) in this.exports().items() {
-        val f = this.c.fi(*i);
+    if (this.texts.len > 0) {
+        out.append("#ifndef VOLT_TEXT_DEFINED\n#define VOLT_TEXT_DEFINED\n// owned text a Volt function gave out: bytes and a length (no terminator); free it with\n// volt_text_free once you're done with the bytes\ntypedef struct {\n    const uint8_t *ptr;\n    size_t len;\n    void *owner;\n    void (*drop)(void *owner);\n} volt_text;\n\nstatic inline void volt_text_free(volt_text t) {\n    if (t.drop) {\n        t.drop(t.owner);\n    }\n}\n#endif\n\n");
+    }
+    this.c_types(false, &out);
+    out.append("\n");
+    for (e&) in ents.items() {
+        out.append(fmt3("{}{}({});\n", spaced(this.c_ret(e, false)), copy e.name, this.c_params(e, false)).as_str());
+    }
+    out.append(fmt("\n#ifdef __cplusplus\n}\n#endif\n#endif // {}_H\n", copy guard).as_str());
+    return move out;
+}
+
+// ---------- C++ ----------
+
+// the C++ keywords a Volt name might be
+fn cpp_keyword(s: str) -> bool {
+    val words: str[] = { "new", "delete", "class", "default", "operator", "template", "this", "virtual", "public", "private", "protected", "friend", "typename", "namespace", "using", "auto", "register", "union", "signed", "unsigned", "char", "int", "long", "short", "float", "double", "bool", "void", "const", "static", "extern", "volatile", "inline", "explicit", "export", "throw", "try", "catch", "switch", "case", "goto", "sizeof", "typedef", "struct", "enum", "return", "if", "else", "while", "do", "for", "break", "continue", "and", "or", "not", "xor" };
+    for (w) in words {
+        if (w == s) {
+            return true;
+        }
+    }
+    return false;
+}
+
+fn cpp_ident(s: str) -> std::string {
+    var n = S(s);
+    if (cpp_keyword(s)) {
+        n.push('_');
+    }
+    return move n;
+}
+
+// error_name and the error exception: every code of every error set the package uses
+attach fn cpp_errors(this: bind&, out: std::string&) -> void {
+    if (this.codes.len == 0) {
+        return;
+    }
+    out.append("\n// the name of an error code\ninline const char *error_name(uint32_t code) {\n    switch (code) {\n");
+    var seen: std::vec<i128> = {};
+    for (et&) in this.codes.items() {
+        match (*this.c.t.get(*et)) {
+            .ENUM(e) => {
+                val info = this.c.ei(e);
+                for (i) in 0..info.names.len {
+                    val v = *info.values.at(i);
+                    var dup = false;
+                    for (s&) in seen.items() {
+                        if (*s == v) {
+                            dup = true;
+                        }
+                    }
+                    if (!dup) {
+                        put(&seen, v);
+                        out.append(fmt2("    case {}u: return \"{}\";\n", num(v), S(*info.names.at(i))).as_str());
+                    }
+                }
+            },
+            default => {},
+        }
+    }
+    out.append("    }\n    return \"error\";\n}\n\n// what a function throws when the Volt function returns an error\nstruct error : std::runtime_error {\n    uint32_t code;\n    explicit error(uint32_t c) : std::runtime_error(error_name(c)), code(c) {}\n};\n");
+}
+
+// what a wrapper's parameter is in C++, and the C argument(s) it passes
+attach fn cpp_param(this: bind&, t: u32, name0: str, ty: std::string&, arg: std::string&) -> void {
+    val nm = cpp_ident(name0);
+    val name = nm.as_str();
+    val h = this.lent_handle(t);
+    if (h) {
+        val cls = this.local(this.c.si(h).name);
+        match (*this.c.t.get(t)) {
+            .REF(x) => {
+                ty.append(fmt2("{} &{}", move cls, S(name)).as_str());
+                arg.append(fmt("{}.get()", S(name)).as_str());
+            },
+            default => {
+                ty.append(fmt2("{} *{}", move cls, S(name)).as_str());
+                arg.append(fmt2("({} ? {}->get() : nullptr)", S(name), S(name)).as_str());
+            },
+        }
+        return;
+    }
+    match (this.shape_of(t) ?? shape::VOID) {
+        .OPT(x) => {
+            val v = this.c_prim(x, true);
+            ty.append(fmt2("std::optional<{}> {}", copy v, S(name)).as_str());
+            arg.append(fmt4("{}{{{}.value_or({}{{}}), {}.has_value()}}", this.made_name("opt", x, true), S(name), copy v, S(name)).as_str());
+        },
+        .CLOSURE(i) => {
+            match (*this.c.t.get(t)) {
+                .FN_VAL(ps&, r) => {
+                    var sig = this.c_prim(r, true);
+                    sig.push('(');
+                    var lps = S("void *u");
+                    var largs: std::string = {};
+                    for (k) in 0..ps.len {
+                        if (k > 0) {
+                            sig.append(", ");
+                            largs.append(", ");
+                        }
+                        sig.append(this.c_prim(*ps.at(k), true).as_str());
+                        lps.append(fmt2(", {} a{}", this.c_prim(*ps.at(k), true), unum(@cast<u64>(k))).as_str());
+                        largs.append(fmt("a{}", unum(@cast<u64>(k))).as_str());
+                    }
+                    sig.push(')');
+                    ty.append(fmt2("std::function<{}> {}", copy sig, S(name)).as_str());
+                    arg.append(fmt4("[]({}) -> {} {{ return (*static_cast<std::function<{}> *>(u))({}); }}", move lps, this.c_prim(r, true), copy sig, move largs).as_str());
+                    arg.append(fmt(", &{}", S(name)).as_str());
+                },
+                default => {},
+            }
+        },
+        default => {
+            match (*this.c.t.get(t)) {
+                .REF(x) => {
+                    ty.append(fmt2("{} &{}", this.c_prim(x, true), S(name)).as_str());
+                    arg.append(fmt("&{}", S(name)).as_str());
+                },
+                default => {
+                    ty.append(this.c_decl(t, name, true).as_str());
+                    arg.append(name);
+                },
+            }
+        },
+    }
+}
+
+// what a wrapper returns in C++ for a C result of type t
+attach fn cpp_ret(this: bind&, t: u32) -> std::string {
+    match (this.shape_of(t) ?? shape::VOID) {
+        .STR => { return S("std::string"); },
+        .TEXT(x) => { return S("std::string"); },
+        .HANDLE(s) => { return this.local(this.c.si(s).name); },
+        .OPT(x) => { return fmt("std::optional<{}>", this.c_prim(x, true)); },
+        .RESULT(e, x) => { return this.cpp_ret(x); },
+        default => { return this.c_prim(t, true); },
+    }
+}
+
+// the C++ value of C result r (of type t)
+attach fn cpp_value(this: bind&, t: u32, r: str) -> std::string {
+    match (this.shape_of(t) ?? shape::VOID) {
+        .STR => { return fmt2("std::string((const char *){}.ptr, {}.len)", S(r), S(r)); },
+        .TEXT(x) => { return fmt("take_text({})", S(r)); },
+        .HANDLE(s) => { return fmt2("{}({})", this.local(this.c.si(s).name), S(r)); },
+        .OPT(x) => { return fmt3("{}.has ? std::optional<{}>({}.value) : std::nullopt", S(r), this.c_prim(x, true), S(r)); },
+        default => { return S(r); },
+    }
+}
+
+// a wrapper's body: call the C function with args, throw its error, return its value
+attach fn cpp_body(this: bind&, f: u32, args: std::string) -> std::string {
+    val info = this.c.fi(f);
+    val call = fmt2("raw::{}({})", S(info.c_name), move args);
+    if (info.ret == VOID) {
+        return fmt("    {};\n", move call);
+    }
+    var out = fmt("    auto r = {};\n", move call);
+    match (this.shape_of(info.ret) ?? shape::VOID) {
+        .RESULT(e, x) => {
+            out.append("    if (r.error != 0) {\n        throw error(r.error);\n    }\n");
+            if (x != VOID) {
+                out.append(fmt("    return {};\n", this.cpp_value(x, "r.value")).as_str());
+            }
+        },
+        default => { out.append(fmt("    return {};\n", this.cpp_value(info.ret, "r")).as_str()); },
+    }
+    return move out;
+}
+
+// export struct s's part of an export fn's name (counter_add: add), when f belongs to its class:
+// it takes s as its first parameter, or makes one (returns s, or E!s)
+attach fn member_of(this: bind&, f: u32, s: u32) -> str? {
+    val info = this.c.fi(f);
+    var prefix = this.local(this.c.si(s).name);
+    prefix.push('_');
+    if (!starts_with(info.c_name, prefix.as_str()) || info.c_name.len == prefix.len()) {
+        return null;
+    }
+    val m = info.c_name[prefix.len()..info.c_name.len];
+    if (info.params.len > 0 && this.lends(info.params.at(0).ty, s)) {
+        return m;
+    }
+    if (this.made_by(f, s)) {
+        return m;
+    }
+    return null;
+}
+
+// does f make export struct s (return it by value, or as E!T's value)?
+attach fn made_by(this: bind&, f: u32, s: u32) -> bool {
+    val m = this.makes(f) ?? return false;
+    return m == s;
+}
+
+// the export struct f returns by value (or as E!T's value)
+attach fn makes(this: bind&, f: u32) -> u32? {
+    match (this.shape_of(this.c.fi(f).ret) ?? shape::VOID) {
+        .HANDLE(s) => { return s; },
+        .RESULT(e, x) => {
+            match (this.shape_of(x) ?? shape::VOID) {
+                .HANDLE(s) => { return s; },
+                default => {},
+            }
+        },
+        default => {},
+    }
+    return null;
+}
+
+// the class an export fn is a member of (and its member name)
+attach fn class_of(this: bind&, f: u32) -> u32? {
+    for (s&) in this.handles.items() {
+        if (this.member_of(f, *s) != null) {
+            return *s;
+        }
+    }
+    return null;
+}
+
+attach fn cpp_text(this: bind&) -> std::string {
+    val ents = this.entries();
+    var out: std::string = {};
+    out.append(fmt("// {}: generated by voltc bindings; the Volt package for C++17\n", S(this.pkg)).as_str());
+    out.append("// (build it with voltc lib NAME --shared or --static). Errors are thrown as error.\n");
+    out.append("#pragma once\n#include <cstddef>\n#include <cstdint>\n#include <cstring>\n#include <functional>\n#include <optional>\n#include <stdexcept>\n#include <string>\n#include <string_view>\n#include <utility>\n#include <vector>\n\n");
+    out.append(fmt("namespace {} {{\n\n", S(this.pkg)).as_str());
+    if (this.uses_str) {
+        out.append("// a Volt str: bytes and a length (no terminator)\nstruct str {\n    const uint8_t *ptr;\n    size_t len;\n    str(const char *s) : ptr((const uint8_t *)s), len(std::strlen(s)) {}\n    str(std::string_view s) : ptr((const uint8_t *)s.data()), len(s.size()) {}\n    str(const std::string &s) : ptr((const uint8_t *)s.data()), len(s.size()) {}\n    std::string_view view() const { return {(const char *)ptr, len}; }\n};\n\n");
+    }
+    if (this.texts.len > 0) {
+        out.append("// owned text a Volt function gave out (the wrappers copy it into a std::string and free it)\nstruct text {\n    const uint8_t *ptr;\n    size_t len;\n    void *owner;\n    void (*drop)(void *owner);\n};\n\ninline std::string take_text(text t) {\n    std::string s((const char *)t.ptr, t.len);\n    if (t.drop) {\n        t.drop(t.owner);\n    }\n    return s;\n}\n\n");
+    }
+    this.c_types(true, &out);
+    // the C functions, as they are
+    out.append("\n// the C functions (the wrappers below are easier to use)\nnamespace raw {\n");
+    for (s&) in this.handles.items() {
+        out.append(fmt("struct {};\n", this.local(this.c.si(*s).name)).as_str());
+    }
+    out.append("extern \"C\" {\n");
+    for (e&) in ents.items() {
+        out.append(fmt3("{}{}({});\n", spaced(this.c_ret(e, true)), copy e.name, this.c_params(e, true)).as_str());
+    }
+    out.append("}\n}  // namespace raw\n");
+    // a class per export struct: it owns its handle
+    for (s&) in this.handles.items() {
+        val cls = this.local(this.c.si(*s).name);
+        out.append(fmt3("\n// export struct {}: owns a handle, and frees it when it goes away\nclass {} {{\n    raw::{} *p_;\n\npublic:\n", S(this.c.si(*s).name), copy cls, copy cls).as_str());
+        out.append(fmt2("    explicit {}(raw::{} *p) : p_(p) {{}}\n", copy cls, copy cls).as_str());
+        out.append(fmt3("    {}({} &&o) noexcept : p_(o.p_) {{\n        o.p_ = nullptr;\n    }}\n    {} &operator=(", copy cls, copy cls, copy cls).as_str());
+        out.append(fmt3("{} &&o) noexcept {{\n        std::swap(p_, o.p_);\n        return *this;\n    }}\n    {}(const {} &) = delete;\n", copy cls, copy cls, copy cls).as_str());
+        out.append(fmt3("    {} &operator=(const {} &) = delete;\n    ~{}() {{\n", copy cls, copy cls, copy cls).as_str());
+        out.append(fmt("        if (p_) {\n            raw::{}(p_);\n        }\n    }\n    raw::", this.free_name(*s)).as_str());
+        out.append(fmt("{} *get() const {\n        return p_;\n    }\n", copy cls).as_str());
+        for (e&) in ents.items() {
+            if (e.free_of != null) {
+                continue;
+            }
+            val m = this.member_of(e.f, *s) ?? continue;
+            val info = this.c.fi(e.f);
+            var ps: std::string = {};
+            var first: usize = 0;
+            if (!this.made_by(e.f, *s) || (info.params.len > 0 && this.lends(info.params.at(0).ty, *s))) {
+                first = 1;
+            }
+            for (k) in first..info.params.len {
+                if (ps.len() > 0) {
+                    ps.append(", ");
+                }
+                var a: std::string = {};
+                this.cpp_param(info.params.at(k).ty, info.params.at(k).name, &ps, &a);
+            }
+            if (first == 0 && m == "new") {
+                out.append(fmt2("    {}({});\n", copy cls, move ps).as_str());
+            } else if (first == 0) {
+                out.append(fmt3("    static {} {}({});\n", this.cpp_ret(info.ret), cpp_ident(m), move ps).as_str());
+            } else {
+                out.append(fmt3("    {} {}({});\n", this.cpp_ret(info.ret), cpp_ident(m), move ps).as_str());
+            }
+        }
+        out.append("};\n");
+    }
+    // the wrappers
+    for (e&) in ents.items() {
+        if (e.free_of != null) {
+            continue;
+        }
+        val info = this.c.fi(e.f);
+        val cls_id = this.class_of(e.f);
+        var ps: std::string = {};
         var args: std::string = {};
-        for (p&) in f.params.items() {
+        var first: usize = 0;
+        if (cls_id) {
+            if (info.params.len > 0 && this.lends(info.params.at(0).ty, cls_id)) {
+                first = 1;
+                args.append("p_");
+            }
+        }
+        for (k) in first..info.params.len {
+            if (ps.len() > 0) {
+                ps.append(", ");
+            }
             if (args.len() > 0) {
                 args.append(", ");
             }
-            args.append(this.c_decl(p.ty, p.name, cpp).as_str());
+            this.cpp_param(info.params.at(k).ty, info.params.at(k).name, &ps, &args);
         }
-        if (f.params.len == 0) {
-            args.append("void");
+        if (cls_id) {
+            val cls = this.local(this.c.si(cls_id).name);
+            val m = this.member_of(e.f, cls_id) ?? "";
+            if (first == 0 && m == "new") {
+                // the constructor takes the handle the C function makes
+                out.append(fmt4("\ninline {}::{}({}) : p_(nullptr) {{\n    auto r = raw::{}(", copy cls, copy cls, move ps, S(info.c_name)).as_str());
+                out.append(fmt("{});\n", move args).as_str());
+                match (this.shape_of(info.ret) ?? shape::VOID) {
+                    .RESULT(er, x) => { out.append("    if (r.error != 0) {\n        throw error(r.error);\n    }\n    p_ = r.value;\n}\n"); },
+                    default => { out.append("    p_ = r;\n}\n"); },
+                }
+            } else {
+                out.append(fmt4("\ninline {} {}::{}({}) {{\n", this.cpp_ret(info.ret), copy cls, cpp_ident(m), move ps).as_str());
+                out.append(this.cpp_body(e.f, move args).as_str());
+                out.append("}\n");
+            }
+        } else {
+            out.append(fmt3("\ninline {} {}({}) {{\n", this.cpp_ret(info.ret), cpp_ident(info.c_name), move ps).as_str());
+            out.append(this.cpp_body(e.f, move args).as_str());
+            out.append("}\n");
         }
-        out.append(fmt3("{} {}({});\n", this.c_prim(f.ret, cpp), S(f.c_name), move args).as_str());
     }
-    if (cpp) {
-        out.append(fmt("}\n\n}  // namespace {}\n", S(this.pkg)).as_str());
-    } else {
-        out.append(fmt("\n#ifdef __cplusplus\n}\n#endif\n#endif // {}_H\n", copy guard).as_str());
+    out.append(fmt("\n}  // namespace {}\n", S(this.pkg)).as_str());
+    return move out;
+}
+
+// ---------- shared by the generators ----------
+
+// every code of every error set the package uses, once each (codes are the same in every set that
+// has the name): (code, name, the error set's local name)
+struct code_name {
+    code: i128;
+    name: str;
+    set: std::string;
+}
+
+attach fn all_codes(this: bind&) -> std::vec<code_name> {
+    var out: std::vec<code_name> = {};
+    for (et&) in this.codes.items() {
+        match (*this.c.t.get(*et)) {
+            .ENUM(e) => {
+                val info = this.c.ei(e);
+                for (i) in 0..info.names.len {
+                    val v = *info.values.at(i);
+                    var dup = false;
+                    for (s&) in out.items() {
+                        if (s.code == v) {
+                            dup = true;
+                        }
+                    }
+                    if (!dup) {
+                        put(&out, { code: v, name: *info.names.at(i), set: this.local(info.name) });
+                    }
+                }
+            },
+            default => {},
+        }
     }
     return move out;
 }
 
 // ---------- Rust ----------
 
+fn rust_keyword(s: str) -> bool {
+    val words: str[] = { "as", "break", "const", "continue", "crate", "else", "enum", "extern", "false", "fn", "for", "if", "impl", "in", "let", "loop", "match", "mod", "move", "mut", "pub", "ref", "return", "self", "static", "struct", "super", "trait", "true", "type", "unsafe", "use", "where", "while", "async", "await", "dyn", "abstract", "become", "box", "do", "final", "macro", "override", "priv", "typeof", "unsized", "virtual", "yield", "try" };
+    for (w) in words {
+        if (w == s) {
+            return true;
+        }
+    }
+    return false;
+}
+
+fn rust_ident(s: str) -> std::string {
+    if (rust_keyword(s)) {
+        return fmt("r#{}", S(s));
+    }
+    return S(s);
+}
+
+// a type in the C functions' declarations (module raw sees the top level's types through super)
 attach fn rust_ty(this: bind&, t: u32) -> std::string {
     val sh = this.shape_of(t) ?? return S("()");
     match (sh) {
@@ -474,6 +1391,10 @@ attach fn rust_ty(this: bind&, t: u32) -> std::string {
             if (x == VOID) {
                 return S("*mut std::os::raw::c_void");
             }
+            match (this.shape_of(x) ?? shape::VOID) {
+                .HANDLE(s) => { return fmt("*mut raw::{}", this.local(this.c.si(s).name)); },
+                default => {},
+            }
             var s = S("*mut ");
             s.append(this.rust_ty(x).as_str());
             return move s;
@@ -483,36 +1404,175 @@ attach fn rust_ty(this: bind&, t: u32) -> std::string {
         .CODE => { return S("u32"); },
         .RESULT(e, x) => { return this.result_name(t); },
         .ARRAY(elem, n) => { return fmt2("[{}; {}]", this.rust_ty(elem), unum(n)); },
-        .FN(i) => {
+        .FN(i) => { return this.rust_fn_ty(t, false); },
+        .SLICE(x) => { return fmt("VoltSlice<{}>", this.rust_ty(x)); },
+        .OPT(x) => { return fmt("VoltOpt<{}>", this.rust_ty(x)); },
+        .HANDLE(s) => { return fmt("*mut raw::{}", this.local(this.c.si(s).name)); },
+        .TEXT(x) => { return S("VoltText"); },
+        .CLOSURE(i) => { return this.rust_fn_ty(t, true); },
+    }
+}
+
+// an extern "C" fn type (with the caller's data first, for a closure)
+attach fn rust_fn_ty(this: bind&, t: u32, user: bool) -> std::string {
+    var s = S("extern \"C\" fn(");
+    var ps: std::vec<u32> = {};
+    var r = VOID;
+    match (*this.c.t.get(t)) {
+        .FN_PTR(xs&, rr, va) => {
+            ps = copy *xs;
+            r = rr;
+        },
+        .FN_VAL(xs&, rr) => {
+            ps = copy *xs;
+            r = rr;
+        },
+        default => {},
+    }
+    if (user) {
+        s.append("*mut std::os::raw::c_void");
+    }
+    for (k) in 0..ps.len {
+        if (k > 0 || user) {
+            s.append(", ");
+        }
+        s.append(this.rust_ty(*ps.at(k)).as_str());
+    }
+    s.push(')');
+    if (r != VOID) {
+        s.append(" -> ");
+        s.append(this.rust_ty(r).as_str());
+    }
+    return move s;
+}
+
+// a wrapper's parameter in Rust, and the C argument(s) it passes (pre: statements before the call)
+attach fn rust_param(this: bind&, t: u32, name: str, ty: std::string&, arg: std::string&, pre: std::string&) -> void {
+    val n = rust_ident(name);
+    val h = this.lent_handle(t);
+    if (h) {
+        ty.append(fmt2("{}: &{}", copy n, this.local(this.c.si(h).name)).as_str());
+        arg.append(fmt("{}.as_raw()", copy n).as_str());
+        return;
+    }
+    match (this.shape_of(t) ?? shape::VOID) {
+        .STR => {
+            ty.append(fmt("{}: &str", copy n).as_str());
+            arg.append(fmt("VoltStr::from({})", copy n).as_str());
+        },
+        .SLICE(x) => {
+            ty.append(fmt2("{}: &mut [{}]", copy n, this.rust_ty(x)).as_str());
+            arg.append(fmt("VoltSlice::from({})", copy n).as_str());
+        },
+        .OPT(x) => {
+            ty.append(fmt2("{}: Option<{}>", copy n, this.rust_ty(x)).as_str());
+            arg.append(fmt("VoltOpt::from({})", copy n).as_str());
+        },
+        .CLOSURE(i) => {
             match (*this.c.t.get(t)) {
-                .FN_PTR(ps, r, va) => {
-                    var s = S("extern \"C\" fn(");
+                .FN_VAL(ps&, r) => {
+                    var sig = S("dyn FnMut(");
+                    var cps = S("u: *mut std::os::raw::c_void");
+                    var cargs: std::string = {};
                     for (k) in 0..ps.len {
                         if (k > 0) {
-                            s.append(", ");
+                            sig.append(", ");
+                            cargs.append(", ");
                         }
-                        s.append(this.rust_ty(*ps.at(k)).as_str());
+                        sig.append(this.rust_ty(*ps.at(k)).as_str());
+                        cps.append(fmt2(", a{}: {}", unum(@cast<u64>(k)), this.rust_ty(*ps.at(k))).as_str());
+                        cargs.append(fmt("a{}", unum(@cast<u64>(k))).as_str());
                     }
-                    s.push(')');
+                    sig.push(')');
+                    var ret: std::string = {};
                     if (r != VOID) {
-                        s.append(" -> ");
-                        s.append(this.rust_ty(r).as_str());
+                        ret = fmt(" -> {}", this.rust_ty(r));
+                        sig.append(ret.as_str());
                     }
-                    return move s;
+                    ty.append(fmt2("mut {}: &mut {}", copy n, copy sig).as_str());
+                    // the C function calls the closure that the caller's data points at
+                    pre.append(fmt4("    extern \"C\" fn call_{}({}){} {{\n        let f = unsafe {{ &mut *(u as *mut &mut {}) }};\n", S(name), move cps, copy ret, copy sig).as_str());
+                    pre.append(fmt("        f({})\n    }\n", move cargs).as_str());
+                    arg.append(fmt4("call_{}, &mut {} as *mut &mut {} as *mut std::os::raw::c_void", S(name), copy n, copy sig, S("")).as_str());
                 },
-                default => { return S("()"); },
+                default => {},
+            }
+        },
+        default => {
+            match (*this.c.t.get(t)) {
+                .REF(x) => {
+                    ty.append(fmt2("{}: &mut {}", copy n, this.rust_ty(x)).as_str());
+                    arg.append(fmt2("{} as *mut {}", copy n, this.rust_ty(x)).as_str());
+                },
+                default => {
+                    ty.append(fmt2("{}: {}", copy n, this.rust_ty(t)).as_str());
+                    arg.append(n.as_str());
+                },
             }
         },
     }
 }
 
+// what a wrapper returns in Rust for a C result of type t
+attach fn rust_ret(this: bind&, t: u32) -> std::string {
+    match (this.shape_of(t) ?? shape::VOID) {
+        .VOID => { return S("()"); },
+        .STR => { return S("String"); },
+        .TEXT(x) => { return S("String"); },
+        .HANDLE(s) => { return this.local(this.c.si(s).name); },
+        .OPT(x) => { return fmt("Option<{}>", this.rust_ty(x)); },
+        .RESULT(e, x) => { return fmt("Result<{}, Error>", this.rust_ret(x)); },
+        default => { return this.rust_ty(t); },
+    }
+}
+
+attach fn rust_value(this: bind&, t: u32, r: str) -> std::string {
+    match (this.shape_of(t) ?? shape::VOID) {
+        .VOID => { return S("()"); },
+        .STR => { return fmt("unsafe {{ {}.to_string() }}", S(r)); },
+        .TEXT(x) => { return fmt("{}.take()", S(r)); },
+        .HANDLE(s) => { return fmt2("{}::from_raw({})", this.local(this.c.si(s).name), S(r)); },
+        .OPT(x) => { return fmt("{}.get()", S(r)); },
+        default => { return S(r); },
+    }
+}
+
+attach fn rust_body(this: bind&, f: u32, args: std::string, pre: std::string) -> std::string {
+    val info = this.c.fi(f);
+    var out = move pre;
+    out.append(fmt3("    let r = unsafe {{ raw::{}({}) }};\n", S(info.c_name), move args, S("")).as_str());
+    match (this.shape_of(info.ret) ?? shape::VOID) {
+        .RESULT(e, x) => {
+            out.append("    if r.error != 0 {\n        return Err(Error { code: r.error });\n    }\n");
+            if (x == VOID) {
+                out.append("    Ok(())\n");
+            } else {
+                out.append(fmt("    Ok({})\n", this.rust_value(x, "r.value")).as_str());
+            }
+        },
+        .VOID => { out.append("    r\n"); },
+        default => { out.append(fmt("    {}\n", this.rust_value(info.ret, "r")).as_str()); },
+    }
+    return move out;
+}
+
 attach fn rust_text(this: bind&) -> std::string {
+    val ents = this.entries();
     var out: std::string = {};
-    out.append(fmt("// {}: generated by voltc bindings; the C interface of the Volt package, for Rust.\n", S(this.pkg)).as_str());
-    out.append("// Link the library yourself (-l NAME, or #[link] in a build script): shared or static.\n");
-    out.append("#![allow(non_camel_case_types, non_upper_case_globals, non_snake_case, dead_code)]\n");
+    out.append(fmt("// {}: generated by voltc bindings; the Volt package for Rust. Link the library\n", S(this.pkg)).as_str());
+    out.append("// yourself (-l NAME, or #[link] in a build script): shared or static. Module raw has the C\n// functions; the functions and types here wrap them (errors come back as Err(Error)).\n");
+    out.append("#![allow(non_camel_case_types, non_upper_case_globals, non_snake_case, dead_code, unused_mut)]\n");
     if (this.uses_str) {
-        out.append("\n/// a Volt str: bytes and a length (no terminator)\n#[repr(C)]\n#[derive(Clone, Copy, Debug)]\npub struct VoltStr {\n    pub ptr: *const u8,\n    pub len: usize,\n}\n\nimpl VoltStr {\n    pub fn from(s: &str) -> VoltStr {\n        VoltStr { ptr: s.as_ptr(), len: s.len() }\n    }\n    /// the bytes (valid as long as what the str points into)\n    pub unsafe fn bytes<'a>(self) -> &'a [u8] {\n        std::slice::from_raw_parts(self.ptr, self.len)\n    }\n}\n");
+        out.append("\n/// a Volt str: bytes and a length (no terminator)\n#[repr(C)]\n#[derive(Clone, Copy, Debug)]\npub struct VoltStr {\n    pub ptr: *const u8,\n    pub len: usize,\n}\n\nimpl VoltStr {\n    pub fn from(s: &str) -> VoltStr {\n        VoltStr { ptr: s.as_ptr(), len: s.len() }\n    }\n    /// the bytes (valid as long as what the str points into)\n    pub unsafe fn bytes<'a>(self) -> &'a [u8] {\n        std::slice::from_raw_parts(self.ptr, self.len)\n    }\n    /// a copy of the text\n    pub unsafe fn to_string(self) -> String {\n        String::from_utf8_lossy(self.bytes()).into_owned()\n    }\n}\n");
+    }
+    if (this.texts.len > 0) {
+        out.append("\n/// owned text a Volt function gave out: take() copies it into a String and frees it\n#[repr(C)]\npub struct VoltText {\n    pub ptr: *const u8,\n    pub len: usize,\n    pub owner: *mut std::os::raw::c_void,\n    pub drop: Option<extern \"C\" fn(*mut std::os::raw::c_void)>,\n}\n\nimpl VoltText {\n    pub fn take(self) -> String {\n        let s = unsafe { String::from_utf8_lossy(std::slice::from_raw_parts(self.ptr, self.len)).into_owned() };\n        if let Some(d) = self.drop {\n            d(self.owner);\n        }\n        s\n    }\n}\n");
+    }
+    if (this.slices.len > 0) {
+        out.append("\n/// a Volt slice: elements and how many\n#[repr(C)]\n#[derive(Clone, Copy, Debug)]\npub struct VoltSlice<T> {\n    pub ptr: *mut T,\n    pub len: usize,\n}\n\nimpl<T> VoltSlice<T> {\n    pub fn from(s: &mut [T]) -> VoltSlice<T> {\n        VoltSlice { ptr: s.as_mut_ptr(), len: s.len() }\n    }\n}\n");
+    }
+    if (this.opts.len > 0) {
+        out.append("\n/// a Volt optional: has says whether value is there\n#[repr(C)]\n#[derive(Clone, Copy, Debug)]\npub struct VoltOpt<T> {\n    pub value: T,\n    pub has: bool,\n}\n\nimpl<T> VoltOpt<T> {\n    pub fn from(o: Option<T>) -> VoltOpt<T> {\n        match o {\n            Some(value) => VoltOpt { value, has: true },\n            None => VoltOpt { value: unsafe { std::mem::zeroed() }, has: false },\n        }\n    }\n    pub fn get(self) -> Option<T> {\n        if self.has {\n            Some(self.value)\n        } else {\n            None\n        }\n    }\n}\n");
     }
     for (e&) in this.enums.items() {
         val info = this.c.ei(*e);
@@ -536,18 +1596,25 @@ attach fn rust_text(this: bind&) -> std::string {
             default => {},
         }
     }
+    if (this.codes.len > 0) {
+        out.append("\n/// an error a Volt function returned: its code (see name())\n#[derive(Clone, Copy, Debug, PartialEq, Eq)]\npub struct Error {\n    pub code: u32,\n}\n\nimpl Error {\n    pub fn name(&self) -> &'static str {\n        match self.code {\n");
+        for (c&) in this.all_codes().items() {
+            out.append(fmt2("            {} => \"{}\",\n", num(c.code), S(c.name)).as_str());
+        }
+        out.append("            _ => \"error\",\n        }\n    }\n}\n\nimpl std::fmt::Display for Error {\n    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {\n        f.write_str(self.name())\n    }\n}\n\nimpl std::error::Error for Error {}\n");
+    }
     for (s&) in this.structs.items() {
         val info = this.c.si(*s);
         out.append(fmt("\n#[repr(C)]\n#[derive(Clone, Copy, Debug)]\npub struct {} {{\n", this.local(info.name)).as_str());
         for (f&) in info.fields.items() {
-            out.append(fmt2("    pub {}: {},\n", S(f.name), this.rust_ty(f.ty)).as_str());
+            out.append(fmt2("    pub {}: {},\n", rust_ident(f.name), this.rust_ty(f.ty)).as_str());
         }
         out.append("}\n");
     }
     for (rt&) in this.results.items() {
         match (*this.c.t.get(*rt)) {
             .ERR_UNION(e, x) => {
-                out.append(fmt2("\n/// {}: error is 0, or the error's code\n#[repr(C)]\n#[derive(Clone, Copy, Debug)]\npub struct {} {{\n    pub error: u32,\n", this.c.ty_name(*rt), this.result_name(*rt)).as_str());
+                out.append(fmt2("\n/// {}: error is 0, or the error's code\n#[repr(C)]\npub struct {} {{\n    pub error: u32,\n", this.c.ty_name(*rt), this.result_name(*rt)).as_str());
                 if (x != VOID) {
                     out.append(fmt("    pub value: {},\n", this.rust_ty(x)).as_str());
                 }
@@ -556,23 +1623,97 @@ attach fn rust_text(this: bind&) -> std::string {
             default => {},
         }
     }
-    out.append("\nextern \"C\" {\n");
-    for (i&) in this.exports().items() {
-        val f = this.c.fi(*i);
+    // the C functions
+    out.append("\n/// the C functions (the wrappers below are easier to use)\npub mod raw {\n    use super::*;\n");
+    for (s&) in this.handles.items() {
+        out.append(fmt("\n    /// export struct {}, behind a handle\n    #[repr(C)]\n    pub struct ", S(this.c.si(*s).name)).as_str());
+        out.append(fmt("{} {\n        _private: [u8; 0],\n    }\n", this.local(this.c.si(*s).name)).as_str());
+    }
+    out.append("\n    extern \"C\" {\n");
+    for (e&) in ents.items() {
         var args: std::string = {};
+        val s = e.free_of;
+        if (s) {
+            args = fmt("it: *mut {}", this.local(this.c.si(s).name));
+            out.append(fmt2("        pub fn {}({});\n", copy e.name, move args).as_str());
+            continue;
+        }
+        val f = this.c.fi(e.f);
         for (p&) in f.params.items() {
             if (args.len() > 0) {
                 args.append(", ");
             }
-            args.append(fmt2("{}: {}", S(p.name), this.rust_ty(p.ty)).as_str());
+            args.append(fmt2("{}: {}", rust_ident(p.name), this.rust_ty(p.ty)).as_str());
+            match (this.shape_of(p.ty) ?? shape::VOID) {
+                .CLOSURE(i) => { args.append(fmt(", {}_user: *mut std::os::raw::c_void", S(p.name)).as_str()); },
+                default => {},
+            }
         }
         var ret: std::string = {};
         if (f.ret != VOID) {
             ret = fmt(" -> {}", this.rust_ty(f.ret));
         }
-        out.append(fmt3("    pub fn {}({}){};\n", S(f.c_name), move args, move ret).as_str());
+        out.append(fmt3("        pub fn {}({}){};\n", copy e.name, move args, move ret).as_str());
     }
-    out.append("}\n");
+    out.append("    }\n}\n");
+    // a type per export struct: it owns its handle
+    for (s&) in this.handles.items() {
+        val cls = this.local(this.c.si(*s).name);
+        out.append(fmt4("\n/// export struct {}: owns a handle, and frees it when dropped\npub struct {} {{\n    raw: *mut raw::{},\n}}\n\nimpl Drop for {} {{\n", S(this.c.si(*s).name), copy cls, copy cls, copy cls).as_str());
+        out.append(fmt("    fn drop(&mut self) {\n        if !self.raw.is_null() {\n            unsafe { raw::{}(self.raw) }\n        }\n    }\n}\n", this.free_name(*s)).as_str());
+        out.append(fmt3("\nimpl {} {{\n    /// takes ownership of a handle an export fn returned\n    pub fn from_raw(raw: *mut raw::{}) -> {} {{\n", copy cls, copy cls, copy cls).as_str());
+        out.append(fmt2("        {} {{ raw }}\n    }}\n    pub fn as_raw(&self) -> *mut raw::{} {{\n        self.raw\n    }}\n", copy cls, copy cls).as_str());
+        for (e&) in ents.items() {
+            if (e.free_of != null) {
+                continue;
+            }
+            val m = this.member_of(e.f, *s) ?? continue;
+            val info = this.c.fi(e.f);
+            var ps: std::string = {};
+            var args: std::string = {};
+            var pre: std::string = {};
+            var first: usize = 0;
+            if (info.params.len > 0 && this.lends(info.params.at(0).ty, *s)) {
+                first = 1;
+                ps.append("&self");
+                args.append("self.raw");
+            }
+            for (k) in first..info.params.len {
+                if (ps.len() > 0) {
+                    ps.append(", ");
+                }
+                if (args.len() > 0) {
+                    args.append(", ");
+                }
+                this.rust_param(info.params.at(k).ty, info.params.at(k).name, &ps, &args, &pre);
+            }
+            out.append(fmt3("    pub fn {}({}) -> {} {{\n", rust_ident(m), move ps, this.rust_ret(info.ret)).as_str());
+            var body = this.rust_body(e.f, move args, move pre);
+            out.append(indent(body.as_str()).as_str());
+            out.append("    }\n");
+        }
+        out.append("}\n");
+    }
+    // the wrappers
+    for (e&) in ents.items() {
+        if (e.free_of != null || this.class_of(e.f) != null) {
+            continue;
+        }
+        val info = this.c.fi(e.f);
+        var ps: std::string = {};
+        var args: std::string = {};
+        var pre: std::string = {};
+        for (p&) in info.params.items() {
+            if (ps.len() > 0) {
+                ps.append(", ");
+                args.append(", ");
+            }
+            this.rust_param(p.ty, p.name, &ps, &args, &pre);
+        }
+        out.append(fmt3("\npub fn {}({}) -> {} {{\n", rust_ident(info.c_name), move ps, this.rust_ret(info.ret)).as_str());
+        out.append(this.rust_body(e.f, move args, move pre).as_str());
+        out.append("}\n");
+    }
     return move out;
 }
 
@@ -596,6 +1737,10 @@ attach fn zig_ty(this: bind&, t: u32) -> std::string {
             if (x == VOID) {
                 return S("?*anyopaque");
             }
+            match (this.shape_of(x) ?? shape::VOID) {
+                .HANDLE(s) => { return fmt("*raw.{}", this.local(this.c.si(s).name)); },
+                default => {},
+            }
             var s = S("*");
             s.append(this.zig_ty(x).as_str());
             return move s;
@@ -605,31 +1750,187 @@ attach fn zig_ty(this: bind&, t: u32) -> std::string {
         .CODE => { return S("u32"); },
         .RESULT(e, x) => { return this.result_name(t); },
         .ARRAY(elem, n) => { return fmt2("[{}]{}", unum(n), this.zig_ty(elem)); },
-        .FN(i) => {
-            match (*this.c.t.get(t)) {
-                .FN_PTR(ps, r, va) => {
-                    var s = S("*const fn (");
-                    for (k) in 0..ps.len {
-                        if (k > 0) {
-                            s.append(", ");
-                        }
-                        s.append(this.zig_ty(*ps.at(k)).as_str());
-                    }
-                    s.append(") callconv(.c) ");
-                    s.append(this.zig_ty(r).as_str());
-                    return move s;
-                },
-                default => { return S("void"); },
+        .FN(i) => { return this.zig_fn_ty(t, false); },
+        .SLICE(x) => { return fmt("VoltSlice({})", this.zig_ty(x)); },
+        .OPT(x) => { return fmt("VoltOpt({})", this.zig_ty(x)); },
+        .HANDLE(s) => { return fmt("*raw.{}", this.local(this.c.si(s).name)); },
+        .TEXT(x) => { return S("VoltText"); },
+        .CLOSURE(i) => { return this.zig_fn_ty(t, true); },
+    }
+}
+
+attach fn zig_fn_ty(this: bind&, t: u32, user: bool) -> std::string {
+    var s = S("*const fn (");
+    var ps: std::vec<u32> = {};
+    var r = VOID;
+    match (*this.c.t.get(t)) {
+        .FN_PTR(xs&, rr, va) => {
+            ps = copy *xs;
+            r = rr;
+        },
+        .FN_VAL(xs&, rr) => {
+            ps = copy *xs;
+            r = rr;
+        },
+        default => {},
+    }
+    if (user) {
+        s.append("?*anyopaque");
+    }
+    for (k) in 0..ps.len {
+        if (k > 0 || user) {
+            s.append(", ");
+        }
+        s.append(this.zig_ty(*ps.at(k)).as_str());
+    }
+    s.append(") callconv(.c) ");
+    s.append(this.zig_ty(r).as_str());
+    return move s;
+}
+
+// Zig doesn't let a parameter shadow a declaration: a name the file declares gets a _
+attach fn zig_name(this: bind&, name: str) -> std::string {
+    var taken = name == "std" || name == "raw" || name == "Error" || name == "err_of" || name == "self" || name == "print";
+    for (s&) in this.handles.items() {
+        if (this.local(this.c.si(*s).name).as_str() == name) {
+            taken = true;
+        }
+        for (f&) in this.exports().items() {
+            val m = this.member_of(*f, *s) ?? continue;
+            if (m == name) {
+                taken = true;
             }
+        }
+    }
+    for (s&) in this.structs.items() {
+        if (this.local(this.c.si(*s).name).as_str() == name) {
+            taken = true;
+        }
+    }
+    for (e&) in this.enums.items() {
+        if (this.local(this.c.ei(*e).name).as_str() == name) {
+            taken = true;
+        }
+    }
+    for (f&) in this.exports().items() {
+        if (this.c.fi(*f).c_name == name) {
+            taken = true;
+        }
+    }
+    var n = S(name);
+    if (taken) {
+        n.push('_');
+    }
+    return move n;
+}
+
+attach fn zig_param(this: bind&, t: u32, name0: str, ty: std::string&, arg: std::string&, pre: std::string&) -> void {
+    val zn = this.zig_name(name0);
+    val name = zn.as_str();
+    val h = this.lent_handle(t);
+    if (h) {
+        ty.append(fmt2("{}: {}", S(name), this.local(this.c.si(h).name)).as_str());
+        arg.append(fmt("{}.raw", S(name)).as_str());
+        return;
+    }
+    match (this.shape_of(t) ?? shape::VOID) {
+        .STR => {
+            ty.append(fmt("{}: []const u8", S(name)).as_str());
+            arg.append(fmt("VoltStr.from({})", S(name)).as_str());
+        },
+        .SLICE(x) => {
+            ty.append(fmt2("{}: []{}", S(name), this.zig_ty(x)).as_str());
+            arg.append(fmt2("VoltSlice({}).from({})", this.zig_ty(x), S(name)).as_str());
+        },
+        .OPT(x) => {
+            ty.append(fmt2("{}: ?{}", S(name), this.zig_ty(x)).as_str());
+            arg.append(fmt2("VoltOpt({}).from({})", this.zig_ty(x), S(name)).as_str());
+        },
+        .CLOSURE(i) => {
+            match (*this.c.t.get(t)) {
+                .FN_VAL(ps&, r) => {
+                    // context is passed to f with each call: f(context, args...)
+                    var fps = fmt("@TypeOf({}_context)", S(name));
+                    var cps = S("u: ?*anyopaque");
+                    var cargs = fmt("ctx.*", S(""));
+                    for (k) in 0..ps.len {
+                        fps.append(", ");
+                        fps.append(this.zig_ty(*ps.at(k)).as_str());
+                        cps.append(fmt2(", a{}: {}", unum(@cast<u64>(k)), this.zig_ty(*ps.at(k))).as_str());
+                        cargs.append(fmt(", a{}", unum(@cast<u64>(k))).as_str());
+                    }
+                    ty.append(fmt4("{}_context: anytype, comptime {}: fn ({}) {}", S(name), S(name), move fps, this.zig_ty(r)).as_str());
+                    pre.append(fmt4("    const {}_call = struct {{\n        fn call({}) callconv(.c) {} {{\n            const ctx: *const @TypeOf({}_context) = @ptrCast(@alignCast(u));\n", S(name), move cps, this.zig_ty(r), S(name)).as_str());
+                    pre.append(fmt2("            return {}({});\n        }}\n    }};\n", S(name), move cargs).as_str());
+                    arg.append(fmt2("{}_call.call, @ptrCast(@constCast(&{}_context))", S(name), S(name)).as_str());
+                },
+                default => {},
+            }
+        },
+        default => {
+            ty.append(fmt2("{}: {}", S(name), this.zig_ty(t)).as_str());
+            arg.append(name);
         },
     }
 }
 
+attach fn zig_ret(this: bind&, t: u32) -> std::string {
+    match (this.shape_of(t) ?? shape::VOID) {
+        .STR => { return S("[]const u8"); },
+        .HANDLE(s) => { return this.local(this.c.si(s).name); },
+        .OPT(x) => { return fmt("?{}", this.zig_ty(x)); },
+        .RESULT(e, x) => { return fmt("Error!{}", this.zig_ret(x)); },
+        default => { return this.zig_ty(t); },
+    }
+}
+
+attach fn zig_value(this: bind&, t: u32, r: str) -> std::string {
+    match (this.shape_of(t) ?? shape::VOID) {
+        .STR => { return fmt("{}.slice()", S(r)); },
+        .HANDLE(s) => { return fmt2("{}{{ .raw = {} }}", this.local(this.c.si(s).name), S(r)); },
+        .OPT(x) => { return fmt("{}.get()", S(r)); },
+        default => { return S(r); },
+    }
+}
+
+attach fn zig_body(this: bind&, f: u32, args: std::string, pre: std::string) -> std::string {
+    val info = this.c.fi(f);
+    var out = move pre;
+    if (info.ret == VOID) {
+        out.append(fmt2("    raw.{}({});\n", S(info.c_name), move args).as_str());
+        return move out;
+    }
+    out.append(fmt2("    const r = raw.{}({});\n", S(info.c_name), move args).as_str());
+    match (this.shape_of(info.ret) ?? shape::VOID) {
+        .RESULT(e, x) => {
+            out.append("    if (r.@\"error\" != 0) return err_of(r.@\"error\");\n");
+            if (x == VOID) {
+                out.append("    return;\n");
+            } else {
+                out.append(fmt("    return {};\n", this.zig_value(x, "r.value")).as_str());
+            }
+        },
+        default => { out.append(fmt("    return {};\n", this.zig_value(info.ret, "r")).as_str()); },
+    }
+    return move out;
+}
+
 attach fn zig_text(this: bind&) -> std::string {
+    val ents = this.entries();
     var out: std::string = {};
-    out.append(fmt("// {}: generated by voltc bindings; the C interface of the Volt package, for Zig.\n", S(this.pkg)).as_str());
+    out.append(fmt("// {}: generated by voltc bindings; the Volt package for Zig. Struct raw has the C\n", S(this.pkg)).as_str());
+    out.append("// functions; the functions and types here wrap them (errors come back as Error).\nconst std = @import(\"std\");\n");
     if (this.uses_str) {
-        out.append("\n/// a Volt str: bytes and a length (no terminator)\npub const VoltStr = extern struct {\n    ptr: [*]const u8,\n    len: usize,\n    pub fn from(s: []const u8) VoltStr {\n        return .{ .ptr = s.ptr, .len = s.len };\n    }\n};\n");
+        out.append("\n/// a Volt str: bytes and a length (no terminator)\npub const VoltStr = extern struct {\n    ptr: [*]const u8,\n    len: usize,\n    pub fn from(s: []const u8) VoltStr {\n        return .{ .ptr = s.ptr, .len = s.len };\n    }\n    pub fn slice(self: VoltStr) []const u8 {\n        return self.ptr[0..self.len];\n    }\n};\n");
+    }
+    if (this.texts.len > 0) {
+        out.append("\n/// owned text a Volt function gave out: bytes(), then deinit() to free it\npub const VoltText = extern struct {\n    ptr: [*]const u8,\n    len: usize,\n    owner: ?*anyopaque,\n    drop: ?*const fn (?*anyopaque) callconv(.c) void,\n    pub fn bytes(self: VoltText) []const u8 {\n        return self.ptr[0..self.len];\n    }\n    pub fn deinit(self: VoltText) void {\n        if (self.drop) |d| d(self.owner);\n    }\n};\n");
+    }
+    if (this.slices.len > 0) {
+        out.append("\n/// a Volt slice: elements and how many\npub fn VoltSlice(comptime T: type) type {\n    return extern struct {\n        ptr: [*]T,\n        len: usize,\n        pub fn from(s: []T) @This() {\n            return .{ .ptr = s.ptr, .len = s.len };\n        }\n    };\n}\n");
+    }
+    if (this.opts.len > 0) {
+        out.append("\n/// a Volt optional: has says whether value is there\npub fn VoltOpt(comptime T: type) type {\n    return extern struct {\n        value: T,\n        has: bool,\n        pub fn from(o: ?T) @This() {\n            return if (o) |v| .{ .value = v, .has = true } else .{ .value = std.mem.zeroes(T), .has = false };\n        }\n        pub fn get(self: @This()) ?T {\n            return if (self.has) self.value else null;\n        }\n    };\n}\n");
     }
     for (e&) in this.enums.items() {
         val info = this.c.ei(*e);
@@ -652,6 +1953,18 @@ attach fn zig_text(this: bind&) -> std::string {
             default => {},
         }
     }
+    if (this.codes.len > 0) {
+        val codes = this.all_codes();
+        out.append("\n/// the errors Volt functions return (Unknown: a code this file doesn't know)\npub const Error = error{");
+        for (c&) in codes.items() {
+            out.append(fmt(" {},", S(c.name)).as_str());
+        }
+        out.append(" Unknown };\n\npub fn err_of(code: u32) Error {\n    return switch (code) {\n");
+        for (c&) in codes.items() {
+            out.append(fmt2("        {} => error.{},\n", num(c.code), S(c.name)).as_str());
+        }
+        out.append("        else => error.Unknown,\n    };\n}\n");
+    }
     for (s&) in this.structs.items() {
         val info = this.c.si(*s);
         out.append(fmt("\npub const {} = extern struct {{\n", this.local(info.name)).as_str());
@@ -672,17 +1985,98 @@ attach fn zig_text(this: bind&) -> std::string {
             default => {},
         }
     }
-    out.append("\n");
-    for (i&) in this.exports().items() {
-        val f = this.c.fi(*i);
+    out.append("\n/// the C functions (the wrappers below are easier to use)\npub const raw = struct {\n");
+    for (s&) in this.handles.items() {
+        out.append(fmt("    pub const {} = opaque {{}};\n", this.local(this.c.si(*s).name)).as_str());
+    }
+    for (e&) in ents.items() {
         var args: std::string = {};
+        val s = e.free_of;
+        if (s) {
+            out.append(fmt2("    pub extern fn {}(it: *raw.{}) void;\n", copy e.name, this.local(this.c.si(s).name)).as_str());
+            continue;
+        }
+        val f = this.c.fi(e.f);
         for (p&) in f.params.items() {
             if (args.len() > 0) {
                 args.append(", ");
             }
             args.append(fmt2("{}: {}", S(p.name), this.zig_ty(p.ty)).as_str());
+            match (this.shape_of(p.ty) ?? shape::VOID) {
+                .CLOSURE(i) => { args.append(fmt(", {}_user: ?*anyopaque", S(p.name)).as_str()); },
+                default => {},
+            }
         }
-        out.append(fmt3("pub extern fn {}({}) {};\n", S(f.c_name), move args, this.zig_ty(f.ret)).as_str());
+        out.append(fmt3("    pub extern fn {}({}) {};\n", copy e.name, move args, this.zig_ty(f.ret)).as_str());
+    }
+    out.append("};\n");
+    for (s&) in this.handles.items() {
+        val cls = this.local(this.c.si(*s).name);
+        out.append(fmt4("\n/// export struct {}: owns a handle; deinit() frees it\npub const {} = struct {{\n    raw: *raw.{},\n\n    pub fn deinit(self: {}) void {{\n", S(this.c.si(*s).name), copy cls, copy cls, copy cls).as_str());
+        out.append(fmt("        raw.{}(self.raw);\n    }\n", this.free_name(*s)).as_str());
+        for (e&) in ents.items() {
+            if (e.free_of != null) {
+                continue;
+            }
+            val m = this.member_of(e.f, *s) ?? continue;
+            val info = this.c.fi(e.f);
+            var ps: std::string = {};
+            var args: std::string = {};
+            var pre: std::string = {};
+            var first: usize = 0;
+            if (info.params.len > 0 && this.lends(info.params.at(0).ty, *s)) {
+                first = 1;
+                ps.append(fmt("self: {}", copy cls).as_str());
+                args.append("self.raw");
+            }
+            for (k) in first..info.params.len {
+                if (ps.len() > 0) {
+                    ps.append(", ");
+                }
+                if (args.len() > 0) {
+                    args.append(", ");
+                }
+                this.zig_param(info.params.at(k).ty, info.params.at(k).name, &ps, &args, &pre);
+            }
+            out.append(fmt3("\n    pub fn {}({}) {} {{\n", S(m), move ps, this.zig_ret(info.ret)).as_str());
+            var body = this.zig_body(e.f, move args, move pre);
+            out.append(indent(body.as_str()).as_str());
+            out.append("    }\n");
+        }
+        out.append("};\n");
+    }
+    for (e&) in ents.items() {
+        if (e.free_of != null || this.class_of(e.f) != null) {
+            continue;
+        }
+        val info = this.c.fi(e.f);
+        var ps: std::string = {};
+        var args: std::string = {};
+        var pre: std::string = {};
+        for (p&) in info.params.items() {
+            if (ps.len() > 0) {
+                ps.append(", ");
+                args.append(", ");
+            }
+            this.zig_param(p.ty, p.name, &ps, &args, &pre);
+        }
+        out.append(fmt3("\npub fn {}({}) {} {{\n", S(info.c_name), move ps, this.zig_ret(info.ret)).as_str());
+        out.append(this.zig_body(e.f, move args, move pre).as_str());
+        out.append("}\n");
+    }
+    return move out;
+}
+
+// each line of s, four spaces further in
+fn indent(s: str) -> std::string {
+    var out: std::string = {};
+    var start = true;
+    for (c) in s {
+        if (start && c != '\n') {
+            out.append("    ");
+        }
+        out.push(c);
+        start = c == '\n';
     }
     return move out;
 }
@@ -721,6 +2115,10 @@ attach fn py_ty(this: bind&, t: u32) -> std::string {
             if (x == VOID) {
                 return S("ctypes.c_void_p");
             }
+            match (this.shape_of(x) ?? shape::VOID) {
+                .HANDLE(s) => { return S("ctypes.c_void_p"); },
+                default => {},
+            }
             return fmt("ctypes.POINTER({})", this.py_ty(x));
         },
         .STRUCT(s) => { return this.local(this.c.si(s).name); },
@@ -731,32 +2129,113 @@ attach fn py_ty(this: bind&, t: u32) -> std::string {
         .CODE => { return S("ctypes.c_uint32"); },
         .RESULT(e, x) => { return this.result_name(t); },
         .ARRAY(elem, n) => { return fmt2("({} * {})", this.py_ty(elem), unum(n)); },
-        .FN(i) => {
-            match (*this.c.t.get(t)) {
-                .FN_PTR(ps, r, va) => {
-                    var s = S("ctypes.CFUNCTYPE(");
-                    s.append(this.py_ty(r).as_str());
-                    for (p&) in ps.items() {
-                        s.append(", ");
-                        s.append(this.py_ty(*p).as_str());
-                    }
-                    s.push(')');
-                    return move s;
-                },
-                default => { return S("None"); },
-            }
-        },
+        .FN(i) => { return this.py_fn_ty(t, false); },
+        .SLICE(x) => { return this.made_name("slice", x, true); },
+        .OPT(x) => { return this.made_name("opt", x, true); },
+        .HANDLE(s) => { return S("ctypes.c_void_p"); },
+        .TEXT(x) => { return S("VoltText"); },
+        .CLOSURE(i) => { return this.py_fn_ty(t, true); },
     }
 }
 
+attach fn py_fn_ty(this: bind&, t: u32, user: bool) -> std::string {
+    var ps: std::vec<u32> = {};
+    var r = VOID;
+    match (*this.c.t.get(t)) {
+        .FN_PTR(xs&, rr, va) => {
+            ps = copy *xs;
+            r = rr;
+        },
+        .FN_VAL(xs&, rr) => {
+            ps = copy *xs;
+            r = rr;
+        },
+        default => {},
+    }
+    var s = S("ctypes.CFUNCTYPE(");
+    s.append(this.py_ty(r).as_str());
+    if (user) {
+        s.append(", ctypes.c_void_p");
+    }
+    for (p&) in ps.items() {
+        s.append(", ");
+        s.append(this.py_ty(*p).as_str());
+    }
+    s.push(')');
+    return move s;
+}
+
+// a wrapper's argument: what it passes to the C function for Python value name
+attach fn py_arg(this: bind&, t: u32, name: str, conv: std::string&, pre: std::string&) -> void {
+    if (this.lent_handle(t) != null) {
+        conv.append(fmt("{}._h", S(name)).as_str());
+        return;
+    }
+    match (this.shape_of(t) ?? shape::VOID) {
+        .STR => { conv.append(fmt("_str({})", S(name)).as_str()); },
+        .CSTR => { conv.append(fmt3("({}.encode() if isinstance({}, str) else {})", S(name), S(name), S(name)).as_str()); },
+        .PTR(x) => {
+            // a structure by reference (or a pointer as it is)
+            conv.append(fmt3("(ctypes.byref({}) if isinstance({}, ctypes.Structure) else {})", S(name), S(name), S(name)).as_str());
+        },
+        .SLICE(x) => { conv.append(fmt3("_slice({}, {}, {})", this.made_name("slice", x, true), this.py_ty(x), S(name)).as_str()); },
+        .OPT(x) => { conv.append(fmt2("_opt({}, {})", this.made_name("opt", x, true), S(name)).as_str()); },
+        .CLOSURE(i) => {
+            // the C function calls the Python one; kept alive by the local until the call returns
+            pre.append(fmt3("    _{}_c = {}(lambda _u, *a: {}(*a))\n", S(name), this.py_fn_ty(t, true), S(name)).as_str());
+            conv.append(fmt("_{}_c, None", S(name)).as_str());
+        },
+        default => { conv.append(name); },
+    }
+}
+
+// the Python value of C result r (of type t)
+attach fn py_value(this: bind&, t: u32, r: str) -> std::string {
+    match (this.shape_of(t) ?? shape::VOID) {
+        .STR => { return fmt("str({})", S(r)); },
+        .CSTR => { return fmt3("({}.decode() if {} is not None else None)", S(r), S(r), S("")); },
+        .TEXT(x) => { return fmt("_take({})", S(r)); },
+        .HANDLE(s) => { return fmt2("{}._wrap({})", this.local(this.c.si(s).name), S(r)); },
+        .OPT(x) => { return fmt2("({}.value if {}.has else None)", S(r), S(r)); },
+        default => { return S(r); },
+    }
+}
+
+attach fn py_body(this: bind&, f: u32, conv: std::string, pre: std::string) -> std::string {
+    val info = this.c.fi(f);
+    var out = move pre;
+    out.append(fmt2("    r = _lib.{}({})\n", S(info.c_name), move conv).as_str());
+    match (this.shape_of(info.ret) ?? shape::VOID) {
+        .RESULT(e, x) => {
+            out.append("    if r.error:\n        _raise(r.error)\n");
+            if (x != VOID) {
+                out.append(fmt("    return {}\n", this.py_value(x, "r.value")).as_str());
+            }
+        },
+        .VOID => {},
+        default => { out.append(fmt("    return {}\n", this.py_value(info.ret, "r")).as_str()); },
+    }
+    return move out;
+}
+
 attach fn py_text(this: bind&) -> std::string {
+    val ents = this.entries();
     var out: std::string = {};
-    out.append(fmt("# {}: generated by voltc bindings; the C interface of the Volt package, for Python\n", S(this.pkg)).as_str());
-    out.append(fmt2("# (ctypes). It loads lib{}.so from $VOLT_{}_LIB, else from next to this file.\n", S(this.pkg), upper(this.pkg)).as_str());
+    out.append(fmt("# {}: generated by voltc bindings; the Volt package for Python (ctypes). It loads\n", S(this.pkg)).as_str());
+    out.append(fmt2("# lib{}.so from $VOLT_{}_LIB, else from next to this file. Errors are raised as Error.\n", S(this.pkg), upper(this.pkg)).as_str());
     out.append("import ctypes\nimport os\n\n");
     out.append(fmt2("_lib = ctypes.CDLL(os.environ.get(\"VOLT_{}_LIB\") or os.path.join(os.path.dirname(os.path.abspath(__file__)), \"lib{}.so\"))\n", upper(this.pkg), S(this.pkg)).as_str());
     if (this.uses_str) {
         out.append("\n\nclass VoltStr(ctypes.Structure):\n    \"\"\"a Volt str: bytes and a length (no terminator)\"\"\"\n    _fields_ = [(\"ptr\", ctypes.c_void_p), (\"len\", ctypes.c_size_t)]\n\n    def __str__(self):\n        return ctypes.string_at(self.ptr, self.len).decode()\n\n\ndef _str(s):\n    b = s.encode() if isinstance(s, str) else bytes(s)\n    v = VoltStr(ctypes.cast(ctypes.c_char_p(b), ctypes.c_void_p), len(b))\n    v._keep = b\n    return v\n");
+    }
+    if (this.texts.len > 0) {
+        out.append("\n\nclass VoltText(ctypes.Structure):\n    \"\"\"owned text a Volt function gave out (the wrappers copy it into a str and free it)\"\"\"\n    _fields_ = [(\"ptr\", ctypes.c_void_p), (\"len\", ctypes.c_size_t), (\"owner\", ctypes.c_void_p), (\"drop\", ctypes.CFUNCTYPE(None, ctypes.c_void_p))]\n\n\ndef _take(t):\n    s = ctypes.string_at(t.ptr, t.len).decode()\n    if t.drop:\n        t.drop(t.owner)\n    return s\n");
+    }
+    if (this.slices.len > 0) {
+        out.append("\n\ndef _slice(cls, elem, xs):\n    arr = (elem * len(xs))(*xs)\n    v = cls(ctypes.cast(arr, ctypes.POINTER(elem)), len(xs))\n    v._keep = arr\n    return v\n");
+    }
+    if (this.opts.len > 0) {
+        out.append("\n\ndef _opt(cls, x):\n    o = cls()\n    if x is not None:\n        o.value = x\n        o.has = True\n    return o\n");
     }
     for (e&) in this.enums.items() {
         val info = this.c.ei(*e);
@@ -765,11 +2244,14 @@ attach fn py_text(this: bind&) -> std::string {
             out.append(fmt2("    {} = {}\n", S(*info.names.at(i)), num(*info.values.at(i))).as_str());
         }
     }
+    if (this.codes.len > 0) {
+        out.append("\n\nclass Error(Exception):\n    \"\"\"an error a Volt function returned: code, and name\"\"\"\n\n    def __init__(self, code):\n        self.code = code\n        self.name = _ERROR_NAMES.get(code, \"error\")\n        super().__init__(self.name)\n");
+    }
     for (et&) in this.codes.items() {
         match (*this.c.t.get(*et)) {
             .ENUM(e) => {
                 val info = this.c.ei(e);
-                out.append(fmt2("\n\nclass {}:\n    \"\"\"the codes of error set {} (0 means no error)\"\"\"\n", this.local(info.name), S(info.name)).as_str());
+                out.append(fmt2("\n\nclass {}(Error):\n    \"\"\"error set {}: its codes (0 means no error)\"\"\"\n", this.local(info.name), S(info.name)).as_str());
                 for (i) in 0..info.names.len {
                     out.append(fmt2("    {} = {}\n", S(*info.names.at(i)), num(*info.values.at(i))).as_str());
                 }
@@ -777,9 +2259,27 @@ attach fn py_text(this: bind&) -> std::string {
             default => {},
         }
     }
+    if (this.codes.len > 0) {
+        val codes = this.all_codes();
+        out.append("\n\n_ERROR_NAMES = {");
+        for (c&) in codes.items() {
+            out.append(fmt2("{}: \"{}\", ", num(c.code), S(c.name)).as_str());
+        }
+        out.append("}\n_ERROR_SETS = {");
+        for (c&) in codes.items() {
+            out.append(fmt2("{}: {}, ", num(c.code), copy c.set).as_str());
+        }
+        out.append("}\n\n\ndef _raise(code):\n    raise _ERROR_SETS.get(code, Error)(code)\n");
+    }
     // the classes first, then their fields: structs may point at each other
     for (s&) in this.structs.items() {
         out.append(fmt("\n\nclass {}(ctypes.Structure):\n    pass\n", this.local(this.c.si(*s).name)).as_str());
+    }
+    for (x&) in this.slices.items() {
+        out.append(fmt("\n\nclass {}(ctypes.Structure):\n    pass\n", this.made_name("slice", *x, true)).as_str());
+    }
+    for (x&) in this.opts.items() {
+        out.append(fmt("\n\nclass {}(ctypes.Structure):\n    pass\n", this.made_name("opt", *x, true)).as_str());
     }
     for (rt&) in this.results.items() {
         out.append(fmt("\n\nclass {}(ctypes.Structure):\n    pass\n", this.result_name(*rt)).as_str());
@@ -792,6 +2292,12 @@ attach fn py_text(this: bind&) -> std::string {
             fields.append(fmt2("(\"{}\", {}), ", S(f.name), this.py_ty(f.ty)).as_str());
         }
         out.append(fmt2("\n{}._fields_ = [{}]", this.local(info.name), move fields).as_str());
+    }
+    for (x&) in this.slices.items() {
+        out.append(fmt2("\n{}._fields_ = [(\"ptr\", ctypes.POINTER({})), (\"len\", ctypes.c_size_t)]", this.made_name("slice", *x, true), this.py_ty(*x)).as_str());
+    }
+    for (x&) in this.opts.items() {
+        out.append(fmt2("\n{}._fields_ = [(\"value\", {}), (\"has\", ctypes.c_bool)]", this.made_name("opt", *x, true), this.py_ty(*x)).as_str());
     }
     for (rt&) in this.results.items() {
         match (*this.c.t.get(*rt)) {
@@ -806,54 +2312,109 @@ attach fn py_text(this: bind&) -> std::string {
         }
     }
     out.append("\n");
-    for (i&) in this.exports().items() {
-        val f = this.c.fi(*i);
+    // the C functions' types
+    for (e&) in ents.items() {
+        val s = e.free_of;
+        if (s) {
+            out.append(fmt2("\n_lib.{}.argtypes = [ctypes.c_void_p]\n_lib.{}.restype = None", copy e.name, copy e.name).as_str());
+            continue;
+        }
+        val f = this.c.fi(e.f);
         var types: std::string = {};
+        for (p&) in f.params.items() {
+            if (types.len() > 0) {
+                types.append(", ");
+            }
+            types.append(this.py_ty(p.ty).as_str());
+            match (this.shape_of(p.ty) ?? shape::VOID) {
+                .CLOSURE(i) => { types.append(", ctypes.c_void_p"); },
+                default => {},
+            }
+        }
+        out.append(fmt3("\n_lib.{}.argtypes = [{}]\n_lib.{}.restype = ", copy e.name, move types, copy e.name).as_str());
+        out.append(this.py_ty(f.ret).as_str());
+    }
+    out.append("\n");
+    // a class per export struct: it owns its handle (close(), a with block, or the garbage collector frees it)
+    for (s&) in this.handles.items() {
+        val cls = this.local(this.c.si(*s).name);
+        out.append(fmt3("\n\nclass {}:\n    \"\"\"export struct {}: owns a handle; close() (or a with block) frees it\"\"\"\n\n    _h = None\n", copy cls, S(this.c.si(*s).name), S("")).as_str());
+        out.append(fmt3("\n    @classmethod\n    def _wrap(cls, h):\n        o = cls.__new__(cls)\n        o._h = h\n        return o\n\n    def close(self):\n        if self._h:\n            _lib.{}(self._h)\n            self._h = None\n\n    def __enter__(self):\n        return self\n\n    def __exit__(self, *exc):\n        self.close()\n\n    def __del__(self):\n        self.close()\n", this.free_name(*s), S(""), S("")).as_str());
+        for (e&) in ents.items() {
+            if (e.free_of != null) {
+                continue;
+            }
+            val m = this.member_of(e.f, *s) ?? continue;
+            val info = this.c.fi(e.f);
+            var names: std::string = {};
+            var conv: std::string = {};
+            var pre: std::string = {};
+            var first: usize = 0;
+            var is_method = info.params.len > 0 && this.lends(info.params.at(0).ty, *s);
+            if (is_method) {
+                first = 1;
+                names.append("self");
+                conv.append("self._h");
+            }
+            for (k) in first..info.params.len {
+                if (names.len() > 0) {
+                    names.append(", ");
+                }
+                if (conv.len() > 0) {
+                    conv.append(", ");
+                }
+                names.append(info.params.at(k).name);
+                this.py_arg(info.params.at(k).ty, info.params.at(k).name, &conv, &pre);
+            }
+            if (!is_method && m == "new") {
+                // the constructor
+                var ps = S("self");
+                if (names.len() > 0) {
+                    ps.append(", ");
+                    ps.append(names.as_str());
+                }
+                out.append(fmt("\n    def __init__({}):\n", move ps).as_str());
+                // __init__ keeps the handle the C function makes
+                var body = move pre;
+                body.append(fmt2("    r = _lib.{}({})\n", S(info.c_name), move conv).as_str());
+                match (this.shape_of(info.ret) ?? shape::VOID) {
+                    .RESULT(er, x) => { body.append("    if r.error:\n        _raise(r.error)\n    self._h = r.value\n"); },
+                    default => { body.append("    self._h = r\n"); },
+                }
+                out.append(indent(body.as_str()).as_str());
+                continue;
+            }
+            if (!is_method) {
+                out.append("\n    @staticmethod");
+            }
+            out.append(fmt2("\n    def {}({}):\n", S(m), move names).as_str());
+            var body = this.py_body(e.f, move conv, move pre);
+            out.append(indent(body.as_str()).as_str());
+        }
+    }
+    for (e&) in ents.items() {
+        if (e.free_of != null || this.class_of(e.f) != null) {
+            continue;
+        }
+        val info = this.c.fi(e.f);
         var names: std::string = {};
         var conv: std::string = {};
-        for (p&) in f.params.items() {
+        var pre: std::string = {};
+        for (p&) in info.params.items() {
             if (names.len() > 0) {
                 names.append(", ");
-                types.append(", ");
                 conv.append(", ");
             }
             names.append(p.name);
-            types.append(this.py_ty(p.ty).as_str());
-            val sh = this.shape_of(p.ty) ?? shape::VOID;
-            match (sh) {
-                .STR => { conv.append(fmt("_str({})", S(p.name)).as_str()); },
-                .CSTR => { conv.append(fmt3("({}.encode() if isinstance({}, str) else {})", S(p.name), S(p.name), S(p.name)).as_str()); },
-                .PTR(x) => {
-                    // a structure by reference (or a pointer as it is)
-                    conv.append(fmt3("(ctypes.byref({}) if isinstance({}, ctypes.Structure) else {})", S(p.name), S(p.name), S(p.name)).as_str());
-                },
-                default => { conv.append(p.name); },
-            }
+            this.py_arg(p.ty, p.name, &conv, &pre);
         }
-        out.append(fmt2("\n\n_lib.{}.argtypes = [{}]\n", S(f.c_name), move types).as_str());
-        out.append(fmt2("_lib.{}.restype = {}\n", S(f.c_name), this.py_ty(f.ret)).as_str());
-        var call = fmt2("_lib.{}({})", S(f.c_name), move conv);
-        val rs = this.shape_of(f.ret) ?? shape::VOID;
-        match (rs) {
-            .STR => { call = fmt("str({})", move call); },
-            .CSTR => { call = fmt("(lambda r: r.decode() if r is not None else None)({})", move call); },
-            default => {},
-        }
-        out.append(fmt3("\n\ndef {}({}):\n    return {}\n", S(f.c_name), move names, move call).as_str());
+        out.append(fmt2("\n\ndef {}({}):\n", S(info.c_name), move names).as_str());
+        out.append(this.py_body(e.f, move conv, move pre).as_str());
     }
     return move out;
 }
 
 // ---------- the command ----------
-
-// "WHAT is T, which has no C form" (naming the part of T that doesn't cross, when that's inside it)
-attach fn no_c_form(this: bind&, at: span, what: std::string, t: u32) -> compile_error {
-    var msg = fmt2("{} is {}, which has no C form", move what, this.c.ty_name(t));
-    if (this.bad != t) {
-        msg.append(fmt(" (because of the {} in it)", this.c.ty_name(this.bad)).as_str());
-    }
-    return with_help(fail(at, move msg), S("bindings take numbers, bool, pointers and references, cstr, str, structs of those, plain enums, error sets, E!T and extern \"C\" fns"));
-}
 
 // the bindings of package pkg in lang (c, cpp, rust, zig, python)
 attach fn bindings(this: checker&, pkg: str, lang: str) -> compile_error!std::string {
@@ -862,24 +2423,12 @@ attach fn bindings(this: checker&, pkg: str, lang: str) -> compile_error!std::st
     if (fns.len == 0) {
         return fail(NO_SPAN, fmt("package {} has no export fns to make bindings for", S(pkg)));
     }
-    // every type each fn uses has to cross
-    for (i&) in fns.items() {
-        val f = this.fi(*i);
-        val at = this.dl(f.decl).item.span;
-        for (p&) in f.params.items() {
-            if (b.shape_of(p.ty) == null) {
-                return b.no_c_form(at, fmt2("export fn {}: its parameter {}", S(f.name), S(p.name)), p.ty);
-            }
-        }
-        if (b.shape_of(f.ret) == null) {
-            return b.no_c_form(at, fmt("export fn {}: its return type", S(f.name)), f.ret);
-        }
-    }
+    try b.check_all();
     if (lang == "c") {
-        return b.c_text(false);
+        return b.c_text();
     }
     if (lang == "cpp") {
-        return b.c_text(true);
+        return b.cpp_text();
     }
     if (lang == "rust") {
         return b.rust_text();

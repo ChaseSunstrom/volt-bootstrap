@@ -1,8 +1,10 @@
 // std::string: an owned, growable UTF-8 string.
 // (Part of package std: the package loader wraps every file in `namespace std`.)
 
-// Owned, growable text: bytes (UTF-8 by convention, not checked). Prints as its text.
+// Owned, growable text: bytes (UTF-8 by convention, not checked). Prints as its text. An export fn
+// that returns one hands other languages its text (@export_text).
 <Allocator: std::mem::t_allocator = std::mem::default_allocator>
+@attributes([@export_text("as_str")])
 struct string {
     bytes: std::vec<u8, Allocator> = {}; // the text's bytes
 }

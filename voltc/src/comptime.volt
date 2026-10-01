@@ -2712,6 +2712,7 @@ fn attr_defs() -> std::vec<attr_def> {
     put(&v, { name: "deprecated", args: 1 });
     put(&v, { name: "owns", args: 1 });
     put(&v, { name: "cpp_type", args: 1 }); // a struct is this C++ class (use cpp writes it)
+    put(&v, { name: "export_text", args: 1 }); // a struct is text, as this method gives it, to other languages (voltc bindings)
     return move v;
 }
 

@@ -8,8 +8,9 @@ use std::process::{Command, Output};
 
 const ROOT: &str = env!("CARGO_MANIFEST_DIR");
 
-/// what every language's mathlib client prints
-const MATHLIB_OUT: &str = "add 5\ndot 11\nscale 2 4\nlen 5\nnext 2\nsqrt 3 1\nerror negative\n";
+/// what every language's mathlib client prints: plain C types, then owned text, slices, optionals, a
+/// callback with the caller's data and an export struct (shims voltc lib adds)
+const MATHLIB_OUT: &str = "add 5\ndot 11\nscale 2 4\nlen 5\nnext 2\nsqrt 3 1\nerror negative\ngreet hello, volt\nrepeat abab\nrepeat negative\nsum 6.5\nfind 2 none\neach 4 5 6 = 15\ncounter clicks 5\ntake negative\n";
 
 /// voltc/src built by the bootstrap compiler, and a scratch directory; both removed when dropped
 struct Env {
@@ -53,8 +54,13 @@ fn ok(o: Output, what: &str) -> String {
     out
 }
 
-fn has(tool: &str) -> bool {
-    Command::new(tool).arg("--version").output().is_ok_and(|o| o.status.success())
+/// zig on the PATH, or in ~/.local/bin (where a downloaded toolchain goes)
+fn zig() -> Option<PathBuf> {
+    if Command::new("zig").arg("version").output().is_ok_and(|o| o.status.success()) {
+        return Some(PathBuf::from("zig"));
+    }
+    let local = Path::new(&std::env::var_os("HOME")?).join(".local/bin/zig");
+    local.is_file().then_some(local)
 }
 
 fn run(cmd: &mut Command) -> Output {
@@ -93,9 +99,15 @@ fn bindings_round_trip() {
         // Python: the module loads libmathlib.so from $VOLT_MATHLIB_LIB, else next to itself
         let py = run(Command::new("python3").arg("client.py").env("PYTHONPATH", e.path("")).env("VOLT_MATHLIB_LIB", format!("{lib_dir}/libmathlib.so")));
         assert_eq!(ok(py, "python3 client.py"), MATHLIB_OUT, "Python ({backend})");
-        if has("zig") {
+        if let Some(zig) = zig() {
             std::fs::copy(Path::new(ROOT).join("tests/interop/client.zig"), e.dir.join("client.zig")).unwrap();
-            let z = Command::new("zig").args(["run", "client.zig", "-lc", "-L", &lib_dir, "-lmathlib"]).current_dir(&e.dir).env("LD_LIBRARY_PATH", &lib_dir).output().unwrap();
+            // on Linux, Zig's own glibc start files: newer system ones can have sections Zig's linker
+            // doesn't read (.sframe)
+            let mut target = Vec::new();
+            if cfg!(target_os = "linux") {
+                target = vec!["-target".to_string(), format!("{}-linux-gnu", std::env::consts::ARCH)];
+            }
+            let z = Command::new(zig).args(["run", "client.zig"]).args(&target).args(["-lc", "-L", &lib_dir, "-lmathlib"]).current_dir(&e.dir).env("LD_LIBRARY_PATH", &lib_dir).output().unwrap();
             assert!(z.status.success(), "zig run: {}", String::from_utf8_lossy(&z.stderr));
             assert_eq!(String::from_utf8_lossy(&z.stderr), MATHLIB_OUT, "Zig ({backend})");
         } else {
@@ -120,6 +132,19 @@ fn bindings_round_trip() {
     let o = e.voltc(&["bindings", "bad", "--pkg", &format!("bad={}", bad.display()), "--lang", "c"]);
     let err = String::from_utf8_lossy(&o.stderr);
     assert!(!o.status.success() && err.contains("bad_pair") && err.contains("(i32, i32)"), "{err}");
+    // owned values only come out, closures only go in
+    for (src, want) in [
+        ("export struct thing { n: i32; }\nexport fn bad_in(t: thing) -> i32 { return t.n; }\n", "only comes out of export fns"),
+        ("fn twice(x: i32) -> i32 { return x * 2; }\nexport fn bad_out() -> fn(i32) -> i32 { return twice; }\n", "closures only go into export fns"),
+        // the names voltc lib adds itself
+        ("export struct thing { n: i32; }\nexport fn thing_new() -> thing { return { n: 1 }; }\nexport fn thing_free(t: thing&) -> void {}\n", "makes thing_free itself"),
+        ("namespace __export { fn x() -> void {} }\nexport fn one() -> i32 { return 1; }\n", "namespace __export"),
+    ] {
+        std::fs::write(bad.join("bad.volt"), src).unwrap();
+        let o = e.voltc(&["bindings", "bad", "--pkg", &format!("bad={}", bad.display()), "--lang", "c"]);
+        let err = String::from_utf8_lossy(&o.stderr);
+        assert!(!o.status.success() && err.contains(want), "{err}");
+    }
 }
 
 #[test]
