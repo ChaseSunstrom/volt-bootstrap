@@ -322,12 +322,29 @@ fn bindings_round_trip() {
     // bolt builds them too: [lib] kind and bindings
     let pkg_dir = e.dir.join("pkg");
     std::fs::create_dir_all(pkg_dir.join("lib")).unwrap();
-    std::fs::write(pkg_dir.join("bolt.toml"), "[package]\nname = \"twice\"\nversion = \"0.1.0\"\n\n[lib]\nkind = [\"volt\", \"shared\", \"static\"]\nbindings = [\"c\", \"python\", \"node\", \"ts\"]\n\n[std]\npath = \"STD\"\n".replace("STD", &Path::new(ROOT).join("std").display().to_string())).unwrap();
+    std::fs::write(pkg_dir.join("bolt.toml"), "[package]\nname = \"twice\"\nversion = \"0.1.0\"\n\n[lib]\nkind = [\"volt\", \"shared\", \"static\"]\nbindings = [\"c\", \"python\", \"node\", \"js\", \"ts\", \"lua\", \"ruby\", \"swift\", \"kotlin\"]\n\n[std]\npath = \"STD\"\n".replace("STD", &Path::new(ROOT).join("std").display().to_string())).unwrap();
     std::fs::write(pkg_dir.join("lib/twice.volt"), "export fn twice(x: i32) -> i32 { return x * 2; }\n").unwrap();
-    let b = Command::new(env!("CARGO_BIN_EXE_bolt")).arg("build").current_dir(&pkg_dir).env("VOLTC", &e.voltc).env("BOLT_HOME", e.dir.join("cache")).output().unwrap();
+    // ~/.local/bin on the PATH, where a downloaded ruby goes
+    let path = std::env::var("PATH").unwrap_or_default();
+    let path = std::env::var("HOME").map(|h| format!("{h}/.local/bin:{path}")).unwrap_or(path);
+    let b = Command::new(env!("CARGO_BIN_EXE_bolt")).arg("build").current_dir(&pkg_dir).env("VOLTC", &e.voltc).env("BOLT_HOME", e.dir.join("cache")).env("PATH", &path).output().unwrap();
     assert!(b.status.success(), "bolt build: {}", String::from_utf8_lossy(&b.stderr));
-    for f in ["libtwice.so", "libtwice.a", "deps/libtwice.a", "bindings/twice.h", "bindings/twice.py", "bindings/twice_node.c", "bindings/twice.d.ts"] {
+    for f in ["libtwice.so", "libtwice.a", "deps/libtwice.a", "bindings/twice.h", "bindings/twice.py", "bindings/twice_node.c", "bindings/twice.js", "bindings/twice.d.ts", "bindings/twice_lua.c", "bindings/twice_ruby.c", "bindings/twice.swift", "bindings/Ctwice/module.modulemap", "bindings/twice.kt", "bindings/twice.def"] {
         assert!(pkg_dir.join("target/debug").join(f).is_file(), "bolt didn't make target/debug/{f}");
+    }
+    // the native modules it compiled load as they are, from target/
+    let bindings = pkg_dir.join("target/debug/bindings");
+    if node_include().is_some() {
+        let o = Command::new("node").args(["-e", "console.log(require('./twice.js').twice(21))"]).current_dir(&bindings).output().unwrap();
+        assert_eq!(ok(o, "node (bolt's addon)"), "42\n", "bolt's Node addon");
+    }
+    if lua_include().is_some() {
+        let o = Command::new("lua").args(["-e", "package.cpath = 'lua/?.so'; print(require('twice').twice(21))"]).current_dir(&bindings).output().unwrap();
+        assert_eq!(ok(o, "lua (bolt's module)"), "42\n", "bolt's Lua module");
+    }
+    if let Some((ruby, _)) = ruby_headers() {
+        let o = Command::new(ruby).args(["-I", "ruby", "-e", "require 'twice'; puts Twice.twice(21)"]).current_dir(&bindings).output().unwrap();
+        assert_eq!(ok(o, "ruby (bolt's extension)"), "42\n", "bolt's Ruby extension");
     }
 
     // what bindings can't express is an error that says why

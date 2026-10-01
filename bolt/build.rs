@@ -66,6 +66,48 @@ pub fn show(c: &Command) -> String {
 }
 
 /// runs cmd (printing it with -v); fails with `what` if it doesn't succeed
+/// the C compiler native modules are built with: $CC, else cc
+fn c_compiler() -> String {
+    std::env::var("CC").ok().filter(|c| !c.trim().is_empty()).unwrap_or_else(|| "cc".into())
+}
+
+/// the include directories a native module for lang (node, lua, ruby) is compiled against; none when
+/// they aren't installed (for Lua, 5.4 or later)
+fn module_includes(lang: &str) -> Option<Vec<String>> {
+    let output = |cmd: &str, args: &[&str]| Command::new(cmd).args(args).output().ok().filter(|o| o.status.success()).map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
+    match lang {
+        "node" => {
+            let own = output("node", &["-p", "require('path').join(process.execPath, '..', '..', 'include', 'node')"]).unwrap_or_default();
+            [own.as_str(), "/usr/include/node", "/usr/local/include/node"].iter().find(|d| !d.is_empty() && Path::new(d).join("node_api.h").is_file()).map(|d| vec![d.to_string()])
+        }
+        "lua" => ["/usr/include", "/usr/include/lua5.5", "/usr/include/lua5.4", "/usr/local/include"].iter().find(|d| lua_version(Path::new(d)).is_some_and(|v| v >= 504)).map(|d| vec![d.to_string()]),
+        "ruby" => {
+            let dirs: Vec<String> = output("ruby", &["-e", "print RbConfig::CONFIG['rubyhdrdir'], ' ', RbConfig::CONFIG['rubyarchhdrdir']"])?.split_whitespace().map(String::from).collect();
+            (dirs.len() == 2 && Path::new(&dirs[0]).join("ruby.h").is_file()).then_some(dirs)
+        }
+        _ => None,
+    }
+}
+
+/// LUA_VERSION_NUM from the lua.h in dir (504 for 5.4)
+fn lua_version(dir: &Path) -> Option<u32> {
+    let text = std::fs::read_to_string(dir.join("lua.h")).ok()?;
+    let line = text.lines().find(|l| l.trim_start().starts_with("#define LUA_VERSION_NUM"))?;
+    line.split_whitespace().nth(2)?.parse().ok()
+}
+
+/// write text to path (and its directory) unless it already holds it, so its time only moves when
+/// it changes
+fn write_if_changed(path: &Path, text: &str) -> Result<(), String> {
+    if std::fs::read_to_string(path).is_ok_and(|t| t == text) {
+        return Ok(());
+    }
+    if let Some(d) = path.parent() {
+        std::fs::create_dir_all(d).map_err(|e| format!("can't make {}: {e}", d.display()))?;
+    }
+    std::fs::write(path, text).map_err(|e| format!("can't write {}: {e}", path.display()))
+}
+
 pub fn run_checked(mut cmd: Command, what: &str) -> Result<(), String> {
     crate::verbose(&cmd);
     let st = cmd.status().map_err(|e| format!("can't run {what}: {e}"))?;
@@ -102,6 +144,8 @@ struct Job {
     args: Vec<String>,
     /// the Compiling line
     what: String,
+    /// what runs it: voltc, unless it's another tool (the C compiler, for a native module)
+    program: Option<PathBuf>,
 }
 
 /// what makes `pkg`'s executables: its lib's package closure, and whether dev-dependencies count
@@ -278,7 +322,8 @@ impl Build {
 
     fn run_job(&self, j: Job) -> Result<(), String> {
         let stamp_path = PathBuf::from(format!("{}.cmd", j.out.display()));
-        let stamp = format!("{}\n{}", self.voltc.display(), j.args.join("\n"));
+        let program = j.program.as_ref().unwrap_or(&self.voltc);
+        let stamp = format!("{}\n{}", program.display(), j.args.join("\n"));
         let t = mtime(&j.out);
         let fresh = t.is_some_and(|t| j.inputs.iter().all(|i| mtime(i).is_some_and(|m| m <= t)));
         if fresh && std::fs::read_to_string(&stamp_path).is_ok_and(|s| s == stamp) {
@@ -289,7 +334,7 @@ impl Build {
         if let Some(d) = j.out.parent() {
             std::fs::create_dir_all(d).map_err(|e| format!("can't make {}: {e}", d.display()))?;
         }
-        let mut c = Command::new(&self.voltc);
+        let mut c = Command::new(program);
         c.args(&j.args);
         run_checked(c, &format!("compiling {}", j.what))?;
         std::fs::write(&stamp_path, stamp).map_err(|e| format!("can't write {}: {e}", stamp_path.display()))
@@ -319,7 +364,7 @@ impl Build {
                     let out = self.target.join("deps/libstd.a");
                     let mut args = self.args("lib");
                     args.extend(["std".into(), "-o".into(), out.display().to_string()]);
-                    self.run_job(Job { out: out.clone(), inputs: self.std_inputs.clone(), args, what: format!("std ({})", std.display()) })?;
+                    self.run_job(Job { out: out.clone(), inputs: self.std_inputs.clone(), args, what: format!("std ({})", std.display()), program: None })?;
                     self.std_lib = Some(out);
                 }
             } else {
@@ -353,7 +398,7 @@ impl Build {
                 args.push(m.name.clone());
                 args.extend(self.pkg_args(&closure, None, true));
                 args.extend(["-o".into(), out.display().to_string()]);
-                jobs.push((p, Job { out, inputs, args, what: format!("{} v{} ({})", m.name, m.version.text, m.dir.display()) }));
+                jobs.push((p, Job { out, inputs, args, what: format!("{} v{} ({})", m.name, m.version.text, m.dir.display()), program: None }));
             }
             for (p, j) in &jobs {
                 self.inputs.insert(*p, j.inputs.clone());
@@ -416,13 +461,14 @@ impl Build {
             }
             args.extend(["-o".into(), e.out.display().to_string()]);
             let m = &self.g.pkgs[e.pkg].m;
-            jobs.push(Job { out: e.out.clone(), inputs, args, what: format!("{} v{} ({} \"{}\")", m.name, m.version.text, e.kind.name(), e.name) });
+            jobs.push(Job { out: e.out.clone(), inputs, args, what: format!("{} v{} ({} \"{}\")", m.name, m.version.text, e.kind.name(), e.name), program: None });
         }
         parallel(self.jobs, jobs, |j| self.run_job(j))
     }
 
     /// the libraries for other languages package p asks for ([lib] kind = shared, static) and their
-    /// bindings: target/<profile>/libNAME.so, libNAME.a and bindings/NAME.{h,hpp,rs,zig,py}
+    /// bindings: target/<profile>/libNAME.so, libNAME.a and bindings/NAME.{h,hpp,rs,zig,py,...},
+    /// then what makes the bindings usable as they are (binding_extras)
     pub fn foreign(&self, p: usize) -> Result<(), String> {
         let m = &self.g.pkgs[p].m;
         if m.lib.is_none() || (m.bindings.is_empty() && !m.lib_kinds.iter().any(|k| k != "volt")) {
@@ -443,10 +489,15 @@ impl Build {
             args.push(m.name.clone());
             args.extend(self.pkg_args(&closure, None, false));
             args.extend([format!("--{kind}"), "-o".into(), out.display().to_string()]);
-            jobs.push(Job { out, inputs: inputs.clone(), args, what: format!("{} v{} ({kind} library)", m.name, m.version.text) });
+            jobs.push(Job { out, inputs: inputs.clone(), args, what: format!("{} v{} ({kind} library)", m.name, m.version.text), program: None });
         }
-        for lang in &m.bindings {
-            let file = match lang.as_str() {
+        // Swift and Kotlin/Native read the C header
+        let mut langs: Vec<&str> = m.bindings.iter().map(|l| l.as_str()).collect();
+        if !langs.contains(&"c") && langs.iter().any(|l| *l == "swift" || *l == "kotlin") {
+            langs.push("c");
+        }
+        for lang in langs {
+            let file = match lang {
                 "c" => format!("{}.h", m.name),
                 "cpp" => format!("{}.hpp", m.name),
                 "rust" => format!("{}.rs", m.name),
@@ -470,8 +521,55 @@ impl Build {
             let mut args = self.args("bindings");
             args.push(m.name.clone());
             args.extend(self.pkg_args(&closure, None, false));
-            args.extend(["--lang".into(), lang.clone(), "-o".into(), out.display().to_string()]);
-            jobs.push(Job { out, inputs: inputs.clone(), args, what: format!("{} v{} ({lang} bindings)", m.name, m.version.text) });
+            args.extend(["--lang".into(), lang.to_string(), "-o".into(), out.display().to_string()]);
+            jobs.push(Job { out, inputs: inputs.clone(), args, what: format!("{} v{} ({lang} bindings)", m.name, m.version.text), program: None });
+        }
+        parallel(self.jobs, jobs, |j| self.run_job(j))?;
+        self.binding_extras(p)
+    }
+
+    /// what makes package p's bindings usable as they are: the Node, Lua and Ruby modules, compiled
+    /// against the shared library (bindings/NAME.node, which NAME.js loads; bindings/lua/NAME.so;
+    /// bindings/ruby/NAME.so), the module map Swift imports the C header through
+    /// (bindings/CNAME/module.modulemap) and Kotlin/Native's cinterop definition (bindings/NAME.def).
+    /// A module whose headers aren't installed is a warning: its C file is there to build later
+    fn binding_extras(&self, p: usize) -> Result<(), String> {
+        let m = &self.g.pkgs[p].m;
+        let name = &m.name;
+        let dir = self.target.join("bindings");
+        let mut jobs = Vec::new();
+        for lang in &m.bindings {
+            match lang.as_str() {
+                "swift" => write_if_changed(&dir.join(format!("C{name}/module.modulemap")), &format!("module C{name} {{\n    header \"../{name}.h\"\n    export *\n}}\n"))?,
+                "kotlin" => write_if_changed(&dir.join(format!("{name}.def")), &format!("headers = {name}.h\npackage = c{name}\ncompilerOpts = -I{}\nlinkerOpts = -L{} -l{name}\n", dir.display(), self.target.display()))?,
+                "node" | "lua" | "ruby" => {
+                    if !m.lib_kinds.iter().any(|k| k == "shared") {
+                        crate::warn(format!("{name}: the {lang} module is built against the shared library ([lib] kind \"shared\"): only {name}_{lang}.c is written"));
+                        continue;
+                    }
+                    let Some(includes) = module_includes(lang) else {
+                        crate::warn(format!("{name}: {lang}'s headers aren't installed: {name}_{lang}.c isn't built"));
+                        continue;
+                    };
+                    // the module, and the way back from it to libNAME.so in target/<profile>
+                    let (out, up) = if lang == "node" { (dir.join(format!("{name}.node")), "..") } else { (dir.join(lang).join(format!("{name}.so")), "../..") };
+                    let src = dir.join(format!("{name}_{lang}.c"));
+                    let mut args = vec!["-shared".to_string(), "-fPIC".into()];
+                    for i in includes {
+                        args.extend(["-I".into(), i]);
+                    }
+                    args.extend([src.display().to_string(), "-L".into(), self.target.display().to_string(), format!("-l{name}")]);
+                    if cfg!(target_os = "macos") {
+                        args.extend(["-undefined".into(), "dynamic_lookup".into(), format!("-Wl,-rpath,@loader_path/{up}")]);
+                    } else {
+                        args.push(format!("-Wl,-rpath,$ORIGIN/{up}"));
+                    }
+                    args.extend(["-o".into(), out.display().to_string()]);
+                    let lib = self.target.join(format!("lib{name}.so"));
+                    jobs.push(Job { out, inputs: vec![src, lib], args, what: format!("{} v{} ({lang} module)", m.name, m.version.text), program: Some(c_compiler().into()) });
+                }
+                _ => {}
+            }
         }
         parallel(self.jobs, jobs, |j| self.run_job(j))
     }
@@ -522,7 +620,7 @@ impl Build {
             let mut inputs = vec![f.clone(), self.voltc.clone()];
             inputs.extend(volt_files(&api));
             let args = vec!["build".into(), f.display().to_string(), "--pkg".into(), format!("bolt={}", api.display()), "-o".into(), exe.display().to_string()];
-            self.run_job(Job { out: exe.clone(), inputs, args, what: format!("build file {}", f.display()) })?;
+            self.run_job(Job { out: exe.clone(), inputs, args, what: format!("build file {}", f.display()), program: None })?;
             let mut c = Command::new(&exe);
             c.args(defines).current_dir(&m.dir).env("BOLT_PROFILE", &self.profile.name).env("BOLT_PACKAGE", &m.name);
             for feat in &self.act.features[p] {

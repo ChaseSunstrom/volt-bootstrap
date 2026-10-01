@@ -432,5 +432,11 @@ kind = ["volt", "shared", "static"]   # the usual Volt library, plus libNAME.so 
 bindings = ["c", "python"]            # mathlib.h and mathlib.py next to them
 ```
 
-`bolt build` puts them in `target/<profile>/`. `tests/interop` in the repository has a client for
-each language.
+`bolt build` puts them in `target/<profile>/`, the bindings in `bindings/`. What needs compiling
+against the shared library is compiled there too, so it loads as it is: the Node addon
+(`bindings/NAME.node`, which `NAME.js` loads), the Lua module (`bindings/lua/NAME.so`, for
+`package.cpath`) and the Ruby extension (`bindings/ruby/NAME.so`, for `ruby -I`). bolt warns and
+leaves the C file when a language's headers aren't installed. Swift gets a module map
+(`bindings/CNAME/module.modulemap`, `import CNAME`) and Kotlin/Native a cinterop definition
+(`bindings/NAME.def`). The rest are source files their own toolchains build. `tests/interop` in the
+repository has a client for each language.
