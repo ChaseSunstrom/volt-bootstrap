@@ -1,0 +1,6 @@
+[package]
+name = "volt-build"
+version = "0.1.0"
+edition = "2021"
+description = "Build Volt packages from a Cargo build script and call them from Rust"
+license = "MIT OR Apache-2.0"

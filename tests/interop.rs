@@ -392,6 +392,77 @@ fn volt_calls_rust_and_python() {
     }
 }
 
+/// copies directory from into to (made if needed)
+fn copy_dir(from: &Path, to: &Path) {
+    std::fs::create_dir_all(to).unwrap();
+    for e in std::fs::read_dir(from).unwrap().flatten() {
+        let (src, dst) = (e.path(), to.join(e.file_name()));
+        if src.is_dir() {
+            copy_dir(&src, &dst);
+        } else {
+            std::fs::copy(&src, &dst).unwrap();
+        }
+    }
+}
+
+/// the toolchain a Cargo build outside this repository uses (its rust-toolchain.toml doesn't reach
+/// there): the one running these tests
+fn rust_toolchain() -> String {
+    std::env::var("RUSTUP_TOOLCHAIN").unwrap_or_else(|_| "stable".into())
+}
+
+/// Volt and the systems languages, both ways: a bolt package uses a Rust crate and a Zig file
+/// ([foreign]: bolt builds them and writes their C headers), a Cargo project uses a Volt package
+/// (interop/rust/volt-build) and so does a Zig one (interop/zig/volt.zig)
+#[test]
+fn foreign_libraries() {
+    let e = Env::new("foreign");
+    let Some(zig) = zig() else {
+        eprintln!("zig isn't installed: skipping the Rust and Zig round trips");
+        return;
+    };
+    let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
+    let fx = Path::new(ROOT).join("tests/interop/foreign");
+    copy_dir(&fx.join("rs_geom"), &e.dir.join("rs_geom"));
+    copy_dir(&fx.join("app"), &e.dir.join("app"));
+    let app = e.dir.join("app");
+    let toml = std::fs::read_to_string(app.join("bolt.toml")).unwrap() + &format!("\n[std]\npath = \"{}\"\n", Path::new(ROOT).join("std").display());
+    std::fs::write(app.join("bolt.toml"), toml).unwrap();
+    let want = "dist 5 quadrant 4\nscaled 6 -8\nchars 5 apply 42\nclamp 10 0\nsum 10\nwidened -5 15\n";
+    for backend in ["c", "llvm"] {
+        let o = Command::new(env!("CARGO_BIN_EXE_bolt")).args(["run", "--backend", backend]).current_dir(&app).env("VOLTC", &e.voltc).env("BOLT_HOME", e.dir.join("cache")).env("ZIG", &zig).env("CARGO", &cargo).env("RUSTUP_TOOLCHAIN", rust_toolchain()).output().unwrap();
+        assert!(o.status.success(), "bolt run ({backend}): {}", String::from_utf8_lossy(&o.stderr));
+        assert_eq!(String::from_utf8_lossy(&o.stdout), want, "Volt uses Rust and Zig ({backend})");
+    }
+    let header = std::fs::read_to_string(app.join("target/debug/foreign/include/rs_geom.h")).unwrap();
+    assert!(header.contains("double rg_dist(Point a, Point b);") && !header.contains("not_for_c"), "{header}");
+
+    // Rust uses Volt: a build script with volt-build, the bindings included as module mathlib
+    let rs = e.dir.join("rsapp");
+    std::fs::create_dir_all(rs.join("src")).unwrap();
+    std::fs::write(rs.join("Cargo.toml"), format!("[package]\nname = \"rsapp\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[build-dependencies]\nvolt-build = {{ path = \"{}\" }}\n", Path::new(ROOT).join("interop/rust/volt-build").display())).unwrap();
+    std::fs::write(rs.join("build.rs"), format!("fn main() {{\n    volt_build::Package::new(\"mathlib\", \"{}\").build();\n}}\n", Path::new(ROOT).join("tests/interop/mathlib/lib").display())).unwrap();
+    std::fs::write(rs.join("src/main.rs"), "include!(concat!(env!(\"OUT_DIR\"), \"/mathlib.rs\"));\nuse mathlib::*;\n\nfn main() {\n    println!(\"add {}\", ml_add(2, 3));\n    println!(\"greet {}\", ml_greet(\"volt\"));\n    println!(\"sqrt {}\", ml_sqrt(-1.0).is_err());\n}\n").unwrap();
+    let o = Command::new(&cargo).args(["run", "-q", "--offline"]).current_dir(&rs).env("VOLTC", &e.voltc).env("VOLT_STD", Path::new(ROOT).join("std")).env("CARGO_TARGET_DIR", rs.join("target")).env("RUSTUP_TOOLCHAIN", rust_toolchain()).output().unwrap();
+    assert_eq!(ok(o, "cargo run (volt-build)"), "add 5\ngreet hello, volt\nsqrt true\n", "Rust uses Volt");
+
+    // Zig uses Volt: build.zig adds the package with volt.zig
+    let zd = e.dir.join("zigapp");
+    std::fs::create_dir_all(zd.join("src")).unwrap();
+    std::fs::copy(Path::new(ROOT).join("interop/zig/volt.zig"), zd.join("volt.zig")).unwrap();
+    std::fs::write(zd.join("build.zig"), format!("const std = @import(\"std\");\nconst volt = @import(\"volt.zig\");\n\npub fn build(b: *std.Build) void {{\n    const exe = b.addExecutable(.{{\n        .name = \"zigapp\",\n        .root_module = b.createModule(.{{\n            .root_source_file = b.path(\"src/main.zig\"),\n            .target = b.standardTargetOptions(.{{}}),\n            .optimize = b.standardOptimizeOption(.{{}}),\n        }}),\n    }});\n    volt.addPackage(b, exe, \"mathlib\", \"{}\");\n    const run = b.addRunArtifact(exe);\n    b.step(\"run\", \"run it\").dependOn(&run.step);\n}}\n", Path::new(ROOT).join("tests/interop/mathlib/lib").display())).unwrap();
+    std::fs::write(zd.join("src/main.zig"), "const std = @import(\"std\");\nconst mathlib = @import(\"mathlib\");\n\npub fn main() void {\n    std::debug.print(\"add {d}\\n\", .{mathlib.ml_add(2, 3)});\n}\n".replace("std::debug", "std.debug")).unwrap();
+    // on Linux, Zig's own glibc start files (newer system ones can have sections its linker doesn't read)
+    let mut z = Command::new(&zig);
+    z.args(["build", "run"]).current_dir(&zd).env("VOLTC", &e.voltc).env("VOLT_STD", Path::new(ROOT).join("std"));
+    if cfg!(target_os = "linux") {
+        z.arg(format!("-Dtarget={}-linux-gnu", std::env::consts::ARCH));
+    }
+    let o = z.output().unwrap();
+    assert!(o.status.success(), "zig build run: {}", String::from_utf8_lossy(&o.stderr));
+    assert_eq!(String::from_utf8_lossy(&o.stderr), "add 5\n", "Zig uses Volt");
+}
+
 #[test]
 fn cpp_import() {
     let e = Env::new("cpp");

@@ -2,7 +2,7 @@
 // executables with `voltc build`, each only when its inputs or its command changed, and independent
 // ones in parallel. Also build files (Volt programs whose printed directives add sources, C inputs,
 // executables and named steps), and running tests and benchmarks.
-use crate::manifest::{self, Kind, Profile, StdChoice, Target};
+use crate::manifest::{self, ForeignKind, Kind, Profile, StdChoice, Target};
 use crate::resolve::{self, Active, Graph, Lock, Want};
 use crate::{Opts, fail, status};
 use std::collections::{BTreeMap, HashMap};
@@ -66,6 +66,29 @@ pub fn show(c: &Command) -> String {
 }
 
 /// runs cmd (printing it with -v); fails with `what` if it doesn't succeed
+/// a Cargo crate's library name: [lib] name, else the package's name with - as _
+fn crate_lib_name(dir: &Path) -> Result<String, String> {
+    let path = dir.join("Cargo.toml");
+    let text = std::fs::read_to_string(&path).map_err(|e| format!("can't read {}: {e}", path.display()))?;
+    let t = crate::toml::parse(&text).map_err(|e| format!("{}: {e}", path.display()))?;
+    let get = |table: &str, key: &str| t.get(table).and_then(|v| v.as_table()).and_then(|v| v.get(key)).and_then(|v| v.as_str()).map(String::from);
+    let name = get("lib", "name").or_else(|| get("package", "name")).ok_or(format!("{} has no [package] name", path.display()))?;
+    Ok(name.replace('-', "_"))
+}
+
+/// every .zig file under dir
+fn zig_files(dir: &Path, out: &mut Vec<PathBuf>) {
+    let Ok(rd) = std::fs::read_dir(dir) else { return };
+    for e in rd.flatten() {
+        let p = e.path();
+        if p.is_dir() {
+            zig_files(&p, out);
+        } else if p.extension().is_some_and(|x| x == "zig") {
+            out.push(p);
+        }
+    }
+}
+
 /// the C compiler native modules are built with: $CC, else cc
 fn c_compiler() -> String {
     std::env::var("CC").ok().filter(|c| !c.trim().is_empty()).unwrap_or_else(|| "cc".into())
@@ -182,6 +205,8 @@ pub struct Build {
     libs: HashMap<usize, PathBuf>,
     std_inputs: Vec<PathBuf>,
     inputs: HashMap<usize, Vec<PathBuf>>,
+    /// each package's [foreign] libraries, once built: the C compiler flags that use them
+    foreign_cc: HashMap<usize, Vec<String>>,
     _lock: std::fs::File,
 }
 
@@ -268,6 +293,7 @@ impl Build {
             libs: HashMap::new(),
             std_inputs: Vec::new(),
             inputs: HashMap::new(),
+            foreign_cc: HashMap::new(),
             _lock: target_lock,
         }
     }
@@ -384,6 +410,10 @@ impl Build {
         }
         for (_, ps) in levels {
             let mut jobs = Vec::new();
+            let mut includes = HashMap::new();
+            for &p in &ps {
+                includes.insert(p, self.foreign_flags(p)?.into_iter().filter(|f| f.starts_with("-I")).collect::<Vec<_>>());
+            }
             for &p in &ps {
                 let m = &self.g.pkgs[p].m;
                 let out = self.target.join(format!("deps/lib{}.a", m.name));
@@ -397,6 +427,9 @@ impl Build {
                 let mut args = self.args("lib");
                 args.push(m.name.clone());
                 args.extend(self.pkg_args(&closure, None, true));
+                for f in &includes[&p] {
+                    args.extend(["--cc".into(), f.clone()]);
+                }
                 args.extend(["-o".into(), out.display().to_string()]);
                 jobs.push((p, Job { out, inputs, args, what: format!("{} v{} ({})", m.name, m.version.text, m.dir.display()), program: None }));
             }
@@ -429,6 +462,10 @@ impl Build {
             need.extend(self.closure(e.pkg, e.kind != Kind::Bin));
         }
         self.libraries(&need)?;
+        let mut foreign: HashMap<usize, Vec<String>> = HashMap::new();
+        for &p in &need {
+            foreign.insert(p, self.foreign_flags(p)?);
+        }
         let none = Plan::default();
         let mut jobs = Vec::new();
         for e in exes {
@@ -453,7 +490,8 @@ impl Build {
             }
             args.extend(files.iter().map(|f| f.display().to_string()));
             args.extend(self.pkg_args(&closure, Some(e.pkg), true));
-            for a in self.profile.cc_flags.iter().chain(&plan.cc) {
+            let uses: Vec<String> = closure.iter().flat_map(|p| foreign.get(p).cloned().unwrap_or_default()).collect();
+            for a in self.profile.cc_flags.iter().chain(&plan.cc).chain(&uses) {
                 args.extend(["--cc".into(), a.clone()]);
                 if Path::new(a).is_file() {
                     inputs.push(a.into());
@@ -464,6 +502,74 @@ impl Build {
             jobs.push(Job { out: e.out.clone(), inputs, args, what: format!("{} v{} ({} \"{}\")", m.name, m.version.text, e.kind.name(), e.name), program: None });
         }
         parallel(self.jobs, jobs, |j| self.run_job(j))
+    }
+
+    /// package p's [foreign] libraries, built (cargo for a Rust crate, zig build-lib for a Zig file)
+    /// into target/<profile>/foreign with their headers written to foreign/include: the C compiler
+    /// flags that find the headers and link the libraries (and what they need)
+    fn foreign_flags(&mut self, p: usize) -> Result<Vec<String>, String> {
+        if let Some(f) = self.foreign_cc.get(&p) {
+            return Ok(f.clone());
+        }
+        let m = &self.g.pkgs[p].m;
+        let mut flags = Vec::new();
+        if !m.foreign.is_empty() {
+            let base = self.target.join("foreign");
+            let include = base.join("include");
+            flags.push(format!("-I{}", include.display()));
+            let mut needs: Vec<String> = Vec::new();
+            for f in &m.foreign {
+                let header = include.join(format!("{}.h", f.name));
+                match &f.kind {
+                    ForeignKind::Rust(dir) => {
+                        write_if_changed(&header, &crate::foreign::rust_header(dir, &f.name))?;
+                        status("Compiling", format!("{} (Rust, {})", f.name, dir.display()));
+                        // cargo builds it as a static library (only what changed)
+                        let mut c = Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()));
+                        c.args(["rustc", "--lib", "--crate-type", "staticlib", "--manifest-path"]).arg(dir.join("Cargo.toml")).arg("--target-dir").arg(base.join("cargo"));
+                        if self.profile.optimize {
+                            c.arg("--release");
+                        }
+                        c.args(["--", "--print", "native-static-libs"]);
+                        crate::verbose(&c);
+                        let o = c.output().map_err(|e| format!("can't run cargo for {}: {e}", f.name))?;
+                        let err = String::from_utf8_lossy(&o.stderr);
+                        if !o.status.success() {
+                            return Err(format!("cargo couldn't build {} ({}):\n{err}", f.name, dir.display()));
+                        }
+                        // the system libraries the Rust library needs, as rustc says
+                        for line in err.lines() {
+                            if let Some(libs) = line.split("native-static-libs:").nth(1) {
+                                for l in libs.split_whitespace() {
+                                    if !needs.iter().any(|x| x == l) {
+                                        needs.push(l.to_string());
+                                    }
+                                }
+                            }
+                        }
+                        let lib = base.join("cargo").join(if self.profile.optimize { "release" } else { "debug" }).join(format!("lib{}.a", crate_lib_name(dir)?));
+                        flags.push(lib.display().to_string());
+                    }
+                    ForeignKind::Zig(file) => {
+                        write_if_changed(&header, &crate::foreign::zig_header(file, &f.name))?;
+                        // rebuilt when a .zig file next to it changes; compiler_rt goes in with it
+                        let out = base.join(format!("lib{}.a", f.name));
+                        let mut inputs = Vec::new();
+                        if let Some(d) = file.parent() {
+                            zig_files(d, &mut inputs);
+                        }
+                        let mode = if self.profile.optimize { "ReleaseSafe" } else { "Debug" };
+                        let args = vec!["build-lib".to_string(), file.display().to_string(), "-O".into(), mode.into(), "-fPIC".into(), "-fcompiler-rt".into(), format!("-femit-bin={}", out.display())];
+                        let zig = PathBuf::from(std::env::var("ZIG").unwrap_or_else(|_| "zig".into()));
+                        self.run_job(Job { out: out.clone(), inputs, args, what: format!("{} (Zig, {})", f.name, file.display()), program: Some(zig) })?;
+                        flags.push(out.display().to_string());
+                    }
+                }
+            }
+            flags.extend(needs);
+        }
+        self.foreign_cc.insert(p, flags.clone());
+        Ok(flags)
     }
 
     /// the libraries for other languages package p asks for ([lib] kind = shared, static) and their

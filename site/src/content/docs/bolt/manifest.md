@@ -53,6 +53,10 @@ path = "../mystd"            # or none = true for no std; prebuilt = false to sk
 [build]
 files = ["build.volt"]       # build files, run before building
 
+[foreign]                    # libraries in other languages: bolt builds them and writes NAME.h
+geom = { rust = "../geom" }  # a Cargo crate's directory
+fastmath = { zig = "fastmath.zig" }
+
 [workspace]                  # makes this a workspace root
 members = ["crates/*"]
 ```
@@ -128,6 +132,13 @@ release). In a workspace, only the root's profiles count.
 ## [build]
 
 `files` lists [build files](/volt-bootstrap/bolt/build-files/), run before building.
+
+## [foreign]
+
+Each key names a library in another language, `{ rust = "crate dir" }` or `{ zig = "file.zig" }`.
+bolt builds it into a static library, writes its C API to `NAME.h` and links it into the package's
+programs, and the code imports it with `use { "NAME.h" } as NAME;`. See
+[Rust and Zig](/volt-bootstrap/interop/rust-and-zig/).
 
 ## [workspace]
 

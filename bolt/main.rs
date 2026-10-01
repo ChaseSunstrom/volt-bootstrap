@@ -5,6 +5,7 @@
 // runs, tests, benchmarks and installs executables.
 mod build;
 mod commands;
+mod foreign;
 mod manifest;
 mod resolve;
 mod toml;

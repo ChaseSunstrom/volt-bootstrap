@@ -2,7 +2,7 @@
 title: Other languages
 description: Calling Volt from C, C++, Rust, Zig and Python, and calling them from Volt.
 sidebar:
-  order: 3
+  order: 4
 ---
 
 Everything meets at the C ABI.
@@ -11,9 +11,10 @@ Everything meets at the C ABI.
 
 - **C**: import the header, see [C](/volt-bootstrap/interop/c/).
 - **C++**: `use cpp`, see [C++](/volt-bootstrap/interop/cpp/).
-- **Rust**: declare a `#[no_mangle] pub extern "C" fn` with `extern "C" fn` and link the Rust static
-  or shared library with `--cc`.
-- **Zig**: the same, with Zig's `export fn`.
+- **Rust** and **Zig**: list the crate or the file under `[foreign]` in `bolt.toml`, see
+  [Rust and Zig](/volt-bootstrap/interop/rust-and-zig/). Without bolt, declare a
+  `#[no_mangle] pub extern "C" fn` (or a Zig `export fn`) with `extern "C" fn` and link the library
+  with `--cc`.
 - **Python**: embed it like any C library: `use { "Python.h" } as py;` with the flags from
   `python3-config --includes` and `--ldflags --embed` passed through `--cc`.
 
@@ -39,6 +40,9 @@ voltc bindings mathlib --pkg mathlib=lib --lang rust   > mathlib.rs
 voltc bindings mathlib --pkg mathlib=lib --lang zig    > mathlib.zig
 voltc bindings mathlib --pkg mathlib=lib --lang python > mathlib.py
 ```
+
+Cargo and Zig projects can have their build do this, see
+[They use Volt](/volt-bootstrap/interop/rust-and-zig/#they-use-volt).
 
 A shared or static library built this way is self-contained: the package, what it uses from std,
 and the runtime. A program that links the static one also links `-lm -lpthread`. The runtime has

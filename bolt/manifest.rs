@@ -182,6 +182,22 @@ pub struct Manifest {
     pub std_prebuilt: bool,
     pub build_files: Vec<PathBuf>,
     pub default_run: Option<String>,
+    /// [foreign]: libraries in other languages the package uses, in name order
+    pub foreign: Vec<Foreign>,
+}
+
+/// a library in another language ([foreign] NAME = { rust = "dir" } or { zig = "file.zig" }): bolt
+/// builds it into a static library and writes NAME.h, its C API, which the package's code imports
+pub struct Foreign {
+    pub name: String,
+    pub kind: ForeignKind,
+}
+
+pub enum ForeignKind {
+    /// a Cargo crate's directory
+    Rust(PathBuf),
+    /// a Zig file
+    Zig(PathBuf),
 }
 
 impl Manifest {
@@ -265,7 +281,7 @@ pub fn load(dir: &Path) -> Result<Manifest, String> {
 }
 
 pub fn parse(dir: &Path, t: &Table) -> Result<File, String> {
-    only(t, "bolt.toml", &["package", "lib", "bin", "example", "test", "bench", "dependencies", "dev-dependencies", "features", "std", "build", "workspace", "profile"])?;
+    only(t, "bolt.toml", &["package", "lib", "bin", "example", "test", "bench", "dependencies", "dev-dependencies", "features", "std", "build", "workspace", "profile", "foreign"])?;
     let workspace = match t.get("workspace") {
         Some(w) => {
             let w = w.as_table().ok_or("[workspace] should be a table")?;
@@ -422,7 +438,25 @@ fn package(dir: &Path, t: &Table) -> Result<Manifest, String> {
     }
     let default_run = get_str(pkg, "default-run", "package")?;
     let description = get_str(pkg, "description", "package")?;
-    Ok(Manifest { dir: dir.to_path_buf(), name, version, description, lib, lib_kinds, bindings, targets, deps, features, std, std_prebuilt, build_files, default_run })
+    let mut foreign = Vec::new();
+    if let Some(f) = t.get("foreign") {
+        let f = f.as_table().ok_or("[foreign] should be a table")?;
+        for (n, v) in f {
+            if !ident(n) {
+                return Err(format!("[foreign] {n}: the name is its header's (NAME.h), so lowercase letters, digits and _"));
+            }
+            let what = format!("[foreign] {n}");
+            let v = v.as_table().ok_or(format!("{what} should be {{ rust = \"crate dir\" }} or {{ zig = \"file.zig\" }}"))?;
+            only(v, &what, &["rust", "zig"])?;
+            let kind = match (get_str(v, "rust", &what)?, get_str(v, "zig", &what)?) {
+                (Some(p), None) => ForeignKind::Rust(dir.join(p)),
+                (None, Some(p)) => ForeignKind::Zig(dir.join(p)),
+                _ => return Err(format!("{what} needs one of rust = \"crate dir\" or zig = \"file.zig\"")),
+            };
+            foreign.push(Foreign { name: n.clone(), kind });
+        }
+    }
+    Ok(Manifest { dir: dir.to_path_buf(), name, version, description, lib, lib_kinds, bindings, targets, deps, features, std, std_prebuilt, build_files, default_run, foreign })
 }
 
 fn dependency(dir: &Path, dn: &str, v: &Value, dev: bool) -> Result<Dep, String> {
