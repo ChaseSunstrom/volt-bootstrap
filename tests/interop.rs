@@ -76,6 +76,21 @@ fn local_tool(name: &str, arg: &str) -> Option<PathBuf> {
     local.is_file().then_some(local)
 }
 
+/// the bin directory of a JDK 22 or later (javac on the PATH, or ~/.local/share/jdk/current)
+fn jdk_bin() -> Option<PathBuf> {
+    let new_enough = |javac: &Path| {
+        Command::new(javac).arg("-version").output().ok().filter(|o| o.status.success()).is_some_and(|o| {
+            let v = String::from_utf8_lossy(&o.stdout).to_string() + &String::from_utf8_lossy(&o.stderr);
+            v.split_whitespace().nth(1).and_then(|s| s.split('.').next()?.parse::<u32>().ok()).is_some_and(|major| major >= 22)
+        })
+    };
+    if new_enough(Path::new("javac")) {
+        return Some(PathBuf::new()); // bin.join("javac") is just "javac", found on the PATH
+    }
+    let local = Path::new(&std::env::var_os("HOME")?).join(".local/share/jdk/current/bin");
+    new_enough(&local.join("javac")).then_some(local)
+}
+
 fn zig() -> Option<PathBuf> {
     local_tool("zig", "version")
 }
@@ -94,7 +109,7 @@ fn bindings_round_trip() {
         ok(e.voltc(&["lib", "mathlib", "--pkg", pkg, "--shared", "--backend", backend, "-o", &so]), "voltc lib --shared");
         ok(e.voltc(&["lib", "mathlib", "--pkg", pkg, "--static", "--backend", backend, "-o", &e.path(&format!("{backend}/libmathlib_static.a"))]), "voltc lib --static");
     }
-    for (lang, file) in [("c", "mathlib.h"), ("cpp", "mathlib.hpp"), ("rust", "mathlib.rs"), ("python", "mathlib.py"), ("pyi", "mathlib.pyi"), ("csharp", "mathlib.cs"), ("zig", "mathlib.zig"), ("node", "mathlib_node.c"), ("js", "mathlib.js"), ("ts", "mathlib.d.ts")] {
+    for (lang, file) in [("c", "mathlib.h"), ("cpp", "mathlib.hpp"), ("rust", "mathlib.rs"), ("python", "mathlib.py"), ("pyi", "mathlib.pyi"), ("csharp", "mathlib.cs"), ("java", "mathlib.java"), ("zig", "mathlib.zig"), ("node", "mathlib_node.c"), ("js", "mathlib.js"), ("ts", "mathlib.d.ts")] {
         ok(e.voltc(&["bindings", "mathlib", "--pkg", pkg, "--lang", lang, "-o", &e.path(file)]), &format!("voltc bindings --lang {lang}"));
     }
     // the model the generators share, as JSON for generators of other people's
@@ -175,6 +190,19 @@ fn bindings_round_trip() {
                 assert_eq!(ok(o, "dotnet run"), MATHLIB_OUT, "C# ({backend})");
             }
             None => eprintln!("dotnet isn't installed: skipping the C# client"),
+        }
+        // Java (22 or later): the FFM API, compiled with javac
+        match jdk_bin() {
+            Some(bin) => {
+                let jdir = e.dir.join(format!("java-{backend}"));
+                std::fs::create_dir_all(&jdir).unwrap();
+                std::fs::copy(e.dir.join("mathlib.java"), jdir.join("mathlib.java")).unwrap();
+                std::fs::copy(Path::new(ROOT).join("tests/interop/Client.java"), jdir.join("Client.java")).unwrap();
+                ok(Command::new(bin.join("javac")).args(["-Xlint:all", "-Werror", "-d", "classes", "mathlib.java", "Client.java"]).current_dir(&jdir).output().unwrap(), "javac");
+                let o = Command::new(bin.join("java")).args(["--enable-native-access=ALL-UNNAMED", "-cp", "classes", "Client"]).current_dir(&jdir).env("LD_LIBRARY_PATH", &lib_dir).output().unwrap();
+                assert_eq!(ok(o, "java Client"), MATHLIB_OUT, "Java ({backend})");
+            }
+            None => eprintln!("no JDK 22 or later (javac): skipping the Java client"),
         }
         if let Some(zig) = zig() {
             std::fs::copy(Path::new(ROOT).join("tests/interop/client.zig"), e.dir.join("client.zig")).unwrap();

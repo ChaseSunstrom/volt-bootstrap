@@ -22,7 +22,7 @@ required-features = []       # built only when these features are on
 [lib]                        # optional: by default lib/, when it exists
 path = "lib"
 kind = ["volt"]              # also "shared" and "static": self-contained libraries for other languages
-bindings = ["c", "python"]   # for other languages: c, cpp, rust, zig, python, pyi, csharp, node, js, ts, json
+bindings = ["c", "python"]   # for other languages: c, cpp, rust, zig, python, pyi, csharp, java, node, js, ts, json
 
 [[example]]                  # also [[test]] and [[bench]]: name, path, required-features
 name = "demo"
@@ -82,7 +82,7 @@ members = ["crates/*"]
 | --- | --- |
 | `path` | the library's directory (default `lib`) |
 | `kind` | `"volt"` (the default: a `.a` for Volt programs), `"shared"`, `"static"` |
-| `bindings` | languages to write bindings for: `c`, `cpp`, `rust`, `zig`, `python`, `pyi` (its type stubs), `csharp`, `node` (a Node-API addon's C, `NAME_node.c`), `js` (its loader), `ts` (its types, `NAME.d.ts`), `json` (the model) |
+| `bindings` | languages to write bindings for: `c`, `cpp`, `rust`, `zig`, `python`, `pyi` (its type stubs), `csharp`, `java`, `node` (a Node-API addon's C, `NAME_node.c`), `js` (its loader), `ts` (its types, `NAME.d.ts`), `json` (the model) |
 
 See [Other languages](/volt-bootstrap/interop/other-languages/).
 

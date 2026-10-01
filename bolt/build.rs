@@ -453,6 +453,7 @@ impl Build {
                 "python" => format!("{}.py", m.name),
                 "pyi" => format!("{}.pyi", m.name),
                 "csharp" => format!("{}.cs", m.name),
+                "java" => format!("{}.java", m.name),
                 "node" => format!("{}_node.c", m.name),
                 "js" => format!("{}.js", m.name),
                 "ts" => format!("{}.d.ts", m.name),

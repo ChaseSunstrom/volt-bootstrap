@@ -112,13 +112,13 @@ export fn each(xs: i32[..], f: fn(i32) -> void) -> void {
 
 Each language gets these in its own style:
 
-| | C | C++ | Rust | Python | Zig | JavaScript | C# |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| errors | a struct of the code and the value | throws `error` | `Result<T, Error>` | raises a class per error set, all deriving from `Error` | `Error!T` | throws an `Error` whose `code` is the name | throws a `VoltException` subclass per error set |
-| owned text | `volt_text`, freed with `volt_text_free` | `std::string` | `String` | `str` | `VoltText`, with `bytes()` and `deinit()` | a string | `string` |
-| slices, optionals | structs | from vectors and arrays; `std::optional` | `&mut [T]`, `Option` | lists, `None` | `[]T`, `?T` | arrays, `null` | `Span<T>`, `T?` |
-| an export struct | a pointer, and `NAME_free` | a class that frees itself | a type that frees itself when dropped | a class with `close()` and `with` | a type with `deinit()` | a class with `close()` and `Symbol.dispose` | an `IDisposable` class over a `SafeHandle` |
-| callbacks | a function and a `void *` | `std::function` | `&mut dyn FnMut` | any callable | a context and a function | any function | `Action` or `Func` |
+| | C | C++ | Rust | Python | Zig | JavaScript | C# | Java |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| errors | a struct of the code and the value | throws `error` | `Result<T, Error>` | raises a class per error set, all deriving from `Error` | `Error!T` | throws an `Error` whose `code` is the name | throws a `VoltException` subclass per error set | throws a `VoltException` subclass per error set |
+| owned text | `volt_text`, freed with `volt_text_free` | `std::string` | `String` | `str` | `VoltText`, with `bytes()` and `deinit()` | a string | `string` | `String` |
+| slices, optionals | structs | from vectors and arrays; `std::optional` | `&mut [T]`, `Option` | lists, `None` | `[]T`, `?T` | arrays, `null` | `Span<T>`, `T?` | arrays, `null` |
+| an export struct | a pointer, and `NAME_free` | a class that frees itself | a type that frees itself when dropped | a class with `close()` and `with` | a type with `deinit()` | a class with `close()` and `Symbol.dispose` | an `IDisposable` class over a `SafeHandle` | an `AutoCloseable` class, freed by a `Cleaner` if not closed |
+| callbacks | a function and a `void *` | `std::function` | `&mut dyn FnMut` | any callable | a context and a function | any function | `Action` or `Func` | a functional interface |
 
 ### JavaScript and TypeScript
 
@@ -179,9 +179,31 @@ try {
 }
 ```
 
+### Java
+
+`--lang java` writes one class, named after the package, for Java 22 or later. It calls the library
+through the FFM API (`java.lang.foreign`), so there is no JNI and no C to compile. It loads
+`libNAME.so` (or the library `-Dvolt.NAME.lib` names). Run with `--enable-native-access=ALL-UNNAMED`.
+
+```java
+System.out.println(mathlib.ml_greet("volt"));           // hello, volt
+try (var c = new mathlib.counter("clicks")) {           // AutoCloseable
+    c.add(2);
+}
+try {
+    mathlib.ml_sqrt(-1);
+} catch (mathlib.math_error e) {
+    System.out.println(e.name);                         // NEGATIVE
+}
+```
+
+Structs are mutable classes: what Volt changes through a `T&` comes back to the object. Unsigned
+integers use the Java type of the same size, as `int` for `u32`.
+
 Every binding also has the plain C functions: in C++ they're in namespace `raw`, in Rust in module
-`raw`, in Zig in struct `raw`, and in C# in class `Native`. `--lang` is one of `c`, `cpp`, `rust`,
-`zig`, `python`, `pyi`, `csharp`, `node`, `js`, `ts` or `json`. The Python bindings use `ctypes` and load the shared library. `--lang pyi`
+`raw`, in Zig in struct `raw`, in C# in class `Native`, and in Java as the `H_NAME` method handles.
+`--lang` is one of `c`, `cpp`, `rust`, `zig`, `python`, `pyi`, `csharp`, `java`, `node`, `js`, `ts` or
+`json`. The Python bindings use `ctypes` and load the shared library. `--lang pyi`
 writes their type stubs, for editors and type checkers such as mypy.
 
 ### The model, for generators of your own

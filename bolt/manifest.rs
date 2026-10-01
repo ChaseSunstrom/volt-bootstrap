@@ -309,8 +309,8 @@ fn package(dir: &Path, t: &Table) -> Result<Manifest, String> {
                 return Err(format!("[lib] kind '{k}' isn't volt, shared or static"));
             }
             bindings = get_strs(l, "bindings", "lib")?;
-            if let Some(b) = bindings.iter().find(|b| !["c", "cpp", "rust", "zig", "python", "pyi", "csharp", "node", "js", "ts", "json"].contains(&b.as_str())) {
-                return Err(format!("[lib] bindings '{b}' isn't c, cpp, rust, zig, python, pyi, csharp, node, js, ts or json"));
+            if let Some(b) = bindings.iter().find(|b| !["c", "cpp", "rust", "zig", "python", "pyi", "csharp", "java", "node", "js", "ts", "json"].contains(&b.as_str())) {
+                return Err(format!("[lib] bindings '{b}' isn't c, cpp, rust, zig, python, pyi, csharp, java, node, js, ts or json"));
             }
             Some(dir.join(get_str(l, "path", "lib")?.unwrap_or("lib".into())))
         }
