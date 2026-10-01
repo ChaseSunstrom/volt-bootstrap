@@ -379,11 +379,15 @@ fn volt_calls_rust_and_python() {
 fn cpp_import() {
     let e = Env::new("cpp");
     let want = "make 2 3\narea 6\nfields 5 6\nscaled 60 15\ncount 7 name rect\nmake 4 4\nkind 4 1\ntotal 46\ncopy 4 4\ncopied 16\ndrop 4 4\ndrop 4 4\ndrop 5 6\nadd 3 3.5\nbiggest 9 2.5\nbox 6\nenum 4 1\nsize 16\n";
+    let want_std = "hello, volt 3\nfirst lorem\nsum 6.5\nrange 4 9\nvec 4 -6 6\neq true 10\nnode 4\ntaken 40\nshared 7 2\nbuffer abcd 4\nparse 42\nbad -1 trailing characters in '4x'\nerror EXCEPTION not positive\n";
     for backend in ["c", "llvm"] {
         assert_eq!(ok(e.voltc(&["run", "cpp_import.volt", "--backend", backend, "--cc", "-D", "--cc", "SHAPES_FLAG"]), "voltc run cpp_import.volt"), want, "C++ import ({backend})");
         // an exception stops the program with its message
         let o = e.voltc(&["run", "cpp_throws.volt", "--backend", backend, "--cc", "-DSHAPES_FLAG"]);
         let err = String::from_utf8_lossy(&o.stderr);
         assert!(o.status.code() == Some(101) && err.contains("C++ exception") && err.contains("negative"), "C++ exception ({backend}): {err}");
+        // the standard library in signatures (strings, vectors, smart pointers), operators, T&&, and
+        // exceptions caught by try_ forms
+        assert_eq!(ok(e.voltc(&["run", "cpp_std.volt", "--backend", backend]), "voltc run cpp_std.volt"), want_std, "C++ std types ({backend})");
     }
 }

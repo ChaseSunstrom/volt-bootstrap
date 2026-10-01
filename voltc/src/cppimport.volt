@@ -9,10 +9,15 @@
 //   free functions  -> fns; function and class templates -> generic fns and structs
 //   enums           -> enums with the same tag type and values (an unscoped one's names are also
 //                      constants next to it)
+//   operators       -> op_ methods and fns (operator+ is op_add, operator[] op_index...)
+//   std::string, std::string_view -> str in, std::string (a copy) or str out; std::vector<T> ->
+//                      T[..] in, std::vec<T> (a copy) out; std::unique_ptr, std::shared_ptr ->
+//                      stdcxx::unique_ptr<T>, stdcxx::shared_ptr<T>; T&& -> T, moved in
 // Every body is one @cpp<R>("C++ expression", args) (calls.volt): the checker turns each call it
 // instantiates into an extern "C" wrapper function in a C++ file compiled with $CXX and linked in,
-// so both backends call C++ the same way. A C++ exception that reaches one stops the program.
-// What doesn't map (rvalue references, std types, operators...) is left out with a comment.
+// so both backends call C++ the same way. A C++ exception that reaches one stops the program; a
+// function that can throw also gets a try_ form that returns cpp_error::EXCEPTION instead (its
+// message: last_exception()). What doesn't map is left out with a comment.
 use { "clang-c/Index.h" } as clang;
 use std::mem;
 
@@ -29,6 +34,11 @@ struct cpp_gen {
     // default argument can give the same one: it's written once)
     scope: std::string = {};
     written: std::map<str, bool> = {};
+    // the std class templates a signature used, which stdcxx declares
+    unique: bool = false;
+    shared: bool = false;
+    // a try_ form was written (so cpp_error and last_exception are needed)
+    tries: bool = false;
 }
 
 // ---------- names ----------
@@ -62,6 +72,40 @@ fn cpp_qual(c: clang::CXCursor) -> std::string {
         out.append(parts.at(i).as_str());
     }
     return move out;
+}
+
+// the name of the standard library class template t is an instance of (basic_string, vector,
+// unique_ptr...; inline namespaces like std::__cxx11 skipped), or none
+fn std_template(t: clang::CXType) -> std::string? {
+    val ct = clang::clang_getCanonicalType(t);
+    if (ct.kind != clang::CXType_Record) {
+        return null;
+    }
+    val tmpl = clang::clang_getSpecializedCursorTemplate(clang::clang_getTypeDeclaration(ct));
+    if (clang::clang_Cursor_isNull(tmpl) != 0) {
+        return null;
+    }
+    var ns = clang::clang_getCursorSemanticParent(tmpl);
+    while (clang::clang_getCursorKind(ns) == clang::CXCursor_Namespace && clang::clang_Cursor_isInlineNamespace(ns) != 0) {
+        ns = clang::clang_getCursorSemanticParent(ns);
+    }
+    if (clang::clang_getCursorKind(ns) != clang::CXCursor_Namespace || cursor_name(ns).as_str() != "std") {
+        return null;
+    }
+    if (clang::clang_getCursorKind(clang::clang_getCursorSemanticParent(ns)) != clang::CXCursor_TranslationUnit) {
+        return null;
+    }
+    return cursor_name(tmpl);
+}
+
+// is t a std::string or std::string_view (of char)?
+fn char_text(t: clang::CXType, which: str) -> bool {
+    val st = std_template(t) ?? return false;
+    if (st.as_str() != which) {
+        return false;
+    }
+    val k = clang::clang_getCanonicalType(clang::clang_Type_getTemplateArgumentAsType(clang::clang_getCanonicalType(t), 0)).kind;
+    return k == clang::CXType_Char_S || k == clang::CXType_Char_U;
 }
 
 // a C++ name Volt can declare (keywords get a _)
@@ -160,6 +204,22 @@ attach fn vtype(this: cpp_gen&, t: clang::CXType, tparams: std::vec<str>&) -> st
 
 // an imported class (geo::Shape), or an instance of an imported class template (geo::Box<i32>)
 attach fn record(this: cpp_gen&, ct: clang::CXType, tparams: std::vec<str>&) -> std::string? {
+    val st = std_template(ct);
+    if (st) {
+        // std::unique_ptr<T> (its default deleter: one pointer) and std::shared_ptr<T>
+        val name = st.as_str();
+        val size = clang::clang_Type_getSizeOf(ct);
+        if ((name == "unique_ptr" && size == 8) || (name == "shared_ptr" && size == 16)) {
+            val a = this.vtype(clang::clang_Type_getTemplateArgumentAsType(ct, 0), tparams) ?? return null;
+            if (name == "unique_ptr") {
+                this.unique = true;
+            } else {
+                this.shared = true;
+            }
+            return fmt2("stdcxx::{}<{}>", copy st, move a);
+        }
+        return null;
+    }
     val decl = clang::clang_getTypeDeclaration(ct);
     val q = cpp_qual(decl);
     val c = this.classes.get(q.as_str());
@@ -210,8 +270,45 @@ attach fn param(this: cpp_gen&, t: clang::CXType, name: str, i: usize, tparams: 
         }
     }
     val k = t.kind;
+    // std::string and std::string_view from a str, a std::vector<T> from a T[..] (by value, const& or
+    // &&: a C++ object the wrapper makes)
+    var base = t;
+    var mutable_ref = false;
+    if (k == clang::CXType_LValueReference || k == clang::CXType_RValueReference) {
+        base = clang::clang_getPointeeType(t);
+        mutable_ref = k == clang::CXType_LValueReference && clang::clang_isConstQualifiedType(base) == 0;
+    }
+    if (!mutable_ref) {
+        if (char_text(base, "basic_string")) {
+            return { vty: S("str"), pass: S(name), cpp: fmt2("std::string((const char *){}.ptr, {}.len)", copy slot, copy slot) };
+        }
+        if (char_text(base, "basic_string_view")) {
+            return { vty: S("str"), pass: S(name), cpp: fmt2("std::string_view((const char *){}.ptr, {}.len)", copy slot, copy slot) };
+        }
+        val st = std_template(base);
+        if (st != null && (st ?? S("")).as_str() == "vector") {
+            val ct = clang::clang_getCanonicalType(base);
+            val elem = this.vtype(clang::clang_Type_getTemplateArgumentAsType(ct, 0), tparams) ?? return null;
+            var vec = type_spelling(ct);
+            if (starts_with(vec.as_str(), "const ")) {
+                vec = S(vec.as_str()[6..vec.len()]);
+            }
+            return { vty: fmt("{}[..]", move elem), pass: S(name), cpp: fmt4("{}({}.ptr, {}.ptr + {}.len)", move vec, copy slot, copy slot, copy slot) };
+        }
+    }
     if (k == clang::CXType_RValueReference) {
-        return null;
+        // T&&: Volt hands the value over (a class by its place), C++ moves from it
+        val pt = clang::clang_getPointeeType(t);
+        for (p&) in tparams.items() {
+            if (strip_const(type_spelling(pt).as_str()) == *p) {
+                return { vty: S(*p), pass: fmt("&{}", S(name)), cpp: fmt("std::move({})", move slot) };
+            }
+        }
+        val inner = this.vtype(pt, tparams) ?? return null;
+        if (is_class(pt)) {
+            return { vty: move inner, pass: fmt("&{}", S(name)), cpp: fmt("std::move({})", move slot) };
+        }
+        return { vty: move inner, pass: S(name), cpp: fmt("std::move({})", move slot) };
     }
     if (k == clang::CXType_LValueReference) {
         val pt = clang::clang_getPointeeType(t);
@@ -223,7 +320,8 @@ attach fn param(this: cpp_gen&, t: clang::CXType, name: str, i: usize, tparams: 
     }
     val v = this.vtype(t, tparams) ?? return null;
     if (is_class(t)) {
-        return { vty: move v, pass: fmt("&{}", S(name)), cpp: move slot };
+        // a class by value: C++ moves from the Volt parameter (which still deletes what's left)
+        return { vty: move v, pass: fmt("&{}", S(name)), cpp: fmt("std::move({})", move slot) };
     }
     if (clang::clang_getCanonicalType(t).kind == clang::CXType_Enum) {
         return { vty: move v, pass: S(name), cpp: fmt2("({})({})", cpp_qual(clang::clang_getTypeDeclaration(clang::clang_getCanonicalType(t))), move slot) };
@@ -231,20 +329,104 @@ attach fn param(this: cpp_gen&, t: clang::CXType, name: str, i: usize, tparams: 
     return { vty: move v, pass: S(name), cpp: move slot };
 }
 
+// how a C++ result comes back: as @cpp's value, or as a std::string (std::vector) the wrapper
+// copies out into malloc'd memory, which the Volt fn turns into its own std::string (std::vec) and
+// frees, or as the bytes of a std::string_view
+enum ret_way {
+    PLAIN,
+    STRING,
+    VIEW,
+    VECTOR,
+}
+
+struct cpp_ret {
+    vty: std::string;     // what the Volt fn returns
+    way: ret_way = ret_way::PLAIN;
+    elem: std::string = {}; // VECTOR: the element type
+    object: bool = false;   // a C++ object by value (made in place: a try_ form can't hold one)
+}
+
 // the Volt return type of a C++ one (a reference to a class stays one; to a const number, a copy)
-attach fn result(this: cpp_gen&, t: clang::CXType, tparams: std::vec<str>&) -> std::string? {
+attach fn result(this: cpp_gen&, t: clang::CXType, tparams: std::vec<str>&) -> cpp_ret? {
     if (t.kind == clang::CXType_RValueReference) {
         return null;
     }
+    var base = t;
     if (t.kind == clang::CXType_LValueReference) {
-        val pt = clang::clang_getPointeeType(t);
-        var inner = this.vtype(pt, tparams) ?? return null;
-        if (is_class(pt) || clang::clang_isConstQualifiedType(pt) == 0) {
+        base = clang::clang_getPointeeType(t);
+    }
+    if (t.kind != clang::CXType_LValueReference || clang::clang_isConstQualifiedType(base) != 0) {
+        if (char_text(base, "basic_string")) {
+            return { vty: S("std::string"), way: ret_way::STRING };
+        }
+        if (char_text(base, "basic_string_view")) {
+            return { vty: S("str"), way: ret_way::VIEW };
+        }
+        val st = std_template(base);
+        if (st != null && (st ?? S("")).as_str() == "vector") {
+            val elem = this.vtype(clang::clang_Type_getTemplateArgumentAsType(clang::clang_getCanonicalType(base), 0), tparams) ?? return null;
+            return { vty: fmt("std::vec<{}>", copy elem), way: ret_way::VECTOR, elem: move elem };
+        }
+    }
+    if (t.kind == clang::CXType_LValueReference) {
+        var inner = this.vtype(base, tparams) ?? return null;
+        if (is_class(base) || clang::clang_isConstQualifiedType(base) == 0) {
             inner.push('&');
         }
-        return move inner;
+        return { vty: move inner };
     }
-    return this.vtype(t, tparams);
+    val v = this.vtype(t, tparams) ?? return null;
+    return { vty: move v, object: is_class(t) };
+}
+
+// can the function throw (it isn't noexcept or throw())?
+fn may_throw(c: clang::CXCursor) -> bool {
+    val k = clang::clang_getCursorExceptionSpecificationType(c);
+    return k != clang::CXCursor_ExceptionSpecificationKind_BasicNoexcept && k != clang::CXCursor_ExceptionSpecificationKind_DynamicNone && k != clang::CXCursor_ExceptionSpecificationKind_NoThrow;
+}
+
+// the C++ operator a function or method is (operator+ is op_add), by how many operands it has; none
+// for what has no name here (assignment, conversions, new and delete, ->, comma, postfix ++ and --)
+fn op_name(name: str, operands: usize) -> str? {
+    if (!starts_with(name, "operator")) {
+        return null;
+    }
+    val sym = trim(name[8..name.len]);
+    if (sym == "()") {
+        return "op_call";
+    }
+    if (operands == 1) {
+        val unary: str[7] = { "-", "+", "!", "~", "*", "++", "--" };
+        val names: str[7] = { "op_neg", "op_pos", "op_not", "op_bitnot", "op_deref", "op_inc", "op_dec" };
+        for (i) in 0..7 {
+            if (sym == unary[i]) {
+                return names[i];
+            }
+        }
+        return null;
+    }
+    if (operands != 2) {
+        return null;
+    }
+    val binary: str[29] = { "+", "-", "*", "/", "%", "==", "!=", "<", "<=", ">", ">=", "&", "|", "^", "<<", ">>", "&&", "||", "[]", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "<<=", ">>=" };
+    val names: str[29] = { "op_add", "op_sub", "op_mul", "op_div", "op_rem", "op_eq", "op_ne", "op_lt", "op_le", "op_gt", "op_ge", "op_bitand", "op_bitor", "op_xor", "op_shl", "op_shr", "op_and", "op_or", "op_index", "op_add_assign", "op_sub_assign", "op_mul_assign", "op_div_assign", "op_rem_assign", "op_bitand_assign", "op_bitor_assign", "op_xor_assign", "op_shl_assign", "op_shr_assign" };
+    for (i) in 0..29 {
+        if (sym == binary[i]) {
+            return names[i];
+        }
+    }
+    return null;
+}
+
+// how many parameters a function cursor has
+fn param_count(c: clang::CXCursor) -> usize {
+    var n: usize = 0;
+    for (ch&) in children(c).items() {
+        if (clang::clang_getCursorKind(*ch) == clang::CXCursor_ParmDecl) {
+            n += 1;
+        }
+    }
+    return n;
 }
 
 // ---------- functions ----------
@@ -252,9 +434,10 @@ attach fn result(this: cpp_gen&, t: clang::CXType, tparams: std::vec<str>&) -> s
 // one Volt fn per way to call a C++ function or method: `head` is the Volt signature up to its
 // params (`attach fn area(this: Shape&` or `fn add(`), `call` the C++ expression up to its args
 // (`{0}.area(` or `geo::add(`); `first` is the @cpp index of the first C++ argument; self_arg is
-// what the Volt fn passes first (this), if anything. A default argument adds an overload without it
-attach fn callable(this: cpp_gen&, generics: str, head: str, has_params: bool, fn_cursor: clang::CXCursor, ret: std::string?, call: str, self_arg: str?, extra: str, tparams: std::vec<str>&, what: str) -> void {
-    var r = S("void");
+// what the Volt fn passes first (this), if anything. A default argument adds an overload without
+// it, and one that can throw a try_ form too
+attach fn callable(this: cpp_gen&, generics: str, head: str, has_params: bool, fn_cursor: clang::CXCursor, ret: cpp_ret?, call: str, self_arg: str?, extra: str, tparams: std::vec<str>&, what: str) -> void {
+    var r: cpp_ret = { vty: S("void") };
     if (ret) {
         r = copy ret;
     } else {
@@ -306,21 +489,25 @@ attach fn callable(this: cpp_gen&, generics: str, head: str, has_params: bool, f
         put(&args, move a);
         put(&names, move name);
     }
+    // a try_ form: when it can throw, and its result is something a zeroed local can hold
+    val can_try = may_throw(fn_cursor) && r.way != ret_way::VECTOR && !r.object && !ends_with(r.vty.as_str(), "&") && !ends_with(r.vty.as_str(), "?");
     // every count of trailing default arguments, most first
     var drop: usize = 0;
     while (drop <= optional) {
         val count = args.len - drop;
-        var sig = S(head);
+        var params: std::string = {};
         var call_args: std::string = {};
         var passed: std::string = {};
+        var n_passed: usize = 0;
         if (self_arg) {
             passed.append(self_arg);
+            n_passed = 1;
         }
         for (i) in 0..count {
             if (i > 0 || has_params) {
-                sig.append(", ");
+                params.append(", ");
             }
-            sig.append(fmt2("{}: {}", copy *names.at(i), copy args.at(i).vty).as_str());
+            params.append(fmt2("{}: {}", copy *names.at(i), copy args.at(i).vty).as_str());
             if (i > 0) {
                 call_args.append(", ");
             }
@@ -329,9 +516,8 @@ attach fn callable(this: cpp_gen&, generics: str, head: str, has_params: bool, f
                 passed.append(", ");
             }
             passed.append(args.at(i).pass.as_str());
+            n_passed += 1;
         }
-        sig.append(") -> ");
-        sig.append(r.as_str());
         var key = copy this.scope;
         key.push('|');
         key.append(head);
@@ -344,29 +530,121 @@ attach fn callable(this: cpp_gen&, generics: str, head: str, has_params: bool, f
             continue;
         }
         this.written.put(this.c.intern(move key), true);
-        sig.append(" {");
-        if (generics.len > 0) {
-            this.line(generics);
-        }
-        this.line(sig.as_str());
-        this.depth += 1;
-        var body: std::string = {};
-        if (r.as_str() != "void") {
-            body.append("return ");
-        }
-        body.append(fmt3("@cpp<{}{}>(\"{}", copy r, S(extra), S(call)).as_str());
-        body.append(call_args.as_str());
-        body.append(")\"");
+        // the C++ call, and what @cpp passes it
+        var cpp = S(call);
+        cpp.append(call_args.as_str());
+        cpp.push(')');
+        var tail: std::string = {};
         if (passed.len() > 0) {
-            body.append(", ");
-            body.append(passed.as_str());
+            tail = fmt(", {}", copy passed);
         }
-        body.append(");");
-        this.line(body.as_str());
-        this.depth -= 1;
-        this.line("}");
+        this.fn_text(generics, fmt3("{}{}) -> {}", S(head), copy params, copy r.vty).as_str(), &r, cpp.as_str(), tail.as_str(), extra);
+        if (can_try) {
+            this.try_text(generics, head, params.as_str(), &r, cpp.as_str(), tail.as_str(), n_passed, extra);
+        }
         drop += 1;
     }
+}
+
+// a Volt fn whose body makes the C++ call (sig: its signature up to the result type)
+attach fn fn_text(this: cpp_gen&, generics: str, sig: str, r: cpp_ret&, cpp: str, tail: str, extra: str) -> void {
+    if (generics.len > 0) {
+        this.line(generics);
+    }
+    this.line(fmt("{} {{", S(sig)).as_str());
+    this.depth += 1;
+    match (r.way) {
+        .PLAIN => {
+            var body: std::string = {};
+            if (r.vty.as_str() != "void") {
+                body.append("return ");
+            }
+            body.append(fmt4("@cpp<{}{}>(\"{}\"{});", copy r.vty, S(extra), S(cpp), S(tail)).as_str());
+            this.line(body.as_str());
+        },
+        .VIEW => { this.line(fmt3("return @cpp<str{}>(\"volt_cpp_view({})\"{});", S(extra), S(cpp), S(tail)).as_str()); },
+        .STRING => {
+            this.line(fmt3("val r = @cpp<str{}>(\"volt_cpp_dup({})\"{});", S(extra), S(cpp), S(tail)).as_str());
+            this.text_out("r");
+        },
+        .VECTOR => {
+            this.line(fmt4("val r = @cpp<{}[..]{}>(\"volt_cpp_dup_vec({})\"{});", copy r.elem, S(extra), S(cpp), S(tail)).as_str());
+            this.line(fmt("var out: std::vec<{}> = {{}};", copy r.elem).as_str());
+            this.line("out.extend(r) catch |e| {");
+            this.line("    @panic(\"out of memory\");");
+            this.line("};");
+            this.line("@cpp<void>(\"std::free((void *){0}.ptr)\", r);");
+            this.line("return move out;");
+        },
+    }
+    this.depth -= 1;
+    this.line("}");
+}
+
+// the lines turning text the wrapper copied out (str r, malloc'd) into a std::string, and returning it
+attach fn text_out(this: cpp_gen&, r: str) -> void {
+    this.line(fmt("var out = std::string::from({});", S(r)).as_str());
+    this.line(fmt("@cpp<void>(\"std::free((void *){0}.ptr)\", {});", S(r)).as_str());
+    this.line("return move out;");
+}
+
+// the try_ form of a call: cpp_error::EXCEPTION when it throws (last_exception() says what)
+attach fn try_text(this: cpp_gen&, generics: str, head: str, params: str, r: cpp_ret&, cpp: str, tail: str, n_passed: usize, extra: str) -> void {
+    // `attach fn area(this: Shape&` gives `attach fn try_area(this: Shape&`
+    var h = S(head);
+    var at: usize = 0;
+    if (starts_with(head, "attach fn ")) {
+        at = 10;
+    } else if (starts_with(head, "fn ")) {
+        at = 3;
+    }
+    h = fmt3("{}try_{}", S(head[0..at]), S(head[at..head.len]), S(""));
+    if (generics.len > 0) {
+        this.line(generics);
+    }
+    val rv = r.vty.as_str();
+    var inner = S("void");
+    if (r.way == ret_way::STRING || r.way == ret_way::VIEW) {
+        inner = S("str");
+    } else if (rv != "void") {
+        inner = S(rv);
+    }
+    this.tries = true;
+    this.line(fmt3("{}{}) -> cpp_error!{} {{", move h, S(params), copy r.vty).as_str());
+    this.depth += 1;
+    var lambda: std::string = {};
+    var all_tail = S(tail);
+    if (inner.as_str() == "void") {
+        lambda = S(cpp);
+    } else {
+        this.line(fmt("var r: {};", copy inner).as_str());
+        var conv = S(cpp);
+        if (r.way == ret_way::STRING) {
+            conv = fmt("volt_cpp_dup({})", S(cpp));
+        } else if (r.way == ret_way::VIEW) {
+            conv = fmt("volt_cpp_view({})", S(cpp));
+        }
+        // converted to the out variable's own type (an enum to its tag, say)
+        val slot = fmt("{{{}}}", unum(@cast<u64>(n_passed)));
+        lambda = fmt3("{} = static_cast<std::remove_reference_t<decltype({})>>({})", copy slot, copy slot, move conv);
+        if (all_tail.len() == 0) {
+            all_tail = S(", &r");
+        } else {
+            all_tail.append(", &r");
+        }
+    }
+    this.line(fmt3("if (!@cpp<bool{}>(\"VOLT_CPP_CATCH({})\"{})) {{", S(extra), move lambda, move all_tail).as_str());
+    this.line("    return cpp_error::EXCEPTION;");
+    this.line("}");
+    if (r.way == ret_way::STRING) {
+        this.text_out("r");
+    } else if (inner.as_str() != "void") {
+        this.line("return r;");
+    } else {
+        this.line("return;");
+    }
+    this.depth -= 1;
+    this.line("}");
 }
 
 // the type parameters of a template cursor (none if it has a non-type or template parameter)
@@ -432,9 +710,12 @@ fn str_views(v: std::vec<std::string>&) -> std::vec<str> {
 }
 
 attach fn free_fn(this: cpp_gen&, c: clang::CXCursor, tps: std::vec<std::string>&) -> void {
-    val name = cursor_name(c);
-    if (starts_with(name.as_str(), "operator") || clang::clang_CXXMethod_isDeleted(c) != 0) {
+    var name = cursor_name(c);
+    if (clang::clang_CXXMethod_isDeleted(c) != 0) {
         return;
+    }
+    if (starts_with(name.as_str(), "operator")) {
+        name = S(op_name(name.as_str(), param_count(c)) ?? return);
     }
     val tp = str_views(tps);
     var call = cpp_qual(c);
@@ -444,7 +725,7 @@ attach fn free_fn(this: cpp_gen&, c: clang::CXCursor, tps: std::vec<std::string>
     call.push('(');
     val head = fmt("fn {}(", vname(name.as_str()));
     val ret = this.result(clang::clang_getCursorResultType(c), &tp);
-    this.callable(generics_text(tps).as_str(), head.as_str(), false, c, move ret, call.as_str(), null, extra_types(tps).as_str(), &tp, name.as_str());
+    this.callable(generics_text(tps).as_str(), head.as_str(), false, c, ret, call.as_str(), null, extra_types(tps).as_str(), &tp, name.as_str());
 }
 
 // ---------- classes ----------
@@ -660,7 +941,8 @@ attach fn class(this: cpp_gen&, c: clang::CXCursor, tps: std::vec<std::string>?)
             val head = fmt("attach fn new(static this: {}", copy self_ty);
             var call = copy cpp_self;
             call.push('(');
-            this.callable(gen.as_str(), head.as_str(), true, *ch, copy self_ty, call.as_str(), null, extra.as_str(), &tp, fmt("{}'s constructor", copy q).as_str());
+            val made: cpp_ret = { vty: copy self_ty, object: true };
+            this.callable(gen.as_str(), head.as_str(), true, *ch, made, call.as_str(), null, extra.as_str(), &tp, fmt("{}'s constructor", copy q).as_str());
         }
     }
     if (!any_ctor && !abstract_) {
@@ -692,19 +974,24 @@ attach fn class(this: cpp_gen&, c: clang::CXCursor, tps: std::vec<std::string>?)
             continue;
         }
         val mn = cursor_name(*ch);
+        val is_static = clang::clang_CXXMethod_isStatic(*ch) != 0;
+        var vn_m = vname(mn.as_str());
         if (starts_with(mn.as_str(), "operator")) {
-            continue;
+            if (is_static) {
+                continue;
+            }
+            vn_m = S(op_name(mn.as_str(), param_count(*ch) + 1) ?? continue);
         }
         val ret = this.result(clang::clang_getCursorResultType(*ch), &tp);
         val what = fmt2("{}::{}", copy q, copy mn);
-        if (clang::clang_CXXMethod_isStatic(*ch) != 0) {
-            val head = fmt2("attach fn {}(static this: {}", vname(mn.as_str()), copy self_ty);
+        if (is_static) {
+            val head = fmt2("attach fn {}(static this: {}", copy vn_m, copy self_ty);
             val call = fmt2("{}::{}(", copy cpp_self, copy mn);
-            this.callable(gen.as_str(), head.as_str(), true, *ch, move ret, call.as_str(), null, extra.as_str(), &tp, what.as_str());
+            this.callable(gen.as_str(), head.as_str(), true, *ch, ret, call.as_str(), null, extra.as_str(), &tp, what.as_str());
         } else {
-            val head = fmt2("attach fn {}(this: {}&", vname(mn.as_str()), copy self_ty);
+            val head = fmt2("attach fn {}(this: {}&", copy vn_m, copy self_ty);
             val call = fmt("{0}.{}(", copy mn);
-            this.callable(gen.as_str(), head.as_str(), true, *ch, move ret, call.as_str(), "this", extra.as_str(), &tp, what.as_str());
+            this.callable(gen.as_str(), head.as_str(), true, *ch, ret, call.as_str(), "this", extra.as_str(), &tp, what.as_str());
         }
     }
 }
@@ -811,6 +1098,76 @@ attach fn emit(this: cpp_gen&, c: clang::CXCursor) -> void {
     }
 }
 
+// the declarations the generated code relies on: stdcxx's smart pointers, and what a try_ form
+// returns
+attach fn std_extras(this: cpp_gen&) -> void {
+    if (this.unique || this.shared) {
+        this.line("// the standard library types the headers' signatures use");
+        this.line("namespace stdcxx {");
+        this.depth += 1;
+    }
+    if (this.unique) {
+        this.line("// std::unique_ptr<T>: owns the T a C++ function made; deleting it deletes the T");
+        this.line("<T: type>");
+        this.line("@attributes([@cpp_type(\"std::unique_ptr\")])");
+        this.line("struct unique_ptr {");
+        this.line("    _volt_p: T*;");
+        this.line("}");
+        this.line("<T: type>");
+        this.line("attach fn delete(this: unique_ptr<T>&) -> void {");
+        this.line("    @cpp<void, T>(\"{0}.~unique_ptr()\", this);");
+        this.line("}");
+        this.line("// the T it owns (null when it owns none)");
+        this.line("<T: type>");
+        this.line("attach fn get(this: unique_ptr<T>&) -> T* {");
+        this.line("    return @cpp<T*, T>(\"{0}.get()\", this);");
+        this.line("}");
+    }
+    if (this.shared) {
+        this.line("// std::shared_ptr<T>: one of the owners of a T; copying adds an owner");
+        this.line("<T: type>");
+        this.line("@attributes([@cpp_type(\"std::shared_ptr\")])");
+        this.line("struct shared_ptr {");
+        this.line("    _volt_p: T*;");
+        this.line("    _volt_count: void*;");
+        this.line("}");
+        this.line("<T: type>");
+        this.line("attach fn delete(this: shared_ptr<T>&) -> void {");
+        this.line("    @cpp<void, T>(\"{0}.~shared_ptr()\", this);");
+        this.line("}");
+        this.line("<T: type>");
+        this.line("attach fn copy(this: shared_ptr<T>&) -> shared_ptr<T> {");
+        this.line("    return @cpp<shared_ptr<T>, T>(\"std::shared_ptr<{t0}>({0})\", this);");
+        this.line("}");
+        this.line("<T: type>");
+        this.line("attach fn get(this: shared_ptr<T>&) -> T* {");
+        this.line("    return @cpp<T*, T>(\"{0}.get()\", this);");
+        this.line("}");
+        this.line("// how many owners the T has");
+        this.line("<T: type>");
+        this.line("attach fn use_count(this: shared_ptr<T>&) -> i64 {");
+        this.line("    return @cpp<i64, T>(\"(long long){0}.use_count()\", this);");
+        this.line("}");
+    }
+    if (this.unique || this.shared) {
+        this.depth -= 1;
+        this.line("}");
+    }
+    if (this.tries) {
+        this.line("// what a try_ form returns when the C++ code threw");
+        this.line("error cpp_error {");
+        this.line("    EXCEPTION,");
+        this.line("}");
+        this.line("// what the exception a try_ form caught last (on this thread) said");
+        this.line("fn last_exception() -> std::string {");
+        this.depth += 1;
+        this.line("val r = @cpp<str>(\"volt_cpp_dup(volt_cpp_last)\");");
+        this.text_out("r");
+        this.depth -= 1;
+        this.line("}");
+    }
+}
+
 // ---------- the import ----------
 
 // the directory a source file's local headers are looked for in (none for std's and generated files)
@@ -878,6 +1235,7 @@ attach fn import_cpp(this: checker&, headers: std::vec<std::string>&, alias: str
     g.scan(tu.root(), "");
     g.out.append(fmt("// the Volt side of use cpp {{ ... }} as {} (generated by voltc from the headers)\n", S(alias)).as_str());
     g.emit(tu.root());
+    g.std_extras();
     // it's Volt source like any other: lexed, parsed and declared in namespace `alias`
     var fname = S("<use cpp as ");
     fname.append(alias);
@@ -918,6 +1276,11 @@ attach fn cpp_spell(this: checker&, t: u32) -> std::string? {
             return null;
         },
         .CSTR => { return S("const char *"); },
+        .STR => { return S("volt_str"); },
+        .SLICE(x) => {
+            val e = this.cpp_spell(x) ?? return null;
+            return fmt("volt_slice<{}>", move e);
+        },
         .VOIDPTR => { return S("void *"); },
         .OPT(x) => {
             if (this.t.is_niche(x)) {
@@ -1158,13 +1521,17 @@ attach fn cpp_unit(this: checker&) -> std::string {
         return move out;
     }
     out.append("// generated by voltc: the C++ this program calls (use cpp); each function wraps one call\n");
-    out.append("#include <cstddef>\n#include <cstdint>\n#include <cstdio>\n#include <cstdlib>\n#include <exception>\n#include <new>\n");
+    out.append("#include <algorithm>\n#include <cstddef>\n#include <cstdint>\n#include <cstdio>\n#include <cstdlib>\n#include <cstring>\n#include <exception>\n#include <memory>\n#include <new>\n#include <string>\n#include <string_view>\n#include <type_traits>\n#include <utility>\n#include <vector>\n");
     for (inc&) in this.cpp_includes.items() {
         out.append(*inc);
         out.push('\n');
     }
     out.append("\n// an exception that reaches Volt stops the program, like a panic\n");
-    out.append("[[noreturn]] static void volt_cpp_throw(const char *what) {\n    std::fprintf(stderr, \"panic: C++ exception: %s\\n\", what);\n    std::exit(101);\n}\n\nextern \"C\" {\n\n");
+    out.append("[[noreturn]] static void volt_cpp_throw(const char *what) {\n    std::fprintf(stderr, \"panic: C++ exception: %s\\n\", what);\n    std::exit(101);\n}\n");
+    out.append("\n// Volt's str and T[..]\nstruct volt_str {\n    const unsigned char *ptr;\n    size_t len;\n};\n\ntemplate <class T>\nstruct volt_slice {\n    T *ptr;\n    size_t len;\n};\n");
+    out.append("\n// text copied out of C++, in memory the Volt side frees (std::free); and a view's bytes\nstatic inline volt_str volt_cpp_dup(std::string_view s) {\n    unsigned char *p = (unsigned char *)std::malloc(s.size() ? s.size() : 1);\n    if (!p) {\n        volt_cpp_throw(\"out of memory\");\n    }\n    std::memcpy(p, s.data(), s.size());\n    return {p, s.size()};\n}\n\nstatic inline volt_str volt_cpp_view(std::string_view s) {\n    return {(const unsigned char *)s.data(), s.size()};\n}\n");
+    out.append("\n// a std::vector's elements copied out the same way\ntemplate <class T>\nstatic volt_slice<T> volt_cpp_dup_vec(const std::vector<T> &v) {\n    static_assert(std::is_trivially_copyable<T>::value, \"Volt copies out a std::vector of plain values\");\n    T *p = (T *)std::malloc(sizeof(T) * (v.size() ? v.size() : 1));\n    if (!p) {\n        volt_cpp_throw(\"out of memory\");\n    }\n    std::copy(v.begin(), v.end(), p);\n    return {p, v.size()};\n}\n");
+    out.append("\n// try_ forms: run the call, and keep what an exception says instead of stopping\nstatic thread_local std::string volt_cpp_last;\n\ntemplate <class F>\nstatic bool volt_cpp_catch(F f) {\n    try {\n        f();\n        return true;\n    } catch (const std::exception &e) {\n        volt_cpp_last = e.what();\n    } catch (...) {\n        volt_cpp_last = \"an exception that isn't a std::exception\";\n    }\n    return false;\n}\n\n#define VOLT_CPP_CATCH(...) volt_cpp_catch([&]() { __VA_ARGS__; })\n\nextern \"C\" {\n\n");
     for (w&) in this.cpp_shims.items() {
         out.append(w.as_str());
         out.push('\n');
