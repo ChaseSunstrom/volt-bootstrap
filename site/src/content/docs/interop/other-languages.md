@@ -160,7 +160,8 @@ Here is how values convert:
 
 Every binding also has the plain C functions: in C++ they're in namespace `raw`, in Rust in module
 `raw`, and in Zig in struct `raw`. `--lang` is one of `c`, `cpp`, `rust`, `zig`, `python`, `node`,
-`js`, `ts` or `json`. The Python bindings use `ctypes` and load the shared library.
+`js`, `ts` or `json`. The Python bindings use `ctypes` and load the shared library. `--lang pyi`
+writes their type stubs, for editors and type checkers such as mypy.
 
 ### The model, for generators of your own
 

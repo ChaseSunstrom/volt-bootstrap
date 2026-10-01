@@ -451,6 +451,7 @@ impl Build {
                 "cpp" => format!("{}.hpp", m.name),
                 "rust" => format!("{}.rs", m.name),
                 "python" => format!("{}.py", m.name),
+                "pyi" => format!("{}.pyi", m.name),
                 "node" => format!("{}_node.c", m.name),
                 "js" => format!("{}.js", m.name),
                 "ts" => format!("{}.d.ts", m.name),

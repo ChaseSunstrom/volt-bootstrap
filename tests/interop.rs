@@ -89,7 +89,7 @@ fn bindings_round_trip() {
         ok(e.voltc(&["lib", "mathlib", "--pkg", pkg, "--shared", "--backend", backend, "-o", &so]), "voltc lib --shared");
         ok(e.voltc(&["lib", "mathlib", "--pkg", pkg, "--static", "--backend", backend, "-o", &e.path(&format!("{backend}/libmathlib_static.a"))]), "voltc lib --static");
     }
-    for (lang, file) in [("c", "mathlib.h"), ("cpp", "mathlib.hpp"), ("rust", "mathlib.rs"), ("python", "mathlib.py"), ("zig", "mathlib.zig"), ("node", "mathlib_node.c"), ("js", "mathlib.js"), ("ts", "mathlib.d.ts")] {
+    for (lang, file) in [("c", "mathlib.h"), ("cpp", "mathlib.hpp"), ("rust", "mathlib.rs"), ("python", "mathlib.py"), ("pyi", "mathlib.pyi"), ("zig", "mathlib.zig"), ("node", "mathlib_node.c"), ("js", "mathlib.js"), ("ts", "mathlib.d.ts")] {
         ok(e.voltc(&["bindings", "mathlib", "--pkg", pkg, "--lang", lang, "-o", &e.path(file)]), &format!("voltc bindings --lang {lang}"));
     }
     // the model the generators share, as JSON for generators of other people's
@@ -124,6 +124,13 @@ fn bindings_round_trip() {
         // Python: the module loads libmathlib.so from $VOLT_MATHLIB_LIB, else next to itself
         let py = run(Command::new("python3").arg("client.py").env("PYTHONPATH", e.path("")).env("VOLT_MATHLIB_LIB", format!("{lib_dir}/libmathlib.so")));
         assert_eq!(ok(py, "python3 client.py"), MATHLIB_OUT, "Python ({backend})");
+        // the stubs parse, and mypy (when it's installed) checks the client against them
+        let parse = format!("import ast; ast.parse(open({:?}).read())", e.path("mathlib.pyi"));
+        ok(run(Command::new("python3").args(["-c", &parse])), "parse mathlib.pyi");
+        if Command::new("mypy").arg("--version").output().is_ok_and(|o| o.status.success()) {
+            std::fs::copy(Path::new(ROOT).join("tests/interop/client.py"), e.dir.join("client.py")).unwrap();
+            ok(Command::new("mypy").args(["--strict", "client.py"]).current_dir(&e.dir).output().unwrap(), "mypy --strict client.py");
+        }
         // JavaScript: the Node-API addon, built against node's own headers, then node and bun run the
         // clients (TypeScript by stripping its types; tsc checks them when it's installed)
         match node_include() {

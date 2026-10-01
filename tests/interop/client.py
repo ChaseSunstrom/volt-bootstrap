@@ -23,7 +23,7 @@ except m.Error as e:
 print("sum %g" % m.ml_sum([1, 2, 3.5]))
 ys = [4, 5, 6]
 print("find", m.ml_find(ys, 6), "none" if m.ml_find(ys, 9) is None else "?")
-seen = []
+seen: list[int] = []
 m.ml_each(ys, seen.append)
 print("each", " ".join(map(str, seen)), "=", sum(seen))
 with m.counter("clicks") as c:
