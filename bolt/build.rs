@@ -456,6 +456,7 @@ impl Build {
                 "java" => format!("{}.java", m.name),
                 "go" => format!("{}.go", m.name),
                 "lua" => format!("{}_lua.c", m.name),
+                "dart" => format!("{}.dart", m.name),
                 "node" => format!("{}_node.c", m.name),
                 "js" => format!("{}.js", m.name),
                 "ts" => format!("{}.d.ts", m.name),

@@ -112,13 +112,13 @@ export fn each(xs: i32[..], f: fn(i32) -> void) -> void {
 
 Each language gets these in its own style:
 
-| | C | C++ | Rust | Python | Zig | JavaScript | C# | Java | Go | Lua |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| errors | a struct of the code and the value | throws `error` | `Result<T, Error>` | raises a class per error set, all deriving from `Error` | `Error!T` | throws an `Error` whose `code` is the name | throws a `VoltException` subclass per error set | throws a `VoltException` subclass per error set | `(T, error)`, with an `*Error` value per code for `errors.Is` | raises a table with its `name` and `code` |
-| owned text | `volt_text`, freed with `volt_text_free` | `std::string` | `String` | `str` | `VoltText`, with `bytes()` and `deinit()` | a string | `string` | `String` | `string` | a string |
-| slices, optionals | structs | from vectors and arrays; `std::optional` | `&mut [T]`, `Option` | lists, `None` | `[]T`, `?T` | arrays, `null` | `Span<T>`, `T?` | arrays, `null` | slices; `*T` in, `(T, bool)` out | sequences (written back), `nil` |
-| an export struct | a pointer, and `NAME_free` | a class that frees itself | a type that frees itself when dropped | a class with `close()` and `with` | a type with `deinit()` | a class with `close()` and `Symbol.dispose` | an `IDisposable` class over a `SafeHandle` | an `AutoCloseable` class, freed by a `Cleaner` if not closed | a type with `Close`, and a finalizer | a userdata with `close()`, `<close>` and `__gc` |
-| callbacks | a function and a `void *` | `std::function` | `&mut dyn FnMut` | any callable | a context and a function | any function | `Action` or `Func` | a functional interface | a `func` | any function |
+| | C | C++ | Rust | Python | Zig | JavaScript | C# | Java | Go | Lua | Dart |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| errors | a struct of the code and the value | throws `error` | `Result<T, Error>` | raises a class per error set, all deriving from `Error` | `Error!T` | throws an `Error` whose `code` is the name | throws a `VoltException` subclass per error set | throws a `VoltException` subclass per error set | `(T, error)`, with an `*Error` value per code for `errors.Is` | raises a table with its `name` and `code` | throws a `VoltError` subclass per error set |
+| owned text | `volt_text`, freed with `volt_text_free` | `std::string` | `String` | `str` | `VoltText`, with `bytes()` and `deinit()` | a string | `string` | `String` | `string` | a string | `String` |
+| slices, optionals | structs | from vectors and arrays; `std::optional` | `&mut [T]`, `Option` | lists, `None` | `[]T`, `?T` | arrays, `null` | `Span<T>`, `T?` | arrays, `null` | slices; `*T` in, `(T, bool)` out | sequences (written back), `nil` | `List`s (written back), `null` |
+| an export struct | a pointer, and `NAME_free` | a class that frees itself | a type that frees itself when dropped | a class with `close()` and `with` | a type with `deinit()` | a class with `close()` and `Symbol.dispose` | an `IDisposable` class over a `SafeHandle` | an `AutoCloseable` class, freed by a `Cleaner` if not closed | a type with `Close`, and a finalizer | a userdata with `close()`, `<close>` and `__gc` | a class with `close()`, and a `NativeFinalizer` |
+| callbacks | a function and a `void *` | `std::function` | `&mut dyn FnMut` | any callable | a context and a function | any function | `Action` or `Func` | a functional interface | a `func` | any function | any function |
 
 ### JavaScript and TypeScript
 
@@ -225,6 +225,32 @@ an error set a table of its names. Integers that don't fit the parameter's type 
 as do wrong types. A callback is any function; an error it raises comes out of the Volt call
 (the calls after it are skipped).
 
+### Dart
+
+`--lang dart` writes a Dart library over `dart:ffi` (Dart 3.4 or later; no packages). It loads
+`libNAME.so` (or the library `$VOLT_NAME_LIB` names, with the package's name in capitals):
+
+```dart
+import 'mathlib.dart';
+
+print(ml_greet('volt'));                      // hello, volt
+final v = vec2.of(x: 1, y: 2);
+ml_scale(v, 2);                               // v is now (2, 4)
+try {
+  ml_sqrt(-1);
+} on math_error catch (e) {
+  print(e.code == math_error.NEGATIVE);       // true
+}
+final c = counter('clicks');
+c.add(2);
+c.close();                                    // or leave it to its NativeFinalizer
+```
+
+Structs are `dart:ffi` structs, with `of` to make one and `copyFrom`; slices are `List`s, and what
+Volt writes into one comes back. Enums are Dart enums, error sets are `VoltError` subclasses with
+their codes as constants, and callbacks are functions: an exception one throws comes out of the
+Volt call. The plain C functions are in class `Native`.
+
 ### Go
 
 `--lang go` writes a cgo package. Put it in a directory of your module, and point the C linker at
@@ -245,9 +271,10 @@ A library that returns owned text also exports `NAME_text_free`, which frees it 
 `volt_text_free` does, for languages that can't call a C function pointer.
 
 Every binding also has the plain C functions: in C++ they're in namespace `raw`, in Rust in module
-`raw`, in Zig in struct `raw`, in C# in class `Native`, and in Java as the `H_NAME` method handles.
+`raw`, in Zig in struct `raw`, in C# and Dart in class `Native`, and in Java as the `H_NAME` method
+handles.
 `--lang` is one of `c`, `cpp`, `rust`, `zig`, `python`, `pyi`, `csharp`, `java`, `go`, `lua`,
-`node`, `js`, `ts` or `json`. The Python bindings use `ctypes` and load the shared library.
+`dart`, `node`, `js`, `ts` or `json`. The Python bindings use `ctypes` and load the shared library.
 `--lang pyi` writes their type stubs, for editors and type checkers such as mypy.
 
 ### The model, for generators of your own

@@ -1,8 +1,8 @@
 // Interop both ways, with the self-hosted voltc (it links libLLVM and libclang): a Volt library
 // built with `voltc lib --shared/--static` and called from C, C++, Rust and Python (and Zig,
-// JavaScript, C#, Java, Go and Lua, when they're installed) through `voltc bindings`; Volt calling
-// a Rust static library and embedding Python; and Volt importing C++ headers (`use cpp`). Every
-// Volt side runs on both backends.
+// JavaScript, C#, Java, Go, Lua and Dart, when they're installed) through `voltc bindings`; Volt
+// calling a Rust static library and embedding Python; and Volt importing C++ headers (`use cpp`).
+// Every Volt side runs on both backends.
 mod common;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -116,7 +116,7 @@ fn bindings_round_trip() {
         ok(e.voltc(&["lib", "mathlib", "--pkg", pkg, "--shared", "--backend", backend, "-o", &so]), "voltc lib --shared");
         ok(e.voltc(&["lib", "mathlib", "--pkg", pkg, "--static", "--backend", backend, "-o", &e.path(&format!("{backend}/libmathlib_static.a"))]), "voltc lib --static");
     }
-    for (lang, file) in [("c", "mathlib.h"), ("cpp", "mathlib.hpp"), ("rust", "mathlib.rs"), ("python", "mathlib.py"), ("pyi", "mathlib.pyi"), ("csharp", "mathlib.cs"), ("java", "mathlib.java"), ("go", "mathlib.go"), ("lua", "mathlib_lua.c"), ("zig", "mathlib.zig"), ("node", "mathlib_node.c"), ("js", "mathlib.js"), ("ts", "mathlib.d.ts")] {
+    for (lang, file) in [("c", "mathlib.h"), ("cpp", "mathlib.hpp"), ("rust", "mathlib.rs"), ("python", "mathlib.py"), ("pyi", "mathlib.pyi"), ("csharp", "mathlib.cs"), ("java", "mathlib.java"), ("go", "mathlib.go"), ("lua", "mathlib_lua.c"), ("dart", "mathlib.dart"), ("zig", "mathlib.zig"), ("node", "mathlib_node.c"), ("js", "mathlib.js"), ("ts", "mathlib.d.ts")] {
         ok(e.voltc(&["bindings", "mathlib", "--pkg", pkg, "--lang", lang, "-o", &e.path(file)]), &format!("voltc bindings --lang {lang}"));
     }
     // the model the generators share, as JSON for generators of other people's
@@ -234,6 +234,18 @@ fn bindings_round_trip() {
             assert_eq!(ok(l, "lua client.lua"), MATHLIB_OUT, "Lua ({backend})");
         } else {
             eprintln!("lua (5.4 or later, with its headers) isn't installed: skipping the Lua client");
+        }
+        // Dart: mathlib.dart over dart:ffi; dart analyze checks it and the client
+        if let Some(dart) = local_tool("dart", "--version") {
+            let ddir = e.dir.join(format!("dart-{backend}"));
+            std::fs::create_dir_all(&ddir).unwrap();
+            std::fs::copy(e.dir.join("mathlib.dart"), ddir.join("mathlib.dart")).unwrap();
+            std::fs::copy(Path::new(ROOT).join("tests/interop/client.dart"), ddir.join("client.dart")).unwrap();
+            ok(Command::new(&dart).args(["analyze", "--fatal-infos", "mathlib.dart", "client.dart"]).current_dir(&ddir).output().unwrap(), "dart analyze");
+            let o = Command::new(&dart).args(["run", "client.dart"]).current_dir(&ddir).env("VOLT_MATHLIB_LIB", format!("{lib_dir}/libmathlib.so")).output().unwrap();
+            assert_eq!(ok(o, "dart run client.dart"), MATHLIB_OUT, "Dart ({backend})");
+        } else {
+            eprintln!("dart isn't installed: skipping the Dart client");
         }
         if let Some(zig) = zig() {
             std::fs::copy(Path::new(ROOT).join("tests/interop/client.zig"), e.dir.join("client.zig")).unwrap();

@@ -1,4 +1,4 @@
-// Bindings for other languages: `voltc bindings NAME --lang c|cpp|rust|zig|python|pyi|csharp|java|go|lua|node|js|ts|json` describes package
+// Bindings for other languages: `voltc bindings NAME --lang c|cpp|rust|zig|python|pyi|csharp|java|go|lua|dart|node|js|ts|json` describes package
 // NAME's export fns and the types they use, for programs that call a library built with
 // `voltc lib NAME --shared` (or `--static`). Every type crosses in a C form:
 // - numbers, bool, pointers (T* and T&), cstr, str (volt_str: a pointer and a length), structs whose
@@ -5985,6 +5985,767 @@ attach fn lua_text(this: bind&) -> compile_error!std::string {
     return move out;
 }
 
+// ---------- Dart (dart:ffi, Dart 3.4 or later) ----------
+
+fn dart_keyword(s: str) -> bool {
+    val words: str[] = { "assert", "await", "break", "case", "catch", "class", "const", "continue", "default", "do", "else", "enum", "extends", "false", "final", "finally", "for", "if", "in", "is", "new", "null", "rethrow", "return", "super", "switch", "this", "throw", "true", "try", "var", "void", "while", "with", "yield" };
+    for (w) in words {
+        if (w == s) {
+            return true;
+        }
+    }
+    return false;
+}
+
+fn dart_ident(s: str) -> std::string {
+    if (dart_keyword(s)) {
+        return fmt("{}_", S(s));
+    }
+    return S(s);
+}
+
+fn dart_int(k: int_ty) -> str {
+    match (k) {
+        .I8 => { return "Int8"; },
+        .I16 => { return "Int16"; },
+        .I32 => { return "Int32"; },
+        .I64 => { return "Int64"; },
+        .U8 => { return "Uint8"; },
+        .U16 => { return "Uint16"; },
+        .U32 => { return "Uint32"; },
+        .U64 => { return "Uint64"; },
+        .ISIZE => { return "IntPtr"; },
+        .USIZE => { return "Size"; },
+        default => { return "Int64"; },
+    }
+}
+
+// a type as dart:ffi declares it in a native signature (Int32, Double, a struct class, a Pointer)
+attach fn dart_native(this: bind&, t: u32) -> std::string {
+    match (this.shape_of(t) ?? shape::VOID) {
+        .VOID => { return S("Void"); },
+        .BOOL => { return S("Bool"); },
+        .INT(k) => { return S(dart_int(k)); },
+        .FLOAT(b) => {
+            if (b == 32) {
+                return S("Float");
+            }
+            return S("Double");
+        },
+        .CSTR => { return S("Pointer<Char>"); },
+        .STR => { return S("VoltStr"); },
+        .TEXT(x) => { return S("VoltText"); },
+        .PTR(x) => {
+            if (x == VOID) {
+                return S("Pointer<Void>");
+            }
+            match (this.shape_of(x) ?? shape::VOID) {
+                .HANDLE(s) => { return S("Pointer<Void>"); },
+                .ARRAY(e, n) => { return S("Pointer<Void>"); },
+                .FN(i) => { return S("Pointer<Void>"); },
+                default => {},
+            }
+            return fmt("Pointer<{}>", this.dart_native(x));
+        },
+        .HANDLE(s) => { return S("Pointer<Void>"); },
+        .STRUCT(s) => { return this.local(this.c.si(s).name); },
+        .ENUM(e) => { return S(dart_int(this.c.ei(e).tag)); },
+        .CODE => { return S("Uint32"); },
+        .RESULT(e, x) => { return this.result_name(t); },
+        .ARRAY(elem, n) => { return S("Pointer<Void>"); },
+        .SLICE(x) => { return this.made_name("slice", x, true); },
+        .OPT(x) => { return this.made_name("opt", x, true); },
+        .FN(i) => { return S("Pointer<Void>"); },
+        .CLOSURE(i) => { return fmt("Pointer<NativeFunction<{}>>", this.dart_cb_sig(t, true)); },
+    }
+}
+
+// the Dart type dart:ffi gives a native type (int, double, bool, or the same class)
+attach fn dart_raw(this: bind&, t: u32) -> std::string {
+    match (this.shape_of(t) ?? shape::VOID) {
+        .VOID => { return S("void"); },
+        .BOOL => { return S("bool"); },
+        .INT(k) => { return S("int"); },
+        .FLOAT(b) => { return S("double"); },
+        .ENUM(e) => { return S("int"); },
+        .CODE => { return S("int"); },
+        default => { return this.dart_native(t); },
+    }
+}
+
+// a closure's C function type: R Function(Pointer<Void>, A...), native or Dart
+attach fn dart_cb_sig(this: bind&, t: u32, native: bool) -> std::string {
+    match (*this.c.t.get(t)) {
+        .FN_VAL(ps&, r) => {
+            var args = S("Pointer<Void>");
+            for (p&) in ps.items() {
+                args.append(", ");
+                if (native) {
+                    args.append(this.dart_native(*p).as_str());
+                } else {
+                    args.append(this.dart_raw(*p).as_str());
+                }
+            }
+            if (native) {
+                return fmt2("{} Function({})", this.dart_native(r), move args);
+            }
+            return fmt2("{} Function({})", this.dart_raw(r), move args);
+        },
+        default => { return S("Void Function()"); },
+    }
+}
+
+// a type as the Dart API shows it
+attach fn dart_ty(this: bind&, t: u32) -> std::string {
+    val h = this.lent_handle(t);
+    if (h) {
+        return this.local(this.c.si(h).name);
+    }
+    match (this.shape_of(t) ?? shape::VOID) {
+        .CSTR => { return S("String?"); },
+        .STR => { return S("String"); },
+        .TEXT(x) => { return S("String"); },
+        .ENUM(e) => { return this.local(this.c.ei(e).name); },
+        .PTR(x) => {
+            val s = this.dart_ref(t);
+            if (s) {
+                var n = this.local(this.c.si(s).name);
+                if (this.nullable_ptr(t)) {
+                    n.push('?');
+                }
+                return move n;
+            }
+            return this.dart_native(t);
+        },
+        .HANDLE(s) => { return this.local(this.c.si(s).name); },
+        .SLICE(x) => { return fmt("List<{}>", this.dart_ty(x)); },
+        .OPT(x) => { return fmt("{}?", this.dart_ty(x)); },
+        .RESULT(e, x) => { return this.dart_ty(x); },
+        .CLOSURE(i) => {
+            match (*this.c.t.get(t)) {
+                .FN_VAL(ps&, r) => {
+                    var args: std::string = {};
+                    for (p&) in ps.items() {
+                        if (args.len() > 0) {
+                            args.append(", ");
+                        }
+                        args.append(this.dart_ty(*p).as_str());
+                    }
+                    return fmt2("{} Function({})", this.dart_ty(r), move args);
+                },
+                default => { return S("Function"); },
+            }
+        },
+        default => { return this.dart_raw(t); },
+    }
+}
+
+// the struct a pointer parameter points to, when the API takes the struct (and copies it back)
+attach fn dart_ref(this: bind&, t: u32) -> u32? {
+    match (this.shape_of(t) ?? shape::VOID) {
+        .PTR(x) => {
+            if (x != VOID) {
+                match (this.shape_of(x) ?? shape::VOID) {
+                    .STRUCT(s) => { return s; },
+                    default => {},
+                }
+            }
+        },
+        default => {},
+    }
+    return null;
+}
+
+// can the pointer be null (a T*, not a T&)?
+attach fn nullable_ptr(this: bind&, t: u32) -> bool {
+    match (*this.c.t.get(t)) {
+        .REF(y) => { return false; },
+        default => { return true; },
+    }
+}
+
+// an expression turning API value v (of type t) into what the C function takes, for the simple
+// types (numbers, bool, enums, structs)
+attach fn dart_in(this: bind&, t: u32, v: str) -> std::string {
+    match (this.shape_of(t) ?? shape::VOID) {
+        .ENUM(e) => { return fmt("{}.value", S(v)); },
+        default => { return S(v); },
+    }
+}
+
+// an expression turning C value r (of type t) into the API's value, for the simple types and str
+attach fn dart_out(this: bind&, t: u32, r: str) -> std::string {
+    match (this.shape_of(t) ?? shape::VOID) {
+        .ENUM(e) => { return fmt2("{}.of({})", this.local(this.c.ei(e).name), S(r)); },
+        .STR => { return fmt("_text({})", S(r)); },
+        default => { return S(r); },
+    }
+}
+
+// can a value of type t sit in a List (or go to a callback) as itself: numbers, bool, enums, structs
+attach fn simple_value(this: bind&, t: u32) -> bool {
+    match (this.shape_of(t) ?? shape::VOID) {
+        .BOOL => { return true; },
+        .INT(k) => { return true; },
+        .FLOAT(b) => { return true; },
+        .ENUM(e) => { return true; },
+        .CODE => { return true; },
+        .STRUCT(s) => { return true; },
+        default => { return false; },
+    }
+}
+
+// one parameter of a wrapper: its declaration, what the call passes, the statements before the
+// try block (outer: a callback's NativeCallable), before the call (pre), after it (after: copying
+// back), in the finally block (fin), and a callback's rethrow
+struct dart_arg {
+    decl: std::string = {};
+    pass: std::string = {};
+    outer: std::string = {};
+    pre: std::string = {};
+    after: std::string = {};
+    fin: std::string = {};
+    raise: std::string = {};
+    err: std::string = {};  // a callback's variable holding what it threw
+    held: bool = false; // it allocates native memory (freed in the finally block)
+}
+
+attach fn dart_arg_of(this: bind&, t: u32, name0: str, a: dart_arg&) -> compile_error!void {
+    val nm = dart_ident(name0);
+    val n = nm.as_str();
+    a.decl = fmt2("{} {}", this.dart_ty(t), S(n));
+    val h = this.lent_handle(t);
+    if (h) {
+        a.pass = fmt("{}._handle()", S(n));
+        return;
+    }
+    match (this.shape_of(t) ?? shape::VOID) {
+        .STR => {
+            a.pass = fmt("_str({}, held$)", S(n));
+            a.held = true;
+        },
+        .CSTR => {
+            a.pass = fmt("_cstr({}, held$)", S(n));
+            a.held = true;
+        },
+        .PTR(x) => {
+            val s = this.dart_ref(t);
+            if (s) {
+                    // a copy goes in, and what Volt changed comes back
+                    val sn = this.local(this.c.si(s).name);
+                    a.held = true;
+                    if (this.nullable_ptr(t)) {
+                        a.pre = fmt4("final {}$p = {} == null ? nullptr : _alloc<{}>(sizeOf<{}>(), held$);\n", S(n), S(n), copy sn, copy sn);
+                        a.pre.append(fmt2("if ({} != null) {{\n  {}$p.ref = ", S(n), S(n)).as_str());
+                        a.pre.append(fmt("{};\n}\n", S(n)).as_str());
+                        a.after = fmt2("if ({} != null) {{\n  {}.copyFrom(", S(n), S(n));
+                        a.after.append(fmt("{}$p.ref);\n}\n", S(n)).as_str());
+                    } else {
+                        a.pre = fmt3("final {}$p = _alloc<{}>(sizeOf<{}>(), held$);\n", S(n), copy sn, copy sn);
+                        a.pre.append(fmt2("{}$p.ref = {};\n", S(n), S(n)).as_str());
+                        a.after = fmt2("{}.copyFrom({}$p.ref);\n", S(n), S(n));
+                    }
+                    a.pass = fmt("{}$p", S(n));
+                    return;
+            }
+            a.pass = S(n);
+        },
+        .SLICE(x) => {
+            if (!this.simple_value(x)) {
+                return fail(NO_SPAN, fmt("a slice of {} can't come from Dart (numbers, bool, enums and structs of those can)", this.c.ty_name(x)));
+            }
+            val en = this.dart_native(x);
+            a.held = true;
+            a.pre = fmt4("final {}$p = _alloc<{}>(sizeOf<{}>() * {}.length, held$);\n", S(n), copy en, copy en, S(n));
+            a.pre.append(fmt3("final {}$s = Struct.create<{}>()\n  ..ptr = {}$p\n", S(n), this.made_name("slice", x, true), S(n)).as_str());
+            a.pre.append(fmt2("  ..len = {}.length;\nfor (var i = 0; i < {}.length; i++) {{\n", S(n), S(n)).as_str());
+            match (this.shape_of(x) ?? shape::VOID) {
+                .STRUCT(s) => {
+                    a.pre.append(fmt2("  ({}$p + i).ref = {}[i];\n}\n", S(n), S(n)).as_str());
+                    // what Volt wrote into the elements comes back
+                    a.after = fmt3("for (var i = 0; i < {}.length; i++) {{\n  {}[i].copyFrom(({}$p + i).ref);\n}}\n", S(n), S(n), S(n));
+                },
+                default => {
+                    a.pre.append(fmt2("  {}$p[i] = {};\n}\n", S(n), this.dart_in(x, fmt("{}[i]", S(n)).as_str())).as_str());
+                    // copied back where Volt changed it (an unmodifiable list it didn't change is fine)
+                    val back = this.dart_out(x, fmt("{}$p[i]", S(n)).as_str());
+                    a.after = fmt4("for (var i = 0; i < {}.length; i++) {{\n  final v = {};\n  if ({}[i] != v) {{\n    {}[i] = v;\n  }}\n}}\n", S(n), copy back, S(n), S(n));
+                },
+            }
+            a.pass = fmt("{}$s", S(n));
+        },
+        .OPT(x) => {
+            if (!this.simple_value(x)) {
+                return fail(NO_SPAN, fmt("an optional {} can't come from Dart", this.c.ty_name(x)));
+            }
+            a.pre = fmt3("final {}$o = Struct.create<{}>()..has = {} != null;\n", S(n), this.made_name("opt", x, true), S(n));
+            a.pre.append(fmt3("if ({} != null) {{\n  {}$o.value = {};\n}}\n", S(n), S(n), this.dart_in(x, n)).as_str());
+            a.pass = fmt("{}$o", S(n));
+        },
+        .CLOSURE(i) => {
+            match (*this.c.t.get(t)) {
+                .FN_VAL(ps&, r) => {
+                    // the Dart function, called through a NativeCallable; what it throws is kept,
+                    // the later calls are skipped, and it's thrown again once the call is back
+                    var params = S("Pointer<Void> u$");
+                    var args: std::string = {};
+                    for (k) in 0..ps.len {
+                        val ak = fmt("a{}", unum(@cast<u64>(k)));
+                        params.append(fmt2(", {} {}", this.dart_raw(*ps.at(k)), copy ak).as_str());
+                        if (k > 0) {
+                            args.append(", ");
+                        }
+                        match (this.shape_of(*ps.at(k)) ?? shape::VOID) {
+                            .STR => {},
+                            default => {
+                                if (!this.simple_value(*ps.at(k))) {
+                                    return fail(NO_SPAN, fmt("a callback taking {} can't call Dart", this.c.ty_name(*ps.at(k))));
+                                }
+                            },
+                        }
+                        args.append(this.dart_out(*ps.at(k), ak.as_str()).as_str());
+                    }
+                    var dflt: std::string = {};
+                    match (this.shape_of(r) ?? shape::VOID) {
+                        .VOID => {},
+                        .BOOL => { dflt = S("false"); },
+                        .FLOAT(b) => { dflt = S("0.0"); },
+                        .INT(k) => { dflt = S("0"); },
+                        .ENUM(e) => { dflt = S("0"); },
+                        .CODE => { dflt = S("0"); },
+                        default => { return fail(NO_SPAN, fmt("a callback returning {} can't call Dart", this.c.ty_name(r))); },
+                    }
+                    a.outer = fmt2("Object? {}$err;\nStackTrace? {}$st;\n", S(n), S(n));
+                    a.outer.append(fmt3("final {}$cb = NativeCallable<{}>.isolateLocal(({}) {{\n", S(n), this.dart_cb_sig(t, true), move params).as_str());
+                    var ret = S("return;");
+                    if (dflt.len() > 0) {
+                        ret = fmt("return {};", copy dflt);
+                    }
+                    a.outer.append(fmt2("  if ({}$err != null) {{\n    {}\n  }}\n  try {{\n", S(n), copy ret).as_str());
+                    val call = fmt2("{}({})", S(n), move args);
+                    if (dflt.len() > 0) {
+                        a.outer.append(fmt("    return {};\n", this.dart_in(r, call.as_str())).as_str());
+                    } else {
+                        a.outer.append(fmt("    {};\n", copy call).as_str());
+                    }
+                    a.outer.append(fmt3("  } catch (e, st) {{\n    {}$err = e;\n    {}$st = st;\n", S(n), S(n), S("")).as_str());
+                    if (dflt.len() > 0) {
+                        a.outer.append(fmt2("    {}\n  }}\n}}, exceptionalReturn: {});\n", copy ret, copy dflt).as_str());
+                    } else {
+                        a.outer.append("  }\n});\n");
+                    }
+                    a.pass = fmt("{}$cb.nativeFunction, nullptr", S(n));
+                    a.fin = fmt("{}$cb.close();\n", S(n));
+                    a.err = fmt("{}$err", S(n));
+                    a.raise = fmt3("if ({}$err != null) {{\n  Error.throwWithStackTrace({}$err!, {}$st!);\n}}\n", S(n), S(n), S(n));
+                },
+                default => {},
+            }
+        },
+        default => { a.pass = this.dart_in(t, n); },
+    }
+    return;
+}
+
+// statements turning C result r (of type t) into the API's value v$ (or throwing its error)
+attach fn dart_result(this: bind&, t: u32, r: str) -> compile_error!std::string {
+    match (this.shape_of(t) ?? shape::VOID) {
+        .VOID => { return {}; },
+        .CSTR => { return fmt("final v$ = _fromCstr({});\n", S(r)); },
+        .TEXT(x) => { return fmt("final v$ = _take({});\n", S(r)); },
+        .HANDLE(s) => { return fmt2("final v$ = {}._({});\n", this.local(this.c.si(s).name), S(r)); },
+        .OPT(x) => {
+            if (!this.simple_value(x)) {
+                return fail(NO_SPAN, fmt("an optional {} can't go to Dart", this.c.ty_name(x)));
+            }
+            return fmt3("final v$ = {}.has ? {} : null;\n", S(r), this.dart_out(x, fmt("{}.value", S(r)).as_str()), S(""));
+        },
+        .SLICE(x) => {
+            match (this.shape_of(x) ?? shape::VOID) {
+                .STRUCT(s) => {
+                    // copies: the elements belong to the library
+                    return fmt3("final v$ = List.generate({}.len, (i) => Struct.create<{}>()..copyFrom(({}.ptr + i).ref));\n", S(r), this.local(this.c.si(s).name), S(r));
+                },
+                default => {},
+            }
+            if (!this.simple_value(x)) {
+                return fail(NO_SPAN, fmt("a slice of {} can't go to Dart", this.c.ty_name(x)));
+            }
+            return fmt2("final v$ = List.generate({}.len, (i) => {});\n", S(r), this.dart_out(x, fmt("{}.ptr[i]", S(r)).as_str()));
+        },
+        .RESULT(e, x) => {
+            var out = fmt("if ({}.error != 0) {{\n  throw VoltError.of(", S(r));
+            out.append(fmt("{}.error);\n}\n", S(r)).as_str());
+            if (x != VOID) {
+                out.append((try this.dart_result(x, fmt("{}.value", S(r)).as_str())).as_str());
+            }
+            return move out;
+        },
+        default => { return fmt("final v$ = {};\n", this.dart_out(t, r)); },
+    }
+}
+
+// what frees owned C result r (of type t) when a callback's error is thrown instead
+attach fn dart_drop(this: bind&, t: u32, r: str) -> std::string {
+    match (this.shape_of(t) ?? shape::VOID) {
+        .TEXT(x) => { return fmt("_take({});\n", S(r)); },
+        .HANDLE(s) => { return fmt2("Native.{}({});\n", this.free_name(s), S(r)); },
+        .RESULT(e, x) => {
+            val inner = this.dart_drop(x, fmt("{}.value", S(r)).as_str());
+            if (inner.len() == 0) {
+                return {};
+            }
+            return fmt2("if ({}.error == 0) {{\n{}}}\n", S(r), indent_n(inner.as_str(), 2));
+        },
+        default => { return {}; },
+    }
+}
+
+// does a result of type t give a value (not void, not an E!void)?
+attach fn dart_returns(this: bind&, t: u32) -> bool {
+    match (this.shape_of(t) ?? shape::VOID) {
+        .VOID => { return false; },
+        .RESULT(e, x) => { return x != VOID; },
+        default => { return true; },
+    }
+}
+
+attach fn dart_doc(this: bind&, f: u32, ind: str) -> std::string {
+    val sp = this.c.dl(this.c.fi(f).decl).item.span;
+    val d = doc_above(this.c.files.at(sp.file).text, @cast<usize>(sp.lo));
+    if (d.len() == 0) {
+        return {};
+    }
+    return fmt2("{}/// {}\n", S(ind), move d);
+}
+
+// a wrapper: its signature (the parameters from first on; self passes an instance's handle) and body
+attach fn dart_fn(this: bind&, f: u32, first: usize, head: str, ind: str) -> compile_error!std::string {
+    val info = this.c.fi(f);
+    var decls: std::string = {};
+    var passes: std::string = {};
+    var outer: std::string = {};
+    var pre: std::string = {};
+    var after: std::string = {};
+    var fin: std::string = {};
+    var raise: std::string = {};
+    var failed: std::string = {};
+    var held = false;
+    if (first == 1) {
+        passes = S("_handle()");
+    }
+    for (k) in first..info.params.len {
+        val p = info.params.at(k);
+        var a: dart_arg = {};
+        try this.dart_arg_of(p.ty, p.name, &a);
+        if (decls.len() > 0) {
+            decls.append(", ");
+        }
+        decls.append(a.decl.as_str());
+        if (passes.len() > 0) {
+            passes.append(", ");
+        }
+        passes.append(a.pass.as_str());
+        outer.append(a.outer.as_str());
+        pre.append(a.pre.as_str());
+        after.append(a.after.as_str());
+        fin.append(a.fin.as_str());
+        raise.append(a.raise.as_str());
+        if (a.err.len() > 0) {
+            if (failed.len() > 0) {
+                failed.append(" || ");
+            }
+            failed.append(fmt("{} != null", copy a.err).as_str());
+        }
+        held = held || a.held;
+    }
+    var body: std::string = {};
+    if (held) {
+        body.append("final held$ = <Pointer<Void>>[];\n");
+    }
+    body.append(outer.as_str());
+    var inner = move pre;
+    if (info.ret == VOID) {
+        inner.append(fmt2("Native.{}({});\n", S(info.c_name), move passes).as_str());
+    } else {
+        inner.append(fmt2("final r$ = Native.{}({});\n", S(info.c_name), move passes).as_str());
+    }
+    // a callback's error first (an owned result freed), then the result's, then what Volt changed
+    // comes back
+    if (raise.len() > 0) {
+        val drop = this.dart_drop(info.ret, "r$");
+        if (drop.len() > 0) {
+            inner.append(fmt("if ({}) {{\n", copy failed).as_str());
+            inner.append(indent_n(drop.as_str(), 2).as_str());
+            inner.append("}\n");
+        }
+    }
+    inner.append(raise.as_str());
+    inner.append((try this.dart_result(info.ret, "r$")).as_str());
+    inner.append(after.as_str());
+    if (this.dart_returns(info.ret)) {
+        inner.append("return v$;\n");
+    }
+    if (held) {
+        fin.append("for (final p in held$) {\n  _free(p);\n}\n");
+    }
+    if (fin.len() > 0) {
+        body.append("try {\n");
+        body.append(indent_n(inner.as_str(), 2).as_str());
+        body.append("} finally {\n");
+        body.append(indent_n(fin.as_str(), 2).as_str());
+        body.append("}\n");
+    } else {
+        body.append(inner.as_str());
+    }
+    var out = this.dart_doc(f, ind);
+    out.append(fmt3("{}{}({}) {{\n", S(ind), S(head), move decls).as_str());
+    out.append(indent_n(body.as_str(), ind.len + 2).as_str());
+    out.append(fmt("{}}\n", S(ind)).as_str());
+    return move out;
+}
+
+// a struct field's declaration: its annotation (numbers, bool, arrays) and type
+attach fn dart_field(this: bind&, t: u32, name: str) -> std::string {
+    match (*this.c.t.get(t)) {
+        .ARRAY(elem, n) => {
+            var dims = unum(n);
+            var multi = false;
+            var e = elem;
+            var arr = true;
+            while (arr) {
+                match (*this.c.t.get(e)) {
+                    .ARRAY(e2, n2) => {
+                        dims.append(", ");
+                        dims.append(unum(n2).as_str());
+                        multi = true;
+                        e = e2;
+                    },
+                    default => { arr = false; },
+                }
+            }
+            var ty = this.dart_native(e);
+            var d = elem;
+            var nest = true;
+            while (nest) {
+                match (*this.c.t.get(d)) {
+                    .ARRAY(e2, n2) => {
+                        ty = fmt("Array<{}>", move ty);
+                        d = e2;
+                    },
+                    default => { nest = false; },
+                }
+            }
+            if (multi) {
+                return fmt3("  @Array.multi([{}])\n  external Array<{}> {};\n", move dims, move ty, S(name));
+            }
+            return fmt3("  @Array({})\n  external Array<{}> {};\n", move dims, move ty, S(name));
+        },
+        default => {},
+    }
+    match (this.shape_of(t) ?? shape::VOID) {
+        .BOOL => { return fmt("  @Bool()\n  external bool {};\n", S(name)); },
+        .INT(k) => { return fmt2("  @{}()\n  external int {};\n", S(dart_int(k)), S(name)); },
+        .FLOAT(b) => { return fmt3("  @{}()\n  external double {};\n", this.dart_native(t), S(name), S("")); },
+        .ENUM(e) => { return fmt2("  @{}()\n  external int {};\n", S(dart_int(this.c.ei(e).tag)), S(name)); },
+        .CODE => { return fmt("  @Uint32()\n  external int {};\n", S(name)); },
+        default => { return fmt2("  external {} {};\n", this.dart_native(t), S(name)); },
+    }
+}
+
+// the statements copying field f of struct from into to (inside copyFrom)
+attach fn dart_copy(this: bind&, t: u32, to: str, from: str, ind: str) -> std::string {
+    match (*this.c.t.get(t)) {
+        .ARRAY(elem, n) => {
+            val i = fmt("i{}", unum(@cast<u64>(ind.len)));
+            var out = fmt4("{}for (var {} = 0; {} < {}; ", S(ind), copy i, copy i, unum(n));
+            out.append(fmt2("{}++) {{\n{}", copy i, this.dart_copy(elem, fmt2("{}[{}]", S(to), copy i).as_str(), fmt2("{}[{}]", S(from), copy i).as_str(), fmt("{}  ", S(ind)).as_str())).as_str());
+            out.append(fmt("{}}\n", S(ind)).as_str());
+            return move out;
+        },
+        default => {},
+    }
+    match (this.shape_of(t) ?? shape::VOID) {
+        .STRUCT(s) => { return fmt3("{}{}.copyFrom({});\n", S(ind), S(to), S(from)); },
+        default => { return fmt3("{}{} = {};\n", S(ind), S(to), S(from)); },
+    }
+}
+
+attach fn dart_text(this: bind&) -> compile_error!std::string {
+    val ents = this.entries();
+    val p = this.pkg;
+    var out = fmt("// {}: generated by voltc bindings; the Volt package for Dart (dart:ffi, Dart 3.4 or later).\n", S(p));
+    out.append(fmt3("// It loads lib{}.so (lib{}.dylib, {}.dll), or the library $VOLT_", S(p), S(p), S(p)).as_str());
+    out.append(fmt("{}_LIB names. Errors are thrown\n// as VoltError, one subclass per error set; an export struct is a class with close().\n", upper(p)).as_str());
+    out.append("// ignore_for_file: camel_case_types, non_constant_identifier_names, constant_identifier_names, unused_element\nimport 'dart:convert';\nimport 'dart:ffi';\nimport 'dart:io';\n\n");
+    out.append(fmt3("final DynamicLibrary _lib = DynamicLibrary.open(Platform.environment['VOLT_{}_LIB'] ??\n    (Platform.isMacOS ? 'lib{}.dylib' : Platform.isWindows ? '{}.dll' : ", upper(p), S(p), S(p)).as_str());
+    out.append(fmt("'lib{}.so'));\n", S(p)).as_str());
+    // native memory for the arguments: C's malloc and free
+    out.append("\nfinal DynamicLibrary _libc = Platform.isWindows ? DynamicLibrary.open('ucrtbase.dll') : DynamicLibrary.process();\nfinal _malloc = _libc.lookupFunction<Pointer<Void> Function(Size), Pointer<Void> Function(int)>('malloc');\nfinal _free = _libc.lookupFunction<Void Function(Pointer<Void>), void Function(Pointer<Void>)>('free');\n");
+    out.append("\n// bytes freed after the call (with the others in held)\nPointer<T> _alloc<T extends NativeType>(int bytes, List<Pointer<Void>> held) {\n  final p = _malloc(bytes > 0 ? bytes : 1);\n  if (p == nullptr) {\n    throw StateError('out of memory');\n  }\n  held.add(p);\n  return p.cast<T>();\n}\n");
+    out.append("\n/// a Volt str: UTF-8 bytes and a length\nfinal class VoltStr extends Struct {\n  external Pointer<Uint8> ptr;\n  @Size()\n  external int len;\n}\n");
+    out.append("\nVoltStr _str(String s, List<Pointer<Void>> held) {\n  final b = utf8.encode(s);\n  final p = _alloc<Uint8>(b.length, held);\n  p.asTypedList(b.length).setAll(0, b);\n  return Struct.create<VoltStr>()\n    ..ptr = p\n    ..len = b.length;\n}\n\nString _text(VoltStr s) => s.len == 0 ? '' : utf8.decode(s.ptr.asTypedList(s.len));\n");
+    out.append("\nPointer<Char> _cstr(String? s, List<Pointer<Void>> held) {\n  if (s == null) {\n    return nullptr;\n  }\n  final b = utf8.encode(s);\n  final p = _alloc<Uint8>(b.length + 1, held);\n  p.asTypedList(b.length + 1)\n    ..setAll(0, b)\n    ..[b.length] = 0;\n  return p.cast<Char>();\n}\n");
+    out.append("\nString? _fromCstr(Pointer<Char> p) {\n  if (p == nullptr) {\n    return null;\n  }\n  final b = p.cast<Uint8>();\n  var n = 0;\n  while (b[n] != 0) {\n    n++;\n  }\n  return utf8.decode(b.asTypedList(n));\n}\n");
+    if (this.texts.len > 0) {
+        out.append("\n/// owned text a Volt function gave out (the wrappers copy it into a String and free it)\nfinal class VoltText extends Struct {\n  external Pointer<Uint8> ptr;\n  @Size()\n  external int len;\n  external Pointer<Void> owner;\n  external Pointer<NativeFunction<Void Function(Pointer<Void>)>> drop;\n}\n");
+        out.append("\nString _take(VoltText t) {\n  final s = t.len == 0 ? '' : utf8.decode(t.ptr.asTypedList(t.len));\n  if (t.drop != nullptr) {\n    t.drop.asFunction<void Function(Pointer<Void>)>()(t.owner);\n  }\n  return s;\n}\n");
+    }
+    // errors: VoltError, and a subclass per error set holding its codes
+    out.append("\n/// an error a Volt function returned: its code and name\nclass VoltError implements Exception {\n  final int code;\n  final String name;\n\n  VoltError(this.code, this.name);\n\n  static VoltError of(int code) {\n    switch (code) {\n");
+    for (c&) in this.all_codes().items() {
+        out.append(fmt3("      case {}:\n        return {}(code, '{}');\n", num(c.code), copy c.set, S(c.name)).as_str());
+    }
+    out.append("    }\n    return VoltError(code, 'error');\n  }\n\n  @override\n  String toString() => name;\n}\n");
+    for (et&) in this.codes.items() {
+        match (*this.c.t.get(*et)) {
+            .ENUM(e) => {
+                val info = this.c.ei(e);
+                val n = this.local(info.name);
+                out.append(fmt3("\n/// error set {}: thrown for its errors; its codes\nclass {} extends VoltError {{\n  {}(super.code, super.name);\n\n", S(info.name), copy n, copy n).as_str());
+                for (i) in 0..info.names.len {
+                    out.append(fmt2("  static const int {} = {};\n", S(*info.names.at(i)), num(*info.values.at(i))).as_str());
+                }
+                out.append("}\n");
+            },
+            default => {},
+        }
+    }
+    for (e&) in this.enums.items() {
+        val info = this.c.ei(*e);
+        val n = this.local(info.name);
+        out.append(fmt("\nenum {} {{\n", copy n).as_str());
+        for (i) in 0..info.names.len {
+            var sep = ",";
+            if (i + 1 == info.names.len) {
+                sep = ";";
+            }
+            out.append(fmt3("  {}({}){}\n", S(*info.names.at(i)), num(*info.values.at(i)), S(sep)).as_str());
+        }
+        out.append(fmt3("\n  const {}(this.value);\n  final int value;\n\n  static {} of(int v) => values.firstWhere((e) => e.value == v);\n}}\n", copy n, copy n, S("")).as_str());
+    }
+    for (s&) in this.structs.items() {
+        val info = this.c.si(*s);
+        val n = this.local(info.name);
+        out.append(fmt("\nfinal class {} extends Struct {{\n", copy n).as_str());
+        var named: std::string = {};
+        var sets: std::string = {};
+        var copies: std::string = {};
+        for (f&) in info.fields.items() {
+            val fname = dart_ident(f.name);
+            out.append(this.dart_field(f.ty, fname.as_str()).as_str());
+            copies.append(this.dart_copy(f.ty, fname.as_str(), fmt("from.{}", copy fname).as_str(), "    ").as_str());
+            match (*this.c.t.get(f.ty)) {
+                .ARRAY(e, k) => {},
+                default => {
+                    if (named.len() > 0) {
+                        named.append(", ");
+                    }
+                    named.append(fmt2("required {} {}", this.dart_raw(f.ty), copy fname).as_str());
+                    sets.append(fmt2("\n    ..{} = {}", copy fname, copy fname).as_str());
+                },
+            }
+        }
+        // of: a new one (in Dart memory), and copyFrom
+        if (named.len() > 0) {
+            named = fmt("{{{}}}", move named);
+        }
+        out.append(fmt3("\n  factory {}.of({}) => Struct.create<{}>()", copy n, move named, copy n).as_str());
+        out.append(fmt("{};\n", move sets).as_str());
+        out.append(fmt2("\n  void copyFrom({} from) {{\n{}  }}\n}}\n", copy n, move copies).as_str());
+    }
+    for (x&) in this.slices.items() {
+        out.append(fmt2("\n/// a Volt slice: elements and how many\nfinal class {} extends Struct {{\n  external Pointer<{}> ptr;\n  @Size()\n  external int len;\n}}\n", this.made_name("slice", *x, true), this.dart_native(*x)).as_str());
+    }
+    for (x&) in this.opts.items() {
+        out.append(fmt2("\n/// a Volt optional: has says whether value is there\nfinal class {} extends Struct {{\n{}  @Bool()\n  external bool has;\n}}\n", this.made_name("opt", *x, true), this.dart_field(*x, "value")).as_str());
+    }
+    for (rt&) in this.results.items() {
+        match (*this.c.t.get(*rt)) {
+            .ERR_UNION(e, x) => {
+                out.append(fmt2("\n/// {}: error is 0, or the error's code\nfinal class {} extends Struct {{\n  @Uint32()\n  external int error;\n", this.c.ty_name(*rt), this.result_name(*rt)).as_str());
+                if (x != VOID) {
+                    out.append(this.dart_field(x, "value").as_str());
+                }
+                out.append("}\n");
+            },
+            default => {},
+        }
+    }
+    // the C functions
+    out.append("\n/// the C functions (the functions and classes below are easier to use)\nabstract final class Native {\n");
+    for (e&) in ents.items() {
+        var nps: std::string = {};
+        var dps: std::string = {};
+        var nret = S("Void");
+        var dret = S("void");
+        if (e.free_of != null) {
+            nps = S("Pointer<Void>");
+            dps = S("Pointer<Void>");
+        } else {
+            val f = this.c.fi(e.f);
+            nret = this.dart_native(f.ret);
+            dret = this.dart_raw(f.ret);
+            for (q&) in f.params.items() {
+                if (nps.len() > 0) {
+                    nps.append(", ");
+                    dps.append(", ");
+                }
+                nps.append(this.dart_native(q.ty).as_str());
+                dps.append(this.dart_raw(q.ty).as_str());
+                match (this.shape_of(q.ty) ?? shape::VOID) {
+                    .CLOSURE(i) => {
+                        nps.append(", Pointer<Void>");
+                        dps.append(", Pointer<Void>");
+                    },
+                    default => {},
+                }
+            }
+        }
+        out.append(fmt4("  static final {} = _lib.lookupFunction<{} Function({}), {} Function(", copy e.name, move nret, move nps, move dret).as_str());
+        out.append(fmt2("{})>('{}');\n", move dps, copy e.name).as_str());
+    }
+    out.append("}\n");
+    // a class per export struct, freed by close() or, when it's collected, by a NativeFinalizer
+    for (s&) in this.handles.items() {
+        val cls = this.local(this.c.si(*s).name);
+        val fr = this.free_name(*s);
+        out.append(fmt4("\nfinal _{}_finalizer = NativeFinalizer(_lib.lookup<NativeFunction<Void Function(Pointer<Void>)>>('{}'));\n\n/// export struct {}; close() frees it (or the finalizer, once it's collected)\nclass {} implements Finalizable {{\n", copy cls, copy fr, S(this.c.si(*s).name), copy cls).as_str());
+        out.append(fmt3("  Pointer<Void> _h;\n\n  {}._(this._h) {{\n    _{}_finalizer.attach(this, _h, detach: this);\n  }}\n\n", copy cls, copy cls, S("")).as_str());
+        out.append(fmt2("  Pointer<Void> _handle() {{\n    if (_h == nullptr) {{\n      throw StateError('this {} is closed');\n    }}\n    return _h;\n  }}\n\n  void close() {{\n    if (_h != nullptr) {{\n      _{}_finalizer.detach(this);\n", copy cls, copy cls).as_str());
+        out.append(fmt("      Native.{}(_h);\n      _h = nullptr;\n    }\n  }\n", copy fr).as_str());
+        for (e&) in ents.items() {
+            if (e.free_of != null) {
+                continue;
+            }
+            val m = this.member_of(e.f, *s) ?? continue;
+            val info = this.c.fi(e.f);
+            out.append("\n");
+            if (this.node_is_method(e.f, *s)) {
+                val head = fmt2("{} {}", this.dart_ty(info.ret), dart_ident(m));
+                out.append((try this.dart_fn(e.f, 1, head.as_str(), "  ")).as_str());
+            } else if (m == "new" && this.made_by(e.f, *s)) {
+                out.append((try this.dart_fn(e.f, 0, fmt("factory {}", copy cls).as_str(), "  ")).as_str());
+            } else {
+                val head = fmt2("static {} {}", this.dart_ty(info.ret), dart_ident(m));
+                out.append((try this.dart_fn(e.f, 0, head.as_str(), "  ")).as_str());
+            }
+        }
+        out.append("}\n");
+    }
+    // the functions
+    for (e&) in ents.items() {
+        if (e.free_of != null || this.class_of(e.f) != null) {
+            continue;
+        }
+        val info = this.c.fi(e.f);
+        out.append("\n");
+        val head = fmt2("{} {}", this.dart_ty(info.ret), dart_ident(info.c_name));
+        out.append((try this.dart_fn(e.f, 0, head.as_str(), "")).as_str());
+    }
+    return move out;
+}
+
 attach fn bindings(this: checker&, pkg: str, lang: str) -> compile_error!std::string {
     var b: bind = { c: this, pkg: pkg };
     val fns = b.exports();
@@ -6025,6 +6786,9 @@ attach fn bindings(this: checker&, pkg: str, lang: str) -> compile_error!std::st
     if (lang == "lua") {
         return b.lua_text();
     }
+    if (lang == "dart") {
+        return b.dart_text();
+    }
     if (lang == "node") {
         return b.node_text();
     }
@@ -6034,5 +6798,5 @@ attach fn bindings(this: checker&, pkg: str, lang: str) -> compile_error!std::st
     if (lang == "ts") {
         return b.ts_text();
     }
-    return fail(NO_SPAN, fmt("--lang takes c, cpp, rust, zig, python, pyi, csharp, java, go, lua, node, js, ts or json, not '{}'", S(lang)));
+    return fail(NO_SPAN, fmt("--lang takes c, cpp, rust, zig, python, pyi, csharp, java, go, lua, dart, node, js, ts or json, not '{}'", S(lang)));
 }

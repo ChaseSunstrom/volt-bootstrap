@@ -22,7 +22,7 @@ required-features = []       # built only when these features are on
 [lib]                        # optional: by default lib/, when it exists
 path = "lib"
 kind = ["volt"]              # also "shared" and "static": self-contained libraries for other languages
-bindings = ["c", "python"]   # for other languages: c, cpp, rust, zig, python, pyi, csharp, java, go, lua, node, js, ts, json
+bindings = ["c", "python"]   # for other languages: c, cpp, rust, zig, python, pyi, csharp, java, go, lua, dart, node, js, ts, json
 
 [[example]]                  # also [[test]] and [[bench]]: name, path, required-features
 name = "demo"
