@@ -469,6 +469,18 @@ namespace json {
         return value<A>::NUM(x);
     }
 
+    // true or false (the allocator only picks which value<A> it is)
+    <A: std::mem::t_allocator = std::mem::default_allocator>
+    fn boolean(b: bool, allocator: A = {}) -> value<A> {
+        return value<A>::BOOL(b);
+    }
+
+    // null (the allocator only picks which value<A> it is)
+    <A: std::mem::t_allocator = std::mem::default_allocator>
+    fn null_value(allocator: A = {}) -> value<A> {
+        return value<A>::NULL;
+    }
+
     // set an object's member (replacing one with the same name)
     <A: std::mem::t_allocator>
     attach fn set(this: value<A>&, key: str, v: value<A>) -> void {

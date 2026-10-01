@@ -80,6 +80,19 @@ fn bindings_round_trip() {
     for (lang, file) in [("c", "mathlib.h"), ("cpp", "mathlib.hpp"), ("rust", "mathlib.rs"), ("python", "mathlib.py"), ("zig", "mathlib.zig")] {
         ok(e.voltc(&["bindings", "mathlib", "--pkg", pkg, "--lang", lang, "-o", &e.path(file)]), &format!("voltc bindings --lang {lang}"));
     }
+    // the model the generators share, as JSON for generators of other people's
+    let json = ok(e.voltc(&["bindings", "mathlib", "--pkg", pkg, "--lang", "json"]), "voltc bindings --lang json");
+    for want in [
+        r#""package":"mathlib""#,
+        r#"{"kind":"class","name":"counter","c_name":"mathlib_counter","free":"counter_free"}"#,
+        r#"{"kind":"error_set","name":"math_error","codes":[{"name":"NEGATIVE","code":3930732238}]}"#,
+        r#"{"name":"counter_add","params":[{"name":"c","type":{"kind":"handle","class":"counter","owned":false,"nullable":false}},{"name":"by","type":{"kind":"i64"}}],"returns":{"kind":"i64"},"class":"counter","method":"add","static":false"#,
+        r#"{"name":"ml_each","params":[{"name":"xs","type":{"kind":"slice","of":{"kind":"i32"}}},{"name":"f","type":{"kind":"callback","params":[{"kind":"i32"}],"returns":{"kind":"void"}}}]"#,
+        r#""returns":{"kind":"result","error":"math_error","value":{"kind":"text"},"c_name":"mathlib_math_error_or_text"}"#,
+        r#""returns":{"kind":"optional","of":{"kind":"usize"}}"#,
+    ] {
+        assert!(json.contains(want), "the JSON model lacks {want}:\n{json}");
+    }
     let bin = |name: &str| e.dir.join(name);
     for backend in ["c", "llvm"] {
         let lib_dir = e.path(backend);

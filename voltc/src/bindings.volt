@@ -1,4 +1,4 @@
-// Bindings for other languages: `voltc bindings NAME --lang c|cpp|rust|zig|python` describes package
+// Bindings for other languages: `voltc bindings NAME --lang c|cpp|rust|zig|python|json` describes package
 // NAME's export fns and the types they use, for programs that call a library built with
 // `voltc lib NAME --shared` (or `--static`). Every type crosses in a C form:
 // - numbers, bool, pointers (T* and T&), cstr, str (volt_str: a pointer and a length), structs whose
@@ -2414,9 +2414,239 @@ attach fn py_text(this: bind&) -> std::string {
     return move out;
 }
 
+// ---------- JSON: the model every generator reads ----------
+
+// A type in the JSON model: {"kind": ...} with what that kind needs. Kinds: void, bool, i8..u64,
+// isize, usize, f32, f64, cstr, str, text (owned text: free it), pointer {to, nullable}, struct {name},
+// enum {name}, error {set} (a u32 code), result {error, value}, array {of, len}, slice {of},
+// optional {of}, handle {class, owned, nullable when lent}, function {params, returns} (an extern "C" fn pointer) and
+// callback {params, returns} (a C function taking the caller's data first, then the data).
+attach fn json_ty(this: bind&, t: u32) -> std::json::value {
+    var o = std::json::object();
+    val sh = this.shape_of(t) ?? shape::VOID;
+    match (sh) {
+        .VOID => { o.set("kind", std::json::string("void")); },
+        .BOOL => { o.set("kind", std::json::string("bool")); },
+        .INT(k) => { o.set("kind", std::json::string(k.name())); },
+        .FLOAT(b) => {
+            if (b == 32) {
+                o.set("kind", std::json::string("f32"));
+            } else {
+                o.set("kind", std::json::string("f64"));
+            }
+        },
+        .CSTR => { o.set("kind", std::json::string("cstr")); },
+        .STR => { o.set("kind", std::json::string("str")); },
+        .PTR(x) => {
+            val h = this.lent_handle(t);
+            if (h) {
+                o.set("kind", std::json::string("handle"));
+                o.set("class", std::json::string(this.local(this.c.si(h).name).as_str()));
+                o.set("owned", std::json::boolean(false));
+            } else {
+                o.set("kind", std::json::string("pointer"));
+                o.set("to", this.json_ty(x));
+            }
+            // a reference (T&) is never null; T* and T&? can be
+            var nullable = true;
+            match (*this.c.t.get(t)) {
+                .REF(y) => { nullable = false; },
+                default => {},
+            }
+            o.set("nullable", std::json::boolean(nullable));
+        },
+        .STRUCT(s) => {
+            o.set("kind", std::json::string("struct"));
+            o.set("name", std::json::string(this.local(this.c.si(s).name).as_str()));
+        },
+        .ENUM(e) => {
+            o.set("kind", std::json::string("enum"));
+            o.set("name", std::json::string(this.local(this.c.ei(e).name).as_str()));
+        },
+        .CODE => {
+            o.set("kind", std::json::string("error"));
+            o.set("set", std::json::string(this.short(t).as_str()));
+        },
+        .RESULT(e, x) => {
+            o.set("kind", std::json::string("result"));
+            o.set("error", std::json::string(this.short(e).as_str()));
+            o.set("value", this.json_ty(x));
+            o.set("c_name", std::json::string(this.c_named(this.result_name(t).as_str(), false).as_str()));
+        },
+        .ARRAY(elem, n) => {
+            o.set("kind", std::json::string("array"));
+            o.set("of", this.json_ty(elem));
+            o.set("len", std::json::number(@cast<f64>(n)));
+        },
+        .FN(i) => {
+            o.set("kind", std::json::string("function"));
+            this.json_sig(t, &o);
+        },
+        .SLICE(x) => {
+            o.set("kind", std::json::string("slice"));
+            o.set("of", this.json_ty(x));
+        },
+        .OPT(x) => {
+            o.set("kind", std::json::string("optional"));
+            o.set("of", this.json_ty(x));
+        },
+        .HANDLE(s) => {
+            o.set("kind", std::json::string("handle"));
+            o.set("class", std::json::string(this.local(this.c.si(s).name).as_str()));
+            o.set("owned", std::json::boolean(true));
+        },
+        .TEXT(x) => { o.set("kind", std::json::string("text")); },
+        .CLOSURE(i) => {
+            o.set("kind", std::json::string("callback"));
+            this.json_sig(t, &o);
+        },
+    }
+    return move o;
+}
+
+// a fn type's params and returns, into o
+attach fn json_sig(this: bind&, t: u32, o: std::json::value&) -> void {
+    var ps = std::json::array();
+    var r = VOID;
+    match (*this.c.t.get(t)) {
+        .FN_PTR(xs&, rr, va) => {
+            for (p&) in xs.items() {
+                ps.add(this.json_ty(*p));
+            }
+            r = rr;
+        },
+        .FN_VAL(xs&, rr) => {
+            for (p&) in xs.items() {
+                ps.add(this.json_ty(*p));
+            }
+            r = rr;
+        },
+        default => {},
+    }
+    o.set("params", move ps);
+    o.set("returns", this.json_ty(r));
+}
+
+attach fn json_text(this: bind&) -> std::string {
+    val ents = this.entries();
+    var out = std::json::object();
+    out.set("package", std::json::string(this.pkg));
+    out.set("version", std::json::number(1.0));
+    var types = std::json::array();
+    for (s&) in this.structs.items() {
+        val info = this.c.si(*s);
+        var o = std::json::object();
+        o.set("kind", std::json::string("struct"));
+        o.set("name", std::json::string(this.local(info.name).as_str()));
+        o.set("c_name", std::json::string(this.c_named(info.name, false).as_str()));
+        var fields = std::json::array();
+        for (f&) in info.fields.items() {
+            var fo = std::json::object();
+            fo.set("name", std::json::string(f.name));
+            fo.set("type", this.json_ty(f.ty));
+            fields.add(move fo);
+        }
+        o.set("fields", move fields);
+        types.add(move o);
+    }
+    for (e&) in this.enums.items() {
+        val info = this.c.ei(*e);
+        var o = std::json::object();
+        o.set("kind", std::json::string("enum"));
+        o.set("name", std::json::string(this.local(info.name).as_str()));
+        o.set("c_name", std::json::string(this.c_named(info.name, false).as_str()));
+        o.set("tag", std::json::string(info.tag.name()));
+        var vals = std::json::array();
+        for (i) in 0..info.names.len {
+            var v = std::json::object();
+            v.set("name", std::json::string(*info.names.at(i)));
+            v.set("value", std::json::number(@cast<f64>(*info.values.at(i))));
+            vals.add(move v);
+        }
+        o.set("values", move vals);
+        types.add(move o);
+    }
+    for (et&) in this.codes.items() {
+        match (*this.c.t.get(*et)) {
+            .ENUM(e) => {
+                val info = this.c.ei(e);
+                var o = std::json::object();
+                o.set("kind", std::json::string("error_set"));
+                o.set("name", std::json::string(this.local(info.name).as_str()));
+                var vals = std::json::array();
+                for (i) in 0..info.names.len {
+                    var v = std::json::object();
+                    v.set("name", std::json::string(*info.names.at(i)));
+                    v.set("code", std::json::number(@cast<f64>(*info.values.at(i))));
+                    vals.add(move v);
+                }
+                o.set("codes", move vals);
+                types.add(move o);
+            },
+            default => {},
+        }
+    }
+    for (s&) in this.handles.items() {
+        var o = std::json::object();
+        o.set("kind", std::json::string("class"));
+        o.set("name", std::json::string(this.local(this.c.si(*s).name).as_str()));
+        o.set("c_name", std::json::string(this.c_named(this.c.si(*s).name, false).as_str()));
+        o.set("free", std::json::string(this.free_name(*s).as_str()));
+        types.add(move o);
+    }
+    out.set("types", move types);
+    var fns = std::json::array();
+    for (e&) in ents.items() {
+        var o = std::json::object();
+        o.set("name", std::json::string(e.name.as_str()));
+        var ps = std::json::array();
+        val s = e.free_of;
+        if (s) {
+            var p = std::json::object();
+            p.set("name", std::json::string("it"));
+            var h = std::json::object();
+            h.set("kind", std::json::string("handle"));
+            h.set("class", std::json::string(this.local(this.c.si(s).name).as_str()));
+            h.set("owned", std::json::boolean(true));
+            p.set("type", move h);
+            ps.add(move p);
+            o.set("params", move ps);
+            var v = std::json::object();
+            v.set("kind", std::json::string("void"));
+            o.set("returns", move v);
+            o.set("frees", std::json::string(this.local(this.c.si(s).name).as_str()));
+            fns.add(move o);
+            continue;
+        }
+        val info = this.c.fi(e.f);
+        for (p&) in info.params.items() {
+            var po = std::json::object();
+            po.set("name", std::json::string(p.name));
+            po.set("type", this.json_ty(p.ty));
+            ps.add(move po);
+        }
+        o.set("params", move ps);
+        o.set("returns", this.json_ty(info.ret));
+        val cls = this.class_of(e.f);
+        if (cls) {
+            o.set("class", std::json::string(this.local(this.c.si(cls).name).as_str()));
+            o.set("method", std::json::string(this.member_of(e.f, cls) ?? ""));
+            o.set("static", std::json::boolean(!(info.params.len > 0 && this.lends(info.params.at(0).ty, cls))));
+        }
+        // its doc comment, for generators that copy it
+        val sp = this.c.dl(info.decl).item.span;
+        o.set("doc", std::json::string(doc_above(this.c.files.at(sp.file).text, @cast<usize>(sp.lo)).as_str()));
+        fns.add(move o);
+    }
+    out.set("functions", move fns);
+    var text = out.text();
+    text.push('\n');
+    return move text;
+}
+
 // ---------- the command ----------
 
-// the bindings of package pkg in lang (c, cpp, rust, zig, python)
+// the bindings of package pkg in lang (c, cpp, rust, zig, python, or json: the model itself)
 attach fn bindings(this: checker&, pkg: str, lang: str) -> compile_error!std::string {
     var b: bind = { c: this, pkg: pkg };
     val fns = b.exports();
@@ -2439,5 +2669,8 @@ attach fn bindings(this: checker&, pkg: str, lang: str) -> compile_error!std::st
     if (lang == "python") {
         return b.py_text();
     }
-    return fail(NO_SPAN, fmt("--lang takes c, cpp, rust, zig or python, not '{}'", S(lang)));
+    if (lang == "json") {
+        return b.json_text();
+    }
+    return fail(NO_SPAN, fmt("--lang takes c, cpp, rust, zig, python or json, not '{}'", S(lang)));
 }

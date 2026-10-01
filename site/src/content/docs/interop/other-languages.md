@@ -124,6 +124,50 @@ Every binding also has the plain C functions: in C++ they're in namespace `raw`,
 `raw`, and in Zig in struct `raw`. `--lang` is one of `c`, `cpp`, `rust`, `zig` or `python`. The
 Python bindings use `ctypes` and load the shared library.
 
+### The model, for generators of your own
+
+`--lang json` prints what every generator above reads: the package's C interface, as one JSON
+object.
+
+```json
+{"package": "mathlib", "version": 1,
+ "types": [
+   {"kind": "struct", "name": "vec2", "c_name": "mathlib_vec2",
+    "fields": [{"name": "x", "type": {"kind": "f64"}}, {"name": "y", "type": {"kind": "f64"}}]},
+   {"kind": "error_set", "name": "math_error", "codes": [{"name": "NEGATIVE", "code": 3930732238}]},
+   {"kind": "class", "name": "counter", "c_name": "mathlib_counter", "free": "counter_free"}],
+ "functions": [
+   {"name": "counter_add", "class": "counter", "method": "add", "static": false, "doc": "",
+    "params": [{"name": "c", "type": {"kind": "handle", "class": "counter", "owned": false, "nullable": false}},
+               {"name": "by", "type": {"kind": "i64"}}],
+    "returns": {"kind": "i64"}}]}
+```
+
+The types are structs (with fields), plain enums (`tag` and `values`), error sets (`codes`), and
+classes, which are export structs. A class has its `free` function. A function's `name` is its C
+symbol. A function that belongs to a class has `class`, `method` and `static`, and `NAME_free`
+has `frees`. `doc` is the comment above the Volt function.
+
+Each parameter and return type is `{"kind": ...}`:
+
+| kind | what it is in C |
+| --- | --- |
+| `void`, `bool`, `i8` to `u64`, `isize`, `usize`, `f32`, `f64` | the C type |
+| `cstr` | `const char *` |
+| `str` | `volt_str`: a pointer and a length (borrowed) |
+| `text` | `volt_text`: owned text; call its `drop` with its `owner` when done |
+| `pointer` (`to`, `nullable`) | a pointer; `nullable` is false for a Volt `T&` |
+| `struct`, `enum` (`name`) | a type from `types` |
+| `error` (`set`) | a `uint32_t` code, 0 for none |
+| `result` (`error`, `value`, `c_name`) | a struct of `uint32_t error` and `value` |
+| `array` (`of`, `len`) | a C array |
+| `slice` (`of`), `optional` (`of`) | `{ T *ptr; size_t len }`, `{ T value; bool has }` |
+| `handle` (`class`, `owned`, `nullable`) | a pointer to the class; owned ones are freed with its `free` |
+| `function` (`params`, `returns`) | an `extern "C"` function pointer |
+| `callback` (`params`, `returns`) | two parameters: a C function that gets the data first, and the data (`void *`) |
+
+`version` changes when a field or a kind changes meaning.
+
 ## In bolt
 
 ```toml
