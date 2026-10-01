@@ -42,6 +42,44 @@ fn main() -> void {
 Types made of owned parts (a struct with a `std::vec` field, say) need no hook: each field is
 deleted when the struct is.
 
+### Temporaries
+
+A value nobody keeps, like the result of `make("a")` below, is a temporary. It's deleted at the end
+of the statement it's in, so `make("a").view()` can be used anywhere in that statement, even when
+the result points into it (`word().as_str()` as an argument). In a `val` or `var`'s initializer,
+it lives as long as the variable instead, and so does one in a `break` value that the initializer's
+block gives. A `defer`'s statement keeps its own until it's done.
+
+```volt
+use std::io;
+
+struct note {
+    text: str;
+}
+
+attach fn delete(this: note&) -> void {
+    std::println("delete {}", this.text);
+}
+
+attach fn view(this: note&) -> str {
+    return this.text;
+}
+
+fn make(t: str) -> note {
+    return { text: t };
+}
+
+fn main() -> void {
+    std::println("{}", make("a").view()); // deleted after this statement
+    val kept = make("b").view();          // deleted when kept goes out of scope
+    std::println("{} still here", kept);
+}
+// expect: a
+// expect: delete a
+// expect: b still here
+// expect: delete b
+```
+
 ## Moves
 
 Using an owned value by value (passing it, returning it, assigning it) **moves** it: the new place

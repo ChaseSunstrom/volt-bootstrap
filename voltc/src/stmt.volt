@@ -73,15 +73,104 @@ attach fn block_scoped(this: checker&, b: block&) -> compile_error!code {
     return { c: this.ir.block(move stmts), div: div };
 }
 
+// what keep_begin saved, for keep_end
+struct keep_mark {
+    was: bool;
+    base: usize;
+    scope: usize;
+}
+
+// keep the receiver temporaries made from here on (see fn_cx.kept), their exits in scope `scope`
+attach fn keep_begin(this: checker&, scope: usize) -> keep_mark {
+    val m: keep_mark = { was: this.cx.keeping, base: this.cx.kept.len, scope: this.cx.keep_scope };
+    this.cx.keeping = true;
+    this.cx.keep_scope = scope;
+    return m;
+}
+
+// stop keeping: the temporaries kept since keep_begin, their flags' initializations (into inits) and
+// the code that deletes the live ones (into drops)
+attach fn keep_end(this: checker&, m: keep_mark, inits: std::vec<u32>&, drops: std::vec<u32>&) -> compile_error!void {
+    this.cx.keeping = m.was;
+    this.cx.keep_scope = m.scope;
+    var kept: std::vec<kept_temp> = {};
+    while (this.cx.kept.len > m.base) {
+        put(&kept, this.cx.kept.pop() ?? { c: 0, ty: 0, flag: 0 });
+    }
+    var i = kept.len;
+    while (i > 0) {
+        i -= 1;
+        val k = *kept.at(i);
+        put(inits, this.decl_at(k.flag, this.ir.boolean(false)));
+        if (try this.needs_drop(k.ty)) {
+            val d = try this.drop_fn(k.ty);
+            put(drops, this.ir.if_(k.flag, this.call_fn(d, nodes(this.ir.addr(k.c, this.t.ref_to(k.ty))), VOID), null));
+        }
+    }
+}
+
+// `break` with a value
+fn is_break_value(e: expr&) -> bool {
+    match (e.kind) {
+        .BREAK(label, value) => {
+            if (value) {
+                return true;
+            }
+        },
+        default => {},
+    }
+    return false;
+}
+
+// an expression statement's code
+attach fn expr_stmt(this: checker&, e: expr&) -> compile_error!code {
+    val v = try this.expr(e, null);
+    val never = v.ty == NEVER;
+    return { c: try this.discard(v), div: never };
+}
+
 // one statement and whether it always diverges; defer/errdefer only register an exit
 attach fn stmt(this: checker&, s: stmt&) -> compile_error!code {
     this.lsp_at = s.span;
+    var inits: std::vec<u32> = {};
+    var drops: std::vec<u32> = {};
     match (s.kind) {
-        .LET(l&) => { return this.let_stmt(l); },
+        .LET(l&) => {
+            // temporaries in the initializer live as long as the variable: to the end of this scope
+            val m = this.keep_begin(this.cx.scopes.len - 1);
+            val r = this.let_stmt(l);
+            val k = this.keep_end(m, &inits, &drops);
+            val c = try r;
+            try k;
+            if (inits.len == 0) {
+                return c;
+            }
+            put(&inits, c.c);
+            return { c: this.ir.block(move inits), div: c.div };
+        },
         .EXPR(e&) => {
-            val v = try this.expr(e, null);
-            val never = v.ty == NEVER;
-            return { c: try this.discard(v), div: never };
+            // a break's value leaves its block: its temporaries belong to the statement the block is
+            // part of (`val x = :b { break :b f().as_str(); }` keeps them as long as x)
+            if (this.cx.keeping && is_break_value(e)) {
+                return this.expr_stmt(e);
+            }
+            // temporaries live to the end of the statement: a scope of its own deletes them on an
+            // early exit, and the code after the statement on the way out
+            put(&this.cx.scopes, {});
+            val m = this.keep_begin(this.cx.scopes.len - 1);
+            val r = this.expr_stmt(e);
+            val k = this.keep_end(m, &inits, &drops);
+            this.cx.scopes.pop();
+            val c = try r;
+            try k;
+            if (inits.len == 0) {
+                return c;
+            }
+            put(&inits, c.c);
+            for (d&) in drops.items() {
+                put(&inits, *d);
+            }
+            return { c: this.ir.block(move inits), div: c.div };
         },
         .DEFER(e&) => {
             put(&this.scope_top().exits, exit::DEFER(e, false));
@@ -277,7 +366,11 @@ attach fn zero_value(this: checker&, t: u32, span: span) -> compile_error!tval {
 // deferred code for scopes [to, from] (innermost first), each checked in its own scope
 attach fn scope_exit_code(this: checker&, from: usize, to: usize, is_err: bool) -> compile_error!std::vec<u32> {
     this.cx.no_suspend += 1;
+    // the exits' own statements keep their temporaries (each defer has a context of its own)
+    val keeping = this.cx.keeping;
+    this.cx.keeping = false;
     val r = this.scope_exit_inner(from, to, is_err);
+    this.cx.keeping = keeping;
     this.cx.no_suspend -= 1;
     return move r;
 }
@@ -315,8 +408,19 @@ attach fn run_exits(this: checker&, exits: std::vec<exit>&, is_err: bool, out: s
                 if (only_err && !is_err) {
                     continue;
                 }
-                val v = try this.expr(e, null);
+                // a deferred statement's temporaries live to its end, like any statement's
+                put(&this.cx.scopes, {});
+                val m = this.keep_begin(this.cx.scopes.len - 1);
+                val r = this.expr(e, null);
+                var drops: std::vec<u32> = {};
+                val ke = this.keep_end(m, out, &drops);
+                this.cx.scopes.pop();
+                val v = try r;
+                try ke;
                 put(out, v.c);
+                for (d&) in drops.items() {
+                    put(out, *d);
+                }
             },
             .DROP(c, d, flag) => {
                 val pt = this.t.ref_to(this.ir.ty_of(c));
@@ -571,7 +675,13 @@ attach fn while_expr(this: checker&, label: str?, c: expr&, b: block&, span: spa
     val li = this.push_loop(label, false, false, null);
     val cont = this.cx.loops.at(li).cont ?? 0;
     val brk_l = this.cx.loops.at(li).brk;
+    val mark = this.cx.kept.len;
     val cd = this.cond(c) catch |e| {
+        this.cx.loops.pop();
+        return copy e;
+    };
+    // the condition runs once per round: its temporaries are deleted after each test
+    val drops = this.cond_drops(mark) catch |e| {
         this.cx.loops.pop();
         return copy e;
     };
@@ -582,9 +692,37 @@ attach fn while_expr(this: checker&, label: str?, c: expr&, b: block&, span: spa
         this.cx.loops.pop();
         return copy e;
     };
-    val stop = this.ir.if_(this.ir.unary(unop_ir::NOT, cd.test, BOOL), this.ir.goto_(brk_l), null);
-    val body = this.ir.block(nodes3(stop, bc.c, this.ir.label_at(cont)));
+    var test = cd.test;
+    var round: std::vec<u32> = {};
+    if (drops.len > 0) {
+        val w = this.tmp_local("wc", BOOL);
+        put(&round, this.ir.decl(w.id, cd.test));
+        for (d&) in drops.items() {
+            put(&round, *d);
+        }
+        test = w.c;
+    }
+    put(&round, this.ir.if_(this.ir.unary(unop_ir::NOT, test, BOOL), this.ir.goto_(brk_l), null));
+    put(&round, bc.c);
+    put(&round, this.ir.label_at(cont));
+    val body = this.ir.block(move round);
     return this.finish_loop(nodes(this.ir.node(ir_kind::LOOP(body), VOID)), false, span, false);
+}
+
+// deleting the temporaries kept since mark (a while condition's), each if live, and marking them dead
+attach fn cond_drops(this: checker&, mark: usize) -> compile_error!std::vec<u32> {
+    var out: std::vec<u32> = {};
+    var i = mark;
+    while (i < this.cx.kept.len) {
+        val k = *this.cx.kept.at(i);
+        if (try this.needs_drop(k.ty)) {
+            val d = try this.drop_fn(k.ty);
+            val del = this.call_fn(d, nodes(this.ir.addr(k.c, this.t.ref_to(k.ty))), VOID);
+            put(&out, this.ir.if_(k.flag, this.ir.block(nodes2(del, this.ir.assign(k.flag, this.ir.boolean(false)))), null));
+        }
+        i += 1;
+    }
+    return move out;
 }
 
 // put a narrowed local (from cond), if any, in a scope of its own; pop_narrow drops it
@@ -724,28 +862,11 @@ attach fn for_inner(this: checker&, f: for_loop&, want: u32?, span: span) -> com
     var after: std::vec<u32> = {};
     if (!range_it) {
         // temporaries the iterable makes (the vec in `f().items()`) live until the loop ends
-        val was = this.cx.keeping;
-        val base = this.cx.kept.len;
-        this.cx.keeping = true;
+        val m = this.keep_begin(this.cx.scopes.len - 1);
         val vr = this.expr(&f.iter, null);
-        this.cx.keeping = was;
-        var kept: std::vec<kept_temp> = {};
-        while (this.cx.kept.len > base) {
-            put(&kept, this.cx.kept.pop() ?? { c: 0, ty: 0, flag: 0 });
-        }
+        val ke = this.keep_end(m, &init_flags, &after);
         val v = try vr;
-        var i = kept.len;
-        while (i > 0) {
-            i -= 1;
-            val k = *kept.at(i);
-            put(&init_flags, this.decl_at(k.flag, this.ir.boolean(false)));
-            if (try this.needs_drop(k.ty)) {
-                val d = try this.drop_fn(k.ty);
-                val del = this.call_fn(d, nodes(this.ir.addr(k.c, this.t.ref_to(k.ty))), VOID);
-                put(&after, this.ir.if_(k.flag, del, null));
-                put(&this.scope_top().exits, exit::DROP(k.c, d, k.flag));
-            }
-        }
+        try ke;
         if (!v.lv && (try this.needs_drop(v.ty))) {
             return fails(f.iter.span, "store this in a variable before looping over it (its elements own memory)");
         }

@@ -42,11 +42,32 @@ impl Checker {
     /// one statement: its C code and whether it always diverges; defer/errdefer only register an exit
     fn stmt(&mut self, s: &Stmt) -> Res<(String, bool)> {
         match &s.kind {
-            StmtKind::Let(l) => self.let_stmt(l),
-            StmtKind::Expr(e) => {
+            StmtKind::Let(l) => {
+                // temporaries in the initializer live as long as the variable: to the end of this scope
+                let scope = self.cx.scopes.len() - 1;
+                let ((code, div), decls, _) = self.keeping(scope, |c| c.let_stmt(l))?;
+                Ok((format!("{decls}{code}"), div))
+            }
+            StmtKind::Expr(e) if matches!(e.kind, ExprKind::Break(_, Some(_))) && self.cx.keep_temps.is_some() => {
+                // a break's value leaves its block: its temporaries belong to the statement the block
+                // is part of (`val x = :b { break :b f().as_str(); }` keeps them as long as x)
                 let v = self.expr(e, None)?;
                 let never = v.ty == NEVER;
                 Ok((format!("{};", self.discard(v)?), never))
+            }
+            StmtKind::Expr(e) => {
+                // temporaries live to the end of the statement: a scope of its own deletes them on an
+                // early exit, and the code after the statement on the way out
+                self.cx.scopes.push(Scope::default());
+                let scope = self.cx.scopes.len() - 1;
+                let r = self.keeping(scope, |c| {
+                    let v = c.expr(e, None)?;
+                    let never = v.ty == NEVER;
+                    Ok((format!("{};", c.discard(v)?), never))
+                });
+                self.cx.scopes.pop();
+                let ((code, never), decls, drops) = r?;
+                Ok((format!("{decls}{code} {drops}"), never))
             }
             StmtKind::Defer(e) | StmtKind::ErrDefer(e) => {
                 let is_err = matches!(s.kind, StmtKind::ErrDefer(_));
@@ -56,6 +77,29 @@ impl Checker {
             StmtKind::Suspend => Ok((self.suspend(s.span)?, false)),
             StmtKind::Resume(e) => Ok((self.resume(e, s.span)?, false)),
         }
+    }
+
+    /// run f keeping the receiver temporaries it makes (see keep_temps), their exits in scope `scope`:
+    /// f's result, the temporaries' declarations, and the code that deletes the live ones
+    fn keeping<T>(&mut self, scope: usize, f: impl FnOnce(&mut Self) -> Res<T>) -> Res<(T, String, String)> {
+        let outer = self.cx.keep_temps.replace(Vec::new());
+        let outer_scope = std::mem::replace(&mut self.cx.keep_scope, scope);
+        let r = f(self);
+        let kept = std::mem::replace(&mut self.cx.keep_temps, outer).unwrap_or_default();
+        self.cx.keep_scope = outer_scope;
+        let r = r?;
+        let (mut decls, mut drops) = (String::new(), String::new());
+        for (t, ty, flag) in kept {
+            // an async fn's are frame fields, declared with the frame
+            if !t.starts_with("_f->") {
+                decls.push_str(&format!("{} {t}; ", self.cty(ty)));
+            }
+            decls.push_str(&format!("{}; ", Self::decl("bool", &flag, "false")));
+            if self.needs_drop(ty)? {
+                drops.push_str(&format!("if ({flag}) {}(&{t}); ", self.drop_fn(ty)?));
+            }
+        }
+        Ok((r, decls, drops))
     }
 
     /// Type for a declaration, filling in `T[]` lengths from the initializer.
@@ -188,7 +232,10 @@ impl Checker {
     /// deferred code for scopes [to, from] (innermost first), each checked in its own scope
     pub fn scope_exit_code(&mut self, from: usize, to: usize, is_err: bool) -> Res<String> {
         self.cx.no_suspend += 1;
+        // the exits' own statements keep their temporaries (each defer has a context of its own)
+        let keep = self.cx.keep_temps.take();
         let r = self.scope_exit_inner(from, to, is_err);
+        self.cx.keep_temps = keep;
         self.cx.no_suspend -= 1;
         r
     }
@@ -209,8 +256,13 @@ impl Checker {
                             if *only_err && !is_err {
                                 continue;
                             }
-                            let v = self.expr(e, None)?;
-                            code.push_str(&format!("{};\n", v.c));
+                            // a deferred statement's temporaries live to its end, like any statement's
+                            self.cx.scopes.push(Scope::default());
+                            let s = self.cx.scopes.len() - 1;
+                            let r = self.keeping(s, |c| c.expr(e, None));
+                            self.cx.scopes.pop();
+                            let (v, decls, drops) = r?;
+                            code.push_str(&format!("{decls}{}; {drops}\n", v.c));
                         }
                         Exit::Drop { c, drop, flag } => code.push_str(&format!("if ({flag}) {drop}(&{c});\n")),
                     }
@@ -399,9 +451,27 @@ impl Checker {
         let li = self.push_loop(label, false, false, None);
         let cont = self.cx.loops[li].cont.clone().unwrap();
         let r = (|| {
+            let mark = self.cx.keep_temps.as_ref().map(|k| k.len());
             let (test, narrow) = self.cond(cond)?;
+            // the condition runs once per round: its temporaries are deleted after each test
+            let mut drops = String::new();
+            let made = match mark {
+                Some(m) => self.cx.keep_temps.as_ref().unwrap()[m..].to_vec(),
+                None => Vec::new(),
+            };
+            for (t, ty, flag) in made {
+                if self.needs_drop(ty)? {
+                    drops.push_str(&format!("if ({flag}) {{ {}(&{t}); {flag} = false; }} ", self.drop_fn(ty)?));
+                }
+            }
+            let test = if drops.is_empty() {
+                format!("if (!({test})) break;")
+            } else {
+                let w = self.tmp("wc");
+                format!("bool {w} = ({test}); {drops}if (!{w}) break;")
+            };
             let (body, _) = self.narrowed(narrow, |c| c.block_code(b))?;
-            Ok(format!("for (;;) {{ if (!({test})) break; {body} {cont}:; }}"))
+            Ok(format!("for (;;) {{ {test} {body} {cont}:; }}"))
         })();
         match r {
             Ok(code) => self.finish_loop(code, false, span, false),
@@ -502,22 +572,10 @@ impl Checker {
             }
             _ => {
                 // temporaries the iterable makes (the vec in `f().items()`) live until the loop ends
-                let outer = self.cx.keep_temps.replace(Vec::new());
-                let v = self.expr(&f.iter, None);
-                let kept = std::mem::replace(&mut self.cx.keep_temps, outer).unwrap_or_default();
-                let v = v?;
-                for (t, ty, flag) in kept {
-                    let tc = self.cty(ty);
-                    if !t.starts_with("_f->") {
-                        kept_decls.push_str(&format!("{tc} {t}; "));
-                    }
-                    kept_decls.push_str(&format!("{}; ", Self::decl("bool", &flag, "false")));
-                    if self.needs_drop(ty)? {
-                        let drop = self.drop_fn(ty)?;
-                        after.push_str(&format!("if ({flag}) {drop}(&{t}); "));
-                        self.cx.scopes.last_mut().unwrap().exits.push(Exit::Drop { c: t, drop, flag });
-                    }
-                }
+                let scope = self.cx.scopes.len() - 1;
+                let (v, decls, drops) = self.keeping(scope, |c| c.expr(&f.iter, None))?;
+                kept_decls = decls;
+                after = drops;
                 if !v.lv && self.needs_drop(v.ty)? {
                     return err(f.iter.span, "store this in a variable before looping over it (its elements own memory)");
                 }

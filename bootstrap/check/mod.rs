@@ -168,9 +168,11 @@ pub struct FnCx {
     pub next_id: u32,
     pub moved: std::collections::HashSet<String>, // locals (C names) moved on some path so far
     pub move_sites: HashMap<String, Span>,        // where each moved local was last moved (for messages)
-    /// while a for loop's iterable is checked: the receiver temporaries made for it (slot, type, live
-    /// flag), which must outlive the loop (a slice from `f().items()` points into one)
+    /// the receiver temporaries a statement makes (slot, type, live flag): they live to the end of the
+    /// statement (a val's to the end of its scope, a for loop's iterable's to the end of the loop), so a
+    /// view into one (`f().as_str()`, `f().items()`) stays valid. None where they're deleted at once
     pub keep_temps: Option<Vec<(String, TyId, String)>>,
+    pub keep_scope: usize, // the scope whose exits delete them (early exits included)
     pub exiting: u32,                              // inside a return/break value
     pub reassigning: Option<String>,               // `x = f(move x)`: x gets a new value right away
     pub frame: Option<usize>,                      // generating this async fn's step function
@@ -190,6 +192,7 @@ impl FnCx {
             moved: Default::default(),
             move_sites: Default::default(),
             keep_temps: None,
+            keep_scope: 0,
             exiting: 0,
             reassigning: None,
             frame: None,

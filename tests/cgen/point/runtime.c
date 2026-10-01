@@ -1,7 +1,8 @@
 // runtime.c: the runtime (allocator, arguments), defined once in each program
 /* Volt runtime definitions: emitted in exactly one C unit per program (see prelude.h). */
 /* Allocation for libraries (std::mem binds it with @intrinsic). Debug builds add a header so double/invalid frees panic
-   (freed blocks sit in a small quarantine before really being freed) and count live
+   (freed blocks are overwritten with 0xDD, so a use after free reads garbage, and sit in a small
+   quarantine before really being freed) and count live
    allocations for --leak-check. */
 #ifdef VOLT_DEBUG_ALLOC
 size_t volt_live_allocs;
@@ -27,6 +28,7 @@ void volt_rt_free(void *p) {
     if (!p) return;
     volt_hdr *h = volt_hdr_of(p, "free of memory the runtime didn't allocate");
     h->magic = VOLT_DEAD;
+    volt_memset(h + 1, 0xDD, h->size); /* a read after free sees 0xDD bytes, not the old value */
     volt_live_allocs--;
     if (volt_quarantine[volt_q_next]) volt_free(volt_quarantine[volt_q_next]);
     volt_quarantine[volt_q_next] = h;

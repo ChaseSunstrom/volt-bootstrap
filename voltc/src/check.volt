@@ -133,7 +133,7 @@ struct fn_inst {
     used_at: span; // where the instance was first asked for (errors in a template's body point back to it)
 }
 
-// a temporary kept alive for a for loop (see fn_cx.kept): its slot, type and live flag
+// a receiver temporary kept alive (see fn_cx.kept): its slot, type and live flag
 struct kept_temp {
     c: u32;
     ty: u32;
@@ -197,10 +197,12 @@ struct fn_cx {
     next_id: u32 = 0;
     moved: idset = {};         // locals (places) moved on some path so far
     move_sites: std::map<u32, span> = {}; // where each moved local was last moved (for messages)
-    // while a for loop's iterable is checked: the receiver temporaries made for it, which must
-    // outlive the loop (a slice from `f().items()` points into one)
+    // the receiver temporaries a statement makes: they live to the end of the statement (a val's to
+    // the end of its scope, a for loop's iterable's to the end of the loop), so a view into one
+    // (`f().as_str()`, `f().items()`) stays valid. keeping is false where they're deleted at once
     keeping: bool = false;
     kept: std::vec<kept_temp> = {};
+    keep_scope: usize = 0; // the scope whose exits delete them (early exits included)
     exiting: u32 = 0;          // inside a return/break value
     reassigning: u32? = null;  // `x = f(move x)`: x gets a new value right away
     frame: u32? = null;        // generating this async fn's step function

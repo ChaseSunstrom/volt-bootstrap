@@ -1285,11 +1285,16 @@ attach fn emit_call(this: checker&, inst: u32, a: adj, rv: tval?, pre: std::vec<
                     v.lv = false;
                     put(&vals, v);
                 } else if (this.cx.keeping) {
-                    // part of a for loop's iterable: for_inner deletes it after the loop
+                    // kept to the end of the statement (see fn_cx.kept); its owner initializes the
+                    // flag, and an exit from the statement's scope deletes it from here on
                     val t = this.slot("_rv", r.ty);
                     val flag = this.flag_for(t);
                     put(&prefix, this.ir.assign(t, r.c));
                     put(&prefix, this.ir.assign(flag, this.ir.boolean(true)));
+                    if (try this.needs_drop(r.ty)) {
+                        val d = try this.drop_fn(r.ty);
+                        put(&this.cx.scopes.at(this.cx.keep_scope).exits, exit::DROP(t, d, flag));
+                    }
                     put(&this.cx.kept, { c: t, ty: r.ty, flag: flag });
                     put(&vals, vpure(rt, this.ir.addr(t, rt)));
                 } else {

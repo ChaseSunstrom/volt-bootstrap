@@ -120,6 +120,45 @@ fn partial_struct_layouts() {
     }
 }
 
+/// voltc built with --release (as `bolt build --release` makes it) works, and so does the release
+/// voltc it builds of itself: std builds as a library, and every tests/run program prints what it
+/// expects (the LLVM backend too). Release builds free memory for real, without the debug allocator's
+/// quarantine and poisoning, so they're where a use after free shows
+#[test]
+fn release_voltc_works() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let std_dir = root.join("std");
+    let tmp = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("release-{}", std::process::id()));
+    std::fs::create_dir_all(&tmp).unwrap();
+    let mut srcs = Vec::new();
+    volt_files(&root.join("voltc/src"), &mut srcs);
+    let (first, second) = (tmp.join("voltc-r1"), tmp.join("voltc-r2"));
+    for (by, out) in [(Path::new(env!("CARGO_BIN_EXE_voltc-bootstrap")), &first), (first.as_path(), &second)] {
+        let b = Command::new(by).arg("build").args(&srcs).arg("--std").arg(&std_dir).arg("--release").args(common::llvm_cc_args()).arg("-o").arg(out).output().unwrap();
+        assert!(b.status.success(), "{} building voltc --release failed:\n{}", by.display(), String::from_utf8_lossy(&b.stderr));
+    }
+    let o = Command::new(&second).args(["lib", "std", "--std"]).arg(&std_dir).arg("-o").arg(tmp.join("libstd.a")).output().unwrap();
+    assert!(o.status.success(), "release voltc lib std: {}", String::from_utf8_lossy(&o.stderr));
+    let mut runs: Vec<(PathBuf, &str)> = std::fs::read_dir(root.join("tests/run")).unwrap().map(|e| (e.unwrap().path(), "c")).collect();
+    runs.push((root.join("tests/run/temp_lifetimes.volt"), "llvm"));
+    let mut bad = Vec::new();
+    for (file, backend) in &runs {
+        let text = std::fs::read_to_string(file).unwrap();
+        let want: Vec<&str> = text.lines().filter_map(|l| l.strip_prefix("// expect: ")).map(|l| l.trim_end()).collect();
+        if want.is_empty() {
+            continue;
+        }
+        let flags: Vec<&str> = text.lines().find_map(|l| l.strip_prefix("// flags:")).map(|f| f.split_whitespace().collect()).unwrap_or_default();
+        let o = Command::new(&second).arg("run").arg(file).arg("--std").arg(&std_dir).args(["--backend", backend]).args(&flags).current_dir(root).output().unwrap();
+        let out = String::from_utf8_lossy(&o.stdout);
+        if out.lines().map(|l| l.trim_end()).collect::<Vec<_>>() != want {
+            bad.push(format!("{} ({backend}):\n{out}{}", file.display(), String::from_utf8_lossy(&o.stderr)));
+        }
+    }
+    assert!(bad.is_empty(), "the release voltc built by itself differs on:\n{}", bad.join("\n"));
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
 /// both compilers, built into a package's target/<profile>/ (as bolt builds voltc), find the std three
 /// levels up; and a library the linker can't find is reported as that, not as a voltc bug
 #[test]
