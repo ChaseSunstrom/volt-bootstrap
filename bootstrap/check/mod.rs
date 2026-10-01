@@ -532,27 +532,34 @@ impl Checker {
 
     /// Find a name from namespace `ns` outward. Returns decls, or a namespace.
     pub fn lookup(&self, ns: NsId, name: &str) -> Option<Found> {
+        self.lookup_in(ns, name, false)
+    }
+
+    /// lookup; with prefix (the name is followed by `::`), a namespace wins over methods of the same name
+    fn lookup_in(&self, ns: NsId, name: &str, prefix: bool) -> Option<Found> {
         let mut cur = Some(ns);
         while let Some(n) = cur {
-            let s = &self.nss[n];
-            if let Some(ds) = s.names.get(name) {
-                return Some(Found::Decls(ds.clone()));
+            if let Some(f) = self.ns_member(n, name, prefix) {
+                return Some(f);
             }
-            if let Some(c) = s.children.get(name) {
-                return Some(Found::Ns(*c));
-            }
-            cur = s.parent;
+            cur = self.nss[n].parent;
         }
         None
+    }
+
+    /// methods are called as x.name(), never reached by path, so a path through `name::` means a
+    /// namespace even when methods share its name
+    fn only_methods(&self, ds: &[DeclId]) -> bool {
+        ds.iter().all(|&d| matches!(self.recv_of(d), generics::Recv::Val(_)))
     }
 
     /// Resolve a whole path from namespace `ns`. The second segment may also come from a `use` of the
     /// first (via_uses).
     pub fn lookup_path_ns(&self, ns: NsId, p: &Path) -> Option<Found> {
-        let mut found = self.lookup(ns, &p.segs[0].name)?;
+        let mut found = self.lookup_in(ns, &p.segs[0].name, p.segs.len() > 1)?;
         for (i, seg) in p.segs[1..].iter().enumerate() {
             found = match found {
-                Found::Ns(n) => match self.ns_member(n, &seg.name) {
+                Found::Ns(n) => match self.ns_member(n, &seg.name, i + 2 < p.segs.len()) {
                     // methods are called as x.name(), never by path: functions a use brings in take their place
                     Some(Found::Decls(ds)) if i == 0 && ds.iter().all(|&d| matches!(self.recv_of(d), generics::Recv::Val(_))) => {
                         match self.via_uses(ns, &p.segs[0].name, &seg.name) {
@@ -578,12 +585,14 @@ impl Checker {
         p.last().to_string()
     }
 
-    /// a name declared directly in namespace n (no outward search)
-    fn ns_member(&self, n: NsId, name: &str) -> Option<Found> {
+    /// a name declared directly in namespace n (no outward search); prefix as in lookup_in
+    fn ns_member(&self, n: NsId, name: &str, prefix: bool) -> Option<Found> {
         let s = &self.nss[n];
+        let child = s.children.get(name).map(|c| Found::Ns(*c));
         match s.names.get(name) {
+            Some(ds) if prefix && child.is_some() && self.only_methods(ds) => child,
             Some(ds) => Some(Found::Decls(ds.clone())),
-            None => s.children.get(name).map(|c| Found::Ns(*c)),
+            None => child,
         }
     }
 
@@ -599,12 +608,12 @@ impl Checker {
                 let mut target = Some(Found::Ns(0));
                 for seg in &u.segs {
                     target = match target {
-                        Some(Found::Ns(m)) => self.ns_member(m, &seg.name),
+                        Some(Found::Ns(m)) => self.ns_member(m, &seg.name, true),
                         _ => None,
                     };
                 }
                 match target {
-                    Some(Found::Ns(m)) => match self.ns_member(m, name) {
+                    Some(Found::Ns(m)) => match self.ns_member(m, name, false) {
                         Some(Found::Decls(ds)) => decls.extend(ds),
                         Some(f) => other = other.or(Some(f)),
                         None => {}

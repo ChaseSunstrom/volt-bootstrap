@@ -81,7 +81,7 @@ impl Checker {
                         let mut target = Some(Found::Ns(0));
                         for seg in &u.segs {
                             target = match target {
-                                Some(Found::Ns(m)) => self.ns_member(m, &seg.name),
+                                Some(Found::Ns(m)) => self.ns_member(m, &seg.name, true),
                                 _ => None,
                             };
                         }

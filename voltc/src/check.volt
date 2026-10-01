@@ -648,33 +648,45 @@ fn may_share(a: item_kind&, b: item_kind&) -> bool {
 
 // Find a name from namespace ns outward: decls, or a namespace.
 attach fn lookup(this: checker&, ns: u32, name: str) -> found? {
+    return this.lookup_in(ns, name, false);
+}
+
+// lookup; with prefix (the name is followed by `::`), a namespace wins over methods of the same name
+attach fn lookup_in(this: checker&, ns: u32, name: str, prefix: bool) -> found? {
     var cur: u32? = ns;
     while (cur) {
         val n = cur;
-        val s = this.ns(n);
-        val ds = s.names.get(name);
-        if (ds) {
-            return found::DECLS(*ds);
+        val f = this.ns_member(n, name, prefix);
+        if (f) {
+            return f;
         }
-        val c = s.children.get(name);
-        if (c) {
-            return found::NS(*c);
-        }
-        cur = s.parent;
+        cur = this.ns(n).parent;
     }
     return null;
+}
+
+// methods are called as x.name(), never reached by path, so a path through `name::` means a
+// namespace even when methods share its name
+attach fn only_methods(this: checker&, ds: u32) -> bool {
+    for (d&) in this.list(ds).items() {
+        match (this.recv_of(*d)) {
+            .VAL(pat) => {},
+            default => { return false; },
+        }
+    }
+    return true;
 }
 
 // Resolve a whole path from namespace ns. The second segment may also come from a `use` of the
 // first (via_uses).
 attach fn lookup_path_ns(this: checker&, ns: u32, p: path&) -> found? {
-    var f = this.lookup(ns, p.segs.at(0).name) ?? return null;
+    var f = this.lookup_in(ns, p.segs.at(0).name, p.segs.len > 1) ?? return null;
     for (i) in 1..p.segs.len {
         val seg = p.segs.at(i).name;
         var next: found? = null;
         match (f) {
             .NS(n) => {
-                next = this.ns_member(n, seg);
+                next = this.ns_member(n, seg, i + 1 < p.segs.len);
                 if (next == null && i == 1) {
                     next = this.via_uses(ns, p.segs.at(0).name, seg);
                 } else if (i == 1) {
@@ -718,14 +730,17 @@ attach fn missing_part(this: checker&, ns: u32, p: path&) -> str {
     return p.last();
 }
 
-// a name declared directly in namespace n (no outward search)
-attach fn ns_member(this: checker&, n: u32, name: str) -> found? {
+// a name declared directly in namespace n (no outward search); prefix as in lookup_in
+attach fn ns_member(this: checker&, n: u32, name: str, prefix: bool) -> found? {
     val s = this.ns(n);
     val ds = s.names.get(name);
+    val c = s.children.get(name);
     if (ds) {
+        if (prefix && c != null && this.only_methods(*ds)) {
+            return found::NS(*c);
+        }
         return found::DECLS(*ds);
     }
-    val c = s.children.get(name);
     if (c) {
         return found::NS(*c);
     }
@@ -752,7 +767,7 @@ attach fn via_uses(this: checker&, ns: u32, first: str, name: str) -> found? {
                 match (target ?? found::DECLS(0)) {
                     .NS(m) => {
                         if (target) {
-                            next = this.ns_member(m, seg.name);
+                            next = this.ns_member(m, seg.name, true);
                         }
                     },
                     default => {},
@@ -762,7 +777,7 @@ attach fn via_uses(this: checker&, ns: u32, first: str, name: str) -> found? {
             if (target) {
                 match (target) {
                     .NS(m) => {
-                        val f = this.ns_member(m, name);
+                        val f = this.ns_member(m, name, false);
                         if (f) {
                             match (f) {
                                 .DECLS(ds) => {

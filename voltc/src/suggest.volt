@@ -139,7 +139,7 @@ attach fn path_candidates(this: checker&, ns: u32, p: path&, locals: bool) -> st
                     var next: found? = null;
                     if (target) {
                         match (target) {
-                            .NS(m) => { next = this.ns_member(m, seg.name); },
+                            .NS(m) => { next = this.ns_member(m, seg.name, true); },
                             default => {},
                         }
                     }
