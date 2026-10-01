@@ -412,6 +412,35 @@ fn python_package() {
     }
 }
 
+/// Volt calls Java through the interop/java package: the JVM started in the program (JNI's
+/// invocation API), static and instance methods, the JDK's classes and an exception, on both backends
+#[test]
+fn java_package() {
+    let Some(bin) = jdk_bin() else {
+        eprintln!("a JDK 22 or later isn't installed: skipping the java package");
+        return;
+    };
+    let e = Env::new("java");
+    let app = e.dir.join("java_app");
+    let fx = Path::new(ROOT).join("tests/interop/java_app");
+    copy_dir(&fx.join("src"), &app.join("src"));
+    std::fs::write(app.join("bolt.toml"), format!("[package]\nname = \"java_app\"\nversion = \"0.1.0\"\n\n[dependencies]\njava = {{ path = \"{}\" }}\n\n[std]\npath = \"{}\"\n", Path::new(ROOT).join("interop/java").display(), Path::new(ROOT).join("std").display())).unwrap();
+    let classes = e.dir.join("classes");
+    ok(run(Command::new(bin.join("javac")).arg("-d").arg(&classes).arg(fx.join("java/Counter.java"))), "javac");
+    let want = "add 42\nHELLO, VOLT\nbump 15 half 7.5\nobject volt=15 equal true\nlist true [x]\nnanos true\nmax 9 sqrt 1.5\nbuilt 42\ncaught THROWN(java.lang.ArithmeticException: / by zero)\nmissing true\nnull false true THROWN(java.lang.NullPointerException: length on null)\n";
+    for backend in ["c", "llvm"] {
+        let mut c = Command::new(env!("CARGO_BIN_EXE_bolt"));
+        c.args(["run", "-q", "--backend", backend]).current_dir(&app).env("VOLTC", &e.voltc).env("BOLT_HOME", e.dir.join("cache")).env("JAVA_APP_CLASSES", &classes);
+        // a JDK found through ~/.local: the build file finds it through $JAVA_HOME
+        if let Some(home) = bin.parent().filter(|h| !h.as_os_str().is_empty()) {
+            c.env("JAVA_HOME", home);
+        }
+        let o = c.output().unwrap();
+        assert!(o.status.success(), "bolt run ({backend}): {}", String::from_utf8_lossy(&o.stderr));
+        assert_eq!(String::from_utf8_lossy(&o.stdout), want, "Volt calls Java ({backend})");
+    }
+}
+
 /// a Node.js addon written in Volt with interop/node: bolt builds it as a shared library, node
 /// loads it (as a .node file), on both backends
 #[test]

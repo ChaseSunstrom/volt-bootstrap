@@ -1,0 +1,7 @@
+[package]
+name = "java"
+version = "0.1.0"
+description = "Call Java from Volt through JNI: a JVM in the process, classes, methods, strings, exceptions as errors"
+
+[build]
+files = ["build.volt"]
