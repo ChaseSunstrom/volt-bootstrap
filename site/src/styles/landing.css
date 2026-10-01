@@ -739,11 +739,17 @@ section {
     stroke-dashoffset: -28;
   }
 }
+.hub-top {
+  position: relative;
+}
+.hub-lines .spoke.cols-3 {
+  display: none;
+}
 .hub-center {
   position: absolute;
   left: 50%;
-  top: 50%;
-  translate: -50% -130%;
+  top: 42.3%; /* the spokes' start, y 110 of the 260-tall drawing */
+  translate: -50% -50%;
   font-weight: 800;
   font-size: 1.4rem;
   padding: 0.8rem 1.6rem;
@@ -756,8 +762,24 @@ section {
 .hub-langs {
   display: grid;
   grid-template-columns: repeat(5, 1fr);
+  row-gap: 0.6rem;
   margin-top: -0.4rem;
   text-align: center;
+}
+@media (max-width: 560px) {
+  .hub-langs {
+    grid-template-columns: repeat(3, 1fr);
+  }
+  .hub-lines .spoke.cols-5 {
+    display: none;
+  }
+  .hub-lines .spoke.cols-3 {
+    display: inline;
+  }
+  .hub-langs span {
+    padding: 0.4rem 0.5rem;
+    font-size: 0.8rem;
+  }
 }
 .hub-langs span {
   justify-self: center;

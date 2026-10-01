@@ -1,6 +1,6 @@
 ---
 title: Other languages
-description: Calling Volt from C, C++, Rust, Zig and Python, and calling them from Volt.
+description: Calling Volt from C, C++, Rust, Zig, Python, JavaScript, C#, Java, Go, Lua, Dart, Swift, Kotlin and Ruby, and calling them from Volt.
 sidebar:
   order: 4
 ---

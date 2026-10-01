@@ -81,7 +81,7 @@ const features = [
   { icon: "box", title: "Ownership & RAII", text: "Deletes run at scope end, moves are tracked, copies are explicit. box<T> owns heap memory." },
   { icon: "cpu", title: "Comptime", text: "Run code in the compiler, pass types around as values, and read any type's shape with @typeinfo." },
   { icon: "clock", title: "Async without a runtime", text: "Stackless frames of known size, driven by hand with async, resume and await. No heap, no executor." },
-  { icon: "plug", title: "Talks to everything", text: "C headers and C++ classes in; shared libraries and bindings for C, C++, Rust, Zig and Python out." },
+  { icon: "plug", title: "Talks to everything", text: "C headers, C++ classes and the C++ standard library, Rust crates and Zig files in; shared libraries with bindings for fifteen languages out." },
   { icon: "package", title: "bolt", text: "The build tool: packages, workspaces, git dependencies, features, profiles, tests, benches and build files." },
   { icon: "repeat", title: "Self-hosted", text: "voltc is written in Volt and builds itself, byte for byte, through both backends." },
 ];
@@ -112,7 +112,7 @@ color = []
 [profile.release]
 backend = "llvm"`;
 
-const languages = ["C", "C++", "Rust", "Zig", "Python"];
+const languages = ["C", "C++", "Rust", "Zig", "Python", "JavaScript", "TypeScript", "C#", "Java", "Go", "Lua", "Dart", "Swift", "Kotlin", "Ruby"];
 ---
 
 <!doctype html>
@@ -139,6 +139,7 @@ const languages = ["C", "C++", "Rust", "Zig", "Python"];
         <span>volt</span>
       </a>
       <nav>
+        <a href={doc("start/why")}>Why Volt</a>
         <a href={doc("start/install")}>Docs</a>
         <a href={doc("guide/basics")}>Guide</a>
         <a href={doc("std/overview")}>std</a>
@@ -188,6 +189,7 @@ const languages = ["C", "C++", "Rust", "Zig", "Python"];
           <div class="cta">
             <a class="btn primary" href={doc("start/install")}>Get started</a>
             <a class="btn ghost" href={doc("start/tour")}>Take the tour</a>
+            <a class="btn ghost" href={doc("start/why")}>Why Volt?</a>
           </div>
           <div class="install" aria-label="Create and run a program">
             <span class="prompt">$</span> bolt new hello <span class="op">&amp;&amp;</span> cd hello <span class="op">&amp;&amp;</span> bolt run
@@ -327,22 +329,26 @@ const languages = ["C", "C++", "Rust", "Zig", "Python"];
 
       <section class="interop reveal">
         <h2>Speaks C, and everything that does</h2>
-        <p class="section-lede">Volt meets other languages at the C ABI in both directions, and reads C++ headers itself.</p>
+        <p class="section-lede">Volt meets other languages at the C ABI in both directions, reads C++ headers itself, and builds Rust and Zig code for you.</p>
         <div class="hub">
-          <svg viewBox="0 0 600 260" class="hub-lines" aria-hidden="true">
-            {languages.map((_, i) => {
-              const x = 60 + i * 120;
-              return <path d={`M300 110 C 300 190 ${x} 170 ${x} 258`} class="spoke" style={`--i:${i}`} />;
-            })}
-          </svg>
-          <div class="hub-center">volt</div>
+          <div class="hub-top">
+            <svg viewBox="0 0 600 260" class="hub-lines" aria-hidden="true">
+              {[5, 3].map((cols) =>
+                Array.from({ length: cols }, (_, i) => {
+                  const x = ((i + 0.5) * 600) / cols;
+                  return <path d={`M300 110 C 300 190 ${x} 170 ${x} 258`} class={`spoke cols-${cols}`} style={`--i:${i}`} />;
+                }),
+              )}
+            </svg>
+            <div class="hub-center">volt</div>
+          </div>
           <div class="hub-langs">
             {languages.map((l) => <span>{l}</span>)}
           </div>
         </div>
         <div class="interop-notes">
-          <p><b>In:</b> <code>use &#123; "stdio.h" &#125; as c;</code> imports functions, structs, constants and globals from real C headers. <code>use cpp &#123; "lib.hpp" &#125;</code> brings classes, overloads and templates.</p>
-          <p><b>Out:</b> <code>export fn</code> makes C symbols; <code>voltc lib --shared</code> builds a library and <code>voltc bindings</code> writes its declarations for C, C++, Rust, Zig or Python.</p>
+          <p><b>In:</b> <code>use &#123; "stdio.h" &#125; as c;</code> imports functions, structs, unions, constants and globals from real C headers. <code>use cpp &#123; "lib.hpp" &#125;</code> brings classes, overloads, templates and the standard library, and bolt's <code>[foreign]</code> table builds Rust crates and Zig files for you.</p>
+          <p><b>Out:</b> <code>export fn</code> makes C symbols; <code>voltc lib --shared</code> builds a library, and <code>bindings</code> in <code>bolt.toml</code> writes (and builds) its bindings for every language above.</p>
         </div>
       </section>
 

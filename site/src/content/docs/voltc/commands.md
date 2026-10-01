@@ -18,7 +18,7 @@ sidebar:
 | `voltc emit-c FILES... [-o DIR]` | print the generated C, or with `-o DIR` write it as separate files |
 | `voltc emit-llvm FILES...` | print the LLVM IR (self-hosted voltc) |
 | `voltc lib NAME [-o OUT]` | precompile package NAME's non-generic code into `libNAME.a` (see [Packages](/volt-bootstrap/voltc/packages/)) |
-| `voltc bindings NAME --lang L` | declarations of package NAME's `export fn`s for C, C++, Rust, Zig or Python |
+| `voltc bindings NAME --lang L` | bindings for package NAME's `export fn`s in another language (see `--lang`) |
 | `voltc doc NAME` | package NAME's declarations and doc comments, as JSON |
 | `voltc parse FILE --sexp` | print the parse tree (used to compare the two compilers) |
 | `voltc lsp` | the [language server](/volt-bootstrap/editors/lsp/) |
@@ -36,7 +36,7 @@ sidebar:
 | `--cfg [PKG:]KEY[=VALUE]` | set KEY for `@cfg` in the program's files, or in package PKG's |
 | `--lib NAME` | with `check`: check package NAME alone, as a library (no `main`) |
 | `--shared`, `--static` | with `lib`: a self-contained `.so` or `.a` for other languages |
-| `--lang L` | with `bindings`: `c`, `cpp`, `rust`, `zig` or `python` |
+| `--lang L` | with `bindings`: `c`, `cpp`, `rust`, `zig`, `python`, `pyi`, `csharp`, `java`, `go`, `lua`, `dart`, `swift`, `kotlin`, `ruby`, `node`, `js`, `ts` or `json` |
 | `--cc ARG` | pass ARG to the C compiler: a `.c` file, `-lNAME`, `-I`, `-D`... (repeatable) |
 | `--backend c\|llvm` | self-hosted voltc: generate C (default) or native code through LLVM |
 | `--message-format F` | `human` (default), `short` or `json`: see [Diagnostics](/volt-bootstrap/voltc/diagnostics/) |

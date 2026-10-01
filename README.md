@@ -20,6 +20,25 @@ are values, generics are templates, and code can run in the compiler. It compile
 through LLVM, to native code; it reads C and C++ headers directly; and its compiler, `voltc`, is
 written in Volt and builds itself.
 
+## Why Volt
+
+- **C's speed, nothing behind your back.** No GC, scheduler, exceptions or vtables; every
+  allocation is one you wrote. On the [benchmarks](https://chasesunstrom.github.io/volt-bootstrap/internals/benchmarks/)
+  Volt runs within a few percent of clang-compiled C.
+- **Mistakes stop loudly until you ship.** Debug builds trap overflow, out-of-bounds indexing, null
+  unwraps and double frees; the compiler rejects use after move, missed `match` cases and ignored
+  errors. `--release` drops the run-time checks.
+- **Ownership without lifetimes.** Values are deleted at scope end, moves are tracked and copies are
+  explicit: RAII with nothing to annotate.
+- **Every language is one step away.** It reads C and C++ headers (templates and the standard
+  library too) and builds Rust crates and Zig files; one `bindings` line in `bolt.toml` makes a
+  Volt library usable from 15 languages.
+- **One toolchain.** bolt, a language server, and diagnostics that point at the problem.
+
+It's young (no 1.0, no package registry) and has no borrow checker: if you need proven memory
+safety, use Rust. The [Why Volt](https://chasesunstrom.github.io/volt-bootstrap/start/why/) page
+has the details and a comparison with C, C++, Rust, Zig and Go.
+
 ```volt
 use std::io;
 
@@ -59,8 +78,9 @@ fn main() -> !void {
 - **Comptime**: functions, `if`, `match` and `for` that run in the compiler, types as values,
   `@typeinfo`.
 - **Async** as stackless frames of known size, driven by hand.
-- **Interop**: real C headers, C++ classes and templates, and libraries with bindings for C, C++,
-  Rust, Zig and Python.
+- **Interop**: real C headers (unions and bitfields too), C++ classes, templates and the standard
+  library, Rust crates and Zig files through bolt, and libraries with bindings for C, C++, Rust,
+  Zig, Python, JavaScript and TypeScript, C#, Java, Go, Lua, Dart, Swift, Kotlin and Ruby.
 - **Tooling**: diagnostics that point at the problem, the **bolt** build tool, a language server,
   and a VS Code extension.
 
