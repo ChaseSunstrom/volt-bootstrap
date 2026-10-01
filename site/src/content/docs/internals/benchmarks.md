@@ -19,6 +19,11 @@ programmers would usually write it. Every program prints the same output in each
 | `strings` | building and splitting text (`std::string` against a C buffer and `std::string`) |
 | `sort` | `slice.sort` (stable) against `qsort` and `std::stable_sort` |
 | `closures` | closures passed to a template, against C function pointers and C++ lambdas |
+| `matmul` | a dense matrix multiply over growable arrays (`std::vec` against `malloc` and `std::vector`) |
+| `sieve` | the sieve of Eratosthenes over a 200 MB byte array |
+| `fib` | naive recursive Fibonacci: nothing but function calls |
+| `vec_grow` | pushing 20 million values without reserving, ten times (`std::vec` against `realloc` and `std::vector`) |
+| `crc32` | table-driven CRC-32 over 256 MiB, a byte at a time |
 
 ## Running it
 
@@ -35,19 +40,53 @@ full run rewrites the table below.
 
 ## Results
 
-Times are the best of three on the machine that last ran the full suite. Each Volt time also shows
-its ratio to C (clang).
+A full run writes what follows: the machine and toolchain it ran on, then the times. Each time is
+the best of the runs, and each one after C (clang) also shows its ratio to it (below 1.00x is
+faster). Times move a few percent between runs; differences that small are noise.
 
 <!-- bench:start -->
+Measured 2026-10-01 on:
+
+- **CPU**: AMD Ryzen 7 9800X3D 8-Core Processor (8 cores, 16 threads, `powersave` frequency governor)
+- **Memory**: 60 GiB
+- **OS**: Arch Linux, kernel 7.2.7-hardened1-1-hardened
+- **C and C++**: clang version 22.1.8; gcc (GCC) 16.2.1 20260810
+- **Volt**: voltc --release; its LLVM backend on LLVM 22.1.8
+- **Timing**: best of 5 runs, wall clock
+
 | Program | C (clang) | C (gcc) | C++ (clang++) | Volt (C backend) | Volt (LLVM) |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| binary_trees | 0.708 s | 0.654 s (0.92x) | 0.957 s (1.35x) | 0.842 s (1.19x) | 0.810 s (1.14x) |
-| closures | 0.474 s | 0.734 s (1.55x) | 0.532 s (1.12x) | 0.567 s (1.20x) | 0.468 s (0.99x) |
-| fannkuch | 1.906 s | 1.904 s (1.00x) | 1.935 s (1.02x) | 1.961 s (1.03x) | 1.939 s (1.02x) |
-| hashmap | 0.534 s | 0.543 s (1.02x) | 1.216 s (2.28x) | 0.539 s (1.01x) | 0.525 s (0.98x) |
-| mandelbrot | 0.639 s | 0.615 s (0.96x) | 0.637 s (1.00x) | 0.637 s (1.00x) | 0.638 s (1.00x) |
-| nbody | 0.717 s | 0.717 s (1.00x) | 0.680 s (0.95x) | 0.716 s (1.00x) | 0.728 s (1.02x) |
-| sort | 0.608 s | 0.561 s (0.92x) | 0.190 s (0.31x) | 0.227 s (0.37x) | 0.227 s (0.37x) |
-| spectral_norm | 0.959 s | 0.648 s (0.68x) | 0.935 s (0.97x) | 0.937 s (0.98x) | 0.936 s (0.98x) |
-| strings | 0.281 s | 0.284 s (1.01x) | 0.381 s (1.36x) | 0.252 s (0.90x) | 0.267 s (0.95x) |
+| binary_trees | 0.710 s | 0.655 s (0.92x) | 0.958 s (1.35x) | 0.844 s (1.19x) | 0.804 s (1.13x) |
+| closures | 0.469 s | 0.735 s (1.57x) | 0.532 s (1.13x) | 0.563 s (1.20x) | 0.481 s (1.03x) |
+| crc32 | 0.705 s | 0.706 s (1.00x) | 0.705 s (1.00x) | 0.700 s (0.99x) | 0.700 s (0.99x) |
+| fannkuch | 1.872 s | 1.863 s (1.00x) | 1.933 s (1.03x) | 1.954 s (1.04x) | 1.947 s (1.04x) |
+| fib | 0.448 s | 0.175 s (0.39x) | 0.449 s (1.00x) | 0.451 s (1.01x) | 0.433 s (0.97x) |
+| hashmap | 0.538 s | 0.542 s (1.01x) | 1.235 s (2.30x) | 0.537 s (1.00x) | 0.524 s (0.97x) |
+| mandelbrot | 0.640 s | 0.615 s (0.96x) | 0.639 s (1.00x) | 0.637 s (0.99x) | 0.636 s (0.99x) |
+| matmul | 0.506 s | 0.477 s (0.94x) | 0.504 s (1.00x) | 0.508 s (1.00x) | 0.504 s (1.00x) |
+| nbody | 0.717 s | 0.713 s (0.99x) | 0.678 s (0.95x) | 0.711 s (0.99x) | 0.727 s (1.01x) |
+| sieve | 0.545 s | 0.561 s (1.03x) | 0.535 s (0.98x) | 0.621 s (1.14x) | 0.567 s (1.04x) |
+| sort | 0.568 s | 0.548 s (0.97x) | 0.190 s (0.33x) | 0.227 s (0.40x) | 0.226 s (0.40x) |
+| spectral_norm | 0.959 s | 0.648 s (0.67x) | 0.938 s (0.98x) | 0.937 s (0.98x) | 0.935 s (0.97x) |
+| strings | 0.286 s | 0.286 s (1.00x) | 0.380 s (1.33x) | 0.255 s (0.89x) | 0.258 s (0.90x) |
+| vec_grow | 0.547 s | 0.540 s (0.99x) | 1.332 s (2.44x) | 0.524 s (0.96x) | 0.535 s (0.98x) |
 <!-- bench:end -->
+
+## Reading the results
+
+- **Most rows are a tie.** Volt compiles to the same machine code as C for the same loops: the C
+  backend hands clang C that does what the C program does, and the LLVM backend emits the same IR
+  clang would.
+- **`sort`: templates beat function pointers.** `slice.sort` and `std::stable_sort` are templates,
+  so the comparison is inlined; C's `qsort` calls a function through a pointer for every one.
+- **`vec_grow`: Volt values move by copying bytes**, so `std::vec` grows with `realloc`, which can
+  extend a buffer in place, as the hand-written C does. `std::vector` can't: it allocates a new
+  buffer and moves each element across.
+- **`hashmap`**: C++'s `std::unordered_map` allocates a node per entry; `std::map` in Volt and the C
+  table don't.
+- **`sieve`**: Volt fills its array one `push` at a time (`std::vec` has no fill constructor yet),
+  where C uses `memset`.
+- **`binary_trees`** is where Volt is furthest behind C: allocating and freeing millions of small
+  `box`es.
+- **gcc's own wins** (`fib`, `spectral_norm`) are its optimizer's: it turns much of `fib`'s
+  recursion into loops. Volt's C backend is compiled by clang here, so it follows clang.

@@ -13,8 +13,8 @@ what it looks like it does, the compiler catches what it can, and debug builds c
 **C's speed, with nothing running behind you.** There's no garbage collector, scheduler, exception
 unwinder or vtable. Every call is resolved when compiling, and every allocation is one you wrote.
 On the [benchmarks](/volt-bootstrap/internals/benchmarks/) Volt runs within a few percent of
-clang-compiled C, and beats it where templates inline what C does through function pointers (`sort`,
-0.37x).
+clang-compiled C, and beats it where templates inline what C does through function pointers (`sort`
+takes less than half C's time).
 
 **Mistakes stop, loudly, until you ship.** Debug builds check what C leaves undefined: integer
 overflow, out-of-bounds indexing, null unwraps and double frees stop the program and name the line.

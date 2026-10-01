@@ -2,7 +2,7 @@
 //! speed: C with clang and gcc -O2, C++ with clang++ -O2, and Volt with --release through both of
 //! voltc's backends (C, compiled by clang, and LLVM). Each runs best of BENCH_RUNS (default 3), and
 //! every build has to print the same thing. Prints a table and rewrites the one in
-//! site/src/content/docs/internals/benchmarks.md.
+//! site/src/content/docs/internals/benchmarks.md, with the machine and toolchain it ran on.
 //!
 //!     cargo test --release --test bench -- --ignored --nocapture
 //!     BENCH_ONLY=nbody,sort BENCH_RUNS=5 cargo test --release --test bench -- --ignored --nocapture
@@ -24,6 +24,34 @@ const LANGS: [Lang; 5] = [
     Lang { name: "Volt (C backend)", file: "main.volt" },
     Lang { name: "Volt (LLVM)", file: "main.volt" },
 ];
+
+/// a command's first line of output ("" if it can't run)
+fn first_line(cmd: &str, args: &[&str]) -> String {
+    Command::new(cmd).args(args).output().ok().map(|o| String::from_utf8_lossy(&o.stdout).lines().next().unwrap_or("").trim().to_string()).unwrap_or_default()
+}
+
+/// the machine and toolchain a run measures, for the page: CPU, memory, OS, compilers
+fn machine(runs: usize) -> String {
+    let read = |p: &str| std::fs::read_to_string(p).unwrap_or_default();
+    let field = |text: &str, key: &str| text.lines().find(|l| l.starts_with(key)).and_then(|l| l.split(':').nth(1)).map(|v| v.trim().to_string());
+    let cpuinfo = read("/proc/cpuinfo");
+    let cpu = field(&cpuinfo, "model name").unwrap_or_else(|| std::env::consts::ARCH.to_string());
+    let cores = field(&cpuinfo, "cpu cores").map(|c| format!("{c} cores, ")).unwrap_or_default();
+    let threads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1);
+    let mem_kib: u64 = field(&read("/proc/meminfo"), "MemTotal").and_then(|v| v.split_whitespace().next()?.parse().ok()).unwrap_or(0);
+    let os = read("/etc/os-release").lines().find_map(|l| l.strip_prefix("PRETTY_NAME=")).map(|s| s.trim_matches('"').to_string()).unwrap_or_else(|| std::env::consts::OS.to_string());
+    let governor = read("/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor");
+    let governor = if governor.trim().is_empty() { String::new() } else { format!(", `{}` frequency governor", governor.trim()) };
+    let llvm = ["llvm-config", "llvm-config-22"].iter().map(|c| first_line(c, &["--version"])).find(|v| !v.is_empty()).unwrap_or_default();
+    format!(
+        "Measured {} on:\n\n- **CPU**: {cpu} ({cores}{threads} threads{governor})\n- **Memory**: {:.0} GiB\n- **OS**: {os}, kernel {}\n- **C and C++**: {}; {}\n- **Volt**: voltc --release; its LLVM backend on LLVM {llvm}\n- **Timing**: best of {runs} runs, wall clock\n\n",
+        first_line("date", &["+%Y-%m-%d"]),
+        mem_kib as f64 / 1048576.0,
+        first_line("uname", &["-r"]),
+        first_line("clang", &["--version"]),
+        first_line("gcc", &["--version"]),
+    )
+}
 
 fn run(cmd: &mut Command) -> std::process::Output {
     let o = cmd.output().unwrap();
@@ -114,6 +142,6 @@ fn bench() {
         let text = std::fs::read_to_string(&page).unwrap();
         let (start, end) = ("<!-- bench:start -->\n", "<!-- bench:end -->");
         let (a, b) = (text.find(start).expect("bench:start marker") + start.len(), text.find(end).expect("bench:end marker"));
-        std::fs::write(&page, format!("{}{table}{}", &text[..a], &text[b..])).unwrap();
+        std::fs::write(&page, format!("{}{}{table}{}", &text[..a], machine(runs), &text[b..])).unwrap();
     }
 }
