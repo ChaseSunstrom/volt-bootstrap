@@ -59,6 +59,6 @@ and it needs to find std: through `$VOLT_STD`, a `std/` next to voltc, or `volt.
 
 ## Developing the extension
 
-`npm test` runs the grammar's tests: assertion files in `tests/grammar` and a snapshot of
-`tests/snap/sample.volt` (`npx vscode-tmgrammar-snap -u 'tests/snap/*.volt'` updates the snapshot
-after a deliberate change).
+`npm test`, run in `editors/vscode`, runs the grammar's tests. It checks the assertion files in
+`editors/vscode/tests/grammar`, and a snapshot of `editors/vscode/tests/snap/sample.volt`. After a
+deliberate change, `npx vscode-tmgrammar-snap -u 'tests/snap/*.volt'` updates the snapshot.
