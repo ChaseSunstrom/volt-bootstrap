@@ -993,7 +993,9 @@ impl Checker {
         }
         let Some(pkg) = self.pkg_of(d).map(String::from) else { return Linkage::Static };
         let (lib, linked) = (self.opts.lib.as_deref() == Some(pkg.as_str()), self.opts.linked.contains(&pkg));
-        if !(lib || linked) || f.body.is_none() || f.is_async || f.is_comptime || self.fns[idx].intrinsic.is_some() || !self.fn_generics(d).is_empty() {
+        // a specialization (fn f<i64>) is built where it's used, like the template it specializes: a
+        // library has nothing calling it
+        if !(lib || linked) || f.body.is_none() || f.is_async || f.is_comptime || self.fns[idx].intrinsic.is_some() || !self.fn_generics(d).is_empty() || f.spec.is_some() {
             return Linkage::Static;
         }
         let sig: Vec<TyId> = self.fns[idx].params.iter().map(|p| p.ty).chain([self.fns[idx].ret]).collect();

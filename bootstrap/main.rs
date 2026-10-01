@@ -305,7 +305,8 @@ fn cc(c_src: &str, out: &PathBuf, release: bool, libs: &[(String, PathBuf)], ext
     // imported headers' prototypes are C's own: a Volt void*/cstr for their const void*/char* is fine
     cmd.args(["-std=gnu11", "-w", "-Wno-error=incompatible-pointer-types", "-Wno-error=int-conversion", "-o"]).arg(out).arg(&c_path);
     if object {
-        cmd.arg("-c");
+        // a library's C still includes the headers its code imports: -I, -D, -U from --cc
+        cmd.arg("-c").args(cimport::preprocessor_flags(extra));
     } else {
         cmd.args(extra).args(libs.iter().map(|l| &l.1)).args(["-lm", "-lpthread"]); // the runtime has threads (libpthread before glibc 2.34)
     }
@@ -397,7 +398,7 @@ fn main() {
             let out = cli.out.clone().unwrap_or_else(|| PathBuf::from(format!("lib{}.a", cli.files[0])));
             let dir = fresh_dir();
             let obj = dir.join(format!("{}.o", cli.files[0]));
-            cc(&c, &obj, cli.release, &[], &[], true);
+            cc(&c, &obj, cli.release, &[], &cli.cc_args, true);
             let _ = std::fs::remove_file(&out); // ar would add to an old archive
             let status = Command::new("ar").arg("rcs").arg(&out).arg(&obj).status();
             let _ = std::fs::remove_dir_all(&dir);

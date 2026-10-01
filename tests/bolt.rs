@@ -135,6 +135,19 @@ fn bolt() {
     let err = String::from_utf8_lossy(&o.stderr);
     assert!(!o.status.success() && err.contains("$VOLT_STD") && err.contains("no-such-std"), "{err}");
 
+    // a dependency's build file adds C flags (-I, -D) that its own library and the programs built on
+    // it get, like Cargo's build-script link lines
+    let cdep = tmp.join("cdep");
+    write(&cdep.join("include/cdep.h"), "static inline int cdep_scale(int x) { return x * CDEP_SCALE; }\n");
+    write(&cdep.join("bolt.toml"), "[package]\nname = \"cdep\"\nversion = \"0.1.0\"\n\n[build]\nfiles = [\"build.volt\"]\n");
+    write(&cdep.join("build.volt"), &format!("fn main() -> void {{\n    bolt::cc_arg(\"-I{}\");\n    bolt::cc_arg(\"-DCDEP_SCALE=7\");\n}}\n", cdep.join("include").display()));
+    write(&cdep.join("lib/cdep.volt"), "use {{ \"cdep.h\" }} as c;\nfn scaled(x: i32) -> i32 {{ return c::cdep_scale(x); }}\n".replace("{{", "{").replace("}}", "}").as_str());
+    let uses_cdep = tmp.join("uses_cdep");
+    write(&uses_cdep.join("bolt.toml"), &format!("[package]\nname = \"uses_cdep\"\nversion = \"0.1.0\"\n\n[dependencies]\ncdep = {{ path = \"{}\" }}\n", cdep.display()));
+    write(&uses_cdep.join("src/main.volt"), "use std::io;\nfn main() -> void { std::println(\"scaled {}\", cdep::scaled(6)); }\n");
+    let out = ok(bolt(&uses_cdep, &["run"]), "bolt run (a dependency's build-file flags)");
+    assert!(out.contains("scaled 42"), "{out}");
+
     // a dependency can't smuggle git options in through its url
     let evil = tmp.join("evil");
     write(&evil.join("bolt.toml"), "[package]\nname = \"evil\"\nversion = \"0.1.0\"\n\n[dependencies]\nx = { git = \"--upload-pack=touch /tmp/pwned\" }\n");

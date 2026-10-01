@@ -207,6 +207,10 @@ pub struct Build {
     inputs: HashMap<usize, Vec<PathBuf>>,
     /// each package's [foreign] libraries, once built: the C compiler flags that use them
     foreign_cc: HashMap<usize, Vec<String>>,
+    /// each package's build files' C compiler flags (cc_arg, link_c, c_source), once run
+    plan_cc: std::sync::Mutex<HashMap<usize, Vec<String>>>,
+    /// -D options for the selected packages' build files
+    defines: Vec<String>,
     _lock: std::fs::File,
 }
 
@@ -294,6 +298,8 @@ impl Build {
             std_inputs: Vec::new(),
             inputs: HashMap::new(),
             foreign_cc: HashMap::new(),
+            plan_cc: Default::default(),
+            defines: o.defines.clone(),
             _lock: target_lock,
         }
     }
@@ -426,9 +432,21 @@ impl Build {
         }
         for (_, ps) in levels {
             let mut jobs = Vec::new();
+            // the headers its code and its dependencies' code import: their [foreign] headers and the
+            // preprocessor flags their build files ask for
             let mut includes = HashMap::new();
             for &p in &ps {
-                includes.insert(p, self.foreign_flags(p)?.into_iter().filter(|f| f.starts_with("-I")).collect::<Vec<_>>());
+                let mut inc: Vec<String> = Vec::new();
+                for q in std::iter::once(p).chain(self.closure(p, false)) {
+                    let mut flags = self.foreign_flags(q)?;
+                    flags.extend(self.plan_flags(q)?);
+                    for f in flags {
+                        if ["-I", "-D", "-U"].iter().any(|x| f.starts_with(x)) && !inc.contains(&f) {
+                            inc.push(f);
+                        }
+                    }
+                }
+                includes.insert(p, inc);
             }
             for &p in &ps {
                 let m = &self.g.pkgs[p].m;
@@ -479,8 +497,10 @@ impl Build {
         }
         self.libraries(&need)?;
         let mut foreign: HashMap<usize, Vec<String>> = HashMap::new();
+        let mut planned: HashMap<usize, Vec<String>> = HashMap::new();
         for &p in &need {
             foreign.insert(p, self.foreign_flags(p)?);
+            planned.insert(p, self.plan_flags(p)?);
         }
         let none = Plan::default();
         let mut jobs = Vec::new();
@@ -506,7 +526,10 @@ impl Build {
             }
             args.extend(files.iter().map(|f| f.display().to_string()));
             args.extend(self.pkg_args(&closure, Some(e.pkg), true));
-            let uses: Vec<String> = closure.iter().flat_map(|p| foreign.get(p).cloned().unwrap_or_default()).collect();
+            // [foreign] libraries, and what dependencies' build files ask the C compiler for (the
+            // package's own come with its plan)
+            let mut uses: Vec<String> = closure.iter().flat_map(|p| foreign.get(p).cloned().unwrap_or_default()).collect();
+            uses.extend(closure.iter().filter(|p| **p != e.pkg).flat_map(|p| planned.get(p).cloned().unwrap_or_default()));
             for a in self.profile.cc_flags.iter().chain(&plan.cc).chain(&uses) {
                 args.extend(["--cc".into(), a.clone()]);
                 if Path::new(a).is_file() {
@@ -518,6 +541,22 @@ impl Build {
             jobs.push(Job { out: e.out.clone(), inputs, args, what: format!("{} v{} ({} \"{}\")", m.name, m.version.text, e.kind.name(), e.name), program: None });
         }
         parallel(self.jobs, jobs, |j| self.run_job(j))
+    }
+
+    /// what package p's build files ask the C compiler for (cc_arg, link_c, c_source): it and every
+    /// package and program built on it get these, like Cargo's build-script link lines. Run once
+    fn plan_flags(&self, p: usize) -> Result<Vec<String>, String> {
+        if let Some(f) = self.plan_cc.lock().unwrap().get(&p) {
+            return Ok(f.clone());
+        }
+        let flags = if self.g.pkgs[p].m.build_files.is_empty() {
+            Vec::new()
+        } else {
+            let defines = if self.roots.contains(&p) { self.defines.clone() } else { Vec::new() };
+            self.plan(p, &defines)?.cc
+        };
+        self.plan_cc.lock().unwrap().insert(p, flags.clone());
+        Ok(flags)
     }
 
     /// package p's [foreign] libraries, built (cargo for a Rust crate, zig build-lib for a Zig file)

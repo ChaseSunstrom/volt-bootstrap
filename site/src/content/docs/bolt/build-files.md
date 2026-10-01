@@ -50,3 +50,9 @@ Each call prints one `@bolt` line that bolt reads after the build file finishes;
 build file prints is shown as it is. A step's program sees the C arguments the executables were
 linked with (from `c_source`, `link_c` and `cc_arg`) in `$BOLT_CC_ARGS`, one per line, so a step
 that builds more can use the same ones.
+
+A dependency's build file counts too, like a Cargo build script's link lines: what its `c_source`,
+`link_c` and `cc_arg` add goes into every program built on it, and its `-I`, `-D` and `-U` into the
+compiles of its library and of every library that depends on it. That's how a package wrapping a C
+library finds the library's headers and links it for whoever uses the package; `interop/python`
+asks `python3-config`, for example.

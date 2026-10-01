@@ -2,7 +2,7 @@
 title: Other languages
 description: Calling Volt from C, C++, Rust, Zig, Python, JavaScript, C#, Java, Go, Lua, Dart, Swift, Kotlin and Ruby, and calling them from Volt.
 sidebar:
-  order: 4
+  order: 5
 ---
 
 Everything meets at the C ABI.
@@ -15,7 +15,8 @@ Everything meets at the C ABI.
   [Rust and Zig](/volt-bootstrap/interop/rust-and-zig/). Without bolt, declare a
   `#[no_mangle] pub extern "C" fn` (or a Zig `export fn`) with `extern "C" fn` and link the library
   with `--cc`.
-- **Python**: embed it like any C library: `use { "Python.h" } as py;` with the flags from
+- **Python**: depend on the `interop/python` package, see [Python](/volt-bootstrap/interop/python/).
+  Or embed it like any C library: `use { "Python.h" } as py;` with the flags from
   `python3-config --includes` and `--ldflags --embed` passed through `--cc`.
 
 ```volt ignore

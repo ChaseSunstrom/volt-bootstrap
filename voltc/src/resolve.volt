@@ -779,7 +779,9 @@ attach fn fn_linkage(this: checker&, idx: u32) -> linkage {
             linked = true;
         }
     }
-    if (!(lib || linked) || f.body == null || f.is_async || f.is_comptime || this.fi(idx).intrinsic != null || this.fn_generics(d).len > 0) {
+    // a specialization (fn f<i64>) is built where it's used, like the template it specializes: a
+    // library has nothing calling it
+    if (!(lib || linked) || f.body == null || f.is_async || f.is_comptime || this.fi(idx).intrinsic != null || this.fn_generics(d).len > 0 || f.spec != null) {
         return linkage::STATIC;
     }
     var seen: idset = {};

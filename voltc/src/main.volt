@@ -970,7 +970,11 @@ fn cc_run(inputs: std::vec<str>&, out: str, c: cli&, object: bool) -> void {
         put(&argv, *x);
     }
     if (object) {
+        // a library's C still includes the headers its code imports: -I, -D, -U from --cc
         put(&argv, "-c");
+        for (f&) in preprocessor_flags(&c.cc_args).items() {
+            put(&argv, *f);
+        }
     } else {
         for (a&) in c.cc_args.items() {
             put(&argv, *a);
