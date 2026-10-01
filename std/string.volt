@@ -2,34 +2,52 @@
 // (Part of package std: the package loader wraps every file in `namespace std`.)
 
 // Owned, growable text: bytes (UTF-8 by convention, not checked). Prints as its text.
+<Allocator: std::mem::t_allocator = std::mem::default_allocator>
 struct string {
-    bytes: std::vec<u8> = {}; // the text's bytes
+    bytes: std::vec<u8, Allocator> = {}; // the text's bytes
 }
 
-// a string holding a copy of s
-attach fn from(static this: std::string, s: str) -> std::string {
-    var out: std::string = {};
+// a string holding a copy of s, in memory from allocator
+<A: std::mem::t_allocator = std::mem::default_allocator>
+attach fn from(static this: std::string, s: str, allocator: A = {}) -> std::string<A> {
+    var out: std::string<A> = { bytes: { allocator: move allocator } };
     out.append(s);
     return move out;
 }
 
+// an empty string that allocates from allocator
+<A: std::mem::t_allocator>
+attach fn new_in(static this: std::string, allocator: A) -> std::string<A> {
+    return { bytes: { allocator: move allocator } };
+}
+
+// room for n bytes without growing
+<A: std::mem::t_allocator>
+attach fn reserve(this: std::string<A>&, n: usize) -> std::mem::mem_error!void {
+    return this.bytes.reserve(n);
+}
+
 // the text (valid until the string changes)
-attach fn as_str(this: std::string&) -> str {
+<A: std::mem::t_allocator>
+attach fn as_str(this: std::string<A>&) -> str {
     return @cast<str>(this.bytes.items());
 }
 
 // the length in bytes
-attach fn len(this: std::string&) -> usize {
+<A: std::mem::t_allocator>
+attach fn len(this: std::string<A>&) -> usize {
     return this.bytes.len;
 }
 
 // append one byte
-attach fn push(this: std::string&, byte: u8) -> void {
+<A: std::mem::t_allocator>
+attach fn push(this: std::string<A>&, byte: u8) -> void {
     this.bytes.push(byte) catch @panic("out of memory");
 }
 
 // append s
-attach fn append(this: std::string&, s: str) -> void {
+<A: std::mem::t_allocator>
+attach fn append(this: std::string<A>&, s: str) -> void {
     this.bytes.reserve(this.bytes.len + s.len) catch @panic("out of memory");
     for (b) in s {
         this.bytes.push(b) catch @panic("out of memory");
@@ -37,7 +55,8 @@ attach fn append(this: std::string&, s: str) -> void {
 }
 
 // decimal digits of v
-attach fn append_int(this: std::string&, v: i64) -> void {
+<A: std::mem::t_allocator>
+attach fn append_int(this: std::string<A>&, v: i64) -> void {
     if (v < 0) {
         this.push(45); // '-'
         // -(i64 min) doesn't fit: go through u64
@@ -48,7 +67,8 @@ attach fn append_int(this: std::string&, v: i64) -> void {
 }
 
 // decimal digits of v
-attach fn append_uint(this: std::string&, v: u64) -> void {
+<A: std::mem::t_allocator>
+attach fn append_uint(this: std::string<A>&, v: u64) -> void {
     var digits: u8[20];
     var n: usize = 0;
     var x = v;
@@ -67,41 +87,47 @@ attach fn append_uint(this: std::string&, v: u64) -> void {
 }
 
 // is it empty?
-attach fn is_empty(this: std::string&) -> bool {
+<A: std::mem::t_allocator>
+attach fn is_empty(this: std::string<A>&) -> bool {
     return this.bytes.len == 0;
 }
 
 // make it empty (the memory stays for reuse)
-attach fn clear(this: std::string&) -> void {
+<A: std::mem::t_allocator>
+attach fn clear(this: std::string<A>&) -> void {
     this.bytes.clear();
 }
 
 // keep the first n bytes (nothing happens when it's already that short)
-attach fn truncate(this: std::string&, n: usize) -> void {
+<A: std::mem::t_allocator>
+attach fn truncate(this: std::string<A>&, n: usize) -> void {
     while (this.bytes.len > n) {
         val b = this.bytes.pop();
     }
 }
 
 // the last byte, taken off
-attach fn pop(this: std::string&) -> u8? {
+<A: std::mem::t_allocator>
+attach fn pop(this: std::string<A>&) -> u8? {
     return this.bytes.pop();
 }
 
 // s inserted at byte index at (the end when at is past it)
-attach fn insert(this: std::string&, at: usize, s: str) -> void {
+<A: std::mem::t_allocator>
+attach fn insert(this: std::string<A>&, at: usize, s: str) -> void {
     var i = at;
     if (i > this.bytes.len) {
         i = this.bytes.len;
     }
-    var tail = std::string::from(this.as_str()[i..this.bytes.len]);
+    var tail = std::string::from(this.as_str()[i..this.bytes.len], copy this.bytes.allocator);
     this.truncate(i);
     this.append(s);
     this.append(tail.as_str());
 }
 
 // append a character, as UTF-8 (one that isn't a character is U+FFFD)
-attach fn push_char(this: std::string&, c: u32) -> void {
+<A: std::mem::t_allocator>
+attach fn push_char(this: std::string<A>&, c: u32) -> void {
     var cp = c;
     if (cp > 0x10FFFF || (cp >= 0xD800 && cp <= 0xDFFF)) {
         cp = 0xFFFD;
@@ -124,27 +150,32 @@ attach fn push_char(this: std::string&, c: u32) -> void {
 }
 
 // the same text
-attach fn eq(this: std::string&, other: std::string&) -> bool {
+<A: std::mem::t_allocator, B: std::mem::t_allocator>
+attach fn eq(this: std::string<A>&, other: std::string<B>&) -> bool {
     return this.as_str() == other.as_str();
 }
 
 // -1, 0 or 1: how the text sorts, byte by byte
-attach fn cmp(this: std::string&, other: std::string&) -> i32 {
+<A: std::mem::t_allocator, B: std::mem::t_allocator>
+attach fn cmp(this: std::string<A>&, other: std::string<B>&) -> i32 {
     return this.as_str().cmp(other.as_str());
 }
 
 // the text's hash, so strings can be map keys
-attach fn hash(this: std::string&) -> u64 {
+<A: std::mem::t_allocator>
+attach fn hash(this: std::string<A>&) -> u64 {
     return this.as_str().hash();
 }
 
 // append s: this makes a string a writer, for std::write (and std::format)
-attach fn write_str(this: std::string&, s: str) -> void {
+<A: std::mem::t_allocator>
+attach fn write_str(this: std::string<A>&, s: str) -> void {
     this.append(s);
 }
 
 // a NUL-terminated view for C (valid until the string changes)
-attach fn c_str(this: std::string&) -> cstr {
+<A: std::mem::t_allocator>
+attach fn c_str(this: std::string<A>&) -> cstr {
     this.push(0);
     this.bytes.len -= 1; // the 0 stays in memory just past the text
     return @cast<cstr>(this.bytes.ptr);

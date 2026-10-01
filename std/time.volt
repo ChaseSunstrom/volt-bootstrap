@@ -77,7 +77,8 @@ namespace time {
 
     // a time on the wall clock (nanoseconds since 1970, as unix_nanos gives) as UTC ISO 8601:
     // "2026-09-30T12:34:56Z", with ".789" milliseconds when there are any
-    fn utc_iso8601(unix_ns: i64) -> std::string {
+    <A: std::mem::t_allocator = std::mem::default_allocator>
+    fn utc_iso8601(unix_ns: i64, allocator: A = {}) -> std::string<A> {
         // floor division, so times before 1970 count back from it
         var secs = unix_ns / 1000000000;
         var frac = unix_ns % 1000000000;
@@ -110,10 +111,11 @@ namespace time {
         if (month <= 2) {
             year += 1;
         }
-        var out = std::fmt::format("{:04}-{:02}-{:02}T{:02}:{:02}:{:02}", year, month, day, rem / 3600, rem / 60 % 60, rem % 60);
+        var out = std::string::new_in(move allocator);
+        std::fmt::write(&out, "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}", year, month, day, rem / 3600, rem / 60 % 60, rem % 60);
         val ms = frac / 1000000;
         if (ms != 0) {
-            out.append(std::fmt::format(".{:03}", ms).as_str());
+            std::fmt::write(&out, ".{:03}", ms);
         }
         out.push('Z');
         return move out;

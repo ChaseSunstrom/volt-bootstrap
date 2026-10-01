@@ -533,9 +533,32 @@ impl Checker {
         n >= required && (n <= ps.len() || pack || f.c_varargs)
     }
 
+    /// How many of a fn's receiver and parameters are a bare generic parameter (T, T&, T*, T...): a blanket
+    /// version (`<T> eq(this: T&, other: T&)`) has more than one written for a type (`string<A>&`)
+    fn blanket_positions(&self, decl: DeclId) -> usize {
+        let ItemKind::Fn(f) = &self.decls[decl].item.kind else { return 0 };
+        let gps = self.fn_generics(decl);
+        let bare = |t: &Type| {
+            let inner = match &t.kind {
+                TypeKind::Ref(i) | TypeKind::Ptr(i) | TypeKind::Pack(i) => &**i,
+                _ => t,
+            };
+            matches!(&inner.kind, TypeKind::Path(p) if p.is_single() && gps.iter().any(|g| g.name == p.segs[0].name))
+        };
+        let mut n = match self.recv_of(decl) {
+            Recv::Val(pat) | Recv::Static(pat) => bare(&pat) as usize,
+            Recv::None => 0,
+        };
+        for p in f.params.iter().filter(|p| p.name != "this") {
+            n += p.ty.as_ref().is_some_and(|t| bare(t)) as usize;
+        }
+        n
+    }
+
     /// Pick one of the overloads `cands` for a call and emit it. Every candidate that fits is scored:
     /// per argument 3 for its exact type, 1 for a coercion; 2 when it returns the wanted type, 1 when
-    /// it isn't generic. The best score has to be unique, or the call is ambiguous.
+    /// it isn't generic. The best score has to be unique, or the call is ambiguous; between equal
+    /// scores, the one with fewer blanket positions (more specific) wins.
     pub fn resolve_call(
         &mut self,
         name: &str,
@@ -586,7 +609,7 @@ impl Checker {
         for (a, w) in args.iter().zip(&wants) {
             pre.push(if Self::needs_context(a) { None } else { Some(self.expr(a, *w)?) });
         }
-        let mut viable: Vec<(usize, Adj, i32)> = Vec::new();
+        let mut viable: Vec<(usize, Adj, i32, usize)> = Vec::new();
         // why each candidate doesn't fit; a lone one is the error itself
         let mut reasons: Vec<Diag> = Vec::new();
         for &d in cands {
@@ -637,17 +660,17 @@ impl Checker {
             if self.fn_generics(d).is_empty() {
                 score += 1;
             }
-            viable.push((inst, adj, score));
+            viable.push((inst, adj, score, self.blanket_positions(d)));
         }
-        viable.sort_by_key(|v| -v.2);
+        viable.sort_by_key(|v| (-v.2, v.3));
         let (inst, adj) = match viable.as_slice() {
             [] if reasons.len() == 1 => return Err(reasons.remove(0)),
             [] => {
                 let why: Vec<String> = reasons.iter().map(|r| r.msg.clone()).collect();
                 return err(span, format!("no version of '{name}' fits: {}", why.join("; ")));
             }
-            [(i, a, _)] => (*i, *a),
-            [(i, a, s1), (_, _, s2), ..] if s1 > s2 => (*i, *a),
+            [(i, a, _, _)] => (*i, *a),
+            [(i, a, s1, b1), (_, _, s2, b2), ..] if s1 > s2 || b1 < b2 => (*i, *a),
             _ => return err(span, format!("call to '{name}' is ambiguous (several versions fit); add types to the arguments or the result")),
         };
         self.emit_call(inst, adj, recv, &pre, args, span)

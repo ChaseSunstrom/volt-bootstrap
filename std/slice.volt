@@ -2,15 +2,16 @@
 // They order elements with cmp and match them with eq (see std::compare).
 // (Part of package std: the package loader wraps every file in `namespace std`.)
 
-// sorts in place, smallest first by cmp; stable (equal elements keep their order)
-<T: type>
-attach fn sort(this: T[..]&) -> void {
-    this.sort_by(|| (a: T&, b: T&) -> i32 { return a.cmp(b); });
+// sorts in place, smallest first by cmp; stable (equal elements keep their order). Past 16 elements
+// it takes scratch room for n elements from allocator
+<T: type, A: std::mem::t_allocator = std::mem::default_allocator>
+attach fn sort(this: T[..]&, allocator: A = {}) -> void {
+    this.sort_by(|| (a: T&, b: T&) -> i32 { return a.cmp(b); }, move allocator);
 }
 
 // sorts in place by order(a, b) (negative: a goes first); stable
-<T: type, F: type>
-attach fn sort_by(this: T[..]&, order: F) -> void {
+<T: type, F: type, A: std::mem::t_allocator = std::mem::default_allocator>
+attach fn sort_by(this: T[..]&, order: F, allocator: A = {}) -> void {
     val xs = *this;
     val n = xs.len;
     // insertion sort each run of 16, then merge runs pairwise, doubling their length
@@ -36,8 +37,8 @@ attach fn sort_by(this: T[..]&, order: F) -> void {
         return;
     }
     // scratch for the left run of each merge
-    val raw = std::mem::c_malloc(n * @sizeof(T)) ?? @panic("out of memory");
-    val buf = @slice(@cast<T*>(raw), n);
+    val scratch: T* = allocator.malloc<T>(n) catch @panic("out of memory");
+    val buf = @slice(scratch, n);
     var width = run;
     while (width < n) {
         var start: usize = 0;
@@ -75,7 +76,7 @@ attach fn sort_by(this: T[..]&, order: F) -> void {
         }
         width *= 2;
     }
-    std::mem::c_free(raw);
+    allocator.free<T>(scratch, n);
 }
 
 // whether every element sorts no earlier than the one before it

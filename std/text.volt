@@ -12,8 +12,9 @@ namespace text {
     }
 
     // the parts with sep between them
-    fn join(parts: str[..], sep: str) -> std::string {
-        var out: std::string = {};
+    <A: std::mem::t_allocator = std::mem::default_allocator>
+    fn join(parts: str[..], sep: str, allocator: A = {}) -> std::string<A> {
+        var out = std::string::new_in(move allocator);
         for (p, i) in parts {
             if (i > 0) {
                 out.append(sep);
@@ -24,8 +25,9 @@ namespace text {
     }
 
     // the parts with sep between them (owned strings, like std::fs::list_dir gives)
-    fn join(parts: std::string[..], sep: str) -> std::string {
-        var out: std::string = {};
+    <B: std::mem::t_allocator, A: std::mem::t_allocator = std::mem::default_allocator>
+    fn join(parts: std::string<B>[..], sep: str, allocator: A = {}) -> std::string<A> {
+        var out = std::string::new_in(move allocator);
         for (p&, i) in parts {
             if (i > 0) {
                 out.append(sep);
@@ -158,9 +160,10 @@ attach fn split_once(this: str&, sep: str) -> (str, str)? {
 
 // the parts between each sep ("a,,b" has an empty one in the middle); an empty sep splits into
 // characters
-attach fn split(this: str&, sep: str) -> std::vec<str> {
+<A: std::mem::t_allocator = std::mem::default_allocator>
+attach fn split(this: str&, sep: str, allocator: A = {}) -> std::vec<str, A> {
     val s = *this;
-    var out: std::vec<str> = {};
+    var out: std::vec<str, A> = { allocator: move allocator };
     if (sep.len == 0) {
         var i: usize = 0;
         while (i < s.len) {
@@ -186,9 +189,10 @@ attach fn split(this: str&, sep: str) -> std::vec<str> {
 }
 
 // the lines, without their \n or \r\n (a final newline doesn't start another line)
-attach fn lines(this: str&) -> std::vec<str> {
+<A: std::mem::t_allocator = std::mem::default_allocator>
+attach fn lines(this: str&, allocator: A = {}) -> std::vec<str, A> {
     val s = *this;
-    var out: std::vec<str> = {};
+    var out: std::vec<str, A> = { allocator: move allocator };
     var start: usize = 0;
     for (i) in 0..s.len {
         if (s[i] == '\n') {
@@ -207,9 +211,10 @@ attach fn lines(this: str&) -> std::vec<str> {
 }
 
 // the words: the parts between runs of ASCII whitespace
-attach fn words(this: str&) -> std::vec<str> {
+<A: std::mem::t_allocator = std::mem::default_allocator>
+attach fn words(this: str&, allocator: A = {}) -> std::vec<str, A> {
     val s = *this;
-    var out: std::vec<str> = {};
+    var out: std::vec<str, A> = { allocator: move allocator };
     var i: usize = 0;
     while (i < s.len) {
         while (i < s.len && s[i].is_space()) {
@@ -229,9 +234,10 @@ attach fn words(this: str&) -> std::vec<str> {
 // ---------- new text ----------
 
 // every from replaced by to, left to right (an empty from changes nothing)
-attach fn replace(this: str&, from: str, to: str) -> std::string {
+<A: std::mem::t_allocator = std::mem::default_allocator>
+attach fn replace(this: str&, from: str, to: str, allocator: A = {}) -> std::string<A> {
     val s = *this;
-    var out: std::string = {};
+    var out = std::string::new_in(move allocator);
     if (from.len == 0) {
         out.append(s);
         return move out;
@@ -253,8 +259,9 @@ attach fn replace(this: str&, from: str, to: str) -> std::string {
 }
 
 // n copies, one after another
-attach fn repeat(this: str&, n: usize) -> std::string {
-    var out: std::string = {};
+<A: std::mem::t_allocator = std::mem::default_allocator>
+attach fn repeat(this: str&, n: usize, allocator: A = {}) -> std::string<A> {
+    var out = std::string::new_in(move allocator);
     for (i) in 0..n {
         out.append(*this);
     }
@@ -262,8 +269,9 @@ attach fn repeat(this: str&, n: usize) -> std::string {
 }
 
 // ASCII letters in upper case (other bytes as they are)
-attach fn to_upper(this: str&) -> std::string {
-    var out: std::string = {};
+<A: std::mem::t_allocator = std::mem::default_allocator>
+attach fn to_upper(this: str&, allocator: A = {}) -> std::string<A> {
+    var out = std::string::new_in(move allocator);
     for (b) in *this {
         out.push(b.to_upper());
     }
@@ -271,8 +279,9 @@ attach fn to_upper(this: str&) -> std::string {
 }
 
 // ASCII letters in lower case
-attach fn to_lower(this: str&) -> std::string {
-    var out: std::string = {};
+<A: std::mem::t_allocator = std::mem::default_allocator>
+attach fn to_lower(this: str&, allocator: A = {}) -> std::string<A> {
+    var out = std::string::new_in(move allocator);
     for (b) in *this {
         out.push(b.to_lower());
     }
@@ -527,9 +536,10 @@ attach fn char_count(this: str&) -> usize {
 }
 
 // the characters as code points (a byte that isn't valid UTF-8 is U+FFFD)
-attach fn chars(this: str&) -> std::vec<u32> {
+<A: std::mem::t_allocator = std::mem::default_allocator>
+attach fn chars(this: str&, allocator: A = {}) -> std::vec<u32, A> {
     val s = *this;
-    var out: std::vec<u32> = {};
+    var out: std::vec<u32, A> = { allocator: move allocator };
     var i: usize = 0;
     while (i < s.len) {
         val c = s.char_at(i);

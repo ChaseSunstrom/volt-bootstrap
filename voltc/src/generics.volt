@@ -1035,16 +1035,82 @@ attach fn arity_fits(this: checker&, d: u32, n: usize) -> bool {
     return n >= required && (n <= count || pack || f.c_varargs);
 }
 
-// a candidate that fits a call: its instance, receiver adjustment and score
+// a candidate that fits a call: its instance, receiver adjustment, score and blanket positions
 struct viable {
     inst: u32;
     a: adj;
     score: i32;
+    blanket: i32;
+}
+
+// whether t is a bare generic parameter of gps (T, T&, T*, T...)
+fn bare_generic(t: ty&, gps: std::vec<gparam>&) -> bool {
+    var p: path* = null;
+    match (t.kind) {
+        .PATH(x&) => { p = x; },
+        .REF(i) => {
+            match (i.kind) {
+                .PATH(x&) => { p = x; },
+                default => {},
+            }
+        },
+        .PTR(i) => {
+            match (i.kind) {
+                .PATH(x&) => { p = x; },
+                default => {},
+            }
+        },
+        .PACK(i) => {
+            match (i.kind) {
+                .PATH(x&) => { p = x; },
+                default => {},
+            }
+        },
+        default => {},
+    }
+    val q = p ?? return false;
+    if (!q->is_single()) {
+        return false;
+    }
+    for (g&) in gps.items() {
+        if (g.name == q->segs.at(0).name) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// How many of a fn's receiver and parameters are a bare generic parameter (T, T&, T*, T...): a blanket
+// version (`<T> eq(this: T&, other: T&)`) has more than one written for a type (`string<A>&`)
+attach fn blanket_positions(this: checker&, d: u32) -> i32 {
+    val f = this.fn_decl_of(d) ?? return 0;
+    val gps = this.fn_generics(d);
+    var n = 0;
+    match (this.recv_of(d)) {
+        .VAL(pat) => {
+            if (bare_generic(pat ?? return 0, gps)) {
+                n += 1;
+            }
+        },
+        .STATIC(pat) => {
+            if (bare_generic(pat ?? return 0, gps)) {
+                n += 1;
+            }
+        },
+        default => {},
+    }
+    for (p&) in f.params.items() {
+        if (p.name != "this" && p.ty != null && bare_generic(&p.ty.value, gps)) {
+            n += 1;
+        }
+    }
+    return n;
 }
 
 // Pick one of the overloads cands for a call and emit it. Every candidate that fits is scored:
 // per argument 3 for its exact type, 1 for a coercion; 2 when it returns the wanted type, 1 when
-// it isn't generic. The best score has to be unique, or the call is ambiguous.
+// it isn't generic. The best score has to be unique, or the call is ambiguous; between equal
+// scores, the one with fewer blanket positions (more specific) wins.
 attach fn resolve_call(this: checker&, name: str, cands: std::vec<u32>&, rv: tval?, static_ty: u32?, explicit: std::vec<garg>&, args: std::vec<expr>&, want: u32?, span: span) -> compile_error!tval {
     if (cands.len == 1) {
         val intr = intrinsic_of(this.item_of(*cands.at(0)));
@@ -1208,12 +1274,12 @@ attach fn resolve_rest(this: checker&, name: str, cands: std::vec<u32>&, rp: tva
         if (this.fn_generics(d).len == 0) {
             score += 1;
         }
-        put(&vs, { inst: inst, a: a, score: score });
+        put(&vs, { inst: inst, a: a, score: score, blanket: this.blanket_positions(d) });
     }
-    // stable sort, best first
+    // stable sort, best first: by score, then fewer blanket positions (more specific)
     for (x) in 1..vs.len {
         var j = x;
-        while (j > 0 && vs.at(j - 1).score < vs.at(j).score) {
+        while (j > 0 && (vs.at(j - 1).score < vs.at(j).score || (vs.at(j - 1).score == vs.at(j).score && vs.at(j - 1).blanket > vs.at(j).blanket))) {
             val t = *vs.at(j);
             *vs.at(j) = *vs.at(j - 1);
             *vs.at(j - 1) = t;
@@ -1235,7 +1301,7 @@ attach fn resolve_rest(this: checker&, name: str, cands: std::vec<u32>&, rp: tva
         }
         return fail(span, move m);
     }
-    if (vs.len > 1 && vs.at(0).score <= vs.at(1).score) {
+    if (vs.len > 1 && vs.at(0).score == vs.at(1).score && vs.at(0).blanket == vs.at(1).blanket) {
         return fail(span, fmt("call to '{}' is ambiguous (several versions fit); add types to the arguments or the result", S(name)));
     }
     val pick = *vs.at(0);

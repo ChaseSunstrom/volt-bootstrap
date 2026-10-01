@@ -3,26 +3,38 @@
 // (Part of package std: the package loader wraps every file in `namespace std`.)
 
 // A binary min-heap: push and pop in O(log n), peek in O(1).
-<T: type>
+<T: type, Allocator: std::mem::t_allocator = std::mem::default_allocator>
 struct heap {
-    items: std::vec<T> = {}; // items[i] sorts no earlier than items[(i - 1) / 2]
+    items: std::vec<T, Allocator> = {}; // items[i] sorts no earlier than items[(i - 1) / 2]
+}
+
+// an empty heap that allocates from allocator
+<T: type, A: std::mem::t_allocator>
+attach fn new_in(static this: std::heap<T>, allocator: A) -> std::heap<T, A> {
+    return { items: { allocator: move allocator } };
+}
+
+// room for n elements without growing
+<T: type, A: std::mem::t_allocator>
+attach fn reserve(this: std::heap<T, A>&, n: usize) -> std::mem::mem_error!void {
+    return this.items.reserve(n);
 }
 
 // how many elements it holds
-<T: type>
-attach fn len(this: std::heap<T>&) -> usize {
+<T: type, A: std::mem::t_allocator>
+attach fn len(this: std::heap<T, A>&) -> usize {
     return this.items.len;
 }
 
 // the smallest element, or null when empty
-<T: type>
-attach fn peek(this: std::heap<T>&) -> T* {
+<T: type, A: std::mem::t_allocator>
+attach fn peek(this: std::heap<T, A>&) -> T* {
     return this.items.first();
 }
 
 // add value
-<T: type>
-attach fn push(this: std::heap<T>&, value: T) -> void {
+<T: type, A: std::mem::t_allocator>
+attach fn push(this: std::heap<T, A>&, value: T) -> void {
     this.items.push(move value) catch @panic("out of memory");
     val xs = this.items.items();
     var i = xs.len - 1;
@@ -38,8 +50,8 @@ attach fn push(this: std::heap<T>&, value: T) -> void {
 }
 
 // the smallest element, moved out
-<T: type>
-attach fn pop(this: std::heap<T>&) -> T? {
+<T: type, A: std::mem::t_allocator>
+attach fn pop(this: std::heap<T, A>&) -> T? {
     val n = this.items.len;
     if (n == 0) {
         return null;
@@ -69,7 +81,7 @@ attach fn pop(this: std::heap<T>&) -> T? {
 }
 
 // delete every element
-<T: type>
-attach fn clear(this: std::heap<T>&) -> void {
+<T: type, A: std::mem::t_allocator>
+attach fn clear(this: std::heap<T, A>&) -> void {
     this.items.clear();
 }

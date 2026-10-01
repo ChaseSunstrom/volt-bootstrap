@@ -1426,6 +1426,17 @@ impl Checker {
                 }
             }
         }
+        // a library defines every global of its package: a template that a program instantiates may
+        // use one the library's own code never does
+        if lib.is_some() {
+            for d in 0..self.decls.len() {
+                if matches!(self.decls[d].item.kind, ItemKind::Global(_)) && self.pkg_of(d) == lib.as_deref() {
+                    if let Err(e) = self.global(d, self.decls[d].item.span) {
+                        self.errors.push(e);
+                    }
+                }
+            }
+        }
         self.check_traits();
         // an error stops only its own function: the others are still checked, so one run finds
         // every independent error (--error-limit picks how many are shown)

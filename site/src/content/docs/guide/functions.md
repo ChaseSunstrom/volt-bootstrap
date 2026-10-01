@@ -57,7 +57,9 @@ argument: the caller's value moves in. Take a reference, `T&`, to borrow it inst
 ## Overloading
 
 Several functions can share a name when their parameters differ. The call picks the one whose
-parameter types fit the arguments best, and an ambiguous call is an error.
+parameter types fit the arguments best, and an ambiguous call is an error. Between generic
+versions that fit equally well, the more specific one wins: `<A> cmp(this: string<A>&, ...)` beats
+the blanket `<T> cmp(this: T&, ...)`.
 
 ```volt
 use std::io;

@@ -8,11 +8,12 @@ namespace path {
     }
 
     // b inside a ("a/b"); an absolute b replaces a
-    fn join(a: str, b: str) -> std::string {
+    <A: std::mem::t_allocator = std::mem::default_allocator>
+    fn join(a: str, b: str, allocator: A = {}) -> std::string<A> {
         if (a.len == 0 || is_absolute(b)) {
-            return std::string::from(b);
+            return std::string::from(b, move allocator);
         }
-        var out = std::string::from(a);
+        var out = std::string::from(a, move allocator);
         if (a[a.len - 1] != '/') {
             out.push('/');
         }
@@ -71,10 +72,11 @@ namespace path {
 
     // p with "." parts, repeated slashes and "x/.." pairs removed, by the text alone (it doesn't
     // follow symlinks): "a/c" for "a/./b/../c/". A relative path keeps its leading ".."s; "" is "."
-    fn normalize(p: str) -> std::string {
+    <A: std::mem::t_allocator = std::mem::default_allocator>
+    fn normalize(p: str, allocator: A = {}) -> std::string<A> {
         val abs = is_absolute(p);
-        var parts: std::vec<str> = {};
-        val split = p.split("/");
+        var parts: std::vec<str, A> = { allocator: copy allocator };
+        val split = p.split("/", copy allocator);
         for (part) in split.items() {
             if (part.len == 0 || part == ".") {
                 continue;
@@ -91,11 +93,16 @@ namespace path {
             }
             parts.push(part) catch @panic("out of memory");
         }
-        var out = std::string::from("");
+        var out = std::string::new_in(move allocator);
         if (abs) {
             out.push('/');
         }
-        out.append(std::text::join(parts.items(), "/").as_str());
+        for (part, i) in parts.items() {
+            if (i > 0) {
+                out.push('/');
+            }
+            out.append(part);
+        }
         if (out.len() == 0) {
             out.push('.');
         }

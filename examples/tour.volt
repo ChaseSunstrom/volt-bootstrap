@@ -485,16 +485,17 @@ fn type_name<bool>(v: bool) -> str { return "a bool"; }
 trait t_allocator  { // naming convention for traits is t_
     // count = number of T's. traits need a named error set, there is no body to infer ! from
     <T: type> fn malloc(this, count: usize = 1) -> std::mem::mem_error!(T*);
-    <T: type> fn realloc(this, ptr: T*, count: usize) -> std::mem::mem_error!(T*);
-    <T: type> fn free(this, ptr: T*) -> void;
+    // the caller says how big the block is (old, count), so an allocator needn't remember
+    <T: type> fn realloc(this, ptr: T*, old: usize, count: usize) -> std::mem::mem_error!(T*);
+    <T: type> fn free(this, ptr: T*, count: usize = 1) -> void;
 }
 
 // If we want to use the same type for this:
 <T: type>
 trait t_allocator2 {
     fn malloc(this, count: usize = 1) -> std::mem::mem_error!(T*);
-    fn realloc(this, ptr: T*, count: usize) -> std::mem::mem_error!(T*);
-    fn free(this, ptr: T*) -> void;
+    fn realloc(this, ptr: T*, old: usize, count: usize) -> std::mem::mem_error!(T*);
+    fn free(this, ptr: T*, count: usize = 1) -> void;
 }
 // attached as: <T: type> attach t_allocator2<T> -> some_pool<T> { ... }
 
@@ -563,12 +564,13 @@ namespace demo_alloc {
             return @cast<T*>(raw); // @cast is unchecked (any -> any); "as" only does safe conversions
         }
 
-        <T: type> fn realloc(this, ptr: T*, count: usize) -> std::mem::mem_error!(T*) {
+        // the caller says how big the block was (old T's), so an allocator needn't remember
+        <T: type> fn realloc(this, ptr: T*, old: usize, count: usize) -> std::mem::mem_error!(T*) {
             val raw = libc::realloc(ptr as void*, count * @sizeof(T)) ?? return std::mem::mem_error::OUT_OF_MEMORY;
             return @cast<T*>(raw);
         }
 
-        <T: type> fn free(this, ptr: T*) -> void {
+        <T: type> fn free(this, ptr: T*, count: usize = 1) -> void {
             std::println("noisy: free");
             libc::free(ptr as void*);
         }

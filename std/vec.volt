@@ -10,6 +10,12 @@ struct vec {
     allocator: Allocator = {}; // where the memory comes from
 }
 
+// an empty vec that allocates from allocator
+<T: type, A: std::mem::t_allocator>
+attach fn new_in(static this: std::vec<T>, allocator: A) -> std::vec<T, A> {
+    return { allocator: move allocator };
+}
+
 // the elements as a slice (valid until the vec changes)
 <T: type, A: std::mem::t_allocator>
 attach fn items(this: std::vec<T, A>&) -> T[..] {
@@ -38,7 +44,7 @@ attach fn reserve(this: std::vec<T, A>&, n: usize) -> std::mem::mem_error!void {
     if (this.cap == 0) {
         this.ptr = try this.allocator.malloc<T>(cap);
     } else {
-        this.ptr = try this.allocator.realloc<T>(this.ptr, cap);
+        this.ptr = try this.allocator.realloc<T>(this.ptr, this.cap, cap);
     }
     this.cap = cap;
 }
@@ -195,7 +201,7 @@ attach fn clear(this: std::vec<T, A>&) -> void {
 attach fn delete(this: std::vec<T, A>&) -> void {
     this.clear();
     if (this.cap > 0) {
-        this.allocator.free<T>(this.ptr);
+        this.allocator.free<T>(this.ptr, this.cap);
     }
 }
 

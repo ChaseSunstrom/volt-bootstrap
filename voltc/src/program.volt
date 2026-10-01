@@ -48,6 +48,25 @@ attach fn program(this: checker&) -> compile_error!void {
             this.use_fn(i);
         }
     }
+    // a library defines every global of its package: a template that a program instantiates may
+    // use one the library's own code never does
+    if (lib != null) {
+        for (di) in 0..this.decls.len {
+            val d = @cast<u32>(di);
+            var is_global = false;
+            match (this.item_of(d).kind) {
+                .GLOBAL(l) => { is_global = true; },
+                default => {},
+            }
+            val pkg = this.pkg_of(d);
+            if (is_global && pkg != null && (pkg ?? "") == (lib ?? "")) {
+                this.global(d, this.item_of(d).span) catch |e| {
+                    put(&this.errors, err_diag(&e));
+                    continue;
+                };
+            }
+        }
+    }
     this.check_traits();
     // an error stops only its own function: the others are still checked, so one run finds
     // every independent error (--error-limit picks how many are shown)

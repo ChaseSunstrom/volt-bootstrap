@@ -14,7 +14,9 @@ sidebar:
 | the smallest item first (a priority queue) | `std::heap<T>` |
 
 Each owns what it holds: putting a value in moves it, and deleting the collection deletes its
-contents. `copy` makes a deep copy.
+contents. `copy` makes a deep copy. Each also takes an allocator as its last type parameter
+(`std::vec<T, A>`), defaulting to C's `malloc`. `new_in(allocator)` makes one that uses another,
+and `reserve(n)` makes room ahead of time; see [Allocators](/volt-bootstrap/std/allocators/).
 
 ## Comparing values: eq, cmp and hash
 

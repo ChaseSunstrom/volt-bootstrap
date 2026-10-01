@@ -18,8 +18,11 @@ fn main() -> void {
     geo::count();
     std::println("calls {} {}", geo::calls, geo::count());
     std::println("arg {}", std::process::arg_count());
+    geo::tally(2);
+    std::println("tally {}", geo::tally(@cast<u8>(5)));
 }
 // expect: boxed 20
 // expect: error NEGATIVE
 // expect: calls 2 3
 // expect: arg 1
+// expect: tally 7

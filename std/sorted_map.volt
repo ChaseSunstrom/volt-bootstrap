@@ -4,29 +4,42 @@
 // A map ordered by key. Lookups are a binary search.
 // ponytail: sorted arrays, so put and remove move the entries after the key (O(n));
 // a B-tree if maps with many thousands of keys change often
-<K: type, V: type>
+<K: type, V: type, Allocator: std::mem::t_allocator = std::mem::default_allocator>
 struct sorted_map {
-    keys: std::vec<K> = {}; // sorted by cmp
-    vals: std::vec<V> = {}; // vals[i] is keys[i]'s value
+    keys: std::vec<K, Allocator> = {}; // sorted by cmp
+    vals: std::vec<V, Allocator> = {}; // vals[i] is keys[i]'s value
+}
+
+// an empty sorted_map that allocates from allocator
+<K: type, V: type, A: std::mem::t_allocator>
+attach fn new_in(static this: std::sorted_map<K, V>, allocator: A) -> std::sorted_map<K, V, A> {
+    return { keys: { allocator: copy allocator }, vals: { allocator: move allocator } };
+}
+
+// room for n keys without growing
+<K: type, V: type, A: std::mem::t_allocator>
+attach fn reserve(this: std::sorted_map<K, V, A>&, n: usize) -> std::mem::mem_error!void {
+    try this.keys.reserve(n);
+    return this.vals.reserve(n);
 }
 
 // how many keys it holds
-<K: type, V: type>
-attach fn len(this: std::sorted_map<K, V>&) -> usize {
+<K: type, V: type, A: std::mem::t_allocator>
+attach fn len(this: std::sorted_map<K, V, A>&) -> usize {
     return this.keys.len;
 }
 
 // the index of key, or where it would go
-<K: type, V: type>
-internal attach fn place(this: std::sorted_map<K, V>&, key: K&) -> (bool, usize) {
+<K: type, V: type, A: std::mem::t_allocator>
+internal attach fn place(this: std::sorted_map<K, V, A>&, key: K&) -> (bool, usize) {
     val keys = this.keys.items();
     val at = keys.bound(key);
     return (at < keys.len && keys[at].cmp(key) == 0, at);
 }
 
 // set key to value (an old value for it is deleted)
-<K: type, V: type>
-attach fn put(this: std::sorted_map<K, V>&, key: K, value: V) -> void {
+<K: type, V: type, A: std::mem::t_allocator>
+attach fn put(this: std::sorted_map<K, V, A>&, key: K, value: V) -> void {
     val (found, at) = this.place(&key);
     if (found) {
         *this.vals.at(at) = move value;
@@ -37,8 +50,8 @@ attach fn put(this: std::sorted_map<K, V>&, key: K, value: V) -> void {
 }
 
 // the value for key, if there is one
-<K: type, V: type>
-attach fn get(this: std::sorted_map<K, V>&, key: K) -> V* {
+<K: type, V: type, A: std::mem::t_allocator>
+attach fn get(this: std::sorted_map<K, V, A>&, key: K) -> V* {
     val (found, at) = this.place(&key);
     if (!found) {
         return null;
@@ -47,15 +60,15 @@ attach fn get(this: std::sorted_map<K, V>&, key: K) -> V* {
 }
 
 // whether key has a value
-<K: type, V: type>
-attach fn contains(this: std::sorted_map<K, V>&, key: K) -> bool {
+<K: type, V: type, A: std::mem::t_allocator>
+attach fn contains(this: std::sorted_map<K, V, A>&, key: K) -> bool {
     val (found, at) = this.place(&key);
     return found;
 }
 
 // take key's value out of the map
-<K: type, V: type>
-attach fn remove(this: std::sorted_map<K, V>&, key: K) -> V? {
+<K: type, V: type, A: std::mem::t_allocator>
+attach fn remove(this: std::sorted_map<K, V, A>&, key: K) -> V? {
     val (found, at) = this.place(&key);
     if (!found) {
         return null;
@@ -65,8 +78,8 @@ attach fn remove(this: std::sorted_map<K, V>&, key: K) -> V? {
 }
 
 // delete every key and value
-<K: type, V: type>
-attach fn clear(this: std::sorted_map<K, V>&) -> void {
+<K: type, V: type, A: std::mem::t_allocator>
+attach fn clear(this: std::sorted_map<K, V, A>&) -> void {
     this.keys.clear();
     this.vals.clear();
 }
@@ -80,8 +93,8 @@ struct sorted_map_iter {
 }
 
 // for (e) in m.iter(): each entry in key order, with e.value a reference into the map
-<K: type, V: type>
-attach fn iter(this: std::sorted_map<K, V>&) -> std::sorted_map_iter<K, V> {
+<K: type, V: type, A: std::mem::t_allocator>
+attach fn iter(this: std::sorted_map<K, V, A>&) -> std::sorted_map_iter<K, V> {
     return { keys: this.keys.items(), vals: this.vals.items() };
 }
 

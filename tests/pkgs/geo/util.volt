@@ -21,3 +21,13 @@ fn count() -> i32 {
     calls += 1;
     return calls;
 }
+
+// state only a template uses: a prebuilt library still defines it, for the programs that
+// instantiate the template
+var tallies: i64 = 0;
+
+<T: type>
+fn tally(x: T) -> i64 {
+    tallies += @cast<i64>(x);
+    return tallies;
+}

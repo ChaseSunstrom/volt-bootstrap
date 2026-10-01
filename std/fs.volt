@@ -11,6 +11,23 @@ namespace fs {
         NOT_EMPTY,  // the directory still has entries
         NOT_A_DIR,  // a directory was needed
         IS_A_DIR,   // a file was needed
+        BAD_PATH,   // too long for the system, or a NUL byte in it
+    }
+
+    // text with a NUL after it, in buf, for C: no allocation (a path the system takes is under 4096
+    // bytes and has no NUL in it)
+    internal fn c_text(text: str, buf: u8[..]) -> fs_error!cstr {
+        if (text.len >= buf.len) {
+            return fs_error::BAD_PATH;
+        }
+        for (b, i) in text {
+            if (b == 0) {
+                return fs_error::BAD_PATH;
+            }
+            buf[i] = b;
+        }
+        buf[text.len] = 0;
+        return @cast<cstr>(buf.ptr);
     }
 
     // libc through extern "C": voltc declares these under its own names, so they never clash
@@ -65,10 +82,11 @@ namespace fs {
     }
 
     // the whole file
-    fn read_file(path: str) -> fs_error!std::string {
-        var p = std::string::from(path);
-        val f = fopen(p.c_str(), "rb") ?? return from_errno();
-        var out: std::string = {};
+    <A: std::mem::t_allocator = std::mem::default_allocator>
+    fn read_file(path: str, allocator: A = {}) -> fs_error!std::string<A> {
+        var pb: u8[4096];
+        val f = fopen(try c_text(path, pb[..]), "rb") ?? return from_errno();
+        var out = std::string::new_in(move allocator);
         var buf: u8[4096];
         loop {
             val n = fread(&buf, 1, 4096, f);
@@ -87,8 +105,8 @@ namespace fs {
 
     // data written to path through fopen mode m ("wb" replaces, "ab" appends)
     internal fn put_file(path: str, data: str, m: cstr) -> fs_error!void {
-        var p = std::string::from(path);
-        val f = fopen(p.c_str(), m) ?? return from_errno();
+        var pb: u8[4096];
+        val f = fopen(try c_text(path, pb[..]), m) ?? return from_errno();
         var written: usize = 0;
         if (data.len > 0) {
             written = fwrite(@cast<void*>(data.ptr), 1, data.len, f);
@@ -111,14 +129,14 @@ namespace fs {
 
     // whether something is at path
     fn exists(path: str) -> bool {
-        var p = std::string::from(path);
-        return access(p.c_str(), 0) == 0;
+        var pb: u8[4096];
+        return access(c_text(path, pb[..]) catch return false, 0) == 0;
     }
 
     // whether path is a directory (or a link to one)
     fn is_dir(path: str) -> bool {
-        var p = std::string::from(path);
-        val d = opendir(p.c_str()) ?? return false;
+        var pb: u8[4096];
+        val d = opendir(c_text(path, pb[..]) catch return false) ?? return false;
         closedir(d);
         return true;
     }
@@ -130,8 +148,8 @@ namespace fs {
 
     // the size of the file at path, in bytes
     fn size(path: str) -> fs_error!u64 {
-        var p = std::string::from(path);
-        val f = fopen(p.c_str(), "rb") ?? return from_errno();
+        var pb: u8[4096];
+        val f = fopen(try c_text(path, pb[..]), "rb") ?? return from_errno();
         val ok = fseek(f, 0, 2) == 0;
         val n = ftell(f);
         fclose(f);
@@ -143,9 +161,10 @@ namespace fs {
 
     // the entries of directory path (not "." or ".."), in the order the system gives them: names, and
     // whether each is a directory (a link to one isn't: walking and removing don't follow links)
-    internal fn scan(path: str, names: std::vec<std::string>&, dirs: std::vec<bool>&) -> fs_error!void {
-        var p = std::string::from(path);
-        val d = opendir(p.c_str()) ?? return from_errno();
+    <A: std::mem::t_allocator>
+    internal fn scan(path: str, names: std::vec<std::string<A>, A>&, dirs: std::vec<bool, A>&) -> fs_error!void {
+        var pb: u8[4096];
+        val d = opendir(try c_text(path, pb[..])) ?? return from_errno();
         loop {
             val ent = readdir(d) ?? break;
             // ponytail: struct dirent's d_type at byte 18 and d_name at 19, as glibc and musl lay it out
@@ -160,38 +179,41 @@ namespace fs {
             if (bytes[18] == 0) {
                 // DT_UNKNOWN (a filesystem without types): ask
                 // ponytail: this one follows links, so a link loop on such a filesystem walks forever
-                dir = is_dir(std::path::join(path, name).as_str());
+                dir = is_dir(std::path::join(path, name, copy names.allocator).as_str());
             }
-            names.push(std::string::from(name)) catch @panic("out of memory");
+            names.push(std::string::from(name, copy names.allocator)) catch @panic("out of memory");
             dirs.push(dir) catch @panic("out of memory");
         }
         closedir(d);
     }
 
     // the names in directory path (not "." or ".."), sorted
-    fn list_dir(path: str) -> fs_error!std::vec<std::string> {
-        var names: std::vec<std::string> = {};
-        var dirs: std::vec<bool> = {};
+    <A: std::mem::t_allocator = std::mem::default_allocator>
+    fn list_dir(path: str, allocator: A = {}) -> fs_error!std::vec<std::string<A>, A> {
+        var names: std::vec<std::string<A>, A> = { allocator: copy allocator };
+        var dirs: std::vec<bool, A> = { allocator: copy allocator };
         try scan(path, &names, &dirs);
-        names.items().sort();
+        names.items().sort(move allocator);
         return move names;
     }
 
     // every file under directory path, in its subdirectories too (not the directories themselves), as
     // paths starting with path, sorted; links to directories aren't followed
-    fn walk(path: str) -> fs_error!std::vec<std::string> {
-        var out: std::vec<std::string> = {};
+    <A: std::mem::t_allocator = std::mem::default_allocator>
+    fn walk(path: str, allocator: A = {}) -> fs_error!std::vec<std::string<A>, A> {
+        var out: std::vec<std::string<A>, A> = { allocator: copy allocator };
         try walk_into(path, &out);
-        out.items().sort();
+        out.items().sort(move allocator);
         return move out;
     }
 
-    internal fn walk_into(dir: str, out: std::vec<std::string>&) -> fs_error!void {
-        var names: std::vec<std::string> = {};
-        var dirs: std::vec<bool> = {};
+    <A: std::mem::t_allocator>
+    internal fn walk_into(dir: str, out: std::vec<std::string<A>, A>&) -> fs_error!void {
+        var names: std::vec<std::string<A>, A> = { allocator: copy out.allocator };
+        var dirs: std::vec<bool, A> = { allocator: copy out.allocator };
         try scan(dir, &names, &dirs);
         for (n&, i) in names.items() {
-            var full = std::path::join(dir, n.as_str());
+            var full = std::path::join(dir, n.as_str(), copy out.allocator);
             if (*dirs.at(i)) {
                 try walk_into(full.as_str(), out);
             } else {
@@ -202,8 +224,8 @@ namespace fs {
 
     // make directory path (its parent has to exist)
     fn create_dir(path: str) -> fs_error!void {
-        var p = std::string::from(path);
-        if (mkdir(p.c_str(), 0o777) != 0) {
+        var pb: u8[4096];
+        if (mkdir(try c_text(path, pb[..]), 0o777) != 0) {
             return from_errno();
         }
     }
@@ -227,24 +249,24 @@ namespace fs {
 
     // remove the file (or link) at path
     fn remove_file(path: str) -> fs_error!void {
-        var p = std::string::from(path);
-        if (unlink(p.c_str()) != 0) {
+        var pb: u8[4096];
+        if (unlink(try c_text(path, pb[..])) != 0) {
             return from_errno();
         }
     }
 
     // remove directory path, which has to be empty
     fn remove_dir(path: str) -> fs_error!void {
-        var p = std::string::from(path);
-        if (rmdir(p.c_str()) != 0) {
+        var pb: u8[4096];
+        if (rmdir(try c_text(path, pb[..])) != 0) {
             return from_errno();
         }
     }
 
     // remove path: a file, or a directory with everything in it. A link is removed, not followed
     fn remove_all(path: str) -> fs_error!void {
-        var p = std::string::from(path);
-        if (unlink(p.c_str()) == 0) {
+        var pb: u8[4096];
+        if (unlink(try c_text(path, pb[..])) == 0) {
             return;
         }
         val e = from_errno();
@@ -264,9 +286,9 @@ namespace fs {
 
     // move (or rename) from to to, replacing a file at to
     fn rename(from: str, to: str) -> fs_error!void {
-        var f = std::string::from(from);
-        var t = std::string::from(to);
-        if (sys::rename(f.c_str(), t.c_str()) != 0) {
+        var fb: u8[4096];
+        var tb: u8[4096];
+        if (sys::rename(try c_text(from, fb[..]), try c_text(to, tb[..])) != 0) {
             return from_errno();
         }
     }
@@ -305,15 +327,17 @@ namespace fs {
         if (mode != "r" && mode != "w" && mode != "a" && mode != "r+" && mode != "w+" && mode != "a+") {
             @panic("std::fs::open: mode is r, w, a, r+, w+ or a+");
         }
-        var p = std::string::from(path);
-        var m = std::string::from(mode);
-        val f = fopen(p.c_str(), m.c_str()) ?? return from_errno();
+        var pb: u8[4096];
+        var mb: u8[4];
+        val f = fopen(try c_text(path, pb[..]), try c_text(mode, mb[..])) ?? return from_errno();
         return { handle: f };
     }
 
     // walks a file's lines (see lines)
+    <A: std::mem::t_allocator>
     struct file_lines {
         f: file*;
+        allocator: A; // where each line goes
     }
 }
 
@@ -327,8 +351,9 @@ attach fn read(this: std::fs::file&, buf: u8[..]) -> std::fs::fs_error!usize {
 }
 
 // the rest of the file
-attach fn read_all(this: std::fs::file&) -> std::fs::fs_error!std::string {
-    var out: std::string = {};
+<A: std::mem::t_allocator = std::mem::default_allocator>
+attach fn read_all(this: std::fs::file&, allocator: A = {}) -> std::fs::fs_error!std::string<A> {
+    var out = std::string::new_in(move allocator);
     var buf: u8[4096];
     loop {
         val n = try this.read(buf[..]);
@@ -340,7 +365,8 @@ attach fn read_all(this: std::fs::file&) -> std::fs::fs_error!std::string {
 }
 
 // the next line, without its "\n" (or "\r\n"); null at the end of the file. Any length, NUL bytes too
-attach fn read_line(this: std::fs::file&) -> std::fs::fs_error!(std::string?) {
+<A: std::mem::t_allocator = std::mem::default_allocator>
+attach fn read_line(this: std::fs::file&, allocator: A = {}) -> std::fs::fs_error!(std::string<A>?) {
     // getline counts the bytes (fgets can't: it would stop the line at a NUL) and grows its buffer,
     // which C's malloc owns, so C's free gives it back
     var buf: u8* = @cast<u8*>(0);
@@ -353,7 +379,7 @@ attach fn read_line(this: std::fs::file&) -> std::fs::fs_error!(std::string?) {
         }
         return null;
     }
-    var out = std::string::from(@cast<str>(@slice(buf, @cast<usize>(n))));
+    var out = std::string::from(@cast<str>(@slice(buf, @cast<usize>(n))), move allocator);
     std::fs::free(buf as void*);
     if (out.as_str().ends_with("\n")) {
         out.pop();
@@ -365,13 +391,15 @@ attach fn read_line(this: std::fs::file&) -> std::fs::fs_error!(std::string?) {
 }
 
 // for (line) in f.lines(): each line as read_line gives it, until the end (or a read error)
-attach fn lines(this: std::fs::file&) -> std::fs::file_lines {
-    return { f: this as std::fs::file* };
+<A: std::mem::t_allocator = std::mem::default_allocator>
+attach fn lines(this: std::fs::file&, allocator: A = {}) -> std::fs::file_lines<A> {
+    return { f: this as std::fs::file*, allocator: move allocator };
 }
 
 // the next line
-attach fn next(this: std::fs::file_lines&) -> std::string? {
-    return this.f->read_line() catch null;
+<A: std::mem::t_allocator>
+attach fn next(this: std::fs::file_lines<A>&) -> std::string<A>? {
+    return this.f->read_line(copy this.allocator) catch null;
 }
 
 // write data at the current position

@@ -136,17 +136,17 @@ namespace process {
     }
 
     // the working directory (where relative paths start)
-    fn cwd() -> std::string {
+    <A: std::mem::t_allocator = std::mem::default_allocator>
+    fn cwd(allocator: A = {}) -> std::string<A> {
         var size: usize = 256;
         loop {
-            val raw = std::mem::c_malloc(size) ?? @panic("out of memory");
-            val buf = @cast<u8*>(raw);
+            val buf: u8* = allocator.malloc<u8>(size) catch @panic("out of memory");
             if (getcwd(buf, size) != null) {
-                val out = std::string::from(@cast<str>(@slice(buf, strlen(@cast<cstr>(buf)))));
-                std::mem::c_free(raw);
+                val out = std::string::from(@cast<str>(@slice(buf, strlen(@cast<cstr>(buf)))), copy allocator);
+                allocator.free<u8>(buf, size);
                 return move out;
             }
-            std::mem::c_free(raw);
+            allocator.free<u8>(buf, size);
             if (*__errno_location() != 34) { // ERANGE: a bigger buffer helps; nothing else does
                 @panic("std::process::cwd: the working directory can't be read");
             }
@@ -198,14 +198,17 @@ namespace process {
     }
 
     // what a program printed, and how it ended
+    <A: std::mem::t_allocator = std::mem::default_allocator>
     struct output {
         code: i32;           // exit code, or 128 + signal
-        out: std::string;    // its stdout
-        err: std::string;    // its stderr
+        out: std::string<A>; // its stdout
+        err: std::string<A>; // its stderr
     }
 
-    // run a program (found on PATH) with `input` as its stdin; waits and collects its output
-    fn capture(argv: str[..], input: str) -> process_error!output {
+    // run a program (found on PATH) with `input` as its stdin; waits and collects its output, in
+    // memory from allocator
+    <A: std::mem::t_allocator = std::mem::default_allocator>
+    fn capture(argv: str[..], input: str, allocator: A = {}) -> process_error!output<A> {
         if (argv.len == 0) {
             return process_error::SPAWN_FAILED;
         }
@@ -253,7 +256,7 @@ namespace process {
             close(errp[0]);
             return process_error::SPAWN_FAILED;
         }
-        var r: output = { code: 0, out: {}, err: {} };
+        var r: output<A> = { code: 0, out: std::string::new_in(copy allocator), err: std::string::new_in(move allocator) };
         pump(inp[1], outp[0], errp[0], input, &r);
         r.code = try wait_for(pid);
         return move r;
@@ -261,7 +264,8 @@ namespace process {
 
     // feed the child its input while collecting its stdout and stderr, all at once: a child
     // blocked writing one pipe never waits on us reading another. Closes the three fds.
-    internal fn pump(inp: i32, outp: i32, errp: i32, input: str, r: output&) -> void {
+    <A: std::mem::t_allocator>
+    internal fn pump(inp: i32, outp: i32, errp: i32, input: str, r: output<A>&) -> void {
         var fds: pollfd[3];
         fds[0] = { fd: inp, events: 4, revents: 0 }; // POLLOUT
         fds[1] = { fd: outp, events: 1, revents: 0 }; // POLLIN
