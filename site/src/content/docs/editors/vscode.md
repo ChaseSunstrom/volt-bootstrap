@@ -66,7 +66,8 @@ overrides that.
 ## Developing the extension
 
 `npm test`, run in `editors/vscode`, runs the grammar's tests (the assertion files in
-`tests/grammar` and a snapshot of `tests/snap/sample.volt`) and the voltc finder's tests. After a
+`editors/vscode/tests/grammar` and a snapshot of `editors/vscode/tests/snap/sample.volt`) and the
+voltc finder's tests. After a
 deliberate grammar change, `npx vscode-tmgrammar-snap -u 'tests/snap/*.volt'` updates the snapshot.
 
 `VOLTC=/path/to/voltc npm run test:e2e` runs the extension in a real VS Code (downloaded into

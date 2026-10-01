@@ -7,6 +7,7 @@ mod build;
 mod commands;
 mod foreign;
 mod manifest;
+mod progress;
 mod resolve;
 mod toml;
 
@@ -70,38 +71,38 @@ options:
 
 // ---------- output ----------
 
-struct Ui {
-    quiet: bool,
+pub struct Ui {
+    pub quiet: bool,
     verbose: bool,
-    color: bool,
+    pub color: bool,
 }
 
 static UI: OnceLock<Ui> = OnceLock::new();
 
-fn ui() -> &'static Ui {
+pub fn ui() -> &'static Ui {
     UI.get_or_init(|| Ui { quiet: false, verbose: false, color: false })
 }
 
 /// `text` in bold and colour (an ANSI colour number) when colour is on
-fn paint(text: &str, color: u8) -> String {
+pub fn paint(text: &str, color: u8) -> String {
     if ui().color { format!("\x1b[1;{color}m{text}\x1b[0m") } else { text.to_string() }
 }
 
 /// a cargo-style progress line on stderr: `what` right-aligned, then msg
 pub fn status(what: &str, msg: impl std::fmt::Display) {
     if !ui().quiet {
-        eprintln!("{} {msg}", paint(&format!("{what:>12}"), 32));
+        progress::above(&format!("{} {msg}\n", paint(&format!("{what:>12}"), 32)));
     }
 }
 
 pub fn warn(msg: impl std::fmt::Display) {
     if !ui().quiet {
-        eprintln!("{} {msg}", paint("warning:", 33));
+        progress::above(&format!("{} {msg}\n", paint("warning:", 33)));
     }
 }
 
 pub fn fail(msg: impl std::fmt::Display) -> ! {
-    eprintln!("{} {msg}", paint("error:", 31));
+    progress::above(&format!("{} {msg}\n", paint("error:", 31)));
     exit(1);
 }
 

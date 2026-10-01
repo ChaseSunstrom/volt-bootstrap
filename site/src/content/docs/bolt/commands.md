@@ -50,7 +50,7 @@ sidebar:
 | `--locked`, `--offline`, `--frozen` | refuse to change `bolt.lock` / to use the network / both |
 | `--backend c\|llvm` | override the profile's backend |
 | `--message-format F`, `--color WHEN`, `--error-limit N` | passed to voltc |
-| `-q, --quiet`, `-v, --verbose` | fewer or more lines (verbose prints each command) |
+| `-q, --quiet`, `-v, --verbose` | fewer or more lines (verbose prints each command). On a terminal, a live `Building` line under the others shows what's compiling and for how long |
 
 ## Environment
 

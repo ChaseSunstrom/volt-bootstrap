@@ -362,7 +362,23 @@ impl Build {
         }
         let mut c = Command::new(program);
         c.args(&j.args);
-        run_checked(c, &format!("compiling {}", j.what))?;
+        let live = crate::progress::start(&j.what);
+        if live.is_none() {
+            run_checked(c, &format!("compiling {}", j.what))?;
+        } else {
+            // on a terminal the live line is up: what the compiler prints goes above it, in colour
+            // (not part of the stamp, so a terminal and a log don't rebuild each other's work)
+            if j.program.is_none() && crate::ui().color && !j.args.iter().any(|a| a == "--color") {
+                c.args(["--color", "always"]);
+            }
+            crate::verbose(&c);
+            let o = c.output().map_err(|e| format!("can't run compiling {}: {e}", j.what))?;
+            drop(live);
+            crate::progress::above(&(String::from_utf8_lossy(&o.stdout).to_string() + &String::from_utf8_lossy(&o.stderr)));
+            if !o.status.success() {
+                return Err(format!("compiling {} failed", j.what));
+            }
+        }
         std::fs::write(&stamp_path, stamp).map_err(|e| format!("can't write {}: {e}", stamp_path.display()))
     }
 
