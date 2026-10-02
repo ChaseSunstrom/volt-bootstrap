@@ -238,6 +238,16 @@ namespace bare {
         return @cast<i64>(q);
     }
 
+    // float % (LLVM's frem), which LLVM makes a call to the C library's fmod or fmodf
+    export fn fmod(x: f64, y: f64) -> f64 {
+        return std::math::portable::fmod(x, y);
+    }
+
+    // float % on f32
+    export fn fmodf(x: f32, y: f32) -> f32 {
+        return std::math::portable::fmod(x, y);
+    }
+
     // what LLVM calls for 64-bit division on 32-bit cores
     @attributes([@cfg("pointer_bits", "32")])
     namespace div32 {

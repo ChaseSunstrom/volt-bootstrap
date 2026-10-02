@@ -18,57 +18,59 @@ namespace math {
         return x / 0.0;
     }
 
-    // the C math library (libm, which voltc links): f64 versions
+    // f64 versions: the C math library's (libm, which voltc links; with no OS, std::math::portable's)
+
     // the square root
-    extern "C" fn sqrt(x: f64) -> f64;
+    fn sqrt(x: f64) -> f64 { return libm::sqrt(x); }
     // the cube root
-    extern "C" fn cbrt(x: f64) -> f64;
+    fn cbrt(x: f64) -> f64 { return libm::cbrt(x); }
     // x to the power y
-    extern "C" fn pow(x: f64, y: f64) -> f64;
+    fn pow(x: f64, y: f64) -> f64 { return libm::pow(x, y); }
     // e to the power x
-    extern "C" fn exp(x: f64) -> f64;
+    fn exp(x: f64) -> f64 { return libm::exp(x); }
     // 2 to the power x
-    extern "C" fn exp2(x: f64) -> f64;
+    fn exp2(x: f64) -> f64 { return libm::exp2(x); }
     // the natural logarithm (base e)
-    extern "C" fn log(x: f64) -> f64;
+    fn log(x: f64) -> f64 { return libm::log(x); }
     // the base-2 logarithm
-    extern "C" fn log2(x: f64) -> f64;
+    fn log2(x: f64) -> f64 { return libm::log2(x); }
     // the base-10 logarithm
-    extern "C" fn log10(x: f64) -> f64;
+    fn log10(x: f64) -> f64 { return libm::log10(x); }
     // the sine of x radians
-    extern "C" fn sin(x: f64) -> f64;
+    fn sin(x: f64) -> f64 { return libm::sin(x); }
     // the cosine of x radians
-    extern "C" fn cos(x: f64) -> f64;
+    fn cos(x: f64) -> f64 { return libm::cos(x); }
     // the tangent of x radians
-    extern "C" fn tan(x: f64) -> f64;
+    fn tan(x: f64) -> f64 { return libm::tan(x); }
     // the arcsine, in radians
-    extern "C" fn asin(x: f64) -> f64;
+    fn asin(x: f64) -> f64 { return libm::asin(x); }
     // the arccosine, in radians
-    extern "C" fn acos(x: f64) -> f64;
+    fn acos(x: f64) -> f64 { return libm::acos(x); }
     // the arctangent, in radians
-    extern "C" fn atan(x: f64) -> f64;
+    fn atan(x: f64) -> f64 { return libm::atan(x); }
     // the angle of the point (x, y) from the x axis, in radians (-pi to pi)
-    extern "C" fn atan2(y: f64, x: f64) -> f64;
+    fn atan2(y: f64, x: f64) -> f64 { return libm::atan2(y, x); }
     // the hyperbolic sine
-    extern "C" fn sinh(x: f64) -> f64;
+    fn sinh(x: f64) -> f64 { return libm::sinh(x); }
     // the hyperbolic cosine
-    extern "C" fn cosh(x: f64) -> f64;
+    fn cosh(x: f64) -> f64 { return libm::cosh(x); }
     // the hyperbolic tangent
-    extern "C" fn tanh(x: f64) -> f64;
+    fn tanh(x: f64) -> f64 { return libm::tanh(x); }
     // the length of the hypotenuse, sqrt(x*x + y*y) without overflowing
-    extern "C" fn hypot(x: f64, y: f64) -> f64;
+    fn hypot(x: f64, y: f64) -> f64 { return libm::hypot(x, y); }
     // the largest whole number not above x
-    extern "C" fn floor(x: f64) -> f64;
+    fn floor(x: f64) -> f64 { return libm::floor(x); }
     // the smallest whole number not below x
-    extern "C" fn ceil(x: f64) -> f64;
+    fn ceil(x: f64) -> f64 { return libm::ceil(x); }
     // the nearest whole number, halves away from zero
-    extern "C" fn round(x: f64) -> f64;
+    fn round(x: f64) -> f64 { return libm::round(x); }
     // x without its fraction (toward zero)
-    extern "C" fn trunc(x: f64) -> f64;
+    fn trunc(x: f64) -> f64 { return libm::trunc(x); }
     // the remainder of x / y, with x's sign
-    extern "C" fn fmod(x: f64, y: f64) -> f64;
+    fn fmod(x: f64, y: f64) -> f64 { return libm::fmod(x, y); }
 
     // f32 versions: libm's sqrtf and friends
+
     // the square root
     fn sqrt(x: f32) -> f32 { return libm::sqrtf(x); }
     // the cube root
@@ -118,7 +120,33 @@ namespace math {
     // the remainder of x / y, with x's sign
     fn fmod(x: f32, y: f32) -> f32 { return libm::fmodf(x, y); }
 
+    // the C math library's functions; with no OS, std/math_portable.volt gives these names
+    @attributes([@cfg("hosted")])
     namespace libm {
+        internal extern "C" fn sqrt(x: f64) -> f64;
+        internal extern "C" fn cbrt(x: f64) -> f64;
+        internal extern "C" fn pow(x: f64, y: f64) -> f64;
+        internal extern "C" fn exp(x: f64) -> f64;
+        internal extern "C" fn exp2(x: f64) -> f64;
+        internal extern "C" fn log(x: f64) -> f64;
+        internal extern "C" fn log2(x: f64) -> f64;
+        internal extern "C" fn log10(x: f64) -> f64;
+        internal extern "C" fn sin(x: f64) -> f64;
+        internal extern "C" fn cos(x: f64) -> f64;
+        internal extern "C" fn tan(x: f64) -> f64;
+        internal extern "C" fn asin(x: f64) -> f64;
+        internal extern "C" fn acos(x: f64) -> f64;
+        internal extern "C" fn atan(x: f64) -> f64;
+        internal extern "C" fn atan2(y: f64, x: f64) -> f64;
+        internal extern "C" fn sinh(x: f64) -> f64;
+        internal extern "C" fn cosh(x: f64) -> f64;
+        internal extern "C" fn tanh(x: f64) -> f64;
+        internal extern "C" fn hypot(x: f64, y: f64) -> f64;
+        internal extern "C" fn floor(x: f64) -> f64;
+        internal extern "C" fn ceil(x: f64) -> f64;
+        internal extern "C" fn round(x: f64) -> f64;
+        internal extern "C" fn trunc(x: f64) -> f64;
+        internal extern "C" fn fmod(x: f64, y: f64) -> f64;
         internal extern "C" fn sqrtf(x: f32) -> f32;
         internal extern "C" fn cbrtf(x: f32) -> f32;
         internal extern "C" fn powf(x: f32, y: f32) -> f32;

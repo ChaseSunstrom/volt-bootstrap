@@ -35,8 +35,9 @@ under qemu.
   where it runs, zeroes `.bss`, runs the constructors in `.init_array`, calls `main`, and passes
   what `main` returns to `volt_exit`. On a Cortex-M it's also the vector table: the stack top, the
   reset entry, and the fault entries. On a Cortex-M4 and on `riscv64-none` it turns the FPU on.
-- **std**, in Volt. Printing, `box`, `vec`, `map`, `string` and the other collections, and panics
-  all work. Memory comes from a heap between two addresses the linker script gives. What
+- **std**, in Volt. Printing, `box`, `vec`, `map`, `string` and the other collections, `std::math`
+  (as [`std::math::portable`](/volt-bootstrap/std/math/#in-volt-stdmathportable)), and panics all
+  work. Memory comes from a heap between two addresses the linker script gives. What
   needs an OS (files, threads, sockets, the clock, the process's arguments) isn't there: calling it
   fails to link, naming the function.
 - **What LLVM's code calls**: `memcpy`, `memset` and the like, 64-bit division, and floating point
@@ -99,7 +100,6 @@ The test suite runs both, in debug and release builds, with the C compiler set t
 
 - `usize` is 64 bits even on 32-bit targets (pointers are 32). Code that hands a `usize` to the
   hardware should use `u32`.
-- `std::math`'s functions that come from the C math library (`sin`, `exp`, `pow`...).
 - Printing a pointer or a reference itself (its address) uses the C runtime, so on bare metal it fails
   to link; everything else prints, format specs (`{:>8}`, `{:x}`, `{:.3}`) included.
 - Interrupt handlers past the reset and fault entries, and other CPUs (AArch64, x86-64, Cortex-M0).

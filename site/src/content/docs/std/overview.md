@@ -25,7 +25,7 @@ Each file is wrapped in `namespace std`, and most declare a namespace of their o
 | [`std::heap`](/volt-bootstrap/std/heap/) | `heap<T>`: a priority queue, smallest first |
 | [`std::slice`](/volt-bootstrap/std/slice/) | on any `T[..]`: stable `sort`, `sort_by`, `binary_search`, `reverse`, `contains`, `min`, `max` |
 | [`std::compare`](/volt-bootstrap/std/compare/) | `eq` and `cmp`, which collections and algorithms compare values with |
-| [`std::math`](/volt-bootstrap/std/math/) | constants, `sqrt`, `pow`, trig and the rest of libm (f64 and f32), `min`/`max`/`clamp`, integer limits, checked and saturating arithmetic, `gcd`/`lcm` |
+| [`std::math`](/volt-bootstrap/std/math/) | constants, `sqrt`, `pow`, trig and the rest of libm (f64 and f32; in Volt as `std::math::portable`), `min`/`max`/`clamp`, integer limits, checked and saturating arithmetic, `gcd`/`lcm` |
 | [`std::random`](/volt-bootstrap/std/random/) | random numbers (xoshiro256**), seeded or from the OS; ranges, floats, shuffle, choose; secure OS bytes |
 | [`std::mem`](/volt-bootstrap/std/mem/) | the allocator trait and allocators (`arena`, `fixed_buffer`, `failing`), `box<T>` (an owning pointer), `T::new`, `mem_error` ([Allocators](/volt-bootstrap/std/allocators/)) |
 | [`std::fs`](/volt-bootstrap/std/fs/) | files and directories: whole files, file streams (`open`, `read_line`, `seek`), listing, walking, creating, removing ([Files](/volt-bootstrap/std/files/)) |

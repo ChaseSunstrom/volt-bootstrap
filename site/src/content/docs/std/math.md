@@ -1,6 +1,6 @@
 ---
 title: Math
-description: Constants, the C math library in f64 and f32, min/max/clamp, integer limits, and checked and saturating arithmetic.
+description: Constants, sqrt, pow, trig and the rest of the C math library in f64 and f32 (and in Volt, for bare metal and identical results everywhere), min/max/clamp, integer limits, and checked and saturating arithmetic.
 sidebar:
   order: 3
 ---
@@ -36,6 +36,19 @@ fn main() -> void {
 
 Each function takes and returns an `f64`, and has an `f32` overload that stays in `f32` (libm's
 `sqrtf` and friends). Angles are in radians.
+
+### In Volt: `std::math::portable`
+
+`std::math::portable` has the same functions written in Volt (ported from musl, whose code comes
+from Sun's fdlibm and Arm's optimized routines), needing no C math library. `sqrt`, `floor`, `ceil`,
+`round`, `trunc` and `fmod` are exact; the rest are within an ulp of the true value, and give the same
+bits on every machine. A test compares them with glibc's on edge cases and random values of every
+size.
+
+On an OS, `std::math`'s functions are the system's libm, which has the CPU's own square root and
+rounding instructions behind it. With no OS ([`--target`](/volt-bootstrap/voltc/bare-metal/)) they
+are `portable`'s, and so is the `fmod` LLVM calls for a float `%`. Call `std::math::portable`
+yourself when results must match across machines, for a simulation's replay or a lockstep game.
 
 ## Any number
 
