@@ -4,16 +4,19 @@
 // their `// expect:` lines are the output shown. The benchmark bars come from the table in
 // internals/benchmarks.md, which a benchmark run rewrites.
 //
-// Motion says what Volt does: on load, current runs from main.volt to the C (or LLVM IR) voltc
-// writes for it and on to what it prints. Further down, each section moves once as it scrolls into
-// view (src/scripts/reveal.ts adds .on): the runtime's parts switch off, the benchmark bars charge,
-// current runs through the languages Volt calls and that call it, and the first command types
-// itself. With reduced motion everything is shown in its final state.
+// The page is one circuit. On load the mark draws itself and its spark lights, and current runs
+// from main.volt to the C (or LLVM IR) voltc writes for it and on to what it prints. From the
+// mark's spark one trace runs down the page to the last terminal, and scrolling carries a spark
+// along it (src/scripts/current.ts): headings fill with light as it passes, the runtime's parts
+// switch off, the benchmark bars charge, current runs through the languages Volt calls and that
+// call it, and the first command types itself. With reduced motion everything is shown in its
+// final state.
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import StarlightPage from "@astrojs/starlight/components/StarlightPage.astro";
 import { Code } from "astro:components";
 import { volt, codeDark } from "../code-themes.mjs";
+import * as mark from "../mark";
 import "../styles/landing.css";
 import heroSrc from "../samples/hero.volt?raw";
 // what voltc writes for the hero program, excerpts that tests/docs.rs finds in `voltc emit-c` and
@@ -27,6 +30,9 @@ import comptimeSrc from "../samples/comptime.volt?raw";
 import interopSrc from "../samples/interop.volt?raw";
 
 const base = import.meta.env.BASE_URL.replace(/\/$/, "");
+// the headline, a line at a time, its words numbered for the load sequence
+let word = 0;
+const headline = ["A systems", "language that", "shows its work."].map((l) => l.split(" ").map((w) => ({ w, i: word++ })));
 const doc = (path: string) => `${base}/${path}/`;
 
 // a sample's code (without its expect lines) and its output
@@ -139,7 +145,7 @@ const spec = [
     prev: false,
     next: false,
     tableOfContents: false,
-    // before the first paint: the mark's sweep and the hero's current run once per visit to this page
+    // before the first paint: the hero's load sequence runs once per visit to this page
     head: [
       {
         tag: "script",
@@ -151,7 +157,15 @@ const spec = [
   <div class="landing not-content">
     <section class="hero">
       <div class="hero-text">
-        <h1>A systems language that shows its work.</h1>
+        <h1>{headline.map((line) => <span class="ln">{line.map((x) => <><span class="w" style={`--i:${x.i}`}>{x.w}</span>{" "}</>)}</span>)}</h1>
+        <svg class="hero-mark" viewBox="0 22 100 56" aria-hidden="true">
+          <path class="trace" d={mark.trace} pathLength="1" />
+          <path class="pulse" d={`${mark.trace} L ${mark.cx} ${mark.cy}`} pathLength="1" />
+          <circle class="ring burst" cx={mark.cx} cy={mark.cy} r={mark.r} />
+          <circle class="ring burst" cx={mark.cx} cy={mark.cy} r={mark.r} />
+          <circle class="ring flash" cx={mark.cx} cy={mark.cy} r={mark.r} />
+          <circle class="spark" cx={mark.cx} cy={mark.cy} r={mark.r} />
+        </svg>
         <p class="lede">
           Volt has no runtime. It gives you ownership instead of a garbage collector, errors as values, templates and
           compile-time code, and it compiles to C you can read or to native code through LLVM.
@@ -194,17 +208,17 @@ const spec = [
       </div>
     </section>
 
-    <section class="norun reveal">
+    <section class="norun">
       <div class="norun-text">
-        <h2>Nothing runs underneath</h2>
+        <h2 class="charge">Nothing runs underneath</h2>
         <p>
           Volt programs carry no machinery you didn't ask for. What a line does is what it says, and the C it becomes is
           there to read.
         </p>
       </div>
       <ul class="breakers">
-        {parts.map((p, i) => (
-          <li style={`--i:${i}`}>
+        {parts.map((p) => (
+          <li>
             <span class="part">{p}</span>
             <span class="toggle" aria-hidden="true"><span class="knob"></span></span>
             <span class="state">none</span>
@@ -214,7 +228,7 @@ const spec = [
     </section>
 
     <section class="samples">
-      <h2>Read some Volt</h2>
+      <h2 class="charge">Read some Volt</h2>
       <p class="sub">Every program here is real: the site's tests compile and run each one and check what it prints.</p>
       <div class="tabs">
         {tabs.map((t, i) => <input type="radio" name="sample" id={`s-${t.id}`} checked={i === 0} />)}
@@ -235,9 +249,9 @@ const spec = [
       </div>
     </section>
 
-    <section class="bench reveal">
+    <section class="bench">
       <div class="bench-text">
-        <h2>Measured against C</h2>
+        <h2 class="charge">Measured against C</h2>
         <p>
           Each program runs in C, in C++ and in Volt through both backends. A bar is Volt's time as a share of the C
           program's, and the line marks C. Where Volt is faster, it's for a reason you can read: free lists in the default
@@ -251,8 +265,8 @@ const spec = [
           <span role="columnheader">C backend</span>
           <span role="columnheader">LLVM</span>
         </div>
-        {bench.map((b, i) => (
-          <div class="chart-row" role="row" style={`--i:${i}`}>
+        {bench.map((b) => (
+          <div class="chart-row" role="row">
             <span class="prog" role="rowheader">{b.name}</span>
             <span class="bar-cell" role="cell">
               <span class="track"><span class="bar" style={`--w:${pct(b.c)}`} data-faster={b.c < 0.97 ? "" : undefined}></span></span>
@@ -267,8 +281,8 @@ const spec = [
       </div>
     </section>
 
-    <section class="interop reveal">
-      <h2>Calls everything, and everything calls it</h2>
+    <section class="interop">
+      <h2 class="charge">Calls everything, and everything calls it</h2>
       <p class="sub">
         A use line reads another language's code like a header; the extension says which language. And a Volt library
         builds as a shared library, with bindings bolt writes for each of these.
@@ -287,8 +301,8 @@ const spec = [
         </svg>
         <div class="hub">
           <svg viewBox="0 22 100 56" aria-hidden="true">
-            <path class="hub-trace" d="M5 32 H30 L45 68 L60 32 H80" />
-            <circle class="hub-spark" cx="89" cy="32" r="7.5" />
+            <path class="hub-trace" d={mark.trace} />
+            <circle class="hub-spark" cx={mark.cx} cy={mark.cy} r={mark.r} />
           </svg>
           <span>volt</span>
         </div>
@@ -310,14 +324,14 @@ const spec = [
     </section>
 
     <section class="spec">
-      <h2>What's in it</h2>
+      <h2 class="charge">What's in it</h2>
       <dl>
-        {spec.map((s) => <div><dt>{s.term}</dt><dd>{s.text}</dd></div>)}
+        {spec.map((s) => <div><dt class="charge">{s.term}</dt><dd>{s.text}</dd></div>)}
       </dl>
     </section>
 
-    <section class="start reveal">
-      <h2>Write your first program</h2>
+    <section class="start">
+      <h2 class="charge">Write your first program</h2>
       <p>Build the compiler, then let bolt make a package and run it.</p>
       <pre class="shell"><span class="prompt">$</span> <span class="typed" style="--n:38">bolt new hello && cd hello && bolt run</span>
 <span class="shell-out"><span class="line" style="--i:0">     Created binary (application) package `hello`
@@ -339,6 +353,6 @@ const spec = [
     </footer>
   </div>
   <script>
-    import "../scripts/reveal.ts";
+    import "../scripts/current.ts";
   </script>
 </StarlightPage>

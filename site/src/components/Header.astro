@@ -5,8 +5,7 @@
 import Search from "virtual:starlight/components/Search";
 import SocialIcons from "virtual:starlight/components/SocialIcons";
 import ThemeSelect from "virtual:starlight/components/ThemeSelect";
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { trace, cx, cy, r } from "../mark";
 
 const base = import.meta.env.BASE_URL.replace(/\/$/, "");
 const here = Astro.url.pathname;
@@ -17,11 +16,6 @@ const links = [
   { label: "bolt", href: `${base}/bolt/overview/`, section: "/bolt/" },
   { label: "Interop", href: `${base}/interop/c/`, section: "/interop/" },
 ];
-// the mark: a signal trace bent into a V, and the spark at its leading end (assets/logo/logo.ts
-// writes src/assets/volt-mark.svg)
-const markSvg = readFileSync(resolve(process.cwd(), "src/assets/volt-mark.svg"), "utf8");
-const trace = markSvg.match(/<path d="([^"]+)"/)![1];
-const [cx, cy, r] = ["cx", "cy", "r"].map((a) => markSvg.match(new RegExp(`<circle[^>]* ${a}="([^"]+)"`))![1]);
 ---
 
 <div class="v-header">
@@ -81,8 +75,8 @@ const [cx, cy, r] = ["cx", "cy", "r"].map((a) => markSvg.match(new RegExp(`<circ
     font-size: 1.45rem;
     letter-spacing: -0.035em;
   }
-  /* the trace sweeps in like a scope's beam with the spark at its head: on the landing page's first
-     load (data-intro), and again when the mark is hovered */
+  /* hovered, the trace sweeps in like a scope's beam with the spark at its head (on the landing
+     page, the hero's big mark does this on load) */
   @keyframes v-draw {
     from { stroke-dashoffset: 1; }
     to { stroke-dashoffset: 0; }
@@ -91,12 +85,10 @@ const [cx, cy, r] = ["cx", "cy", "r"].map((a) => markSvg.match(new RegExp(`<circ
     from { offset-distance: 0%; }
     to { offset-distance: 100%; }
   }
-  :global(:root[data-intro]) .v-trace,
   .v-brand:hover .v-trace {
     stroke-dasharray: 1;
     animation: v-draw 0.9s var(--v-ease) both;
   }
-  :global(:root[data-intro]) .v-spark,
   .v-brand:hover .v-spark {
     offset-path: var(--trace);
     offset-rotate: 0deg;
@@ -105,8 +97,6 @@ const [cx, cy, r] = ["cx", "cy", "r"].map((a) => markSvg.match(new RegExp(`<circ
     cy: 0;
   }
   @media (prefers-reduced-motion: reduce) {
-    :global(:root[data-intro]) .v-trace,
-    :global(:root[data-intro]) .v-spark,
     .v-brand:hover .v-trace,
     .v-brand:hover .v-spark {
       animation: none;
