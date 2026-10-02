@@ -1692,7 +1692,7 @@ impl Checker {
     /// rejects unknown attributes and wrong argument counts; @intrinsic is allowed only in package files
     pub fn check_attr(&self, a: &Expr, file: u32) -> Res<()> {
         let ExprKind::Builtin(name, _, args) = &a.kind else { return err(a.span, "attributes are builtins like @inline") };
-        if name == "intrinsic" && self.opts.pkg_files.contains_key(&file) {
+        if (name == "intrinsic" || name == "runtime") && self.opts.pkg_files.contains_key(&file) {
             return Ok(());
         }
         let n_args = args.as_ref().map(|a| a.len()).unwrap_or(0);

@@ -227,10 +227,16 @@ impl Checker {
     pub fn print_code(&mut self, c: &str, ty: TyId, span: Span) -> Res<String> {
         Ok(match self.t.get(ty).clone() {
             Ty::Int(k) if k.bits() == 128 => format!("volt_print_{}128(VOLT_E, {c}); ", if k.signed() { "i" } else { "u" }),
-            Ty::Int(k) if k.signed() => format!("volt_out(VOLT_E, \"%lld\", (long long)({c})); "),
-            Ty::Int(_) => format!("volt_out(VOLT_E, \"%llu\", (unsigned long long)({c})); "),
-            Ty::Float(32) => format!("volt_print_f32(VOLT_E, (float)({c})); "),
-            Ty::Float(_) => format!("volt_print_f64(VOLT_E, (double)({c})); "),
+            Ty::Int(k) => {
+                let (rt, ct) = if k.signed() { ("volt_print_i64", "int64_t") } else { ("volt_print_u64", "uint64_t") };
+                match self.rt_fn(rt)? {
+                    f if f != rt => format!("{f}((void*)VOLT_E, ({ct})({c})); "),
+                    _ if k.signed() => format!("volt_out(VOLT_E, \"%lld\", (long long)({c})); "),
+                    _ => format!("volt_out(VOLT_E, \"%llu\", (unsigned long long)({c})); "),
+                }
+            }
+            Ty::Float(32) => format!("{}((void*)VOLT_E, (float)({c})); ", self.rt_fn("volt_print_f32")?),
+            Ty::Float(_) => format!("{}((void*)VOLT_E, (double)({c})); ", self.rt_fn("volt_print_f64")?),
             Ty::Bool => format!("volt_out(VOLT_E, \"%s\", ({c}) ? \"true\" : \"false\"); "),
             Ty::Str => format!("volt_print_str(VOLT_E, {c}); "),
             Ty::CStr => format!("volt_out(VOLT_E, \"%s\", {c}); "),

@@ -34,6 +34,20 @@ A few rules keep the LLVM output correct:
 - struct layouts from C headers that Volt can only partly read come from libclang, as the C
   backend's do.
 
+## The runtime, moving into Volt
+
+Every program is compiled with a small runtime: today the C prelude and runtime in `runtime/`. It
+is moving into Volt one function at a time, so that a program can one day be built with no C at
+all. A function in std marked `@runtime("volt_print_f64")` is std's Volt version of that runtime
+function: both compilers call it wherever they'd call the C one, and both backends can inline it.
+The C version stays for programs built without std (`--no-std`).
+
+So far, printing numbers is in Volt (`std/fmt.volt`): integers by a digit loop, and floats by
+Ryu (Ulf Adams, PLDI 2018), the shortest text that reads back as the same value, found by exact
+integer arithmetic on the bits. Ryu replaced up to 17 rounds of `snprintf` and `strtod` per float
+(the `print` benchmark measures it). Its tables are generated with exact big-integer
+arithmetic.
+
 ## Compatibility
 
 Both backends produce the same symbols, layouts, error codes and calling conventions, so objects

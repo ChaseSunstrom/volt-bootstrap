@@ -372,6 +372,7 @@ struct checker {
     enum_ids: std::map<str, u32> = {};
     error_names: std::vec<error_name> = {}; // sorted by code
     attached: std::map<str, u32> = {}; // method name -> decl list
+    runtime_impls: std::map<str, u32> = {}; // @runtime("volt_print_f64"): std's Volt version of a runtime function
     attach_blocks: std::vec<u32> = {};
     unions: std::vec<std::box<union_info>> = {};
     union_ids: std::map<u32, u32> = {};
@@ -645,6 +646,14 @@ attach fn collect_item(this: checker&, it: item&, ns: u32, parent: u32?) -> comp
     }
     val id = @cast<u32>(this.decls.len);
     put(&this.decls, { item: it, ns: ns, file: file, parent: parent });
+    for (a&) in it.attrs.items() {
+        if (attr_named(a, "runtime")) {
+            val rt = attr_str(a);
+            if (rt) {
+                this.runtime_impls.put(this.intern(S(rt)), id); // (attr_str's text doesn't outlive the call)
+            }
+        }
+    }
     if (is_block) {
         put(&this.attach_blocks, id);
     }

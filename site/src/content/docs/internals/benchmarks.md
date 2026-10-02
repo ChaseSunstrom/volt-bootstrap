@@ -24,6 +24,7 @@ programmers would usually write it. Every program prints the same output in each
 | `fib` | naive recursive Fibonacci: nothing but function calls |
 | `vec_grow` | pushing 20 million values without reserving, ten times (`std::vec` against `realloc` and `std::vector`) |
 | `crc32` | table-driven CRC-32 over 256 MiB, a byte at a time |
+| `print` | a million lines: shortest round-trip floats (`println` against libc's `%.*g` + `strtod` tries and C++'s `std::to_chars`), then integers |
 
 ## Running it
 
@@ -59,20 +60,21 @@ Measured 2026-10-02 on:
 
 | Program | C (clang) | C (gcc) | C++ (clang++) | Volt (C backend) | Volt (LLVM) |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| binary_trees | 0.716 s | 0.643 s (0.90x) | 0.947 s (1.32x) | 0.367 s (0.51x) | 0.336 s (0.47x) |
-| closures | 0.474 s | 0.735 s (1.55x) | 0.530 s (1.12x) | 0.565 s (1.19x) | 0.474 s (1.00x) |
-| crc32 | 0.706 s | 0.706 s (1.00x) | 0.706 s (1.00x) | 0.708 s (1.00x) | 0.710 s (1.00x) |
-| fannkuch | 1.863 s | 1.899 s (1.02x) | 1.940 s (1.04x) | 1.967 s (1.06x) | 1.944 s (1.04x) |
-| fib | 0.449 s | 0.177 s (0.39x) | 0.450 s (1.00x) | 0.448 s (1.00x) | 0.429 s (0.96x) |
-| hashmap | 0.548 s | 0.547 s (1.00x) | 1.271 s (2.32x) | 0.545 s (1.00x) | 0.531 s (0.97x) |
-| mandelbrot | 0.638 s | 0.615 s (0.96x) | 0.636 s (1.00x) | 0.638 s (1.00x) | 0.636 s (1.00x) |
-| matmul | 0.510 s | 0.481 s (0.94x) | 0.504 s (0.99x) | 0.511 s (1.00x) | 0.509 s (1.00x) |
-| nbody | 0.712 s | 0.714 s (1.00x) | 0.677 s (0.95x) | 0.711 s (1.00x) | 0.727 s (1.02x) |
-| sieve | 0.550 s | 0.591 s (1.07x) | 0.548 s (1.00x) | 0.553 s (1.01x) | 0.545 s (0.99x) |
-| sort | 0.554 s | 0.560 s (1.01x) | 0.192 s (0.35x) | 0.228 s (0.41x) | 0.229 s (0.41x) |
-| spectral_norm | 0.959 s | 0.648 s (0.68x) | 0.937 s (0.98x) | 0.937 s (0.98x) | 0.938 s (0.98x) |
-| strings | 0.284 s | 0.292 s (1.03x) | 0.392 s (1.38x) | 0.262 s (0.92x) | 0.271 s (0.95x) |
-| vec_grow | 0.568 s | 0.549 s (0.97x) | 1.404 s (2.47x) | 0.551 s (0.97x) | 0.555 s (0.98x) |
+| binary_trees | 0.703 s | 0.656 s (0.93x) | 0.945 s (1.34x) | 0.361 s (0.51x) | 0.283 s (0.40x) |
+| closures | 0.475 s | 0.736 s (1.55x) | 0.529 s (1.11x) | 0.567 s (1.19x) | 0.478 s (1.01x) |
+| crc32 | 0.694 s | 0.693 s (1.00x) | 0.693 s (1.00x) | 0.698 s (1.01x) | 0.690 s (0.99x) |
+| fannkuch | 1.894 s | 1.910 s (1.01x) | 1.925 s (1.02x) | 1.961 s (1.04x) | 1.906 s (1.01x) |
+| fib | 0.453 s | 0.178 s (0.39x) | 0.449 s (0.99x) | 0.440 s (0.97x) | 0.438 s (0.97x) |
+| hashmap | 0.545 s | 0.552 s (1.01x) | 1.275 s (2.34x) | 0.545 s (1.00x) | 0.533 s (0.98x) |
+| mandelbrot | 0.636 s | 0.615 s (0.97x) | 0.638 s (1.00x) | 0.637 s (1.00x) | 0.639 s (1.01x) |
+| matmul | 0.508 s | 0.469 s (0.92x) | 0.506 s (1.00x) | 0.502 s (0.99x) | 0.508 s (1.00x) |
+| nbody | 0.721 s | 0.715 s (0.99x) | 0.680 s (0.94x) | 0.712 s (0.99x) | 0.725 s (1.01x) |
+| print | 1.001 s | 1.010 s (1.01x) | 0.049 s (0.05x) | 0.066 s (0.07x) | 0.069 s (0.07x) |
+| sieve | 0.531 s | 0.570 s (1.07x) | 0.532 s (1.00x) | 0.530 s (1.00x) | 0.510 s (0.96x) |
+| sort | 0.568 s | 0.562 s (0.99x) | 0.190 s (0.33x) | 0.228 s (0.40x) | 0.226 s (0.40x) |
+| spectral_norm | 0.959 s | 0.646 s (0.67x) | 0.936 s (0.98x) | 0.937 s (0.98x) | 0.938 s (0.98x) |
+| strings | 0.281 s | 0.282 s (1.00x) | 0.380 s (1.35x) | 0.252 s (0.90x) | 0.267 s (0.95x) |
+| vec_grow | 0.543 s | 0.544 s (1.00x) | 1.253 s (2.31x) | 0.525 s (0.97x) | 0.523 s (0.96x) |
 <!-- bench:end -->
 
 ## Reading the results
@@ -99,5 +101,9 @@ Measured 2026-10-02 on:
   `node::new(value, arena.allocator())`, `reset()` after each) measured 0.85x on the C backend and
   0.83x on LLVM: a box from an arena carries the arena's pointer, so each node is twice the size
   or more, and the free lists win.
+- **`print`: floats are printed by Ryu, in Volt.** libc has no shortest-round-trip float printing,
+  so C tries `%.*g` with more digits until `strtod` reads the value back. C++'s `std::to_chars`
+  does what Volt does, and is ahead of it here: each `println` still writes through C's stdio twice
+  (the value, then the newline), where C++ makes one `printf` call. Volt's own output buffer is next.
 - **gcc's own wins** (`fib`, `spectral_norm`) are its optimizer's: it turns much of `fib`'s
   recursion into loops. Volt's C backend is compiled by clang here, so it follows clang.

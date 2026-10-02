@@ -2787,7 +2787,7 @@ attach fn check_attr(this: checker&, a: expr&, file: u32) -> compile_error!void 
         },
         default => { return fails(a.span, "attributes are builtins like @inline"); },
     }
-    if (name == "intrinsic") {
+    if (name == "intrinsic" || name == "runtime") {
         for (pf&) in this.opts.pkg_files.items() {
             if (pf.file == file) {
                 return;

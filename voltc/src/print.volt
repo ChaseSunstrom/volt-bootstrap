@@ -474,6 +474,14 @@ attach fn out_s(this: checker&, sink: u32, s: str) -> u32 {
     return this.out(sink, "%s", nodes(this.ir.node(ir_kind::CSTR(s), CSTR)));
 }
 
+// name(sink, v) through std's Volt version of that runtime function (@runtime), if it has one
+attach fn rt_print(this: checker&, name: str, sink: u32, v: u32) -> compile_error!(u32?) {
+    val d = this.runtime_impls.get(name) ?? return null;
+    val f = try this.fn_inst(*d, {}, {});
+    this.use_fn(f);
+    return this.call_fn(this.fi(f).ir, nodes2(sink, v), VOID);
+}
+
 // f(sink, v): one of the runtime's print helpers
 attach fn out_rt(this: checker&, sink: u32, f: str, v: u32) -> u32 {
     return this.ir.rt_call(f, nodes2(sink, v), VOID);
@@ -490,16 +498,20 @@ attach fn print_code(this: checker&, code: std::vec<u32>&, sink: u32, c: u32, t:
                     put(code, this.out_rt(sink, "volt_print_u128", c));
                 }
             } else if (k.signed()) {
-                put(code, this.out(sink, "%lld", nodes(this.ir.conv(c, I64))));
+                val v = this.ir.conv(c, I64);
+                put(code, (try this.rt_print("volt_print_i64", sink, v)) ?? this.out(sink, "%lld", nodes(v)));
             } else {
-                put(code, this.out(sink, "%llu", nodes(this.ir.conv(c, int_id(int_ty::U64)))));
+                val v = this.ir.conv(c, int_id(int_ty::U64));
+                put(code, (try this.rt_print("volt_print_u64", sink, v)) ?? this.out(sink, "%llu", nodes(v)));
             }
         },
         .FLOAT(b) => {
             if (b == 32) {
-                put(code, this.out_rt(sink, "volt_print_f32", this.ir.conv(c, F32)));
+                val v = this.ir.conv(c, F32);
+                put(code, (try this.rt_print("volt_print_f32", sink, v)) ?? this.out_rt(sink, "volt_print_f32", v));
             } else {
-                put(code, this.out_rt(sink, "volt_print_f64", this.ir.conv(c, F64)));
+                val v = this.ir.conv(c, F64);
+                put(code, (try this.rt_print("volt_print_f64", sink, v)) ?? this.out_rt(sink, "volt_print_f64", v));
             }
         },
         .BOOL => {

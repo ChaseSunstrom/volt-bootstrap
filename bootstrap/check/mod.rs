@@ -330,6 +330,7 @@ pub struct Checker {
     pub drop_memo: HashMap<TyId, bool>,
     /// hook's answer per (type, name): the attached delete/copy/as_str instance, if any
     pub hook_memo: HashMap<(TyId, &'static str), Option<usize>>,
+    pub runtime_impls: HashMap<String, DeclId>, // @runtime("volt_print_f64"): std's Volt version of a runtime function
     /// generated per-type C helpers ("drop", "copy") by name; their code goes to glue
     pub glue_names: HashMap<(TyId, &'static str), String>,
     pub glue: String,
@@ -396,6 +397,7 @@ impl Checker {
             c_symbols: HashMap::new(),
             drop_memo: HashMap::new(),
             hook_memo: HashMap::new(),
+            runtime_impls: HashMap::new(),
             glue_names: HashMap::new(),
             glue: String::new(),
             glue_protos: String::new(),
@@ -499,6 +501,12 @@ impl Checker {
         let is_attach_fn = matches!(&item.kind, ItemKind::Fn(f) if f.is_attach);
         let item = Rc::new(item);
         self.decls.push(Decl { item: item.clone(), ns, file, parent });
+        if let Some(rt) = item.attrs.iter().find_map(|a| match &a.kind {
+            ExprKind::Builtin(n, _, _) if n == "runtime" => comptime::attr_str(a),
+            _ => None,
+        }) {
+            self.runtime_impls.insert(rt, id);
+        }
         if is_block {
             self.attach_blocks.push(id);
         }

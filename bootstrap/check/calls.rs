@@ -20,6 +20,15 @@ impl Checker {
         }
     }
 
+    /// the C function to call for runtime function `name`: std's Volt version when it has one
+    /// (@runtime("name")), else the prelude's
+    pub fn rt_fn(&mut self, name: &str) -> Res<String> {
+        let Some(&d) = self.runtime_impls.get(name) else { return Ok(name.to_string()) };
+        let i = self.fn_inst(d, Vec::new(), Span::default())?;
+        self.use_fn(i);
+        Ok(self.fns[i].c_name.clone())
+    }
+
     /// `f(args)`: .VARIANT(...), a method call, a named fn (overloads resolved), Type::f() or an enum
     /// variant; any other callee is a value, called through call_value
     pub(super) fn call(&mut self, callee: &Expr, args: &[Expr], want: Option<TyId>, span: Span) -> Res<Val> {
