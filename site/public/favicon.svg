@@ -1,6 +1,12 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 100 100">
-  <rect width="100" height="100" rx="14" fill="#0e3b2e"/>
-  <circle cx="12" cy="12" r="3.2" fill="#08261d"/>
-  <path d="b"
-d="M59.63 5.47 Q60 3 58.4 4.92 L17.56 53.93 Q15 57 19 57 L43 57 Q46 57 45.55 59.97 L40.37 94.53 Q40 97 41.6 95.08 L82.44 46.07 Q85 43 81 43 L57 43 Q54 43 54.45 40.03 Z" transform="translate(14 12) scale(0.72)" fill="#d8b04a"/>
+  <style>
+    path { stroke: #6B3DF5; }
+    circle { fill: #C98500; }
+    @media (prefers-color-scheme: dark) {
+      path { stroke: #A78BFA; }
+      circle { fill: #FFCF4A; }
+    }
+  </style>
+  <path d="M4 30 L26 30 L44 72 L62 30 L76 30" fill="none" stroke-width="13" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="88" cy="30" r="10"/>
 </svg>

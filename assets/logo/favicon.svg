@@ -1,22 +1,12 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
-  <defs>
-    <linearGradient id="m-tile" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#312E81"/>
-      <stop offset="1" stop-color="#0F172A"/>
-    </linearGradient>
-    <radialGradient id="m-shine" cx="0.25" cy="0.15" r="0.9">
-      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.16"/>
-      <stop offset="0.6" stop-color="#FFFFFF" stop-opacity="0"/>
-    </radialGradient>
-    <linearGradient id="m-bolt" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#FDE047"/>
-      <stop offset="1" stop-color="#F59E0B"/>
-    </linearGradient>
-    <filter id="m-glow" x="-50%" y="-50%" width="200%" height="200%">
-      <feGaussianBlur stdDeviation="2.24"/>
-    </filter>
-  </defs>
-  <rect x="0" y="0" width="64" height="64" rx="14.4" fill="url(#m-tile)"/>
-  <rect x="0.38" y="0.38" width="63.23" height="63.23" rx="14.4" fill="url(#m-shine)" stroke="#FFFFFF" stroke-opacity="0.12" stroke-width="0.77"/>
-  <path d="M36.81 9.77 Q36.99 8.54 36.19 9.5 L15.81 33.96 Q14.53 35.49 16.52 35.49 L28.51 35.49 Q30 35.49 29.78 36.98 L27.19 54.23 Q27.01 55.46 27.81 54.5 L48.19 30.04 Q49.47 28.51 47.48 28.51 L35.49 28.51 Q34 28.51 34.22 27.02 Z" fill="url(#m-bolt)"/>
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 100 100">
+  <style>
+    path { stroke: #6B3DF5; }
+    circle { fill: #C98500; }
+    @media (prefers-color-scheme: dark) {
+      path { stroke: #A78BFA; }
+      circle { fill: #FFCF4A; }
+    }
+  </style>
+  <path d="M4 30 L26 30 L44 72 L62 30 L76 30" fill="none" stroke-width="13" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="88" cy="30" r="10"/>
 </svg>

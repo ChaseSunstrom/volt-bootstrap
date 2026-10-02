@@ -1,11 +1,11 @@
 // The Volt site: a custom landing page (src/pages/index.astro) and the docs (Starlight, from
 // src/content/docs). Code blocks are highlighted with the VS Code extension's Volt grammar, in the
-// board's colours (src/code-themes.mjs).
+// site's colours (src/code-themes.mjs).
 import { readFileSync } from "node:fs";
 import { defineConfig } from "astro/config";
 import starlight from "@astrojs/starlight";
 import starlightLinksValidator from "starlight-links-validator";
-import { volt, boardDark, boardLight } from "./src/code-themes.mjs";
+import { volt, codeDark, codeLight } from "./src/code-themes.mjs";
 
 // the std reference's pages (src/pages/std/[file].astro), one per std source file
 const std = JSON.parse(readFileSync(new URL("./src/data/std.json", import.meta.url), "utf8"));
@@ -34,16 +34,16 @@ export default defineConfig({
           tag: "link",
           attrs: {
             rel: "stylesheet",
-            href: "https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,100..900&family=Martian+Mono:wdth,wght@75..112.5,100..800&display=swap",
+            href: "https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wdth,wght@12..96,75..100,200..800&family=JetBrains+Mono:ital,wght@0,400..700;1,400&display=swap",
           },
         },
       ],
       // the std pages aren't content pages, so the validator can't see them
       plugins: [starlightLinksValidator({ exclude: stdPages.map((p) => `/volt-bootstrap${p.link}`) })],
       expressiveCode: {
-        themes: [boardDark, boardLight],
+        themes: [codeDark, codeLight],
         shiki: { langs: [volt] },
-        styleOverrides: { borderRadius: "0.4rem", codeFontFamily: "var(--v-mono)", uiFontFamily: "var(--v-sans)" },
+        styleOverrides: { borderRadius: "0.6rem", codeFontFamily: "var(--v-mono)", uiFontFamily: "var(--v-sans)" },
       },
       sidebar: [
         { label: "Start here", items: [{ autogenerate: { directory: "start" } }] },

@@ -1,6 +1,6 @@
 // The site's code colours, for the docs (Expressive Code, in astro.config.mjs) and the landing page
-// alike: Volt's grammar from the VS Code extension, and two themes in the board's colours, dark (the
-// board) and light (silkscreen paper). Paths are from site/, where the site is built.
+// alike: Volt's grammar from the VS Code extension, and two themes in the site's colours, dark (night
+// violet) and light (lavender paper). Paths are from site/, where the site is built.
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
@@ -24,24 +24,24 @@ function theme(name, type, c) {
   };
 }
 
-export const boardDark = theme("volt-board", "dark", {
-  bg: "#0b2e23",
-  fg: "#dbe5de",
-  comment: "#7a978a",
-  keyword: "#d8b04a",
-  string: "#e2a46c",
-  number: "#9fd3b9",
-  fn: "#f4f7f2",
-  type: "#8cc7ad",
+export const codeDark = theme("volt-night", "dark", {
+  bg: "#110d29",
+  fg: "#e6e1ff",
+  comment: "#7d76a8",
+  keyword: "#c4b5ff",
+  string: "#f5b38a",
+  number: "#7fd8c9",
+  fn: "#ffffff",
+  type: "#9fb8ff",
 });
 
-export const boardLight = theme("volt-paper", "light", {
-  bg: "#e9efea",
-  fg: "#102a21",
-  comment: "#5b7367",
-  keyword: "#7d5f0c",
-  string: "#934f1c",
-  number: "#1d6649",
-  fn: "#0b211a",
-  type: "#2a654f",
+export const codeLight = theme("volt-paper", "light", {
+  bg: "#f1edff",
+  fg: "#1b1538",
+  comment: "#6f6898",
+  keyword: "#5a2ee0",
+  string: "#a64b16",
+  number: "#0f7a6c",
+  fn: "#120d2c",
+  type: "#2e4fc4",
 });

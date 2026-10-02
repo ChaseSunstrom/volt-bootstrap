@@ -1,85 +1,97 @@
-/* The site's look, shared by the landing page and the docs: a circuit board's colours (solder-mask
-   green, gold pads, copper traces, silkscreen white), Archivo for text and Martian Mono for code.
-   Starlight's own variables are set from these, so the docs and the landing page are one theme. */
+/* The site's look, shared by the landing page and the docs: night violet with violet ink, and amber
+   only where current flows (the logo's spark, the pulses on the landing page). Bricolage Grotesque
+   for text, JetBrains Mono for code. Starlight's own variables are set from these, so the docs and
+   the landing page are one theme. */
 
 :root {
-  --v-board: #0e3b2e;
-  --v-board-deep: #08261d;
-  --v-board-line: #1d5a46;
-  --v-silk: #edf2ec;
-  --v-paper: #f4f6f2;
-  --v-ink: #102a21;
-  --v-ink-soft: #3c574c;
-  --v-gold: #d8b04a;
-  --v-gold-ink: #8a6a12;
-  --v-copper: #b8733a;
-  --v-sans: "Archivo", "Helvetica Neue", Arial, sans-serif;
-  --v-mono: "Martian Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  --v-night: #0c0920;
+  --v-panel: #151033;
+  --v-raised: #1d1745;
+  --v-line: #2c2463;
+  --v-text: #eeeaff;
+  --v-muted: #a9a2d6;
+  --v-violet: #8f6bff;
+  --v-violet-soft: #c4b5ff;
+  --v-mark: #a78bfa;
+  --v-spark: #ffcf4a;
+  --v-sans: "Bricolage Grotesque", "Helvetica Neue", Arial, sans-serif;
+  --v-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  --v-ease: cubic-bezier(0.22, 1, 0.36, 1);
 
   --sl-font: var(--v-sans);
   --sl-font-mono: var(--v-mono);
   --sl-nav-height: 4rem;
 }
 
-/* dark: the board itself */
+:root[data-theme="light"] {
+  --v-night: #f7f5ff;
+  --v-panel: #ffffff;
+  --v-raised: #efeafe;
+  --v-line: #ddd6fb;
+  --v-text: #191338;
+  --v-muted: #5a5384;
+  --v-violet: #6b3df5;
+  --v-violet-soft: #4c22d6;
+  --v-mark: #6b3df5;
+  --v-spark: #c98500;
+}
+
+/* dark */
 :root,
 ::backdrop {
-  --sl-color-accent-low: #2c3a17;
-  --sl-color-accent: var(--v-gold);
-  --sl-color-accent-high: #f3e3ad;
-  --sl-color-white: #f6f8f4;
-  --sl-color-gray-1: #dfe7e1;
-  --sl-color-gray-2: #bccbc2;
-  --sl-color-gray-3: #8fa79b;
-  --sl-color-gray-4: #5d7a6d;
-  --sl-color-gray-5: #2d4b3f;
-  --sl-color-gray-6: #133a2d;
-  --sl-color-black: var(--v-board-deep);
-  --sl-color-bg: var(--v-board-deep);
-  --sl-color-bg-nav: var(--v-board-deep);
-  --sl-color-bg-sidebar: var(--v-board-deep);
-  --sl-color-bg-inline-code: #133a2d;
-  --sl-color-hairline: #1a4637;
-  --sl-color-hairline-light: #23523f;
-  --sl-color-hairline-shade: #051c15;
+  --sl-color-accent-low: #241a55;
+  --sl-color-accent: #8f6bff;
+  --sl-color-accent-high: #d9ceff;
+  --sl-color-white: #f4f1ff;
+  --sl-color-gray-1: #e3defb;
+  --sl-color-gray-2: #c3bce6;
+  --sl-color-gray-3: #9890c4;
+  --sl-color-gray-4: #6a6299;
+  --sl-color-gray-5: #3a3270;
+  --sl-color-gray-6: #1d1745;
+  --sl-color-black: #0c0920;
+  --sl-color-bg: #0c0920;
+  --sl-color-bg-nav: #0c0920;
+  --sl-color-bg-sidebar: #0c0920;
+  --sl-color-bg-inline-code: #1d1745;
+  --sl-color-hairline: #221b4f;
+  --sl-color-hairline-light: #2c2463;
+  --sl-color-hairline-shade: #07051a;
 }
 
-/* light: silkscreen paper, board-green ink */
+/* light */
 :root[data-theme="light"],
 [data-theme="light"] ::backdrop {
-  --sl-color-accent-low: #f2e8c6;
-  --sl-color-accent: var(--v-gold-ink);
-  --sl-color-accent-high: #4a3a08;
-  --sl-color-white: var(--v-ink);
-  --sl-color-gray-1: #1e3a30;
-  --sl-color-gray-2: #33503f;
-  --sl-color-gray-3: #557263;
-  --sl-color-gray-4: #7f978a;
-  --sl-color-gray-5: #c7d3cb;
-  --sl-color-gray-6: #e6ece7;
-  --sl-color-gray-7: #eff3ef;
-  --sl-color-black: var(--v-paper);
-  --sl-color-bg: var(--v-paper);
-  --sl-color-bg-nav: var(--v-paper);
-  --sl-color-bg-sidebar: var(--v-paper);
-  --sl-color-bg-inline-code: #e3eae4;
-  --sl-color-hairline: #d3ddd6;
-  --sl-color-hairline-light: #e1e8e3;
-  --sl-color-hairline-shade: #c2cfc6;
+  --sl-color-accent-low: #ece6ff;
+  --sl-color-accent: #6b3df5;
+  --sl-color-accent-high: #2f1592;
+  --sl-color-white: #191338;
+  --sl-color-gray-1: #2a2350;
+  --sl-color-gray-2: #3d3566;
+  --sl-color-gray-3: #5a5384;
+  --sl-color-gray-4: #8a83b2;
+  --sl-color-gray-5: #cdc6ee;
+  --sl-color-gray-6: #ebe6fd;
+  --sl-color-gray-7: #f4f1ff;
+  --sl-color-black: #f7f5ff;
+  --sl-color-bg: #f7f5ff;
+  --sl-color-bg-nav: #f7f5ff;
+  --sl-color-bg-sidebar: #f7f5ff;
+  --sl-color-bg-inline-code: #ece6ff;
+  --sl-color-hairline: #e4defb;
+  --sl-color-hairline-light: #ece7fd;
+  --sl-color-hairline-shade: #d3cbf5;
 }
 
-/* headings in the expanded cut; code a little narrower than Martian Mono's default */
+body {
+  background: var(--sl-color-bg);
+}
+
 .sl-markdown-content :is(h1, h2, h3),
 h1#_top {
-  font-stretch: 112%;
-  font-weight: 750;
-  letter-spacing: -0.01em;
-}
-
-code,
-pre,
-kbd {
-  font-stretch: 87.5%;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  font-variation-settings: "wdth" 92;
 }
 
 :focus-visible {

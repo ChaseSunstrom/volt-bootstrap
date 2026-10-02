@@ -1,6 +1,7 @@
-// The Volt logo, as code: a rounded lightning bolt on an indigo tile (the mark) and a geometric
-// lowercase "volt" drawn with round strokes (the wordmark). `npm run build` writes the SVGs and PNGs
-// here, the VS Code extension's icons into editors/vscode/images, and the website's bolt into site/.
+// The Volt logo, as code: a signal trace bent into a V, with an amber spark at its leading end (the
+// mark), and a geometric lowercase "volt" drawn with round strokes (the wordmark). No tile and no
+// glow: the mark stands on whatever it's on. `npm run build` writes the SVGs and PNGs here, the VS
+// Code extension's icons into editors/vscode/images, and the website's mark and favicon into site/.
 import { writeFileSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -11,103 +12,94 @@ const here = dirname(fileURLToPath(import.meta.url));
 // ---------- colours ----------
 
 const colors = {
-  tileTop: "#312E81", // indigo
-  tileBottom: "#0F172A", // near-black slate
-  boltTop: "#FDE047", // electric yellow
-  boltBottom: "#F59E0B", // amber
-  glow: "#FBBF24",
-  inkLight: "#111827", // the wordmark on light backgrounds
-  inkDark: "#F9FAFB", // ...and on dark ones
+  traceDark: "#A78BFA", // the trace on dark backgrounds (violet)
+  traceLight: "#6B3DF5", // ...and on light ones
+  sparkDark: "#FFCF4A", // the spark (amber)
+  sparkLight: "#C98500",
+  night: "#0C0920", // the site's background, and the icon's tile
+  inkLight: "#191338", // the wordmark on light backgrounds
+  inkDark: "#F4F1FF", // ...and on dark ones
 };
 
-// ---------- the bolt ----------
+// ---------- the mark ----------
 
 type Point = [number, number];
 
-// A lightning bolt in a 100×100 box, symmetric about its centre: top, the left point, the notch,
-// the bottom tip, the right point, the other notch
-const BOLT: Point[] = [
-  [60, 3],
-  [15, 57],
-  [46, 57],
-  [40, 97],
-  [85, 43],
-  [54, 43],
-];
-
-// radius of each corner's rounding (the tips a little sharper)
-const BOLT_RADII = [2.5, 4, 3, 2.5, 4, 3];
-
-// a closed path through pts with each corner rounded: the corner is cut r along both edges and
-// joined by a quadratic curve through the corner point
-function roundedPath(pts: Point[], radii: number[], scale: number, [dx, dy]: Point): string {
-  const p = (q: Point): string => `${fmt(dx + q[0] * scale)} ${fmt(dy + q[1] * scale)}`;
-  const toward = (a: Point, b: Point, r: number): Point => {
-    const len = Math.hypot(b[0] - a[0], b[1] - a[1]);
-    const t = Math.min(r / len, 0.5);
-    return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
-  };
-  let d = "";
-  pts.forEach((cur, i) => {
-    const prev = pts[(i + pts.length - 1) % pts.length];
-    const next = pts[(i + 1) % pts.length];
-    const a = toward(cur, prev, radii[i]);
-    const b = toward(cur, next, radii[i]);
-    d += `${i === 0 ? "M" : "L"}${p(a)} Q${p(cur)} ${p(b)} `;
-  });
-  return d + "Z";
-}
+// The trace in a 100×100 box: level, down into the V, back up, level again; the spark sits just past
+// its end. Drawn with round caps and joins. The small form (icons of 16-48 px, the favicon) is
+// bolder, with a deeper V, so it holds at a few pixels.
+const MARK = {
+  trace: [[5, 32], [30, 32], [45, 68], [60, 32], [80, 32]] as Point[],
+  spark: [89, 32] as Point,
+  stroke: 9,
+  sparkR: 7.5,
+};
+const MARK_SMALL = {
+  trace: [[4, 30], [26, 30], [44, 72], [62, 30], [76, 30]] as Point[],
+  spark: [88, 30] as Point,
+  stroke: 13,
+  sparkR: 10,
+};
 
 function fmt(n: number): string {
   return String(Math.round(n * 100) / 100);
 }
 
-// ---------- the mark ----------
-
-// the mark at (x, y), size×size: the tile, a soft glow and the bolt. small (16-48 px icons, the
-// favicon): a bigger bolt and no glow, which only blurs at that size
-function mark(x: number, y: number, size: number, small = false): { defs: string; body: string } {
-  const ids = "m";
-  const boltSize = size * (small ? 0.78 : 0.66);
-  const at: Point = [x + (size - boltSize) / 2, y + (size - boltSize) / 2];
-  const bolt = roundedPath(BOLT, BOLT_RADII, boltSize / 100, at);
-  const defs = `
-    <linearGradient id="${ids}-tile" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="${colors.tileTop}"/>
-      <stop offset="1" stop-color="${colors.tileBottom}"/>
-    </linearGradient>
-    <radialGradient id="${ids}-shine" cx="0.25" cy="0.15" r="0.9">
-      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.16"/>
-      <stop offset="0.6" stop-color="#FFFFFF" stop-opacity="0"/>
-    </radialGradient>
-    <linearGradient id="${ids}-bolt" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="${colors.boltTop}"/>
-      <stop offset="1" stop-color="${colors.boltBottom}"/>
-    </linearGradient>
-    <filter id="${ids}-glow" x="-50%" y="-50%" width="200%" height="200%">
-      <feGaussianBlur stdDeviation="${fmt(size * 0.035)}"/>
-    </filter>`;
-  const r = fmt(size * 0.225);
-  const edge = size * 0.012; // a faint rim, so the tile holds on dark backgrounds
-  const body = `
-  <rect x="${fmt(x)}" y="${fmt(y)}" width="${fmt(size)}" height="${fmt(size)}" rx="${r}" fill="url(#${ids}-tile)"/>
-  <rect x="${fmt(x + edge / 2)}" y="${fmt(y + edge / 2)}" width="${fmt(size - edge)}" height="${fmt(size - edge)}" rx="${r}" fill="url(#${ids}-shine)" stroke="#FFFFFF" stroke-opacity="0.12" stroke-width="${fmt(edge)}"/>${small ? "" : `
-  <path d="${bolt}" fill="${colors.glow}" opacity="0.55" filter="url(#${ids}-glow)"/>`}
-  <path d="${bolt}" fill="url(#${ids}-bolt)"/>`;
-  return { defs, body };
+// the trace as a path, through a mapping from the 100×100 box
+function tracePath(pts: Point[], at: (p: Point) => string): string {
+  return pts.map((p, i) => `${i === 0 ? "M" : "L"}${at(p)}`).join(" ");
 }
 
-// the bolt alone, filling size×size (the file icon)
-function boltOnly(size: number): string {
-  const d = roundedPath(BOLT, BOLT_RADII, size / 100, [0, 0]);
+// the mark with its 100×100 box at (x, y), scaled to size
+function mark(x: number, y: number, size: number, trace: string, spark: string, small = false): string {
+  const m = small ? MARK_SMALL : MARK;
+  const k = size / 100;
+  const at = (p: Point) => `${fmt(x + p[0] * k)} ${fmt(y + p[1] * k)}`;
+  return `
+  <path d="${tracePath(m.trace, at)}" fill="none" stroke="${trace}" stroke-width="${fmt(m.stroke * k)}" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="${fmt(x + m.spark[0] * k)}" cy="${fmt(y + m.spark[1] * k)}" r="${fmt(m.sparkR * k)}" fill="${spark}"/>`;
+}
+
+// the mark alone on a square canvas, for dark or light backgrounds
+function markSvg(size: number, dark: boolean, small = false): string {
+  // the mark's ink spans y 27..73 of its box: centred as is
+  return svg(size, size, mark(0, 0, size, dark ? colors.traceDark : colors.traceLight, dark ? colors.sparkDark : colors.sparkLight, small));
+}
+
+// the mark on a flat night tile: for the places that want an app icon (the VS Code extension, PNGs)
+function iconSvg(size: number): string {
+  const small = size <= 48;
+  const inset = size * (small ? 0.06 : 0.14);
   return svg(size, size, `
-  <defs>
-    <linearGradient id="b" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="${colors.boltTop}"/>
-      <stop offset="1" stop-color="${colors.boltBottom}"/>
-    </linearGradient>
-  </defs>
-  <path d="${d}" fill="url(#b)"/>`);
+  <rect width="${fmt(size)}" height="${fmt(size)}" rx="${fmt(size * 0.22)}" fill="${colors.night}"/>${mark(inset, inset, size - 2 * inset, colors.traceDark, colors.sparkDark, small)}`);
+}
+
+// the favicon: the small mark, in the colours of the browser's theme
+function faviconSvg(): string {
+  const m = MARK_SMALL;
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 100 100">
+  <style>
+    path { stroke: ${colors.traceLight}; }
+    circle { fill: ${colors.sparkLight}; }
+    @media (prefers-color-scheme: dark) {
+      path { stroke: ${colors.traceDark}; }
+      circle { fill: ${colors.sparkDark}; }
+    }
+  </style>
+  <path d="${tracePath(m.trace, (p) => `${p[0]} ${p[1]}`)}" fill="none" stroke-width="${m.stroke}" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="${m.spark[0]}" cy="${m.spark[1]}" r="${m.sparkR}"/>
+</svg>
+`;
+}
+
+// the website's mark, cropped to its ink (the header reads its path and spark from this)
+function siteMarkSvg(): string {
+  const m = MARK;
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="100" height="56" viewBox="0 22 100 56">
+  <path d="${tracePath(m.trace, (p) => `${p[0]} ${p[1]}`)}" fill="none" stroke="${colors.traceDark}" stroke-width="${m.stroke}" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="${m.spark[0]}" cy="${m.spark[1]}" r="${m.sparkR}" fill="${colors.sparkDark}"/>
+</svg>
+`;
 }
 
 // ---------- the wordmark ----------
@@ -164,22 +156,18 @@ function svg(w: number, h: number, inner: string): string {
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${fmt(w)}" height="${fmt(h)}" viewBox="0 0 ${fmt(w)} ${fmt(h)}">${inner}\n</svg>\n`;
 }
 
-function markSvg(size: number, small = false): string {
-  const m = mark(0, 0, size, small);
-  return svg(size, size, `\n  <defs>${m.defs}\n  </defs>${m.body}`);
-}
-
 // the mark and the wordmark side by side, height tall
-function logoSvg(height: number, ink: string): string {
+function logoSvg(height: number, dark: boolean): string {
   const pad = height * 0.08;
   const size = height - 2 * pad;
-  const m = mark(pad, pad, size);
-  const xh = size * 0.42; // the wordmark's x-height
-  // the x-height band sits a little below the mark's centre, where lowercase looks centred
-  const top = pad + size / 2 - xh * 0.38;
-  const w = wordmark(pad + size + size * 0.24, top, xh, ink);
-  const width = pad + size + size * 0.24 + w.width + pad;
-  return svg(width, height, `\n  <defs>${m.defs}\n  </defs>${m.body}${w.body}`);
+  const ink = dark ? colors.inkDark : colors.inkLight;
+  const xh = size * 0.36; // the wordmark's x-height
+  // the x-height band sits on the trace's level, so the word reads as the signal's continuation
+  const top = pad + size * 0.3;
+  const m = mark(pad, pad, size, dark ? colors.traceDark : colors.traceLight, dark ? colors.sparkDark : colors.sparkLight);
+  const w = wordmark(pad + size + size * 0.12, top, xh, ink);
+  const width = pad + size + size * 0.12 + w.width + pad;
+  return svg(width, height, `${m}${w.body}`);
 }
 
 function png(svgText: string, width: number): Buffer {
@@ -192,25 +180,25 @@ function write(path: string, data: string | Buffer): void {
   console.log(`wrote ${path}`);
 }
 
-const markText = markSvg(512);
-const light = logoSvg(200, colors.inkLight);
-const dark = logoSvg(200, colors.inkDark);
+const light = logoSvg(200, false);
+const dark = logoSvg(200, true);
 
-write(join(here, "volt-mark.svg"), markText);
-write(join(here, "volt-bolt.svg"), boltOnly(100));
+write(join(here, "volt-mark-dark.svg"), markSvg(512, true));
+write(join(here, "volt-mark-light.svg"), markSvg(512, false));
 write(join(here, "volt-logo-light.svg"), light);
 write(join(here, "volt-logo-dark.svg"), dark);
-write(join(here, "favicon.svg"), markSvg(64, true));
+write(join(here, "favicon.svg"), faviconSvg());
 for (const size of [16, 32, 48, 64, 128, 256, 512]) {
-  write(join(here, `volt-mark-${size}.png`), png(size <= 48 ? markSvg(size, true) : markText, size));
+  write(join(here, `volt-icon-${size}.png`), png(iconSvg(size), size));
 }
 write(join(here, "volt-logo-light.png"), png(light, 1200));
 write(join(here, "volt-logo-dark.png"), png(dark, 1200));
 
-// the VS Code extension's icons
+// the VS Code extension's icons: the marketplace icon, and the .volt file icon
 const ext = join(here, "../../editors/vscode/images");
-write(join(ext, "icon.png"), png(markText, 256));
-write(join(ext, "volt-file.svg"), boltOnly(100));
+write(join(ext, "icon.png"), png(iconSvg(256), 256));
+write(join(ext, "volt-file.svg"), svg(100, 100, mark(0, 0, 100, "#8F6BFF", colors.sparkDark, true)));
 
-// the website's bolt (the site draws its own mark and favicon, in the board's colours)
-write(join(here, "../../site/src/assets/volt-bolt.svg"), boltOnly(100));
+// the website's mark and favicon
+write(join(here, "../../site/src/assets/volt-mark.svg"), siteMarkSvg());
+write(join(here, "../../site/public/favicon.svg"), faviconSvg());

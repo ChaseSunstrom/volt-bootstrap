@@ -1,5 +1,5 @@
-/* The docs' own touches on top of theme.css: the sidebar's current page marked like a pad, and
-   tables and asides in the board's colours. */
+/* The docs' own touches on top of theme.css: the sidebar's current page marked with the accent, and
+   code frames rounded like the landing page's panels. */
 
 .sidebar-content a[aria-current="page"] {
   border-inline-start: 3px solid var(--sl-color-accent);
@@ -9,10 +9,7 @@
   font-weight: 600;
 }
 
-.sl-markdown-content table th {
-  font-stretch: 112%;
-}
 
 .expressive-code .frame {
-  --ec-brdRad: 0.4rem;
+  --ec-brdRad: 0.6rem;
 }

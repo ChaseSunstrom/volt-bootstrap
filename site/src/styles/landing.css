@@ -1,7 +1,11 @@
 /* The landing page (src/pages/index.astro). It is a Starlight splash page, so the frame around it is
-   the docs' own; the rules at the top undo Starlight's title panel and content width for it. The one
-   moving part is the hero board: a source chip, the C voltc writes for it, and what it prints, wired
-   by traces that draw once on load. Everything else is still. */
+   the docs' own; the rules at the top undo Starlight's title panel and content width for it.
+
+   Motion means current: an amber pulse runs along a wire, and what it reaches comes on. On load
+   (:root[data-intro]) it runs from main.volt to the C voltc writes and on to the terminal. Further
+   down, a section moves once when it scrolls into view (.on, from src/scripts/reveal.ts); sections
+   wait in their starting state only while :root[data-motion] is set, so without the script, or
+   with reduced motion, every part shows how it ends. */
 
 body:has(.landing) .content-panel:has(h1#_top) {
   display: none;
@@ -15,399 +19,518 @@ body:has(.landing) .sl-container {
 }
 
 .landing {
-  --wrap: 72rem;
+  --wrap: 74rem;
   --gutter: clamp(1rem, 4vw, 2.5rem);
-  color: var(--sl-color-gray-2);
-  font-size: 1rem;
+  --stage: #110d29; /* code and terminal panels stay dark in both themes */
+  --stage-line: #2c2463;
+  --stage-text: #e6e1ff;
+  --stage-muted: #8d86b8;
+  color: var(--v-muted);
+  font-size: 1.05rem;
   line-height: 1.6;
 }
 
 .landing > section,
 .landing > .foot {
-  padding: clamp(3.5rem, 8vw, 6rem) max(var(--gutter), (100% - var(--wrap)) / 2);
+  padding: clamp(4rem, 9vw, 7rem) max(var(--gutter), (100% - var(--wrap)) / 2);
 }
 
 .landing h1,
 .landing h2,
 .landing h3 {
-  color: var(--sl-color-white);
-  font-stretch: 112%;
-  font-weight: 750;
+  color: var(--v-text);
+  font-weight: 700;
+  font-variation-settings: "wdth" 90, "opsz" 72;
   letter-spacing: -0.015em;
-  line-height: 1.1;
+  line-height: 1.02;
   margin: 0;
 }
 .landing h2 {
-  font-size: clamp(1.75rem, 3.6vw, 2.6rem);
-  margin-bottom: 1rem;
+  font-size: clamp(2rem, 4.4vw, 3.2rem);
+  margin-bottom: 1.1rem;
+  max-width: 18ch;
 }
 .landing h3 {
-  font-size: 1.2rem;
+  font-size: 1.3rem;
+  letter-spacing: -0.02em;
   margin-bottom: 0.5rem;
 }
 .landing p {
   margin: 0 0 1rem;
+  max-width: 60ch;
 }
-.landing .narrow {
-  max-width: 40rem;
+.landing .sub {
+  margin-bottom: 2.5rem;
 }
 .landing a:not(.button) {
-  color: var(--sl-color-white);
-  text-decoration-color: var(--sl-color-accent);
+  color: var(--v-text);
+  text-decoration-color: var(--v-violet);
   text-decoration-thickness: 2px;
-  text-underline-offset: 0.2em;
+  text-underline-offset: 0.22em;
 }
 .landing a:not(.button):hover {
-  color: var(--sl-color-accent-high);
+  color: var(--v-violet-soft);
 }
-
-/* code that sits on the board: Shiki's own <pre>, coloured by the board theme in index.astro */
+.landing code,
 .landing pre {
-  margin: 0;
   font-family: var(--v-mono);
-  font-size: 0.8rem;
-  line-height: 1.65;
-}
-.landing pre.astro-code {
-  padding: 1rem 1.15rem;
 }
 
-/* buttons: a gold pad and a silkscreen outline */
-.landing .actions {
+.actions {
   display: flex;
   flex-wrap: wrap;
   gap: 0.75rem;
+  margin-top: 2rem;
 }
-.landing .button {
+.button {
   display: inline-flex;
   align-items: center;
-  padding: 0.7rem 1.2rem;
-  border: 1.5px solid var(--sl-color-gray-3);
-  border-radius: 0.3rem;
-  color: var(--sl-color-white);
-  font-weight: 650;
-  font-stretch: 105%;
+  padding: 0.8rem 1.35rem;
+  border-radius: 0.7rem;
+  border: 1px solid var(--v-line);
+  color: var(--v-text);
+  font-weight: 600;
   text-decoration: none;
-  transition: border-color 0.15s, background-color 0.15s;
+  transition: border-color 0.2s, background 0.2s;
 }
-.landing .button:hover {
-  border-color: var(--sl-color-white);
+.button:hover {
+  border-color: var(--v-violet);
 }
-.landing .button.primary {
-  background: var(--v-gold);
-  border-color: var(--v-gold);
-  color: var(--v-ink);
+.button.primary {
+  background: var(--v-violet);
+  border-color: var(--v-violet);
+  color: #fff;
 }
-.landing .button.primary:hover {
-  background: #e6c364;
-  border-color: #e6c364;
+.button.primary:hover {
+  background: color-mix(in oklab, var(--v-violet) 85%, white);
 }
 
-/* ---------------------------------------------------------------- the hero: a board in both themes */
+/* ---------- the hero: main.volt, wired to what voltc writes, wired to what it prints ---------- */
 
 .hero {
-  background-color: var(--v-board);
-  background-image: radial-gradient(circle at 1px 1px, rgb(237 242 236 / 0.08) 1px, transparent 1.6px);
-  background-size: 1.5rem 1.5rem;
-  color: #c9d8cf;
-}
-.hero h1 {
-  color: var(--v-silk);
-  font-size: clamp(2.6rem, 6.4vw, 5.4rem);
-  font-stretch: 125%;
-  font-weight: 800;
-  line-height: 0.98;
-  letter-spacing: -0.025em;
-  max-width: 13ch;
+  padding-top: clamp(3rem, 7vw, 5.5rem) !important;
 }
 .hero-text {
   display: grid;
-  gap: 1.5rem 3rem;
-  align-items: end;
-  margin-bottom: clamp(2.5rem, 6vw, 4rem);
+  gap: 1.75rem 4rem;
 }
-.hero .lede {
-  font-size: 1.12rem;
-  max-width: 34rem;
-  margin-bottom: 1.5rem;
-}
-.hero .button {
-  border-color: #6f8c80;
-  color: var(--v-silk);
-}
-.hero .button:hover {
-  border-color: var(--v-silk);
-}
-.hero .button.primary {
-  color: var(--v-ink);
-}
-@media (min-width: 62rem) {
+@media (min-width: 60rem) {
   .hero-text {
-    grid-template-columns: 1.15fr 1fr;
+    grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr);
+    align-items: end;
+  }
+}
+.hero h1 {
+  font-size: clamp(2.9rem, 7vw, 5.8rem);
+  font-variation-settings: "wdth" 94, "opsz" 96;
+  letter-spacing: -0.01em;
+  line-height: 0.97;
+  max-width: 12ch;
+}
+.lede {
+  font-size: clamp(1.1rem, 1.5vw, 1.25rem);
+  margin: 0 !important;
+  max-width: 44ch !important;
+}
+.hero .actions {
+  margin-top: 1.75rem;
+}
+
+.circuit {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0;
+  margin-top: clamp(3rem, 6vw, 4.5rem);
+}
+@media (min-width: 68rem) {
+  .circuit {
+    grid-template-columns: minmax(0, 1.05fr) 3rem minmax(0, 1.2fr) 3rem minmax(0, 0.8fr);
+    align-items: start;
+  }
+  /* the wires run at the height of the panels' first lines */
+  .circuit .wire {
+    margin-top: 4.3rem;
   }
 }
 
-.board {
-  display: grid;
-  grid-template-columns: minmax(0, 1.15fr) 4rem minmax(0, 1fr) 4rem minmax(0, 0.7fr);
-  align-items: center;
-}
-
-/* a chip: a dark package with a row of gold pins down each side */
-.chip {
-  position: relative;
+.stage {
   margin: 0;
-  background: var(--v-board-deep);
-  border: 1px solid var(--v-board-line);
-  border-radius: 0.35rem;
-  box-shadow: 0 1px 0 rgb(0 0 0 / 0.25);
+  background: var(--stage);
+  border: 1px solid var(--stage-line);
+  border-radius: 0.9rem;
+  overflow: hidden;
+  min-width: 0;
 }
-.chip::before,
-.chip::after {
-  content: "";
-  position: absolute;
-  top: 2.75rem;
-  bottom: 1rem;
-  width: 5px;
-  background: repeating-linear-gradient(to bottom, var(--v-gold) 0 4px, transparent 4px 13px);
-  opacity: 0.85;
-}
-.chip::before {
-  left: -6px;
-  border-radius: 1px 0 0 1px;
-}
-.chip::after {
-  right: -6px;
-  border-radius: 0 1px 1px 0;
-}
-.chip figcaption {
+.stage figcaption {
   display: flex;
   align-items: center;
-  gap: 0.6rem;
-  min-height: 2.6rem;
-  padding: 0.45rem 0.9rem;
-  border-bottom: 1px solid var(--v-board-line);
-  color: var(--v-silk);
-  font-size: 0.85rem;
-  font-weight: 600;
+  gap: 0.55rem;
+  padding: 0.65rem 1rem;
+  border-bottom: 1px solid var(--stage-line);
+  color: var(--stage-muted);
+  font-family: var(--v-mono);
+  font-size: 0.8rem;
 }
-.chip .ref {
-  padding: 0.05rem 0.4rem;
-  border: 1px solid var(--v-gold);
-  border-radius: 0.2rem;
-  color: var(--v-gold);
-  font-size: 0.72rem;
-  font-weight: 750;
-  font-stretch: 112%;
+/* each stage's lamp: on once current reaches it */
+.stage .dot {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  background: var(--v-violet);
+  flex-shrink: 0;
 }
-.chip pre.astro-code {
+.stage pre.astro-code {
+  margin: 0;
+  padding: 1rem 1.1rem;
   background: transparent !important;
+  font-size: 0.84rem;
+  line-height: 1.7;
+  overflow-x: auto;
 }
-
-/* the backend switch: two radios before the caption, so the caption's labels and the panels follow them */
-.chip-out > input,
-.tabs > input {
+.stage pre.astro-code .line {
+  display: inline-block;
+}
+.stage-out input {
   position: absolute;
   opacity: 0;
   pointer-events: none;
 }
 .switch {
   display: inline-flex;
-  border: 1px solid var(--v-board-line);
-  border-radius: 0.25rem;
-  overflow: hidden;
+  gap: 0.25rem;
 }
 .switch label {
-  padding: 0.12rem 0.55rem;
-  color: #8fa79b;
+  padding: 0.15rem 0.6rem;
+  border-radius: 999px;
   cursor: pointer;
-}
-.switch label + label {
-  border-left: 1px solid var(--v-board-line);
+  border: 1px solid transparent;
 }
 .switch label:hover {
-  color: var(--v-silk);
+  color: var(--stage-text);
 }
 #be-c:checked ~ figcaption label[for="be-c"],
 #be-llvm:checked ~ figcaption label[for="be-llvm"] {
-  background: #2c3a17;
-  color: var(--v-silk);
+  color: var(--stage-text);
+  border-color: var(--stage-line);
+  background: #1d1745;
 }
 #be-c:focus-visible ~ figcaption label[for="be-c"],
 #be-llvm:focus-visible ~ figcaption label[for="be-llvm"] {
-  outline: 2px solid var(--v-gold);
-  outline-offset: -2px;
+  outline: 2px solid var(--v-violet);
 }
-.out {
+.out-llvm,
+#be-llvm:checked ~ .out-c {
   display: none;
 }
-#be-c:checked ~ .out-c,
 #be-llvm:checked ~ .out-llvm {
   display: block;
 }
-
-/* the terminal */
-.chip-term pre {
-  padding: 1rem 1.15rem;
-  color: #dbe5de;
+.stage-term pre {
+  margin: 0;
+  padding: 1rem;
+  color: var(--stage-text);
+  font-size: 0.85rem;
+  line-height: 1.7;
   white-space: pre-wrap;
 }
-.chip-term .prompt {
-  color: var(--v-gold);
+.prompt {
+  color: var(--v-mark);
+  user-select: none;
 }
-.chip-term .result {
-  color: var(--v-silk);
-  font-weight: 700;
+.landing .stage .prompt,
+.landing .shell .prompt {
+  color: #a78bfa;
 }
-
-/* traces between the chips: copper, with a spark that runs the length of each once */
-.trace {
-  width: 4rem;
-  height: 7.5rem;
-  overflow: visible;
-}
-.trace path {
-  fill: none;
-  stroke: var(--v-copper);
-  stroke-width: 3;
-  stroke-linejoin: round;
-  stroke-dasharray: 1;
-  stroke-dashoffset: 0;
-}
-.trace .spark {
-  fill: #ffe7a0;
+.result {
+  color: #fff;
 }
 
-/* the sequence: the first trace draws, the C prints line by line, the second trace draws, the result
-   appears. Each keyframe ends where the still page is, so with no motion everything is just there. */
-.t1 path {
-  animation: draw 0.7s 0.25s ease-in both;
+/* a wire between stages: a track, and the pulse that runs along it (down, when the stages stack) */
+.wire {
+  position: relative;
+  height: 2.5rem;
+  overflow: hidden;
 }
-.out-c pre {
-  animation: print 0.7s 0.95s steps(12, end) both;
+.wire::before,
+.wire::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--v-line);
 }
-.t2 path {
-  animation: draw 0.6s 1.6s ease-in both;
+.wire::after {
+  background: linear-gradient(to bottom, transparent, var(--v-spark));
+  height: 40%;
+  opacity: 0;
 }
-.chip-term .result {
-  animation: appear 0.01s 2.25s both;
-}
-@keyframes draw {
-  from {
-    stroke-dashoffset: 1;
+@media (min-width: 68rem) {
+  .wire {
+    height: 2px;
+    overflow: visible;
+  }
+  .wire::before,
+  .wire::after {
+    left: 0;
+    right: 0;
+    top: 0;
+    bottom: auto;
+    width: auto;
+    height: 2px;
+    margin: 0;
+  }
+  .wire::after {
+    background: linear-gradient(to right, transparent, var(--v-spark));
+    width: 45%;
+    right: auto;
   }
 }
-@keyframes print {
-  from {
-    clip-path: inset(0 0 100% 0);
-  }
-  to {
-    clip-path: inset(0 0 0 0);
-  }
+
+@keyframes run-down {
+  0% { opacity: 1; transform: translateY(-100%); }
+  85% { opacity: 1; }
+  100% { opacity: 0; transform: translateY(250%); }
+}
+@keyframes run-right {
+  0% { opacity: 1; transform: translateX(-100%); }
+  85% { opacity: 1; }
+  100% { opacity: 0; transform: translateX(222%); }
+}
+@keyframes lamp {
+  from { background: var(--stage-line); }
+  to { background: var(--v-violet); }
+}
+@keyframes line-in {
+  from { opacity: 0; transform: translateX(-0.4rem); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes type {
+  from { width: 0; }
 }
 @keyframes appear {
-  from {
-    visibility: hidden;
-  }
+  from { opacity: 0; }
 }
 
-@media (max-width: 66rem) {
-  .board {
-    grid-template-columns: minmax(0, 1fr);
-    max-width: 40rem;
+/* the load sequence: main.volt is on; current runs to the C, whose lines come on one by one; then
+   on to the terminal, where the command types and the program prints */
+:root[data-intro] .stage-src .dot {
+  animation: lamp 0.3s 0.15s both;
+}
+:root[data-intro] .w1::after {
+  animation: run-down 0.65s 0.4s var(--v-ease) both;
+}
+:root[data-intro] .stage-out .dot {
+  animation: lamp 0.3s 0.95s both;
+}
+:root[data-intro] .stage-out .line {
+  animation: line-in 0.35s calc(1s + var(--i, 0) * 0.06s) var(--v-ease) both;
+}
+:root[data-intro] .w2::after {
+  animation: run-down 0.6s 1.75s var(--v-ease) both;
+}
+:root[data-intro] .stage-term .dot {
+  animation: lamp 0.3s 2.25s both;
+}
+:root[data-intro] .stage-term .typed {
+  animation: type 0.7s 2.35s steps(var(--n)) both;
+}
+:root[data-intro] .stage-term .result {
+  animation: appear 0.2s 3.15s both;
+}
+@media (min-width: 68rem) {
+  :root[data-intro] .w1::after {
+    animation-name: run-right;
   }
-  .trace {
-    justify-self: center;
-    transform: rotate(90deg);
-    margin-block: -1.75rem;
+  :root[data-intro] .w2::after {
+    animation-name: run-right;
   }
 }
+/* switching backends brings the other excerpt on, line by line */
+:root[data-motion] .stage-out .line {
+  animation: line-in 0.3s calc(var(--i, 0) * 0.035s) var(--v-ease) both;
+}
 
-/* ---------------------------------------------------------------- what Volt leaves out */
+.typed {
+  display: inline-block;
+  overflow: hidden;
+  white-space: pre;
+  vertical-align: bottom;
+  width: calc(var(--n) * 1ch);
+}
 
-.parts {
+/* ---------- nothing runs underneath: the runtime's parts, switched off ---------- */
+
+.norun {
   display: grid;
-  gap: 2rem 4rem;
-  align-items: start;
+  gap: 2.5rem;
 }
-@media (min-width: 56rem) {
-  .parts {
+@media (min-width: 60rem) {
+  .norun {
     grid-template-columns: 1fr 1fr;
+    align-items: center;
   }
 }
-.bom {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 0.98rem;
+.breakers {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border-top: 1px solid var(--v-line);
 }
-.bom th {
-  text-align: left;
-  font-weight: 650;
-  font-stretch: 112%;
-  color: var(--sl-color-gray-3);
-  padding: 0 0.75rem 0.6rem 0;
-  border-bottom: 2px solid var(--sl-color-gray-5);
+.breakers li {
+  display: grid;
+  grid-template-columns: 1fr auto 3.5rem;
+  align-items: center;
+  gap: 1rem;
+  padding: 1rem 0.25rem;
+  border-bottom: 1px solid var(--v-line);
+  margin: 0;
 }
-.bom td {
-  padding: 0.7rem 0.75rem 0.7rem 0;
-  border-bottom: 1px solid var(--sl-color-hairline);
-  color: var(--sl-color-white);
+.part {
+  color: var(--v-muted);
+  font-size: 1.1rem;
+  font-weight: 500;
 }
-.bom td:first-child {
-  width: 4.5rem;
-  color: var(--sl-color-accent);
-  font-weight: 700;
-  font-stretch: 112%;
+.state {
+  font-family: var(--v-mono);
+  font-size: 0.8rem;
+  text-align: right;
 }
-.bom td:last-child {
-  width: 4rem;
-  color: var(--sl-color-gray-3);
+.toggle {
+  position: relative;
+  width: 2.75rem;
+  height: 1.5rem;
+  border-radius: 999px;
+  background: var(--v-raised);
+  border: 1px solid var(--v-line);
+}
+.knob {
+  position: absolute;
+  top: 0.2rem;
+  left: 0.2rem;
+  width: 1rem;
+  height: 1rem;
+  border-radius: 50%;
+  background: var(--v-muted);
 }
 
-/* ---------------------------------------------------------------- samples */
+/* before: on (violet, knob right, a spark lit); each one flips off in turn */
+:root[data-motion] .norun:not(.on) .part {
+  color: var(--v-text);
+}
+:root[data-motion] .norun:not(.on) .toggle {
+  background: var(--v-violet);
+  border-color: var(--v-violet);
+}
+:root[data-motion] .norun:not(.on) .knob {
+  transform: translateX(1.25rem);
+  background: #fff;
+}
+:root[data-motion] .norun:not(.on) .state {
+  opacity: 0;
+}
+@keyframes switch-track {
+  from { background: var(--v-violet); border-color: var(--v-violet); }
+}
+@keyframes switch-knob {
+  from { transform: translateX(1.25rem); background: #fff; }
+}
+@keyframes part-dim {
+  from { color: var(--v-text); }
+}
+.norun.on .toggle {
+  animation: switch-track 0.35s calc(0.3s + var(--i) * 0.22s) var(--v-ease) both;
+}
+.norun.on .knob {
+  animation: switch-knob 0.35s calc(0.3s + var(--i) * 0.22s) var(--v-ease) both;
+}
+.norun.on .part {
+  animation: part-dim 0.5s calc(0.3s + var(--i) * 0.22s) both;
+}
+.norun.on .state {
+  animation: appear 0.4s calc(0.45s + var(--i) * 0.22s) both;
+}
 
-.samples {
-  border-top: 1px solid var(--sl-color-hairline);
+/* ---------- samples ---------- */
+
+.tabs > input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
 }
 .tab-labels {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.25rem 1.5rem;
-  margin: 2rem 0 1.5rem;
-  border-bottom: 1px solid var(--sl-color-hairline);
+  gap: 0.35rem;
+  padding: 0.3rem;
+  border: 1px solid var(--v-line);
+  border-radius: 999px;
+  width: fit-content;
+  margin-bottom: 1.5rem;
 }
 .tab-labels label {
-  padding: 0.5rem 0;
-  margin-bottom: -1px;
-  border-bottom: 3px solid transparent;
-  color: var(--sl-color-gray-3);
-  font-weight: 650;
-  font-stretch: 105%;
+  padding: 0.45rem 1rem;
+  border-radius: 999px;
   cursor: pointer;
+  color: var(--v-muted);
+  font-weight: 600;
+  font-size: 0.95rem;
+  transition: color 0.2s, background 0.2s;
 }
 .tab-labels label:hover {
-  color: var(--sl-color-white);
-}
-#s-errors:checked ~ .tab-labels label[for="s-errors"],
-#s-ownership:checked ~ .tab-labels label[for="s-ownership"],
-#s-templates:checked ~ .tab-labels label[for="s-templates"],
-#s-comptime:checked ~ .tab-labels label[for="s-comptime"],
-#s-interop:checked ~ .tab-labels label[for="s-interop"] {
-  color: var(--sl-color-white);
-  border-bottom-color: var(--sl-color-accent);
-}
-#s-errors:focus-visible ~ .tab-labels label[for="s-errors"],
-#s-ownership:focus-visible ~ .tab-labels label[for="s-ownership"],
-#s-templates:focus-visible ~ .tab-labels label[for="s-templates"],
-#s-comptime:focus-visible ~ .tab-labels label[for="s-comptime"],
-#s-interop:focus-visible ~ .tab-labels label[for="s-interop"] {
-  outline: 2px solid var(--sl-color-accent);
-  outline-offset: 2px;
+  color: var(--v-text);
 }
 .panel {
   display: none;
-  gap: 1.5rem 3rem;
-  align-items: start;
+  gap: 2.5rem;
+}
+@media (min-width: 60rem) {
+  .panel {
+    grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr);
+    align-items: start;
+  }
+}
+.panel pre.astro-code {
+  margin: 0;
+  min-width: 0;
+  padding: 1.1rem 1.25rem;
+  border: 1px solid var(--stage-line);
+  border-radius: 0.9rem;
+  font-size: 0.85rem;
+  line-height: 1.7;
+  overflow-x: auto;
+}
+.printed {
+  margin: 1.25rem 0;
+  padding: 0.9rem 1rem;
+  background: var(--stage);
+  border: 1px solid var(--stage-line);
+  border-radius: 0.7rem;
+  color: var(--stage-text);
+  font-size: 0.85rem;
+  white-space: pre-wrap;
+}
+/* a sample's output prints when its tab opens */
+:root[data-motion] .panel .printed span {
+  animation: appear 0.25s calc(0.25s + var(--i) * 0.12s) both;
+}
+.tabs > input:nth-of-type(1):checked ~ .tab-labels label:nth-of-type(1),
+.tabs > input:nth-of-type(2):checked ~ .tab-labels label:nth-of-type(2),
+.tabs > input:nth-of-type(3):checked ~ .tab-labels label:nth-of-type(3),
+.tabs > input:nth-of-type(4):checked ~ .tab-labels label:nth-of-type(4),
+.tabs > input:nth-of-type(5):checked ~ .tab-labels label:nth-of-type(5) {
+  background: var(--v-violet);
+  color: #fff;
+}
+.tabs > input:nth-of-type(1):focus-visible ~ .tab-labels label:nth-of-type(1),
+.tabs > input:nth-of-type(2):focus-visible ~ .tab-labels label:nth-of-type(2),
+.tabs > input:nth-of-type(3):focus-visible ~ .tab-labels label:nth-of-type(3),
+.tabs > input:nth-of-type(4):focus-visible ~ .tab-labels label:nth-of-type(4),
+.tabs > input:nth-of-type(5):focus-visible ~ .tab-labels label:nth-of-type(5) {
+  outline: 2px solid var(--v-violet);
+  outline-offset: 2px;
 }
 #s-errors:checked ~ .panel-errors,
 #s-ownership:checked ~ .panel-ownership,
@@ -416,222 +539,354 @@ body:has(.landing) .sl-container {
 #s-interop:checked ~ .panel-interop {
   display: grid;
 }
-@media (min-width: 56rem) {
-  .panel {
-    grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr);
-  }
-}
-.panel pre.astro-code {
-  border: 1px solid var(--v-board-line);
-  border-radius: 0.35rem;
-  font-size: 0.82rem;
-}
-.panel-text .printed {
-  margin: 1.25rem 0;
-  padding: 0.75rem 1rem;
-  border-left: 3px solid var(--sl-color-accent);
-  background: var(--sl-color-bg-inline-code);
-  color: var(--sl-color-white);
-  white-space: pre-wrap;
-}
 
-/* ---------------------------------------------------------------- benchmarks */
+/* ---------- measured against C: the bars charge to their values ---------- */
 
 .bench {
-  background: var(--sl-color-gray-6);
+  display: grid;
+  gap: 2.5rem;
 }
-:root[data-theme="light"] .bench {
-  background: var(--sl-color-gray-7);
+@media (min-width: 64rem) {
+  .bench {
+    grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr);
+    align-items: start;
+  }
+  .bench-text {
+    position: sticky;
+    top: calc(var(--sl-nav-height) + 2rem);
+  }
 }
 .chart {
   display: grid;
-  grid-template-columns: minmax(6.5rem, 10rem) 1fr 1fr;
-  gap: 0 1.5rem;
-  margin: 2rem 0 1.5rem;
+  gap: 0.15rem;
+  font-size: 0.9rem;
 }
 .chart-head,
 .chart-row {
-  display: contents;
+  display: grid;
+  grid-template-columns: 7.5rem 1fr 1fr;
+  gap: 1rem;
+  align-items: center;
 }
-.chart-head span {
-  padding-bottom: 0.6rem;
-  border-bottom: 2px solid var(--sl-color-gray-5);
-  color: var(--sl-color-gray-3);
-  font-weight: 650;
-  font-stretch: 112%;
-  font-size: 0.9rem;
+.chart-head {
+  color: var(--v-muted);
+  font-size: 0.8rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--v-line);
+  margin-bottom: 0.35rem;
 }
-.prog,
-.bar-cell {
-  padding: 0.55rem 0;
-  border-bottom: 1px solid var(--sl-color-hairline);
+.chart-row {
+  padding: 0.3rem 0;
 }
 .prog {
-  color: var(--sl-color-white);
-  font-weight: 600;
+  font-family: var(--v-mono);
+  font-size: 0.8rem;
+  color: var(--v-text);
 }
 .bar-cell {
-  display: flex;
+  display: grid;
+  grid-template-columns: 1fr 3.2rem;
   align-items: center;
-  gap: 0.75rem;
+  gap: 0.6rem;
 }
 .track {
   position: relative;
-  flex: 1;
-  height: 0.85rem;
+  height: 0.6rem;
+  border-radius: 999px;
+  background: var(--v-raised);
 }
+/* where C's time is */
 .track::after {
   content: "";
   position: absolute;
   left: var(--c);
-  top: -0.35rem;
-  bottom: -0.35rem;
+  top: -0.3rem;
+  bottom: -0.3rem;
   width: 2px;
-  background: var(--sl-color-white);
+  background: var(--v-muted);
+  opacity: 0.6;
 }
 .bar {
-  display: block;
-  height: 100%;
+  position: absolute;
+  inset: 0 auto 0 0;
   width: var(--w);
-  background: var(--v-copper);
-  border-radius: 0 2px 2px 0;
+  border-radius: inherit;
+  background: color-mix(in oklab, var(--v-violet) 45%, var(--v-muted));
 }
 .bar[data-faster] {
-  background: var(--v-gold);
+  background: var(--v-violet);
 }
 .num {
-  width: 3.4rem;
+  font-family: var(--v-mono);
+  font-size: 0.78rem;
   text-align: right;
-  color: var(--sl-color-white);
-  font-variant-numeric: tabular-nums;
-  font-size: 0.92rem;
 }
-@media (max-width: 40rem) {
-  .chart {
-    grid-template-columns: 1fr 1fr;
-    gap: 0 1rem;
-  }
-  .chart-head span:first-child {
-    display: none;
-  }
-  .prog {
-    grid-column: 1 / -1;
-    padding-bottom: 0;
-    border-bottom: 0;
-  }
+:root[data-motion] .bench:not(.on) .bar {
+  width: 0;
+}
+@keyframes charge {
+  from { width: 0; }
+}
+/* the spark at the bar's head while it charges */
+@keyframes spark-out {
+  0%, 80% { opacity: 1; }
+  100% { opacity: 0; }
+}
+.bench.on .bar {
+  animation: charge 1.1s calc(var(--i) * 0.05s) var(--v-ease) both;
+}
+.bench.on .bar::after {
+  content: "";
+  position: absolute;
+  right: -1px;
+  top: -1px;
+  bottom: -1px;
+  width: 0.5rem;
+  border-radius: 999px;
+  background: var(--v-spark);
+  animation: spark-out 1.2s calc(var(--i) * 0.05s) both;
 }
 
-/* ---------------------------------------------------------------- interop */
+/* ---------- interop: current in from the languages Volt imports, out to the ones that call it ---------- */
 
-.two {
+.network {
   display: grid;
-  gap: 2.5rem 4rem;
-  margin: 2rem 0;
+  gap: 1.5rem;
+  margin-bottom: 2rem;
 }
-@media (min-width: 56rem) {
-  .two {
-    grid-template-columns: 1fr 1fr;
-  }
-}
-.imports {
+.imports,
+.callers {
   list-style: none;
+  margin: 0;
   padding: 0;
-  margin: 1.25rem 0 0;
+  display: grid;
+  gap: 0.6rem;
 }
 .imports li {
-  display: grid;
-  grid-template-columns: 3.5rem 1fr;
-  align-items: baseline;
-  padding: 0.6rem 0;
-  border-bottom: 1px solid var(--sl-color-hairline);
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin: 0;
+  padding: 0.65rem 0.9rem;
+  background: var(--v-panel);
+  border: 1px solid var(--v-line);
+  border-radius: 0.7rem;
+  min-width: 0;
 }
-.imports span {
-  color: var(--sl-color-white);
-  font-weight: 650;
+.imports .lang {
+  font-weight: 700;
+  color: var(--v-text);
+  min-width: 2.6rem;
 }
 .imports code {
-  font-family: var(--v-mono);
-  font-size: 0.85rem;
-  color: var(--sl-color-gray-1);
-  overflow-wrap: anywhere;
+  font-size: 0.8rem;
+  color: var(--v-muted);
+  background: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
-.langs {
-  margin-top: 1.25rem;
-  color: var(--sl-color-white);
-  font-size: clamp(1.4rem, 2.8vw, 2rem);
-  font-stretch: 112%;
-  font-weight: 650;
-  line-height: 1.3;
+.callers li {
+  display: flex;
+  gap: 0.5rem;
+  margin: 0;
+}
+.callers span {
+  padding: 0.4rem 0.75rem;
+  border: 1px solid var(--v-line);
+  border-radius: 999px;
+  font-size: 0.9rem;
+  color: var(--v-text);
+  background: var(--v-panel);
+}
+.hub {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  padding: 1.25rem 1.5rem;
+  border: 1px solid var(--v-violet);
+  border-radius: 1rem;
+  background: var(--v-panel);
+  color: var(--v-text);
+  font-weight: 750;
+  font-size: 1.4rem;
   letter-spacing: -0.01em;
+  font-variation-settings: "wdth" 88;
+  justify-self: center;
+}
+.hub svg {
+  width: 4.5rem;
+  overflow: visible;
+}
+.hub-trace {
+  fill: none;
+  stroke: var(--v-mark);
+  stroke-width: 9;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.hub-spark {
+  fill: var(--v-spark);
+}
+.wires {
+  display: none;
+}
+@media (min-width: 66rem) {
+  .network {
+    grid-template-columns: minmax(0, 1.1fr) 5rem auto 5rem minmax(0, 1fr);
+    align-items: stretch;
+    gap: 0;
+    min-height: 22rem;
+  }
+  .imports {
+    grid-template-rows: repeat(4, 1fr);
+    gap: 0;
+  }
+  .callers {
+    grid-template-rows: repeat(5, 1fr);
+    gap: 0;
+  }
+  .imports li,
+  .callers li {
+    align-self: center;
+  }
+  .imports li {
+    margin: 0.3rem 0;
+  }
+  .hub {
+    align-self: center;
+  }
+  .wires {
+    display: block;
+    width: 100%;
+    height: 100%;
+    overflow: visible;
+  }
+  .wires path {
+    fill: none;
+    vector-effect: non-scaling-stroke;
+    stroke-width: 2px;
+  }
+  .wires .track {
+    stroke: var(--v-line);
+  }
+  .wires .pulse {
+    stroke: var(--v-spark);
+    stroke-width: 3px;
+    stroke-linecap: round;
+    stroke-dasharray: 0.16 1;
+    stroke-dashoffset: 0.16;
+    opacity: 0;
+  }
+}
+@keyframes flow {
+  0% { stroke-dashoffset: 0.16; opacity: 1; }
+  90% { opacity: 1; }
+  100% { stroke-dashoffset: -1; opacity: 0; }
+}
+@keyframes hub-on {
+  from { border-color: var(--v-line); }
+}
+.interop.on .wires-in .pulse {
+  animation: flow 0.8s calc(0.2s + var(--i) * 0.12s) var(--v-ease) both;
+}
+.interop.on .hub {
+  animation: hub-on 0.4s 0.95s both;
+}
+.interop.on .wires-out .pulse {
+  animation: flow 0.8s calc(1.15s + var(--i) * 0.1s) var(--v-ease) both;
+}
+@keyframes dim-in {
+  from { opacity: 0.35; }
+}
+.interop.on .callers li {
+  animation: dim-in 0.4s calc(1.6s + var(--i) * 0.1s) both;
+}
+:root[data-motion] .interop:not(.on) .hub {
+  border-color: var(--v-line);
+}
+:root[data-motion] .interop:not(.on) .callers li {
+  opacity: 0.35;
 }
 
-/* ---------------------------------------------------------------- the feature list */
+/* ---------- what's in it ---------- */
 
-.spec {
-  border-top: 1px solid var(--sl-color-hairline);
-}
 .spec dl {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(17rem, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 16rem), 1fr));
   gap: 2rem 2.5rem;
-  margin: 2rem 0 0;
+  margin: 2.5rem 0 0;
+}
+@media (min-width: 72rem) {
+  .spec dl {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 2.25rem 2rem;
+  }
 }
 .spec dl > div {
-  padding-top: 0.9rem;
-  border-top: 2px solid var(--sl-color-gray-5);
+  border-top: 1px solid var(--v-line);
+  padding-top: 1rem;
 }
 .spec dt {
-  color: var(--sl-color-white);
+  color: var(--v-text);
   font-weight: 700;
-  font-stretch: 112%;
-  font-size: 1.08rem;
+  font-size: 1.1rem;
   margin-bottom: 0.35rem;
 }
 .spec dd {
   margin: 0;
+  font-size: 0.97rem;
 }
 
-/* ---------------------------------------------------------------- start */
+/* ---------- start: the first command types itself ---------- */
 
 .start {
-  background: var(--v-board);
-  color: #c9d8cf;
+  text-align: left;
 }
-.start h2 {
-  color: var(--v-silk);
+.shell {
+  margin: 1.75rem 0 0;
+  padding: 1.1rem 1.25rem;
+  background: var(--stage);
+  border: 1px solid var(--stage-line);
+  border-radius: 0.9rem;
+  color: var(--stage-text);
+  font-size: 0.88rem;
+  line-height: 1.75;
+  overflow-x: auto;
+  max-width: 46rem;
 }
-.start .shell {
-  margin: 1.5rem 0 2rem;
-  padding: 1rem 1.15rem;
-  max-width: 40rem;
-  background: var(--v-board-deep);
-  border: 1px solid var(--v-board-line);
-  border-radius: 0.35rem;
-  color: var(--v-silk);
-  font-size: 0.9rem;
-  white-space: pre-wrap;
+.shell-out {
+  color: var(--stage-muted);
 }
-.start .prompt {
-  color: var(--v-gold);
+.shell-out .said {
+  color: #fff;
 }
-.start .button {
-  border-color: #6f8c80;
-  color: var(--v-silk);
+:root[data-motion] .start:not(.on) .typed {
+  width: 0;
 }
-.start .button.primary {
-  color: var(--v-ink);
+:root[data-motion] .start:not(.on) .shell-out .line {
+  opacity: 0;
+}
+.start.on .typed {
+  animation: type 1.2s 0.2s steps(var(--n)) both;
+}
+.start.on .shell-out .line {
+  animation: appear 0.15s calc(1.6s + var(--i) * 0.28s) both;
 }
 
-/* ---------------------------------------------------------------- footer */
+/* ---------- foot ---------- */
 
-.landing > .foot {
+.foot {
   display: flex;
   flex-wrap: wrap;
   justify-content: space-between;
   gap: 1rem;
-  padding-block: 2rem;
+  border-top: 1px solid var(--v-line);
+  padding-top: 2rem !important;
+  padding-bottom: 3rem !important;
   font-size: 0.9rem;
-  color: var(--sl-color-gray-3);
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -640,8 +895,5 @@ body:has(.landing) .sl-container {
   .landing *::after {
     animation: none !important;
     transition: none !important;
-  }
-  .trace .spark {
-    display: none;
   }
 }

@@ -1,7 +1,7 @@
 ---
 // The site's one header (Starlight's Header, overridden in astro.config.mjs): the landing page is a
-// Starlight page too, so the docs and the landing page share this: the mark, the main sections,
-// Starlight's search, its theme switch and the GitHub link.
+// Starlight page too, so the docs and the landing page share this: the mark and wordmark, the main
+// sections, Starlight's search, its theme switch and the GitHub link.
 import Search from "virtual:starlight/components/Search";
 import SocialIcons from "virtual:starlight/components/SocialIcons";
 import ThemeSelect from "virtual:starlight/components/ThemeSelect";
@@ -17,16 +17,18 @@ const links = [
   { label: "bolt", href: `${base}/bolt/overview/`, section: "/bolt/" },
   { label: "Interop", href: `${base}/interop/c/`, section: "/interop/" },
 ];
-// the logo's bolt, in a 100×100 box
-const bolt = readFileSync(resolve(process.cwd(), "src/assets/volt-bolt.svg"), "utf8").match(/<path d="([^"]+)"/)![1];
+// the mark: a signal trace bent into a V, and the spark at its leading end (assets/logo/logo.ts
+// writes src/assets/volt-mark.svg)
+const markSvg = readFileSync(resolve(process.cwd(), "src/assets/volt-mark.svg"), "utf8");
+const trace = markSvg.match(/<path d="([^"]+)"/)![1];
+const [cx, cy, r] = ["cx", "cy", "r"].map((a) => markSvg.match(new RegExp(`<circle[^>]* ${a}="([^"]+)"`))![1]);
 ---
 
 <div class="v-header">
   <a class="v-brand" href={`${base}/`}>
-    <svg viewBox="0 0 100 100" aria-hidden="true">
-      <rect width="100" height="100" rx="14" fill="var(--v-board)" />
-      <circle cx="12" cy="12" r="3.2" fill="var(--v-board-deep)" />
-      <path d={bolt} transform="translate(18 16) scale(0.64)" fill="var(--v-gold)" />
+    <svg viewBox="0 22 100 56" aria-hidden="true">
+      <path class="v-trace" d={trace} pathLength="1" />
+      <circle class="v-spark" cx={cx} cy={cy} r={r} style={`--trace: path("${trace} H ${cx}")`} />
     </svg>
     <span>volt</span>
   </a>
@@ -58,15 +60,59 @@ const bolt = readFileSync(resolve(process.cwd(), "src/assets/volt-bolt.svg"), "u
     flex-shrink: 0;
   }
   .v-brand svg {
-    width: 2rem;
-    height: 2rem;
+    width: 2.6rem;
+    height: auto;
+    overflow: visible;
+  }
+  .v-trace {
+    fill: none;
+    stroke: var(--v-mark);
+    stroke-width: 9;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+  .v-spark {
+    fill: var(--v-spark);
   }
   .v-brand span {
     font-family: var(--v-sans);
-    font-stretch: 125%;
-    font-weight: 800;
-    font-size: 1.3rem;
-    letter-spacing: -0.02em;
+    font-variation-settings: "wdth" 88, "opsz" 48;
+    font-weight: 750;
+    font-size: 1.45rem;
+    letter-spacing: -0.035em;
+  }
+  /* the trace sweeps in like a scope's beam with the spark at its head: on the landing page's first
+     load (data-intro), and again when the mark is hovered */
+  @keyframes v-draw {
+    from { stroke-dashoffset: 1; }
+    to { stroke-dashoffset: 0; }
+  }
+  @keyframes v-ride {
+    from { offset-distance: 0%; }
+    to { offset-distance: 100%; }
+  }
+  :global(:root[data-intro]) .v-trace,
+  .v-brand:hover .v-trace {
+    stroke-dasharray: 1;
+    animation: v-draw 0.9s var(--v-ease) both;
+  }
+  :global(:root[data-intro]) .v-spark,
+  .v-brand:hover .v-spark {
+    offset-path: var(--trace);
+    offset-rotate: 0deg;
+    animation: v-ride 0.9s var(--v-ease) both;
+    cx: 0;
+    cy: 0;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    :global(:root[data-intro]) .v-trace,
+    :global(:root[data-intro]) .v-spark,
+    .v-brand:hover .v-trace,
+    .v-brand:hover .v-spark {
+      animation: none;
+      stroke-dasharray: none;
+      offset-path: none;
+    }
   }
   .v-links {
     display: none;
