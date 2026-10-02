@@ -142,6 +142,22 @@ attach fn truncate(this: std::vec<T, A>&, n: usize) -> void {
     }
 }
 
+// n elements: copies of value added at the end, or the ones past n deleted. Filling is one plain
+// loop, which the C compiler turns into a memset for bytes
+<T: type, A: std::mem::t_allocator>
+attach fn resize(this: std::vec<T, A>&, n: usize, value: T) -> std::mem::mem_error!void {
+    if (n <= this.len) {
+        this.truncate(n);
+        return;
+    }
+    try this.reserve(n);
+    val xs = @slice(this.ptr, n);
+    for (i) in this.len..n {
+        @write(&xs[i], copy value);
+    }
+    this.len = n;
+}
+
 // append a copy of each element of xs
 <T: type, A: std::mem::t_allocator>
 attach fn extend(this: std::vec<T, A>&, xs: T[..]) -> std::mem::mem_error!void {

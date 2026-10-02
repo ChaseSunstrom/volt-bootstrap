@@ -56,20 +56,20 @@ Measured 2026-10-01 on:
 
 | Program | C (clang) | C (gcc) | C++ (clang++) | Volt (C backend) | Volt (LLVM) |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| binary_trees | 0.710 s | 0.655 s (0.92x) | 0.958 s (1.35x) | 0.844 s (1.19x) | 0.804 s (1.13x) |
-| closures | 0.469 s | 0.735 s (1.57x) | 0.532 s (1.13x) | 0.563 s (1.20x) | 0.481 s (1.03x) |
-| crc32 | 0.705 s | 0.706 s (1.00x) | 0.705 s (1.00x) | 0.700 s (0.99x) | 0.700 s (0.99x) |
-| fannkuch | 1.872 s | 1.863 s (1.00x) | 1.933 s (1.03x) | 1.954 s (1.04x) | 1.947 s (1.04x) |
-| fib | 0.448 s | 0.175 s (0.39x) | 0.449 s (1.00x) | 0.451 s (1.01x) | 0.433 s (0.97x) |
-| hashmap | 0.538 s | 0.542 s (1.01x) | 1.235 s (2.30x) | 0.537 s (1.00x) | 0.524 s (0.97x) |
-| mandelbrot | 0.640 s | 0.615 s (0.96x) | 0.639 s (1.00x) | 0.637 s (0.99x) | 0.636 s (0.99x) |
-| matmul | 0.506 s | 0.477 s (0.94x) | 0.504 s (1.00x) | 0.508 s (1.00x) | 0.504 s (1.00x) |
-| nbody | 0.717 s | 0.713 s (0.99x) | 0.678 s (0.95x) | 0.711 s (0.99x) | 0.727 s (1.01x) |
-| sieve | 0.545 s | 0.561 s (1.03x) | 0.535 s (0.98x) | 0.621 s (1.14x) | 0.567 s (1.04x) |
-| sort | 0.568 s | 0.548 s (0.97x) | 0.190 s (0.33x) | 0.227 s (0.40x) | 0.226 s (0.40x) |
-| spectral_norm | 0.959 s | 0.648 s (0.67x) | 0.938 s (0.98x) | 0.937 s (0.98x) | 0.935 s (0.97x) |
-| strings | 0.286 s | 0.286 s (1.00x) | 0.380 s (1.33x) | 0.255 s (0.89x) | 0.258 s (0.90x) |
-| vec_grow | 0.547 s | 0.540 s (0.99x) | 1.332 s (2.44x) | 0.524 s (0.96x) | 0.535 s (0.98x) |
+| binary_trees | 0.709 s | 0.656 s (0.92x) | 0.955 s (1.35x) | 0.834 s (1.18x) | 0.808 s (1.14x) |
+| closures | 0.478 s | 0.736 s (1.54x) | 0.533 s (1.12x) | 0.563 s (1.18x) | 0.472 s (0.99x) |
+| crc32 | 0.707 s | 0.707 s (1.00x) | 0.709 s (1.00x) | 0.705 s (1.00x) | 0.703 s (0.99x) |
+| fannkuch | 1.867 s | 1.907 s (1.02x) | 1.935 s (1.04x) | 1.968 s (1.05x) | 1.958 s (1.05x) |
+| fib | 0.450 s | 0.174 s (0.39x) | 0.451 s (1.00x) | 0.449 s (1.00x) | 0.438 s (0.97x) |
+| hashmap | 0.543 s | 0.553 s (1.02x) | 1.299 s (2.39x) | 0.545 s (1.00x) | 0.536 s (0.99x) |
+| mandelbrot | 0.636 s | 0.615 s (0.97x) | 0.637 s (1.00x) | 0.638 s (1.00x) | 0.638 s (1.00x) |
+| matmul | 0.508 s | 0.485 s (0.95x) | 0.514 s (1.01x) | 0.510 s (1.00x) | 0.510 s (1.00x) |
+| nbody | 0.721 s | 0.723 s (1.00x) | 0.681 s (0.94x) | 0.726 s (1.01x) | 0.727 s (1.01x) |
+| sieve | 0.561 s | 0.603 s (1.08x) | 0.556 s (0.99x) | 0.550 s (0.98x) | 0.558 s (1.00x) |
+| sort | 0.556 s | 0.559 s (1.01x) | 0.190 s (0.34x) | 0.226 s (0.41x) | 0.227 s (0.41x) |
+| spectral_norm | 0.960 s | 0.647 s (0.67x) | 0.938 s (0.98x) | 0.937 s (0.98x) | 0.936 s (0.97x) |
+| strings | 0.293 s | 0.288 s (0.99x) | 0.395 s (1.35x) | 0.262 s (0.90x) | 0.264 s (0.90x) |
+| vec_grow | 0.566 s | 0.560 s (0.99x) | 1.372 s (2.42x) | 0.541 s (0.96x) | 0.540 s (0.95x) |
 <!-- bench:end -->
 
 ## Reading the results
@@ -84,8 +84,9 @@ Measured 2026-10-01 on:
   buffer and moves each element across.
 - **`hashmap`**: C++'s `std::unordered_map` allocates a node per entry; `std::map` in Volt and the C
   table don't.
-- **`sieve`**: Volt fills its array one `push` at a time (`std::vec` has no fill constructor yet),
-  where C uses `memset`.
+- **`sieve`**: `vec.resize(n, 1)` fills with one plain loop, which clang turns into the same
+  `memset` the C program calls. (Filling with `push` was 14% slower: each push stores the length
+  back, and a byte store may alias it, so the loop can't be turned into a memset.)
 - **`binary_trees`** is where Volt is furthest behind C: allocating and freeing millions of small
   `box`es.
 - **gcc's own wins** (`fib`, `spectral_norm`) are its optimizer's: it turns much of `fib`'s

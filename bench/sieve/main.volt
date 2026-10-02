@@ -5,10 +5,7 @@ use std::text;
 fn main() -> !void {
     val n = @cast<usize>((std::process::arg(1) ?? "200000000").parse_int() catch 200000000);
     var marks: std::vec<u8> = {};
-    try marks.reserve(n);
-    for (i) in 0..n {
-        try marks.push(1);
-    }
+    try marks.resize(n, 1);
     val prime = marks.items();
     prime[0] = 0;
     prime[1] = 0;
