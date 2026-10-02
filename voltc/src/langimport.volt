@@ -144,10 +144,9 @@ fn find_bolt() -> std::string {
     if (e) {
         return S(e);
     }
-    var buf: u8[4096];
-    val n = sys::readlink("/proc/self/exe", @cast<cstr>(&buf[0]), 4095);
-    if (n > 0) {
-        val exe = @cast<str>(@slice(&buf[0], @cast<usize>(n)));
+    val path = std::process::exe_path();
+    if (path) {
+        val exe = path.as_str();
         var dir_end = exe.len;
         while (dir_end > 0 && exe[dir_end - 1] != '/') {
             dir_end -= 1;

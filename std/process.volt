@@ -65,6 +65,10 @@ namespace process {
     internal extern "C" fn setenv(name: cstr, value: cstr, overwrite: i32) -> i32;
     internal extern "C" fn unsetenv(name: cstr) -> i32;
     internal extern "C" fn getcwd(buf: u8*, size: usize) -> void*;
+    internal extern "C" fn readlink(path: cstr, buf: u8*, n: usize) -> isize;
+    internal extern "C" fn realpath(path: cstr, resolved: u8*) -> cstr?;
+    internal extern "C" fn _NSGetExecutablePath(buf: u8*, size: u32*) -> i32;
+    internal extern "C" fn sysctl(name: i32*, n: u32, old: void*, old_len: usize*, new: void*, new_len: usize) -> i32;
     internal extern "C" fn chdir(path: cstr) -> i32;
 
     // poll.h's struct pollfd
@@ -149,6 +153,38 @@ namespace process {
     fn unset_env(name: str) -> void {
         var n = std::string::from(name);
         unsetenv(n.c_str());
+    }
+
+    // the path of this program's executable, with symlinks resolved (null if the system won't say;
+    // Linux, macOS and FreeBSD do)
+    <A: std::mem::t_allocator = std::mem::default_allocator>
+    fn exe_path(allocator: A = {}) -> std::string<A>? {
+        var buf: u8[4096];
+        comptime if (@cfg("os", "macos")) {
+            // the path it was started by, which may go through symlinks
+            var size: u32 = 4096;
+            if (_NSGetExecutablePath(&buf[0], &size) != 0) {
+                return null;
+            }
+            var real: u8[4096];
+            val r = realpath(@cast<cstr>(&buf[0]), &real[0]) ?? return null;
+            return std::string::from(@cast<str>(@slice(@cast<u8*>(r), strlen(r))), copy allocator);
+        } else {
+            comptime if (@cfg("os", "freebsd")) {
+                var mib: i32[4] = { 1, 14, 12, -1 }; // CTL_KERN, KERN_PROC, KERN_PROC_PATHNAME, this process
+                var n: usize = 4096;
+                if (sysctl(&mib[0], 4, @cast<void*>(&buf[0]), &n, @cast<void*>(0), 0) != 0 || n == 0) {
+                    return null;
+                }
+                return std::string::from(@cast<str>(@slice(&buf[0], n - 1)), copy allocator); // n counts the NUL
+            } else {
+                val n = readlink("/proc/self/exe", &buf[0], 4096);
+                if (n <= 0 || n == 4096) {
+                    return null;
+                }
+                return std::string::from(@cast<str>(@slice(&buf[0], @cast<usize>(n))), copy allocator);
+            }
+        }
     }
 
     // the working directory (where relative paths start)

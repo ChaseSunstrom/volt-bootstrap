@@ -99,7 +99,8 @@ fn main() -> void {
 ```
 
 The working directory and the environment are in `std::process`: `cwd()`, `set_cwd(path)`,
-`env(name)`, `set_env(name, value)` and `unset_env(name)`.
+`env(name)`, `set_env(name, value)` and `unset_env(name)`. `exe_path()` is the program's own file,
+as an absolute path, for finding what's installed beside it.
 
 ## Time
 
