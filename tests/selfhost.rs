@@ -202,6 +202,12 @@ fn hot_profiles(voltc: &Path, tmp: &Path) {
     assert!(out.contains("  mix (tests/hot/spin.volt:6), inlined\n"), "bolt hot didn't mark mix inlined:\n{out}");
     assert!(out.contains("tests/hot/spin.volt:8  return i * 2654435761"), "bolt hot didn't find the hot line:\n{out}");
     assert!(out.contains("main -> work -> mix"), "bolt hot didn't find the path:\n{out}");
+    // a hot leaf keeps its caller in the path: --profiler builds with clang, which gives leaves frame pointers
+    if Command::new("clang").arg("--version").output().is_ok() {
+        let o = Command::new(env!("CARGO_BIN_EXE_bolt")).args(["hot", "tests/hot/leaf.volt"]).current_dir(root).env("VOLTC", voltc).env("VOLT_STD", root.join("std")).env_remove("CC").output().unwrap();
+        let out = String::from_utf8_lossy(&o.stdout);
+        assert!(o.status.success() && out.contains("main -> work -> spin"), "bolt hot lost a leaf's caller:\n{out}{}", String::from_utf8_lossy(&o.stderr));
+    }
     // a normal build: no sampler in it
     let exe = tmp.join("spin");
     let b = Command::new(voltc).args(["build", "--release"]).arg(root.join("tests/hot/spin.volt")).arg("--std").arg(root.join("std")).arg("-o").arg(&exe).output().unwrap();

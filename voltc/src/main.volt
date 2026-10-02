@@ -1090,12 +1090,35 @@ fn llvm_exe(chk: checker&, out: str, c: cli&) -> void {
     rmdir_path(dir.as_str());
 }
 
+// is there a program called name in a $PATH directory?
+fn on_path(name: str) -> bool {
+    val path = std::process::env("PATH") ?? return false;
+    for (dir) in path.split(":").items() {
+        if (dir.len > 0) {
+            var p = S(dir);
+            p.append("/");
+            p.append(name);
+            if (std::fs::exists(p.as_str())) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 // run the C compiler on these inputs (C files, objects): an executable, or with `object` a .o
 fn cc_run(inputs: std::vec<str>&, out: str, c: cli&, object: bool) -> void {
     // imported headers' prototypes are C's own: a Volt void*/cstr for their const void*/char* is fine
     var argv: std::vec<str> = {};
     var lib_flags: std::vec<std::string> = {}; // the linked libraries' LIB.a.flags lines, which argv points into
-    val compiler = c_command(&argv);
+    var compiler = "clang";
+    if (c.profiler && std::process::env("CC") == null && on_path("clang")) {
+        // bolt hot walks frame pointers, and clang keeps them in leaf functions when told to (gcc
+        // 16 drops them there anyway, and a sample in a leaf loses the leaf's caller); $CC still wins
+        put(&argv, compiler);
+    } else {
+        compiler = c_command(&argv);
+    }
     put(&argv, "-std=gnu11");
     put(&argv, "-w");
     put(&argv, "-Wno-error=incompatible-pointer-types");
