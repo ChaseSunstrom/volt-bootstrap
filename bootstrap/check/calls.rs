@@ -66,10 +66,27 @@ impl Checker {
 
     /// call through a value: a C fn pointer, a fn(...) value (its fn and env) or a closure
     pub fn call_value(&mut self, f: Val, args: &[Expr], span: Span) -> Res<Val> {
+        // a generic closure: the arguments' types pick its instance (made the first time)
+        let mut given = Vec::new();
+        let mut inst = None;
+        if let Ty::Closure(c) = self.t.get(f.ty).clone() {
+            if self.closures[c as usize].generic.is_some() {
+                for (i, a) in args.iter().enumerate() {
+                    let want = self.generic_closure_want(c, i);
+                    given.push(self.expr(a, want)?);
+                }
+                let tys: Vec<TyId> = given.iter().map(|v| v.ty).collect();
+                inst = Some(self.closure_instance(c, &tys, span)?);
+            }
+        }
+        let mut given = given.into_iter();
         let (ps, ret, va, kind) = match self.t.get(f.ty).clone() {
             Ty::FnPtr(ps, r, va) => (ps, r, va, 0),
             Ty::FnVal(ps, r) => (ps, r, false, 1),
-            Ty::Closure(c) => (self.closures[c as usize].params.clone(), self.closures[c as usize].ret, false, 2),
+            Ty::Closure(c) => {
+                let k = inst.unwrap_or(c) as usize;
+                (self.closures[k].params.clone(), self.closures[k].ret, false, 2)
+            }
             _ => return err(span, format!("can't call a {}", self.ty_name(f.ty))),
         };
         if args.len() < ps.len() || (!va && args.len() > ps.len()) {
@@ -78,14 +95,17 @@ impl Checker {
         let fty = f.ty;
         // what the call runs: this closure's body, or what any fn of this type made into a value does
         let callee = match self.t.get(fty).clone() {
-            Ty::Closure(c) => Body::Closure(c),
+            Ty::Closure(c) => Body::Closure(inst.unwrap_or(c)),
             _ => Body::Value(self.value_key(fty)),
         };
         let mut vals = vec![f];
         for (i, a) in args.iter().enumerate() {
             vals.push(match ps.get(i) {
                 Some(p) => {
-                    let v = self.expr(a, Some(*p))?;
+                    let v = match given.next() {
+                        Some(v) => v,
+                        None => self.expr(a, Some(*p))?,
+                    };
                     let v = self.take_into(v, *p, a.span)?;
                     if self.reaches(*p) {
                         self.note_arg(callee, i, v.ro, v.via, v.root.as_deref(), a.span);
@@ -109,7 +129,7 @@ impl Checker {
             }
             _ => {
                 let Ty::Closure(c) = self.t.get(fty).clone() else { unreachable!() };
-                let fname = self.closures[c as usize].fn_name.clone();
+                let fname = self.closures[inst.unwrap_or(c) as usize].fn_name.clone();
                 let sep = if cs.is_empty() { "" } else { ", " };
                 if vals[0].lv {
                     format!("{fname}(&({}){sep}{})", vals[0].c, cs.join(", "))

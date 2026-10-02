@@ -68,7 +68,7 @@ fn append_u128(s: std::string&, v: u128) -> void {
     }
 }
 
-// Names declared with a generic prefix: `<...> [modifiers] fn|struct|enum|trait|error NAME`.
+// Names declared with a generic prefix: `<...> [modifiers] fn|struct|enum|trait|error|type NAME`.
 fn collect_generic_names(toks: std::vec<token>&, out: std::map<str, bool>&) -> void {
     for (i) in 0..toks.len {
         if ((punct_of(&(toks.at(i).tok)) ?? "") != ">") {

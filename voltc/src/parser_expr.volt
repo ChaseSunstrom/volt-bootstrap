@@ -811,7 +811,8 @@ attach fn loop_expr(this: parser&, lab: str?, is_comptime: bool) -> compile_erro
     return { kind: move kind, span: start.to(this.prev_span()) };
 }
 
-// `|a, b&, move c| (params) -> R { body }`: captures copy unless marked `&` (by reference) or `move`
+// `|a, b&, move c| (params) -> R { body }`: captures copy unless marked `&` (by reference) or `move`;
+// `|c| <T: type>(x: T) { }` is generic
 attach fn closure(this: parser&) -> compile_error!expr {
     val start = this.span();
     var caps: std::vec<capture> = {};
@@ -833,6 +834,10 @@ attach fn closure(this: parser&) -> compile_error!expr {
             }
         }
     }
+    var gps: std::vec<generic_param> = {};
+    if (this.is("<")) {
+        gps = try this.generic_params();
+    }
     var ps: std::vec<param> = {};
     try this.params(&ps);
     var ret: ty? = null;
@@ -840,7 +845,7 @@ attach fn closure(this: parser&) -> compile_error!expr {
         ret = try this.parse_type();
     }
     val body = try this.block();
-    return { kind: expr_kind::CLOSURE({ caps: move caps, params: move ps, ret: move ret, body: move body }), span: start.to(this.prev_span()) };
+    return { kind: expr_kind::CLOSURE({ caps: move caps, generics: move gps, params: move ps, ret: move ret, body: move body }), span: start.to(this.prev_span()) };
 }
 
 // whether a literal pattern starts here (a number, maybe negative, char, string, true, false, null)

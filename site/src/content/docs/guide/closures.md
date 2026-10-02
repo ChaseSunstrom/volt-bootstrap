@@ -39,6 +39,36 @@ fn main() -> void {
 Each closure literal has a type of its own, so a template that takes one (`<F: type> fn
 apply(f: F)`) gets a copy with a direct, inlinable call.
 
+### Generic closures
+
+A closure can take type parameters, written before its parameters:
+`|captures| <T: type>(x: T) -> T { ... }`. Its captures are taken once, where it's written; each
+call works out `T` from the arguments and gets a body for that `T`, like a [generic
+function](/volt-bootstrap/guide/templates/#generic-functions). Bounds work too (`<T: show>`).
+
+```volt
+use std::io;
+
+fn main() -> void {
+    val prefix = ">";
+    val show = |prefix| <T: type>(x: T) -> T {
+        std::println("{} {}", prefix, x);
+        return x;
+    };
+    show(5);
+    show("five");
+    val f: fn(f64) -> f64 = show; // a fn value: the body for T = f64
+    std::println("{}", f(2.5) * 2.0);
+}
+// expect: > 5
+// expect: > five
+// expect: > 2.5
+// expect: 5
+```
+
+Each call has to tell what `T` is from its arguments: a closure whose parameters don't mention `T`
+can't be called.
+
 ## Function types
 
 `fn(A, B) -> R` is the type of any function or closure with that signature: a function pointer plus

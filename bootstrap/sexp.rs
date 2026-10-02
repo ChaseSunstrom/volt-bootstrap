@@ -568,7 +568,7 @@ impl W {
                     w.expr(x);
                 });
             }
-            ExprKind::Closure { caps, params, ret, body } => {
+            ExprKind::Closure { caps, generics, params, ret, body } => {
                 self.open("closure");
                 self.list(caps, |w, c| {
                     w.sp();
@@ -582,6 +582,7 @@ impl W {
                     w.span(c.span);
                     w.close();
                 });
+                self.list(generics, |w, g| w.generic_param(g));
                 self.list(params, |w, p| w.param(p));
                 self.opt(ret, |w, t| {
                     w.sp();

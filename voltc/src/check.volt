@@ -102,6 +102,7 @@ struct closure_info {
     params: std::vec<u32>;
     ret: u32;
     names: std::vec<str> = {}; // its params' names, then its captures' (lends.volt)
+    gen: u32? = null;          // a generic closure's (gclosures): its body is checked per instance
 }
 
 struct cap_field {
@@ -387,6 +388,7 @@ struct checker {
     hook_memo: std::map<str, i64> = {};
     glue_names: std::map<str, u32> = {};
     closures: std::vec<std::box<closure_info>> = {};
+    gclosures: std::vec<std::box<generic_closure>> = {};
     // comptime interpreter call frames
     ct: std::vec<ct_frame> = {};
     ct_flow: flow? = null; // a return/break/continue leaving compile-time code (with a "<flow>" error)
@@ -982,8 +984,21 @@ attach fn put_ty(this: checker&, s: std::string&, id: u32) -> void {
         },
         .TRAIT_UNION(u) => { s.append(this.ui(u).name); },
         .CLOSURE(c) => {
-            s.append("closure(");
             val ci = this.ci(c);
+            val gi = ci.gen;
+            if (gi) {
+                s.append("closure<");
+                val g = this.gc(gi);
+                for (i) in 0..g.gps.len {
+                    if (i > 0) {
+                        s.append(", ");
+                    }
+                    s.append(g.gps.at(i).name);
+                }
+                s.push('>');
+                return;
+            }
+            s.append("closure(");
             for (i) in 0..ci.params.len {
                 if (i > 0) {
                     s.append(", ");

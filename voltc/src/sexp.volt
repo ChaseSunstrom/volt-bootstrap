@@ -735,6 +735,11 @@ attach fn expr(this: sexp_writer&, e: expr&) -> void {
                 this.close();
             }
             this.out.append(" ]");
+            this.out.append(" [");
+            for (g&) in c.generics.items() {
+                this.generic_param(g);
+            }
+            this.out.append(" ]");
             this.params(&c.params);
             this.opt_ty(&c.ret);
             this.sp();

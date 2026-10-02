@@ -97,6 +97,7 @@ struct lit_entry {
 
 struct closure {
     caps: std::vec<capture>;
+    generics: std::vec<generic_param> = {}; // a generic closure's: |c| <T: type>(x: T) { }
     params: std::vec<param>;
     ret: ty?;
     body: block;

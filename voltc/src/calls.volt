@@ -113,6 +113,24 @@ attach fn call_value(this: checker&, f: tval, args: std::vec<expr>&, span: span)
     var va = false;
     var kind = 0;
     var closure: u32 = 0;
+    // a generic closure: the arguments' types pick its instance (made the first time)
+    var given: std::vec<tval> = {};
+    var inst: u32? = null;
+    match (*this.t.get(f.ty)) {
+        .CLOSURE(c) => {
+            if (this.ci(c).gen != null) {
+                for (i) in 0..args.len {
+                    put(&given, try this.expr(args.at(i), this.generic_closure_want(c, i)));
+                }
+                var tys: std::vec<u32> = {};
+                for (g&) in given.items() {
+                    put(&tys, g.ty);
+                }
+                inst = try this.closure_instance(c, &tys, span);
+            }
+        },
+        default => {},
+    }
     match (*this.t.get(f.ty)) {
         .FN_PTR(p, r, v) => {
             ps = copy p;
@@ -126,10 +144,10 @@ attach fn call_value(this: checker&, f: tval, args: std::vec<expr>&, span: span)
             kind = 1;
         },
         .CLOSURE(c) => {
-            ps = copy this.ci(c).params;
-            ret = this.ci(c).ret;
+            closure = inst ?? c;
+            ps = copy this.ci(closure).params;
+            ret = this.ci(closure).ret;
             kind = 2;
-            closure = c;
         },
         default => { return fail(span, fmt("can't call a {}", this.ty_name(f.ty))); },
     }
@@ -148,7 +166,12 @@ attach fn call_value(this: checker&, f: tval, args: std::vec<expr>&, span: span)
         val a = args.at(i);
         if (i < ps.len) {
             val p = *ps.at(i);
-            val v = try this.expr(a, p);
+            var v = vnew(0, 0);
+            if (i < given.len) {
+                v = *given.at(i);
+            } else {
+                v = try this.expr(a, p);
+            }
             val tv = try this.take_into(v, p, a.span);
             if (this.reaches(p)) {
                 this.note_arg(callee, i, &tv, a.span);

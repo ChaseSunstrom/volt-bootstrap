@@ -311,7 +311,7 @@ attach fn coercible(this: checker&, v: tval&, to: u32) -> bool {
         },
         .CLOSURE(c) => {
             match (*tt) {
-                .FN_VAL(ps&, r) => { return this.closure_sig_is(v.ty, ps, r); },
+                .FN_VAL(ps&, r) => { return this.closure_sig_is(v.ty, ps, r) || this.generic_closure_takes(v.ty, ps.len); },
                 default => {},
             }
         },
@@ -471,13 +471,23 @@ attach fn coerce(this: checker&, v: tval, to: u32, span: span) -> compile_error!
         .CLOSURE(c) => {
             match (*tt) {
                 .FN_VAL(ps&, r) => {
-                    if (this.closure_sig_is(v.ty, ps, r)) {
+                    val plain = this.closure_sig_is(v.ty, ps, r);
+                    if (plain || this.generic_closure_takes(v.ty, ps.len)) {
                         // a closure literal lives to the end of the enclosing block
                         // ponytail: the fn value can still outlive a stored-away literal; a borrow check would catch it
                         if (!v.lv && !this.is_closure_literal(&v)) {
                             return fails(span, "a fn(...) value borrows its closure; store the closure in a variable first");
                         }
-                        return retyped(&v, to, this.closure_to_fn(&v, to));
+                        // a generic closure: its instance for these parameters
+                        var body = c;
+                        if (!plain) {
+                            body = try this.closure_instance(c, ps, span);
+                            if (this.ci(body).ret != r || !same_list(&this.ci(body).params, ps)) {
+                                val got = this.t.intern(tyk::FN_VAL(copy this.ci(body).params, this.ci(body).ret));
+                                return fail(span, fmt2("for these parameters this closure is a {}, not a {}", this.ty_name(got), this.ty_name(to)));
+                            }
+                        }
+                        return retyped(&v, to, this.closure_to_fn(&v, to, body));
                     }
                 },
                 default => {},

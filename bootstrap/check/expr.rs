@@ -160,7 +160,7 @@ impl Checker {
             (Ty::Str, Ty::Slice(b)) => *b == U8,
             (_, Ty::TraitUnion(_)) => self.union_member(to, v.ty).is_some(),
             (Ty::Struct(_), Ty::Ref(t) | Ty::Ptr(t)) => self.box_inner(v.ty) == Some(*t) && v.lv,
-            (Ty::Closure(_), Ty::FnVal(ps, r)) => self.closure_sig(v.ty) == Some((ps.clone(), *r)),
+            (Ty::Closure(_), Ty::FnVal(ps, r)) => self.closure_sig(v.ty) == Some((ps.clone(), *r)) || self.generic_closure_arity(v.ty) == Some(ps.len()),
             _ => self.error_coercible(v, to),
         }
     }
@@ -223,13 +223,23 @@ impl Checker {
                 let c = self.cty(to);
                 ok(to, format!("({{ volt_str _s = {}; ({c}){{ (uint8_t*)_s.ptr, _s.len }}; }})", v.c), &v)
             }
-            (Ty::Closure(_), Ty::FnVal(ps, r)) if self.closure_sig(v.ty) == Some((ps.clone(), r)) => {
+            (Ty::Closure(id), Ty::FnVal(ps, r)) if self.closure_sig(v.ty) == Some((ps.clone(), r)) || self.generic_closure_arity(v.ty) == Some(ps.len()) => {
                 // a closure literal is a C compound literal, which lives to the end of the block
                 // ponytail: the fn value can still outlive a stored-away literal; a borrow check would catch it
                 if !v.lv && !v.c.starts_with("((volt_closure") {
                     return err(span, "a fn(...) value borrows its closure; store the closure in a variable first");
                 }
-                let c = self.closure_to_fn(&v, to)?;
+                // a generic closure: its instance for these parameters
+                let mut body = id;
+                if self.closure_sig(v.ty).is_none() {
+                    body = self.closure_instance(id, &ps, span)?;
+                    let ci = &self.closures[body as usize];
+                    if ci.params != ps || ci.ret != r {
+                        let got = self.t.intern(Ty::FnVal(ci.params.clone(), ci.ret));
+                        return err(span, format!("for these parameters this closure is a {}, not a {}", self.ty_name(got), self.ty_name(to)));
+                    }
+                }
+                let c = self.closure_to_fn(&v, to, body)?;
                 ok(to, c, &v)
             }
             (Ty::Struct(_), Ty::Ref(t) | Ty::Ptr(t)) if self.box_inner(v.ty) == Some(t) => {
@@ -382,7 +392,7 @@ impl Checker {
             ExprKind::OrElse(a, b) => self.orelse(a, b, span),
             ExprKind::Match { scrut, arms, comptime: true } => self.ct_match(scrut, arms, want, span),
             ExprKind::Match { scrut, arms, .. } => self.match_expr(scrut, arms, want, span),
-            ExprKind::Closure { caps, params, ret, body } => self.closure_expr(caps, params, ret.as_ref(), body, want, span),
+            ExprKind::Closure { caps, generics, params, ret, body } => self.closure_expr(caps, generics, params, ret.as_ref(), body, want, span),
             ExprKind::Await(x) => self.await_expr(x, want),
             ExprKind::Async(_) => err(span, "async f() builds a frame in place, so it only works as `val fr = async f()`"),
         }

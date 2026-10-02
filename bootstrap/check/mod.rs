@@ -730,6 +730,10 @@ impl Checker {
                 format!("{}!{payload}", if *e == ANYERR { String::new() } else { self.ty_name(*e) })
             }
             Ty::TraitUnion(u) => self.unions[*u as usize].name.clone(),
+            Ty::Closure(c) if self.closures[*c as usize].generic.is_some() => {
+                let g = self.closures[*c as usize].generic.as_ref().unwrap();
+                format!("closure<{}>", g.gps.iter().map(|g| g.name.clone()).collect::<Vec<_>>().join(", "))
+            }
             Ty::Closure(c) => {
                 let ci = &self.closures[*c as usize];
                 let ps: Vec<String> = ci.params.iter().map(|p| self.ty_name(*p)).collect();

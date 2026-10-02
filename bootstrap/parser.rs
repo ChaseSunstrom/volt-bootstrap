@@ -1421,7 +1421,8 @@ impl<'a> Parser<'a> {
         Ok(Expr { kind, span: start.to(self.prev_span()) })
     }
 
-    /// `|a, b&, move c| (params) -> R { body }`: captures copy unless marked `&` (by reference) or `move`
+    /// `|a, b&, move c| (params) -> R { body }`: captures copy unless marked `&` (by reference) or `move`;
+    /// `|c| <T: type>(x: T) { }` is generic
     fn closure(&mut self) -> Res<Expr> {
         let start = self.span();
         let mut caps = Vec::new();
@@ -1444,10 +1445,11 @@ impl<'a> Parser<'a> {
                 }
             }
         }
+        let generics = if self.is("<") { self.generic_params()? } else { Vec::new() };
         let (params, _) = self.params()?;
         let ret = if self.eat("->") { Some(self.parse_type()?) } else { None };
         let body = self.block()?;
-        Ok(Expr { kind: ExprKind::Closure { caps, params, ret, body }, span: start.to(self.prev_span()) })
+        Ok(Expr { kind: ExprKind::Closure { caps, generics, params, ret, body }, span: start.to(self.prev_span()) })
     }
 
     /// a match pattern. A bare name binds (`n`, or `n&` by reference); a constructor needs `.X`, a
