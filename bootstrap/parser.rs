@@ -37,7 +37,27 @@ pub fn collect_generic_names(toks: &[Token], out: &mut HashSet<String>) {
                         j += 1;
                     }
                 }
-                _ => break,
+                _ => {
+                    // @attributes([...]) between the generics and the declaration: past its parens
+                    if !matches!(toks.get(j).map(|t| &t.tok), Some(Tok::Builtin(s)) if s == "attributes") {
+                        break;
+                    }
+                    j += 1;
+                    let mut depth = 0;
+                    while let Some(t) = toks.get(j) {
+                        j += 1;
+                        match &t.tok {
+                            Tok::Punct("(") => depth += 1,
+                            Tok::Punct(")") => {
+                                depth -= 1;
+                                if depth == 0 {
+                                    break;
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
             }
         }
         if let Some("fn" | "struct" | "enum" | "trait" | "error" | "type") = ident(j) {

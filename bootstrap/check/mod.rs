@@ -1575,14 +1575,15 @@ impl Checker {
         self.cx = saved;
         let (ty, init) = res?;
         let cty = self.cty(ty);
-        let konst = if l.mutable { "" } else { "const " };
+        // `T const name`: the global itself is constant; for a pointer, not what it points to
+        let konst = if l.mutable { "" } else { " const" };
         let pkg = self.pkg_of(decl).map(String::from);
         let tls = if item.attrs.iter().any(|a| matches!(&a.kind, ExprKind::Builtin(n, _, _) if n == "thread_local")) { "_Thread_local " } else { "" };
         if pkg.is_some() && self.opts.linked.contains(pkg.as_ref().unwrap()) {
-            self.globals.push_str(&format!("extern {tls}{konst}{cty} {c};\n")); // defined in the package's library
+            self.globals.push_str(&format!("extern {tls}{cty}{konst} {c};\n")); // defined in the package's library
         } else {
             let storage = if pkg.is_some() && self.opts.lib == pkg { "" } else { "static " };
-            self.globals.push_str(&format!("{storage}{tls}{konst}{cty} {c} = {init};\n"));
+            self.globals.push_str(&format!("{storage}{tls}{cty}{konst} {c} = {init};\n"));
         }
         let g = (c, ty, l.mutable);
         self.global_c.insert(decl, g.clone());

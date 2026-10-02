@@ -290,7 +290,14 @@ attach fn pat_code(this: checker&, p: pat&, c: u32, t: u32) -> compile_error!pat
             return move o;
         },
         .LIT(e&) => {
-            val v = try this.expr(e, t);
+            // null stays null (compare tests any optional against it); other literals take the
+            // matched value's type
+            var want: u32? = t;
+            match (e.kind) {
+                .NULL => { want = null; },
+                default => {},
+            }
+            val v = try this.expr(e, want);
             var bool_val: bool? = null;
             if (t == BOOL) {
                 match (e.kind) {

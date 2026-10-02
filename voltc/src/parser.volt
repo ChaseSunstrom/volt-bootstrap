@@ -69,6 +69,14 @@ fn append_u128(s: std::string&, v: u128) -> void {
 }
 
 // Names declared with a generic prefix: `<...> [modifiers] fn|struct|enum|trait|error|type NAME`.
+// whether the token is @attributes
+fn is_attributes(t: tok&) -> bool {
+    match (*t) {
+        .BUILTIN(s) => { return s == "attributes"; },
+        default => { return false; },
+    }
+}
+
 fn collect_generic_names(toks: std::vec<token>&, out: std::map<str, bool>&) -> void {
     for (i) in 0..toks.len {
         if ((punct_of(&(toks.at(i).tok)) ?? "") != ">") {
@@ -88,6 +96,22 @@ fn collect_generic_names(toks: std::vec<token>&, out: std::map<str, bool>&) -> v
                     match (toks.at(j).tok) {
                         .STR(s) => { j += 1; },
                         default => {},
+                    }
+                }
+            } else if (is_attributes(&(toks.at(j).tok))) {
+                // @attributes([...]) between the generics and the declaration: past its parens
+                j += 1;
+                var depth = 0;
+                while (j < toks.len) {
+                    val p = punct_of(&(toks.at(j).tok)) ?? "";
+                    j += 1;
+                    if (p == "(") {
+                        depth += 1;
+                    } else if (p == ")") {
+                        depth -= 1;
+                        if (depth == 0) {
+                            break;
+                        }
                     }
                 }
             } else {

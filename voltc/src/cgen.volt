@@ -18,6 +18,8 @@ struct cgen {
     // fn_idx: the fn whose body is being written; tmp: its fresh() counter
     fn_idx: u32 = 0;
     tmp: u32 = 0;
+    // writing a global's initializer: another constant global read there is its initializer
+    in_init: bool = false;
     // statements go one per line at depth (4 spaces each), except inside a statement expression
     // (inline > 0), which stays on one line
     depth: usize = 0;
@@ -892,7 +894,14 @@ attach fn expr(this: cgen&, out: std::string&, n: u32) -> void {
                 out.append(this.local_name(id));
             }
         },
-        .GLOBAL(g) => { out.append(this.c.ir.globals.at(@cast<usize>(g)).name); },
+        .GLOBAL(g) => {
+            val gl = this.c.ir.globals.at(@cast<usize>(g));
+            if (this.in_init && !gl.mutable && gl.init != null && gl.link != linkage::EXTERNAL) {
+                this.value_as(out, gl.init ?? 0, gl.ty);
+            } else {
+                out.append(gl.name);
+            }
+        },
         .FN(f) => { out.append(this.c.ir.fn_at(f).name); },
         .RT(name) => { out.append(name); },
         .FIELD(b, i) => {
@@ -2013,7 +2022,9 @@ attach fn global_def(this: cgen&, out: std::string&, g: u32) -> void {
         // an initializer belongs to no fn: clear the per-fn state
         this.fn_idx = 0;
         this.locals = {};
+        this.in_init = true;
         this.value_as(out, gl.init ?? 0, gl.ty);
+        this.in_init = false;
     }
     out.append(";\n");
 }

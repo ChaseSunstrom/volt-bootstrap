@@ -207,7 +207,9 @@ impl Checker {
                 Ok(any(vec![(n.clone(), ty, c.to_string(), false)]))
             }
             PatKind::Lit(e) => {
-                let v = self.expr(e, Some(ty))?;
+                // null stays null (compare tests any optional against it); other literals take the
+                // matched value's type
+                let v = if matches!(e.kind, ExprKind::Null) { self.expr(e, None)? } else { self.expr(e, Some(ty))? };
                 let bool_val = if ty == BOOL {
                     matches!(e.kind, ExprKind::Bool(true)).then_some(true).or(matches!(e.kind, ExprKind::Bool(false)).then_some(false))
                 } else {
