@@ -116,18 +116,28 @@ static int32_t volt_out_word;
 static void *volt_out_owner;
 static int volt_out_depth;
 static _Thread_local char volt_out_me;
+#ifdef VOLT_C_STDOUT
+void volt_flockfile(void *) VOLT_SYM("flockfile");
+void volt_funlockfile(void *) VOLT_SYM("funlockfile");
+#endif
 void volt_lock_out(void) {
     if (__atomic_load_n(&volt_out_owner, __ATOMIC_RELAXED) == &volt_out_me) {
         volt_out_depth++;
         return;
     }
     volt_lock_word(&volt_out_word);
+#ifdef VOLT_C_STDOUT
+    volt_flockfile(volt_c_stdout); /* for volt_to_stdout's unlocked writes */
+#endif
     __atomic_store_n(&volt_out_owner, &volt_out_me, __ATOMIC_RELAXED);
     volt_out_depth = 1;
 }
 void volt_unlock_out(void) {
     if (--volt_out_depth) return;
     __atomic_store_n(&volt_out_owner, (void *)0, __ATOMIC_RELAXED);
+#ifdef VOLT_C_STDOUT
+    volt_funlockfile(volt_c_stdout);
+#endif
     volt_unlock_word(&volt_out_word);
 }
 /* Allocation for libraries (std::mem binds it with @intrinsic). Debug builds add a header so double/invalid frees panic

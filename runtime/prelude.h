@@ -103,7 +103,29 @@ VOLT_RT_LINKAGE bool volt_str_eq(volt_str a, volt_str b) {
    streams (stdout buffered, stderr not); std::write and std::format make one around a writer, with a
    compiler-made function that calls the writer's write_str */
 typedef struct volt_sink { void (*write)(void *ctx, volt_str s); void *ctx; } volt_sink;
-VOLT_RT_LINKAGE void volt_to_stdout(void *ctx, volt_str s) { (void)ctx; volt_printf("%.*s", (int)s.len, (const char *)s.ptr); }
+/* stdout: written straight into stdio's buffer (the one C code's printf uses, so their lines stay in
+   order). A print statement holds the FILE's lock for all of its pieces (volt_lock_out), so each
+   write skips locking where libc has a way to */
+#if defined(__APPLE__) || defined(__FreeBSD__)
+#define VOLT_C_STDOUT 1
+extern void *volt_c_stdout VOLT_SYM("__stdoutp");
+#elif defined(__linux__)
+#define VOLT_C_STDOUT 1
+extern void *volt_c_stdout VOLT_SYM("stdout");
+#endif
+#if defined(VOLT_C_STDOUT) && defined(__GLIBC__)
+size_t volt_fwrite(const void *, size_t, size_t, void *) VOLT_SYM("fwrite_unlocked");
+#elif defined(VOLT_C_STDOUT)
+size_t volt_fwrite(const void *, size_t, size_t, void *) VOLT_SYM("fwrite");
+#endif
+VOLT_RT_LINKAGE void volt_to_stdout(void *ctx, volt_str s) {
+    (void)ctx;
+#ifdef VOLT_C_STDOUT
+    volt_fwrite(s.ptr, 1, s.len, volt_c_stdout);
+#else
+    volt_printf("%.*s", (int)s.len, (const char *)s.ptr);
+#endif
+}
 VOLT_RT_LINKAGE void volt_to_stderr(void *ctx, volt_str s) { (void)ctx; volt_dprintf(2, "%.*s", (int)s.len, (const char *)s.ptr); }
 VOLT_RT_LINKAGE volt_sink *volt_stdout(void) { static volt_sink s = { volt_to_stdout, 0 }; return &s; }
 VOLT_RT_LINKAGE volt_sink *volt_stderr(void) { static volt_sink s = { volt_to_stderr, 0 }; return &s; }
@@ -137,7 +159,7 @@ VOLT_RT_LINKAGE void volt_out(const volt_sink *s, const char *fmt, ...) {
 VOLT_RT_LINKAGE void volt_put(const volt_sink *s, const char *p, size_t n) {
     if (n) s->write(s->ctx, (volt_str){ (const uint8_t *)p, n });
 }
-VOLT_RT_LINKAGE void volt_print_str(const volt_sink *s, volt_str t) { volt_out(s, "%.*s", (int)t.len, (const char *)t.ptr); }
+VOLT_RT_LINKAGE void volt_print_str(const volt_sink *s, volt_str t) { volt_put(s, (const char *)t.ptr, t.len); }
 VOLT_RT_LINKAGE void volt_print_u128(const volt_sink *s, unsigned __int128 v) {
     char buf[40];
     int i = 39;
