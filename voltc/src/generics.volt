@@ -1295,6 +1295,21 @@ attach fn resolve_rest(this: checker&, name: str, cands: std::vec<u32>&, rp: tva
         }
     }
     if (vs.len == 0) {
+        // versions attached to other types are no news once some version takes this receiver
+        if (rp) {
+            val r = rp;
+            val other = fmt2("'{}' doesn't take a {} as this", S(name), this.ty_name(r.ty));
+            var kept: std::vec<diag> = {};
+            for (d&) in reasons.items() {
+                if (d.msg.as_str() != other.as_str()) {
+                    put(&kept, copy *d);
+                }
+            }
+            if (kept.len == 0 && reasons.len > 0) {
+                put(&kept, copy *reasons.at(0));
+            }
+            reasons = move kept;
+        }
         if (reasons.len == 1) {
             return compile_error::AT(copy *reasons.at(0));
         }

@@ -663,6 +663,15 @@ impl Checker {
             viable.push((inst, adj, score, self.blanket_positions(d)));
         }
         viable.sort_by_key(|v| (-v.2, v.3));
+        // versions attached to other types are no news once some version takes this receiver
+        if let Some(r) = &recv {
+            let other = format!("'{name}' doesn't take a {} as this", self.ty_name(r.ty));
+            if reasons.iter().any(|d| d.msg != other) {
+                reasons.retain(|d| d.msg != other);
+            } else {
+                reasons.truncate(1);
+            }
+        }
         let (inst, adj) = match viable.as_slice() {
             [] if reasons.len() == 1 => return Err(reasons.remove(0)),
             [] => {
