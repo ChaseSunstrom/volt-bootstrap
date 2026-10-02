@@ -37,6 +37,7 @@ Each file is wrapped in `namespace std`, and most declare a namespace of their o
 | [`std::json`](/volt-bootstrap/std/json/) | JSON values: parse, build and print |
 | [`std::base64`, `std::hex`](/volt-bootstrap/std/encoding/) | bytes as base64 (standard and URL-safe) or hex text, and back ([Encoding and hashing](/volt-bootstrap/std/encoding/)) |
 | [`std::digest`](/volt-bootstrap/std/digest/) | CRC-32, 64-bit FNV-1a and SHA-256 (in one call, or fed in pieces) |
+| [`std::softfloat`](/volt-bootstrap/std/softfloat/) | IEEE 754 arithmetic, comparison and conversion on the bits of `f32`s and `f64`s with integer instructions only: what [bare metal](/volt-bootstrap/voltc/bare-metal/) cores without a floating-point unit use |
 | [`std::testing`](/volt-bootstrap/std/testing/) | assertions that print the values they compared (`assert_eq`, `assert_near`, ...), and `run` for a file of tests ([Tests](/volt-bootstrap/bolt/testing/)) |
 
 ## Reaching the names

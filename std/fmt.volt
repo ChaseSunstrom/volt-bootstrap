@@ -1049,7 +1049,8 @@ namespace fmt {
     internal fn shortest(out: u8*, v: f64, f32: bool) -> usize {
         val buf = @slice(out, 32);
         var n: usize = 0;
-        if (v != v) {
+        // NaN by its bits: no float comparison (cores without an FPU would call a routine for one)
+        if ((f64_bits(v) & 0x7FFFFFFFFFFFFFFF) > 0x7FF0000000000000) {
             buf[0] = 'n';
             buf[1] = 'a';
             buf[2] = 'n';

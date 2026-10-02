@@ -5,3 +5,4 @@ led off
 led on
 led off
 3 blinks on qemu riscv virt
+on 50.0% of the time, 0.5 of 1

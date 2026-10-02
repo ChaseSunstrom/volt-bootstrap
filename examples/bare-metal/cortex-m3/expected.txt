@@ -5,3 +5,4 @@ led off
 led on
 led off
 3 blinks on lm3s6965 (Cortex-M3)
+on 50.0% of the time, 0.5 of 1

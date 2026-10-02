@@ -5,8 +5,9 @@ Volt on machines with no operating system, built with no C compiler and no C lib
 with `ld.lld`. See the [Bare metal](https://chasesunstrom.github.io/volt-bootstrap/voltc/bare-metal/)
 page for the targets, the board's hooks and the linker script's symbols.
 
-`blinky.volt` is the program: it blinks the board's LED a few times, prints each change and how many
-blinks there were (std's printing, a `vec` and a `box`), and returns 0. Each directory is a board qemu
+`blinky.volt` is the program: it blinks the board's LED a few times, prints each change, how many
+blinks there were and how much of the time the LED was on (std's printing, a `vec`, a `box`, and
+floating point, in software on the cores without an FPU), and returns 0. Each directory is a board qemu
 emulates:
 
 | Directory | Board | `--target` |

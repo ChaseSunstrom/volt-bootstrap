@@ -1,8 +1,8 @@
 // std on bare metal (voltc --target ..-none): the runtime the compiler's code calls, in Volt instead of
 // C. Panics, bounds and printing go to the board's volt_console_write; the program ends in the board's
 // volt_exit (voltc's start code has defaults for both). Memory comes from a heap between the linker
-// script's __heap_start and __heap_end. It also gives what LLVM calls for copies, fills and 64-bit
-// division on 32-bit cores, which a C library would.
+// script's __heap_start and __heap_end. It also gives what LLVM calls for copies, fills, 64-bit
+// division and floating point on 32-bit cores, which a C library and libgcc would.
 // (Part of package std: the package loader wraps every file in `namespace std`.)
 
 @attributes([@cfg("os", "none")])
@@ -334,5 +334,119 @@ namespace bare {
             return 0;
         }
         export fn bcmp(a: u8*, b: u8*, n: usize) -> i32 { return memcmp(a, b, n); }
+    }
+
+    // ---- floating point on cores without an FPU (std::softfloat), under the names LLVM calls ----
+
+    @attributes([@cfg("pointer_bits", "32")])
+    namespace soft {
+        // a float's bits and back, by copying bytes (no float instructions)
+        fn b64(v: f64) -> u64 {
+            var r: u64 = 0;
+            var x = v;
+            val from = @cast<u8*>(&x);
+            val to = @cast<u8*>(&r);
+            for (i) in 0..8 {
+                to[i] = from[i];
+            }
+            return r;
+        }
+        fn f64_of(b: u64) -> f64 {
+            var r: f64 = 0.0;
+            var x = b;
+            val from = @cast<u8*>(&x);
+            val to = @cast<u8*>(&r);
+            for (i) in 0..8 {
+                to[i] = from[i];
+            }
+            return r;
+        }
+        fn b32(v: f32) -> u32 {
+            var r: u32 = 0;
+            var x = v;
+            val from = @cast<u8*>(&x);
+            val to = @cast<u8*>(&r);
+            for (i) in 0..4 {
+                to[i] = from[i];
+            }
+            return r;
+        }
+        fn f32_of(b: u32) -> f32 {
+            var r: f32 = 0.0;
+            var x = b;
+            val from = @cast<u8*>(&x);
+            val to = @cast<u8*>(&r);
+            for (i) in 0..4 {
+                to[i] = from[i];
+            }
+            return r;
+        }
+
+        export fn __adddf3(a: f64, b: f64) -> f64 { return f64_of(std::softfloat::add64(b64(a), b64(b))); }
+        export fn __subdf3(a: f64, b: f64) -> f64 { return f64_of(std::softfloat::sub64(b64(a), b64(b))); }
+        export fn __muldf3(a: f64, b: f64) -> f64 { return f64_of(std::softfloat::mul64(b64(a), b64(b))); }
+        export fn __divdf3(a: f64, b: f64) -> f64 { return f64_of(std::softfloat::div64(b64(a), b64(b))); }
+        export fn __negdf2(a: f64) -> f64 { return f64_of(b64(a) ^ std::softfloat::SIGN); }
+        export fn __addsf3(a: f32, b: f32) -> f32 { return f32_of(std::softfloat::add32(b32(a), b32(b))); }
+        export fn __subsf3(a: f32, b: f32) -> f32 { return f32_of(std::softfloat::sub32(b32(a), b32(b))); }
+        export fn __mulsf3(a: f32, b: f32) -> f32 { return f32_of(std::softfloat::mul32(b32(a), b32(b))); }
+        export fn __divsf3(a: f32, b: f32) -> f32 { return f32_of(std::softfloat::div32(b32(a), b32(b))); }
+        export fn __negsf2(a: f32) -> f32 { return f32_of(b32(a) ^ 0x80000000); }
+
+        // comparisons, as libgcc's: <0, 0 or >0 like a - b; a NaN gives 1 to eq/ne/lt/le, -1 to
+        // ge/gt, so each comparison comes out false
+        fn le64(a: f64, b: f64) -> i32 {
+            val c = std::softfloat::cmp64(b64(a), b64(b));
+            if (c == 2) {
+                return 1;
+            }
+            return c;
+        }
+        fn ge64(a: f64, b: f64) -> i32 {
+            val c = std::softfloat::cmp64(b64(a), b64(b));
+            if (c == 2) {
+                return -1;
+            }
+            return c;
+        }
+        export fn __eqdf2(a: f64, b: f64) -> i32 { return le64(a, b); }
+        export fn __nedf2(a: f64, b: f64) -> i32 { return le64(a, b); }
+        export fn __ltdf2(a: f64, b: f64) -> i32 { return le64(a, b); }
+        export fn __ledf2(a: f64, b: f64) -> i32 { return le64(a, b); }
+        export fn __gedf2(a: f64, b: f64) -> i32 { return ge64(a, b); }
+        export fn __gtdf2(a: f64, b: f64) -> i32 { return ge64(a, b); }
+        export fn __unorddf2(a: f64, b: f64) -> i32 {
+            if (std::softfloat::is_nan(b64(a)) || std::softfloat::is_nan(b64(b))) {
+                return 1;
+            }
+            return 0;
+        }
+        export fn __eqsf2(a: f32, b: f32) -> i32 { return le64(__extendsfdf2(a), __extendsfdf2(b)); }
+        export fn __nesf2(a: f32, b: f32) -> i32 { return le64(__extendsfdf2(a), __extendsfdf2(b)); }
+        export fn __ltsf2(a: f32, b: f32) -> i32 { return le64(__extendsfdf2(a), __extendsfdf2(b)); }
+        export fn __lesf2(a: f32, b: f32) -> i32 { return le64(__extendsfdf2(a), __extendsfdf2(b)); }
+        export fn __gesf2(a: f32, b: f32) -> i32 { return ge64(__extendsfdf2(a), __extendsfdf2(b)); }
+        export fn __gtsf2(a: f32, b: f32) -> i32 { return ge64(__extendsfdf2(a), __extendsfdf2(b)); }
+        export fn __unordsf2(a: f32, b: f32) -> i32 { return __unorddf2(__extendsfdf2(a), __extendsfdf2(b)); }
+
+        // conversions
+        export fn __extendsfdf2(a: f32) -> f64 { return f64_of(std::softfloat::f32_to_f64(b32(a))); }
+        export fn __truncdfsf2(a: f64) -> f32 { return f32_of(std::softfloat::f64_to_f32(b64(a))); }
+        export fn __fixdfsi(a: f64) -> i32 { return std::softfloat::f64_to_i32(b64(a)); }
+        export fn __fixdfdi(a: f64) -> i64 { return std::softfloat::f64_to_i64(b64(a)); }
+        export fn __fixunsdfsi(a: f64) -> u32 { return std::softfloat::f64_to_u32(b64(a)); }
+        export fn __fixunsdfdi(a: f64) -> u64 { return std::softfloat::f64_to_u64(b64(a)); }
+        export fn __fixsfsi(a: f32) -> i32 { return __fixdfsi(__extendsfdf2(a)); }
+        export fn __fixsfdi(a: f32) -> i64 { return __fixdfdi(__extendsfdf2(a)); }
+        export fn __fixunssfsi(a: f32) -> u32 { return __fixunsdfsi(__extendsfdf2(a)); }
+        export fn __fixunssfdi(a: f32) -> u64 { return __fixunsdfdi(__extendsfdf2(a)); }
+        export fn __floatsidf(i: i32) -> f64 { return f64_of(std::softfloat::i64_to_f64(@cast<i64>(i))); }
+        export fn __floatdidf(i: i64) -> f64 { return f64_of(std::softfloat::i64_to_f64(i)); }
+        export fn __floatunsidf(i: u32) -> f64 { return f64_of(std::softfloat::u64_to_f64(false, @cast<u64>(i))); }
+        export fn __floatundidf(i: u64) -> f64 { return f64_of(std::softfloat::u64_to_f64(false, i)); }
+        export fn __floatsisf(i: i32) -> f32 { return f32_of(std::softfloat::i64_to_f32(@cast<i64>(i))); }
+        export fn __floatdisf(i: i64) -> f32 { return f32_of(std::softfloat::i64_to_f32(i)); }
+        export fn __floatunsisf(i: u32) -> f32 { return f32_of(std::softfloat::u64_to_f32(false, @cast<u64>(i))); }
+        export fn __floatundisf(i: u64) -> f32 { return f32_of(std::softfloat::u64_to_f32(false, i)); }
     }
 }
