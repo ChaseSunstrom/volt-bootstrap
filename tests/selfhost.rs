@@ -314,6 +314,8 @@ fn runtime_compiles_for_every_target() {
     let targets = [
         "x86_64-linux-gnu", "aarch64-linux-gnu", "riscv64-linux-gnu", "x86_64-apple-macos11", "arm64-apple-macos11",
         "x86_64-pc-windows-msvc", "aarch64-pc-windows-msvc", "x86_64-w64-windows-gnu", "x86_64-unknown-freebsd",
+        // 32-bit: no __int128, so i128 is _BitInt(128)
+        "i686-linux-gnu", "armv7-linux-gnueabihf", "i686-pc-windows-msvc",
     ];
     for t in targets {
         for debug in [true, false] {

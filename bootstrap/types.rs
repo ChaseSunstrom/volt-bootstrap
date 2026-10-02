@@ -66,13 +66,13 @@ impl IntTy {
             I16 => "int16_t",
             I32 => "int32_t",
             I64 => "int64_t",
-            I128 => "__int128",
+            I128 => "volt_i128",
             Isize => "ptrdiff_t",
             U8 => "uint8_t",
             U16 => "uint16_t",
             U32 => "uint32_t",
             U64 => "uint64_t",
-            U128 => "unsigned __int128",
+            U128 => "volt_u128",
             Usize => "size_t",
         }
     }
@@ -83,7 +83,7 @@ impl IntTy {
             16 => "uint16_t",
             32 => "uint32_t",
             64 => "uint64_t",
-            _ => "unsigned __int128",
+            _ => "volt_u128",
         }
     }
     /// whether the constant v is representable in this type

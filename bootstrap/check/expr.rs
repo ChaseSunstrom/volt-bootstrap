@@ -63,7 +63,7 @@ impl Checker {
             Ty::Int(k) => {
                 if k.bits() == 128 {
                     let u = v as u128;
-                    format!("(({})(((unsigned __int128){}ULL << 64) | {}ULL))", k.c(), (u >> 64) as u64, u as u64)
+                    format!("(({})(((volt_u128){}ULL << 64) | {}ULL))", k.c(), (u >> 64) as u64, u as u64)
                 } else if v == i64::MIN as i128 {
                     format!("(({})(-9223372036854775807LL - 1))", k.c())
                 } else if v < 0 {

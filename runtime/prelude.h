@@ -4,6 +4,15 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdarg.h>
+/* 128-bit integers: the C compiler's own where the target has them (64-bit targets), else C23's
+   _BitInt(128), which clang and gcc give 32-bit targets too */
+#ifdef __SIZEOF_INT128__
+typedef __int128 volt_i128;
+typedef unsigned __int128 volt_u128;
+#else
+typedef _BitInt(128) volt_i128;
+typedef unsigned _BitInt(128) volt_u128;
+#endif
 #define VOLT_S2(x) #x
 #define VOLT_S(x) VOLT_S2(x)
 #define VOLT_SYM(n) __asm__(VOLT_S(__USER_LABEL_PREFIX__) n)
@@ -52,9 +61,9 @@ VOLT_RT_LINKAGE _Noreturn void volt_bounds(size_t i, size_t len, const char *loc
     static inline T volt_sub_##N(T a, T b, const char *loc) { T r; if (__builtin_sub_overflow(a, b, &r)) volt_panic("integer overflow", loc); return r; } \
     static inline T volt_mul_##N(T a, T b, const char *loc) { T r; if (__builtin_mul_overflow(a, b, &r)) volt_panic("integer overflow", loc); return r; }
 VOLT_CHECKED(i8, int8_t) VOLT_CHECKED(i16, int16_t) VOLT_CHECKED(i32, int32_t) VOLT_CHECKED(i64, int64_t)
-VOLT_CHECKED(i128, __int128) VOLT_CHECKED(isize, ptrdiff_t)
+VOLT_CHECKED(i128, volt_i128) VOLT_CHECKED(isize, ptrdiff_t)
 VOLT_CHECKED(u8, uint8_t) VOLT_CHECKED(u16, uint16_t) VOLT_CHECKED(u32, uint32_t) VOLT_CHECKED(u64, uint64_t)
-VOLT_CHECKED(u128, unsigned __int128) VOLT_CHECKED(usize, size_t)
+VOLT_CHECKED(u128, volt_u128) VOLT_CHECKED(usize, size_t)
 /* Atomics for libraries (std::thread binds them with @intrinsic): sequentially consistent load, store,
    swap, add (giving the old value) and compare-and-swap on 32- and 64-bit words */
 #define VOLT_ATOMICS(N, T) \
@@ -160,16 +169,16 @@ VOLT_RT_LINKAGE void volt_put(const volt_sink *s, const char *p, size_t n) {
     if (n) s->write(s->ctx, (volt_str){ (const uint8_t *)p, n });
 }
 VOLT_RT_LINKAGE void volt_print_str(const volt_sink *s, volt_str t) { volt_put(s, (const char *)t.ptr, t.len); }
-VOLT_RT_LINKAGE void volt_print_u128(const volt_sink *s, unsigned __int128 v) {
+VOLT_RT_LINKAGE void volt_print_u128(const volt_sink *s, volt_u128 v) {
     char buf[40];
     int i = 39;
     buf[i] = 0;
     do { buf[--i] = '0' + (int)(v % 10); v /= 10; } while (v);
     volt_out(s, "%s", buf + i);
 }
-VOLT_RT_LINKAGE void volt_print_i128(const volt_sink *s, __int128 v) {
-    if (v < 0) { volt_out(s, "-"); volt_print_u128(s, -(unsigned __int128)v); }
-    else volt_print_u128(s, (unsigned __int128)v);
+VOLT_RT_LINKAGE void volt_print_i128(const volt_sink *s, volt_i128 v) {
+    if (v < 0) { volt_out(s, "-"); volt_print_u128(s, -(volt_u128)v); }
+    else volt_print_u128(s, (volt_u128)v);
 }
 /* A float as the shortest text that reads back as the same value (as a float for f32): %.Ng for
    the smallest N. %g switches to an exponent once it's at least N (1500 at N = 2 is 1.5e+03), so
@@ -270,7 +279,7 @@ VOLT_RT_LINKAGE void volt_fmt_c(const volt_sink *s, uint32_t cp, uint32_t fill, 
     size_t n = volt_utf8_put(b, cp);
     volt_pad(s, fill, align, flags, width, false, "", 0, b, n);
 }
-VOLT_RT_LINKAGE void volt_fmt_u(const volt_sink *s, unsigned __int128 v, int neg, uint32_t fill, int align, int flags, int width, int type) {
+VOLT_RT_LINKAGE void volt_fmt_u(const volt_sink *s, volt_u128 v, int neg, uint32_t fill, int align, int flags, int width, int type) {
     if (type == 'c') { volt_fmt_c(s, (uint32_t)v, fill, align, flags, width); return; }
     unsigned base = type == 'x' || type == 'X' ? 16 : type == 'b' ? 2 : type == 'o' ? 8 : 10;
     const char *digits = type == 'X' ? "0123456789ABCDEF" : "0123456789abcdef";
@@ -288,15 +297,15 @@ VOLT_RT_LINKAGE void volt_fmt_u(const volt_sink *s, unsigned __int128 v, int neg
     volt_pad(s, fill, align, flags, width, true, pre, pn, buf + i, sizeof buf - (size_t)i);
 }
 /* a signed integer of `bits` bits: decimal with its sign; x, b and o show its two's complement */
-VOLT_RT_LINKAGE void volt_fmt_i(const volt_sink *s, __int128 v, int bits, uint32_t fill, int align, int flags, int width, int type) {
+VOLT_RT_LINKAGE void volt_fmt_i(const volt_sink *s, volt_i128 v, int bits, uint32_t fill, int align, int flags, int width, int type) {
     if (type == 'x' || type == 'X' || type == 'b' || type == 'o') {
-        unsigned __int128 u = (unsigned __int128)v;
-        if (bits < 128) u &= (((unsigned __int128)1) << bits) - 1;
+        volt_u128 u = (volt_u128)v;
+        if (bits < 128) u &= (((volt_u128)1) << bits) - 1;
         volt_fmt_u(s, u, 0, fill, align, flags, width, type);
     } else if (v < 0 && type != 'c') {
-        volt_fmt_u(s, -(unsigned __int128)v, 1, fill, align, flags, width, type);
+        volt_fmt_u(s, -(volt_u128)v, 1, fill, align, flags, width, type);
     } else {
-        volt_fmt_u(s, (unsigned __int128)v, 0, fill, align, flags, width, type);
+        volt_fmt_u(s, (volt_u128)v, 0, fill, align, flags, width, type);
     }
 }
 /* e / E: the mantissa (shortest round trip, or prec digits after the point), then e and the

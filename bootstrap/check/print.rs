@@ -171,9 +171,9 @@ impl Checker {
                     return err(span, format!("{{:{kind}}} formats floats, not {name}"));
                 }
                 Ok(if k.signed() {
-                    format!("{}((void*)VOLT_E, (__int128)({c}), {}, {pad}, {}); ", self.rt_fn("volt_fmt_i")?, k.bits(), sp.ty)
+                    format!("{}((void*)VOLT_E, (volt_i128)({c}), {}, {pad}, {}); ", self.rt_fn("volt_fmt_i")?, k.bits(), sp.ty)
                 } else {
-                    format!("{}((void*)VOLT_E, (unsigned __int128)({c}), 0, {pad}, {}); ", self.rt_fn("volt_fmt_u")?, sp.ty)
+                    format!("{}((void*)VOLT_E, (volt_u128)({c}), 0, {pad}, {}); ", self.rt_fn("volt_fmt_u")?, sp.ty)
                 })
             }
             Ty::Float(b) => {

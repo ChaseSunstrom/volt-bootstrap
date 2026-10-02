@@ -40,13 +40,13 @@ fn int_c(k: int_ty) -> str {
         .I16 => { return "int16_t"; },
         .I32 => { return "int32_t"; },
         .I64 => { return "int64_t"; },
-        .I128 => { return "__int128"; },
+        .I128 => { return "volt_i128"; },
         .ISIZE => { return "ptrdiff_t"; },
         .U8 => { return "uint8_t"; },
         .U16 => { return "uint16_t"; },
         .U32 => { return "uint32_t"; },
         .U64 => { return "uint64_t"; },
-        .U128 => { return "unsigned __int128"; },
+        .U128 => { return "volt_u128"; },
         .USIZE => { return "size_t"; },
     }
 }
@@ -60,7 +60,7 @@ fn int_wrap_c(k: int_ty) -> str {
     if (b == 64) {
         return "uint64_t";
     }
-    return "unsigned __int128";
+    return "volt_u128";
 }
 
 // n itself, or "" when n is a C keyword (put_member prefixes those with volt_kw_)
@@ -625,7 +625,7 @@ attach fn int_lit(this: cgen&, out: std::string&, v: i128, t: u32) -> void {
         val u = @cast<u128>(v);
         out.append("((");
         out.append(this.ty(t));
-        out.append(")(((unsigned __int128)");
+        out.append(")(((volt_u128)");
         out.append_uint(@cast<u64>(u >> 64));
         out.append("ULL << 64) | ");
         out.append_uint(@cast<u64>(u & 18446744073709551615));
