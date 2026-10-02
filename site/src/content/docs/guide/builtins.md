@@ -10,6 +10,7 @@ Builtins start with `@`. They're part of the language, not a library.
 | Builtin | Gives | |
 | --- | --- | --- |
 | `@cast<T>(x)` | `T` | converts anything to anything, unchecked. Prefer `x as T`, which only allows safe conversions |
+| `@bitcast<T>(x)` | `T` | the same bits read as type `T`, which must be the same size; plain data only (no destructor). `@bitcast<u64>(1.0)` is `0x3FF0000000000000`, and `@bitcast<f64>` turns it back. A struct's padding bytes come through undefined |
 | `@sizeof(T)` | `usize` | a type's size in bytes |
 | `@alignof(T)` | `usize` | a type's alignment |
 | `@offsetof(T, field)` | `usize` | a field's offset in its struct |

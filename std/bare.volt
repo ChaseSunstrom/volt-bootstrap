@@ -350,47 +350,11 @@ namespace bare {
 
     @attributes([@cfg("pointer_bits", "32")])
     namespace soft {
-        // a float's bits and back, by copying bytes (no float instructions)
-        fn b64(v: f64) -> u64 {
-            var r: u64 = 0;
-            var x = v;
-            val from = @cast<u8*>(&x);
-            val to = @cast<u8*>(&r);
-            for (i) in 0..8 {
-                to[i] = from[i];
-            }
-            return r;
-        }
-        fn f64_of(b: u64) -> f64 {
-            var r: f64 = 0.0;
-            var x = b;
-            val from = @cast<u8*>(&x);
-            val to = @cast<u8*>(&r);
-            for (i) in 0..8 {
-                to[i] = from[i];
-            }
-            return r;
-        }
-        fn b32(v: f32) -> u32 {
-            var r: u32 = 0;
-            var x = v;
-            val from = @cast<u8*>(&x);
-            val to = @cast<u8*>(&r);
-            for (i) in 0..4 {
-                to[i] = from[i];
-            }
-            return r;
-        }
-        fn f32_of(b: u32) -> f32 {
-            var r: f32 = 0.0;
-            var x = b;
-            val from = @cast<u8*>(&x);
-            val to = @cast<u8*>(&r);
-            for (i) in 0..4 {
-                to[i] = from[i];
-            }
-            return r;
-        }
+        // a float's bits and back (register moves: no float instructions)
+        fn b64(v: f64) -> u64 { return @bitcast<u64>(v); }
+        fn f64_of(b: u64) -> f64 { return @bitcast<f64>(b); }
+        fn b32(v: f32) -> u32 { return @bitcast<u32>(v); }
+        fn f32_of(b: u32) -> f32 { return @bitcast<f32>(b); }
 
         export fn __adddf3(a: f64, b: f64) -> f64 { return f64_of(std::softfloat::add64(b64(a), b64(b))); }
         export fn __subdf3(a: f64, b: f64) -> f64 { return f64_of(std::softfloat::sub64(b64(a), b64(b))); }

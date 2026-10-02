@@ -19,28 +19,14 @@ namespace math {
     namespace portable {
         // ---------- bits ----------
 
-        // the bits of an f64 (a byte copy: compilers make it a move)
+        // the bits of an f64
         internal fn bits(v: f64) -> u64 {
-            var x = v;
-            var r: u64 = 0;
-            val from = @slice(@cast<u8*>(&x), 8);
-            val to = @slice(@cast<u8*>(&r), 8);
-            for (i) in 0..8 {
-                to[i] = from[i];
-            }
-            return r;
+            return @bitcast<u64>(v);
         }
 
         // the f64 with these bits
         internal fn from_bits(b: u64) -> f64 {
-            var x = b;
-            var r: f64 = 0.0;
-            val from = @slice(@cast<u8*>(&x), 8);
-            val to = @slice(@cast<u8*>(&r), 8);
-            for (i) in 0..8 {
-                to[i] = from[i];
-            }
-            return r;
+            return @bitcast<f64>(b);
         }
 
         // the high 32 bits: sign, exponent and the fraction's top 20

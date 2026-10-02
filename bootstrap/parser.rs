@@ -15,7 +15,7 @@ const KEYWORDS: &[&str] = &[
 ];
 
 // builtins that take <generic> args
-const GENERIC_BUILTINS: &[&str] = &["cast", "cpp"];
+const GENERIC_BUILTINS: &[&str] = &["cast", "bitcast", "cpp"];
 
 /// Names declared with a generic prefix: `<...> [modifiers] fn|struct|enum|trait|error|type NAME`.
 pub fn collect_generic_names(toks: &[Token], out: &mut HashSet<String>) {

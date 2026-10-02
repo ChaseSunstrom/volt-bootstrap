@@ -516,7 +516,7 @@ attach fn builtin(this: parser&) -> compile_error!expr {
     }
     this.bump();
     var generics: std::vec<garg> = {};
-    if (this.is("<") && (name == "cast" || name == "cpp")) {
+    if (this.is("<") && (name == "cast" || name == "bitcast" || name == "cpp")) {
         generics = try this.generic_args();
     }
     var args: std::vec<garg>? = null;

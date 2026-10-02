@@ -1020,27 +1020,13 @@ namespace fmt {
         return shortest_digits(@cast<u64>(vr), @cast<u64>(vp), @cast<u64>(vm), vm_tz, vr_tz, accept, @cast<u64>(last), e10);
     }
 
-    // the bits of an f64 (a byte copy: compilers make it a move)
+    // the bits of an f64
     internal fn f64_bits(v: f64) -> u64 {
-        var x = v;
-        var r: u64 = 0;
-        val from = @slice(@cast<u8*>(&x), 8);
-        val to = @slice(@cast<u8*>(&r), 8);
-        for (i) in 0..8 {
-            to[i] = from[i];
-        }
-        return r;
+        return @bitcast<u64>(v);
     }
 
     internal fn f32_bits(v: f32) -> u32 {
-        var x = v;
-        var r: u32 = 0;
-        val from = @slice(@cast<u8*>(&x), 4);
-        val to = @slice(@cast<u8*>(&r), 4);
-        for (i) in 0..4 {
-            to[i] = from[i];
-        }
-        return r;
+        return @bitcast<u32>(v);
     }
 
     // v as the shortest text that reads back as the same value (as an f32 when f32 is set), the way

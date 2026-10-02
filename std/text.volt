@@ -428,13 +428,7 @@ attach fn parse_float(this: str&) -> std::text::parse_error!f64 {
         if (neg) {
             bits |= 0x8000000000000000;
         }
-        var r: f64 = 0.0;
-        val from = @cast<u8*>(&bits);
-        val to = @cast<u8*>(&r);
-        for (k) in 0..8 {
-            to[k] = from[k];
-        }
-        return r;
+        return @bitcast<f64>(bits);
     }
     val x = decimal_to_f64(s) ?? return std::text::parse_error::INVALID;
     return x;
@@ -979,13 +973,7 @@ internal fn decimal_to_f64(s: str) -> f64? {
     if (t.neg) {
         b |= 0x8000000000000000;
     }
-    var r: f64 = 0.0;
-    val from = @cast<u8*>(&b);
-    val to = @cast<u8*>(&r);
-    for (k) in 0..8 {
-        to[k] = from[k];
-    }
-    return r;
+    return @bitcast<f64>(b);
 }
 
 // 10^e for e in -348..347, as 128 bits with the top one set, truncated: low half then high half
