@@ -99,12 +99,6 @@ fn err_diag(e: compile_error&) -> diag {
     }
 }
 
-fn err_span(e: compile_error&) -> span {
-    match (*e) {
-        .AT(d) => { return d.span; },
-    }
-}
-
 fn contains(s: str, part: str) -> bool {
     if (part.len > s.len) {
         return false;

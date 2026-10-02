@@ -7537,14 +7537,6 @@ attach fn kt_arg_of(this: bind&, t: u32, name0: str, a: kt_arg&) -> compile_erro
     return;
 }
 
-// does a call to f throw (it returns an error union)?
-attach fn kt_throws(this: bind&, t: u32) -> bool {
-    match (this.shape_of(t) ?? shape::VOID) {
-        .RESULT(e, x) => { return true; },
-        default => { return false; },
-    }
-}
-
 // an expression turning C result r (of type t) into the API's value (raw: a handle stays a pointer)
 attach fn kt_result(this: bind&, t: u32, r: str, raw: bool) -> compile_error!std::string {
     match (this.shape_of(t) ?? shape::VOID) {
