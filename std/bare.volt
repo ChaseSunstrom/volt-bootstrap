@@ -70,18 +70,6 @@ namespace bare {
         volt_hook_exit(101);
     }
 
-    export fn volt_str_eq(a: str, b: str) -> bool {
-        if (a.len != b.len) {
-            return false;
-        }
-        for (i) in 0..a.len {
-            if (a[i] != b[i]) {
-                return false;
-            }
-        }
-        return true;
-    }
-
     // ---- printing: a sink is where print's text goes (the console, or a writer std::format made) ----
 
     struct sink {

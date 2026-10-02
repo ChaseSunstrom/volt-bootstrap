@@ -521,7 +521,7 @@ attach fn compare(this: checker&, op: binop, a: tval, b: tval, span: span) -> co
         },
         .STR => {
             if (!ordered) {
-                var eq = this.ir.rt_call("volt_str_eq", nodes2(av.c, bv.c), BOOL);
+                var eq = try this.rt_any("volt_str_eq", nodes2(av.c, bv.c), BOOL);
                 if (op == binop::NE) {
                     eq = this.ir.unary(unop_ir::NOT, eq, BOOL);
                 }

@@ -4,6 +4,31 @@
 // (Part of package std: the package loader wraps every file in `namespace std`.)
 
 namespace text {
+    // libc's memcmp through the runtime's own binding (no extern of std's to meet a program's own)
+    @attributes([@cfg("hosted")])
+    namespace libc {
+        @attributes([@intrinsic("volt_memcmp")])
+        internal fn memcmp(a: void*, b: void*, n: usize) -> i32;
+    }
+
+    // str == str (@runtime: the compiler's == calls it, so it inlines through either backend)
+    @attributes([@runtime("volt_str_eq")])
+    internal fn str_eq(a: str, b: str) -> bool {
+        if (a.len != b.len) {
+            return false;
+        }
+        comptime if (@cfg("hosted")) {
+            return a.len == 0 || libc::memcmp(@cast<void*>(a.ptr), @cast<void*>(b.ptr), a.len) == 0;
+        } else {
+            for (i) in 0..a.len {
+                if (a[i] != b[i]) {
+                    return false;
+                }
+            }
+            return true;
+        }
+    }
+
     // why parse_int, parse_uint, parse_float or parse_bool failed
     error parse_error {
         EMPTY,    // there was nothing to parse
