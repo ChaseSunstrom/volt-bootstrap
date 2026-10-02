@@ -17,16 +17,35 @@
 // a val passed by reference (this: T[..]&) can be reseated, and its elements can't change.
 // A val is shallow: memory its pointer fields point at isn't part of it. Calls to extern fns aren't
 // checked (C is unchecked), nor are fn values made elsewhere (C callbacks, @cast), and @cast drops
-// where a pointer points. A reference that's returned, or stored in a struct or array, doesn't carry
-// where it points (T-0156).
+// where a pointer points. A reference stored in a struct or array (or returned inside an optional)
+// doesn't carry where it points.
+// A reference a fn returns points where its argument did: each body records where what it returns
+// points (`rets`: a parameter at some depth, or another call's result), solved into a summary a
+// body. A call whose result is a reference is a node of its own (Body::Site, its one parameter the
+// result): writes through the result, or passing it on, mark the site like a parameter, and the
+// site passes them, through the callee's summary, to the arguments of that call: an error where one
+// is read-only (and to the caller's parameter where one reaches it).
 use super::*;
 
-/// what a call runs: a fn instance, a closure's body, or whatever a fn value of this type holds
+/// what a call runs: a fn instance, a closure's body, or whatever a fn value of this type holds;
+/// or a call's result (a site), written through like a parameter
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Body {
     Fn(usize),
     Closure(u32),
     Value(TyId),
+    Site(u32),
+}
+
+/// a via's parameter at or above this is call site k - SITE's result, not a parameter of the body
+pub const SITE: u32 = 1 << 24;
+
+/// a call whose result is a reference: what it calls, from where, and what it lends each reference
+/// parameter (param, ro, via, root, root_param, where)
+pub struct Site {
+    pub callee: Body,
+    pub caller: Option<Body>,
+    pub args: Vec<(usize, u32, Via, String, bool, Span)>,
 }
 
 /// where a reference points, as a parameter's memory: depth e past what it points at is depth e + off
@@ -90,17 +109,52 @@ impl Checker {
         self.writes.get(&b).and_then(|w| w.get(k).copied()).unwrap_or(0)
     }
 
+    /// the parameter via's k names: a parameter of the body being checked, or a call's result
+    fn node(&self, k: u32) -> Option<(Body, usize)> {
+        if k >= SITE {
+            return Some((Body::Site(k - SITE), 0));
+        }
+        self.cx.body.map(|b| (b, k as usize))
+    }
+
     /// assigning to `place`: a write through the parameter it's reached through
     pub fn note_write(&mut self, place: &Val) {
-        if let (Some((k, d)), Some(b)) = (place.pvia, self.cx.body) {
-            if (0..64).contains(&d) {
-                self.mark(b, k as usize, 1 << d);
+        if let Some((k, d)) = place.pvia {
+            if let (Some((b, k)), true) = (self.node(k), (0..64).contains(&d)) {
+                self.mark(b, k, 1 << d);
             }
         }
     }
 
+    /// returning v from the body being checked: where it points, when it's a reference
+    pub fn note_return(&mut self, v: &Val) {
+        if let (Some((k, off)), Some(b), true) = (v.via, self.cx.body, self.reaches(v.ty)) {
+            self.rets.push((b, k, off));
+        }
+    }
+
+    /// a call to `callee` returning `ret`: a site when that's a reference (its arguments are noted
+    /// into it, and its result points at it)
+    pub fn open_site(&mut self, callee: Body, ret: TyId) -> Option<u32> {
+        if !self.reaches(ret) {
+            return None;
+        }
+        self.sites.push(Site { callee, caller: self.cx.body, args: Vec::new() });
+        Some((self.sites.len() - 1) as u32)
+    }
+
+    /// a call's result, pointing at its site
+    pub fn site_result(v: Val, site: Option<u32>) -> Val {
+        match site {
+            Some(s) => Val { via: Some((SITE + s, 0)), ..v },
+            None => v,
+        }
+    }
+
     /// passing a reference (pointer, slice) with this provenance to parameter `param` of `callee`
-    pub fn note_arg(&mut self, callee: Body, param: usize, ro: u32, via: Via, root: Option<&str>, span: Span) {
+    /// (at call `site`, when its result is a reference)
+    #[allow(clippy::too_many_arguments)]
+    pub fn note_arg(&mut self, callee: Body, param: usize, ro: u32, via: Via, root: Option<&str>, span: Span, site: Option<u32>) {
         if let Body::Fn(i) = callee {
             if !self.reaches(self.fns[i].params.get(param).map_or(VOID, |p| p.ty)) || self.fns[i].intrinsic.is_some() {
                 return;
@@ -109,13 +163,18 @@ impl Checker {
                 return; // C: unchecked
             }
         }
+        let root = root.unwrap_or("this").to_string();
+        let root_param = self.lookup_local(&root).is_some_and(|l| l.param);
+        if let Some(s) = site {
+            self.sites[s as usize].args.push((param, ro, via, root.clone(), root_param, span));
+        }
         if ro != 0 {
-            let root = root.unwrap_or("this").to_string();
-            let root_param = self.lookup_local(&root).is_some_and(|l| l.param);
             self.lends.push(Lend { span, callee, param, mask: ro, root, root_param });
         }
-        if let (Some((k, off)), Some(b)) = (via, self.cx.body) {
-            self.edges.push((b, k as usize, off, callee, param));
+        if let Some((k, off)) = via {
+            if let Some((b, k)) = self.node(k) {
+                self.edges.push((b, k, off, callee, param));
+            }
         }
     }
 
@@ -151,6 +210,7 @@ impl Checker {
                 (fname, f.params.get(k).map_or_else(String::new, |p| p.name.clone()))
             }
             Body::Closure(c) => ("a closure".into(), self.closures[c as usize].names.get(k).cloned().unwrap_or_default()),
+            Body::Site(_) => ("a call".into(), String::new()),
             Body::Value(key) => {
                 // the first body behind the value that writes where it's read-only
                 let culprit = self.edges.iter().find(|e| e.0 == b && e.1 == k && self.written(e.3, e.4) & mask != 0).map(|e| e.3);
@@ -165,9 +225,57 @@ impl Checker {
         }
     }
 
+    /// where what each body returns points: (parameter, depth) pairs, through the calls it returns
+    /// the results of (a fixpoint, so recursion works; depths past 63 are dropped)
+    fn return_summaries(&self) -> HashMap<Body, HashSet<(usize, i32)>> {
+        let mut sums: HashMap<Body, HashSet<(usize, i32)>> = HashMap::new();
+        loop {
+            let mut changed = false;
+            for &(b, k, off) in &self.rets {
+                for e in self.expand(&sums, k, off) {
+                    changed |= sums.entry(b).or_default().insert(e);
+                }
+            }
+            // a fn value's results point where any fn made into one does
+            for &(f, _, _, g, _) in &self.edges {
+                if let (Body::Value(_), Some(gs)) = (f, sums.get(&g).cloned()) {
+                    for e in gs {
+                        changed |= sums.entry(f).or_default().insert(e);
+                    }
+                }
+            }
+            if !changed {
+                return sums;
+            }
+        }
+    }
+
+    /// (via k, off) as parameter memory: itself, or for a call's result, where the callee's result
+    /// points as that call's arguments (a call's arguments are calls made before it, so this ends)
+    fn expand(&self, sums: &HashMap<Body, HashSet<(usize, i32)>>, k: u32, off: i32) -> Vec<(usize, i32)> {
+        if off.abs() >= 64 {
+            return Vec::new();
+        }
+        if k < SITE {
+            return vec![(k as usize, off)];
+        }
+        let site = &self.sites[(k - SITE) as usize];
+        let mut out = Vec::new();
+        for &(p, poff) in sums.get(&site.callee).into_iter().flatten() {
+            for (param, _, via, ..) in &site.args {
+                if let (true, Some((k2, o2))) = (*param == p, via) {
+                    out.extend(self.expand(sums, *k2, o2 + poff + off));
+                }
+            }
+        }
+        out
+    }
+
     /// Solve the writes (a parameter is written through when its body writes through it, or passes
     /// it on to one that's written through) and report each lend to one.
     pub fn check_lends(&mut self) {
+        let sums = self.return_summaries();
+        let none = HashSet::new();
         loop {
             let mut changed = false;
             for i in 0..self.edges.len() {
@@ -177,10 +285,44 @@ impl Checker {
                     changed |= self.mark(f, k, w);
                 }
             }
+            // a site's writes reach the arguments its result may point into
+            for s in 0..self.sites.len() {
+                let w = self.written(Body::Site(s as u32), 0);
+                if w == 0 {
+                    continue;
+                }
+                for &(p, poff) in sums.get(&self.sites[s].callee).unwrap_or(&none) {
+                    for a in 0..self.sites[s].args.len() {
+                        let (param, _, via, ..) = self.sites[s].args[a].clone();
+                        let Some((k, o)) = via.filter(|_| param == p) else { continue };
+                        let to = if k >= SITE { Some((Body::Site(k - SITE), 0)) } else { self.sites[s].caller.map(|b| (b, k as usize)) };
+                        if let Some((b, k)) = to {
+                            changed |= self.mark(b, k, shift(w, poff + o));
+                        }
+                    }
+                }
+            }
             if !changed {
                 break;
             }
         }
+        // a write through a call's result into an argument that can't change
+        for (i, s) in std::mem::take(&mut self.sites).into_iter().enumerate() {
+            let w = self.written(Body::Site(i as u32), 0);
+            if w == 0 {
+                continue;
+            }
+            let ps = sums.get(&s.callee).unwrap_or(&none);
+            for (param, ro, _, root, root_param, span) in s.args {
+                if !ps.iter().any(|&(p, poff)| p == param && ro as u64 & shift(w, poff) != 0) {
+                    continue;
+                }
+                let (fname, _) = self.body_name(s.callee, param, 0);
+                let what = if root_param { "a parameter without var" } else { "a val" };
+                self.errors.push(Diag::new(span, format!("'{root}' is {what}, and it's changed through what {fname} returns: declare it with var")));
+            }
+        }
+        self.rets.clear();
         for l in std::mem::take(&mut self.lends) {
             if self.written(l.callee, l.param) & l.mask as u64 == 0 {
                 continue;

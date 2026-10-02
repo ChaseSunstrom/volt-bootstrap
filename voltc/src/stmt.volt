@@ -482,7 +482,9 @@ attach fn ret(this: checker&, v: expr*, span: span) -> compile_error!tval {
         };
         val r = this.take_into(x, rt, e.span);
         this.cx.exiting -= 1;
-        value = try r;
+        val rv = try r;
+        this.note_return(&rv);
+        value = rv;
     } else if (rt == VOID) {
         value = null;
     } else if (eu_void) {
@@ -981,12 +983,12 @@ attach fn for_inner(this: checker&, f: for_loop&, want: u32?, span: span) -> com
                 val pt = this.t.ref_to(t);
                 val p = this.slot("_ip", pt);
                 if (through_ref) {
-                    this.note_arg(body_key(BODY_FN, h), 0, &v, f.iter.span);
+                    this.note_arg(body_key(BODY_FN, h), 0, &v, f.iter.span, null);
                 } else if (v.lv && v.mutable) {
                     this.note_mut(&v);
                     var a = vnew(0, 0);
                     addr_prov(&a, &v);
-                    this.note_arg(body_key(BODY_FN, h), 0, &a, f.iter.span);
+                    this.note_arg(body_key(BODY_FN, h), 0, &a, f.iter.span, null);
                 }
                 // a var (or a reference to one) is advanced in place; a val or a temporary is copied
                 var addr = v.c;

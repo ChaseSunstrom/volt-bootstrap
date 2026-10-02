@@ -36,7 +36,7 @@ attach fn intrinsic(this: checker&, name: str, all_args: std::vec<expr>&, ret: u
         }
         val t = wt ?? return fails(target.span, "std::write takes a reference to the writer: std::write(&out, ...)");
         val h = (try this.hook(t, "write_str")) ?? return fail(target.span, fmt2("std::write needs a writer: {} doesn't attach write_str(this: {}&, s: str) -> void", this.ty_name(t), this.ty_name(t)));
-        this.note_arg(body_key(BODY_FN, h), 0, &w, target.span);
+        this.note_arg(body_key(BODY_FN, h), 0, &w, target.span, null);
         put(&code, this.ir.decl(sk.id, this.sink_of(t, h, this.ir.conv(w.c, VOIDPTR), &code)));
         first = 1;
     } else if (name == "format") {

@@ -92,7 +92,27 @@ fn main() -> void {
 The compiler follows the reference through every call: a function that passes it on to one that
 writes through it changes it too, and so do closures and fn values that do. Writing through a
 reference made from a `val` (`val r = &x; *r = 1;`) is an error right away, and so is sorting a
-slice of a `val` array. Calls into C and pointers made with `@cast` aren't checked.
+slice of a `val` array. A reference a function returns points where its argument did, so writing
+through what `x_of(&p)` returns changes `p`:
+
+```volt fail
+struct point {
+    x: i32;
+}
+
+attach fn x_of(this: point&) -> i32& {
+    return &this.x;
+}
+
+fn main() -> void {
+    val p: point = { x: 0 };
+    *p.x_of() = 1;
+}
+// error: 'p' is a val, and it's changed through what x_of returns: declare it with var
+```
+
+Calls into C, pointers made with `@cast`, references stored in a struct field or an array, and
+ones an `await` gives aren't checked.
 
 A `val` is shallow: what its pointers and slices point at isn't part of it. A `val` slice of a `var`
 array can still change the array's elements; a slice of a `val` array can't.

@@ -349,6 +349,9 @@ pub struct Checker {
     pub writes: HashMap<Body, Vec<u64>>,
     pub edges: Vec<(Body, usize, i32, Body, usize)>,
     pub lends: Vec<Lend>,
+    /// calls whose result is a reference, and where each body's returned references point (lends.rs)
+    pub sites: Vec<lends::Site>,
+    pub rets: Vec<(Body, u32, i32)>,
     /// copy and as_str hooks: called on vals (to copy or print them), so they only read this
     pub ro_hooks: Vec<usize>,
     /// var parameters per fn decl: name, where, and whether any instance changes it
@@ -404,6 +407,8 @@ impl Checker {
             writes: HashMap::new(),
             edges: Vec::new(),
             lends: Vec::new(),
+            sites: Vec::new(),
+            rets: Vec::new(),
             ro_hooks: Vec::new(),
             var_seen: Vec::new(),
             frames: HashMap::new(),

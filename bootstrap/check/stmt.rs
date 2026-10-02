@@ -294,7 +294,9 @@ impl Checker {
                 self.cx.exiting += 1;
                 let r = self.expr(e, Some(ret)).and_then(|v| self.take_into(v, ret, e.span));
                 self.cx.exiting -= 1;
-                Some(r?)
+                let r = r?;
+                self.note_return(&r);
+                Some(r)
             }
             None if ret == VOID => None,
             None if matches!(self.t.get(ret), Ty::ErrUnion(_, VOID)) => {
@@ -663,11 +665,11 @@ impl Checker {
                         let p = self.slot("_ip", pt);
                         // a var (or a reference to one) is advanced in place; a val or a temporary is copied
                         if base_ty.is_some() {
-                            self.note_arg(Body::Fn(h), 0, v.ro, v.via, v.root.as_deref(), f.iter.span);
+                            self.note_arg(Body::Fn(h), 0, v.ro, v.via, v.root.as_deref(), f.iter.span, None);
                         } else if v.lv && v.mutable {
                             self.note_mut(&v);
                             let (ro, via, root) = Self::addr_prov(&v);
-                            self.note_arg(Body::Fn(h), 0, ro, via, root.as_deref(), f.iter.span);
+                            self.note_arg(Body::Fn(h), 0, ro, via, root.as_deref(), f.iter.span, None);
                         }
                         let addr = if base_ty.is_some() {
                             v.c.clone()

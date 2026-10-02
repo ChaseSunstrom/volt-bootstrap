@@ -128,9 +128,11 @@ impl Checker {
         let (c_name, fn_name, erased, ptys, rty) = (ci.c_name.clone(), ci.fn_name.clone(), ci.erased.clone(), ci.params.clone(), ci.ret);
         // a captured reference reaching through one of ours is passed on to the closure
         for (ci, (_, t, _, _, l)) in inner.iter().enumerate() {
-            if let (Some((k, off)), Some(b)) = (l.via, maker) {
-                if self.reaches(*t) {
-                    self.edges.push((b, k as usize, off, Body::Closure(id), params.len() + ci));
+            if let Some((k, off)) = l.via {
+                // a parameter of the body the literal is in, or a call's result
+                let from = if k >= lends::SITE { Some((Body::Site(k - lends::SITE), 0)) } else { maker.map(|b| (b, k as usize)) };
+                if let (Some((b, k)), true) = (from, self.reaches(*t)) {
+                    self.edges.push((b, k, off, Body::Closure(id), params.len() + ci));
                 }
             }
         }

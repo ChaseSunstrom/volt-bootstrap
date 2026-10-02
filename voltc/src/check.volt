@@ -422,6 +422,8 @@ struct checker {
     writes: std::map<u64, std::vec<u64>> = {};
     lend_edges: std::vec<lend_edge> = {};
     lends: std::vec<lend> = {};
+    sites: std::vec<call_site> = {}; // calls whose result is a reference (lends.volt)
+    rets: std::vec<ret_entry> = {};  // where each body's returned references point
     ro_hooks: std::vec<u32> = {}; // copy and as_str hooks: called on vals, so they only read this
     var_seen: std::vec<var_seen> = {}; // var parameters per fn decl (warn_var_params)
     err_name: u32? = null; // volt_err_name's ir fn

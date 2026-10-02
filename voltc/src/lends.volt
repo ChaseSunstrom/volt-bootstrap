@@ -1,11 +1,18 @@
 // What can't change stays unchanged through references. A port of bootstrap/check/lends.rs (the
 // rules are there, by depth, with std::write's writer and the copy and as_str hooks). A body is a
 // u64: what it is in the low two bits (BODY_FN, BODY_CLOSURE, or BODY_VALUE: whatever a fn value of
-// a type holds) and the fn instance, closure or type above them.
+// a type holds, or BODY_SITE: a call's result, written through like a parameter) and the fn instance,
+// closure, type or site above them. A reference a fn returns points where its argument did: each body
+// records where what it returns points (rets), solved into a summary a body; a call whose result is a
+// reference is a site, whose writes reach that call's arguments through the callee's summary.
 
 val BODY_FN: u64 = 0;
 val BODY_CLOSURE: u64 = 1;
 val BODY_VALUE: u64 = 2;
+val BODY_SITE: u64 = 3;
+
+// a via's parameter at or above this is call site k - SITE's result, not a parameter of the body
+val SITE: u32 = 16777216;
 
 fn body_key(kind: u64, id: u32) -> u64 {
     return (@cast<u64>(id) << 2) | kind;
@@ -51,6 +58,30 @@ struct lend_edge {
     off: i32;
     to: u64;
     j: usize;
+}
+
+// what a call whose result is a reference lends one reference parameter
+struct site_arg {
+    param: usize;
+    ro: u32;
+    via: reach?;
+    root: str;
+    root_param: bool;
+    at: span;
+}
+
+// a call whose result is a reference: what it calls, from where, and what it lends
+struct call_site {
+    callee: u64;
+    caller: u64?;
+    args: std::vec<site_arg> = {};
+}
+
+// where what a body returns points (k may name a site)
+struct ret_entry {
+    body: u64;
+    k: u32;
+    off: i32;
 }
 
 // a call lending a read-only reference to a parameter, an error if the callee writes through it
@@ -137,18 +168,65 @@ attach fn written(this: checker&, b: u64, k: usize) -> u64 {
     return 0;
 }
 
+// the body a via's k is a parameter of: the body being checked, or (k >= SITE) a call's result
+attach fn via_body(this: checker&, k: u32) -> u64? {
+    if (k >= SITE) {
+        return body_key(BODY_SITE, k - SITE);
+    }
+    return this.cx.body;
+}
+
+fn via_param(k: u32) -> usize {
+    if (k >= SITE) {
+        return 0;
+    }
+    return @cast<usize>(k);
+}
+
 // assigning to place: a write through the parameter it's reached through
 attach fn note_write(this: checker&, place: tval&) -> void {
     val pv = place.pvia;
     if (pv) {
-        if (this.cx.body != null && pv.off >= 0 && pv.off < 64) {
-            this.mark(this.cx.body ?? 0, @cast<usize>(pv.k), @cast<u64>(1) << @cast<u32>(pv.off));
+        val b = this.via_body(pv.k);
+        if (b != null && pv.off >= 0 && pv.off < 64) {
+            this.mark(b ?? 0, via_param(pv.k), @cast<u64>(1) << @cast<u32>(pv.off));
         }
     }
 }
 
-// passing v (a reference, pointer or slice) to parameter param of callee
-attach fn note_arg(this: checker&, callee: u64, param: usize, v: tval&, span: span) -> void {
+// returning v from the body being checked: where it points, when it's a reference
+attach fn note_return(this: checker&, v: tval&) -> void {
+    val vv = v.via;
+    if (vv) {
+        if (this.cx.body != null && this.reaches(v.ty)) {
+            put(&this.rets, { body: this.cx.body ?? 0, k: vv.k, off: vv.off });
+        }
+    }
+}
+
+// a call to callee returning ret: a site when that's a reference (its arguments are noted into it, and
+// its result points at it)
+attach fn open_site(this: checker&, callee: u64, ret: u32) -> u32? {
+    if (!this.reaches(ret)) {
+        return null;
+    }
+    put(&this.sites, { callee: callee, caller: this.cx.body });
+    return @cast<u32>(this.sites.len - 1);
+}
+
+// a call's result, pointing at its site
+fn site_result(v: tval, site: u32?) -> tval {
+    var r = v;
+    if (site) {
+        val rv: reach = { k: SITE + site, off: 0 };
+        r.via = rv;
+    }
+    return r;
+}
+
+// passing v (a reference, pointer or slice) to parameter param of callee (at call site, when its result
+// is a reference)
+attach fn note_arg(this: checker&, callee: u64, param: usize, v: tval&, span: span, site: u32?) -> void {
     if ((callee & 3) == BODY_FN) {
         val f = body_id(callee);
         if (param >= this.fi(f).params.len || !this.reaches(this.fi(f).params.at(param).ty) || this.fi(f).intrinsic != null) {
@@ -161,19 +239,23 @@ attach fn note_arg(this: checker&, callee: u64, param: usize, v: tval&, span: sp
             }
         }
     }
+    val root = v.root ?? "this";
+    var root_param = false;
+    val l = this.lookup_local(root);
+    if (l) {
+        root_param = l.param;
+    }
+    if (site) {
+        put(&this.sites.at(@cast<usize>(site)).args, { param: param, ro: v.ro, via: v.via, root: root, root_param: root_param, at: span });
+    }
     if (v.ro != 0) {
-        val root = v.root ?? "this";
-        var root_param = false;
-        val l = this.lookup_local(root);
-        if (l) {
-            root_param = l.param;
-        }
         put(&this.lends, { at: span, callee: callee, param: param, mask: v.ro, root: root, root_param: root_param });
     }
     val vv = v.via;
     if (vv) {
-        if (this.cx.body != null) {
-            put(&this.lend_edges, { from: this.cx.body ?? 0, k: @cast<usize>(vv.k), off: vv.off, to: callee, j: param });
+        val b = this.via_body(vv.k);
+        if (b != null) {
+            put(&this.lend_edges, { from: b ?? 0, k: via_param(vv.k), off: vv.off, to: callee, j: param });
         }
     }
 }
@@ -222,6 +304,9 @@ attach fn body_name(this: checker&, b: u64, k: usize, mask: u64, pname: std::str
         }
         return S("a closure");
     }
+    if ((b & 3) == BODY_SITE) {
+        return S("a call");
+    }
     // the first body behind the value that writes where it's read-only
     for (e&) in this.lend_edges.items() {
         if (e.from == b && e.k == k && (this.written(e.to, e.j) & mask) != 0) {
@@ -232,9 +317,89 @@ attach fn body_name(this: checker&, b: u64, k: usize, mask: u64, pname: std::str
     return S("a fn value");
 }
 
+// where what each body returns points: (parameter, depth) pairs, through the calls it returns the
+// results of (a fixpoint, so recursion works; depths past 63 are dropped)
+attach fn return_summaries(this: checker&) -> std::map<u64, std::vec<reach>> {
+    var sums: std::map<u64, std::vec<reach>> = {};
+    var changed = true;
+    while (changed) {
+        changed = false;
+        for (r&) in this.rets.items() {
+            var found: std::vec<reach> = {};
+            this.expand(&sums, r.k, r.off, &found);
+            for (x&) in found.items() {
+                if (add_reach(&sums, r.body, *x)) {
+                    changed = true;
+                }
+            }
+        }
+        // a fn value's results point where any fn made into one does
+        for (e&) in this.lend_edges.items() {
+            if ((e.from & 3) != BODY_VALUE) {
+                continue;
+            }
+            val gs = sums.get(e.to);
+            if (gs) {
+                val got = copy *gs;
+                for (x&) in got.items() {
+                    if (add_reach(&sums, e.from, *x)) {
+                        changed = true;
+                    }
+                }
+            }
+        }
+    }
+    return move sums;
+}
+
+// adds r to body b's summary; whether it's new
+fn add_reach(sums: std::map<u64, std::vec<reach>>&, b: u64, r: reach) -> bool {
+    if (!sums.contains(b)) {
+        sums.put(b, {});
+    }
+    val v = sums.get(b);
+    if (v) {
+        for (x&) in v.items() {
+            if (x.k == r.k && x.off == r.off) {
+                return false;
+            }
+        }
+        put(v, r);
+        return true;
+    }
+    return false;
+}
+
+// (via k, off) as parameter memory: itself, or for a call's result, where the callee's result points as
+// that call's arguments (a call's arguments are calls made before it, so this ends)
+attach fn expand(this: checker&, sums: std::map<u64, std::vec<reach>>&, k: u32, off: i32, out: std::vec<reach>&) -> void {
+    if (off >= 64 || off <= -64) {
+        return;
+    }
+    if (k < SITE) {
+        put(out, { k: k, off: off });
+        return;
+    }
+    val st = this.sites.at(@cast<usize>(k - SITE));
+    val ps = sums.get(st.callee);
+    if (ps) {
+        for (p&) in ps.items() {
+            for (a&) in st.args.items() {
+                val av = a.via;
+                if (av) {
+                    if (a.param == @cast<usize>(p.k)) {
+                        this.expand(sums, av.k, av.off + p.off + off, out);
+                    }
+                }
+            }
+        }
+    }
+}
+
 // Solve the writes (a parameter is written through when its body writes through it, or passes it
-// on to one that's written through) and report each lend to one.
+// on to one that's written through, or a call's result into it is) and report each lend to one.
 attach fn check_lends(this: checker&) -> void {
+    val sums = this.return_summaries();
     var changed = true;
     while (changed) {
         changed = false;
@@ -245,7 +410,66 @@ attach fn check_lends(this: checker&) -> void {
                 changed = true;
             }
         }
+        // a site's writes reach the arguments its result may point into
+        for (s) in 0..this.sites.len {
+            val w = this.written(body_key(BODY_SITE, @cast<u32>(s)), 0);
+            if (w == 0) {
+                continue;
+            }
+            val st = this.sites.at(s);
+            val ps = sums.get(st.callee);
+            if (ps) {
+                for (p&) in ps.items() {
+                    for (a&) in st.args.items() {
+                        val av = a.via;
+                        if (av) {
+                            if (a.param == @cast<usize>(p.k)) {
+                                var to: u64? = st.caller;
+                                if (av.k >= SITE) {
+                                    to = body_key(BODY_SITE, av.k - SITE);
+                                }
+                                if (to != null && this.mark(to ?? 0, via_param(av.k), shift(w, p.off + av.off))) {
+                                    changed = true;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
+    // a write through a call's result into an argument that can't change
+    for (s) in 0..this.sites.len {
+        val w = this.written(body_key(BODY_SITE, @cast<u32>(s)), 0);
+        if (w == 0) {
+            continue;
+        }
+        val st = this.sites.at(s);
+        val ps = sums.get(st.callee);
+        if (ps) {
+            for (a&) in st.args.items() {
+                var hit = false;
+                for (p&) in ps.items() {
+                    if (a.param == @cast<usize>(p.k) && (@cast<u64>(a.ro) & shift(w, p.off)) != 0) {
+                        hit = true;
+                    }
+                }
+                if (!hit) {
+                    continue;
+                }
+                var unused: std::string = {};
+                val fname = this.body_name(st.callee, a.param, 0, &unused);
+                var what = "a val";
+                if (a.root_param) {
+                    what = "a parameter without var";
+                }
+                val e = this.var_fix(fail(a.at, fmt3("'{}' is {}, and it's changed through what {} returns: declare it with var", S(a.root), S(what), move fname)), a.root, a.at);
+                put(&this.errors, err_diag(&e));
+            }
+        }
+    }
+    this.sites.clear();
+    this.rets.clear();
     for (l&) in this.lends.items() {
         val mask = @cast<u64>(l.mask);
         if ((this.written(l.callee, l.param) & mask) == 0) {

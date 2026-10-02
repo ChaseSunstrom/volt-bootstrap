@@ -160,6 +160,7 @@ attach fn call_value(this: checker&, f: tval, args: std::vec<expr>&, span: span)
     if (kind == 2) {
         callee = body_key(BODY_CLOSURE, closure);
     }
+    val site = this.open_site(callee, ret);
     var vals: std::vec<tval> = {};
     put(&vals, f);
     for (i) in 0..args.len {
@@ -174,7 +175,7 @@ attach fn call_value(this: checker&, f: tval, args: std::vec<expr>&, span: span)
             }
             val tv = try this.take_into(v, p, a.span);
             if (this.reaches(p)) {
-                this.note_arg(callee, i, &tv, a.span);
+                this.note_arg(callee, i, &tv, a.span, site);
             }
             put(&vals, tv);
         } else {
@@ -226,7 +227,7 @@ attach fn call_value(this: checker&, f: tval, args: std::vec<expr>&, span: span)
             }
         }
     }
-    return vnew(ret, this.wrap_pre(move pre, c, ret));
+    return site_result(vnew(ret, this.wrap_pre(move pre, c, ret)), site);
 }
 
 // an argument for C varargs: a str literal becomes a cstr, a float narrower than f64 is promoted

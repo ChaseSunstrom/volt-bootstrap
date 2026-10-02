@@ -195,8 +195,13 @@ attach fn closure_fns(this: checker&, id: u32, ty: u32, cl: closure&, inner: std
         val c = inner.at(ci);
         val ov = c.outer.via;
         if (ov) {
-            if (maker != null && this.reaches(c.ty)) {
-                put(&this.lend_edges, { from: maker ?? 0, k: @cast<usize>(ov.k), off: ov.off, to: body_key(BODY_CLOSURE, id), j: cl.params.len + ci });
+            // a parameter of the body the literal is in, or a call's result
+            var from = maker;
+            if (ov.k >= SITE) {
+                from = body_key(BODY_SITE, ov.k - SITE);
+            }
+            if (from != null && this.reaches(c.ty)) {
+                put(&this.lend_edges, { from: from ?? 0, k: via_param(ov.k), off: ov.off, to: body_key(BODY_CLOSURE, id), j: cl.params.len + ci });
             }
         }
     }

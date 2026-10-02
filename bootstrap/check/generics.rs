@@ -682,6 +682,7 @@ impl Checker {
     fn emit_call(&mut self, inst: usize, adj: Adj, recv: Option<Val>, pre: &[Option<Val>], args: &[Expr], span: Span) -> Res<Val> {
         let f = self.fns[inst].clone();
         self.visible(f.decl, span)?;
+        let site = self.open_site(Body::Fn(inst), f.ret);
         let mut vals = Vec::new();
         let mut prefix = String::new();
         let mut post = String::new();
@@ -692,9 +693,9 @@ impl Checker {
                     // a temporary's slot is fresh, but what it points at may not be
                     self.note_mut(&r);
                     let (ro, via, root) = Self::addr_prov(&r);
-                    self.note_arg(Body::Fn(inst), 0, ro, via, root.as_deref(), span);
+                    self.note_arg(Body::Fn(inst), 0, ro, via, root.as_deref(), span, site);
                 }
-                Adj::None => self.note_arg(Body::Fn(inst), 0, r.ro, r.via, r.root.as_deref(), span),
+                Adj::None => self.note_arg(Body::Fn(inst), 0, r.ro, r.via, r.root.as_deref(), span, site),
                 _ => {}
             }
             vals.push(match adj {
@@ -749,7 +750,7 @@ impl Checker {
                 None => self.expr(a, Some(p.ty))?,
             };
             let v = self.take_into(v, p.ty, a.span)?;
-            self.note_arg(Body::Fn(inst), i + offset, v.ro, v.via, v.root.as_deref(), a.span);
+            self.note_arg(Body::Fn(inst), i + offset, v.ro, v.via, v.root.as_deref(), a.span, site);
             vals.push(v);
         }
         // the rest: one tuple for a pack, else C varargs
@@ -792,6 +793,8 @@ impl Checker {
         let seq = self.seq(&mut vals);
         let cs: Vec<String> = vals.iter().map(|v| v.c.clone()).collect();
         let (call, rty) = self.async_call(inst, format!("{}({})", f.c_name, cs.join(", ")), span)?;
+        // an `async` call gives the frame, not the result
+        let site = site.filter(|_| rty == f.ret);
         if !post.is_empty() {
             let rc = self.cty(rty);
             let code = if rty == VOID || rty == NEVER {
@@ -799,9 +802,9 @@ impl Checker {
             } else {
                 format!("({{ {prefix}{seq}{rc} _cr = {call}; {post} _cr; }})")
             };
-            return Ok(Val::new(rty, code));
+            return Ok(Self::site_result(Val::new(rty, code), site));
         }
-        Ok(Val::new(rty, Self::wrap_pre(&format!("{prefix}{seq}"), call)))
+        Ok(Self::site_result(Val::new(rty, Self::wrap_pre(&format!("{prefix}{seq}"), call)), site))
     }
 
     /// x.name(args): fn-typed field, trait-union dispatch, or an attached method

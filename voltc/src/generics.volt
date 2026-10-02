@@ -1331,6 +1331,7 @@ attach fn emit_call(this: checker&, inst: u32, a: adj, rv: tval?, pre: std::vec<
     val fp = this.fi(inst);
     val (pack, fenv, fir, fret) = (fp.pack, fp.env, fp.ir, fp.ret);
     val nparams = fp.params.len;
+    var site = this.open_site(body_key(BODY_FN, inst), fret);
     var vals: std::vec<tval> = {};
     var prefix: std::vec<u32> = {};
     var post: u32? = null;
@@ -1343,9 +1344,9 @@ attach fn emit_call(this: checker&, inst: u32, a: adj, rv: tval?, pre: std::vec<
                 this.note_mut(&r);
                 var x = vnew(0, 0);
                 addr_prov(&x, &r);
-                this.note_arg(body_key(BODY_FN, inst), 0, &x, span);
+                this.note_arg(body_key(BODY_FN, inst), 0, &x, span, site);
             },
-            .NONE => { this.note_arg(body_key(BODY_FN, inst), 0, &r, span); },
+            .NONE => { this.note_arg(body_key(BODY_FN, inst), 0, &r, span, site); },
             default => {},
         }
         match (a) {
@@ -1410,7 +1411,7 @@ attach fn emit_call(this: checker&, inst: u32, a: adj, rv: tval?, pre: std::vec<
                 v = try this.expr(args.at(i), p.ty);
             }
             val tv = try this.take_into(v, p.ty, args.at(i).span);
-            this.note_arg(body_key(BODY_FN, inst), i + offset, &tv, args.at(i).span);
+            this.note_arg(body_key(BODY_FN, inst), i + offset, &tv, args.at(i).span, site);
             if (this.opts.lsp) {
                 put(&this.lsp_args, { at: args.at(i).span, name: p.name });
             }
@@ -1466,6 +1467,9 @@ attach fn emit_call(this: checker&, inst: u32, a: adj, rv: tval?, pre: std::vec<
     val fnode = this.ir.node(ir_kind::FN(fir), VOIDPTR);
     val direct = this.ir.call(fnode, move cs, fret);
     val ac = try this.async_call(inst, direct, span);
+    if (ac.ty != fret) {
+        site = null; // an `async` call gives the frame, not the result
+    }
     for (s&) in seq.items() {
         put(&prefix, *s);
     }
@@ -1478,9 +1482,9 @@ attach fn emit_call(this: checker&, inst: u32, a: adj, rv: tval?, pre: std::vec<
         val t = this.tmp_local("cr", ac.ty);
         put(&prefix, this.ir.decl(t.id, ac.c));
         put(&prefix, post);
-        return vnew(ac.ty, this.ir.seq(move prefix, t.c, ac.ty));
+        return site_result(vnew(ac.ty, this.ir.seq(move prefix, t.c, ac.ty)), site);
     }
-    return vnew(ac.ty, this.wrap_pre(move prefix, ac.c, ac.ty));
+    return site_result(vnew(ac.ty, this.wrap_pre(move prefix, ac.c, ac.ty)), site);
 }
 
 // x.name(args): fn-typed field, trait-union dispatch, or an attached method

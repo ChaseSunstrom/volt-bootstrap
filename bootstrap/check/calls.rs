@@ -98,6 +98,7 @@ impl Checker {
             Ty::Closure(c) => Body::Closure(inst.unwrap_or(c)),
             _ => Body::Value(self.value_key(fty)),
         };
+        let site = self.open_site(callee, ret);
         let mut vals = vec![f];
         for (i, a) in args.iter().enumerate() {
             vals.push(match ps.get(i) {
@@ -108,7 +109,7 @@ impl Checker {
                     };
                     let v = self.take_into(v, *p, a.span)?;
                     if self.reaches(*p) {
-                        self.note_arg(callee, i, v.ro, v.via, v.root.as_deref(), a.span);
+                        self.note_arg(callee, i, v.ro, v.via, v.root.as_deref(), a.span, site);
                     }
                     v
                 }
@@ -138,7 +139,7 @@ impl Checker {
                 }
             }
         };
-        Ok(Val::new(ret, Self::wrap_pre(&pre, call)))
+        Ok(Self::site_result(Val::new(ret, Self::wrap_pre(&pre, call)), site))
     }
 
     /// an argument for C varargs: a str literal becomes a cstr, a float narrower than f64 is promoted
