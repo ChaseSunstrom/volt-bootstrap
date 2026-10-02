@@ -236,7 +236,7 @@ impl Checker {
                         let pv = self.ct_to_val(*p, None, span)?;
                         let tmp = self.tmp("cv");
                         let tc = self.cty(pv.ty);
-                        self.cx.scopes.last_mut().unwrap().vars.insert(tmp.clone(), Local { c: tmp.clone(), ty: pv.ty, mutable: false, orig: None, flag: None, loops: 0, ro: 0, via: None, root: None, param: false });
+                        self.cx.scopes.last_mut().unwrap().vars.insert(tmp.clone(), Local { c: tmp.clone(), ty: pv.ty, mutable: false, orig: None, flag: None, loops: 0, ro: 0, via: None, root: None, param: false, own: None });
                         let arg = Expr { kind: ExprKind::Path(Path::single(&tmp, span)), span };
                         let v = self.make_variant(t, idx, Some(std::slice::from_ref(&arg)), span)?;
                         Val::new(t, format!("({{ {tc} {tmp} = {}; {}; }})", pv.c, v.c))
@@ -1644,7 +1644,7 @@ impl Checker {
                         let local = format!("{name}_{}", self.cx.next_id);
                         let tc = self.cty(t);
                         bind = format!("{tc} {local} = {c}; ");
-                        scope.vars.insert(name.clone(), Local { c: local, ty: t, mutable: false, orig: None, flag: None, loops: 0, ro: 0, via: None, root: None, param: false });
+                        scope.vars.insert(name.clone(), Local { c: local, ty: t, mutable: false, orig: None, flag: None, loops: 0, ro: 0, via: None, root: None, param: false, own: None });
                     }
                     _ => unreachable!(),
                 }

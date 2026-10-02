@@ -39,6 +39,7 @@ attach fn match_expr(this: checker&, scrut: expr&, arms: std::vec<arm>&, want: u
     // what x& bindings reach: the matched place, as &place would (lends.volt)
     var mp = vnew(0, 0);
     addr_prov(&mp, &s);
+    mp.own = s.own; // x& bindings change it
     var outp = vnew(0, 0); // the arms' values: read-only where any is
     val st = s.ty;
     // a place is matched where it is (x& bindings point into it; plain ones copy the payload when the
@@ -128,6 +129,7 @@ attach fn match_arm(this: checker&, a: arm&, m: u32, st: u32, result_ty: u32?&, 
     for (b&) in p.binds.items() {
         val local = this.new_local(b.name, b.ty, false);
         if (b.by_ref) {
+            this.note_mut(mp);
             val x = this.scope_top().vars.get(b.name);
             if (x) {
                 x.ro = mp.ro;

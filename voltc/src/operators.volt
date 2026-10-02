@@ -65,6 +65,7 @@ attach fn unary(this: checker&, op: unop, x: expr&, want: u32?, span: span) -> c
             val t = this.t.ref_to(v.ty);
             var r = vnew(t, this.ir.addr(v.c, t));
             r.pure = v.pure;
+            this.note_mut(&v);
             addr_prov(&r, &v);
             return r;
         },
@@ -567,6 +568,7 @@ attach fn assign(this: checker&, op: binop?, le: expr&, re: expr&, span: span) -
         return fails(le.span, "can't assign to this; it's immutable (val, or a parameter without var)");
     }
     this.note_write(&l);
+    this.note_mut(&l);
     if (op == null) {
         // a narrowed optional takes either its payload type or the full optional back; a narrowed
         // pointer is always stored whole (its checked read would trap on a null one)

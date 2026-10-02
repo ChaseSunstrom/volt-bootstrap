@@ -65,6 +65,7 @@ attach fn closure_expr(this: checker&, cl: closure&, want: u32?, span: span) -> 
         var v = vpure(l.ty, l.c);
         v.lv = true;
         v.mutable = l.mutable;
+        v.own = l.own;
         if (l.flag != null) {
             v.owner = c.name;
         }
@@ -73,6 +74,7 @@ attach fn closure_expr(this: checker&, cl: closure&, want: u32?, span: span) -> 
             val rt = this.t.ref_to(l.ty);
             put(&stored, { name: c.name, ty: rt });
             put(&inits, { field: i, value: this.ir.addr(l.c, rt) });
+            this.note_mut(&v); // changed through the capture, maybe
             put(&inner, { name: c.name, ty: l.ty, by_ref: true, mutable: l.mutable, outer: l });
         } else {
             var x = vnew(0, 0);
@@ -187,7 +189,7 @@ attach fn closure_body(this: checker&, cl: closure&, inner: std::vec<cap_inner>&
         val p = cl.params.at(i);
         val t = *ptys.at(i);
         val c = this.ir.node(ir_kind::LOCAL(@cast<u32>(i) + 1), t);
-        var l: local = { c: c, ty: t, mutable: p.mutable, root: p.name, param: true };
+        var l: local = { c: c, ty: t, mutable: p.mutable, root: p.name, param: true, own: c };
         if (this.reaches(t)) {
             val rv: reach = { k: @cast<u32>(i), off: 0 };
             l.via = rv;

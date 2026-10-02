@@ -690,6 +690,7 @@ impl Checker {
             match adj {
                 Adj::Ref => {
                     // a temporary's slot is fresh, but what it points at may not be
+                    self.note_mut(&r);
                     let (ro, via, root) = Self::addr_prov(&r);
                     self.note_arg(Body::Fn(inst), 0, ro, via, root.as_deref(), span);
                 }

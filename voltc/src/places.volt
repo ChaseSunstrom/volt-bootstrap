@@ -124,8 +124,10 @@ attach fn field(this: checker&, b0: tval, name: str, span: span) -> compile_erro
     var mutable = b.mutable;
     var rop = b.rop;
     var pvia = b.pvia;
+    var own = b.own;
     val inner = this.t.ref_inner(b.ty);
     if (inner) {
+        own = null;
         t = inner;
         obj = this.ir.deref(b.c, t);
         lv = true;
@@ -150,6 +152,7 @@ attach fn field(this: checker&, b0: tval, name: str, span: span) -> compile_erro
                     r.pvia = pvia;
                     r.via = deeper(pvia, 1); // what a pointer field points at isn't part of the place
                     r.root = b.root;
+                    r.own = own;
                     return r;
                 }
             }
@@ -175,6 +178,7 @@ attach fn field(this: checker&, b0: tval, name: str, span: span) -> compile_erro
                 r.pvia = pvia;
                 r.via = deeper(pvia, 1);
                 r.root = b.root;
+                r.own = own;
                 return r;
             }
         },
@@ -368,6 +372,7 @@ attach fn index(this: checker&, be: expr&, ie: expr&, span: span) -> compile_err
         r.pvia = b.pvia;
         r.via = deeper(b.pvia, 1);
         r.root = b.root;
+        r.own = b.own;
     }
     return r;
 }
@@ -388,6 +393,7 @@ attach fn slice_expr(this: checker&, be: expr&, lo: expr*, hi: expr*, incl: bool
     // the slice reaches the array (as &array would) or what the sliced slice does
     var sv = vnew(0, 0);
     addr_prov(&sv, &b);
+    this.note_mut(&b);
     match (*this.t.get(b.ty)) {
         .SLICE(x) => {
             sv.ro = b.ro;

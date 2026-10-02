@@ -6,7 +6,7 @@ impl Checker {
     /// declare a local in the innermost scope and return its C name (a frame field in an async fn: slot)
     pub fn new_local(&mut self, name: &str, ty: TyId, mutable: bool) -> String {
         let c = self.slot(name, ty);
-        self.cx.scopes.last_mut().unwrap().vars.insert(name.to_string(), Local { c: c.clone(), ty, mutable, orig: None, flag: None, loops: self.cx.loops.iter().filter(|l| !l.is_block).count(), ro: 0, via: None, root: Some(name.to_string()), param: false });
+        self.cx.scopes.last_mut().unwrap().vars.insert(name.to_string(), Local { c: c.clone(), ty, mutable, orig: None, flag: None, loops: self.cx.loops.iter().filter(|l| !l.is_block).count(), ro: 0, via: None, root: Some(name.to_string()), param: false, own: Some(c.clone()) });
         c
     }
 
@@ -62,6 +62,9 @@ impl Checker {
                 let scope = self.cx.scopes.len() - 1;
                 let r = self.keeping(scope, |c| {
                     let v = c.expr(e, None)?;
+                    if v.ty != VOID && v.ty != NEVER && no_effects(e) {
+                        return err(e.span, unused_value(e));
+                    }
                     let never = v.ty == NEVER;
                     Ok((format!("{};", c.discard(v)?), never))
                 });
@@ -598,6 +601,9 @@ impl Checker {
                 };
                 // the iterable as a place (through the reference it may be), and so its elements
                 let bp = if base_ty.is_some() { Self::through(Val { ty, lv: true, mutable: true, ..v.clone() }, &v) } else { v.clone() };
+                if f.bindings[0].1 {
+                    self.note_mut(&bp); // (x&) points into it
+                }
                 eprov = match self.t.get(ty) {
                     Ty::Slice(_) => (bp.ro, bp.via, bp.root.clone()),
                     _ => ((bp.lv && !bp.mutable) as u32, bp.pvia, bp.root.clone()),
@@ -659,6 +665,7 @@ impl Checker {
                         if base_ty.is_some() {
                             self.note_arg(Body::Fn(h), 0, v.ro, v.via, v.root.as_deref(), f.iter.span);
                         } else if v.lv && v.mutable {
+                            self.note_mut(&v);
                             let (ro, via, root) = Self::addr_prov(&v);
                             self.note_arg(Body::Fn(h), 0, ro, via, root.as_deref(), f.iter.span);
                         }
@@ -766,4 +773,69 @@ impl Checker {
             None => Ok(v),
         }
     }
+}
+
+impl Checker {
+    /// changing `v` in place (or taking its address): its local, if a var parameter, needs the var
+    pub fn note_mut(&mut self, v: &Val) {
+        if let Some(c) = &v.own {
+            if let Some(p) = self.cx.var_params.iter_mut().find(|p| p.0 == *c) {
+                p.2 = true;
+            }
+        }
+    }
+
+    /// this instance's var parameters, and whether it changed them (any instance of the fn counts)
+    pub fn note_var_params(&mut self, decl: DeclId, f: &FnDecl) {
+        for (_, name, changed) in std::mem::take(&mut self.cx.var_params) {
+            match self.var_seen.iter_mut().find(|s| s.0 == decl && s.1 == name) {
+                Some(s) => s.3 |= changed,
+                None => {
+                    let span = f.params.iter().find(|p| p.name == name).map_or(Span::default(), |p| p.span);
+                    self.var_seen.push((decl, name, span, changed));
+                }
+            }
+        }
+    }
+
+    /// a var parameter no instance changes: the var isn't needed (in source order)
+    pub fn warn_var_params(&mut self) {
+        let mut seen = std::mem::take(&mut self.var_seen);
+        seen.sort_by_key(|s| (s.2.file, s.2.lo));
+        for (_, name, span, changed) in seen {
+            if !changed {
+                self.warnings.push(Diag { severity: crate::diag::Severity::Warning, ..Diag::new(span, format!("'{name}' doesn't need var: the function never changes it")) });
+            }
+        }
+    }
+}
+
+/// an expression that only computes a value: as a statement, it does nothing
+fn no_effects(e: &Expr) -> bool {
+    match &e.kind {
+        ExprKind::Int(_) | ExprKind::Float(_) | ExprKind::Char(_) | ExprKind::Str(_) | ExprKind::Bool(_) | ExprKind::Null | ExprKind::This | ExprKind::ErrorAny | ExprKind::Path(_) | ExprKind::DotVariant(_) => true,
+        ExprKind::Unary(_, x) | ExprKind::Cast(x, _) | ExprKind::Field(x, _, _) => no_effects(x),
+        ExprKind::Binary(_, a, b) | ExprKind::Index(a, b) => no_effects(a) && no_effects(b),
+        ExprKind::Tuple(xs) => xs.iter().all(no_effects),
+        ExprKind::Literal(fs) => fs.iter().all(|(_, x)| no_effects(x)),
+        _ => false,
+    }
+}
+
+/// the message for a statement that only computes a value: `place + 1` likely meant `+=`, and
+/// `place == x` meant `=`
+fn unused_value(e: &Expr) -> String {
+    use BinOp::*;
+    if let ExprKind::Binary(op, a, _) = &e.kind {
+        let place = matches!(a.kind, ExprKind::Path(_) | ExprKind::This | ExprKind::Field(..) | ExprKind::Index(..) | ExprKind::Unary(UnOp::Deref, _));
+        let meant = match op {
+            Add | Sub | Mul | Div | Rem | BitAnd | BitOr | BitXor | Shl | Shr => Some(format!("{}=", op.text())),
+            Eq => Some("=".to_string()),
+            _ => None,
+        };
+        if let (true, Some(m)) = (place, meant) {
+            return format!("this value is never used; did you mean {m} instead of {}?", op.text());
+        }
+    }
+    "this value is never used".to_string()
 }

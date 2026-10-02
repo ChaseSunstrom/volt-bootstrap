@@ -28,8 +28,10 @@ fn main() -> void {
 
 ## Parameters
 
-Parameters can't be reassigned. `var` in front of one gives the function a mutable copy. A default
-value lets a call leave the parameter out.
+Parameters can't be reassigned. `var` in front of one gives the function a mutable copy; when the
+function never changes it, the compiler warns that the `var` isn't needed (writing through a
+`var r: T&` changes what `r` points at, not `r`). A default value lets a call leave the parameter
+out.
 
 ```volt
 use std::io;

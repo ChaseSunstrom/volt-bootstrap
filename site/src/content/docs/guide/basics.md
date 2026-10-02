@@ -82,6 +82,9 @@ The arithmetic, comparison, logical and bitwise operators are C's. What's differ
 - `a..b` and `a..=b` are ranges (exclusive and inclusive).
 - Operands and arguments are evaluated left to right. `place = value` evaluates the value first,
   then the place; `place += value` evaluates the place first, since it reads it.
+- A statement that only computes a value (`x + 1;`, `a == b;`) is an error, since it does nothing.
+  When it looks like a missing `=`, the message says so: `x + 1;` suggests `+=`, `a == b;`
+  suggests `=`.
 
 ```volt
 use std::io;

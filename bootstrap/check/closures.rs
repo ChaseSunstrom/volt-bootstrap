@@ -58,9 +58,12 @@ impl Checker {
                     None => d,
                 });
             }
-            let v = Val { lv: true, mutable: l.mutable, owner: l.flag.as_ref().map(|_| c.name.clone()), ..Val::pure(l.ty, l.c.clone()) };
+            let v = Val { lv: true, mutable: l.mutable, owner: l.flag.as_ref().map(|_| c.name.clone()), own: l.own.clone(), ..Val::pure(l.ty, l.c.clone()) };
             let (fty, init, access, mutable) = match c.mode {
-                CapMode::Ref => (self.t.intern(Ty::Ref(l.ty)), format!("&({})", l.c), format!("(*env->{})", c_field(&c.name)), l.mutable),
+                CapMode::Ref => {
+                    self.note_mut(&v); // changed through the capture, maybe
+                    (self.t.intern(Ty::Ref(l.ty)), format!("&({})", l.c), format!("(*env->{})", c_field(&c.name)), l.mutable)
+                }
                 CapMode::Move => (l.ty, self.take(v, c.span)?.c, format!("(env->{})", c_field(&c.name)), true),
                 CapMode::Copy => (l.ty, self.copy_val(v, c.span)?.c, format!("(env->{})", c_field(&c.name)), true),
             };
@@ -92,7 +95,7 @@ impl Checker {
         let r = (|| -> Res<(String, String)> {
             for (ci, (name, t, access, mutable, l)) in inner.iter().enumerate() {
                 let via = self.reaches(*t).then_some(((params.len() + ci) as u32, 0));
-                self.cx.scopes[0].vars.insert(name.clone(), Local { c: access.clone(), ty: *t, mutable: *mutable, orig: None, flag: None, loops: 0, ro: l.ro, via, root: Some(name.clone()), param: l.param });
+                self.cx.scopes[0].vars.insert(name.clone(), Local { c: access.clone(), ty: *t, mutable: *mutable, orig: None, flag: None, loops: 0, ro: l.ro, via, root: Some(name.clone()), param: l.param, own: None });
             }
             // params are locals of the body; a param that needs a drop gets a live flag, like any owned local
             let mut flags = String::new();
@@ -100,7 +103,7 @@ impl Checker {
             for (i, (p, t)) in params.iter().zip(&ptys).enumerate() {
                 let c = format!("{}_{i}", p.name);
                 let via = self.reaches(*t).then_some((i as u32, 0));
-                let mut local = Local { c: c.clone(), ty: *t, mutable: p.mutable, orig: None, flag: None, loops: 0, ro: 0, via, root: Some(p.name.clone()), param: true };
+                let mut local = Local { c: c.clone(), ty: *t, mutable: p.mutable, orig: None, flag: None, loops: 0, ro: 0, via, root: Some(p.name.clone()), param: true, own: Some(c.clone()) };
                 if self.needs_drop(*t)? {
                     let flag = format!("{c}_live");
                     flags.push_str(&format!("bool {flag} = true; "));

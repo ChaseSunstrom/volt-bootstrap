@@ -267,7 +267,7 @@ attach fn cond(this: checker&, c: expr&) -> compile_error!cond_code {
             .PTR(inner) => {
                 val key = this.place_key(c);
                 if (v.lv && key != null) {
-                    n = { key: key ?? "", l: { c: v.c, ty: this.t.ref_to(inner), mutable: v.mutable, orig_c: v.c, orig_ty: v.ty, ro: v.ro, via: v.via, root: v.root } };
+                    n = { key: key ?? "", l: { c: v.c, ty: this.t.ref_to(inner), mutable: v.mutable, orig_c: v.c, orig_ty: v.ty, ro: v.ro, via: v.via, root: v.root, own: v.own } };
                 }
             },
             default => {},
@@ -280,7 +280,7 @@ attach fn cond(this: checker&, c: expr&) -> compile_error!cond_code {
         var n: narrow? = null;
         val key = this.place_key(c);
         if (v.lv && key != null) {
-            n = { key: key ?? "", l: { c: p.value, ty: inner, mutable: v.mutable, orig_c: v.c, orig_ty: v.ty, ro: v.ro, via: v.via, root: v.root } };
+            n = { key: key ?? "", l: { c: p.value, ty: inner, mutable: v.mutable, orig_c: v.c, orig_ty: v.ty, ro: v.ro, via: v.via, root: v.root, own: v.own } };
         }
         return { test: p.has, narrow: n };
     }

@@ -1,0 +1,17 @@
+warning: 'e' doesn't need var: the function never changes it
+   ┌─ tests/diag/var_unneeded.volt:38:14
+   │
+38 │ fn unchanged(var e: i32, var r: i32&) -> i32 {
+   │              ^^^^^^^^^^
+
+warning: 'r' doesn't need var: the function never changes it
+   ┌─ tests/diag/var_unneeded.volt:38:26
+   │
+38 │ fn unchanged(var e: i32, var r: i32&) -> i32 {
+   │                          ^^^^^^^^^^^
+
+error: this value is never used; did you mean += instead of +?
+   ┌─ tests/diag/var_unneeded.volt:44:5
+   │
+44 │     *mut + 1;
+   │     ^^^^^^^^

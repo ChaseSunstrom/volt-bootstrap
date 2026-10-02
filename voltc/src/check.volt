@@ -155,6 +155,7 @@ struct local {
     via: reach? = null;
     root: str? = null;
     param: bool = false; // a parameter of the fn (for messages: "a parameter without var")
+    own: u32? = null;    // the local whose storage this is (its place: itself, or the one an if narrowed)
 }
 
 // a cleanup registered in a scope: a defer, or deleting an owned local if its flag says it's still live
@@ -221,6 +222,22 @@ struct fn_cx {
     call_start: bool = false;
     ret_local: local_ref? = null; // fn_exit's _ret
     body: u64? = null;            // the fn instance or closure being checked (lends.volt)
+    var_params: std::vec<var_param> = {}; // its var parameters, and whether it changed them yet
+}
+
+// a var parameter of the fn being checked: its place and name
+struct var_param {
+    c: u32;
+    name: str;
+    changed: bool = false;
+}
+
+// a var parameter of a fn decl: where, and whether any instance changes it
+struct var_seen {
+    decl: u32;
+    name: str;
+    at: span;
+    changed: bool;
 }
 
 // a fresh fn context with its outermost scope, lowering into ir fn irf
@@ -249,6 +266,7 @@ struct tval {
     rop: bool = false;
     pvia: reach? = null;
     root: str? = null;
+    own: u32? = null; // a place in a local's own storage (the local's place): changing it needs its var
 }
 
 // a literal's value, kept on a tval so the literal can still adapt to the type it ends up as
@@ -402,6 +420,7 @@ struct checker {
     lend_edges: std::vec<lend_edge> = {};
     lends: std::vec<lend> = {};
     ro_hooks: std::vec<u32> = {}; // copy and as_str hooks: called on vals, so they only read this
+    var_seen: std::vec<var_seen> = {}; // var parameters per fn decl (warn_var_params)
     err_name: u32? = null; // volt_err_name's ir fn
     owned_tys: std::vec<std::box<ty>> = {};     // type expressions made by the checker
     owned_gargs: std::vec<std::box<garg>> = {};

@@ -45,6 +45,7 @@ impl Checker {
                     return err(span, "can't take the address of a temporary value; store it in a variable first");
                 }
                 let ty = self.t.intern(Ty::Ref(v.ty));
+                self.note_mut(&v);
                 let (ro, via, root) = Self::addr_prov(&v);
                 Ok(Val { pure: v.pure, ro, via, root, ..Val::new(ty, format!("(&({}))", v.c)) })
             }
@@ -344,6 +345,7 @@ impl Checker {
             return err(le.span, "can't assign to this; it's immutable (val, or a parameter without var)");
         }
         self.note_write(&l);
+        self.note_mut(&l);
         let Some(op) = op else {
             // a narrowed optional takes either its payload type or the full optional back; a
             // narrowed pointer is always stored whole (its checked read would trap on a null one)

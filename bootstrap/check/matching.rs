@@ -34,6 +34,7 @@ impl Checker {
         }
         // what x& bindings reach: the matched place, as &place would (lends.rs)
         let mprov = Self::addr_prov(&s);
+        let s_own = Val { own: s.own.clone(), ..Val::new(VOID, "") };
         let st = s.ty;
         let sc = self.cty(st);
         // a place is matched where it is (x& bindings point into it; plain ones copy the payload when
@@ -76,6 +77,7 @@ impl Checker {
                         let tc = self.cty(*ty);
                         let local = self.new_local(name, *ty, false);
                         if *by_ref {
+                            self.note_mut(&s_own);
                             if let Some(x) = self.cx.scopes.last_mut().unwrap().vars.get_mut(name.as_str()) {
                                 (x.ro, x.via, x.root) = mprov.clone();
                             }

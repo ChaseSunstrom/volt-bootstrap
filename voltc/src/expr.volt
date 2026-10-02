@@ -99,6 +99,7 @@ attach fn local_val(this: checker&, l: local&, span: span) -> tval {
     v.ro = l.ro;
     v.via = l.via;
     v.root = l.root;
+    v.own = l.own;
     if (this.opts.release || !this.narrow_recheck(l)) {
         return v;
     }
@@ -443,6 +444,7 @@ attach fn coerce(this: checker&, v: tval, to: u32, span: span) -> compile_error!
                         put(&inits, { field: 0, value: first });
                         put(&inits, { field: 1, value: this.ir.int(@cast<i128>(n), USIZE) });
                         // the slice reaches the array, as &array would
+                        this.note_mut(&v);
                         var r = retyped(&v, to, this.ir.node(ir_kind::AGG(move inits), to));
                         addr_prov(&r, &v);
                         return r;
@@ -714,6 +716,7 @@ attach fn path_expr(this: checker&, p: path&, want: u32?, span: span) -> compile
             v.ro = l.ro;
             v.via = l.via;
             v.root = l.root;
+            v.own = l.own;
             if (l.flag != null) {
                 v.owner = name;
             }

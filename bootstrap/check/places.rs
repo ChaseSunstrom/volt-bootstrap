@@ -44,13 +44,13 @@ impl Checker {
         if let Ty::Ptr(_) = self.t.get(b.ty) {
             return err(span, format!("this is a pointer ({}); reach what it points at with ->: p->{name}", self.ty_name(b.ty)));
         }
-        let (ty, access, lv, mutable, rop, pvia) = match self.t.get(b.ty).clone() {
-            Ty::Ref(inner) => (inner, format!("({})->", b.c), true, b.ro & 1 == 0, b.ro & 1 != 0, b.via),
-            _ => (b.ty, format!("({}).", b.c), b.lv, b.mutable, b.rop, b.pvia),
+        let (ty, access, lv, mutable, rop, pvia, own) = match self.t.get(b.ty).clone() {
+            Ty::Ref(inner) => (inner, format!("({})->", b.c), true, b.ro & 1 == 0, b.ro & 1 != 0, b.via, None),
+            _ => (b.ty, format!("({}).", b.c), b.lv, b.mutable, b.rop, b.pvia, b.own.clone()),
         };
         let root = b.root.clone();
         // a field is part of the place; what a pointer field points at isn't (a val is shallow)
-        let place = |ty, c: String| Val { lv, mutable, pure: b.pure, rop, pvia, via: lends::deeper(pvia, 1), root: root.clone(), ..Val::new(ty, c) };
+        let place = |ty, c: String| Val { lv, mutable, pure: b.pure, rop, pvia, via: lends::deeper(pvia, 1), root: root.clone(), own: own.clone(), ..Val::new(ty, c) };
         match self.t.get(ty).clone() {
             Ty::Struct(sid) => {
                 let fields = self.struct_fields(sid, span)?;
@@ -149,7 +149,7 @@ impl Checker {
         if matches!(self.t.get(b.ty), Ty::Slice(_)) {
             return Ok(Self::through(Val { lv, mutable: lv, ..Val::new(elem, c) }, &b));
         }
-        Ok(Val { lv, mutable: lv && b.mutable, rop: b.rop, pvia: b.pvia, via: lends::deeper(b.pvia, 1), root: b.root.clone(), ..Val::new(elem, c) })
+        Ok(Val { lv, mutable: lv && b.mutable, rop: b.rop, pvia: b.pvia, via: lends::deeper(b.pvia, 1), root: b.root.clone(), own: b.own.clone(), ..Val::new(elem, c) })
     }
 
     /// `b[lo..hi]` (either end optional): a slice of an array or slice, a str of a str. Debug builds
@@ -161,6 +161,7 @@ impl Checker {
         }
         // the slice reaches the array (as &array would) or what the sliced slice does
         let (sro, svia, sroot) = if matches!(self.t.get(b.ty), Ty::Slice(_)) { (b.ro, b.via, b.root.clone()) } else { Self::addr_prov(&b) };
+        self.note_mut(&b);
         let lo = match lo {
             Some(e) => self.expr_as(e, USIZE)?.c,
             None => "0".into(),

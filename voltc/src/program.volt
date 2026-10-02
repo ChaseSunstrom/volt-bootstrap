@@ -83,6 +83,7 @@ attach fn program(this: checker&) -> compile_error!void {
     }
     // what can't change, lent to fns that write through it (lends.volt)
     this.check_lends();
+    this.warn_var_params();
     if (this.errors.len > 0) {
         return; // compile() reports this.errors
     }
@@ -250,7 +251,11 @@ attach fn gen_fn(this: checker&, idx: u32) -> compile_error!void {
             c = this.ir.node(ir_kind::LOCAL(lid), p.ty);
             k += 1;
         }
-        var l: local = { c: c, ty: p.ty, mutable: p.mutable, root: p.name, param: true };
+        var l: local = { c: c, ty: p.ty, mutable: p.mutable, root: p.name, param: true, own: c };
+        // var this takes the receiver by value (it consumes it): that's what its var is for
+        if (p.mutable && p.name != "this") {
+            put(&this.cx.var_params, { c: c, name: p.name });
+        }
         if (this.reaches(p.ty)) {
             val rv: reach = { k: @cast<u32>(i), off: 0 }; // what it reaches is parameter i's memory
             l.via = rv;
@@ -276,6 +281,7 @@ attach fn gen_fn(this: checker&, idx: u32) -> compile_error!void {
         }
         return copy e;
     };
+    this.note_var_params(decl, f);
     var div = bc.div;
     put(&stmts, bc.c);
     if (!div && this.cx.scopes.at(0).exits.len > 0) {

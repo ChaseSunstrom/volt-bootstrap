@@ -1337,6 +1337,7 @@ attach fn emit_call(this: checker&, inst: u32, a: adj, rv: tval?, pre: std::vec<
         match (a) {
             .REF => {
                 // a temporary's slot is fresh, but what it points at may not be
+                this.note_mut(&r);
                 var x = vnew(0, 0);
                 addr_prov(&x, &r);
                 this.note_arg(body_key(BODY_FN, inst), 0, &x, span);

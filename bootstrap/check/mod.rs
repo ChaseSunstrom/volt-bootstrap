@@ -130,6 +130,8 @@ pub struct Local {
     pub root: Option<String>,
     /// a parameter of the fn (for messages: "a parameter without var")
     pub param: bool,
+    /// the local whose storage this is (its C name: itself, or the one an if narrowed)
+    pub own: Option<String>,
     pub orig: Option<(String, TyId)>, // narrowed by if/while: the original variable (a pointer one re-checks on read: narrow_recheck)
     pub flag: Option<String>,          // owned local that needs delete: its C "still live" flag
     pub loops: usize,                  // loops around the declaration
@@ -188,6 +190,7 @@ pub struct FnCx {
     pub no_suspend: u32,                           // inside code where suspend can't go (defers)
     pub call_mode: Option<(Span, bool)>,           // the call at this span starts a frame (true) or is awaited
     pub body: Option<Body>,                        // the fn instance or closure being checked (lends.rs)
+    pub var_params: Vec<(String, String, bool)>,   // its var parameters: C name, name, changed yet
 }
 
 impl FnCx {
@@ -209,6 +212,7 @@ impl FnCx {
             no_suspend: 0,
             call_mode: None,
             body: None,
+            var_params: Vec::new(),
         }
     }
 }
@@ -233,6 +237,8 @@ pub struct Val {
     pub rop: bool,
     pub pvia: Via,
     pub root: Option<String>,
+    /// a place in a local's own storage (the local's C name): changing it needs the local's var
+    pub own: Option<String>,
 }
 
 /// a call lending a read-only reference to a parameter, an error if the callee writes through it
@@ -257,7 +263,7 @@ pub enum Lit {
 
 impl Val {
     pub fn new(ty: TyId, c: impl Into<String>) -> Val {
-        Val { ty, c: c.into(), lv: false, mutable: false, pure: false, lit: None, owner: None, ro: 0, via: None, rop: false, pvia: None, root: None }
+        Val { ty, c: c.into(), lv: false, mutable: false, pure: false, lit: None, owner: None, ro: 0, via: None, rop: false, pvia: None, root: None, own: None }
     }
     pub fn pure(ty: TyId, c: impl Into<String>) -> Val {
         Val { pure: true, ..Val::new(ty, c) }
@@ -345,6 +351,8 @@ pub struct Checker {
     pub lends: Vec<Lend>,
     /// copy and as_str hooks: called on vals (to copy or print them), so they only read this
     pub ro_hooks: Vec<usize>,
+    /// var parameters per fn decl: name, where, and whether any instance changes it
+    pub var_seen: Vec<(DeclId, String, Span, bool)>,
     pub frames: HashMap<usize, Vec<(String, TyId)>>, // async fn instance -> frame fields (params, locals, flags)
     pub c_includes: Vec<String>,                     // #include lines for imported C headers
     pub c_imports: HashMap<(u8, String), DeclId>,    // an imported C symbol shared by every import of it
@@ -396,6 +404,7 @@ impl Checker {
             edges: Vec::new(),
             lends: Vec::new(),
             ro_hooks: Vec::new(),
+            var_seen: Vec::new(),
             frames: HashMap::new(),
             c_includes: Vec::new(),
             c_imports: HashMap::new(),
@@ -1356,7 +1365,11 @@ impl Checker {
             param_cs.push(c.clone());
             // a reference (pointer, slice) parameter: what it reaches is reached through parameter i
             let via = self.reaches(p.ty).then_some((i as u32, 0));
-            let mut local = Local { c: c.clone(), ty: p.ty, mutable: p.mutable, orig: None, flag: None, loops: 0, ro: 0, via, root: Some(p.name.clone()), param: true };
+            let mut local = Local { c: c.clone(), ty: p.ty, mutable: p.mutable, orig: None, flag: None, loops: 0, ro: 0, via, root: Some(p.name.clone()), param: true, own: Some(c.clone()) };
+            // var this takes the receiver by value (it consumes it): that's what its var is for
+            if p.mutable && p.name != "this" {
+                self.cx.var_params.push((c.clone(), p.name.clone(), false));
+            }
             if self.needs_drop(p.ty)? {
                 // by-value params are owned by the callee
                 let flag = self.flag_for(&c);
@@ -1372,6 +1385,7 @@ impl Checker {
             // an error in a template's body belongs to one instance: say which, and where it came from
             if generic { d.label(inst.used_at, format!("{} is instantiated here", inst.name)) } else { d }
         })?;
+        self.note_var_params(inst.decl, f);
         if !self.cx.scopes[0].exits.is_empty() {
             // params: deleted when the body finishes without returning
             let at_end = if diverges { String::new() } else { self.scope_exit_code(0, 0, false)? };
@@ -1523,6 +1537,7 @@ impl Checker {
         }
         // what can't change, lent to fns that write through it (lends.rs)
         self.check_lends();
+        self.warn_var_params();
         if !self.errors.is_empty() {
             return Ok(String::new()); // compile() reports self.errors
         }

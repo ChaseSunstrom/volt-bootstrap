@@ -27,7 +27,7 @@ attach fn loops_around(this: checker&) -> usize {
 attach fn new_local(this: checker&, name: str, t: u32, mutable: bool) -> u32 {
     val c = this.slot(name, t);
     val loops = this.loops_around();
-    this.scope_top().vars.put(name, { c: c, ty: t, mutable: mutable, loops: loops, root: name });
+    this.scope_top().vars.put(name, { c: c, ty: t, mutable: mutable, loops: loops, root: name, own: c });
     if (this.opts.lsp) {
         this.lsp_add_local(c, name, t, this.name_span(this.lsp_at, name));
     }
@@ -125,6 +125,9 @@ fn is_break_value(e: expr&) -> bool {
 // an expression statement's code
 attach fn expr_stmt(this: checker&, e: expr&) -> compile_error!code {
     val v = try this.expr(e, null);
+    if (v.ty != VOID && v.ty != NEVER && no_effects(e)) {
+        return fail(e.span, unused_value(e));
+    }
     val never = v.ty == NEVER;
     return { c: try this.discard(v), div: never };
 }
@@ -898,6 +901,9 @@ attach fn for_inner(this: checker&, f: for_loop&, want: u32?, span: span) -> com
             bp.mutable = true;
             through(&bp, v);
         }
+        if (f.bindings.at(0).by_ref) {
+            this.note_mut(&bp); // (x&) points into it
+        }
         match (*this.t.get(t)) {
             .SLICE(x) => {
                 ep.ro = bp.ro;
@@ -977,6 +983,7 @@ attach fn for_inner(this: checker&, f: for_loop&, want: u32?, span: span) -> com
                 if (through_ref) {
                     this.note_arg(body_key(BODY_FN, h), 0, &v, f.iter.span);
                 } else if (v.lv && v.mutable) {
+                    this.note_mut(&v);
                     var a = vnew(0, 0);
                     addr_prov(&a, &v);
                     this.note_arg(body_key(BODY_FN, h), 0, &a, f.iter.span);
@@ -1139,4 +1146,125 @@ attach fn for_body(this: checker&, f: for_loop&, elem_ty: u32, elem: u32, index:
         put(&out, *x);
     }
     return move out;
+}
+
+// changing v in place (or taking its address): its local, if a var parameter, needs the var
+attach fn note_mut(this: checker&, v: tval&) -> void {
+    val o = v.own;
+    if (o) {
+        for (p&) in this.cx.var_params.items() {
+            if (p.c == o) {
+                p.changed = true;
+            }
+        }
+    }
+}
+
+// this instance's var parameters, and whether it changed them (any instance of the fn counts)
+attach fn note_var_params(this: checker&, decl: u32, f: fn_decl&) -> void {
+    for (p&) in this.cx.var_params.items() {
+        var found = false;
+        for (s&) in this.var_seen.items() {
+            if (s.decl == decl && s.name == p.name) {
+                s.changed = s.changed || p.changed;
+                found = true;
+            }
+        }
+        if (!found) {
+            var at: span = {};
+            for (q&) in f.params.items() {
+                if (q.name == p.name) {
+                    at = q.span;
+                }
+            }
+            put(&this.var_seen, { decl: decl, name: p.name, at: at, changed: p.changed });
+        }
+    }
+    this.cx.var_params.clear();
+}
+
+// a var parameter no instance changes: the var isn't needed (in source order)
+attach fn warn_var_params(this: checker&) -> void {
+    this.var_seen.items().sort_by(|| (a: var_seen&, b: var_seen&) -> i32 {
+        if (a.at.file < b.at.file || (a.at.file == b.at.file && a.at.lo < b.at.lo)) {
+            return -1;
+        }
+        if (a.at.file == b.at.file && a.at.lo == b.at.lo) {
+            return 0;
+        }
+        return 1;
+    });
+    for (s&) in this.var_seen.items() {
+        if (!s.changed) {
+            put(&this.warnings, { span: s.at, msg: fmt("'{}' doesn't need var: the function never changes it", S(s.name)), warning: true });
+        }
+    }
+    this.var_seen.clear();
+}
+
+// an expression that only computes a value: as a statement, it does nothing
+fn no_effects(e: expr&) -> bool {
+    match (e.kind) {
+        .INT(x) => { return true; },
+        .FLOAT(x) => { return true; },
+        .CHAR(x) => { return true; },
+        .STR(x&) => { return true; },
+        .BOOL(x) => { return true; },
+        .NULL => { return true; },
+        .THIS => { return true; },
+        .ERROR_ANY => { return true; },
+        .PATH(x&) => { return true; },
+        .DOT_VARIANT(x) => { return true; },
+        .UNARY(op, x) => { return no_effects(x); },
+        .CAST(x, t&) => { return no_effects(x); },
+        .FIELD(x, n, g&) => { return no_effects(x); },
+        .BINARY(op, a, b) => { return no_effects(a) && no_effects(b); },
+        .INDEX(a, b) => { return no_effects(a) && no_effects(b); },
+        .TUPLE(xs&) => {
+            for (x&) in xs.items() {
+                if (!no_effects(x)) {
+                    return false;
+                }
+            }
+            return true;
+        },
+        .LITERAL(fs&) => {
+            for (f&) in fs.items() {
+                if (!no_effects(&f.value)) {
+                    return false;
+                }
+            }
+            return true;
+        },
+        default => { return false; },
+    }
+}
+
+// the message for a statement that only computes a value: `place + 1` likely meant `+=`, and
+// `place == x` meant `=`
+fn unused_value(e: expr&) -> std::string {
+    match (e.kind) {
+        .BINARY(op, a, b) => {
+            var place = false;
+            match (a.kind) {
+                .PATH(p&) => { place = true; },
+                .THIS => { place = true; },
+                .FIELD(x, n, g&) => { place = true; },
+                .INDEX(x, i) => { place = true; },
+                .UNARY(u, x) => { place = u == unop::DEREF; },
+                default => {},
+            }
+            val compound = op == binop::ADD || op == binop::SUB || op == binop::MUL || op == binop::DIV || op == binop::REM || op == binop::BITAND || op == binop::BITOR || op == binop::BITXOR || op == binop::SHL || op == binop::SHR;
+            if (place && compound) {
+                var m = S(binop_text(op));
+                m.push('=');
+                return fmt2("this value is never used; did you mean {} instead of {}?", move m, S(binop_text(op)));
+            }
+            if (place && op == binop::EQ) {
+                return S("this value is never used; did you mean = instead of ==?");
+            }
+        },
+        default => {},
+    }
+    return S("this value is never used");
 }

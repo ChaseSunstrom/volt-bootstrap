@@ -35,7 +35,7 @@ impl Checker {
     /// a local as a value. A narrowed pointer re-checks for null on each read in debug builds (a
     /// null one traps like `->` would); release builds don't check, like every raw pointer deref
     pub fn local_val(&mut self, l: &Local, span: Span) -> Val {
-        let base = Val { lv: true, mutable: l.mutable, ro: l.ro, via: l.via, root: l.root.clone(), ..Val::pure(l.ty, l.c.clone()) };
+        let base = Val { lv: true, mutable: l.mutable, ro: l.ro, via: l.via, root: l.root.clone(), own: l.own.clone(), ..Val::pure(l.ty, l.c.clone()) };
         if self.opts.release || !self.narrow_recheck(l) {
             return base;
         }
@@ -191,7 +191,7 @@ impl Checker {
             _ => {}
         }
         let (from_t, to_t) = (self.t.get(v.ty).clone(), self.t.get(to).clone());
-        let ok = |ty: TyId, c: String, v: &Val| Ok(Val { ty, c, lv: false, mutable: false, pure: v.pure, lit: None, owner: None, ro: v.ro, via: v.via, rop: false, pvia: None, root: v.root.clone() });
+        let ok = |ty: TyId, c: String, v: &Val| Ok(Val { ty, c, lv: false, mutable: false, pure: v.pure, lit: None, owner: None, ro: v.ro, via: v.via, rop: false, pvia: None, root: v.root.clone(), own: None });
         match (from_t, to_t) {
             (Ty::Int(a), Ty::Int(b)) if a.widens_to(b) => ok(to, format!("(({})({}))", b.c(), v.c), &v),
             (Ty::Float(a), Ty::Float(b)) if a <= b => {
@@ -215,6 +215,7 @@ impl Checker {
                 }
                 let c = self.cty(to);
                 // the slice reaches the array, as &array would
+                self.note_mut(&v);
                 let (ro, via, root) = Self::addr_prov(&v);
                 Ok(Val { ro, via, root, ..ok(to, format!("(({c}){{ ({}).a, {n} }})", v.c), &v)? })
             }
@@ -404,7 +405,7 @@ impl Checker {
                     });
                 }
                 let owner = l.flag.as_ref().map(|_| name.clone());
-                return Ok(Val { lv: true, mutable: l.mutable, owner, ro: l.ro, via: l.via, root: l.root.clone(), ..Val::pure(l.ty, l.c) });
+                return Ok(Val { lv: true, mutable: l.mutable, owner, ro: l.ro, via: l.via, root: l.root.clone(), own: l.own.clone(), ..Val::pure(l.ty, l.c) });
             }
             match self.cx.env.generics.iter().rev().find(|(n, _)| n == name).cloned() {
                 Some((_, GVal::Int(v))) => return Ok(self.int_lit(v, want)),
