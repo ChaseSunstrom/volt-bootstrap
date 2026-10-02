@@ -169,21 +169,19 @@ namespace process {
             var real: u8[4096];
             val r = realpath(@cast<cstr>(&buf[0]), &real[0]) ?? return null;
             return std::string::from(@cast<str>(@slice(@cast<u8*>(r), strlen(r))), copy allocator);
-        } else {
-            comptime if (@cfg("os", "freebsd")) {
-                var mib: i32[4] = { 1, 14, 12, -1 }; // CTL_KERN, KERN_PROC, KERN_PROC_PATHNAME, this process
-                var n: usize = 4096;
-                if (sysctl(&mib[0], 4, @cast<void*>(&buf[0]), &n, @cast<void*>(0), 0) != 0 || n == 0) {
-                    return null;
-                }
-                return std::string::from(@cast<str>(@slice(&buf[0], n - 1)), copy allocator); // n counts the NUL
-            } else {
-                val n = readlink("/proc/self/exe", &buf[0], 4096);
-                if (n <= 0 || n == 4096) {
-                    return null;
-                }
-                return std::string::from(@cast<str>(@slice(&buf[0], @cast<usize>(n))), copy allocator);
+        } else if (@cfg("os", "freebsd")) {
+            var mib: i32[4] = { 1, 14, 12, -1 }; // CTL_KERN, KERN_PROC, KERN_PROC_PATHNAME, this process
+            var n: usize = 4096;
+            if (sysctl(&mib[0], 4, @cast<void*>(&buf[0]), &n, @cast<void*>(0), 0) != 0 || n == 0) {
+                return null;
             }
+            return std::string::from(@cast<str>(@slice(&buf[0], n - 1)), copy allocator); // n counts the NUL
+        } else {
+            val n = readlink("/proc/self/exe", &buf[0], 4096);
+            if (n <= 0 || n == 4096) {
+                return null;
+            }
+            return std::string::from(@cast<str>(@slice(&buf[0], @cast<usize>(n))), copy allocator);
         }
     }
 

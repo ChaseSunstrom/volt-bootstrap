@@ -78,16 +78,12 @@ namespace net {
     internal fn by_os(linux: i32, macos: i32, freebsd: i32, windows: i32) -> i32 {
         comptime if (@cfg("os", "windows")) {
             return windows;
+        } else if (@cfg("os", "macos")) {
+            return macos;
+        } else if (@cfg("os", "freebsd")) {
+            return freebsd;
         } else {
-            comptime if (@cfg("os", "macos")) {
-                return macos;
-            } else {
-                comptime if (@cfg("os", "freebsd")) {
-                    return freebsd;
-                } else {
-                    return linux;
-                }
-            }
+            return linux;
         }
     }
 
@@ -121,12 +117,10 @@ namespace net {
     internal fn last_error() -> i32 {
         comptime if (@cfg("os", "windows")) {
             return win::WSAGetLastError();
+        } else if (@cfg("os", "linux")) {
+            return *posix::__errno_location();
         } else {
-            comptime if (@cfg("os", "linux")) {
-                return *posix::__errno_location();
-            } else {
-                return *posix::__error();
-            }
+            return *posix::__error();
         }
     }
 

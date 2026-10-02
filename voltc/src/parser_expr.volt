@@ -715,6 +715,10 @@ attach fn loop_expr(this: parser&, lab: str?, is_comptime: bool) -> compile_erro
         if (this.eat_kw("else")) {
             if (this.is_kw("if")) {
                 els = bx(try this.loop_expr(null, is_comptime));
+            } else if (this.is_kw("comptime") && this.is_kw_at(1, "if")) {
+                // `else comptime if`: that branch is decided in the compiler (after `comptime if`, so is a plain `else if`)
+                this.bump();
+                els = bx(try this.loop_expr(null, true));
             } else {
                 val b = try this.block();
                 val sp = b.span;

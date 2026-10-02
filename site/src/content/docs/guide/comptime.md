@@ -69,7 +69,9 @@ fn main() -> void {
 ## comptime if, match and for
 
 Inside any function, `comptime if`, `comptime match` and `comptime for` are decided in the
-compiler. A branch that isn't taken isn't even checked; a `comptime for` unrolls.
+compiler. A branch that isn't taken isn't even checked; a `comptime for` unrolls. In a `comptime if`
+chain every `else if` is decided in the compiler too, and `else comptime if` makes one branch of a
+run-time `if` a compile-time choice.
 
 ```volt
 use std::io;

@@ -1355,6 +1355,10 @@ impl<'a> Parser<'a> {
             let els = if self.eat_kw("else") {
                 if self.is_kw("if") {
                     Some(Box::new(self.loop_expr(None, comptime)?))
+                } else if self.is_kw("comptime") && self.is_kw_at(1, "if") {
+                    // `else comptime if`: that branch is decided in the compiler (after `comptime if`, so is a plain `else if`)
+                    self.bump();
+                    Some(Box::new(self.loop_expr(None, true)?))
                 } else {
                     let b = self.block()?;
                     Some(Box::new(Expr { span: b.span, kind: ExprKind::Block(None, b) }))
