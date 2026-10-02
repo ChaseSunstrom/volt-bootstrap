@@ -14,7 +14,36 @@ sidebar:
 | `bolt run [-- ARGS]` | build and run an executable (`--bin NAME`, `--example NAME`) |
 | `bolt test [FILTER]` | build and run the tests (`--no-run` builds only) |
 | `bolt bench [FILTER]` | build the benchmarks with the bench profile and time them |
+| `bolt hot [FILES] [-- ARGS]` | run the executable (or `.volt` FILES) sampled, and show where it spends its time |
 | `bolt clean` | remove `target/` (with `--release` or `--profile`, only that profile's) |
+
+### Finding the hot spots
+
+`bolt hot` builds an optimized, sampled copy of the program (in `target/hot/`, apart from the
+normal builds), runs it, and reports the hottest functions (their own time and with what they
+call), the hottest `.volt` lines, and the hottest call paths. Code that got inlined counts where
+it's written, and time spent in a shared library (libc's `malloc`, say) is named too.
+
+```
+$ bolt hot bench/closures/main.volt -- 300
+  self   total  function
+ 49.2%   98.5%  pipeline<closure(i64) -> i64, closure(i64) -> bool> (bench/closures/main.volt:6)
+ 38.6%   38.6%  a closure (bench/closures/main.volt:30:92)
+ 10.7%   10.7%  a closure (bench/closures/main.volt:30:39)
+
+hottest lines
+ 49.2%  bench/closures/main.volt:12  sum += y;
+ 49.2%  bench/closures/main.volt:30  total += pipeline(xs.items(), |factor| (x: i64) -> i64 ...
+
+hottest paths
+ 49.2%  main -> pipeline<closure(i64) -> i64, closure(i64) -> bool>
+ 38.6%  main -> pipeline<closure(i64) -> i64, closure(i64) -> bool> -> closure@main.volt:30:92
+```
+
+The program samples itself (about a thousand times a second of CPU time), so this needs no
+`perf`, debugger or root; it runs on Linux, and names the samples with `llvm-symbolizer` or
+`addr2line`. Run the program long enough to get a few hundred samples. With `--backend llvm` it
+reports functions only, as that backend doesn't write line information yet.
 
 ## Packages
 

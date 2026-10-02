@@ -27,6 +27,7 @@ struct cli {
     lang: str = "c";              // bindings --lang
     release: bool = false;
     leak_check: bool = false;
+    profiler: bool = false; // --profiler: bolt hot's sampler, line info and frame pointers
     sexp: bool = false;
     llvm: bool = false; // --backend llvm
     format: u8 = 0;     // --message-format (FORMAT_HUMAN, FORMAT_SHORT, FORMAT_JSON)
@@ -37,7 +38,7 @@ struct cli {
 }
 
 fn usage() -> never {
-    std::eprintln("usage: voltc <command> FILES... [options]\ncommands:\n  parse FILE --sexp       parse only\n  check FILES            type check\n  emit-c FILES [-o DIR]  print the generated C, or write it as files to DIR\n  emit-llvm FILES        print the generated LLVM IR\n  build FILES [-o OUT]   compile to an executable\n  run FILES [-- ARGS]    build and run\n  lib NAME [-o OUT.a]    precompile package NAME's non-generic code into a static library; with\n                         --shared (OUT.so) or --static, a self-contained library other languages link\n  bindings NAME --lang L bindings of package NAME's export fns for L: c, cpp, rust, zig, python, pyi\n                         (its stubs), csharp, java, go, lua (a C module), dart, swift, kotlin, ruby (a C\n                         extension), node (a Node-API addon's C), js (its loader), ts (its types), or\n                         json (the model, for generators of your own)\n  std-dir                print where the std package is\n  lsp                    the language server for editors (JSON-RPC on stdin and stdout)\n  doc NAME               package NAME's declarations and their comments, as JSON\noptions:\n  --release              optimize, wrap on overflow instead of trapping\n  --leak-check           debug: exit 102 if runtime allocations were never freed\n  --std DIR | --no-std   where the std package is (default: $VOLT_STD, then next to voltc)\n  --pkg NAME=PATH        a package: PATH's .volt files, wrapped in namespace NAME\n  --cfg [PKG:]KEY[=VAL]  set KEY (to VAL) for @cfg in the program's files, or in package PKG's\n  --lib NAME             check: package NAME alone, as a library (no program files, no main)\n  --link NAME=LIB.a      take package NAME's non-generic code from a library built by voltc lib\n  --cc ARG               pass ARG to the C compiler when linking (a .c file, -lNAME, ...)\n  --message-format F     how errors are printed: human (default), short (one line each) or json\n  --color WHEN           colour errors: auto (default: on a terminal, unless NO_COLOR is set), always, never\n  --error-limit N        show at most N errors (default 20; 0: all of them)\n  --backend c|llvm       generate C (the default) or native code through LLVM");
+    std::eprintln("usage: voltc <command> FILES... [options]\ncommands:\n  parse FILE --sexp       parse only\n  check FILES            type check\n  emit-c FILES [-o DIR]  print the generated C, or write it as files to DIR\n  emit-llvm FILES        print the generated LLVM IR\n  build FILES [-o OUT]   compile to an executable\n  run FILES [-- ARGS]    build and run\n  lib NAME [-o OUT.a]    precompile package NAME's non-generic code into a static library; with\n                         --shared (OUT.so) or --static, a self-contained library other languages link\n  bindings NAME --lang L bindings of package NAME's export fns for L: c, cpp, rust, zig, python, pyi\n                         (its stubs), csharp, java, go, lua (a C module), dart, swift, kotlin, ruby (a C\n                         extension), node (a Node-API addon's C), js (its loader), ts (its types), or\n                         json (the model, for generators of your own)\n  std-dir                print where the std package is\n  lsp                    the language server for editors (JSON-RPC on stdin and stdout)\n  doc NAME               package NAME's declarations and their comments, as JSON\noptions:\n  --release              optimize, wrap on overflow instead of trapping\n  --leak-check           debug: exit 102 if runtime allocations were never freed\n  --profiler             sample where the program spends its time (bolt hot reads it): line info,\n                         frame pointers, and a sampler that writes $VOLT_PROFILE_OUT at exit\n  --std DIR | --no-std   where the std package is (default: $VOLT_STD, then next to voltc)\n  --pkg NAME=PATH        a package: PATH's .volt files, wrapped in namespace NAME\n  --cfg [PKG:]KEY[=VAL]  set KEY (to VAL) for @cfg in the program's files, or in package PKG's\n  --lib NAME             check: package NAME alone, as a library (no program files, no main)\n  --link NAME=LIB.a      take package NAME's non-generic code from a library built by voltc lib\n  --cc ARG               pass ARG to the C compiler when linking (a .c file, -lNAME, ...)\n  --message-format F     how errors are printed: human (default), short (one line each) or json\n  --color WHEN           colour errors: auto (default: on a terminal, unless NO_COLOR is set), always, never\n  --error-limit N        show at most N errors (default 20; 0: all of them)\n  --backend c|llvm       generate C (the default) or native code through LLVM");
     std::process::exit(2);
 }
 
@@ -77,6 +78,8 @@ fn parse_cli() -> cli {
             c.standalone = true;
         } else if (a == "--release") {
             c.release = true;
+        } else if (a == "--profiler") {
+            c.profiler = true;
         } else if (a == "--leak-check") {
             c.leak_check = true;
         } else if (a == "--sexp") {
@@ -530,7 +533,7 @@ fn compile_with(c: cli&, s: sources&, shim: shim_src*) -> std::box<checker> {
         }
     }
     // the runtime lives in the program's own C unit, never in a library
-    var o: opts = { release: c.release, leak_check: c.leak_check, guards: move guards, lib: lib, runtime: lib == null || c.shared || c.standalone, cfg: copy c.cfg, pp_flags: preprocessor_flags(&c.cc_args) };
+    var o: opts = { release: c.release, leak_check: c.leak_check, guards: move guards, lib: lib, runtime: lib == null || c.shared || c.standalone, cfg: copy c.cfg, pp_flags: preprocessor_flags(&c.cc_args), line_info: c.profiler };
     for (u&) in s.units.items() {
         if (u.pkg) {
             put(&o.pkg_files, { file: u.file, pkg: u.pkg});
@@ -675,6 +678,9 @@ fn main() -> i32 {
             cc(chk.c_unit().as_str(), out.as_str(), &lc, false);
         }
         write_deps(out.as_str(), &chk.import_deps);
+        if (c.profiler) {
+            write_voltmap(&*chk, out.as_str());
+        }
         if (cpp_o) {
             unlink_path(cpp_o.as_str());
         }
@@ -843,6 +849,49 @@ fn main() -> i32 {
         return code;
     }
     usage();
+}
+
+// --profiler: OUT.voltmap, each function's symbol and what it is in Volt, a line each (bolt hot names
+// samples with it)
+fn write_voltmap(chk: checker&, out: str) -> void {
+    var text: std::string = {};
+    for (i) in 0..chk.ir.fns.len {
+        val f = chk.ir.fn_at(@cast<u32>(i));
+        if (f.origin == null) {
+            // glue the compiler made (a type's drop): its description, without a place
+            if (f.about.len > 0) {
+                text.append(f.name);
+                text.push('\t');
+                text.append(f.about);
+                text.push('\n');
+            }
+            continue;
+        }
+        val o = f.origin ?? continue;
+        text.append(f.name);
+        text.push('\t');
+        if (f.about.len > 0) {
+            text.append(f.about);
+        } else {
+            text.append(f.name);
+        }
+        text.append(" (");
+        text.append(chk.files.at(@cast<usize>(o.file)).name);
+        text.push(':');
+        val lc = chk.line_col(o);
+        text.append_uint(@cast<u64>(lc.line));
+        if (starts_with(f.about, "a closure")) {
+            // two closures can share a line
+            text.push(':');
+            text.append_uint(@cast<u64>(lc.col));
+        }
+        text.append(")\n");
+    }
+    var p = S(out);
+    p.append(".voltmap");
+    std::fs::write_file(p.as_str(), text.as_str()) catch |e| {
+        die(fmt("can't write {}", copy p));
+    };
 }
 
 // a path without its extension (the last .xyz after the last /)
@@ -1057,6 +1106,14 @@ fn cc_run(inputs: std::vec<str>&, out: str, c: cli&, object: bool) -> void {
     } else {
         put(&argv, "-O0");
         put(&argv, "-g");
+    }
+    if (c.profiler) {
+        // bolt hot: line info and frame pointers for the sampler's stack walk (where the program was
+        // loaded is in the profile, so it links as it always would)
+        val pf: str[4] = { "-g", "-fno-omit-frame-pointer", "-mno-omit-leaf-frame-pointer", "-DVOLT_PROFILE" };
+        for (f) in pf {
+            put(&argv, f);
+        }
     }
     val r = std::process::capture(argv.items(), "") catch |e| {
         die(fmt("can't run {}", S(compiler)));

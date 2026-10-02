@@ -60,11 +60,19 @@ attach fn block_scoped(this: checker&, b: block&) -> compile_error!code {
     var stmts: std::vec<u32> = {};
     var div = false;
     for (s&) in b.stmts.items() {
+        if (this.opts.line_info) {
+            put(&stmts, this.ir.node(ir_kind::AT(s.span.file, @cast<u32>(this.line_col(s.span).line)), VOID));
+        }
         val c = try this.stmt(s);
         put(&stmts, c.c);
         div = div || c.div;
     }
     if (!div) {
+        if (this.opts.line_info && b.span.hi > b.span.lo) {
+            // what leaving the block runs (drops, defers) belongs to its closing brace
+            val end: span = { file: b.span.file, lo: b.span.hi - 1, hi: b.span.hi };
+            put(&stmts, this.ir.node(ir_kind::AT(b.span.file, @cast<u32>(this.line_col(end).line)), VOID));
+        }
         val sc = this.cx.scopes.len - 1;
         for (x&) in (try this.scope_exit_code(sc, sc, false)).items() {
             put(&stmts, *x);

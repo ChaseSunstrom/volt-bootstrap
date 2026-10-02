@@ -319,6 +319,7 @@ struct opts {
     cfg: std::vec<cfg_arg> = {};        // --cfg, for @cfg
     pp_flags: std::vec<str> = {};       // the --cc flags the C preprocessor needs (-I, -D...)
     lsp: bool = false;                  // record names for the language server (lsp.volt)
+    line_info: bool = false;            // mark each statement's source line in the IR (--profiler)
 }
 
 // an error variant's code, its name and its qualified name (for volt_err_name)

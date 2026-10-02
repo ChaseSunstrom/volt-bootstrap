@@ -26,6 +26,10 @@ struct cgen {
     targets: std::map<u32, bool> = {};
     // struct members go one per line at this depth (2 inside a union)
     mdepth: usize = 1;
+    // --profiler: the Volt line the statements being written come from (0: none yet in this fn); each
+    // C statement gets it again, since one Volt statement can be several lines of C
+    at_file: u32 = 0;
+    at_line: u32 = 0;
 }
 
 fn int_c(k: int_ty) -> str {
@@ -1424,7 +1428,31 @@ attach fn nested(this: cgen&, out: std::string&, n: u32) -> void {
 
 // one statement (or, for BLOCK and SEQ, several), each on its own line. Blocks don't need braces:
 // every local is declared at the top of the function, and labels are the function's
+// #line N "file": the C after it comes from that Volt line (--profiler builds' debug info)
+fn line_directive(out: std::string&, file: str, line: u32) -> void {
+    out.append("#line ");
+    out.append_uint(@cast<u64>(line));
+    out.append(" \"");
+    for (ch) in file {
+        if (ch == '\\' || ch == '"') {
+            out.push('\\');
+        }
+        out.push(ch);
+    }
+    out.push('"');
+}
+
 attach fn stmt(this: cgen&, out: std::string&, n: u32) -> void {
+    if (this.at_line > 0 && this.inline == 0) {
+        match (this.c.ir.at(n).kind) {
+            .AT(f, l) => {},
+            .BLOCK(xs) => {},
+            default => {
+                out.push('\n');
+                line_directive(out, this.c.files.at(@cast<usize>(this.at_file)).name, this.at_line);
+            },
+        }
+    }
     match (this.c.ir.at(n).kind) {
         .DECL(l, init0) => {
             if (init0) {
@@ -1531,6 +1559,12 @@ attach fn stmt(this: cgen&, out: std::string&, n: u32) -> void {
         .UNREACHABLE => {
             this.nl(out);
             out.append("__builtin_unreachable();");
+        },
+        .AT(f, l) => {
+            // the directive itself goes before each statement after this (not inside a ({ ... }),
+            // which is written on one line)
+            this.at_file = f;
+            this.at_line = l;
         },
         .SEQ(stmts, v) => {
             for (s&) in stmts.items() {
@@ -1836,6 +1870,7 @@ attach fn name_locals(this: cgen&, i: u32) -> void {
 attach fn fn_body(this: cgen&, out: std::string&, i: u32) -> void {
     this.fn_idx = i;
     this.tmp = 0;
+    this.at_line = 0;
     this.name_locals(i);
     this.fn_header(out, i, true);
     out.append(" {");
@@ -1977,8 +2012,17 @@ attach fn c_files(this: checker&) -> std::vec<c_file> {
                 part.push(')');
             }
             part.push('\n');
+            if (this.opts.line_info) {
+                line_directive(part, this.files.at(@cast<usize>(o.file)).name, @cast<u32>(this.line_col(o).line));
+                part.push('\n');
+            }
         }
         g.fn_body(parts.at(at), *b);
+        if (this.opts.line_info) {
+            // what comes next (drop glue, another fn's prologue) isn't from that Volt line
+            line_directive(parts.at(at), "<generated>", 1);
+            parts.at(at).push('\n');
+        }
     }
     // prototypes in first-use order; none for main, nor for prelude and header fns (declared already)
     var protos: std::string = {};

@@ -159,7 +159,30 @@ fn release_voltc_works() {
         }
     }
     assert!(bad.is_empty(), "the release voltc built by itself differs on:\n{}", bad.join("\n"));
+    hot_profiles(&second, &tmp);
     let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// bolt hot with that voltc: a program's hot function and line are found and named the Volt way, and
+/// only a --profiler build has the sampler
+fn hot_profiles(voltc: &Path, tmp: &Path) {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    if !cfg!(target_os = "linux") || ["llvm-symbolizer", "addr2line"].iter().all(|t| Command::new(t).arg("--version").output().is_err()) {
+        return; // the sampler is Linux-only, and naming samples needs one of those
+    }
+    let o = Command::new(env!("CARGO_BIN_EXE_bolt")).args(["hot", "tests/hot/spin.volt"]).current_dir(root).env("VOLTC", voltc).env("VOLT_STD", root.join("std")).output().unwrap();
+    let out = String::from_utf8_lossy(&o.stdout);
+    assert!(o.status.success(), "bolt hot failed:\n{out}{}", String::from_utf8_lossy(&o.stderr));
+    assert!(out.contains("  work (tests/hot/spin.volt:4)"), "bolt hot didn't name work:\n{out}");
+    assert!(out.contains("tests/hot/spin.volt:7  s = s ^"), "bolt hot didn't find the hot line:\n{out}");
+    assert!(out.contains("main -> work"), "bolt hot didn't find the path:\n{out}");
+    // a normal build: no sampler in it
+    let exe = tmp.join("spin");
+    let b = Command::new(voltc).args(["build", "--release"]).arg(root.join("tests/hot/spin.volt")).arg("--std").arg(root.join("std")).arg("-o").arg(&exe).output().unwrap();
+    assert!(b.status.success(), "{}", String::from_utf8_lossy(&b.stderr));
+    if let Ok(syms) = Command::new("nm").arg(&exe).output() {
+        assert!(!String::from_utf8_lossy(&syms.stdout).contains("volt_prof_"), "a build without --profiler has the sampler");
+    }
 }
 
 /// both compilers, built into a package's target/<profile>/ (as bolt builds voltc), find the std three

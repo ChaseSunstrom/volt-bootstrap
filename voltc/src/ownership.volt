@@ -180,6 +180,9 @@ attach fn drop_fn(this: checker&, t: u32) -> compile_error!u32 {
     n.append_uint(@cast<u64>(t));
     val f = this.new_glue(this.intern(move n), t, VOID);
     this.glue_names.put(this.intern(move k), f);
+    if (this.opts.line_info) {
+        this.ir.fn_at(f).about = this.intern(fmt("drop {}", this.ty_name(t))); // bolt hot's name for it
+    }
     val p = this.ir.node(ir_kind::LOCAL(0), this.t.ref_to(t));
     val obj = this.ir.deref(p, t);
     var body: std::vec<u32> = {};

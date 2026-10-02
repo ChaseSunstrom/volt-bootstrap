@@ -6,6 +6,7 @@
 mod build;
 mod commands;
 mod foreign;
+mod hot;
 mod import;
 mod manifest;
 mod progress;
@@ -31,6 +32,8 @@ commands:
   build [STEP] [-Dk=v]    build the package, or run a step from its build files (-D: their options)
   check                   type-check without building anything
   run [-- ARGS]           build and run an executable (--bin NAME, --example NAME)
+  hot [FILES] [-- ARGS]   run it (or .volt FILES) sampled, and show where it spends its time: the
+                          hottest functions, .volt lines and call paths (voltc --profiler; Linux)
   test [FILTER]           build and run tests/ (each program there must exit 0); --no-run builds only
   bench [FILTER]          build and time benches/ (with the bench profile)
   clean                   remove target/ (with --release or --profile: just that profile's)
@@ -349,7 +352,67 @@ fn check_cmd(o: &Opts) {
 fn run_cmd(o: &Opts) {
     let start = Instant::now();
     let mut b = Build::new(o, "dev", !o.examples.is_empty());
-    let plans = plans(&b, o);
+    let exe = built_exe(&mut b, o);
+    b.finished(start);
+    let mut c = Command::new(&exe.out);
+    c.args(&o.prog_args);
+    status("Running", format!("`{}`", build::show(&c).replacen(&exe.out.display().to_string(), &build::rel(&exe.out), 1)));
+    let st = c.status().unwrap_or_else(|e| fail(format!("can't run {}: {e}", exe.out.display())));
+    exit(st.code().unwrap_or(1));
+}
+
+/// bolt hot: build with voltc --profiler (the package's executable, or loose .volt files), run it,
+/// and report where it spent its time (hot.rs)
+fn hot_cmd(o: &Opts) {
+    let start = Instant::now();
+    let files: Vec<&String> = o.words.iter().filter(|w| w.ends_with(".volt")).collect();
+    let mut temp = None;
+    if o.backend.as_deref() == Some("llvm") {
+        status("Note", "the LLVM backend doesn't write line info yet: functions only, inlined code counted in its caller");
+    }
+    let exe = if files.is_empty() {
+        let mut b = Build::new(o, "release", !o.examples.is_empty());
+        b.profiled();
+        let exe = built_exe(&mut b, o);
+        b.finished(start);
+        exe.out
+    } else {
+        let dir = std::env::temp_dir().join(format!("bolt-hot-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap_or_else(|e| fail(format!("can't make {}: {e}", dir.display())));
+        let exe = dir.join(std::path::Path::new(files[0]).file_stem().unwrap_or_default());
+        let mut c = Command::new(build::find_voltc());
+        c.args(["build", "--release", "--profiler"]).args(&files).arg("-o").arg(&exe);
+        if let Some(b) = &o.backend {
+            c.args(["--backend", b]);
+        }
+        status("Building", files.iter().map(|f| f.as_str()).collect::<Vec<_>>().join(" "));
+        let st = c.status().unwrap_or_else(|e| fail(format!("can't run voltc: {e}")));
+        if !st.success() {
+            exit(1);
+        }
+        temp = Some(dir);
+        exe
+    };
+    let mut prof = exe.clone().into_os_string();
+    prof.push(".prof");
+    let prof = PathBuf::from(prof);
+    let mut c = Command::new(&exe);
+    c.args(&o.prog_args).env("VOLT_PROFILE_OUT", &prof);
+    status("Running", format!("`{}` (sampling)", build::show(&c)));
+    let st = c.status().unwrap_or_else(|e| fail(format!("can't run {}: {e}", exe.display())));
+    if !st.success() {
+        status("Note", format!("the program exited with {}", st.code().map_or("a signal".to_string(), |c| c.to_string())));
+    }
+    let text = hot::read_profile(&prof).and_then(|p| hot::report(&exe, &p, 10));
+    if let Some(d) = temp {
+        let _ = std::fs::remove_dir_all(d);
+    }
+    print!("\n{}", text.unwrap_or_else(|e| fail(e)));
+}
+
+/// the executable `run` (and `hot`) means, built: --bin/--example, else the package's own
+fn built_exe(b: &mut Build, o: &Opts) -> Exe {
+    let plans = plans(b, o);
     let exe = if !o.examples.is_empty() || !o.bins.is_empty() {
         let mut picked = o.clone();
         picked.bins.retain(|n| !plans.values().any(|p| p.exes.iter().any(|(x, _)| x == n)));
@@ -377,12 +440,7 @@ fn run_cmd(o: &Opts) {
         }
     };
     b.executables(std::slice::from_ref(&exe), &plans).or_fail();
-    b.finished(start);
-    let mut c = Command::new(&exe.out);
-    c.args(&o.prog_args);
-    status("Running", format!("`{}`", build::show(&c).replacen(&exe.out.display().to_string(), &build::rel(&exe.out), 1)));
-    let st = c.status().unwrap_or_else(|e| fail(format!("can't run {}: {e}", exe.out.display())));
-    exit(st.code().unwrap_or(1));
+    exe
 }
 
 fn test_cmd(o: &Opts, bench: bool) {
@@ -440,6 +498,7 @@ fn main() {
         "build" | "b" => build_cmd(&o),
         "check" | "c" => check_cmd(&o),
         "run" | "r" => run_cmd(&o),
+        "hot" => hot_cmd(&o),
         "test" | "t" => test_cmd(&o, false),
         "bench" => test_cmd(&o, true),
         "clean" => clean_cmd(&o),

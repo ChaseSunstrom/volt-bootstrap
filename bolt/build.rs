@@ -305,6 +305,16 @@ impl Build {
     }
 
     /// voltc CMD with the std choice, the profile and the command line's options
+    /// bolt hot: voltc --profiler on everything, built under target/hot rather than the profile's own
+    /// directory, so a profiled build never stands in for a normal one
+    pub fn profiled(&mut self) {
+        self.extra.push("--profiler".into());
+        if let Some(root) = self.target.parent() {
+            self.target = root.join("hot");
+        }
+        std::fs::create_dir_all(self.target.join("deps")).unwrap_or_else(|e| fail(format!("can't make {}: {e}", self.target.display())));
+    }
+
     fn args(&self, cmd: &str) -> Vec<String> {
         let mut a = vec![cmd.to_string()];
         match &self.std {

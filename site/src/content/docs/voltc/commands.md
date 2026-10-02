@@ -30,6 +30,7 @@ sidebar:
 | --- | --- |
 | `--release` | optimize (`-O2`); drop the debug checks, so integer overflow wraps |
 | `--leak-check` | debug builds: exit with 102 if any allocation was never freed |
+| `--profiler` | build for [`bolt hot`](/volt-bootstrap/bolt/commands/#finding-the-hot-spots): line information, frame pointers, and a sampler that writes `$VOLT_PROFILE_OUT` when the program exits (Linux) |
 | `--std DIR`, `--no-std` | the std package (default: `$VOLT_STD`, then a `std/` next to voltc) |
 | `--pkg NAME=DIR` | a package: DIR's `.volt` files, in `namespace NAME` |
 | `--link NAME=LIB.a` | take package NAME's non-generic code from a `voltc lib` build |

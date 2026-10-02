@@ -38,6 +38,9 @@ clang, and LLVM. Each build runs best of three, and every build has to print the
 `BENCH_MAX_RATIO=1.25` fails when a Volt build takes more than 1.25 times as long as C (clang). A
 full run rewrites the table below.
 
+To see where one of them spends its time, run it under [`bolt hot`](/volt-bootstrap/bolt/commands/#finding-the-hot-spots):
+`bolt hot bench/binary_trees/main.volt -- 18`.
+
 ## Results
 
 A full run writes what follows: the machine and toolchain it ran on, then the times. Each time is

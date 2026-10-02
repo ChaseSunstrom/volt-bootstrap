@@ -647,6 +647,10 @@ attach fn decl_fn(this: lg&, i: u32) -> llvm::LLVMOpaqueValue* {
         if (f.noreturn || f.ret == NEVER) {
             llvm::LLVMAddAttributeAtIndex(fv, 4294967295, this.attr("noreturn"));
         }
+        if (this.c.opts.line_info) {
+            // --profiler: bolt hot's sampler walks the stack by frame pointers
+            llvm::LLVMAddAttributeAtIndex(fv, 4294967295, llvm::LLVMCreateStringAttribute(this.ctx, "frame-pointer", 13, "all", 3));
+        }
         val at = f.attrs;
         if (at.is_inline) {
             llvm::LLVMAddAttributeAtIndex(fv, 4294967295, this.attr("alwaysinline"));
@@ -1921,6 +1925,7 @@ attach fn stmt(this: lg&, n: u32) -> void {
             llvm::LLVMBuildUnreachable(this.b);
             this.dead();
         },
+        .AT(f, l) => {}, // no debug info from this backend yet
         default => { this.rv(n); },
     }
 }

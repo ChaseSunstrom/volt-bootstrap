@@ -190,3 +190,139 @@ int volt_argc;
 char **volt_argv;
 int volt_rt_argc(void) { return volt_argc; }
 volt_str volt_rt_arg(int i) { return (volt_str){ (const uint8_t *)volt_argv[i], volt_strlen(volt_argv[i]) }; }
+/* bolt hot's sampler (voltc --profiler builds only; Linux on x86-64 and aarch64). Every 100 us of the
+   process's CPU time a SIGPROF records the interrupted pc and the frame-pointer chain above it, and at
+   exit the samples go to $VOLT_PROFILE_OUT: "VPROF001", the interval in ns, the number of words, then
+   the samples, each its depth and that many addresses (the pc first); then "MAPS", a length and the
+   text of /proc/self/maps, so addresses can be named wherever they were loaded (a position-independent
+   executable, shared libraries like libc). The chain is only followed on the
+   main thread's stack (its bounds read once from /proc/self/maps): code built without frame pointers
+   (libc's) leaves anything in the frame register, and a word outside the stack is never read. */
+#if defined(VOLT_PROFILE) && defined(__linux__) && (defined(__x86_64__) || defined(__aarch64__))
+#include <signal.h>
+#include <time.h>
+#include <ucontext.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <stdlib.h>
+#include <errno.h>
+#define VOLT_PROF_WORDS (1u << 22)
+#define VOLT_PROF_NS 100000L
+static uint64_t volt_prof_buf[VOLT_PROF_WORDS];
+static uint64_t volt_prof_n; /* 64-bit: it keeps counting past a full buffer without wrapping */
+static uint64_t volt_prof_lo, volt_prof_hi; /* the main thread's stack */
+static timer_t volt_prof_timer;
+static void volt_prof_tick(int sig, siginfo_t *si, void *ucv) {
+    (void)sig;
+    (void)si;
+    ucontext_t *uc = ucv;
+#if defined(__x86_64__)
+    uint64_t pc = (uint64_t)uc->uc_mcontext.gregs[16], fp = (uint64_t)uc->uc_mcontext.gregs[10], sp = (uint64_t)uc->uc_mcontext.gregs[15];
+#else
+    uint64_t pc = uc->uc_mcontext.pc, fp = uc->uc_mcontext.regs[29], sp = uc->uc_mcontext.sp;
+#endif
+    uint64_t frames[64];
+    uint32_t n = 0;
+    frames[n++] = pc;
+    if (sp >= volt_prof_lo && sp < volt_prof_hi) {
+        /* [fp] is the caller's frame pointer and [fp + 8] the return address into it; each frame sits
+           higher up the stack than the last */
+        uint64_t low = sp;
+        while (n < 64 && fp >= low && fp + 16 <= volt_prof_hi && (fp & 7) == 0) {
+            uint64_t *f = (uint64_t *)fp;
+            if (!f[1]) break;
+            frames[n++] = f[1];
+            low = fp + 16;
+            fp = f[0];
+        }
+    }
+    uint64_t at = __atomic_fetch_add(&volt_prof_n, (uint64_t)n + 1, __ATOMIC_RELAXED);
+    if (at + n + 1 > VOLT_PROF_WORDS) return; /* full: later samples are dropped */
+    volt_prof_buf[at] = n;
+    for (uint32_t i = 0; i < n; i++) volt_prof_buf[at + 1 + i] = frames[i];
+}
+/* all of buf to fd, through EINTR; whether it all got there */
+static int volt_prof_write(int fd, const char *buf, uint64_t len) {
+    while (len) {
+        ssize_t w = write(fd, buf, len < (1u << 30) ? (size_t)len : (size_t)(1u << 30));
+        if (w < 0 && errno == EINTR) continue;
+        if (w <= 0) return 0;
+        buf += w;
+        len -= (uint64_t)w;
+    }
+    return 1;
+}
+/* (a thread caught between reserving its slot and filling it when this runs leaves a zero depth there:
+   the samples end at it) */
+static void volt_prof_dump(void) {
+    timer_delete(volt_prof_timer);
+    signal(SIGPROF, SIG_IGN);
+    const char *path = getenv("VOLT_PROFILE_OUT");
+    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fd < 0) return;
+    uint64_t words = __atomic_load_n(&volt_prof_n, __ATOMIC_RELAXED);
+    if (words > VOLT_PROF_WORDS) words = VOLT_PROF_WORDS;
+    /* a sample cut off at the end of the buffer isn't written */
+    uint64_t end = 0;
+    while (end < words && end + 1 + volt_prof_buf[end] <= words && volt_prof_buf[end]) end += 1 + volt_prof_buf[end];
+    uint64_t head[3];
+    volt_memcpy(&head[0], "VPROF001", 8);
+    head[1] = (uint64_t)VOLT_PROF_NS;
+    head[2] = end;
+    /* a short file is worse than none: stop at the first failed write (bolt hot says it can't read it) */
+    if (!volt_prof_write(fd, (const char *)head, sizeof head) || !volt_prof_write(fd, (const char *)volt_prof_buf, end * 8)) {
+        close(fd);
+        return;
+    }
+    static char maps[1 << 18];
+    uint64_t ml = 0;
+    int mf = open("/proc/self/maps", O_RDONLY);
+    if (mf >= 0) {
+        ssize_t r;
+        while (ml < sizeof maps && (r = read(mf, maps + ml, sizeof maps - ml)) > 0) ml += (uint64_t)r;
+        close(mf);
+    }
+    uint64_t mh[2];
+    volt_memcpy(&mh[0], "MAPS\0\0\0\0", 8);
+    mh[1] = ml;
+    if (volt_prof_write(fd, (const char *)mh, sizeof mh)) volt_prof_write(fd, maps, ml);
+    close(fd);
+}
+__attribute__((constructor)) static void volt_prof_start(void) {
+    if (!getenv("VOLT_PROFILE_OUT")) return;
+    /* the main thread's stack: the [stack] line of /proc/self/maps */
+    char maps[1 << 16];
+    int fd = open("/proc/self/maps", O_RDONLY);
+    ssize_t len = fd < 0 ? 0 : read(fd, maps, sizeof maps - 1);
+    if (fd >= 0) close(fd);
+    maps[len > 0 ? len : 0] = 0;
+    for (char *line = maps; *line;) {
+        char *nl = line;
+        while (*nl && *nl != '\n') nl++;
+        int is_stack = 0;
+        for (char *c = line; c + 6 < nl; c++) {
+            if (volt_memcmp(c, "[stack]", 7) == 0) is_stack = 1;
+        }
+        if (is_stack) {
+            volt_prof_lo = strtoull(line, &line, 16);
+            volt_prof_hi = strtoull(line + 1, 0, 16);
+            break;
+        }
+        line = *nl ? nl + 1 : nl;
+    }
+    struct sigaction sa;
+    volt_memset(&sa, 0, sizeof sa);
+    sa.sa_sigaction = volt_prof_tick;
+    sa.sa_flags = SA_SIGINFO | SA_RESTART;
+    sigemptyset(&sa.sa_mask);
+    sigaction(SIGPROF, &sa, 0);
+    struct sigevent ev;
+    volt_memset(&ev, 0, sizeof ev);
+    ev.sigev_notify = SIGEV_SIGNAL;
+    ev.sigev_signo = SIGPROF;
+    if (timer_create(CLOCK_PROCESS_CPUTIME_ID, &ev, &volt_prof_timer) != 0) return;
+    struct itimerspec every = { { 0, VOLT_PROF_NS }, { 0, VOLT_PROF_NS } };
+    timer_settime(volt_prof_timer, 0, &every, 0);
+    atexit(volt_prof_dump);
+}
+#endif

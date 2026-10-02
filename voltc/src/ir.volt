@@ -76,6 +76,7 @@ enum ir_kind {
     RETURN: u32?,
     BLOCK: std::vec<u32>,
     UNREACHABLE,
+    AT: (u32, u32), // the next statement's place in the source (file, line): #line, for --profiler
 }
 
 struct ir_node {
