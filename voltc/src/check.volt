@@ -343,6 +343,7 @@ struct c_symbol {
     decl: u32;
     params: std::vec<u32>;
     ret: u32;
+    c_name: str;
 }
 
 struct frame_field {

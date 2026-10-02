@@ -760,8 +760,13 @@ attach fn fn_inst(this: checker&, d: u32, args: std::vec<gval>, span: span) -> c
         c_name = intr; // a prelude function
     } else if (f.extern_abi != null && (f.extern_abi ?? "") == "C" && !f.is_export) {
         // declared under our own name, bound to the real symbol, so it never clashes with a C
-        // header's prototype of the same function
+        // header's prototype of the same function; a package's carries its namespace too, so std's
+        // own externs never meet a program's extern of the same function with another signature
         var n = S("volt_ext_");
+        if (this.pkg_of(d) != null && path.len() > 0) {
+            n.append(path.as_str());
+            n.append("__");
+        }
         n.append(f.name);
         c_name = this.intern(move n);
     } else if (f.extern_abi != null || f.is_export) {
@@ -818,11 +823,12 @@ attach fn fn_inst(this: checker&, d: u32, args: std::vec<gval>, span: span) -> c
             }
             val differs = !same_list(&other.params, &sig_ps) || other.ret != ret;
             val header_diff = this.is_header_fn(od) || this.is_header_fn(d);
-            if (od != d && (f.is_export || other_export || (differs && !header_diff))) {
+            // two externs under different C names (different packages) are two C declarations of one symbol
+            if (od != d && (f.is_export || other_export || (differs && !header_diff && other.c_name == c_name))) {
                 return fail(it.span, fmt("C function '{}' is declared twice; exported and extern names can't be overloaded", S(c_name)));
             }
         }
-        this.c_symbols.put(f.name, { decl: d, params: move sig_ps, ret: ret });
+        this.c_symbols.put(f.name, { decl: d, params: move sig_ps, ret: ret, c_name: c_name });
     }
     val idx = @cast<u32>(this.fns.len);
     // its IR function, with the parameters as locals (a declaration needs their types)

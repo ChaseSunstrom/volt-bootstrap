@@ -1296,11 +1296,8 @@ attach fn binary(this: cgen&, out: std::string&, op: binop_ir, a: u32, b: u32, t
 // called as __builtin_NAME, since Volt declares them under its own names
 val BUILTIN_MATH: str[22] = { "sqrt", "sqrtf", "fabs", "fabsf", "floor", "floorf", "ceil", "ceilf", "trunc", "truncf", "round", "roundf", "rint", "rintf", "fma", "fmaf", "fmin", "fminf", "fmax", "fmaxf", "copysign", "copysignf" };
 
-fn builtin_math(sym: str) -> str? {
-    if (!starts_with(sym, "volt_ext_")) {
-        return null;
-    }
-    val name = sym[9..sym.len];
+fn builtin_math(f: ir_fn&) -> str? {
+    val name = f.real_name ?? return null;
     for (m) in BUILTIN_MATH {
         if (m == name) {
             return name;
@@ -1316,7 +1313,7 @@ attach fn call(this: cgen&, out: std::string&, f: u32, args: std::vec<u32>&, t: 
         .FN(i) => {
             direct = true;
             val sym = this.c.ir.fn_at(i).name;
-            val m = builtin_math(sym);
+            val m = builtin_math(this.c.ir.fn_at(i));
             if (m) {
                 out.append("__builtin_");
                 out.append(m);

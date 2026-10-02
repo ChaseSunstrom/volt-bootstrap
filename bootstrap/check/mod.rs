@@ -325,7 +325,7 @@ pub struct Checker {
     pub globals: String,
     pub global_c: HashMap<DeclId, (String, TyId, bool)>,
     pub used_c_names: HashMap<String, u32>,
-    pub c_symbols: HashMap<String, (DeclId, Vec<TyId>, TyId)>, // extern/export fns by C name
+    pub c_symbols: HashMap<String, (DeclId, Vec<TyId>, TyId, String)>, // extern/export fns by symbol, with their C names
     /// needs_drop's answer per type
     pub drop_memo: HashMap<TyId, bool>,
     /// hook's answer per (type, name): the attached delete/copy/as_str instance, if any
@@ -1353,8 +1353,13 @@ impl Checker {
             c.clone() // a prelude function
         } else if f.extern_abi.as_deref() == Some("C") && !f.is_export {
             // declared under our own name, bound to the real symbol (VOLT_SYM in fn_header), so
-            // it never clashes with a C header's prototype of the same function
-            format!("volt_ext_{}", f.name)
+            // it never clashes with a C header's prototype of the same function; a package's
+            // carries its namespace too, so std's own externs never meet a program's
+            if self.pkg_of(decl).is_some() && !path.is_empty() {
+                format!("volt_ext_{}__{}", path.join("__"), f.name)
+            } else {
+                format!("volt_ext_{}", f.name)
+            }
         } else if f.extern_abi.is_some() || f.is_export {
             f.name.clone()
         } else if f.name == "main" && path.is_empty() && args.is_empty() {
@@ -1381,16 +1386,17 @@ impl Checker {
         if f.extern_abi.is_some() || f.is_export {
             // C has no overloading: one symbol, one signature
             let sig = (params.iter().map(|p| p.ty).collect::<Vec<_>>(), ret);
-            if let Some((other, ps, r)) = self.c_symbols.get(&f.name) {
+            if let Some((other, ps, r, other_c)) = self.c_symbols.get(&f.name) {
                 let other_export = matches!(&self.decls[*other].item.kind, ItemKind::Fn(o) if o.is_export);
                 // a header's own prototype wins in C, so its Volt view may differ from an extern's
                 let header = |d: DeclId| matches!(&self.decls[d].item.kind, ItemKind::Fn(o) if o.extern_abi.as_deref() == Some(crate::cimport::C_HEADER));
-                let differs = (ps, r) != (&sig.0, &sig.1) && !header(*other) && !header(decl);
+                // two externs under different C names (different packages) are two C declarations of one symbol
+                let differs = (ps, r) != (&sig.0, &sig.1) && !header(*other) && !header(decl) && *other_c == c_name;
                 if *other != decl && (f.is_export || other_export || differs) {
                     return err(item.span, format!("C function '{c_name}' is declared twice; exported and extern names can't be overloaded"));
                 }
             }
-            self.c_symbols.insert(f.name.clone(), (decl, sig.0, sig.1));
+            self.c_symbols.insert(f.name.clone(), (decl, sig.0, sig.1, c_name.clone()));
         }
         let idx = self.fns.len();
         self.fns.push(FnInst { decl, name, pack, env, c_name, params, ret, c_varargs: f.c_varargs, intrinsic, used_at: span });
@@ -1423,8 +1429,8 @@ impl Checker {
         let storage = if self.linkage(idx) == Linkage::Static { "static " } else { "" };
         let attrs = self.c_attrs(&self.decls[inst.decl].item.attrs.clone());
         // the symbol goes on the prototype: C allows no asm label on a definition
-        let symbol = match inst.c_name.strip_prefix("volt_ext_") {
-            Some(real) if !named => format!(" VOLT_SYM(\"{real}\")"),
+        let symbol = match &self.decls[inst.decl].item.kind {
+            ItemKind::Fn(f) if !named && inst.c_name.starts_with("volt_ext_") => format!(" VOLT_SYM(\"{}\")", f.name),
             _ => String::new(),
         };
         format!("{attrs}{storage}{ret} {}({}){symbol}", inst.c_name, ps.join(", "))
