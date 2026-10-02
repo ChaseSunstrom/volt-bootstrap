@@ -83,6 +83,674 @@ namespace fmt {
         rt_put(sink, @cast<cstr>(&buf[n]), 20 - n);
     }
 
+    // ---------- {:spec}: fill, align, sign, #, 0, width, precision, type ----------
+    //
+    // fill is a code point; align '<', '>', '^' or 0 (numbers go right, text left); flags: 1 '+',
+    // 2 '#', 4 '0'; width and precision -1 when not given; type 0 or one of x X b o e E c. Each value
+    // is formatted into a buffer, then padded: a sign or 0x prefix comes before zero padding, and
+    // widths count characters (UTF-8), not bytes.
+
+    internal val F_PLUS: i32 = 1;
+    internal val F_ALT: i32 = 2;
+    internal val F_ZERO: i32 = 4;
+    internal val A_LEFT: i32 = 60;   // '<'
+    internal val A_RIGHT: i32 = 62;  // '>'
+    internal val A_CENTER: i32 = 94; // '^'
+
+    // how many characters n bytes of UTF-8 hold
+    internal fn utf8_count(p: u8*, n: usize) -> usize {
+        var c: usize = 0;
+        for (i) in 0..n {
+            if ((p[i] & 0xC0) != 0x80) {
+                c += 1;
+            }
+        }
+        return c;
+    }
+
+    // cp's UTF-8 bytes at out (U+FFFD for what isn't a character); how many
+    internal fn utf8_put(out: u8*, cp0: u32) -> usize {
+        var cp = cp0;
+        if (cp > 0x10FFFF || (cp >= 0xD800 && cp <= 0xDFFF)) {
+            cp = 0xFFFD;
+        }
+        if (cp < 0x80) {
+            out[0] = @cast<u8>(cp);
+            return 1;
+        }
+        if (cp < 0x800) {
+            out[0] = @cast<u8>(0xC0 | (cp >> 6));
+            out[1] = @cast<u8>(0x80 | (cp & 0x3F));
+            return 2;
+        }
+        if (cp < 0x10000) {
+            out[0] = @cast<u8>(0xE0 | (cp >> 12));
+            out[1] = @cast<u8>(0x80 | ((cp >> 6) & 0x3F));
+            out[2] = @cast<u8>(0x80 | (cp & 0x3F));
+            return 3;
+        }
+        out[0] = @cast<u8>(0xF0 | (cp >> 18));
+        out[1] = @cast<u8>(0x80 | ((cp >> 12) & 0x3F));
+        out[2] = @cast<u8>(0x80 | ((cp >> 6) & 0x3F));
+        out[3] = @cast<u8>(0x80 | (cp & 0x3F));
+        return 4;
+    }
+
+    // n copies of fill
+    internal fn fill_n(sink: void*, fill: u32, n: usize) -> void {
+        var f: u8[4];
+        val k = utf8_put(&f[0], fill);
+        var chunk: u8[64];
+        val per = 64 / k;
+        for (i) in 0..per {
+            for (j) in 0..k {
+                chunk[i * k + j] = f[j];
+            }
+        }
+        var left = n;
+        while (left > 0) {
+            var now = per;
+            if (left < per) {
+                now = left;
+            }
+            rt_put(sink, @cast<cstr>(&chunk[0]), now * k);
+            left -= now;
+        }
+    }
+
+    // pre (a sign, 0x...), body, `zeros` zeros and tail, padded to width
+    internal fn pad(sink: void*, fill: u32, align0: i32, flags: i32, width: i32, numeric: bool, pre: u8*, pre_n: usize, body: u8*, n: usize, zeros: usize, tail: u8*, tail_n: usize) -> void {
+        val have = utf8_count(pre, pre_n) + utf8_count(body, n) + zeros + utf8_count(tail, tail_n);
+        var padn: usize = 0;
+        if (width > 0 && @cast<usize>(width) > have) {
+            padn = @cast<usize>(width) - have;
+        }
+        if (padn > 0 && numeric && (flags & F_ZERO) != 0 && align0 == 0) {
+            // zero padding goes between the sign (or 0x) and the digits
+            rt_put(sink, @cast<cstr>(pre), pre_n);
+            fill_n(sink, '0', padn);
+            rt_put(sink, @cast<cstr>(body), n);
+            fill_n(sink, '0', zeros);
+            rt_put(sink, @cast<cstr>(tail), tail_n);
+            return;
+        }
+        var align = align0;
+        if (align == 0) {
+            align = A_LEFT;
+            if (numeric) {
+                align = A_RIGHT;
+            }
+        }
+        var left: usize = 0;
+        if (align == A_RIGHT) {
+            left = padn;
+        } else if (align == A_CENTER) {
+            left = padn / 2;
+        }
+        fill_n(sink, fill, left);
+        rt_put(sink, @cast<cstr>(pre), pre_n);
+        rt_put(sink, @cast<cstr>(body), n);
+        fill_n(sink, '0', zeros);
+        rt_put(sink, @cast<cstr>(tail), tail_n);
+        fill_n(sink, fill, padn - left);
+    }
+
+    @attributes([@runtime("volt_fmt_text")])
+    internal fn fmt_text(sink: void*, t: str, fill: u32, align: i32, flags: i32, width: i32, prec: i32) -> void {
+        var n = t.len;
+        if (prec >= 0) {
+            // keep prec characters
+            var chars: usize = 0;
+            var i: usize = 0;
+            while (i < t.len) {
+                if ((t[i] & 0xC0) != 0x80) {
+                    if (chars == @cast<usize>(prec)) {
+                        break;
+                    }
+                    chars += 1;
+                }
+                i += 1;
+            }
+            n = i;
+        }
+        var none: u8[1];
+        pad(sink, fill, align, flags, width, false, &none[0], 0, @cast<u8*>(t.ptr), n, 0, &none[0], 0);
+    }
+
+    @attributes([@runtime("volt_fmt_cstr")])
+    internal fn fmt_cstr(sink: void*, c: cstr, fill: u32, align: i32, flags: i32, width: i32, prec: i32) -> void {
+        val p = @cast<u8*>(c);
+        var n: usize = 0;
+        while (p[n] != 0) {
+            n += 1;
+        }
+        fmt_text(sink, @cast<str>(@slice(p, n)), fill, align, flags, width, prec);
+    }
+
+    @attributes([@runtime("volt_fmt_bool")])
+    internal fn fmt_bool(sink: void*, b: i32, fill: u32, align: i32, flags: i32, width: i32, prec: i32) -> void {
+        if (b != 0) {
+            fmt_text(sink, "true", fill, align, flags, width, prec);
+        } else {
+            fmt_text(sink, "false", fill, align, flags, width, prec);
+        }
+    }
+
+    // an integer as the character it's the code point of ({:c})
+    internal fn fmt_char(sink: void*, cp: u32, fill: u32, align: i32, flags: i32, width: i32) -> void {
+        var b: u8[4];
+        val n = utf8_put(&b[0], cp);
+        var none: u8[1];
+        pad(sink, fill, align, flags, width, false, &none[0], 0, &b[0], n, 0, &none[0], 0);
+    }
+
+    // v's digits in base, last first from out[at] down; where the first digit is. Works on 32-bit
+    // pieces, so no 128-bit division is needed (32-bit cores have none)
+    internal fn digits_u128(v: u128, base: u32, upper: bool, out: u8*, at: usize) -> usize {
+        var i = at;
+        var hex = "0123456789abcdef";
+        if (upper) {
+            hex = "0123456789ABCDEF";
+        }
+        if ((v >> 64) == 0) {
+            var x = @cast<u64>(v);
+            loop {
+                i -= 1;
+                out[i] = hex[@cast<usize>(x % @cast<u64>(base))];
+                x /= @cast<u64>(base);
+                if (x == 0) {
+                    return i;
+                }
+            }
+        }
+        var limbs: u32[4] = { @cast<u32>(v), @cast<u32>(v >> 32), @cast<u32>(v >> 64), @cast<u32>(v >> 96) };
+        loop {
+            var r: u64 = 0;
+            var k: usize = 4;
+            var nonzero = false;
+            while (k > 0) {
+                k -= 1;
+                val cur = (r << 32) | @cast<u64>(limbs[k]);
+                limbs[k] = @cast<u32>(cur / @cast<u64>(base));
+                r = cur % @cast<u64>(base);
+                if (limbs[k] != 0) {
+                    nonzero = true;
+                }
+            }
+            i -= 1;
+            out[i] = hex[@cast<usize>(r)];
+            if (!nonzero) {
+                return i;
+            }
+        }
+    }
+
+    @attributes([@runtime("volt_fmt_u")])
+    internal fn fmt_u(sink: void*, v: u128, neg: i32, fill: u32, align: i32, flags: i32, width: i32, ty: i32) -> void {
+        if (ty == 'c') {
+            fmt_char(sink, @cast<u32>(v), fill, align, flags, width);
+            return;
+        }
+        var base: u32 = 10;
+        if (ty == 'x' || ty == 'X') {
+            base = 16;
+        } else if (ty == 'b') {
+            base = 2;
+        } else if (ty == 'o') {
+            base = 8;
+        }
+        var buf: u8[130];
+        val i = digits_u128(v, base, ty == 'X', &buf[0], 130);
+        var pre: u8[4];
+        var pn: usize = 0;
+        if (neg != 0) {
+            pre[pn] = '-';
+            pn += 1;
+        } else if ((flags & F_PLUS) != 0) {
+            pre[pn] = '+';
+            pn += 1;
+        }
+        if ((flags & F_ALT) != 0 && base != 10) {
+            pre[pn] = '0';
+            if (base == 16) {
+                pre[pn + 1] = 'x';
+            } else if (base == 2) {
+                pre[pn + 1] = 'b';
+            } else {
+                pre[pn + 1] = 'o';
+            }
+            pn += 2;
+        }
+        var none: u8[1];
+        pad(sink, fill, align, flags, width, true, &pre[0], pn, &buf[i], 130 - i, 0, &none[0], 0);
+    }
+
+    // a signed integer of `bits` bits: decimal with its sign; x, b and o show its two's complement
+    @attributes([@runtime("volt_fmt_i")])
+    internal fn fmt_i(sink: void*, v: i128, bits: i32, fill: u32, align: i32, flags: i32, width: i32, ty: i32) -> void {
+        if (ty == 'x' || ty == 'X' || ty == 'b' || ty == 'o') {
+            var u = @cast<u128>(v);
+            if (bits < 128) {
+                u &= (@cast<u128>(1) << @cast<u128>(bits)) - 1;
+            }
+            fmt_u(sink, u, 0, fill, align, flags, width, ty);
+        } else if (v < 0 && ty != 'c') {
+            fmt_u(sink, 0 -% @cast<u128>(v), 1, fill, align, flags, width, ty);
+        } else {
+            fmt_u(sink, @cast<u128>(v), 0, fill, align, flags, width, ty);
+        }
+    }
+
+    @attributes([@runtime("volt_print_u128")])
+    internal fn print_u128(sink: void*, v: u128) -> void {
+        var buf: u8[40];
+        val i = digits_u128(v, 10, false, &buf[0], 40);
+        rt_put(sink, @cast<cstr>(&buf[i]), 40 - i);
+    }
+
+    @attributes([@runtime("volt_print_i128")])
+    internal fn print_i128(sink: void*, v: i128) -> void {
+        if (v < 0) {
+            rt_put(sink, "-", 1);
+            print_u128(sink, 0 -% @cast<u128>(v));
+        } else {
+            print_u128(sink, @cast<u128>(v));
+        }
+    }
+
+    // ---------- floats with a precision: exact decimal digits ----------
+    //
+    // A finite f64 is m * 2^e exactly, so its decimal expansion ends: the integer part is a big
+    // integer (written out by dividing by 10^9), and the fraction f / 2^k gives one digit per
+    // multiplication by 10, with no more than 1074 of them. Rounding looks at the next digit and
+    // whether anything nonzero follows, so ties go to the even digit, as printf's do.
+
+    internal val FRAC_LIMBS: usize = 36;
+
+    internal struct exact {
+        int_digits: u8[330]; // the integer part ("" for 0)
+        int_n: usize;
+        frac: u32[36];       // the fraction: frac / 2^k
+        k: u32;
+    }
+
+    // |v|'s exact decimal expansion, ready to give fraction digits (v finite)
+    internal fn exact_of(x: exact&, b: u64) -> void {
+        val ex = @cast<i32>((b >> 52) & 2047);
+        var m = b & 4503599627370495;
+        var e: i32 = -1074;
+        if (ex != 0) {
+            m |= @cast<u64>(1) << 52;
+            e = ex - 1075;
+        }
+        for (i) in 0..FRAC_LIMBS {
+            x.frac[i] = 0;
+        }
+        x.k = 0;
+        x.int_n = 0;
+        if (m == 0) {
+            return;
+        }
+        if (e >= 0) {
+            // m << e as 32-bit limbs, written out 9 digits at a time
+            var limbs: u32[34];
+            for (i) in 0..34 {
+                limbs[i] = 0;
+            }
+            val word = @cast<usize>(e / 32);
+            val sh = @cast<u64>(e % 32);
+            val wide = @cast<u128>(m) << @cast<u128>(sh);
+            limbs[word] = @cast<u32>(wide);
+            limbs[word + 1] = @cast<u32>(wide >> 32);
+            limbs[word + 2] = @cast<u32>(wide >> 64);
+            var top = word + 3;
+            var rev: u8[330];
+            var n: usize = 0;
+            loop {
+                while (top > 0 && limbs[top - 1] == 0) {
+                    top -= 1;
+                }
+                if (top == 0) {
+                    break;
+                }
+                var r: u64 = 0;
+                var j = top;
+                while (j > 0) {
+                    j -= 1;
+                    val cur = (r << 32) | @cast<u64>(limbs[j]);
+                    limbs[j] = @cast<u32>(cur / 1000000000);
+                    r = cur % 1000000000;
+                }
+                // nine digits, least significant first (the last chunk's leading zeros trimmed below)
+                for (d) in 0..9 {
+                    rev[n] = @cast<u8>(r % 10) + '0';
+                    r /= 10;
+                    n += 1;
+                }
+            }
+            while (n > 1 && rev[n - 1] == '0') {
+                n -= 1;
+            }
+            for (i) in 0..n {
+                x.int_digits[i] = rev[n - 1 - i];
+            }
+            x.int_n = n;
+            return;
+        }
+        val k = @cast<u32>(-e);
+        x.k = k;
+        var whole: u64 = 0;
+        var f = m;
+        if (k < 64) {
+            whole = m >> @cast<u64>(k);
+            f = m & ((@cast<u64>(1) << @cast<u64>(k)) - 1);
+        }
+        x.frac[0] = @cast<u32>(f);
+        x.frac[1] = @cast<u32>(f >> 32);
+        if (whole != 0) {
+            var rev: u8[20];
+            var n: usize = 0;
+            while (whole != 0) {
+                rev[n] = @cast<u8>(whole % 10) + '0';
+                whole /= 10;
+                n += 1;
+            }
+            for (i) in 0..n {
+                x.int_digits[i] = rev[n - 1 - i];
+            }
+            x.int_n = n;
+        }
+    }
+
+    // the fraction's next digit: frac * 10, the digit is what passes 2^k
+    internal fn next_digit(x: exact&) -> u8 {
+        val top = @cast<usize>(x.k / 32) + 2;
+        var carry: u64 = 0;
+        for (i) in 0..top {
+            val cur = @cast<u64>(x.frac[i]) * 10 + carry;
+            x.frac[i] = @cast<u32>(cur);
+            carry = cur >> 32;
+        }
+        val w = @cast<usize>(x.k / 32);
+        val sh = x.k % 32;
+        val above = (@cast<u64>(x.frac[w + 1]) << 32) | @cast<u64>(x.frac[w]);
+        val d = @cast<u8>((above >> @cast<u64>(sh)) & 15);
+        // keep only the bits below 2^k
+        x.frac[w] &= @cast<u32>((@cast<u64>(1) << @cast<u64>(sh)) - 1);
+        x.frac[w + 1] = 0;
+        return d;
+    }
+
+    internal fn frac_zero(x: exact&) -> bool {
+        for (i) in 0..FRAC_LIMBS {
+            if (x.frac[i] != 0) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    // round the digits out[from..to) up by one in the last place (skipping a '.'); true when it
+    // carried out of the first digit
+    internal fn round_up(out: u8*, from: usize, to: usize) -> bool {
+        var i = to;
+        while (i > from) {
+            i -= 1;
+            if (out[i] == '.') {
+                continue;
+            }
+            if (out[i] != '9') {
+                out[i] += 1;
+                return false;
+            }
+            out[i] = '0';
+        }
+        return true;
+    }
+
+    // should the digits round up? next is the first dropped digit, sticky whether anything nonzero
+    // follows it, last the last digit kept
+    internal fn rounds_up(next: u8, sticky: bool, last: u8) -> bool {
+        return next > 5 || (next == 5 && (sticky || (last - '0') % 2 == 1));
+    }
+
+    internal val MAX_DIGITS: usize = 1100; // past 1074 fraction digits, an f64's expansion is all zeros
+
+    // %.Nf of |v| into out: the text, and how many zeros past MAX_DIGITS follow it
+    internal fn fixed(x: exact&, prec: usize, out: u8*, n: usize&, zeros: usize&) -> void {
+        var at: usize = 1; // out[0] stays free for a carry into a new first digit
+        if (x.int_n == 0) {
+            out[at] = '0';
+            at += 1;
+        } else {
+            for (i) in 0..x.int_n {
+                out[at + i] = x.int_digits[i];
+            }
+            at += x.int_n;
+        }
+        var digits = prec;
+        *zeros = 0;
+        if (digits > MAX_DIGITS) {
+            *zeros = digits - MAX_DIGITS;
+            digits = MAX_DIGITS;
+        }
+        if (prec > 0) {
+            out[at] = '.';
+            at += 1;
+            for (i) in 0..digits {
+                out[at] = next_digit(x) + '0';
+                at += 1;
+            }
+        }
+        if (*zeros == 0) {
+            val next = next_digit(x);
+            if (rounds_up(next, !frac_zero(x), out[at - 1]) && round_up(out, 1, at)) {
+                out[0] = '1';
+                *n = at;
+                // move the text to start at out (out[0] is now its first digit)
+                return;
+            }
+        }
+        for (i) in 1..at {
+            out[i - 1] = out[i];
+        }
+        *n = at - 1;
+    }
+
+    // %.Pe of |v| into out: mantissa digits (with a '.') and the exponent; `zeros` zeros past
+    // MAX_DIGITS go between them. The digits are made at out[1..], then the first moves in front of
+    // the '.'
+    internal fn exp_digits(x: exact&, prec: usize, out: u8*, n: usize&, zeros: usize&, e10: i32&) -> void {
+        var want = prec + 1;
+        *zeros = 0;
+        if (want > MAX_DIGITS) {
+            *zeros = want - MAX_DIGITS;
+            want = MAX_DIGITS;
+        }
+        val digs = @cast<u8*>(@cast<usize>(out) + 1);
+        var got: usize = 0;
+        var e: i32 = 0;
+        var next: u8 = 0;
+        var sticky = false;
+        if (x.int_n == 0 && frac_zero(x)) {
+            // zero: all its digits are 0
+            for (i) in 0..want {
+                digs[i] = '0';
+            }
+            got = want;
+        } else {
+            // the significant digits: the integer part's, then the fraction's
+            var i: usize = 0;
+            if (x.int_n > 0) {
+                e = @cast<i32>(x.int_n) - 1;
+            } else {
+                // below 1: past the fraction's leading zeros
+                e = -1;
+                var d = next_digit(x);
+                while (d == 0) {
+                    e -= 1;
+                    d = next_digit(x);
+                }
+                digs[0] = d + '0';
+                got = 1;
+            }
+            while (got < want) {
+                if (i < x.int_n) {
+                    digs[got] = x.int_digits[i];
+                    i += 1;
+                } else {
+                    digs[got] = next_digit(x) + '0';
+                }
+                got += 1;
+            }
+            if (i < x.int_n) {
+                next = x.int_digits[i] - '0';
+                sticky = !frac_zero(x);
+                for (j) in i + 1..x.int_n {
+                    if (x.int_digits[j] != '0') {
+                        sticky = true;
+                    }
+                }
+            } else {
+                next = next_digit(x);
+                sticky = !frac_zero(x);
+            }
+        }
+        if (*zeros == 0 && rounds_up(next, sticky, digs[got - 1]) && round_up(digs, 0, got)) {
+            // 9.99 became 10.0: one digit more in front, so the exponent goes up
+            digs[0] = '1';
+            e += 1;
+        }
+        out[0] = digs[0];
+        *n = 1;
+        if (prec > 0) {
+            out[1] = '.';
+            *n = got + 1;
+        }
+        *e10 = e;
+    }
+
+    // "e" and the exponent, without + or leading zeros (1.5e3, 1.2e-4), at out
+    internal fn exp_text(out: u8*, e: i32, upper: bool) -> usize {
+        var at: usize = 0;
+        out[0] = 'e';
+        if (upper) {
+            out[0] = 'E';
+        }
+        at = 1;
+        var ae = e;
+        if (e < 0) {
+            out[at] = '-';
+            at += 1;
+            ae = -e;
+        }
+        var rev: u8[8];
+        var n: usize = 0;
+        loop {
+            rev[n] = @cast<u8>(ae % 10) + '0';
+            ae /= 10;
+            n += 1;
+            if (ae == 0) {
+                break;
+            }
+        }
+        for (i) in 0..n {
+            out[at] = rev[n - 1 - i];
+            at += 1;
+        }
+        return at;
+    }
+
+    @attributes([@runtime("volt_fmt_f")])
+    internal fn fmt_f(sink: void*, v: f64, f32: i32, fill: u32, align: i32, flags: i32, width: i32, prec: i32, ty: i32) -> void {
+        val b = f64_bits(v);
+        val ex = (b >> 52) & 2047;
+        val is_nan = ex == 2047 && (b & 4503599627370495) != 0;
+        var neg = !is_nan && (b >> 63) != 0;
+        var pre: u8[1];
+        var pn: usize = 0;
+        var none: u8[1];
+        var tail: u8[8];
+        var tn: usize = 0;
+        var zeros: usize = 0;
+        var buf: u8[1440]; // a carry digit, 309 integer digits, '.', 1100 more
+        var n: usize = 0;
+        var x: exact;
+        if (is_nan) {
+            buf[0] = 'n';
+            buf[1] = 'a';
+            buf[2] = 'n';
+            n = 3;
+        } else if (ex == 2047) {
+            buf[0] = 'i';
+            buf[1] = 'n';
+            buf[2] = 'f';
+            n = 3;
+        } else if (ty == 'e' || ty == 'E') {
+            var e: i32 = 0;
+            if (prec >= 0) {
+                exact_of(&x, b & 9223372036854775807);
+                exp_digits(&x, @cast<usize>(prec), &buf[0], &n, &zeros, &e);
+            } else {
+                // the shortest digits that read back the same, as d.ddd
+                var d: decimal = { digits: 0, exp: 0 };
+                if ((b & 9223372036854775807) != 0) {
+                    if (f32 != 0) {
+                        val fb = f32_bits(@cast<f32>(v));
+                        d = f2d(fb & 8388607, (fb >> 23) & 255);
+                    } else {
+                        d = d2d(b & 4503599627370495, @cast<u32>(ex));
+                    }
+                }
+                var rev: u8[20];
+                var p: usize = 0;
+                var dg = d.digits;
+                loop {
+                    rev[p] = @cast<u8>(dg % 10) + '0';
+                    dg /= 10;
+                    p += 1;
+                    if (dg == 0) {
+                        break;
+                    }
+                }
+                buf[0] = rev[p - 1];
+                n = 1;
+                if (p > 1) {
+                    buf[1] = '.';
+                    n = 2;
+                    var i = p - 1;
+                    while (i > 0) {
+                        i -= 1;
+                        buf[n] = rev[i];
+                        n += 1;
+                    }
+                }
+                e = @cast<i32>(p) - 1 + d.exp;
+            }
+            tn = exp_text(&tail[0], e, ty == 'E');
+        } else if (prec >= 0) {
+            exact_of(&x, b & 9223372036854775807);
+            fixed(&x, @cast<usize>(prec), &buf[0], &n, &zeros);
+        } else {
+            // the shortest text that reads back the same (what {} prints)
+            n = shortest(&buf[0], v, f32 != 0);
+            if (buf[0] == '-') {
+                for (i) in 1..n {
+                    buf[i - 1] = buf[i];
+                }
+                n -= 1;
+            }
+        }
+        if (neg) {
+            pre[0] = '-';
+            pn = 1;
+        } else if ((flags & F_PLUS) != 0) {
+            pre[0] = '+';
+            pn = 1;
+        }
+        pad(sink, fill, align, flags, width, true, &pre[0], pn, &buf[0], n, zeros, &tail[0], tn);
+    }
+
     // ---------- shortest round-trip floats ----------
     //
     // Ryu (Ulf Adams, "Ryū: fast float-to-string conversion", PLDI 2018): the shortest decimal that

@@ -277,12 +277,12 @@ attach fn spec_code(this: checker&, code: std::vec<u32>&, sink: u32, c: u32, t: 
                 put(&pad, this.ir.conv(c, int_id(int_ty::I128)));
                 put(&pad, this.ir.int(@cast<i128>(k.bits()), I32));
                 this.spec_args(&pad, &sp, false);
-                put(code, this.ir.rt_call("volt_fmt_i", move pad, VOID));
+                put(code, try this.rt_any("volt_fmt_i", move pad, VOID));
             } else {
                 put(&pad, this.ir.conv(c, int_id(int_ty::U128)));
                 put(&pad, this.ir.int(0, I32));
                 this.spec_args(&pad, &sp, false);
-                put(code, this.ir.rt_call("volt_fmt_u", move pad, VOID));
+                put(code, try this.rt_any("volt_fmt_u", move pad, VOID));
             }
             return;
         },
@@ -297,7 +297,7 @@ attach fn spec_code(this: checker&, code: std::vec<u32>&, sink: u32, c: u32, t: 
             }
             put(&pad, this.ir.int(@cast<i128>(small), I32));
             this.spec_args(&pad, &sp, true);
-            put(code, this.ir.rt_call("volt_fmt_f", move pad, VOID));
+            put(code, try this.rt_any("volt_fmt_f", move pad, VOID));
             return;
         },
         default => {},
@@ -339,7 +339,7 @@ attach fn spec_code(this: checker&, code: std::vec<u32>&, sink: u32, c: u32, t: 
     put(&pad, this.ir.int(@cast<i128>(sp.flags), I32));
     put(&pad, this.ir.int(@cast<i128>(sp.width), I32));
     put(&pad, this.ir.int(@cast<i128>(sp.prec), I32));
-    put(code, this.ir.rt_call(name, move pad, VOID));
+    put(code, try this.rt_any(name, move pad, VOID));
 }
 
 // a number's padding arguments: fill, align, flags, width, (precision,) type
@@ -475,6 +475,14 @@ attach fn out_s(this: checker&, sink: u32, s: str) -> u32 {
 }
 
 // name(sink, v) through std's Volt version of that runtime function (@runtime), if it has one
+// a call to runtime function `name`: std's Volt version (@runtime) when it has one, else the C one
+attach fn rt_any(this: checker&, name: str, args: std::vec<u32>, t: u32) -> compile_error!u32 {
+    val d = this.runtime_impls.get(name) ?? return this.ir.rt_call(name, move args, t);
+    val f = try this.fn_inst(*d, {}, {});
+    this.use_fn(f);
+    return this.call_fn(this.fi(f).ir, move args, t);
+}
+
 attach fn rt_print(this: checker&, name: str, sink: u32, v: u32) -> compile_error!(u32?) {
     val d = this.runtime_impls.get(name) ?? return null;
     val f = try this.fn_inst(*d, {}, {});
@@ -493,9 +501,9 @@ attach fn print_code(this: checker&, code: std::vec<u32>&, sink: u32, c: u32, t:
         .INT(k) => {
             if (k.bits() == 128) {
                 if (k.signed()) {
-                    put(code, this.out_rt(sink, "volt_print_i128", c));
+                    put(code, (try this.rt_print("volt_print_i128", sink, c)) ?? this.out_rt(sink, "volt_print_i128", c));
                 } else {
-                    put(code, this.out_rt(sink, "volt_print_u128", c));
+                    put(code, (try this.rt_print("volt_print_u128", sink, c)) ?? this.out_rt(sink, "volt_print_u128", c));
                 }
             } else if (k.signed()) {
                 val v = this.ir.conv(c, I64);

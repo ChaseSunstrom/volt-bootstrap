@@ -171,26 +171,27 @@ impl Checker {
                     return err(span, format!("{{:{kind}}} formats floats, not {name}"));
                 }
                 Ok(if k.signed() {
-                    format!("volt_fmt_i(VOLT_E, (__int128)({c}), {}, {pad}, {}); ", k.bits(), sp.ty)
+                    format!("{}((void*)VOLT_E, (__int128)({c}), {}, {pad}, {}); ", self.rt_fn("volt_fmt_i")?, k.bits(), sp.ty)
                 } else {
-                    format!("volt_fmt_u(VOLT_E, (unsigned __int128)({c}), 0, {pad}, {}); ", sp.ty)
+                    format!("{}((void*)VOLT_E, (unsigned __int128)({c}), 0, {pad}, {}); ", self.rt_fn("volt_fmt_u")?, sp.ty)
                 })
             }
             Ty::Float(b) => {
                 if for_ints {
                     return err(span, format!("{{:{kind}}} formats integers, not {name}"));
                 }
-                Ok(format!("volt_fmt_f(VOLT_E, (double)({c}), {}, {pad}, {}, {}); ", (b == 32) as i32, sp.prec, sp.ty))
+                Ok(format!("{}((void*)VOLT_E, (double)({c}), {}, {pad}, {}, {}); ", self.rt_fn("volt_fmt_f")?, (b == 32) as i32, sp.prec, sp.ty))
             }
             t => {
                 let text = match t {
-                    Ty::Bool => Some(format!("volt_fmt_bool(VOLT_E, ({c}) ? 1 : 0, {pad}, {}); ", sp.prec)),
-                    Ty::Str => Some(format!("volt_fmt_text(VOLT_E, {c}, {pad}, {}); ", sp.prec)),
-                    Ty::CStr => Some(format!("volt_fmt_cstr(VOLT_E, {c}, {pad}, {}); ", sp.prec)),
+                    Ty::Bool => Some(format!("{}((void*)VOLT_E, ({c}) ? 1 : 0, {pad}, {}); ", self.rt_fn("volt_fmt_bool")?, sp.prec)),
+                    Ty::Str => Some(format!("{}((void*)VOLT_E, {c}, {pad}, {}); ", self.rt_fn("volt_fmt_text")?, sp.prec)),
+                    Ty::CStr => Some(format!("{}((void*)VOLT_E, {c}, {pad}, {}); ", self.rt_fn("volt_fmt_cstr")?, sp.prec)),
                     Ty::Struct(_) => match self.hook(ty, "as_str")? {
                         Some(h) => {
                             self.use_fn(h);
-                            Some(format!("volt_fmt_text(VOLT_E, {}(&({c})), {pad}, {}); ", self.fns[h].c_name, sp.prec))
+                            let f = self.rt_fn("volt_fmt_text")?;
+                            Some(format!("{f}((void*)VOLT_E, {}(&({c})), {pad}, {}); ", self.fns[h].c_name, sp.prec))
                         }
                         None => None,
                     },
@@ -226,7 +227,7 @@ impl Checker {
     /// C statements printing value `c` of type `ty`
     pub fn print_code(&mut self, c: &str, ty: TyId, span: Span) -> Res<String> {
         Ok(match self.t.get(ty).clone() {
-            Ty::Int(k) if k.bits() == 128 => format!("volt_print_{}128(VOLT_E, {c}); ", if k.signed() { "i" } else { "u" }),
+            Ty::Int(k) if k.bits() == 128 => format!("{}((void*)VOLT_E, {c}); ", self.rt_fn(if k.signed() { "volt_print_i128" } else { "volt_print_u128" })?),
             Ty::Int(k) => {
                 let (rt, ct) = if k.signed() { ("volt_print_i64", "int64_t") } else { ("volt_print_u64", "uint64_t") };
                 match self.rt_fn(rt)? {

@@ -42,6 +42,9 @@ under qemu.
 - **What LLVM's code calls**: `memcpy`, `memset` and the like, and 64-bit division on 32-bit cores,
   written in Volt too (`std/bare.volt`).
 
+Printing a float with a precision (`{:.3}`, `{:.5e}`) works out its exact digits on the stack, about
+2 KB while it runs; leave room for that in the stack the linker script sets aside.
+
 ## The board
 
 The program, or a package for its board, gives two functions. When it leaves one out, voltc's
@@ -96,6 +99,6 @@ The test suite runs both, in debug and release builds, with the C compiler set t
   `f32` only). Printing a float counts, since it works in `f64`. Using them fails to link, naming the
   routine (`__adddf3`, `__unorddf2`...). `riscv64-none` has both in hardware.
 - `std::math`'s functions that come from the C math library (`sin`, `exp`, `pow`...).
-- Format specs (`{:>8}`, `{:x}`) and printing pointers use the C runtime, so on bare metal they fail
-  to link; plain `{}` works for everything else.
+- Printing a pointer or a reference itself (its address) uses the C runtime, so on bare metal it fails
+  to link; everything else prints, format specs (`{:>8}`, `{:x}`, `{:.3}`) included.
 - Interrupt handlers past the reset and fault entries, and other CPUs (AArch64, x86-64, Cortex-M0).

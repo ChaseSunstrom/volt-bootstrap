@@ -45,7 +45,12 @@ function: both compilers call it wherever they'd call the C one, and both backen
 The C version stays for programs built without std (`--no-std`).
 
 Printing text goes to the runtime as bytes and a length (`volt_put`), with no `printf` format, and
-C strings and error names print through std's `volt_print_cstr`. Printing numbers is in Volt
+C strings and error names print through std's `volt_print_cstr`. Format specs are in Volt too:
+padding counts UTF-8 characters, integers of any base and width (`i128` included) are divided in
+32-bit pieces, so 32-bit cores need no 128-bit division, and a float with a precision (`{:.3}`,
+`{:.5e}`) is written from its exact decimal expansion, a big integer for the whole part and one
+digit per multiplication by 10 for the fraction, rounded half to even as `printf` does. A test
+checks it against `snprintf` on random values. Printing numbers is in Volt
 (`std/fmt.volt`): integers by a digit loop, and floats by
 Ryu (Ulf Adams, PLDI 2018), the shortest text that reads back as the same value, found by exact
 integer arithmetic on the bits. Ryu replaced up to 17 rounds of `snprintf` and `strtod` per float
