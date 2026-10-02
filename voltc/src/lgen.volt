@@ -654,6 +654,11 @@ attach fn decl_fn(this: lg&, i: u32) -> llvm::LLVMOpaqueValue* {
             llvm::LLVMAddAttributeAtIndex(fv, 4294967295, this.attr("nounwind"));
             llvm::LLVMAddAttributeAtIndex(fv, 4294967295, this.attr("willreturn"));
         }
+        if (this.c.opts.target != null) {
+            // bare metal has no C library: loops stay loops, not calls to strlen or memcpy (which
+            // std/bare.volt's memcpy and the like would turn into calls to themselves)
+            llvm::LLVMAddAttributeAtIndex(fv, 4294967295, llvm::LLVMCreateStringAttribute(this.ctx, "no-builtins", 11, "", 0));
+        }
         if (this.c.opts.line_info) {
             // --profiler: bolt hot's sampler walks the stack by frame pointers
             llvm::LLVMAddAttributeAtIndex(fv, 4294967295, llvm::LLVMCreateStringAttribute(this.ctx, "frame-pointer", 13, "all", 3));
@@ -794,7 +799,7 @@ attach fn decl_global(this: lg&, g: u32) -> llvm::LLVMOpaqueValue* {
     if (v == null) {
         v = llvm::LLVMAddGlobal(this.m, t, name);
         val gv = v ?? @panic("global");
-        if (gl.tls) {
+        if (gl.tls && this.c.opts.target == null) { // bare metal has one thread: a plain global
             llvm::LLVMSetThreadLocal(gv, 1);
         }
         if (defined) {
@@ -1325,6 +1330,18 @@ attach fn rv(this: lg&, n: u32) -> llvm::LLVMOpaqueValue* {
         .GLOBAL(g) => { return this.load(t, this.addr(n)); },
         .FIELD(b, i) => { return this.load(t, this.addr(n)); },
         .DEREF(p) => { return this.load(t, this.addr(n)); },
+        .VLOAD(p) => {
+            val v = this.load(t, this.rv(p));
+            llvm::LLVMSetVolatile(v, 1);
+            return v;
+        },
+        .VSTORE(p, x) => {
+            val vt = this.c.ir.ty_of(x);
+            val st = llvm::LLVMBuildStore(this.b, this.rv_as(x, vt), this.rv(p));
+            llvm::LLVMSetAlignment(st, this.align_of(this.lt(vt)));
+            llvm::LLVMSetVolatile(st, 1);
+            return null;
+        },
         .INDEX(b, i) => { return this.load(t, this.addr(n)); },
         .FN(i) => {
             if (this.c.ir.fn_at(i).from_header) {
@@ -2118,30 +2135,65 @@ attach fn keep_used(this: lg&) -> void {
 
 // ---------- the module ----------
 
-// the program as an LLVM module, with a target machine for the host; an error message, or ""
+// the program as an LLVM module, with a target machine for the host or --target; an error message,
+// or ""
 attach fn llvm_build(this: checker&, g: lg&) -> std::string {
-    llvm::LLVMInitializeX86TargetInfo();
-    llvm::LLVMInitializeX86Target();
-    llvm::LLVMInitializeX86TargetMC();
-    llvm::LLVMInitializeX86AsmPrinter();
-    val triple = llvm::LLVMGetDefaultTargetTriple();
-    val tr = c_text(triple);
-    if (tr.len < 6 || tr[0..6] != "x86_64") {
-        return fmt("the LLVM backend supports x86-64 only (for now), not {}; use --backend c", S(tr));
-    }
-    var target: llvm::LLVMTarget* = null;
-    var err: cstr? = null;
-    if (llvm::LLVMGetTargetFromTriple(triple, &target, &err) != 0) {
-        return S("LLVM has no x86-64 target");
-    }
     var level = llvm::LLVMCodeGenLevelNone;
     if (this.opts.release) {
         level = llvm::LLVMCodeGenLevelDefault;
     }
-    g.tm = llvm::LLVMCreateTargetMachine(target, triple, "x86-64", "", level, llvm::LLVMRelocPIC, llvm::LLVMCodeModelDefault);
+    var bare: target_info? = null;
+    if (this.opts.target) {
+        bare = find_target(this.opts.target);
+    }
+    var triple = S("");
+    if (bare) {
+        if (bare.arch == "arm") {
+            llvm::LLVMInitializeARMTargetInfo();
+            llvm::LLVMInitializeARMTarget();
+            llvm::LLVMInitializeARMTargetMC();
+            llvm::LLVMInitializeARMAsmPrinter();
+            llvm::LLVMInitializeARMAsmParser();
+        } else {
+            llvm::LLVMInitializeRISCVTargetInfo();
+            llvm::LLVMInitializeRISCVTarget();
+            llvm::LLVMInitializeRISCVTargetMC();
+            llvm::LLVMInitializeRISCVAsmPrinter();
+            llvm::LLVMInitializeRISCVAsmParser();
+        }
+        triple.append(bare.triple);
+    } else {
+        llvm::LLVMInitializeX86TargetInfo();
+        llvm::LLVMInitializeX86Target();
+        llvm::LLVMInitializeX86TargetMC();
+        llvm::LLVMInitializeX86AsmPrinter();
+        val host = llvm::LLVMGetDefaultTargetTriple();
+        triple.append(c_text(host));
+        llvm::LLVMDisposeMessage(host);
+        if (triple.len() < 6 || triple.as_str()[0..6] != "x86_64") {
+            return fmt("the LLVM backend builds for x86-64 hosts only (for now), not {}; use --backend c", copy triple);
+        }
+    }
+    var target: llvm::LLVMTarget* = null;
+    var err: cstr? = null;
+    if (llvm::LLVMGetTargetFromTriple(triple.c_str(), &target, &err) != 0) {
+        return fmt("LLVM has no target for {}", copy triple);
+    }
+    if (bare) {
+        // bare metal: absolute addresses (no loader relocates it); RISC-V 64 code anywhere in memory
+        var cpu = S(bare.cpu);
+        var feats = S(bare.features);
+        var model = llvm::LLVMCodeModelDefault;
+        if (bare.arch == "riscv64") {
+            model = llvm::LLVMCodeModelMedium;
+        }
+        g.tm = llvm::LLVMCreateTargetMachine(target, triple.c_str(), cpu.c_str(), feats.c_str(), level, llvm::LLVMRelocStatic, model);
+    } else {
+        g.tm = llvm::LLVMCreateTargetMachine(target, triple.c_str(), "x86-64", "", level, llvm::LLVMRelocPIC, llvm::LLVMCodeModelDefault);
+    }
     g.ctx = llvm::LLVMContextCreate();
     g.m = llvm::LLVMModuleCreateWithNameInContext("volt", g.ctx);
-    llvm::LLVMSetTarget(g.m, triple);
+    llvm::LLVMSetTarget(g.m, triple.c_str());
     g.td = llvm::LLVMCreateTargetDataLayout(g.tm);
     llvm::LLVMSetModuleDataLayout(g.m, g.td);
     g.b = llvm::LLVMCreateBuilderInContext(g.ctx);
@@ -2161,6 +2213,12 @@ attach fn llvm_build(this: checker&, g: lg&) -> std::string {
     }
     g.ctor();
     g.keep_used();
+    if (bare) {
+        // the start code, and the hooks the program leaves to the defaults
+        var start = start_asm(bare);
+        start.append(hook_defaults_asm(bare, !defines(g.m, "volt_exit"), !defines(g.m, "volt_console_write")).as_str());
+        llvm::LLVMSetModuleInlineAsm2(g.m, start.c_str(), start.len());
+    }
     if (g.err.len() > 0) {
         return copy g.err;
     }
@@ -2174,8 +2232,21 @@ attach fn llvm_build(this: checker&, g: lg&) -> std::string {
         val po = llvm::LLVMCreatePassBuilderOptions();
         llvm::LLVMRunPasses(g.m, "default<O2>", g.tm, po);
         llvm::LLVMDisposePassBuilderOptions(po);
+    } else if (bare) {
+        // a debug build has all of std's code in it; on bare metal what the program doesn't reach
+        // must go, since much of it calls the OS
+        val po = llvm::LLVMCreatePassBuilderOptions();
+        llvm::LLVMRunPasses(g.m, "globaldce", g.tm, po);
+        llvm::LLVMDisposePassBuilderOptions(po);
     }
     return S("");
+}
+
+// does module m define the function named `name` (not just declare it)?
+fn defines(m: llvm::LLVMOpaqueModule*, name: str) -> bool {
+    var n = S(name);
+    val f = llvm::LLVMGetNamedFunction(m, n.c_str()) ?? return false;
+    return llvm::LLVMIsDeclaration(f) == 0;
 }
 
 // a C string LLVM made, as a str

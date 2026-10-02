@@ -445,7 +445,7 @@ namespace net {
     // resolver (getaddrinfo: the hosts file, DNS, ...)
     <A: std::mem::t_allocator = std::mem::default_allocator>
     fn resolve(host: str, port: u16, allocator: A = {}) -> net_error!std::vec<address, A> {
-        comptime if (!@cfg("pointer_bits", "64")) {
+        comptime if (@cfg("hosted") && !@cfg("pointer_bits", "64")) {
             @compile_error("std::net: only 64-bit targets for now (addrinfo's layout)");
         }
         start();

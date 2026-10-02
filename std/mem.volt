@@ -34,7 +34,8 @@ namespace mem {
     // a box costs a load and a store instead of a trip through malloc (the size class is known when
     // the type is). Debug builds put each block's size in front of it and check every free and
     // realloc against it, so a caller that gives back a different size (which would corrupt a free
-    // list) stops right there. Empty, so a box using it is just a pointer.
+    // list) stops right there. On bare metal (no OS) it's the heap's allocator as is, since a chunk can
+    // be more memory than the board has. Empty, so a box using it is just a pointer.
     // ponytail: freed small blocks stay on their free list (memory isn't handed back to the system,
     // and a thread's lists outlive it); trim them if a long-running program needs that.
     struct default_allocator;
@@ -139,7 +140,7 @@ namespace mem {
     attach t_allocator -> default_allocator {
         <T: type> fn malloc(this, count: usize = 1) -> mem_error!(T*) {
             val n = try bytes<T>(count);
-            comptime if (@cfg("release")) {
+            comptime if (@cfg("release") && @cfg("hosted")) {
                 if (is_small<T>(n)) {
                     return @cast<T*>(try small_alloc(class_of(n)));
                 }
@@ -154,7 +155,7 @@ namespace mem {
         <T: type> fn realloc(this, ptr: T*, old: usize, count: usize) -> mem_error!(T*) {
             val was = old * @sizeof(T);
             val now = try bytes<T>(count);
-            comptime if (@cfg("release")) {
+            comptime if (@cfg("release") && @cfg("hosted")) {
                 if (is_small<T>(was) || is_small<T>(now)) {
                     return try small_realloc<T>(ptr, old, count);
                 }
@@ -172,7 +173,7 @@ namespace mem {
                 return;
             }
             val n = count * @sizeof(T);
-            comptime if (@cfg("release")) {
+            comptime if (@cfg("release") && @cfg("hosted")) {
                 if (is_small<T>(n)) {
                     small_put(ptr as void*, class_of(n));
                     return;

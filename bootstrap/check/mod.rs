@@ -457,6 +457,10 @@ impl Checker {
                 return err(a.span, "@thread_local goes on a global var (each thread gets its own)");
             }
         }
+        // @cfg(...) false: the item isn't in this build at all
+        if !self.item_cfg_on(&item.attrs)? {
+            return Ok(());
+        }
         match item.kind {
             ItemKind::Namespace(path, items) => {
                 let mut n = ns;

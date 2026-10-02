@@ -204,7 +204,8 @@ impl Checker {
         }
     }
 
-    /// The @builtins that generate code: sizeof, alignof, offsetof, cast, write, slice, read, typeid, panic.
+    /// The @builtins that generate code: sizeof, alignof, offsetof, cast, write, slice, read, volatile_read,
+    /// volatile_write, typeid, panic.
     /// The compile-time ones (@typeinfo...) are evaluated by comptime instead.
     pub(super) fn builtin(&mut self, name: &str, gargs: &[GenericArg], args: Option<&[GenericArg]>, want: Option<TyId>, span: Span) -> Res<Val> {
         let args = args.unwrap_or(&[]);
@@ -277,6 +278,28 @@ impl Checker {
                 let (Ty::Ref(t) | Ty::Ptr(t)) = self.t.get(p.ty).clone() else { return err(span, "@read(p) needs a T*") };
                 // what's read points where *p does
                 Ok(Val { ro: p.ro >> 1, via: lends::deeper(p.via, 1), root: p.root.clone(), ..Val::new(t, format!("(*({}))", p.c)) })
+            }
+            "volatile_read" | "volatile_write" => {
+                // a load or store the compiler keeps, in order, exactly as written: memory-mapped
+                // hardware registers
+                n_args(if name == "volatile_read" { 1 } else { 2 })?;
+                let p = self.garg_expr(&args[0], None)?;
+                let (Ty::Ref(t) | Ty::Ptr(t)) = self.t.get(p.ty).clone() else { return err(span, format!("@{name} needs a T* first")) };
+                if self.needs_drop(t)? {
+                    return err(span, format!("@{name} takes plain values (ints, floats, pointers), not a {}", self.ty_name(t)));
+                }
+                let tc = self.cty(t);
+                if name == "volatile_read" {
+                    return Ok(Val::new(t, format!("(*(volatile {tc}*)({}))", p.c)));
+                }
+                let place = Self::through(Val { lv: true, mutable: true, ..Val::new(t, "") }, &p);
+                if !place.mutable {
+                    return err(span, "can't assign through this; it reaches a val (or a parameter without var)");
+                }
+                self.note_write(&place);
+                let v = self.garg_expr(&args[1], Some(t))?;
+                let v = self.coerce(v, t, span)?;
+                Ok(Val::stmt(format!("(*(volatile {tc}*)({}) = {})", p.c, v.c)))
             }
             "typeid" => {
                 // @typeid(T), or @typeid(x): x's type's id, and for a trait value the id of the type it

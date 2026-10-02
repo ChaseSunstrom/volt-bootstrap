@@ -40,6 +40,8 @@ sidebar:
 | `--lang L` | with `bindings`: `c`, `cpp`, `rust`, `zig`, `python`, `pyi`, `csharp`, `java`, `go`, `lua`, `dart`, `swift`, `kotlin`, `ruby`, `node`, `js`, `ts` or `json` |
 | `--cc ARG` | pass ARG to the C compiler: a `.c` file, `-lNAME`, `-I`, `-D`... (repeatable) |
 | `--backend c\|llvm` | self-hosted voltc: generate C (default) or native code through LLVM |
+| `--target T` | self-hosted voltc: build for bare metal (`riscv32-none`, `riscv64-none`, `thumbv7m-none`, `thumbv7em-none`) through LLVM, linked by `ld.lld` with no C compiler or C library; see [Bare metal](/volt-bootstrap/voltc/bare-metal/) |
+| `--link-script FILE` | the linker script for `--target`: the board's memory and the symbols the start code reads |
 | `--message-format F` | `human` (default), `short` or `json`: see [Diagnostics](/volt-bootstrap/voltc/diagnostics/) |
 | `--color WHEN` | `auto` (default), `always` or `never` |
 | `--error-limit N` | show at most N errors, the first in source order (default 20; `0`: all) |

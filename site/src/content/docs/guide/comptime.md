@@ -227,12 +227,38 @@ Three keys describe the platform being built for. Every package sees them withou
 
 | Key | Values |
 | --- | --- |
-| `os` | `linux`, `macos`, `windows`, `freebsd` |
-| `arch` | `x86_64`, `aarch64`, `riscv64`, `x86`, `arm` |
+| `os` | `linux`, `macos`, `windows`, `freebsd`, or `none` on [bare metal](/volt-bootstrap/voltc/bare-metal/) |
+| `arch` | `x86_64`, `aarch64`, `riscv64`, `riscv32`, `x86`, `arm` |
 | `pointer_bits` | `64` or `32` |
 
 A library uses them to pick per-platform code, and the branches for other platforms aren't checked.
 At run time, `std::process::os()` and `std::process::arch()` give the same names.
+`@cfg("hosted")` is true when there's an OS at all (`os` isn't `none`), for code that needs files,
+threads or a clock.
+
+`@cfg` also goes on a declaration, as an attribute: the declaration is only in builds where it holds,
+and in others it isn't even checked. On a namespace it covers everything inside:
+
+```volt
+use std::io;
+// flags: --cfg feature=fast
+
+@attributes([@cfg("feature", "fast")])
+fn speed() -> str { return "fast"; }
+
+@attributes([@cfg("feature", "slow")])
+fn speed() -> str { return "slow"; }
+
+@attributes([@cfg("os", "none")])
+namespace board {
+    fn blink() -> void {}
+}
+
+fn main() -> void {
+    std::println(speed());
+}
+// expect: fast
+```
 
 The keys describe the host. Passing one with `--cfg`, such as `--cfg os=windows`, replaces the host's
 value for every package. `voltc check --cfg os=windows` then checks another platform's branches on
@@ -271,6 +297,7 @@ accepted, so a typo is an error.
 | `@owns("field")` | this struct owns what the field points at, like `box` |
 | `@export_text("method")` | an export fn returning this struct hands other languages its text, as `method()` gives it (std's `string` has it) |
 | `@thread_local` | a global `var` each thread has its own copy of, starting from its initial value |
+| `@cfg("key")`, `@cfg("key", "value")` | the declaration is only in builds where this `@cfg` holds; on a namespace, everything in it |
 
 ```volt
 use std::io;

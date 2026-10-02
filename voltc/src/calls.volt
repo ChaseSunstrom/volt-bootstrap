@@ -282,7 +282,8 @@ attach fn cast_scalar(this: checker&, t: u32) -> bool {
     }
 }
 
-// The @builtins that generate code: sizeof, alignof, offsetof, cast, write, slice, read, typeid, panic.
+// The @builtins that generate code: sizeof, alignof, offsetof, cast, write, slice, read, volatile_read,
+// volatile_write, typeid, panic.
 // The compile-time ones (@typeinfo...) are evaluated by comptime instead.
 attach fn builtin(this: checker&, name: str, gargs: std::vec<garg>&, args_opt: std::vec<garg>*, want: u32?, span: span) -> compile_error!tval {
     var none: std::vec<garg> = {};
@@ -393,6 +394,36 @@ attach fn builtin(this: checker&, name: str, gargs: std::vec<garg>&, args_opt: s
         r.via = deeper(p.via, 1);
         r.root = p.root;
         return r;
+    }
+    if (name == "volatile_read" || name == "volatile_write") {
+        // a load or store the compiler keeps, in order, exactly as written: memory-mapped hardware
+        // registers
+        var want_args: usize = 2;
+        if (name == "volatile_read") {
+            want_args = 1;
+        }
+        if (args.len != want_args) {
+            return fail(span, fmt2("@{} takes {} argument(s)", S(name), unum(@cast<u64>(want_args))));
+        }
+        val p = try this.garg_expr(args.at(0), null);
+        val t = this.pointee(p.ty) ?? return fail(span, fmt("@{} needs a T* first", S(name)));
+        if (try this.needs_drop(t)) {
+            return fail(span, fmt2("@{} takes plain values (ints, floats, pointers), not a {}", S(name), this.ty_name(t)));
+        }
+        if (name == "volatile_read") {
+            return vnew(t, this.ir.node(ir_kind::VLOAD(p.c), t));
+        }
+        var place = vnew(t, 0);
+        place.lv = true;
+        place.mutable = true;
+        through(&place, p);
+        if (!place.mutable) {
+            return fails(span, "can't assign through this; it reaches a val (or a parameter without var)");
+        }
+        this.note_write(&place);
+        var v = try this.garg_expr(args.at(1), t);
+        v = try this.coerce(v, t, span);
+        return this.vstmt(this.ir.node(ir_kind::VSTORE(p.c, v.c), VOID));
     }
     if (name == "typeid") {
         // @typeid(T), or @typeid(x): x's type's id, and for a trait value the id of the type it

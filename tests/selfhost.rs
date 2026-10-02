@@ -161,7 +161,30 @@ fn release_voltc_works() {
     }
     assert!(bad.is_empty(), "the release voltc built by itself differs on:\n{}", bad.join("\n"));
     hot_profiles(&second, &tmp);
+    bare_metal(&second, &std_dir);
     let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// the bare-metal examples with that voltc: each board's blinky (for both of each board's targets),
+/// debug and release, built with no C compiler at all ($CC is false) and run under qemu, prints its
+/// expected.txt and exits 0. A board whose qemu (or ld.lld) isn't installed is skipped: its run.sh
+/// exits 77
+fn bare_metal(voltc: &Path, std_dir: &Path) {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/bare-metal");
+    for (board, target) in [("riscv-virt", "riscv32-none"), ("riscv-virt", "riscv64-none"), ("cortex-m3", "thumbv7m-none"), ("cortex-m3", "thumbv7em-none")] {
+        let dir = root.join(board);
+        for release in ["", "1"] {
+            let o = Command::new(dir.join("run.sh")).env("VOLTC", voltc).env("VOLT_STD", std_dir).env("RELEASE", release).env("TARGET", target).env("CC", "false").output().unwrap();
+            if o.status.code() == Some(77) {
+                eprintln!("bare metal: skipped {board} {target} (no qemu or ld.lld)");
+                break;
+            }
+            let want = std::fs::read_to_string(dir.join("expected.txt")).unwrap();
+            let out = String::from_utf8_lossy(&o.stdout);
+            assert!(o.status.success() && out == want, "bare metal {board} {target} (release: {}) exited {:?}, printed:\n{out}{}", release == "1", o.status.code(), String::from_utf8_lossy(&o.stderr));
+        }
+        let _ = std::fs::remove_file(dir.join("blinky.elf"));
+    }
 }
 
 /// bolt hot with that voltc: a program's hot function and line are found and named the Volt way, and

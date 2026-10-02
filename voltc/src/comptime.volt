@@ -2123,41 +2123,7 @@ attach fn ct_builtin(this: checker&, name: str, gargs: std::vec<garg>&, args: st
                 .TYPE(t) => { return fails(t.span, "@cfg takes strings: @cfg(\"feature\", \"name\")"); },
             }
         }
-        if (parts.len == 0 || parts.len > 2) {
-            return fails(span, "@cfg(KEY) or @cfg(KEY, VALUE)");
-        }
-        val key_only = parts.len == 1;
-        var want = copy *parts.at(0);
-        if (!key_only) {
-            want.push('=');
-            want.append(parts.at(1).as_str());
-        }
-        // @cfg("release"): an optimized build (--release), for code that trades checks for speed
-        if (key_only && want.as_str() == "release") {
-            return cval::BOOL(this.opts.release);
-        }
-        val pkg = this.pkg_of_file(span.file);
-        for (c&) in this.opts.cfg.items() {
-            if (!same_pkg(c.pkg, pkg) || is_target_key(c.set)) {
-                continue;
-            }
-            // a key alone matches KEY and KEY=anything
-            if (cfg_matches(c.set, want.as_str(), key_only)) {
-                return cval::BOOL(true);
-            }
-        }
-        // the target's keys, for every package: the host's values (this voltc's runtime names them),
-        // unless --cfg gives one for any package, which replaces it (checking another platform's code)
-        var host_bits = S("");
-        host_bits.append_uint(@cast<u64>(@sizeof(usize) * 8));
-        var os = S("os=");
-        os.append(this.cfg_given("os") ?? std::process::os());
-        var arch = S("arch=");
-        arch.append(this.cfg_given("arch") ?? std::process::arch());
-        var bits = S("pointer_bits=");
-        bits.append(this.cfg_given("pointer_bits") ?? host_bits.as_str());
-        val on_target = cfg_matches(os.as_str(), want.as_str(), key_only) || cfg_matches(arch.as_str(), want.as_str(), key_only) || cfg_matches(bits.as_str(), want.as_str(), key_only);
-        return cval::BOOL(on_target);
+        return cval::BOOL(try this.cfg_on(&parts, span));
     }
     if (name == "compile_error") {
         var msg = S("compile error");
@@ -2767,6 +2733,7 @@ fn attr_defs() -> std::vec<attr_def> {
     put(&v, { name: "cpp_type", args: 1 }); // a struct is this C++ class (use cpp writes it)
     put(&v, { name: "export_text", args: 1 }); // a struct is text, as this method gives it, to other languages (voltc bindings)
     put(&v, { name: "thread_local", args: 0 }); // a global var each thread has its own of
+    put(&v, { name: "cfg", args: 2 }); // the item is only in builds where this @cfg holds (1 or 2 arguments)
     return move v;
 }
 
@@ -2791,6 +2758,87 @@ fn attr_str(a: expr&) -> str? {
     }
 }
 
+// @cfg(KEY) / @cfg(KEY, VALUE), as a builtin or an item's attribute: was --cfg KEY[=VALUE] given for
+// the package the code at span is in, or is it one of the target's keys (os, arch, pointer_bits)?
+attach fn cfg_on(this: checker&, parts: std::vec<std::string>&, span: span) -> compile_error!bool {
+    if (parts.len == 0 || parts.len > 2) {
+        return fails(span, "@cfg(KEY) or @cfg(KEY, VALUE)");
+    }
+    val key_only = parts.len == 1;
+    var want = copy *parts.at(0);
+    if (!key_only) {
+        want.push('=');
+        want.append(parts.at(1).as_str());
+    }
+    // @cfg("release"): an optimized build (--release), for code that trades checks for speed
+    if (key_only && want.as_str() == "release") {
+        return this.opts.release;
+    }
+    val pkg = this.pkg_of_file(span.file);
+    for (c&) in this.opts.cfg.items() {
+        if (!same_pkg(c.pkg, pkg) || is_target_key(c.set)) {
+            continue;
+        }
+        // a key alone matches KEY and KEY=anything
+        if (cfg_matches(c.set, want.as_str(), key_only)) {
+            return true;
+        }
+    }
+    // the target's keys, for every package: the host's values (this voltc's runtime names them),
+    // unless --cfg gives one for any package, which replaces it (checking another platform's code)
+    // @cfg("hosted"): there's an OS (any target but os=none, bare metal), for std's OS parts
+    if (key_only && want.as_str() == "hosted") {
+        return (this.cfg_given("os") ?? "") != "none";
+    }
+    var host_bits = S("");
+    host_bits.append_uint(@cast<u64>(@sizeof(usize) * 8));
+    var os = S("os=");
+    os.append(this.cfg_given("os") ?? std::process::os());
+    var arch = S("arch=");
+    arch.append(this.cfg_given("arch") ?? std::process::arch());
+    var bits = S("pointer_bits=");
+    bits.append(this.cfg_given("pointer_bits") ?? host_bits.as_str());
+    val on_target = cfg_matches(os.as_str(), want.as_str(), key_only) || cfg_matches(arch.as_str(), want.as_str(), key_only) || cfg_matches(bits.as_str(), want.as_str(), key_only);
+    return on_target;
+}
+
+// an item's @cfg attributes all hold (an item without one is always in)
+attach fn item_cfg_on(this: checker&, attrs: std::vec<expr>&) -> compile_error!bool {
+    for (a&) in attrs.items() {
+        match (a.kind) {
+            .BUILTIN(n, g, args) => {
+                if (n != "cfg" || args == null) {
+                    continue;
+                }
+                var parts: std::vec<std::string> = {};
+                for (x&) in args.value.items() {
+                    var ok = false;
+                    match (*x) {
+                        .EXPR(e) => {
+                            match (e.kind) {
+                                .STR(t) => {
+                                    put(&parts, S(t.as_str()));
+                                    ok = true;
+                                },
+                                default => {},
+                            }
+                        },
+                        default => {},
+                    }
+                    if (!ok) {
+                        return fails(a.span, "@cfg takes strings: @cfg(\"os\", \"none\")");
+                    }
+                }
+                if (!(try this.cfg_on(&parts, a.span))) {
+                    return false;
+                }
+            },
+            default => {},
+        }
+    }
+    return true;
+}
+
 // rejects unknown attributes and wrong argument counts; @intrinsic is allowed only in package files
 attach fn check_attr(this: checker&, a: expr&, file: u32) -> compile_error!void {
     var name: str = "";
@@ -2803,6 +2851,12 @@ attach fn check_attr(this: checker&, a: expr&, file: u32) -> compile_error!void 
             }
         },
         default => { return fails(a.span, "attributes are builtins like @inline"); },
+    }
+    if (name == "cfg") {
+        if (n_args == 1 || n_args == 2) {
+            return;
+        }
+        return fails(a.span, "@cfg takes 1 or 2 arguments: @cfg(\"os\", \"none\")");
     }
     if (name == "intrinsic" || name == "runtime") {
         for (pf&) in this.opts.pkg_files.items() {

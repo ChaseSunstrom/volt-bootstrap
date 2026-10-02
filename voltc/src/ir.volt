@@ -65,9 +65,11 @@ enum ir_kind {
     SIZEOF: u32,                // size of a type (usize); the backend knows C headers' layouts
     ALIGNOF: u32,
     OFFSETOF: (u32, u32),       // type, field index
+    VLOAD: u32,                 // *p, loaded exactly as written (volatile: memory-mapped registers)
     // ---- statements (type void or never) ----
     DECL: (u32, u32?),   // local, initial value
     ASSIGN: (u32, u32),  // place = value
+    VSTORE: (u32, u32),  // *p = value, stored exactly as written (volatile)
     IF: (u32, u32, u32?),
     LOOP: u32,           // forever (leave by goto or return)
     LABEL: u32,
@@ -396,6 +398,11 @@ attach fn kids(this: ir_prog&, n: u32, out: std::vec<u32>&) -> void {
     match (this.at(n).kind) {
         .FIELD(b, i) => { put(out, b); },
         .DEREF(p) => { put(out, p); },
+        .VLOAD(p) => { put(out, p); },
+        .VSTORE(p, v) => {
+            put(out, p);
+            put(out, v);
+        },
         .ADDR(p) => { put(out, p); },
         .INDEX(b, i) => {
             put(out, b);

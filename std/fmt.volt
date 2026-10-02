@@ -56,6 +56,17 @@ namespace fmt {
         rt_put(sink, @cast<cstr>(&buf[n]), 20 - n);
     }
 
+    // a C string's text (error names, cstr values)
+    @attributes([@runtime("volt_print_cstr")])
+    internal fn print_cstr(sink: void*, c: cstr) -> void {
+        val p = @cast<u8*>(c);
+        var n: usize = 0;
+        while (p[n] != 0) {
+            n += 1;
+        }
+        rt_put(sink, c, n);
+    }
+
     @attributes([@runtime("volt_print_u64")])
     internal fn print_u64(sink: void*, v: u64) -> void {
         var buf: u8[20];

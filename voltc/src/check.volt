@@ -321,6 +321,7 @@ struct opts {
     pp_flags: std::vec<str> = {};       // the --cc flags the C preprocessor needs (-I, -D...)
     lsp: bool = false;                  // record names for the language server (lsp.volt)
     line_info: bool = false;            // mark each statement's source line in the IR (--profiler)
+    target: str? = null;                // --target (target.volt): bare metal, through LLVM
 }
 
 // an error variant's code, its name and its qualified name (for volt_err_name)
@@ -590,6 +591,10 @@ attach fn collect_item(this: checker&, it: item&, ns: u32, parent: u32?) -> comp
                 return fails(a.span, "@thread_local goes on a global var (each thread gets its own)");
             }
         }
+    }
+    // @cfg(...) false: the item isn't in this build at all
+    if (!(try this.item_cfg_on(&it.attrs))) {
+        return;
     }
     var name: str? = null;
     var inner: std::vec<item>* = null;

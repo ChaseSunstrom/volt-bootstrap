@@ -469,9 +469,9 @@ attach fn out(this: checker&, sink: u32, f: str, args: std::vec<u32>) -> u32 {
     return this.ir.rt_call("volt_out", move all, VOID);
 }
 
-// print text as is
+// print text as is: its bytes and length, no printf (bare metal has none)
 attach fn out_s(this: checker&, sink: u32, s: str) -> u32 {
-    return this.out(sink, "%s", nodes(this.ir.node(ir_kind::CSTR(s), CSTR)));
+    return this.ir.rt_call("volt_put", nodes3(sink, this.ir.node(ir_kind::CSTR(s), CSTR), this.ir.int(@cast<i128>(s.len), USIZE)), VOID);
 }
 
 // name(sink, v) through std's Volt version of that runtime function (@runtime), if it has one
@@ -514,12 +514,9 @@ attach fn print_code(this: checker&, code: std::vec<u32>&, sink: u32, c: u32, t:
                 put(code, (try this.rt_print("volt_print_f64", sink, v)) ?? this.out_rt(sink, "volt_print_f64", v));
             }
         },
-        .BOOL => {
-            val s = this.ir.node(ir_kind::COND(c, this.ir.node(ir_kind::CSTR("true"), CSTR), this.ir.node(ir_kind::CSTR("false"), CSTR)), CSTR);
-            put(code, this.out(sink, "%s", nodes(s)));
-        },
+        .BOOL => { put(code, this.ir.if_(c, this.ir.block(nodes(this.out_s(sink, "true"))), this.ir.block(nodes(this.out_s(sink, "false"))))); },
         .STR => { put(code, this.out_rt(sink, "volt_print_str", c)); },
-        .CSTR => { put(code, this.out(sink, "%s", nodes(c))); },
+        .CSTR => { put(code, (try this.rt_print("volt_print_cstr", sink, c)) ?? this.out(sink, "%s", nodes(c))); },
         .NULL => { put(code, this.out_s(sink, "null")); },
         .REF(x) => { put(code, this.out(sink, "%p", nodes(this.ir.conv(c, VOIDPTR)))); },
         .FN_PTR(ps, r, va) => { put(code, this.out(sink, "%p", nodes(this.ir.conv(c, VOIDPTR)))); },
@@ -568,7 +565,9 @@ attach fn print_code(this: checker&, code: std::vec<u32>&, sink: u32, c: u32, t:
                 return this.print_code(code, sink, this.ir.deref(p, o.inner), o.inner, span);
             }
             val nf = (try this.struct_fields(sid, span)).len;
-            put(code, this.out(sink, "%s { ", nodes(this.ir.node(ir_kind::CSTR(this.si(sid).name), CSTR))));
+            var open = S(this.si(sid).name);
+            open.append(" { ");
+            put(code, this.out_s(sink, this.intern(move open)));
             for (i) in 0..nf {
                 val f = *(try this.struct_fields(sid, span)).at(i);
                 var label: std::string = {};
@@ -596,7 +595,7 @@ attach fn print_code(this: checker&, code: std::vec<u32>&, sink: u32, c: u32, t:
         },
         .ANYERR => {
             val n = this.call_fn(this.err_name_fn(), nodes(c), CSTR);
-            put(code, this.out(sink, "%s", nodes(n)));
+            put(code, (try this.rt_print("volt_print_cstr", sink, n)) ?? this.out(sink, "%s", nodes(n)));
         },
         .ERR_UNION(e, x) => {
             var bad = nodes(this.out_s(sink, "error."));

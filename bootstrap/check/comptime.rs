@@ -1307,27 +1307,7 @@ impl Checker {
                         GenericArg::Type(t) => return cerr(t.span, "@cfg takes strings: @cfg(\"feature\", \"name\")"),
                     }
                 }
-                let key_only = parts.len() == 1;
-                let want = match parts.as_slice() {
-                    [k] => k.clone(),
-                    [k, v] => format!("{k}={v}"),
-                    _ => return cerr(span, "@cfg(KEY) or @cfg(KEY, VALUE)"),
-                };
-                // @cfg("release"): an optimized build (--release), for code that trades checks for speed
-                if key_only && want == "release" {
-                    return Ok(CVal::Bool(self.opts.release));
-                }
-                let pkg = self.opts.pkg_files.get(&span.file);
-                let matches = |c: &str| c == want || key_only && c.split('=').next() == Some(want.as_str());
-                // the target's keys, for every package: the host's values (as voltc's runtime names them),
-                // unless --cfg gives one for any package, which replaces it (checking another platform's code)
-                const TARGET: [&str; 3] = ["os", "arch", "pointer_bits"];
-                let given = |k: &str| self.opts.cfg.iter().find_map(|(_, c)| c.strip_prefix(k).and_then(|r| r.strip_prefix('=')).map(String::from));
-                let host = [std::env::consts::OS.to_string(), std::env::consts::ARCH.to_string(), usize::BITS.to_string()];
-                let on_target = TARGET.iter().zip(host).any(|(k, h)| matches(&format!("{k}={}", given(k).unwrap_or(h))));
-                let is_target = |c: &str| TARGET.contains(&c.split('=').next().unwrap_or(""));
-                let set = self.opts.cfg.iter().any(|(p, c)| p.as_ref() == pkg && !is_target(c) && matches(c));
-                Ok(CVal::Bool(set || on_target))
+                Ok(CVal::Bool(self.cfg_on(&parts, span)?))
             }
             "sizeof" | "alignof" => {
                 let [g] = args else { return cerr(span, format!("@{name}(T) takes one type")) };
@@ -1688,7 +1668,7 @@ impl Checker {
 
 /// the attributes that exist (enum attribute in the spec); @intrinsic is for packages (a std, or
 /// any library) to bind compiler-provided functions like println
-const ATTRS: &[(&str, usize)] = &[("inline", 0), ("noinline", 0), ("opt", 1), ("section", 1), ("align", 1), ("deprecated", 1), ("owns", 1), ("cpp_type", 1), ("export_text", 1), ("thread_local", 0)];
+const ATTRS: &[(&str, usize)] = &[("inline", 0), ("noinline", 0), ("opt", 1), ("section", 1), ("align", 1), ("deprecated", 1), ("owns", 1), ("cpp_type", 1), ("export_text", 1), ("thread_local", 0), ("cfg", 2)];
 
 /// an attribute's string argument: @owns("ptr") -> ptr
 pub fn attr_str(a: &Expr) -> Option<String> {
@@ -1702,6 +1682,57 @@ pub fn attr_str(a: &Expr) -> Option<String> {
 }
 
 impl Checker {
+    /// @cfg(KEY) / @cfg(KEY, VALUE), as a builtin or an item's attribute: was --cfg KEY[=VALUE] given for
+    /// the package the code at span is in, or is it one of the target's keys (os, arch, pointer_bits)?
+    pub fn cfg_on(&self, parts: &[String], span: Span) -> Res<bool> {
+        let key_only = parts.len() == 1;
+        let want = match parts {
+            [k] => k.clone(),
+            [k, v] => format!("{k}={v}"),
+            _ => return err(span, "@cfg(KEY) or @cfg(KEY, VALUE)"),
+        };
+        // @cfg("release"): an optimized build (--release), for code that trades checks for speed
+        if key_only && want == "release" {
+            return Ok(self.opts.release);
+        }
+        let pkg = self.opts.pkg_files.get(&span.file);
+        let matches = |c: &str| c == want || key_only && c.split('=').next() == Some(want.as_str());
+        // the target's keys, for every package: the host's values (as voltc's runtime names them),
+        // unless --cfg gives one for any package, which replaces it (checking another platform's code)
+        const TARGET: [&str; 3] = ["os", "arch", "pointer_bits"];
+        let given = |k: &str| self.opts.cfg.iter().find_map(|(_, c)| c.strip_prefix(k).and_then(|r| r.strip_prefix('=')).map(String::from));
+        // @cfg("hosted"): there's an OS (any target but os=none, bare metal), for std's OS parts
+        if key_only && want == "hosted" {
+            return Ok(given("os").as_deref() != Some("none"));
+        }
+        let host = [std::env::consts::OS.to_string(), std::env::consts::ARCH.to_string(), usize::BITS.to_string()];
+        let on_target = TARGET.iter().zip(host).any(|(k, h)| matches(&format!("{k}={}", given(k).unwrap_or(h))));
+        let is_target = |c: &str| TARGET.contains(&c.split('=').next().unwrap_or(""));
+        let set = self.opts.cfg.iter().any(|(p, c)| p.as_ref() == pkg && !is_target(c) && matches(c));
+        Ok(set || on_target)
+    }
+
+    /// an item's @cfg attributes all hold (an item without one is always in)
+    pub fn item_cfg_on(&self, attrs: &[Expr]) -> Res<bool> {
+        for a in attrs {
+            let ExprKind::Builtin(n, _, Some(args)) = &a.kind else { continue };
+            if n != "cfg" {
+                continue;
+            }
+            let mut parts = Vec::new();
+            for g in args {
+                match g {
+                    GenericArg::Expr(Expr { kind: ExprKind::Str(s), .. }) => parts.push(String::from_utf8_lossy(s).into_owned()),
+                    _ => return err(a.span, "@cfg takes strings: @cfg(\"os\", \"none\")"),
+                }
+            }
+            if !self.cfg_on(&parts, a.span)? {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
     /// rejects unknown attributes and wrong argument counts; @intrinsic is allowed only in package files
     pub fn check_attr(&self, a: &Expr, file: u32) -> Res<()> {
         let ExprKind::Builtin(name, _, args) = &a.kind else { return err(a.span, "attributes are builtins like @inline") };
@@ -1709,6 +1740,9 @@ impl Checker {
             return Ok(());
         }
         let n_args = args.as_ref().map(|a| a.len()).unwrap_or(0);
+        if name == "cfg" {
+            return if n_args == 1 || n_args == 2 { Ok(()) } else { err(a.span, "@cfg takes 1 or 2 arguments: @cfg(\"os\", \"none\")") };
+        }
         match ATTRS.iter().find(|(n, _)| n == name) {
             Some((_, want)) if *want == n_args => Ok(()),
             Some((_, want)) => err(a.span, format!("@{name} takes {want} argument(s)")),

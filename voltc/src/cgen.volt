@@ -935,6 +935,22 @@ attach fn expr(this: cgen&, out: std::string&, n: u32) -> void {
             this.operand(out, p);
             out.push(')');
         },
+        .VLOAD(p) => {
+            out.append("(*(volatile ");
+            out.append(this.ty(this.c.ir.ty_of(n)));
+            out.append("*)(");
+            this.expr(out, p);
+            out.append("))");
+        },
+        .VSTORE(p, v) => {
+            out.append("(*(volatile ");
+            out.append(this.ty(this.c.ir.ty_of(v)));
+            out.append("*)(");
+            this.expr(out, p);
+            out.append(") = ");
+            this.expr(out, v);
+            out.push(')');
+        },
         .ADDR(p) => {
             out.append("(&");
             this.expr(out, p);
@@ -1433,6 +1449,8 @@ attach fn acts(this: cgen&, n: u32) -> u32 {
                 }
             },
             .ASSIGN(q, x) => { bits |= 1; },
+            .VSTORE(q, x) => { bits |= 1; },
+            .VLOAD(q) => { bits |= 5; },
             .CHECKED(op, a, b, loc) => { bits |= 2; },
             .LOCAL(l) => { bits |= 4; },
             .GLOBAL(g) => { bits |= 4; },

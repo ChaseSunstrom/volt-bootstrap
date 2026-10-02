@@ -36,13 +36,17 @@ A few rules keep the LLVM output correct:
 
 ## The runtime, moving into Volt
 
-Every program is compiled with a small runtime: today the C prelude and runtime in `runtime/`. It
-is moving into Volt one function at a time, so that a program can one day be built with no C at
-all. A function in std marked `@runtime("volt_print_f64")` is std's Volt version of that runtime
+Every hosted program is compiled with a small runtime: today the C prelude and runtime in
+`runtime/`. It is moving into Volt one function at a time. On [bare metal](/volt-bootstrap/voltc/bare-metal/)
+(`--target`) there's no C at all already: `std/bare.volt` has the runtime functions the compiler's
+code calls (panics, bounds, printing, the heap) and the ones LLVM calls (`memcpy`, 64-bit division
+on 32-bit cores), and voltc's start code (`voltc/src/target.volt`) replaces C's `crt0`. A function in std marked `@runtime("volt_print_f64")` is std's Volt version of that runtime
 function: both compilers call it wherever they'd call the C one, and both backends can inline it.
 The C version stays for programs built without std (`--no-std`).
 
-So far, printing numbers is in Volt (`std/fmt.volt`): integers by a digit loop, and floats by
+Printing text goes to the runtime as bytes and a length (`volt_put`), with no `printf` format, and
+C strings and error names print through std's `volt_print_cstr`. Printing numbers is in Volt
+(`std/fmt.volt`): integers by a digit loop, and floats by
 Ryu (Ulf Adams, PLDI 2018), the shortest text that reads back as the same value, found by exact
 integer arithmetic on the bits. Ryu replaced up to 17 rounds of `snprintf` and `strtod` per float
 (the `print` benchmark measures it). Its tables are generated with exact big-integer

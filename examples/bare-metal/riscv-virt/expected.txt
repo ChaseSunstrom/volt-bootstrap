@@ -1,0 +1,7 @@
+led on
+led off
+led on
+led off
+led on
+led off
+3 blinks on qemu riscv virt

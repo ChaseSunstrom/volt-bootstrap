@@ -1,0 +1,7 @@
+led on
+led off
+led on
+led off
+led on
+led off
+3 blinks on lm3s6965 (Cortex-M3)
