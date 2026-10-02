@@ -96,7 +96,7 @@ fn collect_generic_names(toks: std::vec<token>&, out: std::map<str, bool>&) -> v
         }
         if (j + 1 < toks.len) {
             val w = ident_of(&(toks.at(j).tok)) ?? "";
-            if (w == "fn" || w == "struct" || w == "enum" || w == "trait" || w == "error") {
+            if (w == "fn" || w == "struct" || w == "enum" || w == "trait" || w == "error" || w == "type") {
                 match (toks.at(j + 1).tok) {
                     .IDENT(name) => { out.put(name, true); },
                     default => {},
@@ -510,6 +510,14 @@ attach fn item(this: parser&) -> compile_error!item {
             }
         }
         kind = item_kind::ENUM({ name: name, backing: move backing, variants: move variants, is_error: is_error });
+    } else if (this.is_kw("type") && is_ident_tok(this.tok_at(1)) && is_punct_tok(this.tok_at(2), "=")) {
+        // `type name = T;`: another name for a type (`<T: type> type list = std::vec<T>;`)
+        this.bump();
+        val name = (try this.ident()).name;
+        try this.expect("=");
+        val t = try this.parse_type();
+        try this.expect(";");
+        kind = item_kind::ALIAS(name, move t);
     } else if (this.eat_kw("trait")) {
         val name = (try this.ident()).name;
         kind = item_kind::TRAIT(name, try this.item_block());
@@ -581,7 +589,7 @@ attach fn item(this: parser&) -> compile_error!item {
     } else if (this.is_kw("var") || this.is_kw("val") || this.is_kw("static")) {
         kind = item_kind::GLOBAL(try this.let_stmt(is_comptime));
     } else {
-        return this.unexpected("an item (fn, struct, enum, error, trait, attach, namespace, use, var, val)");
+        return this.unexpected("an item (fn, struct, enum, error, trait, type, attach, namespace, use, var, val)");
     }
     return { kind: move kind, span: start.to(this.prev_span()), attrs: move attrs, vis: v, generics: move generics };
 }
@@ -981,4 +989,18 @@ attach fn path(this: parser&, in_type: bool) -> compile_error!path {
         }
     }
     return { segs: move segs, span: start.to(this.prev_span()) };
+}
+
+fn is_ident_tok(t: tok&) -> bool {
+    match (*t) {
+        .IDENT(s) => { return true; },
+        default => { return false; },
+    }
+}
+
+fn is_punct_tok(t: tok&, p: str) -> bool {
+    match (*t) {
+        .PUNCT(s) => { return s == p; },
+        default => { return false; },
+    }
 }

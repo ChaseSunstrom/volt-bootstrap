@@ -130,6 +130,12 @@ attach fn lsp_type_label(this: checker&, d: u32, name: str) -> std::string {
             }
         },
         .TRAIT(n, fs) => { kw = "trait"; },
+        .ALIAS(n, t&) => {
+            // what it names, as written (a C typedef's type has the `use c` span: no Volt source)
+            if (t.span.lo > this.item_of(d).span.lo && @cast<usize>(t.span.file) < this.files.len) {
+                return fmt2("type {} = {}", S(name), this.span_text(t.span));
+            }
+        },
         default => {},
     }
     return fmt2("{} {}", S(kw), S(name));
@@ -1320,6 +1326,10 @@ fn add_symbols(text: str, items: std::vec<item>&, out: std::json::value&) -> voi
                 add_symbols(text, fs, &kids);
             },
             .ATTACH(a, b, fs&) => { add_symbols(text, fs, out); },
+            .ALIAS(n, t) => {
+                name = n;
+                kind = 26.0; // TypeParameter: LSP has no alias kind (rust-analyzer uses this one too)
+            },
             .NAMESPACE(path&, xs&) => {
                 if (path.len > 0) {
                     name = *path.at(path.len - 1);

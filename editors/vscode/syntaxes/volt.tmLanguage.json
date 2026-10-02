@@ -65,6 +65,13 @@
           }
         },
         {
+          "match": "\\b(type)\\s+([A-Za-z_][A-Za-z0-9_]*)(?=\\s*=)",
+          "captures": {
+            "1": { "name": "storage.type.volt" },
+            "2": { "name": "entity.name.type.volt" }
+          }
+        },
+        {
           "match": "\\b(namespace)\\s+([A-Za-z_][A-Za-z0-9_]*(?:::[A-Za-z_][A-Za-z0-9_]*)*)",
           "captures": {
             "1": { "name": "storage.type.volt" },

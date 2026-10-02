@@ -25,6 +25,11 @@ attach fn sum(this: point&) -> i32 {
 //  ^^^^^^ keyword.control.volt
 }
 
+type meters = f64;
+// <---- storage.type.volt
+//   ^^^^^^ entity.name.type.volt
+//            ^^^ support.type.primitive.volt
+
 <T: type>
 //  ^^^^ support.type.primitive.volt
 fn max(a: T, b: T) -> T {

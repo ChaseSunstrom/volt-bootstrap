@@ -180,7 +180,7 @@ impl W {
                 self.let_(l);
                 self.close();
             }
-            // only C imports make these; the parser never does
+            // `type name = T;`, and C imports' typedefs
             ItemKind::Alias(n, t) => {
                 self.open("alias");
                 self.name(n);

@@ -172,20 +172,6 @@ attach fn resolve_type_path(this: checker&, p: path&, e: u32) -> compile_error!u
             }
             val d = primary ?? return fail(p.span, fmt("'{}' isn't a type", S(last)));
             try this.visible(d, p.span);
-            // another name: its type, resolved where it's declared (once)
-            match (this.item_of(d).kind) {
-                .ALIAS(n, t&) => {
-                    val have = this.aliases.get(d);
-                    if (have) {
-                        return *have;
-                    }
-                    val ae = this.new_env({ ns: this.decls.at(@cast<usize>(d)).ns });
-                    val r = try this.resolve_type(t, ae);
-                    this.aliases.put(d, r);
-                    return r;
-                },
-                default => {},
-            }
             if (this.opts.lsp) {
                 this.lsp_decl_use(d, last, p.span, this.lsp_type_label(d, last));
             }
@@ -193,6 +179,42 @@ attach fn resolve_type_path(this: checker&, p: path&, e: u32) -> compile_error!u
             val given = &p.segs.at(p.segs.len - 1).args;
             if (!generic && *given != null) {
                 return fail(p.span, fmt("'{}' isn't generic", S(last)));
+            }
+            // another name: its type, resolved where it's declared (once, unless it's generic: then
+            // with the arguments given here)
+            match (this.item_of(d).kind) {
+                .ALIAS(n, t&) => {
+                    val have = this.aliases.get(d);
+                    if (have) {
+                        return *have;
+                    }
+                    var binds: std::vec<gbind> = {};
+                    if (generic) {
+                        var none: std::vec<garg> = {};
+                        var gargs: std::vec<gval> = {};
+                        if (*given) {
+                            gargs = try this.gargs_for(d, &(*given).value, e, p.span);
+                        } else {
+                            gargs = try this.gargs_for(d, &none, e, p.span);
+                        }
+                        val gps = &this.item_of(d).generics;
+                        for (i) in 0..gps.len {
+                            put(&binds, { name: gps.at(i).name, g: copy *gargs.at(i) });
+                        }
+                    }
+                    val ae = this.new_env({ ns: this.decls.at(@cast<usize>(d)).ns, generics: move binds });
+                    if (!this.alias_resolving.add(d)) {
+                        return fail(p.span, fmt("type '{}' is defined in terms of itself", S(last)));
+                    }
+                    val r = this.resolve_type(t, ae);
+                    this.alias_resolving.remove(d);
+                    val ty = try r;
+                    if (!generic) {
+                        this.aliases.put(d, ty);
+                    }
+                    return ty;
+                },
+                default => {},
             }
             var args: std::vec<gval> = {};
             if (generic) {

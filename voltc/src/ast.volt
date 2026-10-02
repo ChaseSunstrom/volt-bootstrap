@@ -342,7 +342,7 @@ enum item_kind {
     USE_CPP: (std::vec<std::string>, str), // `use cpp { "shapes.hpp" } as shapes;` (cppimport.volt)
     USE_LANG: (str, std::vec<std::string>, str), // `use rust { "geom" } as geom;`: language, arguments, alias (langimport.volt)
     GLOBAL: let_stmt,
-    ALIAS: (str, ty), // another name for a type: a C typedef (cimport.volt)
+    ALIAS: (str, ty), // another name for a type: `type name = T;`, or a C typedef (cimport.volt)
 }
 
 // a top-level declaration with its `@attributes(...)` and the `<...>` generic params written before it

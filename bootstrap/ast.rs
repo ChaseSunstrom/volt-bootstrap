@@ -366,6 +366,6 @@ pub enum ItemKind {
     /// `use rust { "geom" } as geom;`: code in another language (the self-hosted voltc's)
     UseLang { lang: String, args: Vec<String>, alias: String },
     Global(Let),
-    /// another name for a type: a C typedef (cimport.rs)
+    /// another name for a type: `type name = T;`, or a C typedef (cimport.rs)
     Alias(String, Type),
 }

@@ -49,6 +49,33 @@ Function parameters are `val`s too; `fn f(var x: i32)` gives the function its ow
 | `T&`, `T*` | a [reference and a pointer](/volt-bootstrap/guide/references/) |
 | `fn(A) -> R` | a [function value](/volt-bootstrap/guide/closures/) |
 
+### Type aliases
+
+`type name = T;` gives a type another name. It's the same type, not a new one: a `meters` is an
+`f64` wherever an `f64` goes. An alias can be generic, taking its arguments where it's used, and
+`internal` keeps it to its package like any other declaration.
+
+```volt
+use std::io;
+
+type meters = f64;
+<T: type>
+type list = std::vec<T>;
+
+fn total(a: meters, b: meters) -> meters {
+    return a + b;
+}
+
+fn main() -> void {
+    var xs: list<i32> = {};
+    xs.push(3);
+    std::println("{} {}", total(1.5, 2.0), xs.len);
+}
+// expect: 3.5 1
+```
+
+An alias can't be defined in terms of itself (`type a = b; type b = a;` is an error).
+
 ## Literals
 
 ```volt

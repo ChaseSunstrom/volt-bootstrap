@@ -17,7 +17,7 @@ const KEYWORDS: &[&str] = &[
 // builtins that take <generic> args
 const GENERIC_BUILTINS: &[&str] = &["cast", "cpp"];
 
-/// Names declared with a generic prefix: `<...> [modifiers] fn|struct|enum|trait|error NAME`.
+/// Names declared with a generic prefix: `<...> [modifiers] fn|struct|enum|trait|error|type NAME`.
 pub fn collect_generic_names(toks: &[Token], out: &mut HashSet<String>) {
     let ident = |j: usize| match toks.get(j).map(|t| &t.tok) {
         Some(Tok::Ident(s)) => Some(s.as_str()),
@@ -40,7 +40,7 @@ pub fn collect_generic_names(toks: &[Token], out: &mut HashSet<String>) {
                 _ => break,
             }
         }
-        if let Some("fn" | "struct" | "enum" | "trait" | "error") = ident(j) {
+        if let Some("fn" | "struct" | "enum" | "trait" | "error" | "type") = ident(j) {
             if let Some(name) = ident(j + 1) {
                 out.insert(name.to_string());
             }
@@ -351,6 +351,14 @@ impl<'a> Parser<'a> {
                 }
             }
             ItemKind::Enum(EnumDecl { name, backing, variants, is_error })
+        } else if self.is_kw("type") && matches!(self.tok_at(1), Tok::Ident(_)) && matches!(self.tok_at(2), Tok::Punct("=")) {
+            // `type name = T;`: another name for a type (`<T: type> type list = std::vec<T>;`)
+            self.bump();
+            let (name, _) = self.ident()?;
+            self.expect("=")?;
+            let ty = self.parse_type()?;
+            self.expect(";")?;
+            ItemKind::Alias(name, ty)
         } else if self.eat_kw("trait") {
             let (name, _) = self.ident()?;
             ItemKind::Trait { name, fns: self.item_block()? }
@@ -401,7 +409,7 @@ impl<'a> Parser<'a> {
         } else if self.is_kw("var") || self.is_kw("val") || self.is_kw("static") {
             ItemKind::Global(self.let_stmt(is_comptime)?)
         } else {
-            return self.unexpected("an item (fn, struct, enum, error, trait, attach, namespace, use, var, val)");
+            return self.unexpected("an item (fn, struct, enum, error, trait, type, attach, namespace, use, var, val)");
         };
         Ok(Item { kind, span: start.to(self.prev_span()), attrs, vis, generics })
     }

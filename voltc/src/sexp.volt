@@ -287,7 +287,7 @@ attach fn item(this: sexp_writer&, it: item&) -> void {
             this.close();
         },
         .ALIAS(n, t&) => {
-            // only C imports make these; the parser never does
+            // `type name = T;`, and C imports' typedefs
             this.open("alias");
             this.name(n);
             this.sp();

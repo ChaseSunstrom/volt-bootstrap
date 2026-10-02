@@ -397,6 +397,7 @@ struct checker {
     c_includes: std::vec<str> = {};
     c_imports: std::map<str, u32> = {}; // an imported C symbol shared by every import of it
     aliases: std::map<u32, u32> = {}; // an alias decl's type, once resolved
+    alias_resolving: idset = {};       // aliases being resolved (one that reaches itself is an error)
     importing_c: bool = false;          // collecting a C import's items
     owned_items: std::vec<std::box<item>> = {}; // items made by the checker (C imports)
     c_texts: std::vec<std::string> = {};  // preprocessed C headers the imported items' names point into

@@ -24,7 +24,7 @@ use crate::ast::*;
 use cty::c_field;
 use crate::diag::{Diag, Res, SourceMap, Span, err};
 use crate::types::*;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 pub use enums::EnumInfo;
 pub use generics::UnionInfo;
@@ -357,6 +357,7 @@ pub struct Checker {
     pub c_includes: Vec<String>,                     // #include lines for imported C headers
     pub c_imports: HashMap<(u8, String), DeclId>,    // an imported C symbol shared by every import of it
     pub aliases: HashMap<DeclId, TyId>,               // an alias decl's type, once resolved
+    pub alias_resolving: HashSet<DeclId>,             // aliases being resolved (one that reaches itself is an error)
     pub importing_c: bool,                           // collecting a C import's items
 }
 
@@ -409,6 +410,7 @@ impl Checker {
             c_includes: Vec::new(),
             c_imports: HashMap::new(),
             aliases: HashMap::new(),
+            alias_resolving: HashSet::new(),
             importing_c: false,
         }
     }
@@ -881,20 +883,34 @@ impl Checker {
                 });
                 let Some(d) = primary else { return err(p.span, format!("'{}' isn't a type", p.last())) };
                 self.visible(d, p.span)?;
-                // another name: its type, resolved where it's declared (once)
+                let generic = !self.decls[d].item.generics.is_empty();
+                if !generic && given.is_some() {
+                    return err(p.span, format!("'{}' isn't generic", p.last()));
+                }
+                // another name: its type, resolved where it's declared (once, unless it's generic:
+                // then with the arguments given here)
                 if let ItemKind::Alias(_, t) = &self.decls[d].item.kind {
                     if let Some(&have) = self.aliases.get(&d) {
                         return Ok(have);
                     }
                     let t = t.clone();
-                    let ae = Rc::new(Env { ns: self.decls[d].ns, generics: Vec::new() });
-                    let r = self.resolve_type(&t, &ae)?;
-                    self.aliases.insert(d, r);
+                    let generics = if generic {
+                        let args = self.gargs_for(d, given.as_deref().unwrap_or(&[]), env, p.span)?;
+                        self.decls[d].item.generics.iter().map(|g| g.name.clone()).zip(args).collect()
+                    } else {
+                        Vec::new()
+                    };
+                    let ae = Rc::new(Env { ns: self.decls[d].ns, generics });
+                    if !self.alias_resolving.insert(d) {
+                        return err(p.span, format!("type '{}' is defined in terms of itself", p.last()));
+                    }
+                    let r = self.resolve_type(&t, &ae);
+                    self.alias_resolving.remove(&d);
+                    let r = r?;
+                    if !generic {
+                        self.aliases.insert(d, r);
+                    }
                     return Ok(r);
-                }
-                let generic = !self.decls[d].item.generics.is_empty();
-                if !generic && given.is_some() {
-                    return err(p.span, format!("'{}' isn't generic", p.last()));
                 }
                 let args = if generic { self.gargs_for(d, given.as_deref().unwrap_or(&[]), env, p.span)? } else { Vec::new() };
                 match &self.decls[d].item.kind {
