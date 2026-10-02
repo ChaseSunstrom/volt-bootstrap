@@ -1,6 +1,6 @@
 // The Volt logo, as code: a rounded lightning bolt on an indigo tile (the mark) and a geometric
 // lowercase "volt" drawn with round strokes (the wordmark). `npm run build` writes the SVGs and PNGs
-// here, the VS Code extension's icons into editors/vscode/images, and the website's into site/.
+// here, the VS Code extension's icons into editors/vscode/images, and the website's bolt into site/.
 import { writeFileSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -212,10 +212,5 @@ const ext = join(here, "../../editors/vscode/images");
 write(join(ext, "icon.png"), png(markText, 256));
 write(join(ext, "volt-file.svg"), boltOnly(100));
 
-// the website's
-const site = join(here, "../../site");
-write(join(site, "public/favicon.svg"), markSvg(64, true));
-write(join(site, "src/assets/volt-mark.svg"), markText);
-write(join(site, "src/assets/volt-bolt.svg"), boltOnly(100));
-write(join(site, "src/assets/volt-logo-light.svg"), light);
-write(join(site, "src/assets/volt-logo-dark.svg"), dark);
+// the website's bolt (the site draws its own mark and favicon, in the board's colours)
+write(join(here, "../../site/src/assets/volt-bolt.svg"), boltOnly(100));

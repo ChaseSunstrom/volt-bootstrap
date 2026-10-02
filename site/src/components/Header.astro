@@ -1,0 +1,109 @@
+---
+// The site's one header (Starlight's Header, overridden in astro.config.mjs): the landing page is a
+// Starlight page too, so the docs and the landing page share this: the mark, the main sections,
+// Starlight's search, its theme switch and the GitHub link.
+import Search from "virtual:starlight/components/Search";
+import SocialIcons from "virtual:starlight/components/SocialIcons";
+import ThemeSelect from "virtual:starlight/components/ThemeSelect";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+
+const base = import.meta.env.BASE_URL.replace(/\/$/, "");
+const here = Astro.url.pathname;
+const links = [
+  { label: "Learn", href: `${base}/start/install/`, section: "/start/" },
+  { label: "Guide", href: `${base}/guide/basics/`, section: "/guide/" },
+  { label: "std", href: `${base}/std/overview/`, section: "/std/" },
+  { label: "bolt", href: `${base}/bolt/overview/`, section: "/bolt/" },
+  { label: "Interop", href: `${base}/interop/c/`, section: "/interop/" },
+];
+// the logo's bolt, in a 100×100 box
+const bolt = readFileSync(resolve(process.cwd(), "src/assets/volt-bolt.svg"), "utf8").match(/<path d="([^"]+)"/)![1];
+---
+
+<div class="v-header">
+  <a class="v-brand" href={`${base}/`}>
+    <svg viewBox="0 0 100 100" aria-hidden="true">
+      <rect width="100" height="100" rx="14" fill="var(--v-board)" />
+      <circle cx="12" cy="12" r="3.2" fill="var(--v-board-deep)" />
+      <path d={bolt} transform="translate(18 16) scale(0.64)" fill="var(--v-gold)" />
+    </svg>
+    <span>volt</span>
+  </a>
+  <nav class="v-links" aria-label="Sections">
+    {links.map((l) => <a href={l.href} aria-current={here.includes(l.section) ? "true" : undefined}>{l.label}</a>)}
+  </nav>
+  <div class="v-search print:hidden">
+    <Search />
+  </div>
+  <div class="v-right print:hidden">
+    <SocialIcons />
+    <ThemeSelect />
+  </div>
+</div>
+
+<style>
+  .v-header {
+    display: flex;
+    align-items: center;
+    gap: 1.25rem;
+    height: 100%;
+  }
+  .v-brand {
+    display: flex;
+    align-items: center;
+    gap: 0.55rem;
+    text-decoration: none;
+    color: var(--sl-color-white);
+    flex-shrink: 0;
+  }
+  .v-brand svg {
+    width: 2rem;
+    height: 2rem;
+  }
+  .v-brand span {
+    font-family: var(--v-sans);
+    font-stretch: 125%;
+    font-weight: 800;
+    font-size: 1.3rem;
+    letter-spacing: -0.02em;
+  }
+  .v-links {
+    display: none;
+    gap: 0.25rem;
+  }
+  .v-links a {
+    padding: 0.35rem 0.6rem;
+    border-radius: 0.3rem;
+    color: var(--sl-color-gray-2);
+    text-decoration: none;
+    font-size: 0.95rem;
+  }
+  .v-links a:hover {
+    color: var(--sl-color-white);
+  }
+  .v-links a[aria-current="true"] {
+    color: var(--sl-color-white);
+    box-shadow: inset 0 -2px 0 var(--sl-color-accent);
+    border-radius: 0;
+  }
+  .v-search {
+    flex: 1;
+    display: flex;
+    justify-content: flex-end;
+  }
+  .v-right {
+    display: none;
+    align-items: center;
+    gap: 1rem;
+  }
+  @media (min-width: 50rem) {
+    .v-links,
+    .v-right {
+      display: flex;
+    }
+    .v-search {
+      justify-content: center;
+    }
+  }
+</style>

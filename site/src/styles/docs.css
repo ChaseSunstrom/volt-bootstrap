@@ -1,28 +1,18 @@
-/* The docs' colours (Starlight's theme variables): the logo's amber accents on its indigo. */
+/* The docs' own touches on top of theme.css: the sidebar's current page marked like a pad, and
+   tables and asides in the board's colours. */
 
-:root {
-  --sl-color-accent-low: #2a1f0a;
-  --sl-color-accent: #f59e0b;
-  --sl-color-accent-high: #fde68a;
-  --sl-color-bg-nav: #0a0e1f;
-  --sl-color-bg-sidebar: #0a0e1f;
-  --sl-color-bg: #070a16;
-  --sl-color-hairline: rgba(148, 163, 255, 0.14);
-  --sl-color-hairline-light: rgba(148, 163, 255, 0.2);
+.sidebar-content a[aria-current="page"] {
+  border-inline-start: 3px solid var(--sl-color-accent);
+  border-radius: 0 0.25rem 0.25rem 0;
+  background: var(--sl-color-accent-low);
+  color: var(--sl-color-white);
+  font-weight: 600;
 }
 
-:root[data-theme="light"] {
-  --sl-color-accent-low: #fef3c7;
-  --sl-color-accent: #b45309;
-  --sl-color-accent-high: #78350f;
-  --sl-color-bg-nav: #ffffff;
-  --sl-color-bg-sidebar: #ffffff;
-  --sl-color-bg: #ffffff;
-  --sl-color-hairline: rgba(49, 46, 129, 0.12);
-  --sl-color-hairline-light: rgba(49, 46, 129, 0.08);
+.sl-markdown-content table th {
+  font-stretch: 112%;
 }
 
-.site-title {
-  font-weight: 800;
-  letter-spacing: -0.02em;
+.expressive-code .frame {
+  --ec-brdRad: 0.4rem;
 }

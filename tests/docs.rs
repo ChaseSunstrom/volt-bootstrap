@@ -131,6 +131,19 @@ fn code_blocks() {
         }
         checked += 1;
     }
+    // the landing page's excerpts of what voltc writes for hero.volt: each paragraph is in the output
+    let samples = root.join("site/src/samples");
+    std::fs::copy(samples.join("hero.volt"), dir.join("main.volt")).unwrap();
+    let voltc = stage1.get_or_insert_with(|| self::stage1(&dir)).clone();
+    for (cmd, excerpt) in [("emit-c", "hero.c.txt"), ("emit-llvm", "hero.ll.txt")] {
+        let o = Command::new(&voltc).arg(cmd).arg("main.volt").arg("--std").arg(root.join("std")).current_dir(&dir).output().unwrap();
+        let out = String::from_utf8_lossy(&o.stdout);
+        for part in std::fs::read_to_string(samples.join(excerpt)).unwrap().split("\n\n") {
+            if !out.contains(part.trim_end()) {
+                bad.push(format!("site/src/samples/{excerpt}: not in `voltc {cmd} main.volt`:\n{part}"));
+            }
+        }
+    }
     let _ = std::fs::remove_dir_all(&dir);
     assert!(bad.is_empty(), "{} of {checked} code blocks are wrong:\n\n{}", bad.len(), bad.join("\n\n"));
 }

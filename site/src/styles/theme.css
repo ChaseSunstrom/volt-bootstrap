@@ -1,0 +1,88 @@
+/* The site's look, shared by the landing page and the docs: a circuit board's colours (solder-mask
+   green, gold pads, copper traces, silkscreen white), Archivo for text and Martian Mono for code.
+   Starlight's own variables are set from these, so the docs and the landing page are one theme. */
+
+:root {
+  --v-board: #0e3b2e;
+  --v-board-deep: #08261d;
+  --v-board-line: #1d5a46;
+  --v-silk: #edf2ec;
+  --v-paper: #f4f6f2;
+  --v-ink: #102a21;
+  --v-ink-soft: #3c574c;
+  --v-gold: #d8b04a;
+  --v-gold-ink: #8a6a12;
+  --v-copper: #b8733a;
+  --v-sans: "Archivo", "Helvetica Neue", Arial, sans-serif;
+  --v-mono: "Martian Mono", ui-monospace, "SF Mono", Menlo, monospace;
+
+  --sl-font: var(--v-sans);
+  --sl-font-mono: var(--v-mono);
+  --sl-nav-height: 4rem;
+}
+
+/* dark: the board itself */
+:root,
+::backdrop {
+  --sl-color-accent-low: #2c3a17;
+  --sl-color-accent: var(--v-gold);
+  --sl-color-accent-high: #f3e3ad;
+  --sl-color-white: #f6f8f4;
+  --sl-color-gray-1: #dfe7e1;
+  --sl-color-gray-2: #bccbc2;
+  --sl-color-gray-3: #8fa79b;
+  --sl-color-gray-4: #5d7a6d;
+  --sl-color-gray-5: #2d4b3f;
+  --sl-color-gray-6: #133a2d;
+  --sl-color-black: var(--v-board-deep);
+  --sl-color-bg: var(--v-board-deep);
+  --sl-color-bg-nav: var(--v-board-deep);
+  --sl-color-bg-sidebar: var(--v-board-deep);
+  --sl-color-bg-inline-code: #133a2d;
+  --sl-color-hairline: #1a4637;
+  --sl-color-hairline-light: #23523f;
+  --sl-color-hairline-shade: #051c15;
+}
+
+/* light: silkscreen paper, board-green ink */
+:root[data-theme="light"],
+[data-theme="light"] ::backdrop {
+  --sl-color-accent-low: #f2e8c6;
+  --sl-color-accent: var(--v-gold-ink);
+  --sl-color-accent-high: #4a3a08;
+  --sl-color-white: var(--v-ink);
+  --sl-color-gray-1: #1e3a30;
+  --sl-color-gray-2: #33503f;
+  --sl-color-gray-3: #557263;
+  --sl-color-gray-4: #7f978a;
+  --sl-color-gray-5: #c7d3cb;
+  --sl-color-gray-6: #e6ece7;
+  --sl-color-gray-7: #eff3ef;
+  --sl-color-black: var(--v-paper);
+  --sl-color-bg: var(--v-paper);
+  --sl-color-bg-nav: var(--v-paper);
+  --sl-color-bg-sidebar: var(--v-paper);
+  --sl-color-bg-inline-code: #e3eae4;
+  --sl-color-hairline: #d3ddd6;
+  --sl-color-hairline-light: #e1e8e3;
+  --sl-color-hairline-shade: #c2cfc6;
+}
+
+/* headings in the expanded cut; code a little narrower than Martian Mono's default */
+.sl-markdown-content :is(h1, h2, h3),
+h1#_top {
+  font-stretch: 112%;
+  font-weight: 750;
+  letter-spacing: -0.01em;
+}
+
+code,
+pre,
+kbd {
+  font-stretch: 87.5%;
+}
+
+:focus-visible {
+  outline: 2px solid var(--sl-color-accent);
+  outline-offset: 2px;
+}

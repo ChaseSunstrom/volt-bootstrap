@@ -15,7 +15,7 @@ sidebar:
 | `tests/bolt.rs` | bolt end to end: packages, workspaces, git dependencies, features, build files |
 | `tests/interop.rs` | Volt with C, C++ (and its standard library), Rust, Zig, Python, Node, C#, Java, Go, Lua, Dart, Swift, Kotlin and Ruby, both ways, by hand and through bolt; and every example in `examples/interop` (its `run.sh` against its `expected.txt`) |
 | `tests/lsp.rs` | a scripted session with `voltc lsp` |
-| `tests/docs.rs` | every code block on this site compiles (and prints what it shows); the std reference is current |
+| `tests/docs.rs` | every code block on this site compiles (and prints what it shows); the C and LLVM IR on the front page are what voltc writes; the std reference is current |
 | `tests/headers.rs` | every source file opens with a comment saying what it is |
 | `tests/cc_env.rs` | `$CC` with a wrapper command or flags |
 | `tests/bench.rs` | ignored by default: Volt against C and C++ on the programs in `bench/` (see [Benchmarks](/volt-bootstrap/internals/benchmarks/)) |

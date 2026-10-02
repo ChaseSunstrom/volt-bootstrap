@@ -1,0 +1,9 @@
+struct v_rect {
+    double w;
+    double h;
+};
+
+// area (main.volt:8)
+static double v_area(v_rect r) {
+    return r.w * r.h;
+}

@@ -1,5 +1,5 @@
 use std::io;
-use cpp { "geometry.hpp" } as cpp;   // C++ headers, read by libclang
+use { "geometry.hpp" } as cpp;       // C++, by the extension: libclang reads it
 use { "math.h" } as c;               // C headers too
 
 fn main() -> void {
