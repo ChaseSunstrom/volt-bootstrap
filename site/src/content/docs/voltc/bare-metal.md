@@ -46,7 +46,9 @@ under qemu.
   `riscv32-none` and `thumbv7m-none`, and `f64` on `thumbv7em-none`, whose FPU does `f32` only.
 
 Printing a float with a precision (`{:.3}`, `{:.5e}`) works out its exact digits on the stack, about
-2 KB while it runs; leave room for that in the stack the linker script sets aside.
+2 KB while it runs, and reading one (`parse_float`, a JSON number) about 1 KB; leave room for that
+in the stack the linker script sets aside. Reading floats also brings an 11 KB table of powers of
+ten into flash; a program that never parses one doesn't have it.
 
 ## The board
 

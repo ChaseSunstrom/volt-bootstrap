@@ -25,8 +25,6 @@ namespace json {
         SYNTAX, // the text isn't JSON
     }
 
-    internal extern "C" fn strtod(s: cstr, end: void*) -> f64;
-    internal extern "C" fn snprintf(buf: u8*, n: usize, fmt: cstr, ...) -> i32;
 
     // ---------- reading ----------
 
@@ -124,27 +122,16 @@ namespace json {
         if (word(t, at, "null")) {
             return value<A>::NULL;
         }
-        // a number: JSON's grammar, then strtod for its value
+        // a number: the characters one can have, then its exact value (trailing junk is an error)
         val start = *at;
-        if (*at < t.len && t[*at] == '-') {
-            *at += 1;
-        }
-        val digits_at = *at;
         while (*at < t.len && ((t[*at] >= '0' && t[*at] <= '9') || t[*at] == '.' || t[*at] == 'e' || t[*at] == 'E' || t[*at] == '+' || t[*at] == '-')) {
             *at += 1;
         }
-        if (*at == digits_at) {
+        if (t[start] == '+') {
             return json_error::SYNTAX;
         }
-        // strtod wants a NUL after the number: a JSON number that fits a double is short
-        var buf: u8[64];
-        if (*at - start >= 64) {
-            return json_error::SYNTAX;
-        }
-        for (i) in start..*at {
-            buf[i - start] = t[i];
-        }
-        return value<A>::NUM(strtod(@cast<cstr>(&buf[0]), null));
+        val x = std::decimal_to_f64(t[start..*at]) ?? return json_error::SYNTAX;
+        return value<A>::NUM(x);
     }
 
     internal fn word(t: str, at: usize&, w: str) -> bool {
@@ -318,8 +305,8 @@ namespace json {
             return;
         }
         var buf: u8[32];
-        val n = snprintf(&buf[0], 32, "%.17g", x);
-        out.append(@cast<str>(@slice(&buf[0], @cast<usize>(n))));
+        val n = std::fmt::shortest(&buf[0], x, false); // reads back as the same double
+        out.append(@cast<str>(@slice(&buf[0], n)));
     }
 
     <B: std::mem::t_allocator>

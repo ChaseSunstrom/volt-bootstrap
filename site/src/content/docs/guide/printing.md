@@ -53,7 +53,9 @@ fn main() -> void {
 `starts_with`, `ends_with`, `count`), trimming (`trim`, `strip_prefix`, `strip_suffix`), splitting
 (`split`, `split_once`, `lines`, `words`), new text (`replace`, `repeat`, `to_upper`, `to_lower`)
 and parsing (`parse_int`, `parse_uint`, `parse_float`, `parse_bool`). Splitting gives views into the
-text, so nothing is copied; the functions that make new text return a `std::string`.
+text, so nothing is copied; the functions that make new text return a `std::string`. `parse_float`
+gives the double nearest the text, ties to even, so it reads back exactly what printing wrote, however
+many digits it has.
 
 ```volt
 use std::io;

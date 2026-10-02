@@ -55,7 +55,14 @@ checks it against `snprintf` on random values. Printing numbers is in Volt
 Ryu (Ulf Adams, PLDI 2018), the shortest text that reads back as the same value, found by exact
 integer arithmetic on the bits. Ryu replaced up to 17 rounds of `snprintf` and `strtod` per float
 (the `print` benchmark measures it). Its tables are generated with exact big-integer
-arithmetic.
+arithmetic. Reading floats is in Volt as well (`std/text.volt`, for `parse_float` and JSON numbers), in
+three tries, as Go's `strconv` does: a number under 2^52 times or over a power of ten up to 10^22
+is exact in `f64` arithmetic (Clinger); otherwise the first 19 digits times a 128-bit power of ten,
+whose high bits are the answer unless the power's error could reach the rounding bit (Eisel and
+Lemire); otherwise the digits as a big decimal, shifted by powers of two until 53 bits can be taken
+and rounded once. A test compares it with `strtod`, bit for bit, on random doubles' texts and on
+the exact midpoints between neighbours. It's about 9 ns a number for short ones and 23 ns for 17
+digits, against glibc `strtod`'s 28 and 53.
 
 ## Compatibility
 
