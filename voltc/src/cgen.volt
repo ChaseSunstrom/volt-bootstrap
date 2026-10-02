@@ -1265,13 +1265,37 @@ attach fn binary(this: cgen&, out: std::string&, op: binop_ir, a: u32, b: u32, t
 
 // a call; a direct callee (FN or RT) gets its args cast to the declared param types, a fn pointer is
 // called as is, and a fn(...) value's fn slot is cast to a type built from the args (args[0] is the env)
+// libm functions the C compiler knows as instructions (sqrtsd, roundsd...) when it sees them by name:
+// called as __builtin_NAME, since Volt declares them under its own names
+val BUILTIN_MATH: str[22] = { "sqrt", "sqrtf", "fabs", "fabsf", "floor", "floorf", "ceil", "ceilf", "trunc", "truncf", "round", "roundf", "rint", "rintf", "fma", "fmaf", "fmin", "fminf", "fmax", "fmaxf", "copysign", "copysignf" };
+
+fn builtin_math(sym: str) -> str? {
+    if (!starts_with(sym, "volt_ext_")) {
+        return null;
+    }
+    val name = sym[9..sym.len];
+    for (m) in BUILTIN_MATH {
+        if (m == name) {
+            return name;
+        }
+    }
+    return null;
+}
+
 attach fn call(this: cgen&, out: std::string&, f: u32, args: std::vec<u32>&, t: u32) -> void {
     var direct = false;
     var params: std::vec<u32> = {};
     match (this.c.ir.at(f).kind) {
         .FN(i) => {
             direct = true;
-            out.append(this.c.ir.fn_at(i).name);
+            val sym = this.c.ir.fn_at(i).name;
+            val m = builtin_math(sym);
+            if (m) {
+                out.append("__builtin_");
+                out.append(m);
+            } else {
+                out.append(sym);
+            }
             val fl = this.c.ir.fn_at(i);
             for (p&) in fl.params.items() {
                 put(&params, fl.locals.at(@cast<usize>(*p)).ty);

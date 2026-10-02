@@ -1103,6 +1103,7 @@ fn cc_run(inputs: std::vec<str>&, out: str, c: cli&, object: bool) -> void {
     if (c.release) {
         put(&argv, "-O2");
         put(&argv, "-fwrapv");
+        put(&argv, "-fno-math-errno"); // Volt never reads errno: sqrt and friends can be instructions
     } else {
         put(&argv, "-O0");
         put(&argv, "-g");

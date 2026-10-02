@@ -647,6 +647,13 @@ attach fn decl_fn(this: lg&, i: u32) -> llvm::LLVMOpaqueValue* {
         if (f.noreturn || f.ret == NEVER) {
             llvm::LLVMAddAttributeAtIndex(fv, 4294967295, this.attr("noreturn"));
         }
+        if (f.body == null && is_builtin_math(this.symbol(f))) {
+            // libm's sqrt, floor...: touching no memory (Volt never reads errno), so LLVM makes
+            // them instructions
+            llvm::LLVMAddAttributeAtIndex(fv, 4294967295, llvm::LLVMCreateEnumAttribute(this.ctx, llvm::LLVMGetEnumAttributeKindForName("memory", 6), 0));
+            llvm::LLVMAddAttributeAtIndex(fv, 4294967295, this.attr("nounwind"));
+            llvm::LLVMAddAttributeAtIndex(fv, 4294967295, this.attr("willreturn"));
+        }
         if (this.c.opts.line_info) {
             // --profiler: bolt hot's sampler walks the stack by frame pointers
             llvm::LLVMAddAttributeAtIndex(fv, 4294967295, llvm::LLVMCreateStringAttribute(this.ctx, "frame-pointer", 13, "all", 3));
@@ -2227,4 +2234,14 @@ fn llvm_runtime_c(chk: checker&, hdr: std::vec<str>&, runtime: bool) -> std::str
         out.append(";\n");
     }
     return move out;
+}
+
+// the libm functions LLVM can make instructions once they're known not to touch memory (cgen's list)
+fn is_builtin_math(sym: str) -> bool {
+    for (m) in BUILTIN_MATH {
+        if (m == sym) {
+            return true;
+        }
+    }
+    return false;
 }
