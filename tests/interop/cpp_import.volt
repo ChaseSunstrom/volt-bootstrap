@@ -1,7 +1,7 @@
 use std::io;
 // Volt imports C++: classes (constructors, destructor as delete, copy constructor as copy, methods,
 // overloads, default arguments, static methods), free functions, templates, enums, namespaces
-use cpp { "shapes.hpp" } as shapes;
+use { "shapes.hpp" } as shapes;
 
 fn main() -> void {
     {

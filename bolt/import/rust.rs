@@ -1,4 +1,5 @@
-// use rust { "crate dir" } as NAME; — an ordinary Cargo library crate, called from Volt. bolt reads
+// use { "geom.rs" } as NAME; (one file, a crate of its own) or use { "../geom" } as NAME; (a directory
+// with Cargo.toml) — an ordinary Cargo library crate, called from Volt. bolt reads
 // the crate's public API from its source (pub fns, structs, enums, impl blocks' pub fns, consts and
 // pub mods), writes a shim crate that depends on it and wraps each one in an extern "C" function,
 // builds the shim with cargo as a static library, and writes the Volt side (glue.rs). Nothing in
@@ -21,33 +22,57 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 pub fn import(r: &Req) -> Result<(), String> {
-    let [dir] = r.args.as_slice() else {
-        return Err(format!("use rust {{ \"crate dir\" }} as {}: name one crate's directory", r.alias));
+    let [arg] = r.args.as_slice() else {
+        return Err(format!("use {{ \"geom.rs\" }} as {}: name one crate: a .rs file, or a directory with a Cargo.toml", r.alias));
     };
-    let dir = arg_path(r, dir);
-    let manifest = dir.join("Cargo.toml");
-    if !manifest.is_file() {
-        return Err(format!("use rust: {} has no Cargo.toml", dir.display()));
+    let path = arg_path(r, arg);
+    // dir: where cargo runs (the crate's rust-toolchain.toml); krate: the crate the shim depends on;
+    // root and src: its lib.rs and where its `mod x;` files are
+    let (dir, krate, root, src, mut files) = if path.is_file() && path.extension().is_some_and(|e| e.eq_ignore_ascii_case("rs")) {
+        // one file is a crate of its own: its Cargo.toml goes in the import's directory (named so any
+        // file name makes a valid crate name: 2d-shapes.rs is volt_file_2d_shapes)
+        let stem: String = path.file_stem().unwrap_or_default().to_string_lossy().chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '_' }).collect();
+        let stem = format!("volt_file_{stem}");
+        let krate = r.out.join("crate");
+        let toml = format!("[package]\nname = \"{stem}\"\nversion = \"0.0.0\"\nedition = \"2021\"\npublish = false\n\n[lib]\npath = {:?}\n\n[workspace]\n", path.display().to_string());
+        crate::build::write_if_changed(&krate.join("Cargo.toml"), &toml)?;
+        let dir = path.parent().map_or_else(|| PathBuf::from("."), Path::to_path_buf);
+        let mut files = vec![path.clone()];
+        // the files its `mod x;` lines name, next to it
+        if let Ok(rd) = std::fs::read_dir(&dir) {
+            let mut more: Vec<PathBuf> = rd.filter_map(|e| e.ok().map(|e| e.path())).filter(|p| p != &path && p.extension().is_some_and(|e| e == "rs")).collect();
+            more.sort();
+            files.extend(more);
+        }
+        (dir.clone(), krate, path.clone(), dir, files)
+    } else {
+        let manifest = path.join("Cargo.toml");
+        if !manifest.is_file() {
+            return Err(format!("use {{ \"{arg}\" }}: {} is neither a .rs file nor a directory with a Cargo.toml", path.display()));
+        }
+        let mut files = vec![manifest, path.join("Cargo.lock")];
+        rs_files(&path.join("src"), &mut files);
+        (path.clone(), path.clone(), path.join("src/lib.rs"), path.join("src"), files)
+    };
+    let (pkg, lib) = crate_names(&krate.join("Cargo.toml"))?;
+    if !files.contains(&krate.join("Cargo.toml")) {
+        files.push(krate.join("Cargo.toml"));
     }
-    let (pkg, lib) = crate_names(&manifest)?;
-    let mut files = vec![manifest.clone(), dir.join("Cargo.lock")];
-    rs_files(&dir.join("src"), &mut files);
-    let st = stamp(&files, &format!("rust {} {} release={}", r.alias, dir.display(), r.release));
+    let st = stamp(&files, &format!("rust {} {} release={}", r.alias, path.display(), r.release));
     if fresh(r, &st) {
         return Ok(());
     }
 
-    let root = dir.join("src/lib.rs");
     let text = std::fs::read_to_string(&root).map_err(|e| format!("use rust: can't read {}: {e}", root.display()))?;
     let mut w = Walker::default();
-    w.walk(&lex(&text), &[], &dir.join("src"));
+    w.walk(&lex(&text), &[], &src);
     let model = w.model();
     let lang = Rust { lib: lib.clone() };
     let (shim, volt) = Gen::new(&model, &r.alias, &lang).write("the crate");
 
     // the shim crate: its own target directory, cargo run from the crate's (its rust-toolchain.toml)
     let shim_dir = r.out.join("shim");
-    crate::build::write_if_changed(&shim_dir.join("Cargo.toml"), &format!("[package]\nname = \"volt_import_{}\"\nversion = \"0.0.0\"\nedition = \"2021\"\npublish = false\n\n[lib]\npath = \"lib.rs\"\n\n[dependencies]\n{pkg} = {{ path = {:?} }}\n\n[workspace]\n", r.alias, dir.display().to_string()))?;
+    crate::build::write_if_changed(&shim_dir.join("Cargo.toml"), &format!("[package]\nname = \"volt_import_{}\"\nversion = \"0.0.0\"\nedition = \"2021\"\npublish = false\n\n[lib]\npath = \"lib.rs\"\n\n[dependencies]\n{pkg} = {{ path = {:?} }}\n\n[workspace]\n", r.alias, krate.display().to_string()))?;
     crate::build::write_if_changed(&shim_dir.join("lib.rs"), &shim)?;
     let mut c = Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()));
     c.current_dir(&dir).args(["rustc", "-q", "--lib", "--crate-type", "staticlib", "--manifest-path"]).arg(shim_dir.join("Cargo.toml")).arg("--target-dir").arg(r.out.join("target"));

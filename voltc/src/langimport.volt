@@ -1,10 +1,71 @@
-// use LANG { "..." } as NAME; for code in another language (use rust { "geom" } as geom;). bolt does
+// use { "geom.rs" } as NAME; for code in another language, which the extension names (use rust {
+// "geom" } as NAME; says it outright, for a crate directory or anything ambiguous). bolt does
 // the language's part: `bolt import LANG` reads the code's own declarations, builds the glue, and
 // writes the Volt source of namespace NAME (bodies that call the glue) and the flags a program
 // using it links. voltc parses that source into the namespace, as use cpp does with what it
 // writes, and links the flags. bolt keeps each import's work in a cache directory and redoes it
 // only when the code changes.
 use std::io;
+
+// the language a file is in, from its extension: "cpp", "rust" or "zig", or null for a C header (a
+// directory with a Cargo.toml is a Rust crate). A C++ header named .h needs `use cpp { }`
+fn language_of(path: str, dir: str) -> str? {
+    var name = path;
+    for (i) in 0..path.len {
+        if (path[i] == '/') {
+            name = path[i + 1..path.len];
+        }
+    }
+    var at: usize? = null;
+    for (i) in 0..name.len {
+        if (name[i] == '.') {
+            at = i + 1;
+        }
+    }
+    var lower: std::string = {};
+    if (at) {
+        lower = name[at..name.len].to_lower(); // Shapes.HPP is C++ too
+    }
+    val ext = lower.as_str();
+    val cpp: str[11] = { "hpp", "hh", "hxx", "h++", "cpp", "cc", "cxx", "c++", "ipp", "tpp", "ixx" };
+    for (c) in cpp {
+        if (ext == c) {
+            return "cpp";
+        }
+    }
+    if (ext == "rs") {
+        return "rust";
+    }
+    if (ext == "zig") {
+        return "zig";
+    }
+    var full = S(path);
+    if (path.len == 0 || path[0] != '/') {
+        full = S(dir);
+        full.push('/');
+        full.append(path);
+    }
+    full.append("/Cargo.toml");
+    if (std::fs::is_file(full.as_str())) {
+        return "rust";
+    }
+    return null;
+}
+
+// the language a plain `use { ... }` imports: null for C headers. Every file has to be in the same one
+attach fn import_language(this: checker&, files: std::vec<std::string>&, span: span) -> compile_error!(str?) {
+    val dir = this.header_dir(span) ?? ".";
+    var lang: str? = null;
+    for (i) in 0..files.len {
+        val l = language_of(files.at(i).as_str(), dir);
+        if (i == 0) {
+            lang = l;
+        } else if ((l == null) != (lang == null) || (l != null && (l ?? "") != (lang ?? ""))) {
+            return fails(span, "one use { } imports files in one language: give each language its own use");
+        }
+    }
+    return lang;
+}
 
 attach fn import_lang(this: checker&, lang: str, args: std::vec<std::string>&, alias: str, ns: u32, span: span) -> compile_error!void {
     val from = this.header_dir(span) ?? ".";

@@ -51,14 +51,14 @@ sidebar:
 | --- | --- |
 | `VOLT_STD` | where std is, when `--std` isn't given |
 | `CC` | the C compiler (default `cc`); it may be a command with words, like `ccache gcc` |
-| `CXX` | the C++ compiler for `use cpp` wrappers (default `c++`) |
+| `CXX` | the C++ compiler for the wrappers of imported C++ headers (default `c++`) |
 | `VOLT_CLANG_RESOURCE_DIR` | libclang's resource directory, when `clang -print-resource-dir` can't find it |
 | `NO_COLOR` | turn colour off (with `--color auto`) |
 | `VOLT_SHOW_CPP` | `1`: print the Volt declarations generated from C++ headers |
-| `BOLT` | the bolt `use rust { ... }` and `use zig { ... }` run (default: the bolt next to voltc, then `bolt` on the PATH) |
-| `VOLT_CACHE` | where `use rust` and `use zig` keep their work (default `$XDG_CACHE_HOME/volt`, then `~/.cache/volt`) |
-| `VOLT_SHOW_IMPORT` | `1`: print the Volt declarations generated for `use rust { ... }` and `use zig { ... }` |
-| `ZIG` | the zig `use zig { ... }` builds with (default `zig`) |
+| `BOLT` | the bolt that imports Rust and Zig code (`use { "geom.rs" }`, `use { "fm.zig" }`) (default: the bolt next to voltc, then `bolt` on the PATH) |
+| `VOLT_CACHE` | where imports of Rust and Zig code keep their work (default `$XDG_CACHE_HOME/volt`, then `~/.cache/volt`) |
+| `VOLT_SHOW_IMPORT` | `1`: print the Volt declarations generated for imported Rust and Zig code |
+| `ZIG` | the zig that builds imported Zig code (default `zig`) |
 
 ## Exit codes
 

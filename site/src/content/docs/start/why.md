@@ -34,8 +34,8 @@ specialization, packs and constant parameters. Code can run in the compiler (`co
 are values there.
 
 **Every other language is one step away.** Volt reads C headers and C++ headers (classes,
-templates, the standard library) and ordinary Rust crates and Zig files (`use rust { "geom" } as
-geom;`) directly, builds Go modules listed in `bolt.toml`, and calls Python, Java, .NET and Lua
+templates, the standard library) and ordinary Rust crates and Zig files (`use { "geom.rs" } as
+geom;`, like a header) directly, builds Go modules listed in `bolt.toml`, and calls Python, Java, .NET and Lua
 through packages that embed them. The other way round, `voltc bindings` (or a `bindings` list in `bolt.toml`) makes a
 Volt library usable from C, C++, Rust, Zig, Python, JavaScript and TypeScript, C#, Java, Go, Lua,
 Dart, Swift, Kotlin and Ruby. See [Interop](/volt-bootstrap/interop/c/).

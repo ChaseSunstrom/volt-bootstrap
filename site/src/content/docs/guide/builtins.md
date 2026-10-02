@@ -21,7 +21,7 @@ Builtins start with `@`. They're part of the language, not a library.
 | `@slice(ptr, len)` | `T[..]` | a slice over `len` values starting at `ptr`, unchecked |
 | `@write(ptr, value)` | `void` | store into memory without deleting what was there |
 | `@read(ptr)` | `T` | move a value out of memory without copying or deleting it |
-| `@cpp<R>("expr", args...)` | `R` | call C++ code (with `use cpp`); see [C++](/volt-bootstrap/interop/cpp/) |
+| `@cpp<R>("expr", args...)` | `R` | call C++ code (in a file that imports C++ headers); see [C++](/volt-bootstrap/interop/cpp/) |
 | `@attributes([...])` | | attributes on the next declaration; see [Comptime](/volt-bootstrap/guide/comptime/#attributes) |
 
 ```volt

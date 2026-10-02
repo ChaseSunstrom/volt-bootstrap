@@ -104,7 +104,7 @@ fn code_blocks() {
         };
         let expect = directives(&code, "expect");
         let exit: Option<i32> = directives(&code, "exit").first().map(|e| e.parse().unwrap());
-        let compiler = if code.contains("use cpp {") { stage1.get_or_insert_with(|| self::stage1(&dir)).clone() } else { PathBuf::from(env!("CARGO_BIN_EXE_voltc-bootstrap")) };
+        let compiler = if common::imports_foreign(&code) { stage1.get_or_insert_with(|| self::stage1(&dir)).clone() } else { PathBuf::from(env!("CARGO_BIN_EXE_voltc-bootstrap")) };
         let mut cmd = Command::new(compiler);
         let run = (!expect.is_empty() || exit.is_some()) && !flags.contains(&"fail");
         cmd.arg(if run { "run" } else { "check" }).arg(&file).arg("--std").arg(root.join("std"));

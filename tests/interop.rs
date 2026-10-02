@@ -517,7 +517,7 @@ fn lua_package() {
     }
 }
 
-/// Volt calls an ordinary Rust crate directly: `use rust { "geom" } as geom;` and nothing else, on
+/// Volt calls an ordinary Rust crate directly: `use { "geom" } as geom;` and nothing else, on
 /// both backends, from voltc run and from a bolt package, which rebuilds when the crate changes
 #[test]
 fn rust_direct() {
@@ -534,7 +534,15 @@ fn rust_direct() {
         tools(&mut c);
         assert_eq!(ok(c.output().unwrap(), "voltc run"), want, "voltc run ({backend})");
     }
-    // a handle Rust never made stops the program, with no crash inside Rust
+    // one .rs file is a crate of its own (its `mod x;` files next to it)
+    for backend in ["c", "llvm"] {
+        let mut c = Command::new(&e.voltc);
+        c.args(["run", "--backend", backend, "single.volt"]).current_dir(&dir).env("VOLT_STD", Path::new(ROOT).join("std"));
+        tools(&mut c);
+        assert_eq!(ok(c.output().unwrap(), "voltc run single.volt"), "3 n=70\n", "a single .rs file ({backend})");
+    }
+    // a handle Rust never made stops the program, with no crash inside Rust (`use rust { }` says the
+    // language outright)
     let mut c = Command::new(&e.voltc);
     c.args(["run", "empty.volt"]).current_dir(&dir).env("VOLT_STD", Path::new(ROOT).join("std"));
     tools(&mut c);
@@ -545,7 +553,7 @@ fn rust_direct() {
     let app = dir.join("app");
     std::fs::create_dir_all(app.join("src")).unwrap();
     std::fs::write(app.join("bolt.toml"), format!("[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[std]\npath = \"{}\"\n", Path::new(ROOT).join("std").display())).unwrap();
-    std::fs::write(app.join("src/main.volt"), std::fs::read_to_string(dir.join("main.volt")).unwrap().replace("use rust { \"geom\" }", "use rust { \"../../geom\" }")).unwrap();
+    std::fs::write(app.join("src/main.volt"), std::fs::read_to_string(dir.join("main.volt")).unwrap().replace("use { \"geom\" }", "use { \"../../geom\" }")).unwrap();
     let bolt_run = |backend: &str| {
         let mut c = Command::new(env!("CARGO_BIN_EXE_bolt"));
         c.args(["run", "-q", "--backend", backend]).current_dir(&app);
@@ -567,7 +575,7 @@ fn rust_direct() {
     assert!(bolt_run("llvm").contains("hi there, volt QUIET"), "rebuilt after its target was cleaned");
 }
 
-/// Volt calls an ordinary Zig file directly: `use zig { "fastmath.zig" } as fm;` and nothing else,
+/// Volt calls an ordinary Zig file directly: `use { "fastmath.zig" } as fm;` and nothing else,
 /// on both backends, from voltc run and from a bolt package, which rebuilds when the file changes
 #[test]
 fn zig_direct() {
@@ -599,7 +607,7 @@ fn zig_direct() {
     let app = dir.join("app");
     std::fs::create_dir_all(app.join("src")).unwrap();
     std::fs::write(app.join("bolt.toml"), format!("[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[std]\npath = \"{}\"\n", Path::new(ROOT).join("std").display())).unwrap();
-    std::fs::write(app.join("src/main.volt"), std::fs::read_to_string(dir.join("main.volt")).unwrap().replace("use zig { \"fastmath.zig\" }", "use zig { \"../../fastmath.zig\" }")).unwrap();
+    std::fs::write(app.join("src/main.volt"), std::fs::read_to_string(dir.join("main.volt")).unwrap().replace("use { \"fastmath.zig\" }", "use { \"../../fastmath.zig\" }")).unwrap();
     let bolt_run = |backend: &str| {
         let mut c = Command::new(env!("CARGO_BIN_EXE_bolt"));
         c.args(["run", "-q", "--backend", backend]).current_dir(&app);

@@ -1,17 +1,18 @@
 ---
 title: Rust, Zig and Go
-description: Calling ordinary Rust crates and Zig files with use rust and use zig, Go libraries through bolt, and Cargo and Zig projects that use Volt.
+description: Calling ordinary Rust crates and Zig files by importing them like a header, Go libraries through bolt, and Cargo and Zig projects that use Volt.
 sidebar:
   order: 3
 ---
 
 ## Volt calls Rust
 
-One line imports a crate, and its public API is Volt functions and types:
+One line imports a crate, as one imports a C header, and its public API is Volt functions and
+types:
 
 ```volt ignore
 use std::io;
-use rust { "../geom" } as geom;     // the crate's directory, from this file
+use { "../geom" } as geom;          // the crate's directory (it has a Cargo.toml), from this file
 
 fn main() -> !void {
     val d = geom::dist(geom::Point::new(0.0, 0.0), geom::Point::new(3.0, 4.0));
@@ -28,6 +29,10 @@ Nothing in it is written for Volt, with no `extern "C"`, `#[no_mangle]` or `#[re
 `bolt import`, which reads the crate's public API, builds a small shim crate with cargo, and gives
 voltc the Volt declarations. It caches the result and redoes it when the crate changes. It works the
 same with `voltc run main.volt` and in a bolt package.
+
+The import names a directory with a `Cargo.toml`, or a single `.rs` file: `use { "stats.rs" } as
+stats;` makes that file a crate of its own (the files its `mod x;` lines name sit next to it), for
+code that has no Cargo project around it.
 
 | Rust | Volt |
 | --- | --- |
@@ -51,11 +56,11 @@ dependencies apply.
 
 ## Volt calls Zig
 
-`use zig` does the same for a Zig file, with `zig build-lib` building its shim:
+A `.zig` file is imported the same way, with `zig build-lib` building its shim:
 
 ```volt ignore
 use std::io;
-use zig { "fastmath.zig" } as fm;    // the file, from this one; what it imports comes along
+use { "fastmath.zig" } as fm;        // the file, from this one; what it imports comes along
 
 fn main() -> !void {
     var p = fm::Point::init(3.0, 4.0);

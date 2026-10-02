@@ -1,8 +1,8 @@
-// Volt using a C++ class: `use cpp` reads counter.hpp with libclang, so Counter is a Volt struct with
+// Volt using a C++ class: the use reads counter.hpp (C++, by its extension) with libclang, so Counter is a Volt struct with
 // C++'s layout, its constructor is Counter::new, its destructor runs when the Volt value goes out of
 // scope, and the template becomes a generic fn. Run: voltc run examples/interop/counter.volt
 use std::io;
-use cpp { "counter.hpp" } as cpp;
+use { "counter.hpp" } as cpp;
 
 fn main() -> void {
     var c = cpp::tally::Counter::new(10);

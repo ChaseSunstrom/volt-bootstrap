@@ -1,4 +1,4 @@
-// counter.hpp: a small C++ class that examples/interop/counter.volt uses through `use cpp`
+// counter.hpp: a small C++ class that examples/interop/counter.volt imports (use { "counter.hpp" })
 #pragma once
 #include <cstdio>
 #include <string>

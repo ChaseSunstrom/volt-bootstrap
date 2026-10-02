@@ -1,7 +1,7 @@
 use std::io;
 // Volt calling an ordinary Zig file (fastmath.zig, nothing in it is written for Volt): the use
 // line is all it takes, with voltc run main.volt or in a bolt package
-use zig { "fastmath.zig" } as fm;
+use { "fastmath.zig" } as fm;
 
 fn run() -> fm::zig_error!void {
     // plain structs by value, and their methods

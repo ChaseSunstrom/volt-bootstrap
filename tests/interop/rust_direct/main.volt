@@ -1,7 +1,7 @@
 use std::io;
 // Volt calling an ordinary Rust crate (geom/, nothing in it is written for Volt): the use line is
-// all it takes, with voltc run main.volt or in a bolt package
-use rust { "geom" } as geom;
+// all it takes (the language comes from what it names), with voltc run main.volt or in a bolt package
+use { "geom" } as geom;
 
 fn run() -> geom::rust_error!void {
     // plain structs by value, and their methods

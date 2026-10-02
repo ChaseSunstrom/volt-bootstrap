@@ -1,12 +1,14 @@
 ---
 title: C++
-description: Importing C++ headers with use cpp, what maps to what, and the limits.
+description: Importing C++ headers, what maps to what, and the limits.
 sidebar:
   order: 2
 ---
 
-`use cpp { "header.hpp" } as ns;` reads C++ headers with libclang and makes their declarations
-Volt declarations. (This is the self-hosted voltc: the bootstrap compiler reads only C headers.)
+`use { "header.hpp" } as ns;` reads C++ headers with libclang and makes their declarations Volt
+declarations: the extension (`.hpp`, `.hh`, `.hxx`, `.cpp`...) says it's C++. A C++ header named
+`.h`, or a standard one like `vector`, says so outright: `use cpp { "shapes.h", "vector" } as ns;`.
+(This is the self-hosted voltc: the bootstrap compiler reads only C headers.)
 
 ```cpp
 // geometry.hpp
@@ -33,7 +35,7 @@ T clamp(T v, T lo, T hi) { return v < lo ? lo : v > hi ? hi : v; }
 
 ```volt
 use std::io;
-use cpp { "geometry.hpp" } as cpp;
+use { "geometry.hpp" } as cpp;
 
 fn main() -> void {
     var path = cpp::geo::Path::new();
@@ -69,7 +71,7 @@ C++ file, compiles it with `$CXX` (`c++` by default) and links it with `-lstdc++
 
 ```volt
 use std::io;
-use cpp { "geometry.hpp" } as cpp;
+use { "geometry.hpp" } as cpp;
 
 fn scaled_length(v: cpp::geo::Vec2&, k: f64) -> f64 {
     return @cpp<f64>("{0}.length() * {1}", v, k);
@@ -107,7 +109,7 @@ std::unique_ptr<Book> open_book(int id);
 
 ```volt
 use std::io;
-use cpp { "ledger.hpp" } as cpp;
+use { "ledger.hpp" } as cpp;
 
 fn main() -> void {
     val a = cpp::ledger::parse("12.50");

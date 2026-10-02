@@ -614,6 +614,14 @@ attach fn collect_item(this: checker&, it: item&, ns: u32, parent: u32?) -> comp
             return;
         },
         .USE_C(headers&, alias) => {
+            // the language comes from the files: use { "geom.rs" } is Rust, { "shapes.hpp" } C++
+            val lang = try this.import_language(headers, it.span);
+            if (lang) {
+                if (lang == "cpp") {
+                    return this.import_cpp(headers, alias, ns, it.span);
+                }
+                return this.import_lang(lang, headers, alias, ns, it.span);
+            }
             return this.import_c(headers, alias, ns, it.span);
         },
         .USE_CPP(headers&, alias) => {

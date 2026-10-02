@@ -10,9 +10,11 @@ Everything meets at the C ABI.
 ## Volt calls them
 
 - **C**: import the header, see [C](/volt-bootstrap/interop/c/).
-- **C++**: `use cpp`, see [C++](/volt-bootstrap/interop/cpp/).
-- **Rust** and **Zig**: `use rust { "crate dir" } as x;` or `use zig { "file.zig" } as x;` and
-  call its public API, see [Rust, Zig and Go](/volt-bootstrap/interop/rust-and-zig/).
+- **C++**: import the header, `use { "shapes.hpp" } as x;`, see [C++](/volt-bootstrap/interop/cpp/).
+- **Rust** and **Zig**: import the file or the crate, `use { "geom.rs" } as x;`, `use { "../geom" }
+  as x;` (a directory with a `Cargo.toml`) or `use { "fastmath.zig" } as x;`, and call its public
+  API, see [Rust, Zig and Go](/volt-bootstrap/interop/rust-and-zig/). The extension says which
+  language it is; `use cpp`, `use rust` or `use zig { ... }` says it outright where it's ambiguous.
 - **Go**: list the module under `[foreign]` in `bolt.toml`, see
   [Rust, Zig and Go](/volt-bootstrap/interop/rust-and-zig/#go-and-c-apis-you-write-yourself). Without bolt, declare a
   `#[no_mangle] pub extern "C" fn` (or a Zig `export fn`) with `extern "C" fn` and link the library

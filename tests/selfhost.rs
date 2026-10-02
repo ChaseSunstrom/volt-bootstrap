@@ -55,7 +55,7 @@ fn self_hosted_checker_matches() {
     }
     files.sort();
     // C++ imports are the self-hosted voltc's alone (tests/interop.rs checks them)
-    files.retain(|f| !std::fs::read_to_string(f).unwrap_or_default().contains("use cpp {"));
+    files.retain(|f| !common::imports_foreign(&std::fs::read_to_string(f).unwrap_or_default()));
     let std_dir = root.join("std");
     let mut bad = Vec::new();
     for f in &files {
