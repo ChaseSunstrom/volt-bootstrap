@@ -733,3 +733,48 @@ fn cpp_import() {
         assert_eq!(ok(e.voltc(&["run", "cpp_std.volt", "--backend", backend]), "voltc run cpp_std.volt"), want_std, "C++ std types ({backend})");
     }
 }
+
+/// examples/interop: each example's run.sh prints its expected.txt, run from a copy of the directory
+/// with the voltc and bolt under test (a script exits 77 when its toolchain isn't installed)
+#[test]
+fn interop_examples() {
+    let e = Env::new("examples");
+    let dir = e.dir.join("interop");
+    copy_dir(&Path::new(ROOT).join("examples/interop"), &dir);
+    let _ = std::fs::remove_dir_all(dir.join("calls-volt/greet/target"));
+    let path = std::env::var("PATH").unwrap_or_default();
+    let path = std::env::var("HOME").map(|h| format!("{h}/.local/bin:{path}")).unwrap_or(path);
+    let (mut ran, mut skipped) = (Vec::new(), Vec::new());
+    for side in ["calls-volt", "volt-calls"] {
+        let mut examples: Vec<PathBuf> = std::fs::read_dir(dir.join(side)).unwrap().flatten().map(|d| d.path()).filter(|p| p.join("run.sh").is_file()).collect();
+        examples.sort();
+        for ex in examples {
+            let name = format!("{side}/{}", ex.file_name().unwrap().to_string_lossy());
+            let mut c = Command::new("sh");
+            c.arg(ex.join("run.sh")).env("VOLTC", &e.voltc).env("BOLT", env!("CARGO_BIN_EXE_bolt")).env("VOLT_STD", Path::new(ROOT).join("std"));
+            c.env("VOLT_CACHE", e.dir.join("cache")).env("BOLT_HOME", e.dir.join("bolthome")).env("PATH", &path).env("RUSTUP_TOOLCHAIN", rust_toolchain());
+            if let Some(z) = zig() {
+                c.env("ZIG", z);
+            }
+            if let Some(home) = jdk_bin().and_then(|b| b.parent().map(Path::to_path_buf)) {
+                c.env("JAVA_HOME", home);
+            }
+            for (var, tool, arg) in [("DOTNET", "dotnet", "--version"), ("DART", "dart", "--version"), ("SWIFTC", "swiftc", "--version"), ("KOTLINC_NATIVE", "kotlinc-native", "-version")] {
+                if let Some(t) = local_tool(tool, arg) {
+                    c.env(var, t);
+                }
+            }
+            let o = c.output().unwrap();
+            if o.status.code() == Some(77) {
+                skipped.push(name);
+                continue;
+            }
+            assert!(o.status.success(), "{name}: run.sh failed:\n{}{}", String::from_utf8_lossy(&o.stdout), String::from_utf8_lossy(&o.stderr));
+            let want = std::fs::read_to_string(ex.join("expected.txt")).unwrap();
+            assert_eq!(String::from_utf8_lossy(&o.stdout), want, "{name} prints something else");
+            ran.push(name);
+        }
+    }
+    eprintln!("interop examples: ran {ran:?}; skipped (no toolchain) {skipped:?}");
+    assert!(ran.iter().any(|n| n == "calls-volt/c") && ran.iter().any(|n| n == "volt-calls/c"), "the C examples always run");
+}

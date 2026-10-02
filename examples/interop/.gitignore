@@ -1,0 +1,15 @@
+# what the examples' run.sh scripts build
+target/
+*/*/main
+*/*/main.kexe
+*/*/classes/
+*/*/bin/
+*/*/obj/
+*/*/Client.csproj
+*/*/greet_c.klib
+*/*/greet_c-build/
+calls-volt/go/greet/
+calls-volt/zig/greet.zig
+.zig-cache/
+zig-cache/
+__pycache__/

@@ -7,6 +7,9 @@ sidebar:
 
 ## Volt calls Rust
 
+Runnable examples: [Volt calls Rust](https://github.com/ChaseSunstrom/volt-bootstrap/tree/main/examples/interop/volt-calls/rust) and [Zig](https://github.com/ChaseSunstrom/volt-bootstrap/tree/main/examples/interop/volt-calls/zig), and
+[Rust](https://github.com/ChaseSunstrom/volt-bootstrap/tree/main/examples/interop/calls-volt/rust), [Zig](https://github.com/ChaseSunstrom/volt-bootstrap/tree/main/examples/interop/calls-volt/zig) and [Go](https://github.com/ChaseSunstrom/volt-bootstrap/tree/main/examples/interop/calls-volt/go) calling Volt.
+
 One line imports a crate, as one imports a C header, and its public API is Volt functions and
 types:
 

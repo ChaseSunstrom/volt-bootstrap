@@ -5,7 +5,8 @@ sidebar:
   order: 1
 ---
 
-Volt speaks C's ABI in both directions, and reads real C headers.
+Volt speaks C's ABI in both directions, and reads real C headers. Runnable examples:
+[Volt calls C](https://github.com/ChaseSunstrom/volt-bootstrap/tree/main/examples/interop/volt-calls/c) and [C calls Volt](https://github.com/ChaseSunstrom/volt-bootstrap/tree/main/examples/interop/calls-volt/c).
 
 ## Importing headers
 

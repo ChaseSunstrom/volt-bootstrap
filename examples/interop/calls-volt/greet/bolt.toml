@@ -1,0 +1,7 @@
+[package]
+name = "greet"
+version = "0.1.0"
+
+[lib]
+kind = ["volt", "shared", "static"]
+bindings = ["c", "cpp", "rust", "zig", "python", "pyi", "node", "js", "ts", "lua", "go", "java", "kotlin", "csharp", "dart", "swift", "ruby"]

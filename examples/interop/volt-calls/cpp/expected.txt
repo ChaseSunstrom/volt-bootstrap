@@ -1,0 +1,3 @@
+16 clicks
+twice: 42 2.5
+counter done at 16

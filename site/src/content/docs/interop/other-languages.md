@@ -7,6 +7,10 @@ sidebar:
 
 Everything meets at the C ABI.
 
+Each language has a small runnable example in both directions in
+[examples/interop](https://github.com/ChaseSunstrom/volt-bootstrap/tree/main/examples/interop): a Volt library that every language calls, and Volt
+importing C, C++, Rust and Zig code. Each one is a `run.sh` with its exact commands.
+
 ## Volt calls them
 
 - **C**: import the header, see [C](/volt-bootstrap/interop/c/).

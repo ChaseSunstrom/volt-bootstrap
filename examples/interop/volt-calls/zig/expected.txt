@@ -1,0 +1,4 @@
+norm 5
+mean 3
+divide 3
+by zero ERROR(DivisionByZero)
