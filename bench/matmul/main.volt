@@ -9,14 +9,13 @@ fn main() -> !void {
     var c: std::vec<f64> = {};
     try a.reserve(n * n);
     try b.reserve(n * n);
-    try c.reserve(n * n);
     for (i) in 0..n {
         for (j) in 0..n {
             try a.push((@cast<f64>(i) - @cast<f64>(j)) / @cast<f64>(n));
             try b.push(@cast<f64>(i + 2 * j + 1) / @cast<f64>(n));
-            try c.push(0.0);
         }
     }
+    try c.resize(n * n, 0.0); // zeros, as C's calloc
     val x = a.items();
     val y = b.items();
     val z = c.items();

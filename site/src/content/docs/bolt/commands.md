@@ -27,18 +27,24 @@ it's written, and time spent in a shared library (libc's `malloc`, say) is named
 ```
 $ bolt hot bench/closures/main.volt -- 300
   self   total  function
- 49.2%   98.5%  pipeline<closure(i64) -> i64, closure(i64) -> bool> (bench/closures/main.volt:6)
- 38.6%   38.6%  a closure (bench/closures/main.volt:30:92)
- 10.7%   10.7%  a closure (bench/closures/main.volt:30:39)
+ 45.5%   99.0%  pipeline<closure(i64) -> i64, closure(i64) -> bool> (bench/closures/main.volt:6), inlined
+ 40.5%   40.5%  a closure (bench/closures/main.volt:30:92), inlined
+ 13.0%   13.0%  a closure (bench/closures/main.volt:30:39), inlined
+  1.0%  100.0%  main (bench/closures/main.volt:18), inlined
 
 hottest lines
- 49.2%  bench/closures/main.volt:12  sum += y;
- 49.2%  bench/closures/main.volt:30  total += pipeline(xs.items(), |factor| (x: i64) -> i64 ...
+ 53.5%  bench/closures/main.volt:30  total += pipeline(xs.items(), |factor| (x: i64) -> i64 { return x *...
+ 35.0%  bench/closures/main.volt:12  sum += y;
+ 10.5%  bench/closures/main.volt:9  for (x) in xs {
 
 hottest paths
- 49.2%  main -> pipeline<closure(i64) -> i64, closure(i64) -> bool>
- 38.6%  main -> pipeline<closure(i64) -> i64, closure(i64) -> bool> -> closure@main.volt:30:92
+ 45.5%  main -> pipeline<closure(i64) -> i64, closure(i64) -> bool>
+ 40.5%  main -> pipeline<closure(i64) -> i64, closure(i64) -> bool> -> closure@main.volt:30:92
 ```
+
+`inlined` marks a function that every sample found inlined into its callers: its self time is spent
+at its lines there, not in calls to it. A C compiler's copies of a function
+(`work.constprop.0`, made for a constant argument) are reported as that function.
 
 The program samples itself (about a thousand times a second of CPU time), so this needs no
 `perf`, debugger or root; it runs on Linux, and names the samples with `llvm-symbolizer` or

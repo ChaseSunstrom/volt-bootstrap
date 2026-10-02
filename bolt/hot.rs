@@ -4,7 +4,7 @@
 //! llvm-symbolizer (or addr2line) and the build's .voltmap (C symbols to Volt names): the hottest
 //! functions by self and total time, the hottest .volt lines, and the hottest call paths. No perf,
 //! ptrace or root needed.
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -183,7 +183,8 @@ fn symbolize(exe: &Path, addrs: &[u64]) -> Result<HashMap<u64, Vec<Frame>>, Stri
 /// what a report line calls a frame's function: its Volt name (its place relative to here), else the
 /// symbol (libc's, say)
 fn label(f: &Frame, names: &HashMap<String, String>) -> String {
-    let l = names.get(&f.func).cloned().unwrap_or_else(|| f.func.clone());
+    // a C compiler's copies of a function (v_work.constprop.0, .isra.0, .part.0, .cold) are that function
+    let l = names.get(&f.func).or_else(|| f.func.split_once('.').and_then(|(base, _)| names.get(base))).cloned().unwrap_or_else(|| f.func.clone());
     match std::env::current_dir() {
         Ok(d) => l.replace(&format!("({}/", d.display()), "("),
         Err(_) => l,
@@ -226,6 +227,10 @@ pub fn report(exe: &Path, prof: &Profile, top: usize) -> Result<String, String> 
     addrs.dedup();
     let syms = symbolize_all(exe, &prof.maps, &addrs)?;
     let names = read_voltmap(exe);
+    // an address's last frame is the function its code is in; the ones before it were inlined there.
+    // A function no sample found out of line is marked inlined, so its self time isn't read as call
+    // overhead
+    let outlined: HashSet<String> = syms.values().filter_map(|fs| fs.last()).map(|f| label(f, &names)).collect();
     let none = Vec::new();
     let mut self_n: HashMap<String, usize> = HashMap::new();
     let mut total_n: HashMap<String, usize> = HashMap::new();
@@ -276,7 +281,8 @@ pub fn report(exe: &Path, prof: &Profile, top: usize) -> Result<String, String> 
     let mut out = format!("bolt hot: {n} samples of {}\n\n", exe.display());
     out += "  self   total  function\n";
     for (l, k) in sorted(self_n.clone()).into_iter().take(top) {
-        out += &format!("{:5.1}%  {:5.1}%  {l}\n", pct(k, n), pct(total_n[&l], n));
+        let inlined = if outlined.contains(&l) { "" } else { ", inlined" };
+        out += &format!("{:5.1}%  {:5.1}%  {l}{inlined}\n", pct(k, n), pct(total_n[&l], n));
     }
     // functions that are only ever callers (main, a pipeline whose closures got inlined into it)
     let callers: Vec<(String, usize)> = sorted(total_n).into_iter().filter(|(l, _)| !self_n.contains_key(l)).take(3).collect();

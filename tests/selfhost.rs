@@ -173,9 +173,11 @@ fn hot_profiles(voltc: &Path, tmp: &Path) {
     let o = Command::new(env!("CARGO_BIN_EXE_bolt")).args(["hot", "tests/hot/spin.volt"]).current_dir(root).env("VOLTC", voltc).env("VOLT_STD", root.join("std")).output().unwrap();
     let out = String::from_utf8_lossy(&o.stdout);
     assert!(o.status.success(), "bolt hot failed:\n{out}{}", String::from_utf8_lossy(&o.stderr));
-    assert!(out.contains("  work (tests/hot/spin.volt:4)"), "bolt hot didn't name work:\n{out}");
-    assert!(out.contains("tests/hot/spin.volt:7  s = s ^"), "bolt hot didn't find the hot line:\n{out}");
-    assert!(out.contains("main -> work"), "bolt hot didn't find the path:\n{out}");
+    // work by its Volt name though gcc copies it (work.constprop.0); mix, only ever inlined, says so
+    assert!(out.contains("  work (tests/hot/spin.volt:11)\n"), "bolt hot didn't name work:\n{out}");
+    assert!(out.contains("  mix (tests/hot/spin.volt:6), inlined\n"), "bolt hot didn't mark mix inlined:\n{out}");
+    assert!(out.contains("tests/hot/spin.volt:8  return i * 2654435761"), "bolt hot didn't find the hot line:\n{out}");
+    assert!(out.contains("main -> work -> mix"), "bolt hot didn't find the path:\n{out}");
     // a normal build: no sampler in it
     let exe = tmp.join("spin");
     let b = Command::new(voltc).args(["build", "--release"]).arg(root.join("tests/hot/spin.volt")).arg("--std").arg(root.join("std")).arg("-o").arg(&exe).output().unwrap();
