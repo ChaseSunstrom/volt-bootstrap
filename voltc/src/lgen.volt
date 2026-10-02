@@ -794,6 +794,9 @@ attach fn decl_global(this: lg&, g: u32) -> llvm::LLVMOpaqueValue* {
     if (v == null) {
         v = llvm::LLVMAddGlobal(this.m, t, name);
         val gv = v ?? @panic("global");
+        if (gl.tls) {
+            llvm::LLVMSetThreadLocal(gv, 1);
+        }
         if (defined) {
             llvm::LLVMSetInitializer(gv, init);
             llvm::LLVMSetAlignment(gv, this.align_of(this.lt(gl.ty)));

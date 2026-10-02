@@ -160,6 +160,10 @@ fn main() -> void {
 
 `--cfg pkg:key=value` sets a key for package `pkg`'s files only.
 
+`@cfg("release")` is true in a `--release` build, for code that trades checks for speed. std's
+default allocator uses it: debug builds check every free against the block's size, release builds
+skip the check and take small blocks from free lists.
+
 ### The target
 
 Three keys describe the platform being built for. Every package sees them without any `--cfg`:
@@ -209,6 +213,7 @@ accepted, so a typo is an error.
 | `@intrinsic("name")` | a compiler builtin or runtime function (for std-like libraries) |
 | `@owns("field")` | this struct owns what the field points at, like `box` |
 | `@export_text("method")` | an export fn returning this struct hands other languages its text, as `method()` gives it (std's `string` has it) |
+| `@thread_local` | a global `var` each thread has its own copy of, starting from its initial value |
 
 ```volt
 use std::io;
@@ -226,5 +231,32 @@ fn total(a: i32, b: i32) -> i32 {
 fn main() -> void {
     std::println("{}", total(1, 2));
 }
+// expect: 3
+```
+
+A `@thread_local` global needs no lock: each thread reads and writes its own.
+
+```volt
+use std::io;
+use std::thread;
+
+@attributes([@thread_local])
+var calls: i32 = 0;
+
+fn count() -> void {
+    calls += 1;
+    std::println("{}", calls);
+}
+
+fn main() -> !void {
+    count();
+    count();
+    var t = try std::thread::spawn(|| () { count(); });
+    t.join();
+    count();
+}
+// expect: 1
+// expect: 2
+// expect: 1
 // expect: 3
 ```

@@ -1960,6 +1960,9 @@ attach fn global_decl(this: cgen&, out: std::string&, g: u32) -> void {
     } else {
         out.append("extern ");
     }
+    if (gl.tls) {
+        out.append("_Thread_local ");
+    }
     out.append(this.ty(gl.ty));
     out.push(' ');
     out.append(gl.name);
@@ -1978,6 +1981,9 @@ attach fn global_def(this: cgen&, out: std::string&, g: u32) -> void {
     }
     if (gl.keep) {
         out.append("__attribute__((used)) ");
+    }
+    if (gl.tls) {
+        out.append("_Thread_local ");
     }
     out.append(this.ty(gl.ty));
     out.push(' ');

@@ -29,20 +29,158 @@ namespace mem {
         <T: type> fn free(this, ptr: T*, count: usize = 1) -> void;
     }
 
-    // malloc, realloc and free from the C library. Empty, so a box using it is just a pointer
+    // The C library's memory, with two layers on top. Release builds take blocks of up to SMALL_MAX
+    // bytes from per-thread free lists, one per 16-byte size class, cut from SMALL_CHUNK-byte chunks:
+    // a box costs a load and a store instead of a trip through malloc (the size class is known when
+    // the type is). Debug builds put each block's size in front of it and check every free and
+    // realloc against it, so a caller that gives back a different size (which would corrupt a free
+    // list) stops right there. Empty, so a box using it is just a pointer.
+    // ponytail: freed small blocks stay on their free list (memory isn't handed back to the system,
+    // and a thread's lists outlive it); trim them if a long-running program needs that.
     struct default_allocator;
+
+    internal val SMALL_MAX: usize = 256;
+    internal val SMALL_CHUNK: usize = 65536;
+    internal val HEADER: usize = 16; // debug builds: the block's size, keeping 16-byte alignment
+
+    // each size class's free list on this thread: the first block's address (0: empty); a free block
+    // holds the next one's. Class c holds c * 16-byte blocks, 1 to 16 (0 is never used: n bytes are
+    // class (n + 15) / 16, which doesn't wrap at n = 0 the way (n - 1) / 16 would. gcc copies paths it
+    // never runs, a size of 0 among them, and a wrapped class there is a thread-local offset too big
+    // for the instruction: the link fails)
+    @attributes([@thread_local])
+    internal var small_free: usize[17];
+
+    // n bytes' size class
+    internal fn class_of(n: usize) -> usize {
+        return (n + 15) / 16;
+    }
+
+    // a block of size class c: this thread's next free one, or a new chunk's first
+    internal fn small_alloc(c: usize) -> mem_error!(void*) {
+        val head = small_free[c];
+        if (head != 0) {
+            small_free[c] = *@cast<usize*>(head);
+            return @cast<void*>(head);
+        }
+        return try small_refill(c);
+    }
+
+    // class c's list is empty: a new chunk cut into its blocks, the first one returned (out of line,
+    // so what's inlined into callers is just the pop above)
+    @attributes([@noinline])
+    internal fn small_refill(c: usize) -> mem_error!(void*) {
+        val size = c * 16;
+        val chunk = @cast<usize>(c_malloc(SMALL_CHUNK) ?? return mem_error::OUT_OF_MEMORY);
+        // the first block is this one; the rest go on the list, in address order
+        var next: usize = 0;
+        var i = SMALL_CHUNK / size - 1;
+        while (i > 0) {
+            val b = chunk + i * size;
+            *@cast<usize*>(b) = next;
+            next = b;
+            i -= 1;
+        }
+        small_free[c] = next;
+        return @cast<void*>(chunk);
+    }
+
+    internal fn small_put(p: void*, c: usize) -> void {
+        val b = @cast<usize>(p);
+        if (b == 0) {
+            return;
+        }
+        *@cast<usize*>(b) = small_free[c];
+        small_free[c] = b;
+    }
+
+    // n bytes of T's go in the small blocks
+    <T: type>
+    internal fn is_small(n: usize) -> bool {
+        return n != 0 && n <= SMALL_MAX && @alignof(T) <= 16;
+    }
+
+    // realloc to, from or within the small blocks: the same class needs nothing, anything else a new
+    // block. Out of line: growing is rare, and inlined into a push loop it takes the loop's registers
+    // (vec_grow was 5-8% slower)
+    @attributes([@noinline])
+    <T: type>
+    internal fn small_realloc(ptr: T*, old: usize, count: usize) -> mem_error!(T*) {
+        val a: default_allocator = {};
+        val was = old * @sizeof(T);
+        val now = count * @sizeof(T);
+        if (is_small<T>(was) && is_small<T>(now) && class_of(was) == class_of(now)) {
+            return ptr;
+        }
+        val p = try a.malloc<T>(count);
+        var keep = was;
+        if (now < keep) {
+            keep = now;
+        }
+        val from = @slice(@cast<u8*>(ptr), keep);
+        val to = @slice(@cast<u8*>(p), keep);
+        for (b, i) in from {
+            to[i] = b;
+        }
+        a.free<T>(ptr, old);
+        return p;
+    }
+
+    // debug builds: the size a block was allocated with (in its header), checked against what the
+    // caller says
+    internal fn checked_header(ptr: void*, n: usize) -> void* {
+        val h = @cast<usize>(ptr) - HEADER;
+        if (*@cast<usize*>(h) != n) {
+            @panic("a block was given back with a different size than it was allocated with");
+        }
+        return @cast<void*>(h);
+    }
 
     attach t_allocator -> default_allocator {
         <T: type> fn malloc(this, count: usize = 1) -> mem_error!(T*) {
-            val raw = c_malloc(try bytes<T>(count)) ?? return mem_error::OUT_OF_MEMORY;
-            return @cast<T*>(raw);
+            val n = try bytes<T>(count);
+            comptime if (@cfg("release")) {
+                if (is_small<T>(n)) {
+                    return @cast<T*>(try small_alloc(class_of(n)));
+                }
+                val raw = c_malloc(n) ?? return mem_error::OUT_OF_MEMORY;
+                return @cast<T*>(raw);
+            } else {
+                val raw = c_malloc(n + HEADER) ?? return mem_error::OUT_OF_MEMORY;
+                *@cast<usize*>(raw) = n;
+                return @cast<T*>(@cast<usize>(raw) + HEADER);
+            }
         }
         <T: type> fn realloc(this, ptr: T*, old: usize, count: usize) -> mem_error!(T*) {
-            val raw = c_realloc(ptr as void*, try bytes<T>(count)) ?? return mem_error::OUT_OF_MEMORY;
-            return @cast<T*>(raw);
+            val was = old * @sizeof(T);
+            val now = try bytes<T>(count);
+            comptime if (@cfg("release")) {
+                if (is_small<T>(was) || is_small<T>(now)) {
+                    return try small_realloc<T>(ptr, old, count);
+                }
+                val raw = c_realloc(ptr as void*, now) ?? return mem_error::OUT_OF_MEMORY;
+                return @cast<T*>(raw);
+            } else {
+                val h = checked_header(ptr as void*, was);
+                val raw = c_realloc(h, now + HEADER) ?? return mem_error::OUT_OF_MEMORY;
+                *@cast<usize*>(raw) = now;
+                return @cast<T*>(@cast<usize>(raw) + HEADER);
+            }
         }
         <T: type> fn free(this, ptr: T*, count: usize = 1) -> void {
-            c_free(ptr as void*);
+            if (@cast<usize>(ptr) == 0) {
+                return;
+            }
+            val n = count * @sizeof(T);
+            comptime if (@cfg("release")) {
+                if (is_small<T>(n)) {
+                    small_put(ptr as void*, class_of(n));
+                    return;
+                }
+                c_free(ptr as void*);
+            } else {
+                c_free(checked_header(ptr as void*, n));
+            }
         }
     }
 

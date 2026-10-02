@@ -14,7 +14,7 @@ can choose:
   `replace` and `join`, `path::join`, `fs::read_file` and `list_dir`, `json::parse`,
   `time::utc_iso8601`, `process::cwd`, `string::from`, and the rest.
 
-Both default to `std::mem::default_allocator` (C's `malloc`, which takes no space), so
+Both default to `std::mem::default_allocator` (C's `malloc` underneath, and it takes no space), so
 `std::string` and `"a,b".split(",")` work as they always have.
 
 ## Picking one
@@ -46,10 +46,17 @@ fn main() -> !void {
 
 | Allocator | What it does |
 | --- | --- |
-| `default_allocator` | C's `malloc`, `realloc` and `free` |
+| `default_allocator` | C's `malloc`, `realloc` and `free`; in a `--release` build, blocks of up to 256 bytes come from per-thread free lists instead (below) |
 | `arena` | takes memory in chunks from a backing allocator; frees do nothing (except for the last block), and deleting or `reset()`ting the arena gives every chunk back |
 | `fixed_buffer` | hands out a buffer you own (an array on the stack, a global), front to back, with no heap at all; out of room is `OUT_OF_MEMORY` |
 | `failing` | lets the next `left` allocations through, then fails every one: for testing what happens when memory runs out |
+
+In a `--release` build the default allocator keeps a free list per thread for each 16-byte size
+class up to 256 bytes, cut from 64 KiB chunks. A small `box` or a short `vec` costs a load and a
+store instead of a trip through `malloc`, and needs no lock. A debug build instead stores each
+block's size in front of it and checks every `free` and `realloc` against it, since a free with the
+wrong size would corrupt a release build's lists. Freed small blocks stay on their thread's lists:
+the memory goes back to the program, not to the system.
 
 `arena`, `fixed_buffer` and `failing` hold state. You use them through the handle that
 `allocator()` returns, so every container shares that one state. They have to outlive everything

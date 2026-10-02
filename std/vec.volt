@@ -41,12 +41,21 @@ attach fn reserve(this: std::vec<T, A>&, n: usize) -> std::mem::mem_error!void {
     if (cap < 4) {
         cap = 4;
     }
-    if (this.cap == 0) {
-        this.ptr = try this.allocator.malloc<T>(cap);
-    } else {
-        this.ptr = try this.allocator.realloc<T>(this.ptr, this.cap, cap);
-    }
+    this.ptr = try moved_to<T, A>(this.ptr, this.cap, cap, copy this.allocator);
     this.cap = cap;
+}
+
+// a block for cap T's holding the old ones at ptr. Out of line, and given the fields rather than the
+// vec: inlined into a loop that pushes or appends, the allocator's paths take the loop's registers,
+// and a vec passed by reference would keep its length in memory (vec_grow and strings were 3-10%
+// slower either way)
+@attributes([@noinline])
+<T: type, A: std::mem::t_allocator>
+internal fn moved_to(ptr: T*, old: usize, cap: usize, allocator: A) -> std::mem::mem_error!(T*) {
+    if (old == 0) {
+        return try allocator.malloc<T>(cap);
+    }
+    return try allocator.realloc<T>(ptr, old, cap);
 }
 
 // append value (moved in), growing the memory when it's full

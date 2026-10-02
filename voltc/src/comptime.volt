@@ -2115,6 +2115,10 @@ attach fn ct_builtin(this: checker&, name: str, gargs: std::vec<garg>&, args: st
             want.push('=');
             want.append(parts.at(1).as_str());
         }
+        // @cfg("release"): an optimized build (--release), for code that trades checks for speed
+        if (key_only && want.as_str() == "release") {
+            return cval::BOOL(this.opts.release);
+        }
         val pkg = this.pkg_of_file(span.file);
         for (c&) in this.opts.cfg.items() {
             if (!same_pkg(c.pkg, pkg) || is_target_key(c.set)) {
@@ -2742,6 +2746,7 @@ fn attr_defs() -> std::vec<attr_def> {
     put(&v, { name: "owns", args: 1 });
     put(&v, { name: "cpp_type", args: 1 }); // a struct is this C++ class (use cpp writes it)
     put(&v, { name: "export_text", args: 1 }); // a struct is text, as this method gives it, to other languages (voltc bindings)
+    put(&v, { name: "thread_local", args: 0 }); // a global var each thread has its own of
     return move v;
 }
 
@@ -2880,5 +2885,13 @@ attach fn warn_deprecated(this: checker&, idx: u32, span: span) -> void {
         var d: diag = { span: span, msg: fmt2("'{}' is deprecated: {}", S(this.fi(idx).name), S(msg ?? "")), warning: true };
         put(&d.labels, { span: this.item_of(decl).span, msg: S("declared here") });
         put(&this.warnings, move d);
+    }
+}
+
+// whether attribute a is @name
+fn attr_named(a: expr&, name: str) -> bool {
+    match (a.kind) {
+        .BUILTIN(n, g, args) => { return n == name; },
+        default => { return false; },
     }
 }

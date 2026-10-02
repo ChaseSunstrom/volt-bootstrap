@@ -964,7 +964,11 @@ attach fn global(this: checker&, d: u32, span: span) -> compile_error!global_ref
             link = linkage::EXPORTED;
         }
     }
-    put(&this.ir.globals, { name: c, ty: gv.ty, init: init, mutable: l.mutable, link: link, origin: span });
+    var tls = false;
+    for (a&) in this.item_of(d).attrs.items() {
+        tls = tls || attr_named(a, "thread_local");
+    }
+    put(&this.ir.globals, { name: c, ty: gv.ty, init: init, mutable: l.mutable, link: link, origin: span, tls: tls });
     val g: global_ref = { c: this.ir.node(ir_kind::GLOBAL(@cast<u32>(this.ir.globals.len - 1)), gv.ty), ty: gv.ty, mutable: l.mutable };
     this.global_c.put(d, g);
     return g;

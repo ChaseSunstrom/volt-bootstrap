@@ -578,6 +578,16 @@ attach fn collect_item(this: checker&, it: item&, ns: u32, parent: u32?) -> comp
     val file = it.span.file;
     for (a&) in it.attrs.items() {
         try this.check_attr(a, file);
+        if (attr_named(a, "thread_local")) {
+            var global_var = false;
+            match (it.kind) {
+                .GLOBAL(l) => { global_var = l.mutable; },
+                default => {},
+            }
+            if (!global_var) {
+                return fails(a.span, "@thread_local goes on a global var (each thread gets its own)");
+            }
+        }
     }
     var name: str? = null;
     var inner: std::vec<item>* = null;

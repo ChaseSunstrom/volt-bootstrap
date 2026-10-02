@@ -134,6 +134,7 @@ struct ir_global {
     header: bool = false; // defined by an imported C header
     keep: bool = false;   // must stay in the object even if unused (guard references)
     origin: span? = null; // the Volt declaring it (none for generated ones)
+    tls: bool = false;    // @thread_local: each thread has its own
 }
 
 // the IR for a whole unit; nodes, fns and globals refer to each other by index

@@ -28,7 +28,7 @@ sidebar:
 
 | Flag | Effect |
 | --- | --- |
-| `--release` | optimize (`-O2`); drop the debug checks, so integer overflow wraps |
+| `--release` | optimize (`-O2`); drop the debug checks, so integer overflow wraps; C compiled along gets `-fno-math-errno` (Volt never reads `errno`, so `sqrt` and friends become instructions); `@cfg("release")` is true |
 | `--leak-check` | debug builds: exit with 102 if any allocation was never freed |
 | `--profiler` | build for [`bolt hot`](/volt-bootstrap/bolt/commands/#finding-the-hot-spots): line information, frame pointers, and a sampler that writes `$VOLT_PROFILE_OUT` when the program exits (Linux) |
 | `--std DIR`, `--no-std` | the std package (default: `$VOLT_STD`, then a `std/` next to voltc) |
