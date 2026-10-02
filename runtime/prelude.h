@@ -9,9 +9,11 @@
 #ifdef __SIZEOF_INT128__
 typedef __int128 volt_i128;
 typedef unsigned __int128 volt_u128;
-#else
+#elif defined(__BITINT_MAXWIDTH__) && __BITINT_MAXWIDTH__ >= 128
 typedef _BitInt(128) volt_i128;
 typedef unsigned _BitInt(128) volt_u128;
+#else
+#error "Volt's i128 needs __int128 or _BitInt(128); for this target, use clang 16 or gcc 14 or later"
 #endif
 #define VOLT_S2(x) #x
 #define VOLT_S(x) VOLT_S2(x)
