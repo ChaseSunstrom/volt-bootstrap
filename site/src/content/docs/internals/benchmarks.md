@@ -92,11 +92,12 @@ Measured 2026-10-02 on:
   back, and a byte store may alias it, so the loop can't be turned into a memset.)
 - **`binary_trees`: free lists beat `malloc`.** In a `--release` build std's default allocator
   takes small blocks from per-thread free lists ([allocators](/volt-bootstrap/std/allocators/)), so
-  a `box` costs a load and a store. The C and C++ programs call `malloc` and `new` for every node
-  (before the free lists, Volt was 1.14x to 1.18x). A C program with its own pool would match it:
+  a `box` costs a load and a store, and a `box<node>?` is a pointer, so a node is 16 bytes like
+  C's. The C and C++ programs call `malloc` and `new` for every node (before the free lists, Volt
+  was 1.14x to 1.18x). A C program with its own pool would match it:
   this row measures the allocators, not the compilers. The arena idiom (a `std::mem::arena` per tree,
   `node::new(value, arena.allocator())`, `reset()` after each) measured 0.85x on the C backend and
-  0.83x on LLVM: a box from an arena carries the arena's pointer, so each node is twice the size, and
-  the free lists win.
+  0.83x on LLVM: a box from an arena carries the arena's pointer, so each node is twice the size
+  or more, and the free lists win.
 - **gcc's own wins** (`fib`, `spectral_norm`) are its optimizer's: it turns much of `fib`'s
   recursion into loops. Volt's C backend is compiled by clang here, so it follows clang.

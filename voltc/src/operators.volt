@@ -470,7 +470,7 @@ attach fn compare(this: checker&, op: binop, a: tval, b: tval, span: span) -> co
             if (this.t.is_niche(inner)) {
                 is_null = this.ir.binary(binop_ir::EQ, x.c, this.ir.node(ir_kind::NULLPTR, x.ty), BOOL);
             } else {
-                is_null = this.ir.unary(unop_ir::NOT, this.ir.field(x.c, 1, BOOL), BOOL);
+                is_null = this.ir.unary(unop_ir::NOT, this.opt_parts(x.ty, x.c).has, BOOL);
             }
             if (op == binop::NE) {
                 is_null = this.ir.unary(unop_ir::NOT, is_null, BOOL);

@@ -1498,6 +1498,7 @@ impl Checker {
             Ty::AnyErr => (4, 4), // a uint32_t code
             Ty::Str | Ty::Slice(_) | Ty::FnVal(..) => (16, 8),
             Ty::Opt(i) if self.t.is_niche(i) => (8, 8),
+            Ty::Opt(i) if self.niche_field(i).is_some() => self.layout(i, span)?,
             Ty::Opt(i) => rec(self, &[i, BOOL])?,
             Ty::Array(e, n) => {
                 let (s, a) = self.layout(e, span)?;

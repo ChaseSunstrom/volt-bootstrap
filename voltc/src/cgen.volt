@@ -147,7 +147,7 @@ attach fn ty(this: cgen&, t: u32) -> str {
             name.push('*');
         },
         .OPT(x) => {
-            if (this.c.t.is_niche(x)) {
+            if (this.c.niche(x)) {
                 name.append(this.ty(x));
             } else {
                 name.append("volt_t");
@@ -180,7 +180,7 @@ attach fn ty(this: cgen&, t: u32) -> str {
 // does this type get a C definition of ours?
 attach fn needs_def(this: cgen&, t: u32) -> bool {
     match (*this.c.t.get(t)) {
-        .OPT(x) => { return !this.c.t.is_niche(x); },
+        .OPT(x) => { return !this.c.niche(x); },
         .STRUCT(s) => { return !this.c.header_struct(s); },
         .ENUM(e) => { return this.c.ei(e).has_payload; },
         .ARRAY(x, n) => { return true; },
@@ -315,7 +315,7 @@ attach fn define(this: cgen&, t: u32) -> void {
         var dep = *d;
         match (*this.c.t.get(dep)) {
             .OPT(x) => {
-                if (this.c.t.is_niche(x)) {
+                if (this.c.niche(x)) {
                     dep = x;
                 }
             },
@@ -480,7 +480,9 @@ attach fn member_name(this: cgen&, out: std::string&, agg: u32, i: u32) -> void 
         },
         .CLOSURE(c) => { this.put_member(out, this.c.ci(c).caps.at(@cast<usize>(i)).name); },
         .OPT(x) => {
-            if (i == 0) {
+            if (this.c.niche_field(x) != null) {
+                this.member_name(out, x, i); // the owning struct itself
+            } else if (i == 0) {
                 out.push('v');
             } else {
                 out.append("has");

@@ -302,7 +302,7 @@ impl Checker {
                     if !matches!(op, Eq | Ne) {
                         return err(span, "only == and != work with null");
                     }
-                    let is_null = if self.t.is_niche(inner) { format!("(({}) == 0)", x.c) } else { format!("(!({}).has)", x.c) };
+                    let is_null = if self.t.is_niche(inner) { format!("(({}) == 0)", x.c) } else { format!("(!{})", self.opt_parts(x.ty, &x.c).0) };
                     let c = if op == Eq { is_null } else { format!("(!{is_null})") };
                     return Ok(Val { pure: x.pure, ..Val::new(BOOL, c) });
                 }

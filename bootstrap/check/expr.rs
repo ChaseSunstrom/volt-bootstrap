@@ -27,7 +27,7 @@ impl Checker {
     /// may assign it again (`cur = cur->next`), so the narrowing only holds when it is read.
     pub fn narrow_recheck(&self, l: &Local) -> bool {
         match &l.orig {
-            Some((_, oty)) => self.t.is_ptr(*oty) || matches!(self.t.get(*oty), Ty::Opt(i) if self.t.is_niche(*i)),
+            Some((_, oty)) => self.t.is_ptr(*oty) || matches!(self.t.get(*oty), Ty::Opt(i) if self.niche(*i)),
             None => false,
         }
     }
@@ -40,7 +40,12 @@ impl Checker {
             return base;
         }
         let (pc, loc) = (self.cty(l.ty), self.loc(span));
-        Val { c: format!("(*({{ {pc}* _nq = &({}); if (!*_nq) volt_panic(\"null pointer dereference\", \"{loc}\"); _nq; }}))", l.c), ..base }
+        // a box (an optional's niche struct) is null when its pointer is
+        let null = match self.niche_field(l.ty) {
+            Some(f) => format!("!_nq->{f}"),
+            None => "!*_nq".into(),
+        };
+        Val { c: format!("(*({{ {pc}* _nq = &({}); if ({null}) volt_panic(\"null pointer dereference\", \"{loc}\"); _nq; }}))", l.c), ..base }
     }
 
     /// check e expecting type ty, then convert it (an error if it can't)
@@ -119,7 +124,7 @@ impl Checker {
     /// v wrapped in optional type opt (for a niche optional, like a pointer's, that's v itself)
     pub fn some(&mut self, v: Val, opt: TyId) -> Val {
         let Ty::Opt(inner) = self.t.get(opt).clone() else { unreachable!() };
-        if self.t.is_niche(inner) {
+        if self.niche(inner) {
             return Val { ty: opt, ..v };
         }
         let c = self.cty(opt);
@@ -134,6 +139,9 @@ impl Checker {
         let c = self.cty(opt);
         if self.t.is_niche(inner) {
             return Val::pure(opt, format!("(({c})0)"));
+        }
+        if self.niche_field(inner).is_some() {
+            return Val::pure(opt, format!("(({c}){{0}})"));
         }
         Val::pure(opt, format!("(({c}){{ .has = false }})"))
     }

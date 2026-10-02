@@ -270,8 +270,8 @@ attach fn drop_fn(this: checker&, t: u32) -> compile_error!u32 {
         },
         .OPT(x) => {
             val d = try this.drop_fn(x);
-            val has = this.ir.field(obj, 1, BOOL);
-            put(&body, this.ir.if_(has, this.call_fn(d, nodes(this.ir.addr(this.ir.field(obj, 0, x), this.t.ref_to(x))), VOID), null));
+            val p = this.opt_parts(t, obj);
+            put(&body, this.ir.if_(p.has, this.call_fn(d, nodes(this.ir.addr(p.value, this.t.ref_to(x))), VOID), null));
         },
         .ERR_UNION(e, x) => {
             val code = this.eu_code(t, obj);
@@ -392,8 +392,9 @@ attach fn copy_fn(this: checker&, t: u32, span: span) -> compile_error!u32 {
             .OPT(x) => {
                 if (try this.needs_drop(x)) {
                     val cf = try this.copy_fn(x, span);
-                    val src = this.ir.addr(this.ir.field(obj, 0, x), this.t.ref_to(x));
-                    put(&body, this.ir.if_(this.ir.field(obj, 1, BOOL), this.ir.assign(this.ir.field(r.c, 0, x), this.call_fn(cf, nodes(src), x)), null));
+                    val p = this.opt_parts(t, obj);
+                    val src = this.ir.addr(p.value, this.t.ref_to(x));
+                    put(&body, this.ir.if_(p.has, this.ir.assign(this.opt_parts(t, r.c).value, this.call_fn(cf, nodes(src), x)), null));
                 }
             },
             .ERR_UNION(e, x) => {

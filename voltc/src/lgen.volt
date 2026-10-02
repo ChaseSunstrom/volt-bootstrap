@@ -157,7 +157,7 @@ attach fn make_lt(this: lg&, t: u32) -> llvm::LLVMOpaqueType* {
             return llvm::LLVMFP128TypeInContext(this.ctx);
         },
         .OPT(x) => {
-            if (this.c.t.is_niche(x)) {
+            if (this.c.niche(x)) {
                 return this.lt(x);
             }
         },

@@ -131,6 +131,9 @@ impl Checker {
     /// c appears in both, so it should be a place or pure
     pub fn opt_parts(&self, opt: TyId, c: &str) -> (String, String) {
         let Ty::Opt(inner) = self.t.get(opt) else { unreachable!() };
+        if let Some(f) = self.niche_field(*inner) {
+            return (format!("(({c}).{f} != 0)"), c.to_string());
+        }
         if self.t.is_niche(*inner) { (format!("(({c}) != 0)"), c.to_string()) } else { (format!("({c}).has"), format!("({c}).v")) }
     }
 

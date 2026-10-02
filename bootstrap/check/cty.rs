@@ -21,7 +21,7 @@ impl Checker {
             Ty::Float(_) => "__float128".into(),
             Ty::Int(k) => k.c().into(),
             Ty::Ref(t) | Ty::Ptr(t) => format!("{}*", self.cty(t)),
-            Ty::Opt(t) if self.t.is_niche(t) => self.cty(t),
+            Ty::Opt(t) if self.niche(t) => self.cty(t),
             Ty::Struct(s) => self.structs[s as usize].c_name.clone(),
             Ty::Enum(e) if !self.enums[e as usize].has_payload => self.enums[e as usize].tag.c().into(),
             Ty::Enum(e) => self.enums[e as usize].c_name.clone(),
@@ -37,7 +37,7 @@ impl Checker {
     /// does this type need a C definition of its own (a struct, or a fn pointer typedef)?
     fn needs_def(&self, id: TyId) -> bool {
         let own = match self.t.get(id) {
-            Ty::Opt(t) => !self.t.is_niche(*t),
+            Ty::Opt(t) => !self.niche(*t),
             Ty::Array(..) | Ty::Slice(_) | Ty::Tuple(..) | Ty::Range(_) | Ty::Struct(_) | Ty::FnPtr(..) | Ty::ErrUnion(..) | Ty::TraitUnion(_) | Ty::Closure(_) | Ty::FnVal(..) | Ty::Frame(_) => true,
             Ty::Enum(e) => self.enums[*e as usize].has_payload,
             _ => false,
@@ -110,7 +110,7 @@ impl Checker {
             self.cty(dep);
             // a niche optional is its payload's C type (a function pointer's typedef, say)
             let dep = match self.t.get(dep) {
-                Ty::Opt(x) if self.t.is_niche(*x) => *x,
+                Ty::Opt(x) if self.niche(*x) => *x,
                 _ => dep,
             };
             if self.needs_def(dep) {

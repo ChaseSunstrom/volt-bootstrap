@@ -190,6 +190,12 @@ fn main() -> !void {
 `box` is an ordinary std type: `@attributes([@owns("ptr")])` is what makes a struct an owning
 pointer, and a library can make its own.
 
+A `box<T>?` is as small as the box: a live box's pointer is never null, so null means none, and
+`node` above is 16 bytes, like the C struct with a `next` pointer. That holds for any `@owns`
+struct whose other fields take no space, such as a box using the default allocator. A box from an
+arena carries the arena's pointer, so its optional adds a flag. (An allocator that returned null
+for a successful allocation would make that box read as none.)
+
 ## defer
 
 Deletes handle memory and anything with a hook. For other cleanup (unlocking, logging, closing a C

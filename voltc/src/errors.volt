@@ -199,6 +199,13 @@ attach fn opt_parts(this: checker&, opt: u32, c: u32) -> opt_split {
         val has = this.ir.binary(binop_ir::NE, c, this.ir.node(ir_kind::NULLPTR, opt), BOOL);
         return { has: has, value: c };
     }
+    val nf = this.niche_field(inner);
+    if (nf) {
+        // the owning struct itself: present when its pointer isn't null
+        val ft = this.field_ty(inner, nf);
+        val has = this.ir.binary(binop_ir::NE, this.ir.field(c, nf, ft), this.ir.node(ir_kind::NULLPTR, ft), BOOL);
+        return { has: has, value: c };
+    }
     return { has: this.ir.field(c, 1, BOOL), value: this.ir.field(c, 0, inner) };
 }
 

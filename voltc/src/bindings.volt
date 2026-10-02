@@ -149,7 +149,7 @@ attach fn shape_of(this: bind&, t: u32) -> shape? {
                 .FN_PTR(ps, r, va) => { return this.shape_of(x); },
                 default => {},
             }
-            if (this.c.t.is_niche(x)) {
+            if (this.c.niche(x)) {
                 return this.no_form(t);
             }
             this.inner(x) ?? return null;

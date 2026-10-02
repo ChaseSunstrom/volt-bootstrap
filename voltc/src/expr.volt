@@ -87,7 +87,7 @@ attach fn narrow_recheck(this: checker&, l: local&) -> bool {
         return true;
     }
     val inner = this.t.opt_inner(l.orig_ty) ?? return false;
-    return this.t.is_niche(inner);
+    return this.niche(inner);
 }
 
 // a local as a value. A narrowed pointer re-checks for null on each read in debug builds (a null
@@ -107,7 +107,11 @@ attach fn local_val(this: checker&, l: local&, span: span) -> tval {
     val q = this.tmp_local("nq", pt);
     var stmts: std::vec<u32> = {};
     put(&stmts, this.ir.decl(q.id, this.ir.addr(l.c, pt)));
-    val cur = this.ir.deref(q.c, l.ty);
+    var cur = this.ir.deref(q.c, l.ty);
+    val nf = this.niche_field(l.ty);
+    if (nf) {
+        cur = this.ir.field(cur, nf, this.field_ty(l.ty, nf)); // a box is null when its pointer is
+    }
     put(&stmts, this.null_check(cur, span));
     v.c = this.ir.deref(this.ir.seq(move stmts, q.c, pt), l.ty);
     return v;
@@ -182,7 +186,7 @@ attach fn never_as(this: checker&, v: tval, to: u32) -> tval {
 // v wrapped in optional type opt (for a niche optional, like a pointer's, that's v itself)
 attach fn some(this: checker&, v: tval, opt: u32) -> tval {
     val inner = this.t.opt_inner(opt) ?? VOID;
-    if (this.t.is_niche(inner)) {
+    if (this.niche(inner)) {
         var r = v;
         r.ty = opt;
         return r;
@@ -202,6 +206,9 @@ attach fn none(this: checker&, opt: u32) -> tval {
     val inner = this.t.opt_inner(opt) ?? VOID;
     if (this.t.is_niche(inner)) {
         return vpure(opt, this.ir.node(ir_kind::NULLPTR, opt));
+    }
+    if (this.niche_field(inner) != null) {
+        return vpure(opt, this.ir.zero(opt)); // the owning pointer null
     }
     var inits: std::vec<field_init> = {};
     put(&inits, { field: 1, value: this.ir.boolean(false) });

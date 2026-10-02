@@ -201,7 +201,10 @@ impl Checker {
             }
             Ty::Opt(t) => {
                 let d = self.drop_fn(t)?;
-                body.push_str(&format!("if (p->has) {d}(&p->v); "));
+                match self.niche_field(t) {
+                    Some(f) => body.push_str(&format!("if (p->{f}) {d}(p); ")),
+                    None => body.push_str(&format!("if (p->has) {d}(&p->v); ")),
+                }
             }
             Ty::ErrUnion(e, t) => {
                 let code = self.eu_code(ty, "(*p)");
@@ -299,7 +302,10 @@ impl Checker {
                 Ty::Opt(t) => {
                     if self.needs_drop(t)? {
                         let f = self.copy_fn(t, span)?;
-                        body.push_str(&format!("if (p->has) r.v = {f}(&p->v); "));
+                        match self.niche_field(t) {
+                            Some(n) => body.push_str(&format!("if (p->{n}) r = {f}(p); ")),
+                            None => body.push_str(&format!("if (p->has) r.v = {f}(&p->v); ")),
+                        }
                     }
                 }
                 Ty::ErrUnion(e, t) => {

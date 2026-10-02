@@ -89,6 +89,7 @@ pub struct StructInfo {
     pub fields: Option<Rc<Vec<FieldInfo>>>,
     pub resolving: bool,
     pub owns: Option<(String, TyId)>, // @owns("field"): an owning pointer to TyId through that field
+    pub niche: bool, // @owns and every other field takes no space: an optional of it is the struct, null meaning none
 }
 
 #[derive(Clone)]
@@ -959,7 +960,7 @@ impl Checker {
         let gps = self.decls[use_decl].item.generics.clone();
         let env = self.inst_env(dns, &gps, &binds);
         let id = self.structs.len() as u32;
-        self.structs.push(StructInfo { decl: use_decl, family: decl, args: args.clone(), env: env.clone(), name, c_name, fields: None, resolving: false, owns: None });
+        self.structs.push(StructInfo { decl: use_decl, family: decl, args: args.clone(), env: env.clone(), name, c_name, fields: None, resolving: false, owns: None, niche: false });
         self.struct_ids.insert((decl, args), id);
         // @attributes([@owns("ptr")]): the struct owns what field `ptr: T*` points at (like std's box):
         // it's used like that T&, and deleting it deletes the T first. Nothing here knows std
@@ -975,8 +976,55 @@ impl Checker {
             let fty = self.resolve_type(&f.ty, &env)?;
             let (Ty::Ref(inner) | Ty::Ptr(inner)) = self.t.get(fty).clone() else { return err(f.span, "an @owns field has to be a pointer (T*)") };
             self.structs[id as usize].owns = Some((f.name.clone(), inner));
+            // box<T> with the default allocator is just its pointer, which a live box never has null:
+            // T? can be the box itself, null meaning none (like Rust's Option<Box<T>>)
+            let mut niche = true;
+            for g in sd.fields.iter().filter(|g| g.name != f.name) {
+                let gt = self.resolve_type(&g.ty, &env)?;
+                niche = niche && self.takes_no_space(gt, g.span)?;
+            }
+            self.structs[id as usize].niche = niche;
         }
         Ok(self.t.intern(Ty::Struct(id)))
+    }
+
+    /// whether a value of t is zero bytes (an empty struct, like the default allocator)
+    pub fn takes_no_space(&mut self, t: TyId, span: Span) -> Res<bool> {
+        Ok(match self.t.get(t).clone() {
+            Ty::Void => true,
+            Ty::Array(e, n) => n == 0 || self.takes_no_space(e, span)?,
+            Ty::Tuple(ts, _) => {
+                let mut all = true;
+                for e in ts {
+                    all = all && self.takes_no_space(e, span)?;
+                }
+                all
+            }
+            Ty::Struct(s) if !self.header_struct(s) => {
+                let mut all = true;
+                for f in self.struct_fields(s, span)?.iter() {
+                    all = all && self.takes_no_space(f.ty, span)?;
+                }
+                all
+            }
+            _ => false,
+        })
+    }
+
+    /// the field whose null marks an optional of t empty: an @owns struct's pointer, when that's all
+    /// it holds (box<T> with the default allocator)
+    pub fn niche_field(&self, t: TyId) -> Option<String> {
+        let Ty::Struct(s) = self.t.get(t) else { return None };
+        let info = &self.structs[*s as usize];
+        if !info.niche {
+            return None;
+        }
+        info.owns.as_ref().map(|o| cty::c_field(&o.0))
+    }
+
+    /// is an optional of t just t (a pointer-like one, or an owning struct's pointer), with none as null?
+    pub fn niche(&self, t: TyId) -> bool {
+        self.t.is_niche(t) || self.niche_field(t).is_some()
     }
 
     /// a partial specialization (struct holder<T&>) whose pattern matches these args, if any

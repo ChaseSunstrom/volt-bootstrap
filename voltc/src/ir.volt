@@ -187,7 +187,12 @@ attach fn field_count(this: checker&, t: u32) -> usize {
         },
         .TRAIT_UNION(u) => { return this.ui(u).members.len + 1; },
         .FRAME(f) => { return this.frame_of(f).fields.len + 3; },
-        .OPT(x) => { return 2; },
+        .OPT(x) => {
+            if (this.niche_field(x) != null) {
+                return this.field_count(x); // the owning struct itself
+            }
+            return 2;
+        },
         .SLICE(x) => { return 2; },
         .STR => { return 2; },
         .RANGE(x) => { return 2; },
@@ -207,6 +212,9 @@ attach fn field_ty(this: checker&, agg: u32, i: u32) -> u32 {
         .TUPLE(ts, names) => { return *ts.at(@cast<usize>(i)); },
         .CLOSURE(c) => { return this.ci(c).caps.at(@cast<usize>(i)).ty; },
         .OPT(x) => {
+            if (this.niche_field(x) != null) {
+                return this.field_ty(x, i);
+            }
             if (i == 0) {
                 return x;
             }

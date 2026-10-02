@@ -322,6 +322,30 @@ attach fn struct_inst(this: checker&, d: u32, args: std::vec<gval>, span: span) 
                 }
                 this.si(id).owns_field = f.name;
                 this.si(id).owns_ty = inner ?? return fails(f.span, "an @owns field has to be a pointer (T*)");
+                // box<T> with the default allocator is just its pointer, which a live box never has
+                // null: T? can be the box itself, null meaning none (like Rust's Option<Box<T>>)
+                var niche = true;
+                var at: u32 = 0;
+                var i: u32 = 0;
+                match (this.item_of(use_decl).kind) {
+                    .STRUCT(u) => {
+                        for (g&) in u.fields.items() {
+                            if (g.name == f.name) {
+                                at = i;
+                            } else {
+                                val gt = try this.resolve_type(&g.ty, env);
+                                if (!(try this.takes_no_space(gt, g.span))) {
+                                    niche = false;
+                                }
+                            }
+                            i += 1;
+                        }
+                    },
+                    default => {},
+                }
+                if (niche) {
+                    this.si(id).niche = at;
+                }
                 break;
             },
             default => {},
@@ -467,6 +491,50 @@ fn unwrap_binds(binds: std::vec<gval?>&) -> std::vec<gval> {
 }
 
 // a struct instance's fields, resolved on first use; fails if the struct contains itself by value
+// whether a value of t is zero bytes (an empty struct, like the default allocator)
+attach fn takes_no_space(this: checker&, t: u32, span: span) -> compile_error!bool {
+    var parts: std::vec<u32> = {};
+    match (*this.t.get(t)) {
+        .VOID => { return true; },
+        .ARRAY(e, n) => {
+            if (n == 0) {
+                return true;
+            }
+            put(&parts, e);
+        },
+        .TUPLE(ts, names) => { parts = copy ts; },
+        .STRUCT(s) => {
+            if (this.header_struct(s)) {
+                return false;
+            }
+            for (f&) in (try this.struct_fields(s, span)).items() {
+                put(&parts, f.ty);
+            }
+        },
+        default => { return false; },
+    }
+    for (p) in parts.items() {
+        if (!(try this.takes_no_space(p, span))) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// the field whose null marks an optional of t empty: an @owns struct's pointer, when that's all it
+// holds (box<T> with the default allocator)
+attach fn niche_field(this: checker&, t: u32) -> u32? {
+    match (*this.t.get(t)) {
+        .STRUCT(s) => { return this.si(s).niche; },
+        default => { return null; },
+    }
+}
+
+// is an optional of t just t (a pointer-like one, or an owning struct's pointer), with none as null?
+attach fn niche(this: checker&, t: u32) -> bool {
+    return this.t.is_niche(t) || this.niche_field(t) != null;
+}
+
 attach fn struct_fields(this: checker&, sid: u32, span: span) -> compile_error!(std::vec<field_info>&) {
     val info = this.si(sid);
     if (info.has_fields) {

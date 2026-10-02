@@ -2454,6 +2454,9 @@ attach fn layout(this: checker&, t: u32, span: span) -> compile_error!lay {
             if (this.t.is_niche(i)) {
                 return { size: 8, align: 8 };
             }
+            if (this.niche_field(i) != null) {
+                return this.layout(i, span);
+            }
             val xs = nodes2(i, BOOL);
             return this.layout_rec(&xs, span);
         },

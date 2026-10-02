@@ -239,7 +239,7 @@ impl Checker {
             Ty::Ptr(_) | Ty::VoidPtr => format!("{{ void* _pp = (void*)({c}); if (_pp) volt_out(VOLT_E, \"%p\", _pp); else volt_out(VOLT_E, \"null\"); }} "),
             Ty::FnVal(..) | Ty::Closure(_) => "volt_out(VOLT_E, \"<fn>\"); ".into(),
             Ty::Opt(inner) => {
-                let (test, val) = if self.t.is_niche(inner) { (c.to_string(), c.to_string()) } else { (format!("({c}).has"), format!("({c}).v")) };
+                let (test, val) = if self.t.is_niche(inner) { (c.to_string(), c.to_string()) } else { self.opt_parts(ty, c) };
                 let inner_code = self.print_code(&val, inner, span)?;
                 format!("if ({test}) {{ {inner_code}}} else volt_out(VOLT_E, \"null\"); ")
             }
