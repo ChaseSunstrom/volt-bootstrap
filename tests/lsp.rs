@@ -98,7 +98,9 @@ impl Server {
         self.send(&format!("{{\"jsonrpc\":\"2.0\",\"id\":{id},\"method\":\"{method}\",\"params\":{params}}}"));
         loop {
             let m = self.recv();
-            if m.contains(&format!("\"id\":{id}")) && !m.contains("\"method\"") {
+            // a response has a result or an error; a request or notification has a method (which a
+            // result can also spell: the semantic token legend has "method")
+            if m.contains(&format!("\"id\":{id}")) && (m.contains("\"result\"") || m.contains("\"error\"")) {
                 return m;
             }
         }
@@ -257,12 +259,161 @@ fn scripted_session() {
     let d = s.diagnostics_for(&geo_uri);
     assert!(d.contains("\"diagnostics\":[]"), "geo's own file: {d}");
 
+    inline_features(&mut s);
+
     let r = s.request("shutdown", "null");
     assert!(r.contains("\"result\":null"), "{r}");
     s.notify("exit", "null");
     let st = s.child.wait().unwrap();
     assert!(st.success(), "the server exited with {st}");
     let _ = std::fs::remove_dir_all(&s.dir);
+}
+
+/// what the server shows inline (lsp_inline.volt), on a program of its own
+const INLINE: &str = "use std::io;
+
+trait t_shape {
+    fn area(this) -> f64;
+}
+
+struct circle {
+    r: f64;
+}
+
+enum color {
+    RED,
+    GREEN: i32,
+}
+
+attach t_shape -> circle {
+    fn area(this) -> f64 {
+        return 3.0 * this.r * this.r;
+    }
+}
+
+attach fn grow(this: circle&, by: f64) -> void {
+    this.r += by;
+}
+
+<T: t_shape>
+fn report(s: T&, scale: f64) -> f64 {
+    return s.area() * scale;
+}
+
+fn main() -> void {
+    var c: circle = { r: 1.0 };
+    val k = color::GREEN(2);
+    val doubled = report(&c, 2.0);
+    c.grow(1.0);
+    std::println(\"{} {}\", doubled, @sizeof(circle));
+}
+";
+
+fn inline_features(s: &mut Server) {
+    let uri = format!("file://{}/inline.volt", s.dir.display());
+    let doc = format!("{{\"uri\":\"{uri}\"}}");
+    s.notify("textDocument/didOpen", &format!("{{\"textDocument\":{{\"uri\":\"{uri}\",\"languageId\":\"volt\",\"version\":1,\"text\":{}}}}}", js(INLINE)));
+    let d = s.diagnostics_for(&uri);
+    assert!(d.contains("\"diagnostics\":[]"), "inline.volt: {d}");
+
+    // semantic tokens: what each name is (the legend's order: lsp_inline.volt)
+    let types = ["namespace", "type", "struct", "enum", "interface", "typeParameter", "parameter", "variable", "property", "enumMember", "function", "method", "macro"];
+    let mods = ["declaration", "readonly", "defaultLibrary"];
+    let r = s.request("textDocument/semanticTokens/full", &doc_param(&doc));
+    let lines: Vec<&str> = INLINE.lines().collect();
+    let (mut line, mut col, mut got) = (0usize, 0usize, Vec::new());
+    for t in numbers(&r, "\"data\":[").chunks(5) {
+        line += t[0];
+        col = if t[0] == 0 { col + t[1] } else { t[1] };
+        let ms: Vec<&str> = (0..mods.len()).filter(|b| t[4] >> b & 1 == 1).map(|b| mods[b]).collect();
+        got.push(format!("{} {} {}", &lines[line][col..col + t[2]], types[t[3]], ms.join(" ")).trim_end().to_string());
+    }
+    for want in ["std namespace", "io namespace", "t_shape interface declaration", "t_shape interface", "circle struct declaration", "r property declaration", "GREEN enumMember declaration", "GREEN enumMember", "T typeParameter declaration", "T typeParameter", "report function declaration", "grow method declaration", "grow method", "s parameter declaration readonly", "c variable declaration", "k variable declaration readonly", "println function defaultLibrary", "@sizeof macro", "area method"] {
+        assert!(got.iter().any(|g| g == want), "semantic tokens lack `{want}`: {got:?}");
+    }
+
+    // inlay hints: the types of locals that don't write one, the parameters arguments are for
+    // (not for one-letter parameters, nor where the argument names it already)
+    let range = "\"range\":{\"start\":{\"line\":0,\"character\":0},\"end\":{\"line\":40,\"character\":0}}";
+    let h = s.request("textDocument/inlayHint", &format!("{{\"textDocument\":{doc},{range}}}"));
+    for want in ["\"label\":\": color\"", "\"label\":\": f64\"", "\"label\":\"scale:\"", "\"label\":\"by:\""] {
+        assert!(h.contains(want), "inlay hints lack {want}: {h}");
+    }
+    for unwanted in ["\"label\":\": circle\"", "\"label\":\"s:\""] {
+        assert!(!h.contains(unwanted), "inlay hints have {unwanted}: {h}");
+    }
+
+    let at = |line: u32, ch: u32| format!("{{\"textDocument\":{doc},\"position\":{{\"line\":{line},\"character\":{ch}}}}}");
+    // highlights: the field r where it's declared and everywhere it's used
+    let h = s.request("textDocument/documentHighlight", &at(7, 5));
+    for line in [7, 17, 22, 31] {
+        assert!(h.contains(&format!("\"start\":{{\"line\":{line},")), "highlight of r lacks line {line}: {h}");
+    }
+
+    // rename: grow where it's declared and called; not a std fn, not to a keyword
+    let r = s.request("textDocument/prepareRename", &at(21, 11));
+    assert!(r.contains("\"placeholder\":\"grow\""), "prepareRename grow: {r}");
+    let r = s.request("textDocument/rename", &format!("{{\"textDocument\":{doc},\"position\":{{\"line\":21,\"character\":11}},\"newName\":\"enlarge\"}}"));
+    assert!(r.contains("\"newText\":\"enlarge\"") && r.contains("\"line\":21,") && r.contains("\"line\":34,"), "rename grow: {r}");
+    let r = s.request("textDocument/prepareRename", &at(35, 10));
+    assert!(r.contains("\"result\":null"), "prepareRename println: {r}");
+    let r = s.request("textDocument/rename", &format!("{{\"textDocument\":{doc},\"position\":{{\"line\":21,\"character\":11}},\"newName\":\"fn\"}}"));
+    assert!(r.contains("\"error\"") && r.contains("isn't a name"), "rename to a keyword: {r}");
+
+    // hover on a type: its fields, then what's attached to it, grouped by trait; a trait's attachers
+    let h = s.request("textDocument/hover", &at(31, 12));
+    assert!(h.contains("struct circle {\\n    r: f64;\\n}\\n// t_shape\\nfn area(this) -> f64\\n// attached\\nattach fn grow(this: circle&, by: f64) -> void"), "hover circle: {h}");
+    let h = s.request("textDocument/hover", &at(2, 8));
+    assert!(h.contains("// attached by\\ncircle"), "hover t_shape: {h}");
+
+    // code lenses: references above fns, attached fns and traits above types, attachers above a
+    // trait, Run above main
+    let l = s.request("textDocument/codeLens", &doc_param(&doc));
+    for want in ["attached fns", "t_shape", "1 type attaches it", "1 reference", "volt.showLocations", "\"command\":\"volt.run\""] {
+        assert!(l.contains(want), "code lenses lack {want}: {l}");
+    }
+
+    // quick fixes: diagnostics carry their fixes as data, and codeAction turns them into edits
+    let fix_uri = format!("file://{}/fixes.volt", s.dir.display());
+    let fix_src = "fn bump(r: i32&) -> void {\n    *r += 1;\n}\n\nfn main() -> void {\n    val x = 0;\n    bump(&x);\n    var y = 0;\n    y + 1;\n}\n";
+    s.notify("textDocument/didOpen", &format!("{{\"textDocument\":{{\"uri\":\"{fix_uri}\",\"languageId\":\"volt\",\"version\":1,\"text\":{}}}}}", js(fix_src)));
+    let d = s.diagnostics_for(&fix_uri);
+    assert!(d.contains("\"fixes\":[") && d.contains("declare 'x' with var"), "fixes in diagnostics: {d}");
+    let key = "\"diagnostics\":";
+    let diags = &d[d.find(key).unwrap() + key.len()..d.len() - 2];
+    let a = s.request("textDocument/codeAction", &format!("{{\"textDocument\":{{\"uri\":\"{fix_uri}\"}},\"range\":{{\"start\":{{\"line\":0,\"character\":0}},\"end\":{{\"line\":0,\"character\":0}}}},\"context\":{{\"diagnostics\":{diags}}}}}"));
+    assert!(a.contains("\"kind\":\"quickfix\"") && a.contains("\"newText\":\"var\"") && a.contains("\"start\":{\"line\":5,\"character\":4}"), "codeAction val -> var: {a}");
+
+    // a closure parameter's type, the end of a long block; and nothing from an older check: when the
+    // text no longer parses, tokens and hints say ContentModified and rename refuses
+    let long_uri = format!("file://{}/long.volt", s.dir.display());
+    let mut long_src = String::from("fn apply(f: fn(i32) -> i32, x: i32) -> i32 {\n    return f(x);\n}\n\nfn main() -> void {\n    val r0 = apply(|| (n) -> i32 { return n * 2; }, 3);\n");
+    for i in 0..25 {
+        long_src.push_str(&format!("    val v{i} = r0 + {i};\n"));
+    }
+    long_src.push_str("}\n");
+    let long_doc = format!("{{\"uri\":\"{long_uri}\"}}");
+    s.notify("textDocument/didOpen", &format!("{{\"textDocument\":{{\"uri\":\"{long_uri}\",\"languageId\":\"volt\",\"version\":1,\"text\":{}}}}}", js(&long_src)));
+    let d = s.diagnostics_for(&long_uri);
+    assert!(d.contains("\"diagnostics\":[]"), "long.volt: {d}");
+    let h = s.request("textDocument/inlayHint", &format!("{{\"textDocument\":{long_doc},{range}}}"));
+    assert!(h.contains("\"position\":{\"line\":5,\"character\":24},\"label\":\": i32\"") && h.contains("\"label\":\"fn main\""), "closure parameter and closing brace hints: {h}");
+    s.notify("textDocument/didChange", &format!("{{\"textDocument\":{{\"uri\":\"{long_uri}\",\"version\":2}},\"contentChanges\":[{{\"text\":{}}}]}}", js(&format!("\n\n{long_src}fn broken( {{\n"))));
+    let t = s.request("textDocument/semanticTokens/full", &doc_param(&long_doc));
+    assert!(t.contains("-32801"), "tokens for changed text: {t}");
+    let r = s.request("textDocument/rename", &format!("{{\"textDocument\":{long_doc},\"position\":{{\"line\":2,\"character\":4}},\"newName\":\"run\"}}"));
+    assert!(r.contains("\"error\"") && r.contains("fix them, then rename"), "rename on changed text: {r}");
+
+    // folding: blocks (the closing brace stays in view)
+    let f = s.request("textDocument/foldingRange", &doc_param(&doc));
+    assert!(f.contains("\"startLine\":30,\"endLine\":35") && f.contains("\"startLine\":2,\"endLine\":3"), "folding: {f}");
+}
+
+/// the numbers in the JSON array that starts after `key`
+fn numbers(json: &str, key: &str) -> Vec<usize> {
+    let start = json.find(key).unwrap_or_else(|| panic!("no {key} in {json}")) + key.len();
+    let end = start + json[start..].find(']').unwrap();
+    json[start..end].split(',').filter(|x| !x.is_empty()).map(|x| x.trim().parse().unwrap()).collect()
 }
 
 fn doc_param(doc: &str) -> String {

@@ -261,7 +261,7 @@ attach fn check_lends(this: checker&) -> void {
         if (pname.len() > 0) {
             thru = fmt(" (through {})", move pname);
         }
-        val e = fail(l.at, fmt4("'{}' is {}, and {} changes it{}: declare it with var", S(l.root), S(what), move fname, move thru));
+        val e = this.var_fix(fail(l.at, fmt4("'{}' is {}, and {} changes it{}: declare it with var", S(l.root), S(what), move fname, move thru)), l.root, l.at);
         put(&this.errors, err_diag(&e));
     }
     this.lends.clear();

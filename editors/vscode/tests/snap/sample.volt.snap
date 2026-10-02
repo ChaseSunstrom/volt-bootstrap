@@ -59,9 +59,13 @@
 >
 >attach shape -> circle {
 #^^^^^^ source.volt keyword.other.volt
-#      ^^^^^^^ source.volt
+#      ^ source.volt
+#       ^^^^^ source.volt entity.name.type.trait.volt
+#            ^ source.volt
 #             ^^ source.volt keyword.operator.volt
-#               ^^^^^^^^^^ source.volt
+#               ^ source.volt
+#                ^^^^^^ source.volt entity.name.type.volt
+#                      ^^^ source.volt
 >    fn area(this: circle&) -> f64 { return 3.14159 * this.r * this.r; }
 #^^^^ source.volt
 #    ^^ source.volt storage.type.function.volt
@@ -124,24 +128,30 @@
 #                                   ^ source.volt string.quoted.double.volt
 #                                    ^^^^ source.volt
 ><T: type, N: usize>
-#^ source.volt keyword.operator.volt
-# ^^^ source.volt
+#^ source.volt punctuation.definition.generic.begin.volt
+# ^ source.volt entity.name.type.parameter.volt
+#  ^^ source.volt
 #    ^^^^ source.volt support.type.primitive.volt
-#        ^ source.volt punctuation.separator.volt
-#         ^^^^ source.volt
+#        ^^ source.volt
+#          ^ source.volt entity.name.type.parameter.volt
+#           ^^ source.volt
 #             ^^^^^ source.volt support.type.primitive.volt
-#                  ^ source.volt keyword.operator.volt
+#                  ^^ source.volt punctuation.definition.generic.end.volt
 >fn sum(xs: T[N]) -> T {
 #^^ source.volt storage.type.function.volt
 #  ^ source.volt
 #   ^^^ source.volt entity.name.function.volt
 #      ^^^^^^^^^^^ source.volt
 #                 ^^ source.volt keyword.operator.volt
-#                   ^^^^^ source.volt
+#                   ^ source.volt
+#                    ^ source.volt entity.name.type.volt
+#                     ^^^ source.volt
 >    var s: T = 0;
 #^^^^ source.volt
 #    ^^^ source.volt storage.type.volt
-#       ^^^^^^ source.volt
+#       ^^^^ source.volt
+#           ^ source.volt entity.name.type.volt
+#            ^ source.volt
 #             ^ source.volt keyword.operator.volt
 #              ^ source.volt
 #               ^ source.volt constant.numeric.integer.volt
@@ -254,7 +264,9 @@
 >    val shapes: circle[2] = { { r: 2.0 }, {} };
 #^^^^ source.volt
 #    ^^^ source.volt storage.type.volt
-#       ^^^^^^^^^^^^^^^^ source.volt
+#       ^^^^^^^^^ source.volt
+#                ^^^^^^ source.volt entity.name.type.volt
+#                      ^ source.volt
 #                       ^ source.volt constant.numeric.integer.volt
 #                        ^^ source.volt
 #                          ^ source.volt keyword.operator.volt

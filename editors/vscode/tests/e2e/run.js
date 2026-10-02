@@ -21,6 +21,9 @@ async function main() {
   fs.chmodSync(path.join(bin, "voltc"), 0o755);
   fs.writeFileSync(path.join(ws, "bad.volt"), 'fn main() -> void {\n    val x: i32 = "text";\n}\n');
   fs.writeFileSync(path.join(ws, "good.volt"), 'use std::io;\n\nfn add(a: i32, b: i32) -> i32 {\n    return a + b;\n}\n\nfn main() -> void {\n    val total = add(1, 2);\n    std::println("{}", total);\n}\n');
+  // the editor reads a login shell's environment (PATH included) at startup: with a HOME of its own
+  // no shell profile adds a voltc, so the one found is the workspace checkout's
+  process.env.HOME = fs.mkdtempSync(path.join(os.tmpdir(), "volt-e2e-home-"));
   // PATH without voltc's directory, as a desktop launcher would give it
   const PATH = (process.env.PATH ?? "").split(path.delimiter).filter((d) => !fs.existsSync(path.join(d, "voltc"))).join(path.delimiter);
   await runTests({

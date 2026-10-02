@@ -44,3 +44,29 @@ namespace geometry::shapes {
 // <--------- storage.type.volt
 //        ^^^^^^^^ entity.name.namespace.volt
 }
+
+// types where the grammar can tell without the server: after ->, in val x: T, attach headers,
+// generic parameter lists, and names with generic arguments
+fn origin() -> point {
+//             ^^^^^ entity.name.type.volt
+    val p: point = { x: 0, y: 0 };
+//         ^^^^^ entity.name.type.volt
+    var names: std::vec<i32> = {};
+//                  ^^^ entity.name.type.volt
+    return p;
+}
+
+attach t_shape -> circle {
+// <------ keyword.other.volt
+//     ^^^^^^^ entity.name.type.trait.volt
+//                ^^^^^^ entity.name.type.volt
+}
+
+<T: t_shape, N: usize>
+// <- punctuation.definition.generic.begin.volt
+// <~- entity.name.type.parameter.volt
+//  ^^^^^^^ entity.name.type.volt
+//           ^ entity.name.type.parameter.volt
+//              ^^^^^ support.type.primitive.volt
+fn report(s: T&) -> void {
+}

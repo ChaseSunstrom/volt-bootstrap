@@ -2,9 +2,18 @@
 
 Language support for [Volt](https://github.com/ChaseSunstrom/volt-bootstrap):
 
-- **Highlighting** for `.volt` files (the TextMate grammar in `syntaxes/`, which the website uses too)
+- **Highlighting** for `.volt` files (the TextMate grammar in `syntaxes/`, which the website uses too),
+  refined by the server's **semantic tokens**: types, generic parameters, traits, namespaces,
+  methods, fields, enum variants and `val`s each colored by what they are
 - **Diagnostics** as you type, from the compiler itself (`voltc lsp`)
-- **Hover** shows a name's type or a function's declaration
+- **Hover** shows a name's type or a function's declaration; on a type, its fields and every fn
+  attached to it, grouped by trait
+- **Inlay hints**: the types of locals and closure parameters that don't write one, parameter names
+  at calls, what a long block closes
+- **Code lenses**: references above functions, the fns and traits attached to a type, **Run** above
+  `main`
+- **Highlights**, **rename**, **folding** and **quick fixes** (`val` → `var`, `+` → `+=`, a
+  `var` that isn't needed, misspelled names)
 - **Go to definition** and **find references**
 - **Outline** of a file's declarations
 - **Completion**: fields and methods after `x.`, a namespace's names after `std::`, locals and keywords
@@ -39,8 +48,12 @@ In a bolt package, a file under `src/` is checked together with the other files 
 | `volt.serverPath` | `voltc` | the voltc that runs `voltc lsp` |
 | `volt.stdPath` | (empty) | the std package to check against |
 | `volt.boltPath` | `bolt` | the bolt that runs tasks |
+| `volt.inlayHints.types` | `true` | the type of a local that doesn't write one |
+| `volt.inlayHints.parameters` | `true` | which parameter each call argument is for |
+| `volt.inlayHints.closingBraces` | `true` | what a block of 25 lines or more closes, after its `}` |
 
-**Volt: Restart Language Server** restarts it (after rebuilding voltc, say).
+**Volt: Restart Language Server** restarts it (after rebuilding voltc, say). **Volt: Run This
+Program** runs the open file, as the **Run** lens above `main` does.
 
 ## Other editors
 

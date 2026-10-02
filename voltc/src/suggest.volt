@@ -176,7 +176,12 @@ attach fn unknown(this: checker&, span: span, what: str, ns: u32, p: path&, loca
     val e = fail(span, fmt2("unknown {} '{}'", S(what), S(missing)));
     val c = closest(missing, &cands);
     if (c) {
-        return with_help(move e, fmt("did you mean '{}'?", S(c)));
+        val helped = with_help(move e, fmt("did you mean '{}'?", S(c)));
+        if (!this.opts.lsp) {
+            return helped;
+        }
+        val at = this.lsp_word(span, missing, true) ?? span;
+        return with_fix(helped, fmt("change to '{}'", S(c)), at, S(c));
     }
     return move e;
 }
@@ -186,7 +191,12 @@ attach fn no_field(this: checker&, span: span, t: u32, name: str, fields: std::v
     val e = fail(span, fmt2("{} has no field '{}'", this.ty_name(t), S(name)));
     val c = closest(name, fields);
     if (c) {
-        return with_help(move e, fmt("did you mean '{}'?", S(c)));
+        val helped = with_help(move e, fmt("did you mean '{}'?", S(c)));
+        if (!this.opts.lsp) {
+            return helped;
+        }
+        val at = this.lsp_word(span, name, true) ?? span;
+        return with_fix(helped, fmt("change to '{}'", S(c)), at, S(c));
     }
     return move e;
 }

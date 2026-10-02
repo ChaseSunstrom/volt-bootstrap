@@ -565,7 +565,11 @@ attach fn assign(this: checker&, op: binop?, le: expr&, re: expr&, span: span) -
         if (l.rop) {
             return fails(le.span, "can't assign through this; it reaches a val (or a parameter without var)");
         }
-        return fails(le.span, "can't assign to this; it's immutable (val, or a parameter without var)");
+        var e = fails(le.span, "can't assign to this; it's immutable (val, or a parameter without var)");
+        if (l.own != null && l.root != null) {
+            e = this.var_fix(move e, l.root ?? "", le.span);
+        }
+        return move e;
     }
     this.note_write(&l);
     this.note_mut(&l);

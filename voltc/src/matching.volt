@@ -397,6 +397,9 @@ attach fn ctor_pat(this: checker&, path: ctor_path&, args: std::vec<pat>*, c: u3
         return fail(span, fmt2("this is a {} variant, but the value is a {}", this.ty_name(ety), this.ty_name(t)));
     }
     val idx = this.variant_index(eid, name) ?? return fail(span, fmt2("{} has no variant {}", this.ty_name(ety), S(name)));
+    if (this.opts.lsp) {
+        this.lsp_variant_use(eid, idx, span);
+    }
     val value = *this.ei(eid).values.at(idx);
     val tagt = int_id(this.ei(eid).tag);
     var tag_expr = c;

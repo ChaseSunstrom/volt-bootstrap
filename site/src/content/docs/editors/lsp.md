@@ -14,14 +14,25 @@ is exactly what `voltc check` would.
 | | |
 | --- | --- |
 | Diagnostics | errors and warnings, updated as the text changes |
-| Hover | a local's or field's type, a function's declaration, what a type name is |
+| Hover | a local's or field's type, a function's declaration; on a type, its fields or variants and every fn attached to it, grouped by the trait it's attached for (with the trait's generic arguments); on a trait, its fns and the types that attach it |
 | Go to definition | functions, methods, fields (in a struct literal too), locals, parameters, globals, types, into std and dependencies too |
 | References | every use of a function, field, local or global |
 | Document symbols | the outline: functions, structs with their fields, enums with their variants, traits, namespaces |
 | Completion | after `x.`, `x`'s fields and methods; after `a::`, what `a` declares; otherwise locals, the program's names and keywords |
 | Signature help | the declaration of the function being called, and which argument you're on |
+| Semantic tokens | what every name is, so a theme colors it by meaning: namespaces, structs, enums, traits, generic parameters, functions, methods, parameters, variables (a `val` is read-only), fields, enum variants, `@builtins`; std's names are marked as the default library |
+| Inlay hints | the type of a `val`/`var`, a `for`/`match` binding or a closure parameter that doesn't write one; the parameter each call argument is for (not for one-letter parameters, nor where the argument already says it); what a block of 25 lines or more closes (`fn main`), after its `}` |
+| Code lenses | references above a function; above a type, how many fns are attached to it and for which traits; above a trait, the types that attach it; Run above `main` |
+| Highlights | the name under the cursor, where it's declared and used |
+| Rename | a function, type, field, local, parameter or global, in every file of the program (not std's names) |
+| Quick fixes | `declare it with var` (a `val` lent to a function that changes it, or assigned), `did you mean +=` for a statement whose value is never used, dropping a `var` a parameter doesn't need, and did-you-mean names and fields |
+| Folding | blocks, runs of comments and of `use` lines |
 
 ## What it checks
+
+Inlay hints, semantic tokens, code lenses, highlights, rename and quick fixes come from the last
+check, so while the text doesn't parse they wait for it to: the editor keeps what it showed, adjusted
+to the edits, and rename asks for the errors to be fixed first.
 
 Every change re-checks the whole program: std, plus the document. When the file is under a bolt
 package's `src/`, the other `.volt` files there are part of the program too. The package's

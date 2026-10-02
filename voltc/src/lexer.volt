@@ -36,6 +36,14 @@ struct diag {
     labels: std::vec<label> = {};
     notes: std::vec<std::string> = {};
     diff: bool = false; // a type mismatch (expected A, found B): colour shows where A and B differ
+    fixes: std::vec<fix> = {}; // edits that fix it (the language server's quick fixes)
+}
+
+// replace span with text: a quick fix
+struct fix {
+    title: std::string;
+    span: span;
+    text: std::string;
 }
 
 // the error every compiler phase returns: parsing stops at the first, checking at the first in each

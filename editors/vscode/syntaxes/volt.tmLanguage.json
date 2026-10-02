@@ -9,6 +9,7 @@
     { "include": "#chars" },
     { "include": "#builtins" },
     { "include": "#declarations" },
+    { "include": "#typecontexts" },
     { "include": "#keywords" },
     { "include": "#types" },
     { "include": "#constants" },
@@ -68,6 +69,98 @@
           "captures": {
             "1": { "name": "storage.type.volt" },
             "2": { "name": "entity.name.namespace.volt" }
+          }
+        }
+      ]
+    },
+    "typecontexts": {
+      "comment": "where a name is a type without asking the server (semantic tokens refine it): after ->, in `val x: T`, an attach block's header, a generic parameter list, and a name with generic arguments",
+      "patterns": [
+        {
+          "match": "(->)\\s*(?!(?:i8|i16|i32|i64|i128|isize|u8|u16|u32|u64|u128|usize|f16|f32|f64|f128|bool|str|cstr|void|never|type)\\b)([A-Za-z_][A-Za-z0-9_]*(?:::[A-Za-z_][A-Za-z0-9_]*)*)",
+          "captures": {
+            "1": {
+              "name": "keyword.operator.volt"
+            },
+            "2": {
+              "name": "entity.name.type.volt"
+            }
+          }
+        },
+        {
+          "match": "\\b(val|var)\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*(:)\\s*(?!(?:i8|i16|i32|i64|i128|isize|u8|u16|u32|u64|u128|usize|f16|f32|f64|f128|bool|str|cstr|void|never|type)\\b)([A-Za-z_][A-Za-z0-9_]*(?:::[A-Za-z_][A-Za-z0-9_]*)*)",
+          "captures": {
+            "1": {
+              "name": "storage.type.volt"
+            },
+            "4": {
+              "name": "entity.name.type.volt"
+            }
+          }
+        },
+        {
+          "match": "\\b(attach)\\s+(?!fn\\b)(?:([A-Za-z_][A-Za-z0-9_]*(?:::[A-Za-z_][A-Za-z0-9_]*)*)\\s*(?:<[^>]*>)?\\s*)?(->)\\s*(?!(?:i8|i16|i32|i64|i128|isize|u8|u16|u32|u64|u128|usize|f16|f32|f64|f128|bool|str|cstr|void|never|type)\\b)([A-Za-z_][A-Za-z0-9_]*(?:::[A-Za-z_][A-Za-z0-9_]*)*)",
+          "captures": {
+            "1": {
+              "name": "keyword.other.volt"
+            },
+            "2": {
+              "name": "entity.name.type.trait.volt"
+            },
+            "3": {
+              "name": "keyword.operator.volt"
+            },
+            "4": {
+              "name": "entity.name.type.volt"
+            }
+          }
+        },
+        {
+          "begin": "^\\s*(<)(?=[^<>]*(?:<[^<>]*>[^<>]*)*>\\s*$)",
+          "end": ">\\s*$",
+          "beginCaptures": {
+            "1": {
+              "name": "punctuation.definition.generic.begin.volt"
+            }
+          },
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.definition.generic.end.volt"
+            }
+          },
+          "patterns": [
+            {
+              "match": "\\b([A-Za-z_][A-Za-z0-9_]*)(\\.\\.\\.)?\\s*(?=:)",
+              "captures": {
+                "1": {
+                  "name": "entity.name.type.parameter.volt"
+                },
+                "2": {
+                  "name": "keyword.operator.volt"
+                }
+              }
+            },
+            {
+              "include": "#types"
+            },
+            {
+              "include": "#numbers"
+            },
+            {
+              "include": "#strings"
+            },
+            {
+              "match": "\\b[A-Za-z_][A-Za-z0-9_]*(?:::[A-Za-z_][A-Za-z0-9_]*)*",
+              "name": "entity.name.type.volt"
+            }
+          ]
+        },
+        {
+          "match": "\\b([A-Za-z_][A-Za-z0-9_]*)(?=<[A-Za-z0-9_:&*\\[\\].?]+(?:,\\s?[A-Za-z0-9_:&*\\[\\].?]+)*>(?!\\s*\\())",
+          "captures": {
+            "1": {
+              "name": "entity.name.type.volt"
+            }
           }
         }
       ]

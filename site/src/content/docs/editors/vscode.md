@@ -7,9 +7,14 @@ sidebar:
 
 The extension in `editors/vscode` gives VS Code:
 
-- highlighting for `.volt` files, and the file icon;
+- highlighting for `.volt` files, and the file icon, refined by the server's semantic tokens: types,
+  generic parameters, traits, namespaces, methods, fields, enum variants and `val`s each by meaning;
 - diagnostics as you type, hover, go to definition, find references, the outline, completion and
   signature help, from `voltc lsp`;
+- inlay hints (the types of locals and closure parameters that don't write one, parameter names at
+  calls, what a long block closes), code lenses
+  (references, the fns and traits attached to a type, **Run** above `main`), highlights, rename,
+  folding and quick fixes (see [the language server](/volt-bootstrap/editors/lsp/));
 - snippets (`main`, `fn`, `attach`, `struct`, `enum`, `error`, `match`, `for`, `usec`...);
 - bolt tasks (check, build, build --release, run, test, clean) in folders with a `bolt.toml`, and
   the `$volt` problem matcher, which links voltc's errors to the code.
@@ -41,8 +46,15 @@ overrides that.
 | `volt.serverPath` | `voltc` | the voltc that runs the language server |
 | `volt.stdPath` | (empty) | the std package to check against |
 | `volt.boltPath` | `bolt` | the bolt that runs tasks |
+| `volt.inlayHints.types` | `true` | the type of a local that doesn't write one |
+| `volt.inlayHints.parameters` | `true` | which parameter each call argument is for |
+| `volt.inlayHints.closingBraces` | `true` | what a block of 25 lines or more closes, after its `}` |
+
+VS Code's own `editor.inlayHints.enabled` turns every inlay hint on or off.
 
 **Volt: Restart Language Server** restarts the server, after rebuilding voltc for example.
+**Volt: Run This Program** runs the open file (`bolt run` in a bolt package, else `voltc run`), as
+the **Run** lens above `main` does.
 
 ## Tasks
 
@@ -72,5 +84,6 @@ deliberate grammar change, `npx vscode-tmgrammar-snap -u 'tests/snap/*.volt'` up
 
 `VOLTC=/path/to/voltc npm run test:e2e` runs the extension in a real VS Code (downloaded into
 `.vscode-test/` the first time; under `xvfb-run` without a display). voltc is only in a checkout
-inside the test's workspace, not on `PATH`, and the test waits for an error in a broken file,
-completion after `std::` and a hover.
+inside the test's workspace, not on `PATH` (the editor gets a `HOME` of its own, so no shell profile
+adds one), and the test waits for an error in a broken file, completion after `std::`, a hover,
+semantic tokens, an inlay hint and the code lenses.

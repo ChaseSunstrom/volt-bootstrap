@@ -175,6 +175,9 @@ attach fn bound_trait(this: checker&, t: ty&, ns: u32) -> trait_ref? {
                                 if (last.args) {
                                     args = &last.args;
                                 }
+                                if (this.opts.lsp) {
+                                    this.lsp_decl_use(*d, last.name, p.span, this.lsp_type_label(*d, last.name));
+                                }
                                 return { decl: *d, args: args };
                             },
                             default => {},
@@ -1408,6 +1411,9 @@ attach fn emit_call(this: checker&, inst: u32, a: adj, rv: tval?, pre: std::vec<
             }
             val tv = try this.take_into(v, p.ty, args.at(i).span);
             this.note_arg(body_key(BODY_FN, inst), i + offset, &tv, args.at(i).span);
+            if (this.opts.lsp) {
+                put(&this.lsp_args, { at: args.at(i).span, name: p.name });
+            }
             put(&vals, tv);
         }
         i += 1;

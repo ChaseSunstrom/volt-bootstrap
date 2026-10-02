@@ -214,6 +214,9 @@ attach fn tag_const(this: checker&, eid: u32, idx: usize) -> u32 {
 // build variant idx of enum t from optional payload args
 attach fn make_variant(this: checker&, t: u32, idx: usize, args: std::vec<expr>*, span: span) -> compile_error!tval {
     val eid = this.enum_of(t) ?? return fails(span, "not an enum");
+    if (this.opts.lsp) {
+        this.lsp_variant_use(eid, idx, span);
+    }
     val pt = *(try this.enum_payloads(eid, span)).at(idx);
     val info = this.ei(eid);
     val vname = *info.names.at(idx);

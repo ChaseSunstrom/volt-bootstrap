@@ -190,6 +190,9 @@ attach fn closure_body(this: checker&, cl: closure&, inner: std::vec<cap_inner>&
         val t = *ptys.at(i);
         val c = this.ir.node(ir_kind::LOCAL(@cast<u32>(i) + 1), t);
         var l: local = { c: c, ty: t, mutable: p.mutable, root: p.name, param: true, own: c };
+        if (this.opts.lsp) {
+            this.lsp_add_local(c, p.name, t, this.name_span(p.span, p.name), p.mutable, true);
+        }
         if (this.reaches(t)) {
             val rv: reach = { k: @cast<u32>(i), off: 0 };
             l.via = rv;

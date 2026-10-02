@@ -14,6 +14,9 @@ struct lsp_ref {
     at: span;
     def: span;
     label: std::string;
+    kind: u8 = 255; // what it is, for semantic tokens (LK_*, lsp_inline.volt); 255: none
+    mods: u32 = 0;  // LM_* (readonly for a val)
+    decl: u32? = null; // a declared type's decl (hover lists what's attached to it)
 }
 
 // a local variable or parameter: its place, name, type and where it's declared
@@ -22,30 +25,36 @@ struct lsp_local {
     name: str;
     ty: u32;
     def: span;
+    mutable: bool = false;
+    param: bool = false;
+    generic: bool = false; // in an instance of a generic fn: its type is one instance's
 }
 
-attach fn lsp_add_local(this: checker&, c: u32, name: str, ty: u32, def: span) -> void {
+attach fn lsp_add_local(this: checker&, c: u32, name: str, ty: u32, def: span, mutable: bool, param: bool) -> void {
     this.lsp_local_idx.put(c, this.lsp_locals.len);
-    put(&this.lsp_locals, { c: c, name: name, ty: ty, def: def });
+    val generic = this.env_at(this.cx.env).generics.len > 0;
+    put(&this.lsp_locals, { c: c, name: name, ty: ty, def: def, mutable: mutable, param: param, generic: generic });
 }
 
 // parameter `name` of fn decl d, bound to place c
 attach fn lsp_param(this: checker&, d: u32, name: str, c: u32, ty: u32) -> void {
     var def = this.item_of(d).span;
     val f = this.fn_decl_of(d) ?? return;
+    var mutable = false;
     for (p&) in f.params.items() {
         if (p.name == name) {
             def = p.span;
+            mutable = p.mutable;
         }
     }
-    this.lsp_add_local(c, name, ty, this.name_span(def, name));
+    this.lsp_add_local(c, name, ty, this.name_span(def, name), mutable, true);
 }
 
 // local c used at span
 attach fn lsp_local_use(this: checker&, c: u32, name: str, ty: u32, span: span) -> void {
     val i = this.lsp_local_idx.get(c) ?? return;
-    val def = this.lsp_locals.at(*i).def;
-    put(&this.lsp_refs, { at: span, def: def, label: fmt2("{}: {}", S(name), this.ty_name(ty)) });
+    val l = this.lsp_locals.at(*i);
+    put(&this.lsp_refs, { at: span, def: l.def, label: fmt2("{}: {}", S(name), this.ty_name(ty)), kind: local_kind(l), mods: local_mods(l) });
 }
 
 // a use of fn decl d (instance inst, when there is one) somewhere in span: a call, or d as a value
@@ -62,7 +71,13 @@ attach fn lsp_fn_use(this: checker&, d: u32, inst: u32?, span: span) -> void {
     if (kw) {
         def.lo = kw.hi;
     }
-    put(&this.lsp_refs, { at: at, def: this.name_span(def, f.name), label: move label });
+    var kind = LK_FUNCTION;
+    for (p&) in f.params.items() {
+        if (p.name == "this") {
+            kind = LK_METHOD;
+        }
+    }
+    put(&this.lsp_refs, { at: at, def: this.name_span(def, f.name), label: move label, kind: kind });
 }
 
 // field `name` (of type ty) of struct instance sid, used at the end of span (x.name)
@@ -79,13 +94,28 @@ attach fn lsp_field_use(this: checker&, sid: u32, name: str, ty: u32, span: span
         },
         default => {},
     }
-    put(&this.lsp_refs, { at: at, def: def, label: fmt2("{}: {}", S(name), this.ty_name(ty)) });
+    put(&this.lsp_refs, { at: at, def: def, kind: LK_PROPERTY, label: fmt2("{}: {}", S(name), this.ty_name(ty)) });
 }
 
 // decl d (a global), named `name` at the end of span
 attach fn lsp_decl_use(this: checker&, d: u32, name: str, span: span, label: std::string) -> void {
     val at = this.lsp_word(span, name, true) ?? return;
-    put(&this.lsp_refs, { at: at, def: this.name_span(this.item_of(d).span, name), label: move label });
+    var kind = LK_TYPE;
+    var mods: u32 = 0;
+    match (this.item_of(d).kind) {
+        .STRUCT(s) => { kind = LK_STRUCT; },
+        .ENUM(e) => { kind = LK_ENUM; },
+        .TRAIT(n, fs) => { kind = LK_INTERFACE; },
+        .GLOBAL(l&) => {
+            kind = LK_VARIABLE;
+            if (!l.mutable) {
+                mods = LM_READONLY;
+            }
+        },
+        .FN(f) => { kind = LK_FUNCTION; },
+        default => {},
+    }
+    put(&this.lsp_refs, { at: at, def: this.name_span(this.item_of(d).span, name), label: move label, kind: kind, mods: mods, decl: d });
 }
 
 // what hover says about a type: struct point, enum color, error parse_error, trait t_shape
@@ -553,6 +583,9 @@ struct lsp_doc {
 
 struct lsp_server {
     std_dir: std::string? = null;
+    hint_types: bool = true;  // inlay hints the client asked for (initializationOptions)
+    hint_params: bool = true;
+    hint_braces: bool = true;
     docs: std::vec<lsp_doc> = {};
     down: bool = false; // shutdown was asked for: exit is expected
     bolt: std::vec<bolt_libs> = {}; // per bolt package root
@@ -805,6 +838,7 @@ fn lsp_capabilities() -> std::json::value {
     var sig = std::json::object();
     sig.set("triggerCharacters", move sig_trig);
     caps.set("signatureHelpProvider", move sig);
+    lsp_inline_capabilities(&caps);
     var info = std::json::object();
     info.set("name", std::json::string("voltc"));
     var r = std::json::object();
@@ -874,6 +908,7 @@ attach fn handle(this: lsp_server&, msg: std::json::value&) -> bool {
     if (method == "exit") {
         return true;
     } else if (method == "initialize") {
+        this.read_options(params.get("initializationOptions"));
         lsp_reply(id, lsp_capabilities());
     } else if (method == "shutdown") {
         this.down = true;
@@ -915,6 +950,8 @@ attach fn handle(this: lsp_server&, msg: std::json::value&) -> bool {
         lsp_reply(id, this.complete(params));
     } else if (method == "textDocument/signatureHelp") {
         lsp_reply(id, this.signature(params));
+    } else if (this.inline_request(method, id, params)) {
+        // lsp_inline.volt answered it
     } else if (!id.is_null()) {
         var err = std::json::object();
         err.set("code", std::json::number(-32601.0));
@@ -959,6 +996,11 @@ attach fn update(this: lsp_server&, i: usize) -> void {
             m.append(n.as_str());
         }
         o.set("message", std::json::string(m.as_str()));
+        if (d.fixes.len > 0) {
+            var data = std::json::object();
+            data.set("fixes", fixes_json(doc, d));
+            o.set("data", move data);
+        }
         list.add(move o);
     }
     var p = std::json::object();
@@ -1157,6 +1199,9 @@ attach fn hover(this: lsp_server&, params: std::json::value&) -> std::json::valu
     val r = ref_at(c, doc.file, at);
     if (r) {
         label = copy r->label;
+        if (r->decl != null && (r->kind == LK_STRUCT || r->kind == LK_ENUM || r->kind == LK_INTERFACE)) {
+            label = c.type_hover(r->decl ?? 0);
+        }
     } else {
         // a local declared here and never used
         for (l&) in c.lsp_locals.items() {

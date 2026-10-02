@@ -1,7 +1,7 @@
 {
   "name": "volt-lang",
   "displayName": "Volt",
-  "description": "Volt language support: highlighting, diagnostics, hover, go to definition, references, completion and bolt tasks",
+  "description": "Volt language support: semantic highlighting, inlay hints, code lenses, diagnostics with quick fixes, hover, go to definition, references, rename, completion and bolt tasks",
   "version": "0.1.0",
   "publisher": "volt-lang",
   "license": "(MIT OR Apache-2.0)",
@@ -78,6 +78,21 @@
           "type": "string",
           "default": "bolt",
           "description": "The bolt that runs build, run, test and check tasks."
+        },
+        "volt.inlayHints.types": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show the type of a val/var (or for/match binding) that doesn't write one."
+        },
+        "volt.inlayHints.parameters": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show which parameter each call argument is for (not for one-letter parameters, nor where the argument names it already)."
+        },
+        "volt.inlayHints.closingBraces": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show what a long block (25 lines or more) closes after its }: fn main, struct point..."
         }
       }
     },
@@ -85,6 +100,10 @@
       {
         "command": "volt.restartServer",
         "title": "Volt: Restart Language Server"
+      },
+      {
+        "command": "volt.run",
+        "title": "Volt: Run This Program"
       }
     ],
     "taskDefinitions": [

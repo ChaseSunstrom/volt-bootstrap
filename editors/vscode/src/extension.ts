@@ -1,5 +1,7 @@
 // The Volt extension: starts the language server (`voltc lsp`) for .volt files, and offers bolt's
 // commands as tasks (with a problem matcher for voltc's errors) in folders that hold a bolt.toml.
+// The server's code lenses call two commands from here: volt.showLocations (references, attached
+// fns, the types that attach a trait) and volt.run (Run above main).
 // voltc and bolt are found where a terminal would find them (see find.ts), and the status bar
 // says whether the server is running.
 import * as fs from "fs";
@@ -56,6 +58,13 @@ async function startServer(): Promise<void> {
   const options: LanguageClientOptions = {
     documentSelector: [{ scheme: "file", language: "volt" }],
     outputChannelName: "Volt Language Server",
+    initializationOptions: {
+      inlayHints: {
+        types: settings().get<boolean>("inlayHints.types", true),
+        parameters: settings().get<boolean>("inlayHints.parameters", true),
+        closingBraces: settings().get<boolean>("inlayHints.closingBraces", true),
+      },
+    },
   };
   client = new LanguageClient("volt", "Volt", server, options);
   try {
@@ -116,6 +125,38 @@ class BoltTasks implements vscode.TaskProvider {
   }
 }
 
+// the folder holding the bolt.toml above file, if any
+function packageDir(file: string): string | undefined {
+  for (let dir = path.dirname(file); ; dir = path.dirname(dir)) {
+    if (fs.existsSync(path.join(dir, "bolt.toml"))) {
+      return dir;
+    }
+    if (path.dirname(dir) === dir) {
+      return undefined;
+    }
+  }
+}
+
+/** Run above main: `bolt run` in its package, else `voltc run FILE` */
+async function run(uri: string): Promise<void> {
+  const file = vscode.Uri.parse(uri).fsPath;
+  const pkg = packageDir(file);
+  const exec = pkg
+    ? new vscode.ProcessExecution(locate("bolt")?.path ?? "bolt", ["run"], { cwd: pkg })
+    : new vscode.ProcessExecution(locate("voltc")?.path ?? "voltc", ["run", file], { cwd: path.dirname(file) });
+  const scope = vscode.workspace.getWorkspaceFolder(vscode.Uri.file(file)) ?? vscode.TaskScope.Workspace;
+  const task = new vscode.Task({ type: "bolt", command: "run" }, scope, `run ${path.basename(pkg ?? file)}`, "volt", exec, ["$volt"]);
+  await vscode.tasks.executeTask(task);
+}
+
+type Pos = { line: number; character: number };
+/** a code lens's locations, shown the way references are (the server sends them as LSP JSON) */
+function showLocations(uri: string, at: Pos, locs: { uri: string; range: { start: Pos; end: Pos } }[]): Thenable<unknown> {
+  const pos = (p: Pos) => new vscode.Position(p.line, p.character);
+  const list = locs.map((l) => new vscode.Location(vscode.Uri.parse(l.uri), new vscode.Range(pos(l.range.start), pos(l.range.end))));
+  return vscode.commands.executeCommand("editor.action.showReferences", vscode.Uri.parse(uri), pos(at), list);
+}
+
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 0);
   status.command = "volt.restartServer";
@@ -126,8 +167,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       await stopServer();
       await startServer();
     }),
+    vscode.commands.registerCommand("volt.showLocations", showLocations),
+    vscode.commands.registerCommand("volt.run", async (uri?: string) => {
+      const u = uri ?? vscode.window.activeTextEditor?.document.uri.toString();
+      if (u) {
+        await run(u);
+      }
+    }),
     vscode.workspace.onDidChangeConfiguration(async (e) => {
-      if (e.affectsConfiguration("volt.serverPath") || e.affectsConfiguration("volt.stdPath") || e.affectsConfiguration("volt.boltPath")) {
+      if (["serverPath", "stdPath", "boltPath", "inlayHints"].some((k) => e.affectsConfiguration(`volt.${k}`))) {
         await stopServer();
         await startServer();
       }

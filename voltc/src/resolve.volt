@@ -112,7 +112,12 @@ attach fn resolve_type_path(this: checker&, p: path&, e: u32) -> compile_error!u
         val g = this.env_generic(e, name);
         if (g) {
             match (g) {
-                .TY(t) => { return t; },
+                .TY(t) => {
+                    if (this.opts.lsp) {
+                        this.lsp_tparam_use(name, p.span, t);
+                    }
+                    return t;
+                },
                 .PACK(l) => {
                     if (this.list(l).len == 0) {
                         return VOID;

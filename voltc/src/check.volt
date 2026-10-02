@@ -434,6 +434,7 @@ struct checker {
     lsp_at: span = {}; // the statement declaring the next local (its name is written in it)
     lsp_refs: std::vec<lsp_ref> = {};
     lsp_locals: std::vec<lsp_local> = {};
+    lsp_args: std::vec<lsp_arg> = {}; // call arguments and the parameters they're for (inlay hints)
     lsp_local_idx: std::map<u32, usize> = {}; // place -> its lsp_locals entry
 }
 
@@ -737,6 +738,9 @@ attach fn lookup_path_ns(this: checker&, ns: u32, p: path&) -> found? {
         var next: found? = null;
         match (f) {
             .NS(n) => {
+                if (this.opts.lsp) {
+                    this.lsp_ns_use(p.segs.at(i - 1).name, p.span);
+                }
                 next = this.ns_member(n, seg, i + 1 < p.segs.len);
                 if (next == null && i == 1) {
                     next = this.via_uses(ns, p.segs.at(0).name, seg);

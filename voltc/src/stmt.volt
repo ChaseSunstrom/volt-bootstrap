@@ -29,7 +29,7 @@ attach fn new_local(this: checker&, name: str, t: u32, mutable: bool) -> u32 {
     val loops = this.loops_around();
     this.scope_top().vars.put(name, { c: c, ty: t, mutable: mutable, loops: loops, root: name, own: c });
     if (this.opts.lsp) {
-        this.lsp_add_local(c, name, t, this.name_span(this.lsp_at, name));
+        this.lsp_add_local(c, name, t, this.name_span(this.lsp_at, name), mutable, false);
     }
     return c;
 }
@@ -126,7 +126,7 @@ fn is_break_value(e: expr&) -> bool {
 attach fn expr_stmt(this: checker&, e: expr&) -> compile_error!code {
     val v = try this.expr(e, null);
     if (v.ty != VOID && v.ty != NEVER && no_effects(e)) {
-        return fail(e.span, unused_value(e));
+        return this.op_fix(fail(e.span, unused_value(e)), e);
     }
     val never = v.ty == NEVER;
     return { c: try this.discard(v), div: never };
@@ -1196,7 +1196,18 @@ attach fn warn_var_params(this: checker&) -> void {
     });
     for (s&) in this.var_seen.items() {
         if (!s.changed) {
-            put(&this.warnings, { span: s.at, msg: fmt("'{}' doesn't need var: the function never changes it", S(s.name)), warning: true });
+            var d: diag = { span: s.at, msg: fmt("'{}' doesn't need var: the function never changes it", S(s.name)), warning: true };
+            // `var name`: the var and the space after it go
+            val text = this.files.at(@cast<usize>(s.at.file)).text;
+            var hi = @cast<usize>(s.at.lo);
+            if (this.opts.lsp && hi + 3 <= text.len && text[hi..hi + 3] == "var") {
+                hi += 3;
+                while (hi < text.len && (text[hi] == ' ' || text[hi] == '\t')) {
+                    hi += 1;
+                }
+                put(&d.fixes, { title: S("drop the var"), span: { file: s.at.file, lo: s.at.lo, hi: @cast<u32>(hi) }, text: {} });
+            }
+            put(&this.warnings, move d);
         }
     }
     this.var_seen.clear();
