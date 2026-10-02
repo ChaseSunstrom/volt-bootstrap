@@ -925,6 +925,12 @@ fn sort_dedup(v: std::vec<u32>&) -> void {
 // ---------- names ----------
 
 // a type as it's written in Volt, for messages and instance names
+// @typeid(T): the FNV-1a hash of the type's canonical name, so it's the same in every build,
+// library and compiler
+attach fn type_id(this: checker&, t: u32) -> u64 {
+    return std::digest::fnv1a(this.ty_name(t).as_str());
+}
+
 attach fn ty_name(this: checker&, id: u32) -> std::string {
     var s: std::string = {};
     this.put_ty(&s, id);

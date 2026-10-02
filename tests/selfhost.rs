@@ -144,6 +144,7 @@ fn release_voltc_works() {
     assert!(o.status.success(), "release voltc lib std: {}", String::from_utf8_lossy(&o.stderr));
     let mut runs: Vec<(PathBuf, &str)> = std::fs::read_dir(root.join("tests/run")).unwrap().map(|e| (e.unwrap().path(), "c")).collect();
     runs.push((root.join("tests/run/temp_lifetimes.volt"), "llvm"));
+    runs.push((root.join("tests/run/typeid.volt"), "llvm"));
     let mut bad = Vec::new();
     for (file, backend) in &runs {
         let text = std::fs::read_to_string(file).unwrap();

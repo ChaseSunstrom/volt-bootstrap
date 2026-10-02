@@ -135,6 +135,63 @@ fn main() -> void {
 
 `@compile_error("message")` fails compilation when it's reached, for custom checks in templates.
 
+## Type ids: @typeid
+
+`@typeid(T)` is a `u64` naming a type: the 64-bit FNV-1a hash of its canonical name (the
+`canonical_name` `@typeinfo` gives). It's worked out by the compiler, so it costs nothing at run
+time, and because it comes from the name it's the same in every build, in every library and from
+either compiler. Use it as a map key, or in tables built at compile time.
+
+`@typeid(x)` of a value is its type's id, without running `x`. For a trait value, or a reference
+to one, it's the id of the type the value holds, read from its tag: what C++'s `typeid` gives for an
+object with virtual functions, with no type information stored in the program.
+
+`@typeinfo` of a trait used as a type lists every type that attaches it, so a `comptime for` can
+fill a registry with all of them:
+
+```volt
+use std::io;
+
+trait t_shape {
+    fn area(this) -> f64;
+}
+
+struct circle { r: f64; }
+struct square { side: f64; }
+
+attach t_shape -> circle {
+    fn area(this) -> f64 { return 3.0 * this.r * this.r; }
+}
+
+attach t_shape -> square {
+    fn area(this) -> f64 { return this.side * this.side; }
+}
+
+fn main() -> void {
+    // one name per type that attaches t_shape, keyed by type id
+    var names: std::map<u64, str> = {};
+    comptime match (@typeinfo(t_shape).kind) {
+        .TRAIT_UNION(u) => {
+            comptime for (t) in u.1 {
+                names.put(@typeid(t), @typeinfo(t).short_name);
+            }
+        },
+        default => {},
+    }
+    val c: circle = { r: 1.0 };
+    val q: square = { side: 2.0 };
+    val shapes: t_shape[] = { c, q };
+    for (s&) in shapes {
+        std::print("{}:{} ", *names.get(@typeid(s)), s.area());
+    }
+    std::println("{}", @typeid(c) == @typeid(circle));
+}
+// expect: circle:3 square:4 true
+```
+
+Two different names could in principle hash to the same id; with 64 bits that's less than one chance in
+10^11 for a program with ten thousand types.
+
 ## Configuration: @cfg
 
 `@cfg("key")` is true when `--cfg key` (or `key=...`) was given; `@cfg("key", "value")` when

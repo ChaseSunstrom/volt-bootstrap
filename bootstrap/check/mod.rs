@@ -720,6 +720,12 @@ impl Checker {
 
     // ---------- types ----------
 
+    /// @typeid(T): the FNV-1a hash of the type's canonical name, so it's the same in every build,
+    /// library and compiler
+    pub fn type_id(&self, t: TyId) -> u64 {
+        self.ty_name(t).bytes().fold(0xcbf29ce484222325, |h, b| (h ^ b as u64).wrapping_mul(0x100000001b3))
+    }
+
     /// a type as it's written in Volt, for messages and instance names
     pub fn ty_name(&self, id: TyId) -> String {
         match self.t.get(id) {

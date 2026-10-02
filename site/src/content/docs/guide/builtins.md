@@ -15,6 +15,7 @@ Builtins start with `@`. They're part of the language, not a library.
 | `@offsetof(T, field)` | `usize` | a field's offset in its struct |
 | `@typeof(expr)` | `type` | an expression's type (comptime) |
 | `@typeinfo(T)` | typeinfo | a type's description (comptime): names, size, kind, fields... |
+| `@typeid(T)`, `@typeid(x)` | `u64` | a type's id, the same in every build; for a trait value, the id of the type it holds. See [Comptime](/volt-bootstrap/guide/comptime/#type-ids-typeid) |
 | `@panic("msg")` | `never` | stops the program with a message (exit code 101) |
 | `@compile_error("msg")` | `never` | fails compilation where it's reached |
 | `@cfg("key")`, `@cfg("key", "value")` | `bool` | a `--cfg` setting, the target's `os`, `arch` or `pointer_bits`, or `"release"` for a `--release` build (comptime) |

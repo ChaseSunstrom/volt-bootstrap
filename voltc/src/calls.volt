@@ -282,7 +282,7 @@ attach fn cast_scalar(this: checker&, t: u32) -> bool {
     }
 }
 
-// The @builtins that generate code: sizeof, alignof, offsetof, cast, write, slice, read, panic.
+// The @builtins that generate code: sizeof, alignof, offsetof, cast, write, slice, read, typeid, panic.
 // The compile-time ones (@typeinfo...) are evaluated by comptime instead.
 attach fn builtin(this: checker&, name: str, gargs: std::vec<garg>&, args_opt: std::vec<garg>*, want: u32?, span: span) -> compile_error!tval {
     var none: std::vec<garg> = {};
@@ -393,6 +393,67 @@ attach fn builtin(this: checker&, name: str, gargs: std::vec<garg>&, args_opt: s
         r.via = deeper(p.via, 1);
         r.root = p.root;
         return r;
+    }
+    if (name == "typeid") {
+        // @typeid(T), or @typeid(x): x's type's id, and for a trait value the id of the type it
+        // holds, read from its tag (C++'s typeid of a polymorphic object, without a vtable)
+        if (args.len != 1) {
+            return fail(span, fmt("@{} takes 1 argument(s)", S(name)));
+        }
+        val u64t = int_id(int_ty::U64);
+        var local = false;
+        val n = garg_name(args.at(0));
+        if (n) {
+            val c = this.const_local(n);
+            if (c) {
+                match (c) {
+                    .TYPE(t) => { return vpure(u64t, this.ir.int(@cast<i128>(this.type_id(t)), u64t)); },
+                    default => {},
+                }
+            }
+            local = this.lookup_local(n) != null;
+        }
+        if (!local) {
+            val t = this.garg_type(args.at(0)) catch |x| NO_TY;
+            if (t != NO_TY) {
+                return vpure(u64t, this.ir.int(@cast<i128>(this.type_id(t)), u64t));
+            }
+        }
+        val v = try this.garg_expr(args.at(0), null);
+        // a trait value, or a reference to one
+        var u: u32? = null;
+        var place = v.c;
+        match (*this.t.get(v.ty)) {
+            .TRAIT_UNION(x) => {
+                if (!v.lv && try this.needs_drop(v.ty)) {
+                    return fails(span, "@typeid of a temporary trait value that owns memory; give it a name first");
+                }
+                u = x;
+            },
+            .REF(r) => {
+                match (*this.t.get(r)) {
+                    .TRAIT_UNION(x) => {
+                        u = x;
+                        place = this.ir.deref(v.c, r);
+                    },
+                    default => {},
+                }
+            },
+            default => {},
+        }
+        val tu = u ?? return vpure(u64t, this.ir.int(@cast<i128>(this.type_id(v.ty)), u64t));
+        // tag == 0 ? id0 : tag == 1 ? id1 : ... idN
+        val members = copy this.ui(tu).members;
+        val u16t = int_id(int_ty::U16);
+        val tag = this.tmp_local("tag", u16t);
+        var r = this.ir.int(@cast<i128>(this.type_id(*members.at(members.len - 1))), u64t);
+        var i = members.len - 1;
+        while (i > 0) {
+            i -= 1;
+            val is = this.ir.binary(binop_ir::EQ, tag.c, this.ir.int(@cast<i128>(i), u16t), BOOL);
+            r = this.ir.node(ir_kind::COND(is, this.ir.int(@cast<i128>(this.type_id(*members.at(i))), u64t), r), u64t);
+        }
+        return vnew(u64t, this.ir.seq(nodes(this.ir.decl(tag.id, this.ir.field(place, 0, u16t))), r, u64t));
     }
     if (name == "panic") {
         if (args.len != 1) {

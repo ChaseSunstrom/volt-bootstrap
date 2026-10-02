@@ -204,7 +204,7 @@ impl Checker {
         }
     }
 
-    /// The @builtins that generate code: sizeof, alignof, offsetof, cast, write, slice, read, panic.
+    /// The @builtins that generate code: sizeof, alignof, offsetof, cast, write, slice, read, typeid, panic.
     /// The compile-time ones (@typeinfo...) are evaluated by comptime instead.
     pub(super) fn builtin(&mut self, name: &str, gargs: &[GenericArg], args: Option<&[GenericArg]>, want: Option<TyId>, span: Span) -> Res<Val> {
         let args = args.unwrap_or(&[]);
@@ -277,6 +277,41 @@ impl Checker {
                 let (Ty::Ref(t) | Ty::Ptr(t)) = self.t.get(p.ty).clone() else { return err(span, "@read(p) needs a T*") };
                 // what's read points where *p does
                 Ok(Val { ro: p.ro >> 1, via: lends::deeper(p.via, 1), root: p.root.clone(), ..Val::new(t, format!("(*({}))", p.c)) })
+            }
+            "typeid" => {
+                // @typeid(T), or @typeid(x): x's type's id, and for a trait value the id of the type it
+                // holds, read from its tag (C++'s typeid of a polymorphic object, without a vtable)
+                n_args(1)?;
+                let id = |c: &Checker, t: TyId| Val::pure(int(IntTy::U64), format!("((uint64_t){}ULL)", c.type_id(t)));
+                let local = match &args[0] {
+                    GenericArg::Type(Type { kind: TypeKind::Path(p), .. }) | GenericArg::Expr(Expr { kind: ExprKind::Path(p), .. }) if p.is_single() => {
+                        if let Some(comptime::CVal::Type(t)) = self.const_local(&p.segs[0].name) {
+                            return Ok(id(self, t));
+                        }
+                        self.lookup_local(&p.segs[0].name).is_some()
+                    }
+                    _ => false,
+                };
+                if !local {
+                    if let Ok(t) = self.garg_type(&args[0]) {
+                        return Ok(id(self, t));
+                    }
+                }
+                let v = self.garg_expr(&args[0], None)?;
+                // a trait value, or a reference to one
+                let (u, place) = match self.t.get(v.ty).clone() {
+                    Ty::TraitUnion(u) => (u, v.c.clone()),
+                    Ty::Ref(t) => match self.t.get(t).clone() {
+                        Ty::TraitUnion(u) => (u, format!("(*({}))", v.c)),
+                        _ => return Ok(id(self, v.ty)),
+                    },
+                    _ => return Ok(id(self, v.ty)),
+                };
+                if !v.lv && matches!(self.t.get(v.ty), Ty::TraitUnion(_)) && self.needs_drop(v.ty)? {
+                    return err(span, "@typeid of a temporary trait value that owns memory; give it a name first");
+                }
+                let ids: Vec<String> = self.unions[u as usize].members.iter().map(|m| format!("{}ULL", self.type_id(*m))).collect();
+                Ok(Val::new(int(IntTy::U64), format!("((const uint64_t[]){{{}}})[({place}).tag]", ids.join(", "))))
             }
             "panic" => {
                 n_args(1)?;

@@ -197,7 +197,8 @@ impl Checker {
                 Val::pure(ty, format!("(({c}){{ {} }})", inits.join(", ")))
             }
             CVal::Array(elems, et) => {
-                let et = if et == VOID { I32 } else { et };
+                // an untyped list: its first element's type when that has one (an untyped literal's doesn't), else i32
+                let et = if et == VOID { elems.first().map(|e| self.ct_type_of(e)).filter(|t| *t != VOID).unwrap_or(I32) } else { et };
                 let ty = self.t.intern(Ty::Array(et, elems.len() as u64));
                 let mut cs = Vec::new();
                 for e in elems {
@@ -1223,7 +1224,7 @@ impl Checker {
 
     // ---------- builtins ----------
 
-    /// @typeinfo, @typeof, @compile_error, @cfg, @sizeof, @alignof, @cast and @panic at compile time
+    /// @typeinfo, @typeid, @typeof, @compile_error, @cfg, @sizeof, @alignof, @cast and @panic at compile time
     fn ct_builtin(&mut self, name: &str, gargs: &[GenericArg], args: &[GenericArg], want: Option<TyId>, span: Span) -> CRes<CVal> {
         let env = self.frame().env.clone();
         let ty_arg = |c: &mut Self, g: &GenericArg| -> CRes<TyId> {
@@ -1250,6 +1251,18 @@ impl Checker {
                 let [g] = args else { return cerr(span, "@typeinfo(T) takes one type") };
                 let t = ty_arg(self, g)?;
                 Ok(self.typeinfo(t, span)?)
+            }
+            "typeid" => {
+                let [g] = args else { return cerr(span, "@typeid takes one type or value") };
+                let t = match ty_arg(self, g) {
+                    Ok(t) => t,
+                    // a compile-time value: its type's id
+                    Err(_) => {
+                        let v = self.ct_expr(&Self::garg_value(g)?, None)?;
+                        self.ct_type_of(&v)
+                    }
+                };
+                Ok(CVal::Int(self.type_id(t) as i128, int(IntTy::U64)))
             }
             "typeof" => {
                 let [g] = args else { return cerr(span, "@typeof(x) takes one value") };

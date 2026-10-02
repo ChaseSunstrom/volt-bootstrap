@@ -293,9 +293,13 @@ attach fn ct_to_val(this: checker&, v: cval, want: u32?, span: span) -> compile_
             return vpure(ty, this.ir.node(ir_kind::AGG(move inits), ty));
         },
         .ARRAY(es, et0) => {
+            // an untyped list: its first element's type when that has one (an untyped literal's doesn't), else i32
             var et = et0;
             if (et == VOID) {
                 et = I32;
+                if (es.len > 0 && this.ct_type_of(es.at(0)) != VOID) {
+                    et = this.ct_type_of(es.at(0));
+                }
             }
             val ty = this.t.intern(tyk::ARRAY(et, @cast<u64>(es.len)));
             var cs: std::vec<u32> = {};
@@ -2048,7 +2052,7 @@ fn cfg_matches(set: str, want: str, key_only: bool) -> bool {
     return set == want || (key_only && set.len > want.len && set[0..want.len] == want && set[want.len] == '=');
 }
 
-// @typeinfo, @typeof, @compile_error, @cfg, @sizeof, @alignof, @cast and @panic at compile time
+// @typeinfo, @typeid, @typeof, @compile_error, @cfg, @sizeof, @alignof, @cast and @panic at compile time
 attach fn ct_builtin(this: checker&, name: str, gargs: std::vec<garg>&, args: std::vec<garg>&, want: u32?, span: span) -> compile_error!cval {
     val env = this.ct_top().env;
     if (name == "typeinfo") {
@@ -2057,6 +2061,19 @@ attach fn ct_builtin(this: checker&, name: str, gargs: std::vec<garg>&, args: st
         }
         val t = try this.ct_ty_arg(args.at(0), env);
         return this.typeinfo(t, span);
+    }
+    if (name == "typeid") {
+        if (args.len != 1) {
+            return fails(span, "@typeid takes one type or value");
+        }
+        var t = this.ct_ty_arg(args.at(0), env) catch |x| NO_TY;
+        if (t == NO_TY) {
+            // a compile-time value: its type's id
+            val e = try this.garg_value(args.at(0));
+            val v = try this.ct_expr(e, null);
+            t = this.ct_type_of(&v);
+        }
+        return cval::INT(@cast<i128>(this.type_id(t)), int_id(int_ty::U64));
     }
     if (name == "typeof") {
         if (args.len != 1) {

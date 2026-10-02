@@ -108,6 +108,8 @@ Things to keep in mind:
 - The member list is closed when the program is compiled: a precompiled library can't add members to
   a trait union later.
 - Static functions (`static this`) can't be called through a union.
+- `@typeid(v)` of a trait value is the id of the type it holds, the same id `@typeid(circle)` gives;
+  see [type ids](/volt-bootstrap/guide/comptime/#type-ids-typeid).
 
 ## Generic trait functions and generic traits
 
