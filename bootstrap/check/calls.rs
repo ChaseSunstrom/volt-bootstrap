@@ -231,7 +231,10 @@ impl Checker {
                 n_args(1)?;
                 let [g] = gargs else { return err(span, "@cast<T>(x) needs one type") };
                 let to = self.garg_type(g)?;
-                let v = self.garg_expr(&args[0], None)?;
+                // a function's name cast to a pointer is its address (expr's fn-name case)
+                let e = Self::garg_value(&args[0])?;
+                let want = (matches!(e.kind, ExprKind::Path(_)) && matches!(self.t.get(to), Ty::VoidPtr | Ty::Ptr(_) | Ty::FnPtr(..))).then_some(to);
+                let v = self.expr(&e, want)?;
                 let c = self.cty(to);
                 // scalars convert as values; anything else is reinterpreted byte for byte
                 let scalar = |c: &Checker, t: TyId| matches!(c.t.get(t), Ty::Int(_) | Ty::Float(_) | Ty::Bool | Ty::Ref(_) | Ty::Ptr(_) | Ty::VoidPtr | Ty::CStr | Ty::FnPtr(..)) || (matches!(c.t.get(t), Ty::Opt(i) if c.t.is_niche(*i)));
@@ -241,6 +244,26 @@ impl Checker {
                     let fc = self.cty(v.ty);
                     Ok(Val::new(to, format!("({{ {fc} _v = {}; *({c}*)&_v; }})", v.c)))
                 }
+            }
+            "bitcast" => {
+                // the same bits read as another type of the same size: an f64's as a u64 and back.
+                // Plain data only: a box's or a string's bits copied would be owned twice
+                n_args(1)?;
+                let [g] = gargs else { return err(span, "@bitcast<T>(x) needs one type") };
+                let to = self.garg_type(g)?;
+                let v = self.garg_expr(&args[0], None)?;
+                for t in [v.ty, to] {
+                    if self.needs_drop(t)? {
+                        return err(span, format!("@bitcast takes plain data, not a {}", self.ty_name(t)));
+                    }
+                }
+                let (a, _) = self.layout(v.ty, span)?;
+                let (b, _) = self.layout(to, span)?;
+                if a != b {
+                    return err(span, format!("@bitcast needs types of one size: {} is {a} bytes, {} is {b}", self.ty_name(v.ty), self.ty_name(to)));
+                }
+                let (fc, tc) = (self.cty(v.ty), self.cty(to));
+                Ok(Val::new(to, format!("(((union {{ {fc} s; {tc} t; }}){{ .s = {} }}).t)", v.c)))
             }
             "write" => {
                 // store into memory without deleting what was there (it isn't a value yet)

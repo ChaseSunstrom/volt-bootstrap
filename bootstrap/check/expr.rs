@@ -469,8 +469,9 @@ impl Checker {
                             Ty::Opt(i) => *i,
                             _ => w,
                         });
-                        if matches!(want.map(|w| self.t.get(w).clone()), Some(Ty::FnPtr(..))) || inst.c_varargs {
-                            // extern "C" fn(...): a plain C function pointer
+                        // extern "C" fn(...), or a raw pointer (@cast<void*>(f)): a plain C function
+                        // pointer
+                        if matches!(want.map(|w| self.t.get(w).clone()), Some(Ty::FnPtr(..) | Ty::VoidPtr | Ty::Ptr(_))) || inst.c_varargs {
                             let ty = self.t.intern(Ty::FnPtr(ps, inst.ret, inst.c_varargs));
                             self.escape(Body::Fn(i), ty);
                             return Ok(Val::pure(ty, format!("(&{})", inst.c_name)));

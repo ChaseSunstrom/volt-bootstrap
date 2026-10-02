@@ -834,11 +834,14 @@ attach fn path_expr(this: checker&, p: path&, want: u32?, span: span) -> compile
                     if (w) {
                         match (*this.t.get(w)) {
                             .FN_PTR(a, b, c) => { wants_ptr = true; },
+                            .VOIDPTR => { wants_ptr = true; },
+                            .PTR(x) => { wants_ptr = true; },
                             default => {},
                         }
                     }
                     if (wants_ptr || va) {
-                        // extern "C" fn(...): a plain C function pointer
+                        // extern "C" fn(...), or a raw pointer (@cast<void*>(f)): a plain C function
+                        // pointer
                         val t = this.t.intern(tyk::FN_PTR(move ps, ret, va));
                         this.escape(body_key(BODY_FN, i), t);
                         return vpure(t, this.ir.node(ir_kind::FN(this.fi(i).ir), t));

@@ -331,11 +331,57 @@ attach fn builtin(this: checker&, name: str, gargs: std::vec<garg>&, args_opt: s
             return fails(span, "@cast<T>(x) needs one type");
         }
         val to = try this.garg_type(gargs.at(0));
-        val v = try this.garg_expr(args.at(0), null);
+        // a function's name cast to a pointer is its address (expr's fn-name case)
+        val e = try this.garg_value(args.at(0));
+        var want: u32? = null;
+        match (e.kind) {
+            .PATH(p) => {
+                match (*this.t.get(to)) {
+                    .VOIDPTR => { want = to; },
+                    .PTR(x) => { want = to; },
+                    .FN_PTR(a, b, c) => { want = to; },
+                    default => {},
+                }
+            },
+            default => {},
+        }
+        val v = try this.expr(e, want);
         if (this.cast_scalar(v.ty) && this.cast_scalar(to)) {
             var r = vnew(to, this.ir.conv(v.c, to));
             r.pure = v.pure;
             return r;
+        }
+        return vnew(to, this.ir.bitcast(v.c, to));
+    }
+    if (name == "bitcast") {
+        // the same bits read as another type of the same size: an f64's as a u64 and back. Plain
+        // data only: a box's or a string's bits copied would be owned twice
+        if (args.len != 1) {
+            return fail(span, fmt("@{} takes 1 argument(s)", S(name)));
+        }
+        if (gargs.len != 1) {
+            return fails(span, "@bitcast<T>(x) needs one type");
+        }
+        val to = try this.garg_type(gargs.at(0));
+        val v = try this.garg_expr(args.at(0), null);
+        if (try this.needs_drop(v.ty)) {
+            return fail(span, fmt("@bitcast takes plain data, not a {}", this.ty_name(v.ty)));
+        }
+        if (try this.needs_drop(to)) {
+            return fail(span, fmt("@bitcast takes plain data, not a {}", this.ty_name(to)));
+        }
+        val a = try this.layout(v.ty, span);
+        val b = try this.layout(to, span);
+        if (a.size != b.size) {
+            var m = S("@bitcast needs types of one size: ");
+            m.append(this.ty_name(v.ty).as_str());
+            m.append(" is ");
+            m.append_uint(a.size);
+            m.append(" bytes, ");
+            m.append(this.ty_name(to).as_str());
+            m.append(" is ");
+            m.append_uint(b.size);
+            return fail(span, move m);
         }
         return vnew(to, this.ir.bitcast(v.c, to));
     }

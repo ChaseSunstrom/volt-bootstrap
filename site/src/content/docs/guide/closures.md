@@ -145,6 +145,9 @@ fn main() -> void {
 // expect: { 1, 3, 5, 9 }
 ```
 
+`@cast<void*>(f)` (or to any pointer type) on a function's name is that C function's address too:
+for a C API that takes callbacks as `void*`, and it casts back to its `extern "C" fn` type.
+
 A generic function is a value once its generic arguments are given: `name<Args>` is that instance,
 as a `fn` value or as a C function pointer.
 
