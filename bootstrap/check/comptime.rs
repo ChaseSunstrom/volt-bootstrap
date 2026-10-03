@@ -41,6 +41,9 @@ impl From<Diag> for Ctl {
 
 type CRes<T> = Result<T, Ctl>;
 
+/// the most elements a { x; n } or {} makes at compile time (each is a value in memory)
+const CT_ARRAY_MAX: u64 = 1 << 20;
+
 fn cerr<T>(span: Span, msg: impl Into<String>) -> CRes<T> {
     Err(Ctl::Err(Diag::new(span, msg)))
 }
@@ -522,6 +525,34 @@ impl Checker {
                 Ok(CVal::Tuple(out))
             }
             ExprKind::Literal(entries) => self.ct_literal(entries, want, span),
+            ExprKind::Repeat(x, n) => {
+                // inside an optional: the array, present
+                if let Some(w) = want {
+                    if let Ty::Opt(inner) = self.t.get(w).clone() {
+                        let v = self.ct_expr(e, Some(inner))?;
+                        return Ok(CVal::Opt(w, Some(Box::new(v))));
+                    }
+                }
+                let count = match self.ct_expr(n, None)? {
+                    CVal::Int(c, _) if c >= 0 => c,
+                    _ => return cerr(n.span, "a repeat count is an integer, 0 or more"),
+                };
+                if count > CT_ARRAY_MAX as i128 {
+                    return cerr(span, format!("a repeat at compile time makes at most {CT_ARRAY_MAX} elements"));
+                }
+                let (et, v) = match want.map(|w| self.t.get(w).clone()) {
+                    Some(Ty::Array(et, len)) => {
+                        if count != len as i128 {
+                            return cerr(span, format!("this repeats {count} times but the array holds {len}"));
+                        }
+                        let v = self.ct_expr(x, Some(et))?;
+                        (et, self.ct_coerce(v, et, span)?)
+                    }
+                    None => (VOID, self.ct_expr(x, None)?), // untyped, as a { a, b } list is
+                    Some(_) => return cerr(span, "a { x; n } literal makes an array"),
+                };
+                Ok(CVal::Array(vec![v; count as usize], et))
+            }
             ExprKind::Field(b, name, _) => {
                 let bv = self.ct_expr(b, None)?;
                 self.ct_field(bv, name, span)
@@ -804,6 +835,36 @@ impl Checker {
         }
     }
 
+    /// the value a `var x: T;` starts with, at compile time (what `{}` makes for an array)
+    fn ct_zero(&mut self, t: TyId, span: Span) -> CRes<CVal> {
+        Ok(match self.t.get(t).clone() {
+            Ty::Int(_) => CVal::Int(0, t),
+            Ty::Float(_) => CVal::Float(0.0, t),
+            Ty::Bool => CVal::Bool(false),
+            Ty::Opt(_) => CVal::Opt(t, None),
+            Ty::Array(_, n) if n > CT_ARRAY_MAX => return cerr(span, format!("an array at compile time holds at most {CT_ARRAY_MAX} elements")),
+            Ty::Array(et, n) => CVal::Array(vec![self.ct_zero(et, span)?; n as usize], et),
+            Ty::Tuple(ts, _) => CVal::Tuple(ts.into_iter().map(|x| self.ct_zero(x, span)).collect::<CRes<_>>()?),
+            Ty::Struct(sid) if !self.header_struct(sid) => {
+                let fields = self.struct_fields(sid, span)?;
+                let mut out = Vec::new();
+                for f in fields.iter() {
+                    let v = match &f.default {
+                        Some(d) => {
+                            let env = self.structs[sid as usize].env.clone();
+                            let v = self.ct_eval_in(env, d, Some(f.ty))?;
+                            self.ct_coerce(v, f.ty, span)?
+                        }
+                        None => self.ct_zero(f.ty, span)?,
+                    };
+                    out.push((f.name.clone(), v));
+                }
+                CVal::Struct(t, out)
+            }
+            _ => return cerr(span, format!("a {} has no zero value at compile time", self.ty_name(t))),
+        })
+    }
+
     /// `{ ... }` at compile time: a struct or array of the wanted type, or an untyped list when none is
     /// wanted
     fn ct_literal(&mut self, entries: &[(Option<String>, Expr)], want: Option<TyId>, span: Span) -> CRes<CVal> {
@@ -834,6 +895,9 @@ impl Checker {
                 Ok(CVal::Struct(w, out))
             }
             Ty::Array(et, n) => {
+                if entries.is_empty() {
+                    return self.ct_zero(w, span); // {}: all zero
+                }
                 if entries.len() as u64 != n {
                     return cerr(span, format!("expected {n} elements, found {}", entries.len()));
                 }

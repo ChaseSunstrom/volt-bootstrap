@@ -211,6 +211,10 @@ attach fn decl_type(this: checker&, t: ty&, init: expr*) -> compile_error!u32 {
                         count = @cast<i128>(entries.len);
                         done = true;
                     },
+                    .REPEAT(x, n) => {
+                        count = try this.const_int(n, e);
+                        done = true;
+                    },
                     .RANGE(lo, hi, incl) => {
                         if (lo != null && hi != null) {
                             count = (try this.const_int(hi.value, e)) - (try this.const_int(lo.value, e));
@@ -375,6 +379,14 @@ attach fn zero_value(this: checker&, t: u32, span: span) -> compile_error!tval {
         },
         .REF(x) => { return fail(span, fmt("a {} needs an initializer (references can't be null)", this.ty_name(t))); },
         .OPT(x) => { return this.none(t); },
+        .ARRAY(et, n) => {
+            // all zero bytes, unless an element starts otherwise (a struct field's default)
+            val z = try this.zero_value(et, span);
+            match (this.ir.at(z.c).kind) {
+                .ZERO => { return vpure(t, this.ir.zero(t)); },
+                default => { return this.fill_array(t, et, n, z.c); },
+            }
+        },
         default => { return vpure(t, this.ir.zero(t)); },
     }
 }
@@ -1241,6 +1253,7 @@ fn no_effects(e: expr&) -> bool {
         .FIELD(x, n, g&) => { return no_effects(x); },
         .BINARY(op, a, b) => { return no_effects(a) && no_effects(b); },
         .INDEX(a, b) => { return no_effects(a) && no_effects(b); },
+        .REPEAT(a, b) => { return no_effects(a) && no_effects(b); },
         .TUPLE(xs&) => {
             for (x&) in xs.items() {
                 if (!no_effects(x)) {

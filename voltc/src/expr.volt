@@ -640,6 +640,7 @@ attach fn expr(this: checker&, e: expr&, want: u32?) -> compile_error!tval {
         .BUILTIN(name, gargs&, args&) => { return this.builtin(name, gargs, ptr_of(args), want, span); },
         .TUPLE(elems&) => { return this.tuple(elems, want, span); },
         .LITERAL(entries&) => { return this.literal(entries, want, span); },
+        .REPEAT(x, n) => { return this.repeat(x, n, want, span); },
         .RANGE(lo&, hi&, incl) => { return this.range_val(ptr_box(lo), ptr_box(hi), incl, want, span); },
         .RETURN(v&) => { return this.ret(ptr_box(v), span); },
         .BREAK(label, v&) => { return this.brk(label, ptr_box(v), span); },

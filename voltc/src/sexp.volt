@@ -710,6 +710,11 @@ attach fn expr(this: sexp_writer&, e: expr&) -> void {
             this.open("tuple");
             this.expr_list(es);
         },
+        .REPEAT(x, n) => {
+            this.open("repeat");
+            this.expr(x);
+            this.expr(n);
+        },
         .LITERAL(es) => {
             this.open("literal");
             this.out.append(" [");

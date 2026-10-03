@@ -1060,7 +1060,26 @@ attach fn global_init(this: checker&, l: let_stmt&, span: span) -> compile_error
             v = try this.coerce(v, want, l.init.span);
         }
         if (!v.pure && v.lit == null) {
-            return fails(l.init.span, "global initializers must be constants");
+            // a { x; n } (or a struct whose defaults hold one) is worked out now, as constants
+            var lit = false;
+            match (l.init.kind) {
+                .LITERAL(x) => { lit = true; },
+                .REPEAT(x, n) => { lit = true; },
+                default => {},
+            }
+            if (!lit) {
+                return fails(l.init.span, "global initializers must be constants");
+            }
+            val cv = this.ct_eval_in(this.cx.env, &l.init, want) catch |e| {
+                return fails(l.init.span, "global initializers must be constants");
+            };
+            val c = this.ct_to_val(cv, want, l.init.span) catch |e| {
+                return fails(l.init.span, "global initializers must be constants");
+            };
+            if (!c.pure) {
+                return fails(l.init.span, "global initializers must be constants");
+            }
+            return c;
         }
         return v;
     }

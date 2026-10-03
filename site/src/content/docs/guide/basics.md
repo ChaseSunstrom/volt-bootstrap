@@ -283,6 +283,26 @@ fn main() -> void {
 // expect: 5 28 15 4
 ```
 
+`{}` is an array of zeros (what a `var` without an initializer holds), and `{x; n}` is `n` copies of
+`x`, which runs once; `n` is a constant, the array's length. Both work wherever an array is
+expected, struct field defaults and compile time included:
+
+```volt
+use std::io;
+
+struct frame {
+    data: u8[16] = {};
+    tag: u8[2] = { 0xFF; 2 };
+}
+
+fn main() -> void {
+    val f: frame = {};
+    val ones: i32[] = { 1; 4 };
+    std::println("{} {} {}", f.data[15], f.tag[1], ones.len);
+}
+// expect: 0 255 4
+```
+
 ## Tuples
 
 Tuples group values without declaring a struct. Destructure them with `val (a, b) = ...`, or reach

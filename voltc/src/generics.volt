@@ -1000,6 +1000,7 @@ attach fn satisfies(this: checker&, t: u32, trait_decl: u32, targs: std::vec<gar
 fn needs_context(e: expr&) -> bool {
     match (e.kind) {
         .LITERAL(x) => { return true; },
+        .REPEAT(x, n) => { return true; },
         .DOT_VARIANT(x) => { return true; },
         .NULL => { return true; },
         .CLOSURE(c) => {

@@ -1573,8 +1573,14 @@ impl Checker {
                     None => return err(span, "global needs a type or an initializer"),
                 },
             };
-            if !v.pure && v.lit.is_none() && l.init.is_some() {
-                return err(l.init.as_ref().unwrap().span, "global initializers must be constants");
+            let mut v = v;
+            if let (false, None, Some(init)) = (v.pure, &v.lit, &l.init) {
+                // a { x; n } (or a struct whose defaults hold one) is worked out now, as constants
+                let lit = matches!(init.kind, ExprKind::Literal(_) | ExprKind::Repeat(..));
+                v = match lit.then(|| self.ct_eval_in(env.clone(), init, want).and_then(|cv| self.ct_to_val(cv, want, init.span))) {
+                    Some(Ok(c)) if c.pure => c,
+                    _ => return err(init.span, "global initializers must be constants"),
+                };
             }
             Ok((v.ty, v.c))
         })();

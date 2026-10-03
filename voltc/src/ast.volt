@@ -172,6 +172,7 @@ enum expr_kind {
     BUILTIN: (str, std::vec<garg>, std::vec<garg>?),
     TUPLE: std::vec<expr>,
     LITERAL: std::vec<lit_entry>,
+    REPEAT: (std::box<expr>, std::box<expr>), // { x; n }: an array of n copies of x, typed by context
     CLOSURE: closure,
     TRY: std::box<expr>,
     AWAIT: std::box<expr>,

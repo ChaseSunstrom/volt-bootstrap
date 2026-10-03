@@ -773,6 +773,7 @@ attach fn ct_expr(this: checker&, e: expr&, want: u32?) -> compile_error!cval {
             return cval::TUPLE(move out);
         },
         .LITERAL(entries&) => { return this.ct_literal(entries, want, span); },
+        .REPEAT(x, n) => { return this.ct_repeat(x, n, want, span); },
         .FIELD(b, name, g) => {
             val bv = try this.ct_expr(b, null);
             return this.ct_field(move bv, name, span);
@@ -1356,6 +1357,102 @@ attach fn ct_write(this: checker&, whole: cval&, place: expr&, v: cval, span: sp
 
 
 // `{ ... }` at compile time: a struct or array of the wanted type, or an untyped list when none is wanted
+// the most elements a { x; n } or {} makes at compile time (each is a value in memory)
+val CT_ARRAY_MAX: u64 = 1048576;
+
+// `{ x; n }` at compile time: an array of the wanted type, or an untyped list when none is wanted
+attach fn ct_repeat(this: checker&, x: expr&, n: expr&, want: u32?, span: span) -> compile_error!cval {
+    // inside an optional: the array, present
+    if (want) {
+        val inner = this.t.opt_inner(want);
+        if (inner) {
+            val v = try this.ct_repeat(x, n, inner, span);
+            return cval::OPT(want, some_c(move v));
+        }
+    }
+    var count: i128 = -1;
+    match (try this.ct_expr(n, null)) {
+        .INT(c, t) => { count = c; },
+        default => {},
+    }
+    if (count < 0) {
+        return fails(n.span, "a repeat count is an integer, 0 or more");
+    }
+    if (count > @cast<i128>(CT_ARRAY_MAX)) {
+        return fail(span, fmt("a repeat at compile time makes at most {} elements", unum(CT_ARRAY_MAX)));
+    }
+    var et = VOID;
+    var v = cval::VOID;
+    if (want) {
+        match (*this.t.get(want)) {
+            .ARRAY(t, len) => {
+                if (count != @cast<i128>(len)) {
+                    return fail(span, fmt2("this repeats {} times but the array holds {}", num(count), unum(len)));
+                }
+                et = t;
+            },
+            default => { return fails(span, "a { x; n } literal makes an array"); },
+        }
+        val x0 = try this.ct_expr(x, et);
+        v = try this.ct_coerce(move x0, et, span);
+    } else {
+        v = try this.ct_expr(x, null); // untyped, as a { a, b } list is
+    }
+    var es: std::vec<cval> = {};
+    for (i) in 0..count {
+        put(&es, copy v);
+    }
+    return cval::ARRAY(move es, et);
+}
+
+// the value a `var x: T;` starts with, at compile time (what `{}` makes for an array)
+attach fn ct_zero(this: checker&, t: u32, span: span) -> compile_error!cval {
+    match (*this.t.get(t)) {
+        .INT(k) => { return cval::INT(0, t); },
+        .FLOAT(b) => { return cval::FLOAT(0.0, t); },
+        .BOOL => { return cval::BOOL(false); },
+        .OPT(x) => { return cval::OPT(t, null); },
+        .ARRAY(et, n) => {
+            if (n > CT_ARRAY_MAX) {
+                return fail(span, fmt("an array at compile time holds at most {} elements", unum(CT_ARRAY_MAX)));
+            }
+            var es: std::vec<cval> = {};
+            for (i) in 0..n {
+                put(&es, try this.ct_zero(et, span));
+            }
+            return cval::ARRAY(move es, et);
+        },
+        .TUPLE(ts, names) => {
+            val xs = copy ts;
+            var es: std::vec<cval> = {};
+            for (x&) in xs.items() {
+                put(&es, try this.ct_zero(*x, span));
+            }
+            return cval::TUPLE(move es);
+        },
+        .STRUCT(sid) => {
+            if (!this.header_struct(sid)) {
+                val nf = (try this.struct_fields(sid, span)).len;
+                var out: std::vec<cfield> = {};
+                for (k) in 0..nf {
+                    val f = *(try this.struct_fields(sid, span)).at(k);
+                    var v = cval::VOID;
+                    if (f.fallback) {
+                        val d = try this.ct_eval_in(this.si(sid).env, f.fallback, f.ty);
+                        v = try this.ct_coerce(move d, f.ty, span);
+                    } else {
+                        v = try this.ct_zero(f.ty, span);
+                    }
+                    put(&out, { name: f.name, v: move v });
+                }
+                return cval::STRUCT(t, move out);
+            }
+        },
+        default => {},
+    }
+    return fail(span, fmt("a {} has no zero value at compile time", this.ty_name(t)));
+}
+
 attach fn ct_literal(this: checker&, entries: std::vec<lit_entry>&, want: u32?, span: span) -> compile_error!cval {
     if (want == null) {
         var es: std::vec<cval> = {};
@@ -1401,6 +1498,9 @@ attach fn ct_literal(this: checker&, entries: std::vec<lit_entry>&, want: u32?, 
             return cval::STRUCT(w, move out);
         },
         .ARRAY(et, n) => {
+            if (entries.len == 0) {
+                return this.ct_zero(w, span); // {}: all zero
+            }
             if (@cast<u64>(entries.len) != n) {
                 return fail(span, fmt2("expected {} elements, found {}", unum(n), unum(@cast<u64>(entries.len))));
             }

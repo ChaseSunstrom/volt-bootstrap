@@ -304,6 +304,9 @@ impl Checker {
                 Ok(Val { pure, ro, via, root, ..Val::new(w, Self::wrap_pre(&pre, format!("(({c}){{ {} }})", inits.join(", ")))) })
             }
             Ty::Array(t, n) => {
+                if entries.is_empty() {
+                    return self.zero_value(w, span); // {}: all zero, like a var without an initializer
+                }
                 if entries.len() as u64 != n {
                     return err(span, format!("expected {n} elements, found {}", entries.len()));
                 }
@@ -328,6 +331,44 @@ impl Checker {
             }
             _ => err(span, format!("a {{ }} literal can't make a {}", self.ty_name(w))),
         }
+    }
+
+    /// `{ x; n }`: an array of the wanted type (or one inside an optional or error union) holding n
+    /// copies of x, which is evaluated once
+    pub(super) fn repeat(&mut self, x: &Expr, n: &Expr, want: Option<TyId>, span: Span) -> Res<Val> {
+        let Some(w) = want else { return err(span, "can't tell what type this literal is; give the variable a type") };
+        let (t, len) = match self.t.get(w).clone() {
+            Ty::Opt(inner) => {
+                let v = self.repeat(x, n, Some(inner), span)?;
+                return Ok(self.some(v, w));
+            }
+            Ty::ErrUnion(_, inner) => {
+                let v = self.repeat(x, n, Some(inner), span)?;
+                return self.coerce(v, w, span);
+            }
+            Ty::Array(t, len) => (t, len),
+            _ => return err(span, format!("a {{ x; n }} literal makes an array, not a {}", self.ty_name(w))),
+        };
+        let env = self.cx.env.clone();
+        let Ok(count) = self.const_int(n, &env) else { return err(n.span, "a repeat count must be known at compile time") };
+        if count != len as i128 {
+            return err(span, format!("this repeats {count} times but the array holds {len}"));
+        }
+        if self.needs_drop(t)? {
+            return err(x.span, format!("can't repeat a {}: it owns memory; build the elements one by one", self.ty_name(t)));
+        }
+        let v = self.expr(x, Some(t))?;
+        let v = self.coerce(v, t, x.span)?;
+        let (ro, via, root) = self.merged_prov(w, std::slice::from_ref(&v));
+        Ok(Val { ro, via, root, ..self.fill_array(w, t, len, &v.c) })
+    }
+
+    /// an array of type `at` (len elements of type t) with every element set to the C value `c`,
+    /// evaluated once
+    pub fn fill_array(&mut self, at: TyId, t: TyId, len: u64, c: &str) -> Val {
+        let (ac, tc) = (self.cty(at), self.cty(t));
+        let (r, v) = (self.tmp("r"), self.tmp("v"));
+        Val::new(at, format!("({{ {}; {ac} {r}; for (size_t _k = 0; _k < {len}; _k++) {r}.a[_k] = {v}; {r}; }})", Self::decl(&tc, &v, c)))
     }
 
     /// value for a field left out of a struct literal

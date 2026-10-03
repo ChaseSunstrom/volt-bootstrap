@@ -561,6 +561,11 @@ impl W {
                 self.open("tuple");
                 self.list(es, |w, x| w.expr(x));
             }
+            ExprKind::Repeat(x, n) => {
+                self.open("repeat");
+                self.expr(x);
+                self.expr(n);
+            }
             ExprKind::Literal(es) => {
                 self.open("literal");
                 self.list(es, |w, (n, x)| {

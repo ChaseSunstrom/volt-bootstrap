@@ -604,7 +604,14 @@ attach fn primary(this: parser&) -> compile_error!expr {
                 name = (try this.ident()).name;
                 this.bump();
             }
-            put(&entries, { name: name, value: try this.expr() });
+            var value = try this.expr();
+            // { x; n }: n copies of x
+            if (entries.len == 0 && name == null && this.eat(";")) {
+                var n = try this.expr();
+                try this.expect("}");
+                return { kind: expr_kind::REPEAT(bx(move value), bx(move n)), span: start.to(this.prev_span()) };
+            }
+            put(&entries, { name: name, value: move value });
             if (!this.eat(",") && !this.is("}")) {
                 return this.unexpected("',' or '}'");
             }

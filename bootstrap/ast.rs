@@ -154,6 +154,7 @@ pub enum ExprKind {
     Builtin(String, Vec<GenericArg>, Option<Vec<GenericArg>>), // @name<generic>(args); args None = no parens
     Tuple(Vec<Expr>),
     Literal(Vec<(Option<String>, Expr)>), // { a, b: c } or { 1, 2 }, typed by context
+    Repeat(P<Expr>, P<Expr>),     // { x; n }: an array of n copies of x, typed by context
     Closure { caps: Vec<Capture>, generics: Vec<GenericParam>, params: Vec<Param>, ret: Option<Type>, body: Block },
     Try(P<Expr>),
     Await(P<Expr>),

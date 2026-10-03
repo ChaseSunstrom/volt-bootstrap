@@ -112,6 +112,7 @@ impl Checker {
             let elem = self.resolve_type(inner, &env)?;
             let n = match init.map(|e| &e.kind) {
                 Some(ExprKind::Literal(entries)) => entries.len() as i128,
+                Some(ExprKind::Repeat(_, n)) => self.const_int(n, &env)?,
                 Some(ExprKind::Range(Some(lo), Some(hi), incl)) => self.const_int(hi, &env)? - self.const_int(lo, &env)? + *incl as i128,
                 Some(_) => {
                     let v = self.expr(init.unwrap(), None)?;
@@ -230,6 +231,16 @@ impl Checker {
             }
             Ty::Ref(_) => err(span, format!("a {} needs an initializer (references can't be null)", self.ty_name(t))),
             Ty::Opt(_) => Ok(self.none(t)),
+            Ty::Array(et, n) => {
+                // all zero bytes, unless an element starts otherwise (a struct field's default)
+                let z = self.zero_value(et, span)?;
+                let ec = self.cty(et);
+                if z.c == format!("(({ec}){{0}})") {
+                    let c = self.cty(t);
+                    return Ok(Val::pure(t, format!("(({c}){{0}})")));
+                }
+                Ok(self.fill_array(t, et, n, &z.c))
+            }
             _ => {
                 let c = self.cty(t);
                 Ok(Val::pure(t, format!("(({c}){{0}})")))
@@ -829,6 +840,7 @@ fn no_effects(e: &Expr) -> bool {
         ExprKind::Binary(_, a, b) | ExprKind::Index(a, b) => no_effects(a) && no_effects(b),
         ExprKind::Tuple(xs) => xs.iter().all(no_effects),
         ExprKind::Literal(fs) => fs.iter().all(|(_, x)| no_effects(x)),
+        ExprKind::Repeat(x, n) => no_effects(x) && no_effects(n),
         _ => false,
     }
 }

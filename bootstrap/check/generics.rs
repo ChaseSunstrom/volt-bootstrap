@@ -517,7 +517,7 @@ impl Checker {
     /// closures with untyped params); calls check them against the chosen candidate's params
     pub fn needs_context(e: &Expr) -> bool {
         match &e.kind {
-            ExprKind::Literal(_) | ExprKind::DotVariant(_) | ExprKind::Null => true,
+            ExprKind::Literal(_) | ExprKind::Repeat(..) | ExprKind::DotVariant(_) | ExprKind::Null => true,
             ExprKind::Closure { params, .. } => params.iter().any(|p| p.ty.is_none()),
             ExprKind::Call(c, _) => matches!(c.kind, ExprKind::DotVariant(_)),
             _ => false,

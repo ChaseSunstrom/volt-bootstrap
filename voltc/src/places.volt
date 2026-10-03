@@ -572,6 +572,60 @@ attach fn tuple_of(this: checker&, elems: std::vec<expr*>&, want0: u32?, span: s
     return r;
 }
 
+// `{ x; n }`: an array of the wanted type (or one inside an optional or error union) holding n copies
+// of x, which is evaluated once
+attach fn repeat(this: checker&, x: expr&, n: expr&, want: u32?, span: span) -> compile_error!tval {
+    val w = want ?? return fails(span, "can't tell what type this literal is; give the variable a type");
+    var t: u32 = 0;
+    var len: u64 = 0;
+    match (*this.t.get(w)) {
+        .OPT(inner) => {
+            val v = try this.repeat(x, n, inner, span);
+            return this.some(v, w);
+        },
+        .ERR_UNION(e, inner) => {
+            val v = try this.repeat(x, n, inner, span);
+            return this.coerce(v, w, span);
+        },
+        .ARRAY(et, k) => {
+            t = et;
+            len = k;
+        },
+        default => { return fail(span, fmt("a {{ x; n }} literal makes an array, not a {}", this.ty_name(w))); },
+    }
+    val count = this.const_int(n, this.cx.env) catch |e| {
+        return fails(n.span, "a repeat count must be known at compile time");
+    };
+    if (count != @cast<i128>(len)) {
+        return fail(span, fmt2("this repeats {} times but the array holds {}", num(count), unum(len)));
+    }
+    if (try this.needs_drop(t)) {
+        return fail(x.span, fmt("can't repeat a {}: it owns memory; build the elements one by one", this.ty_name(t)));
+    }
+    val v0 = try this.expr(x, t);
+    val v = try this.coerce(v0, t, x.span);
+    var r = this.fill_array(w, t, len, v.c);
+    var vs: std::vec<tval> = {};
+    put(&vs, v);
+    this.merge_held(&r, &vs);
+    return r;
+}
+
+// an array of type at (len elements of type t) with every element set to c, evaluated once
+attach fn fill_array(this: checker&, at: u32, t: u32, len: u64, c: u32) -> tval {
+    val r = this.tmp_local("r", at);
+    val v = this.tmp_local("v", t);
+    val k = this.tmp_local("k", USIZE);
+    val body = this.ir.assign(this.ir.index(r.c, k.c, t), v.c);
+    var stmts: std::vec<u32> = {};
+    put(&stmts, this.ir.decl(v.id, c));
+    put(&stmts, this.ir.decl(r.id, null));
+    for (s&) in this.counted_loop(k, this.ir.int(@cast<i128>(len), USIZE), body).items() {
+        put(&stmts, *s);
+    }
+    return vnew(at, this.ir.seq(move stmts, r.c, at));
+}
+
 // A `{ ... }` literal of the wanted type: a struct (fields by name, the rest from their
 // defaults), an array, a tuple, or one of those inside an optional or error union.
 attach fn literal(this: checker&, entries: std::vec<lit_entry>&, want: u32?, span: span) -> compile_error!tval {
@@ -682,6 +736,9 @@ attach fn literal(this: checker&, entries: std::vec<lit_entry>&, want: u32?, spa
             return r;
         },
         .ARRAY(t, n) => {
+            if (entries.len == 0) {
+                return this.zero_value(w, span); // {}: all zero, like a var without an initializer
+            }
             if (@cast<u64>(entries.len) != n) {
                 return fail(span, fmt2("expected {} elements, found {}", unum(n), unum(@cast<u64>(entries.len))));
             }

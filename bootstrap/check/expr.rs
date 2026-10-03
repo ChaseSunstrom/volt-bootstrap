@@ -355,6 +355,7 @@ impl Checker {
             ExprKind::Builtin(name, gargs, args) => self.builtin(name, gargs, args.as_deref(), want, span),
             ExprKind::Tuple(elems) => self.tuple(elems, want, span),
             ExprKind::Literal(entries) => self.literal(entries, want, span),
+            ExprKind::Repeat(x, n) => self.repeat(x, n, want, span),
             ExprKind::Range(lo, hi, incl) => self.range_val(lo.as_deref(), hi.as_deref(), *incl, want, span),
             ExprKind::Return(v) => self.ret(v.as_deref(), span),
             ExprKind::Break(label, v) => self.brk(label.as_deref(), v.as_deref(), span),

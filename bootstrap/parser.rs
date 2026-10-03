@@ -1265,6 +1265,13 @@ impl<'a> Parser<'a> {
                         None
                     };
                     entries.push((name, self.expr()?));
+                    // { x; n }: n copies of x
+                    if entries.len() == 1 && entries[0].0.is_none() && self.eat(";") {
+                        let n = self.expr()?;
+                        self.expect("}")?;
+                        let x = entries.pop().unwrap().1;
+                        return mk(ExprKind::Repeat(Box::new(x), Box::new(n)), self);
+                    }
                     if !self.eat(",") && !self.is("}") {
                         return self.unexpected("',' or '}'");
                     }
