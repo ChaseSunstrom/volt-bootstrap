@@ -290,6 +290,13 @@ impl Checker {
         let tc = self.cty(fv);
         let erased = self.closures[body as usize].erased.clone();
         self.escape(Body::Closure(body), fv);
+        // a closure literal is a temporary like any other: kept (and deleted, its move captures with
+        // it) to the end of the statement, or with the variable it initializes
+        if !v.lv && self.cx.keep_temps.is_some() {
+            let mut prefix = String::new();
+            let t = self.keep_temp(v, &mut prefix)?;
+            return Ok(format!("({{ {prefix}(({tc}){{ .fn = {erased}, .env = (void*)&{t} }}); }})"));
+        }
         Ok(format!("(({tc}){{ .fn = {erased}, .env = (void*)&({}) }})", v.c))
     }
 

@@ -442,15 +442,20 @@ attach fn fn_value(this: checker&, inst: u32, fv: u32) -> u32 {
 
 // closure -> fn(...) value: borrows the closure's storage; id is the closure, or the generic closure's
 // instance the value calls
-attach fn closure_to_fn(this: checker&, v: tval&, fv: u32, id: u32) -> u32 {
+attach fn closure_to_fn(this: checker&, v: tval&, fv: u32, id: u32) -> compile_error!u32 {
     this.escape(body_key(BODY_CLOSURE, id), fv);
-    // a closure literal gets storage of its own: the fn value points at it for the rest of the fn
+    // a closure literal gets storage of its own, a temporary like any other: deleted (its move
+    // captures with it) at the end of the statement, or with the variable it initializes
     var place = v.c;
     var pre: std::vec<u32> = {};
     if (!v.lv) {
-        val t = this.tmp_local("cl", v.ty);
-        put(&pre, this.ir.decl(t.id, v.c));
-        place = t.c;
+        if (this.cx.keeping) {
+            place = try this.keep_temp(v, &pre);
+        } else {
+            val t = this.tmp_local("cl", v.ty);
+            put(&pre, this.ir.decl(t.id, v.c));
+            place = t.c;
+        }
     }
     var inits: std::vec<field_init> = {};
     put(&inits, { field: 0, value: this.ir.node(ir_kind::FN(this.ci(id).erased_ir), VOIDPTR) });

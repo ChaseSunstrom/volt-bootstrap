@@ -75,6 +75,12 @@ can't be called.
 its captures. Use it to store different functions in one place. Parentheses group a type, so an
 array of them is `(fn(i32) -> i32)[]`.
 
+A `fn` value borrows its closure. A closure literal written where a `fn` value is wanted is a
+[temporary](/volt-bootstrap/guide/ownership/#temporaries): it's deleted, with what it captured, at
+the end of the statement, or when the `val` or `var` it initializes goes. So `f = |move a| ...;`
+leaves `f` pointing at a deleted closure after that statement. To keep a `fn` value longer (in a
+field or variable assigned later), store the closure in a variable first.
+
 ```volt
 use std::io;
 

@@ -584,6 +584,22 @@ attach fn flag_for(this: checker&, c: u32) -> u32 {
     return this.field_c(this.intern(move n), BOOL);
 }
 
+// temporary r kept to the end of the statement (see fn_cx.kept): its slot, which the code put in
+// prefix sets; its owner initializes the live flag, and an exit from the statement's scope deletes it
+// from here on
+attach fn keep_temp(this: checker&, r: tval&, prefix: std::vec<u32>&) -> compile_error!u32 {
+    val t = this.slot("_rv", r.ty);
+    val flag = this.flag_for(t);
+    put(prefix, this.ir.assign(t, r.c));
+    put(prefix, this.ir.assign(flag, this.ir.boolean(true)));
+    if (try this.needs_drop(r.ty)) {
+        val d = try this.drop_fn(r.ty);
+        put(&this.cx.scopes.at(this.cx.keep_scope).exits, exit::DROP(t, d, flag));
+    }
+    put(&this.cx.kept, { c: t, ty: r.ty, flag: flag });
+    return t;
+}
+
 // the name of a local or frame slot
 attach fn place_name(this: checker&, c: u32) -> str {
     match (this.ir.at(c).kind) {

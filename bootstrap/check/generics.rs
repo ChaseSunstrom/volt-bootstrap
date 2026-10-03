@@ -721,17 +721,7 @@ impl Checker {
                     if r.lv {
                         Val { ty: rt, c: format!("(&({}))", r.c), lv: false, ..r }
                     } else if self.cx.keep_temps.is_some() {
-                        // kept to the end of the statement (see keep_temps); its owner declares it, and an
-                        // exit from the statement's scope deletes it from here on
-                        let t = self.slot("_rv", r.ty);
-                        let flag = self.flag_for(&t);
-                        prefix.push_str(&format!("{t} = {}; {flag} = true; ", r.c));
-                        if self.needs_drop(r.ty)? {
-                            let drop = self.drop_fn(r.ty)?;
-                            let s = self.cx.keep_scope;
-                            self.cx.scopes[s].exits.push(Exit::Drop { c: t.clone(), drop, flag: flag.clone() });
-                        }
-                        self.cx.keep_temps.as_mut().unwrap().push((t.clone(), r.ty, flag));
+                        let t = self.keep_temp(&r, &mut prefix)?;
                         Val::pure(rt, format!("(&{t})"))
                     } else {
                         let t = self.tmp("rv");

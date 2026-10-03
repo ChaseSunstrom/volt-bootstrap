@@ -497,7 +497,7 @@ attach fn coerce(this: checker&, v: tval, to: u32, span: span) -> compile_error!
                                 return fail(span, fmt2("for these parameters this closure is a {}, not a {}", this.ty_name(got), this.ty_name(to)));
                             }
                         }
-                        return retyped(&v, to, this.closure_to_fn(&v, to, body));
+                        return retyped(&v, to, try this.closure_to_fn(&v, to, body));
                     }
                 },
                 default => {},

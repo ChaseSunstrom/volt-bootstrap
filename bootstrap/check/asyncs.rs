@@ -40,6 +40,21 @@ impl Checker {
         format!("{c}_live")
     }
 
+    /// temporary r kept to the end of the statement (see keep_temps): its slot, which the code pushed
+    /// on prefix sets; its owner declares it, and an exit from the statement's scope deletes it from here on
+    pub fn keep_temp(&mut self, r: &Val, prefix: &mut String) -> Res<String> {
+        let t = self.slot("_rv", r.ty);
+        let flag = self.flag_for(&t);
+        prefix.push_str(&format!("{t} = {}; {flag} = true; ", r.c));
+        if self.needs_drop(r.ty)? {
+            let drop = self.drop_fn(r.ty)?;
+            let s = self.cx.keep_scope;
+            self.cx.scopes[s].exits.push(Exit::Drop { c: t.clone(), drop, flag: flag.clone() });
+        }
+        self.cx.keep_temps.as_mut().unwrap().push((t.clone(), r.ty, flag));
+        Ok(t)
+    }
+
     /// `T c = init` for a C local, `c = init` for a frame field
     pub fn decl(cty: &str, c: &str, init: &str) -> String {
         if c.starts_with("_f->") { format!("{c} = {init}") } else { format!("{cty} {c} = {init}") }

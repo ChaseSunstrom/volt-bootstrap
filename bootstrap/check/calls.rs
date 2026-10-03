@@ -135,7 +135,7 @@ impl Checker {
             0 => format!("({})({})", vals[0].c, cs.join(", ")),
             1 => {
                 let sep = if cs.is_empty() { "" } else { ", " };
-                format!("({{ {fc} _f = {}; _f.fn(_f.env{sep}{}); }})", vals[0].c, cs.join(", "))
+                format!("({{ {fc} _fv = {}; _fv.fn(_fv.env{sep}{}); }})", vals[0].c, cs.join(", "))
             }
             _ => {
                 let Ty::Closure(c) = self.t.get(fty).clone() else { unreachable!() };
