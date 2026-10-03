@@ -367,9 +367,6 @@ fn hot_cmd(o: &Opts) {
     let start = Instant::now();
     let files: Vec<&String> = o.words.iter().filter(|w| w.ends_with(".volt")).collect();
     let mut temp = None;
-    if o.backend.as_deref() == Some("llvm") {
-        status("Note", "the LLVM backend doesn't write line info yet: functions only, inlined code counted in its caller");
-    }
     let exe = if files.is_empty() {
         let mut b = Build::new(o, "release", !o.examples.is_empty());
         b.profiled();

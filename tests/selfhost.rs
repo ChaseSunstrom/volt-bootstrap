@@ -239,6 +239,16 @@ fn toolchain_layout_and_link_errors() {
         let err = String::from_utf8_lossy(&o.stderr);
         assert!(!o.status.success() && err.contains("failed: a library above wasn't found") && !err.contains("voltc bug"), "{name}: {err}");
     }
+    // an LLVM build of a program importing no C compiles the runtime once into Volt's cache, then
+    // links it from there
+    let cache = tmp.join("cache");
+    for _ in 0..2 {
+        let o = Command::new(&stage1.0).arg("build").arg(&tiny).args(["--backend", "llvm", "--std"]).arg(root.join("std")).arg("-o").arg(tmp.join("tiny_llvm")).env("VOLT_CACHE", &cache).output().unwrap();
+        assert!(o.status.success(), "LLVM build with a runtime cache: {}", String::from_utf8_lossy(&o.stderr));
+        assert!(Command::new(tmp.join("tiny_llvm")).status().unwrap().success());
+    }
+    let objs: Vec<String> = std::fs::read_dir(cache.join("runtime")).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().to_string()).collect();
+    assert!(objs.len() == 1 && objs[0].starts_with("rt-") && objs[0].ends_with(".o"), "the runtime cache holds {objs:?}");
     let _ = std::fs::remove_dir_all(&tmp);
 }
 

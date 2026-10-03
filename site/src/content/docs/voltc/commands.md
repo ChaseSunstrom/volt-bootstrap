@@ -30,7 +30,7 @@ sidebar:
 | --- | --- |
 | `--release` | optimize (`-O2`); drop the debug checks, so integer overflow wraps; C compiled along gets `-fno-math-errno` (Volt never reads `errno`, so `sqrt` and friends become instructions); `@cfg("release")` is true |
 | `--leak-check` | debug builds: exit with 102 if any allocation was never freed |
-| `--profiler` | build for [`bolt hot`](/volt-bootstrap/bolt/commands/#finding-the-hot-spots): line information, frame pointers, and a sampler that writes `$VOLT_PROFILE_OUT` when the program exits (Linux). Built with clang when it's installed and `$CC` isn't set: gcc leaves frame pointers out of leaf functions, which loses a leaf's caller |
+| `--profiler` | build for [`bolt hot`](/volt-bootstrap/bolt/commands/#finding-the-hot-spots): line information, frame pointers, and a sampler that writes `$VOLT_PROFILE_OUT` when the program exits (Linux). Through the C backend it's compiled with clang when that's installed and `$CC` isn't set: gcc leaves frame pointers out of leaf functions, which loses a leaf's caller |
 | `--std DIR`, `--no-std` | the std package (default: `$VOLT_STD`, then a `std/` next to voltc) |
 | `--pkg NAME=DIR` | a package: DIR's `.volt` files, in `namespace NAME` |
 | `--link NAME=LIB.a` | take package NAME's non-generic code from a `voltc lib` build |
@@ -39,7 +39,7 @@ sidebar:
 | `--shared`, `--static` | with `lib`: a self-contained `.so` or `.a` for other languages |
 | `--lang L` | with `bindings`: `c`, `cpp`, `rust`, `zig`, `python`, `pyi`, `csharp`, `java`, `go`, `lua`, `dart`, `swift`, `kotlin`, `ruby`, `node`, `js`, `ts` or `json` |
 | `--cc ARG` | pass ARG to the C compiler: a `.c` file, `-lNAME`, `-I`, `-D`... (repeatable) |
-| `--backend c\|llvm` | self-hosted voltc: generate C (default) or native code through LLVM |
+| `--backend c\|llvm` | self-hosted voltc: generate C, or native code through LLVM (the default on x86-64 but for Windows) |
 | `--target T` | self-hosted voltc: build for bare metal (`riscv32-none`, `riscv64-none`, `thumbv7m-none`, `thumbv7em-none`) through LLVM, linked by `ld.lld` with no C compiler or C library; see [Bare metal](/volt-bootstrap/voltc/bare-metal/) |
 | `--link-script FILE` | the linker script for `--target`: the board's memory and the symbols the start code reads |
 | `--message-format F` | `human` (default), `short` or `json`: see [Diagnostics](/volt-bootstrap/voltc/diagnostics/) |

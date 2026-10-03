@@ -130,8 +130,9 @@ then through LLVM, and runs the golden suite on both backends. See
 
 ## Status
 
-Volt is young. The LLVM backend targets x86-64 for now and has no debug info yet; there's no package
-registry (bolt uses paths and git).
+Volt is young. The LLVM backend (the default on x86-64) has the System V calling convention only
+for now, so Windows and aarch64 build through C; there's no package registry (bolt uses paths and
+git).
 
 ## License
 

@@ -48,8 +48,7 @@ at its lines there, not in calls to it. A C compiler's copies of a function
 
 The program samples itself (about a thousand times a second of CPU time), so this needs no
 `perf`, debugger or root; it runs on Linux, and names the samples with `llvm-symbolizer` or
-`addr2line`. Run the program long enough to get a few hundred samples. With `--backend llvm` it
-reports functions only, as that backend doesn't write line information yet.
+`addr2line`. Run the program long enough to get a few hundred samples.
 
 ## Packages
 

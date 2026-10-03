@@ -87,7 +87,7 @@ fn bench() {
                 0 => run(Command::new("clang").args(["-O2", "-o"]).arg(&exe).arg(&src).arg("-lm")),
                 1 => run(Command::new("gcc").args(["-O2", "-o"]).arg(&exe).arg(&src).arg("-lm")),
                 2 => run(Command::new("clang++").args(["-O2", "-std=c++20", "-o"]).arg(&exe).arg(&src)),
-                3 => run(Command::new(&voltc).arg("build").arg(&src).args(["--release", "--std"]).arg(root.join("std")).arg("-o").arg(&exe).env("CC", "clang")),
+                3 => run(Command::new(&voltc).arg("build").arg(&src).args(["--release", "--backend", "c", "--std"]).arg(root.join("std")).arg("-o").arg(&exe).env("CC", "clang")),
                 _ => run(Command::new(&voltc).arg("build").arg(&src).args(["--release", "--backend", "llvm", "--std"]).arg(root.join("std")).arg("-o").arg(&exe)),
             };
             let mut best = Duration::MAX;

@@ -9,7 +9,7 @@ The checker turns each function into a small typed IR, and a backend turns the I
 voltc has two, and they're interchangeable: layouts and calling conventions match, so a library
 built by one links into a program built by the other.
 
-## C (the default)
+## C
 
 The C backend writes C that a person can read: named after the Volt it comes from, with a comment
 per function saying where it was declared. `voltc emit-c app.volt -o out/` writes it as files:
@@ -49,12 +49,19 @@ static v_point v_add(v_point a, v_point b) {
 
 ## LLVM
 
-`--backend llvm` generates native code through LLVM's C API, with no C compiler in between (`cc`
+The LLVM backend generates native code through LLVM's C API, with no C compiler in between (`cc`
 still links the program and compiles the tiny C runtime). `voltc emit-llvm` prints the IR.
 
-The LLVM backend targets x86-64 (the System V ABI) for now; C's `static inline` functions from
-headers are reached through pointers that a small generated C unit exports. It doesn't emit debug
-info yet.
+It's the default where it's complete: x86-64 with the System V calling convention (Linux, macOS,
+FreeBSD). Elsewhere (Windows, aarch64) the default is C until those calling conventions are in;
+`--backend c` or `--backend llvm` chooses either way. A program the LLVM backend can't lower (a C
+struct from a header that only the C compiler can lay out) is built through C instead, unless
+`--backend llvm` asked for LLVM. C's `static inline` functions from headers are reached through
+pointers that a small generated C unit exports.
+
+Debug builds carry DWARF debug information: a breakpoint goes on a Volt line (`break main.volt:12`),
+stepping goes statement by statement, and a debugger shows parameters and locals by their Volt
+names, with structs, `str`, arrays and pointers laid out as Volt lays them out.
 
 ## How they're kept in step
 

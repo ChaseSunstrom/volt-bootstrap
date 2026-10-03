@@ -360,6 +360,8 @@ struct fn_frame {
 // all compiler state: declarations, namespaces, instances, types, and the IR built so far
 struct checker {
     files: std::vec<source_file>&;
+    line_starts: std::vec<std::vec<u32>> = {}; // each file's line start offsets, found on first use (line_col)
+    llvm_cant_lower: bool = false;              // the LLVM backend met something only C can do (lgen's err)
     opts: opts;
     t: types;
     ir: ir_prog = {};
@@ -1274,7 +1276,39 @@ attach fn pkg_of_file(this: checker&, file: u32) -> str? {
 }
 
 attach fn line_col(this: checker&, sp: span) -> (line: usize, col: usize) {
-    return file_line_col(this.files, sp);
+    // each file's line starts, found once: debug builds ask for a place per statement and per
+    // checked operation, and scanning from the top each time made that quadratic
+    val f = @cast<usize>(sp.file);
+    while (this.line_starts.len <= f) {
+        put(&this.line_starts, {});
+    }
+    val text = this.files.at(f).text;
+    val ls = this.line_starts.at(f);
+    if (ls.len == 0) {
+        put(ls, 0);
+        for (i) in 0..text.len {
+            if (text[i] == '\n') {
+                put(ls, @cast<u32>(i + 1));
+            }
+        }
+    }
+    var at = @cast<usize>(sp.lo);
+    if (at > text.len) {
+        at = text.len;
+    }
+    // the last line start at or before it
+    var lo: usize = 0;
+    var hi = ls.len;
+    while (hi - lo > 1) {
+        val mid = (lo + hi) / 2;
+        if (@cast<usize>(*ls.at(mid)) <= at) {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    val start = @cast<usize>(*ls.at(lo));
+    return { line: lo + 1, col: text_pos(text[start..text.len], at - start).col };
 }
 
 // the 1-based line and column where a span starts

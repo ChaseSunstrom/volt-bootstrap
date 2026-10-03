@@ -29,7 +29,8 @@ struct cli {
     leak_check: bool = false;
     profiler: bool = false; // --profiler: bolt hot's sampler, line info and frame pointers
     sexp: bool = false;
-    llvm: bool = false; // --backend llvm
+    llvm: bool = false;        // through the LLVM backend (--backend llvm, or the default where it's complete)
+    backend_set: bool = false; // --backend (or --target) chose it: no falling back to C
     target: str? = null;      // --target: bare metal (target.volt), through LLVM and ld.lld
     link_script: str? = null; // --link-script: the linker script for --target
     format: u8 = 0;     // --message-format (FORMAT_HUMAN, FORMAT_SHORT, FORMAT_JSON)
@@ -40,7 +41,7 @@ struct cli {
 }
 
 fn usage() -> never {
-    std::eprintln("usage: voltc <command> FILES... [options]\ncommands:\n  parse FILE --sexp       parse only\n  check FILES            type check\n  emit-c FILES [-o DIR]  print the generated C, or write it as files to DIR\n  emit-llvm FILES        print the generated LLVM IR\n  build FILES [-o OUT]   compile to an executable\n  run FILES [-- ARGS]    build and run\n  lib NAME [-o OUT.a]    precompile package NAME's non-generic code into a static library; with\n                         --shared (OUT.so) or --static, a self-contained library other languages link\n  bindings NAME --lang L bindings of package NAME's export fns for L: c, cpp, rust, zig, python, pyi\n                         (its stubs), csharp, java, go, lua (a C module), dart, swift, kotlin, ruby (a C\n                         extension), node (a Node-API addon's C), js (its loader), ts (its types), or\n                         json (the model, for generators of your own)\n  std-dir                print where the std package is\n  lsp                    the language server for editors (JSON-RPC on stdin and stdout)\n  doc NAME               package NAME's declarations and their comments, as JSON\noptions:\n  --release              optimize, wrap on overflow instead of trapping\n  --leak-check           debug: exit 102 if runtime allocations were never freed\n  --profiler             sample where the program spends its time (bolt hot reads it): line info,\n                         frame pointers, and a sampler that writes $VOLT_PROFILE_OUT at exit\n  --std DIR | --no-std   where the std package is (default: $VOLT_STD, then next to voltc)\n  --pkg NAME=PATH        a package: PATH's .volt files, wrapped in namespace NAME\n  --cfg [PKG:]KEY[=VAL]  set KEY (to VAL) for @cfg in the program's files, or in package PKG's\n  --lib NAME             check: package NAME alone, as a library (no program files, no main)\n  --link NAME=LIB.a      take package NAME's non-generic code from a library built by voltc lib\n  --cc ARG               pass ARG to the C compiler when linking (a .c file, -lNAME, ...)\n  --message-format F     how errors are printed: human (default), short (one line each) or json\n  --color WHEN           colour errors: auto (default: on a terminal, unless NO_COLOR is set), always, never\n  --error-limit N        show at most N errors (default 20; 0: all of them)\n  --backend c|llvm       generate C (the default) or native code through LLVM\n  --target T             bare metal through LLVM, linked by ld.lld with no C at all: riscv32-none,\n                         riscv64-none, thumbv7m-none or thumbv7em-none\n  --link-script FILE     the linker script for --target (memory layout, the start code's symbols)");
+    std::eprintln("usage: voltc <command> FILES... [options]\ncommands:\n  parse FILE --sexp       parse only\n  check FILES            type check\n  emit-c FILES [-o DIR]  print the generated C, or write it as files to DIR\n  emit-llvm FILES        print the generated LLVM IR\n  build FILES [-o OUT]   compile to an executable\n  run FILES [-- ARGS]    build and run\n  lib NAME [-o OUT.a]    precompile package NAME's non-generic code into a static library; with\n                         --shared (OUT.so) or --static, a self-contained library other languages link\n  bindings NAME --lang L bindings of package NAME's export fns for L: c, cpp, rust, zig, python, pyi\n                         (its stubs), csharp, java, go, lua (a C module), dart, swift, kotlin, ruby (a C\n                         extension), node (a Node-API addon's C), js (its loader), ts (its types), or\n                         json (the model, for generators of your own)\n  std-dir                print where the std package is\n  lsp                    the language server for editors (JSON-RPC on stdin and stdout)\n  doc NAME               package NAME's declarations and their comments, as JSON\noptions:\n  --release              optimize, wrap on overflow instead of trapping\n  --leak-check           debug: exit 102 if runtime allocations were never freed\n  --profiler             sample where the program spends its time (bolt hot reads it): line info,\n                         frame pointers, and a sampler that writes $VOLT_PROFILE_OUT at exit\n  --std DIR | --no-std   where the std package is (default: $VOLT_STD, then next to voltc)\n  --pkg NAME=PATH        a package: PATH's .volt files, wrapped in namespace NAME\n  --cfg [PKG:]KEY[=VAL]  set KEY (to VAL) for @cfg in the program's files, or in package PKG's\n  --lib NAME             check: package NAME alone, as a library (no program files, no main)\n  --link NAME=LIB.a      take package NAME's non-generic code from a library built by voltc lib\n  --cc ARG               pass ARG to the C compiler when linking (a .c file, -lNAME, ...)\n  --message-format F     how errors are printed: human (default), short (one line each) or json\n  --color WHEN           colour errors: auto (default: on a terminal, unless NO_COLOR is set), always, never\n  --error-limit N        show at most N errors (default 20; 0: all of them)\n  --backend c|llvm       generate C, or native code through LLVM (the default on x86-64 but for\n                         Windows; a program LLVM can't lower falls back to C)\n  --target T             bare metal through LLVM, linked by ld.lld with no C at all: riscv32-none,\n                         riscv64-none, thumbv7m-none or thumbv7em-none\n  --link-script FILE     the linker script for --target (memory layout, the start code's symbols)");
     std::process::exit(2);
 }
 
@@ -123,11 +124,13 @@ fn parse_cli() -> cli {
                     die(fmt("--backend takes c or llvm, not '{}'", S(v)));
                 }
                 c.llvm = v == "llvm";
+                c.backend_set = true;
             } else if (a == "--target") {
                 // bare metal: @cfg sees os=none and the target's arch and pointer size
                 val t = find_target(v) ?? die(fmt2("--target takes one of {}, not '{}'", target_names(), S(v)));
                 c.target = v;
                 c.llvm = true;
+                c.backend_set = true;
                 for (set) in t.cfg {
                     put(&c.cfg, { pkg: null, set: set });
                 }
@@ -194,6 +197,13 @@ fn parse_cli() -> cli {
     }
     if (c.target != null && !c.llvm) {
         die(S("--target builds through LLVM: leave out --backend c"));
+    }
+    // LLVM is the default backend where it's complete: x86-64 with the System V calling convention
+    // (Linux, macOS, FreeBSD; not Windows). A program it can't lower is built through C instead
+    if (!c.backend_set) {
+        comptime if (@cfg("arch", "x86_64") && !@cfg("os", "windows")) {
+            c.llvm = true;
+        }
     }
     if (c.target != null && (c.cmd == "run" || c.cmd == "lib")) {
         die(fmt("voltc {} doesn't take --target: build the program, then load it on the board (or qemu)", S(c.cmd)));
@@ -550,7 +560,7 @@ fn compile_with(c: cli&, s: sources&, shim: shim_src*) -> std::box<checker> {
         }
     }
     // the runtime lives in the program's own C unit, never in a library
-    var o: opts = { release: c.release, leak_check: c.leak_check, guards: move guards, lib: lib, runtime: lib == null || c.shared || c.standalone, cfg: copy c.cfg, pp_flags: preprocessor_flags(&c.cc_args), line_info: c.profiler, target: c.target };
+    var o: opts = { release: c.release, leak_check: c.leak_check, guards: move guards, lib: lib, runtime: lib == null || c.shared || c.standalone, cfg: copy c.cfg, pp_flags: preprocessor_flags(&c.cc_args), line_info: c.profiler || (c.llvm && !c.release && (c.cmd == "build" || c.cmd == "run")), target: c.target };
     for (u&) in s.units.items() {
         if (u.pkg) {
             put(&o.pkg_files, { file: u.file, pkg: u.pkg});
@@ -689,9 +699,7 @@ fn main() -> i32 {
         for (f&) in chk.link_flags.items() {
             put(&lc.cc_args, f.as_str());
         }
-        if (c.llvm) {
-            llvm_exe(&*chk, out.as_str(), &lc);
-        } else {
+        if (!c.llvm || !llvm_exe(&*chk, out.as_str(), &lc)) {
             cc(chk.c_unit().as_str(), out.as_str(), &lc, false);
         }
         write_deps(out.as_str(), &chk.import_deps);
@@ -742,9 +750,7 @@ fn main() -> i32 {
         for (f&) in chk.link_flags.items() {
             put(&lc.cc_args, f.as_str());
         }
-        if (c.llvm) {
-            llvm_exe(&*chk, out.as_str(), &lc);
-        } else {
+        if (!c.llvm || !llvm_exe(&*chk, out.as_str(), &lc)) {
             cc(chk.c_unit().as_str(), out.as_str(), &lc, false);
         }
         write_deps(out.as_str(), &chk.import_deps);
@@ -785,16 +791,22 @@ fn main() -> i32 {
         if (cpp_o) {
             put(&ar, cpp_o.as_str()); // the program links -lstdc++ too
         }
-        if (c.llvm) {
+        var via_llvm = c.llvm;
+        if (via_llvm) {
             // the object, plus the prelude's helpers (weak) for programs built by either backend
             var hdr: std::vec<str> = {};
             val e = chk.llvm_object(obj.as_str(), &hdr);
             if (e.len() > 0) {
-                die(move e);
+                if (!llvm_falls_back(&*chk, &c, e.as_str())) {
+                    die(move e);
+                }
+                via_llvm = false;
+            } else {
+                cc(llvm_runtime_c(&*chk, &hdr, c.standalone).as_str(), rt_o.as_str(), &c, true);
+                put(&ar, rt_o.as_str());
             }
-            cc(llvm_runtime_c(&*chk, &hdr, c.standalone).as_str(), rt_o.as_str(), &c, true);
-            put(&ar, rt_o.as_str());
-        } else {
+        }
+        if (!via_llvm) {
             cc(chk.c_unit().as_str(), obj.as_str(), &c, true);
         }
         unlink_path(out.as_str()); // ar would add to an old archive
@@ -844,9 +856,7 @@ fn main() -> i32 {
         for (f&) in chk.link_flags.items() {
             put(&lc.cc_args, f.as_str());
         }
-        if (c.llvm) {
-            llvm_exe(&*chk, exe.as_str(), &lc);
-        } else {
+        if (!c.llvm || !llvm_exe(&*chk, exe.as_str(), &lc)) {
             cc(chk.c_unit().as_str(), exe.as_str(), &lc, false);
         }
         if (cpp_o) {
@@ -1043,8 +1053,70 @@ fn cpp_object(chk: checker&, c: cli&, dir: str) -> std::string? {
     return move obj;
 }
 
+// the runtime unit `text` compiled for c's settings: from Volt's cache (runtime/rt-<hash>.o) when
+// it's there, else compiled in `dir` and kept there for next time
+fn runtime_object(text: str, c: cli&, dir: str) -> std::string {
+    var key = S(text);
+    key.append(std::process::os());
+    key.append(std::process::arch());
+    key.append(std::process::env("CC") ?? "cc");
+    if (c.profiler && on_path("clang")) {
+        key.append("|clang"); // cc_run compiles --profiler builds with clang when it's there
+    }
+    if (c.release) {
+        key.append("|release");
+    }
+    if (c.profiler) {
+        key.append("|profiler");
+    }
+    if (c.shared || c.standalone) {
+        key.append("|pic");
+    }
+    for (f&) in preprocessor_flags(&c.cc_args).items() {
+        key.push('|');
+        key.append(*f);
+    }
+    val cdir = fmt("{}/runtime", cache_base());
+    val path = std::fmt::format("{}/rt-{:x}.o", cdir.as_str(), std::digest::fnv1a(key.as_str()));
+    if (std::fs::exists(path.as_str())) {
+        return path;
+    }
+    var tmp = S(dir);
+    tmp.append("/volt_rt.o");
+    cc(text, tmp.as_str(), c, true);
+    // into the cache by rename, so a build running alongside never sees half a file
+    std::fs::create_dir_all(cdir.as_str()) catch |e| { return tmp; };
+    var part = std::fmt::format("{}.{}.part", path.as_str(), sys::getpid());
+    std::fs::copy_file(tmp.as_str(), part.as_str()) catch |e| { return tmp; };
+    std::fs::rename(part.as_str(), path.as_str()) catch |e| {
+        std::fs::remove_file(part.as_str()) catch |x| {};
+        return tmp;
+    };
+    return path;
+}
+
+// are these --cc arguments only libraries and files to link (nothing that changes how C compiles)?
+fn link_args_only(args: std::vec<str>&) -> bool {
+    for (a) in args.items() {
+        if (starts_with(a, "-") && !starts_with(a, "-l") && !starts_with(a, "-L") && !starts_with(a, "-Wl,")) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// when LLVM was only the default and it can't lower this program (a C struct only C can lay
+// out; not a voltc bug), the build goes through C: say so, and why
+fn llvm_falls_back(chk: checker&, c: cli&, e: str) -> bool {
+    if (c.backend_set || !chk.llvm_cant_lower) {
+        return false;
+    }
+    std::eprintln("note: building through C: {}", e);
+    return true;
+}
+
 // the LLVM backend's executable: the program's object and the runtime (C), linked by cc
-fn llvm_exe(chk: checker&, out: str, c: cli&) -> void {
+fn llvm_exe(chk: checker&, out: str, c: cli&) -> bool {
     var dir = fresh_dir();
     var obj = copy dir;
     obj.append("/prog.o");
@@ -1054,6 +1126,9 @@ fn llvm_exe(chk: checker&, out: str, c: cli&) -> void {
     val e = chk.llvm_object(obj.as_str(), &hdr);
     if (e.len() > 0) {
         rmdir_path(dir.as_str());
+        if (llvm_falls_back(chk, c, e.as_str())) {
+            return false; // the caller builds it through C
+        }
         die(move e);
     }
     if (c.target) {
@@ -1076,18 +1151,31 @@ fn llvm_exe(chk: checker&, out: str, c: cli&) -> void {
         if (st != 0) {
             die(S("ld.lld failed (it ships with LLVM; --target links with it)"));
         }
-        return;
+        return true;
     }
-    std::fs::write_file(rt_c.as_str(), llvm_runtime_c(chk, &hdr, true).as_str()) catch |x| {
-        die(fmt("can't write {}", copy rt_c));
-    };
+    val rt_text = llvm_runtime_c(chk, &hdr, true);
     var inputs: std::vec<str> = {};
     put(&inputs, obj.as_str());
-    put(&inputs, rt_c.as_str());
+    var rt_o = S("");
+    if (chk.c_includes.len == 0 && hdr.len == 0 && link_args_only(&c.cc_args) && cache_base().as_str() != "/tmp/volt-cache") {
+        // the same runtime as every other program's: compiled once, then from the user's cache
+        // (not a shared /tmp one, where another user could leave an object to be linked in)
+        rt_o = runtime_object(rt_text.as_str(), c, dir.as_str());
+        put(&inputs, rt_o.as_str());
+    } else {
+        std::fs::write_file(rt_c.as_str(), rt_text.as_str()) catch |x| {
+            die(fmt("can't write {}", copy rt_c));
+        };
+        put(&inputs, rt_c.as_str());
+    }
     cc_run(&inputs, out, c, false);
     unlink_path(obj.as_str());
     unlink_path(rt_c.as_str());
+    var rt_tmp = copy dir;
+    rt_tmp.append("/volt_rt.o"); // where runtime_object compiles it (the cache keeps its own copy)
+    unlink_path(rt_tmp.as_str());
     rmdir_path(dir.as_str());
+    return true;
 }
 
 // is there a program called name in a $PATH directory?

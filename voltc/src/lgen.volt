@@ -3,7 +3,7 @@
 // aligned member plus padding) and every function uses the C ABI (SysV x86-64), so LLVM-built code
 // shares memory and calls with C-backend libraries, C headers and the runtime (compiled by cc).
 use std::mem;
-use { "llvm-c/Core.h", "llvm-c/Target.h", "llvm-c/TargetMachine.h", "llvm-c/Analysis.h", "llvm-c/Transforms/PassBuilder.h" } as llvm;
+use { "llvm-c/Core.h", "llvm-c/Target.h", "llvm-c/TargetMachine.h", "llvm-c/Analysis.h", "llvm-c/Transforms/PassBuilder.h", "llvm-c/DebugInfo.h" } as llvm;
 
 // how a value crosses a call (SysV x86-64)
 enum pass {
@@ -65,6 +65,14 @@ struct lg {
     tm: llvm::LLVMOpaqueTargetMachine* = null;
     hdr: std::vec<str> = {}; // C header functions called through the runtime unit's pointers
     err: std::string = {};   // a program this backend can't lower (reported after the module)
+    // debug info (DWARF line tables, when the IR marks statements' lines): the builder, a file per
+    // source file, and the current function's subprogram and file
+    di: llvm::LLVMOpaqueDIBuilder* = null;
+    di_files: std::map<u32, llvm::LLVMOpaqueMetadata*> = {};
+    di_sp: llvm::LLVMOpaqueMetadata* = null;
+    di_file: u32 = 0;
+    di_tys: std::map<u32, llvm::LLVMOpaqueMetadata*> = {}; // debug types by Volt type
+    di_busy: std::map<u32, u32> = {};                      // aggregates being described (a pointer back to one is a forward declaration)
 }
 
 // ---------- small helpers ----------
@@ -660,7 +668,7 @@ attach fn decl_fn(this: lg&, i: u32) -> llvm::LLVMOpaqueValue* {
             llvm::LLVMAddAttributeAtIndex(fv, 4294967295, llvm::LLVMCreateStringAttribute(this.ctx, "no-builtins", 11, "", 0));
         }
         if (this.c.opts.line_info) {
-            // --profiler: bolt hot's sampler walks the stack by frame pointers
+            // --profiler and debug builds: bolt hot's sampler and debuggers walk the stack by frame pointers
             llvm::LLVMAddAttributeAtIndex(fv, 4294967295, llvm::LLVMCreateStringAttribute(this.ctx, "frame-pointer", 13, "all", 3));
         }
         val at = f.attrs;
@@ -1952,7 +1960,7 @@ attach fn stmt(this: lg&, n: u32) -> void {
             llvm::LLVMBuildUnreachable(this.b);
             this.dead();
         },
-        .AT(f, l) => {}, // no debug info from this backend yet
+        .AT(f, l) => { this.di_at(f, l); },
         default => { this.rv(n); },
     }
 }
@@ -2013,6 +2021,7 @@ attach fn fn_body(this: lg&, i: u32) -> void {
     val start = this.block();
     llvm::LLVMPositionBuilderAtEnd(this.eb, allocas);
     this.at_block(start);
+    this.di_fn(f);
     // one stack slot per local (a byte for void ones, so every local has an address)
     for (k) in 0..f.locals.len {
         val l = f.locals.at(k);
@@ -2048,6 +2057,7 @@ attach fn fn_body(this: lg&, i: u32) -> void {
             }
         }
     }
+    this.di_locals(f, allocas);
     if (f.body) {
         this.stmt(f.body);
     }
@@ -2073,6 +2083,226 @@ attach fn fn_body(this: lg&, i: u32) -> void {
         }
         bb = llvm::LLVMGetNextBasicBlock(blk);
     }
+    // what's built next (another fn, the constructor) isn't this fn's
+    llvm::LLVMSetCurrentDebugLocation2(this.b, null);
+    this.di_sp = null;
+}
+
+// ---------- debug info ----------
+
+// the DWARF file for source file `file`
+attach fn di_file_of(this: lg&, file: u32) -> llvm::LLVMOpaqueMetadata* {
+    val have = this.di_files.get(file);
+    if (have) {
+        return *have;
+    }
+    var name = S("<generated>");
+    if (@cast<usize>(file) < this.c.files.len) {
+        name = S(this.c.files.at(@cast<usize>(file)).name);
+    }
+    val dir = std::process::cwd();
+    val d = this.di ?? @panic("di");
+    val m = llvm::LLVMDIBuilderCreateFile(d, this.z(name.as_str()), name.len(), this.z(dir.as_str()), dir.len()) ?? @panic("di file");
+    this.di_files.put(file, m);
+    return m;
+}
+
+// the debug info's compile unit, and the module flags debuggers look for
+attach fn di_start(this: lg&) -> void {
+    val d = llvm::LLVMCreateDIBuilder(this.m) ?? @panic("di builder");
+    this.di = d;
+    val file = this.di_file_of(0);
+    llvm::LLVMDIBuilderCreateCompileUnit(d, llvm::LLVMDWARFSourceLanguageC, file, "voltc", 5, @cast<i32>(this.c.opts.release), "", 0, 0, "", 0, llvm::LLVMDWARFEmissionFull, 0, 0, 0, "", 0, "", 0);
+    val i32t = this.i32t();
+    llvm::LLVMAddModuleFlag(this.m, llvm::LLVMModuleFlagBehaviorWarning, "Debug Info Version", 18, llvm::LLVMValueAsMetadata(llvm::LLVMConstInt(i32t, @cast<u64>(llvm::LLVMDebugMetadataVersion()), 0)));
+    llvm::LLVMAddModuleFlag(this.m, llvm::LLVMModuleFlagBehaviorWarning, "Dwarf Version", 13, llvm::LLVMValueAsMetadata(llvm::LLVMConstInt(i32t, 5, 0)));
+}
+
+// fn f's subprogram (its Volt name, the line it's declared on), and its first location
+attach fn di_fn(this: lg&, f: ir_fn&) -> void {
+    val d = this.di ?? return;
+    var file: u32 = 0;
+    var line: u32 = 0;
+    if (f.origin) {
+        val o = f.origin;
+        file = o.file;
+        line = @cast<u32>(this.c.line_col(o).line);
+    }
+    val df = this.di_file_of(file);
+    val ty = llvm::LLVMDIBuilderCreateSubroutineType(d, df, null, 0, llvm::LLVMDIFlagZero);
+    var name = f.about;
+    if (name.len == 0) {
+        name = f.name;
+    }
+    val sym = this.symbol(f);
+    val local = @cast<i32>(f.link == linkage::STATIC);
+    val sp = llvm::LLVMDIBuilderCreateFunction(d, df, this.z(name), name.len, this.z(sym), sym.len, df, line, ty, local, 1, line, llvm::LLVMDIFlagZero, @cast<i32>(this.c.opts.release));
+    llvm::LLVMSetSubprogram(this.f, sp);
+    this.di_sp = sp;
+    this.di_file = file;
+    llvm::LLVMSetCurrentDebugLocation2(this.b, llvm::LLVMDIBuilderCreateDebugLocation(this.ctx, line, 0, sp, null));
+}
+
+// the fn's named locals and parameters, for a debugger (temporaries, _name, aren't shown)
+attach fn di_locals(this: lg&, f: ir_fn&, allocas: llvm::LLVMOpaqueBasicBlock*) -> void {
+    val d = this.di ?? return;
+    val sp = this.di_sp ?? return;
+    val df = this.di_file_of(this.di_file);
+    var line: u32 = 0;
+    if (f.origin) {
+        line = @cast<u32>(this.c.line_col(f.origin).line);
+    }
+    val loc = llvm::LLVMDIBuilderCreateDebugLocation(this.ctx, line, 0, sp, null);
+    val expr = llvm::LLVMDIBuilderCreateExpression(d, null, 0);
+    for (k) in 0..f.locals.len {
+        val l = f.locals.at(k);
+        if (l.name.len == 0 || l.name[0] == '_' || this.is_void(l.ty)) {
+            continue;
+        }
+        val ty = this.di_type(l.ty);
+        var arg: u32 = 0;
+        for (p) in 0..f.params.len {
+            if (@cast<usize>(*f.params.at(p)) == k) {
+                arg = @cast<u32>(p) + 1;
+            }
+        }
+        var v: llvm::LLVMOpaqueMetadata* = null;
+        if (arg > 0) {
+            v = llvm::LLVMDIBuilderCreateParameterVariable(d, sp, this.z(l.name), l.name.len, arg, df, line, ty, 1, llvm::LLVMDIFlagZero);
+        } else {
+            v = llvm::LLVMDIBuilderCreateAutoVariable(d, sp, this.z(l.name), l.name.len, df, line, ty, 1, llvm::LLVMDIFlagZero, 0);
+        }
+        llvm::LLVMDIBuilderInsertDeclareRecordAtEnd(d, *this.locals.at(k), v, expr, loc, allocas);
+    }
+}
+
+// the debug type of Volt type t: what a debugger shows a variable of it as
+attach fn di_type(this: lg&, t: u32) -> llvm::LLVMOpaqueMetadata* {
+    val have = this.di_tys.get(t);
+    if (have) {
+        return *have;
+    }
+    val r = this.make_di_type(t);
+    this.di_tys.put(t, r);
+    return r;
+}
+
+attach fn make_di_type(this: lg&, t: u32) -> llvm::LLVMOpaqueMetadata* {
+    val d = this.di ?? @panic("di");
+    var name = this.c.ty_name(t);
+    match (*this.c.t.get(t)) {
+        .STRUCT(s) => {
+            if (this.c.partial_struct(s)) {
+                // a C struct only C can lay out (reached through pointers): its name, no layout
+                return llvm::LLVMDIBuilderCreateForwardDecl(d, 19, this.z(name.as_str()), name.len(), this.di_file_of(0), this.di_file_of(0), 0, 0, 0, 0, "", 0);
+            }
+        },
+        default => {},
+    }
+    val lty = this.lt(t);
+    val bits = this.size_of(lty) * 8;
+    match (*this.c.t.get(t)) {
+        .BOOL => { return llvm::LLVMDIBuilderCreateBasicType(d, "bool", 4, 8, 2, llvm::LLVMDIFlagZero); },
+        .INT(k) => {
+            var enc: u32 = 7; // DW_ATE_unsigned
+            if (k.signed()) {
+                enc = 5; // DW_ATE_signed
+            }
+            return llvm::LLVMDIBuilderCreateBasicType(d, this.z(name.as_str()), name.len(), bits, enc, llvm::LLVMDIFlagZero);
+        },
+        .FLOAT(b) => { return llvm::LLVMDIBuilderCreateBasicType(d, this.z(name.as_str()), name.len(), bits, 4, llvm::LLVMDIFlagZero); },
+        .ANYERR => { return llvm::LLVMDIBuilderCreateBasicType(d, "anyerror", 8, bits, 7, llvm::LLVMDIFlagZero); },
+        .CSTR => {
+            val ch = llvm::LLVMDIBuilderCreateBasicType(d, "char", 4, 8, 6, llvm::LLVMDIFlagZero);
+            return llvm::LLVMDIBuilderCreatePointerType(d, ch, this.size_of(this.ptrt()) * 8, 0, 0, "cstr", 4);
+        },
+        .REF(x) => { return this.di_pointer(x, name.as_str()); },
+        .PTR(x) => { return this.di_pointer(x, name.as_str()); },
+        .VOIDPTR => { return llvm::LLVMDIBuilderCreatePointerType(d, null, this.size_of(this.ptrt()) * 8, 0, 0, "void*", 5); },
+        .NULL => { return llvm::LLVMDIBuilderCreatePointerType(d, null, this.size_of(this.ptrt()) * 8, 0, 0, "null", 4); },
+        .FN_PTR(ps, r, va) => { return llvm::LLVMDIBuilderCreatePointerType(d, null, this.size_of(this.ptrt()) * 8, 0, 0, this.z(name.as_str()), name.len()); },
+        .ARRAY(x, n) => {
+            var sub = llvm::LLVMDIBuilderGetOrCreateSubrange(d, 0, @cast<i64>(n));
+            return llvm::LLVMDIBuilderCreateArrayType(d, bits, this.align_of(lty) * 8, this.di_type(x), &sub, 1);
+        },
+        default => {},
+    }
+    // an aggregate: its members where the layout puts them; unions and tagged unions as a blob
+    val df = this.di_file_of(0);
+    var members: std::vec<llvm::LLVMOpaqueMetadata*> = {};
+    val n = this.member_count(t);
+    val plain = !this.is_union(t) && !this.c_union(t) && this.overlay(t).0 == 0 && llvm::LLVMGetTypeKind(lty) == llvm::LLVMStructTypeKind;
+    if (plain) {
+        this.di_busy.put(t, 1);
+        for (i) in 0..n {
+            val mt = this.member_ty(t, @cast<u32>(i));
+            if (this.is_void(mt)) {
+                continue;
+            }
+            var mn = this.di_member_name(t, @cast<u32>(i));
+            val off = llvm::LLVMOffsetOfElement(this.td, lty, this.elem(t, @cast<u32>(i))) * 8;
+            val mlt = this.lt(mt);
+            put(&members, llvm::LLVMDIBuilderCreateMemberType(d, df, this.z(mn.as_str()), mn.len(), df, 0, this.size_of(mlt) * 8, this.align_of(mlt) * 8, off, llvm::LLVMDIFlagZero, this.di_type(mt)));
+        }
+        this.di_busy.remove(t);
+    }
+    var els: llvm::LLVMOpaqueMetadata** = null;
+    if (members.len > 0) {
+        els = members.ptr;
+    }
+    return llvm::LLVMDIBuilderCreateStructType(d, df, this.z(name.as_str()), name.len(), df, 0, bits, this.align_of(lty) * 8, llvm::LLVMDIFlagZero, null, els, @cast<u32>(members.len), 0, null, "", 0);
+}
+
+// a pointer to x; to an aggregate still being described, a pointer to its name
+attach fn di_pointer(this: lg&, x: u32, name: str) -> llvm::LLVMOpaqueMetadata* {
+    val d = this.di ?? @panic("di");
+    var to: llvm::LLVMOpaqueMetadata* = null;
+    if (this.di_busy.get(x) != null) {
+        var xn = this.c.ty_name(x);
+        to = llvm::LLVMDIBuilderCreateForwardDecl(d, 19, this.z(xn.as_str()), xn.len(), this.di_file_of(0), this.di_file_of(0), 0, 0, 0, 0, "", 0); // DW_TAG_structure_type
+    } else if (!this.is_void(x)) {
+        to = this.di_type(x);
+    }
+    return llvm::LLVMDIBuilderCreatePointerType(d, to, this.size_of(this.ptrt()) * 8, 0, 0, this.z(name), name.len);
+}
+
+// aggregate t's member i's name, as a debugger shows it
+attach fn di_member_name(this: lg&, t: u32, i: u32) -> std::string {
+    match (*this.c.t.get(t)) {
+        .STRUCT(s) => {
+            val fs = this.c.struct_fields(s, {}) catch |e| { return S("?"); };
+            return S(fs.at(@cast<usize>(i)).name);
+        },
+        .CLOSURE(c) => { return S(this.c.ci(c).caps.at(@cast<usize>(i)).name); },
+        .SLICE(x) => {
+            if (i == 0) {
+                return S("ptr");
+            }
+            return S("len");
+        },
+        .STR => {
+            if (i == 0) {
+                return S("ptr");
+            }
+            return S("len");
+        },
+        default => {},
+    }
+    var n = S("f");
+    n.append_uint(@cast<u64>(i));
+    return n;
+}
+
+// a statement on line `line` of source file `file` starts here
+attach fn di_at(this: lg&, file: u32, line: u32) -> void {
+    val d = this.di ?? return;
+    val sp = this.di_sp ?? return;
+    var scope = sp;
+    if (file != this.di_file) {
+        // code from another file inside this fn (a template's body): a scope in that file
+        scope = llvm::LLVMDIBuilderCreateLexicalBlockFile(d, sp, this.di_file_of(file), 0) ?? sp;
+    }
+    llvm::LLVMSetCurrentDebugLocation2(this.b, llvm::LLVMDIBuilderCreateDebugLocation(this.ctx, line, 0, scope, null));
 }
 
 // globals whose initial value isn't a constant: set before main by a constructor
@@ -2199,6 +2429,10 @@ attach fn llvm_build(this: checker&, g: lg&) -> std::string {
     g.b = llvm::LLVMCreateBuilderInContext(g.ctx);
     g.eb = llvm::LLVMCreateBuilderInContext(g.ctx);
     g.read_aliases();
+    if (this.opts.line_info) {
+        // the IR marks each statement's line: DWARF line tables, so a debugger steps through Volt
+        g.di_start();
+    }
     for (b) in this.ir.bodies.items() {
         val f = this.ir.fn_at(b);
         if (f.body != null && f.used && f.link != linkage::EXTERNAL) {
@@ -2220,7 +2454,11 @@ attach fn llvm_build(this: checker&, g: lg&) -> std::string {
         llvm::LLVMSetModuleInlineAsm2(g.m, start.c_str(), start.len());
     }
     if (g.err.len() > 0) {
+        this.llvm_cant_lower = true;
         return copy g.err;
+    }
+    if (g.di) {
+        llvm::LLVMDIBuilderFinalize(g.di);
     }
     var msg: cstr? = null;
     if (llvm::LLVMVerifyModule(g.m, llvm::LLVMReturnStatusAction, &msg) != 0) {

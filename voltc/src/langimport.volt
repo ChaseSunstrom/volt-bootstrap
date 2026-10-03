@@ -160,22 +160,25 @@ fn find_bolt() -> std::string {
     return S("bolt");
 }
 
-// where bolt keeps one import's work: $VOLT_CACHE, else $XDG_CACHE_HOME/volt, else ~/.cache/volt,
-// then imports/LANG-ALIAS-<a hash of the importing directory>
-fn import_dir(lang: str, alias: str, from: str) -> std::string {
-    var base = S("");
+// Volt's cache: $VOLT_CACHE, else $XDG_CACHE_HOME/volt, else ~/.cache/volt
+fn cache_base() -> std::string {
     val vc = std::process::env("VOLT_CACHE");
     val xdg = std::process::env("XDG_CACHE_HOME");
     val home = std::process::env("HOME");
     if (vc) {
-        base = S(vc);
+        return S(vc);
     } else if (xdg) {
-        base = fmt("{}/volt", S(xdg));
+        return fmt("{}/volt", S(xdg));
     } else if (home) {
-        base = fmt("{}/.cache/volt", S(home));
-    } else {
-        base = S("/tmp/volt-cache");
+        return fmt("{}/.cache/volt", S(home));
     }
+    return S("/tmp/volt-cache");
+}
+
+// where bolt keeps one import's work: the cache's imports/LANG-ALIAS-<a hash of the importing
+// directory>
+fn import_dir(lang: str, alias: str, from: str) -> std::string {
+    val base = cache_base();
     val dir = real_file(from) ?? S(from);
     val h = std::digest::fnv1a(dir.as_str());
     return std::fmt::format("{}/imports/{}-{}-{:x}", base.as_str(), lang, alias, h);
