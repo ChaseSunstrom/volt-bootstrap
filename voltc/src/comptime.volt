@@ -2874,6 +2874,16 @@ attach fn cfg_on(this: checker&, parts: std::vec<std::string>&, span: span) -> c
     if (key_only && want.as_str() == "release") {
         return this.opts.release;
     }
+    // hosted and unix follow os alone (as the bootstrap compiler has them)
+    // @cfg("hosted"): there's an OS (any target but os=none, bare metal), for std's OS parts
+    if (key_only && want.as_str() == "hosted") {
+        return (this.cfg_given("os") ?? "") != "none";
+    }
+    // @cfg("unix"): a POSIX system (Linux, macOS, FreeBSD), for std's code that Windows hasn't
+    if (key_only && want.as_str() == "unix") {
+        val target_os = this.cfg_given("os") ?? std::process::os();
+        return target_os == "linux" || target_os == "macos" || target_os == "freebsd";
+    }
     val pkg = this.pkg_of_file(span.file);
     for (c&) in this.opts.cfg.items() {
         if (!same_pkg(c.pkg, pkg) || is_target_key(c.set)) {
@@ -2886,10 +2896,6 @@ attach fn cfg_on(this: checker&, parts: std::vec<std::string>&, span: span) -> c
     }
     // the target's keys, for every package: the host's values (this voltc's runtime names them),
     // unless --cfg gives one for any package, which replaces it (checking another platform's code)
-    // @cfg("hosted"): there's an OS (any target but os=none, bare metal), for std's OS parts
-    if (key_only && want.as_str() == "hosted") {
-        return (this.cfg_given("os") ?? "") != "none";
-    }
     var host_bits = S("");
     host_bits.append_uint(@cast<u64>(@sizeof(usize) * 8));
     var os = S("os=");

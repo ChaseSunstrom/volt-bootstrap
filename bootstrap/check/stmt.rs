@@ -231,6 +231,11 @@ impl Checker {
             }
             Ty::Ref(_) => err(span, format!("a {} needs an initializer (references can't be null)", self.ty_name(t))),
             Ty::Opt(_) => Ok(self.none(t)),
+            Ty::Array(_, 0) => {
+                // {0} sets the first member: an array of none has none
+                let c = self.cty(t);
+                Ok(Val::pure(t, format!("(({c}){{}})")))
+            }
             Ty::Array(et, n) => {
                 // all zero bytes, unless an element starts otherwise (a struct field's default)
                 let z = self.zero_value(et, span)?;

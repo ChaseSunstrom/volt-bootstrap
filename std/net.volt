@@ -45,8 +45,6 @@ namespace net {
         internal extern "C" fn fcntl(fd: i32, cmd: i32, ...) -> i32;
         internal extern "C" fn getaddrinfo(host: cstr, port: cstr?, hints: void*, out: void**) -> i32;
         internal extern "C" fn freeaddrinfo(ai: void*) -> void;
-        internal extern "C" fn __errno_location() -> i32&; // Linux
-        internal extern "C" fn __error() -> i32&;          // macOS, FreeBSD
     }
 
     // Windows (Winsock): a socket is a 64-bit handle, the error comes from WSAGetLastError
@@ -74,30 +72,17 @@ namespace net {
         internal extern "C" fn freeaddrinfo(ai: void*) -> void;
     }
 
-    // the number for this system: Linux, macOS, FreeBSD or Windows
-    internal fn by_os(linux: i32, macos: i32, freebsd: i32, windows: i32) -> i32 {
-        comptime if (@cfg("os", "windows")) {
-            return windows;
-        } else if (@cfg("os", "macos")) {
-            return macos;
-        } else if (@cfg("os", "freebsd")) {
-            return freebsd;
-        } else {
-            return linux;
-        }
-    }
-
     // BSD sockaddrs start with a length byte, then a one-byte family
     internal fn bsd() -> bool {
         return @cfg("os", "macos") || @cfg("os", "freebsd");
     }
 
     internal fn af_inet6() -> i32 {
-        return by_os(10, 30, 28, 23);
+        return platform::by_os(10, 30, 28, 23);
     }
 
     internal fn sol_socket() -> i32 {
-        return by_os(1, 0xffff, 0xffff, 0xffff);
+        return platform::by_os(1, 0xffff, 0xffff, 0xffff);
     }
 
     // Winsock wants WSAStartup before anything else (it counts calls, so more than one is fine)
@@ -117,28 +102,26 @@ namespace net {
     internal fn last_error() -> i32 {
         comptime if (@cfg("os", "windows")) {
             return win::WSAGetLastError();
-        } else if (@cfg("os", "linux")) {
-            return *posix::__errno_location();
         } else {
-            return *posix::__error();
+            return platform::errno();
         }
     }
 
     // the net_error for an error number
     internal fn error_from(code: i32) -> net_error {
-        if (code == by_os(111, 61, 61, 10061)) {
+        if (code == platform::by_os(111, 61, 61, 10061)) {
             return net_error::REFUSED;
         }
-        if (code == by_os(110, 60, 60, 10060) || code == by_os(11, 35, 35, 10035)) {
+        if (code == platform::by_os(110, 60, 60, 10060) || code == platform::by_os(11, 35, 35, 10035)) {
             return net_error::TIMED_OUT; // a timed-out read or write says EAGAIN
         }
-        if (code == by_os(98, 48, 48, 10048) || code == by_os(99, 49, 49, 10049)) {
+        if (code == platform::by_os(98, 48, 48, 10048) || code == platform::by_os(99, 49, 49, 10049)) {
             return net_error::IN_USE;
         }
-        if (code == by_os(104, 54, 54, 10054) || code == by_os(32, 32, 32, 10058) || code == by_os(103, 53, 53, 10053)) {
+        if (code == platform::by_os(104, 54, 54, 10054) || code == platform::by_os(32, 32, 32, 10058) || code == platform::by_os(103, 53, 53, 10053)) {
             return net_error::RESET;
         }
-        if (code == by_os(101, 51, 51, 10051) || code == by_os(113, 65, 65, 10065)) {
+        if (code == platform::by_os(101, 51, 51, 10051) || code == platform::by_os(113, 65, 65, 10065)) {
             return net_error::UNREACHABLE;
         }
         return net_error::IO;
@@ -234,7 +217,7 @@ namespace net {
             return @cast<i64>(win::send(@cast<u64>(fd), @cast<void*>(data.ptr), @cast<i32>(n), 0));
         } else {
             loop {
-                val r = posix::send(@cast<i32>(fd), @cast<void*>(data.ptr), data.len, by_os(0x4000, 0, 0x20000, 0));
+                val r = posix::send(@cast<i32>(fd), @cast<void*>(data.ptr), data.len, platform::by_os(0x4000, 0, 0x20000, 0));
                 if (r >= 0 || !interrupted()) {
                     return @cast<i64>(r);
                 }
@@ -264,7 +247,7 @@ namespace net {
             return @cast<i64>(win::sendto(@cast<u64>(fd), @cast<void*>(data.ptr), @cast<i32>(data.len), 0, @cast<void*>(sa.ptr), @cast<i32>(len)));
         } else {
             loop {
-                val r = posix::sendto(@cast<i32>(fd), @cast<void*>(data.ptr), data.len, by_os(0x4000, 0, 0x20000, 0), @cast<void*>(sa.ptr), len);
+                val r = posix::sendto(@cast<i32>(fd), @cast<void*>(data.ptr), data.len, platform::by_os(0x4000, 0, 0x20000, 0), @cast<void*>(sa.ptr), len);
                 if (r >= 0 || !interrupted()) {
                     return @cast<i64>(r);
                 }
@@ -311,7 +294,7 @@ namespace net {
             win::getsockopt(@cast<u64>(fd), 0xffff, 0x1007, @cast<void*>(&e), &len);
         } else {
             var len: u32 = 4;
-            posix::getsockopt(@cast<i32>(fd), sol_socket(), by_os(4, 0x1007, 0x1007, 0x1007), @cast<void*>(&e), &len);
+            posix::getsockopt(@cast<i32>(fd), sol_socket(), platform::by_os(4, 0x1007, 0x1007, 0x1007), @cast<void*>(&e), &len);
         }
         return e;
     }
@@ -345,7 +328,7 @@ namespace net {
             }
             win::ioctlsocket(@cast<u64>(fd), @cast<i32>(@cast<u32>(0x8004667E)), &arg); // FIONBIO
         } else {
-            val nonblock = by_os(0x800, 4, 4, 0); // O_NONBLOCK
+            val nonblock = platform::by_os(0x800, 4, 4, 0); // O_NONBLOCK
             val flags = posix::fcntl(@cast<i32>(fd), 3, 0); // F_GETFL
             if (on) {
                 posix::fcntl(@cast<i32>(fd), 4, flags | nonblock); // F_SETFL
@@ -461,7 +444,7 @@ namespace net {
         var out: std::vec<address, A> = { allocator: move allocator };
         // walk the list: ai_family at 4, ai_addr at 24 (Linux) or 32 (the others, after
         // ai_canonname), ai_next at 40
-        val at_addr = @cast<usize>(by_os(24, 32, 32, 32));
+        val at_addr = @cast<usize>(platform::by_os(24, 32, 32, 32));
         var p = @cast<usize>(list);
         while (p != 0) {
             val sa = *@cast<u8**>(p + at_addr);
@@ -526,7 +509,7 @@ namespace net {
         sys_nonblocking(fd, true);
         if (sys_connect(fd, sa[..], len) != 0) {
             val code = last_error();
-            if (code != by_os(115, 36, 36, 10035)) { // EINPROGRESS (WSAEWOULDBLOCK)
+            if (code != platform::by_os(115, 36, 36, 10035)) { // EINPROGRESS (WSAEWOULDBLOCK)
                 sys_close(fd);
                 return error_from(code);
             }
@@ -580,7 +563,7 @@ namespace net {
         }
         // a server restarted right away can have its port back (SO_REUSEADDR)
         var on: i32 = 1;
-        sys_setsockopt(fd, sol_socket(), by_os(2, 4, 4, 4), @cast<void*>(&on), 4);
+        sys_setsockopt(fd, sol_socket(), platform::by_os(2, 4, 4, 4), @cast<void*>(&on), 4);
         var sa: u8[28];
         val len = put_addr(&a, sa[..]);
         if (sys_bind(fd, sa[..], len) != 0 || sys_listen(fd, backlog) != 0) {
@@ -680,7 +663,7 @@ namespace net {
             var tv: i64[2]; // struct timeval: seconds, microseconds
             tv[0] = ns / 1000000000;
             tv[1] = ns % 1000000000 / 1000;
-            sys_setsockopt(fd, sol_socket(), by_os(name_posix_linux, name_other, name_other, name_other), @cast<void*>(&tv), 16);
+            sys_setsockopt(fd, sol_socket(), platform::by_os(name_posix_linux, name_other, name_other, name_other), @cast<void*>(&tv), 16);
         }
     }
 }

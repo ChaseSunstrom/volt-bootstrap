@@ -43,7 +43,8 @@ fn main() -> !void {
 ```
 
 `open`'s mode is C's: `"r"` (the default) reads, `"w"` creates or empties the file, `"a"` appends,
-and `"r+"`, `"w+"`, `"a+"` both read and write. `read_line` gives the next line without its line
+and `"r+"`, `"w+"`, `"a+"` both read and write. Files are always binary: on Windows too, what's
+written is what's read, with no `"\r\n"` added. `read_line` gives the next line without its line
 ending, or `null` at the end; `lines()` loops over them. `seek` counts from `std::fs::seek_from::START`
 (the default), `CURRENT` or `END`.
 
@@ -79,7 +80,12 @@ fn main() -> !void {
 `list_dir` gives the names in a directory, sorted; `walk` every file below it as a path. Neither
 follows links to directories, and `remove_all` removes a link rather than what it points at. Errors
 are `std::fs::fs_error`: `NOT_FOUND`, `EXISTS`, `NOT_EMPTY`, `PERMISSION`, `NOT_A_DIR`, `IS_A_DIR`,
-`IO`.
+`IO`, `BAD_PATH`, the same on every system.
+
+`std::fs` has code for Linux, macOS, FreeBSD and Windows (64-bit). On Windows, `std::path` takes
+`\` as a separator too and `C:\` as a root, `rename` replaces a file that's there as it does
+elsewhere, and paths go to the system in its "ANSI" code page: a path with non-ASCII characters
+works only where that code page is UTF-8.
 
 ## Paths
 

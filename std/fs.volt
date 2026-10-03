@@ -54,12 +54,64 @@ namespace fs {
     internal extern "C" fn readdir(dir: void*) -> u8*;
     internal extern "C" fn closedir(dir: void*) -> i32;
     internal extern "C" fn strlen(s: cstr) -> usize;
-    internal extern "C" fn __errno_location() -> i32&;
 
-    // the fs_error for the last failed call's errno
-    // ponytail: Linux's errno numbers; other systems need their own
+    // Windows: the CRT's names for the POSIX calls above, and kernel32 for what the CRT doesn't have
+    // (64-bit only, where the system's calls are plain C ones).
+    // ponytail: paths cross as the "ANSI" code page, so a UTF-8 path with non-ASCII in it only works
+    // on a system set to UTF-8; the W calls with UTF-16 paths if that matters
+    namespace win {
+        internal extern "C" fn _access(path: cstr, mode: i32) -> i32;
+        internal extern "C" fn _mkdir(path: cstr) -> i32;
+        internal extern "C" fn _rmdir(path: cstr) -> i32;
+        internal extern "C" fn _unlink(path: cstr) -> i32;
+        internal extern "C" fn _fseeki64(f: void*, offset: i64, whence: i32) -> i32; // C's long is 32 bits there
+        internal extern "C" fn _ftelli64(f: void*) -> i64;
+        internal extern "C" fn fgetc(f: void*) -> i32;
+        internal extern "C" fn FindFirstFileA(pattern: cstr, data: void*) -> isize; // -1 when it fails
+        internal extern "C" fn FindNextFileA(h: isize, data: void*) -> i32;
+        internal extern "C" fn FindClose(h: isize) -> i32;
+        internal extern "C" fn GetFileAttributesA(path: cstr) -> u32;
+        internal extern "C" fn MoveFileExA(from: cstr, to: cstr, flags: u32) -> i32;
+        internal extern "C" fn GetLastError() -> u32;
+    }
+
+    // GetFileAttributesA's answers
+    internal fn no_attributes() -> u32 {
+        return 0xffffffff;
+    }
+    internal fn dir_attribute() -> u32 {
+        return 0x10;
+    }
+    internal fn link_attribute() -> u32 {
+        return 0x400; // a reparse point: a symbolic link or a junction
+    }
+
+    // the fs_error for a Windows call's GetLastError
+    internal fn from_win(e: u32) -> fs_error {
+        if (e == 2 || e == 3) {
+            return fs_error::NOT_FOUND; // no such file, no such path
+        }
+        if (e == 5 || e == 32) {
+            return fs_error::PERMISSION; // access denied, in use by another process
+        }
+        if (e == 80 || e == 183) {
+            return fs_error::EXISTS;
+        }
+        if (e == 145) {
+            return fs_error::NOT_EMPTY;
+        }
+        if (e == 267) {
+            return fs_error::NOT_A_DIR;
+        }
+        if (e == 123 || e == 161 || e == 206) {
+            return fs_error::BAD_PATH; // a bad name, a bad path, too long
+        }
+        return fs_error::IO;
+    }
+
+    // the fs_error for the last failed C library call's errno
     internal fn from_errno() -> fs_error {
-        val e = *__errno_location();
+        val e = platform::errno();
         if (e == 2) {
             return fs_error::NOT_FOUND;
         }
@@ -69,7 +121,7 @@ namespace fs {
         if (e == 17) {
             return fs_error::EXISTS;
         }
-        if (e == 39) {
+        if (e == platform::by_os(39, 66, 66, 41)) {
             return fs_error::NOT_EMPTY;
         }
         if (e == 20) {
@@ -79,6 +131,23 @@ namespace fs {
             return fs_error::IS_A_DIR;
         }
         return fs_error::IO;
+    }
+
+    // fseek and ftell with 64-bit offsets everywhere
+    internal fn c_seek(f: void*, offset: i64, whence: i32) -> i32 {
+        comptime if (@cfg("os", "windows")) {
+            return win::_fseeki64(f, offset, whence);
+        } else {
+            return fseek(f, offset, whence);
+        }
+    }
+
+    internal fn c_tell(f: void*) -> i64 {
+        comptime if (@cfg("os", "windows")) {
+            return win::_ftelli64(f);
+        } else {
+            return ftell(f);
+        }
     }
 
     // the whole file
@@ -130,15 +199,26 @@ namespace fs {
     // whether something is at path
     fn exists(path: str) -> bool {
         var pb: u8[4096];
-        return access(c_text(path, pb[..]) catch return false, 0) == 0;
+        val p = c_text(path, pb[..]) catch return false;
+        comptime if (@cfg("os", "windows")) {
+            return win::_access(p, 0) == 0;
+        } else {
+            return access(p, 0) == 0;
+        }
     }
 
     // whether path is a directory (or a link to one)
     fn is_dir(path: str) -> bool {
         var pb: u8[4096];
-        val d = opendir(c_text(path, pb[..]) catch return false) ?? return false;
-        closedir(d);
-        return true;
+        val p = c_text(path, pb[..]) catch return false;
+        comptime if (@cfg("os", "windows")) {
+            val a = win::GetFileAttributesA(p);
+            return a != no_attributes() && (a & dir_attribute()) != 0;
+        } else {
+            val d = opendir(p) ?? return false;
+            closedir(d);
+            return true;
+        }
     }
 
     // whether path is there and isn't a directory
@@ -150,8 +230,8 @@ namespace fs {
     fn size(path: str) -> fs_error!u64 {
         var pb: u8[4096];
         val f = fopen(try c_text(path, pb[..]), "rb") ?? return from_errno();
-        val ok = fseek(f, 0, 2) == 0;
-        val n = ftell(f);
+        val ok = c_seek(f, 0, 2) == 0;
+        val n = c_tell(f);
         fclose(f);
         if (!ok || n < 0) {
             return fs_error::IO;
@@ -163,20 +243,42 @@ namespace fs {
     // whether each is a directory (a link to one isn't: walking and removing don't follow links)
     <A: std::mem::t_allocator>
     internal fn scan(path: str, names: std::vec<std::string<A>, A>&, dirs: std::vec<bool, A>&) -> fs_error!void {
+        comptime if (@cfg("os", "windows")) {
+            return scan_windows(path, names, dirs);
+        } else {
+            return scan_posix(path, names, dirs);
+        }
+    }
+
+    // scan, through opendir and readdir
+    <A: std::mem::t_allocator>
+    internal fn scan_posix(path: str, names: std::vec<std::string<A>, A>&, dirs: std::vec<bool, A>&) -> fs_error!void {
         var pb: u8[4096];
         val d = opendir(try c_text(path, pb[..])) ?? return from_errno();
+        // where struct dirent keeps d_type and d_name: glibc and musl on 64-bit Linux; macOS's (on
+        // x86-64, plain readdir is the old one, with 32-bit inode numbers); FreeBSD 12's
+        var type_at: usize = 18;
+        var name_at: usize = 19;
+        comptime if (@cfg("os", "macos") && @cfg("arch", "x86_64")) {
+            type_at = 6;
+            name_at = 8;
+        } else if (@cfg("os", "macos")) {
+            type_at = 20;
+            name_at = 21;
+        } else if (@cfg("os", "freebsd")) {
+            name_at = 24;
+        }
         loop {
             val ent = readdir(d) ?? break;
-            // ponytail: struct dirent's d_type at byte 18 and d_name at 19, as glibc and musl lay it out
-            // on 64-bit Linux; other systems need their own offsets
-            val bytes = @slice(ent, 20);
-            val cname = @cast<cstr>(&bytes[19]);
+            val bytes = @slice(ent, name_at + 1);
+            val cname = @cast<cstr>(&bytes[name_at]);
             val name = @cast<str>(@slice(@cast<u8*>(cname), strlen(cname)));
             if (name == "." || name == "..") {
                 continue;
             }
-            var dir = bytes[18] == 4; // DT_DIR
-            if (bytes[18] == 0) {
+            val kind = bytes[type_at];
+            var dir = kind == 4; // DT_DIR
+            if (kind == 0) {
                 // DT_UNKNOWN (a filesystem without types): ask
                 // ponytail: this one follows links, so a link loop on such a filesystem walks forever
                 dir = is_dir(std::path::join(path, name, copy names.allocator).as_str());
@@ -185,6 +287,43 @@ namespace fs {
             dirs.push(dir) catch @panic("out of memory");
         }
         closedir(d);
+    }
+
+    // scan, through FindFirstFileA and FindNextFileA
+    <A: std::mem::t_allocator>
+    internal fn scan_windows(path: str, names: std::vec<std::string<A>, A>&, dirs: std::vec<bool, A>&) -> fs_error!void {
+        var pb: u8[4096];
+        var qb: u8[4096];
+        val p = try c_text(path, pb[..]);
+        val pattern = std::path::join(path, "*", copy names.allocator);
+        // WIN32_FIND_DATAA: the attributes at byte 0, the name (NUL-ended) at 44
+        var data: u32[80];
+        val h = win::FindFirstFileA(try c_text(pattern.as_str(), qb[..]), @cast<void*>(&data[0]));
+        if (h == -1) {
+            val e = win::GetLastError();
+            val a = win::GetFileAttributesA(p);
+            if (a != no_attributes() && (a & dir_attribute()) == 0) {
+                return fs_error::NOT_A_DIR;
+            }
+            if (e == 2 && a != no_attributes()) {
+                return; // nothing in it (a drive's root has no "." or "..")
+            }
+            return from_win(e);
+        }
+        loop {
+            val cname = @cast<cstr>(&@slice(@cast<u8*>(&data[0]), 320)[44]);
+            val name = @cast<str>(@slice(@cast<u8*>(cname), strlen(cname)));
+            if (name != "." && name != "..") {
+                // a link to a directory isn't one here: walking and removing don't follow links
+                val a = data[0];
+                names.push(std::string::from(name, copy names.allocator)) catch @panic("out of memory");
+                dirs.push((a & dir_attribute()) != 0 && (a & link_attribute()) == 0) catch @panic("out of memory");
+            }
+            if (win::FindNextFileA(h, @cast<void*>(&data[0])) == 0) {
+                break;
+            }
+        }
+        win::FindClose(h);
     }
 
     // the names in directory path (not "." or ".."), sorted
@@ -225,8 +364,15 @@ namespace fs {
     // make directory path (its parent has to exist)
     fn create_dir(path: str) -> fs_error!void {
         var pb: u8[4096];
-        if (mkdir(try c_text(path, pb[..]), 0o777) != 0) {
-            return from_errno();
+        val p = try c_text(path, pb[..]);
+        comptime if (@cfg("os", "windows")) {
+            if (win::_mkdir(p) != 0) {
+                return from_errno();
+            }
+        } else {
+            if (mkdir(p, 0o777) != 0) {
+                return from_errno();
+            }
         }
     }
 
@@ -247,10 +393,27 @@ namespace fs {
         };
     }
 
+    // C's unlink and rmdir: 0, or -1 with errno set
+    internal fn c_unlink(path: cstr) -> i32 {
+        comptime if (@cfg("os", "windows")) {
+            return win::_unlink(path);
+        } else {
+            return unlink(path);
+        }
+    }
+
+    internal fn c_rmdir(path: cstr) -> i32 {
+        comptime if (@cfg("os", "windows")) {
+            return win::_rmdir(path);
+        } else {
+            return rmdir(path);
+        }
+    }
+
     // remove the file (or link) at path
     fn remove_file(path: str) -> fs_error!void {
         var pb: u8[4096];
-        if (unlink(try c_text(path, pb[..])) != 0) {
+        if (c_unlink(try c_text(path, pb[..])) != 0) {
             return from_errno();
         }
     }
@@ -258,7 +421,7 @@ namespace fs {
     // remove directory path, which has to be empty
     fn remove_dir(path: str) -> fs_error!void {
         var pb: u8[4096];
-        if (rmdir(try c_text(path, pb[..])) != 0) {
+        if (c_rmdir(try c_text(path, pb[..])) != 0) {
             return from_errno();
         }
     }
@@ -266,7 +429,18 @@ namespace fs {
     // remove path: a file, or a directory with everything in it. A link is removed, not followed
     fn remove_all(path: str) -> fs_error!void {
         var pb: u8[4096];
-        if (unlink(try c_text(path, pb[..])) == 0) {
+        val p = try c_text(path, pb[..]);
+        comptime if (@cfg("os", "windows")) {
+            // a link to a directory is removed as a directory is; listing it would list its target
+            val a = win::GetFileAttributesA(p);
+            if (a != no_attributes() && (a & dir_attribute()) != 0 && (a & link_attribute()) != 0) {
+                if (win::_rmdir(p) != 0) {
+                    return from_errno();
+                }
+                return;
+            }
+        }
+        if (c_unlink(p) == 0) {
             return;
         }
         val e = from_errno();
@@ -288,8 +462,18 @@ namespace fs {
     fn rename(from: str, to: str) -> fs_error!void {
         var fb: u8[4096];
         var tb: u8[4096];
-        if (sys::rename(try c_text(from, fb[..]), try c_text(to, tb[..])) != 0) {
-            return from_errno();
+        val f = try c_text(from, fb[..]);
+        val t = try c_text(to, tb[..]);
+        comptime if (@cfg("os", "windows")) {
+            // the CRT's rename won't replace a file: MOVEFILE_REPLACE_EXISTING, MOVEFILE_COPY_ALLOWED
+            // (to another drive)
+            if (win::MoveFileExA(f, t, 3) == 0) {
+                return from_win(win::GetLastError());
+            }
+        } else {
+            if (sys::rename(f, t) != 0) {
+                return from_errno();
+            }
         }
     }
 
@@ -324,13 +508,33 @@ namespace fs {
     // open the file at path. mode: "r" reads; "w" writes, creating or emptying it; "a" appends,
     // creating it; "r+" reads and writes; "w+" empties it, then both; "a+" reads and appends
     fn open(path: str, mode: str = "r") -> fs_error!file {
-        if (mode != "r" && mode != "w" && mode != "a" && mode != "r+" && mode != "w+" && mode != "a+") {
-            @panic("std::fs::open: mode is r, w, a, r+, w+ or a+");
-        }
         var pb: u8[4096];
-        var mb: u8[4];
-        val f = fopen(try c_text(path, pb[..]), try c_text(mode, mb[..])) ?? return from_errno();
+        val f = fopen(try c_text(path, pb[..]), c_mode(mode)) ?? return from_errno();
         return { handle: f };
+    }
+
+    // open's mode for fopen, binary: "b" keeps Windows from turning "\n" into "\r\n" (elsewhere it
+    // changes nothing)
+    internal fn c_mode(mode: str) -> cstr {
+        if (mode == "r") {
+            return "rb";
+        }
+        if (mode == "w") {
+            return "wb";
+        }
+        if (mode == "a") {
+            return "ab";
+        }
+        if (mode == "r+") {
+            return "r+b";
+        }
+        if (mode == "w+") {
+            return "w+b";
+        }
+        if (mode == "a+") {
+            return "a+b";
+        }
+        @panic("std::fs::open: mode is r, w, a, r+, w+ or a+");
     }
 
     // walks a file's lines (see lines)
@@ -367,20 +571,43 @@ attach fn read_all(this: std::fs::file&, allocator: A = {}) -> std::fs::fs_error
 // the next line, without its "\n" (or "\r\n"); null at the end of the file. Any length, NUL bytes too
 <A: std::mem::t_allocator = std::mem::default_allocator>
 attach fn read_line(this: std::fs::file&, allocator: A = {}) -> std::fs::fs_error!(std::string<A>?) {
-    // getline counts the bytes (fgets can't: it would stop the line at a NUL) and grows its buffer,
-    // which C's malloc owns, so C's free gives it back
-    var buf: u8* = @cast<u8*>(0);
-    var cap: usize = 0;
-    val n = std::fs::getline(&buf, &cap, this.handle);
-    if (n < 0) {
-        std::fs::free(buf as void*);
-        if (std::fs::ferror(this.handle) != 0) {
-            return std::fs::fs_error::IO;
+    var out = std::string::new_in(move allocator);
+    comptime if (@cfg("os", "windows")) {
+        // no getline: a byte at a time
+        var any = false;
+        loop {
+            val c = std::fs::win::fgetc(this.handle);
+            if (c < 0) {
+                break; // EOF, or an error
+            }
+            any = true;
+            out.push(@cast<u8>(c));
+            if (c == 10) {
+                break;
+            }
         }
-        return null;
+        if (!any) {
+            if (std::fs::ferror(this.handle) != 0) {
+                return std::fs::fs_error::IO;
+            }
+            return null;
+        }
+    } else {
+        // getline counts the bytes (fgets can't: it would stop the line at a NUL) and grows its
+        // buffer, which C's malloc owns, so C's free gives it back
+        var buf: u8* = @cast<u8*>(0);
+        var cap: usize = 0;
+        val n = std::fs::getline(&buf, &cap, this.handle);
+        if (n < 0) {
+            std::fs::free(buf as void*);
+            if (std::fs::ferror(this.handle) != 0) {
+                return std::fs::fs_error::IO;
+            }
+            return null;
+        }
+        out.append(@cast<str>(@slice(buf, @cast<usize>(n))));
+        std::fs::free(buf as void*);
     }
-    var out = std::string::from(@cast<str>(@slice(buf, @cast<usize>(n))), move allocator);
-    std::fs::free(buf as void*);
     if (out.as_str().ends_with("\n")) {
         out.pop();
     }
@@ -424,7 +651,7 @@ attach fn seek(this: std::fs::file&, offset: i64, from: std::fs::seek_from = std
     } else if (from == std::fs::seek_from::END) {
         whence = 2;
     }
-    if (std::fs::fseek(this.handle, offset, whence) != 0) {
+    if (std::fs::c_seek(this.handle, offset, whence) != 0) {
         return std::fs::from_errno();
     }
     return this.position();
@@ -432,7 +659,7 @@ attach fn seek(this: std::fs::file&, offset: i64, from: std::fs::seek_from = std
 
 // the current position, in bytes from the start
 attach fn position(this: std::fs::file&) -> std::fs::fs_error!u64 {
-    val n = std::fs::ftell(this.handle);
+    val n = std::fs::c_tell(this.handle);
     if (n < 0) {
         return std::fs::from_errno();
     }

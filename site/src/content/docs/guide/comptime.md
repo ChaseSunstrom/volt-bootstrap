@@ -236,7 +236,8 @@ Three keys describe the platform being built for. Every package sees them withou
 A library uses them to pick per-platform code, and the branches for other platforms aren't checked.
 At run time, `std::process::os()` and `std::process::arch()` give the same names.
 `@cfg("hosted")` is true when there's an OS at all (`os` isn't `none`), for code that needs files,
-threads or a clock.
+threads or a clock, and `@cfg("unix")` when it's a POSIX system (Linux, macOS or FreeBSD), for code
+Windows does differently. With `--cfg os=...` they follow the `os` given.
 
 `@cfg` also goes on a declaration, as an attribute: the declaration is only in builds where it holds,
 and in others it isn't even checked. On a namespace it covers everything inside:

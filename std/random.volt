@@ -12,8 +12,9 @@ namespace random {
         s3: u64;
     }
 
-    internal extern "C" fn getrandom(buf: void*, len: usize, flags: u32) -> isize;
-    internal extern "C" fn __errno_location() -> i32&;
+    internal extern "C" fn getrandom(buf: void*, len: usize, flags: u32) -> isize; // Linux, FreeBSD
+    internal extern "C" fn getentropy(buf: void*, len: usize) -> i32;              // macOS: 256 bytes a call
+    internal extern "C" fn rand_s(out: u32*) -> i32;                                // Windows' CRT: 4 bytes a call
 
     // x rotated left by k bits
     internal fn rotl(x: u64, k: u64) -> u64 {
@@ -39,14 +40,37 @@ namespace random {
     fn os_bytes(buf: u8[..]) -> bool {
         var done: usize = 0;
         while (done < buf.len) {
-            val n = getrandom(@cast<void*>(&buf[done]), buf.len - done, 0);
-            if (n < 0) {
-                if (*__errno_location() == 4) {
-                    continue; // EINTR
+            var left = buf.len - done;
+            comptime if (@cfg("os", "windows")) {
+                var word: u32 = 0;
+                if (rand_s(&word) != 0) {
+                    return false;
                 }
-                return false;
+                if (left > 4) {
+                    left = 4;
+                }
+                for (i) in 0..left {
+                    buf[done + i] = @cast<u8>(word >> @cast<u32>(i * 8));
+                }
+                done += left;
+            } else if (@cfg("os", "macos")) {
+                if (left > 256) {
+                    left = 256;
+                }
+                if (getentropy(@cast<void*>(&buf[done]), left) != 0) {
+                    return false;
+                }
+                done += left;
+            } else {
+                val n = getrandom(@cast<void*>(&buf[done]), left, 0);
+                if (n < 0) {
+                    if (platform::interrupted()) {
+                        continue;
+                    }
+                    return false;
+                }
+                done += @cast<usize>(n);
             }
-            done += @cast<usize>(n);
         }
         return true;
     }

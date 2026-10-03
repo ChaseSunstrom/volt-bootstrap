@@ -35,7 +35,7 @@ fn main() -> void {
 the environment changes. `set_env` and `unset_env` change it for this process and the programs it
 starts. `cwd()` is the working directory as a `std::string`, `set_cwd` changes it, and
 `exe_path()` is the path of the running program, with symlinks resolved (null where the system
-won't say; Linux, macOS and FreeBSD do).
+won't say; Linux, macOS, FreeBSD and Windows do).
 
 ```volt
 use std::io;
@@ -83,4 +83,12 @@ fn main() -> !void {
 // expect: SPAWN_FAILED
 ```
 
-These run programs on Linux, macOS and FreeBSD.
+These run programs on Linux, macOS and FreeBSD (fork and exec) and on Windows (`CreateProcessA`,
+which looks for the program as Windows does: next to this one, in the working directory, in the
+system's directories, then on `PATH`, adding `.exe`). A Windows program gets one command line, not
+a list of arguments, so `run` and `capture` quote each argument the way the C runtime's parser reads
+them back; `std::process::windows_args(argv)` gives that line, for code that starts programs some
+other way. They refuse a `.bat` or `.cmd` (`SPAWN_FAILED`): those run through `cmd.exe`, which reads
+the line by its own rules, so an argument could become a command. To run one, start `cmd.exe /c`
+yourself and quote for it. The exit code of a program Windows ended (a crash) is its status, such as `-1073741819`
+for an access violation, not 128 + a signal.

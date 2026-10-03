@@ -9,7 +9,10 @@ sidebar:
 program (`--std DIR`, `$VOLT_STD`, or the `std/` next to voltc). Nothing in the compiler knows its
 names, so you can replace it with your own.
 
-Each file is wrapped in `namespace std`, and most declare a namespace of their own inside it:
+Each file is wrapped in `namespace std`, and most declare a namespace of their own inside it. The
+parts that need an OS (files, processes, time, random bytes, networking and threads) have code for
+Linux, macOS, FreeBSD and Windows, 64-bit, on x86-64 and ARM64, picked with
+[`@cfg`](/volt-bootstrap/guide/comptime/#the-target):
 
 | Module | What it has |
 | --- | --- |

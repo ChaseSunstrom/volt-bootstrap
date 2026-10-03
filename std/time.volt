@@ -34,7 +34,7 @@ namespace time {
         ns: i64; // nanoseconds since some fixed point (boot, usually)
     }
 
-    // C's struct timespec: seconds and nanoseconds, two 64-bit fields on 64-bit Linux
+    // C's struct timespec: seconds and nanoseconds, two 64-bit fields on 64-bit systems
     struct timespec {
         sec: i64;
         nsec: i64;
@@ -42,24 +42,53 @@ namespace time {
 
     internal extern "C" fn clock_gettime(clock: i32, out: timespec*) -> i32;
     internal extern "C" fn nanosleep(want: timespec*, left: timespec*) -> i32;
-    internal extern "C" fn __errno_location() -> i32&;
 
-    // clock id's time in nanoseconds
-    // ponytail: Linux's clock ids (0 realtime, 1 monotonic); other systems number them differently
+    namespace win {
+        internal extern "C" fn QueryPerformanceCounter(out: i64*) -> i32;
+        internal extern "C" fn QueryPerformanceFrequency(out: i64*) -> i32;
+        internal extern "C" fn GetSystemTimePreciseAsFileTime(out: u64*) -> void; // Windows 8 on
+        internal extern "C" fn Sleep(ms: u32) -> void;
+    }
+
+    // the monotonic clock in nanoseconds
+    internal fn monotonic() -> i64 {
+        comptime if (@cfg("os", "windows")) {
+            var count: i64 = 0;
+            var freq: i64 = 1;
+            win::QueryPerformanceCounter(&count);
+            win::QueryPerformanceFrequency(&freq);
+            // in two parts, so count * 10^9 can't overflow
+            return count / freq * 1000000000 + count % freq * 1000000000 / freq;
+        } else {
+            return clock(platform::by_os(1, 6, 4, 0)); // CLOCK_MONOTONIC
+        }
+    }
+
+    // clock id's time in nanoseconds, by clock_gettime (not on Windows, whose clocks are above;
+    // without an OS, a program that reads the clock doesn't link, as with any missing C function)
     internal fn clock(id: i32) -> i64 {
         var t: timespec = { sec: 0, nsec: 0 };
-        clock_gettime(id, &t);
+        comptime if (!@cfg("os", "windows")) {
+            clock_gettime(id, &t);
+        }
         return t.sec * 1000000000 + t.nsec;
     }
 
     // now, on the monotonic clock
     fn now() -> instant {
-        return { ns: clock(1) };
+        return { ns: monotonic() };
     }
 
     // the wall clock: nanoseconds since 1970-01-01 00:00 UTC
     fn unix_nanos() -> i64 {
-        return clock(0);
+        comptime if (@cfg("os", "windows")) {
+            // 100 ns ticks since 1601
+            var ticks: u64 = 0;
+            win::GetSystemTimePreciseAsFileTime(&ticks);
+            return (@cast<i64>(ticks) - 116444736000000000) * 100;
+        } else {
+            return clock(0); // CLOCK_REALTIME, 0 everywhere
+        }
     }
 
     // wait for at least d
@@ -67,11 +96,24 @@ namespace time {
         if (d.ns <= 0) {
             return;
         }
-        var want: timespec = { sec: d.ns / 1000000000, nsec: d.ns % 1000000000 };
-        var left: timespec = { sec: 0, nsec: 0 };
-        // interrupted by a signal (EINTR): sleep what's left
-        while (nanosleep(&want, &left) != 0 && *__errno_location() == 4) {
-            want = left;
+        comptime if (@cfg("os", "windows")) {
+            // whole milliseconds, rounded up; Sleep's limit (0xffffffff is INFINITE) a piece at a time
+            var ms = (d.ns + 999999) / 1000000;
+            while (ms > 0) {
+                var piece: i64 = ms;
+                if (piece > 0x7fffffff) {
+                    piece = 0x7fffffff;
+                }
+                win::Sleep(@cast<u32>(piece));
+                ms -= piece;
+            }
+        } else {
+            var want: timespec = { sec: d.ns / 1000000000, nsec: d.ns % 1000000000 };
+            var left: timespec = { sec: 0, nsec: 0 };
+            // interrupted by a signal (EINTR): sleep what's left
+            while (nanosleep(&want, &left) != 0 && platform::interrupted()) {
+                want = left;
+            }
         }
     }
 

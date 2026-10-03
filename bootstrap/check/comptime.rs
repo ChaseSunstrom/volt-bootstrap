@@ -1769,6 +1769,11 @@ impl Checker {
         if key_only && want == "hosted" {
             return Ok(given("os").as_deref() != Some("none"));
         }
+        // @cfg("unix"): a POSIX system (Linux, macOS, FreeBSD), for std's code that Windows hasn't
+        let os = given("os").unwrap_or_else(|| std::env::consts::OS.to_string());
+        if key_only && want == "unix" {
+            return Ok(matches!(os.as_str(), "linux" | "macos" | "freebsd"));
+        }
         let host = [std::env::consts::OS.to_string(), std::env::consts::ARCH.to_string(), usize::BITS.to_string()];
         let on_target = TARGET.iter().zip(host).any(|(k, h)| matches(&format!("{k}={}", given(k).unwrap_or(h))));
         let is_target = |c: &str| TARGET.contains(&c.split('=').next().unwrap_or(""));

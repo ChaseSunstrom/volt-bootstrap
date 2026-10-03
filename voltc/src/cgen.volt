@@ -882,9 +882,19 @@ attach fn expr(this: cgen&, out: std::string&, n: u32) -> void {
                 out.append(this.ty(t));
                 out.append(")0)");
             } else {
+                // {0} sets the first member: an array of none has none, so {}
+                var init = "){0})";
+                match (*this.c.t.get(t)) {
+                    .ARRAY(x, n) => {
+                        if (n == 0) {
+                            init = "){})";
+                        }
+                    },
+                    default => {},
+                }
                 out.append("((");
                 out.append(this.ty(t));
-                out.append("){0})");
+                out.append(init);
             }
         },
         .LOCAL(id) => {

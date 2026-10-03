@@ -347,21 +347,71 @@ fn runtime_compiles_for_every_target() {
     }
 }
 
-/// std's code for other systems (picked with @cfg("os")) compiles there: a program using it is emitted
-/// as C with --cfg os=X and compiled for that system's target (not linked: those systems aren't here)
+/// std's code for other systems (picked with @cfg("os") and "arch") compiles there: the programs using
+/// its OS parts are emitted as C with --cfg os=X arch=Y and compiled for that target (not linked: those
+/// systems aren't here), and what they leave for the linker has no Linux-only C functions in it. Unused
+/// functions count too (-femit-all-decls): gcc at -O0, and the LLVM backend, keep them
 #[test]
 fn std_compiles_for_other_systems() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("std-targets");
     std::fs::create_dir_all(&dir).unwrap();
-    for (os, target) in [("windows", "x86_64-pc-windows-msvc"), ("macos", "arm64-apple-macos11"), ("freebsd", "x86_64-unknown-freebsd")] {
-        let c = dir.join(format!("net-{os}.c"));
-        let o = Command::new(env!("CARGO_BIN_EXE_voltc-bootstrap")).args(["emit-c", "tests/run/std_net.volt", "--cfg"]).arg(format!("os={os}")).current_dir(root).output().unwrap();
-        assert!(o.status.success(), "emit-c for {os}: {}", String::from_utf8_lossy(&o.stderr));
-        std::fs::write(&c, &o.stdout).unwrap();
-        let cc = Command::new("clang").arg(format!("--target={target}")).args(["-ffreestanding", "-w", "-c"]).arg(&c).arg("-o").arg(dir.join(format!("net-{os}.o"))).output().unwrap();
-        assert!(cc.status.success(), "std's {os} code doesn't compile for {target}:\n{}", String::from_utf8_lossy(&cc.stderr));
+    let programs = ["std_net", "std_os", "std_random", "std_threads", "process_capture", "exe_path"];
+    let targets = [
+        ("windows", "x86_64", "x86_64-pc-windows-msvc"),
+        ("windows", "aarch64", "aarch64-pc-windows-msvc"),
+        ("macos", "aarch64", "arm64-apple-macos11"),
+        ("macos", "x86_64", "x86_64-apple-macos11"),
+        ("freebsd", "x86_64", "x86_64-unknown-freebsd"),
+        ("linux", "aarch64", "aarch64-unknown-linux-gnu"),
+    ];
+    // only Linux's C library has these (glibc's errno, getline's GNU spelling aside)
+    let linux_only = ["__errno_location"];
+    // and Windows has none of POSIX's processes, directories, clocks or environment
+    let posix_only = ["fork", "execvp", "waitpid", "pipe", "poll", "getline", "opendir", "readdir", "closedir", "clock_gettime", "nanosleep", "setenv", "unsetenv", "readlink", "getrandom", "__error", "mkdir", "access"];
+    // and the other systems have none of Windows'
+    let windows_only = ["_errno", "_mkdir", "_access", "_fseeki64", "_putenv_s", "_getcwd", "rand_s", "FindFirstFileA", "GetFileAttributesA", "MoveFileExA", "QueryPerformanceCounter", "CreateProcessA", "CreatePipe", "GetModuleFileNameA", "WSAStartup"];
+    for (os, arch, target) in targets {
+        for prog in programs {
+            let name = format!("{prog}-{os}-{arch}");
+            let c = dir.join(format!("{name}.c"));
+            let o = Command::new(env!("CARGO_BIN_EXE_voltc-bootstrap"))
+                .args(["emit-c", &format!("tests/run/{prog}.volt"), "--cfg", &format!("os={os}"), "--cfg", &format!("arch={arch}")])
+                .current_dir(root)
+                .output()
+                .unwrap();
+            assert!(o.status.success(), "emit-c {prog} for {os}: {}", String::from_utf8_lossy(&o.stderr));
+            std::fs::write(&c, &o.stdout).unwrap();
+            let obj = dir.join(format!("{name}.o"));
+            let cc = Command::new("clang").arg(format!("--target={target}")).args(["-ffreestanding", "-w", "-c", "-femit-all-decls"]).arg(&c).arg("-o").arg(&obj).output().unwrap();
+            assert!(cc.status.success(), "std's {os} code in {prog} doesn't compile for {target}:\n{}", String::from_utf8_lossy(&cc.stderr));
+            let nm = Command::new("llvm-nm").args(["-u", "-j"]).arg(&obj).output().unwrap();
+            // Mach-O puts an underscore before every C name
+            let undefined: Vec<String> = String::from_utf8_lossy(&nm.stdout).lines().map(|l| if os == "macos" { l.strip_prefix('_').unwrap_or(l) } else { l }.to_string()).collect();
+            let wrong: Vec<&String> = undefined
+                .iter()
+                .filter(|u| os != "linux" && linux_only.contains(&u.as_str()) || os == "windows" && posix_only.contains(&u.as_str()) || os != "windows" && windows_only.contains(&u.as_str()))
+                .collect();
+            assert!(wrong.is_empty(), "{prog} for {os} calls C functions that system doesn't have: {wrong:?}");
+        }
     }
+}
+
+/// std::path's Windows rules run here: tests/cross/windows_paths.volt built with --cfg os=windows, with
+/// the Windows functions std names (which it never calls) left unresolved by the linker
+#[test]
+fn windows_paths_run() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let file = "tests/cross/windows_paths.volt";
+    let src = std::fs::read_to_string(root.join(file)).unwrap();
+    let want: Vec<&str> = src.lines().filter_map(|l| l.strip_prefix("// expect: ")).collect();
+    let o = Command::new(env!("CARGO_BIN_EXE_voltc-bootstrap"))
+        .args(["run", file, "--cfg", "os=windows", "--cc", "-no-pie", "--cc", "-Wl,--unresolved-symbols=ignore-all"])
+        .current_dir(root)
+        .output()
+        .unwrap();
+    let out = String::from_utf8_lossy(&o.stdout);
+    assert!(o.status.success() && out.lines().collect::<Vec<_>>() == want, "std::path with Windows' rules printed:\n{out}{}", String::from_utf8_lossy(&o.stderr));
 }
 
 /// the self-hosted compiler reproduces itself (stage2 == stage3) and stage2 passes the golden suite.

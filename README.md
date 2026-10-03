@@ -141,7 +141,8 @@ then through LLVM, and runs the golden suite on both backends. See
 
 Volt is young. The LLVM backend (the default on x86-64) has the System V calling convention only
 for now, so Windows and aarch64 build through C; there's no package registry (bolt uses paths and
-git).
+git). std's OS code has branches for macOS, FreeBSD and Windows, which the tests compile for each of
+them, but they run on Linux only.
 
 ## License
 

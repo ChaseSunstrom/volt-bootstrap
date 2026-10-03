@@ -61,7 +61,6 @@ namespace process {
     internal extern "C" fn fcntl(fd: i32, cmd: i32, ...) -> i32;
     internal extern "C" fn signal(sig: i32, handler: void*) -> void*;
     internal extern "C" fn poll(fds: pollfd*, n: u64, timeout: i32) -> i32;
-    internal extern "C" fn __errno_location() -> i32&;
     internal extern "C" fn setenv(name: cstr, value: cstr, overwrite: i32) -> i32;
     internal extern "C" fn unsetenv(name: cstr) -> i32;
     internal extern "C" fn getcwd(buf: u8*, size: usize) -> void*;
@@ -70,6 +69,71 @@ namespace process {
     internal extern "C" fn _NSGetExecutablePath(buf: u8*, size: u32*) -> i32;
     internal extern "C" fn sysctl(name: i32*, n: u32, old: void*, old_len: usize*, new: void*, new_len: usize) -> i32;
     internal extern "C" fn chdir(path: cstr) -> i32;
+
+    // Windows (64-bit): the CRT for the environment and the working directory, kernel32 for
+    // processes and pipes. Handles are isize: INVALID_HANDLE_VALUE is -1
+    namespace win {
+        internal extern "C" fn _putenv_s(name: cstr, value: cstr) -> i32;
+        internal extern "C" fn _getcwd(buf: u8*, size: i32) -> void*;
+        internal extern "C" fn _chdir(path: cstr) -> i32;
+        internal extern "C" fn GetModuleFileNameA(module: void*, buf: u8*, size: u32) -> u32;
+        internal extern "C" fn CreateProcessA(app: void*, line: cstr, pa: void*, ta: void*, inherit: i32, flags: u32, env: void*, dir: void*, si: void*, pi: void*) -> i32;
+        internal extern "C" fn WaitForSingleObject(h: isize, ms: u32) -> u32;
+        internal extern "C" fn GetExitCodeProcess(h: isize, code: u32*) -> i32;
+        internal extern "C" fn TerminateProcess(h: isize, code: u32) -> i32;
+        internal extern "C" fn CloseHandle(h: isize) -> i32;
+        internal extern "C" fn CreatePipe(r: isize*, w: isize*, sa: void*, size: u32) -> i32;
+        internal extern "C" fn SetHandleInformation(h: isize, mask: u32, flags: u32) -> i32;
+        internal extern "C" fn GetStdHandle(which: u32) -> isize;
+        internal extern "C" fn GetCurrentProcess() -> isize;
+        internal extern "C" fn DuplicateHandle(from: isize, h: isize, to: isize, out: isize*, access: u32, inherit: i32, options: u32) -> i32;
+        internal extern "C" fn ReadFile(h: isize, buf: void*, n: u32, got: u32*, overlapped: void*) -> i32;
+        internal extern "C" fn WriteFile(h: isize, buf: void*, n: u32, put: u32*, overlapped: void*) -> i32;
+
+        // STARTUPINFOA
+        internal extern struct startup_info {
+            cb: u32 = 104; // its size
+            reserved: usize = 0;
+            desktop: usize = 0;
+            title: usize = 0;
+            x: u32 = 0;
+            y: u32 = 0;
+            x_size: u32 = 0;
+            y_size: u32 = 0;
+            x_chars: u32 = 0;
+            y_chars: u32 = 0;
+            fill: u32 = 0;
+            flags: u32 = 0x100; // STARTF_USESTDHANDLES: the three below
+            show_window: u16 = 0;
+            reserved2_size: u16 = 0;
+            reserved2: usize = 0;
+            std_in: isize = 0;
+            std_out: isize = 0;
+            std_err: isize = 0;
+        }
+
+        // PROCESS_INFORMATION
+        internal extern struct process_info {
+            process: isize = 0;
+            thread: isize = 0;
+            pid: u32 = 0;
+            tid: u32 = 0;
+        }
+
+        // SECURITY_ATTRIBUTES, for handles a child inherits
+        internal extern struct security_attributes {
+            size: u32 = 24;
+            descriptor: usize = 0;
+            inherit: i32 = 1;
+        }
+    }
+
+    // a child inherits every inheritable handle there is when it starts: the pipes made for one
+    // child mustn't be open while another starts (it would hold them, and the first child's reader
+    // would wait for that one to exit), so making them and starting the child happen under this lock.
+    // ponytail: only std's own spawns take it; STARTUPINFOEX's handle list if other code spawns too
+    @attributes([@cfg("os", "windows")])
+    internal var spawn_lock: i32 = 0;
 
     // poll.h's struct pollfd
     internal struct pollfd {
@@ -80,11 +144,12 @@ namespace process {
 
     // a call failed only because a signal handler ran (EINTR): try it again
     fn interrupted() -> bool {
-        return *__errno_location() == 4;
+        return platform::interrupted();
     }
 
     // A pipe that a successful exec closes (close-on-exec): the child writes one byte to it only
     // when exec fails, so the parent can tell "couldn't run it" from a program exiting 127
+    @attributes([@cfg("unix")])
     internal fn exec_pipe(fds: i32[2]&) -> bool {
         if (pipe(&fds[0]) != 0) {
             return false;
@@ -94,6 +159,7 @@ namespace process {
     }
 
     // in the child, after exec failed
+    @attributes([@cfg("unix")])
     internal fn exec_failed(fds: i32[2]&) -> never {
         var b: u8 = 1;
         write(fds[1], &b, 1);
@@ -101,6 +167,7 @@ namespace process {
     }
 
     // in the parent: did the child's exec fail? (reaps the child when it did)
+    @attributes([@cfg("unix")])
     internal fn exec_error(fds: i32[2]&, pid: i32) -> bool {
         close(fds[1]);
         var b: u8 = 0;
@@ -117,6 +184,7 @@ namespace process {
     }
 
     // wait for a child; its exit code, or 128 + the signal that killed it
+    @attributes([@cfg("unix")])
     internal fn wait_for(pid: i32) -> process_error!i32 {
         var status: i32 = 0;
         while (waitpid(pid, &status, 0) < 0) {
@@ -146,17 +214,25 @@ namespace process {
     fn set_env(name: str, value: str) -> void {
         var n = std::string::from(name);
         var v = std::string::from(value);
-        setenv(n.c_str(), v.c_str(), 1);
+        comptime if (@cfg("os", "windows")) {
+            win::_putenv_s(n.c_str(), v.c_str());
+        } else {
+            setenv(n.c_str(), v.c_str(), 1);
+        }
     }
 
     // remove environment variable name
     fn unset_env(name: str) -> void {
         var n = std::string::from(name);
-        unsetenv(n.c_str());
+        comptime if (@cfg("os", "windows")) {
+            win::_putenv_s(n.c_str(), ""); // an empty value removes it
+        } else {
+            unsetenv(n.c_str());
+        }
     }
 
     // the path of this program's executable, with symlinks resolved (null if the system won't say;
-    // Linux, macOS and FreeBSD do)
+    // Linux, macOS, FreeBSD and Windows do)
     <A: std::mem::t_allocator = std::mem::default_allocator>
     fn exe_path(allocator: A = {}) -> std::string<A>? {
         var buf: u8[4096];
@@ -176,6 +252,12 @@ namespace process {
                 return null;
             }
             return std::string::from(@cast<str>(@slice(&buf[0], n - 1)), copy allocator); // n counts the NUL
+        } else if (@cfg("os", "windows")) {
+            val n = win::GetModuleFileNameA(@cast<void*>(0), &buf[0], 4096);
+            if (n == 0 || n >= 4096) {
+                return null; // failed, or cut short
+            }
+            return std::string::from(@cast<str>(@slice(&buf[0], @cast<usize>(n))), copy allocator);
         } else {
             val n = readlink("/proc/self/exe", &buf[0], 4096);
             if (n <= 0 || n == 4096) {
@@ -191,13 +273,19 @@ namespace process {
         var size: usize = 256;
         loop {
             val buf: u8* = allocator.malloc<u8>(size) catch @panic("out of memory");
-            if (getcwd(buf, size) != null) {
+            var got = false;
+            comptime if (@cfg("os", "windows")) {
+                got = win::_getcwd(buf, @cast<i32>(size)) != null;
+            } else {
+                got = getcwd(buf, size) != null;
+            }
+            if (got) {
                 val out = std::string::from(@cast<str>(@slice(buf, strlen(@cast<cstr>(buf)))), copy allocator);
                 allocator.free<u8>(buf, size);
                 return move out;
             }
             allocator.free<u8>(buf, size);
-            if (*__errno_location() != 34) { // ERANGE: a bigger buffer helps; nothing else does
+            if (platform::errno() != 34) { // ERANGE: a bigger buffer helps; nothing else does
                 @panic("std::process::cwd: the working directory can't be read");
             }
             size *= 2;
@@ -207,8 +295,14 @@ namespace process {
     // change the working directory to path
     fn set_cwd(path: str) -> std::fs::fs_error!void {
         var p = std::string::from(path);
-        if (chdir(p.c_str()) != 0) {
-            return std::fs::from_errno();
+        comptime if (@cfg("os", "windows")) {
+            if (win::_chdir(p.c_str()) != 0) {
+                return std::fs::from_errno();
+            }
+        } else {
+            if (chdir(p.c_str()) != 0) {
+                return std::fs::from_errno();
+            }
         }
     }
 
@@ -217,6 +311,18 @@ namespace process {
         if (argv.len == 0) {
             return process_error::SPAWN_FAILED;
         }
+        comptime if (@cfg("os", "windows")) {
+            return run_windows(argv);
+        } else if (@cfg("unix")) {
+            return run_posix(argv);
+        } else {
+            return process_error::SPAWN_FAILED; // no OS: no programs to run
+        }
+    }
+
+    // run, through fork and exec
+    @attributes([@cfg("unix")])
+    internal fn run_posix(argv: str[..]) -> process_error!i32 {
         var owned: std::vec<std::string> = {};
         for (a) in argv {
             owned.push(std::string::from(a)) catch @panic("out of memory");
@@ -262,6 +368,18 @@ namespace process {
         if (argv.len == 0) {
             return process_error::SPAWN_FAILED;
         }
+        comptime if (@cfg("os", "windows")) {
+            return capture_windows(argv, input, move allocator);
+        } else if (@cfg("unix")) {
+            return capture_posix(argv, input, move allocator);
+        } else {
+            return process_error::SPAWN_FAILED; // no OS: no programs to run
+        }
+    }
+
+    // capture, through fork and exec
+    <A: std::mem::t_allocator>
+    internal fn capture_posix(argv: str[..], input: str, allocator: A) -> process_error!output<A> {
         var owned: std::vec<std::string> = {};
         for (a) in argv {
             owned.push(std::string::from(a)) catch @panic("out of memory");
@@ -384,17 +502,245 @@ namespace process {
     }
 
     // close the ends of these pipes that were opened (-1 marks one that wasn't)
+    @attributes([@cfg("unix")])
     internal fn close_all(a: i32[2]&, b: i32[2]&, c: i32[2]&) -> void {
         close_pipe(a);
         close_pipe(b);
         close_pipe(c);
     }
 
+    @attributes([@cfg("unix")])
     internal fn close_pipe(p: i32[2]&) -> void {
         for (fd) in *p {
             if (fd >= 0) {
                 close(fd);
             }
         }
+    }
+
+    // argv as one Windows command line, each argument quoted so that the C runtime's parser
+    // (CommandLineToArgvW's rules) gives the program back the same arguments
+    fn windows_args(argv: str[..]) -> std::string {
+        var out = std::string::from("");
+        for (a, i) in argv {
+            if (i > 0) {
+                out.push(' ');
+            }
+            var plain = a.len > 0;
+            for (c) in a {
+                if (c == ' ' || c == '\t' || c == '\n' || c == 11 || c == '"') {
+                    plain = false;
+                }
+            }
+            if (plain) {
+                out.append(a);
+                continue;
+            }
+            // backslashes are literal, but for those before a quote: each one doubles, and one more
+            // escapes the quote itself
+            out.push('"');
+            var slashes: usize = 0;
+            for (c) in a {
+                if (c == '\\') {
+                    slashes += 1;
+                    continue;
+                }
+                if (c == '"') {
+                    slashes = slashes * 2 + 1;
+                }
+                for (k) in 0..slashes {
+                    out.push('\\');
+                }
+                slashes = 0;
+                out.push(c);
+            }
+            for (k) in 0..slashes * 2 {
+                out.push('\\'); // before the closing quote
+            }
+            out.push('"');
+        }
+        return move out;
+    }
+
+    // Windows: start argv (CreateProcessA searches PATH) with these as its stdin, stdout and stderr
+    // (inheritable handles); the process's handle, or 0. Under spawn_lock
+    @attributes([@cfg("os", "windows")])
+    internal fn win_start(argv: str[..], std_in: isize, std_out: isize, std_err: isize) -> isize {
+        // a .bat or .cmd runs through cmd.exe, which reads the line by its own rules, not the ones
+        // windows_args quotes for (an argument could become a command): refused. Windows drops a
+        // name's trailing dots and spaces, so "x.bat." is one too
+        var prog = argv[0];
+        while (prog.len > 0 && (prog[prog.len - 1] == '.' || prog[prog.len - 1] == ' ')) {
+            prog = prog[0..prog.len - 1];
+        }
+        if (prog.len >= 4) {
+            val ext = prog[prog.len - 4..prog.len];
+            if (ext.eq_ignore_case(".bat") || ext.eq_ignore_case(".cmd")) {
+                return 0;
+            }
+        }
+        var line = windows_args(argv);
+        var si: win::startup_info = { std_in: std_in, std_out: std_out, std_err: std_err };
+        var pi: win::process_info = {};
+        val none = @cast<void*>(0);
+        if (win::CreateProcessA(none, line.c_str(), none, none, 1, 0, none, none, @cast<void*>(&si), @cast<void*>(&pi)) == 0) {
+            return 0;
+        }
+        win::CloseHandle(pi.thread);
+        return pi.process;
+    }
+
+    // wait for a process and close its handle: its exit code
+    @attributes([@cfg("os", "windows")])
+    internal fn win_wait(h: isize) -> i32 {
+        win::WaitForSingleObject(h, 0xffffffff); // INFINITE
+        var code: u32 = 0;
+        win::GetExitCodeProcess(h, &code);
+        win::CloseHandle(h);
+        return @cast<i32>(code);
+    }
+
+    // an inheritable copy of this process's stdin, stdout or stderr (0 when it has none)
+    @attributes([@cfg("os", "windows")])
+    internal fn win_inheritable(which: u32) -> isize {
+        val h = win::GetStdHandle(which);
+        var copy_of: isize = 0;
+        if (h == 0 || h == -1) {
+            return 0;
+        }
+        val me = win::GetCurrentProcess();
+        if (win::DuplicateHandle(me, h, me, &copy_of, 0, 1, 2) == 0) { // DUPLICATE_SAME_ACCESS
+            return 0;
+        }
+        return copy_of;
+    }
+
+    @attributes([@cfg("os", "windows")])
+    internal fn win_close(h: isize) -> void {
+        if (h != 0 && h != -1) {
+            win::CloseHandle(h);
+        }
+    }
+
+    // run, through CreateProcessA: the child gets this program's stdin, stdout and stderr
+    @attributes([@cfg("os", "windows")])
+    internal fn run_windows(argv: str[..]) -> process_error!i32 {
+        std::thread::lock_word(&spawn_lock);
+        val i = win_inheritable(0xfffffff6); // STD_INPUT_HANDLE
+        val o = win_inheritable(0xfffffff5); // STD_OUTPUT_HANDLE
+        val e = win_inheritable(0xfffffff4); // STD_ERROR_HANDLE
+        val h = win_start(argv, i, o, e);
+        win_close(i);
+        win_close(o);
+        win_close(e);
+        std::thread::unlock_word(&spawn_lock);
+        if (h == 0) {
+            return process_error::SPAWN_FAILED;
+        }
+        return win_wait(h);
+    }
+
+    // write input to the child's stdin, then close it (on a thread of its own)
+    @attributes([@cfg("os", "windows")])
+    internal fn win_feed(h: isize, input: str) -> void {
+        var sent: usize = 0;
+        while (sent < input.len) {
+            var n = input.len - sent;
+            if (n > 65536) {
+                n = 65536;
+            }
+            var put: u32 = 0;
+            if (win::WriteFile(h, @cast<void*>(input.ptr + sent), @cast<u32>(n), &put, @cast<void*>(0)) == 0) {
+                break; // the child closed its stdin
+            }
+            sent += @cast<usize>(put);
+        }
+        win::CloseHandle(h);
+    }
+
+    // read a pipe to its end (the child closed its side), then close it
+    <A: std::mem::t_allocator>
+    internal fn win_drain(h: isize, into: std::string<A>&) -> void {
+        var buf: u8[4096];
+        loop {
+            var got: u32 = 0;
+            if (win::ReadFile(h, @cast<void*>(&buf[0]), 4096, &got, @cast<void*>(0)) == 0 || got == 0) {
+                break;
+            }
+            into.append(@cast<str>(@slice(&buf[0], @cast<usize>(got))));
+        }
+        win::CloseHandle(h);
+    }
+
+    // a thread that couldn't start: close the handle it would have, and say so
+    @attributes([@cfg("os", "windows")])
+    internal fn not_started(h: isize, started: bool&) -> std::thread::thread {
+        win::CloseHandle(h);
+        *started = false;
+        return {};
+    }
+
+    // capture, through CreateProcessA and three pipes. Windows can't poll pipes: one thread feeds
+    // the input and another reads stderr while this one reads stdout, so the child never waits on
+    // us. The stderr thread collects into its own string (allocator may not be safe across threads)
+    <A: std::mem::t_allocator>
+    internal fn capture_windows(argv: str[..], input: str, allocator: A) -> process_error!output<A> {
+        // ends: the child's stdin (read, write), stdout (read, write), stderr (read, write)
+        var ends: isize[6] = { 0, 0, 0, 0, 0, 0 };
+        var sa: win::security_attributes = {};
+        std::thread::lock_word(&spawn_lock);
+        var h: isize = 0;
+        if (win::CreatePipe(&ends[0], &ends[1], @cast<void*>(&sa), 0) != 0 && win::CreatePipe(&ends[2], &ends[3], @cast<void*>(&sa), 0) != 0 && win::CreatePipe(&ends[4], &ends[5], @cast<void*>(&sa), 0) != 0) {
+            // our ends stay here
+            win::SetHandleInformation(ends[1], 1, 0); // HANDLE_FLAG_INHERIT
+            win::SetHandleInformation(ends[2], 1, 0);
+            win::SetHandleInformation(ends[4], 1, 0);
+            h = win_start(argv, ends[0], ends[3], ends[5]);
+        }
+        // the child has its own copies of its ends
+        win_close(ends[0]);
+        win_close(ends[3]);
+        win_close(ends[5]);
+        std::thread::unlock_word(&spawn_lock);
+        if (h == 0) {
+            win_close(ends[1]);
+            win_close(ends[2]);
+            win_close(ends[4]);
+            return process_error::SPAWN_FAILED;
+        }
+        var r: output<A> = { code: 0, out: std::string::new_in(copy allocator), err: std::string::new_in(move allocator) };
+        var errs = std::string::from("");
+        {
+            val inp = ends[1];
+            val errp = ends[4];
+            var feeder: std::thread::thread = {};
+            var reader: std::thread::thread = {};
+            var started = true;
+            if (input.len == 0) {
+                win::CloseHandle(inp);
+            } else {
+                feeder = std::thread::spawn(|inp, input| () {
+                    win_feed(inp, input);
+                }) catch |x| not_started(inp, &started);
+            }
+            if (started) {
+                reader = std::thread::spawn(|errp, errs&| () {
+                    win_drain(errp, &errs);
+                }) catch |x| not_started(errp, &started);
+            } else {
+                win::CloseHandle(errp);
+            }
+            if (!started) {
+                // no thread for it: stop the child, so the one that did start finishes
+                win::TerminateProcess(h, 1);
+                win::CloseHandle(ends[2]);
+                win_wait(h);
+                return process_error::SPAWN_FAILED;
+            }
+            win_drain(ends[2], &r.out);
+        } // the threads are joined here
+        r.err.append(errs.as_str());
+        r.code = win_wait(h);
+        return move r;
     }
 }

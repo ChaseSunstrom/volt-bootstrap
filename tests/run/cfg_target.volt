@@ -1,6 +1,7 @@
 // flags: --pkg plat=tests/pkgs/plat
 use std::io;
-// the target's keys, set for every package: os, arch and pointer_bits (here: the host, x86-64 Linux)
+// the target's keys, set for every package: os, arch and pointer_bits (here: the host, x86-64 Linux),
+// and unix (a POSIX system) and hosted (an OS at all) from os
 
 fn os_name() -> str {
     comptime if (@cfg("os", "windows")) {
@@ -14,9 +15,9 @@ fn os_name() -> str {
 
 fn main() -> void {
     std::println("{} {} {} {}", os_name(), @cfg("arch", "x86_64"), @cfg("pointer_bits", "64"), @cfg("os", "macos"));
-    std::println("{} {} {}", @cfg("os"), @cfg("arch"), @cfg("nonsense"));
+    std::println("{} {} {} {} {}", @cfg("os"), @cfg("arch"), @cfg("nonsense"), @cfg("unix"), @cfg("hosted"));
     std::println("{} {} {} {}", std::process::os(), std::process::arch(), plat::target_os(), plat::keys_set());
 }
 // expect: linux true true false
-// expect: true true false
+// expect: true true false true true
 // expect: linux x86_64 linux true
