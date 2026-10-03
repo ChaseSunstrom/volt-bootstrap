@@ -18,6 +18,20 @@ private:
     std::string label = "a string Volt never sees";
 };
 
+// a class with a virtual method: main.volt's type overrides it, and run() calls it from C++
+class Ticker {
+public:
+    virtual ~Ticker() = default;
+    virtual std::string tick(int n) const { return "tick " + std::to_string(n); }
+    std::string run(int times) const {
+        std::string out;
+        for (int i = 1; i <= times; i++) {
+            out += tick(i) + (i < times ? ", " : "");
+        }
+        return out;
+    }
+};
+
 template <typename T>
 T twice(T x) { return x + x; }
 

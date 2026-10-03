@@ -82,7 +82,7 @@ impl Checker {
     /// is this expression only meaningful at compile time (so it gets evaluated, not emitted)?
     pub fn is_ct_expr(&self, e: &Expr) -> bool {
         match &e.kind {
-            ExprKind::Builtin(n, _, _) => matches!(n.as_str(), "typeinfo" | "typeof" | "compile_error" | "cfg"),
+            ExprKind::Builtin(n, _, _) => matches!(n.as_str(), "typeinfo" | "typeof" | "compile_error" | "cfg" | "attaches"),
             ExprKind::Call(c, _) => match &c.kind {
                 ExprKind::Path(p) => {
                     let found = if p.segs.len() == 1 { self.lookup(self.cx.env.ns, &p.segs[0].name) } else { self.lookup_path_ns(self.cx.env.ns, p) };
@@ -1288,7 +1288,7 @@ impl Checker {
 
     // ---------- builtins ----------
 
-    /// @typeinfo, @typeid, @typeof, @compile_error, @cfg, @sizeof, @alignof, @cast and @panic at compile time
+    /// @typeinfo, @typeid, @typeof, @compile_error, @cfg, @attaches, @sizeof, @alignof, @cast and @panic at compile time
     fn ct_builtin(&mut self, name: &str, gargs: &[GenericArg], args: &[GenericArg], want: Option<TyId>, span: Span) -> CRes<CVal> {
         let env = self.frame().env.clone();
         let ty_arg = |c: &mut Self, g: &GenericArg| -> CRes<TyId> {
@@ -1372,6 +1372,18 @@ impl Checker {
                     }
                 }
                 Ok(CVal::Bool(self.cfg_on(&parts, span)?))
+            }
+            "attaches" => {
+                // @attaches(T, t_trait): does T attach the trait (as a <T: t_trait> bound asks)?
+                let [g, tr] = args else { return cerr(span, "@attaches(T, trait) takes a type and a trait") };
+                let t = ty_arg(self, g)?;
+                let bound = match tr {
+                    GenericArg::Type(b) => b.clone(),
+                    GenericArg::Expr(Expr { kind: ExprKind::Path(p), span }) => Type { kind: TypeKind::Path(p.clone()), span: *span },
+                    GenericArg::Expr(e) => return cerr(e.span, "@attaches(T, trait): expected a trait"),
+                };
+                let Some((d, targs)) = self.bound_trait(&bound, env.ns) else { return cerr(bound.span, "@attaches(T, trait): expected a trait") };
+                Ok(CVal::Bool(self.satisfies(t, d, &targs, &env)?))
             }
             "sizeof" | "alignof" => {
                 let [g] = args else { return cerr(span, format!("@{name}(T) takes one type")) };

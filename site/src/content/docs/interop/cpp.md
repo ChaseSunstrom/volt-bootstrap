@@ -54,6 +54,7 @@ fn main() -> void {
 | --- | --- |
 | namespace | namespace |
 | a trivially copyable class or struct | a struct with C++'s size and layout: public fields by name, the rest as padding |
+| a class with virtual methods | a handle, as below, and a Volt type can subclass it (see [Subclassing](#subclassing-a-c-class-in-volt)) |
 | any other class | a handle to an object C++ allocates (`new`, and `delete` when the Volt value goes): a public field `f` is the method `f()` (a copy) and `set_f(v)` (when it can be assigned, and the class has no `set_f` of its own) |
 | constructors | `T::new(...)`, one per overload (a default argument adds an overload without it); `T::new()` for a class that declares none, when it can be made from nothing |
 | destructor | a `delete` hook (only when the class needs one) |
@@ -148,6 +149,58 @@ A function that can throw (it isn't `noexcept`) also gets a `try_` form that ret
 `cpp_error::EXCEPTION` instead of stopping the program; `last_exception()`, in the import's
 namespace, is what the exception said. (A `try_` form isn't made for a function returning a C++
 object, a reference or an optional; for one returning a vector, catch the exception in C++.)
+
+## Subclassing a C++ class in Volt
+
+A C++ framework that calls back through virtual methods takes a Volt type in their place. The Volt
+struct holds the subclass's state; each virtual method `m` of class `C` has a trait `t_C_m` in the
+import's namespace, and the struct attaches the ones it overrides. `C::derive(value, ...)` takes the
+struct and the arguments of one of `C`'s constructors (public or protected), and makes the C++
+object, which holds the Volt value and deletes it with itself:
+
+```volt ignore
+use std::io;
+use { "widgets.hpp" } as cpp;   // class gui::Widget { virtual int width() const = 0; ... };
+
+struct boxy {
+    w: i32;
+}
+
+attach cpp::gui::t_Widget_width -> boxy {
+    fn width(this, self: cpp::gui::Widget&) -> i32 { return this.w; }
+}
+
+attach cpp::gui::t_Widget_click -> boxy {
+    fn click(this, self: cpp::gui::Widget&, times: i32) -> void {
+        this.w += times;
+        self.bump(times);       // a protected method
+        self.base_click(times); // Widget's own click
+    }
+}
+
+fn main() -> void {
+    val b: boxy = { w: 3 };
+    var w = cpp::gui::Widget::derive(move b, "ok");
+    std::println("{}", cpp::gui::show(&w));      // C++ calls width() and click(): Volt's
+    val mine = w.derived<boxy>() ?? @panic("?"); // the Volt value back
+}
+```
+
+- An override gets the C++ object as `self`, a `C&`: through it, `base_m(...)` is `C`'s own `m`
+  (not for a pure one), and `C`'s protected methods and fields (`f()`, `set_f(v)`) are there too, as
+  methods of `C`. On an object Volt didn't make with `derive`, a protected one stops the program.
+- A virtual method the struct doesn't override is `C`'s own. A pure one it doesn't override is a
+  compile error naming the trait to attach.
+- Inherited virtual methods count (`t_Button_describe` for a `describe` `Button` inherits), and so
+  do private ones that are pure. A private one that isn't pure stays `C`'s: the subclass couldn't
+  call `C`'s own when the struct doesn't override it.
+- What crosses into an override: numbers, `bool`, enums, pointers, strings (`str`, a view for the
+  call), classes Volt holds by value (a copy, or a reference for `T&`) and classes held by handle
+  (a handle Volt borrows for the call). What comes back: those numbers, enums and pointers, a class
+  held by value, and `std::string`. A virtual method with other types stays `C`'s (a comment in the
+  generated source says so); a pure one with other types means the class can't be derived from.
+- `derive` is there for a class with a virtual method, a public virtual destructor, and not
+  `final`. Copying a derived handle copies only the `C` part, as in C++.
 
 ## Limits
 

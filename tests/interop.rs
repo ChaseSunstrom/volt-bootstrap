@@ -822,6 +822,25 @@ fn foreign_libraries() {
 }
 
 #[test]
+fn cpp_derive() {
+    // Volt types subclassing C++ classes: C++ calls their overrides through base references, the
+    // override reaches the base implementation and protected members, the Volt value goes with the
+    // C++ object
+    let e = Env::new("cpp-derive");
+    let want = "[ok 5 boxy] clicks 202 shown true\n[lbl 5] 10 true\n[x 5 boxy] area 10 poke 41 id 7\nmine 5 log:xlbl true\npress 11 [knob] ring 60\nboxy 5 gone\n";
+    for backend in ["c", "llvm"] {
+        assert_eq!(ok(e.voltc(&["run", "cpp_derive.volt", "--backend", backend]), "voltc run cpp_derive.volt"), want, "C++ derive ({backend})");
+    }
+    // a pure virtual method the Volt type doesn't override is a compile error naming its trait
+    let hpp = Path::new(ROOT).join("tests/interop/widgets.hpp");
+    let src = format!("use {{ \"{}\" }} as cpp;\nstruct nothing {{ n: i32; }}\nfn main() -> void {{\n    val x: nothing = {{ n: 1 }};\n    val w = cpp::gui::Widget::derive(move x, \"a\");\n}}\n", hpp.display());
+    std::fs::write(e.dir.join("cpp_derive_pure.volt"), src).unwrap();
+    let o = e.voltc(&["check", &e.path("cpp_derive_pure.volt")]);
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(!o.status.success() && err.contains("has to attach t_Widget_width"), "pure virtual: {err}");
+}
+
+#[test]
 fn cpp_import() {
     let e = Env::new("cpp");
     let want = "make 2 3\narea 6\nfields 5 6\nscaled 60 15\ncount 7 name rect\nmake 4 4\nkind 4 1\ntotal 46\ncopy 4 4\ncopied 16\ndrop 4 4\ndrop 4 4\ndrop 5 6\nadd 3 3.5\nbiggest 9 2.5\nbox 6\nenum 4 1\nsize 16 8\nrings 20 true\nnamed short#5 5 5 6\ncopy keeps 5 9\nshelf 8 record 7 20 1/2 registry 3\n";

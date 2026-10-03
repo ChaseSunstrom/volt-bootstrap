@@ -509,6 +509,27 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// `.name<...>`'s generic args: a name the program declares generic takes them; any other only
+    /// when a call follows (`x.get<i32>()`: a method declared where the program's names aren't
+    /// collected, like an import's), with one argument or none passed (`f(a.x < b, c > (d))` is two
+    /// comparisons)
+    fn method_generic_args(&mut self, name: &str) -> Option<Vec<GenericArg>> {
+        if !self.is("<") {
+            return None;
+        }
+        if self.generics.contains(name) {
+            return self.try_generic_args();
+        }
+        let save = self.pos;
+        match self.try_generic_args() {
+            Some(a) if self.is("(") && (a.len() == 1 || self.is_at(1, ")")) => Some(a),
+            _ => {
+                self.pos = save;
+                None
+            }
+        }
+    }
+
     fn generic_args(&mut self) -> Res<Vec<GenericArg>> {
         self.expect("<")?;
         let mut out = Vec::new();
@@ -1145,13 +1166,13 @@ impl<'a> Parser<'a> {
                     }
                     _ => unreachable!(),
                 };
-                let args = if self.is("<") && self.generics.contains(&name) { self.try_generic_args() } else { None };
+                let args = self.method_generic_args(&name);
                 ExprKind::Field(Box::new(e), name, args)
             } else if self.is("->") && self.is_ident_at(1) {
                 // p->name is (*p).name
                 self.bump();
                 let name = self.ident()?.0;
-                let args = if self.is("<") && self.generics.contains(&name) { self.try_generic_args() } else { None };
+                let args = self.method_generic_args(&name);
                 let deref = Expr { kind: ExprKind::Unary(UnOp::Deref, Box::new(e)), span: start };
                 ExprKind::Field(Box::new(deref), name, args)
             } else if self.is("++") || self.is("--") {

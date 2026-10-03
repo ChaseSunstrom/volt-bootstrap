@@ -444,19 +444,13 @@ attach fn postfix(this: parser&) -> compile_error!expr {
             }
             val name = this.field_name_at(0) ?? "";
             this.bump();
-            var args: std::vec<garg>? = null;
-            if (this.is("<") && this.generics.get(name) != null) {
-                args = this.try_generic_args();
-            }
+            val args = this.method_generic_args(name);
             e = { kind: expr_kind::FIELD(bx(move e), name, move args), span: start.to(this.prev_span()) };
         } else if (this.is("->") && this.is_ident_at(1)) {
             // p->name is (*p).name
             this.bump();
             val name = (try this.ident()).name;
-            var args: std::vec<garg>? = null;
-            if (this.is("<") && this.generics.get(name) != null) {
-                args = this.try_generic_args();
-            }
+            val args = this.method_generic_args(name);
             val sp = start.to(this.prev_span());
             e = { kind: expr_kind::FIELD(bx<expr>({ kind: expr_kind::UNARY(unop::DEREF, bx(move e)), span: start }), name, move args), span: sp };
         } else if (this.is("++") || this.is("--")) {

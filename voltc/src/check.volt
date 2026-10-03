@@ -420,6 +420,10 @@ struct checker {
     link_flags: std::vec<std::string> = {};
     import_deps: std::vec<std::string> = {}; // the files they were made from (OUT.deps, for bolt)
     cpp_shims: std::vec<std::string> = {};
+    // Volt's subclasses of C++ classes (derive): each one's name and C++ text, in the C++ unit when a
+    // wrapper names it
+    cpp_dir_names: std::vec<std::string> = {};
+    cpp_dirs: std::vec<std::string> = {};
     cpp_shim_keys: std::map<str, u32> = {};
     cpp_shim_fns: std::vec<u32> = {};
     owned_exprs: std::vec<std::box<expr>> = {}; // expressions made by the checker

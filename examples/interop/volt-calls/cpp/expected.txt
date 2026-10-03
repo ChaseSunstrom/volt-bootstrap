@@ -1,3 +1,4 @@
 16 clicks
 twice: 42 2.5
+tick 1, tick 2 | HEY1, HEY2, HEY3
 counter done at 16

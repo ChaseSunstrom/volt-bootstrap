@@ -29,6 +29,9 @@ struct cpp_traits {
     destructible: bool = false; // its destructor can be called from outside, so Volt can own one
     copyable: bool = false;     // it can be made from a const& (it isn't abstract, its copy constructor is public)
     defaults: bool = false;     // it can be made from nothing (T::new() when it declares no constructor)
+    polymorphic: bool = false;  // it has virtual methods
+    final_: bool = false;       // it's final: nothing derives from it
+    vdtor: bool = false;        // its destructor is virtual (deleting a subclass through it is right)
     assignable: bool = false;   // it can be assigned from an rvalue (a field of it gets a set_)
 }
 
@@ -415,6 +418,7 @@ struct cpp_ret {
     elem: std::string = {}; // VECTOR: the element type
     object: bool = false;   // a C++ object by value (made in place: a try_ form can't hold one)
     cls: std::string = {};  // HANDLE: the C++ class
+    up: std::string = {};   // HANDLE: the class the handle is of, when cls is a subclass of it
 }
 
 // the Volt return type of a C++ one (a reference to a class stays one; to a const number, a copy)
@@ -656,7 +660,13 @@ attach fn fn_text(this: cpp_gen&, generics: str, sig: str, r: cpp_ret&, cpp: str
             this.line(body.as_str());
         },
         .VIEW => { this.line(fmt3("return @cpp<str{}>(\"volt_cpp_view({})\"{});", S(extra), S(cpp), S(tail)).as_str()); },
-        .HANDLE => { this.line(fmt4("return {{ cpp: @cpp<void*{}>(\"new {}({})\"{}) }};", S(extra), copy r.cls, S(cpp), S(tail)).as_str()); },
+        .HANDLE => {
+            var made = fmt2("new {}({})", copy r.cls, S(cpp));
+            if (r.up.len() > 0) {
+                made = fmt2("static_cast<{} *>({})", copy r.up, move made);
+            }
+            this.line(fmt3("return {{ cpp: @cpp<void*{}>(\"{}\"{}) }};", S(extra), move made, S(tail)).as_str());
+        },
         .STRING => {
             this.line(fmt3("val try_got = @cpp<str{}>(\"volt_cpp_dup({})\"{});", S(extra), S(cpp), S(tail)).as_str());
             this.text_out("try_got");
@@ -1158,34 +1168,42 @@ attach fn handle_class(this: cpp_gen&, c: clang::CXCursor, vn: str, q: str) -> v
     // (a set_x of its own) is the one Volt calls
     this.class_methods(c, vn, q, obj.as_str());
     for (f&) in children(c).items() {
-        if (clang::clang_getCursorKind(*f) != clang::CXCursor_FieldDecl || !is_public(*f) || clang::clang_Cursor_isBitField(*f) != 0) {
-            continue;
+        if (clang::clang_getCursorKind(*f) == clang::CXCursor_FieldDecl && is_public(*f)) {
+            this.field_accessors(*f, vn, fmt2("{}.{}", copy obj, cursor_name(*f)).as_str());
         }
-        val ft = clang::clang_getCursorType(*f);
-        if (ft.kind == clang::CXType_LValueReference || ft.kind == clang::CXType_RValueReference) {
-            continue;
-        }
-        val fv = vname(cursor_name(*f).as_str());
-        val at = fmt2("{}.{}", copy obj, cursor_name(*f));
-        var r = this.result(ft, &none) ?? continue;
-        // a field held by handle comes back as a copy of it
-        var getter = true;
-        val fh = this.handle_of(ft);
-        if (fh) {
-            getter = (this.traits.get(fh.as_str()) ?? continue)->copyable;
-        }
-        if (getter && this.first_time(fmt2("attach fn {}(this: {}&", copy fv, S(vn)).as_str(), "")) {
-            this.fn_text("", fmt3("attach fn {}(this: {}&) -> {}", copy fv, S(vn), copy r.vty).as_str(), &r, at.as_str(), ", this.cpp", "");
-        }
-        if (!this.assignable(ft)) {
-            continue;
-        }
-        val a = this.param(ft, "v", 1, &none) ?? continue;
-        if (this.first_time(fmt2("attach fn set_{}(this: {}&", copy fv, S(vn)).as_str(), fmt(",{}", copy a.vty).as_str())) {
-            this.line(fmt3("attach fn set_{}(this: {}&, v: {}) -> void {{", copy fv, S(vn), copy a.vty).as_str());
-            this.line(fmt3("    @cpp<void>(\"{} = {}\", this.cpp, {});", copy at, copy a.cpp, copy a.pass).as_str());
-            this.line("}");
-        }
+    }
+    if (tr.polymorphic && !tr.final_ && tr.vdtor) {
+        this.director(c, vn, q);
+    }
+}
+
+// a field's getter (of the same name) and set_ method; at: the field, in a C++ expression ({0}: the
+// object's handle)
+attach fn field_accessors(this: cpp_gen&, f: clang::CXCursor, vn: str, at: str) -> void {
+    val none: std::vec<str> = {};
+    val ft = clang::clang_getCursorType(f);
+    if (clang::clang_Cursor_isBitField(f) != 0 || ft.kind == clang::CXType_LValueReference || ft.kind == clang::CXType_RValueReference) {
+        return;
+    }
+    val fv = vname(cursor_name(f).as_str());
+    var r = this.result(ft, &none) ?? return;
+    // a field held by handle comes back as a copy of it
+    var getter = true;
+    val fh = this.handle_of(ft);
+    if (fh) {
+        getter = (this.traits.get(fh.as_str()) ?? return)->copyable;
+    }
+    if (getter && this.first_time(fmt2("attach fn {}(this: {}&", copy fv, S(vn)).as_str(), "")) {
+        this.fn_text("", fmt3("attach fn {}(this: {}&) -> {}", copy fv, S(vn), copy r.vty).as_str(), &r, at, ", this.cpp", "");
+    }
+    if (!this.assignable(ft)) {
+        return;
+    }
+    val a = this.param(ft, "v", 1, &none) ?? return;
+    if (this.first_time(fmt2("attach fn set_{}(this: {}&", copy fv, S(vn)).as_str(), fmt(",{}", copy a.vty).as_str())) {
+        this.line(fmt3("attach fn set_{}(this: {}&, v: {}) -> void {{", copy fv, S(vn), copy a.vty).as_str());
+        this.line(fmt3("    @cpp<void>(\"{} = {}\", this.cpp, {});", S(at), copy a.cpp, copy a.pass).as_str());
+        this.line("}");
     }
 }
 
@@ -1216,7 +1234,7 @@ attach fn class_methods(this: cpp_gen&, c: clang::CXCursor, vn: str, q: str, obj
 }
 
 // what clang says of each class, from a second parse of the same headers with these appended:
-//     constexpr bool t0 = __is_trivially_copyable(::geo::Shape); (d0, c0, a0, n0 likewise)
+//     constexpr bool t0 = __is_trivially_copyable(::geo::Shape); (d0, c0, a0, n0, p0, f0, v0 likewise)
 // A class it can't answer for is held by handle, and Volt neither makes, copies nor assigns one.
 // ponytail: the second parse reads every header again (<string>, <vector>: about twice the
 // import's time); a precompiled preamble with clang_reparseTranslationUnit if that ever matters
@@ -1232,6 +1250,9 @@ attach fn probe(this: cpp_gen&, src: str, args: std::vec<str>&) -> void {
         text.append(fmt3("constexpr bool c{} = __is_constructible(::{}, const ::{} &);\n", copy i, copy q, copy q).as_str());
         text.append(fmt3("constexpr bool a{} = __is_assignable(::{} &, ::{} &&);\n", copy i, copy q, copy q).as_str());
         text.append(fmt2("constexpr bool n{} = __is_constructible(::{});\n", copy i, copy q).as_str());
+        text.append(fmt2("constexpr bool p{} = __is_polymorphic(::{});\n", copy i, copy q).as_str());
+        text.append(fmt2("constexpr bool f{} = __is_final(::{});\n", copy i, copy q).as_str());
+        text.append(fmt2("constexpr bool v{} = __has_virtual_destructor(::{});\n", copy i, copy q).as_str());
         put(&names, *e.key);
         this.traits.put(*e.key, {});
     }
@@ -1272,11 +1293,513 @@ attach fn probe(this: cpp_gen&, src: str, args: std::vec<str>&) -> void {
                 tr->copyable = yes;
             } else if (which == "a") {
                 tr->assignable = yes;
-            } else {
+            } else if (which == "n") {
                 tr->defaults = yes;
+            } else if (which == "p") {
+                tr->polymorphic = yes;
+            } else if (which == "f") {
+                tr->final_ = yes;
+            } else {
+                tr->vdtor = yes;
             }
         }
     }
+}
+
+// ---------- Volt types subclassing C++ classes ----------
+
+// how one parameter of a virtual method crosses from C++ to the Volt method overriding it (aN is the
+// parameter on both sides)
+struct virt_arg {
+    vty: std::string;    // its type in the trait's fn
+    thunk: std::string;  // its type in the thunk: what C++ passes
+    cpp_ty: std::string; // that, in C++ (in the thunk's function pointer type)
+    cpp: std::string;    // the C++ expression passing it
+    arg: std::string;    // the Volt expression the thunk passes on
+    handle: std::string = {}; // a class held by handle: its Volt type (the thunk makes a handle of
+                              // the object, and empties it after the call)
+}
+
+// how a virtual method's result comes back from the Volt method overriding it
+struct virt_ret {
+    vty: std::string;
+    cpp_ty: std::string;    // the thunk's result in C++ (void when it writes to out)
+    out: u8 = 0;            // 1: a class Volt holds by value, written to *out; 2: a std::string, assigned to *out
+    cast: std::string = {}; // the C++ type it's cast back to (an enum from its tag)
+}
+
+// a virtual method a Volt type can override (the class's own, or inherited)
+struct virt {
+    m: clang::CXCursor;
+    pure: bool;
+}
+
+// a C++ type as C++ spells it anywhere (qualified)
+fn canon(t: clang::CXType) -> std::string {
+    return type_spelling(clang::clang_getCanonicalType(t));
+}
+
+// what tells two virtual methods apart: the name, the parameters' types and const
+fn virt_key(m: clang::CXCursor) -> std::string {
+    var k = cursor_name(m);
+    k.push('(');
+    for (ch&) in children(m).items() {
+        if (clang::clang_getCursorKind(*ch) == clang::CXCursor_ParmDecl) {
+            k.append(canon(clang::clang_getCursorType(*ch)).as_str());
+            k.push(',');
+        }
+    }
+    k.push(')');
+    if (clang::clang_CXXMethod_isConst(m) != 0) {
+        k.append("const");
+    }
+    return move k;
+}
+
+fn is_final(m: clang::CXCursor) -> bool {
+    for (ch&) in children(m).items() {
+        if (clang::clang_getCursorKind(*ch) == clang::CXCursor_CXXFinalAttr) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// the virtual methods of class c and its bases, the most derived declaration of each first (a final
+// one is left out: nothing overrides it)
+attach fn virtuals(this: cpp_gen&, c: clang::CXCursor, out: std::vec<virt>&, seen: std::map<str, bool>&, depth: u32) -> void {
+    if (depth > 16) {
+        return;
+    }
+    for (ch&) in children(c).items() {
+        if (clang::clang_getCursorKind(*ch) != clang::CXCursor_CXXMethod || clang::clang_CXXMethod_isVirtual(*ch) == 0) {
+            continue;
+        }
+        val key = this.c.intern(virt_key(*ch));
+        if (seen.get(key) != null) {
+            continue;
+        }
+        seen.put(key, true);
+        if (!is_final(*ch)) {
+            put(out, { m: *ch, pure: clang::clang_CXXMethod_isPureVirtual(*ch) != 0 });
+        }
+    }
+    for (ch&) in children(c).items() {
+        if (clang::clang_getCursorKind(*ch) == clang::CXCursor_CXXBaseSpecifier) {
+            val b = clang::clang_getCursorDefinition(clang::clang_getTypeDeclaration(clang::clang_getCanonicalType(clang::clang_getCursorType(*ch))));
+            if (clang::clang_Cursor_isNull(b) == 0) {
+                this.virtuals(b, out, seen, depth + 1);
+            }
+        }
+    }
+}
+
+// parameter i (of type t) of a virtual method, from C++ to Volt: text (a str view), numbers, enums and
+// pointers as they are, a class Volt holds by value by its address, one held by handle as a handle
+// to C++'s object (Volt borrows it for the call)
+attach fn virt_param(this: cpp_gen&, t: clang::CXType, i: usize) -> virt_arg? {
+    val none: std::vec<str> = {};
+    val a = fmt("a{}", unum(@cast<u64>(i)));
+    // through typedefs (using Ref = T&)
+    val ck = clang::clang_getCanonicalType(t).kind;
+    if (ck == clang::CXType_RValueReference) {
+        return null;
+    }
+    val is_ref = ck == clang::CXType_LValueReference;
+    var base = t;
+    if (is_ref) {
+        base = clang::clang_getPointeeType(clang::clang_getCanonicalType(t));
+    }
+    if (!(is_ref && clang::clang_isConstQualifiedType(base) == 0) && (char_text(base, "basic_string") || char_text(base, "basic_string_view"))) {
+        return { vty: S("str"), thunk: S("str"), cpp_ty: S("volt_str"), cpp: fmt("volt_cpp_view({})", copy a), arg: copy a };
+    }
+    val hc = this.handle_of(base);
+    if (hc) {
+        val vt = this.vtype(base, &none) ?? return null;
+        return { vty: fmt("{}&", copy vt), thunk: S("void*"), cpp_ty: S("void *"), cpp: fmt("(void *)&{}", copy a), arg: fmt("&h{}", unum(@cast<u64>(i))), handle: copy vt };
+    }
+    if (is_class(base)) {
+        // an imported class (not a std one, nor an instance of a template)
+        if (this.traits.get(cpp_qual(clang::clang_getTypeDeclaration(clang::clang_getCanonicalType(base))).as_str()) == null) {
+            return null;
+        }
+        val vt = this.vtype(base, &none) ?? return null;
+        if (is_ref) {
+            return { vty: fmt("{}&", copy vt), thunk: fmt("{}&", copy vt), cpp_ty: S("void *"), cpp: fmt("(void *)&{}", copy a), arg: copy a };
+        }
+        return { vty: copy vt, thunk: fmt("{}&", copy vt), cpp_ty: S("void *"), cpp: fmt("(void *)&{}", copy a), arg: fmt("*{}", copy a) };
+    }
+    if (is_ref) {
+        return null;
+    }
+    val vt = this.vtype(t, &none) ?? return null;
+    if (clang::clang_getCanonicalType(t).kind == clang::CXType_Enum) {
+        val under = fmt("std::underlying_type_t<{}>", canon(t));
+        return { vty: copy vt, thunk: copy vt, cpp_ty: copy under, cpp: fmt2("({}){}", copy under, copy a), arg: copy a };
+    }
+    return { vty: copy vt, thunk: copy vt, cpp_ty: canon(t), cpp: copy a, arg: copy a };
+}
+
+// a virtual method's result, from Volt back to C++: numbers, enums and pointers as they are, a class
+// Volt holds by value and a std::string through a pointer to C++'s
+attach fn virt_result(this: cpp_gen&, t: clang::CXType) -> virt_ret? {
+    val none: std::vec<str> = {};
+    val ct = clang::clang_getCanonicalType(t);
+    if (ct.kind == clang::CXType_Void) {
+        return { vty: S("void"), cpp_ty: S("void") };
+    }
+    if (ct.kind == clang::CXType_LValueReference || ct.kind == clang::CXType_RValueReference) {
+        return null;
+    }
+    if (char_text(t, "basic_string")) {
+        return { vty: S("std::string"), cpp_ty: S("void"), out: 2 };
+    }
+    if (is_class(t)) {
+        if (this.handle_of(t) != null || this.traits.get(cpp_qual(clang::clang_getTypeDeclaration(ct)).as_str()) == null) {
+            return null;
+        }
+        return { vty: this.vtype(t, &none) ?? return null, cpp_ty: S("void"), out: 1 };
+    }
+    val vt = this.vtype(t, &none) ?? return null;
+    if (ct.kind == clang::CXType_Enum) {
+        return { vty: move vt, cpp_ty: fmt("std::underlying_type_t<{}>", canon(t)), cast: canon(t) };
+    }
+    return { vty: move vt, cpp_ty: canon(t) };
+}
+
+// one overridable virtual method: its trait's name, its C++ and Volt names, parameters and result
+struct virt_map {
+    m: clang::CXCursor;
+    pure: bool;
+    cname: std::string;
+    vname: std::string;
+    names: std::vec<std::string>; // the parameters' Volt names
+    args: std::vec<virt_arg>;
+    ret: virt_ret;
+}
+
+// a Volt type subclassing class c (held by handle, polymorphic, not final, with a virtual
+// destructor): a C++ subclass whose overrides call the Volt type's methods (or c's own when it has
+// none), and on the Volt side a trait each virtual method, T::derive, base_ methods and the
+// protected members
+attach fn director(this: cpp_gen&, c: clang::CXCursor, vn: str, q: str) -> void {
+    val none: std::vec<str> = {};
+    var dn = S("volt_dir_");
+    for (ch) in q {
+        if (ch == ':') {
+            dn.push('_');
+        } else {
+            dn.push(ch);
+        }
+    }
+    var vs: std::vec<virt> = {};
+    var seen: std::map<str, bool> = {};
+    this.virtuals(c, &vs, &seen, 0);
+    // the ones Volt can override (a name once: an overload of it stays C++'s)
+    var maps: std::vec<virt_map> = {};
+    var named: std::map<str, bool> = {};
+    for (v&) in vs.items() {
+        val mn = cursor_name(v.m);
+        if (!v.pure && clang::clang_getCXXAccessSpecifier(v.m) == clang::CX_CXXPrivate) {
+            // the subclass couldn't call C++'s own when the Volt type doesn't override it
+            this.line(fmt2("// ({}::{} is C++'s own in a Volt type deriving from it: it's private)", S(q), copy mn).as_str());
+            continue;
+        }
+        var ok = !starts_with(mn.as_str(), "operator") && named.get(mn.as_str()) == null && clang::clang_Cursor_isVariadic(v.m) == 0 && clang::clang_Type_getCXXRefQualifier(clang::clang_getCursorType(v.m)) == clang::CXRefQualifier_None;
+        var args: std::vec<virt_arg> = {};
+        var names: std::vec<std::string> = {};
+        if (ok) {
+            for (ch&) in children(v.m).items() {
+                if (clang::clang_getCursorKind(*ch) != clang::CXCursor_ParmDecl) {
+                    continue;
+                }
+                val a = this.virt_param(clang::clang_getCursorType(*ch), args.len);
+                if (a) {
+                    put(&args, copy a);
+                } else {
+                    ok = false;
+                    break;
+                }
+                var pn = vname(cursor_name(*ch).as_str());
+                if (pn.len() == 0 || pn.as_str() == "self") {
+                    pn = fmt("a{}", unum(@cast<u64>(names.len)));
+                }
+                put(&names, move pn);
+            }
+        }
+        var ret: virt_ret? = null;
+        if (ok) {
+            ret = this.virt_result(clang::clang_getCursorResultType(v.m));
+        }
+        if (!ok || ret == null) {
+            if (v.pure) {
+                this.line(fmt2("// (Volt types can't derive from {}: its pure virtual {} has types Volt can't give)", S(q), copy mn).as_str());
+                return;
+            }
+            this.line(fmt2("// ({}::{} is C++'s own in a Volt type deriving from it: its types)", S(q), copy mn).as_str());
+            continue;
+        }
+        named.put(this.c.intern(copy mn), true);
+        put(&maps, { m: v.m, pure: v.pure, cname: copy mn, vname: vname(mn.as_str()), names: move names, args: move args, ret: ret ?? { vty: {}, cpp_ty: {} } });
+    }
+    if (maps.len == 0) {
+        return;
+    }
+    val n = unum(@cast<u64>(maps.len));
+    // the traits
+    this.line(fmt2("// {}'s virtual methods: a Volt type overrides one by attaching its trait, and {}::derive", S(q), S(vn)).as_str());
+    this.line("// makes the C++ object, which holds the Volt value (deleted with it)");
+    for (m&) in maps.items() {
+        var ps = fmt("this, self: {}&", S(vn));
+        for (i) in 0..m.args.len {
+            ps.append(fmt2(", {}: {}", copy *m.names.at(i), copy m.args.at(i).vty).as_str());
+        }
+        this.line(fmt2("trait t_{}_{} {{", S(vn), copy m.vname).as_str());
+        this.line(fmt3("    fn {}({}) -> {};", copy m.vname, move ps, copy m.ret.vty).as_str());
+        this.line("}");
+    }
+    // what the C++ object holds: how to delete it, the thunk each virtual method calls (null: C++'s
+    // own), the Volt value's type and the value
+    this.line("<T: type>");
+    this.line(fmt("struct {}_volt {{", S(vn)).as_str());
+    this.line("    drop: void*;");
+    this.line(fmt("    v: void*[{}];", copy n).as_str());
+    this.line("    tid: u64;");
+    this.line("    impl: T;");
+    this.line("}");
+    // a thunk each: C++ calls it with the block and the object, and it calls the Volt method
+    for (m&) in maps.items() {
+        var ps = S("d: void*, self: void*");
+        for (i) in 0..m.args.len {
+            ps.append(fmt2(", a{}: {}", unum(@cast<u64>(i)), copy m.args.at(i).thunk).as_str());
+        }
+        if (m.ret.out != 0) {
+            ps.append(", out: void*");
+        }
+        var rty = copy m.ret.vty;
+        if (m.ret.out != 0) {
+            rty = S("void");
+        }
+        this.line("<T: type>");
+        this.line(fmt4("fn {}_volt_{}({}) -> {} {{", S(vn), copy m.vname, move ps, move rty).as_str());
+        this.depth += 1;
+        this.line(fmt("var me: {} = {{ cpp: self }};", S(vn)).as_str());
+        var call = fmt3("@cast<{}_volt<T>*>(d)->impl.{}(&me", S(vn), copy m.vname, S(""));
+        for (i) in 0..m.args.len {
+            val a = m.args.at(i);
+            if (a.handle.len() > 0) {
+                this.line(fmt3("var h{}: {} = {{ cpp: a{} }};", unum(@cast<u64>(i)), copy a.handle, unum(@cast<u64>(i))).as_str());
+            }
+            call.append(", ");
+            call.append(a.arg.as_str());
+        }
+        call.push(')');
+        if (m.ret.vty.as_str() == "void") {
+            this.line(fmt("{};", move call).as_str());
+        } else {
+            this.line(fmt("val r = {};", move call).as_str());
+        }
+        for (i) in 0..m.args.len {
+            if (m.args.at(i).handle.len() > 0) {
+                this.line(fmt("h{}.cpp = null;", unum(@cast<u64>(i))).as_str());
+            }
+        }
+        this.line("me.cpp = null; // the object is C++'s");
+        if (m.ret.out == 1) {
+            this.line(fmt("@write(@cast<{}*>(out), r);", copy m.ret.vty).as_str());
+        } else if (m.ret.out == 2) {
+            this.line("@cpp<void>(\"((std::string *){0})->assign((const char *){1}.ptr, {1}.len)\", out, r.as_str());");
+        } else if (m.ret.vty.as_str() != "void") {
+            this.line("return r;");
+        }
+        this.depth -= 1;
+        this.line("}");
+    }
+    // deleting the block (the C++ object's destructor calls it), and making one
+    this.line("<T: type>");
+    this.line(fmt("fn {}_volt_drop(d: void*) -> void {{", S(vn)).as_str());
+    this.line(fmt("    val b = @read(@cast<{}_volt<T>*>(d));", S(vn)).as_str());
+    this.line("    @cpp<void>(\"std::free({0})\", d);");
+    this.line("}");
+    this.line("<T: type>");
+    this.line(fmt("fn {}_volt_new(impl: T) -> void* {{", S(vn)).as_str());
+    this.depth += 1;
+    for (m&) in maps.items() {
+        if (m.pure) {
+            this.line(fmt2("comptime if (!@attaches(T, t_{}_{})) {{", S(vn), copy m.vname).as_str());
+            this.line(fmt4("    @compile_error(\"a Volt type deriving from {} has to attach t_{}_{}: {}\");", S(q), S(vn), copy m.vname, fmt2("{}::{} is pure virtual", S(q), copy m.cname)).as_str());
+            this.line("}");
+        }
+    }
+    this.line(fmt("var v: void*[{}] = {{}};", copy n).as_str());
+    for (k) in 0..maps.len {
+        val m = maps.at(k);
+        this.line(fmt2("comptime if (@attaches(T, t_{}_{})) {{", S(vn), copy m.vname).as_str());
+        this.line(fmt3("    v[{}] = @cast<void*>({}_volt_{}<T>);", unum(@cast<u64>(k)), S(vn), copy m.vname).as_str());
+        this.line("}");
+    }
+    this.line(fmt("val p = @cpp<void*>(\"std::malloc({{0}})\", @sizeof({}_volt<T>));", S(vn)).as_str());
+    this.line("if (p == null) {");
+    this.line("    @panic(\"out of memory\");");
+    this.line("}");
+    this.line(fmt2("@write(@cast<{}_volt<T>*>(p), {{ drop: @cast<void*>({}_volt_drop<T>), v: v, tid: @typeid(T), impl: move impl }});", S(vn), S(vn)).as_str());
+    this.line("return p;");
+    this.depth -= 1;
+    this.line("}");
+    // T::derive(impl, the constructor's arguments): one a constructor (public or protected)
+    val made: cpp_ret = { vty: S(vn), way: ret_way::HANDLE, cls: copy dn, up: fmt("::{}", S(q)) };
+    val head = fmt("attach fn derive(static this: {}, impl: T", S(vn));
+    val self_arg = fmt("{}_volt_new<T>(move impl)", S(vn));
+    val make = fmt("{}::make({{0}})(", copy dn);
+    var any_ctor = false;
+    for (ch&) in children(c).items() {
+        if (clang::clang_getCursorKind(*ch) != clang::CXCursor_Constructor) {
+            continue;
+        }
+        any_ctor = true;
+        if (clang::clang_getCXXAccessSpecifier(*ch) == clang::CX_CXXPrivate || clang::clang_CXXMethod_isDeleted(*ch) != 0 || clang::clang_CXXConstructor_isCopyConstructor(*ch) != 0 || clang::clang_CXXConstructor_isMoveConstructor(*ch) != 0) {
+            continue;
+        }
+        this.callable("<T: type>", head.as_str(), true, *ch, copy made, make.as_str(), self_arg.as_str(), "", &none, fmt("{}'s constructor", S(q)).as_str());
+    }
+    if (!any_ctor) {
+        this.line("<T: type>");
+        this.line(fmt2("attach fn derive(static this: {}, impl: T) -> {} {{", S(vn), S(vn)).as_str());
+        this.line(fmt4("    return {{ cpp: @cpp<void*>(\"static_cast<::{} *>(new {}({}::make({{0}})()))\", {}) }};", S(q), copy dn, copy dn, copy self_arg).as_str());
+        this.line("}");
+    }
+    // the Volt value a derived object holds, when it's a T
+    this.line("<T: type>");
+    this.line(fmt("attach fn derived(this: {}&) -> T* {{", S(vn)).as_str());
+    this.depth += 1;
+    this.line(fmt2("val d = @cpp<void*>(\"volt_dir_block<{}, ::{}>({{0}})\", this.cpp);", copy dn, S(q)).as_str());
+    this.line("if (d == null) {");
+    this.line("    return null;");
+    this.line("}");
+    this.line(fmt("val b = @cast<{}_volt<T>*>(d);", S(vn)).as_str());
+    this.line("if (b->tid != @typeid(T)) {");
+    this.line("    return null;");
+    this.line("}");
+    this.line("return &b->impl;");
+    this.depth -= 1;
+    this.line("}");
+    // base_m: C++'s own m (what a Volt method overriding it can call); a protected one through the
+    // subclass
+    var cpp = S("");
+    val obj = fmt("volt_cpp_obj<::{}>({{0}})", S(q));
+    val dir = fmt2("volt_dir_of<{}, ::{}>({{0}})", copy dn, S(q));
+    for (v&) in vs.items() {
+        val mn = cursor_name(v.m);
+        val acc = clang::clang_getCXXAccessSpecifier(v.m);
+        if (v.pure || acc == clang::CX_CXXPrivate || starts_with(mn.as_str(), "operator")) {
+            continue;
+        }
+        val ret = this.result(clang::clang_getCursorResultType(v.m), &none);
+        val h = fmt2("attach fn base_{}(this: {}&", vname(mn.as_str()), S(vn));
+        if (acc == clang::CX_CXXPublic) {
+            this.callable("", h.as_str(), true, v.m, ret, fmt3("{}.{}::{}(", copy obj, S(q), copy mn).as_str(), "this.cpp", "", &none, fmt2("{}::{}", S(q), copy mn).as_str());
+        } else {
+            this.callable("", h.as_str(), true, v.m, ret, fmt2("{}.volt_base_{}(", copy dir, copy mn).as_str(), "this.cpp", "", &none, fmt2("{}::{}", S(q), copy mn).as_str());
+            cpp.append(fmt2("    template <class... A>\n    decltype(auto) volt_base_{}(A &&...a) {{ return ::{}::", copy mn, S(q)).as_str());
+            cpp.append(fmt("{}(std::forward<A>(a)...); }\n", copy mn).as_str());
+        }
+    }
+    // the protected methods and fields, through the subclass (an object Volt didn't make with derive
+    // has no way to them: using one stops the program)
+    var pnames: std::map<str, bool> = {};
+    for (ch&) in children(c).items() {
+        val k = clang::clang_getCursorKind(*ch);
+        if (clang::clang_getCXXAccessSpecifier(*ch) != clang::CX_CXXProtected) {
+            continue;
+        }
+        val mn = cursor_name(*ch);
+        if (k == clang::CXCursor_CXXMethod && clang::clang_CXXMethod_isStatic(*ch) == 0 && clang::clang_CXXMethod_isDeleted(*ch) == 0 && !starts_with(mn.as_str(), "operator")) {
+            val ret = this.result(clang::clang_getCursorResultType(*ch), &none);
+            this.callable("", fmt2("attach fn {}(this: {}&", vname(mn.as_str()), S(vn)).as_str(), true, *ch, ret, fmt2("{}.volt_p_{}(", copy dir, copy mn).as_str(), "this.cpp", "", &none, fmt2("{}::{}", S(q), copy mn).as_str());
+            if (pnames.get(mn.as_str()) == null) {
+                pnames.put(this.c.intern(copy mn), true);
+                cpp.append(fmt2("    template <class... A>\n    decltype(auto) volt_p_{}(A &&...a) {{ return this->{}(std::forward<A>(a)...); }}\n", copy mn, copy mn).as_str());
+            }
+        } else if (k == clang::CXCursor_FieldDecl) {
+            this.field_accessors(*ch, vn, fmt2("{}.volt_pf_{}()", copy dir, copy mn).as_str());
+            cpp.append(fmt2("    auto &volt_pf_{}() {{ return this->{}; }}\n", copy mn, copy mn).as_str());
+        }
+    }
+    // the C++ subclass
+    var text = fmt2("// Volt's subclass of {} (derive): an override calls the Volt type's method through its thunk,\n// or {}'s own when the type doesn't attach that trait\n", S(q), S(q));
+    text.append(fmt2("struct {} final : ::{} {{\n", copy dn, S(q)).as_str());
+    text.append("    void *volt_d; // the Volt side: how to delete it, the thunks, the Volt value\n");
+    text.append(fmt3("    struct volt_make {{\n        void *d;\n        template <class... A>\n        {} operator()(A &&...a) const {{ return {}(d, std::forward<A>(a)...); }}\n    }};\n", copy dn, copy dn, S("")).as_str());
+    text.append("    static volt_make make(void *d) { return {d}; }\n");
+    text.append(fmt3("    template <class... A>\n    explicit {}(void *d, A &&...a) : ::{}(std::forward<A>(a)...), volt_d(d) {{}}\n", copy dn, S(q), S("")).as_str());
+    text.append(fmt("    ~{}() override {{ ((void (*)(void *))((void **)volt_d)[0])(volt_d); }}\n", copy dn).as_str());
+    text.append("    void *volt_thunk(int i) const { return ((void **)volt_d)[1 + i]; }\n");
+    text.append(fmt("    void *volt_self() const {{ return (void *)static_cast<const ::{} *>(this); }}\n", S(q)).as_str());
+    for (k) in 0..maps.len {
+        val m = maps.at(k);
+        val rt = canon(clang::clang_getCursorResultType(m.m));
+        var params: std::string = {};
+        var fty = S("void *, void *");
+        var pass = S("volt_d, volt_self()");
+        var base = S("");
+        var i: usize = 0;
+        for (ch&) in children(m.m).items() {
+            if (clang::clang_getCursorKind(*ch) != clang::CXCursor_ParmDecl) {
+                continue;
+            }
+            val pt = clang::clang_getCursorType(*ch);
+            if (i > 0) {
+                params.append(", ");
+                base.append(", ");
+            }
+            params.append(fmt2("volt_id<{}> a{}", canon(pt), unum(@cast<u64>(i))).as_str());
+            if (clang::clang_getCanonicalType(pt).kind == clang::CXType_LValueReference) {
+                base.append(fmt("a{}", unum(@cast<u64>(i))).as_str());
+            } else {
+                base.append(fmt("std::move(a{})", unum(@cast<u64>(i))).as_str());
+            }
+            fty.append(", ");
+            fty.append(m.args.at(i).cpp_ty.as_str());
+            pass.append(", ");
+            pass.append(m.args.at(i).cpp.as_str());
+            i += 1;
+        }
+        if (m.ret.out != 0) {
+            fty.append(", void *");
+        }
+        var quals = S("");
+        if (clang::clang_CXXMethod_isConst(m.m) != 0) {
+            quals.append(" const");
+        }
+        if (!may_throw(m.m)) {
+            quals.append(" noexcept");
+        }
+        text.append(fmt4("    volt_id<{}> {}({}){} override {{\n", copy rt, copy m.cname, move params, move quals).as_str());
+        text.append(fmt3("        if (auto f = ({} (*)({}))volt_thunk({})) {{\n", copy m.ret.cpp_ty, move fty, unum(@cast<u64>(k))).as_str());
+        if (m.ret.out == 1) {
+            text.append(fmt3("            alignas({}) unsigned char volt_r[sizeof({})];\n            f({}, volt_r);\n", copy rt, copy rt, copy pass).as_str());
+            text.append(fmt("            return *std::launder(reinterpret_cast<{} *>(volt_r));\n", copy rt).as_str());
+        } else if (m.ret.out == 2) {
+            text.append(fmt("            std::string volt_r;\n            f({}, &volt_r);\n            return volt_r;\n", copy pass).as_str());
+        } else if (m.ret.vty.as_str() == "void") {
+            text.append(fmt("            f({});\n            return;\n", copy pass).as_str());
+        } else if (m.ret.cast.len() > 0) {
+            text.append(fmt2("            return ({})f({});\n", copy m.ret.cast, copy pass).as_str());
+        } else {
+            text.append(fmt("            return f({});\n", copy pass).as_str());
+        }
+        text.append("        }\n");
+        if (m.pure) {
+            text.append(fmt2("        volt_cpp_throw(\"{}::{} is pure virtual, and the Volt type doesn't override it\");\n", S(q), copy m.cname).as_str());
+        } else {
+            text.append(fmt3("        return ::{}::{}({});\n", S(q), copy m.cname, move base).as_str());
+        }
+        text.append("    }\n");
+    }
+    text.append(cpp.as_str());
+    text.append("};\n");
+    put(&this.c.cpp_dir_names, move dn);
+    put(&this.c.cpp_dirs, move text);
 }
 
 // ---------- enums ----------
@@ -1816,7 +2339,21 @@ attach fn cpp_unit(this: checker&) -> std::string {
     out.append("\n// Volt's str and T[..]\nstruct volt_str {\n    const unsigned char *ptr;\n    size_t len;\n};\n\ntemplate <class T>\nstruct volt_slice {\n    T *ptr;\n    size_t len;\n};\n");
     out.append("\n// text copied out of C++, in memory the Volt side frees (std::free); and a view's bytes\nstatic inline volt_str volt_cpp_dup(std::string_view s) {\n    unsigned char *p = (unsigned char *)std::malloc(s.size() ? s.size() : 1);\n    if (!p) {\n        volt_cpp_throw(\"out of memory\");\n    }\n    std::memcpy(p, s.data(), s.size());\n    return {p, s.size()};\n}\n\nstatic inline volt_str volt_cpp_view(std::string_view s) {\n    return {(const unsigned char *)s.data(), s.size()};\n}\n");
     out.append("\n// a std::vector's elements copied out the same way\ntemplate <class T>\nstatic volt_slice<T> volt_cpp_dup_vec(const std::vector<T> &v) {\n    static_assert(std::is_trivially_copyable<T>::value, \"Volt copies out a std::vector of plain values\");\n    T *p = (T *)std::malloc(sizeof(T) * (v.size() ? v.size() : 1));\n    if (!p) {\n        volt_cpp_throw(\"out of memory\");\n    }\n    std::copy(v.begin(), v.end(), p);\n    return {p, v.size()};\n}\n");
-    out.append("\n// try_ forms: run the call, and keep what an exception says instead of stopping\nstatic thread_local std::string volt_cpp_last;\n\ntemplate <class F>\nstatic bool volt_cpp_catch(F f) {\n    try {\n        f();\n        return true;\n    } catch (const std::exception &e) {\n        volt_cpp_last = e.what();\n    } catch (...) {\n        volt_cpp_last = \"an exception that isn't a std::exception\";\n    }\n    return false;\n}\n\n#define VOLT_CPP_CATCH(...) volt_cpp_catch([&]() { __VA_ARGS__; })\n\nextern \"C\" {\n\n");
+    out.append("\n// try_ forms: run the call, and keep what an exception says instead of stopping\nstatic thread_local std::string volt_cpp_last;\n\ntemplate <class F>\nstatic bool volt_cpp_catch(F f) {\n    try {\n        f();\n        return true;\n    } catch (const std::exception &e) {\n        volt_cpp_last = e.what();\n    } catch (...) {\n        volt_cpp_last = \"an exception that isn't a std::exception\";\n    }\n    return false;\n}\n\n#define VOLT_CPP_CATCH(...) volt_cpp_catch([&]() { __VA_ARGS__; })\n");
+    out.append("\n// Volt's subclasses of C++ classes (derive): a type spelled anywhere, the subclass behind a handle\n// (for its protected members), and the Volt side a derived object holds\ntemplate <class T>\nusing volt_id = T;\n\ntemplate <class D, class B>\nstatic D &volt_dir_of(void *p) {\n    D *d = dynamic_cast<D *>(&volt_cpp_obj<B>(p));\n    if (!d) {\n        std::fprintf(stderr, \"panic: a protected member of a C++ object Volt didn't make with derive\\n\");\n        std::exit(101);\n    }\n    return *d;\n}\n\ntemplate <class D, class B>\nstatic void *volt_dir_block(void *p) {\n    D *d = p ? dynamic_cast<D *>((B *)p) : nullptr;\n    return d ? d->volt_d : nullptr;\n}\n");
+    for (i) in 0..this.cpp_dirs.len {
+        var used = false;
+        for (w&) in this.cpp_shims.items() {
+            if (contains(w.as_str(), this.cpp_dir_names.at(i).as_str())) {
+                used = true;
+            }
+        }
+        if (used) {
+            out.push('\n');
+            out.append(this.cpp_dirs.at(i).as_str());
+        }
+    }
+    out.append("\nextern \"C\" {\n\n");
     for (w&) in this.cpp_shims.items() {
         out.append(w.as_str());
         out.push('\n');

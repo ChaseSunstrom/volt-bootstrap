@@ -696,6 +696,29 @@ attach fn try_generic_args(this: parser&) -> std::vec<garg>? {
     return move a;
 }
 
+// `.name<...>`'s generic args: a name the program declares generic takes them; any other only when a
+// call follows (`x.get<i32>()`: a method declared where the program's names aren't collected, like an
+// import's), with one argument or none passed (`f(a.x < b, c > (d))` is two comparisons)
+attach fn method_generic_args(this: parser&, name: str) -> std::vec<garg>? {
+    if (!this.is("<")) {
+        return null;
+    }
+    if (this.generics.get(name) != null) {
+        return this.try_generic_args();
+    }
+    val save = this.pos;
+    val a = this.try_generic_args();
+    var n: usize = 0;
+    if (a) {
+        n = a.len;
+    }
+    if (a != null && this.is("(") && (n == 1 || this.is_at(1, ")"))) {
+        return a;
+    }
+    this.pos = save;
+    return null;
+}
+
 attach fn generic_args(this: parser&) -> compile_error!std::vec<garg> {
     try this.expect("<");
     var out: std::vec<garg> = {};

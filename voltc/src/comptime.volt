@@ -114,7 +114,7 @@ attach fn ct_eval_in(this: checker&, env: u32, e: expr&, want: u32?) -> compile_
 // is this expression only meaningful at compile time (so it gets evaluated, not emitted)?
 attach fn is_ct_expr(this: checker&, e: expr&) -> bool {
     match (e.kind) {
-        .BUILTIN(n, g, a) => { return n == "typeinfo" || n == "typeof" || n == "compile_error" || n == "cfg"; },
+        .BUILTIN(n, g, a) => { return n == "typeinfo" || n == "typeof" || n == "compile_error" || n == "cfg" || n == "attaches"; },
         .CALL(c, args) => {
             match (c.kind) {
                 .PATH(p&) => {
@@ -2152,7 +2152,7 @@ fn cfg_matches(set: str, want: str, key_only: bool) -> bool {
     return set == want || (key_only && set.len > want.len && set[0..want.len] == want && set[want.len] == '=');
 }
 
-// @typeinfo, @typeid, @typeof, @compile_error, @cfg, @sizeof, @alignof, @cast and @panic at compile time
+// @typeinfo, @typeid, @typeof, @compile_error, @cfg, @attaches, @sizeof, @alignof, @cast and @panic at compile time
 attach fn ct_builtin(this: checker&, name: str, gargs: std::vec<garg>&, args: std::vec<garg>&, want: u32?, span: span) -> compile_error!cval {
     val env = this.ct_top().env;
     if (name == "typeinfo") {
@@ -2240,6 +2240,26 @@ attach fn ct_builtin(this: checker&, name: str, gargs: std::vec<garg>&, args: st
             }
         }
         return fail(span, move msg);
+    }
+    if (name == "attaches") {
+        // @attaches(T, t_trait): does T attach the trait (as a <T: t_trait> bound asks)?
+        if (args.len != 2) {
+            return fails(span, "@attaches(T, trait) takes a type and a trait");
+        }
+        val t = try this.ct_ty_arg(args.at(0), env);
+        var bound: ty* = null;
+        match (*args.at(1)) {
+            .TYPE(b&) => { bound = b; },
+            .EXPR(e&) => {
+                match (e.kind) {
+                    .PATH(p) => { bound = this.keep_ty({ kind: type_kind::PATH(copy p), span: e.span }); },
+                    default => { return fails(e.span, "@attaches(T, trait): expected a trait"); },
+                }
+            },
+        }
+        val b = bound ?? return fails(span, "@attaches(T, trait): expected a trait");
+        val tr = this.bound_trait(b, this.env_at(env).ns) ?? return fails(b.span, "@attaches(T, trait): expected a trait");
+        return cval::BOOL(try this.satisfies(t, tr.decl, tr.args, env));
     }
     if (name == "sizeof" || name == "alignof") {
         if (args.len != 1) {

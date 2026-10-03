@@ -137,6 +137,58 @@ fn main() -> void {
 
 `@compile_error("message")` fails compilation when it's reached, for custom checks in templates.
 
+## Does a type attach a trait: @attaches
+
+`@attaches(T, t_trait)` is `true` when `T` attaches the trait, the same test a `<T: t_trait>` bound
+makes. A template can use what a type offers and do without what it doesn't:
+
+```volt
+use std::io;
+
+trait t_area {
+    fn area(this) -> f64;
+}
+
+trait t_name {
+    fn name(this) -> str;
+}
+
+struct circle { r: f64; }
+struct square { side: f64; }
+
+attach t_area -> circle {
+    fn area(this) -> f64 { return 3.0 * this.r * this.r; }
+}
+
+attach t_area -> square {
+    fn area(this) -> f64 { return this.side * this.side; }
+}
+
+attach t_name -> square {
+    fn name(this) -> str { return "square"; }
+}
+
+<T: t_area>
+fn describe(s: T&) -> void {
+    comptime if (@attaches(T, t_name)) {
+        std::println("{}: {}", s.name(), s.area());
+    } else {
+        std::println("something: {}", s.area());
+    }
+}
+
+fn main() -> void {
+    val c: circle = { r: 1.0 };
+    val q: square = { side: 2.0 };
+    describe(&c);
+    describe(&q);
+}
+// expect: something: 3
+// expect: square: 4
+```
+
+A generic trait takes its arguments: `@attaches(T, t_source<i32>)`.
+
 ## Type ids: @typeid
 
 `@typeid(T)` is a `u64` naming a type: the 64-bit FNV-1a hash of its canonical name (the
