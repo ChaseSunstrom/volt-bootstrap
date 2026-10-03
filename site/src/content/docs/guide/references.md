@@ -111,8 +111,28 @@ fn main() -> void {
 // error: 'p' is a val, and it's changed through what x_of returns: declare it with var
 ```
 
-Calls into C, pointers made with `@cast`, references stored in a struct field or an array, and
-ones an `await` gives aren't checked.
+A reference keeps where it points when it's stored in a struct, tuple or array, passed or returned
+inside one (or inside an error union), or assigned to a variable later:
+
+```volt fail
+struct holder {
+    r: i32&;
+}
+
+fn main() -> void {
+    val x = 0;
+    val h: holder = { r: &x };
+    *h.r = 1;
+}
+// error: can't assign through this; it reaches a val (or a parameter without var)
+```
+
+The references in one value share a verdict: when one of them points at a `val`, writing through
+any of them is an error.
+
+Calls into C, pointers made with `@cast`, ones an `await` gives, a reference stored through another
+reference, and references kept in an enum's payload or in a struct that also owns memory through a
+pointer (as a `std::vec` does) aren't checked.
 
 A `val` is shallow: what its pointers and slices point at isn't part of it. A `val` slice of a `var`
 array can still change the array's elements; a slice of a `val` array can't.

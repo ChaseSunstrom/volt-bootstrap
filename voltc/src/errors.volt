@@ -41,7 +41,7 @@ attach fn error_coerce(this: checker&, v: tval, to: u32, span: span) -> compile_
                 put(&inits, { field: 1, value: this.ir.field(tmp.c, 1, t) });
             }
             val agg = this.ir.node(ir_kind::AGG(move inits), to);
-            return vnew(to, this.ir.seq(nodes(this.ir.decl(tmp.id, v.c)), agg, to));
+            return with_prov(vnew(to, this.ir.seq(nodes(this.ir.decl(tmp.id, v.c)), agg, to)), &v);
         },
         default => {},
     }
@@ -104,7 +104,7 @@ attach fn try_expr(this: checker&, x: expr&, span: span) -> compile_error!tval {
     if (t == VOID) {
         return vnew(t, this.ir.seq(move stmts, null, t));
     }
-    return vnew(t, this.ir.seq(move stmts, this.ir.field(tmp.c, 1, t), t));
+    return with_prov(vnew(t, this.ir.seq(move stmts, this.ir.field(tmp.c, 1, t), t)), &v);
 }
 
 // `x catch |e| handler`: the payload, or the handler's value on error. The handler may leave
@@ -171,7 +171,7 @@ attach fn catch_inner(this: checker&, v: tval, e: u32, t: u32, cap: catch_cap*, 
         if (t == VOID) {
             return vnew(t, this.ir.seq(move stmts, null, t));
         }
-        return vnew(t, this.ir.seq(move stmts, this.ir.field(tmp.c, 1, t), t));
+        return with_prov(vnew(t, this.ir.seq(move stmts, this.ir.field(tmp.c, 1, t), t)), &v);
     }
     if (h.ty == VOID) {
         return fails(handler.span, "catch needs a value here, or a block that leaves (return/break)");
@@ -182,7 +182,12 @@ attach fn catch_inner(this: checker&, v: tval, e: u32, t: u32, cap: catch_cap*, 
     extend(&arm, try this.scope_exit_code(top, top, false));
     val els = this.ir.assign(r.c, this.ir.field(tmp.c, 1, t));
     val stmts = nodes3(first, this.ir.decl(r.id, null), this.ir.if_(this.nonzero(code), this.ir.block(move arm), els));
-    return vnew(t, this.ir.seq(move stmts, r.c, t));
+    var out = vnew(t, this.ir.seq(move stmts, r.c, t));
+    var both: std::vec<tval> = {};
+    put(&both, v);
+    put(&both, hv);
+    this.merge_held(&out, &both);
+    return out;
 }
 
 // an optional's present test and payload, as IR nodes (see opt_parts)
@@ -229,7 +234,7 @@ attach fn orelse(this: checker&, a: expr&, b: expr&, span: span) -> compile_erro
         val first = this.ir.decl(o.id, av.c);
         val is_null = this.ir.binary(binop_ir::EQ, o.c, this.ir.node(ir_kind::NULLPTR, av.ty), BOOL);
         if (bv.ty == NEVER) {
-            return vnew(res, this.ir.seq(nodes2(first, this.ir.if_(is_null, bv.c, null)), o.c, res));
+            return with_prov(vnew(res, this.ir.seq(nodes2(first, this.ir.if_(is_null, bv.c, null)), o.c, res)), &av);
         }
         val bc = try this.coerce(bv, res, span);
         // either one: read-only where either is (lends.volt)
@@ -249,7 +254,7 @@ attach fn orelse(this: checker&, a: expr&, b: expr&, span: span) -> compile_erro
     val p = this.opt_parts(av.ty, o.c);
     if (bv.ty == NEVER) {
         val missing = this.ir.unary(unop_ir::NOT, p.has, BOOL);
-        return vnew(inner, this.ir.seq(nodes2(first, this.ir.if_(missing, bv.c, null)), p.value, inner));
+        return with_prov(vnew(inner, this.ir.seq(nodes2(first, this.ir.if_(missing, bv.c, null)), p.value, inner)), &av);
     }
     val bc = try this.coerce(bv, inner, span);
     var r = vnew(inner, this.ir.seq(nodes(first), this.ir.node(ir_kind::COND(p.has, p.value, bc.c), inner), inner));

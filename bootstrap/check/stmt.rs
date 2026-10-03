@@ -173,11 +173,9 @@ impl Checker {
                     return Ok((format!("{storage}{cty} {c} = {};", v.c), false));
                 }
                 let (c, flag) = self.owned_local(name, ty, l.mutable)?;
-                // a reference local reaches what its value does
-                if self.reaches(ty) {
-                    if let Some(x) = self.cx.scopes.last_mut().unwrap().vars.get_mut(name) {
-                        (x.ro, x.via, x.root) = (v.ro, v.via, v.root.clone());
-                    }
+                // a reference local reaches what its value does (a struct or array of them, where they do)
+                if self.holds(ty) {
+                    self.local_prov(name, ty, &v);
                 }
                 Ok((format!("{};{flag}", Self::decl(&cty, &c, &v.c)), false))
             }
@@ -194,6 +192,9 @@ impl Checker {
                     let PatKind::Bind(name) = &p.kind else { return err(p.span, "expected a name") };
                     let ec = self.cty(t);
                     let (c, flag) = self.owned_local(name, t, l.mutable)?;
+                    if self.holds(t) {
+                        self.local_prov(name, t, &v);
+                    }
                     code.push_str(&format!(" {};{flag}", Self::decl(&ec, &c, &format!("{tmp}.f{i}"))));
                 }
                 Ok((code, false))
@@ -552,6 +553,8 @@ impl Checker {
         let mut owned_elem = false;
         // what (x&) reaches: read-only, through a parameter, and its root (lends.rs)
         let mut eprov: (u32, Via, Option<String>) = (0, None, None);
+        // where an element's own references point (a by-value element that holds some)
+        let mut vprov: (u32, Via, Option<String>) = (0, None, None);
         let mut acc_decl = String::new();
         let acc = match &f.acc {
             Some(a) => {
@@ -608,8 +611,10 @@ impl Checker {
                 }
                 eprov = match self.t.get(ty) {
                     Ty::Slice(_) => (bp.ro, bp.via, bp.root.clone()),
-                    _ => ((bp.lv && !bp.mutable) as u32, bp.pvia, bp.root.clone()),
+                    _ => Self::addr_prov(&bp),
                 };
+                // the element's own references point one depth past where (x&) would
+                vprov = (eprov.0 >> 1, lends::deeper(eprov.1, 1), eprov.2.clone());
                 let (elem_ty, len, access) = match self.t.get(ty).clone() {
                     Ty::Array(t, n) => {
                         let pt = self.t.intern(Ty::Ref(ty));
@@ -735,6 +740,10 @@ impl Checker {
                     binds.push_str(&format!("{};{flag}", Self::decl(&et, &c, &elem)));
                 } else {
                     let c = self.new_local(name, elem_ty, false);
+                    if self.holds(elem_ty) {
+                        let (ro, via, root) = vprov.clone();
+                        self.local_prov(name, elem_ty, &Val { ro, via, root, ..Val::new(elem_ty, "") });
+                    }
                     binds.push_str(&format!("{};", Self::decl(&et, &c, &elem)));
                 }
                 if let Some((iname, _, _)) = f.bindings.get(1) {

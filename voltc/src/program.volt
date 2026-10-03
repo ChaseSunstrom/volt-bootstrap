@@ -256,7 +256,7 @@ attach fn gen_fn(this: checker&, idx: u32) -> compile_error!void {
         if (p.mutable && p.name != "this") {
             put(&this.cx.var_params, { c: c, name: p.name });
         }
-        if (this.reaches(p.ty)) {
+        if (this.holds(p.ty)) {
             val rv: reach = { k: @cast<u32>(i), off: 0 }; // what it reaches is parameter i's memory
             l.via = rv;
         }

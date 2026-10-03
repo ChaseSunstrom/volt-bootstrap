@@ -582,6 +582,7 @@ attach fn assign(this: checker&, op: binop?, le: expr&, re: expr&, span: span) -
             if (lo != null && (lo ?? { c: 0, ty: 0, mutable: false }).orig_c != null) {
                 val loc = lo ?? { c: 0, ty: 0, mutable: false };
                 val r = try this.expr(re, l.ty);
+                this.note_store(&l, &r);
                 if (!this.coercible(&r, l.ty) || this.narrow_recheck(&loc)) {
                     var whole = vpure(loc.orig_ty, loc.orig_c ?? 0);
                     whole.lv = true;
@@ -605,6 +606,7 @@ attach fn assign(this: checker&, op: binop?, le: expr&, re: expr&, span: span) -
             this.cx.reassigning = saved;
             return copy e;
         };
+        this.note_store(&l, &rr);
         val res = this.store(l, rr, re.span);
         this.cx.reassigning = saved;
         return move res;

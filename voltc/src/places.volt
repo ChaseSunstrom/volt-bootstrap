@@ -125,6 +125,9 @@ attach fn field(this: checker&, b0: tval, name: str, span: span) -> compile_erro
     var rop = b.rop;
     var pvia = b.pvia;
     var own = b.own;
+    // what the struct's references point at: through b, one depth further than b's own
+    var fro = b.ro;
+    var fvia = b.via;
     val inner = this.t.ref_inner(b.ty);
     if (inner) {
         own = null;
@@ -134,6 +137,8 @@ attach fn field(this: checker&, b0: tval, name: str, span: span) -> compile_erro
         mutable = (b.ro & 1) == 0;
         rop = (b.ro & 1) != 0;
         pvia = b.via;
+        fro = b.ro >> 1;
+        fvia = deeper(b.via, 1);
     }
     match (*this.t.get(t)) {
         .STRUCT(sid) => {
@@ -150,7 +155,10 @@ attach fn field(this: checker&, b0: tval, name: str, span: span) -> compile_erro
                     r.pure = b.pure;
                     r.rop = rop;
                     r.pvia = pvia;
-                    r.via = deeper(pvia, 1); // what a pointer field points at isn't part of the place
+                    // what a pointer field points at isn't part of the place, but it points where
+                    // the struct's references do
+                    r.ro = fro;
+                    r.via = fvia;
                     r.root = b.root;
                     r.own = own;
                     return r;
@@ -176,7 +184,8 @@ attach fn field(this: checker&, b0: tval, name: str, span: span) -> compile_erro
                 r.pure = b.pure;
                 r.rop = rop;
                 r.pvia = pvia;
-                r.via = deeper(pvia, 1);
+                r.ro = fro;
+                r.via = fvia;
                 r.root = b.root;
                 r.own = own;
                 return r;
@@ -370,7 +379,8 @@ attach fn index(this: checker&, be: expr&, ie: expr&, span: span) -> compile_err
         r.mutable = lv && b.mutable;
         r.rop = b.rop;
         r.pvia = b.pvia;
-        r.via = deeper(b.pvia, 1);
+        r.ro = b.ro;
+        r.via = b.via;
         r.root = b.root;
         r.own = b.own;
     }
@@ -558,6 +568,7 @@ attach fn tuple_of(this: checker&, elems: std::vec<expr*>&, want0: u32?, span: s
     }
     var r = vnew(t, this.wrap_pre(move pre, this.ir.node(ir_kind::AGG(move inits), t), t));
     r.pure = pure;
+    this.merge_held(&r, &vals);
     return r;
 }
 
@@ -667,6 +678,7 @@ attach fn literal(this: checker&, entries: std::vec<lit_entry>&, want: u32?, spa
             }
             var r = vnew(w, this.wrap_pre(move pre, this.ir.node(ir_kind::AGG(move inits), w), w));
             r.pure = pure;
+            this.merge_held(&r, &vals);
             return r;
         },
         .ARRAY(t, n) => {
@@ -690,6 +702,7 @@ attach fn literal(this: checker&, entries: std::vec<lit_entry>&, want: u32?, spa
             }
             var r = vnew(w, this.wrap_pre(move pre, this.ir.node(ir_kind::ARRAY_LIT(move cs), w), w));
             r.pure = pure;
+            this.merge_held(&r, &vals);
             return r;
         },
         .TUPLE(ts, names) => {

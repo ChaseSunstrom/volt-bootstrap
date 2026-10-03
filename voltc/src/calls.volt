@@ -174,7 +174,7 @@ attach fn call_value(this: checker&, f: tval, args: std::vec<expr>&, span: span)
                 v = try this.expr(a, p);
             }
             val tv = try this.take_into(v, p, a.span);
-            if (this.reaches(p)) {
+            if (this.holds(p)) {
                 this.note_arg(callee, i, &tv, a.span, site);
             }
             put(&vals, tv);

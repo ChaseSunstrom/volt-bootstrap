@@ -200,7 +200,7 @@ attach fn closure_fns(this: checker&, id: u32, ty: u32, cl: closure&, inner: std
             if (ov.k >= SITE) {
                 from = body_key(BODY_SITE, ov.k - SITE);
             }
-            if (from != null && this.reaches(c.ty)) {
+            if (from != null && this.holds(c.ty)) {
                 put(&this.lend_edges, { from: from ?? 0, k: via_param(ov.k), off: ov.off, to: body_key(BODY_CLOSURE, id), j: cl.params.len + ci });
             }
         }
@@ -349,7 +349,7 @@ attach fn closure_body(this: checker&, cl: closure&, inner: std::vec<cap_inner>&
             place = this.ir.field(obj, @cast<u32>(i), c.ty);
         }
         var l: local = { c: place, ty: c.ty, mutable: c.mutable, ro: c.outer.ro, root: c.name, param: c.outer.param };
-        if (this.reaches(c.ty)) {
+        if (this.holds(c.ty)) {
             val rv: reach = { k: @cast<u32>(cl.params.len + i), off: 0 };
             l.via = rv;
         }
@@ -364,7 +364,7 @@ attach fn closure_body(this: checker&, cl: closure&, inner: std::vec<cap_inner>&
         if (this.opts.lsp) {
             this.lsp_add_local(c, p.name, t, this.name_span(p.span, p.name), p.mutable, true);
         }
-        if (this.reaches(t)) {
+        if (this.holds(t)) {
             val rv: reach = { k: @cast<u32>(i), off: 0 };
             l.via = rv;
         }

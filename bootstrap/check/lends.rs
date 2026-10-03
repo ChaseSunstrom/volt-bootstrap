@@ -17,8 +17,14 @@
 // a val passed by reference (this: T[..]&) can be reseated, and its elements can't change.
 // A val is shallow: memory its pointer fields point at isn't part of it. Calls to extern fns aren't
 // checked (C is unchecked), nor are fn values made elsewhere (C callbacks, @cast), and @cast drops
-// where a pointer points. A reference stored in a struct or array (or returned inside an optional)
-// doesn't carry where it points.
+// where a pointer points.
+// A value holding references (a struct, tuple or array of them, an optional or error union: see
+// holds) carries where they point, merged: ro has the bits of any, via and root come from the first
+// (the first read-only one, for root), and a part of it (a field, an element) points where the whole
+// does. Storing a reference into a local, or into part of one, merges where it points into the
+// local's (flow-insensitively: once a local has held a reference to a val, writing through it is an
+// error). Not followed: a reference stored through another reference (into memory a parameter
+// reaches), an enum's payload, and a struct that also owns memory through a pointer.
 // A reference a fn returns points where its argument did: each body records where what it returns
 // points (`rets`: a parameter at some depth, or another call's result), solved into a summary a
 // body. A call whose result is a reference is a node of its own (Body::Site, its one parameter the
@@ -73,11 +79,91 @@ impl Checker {
         matches!(self.t.get(t), Ty::Ref(_) | Ty::Ptr(_) | Ty::Slice(_))
     }
 
+    /// whether where a value of this type points travels with it: a reference, pointer or slice, or
+    /// a struct, tuple, array, optional or error union whose parts hold references or slices and
+    /// nothing else that points (a part that owns memory through a pointer, like a vec's buffer,
+    /// would share depths with what the references reach, so such a value isn't followed)
+    pub fn holds(&mut self, t: TyId) -> bool {
+        self.reaches(t) || self.ref_parts(t) == Some(true)
+    }
+
+    /// Some(true) when t's parts hold references or slices and nothing else that points, Some(false)
+    /// when nothing in it points, None when something else does (a pointer, a fn value, an enum's
+    /// payload)
+    fn ref_parts(&mut self, t: TyId) -> Option<bool> {
+        let parts: Vec<TyId> = match self.t.get(t).clone() {
+            Ty::Ref(_) | Ty::Slice(_) => return Some(true),
+            Ty::Ptr(_) | Ty::VoidPtr | Ty::FnVal(..) | Ty::Closure(_) | Ty::TraitUnion(_) | Ty::Frame(_) => return None,
+            Ty::Opt(x) | Ty::ErrUnion(_, x) | Ty::Array(x, _) => vec![x],
+            Ty::Tuple(ts, _) => ts,
+            Ty::Struct(sid) => self.struct_fields(sid, Span::default()).ok()?.iter().map(|f| f.ty).collect(),
+            Ty::Enum(e) => return self.enum_payloads(e, Span::default()).ok()?.iter().all(|p| p.is_none()).then_some(false),
+            _ => return Some(false),
+        };
+        let mut any = false;
+        for p in parts {
+            any |= self.ref_parts(p)?;
+        }
+        Some(any)
+    }
+
+    /// where the references in these parts of a `ty` point, merged (parts holding none are skipped;
+    /// nothing when ty isn't followed)
+    pub fn merged_prov(&mut self, ty: TyId, vals: &[Val]) -> (u32, Via, Option<String>) {
+        let mut prov = (0, None, None);
+        if !self.holds(ty) {
+            return prov;
+        }
+        for v in vals {
+            if self.holds(v.ty) {
+                Self::merge_prov(&mut prov, v);
+            }
+        }
+        prov
+    }
+
+    /// the local just declared as `name` holds v: it points where v does (a reference local is
+    /// named after what it points into; a struct or array of them only when that can't change)
+    pub fn local_prov(&mut self, name: &str, ty: TyId, v: &Val) {
+        let plain = self.reaches(ty);
+        if let Some(x) = self.cx.scopes.last_mut().unwrap().vars.get_mut(name) {
+            (x.ro, x.via) = (v.ro, v.via);
+            if plain || v.ro != 0 {
+                x.root = v.root.clone();
+            }
+        }
+    }
+
+    /// storing v into place l: when l is a local or part of one, the local now also points where v
+    /// does (a reference stored through another reference isn't followed)
+    pub fn note_store(&mut self, l: &Val, v: &Val) {
+        let Some(own) = &l.own else { return };
+        if !self.holds(v.ty) {
+            return;
+        }
+        let found = self.cx.scopes.iter().rev().find_map(|s| s.vars.values().find(|x| x.own.as_ref() == Some(own)).map(|x| x.ty));
+        if !found.is_some_and(|t| self.holds(t)) {
+            return; // a local whose type isn't followed (one that owns memory too) keeps none
+        }
+        for s in self.cx.scopes.iter_mut().rev() {
+            if let Some(x) = s.vars.values_mut().find(|x| x.own.as_ref() == Some(own)) {
+                let mut prov = (x.ro, x.via, x.root.clone());
+                Self::merge_prov(&mut prov, v);
+                (x.ro, x.via, x.root) = prov;
+                return;
+            }
+        }
+    }
+
     /// &place's provenance: read-only where the place can't change (depth 0) and where what it holds
     /// points at what can't (deeper); the parameter memory it is
     pub fn addr_prov(place: &Val) -> (u32, Via, Option<String>) {
         let ro = (place.lv && !place.mutable) as u32 | (place.ro << 1);
-        (ro, place.pvia.or(deeper(place.via, -1)), place.root.clone())
+        // a local holding what a parameter reaches one depth or more down: its address would map the
+        // local itself onto the parameter's memory, so it isn't followed
+        // ponytail: a via has no floor (depths above it that are local); add one to follow these
+        let via = place.pvia.or(deeper(place.via, -1).filter(|&(_, o)| o < 0));
+        (ro, via, place.root.clone())
     }
 
     /// the place a reference (pointer, slice) value `r` reaches: mutable unless r's pointee is
@@ -86,13 +172,14 @@ impl Checker {
         Val { mutable: place.mutable && r.ro & 1 == 0, rop: r.ro & 1 != 0, pvia: r.via, ro: r.ro >> 1, via: deeper(r.via, 1), root: r.root.clone(), ..place }
     }
 
-    /// a value from either of two (a ?? b, match arms): read-only where either is
+    /// a value from either of two (a ?? b, match arms): read-only where either is, named after the
+    /// first read-only one
     pub fn merge_prov(into: &mut (u32, Via, Option<String>), v: &Val) {
-        into.0 |= v.ro;
-        into.1 = into.1.or(v.via);
-        if into.2.is_none() {
+        if into.2.is_none() || (into.0 == 0 && v.ro != 0) {
             into.2 = v.root.clone();
         }
+        into.0 |= v.ro;
+        into.1 = into.1.or(v.via);
     }
 
     fn mark(&mut self, b: Body, k: usize, w: u64) -> bool {
@@ -128,7 +215,10 @@ impl Checker {
 
     /// returning v from the body being checked: where it points, when it's a reference
     pub fn note_return(&mut self, v: &Val) {
-        if let (Some((k, off)), Some(b), true) = (v.via, self.cx.body, self.reaches(v.ty)) {
+        if let (Some((k, off)), Some(b)) = (v.via, self.cx.body) {
+            if !self.holds(v.ty) {
+                return;
+            }
             self.rets.push((b, k, off));
         }
     }
@@ -136,7 +226,7 @@ impl Checker {
     /// a call to `callee` returning `ret`: a site when that's a reference (its arguments are noted
     /// into it, and its result points at it)
     pub fn open_site(&mut self, callee: Body, ret: TyId) -> Option<u32> {
-        if !self.reaches(ret) {
+        if !self.holds(ret) {
             return None;
         }
         self.sites.push(Site { callee, caller: self.cx.body, args: Vec::new() });
@@ -156,7 +246,7 @@ impl Checker {
     #[allow(clippy::too_many_arguments)]
     pub fn note_arg(&mut self, callee: Body, param: usize, ro: u32, via: Via, root: Option<&str>, span: Span, site: Option<u32>) {
         if let Body::Fn(i) = callee {
-            if !self.reaches(self.fns[i].params.get(param).map_or(VOID, |p| p.ty)) || self.fns[i].intrinsic.is_some() {
+            if !self.holds(self.fns[i].params.get(param).map_or(VOID, |p| p.ty)) || self.fns[i].intrinsic.is_some() {
                 return;
             }
             if matches!(&self.decls[self.fns[i].decl].item.kind, ItemKind::Fn(f) if f.extern_abi.is_some() && f.body.is_none()) {

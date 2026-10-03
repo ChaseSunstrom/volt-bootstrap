@@ -44,13 +44,15 @@ impl Checker {
         if let Ty::Ptr(_) = self.t.get(b.ty) {
             return err(span, format!("this is a pointer ({}); reach what it points at with ->: p->{name}", self.ty_name(b.ty)));
         }
-        let (ty, access, lv, mutable, rop, pvia, own) = match self.t.get(b.ty).clone() {
-            Ty::Ref(inner) => (inner, format!("({})->", b.c), true, b.ro & 1 == 0, b.ro & 1 != 0, b.via, None),
-            _ => (b.ty, format!("({}).", b.c), b.lv, b.mutable, b.rop, b.pvia, b.own.clone()),
+        // what the struct's references point at: through b, one depth further than b's own
+        let (ty, access, lv, mutable, rop, pvia, own, ro, via) = match self.t.get(b.ty).clone() {
+            Ty::Ref(inner) => (inner, format!("({})->", b.c), true, b.ro & 1 == 0, b.ro & 1 != 0, b.via, None, b.ro >> 1, lends::deeper(b.via, 1)),
+            _ => (b.ty, format!("({}).", b.c), b.lv, b.mutable, b.rop, b.pvia, b.own.clone(), b.ro, b.via),
         };
         let root = b.root.clone();
-        // a field is part of the place; what a pointer field points at isn't (a val is shallow)
-        let place = |ty, c: String| Val { lv, mutable, pure: b.pure, rop, pvia, via: lends::deeper(pvia, 1), root: root.clone(), own: own.clone(), ..Val::new(ty, c) };
+        // a field is part of the place; what a pointer field points at isn't (a val is shallow), but
+        // it points where the struct's references do
+        let place = |ty, c: String| Val { lv, mutable, pure: b.pure, rop, pvia, ro, via, root: root.clone(), own: own.clone(), ..Val::new(ty, c) };
         match self.t.get(ty).clone() {
             Ty::Struct(sid) => {
                 let fields = self.struct_fields(sid, span)?;
@@ -149,7 +151,7 @@ impl Checker {
         if matches!(self.t.get(b.ty), Ty::Slice(_)) {
             return Ok(Self::through(Val { lv, mutable: lv, ..Val::new(elem, c) }, &b));
         }
-        Ok(Val { lv, mutable: lv && b.mutable, rop: b.rop, pvia: b.pvia, via: lends::deeper(b.pvia, 1), root: b.root.clone(), own: b.own.clone(), ..Val::new(elem, c) })
+        Ok(Val { lv, mutable: lv && b.mutable, rop: b.rop, pvia: b.pvia, ro: b.ro, via: b.via, root: b.root.clone(), own: b.own.clone(), ..Val::new(elem, c) })
     }
 
     /// `b[lo..hi]` (either end optional): a slice of an array or slice, a str of a str. Debug builds
@@ -241,7 +243,8 @@ impl Checker {
         let c = self.cty(ty);
         let inits: Vec<String> = vals.iter().enumerate().map(|(i, v)| format!(".f{i} = {}", v.c)).collect();
         let pure = vals.iter().all(|v| v.pure);
-        Ok(Val { pure, ..Val::new(ty, Self::wrap_pre(&pre, format!("(({c}){{ {} }})", inits.join(", ")))) })
+        let (ro, via, root) = self.merged_prov(ty, &vals);
+        Ok(Val { pure, ro, via, root, ..Val::new(ty, Self::wrap_pre(&pre, format!("(({c}){{ {} }})", inits.join(", ")))) })
     }
 
     /// A `{ ... }` literal of the wanted type: a struct (fields by name, the rest from their
@@ -297,7 +300,8 @@ impl Checker {
                 let c = self.cty(w);
                 let inits: Vec<String> = kept.iter().zip(&vals).filter(|(f, _)| f.ty != VOID).map(|(f, v)| format!(".{} = {}", c_field(&f.name), v.c)).collect();
                 let pure = vals.iter().all(|v| v.pure);
-                Ok(Val { pure, ..Val::new(w, Self::wrap_pre(&pre, format!("(({c}){{ {} }})", inits.join(", ")))) })
+                let (ro, via, root) = self.merged_prov(w, &vals);
+                Ok(Val { pure, ro, via, root, ..Val::new(w, Self::wrap_pre(&pre, format!("(({c}){{ {} }})", inits.join(", ")))) })
             }
             Ty::Array(t, n) => {
                 if entries.len() as u64 != n {
@@ -315,7 +319,8 @@ impl Checker {
                 let c = self.cty(w);
                 let inits: Vec<String> = vals.iter().map(|v| v.c.clone()).collect();
                 let pure = vals.iter().all(|v| v.pure);
-                Ok(Val { pure, ..Val::new(w, Self::wrap_pre(&pre, format!("(({c}){{ {{ {} }} }})", inits.join(", ")))) })
+                let (ro, via, root) = self.merged_prov(w, &vals);
+                Ok(Val { pure, ro, via, root, ..Val::new(w, Self::wrap_pre(&pre, format!("(({c}){{ {{ {} }} }})", inits.join(", ")))) })
             }
             Ty::Tuple(..) => {
                 let elems: Vec<Expr> = entries.iter().map(|(_, e)| e.clone()).collect();

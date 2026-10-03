@@ -128,9 +128,8 @@ impl Checker {
             return Val { ty: opt, ..v };
         }
         let c = self.cty(opt);
-        let pure = v.pure;
         let inner_c = if inner == VOID { String::new() } else { format!(".v = {}, ", v.c) };
-        Val { pure, ..Val::new(opt, format!("(({c}){{ {inner_c}.has = true }})")) }
+        Val { pure: v.pure, ro: v.ro, via: v.via, root: v.root, ..Val::new(opt, format!("(({c}){{ {inner_c}.has = true }})")) }
     }
 
     /// the empty value of optional type opt

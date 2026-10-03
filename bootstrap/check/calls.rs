@@ -117,7 +117,7 @@ impl Checker {
                         None => self.expr(a, Some(*p))?,
                     };
                     let v = self.take_into(v, *p, a.span)?;
-                    if self.reaches(*p) {
+                    if self.holds(*p) {
                         self.note_arg(callee, i, v.ro, v.via, v.root.as_deref(), a.span, site);
                     }
                     v

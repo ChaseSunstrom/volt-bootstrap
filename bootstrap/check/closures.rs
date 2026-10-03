@@ -131,7 +131,7 @@ impl Checker {
             if let Some((k, off)) = l.via {
                 // a parameter of the body the literal is in, or a call's result
                 let from = if k >= lends::SITE { Some((Body::Site(k - lends::SITE), 0)) } else { maker.map(|b| (b, k as usize)) };
-                if let (Some((b, k)), true) = (from, self.reaches(*t)) {
+                if let (Some((b, k)), true) = (from, self.holds(*t)) {
                     self.edges.push((b, k, off, Body::Closure(id), params.len() + ci));
                 }
             }
@@ -142,7 +142,7 @@ impl Checker {
         let saved = std::mem::replace(&mut self.cx, fresh);
         let r = (|| -> Res<(String, String)> {
             for (ci, (name, t, access, mutable, l)) in inner.iter().enumerate() {
-                let via = self.reaches(*t).then_some(((params.len() + ci) as u32, 0));
+                let via = self.holds(*t).then_some(((params.len() + ci) as u32, 0));
                 self.cx.scopes[0].vars.insert(name.clone(), Local { c: access.clone(), ty: *t, mutable: *mutable, orig: None, flag: None, loops: 0, ro: l.ro, via, root: Some(name.clone()), param: l.param, own: None });
             }
             // params are locals of the body; a param that needs a drop gets a live flag, like any owned local
@@ -150,7 +150,7 @@ impl Checker {
             let mut sig = Vec::new();
             for (i, (p, t)) in params.iter().zip(&ptys).enumerate() {
                 let c = format!("{}_{i}", p.name);
-                let via = self.reaches(*t).then_some((i as u32, 0));
+                let via = self.holds(*t).then_some((i as u32, 0));
                 let mut local = Local { c: c.clone(), ty: *t, mutable: p.mutable, orig: None, flag: None, loops: 0, ro: 0, via, root: Some(p.name.clone()), param: true, own: Some(c.clone()) };
                 if self.needs_drop(*t)? {
                     let flag = format!("{c}_live");

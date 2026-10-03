@@ -27,14 +27,14 @@ impl Checker {
                     let vc = self.cty(v.ty);
                     let code = self.eu_code(v.ty, "_e");
                     let val = if t == VOID { String::new() } else { ", .v = _e.v".into() };
-                    return Ok(Val::new(to, format!("({{ {vc} _e = {}; ({tc}){{ .err = {code}{val} }}; }})", v.c)));
+                    return Ok(Val { ro: v.ro, via: v.via, root: v.root.clone(), ..Val::new(to, format!("({{ {vc} _e = {}; ({tc}){{ .err = {code}{val} }}; }})", v.c)) });
                 }
                 if self.is_error_ty(v.ty) && (v.ty == e || e == ANYERR) {
                     let conv = if v.ty == e { v.c.clone() } else { self.err_code(v.ty, &v.c) };
                     return Ok(Val { pure: v.pure, ..Val::new(to, format!("(({tc}){{ .err = {conv} }})")) });
                 }
                 let inner = self.coerce(v, t, span)?;
-                Ok(Val { pure: inner.pure, ..Val::new(to, format!("(({tc}){{ .v = {} }})", inner.c)) })
+                Ok(Val { pure: inner.pure, ro: inner.ro, via: inner.via, root: inner.root, ..Val::new(to, format!("(({tc}){{ .v = {} }})", inner.c)) })
             }
             Ty::AnyErr => {
                 let c = self.err_code(v.ty, &v.c);
@@ -68,7 +68,7 @@ impl Checker {
         let defers = self.scope_exit_code(top, 0, true)?;
         let value = if t == VOID { String::new() } else { format!(" {tmp}.v;") };
         let exit = self.fn_exit(Some(format!("(({rc}){{ .err = {conv} }})")), &defers);
-        Ok(Val::new(t, format!("({{ {vc} {tmp} = {}; if ({code}) {{ {exit}; }}{value} }})", v.c)))
+        Ok(Val { ro: v.ro, via: v.via, root: v.root, ..Val::new(t, format!("({{ {vc} {tmp} = {}; if ({code}) {{ {exit}; }}{value} }})", v.c)) })
     }
 
     /// `x catch |e| handler`: the payload, or the handler's value on error. The handler may leave
@@ -111,7 +111,7 @@ impl Checker {
                 }
                 let exits = if h.ty == NEVER { String::new() } else { self.scope_exit_code(top, top, false)? };
                 let value = if t == VOID { String::new() } else { format!(" {tmp}.v;") };
-                Val::new(t, format!("({{ {vc} {tmp} = {}; if ({code}) {{ {bind}{}; {exits}}}{value} }})", v.c, h.c))
+                Val { ro: v.ro, via: v.via, root: v.root.clone(), ..Val::new(t, format!("({{ {vc} {tmp} = {}; if ({code}) {{ {bind}{}; {exits}}}{value} }})", v.c, h.c)) }
             } else {
                 if h.ty == VOID {
                     return err(handler.span, "catch needs a value here, or a block that leaves (return/break)");
@@ -119,7 +119,8 @@ impl Checker {
                 let h = self.coerce(h, t, handler.span)?;
                 let exits = self.scope_exit_code(top, top, false)?;
                 let tc = self.cty(t);
-                Val::new(t, format!("({{ {vc} {tmp} = {}; {tc} _r; if ({code}) {{ {bind}_r = {}; {exits}}} else _r = {tmp}.v; _r; }})", v.c, h.c))
+                let (ro, via, root) = self.merged_prov(t, &[v.clone(), h.clone()]);
+                Val { ro, via, root, ..Val::new(t, format!("({{ {vc} {tmp} = {}; {tc} _r; if ({code}) {{ {bind}_r = {}; {exits}}} else _r = {tmp}.v; _r; }})", v.c, h.c)) }
             })
         })();
         self.cx.scopes.pop();
@@ -154,7 +155,7 @@ impl Checker {
             }
             let pc = self.cty(av.ty);
             if bv.ty == NEVER {
-                return Ok(Val::new(res, format!("({{ {pc} _o = {}; if (!_o) {{ {}; }} _o; }})", av.c, bv.c)));
+                return Ok(Val { ro: av.ro, via: av.via, root: av.root.clone(), ..Val::new(res, format!("({{ {pc} _o = {}; if (!_o) {{ {}; }} _o; }})", av.c, bv.c)) });
             }
             let bv = self.coerce(bv, res, span)?;
             // either one: read-only where either is (lends.rs)
@@ -174,7 +175,7 @@ impl Checker {
         let oc = self.cty(av.ty);
         let (has, val) = self.opt_parts(av.ty, "_o");
         if bv.ty == NEVER {
-            return Ok(Val::new(inner, format!("({{ {oc} _o = {}; if (!{has}) {{ {}; }} {val}; }})", av.c, bv.c)));
+            return Ok(Val { ro: av.ro, via: av.via, root: av.root.clone(), ..Val::new(inner, format!("({{ {oc} _o = {}; if (!{has}) {{ {}; }} {val}; }})", av.c, bv.c)) });
         }
         let bv = self.coerce(bv, inner, span)?;
         let mut prov = (av.ro, av.via, av.root.clone());

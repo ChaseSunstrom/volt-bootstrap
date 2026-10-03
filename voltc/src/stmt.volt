@@ -296,14 +296,9 @@ attach fn let_stmt(this: checker&, l: let_stmt&) -> compile_error!code {
             }
             this.lsp_at = l.pat.span;
             val o = try this.owned_local(name, t, l.mutable);
-            // a reference local reaches what its value does
-            if (this.reaches(t)) {
-                val x = this.scope_top().vars.get(name);
-                if (x) {
-                    x.ro = v.ro;
-                    x.via = v.via;
-                    x.root = v.root;
-                }
+            // a reference local reaches what its value does (a struct or array of them, where they do)
+            if (this.holds(t)) {
+                this.local_prov(name, t, &v);
             }
             var stmts: std::vec<u32> = {};
             put(&stmts, this.decl_at(o.c, v.c));
@@ -334,6 +329,9 @@ attach fn let_stmt(this: checker&, l: let_stmt&) -> compile_error!code {
                 val et = *ts.at(i);
                 this.lsp_at = p.span;
                 val o = try this.owned_local(name, et, l.mutable);
+                if (this.holds(et)) {
+                    this.local_prov(name, et, &v);
+                }
                 put(&stmts, this.decl_at(o.c, this.ir.field(tmp.c, @cast<u32>(i), et)));
                 if (o.flag) {
                     put(&stmts, o.flag);
@@ -919,13 +917,7 @@ attach fn for_inner(this: checker&, f: for_loop&, want: u32?, span: span) -> com
                 ep.ro = bp.ro;
                 ep.via = bp.via;
             },
-            default => {
-                ep.ro = 0;
-                if (bp.lv && !bp.mutable) {
-                    ep.ro = 1;
-                }
-                ep.via = bp.pvia;
-            },
+            default => { addr_prov(&ep, &bp); },
         }
         ep.root = bp.root;
         var is_range_val = false;
@@ -1129,6 +1121,14 @@ attach fn for_body(this: checker&, f: for_loop&, elem_ty: u32, elem: u32, index:
         }
     } else {
         val c = this.new_local(b0.name, elem_ty, false);
+        if (this.holds(elem_ty)) {
+            // the element's own references point one depth past where (x&) would
+            var ev = vnew(elem_ty, 0);
+            ev.ro = ep.ro >> 1;
+            ev.via = deeper(ep.via, 1);
+            ev.root = ep.root;
+            this.local_prov(b0.name, elem_ty, &ev);
+        }
         put(&out, this.decl_at(c, elem));
     }
     if (f.bindings.len > 1) {

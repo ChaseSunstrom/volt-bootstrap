@@ -198,6 +198,9 @@ attach fn some(this: checker&, v: tval, opt: u32) -> tval {
     put(&inits, { field: 1, value: this.ir.boolean(true) });
     var r = vnew(opt, this.ir.node(ir_kind::AGG(move inits), opt));
     r.pure = v.pure;
+    r.ro = v.ro;
+    r.via = v.via;
+    r.root = v.root;
     return r;
 }
 

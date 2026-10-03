@@ -352,6 +352,7 @@ impl Checker {
             if let Some(loc @ Local { orig: Some(_), .. }) = Self::place_key(le).and_then(|k| self.lookup_local(&k)) {
                 let (oc, oty) = loc.orig.clone().unwrap();
                 let r = self.expr(re, Some(l.ty))?;
+                self.note_store(&l, &r);
                 if !self.coercible(&r, l.ty) || self.narrow_recheck(&loc) {
                     let whole = Val { lv: true, mutable: l.mutable, ..Val::pure(oty, oc) };
                     return self.store(whole, r, re.span);
@@ -370,6 +371,7 @@ impl Checker {
                     parts.count() <= 1 && (root == "this" || self.lookup_local(root).is_some())
                 });
             let r = self.expr(re, Some(l.ty)).and_then(|r| {
+                self.note_store(&l, &r);
                 // C leaves the order of `l = r` open; Volt evaluates r first
                 if fixed || (r.pure && (l.pure || r.lit.is_some())) || self.needs_drop(l.ty)? {
                     return self.store(l, r, re.span);

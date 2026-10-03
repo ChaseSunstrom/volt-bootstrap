@@ -1476,7 +1476,7 @@ impl Checker {
             let c = if f.is_async { self.slot(&p.name, p.ty) } else { format!("{}_{i}", p.name) };
             param_cs.push(c.clone());
             // a reference (pointer, slice) parameter: what it reaches is reached through parameter i
-            let via = self.reaches(p.ty).then_some((i as u32, 0));
+            let via = self.holds(p.ty).then_some((i as u32, 0));
             let mut local = Local { c: c.clone(), ty: p.ty, mutable: p.mutable, orig: None, flag: None, loops: 0, ro: 0, via, root: Some(p.name.clone()), param: true, own: Some(c.clone()) };
             // var this takes the receiver by value (it consumes it): that's what its var is for
             if p.mutable && p.name != "this" {
