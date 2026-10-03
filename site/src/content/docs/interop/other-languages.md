@@ -9,7 +9,7 @@ Everything meets at the C ABI.
 
 Each language has a small runnable example in both directions in
 [examples/interop](https://github.com/ChaseSunstrom/volt-bootstrap/tree/main/examples/interop): a Volt library that every language calls, and Volt
-importing C, C++, Rust and Zig code. Each one is a `run.sh` with its exact commands.
+importing C, C++, Rust, Zig and Swift code. Each one is a `run.sh` with its exact commands.
 
 ## Volt calls them
 
@@ -19,6 +19,8 @@ importing C, C++, Rust and Zig code. Each one is a `run.sh` with its exact comma
   as x;` (a directory with a `Cargo.toml`) or `use { "fastmath.zig" } as x;`, and call its public
   API, see [Rust, Zig and Go](/volt-bootstrap/interop/rust-and-zig/). The extension says which
   language it is; `use cpp`, `use rust` or `use zig { ... }` says it outright where it's ambiguous.
+- **Swift**: import the files, `use { "shapes.swift" } as x;`, and call their functions, structs,
+  classes and enums, see [Swift](/volt-bootstrap/interop/swift/).
 - **Go**: list the module under `[foreign]` in `bolt.toml`, see
   [Rust, Zig and Go](/volt-bootstrap/interop/rust-and-zig/#go-and-c-apis-you-write-yourself). Without bolt, declare a
   `#[no_mangle] pub extern "C" fn` (or a Zig `export fn`) with `extern "C" fn` and link the library

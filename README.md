@@ -31,7 +31,7 @@ written in Volt and builds itself.
 - **Ownership without lifetimes.** Values are deleted at scope end, moves are tracked and copies are
   explicit: RAII with nothing to annotate.
 - **Every language is one step away.** It reads C and C++ headers (templates and the standard
-  library too) and calls ordinary Rust crates and Zig files directly, imported like a header
+  library too) and calls ordinary Rust crates, Zig files and Swift files directly, imported like a header
   (`use { "geom.rs" } as geom;`), builds Go code, and embeds Python, Java, .NET and Lua; one `bindings` line in
   `bolt.toml` makes a Volt library usable from 15 languages.
 - **One toolchain.** bolt, a language server, and diagnostics that point at the problem.
@@ -89,7 +89,7 @@ fn main() -> !void {
 - **A standard library** with collections, text, JSON, files, processes, networking, threads,
   allocators you choose per container, hashing and encodings.
 - **Interop**: real C headers (unions and bitfields too), C++ classes, templates and the standard
-  library, Rust crates and Zig files imported by name (`use { "fm.zig" } as fm;`), Go modules through bolt,
+  library, Rust crates, Zig files and Swift files imported by name (`use { "fm.zig" } as fm;`), Go modules through bolt,
   Python, Java, .NET and Lua through packages, and libraries with bindings for C, C++, Rust, Zig,
   Python, JavaScript and TypeScript, C#, Java, Go, Lua, Dart, Swift, Kotlin and Ruby.
 - **Tooling**: diagnostics that point at the problem, the **bolt** build tool, a language server,

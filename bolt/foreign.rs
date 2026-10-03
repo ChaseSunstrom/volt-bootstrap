@@ -25,17 +25,17 @@ pub(crate) fn lex(src: &str) -> Vec<Tok> {
         let c = b[i];
         if c.is_ascii_whitespace() {
             i += 1;
-        } else if src[i..].starts_with("//") {
+        } else if b[i..].starts_with(b"//") {
             while i < b.len() && b[i] != b'\n' {
                 i += 1;
             }
-        } else if src[i..].starts_with("/*") {
+        } else if b[i..].starts_with(b"/*") {
             let mut depth = 0;
             while i < b.len() {
-                if src[i..].starts_with("/*") {
+                if b[i..].starts_with(b"/*") {
                     depth += 1;
                     i += 2;
-                } else if src[i..].starts_with("*/") {
+                } else if b[i..].starts_with(b"*/") {
                     depth -= 1;
                     i += 2;
                     if depth == 0 {
@@ -67,10 +67,11 @@ pub(crate) fn lex(src: &str) -> Vec<Tok> {
                     i += 1;
                 }
             }
-        } else if c.is_ascii_alphabetic() || c == b'_' || c == b'@' {
+        } else if c.is_ascii_alphabetic() || c == b'_' || c == b'@' || c >= 0x80 {
+            // a name; one in letters past ASCII (π, naïve, a byte order mark) whole
             let s = i;
             i += 1;
-            while i < b.len() && (b[i].is_ascii_alphanumeric() || b[i] == b'_') {
+            while i < b.len() && (b[i].is_ascii_alphanumeric() || b[i] == b'_' || b[i] >= 0x80) {
                 i += 1;
             }
             out.push(Tok::Id(src[s..i].to_string()));
@@ -80,7 +81,7 @@ pub(crate) fn lex(src: &str) -> Vec<Tok> {
                 i += 1;
             }
             out.push(Tok::Num(src[s..i].replace('_', "")));
-        } else if src[i..].starts_with("::") || src[i..].starts_with("->") {
+        } else if b[i..].starts_with(b"::") || b[i..].starts_with(b"->") {
             out.push(Tok::P(src[i..i + 2].to_string()));
             i += 2;
         } else {

@@ -486,7 +486,7 @@ impl Checker {
             }
             ItemKind::UseC { headers, alias } => {
                 // the extension names the language (use { "geom.rs" }), and only C is read here
-                const FOREIGN: [(&str, &str); 13] = [("hpp", "C++"), ("hh", "C++"), ("hxx", "C++"), ("h++", "C++"), ("cpp", "C++"), ("cc", "C++"), ("cxx", "C++"), ("c++", "C++"), ("ipp", "C++"), ("tpp", "C++"), ("ixx", "C++"), ("rs", "Rust"), ("zig", "Zig")];
+                const FOREIGN: [(&str, &str); 14] = [("hpp", "C++"), ("hh", "C++"), ("hxx", "C++"), ("h++", "C++"), ("cpp", "C++"), ("cc", "C++"), ("cxx", "C++"), ("c++", "C++"), ("ipp", "C++"), ("tpp", "C++"), ("ixx", "C++"), ("rs", "Rust"), ("zig", "Zig"), ("swift", "Swift")];
                 let ext = |h: &String| h.rsplit('/').next().and_then(|n| n.rsplit_once('.')).map(|(_, e)| e.to_ascii_lowercase());
                 // a directory with a Cargo.toml is a Rust crate
                 let src = &self.sm.files[file as usize].0;

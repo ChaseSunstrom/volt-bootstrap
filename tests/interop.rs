@@ -623,6 +623,46 @@ fn zig_direct() {
     assert!(bolt_run("c").contains("ticks 20 30"), "the Zig change is in");
 }
 
+/// Volt calls ordinary Swift directly: `use { "geometry.swift", "things.swift" } as geo;` and nothing
+/// else, on both backends, from voltc run and from a bolt package, which rebuilds when a file changes
+#[test]
+fn volt_calls_swift() {
+    let Some(swiftc) = local_tool("swiftc", "--version") else {
+        eprintln!("swiftc isn't installed: skipping use swift");
+        return;
+    };
+    let e = Env::new("swift_direct");
+    let dir = e.dir.join("sd");
+    copy_dir(&Path::new(ROOT).join("tests/interop/swift_direct"), &dir);
+    let src = std::fs::read_to_string(dir.join("main.volt")).unwrap();
+    let want: String = src.lines().filter_map(|l| l.strip_prefix("// expect: ")).map(|l| format!("{l}\n")).collect();
+    let tools = |c: &mut Command| {
+        c.env("VOLTC", &e.voltc).env("BOLT", env!("CARGO_BIN_EXE_bolt")).env("VOLT_CACHE", e.dir.join("cache")).env("BOLT_HOME", e.dir.join("bolthome")).env("SWIFTC", &swiftc);
+    };
+    for backend in ["c", "llvm"] {
+        let mut c = Command::new(&e.voltc);
+        c.args(["run", "--backend", backend, "main.volt"]).current_dir(&dir).env("VOLT_STD", Path::new(ROOT).join("std"));
+        tools(&mut c);
+        assert_eq!(ok(c.output().unwrap(), "voltc run"), want, "voltc run ({backend})");
+    }
+    // the same program in a bolt package
+    let app = dir.join("app");
+    std::fs::create_dir_all(app.join("src")).unwrap();
+    std::fs::write(app.join("bolt.toml"), format!("[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[std]\npath = \"{}\"\n", Path::new(ROOT).join("std").display())).unwrap();
+    std::fs::write(app.join("src/main.volt"), src.replace("use { \"geometry.swift\", \"things.swift\" }", "use { \"../../geometry.swift\", \"../../things.swift\" }")).unwrap();
+    let bolt_run = |backend: &str| {
+        let mut c = Command::new(env!("CARGO_BIN_EXE_bolt"));
+        c.args(["run", "-q", "--backend", backend]).current_dir(&app);
+        tools(&mut c);
+        ok(c.output().unwrap(), "bolt run")
+    };
+    assert_eq!(bolt_run("llvm"), want, "bolt run");
+    // a change to a Swift file reaches the program
+    let f = dir.join("things.swift");
+    std::fs::write(&f, std::fs::read_to_string(&f).unwrap().replace("count += k", "count += 10 * k")).unwrap();
+    assert!(bolt_run("c").contains("clicks 50 50"), "the Swift change is in");
+}
+
 /// a Node.js addon written in Volt with interop/node: bolt builds it as a shared library, node
 /// loads it (as a .node file), on both backends
 #[test]

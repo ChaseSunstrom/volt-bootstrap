@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 
 mod glue;
 mod rust;
+mod swift;
 mod zig;
 
 /// one import, as voltc asked for it
@@ -67,7 +68,8 @@ fn run(r: &Req) -> Result<(), String> {
     match r.lang.as_str() {
         "rust" => rust::import(r),
         "zig" => zig::import(r),
-        other => Err(format!("there's no `use {other}`: the languages Volt imports are c (use {{ \"x.h\" }}), cpp, rust and zig")),
+        "swift" => swift::import(r),
+        other => Err(format!("there's no `use {other}`: the languages Volt imports are c (use {{ \"x.h\" }}), cpp, rust, zig and swift")),
     }
 }
 

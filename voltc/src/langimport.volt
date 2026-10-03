@@ -7,7 +7,7 @@
 // only when the code changes.
 use std::io;
 
-// the language a file is in, from its extension: "cpp", "rust" or "zig", or null for a C header (a
+// the language a file is in, from its extension: "cpp", "rust", "zig" or "swift", or null for a C header (a
 // directory with a Cargo.toml is a Rust crate). A C++ header named .h needs `use cpp { }`
 fn language_of(path: str, dir: str) -> str? {
     var name = path;
@@ -38,6 +38,9 @@ fn language_of(path: str, dir: str) -> str? {
     }
     if (ext == "zig") {
         return "zig";
+    }
+    if (ext == "swift") {
+        return "swift";
     }
     var full = S(path);
     if (path.len == 0 || path[0] != '/') {

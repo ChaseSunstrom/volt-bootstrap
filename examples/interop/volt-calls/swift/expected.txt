@@ -1,0 +1,5 @@
+length 5
+tally 7
+divide 3
+by zero ERROR(divisionByZero)
+HELLO SWIFT
