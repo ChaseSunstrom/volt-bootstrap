@@ -26,7 +26,7 @@ importing C, C++, Rust and Zig code. Each one is a `run.sh` with its exact comma
 - **Python**: depend on the `interop/python` package, see [Python](/volt-bootstrap/interop/python/).
   Or embed it like any C library: `use { "Python.h" } as py;` with the flags from
   `python3-config --includes` and `--ldflags --embed` passed through `--cc`.
-- **Node.js**: write the addon in Volt with `interop/node`, see [Node.js addons](/volt-bootstrap/interop/node/).
+- **Node.js**: write the addon in Volt with `interop/node`, see [Node.js](/volt-bootstrap/interop/node/#addons-written-in-volt).
 - **Java**: depend on the `interop/java` package, see [Java](/volt-bootstrap/interop/java/).
 - **C#** and other .NET languages: depend on the `interop/dotnet` package, see [.NET](/volt-bootstrap/interop/dotnet/).
 - **Lua**: embed it with the `interop/lua` package, see [Lua](/volt-bootstrap/interop/lua/).
@@ -146,110 +146,12 @@ Each language gets these in its own style:
 | Kotlin/Native | throws a `VoltException` subclass per error set | `String` | primitive arrays (in place) or `List`s, `T?` | an `AutoCloseable` class, freed by a `Cleaner` if not closed | a lambda |
 | Ruby | raises a `Mod::Error` subclass per error set | a `String` | `Array`s (written back), `nil` | a class with `close`, freed by the GC | a block or a `Proc` |
 
-### JavaScript and TypeScript
-
-`--lang node` writes the C source of a Node-API addon, which runs in Node.js and in Bun. It
-includes the C declarations, so it's one file to compile against the library and node's headers.
-`--lang js` writes a loader, and `--lang ts` writes the TypeScript types:
-
-```sh
-voltc bindings mathlib --pkg mathlib=lib --lang node > mathlib_node.c
-voltc bindings mathlib --pkg mathlib=lib --lang js   > mathlib.js
-voltc bindings mathlib --pkg mathlib=lib --lang ts   > mathlib.d.ts
-cc -shared -fPIC -I /usr/include/node mathlib_node.c -L. -lmathlib -o mathlib.node
-```
-
-```js
-const m = require("./mathlib");      // mathlib.node next to it, or $VOLT_MATHLIB_NODE
-console.log(m.ml_greet("volt"));     // hello, volt
-const c = new m.counter("clicks");   // an export struct is a class
-c.add(2);
-c.close();                           // or `using c = ...`, or leave it to the garbage collector
-try {
-    m.ml_sqrt(-1);
-} catch (e) {
-    console.log(e.code);             // NEGATIVE: the error's name
-}
-```
-
-Here is how values convert:
-- Numbers and `bool` convert directly. A number that doesn't fit the parameter's type throws a
-  `RangeError`, and a fraction, NaN or infinity given for an integer throws a `TypeError`.
-  64-bit integers also take a `BigInt`. They come back as numbers, which are exact up to 2^53.
-- A struct is a plain object. Passed as `T&`, what Volt changes in it comes back to the object.
-- A slice is an array, and what Volt writes into its elements comes back too.
-- An optional is the value or `null`.
-- A callback is any function. It's called during the call it was passed to.
-- `str` and owned text are strings.
-- An error set's codes are the error names (`m.math_error.NEGATIVE` is `"NEGATIVE"`).
-- Each class checks that its methods get an instance of it.
-
-### C#
-
-`--lang csharp` writes one file for .NET 7 or later. It has the structs and enums, a `Native`
-class of `[LibraryImport]` declarations, and on top of those the package's functions in a static
-class `Api` and a class per export struct. Build it with `AllowUnsafeBlocks`. The library loads as
-`libNAME.so`, `NAME.dll` or `libNAME.dylib`.
-
-```csharp
-using mathlib;
-
-Console.WriteLine(Api.ml_greet("volt"));            // hello, volt
-using (var c = new counter("clicks")) {             // an IDisposable class
-    c.add(2);
-}
-try {
-    Api.ml_sqrt(-1);
-} catch (math_error e) when (e.Code == math_error.NEGATIVE) {
-    Console.WriteLine(e.Name);                      // NEGATIVE
-}
-```
-
-### Java
-
-`--lang java` writes one class, named after the package, for Java 22 or later. It calls the library
-through the FFM API (`java.lang.foreign`), so there is no JNI and no C to compile. It loads
-`libNAME.so` (or the library `-Dvolt.NAME.lib` names). Run with `--enable-native-access=ALL-UNNAMED`.
-
-```java
-System.out.println(mathlib.ml_greet("volt"));           // hello, volt
-try (var c = new mathlib.counter("clicks")) {           // AutoCloseable
-    c.add(2);
-}
-try {
-    mathlib.ml_sqrt(-1);
-} catch (mathlib.math_error e) {
-    System.out.println(e.name);                         // NEGATIVE
-}
-```
-
-Structs are mutable classes: what Volt changes through a `T&` comes back to the object. Unsigned
-integers use the Java type of the same size, as `int` for `u32`.
-
-### Lua
-
-`--lang lua` writes a C module for Lua 5.4 or later. Build it against the library and Lua's headers,
-then `require` it:
-
-```sh
-voltc bindings mathlib --pkg mathlib=lib --lang lua > mathlib_lua.c
-cc -shared -fPIC mathlib_lua.c -L. -lmathlib -o mathlib.so
-```
-
-```lua
-local m = require("mathlib")
-print(m.ml_greet("volt"))                     -- hello, volt
-local ok, err = pcall(m.ml_sqrt, -1)
-print(err.name == m.math_error.NEGATIVE)      -- true: err is {name = "NEGATIVE", code = ...}
-local c <close> = m.counter.new("clicks")     -- closed at the end of the block
-c:add(2)
-```
-
-Structs are tables with their fields; what Volt changes in one passed by reference comes back
-into the table, and so do the elements of a slice (a sequence). An enum is a table of its values,
-an error set a table of its names. Integers that don't fit the parameter's type raise an error,
-as do wrong types. A callback is any function; an error it raises comes out of the Volt call
-(the calls after it are skipped).
+Python, JavaScript and TypeScript, C#, Java and Lua have pages of their own, each with both
+directions: [Python](/volt-bootstrap/interop/python/#python-calls-volt),
+[Node.js](/volt-bootstrap/interop/node/#javascript-calls-volt),
+[.NET](/volt-bootstrap/interop/dotnet/#c-calls-volt), [Java](/volt-bootstrap/interop/java/#java-calls-volt)
+and [Lua](/volt-bootstrap/interop/lua/#lua-calls-volt). C, C++, Rust and Zig are in
+[Rust, Zig and Go](/volt-bootstrap/interop/rust-and-zig/#they-use-volt). The rest are here.
 
 ### Dart
 

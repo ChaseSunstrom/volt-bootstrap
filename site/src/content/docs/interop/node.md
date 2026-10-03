@@ -1,14 +1,73 @@
 ---
-title: Node.js addons
-description: Writing Node.js addons in Volt with the interop/node package.
+title: Node.js
+description: JavaScript and TypeScript calling Volt through generated bindings, and Node.js addons written in Volt with the interop/node package.
 sidebar:
   order: 5
 ---
 
+Volt meets JavaScript two ways: bindings that `bolt build` writes for a Volt library, which
+JavaScript and TypeScript call like any module, and addons written in Volt with the `interop/node`
+package, which take any JavaScript values and call JavaScript back. Both run in Node.js and in Bun.
+
+## JavaScript calls Volt
+
+A Volt library that lists `node` among its bindings gets the C source of a Node-API addon, which
+`bolt build` compiles to `target/debug/bindings/NAME.node` when Node's headers are installed. `js`
+adds its loader (`NAME.js`) and `ts` its TypeScript types (`NAME.d.ts`).
+
+The examples here use `greet`, the library every client in
+[examples/interop/calls-volt](https://github.com/ChaseSunstrom/volt-bootstrap/tree/main/examples/interop/calls-volt)
+calls: `export fn add(a: i64, b: i64) -> i64`, `export fn hello(name: str) -> std::string`, and an
+`export struct tally` with `tally_new`, `tally_add` and `tally_name`. What `export` means, and what
+crosses as what, is in [They call Volt](/volt-bootstrap/interop/other-languages/#they-call-volt).
+
+```toml
+# bolt.toml of the Volt library
+[lib]
+kind = ["shared"]
+bindings = ["node", "js", "ts"]
+```
+
+```js
+const greet = require("./target/debug/bindings/greet.js");   // loads greet.node next to it
+
+console.log("add", greet.add(2, 3));    // add 5
+console.log(greet.hello("volt"));       // hello, volt
+const c = new greet.tally("clicks");    // an export struct is a class
+c.add(1);
+console.log(c.name(), c.add(2));        // clicks 3
+c.close();                              // or `using c = ...`, or leave it to the garbage collector
+```
+
+`bolt build` writes the addon and its loader to `target/debug/bindings`. The loader finds the
+addon in `$VOLT_NAME_NODE` (the package's name in capitals), else next to itself. TypeScript imports the same
+loader, typed by `NAME.d.ts`:
+
+```ts
+import { createRequire } from "node:module";
+import type * as Greet from "./target/debug/bindings/greet.js";
+
+const greet: typeof Greet = createRequire(import.meta.url)("./target/debug/bindings/greet.js");
+const c: Greet.tally = new greet.tally("clicks");
+```
+
+Here is how values convert:
+- Numbers and `bool` convert directly. A number that doesn't fit the parameter's type throws a
+  `RangeError`, and a fraction, NaN or infinity given for an integer throws a `TypeError`.
+  64-bit integers also take a `BigInt`. They come back as numbers, which are exact up to 2^53.
+- A struct is a plain object. Passed as `T&`, what Volt changes in it comes back to the object.
+- A slice is an array, and what Volt writes into its elements comes back too.
+- An optional is the value or `null`.
+- A callback is any function. It's called during the call it was passed to.
+- `str` and owned text are strings.
+- An error is thrown as an `Error` whose `code` is the error's name, and an error set is an object
+  of its names (for `error math_error { NEGATIVE }`, `greet.math_error.NEGATIVE` is `"NEGATIVE"`).
+- Each class checks that its methods get an instance of it.
+
+## Addons written in Volt
+
 The `interop/node` package (in the repository) writes Node.js addons in Volt over Node-API: Volt
-functions that JavaScript calls with any values, and that call JavaScript back. (To expose an
-existing Volt library to JavaScript without writing addon code, use
-[`bindings = ["node", "js", "ts"]`](/volt-bootstrap/interop/other-languages/#javascript-and-typescript).)
+functions that JavaScript calls with any values, and that call JavaScript back.
 
 ```toml
 # bolt.toml

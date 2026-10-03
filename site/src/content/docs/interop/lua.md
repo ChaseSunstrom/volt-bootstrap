@@ -1,6 +1,6 @@
 ---
 title: Lua
-description: Embedding Lua in Volt with the interop/lua package.
+description: Embedding Lua in Volt with the interop/lua package, and calling Volt from Lua through generated bindings.
 sidebar:
   order: 8
 ---
@@ -83,3 +83,46 @@ a.ret(lua::nil());
 a.ret("hypot wants two numbers");
 return 2;
 ```
+
+## Lua calls Volt
+
+A Volt library that lists `lua` among its bindings gets the C source of a Lua module, which
+`bolt build` compiles to `target/debug/bindings/lua/NAME.so` when Lua's headers are installed
+(Lua 5.4 or later).
+
+The examples here use `greet`, the library every client in
+[examples/interop/calls-volt](https://github.com/ChaseSunstrom/volt-bootstrap/tree/main/examples/interop/calls-volt)
+calls: `export fn add(a: i64, b: i64) -> i64`, `export fn hello(name: str) -> std::string`, and an
+`export struct tally` with `tally_new`, `tally_add` and `tally_name`. What `export` means, and what
+crosses as what, is in [They call Volt](/volt-bootstrap/interop/other-languages/#they-call-volt).
+
+```toml
+# bolt.toml of the Volt library
+[lib]
+kind = ["shared"]
+bindings = ["lua"]
+```
+
+```sh
+bolt build
+LUA_CPATH="target/debug/bindings/lua/?.so" lua main.lua
+```
+
+```lua
+local greet = require("greet")
+
+print("add", greet.add(2, 3))       -- add 5
+print(greet.hello("volt"))          -- hello, volt
+do
+    local c <close> = greet.tally.new("clicks")   -- closed at the end of the block
+    c:add(1)
+    print(c:name(), c:add(2))       -- clicks 3
+end
+```
+
+Structs are tables with their fields; what Volt changes in one passed by reference comes back
+into the table, and so do the elements of a slice (a sequence). An enum is a table of its values,
+an error set a table of its names, and an error is raised as a table with its `name` and `code`.
+Integers that don't fit the parameter's type raise an error, as do wrong types. A callback is any
+function; an error it raises comes out of the Volt call (the calls after it are skipped). An export
+struct is a userdata with `close()`, `<close>` and `__gc`.

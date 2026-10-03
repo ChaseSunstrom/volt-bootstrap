@@ -1,6 +1,6 @@
 ---
 title: .NET
-description: Calling C# and other .NET code from Volt with the interop/dotnet package.
+description: Calling C# and other .NET code from Volt with the interop/dotnet package, and Volt from C# through generated bindings.
 sidebar:
   order: 7
 ---
@@ -89,3 +89,47 @@ process, so catch it in C# and return an error code.
 
 The runtime starts once per process and stays loaded until the process ends. One process can load
 any number of assemblies.
+
+## C# calls Volt
+
+A Volt library that lists `csharp` among its bindings gets one C# file from `bolt build`
+(`target/debug/bindings/NAME.cs`), for .NET 7 or later. It has the structs and enums, a `Native`
+class of `[LibraryImport]` declarations, and on top of those the package's functions in a static
+class `Api` and a class per export struct.
+
+The examples here use `greet`, the library every client in
+[examples/interop/calls-volt](https://github.com/ChaseSunstrom/volt-bootstrap/tree/main/examples/interop/calls-volt)
+calls: `export fn add(a: i64, b: i64) -> i64`, `export fn hello(name: str) -> std::string`, and an
+`export struct tally` with `tally_new`, `tally_add` and `tally_name`. What `export` means, and what
+crosses as what, is in [They call Volt](/volt-bootstrap/interop/other-languages/#they-call-volt).
+
+```toml
+# bolt.toml of the Volt library
+[lib]
+kind = ["shared"]
+bindings = ["csharp"]
+```
+
+```csharp
+using greet;
+
+Console.WriteLine($"add {Api.add(2, 3)}");        // add 5
+Console.WriteLine(Api.hello("volt"));             // hello, volt
+using (var c = new tally("clicks"))               // an IDisposable class over a SafeHandle
+{
+    c.add(1);
+    Console.WriteLine($"{c.name()} {c.add(2)}");  // clicks 3
+}
+```
+
+Add the file to the project (`<Compile Include="..." />`) and build with `AllowUnsafeBlocks`. The
+library loads as `libNAME.so`, `NAME.dll` or `libNAME.dylib`, from where the system looks for
+libraries; `bolt build` puts it in `target/debug`:
+
+```sh
+bolt build
+LD_LIBRARY_PATH=/path/to/greet/target/debug dotnet run   # DYLD_LIBRARY_PATH on macOS
+```
+
+An error set becomes a `VoltException` subclass whose `Code` and `Name` say which error it was;
+slices are `Span<T>`, optionals `T?`, and a callback an `Action` or a `Func`.

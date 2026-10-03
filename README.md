@@ -72,13 +72,20 @@ fn main() -> !void {
 ## What's in it
 
 - **Ownership** without a collector: deletes run at scope end, moves are tracked, copies are
-  explicit, `box<T>` owns heap memory.
+  explicit, `box<T>` owns heap memory. A `val` can't change, even through a reference to it passed
+  on, returned or stored in a struct.
 - **Errors as values** (`E!T`, `try`, `catch`, `errdefer`) and **optionals** (`T?`, `??`, narrowing).
 - **Templates** with specialization, packs and constant parameters; **traits** as constraints, and
   as tagged unions instead of vtables.
 - **Comptime**: functions, `if`, `match` and `for` that run in the compiler, types as values,
   `@typeinfo`.
 - **Async** as stackless frames of known size, driven by hand.
+- **Two backends**: readable C, or native code through LLVM (the default on x86-64), with DWARF
+  debug info for gdb in debug builds.
+- **Bare metal with no C at all**: `--target riscv32-none`, `riscv64-none`, `thumbv7m-none` or
+  `thumbv7em-none` builds through LLVM and ld.lld with no C compiler, libc or C runtime.
+- **A standard library** with collections, text, JSON, files, processes, networking, threads,
+  allocators you choose per container, hashing and encodings.
 - **Interop**: real C headers (unions and bitfields too), C++ classes, templates and the standard
   library, Rust crates and Zig files imported by name (`use { "fm.zig" } as fm;`), Go modules through bolt,
   Python, Java, .NET and Lua through packages, and libraries with bindings for C, C++, Rust, Zig,

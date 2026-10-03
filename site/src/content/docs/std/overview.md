@@ -15,7 +15,7 @@ Each file is wrapped in `namespace std`, and most declare a namespace of their o
 | --- | --- |
 | [`std::io`](/volt-bootstrap/std/io/) | `println`, `print`, `eprintln`, `eprint`: formatted output, checked at compile time |
 | [`std::fmt`](/volt-bootstrap/std/fmt/) | `format` (text as a `std::string`) and `write` (into any writer); format specifiers like `{:>8.2}` |
-| [`std::text`](/volt-bootstrap/std/text/) | methods on `str`: search, trim, split, replace, case, parse numbers; UTF-8; ASCII classes on `u8`; `join` |
+| [`std::text`](/volt-bootstrap/std/text/) | methods on `str`: search, trim, split, replace, case, parse numbers; UTF-8; ASCII classes on `u8`; `join` ([Text and strings](/volt-bootstrap/std/strings/)) |
 | [`std::string`](/volt-bootstrap/std/string/) | `string`: owned, growable UTF-8 text |
 | [`std::vec`](/volt-bootstrap/std/vec/) | `vec<T>`: a growable array that owns its elements; `insert`, `remove`, `retain`, `dedup` |
 | [`std::map`](/volt-bootstrap/std/map/) | `map<K, V>`: a hash map, `iter()` over its entries, and `hash` for the built-in key types |
@@ -30,11 +30,11 @@ Each file is wrapped in `namespace std`, and most declare a namespace of their o
 | [`std::mem`](/volt-bootstrap/std/mem/) | the allocator trait and allocators (`arena`, `fixed_buffer`, `failing`), `box<T>` (an owning pointer), `T::new`, `mem_error` ([Allocators](/volt-bootstrap/std/allocators/)) |
 | [`std::fs`](/volt-bootstrap/std/fs/) | files and directories: whole files, file streams (`open`, `read_line`, `seek`), listing, walking, creating, removing ([Files](/volt-bootstrap/std/files/)) |
 | [`std::path`](/volt-bootstrap/std/path/) | paths as text: `join`, `parent`, `file_name`, `extension`, `normalize` |
-| [`std::process`](/volt-bootstrap/std/process/) | running programs, arguments, the environment and the working directory, `exit` |
+| [`std::process`](/volt-bootstrap/std/process/) | running programs, arguments, the environment and the working directory, `exit` ([Processes](/volt-bootstrap/std/processes/)) |
 | [`std::time`](/volt-bootstrap/std/time/) | the monotonic clock, the wall clock, `sleep`, durations, UTC dates in ISO 8601 |
 | [`std::net`](/volt-bootstrap/std/net/) | TCP (`listen`, `connect`, streams), UDP, `resolve`, timeouts; the same on Linux, macOS, FreeBSD and Windows ([Networking](/volt-bootstrap/std/networking/)) |
 | [`std::thread`](/volt-bootstrap/std/thread/) | threads (`spawn`, `join`), `mutex<T>` and its guard, `cond`, `atomic_i64`/`atomic_bool`, `shared<T>`, `channel<T>` ([Threads](/volt-bootstrap/std/threads/)) |
-| [`std::json`](/volt-bootstrap/std/json/) | JSON values: parse, build and print |
+| [`std::json`](/volt-bootstrap/std/json/) | JSON values: parse, build and print ([JSON](/volt-bootstrap/std/json-data/)) |
 | [`std::base64`, `std::hex`](/volt-bootstrap/std/encoding/) | bytes as base64 (standard and URL-safe) or hex text, and back ([Encoding and hashing](/volt-bootstrap/std/encoding/)) |
 | [`std::digest`](/volt-bootstrap/std/digest/) | CRC-32, 64-bit FNV-1a and SHA-256 (in one call, or fed in pieces) |
 | [`std::softfloat`](/volt-bootstrap/std/softfloat/) | IEEE 754 arithmetic, comparison and conversion on the bits of `f32`s and `f64`s with integer instructions only: what [bare metal](/volt-bootstrap/voltc/bare-metal/) cores without a floating-point unit use |

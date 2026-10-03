@@ -1,6 +1,6 @@
 ---
 title: Python
-description: Calling Python from Volt with the interop/python package.
+description: Calling Python from Volt with the interop/python package, and Volt from Python through generated bindings.
 sidebar:
   order: 4
 ---
@@ -71,3 +71,45 @@ py.without_gil(|total&| () {
     t.join();
 });
 ```
+
+## Python calls Volt
+
+A Volt library that lists `python` among its bindings gets a Python module from `bolt build`
+(`target/debug/bindings/NAME.py`): one file over `ctypes`, with no C to compile. `pyi` adds its type
+stubs.
+
+The examples here use `greet`, the library every client in
+[examples/interop/calls-volt](https://github.com/ChaseSunstrom/volt-bootstrap/tree/main/examples/interop/calls-volt)
+calls: `export fn add(a: i64, b: i64) -> i64`, `export fn hello(name: str) -> std::string`, and an
+`export struct tally` with `tally_new`, `tally_add` and `tally_name`. What `export` means, and what
+crosses as what, is in [They call Volt](/volt-bootstrap/interop/other-languages/#they-call-volt).
+
+```toml
+# bolt.toml of the Volt library
+[lib]
+kind = ["shared"]
+bindings = ["python", "pyi"]
+```
+
+```python
+import greet                        # bindings/greet.py
+
+print("add", greet.add(2, 3))       # add 5
+print(greet.hello("volt"))          # hello, volt: owned text comes back as a str
+with greet.tally("clicks") as c:    # an export struct is a class; with (or close()) frees it
+    c.add(1)
+    print(c.name(), c.add(2))       # clicks 3
+```
+
+`bolt build` writes the library to `target/debug/libgreet.so` and the module to
+`target/debug/bindings/greet.py`, so point Python at both:
+
+```sh
+bolt build
+PYTHONPATH=target/debug/bindings VOLT_GREET_LIB=target/debug/libgreet.so python3 main.py
+```
+
+The module loads `libNAME.so` from `$VOLT_NAME_LIB` (the package's name in capitals), else from
+next to itself. An error set becomes an exception class deriving from the module's `Error`, raised
+with the error's name; slices are lists, optionals are the value or `None`, and a callback is any
+callable.
