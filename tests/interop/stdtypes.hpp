@@ -56,8 +56,7 @@ inline int take_node(std::unique_ptr<Node> n) { return n->value * 10; }
 inline std::shared_ptr<Node> share_node(int v) { return std::make_shared<Node>(v); }
 inline long uses(const std::shared_ptr<Node>& n) { return n.use_count(); }
 
-// (its strings are behind the vector's pointer: Volt moves objects by copying their bytes, which a
-// std::string held by value doesn't survive)
+// not trivially copyable (a vector member): Volt holds it by handle
 class Buffer {
 public:
     Buffer() {}

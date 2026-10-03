@@ -53,10 +53,11 @@ fn main() -> void {
 | C++ | Volt |
 | --- | --- |
 | namespace | namespace |
-| class, struct | a struct with C++'s size and layout: public fields by name, the rest as padding |
-| constructors | `T::new(...)`, one per overload (a default argument adds an overload without it) |
+| a trivially copyable class or struct | a struct with C++'s size and layout: public fields by name, the rest as padding |
+| any other class | a handle to an object C++ allocates (`new`, and `delete` when the Volt value goes): a public field `f` is the method `f()` (a copy) and `set_f(v)` (when it can be assigned, and the class has no `set_f` of its own) |
+| constructors | `T::new(...)`, one per overload (a default argument adds an overload without it); `T::new()` for a class that declares none, when it can be made from nothing |
 | destructor | a `delete` hook (only when the class needs one) |
-| copy constructor | a `copy` hook |
+| copy constructor | a `copy` hook (a handle's copies the object with it) |
 | methods, static methods | attached functions, overloads kept |
 | functions, function templates | functions, generic functions: `ns::biggest<i32>(a, b)` |
 | class templates | generic structs: `ns::Box<f64>` |
@@ -155,7 +156,16 @@ object, a reference or an optional; for one returning a vector, catch the except
   assignment and conversion operators.
 - A C++ exception that reaches Volt through a function's plain form stops the program, like a
   panic; its `try_` form returns it as an error.
-- Volt moves values by copying their bytes. A C++ object that points into itself (like libstdc++'s
-  `std::string`) should stay behind a pointer.
+- Volt moves values by copying their bytes, which a C++ object that points into itself (as
+  libstdc++'s `std::string` does) doesn't survive. So a class clang says isn't trivially copyable
+  (`__is_trivially_copyable`, asked of the imported headers) is held by handle: moving it moves the
+  pointer, and the object stays where C++ made it. A handle made with `{}` is empty, and using it
+  stops the program.
+- A handle class can't be reached through a C++ pointer (`T*`), a non-const reference result (`T&`)
+  or a smart pointer or class template over it; those are left out, as is a class template with a
+  field of one. A `const T&` result is copied into a new handle, so it's left out when the class
+  can't be copied (an abstract one, say).
+- A class whose destructor isn't public can't be owned by Volt: it has no `T::new`, and only its
+  static methods are of use.
 
 Runnable examples: [Volt calls C++](https://github.com/ChaseSunstrom/volt-bootstrap/tree/main/examples/interop/volt-calls/cpp) and [C++ calls Volt](https://github.com/ChaseSunstrom/volt-bootstrap/tree/main/examples/interop/calls-volt/cpp).

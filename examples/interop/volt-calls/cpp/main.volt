@@ -1,6 +1,7 @@
-// Volt calling C++: the use reads counter.hpp (C++, by its extension) with libclang, so Counter is
-// a Volt struct with C++'s layout, its constructor is Counter::new, its destructor runs when the
-// Volt value goes out of scope, and the template becomes a generic fn. Run: sh run.sh
+// Volt calling C++: the use reads counter.hpp (C++, by its extension) with libclang, so Counter (it
+// holds a std::string, so it isn't trivially copyable) is a handle to an object C++ allocates, its
+// constructor is Counter::new, its destructor runs when the Volt value goes out of scope, and the
+// template becomes a generic fn. Run: sh run.sh
 use std::io;
 use { "counter.hpp" } as cpp;
 
