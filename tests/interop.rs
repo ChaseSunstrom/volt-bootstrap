@@ -404,7 +404,7 @@ fn python_package() {
     let app = e.dir.join("py_app");
     copy_dir(&Path::new(ROOT).join("tests/interop/py_app/src"), &app.join("src"));
     std::fs::write(app.join("bolt.toml"), format!("[package]\nname = \"py_app\"\nversion = \"0.1.0\"\n\n[dependencies]\npython = {{ path = \"{}\" }}\n\n[std]\npath = \"{}\"\n", Path::new(ROOT).join("interop/python").display(), Path::new(ROOT).join("std").display())).unwrap();
-    let want = "sqrt 1.4142 factorial 3628800\njson \"volt\" and false\nhi volt, hi volt\nlist [0, 1, 4, 9, 16] len 5\nitem 9\ncaught EXCEPTION(ZeroDivisionError: division by zero)\nnone true\nthread 5050\n";
+    let want = "sqrt 1.4142 factorial 3628800\njson \"volt\" and false\nhi volt, hi volt\nlist [0, 1, 4, 9, 16] len 5\nitem 9\nobjects 5 true 4\ncaught EXCEPTION(ZeroDivisionError: division by zero)\nnone true\nthread 5050\n";
     for backend in ["c", "llvm"] {
         let o = Command::new(env!("CARGO_BIN_EXE_bolt")).args(["run", "-q", "--backend", backend]).current_dir(&app).env("VOLTC", &e.voltc).env("BOLT_HOME", e.dir.join("cache")).output().unwrap();
         assert!(o.status.success(), "bolt run ({backend}): {}", String::from_utf8_lossy(&o.stderr));

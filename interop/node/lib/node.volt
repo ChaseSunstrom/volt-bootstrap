@@ -285,7 +285,7 @@ attach fn put(this: value&, i: usize, x: T) -> node_error!void {
 attach fn call(this: value&, args: Args...) -> node_error!value {
     var argv: std::vec<napi::napi_value__*> = {};
     comptime for (a) in args {
-        val v = js(this.env, a);
+        val v = js(this.env, copy a); // an element can't be moved out of (a std::string)
         argv.push(v.v) catch return node_error::THROWN(std::string::from("out of memory"));
     }
     var recv: napi::napi_value__* = null;

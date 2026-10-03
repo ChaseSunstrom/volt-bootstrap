@@ -18,6 +18,10 @@ fn run() -> python::python_error!void {
     val xs = try python::eval("[n * n for n in range(5)]");
     std::println("list {} len {}", try xs.repr(), try (try xs.call_method("__len__")).to_i64());
     std::println("item {}", try (try xs.item(3)).to_i64());
+    // objects as arguments (moved into the call: copy keeps xs)
+    val count = try python::eval("len");
+    val has = try python::eval("lambda xs, x: x in xs");
+    std::println("objects {} {} {}", try (try count.call(copy xs)).to_i64(), try (try has.call(copy xs, 9)).to_bool(), try (try xs.call_method("index", try python::eval("16"))).to_i64());
     // an exception is an error with its type and message
     val bad = python::eval("1 / 0");
     if (bad.err) {

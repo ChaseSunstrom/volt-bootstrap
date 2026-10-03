@@ -198,7 +198,7 @@ fn call_list(f: c::PyObject*, list: object&) -> python_error!object {
 attach fn call(this: object&, args: Args...) -> python_error!object {
     var list = try own(c::PyList_New(0));
     comptime for (a) in args {
-        val item = try value(a);
+        val item = try value(copy a); // an element can't be moved out of (an object: a new reference)
         if (c::PyList_Append(list.ptr, item.ptr) != 0) {
             return fetch();
         }
@@ -212,7 +212,7 @@ attach fn call_method(this: object&, name: str, args: Args...) -> python_error!o
     val f = try this.get(name);
     var list = try own(c::PyList_New(0));
     comptime for (a) in args {
-        val item = try value(a);
+        val item = try value(copy a); // an element can't be moved out of (an object: a new reference)
         if (c::PyList_Append(list.ptr, item.ptr) != 0) {
             return fetch();
         }

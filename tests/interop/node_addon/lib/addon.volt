@@ -34,10 +34,10 @@ fn point(c: node::call&) -> node::node_error!node::value {
     return p;
 }
 
-// calls back into JS: f(x, "from volt")
+// calls back into JS: f(x, "from volt"), the text built as a std::string
 fn apply(c: node::call&) -> node::node_error!node::value {
     val f = c.arg(0);
-    return f.call(try c.arg(1).to_f64(), "from volt");
+    return f.call(try c.arg(1).to_f64(), std::fmt::format("from {}", "volt"));
 }
 
 // a Volt error becomes a JS Error

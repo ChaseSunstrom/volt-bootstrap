@@ -44,9 +44,9 @@ fn main() -> !void {
 | `python::start()` | starts the interpreter (an `interpreter`: deleting it stops Python) |
 | `python::import(name)` | a module |
 | `python::eval(expr)`, `python::exec(code)` | an expression's value; statements run in `__main__` |
-| `python::value(x)` | a Volt value as a Python object: integers, `f64`, `f32`, `bool`, `str`, `std::string` |
+| `python::value(x)` | a Volt value as a Python object: integers, `f64`, `f32`, `bool`, `str`, `std::string`, and objects as they are |
 | `o.get(name)`, `o.item(key)` | `o.name`, `o[key]` |
-| `o.call(args...)`, `o.call_method(name, args...)` | calls, each argument converted with `value` |
+| `o.call(args...)`, `o.call_method(name, args...)` | calls, each argument converted with `value`; an object argument moves into the call, so pass `copy x` to keep `x` |
 | `o.to_i64()`, `to_f64()`, `to_bool()`, `to_string()`, `repr()` | back to Volt |
 | `o.is_none()` | whether it's `None` |
 
