@@ -3,7 +3,7 @@
 // aligned member plus padding) and every function uses the C ABI (SysV x86-64), so LLVM-built code
 // shares memory and calls with C-backend libraries, C headers and the runtime (compiled by cc).
 use std::mem;
-use { "llvm-c/Core.h", "llvm-c/Target.h", "llvm-c/TargetMachine.h", "llvm-c/Analysis.h", "llvm-c/Transforms/PassBuilder.h", "llvm-c/DebugInfo.h" } as llvm;
+use { "llvm-c/Core.h", "llvm-c/Target.h", "llvm-c/TargetMachine.h", "llvm-c/Analysis.h", "llvm-c/Transforms/PassBuilder.h", "llvm-c/DebugInfo.h", "llvm-c/LLJIT.h", "llvm-c/Orc.h" } as llvm;
 
 // how a value crosses a call (SysV x86-64)
 enum pass {
@@ -2520,6 +2520,30 @@ attach fn llvm_object(this: checker&, path: str, hdr: std::vec<str>&) -> std::st
         return fmt("LLVM couldn't write the object file: {}", S(c_text(err)));
     }
     *hdr = copy g.hdr;
+    return S("");
+}
+
+// the program as a module for a JIT (vm.volt): built as for an object file, but with no C header
+// pointers (there's no C unit to hold them), and its globals' initializer an external function
+// named `init` for the JIT's user to call (nothing runs llvm.global_ctors there)
+attach fn llvm_jit_module(this: checker&, g: lg&, init: str) -> std::string {
+    val e = this.llvm_build(g);
+    if (e.len() > 0) {
+        return e;
+    }
+    if (g.hdr.len > 0) {
+        return S("a script can't call functions from C headers (no C compiler runs to define them)");
+    }
+    val ctors = llvm::LLVMGetNamedGlobal(g.m, "llvm.global_ctors");
+    if (ctors) {
+        llvm::LLVMDeleteGlobal(ctors);
+    }
+    val f = llvm::LLVMGetNamedFunction(g.m, "volt_init_globals");
+    if (f) {
+        var n = S(init);
+        llvm::LLVMSetValueName2(f, n.c_str(), n.len());
+        llvm::LLVMSetLinkage(f, llvm::LLVMExternalLinkage);
+    }
     return S("");
 }
 

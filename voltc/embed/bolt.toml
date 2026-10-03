@@ -1,0 +1,16 @@
+[package]
+name = "voltvm"
+version = "0.1.0"
+description = "Volt embedded in other programs: compile Volt source in memory and run it through LLVM's JIT"
+
+# the compiler's own sources, as a library whose interface is volt_vm (src/vm.volt)
+[lib]
+path = "../src"
+kind = ["shared"]
+bindings = ["c", "cpp", "rust", "python", "pyi"]
+
+[std]
+path = "../../std"
+
+[build]
+files = ["build.volt"]

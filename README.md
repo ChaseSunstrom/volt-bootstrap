@@ -82,6 +82,8 @@ fn main() -> !void {
 - **Async** as stackless frames of known size, driven by hand.
 - **Two backends**: readable C, or native code through LLVM (the default on x86-64), with DWARF
   debug info for gdb in debug builds.
+- **Embeddable, like Lua**: `libvoltvm` compiles Volt source in memory and runs it through LLVM's
+  JIT, with host functions, sandboxes, and C, C++, Rust and Python bindings.
 - **Bare metal with no C at all**: `--target riscv32-none`, `riscv64-none`, `thumbv7m-none` or
   `thumbv7em-none` builds through LLVM and ld.lld with no C compiler, libc or C runtime.
 - **A standard library** with collections, text, JSON, files, processes, networking, threads,
@@ -112,7 +114,7 @@ Then `bolt new hello && cd hello && bolt run`. The
 
 | Path | |
 | --- | --- |
-| [`voltc/`](voltc) | the compiler, in Volt: checker, typed IR, C and LLVM backends, C/C++ import, language server |
+| [`voltc/`](voltc) | the compiler, in Volt: checker, typed IR, C and LLVM backends, C/C++ import, language server; `voltc/embed` builds it into `libvoltvm`, Volt for embedding |
 | [`bootstrap/`](bootstrap) | `voltc-bootstrap`, the stage0 compiler in Rust that builds voltc the first time |
 | [`std/`](std) | the standard library, an ordinary package |
 | [`runtime/`](runtime) | the small C prelude and runtime every program includes |

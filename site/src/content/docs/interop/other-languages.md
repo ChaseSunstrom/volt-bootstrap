@@ -31,6 +31,9 @@ importing C, C++, Rust and Zig code. Each one is a `run.sh` with its exact comma
 - **C#** and other .NET languages: depend on the `interop/dotnet` package, see [.NET](/volt-bootstrap/interop/dotnet/).
 - **Lua**: embed it with the `interop/lua` package, see [Lua](/volt-bootstrap/interop/lua/).
 
+The other way, a program in any of these languages can embed Volt itself and run Volt source it
+loads at run time, through `libvoltvm`: see [Embedding Volt](/volt-bootstrap/interop/embedding/).
+
 ```volt ignore
 extern "C" fn rust_checksum(data: u8*, len: usize) -> u32;   // from a Rust staticlib
 
