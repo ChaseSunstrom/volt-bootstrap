@@ -134,6 +134,7 @@ struct fn_inst {
     intrinsic: str?;
     ir: u32; // its ir_fn
     used_at: span; // where the instance was first asked for (errors in a template's body point back to it)
+    used_in: u32? = null; // the fn instance whose body asked
 }
 
 // a receiver temporary kept alive (see fn_cx.kept): its slot, type and live flag
@@ -395,6 +396,7 @@ struct checker {
     hook_memo: std::map<str, i64> = {};
     glue_names: std::map<str, u32> = {};
     closures: std::vec<std::box<closure_info>> = {};
+    gen_fn_idx: u32? = null; // the fn instance whose body is being checked (closures inside it included)
     gclosures: std::vec<std::box<generic_closure>> = {};
     // comptime interpreter call frames
     ct: std::vec<ct_frame> = {};

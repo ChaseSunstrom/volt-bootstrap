@@ -204,6 +204,32 @@ attach fn runtime_global(this: checker&, name: str, t: u32) -> u32 {
 
 // Check a fn instance's body into its ir fn. Parameters become locals of the outermost scope; an
 // async fn's body becomes the step function of its frame (gen_async).
+// an error in a template's body belongs to one instance: say which, and where each template on the
+// way asked for the next, back to the first caller that isn't a template (8 at most; a span that
+// repeats is labelled once)
+attach fn instantiation_chain(this: checker&, idx: u32, e: compile_error) -> compile_error {
+    var d = move e;
+    var at: u32? = idx;
+    var last: span? = null;
+    for (k) in 0..8 {
+        val i = at ?? break;
+        val f = this.fi(i);
+        if (this.fn_generics(f.decl).len == 0) {
+            break;
+        }
+        var repeat = false;
+        if (last) {
+            repeat = last.file == f.used_at.file && last.lo == f.used_at.lo && last.hi == f.used_at.hi;
+        }
+        if (!repeat) {
+            d = with_label(move d, f.used_at, fmt("{} is instantiated here", S(f.name)));
+        }
+        last = f.used_at;
+        at = f.used_in;
+    }
+    return move d;
+}
+
 attach fn gen_fn(this: checker&, idx: u32) -> compile_error!void {
     val inst = this.fi(idx);
     val decl = inst.decl;
@@ -273,14 +299,13 @@ attach fn gen_fn(this: checker&, idx: u32) -> compile_error!void {
             this.lsp_param(decl, p.name, c, p.ty);
         }
     }
-    val generic = this.fn_generics(decl).len > 0;
+    val saved_fn = this.gen_fn_idx;
+    this.gen_fn_idx = idx;
     val bc = this.block_code(body) catch |e| {
-        // an error in a template's body belongs to one instance: say which, and where it came from
-        if (generic) {
-            return with_label(copy e, inst.used_at, fmt("{} is instantiated here", S(inst.name)));
-        }
-        return copy e;
+        this.gen_fn_idx = saved_fn;
+        return this.instantiation_chain(idx, copy e);
     };
+    this.gen_fn_idx = saved_fn;
     this.note_var_params(decl, f);
     var div = bc.div;
     put(&stmts, bc.c);

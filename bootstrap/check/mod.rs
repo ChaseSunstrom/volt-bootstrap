@@ -115,8 +115,10 @@ pub struct FnInst {
     pub c_varargs: bool,
     /// `@intrinsic("name")`: a compiler builtin, or a prelude C function when the name starts with volt_
     pub intrinsic: Option<String>,
-    /// where the instance was first asked for (errors in a template's body point back to it)
+    /// where the instance was first asked for (errors in a template's body point back to it), and
+    /// the fn instance whose body asked
     pub used_at: Span,
+    pub used_in: Option<usize>,
 }
 
 /// a local variable in scope: its C name, type and ownership bookkeeping
@@ -336,6 +338,8 @@ pub struct Checker {
     pub glue: String,
     pub glue_protos: String,
     pub closures: Vec<ClosureInfo>,
+    /// the fn instance whose body is being checked (closures inside it included)
+    pub gen_fn_idx: Option<usize>,
     /// comptime interpreter call frames, and the step count that stops runaway evaluation
     pub ct: Vec<comptime::CtFrame>,
     pub ct_steps: u64,
@@ -402,6 +406,7 @@ impl Checker {
             glue: String::new(),
             glue_protos: String::new(),
             closures: Vec::new(),
+            gen_fn_idx: None,
             ct: Vec::new(),
             ct_steps: 0,
             warned: Default::default(),
@@ -1399,7 +1404,7 @@ impl Checker {
             self.c_symbols.insert(f.name.clone(), (decl, sig.0, sig.1, c_name.clone()));
         }
         let idx = self.fns.len();
-        self.fns.push(FnInst { decl, name, pack, env, c_name, params, ret, c_varargs: f.c_varargs, intrinsic, used_at: span });
+        self.fns.push(FnInst { decl, name, pack, env, c_name, params, ret, c_varargs: f.c_varargs, intrinsic, used_at: span, used_in: self.gen_fn_idx });
         self.fn_ids.insert((decl, args), idx);
         Ok(idx)
     }
@@ -1450,6 +1455,26 @@ impl Checker {
         }
     }
 
+    /// an error in a template's body belongs to one instance: say which, and where each template on
+    /// the way asked for the next, back to the first caller that isn't a template (8 at most; a span
+    /// that repeats is labelled once)
+    fn instantiation_chain(&self, idx: usize, mut d: Diag) -> Diag {
+        let mut at = Some(idx);
+        let mut last = None;
+        for _ in 0..8 {
+            let Some(i) = at else { break };
+            let f = &self.fns[i];
+            if self.fn_generics(f.decl).is_empty() {
+                break;
+            }
+            if last != Some(f.used_at) {
+                d = d.label(f.used_at, format!("{} is instantiated here", f.name));
+            }
+            (last, at) = (Some(f.used_at), f.used_in);
+        }
+        d
+    }
+
     /// Check a fn instance's body and emit its C definition. Parameters become locals of the outermost
     /// scope; an async fn's body becomes the step function of its frame (gen_async).
     fn gen_fn(&mut self, idx: usize) -> Res<()> {
@@ -1492,11 +1517,10 @@ impl Checker {
             }
             self.cx.scopes[0].vars.insert(p.name.clone(), local);
         }
-        let generic = !self.fn_generics(inst.decl).is_empty();
-        let (mut code, mut diverges) = self.block_code(body).map_err(|d| {
-            // an error in a template's body belongs to one instance: say which, and where it came from
-            if generic { d.label(inst.used_at, format!("{} is instantiated here", inst.name)) } else { d }
-        })?;
+        let saved_fn = self.gen_fn_idx.replace(idx);
+        let body_res = self.block_code(body);
+        self.gen_fn_idx = saved_fn;
+        let (mut code, mut diverges) = body_res.map_err(|d| self.instantiation_chain(idx, d))?;
         self.note_var_params(inst.decl, f);
         if !self.cx.scopes[0].exits.is_empty() {
             // params: deleted when the body finishes without returning

@@ -33,8 +33,10 @@ fn main() -> void {
 
 A template's body is checked for each set of arguments it's used with, so it can use anything the
 argument supports: `max` works for every type with `>`. Using it with a type that doesn't have
-`>` reports the error at that use, pointing back at the call that asked for it. To state the
-requirements up front, bound the parameter with a [trait](/volt-bootstrap/guide/traits/).
+`>` reports the error at that use, and names each template instance on the way to it, back to
+the call in code that isn't a template: sorting a struct with no `cmp` points into std, and at
+your `sort` call. To state the requirements up front, bound the parameter with a
+[trait](/volt-bootstrap/guide/traits/).
 
 ## Generic types
 

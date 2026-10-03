@@ -854,7 +854,7 @@ attach fn fn_inst(this: checker&, d: u32, args: std::vec<gval>, span: span) -> c
     }
     put(&this.ir.fns, bx(move irf));
     val ir_idx = @cast<u32>(this.ir.fns.len - 1);
-    put(&this.fns, bx<fn_inst>({ decl: d, name: name, pack: pack, env: env, c_name: c_name, params: move params, ret: ret, c_varargs: f.c_varargs, intrinsic: intrinsic, ir: ir_idx, used_at: span }));
+    put(&this.fns, bx<fn_inst>({ decl: d, name: name, pack: pack, env: env, c_name: c_name, params: move params, ret: ret, c_varargs: f.c_varargs, intrinsic: intrinsic, ir: ir_idx, used_at: span, used_in: this.gen_fn_idx }));
     put(&this.used, false);
     this.fn_ids.put(this.intern(move key), idx);
     this.family_count.put(d, count + 1);
