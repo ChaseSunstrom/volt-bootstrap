@@ -364,3 +364,47 @@ leaves the C file when a language's headers aren't installed. Swift gets a modul
 (`bindings/CNAME/module.modulemap`, `import CNAME`) and Kotlin/Native a cinterop definition
 (`bindings/NAME.def`). The rest are source files their own toolchains build. `tests/interop` in the
 repository has a client for each language.
+
+## pip install and npm install
+
+A Python or Node project can install a Volt library the way it installs anything else: pip and
+npm run bolt themselves, as `volt-build` does for Cargo. Both need bolt (from `$BOLT`, else the
+PATH) and a `bolt.toml` whose `[lib]` has kind `"shared"` and the bindings for that language.
+
+For pip, copy `interop/pip/volt_build.py` from the repository into the project. It's a build
+backend that uses only Python's standard library (3.11 or later), so pip fetches nothing:
+
+```toml
+# pyproject.toml, next to bolt.toml ([lib] bindings = ["python", "pyi"])
+[build-system]
+requires = []
+build-backend = "volt_build"
+backend-path = ["."]
+
+[project]
+name = "mathlib"
+version = "0.1.0"
+```
+
+`pip install .` (or `pip install` of the sdist) runs `bolt build --release` and installs package
+`mathlib`, named after the Volt package: the bindings as its `__init__.py`, with their types, and
+`libmathlib.so` beside them.
+
+For npm, copy `interop/npm/volt-install.js` into the package and make it the install script:
+
+```json
+{
+  "name": "mathlib",
+  "version": "0.1.0",
+  "main": "target/release/bindings/mathlib.js",
+  "types": "target/release/bindings/mathlib.d.ts",
+  "files": ["bolt.toml", "lib", "volt-install.js"],
+  "scripts": { "install": "node volt-install.js" }
+}
+```
+
+`npm install` of the package builds it with `bolt build --release` (`[lib] bindings = ["node",
+"js", "ts"]`, and Node's headers installed) and loads the addon from `target/release`. npm runs a
+dependency's install script only once the project allows it: `npm install-scripts approve
+mathlib` writes that into the project's `package.json` (`allowScripts`), and `npm rebuild
+mathlib` then builds it.

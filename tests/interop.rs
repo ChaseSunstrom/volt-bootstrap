@@ -663,6 +663,70 @@ fn volt_calls_swift() {
     assert!(bolt_run("c").contains("clicks 50 50"), "the Swift change is in");
 }
 
+/// pip and npm build and install a Volt library themselves: interop/pip/volt_build.py as the project's
+/// build backend (pip install into a venv, nothing from the network), interop/npm/volt-install.js as
+/// the package's install script (npm pack, then npm install of the tarball); Python and Node call it
+#[test]
+fn pip_and_npm_install() {
+    let e = Env::new("pip_npm");
+    let pkg = e.dir.join("geo");
+    std::fs::create_dir_all(pkg.join("lib")).unwrap();
+    std::fs::write(pkg.join("lib/geo.volt"), "export fn area(w: f64, h: f64) -> f64 { return w * h; }\nexport fn twice(x: i32) -> i32 { return x * 2; }\n").unwrap();
+    std::fs::write(pkg.join("bolt.toml"), format!("[package]\nname = \"geo\"\nversion = \"0.1.0\"\n\n[lib]\nkind = [\"volt\", \"shared\"]\nbindings = [\"python\", \"pyi\", \"node\", \"js\", \"ts\"]\n\n[std]\npath = \"{}\"\n", Path::new(ROOT).join("std").display())).unwrap();
+    let tools = |c: &mut Command| {
+        c.env("VOLTC", &e.voltc).env("BOLT", env!("CARGO_BIN_EXE_bolt")).env("BOLT_HOME", e.dir.join("bolthome")).env("npm_config_cache", e.dir.join("npm-cache"));
+    };
+    let elsewhere = e.dir.join("elsewhere");
+    std::fs::create_dir_all(&elsewhere).unwrap();
+
+    // pip: the backend file in the project, named by pyproject.toml
+    std::fs::copy(Path::new(ROOT).join("interop/pip/volt_build.py"), pkg.join("volt_build.py")).unwrap();
+    std::fs::write(pkg.join("pyproject.toml"), "[build-system]\nrequires = []\nbuild-backend = \"volt_build\"\nbackend-path = [\".\"]\n\n[project]\nname = \"volt-geo\"\nversion = \"0.1.0\"\n").unwrap();
+    let venv = e.dir.join("venv");
+    if Command::new("python3").args(["-m", "venv"]).arg(&venv).output().is_ok_and(|o| o.status.success()) {
+        let mut c = Command::new(venv.join("bin/pip"));
+        c.args(["install", "--no-index", "--disable-pip-version-check", "-q"]).arg(&pkg);
+        tools(&mut c);
+        ok(c.output().unwrap(), "pip install");
+        let o = Command::new(venv.join("bin/python")).args(["-c", "import geo; print(geo.area(2.0, 3.5), geo.twice(21))"]).current_dir(&elsewhere).output().unwrap();
+        assert_eq!(ok(o, "python (pip installed)"), "7.0 42\n", "Python calls the package pip installed");
+        // from its sdist too, built somewhere else
+        let o = Command::new(venv.join("bin/python")).args(["-c", "import sys, volt_build; print(volt_build.build_sdist(sys.argv[1]))"]).arg(&e.dir).current_dir(&pkg).output().unwrap();
+        let sdist = e.dir.join(ok(o, "build_sdist").trim());
+        let mut c = Command::new(venv.join("bin/pip"));
+        c.args(["install", "--no-index", "--disable-pip-version-check", "-q", "--force-reinstall"]).arg(&sdist);
+        tools(&mut c);
+        ok(c.output().unwrap(), "pip install (sdist)");
+        let o = Command::new(venv.join("bin/python")).args(["-c", "import geo; print(geo.twice(4))"]).current_dir(&elsewhere).output().unwrap();
+        assert_eq!(ok(o, "python (pip installed from the sdist)"), "8\n");
+    } else {
+        eprintln!("python3 -m venv doesn't work: skipping pip install");
+    }
+
+    // npm: the install script in the package, run when the tarball is installed
+    if node_include().is_none() {
+        eprintln!("node or its headers aren't installed: skipping npm install");
+        return;
+    }
+    std::fs::copy(Path::new(ROOT).join("interop/npm/volt-install.js"), pkg.join("volt-install.js")).unwrap();
+    std::fs::write(pkg.join("package.json"), "{\n  \"name\": \"volt-geo\",\n  \"version\": \"0.1.0\",\n  \"main\": \"target/release/bindings/geo.js\",\n  \"types\": \"target/release/bindings/geo.d.ts\",\n  \"files\": [\"bolt.toml\", \"lib\", \"volt-install.js\"],\n  \"scripts\": { \"install\": \"node volt-install.js\" }\n}\n").unwrap();
+    let mut c = Command::new("npm");
+    c.args(["pack", "--silent", "--pack-destination"]).arg(&e.dir).current_dir(&pkg);
+    tools(&mut c);
+    ok(c.output().unwrap(), "npm pack");
+    // the consumer: its own package.json (else npm installs into a project further up), which lets
+    // volt-geo's install script run (npm skips a dependency's unless allowScripts names it: by name
+    // from a registry, by its file: path from a tarball, as `npm install-scripts approve` writes it)
+    let tgz = e.dir.join("volt-geo-0.1.0.tgz");
+    std::fs::write(elsewhere.join("package.json"), format!("{{\n  \"name\": \"consumer\",\n  \"private\": true,\n  \"allowScripts\": {{ \"file:{}\": true }}\n}}\n", tgz.display())).unwrap();
+    let mut c = Command::new("npm");
+    c.args(["install", "--offline", "--no-audit", "--no-fund", "--silent"]).arg(&tgz).current_dir(&elsewhere);
+    tools(&mut c);
+    ok(c.output().unwrap(), "npm install");
+    let o = Command::new("node").args(["-e", "const g = require('volt-geo'); console.log(g.area(2, 3.5), g.twice(21))"]).current_dir(&elsewhere).output().unwrap();
+    assert_eq!(ok(o, "node (npm installed)"), "7 42\n", "Node calls the package npm installed");
+}
+
 /// a Node.js addon written in Volt with interop/node: bolt builds it as a shared library, node
 /// loads it (as a .node file), on both backends
 #[test]

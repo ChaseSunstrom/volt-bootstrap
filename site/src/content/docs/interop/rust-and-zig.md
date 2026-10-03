@@ -246,7 +246,9 @@ volt.addPackage(b, exe, "mathlib", "volt/mathlib");
 const mathlib = @import("mathlib");
 ```
 
-Both take voltc from `$VOLTC`, else the PATH, and std from `$VOLT_STD`, else voltc's own. The
+Both take voltc from `$VOLTC`, else the PATH, and std from `$VOLT_STD`, else voltc's own. Python
+and Node projects get the same from pip and npm: see
+[pip install and npm install](/volt-bootstrap/interop/other-languages/#pip-install-and-npm-install). The
 bindings' types are in [They call Volt](/volt-bootstrap/interop/other-languages/#they-call-volt):
 `Result` for errors, `String` and `&str` for text, a type that frees itself when dropped for an
 export struct, and the same in Zig with error unions, slices and `deinit()`.
