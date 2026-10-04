@@ -276,7 +276,7 @@ attach fn pat_code(this: checker&, p: pat&, c: u32, t: u32) -> compile_error!pat
             val rt = this.t.ref_to(t);
             var o = any_pat();
             put(&o.binds, { name: n, ty: rt, c: this.ir.addr(c, rt), by_ref: true });
-            return move o;
+            return o;
         },
         .BIND(n) => {
             val eid = this.enum_of(t);
@@ -287,7 +287,7 @@ attach fn pat_code(this: checker&, p: pat&, c: u32, t: u32) -> compile_error!pat
             }
             var o = any_pat();
             put(&o.binds, { name: n, ty: t, c: c });
-            return move o;
+            return o;
         },
         .LIT(e&) => {
             // null stays null (compare tests any optional against it); other literals take the
@@ -370,7 +370,7 @@ attach fn union_pat(this: checker&, pp: path&, args: std::vec<pat>*, c: u32, t: 
         o.variant = i;
     }
     o.bool_val = null;
-    return move o;
+    return o;
 }
 
 // a variant pattern: `.X(sub)`, `X(sub)` or `Enum::X(sub)`, with an optional payload pattern
@@ -456,7 +456,7 @@ attach fn ctor_pat(this: checker&, path: ctor_path&, args: std::vec<pat>*, c: u3
         out.variant = variant;
     }
     out.bool_val = null;
-    return move out;
+    return out;
 }
 
 // element patterns that must all match; element i is field i of c
@@ -471,5 +471,5 @@ attach fn sub_pats(this: checker&, pats: std::vec<pat>&, tys: std::vec<u32>&, c:
         }
         out.irrefutable = out.irrefutable && o.irrefutable;
     }
-    return move out;
+    return out;
 }

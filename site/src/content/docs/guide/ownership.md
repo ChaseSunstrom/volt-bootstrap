@@ -83,7 +83,8 @@ fn main() -> void {
 ## Moves
 
 Using an owned value by value (passing it, returning it, assigning it) **moves** it: the new place
-owns it, and the old one is no longer usable. `move x` says so explicitly. The compiler tracks moves
+owns it, and the old one is no longer usable. `move x` says so explicitly, but it's never needed to
+return a local or parameter: `return out;` hands `out` to the caller without copying it. The compiler tracks moves
 through branches and loops, and using a moved value is a compile error:
 
 ```volt fail

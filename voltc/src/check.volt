@@ -247,7 +247,7 @@ struct var_seen {
 fn new_cx(ret: u32, env: u32, irf: u32) -> fn_cx {
     var cx: fn_cx = { ret: ret, env: env, irf: irf };
     put(&cx.scopes, {});
-    return move cx;
+    return cx;
 }
 
 // A checked expression: its type and code. For void/never types the code is a statement.
@@ -473,7 +473,7 @@ fn new_checker(files: std::vec<source_file>&, o: opts) -> checker {
     put(&c.error_names, { code: 1, name: "error", qual: "error" });
     // fn 0 of the IR is a placeholder for code checked outside any function (globals)
     put(&c.ir.fns, bx<ir_fn>({ name: "", params: {}, ret: VOID, link: linkage::STATIC }));
-    return move c;
+    return c;
 }
 
 // ---------- small accessors ----------
@@ -1160,7 +1160,7 @@ attach fn type_id(this: checker&, t: u32) -> u64 {
 attach fn ty_name(this: checker&, id: u32) -> std::string {
     var s: std::string = {};
     this.put_ty(&s, id);
-    return move s;
+    return s;
 }
 
 attach fn put_ty(this: checker&, s: std::string&, id: u32) -> void {
@@ -1377,7 +1377,7 @@ attach fn inst_key(this: checker&, d: u32, args: std::vec<gval>&) -> std::string
             },
         }
     }
-    return move k;
+    return k;
 }
 
 attach fn gval_eq(this: checker&, a: gval, b: gval) -> bool {

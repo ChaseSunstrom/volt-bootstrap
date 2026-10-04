@@ -39,7 +39,7 @@ fn start(runtimeconfig: str) -> dotnet_error!runtime {
     var out: runtime = {};
     try status(std::fmt::format("starting .NET with {}", runtimeconfig).as_str(), hostfxr_initialize_for_runtime_config(path.c_str(), null, &out.handle));
     try status("hostfxr_get_runtime_delegate", hostfxr_get_runtime_delegate(out.handle, LOAD_ASSEMBLY_AND_GET_FUNCTION_POINTER, &out.load));
-    return move out;
+    return out;
 }
 
 attach fn delete(this: runtime&) -> void {

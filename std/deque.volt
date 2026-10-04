@@ -123,7 +123,7 @@ attach fn pop_front(this: std::deque<T, A>&) -> T? {
     val out = @read(this.slot(0));
     this.head = (this.head + 1) % this.cap;
     this.len -= 1;
-    return move out;
+    return out;
 }
 
 // delete every element, keep the memory
@@ -164,7 +164,7 @@ attach fn copy(this: std::deque<T, A>&) -> std::deque<T, A> {
     for (i) in 0..this.len {
         out.push_back(copy *this.slot(i));
     }
-    return move out;
+    return out;
 }
 
 // deletes the elements, then frees the memory

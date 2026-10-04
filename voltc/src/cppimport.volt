@@ -143,7 +143,7 @@ fn cpp_qual(c: clang::CXCursor) -> std::string {
         }
         out.append(parts.at(i).as_str());
     }
-    return move out;
+    return out;
 }
 
 // the name of the standard library class template t is an instance of (basic_string, vector,
@@ -186,7 +186,7 @@ fn vname(n: str) -> std::string {
     if (is_keyword(n) || n == "this" || n == "new" || n == "delete" || n == "copy") {
         out.push('_');
     }
-    return move out;
+    return out;
 }
 
 attach fn line(this: cpp_gen&, text: str) -> void {
@@ -269,7 +269,7 @@ attach fn vtype(this: cpp_gen&, t: clang::CXType, tparams: std::vec<str>&) -> st
         }
         var inner = this.vtype(pt, tparams) ?? return null;
         inner.push('*');
-        return move inner;
+        return inner;
     }
     if (k == clang::CXType_Record) {
         return this.record(ct, tparams);
@@ -339,7 +339,7 @@ attach fn record(this: cpp_gen&, ct: clang::CXType, tparams: std::vec<str>&) -> 
         out.append(a.as_str());
     }
     out.push('>');
-    return move out;
+    return out;
 }
 
 fn is_class(t: clang::CXType) -> bool {
@@ -357,7 +357,7 @@ attach fn handle_of(this: cpp_gen&, t: clang::CXType) -> std::string? {
     if (tr->trivial) {
         return null;
     }
-    return move q;
+    return q;
 }
 
 // can a getter copy a value of type t out of where it is (a field, a static member): a class, held
@@ -728,7 +728,7 @@ fn params_of(c: clang::CXCursor) -> std::vec<clang::CXCursor> {
         for (i) in 0..@cast<u32>(n) {
             put(&out, clang::clang_Cursor_getArgument(c, i));
         }
-        return move out;
+        return out;
     }
     for (ch&) in children(c).items() {
         if (clang::clang_getCursorKind(*ch) == clang::CXCursor_ParmDecl) {
@@ -741,9 +741,9 @@ fn params_of(c: clang::CXCursor) -> std::vec<clang::CXCursor> {
         for (i) in out.len - @cast<usize>(want)..out.len {
             put(&last, *out.at(i));
         }
-        return move last;
+        return last;
     }
-    return move out;
+    return out;
 }
 
 // how many parameters a function cursor has
@@ -913,7 +913,7 @@ attach fn fn_text(this: cpp_gen&, generics: str, sig: str, r: cpp_ret&, cpp: str
             this.line("    @panic(\"out of memory\");");
             this.line("};");
             this.line("@cpp<void>(\"std::free((void *){0}.ptr)\", try_got);");
-            this.line("return move try_vec;");
+            this.line("return try_vec;");
         },
     }
     this.depth -= 1;
@@ -925,7 +925,7 @@ attach fn fn_text(this: cpp_gen&, generics: str, sig: str, r: cpp_ret&, cpp: str
 attach fn text_out(this: cpp_gen&, r: str) -> void {
     this.line(fmt("var try_text = std::string::from({});", S(r)).as_str());
     this.line(fmt("@cpp<void>(\"std::free((void *){0}.ptr)\", {});", S(r)).as_str());
-    this.line("return move try_text;");
+    this.line("return try_text;");
 }
 
 // the try_ form of a call: a cpp_error naming the exception when it throws (last_exception() says
@@ -1013,13 +1013,13 @@ fn template_params(c: clang::CXCursor) -> std::vec<std::string>? {
             for (d&) in children(*ch).items() {
                 val dk = clang::clang_getCursorKind(*d);
                 if (clang::clang_isExpression(dk) != 0 || dk == clang::CXCursor_TemplateRef) {
-                    return move out;
+                    return out;
                 }
             }
             return null;
         }
     }
-    return move out;
+    return out;
 }
 
 fn generics_text(ps: std::vec<std::string>&) -> std::string {
@@ -1035,7 +1035,7 @@ fn generics_text(ps: std::vec<std::string>&) -> std::string {
         s.append(": type");
     }
     s.push('>');
-    return move s;
+    return s;
 }
 
 // ", T, U": the extra @cpp type arguments a template's {t0}, {t1} stand for
@@ -1045,7 +1045,7 @@ fn extra_types(ps: std::vec<std::string>&) -> std::string {
         s.append(", ");
         s.append(p.as_str());
     }
-    return move s;
+    return s;
 }
 
 // "geo::biggest<{t0}, {t1}>"
@@ -1059,7 +1059,7 @@ fn cpp_template_ref(q: str, n: usize) -> std::string {
         s.append(fmt("{t{}}", unum(@cast<u64>(i))).as_str());
     }
     s.push('>');
-    return move s;
+    return s;
 }
 
 fn str_views(v: std::vec<std::string>&) -> std::vec<str> {
@@ -1067,7 +1067,7 @@ fn str_views(v: std::vec<std::string>&) -> std::vec<str> {
     for (s&) in v.items() {
         put(&out, s.as_str());
     }
-    return move out;
+    return out;
 }
 
 attach fn free_fn(this: cpp_gen&, c: clang::CXCursor, tps: std::vec<std::string>&) -> void {
@@ -1571,7 +1571,7 @@ fn type_word(vty: str) -> std::string {
             out.push('_');
         }
     }
-    return move out;
+    return out;
 }
 
 // a class's public methods (operators by op_ names, operator T() as to_T(), operator= as assign),
@@ -1893,7 +1893,7 @@ fn virt_key(m: clang::CXCursor) -> std::string {
     if (clang::clang_CXXMethod_isConst(m) != 0) {
         k.append("const");
     }
-    return move k;
+    return k;
 }
 
 fn is_final(m: clang::CXCursor) -> bool {
@@ -2071,7 +2071,7 @@ attach fn virt_maps(this: cpp_gen&, c: clang::CXCursor, q: str, vs: std::vec<vir
     if (maps.len == 0) {
         return null;
     }
-    return move maps;
+    return maps;
 }
 
 // how many arguments a list of them, as Volt text, has ("a, f(b, c), g<T>" has 3)
@@ -2948,12 +2948,12 @@ attach fn cpp_spell(this: checker&, t: u32) -> std::string? {
         .PTR(x) => {
             var s = this.cpp_spell(x) ?? return null;
             s.append(" *");
-            return move s;
+            return s;
         },
         .REF(x) => {
             var s = this.cpp_spell(x) ?? return null;
             s.append(" *");
-            return move s;
+            return s;
         },
         .ENUM(e) => {
             if (this.ei(e).has_payload) {
@@ -2993,7 +2993,7 @@ attach fn cpp_class(this: checker&, s: u32) -> std::string? {
                     }
                     out.push('>');
                 }
-                return move out;
+                return out;
             },
             default => {},
         }
@@ -3259,7 +3259,7 @@ fn hole_index(s: str) -> usize? {
 attach fn cpp_unit(this: checker&) -> std::string {
     var out: std::string = {};
     if (this.cpp_shims.len == 0) {
-        return move out;
+        return out;
     }
     out.append("// generated by voltc: the C++ this program calls (use cpp); each function wraps one call\n");
     out.append("#include <algorithm>\n#include <cstddef>\n#include <cstdint>\n#include <cstdio>\n#include <cstdlib>\n#include <cstring>\n#include <exception>\n#include <functional>\n#include <memory>\n#include <new>\n#include <stdexcept>\n#include <string>\n#include <string_view>\n#include <type_traits>\n#include <typeinfo>\n#include <utility>\n#include <vector>\n#if __has_include(<cxxabi.h>)\n#include <cxxabi.h>\n#endif\n\n// RTTI (dynamic_cast, typeid): only what needs it uses it, and a build without it (-fno-rtti) has the rest\n#if defined(__GXX_RTTI) || defined(__cpp_rtti) || defined(_CPPRTTI)\n#define VOLT_RTTI 1\n#else\n#define VOLT_RTTI 0\n#endif\n");
@@ -3296,5 +3296,5 @@ attach fn cpp_unit(this: checker&) -> std::string {
         out.push('\n');
     }
     out.append("}\n");
-    return move out;
+    return out;
 }

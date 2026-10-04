@@ -61,7 +61,7 @@ attach fn ct_leave(this: checker&, f: flow, span: span) -> compile_error {
 attach fn take_flow(this: checker&) -> flow? {
     var f: flow? = null;
     swap(&f, &this.ct_flow);
-    return move f;
+    return f;
 }
 
 // run r: null when it finished, its flow when it left by return/break/continue
@@ -71,7 +71,7 @@ attach fn flow_of(this: checker&, r: compile_error!void) -> compile_error!(flow?
         if (f == null) {
             return copy e;
         }
-        return move f;
+        return f;
     };
     return null;
 }
@@ -108,7 +108,7 @@ attach fn ct_eval_in(this: checker&, env: u32, e: expr&, want: u32?) -> compile_
         }
         return copy x;
     };
-    return move v;
+    return v;
 }
 
 // is this expression only meaningful at compile time (so it gets evaluated, not emitted)?
@@ -180,7 +180,7 @@ attach fn const_local(this: checker&, name: str) -> cval? {
 attach fn const_or_ct_local(this: checker&, name: str) -> cval? {
     val c = this.const_local(name);
     if (c != null || this.ct.len == 0) {
-        return move c;
+        return c;
     }
     val f = this.ct_top();
     var i = f.scopes.len;
@@ -419,7 +419,7 @@ attach fn ct_type_of(this: checker&, v: cval&) -> u32 {
 attach fn ct_coerce(this: checker&, v: cval, t: u32, span: span) -> compile_error!cval {
     val have = this.ct_type_of(&v);
     if (have == t) {
-        return move v;
+        return v;
     }
     match (v) {
         .TYPE(x) => {
@@ -944,7 +944,7 @@ attach fn ct_expr(this: checker&, e: expr&, want: u32?) -> compile_error!cval {
                     return this.ct_expr(b, want);
                 },
                 .NULL => { return this.ct_expr(b, want); },
-                default => { return move v; },
+                default => { return v; },
             }
         },
         .MOVE(x) => { return this.ct_expr(x, want); },
@@ -1719,7 +1719,7 @@ attach fn ct_for(this: checker&, f: for_loop&, span: span) -> compile_error!cval
         this.ct_top().scopes.pop();
     }
     try r;
-    return move out;
+    return out;
 }
 
 // runs the body once per item, each in its own scope, until a break
@@ -2087,7 +2087,7 @@ attach fn ct_call(this: checker&, decl: u32, explicit: std::vec<garg>&, args: st
         }
     }
     if (ret == VOID || ret == TYPE) {
-        return move out;
+        return out;
     }
     return this.ct_coerce(move out, ret, span);
 }
@@ -2559,7 +2559,7 @@ attach fn typeinfo(this: checker&, t: u32, span: span) -> compile_error!cval {
 // the value of x if it's known at compile time, else null (no error)
 attach fn try_ct_eval(this: checker&, x: expr&, want: u32?) -> cval? {
     val v = this.ct_eval(x, want) catch |e| { return null; };
-    return move v;
+    return v;
 }
 
 // a comptime value as Volt writes it (what @expand and the editor show)
@@ -2617,7 +2617,7 @@ attach fn cvals_text(this: checker&, vs: std::vec<cval>&) -> std::string {
         }
         out.append(this.cval_text(vs.at(i)).as_str());
     }
-    return move out;
+    return out;
 }
 
 // a fn instance as its signature (its name has its generic args): twice<i32>(v: i32) -> i32
@@ -3085,7 +3085,7 @@ attach fn ct_unroll_body(this: checker&, f: for_loop&, li: usize) -> compile_err
         put(&body, this.ir.label_at(cont));
         put(&code, this.ir.block(move body));
     }
-    return move code;
+    return code;
 }
 
 // ---------- attributes ----------
@@ -3115,7 +3115,7 @@ fn attr_defs() -> std::vec<attr_def> {
     put(&v, { name: "closed", args: 0 }); // a trait whose attach blocks hold its fns only
     put(&v, { name: "attach_as", args: 1 }); // a struct attach blocks name for this trait (a C++ class's virtuals)
     put(&v, { name: "derive", args: 1 }); // attach these traits (std::derive's when not in scope) to the struct or enum
-    return move v;
+    return v;
 }
 
 // an attribute's string argument: @owns("ptr") -> ptr

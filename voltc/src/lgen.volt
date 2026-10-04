@@ -447,7 +447,7 @@ attach fn part(this: lg&, t: u32) -> abi_part {
             put(&r.pieces, llvm::LLVMIntTypeInContext(this.ctx, @cast<u32>(bytes * 8)));
         }
     }
-    return move r;
+    return r;
 }
 
 // the INTEGER registers a PIECES value needs (the rest are SSE)
@@ -513,7 +513,7 @@ attach fn sig(this: lg&, params: std::vec<u32>&, ret: u32, va: bool) -> abi_fn {
         v = 1;
     }
     a.ty = llvm::LLVMFunctionType(rt, ps.ptr, @cast<u32>(ps.len), v);
-    return move a;
+    return a;
 }
 
 // the LLVM param types x lowers to, appended to ps
@@ -2464,7 +2464,7 @@ attach fn llvm_build(this: checker&, g: lg&) -> std::string {
     if (llvm::LLVMVerifyModule(g.m, llvm::LLVMReturnStatusAction, &msg) != 0) {
         var out = S("the LLVM backend made an invalid module (this is a voltc bug):\n");
         out.append(c_text(msg));
-        return move out;
+        return out;
     }
     if (this.opts.release) {
         val po = llvm::LLVMCreatePassBuilderOptions();
@@ -2569,7 +2569,7 @@ fn llvm_runtime_c(chk: checker&, hdr: std::vec<str>&, runtime: bool) -> std::str
         out.append(h);
         out.append(";\n");
     }
-    return move out;
+    return out;
 }
 
 // the libm functions LLVM can make instructions once they're known not to touch memory (cgen's list)

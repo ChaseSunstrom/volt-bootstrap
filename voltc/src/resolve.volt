@@ -256,7 +256,7 @@ attach fn ns_path(this: checker&, ns: u32, sep: str) -> std::string {
         }
         s.append(*p.at(i));
     }
-    return move s;
+    return s;
 }
 
 // The struct type for decl d with these generic args, made once per argument set. It uses the
@@ -366,7 +366,7 @@ fn replace_all(s: str, from: str, to: str) -> std::string {
             i += 1;
         }
     }
-    return move out;
+    return out;
 }
 
 // pick_specialization's answer: the decl to instantiate and its own generic args
@@ -487,7 +487,7 @@ fn unwrap_binds(binds: std::vec<gval?>&) -> std::vec<gval> {
     for (b&) in binds.items() {
         put(&out, *b ?? gval::INT(0));
     }
-    return move out;
+    return out;
 }
 
 // a struct instance's fields, resolved on first use; fails if the struct contains itself by value
@@ -596,7 +596,7 @@ attach fn const_int_ct(this: checker&, e: expr&, env: u32, first: compile_error)
         if (contains(m, "compile") || contains(m, "overflow")) {
             return copy d;
         }
-        return move first;
+        return first;
     };
     match (v) {
         .INT(x, t) => { return x; },

@@ -40,7 +40,7 @@ fn lsp_token_legend() -> std::json::value {
     var l = std::json::object();
     l.set("tokenTypes", move types);
     l.set("tokenModifiers", move mods);
-    return move l;
+    return l;
 }
 
 fn local_kind(l: lsp_local&) -> u8 {
@@ -299,7 +299,7 @@ attach fn semantic_tokens(this: lsp_server&, params: std::json::value&) -> std::
         return 0;
     });
     r.set("data", encode_tokens(text, &toks));
-    return move r;
+    return r;
 }
 
 // LSP's relative encoding: line and start (UTF-16) from the token before, length, type, modifiers.
@@ -349,7 +349,7 @@ fn encode_tokens(text: str, toks: std::vec<sem_tok>&) -> std::json::value {
         prev_col = col;
         end = t.hi;
     }
-    return move data;
+    return data;
 }
 
 // ---------- inlay hints ----------
@@ -383,7 +383,7 @@ fn hint_type(c: checker&, t: u32) -> std::string {
     // ponytail: text replacement; a short-name mode in ty_name if more defaults need hiding
     s = replace_all(s.as_str(), ", std::mem::default_allocator>", ">");
     s = replace_all(s.as_str(), "<std::mem::default_allocator>", "");
-    return move s;
+    return s;
 }
 
 // whether a type is written right after a declared name (`x: i32`)
@@ -405,7 +405,7 @@ fn hint(text: str, at: usize, label: std::string, kind: f64, left: bool) -> std:
     } else {
         h.set("paddingRight", std::json::value::BOOL(true));
     }
-    return move h;
+    return h;
 }
 
 // the end of each declaration whose block spans CLOSING_LINES lines or more: `fn main` after its }
@@ -518,7 +518,7 @@ attach fn inlay_hints(this: lsp_server&, params: std::json::value&) -> std::json
     if (this.hint_braces) {
         closing_hints(text, doc.src.value.asts.at(@cast<usize>(doc.file)), &out);
     }
-    return move out;
+    return out;
 }
 
 val NO_HINT: u32 = 4294967295;
@@ -555,15 +555,15 @@ fn uses_of(c: checker&, def: span) -> std::vec<span> {
             }
         }
     }
-    return move out;
+    return out;
 }
 
 // documentHighlight: the name under the cursor, its declaration and uses in this document
 attach fn highlights(this: lsp_server&, params: std::json::value&) -> std::json::value {
     var out = std::json::array();
-    val doc = this.fresh_doc(params) ?? return move out;
+    val doc = this.fresh_doc(params) ?? return out;
     val c = &*doc.chk.value;
-    val def = def_at(c, doc.file, doc_offset(doc, params)) ?? return move out;
+    val def = def_at(c, doc.file, doc_offset(doc, params)) ?? return out;
     val text = c.files.at(@cast<usize>(doc.file)).text;
     var spans = uses_of(c, def);
     put(&spans, def);
@@ -574,7 +574,7 @@ attach fn highlights(this: lsp_server&, params: std::json::value&) -> std::json:
             out.add(move h);
         }
     }
-    return move out;
+    return out;
 }
 
 // whether a name can be renamed: it's declared in this program (not std, not made up: a namespace
@@ -614,7 +614,7 @@ attach fn prepare_rename(this: lsp_server&, params: std::json::value&) -> std::j
     var r = std::json::object();
     r.set("range", lsp_range(text, { file: doc.file, lo: @cast<u32>(lo), hi: @cast<u32>(hi) }));
     r.set("placeholder", std::json::string(text[lo..hi]));
-    return move r;
+    return r;
 }
 
 // rename: the declaration and every use, in every file of the check
@@ -656,7 +656,7 @@ attach fn rename(this: lsp_server&, params: std::json::value&) -> std::json::val
     }
     var r = std::json::object();
     r.set("changes", move changes);
-    return move r;
+    return r;
 }
 
 // an error response's body (inline_request sends it as the error)
@@ -666,7 +666,7 @@ fn lsp_error(code: f64, msg: std::string) -> std::json::value {
     e.set("message", std::json::string(msg.as_str()));
     var r = std::json::object();
     r.set("__error", move e);
-    return move r;
+    return r;
 }
 
 // ---------- folding ----------
@@ -680,7 +680,7 @@ fn line_starts(text: str) -> std::vec<usize> {
             put(&out, i + 1);
         }
     }
-    return move out;
+    return out;
 }
 
 // the line offset at is on
@@ -712,11 +712,11 @@ fn fold(out: std::json::value&, start: usize, end: usize, kind: str?) -> void {
 // of comment lines and of use lines
 attach fn folding(this: lsp_server&, params: std::json::value&) -> std::json::value {
     var out = std::json::array();
-    val doc = this.find_doc(params) ?? return move out;
+    val doc = this.find_doc(params) ?? return out;
     val text = doc.text.as_str();
     val starts = line_starts(text);
     val toks = lex(text, 0) catch |e| {
-        return move out;
+        return out;
     };
     var open: std::vec<usize> = {};
     for (t&) in toks.items() {
@@ -760,7 +760,7 @@ attach fn folding(this: lsp_server&, params: std::json::value&) -> std::json::va
             run_start = l;
         }
     }
-    return move out;
+    return out;
 }
 
 // ---------- types: what's attached to them ----------
@@ -784,7 +784,7 @@ attach fn span_text(this: checker&, s: span) -> std::string {
             out.push(text[i]);
         }
     }
-    return move out;
+    return out;
 }
 
 // the type declaration d made (its first instance, for a generic one); null when none was made
@@ -876,7 +876,7 @@ attach fn attached_to(this: checker&, t: u32) -> std::vec<attached_fn> {
         }
         return 0;
     });
-    return move out;
+    return out;
 }
 
 // the attach blocks that attach trait d (their target types, as written)
@@ -893,7 +893,7 @@ attach fn attachers(this: checker&, d: u32) -> std::vec<u32> {
             default => {},
         }
     }
-    return move out;
+    return out;
 }
 
 // what hover shows for a type: its declaration (fields, variants) and every fn attached to it,
@@ -945,11 +945,11 @@ attach fn type_hover(this: checker&, d: u32) -> std::string {
                     }
                 }
             }
-            return move out;
+            return out;
         },
         default => { return this.lsp_type_label(d, ""); },
     }
-    val t = this.type_of_decl(d) ?? return move out;
+    val t = this.type_of_decl(d) ?? return out;
     var group: std::string = {};
     var started = false;
     for (a&) in this.attached_to(t).items() {
@@ -965,7 +965,7 @@ attach fn type_hover(this: checker&, d: u32) -> std::string {
         out.push('\n');
         out.append(this.lsp_decl_text(a.decl).as_str());
     }
-    return move out;
+    return out;
 }
 
 // ---------- code lenses ----------
@@ -993,7 +993,7 @@ fn lens(text: str, uri: str, name: span, title: std::string, locs: std::json::va
     var l = std::json::object();
     l.set("range", lsp_range(text, name));
     l.set("command", move cmd);
-    return move l;
+    return l;
 }
 
 fn plural(n: usize, one: str, many: str) -> std::string {
@@ -1103,7 +1103,7 @@ attach fn code_lenses(this: lsp_server&, params: std::json::value&) -> std::json
     val doc = this.fresh_doc(params) ?? return this.not_fresh(params, move out);
     val c = &*doc.chk.value;
     this.lenses(doc, c, doc.src.value.asts.at(@cast<usize>(doc.file)), false, &out);
-    return move out;
+    return out;
 }
 
 // ---------- quick fixes ----------
@@ -1114,7 +1114,7 @@ fn with_fix(e: compile_error, title: std::string, at: span, text: std::string) -
     match (r) {
         .AT(d&) => { put(&d.fixes, { title: move title, span: at, text: move text }); },
     }
-    return move r;
+    return r;
 }
 
 // e about local name (named at at), with the fix that declares it var: its val becomes var, or a
@@ -1173,7 +1173,7 @@ attach fn op_fix(this: checker&, e: compile_error, e0: expr&) -> compile_error {
 fn fixes_json(doc: lsp_doc&, d: diag&) -> std::json::value {
     var out = std::json::array();
     if (doc.chk == null) {
-        return move out;
+        return out;
     }
     val c = &*doc.chk.value;
     for (f&) in d.fixes.items() {
@@ -1188,14 +1188,14 @@ fn fixes_json(doc: lsp_doc&, d: diag&) -> std::json::value {
         o.set("range", copy *loc.get("range"));
         out.add(move o);
     }
-    return move out;
+    return out;
 }
 
 // codeAction: the quick fixes the diagnostics in the request carry
 attach fn code_actions(this: lsp_server&, params: std::json::value&) -> std::json::value {
     var out = std::json::array();
     // the fixes' places are the last check's: only while the text is still that
-    this.fresh_doc(params) ?? return move out;
+    this.fresh_doc(params) ?? return out;
     val ds = params.get("context").get("diagnostics");
     for (i) in 0..ds.len() {
         val d = ds.at(i);
@@ -1222,7 +1222,7 @@ attach fn code_actions(this: lsp_server&, params: std::json::value&) -> std::jso
             out.add(move a);
         }
     }
-    return move out;
+    return out;
 }
 
 // ---------- the requests ----------

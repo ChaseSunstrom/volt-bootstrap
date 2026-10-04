@@ -237,7 +237,7 @@ attach fn expr(this: parser&) -> compile_error!expr {
         val sp = lhs.span.to(rhs.span);
         return { kind: expr_kind::ASSIGN(op, bx(move lhs), bx(move rhs)), span: sp };
     }
-    return move lhs;
+    return lhs;
 }
 
 struct infix_op {
@@ -371,7 +371,7 @@ attach fn bin(this: parser&, min: u8) -> compile_error!expr {
             },
         }
     }
-    return move lhs;
+    return lhs;
 }
 
 fn unop_of(p: str) -> unop? {
@@ -461,7 +461,7 @@ attach fn postfix(this: parser&) -> compile_error!expr {
             this.bump();
             e = { kind: expr_kind::INC_DEC(bx(move e), inc), span: start.to(this.prev_span()) };
         } else {
-            return move e;
+            return e;
         }
     }
 }
@@ -499,7 +499,7 @@ attach fn call_args(this: parser&) -> compile_error!std::vec<expr> {
             return this.unexpected("',' or ')'");
         }
     }
-    return move args;
+    return args;
 }
 
 // `@name<T>(args)`: only @cast takes `<...>`, each arg may be a type or a value, and the parentheses are
@@ -579,7 +579,7 @@ attach fn primary(this: parser&) -> compile_error!expr {
         }
         val first = try this.expr();
         if (this.eat(")")) {
-            return move first;
+            return first;
         }
         var elems: std::vec<expr> = {};
         put(&elems, move first);
@@ -939,7 +939,7 @@ attach fn pat_args(this: parser&) -> compile_error!(std::vec<pat>?) {
             return this.unexpected("',' or ')'");
         }
     }
-    return move args;
+    return args;
 }
 
 // quote { ... }: its Volt source as a comptime str, with $(expr) and $name splices filled in when

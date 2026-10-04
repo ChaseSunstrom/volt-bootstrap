@@ -102,7 +102,7 @@ attach fn closure_expr(this: checker&, cl: closure&, want: u32?, span: span) -> 
             if (at) {
                 return with_label(move e, *at, S("moved here"));
             }
-            return move e;
+            return e;
         }
         var v = vpure(l.ty, l.c);
         v.lv = true;

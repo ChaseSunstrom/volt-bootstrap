@@ -77,7 +77,7 @@ attach fn pop(this: std::heap<T, A>&) -> T? {
         xs.swap(i, least);
         i = least;
     }
-    return move out;
+    return out;
 }
 
 // delete every element

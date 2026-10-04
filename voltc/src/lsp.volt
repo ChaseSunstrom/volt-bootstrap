@@ -191,7 +191,7 @@ attach fn lsp_c_signature(this: checker&, inst: u32) -> std::string {
     }
     s.append(") -> ");
     s.append(this.ty_name(f.ret).as_str());
-    return move s;
+    return s;
 }
 
 // fn decl d's declaration as written, without its body, on one line; empty when it isn't written
@@ -232,7 +232,7 @@ attach fn lsp_decl_text(this: checker&, d: u32) -> std::string {
     if (out.len() > 0 && out.as_str()[out.len() - 1] == ';') {
         out.bytes.pop();
     }
-    return move out;
+    return out;
 }
 
 // the local named `name` declared in file last before offset at (else the first declared)
@@ -437,7 +437,7 @@ attach fn lsp_callees(this: checker&, callee: str, method: bool) -> std::vec<u32
         },
         default => {},
     }
-    return move out;
+    return out;
 }
 
 // ---------- JSON pieces ----------
@@ -449,7 +449,7 @@ fn lsp_item(label: str, kind: f64, detail: str) -> std::json::value {
     if (detail.len > 0) {
         o.set("detail", std::json::string(detail));
     }
-    return move o;
+    return o;
 }
 
 // the byte offset of LSP position pos (a line, and a column in UTF-16 code units) in text
@@ -507,14 +507,14 @@ fn lsp_pos(text: str, at0: usize) -> std::json::value {
     var p = std::json::object();
     p.set("line", std::json::number(@cast<f64>(line)));
     p.set("character", std::json::number(@cast<f64>(units)));
-    return move p;
+    return p;
 }
 
 fn lsp_range(text: str, s: span) -> std::json::value {
     var r = std::json::object();
     r.set("start", lsp_pos(text, @cast<usize>(s.lo)));
     r.set("end", lsp_pos(text, @cast<usize>(s.hi)));
-    return move r;
+    return r;
 }
 
 fn contains(s: span, file: u32, at: usize) -> bool {
@@ -542,7 +542,7 @@ fn uri_path(uri: str) -> std::string {
         out.push(s[i]);
         i += 1;
     }
-    return move out;
+    return out;
 }
 
 // the file:// URI of a path
@@ -558,7 +558,7 @@ fn path_uri(path: str) -> std::string {
             out.push(hex[@cast<usize>(b & 15)]);
         }
     }
-    return move out;
+    return out;
 }
 
 // ---------- the server ----------
@@ -721,7 +721,7 @@ attach fn next(this: lsp_reader&) -> std::string? {
             if (b.len >= end) {
                 val body = S(b[h + 4..end]);
                 this.buf = S(b[end..b.len]);
-                return move body;
+                return body;
             }
         }
         var chunk: u8[65536];
@@ -837,7 +837,7 @@ fn lsp_capabilities() -> std::json::value {
     var r = std::json::object();
     r.set("capabilities", move caps);
     r.set("serverInfo", move info);
-    return move r;
+    return r;
 }
 
 // `voltc lsp`: serve until exit (or the end of the input)
@@ -1063,7 +1063,7 @@ attach fn check_doc(this: lsp_server&, doc: lsp_doc&) -> std::vec<diag> {
             }
             put(&diags, move d);
         }
-        return move diags;
+        return diags;
     }
     var o: opts = { lsp: true };
     for (u&) in s.units.items() {
@@ -1080,7 +1080,7 @@ attach fn check_doc(this: lsp_server&, doc: lsp_doc&) -> std::vec<diag> {
     doc.file = file;
     doc.chk = move chk;
     doc.src = move sb;
-    return move diags;
+    return diags;
 }
 
 // lex and parse every source (a package's files wrapped in its namespace); every error, in order
@@ -1128,7 +1128,7 @@ fn parse_sources(s: sources&) -> std::vec<diag> {
         }
     }
     sort_diags(&errors);
-    return move errors;
+    return errors;
 }
 
 // the program files of the bolt package path is in (under DIR/src/, with DIR/bolt.toml); none
@@ -1184,7 +1184,7 @@ fn lsp_location(doc: lsp_doc&, c: checker&, s: span) -> std::json::value {
         l.set("uri", std::json::string(path_uri(f.name).as_str()));
     }
     l.set("range", lsp_range(f.text, s));
-    return move l;
+    return l;
 }
 
 attach fn hover(this: lsp_server&, params: std::json::value&) -> std::json::value {
@@ -1226,7 +1226,7 @@ attach fn hover(this: lsp_server&, params: std::json::value&) -> std::json::valu
     contents.set("value", std::json::string(text.as_str()));
     var h = std::json::object();
     h.set("contents", move contents);
-    return move h;
+    return h;
 }
 
 // what the comptime code at offset at became: the notes on the innermost span recorded there
@@ -1257,14 +1257,14 @@ fn expansion_at(c: checker&, file: u32, at: usize) -> std::string {
             }
         }
     }
-    return move out;
+    return out;
 }
 
 // volt/expand: what the comptime code in a document (or on params.line, 0-based) became, as
 // [{ range, text }] in the order it was checked
 attach fn expand(this: lsp_server&, params: std::json::value&) -> std::json::value {
     var out = std::json::array();
-    val doc = this.checked_doc(params) ?? return move out;
+    val doc = this.checked_doc(params) ?? return out;
     val c = &*doc.chk.value;
     val text = c.files.at(@cast<usize>(doc.file)).text;
     val line = params.get("line").as_num();
@@ -1276,7 +1276,7 @@ attach fn expand(this: lsp_server&, params: std::json::value&) -> std::json::val
             out.add(move o);
         }
     }
-    return move out;
+    return out;
 }
 
 attach fn definition(this: lsp_server&, params: std::json::value&) -> std::json::value {
@@ -1321,7 +1321,7 @@ attach fn references(this: lsp_server&, params: std::json::value&) -> std::json:
             }
         }
     }
-    return move out;
+    return out;
 }
 
 // the document's declarations (from its current text; none while it doesn't parse)
@@ -1339,7 +1339,7 @@ attach fn symbols(this: lsp_server&, params: std::json::value&) -> std::json::va
     };
     var out = std::json::array();
     add_symbols(text, &items, &out);
-    return move out;
+    return out;
 }
 
 fn add_symbols(text: str, items: std::vec<item>&, out: std::json::value&) -> void {
@@ -1411,7 +1411,7 @@ fn symbol(text: str, name: str, kind: f64, s: span, kids: std::json::value) -> s
     o.set("range", lsp_range(text, s));
     o.set("selectionRange", lsp_range(text, find_word(text, s, name, false) ?? s));
     o.set("children", move kids);
-    return move o;
+    return o;
 }
 
 // completion at the cursor: after `x.`, x's fields and methods; after `a::`, what a declares;
@@ -1429,7 +1429,7 @@ attach fn complete(this: lsp_server&, params: std::json::value&) -> std::json::v
         for (k) in KEYWORDS {
             out.add(lsp_item(k, 14.0, ""));
         }
-        return move out;
+        return out;
     }
     val c = &*doc.chk.value;
     if (i > 0 && text[i - 1] == '.') {
@@ -1441,7 +1441,7 @@ attach fn complete(this: lsp_server&, params: std::json::value&) -> std::json::v
         if (l) {
             c.lsp_members(l->ty, &out);
         }
-        return move out;
+        return out;
     }
     if (i > 1 && text[i - 1] == ':' && text[i - 2] == ':') {
         var k = i - 2;
@@ -1449,7 +1449,7 @@ attach fn complete(this: lsp_server&, params: std::json::value&) -> std::json::v
             k -= 1;
         }
         c.lsp_path_members(text[k..i - 2], &out);
-        return move out;
+        return out;
     }
     var seen: std::map<str, bool> = {};
     for (l&) in c.lsp_locals.items() {
@@ -1462,7 +1462,7 @@ attach fn complete(this: lsp_server&, params: std::json::value&) -> std::json::v
     for (k) in KEYWORDS {
         out.add(lsp_item(k, 14.0, ""));
     }
-    return move out;
+    return out;
 }
 
 // signature help inside a call's parentheses: the callee's declarations, and which argument the
@@ -1541,7 +1541,7 @@ attach fn signature(this: lsp_server&, params: std::json::value&) -> std::json::
     h.set("signatures", move sigs);
     h.set("activeSignature", std::json::number(0.0));
     h.set("activeParameter", std::json::number(commas));
-    return move h;
+    return h;
 }
 
 // a declaration's parameters, as ParameterInformation labels: the text between its first ( and
@@ -1575,7 +1575,7 @@ fn param_labels(label: str) -> std::json::value {
     if (j > start) {
         add_param(&out, label[start..j]);
     }
-    return move out;
+    return out;
 }
 
 fn add_param(out: std::json::value&, text: str) -> void {

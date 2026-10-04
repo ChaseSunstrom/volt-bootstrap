@@ -231,7 +231,7 @@ fn ty_key(t: tyk&) -> std::string {
         .FRAME(x) => { key_one(&k, "fr", x); },
         .TRAIT_UNION(x) => { key_one(&k, "tu", x); },
     }
-    return move k;
+    return k;
 }
 
 // appends tag then the id
@@ -266,7 +266,7 @@ fn new_types() -> types {
     for (k) in INTS {
         t.intern(tyk::INT(k));
     }
-    return move t;
+    return t;
 }
 
 // the id of t, adding it if it's new

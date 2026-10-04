@@ -23,7 +23,7 @@ fn targets() -> std::vec<target_info> {
     put(&v, { name: "riscv64-none", triple: "riscv64-unknown-none-elf", cpu: "generic-rv64", features: "+m,+a,+f,+d,+c,-relax", arch: "riscv64", bits: "64", cfg: { "os=none", "arch=riscv64", "pointer_bits=64" } });
     put(&v, { name: "thumbv7m-none", triple: "thumbv7m-none-eabi", cpu: "cortex-m3", features: "", arch: "arm", bits: "32", cfg: { "os=none", "arch=arm", "pointer_bits=32" } });
     put(&v, { name: "thumbv7em-none", triple: "thumbv7em-none-eabi", cpu: "cortex-m4", features: "", arch: "arm", bits: "32", cfg: { "os=none", "arch=arm", "pointer_bits=32" } });
-    return move v;
+    return v;
 }
 
 fn find_target(name: str) -> target_info? {
@@ -44,7 +44,7 @@ fn target_names() -> std::string {
         }
         s.append(t.name);
     }
-    return move s;
+    return s;
 }
 
 // the defaults for the board's hooks the program doesn't define: volt_exit stops (on Cortex-M through
@@ -59,7 +59,7 @@ fn hook_defaults_asm(t: target_info, exit: bool, console: bool) -> std::string {
         if (console) {
             out.append("    .thumb_func\n    .globl volt_console_write\n    .type volt_console_write,%function\nvolt_console_write:\n    bx lr\n");
         }
-        return move out;
+        return out;
     }
     out.append("    .section .text.volt_hooks,\"ax\",@progbits\n");
     if (exit) {
@@ -68,7 +68,7 @@ fn hook_defaults_asm(t: target_info, exit: bool, console: bool) -> std::string {
     if (console) {
         out.append("    .globl volt_console_write\n    .type volt_console_write,@function\nvolt_console_write:\n    ret\n");
     }
-    return move out;
+    return out;
 }
 
 // the start code for t, as module-level assembly
@@ -176,7 +176,7 @@ fn start_asm(t: target_info) -> std::string {
                 out.append("    ldr r0, =0xE000ED88\n    ldr r1, [r0]\n    orr r1, r1, #0xF00000\n    str r1, [r0]\n    dsb\n    isb\n");
             }
         }
-        return move out;
+        return out;
     }
     // RISC-V: the init_array walk and argv take a pointer's size
     var ld = "lw";
@@ -262,5 +262,5 @@ fn start_asm(t: target_info) -> std::string {
             out.push('\n');
         }
     }
-    return move out;
+    return out;
 }

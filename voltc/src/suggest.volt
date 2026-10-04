@@ -111,7 +111,7 @@ attach fn path_candidates(this: checker&, ns: u32, p: path&, locals: bool) -> st
             this.ns_names(n, &out);
             cur = this.ns(n).parent;
         }
-        return move out;
+        return out;
     }
     var prefix: path = { segs: {}, span: p.span };
     for (i) in 0..p.segs.len - 1 {
@@ -155,7 +155,7 @@ attach fn path_candidates(this: checker&, ns: u32, p: path&, locals: bool) -> st
             cur = this.ns(n).parent;
         }
     }
-    return move out;
+    return out;
 }
 
 // the primitive type names, for `unknown type` help
@@ -183,7 +183,7 @@ attach fn unknown(this: checker&, span: span, what: str, ns: u32, p: path&, loca
         val at = this.lsp_word(span, missing, true) ?? span;
         return with_fix(helped, fmt("change to '{}'", S(c)), at, S(c));
     }
-    return move e;
+    return e;
 }
 
 // `T has no field 'x'`, with a did-you-mean from the fields that exist
@@ -198,7 +198,7 @@ attach fn no_field(this: checker&, span: span, t: u32, name: str, fields: std::v
         val at = this.lsp_word(span, name, true) ?? span;
         return with_fix(helped, fmt("change to '{}'", S(c)), at, S(c));
     }
-    return move e;
+    return e;
 }
 
 // the span of name inside an item's span s (all of s when it isn't there): where an error about a

@@ -66,7 +66,7 @@ namespace path {
             out.push(sep());
         }
         out.append(b);
-        return move out;
+        return out;
     }
 
     // p without the separators it ends with (its root stays)
@@ -166,6 +166,6 @@ namespace path {
         if (out.len() == 0) {
             out.push('.');
         }
-        return move out;
+        return out;
     }
 }

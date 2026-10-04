@@ -160,7 +160,7 @@ namespace time {
             std::fmt::write(&out, ".{:03}", ms);
         }
         out.push('Z');
-        return move out;
+        return out;
     }
 }
 

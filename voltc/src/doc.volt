@@ -152,7 +152,7 @@ attach fn entry(this: doc_writer&, kind: str, name: str, ns: std::vec<str>&, spa
         path.add(std::json::string(p));
     }
     o.set("namespace", move path);
-    return move o;
+    return o;
 }
 
 // add the signature, doc comment and place to entry o, and o to the items
@@ -175,7 +175,7 @@ attach fn member(this: doc_writer&, name: str, span: span) -> std::json::value {
         doc = doc_above(this.text, @cast<usize>(span.lo));
     }
     o.set("doc", std::json::string(doc.as_str()));
-    return move o;
+    return o;
 }
 
 // a fn's declaration, without its body
@@ -274,7 +274,7 @@ fn decl_text(text: str, lo: usize, hi: usize) -> std::string {
     while (out.len() > 0 && (out.as_str()[out.len() - 1] == ';' || out.as_str()[out.len() - 1] == ',')) {
         out.bytes.pop();
     }
-    return move out;
+    return out;
 }
 
 // the comment block directly above the line holding offset at
@@ -311,7 +311,7 @@ fn doc_above(text: str, at: usize) -> std::string {
             out.push('\n');
         }
     }
-    return move out;
+    return out;
 }
 
 // the comment after offset at on its line, if there is one
@@ -349,7 +349,7 @@ fn file_doc(text: str) -> std::string {
         out.append(comment_body(line));
         i = end + 1;
     }
-    return move out;
+    return out;
 }
 
 // `// text` → `text`

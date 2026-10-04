@@ -11,7 +11,7 @@ export fn add(a: i64, b: i64) -> i64 {
 export fn hello(name: str) -> std::string {
     var s = std::string::from("hello, ");
     s.append(name);
-    return move s;
+    return s;
 }
 
 // a class: other languages hold a tally by a handle, call its methods, and free it

@@ -14,7 +14,7 @@ attach cpp::tally::Ticker -> shout {
     fn tick(this, self: cpp::tally::Ticker&, n: i32) -> std::string {
         var s = std::string::from(this.word);
         s.append_int(@cast<i64>(n));
-        return move s;
+        return s;
     }
 }
 

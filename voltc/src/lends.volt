@@ -488,7 +488,7 @@ attach fn return_summaries(this: checker&) -> std::map<u64, std::vec<reach>> {
             }
         }
     }
-    return move sums;
+    return sums;
 }
 
 // adds r to body b's summary; whether it's new

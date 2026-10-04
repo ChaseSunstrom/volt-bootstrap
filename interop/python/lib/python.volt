@@ -149,7 +149,7 @@ fn value<bool>(x: bool) -> python_error!object {
 }
 fn value<str>(x: str) -> python_error!object { return own(c::PyUnicode_FromStringAndSize(@cast<cstr>(x.ptr), @cast<isize>(x.len))); }
 fn value<std::string>(x: std::string) -> python_error!object { return value(x.as_str()); }
-fn value<object>(x: object) -> python_error!object { return move x; }
+fn value<object>(x: object) -> python_error!object { return x; }
 
 // None
 fn none() -> python_error!object {

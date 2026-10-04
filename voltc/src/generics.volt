@@ -72,7 +72,7 @@ fn gparam_of(g: generic_param&) -> gparam {
     if (g.fallback) {
         p.fallback = &g.fallback;
     }
-    return move p;
+    return p;
 }
 
 // an item's own generic params
@@ -353,7 +353,7 @@ fn none_binds(n: usize) -> std::vec<gval?> {
     for (i) in 0..n {
         put(&v, null);
     }
-    return move v;
+    return v;
 }
 
 // generic args for a generic type: given ones, then defaults
@@ -381,7 +381,7 @@ attach fn gargs_for(this: checker&, d: u32, given: std::vec<garg>&, caller: u32,
     if (bad) {
         return fail(span, copy bad);
     }
-    return move out;
+    return out;
 }
 
 // ---------- inference ----------

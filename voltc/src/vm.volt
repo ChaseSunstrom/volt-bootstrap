@@ -43,11 +43,11 @@ export fn volt_vm_new(std_dir: str) -> volt_vm {
     val e = llvm::LLVMOrcCreateLLJIT(&j, null);
     if (e != null) {
         v.message = jit_error(e);
-        return move v;
+        return v;
     }
     v.jit = j;
     v.jd = llvm::LLVMOrcExecutionSessionCreateBareJITDylib(llvm::LLVMOrcLLJITGetExecutionSession(j), "volt scripts");
-    return move v;
+    return v;
 }
 
 // the VM is in its final place (a handle, or a variable that won't move): LLVM's reports during

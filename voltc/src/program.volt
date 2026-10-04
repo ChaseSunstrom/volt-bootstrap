@@ -227,7 +227,7 @@ attach fn instantiation_chain(this: checker&, idx: u32, e: compile_error) -> com
         last = f.used_at;
         at = f.used_in;
     }
-    return move d;
+    return d;
 }
 
 attach fn gen_fn(this: checker&, idx: u32) -> compile_error!void {
@@ -365,7 +365,7 @@ fn compile(files: std::vec<source_file>&, asts: std::vec<std::vec<item>>&, o: op
             put(&c.errors, err_diag(&e));
         };
     }
-    return move c;
+    return c;
 }
 
 // a run's diagnostics in source order, each once (an error in a shared template instance can come
@@ -389,7 +389,7 @@ fn all_diags(c: checker&) -> std::vec<diag> {
         }
     }
     sort_diags(&out);
-    return move out;
+    return out;
 }
 
 // a stable insertion sort by (file, lo), like Rust's sort_by_key

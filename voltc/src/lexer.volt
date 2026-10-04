@@ -247,7 +247,7 @@ fn lex(src: str, file: u32) -> compile_error!std::vec<token> {
         glued = true;
     }
     out.push({ tok: tok::EOF, span: { file: file, lo: @cast<u32>(src.len), hi: @cast<u32>(src.len) }, glued: false }) catch @panic("out of memory");
-    return move out;
+    return out;
 }
 
 // the value of a digit in any radix up to 36; 99 for a non-digit

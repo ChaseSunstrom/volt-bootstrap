@@ -169,7 +169,7 @@ namespace fs {
         if (failed) {
             return fs_error::IO;
         }
-        return move out;
+        return out;
     }
 
     // data written to path through fopen mode m ("wb" replaces, "ab" appends)
@@ -333,7 +333,7 @@ namespace fs {
         var dirs: std::vec<bool, A> = { allocator: copy allocator };
         try scan(path, &names, &dirs);
         names.items().sort(move allocator);
-        return move names;
+        return names;
     }
 
     // every file under directory path, in its subdirectories too (not the directories themselves), as
@@ -343,7 +343,7 @@ namespace fs {
         var out: std::vec<std::string<A>, A> = { allocator: copy allocator };
         try walk_into(path, &out);
         out.items().sort(move allocator);
-        return move out;
+        return out;
     }
 
     <A: std::mem::allocator>
@@ -562,7 +562,7 @@ attach fn read_all(this: std::fs::file&, allocator: A = {}) -> std::fs::fs_error
     loop {
         val n = try this.read(buf[..]);
         if (n == 0) {
-            return move out;
+            return out;
         }
         out.append(@cast<str>(buf[0..n]));
     }
@@ -614,7 +614,7 @@ attach fn read_line(this: std::fs::file&, allocator: A = {}) -> std::fs::fs_erro
     if (out.as_str().ends_with("\r")) {
         out.pop();
     }
-    return move out;
+    return out;
 }
 
 // for (line) in f.lines(): each line as read_line gives it, until the end (or a read error)

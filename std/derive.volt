@@ -92,7 +92,7 @@ attach fn to_json(this: T&) -> std::json::value {
             @compile_error("@derive(json) goes on a struct or an enum");
         },
     }
-    return move o;
+    return o;
 }
 
 // what a field's to_json is for the types std knows: numbers, bool, text, optionals and vectors. One
@@ -131,7 +131,7 @@ attach fn to_json(this: std::vec<T, A>&) -> std::json::value {
     for (x&) in this.items() {
         out.add(x.to_json());
     }
-    return move out;
+    return out;
 }
 
 // optionals and vectors as map keys (and fields of a derived hash)

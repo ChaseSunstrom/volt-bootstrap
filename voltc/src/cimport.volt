@@ -27,7 +27,7 @@ fn c_puncts() -> std::vec<str> {
     for (p) in all {
         put(&v, p);
     }
-    return move v;
+    return v;
 }
 
 fn c_is_alnum(c: u8) -> bool {
@@ -110,7 +110,7 @@ fn c_lex(src: str) -> std::vec<ctok> {
             }
         }
     }
-    return move out;
+    return out;
 }
 
 fn digit_val(c: u8) -> u32? {
@@ -928,7 +928,7 @@ attach fn fields(this: cparser&, tag: str) -> std::vec<cfield_decl>? {
         }
         i = stop + 1;
     }
-    return move out;
+    return out;
 }
 
 // `{ A, B = 5, ... }`: each constant goes into consts and env
@@ -1016,7 +1016,7 @@ attach fn declarator(this: cparser&, base: ctype) -> cdecl? {
             return null;
         }
         this.i = after;
-        return move r;
+        return r;
     }
     val name = this.peek_id();
     if (name != null) {
@@ -1081,7 +1081,7 @@ attach fn suffixes(this: cparser&, ty: ctype) -> ctype? {
         }
         return ctype::FUNC(move ps, bx(move ret), variadic);
     }
-    return move ty;
+    return ty;
 }
 
 // is this parameter list just `(void)`?
@@ -1106,7 +1106,7 @@ attach fn params(this: cparser&, variadic: bool&) -> std::vec<cparam>? {
     val toks = this.t[open + 1..close];
     var out: std::vec<cparam> = {};
     if (toks.len == 0 || only_void(toks)) {
-        return move out;
+        return out;
     }
     for (part) in split_top(toks, ",").items() {
         if (part.len == 1 && is_p(&part[0], "...")) {
@@ -1133,7 +1133,7 @@ attach fn params(this: cparser&, variadic: bool&) -> std::vec<cparam>? {
     for (p&) in out.items() {
         put(&this.d.last_params, p.name);
     }
-    return move out;
+    return out;
 }
 
 // one top-level declaration (the tokens up to its `;`, or up to a function body)
@@ -1222,7 +1222,7 @@ fn split_top(t: ctok[..], sep: str) -> std::vec<ctok[..]> {
         }
     }
     put(&out, t[s..t.len]);
-    return move out;
+    return out;
 }
 
 // end of the declaration starting at i: its `;`, or the `{` of a function body
@@ -1440,7 +1440,7 @@ fn real_file(path: str) -> std::string? {
     val r = realpath(p.c_str(), null) ?? return null;
     val out = S(@cast<str>(@slice(@cast<u8*>(r), strlen(r))));
     free(@cast<void*>(r));
-    return move out;
+    return out;
 }
 
 // the --cc arguments the preprocessor needs too, to find and read headers: -I, -D, -U (joined to
@@ -1461,7 +1461,7 @@ fn preprocessor_flags(cc_args: std::vec<str>&) -> std::vec<str> {
         }
         i += 1;
     }
-    return move out;
+    return out;
 }
 
 // the structs with members Volt can't read (a bitfield, a type it can't parse): libclang says where
@@ -1613,7 +1613,7 @@ attach fn import_headers(this: checker&, headers: std::vec<std::string>&, dir: s
     parse_decls(dtext, &d);
     try this.c_macros(&d, mtext);
     this.c_items(&d, &res, span);
-    return move res;
+    return res;
 }
 
 // reads C declarations (preprocessed) into d; function bodies are skipped

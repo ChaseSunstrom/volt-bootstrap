@@ -29,7 +29,7 @@ fn start(classpath: str) -> java_error!vm {
         return java_error::THROWN(std::string::from("JNI_CreateJavaVM failed (is a JVM already running?)"));
     }
     out.env = @cast<jni::JNIEnv*>(envp);
-    return move out;
+    return out;
 }
 
 attach fn delete(this: vm&) -> void {

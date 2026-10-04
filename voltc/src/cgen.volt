@@ -249,7 +249,7 @@ attach fn value_deps(this: cgen&, t: u32) -> std::vec<u32> {
         },
         default => {},
     }
-    return move out;
+    return out;
 }
 
 // " T name;" (nothing for a void member)
@@ -2203,7 +2203,7 @@ attach fn c_files(this: checker&) -> std::vec<c_file> {
         prog.append("\"\n");
     }
     put(&files, { name: S("program.c"), text: move prog });
-    return move files;
+    return files;
 }
 
 // the fns the C needs: everything reachable from what's visible outside (main, exported fns),
@@ -2258,7 +2258,7 @@ fn reachable(c: checker&) -> std::map<u32, bool> {
             c.ir.kids(n, &nodes_todo);
         }
     }
-    return move live;
+    return live;
 }
 
 // a source path's file name without directories or .volt, kept to what a file name may hold
@@ -2287,5 +2287,5 @@ attach fn c_unit(this: checker&) -> std::string {
         out.append(files.at(k).text.as_str());
         out.push('\n');
     }
-    return move out;
+    return out;
 }

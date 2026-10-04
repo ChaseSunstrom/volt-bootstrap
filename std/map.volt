@@ -267,7 +267,7 @@ attach fn copy(this: std::map<K, V, A>&) -> std::map<K, V, A> {
             out.put(copy @slice(this.keys, this.cap)[i], copy @slice(this.vals, this.cap)[i]);
         }
     }
-    return move out;
+    return out;
 }
 
 // deletes every key and value, then frees the arrays

@@ -37,7 +37,7 @@ namespace json {
         if (at != text.len) {
             return json_error::SYNTAX;
         }
-        return move v;
+        return v;
     }
 
     internal fn skip_space(t: str, at: usize&) -> void {
@@ -198,7 +198,7 @@ namespace json {
             val c = t[*at];
             if (c == '"') {
                 *at += 1;
-                return move out;
+                return out;
             }
             if (c < 0x20) {
                 return json_error::SYNTAX;
@@ -251,7 +251,7 @@ namespace json {
     attach fn text(this: value<A>&, allocator: B = {}) -> std::string<B> {
         var out = std::string::new_in(move allocator);
         this.write(&out);
-        return move out;
+        return out;
     }
 
     // append the value to out as compact JSON text

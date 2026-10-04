@@ -15,13 +15,13 @@ fn num(v: i128) -> std::string {
     } else {
         append_u128(&s, @cast<u128>(v));
     }
-    return move s;
+    return s;
 }
 
 fn unum(v: u64) -> std::string {
     var s: std::string = {};
     s.append_uint(v);
-    return move s;
+    return s;
 }
 
 // f with each {} replaced by the next part
@@ -73,7 +73,7 @@ fn fmt_parts(f: str, parts: std::vec<std::string>&) -> std::string {
             i += 1;
         }
     }
-    return move out;
+    return out;
 }
 
 // an error at sp (fails: the same with a str message)
@@ -177,7 +177,7 @@ fn hex8(v: u32) -> std::string {
         shift -= 4;
         s.push(hex_digit(@cast<u64>((v >> shift) & 15)));
     }
-    return move s;
+    return s;
 }
 
 // ---------- i128 arithmetic that reports overflow instead of trapping (comptime) ----------

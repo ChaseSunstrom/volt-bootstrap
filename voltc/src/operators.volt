@@ -683,7 +683,7 @@ attach fn assign(this: checker&, op: binop?, le: expr&, re: expr&, span: span) -
         if (l.own != null && l.root != null) {
             e = this.var_fix(move e, l.root ?? "", le.span);
         }
-        return move e;
+        return e;
     }
     this.note_write(&l);
     this.note_mut(&l);
@@ -723,7 +723,7 @@ attach fn assign(this: checker&, op: binop?, le: expr&, re: expr&, span: span) -
         this.note_store(&l, &rr);
         val res = this.store(l, rr, re.span);
         this.cx.reassigning = saved;
-        return move res;
+        return res;
     }
     val bop = op ?? binop::ADD;
     val r = try this.expr(re, l.ty);

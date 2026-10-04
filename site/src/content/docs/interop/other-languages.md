@@ -109,7 +109,7 @@ use std::string;
 export fn greet(name: str) -> std::string {
     var s = std::string::from("hello, ");
     s.append(name);
-    return move s;
+    return s;
 }
 
 export struct counter {

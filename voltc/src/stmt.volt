@@ -52,7 +52,7 @@ attach fn block_code(this: checker&, b: block&) -> compile_error!code {
     put(&this.cx.scopes, {});
     val r = this.block_scoped(b);
     this.cx.scopes.pop();
-    return move r;
+    return r;
 }
 
 // block_code's body: the statements, then the scope's exits unless it diverges
@@ -402,7 +402,7 @@ attach fn scope_exit_code(this: checker&, from: usize, to: usize, is_err: bool) 
     val r = this.scope_exit_inner(from, to, is_err);
     this.cx.keeping = keeping;
     this.cx.no_suspend -= 1;
-    return move r;
+    return r;
 }
 
 attach fn scope_exit_inner(this: checker&, from: usize, to: usize, is_err: bool) -> compile_error!std::vec<u32> {
@@ -425,7 +425,7 @@ attach fn scope_exit_inner(this: checker&, from: usize, to: usize, is_err: bool)
         }
         try r;
     }
-    return move out;
+    return out;
 }
 
 // append the code of a scope's exits, last registered first; errdefers only when is_err
@@ -754,7 +754,7 @@ attach fn cond_drops(this: checker&, mark: usize) -> compile_error!std::vec<u32>
         }
         i += 1;
     }
-    return move out;
+    return out;
 }
 
 // put a narrowed local (from cond), if any, in a scope of its own; pop_narrow drops it
@@ -820,7 +820,7 @@ attach fn for_expr(this: checker&, f: for_loop&, want: u32?, span: span) -> comp
     put(&this.cx.scopes, {});
     val r = this.for_inner(f, want, span);
     this.cx.scopes.pop();
-    return move r;
+    return r;
 }
 
 // A runtime for loop, in a scope of its own. An accumulator (`[var acc = init]`) is declared
@@ -1167,7 +1167,7 @@ attach fn for_body(this: checker&, f: for_loop&, elem_ty: u32, elem: u32, index:
     for (x&) in (try this.scope_exit_code(round, round, false)).items() {
         put(&out, *x);
     }
-    return move out;
+    return out;
 }
 
 // changing v in place (or taking its address): its local, if a var parameter, needs the var

@@ -35,7 +35,7 @@ fn clang_resource_dir() -> std::string? {
     while (out.len() > 0 && (*out.bytes.at(out.len() - 1) == '\n' || *out.bytes.at(out.len() - 1) == ' ')) {
         out.bytes.pop();
     }
-    return move out;
+    return out;
 }
 
 // `text` parsed as the file `name`, with args (-x c++, -std=..., -I...); declarations only
@@ -74,7 +74,7 @@ attach fn first_error(this: clang_tu&) -> std::string? {
         if (sev >= 3) {
             val msg = cx_str(clang::clang_formatDiagnostic(d, clang::clang_defaultDiagnosticDisplayOptions()));
             clang::clang_disposeDiagnostic(d);
-            return move msg;
+            return msg;
         }
         clang::clang_disposeDiagnostic(d);
     }
@@ -93,7 +93,7 @@ fn cx_str(s: clang::CXString) -> std::string {
         out = S(@cast<str>(@slice(@cast<u8*>(c), strlen(c))));
     }
     clang::clang_disposeString(s);
-    return move out;
+    return out;
 }
 
 fn cursor_name(c: clang::CXCursor) -> std::string {
@@ -127,7 +127,7 @@ attach fn included_files(this: clang_tu&) -> std::vec<std::string> {
     if (this.tu != null) {
         clang::clang_getInclusions(this.tu, volt_clang_inclusion, @cast<void*>(&out));
     }
-    return move out;
+    return out;
 }
 
 // the file a cursor is in (empty for none)
@@ -144,7 +144,7 @@ fn cursor_file(c: clang::CXCursor) -> std::string {
 fn children(c: clang::CXCursor) -> std::vec<clang::CXCursor> {
     var out: std::vec<clang::CXCursor> = {};
     clang::clang_visitChildren(c, volt_clang_collect, @cast<void*>(&out));
-    return move out;
+    return out;
 }
 
 // ---------- C struct layouts ----------

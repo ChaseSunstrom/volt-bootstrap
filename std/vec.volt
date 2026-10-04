@@ -125,7 +125,7 @@ attach fn remove(this: std::vec<T, A>&, i: usize) -> T {
         @write(&xs[j - 1], @read(&xs[j]));
     }
     this.len -= 1;
-    return move out;
+    return out;
 }
 
 // take element i out and put the last element in its place: O(1), but changes the order
@@ -140,7 +140,7 @@ attach fn swap_remove(this: std::vec<T, A>&, i: usize) -> T {
     if (i != this.len) {
         @write(&xs[i], @read(&xs[this.len]));
     }
-    return move out;
+    return out;
 }
 
 // delete the elements from index n on (nothing when n >= len)
@@ -240,5 +240,5 @@ attach fn copy(this: std::vec<T, A>&) -> std::vec<T, A> {
     for (x&) in @slice(this.ptr, this.len) {
         out.push(copy *x) catch @panic("out of memory");
     }
-    return move out;
+    return out;
 }

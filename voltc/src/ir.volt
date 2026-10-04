@@ -375,14 +375,14 @@ attach fn panic(this: ir_prog&, msg: str, loc: str) -> u32 {
 fn nodes(a: u32) -> std::vec<u32> {
     var v: std::vec<u32> = {};
     put(&v, a);
-    return move v;
+    return v;
 }
 
 fn nodes2(a: u32, b: u32) -> std::vec<u32> {
     var v: std::vec<u32> = {};
     put(&v, a);
     put(&v, b);
-    return move v;
+    return v;
 }
 
 fn nodes3(a: u32, b: u32, c: u32) -> std::vec<u32> {
@@ -390,7 +390,7 @@ fn nodes3(a: u32, b: u32, c: u32) -> std::vec<u32> {
     put(&v, a);
     put(&v, b);
     put(&v, c);
-    return move v;
+    return v;
 }
 
 // the nodes directly under n, in evaluation order

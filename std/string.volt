@@ -14,7 +14,7 @@ struct string {
 attach fn from(static this: std::string, s: str, allocator: A = {}) -> std::string<A> {
     var out: std::string<A> = { bytes: { allocator: move allocator } };
     out.append(s);
-    return move out;
+    return out;
 }
 
 // an empty string that allocates from allocator

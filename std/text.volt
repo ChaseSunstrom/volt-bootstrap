@@ -46,7 +46,7 @@ namespace text {
             }
             out.append(p);
         }
-        return move out;
+        return out;
     }
 
     // the parts with sep between them (owned strings, like std::fs::list_dir gives)
@@ -59,7 +59,7 @@ namespace text {
             }
             out.append(p.as_str());
         }
-        return move out;
+        return out;
     }
 
     // whether what starts at s[i] (which has room for it): the first byte first, since most places
@@ -206,7 +206,7 @@ attach fn split(this: str&, sep: str, allocator: A = {}) -> std::vec<str, A> {
             out.push(s[i..i + n]) catch @panic("out of memory");
             i += n;
         }
-        return move out;
+        return out;
     }
     var start: usize = 0;
     var i: usize = 0;
@@ -220,7 +220,7 @@ attach fn split(this: str&, sep: str, allocator: A = {}) -> std::vec<str, A> {
         }
     }
     out.push(s[start..s.len]) catch @panic("out of memory");
-    return move out;
+    return out;
 }
 
 // the lines, without their \n or \r\n (a final newline doesn't start another line)
@@ -242,7 +242,7 @@ attach fn lines(this: str&, allocator: A = {}) -> std::vec<str, A> {
     if (start < s.len) {
         out.push(s[start..s.len]) catch @panic("out of memory");
     }
-    return move out;
+    return out;
 }
 
 // the words: the parts between runs of ASCII whitespace
@@ -263,7 +263,7 @@ attach fn words(this: str&, allocator: A = {}) -> std::vec<str, A> {
             out.push(s[start..i]) catch @panic("out of memory");
         }
     }
-    return move out;
+    return out;
 }
 
 // ---------- new text ----------
@@ -275,7 +275,7 @@ attach fn replace(this: str&, from: str, to: str, allocator: A = {}) -> std::str
     var out = std::string::new_in(move allocator);
     if (from.len == 0) {
         out.append(s);
-        return move out;
+        return out;
     }
     var start: usize = 0;
     var i: usize = 0;
@@ -290,7 +290,7 @@ attach fn replace(this: str&, from: str, to: str, allocator: A = {}) -> std::str
         }
     }
     out.append(s[start..s.len]);
-    return move out;
+    return out;
 }
 
 // n copies, one after another
@@ -300,7 +300,7 @@ attach fn repeat(this: str&, n: usize, allocator: A = {}) -> std::string<A> {
     for (i) in 0..n {
         out.append(*this);
     }
-    return move out;
+    return out;
 }
 
 // ASCII letters in upper case (other bytes as they are)
@@ -310,7 +310,7 @@ attach fn to_upper(this: str&, allocator: A = {}) -> std::string<A> {
     for (b) in *this {
         out.push(b.to_upper());
     }
-    return move out;
+    return out;
 }
 
 // ASCII letters in lower case
@@ -320,7 +320,7 @@ attach fn to_lower(this: str&, allocator: A = {}) -> std::string<A> {
     for (b) in *this {
         out.push(b.to_lower());
     }
-    return move out;
+    return out;
 }
 
 // equal but for the case of ASCII letters?
@@ -1815,7 +1815,7 @@ attach fn chars(this: str&, allocator: A = {}) -> std::vec<u32, A> {
             i += 1;
         }
     }
-    return move out;
+    return out;
 }
 
 // how many bytes the character at s[i] takes (1 when a valid one doesn't start there)

@@ -460,7 +460,7 @@ namespace net {
         } else {
             posix::freeaddrinfo(list);
         }
-        return move out;
+        return out;
     }
 
     // ---------- TCP ----------
@@ -541,7 +541,7 @@ namespace net {
                 last = e;
                 continue;
             };
-            return move s;
+            return s;
         }
         return last;
     }
@@ -641,7 +641,7 @@ namespace net {
         }
         out.push(':');
         out.append_uint(@cast<u64>(this.port));
-        return move out;
+        return out;
     }
 
     // set SO_RCVTIMEO or SO_SNDTIMEO (null: wait as long as it takes)
@@ -710,7 +710,7 @@ attach fn read_all(this: std::net::tcp_stream&, allocator: A = {}) -> std::net::
     loop {
         val n = try this.read(buf[..]);
         if (n == 0) {
-            return move out;
+            return out;
         }
         out.append(@cast<str>(buf[0..n]));
     }

@@ -547,7 +547,7 @@ attach fn seq_vals(this: checker&, vals: std::vec<tval>&) -> std::vec<u32> {
     }
     var pre: std::vec<u32> = {};
     if (impure < 2) {
-        return move pre;
+        return pre;
     }
     for (v&) in vals.items() {
         if (!v.pure && v.ty != VOID && v.ty != NEVER) {
@@ -557,7 +557,7 @@ attach fn seq_vals(this: checker&, vals: std::vec<tval>&) -> std::vec<u32> {
             v.pure = true;
         }
     }
-    return move pre;
+    return pre;
 }
 
 // ---------- expressions ----------
@@ -741,7 +741,7 @@ attach fn path_expr(this: checker&, p: path&, want: u32?, span: span) -> compile
                 if (at) {
                     return with_label(move e, *at, S("moved here"));
                 }
-                return move e;
+                return e;
             }
             var v = vpure(l.ty, l.c);
             v.lv = true;

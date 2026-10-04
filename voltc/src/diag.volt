@@ -122,7 +122,7 @@ fn span_loc(files: std::vec<source_file>&, sp: span) -> std::string {
     s.append_uint(@cast<u64>(p.line));
     s.push(':');
     s.append_uint(@cast<u64>(p.col));
-    return move s;
+    return s;
 }
 
 fn kind_of_diag(d: diag&) -> str {
@@ -341,7 +341,7 @@ fn render_human(files: std::vec<source_file>&, d: diag&, color: bool) -> std::st
             out.append(rest);
         }
     }
-    return move out;
+    return out;
 }
 
 // a JSON string literal
@@ -414,7 +414,7 @@ fn render_json(files: std::vec<source_file>&, d: diag&) -> std::string {
         json_str(&out, d.notes.at(i).as_str());
     }
     out.append("]}");
-    return move out;
+    return out;
 }
 
 fn render_diag(files: std::vec<source_file>&, d: diag&, format: u8, color: bool) -> std::string {
@@ -430,7 +430,7 @@ fn render_diag(files: std::vec<source_file>&, d: diag&, format: u8, color: bool)
         s.append(kind_of_diag(d));
         s.append(": ");
         s.append(d.msg.as_str());
-        return move s;
+        return s;
     }
     return render_human(files, d, color);
 }
@@ -469,7 +469,7 @@ fn report(files: std::vec<source_file>&, diags: std::vec<diag>&, format: u8, col
         paint(&out, color, BOLD, rest.as_str());
         out.push('\n');
     }
-    return move out;
+    return out;
 }
 
 // `: msg` in bold; a type mismatch's message (expected A, found B / mismatched types A and B) has
@@ -577,7 +577,7 @@ fn type_diff(e: compile_error) -> compile_error {
     match (r) {
         .AT(d&) => { d.diff = true; },
     }
-    return move r;
+    return r;
 }
 
 // a compile_error with a secondary span labelled msg
@@ -586,7 +586,7 @@ fn with_label(e: compile_error, sp: span, msg: std::string) -> compile_error {
     match (r) {
         .AT(d&) => { put(&d.labels, { span: sp, msg: move msg }); },
     }
-    return move r;
+    return r;
 }
 
 // a compile_error with a `help: msg` line
@@ -599,5 +599,5 @@ fn with_help(e: compile_error, msg: std::string) -> compile_error {
             put(&d.notes, move line);
         },
     }
-    return move r;
+    return r;
 }

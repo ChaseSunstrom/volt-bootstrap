@@ -800,7 +800,7 @@ attach fn in_env_expr_as(this: checker&, e: u32, x: expr&, t: u32) -> compile_er
     val r = this.expr_as(x, t);
     this.cx.scopes.pop();
     this.cx.env = saved;
-    return move r;
+    return r;
 }
 
 // k = 0; loop { if (k >= n) break; body; k += 1; }
@@ -814,7 +814,7 @@ attach fn counted_loop(this: checker&, k: local_ref, n: u32, body: u32) -> std::
     put(&out, this.ir.decl(k.id, this.ir.int(0, USIZE)));
     put(&out, this.ir.node(ir_kind::LOOP(this.ir.block(move inner)), VOID));
     put(&out, this.ir.label_at(end));
-    return move out;
+    return out;
 }
 
 // `lo..hi` as a range value (`for (i) in lo..hi` doesn't come here); a constant range wanted as an

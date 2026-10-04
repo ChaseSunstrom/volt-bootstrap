@@ -340,7 +340,7 @@ attach fn parse_file(this: parser&) -> compile_error!std::vec<item> {
     if (this.errors.len > 0) {
         return compile_error::AT(copy *this.errors.at(0));
     }
-    return move items;
+    return items;
 }
 
 // items up to the end of the file, or up to `}` in a block. An item with an error is recorded and
@@ -358,7 +358,7 @@ attach fn items(this: parser&, in_block: bool) -> std::vec<item> {
         };
         put(&items, move it);
     }
-    return move items;
+    return items;
 }
 
 // after an error in the item starting at token `start`: skip to the next line that starts at that
@@ -642,7 +642,7 @@ attach fn item_block(this: parser&) -> compile_error!std::vec<item> {
     if (!this.eat("}")) {
         return this.unexpected("'}'");
     }
-    return move items;
+    return items;
 }
 
 // @attributes([@inline, @opt(3)])
@@ -668,7 +668,7 @@ attach fn attributes(this: parser&) -> compile_error!std::vec<expr> {
         }
     }
     try this.expect(")");
-    return move out;
+    return out;
 }
 
 // `<T: type, N: usize = 4, Args: type...>`; `+` joins bounds, and a `...` bound makes the param a pack
@@ -702,7 +702,7 @@ attach fn generic_params(this: parser&) -> compile_error!std::vec<generic_param>
         }
     }
     try this.expect(">");
-    return move out;
+    return out;
 }
 
 // `<...>` after a name that is generic somewhere, in an expression: if it doesn't parse as
@@ -713,7 +713,7 @@ attach fn try_generic_args(this: parser&) -> std::vec<garg>? {
         this.pos = save;
         return null;
     };
-    return move a;
+    return a;
 }
 
 // `.name<...>`'s generic args: a name the program declares generic takes them; any other only when a
@@ -749,7 +749,7 @@ attach fn generic_args(this: parser&) -> compile_error!std::vec<garg> {
         }
     }
     try this.expect(">");
-    return move out;
+    return out;
 }
 
 // a type, if one parses cleanly up to `,`/closer
@@ -776,7 +776,7 @@ attach fn value_garg(this: parser&, pos: usize, closer: str) -> compile_error!ga
 attach fn generic_arg(this: parser&, closer: str) -> compile_error!garg {
     val save = this.pos;
     val g = this.type_garg(closer) ?? return this.value_garg(save, closer);
-    return move g;
+    return g;
 }
 
 // the part after `fn`; `item` fills in the modifiers
@@ -877,7 +877,7 @@ attach fn type_ext(this: parser&, stop_at_pack: bool) -> compile_error!ty {
     } else {
         val t = try this.type_no_err(stop_at_pack, false);
         if (!this.eat("!")) {
-            return move t;
+            return t;
         }
         val rhs = try this.err_payload();
         val sp = start.to(rhs.span);
@@ -891,7 +891,7 @@ attach fn err_payload(this: parser&) -> compile_error!ty {
     val start = this.span();
     val a = try this.type_atom();
     if (!this.eat("!")) {
-        return move a;
+        return a;
     }
     val rhs = try this.err_payload();
     val sp = start.to(rhs.span);
@@ -1007,7 +1007,7 @@ attach fn type_suffixes(this: parser&, first: ty, start: span, stop_at_pack: boo
                 cur = { kind: type_kind::ARRAY(bx(move cur), bx(move n)), span: start.to(this.prev_span()) };
             }
         } else {
-            return move cur;
+            return cur;
         }
     }
 }

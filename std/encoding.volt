@@ -75,7 +75,7 @@ namespace base64 {
                 out.push('=');
             }
         }
-        return move out;
+        return out;
     }
 
     // the 6-bit value of c in alphabet, or 64 when it isn't there
@@ -134,7 +134,7 @@ namespace base64 {
         if ((acc & (0xff >> (8 - bits))) != 0) {
             return decode_error::BAD_INPUT;
         }
-        return move out;
+        return out;
     }
 }
 
@@ -155,7 +155,7 @@ namespace hex {
             out.push(DIGITS[b >> 4]);
             out.push(DIGITS[b & 15]);
         }
-        return move out;
+        return out;
     }
 
     <A: std::mem::allocator = std::mem::default_allocator>
@@ -181,7 +181,7 @@ namespace hex {
             out.push((hi << 4) | lo) catch @panic("out of memory");
             i += 2;
         }
-        return move out;
+        return out;
     }
 
     // a hex digit's value, or 16 for anything else

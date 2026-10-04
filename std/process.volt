@@ -282,7 +282,7 @@ namespace process {
             if (got) {
                 val out = std::string::from(@cast<str>(@slice(buf, strlen(@cast<cstr>(buf)))), copy allocator);
                 allocator.free<u8>(buf, size);
-                return move out;
+                return out;
             }
             allocator.free<u8>(buf, size);
             if (platform::errno() != 34) { // ERANGE: a bigger buffer helps; nothing else does
@@ -427,7 +427,7 @@ namespace process {
         var r: output<A> = { code: 0, out: std::string::new_in(copy allocator), err: std::string::new_in(move allocator) };
         pump(inp[1], outp[0], errp[0], input, &r);
         r.code = try wait_for(pid);
-        return move r;
+        return r;
     }
 
     // feed the child its input while collecting its stdout and stderr, all at once: a child
@@ -559,7 +559,7 @@ namespace process {
             }
             out.push('"');
         }
-        return move out;
+        return out;
     }
 
     // Windows: start argv (CreateProcessA searches PATH) with these as its stdin, stdout and stderr
@@ -741,6 +741,6 @@ namespace process {
         } // the threads are joined here
         r.err.append(errs.as_str());
         r.code = win_wait(h);
-        return move r;
+        return r;
     }
 }

@@ -173,7 +173,7 @@ fn show(v: T&) -> std::string {
         },
         default => {},
     }
-    return move out;
+    return out;
 }
 
 fn main() -> void {
@@ -299,7 +299,7 @@ attach fn field_names(this: T&) -> std::string {
         },
         default => {},
     }
-    return move out;
+    return out;
 }
 
 @attributes([@derive(audit::fields)])
@@ -674,7 +674,7 @@ fn keys(v: T&) -> std::string {
         },
         default => {},
     }
-    return move out;
+    return out;
 }
 
 fn main() -> void {

@@ -221,7 +221,7 @@ fn parse_cli() -> cli {
     if (c.target != null && (c.cmd == "run" || c.cmd == "lib")) {
         die(fmt("voltc {} doesn't take --target: build the program, then load it on the board (or qemu)", S(c.cmd)));
     }
-    return move c;
+    return c;
 }
 
 // the names in a directory, or none when it isn't one
@@ -243,7 +243,7 @@ fn list_dir(path: str) -> std::vec<std::string>? {
         }
     }
     sys::closedir(d);
-    return move out;
+    return out;
 }
 
 // sorts by bytes (an insertion sort: a package has few files)
@@ -276,7 +276,7 @@ fn volt_files(path: str) -> std::vec<std::string> {
     val top = list_dir(path);
     if (top == null) {
         put(&out, S(path));
-        return move out;
+        return out;
     }
     put(&dirs, S(path));
     while (dirs.len > 0) {
@@ -294,7 +294,7 @@ fn volt_files(path: str) -> std::vec<std::string> {
         }
     }
     sort_strings(&out);
-    return move out;
+    return out;
 }
 
 // the std package: --std, $VOLT_STD, or a std/ directory next to (or above) voltc: installed
@@ -332,7 +332,7 @@ fn find_std(c: cli&) -> std::string? {
                 if (r) {
                     return S(@cast<str>(@slice(@cast<u8*>(r), strlen(r))));
                 }
-                return move p;
+                return p;
             }
         }
     }
@@ -407,13 +407,13 @@ fn compile_lib(c: cli&, first: sources&, s: sources&) -> std::box<checker> {
     val chk = compile_with(c, first, null);
     if (!c.shared && !c.standalone) {
         // a library for Volt programs: they call its fns as Volt does
-        return move chk;
+        return chk;
     }
     val plan = chk.shims(pkg) catch |e| {
         fail_diag(c, &first.files, &e);
     };
     if (plan.text.len() == 0) {
-        return move chk;
+        return chk;
     }
     var shim: shim_src = { pkg: pkg, text: copy plan.text, unexport: copy plan.unexport };
     return compile_with(c, s, &shim);
@@ -594,7 +594,7 @@ fn compile_with(c: cli&, s: sources&, shim: shim_src*) -> std::box<checker> {
             die(copy e);
         }
     }
-    return move chk;
+    return chk;
 }
 
 // print a parse error in the canonical form: (error @lo:hi "msg"), with " as '
@@ -1081,7 +1081,7 @@ fn cpp_object(chk: checker&, c: cli&, dir: str) -> std::string? {
     if (r.code != 0) {
         die(fmt("the C++ compiler failed on the wrappers for use cpp:\n{}", copy r.err));
     }
-    return move obj;
+    return obj;
 }
 
 // the runtime unit `text` compiled for c's settings: from Volt's cache (runtime/rt-<hash>.o) when
