@@ -308,6 +308,7 @@ impl Checker {
         let is_eu = matches!(self.t.get(ret), Ty::ErrUnion(..));
         let val = match v {
             Some(e) => {
+                self.escapes(e, ret)?;
                 self.cx.exiting += 1;
                 let r = self.expr(e, Some(ret)).and_then(|v| self.take_into(v, ret, e.span));
                 self.cx.exiting -= 1;
@@ -336,6 +337,43 @@ impl Checker {
             v => self.fn_exit(v.map(|v| v.c), &defers),
         };
         Ok(Val::new(NEVER, code))
+    }
+
+    /// what a return can't hand out, since it's gone once the function returns: a reference to a local
+    /// (a field or element of one, a parameter taken by value), or a closure as a fn value (a fn
+    /// value borrows its closure); also inside a struct, tuple or array literal it returns
+    fn escapes(&self, e: &Expr, want: TyId) -> Res<()> {
+        match &e.kind {
+            ExprKind::Unary(UnOp::Addr, x) => match self.frame_root(x) {
+                Some(n) => err(e.span, format!("can't return a reference to '{n}': it's this function's own, gone once it returns (return the value, or take what holds it by reference)")),
+                None => Ok(()),
+            },
+            ExprKind::Cast(x, _) | ExprKind::Move(x) => self.escapes(x, want),
+            ExprKind::Literal(items) => items.iter().try_for_each(|(_, x)| self.escapes(x, VOID)),
+            ExprKind::Tuple(xs) => xs.iter().try_for_each(|x| self.escapes(x, VOID)),
+            ExprKind::Closure { .. } if matches!(self.t.get(want), Ty::FnVal(..)) => err(e.span, Self::CLOSURE_ESCAPES),
+            ExprKind::Path(p) if p.is_single() && matches!(self.t.get(want), Ty::FnVal(..)) => match self.lookup_local(p.last()) {
+                Some(l) if l.own.is_some() && matches!(self.t.get(l.ty), Ty::Closure(_)) => err(e.span, Self::CLOSURE_ESCAPES),
+                _ => Ok(()),
+            },
+            _ => Ok(()),
+        }
+    }
+
+    const CLOSURE_ESCAPES: &'static str = "can't return a closure as a fn value: a fn value borrows its closure, which is gone once this function returns (call it here, or keep the closure where the caller can)";
+
+    /// the local of this call whose storage a place is in: a variable or a parameter taken by value
+    /// (not a reference, pointer or slice one, which point elsewhere, nor a closure's capture)
+    fn frame_root(&self, x: &Expr) -> Option<String> {
+        match &x.kind {
+            ExprKind::Path(p) if p.is_single() => {
+                let l = self.lookup_local(p.last())?;
+                let elsewhere = matches!(self.t.get(l.ty), Ty::Ref(_) | Ty::Ptr(_) | Ty::Slice(_) | Ty::VoidPtr | Ty::CStr | Ty::Str);
+                (l.own.is_some() && !elsewhere).then(|| p.last().to_string())
+            }
+            ExprKind::Field(b, _, None) | ExprKind::Index(b, _) => self.frame_root(b),
+            _ => None,
+        }
     }
 
     /// the loop a break/continue targets: the one with the label, else the innermost loop (a block

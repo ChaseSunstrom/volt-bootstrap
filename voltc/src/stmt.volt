@@ -477,6 +477,94 @@ attach fn has_errdefer(this: checker&, from: usize) -> bool {
     return false;
 }
 
+// what a return can't hand out, since it's gone once the function returns: a reference to a local (a
+// field or element of one, a parameter taken by value), or a closure as a fn value (a fn value
+// borrows its closure); also inside a struct, tuple or array literal it returns
+attach fn escapes(this: checker&, e: expr&, want: u32) -> compile_error!void {
+    var fn_val = false;
+    match (*this.t.get(want)) {
+        .FN_VAL(ps, r) => { fn_val = true; },
+        default => {},
+    }
+    match (e.kind) {
+        .UNARY(op, x) => {
+            if (op == unop::ADDR) {
+                val n = this.frame_root(x);
+                if (n) {
+                    return fail(e.span, fmt("can't return a reference to '{}': it's this function's own, gone once it returns (return the value, or take what holds it by reference)", S(n)));
+                }
+            }
+        },
+        .CAST(x, t) => { return this.escapes(x, want); },
+        .MOVE(x) => { return this.escapes(x, want); },
+        .LITERAL(items&) => {
+            for (it&) in items.items() {
+                try this.escapes(&it.value, VOID);
+            }
+        },
+        .TUPLE(xs&) => {
+            for (x&) in xs.items() {
+                try this.escapes(x, VOID);
+            }
+        },
+        .CLOSURE(c&) => {
+            if (fn_val) {
+                return fails(e.span, CLOSURE_ESCAPES);
+            }
+        },
+        .PATH(p&) => {
+            if (fn_val && p.is_single()) {
+                val l = this.lookup_local(p.segs.at(0).name);
+                if (l) {
+                    if (l.own != null) {
+                        match (*this.t.get(l.ty)) {
+                            .CLOSURE(id) => { return fails(e.span, CLOSURE_ESCAPES); },
+                            default => {},
+                        }
+                    }
+                }
+            }
+        },
+        default => {},
+    }
+}
+
+val CLOSURE_ESCAPES: str = "can't return a closure as a fn value: a fn value borrows its closure, which is gone once this function returns (call it here, or keep the closure where the caller can)";
+
+// the local of this call whose storage a place is in: a variable or a parameter taken by value (not a
+// reference, pointer or slice one, which point elsewhere, nor a closure's capture)
+attach fn frame_root(this: checker&, x: expr&) -> str? {
+    match (x.kind) {
+        .PATH(p&) => {
+            if (!p.is_single()) {
+                return null;
+            }
+            val name = p.segs.at(0).name;
+            val l = this.lookup_local(name) ?? return null;
+            if (l.own == null) {
+                return null;
+            }
+            match (*this.t.get(l.ty)) {
+                .REF(t) => { return null; },
+                .PTR(t) => { return null; },
+                .SLICE(t) => { return null; },
+                .VOIDPTR => { return null; },
+                .CSTR => { return null; },
+                .STR => { return null; },
+                default => { return name; },
+            }
+        },
+        .FIELD(b, n, g) => {
+            if (g != null) {
+                return null;
+            }
+            return this.frame_root(b);
+        },
+        .INDEX(b, i) => { return this.frame_root(b); },
+        default => { return null; },
+    }
+}
+
 // `return`: the value moves out, then every scope's exits run (errdefers too when an error union
 // return value holds an error)
 attach fn ret(this: checker&, v: expr*, span: span) -> compile_error!tval {
@@ -493,6 +581,7 @@ attach fn ret(this: checker&, v: expr*, span: span) -> compile_error!tval {
     var value: tval? = null;
     if (v) {
         val e = v;
+        try this.escapes(e, rt);
         this.cx.exiting += 1;
         val x = this.expr(e, rt) catch |er| {
             this.cx.exiting -= 1;

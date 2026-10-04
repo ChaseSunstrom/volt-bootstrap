@@ -111,6 +111,22 @@ fn main() -> void {
 // error: 'p' is a val, and it's changed through what x_of returns: declare it with var
 ```
 
+A function can return a reference to what its caller lent it, but not to its own locals or the
+parameters it took by value: they're gone once it returns. Returning `&x`, a field or element of
+`x`, or a struct, tuple or array holding one, is an error:
+
+```volt fail
+fn biggest() -> i32& {
+    var best = 0;
+    return &best;
+}
+
+fn main() -> void {
+    val b = biggest();
+}
+// error: can't return a reference to 'best'
+```
+
 A reference keeps where it points when it's stored in a struct, tuple or array, passed or returned
 inside one (or inside an error union), or assigned to a variable later:
 

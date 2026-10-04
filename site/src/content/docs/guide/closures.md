@@ -79,7 +79,10 @@ A `fn` value borrows its closure. A closure literal written where a `fn` value i
 [temporary](/volt-bootstrap/guide/ownership/#temporaries): it's deleted, with what it captured, at
 the end of the statement, or when the `val` or `var` it initializes goes. So `f = |move a| ...;`
 leaves `f` pointing at a deleted closure after that statement. To keep a `fn` value longer (in a
-field or variable assigned later), store the closure in a variable first.
+field or variable assigned later), store the closure in a variable first. For the same reason a
+function can't return a closure (written in the `return`, or kept in a local) as a `fn` value: it's
+an error, since the closure is gone once the function returns. A plain function's name is a `fn`
+value it can return.
 
 ```volt
 use std::io;
