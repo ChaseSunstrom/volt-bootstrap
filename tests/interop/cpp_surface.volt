@@ -31,4 +31,6 @@ fn main() -> void {
     val sb = cpp::kit::scale_by(3);
     val btn = cpp::kit::Button::new();
     std::println("{} {}", sb.call(5), btn.on().call(8));
+    var x = 7;
+    std::println("{} {}", cpp::kit::deref_or<i32>(&x, 0), cpp::kit::hold(5).value);
 }

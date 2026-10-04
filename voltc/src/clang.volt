@@ -111,6 +111,35 @@ extern "C" fn volt_clang_collect(c: clang::CXCursor, parent: clang::CXCursor, da
     return 1; // CXChildVisit_Continue
 }
 
+// the visitor behind included_files: the name of each file the main file includes itself (its
+// inclusion stack is one deep) into the vec `data` points to
+extern "C" fn volt_clang_inclusion(f: clang::CXFile, stack: clang::CXSourceLocation*, n: u32, data: void*) -> void {
+    if (n != 1) {
+        return;
+    }
+    val out = @cast<std::vec<std::string>*>(data);
+    put(&*out, cx_str(clang::clang_getFileName(f)));
+}
+
+// the files the translation unit's main file includes itself (its #include lines)
+attach fn included_files(this: clang_tu&) -> std::vec<std::string> {
+    var out: std::vec<std::string> = {};
+    if (this.tu != null) {
+        clang::clang_getInclusions(this.tu, volt_clang_inclusion, @cast<void*>(&out));
+    }
+    return move out;
+}
+
+// the file a cursor is in (empty for none)
+fn cursor_file(c: clang::CXCursor) -> std::string {
+    var f: clang::CXFile = null;
+    clang::clang_getExpansionLocation(clang::clang_getCursorLocation(c), &f, null, null, null);
+    if (f == null) {
+        return {};
+    }
+    return cx_str(clang::clang_getFileName(f));
+}
+
 // the direct children of c
 fn children(c: clang::CXCursor) -> std::vec<clang::CXCursor> {
     var out: std::vec<clang::CXCursor> = {};

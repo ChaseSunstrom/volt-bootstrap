@@ -247,4 +247,7 @@ fn main() -> void {
 - A class whose destructor isn't public can't be owned by Volt: it has no `T::new`, and only its
   static methods are of use.
 
+[C++ coverage](/volt-bootstrap/interop/cpp-coverage/) sums up what comes through, the libraries
+it's tested against, and what can't map, with the way around each.
+
 Runnable examples: [Volt calls C++](https://github.com/ChaseSunstrom/volt-bootstrap/tree/main/examples/interop/volt-calls/cpp) and [C++ calls Volt](https://github.com/ChaseSunstrom/volt-bootstrap/tree/main/examples/interop/calls-volt/cpp).

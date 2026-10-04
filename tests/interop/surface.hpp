@@ -74,6 +74,17 @@ private:
     Entry kept;
 };
 
+// a template's T* parameter, and a template instance with a defaulted argument
+template <class T>
+int deref_or(T* p, T d) {
+    return p ? static_cast<int>(*p) : static_cast<int>(d);
+}
+template <class T, class Tag = void>
+struct Holder {
+    T value;
+};
+inline Holder<int> hold(int v) { return Holder<int>{v}; }
+
 // std::function: a Volt fn value in, a C++ callable out
 inline int apply(const std::function<int(int)>& f, int x) { return f(x) + 1; }
 inline double twice_apply(std::function<double(double)> f, double x) { return f(f(x)); }

@@ -856,9 +856,48 @@ fn cpp_surface() {
     // constants, static members, nested classes, conversion and assignment operators, T&& results,
     // member templates, and std::function both ways (a Volt closure in, a C++ callable out)
     let e = Env::new("cpp-surface");
-    let want = "42 1.5 true kit \"tools\" 1\n10 true 3\n12 1.5 12\ncreated 4\nreg k 42\nstolen 9\n41\n1.5\ntrue\n6 42\ntrue 1 1\n15 8\n";
+    let want = "42 1.5 true kit \"tools\" 1\n10 true 3\n12 1.5 12\ncreated 4\nreg k 42\nstolen 9\n41\n1.5\ntrue\n6 42\ntrue 1 1\n15 8\n7 5\n";
     for backend in ["c", "llvm"] {
         assert_eq!(ok(e.voltc(&["run", "cpp_surface.volt", "--backend", backend]), "voltc run cpp_surface.volt"), want, "C++ surface ({backend})");
+    }
+}
+
+/// is a C++ library's header on the usual include paths?
+fn installed(header: &str) -> bool {
+    ["/usr/include", "/usr/local/include", "/opt/homebrew/include"].iter().any(|d| Path::new(d).join(header).is_file())
+}
+
+#[test]
+fn cpp_libs() {
+    // libraries as installed, imported from the include path: their own declarations come through
+    // (not the system's), every generated wrapper compiles, and what maps runs; one that isn't
+    // installed is skipped
+    let e = Env::new("cpp-libs");
+    let libs = [
+        ("re2/re2.h", "libs/re2.volt", &["--cc", "-lre2"][..], "true a(b+)c 1\nfalse\n"),
+        ("nlohmann/json.hpp", "libs/json.volt", &[][..], "true 3\n"),
+        ("glm/glm.hpp", "libs/glm.volt", &[][..], "2.5 3 1\n"),
+    ];
+    for (header, file, flags, want) in libs {
+        if !installed(header) {
+            eprintln!("skipped {file}: {header} isn't installed");
+            continue;
+        }
+        for backend in ["c", "llvm"] {
+            let mut args = vec!["run", file, "--backend", backend];
+            args.extend_from_slice(flags);
+            assert_eq!(ok(e.voltc(&args), file), want, "{file} ({backend})");
+        }
+    }
+}
+
+#[test]
+fn cpp_framework() {
+    // Volt types as a C++ framework's listeners and plugins, called through its base classes
+    let e = Env::new("cpp-framework");
+    let want = "2 2\n2 5 2 50\ncount+broken- count-broken-\ntrue\n";
+    for backend in ["c", "llvm"] {
+        assert_eq!(ok(e.voltc(&["run", "cpp_framework.volt", "--backend", backend]), "voltc run cpp_framework.volt"), want, "C++ framework ({backend})");
     }
 }
 

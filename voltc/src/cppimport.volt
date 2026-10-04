@@ -63,6 +63,13 @@ struct cpp_gen {
     cursors: std::map<str, clang::CXCursor> = {};
     // the C++ function telling which exception a try_ form caught (volt_cpp_kinds_N, one an import)
     kinds: std::string = {};
+    // the functions written so far, by USR (a function declared, then defined, is one: its
+    // template parameters may be named differently each time)
+    fns_seen: std::map<str, bool> = {};
+    // where the libraries the use names live, as found on the include path ("/usr/include/re2/" for
+    // re2/re2.h, the file itself for a header with no directory): their declarations are the
+    // import's own though the C++ compiler sees them as system headers
+    roots: std::vec<std::string> = {};
     // the std::function signatures results come back as (stdcxx::function's call overloads), by
     // their C++ type (int(int))
     fn_sigs: std::map<str, clang::CXType> = {};
@@ -72,6 +79,44 @@ struct cpp_gen {
 
 fn in_system(c: clang::CXCursor) -> bool {
     return clang::clang_Location_isInSystemHeader(clang::clang_getCursorLocation(c)) != 0;
+}
+
+// is c none of the import's own: in a system header, and not in a library one of the use names
+// (see roots)
+attach fn skip(this: cpp_gen&, c: clang::CXCursor) -> bool {
+    // an explicit specialization (template <> struct S<void>, template <> bool f<int>(...)) has
+    // the template's name: the template is what Volt sees
+    if (clang::clang_Cursor_isNull(clang::clang_getSpecializedCursorTemplate(c)) == 0) {
+        return true;
+    }
+    // a member defined outside its class (template <...> vec<2, T, Q>::vec(...) at namespace
+    // scope) is the class's, not a free function
+    val k = clang::clang_getCursorKind(c);
+    if (k == clang::CXCursor_FunctionDecl || k == clang::CXCursor_FunctionTemplate) {
+        val pk = clang::clang_getCursorKind(clang::clang_getCursorSemanticParent(c));
+        if (pk == clang::CXCursor_ClassDecl || pk == clang::CXCursor_StructDecl || pk == clang::CXCursor_ClassTemplate || pk == clang::CXCursor_ClassTemplatePartialSpecialization) {
+            return true;
+        }
+    }
+    // what a library adds to namespace std (std::hash<T>, std::swap overloads) isn't its own API,
+    // and a Volt namespace std in the import would hide Volt's
+    if (clang::clang_getCursorKind(c) == clang::CXCursor_Namespace && cursor_name(c).as_str() == "std") {
+        return true;
+    }
+    if (!in_system(c)) {
+        return false;
+    }
+    if (this.roots.len == 0) {
+        return true;
+    }
+    val f = cursor_file(c);
+    for (r&) in this.roots.items() {
+        // a directory's files, or the one file
+        if ((ends_with(r.as_str(), "/") && starts_with(f.as_str(), r.as_str())) || f.as_str() == r.as_str()) {
+            return false;
+        }
+    }
+    return true;
 }
 
 // the C++ qualified name of a declaration: geo::Shape
@@ -206,7 +251,11 @@ attach fn vtype(this: cpp_gen&, t: clang::CXType, tparams: std::vec<str>&) -> st
         return S("f64");
     }
     if (k == clang::CXType_Pointer) {
-        val pt = clang::clang_getPointeeType(ct);
+        // the pointee as written (a template's T* is T* by its name), else the canonical one's
+        var pt = clang::clang_getPointeeType(t);
+        if (pt.kind == clang::CXType_Invalid) {
+            pt = clang::clang_getPointeeType(ct);
+        }
         val pk = clang::clang_getCanonicalType(pt).kind;
         if (pk == clang::CXType_Char_S || pk == clang::CXType_SChar) {
             return S("cstr?");
@@ -267,9 +316,18 @@ attach fn record(this: cpp_gen&, ct: clang::CXType, tparams: std::vec<str>&) -> 
     }
     val tq = cpp_qual(clang::clang_getSpecializedCursorTemplate(decl));
     val base = this.templates.get(tq.as_str()) ?? return null;
+    // as many arguments as the Volt generic has (the defaulted rest are C++'s)
+    var count = @cast<u32>(n);
+    val tc = this.cursors.get(tq.as_str());
+    if (tc) {
+        val tps = template_params(*tc) ?? return null;
+        if (@cast<u32>(tps.len) < count) {
+            count = @cast<u32>(tps.len);
+        }
+    }
     var out = S(*base);
     out.push('<');
-    for (i) in 0..@cast<u32>(n) {
+    for (i) in 0..count {
         if (i > 0) {
             out.append(", ");
         }
@@ -425,6 +483,11 @@ attach fn param(this: cpp_gen&, t: clang::CXType, name: str, i: usize, tparams: 
     }
     if (clang::clang_getCanonicalType(t).kind == clang::CXType_Enum) {
         return { vty: move v, pass: S(name), cpp: fmt2("({})({})", cpp_qual(clang::clang_getTypeDeclaration(clang::clang_getCanonicalType(t))), move slot) };
+    }
+    // a pointer as the parameter's own type (Volt's cstr is a const char *, for a char * one too);
+    // not a template's T*, which only the template can spell
+    if (clang::clang_getCanonicalType(t).kind == clang::CXType_Pointer && !contains(canon(t).as_str(), "type-parameter")) {
+        return { vty: move v, pass: S(name), cpp: fmt2("(volt_id<{}>)({})", canon(t), move slot) };
     }
     return { vty: move v, pass: S(name), cpp: move slot };
 }
@@ -920,13 +983,27 @@ attach fn try_text(this: cpp_gen&, generics: str, head: str, params: str, r: cpp
 }
 
 // the type parameters of a template cursor (none if it has a non-type or template parameter)
+// a template's type parameters, the ones Volt passes: up to the first with a default, which C++
+// fills in (typename = std::enable_if_t<...>); none when one Volt can't pass comes first (a value
+// or template parameter, an unnamed one without a default)
 fn template_params(c: clang::CXCursor) -> std::vec<std::string>? {
     var out: std::vec<std::string> = {};
     for (ch&) in children(c).items() {
         val k = clang::clang_getCursorKind(*ch);
         if (k == clang::CXCursor_TemplateTypeParameter) {
-            put(&out, cursor_name(*ch));
+            // a default shows up as what's under the parameter
+            if (children(*ch).len > 0) {
+                break;
+            }
+            val name = cursor_name(*ch);
+            if (name.len() == 0) {
+                return null;
+            }
+            put(&out, move name);
         } else if (k == clang::CXCursor_NonTypeTemplateParameter || k == clang::CXCursor_TemplateTemplateParameter) {
+            if (children(*ch).len > 0) {
+                break;
+            }
             return null;
         }
     }
@@ -1570,6 +1647,102 @@ attach fn static_member(this: cpp_gen&, v: clang::CXCursor, self_ty: str, cpp_se
     }
 }
 
+// can Volt lay out class template c (as class() does): public fields only, of types it can use (a
+// class held by handle isn't laid out as C++ lays it out), no bases, no virtual methods
+attach fn template_ok(this: cpp_gen&, c: clang::CXCursor) -> bool {
+    val tps = template_params(c) ?? return false;
+    val tp = str_views(&tps);
+    for (ch&) in children(c).items() {
+        val k = clang::clang_getCursorKind(*ch);
+        if (k == clang::CXCursor_CXXBaseSpecifier || (k == clang::CXCursor_CXXMethod && clang::clang_CXXMethod_isVirtual(*ch) != 0)) {
+            return false;
+        }
+        if (k == clang::CXCursor_FieldDecl) {
+            val ft = clang::clang_getCursorType(*ch);
+            if (!is_public(*ch) || this.handle_of(ft) != null || this.vtype(ft, &tp) == null) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+// leave out (of classes and templates) what can't be declared, before anything refers to it: a
+// class template Volt can't lay out (template_ok), and a class held by value whose layout it can't
+// copy (class_struct); until nothing more goes, since one going can take others with it
+attach fn prune(this: cpp_gen&) -> void {
+    loop {
+        var gone: std::vec<str> = {};
+        for (e) in this.templates.iter() {
+            val c = *(this.cursors.get(*e.key) ?? continue);
+            if (!this.template_ok(c)) {
+                put(&gone, *e.key);
+            }
+        }
+        for (q&) in gone.items() {
+            this.templates.remove(*q);
+        }
+        var gone_classes: std::vec<str> = {};
+        for (e) in this.classes.iter() {
+            val tr = this.traits.get(*e.key) ?? continue;
+            if (!tr->trivial) {
+                continue;
+            }
+            val c = *(this.cursors.get(*e.key) ?? continue);
+            // a dry run: written, then taken back out
+            val start = this.out.len();
+            val ok = this.class_struct(c, last_part(*e.value, "").as_str(), *e.key);
+            this.out.bytes.len = start;
+            if (!ok) {
+                put(&gone_classes, *e.key);
+            }
+        }
+        for (q&) in gone_classes.items() {
+            this.classes.remove(*q);
+        }
+        if (gone.len == 0 && gone_classes.len == 0) {
+            break;
+        }
+    }
+}
+
+// the roots of the libraries the use names from the include path (not local files, not the C++
+// standard library's): for each, the file it resolved to, then its directory as named ("re2/" of
+// re2/re2.h: every file under /usr/include/re2/), or the file alone when it has none
+attach fn library_roots(this: cpp_gen&, headers: std::vec<std::string>&, tu: clang_tu&) -> void {
+    val files = tu.included_files();
+    for (h&) in headers.items() {
+        val name = h.as_str();
+        // the standard library's headers name no directory and no extension: <vector>, <string>
+        var has_dot = false;
+        var slash: usize? = null;
+        for (i) in 0..name.len {
+            if (name[i] == '.') {
+                has_dot = true;
+            }
+            if (name[i] == '/' && slash == null) {
+                slash = i;
+            }
+        }
+        if (!has_dot) {
+            continue;
+        }
+        val tail = fmt("/{}", S(name));
+        for (f&) in files.items() {
+            if (!ends_with(f.as_str(), tail.as_str())) {
+                continue;
+            }
+            if (slash) {
+                // /usr/include/ + re2/
+                put(&this.roots, S(f.as_str()[0..f.len() - name.len + slash + 1]));
+            } else {
+                put(&this.roots, copy *f);
+            }
+            break;
+        }
+    }
+}
+
 // what clang says of each class, from a second parse of the same headers with these appended:
 //     constexpr bool t0 = __is_trivially_copyable(::geo::Shape); (d0, c0, a0, n0, p0, f0, v0, e0, m0 likewise)
 // A class it can't answer for is held by handle, and Volt neither makes, copies nor assigns one.
@@ -2180,7 +2353,7 @@ attach fn enum_decl(this: cpp_gen&, c: clang::CXCursor) -> void {
 // Volt path each gets inside the import's namespace
 attach fn scan(this: cpp_gen&, c: clang::CXCursor, vpath: str) -> void {
     for (ch&) in children(c).items() {
-        if (in_system(*ch)) {
+        if (this.skip(*ch)) {
             continue;
         }
         val k = clang::clang_getCursorKind(*ch);
@@ -2197,6 +2370,10 @@ attach fn scan(this: cpp_gen&, c: clang::CXCursor, vpath: str) -> void {
         p.append(vname(name.as_str()).as_str());
         val q = this.c.intern(cpp_qual(*ch));
         if (k == clang::CXCursor_Namespace) {
+            if (clang::clang_Cursor_isInlineNamespace(*ch) != 0) {
+                this.scan(*ch, vpath);
+                continue;
+            }
             p.append("::");
             this.scan(*ch, p.as_str());
         } else if ((k == clang::CXCursor_ClassDecl || k == clang::CXCursor_StructDecl) && clang::clang_isCursorDefinition(*ch) != 0) {
@@ -2206,8 +2383,10 @@ attach fn scan(this: cpp_gen&, c: clang::CXCursor, vpath: str) -> void {
             this.scan(*ch, inner.as_str());
             this.classes.put(q, this.c.intern(move p));
             this.cursors.put(q, *ch);
-        } else if (k == clang::CXCursor_ClassTemplate) {
+        } else if (k == clang::CXCursor_ClassTemplate && clang::clang_isCursorDefinition(*ch) != 0) {
+            // its definition (a forward declaration has no fields or bases to tell by)
             this.templates.put(q, this.c.intern(move p));
+            this.cursors.put(q, *ch);
         } else if (k == clang::CXCursor_EnumDecl) {
             this.enums.put(q, this.c.intern(move p));
         }
@@ -2217,13 +2396,18 @@ attach fn scan(this: cpp_gen&, c: clang::CXCursor, vpath: str) -> void {
 // the Volt source for the declarations under c
 attach fn emit(this: cpp_gen&, c: clang::CXCursor) -> void {
     for (ch&) in children(c).items() {
-        if (in_system(*ch)) {
+        if (this.skip(*ch)) {
             continue;
         }
         val k = clang::clang_getCursorKind(*ch);
         if (k == clang::CXCursor_Namespace) {
             val name = cursor_name(*ch);
             if (name.len() == 0) {
+                continue;
+            }
+            // an inline namespace (a library's ABI version) is its parent's in C++ too
+            if (clang::clang_Cursor_isInlineNamespace(*ch) != 0) {
+                this.emit(*ch);
                 continue;
             }
             this.line(fmt("namespace {} {{", vname(name.as_str())).as_str());
@@ -2240,28 +2424,52 @@ attach fn emit(this: cpp_gen&, c: clang::CXCursor) -> void {
             this.nested(*ch);
         } else if (k == clang::CXCursor_VarDecl) {
             this.constant(*ch);
-        } else if (k == clang::CXCursor_ClassTemplate) {
+        } else if (k == clang::CXCursor_ClassTemplate && clang::clang_isCursorDefinition(*ch) != 0 && this.templates.get(cpp_qual(*ch).as_str()) != null) {
+            // one whose parameters all have defaults has nothing for Volt's generics (and one
+            // prune left out isn't declared)
             val tps = template_params(*ch);
+            var n: usize = 0;
             if (tps) {
+                n = tps.len;
+            }
+            if (n > 0) {
                 this.class(*ch, copy tps);
             }
         } else if (k == clang::CXCursor_EnumDecl) {
             this.enum_decl(*ch);
-        } else if (k == clang::CXCursor_FunctionDecl) {
-            val none: std::vec<std::string> = {};
-            this.free_fn(*ch, &none);
-        } else if (k == clang::CXCursor_FunctionTemplate) {
-            val tps = template_params(*ch);
-            if (tps) {
-                this.free_fn(*ch, &tps);
+        } else if ((k == clang::CXCursor_FunctionDecl || k == clang::CXCursor_FunctionTemplate) && this.first_decl(*ch)) {
+            if (k == clang::CXCursor_FunctionDecl) {
+                val none: std::vec<std::string> = {};
+                this.free_fn(*ch, &none);
+            } else {
+                val tps = template_params(*ch);
+                if (tps) {
+                    this.free_fn(*ch, &tps);
+                }
             }
         }
     }
 }
 
+// is this c's first declaration the import sees (by USR)? it's noted as seen
+attach fn first_decl(this: cpp_gen&, c: clang::CXCursor) -> bool {
+    val usr = cx_str(clang::clang_getCursorUSR(c));
+    if (usr.len() == 0) {
+        return true;
+    }
+    if (this.fns_seen.get(usr.as_str()) != null) {
+        return false;
+    }
+    this.fns_seen.put(this.c.intern(move usr), true);
+    return true;
+}
+
 // the public types inside class c, beside it (their Volt names are Outer_Inner: see scan)
 attach fn nested(this: cpp_gen&, c: clang::CXCursor) -> void {
     for (ch&) in children(c).items() {
+        if (this.skip(*ch)) {
+            continue;
+        }
         val acc = clang::clang_getCXXAccessSpecifier(*ch);
         if (acc == clang::CX_CXXPrivate || acc == clang::CX_CXXProtected) {
             continue;
@@ -2597,8 +2805,10 @@ attach fn import_cpp(this: checker&, headers: std::vec<std::string>&, alias: str
         return fail(span, fmt("libclang couldn't read these C++ headers: {}", copy bad));
     }
     var g: cpp_gen = { c: this, kinds: fmt("volt_cpp_kinds_{}", unum(@cast<u64>(this.cpp_items.len))) };
+    g.library_roots(headers, &tu);
     g.scan(tu.root(), "");
     g.probe(src.as_str(), &args);
+    g.prune();
     g.out.append(fmt("// the Volt side of use cpp {{ ... }} as {} (generated by voltc from the headers)\n", S(alias)).as_str());
     g.emit(tu.root());
     g.std_extras();
@@ -2817,7 +3027,9 @@ attach fn cpp_call(this: checker&, gargs: std::vec<garg>&, args: std::vec<garg>&
         body = fmt2("new (ret) {}({});", this.cpp_spell(r) ?? S("void"), move expr);
     } else {
         match (*this.t.get(r)) {
-            .REF(x) => { body = fmt("return &({});", move expr); },
+            // the reference's address, as the wrapper's pointer type (Volt has no const: a const&
+            // result is a reference like any other)
+            .REF(x) => { body = fmt2("return ({})&({});", copy rsp, move expr); },
             default => { body = fmt2("return ({})({});", copy rsp, move expr); },
         }
     }
