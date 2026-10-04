@@ -311,6 +311,8 @@ pub struct Checker {
     pub error_names: std::collections::BTreeMap<u32, (String, String)>, // code -> (variant, qualified name)
     pub attached: HashMap<String, Vec<DeclId>>,
     pub attach_blocks: Vec<DeclId>,
+    /// the attach blocks @derive made (their trait, when not in scope, is std::derive's)
+    pub derive_blocks: HashSet<DeclId>,
     pub unions: Vec<UnionInfo>,
     pub union_ids: HashMap<DeclId, u32>,
     pub fns: Vec<FnInst>,
@@ -385,6 +387,7 @@ impl Checker {
             error_names: [(1, ("error".to_string(), "error".to_string()))].into_iter().collect(),
             attached: HashMap::new(),
             attach_blocks: Vec::new(),
+            derive_blocks: HashSet::new(),
             unions: Vec::new(),
             union_ids: HashMap::new(),
             fns: Vec::new(),
@@ -455,6 +458,73 @@ impl Checker {
     /// declare one item (and a trait's or attach block's fns, with it as their parent); attached fns
     /// also go into `attached`, found by method name
     fn collect_item(&mut self, item: Item, ns: NsId, parent: Option<DeclId>) -> Res<()> {
+        // @derive(a, b) on a struct or enum: an empty attach block of each named trait after it
+        let derives = Self::derive_blocks_of(&item)?;
+        let on = derives.is_empty() || self.item_cfg_on(&item.attrs)?;
+        self.collect_one(item, ns, parent)?;
+        if on {
+            for b in derives {
+                let id = self.decls.len();
+                self.collect_one(b, ns, None)?;
+                self.derive_blocks.insert(id);
+            }
+        }
+        Ok(())
+    }
+
+    /// @derive(a, b): `attach a -> T {}` and `attach b -> T {}` (with T's generic parameters). A
+    /// derive is a trait whose methods are generic over the types attaching it
+    fn derive_blocks_of(item: &Item) -> Res<Vec<Item>> {
+        let name = match &item.kind {
+            ItemKind::Struct(s) => &s.name,
+            ItemKind::Enum(e) => &e.name,
+            _ => {
+                if let Some(a) = item.attrs.iter().find(|a| matches!(&a.kind, ExprKind::Builtin(n, _, _) if n == "derive")) {
+                    return err(a.span, "@derive goes on a struct or an enum");
+                }
+                return Ok(Vec::new());
+            }
+        };
+        let mut out = Vec::new();
+        for a in &item.attrs {
+            let ExprKind::Builtin(n, _, args) = &a.kind else { continue };
+            if n != "derive" {
+                continue;
+            }
+            for g in args.iter().flatten() {
+                let trait_ = match g {
+                    GenericArg::Type(t) => t.clone(),
+                    GenericArg::Expr(Expr { kind: ExprKind::Path(p), span }) => Type { kind: TypeKind::Path(p.clone()), span: *span },
+                    GenericArg::Expr(e) => return err(e.span, "@derive takes trait names: @derive(eq, hash)"),
+                };
+                let span = trait_.span;
+                let targs: Vec<GenericArg> = item.generics.iter().map(|g| GenericArg::Type(Type { kind: TypeKind::Path(Path::single(&g.name, span)), span })).collect();
+                let target = Type { kind: TypeKind::Path(Path { segs: vec![PathSeg { name: name.clone(), args: (!targs.is_empty()).then_some(targs) }], span }), span };
+                out.push(Item { kind: ItemKind::AttachBlock { trait_, target, fns: Vec::new() }, span, attrs: Vec::new(), vis: item.vis.clone(), generics: item.generics.clone() });
+            }
+        }
+        Ok(out)
+    }
+
+    /// the trait attach block b attaches, with its generic args; a @derive name that isn't a trait
+    /// in scope is std::derive's
+    pub fn block_trait(&self, b: DeclId) -> Option<(DeclId, Vec<GenericArg>)> {
+        let ItemKind::AttachBlock { trait_, .. } = &self.decls[b].item.kind else { return None };
+        let ns = self.decls[b].ns;
+        if let Some(r) = self.bound_trait(trait_, ns) {
+            return Some(r);
+        }
+        let TypeKind::Path(p) = &trait_.kind else { return None };
+        if !self.derive_blocks.contains(&b) || p.segs.len() != 1 {
+            return None;
+        }
+        let mut q = p.clone();
+        q.segs.insert(0, PathSeg { name: "derive".to_string(), args: None });
+        q.segs.insert(0, PathSeg { name: "std".to_string(), args: None });
+        self.bound_trait(&Type { kind: TypeKind::Path(q), span: trait_.span }, ns)
+    }
+
+    fn collect_one(&mut self, item: Item, ns: NsId, parent: Option<DeclId>) -> Res<()> {
         let file = item.span.file;
         for a in &item.attrs {
             self.check_attr(a, file)?;
@@ -1759,7 +1829,7 @@ impl Checker {
         let ItemKind::AttachBlock { trait_, fns, .. } = &item.kind else { return Ok(()) };
         let ns = self.decls[b].ns;
         let TypeKind::Path(p) = &trait_.kind else { return err(trait_.span, "an attach block names a trait: attach named -> type { ... }") };
-        let Some((tr, _)) = self.bound_trait(trait_, ns) else {
+        let Some((tr, _)) = self.block_trait(b) else {
             let found = if p.segs.len() == 1 { self.lookup(ns, &p.segs[0].name) } else { self.lookup_path_ns(ns, p) };
             if matches!(found, Some(Found::Decls(_))) {
                 return err(trait_.span, format!("'{}' isn't a trait", p.last()));

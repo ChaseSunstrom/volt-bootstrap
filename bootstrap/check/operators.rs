@@ -112,6 +112,11 @@ impl Checker {
         let is_cmp = matches!(op, Eq | Ne | Lt | Gt | Le | Ge);
         let operand_want = if is_cmp { None } else { want.filter(|w| self.t.int_of(*w).is_some() || self.t.is_float(*w)) };
         let a = self.expr(ae, operand_want)?;
+        if matches!(op, Eq | Ne) && !matches!(be.kind, ExprKind::Null) {
+            if let Some(v) = self.eq_call(op, a.clone(), ae, be, span)? {
+                return Ok(v);
+            }
+        }
         let b_want = if matches!(be.kind, ExprKind::Null) || a.lit.is_some() || a.ty == NULL { operand_want } else { Some(a.ty) };
         let b = self.expr(be, b_want)?;
         if !is_cmp {
@@ -275,6 +280,47 @@ impl Checker {
         };
         let _ = a_c;
         Ok(Val::new(a.ty, c))
+    }
+
+    /// == and != on a struct (or an enum with payloads) call its eq(other: T&): one written for it, or
+    /// a derive's (std::compare's, for any type, is == itself, so it doesn't count). None: it has none
+    fn eq_call(&mut self, op: BinOp, a: Val, ae: &Expr, be: &Expr, span: Span) -> Res<Option<Val>> {
+        let own_type = match self.t.get(a.ty).clone() {
+            Ty::Struct(_) => true,
+            Ty::Enum(e) => self.enums[e as usize].has_payload,
+            _ => false,
+        };
+        if !own_type {
+            return Ok(None);
+        }
+        // probed with another of the same type, as == compares
+        let other_ty = self.t.intern(Ty::Ref(a.ty));
+        let probe = [Some(Val::pure(other_ty, "q"))];
+        let mut fits = Vec::new();
+        for d in self.attached.get("eq").cloned().unwrap_or_default() {
+            if self.blanket_positions(d) == 0 && matches!(self.bind_cand(d, Some(&a), None, &[], &probe)?, Ok(_)) {
+                fits.push(d);
+            }
+        }
+        if fits.is_empty() {
+            return Ok(None);
+        }
+        // eq takes other by reference: a place's address. A temporary goes in this's place, which may
+        // be one (it lives to the end of the statement), so with a temporary on the right the left
+        // goes second: only a variable or a field of one (it reads the same either way)
+        let addr = |e: &Expr| Expr { kind: ExprKind::Unary(UnOp::Addr, Box::new(e.clone())), span: e.span };
+        let v = if is_place(be) {
+            self.resolve_call("eq", &fits, Some(a), None, &[], &[addr(be)], Some(BOOL), span)?
+        } else if is_plain_place(ae) {
+            let b = self.expr(be, Some(a.ty))?;
+            self.resolve_call("eq", &fits, Some(b), None, &[], &[addr(ae)], Some(BOOL), span)?
+        } else {
+            return err(span, format!("== on two temporary {}s: store one in a variable first", self.ty_name(a.ty)));
+        };
+        if op == BinOp::Ne {
+            return Ok(Some(Val { pure: v.pure, ..Val::new(BOOL, format!("(!{})", v.c)) }));
+        }
+        Ok(Some(v))
     }
 
     /// Comparisons: a pointer or optional against null, then numbers, pointers, bools, strs, errors and
@@ -468,4 +514,26 @@ impl Checker {
         self.coerce(v, to, span)
     }
 
+}
+
+/// a place whose address can be taken: a variable, this, *p, or a field or element of a place
+fn is_place(e: &Expr) -> bool {
+    match &e.kind {
+        ExprKind::Path(_) | ExprKind::This | ExprKind::Unary(UnOp::Deref, _) => true,
+        ExprKind::Field(b, _, None) | ExprKind::Index(b, _) => is_place(b),
+        ExprKind::Builtin(n, _, Some(args)) if n == "field" => matches!(args.first(), Some(GenericArg::Expr(b)) if is_place(b)),
+        _ => false,
+    }
+}
+
+/// a place reading which runs nothing: a variable, this, a field of one, or an element at a
+/// variable or literal index
+fn is_plain_place(e: &Expr) -> bool {
+    match &e.kind {
+        ExprKind::Path(_) | ExprKind::This => true,
+        ExprKind::Field(b, _, None) => is_plain_place(b),
+        ExprKind::Index(b, i) => is_plain_place(b) && matches!(i.kind, ExprKind::Path(_) | ExprKind::Int(_)),
+        ExprKind::Builtin(n, _, Some(args)) if n == "field" => matches!(args.first(), Some(GenericArg::Expr(b)) if is_plain_place(b)),
+        _ => false,
+    }
 }

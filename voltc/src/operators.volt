@@ -167,6 +167,107 @@ fn cmp_sym(op: binop) -> str {
     }
 }
 
+// == and != on a struct (or an enum with payloads) call its eq(other: T&): one written for it, or a
+// derive's (std::compare's, for any type, is == itself, so it doesn't count). null: it has none
+attach fn eq_call(this: checker&, op: binop, a: tval, ae: expr&, be: expr&, span: span) -> compile_error!(tval?) {
+    var own_type = false;
+    match (*this.t.get(a.ty)) {
+        .STRUCT(s) => { own_type = true; },
+        .ENUM(e) => { own_type = this.ei(e).has_payload; },
+        default => {},
+    }
+    if (!own_type) {
+        return null;
+    }
+    // probed with another of the same type, as == compares
+    var probe: std::vec<tval?> = {};
+    put(&probe, vpure(this.t.ref_to(a.ty), this.ir.boolean(false)));
+    var fits: std::vec<u32> = {};
+    var none: std::vec<garg> = {};
+    for (d&) in this.named(&this.attached, "eq").items() {
+        if (this.blanket_positions(*d) == 0) {
+            match (try this.bind_cand(*d, &a, null, &none, &probe)) {
+                .OK(b, j) => { put(&fits, *d); },
+                default => {},
+            }
+        }
+    }
+    if (fits.len == 0) {
+        return null;
+    }
+    // eq takes other by reference: a place's address. A temporary goes in this's place, which may be
+    // one (it lives to the end of the statement), so with a temporary on the right the left goes
+    // second: only a variable or a field of one (it reads the same either way)
+    var args: std::vec<expr> = {};
+    var v: tval = a;
+    if (is_place(be)) {
+        put(&args, { kind: expr_kind::UNARY(unop::ADDR, bx(copy *be)), span: be.span });
+        v = try this.resolve_call("eq", &fits, a, null, &none, &args, BOOL, span);
+    } else if (is_plain_place(ae)) {
+        val b = try this.expr(be, a.ty);
+        put(&args, { kind: expr_kind::UNARY(unop::ADDR, bx(copy *ae)), span: ae.span });
+        v = try this.resolve_call("eq", &fits, b, null, &none, &args, BOOL, span);
+    } else {
+        return fail(span, fmt("== on two temporary {}s: store one in a variable first", this.ty_name(a.ty)));
+    }
+    if (op == binop::NE) {
+        var r = vnew(BOOL, this.ir.unary(unop_ir::NOT, v.c, BOOL));
+        r.pure = v.pure;
+        return r;
+    }
+    return v;
+}
+
+// a place whose address can be taken: a variable, this, *p, or a field or element of a place
+fn is_place(e: expr&) -> bool {
+    match (e.kind) {
+        .PATH(p) => { return true; },
+        .THIS => { return true; },
+        .FIELD(b, n, g) => { return g == null && is_place(b); },
+        .INDEX(b, i) => { return is_place(b); },
+        .UNARY(o, x) => { return o == unop::DEREF; },
+        .BUILTIN(n, g, a&) => {
+            val ap = ptr_of(a);
+            if (n != "field" || ap == null || ap->len == 0) {
+                return false;
+            }
+            match (*ap->at(0)) {
+                .EXPR(b&) => { return is_place(b); },
+                default => { return false; },
+            }
+        },
+        default => { return false; },
+    }
+}
+
+// a place reading which runs nothing: a variable, this, a field of one, or an element at a variable
+// or literal index
+fn is_plain_place(e: expr&) -> bool {
+    match (e.kind) {
+        .PATH(p) => { return true; },
+        .THIS => { return true; },
+        .FIELD(b, n, g) => { return g == null && is_plain_place(b); },
+        .INDEX(b, i) => {
+            match (i.kind) {
+                .PATH(p) => { return is_plain_place(b); },
+                .INT(v) => { return is_plain_place(b); },
+                default => { return false; },
+            }
+        },
+        .BUILTIN(n, g, a&) => {
+            val ap = ptr_of(a);
+            if (n != "field" || ap == null || ap->len == 0) {
+                return false;
+            }
+            match (*ap->at(0)) {
+                .EXPR(b&) => { return is_plain_place(b); },
+                default => { return false; },
+            }
+        },
+        default => { return false; },
+    }
+}
+
 // Binary operators. The right operand is checked expecting the left's type (so literals adapt),
 // integer constants fold, and integer arithmetic traps on overflow in debug builds.
 attach fn binary(this: checker&, op: binop, ae: expr&, be: expr&, want: u32?, span: span) -> compile_error!tval {
@@ -196,6 +297,12 @@ attach fn binary(this: checker&, op: binop, ae: expr&, be: expr&, want: u32?, sp
     match (be.kind) {
         .NULL => { be_null = true; },
         default => {},
+    }
+    if ((op == binop::EQ || op == binop::NE) && !be_null) {
+        val called = try this.eq_call(op, a, ae, be, span);
+        if (called) {
+            return called;
+        }
     }
     if (be_null || a.lit != null || a.ty == NULL_TY) {
         b_want = operand_want;

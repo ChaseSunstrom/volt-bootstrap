@@ -885,7 +885,7 @@ attach fn attachers(this: checker&, d: u32) -> std::vec<u32> {
     for (b&) in this.attach_blocks.items() {
         match (this.item_of(*b).kind) {
             .ATTACH(tr&, target&, fs) => {
-                val bt = this.bound_trait(tr, this.dl(*b).ns);
+                val bt = this.block_trait(*b);
                 if (bt != null && (bt ?? return out).decl == d) {
                     put(&out, *b);
                 }

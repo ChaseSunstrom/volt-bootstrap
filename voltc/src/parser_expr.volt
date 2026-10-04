@@ -396,6 +396,9 @@ attach fn unary(this: parser&) -> compile_error!expr {
     val w = ident_of(this.tok()) ?? "";
     if (w == "try" || w == "await" || w == "async" || w == "move" || w == "copy") {
         this.bump();
+        if (w == "copy" && (this.is(")") || this.is(","))) {
+            return fails(start, "copy needs a value: copy x (a struct copies field by field; there's no copy derive)");
+        }
         val e = try this.unary();
         val sp = start.to(e.span);
         val b = bx(move e);

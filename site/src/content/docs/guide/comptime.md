@@ -247,6 +247,77 @@ of those types: `@has_method(T, "draw", canvas&)`. With a trait's `@optional` fu
 template asks which ones a type wrote (see
 [Traits](/volt-bootstrap/guide/traits/#optional-functions-and-closed-traits)).
 
+## Derive
+
+`@attributes([@derive(eq, hash, fmt, json)])` on a struct gives it methods written in Volt, in
+`std::derive`: `eq(other)` field by field (and so `==` and `!=`), `hash()` (so it can be a map
+key), `to_string()` (the text `println` prints) and `to_json()` (an object with a member each
+field). Copying needs no derive: `copy x` copies any struct field by field. On an enum without
+payloads, `eq` and `hash` work too and `to_json` is the variant's name; an enum with payloads can't
+derive them yet. A JSON number is an `f64`, so an integer field past 2^53 loses its low bits in
+`to_json`.
+
+```volt
+use std::io;
+
+@attributes([@derive(eq, hash, json)])
+struct point {
+    x: i32;
+    y: i32;
+}
+
+fn main() -> void {
+    val a: point = { x: 1, y: 2 };
+    val b: point = { x: 1, y: 2 };
+    var seen: std::map<point, str> = {};
+    seen.put(a, "first");
+    std::println("{} {} {}", a == b, *seen.get(b), a.to_json().text());
+}
+// expect: true first {"x":1,"y":2}
+```
+
+A derive is a trait with no functions, and methods that are generic over the types attaching it:
+`@derive(eq)` is `attach std::derive::eq -> point {}`. A name that isn't a trait in scope is
+`std::derive`'s. A derive of your own is written the same way, with a `comptime for` over the
+fields:
+
+```volt
+use std::io;
+
+namespace audit {
+    trait fields {}
+}
+
+<T: audit::fields>
+attach fn field_names(this: T&) -> std::string {
+    var out = std::string::from(@typeinfo(T).short_name);
+    comptime match (@typeinfo(T).kind) {
+        .STRUCT(s) => {
+            comptime for (f) in s.0 {
+                std::fmt::write(&out, " {}", f.name);
+            }
+        },
+        default => {},
+    }
+    return move out;
+}
+
+@attributes([@derive(audit::fields)])
+struct account {
+    id: u32;
+    owner: str;
+}
+
+fn main() -> void {
+    val a: account = { id: 7, owner: "ada" };
+    std::println("{}", a.field_names());
+}
+// expect: account id owner
+```
+
+The methods apply to the types that attach the trait and no others: between generic versions that
+fit equally well, one whose type parameter has a trait bound is chosen over one taking any type.
+
 ## Type ids: @typeid
 
 `@typeid(T)` is a `u64` naming a type: the 64-bit FNV-1a hash of its canonical name (the
@@ -413,6 +484,7 @@ accepted, so a typo is an error.
 | `@cfg("key")`, `@cfg("key", "value")` | the declaration is only in builds where this `@cfg` holds; on a namespace, everything in it |
 | `@optional` | on a trait fn: attach blocks may leave it out (`@has_method` says which did) |
 | `@closed` | on a trait: its attach blocks hold its fns and nothing else, with its parameter types |
+| `@derive(a, b)` | on a struct or enum: attach each named trait (`std::derive`'s when not in scope); see [Derive](#derive) |
 | `@attach_as("trait")` | on a struct: `attach S -> T` and `<T: S>` mean that trait (how a C++ class's virtual methods are overridden) |
 
 ```volt

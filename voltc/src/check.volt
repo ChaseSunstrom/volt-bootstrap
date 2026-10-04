@@ -379,6 +379,8 @@ struct checker {
     attached: std::map<str, u32> = {}; // method name -> decl list
     runtime_impls: std::map<str, u32> = {}; // @runtime("volt_print_f64"): std's Volt version of a runtime function
     attach_blocks: std::vec<u32> = {};
+    derive_items: std::vec<std::box<item>> = {}; // the attach blocks @derive made
+    derive_blocks: std::map<u32, bool> = {};     // their decls (a trait not in scope is std::derive's)
     unions: std::vec<std::box<union_info>> = {};
     union_ids: std::map<u32, u32> = {};
     fns: std::vec<std::box<fn_inst>> = {};
@@ -715,6 +717,98 @@ attach fn collect_item(this: checker&, it: item&, ns: u32, parent: u32?) -> comp
             }
             try this.collect_item(f, ns, id);
         }
+    }
+    if (parent == null) {
+        try this.collect_derives(it, ns);
+    }
+}
+
+// @derive(a, b) on a struct or enum: `attach a -> T {}` and `attach b -> T {}` (with T's generic
+// parameters). A derive is a trait whose methods are generic over the types attaching it
+attach fn collect_derives(this: checker&, it: item&, ns: u32) -> compile_error!void {
+    var tname: str? = null;
+    match (it.kind) {
+        .STRUCT(s) => { tname = s.name; },
+        .ENUM(e) => { tname = e.name; },
+        default => {
+            for (a&) in it.attrs.items() {
+                if (attr_named(a, "derive")) {
+                    return fails(a.span, "@derive goes on a struct or an enum");
+                }
+            }
+        },
+    }
+    val name = tname ?? return;
+    for (a&) in it.attrs.items() {
+        match (a.kind) {
+            .BUILTIN(n, g, args&) => {
+                val ap = ptr_of(args);
+                if (n != "derive" || ap == null) {
+                    continue;
+                }
+                for (ga&) in ap->items() {
+                    var trt = try derive_trait(ga);
+                    val sp = trt.span;
+                    var segs: std::vec<path_seg> = {};
+                    if (it.generics.len > 0) {
+                        var targs: std::vec<garg> = {};
+                        for (gp&) in it.generics.items() {
+                            put(&targs, garg::TYPE({ kind: type_kind::PATH(single_path(gp.name, sp)), span: sp }));
+                        }
+                        put(&segs, { name: name, args: move targs });
+                    } else {
+                        put(&segs, { name: name, args: null });
+                    }
+                    val target: ty = { kind: type_kind::PATH({ segs: move segs, span: sp }), span: sp };
+                    put(&this.derive_items, bx<item>({ kind: item_kind::ATTACH(move trt, move target, {}), span: sp, attrs: {}, vis: it.vis, generics: copy it.generics }));
+                    val id = @cast<u32>(this.decls.len);
+                    try this.collect_item(*this.derive_items.at(this.derive_items.len - 1), ns, null);
+                    this.derive_blocks.put(id, true);
+                }
+            },
+            default => {},
+        }
+    }
+}
+
+// a @derive argument: a trait's name, as a type
+fn derive_trait(ga: garg&) -> compile_error!ty {
+    match (*ga) {
+        .TYPE(t&) => { return copy *t; },
+        .EXPR(e&) => {
+            match (e.kind) {
+                .PATH(p&) => { return { kind: type_kind::PATH(copy *p), span: e.span }; },
+                default => {},
+            }
+            return fails(e.span, "@derive takes trait names: @derive(eq, hash)");
+        },
+    }
+}
+
+// the trait attach block b attaches; a @derive name that isn't a trait in scope is std::derive's
+attach fn block_trait(this: checker&, b: u32) -> trait_ref? {
+    match (this.item_of(b).kind) {
+        .ATTACH(tr&, target&, fs) => {
+            val ns = this.dl(b).ns;
+            val r = this.bound_trait(tr, ns);
+            if (r != null || this.derive_blocks.get(b) == null) {
+                return r;
+            }
+            match (tr.kind) {
+                .PATH(p&) => {
+                    if (p.segs.len != 1) {
+                        return null;
+                    }
+                    var segs: std::vec<path_seg> = {};
+                    put(&segs, { name: "std", args: null });
+                    put(&segs, { name: "derive", args: null });
+                    put(&segs, { name: p.segs.at(0).name, args: null });
+                    return this.bound_trait(this.keep_ty({ kind: type_kind::PATH({ segs: move segs, span: tr.span }), span: tr.span }), ns);
+                },
+                default => { return null; },
+            }
+        },
+        default => { return null; },
     }
 }
 

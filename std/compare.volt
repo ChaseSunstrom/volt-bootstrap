@@ -9,6 +9,29 @@ attach fn eq(this: T&, other: T&) -> bool {
     return *this == *other;
 }
 
+// optionals: both empty, or both holding equal values
+<T: type>
+attach fn eq(this: T?&, other: T?&) -> bool {
+    if (*this == null || *other == null) {
+        return *this == null && *other == null;
+    }
+    return this.value.eq(&other.value);
+}
+
+// vectors: as long, and equal element by element
+<T: type, A: std::mem::allocator, B: std::mem::allocator>
+attach fn eq(this: std::vec<T, A>&, other: std::vec<T, B>&) -> bool {
+    if (this.len != other.len) {
+        return false;
+    }
+    for (i) in 0..this.len {
+        if (!this.at(i).eq(other.at(i))) {
+            return false;
+        }
+    }
+    return true;
+}
+
 // -1, 0 or 1: how this sorts against other, by <
 <T: type>
 attach fn cmp(this: T&, other: T&) -> i32 {

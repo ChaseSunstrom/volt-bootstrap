@@ -234,8 +234,9 @@ impl Checker {
                     let (has, _) = c.opt_parts(b.ty, o);
                     if c.opts.release { String::new() } else { format!("if (!{has}) volt_panic(\"unwrapped a null value\", \"{loc}\"); ") }
                 };
-                if b.lv && self.needs_drop(inner)? {
-                    // a place: .value names the payload in place (a borrow), so ownership stays put
+                if b.lv {
+                    // a place: .value names the payload in place (a borrow: ownership stays put, and
+                    // &x.value is its address)
                     let (_, val) = self.opt_parts(b.ty, "(*_o)");
                     let ic = self.cty(inner);
                     let ck = chk(self, "(*_o)");

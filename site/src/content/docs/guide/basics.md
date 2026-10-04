@@ -106,6 +106,10 @@ The arithmetic, comparison, logical and bitwise operators are C's. What's differ
 - `x as T` converts only when nothing can be lost (widening an integer, integer to float, `T&` to
   `T*`); anything else is a compile error. `@cast<T>(x)` converts anything to anything, unchecked.
 - `a ?? b` is the value of optional `a`, or `b` when it's null.
+- `==` and `!=` on a struct (or an enum with payloads) call its `eq(other)`: one it attaches, like
+  `std::string`'s, or a [derived](/volt-bootstrap/guide/comptime/#derive) one. A type without one
+  can't be compared. `eq` takes one side by reference, so both sides can't be temporaries
+  (`make() == make()`: store one in a variable first).
 - `a..b` and `a..=b` are ranges (exclusive and inclusive).
 - Operands and arguments are evaluated left to right. `place = value` evaluates the value first,
   then the place; `place += value` evaluates the place first, since it reads it.

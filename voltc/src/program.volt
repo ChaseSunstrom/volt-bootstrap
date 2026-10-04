@@ -443,7 +443,7 @@ attach fn check_attach_block(this: checker&, b: u32) -> compile_error!void {
         .ATTACH(tr&, target&, fs&) => {
             match (tr.kind) {
                 .PATH(p&) => {
-                    val r = this.bound_trait(tr, ns) ?? return this.not_a_trait(tr.span, ns, p);
+                    val r = this.block_trait(b) ?? return this.not_a_trait(tr.span, ns, p);
                     try this.visible(r.decl, tr.span);
                     return this.check_required(r.decl, fs, tr.span, p.last(), ns);
                 },

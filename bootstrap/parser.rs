@@ -1129,7 +1129,11 @@ impl<'a> Parser<'a> {
                 _ => None,
             };
             if let Some(k) = k {
+                let word = s.clone();
                 self.bump();
+                if word == "copy" && (self.is(")") || self.is(",")) {
+                    return err(start, "copy needs a value: copy x (a struct copies field by field; there's no copy derive)");
+                }
                 let e = self.unary()?;
                 return Ok(wrap(k, e));
             }

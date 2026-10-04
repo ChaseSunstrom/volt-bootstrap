@@ -349,8 +349,9 @@ attach fn wrapper_field(this: checker&, b: tval&, name: str, span: span) -> comp
             if (name != "value") {
                 return null;
             }
-            if (b.lv && (try this.needs_drop(inner))) {
-                // a place: .value names the payload in place (a borrow), so ownership stays put
+            if (b.lv) {
+                // a place: .value names the payload in place (a borrow: ownership stays put, and
+                // &x.value is its address)
                 val pt = this.t.ref_to(b.ty);
                 val o = this.tmp_local("o", pt);
                 val obj = this.ir.deref(o.c, b.ty);

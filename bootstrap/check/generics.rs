@@ -111,6 +111,18 @@ impl Checker {
             if self.match_recv(&pat, t, &gps, &mut binds, ns).is_none() {
                 continue;
             }
+            // a generic method applies only to the types its bounds allow (a derive's)
+            let env = self.partial_env(ns, &gps, &binds);
+            for (gp, b) in gps.iter().zip(&binds) {
+                let Some(GVal::Ty(bt)) = b else { continue };
+                for bound in &gp.bounds {
+                    if let Some((tr, targs)) = self.bound_trait(bound, ns) {
+                        if !self.satisfies(*bt, tr, &targs, &env).unwrap_or(false) {
+                            continue 'cands;
+                        }
+                    }
+                }
+            }
             let ItemKind::Fn(f) = &self.decls[d].item.kind else { continue };
             let ps: Vec<Option<Type>> = f.params.iter().skip(1).map(|p| p.ty.clone()).collect();
             if ps.len() < args.len() {
@@ -532,8 +544,8 @@ impl Checker {
         for b in self.attach_blocks.clone() {
             let item = self.decls[b].item.clone();
             let ns = self.decls[b].ns;
-            let ItemKind::AttachBlock { trait_, target, .. } = &item.kind else { continue };
-            let Some((tr, block_targs)) = self.bound_trait(trait_, ns) else { continue };
+            let ItemKind::AttachBlock { target, .. } = &item.kind else { continue };
+            let Some((tr, block_targs)) = self.block_trait(b) else { continue };
             if tr != trait_decl {
                 continue;
             }
@@ -576,7 +588,7 @@ impl Checker {
 
     /// How many of a fn's receiver and parameters are a bare generic parameter (T, T&, T*, T...): a blanket
     /// version (`<T> eq(this: T&, other: T&)`) has more than one written for a type (`string<A>&`)
-    fn blanket_positions(&self, decl: DeclId) -> usize {
+    pub fn blanket_positions(&self, decl: DeclId) -> usize {
         let ItemKind::Fn(f) = &self.decls[decl].item.kind else { return 0 };
         let gps = self.fn_generics(decl);
         let bare = |t: &Type| {
@@ -584,7 +596,8 @@ impl Checker {
                 TypeKind::Ref(i) | TypeKind::Ptr(i) | TypeKind::Pack(i) => &**i,
                 _ => t,
             };
-            matches!(&inner.kind, TypeKind::Path(p) if p.is_single() && gps.iter().any(|g| g.name == p.segs[0].name))
+            // a parameter with a trait bound isn't a blanket: <T: marked> is more specific than <T: type>
+            matches!(&inner.kind, TypeKind::Path(p) if p.is_single() && gps.iter().any(|g| g.name == p.segs[0].name && g.bounds.iter().all(Self::is_type_bound)))
         };
         let mut n = match self.recv_of(decl) {
             Recv::Val(pat) | Recv::Static(pat) => bare(&pat) as usize,
@@ -921,8 +934,8 @@ impl Checker {
         for b in self.attach_blocks.clone() {
             let item = self.decls[b].item.clone();
             let ns = self.decls[b].ns;
-            let ItemKind::AttachBlock { trait_, target, .. } = &item.kind else { continue };
-            if !item.generics.is_empty() || self.bound_trait(trait_, ns).map(|x| x.0) != Some(trait_decl) {
+            let ItemKind::AttachBlock { target, .. } = &item.kind else { continue };
+            if !item.generics.is_empty() || self.block_trait(b).map(|x| x.0) != Some(trait_decl) {
                 continue;
             }
             let env = Rc::new(Env { ns, generics: Vec::new() });

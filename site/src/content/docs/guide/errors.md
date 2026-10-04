@@ -245,8 +245,9 @@ fn main() -> void {
 // expect: 42 6
 ```
 
-`x.value` and `x.none` read an optional directly. A condition is always a `bool`, except that an
-optional is allowed (it means "has a value").
+`x.value` and `x.none` read an optional directly; when `x` is a variable or a field, `x.value` is
+its value in place (`&x.value` is a reference to it). A condition is always a `bool`, except that
+an optional is allowed (it means "has a value").
 
 Pointers (`T*`) may be null too; `if (p)` and `p ?? x` turn one into a reference. See
 [References and pointers](/volt-bootstrap/guide/references/).

@@ -632,6 +632,23 @@ attach fn method_fits(this: checker&, d: u32, t: u32, args: std::vec<u32>&) -> b
             if (this.match_recv(p, t, gps, &binds, ns) == null) {
                 return false;
             }
+            // a generic method applies only to the types its bounds allow (a derive's)
+            val env = this.partial_env(ns, gps, &binds);
+            for (i) in 0..gps.len {
+                match (*binds.at(i) ?? continue) {
+                    .TY(bt) => {
+                        for (b&) in gps.at(i).bounds.items() {
+                            val bty = *b ?? continue;
+                            val tr = this.bound_trait(bty, ns) ?? continue;
+                            val ok = this.satisfies(bt, tr.decl, tr.args, env) catch |x| { return false; };
+                            if (!ok) {
+                                return false;
+                            }
+                        }
+                    },
+                    default => {},
+                }
+            }
             val f = this.fn_decl_of(d) ?? return false;
             if (f.params.len < args.len + 1) {
                 return false;
@@ -1041,7 +1058,7 @@ attach fn satisfies(this: checker&, t: u32, trait_decl: u32, targs: std::vec<gar
         val ns = this.dl(*b).ns;
         match (this.item_of(*b).kind) {
             .ATTACH(tr&, target&, fs) => {
-                val bt = this.bound_trait(tr, ns) ?? continue;
+                val bt = this.block_trait(*b) ?? continue;
                 if (bt.decl != trait_decl) {
                     continue;
                 }
@@ -1163,6 +1180,14 @@ fn bare_generic(t: ty&, gps: std::vec<gparam>&) -> bool {
     }
     for (g&) in gps.items() {
         if (g.name == q->segs.at(0).name) {
+            // a parameter with a trait bound isn't a blanket: <T: marked> is more specific than
+            // <T: type>
+            for (b&) in g.bounds.items() {
+                val bt = *b ?? continue;
+                if (!is_type_bound(bt)) {
+                    return false;
+                }
+            }
             return true;
         }
     }
@@ -1695,7 +1720,7 @@ attach fn trait_union(this: checker&, trait_decl: u32, span: span) -> compile_er
         }
         match (this.item_of(*b).kind) {
             .ATTACH(tr&, target&, fs) => {
-                val bt = this.bound_trait(tr, ns) ?? continue;
+                val bt = this.block_trait(*b) ?? continue;
                 if (bt.decl != trait_decl) {
                     continue;
                 }

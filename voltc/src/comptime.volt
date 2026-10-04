@@ -2907,6 +2907,7 @@ fn attr_defs() -> std::vec<attr_def> {
     put(&v, { name: "optional", args: 0 }); // a trait fn an attach block may leave out
     put(&v, { name: "closed", args: 0 }); // a trait whose attach blocks hold its fns only
     put(&v, { name: "attach_as", args: 1 }); // a struct attach blocks name for this trait (a C++ class's virtuals)
+    put(&v, { name: "derive", args: 1 }); // attach these traits (std::derive's when not in scope) to the struct or enum
     return move v;
 }
 
@@ -3036,6 +3037,12 @@ attach fn check_attr(this: checker&, a: expr&, file: u32) -> compile_error!void 
             return;
         }
         return fails(a.span, "@cfg takes 1 or 2 arguments: @cfg(\"os\", \"none\")");
+    }
+    if (name == "derive") {
+        if (n_args >= 1) {
+            return;
+        }
+        return fails(a.span, "@derive names the traits to attach: @derive(eq, hash)");
     }
     if (name == "intrinsic" || name == "runtime") {
         for (pf&) in this.opts.pkg_files.items() {
