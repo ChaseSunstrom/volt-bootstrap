@@ -25,8 +25,8 @@ importing C, C++, Rust, Zig and Swift code. Each one is a `run.sh` with its exac
   is; `use cpp`, `use rust`, `use zig` or `use go { ... }` says it outright where it's ambiguous.
 - **Swift**: import the files, `use { "shapes.swift" } as x;`, and call their functions, structs,
   classes and enums, see [Swift](/volt-bootstrap/interop/swift/).
-- **Python**: depend on the `interop/python` package, see [Python](/volt-bootstrap/interop/python/).
-  Or embed it like any C library: `use { "Python.h" } as py;` with the flags from
+- **Python**: import the module, `use { "geom.py" } as geom;` (or a package's directory), see
+  [Python](/volt-bootstrap/interop/python/). Or embed it like any C library: `use { "Python.h" } as py;` with the flags from
   `python3-config --includes` and `--ldflags --embed` passed through `--cc`.
 - **Node.js**: write the addon in Volt with `interop/node`, see [Node.js](/volt-bootstrap/interop/node/#addons-written-in-volt).
 - **C#** and other .NET languages: import the sources or the assembly, `use { "Geo.cs" } as geo;`

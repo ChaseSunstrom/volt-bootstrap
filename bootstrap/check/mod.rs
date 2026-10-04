@@ -577,12 +577,12 @@ impl Checker {
             }
             ItemKind::UseC { headers, alias } => {
                 // the extension names the language (use { "geom.rs" }), and only C is read here
-                const FOREIGN: [(&str, &str); 19] = [("hpp", "C++"), ("hh", "C++"), ("hxx", "C++"), ("h++", "C++"), ("cpp", "C++"), ("cc", "C++"), ("cxx", "C++"), ("c++", "C++"), ("ipp", "C++"), ("tpp", "C++"), ("ixx", "C++"), ("rs", "Rust"), ("zig", "Zig"), ("swift", "Swift"), ("go", "Go"), ("java", "Java"), ("jar", "Java"), ("cs", "C#"), ("dll", ".NET")];
+                const FOREIGN: [(&str, &str); 20] = [("hpp", "C++"), ("hh", "C++"), ("hxx", "C++"), ("h++", "C++"), ("cpp", "C++"), ("cc", "C++"), ("cxx", "C++"), ("c++", "C++"), ("ipp", "C++"), ("tpp", "C++"), ("ixx", "C++"), ("rs", "Rust"), ("zig", "Zig"), ("swift", "Swift"), ("go", "Go"), ("java", "Java"), ("jar", "Java"), ("cs", "C#"), ("dll", ".NET"), ("py", "Python")];
                 let ext = |h: &String| h.rsplit('/').next().and_then(|n| n.rsplit_once('.')).map(|(_, e)| e.to_ascii_lowercase());
                 // a directory with a Cargo.toml is a Rust crate, one with a go.mod a Go package
                 let src = &self.sm.files[file as usize].0;
                 let dir = std::path::Path::new(src).parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(std::path::Path::new("."));
-                let lang = |h: &String| FOREIGN.iter().find(|f| ext(h).as_deref() == Some(f.0)).map(|f| f.1).or_else(|| dir.join(h).join("Cargo.toml").is_file().then_some("Rust")).or_else(|| dir.join(h).join("go.mod").is_file().then_some("Go"));
+                let lang = |h: &String| FOREIGN.iter().find(|f| ext(h).as_deref() == Some(f.0)).map(|f| f.1).or_else(|| dir.join(h).join("Cargo.toml").is_file().then_some("Rust")).or_else(|| dir.join(h).join("go.mod").is_file().then_some("Go")).or_else(|| dir.join(h).join("__init__.py").is_file().then_some("Python"));
                 if let Some((h, lang)) = headers.iter().find_map(|h| lang(h).map(|l| (h, l))) {
                     return err(item.span, format!("use {{ \"{h}\" }}: {lang} is imported by the self-hosted voltc; voltc-bootstrap reads only C headers"));
                 }

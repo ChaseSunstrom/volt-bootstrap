@@ -13,6 +13,7 @@ mod dotnet;
 mod glue;
 mod go;
 mod java;
+mod python;
 mod rust;
 mod swift;
 mod zig;
@@ -76,7 +77,8 @@ fn run(r: &Req) -> Result<(), String> {
         "go-link" => go::link(r),
         "java" => java::import(r),
         "dotnet" => dotnet::import(r),
-        other => Err(format!("there's no `use {other}`: the languages Volt imports are c (use {{ \"x.h\" }}), cpp, rust, zig, swift, go, java and dotnet")),
+        "python" => python::import(r),
+        other => Err(format!("there's no `use {other}`: the languages Volt imports are c (use {{ \"x.h\" }}), cpp, rust, zig, swift, go, java, dotnet and python")),
     }
 }
 

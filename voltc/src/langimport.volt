@@ -8,8 +8,9 @@
 use std::io;
 
 // the language a file is in, from its extension: "cpp", "rust", "zig", "swift", "go", "java" (.java,
-// .jar) or "dotnet" (.cs, .dll), or null for a C header (a directory with a Cargo.toml is a Rust crate, one with a go.mod a Go
-// package). A C++ header named .h needs `use cpp { }`, a directory of classes `use java { }`
+// .jar), "dotnet" (.cs, .dll) or "python" (.py), or null for a C header (a directory with a Cargo.toml
+// is a Rust crate, one with a go.mod a Go package, one with an __init__.py a Python package). A C++
+// header named .h needs `use cpp { }`, a directory of classes `use java { }`
 fn language_of(path: str, dir: str) -> str? {
     var name = path;
     for (i) in 0..path.len {
@@ -52,6 +53,9 @@ fn language_of(path: str, dir: str) -> str? {
     if (ext == "cs" || ext == "dll") {
         return "dotnet";
     }
+    if (ext == "py") {
+        return "python";
+    }
     var full = S(path);
     if (path.len == 0 || path[0] != '/') {
         full = S(dir);
@@ -63,9 +67,14 @@ fn language_of(path: str, dir: str) -> str? {
     if (std::fs::is_file(cargo.as_str())) {
         return "rust";
     }
-    full.append("/go.mod");
-    if (std::fs::is_file(full.as_str())) {
+    var gomod = copy full;
+    gomod.append("/go.mod");
+    if (std::fs::is_file(gomod.as_str())) {
         return "go";
+    }
+    full.append("/__init__.py");
+    if (std::fs::is_file(full.as_str())) {
+        return "python";
     }
     return null;
 }

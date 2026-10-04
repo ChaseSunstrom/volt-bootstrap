@@ -1,11 +1,60 @@
 ---
 title: Python
-description: Calling Python from Volt with the interop/python package, and Volt from Python through generated bindings.
+description: Calling a Python module from Volt by importing it like a header, and Volt from Python through generated bindings.
 sidebar:
   order: 4
 ---
 
-The `interop/python` package (in the repository) embeds the Python interpreter. Depend on it and
+## Volt calls Python
+
+A Python module is imported like a header: a `.py` file, or a package's directory (one with an
+`__init__.py`). Nothing in the Python is written for Volt, and the Volt code has no interpreter
+handles or object juggling: bolt asks Python what the module exports, typed by its annotations,
+and writes Volt that calls it through Python's C API. Python starts the first time it's called.
+
+```volt ignore
+use std::io;
+use { "geom.py" } as geom;
+
+fn main() -> void {
+    var p = geom::Point::new(3.0, 4.0);          // a class (a dataclass here): Point(3.0, 4.0)
+    p.scale(2.0);                                 // a method
+    p.set_y(1.5);                                 // an attribute: y() and set_y(v)
+    std::println("{} {}", p.x(), geom::upper("quiet"));             // 6 QUIET
+    std::println("{} {}", geom::add(40), geom::greet("volt", true)); // defaults, keyword-only arguments
+    val xs: i64[3] = { 5, 7, 9 };
+    std::println("{}", geom::find(xs[..], 9) ?? -1);                 // int | None is i64?: 2
+}
+```
+
+| Python | Volt |
+| --- | --- |
+| a function with annotated parameters | `fn f(...)`; simple defaults stay defaults, keyword-only parameters are ordinary ones |
+| a class | a handle: a reference to the object (a copy refers to the same one); `is_null()` for `None` |
+| `__init__` | `T::new(...)` |
+| methods, `@staticmethod`, `@classmethod` | methods, and `T::f(...)` |
+| a property, an annotated attribute (a dataclass's fields) | `x()` and, unless it's read-only, `set_x(v)` |
+| a base class `B` of the module | `as_B()`: the same object, as a `B` |
+| an `Enum` | a Volt enum (its int values kept) |
+| `int`, `float`, `bool` | `i64`, `f64`, `bool` |
+| `str` | `str` in, `std::string` out |
+| `bytes` | `u8[..]` in, `std::vec<u8>` out |
+| `list[int]`, `list[float]`, `list[bool]`, `list[str]` | `T[..]` in (what Python changes in the list comes back, but for `str`), `std::vec<T>` out |
+| `X \| None`, `Optional[X]` | `X?`; for a class, an empty handle is `None` |
+| no return annotation, `-> None` | `void` |
+| an `UPPER_CASE` constant (a number, `bool` or string) | a `val` |
+
+An exception stops the program with its type and message, as a Volt panic does (Python declares
+none to make an error of). A parameter without an annotation, `*args`, `**kwargs`, callables, dicts
+and tuples are left out, listed in a comment of the generated declarations. Calls hold the GIL, so
+any thread can make them. bolt runs `python3` (or `$PYTHON`) to read the module and
+`python3-config` (or `$PYTHON_CONFIG`) for `Python.h` and the library; it needs Python 3.13 or
+later.
+
+## The interop/python package
+
+The `interop/python` package (in the repository) embeds the Python interpreter for calls made by
+hand. Depend on it and
 call Python with Volt values; its build file asks `python3-config` (or `$PYTHON_CONFIG`) for the
 headers and the library, and bolt passes them to your program.
 
