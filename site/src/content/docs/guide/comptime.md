@@ -318,6 +318,56 @@ fn main() -> void {
 The methods apply to the types that attach the trait and no others: between generic versions that
 fit equally well, one whose type parameter has a trait bound is chosen over one taking any type.
 
+## Generating code: quote and @emit
+
+`quote { ... }` is Volt source as a comptime `str`, with values spliced in: `$(expr)`, or `$name`
+for a plain name. A spliced `str` goes in as its text (a name, or more code), a type by its name, an
+integer or a bool as written (`quote` followed by `{` is always a quote). A top-level `@emit(code);` declares what that source holds, in its
+namespace. So a comptime function can write declarations from anything it can see at compile time,
+like a type's fields:
+
+```volt
+use std::io;
+
+struct point {
+    x: i32;
+    y: f64;
+}
+
+// get_x(), get_y(): a getter each field, of the field's type
+comptime fn getters(T: type) -> str {
+    var out = "";
+    match (@typeinfo(T).kind) {
+        .STRUCT(s) => {
+            for (f) in s.0 {
+                out = quote {
+                    $(out)
+                    attach fn get_$(f.name)(this: $(T)&) -> $(f.field_type) {
+                        return this.$(f.name);
+                    }
+                };
+            }
+        },
+        default => {},
+    }
+    return out;
+}
+
+@emit(getters(point));
+
+fn main() -> void {
+    val p: point = { x: 3, y: 1.5 };
+    std::println("{} {}", p.get_x(), p.get_y());
+}
+// expect: 3 1.5
+```
+
+Quotes build up by splicing one into another, as `$(out)` does above. The emitted source is
+parsed as a file of its own, named after the `@emit` (`<emit at main.volt:22>`), so an error in it
+points at the generated line; its types are checked where they're used, like any declaration. An
+`@emit` in emitted code runs too, after the one that made it (up to 10,000 of them: code that
+emits itself is an error, not a hang).
+
 ## Type ids: @typeid
 
 `@typeid(T)` is a `u64` naming a type: the 64-bit FNV-1a hash of its canonical name (the

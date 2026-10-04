@@ -189,6 +189,11 @@ impl W {
                 self.ty(t);
                 self.close();
             }
+            ItemKind::Emit(e) => {
+                self.open("emit");
+                self.expr(e);
+                self.close();
+            }
         }
         self.close();
     }
@@ -608,6 +613,15 @@ impl W {
             ExprKind::Async(x) => {
                 self.open("async");
                 self.expr(x);
+            }
+            ExprKind::Quote(parts) => {
+                self.open("quote");
+                for p in parts {
+                    match p {
+                        QuotePart::Text(t) => self.bytes(t.as_bytes()),
+                        QuotePart::Splice(e) => self.expr(e),
+                    }
+                }
             }
             ExprKind::Move(x) => {
                 self.open("move");

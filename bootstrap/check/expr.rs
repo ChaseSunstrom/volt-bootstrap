@@ -403,6 +403,7 @@ impl Checker {
             ExprKind::Closure { caps, generics, params, ret, body } => self.closure_expr(caps, generics, params, ret.as_ref(), body, want, span),
             ExprKind::Await(x) => self.await_expr(x, want),
             ExprKind::Async(_) => err(span, "async f() builds a frame in place, so it only works as `val fr = async f()`"),
+            ExprKind::Quote(_) => err(span, "a quote is evaluated at compile time"),
         }
     }
 

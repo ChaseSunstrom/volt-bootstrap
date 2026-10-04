@@ -114,6 +114,7 @@ attach fn ct_eval_in(this: checker&, env: u32, e: expr&, want: u32?) -> compile_
 // is this expression only meaningful at compile time (so it gets evaluated, not emitted)?
 attach fn is_ct_expr(this: checker&, e: expr&) -> bool {
     match (e.kind) {
+        .QUOTE(p) => { return true; },
         .BUILTIN(n, g, a) => { return n == "typeinfo" || n == "typeof" || n == "compile_error" || n == "cfg" || n == "attaches" || n == "has_method" || n == "has_field"; },
         .CALL(c, args) => {
             match (c.kind) {
@@ -695,6 +696,18 @@ attach fn ct_expr(this: checker&, e: expr&, want: u32?) -> compile_error!cval {
             return cval::FLOAT(v, t);
         },
         .STR(s) => { return cval::STR(copy s); },
+        .QUOTE(parts&) => {
+            var out: std::string = {};
+            for (p&) in parts.items() {
+                out.append(p.text);
+                if (p.splice) {
+                    val x = &p.splice;
+                    val v = try this.ct_expr(x, null);
+                    out.append((try this.splice_text(v, x.span)).as_str());
+                }
+            }
+            return cval::STR(move out);
+        },
         .BOOL(b) => { return cval::BOOL(b); },
         .NULL => { return cval::NULL; },
         .PATH(p&) => { return this.ct_path(p, want, span); },
@@ -2541,6 +2554,25 @@ attach fn typeinfo(this: checker&, t: u32, span: span) -> compile_error!cval {
     }
     put(&r, cf("attributes", move attributes));
     return rec1(move r);
+}
+
+// a value spliced into a quote, as source text: a str's text (a name, or code), a type by its name, a
+// number, a bool
+attach fn splice_text(this: checker&, v: cval, span: span) -> compile_error!std::string {
+    match (v) {
+        .STR(s) => { return copy s; },
+        .TYPE(t) => { return this.ty_name(t); },
+        .INT(n, k) => { return num(n); },
+        .BOOL(b) => {
+            if (b) {
+                return S("true");
+            }
+            return S("false");
+        },
+        .STRUCT(t, fs) => { return fail(span, fmt("can't splice a {} into code (it takes text, a type, a number or a bool)", this.ty_name(t))); },
+        default => {},
+    }
+    return fails(span, "can't splice this value into code (it takes text, a type, a number or a bool)");
 }
 
 // a library's attribute: a struct (or comptime fn) named and called, or a comptime value's name;

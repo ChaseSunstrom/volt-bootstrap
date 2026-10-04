@@ -299,6 +299,11 @@ attach fn item(this: sexp_writer&, it: item&) -> void {
             this.ty(t);
             this.close();
         },
+        .EMIT(e&) => {
+            this.open("emit");
+            this.expr(e);
+            this.close();
+        },
     }
     this.close();
 }
@@ -766,6 +771,15 @@ attach fn expr(this: sexp_writer&, e: expr&) -> void {
         .ASYNC(x) => {
             this.open("async");
             this.expr(x);
+        },
+        .QUOTE(parts&) => {
+            this.open("quote");
+            for (p&) in parts.items() {
+                this.name(p.text);
+                if (p.splice) {
+                    this.expr(&p.splice);
+                }
+            }
         },
         .MOVE(x) => {
             this.open("move");

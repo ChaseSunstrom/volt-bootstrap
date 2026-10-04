@@ -275,6 +275,15 @@ impl<'a> Parser<'a> {
     /// export attach extern "abi"), then the keyword that says what it is
     fn item(&mut self) -> Res<Item> {
         let start = self.span();
+        // @emit(code); declares what the comptime str of Volt source holds
+        if matches!(self.tok(), Tok::Builtin(s) if s == "emit") {
+            self.bump();
+            self.expect("(")?;
+            let e = self.expr()?;
+            self.expect(")")?;
+            self.expect(";")?;
+            return Ok(Item { kind: ItemKind::Emit(e), span: start.to(self.prev_span()), attrs: Vec::new(), vis: Vis::Public, generics: Vec::new() });
+        }
         let mut attrs = Vec::new();
         let mut generics = Vec::new();
         loop {
@@ -1238,6 +1247,55 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// quote { ... }: its Volt source as a comptime str, with $(expr) and $name splices filled in
+    /// when it's evaluated
+    fn quote(&mut self) -> Res<Expr> {
+        let start = self.span();
+        self.bump();
+        let open = self.span();
+        self.expect("{")?;
+        let mut parts = Vec::new();
+        let mut from = open.hi as usize;
+        let mut depth = 0usize;
+        loop {
+            match self.tok() {
+                Tok::Eof => return err(open, "this quote's { is never closed"),
+                Tok::Punct("{") => {
+                    depth += 1;
+                    self.bump();
+                }
+                Tok::Punct("}") if depth == 0 => {
+                    parts.push(QuotePart::Text(self.src[from..self.span().lo as usize].to_string()));
+                    self.bump();
+                    break;
+                }
+                Tok::Punct("}") => {
+                    depth -= 1;
+                    self.bump();
+                }
+                Tok::Punct("$") => {
+                    parts.push(QuotePart::Text(self.src[from..self.span().lo as usize].to_string()));
+                    self.bump();
+                    let e = if self.eat("(") {
+                        let e = self.expr()?;
+                        self.expect(")")?;
+                        e
+                    } else {
+                        let sp = self.span();
+                        let (name, _) = self.ident()?;
+                        Expr { kind: ExprKind::Path(Path::single(&name, sp)), span: sp }
+                    };
+                    parts.push(QuotePart::Splice(e));
+                    from = self.prev_span().hi as usize;
+                }
+                _ => {
+                    self.bump();
+                }
+            }
+        }
+        Ok(Expr { kind: ExprKind::Quote(parts), span: start.to(self.prev_span()) })
+    }
+
     /// a literal, name, `(...)`, `{...}` literal, closure, label, `.VARIANT`, open range, or a keyword
     /// expression (return, break, if, match, loops...)
     fn primary(&mut self) -> Res<Expr> {
@@ -1329,6 +1387,7 @@ impl<'a> Parser<'a> {
                 mk(ExprKind::Range(None, rhs, p == "..="), self)
             }
             Tok::Ident(s) => match s.as_str() {
+                "quote" if self.is_at(1, "{") => self.quote(),
                 "true" | "false" => {
                     self.bump();
                     mk(ExprKind::Bool(s == "true"), self)

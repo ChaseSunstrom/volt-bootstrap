@@ -82,6 +82,7 @@ impl Checker {
     /// is this expression only meaningful at compile time (so it gets evaluated, not emitted)?
     pub fn is_ct_expr(&self, e: &Expr) -> bool {
         match &e.kind {
+            ExprKind::Quote(_) => true,
             ExprKind::Builtin(n, _, _) => matches!(n.as_str(), "typeinfo" | "typeof" | "compile_error" | "cfg" | "attaches" | "has_method" | "has_field"),
             ExprKind::Call(c, _) => match &c.kind {
                 ExprKind::Path(p) => {
@@ -472,6 +473,19 @@ impl Checker {
             ExprKind::Char(v) => Ok(CVal::Int(*v as i128, VOID)),
             ExprKind::Float(v) => Ok(CVal::Float(*v, want.filter(|w| self.t.is_float(*w)).unwrap_or(VOID))),
             ExprKind::Str(s) => Ok(CVal::Str(s.clone())),
+            ExprKind::Quote(parts) => {
+                let mut out = String::new();
+                for p in parts {
+                    match p {
+                        QuotePart::Text(t) => out.push_str(t),
+                        QuotePart::Splice(x) => {
+                            let v = self.ct_expr(x, None)?;
+                            out.push_str(&self.splice_text(v, x.span)?);
+                        }
+                    }
+                }
+                Ok(CVal::Str(out.into_bytes()))
+            }
             ExprKind::Bool(b) => Ok(CVal::Bool(*b)),
             ExprKind::Null => Ok(CVal::Null),
             ExprKind::Path(p) => self.ct_path(p, want, span),
@@ -1895,6 +1909,19 @@ impl Checker {
                 err(a.span, format!("unknown attribute @{name} (there are: {})", known.join(", ")))
             }
         }
+    }
+
+    /// a value spliced into a quote, as source text: a str's text (a name, or code), a type by its
+    /// name, a number, a bool
+    fn splice_text(&mut self, v: CVal, span: Span) -> CRes<String> {
+        Ok(match v {
+            CVal::Str(s) => String::from_utf8_lossy(&s).into_owned(),
+            CVal::Type(t) => self.ty_name(t),
+            CVal::Int(n, _) => n.to_string(),
+            CVal::Bool(b) => b.to_string(),
+            CVal::Struct(t, _) => return cerr(span, format!("can't splice a {} into code (it takes text, a type, a number or a bool)", self.ty_name(t))),
+            _ => return cerr(span, "can't splice this value into code (it takes text, a type, a number or a bool)"),
+        })
     }
 
     /// a library's attribute: a struct (or comptime fn) named and called, or a comptime value's name;

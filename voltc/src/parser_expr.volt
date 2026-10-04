@@ -644,6 +644,9 @@ attach fn primary(this: parser&) -> compile_error!expr {
         return { kind: expr_kind::RANGE(null, move rhs, incl), span: start.to(this.prev_span()) };
     }
     val s = ident_of(this.tok()) ?? return this.unexpected("an expression");
+    if (s == "quote" && this.is_at(1, "{")) {
+        return this.quote();
+    }
     if (s == "true" || s == "false") {
         this.bump();
         return { kind: expr_kind::BOOL(s == "true"), span: start.to(this.prev_span()) };
@@ -937,4 +940,54 @@ attach fn pat_args(this: parser&) -> compile_error!(std::vec<pat>?) {
         }
     }
     return move args;
+}
+
+// quote { ... }: its Volt source as a comptime str, with $(expr) and $name splices filled in when
+// it's evaluated
+attach fn quote(this: parser&) -> compile_error!expr {
+    val start = this.span();
+    this.bump();
+    val open = this.span();
+    try this.expect("{");
+    var parts: std::vec<quote_part> = {};
+    var from = @cast<usize>(open.hi);
+    var depth: usize = 0;
+    loop {
+        if (this.at_eof()) {
+            return fails(open, "this quote's { is never closed");
+        }
+        if (this.is("{")) {
+            depth += 1;
+            this.bump();
+            continue;
+        }
+        if (this.is("}")) {
+            if (depth == 0) {
+                put(&parts, { text: this.src[from..@cast<usize>(this.span().lo)], splice: null });
+                this.bump();
+                break;
+            }
+            depth -= 1;
+            this.bump();
+            continue;
+        }
+        if (this.is("$")) {
+            val text = this.src[from..@cast<usize>(this.span().lo)];
+            this.bump();
+            var e: expr? = null;
+            if (this.eat("(")) {
+                e = try this.expr();
+                try this.expect(")");
+            } else {
+                val sp = this.span();
+                val name = (try this.ident()).name;
+                e = { kind: expr_kind::PATH(single_path(name, sp)), span: sp };
+            }
+            put(&parts, { text: text, splice: move e });
+            from = @cast<usize>(this.prev_span().hi);
+            continue;
+        }
+        this.bump();
+    }
+    return { kind: expr_kind::QUOTE(move parts), span: start.to(this.prev_span()) };
 }

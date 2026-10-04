@@ -90,6 +90,12 @@ struct capture {
     span: span;
 }
 
+// a piece of a quote's source text, and the value spliced in after it (none after the last)
+struct quote_part {
+    text: str;
+    splice: expr?;
+}
+
 struct lit_entry {
     name: str?;
     value: expr;
@@ -174,6 +180,7 @@ enum expr_kind {
     LITERAL: std::vec<lit_entry>,
     REPEAT: (std::box<expr>, std::box<expr>), // { x; n }: an array of n copies of x, typed by context
     CLOSURE: closure,
+    QUOTE: std::vec<quote_part>, // quote { Volt source with $(splices) }: a comptime str
     TRY: std::box<expr>,
     AWAIT: std::box<expr>,
     ASYNC: std::box<expr>,
@@ -346,6 +353,7 @@ enum item_kind {
     USE_LANG: (str, std::vec<std::string>, str), // `use rust { "geom" } as geom;`: language, arguments, alias (langimport.volt)
     GLOBAL: let_stmt,
     ALIAS: (str, ty), // another name for a type: `type name = T;`, or a C typedef (cimport.volt)
+    EMIT: expr, // `@emit(code);`: the declarations a comptime str of Volt source holds (a quote, usually)
 }
 
 // a top-level declaration with its `@attributes(...)` and the `<...>` generic params written before it

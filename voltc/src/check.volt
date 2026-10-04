@@ -381,6 +381,9 @@ struct checker {
     attach_blocks: std::vec<u32> = {};
     derive_items: std::vec<std::box<item>> = {}; // the attach blocks @derive made
     derive_blocks: std::map<u32, bool> = {};     // their decls (a trait not in scope is std::derive's)
+    pending_emits: std::vec<pending_emit> = {};  // the @emit(...)s collected and not yet run
+    emit_texts: std::vec<std::string> = {};      // the source each @emit gave (its file's text)
+    emit_items: std::vec<std::box<std::vec<item>>> = {}; // and what it declared
     unions: std::vec<std::box<union_info>> = {};
     union_ids: std::map<u32, u32> = {};
     fns: std::vec<std::box<fn_inst>> = {};
@@ -626,6 +629,10 @@ attach fn collect_item(this: checker&, it: item&, ns: u32, parent: u32?) -> comp
     var is_block = false;
     var is_attach_fn = false;
     match (it.kind) {
+        .EMIT(e&) => {
+            put(&this.pending_emits, { e: e, ns: ns });
+            return;
+        },
         .NAMESPACE(path, items) => {
             var n = ns;
             for (p&) in path.items() {
@@ -735,6 +742,69 @@ attach fn collect_item(this: checker&, it: item&, ns: u32, parent: u32?) -> comp
     if (parent == null) {
         try this.collect_derives(it, ns);
     }
+}
+
+// how many @emits a program may run (one whose code emits itself would never stop)
+val MAX_EMITS: usize = 10000;
+
+// an @emit(...) waiting to run, and the namespace it's in
+struct pending_emit {
+    e: expr*;
+    ns: u32;
+}
+
+// Run the @emit(...)s, in order: each one's value is Volt source (a quote, usually), parsed as a file
+// of its own (<emit at file:line>, so errors point into it) and declared in the @emit's namespace. An
+// @emit it holds runs after it
+attach fn run_emits(this: checker&) -> compile_error!void {
+    var i: usize = 0;
+    while (i < this.pending_emits.len) {
+        val pe = *this.pending_emits.at(i);
+        i += 1;
+        val e = pe.e ?? continue;
+        if (i > MAX_EMITS) {
+            return fail(e.span, fmt("@emit expands without end (over {} of them): an @emit's code keeps emitting more", unum(@cast<u64>(MAX_EMITS))));
+        }
+        val env = this.new_env({ ns: pe.ns });
+        var text = S("");
+        match (try this.ct_eval_in(env, e, STR)) {
+            .STR(s) => { text = copy s; },
+            default => { return fails(e.span, "@emit takes Volt source: a str, like a quote { ... }"); },
+        }
+        // named in the emitting file's directory, so paths in it (use { "x.h" }) resolve as there
+        val lc = this.line_col(e.span);
+        val from = this.files.at(@cast<usize>(e.span.file)).name;
+        var slash: usize? = null;
+        for (k) in 0..from.len {
+            if (from[k] == '/') {
+                slash = k;
+            }
+        }
+        var fname: std::string = {};
+        if (slash) {
+            fname.append(from[0..slash]);
+            fname.append("/<emit at ");
+            fname.append(from[slash + 1..from.len]);
+        } else {
+            fname.append("<emit at ");
+            fname.append(from);
+        }
+        fname.push(':');
+        fname.append_uint(@cast<u64>(lc.line));
+        fname.push('>');
+        put(&this.emit_texts, move text);
+        val src = this.emit_texts.at(this.emit_texts.len - 1).as_str();
+        put(this.files, { name: this.intern(move fname), text: src });
+        val file = @cast<u32>(this.files.len - 1);
+        val toks = try lex(src, file);
+        var names: std::map<str, bool> = {};
+        collect_generic_names(&toks, &names);
+        var p: parser = { src: src, toks: &toks, pos: 0, generics: &names };
+        val items = try p.parse_file();
+        put(&this.emit_items, bx(move items));
+        try this.collect(*this.emit_items.at(this.emit_items.len - 1), pe.ns);
+    }
+    this.pending_emits = {};
 }
 
 // @derive(a, b) on a struct or enum: `attach a -> T {}` and `attach b -> T {}` (with T's generic

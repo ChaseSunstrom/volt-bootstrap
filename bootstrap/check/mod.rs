@@ -313,6 +313,8 @@ pub struct Checker {
     pub attach_blocks: Vec<DeclId>,
     /// the attach blocks @derive made (their trait, when not in scope, is std::derive's)
     pub derive_blocks: HashSet<DeclId>,
+    /// the @emit(...)s collected and not yet run, with their namespaces
+    pub pending_emits: Vec<(Expr, NsId)>,
     pub unions: Vec<UnionInfo>,
     pub union_ids: HashMap<DeclId, u32>,
     pub fns: Vec<FnInst>,
@@ -388,6 +390,7 @@ impl Checker {
             attached: HashMap::new(),
             attach_blocks: Vec::new(),
             derive_blocks: HashSet::new(),
+            pending_emits: Vec::new(),
             unions: Vec::new(),
             union_ids: HashMap::new(),
             fns: Vec::new(),
@@ -546,6 +549,10 @@ impl Checker {
             return Ok(());
         }
         match item.kind {
+            ItemKind::Emit(e) => {
+                self.pending_emits.push((e, ns));
+                return Ok(());
+            }
             ItemKind::Namespace(path, items) => {
                 let mut n = ns;
                 for p in &path {
@@ -1707,6 +1714,38 @@ impl Checker {
 
     // ---------- program ----------
 
+    /// Run the @emit(...)s, in order: each one's value is Volt source (a quote, usually), parsed as a
+    /// file of its own (<emit at file:line>, so errors point into it) and declared in the
+    /// @emit's namespace. An @emit it holds runs after it
+    pub fn run_emits(&mut self) -> Res<()> {
+        let mut i = 0;
+        while i < self.pending_emits.len() {
+            let (e, ns) = self.pending_emits[i].clone();
+            i += 1;
+            if i > MAX_EMITS {
+                return err(e.span, format!("@emit expands without end (over {MAX_EMITS} of them): an @emit's code keeps emitting more"));
+            }
+            let env = Rc::new(Env { ns, generics: Vec::new() });
+            let comptime::CVal::Str(text) = self.ct_eval_in(env, &e, Some(STR))? else {
+                return err(e.span, "@emit takes Volt source: a str, like a quote { ... }");
+            };
+            let text = String::from_utf8_lossy(&text).into_owned();
+            // named in the emitting file's directory, so paths in it (use { "x.h" }) resolve as there
+            let (line, _) = self.sm.line_col(e.span);
+            let from = &self.sm.files[e.span.file as usize].0;
+            let name = match from.rfind('/') {
+                Some(k) => format!("{}/<emit at {}:{line}>", &from[..k], &from[k + 1..]),
+                None => format!("<emit at {from}:{line}>"),
+            };
+            self.sm.files.push((name, text.clone()));
+            let file = (self.sm.files.len() - 1) as u32;
+            let mut parsed = crate::parser::parse_files(&[(file, text.as_str())]).map_err(|mut ds| ds.remove(0))?;
+            self.collect(parsed.remove(0), ns)?;
+        }
+        self.pending_emits.clear();
+        Ok(())
+    }
+
     /// check the whole program from its roots (main, and every non-generic fn) and build the C file
     pub fn program(&mut self) -> Res<String> {
         let lib = self.opts.lib.clone();
@@ -1941,12 +1980,16 @@ pub enum Found {
 /// generate from the roots. An error comes back with the source map, to render it.
 /// check the program and generate its C: the diagnostics (warnings, and errors if any) and the C
 /// when there were no errors
+/// how many @emits a program may run (one whose code emits itself would never stop)
+const MAX_EMITS: usize = 10000;
+
 pub fn compile(sm: SourceMap, files: Vec<Vec<Item>>, opts: Opts) -> (SourceMap, Vec<Diag>, Option<String>) {
     let mut c = Checker::new(sm, opts);
     let r = (|| {
         for f in files {
             c.collect(f, 0)?;
         }
+        c.run_emits()?;
         c.program()
     })();
     let mut errors = std::mem::take(&mut c.errors);

@@ -156,6 +156,7 @@ pub enum ExprKind {
     Literal(Vec<(Option<String>, Expr)>), // { a, b: c } or { 1, 2 }, typed by context
     Repeat(P<Expr>, P<Expr>),     // { x; n }: an array of n copies of x, typed by context
     Closure { caps: Vec<Capture>, generics: Vec<GenericParam>, params: Vec<Param>, ret: Option<Type>, body: Block },
+    Quote(Vec<QuotePart>), // quote { Volt source with $(splices) }: a comptime str
     Try(P<Expr>),
     Await(P<Expr>),
     Async(P<Expr>),               // async f(): start without waiting
@@ -370,4 +371,13 @@ pub enum ItemKind {
     Global(Let),
     /// another name for a type: `type name = T;`, or a C typedef (cimport.rs)
     Alias(String, Type),
+    /// `@emit(code);`: the declarations a comptime str of Volt source holds (a quote, usually)
+    Emit(Expr),
+}
+
+/// a quote's source text, and the values spliced into it
+#[derive(Clone, Debug)]
+pub enum QuotePart {
+    Text(String),
+    Splice(Expr),
 }

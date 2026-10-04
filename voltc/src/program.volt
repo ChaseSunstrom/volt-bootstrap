@@ -355,6 +355,12 @@ fn compile(files: std::vec<source_file>&, asts: std::vec<std::vec<item>>&, o: op
         };
     }
     if (ok) {
+        c.run_emits() catch |e| {
+            put(&c.errors, err_diag(&e));
+            ok = false;
+        };
+    }
+    if (ok) {
         c.program() catch |e| {
             put(&c.errors, err_diag(&e));
         };
