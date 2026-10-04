@@ -18,8 +18,8 @@
 // Every body is one @cpp<R>("C++ expression", args) (calls.volt): the checker turns each call it
 // instantiates into an extern "C" wrapper function in a C++ file compiled with $CXX and linked in,
 // so both backends call C++ the same way. A C++ exception that reaches one stops the program; a
-// function that can throw also gets a try_ form that returns cpp_error::EXCEPTION instead (its
-// message: last_exception()). What doesn't map is left out with a comment.
+// function that can throw also gets a try_ form that returns a cpp_error naming the exception
+// instead (its message: last_exception()). What doesn't map is left out with a comment.
 use { "clang-c/Index.h" } as clang;
 use std::mem;
 
@@ -32,6 +32,7 @@ struct cpp_traits {
     polymorphic: bool = false;  // it has virtual methods
     final_: bool = false;       // it's final: nothing derives from it
     vdtor: bool = false;        // its destructor is virtual (deleting a subclass through it is right)
+    exception: bool = false;    // it derives from std::exception (a try_ form's error names it)
     assignable: bool = false;   // it can be assigned from an rvalue (a field of it gets a set_)
 }
 
@@ -56,6 +57,10 @@ struct cpp_gen {
     // what clang says of each class (C++ qualified names): one that isn't trivially copyable Volt
     // holds by handle
     traits: std::map<str, cpp_traits> = {};
+    // each class's cursor (C++ qualified names)
+    cursors: std::map<str, clang::CXCursor> = {};
+    // the C++ function telling which exception a try_ form caught (volt_cpp_kinds_N, one an import)
+    kinds: std::string = {};
 }
 
 // ---------- names ----------
@@ -358,15 +363,14 @@ attach fn param(this: cpp_gen&, t: clang::CXType, name: str, i: usize, tparams: 
         }
     }
     // a class Volt holds by handle: its object, by reference (const& or &); by value or && C++ moves
-    // from it, and the Volt value still deletes what's left
+    // from it (the Volt value still deletes what's left), or copies it when the handle only borrows it
     val hc = this.handle_of(base);
     if (hc) {
         val vt = this.vtype(base, tparams) ?? return null;
-        val obj = fmt2("volt_cpp_obj<{}>({})", copy hc, copy slot);
         if (k == clang::CXType_LValueReference) {
-            return { vty: fmt("{}&", move vt), pass: fmt("{}.cpp", S(name)), cpp: move obj };
+            return { vty: fmt("{}&", move vt), pass: fmt("{}.cpp", S(name)), cpp: fmt2("volt_cpp_obj<{}>({})", copy hc, copy slot) };
         }
-        return { vty: move vt, pass: fmt("{}.cpp", S(name)), cpp: fmt("std::move({})", move obj) };
+        return { vty: move vt, pass: fmt("@cast<void*>(&{})", S(name)), cpp: fmt2("volt_cpp_take<{}>({})", copy hc, copy slot) };
     }
     if (k == clang::CXType_RValueReference) {
         // T&&: Volt hands the value over (a class by its place), C++ moves from it
@@ -693,7 +697,8 @@ attach fn text_out(this: cpp_gen&, r: str) -> void {
     this.line("return move try_text;");
 }
 
-// the try_ form of a call: cpp_error::EXCEPTION when it throws (last_exception() says what)
+// the try_ form of a call: a cpp_error naming the exception when it throws (last_exception() says
+// what it said)
 attach fn try_text(this: cpp_gen&, generics: str, head: str, params: str, r: cpp_ret&, cpp: str, tail: str, n_passed: usize, extra: str) -> void {
     // `attach fn area(this: Shape&` gives `attach fn try_area(this: Shape&`
     var h = S(head);
@@ -738,8 +743,9 @@ attach fn try_text(this: cpp_gen&, generics: str, head: str, params: str, r: cpp
             all_tail.append(", &try_out");
         }
     }
-    this.line(fmt3("if (!@cpp<bool{}>(\"VOLT_CPP_CATCH({})\"{})) {{", S(extra), move lambda, move all_tail).as_str());
-    this.line("    return cpp_error::EXCEPTION;");
+    this.line(fmt4("val try_k = @cpp<i32{}>(\"VOLT_CPP_TRY({}, {})\"{});", S(extra), copy this.kinds, move lambda, move all_tail).as_str());
+    this.line("if (try_k != 0) {");
+    this.line("    return volt_cpp_error_of(try_k);");
     this.line("}");
     if (r.way == ret_way::STRING) {
         this.text_out("try_out");
@@ -1122,6 +1128,7 @@ attach fn handle_class(this: cpp_gen&, c: clang::CXCursor, vn: str, q: str) -> v
     this.line(fmt("// C++'s {}: it isn't trivially copyable, so Volt holds it by handle (C++ allocates it)", S(q)).as_str());
     this.line(fmt("struct {} {{", S(vn)).as_str());
     this.line("    cpp: void* = null; // the C++ object (null when there's none, as in one made with {})");
+    this.line("    borrowed: bool = false; // the object is something else's (as_Base made it): not deleted");
     this.line("}");
     // the object, in a C++ expression (an empty handle stops the program)
     val obj = fmt("volt_cpp_obj<{}>({{0}})", S(q));
@@ -1152,7 +1159,7 @@ attach fn handle_class(this: cpp_gen&, c: clang::CXCursor, vn: str, q: str) -> v
         this.line("}");
     }
     this.line(fmt("attach fn delete(this: {}&) -> void {{", S(vn)).as_str());
-    this.line("    if (this.cpp != null) {");
+    this.line("    if (this.cpp != null && !this.borrowed) {");
     this.line(fmt("        @cpp<void>(\"delete ({} *){{0}}\", this.cpp);", S(q)).as_str());
     this.line("    }");
     this.line("}");
@@ -1172,8 +1179,100 @@ attach fn handle_class(this: cpp_gen&, c: clang::CXCursor, vn: str, q: str) -> v
             this.field_accessors(*f, vn, fmt2("{}.{}", copy obj, cursor_name(*f)).as_str());
         }
     }
+    this.casts(c, vn, q);
+    // the object's type, as C++ names it (its dynamic type, for a class with virtual methods)
+    if (this.first_time(fmt("attach fn cpp_type_name(this: {}&", S(vn)).as_str(), "")) {
+        val r: cpp_ret = { vty: S("std::string"), way: ret_way::STRING };
+        this.fn_text("", fmt("attach fn cpp_type_name(this: {}&) -> std::string", S(vn)).as_str(), &r, fmt("volt_cpp_demangle(typeid({}).name())", copy obj).as_str(), ", this.cpp", "");
+    }
     if (tr.polymorphic && !tr.final_ && tr.vdtor) {
         this.director(c, vn, q);
+    }
+}
+
+// class c's bases (direct and through others), by every path: each one's cursor, whether it's
+// reached by public inheritance all the way, and whether it's a virtual base (one object however
+// many paths reach it)
+struct base_path {
+    c: clang::CXCursor;
+    public_: bool;
+    virtual_: bool;
+}
+
+fn all_bases(c: clang::CXCursor, public_: bool, out: std::vec<base_path>&, depth: u32) -> void {
+    if (depth > 16) {
+        return;
+    }
+    for (ch&) in children(c).items() {
+        if (clang::clang_getCursorKind(*ch) != clang::CXCursor_CXXBaseSpecifier) {
+            continue;
+        }
+        val b = clang::clang_getCursorDefinition(clang::clang_getTypeDeclaration(clang::clang_getCanonicalType(clang::clang_getCursorType(*ch))));
+        if (clang::clang_Cursor_isNull(b) != 0) {
+            continue;
+        }
+        val pub = public_ && clang::clang_getCXXAccessSpecifier(*ch) == clang::CX_CXXPublic;
+        put(out, { c: b, public_: pub, virtual_: clang::clang_isVirtualBase(*ch) != 0 });
+        all_bases(b, pub, out, depth + 1);
+    }
+}
+
+// class c's casts: as_B for each public base B (a handle borrowing the object, or a B& for a class
+// Volt holds by value), and on each base with virtual methods as_C (dynamic_cast: null when the
+// object isn't a C)
+attach fn casts(this: cpp_gen&, c: clang::CXCursor, vn: str, q: str) -> void {
+    var bases: std::vec<base_path> = {};
+    all_bases(c, true, &bases, 0);
+    var done: std::map<str, bool> = {};
+    for (i) in 0..bases.len {
+        val bp = *bases.at(i);
+        val bq = cpp_qual(bp.c);
+        if (!bp.public_ || done.get(bq.as_str()) != null) {
+            continue;
+        }
+        done.put(this.c.intern(copy bq), true);
+        // the object has that base once: by one path, or by virtual inheritance however many
+        var plain = 0;
+        var virt_ = 0;
+        for (j) in 0..bases.len {
+            if (cpp_qual(bases.at(j).c).as_str() == bq.as_str()) {
+                if (bases.at(j).virtual_) {
+                    virt_ = 1;
+                } else {
+                    plain += 1;
+                }
+            }
+        }
+        val btr = this.traits.get(bq.as_str()) ?? continue;
+        val bvt = S(*(this.classes.get(bq.as_str()) ?? continue));
+        if (plain + virt_ > 1) {
+            this.line(fmt2("// (no {}::as_ cast to {}: it's that base more than once)", S(q), copy bq).as_str());
+            continue;
+        }
+        val bn = vname(cursor_name(bp.c).as_str());
+        if (!this.first_time(fmt2("attach fn as_{}(this: {}&", copy bn, S(vn)).as_str(), "")) {
+            this.line(fmt3("// (no {}::as_{} for {}: the name is taken)", S(q), copy bn, copy bq).as_str());
+            continue;
+        }
+        if (btr->trivial) {
+            this.line(fmt3("attach fn as_{}(this: {}&) -> {}& {{", copy bn, S(vn), copy bvt).as_str());
+            this.line(fmt4("    return @cpp<{}&>(\"static_cast<::{} &>(volt_cpp_obj<::{}>({{0}}))\", this.cpp);", copy bvt, copy bq, S(q), S("")).as_str());
+            this.line("}");
+            continue;
+        }
+        this.line(fmt3("attach fn as_{}(this: {}&) -> {} {{", copy bn, S(vn), copy bvt).as_str());
+        this.line(fmt3("    return {{ cpp: @cpp<void*>(\"static_cast<::{} *>(&volt_cpp_obj<::{}>({{0}}))\", this.cpp), borrowed: true }};", copy bq, S(q), S("")).as_str());
+        this.line("}");
+        if (btr->polymorphic && this.first_time(fmt2("attach fn as_{}(this: {}&", vname(cursor_name(c).as_str()), copy bvt).as_str(), "")) {
+            this.line(fmt3("attach fn as_{}(this: {}&) -> {}? {{", vname(cursor_name(c).as_str()), copy bvt, S(vn)).as_str());
+            this.line(fmt2("    val p = @cpp<void*>(\"dynamic_cast<::{} *>(&volt_cpp_obj<::{}>({{0}}))\", this.cpp);", S(q), copy bq).as_str());
+            this.line("    if (p == null) {");
+            this.line("        return null;");
+            this.line("    }");
+            this.line(fmt("    val h: {} = {{ cpp: p, borrowed: true }};", S(vn)).as_str());
+            this.line("    return h;");
+            this.line("}");
+        }
     }
 }
 
@@ -1234,14 +1333,14 @@ attach fn class_methods(this: cpp_gen&, c: clang::CXCursor, vn: str, q: str, obj
 }
 
 // what clang says of each class, from a second parse of the same headers with these appended:
-//     constexpr bool t0 = __is_trivially_copyable(::geo::Shape); (d0, c0, a0, n0, p0, f0, v0 likewise)
+//     constexpr bool t0 = __is_trivially_copyable(::geo::Shape); (d0, c0, a0, n0, p0, f0, v0, e0 likewise)
 // A class it can't answer for is held by handle, and Volt neither makes, copies nor assigns one.
 // ponytail: the second parse reads every header again (<string>, <vector>: about twice the
 // import's time); a precompiled preamble with clang_reparseTranslationUnit if that ever matters
 attach fn probe(this: cpp_gen&, src: str, args: std::vec<str>&) -> void {
     var names: std::vec<str> = {};
     var text = S(src);
-    text.append("namespace volt_probe {\n");
+    text.append("#include <exception>\n#include <type_traits>\nnamespace volt_probe {\n");
     for (e) in this.classes.iter() {
         val i = unum(@cast<u64>(names.len));
         val q = S(*e.key);
@@ -1253,6 +1352,7 @@ attach fn probe(this: cpp_gen&, src: str, args: std::vec<str>&) -> void {
         text.append(fmt2("constexpr bool p{} = __is_polymorphic(::{});\n", copy i, copy q).as_str());
         text.append(fmt2("constexpr bool f{} = __is_final(::{});\n", copy i, copy q).as_str());
         text.append(fmt2("constexpr bool v{} = __has_virtual_destructor(::{});\n", copy i, copy q).as_str());
+        text.append(fmt2("constexpr bool e{} = std::is_convertible<::{} *, const std::exception *>::value;\n", copy i, copy q).as_str());
         put(&names, *e.key);
         this.traits.put(*e.key, {});
     }
@@ -1299,8 +1399,10 @@ attach fn probe(this: cpp_gen&, src: str, args: std::vec<str>&) -> void {
                 tr->polymorphic = yes;
             } else if (which == "f") {
                 tr->final_ = yes;
-            } else {
+            } else if (which == "v") {
                 tr->vdtor = yes;
+            } else {
+                tr->exception = yes;
             }
         }
     }
@@ -1332,6 +1434,7 @@ struct virt_ret {
 struct virt {
     m: clang::CXCursor;
     pure: bool;
+    private_: bool; // private, or inherited through a base that isn't public: a subclass can't call it
 }
 
 // a C++ type as C++ spells it anywhere (qualified)
@@ -1366,8 +1469,8 @@ fn is_final(m: clang::CXCursor) -> bool {
 }
 
 // the virtual methods of class c and its bases, the most derived declaration of each first (a final
-// one is left out: nothing overrides it)
-attach fn virtuals(this: cpp_gen&, c: clang::CXCursor, out: std::vec<virt>&, seen: std::map<str, bool>&, depth: u32) -> void {
+// one is left out: nothing overrides it); public_: c is reached by public inheritance
+attach fn virtuals(this: cpp_gen&, c: clang::CXCursor, public_: bool, out: std::vec<virt>&, seen: std::map<str, bool>&, depth: u32) -> void {
     if (depth > 16) {
         return;
     }
@@ -1381,14 +1484,14 @@ attach fn virtuals(this: cpp_gen&, c: clang::CXCursor, out: std::vec<virt>&, see
         }
         seen.put(key, true);
         if (!is_final(*ch)) {
-            put(out, { m: *ch, pure: clang::clang_CXXMethod_isPureVirtual(*ch) != 0 });
+            put(out, { m: *ch, pure: clang::clang_CXXMethod_isPureVirtual(*ch) != 0, private_: !public_ || clang::clang_getCXXAccessSpecifier(*ch) == clang::CX_CXXPrivate });
         }
     }
     for (ch&) in children(c).items() {
         if (clang::clang_getCursorKind(*ch) == clang::CXCursor_CXXBaseSpecifier) {
             val b = clang::clang_getCursorDefinition(clang::clang_getTypeDeclaration(clang::clang_getCanonicalType(clang::clang_getCursorType(*ch))));
             if (clang::clang_Cursor_isNull(b) == 0) {
-                this.virtuals(b, out, seen, depth + 1);
+                this.virtuals(b, public_ && clang::clang_getCXXAccessSpecifier(*ch) == clang::CX_CXXPublic, out, seen, depth + 1);
             }
         }
     }
@@ -1494,13 +1597,13 @@ attach fn director(this: cpp_gen&, c: clang::CXCursor, vn: str, q: str) -> void 
     }
     var vs: std::vec<virt> = {};
     var seen: std::map<str, bool> = {};
-    this.virtuals(c, &vs, &seen, 0);
+    this.virtuals(c, true, &vs, &seen, 0);
     // the ones Volt can override (a name once: an overload of it stays C++'s)
     var maps: std::vec<virt_map> = {};
     var named: std::map<str, bool> = {};
     for (v&) in vs.items() {
         val mn = cursor_name(v.m);
-        if (!v.pure && clang::clang_getCXXAccessSpecifier(v.m) == clang::CX_CXXPrivate) {
+        if (!v.pure && v.private_) {
             // the subclass couldn't call C++'s own when the Volt type doesn't override it
             this.line(fmt2("// ({}::{} is C++'s own in a Volt type deriving from it: it's private)", S(q), copy mn).as_str());
             continue;
@@ -1691,7 +1794,7 @@ attach fn director(this: cpp_gen&, c: clang::CXCursor, vn: str, q: str) -> void 
     for (v&) in vs.items() {
         val mn = cursor_name(v.m);
         val acc = clang::clang_getCXXAccessSpecifier(v.m);
-        if (v.pure || acc == clang::CX_CXXPrivate || starts_with(mn.as_str(), "operator")) {
+        if (v.pure || v.private_ || starts_with(mn.as_str(), "operator")) {
             continue;
         }
         val ret = this.result(clang::clang_getCursorResultType(v.m), &none);
@@ -1798,8 +1901,8 @@ attach fn director(this: cpp_gen&, c: clang::CXCursor, vn: str, q: str) -> void 
     }
     text.append(cpp.as_str());
     text.append("};\n");
-    put(&this.c.cpp_dir_names, move dn);
-    put(&this.c.cpp_dirs, move text);
+    put(&this.c.cpp_decl_names, move dn);
+    put(&this.c.cpp_decls, move text);
 }
 
 // ---------- enums ----------
@@ -1854,6 +1957,7 @@ attach fn scan(this: cpp_gen&, c: clang::CXCursor, vpath: str) -> void {
             this.scan(*ch, p.as_str());
         } else if ((k == clang::CXCursor_ClassDecl || k == clang::CXCursor_StructDecl) && clang::clang_isCursorDefinition(*ch) != 0) {
             this.classes.put(q, this.c.intern(move p));
+            this.cursors.put(q, *ch);
         } else if (k == clang::CXCursor_ClassTemplate) {
             this.templates.put(q, this.c.intern(move p));
         } else if (k == clang::CXCursor_EnumDecl) {
@@ -1960,10 +2064,7 @@ attach fn std_extras(this: cpp_gen&) -> void {
         this.line("}");
     }
     if (this.tries) {
-        this.line("// what a try_ form returns when the C++ code threw");
-        this.line("error cpp_error {");
-        this.line("    EXCEPTION,");
-        this.line("}");
+        this.exceptions();
         this.line("// what the exception a try_ form caught last (on this thread) said");
         this.line("fn last_exception() -> std::string {");
         this.depth += 1;
@@ -1972,6 +2073,96 @@ attach fn std_extras(this: cpp_gen&) -> void {
         this.depth -= 1;
         this.line("}");
     }
+}
+
+// how many classes deep c is (a class with no bases is 1)
+fn class_depth(c: clang::CXCursor, depth: u32) -> u32 {
+    var most: u32 = 0;
+    if (depth > 16) {
+        return 1;
+    }
+    for (ch&) in children(c).items() {
+        if (clang::clang_getCursorKind(*ch) == clang::CXCursor_CXXBaseSpecifier) {
+            val b = clang::clang_getCursorDefinition(clang::clang_getTypeDeclaration(clang::clang_getCanonicalType(clang::clang_getCursorType(*ch))));
+            if (clang::clang_Cursor_isNull(b) == 0) {
+                val d = class_depth(b, depth + 1);
+                if (d > most) {
+                    most = d;
+                }
+            }
+        }
+    }
+    return most + 1;
+}
+
+// what a try_ form's error says: cpp_error, a variant a standard exception and one each class of the
+// headers deriving from std::exception; the C++ function telling which one was thrown (this.kinds,
+// in the C++ unit once a try_ form names it); and the Volt fn turning its number into the variant
+attach fn exceptions(this: cpp_gen&) -> void {
+    val std_names: str[11] = { "out_of_range", "invalid_argument", "length_error", "domain_error", "logic_error", "range_error", "overflow_error", "underflow_error", "runtime_error", "bad_alloc", "bad_cast" };
+    val variants: str[11] = { "OUT_OF_RANGE", "INVALID_ARGUMENT", "LENGTH_ERROR", "DOMAIN_ERROR", "LOGIC_ERROR", "RANGE_ERROR", "OVERFLOW_ERROR", "UNDERFLOW_ERROR", "RUNTIME_ERROR", "BAD_ALLOC", "BAD_CAST" };
+    // the headers' own, most derived first (a catch takes the first that matches)
+    var own: std::vec<str> = {};
+    var depths: std::vec<u32> = {};
+    var taken: std::map<str, bool> = {};
+    for (i) in 0..11 {
+        taken.put(variants[i], true);
+    }
+    taken.put("EXCEPTION", true);
+    taken.put("UNKNOWN", true);
+    for (e) in this.traits.iter() {
+        if (!e.value.exception) {
+            continue;
+        }
+        val c = *(this.cursors.get(*e.key) ?? continue);
+        val name = this.c.intern(vname(cursor_name(c).as_str()));
+        if (taken.get(name) != null) {
+            this.line(fmt2("// ({} has no cpp_error variant of its own: {} is taken; its base's is the one)", S(*e.key), S(name)).as_str());
+            continue;
+        }
+        taken.put(name, true);
+        val d = class_depth(c, 0);
+        var at = own.len;
+        while (at > 0 && *depths.at(at - 1) < d) {
+            at -= 1;
+        }
+        own.insert(at, *e.key) catch @panic("out of memory");
+        depths.insert(at, d) catch @panic("out of memory");
+    }
+    this.line("// what a try_ form returns when the C++ code threw: a variant a standard exception, one each");
+    this.line("// class of these headers deriving from std::exception, EXCEPTION for any other std::exception");
+    this.line("// and UNKNOWN for what isn't one (last_exception() says what it said)");
+    this.line("error cpp_error {");
+    for (i) in 0..11 {
+        this.line(fmt("    {},", S(variants[i])).as_str());
+    }
+    this.line("    EXCEPTION,");
+    this.line("    UNKNOWN,");
+    for (q&) in own.items() {
+        this.line(fmt("    {},", vname(cursor_name(*(this.cursors.get(*q) ?? continue)).as_str())).as_str());
+    }
+    this.line("}");
+    this.line("fn volt_cpp_error_of(k: i32) -> cpp_error {");
+    for (i) in 0..11 {
+        this.line(fmt2("    if (k == {}) {{ return cpp_error::{}; }}", unum(@cast<u64>(i + 1)), S(variants[i])).as_str());
+    }
+    this.line("    if (k == 12) { return cpp_error::EXCEPTION; }");
+    for (i) in 0..own.len {
+        this.line(fmt2("    if (k == {}) {{ return cpp_error::{}; }}", unum(@cast<u64>(i + 14)), vname(cursor_name(*(this.cursors.get(*own.at(i)) ?? continue)).as_str())).as_str());
+    }
+    this.line("    return cpp_error::UNKNOWN;");
+    this.line("}");
+    // the C++ side: rethrow what's being handled, and catch it most derived first
+    var text = fmt("// which exception is being handled, as cpp_error numbers its variants (a try_ form's error)\nstatic int {}() {{\n    try {{\n        throw;\n", copy this.kinds);
+    for (i) in 0..own.len {
+        text.append(fmt2("    }} catch (const ::{} &e) {{\n        volt_cpp_last = e.what();\n        return {};\n", S(*own.at(i)), unum(@cast<u64>(i + 14))).as_str());
+    }
+    for (i) in 0..11 {
+        text.append(fmt2("    }} catch (const std::{} &e) {{\n        volt_cpp_last = e.what();\n        return {};\n", S(std_names[i]), unum(@cast<u64>(i + 1))).as_str());
+    }
+    text.append("    } catch (const std::exception &e) {\n        volt_cpp_last = e.what();\n        return 12;\n    } catch (...) {\n        volt_cpp_last = \"an exception that isn't a std::exception\";\n        return 13;\n    }\n}\n");
+    put(&this.c.cpp_decl_names, copy this.kinds);
+    put(&this.c.cpp_decls, move text);
 }
 
 // ---------- the import ----------
@@ -2037,7 +2228,7 @@ attach fn import_cpp(this: checker&, headers: std::vec<std::string>&, alias: str
     if (bad) {
         return fail(span, fmt("libclang couldn't read these C++ headers: {}", copy bad));
     }
-    var g: cpp_gen = { c: this };
+    var g: cpp_gen = { c: this, kinds: fmt("volt_cpp_kinds_{}", unum(@cast<u64>(this.cpp_items.len))) };
     g.scan(tu.root(), "");
     g.probe(src.as_str(), &args);
     g.out.append(fmt("// the Volt side of use cpp {{ ... }} as {} (generated by voltc from the headers)\n", S(alias)).as_str());
@@ -2328,7 +2519,7 @@ attach fn cpp_unit(this: checker&) -> std::string {
         return move out;
     }
     out.append("// generated by voltc: the C++ this program calls (use cpp); each function wraps one call\n");
-    out.append("#include <algorithm>\n#include <cstddef>\n#include <cstdint>\n#include <cstdio>\n#include <cstdlib>\n#include <cstring>\n#include <exception>\n#include <memory>\n#include <new>\n#include <string>\n#include <string_view>\n#include <type_traits>\n#include <utility>\n#include <vector>\n");
+    out.append("#include <algorithm>\n#include <cstddef>\n#include <cstdint>\n#include <cstdio>\n#include <cstdlib>\n#include <cstring>\n#include <exception>\n#include <memory>\n#include <new>\n#include <stdexcept>\n#include <string>\n#include <string_view>\n#include <type_traits>\n#include <typeinfo>\n#include <utility>\n#include <vector>\n#if __has_include(<cxxabi.h>)\n#include <cxxabi.h>\n#endif\n");
     for (inc&) in this.cpp_includes.items() {
         out.append(*inc);
         out.push('\n');
@@ -2339,18 +2530,20 @@ attach fn cpp_unit(this: checker&) -> std::string {
     out.append("\n// Volt's str and T[..]\nstruct volt_str {\n    const unsigned char *ptr;\n    size_t len;\n};\n\ntemplate <class T>\nstruct volt_slice {\n    T *ptr;\n    size_t len;\n};\n");
     out.append("\n// text copied out of C++, in memory the Volt side frees (std::free); and a view's bytes\nstatic inline volt_str volt_cpp_dup(std::string_view s) {\n    unsigned char *p = (unsigned char *)std::malloc(s.size() ? s.size() : 1);\n    if (!p) {\n        volt_cpp_throw(\"out of memory\");\n    }\n    std::memcpy(p, s.data(), s.size());\n    return {p, s.size()};\n}\n\nstatic inline volt_str volt_cpp_view(std::string_view s) {\n    return {(const unsigned char *)s.data(), s.size()};\n}\n");
     out.append("\n// a std::vector's elements copied out the same way\ntemplate <class T>\nstatic volt_slice<T> volt_cpp_dup_vec(const std::vector<T> &v) {\n    static_assert(std::is_trivially_copyable<T>::value, \"Volt copies out a std::vector of plain values\");\n    T *p = (T *)std::malloc(sizeof(T) * (v.size() ? v.size() : 1));\n    if (!p) {\n        volt_cpp_throw(\"out of memory\");\n    }\n    std::copy(v.begin(), v.end(), p);\n    return {p, v.size()};\n}\n");
-    out.append("\n// try_ forms: run the call, and keep what an exception says instead of stopping\nstatic thread_local std::string volt_cpp_last;\n\ntemplate <class F>\nstatic bool volt_cpp_catch(F f) {\n    try {\n        f();\n        return true;\n    } catch (const std::exception &e) {\n        volt_cpp_last = e.what();\n    } catch (...) {\n        volt_cpp_last = \"an exception that isn't a std::exception\";\n    }\n    return false;\n}\n\n#define VOLT_CPP_CATCH(...) volt_cpp_catch([&]() { __VA_ARGS__; })\n");
+    out.append("\n// try_ forms: run the call; when it throws, which exception (kinds numbers it, 0 is none) and\n// what it said (volt_cpp_last), instead of stopping\nstatic thread_local std::string volt_cpp_last;\n\ntemplate <class F>\nstatic int volt_cpp_try(int (*kinds)(), F f) {\n    try {\n        f();\n        return 0;\n    } catch (...) {\n        return kinds();\n    }\n}\n\n#define VOLT_CPP_TRY(KINDS, ...) volt_cpp_try(KINDS, [&]() { __VA_ARGS__; })\n");
+    out.append("\n// a handle's object for a by-value parameter: moved from when the handle owns it, copied when it\n// only borrows it (as_Base's: the object is something else's)\nstruct volt_handle {\n    void *cpp;\n    bool borrowed;\n};\n\ntemplate <class T>\nstatic T volt_cpp_take(void *h) {\n    volt_handle *v = (volt_handle *)h;\n    T &o = volt_cpp_obj<T>(v->cpp);\n    if (v->borrowed) {\n        if constexpr (std::is_copy_constructible<T>::value) {\n            return o;\n        } else {\n            std::fprintf(stderr, \"panic: a borrowed C++ object passed by value, and it can't be copied\\n\");\n            std::exit(101);\n        }\n    }\n    return std::move(o);\n}\n");
+    out.append("\n// a type's name as C++ writes it (typeid's, demangled where the C++ library can)\nstatic inline std::string volt_cpp_demangle(const char *name) {\n#if __has_include(<cxxabi.h>)\n    int status = 0;\n    char *d = abi::__cxa_demangle(name, nullptr, nullptr, &status);\n    if (d) {\n        std::string s = d;\n        std::free(d);\n        return s;\n    }\n#endif\n    return name;\n}\n");
     out.append("\n// Volt's subclasses of C++ classes (derive): a type spelled anywhere, the subclass behind a handle\n// (for its protected members), and the Volt side a derived object holds\ntemplate <class T>\nusing volt_id = T;\n\ntemplate <class D, class B>\nstatic D &volt_dir_of(void *p) {\n    D *d = dynamic_cast<D *>(&volt_cpp_obj<B>(p));\n    if (!d) {\n        std::fprintf(stderr, \"panic: a protected member of a C++ object Volt didn't make with derive\\n\");\n        std::exit(101);\n    }\n    return *d;\n}\n\ntemplate <class D, class B>\nstatic void *volt_dir_block(void *p) {\n    D *d = p ? dynamic_cast<D *>((B *)p) : nullptr;\n    return d ? d->volt_d : nullptr;\n}\n");
-    for (i) in 0..this.cpp_dirs.len {
+    for (i) in 0..this.cpp_decls.len {
         var used = false;
         for (w&) in this.cpp_shims.items() {
-            if (contains(w.as_str(), this.cpp_dir_names.at(i).as_str())) {
+            if (contains(w.as_str(), this.cpp_decl_names.at(i).as_str())) {
                 used = true;
             }
         }
         if (used) {
             out.push('\n');
-            out.append(this.cpp_dirs.at(i).as_str());
+            out.append(this.cpp_decls.at(i).as_str());
         }
     }
     out.append("\nextern \"C\" {\n\n");

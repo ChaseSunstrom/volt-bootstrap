@@ -24,7 +24,8 @@ fn main() -> void {
     b.set(b.get() + 1);
     std::println("box {}", b.value);
     std::println("enum {} {}", @cast<i32>(shapes::geo::Kind::Square), @cast<i32>(shapes::geo::ONE));
-    // a trivially copyable class has C++'s layout; any other is one pointer, to C++'s object
+    // a trivially copyable class has C++'s layout; any other is a handle: a pointer to C++'s object
+    // and whether it's borrowed
     std::println("size {} {}", @sizeof(shapes::geo::Size), @sizeof(shapes::geo::Shape));
     val o = shapes::geo::Owner::new();
     // a class that points into itself survives Volt's moves: the object stays where C++ put it

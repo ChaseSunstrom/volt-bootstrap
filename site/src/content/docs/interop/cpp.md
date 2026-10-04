@@ -55,7 +55,9 @@ fn main() -> void {
 | namespace | namespace |
 | a trivially copyable class or struct | a struct with C++'s size and layout: public fields by name, the rest as padding |
 | a class with virtual methods | a handle, as below, and a Volt type can subclass it (see [Subclassing](#subclassing-a-c-class-in-volt)) |
-| any other class | a handle to an object C++ allocates (`new`, and `delete` when the Volt value goes): a public field `f` is the method `f()` (a copy) and `set_f(v)` (when it can be assigned, and the class has no `set_f` of its own) |
+| any other class | a handle to an object C++ allocates (`new`, and `delete` when the Volt value goes): a public field `f` is the method `f()` (a copy) and `set_f(v)` (when it can be assigned, and the class has no `set_f` of its own); `cpp_type_name()` is its type as C++ names it (the dynamic type, for a class with virtual methods) |
+| a public base class `B` (direct or not) | `d.as_B()`: a handle that borrows the object (never deleted), or a `B&` for a class held by value; a base reached twice isn't one |
+| `dynamic_cast` | `b.as_D()` on a base with virtual methods: a borrowed handle to the `D`, or null when the object isn't one |
 | constructors | `T::new(...)`, one per overload (a default argument adds an overload without it); `T::new()` for a class that declares none, when it can be made from nothing |
 | destructor | a `delete` hook (only when the class needs one) |
 | copy constructor | a `copy` hook (a handle's copies the object with it) |
@@ -131,7 +133,7 @@ fn main() -> void {
 // expect: 13.25 false
 // expect: 3 6
 // expect: book 7
-// expect: EXCEPTION: expected units.cents, not '12'
+// expect: INVALID_ARGUMENT: expected units.cents, not '12'
 ```
 
 | C++ | Volt |
@@ -145,9 +147,13 @@ fn main() -> void {
 | operators | methods and functions named after them: `op_add` (`+`), `op_sub`, `op_mul`, `op_div`, `op_rem`, `op_eq`, `op_ne`, `op_lt`, `op_le`, `op_gt`, `op_ge`, `op_index` (`[]`), `op_call` (`()`), `op_neg` (unary `-`), `op_not`, `op_add_assign` (`+=`)... |
 | `T&&` parameters | `T`: Volt hands the value over and C++ moves from it |
 
-A function that can throw (it isn't `noexcept`) also gets a `try_` form that returns the error
-`cpp_error::EXCEPTION` instead of stopping the program; `last_exception()`, in the import's
-namespace, is what the exception said. (A `try_` form isn't made for a function returning a C++
+A function that can throw (it isn't `noexcept`) also gets a `try_` form that returns the exception
+as a `cpp_error` instead of stopping the program. Its variant says which exception it was:
+`OUT_OF_RANGE`, `INVALID_ARGUMENT`, `LENGTH_ERROR`, `DOMAIN_ERROR`, `LOGIC_ERROR`, `RANGE_ERROR`,
+`OVERFLOW_ERROR`, `UNDERFLOW_ERROR`, `RUNTIME_ERROR`, `BAD_ALLOC` and `BAD_CAST` for the standard
+ones, one named after each class of the headers that derives from `std::exception` (the most
+derived one that matches), `EXCEPTION` for any other `std::exception` and `UNKNOWN` for a thrown
+value that isn't one. `last_exception()`, in the import's namespace, is what the exception said. (A `try_` form isn't made for a function returning a C++
 object, a reference or an optional; for one returning a vector, catch the exception in C++.)
 
 ## Subclassing a C++ class in Volt
@@ -192,8 +198,9 @@ fn main() -> void {
 - A virtual method the struct doesn't override is `C`'s own. A pure one it doesn't override is a
   compile error naming the trait to attach.
 - Inherited virtual methods count (`t_Button_describe` for a `describe` `Button` inherits), and so
-  do private ones that are pure. A private one that isn't pure stays `C`'s: the subclass couldn't
-  call `C`'s own when the struct doesn't override it.
+  do private ones that are pure. A private one that isn't pure (or one inherited through a base
+  that isn't public) stays `C`'s: the subclass couldn't call `C`'s own when the struct doesn't
+  override it.
 - What crosses into an override: numbers, `bool`, enums, pointers, strings (`str`, a view for the
   call), classes Volt holds by value (a copy, or a reference for `T&`) and classes held by handle
   (a handle Volt borrows for the call). What comes back: those numbers, enums and pointers, a class
@@ -208,7 +215,11 @@ fn main() -> void {
   result, a standard library type other than those above (or a non-const reference to one),
   assignment and conversion operators.
 - A C++ exception that reaches Volt through a function's plain form stops the program, like a
-  panic; its `try_` form returns it as an error.
+  panic; its `try_` form returns it as an error. Either way it never passes through Volt frames, and
+  a Volt panic (in a method C++ calls, say) ends the program without unwinding through C++'s.
+- A handle borrowed from `as_` doesn't keep the object alive: it's good while what it came from is.
+  Passed by value, it gives C++ a copy of the object (an owned handle is moved from), and `copy` of
+  it is an object of its own.
 - Volt moves values by copying their bytes, which a C++ object that points into itself (as
   libstdc++'s `std::string` does) doesn't survive. So a class clang says isn't trivially copyable
   (`__is_trivially_copyable`, asked of the imported headers) is held by handle: moving it moves the

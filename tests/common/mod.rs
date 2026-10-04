@@ -13,7 +13,11 @@ pub fn relocated_llvm_config(dir: &std::path::Path) -> Option<std::path::PathBuf
         out.status.success().then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
     };
     let (inc, lib, libs) = (ask("--includedir")?, ask("--libdir")?, ask("--libs")?);
-    let llvm = std::path::Path::new(&lib).join(format!("lib{}.so", libs.split_whitespace().next()?.strip_prefix("-l")?));
+    let name = libs.split_whitespace().next()?.strip_prefix("-l")?;
+    let llvm = std::path::Path::new(&lib).join(format!("lib{name}.so"));
+    // the renamed library keeps LLVM's own name (LLVM-23) in it, so a build cached against another
+    // LLVM sees its link flags change and is rebuilt
+    let renamed = format!("relocated{name}");
     let _ = std::fs::remove_dir_all(dir);
     std::fs::create_dir_all(dir.join("include")).ok()?;
     std::fs::create_dir_all(dir.join("lib")).ok()?;
@@ -21,14 +25,14 @@ pub fn relocated_llvm_config(dir: &std::path::Path) -> Option<std::path::PathBuf
     for h in ["llvm-c", "clang-c"] {
         symlink(std::path::Path::new(&inc).join(h), dir.join("include").join(h)).ok()?;
     }
-    symlink(llvm.canonicalize().ok()?, dir.join("lib/libLLVMrelocated.so")).ok()?;
+    symlink(llvm.canonicalize().ok()?, dir.join(format!("lib/lib{renamed}.so"))).ok()?;
     let clang = std::path::Path::new(&lib).join("libclang.so");
     if clang.exists() {
         symlink(clang.canonicalize().ok()?, dir.join("lib/libclang.so")).ok()?;
     }
     let (i, l) = (dir.join("include").display().to_string(), dir.join("lib").display().to_string());
     let script = dir.join("llvm-config");
-    let body = format!("#!/bin/sh\nfor a in \"$@\"; do case \"$a\" in --includedir) echo {i};; --libdir) echo {l};; --libs) echo -lLLVMrelocated;; esac; done\n");
+    let body = format!("#!/bin/sh\nfor a in \"$@\"; do case \"$a\" in --includedir) echo {i};; --libdir) echo {l};; --libs) echo -l{renamed};; esac; done\n");
     std::fs::write(&script, body).ok()?;
     use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).ok()?;

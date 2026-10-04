@@ -841,10 +841,21 @@ fn cpp_derive() {
 }
 
 #[test]
+fn cpp_rtti() {
+    // casts between classes (multiple inheritance, a base held by value), dynamic types, and a
+    // cpp_error variant each exception: the standard ones and the library's own
+    let e = Env::new("cpp-rtti");
+    let want = "woof named zoo::Dog\n3 true\nmeow true zoo::Cat\nanimal! animal\nzoo::Animal\nwoof 3\n6 box\n5 fed 10\n-1 INVALID_ARGUMENT: negative food\n500 OUT_OF_RANGE: too much food\n7 escaped: the tiger escaped\n8 zoo_error: closed\n9 UNKNOWN: an exception that isn't a std::exception\n10 BAD_ALLOC: std::bad_alloc\n11 EXCEPTION: std::bad_exception\n12 UNKNOWN: an exception that isn't a std::exception\n";
+    for backend in ["c", "llvm"] {
+        assert_eq!(ok(e.voltc(&["run", "cpp_rtti.volt", "--backend", backend]), "voltc run cpp_rtti.volt"), want, "C++ RTTI ({backend})");
+    }
+}
+
+#[test]
 fn cpp_import() {
     let e = Env::new("cpp");
-    let want = "make 2 3\narea 6\nfields 5 6\nscaled 60 15\ncount 7 name rect\nmake 4 4\nkind 4 1\ntotal 46\ncopy 4 4\ncopied 16\ndrop 4 4\ndrop 4 4\ndrop 5 6\nadd 3 3.5\nbiggest 9 2.5\nbox 6\nenum 4 1\nsize 16 8\nrings 20 true\nnamed short#5 5 5 6\ncopy keeps 5 9\nshelf 8 record 7 20 1/2 registry 3\n";
-    let want_std = "hello, volt 3\nfirst lorem\nsum 6.5\nrange 4 9\nvec 4 -6 6\neq true 10\nnode 4\ntaken 40\nshared 7 2\nbuffer abcd 4\nparse 42\nbad -1 trailing characters in '4x'\nerror EXCEPTION not positive\n";
+    let want = "make 2 3\narea 6\nfields 5 6\nscaled 60 15\ncount 7 name rect\nmake 4 4\nkind 4 1\ntotal 46\ncopy 4 4\ncopied 16\ndrop 4 4\ndrop 4 4\ndrop 5 6\nadd 3 3.5\nbiggest 9 2.5\nbox 6\nenum 4 1\nsize 16 16\nrings 20 true\nnamed short#5 5 5 6\ncopy keeps 5 9\nshelf 8 record 7 20 1/2 registry 3\n";
+    let want_std = "hello, volt 3\nfirst lorem\nsum 6.5\nrange 4 9\nvec 4 -6 6\neq true 10\nnode 4\ntaken 40\nshared 7 2\nbuffer abcd 4\nparse 42\nbad -1 trailing characters in '4x'\nerror OUT_OF_RANGE not positive\n";
     for backend in ["c", "llvm"] {
         assert_eq!(ok(e.voltc(&["run", "cpp_import.volt", "--backend", backend, "--cc", "-D", "--cc", "SHAPES_FLAG"]), "voltc run cpp_import.volt"), want, "C++ import ({backend})");
         // an exception stops the program with its message
