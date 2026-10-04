@@ -9,6 +9,7 @@
 // redone while the sources are as they were.
 use std::path::{Path, PathBuf};
 
+mod dotnet;
 mod glue;
 mod go;
 mod java;
@@ -74,7 +75,8 @@ fn run(r: &Req) -> Result<(), String> {
         "go" => go::import(r),
         "go-link" => go::link(r),
         "java" => java::import(r),
-        other => Err(format!("there's no `use {other}`: the languages Volt imports are c (use {{ \"x.h\" }}), cpp, rust, zig, swift, go and java")),
+        "dotnet" => dotnet::import(r),
+        other => Err(format!("there's no `use {other}`: the languages Volt imports are c (use {{ \"x.h\" }}), cpp, rust, zig, swift, go, java and dotnet")),
     }
 }
 

@@ -737,6 +737,53 @@ fn java_direct() {
     assert!(bolt_run("c").contains("42 3000000000 QUIET!"), "the Java change is in");
 }
 
+/// Volt calls ordinary C# directly: `use { "Geo.cs" } as geo;` and nothing else (.NET starts on first
+/// use), on both backends, from voltc run and from a bolt package, which rebuilds when the C# changes
+#[test]
+fn dotnet_direct() {
+    let Some(dotnet) = local_tool("dotnet", "--version") else {
+        eprintln!("dotnet isn't installed: skipping use dotnet");
+        return;
+    };
+    let e = Env::new("dotnet_direct");
+    let dir = e.dir.join("nd");
+    copy_dir(&Path::new(ROOT).join("tests/interop/dotnet_direct"), &dir);
+    let src = std::fs::read_to_string(dir.join("main.volt")).unwrap();
+    let want: String = src.lines().filter_map(|l| l.strip_prefix("// expect: ")).map(|l| format!("{l}\n")).collect();
+    let tools = |c: &mut Command| {
+        c.env("VOLTC", &e.voltc).env("BOLT", env!("CARGO_BIN_EXE_bolt")).env("VOLT_CACHE", e.dir.join("cache")).env("BOLT_HOME", e.dir.join("bolthome")).env("DOTNET", &dotnet);
+    };
+    for backend in ["c", "llvm"] {
+        let mut c = Command::new(&e.voltc);
+        c.args(["run", "--backend", backend, "main.volt"]).current_dir(&dir).env("VOLT_STD", Path::new(ROOT).join("std"));
+        tools(&mut c);
+        assert_eq!(ok(c.output().unwrap(), "voltc run"), want, "voltc run ({backend})");
+    }
+    // an exception stops the program
+    let mut c = Command::new(&e.voltc);
+    c.args(["run", "panics.volt"]).current_dir(&dir).env("VOLT_STD", Path::new(ROOT).join("std"));
+    tools(&mut c);
+    let o = c.output().unwrap();
+    assert_eq!(o.status.code(), Some(101), "an exception stops the program: {}", String::from_utf8_lossy(&o.stderr));
+    assert!(String::from_utf8_lossy(&o.stderr).contains("System.DivideByZeroException"), "{}", String::from_utf8_lossy(&o.stderr));
+    // the same program in a bolt package
+    let app = dir.join("app");
+    std::fs::create_dir_all(app.join("src")).unwrap();
+    std::fs::write(app.join("bolt.toml"), format!("[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[std]\npath = \"{}\"\n", Path::new(ROOT).join("std").display())).unwrap();
+    std::fs::write(app.join("src/main.volt"), src.replace("\"Geo.cs\"", "\"../../Geo.cs\"")).unwrap();
+    let bolt_run = |backend: &str| {
+        let mut c = Command::new(env!("CARGO_BIN_EXE_bolt"));
+        c.args(["run", "-q", "--backend", backend]).current_dir(&app);
+        tools(&mut c);
+        ok(c.output().unwrap(), "bolt run")
+    };
+    assert_eq!(bolt_run("llvm"), want, "bolt run");
+    // a change to the C# reaches the program
+    let f = dir.join("Geo.cs");
+    std::fs::write(&f, std::fs::read_to_string(&f).unwrap().replace("s.ToUpper()", "s.ToUpper() + \"!\"")).unwrap();
+    assert!(bolt_run("c").contains("QUIET! 10"), "the C# change is in");
+}
+
 /// Volt calls ordinary Swift directly: `use { "geometry.swift", "things.swift" } as geo;` and nothing
 /// else, on both backends, from voltc run and from a bolt package, which rebuilds when a file changes
 #[test]

@@ -1,12 +1,57 @@
 ---
 title: .NET
-description: Calling C# and other .NET code from Volt with the interop/dotnet package, and Volt from C# through generated bindings.
+description: Calling C# and other .NET code from Volt by importing it like a header, and Volt from C# through generated bindings.
 sidebar:
   order: 7
 ---
 
+## Volt calls .NET
+
+C# sources and .NET assemblies are imported like a header. Nothing in the C# is written for Volt
+(no `[UnmanagedCallersOnly]`), and the Volt code has no runtime configs, start calls or function
+pointers: bolt builds the sources with `dotnet build`, asks .NET what the assembly exports, and
+writes a C# shim and the Volt declarations that call it. .NET starts the first time it's called.
+
+```volt ignore
+use std::io;
+use { "Geo.cs" } as geo;             // or { "Lib.dll" }
+
+fn main() -> void {
+    var p = geo::Point::new(3.0, 4.0);                 // a struct of plain fields: a Volt struct
+    p.Scale(2.0);
+    var c = geo::Circle::new(2.0);                     // a class: a handle
+    c.set_R(1.0);                                      // a property: R() and set_R(v)
+    std::println("{} {} {}", p.X, c.Area(), geo::Geom::Upper("quiet"));   // 6 3 QUIET
+    val s = c.as_IShape();                             // the same object, as an interface it has
+    std::println("{}", geo::Geom::Total(&s, &s));      // 6
+}
+```
+
+| .NET | Volt |
+| --- | --- |
+| a class, interface or static class | a handle: .NET's collector keeps the object while Volt holds it, and a copy refers to the same object |
+| a struct whose fields are all public, settable numbers, `bool`s, enums or such structs | a Volt struct with those fields, passed by value |
+| any other struct | a handle |
+| `new T(...)` | `T::new(...)`, one per public constructor |
+| a public method | a method, or `T::F(...)` for a static one; overloads stay overloads |
+| a property or public field | `X()` and, when it can be set, `set_X(v)`; `T::X()` for a static one (constants too) |
+| an imported base class or interface `B` | `as_B()`: the same object, as a `B` |
+| an `enum` | a Volt enum with the same values |
+| `bool`, `sbyte`…`ulong`, `float`, `double` | the same; `char` is `u32` |
+| `string` | `str` in, `std::string` out (`null` is `""`) |
+| `T[]` of those and of `string` | `T[..]` in (what .NET changes in it comes back), `std::vec<T>` out |
+| `int?` and the like | `i32?` |
+
+An exception stops the program with its type and message, as a Volt panic does (.NET declares no
+exceptions to make an error of). Generic types and methods, delegates, `ref` and `out` parameters
+are left out, listed in a comment of the generated declarations. bolt needs the .NET SDK:
+`$DOTNET`, else `$DOTNET_ROOT/dotnet`, else `dotnet` on the PATH; the program links its `libhostfxr`
+with an rpath, and an assembly's own dependencies are found next to it.
+
+## The interop/dotnet package
+
 The `interop/dotnet` package (in the repository) starts the .NET runtime inside a Volt program
-through hostfxr, the library `dotnet` itself uses. Its build file finds the install that
+through hostfxr, the library `dotnet` itself uses, for calls made by hand. Its build file finds the install that
 `dotnet --list-runtimes` reports (`$DOTNET_ROOT/dotnet` when that's set) and links `libhostfxr`
 with an rpath to it.
 

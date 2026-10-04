@@ -176,6 +176,12 @@ pub trait Lang {
     fn type_glue(&self, g: &Gen, ti: &TypeInfo) -> String;
     /// what every shim has: its helpers and the functions freeing what Volt was given
     fn prelude(&self, g: &Gen) -> String;
+    /// a shim whose functions are found while the program runs (not linked): the Volt source, in
+    /// the shim namespace, of `fn load(slot: void**, name: str) -> void*`, which finds function
+    /// `name` (once: slot keeps it)
+    fn loader(&self, _g: &Gen) -> Option<String> {
+        None
+    }
 }
 
 /// the Volt side of one parameter
@@ -211,6 +217,9 @@ pub struct Gen<'a> {
     helpers: String,
     modules: BTreeMap<Vec<String>, String>,
     left_out: Vec<String>,
+    /// the shim's symbols so far (overloads get one each), and the Volt signatures
+    syms: BTreeSet<String>,
+    sigs: BTreeSet<String>,
 }
 
 pub fn zero(p: &str) -> &'static str {
@@ -266,7 +275,19 @@ impl<'a> Gen<'a> {
                 break;
             }
         }
-        Gen { m, alias: alias.to_string(), lang, types, vec_elems: BTreeSet::new(), strs: false, errors: false, shim: String::new(), ext: String::new(), helpers: String::new(), modules: BTreeMap::new(), left_out: Vec::new() }
+        Gen { m, alias: alias.to_string(), lang, types, vec_elems: BTreeSet::new(), strs: false, errors: false, shim: String::new(), ext: String::new(), helpers: String::new(), modules: BTreeMap::new(), left_out: Vec::new(), syms: BTreeSet::new(), sigs: BTreeSet::new() }
+    }
+
+    /// the Volt declaration of shim function sym (params: "name: type"): an extern "C" fn, or for
+    /// a shim found while the program runs, a function calling the address load finds
+    fn ext_fn(&self, sym: &str, params: &[String], ret: &str) -> String {
+        if self.lang.loader(self).is_none() {
+            return format!("    extern \"C\" fn {sym}({}) -> {ret};\n", params.join(", "));
+        }
+        let (names, types): (Vec<&str>, Vec<&str>) = params.iter().map(|p| p.split_once(": ").unwrap_or(("", p))).unzip();
+        let call = format!("@cast<extern \"C\" fn({}) -> {ret}>(load(&p_{sym}, \"{sym}\"))({})", types.join(", "), names.join(", "));
+        let body = if ret == "void" { format!("{call};") } else { format!("return {call};") };
+        format!("    var p_{sym}: void* = null;\n    fn {sym}({}) -> {ret} {{\n        {body}\n    }}\n", params.join(", "))
     }
 
     /// the exported symbol for a path of names
@@ -506,7 +527,15 @@ impl<'a> Gen<'a> {
             path.push(t);
         }
         path.push(&s.name);
-        let sym = self.sym(&path);
+        // an overload gets a symbol of its own
+        let mut sym = self.sym(&path);
+        let base = sym.clone();
+        for n in 2.. {
+            if !self.syms.contains(&sym) {
+                break;
+            }
+            sym = format!("{base}_{n}");
+        }
         let ns = self.shim_ns();
 
         // the receiver
@@ -558,6 +587,12 @@ impl<'a> Gen<'a> {
             let v = self.volt_param(n, &t, i).ok_or(format!("{what} (parameter {n}'s type)"))?;
             params.push((shim, Some(v)));
         }
+        // two overloads Volt can't tell apart (their parameters are the same Volt types)
+        let types: Vec<&str> = params.iter().filter_map(|p| p.1.as_ref()).map(|v| v.param.split_once(": ").map_or(v.param.as_str(), |x| x.1)).collect();
+        let key = format!("{what} {} ({})", self_ty.is_some() && s.recv == Recv::None, types.join(", "));
+        if self.sigs.contains(&key) {
+            return Err(format!("{what} (an overload Volt sees as the same as another)"));
+        }
         let ret = s.ret.clone().map(|t| self.resolve(t, self_ty)).ok_or(format!("{what} (its return type)"))?;
         let (res, val_ty) = match ret {
             Ty::Res(x) => (true, *x),
@@ -573,6 +608,8 @@ impl<'a> Gen<'a> {
         if res {
             self.errors = true;
         }
+        self.sigs.insert(key);
+        self.syms.insert(sym.clone());
 
         // the shim
         let shims: Vec<&ShimParam> = recv.iter().map(|r| &r.0).chain(params.iter().map(|p| &p.0)).collect();
@@ -596,7 +633,8 @@ impl<'a> Gen<'a> {
         if res {
             ve.extend(["e: u8**".to_string(), "e_n: usize*".to_string()]);
         }
-        let _ = writeln!(self.ext, "    extern \"C\" fn {sym}({}) -> {};", ve.join(", "), if res { "bool" } else { "void" });
+        let decl = self.ext_fn(&sym, &ve, if res { "bool" } else { "void" });
+        self.ext.push_str(&decl);
 
         // the Volt function
         let vt = volt_out.as_ref().map_or("void".to_string(), |o| o.ty.clone());
@@ -692,11 +730,13 @@ impl<'a> Gen<'a> {
                 let drop = self.sym(&[&mg, "drop"]);
                 let n = self.lang.name();
                 let _ = write!(v, "// a {n} {} (owned: deleting it frees it)\nstruct {} {{\n    h: void* = null;\n}}\n\nattach fn delete(this: {vp}&) -> void {{\n    if (this.h != null) {{\n        {ns}::{drop}(this.h);\n        this.h = null;\n    }}\n}}\n", def.name, def.name);
-                let _ = writeln!(self.ext, "    extern \"C\" fn {drop}(h: void*) -> void;");
+                let decl = self.ext_fn(&drop, &["h: void*".to_string()], "void");
+                self.ext.push_str(&decl);
                 if def.clone {
                     let cl = self.sym(&[&mg, "clone"]);
                     let _ = write!(v, "\nattach fn copy(this: {vp}&) -> {vp} {{\n    if (this.h == null) {{\n        return {{}};\n    }}\n    return {{ h: {ns}::{cl}(this.h) }};\n}}\n");
-                    let _ = writeln!(self.ext, "    extern \"C\" fn {cl}(h: void*) -> void*;");
+                    let decl = self.ext_fn(&cl, &["h: void*".to_string()], "void*");
+                    self.ext.push_str(&decl);
                 }
                 let _ = write!(self.helpers, "    fn own_{mg}(h: void*) -> {vp} {{\n        return {{ h: h }};\n    }}\n");
             }
@@ -762,19 +802,22 @@ impl<'a> Gen<'a> {
 
         // the Volt helpers that take what the shim hands over (and free it through the shim)
         let free = |what: &str| format!("volt_{}_{}_free_{what}", self.lang.short(), self.alias);
-        let mut ext = format!("    extern \"C\" fn {}(p: u8*, n: usize) -> void;\n", free("bytes"));
+        let mut ext = self.ext_fn(&free("bytes"), &["p: u8*".to_string(), "n: usize".to_string()], "void");
         let mut helpers = format!("    // the shim's bytes as a std::string; the shim's copy is freed\n    fn take(p: u8*, n: usize) -> std::string {{\n        if (n == 0) {{\n            return std::string::from(\"\");\n        }}\n        val s = std::string::from(@cast<str>(@slice(p, n)));\n        {}(p, n);\n        return s;\n    }}\n", free("bytes"));
         for x in &self.vec_elems {
             let f = free(&format!("{x}s"));
-            let _ = writeln!(ext, "    extern \"C\" fn {f}(p: {x}*, n: usize) -> void;");
+            ext.push_str(&self.ext_fn(&f, &["p: ".to_string() + x + "*", "n: usize".to_string()], "void"));
             let _ = write!(helpers, "    fn take_{x}s(p: {x}*, n: usize) -> std::vec<{x}> {{\n        var out: std::vec<{x}> = {{}};\n        if (n == 0) {{\n            return out;\n        }}\n        for (x) in @slice(p, n) {{\n            out.push(x) catch @panic(\"out of memory\");\n        }}\n        {f}(p, n);\n        return out;\n    }}\n");
         }
         if self.strs {
             let f = free("strs");
-            let _ = writeln!(ext, "    extern \"C\" fn {f}(p: owned_str*, n: usize) -> void;");
+            ext.push_str(&self.ext_fn(&f, &["p: owned_str*".to_string(), "n: usize".to_string()], "void"));
             let _ = write!(helpers, "    struct owned_str {{\n        p: u8*;\n        n: usize;\n    }}\n\n    fn take_strs(p: owned_str*, n: usize) -> std::vec<std::string> {{\n        var out: std::vec<std::string> = {{}};\n        if (n == 0) {{\n            return out;\n        }}\n        for (x) in @slice(p, n) {{\n            out.push(std::string::from(@cast<str>(@slice(x.p, x.n)))) catch @panic(\"out of memory\");\n        }}\n        {f}(p, n);\n        return out;\n    }}\n");
         }
         helpers.push_str(&self.helpers);
+        if let Some(l) = self.lang.loader(&self) {
+            helpers.push_str(&l);
+        }
         let short = self.lang.short();
         let mut volt = format!("// use {short} {{ ... }} as {}: {what}'s public API, called through its shim (written by bolt import)\n\nnamespace {short}_shim {{\n{ext}{}\n{helpers}}}\n", self.alias, self.ext);
         if self.errors {

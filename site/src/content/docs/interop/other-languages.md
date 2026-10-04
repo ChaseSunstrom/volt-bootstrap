@@ -29,7 +29,8 @@ importing C, C++, Rust, Zig and Swift code. Each one is a `run.sh` with its exac
   Or embed it like any C library: `use { "Python.h" } as py;` with the flags from
   `python3-config --includes` and `--ldflags --embed` passed through `--cc`.
 - **Node.js**: write the addon in Volt with `interop/node`, see [Node.js](/volt-bootstrap/interop/node/#addons-written-in-volt).
-- **C#** and other .NET languages: depend on the `interop/dotnet` package, see [.NET](/volt-bootstrap/interop/dotnet/).
+- **C#** and other .NET languages: import the sources or the assembly, `use { "Geo.cs" } as geo;`
+  or `use { "Lib.dll" } as lib;`, see [.NET](/volt-bootstrap/interop/dotnet/).
 - **Lua**: embed it with the `interop/lua` package, see [Lua](/volt-bootstrap/interop/lua/).
 
 The other way, a program in any of these languages can embed Volt itself and run Volt source it
