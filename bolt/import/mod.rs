@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 
 mod glue;
 mod go;
+mod java;
 mod rust;
 mod swift;
 mod zig;
@@ -72,7 +73,8 @@ fn run(r: &Req) -> Result<(), String> {
         "swift" => swift::import(r),
         "go" => go::import(r),
         "go-link" => go::link(r),
-        other => Err(format!("there's no `use {other}`: the languages Volt imports are c (use {{ \"x.h\" }}), cpp, rust, zig, swift and go")),
+        "java" => java::import(r),
+        other => Err(format!("there's no `use {other}`: the languages Volt imports are c (use {{ \"x.h\" }}), cpp, rust, zig, swift, go and java")),
     }
 }
 

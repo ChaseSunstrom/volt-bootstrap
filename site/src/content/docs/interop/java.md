@@ -1,12 +1,56 @@
 ---
 title: Java
-description: Calling Java from Volt with the interop/java package, and Volt from Java through generated bindings.
+description: Calling Java classes from Volt by importing them like a header, and Volt from Java through generated bindings.
 sidebar:
   order: 6
 ---
 
+## Volt calls Java
+
+Java sources, jars and class directories are imported like a header. Nothing in the Java code is
+written for Volt, and there are no signatures, start calls or VM values in the Volt code: bolt
+compiles the sources with `javac`, asks the JVM what the classes export, and writes Volt that calls
+them through JNI. The JVM starts the first time Java is called.
+
+```volt ignore
+use std::io;
+use { "geo/Point.java", "geo/Color.java" } as geo;    // or { "lib.jar" }, or use java { "classes" }
+
+fn main() -> !void {
+    var p = geo::Point::new(3.0, 4.0);               // a constructor (overloads stay overloads)
+    p.scale(2.0);                                     // a method
+    p.set_y(1.5);                                     // a public field: y() and set_y(v)
+    std::println("{} {}", p.x(), p.toString());       // 6 (6.0, 1.5)
+    val q = try geo::Point::parse("1, 2");            // it declares an exception: java_error!Point
+    std::println("{}", geo::Color::GREEN.next().lower());   // an enum and its methods: blue
+}
+```
+
+| Java | Volt |
+| --- | --- |
+| a public class, interface or abstract class | a handle: a reference to the object (a copy refers to the same one); `is_null()` for a `null` one |
+| `new T(...)` | `T::new(...)`, one per public constructor |
+| a public method | a method, or `T::f(...)` for a static one; overloads stay overloads |
+| a public field | `x()` and, unless it's `final`, `set_x(v)`; `T::x()` for a static one |
+| an imported supertype `S` | `as_S()`: the same object, as an `S` |
+| an `enum` | a Volt enum with the same constants, and the enum's methods |
+| `boolean`, `byte`, `char`, `short`, `int`, `long`, `float`, `double` | `bool`, `i8`, `u16`, `i16`, `i32`, `i64`, `f32`, `f64` |
+| `String` | `str` in, `std::string` out (`null` is `""`) |
+| arrays of those and of `String` | `T[..]` in (what Java changes in it comes back), `std::vec<T>` out |
+| a method that declares exceptions (`throws`) | `java_error!T`; `java_error::THROWN` holds the exception's `toString()` |
+
+An exception a method doesn't declare stops the program with its text, as a Volt panic does. A
+method whose types aren't in the table (generic ones, collections, other libraries' classes) is
+left out, listed in a comment of the generated declarations. Each import loads its classes through
+a class loader of its own, so a program can import several, and they share the process's JVM.
+
+bolt needs a JDK: `$JAVA_HOME`, else the one whose `javac` is on the PATH (for `javac` and its
+`jni.h`). The program links its `libjvm` with an rpath to it.
+
+## The interop/java package
+
 The `interop/java` package (in the repository) starts a Java VM inside a Volt program through JNI's
-invocation API. Depend on it and call Java methods with Volt values; its build file finds the JDK at
+invocation API, for calls made by hand. Depend on it and call Java methods with Volt values; its build file finds the JDK at
 `$JAVA_HOME` (or the one whose `java` is on the PATH) and links `libjvm` with an rpath to it.
 
 ```toml

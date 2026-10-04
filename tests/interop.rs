@@ -685,6 +685,58 @@ fn go_direct() {
     assert!(out.contains("QUIET! a-b-c") && out.contains("6 metres²"), "the Go changes are in: {out}");
 }
 
+/// Volt calls ordinary Java directly: `use { "geo/Point.java", ... } as geo;` and nothing else (the JVM
+/// starts on first use), on both backends, from voltc run and from a bolt package, which rebuilds
+/// when a Java file changes
+#[test]
+fn java_direct() {
+    let Some(bin) = jdk_bin() else {
+        eprintln!("there's no JDK 22 or later: skipping use java");
+        return;
+    };
+    let e = Env::new("java_direct");
+    let dir = e.dir.join("jd");
+    copy_dir(&Path::new(ROOT).join("tests/interop/java_direct"), &dir);
+    let src = std::fs::read_to_string(dir.join("main.volt")).unwrap();
+    let want: String = src.lines().filter_map(|l| l.strip_prefix("// expect: ")).map(|l| format!("{l}\n")).collect();
+    let tools = |c: &mut Command| {
+        c.env("VOLTC", &e.voltc).env("BOLT", env!("CARGO_BIN_EXE_bolt")).env("VOLT_CACHE", e.dir.join("cache")).env("BOLT_HOME", e.dir.join("bolthome"));
+        // javac on the PATH is found there; else the JDK this found
+        if let Some(home) = bin.parent().filter(|h| !h.as_os_str().is_empty()) {
+            c.env("JAVA_HOME", home);
+        }
+    };
+    for backend in ["c", "llvm"] {
+        let mut c = Command::new(&e.voltc);
+        c.args(["run", "--backend", backend, "main.volt"]).current_dir(&dir).env("VOLT_STD", Path::new(ROOT).join("std"));
+        tools(&mut c);
+        assert_eq!(ok(c.output().unwrap(), "voltc run"), want, "voltc run ({backend})");
+    }
+    // an exception the method doesn't declare stops the program
+    let mut c = Command::new(&e.voltc);
+    c.args(["run", "panics.volt"]).current_dir(&dir).env("VOLT_STD", Path::new(ROOT).join("std"));
+    tools(&mut c);
+    let o = c.output().unwrap();
+    assert_eq!(o.status.code(), Some(101), "an undeclared exception panics: {}", String::from_utf8_lossy(&o.stderr));
+    assert!(String::from_utf8_lossy(&o.stderr).contains("java.lang.ArithmeticException: / by zero"), "{}", String::from_utf8_lossy(&o.stderr));
+    // the same program in a bolt package
+    let app = dir.join("app");
+    std::fs::create_dir_all(app.join("src")).unwrap();
+    std::fs::write(app.join("bolt.toml"), format!("[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[std]\npath = \"{}\"\n", Path::new(ROOT).join("std").display())).unwrap();
+    std::fs::write(app.join("src/main.volt"), src.replace("\"geo/", "\"../../geo/")).unwrap();
+    let bolt_run = |backend: &str| {
+        let mut c = Command::new(env!("CARGO_BIN_EXE_bolt"));
+        c.args(["run", "-q", "--backend", backend]).current_dir(&app);
+        tools(&mut c);
+        ok(c.output().unwrap(), "bolt run")
+    };
+    assert_eq!(bolt_run("llvm"), want, "bolt run");
+    // a change to a Java file reaches the program
+    let f = dir.join("geo/Geom.java");
+    std::fs::write(&f, std::fs::read_to_string(&f).unwrap().replace("s.toUpperCase()", "s.toUpperCase() + \"!\"")).unwrap();
+    assert!(bolt_run("c").contains("42 3000000000 QUIET!"), "the Java change is in");
+}
+
 /// Volt calls ordinary Swift directly: `use { "geometry.swift", "things.swift" } as geo;` and nothing
 /// else, on both backends, from voltc run and from a bolt package, which rebuilds when a file changes
 #[test]

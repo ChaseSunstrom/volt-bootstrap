@@ -7,9 +7,9 @@
 // only when the code changes.
 use std::io;
 
-// the language a file is in, from its extension: "cpp", "rust", "zig", "swift" or "go", or null for a C
-// header (a directory with a Cargo.toml is a Rust crate, one with a go.mod a Go package). A C++ header
-// named .h needs `use cpp { }`
+// the language a file is in, from its extension: "cpp", "rust", "zig", "swift", "go" or "java" (.java,
+// .jar), or null for a C header (a directory with a Cargo.toml is a Rust crate, one with a go.mod a Go
+// package). A C++ header named .h needs `use cpp { }`, a directory of classes `use java { }`
 fn language_of(path: str, dir: str) -> str? {
     var name = path;
     for (i) in 0..path.len {
@@ -45,6 +45,9 @@ fn language_of(path: str, dir: str) -> str? {
     }
     if (ext == "go") {
         return "go";
+    }
+    if (ext == "java" || ext == "jar") {
+        return "java";
     }
     var full = S(path);
     if (path.len == 0 || path[0] != '/') {

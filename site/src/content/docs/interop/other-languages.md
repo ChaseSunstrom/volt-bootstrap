@@ -15,6 +15,9 @@ importing C, C++, Rust, Zig and Swift code. Each one is a `run.sh` with its exac
 
 - **C**: import the header, see [C](/volt-bootstrap/interop/c/).
 - **C++**: import the header, `use { "shapes.hpp" } as x;`, see [C++](/volt-bootstrap/interop/cpp/).
+- **Java**: import the sources, jars or class directories, `use { "geo/Point.java" } as geo;`,
+  `use { "lib.jar" } as lib;` or `use java { "classes" } as x;`, see
+  [Java](/volt-bootstrap/interop/java/).
 - **Rust**, **Zig** and **Go**: import the file or the crate, `use { "geom.rs" } as x;`,
   `use { "../geom" } as x;` (a directory with a `Cargo.toml`, or a `go.mod`),
   `use { "fastmath.zig" } as x;` or `use { "geom.go" } as x;`, and call its public API, see
@@ -26,7 +29,6 @@ importing C, C++, Rust, Zig and Swift code. Each one is a `run.sh` with its exac
   Or embed it like any C library: `use { "Python.h" } as py;` with the flags from
   `python3-config --includes` and `--ldflags --embed` passed through `--cc`.
 - **Node.js**: write the addon in Volt with `interop/node`, see [Node.js](/volt-bootstrap/interop/node/#addons-written-in-volt).
-- **Java**: depend on the `interop/java` package, see [Java](/volt-bootstrap/interop/java/).
 - **C#** and other .NET languages: depend on the `interop/dotnet` package, see [.NET](/volt-bootstrap/interop/dotnet/).
 - **Lua**: embed it with the `interop/lua` package, see [Lua](/volt-bootstrap/interop/lua/).
 
