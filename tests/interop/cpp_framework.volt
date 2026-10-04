@@ -9,14 +9,12 @@ struct logger {
     rank: i32;
 }
 
-attach cpp::fw::t_Listener_on_event -> logger {
+attach cpp::fw::Listener -> logger {
     fn on_event(this, self: cpp::fw::Listener&, e: cpp::fw::Event&) -> void {
         this.lines += 1;
         this.total += e.value() * this.rank;
     }
-}
 
-attach cpp::fw::t_Listener_priority -> logger {
     fn priority(this, self: cpp::fw::Listener&) -> i32 { return this.rank; }
 }
 
@@ -26,18 +24,14 @@ struct counter {
     stopped: bool;
 }
 
-attach cpp::fw::t_Plugin_id -> counter {
+attach cpp::fw::Plugin -> counter {
     fn id(this, self: cpp::fw::Plugin&) -> std::string { return std::string::from(this.name); }
-}
 
-attach cpp::fw::t_Plugin_start -> counter {
     fn start(this, self: cpp::fw::Plugin&) -> bool {
         this.starts += 1;
         return this.starts < 2;
     }
-}
 
-attach cpp::fw::t_Plugin_stop -> counter {
     fn stop(this, self: cpp::fw::Plugin&) -> void { this.stopped = true; }
 }
 
@@ -45,12 +39,23 @@ struct broken {
     code: i32;
 }
 
-attach cpp::fw::t_Plugin_id -> broken {
+attach cpp::fw::Plugin -> broken {
     fn id(this, self: cpp::fw::Plugin&) -> std::string { return std::string::from("broken"); }
+    fn start(this, self: cpp::fw::Plugin&) -> bool { return false; }
 }
 
-attach cpp::fw::t_Plugin_start -> broken {
-    fn start(this, self: cpp::fw::Plugin&) -> bool { return false; }
+// both a listener and a plugin: label is the listener's only (the plugin's is C++'s own)
+struct both {
+    seen: i32;
+}
+
+attach cpp::fw::Listener -> both {
+    fn on_event(this, self: cpp::fw::Listener&, e: cpp::fw::Event&) -> void { this.seen += 1; }
+    fn label(this, self: cpp::fw::Listener&) -> std::string { return std::string::from("both"); }
+}
+
+attach cpp::fw::Plugin -> both {
+    fn id(this, self: cpp::fw::Plugin&) -> std::string { return std::string::from("both"); }
 }
 
 fn main() -> void {
@@ -75,4 +80,10 @@ fn main() -> void {
     std::println("{} {}", reg.start_all(), reg.start_all());
     reg.stop_all();
     std::println("{}", (pc.derived<counter>() ?? @panic("?")).stopped);
+    val x: both = { seen: 0 };
+    val y: both = { seen: 0 };
+    var lx = cpp::fw::Listener::derive(move x);
+    var py = cpp::fw::Plugin::derive(move y);
+    bus.subscribe(&lx);
+    std::println("{} {} {}", bus.publish("z", 1), cpp::fw::labels(&lx, &py), (lx.derived<both>() ?? @panic("?")).seen);
 }

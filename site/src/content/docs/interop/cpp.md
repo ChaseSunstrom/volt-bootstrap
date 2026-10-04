@@ -88,6 +88,12 @@ fn main() -> void {
 // expect: 7.5
 ```
 
+Two more holes fill what C++ wants at compile time, and aren't passed: `{&i}` is argument `i`, a
+Volt function, by its symbol (declared `extern "C"` for the call), and `{=i}` is argument `i`, a
+comptime value, as a C++ literal. So a template with non-type parameters gets them, and a call
+inside a generic function gets that instance's: `@cpp<i32>("apply<{&0}, {=1}>({2})", step<T>,
+@sizeof(T) > 4, x)`.
+
 `VOLT_SHOW_CPP=1` prints the Volt declarations voltc generated from the headers.
 
 ## The standard library, operators and exceptions
@@ -169,10 +175,10 @@ object, a reference or an optional; for one returning a vector, catch the except
 ## Subclassing a C++ class in Volt
 
 A C++ framework that calls back through virtual methods takes a Volt type in their place. The Volt
-struct holds the subclass's state; each virtual method `m` of class `C` has a trait `t_C_m` in the
-import's namespace, and the struct attaches the ones it overrides. `C::derive(value, ...)` takes the
-struct and the arguments of one of `C`'s constructors (public or protected), and makes the C++
-object, which holds the Volt value and deletes it with itself:
+struct holds the subclass's state, and attaches the class itself: `attach C -> T { ... }` overrides
+`C`'s virtual methods by their own names, any of them (the pure ones it has to). `C::derive(value,
+...)` takes the struct and the arguments of one of `C`'s constructors (public or protected), and
+makes the C++ object, which holds the Volt value and deletes it with itself:
 
 ```volt ignore
 use std::io;
@@ -182,11 +188,9 @@ struct boxy {
     w: i32;
 }
 
-attach cpp::gui::t_Widget_width -> boxy {
+attach cpp::gui::Widget -> boxy {
     fn width(this, self: cpp::gui::Widget&) -> i32 { return this.w; }
-}
 
-attach cpp::gui::t_Widget_click -> boxy {
     fn click(this, self: cpp::gui::Widget&, times: i32) -> void {
         this.w += times;
         self.bump(times);       // a protected method
@@ -204,13 +208,14 @@ fn main() -> void {
 
 - An override gets the C++ object as `self`, a `C&`: through it, `base_m(...)` is `C`'s own `m`
   (not for a pure one), and `C`'s protected methods and fields (`f()`, `set_f(v)`) are there too, as
-  methods of `C`. On an object Volt didn't make with `derive`, a protected one stops the program.
+  methods of `C`.
 - A virtual method the struct doesn't override is `C`'s own. A pure one it doesn't override is a
-  compile error naming the trait to attach.
-- Inherited virtual methods count (`t_Button_describe` for a `describe` `Button` inherits), and so
-  do private ones that are pure. A private one that isn't pure (or one inherited through a base
-  that isn't public) stays `C`'s: the subclass couldn't call `C`'s own when the struct doesn't
-  override it.
+  compile error naming it, and so is a function in the block that isn't one of `C`'s virtual
+  methods, or that takes other types (a `self` of another class).
+- Inherited virtual methods count (a `Button` block can override the `describe` it inherits from
+  `Widget`), and so do private ones that are pure. A private one that isn't pure (or one inherited
+  through a base that isn't public) stays `C`'s: the subclass couldn't call `C`'s own when the
+  struct doesn't override it.
 - What crosses into an override: numbers, `bool`, enums, pointers, strings (`str`, a view for the
   call), classes Volt holds by value (a copy, or a reference for `T&`) and classes held by handle
   (a handle Volt borrows for the call). What comes back: those numbers, enums and pointers, a class
@@ -218,6 +223,21 @@ fn main() -> void {
   generated source says so); a pure one with other types means the class can't be derived from.
 - `derive` is there for a class with a virtual method, a public virtual destructor, and not
   `final`. Copying a derived handle copies only the `C` part, as in C++.
+
+### What it costs
+
+The C++ subclass is a template, made once for each Volt type: each override calls that type's
+method directly, by its symbol, and a method the type doesn't have calls `C`'s own directly. There's
+no table of function pointers and nothing checked at run time; a call from C++ costs what a virtual
+call to a C++ subclass does. A type with methods of the same name for two classes (`label()` of a
+`Listener` and of a `Plugin`) overrides each class's separately.
+
+Nothing here needs RTTI, so a program built with `-fno-rtti` (`CXX="c++ -fno-rtti"`) subclasses the
+same way. `derived<T>()` and the protected members know a derived object from the handle `derive`
+made (or `self`, in an override). Only these use RTTI: `as_Derived()` casts, `cpp_type_name()`, and
+`derived<T>()` or a protected method on an object C++ handed back (a handle `derive` didn't make);
+without RTTI, a cast or a type name stops the program, and `derived<T>()` on such a handle is
+`null`.
 
 ## Limits
 

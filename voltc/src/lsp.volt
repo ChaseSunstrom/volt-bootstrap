@@ -248,19 +248,6 @@ attach fn lsp_local_named(this: checker&, file: u32, name: str, at: usize) -> ls
     return best;
 }
 
-// does method d take a t (or a t&) as this?
-attach fn lsp_takes(this: checker&, d: u32, t: u32) -> bool {
-    match (this.recv_of(d)) {
-        .VAL(pat) => {
-            val p = pat ?? return false;
-            val gps = this.fn_generics(d);
-            var binds = none_binds(gps.len);
-            return this.match_recv(p, t, gps, &binds, this.dl(d).ns) != null;
-        },
-        default => { return false; },
-    }
-}
-
 // completion items for a value of type t0: its fields and the methods that take it as this
 attach fn lsp_members(this: checker&, t0: u32, out: std::json::value&) -> void {
     val t = this.t.ref_inner(t0) ?? t0;
@@ -279,7 +266,7 @@ attach fn lsp_members(this: checker&, t0: u32, out: std::json::value&) -> void {
     map_keys(&this.attached, &names);
     for (n) in names.items() {
         for (d) in this.named(&this.attached, n).items() {
-            if (this.lsp_takes(d, t)) {
+            if (this.takes_this(d, t)) {
                 out.add(lsp_item(n, 2.0, this.lsp_decl_text(d).as_str()));
                 break;
             }
@@ -1473,7 +1460,7 @@ attach fn signature(this: lsp_server&, params: std::json::value&) -> std::json::
     for (d) in c.lsp_callees(text[k..o], method).items() {
         if (recv) {
             val rt = c.t.ref_inner(recv->ty) ?? recv->ty;
-            if (!c.lsp_takes(d, rt)) {
+            if (!c.takes_this(d, rt)) {
                 continue;
             }
         }

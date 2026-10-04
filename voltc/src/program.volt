@@ -445,11 +445,52 @@ attach fn check_attach_block(this: checker&, b: u32) -> compile_error!void {
                 .PATH(p&) => {
                     val r = this.bound_trait(tr, ns) ?? return this.not_a_trait(tr.span, ns, p);
                     try this.visible(r.decl, tr.span);
-                    return this.check_required(r.decl, fs, tr.span);
+                    return this.check_required(r.decl, fs, tr.span, p.last(), ns);
                 },
                 default => {
                     return fails(tr.span, "an attach block names a trait: attach t_name -> type { ... }");
                 },
+            }
+        },
+        default => {},
+    }
+}
+
+// a closed trait's fn rf (declared in namespace tns) and an attach block's (f, in ns) take the same
+// types, where both write them
+attach fn same_params(this: checker&, f: item*, rf: fn_decl&, ns: u32, tns: u32, what: std::string&, wanted: span) -> compile_error!void {
+    match (f->kind) {
+        .FN(g&) => {
+            var none: std::vec<gparam> = {};
+            var binds = none_binds(0);
+            var i: usize = 0;
+            var j: usize = 0;
+            while (i < g.params.len && j < rf.params.len) {
+                if (g.params.at(i).name == "this") {
+                    i += 1;
+                    continue;
+                }
+                if (rf.params.at(j).name == "this") {
+                    j += 1;
+                    continue;
+                }
+                val p = g.params.at(i);
+                val w = rf.params.at(j);
+                var got: u32? = null;
+                var exp: u32? = null;
+                if (p.ty) {
+                    got = this.resolve_partial(&p.ty, &none, &binds, ns);
+                }
+                if (w.ty) {
+                    exp = this.resolve_partial(&w.ty, &none, &binds, tns);
+                }
+                if (got != null && exp != null && (got ?? 0) != (exp ?? 0)) {
+                    var msg = fmt3("'{}' takes a {} as argument {}", S(g.name), this.ty_name(got ?? 0), unum(@cast<u64>(j)));
+                    msg.append(fmt2(" here but a {} in {}", this.ty_name(exp ?? 0), copy *what).as_str());
+                    return with_label(fail(this.name_span(f->span, g.name), move msg), wanted, S("declared here"));
+                }
+                i += 1;
+                j += 1;
             }
         },
         default => {},
@@ -475,17 +516,46 @@ attach fn not_a_trait(this: checker&, span: span, ns: u32, p: path&) -> compile_
     return this.unknown(span, "trait", ns, p, false);
 }
 
-// every fn trait tr declares is among fns (an attach block's, whose trait name is at), taking as
-// many arguments
-attach fn check_required(this: checker&, tr: u32, fns: std::vec<item>&, at: span) -> compile_error!void {
+// every fn trait tr declares (but its @optional ones) is among fns (an attach block's, in namespace
+// ns, whose trait name, written, is at), taking as many arguments; a @closed trait's blocks hold its
+// fns only, taking its parameters' types (a C++ class's virtual method with another self would be no
+// override of it)
+attach fn check_required(this: checker&, tr: u32, fns: std::vec<item>&, at: span, written: str, ns: u32) -> compile_error!void {
     match (this.item_of(tr).kind) {
         .TRAIT(tname, required&) => {
+            // the name the block wrote: a struct marked @attach_as stands for its trait
+            var what = fmt("trait '{}'", S(tname));
+            if (written != tname) {
+                what = fmt("'{}'", S(written));
+            }
+            var closed = false;
+            for (a&) in this.item_of(tr).attrs.items() {
+                closed = closed || attr_named(a, "closed");
+            }
+            for (f&) in fns.items() {
+                match (f.kind) {
+                    .FN(g&) => {
+                        var known = !closed;
+                        for (r&) in required.items() {
+                            match (r.kind) {
+                                .FN(rf&) => { known = known || rf.name == g.name; },
+                                default => {},
+                            }
+                        }
+                        if (!known) {
+                            return fail(this.name_span(f.span, g.name), fmt2("'{}' isn't one of {}'s functions", S(g.name), S(written)));
+                        }
+                    },
+                    default => {},
+                }
+            }
             for (r&) in required.items() {
                 match (r.kind) {
                     .FN(rf&) => {
                         val wanted = this.name_span(r.span, rf.name);
                         // the block's fns of that name (overloads): one has to take the trait's arguments
                         var first: item* = null;
+                        var same: item* = null;
                         var ok = false;
                         for (f&) in fns.items() {
                             match (f.kind) {
@@ -494,22 +564,33 @@ attach fn check_required(this: checker&, tr: u32, fns: std::vec<item>&, at: span
                                         if (first == null) {
                                             first = f;
                                         }
-                                        if (arg_count(g) == arg_count(rf)) {
+                                        if (arg_count(g) == arg_count(rf) && !ok) {
                                             ok = true;
+                                            same = f;
                                         }
                                     }
                                 },
                                 default => {},
                             }
                         }
+                        var optional = false;
+                        for (a&) in r.attrs.items() {
+                            optional = optional || attr_named(a, "optional");
+                        }
+                        if (first == null && optional) {
+                            continue;
+                        }
                         if (first == null) {
-                            val msg = fmt2("this attach block is missing fn '{}', which trait '{}' requires", S(rf.name), S(tname));
+                            val msg = fmt2("this attach block is missing fn '{}', which {} requires", S(rf.name), copy what);
                             return with_label(fail(at, msg), wanted, S("required here"));
+                        }
+                        if (closed && same != null) {
+                            try this.same_params(same, rf, ns, this.dl(tr).ns, &what, wanted);
                         }
                         if (!ok) {
                             match (first->kind) {
                                 .FN(g&) => {
-                                    val msg = fmt4("'{}' takes {} here but {} in trait '{}'", S(g.name), args_text(arg_count(g)), args_text(arg_count(rf)), S(tname));
+                                    val msg = fmt4("'{}' takes {} here but {} in {}", S(g.name), args_text(arg_count(g)), args_text(arg_count(rf)), copy what);
                                     return with_label(fail(this.name_span(first->span, g.name), msg), wanted, S("declared here"));
                                 },
                                 default => {},

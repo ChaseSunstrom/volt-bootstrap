@@ -1,5 +1,6 @@
-// Volt types subclassing C++ classes: each attaches the t_<Class>_<method> traits of the virtual
-// methods it overrides, and <Class>::derive makes the C++ object, which holds the Volt value
+// Volt types subclassing C++ classes: each attaches the class (attach Class -> T), overriding its
+// virtual methods by their own names, and Class::derive makes the C++ object, which holds the Volt
+// value
 use std::io;
 use { "widgets.hpp" } as cpp;
 
@@ -12,44 +13,33 @@ attach fn delete(this: boxy&) -> void {
     std::println("boxy {} gone", this.w);
 }
 
-attach cpp::gui::t_Widget_width -> boxy {
+// boxy overrides Widget's virtual methods by their own names (width is pure: it has to)
+attach cpp::gui::Widget -> boxy {
     fn width(this, self: cpp::gui::Widget&) -> i32 { return this.w; }
-}
 
-attach cpp::gui::t_Widget_click -> boxy {
     fn click(this, self: cpp::gui::Widget&, times: i32) -> void {
         this.w += times;
         self.bump(times);       // protected
         self.base_click(times); // C++'s own click
     }
-}
 
-attach cpp::gui::t_Widget_describe -> boxy {
     fn describe(this, self: cpp::gui::Widget&) -> std::string {
         var s = self.base_describe();
         s.append(" boxy");
         return move s;
     }
-}
 
-attach cpp::gui::t_Widget_rename -> boxy {
     fn rename(this, self: cpp::gui::Widget&, to: str) -> void {
         this.log.append(to);
         self.set_name_(to); // a protected field
     }
-}
 
-attach cpp::gui::t_Widget_link -> boxy {
     fn link(this, self: cpp::gui::Widget&, other: cpp::gui::Widget&) -> void {
         this.log.append(other.title().as_str());
     }
-}
 
-attach cpp::gui::t_Widget_size -> boxy {
     fn size(this, self: cpp::gui::Widget&) -> cpp::gui::Size { return { w: this.w, h: 2 }; }
-}
 
-attach cpp::gui::t_Widget_react -> boxy {
     fn react(this, self: cpp::gui::Widget&, m: cpp::gui::Mood) -> i32 { return @cast<i32>(m) + 40; }
 }
 
@@ -57,7 +47,8 @@ struct label {
     text: str;
 }
 
-attach cpp::gui::t_Widget_width -> label {
+// only the pure one: the rest are Widget's own
+attach cpp::gui::Widget -> label {
     fn width(this, self: cpp::gui::Widget&) -> i32 { return @cast<i32>(this.text.len); }
 }
 
@@ -65,15 +56,10 @@ struct knob {
     n: i32;
 }
 
-attach cpp::gui::t_Button_press -> knob {
+// Button's virtual methods, its own and Widget's
+attach cpp::gui::Button -> knob {
     fn press(this, self: cpp::gui::Button&) -> i32 { return this.n + self.base_press(); }
-}
-
-attach cpp::gui::t_Button_sound -> knob {
     fn sound(this, self: cpp::gui::Button&) -> i32 { return this.n * 3; }
-}
-
-attach cpp::gui::t_Button_describe -> knob {
     fn describe(this, self: cpp::gui::Button&) -> std::string { return std::string::from("knob"); }
 }
 

@@ -21,6 +21,7 @@ public:
     virtual ~Listener() = default;
     virtual void on_event(const Event& e) = 0;
     virtual int priority() const { return 0; }
+    virtual std::string label() const { return "listener"; }
 };
 
 class Plugin {
@@ -29,6 +30,7 @@ public:
     virtual std::string id() const = 0;
     virtual bool start() { return true; }
     virtual void stop() {}
+    virtual std::string label() const { return "plugin"; }
 };
 
 class Bus {
@@ -65,5 +67,8 @@ public:
 private:
     std::vector<Plugin*> plugins;
 };
+
+// one object as both: what each interface calls it
+inline std::string labels(const Listener& l, const Plugin& p) { return l.label() + "/" + p.label(); }
 
 }  // namespace fw

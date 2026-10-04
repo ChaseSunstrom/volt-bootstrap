@@ -1767,13 +1767,27 @@ impl Checker {
             return Err(self.unknown(trait_.span, "trait", ns, p, false));
         };
         self.visible(tr, trait_.span)?;
-        let ItemKind::Trait { name: tname, fns: required } = &self.decls[tr].item.kind else { return Ok(()) };
+        let ItemKind::Trait { name: tname, fns: required } = self.decls[tr].item.kind.clone() else { return Ok(()) };
+        let tns = self.decls[tr].ns;
         let args = |f: &FnDecl| match f.params.iter().filter(|q| q.name != "this").count() {
             0 => "no arguments".to_string(),
             1 => "1 argument".to_string(),
             n => format!("{n} arguments"),
         };
-        for r in required {
+        let has = |attrs: &[Expr], name: &str| attrs.iter().any(|a| matches!(&a.kind, ExprKind::Builtin(n, _, _) if n == name));
+        // the name the block wrote: a struct marked @attach_as stands for its trait
+        let what = if p.last() == tname.as_str() { format!("trait '{tname}'") } else { format!("'{}'", p.last()) };
+        let closed = has(&self.decls[tr].item.attrs, "closed");
+        if closed {
+            for f in fns {
+                let ItemKind::Fn(g) = &f.kind else { continue };
+                if !required.iter().any(|r| matches!(&r.kind, ItemKind::Fn(rf) if rf.name == g.name)) {
+                    let msg = format!("'{}' isn't one of {}'s functions", g.name, p.last());
+                    return err(self.name_span(f.span, &g.name), msg);
+                }
+            }
+        }
+        for r in &required {
             let ItemKind::Fn(rf) = &r.kind else { continue };
             let wanted = self.name_span(r.span, &rf.name);
             // the block's fns of that name (overloads): one has to take the trait's arguments
@@ -1785,12 +1799,30 @@ impl Checker {
                 })
                 .collect();
             let Some(&(at, g)) = same.first() else {
-                let msg = format!("this attach block is missing fn '{}', which trait '{tname}' requires", rf.name);
+                if has(&r.attrs, "optional") {
+                    continue;
+                }
+                let msg = format!("this attach block is missing fn '{}', which {what} requires", rf.name);
                 return Err(Diag::new(trait_.span, msg).label(wanted, "required here"));
             };
-            if !same.iter().any(|(_, g)| args(g) == args(rf)) {
-                let msg = format!("'{}' takes {} here but {} in trait '{tname}'", g.name, args(g), args(rf));
+            let Some(&(at, g)) = same.iter().find(|(_, g)| args(g) == args(rf)) else {
+                let msg = format!("'{}' takes {} here but {} in {what}", g.name, args(g), args(rf));
                 return Err(Diag::new(self.name_span(at, &g.name), msg).label(wanted, "declared here"));
+            };
+            // a closed trait's blocks take its parameters' types too (a C++ class's virtual method
+            // with another self would be no override of it)
+            if closed {
+                for (i, (p, w)) in g.params.iter().filter(|q| q.name != "this").zip(rf.params.iter().filter(|q| q.name != "this")).enumerate() {
+                    let (Some(pt), Some(wt)) = (&p.ty, &w.ty) else { continue };
+                    let got = self.resolve_partial(pt, &[], &[], ns);
+                    let exp = self.resolve_partial(wt, &[], &[], tns);
+                    if let (Some(a), Some(b)) = (got, exp) {
+                        if a != b {
+                            let msg = format!("'{}' takes a {} as argument {} here but a {} in {what}", g.name, self.ty_name(a), i + 1, self.ty_name(b));
+                            return Err(Diag::new(self.name_span(at, &g.name), msg).label(wanted, "declared here"));
+                        }
+                    }
+                }
             }
         }
         Ok(())

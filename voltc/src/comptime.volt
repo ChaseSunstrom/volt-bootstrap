@@ -114,7 +114,7 @@ attach fn ct_eval_in(this: checker&, env: u32, e: expr&, want: u32?) -> compile_
 // is this expression only meaningful at compile time (so it gets evaluated, not emitted)?
 attach fn is_ct_expr(this: checker&, e: expr&) -> bool {
     match (e.kind) {
-        .BUILTIN(n, g, a) => { return n == "typeinfo" || n == "typeof" || n == "compile_error" || n == "cfg" || n == "attaches"; },
+        .BUILTIN(n, g, a) => { return n == "typeinfo" || n == "typeof" || n == "compile_error" || n == "cfg" || n == "attaches" || n == "has_method"; },
         .CALL(c, args) => {
             match (c.kind) {
                 .PATH(p&) => {
@@ -2261,6 +2261,28 @@ attach fn ct_builtin(this: checker&, name: str, gargs: std::vec<garg>&, args: st
         val tr = this.bound_trait(b, this.env_at(env).ns) ?? return fails(b.span, "@attaches(T, trait): expected a trait");
         return cval::BOOL(try this.satisfies(t, tr.decl, tr.args, env));
     }
+    if (name == "has_method") {
+        // @has_method(T, "name", A...): does T have a method of that name (attached to it, by an
+        // attach fn or an attach block), taking arguments of types A first?
+        if (args.len < 2) {
+            return fails(span, "@has_method(T, \"name\", A...) takes a type, a name and argument types");
+        }
+        val t = try this.ct_ty_arg(args.at(0), env);
+        var tys: std::vec<u32> = {};
+        for (i) in 2..args.len {
+            put(&tys, try this.ct_ty_arg(args.at(i), env));
+        }
+        match (*args.at(1)) {
+            .EXPR(e&) => {
+                match (try this.ct_expr(e, null)) {
+                    .STR(s) => { return cval::BOOL(this.has_method(t, s.as_str(), &tys)); },
+                    default => {},
+                }
+                return fails(e.span, "@has_method(T, \"name\"): the name is a string");
+            },
+            .TYPE(b&) => { return fails(b.span, "@has_method(T, \"name\"): the name is a string"); },
+        }
+    }
     if (name == "sizeof" || name == "alignof") {
         if (args.len != 1) {
             return fail(span, fmt("@{}(T) takes one type", S(name)));
@@ -2854,6 +2876,9 @@ fn attr_defs() -> std::vec<attr_def> {
     put(&v, { name: "export_text", args: 1 }); // a struct is text, as this method gives it, to other languages (voltc bindings)
     put(&v, { name: "thread_local", args: 0 }); // a global var each thread has its own of
     put(&v, { name: "cfg", args: 2 }); // the item is only in builds where this @cfg holds (1 or 2 arguments)
+    put(&v, { name: "optional", args: 0 }); // a trait fn an attach block may leave out
+    put(&v, { name: "closed", args: 0 }); // a trait whose attach blocks hold its fns only
+    put(&v, { name: "attach_as", args: 1 }); // a struct attach blocks name for this trait (a C++ class's virtuals)
     return move v;
 }
 

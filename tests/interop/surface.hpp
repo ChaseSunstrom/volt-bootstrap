@@ -104,5 +104,14 @@ std::function<int(int)> scale_by(T k) {
 struct Button {
     std::function<int(int)> on = [](int x) { return x; };
 };
+// non-type template parameters: no Volt declaration, but @cpp's {&i} and {=i} holes fill them
+template <int (*F)(int), bool Twice>
+int apply_fn(int x) {
+    if constexpr (Twice) {
+        return F(F(x));
+    } else {
+        return F(x);
+    }
+}
 
 }  // namespace kit

@@ -1,8 +1,8 @@
 // Volt calling C++: the use reads counter.hpp (C++, by its extension) with libclang, so Counter (it
 // holds a std::string, so it isn't trivially copyable) is a handle to an object C++ allocates, its
 // constructor is Counter::new, its destructor runs when the Volt value goes out of scope, and the
-// template becomes a generic fn. A Volt type overrides Ticker's virtual tick by attaching
-// t_Ticker_tick, and Ticker::derive makes the C++ object that calls it. Run: sh run.sh
+// template becomes a generic fn. A Volt type overrides Ticker's virtual tick in an attach block for
+// Ticker itself, and Ticker::derive makes the C++ object that calls it. Run: sh run.sh
 use std::io;
 use { "counter.hpp" } as cpp;
 
@@ -10,7 +10,7 @@ struct shout {
     word: str;
 }
 
-attach cpp::tally::t_Ticker_tick -> shout {
+attach cpp::tally::Ticker -> shout {
     fn tick(this, self: cpp::tally::Ticker&, n: i32) -> std::string {
         var s = std::string::from(this.word);
         s.append_int(@cast<i64>(n));

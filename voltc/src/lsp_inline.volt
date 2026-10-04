@@ -849,7 +849,7 @@ attach fn attached_to(this: checker&, t: u32) -> std::vec<attached_fn> {
     map_keys(&this.attached, &names);
     for (n) in names.items() {
         for (d) in this.named(&this.attached, n).items() {
-            if (this.catch_all(d) || !this.lsp_takes(d, t)) {
+            if (this.catch_all(d) || !this.takes_this(d, t)) {
                 continue;
             }
             var group: std::string = {};

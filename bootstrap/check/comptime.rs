@@ -82,7 +82,7 @@ impl Checker {
     /// is this expression only meaningful at compile time (so it gets evaluated, not emitted)?
     pub fn is_ct_expr(&self, e: &Expr) -> bool {
         match &e.kind {
-            ExprKind::Builtin(n, _, _) => matches!(n.as_str(), "typeinfo" | "typeof" | "compile_error" | "cfg" | "attaches"),
+            ExprKind::Builtin(n, _, _) => matches!(n.as_str(), "typeinfo" | "typeof" | "compile_error" | "cfg" | "attaches" | "has_method"),
             ExprKind::Call(c, _) => match &c.kind {
                 ExprKind::Path(p) => {
                     let found = if p.segs.len() == 1 { self.lookup(self.cx.env.ns, &p.segs[0].name) } else { self.lookup_path_ns(self.cx.env.ns, p) };
@@ -1385,6 +1385,24 @@ impl Checker {
                 let Some((d, targs)) = self.bound_trait(&bound, env.ns) else { return cerr(bound.span, "@attaches(T, trait): expected a trait") };
                 Ok(CVal::Bool(self.satisfies(t, d, &targs, &env)?))
             }
+            "has_method" => {
+                // @has_method(T, "name", A...): does T have a method of that name (attached to it, by
+                // an attach fn or an attach block), taking arguments of types A first?
+                let [g, n, rest @ ..] = args else { return cerr(span, "@has_method(T, \"name\", A...) takes a type, a name and argument types") };
+                let t = ty_arg(self, g)?;
+                let name = match n {
+                    GenericArg::Expr(e) => match self.ct_expr(e, None)? {
+                        CVal::Str(s) => String::from_utf8_lossy(&s).into_owned(),
+                        _ => return cerr(e.span, "@has_method(T, \"name\"): the name is a string"),
+                    },
+                    GenericArg::Type(t) => return cerr(t.span, "@has_method(T, \"name\"): the name is a string"),
+                };
+                let mut tys = vec![];
+                for a in rest {
+                    tys.push(ty_arg(self, a)?);
+                }
+                Ok(CVal::Bool(self.has_method(t, &name, &tys)))
+            }
             "sizeof" | "alignof" => {
                 let [g] = args else { return cerr(span, format!("@{name}(T) takes one type")) };
                 let t = ty_arg(self, g)?;
@@ -1744,7 +1762,7 @@ impl Checker {
 
 /// the attributes that exist (enum attribute in the spec); @intrinsic is for packages (a std, or
 /// any library) to bind compiler-provided functions like println
-const ATTRS: &[(&str, usize)] = &[("inline", 0), ("noinline", 0), ("opt", 1), ("section", 1), ("align", 1), ("deprecated", 1), ("owns", 1), ("cpp_type", 1), ("export_text", 1), ("thread_local", 0), ("cfg", 2)];
+const ATTRS: &[(&str, usize)] = &[("inline", 0), ("noinline", 0), ("opt", 1), ("section", 1), ("align", 1), ("deprecated", 1), ("owns", 1), ("cpp_type", 1), ("export_text", 1), ("thread_local", 0), ("cfg", 2), ("optional", 0), ("closed", 0), ("attach_as", 1)];
 
 /// an attribute's string argument: @owns("ptr") -> ptr
 pub fn attr_str(a: &Expr) -> Option<String> {

@@ -189,6 +189,12 @@ fn main() -> void {
 
 A generic trait takes its arguments: `@attaches(T, t_source<i32>)`.
 
+`@has_method(T, "name")` is `true` when `T` has a method of that name, attached by an `attach fn`
+or an attach block. Types after the name ask for a method whose first arguments (after `this`) are
+of those types: `@has_method(T, "draw", canvas&)`. With a trait's `@optional` functions, it's how a
+template asks which ones a type wrote (see
+[Traits](/volt-bootstrap/guide/traits/#optional-functions-and-closed-traits)).
+
 ## Type ids: @typeid
 
 `@typeid(T)` is a `u64` naming a type: the 64-bit FNV-1a hash of its canonical name (the
@@ -353,6 +359,9 @@ accepted, so a typo is an error.
 | `@export_text("method")` | an export fn returning this struct hands other languages its text, as `method()` gives it (std's `string` has it) |
 | `@thread_local` | a global `var` each thread has its own copy of, starting from its initial value |
 | `@cfg("key")`, `@cfg("key", "value")` | the declaration is only in builds where this `@cfg` holds; on a namespace, everything in it |
+| `@optional` | on a trait fn: attach blocks may leave it out (`@has_method` says which did) |
+| `@closed` | on a trait: its attach blocks hold its fns and nothing else, with its parameter types |
+| `@attach_as("trait")` | on a struct: `attach S -> T` and `<T: S>` mean that trait (how a C++ class's virtual methods are overridden) |
 
 ```volt
 use std::io;

@@ -9,7 +9,8 @@ A trait names a set of functions. A type attaches a trait by providing them in a
 `attach trait -> type { ... }` block. Traits do two jobs.
 
 A trait's functions are signatures only, with no default bodies. An attach block must provide every
-one of them, each taking the same number of arguments; it may add helpers of its own. The compiler
+one of them (but the [optional](#optional-functions-and-closed-traits) ones), each taking the same
+number of arguments; it may add helpers of its own. The compiler
 checks each block where it's written, so a missing function is reported at the block, not later in
 some template that calls it.
 
@@ -55,6 +56,58 @@ fn main() -> void {
 ```
 
 Inside an `attach` block, `this` can leave out its type. Trait naming convention is `t_name`.
+
+## Optional functions and closed traits
+
+A trait fn marked `@optional` may be left out of an attach block. A template asks whether a type
+wrote it with `@has_method(T, "name")`, at compile time, so the call costs nothing either way. A
+trait marked `@closed` holds its blocks to its own functions, taking its parameters' types: a
+misspelt one is an error at the block rather than a helper nobody calls.
+
+```volt
+use std::io;
+
+@attributes([@closed])
+trait greeter {
+    fn name(this) -> str;
+    @attributes([@optional])
+    fn greeting(this) -> str;
+}
+
+struct en { }
+struct fr { }
+
+attach greeter -> en {
+    fn name(this) -> str { return "en"; }
+}
+
+attach greeter -> fr {
+    fn name(this) -> str { return "fr"; }
+    fn greeting(this) -> str { return "bonjour"; }
+}
+
+<T: greeter>
+fn greet(g: T&) -> void {
+    comptime if (@has_method(T, "greeting")) {
+        std::println("{}: {}", g.name(), g.greeting());
+    } else {
+        std::println("{}: hello", g.name());
+    }
+}
+
+fn main() -> void {
+    val a: en = {};
+    val b: fr = {};
+    greet(&a);
+    greet(&b);
+}
+// expect: en: hello
+// expect: fr: bonjour
+```
+
+A struct marked `@attributes([@attach_as("name")])` stands for that trait: `attach S -> T` and
+`<T: S>` mean `name`. That's how a [C++ class's](/volt-bootstrap/interop/cpp/) virtual methods are
+overridden, by attaching the class.
 
 ## As types
 

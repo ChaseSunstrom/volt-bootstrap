@@ -25,7 +25,7 @@ doesn't map, with the way around each.
 | public fields, static data members | getters and `set_` methods |
 | `const`/`constexpr` constants | `val`s |
 | enums (scoped or not) | enums |
-| virtual methods | a trait each: a Volt type subclasses the class with `T::derive` |
+| virtual methods | overridden by name in an `attach C -> T` block; `C::derive` makes the subclass (no RTTI, no call through a table) |
 | public bases, `dynamic_cast`, `typeid` | `as_Base()`, `as_Derived()`, `cpp_type_name()` |
 | exceptions | `try_` forms returning a `cpp_error` naming the exception |
 | `std::string`, `std::string_view`, `std::vector`, `std::unique_ptr`, `std::shared_ptr`, `std::function` | `str`/`std::string`, `T[..]`/`std::vec<T>`, `stdcxx::` handles, `fn(...)` values |

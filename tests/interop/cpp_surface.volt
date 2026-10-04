@@ -33,4 +33,20 @@ fn main() -> void {
     std::println("{} {}", sb.call(5), btn.on().call(8));
     var x = 7;
     std::println("{} {}", cpp::kit::deref_or<i32>(&x, 0), cpp::kit::hold(5).value);
+    std::println("{} {} {}", @cpp<i32>("kit::apply_fn<{&0}, {=1}>({2})", inc, true, 5), times<i16>(3), times<i32>(3));
+}
+
+fn inc(x: i32) -> i32 {
+    return x + 1;
+}
+
+<T: type>
+fn by_size(x: i32) -> i32 {
+    return x * @cast<i32>(@sizeof(T));
+}
+
+// a generic function's instance by its symbol, and a comptime value, as template arguments
+<T: type>
+fn times(x: i32) -> i32 {
+    return @cpp<i32>("kit::apply_fn<{&0}, {=1}>({2})", by_size<T>, @sizeof(T) > 2, x);
 }

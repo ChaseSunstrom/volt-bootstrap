@@ -155,7 +155,8 @@ struct trait_ref {
     args: std::vec<garg>*; // null: none given
 }
 
-// the trait a bound names, with its generic args
+// the trait a bound names, with its generic args: a trait, or a struct marked
+// @attach_as("trait") (a C++ class, whose virtual methods that trait holds)
 attach fn bound_trait(this: checker&, t: ty&, ns: u32) -> trait_ref? {
     match (t.kind) {
         .PATH(p&) => {
@@ -179,6 +180,37 @@ attach fn bound_trait(this: checker&, t: ty&, ns: u32) -> trait_ref? {
                                     this.lsp_decl_use(*d, last.name, p.span, this.lsp_type_label(*d, last.name));
                                 }
                                 return { decl: *d, args: args };
+                            },
+                            default => {},
+                        }
+                    }
+                    for (d&) in this.list(l).items() {
+                        match (this.item_of(*d).kind) {
+                            .STRUCT(sd) => {
+                                for (a&) in this.item_of(*d).attrs.items() {
+                                    if (attr_named(a, "attach_as")) {
+                                        val tn = attr_str(a) ?? return null;
+                                        match (this.lookup(this.dl(*d).ns, tn) ?? return null) {
+                                            .DECLS(tl) => {
+                                                for (tr&) in this.list(tl).items() {
+                                                    match (this.item_of(*tr).kind) {
+                                                        .TRAIT(n, fs) => {
+                                                            var args: std::vec<garg>* = null;
+                                                            val last = p.segs.at(p.segs.len - 1);
+                                                            if (last.args) {
+                                                                args = &last.args;
+                                                            }
+                                                            return { decl: *tr, args: args };
+                                                        },
+                                                        default => {},
+                                                    }
+                                                }
+                                            },
+                                            default => {},
+                                        }
+                                        return null;
+                                    }
+                                }
                             },
                             default => {},
                         }
@@ -582,6 +614,54 @@ attach fn infer(this: checker&, pat: ty&, actual: u32, gps: std::vec<gparam>&, b
 }
 
 // ---------- candidates ----------
+
+// does method d take a t (or a t&) as this?
+attach fn takes_this(this: checker&, d: u32, t: u32) -> bool {
+    val none: std::vec<u32> = {};
+    return this.method_fits(d, t, &none);
+}
+
+// does method d take a t (or a t&) as this, and arguments of types args first?
+attach fn method_fits(this: checker&, d: u32, t: u32, args: std::vec<u32>&) -> bool {
+    match (this.recv_of(d)) {
+        .VAL(pat) => {
+            val p = pat ?? return false;
+            val gps = this.fn_generics(d);
+            var binds = none_binds(gps.len);
+            val ns = this.dl(d).ns;
+            if (this.match_recv(p, t, gps, &binds, ns) == null) {
+                return false;
+            }
+            val f = this.fn_decl_of(d) ?? return false;
+            if (f.params.len < args.len + 1) {
+                return false;
+            }
+            for (i) in 0..args.len {
+                val q = f.params.at(i + 1);
+                var got: u32? = null;
+                if (q.ty) {
+                    got = this.resolve_partial(&q.ty, gps, &binds, ns);
+                }
+                if (got == null || (got ?? 0) != *args.at(i)) {
+                    return false;
+                }
+            }
+            return true;
+        },
+        default => { return false; },
+    }
+}
+
+// does type t have a method of this name (an attach fn or attach block fn whose receiver fits)
+// whose first parameters after this are of types args?
+attach fn has_method(this: checker&, t: u32, name: str, args: std::vec<u32>&) -> bool {
+    for (d&) in this.named(&this.attached, name).items() {
+        if (this.method_fits(*d, t, args)) {
+            return true;
+        }
+    }
+    return false;
+}
 
 // a fn's receiver: `this`'s declared type, else its attach block's target (T& for a non-static
 // this, made once per method: recv_refs)

@@ -72,17 +72,58 @@ impl Checker {
         matches!(&t.kind, TypeKind::Path(p) if p.is_single() && p.segs[0].name == "type")
     }
 
-    /// the trait a bound names, with its generic args
+    /// the trait a bound names, with its generic args: a trait, or a struct marked
+    /// @attach_as("trait") (a C++ class, whose virtual methods that trait holds)
     pub fn bound_trait(&self, t: &Type, ns: NsId) -> Option<(DeclId, Vec<GenericArg>)> {
         let TypeKind::Path(p) = &t.kind else { return None };
         let found = if p.segs.len() == 1 { self.lookup(ns, &p.segs[0].name) } else { self.lookup_path_ns(ns, p) };
-        match found {
-            Some(Found::Decls(ds)) => ds
-                .into_iter()
-                .find(|d| matches!(self.decls[*d].item.kind, ItemKind::Trait { .. }))
-                .map(|d| (d, p.segs.last().unwrap().args.clone().unwrap_or_default())),
-            _ => None,
+        let Some(Found::Decls(ds)) = found else { return None };
+        let args = p.segs.last().unwrap().args.clone().unwrap_or_default();
+        if let Some(d) = ds.iter().find(|d| matches!(self.decls[**d].item.kind, ItemKind::Trait { .. })) {
+            return Some((*d, args));
         }
+        for d in ds {
+            let as_trait = self.decls[d].item.attrs.iter().find_map(|a| match &a.kind {
+                ExprKind::Builtin(n, _, _) if n == "attach_as" => crate::check::comptime::attr_str(a),
+                _ => None,
+            });
+            if let (ItemKind::Struct(_), Some(tn)) = (&self.decls[d].item.kind, as_trait) {
+                let ns = self.decls[d].ns;
+                if let Some(Found::Decls(ts)) = self.lookup(ns, &tn) {
+                    if let Some(tr) = ts.into_iter().find(|t| matches!(self.decls[*t].item.kind, ItemKind::Trait { .. })) {
+                        return Some((tr, args));
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// does type t have a method of this name (an attach fn or attach block fn whose receiver fits)
+    /// whose first parameters after this are of types args?
+    pub fn has_method(&mut self, t: TyId, name: &str, args: &[TyId]) -> bool {
+        let cands = self.attached.get(name).cloned().unwrap_or_default();
+        'cands: for d in cands {
+            let Recv::Val(pat) = self.recv_of(d) else { continue };
+            let ns = self.decls[d].ns;
+            let gps = self.fn_generics(d);
+            let mut binds = vec![None; gps.len()];
+            if self.match_recv(&pat, t, &gps, &mut binds, ns).is_none() {
+                continue;
+            }
+            let ItemKind::Fn(f) = &self.decls[d].item.kind else { continue };
+            let ps: Vec<Option<Type>> = f.params.iter().skip(1).map(|p| p.ty.clone()).collect();
+            if ps.len() < args.len() {
+                continue;
+            }
+            for (a, p) in args.iter().zip(ps) {
+                if p.and_then(|p| self.resolve_partial(&p, &gps, &binds, ns)) != Some(*a) {
+                    continue 'cands;
+                }
+            }
+            return true;
+        }
+        false
     }
 
     /// a pack, a type (every bound is `type` or a trait), or else a value of its one bound's type
@@ -144,7 +185,7 @@ impl Checker {
     }
 
     /// the type pat denotes with these bindings, or None if it names an unbound param or doesn't resolve
-    fn resolve_partial(&mut self, pat: &Type, gps: &[GenericParam], binds: &[Option<GVal>], ns: NsId) -> Option<TyId> {
+    pub fn resolve_partial(&mut self, pat: &Type, gps: &[GenericParam], binds: &[Option<GVal>], ns: NsId) -> Option<TyId> {
         let env = self.partial_env(ns, gps, binds);
         self.resolve_type(pat, &env).ok()
     }

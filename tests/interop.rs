@@ -33,7 +33,16 @@ impl Env {
     }
     /// voltc with ROOT's std, in tests/interop
     fn voltc(&self, args: &[&str]) -> Output {
-        Command::new(&self.voltc).args(args).arg("--std").arg(Path::new(ROOT).join("std")).current_dir(Path::new(ROOT).join("tests/interop")).output().unwrap()
+        self.voltc_cxx(args, None)
+    }
+    /// with $CXX set (the C++ compiler, and its flags)
+    fn voltc_cxx(&self, args: &[&str], cxx: Option<&str>) -> Output {
+        let mut c = Command::new(&self.voltc);
+        c.args(args).arg("--std").arg(Path::new(ROOT).join("std")).current_dir(Path::new(ROOT).join("tests/interop"));
+        if let Some(x) = cxx {
+            c.env("CXX", x);
+        }
+        c.output().unwrap()
     }
     fn path(&self, name: &str) -> String {
         self.dir.join(name).display().to_string()
@@ -825,19 +834,32 @@ fn foreign_libraries() {
 fn cpp_derive() {
     // Volt types subclassing C++ classes: C++ calls their overrides through base references, the
     // override reaches the base implementation and protected members, the Volt value goes with the
-    // C++ object
+    // C++ object; and none of it needs RTTI
     let e = Env::new("cpp-derive");
     let want = "[ok 5 boxy] clicks 202 shown true\n[lbl 5] 10 true\n[x 5 boxy] area 10 poke 41 id 7\nmine 5 log:xlbl true\npress 11 [knob] ring 60\nboxy 5 gone\n";
     for backend in ["c", "llvm"] {
         assert_eq!(ok(e.voltc(&["run", "cpp_derive.volt", "--backend", backend]), "voltc run cpp_derive.volt"), want, "C++ derive ({backend})");
     }
-    // a pure virtual method the Volt type doesn't override is a compile error naming its trait
+    assert_eq!(ok(e.voltc_cxx(&["run", "cpp_derive.volt"], Some("c++ -fno-rtti")), "voltc run cpp_derive.volt (-fno-rtti)"), want, "C++ derive without RTTI");
+    // a pure virtual method the Volt type doesn't override is a compile error naming it
     let hpp = Path::new(ROOT).join("tests/interop/widgets.hpp");
     let src = format!("use {{ \"{}\" }} as cpp;\nstruct nothing {{ n: i32; }}\nfn main() -> void {{\n    val x: nothing = {{ n: 1 }};\n    val w = cpp::gui::Widget::derive(move x, \"a\");\n}}\n", hpp.display());
     std::fs::write(e.dir.join("cpp_derive_pure.volt"), src).unwrap();
     let o = e.voltc(&["check", &e.path("cpp_derive_pure.volt")]);
     let err = String::from_utf8_lossy(&o.stderr);
-    assert!(!o.status.success() && err.contains("has to attach t_Widget_width"), "pure virtual: {err}");
+    assert!(!o.status.success() && err.contains("has to override width, which is pure virtual"), "pure virtual: {err}");
+    // so is one the class doesn't have, in the attach block
+    let src = format!("use {{ \"{}\" }} as cpp;\nstruct nothing {{ n: i32; }}\nattach cpp::gui::Widget -> nothing {{\n    fn width(this, self: cpp::gui::Widget&) -> i32 {{ return 1; }}\n    fn widht(this, self: cpp::gui::Widget&) -> i32 {{ return 2; }}\n}}\nfn main() -> void {{}}\n", hpp.display());
+    std::fs::write(e.dir.join("cpp_derive_extra.volt"), src).unwrap();
+    let o = e.voltc(&["check", &e.path("cpp_derive_extra.volt")]);
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(!o.status.success() && err.contains("'widht' isn't one of Widget's functions"), "not a virtual method: {err}");
+    // and one whose self is another class (it would override nothing)
+    let src = format!("use {{ \"{}\" }} as cpp;\nstruct nothing {{ n: i32; }}\nattach cpp::gui::Button -> nothing {{\n    fn sound(this, self: cpp::gui::Button&) -> i32 {{ return 1; }}\n    fn press(this, self: cpp::gui::Widget&) -> i32 {{ return 2; }}\n}}\nfn main() -> void {{}}\n", hpp.display());
+    std::fs::write(e.dir.join("cpp_derive_self.volt"), src).unwrap();
+    let o = e.voltc(&["check", &e.path("cpp_derive_self.volt")]);
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(!o.status.success() && err.contains("'press' takes a cpp::gui::Widget& as argument 1 here but a cpp::gui::Button& in 'Button'"), "another self: {err}");
 }
 
 #[test]
@@ -849,6 +871,10 @@ fn cpp_rtti() {
     for backend in ["c", "llvm"] {
         assert_eq!(ok(e.voltc(&["run", "cpp_rtti.volt", "--backend", backend]), "voltc run cpp_rtti.volt"), want, "C++ RTTI ({backend})");
     }
+    // built without RTTI, it compiles, and what needs RTTI stops the program saying so
+    let o = e.voltc_cxx(&["run", "cpp_rtti.volt"], Some("c++ -fno-rtti"));
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(!o.status.success() && err.contains("needs RTTI, and the C++ was built without it"), "-fno-rtti: {err}");
 }
 
 #[test]
@@ -856,10 +882,17 @@ fn cpp_surface() {
     // constants, static members, nested classes, conversion and assignment operators, T&& results,
     // member templates, and std::function both ways (a Volt closure in, a C++ callable out)
     let e = Env::new("cpp-surface");
-    let want = "42 1.5 true kit \"tools\" 1\n10 true 3\n12 1.5 12\ncreated 4\nreg k 42\nstolen 9\n41\n1.5\ntrue\n6 42\ntrue 1 1\n15 8\n7 5\n";
+    let want = "42 1.5 true kit \"tools\" 1\n10 true 3\n12 1.5 12\ncreated 4\nreg k 42\nstolen 9\n41\n1.5\ntrue\n6 42\ntrue 1 1\n15 8\n7 5\n7 6 48\n";
     for backend in ["c", "llvm"] {
         assert_eq!(ok(e.voltc(&["run", "cpp_surface.volt", "--backend", backend]), "voltc run cpp_surface.volt"), want, "C++ surface ({backend})");
     }
+    // {&i} takes a function
+    let hpp = Path::new(ROOT).join("tests/interop/surface.hpp");
+    let src = format!("use {{ \"{}\" }} as cpp;\nfn main() -> void {{\n    val x = @cpp<i32>(\"kit::apply_fn<{{&0}}, true>(1)\", 5);\n}}\n", hpp.display());
+    std::fs::write(e.dir.join("cpp_hole.volt"), src).unwrap();
+    let o = e.voltc(&["check", &e.path("cpp_hole.volt")]);
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(!o.status.success() && err.contains("{&0} is a function's symbol: pass a function"), "{{&0}} of a number: {err}");
 }
 
 /// is a C++ library's header on the usual include paths?
@@ -895,10 +928,11 @@ fn cpp_libs() {
 fn cpp_framework() {
     // Volt types as a C++ framework's listeners and plugins, called through its base classes
     let e = Env::new("cpp-framework");
-    let want = "2 2\n2 5 2 50\ncount+broken- count-broken-\ntrue\n";
+    let want = "2 2\n2 5 2 50\ncount+broken- count-broken-\ntrue\n3 both/plugin 1\n";
     for backend in ["c", "llvm"] {
         assert_eq!(ok(e.voltc(&["run", "cpp_framework.volt", "--backend", backend]), "voltc run cpp_framework.volt"), want, "C++ framework ({backend})");
     }
+    assert_eq!(ok(e.voltc_cxx(&["run", "cpp_framework.volt"], Some("c++ -fno-rtti")), "voltc run cpp_framework.volt (-fno-rtti)"), want, "C++ framework without RTTI");
 }
 
 #[test]
