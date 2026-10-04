@@ -28,7 +28,10 @@ importing C, C++, Rust, Zig and Swift code. Each one is a `run.sh` with its exac
 - **Python**: import the module, `use { "geom.py" } as geom;` (or a package's directory), see
   [Python](/volt-bootstrap/interop/python/). Or embed it like any C library: `use { "Python.h" } as py;` with the flags from
   `python3-config --includes` and `--ldflags --embed` passed through `--cc`.
-- **Node.js**: write the addon in Volt with `interop/node`, see [Node.js](/volt-bootstrap/interop/node/#addons-written-in-volt).
+- **JavaScript** and **TypeScript**: import the module, `use { "geom.ts" } as geom;` (a `.js` one
+  takes its types from the `.d.ts` beside it), see
+  [JavaScript and Node.js](/volt-bootstrap/interop/node/). For Node.js, write the addon in Volt
+  with `interop/node`, see [Node.js addons](/volt-bootstrap/interop/node/#addons-written-in-volt).
 - **C#** and other .NET languages: import the sources or the assembly, `use { "Geo.cs" } as geo;`
   or `use { "Lib.dll" } as lib;`, see [.NET](/volt-bootstrap/interop/dotnet/).
 - **Lua**: embed it with the `interop/lua` package, see [Lua](/volt-bootstrap/interop/lua/).

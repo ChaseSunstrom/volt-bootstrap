@@ -832,6 +832,56 @@ fn python_direct() {
     assert!(bolt_run("c").contains("42 2 QUIET!"), "the Python change is in");
 }
 
+/// Volt calls an ordinary TypeScript module, and JavaScript typed by a .d.ts, directly: `use {
+/// "geom.ts" } as geom;` and nothing else (JavaScriptCore starts on first use), on both backends,
+/// from voltc run and from a bolt package, which rebuilds when the module changes
+#[test]
+fn js_direct() {
+    let strips = Command::new("node").args(["-e", "process.exit(typeof require('module').stripTypeScriptTypes === 'function' ? 0 : 1)"]).status().is_ok_and(|s| s.success());
+    let jsc = Command::new("pkg-config").args(["--exists", "javascriptcoregtk-4.1"]).status().is_ok_and(|s| s.success());
+    if !strips || !jsc {
+        eprintln!("node 23.2+ or JavaScriptCore isn't installed: skipping use js");
+        return;
+    }
+    let e = Env::new("js_direct");
+    let dir = e.dir.join("jd");
+    copy_dir(&Path::new(ROOT).join("tests/interop/js_direct"), &dir);
+    let src = std::fs::read_to_string(dir.join("main.volt")).unwrap();
+    let want: String = src.lines().filter_map(|l| l.strip_prefix("// expect: ")).map(|l| format!("{l}\n")).collect();
+    let tools = |c: &mut Command| {
+        c.env("VOLTC", &e.voltc).env("BOLT", env!("CARGO_BIN_EXE_bolt")).env("VOLT_CACHE", e.dir.join("cache")).env("BOLT_HOME", e.dir.join("bolthome"));
+    };
+    for backend in ["c", "llvm"] {
+        let mut c = Command::new(&e.voltc);
+        c.args(["run", "--backend", backend, "main.volt"]).current_dir(&dir).env("VOLT_STD", Path::new(ROOT).join("std"));
+        tools(&mut c);
+        assert_eq!(ok(c.output().unwrap(), "voltc run"), want, "voltc run ({backend})");
+    }
+    // a thrown exception stops the program
+    let mut c = Command::new(&e.voltc);
+    c.args(["run", "panics.volt"]).current_dir(&dir).env("VOLT_STD", Path::new(ROOT).join("std"));
+    tools(&mut c);
+    let o = c.output().unwrap();
+    assert_eq!(o.status.code(), Some(101), "an exception stops the program: {}", String::from_utf8_lossy(&o.stderr));
+    assert!(String::from_utf8_lossy(&o.stderr).contains("Error: boom"), "{}", String::from_utf8_lossy(&o.stderr));
+    // the same program in a bolt package
+    let app = dir.join("app");
+    std::fs::create_dir_all(app.join("src")).unwrap();
+    std::fs::write(app.join("bolt.toml"), format!("[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[std]\npath = \"{}\"\n", Path::new(ROOT).join("std").display())).unwrap();
+    std::fs::write(app.join("src/main.volt"), src.replace("\"geom.ts\"", "\"../../geom.ts\"").replace("\"util.js\"", "\"../../util.js\"")).unwrap();
+    let bolt_run = |backend: &str| {
+        let mut c = Command::new(env!("CARGO_BIN_EXE_bolt"));
+        c.args(["run", "-q", "--backend", backend]).current_dir(&app);
+        tools(&mut c);
+        ok(c.output().unwrap(), "bolt run")
+    };
+    assert_eq!(bolt_run("llvm"), want, "bolt run");
+    // a change to the module reaches the program
+    let f = dir.join("geom.ts");
+    std::fs::write(&f, std::fs::read_to_string(&f).unwrap().replace("return s.toUpperCase();", "return s.toUpperCase() + \"!\";")).unwrap();
+    assert!(bolt_run("c").contains("42 2 QUIET!"), "the TypeScript change is in");
+}
+
 /// Volt calls ordinary Swift directly: `use { "geometry.swift", "things.swift" } as geo;` and nothing
 /// else, on both backends, from voltc run and from a bolt package, which rebuilds when a file changes
 #[test]

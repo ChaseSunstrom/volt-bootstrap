@@ -8,7 +8,7 @@
 use std::io;
 
 // the language a file is in, from its extension: "cpp", "rust", "zig", "swift", "go", "java" (.java,
-// .jar), "dotnet" (.cs, .dll) or "python" (.py), or null for a C header (a directory with a Cargo.toml
+// .jar), "dotnet" (.cs, .dll), "python" (.py) or "js" (.ts, .js), or null for a C header (a directory with a Cargo.toml
 // is a Rust crate, one with a go.mod a Go package, one with an __init__.py a Python package). A C++
 // header named .h needs `use cpp { }`, a directory of classes `use java { }`
 fn language_of(path: str, dir: str) -> str? {
@@ -55,6 +55,9 @@ fn language_of(path: str, dir: str) -> str? {
     }
     if (ext == "py") {
         return "python";
+    }
+    if (ext == "ts" || ext == "mts" || ext == "js" || ext == "mjs") {
+        return "js";
     }
     var full = S(path);
     if (path.len == 0 || path[0] != '/') {

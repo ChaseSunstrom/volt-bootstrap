@@ -577,7 +577,7 @@ impl Checker {
             }
             ItemKind::UseC { headers, alias } => {
                 // the extension names the language (use { "geom.rs" }), and only C is read here
-                const FOREIGN: [(&str, &str); 20] = [("hpp", "C++"), ("hh", "C++"), ("hxx", "C++"), ("h++", "C++"), ("cpp", "C++"), ("cc", "C++"), ("cxx", "C++"), ("c++", "C++"), ("ipp", "C++"), ("tpp", "C++"), ("ixx", "C++"), ("rs", "Rust"), ("zig", "Zig"), ("swift", "Swift"), ("go", "Go"), ("java", "Java"), ("jar", "Java"), ("cs", "C#"), ("dll", ".NET"), ("py", "Python")];
+                const FOREIGN: [(&str, &str); 24] = [("hpp", "C++"), ("hh", "C++"), ("hxx", "C++"), ("h++", "C++"), ("cpp", "C++"), ("cc", "C++"), ("cxx", "C++"), ("c++", "C++"), ("ipp", "C++"), ("tpp", "C++"), ("ixx", "C++"), ("rs", "Rust"), ("zig", "Zig"), ("swift", "Swift"), ("go", "Go"), ("java", "Java"), ("jar", "Java"), ("cs", "C#"), ("dll", ".NET"), ("py", "Python"), ("ts", "TypeScript"), ("mts", "TypeScript"), ("js", "JavaScript"), ("mjs", "JavaScript")];
                 let ext = |h: &String| h.rsplit('/').next().and_then(|n| n.rsplit_once('.')).map(|(_, e)| e.to_ascii_lowercase());
                 // a directory with a Cargo.toml is a Rust crate, one with a go.mod a Go package
                 let src = &self.sm.files[file as usize].0;

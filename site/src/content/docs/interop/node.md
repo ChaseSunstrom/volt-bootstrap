@@ -1,15 +1,61 @@
 ---
-title: Node.js
-description: JavaScript and TypeScript calling Volt through generated bindings, and Node.js addons written in Volt with the interop/node package.
+title: JavaScript and Node.js
+description: Calling TypeScript and JavaScript modules from Volt by importing them like a header, JavaScript calling Volt through generated bindings, and Node.js addons written in Volt.
 sidebar:
   order: 5
 ---
 
-Volt meets JavaScript two ways: bindings that `bolt build` writes for a Volt library, which
-JavaScript and TypeScript call like any module, and addons written in Volt with the `interop/node`
-package, which take any JavaScript values and call JavaScript back. Both run in Node.js and in Bun.
+## Volt calls JavaScript
+
+A TypeScript module is imported like a header, and so is a JavaScript one with a `.d.ts` beside it
+for its types. Nothing in it is written for Volt, and the Volt code has no engine or value handles:
+bolt reads the module's TypeScript declarations, strips the types with node, and writes Volt that
+runs the module in JavaScriptCore, embedded in the program. It starts the first time it's called.
+
+```volt ignore
+use std::io;
+use { "geom.ts" } as geom;
+use { "util.js" } as util;            // its types: util.d.ts
+
+fn main() -> void {
+    var p = geom::Point::new(3.0, 4.0);                  // new Point(3, 4)
+    p.scale(2.0);
+    p.set_y(1.5);                                         // a field: y() and set_y(v)
+    std::println("{} {}", p.norm(), geom::upper("quiet"));  // 6.18465843842649 QUIET
+    std::println("{}", geom::add(40.0));                  // a default: add(a, b = 2) is 42
+    std::println("{}", util::greet("volt"));
+}
+```
+
+| TypeScript | Volt |
+| --- | --- |
+| an exported function | `fn f(...)`; literal defaults stay defaults, `x?: T` is `x: T? = null` |
+| an exported class | a handle: a reference to the object (a copy refers to the same one); `is_null()` for `null` |
+| `new T(...)` | `T::new(...)` |
+| methods, `static` methods | methods, and `T::f(...)`; a subclass has its base's too |
+| a field, a `get`/`set` accessor | `x()` and, unless it's `readonly` (or has no setter), `set_x(v)`; `T::x()` for a static one |
+| a base class `B` of the module | `as_B()`: the same object, as a `B` |
+| a numeric `enum` | a Volt enum with the same values |
+| `number`, `boolean` | `f64`, `bool` |
+| `string` | `str` in, `std::string` out |
+| `T[]` of those | `T[..]` in (what JavaScript changes in an array of numbers or booleans comes back), `std::vec<T>` out |
+| `T \| null`, `T \| undefined` | `T?`; for a class, an empty handle is `null` |
+| an exported constant of a number, `boolean` or string | a `val` |
+
+A thrown exception stops the program with its text, as a Volt panic does. A function needs its
+parameter types written, and its return type when it returns something. Generics, `async`
+functions, callbacks, object types, imports between modules (bundle them into one file first) and
+TypeScript that needs more than stripping (parameter properties, namespaces) are left out or
+refused, and what's left out is listed in a comment of the generated declarations. bolt needs node
+23.2 or later (`$NODE`) to strip TypeScript, and JavaScriptCore from WebKitGTK
+(`javascriptcoregtk-4.1`, or `$JSC_PKG`): the program links it, nothing of Node.js.
 
 ## JavaScript calls Volt
+
+The other way round, Volt meets JavaScript two ways: bindings that `bolt build` writes for a Volt
+library, which JavaScript and TypeScript call like any module, and addons written in Volt with the
+`interop/node` package, which take any JavaScript values and call JavaScript back. Both run in
+Node.js and in Bun.
 
 A Volt library that lists `node` among its bindings gets the C source of a Node-API addon, which
 `bolt build` compiles to `target/debug/bindings/NAME.node` when Node's headers are installed. `js`

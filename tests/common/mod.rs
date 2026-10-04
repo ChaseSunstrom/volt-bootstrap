@@ -72,7 +72,7 @@ pub fn llvm_cc_args() -> Vec<String> {
 /// `use cpp { }`, `use rust { }`..., or a plain `use { }` of a file the extension says isn't C. (A
 /// crate directory by itself, `use { "../geom" }`, can't be told from the text: tests write `use rust`)
 pub fn imports_foreign(code: &str) -> bool {
-    const EXTS: [&str; 20] = [".hpp\"", ".hh\"", ".hxx\"", ".h++\"", ".cpp\"", ".cc\"", ".cxx\"", ".c++\"", ".ipp\"", ".tpp\"", ".ixx\"", ".rs\"", ".zig\"", ".swift\"", ".go\"", ".java\"", ".jar\"", ".cs\"", ".dll\"", ".py\""];
+    const EXTS: [&str; 24] = [".hpp\"", ".hh\"", ".hxx\"", ".h++\"", ".cpp\"", ".cc\"", ".cxx\"", ".c++\"", ".ipp\"", ".tpp\"", ".ixx\"", ".rs\"", ".zig\"", ".swift\"", ".go\"", ".java\"", ".jar\"", ".cs\"", ".dll\"", ".py\"", ".ts\"", ".mts\"", ".js\"", ".mjs\""];
     code.lines().map(str::trim).any(|l| {
         let Some(rest) = l.strip_prefix("use ") else { return false };
         let explicit = rest.split_once('{').is_some_and(|(lang, _)| !lang.trim().is_empty());
