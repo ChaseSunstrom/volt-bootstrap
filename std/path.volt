@@ -56,7 +56,7 @@ namespace path {
     }
 
     // b inside a ("a/b"); an absolute b replaces a
-    <A: std::mem::t_allocator = std::mem::default_allocator>
+    <A: std::mem::allocator = std::mem::default_allocator>
     fn join(a: str, b: str, allocator: A = {}) -> std::string<A> {
         if (a.len == 0 || is_absolute(b)) {
             return std::string::from(b, move allocator);
@@ -125,7 +125,7 @@ namespace path {
 
     // p with "." parts, repeated slashes and "x/.." pairs removed, by the text alone (it doesn't
     // follow symlinks): "a/c" for "a/./b/../c/". A relative path keeps its leading ".."s; "" is "."
-    <A: std::mem::t_allocator = std::mem::default_allocator>
+    <A: std::mem::allocator = std::mem::default_allocator>
     fn normalize(p: str, allocator: A = {}) -> std::string<A> {
         val root = root_len(p);
         val abs = root > 0;

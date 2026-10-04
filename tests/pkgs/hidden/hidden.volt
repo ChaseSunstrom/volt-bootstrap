@@ -25,6 +25,6 @@ fn default_mode() -> i32 {
     return 1;
 }
 
-internal trait t_secret {
+internal trait secret {
     fn code(this) -> i32;
 }

@@ -109,11 +109,11 @@ fn main() -> !void {
 
 ## Writing one
 
-An allocator is any type that attaches `std::mem::t_allocator`. When a block is resized or freed,
+An allocator is any type that attaches `std::mem::allocator`. When a block is resized or freed,
 the caller passes its size, as in Zig, so an allocator doesn't have to remember sizes:
 
 ```volt ignore
-trait t_allocator {
+trait allocator {
     <T: type> fn malloc(this, count: usize = 1) -> mem_error!(T*);
     <T: type> fn realloc(this, ptr: T*, old: usize, count: usize) -> mem_error!(T*);
     <T: type> fn free(this, ptr: T*, count: usize = 1) -> void;

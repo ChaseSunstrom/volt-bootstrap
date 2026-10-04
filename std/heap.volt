@@ -3,37 +3,37 @@
 // (Part of package std: the package loader wraps every file in `namespace std`.)
 
 // A binary min-heap: push and pop in O(log n), peek in O(1).
-<T: type, Allocator: std::mem::t_allocator = std::mem::default_allocator>
+<T: type, Allocator: std::mem::allocator = std::mem::default_allocator>
 struct heap {
     items: std::vec<T, Allocator> = {}; // items[i] sorts no earlier than items[(i - 1) / 2]
 }
 
 // an empty heap that allocates from allocator
-<T: type, A: std::mem::t_allocator>
+<T: type, A: std::mem::allocator>
 attach fn new_in(static this: std::heap<T>, allocator: A) -> std::heap<T, A> {
     return { items: { allocator: move allocator } };
 }
 
 // room for n elements without growing
-<T: type, A: std::mem::t_allocator>
+<T: type, A: std::mem::allocator>
 attach fn reserve(this: std::heap<T, A>&, n: usize) -> std::mem::mem_error!void {
     return this.items.reserve(n);
 }
 
 // how many elements it holds
-<T: type, A: std::mem::t_allocator>
+<T: type, A: std::mem::allocator>
 attach fn len(this: std::heap<T, A>&) -> usize {
     return this.items.len;
 }
 
 // the smallest element, or null when empty
-<T: type, A: std::mem::t_allocator>
+<T: type, A: std::mem::allocator>
 attach fn peek(this: std::heap<T, A>&) -> T* {
     return this.items.first();
 }
 
 // add value
-<T: type, A: std::mem::t_allocator>
+<T: type, A: std::mem::allocator>
 attach fn push(this: std::heap<T, A>&, value: T) -> void {
     this.items.push(move value) catch @panic("out of memory");
     val xs = this.items.items();
@@ -50,7 +50,7 @@ attach fn push(this: std::heap<T, A>&, value: T) -> void {
 }
 
 // the smallest element, moved out
-<T: type, A: std::mem::t_allocator>
+<T: type, A: std::mem::allocator>
 attach fn pop(this: std::heap<T, A>&) -> T? {
     val n = this.items.len;
     if (n == 0) {
@@ -81,7 +81,7 @@ attach fn pop(this: std::heap<T, A>&) -> T? {
 }
 
 // delete every element
-<T: type, A: std::mem::t_allocator>
+<T: type, A: std::mem::allocator>
 attach fn clear(this: std::heap<T, A>&) -> void {
     this.items.clear();
 }

@@ -139,38 +139,38 @@ fn main() -> void {
 
 ## Does a type attach a trait: @attaches
 
-`@attaches(T, t_trait)` is `true` when `T` attaches the trait, the same test a `<T: t_trait>` bound
+`@attaches(T, some_trait)` is `true` when `T` attaches the trait, the same test a `<T: some_trait>` bound
 makes. A template can use what a type offers and do without what it doesn't:
 
 ```volt
 use std::io;
 
-trait t_area {
+trait measured {
     fn area(this) -> f64;
 }
 
-trait t_name {
+trait named {
     fn name(this) -> str;
 }
 
 struct circle { r: f64; }
 struct square { side: f64; }
 
-attach t_area -> circle {
+attach measured -> circle {
     fn area(this) -> f64 { return 3.0 * this.r * this.r; }
 }
 
-attach t_area -> square {
+attach measured -> square {
     fn area(this) -> f64 { return this.side * this.side; }
 }
 
-attach t_name -> square {
+attach named -> square {
     fn name(this) -> str { return "square"; }
 }
 
-<T: t_area>
+<T: measured>
 fn describe(s: T&) -> void {
-    comptime if (@attaches(T, t_name)) {
+    comptime if (@attaches(T, named)) {
         std::println("{}: {}", s.name(), s.area());
     } else {
         std::println("something: {}", s.area());
@@ -187,7 +187,7 @@ fn main() -> void {
 // expect: square: 4
 ```
 
-A generic trait takes its arguments: `@attaches(T, t_source<i32>)`.
+A generic trait takes its arguments: `@attaches(T, source<i32>)`.
 
 `@has_method(T, "name")` is `true` when `T` has a method of that name, attached by an `attach fn`
 or an attach block. Types after the name ask for a method whose first arguments (after `this`) are
@@ -212,25 +212,25 @@ fill a registry with all of them:
 ```volt
 use std::io;
 
-trait t_shape {
+trait shape {
     fn area(this) -> f64;
 }
 
 struct circle { r: f64; }
 struct square { side: f64; }
 
-attach t_shape -> circle {
+attach shape -> circle {
     fn area(this) -> f64 { return 3.0 * this.r * this.r; }
 }
 
-attach t_shape -> square {
+attach shape -> square {
     fn area(this) -> f64 { return this.side * this.side; }
 }
 
 fn main() -> void {
-    // one name per type that attaches t_shape, keyed by type id
+    // one name per type that attaches shape, keyed by type id
     var names: std::map<u64, str> = {};
-    comptime match (@typeinfo(t_shape).kind) {
+    comptime match (@typeinfo(shape).kind) {
         .TRAIT_UNION(u) => {
             comptime for (t) in u.1 {
                 names.put(@typeid(t), @typeinfo(t).short_name);
@@ -240,7 +240,7 @@ fn main() -> void {
     }
     val c: circle = { r: 1.0 };
     val q: square = { side: 2.0 };
-    val shapes: t_shape[] = { c, q };
+    val shapes: shape[] = { c, q };
     for (s&) in shapes {
         std::print("{}:{} ", *names.get(@typeid(s)), s.area());
     }

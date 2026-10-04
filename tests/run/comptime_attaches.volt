@@ -2,41 +2,41 @@
 // offers and leave out what it doesn't
 use std::io;
 
-trait t_area {
+trait measured {
     fn area(this) -> f64;
 }
 
-trait t_name {
+trait named {
     fn name(this) -> str;
 }
 
 <T: type>
-trait t_source {
+trait source {
     fn next(this) -> T?;
 }
 
 struct circle { r: f64; }
 struct square { side: f64; }
 
-attach t_area -> circle {
+attach measured -> circle {
     fn area(this) -> f64 { return 3.0 * this.r * this.r; }
 }
 
-attach t_area -> square {
+attach measured -> square {
     fn area(this) -> f64 { return this.side * this.side; }
 }
 
-attach t_name -> square {
+attach named -> square {
     fn name(this) -> str { return "square"; }
 }
 
-attach t_source<i32> -> circle {
+attach source<i32> -> circle {
     fn next(this) -> i32? { return null; }
 }
 
 <T: type>
 fn describe(s: T&) -> void {
-    comptime if (@attaches(T, t_name)) {
+    comptime if (@attaches(T, named)) {
         std::println("{}: {}", s.name(), s.area());
     } else {
         std::println("something: {}", s.area());
@@ -48,8 +48,8 @@ fn main() -> void {
     val q: square = { side: 2.0 };
     describe(&c);
     describe(&q);
-    std::println("{} {} {}", @attaches(circle, t_area), @attaches(circle, t_name), @attaches(i32, t_area));
-    std::println("{} {}", @attaches(circle, t_source<i32>), @attaches(circle, t_source<i64>));
+    std::println("{} {} {}", @attaches(circle, measured), @attaches(circle, named), @attaches(i32, measured));
+    std::println("{} {}", @attaches(circle, source<i32>), @attaches(circle, source<i64>));
 }
 // expect: something: 3
 // expect: square: 4

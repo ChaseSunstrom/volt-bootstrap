@@ -48,7 +48,7 @@ namespace fs {
  *          // `if (p)` or `p ?? x` turns it into a T&. A T& converts to a T* by itself
  *    T?    // Optional
  *    box<T>   // owned heap pointer (std::mem::box), used like a T&. Deleted (and freed) automatically
- *    t_trait  // a trait used as a type: tagged union of every type that attaches it (see t_shape below)
+ *    some_trait  // a trait used as a type: tagged union of every type that attaches it (see shape below)
  *    E!T   // Error union: an error from set E, or a T.  !T = error set inferred from the fn body
  *    (T, ...) // tuple
  *    fn(T, ...) -> R          // function type, can hold a closure (fat: fn ptr + captures). each closure
@@ -133,7 +133,7 @@ namespace fs {
         ENUM: (tag: typeinfo, variants: variant_info[..]),
         FUNCTION: (args: typeinfo[..], ret: typeinfo, varargs: bool, is_async: bool, calling_convention: str),
         CLOSURE: (signature: typeinfo, captures: field_info[..]),
-        TRAIT_UNION: (trait_name: str, members: typeinfo[..]), // t_trait used as a type
+        TRAIT_UNION: (trait_name: str, members: typeinfo[..]), // some_trait used as a type
     }
 
     enum struct_layout {
@@ -479,10 +479,10 @@ fn type_name(v: T) -> str { return @typeinfo(T).short_name; }
 
 fn type_name<bool>(v: bool) -> str { return "a bool"; }
 
-// Traits are constraints, like C++20 concepts (<T: t_allocator>).
+// Traits are constraints, like C++20 concepts (<T: allocator>).
 // Gets ran when a generic uses it and requires all constraints to be true, or an error will occur (compile time).
 // That gives a clear error at the call site, but doesnt limit what the body is allowed to use
-trait t_allocator  { // naming convention for traits is t_
+trait allocator {
     // count = number of T's. traits need a named error set, there is no body to infer ! from
     <T: type> fn malloc(this, count: usize = 1) -> std::mem::mem_error!(T*);
     // the caller says how big the block is (old, count), so an allocator needn't remember
@@ -492,17 +492,17 @@ trait t_allocator  { // naming convention for traits is t_
 
 // If we want to use the same type for this:
 <T: type>
-trait t_allocator2 {
+trait pool_allocator {
     fn malloc(this, count: usize = 1) -> std::mem::mem_error!(T*);
     fn realloc(this, ptr: T*, old: usize, count: usize) -> std::mem::mem_error!(T*);
     fn free(this, ptr: T*, count: usize = 1) -> void;
 }
-// attached as: <T: type> attach t_allocator2<T> -> some_pool<T> { ... }
+// attached as: <T: type> attach pool_allocator<T> -> some_pool<T> { ... }
 
 // Traits as types, with no vtable: the compiler sees the whole program, so it knows every type that
-// attaches t_shape. Using t_shape as a type makes a tagged union of all of them (circle | square here).
+// attaches shape. Using shape as a type makes a tagged union of all of them (circle | square here).
 // A call is a switch on the tag, then a direct (inlinable) call. Values are stored inline, no heap.
-trait t_shape {
+trait shape {
     fn area(this) -> f64;
     fn name(this) -> str;
 }
@@ -510,18 +510,18 @@ trait t_shape {
 struct circle { r: f64; }
 struct square { side: f64; }
 
-attach t_shape -> circle {
+attach shape -> circle {
     fn area(this) -> f64 { return 3.14159 * this.r * this.r; }
     fn name(this) -> str { return "circle"; }
 }
 
-attach t_shape -> square {
+attach shape -> square {
     fn area(this) -> f64 { return this.side * this.side; }
     fn name(this) -> str { return "square"; }
 }
 
 // one type at a time: use a generic, a copy per type, no tag at all
-<T: t_shape>
+<T: shape>
 fn print_shape(s: T&) -> void {
     std::println("{}: {}", s.name(), s.area());
 }
@@ -531,10 +531,10 @@ fn shapes() -> void {
     val q: square = { side: 3.0 };
     print_shape(&c);
 
-    // mixed types: a flat array of t_shape, each element is the largest member + a tag
-    val list: t_shape[] = { c, q }; // circle -> t_shape, square -> t_shape
+    // mixed types: a flat array of shape, each element is the largest member + a tag
+    val list: shape[] = { c, q }; // circle -> shape, square -> shape
     for (s&) in list { // (s&) binds by reference, like closure captures
-        print_shape(s); // t_shape itself satisfies <T: t_shape>, the calls inside switch on the tag
+        print_shape(s); // shape itself satisfies <T: shape>, the calls inside switch on the tag
     }
 
     match (list[0]) { // get the real type back
@@ -544,19 +544,19 @@ fn shapes() -> void {
 }
 
 // Rules:
-//  - size of t_shape = largest member + tag. One huge member makes every t_shape huge, so box that member
+//  - size of shape = largest member + tag. One huge member makes every shape huge, so box that member
 //  - generic trait fns work too (instantiated per member), only static this fns cant be called through it
 //  - the member list is closed at compile time. fine for whole-program builds (one C program),
 //    but a precompiled Volt library cant add members to it later
 
 // std::mem (std/std.volt) has the allocator trait, box<T, Allocator> and the blanket T::new(value).
-// A custom allocator is any type that attaches std::mem::t_allocator:
+// A custom allocator is any type that attaches std::mem::allocator:
 namespace demo_alloc {
     use { "stdlib.h" } as libc;
 
     struct noisy; // empty struct: a box<T, noisy> is still just a pointer
 
-    attach std::mem::t_allocator -> noisy {
+    attach std::mem::allocator -> noisy {
         // inside an "attach trait -> type" block, this can leave off its type
         <T: type> fn malloc(this, count: usize = 1) -> std::mem::mem_error!(T*) {
             std::println("noisy: alloc {} bytes", count * @sizeof(T));

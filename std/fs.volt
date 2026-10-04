@@ -151,7 +151,7 @@ namespace fs {
     }
 
     // the whole file
-    <A: std::mem::t_allocator = std::mem::default_allocator>
+    <A: std::mem::allocator = std::mem::default_allocator>
     fn read_file(path: str, allocator: A = {}) -> fs_error!std::string<A> {
         var pb: u8[4096];
         val f = fopen(try c_text(path, pb[..]), "rb") ?? return from_errno();
@@ -241,7 +241,7 @@ namespace fs {
 
     // the entries of directory path (not "." or ".."), in the order the system gives them: names, and
     // whether each is a directory (a link to one isn't: walking and removing don't follow links)
-    <A: std::mem::t_allocator>
+    <A: std::mem::allocator>
     internal fn scan(path: str, names: std::vec<std::string<A>, A>&, dirs: std::vec<bool, A>&) -> fs_error!void {
         comptime if (@cfg("os", "windows")) {
             return scan_windows(path, names, dirs);
@@ -251,7 +251,7 @@ namespace fs {
     }
 
     // scan, through opendir and readdir
-    <A: std::mem::t_allocator>
+    <A: std::mem::allocator>
     internal fn scan_posix(path: str, names: std::vec<std::string<A>, A>&, dirs: std::vec<bool, A>&) -> fs_error!void {
         var pb: u8[4096];
         val d = opendir(try c_text(path, pb[..])) ?? return from_errno();
@@ -290,7 +290,7 @@ namespace fs {
     }
 
     // scan, through FindFirstFileA and FindNextFileA
-    <A: std::mem::t_allocator>
+    <A: std::mem::allocator>
     internal fn scan_windows(path: str, names: std::vec<std::string<A>, A>&, dirs: std::vec<bool, A>&) -> fs_error!void {
         var pb: u8[4096];
         var qb: u8[4096];
@@ -327,7 +327,7 @@ namespace fs {
     }
 
     // the names in directory path (not "." or ".."), sorted
-    <A: std::mem::t_allocator = std::mem::default_allocator>
+    <A: std::mem::allocator = std::mem::default_allocator>
     fn list_dir(path: str, allocator: A = {}) -> fs_error!std::vec<std::string<A>, A> {
         var names: std::vec<std::string<A>, A> = { allocator: copy allocator };
         var dirs: std::vec<bool, A> = { allocator: copy allocator };
@@ -338,7 +338,7 @@ namespace fs {
 
     // every file under directory path, in its subdirectories too (not the directories themselves), as
     // paths starting with path, sorted; links to directories aren't followed
-    <A: std::mem::t_allocator = std::mem::default_allocator>
+    <A: std::mem::allocator = std::mem::default_allocator>
     fn walk(path: str, allocator: A = {}) -> fs_error!std::vec<std::string<A>, A> {
         var out: std::vec<std::string<A>, A> = { allocator: copy allocator };
         try walk_into(path, &out);
@@ -346,7 +346,7 @@ namespace fs {
         return move out;
     }
 
-    <A: std::mem::t_allocator>
+    <A: std::mem::allocator>
     internal fn walk_into(dir: str, out: std::vec<std::string<A>, A>&) -> fs_error!void {
         var names: std::vec<std::string<A>, A> = { allocator: copy out.allocator };
         var dirs: std::vec<bool, A> = { allocator: copy out.allocator };
@@ -538,7 +538,7 @@ namespace fs {
     }
 
     // walks a file's lines (see lines)
-    <A: std::mem::t_allocator>
+    <A: std::mem::allocator>
     struct file_lines {
         f: file*;
         allocator: A; // where each line goes
@@ -555,7 +555,7 @@ attach fn read(this: std::fs::file&, buf: u8[..]) -> std::fs::fs_error!usize {
 }
 
 // the rest of the file
-<A: std::mem::t_allocator = std::mem::default_allocator>
+<A: std::mem::allocator = std::mem::default_allocator>
 attach fn read_all(this: std::fs::file&, allocator: A = {}) -> std::fs::fs_error!std::string<A> {
     var out = std::string::new_in(move allocator);
     var buf: u8[4096];
@@ -569,7 +569,7 @@ attach fn read_all(this: std::fs::file&, allocator: A = {}) -> std::fs::fs_error
 }
 
 // the next line, without its "\n" (or "\r\n"); null at the end of the file. Any length, NUL bytes too
-<A: std::mem::t_allocator = std::mem::default_allocator>
+<A: std::mem::allocator = std::mem::default_allocator>
 attach fn read_line(this: std::fs::file&, allocator: A = {}) -> std::fs::fs_error!(std::string<A>?) {
     var out = std::string::new_in(move allocator);
     comptime if (@cfg("os", "windows")) {
@@ -618,13 +618,13 @@ attach fn read_line(this: std::fs::file&, allocator: A = {}) -> std::fs::fs_erro
 }
 
 // for (line) in f.lines(): each line as read_line gives it, until the end (or a read error)
-<A: std::mem::t_allocator = std::mem::default_allocator>
+<A: std::mem::allocator = std::mem::default_allocator>
 attach fn lines(this: std::fs::file&, allocator: A = {}) -> std::fs::file_lines<A> {
     return { f: this as std::fs::file*, allocator: move allocator };
 }
 
 // the next line
-<A: std::mem::t_allocator>
+<A: std::mem::allocator>
 attach fn next(this: std::fs::file_lines<A>&) -> std::string<A>? {
     return this.f->read_line(copy this.allocator) catch null;
 }

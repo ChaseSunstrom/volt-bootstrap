@@ -20,7 +20,7 @@ attach fn describe(this: T) -> str {
     return "a value";
 }
 
-trait t_shape {
+trait shape {
     fn area(this) -> f64;
     fn name(this) -> str;
 }
@@ -28,17 +28,17 @@ trait t_shape {
 struct circle { r: f64; }
 struct square { side: f64; }
 
-attach t_shape -> circle {
+attach shape -> circle {
     fn area(this) -> f64 { return 3.0 * this.r * this.r; }
     fn name(this) -> str { return "circle"; }
 }
 
-attach t_shape -> square {
+attach shape -> square {
     fn area(this) -> f64 { return this.side * this.side; }
     fn name(this) -> str { return "square"; }
 }
 
-<T: t_shape>
+<T: shape>
 fn print_shape(s: T&) -> void {
     std::println("{}: {}", s.name(), s.area());
 }
@@ -51,7 +51,7 @@ fn main() -> void {
     val ci: circle = { r: 1.0 };
     val sq: square = { side: 3.0 };
     print_shape(&ci);
-    var list: t_shape[] = { ci, sq };
+    var list: shape[] = { ci, sq };
     for (s&) in list {
         print_shape(s);
     }
@@ -60,7 +60,7 @@ fn main() -> void {
         circle(x) => std::println("r = {}", x.r),
         square(x) => std::println("side = {}", x.side),
     }
-    std::println(@sizeof(t_shape) >= @sizeof(circle));
+    std::println(@sizeof(shape) >= @sizeof(circle));
 }
 // expect: 42 a value
 // expect: circle: 3

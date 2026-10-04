@@ -19,7 +19,7 @@ namespace mem {
     // heap, sorted_map, shared, channel, and the functions that return such values. A failed malloc or
     // realloc returns OUT_OF_MEMORY. Like Zig's, the caller says how big a block is when it resizes or
     // frees it, so an allocator needn't remember.
-    trait t_allocator {
+    trait allocator {
         // room for count T's, aligned for T
         <T: type> fn malloc(this, count: usize = 1) -> mem_error!(T*);
         // ptr's block, which holds old T's, resized to count T's (it may move; the first min(old,
@@ -137,7 +137,7 @@ namespace mem {
         return @cast<void*>(h);
     }
 
-    attach t_allocator -> default_allocator {
+    attach allocator -> default_allocator {
         <T: type> fn malloc(this, count: usize = 1) -> mem_error!(T*) {
             val n = try bytes<T>(count);
             comptime if (@cfg("release") && @cfg("hosted")) {
@@ -227,7 +227,7 @@ namespace mem {
         fb: fixed_buffer* = null;
     }
 
-    attach t_allocator -> fixed_buffer_allocator {
+    attach allocator -> fixed_buffer_allocator {
         <T: type> fn malloc(this, count: usize = 1) -> mem_error!(T*) {
             val fb = this.fb;
             val size = try bytes<T>(count);
@@ -279,7 +279,7 @@ namespace mem {
     // Memory that goes all at once: blocks come from chunks taken from backing, frees do nothing
     // (except for the last block, whose room comes back), and deleting or resetting the arena gives
     // every chunk back. Allocate through allocator(); the arena has to outlive what's allocated from it.
-    <B: t_allocator = default_allocator>
+    <B: allocator = default_allocator>
     struct arena {
         backing: B = {};             // where the chunks come from
         head: arena_chunk* = null;   // the newest chunk
@@ -289,13 +289,13 @@ namespace mem {
     }
 
     // the allocator for an arena (a pointer to it, so every container using it shares its state)
-    <B: t_allocator = default_allocator>
+    <B: allocator = default_allocator>
     struct arena_allocator {
         a: arena<B>* = null;
     }
 
-    <B: t_allocator>
-    attach t_allocator -> arena_allocator<B> {
+    <B: allocator>
+    attach allocator -> arena_allocator<B> {
         <T: type> fn malloc(this, count: usize = 1) -> mem_error!(T*) {
             val a = this.a;
             val size = try bytes<T>(count);
@@ -368,20 +368,20 @@ namespace mem {
 
     // For testing what happens when memory runs out: the next left allocations (or resizes) come from
     // backing, and every one after them fails. Allocate through allocator().
-    <B: t_allocator = default_allocator>
+    <B: allocator = default_allocator>
     struct failing {
         left: i64 = 0;   // allocations still allowed
         backing: B = {}; // where those come from
     }
 
     // the allocator for a failing (a pointer to it, so every container using it shares the count)
-    <B: t_allocator = default_allocator>
+    <B: allocator = default_allocator>
     struct failing_allocator {
         f: failing<B>* = null;
     }
 
-    <B: t_allocator>
-    attach t_allocator -> failing_allocator<B> {
+    <B: allocator>
+    attach allocator -> failing_allocator<B> {
         <T: type> fn malloc(this, count: usize = 1) -> mem_error!(T*) {
             val f = this.f;
             if (f->left <= 0) {
@@ -406,7 +406,7 @@ namespace mem {
     // the owned pointer. keeps its allocator, so it frees with the one that allocated.
     // @owns("ptr"): box is used like a T&, and when it goes out of scope *ptr is deleted first,
     // then box's own delete (below) frees the memory. Any library can make such a type
-    <T: type, Allocator: t_allocator = default_allocator>
+    <T: type, Allocator: allocator = default_allocator>
     @attributes([@owns("ptr")])
     struct box {
         ptr: T*; // raw: the memory the box owns
@@ -415,7 +415,7 @@ namespace mem {
 }
 
 // T::new(value) / T::new(value, allocator): a box holding value
-<T: type, Allocator: std::mem::t_allocator = std::mem::default_allocator>
+<T: type, Allocator: std::mem::allocator = std::mem::default_allocator>
 attach fn new(static this: T, value: T, allocator: Allocator = {}) -> std::mem::mem_error!std::mem::box<T, Allocator> {
     val p: T* = try allocator.malloc<T>();
     @write(p, move value); // p is fresh memory: nothing there to delete
@@ -423,13 +423,13 @@ attach fn new(static this: T, value: T, allocator: Allocator = {}) -> std::mem::
 }
 
 // frees a box's memory; runs automatically after *ptr is deleted
-<T: type, Allocator: std::mem::t_allocator>
+<T: type, Allocator: std::mem::allocator>
 attach fn delete(this: std::mem::box<T, Allocator>&) -> void {
     this.allocator.free<T>(this.ptr);
 }
 
 // copy of a box: a new allocation from the same kind of allocator holding a copy of *ptr
-<T: type, Allocator: std::mem::t_allocator>
+<T: type, Allocator: std::mem::allocator>
 attach fn copy(this: std::mem::box<T, Allocator>&) -> std::mem::box<T, Allocator> {
     val p: T* = this.allocator.malloc<T>() catch @panic("out of memory");
     @write(p, copy *this.ptr);
@@ -453,19 +453,19 @@ attach fn reset(this: std::mem::fixed_buffer&) -> void {
 }
 
 // the allocator handing out the arena's memory
-<B: std::mem::t_allocator>
+<B: std::mem::allocator>
 attach fn allocator(this: std::mem::arena<B>&) -> std::mem::arena_allocator<B> {
     return { a: this };
 }
 
 // bytes handed out and not given back
-<B: std::mem::t_allocator>
+<B: std::mem::allocator>
 attach fn used(this: std::mem::arena<B>&) -> usize {
     return this.total;
 }
 
 // give every chunk back: what was allocated must not be used after
-<B: std::mem::t_allocator>
+<B: std::mem::allocator>
 attach fn reset(this: std::mem::arena<B>&) -> void {
     while (this.head != null) {
         val c = this.head;
@@ -477,13 +477,13 @@ attach fn reset(this: std::mem::arena<B>&) -> void {
     this.total = 0;
 }
 
-<B: std::mem::t_allocator>
+<B: std::mem::allocator>
 attach fn delete(this: std::mem::arena<B>&) -> void {
     this.reset();
 }
 
 // the allocator that counts down its allocations
-<B: std::mem::t_allocator>
+<B: std::mem::allocator>
 attach fn allocator(this: std::mem::failing<B>&) -> std::mem::failing_allocator<B> {
     return { f: this };
 }

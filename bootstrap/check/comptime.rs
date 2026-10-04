@@ -1374,7 +1374,7 @@ impl Checker {
                 Ok(CVal::Bool(self.cfg_on(&parts, span)?))
             }
             "attaches" => {
-                // @attaches(T, t_trait): does T attach the trait (as a <T: t_trait> bound asks)?
+                // @attaches(T, some_trait): does T attach the trait (as a <T: some_trait> bound asks)?
                 let [g, tr] = args else { return cerr(span, "@attaches(T, trait) takes a type and a trait") };
                 let t = ty_arg(self, g)?;
                 let bound = match tr {

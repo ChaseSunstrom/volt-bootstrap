@@ -448,7 +448,7 @@ attach fn check_attach_block(this: checker&, b: u32) -> compile_error!void {
                     return this.check_required(r.decl, fs, tr.span, p.last(), ns);
                 },
                 default => {
-                    return fails(tr.span, "an attach block names a trait: attach t_name -> type { ... }");
+                    return fails(tr.span, "an attach block names a trait: attach named -> type { ... }");
                 },
             }
         },

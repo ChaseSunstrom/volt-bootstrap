@@ -56,7 +56,7 @@ namespace thread {
 
     // what a new thread runs, in memory from allocator: the entry first (the runtime calls it with
     // this memory; extern keeps the fields in order), then the closure and the allocator that frees it
-    <F: type, A: std::mem::t_allocator>
+    <F: type, A: std::mem::allocator>
     internal extern struct job {
         run: extern "C" fn(void*) -> void;
         f: F;
@@ -64,7 +64,7 @@ namespace thread {
     }
 
     // on the new thread: move the closure and the allocator out, free the job, run the closure
-    <F: type, A: std::mem::t_allocator>
+    <F: type, A: std::mem::allocator>
     internal fn run_job(p: void*) -> void {
         val jp = @cast<job<F, A>*>(p);
         val f: F = @read(&jp->f);
@@ -75,7 +75,7 @@ namespace thread {
 
     // run f, a closure with no parameters, on a new thread. f is moved there: what it captures by
     // value or with move belongs to the thread
-    <F: type, A: std::mem::t_allocator = std::mem::default_allocator>
+    <F: type, A: std::mem::allocator = std::mem::default_allocator>
     fn spawn(f: F, allocator: A = {}) -> spawn_error!thread {
         val p: job<F, A>* = allocator.malloc<job<F, A>>() catch return spawn_error::OUT_OF_MEMORY;
         @write(p, { run: run_job<F, A>, f: move f, allocator: move allocator });
@@ -158,14 +158,14 @@ namespace thread {
     // One value with several owners, on any threads: copy makes another owner (the count goes up
     // atomically), and the value is deleted with the last one. Reach the value with get(); to change it
     // from several threads, share a mutex<T> or atomics.
-    <T: type, Allocator: std::mem::t_allocator = std::mem::default_allocator>
+    <T: type, Allocator: std::mem::allocator = std::mem::default_allocator>
     struct shared {
         ptr: shared_box<T>*; // null in an empty (default) shared
         allocator: Allocator; // what frees it
     }
 
     // value in a new shared<T>, its only owner so far
-    <T: type, A: std::mem::t_allocator = std::mem::default_allocator>
+    <T: type, A: std::mem::allocator = std::mem::default_allocator>
     fn share(value: T, allocator: A = {}) -> std::mem::mem_error!shared<T, A> {
         val p: shared_box<T>* = try allocator.malloc<shared_box<T>>();
         @write(p, { count: 1, value: move value });
@@ -173,13 +173,13 @@ namespace thread {
     }
 
     // what a channel holds: values sent and not yet received, and whether it's closed
-    <T: type, A: std::mem::t_allocator>
+    <T: type, A: std::mem::allocator>
     internal struct chan_items {
         queue: std::deque<T, A>;
         closed: bool;
     }
 
-    <T: type, A: std::mem::t_allocator>
+    <T: type, A: std::mem::allocator>
     internal struct chan_state {
         items: mutex<chan_items<T, A>>;
         ready: cond; // notified on a send or a close
@@ -188,7 +188,7 @@ namespace thread {
     // Owned values passed between threads, first in first out. A copy of a channel is the same channel
     // (give each thread its own copy); it's deleted, with whatever was never received, with the last.
     // Its queue and shared state come from Allocator.
-    <T: type, Allocator: std::mem::t_allocator = std::mem::default_allocator>
+    <T: type, Allocator: std::mem::allocator = std::mem::default_allocator>
     struct channel {
         state: shared<chan_state<T, Allocator>, Allocator>;
     }
@@ -297,19 +297,19 @@ attach fn swap(this: std::thread::atomic_bool&, v: bool) -> bool {
 }
 
 // the shared value
-<T: type, A: std::mem::t_allocator>
+<T: type, A: std::mem::allocator>
 attach fn get(this: std::thread::shared<T, A>&) -> T& {
     return &this.ptr->value;
 }
 
 // how many shared<T>s point at the value (on several threads, it may change right after)
-<T: type, A: std::mem::t_allocator>
+<T: type, A: std::mem::allocator>
 attach fn count(this: std::thread::shared<T, A>&) -> i64 {
     return std::thread::load64(&this.ptr->count);
 }
 
 // another owner of the same value
-<T: type, A: std::mem::t_allocator>
+<T: type, A: std::mem::allocator>
 attach fn copy(this: std::thread::shared<T, A>&) -> std::thread::shared<T, A> {
     if (this.ptr != null) {
         std::thread::add64(&this.ptr->count, 1);
@@ -318,7 +318,7 @@ attach fn copy(this: std::thread::shared<T, A>&) -> std::thread::shared<T, A> {
 }
 
 // one owner fewer; the last one deletes the value and frees its memory
-<T: type, A: std::mem::t_allocator>
+<T: type, A: std::mem::allocator>
 attach fn delete(this: std::thread::shared<T, A>&) -> void {
     if (this.ptr == null || std::thread::add64(&this.ptr->count, -1) != 1) {
         return;
@@ -335,14 +335,14 @@ attach fn new(static this: std::thread::channel<T>) -> std::mem::mem_error!std::
 }
 
 // a new, empty channel whose memory comes from allocator
-<T: type, A: std::mem::t_allocator>
+<T: type, A: std::mem::allocator>
 attach fn new_in(static this: std::thread::channel<T>, allocator: A) -> std::mem::mem_error!std::thread::channel<T, A> {
     val st: std::thread::chan_state<T, A> = { items: { value: { queue: { allocator: copy allocator }, closed: false } }, ready: {} };
     return { state: try std::thread::share(move st, move allocator) };
 }
 
 // send value to whoever receives; false if the channel is closed (then value is deleted)
-<T: type, A: std::mem::t_allocator>
+<T: type, A: std::mem::allocator>
 attach fn send(this: std::thread::channel<T, A>&, value: T) -> bool {
     val st = this.state.get();
     {
@@ -357,7 +357,7 @@ attach fn send(this: std::thread::channel<T, A>&, value: T) -> bool {
 }
 
 // the next value, waiting for one if there's none yet; null once the channel is closed and empty
-<T: type, A: std::mem::t_allocator>
+<T: type, A: std::mem::allocator>
 attach fn recv(this: std::thread::channel<T, A>&) -> T? {
     val st = this.state.get();
     var g = st.items.lock();
@@ -368,14 +368,14 @@ attach fn recv(this: std::thread::channel<T, A>&) -> T? {
 }
 
 // the next value if one is waiting, else null
-<T: type, A: std::mem::t_allocator>
+<T: type, A: std::mem::allocator>
 attach fn try_recv(this: std::thread::channel<T, A>&) -> T? {
     var g = this.state.get().items.lock();
     return g.get().queue.pop_front();
 }
 
 // no more sends: receivers get what's left, then null
-<T: type, A: std::mem::t_allocator>
+<T: type, A: std::mem::allocator>
 attach fn close(this: std::thread::channel<T, A>&) -> void {
     val st = this.state.get();
     {

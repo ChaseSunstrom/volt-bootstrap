@@ -272,7 +272,7 @@ fn scripted_session() {
 /// what the server shows inline (lsp_inline.volt), on a program of its own
 const INLINE: &str = "use std::io;
 
-trait t_shape {
+trait shape {
     fn area(this) -> f64;
 }
 
@@ -285,7 +285,7 @@ enum color {
     GREEN: i32,
 }
 
-attach t_shape -> circle {
+attach shape -> circle {
     fn area(this) -> f64 {
         return 3.0 * this.r * this.r;
     }
@@ -295,7 +295,7 @@ attach fn grow(this: circle&, by: f64) -> void {
     this.r += by;
 }
 
-<T: t_shape>
+<T: shape>
 fn report(s: T&, scale: f64) -> f64 {
     return s.area() * scale;
 }
@@ -328,7 +328,7 @@ fn inline_features(s: &mut Server) {
         let ms: Vec<&str> = (0..mods.len()).filter(|b| t[4] >> b & 1 == 1).map(|b| mods[b]).collect();
         got.push(format!("{} {} {}", &lines[line][col..col + t[2]], types[t[3]], ms.join(" ")).trim_end().to_string());
     }
-    for want in ["std namespace", "io namespace", "t_shape interface declaration", "t_shape interface", "circle struct declaration", "r property declaration", "GREEN enumMember declaration", "GREEN enumMember", "T typeParameter declaration", "T typeParameter", "report function declaration", "grow method declaration", "grow method", "s parameter declaration readonly", "c variable declaration", "k variable declaration readonly", "println function defaultLibrary", "@sizeof macro", "area method"] {
+    for want in ["std namespace", "io namespace", "shape interface declaration", "shape interface", "circle struct declaration", "r property declaration", "GREEN enumMember declaration", "GREEN enumMember", "T typeParameter declaration", "T typeParameter", "report function declaration", "grow method declaration", "grow method", "s parameter declaration readonly", "c variable declaration", "k variable declaration readonly", "println function defaultLibrary", "@sizeof macro", "area method"] {
         assert!(got.iter().any(|g| g == want), "semantic tokens lack `{want}`: {got:?}");
     }
 
@@ -362,14 +362,14 @@ fn inline_features(s: &mut Server) {
 
     // hover on a type: its fields, then what's attached to it, grouped by trait; a trait's attachers
     let h = s.request("textDocument/hover", &at(31, 12));
-    assert!(h.contains("struct circle {\\n    r: f64;\\n}\\n// t_shape\\nfn area(this) -> f64\\n// attached\\nattach fn grow(this: circle&, by: f64) -> void"), "hover circle: {h}");
+    assert!(h.contains("struct circle {\\n    r: f64;\\n}\\n// shape\\nfn area(this) -> f64\\n// attached\\nattach fn grow(this: circle&, by: f64) -> void"), "hover circle: {h}");
     let h = s.request("textDocument/hover", &at(2, 8));
-    assert!(h.contains("// attached by\\ncircle"), "hover t_shape: {h}");
+    assert!(h.contains("// attached by\\ncircle"), "hover shape: {h}");
 
     // code lenses: references above fns, attached fns and traits above types, attachers above a
     // trait, Run above main
     let l = s.request("textDocument/codeLens", &doc_param(&doc));
-    for want in ["attached fns", "t_shape", "1 type attaches it", "1 reference", "volt.showLocations", "\"command\":\"volt.run\""] {
+    for want in ["attached fns", "shape", "1 type attaches it", "1 reference", "volt.showLocations", "\"command\":\"volt.run\""] {
         assert!(l.contains(want), "code lenses lack {want}: {l}");
     }
 

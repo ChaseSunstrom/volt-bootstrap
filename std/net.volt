@@ -420,7 +420,7 @@ namespace net {
 
     // the addresses host (a name or a numeric address) resolves to, with port, from the system's
     // resolver (getaddrinfo: the hosts file, DNS, ...)
-    <A: std::mem::t_allocator = std::mem::default_allocator>
+    <A: std::mem::allocator = std::mem::default_allocator>
     fn resolve(host: str, port: u16, allocator: A = {}) -> net_error!std::vec<address, A> {
         comptime if (@cfg("hosted") && !@cfg("pointer_bits", "64")) {
             @compile_error("std::net: only 64-bit targets for now (addrinfo's layout)");
@@ -618,7 +618,7 @@ namespace net {
 
     // (inside the namespace: a top-level `text` would hide the std::text namespace)
     // "1.2.3.4:80", or "[2001:db8:0:0:0:0:0:1]:443" for IPv6
-    <A: std::mem::t_allocator = std::mem::default_allocator>
+    <A: std::mem::allocator = std::mem::default_allocator>
     attach fn text(this: address&, allocator: A = {}) -> std::string<A> {
         var out = std::string::new_in(move allocator);
         if (this.v6) {
@@ -703,7 +703,7 @@ attach fn read(this: std::net::tcp_stream&, buf: u8[..]) -> std::net::net_error!
 }
 
 // everything until the other side finishes sending
-<A: std::mem::t_allocator = std::mem::default_allocator>
+<A: std::mem::allocator = std::mem::default_allocator>
 attach fn read_all(this: std::net::tcp_stream&, allocator: A = {}) -> std::net::net_error!std::string<A> {
     var out = std::string::new_in(move allocator);
     var buf: u8[4096];

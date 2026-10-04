@@ -118,7 +118,7 @@ attach fn lsp_decl_use(this: checker&, d: u32, name: str, span: span, label: std
     put(&this.lsp_refs, { at: at, def: this.name_span(this.item_of(d).span, name), label: move label, kind: kind, mods: mods, decl: d });
 }
 
-// what hover says about a type: struct point, enum color, error parse_error, trait t_shape
+// what hover says about a type: struct point, enum color, error parse_error, trait shape
 attach fn lsp_type_label(this: checker&, d: u32, name: str) -> std::string {
     var kw = "type";
     match (this.item_of(d).kind) {

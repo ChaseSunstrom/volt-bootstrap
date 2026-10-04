@@ -1758,7 +1758,7 @@ impl Checker {
         let item = self.decls[b].item.clone();
         let ItemKind::AttachBlock { trait_, fns, .. } = &item.kind else { return Ok(()) };
         let ns = self.decls[b].ns;
-        let TypeKind::Path(p) = &trait_.kind else { return err(trait_.span, "an attach block names a trait: attach t_name -> type { ... }") };
+        let TypeKind::Path(p) = &trait_.kind else { return err(trait_.span, "an attach block names a trait: attach named -> type { ... }") };
         let Some((tr, _)) = self.bound_trait(trait_, ns) else {
             let found = if p.segs.len() == 1 { self.lookup(ns, &p.segs[0].name) } else { self.lookup_path_ns(ns, p) };
             if matches!(found, Some(Found::Decls(_))) {

@@ -3,9 +3,9 @@
 
 struct mine {}
 
-attach hidden::t_secret -> mine {
+attach hidden::secret -> mine {
     fn code(this) -> i32 { return 1; }
 }
 
 fn main() -> void {}
-// error: 't_secret' is internal to package hidden
+// error: 'secret' is internal to package hidden

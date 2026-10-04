@@ -16,13 +16,13 @@ some template that calls it.
 
 ## As constraints
 
-`<T: t_shape>` says the template only accepts types that attach `t_shape`. A call with any other
+`<T: shape>` says the template only accepts types that attach `shape`. A call with any other
 type is an error at the call, naming the trait, instead of an error somewhere inside the body.
 
 ```volt
 use std::io;
 
-trait t_shape {
+trait shape {
     fn area(this) -> f64;
     fn name(this) -> str;
 }
@@ -30,17 +30,17 @@ trait t_shape {
 struct circle { r: f64; }
 struct square { side: f64; }
 
-attach t_shape -> circle {
+attach shape -> circle {
     fn area(this) -> f64 { return 3.0 * this.r * this.r; }
     fn name(this) -> str { return "circle"; }
 }
 
-attach t_shape -> square {
+attach shape -> square {
     fn area(this) -> f64 { return this.side * this.side; }
     fn name(this) -> str { return "square"; }
 }
 
-<T: t_shape>
+<T: shape>
 fn report(s: T&) -> void {
     std::println("{}: {}", s.name(), s.area());
 }
@@ -55,7 +55,7 @@ fn main() -> void {
 // expect: square: 9
 ```
 
-Inside an `attach` block, `this` can leave out its type. Trait naming convention is `t_name`.
+Inside an `attach` block, `this` can leave out its type.
 
 ## Optional functions and closed traits
 
@@ -119,25 +119,25 @@ no vtables and no heap allocation.
 ```volt
 use std::io;
 
-trait t_shape {
+trait shape {
     fn area(this) -> f64;
 }
 
 struct circle { r: f64; }
 struct square { side: f64; }
 
-attach t_shape -> circle {
+attach shape -> circle {
     fn area(this) -> f64 { return 3.0 * this.r * this.r; }
 }
 
-attach t_shape -> square {
+attach shape -> square {
     fn area(this) -> f64 { return this.side * this.side; }
 }
 
 fn main() -> void {
     val c: circle = { r: 2.0 };
     val q: square = { side: 1.5 };
-    val shapes: t_shape[] = { c, q };
+    val shapes: shape[] = { c, q };
     var total = 0.0;
     for (s&) in shapes {
         total += s.area();
@@ -152,7 +152,7 @@ fn main() -> void {
 // expect: circle of radius 2
 ```
 
-A trait union also satisfies `<T: t_shape>`, so the same template takes one concrete shape (no tag
+A trait union also satisfies `<T: shape>`, so the same template takes one concrete shape (no tag
 at all) or a mix.
 
 Things to keep in mind:
@@ -172,13 +172,13 @@ Trait functions can be templates, and a trait can take parameters itself:
 use std::io;
 
 <T: type>
-trait t_source {
+trait source {
     fn next(this) -> T?;
 }
 
 struct countdown { n: i32; }
 
-attach t_source<i32> -> countdown {
+attach source<i32> -> countdown {
     fn next(this) -> i32? {
         if (this.n == 0) {
             return null;
@@ -199,5 +199,5 @@ fn main() -> void {
 // expect: 3 2 1
 ```
 
-std's allocator is a trait: `std::mem::t_allocator` has `malloc`, `realloc` and `free`, and
+std's allocator is a trait: `std::mem::allocator` has `malloc`, `realloc` and `free`, and
 `box<T, Allocator>` and `vec<T, Allocator>` work with any type that attaches it.

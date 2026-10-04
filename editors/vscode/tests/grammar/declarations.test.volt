@@ -61,17 +61,17 @@ fn origin() -> point {
     return p;
 }
 
-attach t_shape -> circle {
+attach shape -> circle {
 // <------ keyword.other.volt
-//     ^^^^^^^ entity.name.type.trait.volt
-//                ^^^^^^ entity.name.type.volt
+//     ^^^^^ entity.name.type.trait.volt
+//              ^^^^^^ entity.name.type.volt
 }
 
-<T: t_shape, N: usize>
+<T: shape, N: usize>
 // <- punctuation.definition.generic.begin.volt
 // <~- entity.name.type.parameter.volt
-//  ^^^^^^^ entity.name.type.volt
-//           ^ entity.name.type.parameter.volt
-//              ^^^^^ support.type.primitive.volt
+//  ^^^^^ entity.name.type.volt
+//         ^ entity.name.type.parameter.volt
+//            ^^^^^ support.type.primitive.volt
 fn report(s: T&) -> void {
 }

@@ -172,18 +172,18 @@ fn twice(x: T) -> T {
     return x + x;
 }
 
-trait t_named {
+trait named {
     fn name(this) -> str;
 }
 
 struct cat {}
 struct dog {}
 
-attach t_named -> cat {
+attach named -> cat {
     fn name(this) -> str { return "cat"; }
 }
 
-attach t_named -> dog {
+attach named -> dog {
     fn name(this) -> str { return "dog"; }
 }
 
@@ -191,7 +191,7 @@ fn main() -> void {
     std::println("{} {}", twice(21), twice(1.25));
     val c: cat = {};
     val d: dog = {};
-    val pets: t_named[] = { c, d };
+    val pets: named[] = { c, d };
     for (p&) in pets {
         std::print("{} ", p.name());
     }

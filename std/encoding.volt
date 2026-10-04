@@ -12,40 +12,40 @@ namespace base64 {
     internal val URL_SAFE: str = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
 
     // data in base64 (RFC 4648), with = padding
-    <A: std::mem::t_allocator = std::mem::default_allocator>
+    <A: std::mem::allocator = std::mem::default_allocator>
     fn encode(data: u8[..], allocator: A = {}) -> std::string<A> {
         return encode_with(data, STANDARD, true, move allocator);
     }
 
-    <A: std::mem::t_allocator = std::mem::default_allocator>
+    <A: std::mem::allocator = std::mem::default_allocator>
     fn encode(text: str, allocator: A = {}) -> std::string<A> {
         return encode_with(@cast<u8[..]>(text), STANDARD, true, move allocator);
     }
 
     // data in the URL- and file-name-safe alphabet (- and _ for + and /), without padding
-    <A: std::mem::t_allocator = std::mem::default_allocator>
+    <A: std::mem::allocator = std::mem::default_allocator>
     fn encode_url(data: u8[..], allocator: A = {}) -> std::string<A> {
         return encode_with(data, URL_SAFE, false, move allocator);
     }
 
-    <A: std::mem::t_allocator = std::mem::default_allocator>
+    <A: std::mem::allocator = std::mem::default_allocator>
     fn encode_url(text: str, allocator: A = {}) -> std::string<A> {
         return encode_with(@cast<u8[..]>(text), URL_SAFE, false, move allocator);
     }
 
     // the bytes that base64 text (with its = padding) stands for
-    <A: std::mem::t_allocator = std::mem::default_allocator>
+    <A: std::mem::allocator = std::mem::default_allocator>
     fn decode(text: str, allocator: A = {}) -> decode_error!std::vec<u8, A> {
         return decode_with(text, STANDARD, true, move allocator);
     }
 
     // the bytes that URL-safe base64 text stands for, padded or not
-    <A: std::mem::t_allocator = std::mem::default_allocator>
+    <A: std::mem::allocator = std::mem::default_allocator>
     fn decode_url(text: str, allocator: A = {}) -> decode_error!std::vec<u8, A> {
         return decode_with(text, URL_SAFE, false, move allocator);
     }
 
-    <A: std::mem::t_allocator>
+    <A: std::mem::allocator>
     internal fn encode_with(data: u8[..], alphabet: str, pad: bool, allocator: A) -> std::string<A> {
         var out = std::string::new_in(move allocator);
         out.reserve((data.len + 2) / 3 * 4) catch @panic("out of memory");
@@ -98,7 +98,7 @@ namespace base64 {
         return 64;
     }
 
-    <A: std::mem::t_allocator>
+    <A: std::mem::allocator>
     internal fn decode_with(text: str, alphabet: str, need_pad: bool, allocator: A) -> decode_error!std::vec<u8, A> {
         // the characters that carry data: padding only at the very end
         var end = text.len;
@@ -147,7 +147,7 @@ namespace hex {
     internal val DIGITS: str = "0123456789abcdef";
 
     // each byte of data as two lower-case hex digits
-    <A: std::mem::t_allocator = std::mem::default_allocator>
+    <A: std::mem::allocator = std::mem::default_allocator>
     fn encode(data: u8[..], allocator: A = {}) -> std::string<A> {
         var out = std::string::new_in(move allocator);
         out.reserve(data.len * 2) catch @panic("out of memory");
@@ -158,13 +158,13 @@ namespace hex {
         return move out;
     }
 
-    <A: std::mem::t_allocator = std::mem::default_allocator>
+    <A: std::mem::allocator = std::mem::default_allocator>
     fn encode(text: str, allocator: A = {}) -> std::string<A> {
         return encode(@cast<u8[..]>(text), move allocator);
     }
 
     // the bytes hex digits (either case) stand for
-    <A: std::mem::t_allocator = std::mem::default_allocator>
+    <A: std::mem::allocator = std::mem::default_allocator>
     fn decode(text: str, allocator: A = {}) -> decode_error!std::vec<u8, A> {
         if (text.len % 2 != 0) {
             return decode_error::BAD_INPUT;

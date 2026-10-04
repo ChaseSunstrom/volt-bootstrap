@@ -119,7 +119,7 @@ namespace time {
 
     // a time on the wall clock (nanoseconds since 1970, as unix_nanos gives) as UTC ISO 8601:
     // "2026-09-30T12:34:56Z", with ".789" milliseconds when there are any
-    <A: std::mem::t_allocator = std::mem::default_allocator>
+    <A: std::mem::allocator = std::mem::default_allocator>
     fn utc_iso8601(unix_ns: i64, allocator: A = {}) -> std::string<A> {
         // floor division, so times before 1970 count back from it
         var secs = unix_ns / 1000000000;

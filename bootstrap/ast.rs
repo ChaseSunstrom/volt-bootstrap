@@ -47,7 +47,7 @@ pub struct Type {
 
 #[derive(Clone, Debug)]
 pub enum TypeKind {
-    Path(Path),                            // i32, example, std::mem::box<T>, t_shape, type, void
+    Path(Path),                            // i32, example, std::mem::box<T>, shape, type, void
     Ref(P<Type>),                          // T&: a reference, never null
     Ptr(P<Type>),                          // T*: a raw pointer, may be null
     Optional(P<Type>),                     // T?

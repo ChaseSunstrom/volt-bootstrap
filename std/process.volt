@@ -233,7 +233,7 @@ namespace process {
 
     // the path of this program's executable, with symlinks resolved (null if the system won't say;
     // Linux, macOS, FreeBSD and Windows do)
-    <A: std::mem::t_allocator = std::mem::default_allocator>
+    <A: std::mem::allocator = std::mem::default_allocator>
     fn exe_path(allocator: A = {}) -> std::string<A>? {
         var buf: u8[4096];
         comptime if (@cfg("os", "macos")) {
@@ -268,7 +268,7 @@ namespace process {
     }
 
     // the working directory (where relative paths start)
-    <A: std::mem::t_allocator = std::mem::default_allocator>
+    <A: std::mem::allocator = std::mem::default_allocator>
     fn cwd(allocator: A = {}) -> std::string<A> {
         var size: usize = 256;
         loop {
@@ -354,7 +354,7 @@ namespace process {
     }
 
     // what a program printed, and how it ended
-    <A: std::mem::t_allocator = std::mem::default_allocator>
+    <A: std::mem::allocator = std::mem::default_allocator>
     struct output {
         code: i32;           // exit code, or 128 + signal
         out: std::string<A>; // its stdout
@@ -363,7 +363,7 @@ namespace process {
 
     // run a program (found on PATH) with `input` as its stdin; waits and collects its output, in
     // memory from allocator
-    <A: std::mem::t_allocator = std::mem::default_allocator>
+    <A: std::mem::allocator = std::mem::default_allocator>
     fn capture(argv: str[..], input: str, allocator: A = {}) -> process_error!output<A> {
         if (argv.len == 0) {
             return process_error::SPAWN_FAILED;
@@ -378,7 +378,7 @@ namespace process {
     }
 
     // capture, through fork and exec
-    <A: std::mem::t_allocator>
+    <A: std::mem::allocator>
     internal fn capture_posix(argv: str[..], input: str, allocator: A) -> process_error!output<A> {
         var owned: std::vec<std::string> = {};
         for (a) in argv {
@@ -432,7 +432,7 @@ namespace process {
 
     // feed the child its input while collecting its stdout and stderr, all at once: a child
     // blocked writing one pipe never waits on us reading another. Closes the three fds.
-    <A: std::mem::t_allocator>
+    <A: std::mem::allocator>
     internal fn pump(inp: i32, outp: i32, errp: i32, input: str, r: output<A>&) -> void {
         var fds: pollfd[3];
         fds[0] = { fd: inp, events: 4, revents: 0 }; // POLLOUT
@@ -659,7 +659,7 @@ namespace process {
     }
 
     // read a pipe to its end (the child closed its side), then close it
-    <A: std::mem::t_allocator>
+    <A: std::mem::allocator>
     internal fn win_drain(h: isize, into: std::string<A>&) -> void {
         var buf: u8[4096];
         loop {
@@ -683,7 +683,7 @@ namespace process {
     // capture, through CreateProcessA and three pipes. Windows can't poll pipes: one thread feeds
     // the input and another reads stderr while this one reads stdout, so the child never waits on
     // us. The stderr thread collects into its own string (allocator may not be safe across threads)
-    <A: std::mem::t_allocator>
+    <A: std::mem::allocator>
     internal fn capture_windows(argv: str[..], input: str, allocator: A) -> process_error!output<A> {
         // ends: the child's stdin (read, write), stdout (read, write), stderr (read, write)
         var ends: isize[6] = { 0, 0, 0, 0, 0, 0 };

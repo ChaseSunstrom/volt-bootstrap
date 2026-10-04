@@ -2242,7 +2242,7 @@ attach fn ct_builtin(this: checker&, name: str, gargs: std::vec<garg>&, args: st
         return fail(span, move msg);
     }
     if (name == "attaches") {
-        // @attaches(T, t_trait): does T attach the trait (as a <T: t_trait> bound asks)?
+        // @attaches(T, some_trait): does T attach the trait (as a <T: some_trait> bound asks)?
         if (args.len != 2) {
             return fails(span, "@attaches(T, trait) takes a type and a trait");
         }

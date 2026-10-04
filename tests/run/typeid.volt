@@ -2,24 +2,24 @@
 // time, and for a trait value the id of the type it holds
 use std::io;
 
-trait t_shape {
+trait shape {
     fn area(this) -> f64;
 }
 
 struct circle { r: f64; }
 struct square { side: f64; }
 
-attach t_shape -> circle {
+attach shape -> circle {
     fn area(this) -> f64 { return 3.0 * this.r * this.r; }
 }
 
-attach t_shape -> square {
+attach shape -> square {
     fn area(this) -> f64 { return this.side * this.side; }
 }
 
-trait t_one { fn n(this) -> i32; }
+trait one { fn n(this) -> i32; }
 struct only { v: i32 = 1; }
-attach t_one -> only {
+attach one -> only {
     fn n(this) -> i32 { return this.v; }
 }
 
@@ -32,7 +32,7 @@ val IDS: u64[2] = ids();
 <T: type>
 fn id_of() -> u64 { return @typeid(T); }
 
-fn make(round: bool) -> t_shape {
+fn make(round: bool) -> shape {
     if (round) {
         val c: circle = { r: 1.0 };
         return c;
@@ -55,15 +55,15 @@ fn main() -> void {
     names.put(@typeid(square), "square");
     val c: circle = { r: 2.0 };
     val q: square = { side: 1.5 };
-    val shapes: t_shape[] = { c, q };
+    val shapes: shape[] = { c, q };
     for (s&) in shapes {
         std::print("{} ", *names.get(@typeid(s)));
     }
-    std::println("{} {}", @typeid(make(false)) == @typeid(square), @typeid(shapes[0]) != @typeid(t_shape));
+    std::println("{} {}", @typeid(make(false)) == @typeid(square), @typeid(shapes[0]) != @typeid(shape));
 
     // a registry filled from the trait's own list of types
     var areas: std::map<u64, f64> = {};
-    comptime match (@typeinfo(t_shape).kind) {
+    comptime match (@typeinfo(shape).kind) {
         .TRAIT_UNION(u) => {
             comptime for (t) in u.1 {
                 areas.put(@typeid(t), @sizeof(t) as f64);
@@ -75,7 +75,7 @@ fn main() -> void {
 
     // a trait with one type; a local named like a type is the local
     val o: only = {};
-    val one: t_one = o;
+    val one: one = o;
     val square: i32 = 3;
     std::println("{} {}", @typeid(one) == @typeid(only), @typeid(square) == @typeid(i32));
 }

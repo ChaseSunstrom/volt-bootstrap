@@ -9,12 +9,12 @@ attach fn make(static this: T) -> T? { return null; }
 <T: type, U: type>
 attach fn pair_of(static this: T, u: U) -> (T, U) { return (0, u); }
 
-trait t_store {
+trait storing {
     <T: type> fn put(this, v: T) -> i32;
 }
 
 struct store { count: i32; }
-attach t_store -> store {
+attach storing -> store {
     <T: type> fn put(this, v: T) -> i32 {
         this.count += 1;
         return this.count;
@@ -22,7 +22,7 @@ attach t_store -> store {
 }
 
 <T: type>
-trait t_box {
+trait holder {
     fn get(this) -> T;
 }
 
@@ -30,11 +30,11 @@ trait t_box {
 struct cell { v: T; }
 
 <T: type>
-attach t_box<T> -> cell<T> {
+attach holder<T> -> cell<T> {
     fn get(this) -> T { return this.v; }
 }
 
-<B: t_box<i32>>
+<B: holder<i32>>
 fn read(b: B&) -> i32 { return b.get(); }
 
 fn main() -> void {

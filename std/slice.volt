@@ -4,13 +4,13 @@
 
 // sorts in place, smallest first by cmp; stable (equal elements keep their order). Past 16 elements
 // it takes scratch room for n elements from allocator
-<T: type, A: std::mem::t_allocator = std::mem::default_allocator>
+<T: type, A: std::mem::allocator = std::mem::default_allocator>
 attach fn sort(this: T[..]&, allocator: A = {}) -> void {
     this.sort_by(|| (a: T&, b: T&) -> i32 { return a.cmp(b); }, move allocator);
 }
 
 // sorts in place by order(a, b) (negative: a goes first); stable
-<T: type, F: type, A: std::mem::t_allocator = std::mem::default_allocator>
+<T: type, F: type, A: std::mem::allocator = std::mem::default_allocator>
 attach fn sort_by(this: T[..]&, order: F, allocator: A = {}) -> void {
     val xs = *this;
     val n = xs.len;

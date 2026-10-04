@@ -31,7 +31,7 @@ fn map_mix(x: u64) -> u64 {
 }
 
 // A hash map with open addressing (linear probing, tombstones for removed keys).
-<K: type, V: type, Allocator: std::mem::t_allocator = std::mem::default_allocator>
+<K: type, V: type, Allocator: std::mem::allocator = std::mem::default_allocator>
 struct map {
     // keys, vals and state are parallel arrays of cap slots; nothing is allocated until the first put
     keys: K* = @cast<K*>(@alignof(K));
@@ -45,13 +45,13 @@ struct map {
 }
 
 // an empty map that allocates from allocator
-<K: type, V: type, A: std::mem::t_allocator>
+<K: type, V: type, A: std::mem::allocator>
 attach fn new_in(static this: std::map<K, V>, allocator: A) -> std::map<K, V, A> {
     return { allocator: move allocator };
 }
 
 // the slot holding key, or where it would go
-<K: type, V: type, A: std::mem::t_allocator>
+<K: type, V: type, A: std::mem::allocator>
 internal attach fn slot(this: std::map<K, V, A>&, key: K&) -> usize {
     val state = @slice(this.state, this.cap);
     val keys = @slice(this.keys, this.cap);
@@ -76,7 +76,7 @@ internal attach fn slot(this: std::map<K, V, A>&, key: K&) -> usize {
 }
 
 // room for n keys without growing: the slots double (at least 8) until n fit under 3/4 of them
-<K: type, V: type, A: std::mem::t_allocator>
+<K: type, V: type, A: std::mem::allocator>
 attach fn reserve(this: std::map<K, V, A>&, n: usize) -> std::mem::mem_error!void {
     if (n * 4 <= this.cap * 3) {
         return;
@@ -92,7 +92,7 @@ attach fn reserve(this: std::map<K, V, A>&, n: usize) -> std::mem::mem_error!voi
 }
 
 // doubles the slots (at least 8), for one more key
-<K: type, V: type, A: std::mem::t_allocator>
+<K: type, V: type, A: std::mem::allocator>
 internal attach fn grow(this: std::map<K, V, A>&) -> void {
     var cap = this.cap * 2;
     if (cap < 8) {
@@ -102,7 +102,7 @@ internal attach fn grow(this: std::map<K, V, A>&) -> void {
 }
 
 // cap new slots, with every entry put back and the removed markers dropped
-<K: type, V: type, A: std::mem::t_allocator>
+<K: type, V: type, A: std::mem::allocator>
 internal attach fn rehash(this: std::map<K, V, A>&, cap: usize) -> std::mem::mem_error!void {
     val old_cap = this.cap;
     val (old_keys, old_vals, old_state) = (this.keys, this.vals, this.state);
@@ -142,7 +142,7 @@ internal attach fn rehash(this: std::map<K, V, A>&, cap: usize) -> std::mem::mem
 }
 
 // set key to value (an old value for it is deleted)
-<K: type, V: type, A: std::mem::t_allocator>
+<K: type, V: type, A: std::mem::allocator>
 attach fn put(this: std::map<K, V, A>&, key: K, value: V) -> void {
     // keep used slots under 3/4 (removed ones count), so a probe always reaches an empty slot
     if ((this.used + 1) * 4 > this.cap * 3) {
@@ -164,13 +164,13 @@ attach fn put(this: std::map<K, V, A>&, key: K, value: V) -> void {
 }
 
 // the value for key, if there is one
-<K: type, V: type, A: std::mem::t_allocator>
+<K: type, V: type, A: std::mem::allocator>
 attach fn get(this: std::map<K, V, A>&, key: K) -> V* {
     return this.lookup(&key);
 }
 
 // get without taking the key
-<K: type, V: type, A: std::mem::t_allocator>
+<K: type, V: type, A: std::mem::allocator>
 internal attach fn lookup(this: std::map<K, V, A>&, key: K&) -> V* {
     if (this.cap == 0) {
         return null;
@@ -183,13 +183,13 @@ internal attach fn lookup(this: std::map<K, V, A>&, key: K&) -> V* {
 }
 
 // whether key has a value
-<K: type, V: type, A: std::mem::t_allocator>
+<K: type, V: type, A: std::mem::allocator>
 attach fn contains(this: std::map<K, V, A>&, key: K) -> bool {
     return this.lookup(&key) != null;
 }
 
 // take key's value out of the map
-<K: type, V: type, A: std::mem::t_allocator>
+<K: type, V: type, A: std::mem::allocator>
 attach fn remove(this: std::map<K, V, A>&, key: K) -> V? {
     if (this.cap == 0) {
         return null;
@@ -206,7 +206,7 @@ attach fn remove(this: std::map<K, V, A>&, key: K) -> V? {
 }
 
 // deletes every key and value, keeping the slots
-<K: type, V: type, A: std::mem::t_allocator>
+<K: type, V: type, A: std::mem::allocator>
 attach fn clear(this: std::map<K, V, A>&) -> void {
     for (i) in 0..this.cap {
         val st = &(@slice(this.state, this.cap)[i]);
@@ -240,7 +240,7 @@ struct map_iter {
 }
 
 // for (e) in m.iter(): each entry, with e.value a reference into the map
-<K: type, V: type, A: std::mem::t_allocator>
+<K: type, V: type, A: std::mem::allocator>
 attach fn iter(this: std::map<K, V, A>&) -> std::map_iter<K, V> {
     return { keys: this.keys, vals: this.vals, state: this.state, cap: this.cap };
 }
@@ -259,7 +259,7 @@ attach fn next(this: std::map_iter<K, V>&) -> std::entry<K, V>? {
 }
 
 // a deep copy: a new map holding a copy of every key and value
-<K: type, V: type, A: std::mem::t_allocator>
+<K: type, V: type, A: std::mem::allocator>
 attach fn copy(this: std::map<K, V, A>&) -> std::map<K, V, A> {
     var out: std::map<K, V, A> = { allocator: copy this.allocator };
     for (i) in 0..this.cap {
@@ -271,7 +271,7 @@ attach fn copy(this: std::map<K, V, A>&) -> std::map<K, V, A> {
 }
 
 // deletes every key and value, then frees the arrays
-<K: type, V: type, A: std::mem::t_allocator>
+<K: type, V: type, A: std::mem::allocator>
 attach fn delete(this: std::map<K, V, A>&) -> void {
     if (this.cap == 0) {
         return;
