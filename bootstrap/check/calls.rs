@@ -183,6 +183,18 @@ impl Checker {
     }
 
     /// a generic/builtin argument read as a value: names, calls and indexing (a[i]) parse as types first
+    /// @field(v, "name"): v's field of that name, worked out at compile time, as the v.name it is
+    /// (read, written, borrowed, narrowed like it)
+    pub(super) fn field_form(&mut self, base: &GenericArg, name: &GenericArg, span: Span) -> Res<Expr> {
+        let base = Self::garg_value(base)?;
+        let n = Self::garg_value(name)?;
+        let name = match self.ct_eval(&n, None)? {
+            comptime::CVal::Str(s) => String::from_utf8_lossy(&s).into_owned(),
+            _ => return err(n.span, "@field(v, \"name\"): the name is a comptime string"),
+        };
+        Ok(Expr { kind: ExprKind::Field(Box::new(base), name, None), span })
+    }
+
     pub fn garg_value(g: &GenericArg) -> Res<Expr> {
         match g {
             GenericArg::Expr(e) => Ok(e.clone()),
@@ -216,6 +228,11 @@ impl Checker {
                 let t = self.garg_type(&args[0])?;
                 let c = self.cty(t);
                 Ok(Val::pure(USIZE, format!("((size_t){}({c}))", if name == "sizeof" { "sizeof" } else { "_Alignof" })))
+            }
+            "field" => {
+                n_args(2)?;
+                let f = self.field_form(&args[0], &args[1], span)?;
+                self.expr(&f, want)
             }
             "offsetof" => {
                 n_args(2)?;

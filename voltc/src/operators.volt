@@ -555,6 +555,13 @@ attach fn assign(this: checker&, op: binop?, le: expr&, re: expr&, span: span) -
                 return this.ct_assign(op, p.segs.at(0).name, re, span);
             }
         },
+        .BUILTIN(n, g, a&) => {
+            val ap = ptr_of(a);
+            if (n == "field" && ap != null && ap->len == 2) {
+                val fe = try this.field_form(ap->at(0), ap->at(1), le.span);
+                return this.assign(op, &fe, re, span);
+            }
+        },
         default => {},
     }
     val l = try this.expr(le, null);

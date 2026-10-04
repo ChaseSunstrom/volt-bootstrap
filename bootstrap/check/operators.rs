@@ -329,6 +329,12 @@ impl Checker {
     /// `l = r` and the compound forms (`l += r`...). A plain `=` goes through store (the value moves
     /// in, the old one is deleted); a compound one evaluates the target once.
     pub(super) fn assign(&mut self, op: Option<BinOp>, le: &Expr, re: &Expr, span: Span) -> Res<Val> {
+        if let ExprKind::Builtin(n, _, Some(args)) = &le.kind {
+            if let ([b, f], "field") = (&args[..], n.as_str()) {
+                let fe = self.field_form(b, f, le.span)?;
+                return self.assign(op, &fe, re, span);
+            }
+        }
         if let ExprKind::Path(p) = &le.kind {
             if p.is_single() && self.const_local(&p.segs[0].name).is_some() {
                 return self.ct_assign(op, &p.segs[0].name, re, span);

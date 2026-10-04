@@ -261,6 +261,19 @@ attach fn garg_type(this: checker&, g: garg&) -> compile_error!u32 {
 }
 
 // a builtin's argument checked as an expression
+// @field(v, "name"): v's field of that name, worked out at compile time, as the v.name it is (read,
+// written, borrowed, narrowed like it)
+attach fn field_form(this: checker&, base: garg&, name: garg&, span: span) -> compile_error!expr {
+    val b = try this.garg_value(base);
+    val n = try this.garg_value(name);
+    var fname = S("");
+    match (try this.ct_eval(n, null)) {
+        .STR(s) => { fname = copy s; },
+        default => { return fails(n.span, "@field(v, \"name\"): the name is a comptime string"); },
+    }
+    return { kind: expr_kind::FIELD(bx(copy *b), this.intern(move fname), null), span: span };
+}
+
 attach fn garg_expr(this: checker&, g: garg&, want: u32?) -> compile_error!tval {
     val e = try this.garg_value(g);
     return this.expr(e, want);
@@ -303,6 +316,13 @@ attach fn builtin(this: checker&, name: str, gargs: std::vec<garg>&, args_opt: s
             return vpure(USIZE, this.ir.node(ir_kind::SIZEOF(t), USIZE));
         }
         return vpure(USIZE, this.ir.node(ir_kind::ALIGNOF(t), USIZE));
+    }
+    if (name == "field") {
+        if (args.len != 2) {
+            return fail(span, fmt("@{} takes 2 argument(s)", S(name)));
+        }
+        val fe = try this.field_form(args.at(0), args.at(1), span);
+        return this.expr(&fe, want);
     }
     if (name == "offsetof") {
         if (args.len != 2) {
