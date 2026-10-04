@@ -310,6 +310,7 @@ pub struct Field {
     pub default: Option<Expr>,
     pub vis: Vis,
     pub span: Span,
+    pub attrs: Vec<Expr>, // a library's attributes (@typeinfo's field_info.attributes)
 }
 
 #[derive(Clone, Debug)]

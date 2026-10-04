@@ -97,6 +97,7 @@ impl W {
                     w.opt(&f.default, |w, e| w.expr(e));
                     w.s(if f.vis == Vis::Internal { " internal" } else { " public" });
                     w.span(f.span);
+                    w.list(&f.attrs, |w, a| w.expr(a));
                     w.close();
                 });
                 self.flag(s.is_extern);

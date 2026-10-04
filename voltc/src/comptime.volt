@@ -637,12 +637,13 @@ attach fn ct_path(this: checker&, p: path&, want: u32?, span: span) -> compile_e
                             return fails(span, "this global has no value");
                         }
                         val genv = this.new_env({ ns: this.dl(d).ns });
-                        val gv = try this.ct_eval_in(genv, &g.init.value, null);
+                        // the declared type guides the value (a struct literal is that struct)
                         if (g.ty) {
                             val t = try this.resolve_type(&g.ty, genv);
-                            return this.ct_coerce(move gv, t, span);
+                            val tv = try this.ct_eval_in(genv, &g.init.value, t);
+                            return this.ct_coerce(move tv, t, span);
                         }
-                        return move gv;
+                        return this.ct_eval_in(genv, &g.init.value, null);
                     },
                     .STRUCT(s) => { return cval::TYPE(try this.resolve_type_path(p, env)); },
                     .ENUM(x) => { return cval::TYPE(try this.resolve_type_path(p, env)); },
@@ -2459,7 +2460,7 @@ attach fn typeinfo(this: checker&, t: u32, span: span) -> compile_error!cval {
                 put(&fields, cf("offset", this.opt_usize(off)));
                 put(&fields, cf("default_expr", cval::OPT(this.t.opt_of(STR), null)));
                 put(&fields, cf("visibility", kind_of("PUBLIC", null)));
-                put(&fields, cf("attributes", cval::ARRAY({}, VOID)));
+                put(&fields, cf("attributes", try this.field_attrs(sid, f.name)));
                 put(&out, rec1(move fields));
                 off += l.size;
             }
@@ -2531,7 +2532,92 @@ attach fn typeinfo(this: checker&, t: u32, span: span) -> compile_error!cval {
     put(&r, cf("is_comptime_only", cval::BOOL(t == TYPE)));
     put(&r, cf("generic_args", cval::ARRAY(move gargs, VOID)));
     put(&r, cf("visibility", kind_of("PUBLIC", null)));
+    // a struct's or enum's library attributes
+    var attributes = cval::TUPLE({});
+    match (*this.t.get(t)) {
+        .STRUCT(s) => { attributes = try this.user_attrs(&this.item_of(this.si(s).decl).attrs, this.si(s).env); },
+        .ENUM(e) => { attributes = try this.user_attrs(&this.item_of(this.ei(e).decl).attrs, this.ei(e).env); },
+        default => {},
+    }
+    put(&r, cf("attributes", move attributes));
     return rec1(move r);
+}
+
+// a library's attribute: a struct (or comptime fn) named and called, or a comptime value's name;
+// it's evaluated when @typeinfo reads it
+fn check_user_attr(a: expr&) -> compile_error!void {
+    match (a.kind) {
+        .PATH(p) => { return; },
+        .CALL(f, args) => {
+            match (f.kind) {
+                .PATH(p) => { return; },
+                default => {},
+            }
+        },
+        default => {},
+    }
+    return fails(a.span, "an attribute is a builtin (@inline) or a library's value (json::rename(\"id\"))");
+}
+
+// a library's attribute's value: a struct's name called like a function is that struct, its fields
+// filled in order (the rest take their defaults); anything else is a comptime value
+attach fn user_attr(this: checker&, e: expr&, env: u32) -> compile_error!cval {
+    match (e.kind) {
+        .CALL(callee, args&) => {
+            match (callee.kind) {
+                .PATH(p&) => {
+                    val as_ty = this.keep_ty({ kind: type_kind::PATH(copy *p), span: callee.span });
+                    val t = this.resolve_type(as_ty, env) catch |x| { return this.ct_eval_in(env, e, null); };
+                    match (*this.t.get(t)) {
+                        .STRUCT(sid) => {
+                            val fields = copy *(try this.struct_fields(sid, e.span));
+                            if (args.len > fields.len) {
+                                return fail(e.span, fmt3("{} has {} field(s), given {} values", this.ty_name(t), unum(@cast<u64>(fields.len)), unum(@cast<u64>(args.len))));
+                            }
+                            var entries: std::vec<lit_entry> = {};
+                            for (i) in 0..args.len {
+                                put(&entries, { name: fields.at(i).name, value: copy *args.at(i) });
+                            }
+                            val lit: expr = { kind: expr_kind::LITERAL(move entries), span: e.span };
+                            return this.ct_eval_in(env, &lit, t);
+                        },
+                        default => {},
+                    }
+                },
+                default => {},
+            }
+        },
+        default => {},
+    }
+    return this.ct_eval_in(env, e, null);
+}
+
+// the library attributes among attrs (the builtins mean something to the compiler, and aren't
+// listed), as a tuple
+attach fn user_attrs(this: checker&, attrs: std::vec<expr>&, env: u32) -> compile_error!cval {
+    var out: std::vec<cval> = {};
+    for (a&) in attrs.items() {
+        match (a.kind) {
+            .BUILTIN(n, g, x) => {},
+            default => { put(&out, try this.user_attr(a, env)); },
+        }
+    }
+    return cval::TUPLE(move out);
+}
+
+// struct sid's field name's library attributes
+attach fn field_attrs(this: checker&, sid: u32, name: str) -> compile_error!cval {
+    match (this.item_of(this.si(sid).decl).kind) {
+        .STRUCT(sd&) => {
+            for (f&) in sd.fields.items() {
+                if (f.name == name) {
+                    return this.user_attrs(&f.attrs, this.si(sid).env);
+                }
+            }
+        },
+        default => {},
+    }
+    return cval::TUPLE({});
 }
 
 // the FUNCTION kind of a fn pointer or fn value type
@@ -3030,7 +3116,7 @@ attach fn check_attr(this: checker&, a: expr&, file: u32) -> compile_error!void 
                 n_args = args.len;
             }
         },
-        default => { return fails(a.span, "attributes are builtins like @inline"); },
+        default => { return check_user_attr(a); },
     }
     if (name == "cfg") {
         if (n_args == 1 || n_args == 2) {

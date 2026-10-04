@@ -102,7 +102,7 @@ namespace fs {
         traits: str[..];              // implemented trait names, for quick listing
 
         // reflection and doc metadata
-        attributes: attribute[..]; // e.g. [@inline, @opt(3)]
+        attributes: (...);     // a library's attribute values, a tuple: (json::rename("id"),). The builtins aren't listed
         doc: str?;               // documentation comment
         visibility: visibility;
 
@@ -148,7 +148,7 @@ namespace fs {
         offset: usize?;          // offset in bytes if known/applicable
         default_expr: str?;      // textual default expression (comptime string)
         visibility: visibility;
-        attributes: attribute[..];
+        attributes: (...);       // a library's attribute values, a tuple (as on the type)
     }
 
     comptime struct variant_info {

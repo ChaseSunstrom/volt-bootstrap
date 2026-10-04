@@ -1085,7 +1085,7 @@ pub fn import(headers: &[String], dir: &FsPath, flags: &[String], span: Span) ->
             .fields
             .iter()
             .flatten()
-            .filter_map(|(n, t)| Some(Field { name: n.clone(), ty: m.ty(t)?, default: None, vis: Vis::Public, span }))
+            .filter_map(|(n, t)| Some(Field { name: n.clone(), ty: m.ty(t)?, default: None, vis: Vis::Public, span, attrs: Vec::new() }))
             .collect();
         items.push(m.item(ItemKind::Struct(StructDecl { name: name.clone(), spec: None, fields, is_extern: true, is_comptime: false, c_name: Some(c.clone()), c_union: s.union })));
     }

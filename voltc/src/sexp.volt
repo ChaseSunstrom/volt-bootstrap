@@ -193,6 +193,11 @@ attach fn item(this: sexp_writer&, it: item&) -> void {
                 this.opt_expr(&f.fallback);
                 this.vis(f.vis);
                 this.span(f.span);
+                this.out.append(" [");
+                for (a&) in f.attrs.items() {
+                    this.expr(a);
+                }
+                this.out.append(" ]");
                 this.close();
             }
             this.out.append(" ]");

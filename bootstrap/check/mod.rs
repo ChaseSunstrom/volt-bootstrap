@@ -532,6 +532,15 @@ impl Checker {
                 return err(a.span, "@thread_local goes on a global var (each thread gets its own)");
             }
         }
+        // a field takes a library's attributes only (the builtins are about declarations)
+        if let ItemKind::Struct(sd) = &item.kind {
+            for a in sd.fields.iter().flat_map(|f| &f.attrs) {
+                if let ExprKind::Builtin(n, _, _) = &a.kind {
+                    return err(a.span, format!("@{n} goes on a declaration, not a field"));
+                }
+                Self::check_user_attr(a)?;
+            }
+        }
         // @cfg(...) false: the item isn't in this build at all
         if !self.item_cfg_on(&item.attrs)? {
             return Ok(());

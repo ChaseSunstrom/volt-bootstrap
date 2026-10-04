@@ -487,6 +487,15 @@ attach fn item(this: parser&) -> compile_error!item {
             try this.expect("{");
             while (!this.eat("}")) {
                 val fstart = this.span();
+                var fattrs: std::vec<expr> = {};
+                match (*this.tok()) {
+                    .BUILTIN(s) => {
+                        if (s == "attributes") {
+                            fattrs = try this.attributes();
+                        }
+                    },
+                    default => {},
+                }
                 var fvis = vis::PUBLIC;
                 if (this.eat_kw("internal")) {
                     fvis = vis::INTERNAL;
@@ -503,7 +512,7 @@ attach fn item(this: parser&) -> compile_error!item {
                 if (!this.eat(";") && !this.eat(",") && !this.is("}")) {
                     return this.unexpected("';' after field");
                 }
-                put(&fields, { name: fname, ty: move t, fallback: move fallback, vis: fvis, span: fstart.to(this.prev_span()) });
+                put(&fields, { name: fname, ty: move t, fallback: move fallback, vis: fvis, span: fstart.to(this.prev_span()), attrs: move fattrs });
             }
         }
         kind = item_kind::STRUCT({ name: name, spec: move spec, fields: move fields, is_extern: is_extern, is_comptime: is_comptime, is_export: is_export });
@@ -634,15 +643,17 @@ attach fn attributes(this: parser&) -> compile_error!std::vec<expr> {
     try this.expect("[");
     var out: std::vec<expr> = {};
     while (!this.eat("]")) {
+        // a builtin (@inline), or a library's attribute: a value (json::rename("id"))
         var is_b = false;
         match (*this.tok()) {
             .BUILTIN(s) => { is_b = true; },
             default => {},
         }
-        if (!is_b) {
-            return this.unexpected("an attribute like @inline");
+        if (is_b) {
+            put(&out, try this.builtin());
+        } else {
+            put(&out, try this.expr());
         }
-        put(&out, try this.builtin());
         if (!this.eat(",") && !this.is("]")) {
             return this.unexpected("',' or ']'");
         }

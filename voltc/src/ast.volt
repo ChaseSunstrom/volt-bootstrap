@@ -297,6 +297,7 @@ struct field {
     fallback: expr?;
     vis: vis;
     span: span;
+    attrs: std::vec<expr> = {}; // a library's attributes (@typeinfo's field_info.attributes)
 }
 
 struct struct_decl {

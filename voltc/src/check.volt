@@ -603,6 +603,20 @@ attach fn collect_item(this: checker&, it: item&, ns: u32, parent: u32?) -> comp
             }
         }
     }
+    // a field takes a library's attributes only (the builtins are about declarations)
+    match (it.kind) {
+        .STRUCT(sd&) => {
+            for (f&) in sd.fields.items() {
+                for (a&) in f.attrs.items() {
+                    match (a.kind) {
+                        .BUILTIN(n, g, x) => { return fail(a.span, fmt("@{} goes on a declaration, not a field", S(n))); },
+                        default => { try check_user_attr(a); },
+                    }
+                }
+            }
+        },
+        default => {},
+    }
     // @cfg(...) false: the item isn't in this build at all
     if (!(try this.item_cfg_on(&it.attrs))) {
         return;

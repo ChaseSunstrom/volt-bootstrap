@@ -467,8 +467,9 @@ fn main() -> void {
 
 ## Attributes
 
-`@attributes([...])` before a declaration attaches compile-time attributes. Only known ones are
-accepted, so a typo is an error.
+`@attributes([...])` before a declaration attaches compile-time attributes: the builtins below
+(only known ones are accepted, so a typo is an error), and a library's own (see
+[Your own attributes](#your-own-attributes)).
 
 | Attribute | Meaning |
 | --- | --- |
@@ -532,3 +533,65 @@ fn main() -> !void {
 // expect: 1
 // expect: 3
 ```
+
+### Your own attributes
+
+A library's attributes are plain structs. In `@attributes([...])`, a struct's name called like a
+function is that struct, its fields filled in order (the rest take their defaults); a comptime
+function's call, or a comptime value's name, works too. They go on declarations and on struct fields, and `@typeinfo` gives them
+as a tuple: `@typeinfo(T).attributes`, and each field's `attributes`. A serializer looks through
+them with `comptime for` and `@typeof`:
+
+```volt
+use std::io;
+
+namespace ser {
+    struct rename {
+        to: str;
+    }
+
+    struct skip {}
+}
+
+struct user {
+    @attributes([ser::rename("user_id")])
+    id: u32;
+    name: str;
+    @attributes([ser::skip()])
+    password: str;
+}
+
+<T: type>
+fn keys(v: T&) -> std::string {
+    var out: std::string = {};
+    comptime match (@typeinfo(T).kind) {
+        .STRUCT(s) => {
+            comptime for (f) in s.0 {
+                comptime var key = f.name;
+                comptime var skipped = false;
+                comptime for (a) in f.attributes {
+                    comptime if (@typeof(a) == ser::rename) {
+                        key = a.to;
+                    } else comptime if (@typeof(a) == ser::skip) {
+                        skipped = true;
+                    }
+                }
+                comptime if (!skipped) {
+                    std::fmt::write(&out, "{}={} ", key, @field(v, f.name));
+                }
+            }
+        },
+        default => {},
+    }
+    return move out;
+}
+
+fn main() -> void {
+    val u: user = { id: 7, name: "ada", password: "-" };
+    std::println("{}", keys(&u));
+}
+// expect: user_id=7 name=ada
+```
+
+An attribute is evaluated when `@typeinfo` reads it, so one naming nothing is an error then. A field
+takes only a library's attributes; the builtins are about declarations.

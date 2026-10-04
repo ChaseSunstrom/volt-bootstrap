@@ -337,6 +337,7 @@ impl<'a> Parser<'a> {
                 self.expect("{")?;
                 while !self.eat("}") {
                     let fstart = self.span();
+                    let fattrs = if matches!(self.tok(), Tok::Builtin(s) if s == "attributes") { self.attributes()? } else { Vec::new() };
                     let fvis = if self.eat_kw("internal") {
                         Vis::Internal
                     } else {
@@ -350,7 +351,7 @@ impl<'a> Parser<'a> {
                     if !self.eat(";") && !self.eat(",") && !self.is("}") {
                         return self.unexpected("';' after field");
                     }
-                    fields.push(Field { name: fname, ty, default, vis: fvis, span: fstart.to(self.prev_span()) });
+                    fields.push(Field { name: fname, ty, default, vis: fvis, span: fstart.to(self.prev_span()), attrs: fattrs });
                 }
             }
             ItemKind::Struct(StructDecl { name, spec, fields, is_extern, is_comptime, c_name: None, c_union: false })
@@ -450,10 +451,12 @@ impl<'a> Parser<'a> {
         self.expect("[")?;
         let mut out = Vec::new();
         while !self.eat("]") {
-            if !matches!(self.tok(), Tok::Builtin(_)) {
-                return self.unexpected("an attribute like @inline");
+            // a builtin (@inline), or a library's attribute: a value (json::rename("id"))
+            if matches!(self.tok(), Tok::Builtin(_)) {
+                out.push(self.builtin()?);
+            } else {
+                out.push(self.expr()?);
             }
-            out.push(self.builtin()?);
             if !self.eat(",") && !self.is("]") {
                 return self.unexpected("',' or ']'");
             }

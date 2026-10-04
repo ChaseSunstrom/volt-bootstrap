@@ -427,13 +427,14 @@ impl Checker {
                         }
                         let Some(init) = &l.init else { return cerr(span, "this global has no value") };
                         let genv = Rc::new(Env { ns: self.decls[d].ns, generics: Vec::new() });
-                        let v = self.ct_eval_in(genv.clone(), init, None)?;
+                        // the declared type guides the value (a struct literal is that struct)
                         match &l.ty {
                             Some(t) => {
                                 let t = self.resolve_type(t, &genv)?;
+                                let v = self.ct_eval_in(genv.clone(), init, Some(t))?;
                                 self.ct_coerce(v, t, span)
                             }
-                            None => Ok(v),
+                            None => Ok(self.ct_eval_in(genv.clone(), init, None)?),
                         }
                     }
                     ItemKind::Struct(_) | ItemKind::Enum(_) | ItemKind::Trait { .. } => {
@@ -1489,18 +1490,27 @@ impl Checker {
             Ty::Tuple(ts, _) => Self::kind("TUPLE", Some(types(&ts))),
             Ty::Struct(sid) => {
                 let fields = self.struct_fields(sid, span)?;
+                let env = self.structs[sid as usize].env.clone();
+                let decl_fields = match &self.decls[self.structs[sid as usize].decl].item.kind {
+                    ItemKind::Struct(sd) => sd.fields.clone(),
+                    _ => Vec::new(),
+                };
                 let mut out = Vec::new();
                 let mut off = 0u64;
                 for f in fields.iter() {
                     let (s, a) = self.layout(f.ty, span)?;
                     off = off.div_ceil(a.max(1)) * a.max(1);
+                    let attrs = match decl_fields.iter().find(|d| d.name == f.name) {
+                        Some(d) => self.user_attrs(&d.attrs, &env)?,
+                        None => CVal::Tuple(Vec::new()),
+                    };
                     out.push(Self::rec(vec![
                         ("name", CVal::Str(f.name.clone().into_bytes())),
                         ("field_type", CVal::Type(f.ty)),
                         ("offset", opt_usize(Some(off))),
                         ("default_expr", CVal::Opt(opt_str, None)),
                         ("visibility", Self::kind("PUBLIC", None)),
-                        ("attributes", CVal::Array(Vec::new(), VOID)),
+                        ("attributes", attrs),
                     ]));
                     off += s;
                 }
@@ -1560,6 +1570,20 @@ impl Checker {
             })
             .collect();
         let is_pod = !self.needs_drop(t)?;
+        // a struct's or enum's library attributes
+        let attributes = match self.t.get(t).clone() {
+            Ty::Struct(s) => {
+                let (d, env) = (self.structs[s as usize].decl, self.structs[s as usize].env.clone());
+                let attrs = self.decls[d].item.attrs.clone();
+                self.user_attrs(&attrs, &env)?
+            }
+            Ty::Enum(e) => {
+                let (d, env) = (self.enums[e as usize].decl, self.enums[e as usize].env.clone());
+                let attrs = self.decls[d].item.attrs.clone();
+                self.user_attrs(&attrs, &env)?
+            }
+            _ => CVal::Tuple(Vec::new()),
+        };
         Ok(Self::rec(vec![
             ("id", CVal::Int(t as i128, int(IntTy::U128))),
             ("canonical_name", CVal::Str(full.into_bytes())),
@@ -1573,6 +1597,7 @@ impl Checker {
             ("is_comptime_only", CVal::Bool(t == TYPE)),
             ("generic_args", CVal::Array(gargs, VOID)),
             ("visibility", Self::kind("PUBLIC", None)),
+            ("attributes", attributes),
         ]))
     }
 
@@ -1851,7 +1876,7 @@ impl Checker {
 
     /// rejects unknown attributes and wrong argument counts; @intrinsic is allowed only in package files
     pub fn check_attr(&self, a: &Expr, file: u32) -> Res<()> {
-        let ExprKind::Builtin(name, _, args) = &a.kind else { return err(a.span, "attributes are builtins like @inline") };
+        let ExprKind::Builtin(name, _, args) = &a.kind else { return Self::check_user_attr(a) };
         if (name == "intrinsic" || name == "runtime") && self.opts.pkg_files.contains_key(&file) {
             return Ok(());
         }
@@ -1870,6 +1895,49 @@ impl Checker {
                 err(a.span, format!("unknown attribute @{name} (there are: {})", known.join(", ")))
             }
         }
+    }
+
+    /// a library's attribute: a struct (or comptime fn) named and called, or a comptime value's name;
+    /// it's evaluated when @typeinfo reads it
+    pub fn check_user_attr(a: &Expr) -> Res<()> {
+        match &a.kind {
+            ExprKind::Path(_) => Ok(()),
+            ExprKind::Call(f, _) if matches!(f.kind, ExprKind::Path(_)) => Ok(()),
+            _ => err(a.span, "an attribute is a builtin (@inline) or a library's value (json::rename(\"id\"))"),
+        }
+    }
+
+    /// a library's attribute's value: a struct's name called like a function is that struct, its
+    /// fields filled in order (the rest take their defaults); anything else is a comptime value
+    pub fn user_attr(&mut self, e: &Expr, env: &Rc<Env>) -> Res<CVal> {
+        if let ExprKind::Call(callee, args) = &e.kind {
+            if let ExprKind::Path(p) = &callee.kind {
+                let as_ty = Type { kind: TypeKind::Path(p.clone()), span: callee.span };
+                if let Ok(t) = self.resolve_type(&as_ty, env) {
+                    if let Ty::Struct(sid) = self.t.get(t).clone() {
+                        let fields = self.struct_fields(sid, e.span)?;
+                        if args.len() > fields.len() {
+                            return err(e.span, format!("{} has {} field(s), given {} values", self.ty_name(t), fields.len(), args.len()));
+                        }
+                        let entries = args.iter().zip(fields.iter()).map(|(a, f)| (Some(f.name.clone()), a.clone())).collect();
+                        return self.ct_eval_in(env.clone(), &Expr { kind: ExprKind::Literal(entries), span: e.span }, Some(t));
+                    }
+                }
+            }
+        }
+        self.ct_eval_in(env.clone(), e, None)
+    }
+
+    /// the library attributes among attrs (the builtins mean something to the compiler, and aren't
+    /// listed), as a tuple
+    fn user_attrs(&mut self, attrs: &[Expr], env: &Rc<Env>) -> Res<CVal> {
+        let mut out = Vec::new();
+        for a in attrs {
+            if !matches!(a.kind, ExprKind::Builtin(..)) {
+                out.push(self.user_attr(a, env)?);
+            }
+        }
+        Ok(CVal::Tuple(out))
     }
 
     /// an attribute's first argument as text (an int or a string)
