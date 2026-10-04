@@ -146,6 +146,16 @@ fn main() -> void {
 | `std::unique_ptr<T>`, `std::shared_ptr<T>` | `stdcxx::unique_ptr<T>`, `stdcxx::shared_ptr<T>`: `get()`, and `use_count()` for the shared one; deleting one is C++'s destructor, copying a shared one adds an owner |
 | operators | methods and functions named after them: `op_add` (`+`), `op_sub`, `op_mul`, `op_div`, `op_rem`, `op_eq`, `op_ne`, `op_lt`, `op_le`, `op_gt`, `op_ge`, `op_index` (`[]`), `op_call` (`()`), `op_neg` (unary `-`), `op_not`, `op_add_assign` (`+=`)... |
 | `T&&` parameters | `T`: Volt hands the value over and C++ moves from it |
+| a `T&&` result | `T`: a copy of what it refers to (for a class held by handle, a new object moved from it) |
+| a `const` or `constexpr` constant (a number, `bool`, enum or text) in a namespace | a `val` of its value |
+| a static data member `m` | `T::m()` (a copy) and `T::set_m(v)` when it can be assigned |
+| a class or enum inside a class (`Outer::Inner`) | `Outer_Inner`, beside `Outer` (an unscoped enum's names stay in it: `Outer_Mode::Low`) |
+| `operator T()` (explicit or not) | `to_T()`: `to_bool()`, `to_i32()`, `to_string()` |
+| `operator=` | `assign(v)` |
+| a method template | a generic method: `c.cast_to<f64>()` |
+| a `std::function<R(A...)>` parameter | `fn(A...) -> R`: a closure or function; C++ calls it while the call lasts (it mustn't keep it) |
+| a `std::function` result | `stdcxx::function`: `call(...)` runs it, and it's deleted with the Volt value |
+| a `std::function` field | a getter only: setting it from a Volt closure would keep the closure past the call |
 
 A function that can throw (it isn't `noexcept`) also gets a `try_` form that returns the exception
 as a `cpp_error` instead of stopping the program. Its variant says which exception it was:
@@ -211,9 +221,14 @@ fn main() -> void {
 
 ## Limits
 
-- What doesn't map is left out, with a comment in the generated source: an rvalue reference
-  result, a standard library type other than those above (or a non-const reference to one),
-  assignment and conversion operators.
+- What doesn't map is left out, with a comment in the generated source: a standard library type
+  other than those above (or a non-const reference to one), a `std::function` whose signature has a
+  class in it (other than text), variadic templates, a lambda's own type (take a `std::function`),
+  and function-like macros. A constant whose value clang can't work out (or a variable that isn't
+  `const`) isn't a `val`.
+- Generic arguments written on a method template's call parse when there's one of them or the
+  call passes nothing (`x.get<i32>()`, `x.pair<i32, f64>()`); otherwise they come from the call's
+  arguments, as a generic function's can.
 - A C++ exception that reaches Volt through a function's plain form stops the program, like a
   panic; its `try_` form returns it as an error. Either way it never passes through Volt frames, and
   a Volt panic (in a method C++ calls, say) ends the program without unwinding through C++'s.

@@ -852,6 +852,17 @@ fn cpp_rtti() {
 }
 
 #[test]
+fn cpp_surface() {
+    // constants, static members, nested classes, conversion and assignment operators, T&& results,
+    // member templates, and std::function both ways (a Volt closure in, a C++ callable out)
+    let e = Env::new("cpp-surface");
+    let want = "42 1.5 true kit \"tools\" 1\n10 true 3\n12 1.5 12\ncreated 4\nreg k 42\nstolen 9\n41\n1.5\ntrue\n6 42\ntrue 1 1\n15 8\n";
+    for backend in ["c", "llvm"] {
+        assert_eq!(ok(e.voltc(&["run", "cpp_surface.volt", "--backend", backend]), "voltc run cpp_surface.volt"), want, "C++ surface ({backend})");
+    }
+}
+
+#[test]
 fn cpp_import() {
     let e = Env::new("cpp");
     let want = "make 2 3\narea 6\nfields 5 6\nscaled 60 15\ncount 7 name rect\nmake 4 4\nkind 4 1\ntotal 46\ncopy 4 4\ncopied 16\ndrop 4 4\ndrop 4 4\ndrop 5 6\nadd 3 3.5\nbiggest 9 2.5\nbox 6\nenum 4 1\nsize 16 16\nrings 20 true\nnamed short#5 5 5 6\ncopy keeps 5 9\nshelf 8 record 7 20 1/2 registry 3\n";
