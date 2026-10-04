@@ -53,7 +53,9 @@ In a bolt package, a file under `src/` is checked together with the other files 
 | `volt.inlayHints.closingBraces` | `true` | what a block of 25 lines or more closes, after its `}` |
 
 **Volt: Restart Language Server** restarts it (after rebuilding voltc, say). **Volt: Run This
-Program** runs the open file, as the **Run** lens above `main` does.
+Program** runs the open file, as the **Run** lens above `main` does. **Volt: Expand Comptime** shows
+what the comptime code on the cursor's line (or in the file) became, beside it: values, `comptime
+if` branches, generic instances, `@emit` and `@derive` output.
 
 ## Other editors
 

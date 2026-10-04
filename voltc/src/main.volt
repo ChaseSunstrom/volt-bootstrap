@@ -36,12 +36,13 @@ struct cli {
     format: u8 = 0;     // --message-format (FORMAT_HUMAN, FORMAT_SHORT, FORMAT_JSON)
     color: str = "auto"; // --color auto|always|never
     error_limit: usize = 20; // --error-limit: errors shown (0: all)
+    expand_line: usize = 0;  // voltc expand FILE:LINE (0: every line)
     // everything after `--`: the arguments for `run`'s program
     prog_args: std::vec<str> = {};
 }
 
 fn usage() -> never {
-    std::eprintln("usage: voltc <command> FILES... [options]\ncommands:\n  parse FILE --sexp       parse only\n  check FILES            type check\n  emit-c FILES [-o DIR]  print the generated C, or write it as files to DIR\n  emit-llvm FILES        print the generated LLVM IR\n  build FILES [-o OUT]   compile to an executable\n  run FILES [-- ARGS]    build and run\n  lib NAME [-o OUT.a]    precompile package NAME's non-generic code into a static library; with\n                         --shared (OUT.so) or --static, a self-contained library other languages link\n  bindings NAME --lang L bindings of package NAME's export fns for L: c, cpp, rust, zig, python, pyi\n                         (its stubs), csharp, java, go, lua (a C module), dart, swift, kotlin, ruby (a C\n                         extension), node (a Node-API addon's C), js (its loader), ts (its types), or\n                         json (the model, for generators of your own)\n  std-dir                print where the std package is\n  lsp                    the language server for editors (JSON-RPC on stdin and stdout)\n  doc NAME               package NAME's declarations and their comments, as JSON\noptions:\n  --release              optimize, wrap on overflow instead of trapping\n  --leak-check           debug: exit 102 if runtime allocations were never freed\n  --profiler             sample where the program spends its time (bolt hot reads it): line info,\n                         frame pointers, and a sampler that writes $VOLT_PROFILE_OUT at exit\n  --std DIR | --no-std   where the std package is (default: $VOLT_STD, then next to voltc)\n  --pkg NAME=PATH        a package: PATH's .volt files, wrapped in namespace NAME\n  --cfg [PKG:]KEY[=VAL]  set KEY (to VAL) for @cfg in the program's files, or in package PKG's\n  --lib NAME             check: package NAME alone, as a library (no program files, no main)\n  --link NAME=LIB.a      take package NAME's non-generic code from a library built by voltc lib\n  --cc ARG               pass ARG to the C compiler when linking (a .c file, -lNAME, ...)\n  --message-format F     how errors are printed: human (default), short (one line each) or json\n  --color WHEN           colour errors: auto (default: on a terminal, unless NO_COLOR is set), always, never\n  --error-limit N        show at most N errors (default 20; 0: all of them)\n  --backend c|llvm       generate C, or native code through LLVM (the default on x86-64 but for\n                         Windows; a program LLVM can't lower falls back to C)\n  --target T             bare metal through LLVM, linked by ld.lld with no C at all: riscv32-none,\n                         riscv64-none, thumbv7m-none or thumbv7em-none\n  --link-script FILE     the linker script for --target (memory layout, the start code's symbols)");
+    std::eprintln("usage: voltc <command> FILES... [options]\ncommands:\n  parse FILE --sexp       parse only\n  check FILES            type check\n  expand FILE[:LINE] ... what the comptime code (on that line) became: values, branches, comptime\n                         for copies, generic instances, @emit and @derive output\n  emit-c FILES [-o DIR]  print the generated C, or write it as files to DIR\n  emit-llvm FILES        print the generated LLVM IR\n  build FILES [-o OUT]   compile to an executable\n  run FILES [-- ARGS]    build and run\n  lib NAME [-o OUT.a]    precompile package NAME's non-generic code into a static library; with\n                         --shared (OUT.so) or --static, a self-contained library other languages link\n  bindings NAME --lang L bindings of package NAME's export fns for L: c, cpp, rust, zig, python, pyi\n                         (its stubs), csharp, java, go, lua (a C module), dart, swift, kotlin, ruby (a C\n                         extension), node (a Node-API addon's C), js (its loader), ts (its types), or\n                         json (the model, for generators of your own)\n  std-dir                print where the std package is\n  lsp                    the language server for editors (JSON-RPC on stdin and stdout)\n  doc NAME               package NAME's declarations and their comments, as JSON\noptions:\n  --release              optimize, wrap on overflow instead of trapping\n  --leak-check           debug: exit 102 if runtime allocations were never freed\n  --profiler             sample where the program spends its time (bolt hot reads it): line info,\n                         frame pointers, and a sampler that writes $VOLT_PROFILE_OUT at exit\n  --std DIR | --no-std   where the std package is (default: $VOLT_STD, then next to voltc)\n  --pkg NAME=PATH        a package: PATH's .volt files, wrapped in namespace NAME\n  --cfg [PKG:]KEY[=VAL]  set KEY (to VAL) for @cfg in the program's files, or in package PKG's\n  --lib NAME             check: package NAME alone, as a library (no program files, no main)\n  --link NAME=LIB.a      take package NAME's non-generic code from a library built by voltc lib\n  --cc ARG               pass ARG to the C compiler when linking (a .c file, -lNAME, ...)\n  --message-format F     how errors are printed: human (default), short (one line each) or json\n  --color WHEN           colour errors: auto (default: on a terminal, unless NO_COLOR is set), always, never\n  --error-limit N        show at most N errors (default 20; 0: all of them)\n  --backend c|llvm       generate C, or native code through LLVM (the default on x86-64 but for\n                         Windows; a program LLVM can't lower falls back to C)\n  --target T             bare metal through LLVM, linked by ld.lld with no C at all: riscv32-none,\n                         riscv64-none, thumbv7m-none or thumbv7em-none\n  --link-script FILE     the linker script for --target (memory layout, the start code's symbols)");
     std::process::exit(2);
 }
 
@@ -189,7 +190,19 @@ fn parse_cli() -> cli {
         } else if (a.len > 0 && a[0] == '-') {
             die(fmt("unknown option '{}'", S(a)));
         } else {
-            put(&c.files, a);
+            // voltc expand FILE:LINE: a trailing :digits is the line
+            var at = a.len;
+            while (at > 0 && a[at - 1] >= '0' && a[at - 1] <= '9') {
+                at -= 1;
+            }
+            if (c.cmd == "expand" && at > 1 && at < a.len && a[at - 1] == ':') {
+                for (k) in at..a.len {
+                    c.expand_line = c.expand_line * 10 + @cast<usize>(a[k] - '0');
+                }
+                put(&c.files, a[0..at - 1]);
+            } else {
+                put(&c.files, a);
+            }
         }
     }
     if (c.files.len == 0 && c.cmd != "std-dir" && c.cmd != "lsp" && !(c.cmd == "check" && c.lib != null)) {
@@ -560,7 +573,7 @@ fn compile_with(c: cli&, s: sources&, shim: shim_src*) -> std::box<checker> {
         }
     }
     // the runtime lives in the program's own C unit, never in a library
-    var o: opts = { release: c.release, leak_check: c.leak_check, guards: move guards, lib: lib, runtime: lib == null || c.shared || c.standalone, cfg: copy c.cfg, pp_flags: preprocessor_flags(&c.cc_args), line_info: c.profiler || (c.llvm && !c.release && (c.cmd == "build" || c.cmd == "run")), target: c.target };
+    var o: opts = { release: c.release, leak_check: c.leak_check, guards: move guards, lib: lib, runtime: lib == null || c.shared || c.standalone, cfg: copy c.cfg, pp_flags: preprocessor_flags(&c.cc_args), expand: c.cmd == "expand", line_info: c.profiler || (c.llvm && !c.release && (c.cmd == "build" || c.cmd == "run")), target: c.target };
     for (u&) in s.units.items() {
         if (u.pkg) {
             put(&o.pkg_files, { file: u.file, pkg: u.pkg});
@@ -642,6 +655,18 @@ fn main() -> i32 {
     if (c.cmd == "check") {
         var s: sources = {};
         compile_cli(&c, &s);
+        return 0;
+    }
+    if (c.cmd == "expand") {
+        var s: sources = {};
+        val chk = compile_cli(&c, &s);
+        for (e&) in chk.expansions.items() {
+            val f = chk.files.at(@cast<usize>(e.at.file));
+            val lc = chk.line_col(e.at);
+            if (f.name == *c.files.at(0) && (c.expand_line == 0 || lc.line == c.expand_line)) {
+                std::println("{}:{}:{}: {}", f.name, lc.line, lc.col, e.text);
+            }
+        }
         return 0;
     }
     if (c.cmd == "emit-c") {

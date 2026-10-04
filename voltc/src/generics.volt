@@ -1445,6 +1445,12 @@ attach fn resolve_rest(this: checker&, name: str, cands: std::vec<u32>&, rp: tva
 // tuple, C varargs are promoted), and fill in defaults, checked in the callee's env. A temporary
 // made to pass a receiver by reference is deleted after the call.
 attach fn emit_call(this: checker&, inst: u32, a: adj, rv: tval?, pre: std::vec<tval?>&, args: std::vec<expr>&, span: span) -> compile_error!tval {
+    if (this.expand_span != null && same_span(this.expand_span ?? span, span)) {
+        this.last_call = inst;
+    }
+    if ((this.opts.expand || this.opts.lsp) && this.fi(inst).env != 0 && this.env_at(this.fi(inst).env).generics.len > 0) {
+        this.expanded(span, fmt("calls {}", this.inst_label(inst)));
+    }
     if (this.opts.lsp) {
         this.lsp_fn_use(this.fi(inst).decl, inst, span);
     }

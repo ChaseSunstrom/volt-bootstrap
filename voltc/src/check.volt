@@ -321,6 +321,7 @@ struct opts {
     cfg: std::vec<cfg_arg> = {};        // --cfg, for @cfg
     pp_flags: std::vec<str> = {};       // the --cc flags the C preprocessor needs (-I, -D...)
     lsp: bool = false;                  // record names for the language server (lsp.volt)
+    expand: bool = false;               // record what comptime code became (voltc expand, the LSP)
     line_info: bool = false;            // mark each statement's source line in the IR (--profiler)
     target: str? = null;                // --target (target.volt): bare metal, through LLVM
 }
@@ -382,6 +383,9 @@ struct checker {
     derive_items: std::vec<std::box<item>> = {}; // the attach blocks @derive made
     derive_blocks: std::map<u32, bool> = {};     // their decls (a trait not in scope is std::derive's)
     pending_emits: std::vec<pending_emit> = {};  // the @emit(...)s collected and not yet run
+    expand_span: span? = null;                   // @expand of a call: the call's span,
+    last_call: u32? = null;                      // and the fn instance emitted there
+    expansions: std::vec<expansion> = {};        // what comptime code became, by span (opts.expand or opts.lsp)
     emit_texts: std::vec<std::string> = {};      // the source each @emit gave (its file's text)
     emit_items: std::vec<std::box<std::vec<item>>> = {}; // and what it declared
     unions: std::vec<std::box<union_info>> = {};
@@ -747,6 +751,19 @@ attach fn collect_item(this: checker&, it: item&, ns: u32, parent: u32?) -> comp
 // how many @emits a program may run (one whose code emits itself would never stop)
 val MAX_EMITS: usize = 10000;
 
+// what the code at a span became: a comptime value, a branch taken, an instance called, emitted source
+struct expansion {
+    at: span;
+    text: std::string;
+}
+
+// note what the code at span became, when the LSP or voltc expand asks
+attach fn expanded(this: checker&, at: span, text: std::string) -> void {
+    if (this.opts.expand || this.opts.lsp) {
+        put(&this.expansions, { at: at, text: move text });
+    }
+}
+
 // an @emit(...) waiting to run, and the namespace it's in
 struct pending_emit {
     e: expr*;
@@ -792,6 +809,7 @@ attach fn run_emits(this: checker&) -> compile_error!void {
         fname.push(':');
         fname.append_uint(@cast<u64>(lc.line));
         fname.push('>');
+        this.expanded(e.span, S(text.as_str().trim()));
         put(&this.emit_texts, move text);
         val src = this.emit_texts.at(this.emit_texts.len - 1).as_str();
         put(this.files, { name: this.intern(move fname), text: src });
@@ -844,6 +862,21 @@ attach fn collect_derives(this: checker&, it: item&, ns: u32) -> compile_error!v
                         put(&segs, { name: name, args: null });
                     }
                     val target: ty = { kind: type_kind::PATH({ segs: move segs, span: sp }), span: sp };
+                    if (this.opts.expand || this.opts.lsp) {
+                        var tn: std::string = {};
+                        match (trt.kind) {
+                            .PATH(tp&) => {
+                                for (k) in 0..tp.segs.len {
+                                    if (k > 0) {
+                                        tn.append("::");
+                                    }
+                                    tn.append(tp.segs.at(k).name);
+                                }
+                            },
+                            default => {},
+                        }
+                        this.expanded(sp, fmt2("attach {} -> {} {{}}", move tn, S(name)));
+                    }
                     put(&this.derive_items, bx<item>({ kind: item_kind::ATTACH(move trt, move target, {}), span: sp, attrs: {}, vis: it.vis, generics: copy it.generics }));
                     val id = @cast<u32>(this.decls.len);
                     try this.collect_item(*this.derive_items.at(this.derive_items.len - 1), ns, null);

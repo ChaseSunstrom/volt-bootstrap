@@ -15,6 +15,9 @@ The extension in `editors/vscode` gives VS Code:
   calls, what a long block closes), code lenses
   (references, the fns and traits attached to a type, **Run** above `main`), highlights, rename,
   folding and quick fixes (see [the language server](/volt-bootstrap/editors/lsp/));
+- **Volt: Expand Comptime** (command palette): what the comptime code on the cursor's line (or in
+  the file) became, beside it: values, `comptime if` branches, generic instances, `@emit` and
+  `@derive` output;
 - snippets (`main`, `fn`, `attach`, `struct`, `enum`, `error`, `match`, `for`, `usec`...);
 - bolt tasks (check, build, build --release, run, test, clean) in folders with a `bolt.toml`, and
   the `$volt` problem matcher, which links voltc's errors to the code.

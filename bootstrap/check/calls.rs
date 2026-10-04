@@ -229,6 +229,33 @@ impl Checker {
                 let c = self.cty(t);
                 Ok(Val::pure(USIZE, format!("((size_t){}({c}))", if name == "sizeof" { "sizeof" } else { "_Alignof" })))
             }
+            "expand" => {
+                // @expand(x): x, and a note saying what it became: a comptime value, or the fn
+                // instance a call runs
+                n_args(1)?;
+                let x = Self::garg_value(&args[0])?;
+                // a call names its instance; anything else known at compile time, its value
+                let known = if matches!(x.kind, ExprKind::Call(..)) && !self.is_ct_expr(&x) { None } else { self.ct_eval(&x, want).ok() };
+                let (v, what) = if let Some(c) = known {
+                    let v = self.ct_to_val(c.clone(), want, span)?;
+                    let what = format!("{} ({})", self.cval_text(&c), self.ty_name(v.ty));
+                    (v, what)
+                } else {
+                    // the call x is, not one in its arguments
+                    let outer = self.expand_span.replace(x.span);
+                    self.last_call = None;
+                    let v = self.expr(&x, want);
+                    self.expand_span = outer;
+                    let v = v?;
+                    let what = match (self.last_call, &x.kind) {
+                        (Some(i), ExprKind::Call(..)) => format!("a call of {}", self.inst_label(i)),
+                        _ => format!("a value of type {}", self.ty_name(v.ty)),
+                    };
+                    (v, what)
+                };
+                self.warnings.push(Diag { severity: crate::diag::Severity::Warning, ..Diag::new(span, format!("expands to {what}")) });
+                Ok(v)
+            }
             "field" => {
                 n_args(2)?;
                 let f = self.field_form(&args[0], &args[1], span)?;

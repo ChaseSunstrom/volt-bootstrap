@@ -1,6 +1,6 @@
 // Runs inside VS Code's extension host (see run.js): the language server has to find voltc by
 // itself, then report the error in bad.volt, complete std::, hover over a function, and show
-// semantic tokens, inlay hints and code lenses.
+// semantic tokens, inlay hints and code lenses, and expand a generic call (Volt: Expand Comptime).
 const assert = require("node:assert");
 const path = require("node:path");
 const vscode = require("vscode");
@@ -72,4 +72,17 @@ exports.run = async function () {
     return titles.includes("1 reference") && titles.some((t) => t && t.endsWith("Run")) ? titles : undefined;
   });
   console.log(`code lenses: ${lenses.join(", ")}`);
+
+  // Volt: Expand Comptime on a generic call's line: a document beside it names the instance
+  const ex = await vscode.workspace.openTextDocument(vscode.Uri.file(path.join(root, "expand.volt")));
+  const call = at(ex, "twice(21)", 0);
+  const shown = await until("the expansion of twice(21)", async () => {
+    // the command opens a document beside it: back to expand.volt before each try
+    const editor = await vscode.window.showTextDocument(ex, vscode.ViewColumn.One);
+    editor.selection = new vscode.Selection(call, call);
+    await vscode.commands.executeCommand("volt.expand");
+    const t = vscode.window.activeTextEditor?.document.getText() ?? "";
+    return t.includes("calls twice<i32>(v: i32) -> i32") ? t : undefined;
+  });
+  console.log(`expand: ${shown.trim().split("\n").pop()}`);
 };

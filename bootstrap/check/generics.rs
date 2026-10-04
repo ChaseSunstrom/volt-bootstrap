@@ -743,6 +743,9 @@ impl Checker {
     /// one tuple, C varargs are promoted), and fill in defaults, checked in the callee's env. A
     /// temporary made to pass a receiver by reference is deleted after the call.
     fn emit_call(&mut self, inst: usize, adj: Adj, recv: Option<Val>, pre: &[Option<Val>], args: &[Expr], span: Span) -> Res<Val> {
+        if self.expand_span == Some(span) {
+            self.last_call = Some(inst);
+        }
         let f = self.fns[inst].clone();
         self.visible(f.decl, span)?;
         let site = self.open_site(Body::Fn(inst), f.ret);

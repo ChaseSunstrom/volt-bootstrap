@@ -15,6 +15,7 @@ sidebar:
 | `voltc run FILES... [-- ARGS]` | build and run; everything after `--` goes to the program |
 | `voltc build FILES... [-o OUT]` | build an executable |
 | `voltc check FILES...` | type check only |
+| `voltc expand FILE[:LINE] [FILES...]` | what the comptime code in FILE (on LINE) became: values, `comptime if`/`match` branches, `comptime for` copies, generic instances, `@emit` and `@derive` output (self-hosted voltc) (see [Comptime](/volt-bootstrap/guide/comptime/#what-comptime-code-became-expand-and-voltc-expand)) |
 | `voltc emit-c FILES... [-o DIR]` | print the generated C, or with `-o DIR` write it as separate files |
 | `voltc emit-llvm FILES...` | print the LLVM IR (self-hosted voltc) |
 | `voltc lib NAME [-o OUT]` | precompile package NAME's non-generic code into `libNAME.a` (see [Packages](/volt-bootstrap/voltc/packages/)) |

@@ -2556,6 +2556,85 @@ attach fn typeinfo(this: checker&, t: u32, span: span) -> compile_error!cval {
     return rec1(move r);
 }
 
+// the value of x if it's known at compile time, else null (no error)
+attach fn try_ct_eval(this: checker&, x: expr&, want: u32?) -> cval? {
+    val v = this.ct_eval(x, want) catch |e| { return null; };
+    return move v;
+}
+
+// a comptime value as Volt writes it (what @expand and the editor show)
+attach fn cval_text(this: checker&, v: cval&) -> std::string {
+    match (*v) {
+        .VOID => { return S("()"); },
+        .NULL => { return S("null"); },
+        .BOOL(b) => {
+            if (b) {
+                return S("true");
+            }
+            return S("false");
+        },
+        .INT(n, k) => { return num(n); },
+        .FLOAT(f, k) => { return std::format("{}", f); },
+        .STR(s) => { return fmt("\"{}\"", copy s); },
+        .TYPE(t) => { return this.ty_name(t); },
+        .TUPLE(vs) => { return fmt("({})", this.cvals_text(&vs)); },
+        .ARRAY(vs, t) => { return fmt("{{ {} }}", this.cvals_text(&vs)); },
+        .STRUCT(t, fs) => {
+            var body: std::string = {};
+            for (i) in 0..fs.len {
+                if (i > 0) {
+                    body.append(", ");
+                }
+                body.append(fs.at(i).name);
+                body.append(": ");
+                body.append(this.cval_text(&fs.at(i).v).as_str());
+            }
+            if (t == VOID) {
+                return fmt("{{ {} }}", move body);
+            }
+            return fmt2("{} {{ {} }}", this.ty_name(t), move body);
+        },
+        .VARIANT(t, n, p) => {
+            if (p != null) {
+                return fmt2(".{}({})", S(n), this.cval_text(p.value));
+            }
+            return fmt(".{}", S(n));
+        },
+        .OPT(t, p) => {
+            if (p != null) {
+                return this.cval_text(p.value);
+            }
+            return S("null");
+        },
+    }
+}
+
+attach fn cvals_text(this: checker&, vs: std::vec<cval>&) -> std::string {
+    var out: std::string = {};
+    for (i) in 0..vs.len {
+        if (i > 0) {
+            out.append(", ");
+        }
+        out.append(this.cval_text(vs.at(i)).as_str());
+    }
+    return move out;
+}
+
+// a fn instance as its signature (its name has its generic args): twice<i32>(v: i32) -> i32
+attach fn inst_label(this: checker&, i: u32) -> std::string {
+    var ps: std::string = {};
+    val f = this.fi(i);
+    for (k) in 0..f.params.len {
+        if (k > 0) {
+            ps.append(", ");
+        }
+        ps.append(f.params.at(k).name);
+        ps.append(": ");
+        ps.append(this.ty_name(f.params.at(k).ty).as_str());
+    }
+    return fmt3("{}({}) -> {}", S(f.name), move ps, this.ty_name(f.ret));
+}
+
 // a value spliced into a quote, as source text: a str's text (a name, or code), a type by its name, a
 // number, a bool
 attach fn splice_text(this: checker&, v: cval, span: span) -> compile_error!std::string {
@@ -2874,6 +2953,9 @@ attach fn ct_match(this: checker&, scrut: expr&, arms: std::vec<arm>&, want: u32
             return copy e;
         };
         if (h) {
+            if (this.opts.expand || this.opts.lsp) {
+                this.expanded(a.pat.span, fmt("comptime match: {}, this arm", this.cval_text(&v)));
+            }
             var s: scope = {};
             s.consts = move binds;
             put(&this.cx.scopes, move s);
@@ -2968,6 +3050,13 @@ attach fn ct_unroll_body(this: checker&, f: for_loop&, li: usize) -> compile_err
     var n = consts.len;
     if (runtime != null) {
         n = elems.len;
+    }
+    if (this.opts.expand || this.opts.lsp) {
+        if (runtime != null) {
+            this.expanded(f.iter.span, fmt2("comptime for: {} copies, {} one per element", num(@cast<i128>(n)), S(name)));
+        } else {
+            this.expanded(f.iter.span, fmt3("comptime for: {} copies, {} = {}", num(@cast<i128>(n)), S(name), this.cvals_text(&consts)));
+        }
     }
     for (i) in 0..n {
         val cont = this.ir.label();

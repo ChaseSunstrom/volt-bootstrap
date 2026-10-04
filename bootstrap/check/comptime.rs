@@ -1911,6 +1911,38 @@ impl Checker {
         }
     }
 
+    /// a comptime value as Volt writes it (what @expand shows)
+    pub fn cval_text(&self, v: &CVal) -> String {
+        let list = |c: &Self, vs: &[CVal]| vs.iter().map(|x| c.cval_text(x)).collect::<Vec<_>>().join(", ");
+        match v {
+            CVal::Void => "()".to_string(),
+            CVal::Null | CVal::Opt(_, None) => "null".to_string(),
+            CVal::Bool(b) => b.to_string(),
+            CVal::Int(n, _) => n.to_string(),
+            CVal::Float(f, _) => f.to_string(),
+            CVal::Str(s) => format!("\"{}\"", String::from_utf8_lossy(s)),
+            CVal::Type(t) => self.ty_name(*t),
+            CVal::Tuple(vs) => format!("({})", list(self, vs)),
+            CVal::Array(vs, _) => format!("{{ {} }}", list(self, vs)),
+            CVal::Struct(t, fs) => {
+                let body = fs.iter().map(|(n, x)| format!("{n}: {}", self.cval_text(x))).collect::<Vec<_>>().join(", ");
+                if *t == VOID { format!("{{ {body} }}") } else { format!("{} {{ {body} }}", self.ty_name(*t)) }
+            }
+            CVal::Variant(_, n, p) => match p {
+                Some(x) => format!(".{n}({})", self.cval_text(x)),
+                None => format!(".{n}"),
+            },
+            CVal::Opt(_, Some(x)) => self.cval_text(x),
+        }
+    }
+
+    /// a fn instance as its signature (its name has its generic args): twice<i32>(v: i32) -> i32
+    pub fn inst_label(&self, i: usize) -> String {
+        let f = &self.fns[i];
+        let ps: Vec<String> = f.params.iter().map(|p| format!("{}: {}", p.name, self.ty_name(p.ty))).collect();
+        format!("{}({}) -> {}", f.name, ps.join(", "), self.ty_name(f.ret))
+    }
+
     /// a value spliced into a quote, as source text: a str's text (a name, or code), a type by its
     /// name, a number, a bool
     fn splice_text(&mut self, v: CVal, span: Span) -> CRes<String> {

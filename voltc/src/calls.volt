@@ -317,6 +317,50 @@ attach fn builtin(this: checker&, name: str, gargs: std::vec<garg>&, args_opt: s
         }
         return vpure(USIZE, this.ir.node(ir_kind::ALIGNOF(t), USIZE));
     }
+    if (name == "expand") {
+        // @expand(x): x, and a note saying what it became: a comptime value, or the fn instance a
+        // call runs
+        if (args.len != 1) {
+            return fail(span, fmt("@{} takes 1 argument(s)", S(name)));
+        }
+        val x = try this.garg_value(args.at(0));
+        var is_call = false;
+        match (x.kind) {
+            .CALL(f, a) => { is_call = !this.is_ct_expr(x); },
+            default => {},
+        }
+        var what: std::string = {};
+        var v: tval = vpure(VOID, this.ir.boolean(false));
+        var known: cval? = null;
+        if (!is_call) {
+            known = this.try_ct_eval(x, want);
+        }
+        if (known) {
+            val text = this.cval_text(&known);
+            v = try this.ct_to_val(copy known, want, span);
+            what = fmt2("{} ({})", move text, this.ty_name(v.ty));
+        } else {
+            // the call x is, not one in its arguments
+            val outer = this.expand_span;
+            this.expand_span = x.span;
+            this.last_call = null;
+            val r = this.expr(x, want);
+            this.expand_span = outer;
+            v = try r;
+            val lc = this.last_call;
+            if (is_call && lc != null) {
+                what = fmt("a call of {}", this.inst_label(lc ?? 0));
+            } else {
+                what = fmt("a value of type {}", this.ty_name(v.ty));
+            }
+        }
+        // a call's instance is already recorded where it's emitted
+        if (known) {
+            this.expanded(span, copy what);
+        }
+        put(&this.warnings, { span: span, msg: fmt("expands to {}", move what), warning: true });
+        return v;
+    }
     if (name == "field") {
         if (args.len != 2) {
             return fail(span, fmt("@{} takes 2 argument(s)", S(name)));

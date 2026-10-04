@@ -157,6 +157,29 @@ function showLocations(uri: string, at: Pos, locs: { uri: string; range: { start
   return vscode.commands.executeCommand("editor.action.showReferences", vscode.Uri.parse(uri), pos(at), list);
 }
 
+type Expansion = { range: { start: Pos; end: Pos }; text: string };
+/** Volt: Expand Comptime: what the comptime code on the cursor's line (or, with nothing there, in the
+ * whole file) became, in a document beside it */
+async function expand(): Promise<void> {
+  const editor = vscode.window.activeTextEditor;
+  if (!client || !editor) {
+    return;
+  }
+  const uri = editor.document.uri.toString();
+  const ask = (line?: number) => client!.sendRequest<Expansion[]>("volt/expand", { textDocument: { uri }, line });
+  let list = await ask(editor.selection.active.line);
+  if (list.length === 0) {
+    list = await ask();
+  }
+  list.sort((a, b) => a.range.start.line - b.range.start.line || a.range.start.character - b.range.start.character);
+  const name = vscode.workspace.asRelativePath(editor.document.uri);
+  const body = list.length === 0
+    ? `// ${name}: no comptime code here\n`
+    : list.map((e) => `// ${name}:${e.range.start.line + 1}:${e.range.start.character + 1}\n${e.text}\n`).join("\n");
+  const doc = await vscode.workspace.openTextDocument({ language: "volt", content: body });
+  await vscode.window.showTextDocument(doc, { viewColumn: vscode.ViewColumn.Beside, preview: true });
+}
+
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 0);
   status.command = "volt.restartServer";
@@ -174,6 +197,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         await run(u);
       }
     }),
+    vscode.commands.registerCommand("volt.expand", expand),
     vscode.workspace.onDidChangeConfiguration(async (e) => {
       if (["serverPath", "stdPath", "boltPath", "inlayHints"].some((k) => e.affectsConfiguration(`volt.${k}`))) {
         await stopServer();

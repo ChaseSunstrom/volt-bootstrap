@@ -315,6 +315,9 @@ pub struct Checker {
     pub derive_blocks: HashSet<DeclId>,
     /// the @emit(...)s collected and not yet run, with their namespaces
     pub pending_emits: Vec<(Expr, NsId)>,
+    /// @expand of a call: the call's span, and the fn instance emitted there
+    pub expand_span: Option<Span>,
+    pub last_call: Option<usize>,
     pub unions: Vec<UnionInfo>,
     pub union_ids: HashMap<DeclId, u32>,
     pub fns: Vec<FnInst>,
@@ -391,6 +394,8 @@ impl Checker {
             attach_blocks: Vec::new(),
             derive_blocks: HashSet::new(),
             pending_emits: Vec::new(),
+            expand_span: None,
+            last_call: None,
             unions: Vec::new(),
             union_ids: HashMap::new(),
             fns: Vec::new(),

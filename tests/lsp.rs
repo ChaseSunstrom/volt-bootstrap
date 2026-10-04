@@ -366,6 +366,27 @@ fn inline_features(s: &mut Server) {
     let h = s.request("textDocument/hover", &at(2, 8));
     assert!(h.contains("// attached by\\ncircle"), "hover shape: {h}");
 
+    // what comptime code became: hover on a generic call adds the instance it runs, and volt/expand
+    // lists a line's
+    let h = s.request("textDocument/hover", &at(33, 20));
+    assert!(h.contains("expands to\\n```volt\\ncalls report<circle>(s: circle&, scale: f64) -> f64"), "hover report: {h}");
+    let e = s.request("volt/expand", &format!("{{\"textDocument\":{doc},\"line\":33}}"));
+    assert!(e.contains("\"text\":\"calls report<circle>(s: circle&, scale: f64) -> f64\"") && e.contains("\"start\":{\"line\":33,\"character\":18}"), "volt/expand: {e}");
+    let e = s.request("volt/expand", &format!("{{\"textDocument\":{doc},\"line\":32}}"));
+    assert!(e.contains("\"result\":[]"), "volt/expand of a line without comptime code: {e}");
+    // the same from the command line: voltc expand FILE, and FILE:LINE for one line's
+    let expand = |arg: &str| {
+        let out = Command::new(s.dir.join("voltc")).args(["expand", arg]).current_dir(ROOT).env("VOLT_STD", Path::new(ROOT).join("std")).output().unwrap();
+        assert!(out.status.success(), "voltc expand {arg}: {}", String::from_utf8_lossy(&out.stderr));
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+    let all = expand("tests/run/expand.volt");
+    for want in [":6:22: attach eq -> point {}", ":20:7: attach fn get_x(this: point&) -> i32 {", ":32:13: 32 (usize)", ":36:13: = \"hi\" (str)", ":39:9: comptime match: 16, this arm", ":42:25: comptime for: 3 copies, i = 0, 1, 2", ":47:18: comptime if: true, this branch"] {
+        assert!(all.contains(want), "voltc expand lacks {want}: {all}");
+    }
+    let one = expand("tests/run/expand.volt:34");
+    assert!(one.contains(":34:21: calls twice<i64>(v: i64) -> i64") && !one.contains(":33:"), "voltc expand FILE:34: {one}");
+
     // code lenses: references above fns, attached fns and traits above types, attachers above a
     // trait, Run above main
     let l = s.request("textDocument/codeLens", &doc_param(&doc));

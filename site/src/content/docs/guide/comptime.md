@@ -368,6 +368,47 @@ points at the generated line; its types are checked where they're used, like any
 `@emit` in emitted code runs too, after the one that made it (up to 10,000 of them: code that
 emits itself is an error, not a hang).
 
+## What comptime code became: @expand and voltc expand
+
+`@expand(expr)` is `expr`, and notes at compile time what it became: a comptime value with its
+type, or the generic instance a call runs.
+
+```volt
+use std::io;
+
+<T: type>
+fn twice(v: T) -> T {
+    return v + v;
+}
+
+fn main() -> void {
+    val n = @expand(@sizeof(i64) * 2);
+    val t = @expand(twice(21));
+    std::println("{} {}", n, t);
+}
+// expect: 16 42
+```
+
+```
+warning: expands to 16 (usize)
+   ┌─ main.volt:9:13
+warning: expands to a call of twice<i32>(v: i32) -> i32
+   ┌─ main.volt:10:13
+```
+
+For code you'd rather not touch, `voltc expand FILE` lists what all of a file's comptime code became,
+by line: comptime values, which way each `comptime if` went, the arm each `comptime match` took, the
+copies a `comptime for` made, the generic instance each call runs, the source an `@emit` declared
+and the `attach` a `@derive` made. `voltc expand FILE:LINE` lists one line's:
+
+```
+$ voltc expand main.volt:10
+main.volt:10:13: calls twice<i32>(v: i32) -> i32
+```
+
+In an editor, hover shows the same under **expands to**, and VS Code's **Volt: Expand Comptime**
+opens the cursor's line's (or the file's) in a document beside it.
+
 ## Type ids: @typeid
 
 `@typeid(T)` is a `u64` naming a type: the 64-bit FNV-1a hash of its canonical name (the

@@ -943,6 +943,9 @@ attach fn handle(this: lsp_server&, msg: std::json::value&) -> bool {
         lsp_reply(id, this.complete(params));
     } else if (method == "textDocument/signatureHelp") {
         lsp_reply(id, this.signature(params));
+    } else if (method == "volt/expand") {
+        this.flush();
+        lsp_reply(id, this.expand(params));
     } else if (this.inline_request(method, id, params)) {
         // lsp_inline.volt answered it
     } else if (!id.is_null()) {
@@ -1203,18 +1206,77 @@ attach fn hover(this: lsp_server&, params: std::json::value&) -> std::json::valu
             }
         }
     }
-    if (label.len() == 0) {
+    val exp = expansion_at(c, doc.file, at);
+    if (label.len() == 0 && exp.len() == 0) {
         return std::json::value::NULL;
     }
-    var text = S("```volt\n");
-    text.append(label.as_str());
-    text.append("\n```");
+    var text: std::string = {};
+    if (label.len() > 0) {
+        text.append("```volt\n");
+        text.append(label.as_str());
+        text.append("\n```\n");
+    }
+    if (exp.len() > 0) {
+        text.append("expands to\n```volt\n");
+        text.append(exp.as_str());
+        text.append("\n```");
+    }
     var contents = std::json::object();
     contents.set("kind", std::json::string("markdown"));
     contents.set("value", std::json::string(text.as_str()));
     var h = std::json::object();
     h.set("contents", move contents);
     return move h;
+}
+
+// what the comptime code at offset at became: the notes on the innermost span recorded there
+// (a generic fn's body has one per instance; the same text shows once)
+fn expansion_at(c: checker&, file: u32, at: usize) -> std::string {
+    var width: u32? = null;
+    for (e&) in c.expansions.items() {
+        if (contains(e.at, file, at) && (width == null || e.at.hi - e.at.lo < (width ?? 0))) {
+            width = e.at.hi - e.at.lo;
+        }
+    }
+    var out: std::string = {};
+    var seen: std::vec<str> = {};
+    for (e&) in c.expansions.items() {
+        if (contains(e.at, file, at) && e.at.hi - e.at.lo == (width ?? 0)) {
+            var dup = false;
+            for (s&) in seen.items() {
+                if (*s == e.text.as_str()) {
+                    dup = true;
+                }
+            }
+            if (!dup) {
+                put(&seen, e.text.as_str());
+                if (out.len() > 0) {
+                    out.push('\n');
+                }
+                out.append(e.text.as_str());
+            }
+        }
+    }
+    return move out;
+}
+
+// volt/expand: what the comptime code in a document (or on params.line, 0-based) became, as
+// [{ range, text }] in the order it was checked
+attach fn expand(this: lsp_server&, params: std::json::value&) -> std::json::value {
+    var out = std::json::array();
+    val doc = this.checked_doc(params) ?? return move out;
+    val c = &*doc.chk.value;
+    val text = c.files.at(@cast<usize>(doc.file)).text;
+    val line = params.get("line").as_num();
+    for (e&) in c.expansions.items() {
+        if (e.at.file == doc.file && (line == null || @cast<f64>(c.line_col(e.at).line - 1) == (line ?? 0.0))) {
+            var o = std::json::object();
+            o.set("range", lsp_range(text, e.at));
+            o.set("text", std::json::string(e.text.as_str()));
+            out.add(move o);
+        }
+    }
+    return move out;
 }
 
 attach fn definition(this: lsp_server&, params: std::json::value&) -> std::json::value {

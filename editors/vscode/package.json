@@ -104,6 +104,10 @@
       {
         "command": "volt.run",
         "title": "Volt: Run This Program"
+      },
+      {
+        "command": "volt.expand",
+        "title": "Volt: Expand Comptime"
       }
     ],
     "taskDefinitions": [

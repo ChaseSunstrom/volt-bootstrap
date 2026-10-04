@@ -20,6 +20,7 @@ async function main() {
   fs.copyFileSync(voltc, path.join(bin, "voltc"));
   fs.chmodSync(path.join(bin, "voltc"), 0o755);
   fs.writeFileSync(path.join(ws, "bad.volt"), 'fn main() -> void {\n    val x: i32 = "text";\n}\n');
+  fs.writeFileSync(path.join(ws, "expand.volt"), '<T: type>\nfn twice(v: T) -> T {\n    return v + v;\n}\n\nfn main() -> void {\n    val t = twice(21);\n}\n');
   fs.writeFileSync(path.join(ws, "good.volt"), 'use std::io;\n\nfn add(a: i32, b: i32) -> i32 {\n    return a + b;\n}\n\nfn main() -> void {\n    val total = add(1, 2);\n    std::println("{}", total);\n}\n');
   // the editor reads a login shell's environment (PATH included) at startup: with a HOME of its own
   // no shell profile adds a voltc, so the one found is the workspace checkout's

@@ -569,6 +569,12 @@ attach fn expr(this: checker&, e: expr&, want: u32?) -> compile_error!tval {
     // @typeinfo, comptime fn calls and comptime locals are evaluated now, not emitted
     if (this.is_ct_expr(e)) {
         val v = try this.ct_eval(e, want);
+        if (this.opts.expand || this.opts.lsp) {
+            val text = this.cval_text(&v);
+            val r = try this.ct_to_val(move v, want, span);
+            this.expanded(span, fmt2("= {} ({})", move text, this.ty_name(r.ty)));
+            return r;
+        }
         return this.ct_to_val(move v, want, span);
     }
     match (e.kind) {
@@ -657,6 +663,11 @@ attach fn expr(this: checker&, e: expr&, want: u32?) -> compile_error!tval {
                 match (c) {
                     .BOOL(b) => { taken = b; },
                     default => { return fails(n.cond.span, "comptime if needs a bool"); },
+                }
+                if (taken) {
+                    this.expanded(n.cond.span, S("comptime if: true, this branch"));
+                } else {
+                    this.expanded(n.cond.span, S("comptime if: false, the else"));
                 }
                 if (taken) {
                     val bc = try this.block_code(&n.then);
