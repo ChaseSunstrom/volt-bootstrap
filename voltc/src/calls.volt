@@ -269,7 +269,14 @@ attach fn field_form(this: checker&, base: garg&, name: garg&, span: span) -> co
     var fname = S("");
     match (try this.ct_eval(n, null)) {
         .STR(s) => { fname = copy s; },
-        default => { return fails(n.span, "@field(v, \"name\"): the name is a comptime string"); },
+        // a tuple's element by its index
+        .INT(i, t) => {
+            if (i < 0) {
+                return fails(n.span, "@field(v, \"name\"): the name is a comptime string (or a tuple element's index)");
+            }
+            fname = num(i);
+        },
+        default => { return fails(n.span, "@field(v, \"name\"): the name is a comptime string (or a tuple element's index)"); },
     }
     return { kind: expr_kind::FIELD(bx(copy *b), this.intern(move fname), null), span: span };
 }
@@ -595,6 +602,35 @@ attach fn builtin(this: checker&, name: str, gargs: std::vec<garg>&, args_opt: s
             r = this.ir.node(ir_kind::COND(is, this.ir.int(@cast<i128>(this.type_id(*members.at(i))), u64t), r), u64t);
         }
         return vnew(u64t, this.ir.seq(nodes(this.ir.decl(tag.id, this.ir.field(place, 0, u16t))), r, u64t));
+    }
+    if (name == "discriminant") {
+        // which variant an enum value holds: its discriminant, as @typeinfo's variants list it
+        if (args.len != 1) {
+            return fail(span, fmt("@{} takes 1 argument(s)", S(name)));
+        }
+        val v = try this.garg_expr(args.at(0), null);
+        var t = v.ty;
+        var c = v.c;
+        val inner = this.t.ref_inner(v.ty);
+        if (inner) {
+            t = inner;
+            c = this.ir.deref(v.c, inner);
+        }
+        val eid = this.enum_of(t) ?? return fail(span, fmt("@discriminant takes an enum value, found {}", this.ty_name(t)));
+        // a temporary that owns something is deleted once its tag is read
+        if (!v.lv && t == v.ty && (try this.needs_drop(t))) {
+            val td = this.tmp_local("d", t);
+            val tt = this.tmp_local("t", I64);
+            val d = try this.drop_fn(t);
+            var stmts: std::vec<u32> = {};
+            put(&stmts, this.ir.decl(td.id, c));
+            put(&stmts, this.ir.decl(tt.id, this.ir.conv(this.tag_of(eid, td.c), I64)));
+            put(&stmts, this.call_fn(d, nodes(this.ir.addr(td.c, this.t.ref_to(t))), VOID));
+            return vnew(I64, this.ir.seq(move stmts, tt.c, I64));
+        }
+        var r = vnew(I64, this.ir.conv(this.tag_of(eid, c), I64));
+        r.pure = v.pure;
+        return r;
     }
     if (name == "panic") {
         if (args.len != 1) {

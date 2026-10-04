@@ -252,10 +252,11 @@ template asks which ones a type wrote (see
 `@attributes([@derive(eq, hash, fmt, json)])` on a struct gives it methods written in Volt, in
 `std::derive`: `eq(other)` field by field (and so `==` and `!=`), `hash()` (so it can be a map
 key), `to_string()` (the text `println` prints) and `to_json()` (an object with a member each
-field). Copying needs no derive: `copy x` copies any struct field by field. On an enum without
-payloads, `eq` and `hash` work too and `to_json` is the variant's name; an enum with payloads can't
-derive them yet. A JSON number is an `f64`, so an integer field past 2^53 loses its low bits in
-`to_json`.
+field). Copying needs no derive: `copy x` copies any struct field by field. On an enum, `eq` and
+`hash` go by the variant and its payload; `to_json` is the variant's name, or for a variant with a
+payload an object with one member, the variant's name: `{"KEY":97}`, a tuple payload as an array
+(`{"CLICK":[10,20]}`). A JSON number is an `f64`, so an integer field past 2^53 loses its low bits
+in `to_json`.
 
 ```volt
 use std::io;
@@ -275,6 +276,11 @@ fn main() -> void {
 }
 // expect: true first {"x":1,"y":2}
 ```
+
+Over an enum, a derive reads which variant a value holds with `@discriminant(v)`, the number
+`@typeinfo` lists each variant's `discriminant` as, and a variant's payload as a field:
+`@field(v, variant.name)` (see [Payloads](/volt-bootstrap/guide/enums-match/#payloads)). A tuple's
+elements are `@field(t, i)` with `i` a comptime integer.
 
 A derive is a trait with no functions, and methods that are generic over the types attaching it:
 `@derive(eq)` is `attach std::derive::eq -> point {}`. A name that isn't a trait in scope is

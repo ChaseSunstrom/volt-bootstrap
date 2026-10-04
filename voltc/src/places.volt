@@ -191,6 +191,46 @@ attach fn field(this: checker&, b0: tval, name: str, span: span) -> compile_erro
                 return r;
             }
         },
+        // a variant's payload, in place; a debug build checks the value holds that variant
+        .ENUM(eid) => {
+            val vi = this.variant_index(eid, name);
+            if (vi) {
+                val idx = vi;
+                val payload = *(try this.enum_payloads(eid, span)).at(idx);
+                val pt = payload ?? return fail(span, fmt("{} has no payload", S(name)));
+                val fi = @cast<u32>(idx) + 1;
+                var r = vnew(pt, this.ir.field(obj, fi, pt));
+                if (!this.opts.release) {
+                    val msg = this.intern(fmt("reading {}'s payload, but the value is another variant", S(name)));
+                    val k = this.tag_const(eid, idx);
+                    var stmts: std::vec<u32> = {};
+                    if (lv) {
+                        val ept = this.t.intern(tyk::PTR(t));
+                        val ppt = this.t.intern(tyk::PTR(pt));
+                        val te = this.tmp_local("e", ept);
+                        val e = this.ir.deref(te.c, t);
+                        put(&stmts, this.ir.decl(te.id, this.ir.addr(obj, ept)));
+                        put(&stmts, this.ir.if_(this.ir.binary(binop_ir::NE, this.tag_of(eid, e), k, BOOL), this.ir.panic(msg, this.loc(span)), null));
+                        r.c = this.ir.deref(this.ir.seq(move stmts, this.ir.addr(this.ir.field(e, fi, pt), ppt), ppt), pt);
+                    } else {
+                        val te = this.tmp_local("e", t);
+                        put(&stmts, this.ir.decl(te.id, obj));
+                        put(&stmts, this.ir.if_(this.ir.binary(binop_ir::NE, this.tag_of(eid, te.c), k, BOOL), this.ir.panic(msg, this.loc(span)), null));
+                        r.c = this.ir.seq(move stmts, this.ir.field(te.c, fi, pt), pt);
+                    }
+                }
+                r.lv = lv;
+                r.mutable = mutable;
+                r.pure = b.pure;
+                r.rop = rop;
+                r.pvia = pvia;
+                r.ro = fro;
+                r.via = fvia;
+                r.root = b.root;
+                r.own = own;
+                return r;
+            }
+        },
         .SLICE(et) => {
             if (name == "len") {
                 var r = vnew(USIZE, this.ir.field(obj, 1, USIZE));

@@ -13,6 +13,57 @@ namespace derive {
     trait fmt {}
     // to_json(): a JSON object with a member each field
     trait json {}
+
+    // a variant's payload compared, hashed or made JSON: a tuple's element by element (a tuple has
+    // none of these of its own)
+    <P: type>
+    fn payload_eq(a: P&, b: P&) -> bool {
+        comptime match (@typeinfo(P).kind) {
+            .TUPLE(ts) => {
+                comptime for (t, i) in ts {
+                    if (!@field(a, i).eq(&@field(b, i))) {
+                        return false;
+                    }
+                }
+                return true;
+            },
+            default => {
+                return a.eq(b);
+            },
+        }
+    }
+
+    <P: type>
+    fn payload_hash(a: P&) -> u64 {
+        comptime match (@typeinfo(P).kind) {
+            .TUPLE(ts) => {
+                var h: u64 = 14695981039346656037;
+                comptime for (t, i) in ts {
+                    h = (h ^ @field(a, i).hash()) *% 1099511628211;
+                }
+                return h;
+            },
+            default => {
+                return a.hash();
+            },
+        }
+    }
+
+    <P: type>
+    fn payload_json(a: P&) -> std::json::value {
+        comptime match (@typeinfo(P).kind) {
+            .TUPLE(ts) => {
+                var out = std::json::array();
+                comptime for (t, i) in ts {
+                    out.add(@field(a, i).to_json());
+                }
+                return out;
+            },
+            default => {
+                return a.to_json();
+            },
+        }
+    }
 }
 
 <T: std::derive::eq>
@@ -27,12 +78,18 @@ attach fn eq(this: T&, other: T&) -> bool {
             return true;
         },
         .ENUM(e) => {
+            // the same variant, and the same payload
+            if (@discriminant(this) != @discriminant(other)) {
+                return false;
+            }
             comptime for (v) in e.1 {
                 comptime if (v.payload != null) {
-                    @compile_error("@derive(eq) on an enum with payloads isn't supported yet");
+                    if (@discriminant(this) == v.discriminant.value) {
+                        return std::derive::payload_eq(&@field(this, v.name), &@field(other, v.name));
+                    }
                 }
             }
-            return @cast<i64>(*this) == @cast<i64>(*other);
+            return true;
         },
         default => {
             @compile_error("@derive(eq) goes on a struct or an enum");
@@ -50,12 +107,14 @@ attach fn hash(this: T&) -> u64 {
             }
         },
         .ENUM(e) => {
+            h = std::map_mix(@cast<u64>(@discriminant(this)));
             comptime for (v) in e.1 {
                 comptime if (v.payload != null) {
-                    @compile_error("@derive(hash) on an enum with payloads isn't supported yet");
+                    if (@discriminant(this) == v.discriminant.value) {
+                        h = (h ^ std::derive::payload_hash(&@field(this, v.name))) *% 1099511628211;
+                    }
                 }
             }
-            h = std::map_mix(@cast<u64>(@cast<i64>(*this)));
         },
         default => {
             @compile_error("@derive(hash) goes on a struct or an enum");
@@ -80,10 +139,14 @@ attach fn to_json(this: T&) -> std::json::value {
             }
         },
         .ENUM(e) => {
-            // an enum without payloads: its variant's name
+            // a variant with a payload: an object with one member, the variant's name; one without:
+            // its name
             comptime for (v) in e.1 {
                 comptime if (v.payload != null) {
-                    @compile_error("@derive(json) on an enum with payloads isn't supported yet");
+                    if (@discriminant(this) == v.discriminant.value) {
+                        o.set(v.name, std::derive::payload_json(&@field(this, v.name)));
+                        return o;
+                    }
                 }
             }
             return std::json::string(std::fmt::format("{}", *this).as_str());

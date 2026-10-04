@@ -79,6 +79,25 @@ impl Checker {
                     }
                 }
             }
+            // a variant's payload, in place; a debug build checks the value holds that variant
+            Ty::Enum(eid) if self.variant_index(eid, name).is_some() => {
+                let idx = self.variant_index(eid, name).unwrap();
+                let Some(pt) = self.enum_payloads(eid, span)?[idx] else {
+                    return err(span, format!("{name} has no payload"));
+                };
+                if self.opts.release {
+                    return Ok(place(pt, format!("{access}u.v{idx}")));
+                }
+                let k = self.c_int(self.enums[eid as usize].values[idx], int(self.enums[eid as usize].tag));
+                let chk = format!("volt_panic(\"reading {name}'s payload, but the value is another variant\", \"{}\")", self.loc(span));
+                let ec = self.cty(ty);
+                if lv {
+                    let at = if access.ends_with("->") { format!("({})", b.c) } else { format!("&({})", b.c) };
+                    Ok(place(pt, format!("(*({{ {ec}* _e = {at}; if (_e->tag != {k}) {chk}; &_e->u.v{idx}; }}))")))
+                } else {
+                    Ok(place(pt, format!("({{ {ec} _e = {}; if (_e.tag != {k}) {chk}; _e.u.v{idx}; }})", b.c)))
+                }
+            }
             Ty::Slice(_) | Ty::Str if name == "len" => Ok(Val { pure: b.pure, ..Val::new(USIZE, format!("{access}len")) }),
             Ty::Slice(t) if name == "ptr" => {
                 let r = self.t.intern(Ty::Ptr(t));

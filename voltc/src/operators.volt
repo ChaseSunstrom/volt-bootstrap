@@ -200,10 +200,16 @@ attach fn eq_call(this: checker&, op: binop, a: tval, ae: expr&, be: expr&, span
     // second: only a variable or a field of one (it reads the same either way)
     var args: std::vec<expr> = {};
     var v: tval = a;
-    if (is_place(be)) {
+    // a variant's name (event::QUIT) is a path but no place
+    var place_b = is_place(be);
+    match (be.kind) {
+        .PATH(p) => { place_b = (try this.expr(be, a.ty)).lv; },
+        default => {},
+    }
+    if (place_b) {
         put(&args, { kind: expr_kind::UNARY(unop::ADDR, bx(copy *be)), span: be.span });
         v = try this.resolve_call("eq", &fits, a, null, &none, &args, BOOL, span);
-    } else if (is_plain_place(ae)) {
+    } else if (is_plain_place(ae) && a.lv) {
         val b = try this.expr(be, a.ty);
         put(&args, { kind: expr_kind::UNARY(unop::ADDR, bx(copy *ae)), span: ae.span });
         v = try this.resolve_call("eq", &fits, b, null, &none, &args, BOOL, span);

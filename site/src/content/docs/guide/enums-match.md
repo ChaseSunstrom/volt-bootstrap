@@ -57,6 +57,28 @@ fn main() -> void {
 
 `.QUIT` is short for `event::QUIT` wherever the type is already known.
 
+A variant's payload is also a field named after it, to read, change or borrow where the value is
+known to hold that variant. A debug build checks: reading it from another variant stops the program.
+`@discriminant(x)` says which variant `x` holds.
+
+```volt
+use std::io;
+
+enum shape {
+    CIRCLE: i32,
+    RECT: (w: i32, h: i32),
+}
+
+fn main() -> void {
+    var s = shape::RECT(2, 3);
+    std::println("{} {}", s.RECT.w * s.RECT.h, @discriminant(s));
+    s.RECT.h = 4;
+    std::println(s);
+}
+// expect: 6 1
+// expect: RECT(2, 4)
+```
+
 Enums can be generic too:
 
 ```volt

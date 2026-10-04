@@ -309,9 +309,11 @@ impl Checker {
         // be one (it lives to the end of the statement), so with a temporary on the right the left
         // goes second: only a variable or a field of one (it reads the same either way)
         let addr = |e: &Expr| Expr { kind: ExprKind::Unary(UnOp::Addr, Box::new(e.clone())), span: e.span };
-        let v = if is_place(be) {
+        // a variant's name (event::QUIT) is a path but no place
+        let place_b = is_place(be) && (!matches!(be.kind, ExprKind::Path(_)) || self.expr(be, Some(a.ty))?.lv);
+        let v = if place_b {
             self.resolve_call("eq", &fits, Some(a), None, &[], &[addr(be)], Some(BOOL), span)?
-        } else if is_plain_place(ae) {
+        } else if is_plain_place(ae) && a.lv {
             let b = self.expr(be, Some(a.ty))?;
             self.resolve_call("eq", &fits, Some(b), None, &[], &[addr(ae)], Some(BOOL), span)?
         } else {

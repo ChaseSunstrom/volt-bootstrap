@@ -190,7 +190,9 @@ impl Checker {
         let n = Self::garg_value(name)?;
         let name = match self.ct_eval(&n, None)? {
             comptime::CVal::Str(s) => String::from_utf8_lossy(&s).into_owned(),
-            _ => return err(n.span, "@field(v, \"name\"): the name is a comptime string"),
+            // a tuple's element by its index
+            comptime::CVal::Int(i, _) if i >= 0 => i.to_string(),
+            _ => return err(n.span, "@field(v, \"name\"): the name is a comptime string (or a tuple element's index)"),
         };
         Ok(Expr { kind: ExprKind::Field(Box::new(base), name, None), span })
     }
@@ -402,6 +404,25 @@ impl Checker {
                 }
                 let ids: Vec<String> = self.unions[u as usize].members.iter().map(|m| format!("{}ULL", self.type_id(*m))).collect();
                 Ok(Val::new(int(IntTy::U64), format!("((const uint64_t[]){{{}}})[({place}).tag]", ids.join(", "))))
+            }
+            "discriminant" => {
+                // which variant an enum value holds: its discriminant, as @typeinfo's variants list it
+                n_args(1)?;
+                let v = self.garg_expr(&args[0], None)?;
+                let (ty, c) = match self.t.get(v.ty).clone() {
+                    Ty::Ref(t) => (t, format!("(*({}))", v.c)),
+                    _ => (v.ty, v.c.clone()),
+                };
+                let Some(eid) = self.enum_of(ty) else {
+                    return err(span, format!("@discriminant takes an enum value, found {}", self.ty_name(ty)));
+                };
+                // a temporary that owns something is deleted once its tag is read
+                if !v.lv && ty == v.ty && self.needs_drop(ty)? {
+                    let (tc, d) = (self.cty(ty), self.drop_fn(ty)?);
+                    let tag = self.tag_c(eid, "_d");
+                    return Ok(Val::new(I64, format!("({{ {tc} _d = {c}; int64_t _t = (int64_t){tag}; {d}(&_d); _t; }})")));
+                }
+                Ok(Val { pure: v.pure, ..Val::new(I64, format!("((int64_t){})", self.tag_c(eid, &c))) })
             }
             "panic" => {
                 n_args(1)?;
