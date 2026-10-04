@@ -126,7 +126,9 @@ fn partial_struct_layouts() {
 /// voltc built with --release (as `bolt build --release` makes it) works, and so does the release
 /// voltc it builds of itself: std builds as a library, and every tests/run program prints what it
 /// expects (the LLVM backend too). Release builds free memory for real, without the debug allocator's
-/// quarantine and poisoning, so they're where a use after free shows
+/// quarantine and poisoning, so they're where a use after free shows. The C backend's runs build with
+/// clang where it's installed: the golden runs' cc is often gcc, which accepts C that clang rejects
+/// (`(T){0}` for a zero-length array)
 #[test]
 fn release_voltc_works() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -146,6 +148,7 @@ fn release_voltc_works() {
     runs.push((root.join("tests/run/temp_lifetimes.volt"), "llvm"));
     runs.push((root.join("tests/run/typeid.volt"), "llvm"));
     runs.push((root.join("tests/run/closure_fn_drop.volt"), "llvm"));
+    let clang = Command::new("clang").arg("--version").output().is_ok_and(|o| o.status.success());
     let mut bad = Vec::new();
     for (file, backend) in &runs {
         let text = std::fs::read_to_string(file).unwrap();
@@ -154,7 +157,11 @@ fn release_voltc_works() {
             continue;
         }
         let flags: Vec<&str> = text.lines().find_map(|l| l.strip_prefix("// flags:")).map(|f| f.split_whitespace().collect()).unwrap_or_default();
-        let o = Command::new(&second).arg("run").arg(file).arg("--std").arg(&std_dir).args(["--backend", backend]).args(&flags).current_dir(root).output().unwrap();
+        let mut cmd = Command::new(&second);
+        if clang && *backend == "c" {
+            cmd.env("CC", "clang");
+        }
+        let o = cmd.arg("run").arg(file).arg("--std").arg(&std_dir).args(["--backend", backend]).args(&flags).current_dir(root).output().unwrap();
         let out = String::from_utf8_lossy(&o.stdout);
         if out.lines().map(|l| l.trim_end()).collect::<Vec<_>>() != want {
             bad.push(format!("{} ({backend}):\n{out}{}", file.display(), String::from_utf8_lossy(&o.stderr)));
