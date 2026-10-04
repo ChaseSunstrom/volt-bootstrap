@@ -7,8 +7,9 @@
 // only when the code changes.
 use std::io;
 
-// the language a file is in, from its extension: "cpp", "rust", "zig" or "swift", or null for a C header (a
-// directory with a Cargo.toml is a Rust crate). A C++ header named .h needs `use cpp { }`
+// the language a file is in, from its extension: "cpp", "rust", "zig", "swift" or "go", or null for a C
+// header (a directory with a Cargo.toml is a Rust crate, one with a go.mod a Go package). A C++ header
+// named .h needs `use cpp { }`
 fn language_of(path: str, dir: str) -> str? {
     var name = path;
     for (i) in 0..path.len {
@@ -42,15 +43,23 @@ fn language_of(path: str, dir: str) -> str? {
     if (ext == "swift") {
         return "swift";
     }
+    if (ext == "go") {
+        return "go";
+    }
     var full = S(path);
     if (path.len == 0 || path[0] != '/') {
         full = S(dir);
         full.push('/');
         full.append(path);
     }
-    full.append("/Cargo.toml");
-    if (std::fs::is_file(full.as_str())) {
+    var cargo = copy full;
+    cargo.append("/Cargo.toml");
+    if (std::fs::is_file(cargo.as_str())) {
         return "rust";
+    }
+    full.append("/go.mod");
+    if (std::fs::is_file(full.as_str())) {
+        return "go";
     }
     return null;
 }
@@ -109,7 +118,10 @@ attach fn import_lang(this: checker&, lang: str, args: std::vec<std::string>&, a
     };
     for (l) in flags.as_str().lines().items() {
         val f = l.trim();
-        if (f.len > 0) {
+        val go_pkg = f.strip_prefix("go-package ");
+        if (go_pkg) {
+            put(&this.go_packages, S(go_pkg));
+        } else if (f.len > 0) {
             put(&this.link_flags, S(f));
         }
     }
@@ -139,6 +151,51 @@ attach fn import_lang(this: checker&, lang: str, args: std::vec<std::string>&, a
     put(&this.cpp_items, bx(move items));
     val n = this.ns_child(ns, alias);
     return this.collect(*this.cpp_items.at(this.cpp_items.len - 1), n);
+}
+
+// A program's use go imports as one library: each import is a package of glue (`go-package DIR` in
+// its flags), and bolt import go-link builds them all into one, with the one Go runtime a program
+// can have. The error, if it fails
+attach fn link_go(this: checker&) -> std::string? {
+    if (this.go_packages.len == 0) {
+        return null;
+    }
+    var key: std::string = {};
+    for (p&) in this.go_packages.items() {
+        key.append(p.as_str());
+        key.push('\n');
+    }
+    val out = std::fmt::format("{}/imports/go-link-{:x}", cache_base().as_str(), std::digest::fnv1a(key.as_str()));
+    val bolt = find_bolt();
+    var argv: std::vec<str> = {};
+    put(&argv, bolt.as_str());
+    put(&argv, "import");
+    put(&argv, "go-link");
+    put(&argv, "--as");
+    put(&argv, "program");
+    put(&argv, "--out");
+    put(&argv, out.as_str());
+    put(&argv, "--");
+    for (p&) in this.go_packages.items() {
+        put(&argv, p.as_str());
+    }
+    val r = std::process::capture(argv.items(), "") catch |e| {
+        return fmt("use go: can't run {}: set $BOLT to bolt, or put it next to voltc or on PATH", copy bolt);
+    };
+    if (r.code != 0) {
+        return S(r.err.as_str().trim());
+    }
+    var ff = copy out;
+    ff.append("/import.flags");
+    val flags = std::fs::read_file(ff.as_str()) catch |e| {
+        return fmt("bolt import go-link wrote no {}", copy ff);
+    };
+    for (l) in flags.as_str().lines().items() {
+        if (l.trim().len > 0) {
+            put(&this.link_flags, S(l.trim()));
+        }
+    }
+    return null;
 }
 
 // bolt: $BOLT, else the bolt next to this voltc, else bolt on PATH

@@ -15,16 +15,13 @@ importing C, C++, Rust, Zig and Swift code. Each one is a `run.sh` with its exac
 
 - **C**: import the header, see [C](/volt-bootstrap/interop/c/).
 - **C++**: import the header, `use { "shapes.hpp" } as x;`, see [C++](/volt-bootstrap/interop/cpp/).
-- **Rust** and **Zig**: import the file or the crate, `use { "geom.rs" } as x;`, `use { "../geom" }
-  as x;` (a directory with a `Cargo.toml`) or `use { "fastmath.zig" } as x;`, and call its public
-  API, see [Rust, Zig and Go](/volt-bootstrap/interop/rust-and-zig/). The extension says which
-  language it is; `use cpp`, `use rust` or `use zig { ... }` says it outright where it's ambiguous.
+- **Rust**, **Zig** and **Go**: import the file or the crate, `use { "geom.rs" } as x;`,
+  `use { "../geom" } as x;` (a directory with a `Cargo.toml`, or a `go.mod`),
+  `use { "fastmath.zig" } as x;` or `use { "geom.go" } as x;`, and call its public API, see
+  [Rust, Zig and Go](/volt-bootstrap/interop/rust-and-zig/). The extension says which language it
+  is; `use cpp`, `use rust`, `use zig` or `use go { ... }` says it outright where it's ambiguous.
 - **Swift**: import the files, `use { "shapes.swift" } as x;`, and call their functions, structs,
   classes and enums, see [Swift](/volt-bootstrap/interop/swift/).
-- **Go**: list the module under `[foreign]` in `bolt.toml`, see
-  [Rust, Zig and Go](/volt-bootstrap/interop/rust-and-zig/#go-and-c-apis-you-write-yourself). Without bolt, declare a
-  `#[no_mangle] pub extern "C" fn` (or a Zig `export fn`) with `extern "C" fn` and link the library
-  with `--cc`.
 - **Python**: depend on the `interop/python` package, see [Python](/volt-bootstrap/interop/python/).
   Or embed it like any C library: `use { "Python.h" } as py;` with the flags from
   `python3-config --includes` and `--ldflags --embed` passed through `--cc`.

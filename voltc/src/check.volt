@@ -427,6 +427,7 @@ struct checker {
     cpp_items: std::vec<std::box<std::vec<item>>> = {};
     // use LANG (langimport.volt): what the program links for the imports (libraries, -l flags)
     link_flags: std::vec<std::string> = {};
+    go_packages: std::vec<std::string> = {}; // use go's glue packages, linked as one (link_go)
     import_deps: std::vec<std::string> = {}; // the files they were made from (OUT.deps, for bolt)
     cpp_shims: std::vec<std::string> = {};
     // C++ declarations of the imports' own (Volt's subclasses of C++ classes, what each import's

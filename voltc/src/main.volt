@@ -582,11 +582,17 @@ fn compile_with(c: cli&, s: sources&, shim: shim_src*) -> std::box<checker> {
     for (l&) in c.links.items() {
         put(&o.linked, l.name);
     }
-    val chk = compile(&s.files, &s.asts, move o);
+    var chk = compile(&s.files, &s.asts, move o);
     val diags = all_diags(&*chk);
     report_diags(c, &s.files, &diags);
     if (chk.errors.len > 0) {
         std::process::exit(1);
+    }
+    if (c.cmd == "build" || c.cmd == "run" || c.cmd == "lib") {
+        val e = chk.link_go();
+        if (e) {
+            die(copy e);
+        }
     }
     return move chk;
 }

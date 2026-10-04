@@ -632,6 +632,59 @@ fn zig_direct() {
     assert!(bolt_run("c").contains("ticks 20 30"), "the Zig change is in");
 }
 
+/// Volt calls ordinary Go directly: `use { "geom.go" } as geom;` (a package), `use { "shapes" }` (a
+/// module's directory) and `use { "tool/tool.go" }` (a main package), and nothing else, linked with
+/// one Go runtime, on both backends, from voltc run and from a bolt package, which rebuilds when the
+/// Go code changes
+#[test]
+fn go_direct() {
+    let Some(go) = local_tool("go", "version") else {
+        eprintln!("go isn't installed: skipping use go");
+        return;
+    };
+    let e = Env::new("go_direct");
+    let dir = e.dir.join("gd");
+    copy_dir(&Path::new(ROOT).join("tests/interop/go_direct"), &dir);
+    let src = std::fs::read_to_string(dir.join("main.volt")).unwrap();
+    let want: String = src.lines().filter_map(|l| l.strip_prefix("// expect: ")).map(|l| format!("{l}\n")).collect();
+    let tools = |c: &mut Command| {
+        c.env("VOLTC", &e.voltc).env("BOLT", env!("CARGO_BIN_EXE_bolt")).env("VOLT_CACHE", e.dir.join("cache")).env("BOLT_HOME", e.dir.join("bolthome")).env("GO", &go);
+    };
+    for backend in ["c", "llvm"] {
+        let mut c = Command::new(&e.voltc);
+        c.args(["run", "--backend", backend, "main.volt"]).current_dir(&dir).env("VOLT_STD", Path::new(ROOT).join("std"));
+        tools(&mut c);
+        assert_eq!(ok(c.output().unwrap(), "voltc run"), want, "voltc run ({backend})");
+    }
+    // a handle Go never made stops the program
+    let mut c = Command::new(&e.voltc);
+    c.args(["run", "empty.volt"]).current_dir(&dir).env("VOLT_STD", Path::new(ROOT).join("std"));
+    tools(&mut c);
+    let o = c.output().unwrap();
+    assert_eq!(o.status.code(), Some(101), "an empty handle panics: {}", String::from_utf8_lossy(&o.stderr));
+    assert!(String::from_utf8_lossy(&o.stderr).contains("geom::Shape is empty"), "{}", String::from_utf8_lossy(&o.stderr));
+    // the same program in a bolt package
+    let app = dir.join("app");
+    std::fs::create_dir_all(app.join("src")).unwrap();
+    std::fs::write(app.join("bolt.toml"), format!("[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[std]\npath = \"{}\"\n", Path::new(ROOT).join("std").display())).unwrap();
+    let in_app = src.replace("use { \"geom.go\" }", "use { \"../../geom.go\" }").replace("use { \"shapes\" }", "use { \"../../shapes\" }").replace("use { \"tool/tool.go\" }", "use { \"../../tool/tool.go\" }");
+    std::fs::write(app.join("src/main.volt"), in_app).unwrap();
+    let bolt_run = |backend: &str| {
+        let mut c = Command::new(env!("CARGO_BIN_EXE_bolt"));
+        c.args(["run", "-q", "--backend", backend]).current_dir(&app);
+        tools(&mut c);
+        ok(c.output().unwrap(), "bolt run")
+    };
+    assert_eq!(bolt_run("llvm"), want, "bolt run");
+    // a change to the Go code reaches the program: the package's, and one its module imports
+    let f = dir.join("geom.go");
+    std::fs::write(&f, std::fs::read_to_string(&f).unwrap().replace("strings.ToUpper(s)", "strings.ToUpper(s) + \"!\"")).unwrap();
+    let f = dir.join("shapes/units/units.go");
+    std::fs::write(&f, std::fs::read_to_string(&f).unwrap().replace("\" m\"", "\" metres\"")).unwrap();
+    let out = bolt_run("c");
+    assert!(out.contains("QUIET! a-b-c") && out.contains("6 metres²"), "the Go changes are in: {out}");
+}
+
 /// Volt calls ordinary Swift directly: `use { "geometry.swift", "things.swift" } as geo;` and nothing
 /// else, on both backends, from voltc run and from a bolt package, which rebuilds when a file changes
 #[test]

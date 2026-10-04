@@ -1,6 +1,6 @@
 ---
 title: Rust, Zig and Go
-description: Calling ordinary Rust crates and Zig files by importing them like a header, Go libraries through bolt, and Cargo and Zig projects that use Volt.
+description: Calling ordinary Rust crates, Zig files and Go packages by importing them like a header, and Cargo and Zig projects that use Volt.
 sidebar:
   order: 3
 ---
@@ -94,10 +94,56 @@ fn main() -> !void {
 Functions with `comptime` or `anytype` parameters are left out, listed in a comment of the
 generated declarations. bolt reads `$ZIG` for the compiler, else `zig` on the PATH.
 
+## Volt calls Go
+
+A `.go` file imports its package (the files of its directory), and a directory with a `go.mod`
+imports that module's package. Nothing in the Go code is written for Volt: no `//export`, no cgo.
+bolt asks Go's own type checker what the package exports and writes a cgo shim for it:
+
+```volt ignore
+use std::io;
+use { "geom.go" } as geom;       // package geom, from this file's directory
+use { "../shapes" } as sh;       // a module's directory: its root package
+
+fn main() -> !void {
+    var b: geom::Point = { X: 3.0, Y: 4.0 };    // a plain struct, by value
+    b.Scale(2.0);                                // func (p *Point) Scale(k float64)
+    std::println("{} {}", b.Norm(), geom::Upper("quiet"));      // 10 QUIET
+    std::println("{}", try geom::Parse("42"));                  // (int, error)
+
+    val sides: f64[3] = { 3.0, 4.0, 5.0 };
+    var s = geom::NewShape("tri", sides[..]);   // *Shape: a handle; Go keeps it while Volt holds it
+    s.Add(1.0);
+    std::println("{} {}", s.Perimeter(), sh::Area(2.0, 3.0));
+}
+```
+
+| Go | Volt |
+| --- | --- |
+| an exported `func F(...)` | `fn F(...)`, the same name |
+| an exported method, on `T` or `*T` | a method; one on `*T` can change a plain struct, and the change comes back |
+| `int`, `uint` | `isize`, `usize` |
+| `int8`…`uint64`, `float32`, `float64`, `bool`, `byte`, `rune` | the same sizes (`u8`, `i32`) |
+| `string` | `str` in, `std::string` out |
+| `[]T` of numbers or strings | `T[..]`, `str[..]` in (Go sees Volt's elements, and changes them in place); `std::vec<T>` out |
+| `(T, error)`, `error` | `go_error!T`, `go_error!void`; the error's text is in `go_error::ERROR` |
+| `(T, bool)` | `T?` |
+| a struct whose fields are all exported numbers, `bool`s, enums or such structs | a Volt struct with those fields, passed by value |
+| any other struct | an owned handle (a cgo `Handle`): Go's collector keeps the value until Volt deletes it; a `*T` result is a handle to that same value, a `T` one to a copy |
+| `type T int` with constants of type `T` | a Volt enum with the same values |
+| an exported constant of a number, `bool` or string | a `val` |
+
+A `main` package works too (its `main` isn't run). The program links every `use go` import into
+one library, so it has one Go runtime, started when the program starts. Generic functions and types,
+variadic functions, and `func`, `map`, `chan` and interface types are left out, listed in a comment
+of the generated declarations. bolt reads `$GO` for the go command, else `go` on the PATH; cgo needs
+a C compiler.
+
 ## Go, and C APIs you write yourself
 
-Go modules, and Rust crates or Zig files that export a C API (`#[no_mangle] pub extern "C" fn`,
-`export fn`), can be named under `[foreign]` in `bolt.toml`:
+Libraries with a C API of their own, Go modules built as one (`//export`), and Rust crates or Zig
+files that export one (`#[no_mangle] pub extern "C" fn`, `export fn`), can be named under
+`[foreign]` in `bolt.toml`:
 
 ```toml
 [foreign]
