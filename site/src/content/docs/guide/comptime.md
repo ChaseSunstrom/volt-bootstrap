@@ -135,6 +135,58 @@ fn main() -> void {
 // expect: std::mem::box<i32, std::mem::default_allocator>
 ```
 
+`@field(v, "name")` is `v.name` with the name worked out at compile time: read it, assign to it,
+take its address. `@has_field(T, "name")` asks whether struct `T` has that field. With a
+`comptime for` over `@typeinfo`'s fields, code over any struct is a few lines:
+
+```volt
+use std::io;
+
+struct point {
+    x: i32;
+    y: i32;
+}
+
+<T: type>
+fn same(a: T&, b: T&) -> bool {
+    comptime match (@typeinfo(T).kind) {
+        .STRUCT(s) => {
+            comptime for (f) in s.0 {
+                if (@field(a, f.name) != @field(b, f.name)) {
+                    return false;
+                }
+            }
+        },
+        default => {},
+    }
+    return true;
+}
+
+<T: type>
+fn show(v: T&) -> std::string {
+    var out = std::string::from(@typeinfo(T).short_name);
+    comptime match (@typeinfo(T).kind) {
+        .STRUCT(s) => {
+            comptime for (f) in s.0 {
+                std::fmt::write(&out, " {}={}", f.name, @field(v, f.name));
+            }
+        },
+        default => {},
+    }
+    return move out;
+}
+
+fn main() -> void {
+    var p: point = { x: 1, y: 2 };
+    val q: point = { x: 1, y: 2 };
+    std::println("{} {}", same(&p, &q), @has_field(point, "y"));
+    @field(p, "y") = 5;
+    std::println("{}", show(&p));
+}
+// expect: true true
+// expect: point x=1 y=5
+```
+
 `@compile_error("message")` fails compilation when it's reached, for custom checks in templates.
 
 ## Does a type attach a trait: @attaches

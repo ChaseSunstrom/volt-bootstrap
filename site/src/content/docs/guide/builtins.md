@@ -17,6 +17,8 @@ Builtins start with `@`. They're part of the language, not a library.
 | `@typeof(expr)` | `type` | an expression's type (comptime) |
 | `@typeinfo(T)` | typeinfo | a type's description (comptime): names, size, kind, fields... |
 | `@typeid(T)`, `@typeid(x)` | `u64` | a type's id, the same in every build; for a trait value, the id of the type it holds. See [Comptime](/volt-bootstrap/guide/comptime/#type-ids-typeid) |
+| `@field(v, "name")` | the field | `v.name`, the name a comptime string: read, assigned, borrowed. See [Comptime](/volt-bootstrap/guide/comptime/#reflection-typeinfo-and-typeof) |
+| `@has_field(T, "name")` | `bool` | is `T` a struct with that field (comptime) |
 | `@has_method(T, "name", A...)` | `bool` | does `T` have a method of that name, taking `A...` first (comptime). See [Comptime](/volt-bootstrap/guide/comptime/#does-a-type-attach-a-trait-attaches) |
 | `@attaches(T, some_trait)` | `bool` | does `T` attach the trait, as a `<T: some_trait>` bound asks (comptime). See [Comptime](/volt-bootstrap/guide/comptime/#does-a-type-attach-a-trait-attaches) |
 | `@panic("msg")` | `never` | stops the program with a message (exit code 101) |

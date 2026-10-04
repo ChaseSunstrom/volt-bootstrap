@@ -82,7 +82,7 @@ impl Checker {
     /// is this expression only meaningful at compile time (so it gets evaluated, not emitted)?
     pub fn is_ct_expr(&self, e: &Expr) -> bool {
         match &e.kind {
-            ExprKind::Builtin(n, _, _) => matches!(n.as_str(), "typeinfo" | "typeof" | "compile_error" | "cfg" | "attaches" | "has_method"),
+            ExprKind::Builtin(n, _, _) => matches!(n.as_str(), "typeinfo" | "typeof" | "compile_error" | "cfg" | "attaches" | "has_method" | "has_field"),
             ExprKind::Call(c, _) => match &c.kind {
                 ExprKind::Path(p) => {
                     let found = if p.segs.len() == 1 { self.lookup(self.cx.env.ns, &p.segs[0].name) } else { self.lookup_path_ns(self.cx.env.ns, p) };
@@ -1402,6 +1402,23 @@ impl Checker {
                     tys.push(ty_arg(self, a)?);
                 }
                 Ok(CVal::Bool(self.has_method(t, &name, &tys)))
+            }
+            "has_field" => {
+                // @has_field(T, "name"): is T a struct with a field of that name?
+                let [g, n] = args else { return cerr(span, "@has_field(T, \"name\") takes a type and a name") };
+                let t = ty_arg(self, g)?;
+                let name = match n {
+                    GenericArg::Expr(e) => match self.ct_expr(e, None)? {
+                        CVal::Str(s) => String::from_utf8_lossy(&s).into_owned(),
+                        _ => return cerr(e.span, "@has_field(T, \"name\"): the name is a string"),
+                    },
+                    GenericArg::Type(t) => return cerr(t.span, "@has_field(T, \"name\"): the name is a string"),
+                };
+                let has = match self.t.get(t).clone() {
+                    Ty::Struct(sid) => self.struct_fields(sid, span)?.iter().any(|f| f.name == name),
+                    _ => false,
+                };
+                Ok(CVal::Bool(has))
             }
             "sizeof" | "alignof" => {
                 let [g] = args else { return cerr(span, format!("@{name}(T) takes one type")) };

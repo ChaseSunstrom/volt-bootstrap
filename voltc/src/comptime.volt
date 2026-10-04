@@ -114,7 +114,7 @@ attach fn ct_eval_in(this: checker&, env: u32, e: expr&, want: u32?) -> compile_
 // is this expression only meaningful at compile time (so it gets evaluated, not emitted)?
 attach fn is_ct_expr(this: checker&, e: expr&) -> bool {
     match (e.kind) {
-        .BUILTIN(n, g, a) => { return n == "typeinfo" || n == "typeof" || n == "compile_error" || n == "cfg" || n == "attaches" || n == "has_method"; },
+        .BUILTIN(n, g, a) => { return n == "typeinfo" || n == "typeof" || n == "compile_error" || n == "cfg" || n == "attaches" || n == "has_method" || n == "has_field"; },
         .CALL(c, args) => {
             match (c.kind) {
                 .PATH(p&) => {
@@ -2282,6 +2282,34 @@ attach fn ct_builtin(this: checker&, name: str, gargs: std::vec<garg>&, args: st
             },
             .TYPE(b&) => { return fails(b.span, "@has_method(T, \"name\"): the name is a string"); },
         }
+    }
+    if (name == "has_field") {
+        // @has_field(T, "name"): is T a struct with a field of that name?
+        if (args.len != 2) {
+            return fails(span, "@has_field(T, \"name\") takes a type and a name");
+        }
+        val t = try this.ct_ty_arg(args.at(0), env);
+        var fname = S("");
+        match (*args.at(1)) {
+            .EXPR(e&) => {
+                match (try this.ct_expr(e, null)) {
+                    .STR(s) => { fname = copy s; },
+                    default => { return fails(e.span, "@has_field(T, \"name\"): the name is a string"); },
+                }
+            },
+            .TYPE(b&) => { return fails(b.span, "@has_field(T, \"name\"): the name is a string"); },
+        }
+        match (*this.t.get(t)) {
+            .STRUCT(sid) => {
+                for (f&) in (try this.struct_fields(sid, span)).items() {
+                    if (f.name == fname.as_str()) {
+                        return cval::BOOL(true);
+                    }
+                }
+            },
+            default => {},
+        }
+        return cval::BOOL(false);
     }
     if (name == "sizeof" || name == "alignof") {
         if (args.len != 1) {
