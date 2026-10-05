@@ -164,7 +164,8 @@ fn main() -> void {
 
 ## Control flow
 
-`if` and `while` take a `bool` in parentheses, and their bodies always have braces.
+`if` and `while` take a `bool` in parentheses, and their bodies always have braces (an `if` without
+them is a value, below).
 
 ```volt
 use std::io;
@@ -187,6 +188,34 @@ fn main() -> void {
 
 `if (val v = e)` and `while (val x = e)` bind the value of an optional or an error union when it
 has one; see [Binding in if and while](/volt-bootstrap/guide/errors/#binding-in-if-and-while).
+
+### if as a value
+
+Without braces, `if (c) a else b` is an expression: its value is `a` when `c` holds, else `b`. The
+`else` is required, `else if` chains, and the arms are expressions, as a
+[match](/volt-bootstrap/guide/enums-match/#match)'s are; they take their type from where the value goes.
+A condition narrows an optional in the arm as it does in a statement `if`, and the binding forms work
+too. An arm can also leave (`else return 0`), or be a block that leaves (`else { ...; return; }`).
+
+```volt
+use std::io;
+
+fn sign(x: i32) -> str {
+    return if (x < 0) "negative" else if (x == 0) "zero" else "positive";
+}
+
+fn main() -> void {
+    val name: str? = "volt";
+    val len = if (val n = name) n.len else 0;
+    val carry: u32 = if (len > 3) 1 else 0;
+    std::println("{} {} {}", sign(-5), len, carry);
+}
+// expect: negative 4 1
+```
+
+Choosing a value this way compiles to a branch-free select where it can, as C's `?:` does; an `if`
+statement that assigns in both branches may compile to a jump instead, which costs more when the
+condition is hard to predict.
 
 ### for
 

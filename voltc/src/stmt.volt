@@ -715,10 +715,18 @@ attach fn brk(this: checker&, label: str?, v: expr*, span: span) -> compile_erro
         val got = this.take(g, e.span);
         this.cx.exiting -= 1;
         var value = try got;
+        // a value that leaves first (break :l return x, an if value's arm that's continue) never gets
+        // to break: it gives the block no value and no type
+        if (value.ty == NEVER) {
+            return value;
+        }
         val bt = this.cx.loops.at(li).break_ty;
         if (bt) {
             value = try this.coerce(value, bt, e.span);
         } else {
+            if (value.ty == VOID && (this.cx.loops.at(li).label ?? "") == IFV_LABEL) {
+                return fails(e.span, "an if without { } is a value, and this arm has none; an if statement takes braces");
+            }
             if (value.ty == VOID || value.ty == NULL_TY) {
                 return fails(e.span, "break needs a value with a type here");
             }
@@ -797,6 +805,9 @@ attach fn finish_loop(this: checker&, body: std::vec<u32>, body_div: bool, span:
     put(&stmts, this.ir.label_at(lc.brk));
     if (lc.can_value && lc.break_ty != null && lc.has_break) {
         if (value_needs_break && !body_div) {
+            if ((lc.label ?? "") == IFV_LABEL) {
+                return fails(span, "an arm of this if is a block with no value: a block arm has to leave (return, break, @panic ...)");
+            }
             return fails(span, "this block needs to end with a break that gives its value");
         }
         val t = lc.break_ty ?? VOID;

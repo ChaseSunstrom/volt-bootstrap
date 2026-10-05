@@ -857,6 +857,14 @@ attach fn loop_expr(this: parser&, lab: str?, is_comptime: bool) -> compile_erro
         }
         val cond = try this.expr();
         try this.expect(")");
+        if (!is_comptime && !this.is("{")) {
+            // the value form, `:@ifv { if (c) { break :@ifv a; } else { break :@ifv b; } }`
+            val (then, els, cap) = try this.value_arms(false);
+            val sp = start.to(this.prev_span());
+            var stmts: std::vec<stmt> = {};
+            put(&stmts, { kind: stmt_kind::EXPR({ kind: expr_kind::IF({ cond: bx(move cond), then: move then, els: bx(move els), is_comptime: false }), span: sp }), span: sp });
+            return value_block(move stmts, sp);
+        }
         val then = try this.block();
         var els: std::box<expr>? = null;
         if (this.eat_kw("else")) {
@@ -1211,6 +1219,47 @@ fn update_tmp(sp: span) -> expr {
     return { kind: expr_kind::PATH(single_path(UPDATE_TMP, sp)), span: sp };
 }
 
+// the arms of `if (c) a else b`, the value form (after the condition): the then block and the else,
+// each breaking out of the `:@ifv` block around the if with its arm's value. The else is required;
+// its arm is an expression (another if, too) or, as in a match, a block, which has to leave
+// (`else { return; }`); `else |err|` (with capture) binds an error union's error
+attach fn value_arms(this: parser&, capture: bool) -> compile_error!(block, expr, catch_cap?) {
+    val a = try this.expr();
+    if (!this.eat_kw("else")) {
+        return this.unexpected("'else' (an if without { } is a value: if (c) a else b)");
+    }
+    var cap: catch_cap? = null;
+    if (capture && this.eat("|")) {
+        val c = try this.ident();
+        try this.expect("|");
+        cap = { name: c.name, span: c.span };
+    }
+    var els: expr = { kind: expr_kind::NULL, span: a.span };
+    if (this.is("{")) {
+        val b = try this.block();
+        val bsp = b.span;
+        els = { kind: expr_kind::BLOCK(null, move b), span: bsp };
+    } else {
+        val b = value_arm(try this.expr());
+        val bsp = b.span;
+        els = { kind: expr_kind::BLOCK(null, move b), span: bsp };
+    }
+    return (value_arm(move a), move els, cap);
+}
+
+// `{ break :@ifv e; }`
+fn value_arm(e: expr) -> block {
+    val sp = e.span;
+    var stmts: std::vec<stmt> = {};
+    put(&stmts, { kind: stmt_kind::EXPR({ kind: expr_kind::BREAK(IFV_LABEL, bx(move e)), span: sp }), span: sp });
+    return { stmts: move stmts, span: sp };
+}
+
+// `:@ifv { stmts }`
+fn value_block(stmts: std::vec<stmt>, sp: span) -> expr {
+    return { kind: expr_kind::BLOCK(IFV_LABEL, { stmts: move stmts, span: sp }), span: sp };
+}
+
 // `val v = e)` of `if (val v = e)` / `while (val x = e)`: `val @if = e;` into stmts, and the binding:
 // var or val, its name and where, and where e is
 attach fn cond_bind(this: parser&, stmts: std::vec<stmt>&) -> compile_error!(bool, str, span, span) {
@@ -1248,6 +1297,29 @@ fn held(sp: span) -> std::box<expr> {
 attach fn if_bind(this: parser&, start: span) -> compile_error!expr {
     var stmts: std::vec<stmt> = {};
     val (mutable, name, nspan, hsp) = try this.cond_bind(&stmts);
+    if (!this.is("{")) {
+        // the value form, the then arm first (its value's type decides, as a match's first arm's does):
+        // `:@ifv { val @if = e; :@if { val v = @if ?? break :@if; { break :@ifv a; } } { break :@ifv b; } }`;
+        // with `else |err|`, `val @err = @if.err;` before (the then arm may move @if's value) and
+        // `val err = @err ?? loop {};` before the else (only an error gets there)
+        val (then, els, cap) = try this.value_arms(true);
+        var found: std::vec<stmt> = {};
+        put(&found, bind_stmt(mutable, name, nspan, { kind: expr_kind::OR_ELSE(held(hsp), bx<expr>({ kind: expr_kind::BREAK(IF_LABEL, null), span: hsp })), span: hsp }));
+        val tsp = then.span;
+        put(&found, { kind: stmt_kind::EXPR({ kind: expr_kind::BLOCK(null, move then), span: tsp }), span: tsp });
+        if (cap) {
+            put(&stmts, bind_stmt(false, ERR_TMP, cap.span, { kind: expr_kind::FIELD(held(hsp), "err", null), span: cap.span }));
+        }
+        put(&stmts, { kind: stmt_kind::EXPR({ kind: expr_kind::BLOCK(IF_LABEL, { stmts: move found, span: hsp }), span: hsp }), span: hsp });
+        if (cap) {
+            val never: expr = { kind: expr_kind::LOOP(null, { stmts: {}, span: cap.span }), span: cap.span };
+            val err: expr = { kind: expr_kind::PATH(single_path(ERR_TMP, cap.span)), span: cap.span };
+            put(&stmts, bind_stmt(false, cap.name, cap.span, { kind: expr_kind::OR_ELSE(bx(move err), bx(move never)), span: cap.span }));
+        }
+        val esp = els.span;
+        put(&stmts, { kind: stmt_kind::EXPR(move els), span: esp });
+        return value_block(move stmts, start.to(this.prev_span()));
+    }
     var then = try this.block();
     var cap: catch_cap? = null;
     var has_else = false;

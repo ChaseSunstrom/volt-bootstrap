@@ -1423,6 +1423,34 @@ impl<'a> Parser<'a> {
     /// hidden @if local that holds an error union as its catch (see Checker::orelse).
     fn if_bind(&mut self, start: Span) -> Res<Expr> {
         let (mutable, name, nspan, hold) = self.cond_bind()?;
+        if !self.is("{") {
+            // the value form, the then arm first (its value's type decides, as a match's first arm's does):
+            // `:@ifv { val @if = e; :@if { val v = @if ?? break :@if; { break :@ifv a; } } { break :@ifv b; } }`;
+            // with `else |err|`, `val @err = @if.err;` before (the then arm may move @if's value) and
+            // `val err = @err ?? loop {};` before the else (only an error gets there)
+            let (then, els, cap) = self.value_arms(true)?;
+            let sp = hold.span;
+            let held = || Box::new(Expr { kind: ExprKind::Path(Path::single(IF_TMP, sp)), span: sp });
+            let leave = Expr { kind: ExprKind::Break(Some(IF_LABEL.into()), None), span: sp };
+            let value = Expr { kind: ExprKind::OrElse(held(), Box::new(leave)), span: sp };
+            let body = Stmt { span: then.span, kind: StmtKind::Expr(Expr { span: then.span, kind: ExprKind::Block(None, then) }) };
+            let found = Block { stmts: vec![Self::bind_stmt(mutable, name, nspan, value), body], span: sp };
+            let mut stmts = vec![hold];
+            if let Some((_, csp)) = &cap {
+                let err = Expr { kind: ExprKind::Field(held(), "err".into(), None), span: *csp };
+                stmts.push(Self::bind_stmt(false, ERR_TMP.into(), *csp, err));
+            }
+            stmts.push(Stmt { kind: StmtKind::Expr(Expr { kind: ExprKind::Block(Some(IF_LABEL.into()), found), span: sp }), span: sp });
+            if let Some((c, csp)) = cap {
+                let never = Expr { kind: ExprKind::Loop(None, Block { stmts: Vec::new(), span: csp }), span: csp };
+                let err = Expr { kind: ExprKind::Path(Path::single(ERR_TMP, csp)), span: csp };
+                stmts.push(Self::bind_stmt(false, c, csp, Expr { kind: ExprKind::OrElse(Box::new(err), Box::new(never)), span: csp }));
+            }
+            let esp = els.span;
+            stmts.push(Stmt { kind: StmtKind::Expr(els), span: esp });
+            let span = start.to(self.prev_span());
+            return Ok(Self::value_block(stmts, span));
+        }
         let then = self.block()?;
         let mut cap = None;
         let els = if self.eat_kw("else") {
@@ -1458,6 +1486,42 @@ impl<'a> Parser<'a> {
         let body = Stmt { span: then.span, kind: StmtKind::Expr(Expr { span: then.span, kind: ExprKind::Block(None, then) }) };
         let stmts = vec![hold, Self::bind_stmt(mutable, name, nspan, value), body];
         Ok(Expr { kind: ExprKind::Block(Some(IF_LABEL.into()), Block { stmts, span }), span })
+    }
+
+    /// the arms of `if (c) a else b`, the value form (after the condition): the then block and the else,
+    /// each breaking out of the `:@ifv` block around the if with its arm's value. The else is required;
+    /// its arm is an expression (another if, too) or, as in a match, a block, which has to leave
+    /// (`else { return; }`); `else |err|` (with capture) binds an error union's error
+    fn value_arms(&mut self, capture: bool) -> Res<(Block, Expr, Option<(String, Span)>)> {
+        let a = self.expr()?;
+        if !self.eat_kw("else") {
+            return self.unexpected("'else' (an if without { } is a value: if (c) a else b)");
+        }
+        let mut cap = None;
+        if capture && self.eat("|") {
+            cap = Some(self.ident()?);
+            self.expect("|")?;
+        }
+        let els = if self.is("{") {
+            let b = self.block()?;
+            Expr { span: b.span, kind: ExprKind::Block(None, b) }
+        } else {
+            let b = Self::value_arm(self.expr()?);
+            Expr { span: b.span, kind: ExprKind::Block(None, b) }
+        };
+        Ok((Self::value_arm(a), els, cap))
+    }
+
+    /// `{ break :@ifv e; }`
+    fn value_arm(e: Expr) -> Block {
+        let span = e.span;
+        let brk = Expr { kind: ExprKind::Break(Some(IFV_LABEL.into()), Some(Box::new(e))), span };
+        Block { stmts: vec![Stmt { kind: StmtKind::Expr(brk), span }], span }
+    }
+
+    /// `:@ifv { stmts }`
+    fn value_block(stmts: Vec<Stmt>, span: Span) -> Expr {
+        Expr { kind: ExprKind::Block(Some(IFV_LABEL.into()), Block { stmts, span }), span }
     }
 
     /// `while (val x = e) { A }` (after the `while (`): `loop { val @if = e; val x = @if ?? break; { A } }`,
@@ -1777,6 +1841,13 @@ impl<'a> Parser<'a> {
             }
             let cond = self.expr()?;
             self.expect(")")?;
+            if !comptime && !self.is("{") {
+                // the value form, `:@ifv { if (c) { break :@ifv a; } else { break :@ifv b; } }`
+                let (then, els, _) = self.value_arms(false)?;
+                let span = start.to(self.prev_span());
+                let e = Expr { kind: ExprKind::If { cond: Box::new(cond), then, els: Some(Box::new(els)), comptime: false }, span };
+                return Ok(Self::value_block(vec![Stmt { kind: StmtKind::Expr(e), span }], span));
+            }
             let then = self.block()?;
             let els = if self.eat_kw("else") {
                 if self.is_kw("if") {

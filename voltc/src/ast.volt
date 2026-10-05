@@ -210,6 +210,10 @@ val UPDATE_TMP: str = "@base";
 val IF_LABEL: str = "@if";
 val ELSE_LABEL: str = "@else";
 val IF_TMP: str = "@if";
+// the block around `if (c) a else b` (the value form), each arm breaking out of it with its value
+val IFV_LABEL: str = "@ifv";
+// the error of an `if (val v = e) a else |err| b` value, read before a can move e's value
+val ERR_TMP: str = "@err";
 
 // the operators `attach operator` can give a type: the fn each makes, and the word a C name spells
 // it as (in step with bootstrap/ast.rs OPERATORS; 8 below is "operator".len)

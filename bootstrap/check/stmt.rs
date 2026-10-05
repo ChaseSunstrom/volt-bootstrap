@@ -439,10 +439,18 @@ impl Checker {
             let got = self.expr(e, self.cx.loops[li].break_ty).and_then(|v| self.take(v, e.span));
             self.cx.exiting -= 1;
             let got = got?;
+            // a value that leaves first (break :l return x, an if value's arm that's continue) never
+            // gets to break: it gives the block no value and no type
+            if got.ty == NEVER {
+                return Ok(got);
+            }
             let val = match self.cx.loops[li].break_ty {
                 Some(t) => self.coerce(got, t, e.span)?,
                 None => {
                     let v = got;
+                    if v.ty == VOID && self.cx.loops[li].label.as_deref() == Some(IFV_LABEL) {
+                        return err(e.span, "an if without { } is a value, and this arm has none; an if statement takes braces");
+                    }
                     if v.ty == VOID || v.ty == NULL {
                         return err(e.span, "break needs a value with a type here");
                     }
@@ -503,6 +511,9 @@ impl Checker {
         if let (Some(r), Some(t)) = (&lc.result, lc.break_ty) {
             if lc.has_break {
                 if value_needs_break && !body_div {
+                    if lc.label.as_deref() == Some(IFV_LABEL) {
+                        return err(span, "an arm of this if is a block with no value: a block arm has to leave (return, break, @panic ...)");
+                    }
                     return err(span, "this block needs to end with a break that gives its value");
                 }
                 let c = self.cty(t);

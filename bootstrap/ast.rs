@@ -138,6 +138,10 @@ pub const UPDATE_TMP: &str = "@base";
 pub const IF_LABEL: &str = "@if";
 pub const ELSE_LABEL: &str = "@else";
 pub const IF_TMP: &str = "@if";
+/// the block around `if (c) a else b` (the value form), each arm breaking out of it with its value
+pub const IFV_LABEL: &str = "@ifv";
+/// the error of an `if (val v = e) a else |err| b` value, read before a can move e's value
+pub const ERR_TMP: &str = "@err";
 
 /// the operators `attach operator` can give a type (its fn is named operator+), and the word a C
 /// name spells each as
