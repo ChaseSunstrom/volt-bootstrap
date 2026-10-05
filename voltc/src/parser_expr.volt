@@ -913,6 +913,32 @@ attach fn pat(this: parser&) -> compile_error!pat {
         }
         return { kind: pat_kind::TUPLE(move elems), span: start.to(this.prev_span()) };
     }
+    if (this.eat("[")) {
+        var elems: std::vec<pat> = {};
+        var rest: slice_rest? = null;
+        while (!this.eat("]")) {
+            if (this.is("..")) {
+                val sp = this.span();
+                this.bump();
+                if (rest != null) {
+                    return fails(sp, "a slice pattern has one .. at most");
+                }
+                var r: slice_rest = { at: elems.len, name: null, name_span: sp };
+                if (this.is_ident()) {
+                    val id = try this.ident();
+                    r.name = id.name;
+                    r.name_span = id.span;
+                }
+                rest = r;
+            } else {
+                put(&elems, try this.pat());
+            }
+            if (!this.eat(",") && !this.is("]")) {
+                return this.unexpected("',' or ']'");
+            }
+        }
+        return { kind: pat_kind::SLICE(move elems, rest), span: start.to(this.prev_span()) };
+    }
     if (this.is_lit_tok()) {
         val lo = try this.unary();
         if (this.is("..") || this.is("..=")) {

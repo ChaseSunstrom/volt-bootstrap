@@ -9,6 +9,8 @@ struct coverage {
     variants: idset = {};
     has_false: bool = false;
     has_true: bool = false;
+    lens: std::vec<usize> = {}; // slice lengths covered exactly
+    open: usize? = null;        // every slice length from this one up (a [.., x] arm)
 }
 
 // a local an arm declares, initialized from c (the payload's place, or its address for x&)
@@ -27,6 +29,10 @@ struct pat_out {
     irrefutable: bool;
     variant: usize? = null;
     bool_val: bool? = null;
+    // a slice pattern whose elements all match anything: the lengths it covers, lens_n exactly or
+    // (lens_open, with a `..`) lens_n and more
+    lens_n: usize? = null;
+    lens_open: bool = false;
 }
 
 // `match (scrut) { arms }`: an if-chain over the scrutinee's slot. Its type is want, else the first arm
@@ -40,6 +46,14 @@ attach fn match_expr(this: checker&, scrut: expr&, arms: std::vec<arm>&, want: u
     var mp = vnew(0, 0);
     addr_prov(&mp, &s);
     mp.own = s.own; // x& bindings change it
+    // a slice's elements are what it points at, as s[i] reaches them
+    match (*this.t.get(s.ty)) {
+        .SLICE(x) => {
+            mp.ro = s.ro;
+            mp.via = s.via;
+        },
+        default => {},
+    }
     var outp = vnew(0, 0); // the arms' values: read-only where any is
     val st = s.ty;
     // a place is matched where it is (x& bindings point into it; plain ones copy the payload when the
@@ -188,6 +202,17 @@ attach fn match_arm(this: checker&, a: arm&, m: u32, st: u32, result_ty: u32?&, 
                 cov.has_false = true;
             }
         }
+        val ln = p.lens_n;
+        if (ln) {
+            if (p.lens_open) {
+                val co = cov.open;
+                if (co == null || ln < (co ?? 0)) {
+                    cov.open = ln;
+                }
+            } else {
+                put(&cov.lens, ln);
+            }
+        }
     }
     if (guard) {
         put(&body_stmts, this.ir.if_(guard, this.ir.block(move body_code), null));
@@ -208,6 +233,42 @@ attach fn match_arm(this: checker&, a: arm&, m: u32, st: u32, result_ty: u32?&, 
 attach fn check_exhaustive(this: checker&, t: u32, cov: coverage&, span: span) -> compile_error!void {
     if (cov.all) {
         return;
+    }
+    // slices and str: every length; an array: its one length
+    var seq = false;
+    var arr_len: u64? = null;
+    match (*this.t.get(t)) {
+        .SLICE(x) => { seq = true; },
+        .STR => { seq = true; },
+        .ARRAY(x, n) => { arr_len = n; },
+        default => {},
+    }
+    if (seq) {
+        var upto: usize = 0;
+        val co = cov.open;
+        if (co) {
+            upto = co;
+        } else {
+            for (x&) in cov.lens.items() {
+                if (*x + 1 > upto) {
+                    upto = *x + 1;
+                }
+            }
+        }
+        var n: usize = 0;
+        while (n <= upto) {
+            if (!covers_len(cov, n)) {
+                return fail(span, fmt("match doesn't handle a slice of length {} (add arms or a default)", unum(@cast<u64>(n))));
+            }
+            n += 1;
+        }
+        return;
+    }
+    val al = arr_len;
+    if (al) {
+        if (covers_len(cov, @cast<usize>(al))) {
+            return;
+        }
     }
     val eid = this.enum_of(t);
     if (eid) {
@@ -249,6 +310,20 @@ attach fn check_exhaustive(this: checker&, t: u32, cov: coverage&, span: span) -
         return;
     }
     return fail(span, fmt("match on {} needs a default arm", this.ty_name(t)));
+}
+
+// whether the unguarded arms so far cover slices of length n
+fn covers_len(cov: coverage&, n: usize) -> bool {
+    for (x&) in cov.lens.items() {
+        if (*x == n) {
+            return true;
+        }
+    }
+    val co = cov.open;
+    if (co) {
+        return n >= co;
+    }
+    return false;
 }
 
 // a pattern that always matches and binds nothing
@@ -331,6 +406,81 @@ attach fn pat_code(this: checker&, p: pat&, c: u32, t: u32) -> compile_error!pat
                 return fail(span, fmt2("expected {} elements, found {}", unum(@cast<u64>(ts.len)), unum(@cast<u64>(pats.len))));
             }
             return this.sub_pats(pats, &ts, c);
+        },
+        .SLICE(pats&, rest) => {
+            // a slice's or str's elements through its pointer, an array's in place
+            var elem: u32 = 0;
+            var len: u32 = 0;
+            var base: u32 = c;
+            var is_array = false;
+            match (*this.t.get(t)) {
+                .SLICE(x) => {
+                    elem = x;
+                    len = this.ir.field(c, 1, USIZE);
+                    base = this.ir.field(c, 0, this.t.intern(tyk::PTR(x)));
+                },
+                .STR => {
+                    elem = U8;
+                    len = this.ir.field(c, 1, USIZE);
+                    base = this.ir.field(c, 0, this.t.intern(tyk::PTR(U8)));
+                },
+                .ARRAY(x, n) => {
+                    elem = x;
+                    len = this.ir.int(@cast<i128>(n), USIZE);
+                    is_array = true;
+                },
+                default => { return fail(span, fmt("slice pattern, but the value is a {}", this.ty_name(t))); },
+            }
+            val n = pats.len;
+            var split = n;
+            val rr = rest;
+            if (rr) {
+                split = rr.at;
+            }
+            // elements before the .. count from the front, the ones after it from the back
+            var out = any_pat();
+            for (i) in 0..n {
+                var idx = this.ir.int(@cast<i128>(i), USIZE);
+                if (i >= split) {
+                    idx = this.ir.binary(binop_ir::SUB, len, this.ir.int(@cast<i128>(n - i), USIZE), USIZE);
+                }
+                val o = try this.pat_code(pats.at(i), this.ir.index(base, idx, elem), elem);
+                out.test = this.and_test(out.test, o.test);
+                for (b&) in o.binds.items() {
+                    put(&out.binds, *b);
+                }
+                out.irrefutable = out.irrefutable && o.irrefutable;
+            }
+            var op = binop_ir::EQ;
+            if (rr) {
+                op = binop_ir::GE;
+            }
+            // the length first: the elements are only read when it holds
+            out.test = this.and_test(this.ir.binary(op, len, this.ir.int(@cast<i128>(n), USIZE), BOOL), out.test);
+            if (rr) {
+                val nm = rr.name;
+                if (nm) {
+                    var st = this.t.intern(tyk::SLICE(elem));
+                    if (t == STR) {
+                        st = STR;
+                    }
+                    val pt = this.t.intern(tyk::PTR(elem));
+                    var p0 = base;
+                    if (is_array) {
+                        p0 = this.ir.addr(this.ir.index(c, this.ir.int(0, USIZE), elem), pt);
+                    }
+                    var inits: std::vec<field_init> = {};
+                    put(&inits, { field: 0, value: this.ir.binary(binop_ir::ADD, p0, this.ir.int(@cast<i128>(rr.at), USIZE), pt) });
+                    put(&inits, { field: 1, value: this.ir.binary(binop_ir::SUB, len, this.ir.int(@cast<i128>(n), USIZE), USIZE) });
+                    put(&out.binds, { name: nm, ty: st, c: this.ir.node(ir_kind::AGG(move inits), st) });
+                }
+            }
+            if (out.irrefutable) {
+                out.lens_n = n;
+                out.lens_open = rr != null;
+            }
+            out.irrefutable = false;
+            return out;
         },
         .CTOR(path&, args&) => {
             match (*this.t.get(t)) {

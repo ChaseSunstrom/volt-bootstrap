@@ -1733,6 +1733,26 @@ impl<'a> Parser<'a> {
             }
             return mk(PatKind::Tuple(elems), self);
         }
+        if self.eat("[") {
+            let mut elems = Vec::new();
+            let mut rest = None;
+            while !self.eat("]") {
+                if self.is("..") {
+                    let sp = self.bump().span;
+                    if rest.is_some() {
+                        return err(sp, "a slice pattern has one .. at most");
+                    }
+                    let name = if self.is_ident() { Some(self.ident()?) } else { None };
+                    rest = Some((elems.len(), name));
+                } else {
+                    elems.push(self.pat()?);
+                }
+                if !self.eat(",") && !self.is("]") {
+                    return self.unexpected("',' or ']'");
+                }
+            }
+            return mk(PatKind::Slice(elems, rest), self);
+        }
         let is_lit = matches!(self.tok(), Tok::Int(_) | Tok::Float(_) | Tok::Char(_) | Tok::Str(_))
             || (self.is("-") && matches!(self.tok_at(1), Tok::Int(_) | Tok::Float(_)))
             || self.is_kw("true")

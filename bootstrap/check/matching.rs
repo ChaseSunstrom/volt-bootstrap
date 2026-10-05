@@ -10,6 +10,8 @@ struct Coverage {
     all: bool,
     variants: HashSet<usize>,
     bools: [bool; 2],
+    lens: HashSet<usize>,  // slice lengths covered exactly
+    open: Option<usize>,   // every slice length from this one up (a [.., x] arm)
 }
 
 /// a pattern compiled against the scrutinee's place. `test` is C that's true on a match ("1" = always),
@@ -22,6 +24,9 @@ pub struct PatOut {
     pub irrefutable: bool,
     pub variant: Option<usize>,
     pub bool_val: Option<bool>,
+    /// a slice pattern whose elements all match anything: the lengths it covers, n exactly or (with a
+    /// `..`) n and more
+    pub lens: Option<(usize, bool)>,
 }
 
 impl Checker {
@@ -32,8 +37,9 @@ impl Checker {
         if matches!(s.ty, VOID | NEVER | NULL) {
             return err(scrut.span, "can't match on this; it has no value");
         }
-        // what x& bindings reach: the matched place, as &place would (lends.rs)
-        let mprov = Self::addr_prov(&s);
+        // what x& bindings reach: the matched place, as &place would (lends.rs); a slice's elements are
+        // what it points at, as s[i] reaches them
+        let mprov = if matches!(self.t.get(s.ty), Ty::Slice(_)) { (s.ro, s.via, s.root.clone()) } else { Self::addr_prov(&s) };
         let s_own = Val { own: s.own.clone(), ..Val::new(VOID, "") };
         let st = s.ty;
         let sc = self.cty(st);
@@ -120,6 +126,13 @@ impl Checker {
                         if let Some(b) = p.bool_val {
                             cov.bools[b as usize] = true;
                         }
+                        match p.lens {
+                            Some((n, true)) => cov.open = Some(cov.open.map_or(n, |m| m.min(n))),
+                            Some((n, false)) => {
+                                cov.lens.insert(n);
+                            }
+                            None => {}
+                        }
                     }
                     Ok(match guard {
                         Some(g) => {
@@ -164,6 +177,19 @@ impl Checker {
         if cov.all {
             return Ok(());
         }
+        // slices and str: every length; an array: its one length
+        let covers = |n: usize| cov.lens.contains(&n) || cov.open.is_some_and(|m| n >= m);
+        match self.t.get(ty) {
+            Ty::Slice(_) | Ty::Str => {
+                let upto = cov.open.unwrap_or_else(|| cov.lens.iter().max().map_or(0, |m| m + 1));
+                return match (0..=upto).find(|n| !covers(*n)) {
+                    Some(n) => err(span, format!("match doesn't handle a slice of length {n} (add arms or a default)")),
+                    None => Ok(()),
+                };
+            }
+            Ty::Array(_, n) if covers(*n as usize) => return Ok(()),
+            _ => {}
+        }
         if let Some(eid) = self.enum_of(ty) {
             let names = &self.enums[eid as usize].names;
             let missing: Vec<&str> = (0..names.len()).filter(|i| !cov.variants.contains(i)).map(|i| names[i].as_str()).collect();
@@ -188,7 +214,7 @@ impl Checker {
 
     /// compiles pat against the place c of type ty (c is repeated in each test, so it must be a place)
     fn pat_code(&mut self, pat: &Pat, c: &str, ty: TyId) -> Res<PatOut> {
-        let any = |binds| PatOut { test: "1".into(), binds, irrefutable: true, variant: None, bool_val: None };
+        let any = |binds| PatOut { test: "1".into(), binds, irrefutable: true, variant: None, bool_val: None, lens: None };
         let span = pat.span;
         match &pat.kind {
             PatKind::Wild => Ok(any(Vec::new())),
@@ -216,7 +242,7 @@ impl Checker {
                     None
                 };
                 let t = self.compare(BinOp::Eq, Val::pure(ty, c), v, span)?;
-                Ok(PatOut { test: t.c, binds: Vec::new(), irrefutable: false, variant: None, bool_val })
+                Ok(PatOut { test: t.c, binds: Vec::new(), irrefutable: false, variant: None, bool_val, lens: None })
             }
             PatKind::Range(lo, hi, incl) => {
                 if self.t.int_of(ty).is_none() {
@@ -224,7 +250,7 @@ impl Checker {
                 }
                 let (l, h) = (self.expr_as(lo, ty)?, self.expr_as(hi, ty)?);
                 let op = if *incl { "<=" } else { "<" };
-                Ok(PatOut { test: format!("(({c}) >= {} && ({c}) {op} {})", l.c, h.c), binds: Vec::new(), irrefutable: false, variant: None, bool_val: None })
+                Ok(PatOut { test: format!("(({c}) >= {} && ({c}) {op} {})", l.c, h.c), binds: Vec::new(), irrefutable: false, variant: None, bool_val: None, lens: None })
             }
             PatKind::Tuple(pats) => {
                 let Ty::Tuple(ts, _) = self.t.get(ty).clone() else {
@@ -234,6 +260,32 @@ impl Checker {
                     return err(span, format!("expected {} elements, found {}", ts.len(), pats.len()));
                 }
                 self.sub_pats(pats, &ts, |i| format!("({c}).f{i}"), None)
+            }
+            PatKind::Slice(pats, rest) => {
+                // a slice's or str's elements through its pointer, an array's in place
+                let (elem, len, base) = match self.t.get(ty).clone() {
+                    Ty::Slice(t) => (t, format!("({c}).len"), format!("({c}).ptr")),
+                    Ty::Str => (U8, format!("({c}).len"), format!("({c}).ptr")),
+                    Ty::Array(t, n) => (t, format!("((size_t){n})"), format!("({c}).a")),
+                    _ => return err(span, format!("slice pattern, but the value is a {}", self.ty_name(ty))),
+                };
+                let n = pats.len();
+                let split = rest.as_ref().map_or(n, |(at, _)| *at);
+                // elements before the .. count from the front, the ones after it from the back
+                let tys = vec![elem; n];
+                let mut out = self.sub_pats(pats, &tys, |i| if i < split { format!("{base}[{i}]") } else { format!("{base}[{len} - {}]", n - i) }, None)?;
+                let op = if rest.is_some() { ">=" } else { "==" };
+                out.test = if out.test == "1" { format!("({len} {op} {n})") } else { format!("({len} {op} {n} && {})", out.test) };
+                if let Some((at, Some((name, _)))) = rest {
+                    let st = if ty == STR { STR } else { self.t.intern(Ty::Slice(elem)) };
+                    let sc = self.cty(st);
+                    out.binds.push((name.clone(), st, format!("(({sc}){{ {base} + {at}, {len} - {n} }})"), false));
+                }
+                if out.irrefutable {
+                    out.lens = Some((n, rest.is_some()));
+                }
+                out.irrefutable = false;
+                Ok(out)
             }
             PatKind::Ctor(CtorPath::Path(p), args) if matches!(self.t.get(ty), Ty::TraitUnion(_)) => {
                 // member-type pattern on a trait union: circle(c)
@@ -245,11 +297,11 @@ impl Checker {
                 let test = format!("(({c}).tag == {i})");
                 let mc = format!("({c}).u.m{i}");
                 match args.as_deref() {
-                    None | Some([]) => Ok(PatOut { test, binds: Vec::new(), irrefutable: false, variant: Some(i), bool_val: None }),
+                    None | Some([]) => Ok(PatOut { test, binds: Vec::new(), irrefutable: false, variant: Some(i), bool_val: None, lens: None }),
                     Some([sub]) => {
                         let o = self.pat_code(sub, &mc, mty)?;
                         let full = o.irrefutable;
-                        Ok(PatOut { test: format!("({test} && {})", o.test), binds: o.binds, irrefutable: false, variant: full.then_some(i), bool_val: None })
+                        Ok(PatOut { test: format!("({test} && {})", o.test), binds: o.binds, irrefutable: false, variant: full.then_some(i), bool_val: None, lens: None })
                     }
                     _ => err(span, "a type pattern takes one name: circle(c)"),
                 }
@@ -283,11 +335,11 @@ impl Checker {
                 let payload = self.enum_payloads(eid, span)?[idx];
                 let variant = (ety == ty).then_some(idx);
                 let Some(pats) = args else {
-                    return Ok(PatOut { test, binds: Vec::new(), irrefutable: false, variant, bool_val: None });
+                    return Ok(PatOut { test, binds: Vec::new(), irrefutable: false, variant, bool_val: None, lens: None });
                 };
                 let Some(pt) = payload else {
                     if pats.is_empty() {
-                        return Ok(PatOut { test, binds: Vec::new(), irrefutable: false, variant, bool_val: None });
+                        return Ok(PatOut { test, binds: Vec::new(), irrefutable: false, variant, bool_val: None, lens: None });
                     }
                     return err(span, format!("{name} has no payload"));
                 };
@@ -321,6 +373,6 @@ impl Checker {
             irrefutable &= o.irrefutable;
         }
         let test = if tests.is_empty() { "1".into() } else { format!("({})", tests.join(" && ")) };
-        Ok(PatOut { test, binds, irrefutable, variant, bool_val: None })
+        Ok(PatOut { test, binds, irrefutable, variant, bool_val: None, lens: None })
     }
 }

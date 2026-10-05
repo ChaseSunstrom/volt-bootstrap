@@ -227,6 +227,15 @@ enum pat_kind {
     RANGE: (expr, expr, bool),
     CTOR: (ctor_path, std::vec<pat>?),
     TUPLE: std::vec<pat>,
+    // [a, b], [first, ..rest], [.., last]: the element patterns, and the one `..` among them
+    SLICE: (std::vec<pat>, slice_rest?),
+}
+
+// where a slice pattern's `..` sits among its elements, and the name that binds what it covers
+struct slice_rest {
+    at: usize;
+    name: str?;
+    name_span: span;
 }
 
 struct pat {

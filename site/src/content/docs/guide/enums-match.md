@@ -170,6 +170,46 @@ fn main() -> void {
 // expect: 2 and true
 ```
 
+### Slice patterns
+
+`[...]` matches a slice, an array or a `str` (its bytes) by its elements: `[]` is empty, `[x]` has
+one, `[first, ..rest]` has at least one and binds the others as a slice, `[.., last]` reads from the
+end, and `[a, b, ..]` needs at least two. Each element is any pattern, so literals, nested tuples and
+`x&` (a reference to the element in place) work too. A match on a slice has to handle every length:
+the arms below cover 0, 1, and 2 or more.
+
+```volt
+use std::io;
+
+fn describe(xs: i32[..]) -> void {
+    match (xs) {
+        [] => std::println("empty"),
+        [x] => std::println("just {}", x),
+        [0, ..rest] => std::println("0, then {} more", rest.len),
+        [first, .., last] => std::println("{} to {}", first, last),
+    }
+}
+
+fn sum(xs: i32[..]) -> i32 {
+    match (xs) {
+        [] => return 0,
+        [x, ..rest] => return x + sum(rest),
+    }
+}
+
+fn main() -> void {
+    val xs: i32[] = { 3, 1, 4, 1, 5 };
+    describe(xs[0..0]);
+    describe(xs[0..1]);
+    describe(xs[..]);
+    std::println("{}", sum(xs[..]));
+}
+// expect: empty
+// expect: just 3
+// expect: 3 to 5
+// expect: 14
+```
+
 ### Binding by reference
 
 A binding copies the payload. `.V(x&)` binds a reference to the payload in place instead, to read

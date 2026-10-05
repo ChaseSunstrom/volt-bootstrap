@@ -1823,6 +1823,46 @@ attach fn ct_pat(this: checker&, p: pat&, v: cval&) -> compile_error!bool {
             }
             return z >= x && z < y;
         },
+        .SLICE(ps&, rest) => {
+            var es: std::vec<cval> = {};
+            var et: u32 = 0;
+            match (*v) {
+                .ARRAY(xs, t) => {
+                    es = copy xs;
+                    et = t;
+                },
+                default => { return fails(p.span, "slice patterns at compile time match arrays"); },
+            }
+            val n = ps.len;
+            val rr = rest;
+            if ((rr == null && es.len != n) || es.len < n) {
+                return false;
+            }
+            var split = n;
+            if (rr) {
+                split = rr.at;
+            }
+            for (i) in 0..n {
+                var k = i;
+                if (i >= split) {
+                    k = es.len - (n - i);
+                }
+                if (!(try this.ct_pat(ps.at(i), es.at(k)))) {
+                    return false;
+                }
+            }
+            if (rr) {
+                val nm = rr.name;
+                if (nm) {
+                    var mid: std::vec<cval> = {};
+                    for (k) in rr.at..es.len - (n - rr.at) {
+                        put(&mid, copy *es.at(k));
+                    }
+                    this.ct_scope().put(nm, { value: cval::ARRAY(move mid, et), mutable: false });
+                }
+            }
+            return true;
+        },
         .TUPLE(ps) => {
             match (*v) {
                 .TUPLE(es) => {

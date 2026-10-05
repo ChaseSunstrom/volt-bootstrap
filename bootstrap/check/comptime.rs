@@ -1100,6 +1100,25 @@ impl Checker {
                 };
                 x >= a && if *incl { x <= b } else { x < b }
             }
+            PatKind::Slice(ps, rest) => {
+                let CVal::Array(es, et) = v else { return cerr(pat.span, "slice patterns at compile time match arrays") };
+                let n = ps.len();
+                if (rest.is_none() && es.len() != n) || es.len() < n {
+                    return Ok(false);
+                }
+                let split = rest.as_ref().map_or(n, |(at, _)| *at);
+                for (i, p) in ps.iter().enumerate() {
+                    let e = if i < split { &es[i] } else { &es[es.len() - (n - i)] };
+                    if !self.ct_pat(p, e)? {
+                        return Ok(false);
+                    }
+                }
+                if let Some((at, Some((name, _)))) = rest {
+                    let mid = es[*at..es.len() - (n - at)].to_vec();
+                    self.frame().scopes.last_mut().unwrap().insert(name.clone(), (CVal::Array(mid, *et), false));
+                }
+                true
+            }
             PatKind::Tuple(ps) => {
                 let CVal::Tuple(es) = v else { return Ok(false) };
                 if es.len() != ps.len() {

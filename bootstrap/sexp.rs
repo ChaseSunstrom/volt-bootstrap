@@ -443,6 +443,17 @@ impl W {
                     w.pat(p)
                 });
             }
+            PatKind::Slice(ps, rest) => {
+                self.open("pslice");
+                self.list(ps, |w, p| {
+                    w.sp();
+                    w.pat(p)
+                });
+                self.opt(rest, |w, (at, name)| {
+                    w.s(&format!(" {at}"));
+                    w.opt(name, |w, (n, _)| w.name(n));
+                });
+            }
         }
         self.span(p.span);
         self.close();

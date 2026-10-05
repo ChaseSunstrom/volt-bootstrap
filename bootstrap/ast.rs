@@ -229,6 +229,9 @@ pub enum PatKind {
     Range(Expr, Expr, bool),                // 1..=9
     Ctor(CtorPath, Option<Vec<Pat>>),       // .VALUE(v), some_error::BLAH, circle(c)
     Tuple(Vec<Pat>),                        // (a, b)
+    /// [a, b], [first, ..rest], [.., last]: the element patterns, and where the one `..` sits among
+    /// them with the name that binds what it covers (a slice)
+    Slice(Vec<Pat>, Option<(usize, Option<(String, Span)>)>),
 }
 
 #[derive(Clone, Debug)]

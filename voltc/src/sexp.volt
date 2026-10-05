@@ -584,6 +584,21 @@ attach fn pat(this: sexp_writer&, p: pat&) -> void {
             this.open("ptuple");
             this.pat_list(ps);
         },
+        .SLICE(ps&, rest) => {
+            this.open("pslice");
+            this.pat_list(ps);
+            if (rest) {
+                this.out.append(" ");
+                this.out.append_uint(@cast<u64>(rest.at));
+                if (rest.name) {
+                    this.name(rest.name);
+                } else {
+                    this.none();
+                }
+            } else {
+                this.none();
+            }
+        },
     }
     this.span(p.span);
     this.close();
