@@ -25,6 +25,22 @@ programmers would usually write it. Every program prints the same output in each
 | `vec_grow` | pushing 20 million values without reserving, ten times (`std::vec` against `realloc` and `std::vector`) |
 | `crc32` | table-driven CRC-32 over 256 MiB, a byte at a time |
 | `print` | a million lines: shortest round-trip floats (`println` against libc's `%.*g` + `strtod` tries and C++'s `std::to_chars`), then integers |
+| `raytrace` | vector math through operators (`attach operator` against C functions and C++ overloads): spheres, shadows and mirror bounces |
+| `vm_interp` | a bytecode interpreter: an enum with payloads and `match` against a C tagged union with `switch` and C++'s `std::variant` with `std::visit` |
+| `shapes` | dynamic dispatch over a million shapes: a trait held inline in a `std::vec` against C function-pointer tables and C++ virtual calls through `unique_ptr` |
+| `errors` | parsing where about 1 line in 20 fails: error unions with `try` against C status codes and C++ exceptions |
+| `json` | writing a 73 MB JSON document, parsing it into a tree and walking it (`std::json` against hand-written C and C++ parsers) |
+| `csv` | formatting and parsing records with floats and quoted fields (`{:.2}` and `parse_float` against `snprintf` and `strtod`, and C++'s `std::format_to` and `from_chars`) |
+| `wordfreq` | counting 20 million words and taking the top 20 (`std::map<str, i64>` against a C hash table and `std::unordered_map<std::string, long>`) |
+| `lru_cache` | an LRU cache under 20 million skewed operations (`std::map` and `std::vec` against C linked nodes in a chained table and C++'s `std::list` with `std::unordered_map`) |
+| `heap` | a priority queue of numbers and of structs (`std::heap` against a C `void*` heap with a comparator and `std::priority_queue`) |
+| `dijkstra` | shortest paths across a 1500 by 1500 grid with a binary heap |
+| `nqueens` | counting N-queens solutions with bitboards and recursion |
+| `bigint` | arbitrary precision in base 10^9 limbs: a factorial, a Fibonacci number by additions, and a schoolbook product |
+| `sha256` | SHA-256 over 256 MiB: rotates, shifts and 32-bit adds |
+| `lz77` | compressing 64 MiB with hash chains, decompressing it and checking the round trip |
+| `knucleotide` | counting k-mers of a 25 million base DNA string with rolling 2-bit keys in hash tables (the Benchmarks Game) |
+| `lexer` | tokenizing 32 MiB of source text: a `match` on `str` keywords against C `memcmp` tables and C++ `string_view` compares |
 
 ## Running it
 
@@ -49,32 +65,48 @@ the best of the runs, and each one after C (clang) also shows its ratio to it (b
 faster). Times move a few percent between runs; differences that small are noise.
 
 <!-- bench:start -->
-Measured 2026-10-02 on:
+Measured 2026-10-05 on:
 
 - **CPU**: AMD Ryzen 7 9800X3D 8-Core Processor (8 cores, 16 threads, `powersave` frequency governor)
 - **Memory**: 60 GiB
-- **OS**: Arch Linux, kernel 7.2.7-hardened1-1-hardened
-- **C and C++**: clang version 22.1.8; gcc (GCC) 16.2.1 20260810
-- **Volt**: voltc --release; its LLVM backend on LLVM 22.1.8
+- **OS**: Arch Linux, kernel 7.2.8-hardened1-2-hardened
+- **C and C++**: clang version 23.1.1; gcc (GCC) 16.2.1 20260810
+- **Volt**: voltc --release; its LLVM backend on LLVM 23.1.1
 - **Timing**: best of 3 runs, wall clock
 
 | Program | C (clang) | C (gcc) | C++ (clang++) | Volt (C backend) | Volt (LLVM) |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| binary_trees | 0.713 s | 0.661 s (0.93x) | 0.952 s (1.33x) | 0.366 s (0.51x) | 0.293 s (0.41x) |
-| closures | 0.475 s | 0.738 s (1.55x) | 0.531 s (1.12x) | 0.565 s (1.19x) | 0.477 s (1.00x) |
-| crc32 | 0.717 s | 0.710 s (0.99x) | 0.719 s (1.00x) | 0.708 s (0.99x) | 0.709 s (0.99x) |
-| fannkuch | 1.878 s | 1.919 s (1.02x) | 1.939 s (1.03x) | 1.988 s (1.06x) | 1.979 s (1.05x) |
-| fib | 0.448 s | 0.173 s (0.39x) | 0.448 s (1.00x) | 0.453 s (1.01x) | 0.438 s (0.98x) |
-| hashmap | 0.582 s | 0.593 s (1.02x) | 1.472 s (2.53x) | 0.584 s (1.00x) | 0.575 s (0.99x) |
-| mandelbrot | 0.637 s | 0.617 s (0.97x) | 0.637 s (1.00x) | 0.638 s (1.00x) | 0.636 s (1.00x) |
-| matmul | 0.509 s | 0.475 s (0.93x) | 0.511 s (1.00x) | 0.523 s (1.03x) | 0.512 s (1.01x) |
-| nbody | 0.715 s | 0.713 s (1.00x) | 0.680 s (0.95x) | 0.712 s (0.99x) | 0.726 s (1.02x) |
-| print | 1.006 s | 1.014 s (1.01x) | 0.050 s (0.05x) | 0.043 s (0.04x) | 0.045 s (0.04x) |
-| sieve | 0.587 s | 0.610 s (1.04x) | 0.580 s (0.99x) | 0.584 s (0.99x) | 0.580 s (0.99x) |
-| sort | 0.563 s | 0.562 s (1.00x) | 0.194 s (0.34x) | 0.233 s (0.41x) | 0.232 s (0.41x) |
-| spectral_norm | 0.959 s | 0.648 s (0.68x) | 0.936 s (0.98x) | 0.936 s (0.98x) | 0.936 s (0.98x) |
-| strings | 0.294 s | 0.296 s (1.01x) | 0.415 s (1.41x) | 0.268 s (0.91x) | 0.272 s (0.92x) |
-| vec_grow | 0.581 s | 0.583 s (1.00x) | 1.429 s (2.46x) | 0.575 s (0.99x) | 0.578 s (1.00x) |
+| bigint | 0.536 s | 0.446 s (0.83x) | 0.543 s (1.01x) | 0.546 s (1.02x) | 0.545 s (1.02x) |
+| binary_trees | 0.707 s | 0.660 s (0.93x) | 0.914 s (1.29x) | 0.348 s (0.49x) | 0.282 s (0.40x) |
+| closures | 0.472 s | 0.734 s (1.56x) | 0.533 s (1.13x) | 0.534 s (1.13x) | 0.480 s (1.02x) |
+| crc32 | 0.711 s | 0.709 s (1.00x) | 0.702 s (0.99x) | 0.701 s (0.99x) | 0.702 s (0.99x) |
+| csv | 0.651 s | 0.648 s (1.00x) | 0.568 s (0.87x) | 0.342 s (0.53x) | 0.363 s (0.56x) |
+| dijkstra | 0.434 s | 0.507 s (1.17x) | 0.443 s (1.02x) | 0.514 s (1.18x) | 0.500 s (1.15x) |
+| errors | 0.682 s | 0.700 s (1.03x) | 1.322 s (1.94x) | 0.655 s (0.96x) | 0.660 s (0.97x) |
+| fannkuch | 1.858 s | 1.903 s (1.02x) | 1.935 s (1.04x) | 1.969 s (1.06x) | 1.992 s (1.07x) |
+| fib | 0.449 s | 0.175 s (0.39x) | 0.452 s (1.00x) | 0.438 s (0.97x) | 0.433 s (0.96x) |
+| hashmap | 0.545 s | 0.569 s (1.04x) | 1.342 s (2.46x) | 0.548 s (1.01x) | 0.570 s (1.05x) |
+| heap | 0.599 s | 1.343 s (2.24x) | 0.600 s (1.00x) | 0.610 s (1.02x) | 0.617 s (1.03x) |
+| json | 0.639 s | 0.655 s (1.03x) | 0.570 s (0.89x) | 0.484 s (0.76x) | 0.442 s (0.69x) |
+| knucleotide | 0.743 s | 0.904 s (1.22x) | 0.737 s (0.99x) | 1.045 s (1.41x) | 1.054 s (1.42x) |
+| lexer | 0.554 s | 0.657 s (1.19x) | 0.748 s (1.35x) | 0.493 s (0.89x) | 0.461 s (0.83x) |
+| lru_cache | 0.571 s | 0.563 s (0.99x) | 1.307 s (2.29x) | 1.023 s (1.79x) | 1.019 s (1.78x) |
+| lz77 | 0.605 s | 0.578 s (0.96x) | 0.640 s (1.06x) | 0.697 s (1.15x) | 0.682 s (1.13x) |
+| mandelbrot | 0.637 s | 0.616 s (0.97x) | 0.638 s (1.00x) | 0.638 s (1.00x) | 0.639 s (1.00x) |
+| matmul | 0.515 s | 0.476 s (0.92x) | 0.510 s (0.99x) | 0.513 s (1.00x) | 0.511 s (0.99x) |
+| nbody | 0.698 s | 0.714 s (1.02x) | 0.681 s (0.97x) | 0.699 s (1.00x) | 0.727 s (1.04x) |
+| nqueens | 0.831 s | 0.803 s (0.97x) | 0.866 s (1.04x) | 0.847 s (1.02x) | 0.832 s (1.00x) |
+| print | 1.012 s | 1.008 s (1.00x) | 0.048 s (0.05x) | 0.043 s (0.04x) | 0.044 s (0.04x) |
+| raytrace | 0.753 s | 0.848 s (1.13x) | 0.719 s (0.95x) | 0.747 s (0.99x) | 0.666 s (0.88x) |
+| sha256 | 1.016 s | 1.038 s (1.02x) | 1.000 s (0.98x) | 1.026 s (1.01x) | 1.005 s (0.99x) |
+| shapes | 0.882 s | 0.896 s (1.02x) | 0.873 s (0.99x) | 0.631 s (0.71x) | 0.673 s (0.76x) |
+| sieve | 0.588 s | 0.585 s (0.99x) | 0.596 s (1.01x) | 0.605 s (1.03x) | 0.596 s (1.01x) |
+| sort | 0.559 s | 0.696 s (1.24x) | 0.191 s (0.34x) | 0.233 s (0.42x) | 0.228 s (0.41x) |
+| spectral_norm | 0.969 s | 0.648 s (0.67x) | 0.936 s (0.97x) | 0.946 s (0.98x) | 0.936 s (0.97x) |
+| strings | 0.294 s | 0.285 s (0.97x) | 0.374 s (1.27x) | 0.258 s (0.88x) | 0.264 s (0.90x) |
+| vec_grow | 0.559 s | 0.553 s (0.99x) | 1.335 s (2.39x) | 0.546 s (0.98x) | 0.551 s (0.99x) |
+| vm_interp | 0.781 s | 0.848 s (1.09x) | 0.582 s (0.74x) | 0.924 s (1.18x) | 0.913 s (1.17x) |
+| wordfreq | 0.548 s | 0.563 s (1.03x) | 1.003 s (1.83x) | 0.712 s (1.30x) | 0.705 s (1.29x) |
 <!-- bench:end -->
 
 ## Reading the results
