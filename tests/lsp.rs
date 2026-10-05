@@ -164,6 +164,12 @@ fn scripted_session() {
     let d = s.diagnostics();
     assert!(d.contains("odd%1") && d.contains("\"diagnostics\":[]"), "{d}");
 
+    // test blocks are checked like the rest (kept as plain fns, each its own)
+    let turi = format!("file://{}/tests.volt", s.dir.display());
+    s.notify("textDocument/didOpen", &format!("{{\"textDocument\":{{\"uri\":\"{turi}\",\"languageId\":\"volt\",\"version\":1,\"text\":{}}}}}", js("fn main() -> void {}\ntest \"one\" {\n    val x = nope;\n}\ntest \"two\" {\n}\n")));
+    let d = s.diagnostics_for(&turi);
+    assert!(d.contains("unknown name 'nope'") && !d.contains("defined"), "{d}");
+
     // an error where `missing` is (line 18, from character 31)
     s.notify("textDocument/didOpen", &format!("{{\"textDocument\":{{\"uri\":\"{uri}\",\"languageId\":\"volt\",\"version\":1,\"text\":{}}}}}", js(PROGRAM)));
     let d = s.diagnostics();

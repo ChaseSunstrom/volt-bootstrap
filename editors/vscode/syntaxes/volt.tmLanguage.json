@@ -185,6 +185,7 @@
         },
         { "name": "storage.type.function.volt", "match": "\\bfn\\b" },
         { "name": "storage.type.volt", "match": "\\b(val|var|struct|enum|error|trait|namespace)\\b" },
+        { "name": "storage.type.volt", "match": "\\btest(?=\\s+\")" },
         { "name": "storage.modifier.volt", "match": "\\b(public|internal|static|extern|export|comptime|async)\\b" },
         { "name": "keyword.other.volt", "match": "\\b(use|as|attach|move|copy)\\b" },
         { "name": "variable.language.this.volt", "match": "\\bthis\\b" }

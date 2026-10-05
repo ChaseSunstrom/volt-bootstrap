@@ -425,6 +425,35 @@ attach fn item(this: parser&) -> compile_error!item {
         try this.expect(";");
         return { kind: item_kind::EMIT(move e), span: start.to(this.prev_span()), attrs: {}, vis: vis::PUBLIC, generics: {} };
     }
+    // test "name" { ... }: a fn named test returning !void, with its name in a @test attribute (the
+    // driver keeps it, named uniquely, under --test, and leaves it out otherwise)
+    if (this.is_kw("test")) {
+        var is_test = false;
+        var label: std::string = {};
+        match (*this.tok_at(1)) {
+            .STR(text) => {
+                is_test = true;
+                label = copy text;
+            },
+            default => {},
+        }
+        if (is_test) {
+            val name = ident_of(this.tok()) ?? "test";
+            this.bump();
+            val lspan = this.span();
+            this.bump();
+            var body = try this.block();
+            val sp = start.to(this.prev_span());
+            var void_ty: ty = { kind: type_kind::PATH(single_path("void", sp)), span: sp };
+            var ret: ty = { kind: type_kind::ERROR_UNION(null, bx(move void_ty)), span: sp };
+            var args: std::vec<garg> = {};
+            put(&args, garg::EXPR({ kind: expr_kind::STR(move label), span: lspan }));
+            var tattrs: std::vec<expr> = {};
+            put(&tattrs, { kind: expr_kind::BUILTIN("test", {}, move args), span: lspan });
+            var f: fn_decl = { name: name, spec: null, params: {}, c_varargs: false, ret: move ret, body: move body, is_async: false, is_comptime: false, extern_abi: null, is_export: false, is_attach: false };
+            return { kind: item_kind::FN(move f), span: sp, attrs: move tattrs, vis: vis::DEFAULT, generics: {} };
+        }
+    }
     var attrs: std::vec<expr> = {};
     var generics: std::vec<generic_param> = {};
     loop {
@@ -434,6 +463,12 @@ attach fn item(this: parser&) -> compile_error!item {
             generics = try this.generic_params();
         } else {
             break;
+        }
+    }
+    if (this.is_kw("test")) {
+        match (*this.tok_at(1)) {
+            .STR(text) => { return fails(this.span(), "a test block takes no attributes or generics; for a platform check put comptime if (@cfg(...)) { ... } in it"); },
+            default => {},
         }
     }
     var v = vis::DEFAULT;

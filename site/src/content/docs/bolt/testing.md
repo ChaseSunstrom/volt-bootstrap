@@ -53,6 +53,50 @@ fn main() -> i32 {
 A test file can also be a plain `main() -> !void` that calls the assertions with `try`: the first
 one that fails ends it with exit code 1.
 
+## Test blocks
+
+A test can also sit next to the code it tests, in any source file: `test "name" { ... }`. Its body
+is like a function's that returns `!void`, so the assertions work with `try`, and it can reach
+everything in its package, exported or not. An ordinary build leaves test blocks out. `bolt test`
+builds each bin's sources with their test blocks (`voltc --test`), and the library's from source
+(`--test-pkg`), and runs each test beside the programs in `tests/`; `bolt test NAME` picks them by
+name too. A dependency's test blocks don't run. bolt looks for a line that starts `test "`, so a
+block starts its line. A test block takes no attributes: a test for one platform checks it inside,
+`comptime if (@cfg("os", "linux")) { ... }`.
+
+```volt
+use std::io;
+use std::testing;
+
+fn clamp(x: i32, lo: i32, hi: i32) -> i32 {
+    if (x < lo) { return lo; }
+    if (x > hi) { return hi; }
+    return x;
+}
+
+fn main() -> void {
+    std::println("{}", clamp(15, 0, 10));
+}
+
+test "clamp keeps values in range" {
+    try std::testing::assert_eq(clamp(15, 0, 10), 10);
+    try std::testing::assert_eq(clamp(-3, 0, 10), 0);
+}
+
+test "clamp leaves the rest" {
+    try std::testing::assert_eq(clamp(4, 0, 10), 4);
+}
+// expect: 10
+```
+
+`voltc run --test main.volt` runs them without bolt:
+
+```txt
+test clamp keeps values in range ... ok
+test clamp leaves the rest ... ok
+2 passed, 0 failed
+```
+
 A test uses the package's library like any other code (`app::name`), and can use
 `[dev-dependencies]`. `bolt test FILTER` runs only the tests whose name contains FILTER, and
 `--no-run` builds without running.

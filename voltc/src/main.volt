@@ -27,6 +27,8 @@ struct cli {
     lang: str = "c";              // bindings --lang
     release: bool = false;
     leak_check: bool = false;
+    test: bool = false; // build the program's test blocks instead of its main
+    test_pkgs: std::vec<str> = {}; // and these packages' test blocks too
     profiler: bool = false; // --profiler: bolt hot's sampler, line info and frame pointers
     sexp: bool = false;
     llvm: bool = false;        // through the LLVM backend (--backend llvm, or the default where it's complete)
@@ -42,7 +44,7 @@ struct cli {
 }
 
 fn usage() -> never {
-    std::eprintln("usage: voltc <command> FILES... [options]\ncommands:\n  parse FILE --sexp       parse only\n  check FILES            type check\n  expand FILE[:LINE] ... what the comptime code (on that line) became: values, branches, comptime\n                         for copies, generic instances, @emit and @derive output\n  emit-c FILES [-o DIR]  print the generated C, or write it as files to DIR\n  emit-llvm FILES        print the generated LLVM IR\n  build FILES [-o OUT]   compile to an executable\n  run FILES [-- ARGS]    build and run\n  lib NAME [-o OUT.a]    precompile package NAME's non-generic code into a static library; with\n                         --shared (OUT.so) or --static, a self-contained library other languages link\n  bindings NAME --lang L bindings of package NAME's export fns for L: c, cpp, rust, zig, python, pyi\n                         (its stubs), csharp, java, go, lua (a C module), dart, swift, kotlin, ruby (a C\n                         extension), node (a Node-API addon's C), js (its loader), ts (its types), or\n                         json (the model, for generators of your own)\n  std-dir                print where the std package is\n  lsp                    the language server for editors (JSON-RPC on stdin and stdout)\n  doc NAME               package NAME's declarations and their comments, as JSON\noptions:\n  --release              optimize, wrap on overflow instead of trapping\n  --leak-check           debug: exit 102 if runtime allocations were never freed\n  --profiler             sample where the program spends its time (bolt hot reads it): line info,\n                         frame pointers, and a sampler that writes $VOLT_PROFILE_OUT at exit\n  --std DIR | --no-std   where the std package is (default: $VOLT_STD, then next to voltc)\n  --pkg NAME=PATH        a package: PATH's .volt files, wrapped in namespace NAME\n  --cfg [PKG:]KEY[=VAL]  set KEY (to VAL) for @cfg in the program's files, or in package PKG's\n  --lib NAME             check: package NAME alone, as a library (no program files, no main)\n  --link NAME=LIB.a      take package NAME's non-generic code from a library built by voltc lib\n  --cc ARG               pass ARG to the C compiler when linking (a .c file, -lNAME, ...)\n  --message-format F     how errors are printed: human (default), short (one line each) or json\n  --color WHEN           colour errors: auto (default: on a terminal, unless NO_COLOR is set), always, never\n  --error-limit N        show at most N errors (default 20; 0: all of them)\n  --backend c|llvm       generate C, or native code through LLVM (the default on x86-64 but for\n                         Windows; a program LLVM can't lower falls back to C)\n  --target T             bare metal through LLVM, linked by ld.lld with no C at all: riscv32-none,\n                         riscv64-none, thumbv6m-none, thumbv7m-none or thumbv7em-none\n  --link-script FILE     the linker script for --target (memory layout, the start code's symbols)");
+    std::eprintln("usage: voltc <command> FILES... [options]\ncommands:\n  parse FILE --sexp       parse only\n  check FILES            type check\n  expand FILE[:LINE] ... what the comptime code (on that line) became: values, branches, comptime\n                         for copies, generic instances, @emit and @derive output\n  emit-c FILES [-o DIR]  print the generated C, or write it as files to DIR\n  emit-llvm FILES        print the generated LLVM IR\n  build FILES [-o OUT]   compile to an executable\n  run FILES [-- ARGS]    build and run\n  lib NAME [-o OUT.a]    precompile package NAME's non-generic code into a static library; with\n                         --shared (OUT.so) or --static, a self-contained library other languages link\n  bindings NAME --lang L bindings of package NAME's export fns for L: c, cpp, rust, zig, python, pyi\n                         (its stubs), csharp, java, go, lua (a C module), dart, swift, kotlin, ruby (a C\n                         extension), node (a Node-API addon's C), js (its loader), ts (its types), or\n                         json (the model, for generators of your own)\n  std-dir                print where the std package is\n  lsp                    the language server for editors (JSON-RPC on stdin and stdout)\n  doc NAME               package NAME's declarations and their comments, as JSON\noptions:\n  --release              optimize, wrap on overflow instead of trapping\n  --leak-check           debug: exit 102 if runtime allocations were never freed\n  --test                 build the program's test blocks (test \"name\" { ... }) instead of its main\n  --test-pkg NAME        with --test, package NAME's test blocks too\n  --profiler             sample where the program spends its time (bolt hot reads it): line info,\n                         frame pointers, and a sampler that writes $VOLT_PROFILE_OUT at exit\n  --std DIR | --no-std   where the std package is (default: $VOLT_STD, then next to voltc)\n  --pkg NAME=PATH        a package: PATH's .volt files, wrapped in namespace NAME\n  --cfg [PKG:]KEY[=VAL]  set KEY (to VAL) for @cfg in the program's files, or in package PKG's\n  --lib NAME             check: package NAME alone, as a library (no program files, no main)\n  --link NAME=LIB.a      take package NAME's non-generic code from a library built by voltc lib\n  --cc ARG               pass ARG to the C compiler when linking (a .c file, -lNAME, ...)\n  --message-format F     how errors are printed: human (default), short (one line each) or json\n  --color WHEN           colour errors: auto (default: on a terminal, unless NO_COLOR is set), always, never\n  --error-limit N        show at most N errors (default 20; 0: all of them)\n  --backend c|llvm       generate C, or native code through LLVM (the default on x86-64 but for\n                         Windows; a program LLVM can't lower falls back to C)\n  --target T             bare metal through LLVM, linked by ld.lld with no C at all: riscv32-none,\n                         riscv64-none, thumbv6m-none, thumbv7m-none or thumbv7em-none\n  --link-script FILE     the linker script for --target (memory layout, the start code's symbols)");
     std::process::exit(2);
 }
 
@@ -86,6 +88,12 @@ fn parse_cli() -> cli {
             c.profiler = true;
         } else if (a == "--leak-check") {
             c.leak_check = true;
+        } else if (a == "--test") {
+            c.test = true;
+        } else if (a == "--test-pkg") {
+            c.test = true;
+            put(&c.test_pkgs, std::process::arg(i) ?? usage());
+            i += 1;
         } else if (a == "--sexp") {
             c.sexp = true;
         } else if (a == "--no-std") {
@@ -205,7 +213,7 @@ fn parse_cli() -> cli {
             }
         }
     }
-    if (c.files.len == 0 && c.cmd != "std-dir" && c.cmd != "lsp" && !(c.cmd == "check" && c.lib != null)) {
+    if (c.files.len == 0 && c.cmd != "std-dir" && c.cmd != "lsp" && !(c.cmd == "check" && c.lib != null) && c.test_pkgs.len == 0) {
         usage();
     }
     if (c.target != null && !c.llvm) {
@@ -356,6 +364,11 @@ struct sources {
     asts: std::vec<std::vec<item>> = {}; // the checked program points into these (names, string literals)
     guard_names: std::vec<std::string> = {}; // packages' guard symbols (the program's globals name them)
     pkg_names: std::vec<std::string> = {};   // package names the units point into (the language server's)
+    // test blocks: left out (0), run instead of main (1, --test), or kept as plain fns (2, the
+    // language server); test_names are the names kept ones get
+    test_mode: u32 = 0;
+    test_pkgs: std::vec<str> = {}; // packages whose tests run too (--test-pkg)
+    test_names: std::vec<std::string> = {};
 }
 
 // read path as a unit of package pkg (none: the program's own)
@@ -562,6 +575,10 @@ fn compile_with(c: cli&, s: sources&, shim: shim_src*) -> std::box<checker> {
     }
     // parse all units together (generic names are shared between files); a package's files live
     // in namespace <package>
+    if (c.test) {
+        s.test_mode = 1;
+        s.test_pkgs = copy c.test_pkgs;
+    }
     val bad = parse_sources(s);
     if (bad.len > 0) {
         report_diags(c, &s.files, &bad);
@@ -718,7 +735,12 @@ fn main() -> i32 {
         val chk = compile_cli(&c, &s);
         var out = S(c.out ?? "");
         if (c.out == null) {
-            out = S(without_ext(*c.files.at(0)));
+            // named after the first file, or (only test packages) the first of them
+            if (c.files.len > 0) {
+                out = S(without_ext(*c.files.at(0)));
+            } else {
+                out = S(*c.test_pkgs.at(0));
+            }
         }
         var lc = copy c;
         val cdir = fresh_dir();

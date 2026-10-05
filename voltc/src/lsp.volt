@@ -1056,6 +1056,7 @@ attach fn check_doc(this: lsp_server&, doc: lsp_doc&) -> std::vec<diag> {
     for (i) in 0..s.names.len {
         put(&s.files, { name: s.names.at(i).as_str(), text: s.texts.at(i).as_str() });
     }
+    s.test_mode = 2; // test blocks are checked as plain fns
     val bad = parse_sources(s);
     if (bad.len > 0) {
         for (b&) in bad.items() {
@@ -1131,7 +1132,166 @@ fn parse_sources(s: sources&) -> std::vec<diag> {
             put(&s.asts, move items);
         }
     }
+    for (d&) in test_items(s).items() {
+        put(&errors, copy *d);
+    }
     sort_diags(&errors);
+    return errors;
+}
+
+// test blocks (fns the parser makes from `test "name" { }`, named in a @test attribute): left out
+// (s.test_mode 0), run instead of main from a main written here over std::testing::run_main (1:
+// --test, the program's own tests and --test-pkg packages'), or kept as plain fns (2: the language
+// server)
+fn test_items(s: sources&) -> std::vec<diag> {
+    var found: std::vec<std::string> = {}; // the generated main's `{ name: "...", body: path },`s
+    for (i) in 0..s.asts.len {
+        var own = false;
+        if (i < s.units.len) {
+            val pkg = s.units.at(i).pkg;
+            own = pkg == null;
+            for (t&) in s.test_pkgs.items() {
+                if (pkg != null && (pkg ?? "") == *t) {
+                    own = true;
+                }
+            }
+        }
+        keep_tests(s.asts.at(i), S(""), s.test_mode != 0 && own, s.test_mode == 1 && own, &s.test_names, &found);
+    }
+    if (s.test_mode != 1) {
+        return {};
+    }
+    var src = S("fn main() -> i32 {\n    val tests: std::testing::test[");
+    src.append_uint(@cast<u64>(found.len));
+    src.append("] = {");
+    for (f&) in found.items() {
+        src.append(f.as_str());
+    }
+    src.append(" };\n    return std::testing::run_main(tests[..]);\n}\n");
+    return add_source(s, "<tests>", move src);
+}
+
+// takes the tests out of items, or (keep) names them __test<n> (into names), public (the generated
+// main calls a package's) and without their @test attribute, and (drop_main) takes main out; each
+// kept test's entry for the generated main into found
+fn keep_tests(items: std::vec<item>&, prefix: std::string, keep: bool, drop_main: bool, names: std::vec<std::string>&, found: std::vec<std::string>&) -> void {
+    var rev: std::vec<item> = {};
+    loop {
+        var it = items.pop() ?? break;
+        put(&rev, move it);
+    }
+    loop {
+        var it = rev.pop() ?? break;
+        var out = true;
+        val label = test_label(&it.attrs);
+        match (it.kind) {
+            .FN(f&) => {
+                if (label != null) {
+                    out = keep;
+                    if (keep) {
+                        var n = S("__test");
+                        n.append_uint(@cast<u64>(names.len + 1));
+                        put(names, move n);
+                        f.name = names.at(names.len - 1).as_str();
+                        var e = S(" { name: \"");
+                        escape_label(label ?? "", &e);
+                        e.append("\", body: ");
+                        e.append(prefix.as_str());
+                        e.append(f.name);
+                        e.append(" },");
+                        put(found, move e);
+                    }
+                } else if (drop_main && prefix.len() == 0 && f.name == "main") {
+                    out = false;
+                }
+            },
+            .NAMESPACE(p&, inner&) => {
+                var sub = copy prefix;
+                for (seg&) in p.items() {
+                    sub.append(*seg);
+                    sub.append("::");
+                }
+                keep_tests(inner, move sub, keep, drop_main, names, found);
+            },
+            default => {},
+        }
+        if (out) {
+            if (label != null) {
+                it.attrs = {};
+                it.vis = vis::PUBLIC;
+            }
+            put(items, move it);
+        }
+    }
+}
+
+// a @test attribute's name, if attrs has one
+fn test_label(attrs: std::vec<expr>&) -> str? {
+    for (a&) in attrs.items() {
+        match (a.kind) {
+            .BUILTIN(n, g&, args&) => {
+                if (n != "test") {
+                    continue;
+                }
+                val al = ptr_of(args) ?? continue;
+                if (al.len > 0) {
+                    match (*al.at(0)) {
+                        .EXPR(e&) => {
+                            match (e.kind) {
+                                .STR(text&) => { return text.as_str(); },
+                                default => {},
+                            }
+                        },
+                        default => {},
+                    }
+                }
+            },
+            default => {},
+        }
+    }
+    return null;
+}
+
+// a test's name as the inside of a Volt string literal
+fn escape_label(s: str, out: std::string&) -> void {
+    val hex = "0123456789abcdef";
+    for (c) in s {
+        if (c == '"' || c == '\\') {
+            out.push('\\');
+            out.push(c);
+        } else if (c >= 0x20 && c < 0x7f) {
+            out.push(c);
+        } else {
+            out.append("\\x");
+            out.push(hex[c >> 4]);
+            out.push(hex[c & 15]);
+        }
+    }
+}
+
+// one more file of the program, written here (name: what errors in it say): lexed and parsed like
+// the others
+fn add_source(s: sources&, name: str, text: std::string) -> std::vec<diag> {
+    var errors: std::vec<diag> = {};
+    put(&s.names, S(name));
+    put(&s.texts, move text);
+    val i = s.names.len - 1;
+    put(&s.units, { file: @cast<u32>(i), pkg: null });
+    put(&s.files, { name: s.names.at(i).as_str(), text: s.texts.at(i).as_str() });
+    val t = lex(s.files.at(i).text, @cast<u32>(i)) catch |e| {
+        put(&errors, err_diag(&e));
+        return errors;
+    };
+    put(&s.toks, move t);
+    var names: std::map<str, bool> = {};
+    var p: parser = { src: s.files.at(i).text, toks: s.toks.at(i), pos: 0, generics: &names };
+    val items = p.parse_file() catch |e| {
+        for (d&) in p.errors.items() {
+            put(&errors, copy *d);
+        }
+        return errors;
+    };
+    put(&s.asts, move items);
     return errors;
 }
 

@@ -284,6 +284,20 @@ impl<'a> Parser<'a> {
             self.expect(";")?;
             return Ok(Item { kind: ItemKind::Emit(e), span: start.to(self.prev_span()), attrs: Vec::new(), vis: Vis::Public, generics: Vec::new() });
         }
+        // test "name" { ... }: a fn named test returning !void, with its name in a @test attribute (the
+        // driver keeps it, named uniquely, under --test, and leaves it out otherwise)
+        if matches!(self.tok(), Tok::Ident(s) if s == "test") && matches!(self.tok_at(1), Tok::Str(_)) {
+            self.bump();
+            let label = self.bump();
+            let Tok::Str(name) = label.tok else { unreachable!() };
+            let body = self.block()?;
+            let span = start.to(self.prev_span());
+            let void = Type { kind: TypeKind::Path(Path::single("void", span)), span };
+            let ret = Type { kind: TypeKind::ErrorUnion(None, Box::new(void)), span };
+            let attr = Expr { kind: ExprKind::Builtin("test".into(), Vec::new(), Some(vec![GenericArg::Expr(Expr { kind: ExprKind::Str(name), span: label.span })])), span: label.span };
+            let f = FnDecl { name: "test".into(), spec: None, params: Vec::new(), c_varargs: false, ret: Some(ret), body: Some(body), is_async: false, is_comptime: false, extern_abi: None, is_export: false, is_attach: false };
+            return Ok(Item { kind: ItemKind::Fn(f), span, attrs: vec![attr], vis: Vis::Default, generics: Vec::new() });
+        }
         let mut attrs = Vec::new();
         let mut generics = Vec::new();
         loop {
@@ -294,6 +308,9 @@ impl<'a> Parser<'a> {
             } else {
                 break;
             }
+        }
+        if matches!(self.tok(), Tok::Ident(s) if s == "test") && matches!(self.tok_at(1), Tok::Str(_)) {
+            return err(self.span(), "a test block takes no attributes or generics; for a platform check put comptime if (@cfg(...)) { ... } in it");
         }
         let mut vis = if self.eat_kw("internal") {
             Vis::Internal

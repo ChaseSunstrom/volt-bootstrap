@@ -101,4 +101,17 @@ namespace testing {
         }
         return 0;
     }
+
+    // the main of a --test build (the compiler writes it from the program's test blocks): runs the
+    // tests whose names contain the program's first argument, or all of them without one
+    public fn run_main(tests: test[..]) -> i32 {
+        val filter = std::process::arg(1) ?? "";
+        var picked: std::vec<test> = {};
+        for (t) in tests {
+            if (t.name.contains(filter)) {
+                picked.push(t) catch @panic("out of memory");
+            }
+        }
+        return run(picked.items());
+    }
 }

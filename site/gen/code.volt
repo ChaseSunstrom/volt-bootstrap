@@ -619,6 +619,11 @@ fn volt_word(l: str, p: usize, colors: std::vec<u8>&) -> usize? {
             }
         }
     }
+    // test "name" { }: a test block
+    if (w == "test" && after > e && after < l.len && l[after] == '"') {
+        paint(colors, p, e, KW);
+        return e;
+    }
     // keywords, types, constants
     if (word_in(l, p, CONTROL) != null || w == "fn" || word_in(l, p, STORAGE) != null || word_in(l, p, MODIFIERS) != null || word_in(l, p, OTHER_KW) != null) {
         paint(colors, p, e, KW);

@@ -75,3 +75,8 @@ attach shape -> circle {
 //            ^^^^^ support.type.primitive.volt
 fn report(s: T&) -> void {
 }
+
+test "adds up" {
+// <---- storage.type.volt
+//   ^^^^^^^^^ string.quoted.double.volt
+}

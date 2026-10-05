@@ -448,9 +448,13 @@ fn test_cmd(o: &Opts, bench: bool) {
     if let Some(f) = o.words.first() {
         exes.retain(|e| e.name.contains(f.as_str()));
     }
+    // the selected packages' test blocks, unless particular targets were asked for
+    if !bench && !picked(o) && o.tests.is_empty() {
+        exes.extend(b.roots.iter().flat_map(|&r| b.units_of(r)));
+    }
     b.executables(&exes, &HashMap::new()).or_fail();
     b.finished(start);
-    if !o.no_run && !b.run_tests(&exes, bench) {
+    if !o.no_run && !b.run_tests(&exes, bench, o.words.first().map(String::as_str)) {
         exit(1);
     }
 }

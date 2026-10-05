@@ -24,6 +24,8 @@ fn usage() -> ! {
          std-dir                print where the std package is\n\
          options:\n  --release              optimize, wrap on overflow instead of trapping\n  \
          --leak-check           debug: exit 102 if runtime allocations were never freed\n  \
+         --test                 build the program's test blocks (test \"name\" {{ ... }}) instead of its main\n  \
+         --test-pkg NAME        with --test, package NAME's test blocks too\n  \
          --std DIR | --no-std   where the std package is (default: $VOLT_STD, then next to voltc)\n  \
          --pkg NAME=PATH        a package: PATH's .volt files, wrapped in namespace NAME\n  \
          --cfg [PKG:]KEY[=VAL]  set KEY (to VAL) for @cfg in the program's files, or in package PKG's\n  \
@@ -78,6 +80,9 @@ struct Cli {
     lib: Option<String>,
     release: bool,
     leak_check: bool,
+    /// build the program's test blocks instead of its main (and those of the packages in test_pkgs)
+    test: bool,
+    test_pkgs: Vec<String>,
     dump: bool,
     sexp: bool,
     format: diag::Format,
@@ -97,6 +102,11 @@ fn parse_cli() -> Cli {
         match a.as_str() {
             "--release" => cli.release = true,
             "--leak-check" => cli.leak_check = true,
+            "--test" => cli.test = true,
+            "--test-pkg" => {
+                cli.test = true;
+                cli.test_pkgs.push(args.next().unwrap_or_else(|| usage()));
+            }
             "--dump" => cli.dump = true,
             "--sexp" => cli.sexp = true,
             "--no-std" => cli.no_std = true,
@@ -141,7 +151,7 @@ fn parse_cli() -> Cli {
             f => cli.files.push(f.to_string()),
         }
     }
-    if cli.files.is_empty() && cli.cmd != "std-dir" && !(cli.cmd == "check" && cli.lib.is_some()) {
+    if cli.files.is_empty() && cli.cmd != "std-dir" && !(cli.cmd == "check" && cli.lib.is_some()) && cli.test_pkgs.is_empty() {
         usage();
     }
     cli
@@ -273,6 +283,7 @@ fn compile(cli: &Cli) -> String {
             None => items,
         })
         .collect();
+    let files = test_items(files, &units, cli, &mut sm).unwrap_or_else(|ds| die(cli, &sm, &ds));
     let pkg_files = units.iter().filter_map(|(id, p)| Some((*id, p.clone()?))).collect();
     let opts = check::Opts {
         release: cli.release,
@@ -293,6 +304,74 @@ fn compile(cli: &Cli) -> String {
         }
         None => die(cli, &sm, &diags),
     }
+}
+
+/// test blocks (fns the parser makes from `test "name" { }`, named in a @test attribute) are left out
+/// of an ordinary build; with --test the program's own (and --test-pkg packages') run instead of its
+/// main, from a main written here over std::testing::run_main
+fn test_items(files: Vec<Vec<ast::Item>>, units: &[(u32, Option<String>)], cli: &Cli, sm: &mut SourceMap) -> Result<Vec<Vec<ast::Item>>, Vec<diag::Diag>> {
+    let mut found = Vec::new();
+    let mut out: Vec<Vec<ast::Item>> = files
+        .into_iter()
+        .zip(units)
+        .map(|(items, (_, pkg))| {
+            let keep = cli.test && pkg.as_ref().is_none_or(|p| cli.test_pkgs.contains(p));
+            keep_tests(items, &[], keep, &mut found)
+        })
+        .collect();
+    if cli.test {
+        let mut src = format!("fn main() -> i32 {{\n    val tests: std::testing::test[{}] = {{", found.len());
+        for (path, label) in &found {
+            let mut name = String::new();
+            for &c in label {
+                match c {
+                    b'"' | b'\\' => name.push_str(&format!("\\{}", c as char)),
+                    0x20..=0x7e => name.push(c as char),
+                    _ => name.push_str(&format!("\\x{c:02x}")),
+                }
+            }
+            src.push_str(&format!(" {{ name: \"{name}\", body: {path} }},"));
+        }
+        src.push_str(" };\n    return std::testing::run_main(tests[..]);\n}\n");
+        let id = sm.add("<tests>", src.clone());
+        out.push(parser::parse_files(&[(id, src.as_str())])?.remove(0));
+    }
+    Ok(out)
+}
+
+/// items without the tests (keep: with them, each named __test<n>, public (the generated main calls
+/// a package's) and without its @test attribute, and without main), noting each kept test's path and
+/// name in found
+fn keep_tests(items: Vec<ast::Item>, path: &[String], keep: bool, found: &mut Vec<(String, Vec<u8>)>) -> Vec<ast::Item> {
+    let mut out = Vec::new();
+    for mut it in items {
+        let label = it.attrs.iter().find_map(|a| match &a.kind {
+            ast::ExprKind::Builtin(n, _, Some(args)) if n == "test" => match args.first() {
+                Some(ast::GenericArg::Expr(ast::Expr { kind: ast::ExprKind::Str(s), .. })) => Some(s.clone()),
+                _ => None,
+            },
+            _ => None,
+        });
+        match (&mut it.kind, label) {
+            (ast::ItemKind::Fn(f), Some(l)) => {
+                if keep {
+                    f.name = format!("__test{}", found.len() + 1);
+                    found.push(([path, &[f.name.clone()]].concat().join("::"), l));
+                    it.attrs.clear();
+                    it.vis = ast::Vis::Public;
+                    out.push(it);
+                }
+            }
+            (ast::ItemKind::Fn(f), None) if keep && path.is_empty() && f.name == "main" => {}
+            (ast::ItemKind::Namespace(p, inner), _) => {
+                let sub = [path, p.as_slice()].concat();
+                *inner = keep_tests(std::mem::take(inner), &sub, keep, found);
+                out.push(it);
+            }
+            _ => out.push(it),
+        }
+    }
+    out
 }
 
 /// compile C (written next to `out` as a .c file): to an executable (linked with `libs` and `extra`), or
@@ -390,7 +469,9 @@ fn main() {
         "emit-c" => print!("{}", compile(&cli)),
         "build" => {
             let c = compile(&cli);
-            let out = cli.out.clone().unwrap_or_else(|| PathBuf::from(&cli.files[0]).with_extension(""));
+            // named after the first file, or (only test packages) the first of them
+            let first = cli.files.first().or(cli.test_pkgs.first()).unwrap();
+            let out = cli.out.clone().unwrap_or_else(|| PathBuf::from(first).with_extension(""));
             cc(&c, &out, cli.release, &cli.links, &cli.cc_args, false);
         }
         "lib" => {

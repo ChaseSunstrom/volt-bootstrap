@@ -89,6 +89,18 @@ fn bolt() {
     let out = ok(bolt(&app, &["test"]), "bolt test");
     assert!(out.contains("test sums ... ok"), "{out}");
 
+    // test blocks in the package's own sources run beside tests/ (a line each, picked by name); a
+    // dependency's don't
+    let main_src = std::fs::read_to_string(app.join("src/main.volt")).unwrap();
+    write(&app.join("src/main.volt"), &format!("{main_src}test \"triples\" {{\n    try std::testing::assert_eq(mathx::triple(2), 6);\n}}\ntest \"other\" {{\n}}\n"));
+    write(&tmp.join("mathx/lib/ops.volt"), "public fn triple(x: i32) -> i32 { return x * 3; }\ntest \"never runs\" {\n    try std::testing::assert(false);\n}\n");
+    // the package's library has its own (run from source, so they reach its unexported code)
+    write(&app.join("lib/extra.volt"), "fn seven() -> i32 { return 7; }\ntest \"seven\" {\n    try std::testing::assert_eq(seven(), 7);\n}\n");
+    let out = ok(bolt(&app, &["test"]), "bolt test (test blocks)");
+    assert!(out.contains("test sums ... ok") && out.contains("test triples ... ok") && out.contains("test other ... ok") && out.contains("test seven ... ok") && !out.contains("never runs") && out.contains("4 passed; 0 failed"), "{out}");
+    let out = ok(bolt(&app, &["test", "trip"]), "bolt test trip");
+    assert!(out.contains("test triples ... ok") && !out.contains("test other") && !out.contains("test sums") && out.contains("1 passed; 0 failed"), "{out}");
+
     // the lock keeps the commit even after the dependency moves on
     write(&greet.join("lib/greet.volt"), "use std::io;\npublic fn hello(who: str) -> void { std::println(\"changed\"); }\n");
     git(&greet, &["commit", "-q", "-am", "v2"]);
@@ -306,6 +318,10 @@ fn targets_and_commands() {
     e.ok(t, &["new", "tools", "--lib"]);
     assert!(t.join("tools/lib/tools.volt").is_file() && !t.join("tools/src").exists());
     write(&t.join("tools/lib/tools.volt"), "public fn twice(x: i32) -> i32 { return x * 2; }\n");
+    // a library's test blocks test its unexported code too
+    write(&t.join("tools/lib/inner.volt"), "fn halve(x: i32) -> i32 { return x / 2; }\ntest \"halves\" {\n    try std::testing::assert_eq(halve(twice(5)), 5);\n}\n");
+    let out = e.ok(&t.join("tools"), &["test"]);
+    assert!(out.contains("test halves ... ok") && out.contains("1 passed; 0 failed"), "{out}");
     write(&t.join("testutil/bolt.toml"), "[package]\nname = \"testutil\"\n\n[features]\nstrict = []\n");
     write(&t.join("testutil/lib/t.volt"), "public fn expect(ok: bool) -> i32 { if (ok) { return 0; } return 1; }\n");
 

@@ -179,6 +179,9 @@ pub struct Exe {
     pub name: String,
     pub roots: Vec<PathBuf>,
     pub out: PathBuf,
+    /// test blocks (test "name" { }): a bin's roots built with --test, or (no roots) the package's
+    /// library from source with its tests (--test-pkg); run with a name filter, per-test lines shown
+    pub unit: bool,
 }
 
 /// one command's build: the resolved packages, what's on, the profile, where things go
@@ -499,7 +502,26 @@ impl Build {
     }
 
     pub fn exe_of(&self, pkg: usize, t: &Target) -> Exe {
-        Exe { pkg, kind: t.kind, name: t.name.clone(), roots: vec![t.path.clone()], out: self.exe_path(t.kind, &t.name) }
+        Exe { pkg, kind: t.kind, name: t.name.clone(), roots: vec![t.path.clone()], out: self.exe_path(t.kind, &t.name), unit: false }
+    }
+
+    /// a package's test blocks as test executables: one per bin that has some (its sources with
+    /// --test), and one for its library's (built from source, --test-pkg). A file has them when a
+    /// line of it starts `test "`
+    pub fn units_of(&self, pkg: usize) -> Vec<Exe> {
+        let m = &self.g.pkgs[pkg].m;
+        // ponytail: a textual look for test blocks; the compiler is the one that knows
+        let has = |root: &Path| volt_files(root).into_iter().any(|f| std::fs::read_to_string(f).is_ok_and(|t| t.lines().any(|l| l.trim_start().starts_with("test \""))));
+        let mut out = Vec::new();
+        for t in m.of(Kind::Bin).filter(|t| self.has_features(pkg, t) && has(&t.path)) {
+            let name = format!("{}-test-blocks", t.name);
+            out.push(Exe { pkg, kind: Kind::Test, out: self.exe_path(Kind::Test, &name), name, roots: vec![t.path.clone()], unit: true });
+        }
+        if m.lib.as_deref().is_some_and(has) {
+            let name = format!("{}-lib-test-blocks", m.name);
+            out.push(Exe { pkg, kind: Kind::Test, out: self.exe_path(Kind::Test, &name), name, roots: Vec::new(), unit: true });
+        }
+        out
     }
 
     /// build executables (their libraries first); `plans` adds each package's build-file sources and C inputs
@@ -521,7 +543,7 @@ impl Build {
             let plan = plans.get(&e.pkg).unwrap_or(&none);
             let mut files: Vec<PathBuf> = e.roots.iter().flat_map(|r| volt_files(r)).collect();
             files.extend(plan.sources.iter().cloned());
-            if files.is_empty() {
+            if files.is_empty() && !e.unit {
                 return Err(format!("{} '{}' has no .volt files", e.kind.name(), e.name));
             }
             let closure = self.closure(e.pkg, e.kind != Kind::Bin);
@@ -538,7 +560,19 @@ impl Build {
                 args.extend(["--backend".into(), b.clone()]);
             }
             args.extend(files.iter().map(|f| f.display().to_string()));
-            args.extend(self.pkg_args(&closure, Some(e.pkg), true));
+            let mut pkgs = self.pkg_args(&closure, Some(e.pkg), true);
+            if e.unit {
+                args.push("--test".into());
+                if e.roots.is_empty() {
+                    // the library's own: from source, test blocks and all
+                    let name = self.g.pkgs[e.pkg].m.name.clone();
+                    if let Some(i) = pkgs.windows(2).position(|w| w[0] == "--link" && w[1].starts_with(&format!("{name}="))) {
+                        pkgs.drain(i..i + 2);
+                    }
+                    args.extend(["--test-pkg".into(), name]);
+                }
+            }
+            args.extend(pkgs);
             // [foreign] libraries, and what dependencies' build files ask the C compiler for (the
             // package's own come with its plan)
             let mut uses: Vec<String> = closure.iter().flat_map(|p| foreign.get(p).cloned().unwrap_or_default()).collect();
@@ -849,7 +883,7 @@ impl Build {
     pub fn install_exes(&self, p: usize, plan: &Plan) -> Vec<Exe> {
         let m = &self.g.pkgs[p].m;
         let mut v: Vec<Exe> = m.of(Kind::Bin).filter(|t| self.has_features(p, t)).map(|t| self.exe_of(p, t)).collect();
-        v.extend(plan.exes.iter().map(|(n, roots)| Exe { pkg: p, kind: Kind::Bin, name: n.clone(), roots: roots.clone(), out: self.exe_path(Kind::Bin, n) }));
+        v.extend(plan.exes.iter().map(|(n, roots)| Exe { pkg: p, kind: Kind::Bin, name: n.clone(), roots: roots.clone(), out: self.exe_path(Kind::Bin, n), unit: false }));
         v
     }
 
@@ -919,16 +953,37 @@ impl Build {
 
     // ---------- tests and benchmarks ----------
 
-    /// run built test (or bench) executables in their package's directory: pass = exit 0
-    pub fn run_tests(&self, exes: &[Exe], bench: bool) -> bool {
+    /// run built test (or bench) executables in their package's directory: pass = exit 0. A
+    /// package's test blocks count one by one, filtered by name
+    pub fn run_tests(&self, exes: &[Exe], bench: bool, filter: Option<&str>) -> bool {
         let start = Instant::now();
         let (mut passed, mut failed) = (0, 0);
         for e in exes {
             let dir = &self.g.pkgs[e.pkg].m.dir;
             status("Running", format!("{}/{} ({})", e.kind.dir(), e.name, rel(&e.out)));
             let t = Instant::now();
-            let out = Command::new(&e.out).current_dir(dir).output().unwrap_or_else(|err| fail(format!("can't run {}: {err}", e.out.display())));
+            let mut cmd = Command::new(&e.out);
+            if e.unit {
+                cmd.args(filter);
+            }
+            let out = cmd.current_dir(dir).output().unwrap_or_else(|err| fail(format!("can't run {}: {err}", e.out.display())));
             let ms = t.elapsed().as_secs_f64() * 1000.0;
+            // std::testing::run's lines, then "N passed, M failed"
+            let text = String::from_utf8_lossy(&out.stdout);
+            let counts = text.lines().last().and_then(|l| {
+                let (p, f) = l.strip_suffix(" failed")?.split_once(" passed, ")?;
+                Some((p.parse::<usize>().ok()?, f.parse::<usize>().ok()?))
+            });
+            // (an exit code that disagrees, say a leak check's, fails it as a whole below)
+            if let (true, Some((p, f))) = (e.unit && (out.status.success() || failed_any(counts)), counts) {
+                print!("{}", text.lines().filter(|l| l.starts_with("test ")).map(|l| format!("{l}\n")).collect::<String>());
+                if f > 0 {
+                    eprint!("{}", String::from_utf8_lossy(&out.stderr));
+                }
+                passed += p;
+                failed += f;
+                continue;
+            }
             if out.status.success() {
                 passed += 1;
                 if bench {
@@ -1081,4 +1136,9 @@ impl Plan {
         }
         Ok(())
     }
+}
+
+/// whether a test executable's counts say something failed
+fn failed_any(counts: Option<(usize, usize)>) -> bool {
+    counts.is_some_and(|(_, f)| f > 0)
 }
