@@ -44,7 +44,8 @@ jobs:
           echo "/usr/lib/llvm-$LLVM_VERSION/bin" >> "$GITHUB_PATH"
           echo "LLVM_CONFIG=/usr/lib/llvm-$LLVM_VERSION/bin/llvm-config" >> "$GITHUB_ENV"
           # voltc's own sources import LLVM's C headers, which apt.llvm.org keeps beside its libraries
-          echo "CPATH=/usr/lib/llvm-$LLVM_VERSION/include" >> "$GITHUB_ENV"
+          # (for C only: C++ would take LLVM's libc++ headers over libstdc++'s)
+          echo "C_INCLUDE_PATH=/usr/lib/llvm-$LLVM_VERSION/include" >> "$GITHUB_ENV"
           echo "LIBRARY_PATH=/usr/lib/llvm-$LLVM_VERSION/lib" >> "$GITHUB_ENV"
           echo "LD_LIBRARY_PATH=/usr/lib/llvm-$LLVM_VERSION/lib" >> "$GITHUB_ENV"
       - name: Build (no warnings)
@@ -62,9 +63,9 @@ jobs:
           [ -f test.log ] || exit 0
           tests=$(grep -E '^test .* \.\.\. FAILED$' test.log | sed 's/^test //; s/ \.\.\. FAILED$//' | head -40 | paste -sd ' ')
           [ -n "$tests" ] && echo "::error title=failed tests::$tests"
-          golden=$(grep '✗' test.log | head -30 | sed ':a;N;$!ba;s/\n/%0A/g')
+          golden=$(grep -E '^/.*\.volt: (exit|want errors)' test.log | head -40 | sed ':a;N;$!ba;s/\n/%0A/g')
           [ -n "$golden" ] && echo "::error title=failed programs::$golden"
-          grep -n 'panicked at' test.log | head -8 | while IFS=: read -r n _; do
+          grep -n 'panicked at' test.log | head -7 | while IFS=: read -r n _; do
             ctx=$(sed -n "${n},$((n + 12))p" test.log | sed ':a;N;$!ba;s/\n/%0A/g')
             echo "::error title=panic::$ctx"
           done
