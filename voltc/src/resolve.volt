@@ -789,7 +789,7 @@ attach fn fn_inst(this: checker&, d: u32, args: std::vec<gval>, span: span) -> c
         var n = S("vp_");
         n.append(path.as_str());
         n.append("__");
-        n.append(f.name);
+        n.append(c_word(f.name));
         n.push('_');
         n.append(hex8(fnv32(sig.as_str())).as_str());
         c_name = this.intern(move n);
@@ -800,7 +800,7 @@ attach fn fn_inst(this: checker&, d: u32, args: std::vec<gval>, span: span) -> c
             n.append(path.as_str());
             n.append("__");
         }
-        n.append(f.name);
+        n.append(c_word(f.name));
         c_name = this.fresh_c_name(n.as_str());
     }
     val name = this.inst_name(f.name, &args);

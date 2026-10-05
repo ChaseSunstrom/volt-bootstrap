@@ -1330,12 +1330,17 @@ attach fn resolve_rest(this: checker&, name: str, cands: std::vec<u32>&, rp: tva
             put(&pre, try this.expr(a, *wants.at(k)));
         }
     }
+    return this.pick_call(name, cands, rp, static_ty, explicit, &pre, args, want, span);
+}
+
+// resolve_call once the arguments are checked (pre; null: one waiting for its parameter's type)
+attach fn pick_call(this: checker&, name: str, cands: std::vec<u32>&, rp: tval*, static_ty: u32?, explicit: std::vec<garg>&, pre: std::vec<tval?>&, args: std::vec<expr>&, want: u32?, span: span) -> compile_error!tval {
     var vs: std::vec<viable> = {};
     // why each candidate doesn't fit; a lone one is the error itself
     var reasons: std::vec<diag> = {};
     for (dp&) in cands.items() {
         val d = *dp;
-        val b = try this.bind_cand(d, rp, static_ty, explicit, &pre);
+        val b = try this.bind_cand(d, rp, static_ty, explicit, pre);
         var binds: std::vec<gval> = {};
         var a = adj::NONE;
         match (b) {
@@ -1452,7 +1457,7 @@ attach fn resolve_rest(this: checker&, name: str, cands: std::vec<u32>&, rp: tva
     if (rp) {
         r = *(rp);
     }
-    return this.emit_call(pick.inst, pick.a, r, &pre, args, span);
+    return this.emit_call(pick.inst, pick.a, r, pre, args, span);
 }
 
 // Emit a call of fn instance inst: adjust the receiver, convert the arguments (a pack's become one

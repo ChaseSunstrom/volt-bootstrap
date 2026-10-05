@@ -322,6 +322,14 @@ fn first(x: u16?, c: circle) -> f64 {
     }
     return c.r;
 }
+
+attach operator +(this: circle, other: circle) -> circle {
+    return { r: this.r + other.r };
+}
+
+fn joined(c: circle, wide: circle) -> f64 {
+    return (c + wide).r;
+}
 ";
 
 fn inline_features(s: &mut Server) {
@@ -349,14 +357,15 @@ fn inline_features(s: &mut Server) {
 
     // inlay hints: the types of locals that don't write one, the parameters arguments are for
     // (not for one-letter parameters, nor where the argument names it already)
-    let range = "\"range\":{\"start\":{\"line\":0,\"character\":0},\"end\":{\"line\":40,\"character\":0}}";
+    let range = "\"range\":{\"start\":{\"line\":0,\"character\":0},\"end\":{\"line\":60,\"character\":0}}";
     let h = s.request("textDocument/inlayHint", &format!("{{\"textDocument\":{doc},{range}}}"));
     for want in ["\"label\":\": color\"", "\"label\":\": f64\"", "\"label\":\"scale:\"", "\"label\":\"by:\""] {
         assert!(h.contains(want), "inlay hints lack {want}: {h}");
     }
     // an if's binding gets one; the hidden locals an if binding or a struct update is parsed into don't
     assert!(h.contains("\"label\":\": u16\""), "inlay hints lack the if binding's type: {h}");
-    for unwanted in ["\"label\":\": circle\"", "\"label\":\"s:\"", "\"label\":\": u16?\""] {
+    // nor an operator's operand
+    for unwanted in ["\"label\":\": circle\"", "\"label\":\"s:\"", "\"label\":\": u16?\"", "\"label\":\"other:\""] {
         assert!(!h.contains(unwanted), "inlay hints have {unwanted}: {h}");
     }
 
@@ -382,7 +391,7 @@ fn inline_features(s: &mut Server) {
 
     // hover on a type: its fields, then what's attached to it, grouped by trait; a trait's attachers
     let h = s.request("textDocument/hover", &at(31, 12));
-    assert!(h.contains("struct circle {\\n    r: f64;\\n}\\n// shape\\nfn area(this) -> f64\\n// attached\\nattach fn grow(this: circle&, by: f64) -> void"), "hover circle: {h}");
+    assert!(h.contains("struct circle {\\n    r: f64;\\n}\\n// shape\\nfn area(this) -> f64\\n// attached\\nattach operator +(this: circle, other: circle) -> circle\\nattach fn grow(this: circle&, by: f64) -> void"), "hover circle: {h}");
     let h = s.request("textDocument/hover", &at(2, 8));
     assert!(h.contains("// attached by\\ncircle"), "hover shape: {h}");
 

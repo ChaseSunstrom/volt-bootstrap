@@ -138,6 +138,21 @@ pub const IF_LABEL: &str = "@if";
 pub const ELSE_LABEL: &str = "@else";
 pub const IF_TMP: &str = "@if";
 
+/// the operators `attach operator` can give a type (its fn is named operator+), and the word a C
+/// name spells each as
+pub const OPERATORS: &[(&str, &str)] = &[
+    ("+", "add"), ("-", "sub"), ("*", "mul"), ("/", "div"), ("%", "rem"), ("&", "and"), ("|", "or"), ("^", "xor"),
+    ("<<", "shl"), (">>", "shr"), ("~", "not"), ("<", "lt"), ("[]", "index"),
+];
+
+/// a fn's name as C can spell it: an operator's is a word (operator+ is op_add)
+pub fn c_word(name: &str) -> String {
+    match name.strip_prefix("operator").and_then(|s| OPERATORS.iter().find(|o| o.0 == s)) {
+        Some((_, w)) => format!("op_{w}"),
+        None => name.to_string(),
+    }
+}
+
 /// `Int` holds the literal's magnitude; a leading `-` is Unary(Neg, ..)
 #[derive(Clone, Debug)]
 pub enum ExprKind {

@@ -342,8 +342,18 @@ impl<'a> Parser<'a> {
         }
         // the modifiers came before we knew what they modify: a fn takes them all, a struct only
         // extern/comptime, a global comptime; anything else ignores them
-        let kind = if self.eat_kw("fn") {
-            let mut f = self.fn_decl()?;
+        // `attach operator +(...)`: a fn named operator+ (not `attach operator -> T`, an attach block
+        // of a trait named operator, nor `attach operator<T> -> U`)
+        let op = is_attach
+            && self.is_kw("operator")
+            && match self.tok_at(1) {
+                Tok::Punct("->") => false,
+                Tok::Punct("<") => self.is_at(2, "("),
+                Tok::Punct(_) => true,
+                _ => false,
+            };
+        let kind = if op || self.eat_kw("fn") {
+            let mut f = self.fn_decl(op)?;
             f.is_async = is_async;
             f.is_comptime = is_comptime;
             f.is_export = is_export;
@@ -594,12 +604,42 @@ impl<'a> Parser<'a> {
         Ok(GenericArg::Expr(e))
     }
 
-    /// the part after `fn`; `item` fills in the modifiers
-    fn fn_decl(&mut self) -> Res<FnDecl> {
+    /// the part after `fn`, or after `attach` for an operator (op); `item` fills in the modifiers
+    fn fn_decl(&mut self, op: bool) -> Res<FnDecl> {
+        let at = self.span();
         // `copy` is a keyword but also the name of the copy hook: attach fn copy(this: T&) -> T
-        let name = if self.eat_kw("copy") { "copy".to_string() } else { self.ident()?.0 };
-        let spec = if self.is("<") { Some(self.generic_args()?) } else { None };
+        let name = if op {
+            self.operator_name()?
+        } else if self.eat_kw("copy") {
+            "copy".to_string()
+        } else {
+            self.ident()?.0
+        };
+        let spec = if self.is("<") && !op { Some(self.generic_args()?) } else { None };
         let (params, c_varargs) = self.params()?;
+        if op {
+            // a binary operator takes this and the right operand; == (eq) takes both by reference
+            let sym = name.strip_prefix("operator").unwrap_or("==");
+            if !params.first().is_some_and(|p| p.name == "this" && !p.is_static) {
+                return err(at, format!("operator {sym} takes this as its first parameter"));
+            }
+            let n = params.len();
+            let want = match sym {
+                "-" if n == 1 || n == 2 => None,
+                "-" => Some("one parameter (this) or two (this and the right operand)"),
+                "~" if n == 1 => None,
+                "~" => Some("one parameter: this"),
+                "==" if n != 2 || params.iter().any(|p| !matches!(p.ty.as_ref().map(|t| &t.kind), Some(TypeKind::Ref(_)))) => {
+                    Some("this and the right operand, both by reference: (this: T&, other: T&)")
+                }
+                _ if n == 2 => None,
+                "[]" => Some("two parameters: this and the index"),
+                _ => Some("two parameters: this and the right operand"),
+            };
+            if let Some(w) = want {
+                return err(at, format!("operator {sym} takes {w}"));
+            }
+        }
         let ret = if self.eat("->") { Some(self.parse_type()?) } else { None };
         let body = if self.eat(";") { None } else { Some(self.block()?) };
         Ok(FnDecl {
@@ -615,6 +655,43 @@ impl<'a> Parser<'a> {
             is_export: false,
             is_attach: false,
         })
+    }
+
+    /// `operator <op>` after attach: the fn's name, operator<op> (`==` names it eq, the fn == already
+    /// calls). The operators that come from another can't be attached themselves.
+    fn operator_name(&mut self) -> Res<String> {
+        self.bump(); // operator
+        let at = self.span();
+        let Tok::Punct(p) = self.tok().clone() else { unreachable!() };
+        self.bump();
+        let sym = match p {
+            "[" => {
+                self.expect("]")?;
+                "[]"
+            }
+            ">" if self.glued_at(0) && (self.is(">") || self.is(">=")) => {
+                let s = if self.is(">") { ">>" } else { ">>=" };
+                self.bump();
+                s
+            }
+            p => p,
+        };
+        if sym == "==" {
+            return Ok("eq".into());
+        }
+        if OPERATORS.iter().any(|o| o.0 == sym) {
+            return Ok(format!("operator{sym}"));
+        }
+        let base = match sym {
+            ">" | "<=" | ">=" => Some("<"),
+            "!=" => Some("=="),
+            s if s.len() > 1 && s.ends_with('=') => OPERATORS.iter().map(|o| o.0).find(|o| *o == &s[..s.len() - 1]),
+            _ => None,
+        };
+        match base {
+            Some(b) => err(at, format!("{sym} can't be attached: it comes from operator {b}")),
+            None => err(at, format!("{sym} can't be attached; these can: + - * / % & | ^ << >> ~ < == []")),
+        }
     }
 
     /// `(var x: T = d, static this, ...)`: the params, and whether they end in C varargs `...`

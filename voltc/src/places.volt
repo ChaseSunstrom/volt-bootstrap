@@ -323,6 +323,23 @@ attach fn index(this: checker&, be: expr&, ie: expr&, span: span) -> compile_err
         b.mutable = true;
         through(&b, r0);
     }
+    var ia: std::vec<expr> = {};
+    put(&ia, copy *ie);
+    val called = try this.op_call("[]", b, &ia, null, span);
+    if (called) {
+        // a reference it gives back is a place
+        val v = called;
+        val t = this.t.ref_inner(v.ty);
+        if (t == null) {
+            return v;
+        }
+        var r = vnew(t ?? 0, this.ir.deref(v.c, t ?? 0));
+        r.lv = true;
+        r.mutable = true;
+        r.pure = v.pure;
+        through(&r, v);
+        return r;
+    }
     val i = try this.expr(ie, USIZE);
     if (this.t.int_of(i.ty) == null) {
         return fail(ie.span, fmt("index must be an integer, found {}", this.ty_name(i.ty)));
@@ -402,7 +419,7 @@ attach fn index(this: checker&, be: expr&, ie: expr&, span: span) -> compile_err
             elem = U8;
             c = this.ir.index(b.c, i.c, U8);
         },
-        default => { return fail(span, fmt("can't index a {}", this.ty_name(b.ty))); },
+        default => { return fail(span, fmt2("can't index a {}{}", this.ty_name(b.ty), this.op_hint(b.ty, "[]"))); },
     }
     var is_slice = false;
     match (*this.t.get(b.ty)) {

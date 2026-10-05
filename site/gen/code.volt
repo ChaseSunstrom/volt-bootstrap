@@ -624,6 +624,11 @@ fn volt_word(l: str, p: usize, colors: std::vec<u8>&) -> usize? {
         paint(colors, p, e, KW);
         return e;
     }
+    // attach operator +(...)
+    if (w == "operator" && after < l.len && "+-*/%&|^~<>=![".find(l[after..after + 1]) != null) {
+        paint(colors, p, e, KW);
+        return e;
+    }
     // keywords, types, constants
     if (word_in(l, p, CONTROL) != null || w == "fn" || word_in(l, p, STORAGE) != null || word_in(l, p, MODIFIERS) != null || word_in(l, p, OTHER_KW) != null) {
         paint(colors, p, e, KW);

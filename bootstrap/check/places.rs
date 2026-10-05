@@ -125,6 +125,13 @@ impl Checker {
         if let Ty::Ref(inner) = self.t.get(b.ty).clone() {
             b = Self::through(Val { ty: inner, c: format!("(*({}))", b.c), lv: true, mutable: true, ..b.clone() }, &b);
         }
+        if let Some(v) = self.op_call("[]", b.clone(), std::slice::from_ref(ie), None, span)? {
+            // a reference it gives back is a place
+            if let Ty::Ref(t) = self.t.get(v.ty).clone() {
+                return Ok(Self::through(Val { lv: true, mutable: true, pure: v.pure, ..Val::new(t, format!("(*({}))", v.c)) }, &v));
+            }
+            return Ok(v);
+        }
         let i = self.expr(ie, Some(USIZE))?;
         if self.t.int_of(i.ty).is_none() {
             return err(ie.span, format!("index must be an integer, found {}", self.ty_name(i.ty)));
@@ -164,7 +171,7 @@ impl Checker {
                 (U8, format!("({{ volt_str _s = {}; size_t _i = (size_t)({}); {chk}_s.ptr[_i]; }})", b.c, i.c), false)
             }
             Ty::CStr => (U8, format!("((uint8_t)({})[{}])", b.c, i.c), false),
-            _ => return err(span, format!("can't index a {}", self.ty_name(b.ty))),
+            _ => return err(span, format!("can't index a {}{}", self.ty_name(b.ty), self.op_hint(b.ty, "[]"))),
         };
         // a slice's elements are what it points at; an array's are part of it
         if matches!(self.t.get(b.ty), Ty::Slice(_)) {

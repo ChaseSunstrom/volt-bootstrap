@@ -23,6 +23,11 @@ attach fn unary(this: checker&, op: unop, x: expr&, want: u32?, span: span) -> c
                     default => {},
                 }
             }
+            var none: std::vec<expr> = {};
+            val called = try this.op_call("-", v, &none, want, span);
+            if (called) {
+                return called;
+            }
             match (*this.t.get(v.ty)) {
                 .FLOAT(b) => {
                     var r = vnew(v.ty, this.ir.unary(unop_ir::NEG, v.c, v.ty));
@@ -40,7 +45,7 @@ attach fn unary(this: checker&, op: unop, x: expr&, want: u32?, span: span) -> c
                 },
                 default => {},
             }
-            return fail(span, fmt("can't negate a {}", this.ty_name(v.ty)));
+            return fail(span, fmt2("can't negate a {}{}", this.ty_name(v.ty), this.op_hint(v.ty, "-")));
         },
         .NOT => {
             val v = try this.expr_as(x, BOOL);
@@ -50,8 +55,13 @@ attach fn unary(this: checker&, op: unop, x: expr&, want: u32?, span: span) -> c
         },
         .BITNOT => {
             val v = try this.expr(x, want);
+            var none: std::vec<expr> = {};
+            val called = try this.op_call("~", v, &none, want, span);
+            if (called) {
+                return called;
+            }
             if (this.t.int_of(v.ty) == null) {
-                return fail(span, fmt("~ needs an integer, found {}", this.ty_name(v.ty)));
+                return fail(span, fmt2("~ needs an integer, found {}{}", this.ty_name(v.ty), this.op_hint(v.ty, "~")));
             }
             var r = vnew(v.ty, this.ir.unary(unop_ir::BITNOT, v.c, v.ty));
             r.pure = v.pure;
@@ -298,6 +308,9 @@ attach fn binary(this: checker&, op: binop, ae: expr&, be: expr&, want: u32?, sp
         }
     }
     val a = try this.expr(ae, operand_want);
+    if (op != binop::EQ && op != binop::NE && this.has_ops(a.ty)) {
+        return this.op_binary(op, a, ae, be, want, span);
+    }
     var b_want: u32? = a.ty;
     var be_null = false;
     match (be.kind) {
@@ -653,7 +666,7 @@ attach fn compare(this: checker&, op: binop, a: tval, b: tval, span: span) -> co
         },
         default => {},
     }
-    val code = c ?? return fail(span, fmt2("can't compare {} with {}", this.ty_name(av.ty), S(sym)));
+    val code = c ?? return fail(span, fmt3("can't compare {} with {}{}", this.ty_name(av.ty), S(sym), this.op_hint(av.ty, "==")));
     var r = vnew(BOOL, this.wrap_pre(move pre, code, BOOL));
     r.pure = av.pure && bv.pure;
     return r;
@@ -732,6 +745,10 @@ attach fn assign(this: checker&, op: binop?, le: expr&, re: expr&, span: span) -
         return res;
     }
     val bop = op ?? binop::ADD;
+    val by_op = try this.op_assign(bop, l, re, span);
+    if (by_op) {
+        return by_op;
+    }
     val r = try this.expr(re, l.ty);
     val lty = l.ty;
     // evaluate the target once
@@ -779,11 +796,11 @@ attach fn assign(this: checker&, op: binop?, le: expr&, re: expr&, span: span) -
                     .SUB => { o = binop_ir::SUB; },
                     .MUL => { o = binop_ir::MUL; },
                     .DIV => { o = binop_ir::DIV; },
-                    default => { return fail(span, fmt2("can't use {}= on {}", S(binop_text(bop)), this.ty_name(lty))); },
+                    default => { return fail(span, fmt3("can't use {}= on {}{}", S(binop_text(bop)), this.ty_name(lty), this.op_hint(lty, binop_text(bop)))); },
                 }
                 v = vnew(lty, this.ir.binary(o, target, rc.c, lty));
             },
-            default => { return fail(span, fmt2("can't use {}= on {}", S(binop_text(bop)), this.ty_name(lty))); },
+            default => { return fail(span, fmt3("can't use {}= on {}{}", S(binop_text(bop)), this.ty_name(lty), this.op_hint(lty, binop_text(bop)))); },
         }
     }
     val code = this.ir.assign(target, v.c);
@@ -890,4 +907,243 @@ attach fn cast(this: checker&, x: expr&, to: u32, span: span) -> compile_error!t
         return r;
     }
     return this.coerce(v, to, span);
+}
+
+// ---------- operators of structs and enums ----------
+
+// a struct or an enum (or a reference to one): only those have operators of their own
+attach fn has_ops(this: checker&, ty: u32) -> bool {
+    match (*this.t.get(this.t.ref_inner(ty) ?? ty)) {
+        .STRUCT(s) => { return true; },
+        .ENUM(e) => { return true; },
+        default => { return false; },
+    }
+}
+
+// "; attach operator - to give it one" after an error about a struct or an enum
+attach fn op_hint(this: checker&, ty: u32, sym: str) -> std::string {
+    if (!this.has_ops(ty) || sym == "+%" || sym == "-%" || sym == "*%") {
+        return {};
+    }
+    return fmt("; attach operator {} to give it one", S(sym));
+}
+
+// the operator<op> fns that take recv as this, given these operands after it (null: not checked yet)
+attach fn op_cands(this: checker&, name: str, recv: tval&, probe: std::vec<tval?>&) -> compile_error!(std::vec<u32>) {
+    var fits: std::vec<u32> = {};
+    if (!this.has_ops(recv.ty)) {
+        return fits;
+    }
+    var none: std::vec<garg> = {};
+    val all = this.named(&this.attached, name);
+    for (d&) in all.items() {
+        match (this.recv_of(*d)) {
+            .VAL(x) => {
+                match (try this.bind_cand(*d, recv, null, &none, probe)) {
+                    .OK(b, j) => { put(&fits, *d); },
+                    default => {},
+                }
+            },
+            default => {},
+        }
+    }
+    return fits;
+}
+
+// -x, ~x and x[i] on a struct or enum: its operator, called like a method. null: it has none
+attach fn op_call(this: checker&, sym: str, recv: tval, args: std::vec<expr>&, want: u32?, span: span) -> compile_error!(tval?) {
+    val name = this.intern(fmt("operator{}", S(sym)));
+    var probe: std::vec<tval?> = {};
+    for (k) in 0..args.len {
+        put(&probe, null);
+    }
+    val cands = try this.op_cands(name, &recv, &probe);
+    if (cands.len == 0) {
+        return null;
+    }
+    var none: std::vec<garg> = {};
+    val mark = this.lsp_args.len;
+    val r = try this.resolve_call(name, &cands, recv, null, &none, args, want, span);
+    this.lsp_args.truncate(mark); // an operand gets no parameter-name hint
+    return r;
+}
+
+// a op b on a struct or enum: its operator<op>, called with a as this. a > b is b < a and a <= b is
+// !(b < a), the operands still evaluated left to right; a >= b is !(a < b)
+attach fn op_binary(this: checker&, op: binop, a: tval, ae: expr&, be: expr&, want: u32?, span: span) -> compile_error!tval {
+    val swap = op == binop::GT || op == binop::LE;
+    val negate = op == binop::LE || op == binop::GE;
+    var sym = binop_text(op);
+    if (swap || negate) {
+        sym = "<";
+    }
+    val name = this.intern(fmt("operator{}", S(sym)));
+    val b = try this.expr(be, this.t.ref_inner(a.ty) ?? a.ty);
+    val left = a.ty;
+    var pair: std::vec<tval> = {};
+    put(&pair, a);
+    put(&pair, b);
+    var pre = this.seq_vals(&pair);
+    var recv = *pair.at(0);
+    var arg = *pair.at(1);
+    var args: std::vec<expr> = {};
+    if (swap) {
+        recv = *pair.at(1);
+        arg = *pair.at(0);
+        put(&args, copy *ae);
+    } else {
+        put(&args, copy *be);
+    }
+    var probe: std::vec<tval?> = {};
+    put(&probe, arg);
+    val cands = try this.op_cands(name, &recv, &probe);
+    if (cands.len == 0) {
+        if (swap && recv.ty != arg.ty) {
+            return fail(span, fmt3("a {} b calls b's operator <, and {} has none taking a {}", S(binop_text(op)), this.ty_name(recv.ty), this.ty_name(arg.ty)));
+        }
+        return fail(span, fmt3("can't use {} on {}{}", S(binop_text(op)), this.ty_name(left), this.op_hint(left, sym)));
+    }
+    var post: u32? = null;
+    var w = want;
+    if (is_cmp_op(op)) {
+        w = BOOL;
+    }
+    var r = try this.op_pick(name, &cands, recv, arg, &args, w, span, &pre, &post);
+    if (negate && r.ty != BOOL) {
+        return fail(span, fmt2("{} needs operator < to give a bool, but it gives {}", S(binop_text(op)), this.ty_name(r.ty)));
+    }
+    r.c = this.after_lend(move pre, post, r.c, r.ty);
+    if (negate) {
+        r.c = this.ir.unary(unop_ir::NOT, r.c, BOOL);
+    }
+    r.pure = false;
+    return r;
+}
+
+// the version of operator name for recv op arg: given the operand as it is, else lent by reference
+// when some version takes it as T& (a lent temporary's declaration goes in pre, its deletion in
+// post). When neither fits, the error is the first's. An operand gets no parameter-name hint.
+attach fn op_pick(this: checker&, name: str, cands: std::vec<u32>&, recv: tval, arg: tval, args: std::vec<expr>&, want: u32?, span: span, pre: std::vec<u32>&, post: u32?&) -> compile_error!tval {
+    var none: std::vec<garg> = {};
+    val mark = this.lsp_args.len;
+    var pv: std::vec<tval?> = {};
+    put(&pv, arg);
+    val r = this.pick_call(name, cands, &recv, null, &none, &pv, args, want, span) catch |e| {
+        var by_ref = false;
+        for (d&) in cands.items() {
+            val fd = this.fn_decl_of(*d);
+            if (fd != null && fd->params.len > 1) {
+                val p = fd->params.at(1);
+                if (p.ty) {
+                    match (p.ty.kind) {
+                        .REF(x) => { by_ref = true; },
+                        default => {},
+                    }
+                }
+            }
+        }
+        if (!by_ref || this.t.ref_inner(arg.ty) != null) {
+            return copy e;
+        }
+        var lv: std::vec<tval?> = {};
+        put(&lv, try this.lend(arg, pre, post));
+        val r2 = this.pick_call(name, cands, &recv, null, &none, &lv, args, want, span) catch |e2| {
+            return copy e;
+        };
+        this.lsp_args.truncate(mark);
+        return r2;
+    };
+    this.lsp_args.truncate(mark);
+    return r;
+}
+
+// an operand lent to a T& parameter: its address, or a temporary's (its declaration goes in pre, its
+// deletion in post)
+attach fn lend(this: checker&, v: tval, pre: std::vec<u32>&, post: u32?&) -> compile_error!tval {
+    val rt = this.t.ref_to(v.ty);
+    if (v.lv) {
+        var x = vnew(rt, this.ir.addr(v.c, rt));
+        addr_prov(&x, &v);
+        x.pure = v.pure;
+        return x;
+    }
+    val t = this.tmp_local("ov", v.ty);
+    put(pre, this.ir.decl(t.id, v.c));
+    if (try this.needs_drop(v.ty)) {
+        val d = try this.drop_fn(v.ty);
+        *post = this.call_fn(d, nodes(this.ir.addr(t.c, rt)), VOID);
+    }
+    return vpure(rt, this.ir.addr(t.c, rt));
+}
+
+// the statements in pre, then the call c, then post (a lent temporary's deletion)
+attach fn after_lend(this: checker&, pre: std::vec<u32>, post: u32?, c: u32, t: u32) -> u32 {
+    if (post == null) {
+        return this.wrap_pre(move pre, c, t);
+    }
+    var stmts = move pre;
+    if (t == VOID || t == NEVER) {
+        put(&stmts, c);
+        put(&stmts, post ?? c);
+        return this.ir.seq(move stmts, null, t);
+    }
+    val r = this.tmp_local("or", t);
+    put(&stmts, this.ir.decl(r.id, c));
+    put(&stmts, post ?? c);
+    return this.ir.seq(move stmts, r.c, t);
+}
+
+// a op= b on a struct or enum is a = a op b: the place evaluated once, the old value deleted. null:
+// it has no operator op
+attach fn op_assign(this: checker&, op: binop, l: tval, re: expr&, span: span) -> compile_error!(tval?) {
+    // a reference variable isn't the value it reaches: that's *r += x
+    if (this.t.ref_inner(l.ty) != null) {
+        return null;
+    }
+    val name = this.intern(fmt("operator{}", S(binop_text(op))));
+    var probe: std::vec<tval?> = {};
+    put(&probe, null);
+    val cands = try this.op_cands(name, &l, &probe);
+    if (cands.len == 0) {
+        return null;
+    }
+    var pre: std::vec<u32> = {};
+    var cur = l;
+    if (!l.pure) {
+        val pt = this.t.ref_to(l.ty);
+        val p = this.tmp_local("op", pt);
+        put(&pre, this.ir.decl(p.id, this.ir.addr(l.c, pt)));
+        cur.c = this.ir.deref(p.c, l.ty);
+        cur.pure = true;
+    }
+    val b = try this.expr(re, l.ty);
+    var post: u32? = null;
+    var args: std::vec<expr> = {};
+    put(&args, copy *re);
+    // x += y may move x into the operator even inside a loop: it gets the result right away
+    var target: u32? = null;
+    if (l.owner) {
+        val ol = this.lookup_local(l.owner);
+        if (ol) {
+            target = (ol).c;
+        }
+    }
+    val saved = this.cx.reassigning;
+    this.cx.reassigning = target;
+    var v = this.op_pick(name, &cands, cur, b, &args, l.ty, span, &pre, &post) catch |e| {
+        this.cx.reassigning = saved;
+        return copy e;
+    };
+    this.cx.reassigning = saved;
+    if (post) {
+        v.c = this.after_lend({}, post, v.c, v.ty);
+        v.pure = false;
+    }
+    this.note_store(&cur, &v);
+    val st = try this.store(cur, v, span);
+    if (pre.len == 0) {
+        return st;
+    }
+    put(&pre, st.c);
+    return this.vstmt(this.ir.seq(move pre, null, VOID));
 }

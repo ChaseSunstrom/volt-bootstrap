@@ -38,7 +38,9 @@ fn bolt() {
 
     // a path dependency
     write(&tmp.join("mathx/bolt.toml"), "[package]\nname = \"mathx\"\nversion = \"0.1.0\"\n");
-    write(&tmp.join("mathx/lib/ops.volt"), "public fn triple(x: i32) -> i32 { return x * 3; }\n");
+    // a package's operator is a package fn like any other (its C name spells the symbol as a word)
+    let meters = "public struct meters {\n    public n: i32;\n}\npublic attach operator +(this: meters, o: meters) -> meters {\n    return { n: this.n + o.n };\n}\n";
+    write(&tmp.join("mathx/lib/ops.volt"), &format!("public fn triple(x: i32) -> i32 {{ return x * 3; }}\n{meters}"));
     // a git dependency, which itself depends on mathx by path
     let greet = tmp.join("greet");
     write(&greet.join("bolt.toml"), &format!("[package]\nname = \"greet\"\nversion = \"1.0.0\"\n\n[dependencies]\nmathx = {{ path = \"{}\" }}\n", tmp.join("mathx").display()));
@@ -58,7 +60,7 @@ fn bolt() {
     );
     write(
         &app.join("src/main.volt"),
-        "use std::io;\nfn main() -> void {\n    greet::hello(\"app\");\n    std::println(\"{} {}\", mathx::triple(5), std::process::arg(1) ?? \"-\");\n}\n",
+        "use std::io;\nfn main() -> void {\n    greet::hello(\"app\");\n    val m: mathx::meters = { n: 2 };\n    std::println(\"{} {} {}\", mathx::triple(5), std::process::arg(1) ?? \"-\", (m + m).n);\n}\n",
     );
     write(
         &app.join("build.volt"),
@@ -70,7 +72,7 @@ fn bolt() {
     write(&app.join("tests/sums.volt"), "fn main() -> i32 { return mathx::triple(0); }\n");
 
     let out = ok(bolt(&app, &["run", "--", "arg1"]), "bolt run");
-    assert!(out.contains("hello app x6\n15 arg1"), "{out}");
+    assert!(out.contains("hello app x6\n15 arg1 4"), "{out}");
     let lock = std::fs::read_to_string(app.join("bolt.lock")).unwrap();
     assert!(lock.contains("commit = \""), "{lock}");
 
@@ -93,7 +95,7 @@ fn bolt() {
     // dependency's don't
     let main_src = std::fs::read_to_string(app.join("src/main.volt")).unwrap();
     write(&app.join("src/main.volt"), &format!("{main_src}test \"triples\" {{\n    try std::testing::assert_eq(mathx::triple(2), 6);\n}}\ntest \"other\" {{\n}}\n"));
-    write(&tmp.join("mathx/lib/ops.volt"), "public fn triple(x: i32) -> i32 { return x * 3; }\ntest \"never runs\" {\n    try std::testing::assert(false);\n}\n");
+    write(&tmp.join("mathx/lib/ops.volt"), &format!("public fn triple(x: i32) -> i32 {{ return x * 3; }}\n{meters}test \"never runs\" {{\n    try std::testing::assert(false);\n}}\n"));
     // the package's library has its own (run from source, so they reach its unexported code)
     write(&app.join("lib/extra.volt"), "fn seven() -> i32 { return 7; }\ntest \"seven\" {\n    try std::testing::assert_eq(seven(), 7);\n}\n");
     let out = ok(bolt(&app, &["test"]), "bolt test (test blocks)");

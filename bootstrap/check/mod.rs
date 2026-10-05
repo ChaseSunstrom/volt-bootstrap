@@ -1467,13 +1467,13 @@ impl Checker {
             "v_main".to_string()
         } else if self.pkg_of(decl).is_some() && args.is_empty() {
             // a package fn gets the same name in every C unit, so a precompiled package links
-            let full = format!("{}__{}", path.join("__"), f.name);
+            let full = format!("{}__{}", path.join("__"), c_word(&f.name));
             let sig: Vec<String> = params.iter().map(|p| self.ty_name(p.ty)).chain([self.ty_name(ret)]).collect();
             let n = format!("vp_{full}_{:08x}", fnv32(&sig.join(",")));
             self.used_c_names.insert(n.clone(), 1);
             n
         } else {
-            let full = if path.is_empty() { f.name.clone() } else { format!("{}__{}", path.join("__"), f.name) };
+            let full = if path.is_empty() { c_word(&f.name) } else { format!("{}__{}", path.join("__"), c_word(&f.name)) };
             self.fresh_c_name(&format!("v_{full}"))
         };
         let mut name = f.name.clone();

@@ -209,6 +209,31 @@ val IF_LABEL: str = "@if";
 val ELSE_LABEL: str = "@else";
 val IF_TMP: str = "@if";
 
+// the operators `attach operator` can give a type: the fn each makes, and the word a C name spells
+// it as (in step with bootstrap/ast.rs OPERATORS; 8 below is "operator".len)
+val OPERATOR_FNS: str[13] = { "operator+", "operator-", "operator*", "operator/", "operator%", "operator&", "operator|", "operator^", "operator<<", "operator>>", "operator~", "operator<", "operator[]" };
+val OPERATOR_WORDS: str[13] = { "op_add", "op_sub", "op_mul", "op_div", "op_rem", "op_and", "op_or", "op_xor", "op_shl", "op_shr", "op_not", "op_lt", "op_index" };
+
+// a fn's name as C can spell it: an operator's is a word (operator+ is op_add)
+fn c_word(name: str) -> str {
+    for (i) in 0..13 {
+        if (name == OPERATOR_FNS[i]) {
+            return OPERATOR_WORDS[i];
+        }
+    }
+    return name;
+}
+
+// the fn `attach operator <sym>` makes, if sym can be attached
+fn operator_fn(sym: str) -> str? {
+    for (i) in 0..13 {
+        if (OPERATOR_FNS[i][8..OPERATOR_FNS[i].len] == sym) {
+            return OPERATOR_FNS[i];
+        }
+    }
+    return null;
+}
+
 struct expr {
     kind: expr_kind;
     span: span;

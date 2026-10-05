@@ -16,6 +16,9 @@ impl Checker {
                     Some(Lit::Float(f)) => return Ok(self.float_lit(-f, Some(v.ty))),
                     _ => {}
                 }
+                if let Some(r) = self.op_call("-", v.clone(), &[], want, span)? {
+                    return Ok(r);
+                }
                 match self.t.get(v.ty).clone() {
                     Ty::Float(_) => Ok(Val { pure: v.pure, ..Val::new(v.ty, format!("(-({}))", v.c)) }),
                     Ty::Int(k) if k.signed() => {
@@ -27,7 +30,7 @@ impl Checker {
                         };
                         Ok(Val::new(v.ty, c))
                     }
-                    _ => err(span, format!("can't negate a {}", self.ty_name(v.ty))),
+                    _ => err(span, format!("can't negate a {}{}", self.ty_name(v.ty), self.op_hint(v.ty, "-"))),
                 }
             }
             UnOp::Not => {
@@ -36,7 +39,10 @@ impl Checker {
             }
             UnOp::BitNot => {
                 let v = self.expr(x, want)?;
-                let Some(k) = self.t.int_of(v.ty) else { return err(span, format!("~ needs an integer, found {}", self.ty_name(v.ty))) };
+                if let Some(r) = self.op_call("~", v.clone(), &[], want, span)? {
+                    return Ok(r);
+                }
+                let Some(k) = self.t.int_of(v.ty) else { return err(span, format!("~ needs an integer, found {}{}", self.ty_name(v.ty), self.op_hint(v.ty, "~"))) };
                 Ok(Val { pure: v.pure, ..Val::new(v.ty, format!("(({})~({}))", k.c(), v.c)) })
             }
             UnOp::Addr => {
@@ -112,6 +118,9 @@ impl Checker {
         let is_cmp = matches!(op, Eq | Ne | Lt | Gt | Le | Ge);
         let operand_want = if is_cmp { None } else { want.filter(|w| self.t.int_of(*w).is_some() || self.t.is_float(*w)) };
         let a = self.expr(ae, operand_want)?;
+        if !matches!(op, Eq | Ne) && self.has_ops(a.ty) {
+            return self.op_binary(op, a, ae, be, want, span);
+        }
         if matches!(op, Eq | Ne) && !matches!(be.kind, ExprKind::Null) {
             if let Some(v) = self.eq_call(op, a.clone(), ae, be, span)? {
                 return Ok(v);
@@ -369,7 +378,7 @@ impl Checker {
             Ty::Str if !ordered => format!("({}volt_str_eq({}, {}))", if op == Ne { "!" } else { "" }, a.c, b.c),
             Ty::AnyErr if !ordered => format!("(({}) {sym} ({}))", a.c, b.c),
             Ty::Enum(e) if !ordered && !self.enums[e as usize].has_payload => format!("(({}) {sym} ({}))", a.c, b.c),
-            _ => return err(span, format!("can't compare {} with {sym}", self.ty_name(a.ty))),
+            _ => return err(span, format!("can't compare {} with {sym}{}", self.ty_name(a.ty), self.op_hint(a.ty, "=="))),
         };
         Ok(Val { pure: a.pure && b.pure, ..Val::new(BOOL, Self::wrap_pre(&pre, c)) })
     }
@@ -436,6 +445,9 @@ impl Checker {
             self.cx.reassigning = saved;
             return r;
         };
+        if let Some(v) = self.op_assign(op, l.clone(), re, span)? {
+            return Ok(v);
+        }
         let r = self.expr(re, Some(l.ty))?;
         let lty = l.ty;
         let cty = self.cty(lty);
@@ -464,7 +476,7 @@ impl Checker {
                     };
                     format!("(({target}) {s} ({}))", r.c)
                 }
-                _ => return err(span, format!("can't use {}= on {}", op.text(), self.ty_name(lty))),
+                _ => return err(span, format!("can't use {}= on {}{}", op.text(), self.ty_name(lty), self.op_hint(lty, op.text()))),
             };
             Val::new(lty, c)
         };
@@ -516,6 +528,157 @@ impl Checker {
         self.coerce(v, to, span)
     }
 
+    // ---------- operators of structs and enums ----------
+
+    /// a struct or an enum (or a reference to one): only those have operators of their own
+    pub(super) fn has_ops(&self, ty: TyId) -> bool {
+        let base = match self.t.get(ty) {
+            Ty::Ref(d) => *d,
+            _ => ty,
+        };
+        matches!(self.t.get(base), Ty::Struct(_) | Ty::Enum(_))
+    }
+
+    /// "; attach operator - to give it one" after an error about a struct or an enum
+    pub(super) fn op_hint(&self, ty: TyId, sym: &str) -> String {
+        if !self.has_ops(ty) || matches!(sym, "+%" | "-%" | "*%") {
+            return String::new();
+        }
+        format!("; attach operator {sym} to give it one")
+    }
+
+    /// the operator<op> fns that take recv as this, given these operands after it (None: not
+    /// checked yet)
+    fn op_cands(&mut self, name: &str, recv: &Val, probe: &[Option<Val>]) -> Res<Vec<DeclId>> {
+        let mut fits = Vec::new();
+        if !self.has_ops(recv.ty) {
+            return Ok(fits);
+        }
+        for d in self.attached.get(name).cloned().unwrap_or_default() {
+            if matches!(self.recv_of(d), super::generics::Recv::Val(_)) && matches!(self.bind_cand(d, Some(recv), None, &[], probe)?, Ok(_)) {
+                fits.push(d);
+            }
+        }
+        Ok(fits)
+    }
+
+    /// `-x`, `~x` and `x[i]` on a struct or enum: its operator, called like a method. None: it has none
+    pub(super) fn op_call(&mut self, sym: &str, recv: Val, args: &[Expr], want: Option<TyId>, span: Span) -> Res<Option<Val>> {
+        let name = format!("operator{sym}");
+        let cands = self.op_cands(&name, &recv, &vec![None; args.len()])?;
+        if cands.is_empty() {
+            return Ok(None);
+        }
+        Ok(Some(self.resolve_call(&name, &cands, Some(recv), None, &[], args, want, span)?))
+    }
+
+    /// `a op b` on a struct or enum: its operator<op>, called with a as this. `a > b` is `b < a` and
+    /// `a <= b` is `!(b < a)`, the operands still evaluated left to right; `a >= b` is `!(a < b)`
+    fn op_binary(&mut self, op: BinOp, a: Val, ae: &Expr, be: &Expr, want: Option<TyId>, span: Span) -> Res<Val> {
+        use BinOp::*;
+        let (swap, negate) = (matches!(op, Gt | Le), matches!(op, Le | Ge));
+        let sym = if swap || negate { "<" } else { op.text() };
+        let name = format!("operator{sym}");
+        let base = match self.t.get(a.ty) {
+            Ty::Ref(d) => *d,
+            _ => a.ty,
+        };
+        let b = self.expr(be, Some(base))?;
+        let left = a.ty;
+        let mut pair = [a, b];
+        let pre = self.seq(&mut pair);
+        let [a, b] = pair;
+        let (recv, arg, arg_e) = if swap { (b, a, ae) } else { (a, b, be) };
+        let cands = self.op_cands(&name, &recv, &[Some(arg.clone())])?;
+        if cands.is_empty() {
+            if swap && recv.ty != arg.ty {
+                return err(span, format!("a {} b calls b's operator <, and {} has none taking a {}", op.text(), self.ty_name(recv.ty), self.ty_name(arg.ty)));
+            }
+            return err(span, format!("can't use {} on {}{}", op.text(), self.ty_name(left), self.op_hint(left, sym)));
+        }
+        let (mut prefix, mut post) = (pre, String::new());
+        let want = if matches!(op, Lt | Gt | Le | Ge) { Some(BOOL) } else { want };
+        let v = self.op_pick(&name, &cands, recv, arg, arg_e, want, span, &mut prefix, &mut post)?;
+        if negate && v.ty != BOOL {
+            return err(span, format!("{} needs operator < to give a bool, but it gives {}", op.text(), self.ty_name(v.ty)));
+        }
+        let c = self.after_lend(&prefix, &post, &v);
+        Ok(Val { c: if negate { format!("(!{c})") } else { c }, pure: false, ..v })
+    }
+
+    /// the version of operator `name` for `recv op arg`: given the operand as it is, else lent by
+    /// reference when some version takes it as T& (a lent temporary's declaration goes in prefix,
+    /// its deletion in post). When neither fits, the error is the first's.
+    #[allow(clippy::too_many_arguments)]
+    fn op_pick(&mut self, name: &str, cands: &[DeclId], recv: Val, arg: Val, arg_e: &Expr, want: Option<TyId>, span: Span, prefix: &mut String, post: &mut String) -> Res<Val> {
+        let args = std::slice::from_ref(arg_e);
+        let first = self.pick_call(name, cands, Some(recv.clone()), None, &[], &[Some(arg.clone())], args, want, span);
+        let by_ref = cands.iter().any(|d| match &self.decls[*d].item.kind {
+            ItemKind::Fn(f) => f.params.get(1).and_then(|p| p.ty.as_ref()).is_some_and(|t| matches!(t.kind, TypeKind::Ref(_))),
+            _ => false,
+        });
+        if first.is_ok() || !by_ref || matches!(self.t.get(arg.ty), Ty::Ref(_)) {
+            return first;
+        }
+        let lent = self.lend(arg, prefix, post)?;
+        self.pick_call(name, cands, Some(recv), None, &[], &[Some(lent)], args, want, span).or(first)
+    }
+
+    /// an operand lent to a T& parameter: its address, or a temporary's (its declaration goes in
+    /// prefix, its deletion in post)
+    fn lend(&mut self, v: Val, prefix: &mut String, post: &mut String) -> Res<Val> {
+        let rt = self.t.intern(Ty::Ref(v.ty));
+        if v.lv {
+            let (ro, via, root) = Self::addr_prov(&v);
+            return Ok(Val { pure: v.pure, ro, via, root, ..Val::new(rt, format!("(&({}))", v.c)) });
+        }
+        let t = self.tmp("ov");
+        prefix.push_str(&format!("{} {t} = {}; ", self.cty(v.ty), v.c));
+        if self.needs_drop(v.ty)? {
+            post.push_str(&format!("{}(&{t}); ", self.drop_fn(v.ty)?));
+        }
+        Ok(Val::pure(rt, format!("(&{t})")))
+    }
+
+    /// prefix, then the call v, then post (a lent temporary's deletion)
+    fn after_lend(&mut self, prefix: &str, post: &str, v: &Val) -> String {
+        if post.is_empty() {
+            Self::wrap_pre(prefix, v.c.clone())
+        } else if v.ty == VOID || v.ty == NEVER {
+            format!("({{ {prefix}{}; {post}}})", v.c)
+        } else {
+            format!("({{ {prefix}{} _or = {}; {post}_or; }})", self.cty(v.ty), v.c)
+        }
+    }
+
+    /// `a op= b` on a struct or enum is `a = a op b`: the place evaluated once, the old value
+    /// deleted. None: it has no operator op
+    fn op_assign(&mut self, op: BinOp, l: Val, re: &Expr, span: Span) -> Res<Option<Val>> {
+        let name = format!("operator{}", op.text());
+        // a reference variable isn't the value it reaches: that's *r += x
+        let cands = if matches!(self.t.get(l.ty), Ty::Ref(_)) { Vec::new() } else { self.op_cands(&name, &l, &[None])? };
+        if cands.is_empty() {
+            return Ok(None);
+        }
+        let (mut pre, cur) = if l.pure {
+            (String::new(), l.clone())
+        } else {
+            let p = self.tmp("op");
+            (format!("{}* {p} = &({}); ", self.cty(l.ty), l.c), Val { c: format!("(*{p})"), pure: true, ..l.clone() })
+        };
+        let b = self.expr(re, Some(l.ty))?;
+        let mut post = String::new();
+        // `x += y` may move x into the operator even inside a loop: it gets the result right away
+        let target = l.owner.as_ref().and_then(|n| self.lookup_local(n)).map(|x| x.c);
+        let saved = std::mem::replace(&mut self.cx.reassigning, target);
+        let v = self.op_pick(&name, &cands, cur.clone(), b, re, Some(l.ty), span, &mut pre, &mut post);
+        self.cx.reassigning = saved;
+        let v = v?;
+        let v = if post.is_empty() { v } else { Val { c: self.after_lend("", &post, &v), pure: false, ..v } };
+        self.note_store(&cur, &v);
+        let st = self.store(cur, v, span)?;
+        Ok(Some(Val::stmt(if pre.is_empty() { st.c } else { format!("({{ {pre}{}; }})", st.c) })))
+    }
 }
 
 /// a place whose address can be taken: a variable, this, *p, or a field or element of a place

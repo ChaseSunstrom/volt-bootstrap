@@ -204,10 +204,12 @@ attach fn lsp_decl_text(this: checker&, d: u32) -> std::string {
     var out: std::string = {};
     val f = this.fn_decl_of(d) ?? return {};
     val sp = this.item_of(d).span;
-    val kw = this.lsp_word(sp, "fn", false) ?? return {};
-    if (this.lsp_word(sp, f.name, false) == null) {
-        return {};
+    // an operator's line starts at `operator`: its name (operator+, or eq for ==) isn't a word there
+    var found = this.lsp_word(sp, "fn", false);
+    if (found == null || this.lsp_word(sp, f.name, false) == null) {
+        found = this.lsp_word(sp, "operator", false);
     }
+    val kw = found ?? return {};
     val text = this.files.at(@cast<usize>(sp.file)).text;
     // from the start of the `fn` line (with `attach`, `extern "C"`...), not the attributes before it
     var lo = @cast<usize>(kw.lo);

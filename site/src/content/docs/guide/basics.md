@@ -137,8 +137,10 @@ The arithmetic, comparison, logical and bitwise operators are C's. What's differ
   `T*`); anything else is a compile error. `@cast<T>(x)` converts anything to anything, unchecked.
 - `a ?? b` is the value of optional `a`, or `b` when it's null.
 - `==` and `!=` on a struct (or an enum with payloads) call its `eq(other)`: one it attaches, like
-  `std::string`'s, or a [derived](/volt-bootstrap/guide/comptime/#derive) one. A type without one
-  can't be compared. `eq` takes one side by reference, so both sides can't be temporaries
+  `std::string`'s (`attach operator ==` is another way to write it), or a
+  [derived](/volt-bootstrap/guide/comptime/#derive) one. A type without one can't be compared.
+  Structs and enums get the other operators the same way: see
+  [Operators](/volt-bootstrap/guide/structs/#operators). `eq` takes one side by reference, so both sides can't be temporaries
   (`make() == make()`: store one in a variable first).
 - `a..b` and `a..=b` are ranges (exclusive and inclusive).
 - Operands and arguments are evaluated left to right. `place = value` evaluates the value first,

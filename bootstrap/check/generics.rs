@@ -671,11 +671,28 @@ impl Checker {
         for (a, w) in args.iter().zip(&wants) {
             pre.push(if Self::needs_context(a) { None } else { Some(self.expr(a, *w)?) });
         }
+        self.pick_call(name, cands, recv, static_ty, explicit, &pre, args, want, span)
+    }
+
+    /// resolve_call once the arguments are checked (pre; None: one waiting for its parameter's type)
+    #[allow(clippy::too_many_arguments)]
+    pub fn pick_call(
+        &mut self,
+        name: &str,
+        cands: &[DeclId],
+        recv: Option<Val>,
+        static_ty: Option<TyId>,
+        explicit: &[GenericArg],
+        pre: &[Option<Val>],
+        args: &[Expr],
+        want: Option<TyId>,
+        span: Span,
+    ) -> Res<Val> {
         let mut viable: Vec<(usize, Adj, i32, usize)> = Vec::new();
         // why each candidate doesn't fit; a lone one is the error itself
         let mut reasons: Vec<Diag> = Vec::new();
         for &d in cands {
-            let (binds, adj) = match self.bind_cand(d, recv.as_ref(), static_ty, explicit, &pre)? {
+            let (binds, adj) = match self.bind_cand(d, recv.as_ref(), static_ty, explicit, pre)? {
                 Ok(x) => x,
                 Err(r) => {
                     reasons.push(Diag::new(span, r));
@@ -744,7 +761,7 @@ impl Checker {
             [(i, a, s1, b1), (_, _, s2, b2), ..] if s1 > s2 || b1 < b2 => (*i, *a),
             _ => return err(span, format!("call to '{name}' is ambiguous (several versions fit); add types to the arguments or the result")),
         };
-        self.emit_call(inst, adj, recv, &pre, args, span)
+        self.emit_call(inst, adj, recv, pre, args, span)
     }
 
     /// Emit a call of fn instance `inst`: adjust the receiver, convert the arguments (a pack's become

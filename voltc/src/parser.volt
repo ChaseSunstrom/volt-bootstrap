@@ -504,8 +504,12 @@ attach fn item(this: parser&) -> compile_error!item {
     // the modifiers came before we knew what they modify: a fn takes them all, a struct only
     // extern/comptime/export, a global comptime; anything else ignores them. `kind` starts as a placeholder
     var kind: item_kind = item_kind::GLOBAL({ mutable: false, is_comptime: false, is_static: false, pat: { kind: pat_kind::WILD, span: start }, ty: null, init: null, span: start });
-    if (this.eat_kw("fn")) {
-        var f = try this.fn_decl();
+    // `attach operator +(...)`: a fn named operator+ (not `attach operator -> T`, an attach block of
+    // a trait named operator, nor `attach operator<T> -> U`)
+    val next = punct_of(this.tok_at(1)) ?? "";
+    val op = is_attach && this.is_kw("operator") && next != "" && next != "->" && (next != "<" || this.is_at(2, "("));
+    if (op || this.eat_kw("fn")) {
+        var f = try this.fn_decl(op);
         f.is_async = is_async;
         f.is_comptime = is_comptime;
         f.is_export = is_export;
@@ -824,19 +828,67 @@ attach fn generic_arg(this: parser&, closer: str) -> compile_error!garg {
     return g;
 }
 
-// the part after `fn`; `item` fills in the modifiers
-attach fn fn_decl(this: parser&) -> compile_error!fn_decl {
+// the part after `fn`, or after `attach` for an operator (op); `item` fills in the modifiers
+attach fn fn_decl(this: parser&, op: bool) -> compile_error!fn_decl {
+    val at = this.span();
     // `copy` is a keyword but also the name of the copy hook: attach fn copy(this: T&) -> T
     var name = "copy";
-    if (!this.eat_kw("copy")) {
+    if (op) {
+        name = try this.operator_name();
+    } else if (!this.eat_kw("copy")) {
         name = (try this.ident()).name;
     }
     var spec: std::vec<garg>? = null;
-    if (this.is("<")) {
+    if (this.is("<") && !op) {
         spec = try this.generic_args();
     }
     var ps: std::vec<param> = {};
     val c_varargs = try this.params(&ps);
+    if (op) {
+        // a binary operator takes this and the right operand; == (eq) takes both by reference
+        var sym = "==";
+        if (name != "eq") {
+            sym = name[8..name.len];
+        }
+        if (ps.len == 0 || ps.at(0).name != "this" || ps.at(0).is_static) {
+            return fail(at, fmt("operator {} takes this as its first parameter", S(sym)));
+        }
+        val n = ps.len;
+        var want: str? = null;
+        if (sym == "-") {
+            if (n != 1 && n != 2) {
+                want = "one parameter (this) or two (this and the right operand)";
+            }
+        } else if (sym == "~") {
+            if (n != 1) {
+                want = "one parameter: this";
+            }
+        } else if (sym == "==") {
+            var refs = n == 2;
+            for (p&) in ps.items() {
+                var r = false;
+                if (p.ty) {
+                    match (p.ty.kind) {
+                        .REF(x) => { r = true; },
+                        default => {},
+                    }
+                }
+                refs = refs && r;
+            }
+            if (!refs) {
+                want = "this and the right operand, both by reference: (this: T&, other: T&)";
+            }
+        } else if (n != 2) {
+            if (sym == "[]") {
+                want = "two parameters: this and the index";
+            } else {
+                want = "two parameters: this and the right operand";
+            }
+        }
+        if (want) {
+            return fail(at, fmt2("operator {} takes {}", S(sym), S(want)));
+        }
+    }
     var ret: ty? = null;
     if (this.eat("->")) {
         ret = try this.parse_type();
@@ -858,6 +910,45 @@ attach fn fn_decl(this: parser&) -> compile_error!fn_decl {
         is_export: false,
         is_attach: false,
     };
+}
+
+// `operator <op>` after attach: the fn's name, operator<op> (== names it eq, the fn == already calls).
+// The operators that come from another can't be attached themselves.
+attach fn operator_name(this: parser&) -> compile_error!str {
+    this.bump(); // operator
+    val at = this.span();
+    var sym = punct_of(this.tok()) ?? "";
+    this.bump();
+    if (sym == "[") {
+        try this.expect("]");
+        sym = "[]";
+    } else if (sym == ">" && this.glued_at(0) && (this.is(">") || this.is(">="))) {
+        if (this.is(">")) {
+            sym = ">>";
+        } else {
+            sym = ">>=";
+        }
+        this.bump();
+    }
+    if (sym == "==") {
+        return "eq";
+    }
+    val f = operator_fn(sym);
+    if (f) {
+        return f;
+    }
+    var base: str? = null;
+    if (sym == ">" || sym == "<=" || sym == ">=") {
+        base = "<";
+    } else if (sym == "!=") {
+        base = "==";
+    } else if (sym.len > 1 && sym[sym.len - 1] == '=' && operator_fn(sym[0..sym.len - 1]) != null) {
+        base = sym[0..sym.len - 1];
+    }
+    if (base) {
+        return fail(at, fmt2("{} can't be attached: it comes from operator {}", S(sym), S(base)));
+    }
+    return fail(at, fmt("{} can't be attached; these can: + - * / % & | ^ << >> ~ < == []", S(sym)));
 }
 
 // `(var x: T = d, static this, ...)`: the params go into out; returns whether they end in C varargs `...`

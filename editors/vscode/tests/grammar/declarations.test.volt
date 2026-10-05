@@ -76,6 +76,10 @@ attach shape -> circle {
 fn report(s: T&) -> void {
 }
 
+attach operator +(this: vec2, o: vec2) -> vec2 {
+// <~~~~~~~-------- storage.type.function.volt
+}
+
 test "adds up" {
 // <---- storage.type.volt
 //   ^^^^^^^^^ string.quoted.double.volt

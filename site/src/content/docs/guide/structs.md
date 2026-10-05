@@ -166,6 +166,83 @@ fn main() -> void {
 Two attached functions named `delete` and `copy` are hooks the compiler calls: see
 [Ownership](/volt-bootstrap/guide/ownership/).
 
+### Operators
+
+`attach operator` gives a struct or an enum an operator. It's a method under another name: the left
+operand is `this`, the right one the other parameter, and overloads pick by the right operand's
+type, like any function's.
+
+```volt
+use std::io;
+
+struct vec2 {
+    x: f64;
+    y: f64;
+}
+
+attach operator +(this: vec2, o: vec2) -> vec2 {
+    return { x: this.x + o.x, y: this.y + o.y };
+}
+
+attach operator -(this: vec2) -> vec2 {
+    return { x: -this.x, y: -this.y };
+}
+
+attach operator *(this: vec2, k: f64) -> vec2 {
+    return { x: this.x * k, y: this.y * k };
+}
+
+attach operator <(this: vec2, o: vec2) -> bool {
+    return this.x * this.x + this.y * this.y < o.x * o.x + o.y * o.y;
+}
+
+fn main() -> void {
+    val a: vec2 = { x: 1.0, y: 2.0 };
+    var pos = a + a * 2.0;
+    pos += -a;
+    std::println("{} {} {}", pos.x, pos.y, a < pos);
+}
+// expect: 2 4 true
+```
+
+These can be attached:
+
+| Operator | Parameters | Gives |
+| --- | --- | --- |
+| `+ - * / % & \| ^ << >>` | `this` and the right operand | `a op b`, and `a op= b` as `a = a op b` |
+| `-` `~` | `this` | `-a`, `~a` |
+| `<` | `this` and the right operand | `a < b`; `a > b` is `b < a`, `a <= b` is `!(b < a)`, `a >= b` is `!(a < b)` |
+| `==` | `this` and the right operand, both `T&` | `a == b` and `a != b`; it's the type's [`eq`](/volt-bootstrap/guide/basics/#operators) |
+| `[]` | `this` and the index | `a[i]`; when it returns a `T&`, `a[i]` is a place: `a[i] = x` and `a[i] += x` work |
+
+- Operands are still evaluated left to right, even when `a > b` runs as `b < a`.
+- A right operand taken by reference (`o: T&`) lends its address; a temporary one lives until the
+  call is done, so `a + (b + c)` works.
+- `a += b` evaluates the place `a` once; the old value is deleted like on `a = a + b`.
+- Built-in types keep their own operators, and `&& || ?? = .` and the wrapping `+% -% *%` can't be
+  attached. Neither can `> <= >= != +=`: they come from `<`, `==` and `+`.
+- The left operand picks the operator: `v * 2.0` can be attached to `vec2`, `2.0 * v` can't.
+
+```volt
+use std::io;
+
+struct grid {
+    cells: i32[4];
+}
+
+attach operator [](this: grid&, i: usize) -> i32& {
+    return &this.cells[i];
+}
+
+fn main() -> void {
+    var g: grid = { cells: { 0; 4 } };
+    g[1] = 5;
+    g[1] += 2;
+    std::println("{}", g[1]);
+}
+// expect: 7
+```
+
 ## Generic structs
 
 A struct can take generic parameters, with defaults:
