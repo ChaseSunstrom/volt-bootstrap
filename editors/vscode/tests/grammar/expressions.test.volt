@@ -12,6 +12,10 @@ fn main() -> void {
 //                  ^^^^^^^^^^ string.quoted.double.volt
 //                     ^^ constant.other.placeholder.volt
 //                         ^^ constant.character.escape.volt
+    std::println("{count} {p.x:.1} {:>8}");
+//                ^^^^^^^ constant.other.placeholder.volt
+//                        ^^^^^^^^ constant.other.placeholder.volt
+//                                 ^^^^^ constant.other.placeholder.volt
     val c = 'x';
 //          ^^^ string.quoted.single.volt
     val v = parse(text) catch |e| { return; };

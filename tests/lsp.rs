@@ -310,6 +310,7 @@ fn main() -> void {
 
 fn first(x: u16?, c: circle) -> f64 {
     val wide: circle = { ..c, r: 2.0 };
+    std::println(\"r {wide.r}\");
     if (val n = x) {
         return wide.r + @cast<f64>(n);
     }
@@ -354,6 +355,9 @@ fn inline_features(s: &mut Server) {
     }
 
     let at = |line: u32, ch: u32| format!("{{\"textDocument\":{doc},\"position\":{{\"line\":{line},\"character\":{ch}}}}}");
+    // a local named in a format string is used where its name is written, inside the string
+    let h = s.request("textDocument/documentHighlight", &at(39, 8));
+    assert!(h.contains("\"start\":{\"line\":40,\"character\":21}"), "highlight of wide lacks its {{wide.r}}: {h}");
     // highlights: the field r where it's declared and everywhere it's used
     let h = s.request("textDocument/documentHighlight", &at(7, 5));
     for line in [7, 17, 22, 31] {

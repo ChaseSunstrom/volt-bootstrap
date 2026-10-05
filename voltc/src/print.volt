@@ -61,7 +61,7 @@ attach fn intrinsic(this: checker&, name: str, all_args: std::vec<expr>&, ret: u
     if (nargs > 0) {
         match (all_args.at(first).kind) {
             .STR(s) => {
-                if (nargs > 1 || contains(s.as_str(), "{}") || contains(s.as_str(), "{:")) {
+                if (nargs > 1 || contains(s.as_str(), "{}") || contains(s.as_str(), "{:") || has_name_hole(s.as_str())) {
                     fmt_str = s.as_str();
                     fmt_span = all_args.at(first).span;
                 }
@@ -70,6 +70,7 @@ attach fn intrinsic(this: checker&, name: str, all_args: std::vec<expr>&, ret: u
         }
     }
     var first_value = first;
+    var named: std::vec<expr> = {}; // {name}s: the values after the given ones
     if (fmt_str) {
         val f = fmt_str;
         var text: std::string = {};
@@ -114,6 +115,50 @@ attach fn intrinsic(this: checker&, name: str, all_args: std::vec<expr>&, ret: u
                 }
                 next += 1;
                 i = close + 1;
+            } else if (c == '{' && ((d >= 'a' && d <= 'z') || (d >= 'A' && d <= 'Z') || d == '_')) {
+                var close = i + 1;
+                while (close < f.len && f[close] != '}') {
+                    close += 1;
+                }
+                if (close >= f.len) {
+                    return fails(fmt_span, "use {} for a value, {{ and }} for braces");
+                }
+                val inner = f[i + 1..close];
+                // the name runs to a ':' that isn't part of a '::'
+                var cut = inner.len;
+                var k: usize = 0;
+                while (k < inner.len) {
+                    if (inner[k] == ':') {
+                        if (k + 1 < inner.len && inner[k + 1] == ':') {
+                            k += 2;
+                            continue;
+                        }
+                        cut = k;
+                        break;
+                    }
+                    k += 1;
+                }
+                var sp: fspec = {};
+                var has_spec = false;
+                if (cut < inner.len) {
+                    val bad = parse_spec(inner[cut + 1..inner.len], &sp);
+                    if (bad) {
+                        return fail(fmt_span, copy bad);
+                    }
+                    has_spec = cut + 1 < inner.len;
+                }
+                val at = hole_at(this.files.at(@cast<usize>(fmt_span.file)).text, fmt_span, f, i + 1, cut);
+                var e = this.name_expr(inner[0..cut], at, fmt_span) ?? return fails(fmt_span, "a name in a format string is a path like {x}, {a::B} or {p.x}");
+                var done: std::string = {};
+                swap(&done, &text);
+                put(&pieces, piece::TEXT(this.intern(move done)));
+                if (has_spec) {
+                    put(&pieces, piece::ARG(nargs - 1 + named.len, sp));
+                } else {
+                    put(&pieces, piece::ARG(nargs - 1 + named.len, null));
+                }
+                put(&named, move e);
+                i = close + 1;
             } else if (c == '{' || c == '}') {
                 return fails(fmt_span, "use {} for a value, {{ and }} for braces");
             } else {
@@ -144,8 +189,15 @@ attach fn intrinsic(this: checker&, name: str, all_args: std::vec<expr>&, ret: u
     var temps: std::vec<local_ref> = {};
     var tys: std::vec<u32> = {};
     var spans: std::vec<span> = {};
+    var vals: std::vec<expr*> = {};
     for (i) in first_value..all_args.len {
-        val a = all_args.at(i);
+        put(&vals, all_args.at(i));
+    }
+    for (n&) in named.items() {
+        put(&vals, n);
+    }
+    for (ap&) in vals.items() {
+        val a = *ap ?? return fails(span, "");
         val v = try this.expr(a, null);
         if (v.ty == VOID || v.ty == NEVER) {
             return fails(a.span, "this has no value to print");
@@ -690,4 +742,118 @@ attach fn err_name_fn(this: checker&) -> u32 {
     put(&this.ir.order, f);
     this.err_name = f;
     return f;
+}
+
+// whether a format string has a {name} in it (not a {{ escape)
+fn has_name_hole(s: str) -> bool {
+    var i: usize = 0;
+    while (i + 1 < s.len) {
+        if (s[i] == '{') {
+            val d = s[i + 1];
+            if (d == '{') {
+                i += 2;
+                continue;
+            }
+            if ((d >= 'a' && d <= 'z') || (d >= 'A' && d <= 'Z') || d == '_') {
+                return true;
+            }
+        }
+        i += 1;
+    }
+    return false;
+}
+
+// a word of a {name}: letters, digits and _, not starting with a digit unless it's a field (t.0)
+fn fmt_word(w: str, digit_first: bool) -> bool {
+    if (w.len == 0 || (!digit_first && w[0] >= '0' && w[0] <= '9')) {
+        return false;
+    }
+    for (c) in w {
+        if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_')) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// where the source writes the {name} whose name starts at byte i of the format string fmt (from the
+// literal at sp), as a span of its len bytes: found when the literal is a plain or raw string whose
+// source holds the same bytes up to there (no escape before it); else null
+fn hole_at(text: str, sp: span, fmt: str, i: usize, len: usize) -> span? {
+    val lo = @cast<usize>(sp.lo);
+    val hi = @cast<usize>(sp.hi);
+    if (hi > text.len || lo > hi) {
+        return null;
+    }
+    val src = text[lo..hi];
+    var off: usize = 0;
+    if (src.starts_with("\"\"\"") || src.starts_with("r\"\"\"")) {
+        return null; // a multi-line string's lines lose their indentation
+    } else if (src.starts_with("r\"")) {
+        off = 2;
+    } else if (src.starts_with("\"")) {
+        off = 1;
+    } else {
+        return null;
+    }
+    if (off + i + len > src.len || src[off..off + i + len] != fmt[0..i + len]) {
+        return null;
+    }
+    return { file: sp.file, lo: sp.lo + @cast<u32>(off + i), hi: sp.lo + @cast<u32>(off + i + len) };
+}
+
+// `{a::b.c.0}`'s value: the path a::b, then field c, then element 0 (`this` names the receiver). Each
+// part spans what it covers of the name where the source writes it (at), else the string's span
+attach fn name_expr(this: checker&, name: str, at: span?, sp0: span) -> expr? {
+    var dot = name.len;
+    for (c, i) in name {
+        if (c == '.') {
+            dot = i;
+            break;
+        }
+    }
+    var segs: std::vec<path_seg> = {};
+    var seg: usize = 0;
+    var k: usize = 0;
+    while (k <= dot) {
+        if (k == dot || (k + 1 < dot && name[k] == ':' && name[k + 1] == ':')) {
+            val w = name[seg..k];
+            if (!fmt_word(w, false)) {
+                return null;
+            }
+            put(&segs, { name: this.intern_str(w), args: null });
+            if (k == dot) {
+                break;
+            }
+            k += 2;
+            seg = k;
+            continue;
+        }
+        k += 1;
+    }
+    val ps = sub_span(at, sp0, dot);
+    var e: expr = { kind: expr_kind::THIS, span: ps };
+    if (segs.len != 1 || segs.at(0).name != "this") {
+        e = { kind: expr_kind::PATH({ segs: move segs, span: ps }), span: ps };
+    }
+    var start = dot + 1;
+    var j = dot + 1;
+    while (dot < name.len && j <= name.len) {
+        if (j == name.len || name[j] == '.') {
+            val w = name[start..j];
+            if (!fmt_word(w, true)) {
+                return null;
+            }
+            e = { kind: expr_kind::FIELD(bx(move e), this.intern_str(w), null), span: sub_span(at, sp0, j) };
+            start = j + 1;
+        }
+        j += 1;
+    }
+    return e;
+}
+
+// the first n bytes of a name at `at`, or the whole string's span when it isn't found there
+fn sub_span(at: span?, whole: span, n: usize) -> span {
+    val s = at ?? return whole;
+    return { file: s.file, lo: s.lo, hi: s.lo + @cast<u32>(n) };
 }

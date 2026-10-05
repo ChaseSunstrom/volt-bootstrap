@@ -42,7 +42,7 @@
       "patterns": [
         { "include": "#escapes" },
         { "name": "constant.character.escape.volt", "match": "\\{\\{|\\}\\}" },
-        { "name": "constant.other.placeholder.volt", "match": "\\{\\}" }
+        { "name": "constant.other.placeholder.volt", "match": "\\{(?:[A-Za-z_][A-Za-z0-9_]*(?:(?:::|\\.)[A-Za-z0-9_]+)*)?(?::[^{}\"]*)?\\}" }
       ]
     },
     "chars": {

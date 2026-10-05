@@ -50,19 +50,50 @@ impl Checker {
         let mut pieces: Vec<Result<Vec<u8>, (usize, Option<Spec>)>> = Vec::new();
         // the first argument is a format string when values follow it or it has a {} in it
         let fmt_arg = match args.first().map(|a| &a.kind) {
-            Some(ExprKind::Str(s)) if args.len() > 1 || s.windows(2).any(|w| w == b"{}") || s.windows(2).any(|w| w == b"{:") => Some(s.clone()),
+            Some(ExprKind::Str(s)) if args.len() > 1 || s.windows(2).any(|w| w == b"{}") || s.windows(2).any(|w| w == b"{:") || has_name_hole(s) => Some(s.clone()),
             _ => None,
         };
-        let value_args: &[Expr] = match &fmt_arg {
+        let value_args: Vec<Expr> = match &fmt_arg {
             Some(fmt) => {
                 let mut text = Vec::new();
                 let mut next = 0;
+                // {name}s: the values after the given ones
+                let mut named = Vec::new();
                 let mut i = 0;
                 while i < fmt.len() {
                     match (fmt[i], fmt.get(i + 1)) {
                         (b'{', Some(b'{')) | (b'}', Some(b'}')) => {
                             text.push(fmt[i]);
                             i += 2;
+                        }
+                        (b'{', Some(&c)) if c.is_ascii_alphabetic() || c == b'_' => {
+                            let Some(close) = fmt[i..].iter().position(|&c| c == b'}') else {
+                                return err(args[0].span, "use {} for a value, {{ and }} for braces");
+                            };
+                            let inner = &fmt[i + 1..i + close];
+                            // the name runs to a ':' that isn't part of a '::'
+                            let mut cut = inner.len();
+                            let mut k = 0;
+                            while k < inner.len() {
+                                if inner[k] == b':' {
+                                    if inner.get(k + 1) == Some(&b':') {
+                                        k += 2;
+                                        continue;
+                                    }
+                                    cut = k;
+                                    break;
+                                }
+                                k += 1;
+                            }
+                            let spec = if cut < inner.len() { parse_spec(&inner[cut + 1..]).map_err(|m| Diag::new(args[0].span, m))? } else { None };
+                            let at = hole_at(&self.sm.files[args[0].span.file as usize].1, args[0].span, fmt, i + 1, cut);
+                            let Some(e) = name_expr(&inner[..cut], at, args[0].span) else {
+                                return err(args[0].span, "a name in a format string is a path like {x}, {a::B} or {p.x}");
+                            };
+                            pieces.push(Ok(std::mem::take(&mut text)));
+                            pieces.push(Err((args.len() - 1 + named.len(), spec)));
+                            named.push(e);
+                            i += close + 1;
                         }
                         (b'{', Some(b'}')) => {
                             pieces.push(Ok(std::mem::take(&mut text)));
@@ -91,7 +122,9 @@ impl Checker {
                 if next != args.len() - 1 {
                     return err(span, format!("format string has {next} {{}} but {} values were given", args.len() - 1));
                 }
-                &args[1..]
+                let mut vals = args[1..].to_vec();
+                vals.extend(named);
+                vals
             }
             None => {
                 if args.len() > 1 {
@@ -100,14 +133,14 @@ impl Checker {
                 if !args.is_empty() {
                     pieces.push(Err((0, None)));
                 }
-                args
+                args.to_vec()
             }
         };
         // evaluate values in order into temps
         let mut code = String::new();
         let mut drops = String::new();
         let mut temps = Vec::new();
-        for a in value_args {
+        for a in &value_args {
             let v = self.expr(a, None)?;
             if v.ty == VOID || v.ty == NEVER {
                 return err(a.span, "this has no value to print");
@@ -383,4 +416,71 @@ fn parse_spec(s: &[u8]) -> Result<Option<Spec>, String> {
         }
     }
     Ok(Some(sp))
+}
+
+/// whether a format string has a {name} in it (not a {{ escape)
+fn has_name_hole(s: &[u8]) -> bool {
+    let mut i = 0;
+    while i + 1 < s.len() {
+        if s[i] == b'{' {
+            if s[i + 1] == b'{' {
+                i += 2;
+                continue;
+            }
+            if s[i + 1].is_ascii_alphabetic() || s[i + 1] == b'_' {
+                return true;
+            }
+        }
+        i += 1;
+    }
+    false
+}
+
+/// where the source writes the {name} whose name starts at byte i of the format string fmt (from
+/// the literal at span), as a span of its len bytes: found when the literal is a plain or raw string
+/// whose source holds the same bytes up to there (no escape before it); else None
+fn hole_at(text: &str, span: Span, fmt: &[u8], i: usize, len: usize) -> Option<Span> {
+    let src = text.as_bytes().get(span.lo as usize..span.hi as usize)?;
+    let off = if src.starts_with(b"\"\"\"") || src.starts_with(b"r\"\"\"") {
+        return None; // a multi-line string's lines lose their indentation
+    } else if src.starts_with(b"r\"") {
+        2
+    } else if src.starts_with(b"\"") {
+        1
+    } else {
+        return None;
+    };
+    (src.get(off..off + i + len)? == &fmt[..i + len]).then(|| Span { file: span.file, lo: span.lo + (off + i) as u32, hi: span.lo + (off + i + len) as u32 })
+}
+
+/// `{a::b.c.0}`'s value: the path a::b, then field c, then element 0 (`this` names the receiver).
+/// Each part spans what it covers of the name where the source writes it (at), else the string's span
+fn name_expr(name: &[u8], at: Option<Span>, span: Span) -> Option<Expr> {
+    let sub = |n: usize| match at {
+        Some(s) => Span { file: s.file, lo: s.lo, hi: s.lo + n as u32 },
+        None => span,
+    };
+    let name = std::str::from_utf8(name).ok()?;
+    let mut parts = name.split('.');
+    let path = parts.next()?;
+    let mut end = path.len();
+    let word = |w: &str, first_digit: bool| !w.is_empty() && w.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_') && (first_digit || !w.as_bytes()[0].is_ascii_digit());
+    let segs: Vec<&str> = path.split("::").collect();
+    if !segs.iter().all(|s| word(s, false)) {
+        return None;
+    }
+    let ps = sub(end);
+    let mut e = if segs == ["this"] {
+        Expr { kind: ExprKind::This, span: ps }
+    } else {
+        Expr { kind: ExprKind::Path(Path { segs: segs.iter().map(|s| PathSeg { name: s.to_string(), args: None }).collect(), span: ps }), span: ps }
+    };
+    for f in parts {
+        if !word(f, true) {
+            return None;
+        }
+        end += 1 + f.len();
+        e = Expr { kind: ExprKind::Field(Box::new(e), f.to_string(), None), span: sub(end) };
+    }
+    Some(e)
 }

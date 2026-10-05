@@ -121,6 +121,30 @@ fn main() -> void {
 // error: format string has 2 {} but 1 values were given
 ```
 
+A name between the braces prints that value without passing it: a local (`{count}`), a global or
+constant by its path (`{board::NAME}`), or a field path (`{p.x}`, `{this.n}`). A specifier goes after
+a colon, as with `{}`: `{p.x:.1}`. Names are checked like the rest of the program, and `{}`s still
+take the arguments in order, so the two mix.
+
+```volt
+use std::io;
+
+namespace board {
+    val NAME: str = "pico";
+}
+
+struct point { x: f64; y: f64; }
+
+fn main() -> void {
+    val count = 3;
+    val p: point = { x: 1.25, y: 2.0 };
+    std::println("{count} blinks on {board::NAME}");
+    std::println("at ({p.x:.1}, {p.y}) after {} tries", 2);
+}
+// expect: 3 blinks on pico
+// expect: at (1.2, 2) after 2 tries
+```
+
 ## Format specifiers
 
 A `{}` can carry a spec after a colon, as in Rust: `{:[[fill]align][sign][#][0][width][.precision][type]}`.
