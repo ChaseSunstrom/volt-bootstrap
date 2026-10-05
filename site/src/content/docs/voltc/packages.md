@@ -8,7 +8,8 @@ sidebar:
 ## Packages
 
 A package is a directory of `.volt` files. Every file in it is wrapped in `namespace NAME`, so a
-package's names are reached as `NAME::...`. voltc takes packages with `--pkg`:
+package's names are reached as `NAME::...`: the ones it marks `public` (see
+[Visibility](/volt-bootstrap/guide/namespaces/#visibility)). voltc takes packages with `--pkg`:
 
 ```sh
 voltc run main.volt --pkg geo=../geo --pkg json=../json

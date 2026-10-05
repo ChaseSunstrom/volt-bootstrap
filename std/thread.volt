@@ -7,49 +7,49 @@
 
 namespace thread {
     // why spawn failed
-    error spawn_error {
+    public error spawn_error {
         OUT_OF_MEMORY, // no memory for the thread's closure
         REFUSED        // the system wouldn't start another thread
     }
 
     @attributes([@intrinsic("volt_rt_thread_start")])
-    internal fn rt_start(job: void*, handle: u64&) -> i32;
+    fn rt_start(job: void*, handle: u64&) -> i32;
     @attributes([@intrinsic("volt_rt_thread_join")])
-    internal fn rt_join(handle: u64) -> void;
+    fn rt_join(handle: u64) -> void;
     @attributes([@intrinsic("volt_rt_thread_yield")])
-    internal fn rt_yield() -> void;
+    fn rt_yield() -> void;
     // sleep while *word == expected (it can also return early: check again)
     @attributes([@intrinsic("volt_rt_wait")])
-    internal fn rt_wait(word: i32&, expected: i32) -> void;
+    fn rt_wait(word: i32&, expected: i32) -> void;
     // wake one (or all) of the threads sleeping on word
     @attributes([@intrinsic("volt_rt_wake")])
-    internal fn rt_wake(word: i32&, all: bool) -> void;
+    fn rt_wake(word: i32&, all: bool) -> void;
 
     // sequentially consistent atomics; add gives the value before
     @attributes([@intrinsic("volt_rt_atomic_load32")])
-    internal fn load32(p: i32&) -> i32;
+    fn load32(p: i32&) -> i32;
     @attributes([@intrinsic("volt_rt_atomic_store32")])
-    internal fn store32(p: i32&, v: i32) -> void;
+    fn store32(p: i32&, v: i32) -> void;
     @attributes([@intrinsic("volt_rt_atomic_swap32")])
-    internal fn swap32(p: i32&, v: i32) -> i32;
+    fn swap32(p: i32&, v: i32) -> i32;
     @attributes([@intrinsic("volt_rt_atomic_add32")])
-    internal fn add32(p: i32&, v: i32) -> i32;
+    fn add32(p: i32&, v: i32) -> i32;
     @attributes([@intrinsic("volt_rt_atomic_cas32")])
-    internal fn cas32(p: i32&, expected: i32, desired: i32) -> bool;
+    fn cas32(p: i32&, expected: i32, desired: i32) -> bool;
     @attributes([@intrinsic("volt_rt_atomic_load64")])
-    internal fn load64(p: i64&) -> i64;
+    fn load64(p: i64&) -> i64;
     @attributes([@intrinsic("volt_rt_atomic_store64")])
-    internal fn store64(p: i64&, v: i64) -> void;
+    fn store64(p: i64&, v: i64) -> void;
     @attributes([@intrinsic("volt_rt_atomic_swap64")])
-    internal fn swap64(p: i64&, v: i64) -> i64;
+    fn swap64(p: i64&, v: i64) -> i64;
     @attributes([@intrinsic("volt_rt_atomic_add64")])
-    internal fn add64(p: i64&, v: i64) -> i64;
+    fn add64(p: i64&, v: i64) -> i64;
     @attributes([@intrinsic("volt_rt_atomic_cas64")])
-    internal fn cas64(p: i64&, expected: i64, desired: i64) -> bool;
+    fn cas64(p: i64&, expected: i64, desired: i64) -> bool;
 
     // A running thread. Deleting it joins it (waits for it to finish), so a thread never outlives its
     // handle, and what its closure borrows (& captures) only has to outlive the handle.
-    struct thread {
+    public struct thread {
         handle: u64 = 0;
         running: bool = false; // false: nothing to join (a default thread, or one joined already)
     }
@@ -57,7 +57,7 @@ namespace thread {
     // what a new thread runs, in memory from allocator: the entry first (the runtime calls it with
     // this memory; extern keeps the fields in order), then the closure and the allocator that frees it
     <F: type, A: std::mem::allocator>
-    internal extern struct job {
+    extern struct job {
         run: extern "C" fn(void*) -> void;
         f: F;
         allocator: A;
@@ -65,7 +65,7 @@ namespace thread {
 
     // on the new thread: move the closure and the allocator out, free the job, run the closure
     <F: type, A: std::mem::allocator>
-    internal fn run_job(p: void*) -> void {
+    fn run_job(p: void*) -> void {
         val jp = @cast<job<F, A>*>(p);
         val f: F = @read(&jp->f);
         var allocator: A = @read(&jp->allocator);
@@ -76,7 +76,7 @@ namespace thread {
     // run f, a closure with no parameters, on a new thread. f is moved there: what it captures by
     // value or with move belongs to the thread
     <F: type, A: std::mem::allocator = std::mem::default_allocator>
-    fn spawn(f: F, allocator: A = {}) -> spawn_error!thread {
+    public fn spawn(f: F, allocator: A = {}) -> spawn_error!thread {
         val p: job<F, A>* = allocator.malloc<job<F, A>>() catch return spawn_error::OUT_OF_MEMORY;
         @write(p, { run: run_job<F, A>, f: move f, allocator: move allocator });
         var t: thread = {};
@@ -92,12 +92,12 @@ namespace thread {
     }
 
     // let another thread run
-    fn yield_now() -> void {
+    public fn yield_now() -> void {
         rt_yield();
     }
 
     // take the lock on w: 0 free, 1 held, 2 held and someone may be sleeping on it
-    internal fn lock_word(w: i32&) -> void {
+    fn lock_word(w: i32&) -> void {
         if (cas32(w, 0, 1)) {
             return;
         }
@@ -105,13 +105,13 @@ namespace thread {
     }
 
     // take it, marking that someone may be sleeping (after a wait, others may be)
-    internal fn lock_contended(w: i32&) -> void {
+    fn lock_contended(w: i32&) -> void {
         while (swap32(w, 2) != 0) {
             rt_wait(w, 2);
         }
     }
 
-    internal fn unlock_word(w: i32&) -> void {
+    fn unlock_word(w: i32&) -> void {
         if (swap32(w, 0) == 2) {
             rt_wake(w, false);
         }
@@ -121,36 +121,36 @@ namespace thread {
     // deleting the guard unlocks it. Don't move a mutex while it's locked (share it: shared<mutex<T>>,
     // or borrow it from a thread whose handle goes first).
     <T: type>
-    struct mutex {
+    public struct mutex {
         word: i32 = 0; // 0 free, 1 locked, 2 locked and someone may be waiting
         value: T;      // what it guards
     }
 
     // the lock on a mutex, held until the guard is deleted
     <T: type>
-    struct guard {
+    public struct guard {
         m: mutex<T>*;
     }
 
     // A condition variable: wait(guard) unlocks the guard's mutex and sleeps until notified, then locks
     // it again. It can wake without a notify, so wait in a loop that checks what it's waiting for.
-    struct cond {
+    public struct cond {
         seq: i32 = 0; // bumped by every notify
     }
 
     // an i64 that threads can change at the same time
-    struct atomic_i64 {
+    public struct atomic_i64 {
         value: i64 = 0;
     }
 
     // a bool that threads can change at the same time
-    struct atomic_bool {
+    public struct atomic_bool {
         value: i32 = 0;
     }
 
     // a shared value and the number of shared<T>s pointing at it
     <T: type>
-    internal struct shared_box {
+    struct shared_box {
         count: i64;
         value: T;
     }
@@ -159,14 +159,14 @@ namespace thread {
     // atomically), and the value is deleted with the last one. Reach the value with get(); to change it
     // from several threads, share a mutex<T> or atomics.
     <T: type, Allocator: std::mem::allocator = std::mem::default_allocator>
-    struct shared {
+    public struct shared {
         ptr: shared_box<T>*; // null in an empty (default) shared
         allocator: Allocator; // what frees it
     }
 
     // value in a new shared<T>, its only owner so far
     <T: type, A: std::mem::allocator = std::mem::default_allocator>
-    fn share(value: T, allocator: A = {}) -> std::mem::mem_error!shared<T, A> {
+    public fn share(value: T, allocator: A = {}) -> std::mem::mem_error!shared<T, A> {
         val p: shared_box<T>* = try allocator.malloc<shared_box<T>>();
         @write(p, { count: 1, value: move value });
         return { ptr: p, allocator: move allocator };
@@ -174,13 +174,13 @@ namespace thread {
 
     // what a channel holds: values sent and not yet received, and whether it's closed
     <T: type, A: std::mem::allocator>
-    internal struct chan_items {
+    struct chan_items {
         queue: std::deque<T, A>;
         closed: bool;
     }
 
     <T: type, A: std::mem::allocator>
-    internal struct chan_state {
+    struct chan_state {
         items: mutex<chan_items<T, A>>;
         ready: cond; // notified on a send or a close
     }
@@ -189,33 +189,33 @@ namespace thread {
     // (give each thread its own copy); it's deleted, with whatever was never received, with the last.
     // Its queue and shared state come from Allocator.
     <T: type, Allocator: std::mem::allocator = std::mem::default_allocator>
-    struct channel {
+    public struct channel {
         state: shared<chan_state<T, Allocator>, Allocator>;
     }
 }
 
 // wait for the thread to finish (again: nothing)
-attach fn join(this: std::thread::thread&) -> void {
+public attach fn join(this: std::thread::thread&) -> void {
     if (this.running) {
         std::thread::rt_join(this.handle);
         this.running = false;
     }
 }
 
-attach fn delete(this: std::thread::thread&) -> void {
+public attach fn delete(this: std::thread::thread&) -> void {
     this.join();
 }
 
 // wait for the lock and take it: the guard reaches the value, and unlocks when it's deleted
 <T: type>
-attach fn lock(this: std::thread::mutex<T>&) -> std::thread::guard<T> {
+public attach fn lock(this: std::thread::mutex<T>&) -> std::thread::guard<T> {
     std::thread::lock_word(&this.word);
     return { m: this };
 }
 
 // the lock if it's free now, else null
 <T: type>
-attach fn try_lock(this: std::thread::mutex<T>&) -> std::thread::guard<T>? {
+public attach fn try_lock(this: std::thread::mutex<T>&) -> std::thread::guard<T>? {
     if (std::thread::cas32(&this.word, 0, 1)) {
         val g: std::thread::guard<T> = { m: this };
         return g;
@@ -225,18 +225,18 @@ attach fn try_lock(this: std::thread::mutex<T>&) -> std::thread::guard<T>? {
 
 // the locked value
 <T: type>
-attach fn get(this: std::thread::guard<T>&) -> T& {
+public attach fn get(this: std::thread::guard<T>&) -> T& {
     return &this.m->value;
 }
 
 <T: type>
-attach fn delete(this: std::thread::guard<T>&) -> void {
+public attach fn delete(this: std::thread::guard<T>&) -> void {
     std::thread::unlock_word(&this.m->word);
 }
 
 // unlock g's mutex, sleep until notified (or not: check again), lock it again
 <T: type>
-attach fn wait(this: std::thread::cond&, g: std::thread::guard<T>&) -> void {
+public attach fn wait(this: std::thread::cond&, g: std::thread::guard<T>&) -> void {
     val seen = std::thread::load32(&this.seq);
     std::thread::unlock_word(&g.m->word);
     std::thread::rt_wait(&this.seq, seen);
@@ -244,73 +244,73 @@ attach fn wait(this: std::thread::cond&, g: std::thread::guard<T>&) -> void {
 }
 
 // wake one waiting thread
-attach fn notify_one(this: std::thread::cond&) -> void {
+public attach fn notify_one(this: std::thread::cond&) -> void {
     std::thread::add32(&this.seq, 1);
     std::thread::rt_wake(&this.seq, false);
 }
 
 // wake every waiting thread
-attach fn notify_all(this: std::thread::cond&) -> void {
+public attach fn notify_all(this: std::thread::cond&) -> void {
     std::thread::add32(&this.seq, 1);
     std::thread::rt_wake(&this.seq, true);
 }
 
-attach fn load(this: std::thread::atomic_i64&) -> i64 {
+public attach fn load(this: std::thread::atomic_i64&) -> i64 {
     return std::thread::load64(&this.value);
 }
 
-attach fn store(this: std::thread::atomic_i64&, v: i64) -> void {
+public attach fn store(this: std::thread::atomic_i64&, v: i64) -> void {
     std::thread::store64(&this.value, v);
 }
 
 // add n; the value before
-attach fn add(this: std::thread::atomic_i64&, n: i64) -> i64 {
+public attach fn add(this: std::thread::atomic_i64&, n: i64) -> i64 {
     return std::thread::add64(&this.value, n);
 }
 
 // subtract n; the value before
-attach fn sub(this: std::thread::atomic_i64&, n: i64) -> i64 {
+public attach fn sub(this: std::thread::atomic_i64&, n: i64) -> i64 {
     return std::thread::add64(&this.value, 0 -% n);
 }
 
 // set it to v; the value before
-attach fn swap(this: std::thread::atomic_i64&, v: i64) -> i64 {
+public attach fn swap(this: std::thread::atomic_i64&, v: i64) -> i64 {
     return std::thread::swap64(&this.value, v);
 }
 
 // set it to desired if it's expected; whether it was
-attach fn compare_swap(this: std::thread::atomic_i64&, expected: i64, desired: i64) -> bool {
+public attach fn compare_swap(this: std::thread::atomic_i64&, expected: i64, desired: i64) -> bool {
     return std::thread::cas64(&this.value, expected, desired);
 }
 
-attach fn load(this: std::thread::atomic_bool&) -> bool {
+public attach fn load(this: std::thread::atomic_bool&) -> bool {
     return std::thread::load32(&this.value) != 0;
 }
 
-attach fn store(this: std::thread::atomic_bool&, v: bool) -> void {
+public attach fn store(this: std::thread::atomic_bool&, v: bool) -> void {
     std::thread::store32(&this.value, @cast<i32>(v));
 }
 
 // set it to v; the value before
-attach fn swap(this: std::thread::atomic_bool&, v: bool) -> bool {
+public attach fn swap(this: std::thread::atomic_bool&, v: bool) -> bool {
     return std::thread::swap32(&this.value, @cast<i32>(v)) != 0;
 }
 
 // the shared value
 <T: type, A: std::mem::allocator>
-attach fn get(this: std::thread::shared<T, A>&) -> T& {
+public attach fn get(this: std::thread::shared<T, A>&) -> T& {
     return &this.ptr->value;
 }
 
 // how many shared<T>s point at the value (on several threads, it may change right after)
 <T: type, A: std::mem::allocator>
-attach fn count(this: std::thread::shared<T, A>&) -> i64 {
+public attach fn count(this: std::thread::shared<T, A>&) -> i64 {
     return std::thread::load64(&this.ptr->count);
 }
 
 // another owner of the same value
 <T: type, A: std::mem::allocator>
-attach fn copy(this: std::thread::shared<T, A>&) -> std::thread::shared<T, A> {
+public attach fn copy(this: std::thread::shared<T, A>&) -> std::thread::shared<T, A> {
     if (this.ptr != null) {
         std::thread::add64(&this.ptr->count, 1);
     }
@@ -319,7 +319,7 @@ attach fn copy(this: std::thread::shared<T, A>&) -> std::thread::shared<T, A> {
 
 // one owner fewer; the last one deletes the value and frees its memory
 <T: type, A: std::mem::allocator>
-attach fn delete(this: std::thread::shared<T, A>&) -> void {
+public attach fn delete(this: std::thread::shared<T, A>&) -> void {
     if (this.ptr == null || std::thread::add64(&this.ptr->count, -1) != 1) {
         return;
     }
@@ -329,21 +329,21 @@ attach fn delete(this: std::thread::shared<T, A>&) -> void {
 
 // a new, empty channel
 <T: type>
-attach fn new(static this: std::thread::channel<T>) -> std::mem::mem_error!std::thread::channel<T> {
+public attach fn new(static this: std::thread::channel<T>) -> std::mem::mem_error!std::thread::channel<T> {
     val a: std::mem::default_allocator = {};
     return std::thread::channel<T>::new_in(a);
 }
 
 // a new, empty channel whose memory comes from allocator
 <T: type, A: std::mem::allocator>
-attach fn new_in(static this: std::thread::channel<T>, allocator: A) -> std::mem::mem_error!std::thread::channel<T, A> {
+public attach fn new_in(static this: std::thread::channel<T>, allocator: A) -> std::mem::mem_error!std::thread::channel<T, A> {
     val st: std::thread::chan_state<T, A> = { items: { value: { queue: { allocator: copy allocator }, closed: false } }, ready: {} };
     return { state: try std::thread::share(move st, move allocator) };
 }
 
 // send value to whoever receives; false if the channel is closed (then value is deleted)
 <T: type, A: std::mem::allocator>
-attach fn send(this: std::thread::channel<T, A>&, value: T) -> bool {
+public attach fn send(this: std::thread::channel<T, A>&, value: T) -> bool {
     val st = this.state.get();
     {
         var g = st.items.lock();
@@ -358,7 +358,7 @@ attach fn send(this: std::thread::channel<T, A>&, value: T) -> bool {
 
 // the next value, waiting for one if there's none yet; null once the channel is closed and empty
 <T: type, A: std::mem::allocator>
-attach fn recv(this: std::thread::channel<T, A>&) -> T? {
+public attach fn recv(this: std::thread::channel<T, A>&) -> T? {
     val st = this.state.get();
     var g = st.items.lock();
     while (g.get().queue.len == 0 && !g.get().closed) {
@@ -369,14 +369,14 @@ attach fn recv(this: std::thread::channel<T, A>&) -> T? {
 
 // the next value if one is waiting, else null
 <T: type, A: std::mem::allocator>
-attach fn try_recv(this: std::thread::channel<T, A>&) -> T? {
+public attach fn try_recv(this: std::thread::channel<T, A>&) -> T? {
     var g = this.state.get().items.lock();
     return g.get().queue.pop_front();
 }
 
 // no more sends: receivers get what's left, then null
 <T: type, A: std::mem::allocator>
-attach fn close(this: std::thread::channel<T, A>&) -> void {
+public attach fn close(this: std::thread::channel<T, A>&) -> void {
     val st = this.state.get();
     {
         var g = st.items.lock();

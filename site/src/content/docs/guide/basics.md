@@ -53,7 +53,7 @@ Function parameters are `val`s too; `fn f(var x: i32)` gives the function its ow
 
 `type name = T;` gives a type another name. It's the same type, not a new one: a `meters` is an
 `f64` wherever an `f64` goes. An alias can be generic, taking its arguments where it's used, and
-`internal` keeps it to its package like any other declaration.
+in a package it's the package's own unless marked `public`, like any other declaration.
 
 ```volt
 use std::io;

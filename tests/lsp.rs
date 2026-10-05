@@ -239,7 +239,7 @@ fn scripted_session() {
     std::fs::create_dir_all(geo.join("lib")).unwrap();
     std::fs::create_dir_all(app.join("src")).unwrap();
     std::fs::write(geo.join("bolt.toml"), "[package]\nname = \"geo\"\nversion = \"0.1.0\"\n").unwrap();
-    let shapes = "// areas\nfn area(w: i32, h: i32) -> i32 {\n    return w * h;\n}\n";
+    let shapes = "// areas\npublic fn area(w: i32, h: i32) -> i32 {\n    return w * h;\n}\n";
     std::fs::write(geo.join("lib/shapes.volt"), shapes).unwrap();
     // an unreadable file in a library is left out; it doesn't take the server down
     let locked = geo.join("lib/locked.volt");

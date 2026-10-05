@@ -257,10 +257,12 @@ pub enum StmtKind {
     Resume(Expr),
 }
 
-/// `internal` on an item or field; parsed and printed, not yet enforced by the checker
+/// `public` or `internal` on an item or field, or neither (Default): an unmarked item is internal in a
+/// package and public in the program's files; an unmarked field follows its struct
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum Vis {
     #[default]
+    Default,
     Public,
     Internal,
 }

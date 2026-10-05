@@ -6,7 +6,7 @@
 
 namespace softint {
     // n / d, and n % d into rem; d isn't 0 (the caller checked)
-    fn udivmod32(n: u32, d: u32, rem: u32*) -> u32 {
+    public fn udivmod32(n: u32, d: u32, rem: u32*) -> u32 {
         var q: u32 = 0;
         var r: u32 = 0;
         var i: u32 = 32;
@@ -26,7 +26,7 @@ namespace softint {
         return q;
     }
 
-    fn udivmod64(n: u64, d: u64, rem: u64*) -> u64 {
+    public fn udivmod64(n: u64, d: u64, rem: u64*) -> u64 {
         var q: u64 = 0;
         var r: u64 = 0;
         var i: u32 = 64;
@@ -47,7 +47,7 @@ namespace softint {
 
     // the signed ones through the magnitudes, wrapping so the most negative number works too: the
     // quotient truncates, the remainder takes the dividend's sign
-    fn sdivmod32(n: i32, d: i32, rem: i32*) -> i32 {
+    public fn sdivmod32(n: i32, d: i32, rem: i32*) -> i32 {
         var un = @cast<u32>(n);
         if (n < 0) {
             un = 0 -% un;
@@ -70,7 +70,7 @@ namespace softint {
         return @cast<i32>(q);
     }
 
-    fn sdivmod64(n: i64, d: i64, rem: i64*) -> i64 {
+    public fn sdivmod64(n: i64, d: i64, rem: i64*) -> i64 {
         var un = @cast<u64>(n);
         if (n < 0) {
             un = 0 -% un;
@@ -95,17 +95,17 @@ namespace softint {
 
     // a u64 from its halves, and back, through its bytes (low half first: every core voltc targets
     // is little-endian). Not by shifting: a debug build's x >> 32 is a call to lshr64 on a Cortex-M0
-    fn join(hi: u32, lo: u32) -> u64 {
+    public fn join(hi: u32, lo: u32) -> u64 {
         val h: u32[2] = { lo, hi };
         return @bitcast<u64>(h);
     }
 
-    fn high(x: u64) -> u32 {
+    public fn high(x: u64) -> u32 {
         return @bitcast<u32[2]>(x)[1];
     }
 
     // x << s, x >> s and the arithmetic x >> s, for s in 0..63, through the halves
-    fn shl64(x: u64, s: u32) -> u64 {
+    public fn shl64(x: u64, s: u32) -> u64 {
         val (hi, lo, n) = (high(x), @cast<u32>(x), s & 63);
         if (n == 0) {
             return x;
@@ -116,7 +116,7 @@ namespace softint {
         return join((hi << n) | (lo >> (32 - n)), lo << n);
     }
 
-    fn lshr64(x: u64, s: u32) -> u64 {
+    public fn lshr64(x: u64, s: u32) -> u64 {
         val (hi, lo, n) = (high(x), @cast<u32>(x), s & 63);
         if (n == 0) {
             return x;
@@ -127,7 +127,7 @@ namespace softint {
         return join(hi >> n, (lo >> n) | (hi << (32 - n)));
     }
 
-    fn ashr64(x: i64, s: u32) -> i64 {
+    public fn ashr64(x: i64, s: u32) -> i64 {
         val (hi, lo, n) = (@cast<i32>(high(@cast<u64>(x))), @cast<u32>(@cast<u64>(x)), s & 63);
         if (n == 0) {
             return x;
@@ -141,7 +141,7 @@ namespace softint {
     // the whole 64-bit product of two u32s, from their 16-bit halves (each partial product fits
     // in 32 bits). Wrapping ops, though nothing wraps: a debug build checks a u32 * for overflow
     // through a 64-bit multiply, which is a call to mul64
-    fn mul32x32(a: u32, b: u32) -> u64 {
+    public fn mul32x32(a: u32, b: u32) -> u64 {
         val (a0, a1, b0, b1) = (a & 0xFFFF, a >> 16, b & 0xFFFF, b >> 16);
         val p00 = a0 *% b0;
         val p01 = a0 *% b1;
@@ -153,7 +153,7 @@ namespace softint {
     }
 
     // a * b, wrapping: the high halves only reach the result's upper 32 bits
-    fn mul64(a: u64, b: u64) -> u64 {
+    public fn mul64(a: u64, b: u64) -> u64 {
         val (ah, al, bh, bl) = (high(a), @cast<u32>(a), high(b), @cast<u32>(b));
         val cross = al *% bh +% ah *% bl;
         return mul32x32(al, bl) +% join(cross, 0);

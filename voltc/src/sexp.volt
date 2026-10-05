@@ -98,6 +98,7 @@ attach fn vis(this: sexp_writer&, v: vis) -> void {
     match (v) {
         .INTERNAL => { this.out.append(" internal"); },
         .PUBLIC => { this.out.append(" public"); },
+        .DEFAULT => { this.out.append(" public"); }, // as the bootstrap prints it
     }
 }
 

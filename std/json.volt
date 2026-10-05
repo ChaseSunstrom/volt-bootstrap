@@ -4,7 +4,7 @@
 namespace json {
     // a JSON value; an object keeps its members in order. Its strings and arrays come from A
     <A: std::mem::allocator = std::mem::default_allocator>
-    enum value {
+    public enum value {
         NULL,                       // null
         BOOL: bool,                 // true or false
         NUM: f64,                   // a number (JSON has one kind)
@@ -15,13 +15,13 @@ namespace json {
 
     // one member of an object
     <A: std::mem::allocator = std::mem::default_allocator>
-    struct member {
+    public struct member {
         name: std::string<A>; // the key
         item: value<A>;       // its value
     }
 
     // why parse failed
-    error json_error {
+    public error json_error {
         SYNTAX, // the text isn't JSON
     }
 
@@ -30,7 +30,7 @@ namespace json {
 
     // the text parsed; whitespace around the value is fine, anything else after it isn't
     <A: std::mem::allocator = std::mem::default_allocator>
-    fn parse(text: str, allocator: A = {}) -> json_error!value<A> {
+    public fn parse(text: str, allocator: A = {}) -> json_error!value<A> {
         var at: usize = 0;
         val v = try parse_value(text, &at, 0, &allocator);
         skip_space(text, &at);
@@ -40,14 +40,14 @@ namespace json {
         return v;
     }
 
-    internal fn skip_space(t: str, at: usize&) -> void {
+    fn skip_space(t: str, at: usize&) -> void {
         while (*at < t.len && (t[*at] == ' ' || t[*at] == '\t' || t[*at] == '\n' || t[*at] == '\r')) {
             *at += 1;
         }
     }
 
     <A: std::mem::allocator>
-    internal fn parse_value(t: str, at: usize&, depth: u32, a: A&) -> json_error!value<A> {
+    fn parse_value(t: str, at: usize&, depth: u32, a: A&) -> json_error!value<A> {
         if (depth > 512) {
             return json_error::SYNTAX; // nested too deep to be anything but an attack
         }
@@ -134,7 +134,7 @@ namespace json {
         return value<A>::NUM(x);
     }
 
-    internal fn word(t: str, at: usize&, w: str) -> bool {
+    fn word(t: str, at: usize&, w: str) -> bool {
         if (*at + w.len <= t.len && t[*at..*at + w.len] == w) {
             *at += w.len;
             return true;
@@ -142,7 +142,7 @@ namespace json {
         return false;
     }
 
-    internal fn hex_digit(c: u8) -> u32? {
+    fn hex_digit(c: u8) -> u32? {
         if (c >= '0' && c <= '9') {
             return @cast<u32>(c - '0');
         }
@@ -156,7 +156,7 @@ namespace json {
     }
 
     // \uXXXX's four hex digits at t[at..]
-    internal fn hex4(t: str, at: usize) -> u32? {
+    fn hex4(t: str, at: usize) -> u32? {
         if (at + 4 > t.len) {
             return null;
         }
@@ -171,7 +171,7 @@ namespace json {
 
     // the code point cp as UTF-8
     <A: std::mem::allocator>
-    internal fn put_utf8(out: std::string<A>&, cp: u32) -> void {
+    fn put_utf8(out: std::string<A>&, cp: u32) -> void {
         if (cp < 0x80) {
             out.push(@cast<u8>(cp));
         } else if (cp < 0x800) {
@@ -191,7 +191,7 @@ namespace json {
 
     // a string literal at t[at] (the opening quote), unescaped
     <A: std::mem::allocator>
-    internal fn parse_string(t: str, at: usize&, a: A&) -> json_error!std::string<A> {
+    fn parse_string(t: str, at: usize&, a: A&) -> json_error!std::string<A> {
         *at += 1;
         var out = std::string::new_in(copy *a);
         while (*at < t.len) {
@@ -248,7 +248,7 @@ namespace json {
 
     // the value as compact JSON text
     <A: std::mem::allocator, B: std::mem::allocator = std::mem::default_allocator>
-    attach fn text(this: value<A>&, allocator: B = {}) -> std::string<B> {
+    public attach fn text(this: value<A>&, allocator: B = {}) -> std::string<B> {
         var out = std::string::new_in(move allocator);
         this.write(&out);
         return out;
@@ -256,7 +256,7 @@ namespace json {
 
     // append the value to out as compact JSON text
     <A: std::mem::allocator, B: std::mem::allocator>
-    attach fn write(this: value<A>&, out: std::string<B>&) -> void {
+    public attach fn write(this: value<A>&, out: std::string<B>&) -> void {
         match (*this) {
             .NULL => { out.append("null"); },
             .BOOL(b) => {
@@ -295,7 +295,7 @@ namespace json {
 
     // a whole number exactly, anything else with 17 significant digits
     <B: std::mem::allocator>
-    internal fn write_num(out: std::string<B>&, x: f64) -> void {
+    fn write_num(out: std::string<B>&, x: f64) -> void {
         if (x == x && x >= -9007199254740992.0 && x <= 9007199254740992.0 && @cast<f64>(@cast<i64>(x)) == x) {
             out.append_int(@cast<i64>(x));
             return;
@@ -310,7 +310,7 @@ namespace json {
     }
 
     <B: std::mem::allocator>
-    internal fn write_str(out: std::string<B>&, s: str) -> void {
+    fn write_str(out: std::string<B>&, s: str) -> void {
         val hex: str = "0123456789abcdef";
         out.push('"');
         for (c) in s {
@@ -340,10 +340,10 @@ namespace json {
     // what get and at give for a member or element that isn't there: null, so lookups chain,
     // v.get("a").get("b").as_str() ?? "none". One buffer serves every value<A> (a null has no
     // payload); it's made null again on each use, so assigning through it changes nothing
-    internal var missing_bytes: u64[32];
+    var missing_bytes: u64[32];
 
     <A: std::mem::allocator>
-    internal fn missing() -> value<A>& {
+    fn missing() -> value<A>& {
         comptime if (@sizeof(value<A>) > 256 || @alignof(value<A>) > 8) {
             @compile_error("std::json: values with this allocator are too big for a missing lookup's null");
         }
@@ -354,7 +354,7 @@ namespace json {
 
     // an object's member called key (null when there's none)
     <A: std::mem::allocator>
-    attach fn get(this: value<A>&, key: str) -> value<A>& {
+    public attach fn get(this: value<A>&, key: str) -> value<A>& {
         match (*this) {
             .OBJ(ms&) => {
                 for (m&) in ms.items() {
@@ -370,7 +370,7 @@ namespace json {
 
     // an array's element i (null when there's none)
     <A: std::mem::allocator>
-    attach fn at(this: value<A>&, i: usize) -> value<A>& {
+    public attach fn at(this: value<A>&, i: usize) -> value<A>& {
         match (*this) {
             .ARR(xs&) => {
                 if (i < xs.len) {
@@ -384,7 +384,7 @@ namespace json {
 
     // how many elements (an array) or members (an object)
     <A: std::mem::allocator>
-    attach fn len(this: value<A>&) -> usize {
+    public attach fn len(this: value<A>&) -> usize {
         match (*this) {
             .ARR(xs&) => { return xs.len; },
             .OBJ(ms&) => { return ms.len; },
@@ -394,7 +394,7 @@ namespace json {
 
     // a string's text (null for anything else)
     <A: std::mem::allocator>
-    attach fn as_str(this: value<A>&) -> str? {
+    public attach fn as_str(this: value<A>&) -> str? {
         match (*this) {
             .STR(s&) => { return s.as_str(); },
             default => { return null; },
@@ -403,7 +403,7 @@ namespace json {
 
     // a number (null for anything else)
     <A: std::mem::allocator>
-    attach fn as_num(this: value<A>&) -> f64? {
+    public attach fn as_num(this: value<A>&) -> f64? {
         match (*this) {
             .NUM(x) => { return x; },
             default => { return null; },
@@ -412,7 +412,7 @@ namespace json {
 
     // true or false (null for anything else)
     <A: std::mem::allocator>
-    attach fn as_bool(this: value<A>&) -> bool? {
+    public attach fn as_bool(this: value<A>&) -> bool? {
         match (*this) {
             .BOOL(b) => { return b; },
             default => { return null; },
@@ -421,7 +421,7 @@ namespace json {
 
     // is it null? (a missing member or element is too)
     <A: std::mem::allocator>
-    attach fn is_null(this: value<A>&) -> bool {
+    public attach fn is_null(this: value<A>&) -> bool {
         match (*this) {
             .NULL => { return true; },
             default => { return false; },
@@ -432,45 +432,45 @@ namespace json {
 
     // an empty object (add members with set)
     <A: std::mem::allocator = std::mem::default_allocator>
-    fn object(allocator: A = {}) -> value<A> {
+    public fn object(allocator: A = {}) -> value<A> {
         val ms: std::vec<member<A>, A> = { allocator: move allocator };
         return value<A>::OBJ(move ms);
     }
 
     // an empty array (add elements with add)
     <A: std::mem::allocator = std::mem::default_allocator>
-    fn array(allocator: A = {}) -> value<A> {
+    public fn array(allocator: A = {}) -> value<A> {
         val xs: std::vec<value<A>, A> = { allocator: move allocator };
         return value<A>::ARR(move xs);
     }
 
     // a string value holding a copy of s
     <A: std::mem::allocator = std::mem::default_allocator>
-    fn string(s: str, allocator: A = {}) -> value<A> {
+    public fn string(s: str, allocator: A = {}) -> value<A> {
         return value<A>::STR(std::string::from(s, move allocator));
     }
 
     // a number value (the allocator only picks which value<A> it is)
     <A: std::mem::allocator = std::mem::default_allocator>
-    fn number(x: f64, allocator: A = {}) -> value<A> {
+    public fn number(x: f64, allocator: A = {}) -> value<A> {
         return value<A>::NUM(x);
     }
 
     // true or false (the allocator only picks which value<A> it is)
     <A: std::mem::allocator = std::mem::default_allocator>
-    fn boolean(b: bool, allocator: A = {}) -> value<A> {
+    public fn boolean(b: bool, allocator: A = {}) -> value<A> {
         return value<A>::BOOL(b);
     }
 
     // null (the allocator only picks which value<A> it is)
     <A: std::mem::allocator = std::mem::default_allocator>
-    fn null_value(allocator: A = {}) -> value<A> {
+    public fn null_value(allocator: A = {}) -> value<A> {
         return value<A>::NULL;
     }
 
     // set an object's member (replacing one with the same name)
     <A: std::mem::allocator>
-    attach fn set(this: value<A>&, key: str, v: value<A>) -> void {
+    public attach fn set(this: value<A>&, key: str, v: value<A>) -> void {
         match (*this) {
             .OBJ(ms&) => {
                 var found: usize? = null;
@@ -491,7 +491,7 @@ namespace json {
 
     // add an element to an array
     <A: std::mem::allocator>
-    attach fn add(this: value<A>&, v: value<A>) -> void {
+    public attach fn add(this: value<A>&, v: value<A>) -> void {
         match (*this) {
             .ARR(xs&) => { xs.push(move v) catch @panic("out of memory"); },
             default => { @panic("json add: not an array"); },

@@ -3,13 +3,13 @@
 
 namespace digest {
     // CRC-32 for a nibble (the reflected 0xEDB88320 polynomial): two lookups a byte
-    internal val CRC_NIBBLE: u32[16] = {
+    val CRC_NIBBLE: u32[16] = {
         0x00000000, 0x1DB71064, 0x3B6E20C8, 0x26D930AC, 0x76DC4190, 0x6B6B51F4, 0x4DB26158, 0x5005713C,
         0xEDB88320, 0xF00F9344, 0xD6D6A3E8, 0xCB61B38C, 0x9B64C2B0, 0x86D3D2D4, 0xA00AE278, 0xBDBDF21C,
     };
 
     // the CRC-32 of data, as zip, gzip and PNG compute it ("123456789" gives cbf43926)
-    fn crc32(data: u8[..]) -> u32 {
+    public fn crc32(data: u8[..]) -> u32 {
         var crc: u32 = 0xFFFFFFFF;
         for (b) in data {
             crc = crc ^ @cast<u32>(b);
@@ -19,13 +19,13 @@ namespace digest {
         return crc ^ 0xFFFFFFFF;
     }
 
-    fn crc32(text: str) -> u32 {
+    public fn crc32(text: str) -> u32 {
         return crc32(@cast<u8[..]>(text));
     }
 
     // the 64-bit FNV-1a hash of data: fast and simple, for hash tables and fingerprints (not for
     // anything an attacker controls)
-    fn fnv1a(data: u8[..]) -> u64 {
+    public fn fnv1a(data: u8[..]) -> u64 {
         var h: u64 = 14695981039346656037;
         for (b) in data {
             h = (h ^ @cast<u64>(b)) *% 1099511628211;
@@ -33,12 +33,12 @@ namespace digest {
         return h;
     }
 
-    fn fnv1a(text: str) -> u64 {
+    public fn fnv1a(text: str) -> u64 {
         return fnv1a(@cast<u8[..]>(text));
     }
 
     // SHA-256's round constants
-    internal val K: u32[64] = {
+    val K: u32[64] = {
         0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
         0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
         0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
@@ -51,7 +51,7 @@ namespace digest {
 
     // SHA-256 (FIPS 180-4), fed in pieces: update with each, then finish for the 32-byte digest.
     // Make one with sha256::new()
-    struct sha256 {
+    public struct sha256 {
         h: u32[8];      // the state
         block: u8[64];  // bytes waiting for a whole block
         filled: usize;  // how many of block are in use
@@ -59,22 +59,22 @@ namespace digest {
     }
 
     // the digest of data in one call
-    fn sha256_of(data: u8[..]) -> u8[32] {
+    public fn sha256_of(data: u8[..]) -> u8[32] {
         var s = sha256::new();
         s.update(data);
         return s.finish();
     }
 
-    fn sha256_of(text: str) -> u8[32] {
+    public fn sha256_of(text: str) -> u8[32] {
         return sha256_of(@cast<u8[..]>(text));
     }
 
-    internal fn rotr(x: u32, n: u32) -> u32 {
+    fn rotr(x: u32, n: u32) -> u32 {
         return (x >> n) | (x << (32 - n));
     }
 
     // one 64-byte block into the state
-    internal fn compress(h: u32[8]&, b: u8[..]) -> void {
+    fn compress(h: u32[8]&, b: u8[..]) -> void {
         var w: u32[64];
         for (i) in 0..16 {
             w[i] = (@cast<u32>(b[4 * i]) << 24) | (@cast<u32>(b[4 * i + 1]) << 16) | (@cast<u32>(b[4 * i + 2]) << 8) | @cast<u32>(b[4 * i + 3]);
@@ -113,14 +113,14 @@ namespace digest {
 }
 
 // a SHA-256 hasher with nothing fed in yet
-attach fn new(static this: std::digest::sha256) -> std::digest::sha256 {
+public attach fn new(static this: std::digest::sha256) -> std::digest::sha256 {
     val iv: u32[8] = { 0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19 };
     var block: u8[64];
     return { h: iv, block: block, filled: 0, total: 0 };
 }
 
 // feed data in
-attach fn update(this: std::digest::sha256&, data: u8[..]) -> void {
+public attach fn update(this: std::digest::sha256&, data: u8[..]) -> void {
     var i: usize = 0;
     this.total +%= @cast<u64>(data.len);
     // top up a partly filled block first
@@ -148,12 +148,12 @@ attach fn update(this: std::digest::sha256&, data: u8[..]) -> void {
     }
 }
 
-attach fn update(this: std::digest::sha256&, text: str) -> void {
+public attach fn update(this: std::digest::sha256&, text: str) -> void {
     this.update(@cast<u8[..]>(text));
 }
 
 // the digest of everything fed in (the hasher is used up: make a new one for more)
-attach fn finish(this: std::digest::sha256&) -> u8[32] {
+public attach fn finish(this: std::digest::sha256&) -> u8[32] {
     val bits = this.total *% 8;
     // a 1 bit, zeros to 56 bytes into a block, then the length in bits, big-endian
     var tail: u8[72];

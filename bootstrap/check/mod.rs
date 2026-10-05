@@ -1303,20 +1303,23 @@ impl Checker {
     }
 
     /// An internal item belongs to its package: only that package's files may use it (the program's
-    /// own files, for the program's). A template's body is judged by the file it's written in.
+    /// own files, for the program's). A package's items are internal unless marked public; the
+    /// program's are public unless marked internal. A template's body is judged by the file it's
+    /// written in.
     pub fn visible(&self, decl: DeclId, span: Span) -> Res<()> {
-        if self.decls[decl].item.vis != Vis::Internal {
+        let owner = self.pkg_of(decl);
+        let vis = self.decls[decl].item.vis;
+        if vis == Vis::Public || vis == Vis::Default && owner.is_none() {
             return Ok(());
         }
-        let owner = self.pkg_of(decl);
         if owner == self.opts.pkg_files.get(&span.file).map(|s| s.as_str()) {
             return Ok(());
         }
-        let whose = match owner {
-            Some(p) => format!("package {p}"),
-            None => "the program".to_string(),
-        };
-        err(span, format!("'{}' is internal to {whose}", self.decl_name(decl)))
+        match owner {
+            Some(p) if vis == Vis::Default => err(span, format!("'{}' isn't public in package {p}", self.decl_name(decl))),
+            Some(p) => err(span, format!("'{}' is internal to package {p}", self.decl_name(decl))),
+            None => err(span, format!("'{}' is internal to the program", self.decl_name(decl))),
+        }
     }
 
     // ---------- constants ----------

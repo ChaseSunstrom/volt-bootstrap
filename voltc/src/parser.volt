@@ -436,11 +436,11 @@ attach fn item(this: parser&) -> compile_error!item {
             break;
         }
     }
-    var v = vis::PUBLIC;
+    var v = vis::DEFAULT;
     if (this.eat_kw("internal")) {
         v = vis::INTERNAL;
-    } else {
-        this.eat_kw("public");
+    } else if (this.eat_kw("public")) {
+        v = vis::PUBLIC;
     }
     var (is_async, is_comptime, is_export, is_attach, is_extern) = (false, false, false, false, false);
     var abi: str? = null;
@@ -484,7 +484,14 @@ attach fn item(this: parser&) -> compile_error!item {
         val trait_ = try this.parse_type();
         try this.expect("->");
         val target = try this.parse_type();
-        kind = item_kind::ATTACH(move trait_, move target, try this.item_block());
+        // its fns are the trait's: as public as the trait is
+        var fns = try this.item_block();
+        for (f&) in fns.items() {
+            if (f.vis == vis::DEFAULT) {
+                f.vis = vis::PUBLIC;
+            }
+        }
+        kind = item_kind::ATTACH(move trait_, move target, move fns);
     } else if (this.eat_kw("struct")) {
         val name = (try this.ident()).name;
         var spec: std::vec<garg>? = null;
@@ -632,6 +639,9 @@ attach fn item(this: parser&) -> compile_error!item {
         kind = item_kind::GLOBAL(try this.let_stmt(is_comptime));
     } else {
         return this.unexpected("an item (fn, struct, enum, error, trait, type, attach, namespace, use, var, val)");
+    }
+    if (is_export && v == vis::DEFAULT) {
+        v = vis::PUBLIC; // a C symbol is anyone's
     }
     return { kind: move kind, span: start.to(this.prev_span()), attrs: move attrs, vis: v, generics: move generics };
 }

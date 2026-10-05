@@ -1468,20 +1468,24 @@ fn same_pkg(a: str?, b: str?) -> bool {
 }
 
 // An internal item belongs to its package: only that package's files may use it (the program's own
-// files, for the program's). A template's body is judged by the file it's written in.
+// files, for the program's). A package's items are internal unless marked public; the program's are
+// public unless marked internal. A template's body is judged by the file it's written in.
 attach fn visible(this: checker&, d: u32, span: span) -> compile_error!void {
-    if (this.item_of(d).vis != vis::INTERNAL) {
+    val owner = this.pkg_of(d);
+    val v = this.item_of(d).vis;
+    if (v == vis::PUBLIC || (v == vis::DEFAULT && owner == null)) {
         return;
     }
-    val owner = this.pkg_of(d);
     if (same_pkg(owner, this.pkg_of_file(span.file))) {
         return;
     }
-    var whose = S("the program");
     if (owner) {
-        whose = fmt("package {}", S(owner));
+        if (v == vis::DEFAULT) {
+            return fail(span, fmt2("'{}' isn't public in package {}", S(this.decl_name(d)), S(owner)));
+        }
+        return fail(span, fmt2("'{}' is internal to {}", S(this.decl_name(d)), fmt("package {}", S(owner))));
     }
-    return fail(span, fmt2("'{}' is internal to {}", S(this.decl_name(d)), move whose));
+    return fail(span, fmt2("'{}' is internal to {}", S(this.decl_name(d)), S("the program")));
 }
 
 attach fn pkg_of_file(this: checker&, file: u32) -> str? {

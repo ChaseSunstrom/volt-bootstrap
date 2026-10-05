@@ -20,7 +20,7 @@ fn use_global() -> void {
 }
 
 fn main() -> void {}
-// error: 'hex_digit' is internal to package std
-// error: 'grow' is internal to package std
-// error: 'pollfd' is internal to package std
-// error: 'missing' is internal to package std
+// error: 'hex_digit' isn't public in package std
+// error: 'grow' isn't public in package std
+// error: 'pollfd' isn't public in package std
+// error: 'missing' isn't public in package std

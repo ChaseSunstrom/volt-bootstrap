@@ -10,16 +10,16 @@
 namespace bare {
     // the board's hooks (voltc's start code jumps from these names to volt_console_write and
     // volt_exit, which the program defines), and the heap's bounds from the linker script
-    extern "C" fn volt_hook_console_write(p: u8*, n: usize) -> void;
-    extern "C" fn volt_hook_exit(code: i32) -> never;
-    extern "C" fn volt_heap_start() -> u8*;
-    extern "C" fn volt_heap_end() -> u8*;
+    public extern "C" fn volt_hook_console_write(p: u8*, n: usize) -> void;
+    public extern "C" fn volt_hook_exit(code: i32) -> never;
+    public extern "C" fn volt_heap_start() -> u8*;
+    public extern "C" fn volt_heap_end() -> u8*;
 
-    fn put(s: str) -> void {
+    public fn put(s: str) -> void {
         volt_hook_console_write(@cast<u8*>(s.ptr), s.len);
     }
 
-    fn put_cstr(c: cstr) -> void {
+    public fn put_cstr(c: cstr) -> void {
         val p = @cast<u8*>(c);
         var n: usize = 0;
         while (p[n] != 0) {
@@ -28,7 +28,7 @@ namespace bare {
         volt_hook_console_write(p, n);
     }
 
-    fn put_num(v: u64) -> void {
+    public fn put_num(v: u64) -> void {
         var buf: u8[20];
         var i: usize = 20;
         var x = v;
@@ -73,16 +73,16 @@ namespace bare {
 
     // ---- printing: a sink is where print's text goes (the console, or a writer std::format made) ----
 
-    struct sink {
+    public struct sink {
         write: extern "C" fn(void*, str) -> void;
         ctx: void*;
     }
 
-    extern "C" fn to_console(ctx: void*, s: str) -> void {
+    public extern "C" fn to_console(ctx: void*, s: str) -> void {
         put(s);
     }
 
-    var console_sink: sink = { write: to_console, ctx: null };
+    public var console_sink: sink = { write: to_console, ctx: null };
 
     export fn volt_stdout() -> void* {
         return @cast<void*>(&console_sink);
@@ -112,16 +112,16 @@ namespace bare {
     // fragment; merge neighbours when that matters
 
     // a block's header: its whole size, and while it's free the next free block
-    struct block {
+    public struct block {
         size: usize;
         next: block*;
     }
 
-    val HEADER: usize = 16; // keeps what a block holds 16-byte aligned
+    public val HEADER: usize = 16; // keeps what a block holds 16-byte aligned
 
-    var heap_top: usize = 0;
-    var heap_limit: usize = 0;
-    var free_blocks: block* = null;
+    public var heap_top: usize = 0;
+    public var heap_limit: usize = 0;
+    public var free_blocks: block* = null;
 
     export fn volt_rt_malloc(n: usize) -> void* {
         val need = (n + HEADER + 15) / 16 * 16;
@@ -318,10 +318,10 @@ namespace bare {
     @attributes([@cfg("pointer_bits", "32")])
     namespace soft {
         // a float's bits and back (register moves: no float instructions)
-        fn b64(v: f64) -> u64 { return @bitcast<u64>(v); }
-        fn f64_of(b: u64) -> f64 { return @bitcast<f64>(b); }
-        fn b32(v: f32) -> u32 { return @bitcast<u32>(v); }
-        fn f32_of(b: u32) -> f32 { return @bitcast<f32>(b); }
+        public fn b64(v: f64) -> u64 { return @bitcast<u64>(v); }
+        public fn f64_of(b: u64) -> f64 { return @bitcast<f64>(b); }
+        public fn b32(v: f32) -> u32 { return @bitcast<u32>(v); }
+        public fn f32_of(b: u32) -> f32 { return @bitcast<f32>(b); }
 
         export fn __adddf3(a: f64, b: f64) -> f64 { return f64_of(std::softfloat::add64(b64(a), b64(b))); }
         export fn __subdf3(a: f64, b: f64) -> f64 { return f64_of(std::softfloat::sub64(b64(a), b64(b))); }
@@ -336,14 +336,14 @@ namespace bare {
 
         // comparisons, as libgcc's: <0, 0 or >0 like a - b; a NaN gives 1 to eq/ne/lt/le, -1 to
         // ge/gt, so each comparison comes out false
-        fn le64(a: f64, b: f64) -> i32 {
+        public fn le64(a: f64, b: f64) -> i32 {
             val c = std::softfloat::cmp64(b64(a), b64(b));
             if (c == 2) {
                 return 1;
             }
             return c;
         }
-        fn ge64(a: f64, b: f64) -> i32 {
+        public fn ge64(a: f64, b: f64) -> i32 {
             val c = std::softfloat::cmp64(b64(a), b64(b));
             if (c == 2) {
                 return -1;

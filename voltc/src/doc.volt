@@ -61,7 +61,15 @@ struct doc_writer {
 // document items, declared in namespace ns (a path inside the package)
 attach fn walk(this: doc_writer&, items: std::vec<item>&, ns: std::vec<str>&) -> void {
     for (it&) in items.items() {
-        if (it.vis == vis::INTERNAL) {
+        // a package's API: what it marks public (a namespace or an attach block has no visibility of
+        // its own)
+        var scope = false;
+        match (it.kind) {
+            .NAMESPACE(p&, xs&) => { scope = true; },
+            .ATTACH(t&, target&, fns&) => { scope = true; },
+            default => {},
+        }
+        if (it.vis != vis::PUBLIC && !scope) {
             continue;
         }
         match (it.kind) {
@@ -228,8 +236,8 @@ attach fn type_name(this: doc_writer&, s: span) -> str {
     return t[start..end];
 }
 
-// text[lo..hi] on one line: whitespace runs as one space, comments and @attributes(...) dropped, no
-// trailing `;`
+// text[lo..hi] on one line: whitespace runs as one space, comments, @attributes(...) and `public`
+// dropped (everything documented is), no trailing `;`
 fn decl_text(text: str, lo: usize, hi: usize) -> std::string {
     var out: std::string = {};
     var space = false;
@@ -240,6 +248,11 @@ fn decl_text(text: str, lo: usize, hi: usize) -> std::string {
             while (i < hi && text[i] != '\n') {
                 i += 1;
             }
+            space = out.len() > 0;
+            continue;
+        }
+        if (starts_with(text[i..hi], "public ") && (i == lo || is_space(text[i - 1]))) {
+            i += 7;
             space = out.len() > 0;
             continue;
         }

@@ -4,7 +4,7 @@
 
 namespace path {
     // whether c separates a path's parts
-    internal fn is_sep(c: u8) -> bool {
+    fn is_sep(c: u8) -> bool {
         comptime if (@cfg("os", "windows")) {
             return c == '/' || c == '\\';
         } else {
@@ -13,7 +13,7 @@ namespace path {
     }
 
     // what join and normalize put between parts
-    internal fn sep() -> u8 {
+    fn sep() -> u8 {
         comptime if (@cfg("os", "windows")) {
             return '\\';
         } else {
@@ -23,7 +23,7 @@ namespace path {
 
     // how long p's root is: 1 for "/", 0 for a relative path; on Windows also 3 for "C:\" or "C:/",
     // and 2 for the "\\" a network path ("\\server\share") starts with
-    internal fn root_len(p: str) -> usize {
+    fn root_len(p: str) -> usize {
         comptime if (@cfg("os", "windows")) {
             if (p.len >= 3 && p[1] == ':' && is_sep(p[2])) {
                 return 3;
@@ -39,7 +39,7 @@ namespace path {
     }
 
     // where p's last separator is
-    internal fn last_sep(p: str) -> usize? {
+    fn last_sep(p: str) -> usize? {
         var i = p.len;
         while (i > 0) {
             i -= 1;
@@ -51,13 +51,13 @@ namespace path {
     }
 
     // whether p starts at the root
-    fn is_absolute(p: str) -> bool {
+    public fn is_absolute(p: str) -> bool {
         return root_len(p) > 0;
     }
 
     // b inside a ("a/b"); an absolute b replaces a
     <A: std::mem::allocator = std::mem::default_allocator>
-    fn join(a: str, b: str, allocator: A = {}) -> std::string<A> {
+    public fn join(a: str, b: str, allocator: A = {}) -> std::string<A> {
         if (a.len == 0 || is_absolute(b)) {
             return std::string::from(b, move allocator);
         }
@@ -70,7 +70,7 @@ namespace path {
     }
 
     // p without the separators it ends with (its root stays)
-    internal fn trimmed(p: str) -> str {
+    fn trimmed(p: str) -> str {
         var keep = root_len(p);
         if (keep == 0) {
             keep = 1;
@@ -83,7 +83,7 @@ namespace path {
     }
 
     // the directory p is in: "a/b" for "a/b/c", "/" for "/a", "" for "a"
-    fn parent(p: str) -> str {
+    public fn parent(p: str) -> str {
         val t = trimmed(p);
         val slash = last_sep(t) ?? return "";
         val root = root_len(t);
@@ -94,7 +94,7 @@ namespace path {
     }
 
     // the last part: "b.txt" for "a/b.txt", "b" for "a/b/", "" for "/"
-    fn file_name(p: str) -> str {
+    public fn file_name(p: str) -> str {
         val t = trimmed(p);
         if (t.len == root_len(t)) {
             return ""; // the root, or nothing
@@ -104,7 +104,7 @@ namespace path {
     }
 
     // the file name after its last dot: "gz" for "b.tar.gz"; null without one, or for a dotfile like ".bashrc"
-    fn extension(p: str) -> str? {
+    public fn extension(p: str) -> str? {
         val name = file_name(p);
         val dot = name.rfind(".") ?? return null;
         if (dot == 0) {
@@ -114,7 +114,7 @@ namespace path {
     }
 
     // the file name without its extension: "b.tar" for "a/b.tar.gz"
-    fn stem(p: str) -> str {
+    public fn stem(p: str) -> str {
         val name = file_name(p);
         val dot = name.rfind(".") ?? return name;
         if (dot == 0) {
@@ -126,7 +126,7 @@ namespace path {
     // p with "." parts, repeated slashes and "x/.." pairs removed, by the text alone (it doesn't
     // follow symlinks): "a/c" for "a/./b/../c/". A relative path keeps its leading ".."s; "" is "."
     <A: std::mem::allocator = std::mem::default_allocator>
-    fn normalize(p: str, allocator: A = {}) -> std::string<A> {
+    public fn normalize(p: str, allocator: A = {}) -> std::string<A> {
         val root = root_len(p);
         val abs = root > 0;
         var parts: std::vec<str, A> = { allocator: copy allocator };

@@ -5,40 +5,40 @@ namespace process {
     // through the runtime (runtime/prelude.h), not a libc header: std is in every program, and a
     // #include there could clash with a user's own extern "C" declarations
     @attributes([@intrinsic("volt_exit")])
-    internal fn c_exit(code: i32) -> never;
+    fn c_exit(code: i32) -> never;
     @attributes([@intrinsic("volt_rt_argc")])
-    internal fn c_argc() -> i32;
+    fn c_argc() -> i32;
     @attributes([@intrinsic("volt_rt_arg")])
-    internal fn c_arg(i: i32) -> str;
+    fn c_arg(i: i32) -> str;
     @attributes([@intrinsic("volt_rt_os")])
-    internal fn c_os() -> str;
+    fn c_os() -> str;
     @attributes([@intrinsic("volt_rt_arch")])
-    internal fn c_arch() -> str;
+    fn c_arch() -> str;
 
     // the system this program was built for: "linux", "macos", "windows" or "freebsd" (what
     // @cfg("os", ...) tests at compile time)
-    fn os() -> str {
+    public fn os() -> str {
         return c_os();
     }
 
     // the CPU this program was built for: "x86_64", "aarch64", "riscv64", "x86" or "arm" (what
     // @cfg("arch", ...) tests at compile time)
-    fn arch() -> str {
+    public fn arch() -> str {
         return c_arch();
     }
 
     // ends the program right away: scopes don't run their deletes or defers
-    fn exit(code: i32) -> never {
+    public fn exit(code: i32) -> never {
         c_exit(code);
     }
 
     // command-line arguments; arg(0) is the program itself
-    fn arg_count() -> usize {
+    public fn arg_count() -> usize {
         return @cast<usize>(c_argc());
     }
 
     // argument i (null past the last one)
-    fn arg(i: usize) -> str? {
+    public fn arg(i: usize) -> str? {
         if (i >= arg_count()) {
             return null;
         }
@@ -47,51 +47,51 @@ namespace process {
 }
 
 namespace process {
-    internal extern "C" fn getenv(name: cstr) -> cstr?;
-    internal extern "C" fn strlen(s: cstr) -> usize;
-    internal extern "C" fn fork() -> i32;
-    internal extern "C" fn execvp(file: cstr, argv: cstr?*) -> i32;
-    internal extern "C" fn waitpid(pid: i32, status: i32*, options: i32) -> i32;
-    internal extern "C" fn _exit(code: i32) -> never;
-    internal extern "C" fn pipe(fds: i32*) -> i32;
-    internal extern "C" fn dup2(from: i32, to: i32) -> i32;
-    internal extern "C" fn close(fd: i32) -> i32;
-    internal extern "C" fn read(fd: i32, buf: void*, n: usize) -> isize;
-    internal extern "C" fn write(fd: i32, buf: void*, n: usize) -> isize;
-    internal extern "C" fn fcntl(fd: i32, cmd: i32, ...) -> i32;
-    internal extern "C" fn signal(sig: i32, handler: void*) -> void*;
-    internal extern "C" fn poll(fds: pollfd*, n: u64, timeout: i32) -> i32;
-    internal extern "C" fn setenv(name: cstr, value: cstr, overwrite: i32) -> i32;
-    internal extern "C" fn unsetenv(name: cstr) -> i32;
-    internal extern "C" fn getcwd(buf: u8*, size: usize) -> void*;
-    internal extern "C" fn readlink(path: cstr, buf: u8*, n: usize) -> isize;
-    internal extern "C" fn realpath(path: cstr, resolved: u8*) -> cstr?;
-    internal extern "C" fn _NSGetExecutablePath(buf: u8*, size: u32*) -> i32;
-    internal extern "C" fn sysctl(name: i32*, n: u32, old: void*, old_len: usize*, new: void*, new_len: usize) -> i32;
-    internal extern "C" fn chdir(path: cstr) -> i32;
+    extern "C" fn getenv(name: cstr) -> cstr?;
+    extern "C" fn strlen(s: cstr) -> usize;
+    extern "C" fn fork() -> i32;
+    extern "C" fn execvp(file: cstr, argv: cstr?*) -> i32;
+    extern "C" fn waitpid(pid: i32, status: i32*, options: i32) -> i32;
+    extern "C" fn _exit(code: i32) -> never;
+    extern "C" fn pipe(fds: i32*) -> i32;
+    extern "C" fn dup2(from: i32, to: i32) -> i32;
+    extern "C" fn close(fd: i32) -> i32;
+    extern "C" fn read(fd: i32, buf: void*, n: usize) -> isize;
+    extern "C" fn write(fd: i32, buf: void*, n: usize) -> isize;
+    extern "C" fn fcntl(fd: i32, cmd: i32, ...) -> i32;
+    extern "C" fn signal(sig: i32, handler: void*) -> void*;
+    extern "C" fn poll(fds: pollfd*, n: u64, timeout: i32) -> i32;
+    extern "C" fn setenv(name: cstr, value: cstr, overwrite: i32) -> i32;
+    extern "C" fn unsetenv(name: cstr) -> i32;
+    extern "C" fn getcwd(buf: u8*, size: usize) -> void*;
+    extern "C" fn readlink(path: cstr, buf: u8*, n: usize) -> isize;
+    extern "C" fn realpath(path: cstr, resolved: u8*) -> cstr?;
+    extern "C" fn _NSGetExecutablePath(buf: u8*, size: u32*) -> i32;
+    extern "C" fn sysctl(name: i32*, n: u32, old: void*, old_len: usize*, new: void*, new_len: usize) -> i32;
+    extern "C" fn chdir(path: cstr) -> i32;
 
     // Windows (64-bit): the CRT for the environment and the working directory, kernel32 for
     // processes and pipes. Handles are isize: INVALID_HANDLE_VALUE is -1
     namespace win {
-        internal extern "C" fn _putenv_s(name: cstr, value: cstr) -> i32;
-        internal extern "C" fn _getcwd(buf: u8*, size: i32) -> void*;
-        internal extern "C" fn _chdir(path: cstr) -> i32;
-        internal extern "C" fn GetModuleFileNameA(module: void*, buf: u8*, size: u32) -> u32;
-        internal extern "C" fn CreateProcessA(app: void*, line: cstr, pa: void*, ta: void*, inherit: i32, flags: u32, env: void*, dir: void*, si: void*, pi: void*) -> i32;
-        internal extern "C" fn WaitForSingleObject(h: isize, ms: u32) -> u32;
-        internal extern "C" fn GetExitCodeProcess(h: isize, code: u32*) -> i32;
-        internal extern "C" fn TerminateProcess(h: isize, code: u32) -> i32;
-        internal extern "C" fn CloseHandle(h: isize) -> i32;
-        internal extern "C" fn CreatePipe(r: isize*, w: isize*, sa: void*, size: u32) -> i32;
-        internal extern "C" fn SetHandleInformation(h: isize, mask: u32, flags: u32) -> i32;
-        internal extern "C" fn GetStdHandle(which: u32) -> isize;
-        internal extern "C" fn GetCurrentProcess() -> isize;
-        internal extern "C" fn DuplicateHandle(from: isize, h: isize, to: isize, out: isize*, access: u32, inherit: i32, options: u32) -> i32;
-        internal extern "C" fn ReadFile(h: isize, buf: void*, n: u32, got: u32*, overlapped: void*) -> i32;
-        internal extern "C" fn WriteFile(h: isize, buf: void*, n: u32, put: u32*, overlapped: void*) -> i32;
+        extern "C" fn _putenv_s(name: cstr, value: cstr) -> i32;
+        extern "C" fn _getcwd(buf: u8*, size: i32) -> void*;
+        extern "C" fn _chdir(path: cstr) -> i32;
+        extern "C" fn GetModuleFileNameA(module: void*, buf: u8*, size: u32) -> u32;
+        extern "C" fn CreateProcessA(app: void*, line: cstr, pa: void*, ta: void*, inherit: i32, flags: u32, env: void*, dir: void*, si: void*, pi: void*) -> i32;
+        extern "C" fn WaitForSingleObject(h: isize, ms: u32) -> u32;
+        extern "C" fn GetExitCodeProcess(h: isize, code: u32*) -> i32;
+        extern "C" fn TerminateProcess(h: isize, code: u32) -> i32;
+        extern "C" fn CloseHandle(h: isize) -> i32;
+        extern "C" fn CreatePipe(r: isize*, w: isize*, sa: void*, size: u32) -> i32;
+        extern "C" fn SetHandleInformation(h: isize, mask: u32, flags: u32) -> i32;
+        extern "C" fn GetStdHandle(which: u32) -> isize;
+        extern "C" fn GetCurrentProcess() -> isize;
+        extern "C" fn DuplicateHandle(from: isize, h: isize, to: isize, out: isize*, access: u32, inherit: i32, options: u32) -> i32;
+        extern "C" fn ReadFile(h: isize, buf: void*, n: u32, got: u32*, overlapped: void*) -> i32;
+        extern "C" fn WriteFile(h: isize, buf: void*, n: u32, put: u32*, overlapped: void*) -> i32;
 
         // STARTUPINFOA
-        internal extern struct startup_info {
+        extern struct startup_info {
             cb: u32 = 104; // its size
             reserved: usize = 0;
             desktop: usize = 0;
@@ -113,7 +113,7 @@ namespace process {
         }
 
         // PROCESS_INFORMATION
-        internal extern struct process_info {
+        extern struct process_info {
             process: isize = 0;
             thread: isize = 0;
             pid: u32 = 0;
@@ -121,7 +121,7 @@ namespace process {
         }
 
         // SECURITY_ATTRIBUTES, for handles a child inherits
-        internal extern struct security_attributes {
+        extern struct security_attributes {
             size: u32 = 24;
             descriptor: usize = 0;
             inherit: i32 = 1;
@@ -133,24 +133,24 @@ namespace process {
     // would wait for that one to exit), so making them and starting the child happen under this lock.
     // ponytail: only std's own spawns take it; STARTUPINFOEX's handle list if other code spawns too
     @attributes([@cfg("os", "windows")])
-    internal var spawn_lock: i32 = 0;
+    var spawn_lock: i32 = 0;
 
     // poll.h's struct pollfd
-    internal struct pollfd {
+    struct pollfd {
         fd: i32;
         events: i16;
         revents: i16;
     }
 
     // a call failed only because a signal handler ran (EINTR): try it again
-    fn interrupted() -> bool {
+    public fn interrupted() -> bool {
         return platform::interrupted();
     }
 
     // A pipe that a successful exec closes (close-on-exec): the child writes one byte to it only
     // when exec fails, so the parent can tell "couldn't run it" from a program exiting 127
     @attributes([@cfg("unix")])
-    internal fn exec_pipe(fds: i32[2]&) -> bool {
+    fn exec_pipe(fds: i32[2]&) -> bool {
         if (pipe(&fds[0]) != 0) {
             return false;
         }
@@ -160,7 +160,7 @@ namespace process {
 
     // in the child, after exec failed
     @attributes([@cfg("unix")])
-    internal fn exec_failed(fds: i32[2]&) -> never {
+    fn exec_failed(fds: i32[2]&) -> never {
         var b: u8 = 1;
         write(fds[1], &b, 1);
         _exit(127);
@@ -168,7 +168,7 @@ namespace process {
 
     // in the parent: did the child's exec fail? (reaps the child when it did)
     @attributes([@cfg("unix")])
-    internal fn exec_error(fds: i32[2]&, pid: i32) -> bool {
+    fn exec_error(fds: i32[2]&, pid: i32) -> bool {
         close(fds[1]);
         var b: u8 = 0;
         var n = read(fds[0], &b, 1);
@@ -185,7 +185,7 @@ namespace process {
 
     // wait for a child; its exit code, or 128 + the signal that killed it
     @attributes([@cfg("unix")])
-    internal fn wait_for(pid: i32) -> process_error!i32 {
+    fn wait_for(pid: i32) -> process_error!i32 {
         var status: i32 = 0;
         while (waitpid(pid, &status, 0) < 0) {
             if (!interrupted()) {
@@ -199,19 +199,19 @@ namespace process {
     }
 
     // why a program couldn't be run
-    error process_error {
+    public error process_error {
         SPAWN_FAILED, // not found, not executable, or out of processes
     }
 
     // an environment variable (valid until the environment changes)
-    fn env(name: str) -> str? {
+    public fn env(name: str) -> str? {
         var n = std::string::from(name);
         val v = getenv(n.c_str()) ?? return null;
         return @cast<str>(@slice(@cast<u8*>(v), strlen(v)));
     }
 
     // set environment variable name to value, for this process and the programs it starts
-    fn set_env(name: str, value: str) -> void {
+    public fn set_env(name: str, value: str) -> void {
         var n = std::string::from(name);
         var v = std::string::from(value);
         comptime if (@cfg("os", "windows")) {
@@ -222,7 +222,7 @@ namespace process {
     }
 
     // remove environment variable name
-    fn unset_env(name: str) -> void {
+    public fn unset_env(name: str) -> void {
         var n = std::string::from(name);
         comptime if (@cfg("os", "windows")) {
             win::_putenv_s(n.c_str(), ""); // an empty value removes it
@@ -234,7 +234,7 @@ namespace process {
     // the path of this program's executable, with symlinks resolved (null if the system won't say;
     // Linux, macOS, FreeBSD and Windows do)
     <A: std::mem::allocator = std::mem::default_allocator>
-    fn exe_path(allocator: A = {}) -> std::string<A>? {
+    public fn exe_path(allocator: A = {}) -> std::string<A>? {
         var buf: u8[4096];
         comptime if (@cfg("os", "macos")) {
             // the path it was started by, which may go through symlinks
@@ -269,7 +269,7 @@ namespace process {
 
     // the working directory (where relative paths start)
     <A: std::mem::allocator = std::mem::default_allocator>
-    fn cwd(allocator: A = {}) -> std::string<A> {
+    public fn cwd(allocator: A = {}) -> std::string<A> {
         var size: usize = 256;
         loop {
             val buf: u8* = allocator.malloc<u8>(size) catch @panic("out of memory");
@@ -293,7 +293,7 @@ namespace process {
     }
 
     // change the working directory to path
-    fn set_cwd(path: str) -> std::fs::fs_error!void {
+    public fn set_cwd(path: str) -> std::fs::fs_error!void {
         var p = std::string::from(path);
         comptime if (@cfg("os", "windows")) {
             if (win::_chdir(p.c_str()) != 0) {
@@ -307,7 +307,7 @@ namespace process {
     }
 
     // run a program (found on PATH) and wait for it; its exit code, or 128 + signal
-    fn run(argv: str[..]) -> process_error!i32 {
+    public fn run(argv: str[..]) -> process_error!i32 {
         if (argv.len == 0) {
             return process_error::SPAWN_FAILED;
         }
@@ -322,7 +322,7 @@ namespace process {
 
     // run, through fork and exec
     @attributes([@cfg("unix")])
-    internal fn run_posix(argv: str[..]) -> process_error!i32 {
+    fn run_posix(argv: str[..]) -> process_error!i32 {
         var owned: std::vec<std::string> = {};
         for (a) in argv {
             owned.push(std::string::from(a)) catch @panic("out of memory");
@@ -355,7 +355,7 @@ namespace process {
 
     // what a program printed, and how it ended
     <A: std::mem::allocator = std::mem::default_allocator>
-    struct output {
+    public struct output {
         code: i32;           // exit code, or 128 + signal
         out: std::string<A>; // its stdout
         err: std::string<A>; // its stderr
@@ -364,7 +364,7 @@ namespace process {
     // run a program (found on PATH) with `input` as its stdin; waits and collects its output, in
     // memory from allocator
     <A: std::mem::allocator = std::mem::default_allocator>
-    fn capture(argv: str[..], input: str, allocator: A = {}) -> process_error!output<A> {
+    public fn capture(argv: str[..], input: str, allocator: A = {}) -> process_error!output<A> {
         if (argv.len == 0) {
             return process_error::SPAWN_FAILED;
         }
@@ -379,7 +379,7 @@ namespace process {
 
     // capture, through fork and exec
     <A: std::mem::allocator>
-    internal fn capture_posix(argv: str[..], input: str, allocator: A) -> process_error!output<A> {
+    fn capture_posix(argv: str[..], input: str, allocator: A) -> process_error!output<A> {
         var owned: std::vec<std::string> = {};
         for (a) in argv {
             owned.push(std::string::from(a)) catch @panic("out of memory");
@@ -433,7 +433,7 @@ namespace process {
     // feed the child its input while collecting its stdout and stderr, all at once: a child
     // blocked writing one pipe never waits on us reading another. Closes the three fds.
     <A: std::mem::allocator>
-    internal fn pump(inp: i32, outp: i32, errp: i32, input: str, r: output<A>&) -> void {
+    fn pump(inp: i32, outp: i32, errp: i32, input: str, r: output<A>&) -> void {
         var fds: pollfd[3];
         fds[0] = { fd: inp, events: 4, revents: 0 }; // POLLOUT
         fds[1] = { fd: outp, events: 1, revents: 0 }; // POLLIN
@@ -503,14 +503,14 @@ namespace process {
 
     // close the ends of these pipes that were opened (-1 marks one that wasn't)
     @attributes([@cfg("unix")])
-    internal fn close_all(a: i32[2]&, b: i32[2]&, c: i32[2]&) -> void {
+    fn close_all(a: i32[2]&, b: i32[2]&, c: i32[2]&) -> void {
         close_pipe(a);
         close_pipe(b);
         close_pipe(c);
     }
 
     @attributes([@cfg("unix")])
-    internal fn close_pipe(p: i32[2]&) -> void {
+    fn close_pipe(p: i32[2]&) -> void {
         for (fd) in *p {
             if (fd >= 0) {
                 close(fd);
@@ -520,7 +520,7 @@ namespace process {
 
     // argv as one Windows command line, each argument quoted so that the C runtime's parser
     // (CommandLineToArgvW's rules) gives the program back the same arguments
-    fn windows_args(argv: str[..]) -> std::string {
+    public fn windows_args(argv: str[..]) -> std::string {
         var out = std::string::from("");
         for (a, i) in argv {
             if (i > 0) {
@@ -565,7 +565,7 @@ namespace process {
     // Windows: start argv (CreateProcessA searches PATH) with these as its stdin, stdout and stderr
     // (inheritable handles); the process's handle, or 0. Under spawn_lock
     @attributes([@cfg("os", "windows")])
-    internal fn win_start(argv: str[..], std_in: isize, std_out: isize, std_err: isize) -> isize {
+    fn win_start(argv: str[..], std_in: isize, std_out: isize, std_err: isize) -> isize {
         // a .bat or .cmd runs through cmd.exe, which reads the line by its own rules, not the ones
         // windows_args quotes for (an argument could become a command): refused. Windows drops a
         // name's trailing dots and spaces, so "x.bat." is one too
@@ -592,7 +592,7 @@ namespace process {
 
     // wait for a process and close its handle: its exit code
     @attributes([@cfg("os", "windows")])
-    internal fn win_wait(h: isize) -> i32 {
+    fn win_wait(h: isize) -> i32 {
         win::WaitForSingleObject(h, 0xffffffff); // INFINITE
         var code: u32 = 0;
         win::GetExitCodeProcess(h, &code);
@@ -602,7 +602,7 @@ namespace process {
 
     // an inheritable copy of this process's stdin, stdout or stderr (0 when it has none)
     @attributes([@cfg("os", "windows")])
-    internal fn win_inheritable(which: u32) -> isize {
+    fn win_inheritable(which: u32) -> isize {
         val h = win::GetStdHandle(which);
         var copy_of: isize = 0;
         if (h == 0 || h == -1) {
@@ -616,7 +616,7 @@ namespace process {
     }
 
     @attributes([@cfg("os", "windows")])
-    internal fn win_close(h: isize) -> void {
+    fn win_close(h: isize) -> void {
         if (h != 0 && h != -1) {
             win::CloseHandle(h);
         }
@@ -624,7 +624,7 @@ namespace process {
 
     // run, through CreateProcessA: the child gets this program's stdin, stdout and stderr
     @attributes([@cfg("os", "windows")])
-    internal fn run_windows(argv: str[..]) -> process_error!i32 {
+    fn run_windows(argv: str[..]) -> process_error!i32 {
         std::thread::lock_word(&spawn_lock);
         val i = win_inheritable(0xfffffff6); // STD_INPUT_HANDLE
         val o = win_inheritable(0xfffffff5); // STD_OUTPUT_HANDLE
@@ -642,7 +642,7 @@ namespace process {
 
     // write input to the child's stdin, then close it (on a thread of its own)
     @attributes([@cfg("os", "windows")])
-    internal fn win_feed(h: isize, input: str) -> void {
+    fn win_feed(h: isize, input: str) -> void {
         var sent: usize = 0;
         while (sent < input.len) {
             var n = input.len - sent;
@@ -660,7 +660,7 @@ namespace process {
 
     // read a pipe to its end (the child closed its side), then close it
     <A: std::mem::allocator>
-    internal fn win_drain(h: isize, into: std::string<A>&) -> void {
+    fn win_drain(h: isize, into: std::string<A>&) -> void {
         var buf: u8[4096];
         loop {
             var got: u32 = 0;
@@ -674,7 +674,7 @@ namespace process {
 
     // a thread that couldn't start: close the handle it would have, and say so
     @attributes([@cfg("os", "windows")])
-    internal fn not_started(h: isize, started: bool&) -> std::thread::thread {
+    fn not_started(h: isize, started: bool&) -> std::thread::thread {
         win::CloseHandle(h);
         *started = false;
         return {};
@@ -684,7 +684,7 @@ namespace process {
     // the input and another reads stderr while this one reads stdout, so the child never waits on
     // us. The stderr thread collects into its own string (allocator may not be safe across threads)
     <A: std::mem::allocator>
-    internal fn capture_windows(argv: str[..], input: str, allocator: A) -> process_error!output<A> {
+    fn capture_windows(argv: str[..], input: str, allocator: A) -> process_error!output<A> {
         // ends: the child's stdin (read, write), stdout (read, write), stderr (read, write)
         var ends: isize[6] = { 0, 0, 0, 0, 0, 0 };
         var sa: win::security_attributes = {};

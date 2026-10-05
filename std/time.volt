@@ -4,54 +4,54 @@
 
 namespace time {
     // a span of time
-    struct duration {
+    public struct duration {
         ns: i64; // nanoseconds
     }
 
     // n nanoseconds
-    fn nanos(n: i64) -> duration {
+    public fn nanos(n: i64) -> duration {
         return { ns: n };
     }
 
     // n microseconds
-    fn micros(n: i64) -> duration {
+    public fn micros(n: i64) -> duration {
         return { ns: n * 1000 };
     }
 
     // n milliseconds
-    fn millis(n: i64) -> duration {
+    public fn millis(n: i64) -> duration {
         return { ns: n * 1000000 };
     }
 
     // n seconds
-    fn secs(n: i64) -> duration {
+    public fn secs(n: i64) -> duration {
         return { ns: n * 1000000000 };
     }
 
     // a point on the monotonic clock: it never jumps back (the wall clock can), and only differences
     // between instants mean anything
-    struct instant {
+    public struct instant {
         ns: i64; // nanoseconds since some fixed point (boot, usually)
     }
 
     // C's struct timespec: seconds and nanoseconds, two 64-bit fields on 64-bit systems
-    struct timespec {
+    public struct timespec {
         sec: i64;
         nsec: i64;
     }
 
-    internal extern "C" fn clock_gettime(clock: i32, out: timespec*) -> i32;
-    internal extern "C" fn nanosleep(want: timespec*, left: timespec*) -> i32;
+    extern "C" fn clock_gettime(clock: i32, out: timespec*) -> i32;
+    extern "C" fn nanosleep(want: timespec*, left: timespec*) -> i32;
 
     namespace win {
-        internal extern "C" fn QueryPerformanceCounter(out: i64*) -> i32;
-        internal extern "C" fn QueryPerformanceFrequency(out: i64*) -> i32;
-        internal extern "C" fn GetSystemTimePreciseAsFileTime(out: u64*) -> void; // Windows 8 on
-        internal extern "C" fn Sleep(ms: u32) -> void;
+        extern "C" fn QueryPerformanceCounter(out: i64*) -> i32;
+        extern "C" fn QueryPerformanceFrequency(out: i64*) -> i32;
+        extern "C" fn GetSystemTimePreciseAsFileTime(out: u64*) -> void; // Windows 8 on
+        extern "C" fn Sleep(ms: u32) -> void;
     }
 
     // the monotonic clock in nanoseconds
-    internal fn monotonic() -> i64 {
+    fn monotonic() -> i64 {
         comptime if (@cfg("os", "windows")) {
             var count: i64 = 0;
             var freq: i64 = 1;
@@ -66,7 +66,7 @@ namespace time {
 
     // clock id's time in nanoseconds, by clock_gettime (not on Windows, whose clocks are above;
     // without an OS, a program that reads the clock doesn't link, as with any missing C function)
-    internal fn clock(id: i32) -> i64 {
+    fn clock(id: i32) -> i64 {
         var t: timespec = { sec: 0, nsec: 0 };
         comptime if (!@cfg("os", "windows")) {
             clock_gettime(id, &t);
@@ -75,12 +75,12 @@ namespace time {
     }
 
     // now, on the monotonic clock
-    fn now() -> instant {
+    public fn now() -> instant {
         return { ns: monotonic() };
     }
 
     // the wall clock: nanoseconds since 1970-01-01 00:00 UTC
-    fn unix_nanos() -> i64 {
+    public fn unix_nanos() -> i64 {
         comptime if (@cfg("os", "windows")) {
             // 100 ns ticks since 1601
             var ticks: u64 = 0;
@@ -92,7 +92,7 @@ namespace time {
     }
 
     // wait for at least d
-    fn sleep(d: duration) -> void {
+    public fn sleep(d: duration) -> void {
         if (d.ns <= 0) {
             return;
         }
@@ -120,7 +120,7 @@ namespace time {
     // a time on the wall clock (nanoseconds since 1970, as unix_nanos gives) as UTC ISO 8601:
     // "2026-09-30T12:34:56Z", with ".789" milliseconds when there are any
     <A: std::mem::allocator = std::mem::default_allocator>
-    fn utc_iso8601(unix_ns: i64, allocator: A = {}) -> std::string<A> {
+    public fn utc_iso8601(unix_ns: i64, allocator: A = {}) -> std::string<A> {
         // floor division, so times before 1970 count back from it
         var secs = unix_ns / 1000000000;
         var frac = unix_ns % 1000000000;
@@ -165,36 +165,36 @@ namespace time {
 }
 
 // how long ago this was, on the monotonic clock
-attach fn elapsed(this: std::time::instant&) -> std::time::duration {
+public attach fn elapsed(this: std::time::instant&) -> std::time::duration {
     return { ns: std::time::now().ns - this.ns };
 }
 
 // the time from earlier to this
-attach fn since(this: std::time::instant&, earlier: std::time::instant) -> std::time::duration {
+public attach fn since(this: std::time::instant&, earlier: std::time::instant) -> std::time::duration {
     return { ns: this.ns - earlier.ns };
 }
 
 // the duration in nanoseconds
-attach fn as_nanos(this: std::time::duration&) -> i64 {
+public attach fn as_nanos(this: std::time::duration&) -> i64 {
     return this.ns;
 }
 
 // the duration in whole microseconds
-attach fn as_micros(this: std::time::duration&) -> i64 {
+public attach fn as_micros(this: std::time::duration&) -> i64 {
     return this.ns / 1000;
 }
 
 // the duration in whole milliseconds
-attach fn as_millis(this: std::time::duration&) -> i64 {
+public attach fn as_millis(this: std::time::duration&) -> i64 {
     return this.ns / 1000000;
 }
 
 // the duration in whole seconds
-attach fn as_secs(this: std::time::duration&) -> i64 {
+public attach fn as_secs(this: std::time::duration&) -> i64 {
     return this.ns / 1000000000;
 }
 
 // the duration in seconds, with the fraction
-attach fn as_secs_f64(this: std::time::duration&) -> f64 {
+public attach fn as_secs_f64(this: std::time::duration&) -> f64 {
     return @cast<f64>(this.ns) / 1000000000.0;
 }

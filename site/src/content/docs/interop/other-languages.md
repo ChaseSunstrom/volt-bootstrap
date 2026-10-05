@@ -70,12 +70,12 @@ and the runtime. A program that links the static one also links `-lm -lpthread`.
 threads, and before glibc 2.34 they're in libpthread; elsewhere the flag does no harm.
 
 ```volt
-struct vec2 {
+public struct vec2 {
     x: f64;
     y: f64;
 }
 
-error math_error { DIVIDE_BY_ZERO }
+public error math_error { DIVIDE_BY_ZERO }
 
 export fn vec2_len2(v: vec2) -> f64 {
     return v.x * v.x + v.y * v.y;

@@ -5,18 +5,18 @@
 // as lua_error::ERROR with its message. register(name, f) gives Lua a Volt function.
 use { "lua.h", "lauxlib.h", "lualib.h" } as c;
 
-error lua_error {
+public error lua_error {
     ERROR: std::string,
 }
 
 // ---------- the state ----------
 
-struct state {
+public struct state {
     L: c::lua_State* = null;
 }
 
 // a Lua state with the standard libraries
-fn start() -> state {
+public fn start() -> state {
     val L = c::luaL_newstate() ?? @panic("lua: out of memory");
     // what luaL_openlibs does (a macro in Lua 5.5)
     open(L, "_G", c::luaopen_base);
@@ -32,13 +32,13 @@ fn start() -> state {
     return { L: L };
 }
 
-fn open(L: c::lua_State*, name: str, f: extern "C" fn(c::lua_State*) -> i32) -> void {
+public fn open(L: c::lua_State*, name: str, f: extern "C" fn(c::lua_State*) -> i32) -> void {
     var n = std::string::from(name);
     c::luaL_requiref(L, n.c_str(), f, 1);
     c::lua_settop(L, -2);
 }
 
-attach fn delete(this: state&) -> void {
+public attach fn delete(this: state&) -> void {
     if (this.L != null) {
         c::lua_close(this.L);
         this.L = null;
@@ -46,7 +46,7 @@ attach fn delete(this: state&) -> void {
 }
 
 // the message on top of the stack, popped, as an error
-fn failed(L: c::lua_State*) -> lua_error {
+public fn failed(L: c::lua_State*) -> lua_error {
     var msg = std::string::from("a Lua error");
     var n: usize = 0;
     val s = c::lua_tolstring(L, -1, &n);
@@ -58,7 +58,7 @@ fn failed(L: c::lua_State*) -> lua_error {
 }
 
 // loads a chunk (the function it compiles to is pushed)
-fn load(L: c::lua_State*, code: str, name: str) -> lua_error!void {
+public fn load(L: c::lua_State*, code: str, name: str) -> lua_error!void {
     var n = std::string::from(name);
     if (c::luaL_loadbufferx(L, @cast<cstr>(code.ptr), code.len, n.c_str(), null) != 0) {
         return failed(L);
@@ -66,7 +66,7 @@ fn load(L: c::lua_State*, code: str, name: str) -> lua_error!void {
 }
 
 // runs a chunk of Lua
-attach fn run(this: state&, code: str) -> lua_error!void {
+public attach fn run(this: state&, code: str) -> lua_error!void {
     try load(this.L, code, "=run");
     if (c::lua_pcallk(this.L, 0, 0, 0, 0, null) != 0) {
         return failed(this.L);
@@ -74,7 +74,7 @@ attach fn run(this: state&, code: str) -> lua_error!void {
 }
 
 // an expression's value
-attach fn eval(this: state&, expr: str) -> lua_error!value {
+public attach fn eval(this: state&, expr: str) -> lua_error!value {
     var code = std::string::from("return ");
     code.append(expr);
     try load(this.L, code.as_str(), "=eval");
@@ -85,7 +85,7 @@ attach fn eval(this: state&, expr: str) -> lua_error!value {
 }
 
 // the global called name (nil when there's none)
-attach fn global(this: state&, name: str) -> value {
+public attach fn global(this: state&, name: str) -> value {
     var n = std::string::from(name);
     c::lua_getglobal(this.L, n.c_str());
     return pop(this.L);
@@ -93,7 +93,7 @@ attach fn global(this: state&, name: str) -> value {
 
 // sets the global called name to x
 <T: type>
-attach fn set_global(this: state&, name: str, x: T) -> void {
+public attach fn set_global(this: state&, name: str, x: T) -> void {
     push(this.L, &x);
     var n = std::string::from(name);
     c::lua_setglobal(this.L, n.c_str());
@@ -102,7 +102,7 @@ attach fn set_global(this: state&, name: str, x: T) -> void {
 // gives Lua a Volt function as the global name: it reads its arguments and returns its results
 // through lua::args (an error raised from it would skip Volt's deletes, so return nil and a message
 // instead)
-attach fn register(this: state&, name: str, f: extern "C" fn(void*) -> i32) -> void {
+public attach fn register(this: state&, name: str, f: extern "C" fn(void*) -> i32) -> void {
     c::lua_pushcclosure(this.L, @cast<extern "C" fn(c::lua_State*) -> i32>(f), 0);
     var n = std::string::from(name);
     c::lua_setglobal(this.L, n.c_str());
@@ -111,19 +111,19 @@ attach fn register(this: state&, name: str, f: extern "C" fn(void*) -> i32) -> v
 // ---------- values ----------
 
 // a Lua value, held in the registry
-struct value {
+public struct value {
     L: c::lua_State* = null;
     ref: i32 = -1; // LUA_REFNIL: nil
 }
 
-attach fn delete(this: value&) -> void {
+public attach fn delete(this: value&) -> void {
     if (this.L != null && this.ref >= 0) {
         c::luaL_unref(this.L, c::LUA_REGISTRYINDEX, this.ref);
         this.ref = -1;
     }
 }
 
-attach fn copy(this: value&) -> value {
+public attach fn copy(this: value&) -> value {
     if (this.L == null) {
         return {};
     }
@@ -132,39 +132,39 @@ attach fn copy(this: value&) -> value {
 }
 
 // nil, as a value to pass
-fn nil() -> value {
+public fn nil() -> value {
     return {};
 }
 
 // the value on top of the stack, popped
-fn pop(L: c::lua_State*) -> value {
+public fn pop(L: c::lua_State*) -> value {
     return { L: L, ref: c::luaL_ref(L, c::LUA_REGISTRYINDEX) };
 }
 
 // pushes this value
-attach fn push(this: value&) -> void {
+public attach fn push(this: value&) -> void {
     c::lua_rawgeti(this.L, c::LUA_REGISTRYINDEX, @cast<i64>(this.ref));
 }
 
 // x pushed on the stack
 <T: type>
-fn push(L: c::lua_State*, x: T&) -> void {
+public fn push(L: c::lua_State*, x: T&) -> void {
     @compile_error("Lua values are integers, f64, f32, bool, str, std::string and lua::value");
 }
-fn push<i64>(L: c::lua_State*, x: i64&) -> void { c::lua_pushinteger(L, *x); }
-fn push<i32>(L: c::lua_State*, x: i32&) -> void { c::lua_pushinteger(L, *x as i64); }
-fn push<f64>(L: c::lua_State*, x: f64&) -> void { c::lua_pushnumber(L, *x); }
-fn push<f32>(L: c::lua_State*, x: f32&) -> void { c::lua_pushnumber(L, *x as f64); }
-fn push<bool>(L: c::lua_State*, x: bool&) -> void {
+public fn push<i64>(L: c::lua_State*, x: i64&) -> void { c::lua_pushinteger(L, *x); }
+public fn push<i32>(L: c::lua_State*, x: i32&) -> void { c::lua_pushinteger(L, *x as i64); }
+public fn push<f64>(L: c::lua_State*, x: f64&) -> void { c::lua_pushnumber(L, *x); }
+public fn push<f32>(L: c::lua_State*, x: f32&) -> void { c::lua_pushnumber(L, *x as f64); }
+public fn push<bool>(L: c::lua_State*, x: bool&) -> void {
     var b = 0;
     if (*x) {
         b = 1;
     }
     c::lua_pushboolean(L, b);
 }
-fn push<str>(L: c::lua_State*, x: str&) -> void { c::lua_pushlstring(L, @cast<cstr>(x.ptr), x.len); }
-fn push<std::string>(L: c::lua_State*, x: std::string&) -> void { c::lua_pushlstring(L, @cast<cstr>(x.as_str().ptr), x.len()); }
-fn push<value>(L: c::lua_State*, x: value&) -> void {
+public fn push<str>(L: c::lua_State*, x: str&) -> void { c::lua_pushlstring(L, @cast<cstr>(x.ptr), x.len); }
+public fn push<std::string>(L: c::lua_State*, x: std::string&) -> void { c::lua_pushlstring(L, @cast<cstr>(x.as_str().ptr), x.len()); }
+public fn push<value>(L: c::lua_State*, x: value&) -> void {
     if (x.L == null) {
         c::lua_pushnil(L);
     } else {
@@ -174,7 +174,7 @@ fn push<value>(L: c::lua_State*, x: value&) -> void {
 
 // this(args...): its first result (nil when there's none)
 <Args: type...>
-attach fn call(this: value&, args: Args...) -> lua_error!value {
+public attach fn call(this: value&, args: Args...) -> lua_error!value {
     this.push();
     var n = 0;
     comptime for (a) in args {
@@ -188,7 +188,7 @@ attach fn call(this: value&, args: Args...) -> lua_error!value {
 }
 
 // this[key], for a table (or anything with __index)
-attach fn get(this: value&, key: str) -> lua_error!value {
+public attach fn get(this: value&, key: str) -> lua_error!value {
     this.push();
     var k = std::string::from(key);
     c::lua_pushlstring(this.L, k.c_str(), k.len());
@@ -203,7 +203,7 @@ attach fn get(this: value&, key: str) -> lua_error!value {
 }
 
 // this[i], for a sequence (1 is the first)
-attach fn at(this: value&, i: i64) -> lua_error!value {
+public attach fn at(this: value&, i: i64) -> lua_error!value {
     if (this.type_name() != "table") {
         return lua_error::ERROR(std::fmt::format("indexing a {} value with {}", this.type_name(), i));
     }
@@ -215,7 +215,7 @@ attach fn at(this: value&, i: i64) -> lua_error!value {
 }
 
 // #this: a string's or sequence's length
-attach fn len(this: value&) -> i64 {
+public attach fn len(this: value&) -> i64 {
     this.push();
     val n = c::lua_rawlen(this.L, -1);
     c::lua_settop(this.L, -2);
@@ -223,7 +223,7 @@ attach fn len(this: value&) -> i64 {
 }
 
 // "nil", "number", "string", "table", "function", ...
-attach fn type_name(this: value&) -> str {
+public attach fn type_name(this: value&) -> str {
     if (this.L == null) {
         return "nil";
     }
@@ -234,11 +234,11 @@ attach fn type_name(this: value&) -> str {
     return @cast<str>(@slice(@cast<u8*>(s), strlen(s)));
 }
 
-attach fn is_nil(this: value&) -> bool {
+public attach fn is_nil(this: value&) -> bool {
     return this.type_name() == "nil";
 }
 
-attach fn to_i64(this: value&) -> lua_error!i64 {
+public attach fn to_i64(this: value&) -> lua_error!i64 {
     this.push();
     var ok = 0;
     val x = c::lua_tointegerx(this.L, -1, &ok);
@@ -249,7 +249,7 @@ attach fn to_i64(this: value&) -> lua_error!i64 {
     return x;
 }
 
-attach fn to_f64(this: value&) -> lua_error!f64 {
+public attach fn to_f64(this: value&) -> lua_error!f64 {
     this.push();
     var ok = 0;
     val x = c::lua_tonumberx(this.L, -1, &ok);
@@ -261,7 +261,7 @@ attach fn to_f64(this: value&) -> lua_error!f64 {
 }
 
 // Lua's truth: false and nil are false, everything else is true
-attach fn to_bool(this: value&) -> bool {
+public attach fn to_bool(this: value&) -> bool {
     if (this.L == null) {
         return false;
     }
@@ -272,7 +272,7 @@ attach fn to_bool(this: value&) -> bool {
 }
 
 // what tostring(this) gives
-attach fn to_string(this: value&) -> std::string {
+public attach fn to_string(this: value&) -> std::string {
     if (this.L == null) {
         return std::string::from("nil");
     }
@@ -287,25 +287,25 @@ attach fn to_string(this: value&) -> std::string {
     return out;
 }
 
-extern "C" fn strlen(s: cstr) -> usize;
+public extern "C" fn strlen(s: cstr) -> usize;
 
 // ---------- Volt functions Lua calls ----------
 
 // a call from Lua to a registered Volt function: its arguments (1 is the first) and its results
-struct args {
+public struct args {
     L: c::lua_State*;
 }
 
 // the arguments of the call a registered function was given L for
-fn args_of(L: void*) -> args {
+public fn args_of(L: void*) -> args {
     return { L: @cast<c::lua_State*>(L) };
 }
 
-attach fn len(this: args&) -> i32 {
+public attach fn len(this: args&) -> i32 {
     return c::lua_gettop(this.L);
 }
 
-attach fn integer(this: args&, i: i32) -> i64? {
+public attach fn integer(this: args&, i: i32) -> i64? {
     var ok = 0;
     val x = c::lua_tointegerx(this.L, i, &ok);
     if (ok == 0) {
@@ -314,7 +314,7 @@ attach fn integer(this: args&, i: i32) -> i64? {
     return x;
 }
 
-attach fn number(this: args&, i: i32) -> f64? {
+public attach fn number(this: args&, i: i32) -> f64? {
     var ok = 0;
     val x = c::lua_tonumberx(this.L, i, &ok);
     if (ok == 0) {
@@ -323,7 +323,7 @@ attach fn number(this: args&, i: i32) -> f64? {
     return x;
 }
 
-attach fn text(this: args&, i: i32) -> std::string? {
+public attach fn text(this: args&, i: i32) -> std::string? {
     if (c::lua_type(this.L, i) != 4) { // LUA_TSTRING
         return null;
     }
@@ -332,13 +332,13 @@ attach fn text(this: args&, i: i32) -> std::string? {
     return std::string::from(@cast<str>(@slice(@cast<u8*>(s), n)));
 }
 
-attach fn get(this: args&, i: i32) -> value {
+public attach fn get(this: args&, i: i32) -> value {
     c::lua_pushvalue(this.L, i);
     return pop(this.L);
 }
 
 // pushes a result; the function returns how many it pushed
 <T: type>
-attach fn ret(this: args&, x: T) -> void {
+public attach fn ret(this: args&, x: T) -> void {
     push(this.L, &x);
 }

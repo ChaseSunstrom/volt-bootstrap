@@ -7,26 +7,26 @@
 //
 // The runtime starts once per process; it stays loaded until the process ends.
 
-error dotnet_error {
+public error dotnet_error {
     FAILED: std::string,
 }
 
-extern "C" fn hostfxr_initialize_for_runtime_config(config: cstr, params: void*, handle: void**) -> i32;
-extern "C" fn hostfxr_get_runtime_delegate(handle: void*, kind: i32, out: void**) -> i32;
-extern "C" fn hostfxr_close(handle: void*) -> i32;
-extern "C" fn free(p: void*) -> void;
-extern "C" fn strlen(s: cstr) -> usize;
+public extern "C" fn hostfxr_initialize_for_runtime_config(config: cstr, params: void*, handle: void**) -> i32;
+public extern "C" fn hostfxr_get_runtime_delegate(handle: void*, kind: i32, out: void**) -> i32;
+public extern "C" fn hostfxr_close(handle: void*) -> i32;
+public extern "C" fn free(p: void*) -> void;
+public extern "C" fn strlen(s: cstr) -> usize;
 
 // hostfxr's delegate kinds: hdt_load_assembly_and_get_function_pointer
-val LOAD_ASSEMBLY_AND_GET_FUNCTION_POINTER: i32 = 5;
+public val LOAD_ASSEMBLY_AND_GET_FUNCTION_POINTER: i32 = 5;
 
-struct runtime {
+public struct runtime {
     handle: void* = null;
     load: void* = null;
 }
 
 // hostfxr's codes: 0 to 2 are success, the others are errors (0x80008083 and so on)
-fn status(what: str, rc: i32) -> dotnet_error!void {
+public fn status(what: str, rc: i32) -> dotnet_error!void {
     if (rc >= 0 && rc <= 2) {
         return;
     }
@@ -34,7 +34,7 @@ fn status(what: str, rc: i32) -> dotnet_error!void {
 }
 
 // starts the runtime a library's NAME.runtimeconfig.json asks for
-fn start(runtimeconfig: str) -> dotnet_error!runtime {
+public fn start(runtimeconfig: str) -> dotnet_error!runtime {
     var path = std::string::from(runtimeconfig);
     var out: runtime = {};
     try status(std::fmt::format("starting .NET with {}", runtimeconfig).as_str(), hostfxr_initialize_for_runtime_config(path.c_str(), null, &out.handle));
@@ -42,7 +42,7 @@ fn start(runtimeconfig: str) -> dotnet_error!runtime {
     return out;
 }
 
-attach fn delete(this: runtime&) -> void {
+public attach fn delete(this: runtime&) -> void {
     if (this.handle != null) {
         hostfxr_close(this.handle);
         this.handle = null;
@@ -51,7 +51,7 @@ attach fn delete(this: runtime&) -> void {
 
 // the address of a static [UnmanagedCallersOnly] method: the assembly's path, its type as
 // "Namespace.Type, Assembly", and the method's name
-attach fn function(this: runtime&, assembly: str, type_name: str, method: str) -> dotnet_error!(void*) {
+public attach fn function(this: runtime&, assembly: str, type_name: str, method: str) -> dotnet_error!(void*) {
     var a = std::string::from(assembly);
     var t = std::string::from(type_name);
     var m = std::string::from(method);
@@ -66,7 +66,7 @@ attach fn function(this: runtime&, assembly: str, type_name: str, method: str) -
 }
 
 // the text of a string .NET returned from Marshal.StringToCoTaskMemUTF8, which it frees
-fn take_string(p: void*) -> std::string {
+public fn take_string(p: void*) -> std::string {
     if (p == null) {
         return std::string::from("");
     }

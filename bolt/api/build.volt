@@ -3,7 +3,7 @@
 // carries them out after the build file finishes. Other output is shown as-is.
 
 // arguments travel on one tab-separated line, so they can't hold tabs or newlines
-fn check(s: str) -> void {
+public fn check(s: str) -> void {
     for (c) in s {
         if (c == 9 || c == 10 || c == 13) {
             @panic("bolt: build-file arguments can't contain tabs or newlines");
@@ -12,7 +12,7 @@ fn check(s: str) -> void {
 }
 
 // -Dname=value from the bolt command line, or `fallback`
-fn option(name: str, fallback: str) -> str {
+public fn option(name: str, fallback: str) -> str {
     var i: usize = 1;
     while (i < std::process::arg_count()) {
         val a = std::process::arg(i) ?? "";
@@ -26,7 +26,7 @@ fn option(name: str, fallback: str) -> str {
 
 // another executable, built from .volt files and directories (relative to the package)
 <Paths: type...>
-fn exe(name: str, paths: Paths...) -> void {
+public fn exe(name: str, paths: Paths...) -> void {
     check(name);
     std::io::print("@bolt\texe\t{}", name);
     comptime for (p) in paths {
@@ -39,39 +39,39 @@ fn exe(name: str, paths: Paths...) -> void {
 }
 
 // one more .volt file in every executable
-fn source(path: str) -> void {
+public fn source(path: str) -> void {
     check(path);
     std::io::println("@bolt\tsource\t{}", path);
 }
 
 // a C file compiled into every executable
-fn c_source(path: str) -> void {
+public fn c_source(path: str) -> void {
     check(path);
     std::io::println("@bolt\tc_source\t{}", path);
 }
 
 // a C library linked into every executable (-lNAME)
-fn link_c(name: str) -> void {
+public fn link_c(name: str) -> void {
     check(name);
     std::io::println("@bolt\tlink_c\t{}", name);
 }
 
 // one more argument for the C compiler when linking every executable: -I/-L/-D flags, a library.
 // Steps see them all (with link_c's and c_source's) in $BOLT_CC_ARGS, one per line
-fn cc_arg(arg: str) -> void {
+public fn cc_arg(arg: str) -> void {
     check(arg);
     std::io::println("@bolt\tcc_arg\t{}", arg);
 }
 
 // a named step: `bolt build NAME` runs it (after the steps it depends on)
-fn step(name: str) -> void {
+public fn step(name: str) -> void {
     check(name);
     std::io::println("@bolt\tstep\t{}", name);
 }
 
 // the step runs a program
 <Args: type...>
-fn cmd(step: str, program: str, args: Args...) -> void {
+public fn cmd(step: str, program: str, args: Args...) -> void {
     check(step);
     check(program);
     std::io::print("@bolt\tcmd\t{}\t{}", step, program);
@@ -86,7 +86,7 @@ fn cmd(step: str, program: str, args: Args...) -> void {
 
 // the step runs one of this package's executables (building everything first)
 <Args: type...>
-fn run(step: str, exe: str, args: Args...) -> void {
+public fn run(step: str, exe: str, args: Args...) -> void {
     check(step);
     check(exe);
     std::io::print("@bolt\trun\t{}\t{}", step, exe);
@@ -100,14 +100,14 @@ fn run(step: str, exe: str, args: Args...) -> void {
 }
 
 // `step` needs `on` to run first ("install" builds every executable)
-fn depends(step: str, on: str) -> void {
+public fn depends(step: str, on: str) -> void {
     check(step);
     check(on);
     std::io::println("@bolt\tdepends\t{}\t{}", step, on);
 }
 
 // is feature `name` of this package on? (bolt passes them as BOLT_FEATURE_<NAME>, - as _)
-fn feature(name: str) -> bool {
+public fn feature(name: str) -> bool {
     var key = std::string::from("BOLT_FEATURE_");
     for (c) in name {
         if (c >= 'a' && c <= 'z') {
@@ -122,6 +122,6 @@ fn feature(name: str) -> bool {
 }
 
 // the profile being built: dev, release, test, bench or a custom one
-fn profile() -> str {
+public fn profile() -> str {
     return std::process::env("BOLT_PROFILE") ?? "dev";
 }

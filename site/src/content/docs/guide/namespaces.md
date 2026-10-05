@@ -94,16 +94,22 @@ A `static` local keeps its value between calls: `static var calls: i32 = 0;` ins
 
 ## Visibility
 
-Declarations are public by default. `internal` marks one as belonging to its own package: code in
-that package can use it, and anywhere else, naming it (a function, method, type or global) is a
-compile error, `'helper' is internal to package mylib`. Templates are fine: a std template that
-calls an internal helper still works when your program instantiates it.
+A package's declarations are its own unless it marks them `public`: code in the package can use
+any of them, and anywhere else, naming one that isn't public (a function, method, type or global) is
+a compile error, `'helper' isn't public in package mylib`. So a package's API is what it says is.
 
 ```volt
-internal fn helper() -> i32 { return 1; }
+public fn api() -> i32 { return helper() + 1; } // the package's API
 
-fn api() -> i32 { return helper() + 1; }
+fn helper() -> i32 { return 1; }                // its own
 ```
+
+A program's own files never need `public`: everything they declare is visible, to std's templates
+too (`internal` still keeps a declaration to the program). A struct's fields and an enum's variants
+go with their type (`internal` on a field hides just that field), an `export fn` is public, and so
+are the functions in an `attach some_trait -> T { }` block, which are the trait's. Templates are
+fine: a std template that calls one of std's own helpers still works when your program
+instantiates it.
 
 ## Packages
 

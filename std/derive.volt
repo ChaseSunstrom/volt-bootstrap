@@ -6,18 +6,18 @@
 
 namespace derive {
     // eq(other: T&): every field equal (by its own eq); == and != on the type call it
-    trait eq {}
+    public trait eq {}
     // hash(): the fields' hashes, combined (a map key)
-    trait hash {}
+    public trait hash {}
     // to_string(): the text println prints for the value
-    trait fmt {}
+    public trait fmt {}
     // to_json(): a JSON object with a member each field
-    trait json {}
+    public trait json {}
 
     // a variant's payload compared, hashed or made JSON: a tuple's element by element (a tuple has
     // none of these of its own)
     <P: type>
-    fn payload_eq(a: P&, b: P&) -> bool {
+    public fn payload_eq(a: P&, b: P&) -> bool {
         comptime match (@typeinfo(P).kind) {
             .TUPLE(ts) => {
                 comptime for (t, i) in ts {
@@ -34,7 +34,7 @@ namespace derive {
     }
 
     <P: type>
-    fn payload_hash(a: P&) -> u64 {
+    public fn payload_hash(a: P&) -> u64 {
         comptime match (@typeinfo(P).kind) {
             .TUPLE(ts) => {
                 var h: u64 = 14695981039346656037;
@@ -50,7 +50,7 @@ namespace derive {
     }
 
     <P: type>
-    fn payload_json(a: P&) -> std::json::value {
+    public fn payload_json(a: P&) -> std::json::value {
         comptime match (@typeinfo(P).kind) {
             .TUPLE(ts) => {
                 var out = std::json::array();
@@ -67,7 +67,7 @@ namespace derive {
 }
 
 <T: std::derive::eq>
-attach fn eq(this: T&, other: T&) -> bool {
+public attach fn eq(this: T&, other: T&) -> bool {
     comptime match (@typeinfo(T).kind) {
         .STRUCT(s) => {
             comptime for (f) in s.0 {
@@ -98,7 +98,7 @@ attach fn eq(this: T&, other: T&) -> bool {
 }
 
 <T: std::derive::hash>
-attach fn hash(this: T&) -> u64 {
+public attach fn hash(this: T&) -> u64 {
     var h: u64 = 14695981039346656037;
     comptime match (@typeinfo(T).kind) {
         .STRUCT(s) => {
@@ -125,12 +125,12 @@ attach fn hash(this: T&) -> u64 {
 
 // println already prints any struct field by field: this gives that text as a string
 <T: std::derive::fmt>
-attach fn to_string(this: T&) -> std::string {
+public attach fn to_string(this: T&) -> std::string {
     return std::fmt::format("{}", *this);
 }
 
 <T: std::derive::json>
-attach fn to_json(this: T&) -> std::json::value {
+public attach fn to_json(this: T&) -> std::json::value {
     var o = std::json::object();
     comptime match (@typeinfo(T).kind) {
         .STRUCT(s) => {
@@ -161,27 +161,27 @@ attach fn to_json(this: T&) -> std::json::value {
 // what a field's to_json is for the types std knows: numbers, bool, text, optionals and vectors. One
 // each number type (there's no trait for numbers); a JSON number is an f64, so an integer past 2^53
 // loses its low bits
-attach fn to_json(this: i8&) -> std::json::value { return std::json::number(@cast<f64>(*this)); }
-attach fn to_json(this: i16&) -> std::json::value { return std::json::number(@cast<f64>(*this)); }
-attach fn to_json(this: i32&) -> std::json::value { return std::json::number(@cast<f64>(*this)); }
-attach fn to_json(this: i64&) -> std::json::value { return std::json::number(@cast<f64>(*this)); }
-attach fn to_json(this: u8&) -> std::json::value { return std::json::number(@cast<f64>(*this)); }
-attach fn to_json(this: u16&) -> std::json::value { return std::json::number(@cast<f64>(*this)); }
-attach fn to_json(this: u32&) -> std::json::value { return std::json::number(@cast<f64>(*this)); }
-attach fn to_json(this: u64&) -> std::json::value { return std::json::number(@cast<f64>(*this)); }
-attach fn to_json(this: usize&) -> std::json::value { return std::json::number(@cast<f64>(*this)); }
-attach fn to_json(this: f32&) -> std::json::value { return std::json::number(@cast<f64>(*this)); }
-attach fn to_json(this: f64&) -> std::json::value { return std::json::number(*this); }
-attach fn to_json(this: bool&) -> std::json::value { return std::json::boolean(*this); }
-attach fn to_json(this: str&) -> std::json::value { return std::json::string(*this); }
+public attach fn to_json(this: i8&) -> std::json::value { return std::json::number(@cast<f64>(*this)); }
+public attach fn to_json(this: i16&) -> std::json::value { return std::json::number(@cast<f64>(*this)); }
+public attach fn to_json(this: i32&) -> std::json::value { return std::json::number(@cast<f64>(*this)); }
+public attach fn to_json(this: i64&) -> std::json::value { return std::json::number(@cast<f64>(*this)); }
+public attach fn to_json(this: u8&) -> std::json::value { return std::json::number(@cast<f64>(*this)); }
+public attach fn to_json(this: u16&) -> std::json::value { return std::json::number(@cast<f64>(*this)); }
+public attach fn to_json(this: u32&) -> std::json::value { return std::json::number(@cast<f64>(*this)); }
+public attach fn to_json(this: u64&) -> std::json::value { return std::json::number(@cast<f64>(*this)); }
+public attach fn to_json(this: usize&) -> std::json::value { return std::json::number(@cast<f64>(*this)); }
+public attach fn to_json(this: f32&) -> std::json::value { return std::json::number(@cast<f64>(*this)); }
+public attach fn to_json(this: f64&) -> std::json::value { return std::json::number(*this); }
+public attach fn to_json(this: bool&) -> std::json::value { return std::json::boolean(*this); }
+public attach fn to_json(this: str&) -> std::json::value { return std::json::string(*this); }
 
 <A: std::mem::allocator>
-attach fn to_json(this: std::string<A>&) -> std::json::value {
+public attach fn to_json(this: std::string<A>&) -> std::json::value {
     return std::json::string(this.as_str());
 }
 
 <T: type>
-attach fn to_json(this: T?&) -> std::json::value {
+public attach fn to_json(this: T?&) -> std::json::value {
     if (*this) {
         return this.value.to_json();
     }
@@ -189,7 +189,7 @@ attach fn to_json(this: T?&) -> std::json::value {
 }
 
 <T: type, A: std::mem::allocator>
-attach fn to_json(this: std::vec<T, A>&) -> std::json::value {
+public attach fn to_json(this: std::vec<T, A>&) -> std::json::value {
     var out = std::json::array();
     for (x&) in this.items() {
         out.add(x.to_json());
@@ -199,7 +199,7 @@ attach fn to_json(this: std::vec<T, A>&) -> std::json::value {
 
 // optionals and vectors as map keys (and fields of a derived hash)
 <T: type>
-attach fn hash(this: T?&) -> u64 {
+public attach fn hash(this: T?&) -> u64 {
     if (*this == null) {
         return 0;
     }
@@ -207,7 +207,7 @@ attach fn hash(this: T?&) -> u64 {
 }
 
 <T: type, A: std::mem::allocator>
-attach fn hash(this: std::vec<T, A>&) -> u64 {
+public attach fn hash(this: std::vec<T, A>&) -> u64 {
     var h: u64 = 14695981039346656037;
     for (x&) in this.items() {
         h = (h ^ x.hash()) *% 1099511628211;

@@ -3,23 +3,23 @@
 
 namespace mem {
     // an allocation that failed
-    error mem_error {
+    public error mem_error {
         OUT_OF_MEMORY // malloc or realloc returned null
     }
 
     // libc, through the runtime prelude (so user extern decls of malloc never clash)
     @attributes([@intrinsic("volt_rt_malloc")])
-    internal fn c_malloc(size: usize) -> void*;
+    fn c_malloc(size: usize) -> void*;
     @attributes([@intrinsic("volt_rt_realloc")])
-    internal fn c_realloc(ptr: void*, size: usize) -> void*;
+    fn c_realloc(ptr: void*, size: usize) -> void*;
     @attributes([@intrinsic("volt_rt_free")])
-    internal fn c_free(ptr: void*) -> void;
+    fn c_free(ptr: void*) -> void;
 
     // What everything in std that owns memory allocates through: box, vec, string, map, set, deque,
     // heap, sorted_map, shared, channel, and the functions that return such values. A failed malloc or
     // realloc returns OUT_OF_MEMORY. Like Zig's, the caller says how big a block is when it resizes or
     // frees it, so an allocator needn't remember.
-    trait allocator {
+    public trait allocator {
         // room for count T's, aligned for T
         <T: type> fn malloc(this, count: usize = 1) -> mem_error!(T*);
         // ptr's block, which holds old T's, resized to count T's (it may move; the first min(old,
@@ -38,11 +38,11 @@ namespace mem {
     // be more memory than the board has. Empty, so a box using it is just a pointer.
     // ponytail: freed small blocks stay on their free list (memory isn't handed back to the system,
     // and a thread's lists outlive it); trim them if a long-running program needs that.
-    struct default_allocator;
+    public struct default_allocator;
 
-    internal val SMALL_MAX: usize = 256;
-    internal val SMALL_CHUNK: usize = 65536;
-    internal val HEADER: usize = 16; // debug builds: the block's size, keeping 16-byte alignment
+    val SMALL_MAX: usize = 256;
+    val SMALL_CHUNK: usize = 65536;
+    val HEADER: usize = 16; // debug builds: the block's size, keeping 16-byte alignment
 
     // each size class's free list on this thread: the first block's address (0: empty); a free block
     // holds the next one's. Class c holds c * 16-byte blocks, 1 to 16 (0 is never used: n bytes are
@@ -50,15 +50,15 @@ namespace mem {
     // never runs, a size of 0 among them, and a wrapped class there is a thread-local offset too big
     // for the instruction: the link fails)
     @attributes([@thread_local])
-    internal var small_free: usize[17];
+    var small_free: usize[17];
 
     // n bytes' size class
-    internal fn class_of(n: usize) -> usize {
+    fn class_of(n: usize) -> usize {
         return (n + 15) / 16;
     }
 
     // a block of size class c: this thread's next free one, or a new chunk's first
-    internal fn small_alloc(c: usize) -> mem_error!(void*) {
+    fn small_alloc(c: usize) -> mem_error!(void*) {
         val head = small_free[c];
         if (head != 0) {
             small_free[c] = *@cast<usize*>(head);
@@ -70,7 +70,7 @@ namespace mem {
     // class c's list is empty: a new chunk cut into its blocks, the first one returned (out of line,
     // so what's inlined into callers is just the pop above)
     @attributes([@noinline])
-    internal fn small_refill(c: usize) -> mem_error!(void*) {
+    fn small_refill(c: usize) -> mem_error!(void*) {
         val size = c * 16;
         val chunk = @cast<usize>(c_malloc(SMALL_CHUNK) ?? return mem_error::OUT_OF_MEMORY);
         // the first block is this one; the rest go on the list, in address order
@@ -86,7 +86,7 @@ namespace mem {
         return @cast<void*>(chunk);
     }
 
-    internal fn small_put(p: void*, c: usize) -> void {
+    fn small_put(p: void*, c: usize) -> void {
         val b = @cast<usize>(p);
         if (b == 0) {
             return;
@@ -97,7 +97,7 @@ namespace mem {
 
     // n bytes of T's go in the small blocks
     <T: type>
-    internal fn is_small(n: usize) -> bool {
+    fn is_small(n: usize) -> bool {
         return n != 0 && n <= SMALL_MAX && @alignof(T) <= 16;
     }
 
@@ -106,7 +106,7 @@ namespace mem {
     // (vec_grow was 5-8% slower)
     @attributes([@noinline])
     <T: type>
-    internal fn small_realloc(ptr: T*, old: usize, count: usize) -> mem_error!(T*) {
+    fn small_realloc(ptr: T*, old: usize, count: usize) -> mem_error!(T*) {
         val a: default_allocator = {};
         val was = old * @sizeof(T);
         val now = count * @sizeof(T);
@@ -129,7 +129,7 @@ namespace mem {
 
     // debug builds: the size a block was allocated with (in its header), checked against what the
     // caller says
-    internal fn checked_header(ptr: void*, n: usize) -> void* {
+    fn checked_header(ptr: void*, n: usize) -> void* {
         val h = @cast<usize>(ptr) - HEADER;
         if (*@cast<usize*>(h) != n) {
             @panic("a block was given back with a different size than it was allocated with");
@@ -187,7 +187,7 @@ namespace mem {
 
     // count T's in bytes, or OUT_OF_MEMORY when that doesn't fit in a usize
     <T: type>
-    internal fn bytes(count: usize) -> mem_error!usize {
+    fn bytes(count: usize) -> mem_error!usize {
         if (@sizeof(T) != 0 && count > (@cast<usize>(0) -% 1) / @sizeof(T)) {
             return mem_error::OUT_OF_MEMORY;
         }
@@ -195,14 +195,14 @@ namespace mem {
     }
 
     // where a block of size bytes aligned to align starts, at or after offset end of the bytes at base
-    internal fn align_up(base: usize, end: usize, align: usize) -> usize {
+    fn align_up(base: usize, end: usize, align: usize) -> usize {
         val at = base + end;
         return end + (align - at % align) % align;
     }
 
     // move the first n T's from one block to another
     <T: type>
-    internal fn move_items(from: T*, to: T*, n: usize) -> void {
+    fn move_items(from: T*, to: T*, n: usize) -> void {
         val src = @slice(from, n);
         val dst = @slice(to, n);
         for (i) in 0..n {
@@ -216,14 +216,14 @@ namespace mem {
     // all. Blocks are handed out front to back; freeing or resizing the last one gives its room back,
     // other frees keep theirs until reset. Allocate through allocator(); the buffer has to outlive
     // everything allocated from it.
-    struct fixed_buffer {
+    public struct fixed_buffer {
         buf: u8[..];      // the memory
         end: usize = 0;   // bytes in use: the front of buf
         last: usize = 0;  // where the last block starts
     }
 
     // the allocator for a fixed_buffer (a pointer to it, so every container using it shares its state)
-    struct fixed_buffer_allocator {
+    public struct fixed_buffer_allocator {
         fb: fixed_buffer* = null;
     }
 
@@ -271,7 +271,7 @@ namespace mem {
     // ---------- an arena ----------
 
     // a chunk of an arena's memory, followed by its size bytes
-    internal struct arena_chunk {
+    struct arena_chunk {
         next: arena_chunk* = null; // the chunk before it
         size: usize = 0;
     }
@@ -280,7 +280,7 @@ namespace mem {
     // (except for the last block, whose room comes back), and deleting or resetting the arena gives
     // every chunk back. Allocate through allocator(); the arena has to outlive what's allocated from it.
     <B: allocator = default_allocator>
-    struct arena {
+    public struct arena {
         backing: B = {};             // where the chunks come from
         head: arena_chunk* = null;   // the newest chunk
         end: usize = 0;              // bytes in use in head
@@ -290,7 +290,7 @@ namespace mem {
 
     // the allocator for an arena (a pointer to it, so every container using it shares its state)
     <B: allocator = default_allocator>
-    struct arena_allocator {
+    public struct arena_allocator {
         a: arena<B>* = null;
     }
 
@@ -369,14 +369,14 @@ namespace mem {
     // For testing what happens when memory runs out: the next left allocations (or resizes) come from
     // backing, and every one after them fails. Allocate through allocator().
     <B: allocator = default_allocator>
-    struct failing {
+    public struct failing {
         left: i64 = 0;   // allocations still allowed
         backing: B = {}; // where those come from
     }
 
     // the allocator for a failing (a pointer to it, so every container using it shares the count)
     <B: allocator = default_allocator>
-    struct failing_allocator {
+    public struct failing_allocator {
         f: failing<B>* = null;
     }
 
@@ -408,7 +408,7 @@ namespace mem {
     // then box's own delete (below) frees the memory. Any library can make such a type
     <T: type, Allocator: allocator = default_allocator>
     @attributes([@owns("ptr")])
-    struct box {
+    public struct box {
         ptr: T*; // raw: the memory the box owns
         allocator: Allocator; // what frees ptr
     }
@@ -416,7 +416,7 @@ namespace mem {
 
 // T::new(value) / T::new(value, allocator): a box holding value
 <T: type, Allocator: std::mem::allocator = std::mem::default_allocator>
-attach fn new(static this: T, value: T, allocator: Allocator = {}) -> std::mem::mem_error!std::mem::box<T, Allocator> {
+public attach fn new(static this: T, value: T, allocator: Allocator = {}) -> std::mem::mem_error!std::mem::box<T, Allocator> {
     val p: T* = try allocator.malloc<T>();
     @write(p, move value); // p is fresh memory: nothing there to delete
     return { ptr: p, allocator: move allocator };
@@ -424,49 +424,49 @@ attach fn new(static this: T, value: T, allocator: Allocator = {}) -> std::mem::
 
 // frees a box's memory; runs automatically after *ptr is deleted
 <T: type, Allocator: std::mem::allocator>
-attach fn delete(this: std::mem::box<T, Allocator>&) -> void {
+public attach fn delete(this: std::mem::box<T, Allocator>&) -> void {
     this.allocator.free<T>(this.ptr);
 }
 
 // copy of a box: a new allocation from the same kind of allocator holding a copy of *ptr
 <T: type, Allocator: std::mem::allocator>
-attach fn copy(this: std::mem::box<T, Allocator>&) -> std::mem::box<T, Allocator> {
+public attach fn copy(this: std::mem::box<T, Allocator>&) -> std::mem::box<T, Allocator> {
     val p: T* = this.allocator.malloc<T>() catch @panic("out of memory");
     @write(p, copy *this.ptr);
     return { ptr: p, allocator: copy this.allocator };
 }
 
 // the allocator handing out the buffer's memory
-attach fn allocator(this: std::mem::fixed_buffer&) -> std::mem::fixed_buffer_allocator {
+public attach fn allocator(this: std::mem::fixed_buffer&) -> std::mem::fixed_buffer_allocator {
     return { fb: this };
 }
 
 // bytes in use (including any padding for alignment)
-attach fn used(this: std::mem::fixed_buffer&) -> usize {
+public attach fn used(this: std::mem::fixed_buffer&) -> usize {
     return this.end;
 }
 
 // forget every block: the whole buffer is free again (what was allocated must not be used after)
-attach fn reset(this: std::mem::fixed_buffer&) -> void {
+public attach fn reset(this: std::mem::fixed_buffer&) -> void {
     this.end = 0;
     this.last = 0;
 }
 
 // the allocator handing out the arena's memory
 <B: std::mem::allocator>
-attach fn allocator(this: std::mem::arena<B>&) -> std::mem::arena_allocator<B> {
+public attach fn allocator(this: std::mem::arena<B>&) -> std::mem::arena_allocator<B> {
     return { a: this };
 }
 
 // bytes handed out and not given back
 <B: std::mem::allocator>
-attach fn used(this: std::mem::arena<B>&) -> usize {
+public attach fn used(this: std::mem::arena<B>&) -> usize {
     return this.total;
 }
 
 // give every chunk back: what was allocated must not be used after
 <B: std::mem::allocator>
-attach fn reset(this: std::mem::arena<B>&) -> void {
+public attach fn reset(this: std::mem::arena<B>&) -> void {
     while (this.head != null) {
         val c = this.head;
         this.head = c->next;
@@ -478,12 +478,12 @@ attach fn reset(this: std::mem::arena<B>&) -> void {
 }
 
 <B: std::mem::allocator>
-attach fn delete(this: std::mem::arena<B>&) -> void {
+public attach fn delete(this: std::mem::arena<B>&) -> void {
     this.reset();
 }
 
 // the allocator that counts down its allocations
 <B: std::mem::allocator>
-attach fn allocator(this: std::mem::failing<B>&) -> std::mem::failing_allocator<B> {
+public attach fn allocator(this: std::mem::failing<B>&) -> std::mem::failing_allocator<B> {
     return { f: this };
 }

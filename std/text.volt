@@ -8,12 +8,12 @@ namespace text {
     @attributes([@cfg("hosted")])
     namespace libc {
         @attributes([@intrinsic("volt_memcmp")])
-        internal fn memcmp(a: void*, b: void*, n: usize) -> i32;
+        fn memcmp(a: void*, b: void*, n: usize) -> i32;
     }
 
     // str == str (@runtime: the compiler's == calls it, so it inlines through either backend)
     @attributes([@runtime("volt_str_eq")])
-    internal fn str_eq(a: str, b: str) -> bool {
+    fn str_eq(a: str, b: str) -> bool {
         if (a.len != b.len) {
             return false;
         }
@@ -30,7 +30,7 @@ namespace text {
     }
 
     // why parse_int, parse_uint, parse_float or parse_bool failed
-    error parse_error {
+    public error parse_error {
         EMPTY,    // there was nothing to parse
         INVALID,  // it isn't a number (or true/false)
         OVERFLOW, // the number doesn't fit
@@ -38,7 +38,7 @@ namespace text {
 
     // the parts with sep between them
     <A: std::mem::allocator = std::mem::default_allocator>
-    fn join(parts: str[..], sep: str, allocator: A = {}) -> std::string<A> {
+    public fn join(parts: str[..], sep: str, allocator: A = {}) -> std::string<A> {
         var out = std::string::new_in(move allocator);
         for (p, i) in parts {
             if (i > 0) {
@@ -51,7 +51,7 @@ namespace text {
 
     // the parts with sep between them (owned strings, like std::fs::list_dir gives)
     <B: std::mem::allocator, A: std::mem::allocator = std::mem::default_allocator>
-    fn join(parts: std::string<B>[..], sep: str, allocator: A = {}) -> std::string<A> {
+    public fn join(parts: std::string<B>[..], sep: str, allocator: A = {}) -> std::string<A> {
         var out = std::string::new_in(move allocator);
         for (p&, i) in parts {
             if (i > 0) {
@@ -64,7 +64,7 @@ namespace text {
 
     // whether what starts at s[i] (which has room for it): the first byte first, since most places
     // differ there and a whole-slice compare is a call on some backends
-    internal fn at_is(s: str, i: usize, what: str) -> bool {
+    fn at_is(s: str, i: usize, what: str) -> bool {
         if (what.len == 0) {
             return true;
         }
@@ -78,7 +78,7 @@ namespace text {
 // ---------- searching ----------
 
 // where needle first starts, as a byte index (an empty needle is at 0)
-attach fn find(this: str&, needle: str) -> usize? {
+public attach fn find(this: str&, needle: str) -> usize? {
     val s = *this;
     if (needle.len > s.len) {
         return null;
@@ -92,7 +92,7 @@ attach fn find(this: str&, needle: str) -> usize? {
 }
 
 // where needle last starts
-attach fn rfind(this: str&, needle: str) -> usize? {
+public attach fn rfind(this: str&, needle: str) -> usize? {
     val s = *this;
     if (needle.len > s.len) {
         return null;
@@ -108,22 +108,22 @@ attach fn rfind(this: str&, needle: str) -> usize? {
 }
 
 // is needle in it?
-attach fn contains(this: str&, needle: str) -> bool {
+public attach fn contains(this: str&, needle: str) -> bool {
     return this.find(needle) != null;
 }
 
-attach fn starts_with(this: str&, prefix: str) -> bool {
+public attach fn starts_with(this: str&, prefix: str) -> bool {
     val s = *this;
     return s.len >= prefix.len && s[0..prefix.len] == prefix;
 }
 
-attach fn ends_with(this: str&, suffix: str) -> bool {
+public attach fn ends_with(this: str&, suffix: str) -> bool {
     val s = *this;
     return s.len >= suffix.len && s[s.len - suffix.len..s.len] == suffix;
 }
 
 // how many times needle appears, not overlapping (an empty needle counts 0)
-attach fn count(this: str&, needle: str) -> usize {
+public attach fn count(this: str&, needle: str) -> usize {
     val s = *this;
     if (needle.len == 0) {
         return 0;
@@ -144,11 +144,11 @@ attach fn count(this: str&, needle: str) -> usize {
 // ---------- trimming ----------
 
 // without the ASCII whitespace at either end
-attach fn trim(this: str&) -> str {
+public attach fn trim(this: str&) -> str {
     return this.trim_start().trim_end();
 }
 
-attach fn trim_start(this: str&) -> str {
+public attach fn trim_start(this: str&) -> str {
     val s = *this;
     var i: usize = 0;
     while (i < s.len && s[i].is_space()) {
@@ -157,7 +157,7 @@ attach fn trim_start(this: str&) -> str {
     return s[i..s.len];
 }
 
-attach fn trim_end(this: str&) -> str {
+public attach fn trim_end(this: str&) -> str {
     val s = *this;
     var n = s.len;
     while (n > 0 && s[n - 1].is_space()) {
@@ -167,7 +167,7 @@ attach fn trim_end(this: str&) -> str {
 }
 
 // the rest after prefix (null when it doesn't start with it)
-attach fn strip_prefix(this: str&, prefix: str) -> str? {
+public attach fn strip_prefix(this: str&, prefix: str) -> str? {
     if (!this.starts_with(prefix)) {
         return null;
     }
@@ -176,7 +176,7 @@ attach fn strip_prefix(this: str&, prefix: str) -> str? {
 }
 
 // what comes before suffix (null when it doesn't end with it)
-attach fn strip_suffix(this: str&, suffix: str) -> str? {
+public attach fn strip_suffix(this: str&, suffix: str) -> str? {
     if (!this.ends_with(suffix)) {
         return null;
     }
@@ -187,7 +187,7 @@ attach fn strip_suffix(this: str&, suffix: str) -> str? {
 // ---------- splitting ----------
 
 // the parts before and after the first sep (null when there's none)
-attach fn split_once(this: str&, sep: str) -> (str, str)? {
+public attach fn split_once(this: str&, sep: str) -> (str, str)? {
     val i = this.find(sep) ?? return null;
     val s = *this;
     return (s[0..i], s[i + sep.len..s.len]);
@@ -196,7 +196,7 @@ attach fn split_once(this: str&, sep: str) -> (str, str)? {
 // the parts between each sep ("a,,b" has an empty one in the middle); an empty sep splits into
 // characters
 <A: std::mem::allocator = std::mem::default_allocator>
-attach fn split(this: str&, sep: str, allocator: A = {}) -> std::vec<str, A> {
+public attach fn split(this: str&, sep: str, allocator: A = {}) -> std::vec<str, A> {
     val s = *this;
     var out: std::vec<str, A> = { allocator: move allocator };
     if (sep.len == 0) {
@@ -225,7 +225,7 @@ attach fn split(this: str&, sep: str, allocator: A = {}) -> std::vec<str, A> {
 
 // the lines, without their \n or \r\n (a final newline doesn't start another line)
 <A: std::mem::allocator = std::mem::default_allocator>
-attach fn lines(this: str&, allocator: A = {}) -> std::vec<str, A> {
+public attach fn lines(this: str&, allocator: A = {}) -> std::vec<str, A> {
     val s = *this;
     var out: std::vec<str, A> = { allocator: move allocator };
     var start: usize = 0;
@@ -247,7 +247,7 @@ attach fn lines(this: str&, allocator: A = {}) -> std::vec<str, A> {
 
 // the words: the parts between runs of ASCII whitespace
 <A: std::mem::allocator = std::mem::default_allocator>
-attach fn words(this: str&, allocator: A = {}) -> std::vec<str, A> {
+public attach fn words(this: str&, allocator: A = {}) -> std::vec<str, A> {
     val s = *this;
     var out: std::vec<str, A> = { allocator: move allocator };
     var i: usize = 0;
@@ -270,7 +270,7 @@ attach fn words(this: str&, allocator: A = {}) -> std::vec<str, A> {
 
 // every from replaced by to, left to right (an empty from changes nothing)
 <A: std::mem::allocator = std::mem::default_allocator>
-attach fn replace(this: str&, from: str, to: str, allocator: A = {}) -> std::string<A> {
+public attach fn replace(this: str&, from: str, to: str, allocator: A = {}) -> std::string<A> {
     val s = *this;
     var out = std::string::new_in(move allocator);
     if (from.len == 0) {
@@ -295,7 +295,7 @@ attach fn replace(this: str&, from: str, to: str, allocator: A = {}) -> std::str
 
 // n copies, one after another
 <A: std::mem::allocator = std::mem::default_allocator>
-attach fn repeat(this: str&, n: usize, allocator: A = {}) -> std::string<A> {
+public attach fn repeat(this: str&, n: usize, allocator: A = {}) -> std::string<A> {
     var out = std::string::new_in(move allocator);
     for (i) in 0..n {
         out.append(*this);
@@ -305,7 +305,7 @@ attach fn repeat(this: str&, n: usize, allocator: A = {}) -> std::string<A> {
 
 // ASCII letters in upper case (other bytes as they are)
 <A: std::mem::allocator = std::mem::default_allocator>
-attach fn to_upper(this: str&, allocator: A = {}) -> std::string<A> {
+public attach fn to_upper(this: str&, allocator: A = {}) -> std::string<A> {
     var out = std::string::new_in(move allocator);
     for (b) in *this {
         out.push(b.to_upper());
@@ -315,7 +315,7 @@ attach fn to_upper(this: str&, allocator: A = {}) -> std::string<A> {
 
 // ASCII letters in lower case
 <A: std::mem::allocator = std::mem::default_allocator>
-attach fn to_lower(this: str&, allocator: A = {}) -> std::string<A> {
+public attach fn to_lower(this: str&, allocator: A = {}) -> std::string<A> {
     var out = std::string::new_in(move allocator);
     for (b) in *this {
         out.push(b.to_lower());
@@ -324,7 +324,7 @@ attach fn to_lower(this: str&, allocator: A = {}) -> std::string<A> {
 }
 
 // equal but for the case of ASCII letters?
-attach fn eq_ignore_case(this: str&, other: str) -> bool {
+public attach fn eq_ignore_case(this: str&, other: str) -> bool {
     val s = *this;
     if (s.len != other.len) {
         return false;
@@ -338,7 +338,7 @@ attach fn eq_ignore_case(this: str&, other: str) -> bool {
 }
 
 // -1, 0 or 1: how it sorts against other, byte by byte (a prefix sorts first)
-attach fn cmp(this: str&, other: str) -> i32 {
+public attach fn cmp(this: str&, other: str) -> i32 {
     val s = *this;
     var n = s.len;
     if (other.len < n) {
@@ -364,7 +364,7 @@ attach fn cmp(this: str&, other: str) -> i32 {
 // ---------- parsing ----------
 
 // a decimal integer with an optional sign: "42", "-7", "+3"
-attach fn parse_int(this: str&) -> std::text::parse_error!i64 {
+public attach fn parse_int(this: str&) -> std::text::parse_error!i64 {
     val s = *this;
     if (s.len == 0) {
         return std::text::parse_error::EMPTY;
@@ -403,7 +403,7 @@ attach fn parse_int(this: str&) -> std::text::parse_error!i64 {
 }
 
 // a decimal integer that isn't negative: "42", "+3"
-attach fn parse_uint(this: str&) -> std::text::parse_error!u64 {
+public attach fn parse_uint(this: str&) -> std::text::parse_error!u64 {
     val s = *this;
     if (s.len == 0) {
         return std::text::parse_error::EMPTY;
@@ -430,7 +430,7 @@ attach fn parse_uint(this: str&) -> std::text::parse_error!u64 {
 }
 
 // a decimal float: "3.5", "-1e3", ".5", "5.", "inf", "nan" (no spaces around it; too big is inf)
-attach fn parse_float(this: str&) -> std::text::parse_error!f64 {
+public attach fn parse_float(this: str&) -> std::text::parse_error!f64 {
     val s = *this;
     if (s.len == 0) {
         return std::text::parse_error::EMPTY;
@@ -470,7 +470,7 @@ attach fn parse_float(this: str&) -> std::text::parse_error!f64 {
 //   decimal, shifted by powers of two until it lies in [0.5, 1), then 53 bits taken and rounded
 //   once. Exact for every input: past 800 digits, only whether something nonzero was dropped counts.
 
-internal struct big_decimal {
+struct big_decimal {
     d: u8[800]; // digits, most significant first
     nd: i32;    // how many
     dp: i32;    // the decimal point: the value is 0.d[0..nd] * 10^dp
@@ -479,12 +479,12 @@ internal struct big_decimal {
 
 // for a left shift by i bits: how many digits it adds, one fewer when the number starts below
 // cutoff (5^i)
-internal struct shift_cheat {
+struct shift_cheat {
     delta: i32;
     cutoff: str;
 }
 
-internal val LEFT_CHEATS: shift_cheat[61] = {
+val LEFT_CHEATS: shift_cheat[61] = {
         { delta: 0, cutoff: "" },
         { delta: 1, cutoff: "5" },
         { delta: 1, cutoff: "25" },
@@ -549,9 +549,9 @@ internal val LEFT_CHEATS: shift_cheat[61] = {
 };
 
 // the most bits one shift moves: 9 << 60 still fits a u64
-internal val MAX_SHIFT: u64 = 60;
+val MAX_SHIFT: u64 = 60;
 
-internal fn dec_trim(a: big_decimal&) -> void {
+fn dec_trim(a: big_decimal&) -> void {
     while (a.nd > 0 && a.d[@cast<usize>(a.nd - 1)] == '0') {
         a.nd -= 1;
     }
@@ -561,7 +561,7 @@ internal fn dec_trim(a: big_decimal&) -> void {
 }
 
 // a / 2^k, k <= MAX_SHIFT
-internal fn dec_right(a: big_decimal&, k: u64) -> void {
+fn dec_right(a: big_decimal&, k: u64) -> void {
     var r: i32 = 0;
     var w: i32 = 0;
     // enough leading digits to cover the first shift
@@ -608,7 +608,7 @@ internal fn dec_right(a: big_decimal&, k: u64) -> void {
 }
 
 // does a's digit string start below s?
-internal fn dec_below(a: big_decimal&, s: str) -> bool {
+fn dec_below(a: big_decimal&, s: str) -> bool {
     for (i) in 0..s.len {
         if (@cast<i32>(i) >= a.nd) {
             return true;
@@ -621,7 +621,7 @@ internal fn dec_below(a: big_decimal&, s: str) -> bool {
 }
 
 // a * 2^k, k <= MAX_SHIFT
-internal fn dec_left(a: big_decimal&, k: u64) -> void {
+fn dec_left(a: big_decimal&, k: u64) -> void {
     var delta = LEFT_CHEATS[@cast<usize>(k)].delta;
     if (dec_below(a, LEFT_CHEATS[@cast<usize>(k)].cutoff)) {
         delta -= 1;
@@ -662,7 +662,7 @@ internal fn dec_left(a: big_decimal&, k: u64) -> void {
 }
 
 // a * 2^k (k > 0) or a / 2^-k
-internal fn dec_shift(a: big_decimal&, k0: i32) -> void {
+fn dec_shift(a: big_decimal&, k0: i32) -> void {
     if (a.nd == 0) {
         return;
     }
@@ -683,7 +683,7 @@ internal fn dec_shift(a: big_decimal&, k0: i32) -> void {
 }
 
 // rounding a at nd digits: up? (half to even, unless digits were dropped past the 5)
-internal fn dec_round_up(a: big_decimal&, nd: i32) -> bool {
+fn dec_round_up(a: big_decimal&, nd: i32) -> bool {
     if (nd < 0 || nd >= a.nd) {
         return false;
     }
@@ -698,7 +698,7 @@ internal fn dec_round_up(a: big_decimal&, nd: i32) -> bool {
 }
 
 // a's integer part, rounded
-internal fn dec_rounded(a: big_decimal&) -> u64 {
+fn dec_rounded(a: big_decimal&) -> u64 {
     if (a.dp > 20) {
         return 0xFFFFFFFFFFFFFFFF;
     }
@@ -719,7 +719,7 @@ internal fn dec_rounded(a: big_decimal&) -> u64 {
 }
 
 // the f64 bits of a (sign apart)
-internal fn dec_bits(a: big_decimal&) -> u64 {
+fn dec_bits(a: big_decimal&) -> u64 {
     if (a.nd == 0 || a.dp < -330) {
         return 0;
     }
@@ -773,10 +773,10 @@ internal fn dec_bits(a: big_decimal&) -> u64 {
     return (mant & 0x000FFFFFFFFFFFFF) | (biased << 52);
 }
 
-internal val POW10: f64[23] = { 1e0, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9, 1e10, 1e11, 1e12, 1e13, 1e14, 1e15, 1e16, 1e17, 1e18, 1e19, 1e20, 1e21, 1e22 };
+val POW10: f64[23] = { 1e0, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9, 1e10, 1e11, 1e12, 1e13, 1e14, 1e15, 1e16, 1e17, 1e18, 1e19, 1e20, 1e21, 1e22 };
 
 // a decimal number's text, read: the value is mant * 10^exp, but for the digits past the 19th
-internal struct float_text {
+struct float_text {
     mant: u64;    // the first 19 significant digits
     exp: i32;
     trunc: bool;  // nonzero digits past the 19th were dropped
@@ -787,7 +787,7 @@ internal struct float_text {
 
 // s when it is a decimal number: an optional sign, digits with at most one '.', at least one digit,
 // then optionally e or E, a sign and digits
-internal fn read_float(s: str) -> float_text? {
+fn read_float(s: str) -> float_text? {
     var r: float_text = { mant: 0, exp: 0, trunc: false, neg: false, dp: 0, first: 0 };
     var i: usize = 0;
     if (i < s.len && (s[i] == '+' || s[i] == '-')) {
@@ -866,7 +866,7 @@ internal fn read_float(s: str) -> float_text? {
 }
 
 // a times b, 128 bits
-internal fn mul128(a: u64, b: u64, hi: u64&, lo: u64&) -> void {
+fn mul128(a: u64, b: u64, hi: u64&, lo: u64&) -> void {
     comptime if (@cfg("pointer_bits", "64")) {
         val p = @cast<u128>(a) * @cast<u128>(b);
         *hi = @cast<u64>(p >> 64);
@@ -878,7 +878,7 @@ internal fn mul128(a: u64, b: u64, hi: u64&, lo: u64&) -> void {
 
 // man * 10^exp10's bits (sign apart) by Eisel-Lemire, as Go writes it; null when the 128-bit power
 // isn't close enough to tell, or the result is subnormal, infinite or zero
-internal fn eisel_lemire(man0: u64, exp10: i32) -> u64? {
+fn eisel_lemire(man0: u64, exp10: i32) -> u64? {
     if (exp10 < -348 || exp10 > 347) {
         return null;
     }
@@ -929,7 +929,7 @@ internal fn eisel_lemire(man0: u64, exp10: i32) -> u64? {
 }
 
 // s as an f64 when s is a decimal number (see read_float). Too big is infinity, too small 0
-internal fn decimal_to_f64(s: str) -> f64? {
+fn decimal_to_f64(s: str) -> f64? {
     val t = read_float(s) ?? return null;
     var b: u64 = 0;
     if (t.mant != 0) {
@@ -1002,7 +1002,7 @@ internal fn decimal_to_f64(s: str) -> f64? {
 }
 
 // 10^e for e in -348..347, as 128 bits with the top one set, truncated: low half then high half
-internal val POW10_128: u64[1392] = {
+val POW10_128: u64[1392] = {
     0x1732C869CD60E453, 0xFA8FD5A0081C0288, // 1e-348
     0x0E7FBD42205C8EB4, 0x9C99E58405118195, // 1e-347
     0x521FAC92A873B261, 0xC3C05EE50655E1FA, // 1e-346
@@ -1702,7 +1702,7 @@ internal val POW10_128: u64[1392] = {
 };
 
 // "true" or "false"
-attach fn parse_bool(this: str&) -> std::text::parse_error!bool {
+public attach fn parse_bool(this: str&) -> std::text::parse_error!bool {
     val s = *this;
     if (s.len == 0) {
         return std::text::parse_error::EMPTY;
@@ -1720,7 +1720,7 @@ attach fn parse_bool(this: str&) -> std::text::parse_error!bool {
 
 // the character that starts at byte i, and its length in bytes; null when a valid one doesn't
 // start there (i is inside one, or the bytes aren't UTF-8)
-attach fn char_at(this: str&, i: usize) -> (u32, usize)? {
+public attach fn char_at(this: str&, i: usize) -> (u32, usize)? {
     val s = *this;
     if (i >= s.len) {
         return null;
@@ -1765,7 +1765,7 @@ attach fn char_at(this: str&, i: usize) -> (u32, usize)? {
 }
 
 // is it valid UTF-8?
-attach fn is_utf8(this: str&) -> bool {
+public attach fn is_utf8(this: str&) -> bool {
     val s = *this;
     var i: usize = 0;
     while (i < s.len) {
@@ -1777,7 +1777,7 @@ attach fn is_utf8(this: str&) -> bool {
 
 // where the first byte that isn't part of a valid UTF-8 character is (a stray byte, an overlong or
 // cut-off sequence, a surrogate), or null when all of it is valid
-attach fn utf8_error(this: str&) -> usize? {
+public attach fn utf8_error(this: str&) -> usize? {
     val s = *this;
     var i: usize = 0;
     while (i < s.len) {
@@ -1788,7 +1788,7 @@ attach fn utf8_error(this: str&) -> usize? {
 }
 
 // how many characters (a byte that isn't valid UTF-8 counts as one)
-attach fn char_count(this: str&) -> usize {
+public attach fn char_count(this: str&) -> usize {
     val s = *this;
     var n: usize = 0;
     var i: usize = 0;
@@ -1801,7 +1801,7 @@ attach fn char_count(this: str&) -> usize {
 
 // the characters as code points (a byte that isn't valid UTF-8 is U+FFFD)
 <A: std::mem::allocator = std::mem::default_allocator>
-attach fn chars(this: str&, allocator: A = {}) -> std::vec<u32, A> {
+public attach fn chars(this: str&, allocator: A = {}) -> std::vec<u32, A> {
     val s = *this;
     var out: std::vec<u32, A> = { allocator: move allocator };
     var i: usize = 0;
@@ -1819,47 +1819,47 @@ attach fn chars(this: str&, allocator: A = {}) -> std::vec<u32, A> {
 }
 
 // how many bytes the character at s[i] takes (1 when a valid one doesn't start there)
-internal fn utf8_width(s: str, i: usize) -> usize {
+fn utf8_width(s: str, i: usize) -> usize {
     val c = s.char_at(i) ?? return 1;
     return c.1;
 }
 
 // ---------- ASCII classes ----------
 
-attach fn is_digit(this: u8&) -> bool {
+public attach fn is_digit(this: u8&) -> bool {
     return *this >= '0' && *this <= '9';
 }
 
-attach fn is_alpha(this: u8&) -> bool {
+public attach fn is_alpha(this: u8&) -> bool {
     val c = *this;
     return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
 }
 
-attach fn is_alnum(this: u8&) -> bool {
+public attach fn is_alnum(this: u8&) -> bool {
     return this.is_alpha() || this.is_digit();
 }
 
 // space, tab, newline, carriage return, vertical tab or form feed
-attach fn is_space(this: u8&) -> bool {
+public attach fn is_space(this: u8&) -> bool {
     val c = *this;
     return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == 0x0B || c == 0x0C;
 }
 
-attach fn is_upper(this: u8&) -> bool {
+public attach fn is_upper(this: u8&) -> bool {
     return *this >= 'A' && *this <= 'Z';
 }
 
-attach fn is_lower(this: u8&) -> bool {
+public attach fn is_lower(this: u8&) -> bool {
     return *this >= 'a' && *this <= 'z';
 }
 
-attach fn is_hex_digit(this: u8&) -> bool {
+public attach fn is_hex_digit(this: u8&) -> bool {
     val c = *this;
     return this.is_digit() || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
 }
 
 // an ASCII letter in upper case (anything else as it is)
-attach fn to_upper(this: u8&) -> u8 {
+public attach fn to_upper(this: u8&) -> u8 {
     if (this.is_lower()) {
         return *this - 32;
     }
@@ -1867,7 +1867,7 @@ attach fn to_upper(this: u8&) -> u8 {
 }
 
 // an ASCII letter in lower case
-attach fn to_lower(this: u8&) -> u8 {
+public attach fn to_lower(this: u8&) -> u8 {
     if (this.is_upper()) {
         return *this + 32;
     }

@@ -38,11 +38,11 @@ fn bolt() {
 
     // a path dependency
     write(&tmp.join("mathx/bolt.toml"), "[package]\nname = \"mathx\"\nversion = \"0.1.0\"\n");
-    write(&tmp.join("mathx/lib/ops.volt"), "fn triple(x: i32) -> i32 { return x * 3; }\n");
+    write(&tmp.join("mathx/lib/ops.volt"), "public fn triple(x: i32) -> i32 { return x * 3; }\n");
     // a git dependency, which itself depends on mathx by path
     let greet = tmp.join("greet");
     write(&greet.join("bolt.toml"), &format!("[package]\nname = \"greet\"\nversion = \"1.0.0\"\n\n[dependencies]\nmathx = {{ path = \"{}\" }}\n", tmp.join("mathx").display()));
-    write(&greet.join("lib/greet.volt"), "use std::io;\nfn hello(who: str) -> void { std::println(\"hello {} x{}\", who, mathx::triple(2)); }\n");
+    write(&greet.join("lib/greet.volt"), "use std::io;\npublic fn hello(who: str) -> void { std::println(\"hello {} x{}\", who, mathx::triple(2)); }\n");
     git(&greet, &["init", "-q"]);
     git(&greet, &["add", "."]);
     git(&greet, &["commit", "-q", "-m", "v1"]);
@@ -90,7 +90,7 @@ fn bolt() {
     assert!(out.contains("test sums ... ok"), "{out}");
 
     // the lock keeps the commit even after the dependency moves on
-    write(&greet.join("lib/greet.volt"), "use std::io;\nfn hello(who: str) -> void { std::println(\"changed\"); }\n");
+    write(&greet.join("lib/greet.volt"), "use std::io;\npublic fn hello(who: str) -> void { std::println(\"changed\"); }\n");
     git(&greet, &["commit", "-q", "-am", "v2"]);
     let out = ok(bolt(&app, &["run"]), "bolt run (locked)");
     assert!(out.contains("hello app x6"), "{out}");
@@ -141,7 +141,7 @@ fn bolt() {
     write(&cdep.join("include/cdep.h"), "static inline int cdep_scale(int x) { return x * CDEP_SCALE; }\n");
     write(&cdep.join("bolt.toml"), "[package]\nname = \"cdep\"\nversion = \"0.1.0\"\n\n[build]\nfiles = [\"build.volt\"]\n");
     write(&cdep.join("build.volt"), &format!("fn main() -> void {{\n    bolt::cc_arg(\"-I{}\");\n    bolt::cc_arg(\"-DCDEP_SCALE=7\");\n}}\n", cdep.join("include").display()));
-    write(&cdep.join("lib/cdep.volt"), "use {{ \"cdep.h\" }} as c;\nfn scaled(x: i32) -> i32 {{ return c::cdep_scale(x); }}\n".replace("{{", "{").replace("}}", "}").as_str());
+    write(&cdep.join("lib/cdep.volt"), "use {{ \"cdep.h\" }} as c;\npublic fn scaled(x: i32) -> i32 {{ return c::cdep_scale(x); }}\n".replace("{{", "{").replace("}}", "}").as_str());
     let uses_cdep = tmp.join("uses_cdep");
     write(&uses_cdep.join("bolt.toml"), &format!("[package]\nname = \"uses_cdep\"\nversion = \"0.1.0\"\n\n[dependencies]\ncdep = {{ path = \"{}\" }}\n", cdep.display()));
     write(&uses_cdep.join("src/main.volt"), "use std::io;\nfn main() -> void { std::println(\"scaled {}\", cdep::scaled(6)); }\n");
@@ -223,14 +223,14 @@ fn workspace_features_profiles() {
     write(&ws.join("bolt.toml"), "[workspace]\nmembers = [\"crates/*\"]\n\n[profile.fast]\ninherits = \"release\"\ncc-flags = [\"-DFAST=1\"]\n");
     let c = ws.join("crates");
     write(&c.join("helper/bolt.toml"), "[package]\nname = \"helper\"\nversion = \"0.3.1\"\n");
-    write(&c.join("helper/lib/helper.volt"), "fn name() -> str { return \"helper\"; }\n");
+    write(&c.join("helper/lib/helper.volt"), "public fn name() -> str { return \"helper\"; }\n");
     write(
         &c.join("core/bolt.toml"),
         "[package]\nname = \"core\"\nversion = \"0.1.0\"\n\n[dependencies]\nhelper = { path = \"../helper\", version = \"0.3\", optional = true }\n\n[features]\ndefault = [\"loud\"]\nloud = []\nextra = [\"dep:helper\"]\n",
     );
     write(
         &c.join("core/lib/core.volt"),
-        "fn describe() -> str {\n    comptime if (@cfg(\"feature\", \"loud\")) {\n        return \"LOUD\";\n    }\n    return \"quiet\";\n}\nfn extra() -> str {\n    comptime if (@cfg(\"feature\", \"extra\")) {\n        return helper::name();\n    }\n    return \"-\";\n}\n",
+        "public fn describe() -> str {\n    comptime if (@cfg(\"feature\", \"loud\")) {\n        return \"LOUD\";\n    }\n    return \"quiet\";\n}\npublic fn extra() -> str {\n    comptime if (@cfg(\"feature\", \"extra\")) {\n        return helper::name();\n    }\n    return \"-\";\n}\n",
     );
     write(&c.join("app/bolt.toml"), "[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies]\ncore = { path = \"../core\", features = [\"extra\"] }\n\n[features]\nfancy-ui = []\n\n[build]\nfiles = [\"build.volt\"]\n");
     write(&c.join("app/src/main.volt"), "use std::io;\nfn main() -> void { std::println(\"app {} {}\", core::describe(), core::extra()); }\n");
@@ -291,10 +291,10 @@ fn workspace_features_profiles() {
     }
 
     // check: types only, no libraries built
-    write(&c.join("helper/lib/helper.volt"), "fn name() -> str { return 1; }\n");
+    write(&c.join("helper/lib/helper.volt"), "public fn name() -> str { return 1; }\n");
     let err = e.fails(&ws, &["check", "-p", "helper"]);
     assert!(err.contains("helper.volt") && err.contains("error"), "{err}");
-    write(&c.join("helper/lib/helper.volt"), "fn name() -> str { return \"helper\"; }\n");
+    write(&c.join("helper/lib/helper.volt"), "public fn name() -> str { return \"helper\"; }\n");
     assert!(e.ok(&ws, &["check", "--workspace"]).contains("Finished"));
 }
 
@@ -305,9 +305,9 @@ fn targets_and_commands() {
     assert!(e.ok(t, &["--version"]).starts_with("bolt "));
     e.ok(t, &["new", "tools", "--lib"]);
     assert!(t.join("tools/lib/tools.volt").is_file() && !t.join("tools/src").exists());
-    write(&t.join("tools/lib/tools.volt"), "fn twice(x: i32) -> i32 { return x * 2; }\n");
+    write(&t.join("tools/lib/tools.volt"), "public fn twice(x: i32) -> i32 { return x * 2; }\n");
     write(&t.join("testutil/bolt.toml"), "[package]\nname = \"testutil\"\n\n[features]\nstrict = []\n");
-    write(&t.join("testutil/lib/t.volt"), "fn expect(ok: bool) -> i32 { if (ok) { return 0; } return 1; }\n");
+    write(&t.join("testutil/lib/t.volt"), "public fn expect(ok: bool) -> i32 { if (ok) { return 0; } return 1; }\n");
 
     std::fs::create_dir_all(t.join("app")).unwrap();
     e.ok(&t.join("app"), &["init"]);
@@ -378,7 +378,7 @@ fn targets_and_commands() {
     // git: a branch, update, --locked, --offline, fetch
     let lib = t.join("gitlib");
     write(&lib.join("bolt.toml"), "[package]\nname = \"gitlib\"\nversion = \"1.0.0\"\n");
-    write(&lib.join("lib/g.volt"), "fn which() -> str { return \"v1\"; }\n");
+    write(&lib.join("lib/g.volt"), "public fn which() -> str { return \"v1\"; }\n");
     e.git(&lib, &["init", "-q"]);
     e.git(&lib, &["add", "."]);
     e.git(&lib, &["commit", "-q", "-m", "v1"]);
@@ -386,7 +386,7 @@ fn targets_and_commands() {
     e.ok(&app, &["add", "gitlib", "--git", &url, "--branch", "main"]);
     write(&app.join("src/main.volt"), "use std::io;\nfn main() -> void { std::println(\"git {}\", gitlib::which()); }\n");
     assert!(e.ok(&app, &["run"]).contains("git v1"));
-    write(&lib.join("lib/g.volt"), "fn which() -> str { return \"v2\"; }\n");
+    write(&lib.join("lib/g.volt"), "public fn which() -> str { return \"v2\"; }\n");
     e.git(&lib, &["commit", "-q", "-am", "v2"]);
     assert!(e.ok(&app, &["run", "--locked", "--offline"]).contains("git v1"));
     let out = e.ok(&app, &["update"]);

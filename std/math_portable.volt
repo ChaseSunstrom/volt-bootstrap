@@ -20,22 +20,22 @@ namespace math {
         // ---------- bits ----------
 
         // the bits of an f64
-        internal fn bits(v: f64) -> u64 {
+        fn bits(v: f64) -> u64 {
             return @bitcast<u64>(v);
         }
 
         // the f64 with these bits
-        internal fn from_bits(b: u64) -> f64 {
+        fn from_bits(b: u64) -> f64 {
             return @bitcast<f64>(b);
         }
 
         // the high 32 bits: sign, exponent and the fraction's top 20
-        internal fn high(x: f64) -> u32 {
+        fn high(x: f64) -> u32 {
             return @cast<u32>(bits(x) >> 32);
         }
 
         // x * 2^n, rounded once
-        internal fn scalbn(x: f64, n0: i32) -> f64 {
+        fn scalbn(x: f64, n0: i32) -> f64 {
             var y = x;
             var n = n0;
             if (n > 1023) {
@@ -66,7 +66,7 @@ namespace math {
         // ---------- rounding ----------
 
         // x without its fraction (toward zero)
-        fn trunc(x: f64) -> f64 {
+        public fn trunc(x: f64) -> f64 {
             val b = bits(x);
             val e = @cast<i32>((b >> 52) & 0x7FF) - 1023;
             if (e >= 52) {
@@ -80,7 +80,7 @@ namespace math {
         }
 
         // the largest whole number not above x
-        fn floor(x: f64) -> f64 {
+        public fn floor(x: f64) -> f64 {
             val b = bits(x);
             val e = @cast<i32>((b >> 52) & 0x7FF) - 1023;
             if (e >= 52) {
@@ -107,7 +107,7 @@ namespace math {
         }
 
         // the smallest whole number not below x
-        fn ceil(x: f64) -> f64 {
+        public fn ceil(x: f64) -> f64 {
             val b = bits(x);
             val e = @cast<i32>((b >> 52) & 0x7FF) - 1023;
             if (e >= 52) {
@@ -134,7 +134,7 @@ namespace math {
         }
 
         // the nearest whole number, halves away from zero
-        fn round(x: f64) -> f64 {
+        public fn round(x: f64) -> f64 {
             val b = bits(x);
             val e = @cast<i32>((b >> 52) & 0x7FF) - 1023;
             if (e >= 52) {
@@ -155,7 +155,7 @@ namespace math {
         }
 
         // the remainder of x / y, with x's sign: exact (musl's fmod)
-        fn fmod(x: f64, y: f64) -> f64 {
+        public fn fmod(x: f64, y: f64) -> f64 {
             var ux = bits(x);
             var uy = bits(y);
             var ex = @cast<i32>((ux >> 52) & 0x7FF);
@@ -228,7 +228,7 @@ namespace math {
         // ---------- roots ----------
 
         // the square root, correctly rounded: digit by digit on the significand, two bits a step
-        fn sqrt(x: f64) -> f64 {
+        public fn sqrt(x: f64) -> f64 {
             val b = bits(x);
             if (b == 0x7FF0000000000000 || (b << 1) == 0) {
                 return x; // +inf, +-0
@@ -283,7 +283,7 @@ namespace math {
         }
 
         // the cube root (musl's cbrt)
-        fn cbrt(x: f64) -> f64 {
+        public fn cbrt(x: f64) -> f64 {
             val B1: u32 = 715094163; // (1023 - 1023/3 - 0.03306235651) * 2^20
             val B2: u32 = 696219795; // (1023 - 1023/3 - 54/3 - 0.03306235651) * 2^20
             val P0 = 1.87595182427177009643;
@@ -324,7 +324,7 @@ namespace math {
 
         // the length of the hypotenuse, sqrt(x*x + y*y) without overflowing (musl's hypot: the squares
         // split into exact halves)
-        fn hypot(x0: f64, y0: f64) -> f64 {
+        public fn hypot(x0: f64, y0: f64) -> f64 {
             var ux = bits(x0) & 0x7FFFFFFFFFFFFFFF;
             var uy = bits(y0) & 0x7FFFFFFFFFFFFFFF;
             if (ux < uy) {
@@ -366,7 +366,7 @@ namespace math {
         }
 
         // x*x as hi + lo exactly (Dekker's split)
-        internal fn square(x: f64, hi: f64&, lo: f64&) -> void {
+        fn square(x: f64, hi: f64&, lo: f64&) -> void {
             val xc = x * 134217729.0; // 2^27 + 1
             val xh = x - xc + xc;
             val xl = x - xh;
@@ -377,7 +377,7 @@ namespace math {
         // ---------- exponentials ----------
 
         // when pow or exp overflows: infinity with a sign
-        internal fn overflow(neg: bool) -> f64 {
+        fn overflow(neg: bool) -> f64 {
             val y = 3.105036184601418e+231; // 2^769
             if (neg) {
                 return -y * y;
@@ -386,7 +386,7 @@ namespace math {
         }
 
         // when it underflows: zero with a sign
-        internal fn underflow(neg: bool) -> f64 {
+        fn underflow(neg: bool) -> f64 {
             val y = 1.2882297539194267e-231; // 2^-767
             if (neg) {
                 return -y * y;
@@ -395,13 +395,13 @@ namespace math {
         }
 
         // the top 12 bits: sign and exponent
-        internal fn top12(x: f64) -> u32 {
+        fn top12(x: f64) -> u32 {
             return @cast<u32>(bits(x) >> 52);
         }
 
         // scale * (1 + tmp) where scale's exponent (in sbits) may have overflowed or underflowed: k
         // (the low 32 bits of ki) says which
-        internal fn exp_special(tmp: f64, sbits0: u64, ki: u64) -> f64 {
+        fn exp_special(tmp: f64, sbits0: u64, ki: u64) -> f64 {
             var sbits = sbits0;
             if ((ki & 0x80000000) == 0) {
                 // k > 0: the exponent may be up to 460 too big
@@ -431,7 +431,7 @@ namespace math {
 
         // exp(x + xtail), negated when neg; |xtail| < 2^-15 and |xtail| <= |x| (musl's, from Arm's
         // optimized routines: 2^(k/128) from a table, then a polynomial for what's left)
-        internal fn exp_inline(x: f64, xtail: f64, neg: bool) -> f64 {
+        fn exp_inline(x: f64, xtail: f64, neg: bool) -> f64 {
             var abstop = top12(x) & 0x7FF;
             // 0x3C9 is top12(2^-54), 0x408 top12(512)
             if (abstop -% 0x3C9 >= 0x408 - 0x3C9) {
@@ -476,7 +476,7 @@ namespace math {
         }
 
         // e^x
-        fn exp(x: f64) -> f64 {
+        public fn exp(x: f64) -> f64 {
             val abstop = top12(x) & 0x7FF;
             if (abstop >= 0x409) {
                 if (bits(x) == 0xFFF0000000000000) {
@@ -490,7 +490,7 @@ namespace math {
         }
 
         // 2^x (musl's older exp2: a 256-entry table and a polynomial)
-        fn exp2(x: f64) -> f64 {
+        public fn exp2(x: f64) -> f64 {
             val ux = bits(x);
             val ix = @cast<u32>(ux >> 32) & 0x7FFFFFFF;
             if (x != x) {
@@ -530,7 +530,7 @@ namespace math {
         }
 
         // e^x - 1, exact near 0 (musl's expm1)
-        fn expm1(x0: f64) -> f64 {
+        public fn expm1(x0: f64) -> f64 {
             val o_threshold = 709.782712893383973096;
             val ln2_hi = 6.93147180369123816490e-01;
             val ln2_lo = 1.90821492927058770002e-10;
@@ -627,7 +627,7 @@ namespace math {
         }
 
         // e^x * 2^-1021 * 2^1021, for x past where e^x overflows on its own
-        internal fn expo2(x: f64) -> f64 {
+        fn expo2(x: f64) -> f64 {
             val scale = from_bits(@cast<u64>(0x3FF + 1021) << 52);
             return exp(x - 1416.0996898839683) * scale * scale; // 2043 ln2
         }
@@ -636,7 +636,7 @@ namespace math {
 
         // x = 2^k (1 + f), 1 + f in [sqrt(2)/2, sqrt(2)), for log, log2 and log10, which handle 0,
         // negatives, infinity, NaN and 1 first
-        internal fn log_reduce(x0: f64, k: i32&) -> f64 {
+        fn log_reduce(x0: f64, k: i32&) -> f64 {
             var x = x0;
             var ix = bits(x);
             var hx = @cast<u32>(ix >> 32);
@@ -656,7 +656,7 @@ namespace math {
         }
 
         // log's answer for 0, negatives, infinity, NaN and 1; null for the rest
-        internal fn log_special(x: f64) -> f64? {
+        fn log_special(x: f64) -> f64? {
             val ix = bits(x);
             if ((ix << 1) == 0) {
                 return -1.0 / (x * x); // -inf
@@ -673,16 +673,16 @@ namespace math {
             return null;
         }
 
-        internal val LG1 = 6.666666666666735130e-01;
-        internal val LG2 = 3.999999999940941908e-01;
-        internal val LG3 = 2.857142874366239149e-01;
-        internal val LG4 = 2.222219843214978396e-01;
-        internal val LG5 = 1.818357216161805012e-01;
-        internal val LG6 = 1.531383769920937332e-01;
-        internal val LG7 = 1.479819860511658591e-01;
+        val LG1 = 6.666666666666735130e-01;
+        val LG2 = 3.999999999940941908e-01;
+        val LG3 = 2.857142874366239149e-01;
+        val LG4 = 2.222219843214978396e-01;
+        val LG5 = 1.818357216161805012e-01;
+        val LG6 = 1.531383769920937332e-01;
+        val LG7 = 1.479819860511658591e-01;
 
         // the natural logarithm (fdlibm's)
-        fn log(x: f64) -> f64 {
+        public fn log(x: f64) -> f64 {
             val sp = log_special(x);
             if (sp) {
                 return sp;
@@ -701,7 +701,7 @@ namespace math {
         }
 
         // log(1 + f) as hi + lo, hi with 32 bits so products with it are exact
-        internal fn log1p_split(f: f64, lo: f64&) -> f64 {
+        fn log1p_split(f: f64, lo: f64&) -> f64 {
             val hfsq = 0.5 * f * f;
             val s = f / (2.0 + f);
             val z = s * s;
@@ -715,7 +715,7 @@ namespace math {
         }
 
         // the base-2 logarithm (fdlibm's)
-        fn log2(x: f64) -> f64 {
+        public fn log2(x: f64) -> f64 {
             val sp = log_special(x);
             if (sp) {
                 return sp;
@@ -736,7 +736,7 @@ namespace math {
         }
 
         // the base-10 logarithm (fdlibm's)
-        fn log10(x: f64) -> f64 {
+        public fn log10(x: f64) -> f64 {
             val sp = log_special(x);
             if (sp) {
                 return sp;
@@ -763,7 +763,7 @@ namespace math {
 
         // log(x) as hi + *tail with about 15 more bits, for pow; ix is x's bits with a subnormal
         // normalised (its exponent then negative)
-        internal fn pow_log(ix: u64, tail: f64&) -> f64 {
+        fn pow_log(ix: u64, tail: f64&) -> f64 {
             // x = 2^k z, z in [0x3FE6955500000000, twice that), in one of 128 intervals with c near
             // its middle
             val tmp = ix -% 0x3FE6955500000000;
@@ -802,7 +802,7 @@ namespace math {
         }
 
         // 0 when y (bits, finite and not 0) isn't a whole number, 1 when it's odd, 2 when even
-        internal fn pow_int_kind(iy: u64) -> i32 {
+        fn pow_int_kind(iy: u64) -> i32 {
             val e = @cast<i32>((iy >> 52) & 0x7FF);
             if (e < 0x3FF) {
                 return 0;
@@ -821,12 +821,12 @@ namespace math {
         }
 
         // whether the bits are 0, infinity or NaN
-        internal fn zero_inf_nan(i: u64) -> bool {
+        fn zero_inf_nan(i: u64) -> bool {
             return (2 *% i) -% 1 >= 0xFFDFFFFFFFFFFFFF; // 2 * inf's bits - 1
         }
 
         // x to the power y (musl's pow, from Arm's optimized routines: within 0.52 ulp)
-        fn pow(x: f64, y: f64) -> f64 {
+        public fn pow(x: f64, y: f64) -> f64 {
             var neg = false;
             var ix = bits(x);
             val iy = bits(y);
@@ -911,7 +911,7 @@ namespace math {
         // ---------- trigonometry ----------
 
         // sin(x + y) for |x| <= pi/4, y the tail of x; y is 0 when iy is (fdlibm's __sin)
-        internal fn sin_kernel(x: f64, y: f64, iy: i32) -> f64 {
+        fn sin_kernel(x: f64, y: f64, iy: i32) -> f64 {
             val S1 = -1.66666666666666324348e-01;
             val S2 = 8.33333333332248946124e-03;
             val S3 = -1.98412698298579493134e-04;
@@ -929,7 +929,7 @@ namespace math {
         }
 
         // cos(x + y) for |x| <= pi/4 (fdlibm's __cos)
-        internal fn cos_kernel(x: f64, y: f64) -> f64 {
+        fn cos_kernel(x: f64, y: f64) -> f64 {
             val C1 = 4.16666666666666019037e-02;
             val C2 = -1.38888888888741095749e-03;
             val C3 = 2.48015872894767294178e-05;
@@ -944,7 +944,7 @@ namespace math {
             return w + (((1.0 - w) - hz) + (z * r - x * y));
         }
 
-        internal val TAN_T: f64[13] = {
+        val TAN_T: f64[13] = {
             3.33333333333334091986e-01, 1.33333333333201242699e-01, 5.39682539762260521377e-02,
             2.18694882948595424599e-02, 8.86323982359930005737e-03, 3.59207910759131235356e-03,
             1.45620945432529025516e-03, 5.88041240820264096874e-04, 2.46463134818469906812e-04,
@@ -953,7 +953,7 @@ namespace math {
         };
 
         // tan(x + y), or -1/tan(x + y) when odd, for |x| <= pi/4 (fdlibm's __tan)
-        internal fn tan_kernel(x0: f64, y0: f64, odd: bool) -> f64 {
+        fn tan_kernel(x0: f64, y0: f64, odd: bool) -> f64 {
             val pio4 = 7.85398163397448278999e-01;
             val pio4lo = 3.06161699786838301793e-17;
             var x = x0;
@@ -1001,7 +1001,7 @@ namespace math {
 
         // x - n pi/2 as *y0 + *y1, for |x| below 2^20 pi/2: n is rint(x / (pi/2)), and pi/2 is taken
         // in up to three 33-bit parts as x's size needs
-        internal fn rem_pio2_medium(ix: u32, x: f64, y0: f64&, y1: f64&) -> i32 {
+        fn rem_pio2_medium(ix: u32, x: f64, y0: f64&, y1: f64&) -> i32 {
             val invpio2 = 6.36619772367581382433e-01;
             val pio2_1 = 1.57079632673412561417e+00;
             val pio2_1t = 6.07710050650619224932e-11;
@@ -1052,7 +1052,7 @@ namespace math {
         }
 
         // x - n pi/2 as *y0 + *y1, and n (only its low bits matter): fdlibm's __rem_pio2
-        internal fn rem_pio2(x: f64, y0: f64&, y1: f64&) -> i32 {
+        fn rem_pio2(x: f64, y0: f64&, y1: f64&) -> i32 {
             val pio2_1 = 1.57079632673412561417e+00;
             val pio2_1t = 6.07710050650619224932e-11;
             val ux = bits(x);
@@ -1143,7 +1143,7 @@ namespace math {
             return n;
         }
 
-        internal val PIO2: f64[8] = {
+        val PIO2: f64[8] = {
             1.57079625129699707031e+00, 7.54978941586159635335e-08, 5.39030252995776476554e-15,
             3.28200341580791294123e-22, 1.27065575308067607349e-29, 1.22933308981111328932e-36,
             2.73370053816464559624e-44, 2.16741683877804819444e-51,
@@ -1151,7 +1151,7 @@ namespace math {
 
         // x (nx 24-bit pieces, x[0] * 2^e0 the first) times 2/pi, its whole part mod 8 returned and
         // the fraction times pi/2 in *y0 + *y1: fdlibm's __kernel_rem_pio2, double precision only
-        internal fn rem_pio2_large(x: f64[..], y0: f64&, y1: f64&, e0: i32, nx: i32) -> i32 {
+        fn rem_pio2_large(x: f64[..], y0: f64&, y1: f64&, e0: i32, nx: i32) -> i32 {
             val jk: i32 = 4;
             val jp = jk;
             var iq: i32[20];
@@ -1337,7 +1337,7 @@ namespace math {
         }
 
         // the sine, x in radians
-        fn sin(x: f64) -> f64 {
+        public fn sin(x: f64) -> f64 {
             val ix = high(x) & 0x7FFFFFFF;
             if (ix <= 0x3FE921FB) {
                 // |x| ~< pi/4
@@ -1365,7 +1365,7 @@ namespace math {
         }
 
         // the cosine, x in radians
-        fn cos(x: f64) -> f64 {
+        public fn cos(x: f64) -> f64 {
             val ix = high(x) & 0x7FFFFFFF;
             if (ix <= 0x3FE921FB) {
                 if (ix < 0x3E46A09E) {
@@ -1392,7 +1392,7 @@ namespace math {
         }
 
         // the tangent, x in radians
-        fn tan(x: f64) -> f64 {
+        public fn tan(x: f64) -> f64 {
             val ix = high(x) & 0x7FFFFFFF;
             if (ix <= 0x3FE921FB) {
                 if (ix < 0x3E400000) {
@@ -1410,17 +1410,17 @@ namespace math {
         }
 
         // asin and acos's rational approximation
-        internal fn asin_r(z: f64) -> f64 {
+        fn asin_r(z: f64) -> f64 {
             val p = z * (1.66666666666666657415e-01 + z * (-3.25565818622400915405e-01 + z * (2.01212532134862925881e-01 + z * (-4.00555345006794114027e-02 + z * (7.91534994289814532176e-04 + z * 3.47933107596021167570e-05)))));
             val q = 1.0 + z * (-2.40339491173441421878e+00 + z * (2.02094576023350569471e+00 + z * (-6.88283971605453293030e-01 + z * 7.70381505559019352791e-02)));
             return p / q;
         }
 
-        internal val PIO2_HI = 1.57079632679489655800e+00;
-        internal val PIO2_LO = 6.12323399573676603587e-17;
+        val PIO2_HI = 1.57079632679489655800e+00;
+        val PIO2_LO = 6.12323399573676603587e-17;
 
         // the angle whose sine is x, in radians (-pi/2 to pi/2)
-        fn asin(x: f64) -> f64 {
+        public fn asin(x: f64) -> f64 {
             val hx = high(x);
             val ix = hx & 0x7FFFFFFF;
             if (ix >= 0x3FF00000) {
@@ -1463,7 +1463,7 @@ namespace math {
         }
 
         // the angle whose cosine is x, in radians (0 to pi)
-        fn acos(x: f64) -> f64 {
+        public fn acos(x: f64) -> f64 {
             val hx = high(x);
             val ix = hx & 0x7FFFFFFF;
             if (ix >= 0x3FF00000) {
@@ -1499,9 +1499,9 @@ namespace math {
             return 2.0 * (df + w);
         }
 
-        internal val ATAN_HI: f64[4] = { 4.63647609000806093515e-01, 7.85398163397448278999e-01, 9.82793723247329054082e-01, 1.57079632679489655800e+00 };
-        internal val ATAN_LO: f64[4] = { 2.26987774529616870924e-17, 3.06161699786838301793e-17, 1.39033110312309984516e-17, 6.12323399573676603587e-17 };
-        internal val ATAN_T: f64[11] = {
+        val ATAN_HI: f64[4] = { 4.63647609000806093515e-01, 7.85398163397448278999e-01, 9.82793723247329054082e-01, 1.57079632679489655800e+00 };
+        val ATAN_LO: f64[4] = { 2.26987774529616870924e-17, 3.06161699786838301793e-17, 1.39033110312309984516e-17, 6.12323399573676603587e-17 };
+        val ATAN_T: f64[11] = {
             3.33333333333329318027e-01, -1.99999999998764832476e-01, 1.42857142725034663711e-01,
             -1.11111104054623557880e-01, 9.09088713343650656196e-02, -7.69187620504482999495e-02,
             6.66107313738753120669e-02, -5.83357013379057348645e-02, 4.97687799461593236017e-02,
@@ -1509,7 +1509,7 @@ namespace math {
         };
 
         // the angle whose tangent is x, in radians (-pi/2 to pi/2)
-        fn atan(x0: f64) -> f64 {
+        public fn atan(x0: f64) -> f64 {
             val hx = bits(x0);
             val ix = @cast<u32>(hx >> 32) & 0x7FFFFFFF;
             val sign = (hx >> 63) != 0;
@@ -1568,7 +1568,7 @@ namespace math {
         }
 
         // the angle of the point (x, y) from the x axis, in radians (-pi to pi)
-        fn atan2(y: f64, x: f64) -> f64 {
+        public fn atan2(y: f64, x: f64) -> f64 {
             val pi = 3.1415926535897931160e+00;
             val pi_lo = 1.2246467991473531772e-16;
             if (x != x || y != y) {
@@ -1659,7 +1659,7 @@ namespace math {
         // ---------- hyperbolic ----------
 
         // the hyperbolic sine
-        fn sinh(x: f64) -> f64 {
+        public fn sinh(x: f64) -> f64 {
             val u = bits(x);
             val w = @cast<u32>(u >> 32) & 0x7FFFFFFF;
             val ax = from_bits(u & 0x7FFFFFFFFFFFFFFF);
@@ -1685,7 +1685,7 @@ namespace math {
         }
 
         // the hyperbolic cosine
-        fn cosh(x: f64) -> f64 {
+        public fn cosh(x: f64) -> f64 {
             val u = bits(x);
             val w = @cast<u32>(u >> 32) & 0x7FFFFFFF;
             val ax = from_bits(u & 0x7FFFFFFFFFFFFFFF);
@@ -1706,7 +1706,7 @@ namespace math {
         }
 
         // the hyperbolic tangent
-        fn tanh(x: f64) -> f64 {
+        public fn tanh(x: f64) -> f64 {
             val u = bits(x);
             val ux = u & 0x7FFFFFFFFFFFFFFF;
             val w = @cast<u32>(ux >> 32);
@@ -1741,58 +1741,58 @@ namespace math {
         // within an ulp)
 
         // the square root
-        fn sqrt(x: f32) -> f32 { return @cast<f32>(sqrt(@cast<f64>(x))); }
+        public fn sqrt(x: f32) -> f32 { return @cast<f32>(sqrt(@cast<f64>(x))); }
         // the cube root
-        fn cbrt(x: f32) -> f32 { return @cast<f32>(cbrt(@cast<f64>(x))); }
+        public fn cbrt(x: f32) -> f32 { return @cast<f32>(cbrt(@cast<f64>(x))); }
         // x to the power y
-        fn pow(x: f32, y: f32) -> f32 { return @cast<f32>(pow(@cast<f64>(x), @cast<f64>(y))); }
+        public fn pow(x: f32, y: f32) -> f32 { return @cast<f32>(pow(@cast<f64>(x), @cast<f64>(y))); }
         // e to the power x
-        fn exp(x: f32) -> f32 { return @cast<f32>(exp(@cast<f64>(x))); }
+        public fn exp(x: f32) -> f32 { return @cast<f32>(exp(@cast<f64>(x))); }
         // 2 to the power x
-        fn exp2(x: f32) -> f32 { return @cast<f32>(exp2(@cast<f64>(x))); }
+        public fn exp2(x: f32) -> f32 { return @cast<f32>(exp2(@cast<f64>(x))); }
         // e to the power x, minus 1
-        fn expm1(x: f32) -> f32 { return @cast<f32>(expm1(@cast<f64>(x))); }
+        public fn expm1(x: f32) -> f32 { return @cast<f32>(expm1(@cast<f64>(x))); }
         // the natural logarithm (base e)
-        fn log(x: f32) -> f32 { return @cast<f32>(log(@cast<f64>(x))); }
+        public fn log(x: f32) -> f32 { return @cast<f32>(log(@cast<f64>(x))); }
         // the base-2 logarithm
-        fn log2(x: f32) -> f32 { return @cast<f32>(log2(@cast<f64>(x))); }
+        public fn log2(x: f32) -> f32 { return @cast<f32>(log2(@cast<f64>(x))); }
         // the base-10 logarithm
-        fn log10(x: f32) -> f32 { return @cast<f32>(log10(@cast<f64>(x))); }
+        public fn log10(x: f32) -> f32 { return @cast<f32>(log10(@cast<f64>(x))); }
         // the sine of x radians
-        fn sin(x: f32) -> f32 { return @cast<f32>(sin(@cast<f64>(x))); }
+        public fn sin(x: f32) -> f32 { return @cast<f32>(sin(@cast<f64>(x))); }
         // the cosine of x radians
-        fn cos(x: f32) -> f32 { return @cast<f32>(cos(@cast<f64>(x))); }
+        public fn cos(x: f32) -> f32 { return @cast<f32>(cos(@cast<f64>(x))); }
         // the tangent of x radians
-        fn tan(x: f32) -> f32 { return @cast<f32>(tan(@cast<f64>(x))); }
+        public fn tan(x: f32) -> f32 { return @cast<f32>(tan(@cast<f64>(x))); }
         // the arcsine, in radians
-        fn asin(x: f32) -> f32 { return @cast<f32>(asin(@cast<f64>(x))); }
+        public fn asin(x: f32) -> f32 { return @cast<f32>(asin(@cast<f64>(x))); }
         // the arccosine, in radians
-        fn acos(x: f32) -> f32 { return @cast<f32>(acos(@cast<f64>(x))); }
+        public fn acos(x: f32) -> f32 { return @cast<f32>(acos(@cast<f64>(x))); }
         // the arctangent, in radians
-        fn atan(x: f32) -> f32 { return @cast<f32>(atan(@cast<f64>(x))); }
+        public fn atan(x: f32) -> f32 { return @cast<f32>(atan(@cast<f64>(x))); }
         // the angle of the point (x, y) from the x axis, in radians (-pi to pi)
-        fn atan2(y: f32, x: f32) -> f32 { return @cast<f32>(atan2(@cast<f64>(y), @cast<f64>(x))); }
+        public fn atan2(y: f32, x: f32) -> f32 { return @cast<f32>(atan2(@cast<f64>(y), @cast<f64>(x))); }
         // the hyperbolic sine
-        fn sinh(x: f32) -> f32 { return @cast<f32>(sinh(@cast<f64>(x))); }
+        public fn sinh(x: f32) -> f32 { return @cast<f32>(sinh(@cast<f64>(x))); }
         // the hyperbolic cosine
-        fn cosh(x: f32) -> f32 { return @cast<f32>(cosh(@cast<f64>(x))); }
+        public fn cosh(x: f32) -> f32 { return @cast<f32>(cosh(@cast<f64>(x))); }
         // the hyperbolic tangent
-        fn tanh(x: f32) -> f32 { return @cast<f32>(tanh(@cast<f64>(x))); }
+        public fn tanh(x: f32) -> f32 { return @cast<f32>(tanh(@cast<f64>(x))); }
         // the length of the hypotenuse, sqrt(x*x + y*y) without overflowing
-        fn hypot(x: f32, y: f32) -> f32 { return @cast<f32>(hypot(@cast<f64>(x), @cast<f64>(y))); }
+        public fn hypot(x: f32, y: f32) -> f32 { return @cast<f32>(hypot(@cast<f64>(x), @cast<f64>(y))); }
         // the largest whole number not above x
-        fn floor(x: f32) -> f32 { return @cast<f32>(floor(@cast<f64>(x))); }
+        public fn floor(x: f32) -> f32 { return @cast<f32>(floor(@cast<f64>(x))); }
         // the smallest whole number not below x
-        fn ceil(x: f32) -> f32 { return @cast<f32>(ceil(@cast<f64>(x))); }
+        public fn ceil(x: f32) -> f32 { return @cast<f32>(ceil(@cast<f64>(x))); }
         // the nearest whole number, halves away from zero
-        fn round(x: f32) -> f32 { return @cast<f32>(round(@cast<f64>(x))); }
+        public fn round(x: f32) -> f32 { return @cast<f32>(round(@cast<f64>(x))); }
         // x without its fraction (toward zero)
-        fn trunc(x: f32) -> f32 { return @cast<f32>(trunc(@cast<f64>(x))); }
+        public fn trunc(x: f32) -> f32 { return @cast<f32>(trunc(@cast<f64>(x))); }
         // the remainder of x / y, with x's sign
-        fn fmod(x: f32, y: f32) -> f32 { return @cast<f32>(fmod(@cast<f64>(x), @cast<f64>(y))); }
+        public fn fmod(x: f32, y: f32) -> f32 { return @cast<f32>(fmod(@cast<f64>(x), @cast<f64>(y))); }
 
         // 2^(k/128) ~= H[k] * (1 + T[k]): [2k] the bits of T[k], [2k + 1] the bits of H[k] - (k << 45)
-        internal val EXP_TAB: u64[256] = {
+        val EXP_TAB: u64[256] = {
             0x0, 0x3ff0000000000000, 0x3c9b3b4f1a88bf6e, 0x3feff63da9fb3335,
             0xbc7160139cd8dc5d, 0x3fefec9a3e778061, 0xbc905e7a108766d1, 0x3fefe315e86e7f85,
             0x3c8cd2523567f613, 0x3fefd9b0d3158574, 0xbc8bce8023f98efa, 0x3fefd06b29ddf6de,
@@ -1859,7 +1859,7 @@ namespace math {
             0x3c77893b4d91cd9d, 0x3fefe7c1819e90d8, 0x3c5305c14160cc89, 0x3feff3c22b8f71f1,
         };
         // for log in pow: 1/c, log(c) to 43 bits, and the rest of log(c), for 128 intervals
-        internal val POW_LOG_TAB: f64[384] = {
+        val POW_LOG_TAB: f64[384] = {
             1.4140625, -0.3464667673462145, 5.929407345889625e-15,
             1.40625, -0.34092658697056777, -2.544157440035963e-14,
             1.3984375, -0.3353555419211034, -3.443525940775045e-14,
@@ -1990,7 +1990,7 @@ namespace math {
             0.7109375, 0.3411707574027787, -1.156568624616423e-14,
         };
         // exp2's table: [2i] 2^(i/256 + eps[i]), [2i + 1] eps[i]
-        internal val EXP2_TAB: f64[512] = {
+        val EXP2_TAB: f64[512] = {
             0.707106781186592, 9.070522111187529e-14,
             0.7090239421602083, 1.3322676295501878e-15,
             0.7109463010845614, -4.346523141407488e-14,
@@ -2249,7 +2249,7 @@ namespace math {
             1.4103896082172265, -4.524158825347513e-14,
         };
         // 2/pi's bits after the point, 24 at a time (enough for an f64's exponents)
-        internal val IPIO2: i32[66] = {
+        val IPIO2: i32[66] = {
             0xA2F983, 0x6E4E44, 0x1529FC, 0x2757D1, 0xF534DD, 0xC0DB62,
             0x95993C, 0x439041, 0xFE5163, 0xABDEBB, 0xC561B7, 0x246E3A,
             0x424DD2, 0xE00649, 0x2EEA09, 0xD1921C, 0xFE1DEB, 0x1CB129,
@@ -2269,55 +2269,55 @@ namespace math {
 @attributes([@cfg("os", "none")])
 namespace math {
     namespace libm {
-        internal fn sqrt(x: f64) -> f64 { return portable::sqrt(x); }
-        internal fn cbrt(x: f64) -> f64 { return portable::cbrt(x); }
-        internal fn pow(x: f64, y: f64) -> f64 { return portable::pow(x, y); }
-        internal fn exp(x: f64) -> f64 { return portable::exp(x); }
-        internal fn exp2(x: f64) -> f64 { return portable::exp2(x); }
-        internal fn log(x: f64) -> f64 { return portable::log(x); }
-        internal fn log2(x: f64) -> f64 { return portable::log2(x); }
-        internal fn log10(x: f64) -> f64 { return portable::log10(x); }
-        internal fn sin(x: f64) -> f64 { return portable::sin(x); }
-        internal fn cos(x: f64) -> f64 { return portable::cos(x); }
-        internal fn tan(x: f64) -> f64 { return portable::tan(x); }
-        internal fn asin(x: f64) -> f64 { return portable::asin(x); }
-        internal fn acos(x: f64) -> f64 { return portable::acos(x); }
-        internal fn atan(x: f64) -> f64 { return portable::atan(x); }
-        internal fn atan2(y: f64, x: f64) -> f64 { return portable::atan2(y, x); }
-        internal fn sinh(x: f64) -> f64 { return portable::sinh(x); }
-        internal fn cosh(x: f64) -> f64 { return portable::cosh(x); }
-        internal fn tanh(x: f64) -> f64 { return portable::tanh(x); }
-        internal fn hypot(x: f64, y: f64) -> f64 { return portable::hypot(x, y); }
-        internal fn floor(x: f64) -> f64 { return portable::floor(x); }
-        internal fn ceil(x: f64) -> f64 { return portable::ceil(x); }
-        internal fn round(x: f64) -> f64 { return portable::round(x); }
-        internal fn trunc(x: f64) -> f64 { return portable::trunc(x); }
-        internal fn fmod(x: f64, y: f64) -> f64 { return portable::fmod(x, y); }
-        internal fn sqrtf(x: f32) -> f32 { return portable::sqrt(x); }
-        internal fn cbrtf(x: f32) -> f32 { return portable::cbrt(x); }
-        internal fn powf(x: f32, y: f32) -> f32 { return portable::pow(x, y); }
-        internal fn expf(x: f32) -> f32 { return portable::exp(x); }
-        internal fn exp2f(x: f32) -> f32 { return portable::exp2(x); }
-        internal fn logf(x: f32) -> f32 { return portable::log(x); }
-        internal fn log2f(x: f32) -> f32 { return portable::log2(x); }
-        internal fn log10f(x: f32) -> f32 { return portable::log10(x); }
-        internal fn sinf(x: f32) -> f32 { return portable::sin(x); }
-        internal fn cosf(x: f32) -> f32 { return portable::cos(x); }
-        internal fn tanf(x: f32) -> f32 { return portable::tan(x); }
-        internal fn asinf(x: f32) -> f32 { return portable::asin(x); }
-        internal fn acosf(x: f32) -> f32 { return portable::acos(x); }
-        internal fn atanf(x: f32) -> f32 { return portable::atan(x); }
-        internal fn atan2f(y: f32, x: f32) -> f32 { return portable::atan2(y, x); }
-        internal fn sinhf(x: f32) -> f32 { return portable::sinh(x); }
-        internal fn coshf(x: f32) -> f32 { return portable::cosh(x); }
-        internal fn tanhf(x: f32) -> f32 { return portable::tanh(x); }
-        internal fn hypotf(x: f32, y: f32) -> f32 { return portable::hypot(x, y); }
-        internal fn floorf(x: f32) -> f32 { return portable::floor(x); }
-        internal fn ceilf(x: f32) -> f32 { return portable::ceil(x); }
-        internal fn roundf(x: f32) -> f32 { return portable::round(x); }
-        internal fn truncf(x: f32) -> f32 { return portable::trunc(x); }
-        internal fn fmodf(x: f32, y: f32) -> f32 { return portable::fmod(x, y); }
-        internal fn fabs(x: f64) -> f64 { return portable::from_bits(portable::bits(x) & 0x7FFFFFFFFFFFFFFF); }
-        internal fn fabsf(x: f32) -> f32 { return @cast<f32>(fabs(@cast<f64>(x))); }
+        fn sqrt(x: f64) -> f64 { return portable::sqrt(x); }
+        fn cbrt(x: f64) -> f64 { return portable::cbrt(x); }
+        fn pow(x: f64, y: f64) -> f64 { return portable::pow(x, y); }
+        fn exp(x: f64) -> f64 { return portable::exp(x); }
+        fn exp2(x: f64) -> f64 { return portable::exp2(x); }
+        fn log(x: f64) -> f64 { return portable::log(x); }
+        fn log2(x: f64) -> f64 { return portable::log2(x); }
+        fn log10(x: f64) -> f64 { return portable::log10(x); }
+        fn sin(x: f64) -> f64 { return portable::sin(x); }
+        fn cos(x: f64) -> f64 { return portable::cos(x); }
+        fn tan(x: f64) -> f64 { return portable::tan(x); }
+        fn asin(x: f64) -> f64 { return portable::asin(x); }
+        fn acos(x: f64) -> f64 { return portable::acos(x); }
+        fn atan(x: f64) -> f64 { return portable::atan(x); }
+        fn atan2(y: f64, x: f64) -> f64 { return portable::atan2(y, x); }
+        fn sinh(x: f64) -> f64 { return portable::sinh(x); }
+        fn cosh(x: f64) -> f64 { return portable::cosh(x); }
+        fn tanh(x: f64) -> f64 { return portable::tanh(x); }
+        fn hypot(x: f64, y: f64) -> f64 { return portable::hypot(x, y); }
+        fn floor(x: f64) -> f64 { return portable::floor(x); }
+        fn ceil(x: f64) -> f64 { return portable::ceil(x); }
+        fn round(x: f64) -> f64 { return portable::round(x); }
+        fn trunc(x: f64) -> f64 { return portable::trunc(x); }
+        fn fmod(x: f64, y: f64) -> f64 { return portable::fmod(x, y); }
+        fn sqrtf(x: f32) -> f32 { return portable::sqrt(x); }
+        fn cbrtf(x: f32) -> f32 { return portable::cbrt(x); }
+        fn powf(x: f32, y: f32) -> f32 { return portable::pow(x, y); }
+        fn expf(x: f32) -> f32 { return portable::exp(x); }
+        fn exp2f(x: f32) -> f32 { return portable::exp2(x); }
+        fn logf(x: f32) -> f32 { return portable::log(x); }
+        fn log2f(x: f32) -> f32 { return portable::log2(x); }
+        fn log10f(x: f32) -> f32 { return portable::log10(x); }
+        fn sinf(x: f32) -> f32 { return portable::sin(x); }
+        fn cosf(x: f32) -> f32 { return portable::cos(x); }
+        fn tanf(x: f32) -> f32 { return portable::tan(x); }
+        fn asinf(x: f32) -> f32 { return portable::asin(x); }
+        fn acosf(x: f32) -> f32 { return portable::acos(x); }
+        fn atanf(x: f32) -> f32 { return portable::atan(x); }
+        fn atan2f(y: f32, x: f32) -> f32 { return portable::atan2(y, x); }
+        fn sinhf(x: f32) -> f32 { return portable::sinh(x); }
+        fn coshf(x: f32) -> f32 { return portable::cosh(x); }
+        fn tanhf(x: f32) -> f32 { return portable::tanh(x); }
+        fn hypotf(x: f32, y: f32) -> f32 { return portable::hypot(x, y); }
+        fn floorf(x: f32) -> f32 { return portable::floor(x); }
+        fn ceilf(x: f32) -> f32 { return portable::ceil(x); }
+        fn roundf(x: f32) -> f32 { return portable::round(x); }
+        fn truncf(x: f32) -> f32 { return portable::trunc(x); }
+        fn fmodf(x: f32, y: f32) -> f32 { return portable::fmod(x, y); }
+        fn fabs(x: f64) -> f64 { return portable::from_bits(portable::bits(x) & 0x7FFFFFFFFFFFFFFF); }
+        fn fabsf(x: f32) -> f32 { return @cast<f32>(fabs(@cast<f64>(x))); }
     }
 }

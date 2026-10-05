@@ -5,13 +5,13 @@
 
 // whether this and other are equal, by ==
 <T: type>
-attach fn eq(this: T&, other: T&) -> bool {
+public attach fn eq(this: T&, other: T&) -> bool {
     return *this == *other;
 }
 
 // optionals: both empty, or both holding equal values
 <T: type>
-attach fn eq(this: T?&, other: T?&) -> bool {
+public attach fn eq(this: T?&, other: T?&) -> bool {
     if (*this == null || *other == null) {
         return *this == null && *other == null;
     }
@@ -20,7 +20,7 @@ attach fn eq(this: T?&, other: T?&) -> bool {
 
 // vectors: as long, and equal element by element
 <T: type, A: std::mem::allocator, B: std::mem::allocator>
-attach fn eq(this: std::vec<T, A>&, other: std::vec<T, B>&) -> bool {
+public attach fn eq(this: std::vec<T, A>&, other: std::vec<T, B>&) -> bool {
     if (this.len != other.len) {
         return false;
     }
@@ -34,7 +34,7 @@ attach fn eq(this: std::vec<T, A>&, other: std::vec<T, B>&) -> bool {
 
 // -1, 0 or 1: how this sorts against other, by <
 <T: type>
-attach fn cmp(this: T&, other: T&) -> i32 {
+public attach fn cmp(this: T&, other: T&) -> i32 {
     if (*this < *other) {
         return -1;
     }
@@ -45,6 +45,6 @@ attach fn cmp(this: T&, other: T&) -> i32 {
 }
 
 // str sorts byte by byte (see str's cmp in std::text)
-attach fn cmp(this: str&, other: str&) -> i32 {
+public attach fn cmp(this: str&, other: str&) -> i32 {
     return this.cmp(*other);
 }

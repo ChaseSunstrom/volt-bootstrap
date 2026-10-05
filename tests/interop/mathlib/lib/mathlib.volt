@@ -2,18 +2,18 @@
 // voltc lib --shared/--static and writes its bindings with voltc bindings)
 use std::string;
 
-struct vec2 {
+public struct vec2 {
     x: f64;
     y: f64;
 }
 
-enum color {
+public enum color {
     RED,
     GREEN,
     BLUE,
 }
 
-error math_error {
+public error math_error {
     NEGATIVE,
 }
 

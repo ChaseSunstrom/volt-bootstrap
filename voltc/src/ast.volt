@@ -257,7 +257,10 @@ struct stmt {
 }
 
 // `internal` on an item or field; parsed and printed, not yet enforced by the checker
+// public or internal on an item or field, or neither (DEFAULT): an unmarked item is internal in a
+// package and public in the program's files; an unmarked field follows its struct
 enum vis {
+    DEFAULT,
     PUBLIC,
     INTERNAL,
 }

@@ -295,11 +295,12 @@ impl<'a> Parser<'a> {
                 break;
             }
         }
-        let vis = if self.eat_kw("internal") {
+        let mut vis = if self.eat_kw("internal") {
             Vis::Internal
-        } else {
-            self.eat_kw("public");
+        } else if self.eat_kw("public") {
             Vis::Public
+        } else {
+            Vis::Default
         };
         let (mut is_async, mut is_comptime, mut is_export, mut is_attach, mut is_extern) = (false, false, false, false, false);
         let mut abi = None;
@@ -337,7 +338,12 @@ impl<'a> Parser<'a> {
             let trait_ = self.parse_type()?;
             self.expect("->")?;
             let target = self.parse_type()?;
-            ItemKind::AttachBlock { trait_, target, fns: self.item_block()? }
+            // its fns are the trait's: as public as the trait is
+            let mut fns = self.item_block()?;
+            for f in fns.iter_mut().filter(|f| f.vis == Vis::Default) {
+                f.vis = Vis::Public;
+            }
+            ItemKind::AttachBlock { trait_, target, fns }
         } else if self.eat_kw("struct") {
             let (name, _) = self.ident()?;
             let spec = if self.is("<") { Some(self.generic_args()?) } else { None };
@@ -441,6 +447,9 @@ impl<'a> Parser<'a> {
         } else {
             return self.unexpected("an item (fn, struct, enum, error, trait, type, attach, namespace, use, var, val)");
         };
+        if is_export && vis == Vis::Default {
+            vis = Vis::Public; // a C symbol is anyone's
+        }
         Ok(Item { kind, span: start.to(self.prev_span()), attrs, vis, generics })
     }
 

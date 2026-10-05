@@ -3,12 +3,12 @@
 // (Part of package std: the package loader wraps every file in `namespace std`.)
 
 namespace testing {
-    error test_error {
+    public error test_error {
         FAILED, // an assertion failed (what and why are on stderr)
     }
 
     // fails unless ok
-    fn assert(ok: bool, what: str = "") -> test_error!void {
+    public fn assert(ok: bool, what: str = "") -> test_error!void {
         if (ok) {
             return;
         }
@@ -23,7 +23,7 @@ namespace testing {
     // fails unless left equals right (by eq, so a type's own eq counts). Both are taken by value, so
     // an owned value (a std::string) moves in: pass `copy s`, or compare s.as_str()
     <T: type>
-    fn assert_eq(left: T, right: T, what: str = "") -> test_error!void {
+    public fn assert_eq(left: T, right: T, what: str = "") -> test_error!void {
         if (left.eq(&right)) {
             return;
         }
@@ -39,7 +39,7 @@ namespace testing {
 
     // fails if left equals right
     <T: type>
-    fn assert_ne(left: T, right: T, what: str = "") -> test_error!void {
+    public fn assert_ne(left: T, right: T, what: str = "") -> test_error!void {
         if (!left.eq(&right)) {
             return;
         }
@@ -54,7 +54,7 @@ namespace testing {
 
     // fails unless left and right are at most tolerance (0 or more) apart. Equal infinities are near;
     // NaN is never near anything
-    fn assert_near(left: f64, right: f64, tolerance: f64, what: str = "") -> test_error!void {
+    public fn assert_near(left: f64, right: f64, tolerance: f64, what: str = "") -> test_error!void {
         if (left == right) {
             return;
         }
@@ -73,14 +73,14 @@ namespace testing {
     }
 
     // one test: a name and a body that fails by returning an error
-    struct test {
+    public struct test {
         name: str;
         body: fn() -> !void;
     }
 
     // runs every test, even after one fails, printing `test NAME ... ok` or `... FAILED` for each
     // and a count at the end. Returns the exit code: 0 when all passed, 1 otherwise
-    fn run(tests: test[..]) -> i32 {
+    public fn run(tests: test[..]) -> i32 {
         var failed: usize = 0;
         for (t) in tests {
             val body = t.body;

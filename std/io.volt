@@ -4,17 +4,17 @@
 namespace io {
     // println("a {} b {}", x, y) / println(value) / println()
     @attributes([@intrinsic("println")])
-    fn println() -> void;
+    public fn println() -> void;
     // print("a {} b {}", x, y) / print(value): like println, without the newline
     @attributes([@intrinsic("print")])
-    fn print() -> void;
+    public fn print() -> void;
 }
 
 namespace io {
     // the same, to stderr (unbuffered)
     @attributes([@intrinsic("eprintln")])
-    fn eprintln() -> void;
+    public fn eprintln() -> void;
     // like print, to stderr
     @attributes([@intrinsic("eprint")])
-    fn eprint() -> void;
+    public fn eprint() -> void;
 }

@@ -6,10 +6,10 @@
 namespace fmt {
     // write(&out, "a {} b {}", x, y): the formatted text, handed to out's write_str
     @attributes([@intrinsic("write")])
-    fn write() -> void;
+    public fn write() -> void;
     // format("a {} b {}", x, y): the formatted text as a new string
     @attributes([@intrinsic("format")])
-    fn format() -> std::string;
+    public fn format() -> std::string;
 
     // ---------- the runtime's number printing ----------
     //
@@ -17,24 +17,24 @@ namespace fmt {
     // would call the C runtime's versions, which remain for programs built without std)
 
     @attributes([@intrinsic("volt_put")])
-    internal fn rt_put(sink: void*, p: cstr, n: usize) -> void;
+    fn rt_put(sink: void*, p: cstr, n: usize) -> void;
 
     @attributes([@runtime("volt_print_f64")])
-    internal fn print_f64(sink: void*, v: f64) -> void {
+    fn print_f64(sink: void*, v: f64) -> void {
         var buf: u8[32];
         val n = shortest(&buf[0], v, false);
         rt_put(sink, @cast<cstr>(&buf[0]), n);
     }
 
     @attributes([@runtime("volt_print_f32")])
-    internal fn print_f32(sink: void*, v: f32) -> void {
+    fn print_f32(sink: void*, v: f32) -> void {
         var buf: u8[32];
         val n = shortest(&buf[0], @cast<f64>(v), true);
         rt_put(sink, @cast<cstr>(&buf[0]), n);
     }
 
     @attributes([@runtime("volt_print_i64")])
-    internal fn print_i64(sink: void*, v: i64) -> void {
+    fn print_i64(sink: void*, v: i64) -> void {
         var buf: u8[20];
         var n: usize = 20;
         var x = @cast<u64>(v);
@@ -58,7 +58,7 @@ namespace fmt {
 
     // a C string's text (error names, cstr values)
     @attributes([@runtime("volt_print_cstr")])
-    internal fn print_cstr(sink: void*, c: cstr) -> void {
+    fn print_cstr(sink: void*, c: cstr) -> void {
         val p = @cast<u8*>(c);
         var n: usize = 0;
         while (p[n] != 0) {
@@ -68,7 +68,7 @@ namespace fmt {
     }
 
     @attributes([@runtime("volt_print_u64")])
-    internal fn print_u64(sink: void*, v: u64) -> void {
+    fn print_u64(sink: void*, v: u64) -> void {
         var buf: u8[20];
         var n: usize = 20;
         var x = v;
@@ -90,15 +90,15 @@ namespace fmt {
     // is formatted into a buffer, then padded: a sign or 0x prefix comes before zero padding, and
     // widths count characters (UTF-8), not bytes.
 
-    internal val F_PLUS: i32 = 1;
-    internal val F_ALT: i32 = 2;
-    internal val F_ZERO: i32 = 4;
-    internal val A_LEFT: i32 = 60;   // '<'
-    internal val A_RIGHT: i32 = 62;  // '>'
-    internal val A_CENTER: i32 = 94; // '^'
+    val F_PLUS: i32 = 1;
+    val F_ALT: i32 = 2;
+    val F_ZERO: i32 = 4;
+    val A_LEFT: i32 = 60;   // '<'
+    val A_RIGHT: i32 = 62;  // '>'
+    val A_CENTER: i32 = 94; // '^'
 
     // how many characters n bytes of UTF-8 hold
-    internal fn utf8_count(p: u8*, n: usize) -> usize {
+    fn utf8_count(p: u8*, n: usize) -> usize {
         var c: usize = 0;
         for (i) in 0..n {
             if ((p[i] & 0xC0) != 0x80) {
@@ -109,7 +109,7 @@ namespace fmt {
     }
 
     // cp's UTF-8 bytes at out (U+FFFD for what isn't a character); how many
-    internal fn utf8_put(out: u8*, cp0: u32) -> usize {
+    fn utf8_put(out: u8*, cp0: u32) -> usize {
         var cp = cp0;
         if (cp > 0x10FFFF || (cp >= 0xD800 && cp <= 0xDFFF)) {
             cp = 0xFFFD;
@@ -137,7 +137,7 @@ namespace fmt {
     }
 
     // n copies of fill
-    internal fn fill_n(sink: void*, fill: u32, n: usize) -> void {
+    fn fill_n(sink: void*, fill: u32, n: usize) -> void {
         var f: u8[4];
         val k = utf8_put(&f[0], fill);
         var chunk: u8[64];
@@ -159,7 +159,7 @@ namespace fmt {
     }
 
     // pre (a sign, 0x...), body, `zeros` zeros and tail, padded to width
-    internal fn pad(sink: void*, fill: u32, align0: i32, flags: i32, width: i32, numeric: bool, pre: u8*, pre_n: usize, body: u8*, n: usize, zeros: usize, tail: u8*, tail_n: usize) -> void {
+    fn pad(sink: void*, fill: u32, align0: i32, flags: i32, width: i32, numeric: bool, pre: u8*, pre_n: usize, body: u8*, n: usize, zeros: usize, tail: u8*, tail_n: usize) -> void {
         val have = utf8_count(pre, pre_n) + utf8_count(body, n) + zeros + utf8_count(tail, tail_n);
         var padn: usize = 0;
         if (width > 0 && @cast<usize>(width) > have) {
@@ -196,7 +196,7 @@ namespace fmt {
     }
 
     @attributes([@runtime("volt_fmt_text")])
-    internal fn fmt_text(sink: void*, t: str, fill: u32, align: i32, flags: i32, width: i32, prec: i32) -> void {
+    fn fmt_text(sink: void*, t: str, fill: u32, align: i32, flags: i32, width: i32, prec: i32) -> void {
         var n = t.len;
         if (prec >= 0) {
             // keep prec characters
@@ -218,7 +218,7 @@ namespace fmt {
     }
 
     @attributes([@runtime("volt_fmt_cstr")])
-    internal fn fmt_cstr(sink: void*, c: cstr, fill: u32, align: i32, flags: i32, width: i32, prec: i32) -> void {
+    fn fmt_cstr(sink: void*, c: cstr, fill: u32, align: i32, flags: i32, width: i32, prec: i32) -> void {
         val p = @cast<u8*>(c);
         var n: usize = 0;
         while (p[n] != 0) {
@@ -228,7 +228,7 @@ namespace fmt {
     }
 
     @attributes([@runtime("volt_fmt_bool")])
-    internal fn fmt_bool(sink: void*, b: i32, fill: u32, align: i32, flags: i32, width: i32, prec: i32) -> void {
+    fn fmt_bool(sink: void*, b: i32, fill: u32, align: i32, flags: i32, width: i32, prec: i32) -> void {
         if (b != 0) {
             fmt_text(sink, "true", fill, align, flags, width, prec);
         } else {
@@ -237,7 +237,7 @@ namespace fmt {
     }
 
     // an integer as the character it's the code point of ({:c})
-    internal fn fmt_char(sink: void*, cp: u32, fill: u32, align: i32, flags: i32, width: i32) -> void {
+    fn fmt_char(sink: void*, cp: u32, fill: u32, align: i32, flags: i32, width: i32) -> void {
         var b: u8[4];
         val n = utf8_put(&b[0], cp);
         var none: u8[1];
@@ -246,7 +246,7 @@ namespace fmt {
 
     // v's digits in base, last first from out[at] down; where the first digit is. Works on 32-bit
     // pieces, so no 128-bit division is needed (32-bit cores have none)
-    internal fn digits_u128(v: u128, base: u32, upper: bool, out: u8*, at: usize) -> usize {
+    fn digits_u128(v: u128, base: u32, upper: bool, out: u8*, at: usize) -> usize {
         var i = at;
         var hex = "0123456789abcdef";
         if (upper) {
@@ -286,7 +286,7 @@ namespace fmt {
     }
 
     @attributes([@runtime("volt_fmt_u")])
-    internal fn fmt_u(sink: void*, v: u128, neg: i32, fill: u32, align: i32, flags: i32, width: i32, ty: i32) -> void {
+    fn fmt_u(sink: void*, v: u128, neg: i32, fill: u32, align: i32, flags: i32, width: i32, ty: i32) -> void {
         if (ty == 'c') {
             fmt_char(sink, @cast<u32>(v), fill, align, flags, width);
             return;
@@ -327,7 +327,7 @@ namespace fmt {
 
     // a signed integer of `bits` bits: decimal with its sign; x, b and o show its two's complement
     @attributes([@runtime("volt_fmt_i")])
-    internal fn fmt_i(sink: void*, v: i128, bits: i32, fill: u32, align: i32, flags: i32, width: i32, ty: i32) -> void {
+    fn fmt_i(sink: void*, v: i128, bits: i32, fill: u32, align: i32, flags: i32, width: i32, ty: i32) -> void {
         if (ty == 'x' || ty == 'X' || ty == 'b' || ty == 'o') {
             var u = @cast<u128>(v);
             if (bits < 128) {
@@ -342,14 +342,14 @@ namespace fmt {
     }
 
     @attributes([@runtime("volt_print_u128")])
-    internal fn print_u128(sink: void*, v: u128) -> void {
+    fn print_u128(sink: void*, v: u128) -> void {
         var buf: u8[40];
         val i = digits_u128(v, 10, false, &buf[0], 40);
         rt_put(sink, @cast<cstr>(&buf[i]), 40 - i);
     }
 
     @attributes([@runtime("volt_print_i128")])
-    internal fn print_i128(sink: void*, v: i128) -> void {
+    fn print_i128(sink: void*, v: i128) -> void {
         if (v < 0) {
             rt_put(sink, "-", 1);
             print_u128(sink, 0 -% @cast<u128>(v));
@@ -365,9 +365,9 @@ namespace fmt {
     // multiplication by 10, with no more than 1074 of them. Rounding looks at the next digit and
     // whether anything nonzero follows, so ties go to the even digit, as printf's do.
 
-    internal val FRAC_LIMBS: usize = 36;
+    val FRAC_LIMBS: usize = 36;
 
-    internal struct exact {
+    struct exact {
         int_digits: u8[330]; // the integer part ("" for 0)
         int_n: usize;
         frac: u32[36];       // the fraction: frac / 2^k
@@ -375,7 +375,7 @@ namespace fmt {
     }
 
     // |v|'s exact decimal expansion, ready to give fraction digits (v finite)
-    internal fn exact_of(x: exact&, b: u64) -> void {
+    fn exact_of(x: exact&, b: u64) -> void {
         val ex = @cast<i32>((b >> 52) & 2047);
         var m = b & 4503599627370495;
         var e: i32 = -1074;
@@ -463,7 +463,7 @@ namespace fmt {
     }
 
     // the fraction's next digit: frac * 10, the digit is what passes 2^k
-    internal fn next_digit(x: exact&) -> u8 {
+    fn next_digit(x: exact&) -> u8 {
         val top = @cast<usize>(x.k / 32) + 2;
         var carry: u64 = 0;
         for (i) in 0..top {
@@ -481,7 +481,7 @@ namespace fmt {
         return d;
     }
 
-    internal fn frac_zero(x: exact&) -> bool {
+    fn frac_zero(x: exact&) -> bool {
         for (i) in 0..FRAC_LIMBS {
             if (x.frac[i] != 0) {
                 return false;
@@ -492,7 +492,7 @@ namespace fmt {
 
     // round the digits out[from..to) up by one in the last place (skipping a '.'); true when it
     // carried out of the first digit
-    internal fn round_up(out: u8*, from: usize, to: usize) -> bool {
+    fn round_up(out: u8*, from: usize, to: usize) -> bool {
         var i = to;
         while (i > from) {
             i -= 1;
@@ -510,14 +510,14 @@ namespace fmt {
 
     // should the digits round up? next is the first dropped digit, sticky whether anything nonzero
     // follows it, last the last digit kept
-    internal fn rounds_up(next: u8, sticky: bool, last: u8) -> bool {
+    fn rounds_up(next: u8, sticky: bool, last: u8) -> bool {
         return next > 5 || (next == 5 && (sticky || (last - '0') % 2 == 1));
     }
 
-    internal val MAX_DIGITS: usize = 1100; // past 1074 fraction digits, an f64's expansion is all zeros
+    val MAX_DIGITS: usize = 1100; // past 1074 fraction digits, an f64's expansion is all zeros
 
     // %.Nf of |v| into out: the text, and how many zeros past MAX_DIGITS follow it
-    internal fn fixed(x: exact&, prec: usize, out: u8*, n: usize&, zeros: usize&) -> void {
+    fn fixed(x: exact&, prec: usize, out: u8*, n: usize&, zeros: usize&) -> void {
         var at: usize = 1; // out[0] stays free for a carry into a new first digit
         if (x.int_n == 0) {
             out[at] = '0';
@@ -560,7 +560,7 @@ namespace fmt {
     // %.Pe of |v| into out: mantissa digits (with a '.') and the exponent; `zeros` zeros past
     // MAX_DIGITS go between them. The digits are made at out[1..], then the first moves in front of
     // the '.'
-    internal fn exp_digits(x: exact&, prec: usize, out: u8*, n: usize&, zeros: usize&, e10: i32&) -> void {
+    fn exp_digits(x: exact&, prec: usize, out: u8*, n: usize&, zeros: usize&, e10: i32&) -> void {
         var want = prec + 1;
         *zeros = 0;
         if (want > MAX_DIGITS) {
@@ -631,7 +631,7 @@ namespace fmt {
     }
 
     // "e" and the exponent, without + or leading zeros (1.5e3, 1.2e-4), at out
-    internal fn exp_text(out: u8*, e: i32, upper: bool) -> usize {
+    fn exp_text(out: u8*, e: i32, upper: bool) -> usize {
         var at: usize = 0;
         out[0] = 'e';
         if (upper) {
@@ -662,7 +662,7 @@ namespace fmt {
     }
 
     @attributes([@runtime("volt_fmt_f")])
-    internal fn fmt_f(sink: void*, v: f64, f32: i32, fill: u32, align: i32, flags: i32, width: i32, prec: i32, ty: i32) -> void {
+    fn fmt_f(sink: void*, v: f64, f32: i32, fill: u32, align: i32, flags: i32, width: i32, prec: i32, ty: i32) -> void {
         val b = f64_bits(v);
         val ex = (b >> 52) & 2047;
         val is_nan = ex == 2047 && (b & 4503599627370495) != 0;
@@ -759,27 +759,27 @@ namespace fmt {
     // in fixed widths).
 
     // a float as digits * 10^exp, digits with no trailing zeros
-    internal struct decimal {
+    struct decimal {
         digits: u64;
         exp: i32;
     }
 
     // bits of 5^e, for 0 <= e <= 3528
-    internal fn pow5bits(e: i32) -> i32 {
+    fn pow5bits(e: i32) -> i32 {
         return @cast<i32>((@cast<u64>(e) * 1217359) >> 19) + 1;
     }
 
     // floor(log10(2^e)), for 0 <= e <= 1650
-    internal fn log10_pow2(e: i32) -> i32 {
+    fn log10_pow2(e: i32) -> i32 {
         return @cast<i32>((@cast<u64>(e) * 78913) >> 18);
     }
 
     // floor(log10(5^e)), for 0 <= e <= 2620
-    internal fn log10_pow5(e: i32) -> i32 {
+    fn log10_pow5(e: i32) -> i32 {
         return @cast<i32>((@cast<u64>(e) * 732923) >> 20);
     }
 
-    internal fn multiple_of_pow5(v: u64, p: i32) -> bool {
+    fn multiple_of_pow5(v: u64, p: i32) -> bool {
         var x = v;
         var n: i32 = 0;
         while (x % 5 == 0) {
@@ -789,19 +789,19 @@ namespace fmt {
         return n >= p;
     }
 
-    internal fn multiple_of_pow2(v: u64, p: i32) -> bool {
+    fn multiple_of_pow2(v: u64, p: i32) -> bool {
         return (v & ((@cast<u64>(1) << @cast<u64>(p)) - 1)) == 0;
     }
 
     // (m * (hi * 2^64 + lo)) >> j, for j >= 64
-    internal fn mul_shift64(m: u64, lo: u64, hi: u64, j: i32) -> u64 {
+    fn mul_shift64(m: u64, lo: u64, hi: u64, j: i32) -> u64 {
         val b0 = @cast<u128>(m) * @cast<u128>(lo);
         val b2 = @cast<u128>(m) * @cast<u128>(hi);
         return @cast<u64>(((b0 >> 64) + b2) >> @cast<u128>(j - 64));
     }
 
     // (m * factor) >> j, for j > 32
-    internal fn mul_shift32(m: u32, factor: u64, j: i32) -> u32 {
+    fn mul_shift32(m: u32, factor: u64, j: i32) -> u32 {
         val b0 = @cast<u64>(m) * (factor & 4294967295);
         val b1 = @cast<u64>(m) * (factor >> 32);
         return @cast<u32>(((b0 >> 32) + b1) >> @cast<u64>(j - 32));
@@ -809,7 +809,7 @@ namespace fmt {
 
     // the shortest digits once vr (the value), vp and vm (the interval's ends) are known: digits are
     // dropped while the ends still differ, then vr rounds
-    internal fn shortest_digits(vr0: u64, vp0: u64, vm0: u64, vm_tz0: bool, vr_tz0: bool, accept: bool, last0: u64, e10: i32) -> decimal {
+    fn shortest_digits(vr0: u64, vp0: u64, vm0: u64, vm_tz0: bool, vr_tz0: bool, accept: bool, last0: u64, e10: i32) -> decimal {
         var vr = vr0;
         var vp = vp0;
         var vm = vm0;
@@ -870,7 +870,7 @@ namespace fmt {
     }
 
     // an f64's shortest decimal, from its mantissa and biased exponent (finite, not zero)
-    internal fn d2d(mant: u64, ex: u32) -> decimal {
+    fn d2d(mant: u64, ex: u32) -> decimal {
         var e2: i32 = 0;
         var m2: u64 = 0;
         if (ex == 0) {
@@ -943,7 +943,7 @@ namespace fmt {
     }
 
     // an f32's shortest decimal (finite, not zero)
-    internal fn f2d(mant: u32, ex: u32) -> decimal {
+    fn f2d(mant: u32, ex: u32) -> decimal {
         var e2: i32 = 0;
         var m2: u32 = 0;
         if (ex == 0) {
@@ -1021,18 +1021,18 @@ namespace fmt {
     }
 
     // the bits of an f64
-    internal fn f64_bits(v: f64) -> u64 {
+    fn f64_bits(v: f64) -> u64 {
         return @bitcast<u64>(v);
     }
 
-    internal fn f32_bits(v: f32) -> u32 {
+    fn f32_bits(v: f32) -> u32 {
         return @bitcast<u32>(v);
     }
 
     // v as the shortest text that reads back as the same value (as an f32 when f32 is set), the way
     // %g would print that many digits: 1.5, 0.0001, 1e-05, 1.5e+16, inf, nan; below 1e16 a whole
     // number is written out (1500, not 1.5e+03). Writes at most 32 bytes at out; returns how many
-    internal fn shortest(out: u8*, v: f64, f32: bool) -> usize {
+    fn shortest(out: u8*, v: f64, f32: bool) -> usize {
         val buf = @slice(out, 32);
         var n: usize = 0;
         // NaN by its bits: no float comparison (cores without an FPU would call a routine for one)
@@ -1168,7 +1168,7 @@ namespace fmt {
     }
 
     // 2^k / 5^q + 1, 125 bits, as (low, high) halves: q = 0..341
-    internal val D_POW5_INV: u64[684] = {
+    val D_POW5_INV: u64[684] = {
         1, 2305843009213693952, 11068046444225730970, 1844674407370955161,
         5165088340638674453, 1475739525896764129, 7821419487252849886, 1180591620717411303,
         8824922364862649494, 1888946593147858085, 7059937891890119595, 1511157274518286468,
@@ -1342,7 +1342,7 @@ namespace fmt {
         14677010862395735754, 1681492134412670958, 673562245690857633, 1345193707530136767,
     };
     // 5^i in its top 125 bits, as (low, high) halves: i = 0..325
-    internal val D_POW5: u64[652] = {
+    val D_POW5: u64[652] = {
         0, 1152921504606846976, 0, 1441151880758558720,
         0, 1801439850948198400, 0, 2251799813685248000,
         0, 1407374883553280000, 0, 1759218604441600000,
@@ -1508,7 +1508,7 @@ namespace fmt {
         3278889188817135834, 1424047269444608885, 8710297504448807696, 1780059086805761106,
     };
     // the same for f32, in 59 and 61 bits: q = 0..30, i = 0..46
-    internal val F_POW5_INV: u64[31] = {
+    val F_POW5_INV: u64[31] = {
         576460752303423489, 461168601842738791, 368934881474191033, 295147905179352826,
         472236648286964522, 377789318629571618, 302231454903657294, 483570327845851670,
         386856262276681336, 309485009821345069, 495176015714152110, 396140812571321688,
@@ -1518,7 +1518,7 @@ namespace fmt {
         348449143727040987, 557518629963265579, 446014903970612463, 356811923176489971,
         570899077082383953, 456719261665907162, 365375409332725730,
     };
-    internal val F_POW5: u64[47] = {
+    val F_POW5: u64[47] = {
         1152921504606846976, 1441151880758558720, 1801439850948198400, 2251799813685248000,
         1407374883553280000, 1759218604441600000, 2199023255552000000, 1374389534720000000,
         1717986918400000000, 2147483648000000000, 1342177280000000000, 1677721600000000000,

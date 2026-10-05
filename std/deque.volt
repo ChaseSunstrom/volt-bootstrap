@@ -3,7 +3,7 @@
 
 // A double-ended queue that owns its elements. Nothing is allocated until the first push.
 <T: type, Allocator: std::mem::allocator = std::mem::default_allocator>
-struct deque {
+public struct deque {
     ptr: T* = @cast<T*>(@alignof(T)); // cap slots; a non-null placeholder while cap is 0
     head: usize = 0;                  // the slot of the first element
     len: usize = 0;                   // the elements held
@@ -13,20 +13,20 @@ struct deque {
 
 // an empty deque that allocates from allocator
 <T: type, A: std::mem::allocator>
-attach fn new_in(static this: std::deque<T>, allocator: A) -> std::deque<T, A> {
+public attach fn new_in(static this: std::deque<T>, allocator: A) -> std::deque<T, A> {
     return { allocator: move allocator };
 }
 
 // the slot of element i
 <T: type, A: std::mem::allocator>
-internal attach fn slot(this: std::deque<T, A>&, i: usize) -> T& {
+attach fn slot(this: std::deque<T, A>&, i: usize) -> T& {
     return &(@slice(this.ptr, this.cap)[(this.head + i) % this.cap]);
 }
 
 // room for at least n elements: when it grows (to double, at least 8), the elements move to the
 // front of the new slots in order
 <T: type, A: std::mem::allocator>
-attach fn reserve(this: std::deque<T, A>&, n: usize) -> std::mem::mem_error!void {
+public attach fn reserve(this: std::deque<T, A>&, n: usize) -> std::mem::mem_error!void {
     if (n <= this.cap) {
         return;
     }
@@ -52,13 +52,13 @@ attach fn reserve(this: std::deque<T, A>&, n: usize) -> std::mem::mem_error!void
 
 // room for one more
 <T: type, A: std::mem::allocator>
-internal attach fn grow(this: std::deque<T, A>&) -> void {
+attach fn grow(this: std::deque<T, A>&) -> void {
     this.reserve(this.len + 1) catch @panic("out of memory");
 }
 
 // element i from the front (panics when i >= len)
 <T: type, A: std::mem::allocator>
-attach fn at(this: std::deque<T, A>&, i: usize) -> T& {
+public attach fn at(this: std::deque<T, A>&, i: usize) -> T& {
     if (i >= this.len) {
         @panic("deque index out of range");
     }
@@ -67,7 +67,7 @@ attach fn at(this: std::deque<T, A>&, i: usize) -> T& {
 
 // the first element, or null when empty
 <T: type, A: std::mem::allocator>
-attach fn front(this: std::deque<T, A>&) -> T* {
+public attach fn front(this: std::deque<T, A>&) -> T* {
     if (this.len == 0) {
         return null;
     }
@@ -76,7 +76,7 @@ attach fn front(this: std::deque<T, A>&) -> T* {
 
 // the last element, or null when empty
 <T: type, A: std::mem::allocator>
-attach fn back(this: std::deque<T, A>&) -> T* {
+public attach fn back(this: std::deque<T, A>&) -> T* {
     if (this.len == 0) {
         return null;
     }
@@ -85,7 +85,7 @@ attach fn back(this: std::deque<T, A>&) -> T* {
 
 // append value at the back
 <T: type, A: std::mem::allocator>
-attach fn push_back(this: std::deque<T, A>&, value: T) -> void {
+public attach fn push_back(this: std::deque<T, A>&, value: T) -> void {
     if (this.len == this.cap) {
         this.grow();
     }
@@ -95,7 +95,7 @@ attach fn push_back(this: std::deque<T, A>&, value: T) -> void {
 
 // put value at the front
 <T: type, A: std::mem::allocator>
-attach fn push_front(this: std::deque<T, A>&, value: T) -> void {
+public attach fn push_front(this: std::deque<T, A>&, value: T) -> void {
     if (this.len == this.cap) {
         this.grow();
     }
@@ -106,7 +106,7 @@ attach fn push_front(this: std::deque<T, A>&, value: T) -> void {
 
 // the last element, moved out
 <T: type, A: std::mem::allocator>
-attach fn pop_back(this: std::deque<T, A>&) -> T? {
+public attach fn pop_back(this: std::deque<T, A>&) -> T? {
     if (this.len == 0) {
         return null;
     }
@@ -116,7 +116,7 @@ attach fn pop_back(this: std::deque<T, A>&) -> T? {
 
 // the first element, moved out
 <T: type, A: std::mem::allocator>
-attach fn pop_front(this: std::deque<T, A>&) -> T? {
+public attach fn pop_front(this: std::deque<T, A>&) -> T? {
     if (this.len == 0) {
         return null;
     }
@@ -128,7 +128,7 @@ attach fn pop_front(this: std::deque<T, A>&) -> T? {
 
 // delete every element, keep the memory
 <T: type, A: std::mem::allocator>
-attach fn clear(this: std::deque<T, A>&) -> void {
+public attach fn clear(this: std::deque<T, A>&) -> void {
     while (this.len > 0) {
         this.pop_back();
     }
@@ -136,20 +136,20 @@ attach fn clear(this: std::deque<T, A>&) -> void {
 
 // walks a deque front to back; changing the deque while walking isn't allowed
 <T: type, A: std::mem::allocator>
-struct deque_iter {
+public struct deque_iter {
     d: std::deque<T, A>*;
     i: usize = 0; // the next element
 }
 
 // for (x) in d.iter(): each element, as a reference
 <T: type, A: std::mem::allocator>
-attach fn iter(this: std::deque<T, A>&) -> std::deque_iter<T, A> {
+public attach fn iter(this: std::deque<T, A>&) -> std::deque_iter<T, A> {
     return { d: this as std::deque<T, A>* };
 }
 
 // the next element
 <T: type, A: std::mem::allocator>
-attach fn next(this: std::deque_iter<T, A>&) -> T* {
+public attach fn next(this: std::deque_iter<T, A>&) -> T* {
     if (this.i >= this.d->len) {
         return null;
     }
@@ -159,7 +159,7 @@ attach fn next(this: std::deque_iter<T, A>&) -> T* {
 
 // a new deque holding a copy of each element, with a copy of the allocator
 <T: type, A: std::mem::allocator>
-attach fn copy(this: std::deque<T, A>&) -> std::deque<T, A> {
+public attach fn copy(this: std::deque<T, A>&) -> std::deque<T, A> {
     var out: std::deque<T, A> = { allocator: copy this.allocator };
     for (i) in 0..this.len {
         out.push_back(copy *this.slot(i));
@@ -169,7 +169,7 @@ attach fn copy(this: std::deque<T, A>&) -> std::deque<T, A> {
 
 // deletes the elements, then frees the memory
 <T: type, A: std::mem::allocator>
-attach fn delete(this: std::deque<T, A>&) -> void {
+public attach fn delete(this: std::deque<T, A>&) -> void {
     this.clear();
     if (this.cap > 0) {
         this.allocator.free<T>(this.ptr, this.cap);

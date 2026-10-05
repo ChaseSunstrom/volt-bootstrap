@@ -6,19 +6,19 @@
 // back as java_error::THROWN with its toString(): "java.lang.ArithmeticException: / by zero".
 use { "jni.h" } as jni;
 
-error java_error {
+public error java_error {
     THROWN: std::string,
 }
 
 // ---------- the JVM ----------
 
-struct vm {
+public struct vm {
     jvm: jni::JavaVM* = null;
     env: jni::JNIEnv* = null;
 }
 
 // starts the JVM with this class path (directories and jars, joined with ':')
-fn start(classpath: str) -> java_error!vm {
+public fn start(classpath: str) -> java_error!vm {
     var cp = std::string::from("-Djava.class.path=");
     cp.append(classpath);
     var opt: jni::JavaVMOption = { optionString: cp.c_str() };
@@ -32,7 +32,7 @@ fn start(classpath: str) -> java_error!vm {
     return out;
 }
 
-attach fn delete(this: vm&) -> void {
+public attach fn delete(this: vm&) -> void {
     if (this.jvm != null) {
         val f = (*this.jvm)->DestroyJavaVM;
         if (f) {
@@ -43,26 +43,26 @@ attach fn delete(this: vm&) -> void {
 }
 
 // JNI's functions
-fn fns(env: jni::JNIEnv*) -> jni::JNINativeInterface_* {
+public fn fns(env: jni::JNIEnv*) -> jni::JNINativeInterface_* {
     return @cast<jni::JNINativeInterface_*>(*env);
 }
 
 // ---------- objects ----------
 
 // a global reference to a Java object: a class, a string, anything
-struct object {
+public struct object {
     env: jni::JNIEnv* = null;
     ref: jni::jobject = null;
 }
 
-attach fn delete(this: object&) -> void {
+public attach fn delete(this: object&) -> void {
     if (this.ref != null) {
         (fns(this.env)->DeleteGlobalRef ?? return)(this.env, this.ref);
         this.ref = null;
     }
 }
 
-attach fn copy(this: object&) -> object {
+public attach fn copy(this: object&) -> object {
     if (this.ref == null) {
         return { env: this.env };
     }
@@ -70,7 +70,7 @@ attach fn copy(this: object&) -> object {
 }
 
 // a global reference for a local one (which is released); null: the pending exception
-fn global(env: jni::JNIEnv*, local: jni::jobject) -> java_error!object {
+public fn global(env: jni::JNIEnv*, local: jni::jobject) -> java_error!object {
     try check(env);
     if (local == null) {
         return { env: env };
@@ -81,14 +81,14 @@ fn global(env: jni::JNIEnv*, local: jni::jobject) -> java_error!object {
     return { env: env, ref: g };
 }
 
-attach fn is_null(this: object&) -> bool {
+public attach fn is_null(this: object&) -> bool {
     return this.ref == null;
 }
 
 // ---------- exceptions ----------
 
 // the pending Java exception as an error (and clears it)
-fn check(env: jni::JNIEnv*) -> java_error!void {
+public fn check(env: jni::JNIEnv*) -> java_error!void {
     val t = fns(env);
     if ((t->ExceptionCheck ?? @panic("JNI"))(env) == 0) {
         return;
@@ -110,7 +110,7 @@ fn check(env: jni::JNIEnv*) -> java_error!void {
 }
 
 // a java.lang.String's text
-fn text(env: jni::JNIEnv*, s: jni::jobject) -> std::string {
+public fn text(env: jni::JNIEnv*, s: jni::jobject) -> std::string {
     val t = fns(env);
     val chars = (t->GetStringUTFChars ?? @panic("JNI"))(env, s, null) ?? return std::string::from("");
     val n = (t->GetStringUTFLength ?? @panic("JNI"))(env, s);
@@ -122,19 +122,19 @@ fn text(env: jni::JNIEnv*, s: jni::jobject) -> std::string {
 // ---------- classes, strings ----------
 
 // the class called name: "java/lang/Math", "Calc", "com/example/Thing"
-attach fn find_class(this: vm&, name: str) -> java_error!object {
+public attach fn find_class(this: vm&, name: str) -> java_error!object {
     var n = std::string::from(name);
     return global(this.env, (fns(this.env)->FindClass ?? @panic("JNI"))(this.env, n.c_str()));
 }
 
 // a new java.lang.String
-attach fn string(this: vm&, s: str) -> java_error!object {
+public attach fn string(this: vm&, s: str) -> java_error!object {
     var n = std::string::from(s);
     return global(this.env, (fns(this.env)->NewStringUTF ?? @panic("JNI"))(this.env, n.c_str()));
 }
 
 // a Java String's text (String.valueOf for anything else, through toString)
-attach fn to_string(this: object&) -> java_error!std::string {
+public attach fn to_string(this: object&) -> java_error!std::string {
     if (this.ref == null) {
         return std::string::from("null");
     }
@@ -146,47 +146,47 @@ attach fn to_string(this: object&) -> java_error!std::string {
 
 // a JNI local frame until this is deleted: the local references a call makes (its str arguments)
 // go with it
-struct local_frame {
+public struct local_frame {
     env: jni::JNIEnv*;
 }
 
-fn frame(env: jni::JNIEnv*) -> local_frame {
+public fn frame(env: jni::JNIEnv*) -> local_frame {
     (fns(env)->PushLocalFrame ?? @panic("JNI"))(env, 16);
     return { env: env };
 }
 
-attach fn delete(this: local_frame&) -> void {
+public attach fn delete(this: local_frame&) -> void {
     (fns(this.env)->PopLocalFrame ?? @panic("JNI"))(this.env, null);
 }
 
 // x as a JNI argument; a str becomes a new String (a local reference, released after the call).
 // x stays the caller's: an object argument is lent to the call (pass `copy o` to keep using o)
 <T: type>
-fn jarg(env: jni::JNIEnv*, x: T&) -> jni::jvalue {
+public fn jarg(env: jni::JNIEnv*, x: T&) -> jni::jvalue {
     @compile_error("java arguments are integers, f64, f32, bool, str and java::object");
 }
-fn jarg<i32>(env: jni::JNIEnv*, x: i32&) -> jni::jvalue { var v: jni::jvalue = { i: *x }; return v; }
-fn jarg<i64>(env: jni::JNIEnv*, x: i64&) -> jni::jvalue { var v: jni::jvalue = { j: *x }; return v; }
-fn jarg<i16>(env: jni::JNIEnv*, x: i16&) -> jni::jvalue { var v: jni::jvalue = { s: *x }; return v; }
-fn jarg<i8>(env: jni::JNIEnv*, x: i8&) -> jni::jvalue { var v: jni::jvalue = { b: *x }; return v; }
-fn jarg<f64>(env: jni::JNIEnv*, x: f64&) -> jni::jvalue { var v: jni::jvalue = { d: *x }; return v; }
-fn jarg<f32>(env: jni::JNIEnv*, x: f32&) -> jni::jvalue { var v: jni::jvalue = { f: *x }; return v; }
-fn jarg<bool>(env: jni::JNIEnv*, x: bool&) -> jni::jvalue {
+public fn jarg<i32>(env: jni::JNIEnv*, x: i32&) -> jni::jvalue { var v: jni::jvalue = { i: *x }; return v; }
+public fn jarg<i64>(env: jni::JNIEnv*, x: i64&) -> jni::jvalue { var v: jni::jvalue = { j: *x }; return v; }
+public fn jarg<i16>(env: jni::JNIEnv*, x: i16&) -> jni::jvalue { var v: jni::jvalue = { s: *x }; return v; }
+public fn jarg<i8>(env: jni::JNIEnv*, x: i8&) -> jni::jvalue { var v: jni::jvalue = { b: *x }; return v; }
+public fn jarg<f64>(env: jni::JNIEnv*, x: f64&) -> jni::jvalue { var v: jni::jvalue = { d: *x }; return v; }
+public fn jarg<f32>(env: jni::JNIEnv*, x: f32&) -> jni::jvalue { var v: jni::jvalue = { f: *x }; return v; }
+public fn jarg<bool>(env: jni::JNIEnv*, x: bool&) -> jni::jvalue {
     var v: jni::jvalue = { z: 0 };
     if (*x) {
         v.z = 1;
     }
     return v;
 }
-fn jarg<str>(env: jni::JNIEnv*, x: str&) -> jni::jvalue {
+public fn jarg<str>(env: jni::JNIEnv*, x: str&) -> jni::jvalue {
     var n = std::string::from(*x);
     var v: jni::jvalue = { l: (fns(env)->NewStringUTF ?? @panic("JNI"))(env, n.c_str()) };
     return v;
 }
-fn jarg<object>(env: jni::JNIEnv*, x: object&) -> jni::jvalue { var v: jni::jvalue = { l: x.ref }; return v; }
+public fn jarg<object>(env: jni::JNIEnv*, x: object&) -> jni::jvalue { var v: jni::jvalue = { l: x.ref }; return v; }
 
 // what a call returns, by the kind of method
-enum kind {
+public enum kind {
     VOID,
     INT,
     LONG,
@@ -197,7 +197,7 @@ enum kind {
 
 // calls a static method (this is a class) or an instance method, with the arguments made, inside
 // a local frame that frees their local references
-fn invoke(target: object&, is_static: bool, name: str, sig: str, args: jni::jvalue[..], k: kind) -> java_error!jni::jvalue {
+public fn invoke(target: object&, is_static: bool, name: str, sig: str, args: jni::jvalue[..], k: kind) -> java_error!jni::jvalue {
     if (target.ref == null) {
         return java_error::THROWN(std::fmt::format("java.lang.NullPointerException: {} on null", name));
     }
@@ -247,49 +247,49 @@ fn invoke(target: object&, is_static: bool, name: str, sig: str, args: jni::jval
 
 // every call method: build the arguments, call, convert what comes back
 <Args: type...>
-attach fn call_static_void(this: object&, name: str, sig: str, args: Args...) -> java_error!void {
+public attach fn call_static_void(this: object&, name: str, sig: str, args: Args...) -> java_error!void {
     val f = frame(this.env);
     var a: std::vec<jni::jvalue> = {};
     comptime for (x) in args { a.push(jarg(this.env, &x)) catch @panic("out of memory"); }
     val r = try invoke(this, true, name, sig, a.items(), kind::VOID);
 }
 <Args: type...>
-attach fn call_static_int(this: object&, name: str, sig: str, args: Args...) -> java_error!i32 {
+public attach fn call_static_int(this: object&, name: str, sig: str, args: Args...) -> java_error!i32 {
     val f = frame(this.env);
     var a: std::vec<jni::jvalue> = {};
     comptime for (x) in args { a.push(jarg(this.env, &x)) catch @panic("out of memory"); }
     return (try invoke(this, true, name, sig, a.items(), kind::INT)).i;
 }
 <Args: type...>
-attach fn call_static_long(this: object&, name: str, sig: str, args: Args...) -> java_error!i64 {
+public attach fn call_static_long(this: object&, name: str, sig: str, args: Args...) -> java_error!i64 {
     val f = frame(this.env);
     var a: std::vec<jni::jvalue> = {};
     comptime for (x) in args { a.push(jarg(this.env, &x)) catch @panic("out of memory"); }
     return (try invoke(this, true, name, sig, a.items(), kind::LONG)).j;
 }
 <Args: type...>
-attach fn call_static_double(this: object&, name: str, sig: str, args: Args...) -> java_error!f64 {
+public attach fn call_static_double(this: object&, name: str, sig: str, args: Args...) -> java_error!f64 {
     val f = frame(this.env);
     var a: std::vec<jni::jvalue> = {};
     comptime for (x) in args { a.push(jarg(this.env, &x)) catch @panic("out of memory"); }
     return (try invoke(this, true, name, sig, a.items(), kind::DOUBLE)).d;
 }
 <Args: type...>
-attach fn call_static_bool(this: object&, name: str, sig: str, args: Args...) -> java_error!bool {
+public attach fn call_static_bool(this: object&, name: str, sig: str, args: Args...) -> java_error!bool {
     val f = frame(this.env);
     var a: std::vec<jni::jvalue> = {};
     comptime for (x) in args { a.push(jarg(this.env, &x)) catch @panic("out of memory"); }
     return (try invoke(this, true, name, sig, a.items(), kind::BOOL)).z != 0;
 }
 <Args: type...>
-attach fn call_static_object(this: object&, name: str, sig: str, args: Args...) -> java_error!object {
+public attach fn call_static_object(this: object&, name: str, sig: str, args: Args...) -> java_error!object {
     val f = frame(this.env);
     var a: std::vec<jni::jvalue> = {};
     comptime for (x) in args { a.push(jarg(this.env, &x)) catch @panic("out of memory"); }
     return global(this.env, (try invoke(this, true, name, sig, a.items(), kind::OBJECT)).l);
 }
 <Args: type...>
-attach fn call_static_string(this: object&, name: str, sig: str, args: Args...) -> java_error!std::string {
+public attach fn call_static_string(this: object&, name: str, sig: str, args: Args...) -> java_error!std::string {
     val f = frame(this.env);
     var a: std::vec<jni::jvalue> = {};
     comptime for (x) in args { a.push(jarg(this.env, &x)) catch @panic("out of memory"); }
@@ -297,42 +297,42 @@ attach fn call_static_string(this: object&, name: str, sig: str, args: Args...) 
     return o.to_string();
 }
 <Args: type...>
-attach fn call_void(this: object&, name: str, sig: str, args: Args...) -> java_error!void {
+public attach fn call_void(this: object&, name: str, sig: str, args: Args...) -> java_error!void {
     val f = frame(this.env);
     var a: std::vec<jni::jvalue> = {};
     comptime for (x) in args { a.push(jarg(this.env, &x)) catch @panic("out of memory"); }
     val r = try invoke(this, false, name, sig, a.items(), kind::VOID);
 }
 <Args: type...>
-attach fn call_int(this: object&, name: str, sig: str, args: Args...) -> java_error!i32 {
+public attach fn call_int(this: object&, name: str, sig: str, args: Args...) -> java_error!i32 {
     val f = frame(this.env);
     var a: std::vec<jni::jvalue> = {};
     comptime for (x) in args { a.push(jarg(this.env, &x)) catch @panic("out of memory"); }
     return (try invoke(this, false, name, sig, a.items(), kind::INT)).i;
 }
 <Args: type...>
-attach fn call_long(this: object&, name: str, sig: str, args: Args...) -> java_error!i64 {
+public attach fn call_long(this: object&, name: str, sig: str, args: Args...) -> java_error!i64 {
     val f = frame(this.env);
     var a: std::vec<jni::jvalue> = {};
     comptime for (x) in args { a.push(jarg(this.env, &x)) catch @panic("out of memory"); }
     return (try invoke(this, false, name, sig, a.items(), kind::LONG)).j;
 }
 <Args: type...>
-attach fn call_bool(this: object&, name: str, sig: str, args: Args...) -> java_error!bool {
+public attach fn call_bool(this: object&, name: str, sig: str, args: Args...) -> java_error!bool {
     val f = frame(this.env);
     var a: std::vec<jni::jvalue> = {};
     comptime for (x) in args { a.push(jarg(this.env, &x)) catch @panic("out of memory"); }
     return (try invoke(this, false, name, sig, a.items(), kind::BOOL)).z != 0;
 }
 <Args: type...>
-attach fn call_double(this: object&, name: str, sig: str, args: Args...) -> java_error!f64 {
+public attach fn call_double(this: object&, name: str, sig: str, args: Args...) -> java_error!f64 {
     val f = frame(this.env);
     var a: std::vec<jni::jvalue> = {};
     comptime for (x) in args { a.push(jarg(this.env, &x)) catch @panic("out of memory"); }
     return (try invoke(this, false, name, sig, a.items(), kind::DOUBLE)).d;
 }
 <Args: type...>
-attach fn call_object(this: object&, name: str, sig: str, args: Args...) -> java_error!object {
+public attach fn call_object(this: object&, name: str, sig: str, args: Args...) -> java_error!object {
     val f = frame(this.env);
     var a: std::vec<jni::jvalue> = {};
     comptime for (x) in args { a.push(jarg(this.env, &x)) catch @panic("out of memory"); }
@@ -341,7 +341,7 @@ attach fn call_object(this: object&, name: str, sig: str, args: Args...) -> java
 
 // a new instance of this class: its constructor's signature ("(I)V") and arguments
 <Args: type...>
-attach fn new_object(this: object&, sig: str, args: Args...) -> java_error!object {
+public attach fn new_object(this: object&, sig: str, args: Args...) -> java_error!object {
     val t = fns(this.env);
     var s = std::string::from(sig);
     val mid = (t->GetMethodID ?? @panic("JNI"))(this.env, this.ref, "<init>", s.c_str());

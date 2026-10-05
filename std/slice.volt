@@ -5,13 +5,13 @@
 // sorts in place, smallest first by cmp; stable (equal elements keep their order). Past 16 elements
 // it takes scratch room for n elements from allocator
 <T: type, A: std::mem::allocator = std::mem::default_allocator>
-attach fn sort(this: T[..]&, allocator: A = {}) -> void {
+public attach fn sort(this: T[..]&, allocator: A = {}) -> void {
     this.sort_by(|| (a: T&, b: T&) -> i32 { return a.cmp(b); }, move allocator);
 }
 
 // sorts in place by order(a, b) (negative: a goes first); stable
 <T: type, F: type, A: std::mem::allocator = std::mem::default_allocator>
-attach fn sort_by(this: T[..]&, order: F, allocator: A = {}) -> void {
+public attach fn sort_by(this: T[..]&, order: F, allocator: A = {}) -> void {
     val xs = *this;
     val n = xs.len;
     // insertion sort each run of 16, then merge runs pairwise, doubling their length
@@ -81,7 +81,7 @@ attach fn sort_by(this: T[..]&, order: F, allocator: A = {}) -> void {
 
 // whether every element sorts no earlier than the one before it
 <T: type>
-attach fn is_sorted(this: T[..]&) -> bool {
+public attach fn is_sorted(this: T[..]&) -> bool {
     val xs = *this;
     for (i) in 1..xs.len {
         if (xs[i].cmp(&xs[i - 1]) < 0) {
@@ -93,13 +93,13 @@ attach fn is_sorted(this: T[..]&) -> bool {
 
 // in a sorted slice: the first index whose element doesn't sort before x (len if none)
 <T: type>
-attach fn lower_bound(this: T[..]&, x: T) -> usize {
+public attach fn lower_bound(this: T[..]&, x: T) -> usize {
     return this.bound(&x);
 }
 
 // in a sorted slice: an index holding x, if one does
 <T: type>
-attach fn binary_search(this: T[..]&, x: T) -> usize? {
+public attach fn binary_search(this: T[..]&, x: T) -> usize? {
     val at = this.bound(&x);
     if (at < this.len && (*this)[at].cmp(&x) == 0) {
         return at;
@@ -109,7 +109,7 @@ attach fn binary_search(this: T[..]&, x: T) -> usize? {
 
 // lower_bound without taking x
 <T: type>
-internal attach fn bound(this: T[..]&, x: T&) -> usize {
+attach fn bound(this: T[..]&, x: T&) -> usize {
     val xs = *this;
     var lo: usize = 0;
     var hi = xs.len;
@@ -126,7 +126,7 @@ internal attach fn bound(this: T[..]&, x: T&) -> usize {
 
 // swaps elements i and j
 <T: type>
-attach fn swap(this: T[..]&, i: usize, j: usize) -> void {
+public attach fn swap(this: T[..]&, i: usize, j: usize) -> void {
     val xs = *this;
     val t = @read(&xs[i]);
     @write(&xs[i], @read(&xs[j]));
@@ -135,7 +135,7 @@ attach fn swap(this: T[..]&, i: usize, j: usize) -> void {
 
 // reverses the order in place
 <T: type>
-attach fn reverse(this: T[..]&) -> void {
+public attach fn reverse(this: T[..]&) -> void {
     val n = this.len;
     for (i) in 0..n / 2 {
         this.swap(i, n - 1 - i);
@@ -144,7 +144,7 @@ attach fn reverse(this: T[..]&) -> void {
 
 // the index of the first element equal to x (by eq), if any
 <T: type>
-attach fn index_of(this: T[..]&, x: T) -> usize? {
+public attach fn index_of(this: T[..]&, x: T) -> usize? {
     for (e&, i) in *this {
         if (e.eq(&x)) {
             return i;
@@ -155,13 +155,13 @@ attach fn index_of(this: T[..]&, x: T) -> usize? {
 
 // whether an element equals x (by eq)
 <T: type>
-attach fn contains(this: T[..]&, x: T) -> bool {
+public attach fn contains(this: T[..]&, x: T) -> bool {
     return this.index_of(move x) != null;
 }
 
 // the smallest element by cmp (the first of equals), or null when empty
 <T: type>
-attach fn min(this: T[..]&) -> T* {
+public attach fn min(this: T[..]&) -> T* {
     val xs = *this;
     if (xs.len == 0) {
         return null;
@@ -177,7 +177,7 @@ attach fn min(this: T[..]&) -> T* {
 
 // the largest element by cmp (the first of equals), or null when empty
 <T: type>
-attach fn max(this: T[..]&) -> T* {
+public attach fn max(this: T[..]&) -> T* {
     val xs = *this;
     if (xs.len == 0) {
         return null;

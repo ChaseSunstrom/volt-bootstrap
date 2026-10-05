@@ -12,43 +12,43 @@
 // during the call that made them.
 use { "node_api.h" } as napi;
 
-error node_error {
+public error node_error {
     THROWN: std::string,
 }
 
 // a JS value (and the environment it belongs to)
-struct value {
+public struct value {
     env: napi::napi_env__*;
     v: napi::napi_value__*;
 }
 
 // one call of an exported function: its arguments and `this`
-struct call {
+public struct call {
     env: napi::napi_env__*;
     args: std::vec<napi::napi_value__*> = {};
     this_value: napi::napi_value__* = null;
 }
 
 // the module being set up: what napi_register_module_v1 gets
-struct module {
+public struct module {
     env: napi::napi_env__*;
     exports_value: napi::napi_value__*;
 }
 
 // the module napi_register_module_v1 sets up
-fn init(env: void*, exports: void*) -> module {
+public fn init(env: void*, exports: void*) -> module {
     return { env: @cast<napi::napi_env__*>(env), exports_value: @cast<napi::napi_value__*>(exports) };
 }
 
 // the exports object, to return from napi_register_module_v1
-attach fn exports(this: module&) -> void* {
+public attach fn exports(this: module&) -> void* {
     return @cast<void*>(this.exports_value);
 }
 
 // ---------- errors ----------
 
 // the pending JS exception's message (and clears it), else what failed
-fn failure(env: napi::napi_env__*, what: str) -> node_error {
+public fn failure(env: napi::napi_env__*, what: str) -> node_error {
     var pending = false;
     napi::napi_is_exception_pending(env, &pending);
     if (pending) {
@@ -64,7 +64,7 @@ fn failure(env: napi::napi_env__*, what: str) -> node_error {
     return node_error::THROWN(move msg);
 }
 
-fn check(env: napi::napi_env__*, status: i32, what: str) -> node_error!void {
+public fn check(env: napi::napi_env__*, status: i32, what: str) -> node_error!void {
     if (status != napi::napi_ok) {
         return failure(env, what);
     }
@@ -73,7 +73,7 @@ fn check(env: napi::napi_env__*, status: i32, what: str) -> node_error!void {
 // ---------- exporting functions ----------
 
 // the C function Node calls for every exported Volt function; `data` is the Volt function
-extern "C" fn trampoline(env: napi::napi_env__*, info: napi::napi_callback_info__*) -> napi::napi_value__* {
+public extern "C" fn trampoline(env: napi::napi_env__*, info: napi::napi_callback_info__*) -> napi::napi_value__* {
     var argc: usize = 0;
     var data: void* = null;
     var c: call = { env: env };
@@ -102,7 +102,7 @@ extern "C" fn trampoline(env: napi::napi_env__*, info: napi::napi_callback_info_
 }
 
 // exports f under name: JS calls it with any arguments
-attach fn function(this: module&, name: str, f: extern "C" fn(call&) -> node_error!value) -> node_error!void {
+public attach fn function(this: module&, name: str, f: extern "C" fn(call&) -> node_error!value) -> node_error!void {
     var n = std::string::from(name);
     var fv: napi::napi_value__* = null;
     try check(this.env, napi::napi_create_function(this.env, n.c_str(), name.len, trampoline, @cast<void*>(f), &fv), "napi_create_function");
@@ -111,59 +111,59 @@ attach fn function(this: module&, name: str, f: extern "C" fn(call&) -> node_err
 
 // ---------- a call's arguments, and new values ----------
 
-attach fn len(this: call&) -> usize {
+public attach fn len(this: call&) -> usize {
     return this.args.len;
 }
 
 // argument i (undefined past the end)
-attach fn arg(this: call&, i: usize) -> value {
+public attach fn arg(this: call&, i: usize) -> value {
     if (i < this.args.len) {
         return { env: this.env, v: *this.args.at(i) };
     }
     return this.undefined();
 }
 
-attach fn this_arg(this: call&) -> value {
+public attach fn this_arg(this: call&) -> value {
     return { env: this.env, v: this.this_value };
 }
 
-attach fn undefined(this: call&) -> value {
+public attach fn undefined(this: call&) -> value {
     var r: napi::napi_value__* = null;
     napi::napi_get_undefined(this.env, &r);
     return { env: this.env, v: r };
 }
 
-attach fn null_value(this: call&) -> value {
+public attach fn null_value(this: call&) -> value {
     var r: napi::napi_value__* = null;
     napi::napi_get_null(this.env, &r);
     return { env: this.env, v: r };
 }
 
-attach fn number(this: call&, x: f64) -> value {
+public attach fn number(this: call&, x: f64) -> value {
     var r: napi::napi_value__* = null;
     napi::napi_create_double(this.env, x, &r);
     return { env: this.env, v: r };
 }
 
-attach fn boolean(this: call&, x: bool) -> value {
+public attach fn boolean(this: call&, x: bool) -> value {
     var r: napi::napi_value__* = null;
     napi::napi_get_boolean(this.env, x, &r);
     return { env: this.env, v: r };
 }
 
-attach fn string(this: call&, s: str) -> value {
+public attach fn string(this: call&, s: str) -> value {
     var r: napi::napi_value__* = null;
     napi::napi_create_string_utf8(this.env, @cast<cstr>(s.ptr), s.len, &r);
     return { env: this.env, v: r };
 }
 
-attach fn object(this: call&) -> value {
+public attach fn object(this: call&) -> value {
     var r: napi::napi_value__* = null;
     napi::napi_create_object(this.env, &r);
     return { env: this.env, v: r };
 }
 
-attach fn array(this: call&) -> value {
+public attach fn array(this: call&) -> value {
     var r: napi::napi_value__* = null;
     napi::napi_create_array(this.env, &r);
     return { env: this.env, v: r };
@@ -173,37 +173,37 @@ attach fn array(this: call&) -> value {
 
 // x as a JS value, for set, push and call: f64, f32, integers, bool, str, std::string, value
 <T: type>
-fn js(env: napi::napi_env__*, x: T) -> value {
+public fn js(env: napi::napi_env__*, x: T) -> value {
     @compile_error("node::js takes numbers, bool, str, std::string and node::value");
 }
-fn js<value>(env: napi::napi_env__*, x: value) -> value { return x; }
-fn js<f64>(env: napi::napi_env__*, x: f64) -> value {
+public fn js<value>(env: napi::napi_env__*, x: value) -> value { return x; }
+public fn js<f64>(env: napi::napi_env__*, x: f64) -> value {
     var r: napi::napi_value__* = null;
     napi::napi_create_double(env, x, &r);
     return { env: env, v: r };
 }
-fn js<f32>(env: napi::napi_env__*, x: f32) -> value { return js(env, x as f64); }
-fn js<i64>(env: napi::napi_env__*, x: i64) -> value {
+public fn js<f32>(env: napi::napi_env__*, x: f32) -> value { return js(env, x as f64); }
+public fn js<i64>(env: napi::napi_env__*, x: i64) -> value {
     var r: napi::napi_value__* = null;
     napi::napi_create_int64(env, x, &r);
     return { env: env, v: r };
 }
-fn js<i32>(env: napi::napi_env__*, x: i32) -> value { return js(env, x as i64); }
-fn js<bool>(env: napi::napi_env__*, x: bool) -> value {
+public fn js<i32>(env: napi::napi_env__*, x: i32) -> value { return js(env, x as i64); }
+public fn js<bool>(env: napi::napi_env__*, x: bool) -> value {
     var r: napi::napi_value__* = null;
     napi::napi_get_boolean(env, x, &r);
     return { env: env, v: r };
 }
-fn js<str>(env: napi::napi_env__*, x: str) -> value {
+public fn js<str>(env: napi::napi_env__*, x: str) -> value {
     var r: napi::napi_value__* = null;
     napi::napi_create_string_utf8(env, @cast<cstr>(x.ptr), x.len, &r);
     return { env: env, v: r };
 }
-fn js<std::string>(env: napi::napi_env__*, x: std::string) -> value { return js(env, x.as_str()); }
+public fn js<std::string>(env: napi::napi_env__*, x: std::string) -> value { return js(env, x.as_str()); }
 
 // "number", "string", "boolean", "object", "function", "undefined", "null", "symbol", "bigint" or
 // "external"
-attach fn type_of(this: value&) -> str {
+public attach fn type_of(this: value&) -> str {
     var t: i32 = 0;
     napi::napi_typeof(this.env, this.v, &t);
     val names: str[10] = { "undefined", "null", "boolean", "number", "string", "symbol", "object", "function", "external", "bigint" };
@@ -213,26 +213,26 @@ attach fn type_of(this: value&) -> str {
     return "unknown";
 }
 
-attach fn to_f64(this: value&) -> node_error!f64 {
+public attach fn to_f64(this: value&) -> node_error!f64 {
     var x: f64 = 0.0;
     try check(this.env, napi::napi_get_value_double(this.env, this.v, &x), "expected a number");
     return x;
 }
 
-attach fn to_i64(this: value&) -> node_error!i64 {
+public attach fn to_i64(this: value&) -> node_error!i64 {
     var x: i64 = 0;
     try check(this.env, napi::napi_get_value_int64(this.env, this.v, &x), "expected a number");
     return x;
 }
 
-attach fn to_bool(this: value&) -> node_error!bool {
+public attach fn to_bool(this: value&) -> node_error!bool {
     var x = false;
     try check(this.env, napi::napi_get_value_bool(this.env, this.v, &x), "expected a boolean");
     return x;
 }
 
 // a string's text (String(x) for anything else)
-attach fn to_string(this: value&) -> node_error!std::string {
+public attach fn to_string(this: value&) -> node_error!std::string {
     var s = this.v;
     if (this.type_of() != "string") {
         try check(this.env, napi::napi_coerce_to_string(this.env, this.v, &s), "String()");
@@ -247,7 +247,7 @@ attach fn to_string(this: value&) -> node_error!std::string {
     return std::string::from(@cast<str>(buf.items()[0..n]));
 }
 
-attach fn get(this: value&, name: str) -> node_error!value {
+public attach fn get(this: value&, name: str) -> node_error!value {
     var n = std::string::from(name);
     var r: napi::napi_value__* = null;
     try check(this.env, napi::napi_get_named_property(this.env, this.v, n.c_str(), &r), "a property");
@@ -255,34 +255,34 @@ attach fn get(this: value&, name: str) -> node_error!value {
 }
 
 <T: type>
-attach fn set(this: value&, name: str, x: T) -> node_error!void {
+public attach fn set(this: value&, name: str, x: T) -> node_error!void {
     var n = std::string::from(name);
     val v = js(this.env, x);
     try check(this.env, napi::napi_set_named_property(this.env, this.v, n.c_str(), v.v), "setting a property");
 }
 
 // an array's length
-attach fn length(this: value&) -> node_error!usize {
+public attach fn length(this: value&) -> node_error!usize {
     var n: u32 = 0;
     try check(this.env, napi::napi_get_array_length(this.env, this.v, &n), "expected an array");
     return n as usize;
 }
 
-attach fn at(this: value&, i: usize) -> node_error!value {
+public attach fn at(this: value&, i: usize) -> node_error!value {
     var r: napi::napi_value__* = null;
     try check(this.env, napi::napi_get_element(this.env, this.v, @cast<u32>(i), &r), "an element");
     return { env: this.env, v: r };
 }
 
 <T: type>
-attach fn put(this: value&, i: usize, x: T) -> node_error!void {
+public attach fn put(this: value&, i: usize, x: T) -> node_error!void {
     val v = js(this.env, x);
     try check(this.env, napi::napi_set_element(this.env, this.v, @cast<u32>(i), v.v), "setting an element");
 }
 
 // calls this JS function with the arguments (converted with js); a JS exception is the error
 <Args: type...>
-attach fn call(this: value&, args: Args...) -> node_error!value {
+public attach fn call(this: value&, args: Args...) -> node_error!value {
     var argv: std::vec<napi::napi_value__*> = {};
     comptime for (a) in args {
         val v = js(this.env, copy a); // an element can't be moved out of (a std::string)

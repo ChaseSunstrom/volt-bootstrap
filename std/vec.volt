@@ -3,7 +3,7 @@
 
 // A growable array that owns its elements. Nothing is allocated until the first push.
 <T: type, Allocator: std::mem::allocator = std::mem::default_allocator>
-struct vec {
+public struct vec {
     ptr: T* = @cast<T*>(@alignof(T)); // a non-null placeholder while cap is 0
     len: usize = 0;            // the elements held
     cap: usize = 0;            // room for this many before it grows
@@ -12,25 +12,25 @@ struct vec {
 
 // an empty vec that allocates from allocator
 <T: type, A: std::mem::allocator>
-attach fn new_in(static this: std::vec<T>, allocator: A) -> std::vec<T, A> {
+public attach fn new_in(static this: std::vec<T>, allocator: A) -> std::vec<T, A> {
     return { allocator: move allocator };
 }
 
 // the elements as a slice (valid until the vec changes)
 <T: type, A: std::mem::allocator>
-attach fn items(this: std::vec<T, A>&) -> T[..] {
+public attach fn items(this: std::vec<T, A>&) -> T[..] {
     return @slice(this.ptr, this.len);
 }
 
 // element i (bounds-checked in debug builds)
 <T: type, A: std::mem::allocator>
-attach fn at(this: std::vec<T, A>&, i: usize) -> T& {
+public attach fn at(this: std::vec<T, A>&, i: usize) -> T& {
     return &(@slice(this.ptr, this.len)[i]);
 }
 
 // room for at least n elements
 <T: type, A: std::mem::allocator>
-attach fn reserve(this: std::vec<T, A>&, n: usize) -> std::mem::mem_error!void {
+public attach fn reserve(this: std::vec<T, A>&, n: usize) -> std::mem::mem_error!void {
     if (n <= this.cap) {
         return;
     }
@@ -51,7 +51,7 @@ attach fn reserve(this: std::vec<T, A>&, n: usize) -> std::mem::mem_error!void {
 // slower either way)
 @attributes([@noinline])
 <T: type, A: std::mem::allocator>
-internal fn moved_to(ptr: T*, old: usize, cap: usize, allocator: A) -> std::mem::mem_error!(T*) {
+fn moved_to(ptr: T*, old: usize, cap: usize, allocator: A) -> std::mem::mem_error!(T*) {
     if (old == 0) {
         return try allocator.malloc<T>(cap);
     }
@@ -60,7 +60,7 @@ internal fn moved_to(ptr: T*, old: usize, cap: usize, allocator: A) -> std::mem:
 
 // append value (moved in), growing the memory when it's full
 <T: type, A: std::mem::allocator>
-attach fn push(this: std::vec<T, A>&, value: T) -> std::mem::mem_error!void {
+public attach fn push(this: std::vec<T, A>&, value: T) -> std::mem::mem_error!void {
     if (this.len == this.cap) {
         try this.reserve(this.len + 1);
     }
@@ -70,7 +70,7 @@ attach fn push(this: std::vec<T, A>&, value: T) -> std::mem::mem_error!void {
 
 // the last element, moved out
 <T: type, A: std::mem::allocator>
-attach fn pop(this: std::vec<T, A>&) -> T? {
+public attach fn pop(this: std::vec<T, A>&) -> T? {
     if (this.len == 0) {
         return null;
     }
@@ -80,7 +80,7 @@ attach fn pop(this: std::vec<T, A>&) -> T? {
 
 // the first element, or null when empty
 <T: type, A: std::mem::allocator>
-attach fn first(this: std::vec<T, A>&) -> T* {
+public attach fn first(this: std::vec<T, A>&) -> T* {
     if (this.len == 0) {
         return null;
     }
@@ -89,7 +89,7 @@ attach fn first(this: std::vec<T, A>&) -> T* {
 
 // the last element, or null when empty
 <T: type, A: std::mem::allocator>
-attach fn last(this: std::vec<T, A>&) -> T* {
+public attach fn last(this: std::vec<T, A>&) -> T* {
     if (this.len == 0) {
         return null;
     }
@@ -98,7 +98,7 @@ attach fn last(this: std::vec<T, A>&) -> T* {
 
 // put value at index i (0..=len), moving the elements from i on up by one
 <T: type, A: std::mem::allocator>
-attach fn insert(this: std::vec<T, A>&, i: usize, value: T) -> std::mem::mem_error!void {
+public attach fn insert(this: std::vec<T, A>&, i: usize, value: T) -> std::mem::mem_error!void {
     if (i > this.len) {
         @panic("vec insert index out of range");
     }
@@ -115,7 +115,7 @@ attach fn insert(this: std::vec<T, A>&, i: usize, value: T) -> std::mem::mem_err
 
 // take element i out, moving the ones after it down by one
 <T: type, A: std::mem::allocator>
-attach fn remove(this: std::vec<T, A>&, i: usize) -> T {
+public attach fn remove(this: std::vec<T, A>&, i: usize) -> T {
     if (i >= this.len) {
         @panic("vec remove index out of range");
     }
@@ -130,7 +130,7 @@ attach fn remove(this: std::vec<T, A>&, i: usize) -> T {
 
 // take element i out and put the last element in its place: O(1), but changes the order
 <T: type, A: std::mem::allocator>
-attach fn swap_remove(this: std::vec<T, A>&, i: usize) -> T {
+public attach fn swap_remove(this: std::vec<T, A>&, i: usize) -> T {
     if (i >= this.len) {
         @panic("vec swap_remove index out of range");
     }
@@ -145,7 +145,7 @@ attach fn swap_remove(this: std::vec<T, A>&, i: usize) -> T {
 
 // delete the elements from index n on (nothing when n >= len)
 <T: type, A: std::mem::allocator>
-attach fn truncate(this: std::vec<T, A>&, n: usize) -> void {
+public attach fn truncate(this: std::vec<T, A>&, n: usize) -> void {
     while (this.len > n) {
         this.pop();
     }
@@ -154,7 +154,7 @@ attach fn truncate(this: std::vec<T, A>&, n: usize) -> void {
 // n elements: copies of value added at the end, or the ones past n deleted. Filling is one plain
 // loop, which the C compiler turns into a memset for bytes
 <T: type, A: std::mem::allocator>
-attach fn resize(this: std::vec<T, A>&, n: usize, value: T) -> std::mem::mem_error!void {
+public attach fn resize(this: std::vec<T, A>&, n: usize, value: T) -> std::mem::mem_error!void {
     if (n <= this.len) {
         this.truncate(n);
         return;
@@ -169,7 +169,7 @@ attach fn resize(this: std::vec<T, A>&, n: usize, value: T) -> std::mem::mem_err
 
 // append a copy of each element of xs
 <T: type, A: std::mem::allocator>
-attach fn extend(this: std::vec<T, A>&, xs: T[..]) -> std::mem::mem_error!void {
+public attach fn extend(this: std::vec<T, A>&, xs: T[..]) -> std::mem::mem_error!void {
     try this.reserve(this.len + xs.len);
     for (x&) in xs {
         try this.push(copy *x);
@@ -178,7 +178,7 @@ attach fn extend(this: std::vec<T, A>&, xs: T[..]) -> std::mem::mem_error!void {
 
 // delete each element equal (by eq) to the one kept before it, so a run of equals keeps its first
 <T: type, A: std::mem::allocator>
-attach fn dedup(this: std::vec<T, A>&) -> void {
+public attach fn dedup(this: std::vec<T, A>&) -> void {
     val xs = @slice(this.ptr, this.len);
     if (xs.len == 0) {
         return;
@@ -199,7 +199,7 @@ attach fn dedup(this: std::vec<T, A>&) -> void {
 
 // delete the elements keep(&x) returns false for, keeping the others in order
 <T: type, A: std::mem::allocator, F: type>
-attach fn retain(this: std::vec<T, A>&, keep: F) -> void {
+public attach fn retain(this: std::vec<T, A>&, keep: F) -> void {
     val xs = @slice(this.ptr, this.len);
     var w: usize = 0; // elements kept so far, at the front
     for (r) in 0..xs.len {
@@ -217,7 +217,7 @@ attach fn retain(this: std::vec<T, A>&, keep: F) -> void {
 
 // delete every element, keep the memory
 <T: type, A: std::mem::allocator>
-attach fn clear(this: std::vec<T, A>&) -> void {
+public attach fn clear(this: std::vec<T, A>&) -> void {
     while (this.len > 0) {
         this.pop();
     }
@@ -225,7 +225,7 @@ attach fn clear(this: std::vec<T, A>&) -> void {
 
 // deletes the elements, then frees the memory
 <T: type, A: std::mem::allocator>
-attach fn delete(this: std::vec<T, A>&) -> void {
+public attach fn delete(this: std::vec<T, A>&) -> void {
     this.clear();
     if (this.cap > 0) {
         this.allocator.free<T>(this.ptr, this.cap);
@@ -234,7 +234,7 @@ attach fn delete(this: std::vec<T, A>&) -> void {
 
 // a new vec holding a copy of each element, with a copy of the allocator
 <T: type, A: std::mem::allocator>
-attach fn copy(this: std::vec<T, A>&) -> std::vec<T, A> {
+public attach fn copy(this: std::vec<T, A>&) -> std::vec<T, A> {
     var out: std::vec<T, A> = { allocator: copy this.allocator };
     out.reserve(this.len) catch @panic("out of memory");
     for (x&) in @slice(this.ptr, this.len) {

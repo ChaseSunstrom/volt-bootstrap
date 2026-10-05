@@ -6,15 +6,15 @@
 // (Part of package std: the package loader wraps every file in `namespace std`.)
 
 namespace softfloat {
-    val SIGN: u64 = 0x8000000000000000;
-    val INF: u64 = 0x7FF0000000000000;
-    val FRAC: u64 = 0x000FFFFFFFFFFFFF;
-    val IMPLICIT: u64 = 0x0010000000000000;
-    val QUIET: u64 = 0x0008000000000000;
-    val NAN: u64 = 0x7FF8000000000000;
+    public val SIGN: u64 = 0x8000000000000000;
+    public val INF: u64 = 0x7FF0000000000000;
+    public val FRAC: u64 = 0x000FFFFFFFFFFFFF;
+    public val IMPLICIT: u64 = 0x0010000000000000;
+    public val QUIET: u64 = 0x0008000000000000;
+    public val NAN: u64 = 0x7FF8000000000000;
 
     // the number of leading zero bits of x (64 for 0)
-    fn clz64(x: u64) -> i32 {
+    public fn clz64(x: u64) -> i32 {
         if (x == 0) {
             return 64;
         }
@@ -47,7 +47,7 @@ namespace softfloat {
     }
 
     // x >> by, with a 1 in the lowest bit when anything nonzero was shifted out ("sticky")
-    fn shift_sticky(x: u64, by: i32) -> u64 {
+    public fn shift_sticky(x: u64, by: i32) -> u64 {
         if (by <= 0) {
             return x;
         }
@@ -67,7 +67,7 @@ namespace softfloat {
     // the result from its sign, biased exponent and significand: the significand's leading 1 at bit 55
     // (for exp >= 1), its low three bits the guard, round and sticky bits. Below the smallest normal
     // the significand shifts right (a subnormal, or zero); past the largest it's infinity
-    fn pack64(sign: u64, exp0: i32, sig0: u64) -> u64 {
+    public fn pack64(sign: u64, exp0: i32, sig0: u64) -> u64 {
         var exp = exp0;
         var sig = sig0;
         if (exp >= 2047) {
@@ -87,7 +87,7 @@ namespace softfloat {
     }
 
     // the same for an f32: the significand's leading 1 at bit 26, three rounding bits below it
-    fn pack32(sign: u32, exp0: i32, sig0: u64) -> u32 {
+    public fn pack32(sign: u32, exp0: i32, sig0: u64) -> u32 {
         var exp = exp0;
         var sig = sig0;
         if (exp >= 255) {
@@ -105,13 +105,13 @@ namespace softfloat {
         return r;
     }
 
-    fn is_nan(a: u64) -> bool {
+    public fn is_nan(a: u64) -> bool {
         return (a & ~SIGN) > INF;
     }
 
     // a finite nonzero |a|'s significand (leading 1 at bit 52) and exponent, subnormals normalized
     // (their exponent goes to 0 or below)
-    fn unpack(a: u64, sig: u64&, exp: i32&) -> void {
+    public fn unpack(a: u64, sig: u64&, exp: i32&) -> void {
         val e = @cast<i32>((a >> 52) & 2047);
         val f = a & FRAC;
         if (e == 0) {
@@ -126,7 +126,7 @@ namespace softfloat {
 
     // ---- f64 ----
 
-    fn add64(a: u64, b: u64) -> u64 {
+    public fn add64(a: u64, b: u64) -> u64 {
         val a_abs = a & ~SIGN;
         val b_abs = b & ~SIGN;
         // zero, infinity or NaN
@@ -191,12 +191,12 @@ namespace softfloat {
         return pack64(sign, xe, xs);
     }
 
-    fn sub64(a: u64, b: u64) -> u64 {
+    public fn sub64(a: u64, b: u64) -> u64 {
         return add64(a, b ^ SIGN);
     }
 
     // the 128-bit product of a and b, from 32-bit pieces (32-bit cores have no 64-bit multiply high)
-    fn mul_wide(a: u64, b: u64, hi: u64&, lo: u64&) -> void {
+    public fn mul_wide(a: u64, b: u64, hi: u64&, lo: u64&) -> void {
         val al = a & 0xFFFFFFFF;
         val ah = a >> 32;
         val bl = b & 0xFFFFFFFF;
@@ -210,7 +210,7 @@ namespace softfloat {
         *hi = hh + (lh >> 32) + (hl >> 32) + (mid >> 32);
     }
 
-    fn mul64(a: u64, b: u64) -> u64 {
+    public fn mul64(a: u64, b: u64) -> u64 {
         val a_abs = a & ~SIGN;
         val b_abs = b & ~SIGN;
         val sign = (a ^ b) & SIGN;
@@ -258,7 +258,7 @@ namespace softfloat {
         return pack64(sign, e, top);
     }
 
-    fn div64(a: u64, b: u64) -> u64 {
+    public fn div64(a: u64, b: u64) -> u64 {
         val a_abs = a & ~SIGN;
         val b_abs = b & ~SIGN;
         val sign = (a ^ b) & SIGN;
@@ -315,7 +315,7 @@ namespace softfloat {
     }
 
     // -1, 0 or 1 as a is less than, equal to or greater than b; 2 when either is NaN. -0 equals 0
-    fn cmp64(a: u64, b: u64) -> i32 {
+    public fn cmp64(a: u64, b: u64) -> i32 {
         if (is_nan(a) || is_nan(b)) {
             return 2;
         }
@@ -346,7 +346,7 @@ namespace softfloat {
 
     // ---- conversions ----
 
-    fn f32_to_f64(a: u32) -> u64 {
+    public fn f32_to_f64(a: u32) -> u64 {
         val sign = @cast<u64>(a & 0x80000000) << 32;
         val e = @cast<i32>((a >> 23) & 255);
         val f = @cast<u64>(a & 0x007FFFFF);
@@ -368,7 +368,7 @@ namespace softfloat {
         return sign | (@cast<u64>(e - 127 + 1023) << 52) | (f << 29);
     }
 
-    fn f64_to_f32(a: u64) -> u32 {
+    public fn f64_to_f32(a: u64) -> u32 {
         val sign = @cast<u32>(a >> 32) & 0x80000000;
         val a_abs = a & ~SIGN;
         if (a_abs > INF) {
@@ -388,7 +388,7 @@ namespace softfloat {
     }
 
     // an integer's magnitude, and whether it's negative, as an f64 or f32 (rounded once)
-    fn u64_to_f64(neg: bool, v: u64) -> u64 {
+    public fn u64_to_f64(neg: bool, v: u64) -> u64 {
         var sign: u64 = 0;
         if (neg) {
             sign = SIGN;
@@ -407,7 +407,7 @@ namespace softfloat {
         return pack64(sign, lead + 1023, sig);
     }
 
-    fn u64_to_f32(neg: bool, v: u64) -> u32 {
+    public fn u64_to_f32(neg: bool, v: u64) -> u32 {
         var sign: u32 = 0;
         if (neg) {
             sign = 0x80000000;
@@ -425,14 +425,14 @@ namespace softfloat {
         return pack32(sign, lead + 127, sig);
     }
 
-    fn i64_to_f64(v: i64) -> u64 {
+    public fn i64_to_f64(v: i64) -> u64 {
         if (v < 0) {
             return u64_to_f64(true, 0 -% @cast<u64>(v));
         }
         return u64_to_f64(false, @cast<u64>(v));
     }
 
-    fn i64_to_f32(v: i64) -> u32 {
+    public fn i64_to_f32(v: i64) -> u32 {
         if (v < 0) {
             return u64_to_f32(true, 0 -% @cast<u64>(v));
         }
@@ -441,7 +441,7 @@ namespace softfloat {
 
     // a's integer part (toward zero) as an unsigned magnitude no wider than `bits`, saturating
     // past it; NaN gives the largest
-    fn f64_to_magnitude(a: u64, bits: i32) -> u64 {
+    public fn f64_to_magnitude(a: u64, bits: i32) -> u64 {
         val e = @cast<i32>((a >> 52) & 2047) - 1023;
         if (e < 0) {
             return 0;
@@ -459,7 +459,7 @@ namespace softfloat {
         return s >> @cast<u64>(52 - e);
     }
 
-    fn f64_to_i64(a: u64) -> i64 {
+    public fn f64_to_i64(a: u64) -> i64 {
         val m = f64_to_magnitude(a, 63);
         if ((a & SIGN) != 0 && !is_nan(a)) {
             if (m == 0x7FFFFFFFFFFFFFFF && @cast<i32>((a >> 52) & 2047) - 1023 >= 63) {
@@ -470,14 +470,14 @@ namespace softfloat {
         return @cast<i64>(m);
     }
 
-    fn f64_to_u64(a: u64) -> u64 {
+    public fn f64_to_u64(a: u64) -> u64 {
         if ((a & SIGN) != 0) {
             return 0;
         }
         return f64_to_magnitude(a, 64);
     }
 
-    fn f64_to_i32(a: u64) -> i32 {
+    public fn f64_to_i32(a: u64) -> i32 {
         val m = f64_to_magnitude(a, 31);
         if ((a & SIGN) != 0 && !is_nan(a)) {
             if (m == 0x7FFFFFFF && @cast<i32>((a >> 52) & 2047) - 1023 >= 31) {
@@ -488,7 +488,7 @@ namespace softfloat {
         return @cast<i32>(m);
     }
 
-    fn f64_to_u32(a: u64) -> u32 {
+    public fn f64_to_u32(a: u64) -> u32 {
         if ((a & SIGN) != 0) {
             return 0;
         }
@@ -497,23 +497,23 @@ namespace softfloat {
 
     // ---- f32: through f64, rounded once more ----
 
-    fn add32(a: u32, b: u32) -> u32 {
+    public fn add32(a: u32, b: u32) -> u32 {
         return f64_to_f32(add64(f32_to_f64(a), f32_to_f64(b)));
     }
 
-    fn sub32(a: u32, b: u32) -> u32 {
+    public fn sub32(a: u32, b: u32) -> u32 {
         return f64_to_f32(sub64(f32_to_f64(a), f32_to_f64(b)));
     }
 
-    fn mul32(a: u32, b: u32) -> u32 {
+    public fn mul32(a: u32, b: u32) -> u32 {
         return f64_to_f32(mul64(f32_to_f64(a), f32_to_f64(b)));
     }
 
-    fn div32(a: u32, b: u32) -> u32 {
+    public fn div32(a: u32, b: u32) -> u32 {
         return f64_to_f32(div64(f32_to_f64(a), f32_to_f64(b)));
     }
 
-    fn cmp32(a: u32, b: u32) -> i32 {
+    public fn cmp32(a: u32, b: u32) -> i32 {
         return cmp64(f32_to_f64(a), f32_to_f64(b));
     }
 }
