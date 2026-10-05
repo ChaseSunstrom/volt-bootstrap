@@ -95,3 +95,17 @@ fn std_linked() {
     assert!(!o.status.success() && String::from_utf8_lossy(&o.stderr).contains("rebuild it with voltc lib std"));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// tests/run/strings_multiline.volt saved with Windows line endings prints the same: a \r\n in a
+/// multi-line string is a \n
+#[test]
+fn multiline_strings_crlf() {
+    let src = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/run/strings_multiline.volt")).unwrap();
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("crlf-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let f = dir.join("crlf.volt");
+    std::fs::write(&f, src.replace('\n', "\r\n")).unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_voltc-bootstrap")).arg("run").arg(&f).output().unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!(String::from_utf8_lossy(&out.stdout).trim_end(), directives(&src, "expect").join("\n"), "{}", String::from_utf8_lossy(&out.stderr));
+}

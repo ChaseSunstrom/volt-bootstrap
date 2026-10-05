@@ -43,4 +43,19 @@ fn main() -> void {
 //          ^^^^ keyword.other.volt
     val z = null;
 //          ^^^^ constant.language.volt
+    val path = r"C:\dir\n";
+//             ^^^^^^^^^^^ string.quoted.raw.volt
+//                     ^^ - constant.character.escape.volt
+    val page = """
+//             ^^^ string.quoted.triple.volt
+        <li>{}</li> \t
+//          ^^ constant.other.placeholder.volt
+//                  ^^ constant.character.escape.volt
+        """;
+//      ^^^ string.quoted.triple.volt
+    val re = r"""
+//           ^^^^ string.quoted.triple.raw.volt
+        \d+ "x"
+//      ^^^^^^^ string.quoted.triple.raw.volt
+        """;
 }

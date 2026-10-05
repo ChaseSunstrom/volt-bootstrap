@@ -31,9 +31,14 @@
       "match": "\\\\(?:x[0-9a-fA-F]{2}|u\\{[0-9a-fA-F]+\\}|[nrt0\\\\\"'])"
     },
     "strings": {
-      "name": "string.quoted.double.volt",
-      "begin": "\"",
-      "end": "\"",
+      "patterns": [
+        { "name": "string.quoted.triple.raw.volt", "begin": "\\br\"\"\"", "end": "\"\"\"" },
+        { "name": "string.quoted.raw.volt", "begin": "\\br\"", "end": "\"" },
+        { "name": "string.quoted.triple.volt", "begin": "\"\"\"", "end": "\"\"\"", "patterns": [{ "include": "#string-parts" }] },
+        { "name": "string.quoted.double.volt", "begin": "\"", "end": "\"", "patterns": [{ "include": "#string-parts" }] }
+      ]
+    },
+    "string-parts": {
       "patterns": [
         { "include": "#escapes" },
         { "name": "constant.character.escape.volt", "match": "\\{\\{|\\}\\}" },

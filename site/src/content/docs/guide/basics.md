@@ -96,6 +96,36 @@ fn main() -> void {
 // expect: tab	here
 ```
 
+### Multi-line and raw strings
+
+`"""` starts a string on the next line, and a `"""` on a line of its own ends it. The closing
+quotes' indentation comes off every line, so the text sits indented with the code around it; the
+lines are joined with `\n`, without one after the last (leave an empty line before the closing
+quotes for that). Escapes work as in `"..."`, and `\"""` puts three quotes in. `r"..."` and
+`r"""..."""` are raw: a backslash is just a backslash.
+
+```volt
+use std::io;
+
+fn main() -> void {
+    val page = """
+        <ul>
+          <li>one</li>
+        </ul>
+        """;
+    std::println(page);
+    std::println(r"C:\temp\new");
+    std::println(r"""
+        \d+\.\d+ "quoted"
+        """);
+}
+// expect: <ul>
+// expect:   <li>one</li>
+// expect: </ul>
+// expect: C:\temp\new
+// expect: \d+\.\d+ "quoted"
+```
+
 ## Operators
 
 The arithmetic, comparison, logical and bitwise operators are C's. What's different:

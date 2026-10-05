@@ -57,7 +57,8 @@ fn blocks(dir: &Path, out: &mut Vec<Block>) {
 /// the text after each `// key:` line of src
 fn directives(src: &str, key: &str) -> Vec<String> {
     let tag = format!("// {key}:");
-    src.lines().filter_map(|l| l.trim_start().strip_prefix(&tag).map(|r| r.trim().to_string())).collect()
+    // one space after the colon goes, as in tests/golden.rs: output lines can start indented
+    src.lines().filter_map(|l| l.trim_start().strip_prefix(&tag).map(|r| r.strip_prefix(' ').unwrap_or(r).trim_end().to_string())).collect()
 }
 
 /// Every ```volt block in the site's pages and the README, and every sample under

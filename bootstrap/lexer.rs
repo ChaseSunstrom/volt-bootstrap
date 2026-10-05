@@ -68,7 +68,11 @@ pub fn lex(src: &str, file: u32) -> Res<Vec<Token>> {
         }
         // one token; its kind is decided by the first byte
         let start = i;
-        let tok = if c.is_ascii_alphabetic() || c == b'_' {
+        let tok = if c == b'r' && b.get(i + 1) == Some(&b'"') {
+            // r"..." and r"""...""": raw, backslashes stay as written
+            i += 1;
+            string(b, &mut i, start, true, &sp)?
+        } else if c.is_ascii_alphabetic() || c == b'_' {
             while i < b.len() && (b[i].is_ascii_alphanumeric() || b[i] == b'_') {
                 i += 1;
             }
@@ -87,23 +91,7 @@ pub fn lex(src: &str, file: u32) -> Res<Vec<Token>> {
             let after_dot = matches!(out.last(), Some(Token { tok: Tok::Punct("."), .. }));
             lex_number(b, &mut i, after_dot).map_err(|m| crate::diag::Diag::new(sp(start, i), m))?
         } else if c == b'"' {
-            i += 1;
-            let mut s = Vec::new();
-            loop {
-                match b.get(i) {
-                    None | Some(b'\n') => return err(sp(start, i), "unterminated string"),
-                    Some(b'"') => {
-                        i += 1;
-                        break;
-                    }
-                    Some(b'\\') => s.extend(escape(b, &mut i).map_err(|m| crate::diag::Diag::new(sp(i, i + 1), m))?),
-                    Some(&ch) => {
-                        s.push(ch);
-                        i += 1;
-                    }
-                }
-            }
-            Tok::Str(s)
+            string(b, &mut i, start, false, &sp)?
         } else if c == b'\'' {
             i += 1;
             let v: u32 = match b.get(i) {
@@ -193,6 +181,88 @@ fn lex_number(b: &[u8], i: &mut usize, int_only: bool) -> Result<Tok, String> {
         return full.parse::<f64>().map(Tok::Float).map_err(|e| e.to_string());
     }
     u128::from_str_radix(&text, radix).map(Tok::Int).map_err(|_| format!("bad number literal '{text}'"))
+}
+
+/// a string literal from its opening quote at b[*i] (the token starts at `start`, before an r): "..." on
+/// one line, or """ multi-line. A raw one keeps its backslashes
+fn string(b: &[u8], i: &mut usize, start: usize, raw: bool, sp: &impl Fn(usize, usize) -> Span) -> Res<Tok> {
+    if b[*i..].starts_with(b"\"\"\"") {
+        return multiline(b, i, start, raw, sp).map(Tok::Str);
+    }
+    *i += 1;
+    let mut s = Vec::new();
+    loop {
+        match b.get(*i) {
+            None | Some(b'\n') => return err(sp(start, *i), "unterminated string"),
+            Some(b'"') => {
+                *i += 1;
+                return Ok(Tok::Str(s));
+            }
+            Some(b'\\') if !raw => s.extend(escape(b, i).map_err(|m| crate::diag::Diag::new(sp(*i, *i + 1), m))?),
+            Some(&ch) => {
+                s.push(ch);
+                *i += 1;
+            }
+        }
+    }
+}
+
+/// a """ string: the lines after the opening quotes up to a closing """ with only whitespace before it
+/// on its line. That whitespace comes off the start of every line (a line of only whitespace may have
+/// less), and the lines are joined with \n; a \r\n line ending counts as \n
+fn multiline(b: &[u8], i: &mut usize, start: usize, raw: bool, sp: &impl Fn(usize, usize) -> Span) -> Res<Vec<u8>> {
+    *i += 3;
+    let open = *i;
+    while matches!(b.get(*i), Some(b' ' | b'\t' | b'\r')) {
+        *i += 1;
+    }
+    match b.get(*i) {
+        Some(b'\n') => *i += 1,
+        None => return err(sp(start, open), "unterminated multi-line string"),
+        _ => return err(sp(start, *i + 1), "a multi-line string starts on the line after its \"\"\""),
+    }
+    // each line: where it starts and ends in the source, and its bytes after escapes
+    let mut lines: Vec<(usize, usize, Vec<u8>)> = Vec::new();
+    loop {
+        let at = *i;
+        let mut text = Vec::new();
+        let end = loop {
+            match b.get(*i) {
+                None => return err(sp(start, open), "unterminated multi-line string"),
+                Some(b'\n') => break *i,
+                Some(b'\r') if b.get(*i + 1) == Some(&b'\n') => {
+                    *i += 1;
+                    break *i - 1;
+                }
+                Some(b'"') if b[*i..].starts_with(b"\"\"\"") => {
+                    let indent = &b[at..*i];
+                    if !indent.iter().all(|c| matches!(c, b' ' | b'\t')) {
+                        return err(sp(*i, *i + 3), "the closing \"\"\" goes on a line of its own");
+                    }
+                    *i += 3;
+                    let mut out = Vec::new();
+                    for (n, (from, to, text)) in lines.iter().enumerate() {
+                        if n > 0 {
+                            out.push(b'\n');
+                        }
+                        if b[*from..*to].starts_with(indent) {
+                            out.extend_from_slice(&text[indent.len()..]);
+                        } else if !b[*from..*to].iter().all(|c| matches!(c, b' ' | b'\t')) {
+                            return err(sp(*from, *to), "this line is indented less than the closing \"\"\"");
+                        }
+                    }
+                    return Ok(out);
+                }
+                Some(b'\\') if !raw => text.extend(escape(b, i).map_err(|m| crate::diag::Diag::new(sp(*i, *i + 1), m))?),
+                Some(&ch) => {
+                    text.push(ch);
+                    *i += 1;
+                }
+            }
+        };
+        *i += 1;
+        lines.push((at, end, text));
+    }
 }
 
 /// decodes the backslash escape at b[*i] and moves *i past it; returns its bytes (`\u{...}` as UTF-8)

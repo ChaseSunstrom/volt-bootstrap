@@ -161,7 +161,11 @@ fn lex(src: str, file: u32) -> compile_error!std::vec<token> {
         // one token; its kind is decided by the first byte
         val start = i;
         var t: tok = tok::EOF;
-        if (is_alpha(c) || c == '_') {
+        if (c == 'r' && i + 1 < src.len && src[i + 1] == '"') {
+            // r"..." and r"""...""": raw, backslashes stay as written
+            i++;
+            t = try string_lit(src, &i, start, true, file);
+        } else if (is_alpha(c) || c == '_') {
             while (i < src.len && (is_alnum(src[i]) || src[i] == '_')) {
                 i++;
             }
@@ -186,24 +190,7 @@ fn lex(src: str, file: u32) -> compile_error!std::vec<token> {
             }
             t = try lex_number(src, &i, after_dot, start, file);
         } else if (c == '"') {
-            i++;
-            var s: std::string = {};
-            loop {
-                if (i >= src.len || src[i] == '\n') {
-                    return fail(start, i, file, "unterminated string");
-                }
-                if (src[i] == '"') {
-                    i++;
-                    break;
-                }
-                if (src[i] == '\\') {
-                    try escape(src, &i, file, &s);
-                } else {
-                    s.push(src[i]);
-                    i++;
-                }
-            }
-            t = tok::STR(move s);
+            t = try string_lit(src, &i, start, false, file);
         } else if (c == '\'') {
             i++;
             if (i >= src.len) {
@@ -349,6 +336,120 @@ fn lex_number(src: str, ip: usize&, int_only: bool, start: usize, file: u32) -> 
         return fail(start, i, file, msg.as_str());
     }
     return tok::INT(v);
+}
+
+// a string literal from its opening quote at src[*ip] (the token starts at start, before an r): "..."
+// on one line, or """ multi-line. A raw one keeps its backslashes
+fn string_lit(src: str, ip: usize&, start: usize, raw: bool, file: u32) -> compile_error!tok {
+    var i = *ip;
+    if (src[i..src.len].starts_with("\"\"\"")) {
+        var m = try multiline(src, ip, start, raw, file);
+        return tok::STR(move m);
+    }
+    i++;
+    var s: std::string = {};
+    loop {
+        if (i >= src.len || src[i] == '\n') {
+            return fail(start, i, file, "unterminated string");
+        }
+        if (src[i] == '"') {
+            *ip = i + 1;
+            return tok::STR(move s);
+        }
+        if (src[i] == '\\' && !raw) {
+            try escape(src, &i, file, &s);
+        } else {
+            s.push(src[i]);
+            i++;
+        }
+    }
+}
+
+// one line of a """ string: where it starts and ends in the source, and its bytes after escapes
+struct ml_line {
+    at: usize;
+    end: usize;
+    text: std::string;
+}
+
+// a """ string: the lines after the opening quotes up to a closing """ with only whitespace before it
+// on its line. That whitespace comes off the start of every line (a line of only whitespace may have
+// less), and the lines are joined with \n; a \r\n line ending counts as \n
+fn multiline(src: str, ip: usize&, start: usize, raw: bool, file: u32) -> compile_error!std::string {
+    var i = *ip + 3;
+    val open = i;
+    while (i < src.len && (src[i] == ' ' || src[i] == '\t' || src[i] == '\r')) {
+        i++;
+    }
+    if (i >= src.len) {
+        return fail(start, open, file, "unterminated multi-line string");
+    }
+    if (src[i] != '\n') {
+        return fail(start, i + 1, file, "a multi-line string starts on the line after its \"\"\"");
+    }
+    i++;
+    var lines: std::vec<ml_line> = {};
+    loop {
+        val at = i;
+        var end = i;
+        var text: std::string = {};
+        loop {
+            if (i >= src.len) {
+                return fail(start, open, file, "unterminated multi-line string");
+            }
+            val c = src[i];
+            if (c == '\n') {
+                end = i;
+                break;
+            }
+            if (c == '\r' && i + 1 < src.len && src[i + 1] == '\n') {
+                end = i;
+                i++;
+                break;
+            }
+            if (c == '"' && src[i..src.len].starts_with("\"\"\"")) {
+                val indent = src[at..i];
+                if (!spaces(indent)) {
+                    return fail(i, i + 3, file, "the closing \"\"\" goes on a line of its own");
+                }
+                *ip = i + 3;
+                var out: std::string = {};
+                var first = true;
+                for (l&) in lines.items() {
+                    if (!first) {
+                        out.push('\n');
+                    }
+                    first = false;
+                    val line = src[l.at..l.end];
+                    val t = l.text.as_str();
+                    if (line.starts_with(indent)) {
+                        out.append(t[indent.len..t.len]);
+                    } else if (!spaces(line)) {
+                        return fail(l.at, l.end, file, "this line is indented less than the closing \"\"\"");
+                    }
+                }
+                return out;
+            }
+            if (c == '\\' && !raw) {
+                try escape(src, &i, file, &text);
+            } else {
+                text.push(c);
+                i++;
+            }
+        }
+        i++;
+        lines.push({ at: at, end: end, text: move text });
+    }
+}
+
+// only spaces and tabs (or nothing)
+fn spaces(s: str) -> bool {
+    for (k) in 0..s.len {
+        if (s[k] != ' ' && s[k] != '\t') {
+            return false;
+        }
+    }
+    return true;
 }
 
 // decodes the backslash escape at src[*ip] and moves *ip past it; its bytes (`\u{...}` as UTF-8) go into out
