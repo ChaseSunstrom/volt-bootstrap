@@ -1091,6 +1091,12 @@ attach fn type_atom(this: parser&) -> compile_error!ty {
             ret = { kind: type_kind::PATH(single_path("void", this.prev_span())), span: this.prev_span() };
         }
         t = type_kind::FN({ params: move params, c_varargs: c_varargs, ret: bx(move ret), extern_c: extern_c });
+    } else if ((this.is_kw("struct") || this.is_kw("enum")) && (this.is_at(1, "{") || (this.is_kw("enum") && this.is_at(1, ":")))) {
+        // a type built right here: type point3 = struct { ... };
+        t = type_kind::EXPR(bx(try this.type_body()));
+    } else if (this.is_ident() && this.is_at(1, ".") && ident_of(this.tok_at(2)) != null) {
+        // a compile-time value's field that holds a type: f.field_type
+        t = type_kind::EXPR(bx(try this.postfix()));
     } else if (this.is_type_name()) {
         val p = try this.path(true);
         if (this.is("(")) {

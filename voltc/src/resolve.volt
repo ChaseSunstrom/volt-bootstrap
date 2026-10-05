@@ -87,6 +87,20 @@ attach fn resolve_type(this: checker&, t: ty&, e: u32) -> compile_error!u32 {
                 default => { return fails(x.span, "this doesn't give a type"); },
             }
         },
+        .RESOLVED(r) => { return r; },
+    }
+}
+
+// a type written as a struct { } / enum { } body right there
+fn is_type_body(t: ty&) -> bool {
+    match (t.kind) {
+        .EXPR(x) => {
+            match (x.kind) {
+                .TYPE_BODY(b) => { return true; },
+                default => { return false; },
+            }
+        },
+        default => { return false; },
     }
 }
 
@@ -209,6 +223,15 @@ attach fn resolve_type_path(this: checker&, p: path&, e: u32) -> compile_error!u
                     val r = this.resolve_type(t, ae);
                     this.alias_resolving.remove(d);
                     val ty = try r;
+                    // a type built right in the alias (type point3 = struct { ... }) takes its name
+                    if (!generic && is_type_body(t)) {
+                        var full = this.ns_path(this.decls.at(@cast<usize>(d)).ns, "::");
+                        if (full.len() > 0) {
+                            full.append("::");
+                        }
+                        full.append(last);
+                        this.name_built(ty, this.intern(move full));
+                    }
                     if (!generic) {
                         this.aliases.put(d, ty);
                     }

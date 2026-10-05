@@ -415,6 +415,9 @@ fn inline_features(s: &mut Server) {
     }
     let one = expand("tests/run/expand.volt:34");
     assert!(one.contains(":34:21: calls twice<i64>(v: i64) -> i64") && !one.contains(":33:"), "voltc expand FILE:34: {one}");
+    // a type built at compile time: its members, where it's built
+    let built = expand("tests/run/comptime_types.volt:15");
+    assert!(built.contains(":15:12: struct { x: std::vec<f32, std::mem::default_allocator>; y: "), "voltc expand of a built type: {built}");
 
     // code lenses: references above fns, attached fns and traits above types, attachers above a
     // trait, Run above main

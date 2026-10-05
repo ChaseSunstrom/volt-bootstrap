@@ -404,6 +404,7 @@ impl Checker {
             ExprKind::Await(x) => self.await_expr(x, want),
             ExprKind::Async(_) => err(span, "async f() builds a frame in place, so it only works as `val fr = async f()`"),
             ExprKind::Quote(_) => err(span, "a quote is evaluated at compile time"),
+            ExprKind::TypeBody(b) => err(span, format!("{} {{ }} makes a type, a value only at compile time: return it from a comptime fn or name it with type name = {} {{ ... }};", if b.is_enum { "enum" } else { "struct" }, if b.is_enum { "enum" } else { "struct" })),
         }
     }
 

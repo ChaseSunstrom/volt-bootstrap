@@ -317,6 +317,10 @@ pub struct Checker {
     pub derive_blocks: HashSet<DeclId>,
     /// the @emit(...)s collected and not yet run, with their namespaces
     pub pending_emits: Vec<(Expr, NsId)>,
+    /// types built at compile time, by their body and the values it saw; those still waiting for the
+    /// name their call or alias gives
+    pub built_types: HashMap<String, TyId>,
+    pub unnamed_types: HashSet<TyId>,
     /// @expand of a call: the call's span, and the fn instance emitted there
     pub expand_span: Option<Span>,
     pub last_call: Option<usize>,
@@ -396,6 +400,8 @@ impl Checker {
             attach_blocks: Vec::new(),
             derive_blocks: HashSet::new(),
             pending_emits: Vec::new(),
+            built_types: HashMap::new(),
+            unnamed_types: HashSet::new(),
             expand_span: None,
             last_call: None,
             unions: Vec::new(),
@@ -978,6 +984,7 @@ impl Checker {
                 comptime::CVal::Type(t) => t,
                 _ => return err(e.span, "this doesn't give a type"),
             },
+            TypeKind::Resolved(t) => *t,
         })
     }
 
@@ -1048,6 +1055,12 @@ impl Checker {
                     let r = self.resolve_type(&t, &ae);
                     self.alias_resolving.remove(&d);
                     let r = r?;
+                    // a type built right in the alias (type point3 = struct { ... }) takes its name
+                    if !generic && matches!(t.kind, TypeKind::Expr(ref e) if matches!(e.kind, ExprKind::TypeBody(_))) {
+                        let path = self.nss[self.decls[d].ns].path.clone();
+                        let name = p.last().to_string();
+                        self.name_built(r, if path.is_empty() { name } else { format!("{}::{name}", path.join("::")) });
+                    }
                     if !generic {
                         self.aliases.insert(d, r);
                     }

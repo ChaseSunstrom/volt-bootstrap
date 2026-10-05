@@ -384,6 +384,10 @@ struct checker {
     derive_items: std::vec<std::box<item>> = {}; // the attach blocks @derive made
     derive_blocks: std::map<u32, bool> = {};     // their decls (a trait not in scope is std::derive's)
     pending_emits: std::vec<pending_emit> = {};  // the @emit(...)s collected and not yet run
+    // types built at compile time, by their body and the values it saw; those still waiting for the name
+    // their call or alias gives
+    built_types: std::map<str, u32> = {};
+    unnamed_types: idset = {};
     expand_span: span? = null;                   // @expand of a call: the call's span,
     last_call: u32? = null;                      // and the fn instance emitted there
     expansions: std::vec<expansion> = {};        // what comptime code became, by span (opts.expand or opts.lsp)

@@ -698,6 +698,9 @@ attach fn primary(this: parser&) -> compile_error!expr {
     if (block_kw(s)) {
         return this.loop_expr(null, false);
     }
+    if ((s == "struct" || s == "enum") && (this.is_at(1, "{") || (s == "enum" && this.is_at(1, ":")))) {
+        return this.type_body();
+    }
     if (!is_keyword(s) || s == "error") {
         val p = try this.path(false);
         return { kind: expr_kind::PATH(move p), span: start.to(this.prev_span()) };
@@ -710,6 +713,137 @@ attach fn is_builtin_tok(this: parser&) -> bool {
         .BUILTIN(s) => { return true; },
         default => { return false; },
     }
+}
+
+// `struct { members }` / `enum[: T] { members }` as a value: a type built at compile time
+attach fn type_body(this: parser&) -> compile_error!expr {
+    val start = this.span();
+    val is_enum = this.is_kw("enum");
+    this.bump();
+    var backing: ty? = null;
+    if (is_enum && this.eat(":")) {
+        backing = try this.parse_type();
+    }
+    try this.expect("{");
+    var members: std::vec<body_member> = {};
+    try this.members(&members, is_enum);
+    return { kind: expr_kind::TYPE_BODY(bx<type_body>({ is_enum: is_enum, backing: move backing, members: move members })), span: start.to(this.prev_span()) };
+}
+
+// a type body's members up to its `}`: fields (`name: T [= d];`) or variants (`NAME [: T] [= v],`),
+// `comptime for (x) in e { members }` and `comptime if (c) { members } [else ...]`. A name that isn't
+// a bare identifier (`f.name`, `names[i]`, `(n)`) is worked out at compile time.
+attach fn members(this: parser&, out: std::vec<body_member>&, is_enum: bool) -> compile_error!void {
+    while (!this.eat("}")) {
+        val start = this.span();
+        if (this.is_kw("comptime") && this.is_kw_at(1, "for")) {
+            this.bump();
+            this.bump();
+            try this.expect("(");
+            var bindings: std::vec<binding> = {};
+            while (!this.eat(")")) {
+                val id = try this.ident();
+                val by_ref = this.eat("&");
+                put(&bindings, { name: id.name, by_ref: by_ref, span: id.span });
+                if (!this.eat(",") && !this.is(")")) {
+                    return this.unexpected("',' or ')'");
+                }
+            }
+            var by_ref = false;
+            for (b&) in bindings.items() {
+                by_ref = by_ref || b.by_ref;
+            }
+            if (bindings.len == 0 || bindings.len > 2 || by_ref) {
+                return fails(start, "a comptime for in a type body binds one or two names: (x) or (x, i)");
+            }
+            try this.expect_kw("in");
+            val iter = try this.expr();
+            try this.expect("{");
+            var body: std::vec<body_member> = {};
+            try this.members(&body, is_enum);
+            put(out, body_member::FOR({ bindings: move bindings, iter: move iter, body: move body, span: start.to(this.prev_span()) }));
+            continue;
+        }
+        if (this.is_kw("comptime") && this.is_kw_at(1, "if")) {
+            this.bump();
+            put(out, try this.member_if(is_enum));
+            continue;
+        }
+        var attrs: std::vec<expr> = {};
+        if (!is_enum) {
+            match (*this.tok()) {
+                .BUILTIN(b) => {
+                    if (b == "attributes") {
+                        attrs = try this.attributes();
+                    }
+                },
+                default => {},
+            }
+        }
+        var v = vis::PUBLIC;
+        if (!is_enum && this.eat_kw("internal")) {
+            v = vis::INTERNAL;
+        } else if (!is_enum) {
+            this.eat_kw("public");
+        }
+        // a bare identifier is the name as written; anything else is worked out
+        val bare = ident_of(this.tok()) != null && (this.is_at(1, ":") || this.is_at(1, "=") || this.is_at(1, ",") || this.is_at(1, ";") || this.is_at(1, "}"));
+        var name = "";
+        var named: expr? = null;
+        if (bare) {
+            name = (try this.ident()).name;
+        } else {
+            named = try this.postfix();
+        }
+        if (is_enum) {
+            var payload: ty? = null;
+            if (this.eat(":")) {
+                payload = try this.parse_type();
+            }
+            var value: expr? = null;
+            if (this.eat("=")) {
+                value = try this.expr();
+            }
+            put(out, body_member::VARIANT({ name: name, payload: move payload, value: move value, span: start.to(this.prev_span()) }, move named));
+            if (!this.eat(",") && !this.is("}")) {
+                return this.unexpected("',' or '}'");
+            }
+        } else {
+            try this.expect(":");
+            val t = try this.parse_type();
+            var fallback: expr? = null;
+            if (this.eat("=")) {
+                fallback = try this.expr();
+            }
+            if (!this.eat(";") && !this.eat(",") && !this.is("}")) {
+                return this.unexpected("';' after field");
+            }
+            put(out, body_member::FIELD({ name: name, ty: move t, fallback: move fallback, vis: v, span: start.to(this.prev_span()), attrs: move attrs }, move named));
+        }
+    }
+}
+
+// `if (c) { members } [else { members } | else [comptime] if ...]` in a type body, after `comptime`
+attach fn member_if(this: parser&, is_enum: bool) -> compile_error!body_member {
+    val start = this.span();
+    try this.expect_kw("if");
+    try this.expect("(");
+    val cond = try this.expr();
+    try this.expect(")");
+    try this.expect("{");
+    var then: std::vec<body_member> = {};
+    try this.members(&then, is_enum);
+    var els: std::vec<body_member> = {};
+    if (this.eat_kw("else")) {
+        if (this.is_kw("if") || (this.is_kw("comptime") && this.is_kw_at(1, "if"))) {
+            this.eat_kw("comptime");
+            put(&els, try this.member_if(is_enum));
+        } else {
+            try this.expect("{");
+            try this.members(&els, is_enum);
+        }
+    }
+    return body_member::IF({ cond: move cond, then: move then, els: move els, span: start.to(this.prev_span()) });
 }
 
 // if / match / for / while / loop, with an optional label and comptime flag

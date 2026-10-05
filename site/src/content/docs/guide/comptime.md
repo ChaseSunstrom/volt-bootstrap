@@ -66,6 +66,63 @@ fn main() -> void {
 // expect: 5000000000
 ```
 
+## Types built at compile time
+
+`struct { ... }` and `enum { ... }` are values too: a comptime function can build a type and return
+it. Inside the body, `comptime for` and `comptime if` work out the members, and a name that isn't a
+bare identifier is computed: `f.name`, `names[i]`, or `(expr)` for any expression giving a `str`.
+
+```volt
+use std::io;
+
+struct particle {
+    x: f32;
+    y: f32;
+    alive: bool;
+}
+
+// one vector per field of T: a struct of arrays
+comptime fn soa(T: type) -> type {
+    return struct {
+        comptime for (f) in @typeinfo(T).fields {
+            f.name: std::vec<f.field_type> = {};
+        }
+    };
+}
+
+// a variant for each name, numbered from base
+comptime fn codes(names: str[3], base: i32) -> type {
+    return enum {
+        comptime for (i) in 0..3 {
+            names[i] = base + i,
+        }
+    };
+}
+
+type status = codes({ "OK", "MOVED", "GONE" }, 200);
+
+fn main() -> void {
+    var ps: soa(particle) = {};
+    ps.x.push(1.5);
+    ps.alive.push(true);
+    std::println("{} {} {}", ps.x.len, *ps.x.at(0), @typeinfo(soa(particle)).short_name);
+    std::println("{}", status::GONE as i32);
+}
+// expect: 1 1.5 soa(particle)
+// expect: 202
+```
+
+- A comptime function called with the same arguments gives the same type: `soa(particle)` written
+  twice is one type, so methods attached to it work on every value of it.
+- The type is named after the call (`soa(particle)`) in errors, `@typeinfo` and the editor. A body
+  written right in a type alias, `type point3 = struct { x: f64; y: f64; z: f64 = 1.0; };`, takes
+  the alias's name.
+- Field types and enum values are worked out when the type is built, so they can use the loop
+  variables; so can defaults that are numbers, bools or strings.
+- A computed name has to be an identifier and can't repeat. `str + str` joins strings at compile time:
+  `(prefix + "_count"): i32;`.
+- `voltc expand` shows each built type's members where it's built.
+
 ## comptime if, match and for
 
 Inside any function, `comptime if`, `comptime match` and `comptime for` are decided in the
@@ -111,7 +168,8 @@ fn main() -> void {
 ## Reflection: @typeinfo and @typeof
 
 `@typeof(expr)` is an expression's type. `@typeinfo(T)` describes a type at compile time: its name,
-size, alignment, kind (with fields, variants, element types) and more.
+size, alignment, kind (with fields, variants, element types) and more. Its `fields` and `variants`
+are a struct's fields and an enum's variants (empty for other types), ready for a `comptime for`.
 
 ```volt
 use std::io;

@@ -66,6 +66,7 @@ enum type_kind {
     FN: fn_type,
     PACK: std::box<ty>,
     EXPR: std::box<expr>,
+    RESOLVED: u32, // a type already worked out (a built type's field)
 }
 
 enum binop {
@@ -181,6 +182,7 @@ enum expr_kind {
     REPEAT: (std::box<expr>, std::box<expr>), // { x; n }: an array of n copies of x, typed by context
     CLOSURE: closure,
     QUOTE: std::vec<quote_part>, // quote { Volt source with $(splices) }: a comptime str
+    TYPE_BODY: std::box<type_body>, // struct { ... } / enum { ... } as a value: a type built at compile time
     TRY: std::box<expr>,
     AWAIT: std::box<expr>,
     ASYNC: std::box<expr>,
@@ -377,6 +379,37 @@ struct variant {
     payload: ty?;
     value: expr?;
     span: span;
+}
+
+// a member of a `struct { }` or `enum { }` value's body: a field or a variant, its name worked out at
+// compile time when the expression is there (`f.name: T`, `(n),`; the name itself is empty), or a
+// comptime for / if over members, unrolled when the type is built
+enum body_member {
+    FIELD: (field, expr?),
+    VARIANT: (variant, expr?),
+    FOR: member_for,
+    IF: member_if,
+}
+
+struct member_for {
+    bindings: std::vec<binding>;
+    iter: expr;
+    body: std::vec<body_member>;
+    span: span;
+}
+
+struct member_if {
+    cond: expr;
+    then: std::vec<body_member>;
+    els: std::vec<body_member>;
+    span: span;
+}
+
+// `struct { ... }` or `enum[: T] { ... }` as a value: a type built at compile time
+struct type_body {
+    is_enum: bool;
+    backing: ty?;
+    members: std::vec<body_member>;
 }
 
 struct enum_decl {

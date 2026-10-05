@@ -186,20 +186,7 @@ attach fn item(this: sexp_writer&, it: item&) -> void {
             this.opt_gargs(&s.spec);
             this.out.append(" [");
             for (f&) in s.fields.items() {
-                this.sp();
-                this.open("field");
-                this.name(f.name);
-                this.sp();
-                this.ty(&f.ty);
-                this.opt_expr(&f.fallback);
-                this.vis(f.vis);
-                this.span(f.span);
-                this.out.append(" [");
-                for (a&) in f.attrs.items() {
-                    this.expr(a);
-                }
-                this.out.append(" ]");
-                this.close();
+                this.field_node(f);
             }
             this.out.append(" ]");
             this.flag(s.is_extern);
@@ -212,13 +199,7 @@ attach fn item(this: sexp_writer&, it: item&) -> void {
             this.opt_ty(&e.backing);
             this.out.append(" [");
             for (v&) in e.variants.items() {
-                this.sp();
-                this.open("variant");
-                this.name(v.name);
-                this.opt_ty(&v.payload);
-                this.opt_expr(&v.value);
-                this.span(v.span);
-                this.close();
+                this.variant_node(v);
             }
             this.out.append(" ]");
             this.flag(e.is_error);
@@ -474,9 +455,87 @@ attach fn ty(this: sexp_writer&, t: ty&) -> void {
             this.open("texpr");
             this.expr(e);
         },
+        .RESOLVED(r) => {
+            this.open("tresolved");
+            this.sp();
+            this.out.append_uint(@cast<u64>(r));
+        },
     }
     this.span(t.span);
     this.close();
+}
+
+attach fn field_node(this: sexp_writer&, f: field&) -> void {
+    this.sp();
+    this.open("field");
+    this.name(f.name);
+    this.sp();
+    this.ty(&f.ty);
+    this.opt_expr(&f.fallback);
+    this.vis(f.vis);
+    this.span(f.span);
+    this.out.append(" [");
+    for (a&) in f.attrs.items() {
+        this.expr(a);
+    }
+    this.out.append(" ]");
+    this.close();
+}
+
+attach fn variant_node(this: sexp_writer&, v: variant&) -> void {
+    this.sp();
+    this.open("variant");
+    this.name(v.name);
+    this.opt_ty(&v.payload);
+    this.opt_expr(&v.value);
+    this.span(v.span);
+    this.close();
+}
+
+// a type body's members: a field or variant with its worked-out name's expression after it
+attach fn members(this: sexp_writer&, ms: std::vec<body_member>&) -> void {
+    this.out.append(" [");
+    for (m&) in ms.items() {
+        this.sp();
+        match (*m) {
+            .FIELD(f&, named&) => {
+                this.open("mfield");
+                this.field_node(f);
+                this.opt_expr(named);
+            },
+            .VARIANT(v&, named&) => {
+                this.open("mvariant");
+                this.variant_node(v);
+                this.opt_expr(named);
+            },
+            .FOR(mf&) => {
+                this.open("mfor");
+                this.out.append(" [");
+                for (bd&) in mf.bindings.items() {
+                    this.sp();
+                    this.open("bind");
+                    this.name(bd.name);
+                    this.flag(bd.by_ref);
+                    this.span(bd.span);
+                    this.close();
+                }
+                this.out.append(" ]");
+                this.expr(&mf.iter);
+                this.members(&mf.body);
+                this.span(mf.span);
+            },
+            .IF(mi&) => {
+                this.open("mif");
+                this.expr(&mi.cond);
+                this.members(&mi.then);
+                this.out.append(" else");
+                this.members(&mi.els);
+                this.span(mi.span);
+            },
+        }
+        this.close();
+    }
+    this.out.append(" ]");
 }
 
 attach fn block(this: sexp_writer&, b: block&) -> void {
@@ -796,6 +855,15 @@ attach fn expr(this: sexp_writer&, e: expr&) -> void {
                     this.expr(&p.splice);
                 }
             }
+        },
+        .TYPE_BODY(b) => {
+            if (b.is_enum) {
+                this.open("tbody enum");
+            } else {
+                this.open("tbody struct");
+            }
+            this.opt_ty(&b.backing);
+            this.members(&b.members);
         },
         .MOVE(x) => {
             this.open("move");

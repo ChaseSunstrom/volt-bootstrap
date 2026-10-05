@@ -58,6 +58,7 @@ pub enum TypeKind {
     Fn { params: Vec<Type>, c_varargs: bool, ret: P<Type>, extern_c: bool },
     Pack(P<Type>),                         // Args... (param types) / type... (generic bounds)
     Expr(P<Expr>),                         // a comptime call that returns a type: pick(true)
+    Resolved(u32),                         // a type already worked out (a built type's field, by TyId)
 }
 
 #[derive(Clone, Debug)]
@@ -182,6 +183,7 @@ pub enum ExprKind {
     Repeat(P<Expr>, P<Expr>),     // { x; n }: an array of n copies of x, typed by context
     Closure { caps: Vec<Capture>, generics: Vec<GenericParam>, params: Vec<Param>, ret: Option<Type>, body: Block },
     Quote(Vec<QuotePart>), // quote { Volt source with $(splices) }: a comptime str
+    TypeBody(P<TypeBody>), // struct { ... } / enum { ... } as a value: a type built at compile time
     Try(P<Expr>),
     Await(P<Expr>),
     Async(P<Expr>),               // async f(): start without waiting
@@ -362,6 +364,25 @@ pub struct Variant {
     pub payload: Option<Type>,
     pub value: Option<Expr>,
     pub span: Span,
+}
+
+/// a member of a `struct { }` or `enum { }` value's body: a field or a variant, its name worked out
+/// at compile time when the expression is there (`f.name: T`, `(n),`; the name itself is empty), or
+/// a comptime for / if over members, unrolled when the type is built
+#[derive(Clone, Debug)]
+pub enum Member {
+    Field(Field, Option<Expr>),
+    Variant(Variant, Option<Expr>),
+    For { bindings: Vec<(String, bool, Span)>, iter: Expr, body: Vec<Member>, span: Span },
+    If { cond: Expr, then: Vec<Member>, els: Vec<Member>, span: Span },
+}
+
+/// `struct { ... }` or `enum[: T] { ... }` as a value: a type built at compile time
+#[derive(Clone, Debug)]
+pub struct TypeBody {
+    pub is_enum: bool,
+    pub backing: Option<Type>,
+    pub members: Vec<Member>,
 }
 
 #[derive(Clone, Debug)]

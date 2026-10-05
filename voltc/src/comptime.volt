@@ -696,6 +696,7 @@ attach fn ct_expr(this: checker&, e: expr&, want: u32?) -> compile_error!cval {
             return cval::FLOAT(v, t);
         },
         .STR(s) => { return cval::STR(copy s); },
+        .TYPE_BODY(b) => { return this.ct_type_body(b, span); },
         .QUOTE(parts&) => {
             var out: std::string = {};
             for (p&) in parts.items() {
@@ -1012,6 +1013,21 @@ attach fn ct_binop(this: checker&, op: binop, a: cval, b: cval, span: span) -> c
             }
         },
         default => {},
+    }
+    if (op == binop::ADD) {
+        match (a) {
+            .STR(x) => {
+                match (b) {
+                    .STR(y) => {
+                        var joined = copy x;
+                        joined.append(y.as_str());
+                        return cval::STR(move joined);
+                    },
+                    default => {},
+                }
+            },
+            default => {},
+        }
     }
     if (op == binop::EQ || op == binop::NE) {
         var same = false;
@@ -1644,11 +1660,11 @@ attach fn ct_let_stmt(this: checker&, l: let_stmt&) -> compile_error!void {
     }
 }
 
-// a for loop over a range, list, tuple or string; with an accumulator, its final value is the loop's
-attach fn ct_for(this: checker&, f: for_loop&, span: span) -> compile_error!cval {
+// what a compile-time for loops over: a range's numbers, an array's or tuple's items, a str's bytes
+attach fn ct_items(this: checker&, iter: expr&, span: span) -> compile_error!(std::vec<cval>) {
     var items: std::vec<cval> = {};
     var ranged = false;
-    match (f.iter.kind) {
+    match (iter.kind) {
         .RANGE(lo, hi, incl) => {
             if (lo != null && hi != null) {
                 ranged = true;
@@ -1685,7 +1701,7 @@ attach fn ct_for(this: checker&, f: for_loop&, span: span) -> compile_error!cval
         default => {},
     }
     if (!ranged) {
-        val v = try this.ct_expr(&f.iter, null);
+        val v = try this.ct_expr(iter, null);
         match (v) {
             .ARRAY(es, t) => { items = copy es; },
             .TUPLE(es) => { items = copy es; },
@@ -1694,9 +1710,15 @@ attach fn ct_for(this: checker&, f: for_loop&, span: span) -> compile_error!cval
                     put(&items, cval::INT(@cast<i128>(c), U8));
                 }
             },
-            default => { return fails(f.iter.span, "can't loop over this at compile time"); },
+            default => { return fails(iter.span, "can't loop over this at compile time"); },
         }
     }
+    return items;
+}
+
+// a for loop over a range, list, tuple or string; with an accumulator, its final value is the loop's
+attach fn ct_for(this: checker&, f: for_loop&, span: span) -> compile_error!cval {
+    var items = try this.ct_items(&f.iter, span);
     var acc: str? = null;
     if (f.acc) {
         put(&this.ct_top().scopes, {});
@@ -2127,9 +2149,433 @@ attach fn ct_call(this: checker&, decl: u32, explicit: std::vec<garg>&, args: st
         }
     }
     if (ret == VOID || ret == TYPE) {
+        // a type the call built is named after the call: soa(particle)
+        match (out) {
+            .TYPE(t) => {
+                if (this.unnamed_types.has(t)) {
+                    var n = S(f.name);
+                    n.push('(');
+                    n.append(this.cvals_text(&args).as_str());
+                    n.push(')');
+                    this.name_built(t, this.intern(move n));
+                }
+            },
+            default => {},
+        }
         return out;
     }
     return this.ct_coerce(move out, ret, span);
+}
+
+// ---------- types built at compile time ----------
+
+// `struct { ... }` / `enum { ... }`: its comptime for and if unrolled, its worked-out names, field types
+// and enum values evaluated, made a type. The same body seeing the same compile-time values gives the
+// same type. Its name comes from the call that returns it or the alias it's written in; until then (or
+// without one) it's named after where it is.
+attach fn ct_type_body(this: checker&, b: type_body&, span: span) -> compile_error!cval {
+    var key = std::format("{}:{}|", span.file, span.lo);
+    key.append(this.frame_values().as_str());
+    val have = this.built_types.get(key.as_str());
+    if (have) {
+        return cval::TYPE(*have);
+    }
+    var fields: std::vec<field> = {};
+    var variants: std::vec<variant> = {};
+    try this.ct_members(&b.members, &fields, &variants);
+    // names are identifiers, each once
+    var names: std::vec<str> = {};
+    var spans: std::vec<span> = {};
+    if (b.is_enum) {
+        for (v&) in variants.items() {
+            put(&names, v.name);
+            put(&spans, v.span);
+        }
+    } else {
+        for (f&) in fields.items() {
+            put(&names, f.name);
+            put(&spans, f.span);
+        }
+    }
+    for (i) in 0..names.len {
+        val n = *names.at(i);
+        if (!is_name_text(n)) {
+            return fail(*spans.at(i), fmt("'{}' isn't a name: a letter or _, then letters, digits and _", S(n)));
+        }
+        if (is_keyword(n)) {
+            return fail(*spans.at(i), fmt("'{}' is a keyword, so it can't be a name", S(n)));
+        }
+        for (j) in 0..i {
+            if (*names.at(j) == n) {
+                if (b.is_enum) {
+                    return fail(*spans.at(i), fmt("'{}' is already a variant of this enum", S(n)));
+                }
+                return fail(*spans.at(i), fmt("'{}' is already a field of this struct", S(n)));
+            }
+        }
+    }
+    val env = this.ct_top().env;
+    var base = "struct";
+    if (b.is_enum) {
+        base = "enum";
+        put(&this.owned_items, bx<item>({ kind: item_kind::ENUM({ name: base, backing: copy b.backing, variants: move variants, is_error: false }), span: span, attrs: {}, vis: vis::PUBLIC, generics: {} }));
+    } else {
+        put(&this.owned_items, bx<item>({ kind: item_kind::STRUCT({ name: base, spec: null, fields: move fields, is_extern: false, is_comptime: false, c_name: null }), span: span, attrs: {}, vis: vis::PUBLIC, generics: {} }));
+    }
+    val kept = this.owned_items.at(this.owned_items.len - 1);
+    val d = @cast<u32>(this.decls.len);
+    put(&this.decls, { item: *kept, ns: this.env_at(env).ns, file: span.file, parent: null });
+    var t: u32 = 0;
+    if (b.is_enum) {
+        t = try this.enum_inst(d, {}, span);
+    } else {
+        t = try this.struct_inst(d, {}, span);
+    }
+    // voltc expand and the editor show what it became
+    if (this.opts.expand || this.opts.lsp) {
+        var text = S(base);
+        text.append(" {");
+        match (this.item_of(d).kind) {
+            .STRUCT(sd&) => {
+                for (f&) in sd.fields.items() {
+                    text.push(' ');
+                    text.append(f.name);
+                    text.append(": ");
+                    match (f.ty.kind) {
+                        .RESOLVED(r) => { this.put_ty(&text, r); },
+                        default => {},
+                    }
+                    text.push(';');
+                }
+            },
+            .ENUM(ed&) => {
+                for (i) in 0..ed.variants.len {
+                    if (i > 0) {
+                        text.push(',');
+                    }
+                    text.push(' ');
+                    text.append(ed.variants.at(i).name);
+                }
+            },
+            default => {},
+        }
+        text.append(" }");
+        this.expanded(span, move text);
+    }
+    this.built_types.put(this.intern(move key), t);
+    this.unnamed_types.add(t);
+    var nm = S(base);
+    nm.append(" at ");
+    nm.append(this.loc(span));
+    this.set_type_name(t, this.intern(move nm));
+    return cval::TYPE(t);
+}
+
+// a value as a memo key: types by identity (two can have one name, and a built one's name changes),
+// numbers with their types, strs with their length
+attach fn cval_key(this: checker&, v: cval&) -> std::string {
+    match (*v) {
+        .TYPE(t) => { return std::format("#{}", t); },
+        .INT(n, t) => { return fmt2("{}#{}", num(n), std::format("{}", t)); },
+        .FLOAT(x, t) => { return std::format("{}#{}", x, t); },
+        .STR(s) => { return fmt2("{}:{}", std::format("{}", s.len()), copy s); },
+        .TUPLE(vs&) => { return fmt("({})", this.cvals_key(vs)); },
+        .ARRAY(vs&, t) => { return fmt2("[{}]#{}", this.cvals_key(vs), std::format("{}", t)); },
+        .STRUCT(t, fs&) => {
+            var body: std::string = {};
+            for (i) in 0..fs.len {
+                if (i > 0) {
+                    body.push(',');
+                }
+                body.append(fs.at(i).name);
+                body.push('=');
+                body.append(this.cval_key(&fs.at(i).v).as_str());
+            }
+            return fmt2("{{#{} {}}}", std::format("{}", t), move body);
+        },
+        .VARIANT(t, n, p) => {
+            var inner: std::string = {};
+            if (p != null) {
+                inner = this.cval_key(p.value);
+            }
+            return fmt3("{}#{}({})", S(n), std::format("{}", t), move inner);
+        },
+        .OPT(t, x) => {
+            var inner: std::string = {};
+            if (x != null) {
+                inner = this.cval_key(x.value);
+            }
+            return fmt2("?#{}({})", std::format("{}", t), move inner);
+        },
+        default => { return this.cval_text(v); },
+    }
+}
+
+attach fn cvals_key(this: checker&, vs: std::vec<cval>&) -> std::string {
+    var out: std::string = {};
+    for (i) in 0..vs.len {
+        if (i > 0) {
+            out.push(',');
+        }
+        out.append(this.cval_key(vs.at(i)).as_str());
+    }
+    return out;
+}
+
+// a letter or _, then letters, digits and _
+fn is_name_text(n: str) -> bool {
+    if (n.len == 0) {
+        return false;
+    }
+    for (i) in 0..n.len {
+        val c = n[i];
+        val letter = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_';
+        if (!letter && !(i > 0 && c >= '0' && c <= '9')) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// what a type body sees at compile time, as a memo key: its frame's locals and generic arguments
+attach fn frame_values(this: checker&) -> std::string {
+    val f = this.ct_top();
+    var parts: std::vec<std::string> = {};
+    for (sc&) in f.scopes.items() {
+        for (e) in sc.iter() {
+            var p = S(*e.key);
+            p.push('=');
+            p.append(this.cval_key(&e.value.value).as_str());
+            put(&parts, move p);
+        }
+    }
+    sort_strings(&parts);
+    for (g&) in this.env_at(f.env).generics.items() {
+        var p = S(g.name);
+        p.push(':');
+        match (g.g) {
+            .TY(t) => {
+                p.push('#');
+                p.append_uint(@cast<u64>(t));
+            },
+            .PACK(pk) => {
+                val ts = this.list(pk);
+                for (i) in 0..ts.len {
+                    if (i > 0) {
+                        p.push(',');
+                    }
+                    p.push('#');
+                    p.append_uint(@cast<u64>(*ts.at(i)));
+                }
+            },
+            default => { this.gval_name(&p, copy g.g); },
+        }
+        put(&parts, move p);
+    }
+    var out: std::string = {};
+    for (i) in 0..parts.len {
+        if (i > 0) {
+            out.push(';');
+        }
+        out.append(parts.at(i).as_str());
+    }
+    return out;
+}
+
+// a body's members, unrolled: a comptime for runs its members once per item (its variables bound in a
+// new scope), a comptime if takes one branch, and a worked-out name becomes its str. Field types and
+// enum values are evaluated now, so they can use the loop variables; so are defaults that are numbers,
+// bools or strs
+attach fn ct_members(this: checker&, ms: std::vec<body_member>&, fields: std::vec<field>&, variants: std::vec<variant>&) -> compile_error!void {
+    for (m&) in ms.items() {
+        match (*m) {
+            .FIELD(f0&, named&) => {
+                var f = copy *f0;
+                f.name = (try this.ct_named(named)) ?? f.name;
+                val t = try this.ct_type(&f.ty);
+                val tspan = f.ty.span;
+                f.ty = { kind: type_kind::RESOLVED(t), span: tspan };
+                if (f.fallback) {
+                    val lit = this.ct_lit(&f.fallback, t);
+                    if (lit) {
+                        f.fallback = copy lit;
+                    }
+                }
+                put(fields, move f);
+            },
+            .VARIANT(v0&, named&) => {
+                var v = copy *v0;
+                v.name = (try this.ct_named(named)) ?? v.name;
+                if (v.payload) {
+                    val pspan = v.payload.span;
+                    val t = try this.ct_type(&v.payload);
+                    v.payload = { kind: type_kind::RESOLVED(t), span: pspan };
+                }
+                if (v.value) {
+                    val xspan = v.value.span;
+                    val x = try this.ct_expr(&v.value, null);
+                    var is_int = false;
+                    match (x) {
+                        .INT(n, k) => { is_int = true; },
+                        default => {},
+                    }
+                    if (!is_int) {
+                        return fails(xspan, "an enum value is a number");
+                    }
+                    v.value = cval_expr(&x, xspan);
+                }
+                put(variants, move v);
+            },
+            .FOR(mf&) => {
+                val items = try this.ct_items(&mf.iter, mf.iter.span);
+                for (i) in 0..items.len {
+                    var sc: std::map<str, const_entry> = {};
+                    sc.put(mf.bindings.at(0).name, { value: copy *items.at(i), mutable: false });
+                    if (mf.bindings.len > 1) {
+                        sc.put(mf.bindings.at(1).name, { value: cval::INT(@cast<i128>(i), USIZE), mutable: false });
+                    }
+                    put(&this.ct_top().scopes, move sc);
+                    this.ct_members(&mf.body, fields, variants) catch |e| {
+                        this.ct_top().scopes.pop();
+                        return copy e;
+                    };
+                    this.ct_top().scopes.pop();
+                }
+            },
+            .IF(mi&) => {
+                val c = try this.ct_expr(&mi.cond, BOOL);
+                var pick = false;
+                match (c) {
+                    .BOOL(x) => { pick = x; },
+                    default => { return fails(mi.cond.span, "comptime if needs a bool"); },
+                }
+                if (pick) {
+                    try this.ct_members(&mi.then, fields, variants);
+                } else {
+                    try this.ct_members(&mi.els, fields, variants);
+                }
+            },
+        }
+    }
+}
+
+// a worked-out name, if there's an expression for one: the str it gives
+attach fn ct_named(this: checker&, named: expr?*) -> compile_error!(str?) {
+    if ((*named).none) {
+        return null;
+    }
+    val e = &(*named).value;
+    val v = try this.ct_expr(e, STR);
+    match (v) {
+        .STR(s) => { return this.intern(copy s); },
+        default => {
+            val t = this.ct_type_of(&v);
+            return fail(e.span, fmt("a computed name is a str, found {}", this.ty_name(t)));
+        },
+    }
+}
+
+// e's value as the literal that writes it, if it's a number, bool or str known now
+attach fn ct_lit(this: checker&, e: expr&, want: u32?) -> expr? {
+    val v = this.ct_expr(e, want) catch |x| { return null; };
+    return cval_expr(&v, e.span);
+}
+
+// a number, bool or str as the literal that writes it
+fn cval_expr(v: cval&, span: span) -> expr? {
+    match (*v) {
+        .INT(n, k) => {
+            if (n < 0) {
+                return { kind: expr_kind::UNARY(unop::NEG, bx<expr>({ kind: expr_kind::INT(@cast<u128>(0 - n)), span: span })), span: span };
+            }
+            return { kind: expr_kind::INT(@cast<u128>(n)), span: span };
+        },
+        .FLOAT(f, k) => { return { kind: expr_kind::FLOAT(f), span: span }; },
+        .BOOL(b) => { return { kind: expr_kind::BOOL(b), span: span }; },
+        .STR(s) => { return { kind: expr_kind::STR(copy s), span: span }; },
+        default => { return null; },
+    }
+}
+
+// a type written in a type body, its expressions (std::vec<f.field_type>, pick(x)) evaluated in this
+// frame, so they see its locals
+attach fn ct_type(this: checker&, t: ty&) -> compile_error!u32 {
+    val s = try this.ct_subst(t);
+    return this.resolve_type(&s, this.ct_top().env);
+}
+
+attach fn ct_subst(this: checker&, t: ty&) -> compile_error!ty {
+    match (t.kind) {
+        .EXPR(x) => {
+            val v = try this.ct_expr(x, TYPE);
+            match (v) {
+                .TYPE(r) => { return { kind: type_kind::RESOLVED(r), span: t.span }; },
+                default => { return fails(x.span, "this doesn't give a type"); },
+            }
+        },
+        .PATH(p&) => {
+            var q = copy *p;
+            for (seg&) in q.segs.items() {
+                if (seg.args) {
+                    var na: std::vec<garg> = {};
+                    for (a&) in seg.args.items() {
+                        put(&na, try this.ct_garg(a));
+                    }
+                    seg.args = move na;
+                }
+            }
+            return { kind: type_kind::PATH(move q), span: t.span };
+        },
+        .REF(i) => { return { kind: type_kind::REF(bx(try this.ct_subst(i))), span: t.span }; },
+        .PTR(i) => { return { kind: type_kind::PTR(bx(try this.ct_subst(i))), span: t.span }; },
+        .OPTIONAL(i) => { return { kind: type_kind::OPTIONAL(bx(try this.ct_subst(i))), span: t.span }; },
+        .SLICE(i) => { return { kind: type_kind::SLICE(bx(try this.ct_subst(i))), span: t.span }; },
+        .ARRAY(i, n&) => { return { kind: type_kind::ARRAY(bx(try this.ct_subst(i)), copy *n), span: t.span }; },
+        .TUPLE(es&) => {
+            var out: std::vec<tuple_elem> = {};
+            for (x&) in es.items() {
+                put(&out, { name: x.name, ty: try this.ct_subst(&x.ty) });
+            }
+            return { kind: type_kind::TUPLE(move out), span: t.span };
+        },
+        default => { return copy *t; },
+    }
+}
+
+// a generic argument in a type body: a value the frame can work out (a type, a number) put in; else as
+// written
+attach fn ct_garg(this: checker&, a: garg&) -> compile_error!garg {
+    match (*a) {
+        .TYPE(x&) => { return garg::TYPE(try this.ct_subst(x)); },
+        .EXPR(x&) => {
+            val v = this.ct_expr(x, null) catch |e| { return copy *a; };
+            match (v) {
+                .TYPE(r) => { return garg::TYPE({ kind: type_kind::RESOLVED(r), span: x.span }); },
+                default => {},
+            }
+            val lit = cval_expr(&v, x.span);
+            if (lit) {
+                return garg::EXPR(copy lit);
+            }
+            return copy *a;
+        },
+    }
+}
+
+// a built type gets its shown name (from its call or alias), once
+attach fn name_built(this: checker&, t: u32, name: str) -> void {
+    if (this.unnamed_types.has(t)) {
+        this.unnamed_types.remove(t);
+        this.set_type_name(t, name);
+    }
+}
+
+attach fn set_type_name(this: checker&, t: u32, name: str) -> void {
+    match (*this.t.get(t)) {
+        .STRUCT(s) => { this.si(s).name = name; },
+        .ENUM(e) => { this.ei(e).name = name; },
+        default => {},
+    }
 }
 
 // ---------- builtins ----------
@@ -2577,7 +3023,13 @@ attach fn typeinfo(this: checker&, t: u32, span: span) -> compile_error!cval {
     put(&r, cf("canonical_name", cval::STR(copy full)));
     put(&r, cf("short_name", cval::STR(move short)));
     put(&r, cf("module_path", cval::STR(move module)));
+    // the kind's fields or variants, also right on the record (empty for other kinds), so a comptime
+    // for can loop over them without matching the kind
+    val fields_v = kind_part(&kind, "STRUCT", 0) ?? cval::ARRAY({}, VOID);
+    val variants_v = kind_part(&kind, "ENUM", 1) ?? (kind_part(&kind, "ERROR_SET", 0) ?? cval::ARRAY({}, VOID));
     put(&r, cf("kind", move kind));
+    put(&r, cf("fields", fields_v));
+    put(&r, cf("variants", variants_v));
     put(&r, cf("size", this.opt_usize(size)));
     put(&r, cf("align", this.opt_usize(align)));
     put(&r, cf("stride", this.opt_usize(size)));
@@ -2594,6 +3046,27 @@ attach fn typeinfo(this: checker&, t: u32, span: span) -> compile_error!cval {
     }
     put(&r, cf("attributes", move attributes));
     return rec1(move r);
+}
+
+// part i of a typeinfo kind's payload when it's that kind (all of it when the payload isn't a tuple)
+fn kind_part(kind: cval&, name: str, i: usize) -> cval? {
+    match (*kind) {
+        .VARIANT(t, n, p) => {
+            if (n != name || p == null) {
+                return null;
+            }
+            match (*p.value) {
+                .TUPLE(xs&) => {
+                    if (i < xs.len) {
+                        return copy *xs.at(i);
+                    }
+                    return null;
+                },
+                default => { return copy *p.value; },
+            }
+        },
+        default => { return null; },
+    }
 }
 
 // the value of x if it's known at compile time, else null (no error)

@@ -88,18 +88,7 @@ impl W {
                 self.open("struct");
                 self.name(&s.name);
                 self.opt(&s.spec, |w, a| w.list(a, |w, g| w.garg(g)));
-                self.list(&s.fields, |w, f| {
-                    w.sp();
-                    w.open("field");
-                    w.name(&f.name);
-                    w.sp();
-                    w.ty(&f.ty);
-                    w.opt(&f.default, |w, e| w.expr(e));
-                    w.s(if f.vis == Vis::Internal { " internal" } else { " public" });
-                    w.span(f.span);
-                    w.list(&f.attrs, |w, a| w.expr(a));
-                    w.close();
-                });
+                self.list(&s.fields, |w, f| w.field(f));
                 self.flag(s.is_extern);
                 self.flag(s.is_comptime);
                 self.close();
@@ -111,18 +100,7 @@ impl W {
                     w.sp();
                     w.ty(t)
                 });
-                self.list(&e.variants, |w, v| {
-                    w.sp();
-                    w.open("variant");
-                    w.name(&v.name);
-                    w.opt(&v.payload, |w, t| {
-                        w.sp();
-                        w.ty(t)
-                    });
-                    w.opt(&v.value, |w, e| w.expr(e));
-                    w.span(v.span);
-                    w.close();
-                });
+                self.list(&e.variants, |w, v| w.variant(v));
                 self.flag(e.is_error);
                 self.close();
             }
@@ -339,6 +317,10 @@ impl W {
                 self.open("texpr");
                 self.expr(e);
             }
+            TypeKind::Resolved(t) => {
+                self.open("tresolved");
+                self.s(&format!(" {t}"));
+            }
         }
         self.span(t.span);
         self.close();
@@ -349,6 +331,74 @@ impl W {
         self.list(&b.stmts, |w, s| w.stmt(s));
         self.span(b.span);
         self.close();
+    }
+
+    fn field(&mut self, f: &Field) {
+        self.sp();
+        self.open("field");
+        self.name(&f.name);
+        self.sp();
+        self.ty(&f.ty);
+        self.opt(&f.default, |w, e| w.expr(e));
+        self.s(if f.vis == Vis::Internal { " internal" } else { " public" });
+        self.span(f.span);
+        self.list(&f.attrs, |w, a| w.expr(a));
+        self.close();
+    }
+
+    fn variant(&mut self, v: &Variant) {
+        self.sp();
+        self.open("variant");
+        self.name(&v.name);
+        self.opt(&v.payload, |w, t| {
+            w.sp();
+            w.ty(t)
+        });
+        self.opt(&v.value, |w, e| w.expr(e));
+        self.span(v.span);
+        self.close();
+    }
+
+    /// a type body's members: a field or variant with its worked-out name's expression after it
+    fn members(&mut self, ms: &[Member]) {
+        self.list(ms, |w, m| {
+            w.sp();
+            match m {
+                Member::Field(f, named) => {
+                    w.open("mfield");
+                    w.field(f);
+                    w.opt(named, |w, e| w.expr(e));
+                }
+                Member::Variant(v, named) => {
+                    w.open("mvariant");
+                    w.variant(v);
+                    w.opt(named, |w, e| w.expr(e));
+                }
+                Member::For { bindings, iter, body, span } => {
+                    w.open("mfor");
+                    w.list(bindings, |w, (n, r, s)| {
+                        w.sp();
+                        w.open("bind");
+                        w.name(n);
+                        w.flag(*r);
+                        w.span(*s);
+                        w.close();
+                    });
+                    w.expr(iter);
+                    w.members(body);
+                    w.span(*span);
+                }
+                Member::If { cond, then, els, span } => {
+                    w.open("mif");
+                    w.expr(cond);
+                    w.members(then);
+                    w.s(" else");
+                    w.members(els);
+                    w.span(*span);
+                }
+            }
+            w.close();
+        });
     }
 
     fn let_(&mut self, l: &Let) {
@@ -633,6 +683,14 @@ impl W {
                         QuotePart::Splice(e) => self.expr(e),
                     }
                 }
+            }
+            ExprKind::TypeBody(b) => {
+                self.open(if b.is_enum { "tbody enum" } else { "tbody struct" });
+                self.opt(&b.backing, |w, t| {
+                    w.sp();
+                    w.ty(t)
+                });
+                self.members(&b.members);
             }
             ExprKind::Move(x) => {
                 self.open("move");

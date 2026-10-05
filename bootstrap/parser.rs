@@ -7,7 +7,7 @@ use crate::lexer::{Tok, Token};
 use std::collections::HashSet;
 
 /// words that are never a name (`ident` rejects them); `error` still starts a path (`error::X`)
-const KEYWORDS: &[&str] = &[
+pub const KEYWORDS: &[&str] = &[
     "var", "val", "static", "public", "internal", "attach", "struct", "enum", "fn", "error", "trait", "comptime",
     "async", "await", "suspend", "resume", "extern", "export", "namespace", "use", "as", "this", "move", "copy",
     "if", "else", "for", "in", "while", "loop", "break", "continue", "return", "match", "default", "try", "catch",
@@ -821,6 +821,12 @@ impl<'a> Parser<'a> {
                 Type { kind: TypeKind::Path(Path::single("void", self.prev_span())), span: self.prev_span() }
             };
             TypeKind::Fn { params, c_varargs, ret: Box::new(ret), extern_c }
+        } else if (self.is_kw("struct") || self.is_kw("enum")) && (self.is_at(1, "{") || (self.is_kw("enum") && self.is_at(1, ":"))) {
+            // a type built right here: type point3 = struct { ... };
+            TypeKind::Expr(Box::new(self.type_body()?))
+        } else if self.is_ident() && self.is_at(1, ".") && matches!(self.tok_at(2), Tok::Ident(_)) {
+            // a compile-time value's field that holds a type: f.field_type
+            TypeKind::Expr(Box::new(self.postfix()?))
         } else if matches!(self.tok(), Tok::Ident(s) if s == "error" || !KEYWORDS.contains(&s.as_str())) {
             let p = self.path(true)?;
             if self.is("(") {
@@ -1652,6 +1658,7 @@ impl<'a> Parser<'a> {
                     self.loop_expr(None, true)
                 }
                 "if" | "match" | "for" | "while" | "loop" => self.loop_expr(None, false),
+                "struct" | "enum" if self.is_at(1, "{") || (s == "enum" && self.is_at(1, ":")) => self.type_body(),
                 _ if !KEYWORDS.contains(&s.as_str()) || s == "error" => {
                     let p = self.path(false)?;
                     mk(ExprKind::Path(p), self)
@@ -1660,6 +1667,104 @@ impl<'a> Parser<'a> {
             },
             _ => self.unexpected("an expression"),
         }
+    }
+
+    /// `struct { members }` / `enum[: T] { members }` as a value: a type built at compile time
+    fn type_body(&mut self) -> Res<Expr> {
+        let start = self.span();
+        let is_enum = self.bump().tok == Tok::Ident("enum".into());
+        let backing = if is_enum && self.eat(":") { Some(self.parse_type()?) } else { None };
+        self.expect("{")?;
+        let members = self.members(is_enum)?;
+        Ok(Expr { kind: ExprKind::TypeBody(Box::new(TypeBody { is_enum, backing, members })), span: start.to(self.prev_span()) })
+    }
+
+    /// a type body's members up to its `}`: fields (`name: T [= d];`) or variants (`NAME [: T] [= v],`),
+    /// `comptime for (x) in e { members }` and `comptime if (c) { members } [else ...]`. A name that
+    /// isn't a bare identifier (`f.name`, `names[i]`, `(n)`) is worked out at compile time.
+    fn members(&mut self, is_enum: bool) -> Res<Vec<Member>> {
+        let mut out = Vec::new();
+        while !self.eat("}") {
+            let start = self.span();
+            if self.is_kw("comptime") && self.is_kw_at(1, "for") {
+                self.bump();
+                self.bump();
+                self.expect("(")?;
+                let mut bindings = Vec::new();
+                while !self.eat(")") {
+                    let (n, sp) = self.ident()?;
+                    let by_ref = self.eat("&");
+                    bindings.push((n, by_ref, sp));
+                    if !self.eat(",") && !self.is(")") {
+                        return self.unexpected("',' or ')'");
+                    }
+                }
+                if bindings.is_empty() || bindings.len() > 2 || bindings.iter().any(|b| b.1) {
+                    return err(start, "a comptime for in a type body binds one or two names: (x) or (x, i)");
+                }
+                self.expect_kw("in")?;
+                let iter = self.expr()?;
+                self.expect("{")?;
+                let body = self.members(is_enum)?;
+                out.push(Member::For { bindings, iter, body, span: start.to(self.prev_span()) });
+                continue;
+            }
+            if self.is_kw("comptime") && self.is_kw_at(1, "if") {
+                self.bump();
+                out.push(self.member_if(is_enum)?);
+                continue;
+            }
+            let attrs = if !is_enum && matches!(self.tok(), Tok::Builtin(s) if s == "attributes") { self.attributes()? } else { Vec::new() };
+            let vis = if is_enum {
+                Vis::Public
+            } else if self.eat_kw("internal") {
+                Vis::Internal
+            } else {
+                self.eat_kw("public");
+                Vis::Public
+            };
+            // a bare identifier is the name as written; anything else is worked out
+            let bare = matches!(self.tok(), Tok::Ident(_)) && [":", "=", ",", ";", "}"].iter().any(|p| self.is_at(1, p));
+            let (name, named) = if bare { (self.ident()?.0, None) } else { (String::new(), Some(self.postfix()?)) };
+            if is_enum {
+                let payload = if self.eat(":") { Some(self.parse_type()?) } else { None };
+                let value = if self.eat("=") { Some(self.expr()?) } else { None };
+                out.push(Member::Variant(Variant { name, payload, value, span: start.to(self.prev_span()) }, named));
+                if !self.eat(",") && !self.is("}") {
+                    return self.unexpected("',' or '}'");
+                }
+            } else {
+                self.expect(":")?;
+                let ty = self.parse_type()?;
+                let default = if self.eat("=") { Some(self.expr()?) } else { None };
+                if !self.eat(";") && !self.eat(",") && !self.is("}") {
+                    return self.unexpected("';' after field");
+                }
+                out.push(Member::Field(Field { name, ty, default, vis, span: start.to(self.prev_span()), attrs }, named));
+            }
+        }
+        Ok(out)
+    }
+
+    /// `if (c) { members } [else { members } | else [comptime] if ...]` in a type body, after `comptime`
+    fn member_if(&mut self, is_enum: bool) -> Res<Member> {
+        let start = self.span();
+        self.expect_kw("if")?;
+        self.expect("(")?;
+        let cond = self.expr()?;
+        self.expect(")")?;
+        self.expect("{")?;
+        let then = self.members(is_enum)?;
+        let els = if !self.eat_kw("else") {
+            Vec::new()
+        } else if self.is_kw("if") || (self.is_kw("comptime") && self.is_kw_at(1, "if")) {
+            self.eat_kw("comptime");
+            vec![self.member_if(is_enum)?]
+        } else {
+            self.expect("{")?;
+            self.members(is_enum)?
+        };
+        Ok(Member::If { cond, then, els, span: start.to(self.prev_span()) })
     }
 
     /// if / match / for / while / loop, with an optional label and comptime flag

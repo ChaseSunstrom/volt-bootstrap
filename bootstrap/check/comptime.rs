@@ -473,6 +473,7 @@ impl Checker {
             ExprKind::Char(v) => Ok(CVal::Int(*v as i128, VOID)),
             ExprKind::Float(v) => Ok(CVal::Float(*v, want.filter(|w| self.t.is_float(*w)).unwrap_or(VOID))),
             ExprKind::Str(s) => Ok(CVal::Str(s.clone())),
+            ExprKind::TypeBody(b) => self.ct_type_body(b, span),
             ExprKind::Quote(parts) => {
                 let mut out = String::new();
                 for p in parts {
@@ -747,6 +748,10 @@ impl Checker {
             }
             (CVal::Int(x, _), f @ CVal::Float(..)) => return self.ct_binop(op, CVal::Float(x as f64, VOID), f, span),
             (f @ CVal::Float(..), CVal::Int(y, _)) => return self.ct_binop(op, f, CVal::Float(y as f64, VOID), span),
+            (CVal::Str(mut x), CVal::Str(y)) if op == Add => {
+                x.extend(y);
+                CVal::Str(x)
+            }
             (a, b) if matches!(op, Eq | Ne) => {
                 let same = match (&a, &b) {
                     (CVal::Null, CVal::Opt(_, v)) | (CVal::Opt(_, v), CVal::Null) => v.is_none(),
@@ -1008,23 +1013,7 @@ impl Checker {
 
     /// a for loop over a range, list, tuple or string; with an accumulator, its final value is the loop's
     fn ct_for(&mut self, f: &ForLoop, span: Span) -> CRes<CVal> {
-        let items: Vec<CVal> = match &f.iter.kind {
-            ExprKind::Range(Some(lo), Some(hi), incl) => {
-                let (CVal::Int(a, t), CVal::Int(b, _)) = (self.ct_expr(lo, None)?, self.ct_expr(hi, None)?) else {
-                    return cerr(span, "ranges need integers");
-                };
-                let end = if *incl { b + 1 } else { b };
-                if end - a > 10_000_000 {
-                    return cerr(span, "compile-time range is too long");
-                }
-                (a..end.max(a)).map(|i| CVal::Int(i, t)).collect()
-            }
-            _ => match self.ct_expr(&f.iter, None)? {
-                CVal::Array(es, _) | CVal::Tuple(es) => es,
-                CVal::Str(s) => s.into_iter().map(|c| CVal::Int(c as i128, U8)).collect(),
-                _ => return cerr(f.iter.span, "can't loop over this at compile time"),
-            },
-        };
+        let items = self.ct_items(&f.iter, span)?;
         let mut acc = None;
         if let Some(a) = &f.acc {
             self.frame().scopes.push(HashMap::new());
@@ -1067,6 +1056,27 @@ impl Checker {
             self.frame().scopes.pop();
         }
         r.map(|_| out)
+    }
+
+    /// what a compile-time for loops over: a range's numbers, an array's or tuple's items, a str's bytes
+    fn ct_items(&mut self, iter: &Expr, span: Span) -> CRes<Vec<CVal>> {
+        Ok(match &iter.kind {
+            ExprKind::Range(Some(lo), Some(hi), incl) => {
+                let (CVal::Int(a, t), CVal::Int(b, _)) = (self.ct_expr(lo, None)?, self.ct_expr(hi, None)?) else {
+                    return cerr(span, "ranges need integers");
+                };
+                let end = if *incl { b + 1 } else { b };
+                if end - a > 10_000_000 {
+                    return cerr(span, "compile-time range is too long");
+                }
+                (a..end.max(a)).map(|i| CVal::Int(i, t)).collect()
+            }
+            _ => match self.ct_expr(iter, None)? {
+                CVal::Array(es, _) | CVal::Tuple(es) => es,
+                CVal::Str(s) => s.into_iter().map(|c| CVal::Int(c as i128, U8)).collect(),
+                _ => return cerr(iter.span, "can't loop over this at compile time"),
+            },
+        })
     }
 
     /// whether v matches pat, binding names into the current scope
@@ -1315,9 +1325,247 @@ impl Checker {
             Err(e) => return Err(e),
         };
         if ret == VOID || ret == TYPE {
+            // a type the call built is named after the call: soa(particle)
+            if let CVal::Type(t) = out {
+                if self.unnamed_types.contains(&t) {
+                    let a: Vec<String> = args.iter().map(|v| self.cval_text(v)).collect();
+                    self.name_built(t, format!("{}({})", f.name, a.join(", ")));
+                }
+            }
             return Ok(out);
         }
         self.ct_coerce(out, ret, span)
+    }
+
+    // ---------- types built at compile time ----------
+
+    /// `struct { ... }` / `enum { ... }`: its comptime for and if unrolled, its worked-out names, field
+    /// types and enum values evaluated, made a type. The same body seeing the same compile-time values
+    /// gives the same type. Its name comes from the call that returns it or the alias it's written in;
+    /// until then (or without one) it's named after where it is.
+    fn ct_type_body(&mut self, b: &TypeBody, span: Span) -> CRes<CVal> {
+        let key = format!("{}:{}|{}", span.file, span.lo, self.frame_values());
+        if let Some(t) = self.built_types.get(&key) {
+            return Ok(CVal::Type(*t));
+        }
+        let (mut fields, mut variants) = (Vec::new(), Vec::new());
+        self.ct_members(&b.members, &mut fields, &mut variants)?;
+        // names are identifiers, each once
+        let names: Vec<(String, Span)> = if b.is_enum { variants.iter().map(|v| (v.name.clone(), v.span)).collect() } else { fields.iter().map(|f| (f.name.clone(), f.span)).collect() };
+        let what = if b.is_enum { "a variant of this enum" } else { "a field of this struct" };
+        for (i, (n, at)) in names.iter().enumerate() {
+            let ok = n.chars().next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_') && n.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+            if !ok {
+                return cerr(*at, format!("'{n}' isn't a name: a letter or _, then letters, digits and _"));
+            }
+            if crate::parser::KEYWORDS.contains(&n.as_str()) {
+                return cerr(*at, format!("'{n}' is a keyword, so it can't be a name"));
+            }
+            if names[..i].iter().any(|(m, _)| m == n) {
+                return cerr(*at, format!("'{n}' is already {what}"));
+            }
+        }
+        let env = self.frame().env.clone();
+        let line = self.loc(span);
+        let base = if b.is_enum { "enum" } else { "struct" };
+        let kind = if b.is_enum {
+            ItemKind::Enum(EnumDecl { name: base.into(), backing: b.backing.clone(), variants, is_error: false })
+        } else {
+            ItemKind::Struct(StructDecl { name: base.into(), spec: None, fields, is_extern: false, is_comptime: false, c_name: None, c_union: false })
+        };
+        let item = Item { kind, span, attrs: Vec::new(), vis: Vis::Public, generics: Vec::new() };
+        let decl = self.decls.len();
+        self.decls.push(Decl { item: Rc::new(item), ns: env.ns, file: span.file, parent: None });
+        let t = if b.is_enum { self.enum_inst(decl, Vec::new(), span)? } else { self.struct_inst(decl, Vec::new(), span)? };
+        self.built_types.insert(key, t);
+        self.unnamed_types.insert(t);
+        self.set_type_name(t, format!("{base} at {line}"));
+        Ok(CVal::Type(t))
+    }
+
+    /// what a type body sees at compile time, as a memo key: its frame's locals and generic arguments
+    fn frame_values(&mut self) -> String {
+        let f = self.ct.last().unwrap();
+        let mut parts: Vec<String> = f.scopes.iter().flat_map(|s| s.iter().map(|(n, (v, _))| format!("{n}={}", self.cval_key(v)))).collect();
+        parts.sort();
+        parts.extend(f.env.generics.iter().map(|(n, g)| match g {
+            GVal::Ty(t) => format!("{n}:#{t}"),
+            GVal::Pack(ts) => format!("{n}:#{}", ts.iter().map(|t| t.to_string()).collect::<Vec<_>>().join(",#")),
+            _ => format!("{n}:{}", self.gval_name(g)),
+        }));
+        parts.join(";")
+    }
+
+    /// a value as a memo key: types by identity (two can have one name, and a built one's name changes),
+    /// numbers with their types, strs with their length
+    fn cval_key(&self, v: &CVal) -> String {
+        let list = |c: &Self, vs: &[CVal]| vs.iter().map(|x| c.cval_key(x)).collect::<Vec<_>>().join(",");
+        match v {
+            CVal::Type(t) => format!("#{t}"),
+            CVal::Int(n, t) => format!("{n}#{t}"),
+            CVal::Float(x, t) => format!("{x}#{t}"),
+            CVal::Str(s) => format!("{}:{}", s.len(), String::from_utf8_lossy(s)),
+            CVal::Tuple(vs) => format!("({})", list(self, vs)),
+            CVal::Array(vs, t) => format!("[{}]#{t}", list(self, vs)),
+            CVal::Struct(t, fs) => format!("{{#{t} {}}}", fs.iter().map(|(n, x)| format!("{n}={}", self.cval_key(x))).collect::<Vec<_>>().join(",")),
+            CVal::Variant(t, n, p) => format!("{n}#{t}({})", p.as_ref().map(|x| self.cval_key(x)).unwrap_or_default()),
+            CVal::Opt(t, x) => format!("?#{t}({})", x.as_ref().map(|x| self.cval_key(x)).unwrap_or_default()),
+            other => self.cval_text(other),
+        }
+    }
+
+    /// a body's members, unrolled: a comptime for runs its members once per item (its variables bound
+    /// in a new scope), a comptime if takes one branch, and a worked-out name becomes its str. Field
+    /// types and enum values are evaluated now, so they can use the loop variables; so are defaults
+    /// that are numbers, bools or strs
+    fn ct_members(&mut self, ms: &[Member], fields: &mut Vec<Field>, variants: &mut Vec<Variant>) -> CRes<()> {
+        for m in ms {
+            match m {
+                Member::Field(f, named) => {
+                    let mut f = f.clone();
+                    if let Some(e) = named {
+                        f.name = self.ct_name(e)?;
+                    }
+                    let t = self.ct_type(&f.ty)?;
+                    f.ty = Type { kind: TypeKind::Resolved(t), span: f.ty.span };
+                    if let Some(d) = &f.default {
+                        if let Ok(v) = self.ct_expr(d, Some(t)) {
+                            if let Some(e) = Self::cval_expr(&v, d.span) {
+                                f.default = Some(e);
+                            }
+                        }
+                    }
+                    fields.push(f);
+                }
+                Member::Variant(v, named) => {
+                    let mut v = v.clone();
+                    if let Some(e) = named {
+                        v.name = self.ct_name(e)?;
+                    }
+                    if let Some(p) = &v.payload {
+                        let t = self.ct_type(p)?;
+                        v.payload = Some(Type { kind: TypeKind::Resolved(t), span: p.span });
+                    }
+                    if let Some(x) = &v.value {
+                        let val = self.ct_expr(x, None)?;
+                        if !matches!(val, CVal::Int(..)) {
+                            return cerr(x.span, "an enum value is a number");
+                        }
+                        v.value = Self::cval_expr(&val, x.span);
+                    }
+                    variants.push(v);
+                }
+                Member::For { bindings, iter, body, .. } => {
+                    for (i, item) in self.ct_items(iter, iter.span)?.into_iter().enumerate() {
+                        let mut scope = HashMap::new();
+                        scope.insert(bindings[0].0.clone(), (item, false));
+                        if let Some((n, _, _)) = bindings.get(1) {
+                            scope.insert(n.clone(), (CVal::Int(i as i128, USIZE), false));
+                        }
+                        self.frame().scopes.push(scope);
+                        let r = self.ct_members(body, fields, variants);
+                        self.frame().scopes.pop();
+                        r?;
+                    }
+                }
+                Member::If { cond, then, els, .. } => {
+                    let pick = match self.ct_expr(cond, Some(BOOL))? {
+                        CVal::Bool(b) => b,
+                        _ => return cerr(cond.span, "comptime if needs a bool"),
+                    };
+                    self.ct_members(if pick { then } else { els }, fields, variants)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// a worked-out name: the str an expression gives
+    fn ct_name(&mut self, e: &Expr) -> CRes<String> {
+        match self.ct_expr(e, Some(STR))? {
+            CVal::Str(s) => Ok(String::from_utf8_lossy(&s).into_owned()),
+            v => {
+                let t = self.ct_type_of(&v);
+                cerr(e.span, format!("a computed name is a str, found {}", self.ty_name(t)))
+            }
+        }
+    }
+
+    /// a number, bool or str as the literal that writes it
+    fn cval_expr(v: &CVal, span: Span) -> Option<Expr> {
+        let kind = match v {
+            CVal::Int(n, _) if *n < 0 => ExprKind::Unary(UnOp::Neg, Box::new(Expr { kind: ExprKind::Int(n.unsigned_abs() as u128 as _), span })),
+            CVal::Int(n, _) => ExprKind::Int(*n as _),
+            CVal::Float(f, _) => ExprKind::Float(*f),
+            CVal::Bool(b) => ExprKind::Bool(*b),
+            CVal::Str(s) => ExprKind::Str(s.clone()),
+            _ => return None,
+        };
+        Some(Expr { kind, span })
+    }
+
+    /// a type written in a type body, its expressions (std::vec<f.field_type>, pick(x)) evaluated in
+    /// this frame, so they see its locals
+    fn ct_type(&mut self, t: &Type) -> CRes<TyId> {
+        let t = self.ct_subst(t)?;
+        let env = self.frame().env.clone();
+        Ok(self.resolve_type(&t, &env)?)
+    }
+
+    fn ct_subst(&mut self, t: &Type) -> CRes<Type> {
+        let sub = |c: &mut Self, x: &Type| c.ct_subst(x).map(Box::new);
+        let kind = match &t.kind {
+            TypeKind::Expr(e) => match self.ct_expr(e, Some(TYPE))? {
+                CVal::Type(r) => TypeKind::Resolved(r),
+                _ => return cerr(e.span, "this doesn't give a type"),
+            },
+            TypeKind::Path(p) => {
+                let mut p = p.clone();
+                for seg in &mut p.segs {
+                    for a in seg.args.iter_mut().flatten() {
+                        *a = match a.clone() {
+                            GenericArg::Type(x) => GenericArg::Type(self.ct_subst(&x)?),
+                            // a value the frame can work out (a type, a number); else as written
+                            GenericArg::Expr(e) => match self.ct_expr(&e, None) {
+                                Ok(CVal::Type(r)) => GenericArg::Type(Type { kind: TypeKind::Resolved(r), span: e.span }),
+                                Ok(v) => Self::cval_expr(&v, e.span).map(GenericArg::Expr).unwrap_or(GenericArg::Expr(e)),
+                                Err(_) => GenericArg::Expr(e),
+                            },
+                        };
+                    }
+                }
+                TypeKind::Path(p)
+            }
+            TypeKind::Ref(i) => TypeKind::Ref(sub(self, i)?),
+            TypeKind::Ptr(i) => TypeKind::Ptr(sub(self, i)?),
+            TypeKind::Optional(i) => TypeKind::Optional(sub(self, i)?),
+            TypeKind::Slice(i) => TypeKind::Slice(sub(self, i)?),
+            TypeKind::Array(i, n) => TypeKind::Array(sub(self, i)?, n.clone()),
+            TypeKind::Tuple(es) => {
+                let mut out = Vec::new();
+                for (n, x) in es {
+                    out.push((n.clone(), self.ct_subst(x)?));
+                }
+                TypeKind::Tuple(out)
+            }
+            other => other.clone(),
+        };
+        Ok(Type { kind, span: t.span })
+    }
+
+    /// a built type gets its shown name (from its call or alias), once
+    pub fn name_built(&mut self, t: TyId, name: String) {
+        if self.unnamed_types.remove(&t) {
+            self.set_type_name(t, name);
+        }
+    }
+
+    fn set_type_name(&mut self, t: TyId, name: String) {
+        match self.t.get(t).clone() {
+            Ty::Struct(s) => self.structs[s as usize].name = name,
+            Ty::Enum(e) => self.enums[e as usize].name = name,
+            _ => {}
+        }
     }
 
     // ---------- builtins ----------
@@ -1617,12 +1865,26 @@ impl Checker {
             }
             _ => CVal::Tuple(Vec::new()),
         };
+        // the kind's fields or variants, also right on the record (empty for other kinds), so a
+        // comptime for can loop over them without matching the kind
+        let part = |name: &str, i: usize| match &kind {
+            CVal::Variant(_, n, Some(p)) if n == name => match p.as_ref() {
+                CVal::Tuple(xs) => xs.get(i).cloned(),
+                x => Some(x.clone()),
+            },
+            _ => None,
+        };
+        let none = CVal::Array(Vec::new(), VOID);
+        let fields = part("STRUCT", 0).unwrap_or_else(|| none.clone());
+        let variants = part("ENUM", 1).or_else(|| part("ERROR_SET", 0)).unwrap_or(none);
         Ok(Self::rec(vec![
             ("id", CVal::Int(t as i128, int(IntTy::U128))),
             ("canonical_name", CVal::Str(full.into_bytes())),
             ("short_name", CVal::Str(short.into_bytes())),
             ("module_path", CVal::Str(module.into_bytes())),
-            ("kind", kind),
+            ("kind", kind.clone()),
+            ("fields", fields),
+            ("variants", variants),
             ("size", opt_usize(size)),
             ("align", opt_usize(align)),
             ("stride", opt_usize(size)),
