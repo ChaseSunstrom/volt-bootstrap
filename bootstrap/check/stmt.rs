@@ -28,14 +28,28 @@ impl Checker {
     fn block_inner(&mut self, b: &Block) -> Res<(String, bool)> {
         let mut code = String::new();
         let mut div = false;
+        let dead = self.cx.dead;
         for s in &b.stmts {
-            let (c, d) = self.stmt(s)?;
+            // after a statement that always leaves, the rest never runs: a break there doesn't leave
+            // its loop or block (`{ return x; break :b; }` can't reach past :b)
+            if div {
+                self.cx.dead = dead + 1;
+            }
+            let r = self.stmt(s);
+            let (c, d) = match r {
+                Ok(x) => x,
+                Err(e) => {
+                    self.cx.dead = dead;
+                    return Err(e);
+                }
+            };
             if !c.is_empty() {
                 code.push_str(&c);
                 code.push('\n');
             }
             div |= d;
         }
+        self.cx.dead = dead;
         Ok((code, div))
     }
 
@@ -440,9 +454,11 @@ impl Checker {
         } else if self.cx.loops[li].break_ty.is_some() && self.cx.loops[li].result.is_some() {
             return err(span, "this loop breaks with a value elsewhere, so this break needs one too");
         }
-        self.cx.loops[li].has_break = true;
-        let moved = self.cx.moved.clone();
-        self.cx.loops[li].moved_at_break.extend(moved);
+        if self.cx.dead == 0 {
+            self.cx.loops[li].has_break = true;
+            let moved = self.cx.moved.clone();
+            self.cx.loops[li].moved_at_break.extend(moved);
+        }
         let top = self.cx.scopes.len() - 1;
         let depth = self.cx.loops[li].depth;
         let defers = self.scope_exit_code(top, depth, false)?;

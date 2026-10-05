@@ -183,6 +183,9 @@ fn main() -> void {
 // expect: 111
 ```
 
+`if (val v = e)` and `while (val x = e)` bind the value of an optional or an error union when it
+has one; see [Binding in if and while](/volt-bootstrap/guide/errors/#binding-in-if-and-while).
+
 ### for
 
 `for` walks a range, an array or a slice. A second name gets the index. `for (x&)` binds each

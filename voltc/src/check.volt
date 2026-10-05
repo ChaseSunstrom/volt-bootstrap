@@ -214,6 +214,7 @@ struct fn_cx {
     kept: std::vec<kept_temp> = {};
     keep_scope: usize = 0; // the scope whose exits delete them (early exits included)
     exiting: u32 = 0;          // inside a return/break value
+    dead: u32 = 0;             // in statements after one that always leaves
     reassigning: u32? = null;  // `x = f(move x)`: x gets a new value right away
     frame: u32? = null;        // generating this async fn's step function
     frame_ptr: u32 = 0;        // its frame pointer (a place)

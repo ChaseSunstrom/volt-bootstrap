@@ -203,6 +203,11 @@ enum expr_kind {
 // hidden local: source can't name either)
 val UPDATE_LABEL: str = "@update";
 val UPDATE_TMP: str = "@base";
+// `if (val v = e)` and `while (val x = e)` are parsed into labeled blocks too: these labels, and a
+// hidden local holding e (a nested one shadows it, as a nested scope may)
+val IF_LABEL: str = "@if";
+val ELSE_LABEL: str = "@else";
+val IF_TMP: str = "@if";
 
 struct expr {
     kind: expr_kind;

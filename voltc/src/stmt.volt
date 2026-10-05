@@ -59,14 +59,24 @@ attach fn block_code(this: checker&, b: block&) -> compile_error!code {
 attach fn block_scoped(this: checker&, b: block&) -> compile_error!code {
     var stmts: std::vec<u32> = {};
     var div = false;
+    val dead = this.cx.dead;
     for (s&) in b.stmts.items() {
+        // after a statement that always leaves, the rest never runs: a break there doesn't leave its
+        // loop or block (`{ return x; break :b; }` can't reach past :b)
+        if (div) {
+            this.cx.dead = dead + 1;
+        }
         if (this.opts.line_info) {
             put(&stmts, this.ir.node(ir_kind::AT(s.span.file, @cast<u32>(this.line_col(s.span).line)), VOID));
         }
-        val c = try this.stmt(s);
+        val c = this.stmt(s) catch |e| {
+            this.cx.dead = dead;
+            return e;
+        };
         put(&stmts, c.c);
         div = div || c.div;
     }
+    this.cx.dead = dead;
     if (!div) {
         if (this.opts.line_info && b.span.hi > b.span.lo) {
             // what leaving the block runs (drops, defers) belongs to its closing brace
@@ -719,9 +729,11 @@ attach fn brk(this: checker&, label: str?, v: expr*, span: span) -> compile_erro
     } else if (this.cx.loops.at(li).break_ty != null && this.cx.loops.at(li).can_value) {
         return fails(span, "this loop breaks with a value elsewhere, so this break needs one too");
     }
-    this.cx.loops.at(li).has_break = true;
-    val moved = copy this.cx.moved;
-    this.cx.loops.at(li).moved_at_break.add_all(&moved);
+    if (this.cx.dead == 0) {
+        this.cx.loops.at(li).has_break = true;
+        val moved = copy this.cx.moved;
+        this.cx.loops.at(li).moved_at_break.add_all(&moved);
+    }
     val top = this.cx.scopes.len - 1;
     val depth = this.cx.loops.at(li).depth;
     for (x&) in (try this.scope_exit_code(top, depth, false)).items() {

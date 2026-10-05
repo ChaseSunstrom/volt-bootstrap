@@ -110,6 +110,18 @@ attach fn try_expr(this: checker&, x: expr&, span: span) -> compile_error!tval {
 // `x catch |e| handler`: the payload, or the handler's value on error. The handler may leave
 // (return/break) instead; when x has no payload it must give no value
 attach fn catch_expr(this: checker&, x: expr&, cap: catch_cap*, handler: expr&, span: span) -> compile_error!tval {
+    val bt = this.if_bind_ty(x);
+    if (bt != null && cap != null) {
+        val t = bt ?? 0;
+        var is_eu = false;
+        match (*this.t.get(t)) {
+            .ERR_UNION(a, b) => { is_eu = true; },
+            default => {},
+        }
+        if (!is_eu) {
+            return fail(x.span, fmt2("else |{}| needs an error union, found {}", S(cap->name), this.ty_name(t)));
+        }
+    }
     val v0 = try this.expr(x, null);
     val v = try this.take(v0, x.span); // the payload comes out, so an owning local moves
     var e: u32 = 0;
@@ -215,7 +227,35 @@ attach fn opt_parts(this: checker&, opt: u32, c: u32) -> opt_split {
 }
 
 // `a ?? b`: a's payload, or b when a is none or null. b may leave instead (`?? return x`)
+// the type of a hidden local holding an `if (val v = e)`'s e (see the parser's if_bind), when a is one
+attach fn if_bind_ty(this: checker&, a: expr&) -> u32? {
+    match (a.kind) {
+        .PATH(p) => {
+            if (p.is_single() && p.segs.at(0).name == IF_TMP) {
+                val l = this.lookup_local(IF_TMP) ?? return null;
+                return l.ty;
+            }
+        },
+        default => {},
+    }
+    return null;
+}
+
 attach fn orelse(this: checker&, a: expr&, b: expr&, span: span) -> compile_error!tval {
+    // an if/while binding: an error union there is unwrapped by its catch
+    val bt = this.if_bind_ty(a);
+    if (bt) {
+        val t = bt;
+        match (*this.t.get(t)) {
+            .ERR_UNION(x, y) => { return this.catch_expr(a, null, b, span); },
+            .OPT(x) => {},
+            default => {
+                if (!this.t.is_ptr(t)) {
+                    return fail(a.span, fmt("if (val ...) needs an optional or an error union, found {}", this.ty_name(t)));
+                }
+            },
+        }
+    }
     val a0 = try this.expr(a, null);
     val av = try this.take(a0, a.span); // the payload comes out, so an owning optional moves
     if (this.t.is_ptr(av.ty)) {

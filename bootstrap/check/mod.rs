@@ -187,6 +187,7 @@ pub struct FnCx {
     pub keep_temps: Option<Vec<(String, TyId, String)>>,
     pub keep_scope: usize, // the scope whose exits delete them (early exits included)
     pub exiting: u32,                              // inside a return/break value
+    pub dead: u32,                                 // in statements after one that always leaves
     pub reassigning: Option<String>,               // `x = f(move x)`: x gets a new value right away
     pub frame: Option<usize>,                      // generating this async fn's step function
     pub suspends: Vec<Span>,                       // suspend points so far (state n = index + 1)
@@ -209,6 +210,7 @@ impl FnCx {
             keep_temps: None,
             keep_scope: 0,
             exiting: 0,
+            dead: 0,
             reassigning: None,
             frame: None,
             suspends: Vec::new(),

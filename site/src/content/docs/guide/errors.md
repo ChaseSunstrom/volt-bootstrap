@@ -251,3 +251,57 @@ an optional is allowed (it means "has a value").
 
 Pointers (`T*`) may be null too; `if (p)` and `p ?? x` turn one into a reference. See
 [References and pointers](/volt-bootstrap/guide/references/).
+
+## Binding in if and while
+
+`if (val v = e) { ... }` runs its block with `v` bound to `e`'s value when `e`, an optional or an
+error union, has one; the `else` runs when it doesn't. On an error union, `else |err| { ... }`
+binds the error. `while (val x = e)` loops for as long as `e` has a value, so an iterator's
+`next()` drives it. `var` instead of `val` gives a copy to change. The binding exists only in the
+first block, and an owned value moves into it.
+
+```volt
+use std::io;
+use std::text;
+
+fn lookup(id: i32) -> std::string? {
+    if (id == 7) {
+        return std::string::from("seven");
+    }
+    return null;
+}
+
+struct countdown {
+    n: i32;
+}
+
+attach fn next(this: countdown&) -> i32? {
+    if (this.n == 0) {
+        return null;
+    }
+    this.n -= 1;
+    return this.n;
+}
+
+fn main() -> void {
+    if (val name = lookup(7)) {
+        std::println("found {}", name.as_str());
+    } else {
+        std::println("no one");
+    }
+    if (val n = "4x".parse_int()) {
+        std::println("{}", n);
+    } else |err| {
+        std::println("not a number: {}", err);
+    }
+    var c: countdown = { n: 3 };
+    while (val i = c.next()) {
+        std::println("{}", i);
+    }
+}
+// expect: found seven
+// expect: not a number: INVALID
+// expect: 2
+// expect: 1
+// expect: 0
+```

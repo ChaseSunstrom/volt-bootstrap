@@ -132,6 +132,11 @@ pub enum CapMode {
 /// hidden local: source can't name either)
 pub const UPDATE_LABEL: &str = "@update";
 pub const UPDATE_TMP: &str = "@base";
+/// `if (val v = e)` and `while (val x = e)` are parsed into labeled blocks too: these labels, and a
+/// hidden local holding e (a nested one shadows it, as a nested scope may)
+pub const IF_LABEL: &str = "@if";
+pub const ELSE_LABEL: &str = "@else";
+pub const IF_TMP: &str = "@if";
 
 /// `Int` holds the literal's magnitude; a leading `-` is Unary(Neg, ..)
 #[derive(Clone, Debug)]

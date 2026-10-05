@@ -718,6 +718,9 @@ attach fn loop_expr(this: parser&, lab: str?, is_comptime: bool) -> compile_erro
     var kind: expr_kind = expr_kind::NULL;
     if (this.eat_kw("if")) {
         try this.expect("(");
+        if (!is_comptime && (this.is_kw("val") || this.is_kw("var"))) {
+            return this.if_bind(start);
+        }
         val cond = try this.expr();
         try this.expect(")");
         val then = try this.block();
@@ -766,6 +769,9 @@ attach fn loop_expr(this: parser&, lab: str?, is_comptime: bool) -> compile_erro
         kind = expr_kind::MATCH({ scrut: bx(move scrut), arms: move arms, is_comptime: is_comptime });
     } else if (this.eat_kw("while")) {
         try this.expect("(");
+        if (this.is_kw("val") || this.is_kw("var")) {
+            return this.while_bind(start, lab);
+        }
         val cond = try this.expr();
         try this.expect(")");
         kind = expr_kind::WHILE(lab, bx(move cond), try this.block());
@@ -1043,4 +1049,97 @@ attach fn update(this: parser&, start: span) -> compile_error!expr {
 
 fn update_tmp(sp: span) -> expr {
     return { kind: expr_kind::PATH(single_path(UPDATE_TMP, sp)), span: sp };
+}
+
+// `val v = e)` of `if (val v = e)` / `while (val x = e)`: `val @if = e;` into stmts, and the binding:
+// var or val, its name and where, and where e is
+attach fn cond_bind(this: parser&, stmts: std::vec<stmt>&) -> compile_error!(bool, str, span, span) {
+    val mutable = this.eat_kw("var");
+    if (!mutable) {
+        try this.expect_kw("val");
+    }
+    val id = try this.ident();
+    try this.expect("=");
+    var init = try this.expr();
+    try this.expect(")");
+    val sp = init.span;
+    val hold: let_stmt = { mutable: false, is_comptime: false, is_static: false, pat: { kind: pat_kind::BIND(IF_TMP), span: sp }, ty: null, init: move init, span: sp };
+    put(stmts, { kind: stmt_kind::LET(move hold), span: sp });
+    return (mutable, id.name, id.span, sp);
+}
+
+// `let name = value;`
+fn bind_stmt(mutable: bool, name: str, nspan: span, value: expr) -> stmt {
+    val sp = value.span;
+    val l: let_stmt = { mutable: mutable, is_comptime: false, is_static: false, pat: { kind: pat_kind::BIND(name), span: nspan }, ty: null, init: move value, span: sp };
+    return { kind: stmt_kind::LET(move l), span: sp };
+}
+
+// the hidden local that holds an if/while binding's e
+fn held(sp: span) -> std::box<expr> {
+    return bx<expr>({ kind: expr_kind::PATH(single_path(IF_TMP, sp)), span: sp });
+}
+
+// `if (val v = e) { A } else { B }` (after the `if (`): A with v bound to e's value when e (an optional
+// or an error union) has one, else B; `else |err| { B }` binds an error union's error. It's the block
+// the language has, `:@if { val @if = e; val v = @if ?? :@else { B; break :@if; }; { A } }`:
+// `catch |err|` for `else |err|`, `?? break :@if` with no else. The checker reads ?? on a hidden @if
+// local that holds an error union as its catch (see orelse).
+attach fn if_bind(this: parser&, start: span) -> compile_error!expr {
+    var stmts: std::vec<stmt> = {};
+    val (mutable, name, nspan, hsp) = try this.cond_bind(&stmts);
+    var then = try this.block();
+    var cap: catch_cap? = null;
+    var has_else = false;
+    var els: expr = { kind: expr_kind::NULL, span: start };
+    if (this.eat_kw("else")) {
+        has_else = true;
+        if (this.eat("|")) {
+            val c = try this.ident();
+            try this.expect("|");
+            cap = { name: c.name, span: c.span };
+            val b = try this.block();
+            val bsp = b.span;
+            els = { kind: expr_kind::BLOCK(null, move b), span: bsp };
+        } else if (this.is_kw("if")) {
+            els = try this.loop_expr(null, false);
+        } else {
+            val b = try this.block();
+            val bsp = b.span;
+            els = { kind: expr_kind::BLOCK(null, move b), span: bsp };
+        }
+    }
+    val sp = start.to(this.prev_span());
+    var fallback: expr = { kind: expr_kind::BREAK(IF_LABEL, null), span: sp };
+    if (has_else) {
+        var es: std::vec<stmt> = {};
+        val esp = els.span;
+        put(&es, { kind: stmt_kind::EXPR(move els), span: esp });
+        put(&es, { kind: stmt_kind::EXPR({ kind: expr_kind::BREAK(IF_LABEL, null), span: sp }), span: sp });
+        fallback = { kind: expr_kind::BLOCK(ELSE_LABEL, { stmts: move es, span: sp }), span: sp };
+    }
+    var value: expr = { kind: expr_kind::NULL, span: hsp };
+    if (cap) {
+        value = { kind: expr_kind::CATCH(held(hsp), cap, bx(move fallback)), span: hsp };
+    } else {
+        value = { kind: expr_kind::OR_ELSE(held(hsp), bx(move fallback)), span: hsp };
+    }
+    put(&stmts, bind_stmt(mutable, name, nspan, move value));
+    val tsp = then.span;
+    put(&stmts, { kind: stmt_kind::EXPR({ kind: expr_kind::BLOCK(null, move then), span: tsp }), span: tsp });
+    return { kind: expr_kind::BLOCK(IF_LABEL, { stmts: move stmts, span: sp }), span: sp };
+}
+
+// `while (val x = e) { A }` (after the `while (`): `loop { val @if = e; val x = @if ?? break; { A } }`,
+// with the while's label
+attach fn while_bind(this: parser&, start: span, lab: str?) -> compile_error!expr {
+    var stmts: std::vec<stmt> = {};
+    val (mutable, name, nspan, hsp) = try this.cond_bind(&stmts);
+    var body = try this.block();
+    val sp = start.to(this.prev_span());
+    var value: expr = { kind: expr_kind::OR_ELSE(held(hsp), bx<expr>({ kind: expr_kind::BREAK(null, null), span: hsp })), span: hsp };
+    put(&stmts, bind_stmt(mutable, name, nspan, move value));
+    val bsp = body.span;
+    put(&stmts, { kind: stmt_kind::EXPR({ kind: expr_kind::BLOCK(null, move body), span: bsp }), span: bsp });
+    return { kind: expr_kind::LOOP(lab, { stmts: move stmts, span: sp }), span: sp };
 }

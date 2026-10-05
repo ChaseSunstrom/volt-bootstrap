@@ -1295,6 +1295,85 @@ impl<'a> Parser<'a> {
         Ok(Expr { kind: ExprKind::Block(Some(UPDATE_LABEL.into()), Block { stmts, span }), span })
     }
 
+    /// `val v = e)` of `if (val v = e)` / `while (val x = e)`: the binding, and `val @if = e;`
+    fn cond_bind(&mut self) -> Res<(bool, String, Span, Stmt)> {
+        let mutable = self.eat_kw("var");
+        if !mutable {
+            self.expect_kw("val")?;
+        }
+        let (name, nspan) = self.ident()?;
+        self.expect("=")?;
+        let init = self.expr()?;
+        self.expect(")")?;
+        let sp = init.span;
+        let hold = Stmt { kind: StmtKind::Let(Let { mutable: false, comptime: false, is_static: false, pat: Pat { kind: PatKind::Bind(IF_TMP.into()), span: sp }, ty: None, init: Some(init), span: sp, c_name: None }), span: sp };
+        Ok((mutable, name, nspan, hold))
+    }
+
+    /// `let name = value;`
+    fn bind_stmt(mutable: bool, name: String, nspan: Span, value: Expr) -> Stmt {
+        let sp = value.span;
+        Stmt { kind: StmtKind::Let(Let { mutable, comptime: false, is_static: false, pat: Pat { kind: PatKind::Bind(name), span: nspan }, ty: None, init: Some(value), span: sp, c_name: None }), span: sp }
+    }
+
+    /// `if (val v = e) { A } else { B }` (after the `if (`): A with v bound to e's value when e (an
+    /// optional or an error union) has one, else B; `else |err| { B }` binds an error union's error.
+    /// It's the block the language has, `:@if { val @if = e; val v = @if ?? :@else { B; break :@if; };
+    /// { A } }`: `catch |err|` for `else |err|`, `?? break :@if` with no else. The checker reads ?? on a
+    /// hidden @if local that holds an error union as its catch (see Checker::orelse).
+    fn if_bind(&mut self, start: Span) -> Res<Expr> {
+        let (mutable, name, nspan, hold) = self.cond_bind()?;
+        let then = self.block()?;
+        let mut cap = None;
+        let els = if self.eat_kw("else") {
+            if self.eat("|") {
+                cap = Some(self.ident()?);
+                self.expect("|")?;
+                let b = self.block()?;
+                Some(Expr { span: b.span, kind: ExprKind::Block(None, b) })
+            } else if self.is_kw("if") {
+                Some(self.loop_expr(None, false)?)
+            } else {
+                let b = self.block()?;
+                Some(Expr { span: b.span, kind: ExprKind::Block(None, b) })
+            }
+        } else {
+            None
+        };
+        let span = start.to(self.prev_span());
+        let leave = Expr { kind: ExprKind::Break(Some(IF_LABEL.into()), None), span };
+        let fallback = match els {
+            Some(e) => {
+                let stmts = vec![Stmt { span: e.span, kind: StmtKind::Expr(e) }, Stmt { kind: StmtKind::Expr(leave), span }];
+                Expr { kind: ExprKind::Block(Some(ELSE_LABEL.into()), Block { stmts, span }), span }
+            }
+            None => leave,
+        };
+        let sp = hold.span;
+        let held = Box::new(Expr { kind: ExprKind::Path(Path::single(IF_TMP, sp)), span: sp });
+        let value = match cap {
+            Some(c) => Expr { kind: ExprKind::Catch(held, Some(c), Box::new(fallback)), span: sp },
+            None => Expr { kind: ExprKind::OrElse(held, Box::new(fallback)), span: sp },
+        };
+        let body = Stmt { span: then.span, kind: StmtKind::Expr(Expr { span: then.span, kind: ExprKind::Block(None, then) }) };
+        let stmts = vec![hold, Self::bind_stmt(mutable, name, nspan, value), body];
+        Ok(Expr { kind: ExprKind::Block(Some(IF_LABEL.into()), Block { stmts, span }), span })
+    }
+
+    /// `while (val x = e) { A }` (after the `while (`): `loop { val @if = e; val x = @if ?? break; { A } }`,
+    /// with the while's label
+    fn while_bind(&mut self, start: Span, label: Option<String>) -> Res<Expr> {
+        let (mutable, name, nspan, hold) = self.cond_bind()?;
+        let body = self.block()?;
+        let span = start.to(self.prev_span());
+        let sp = hold.span;
+        let held = Box::new(Expr { kind: ExprKind::Path(Path::single(IF_TMP, sp)), span: sp });
+        let value = Expr { kind: ExprKind::OrElse(held, Box::new(Expr { kind: ExprKind::Break(None, None), span: sp })), span: sp };
+        let inner = Stmt { span: body.span, kind: StmtKind::Expr(Expr { span: body.span, kind: ExprKind::Block(None, body) }) };
+        let stmts = vec![hold, Self::bind_stmt(mutable, name, nspan, value), inner];
+        Ok(Expr { kind: ExprKind::Loop(label, Block { stmts, span }), span })
+    }
+
     /// quote { ... }: its Volt source as a comptime str, with $(expr) and $name splices filled in
     /// when it's evaluated
     fn quote(&mut self) -> Res<Expr> {
@@ -1494,6 +1573,9 @@ impl<'a> Parser<'a> {
         let start = self.span();
         let kind = if self.eat_kw("if") {
             self.expect("(")?;
+            if !comptime && (self.is_kw("val") || self.is_kw("var")) {
+                return self.if_bind(start);
+            }
             let cond = self.expr()?;
             self.expect(")")?;
             let then = self.block()?;
@@ -1537,6 +1619,9 @@ impl<'a> Parser<'a> {
             ExprKind::Match { scrut: Box::new(scrut), arms, comptime }
         } else if self.eat_kw("while") {
             self.expect("(")?;
+            if self.is_kw("val") || self.is_kw("var") {
+                return self.while_bind(start, label);
+            }
             let cond = self.expr()?;
             self.expect(")")?;
             ExprKind::While(label, Box::new(cond), self.block()?)

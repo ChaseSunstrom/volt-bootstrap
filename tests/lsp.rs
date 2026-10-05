@@ -307,6 +307,14 @@ fn main() -> void {
     c.grow(1.0);
     std::println(\"{} {}\", doubled, @sizeof(circle));
 }
+
+fn first(x: u16?, c: circle) -> f64 {
+    val wide: circle = { ..c, r: 2.0 };
+    if (val n = x) {
+        return wide.r + @cast<f64>(n);
+    }
+    return c.r;
+}
 ";
 
 fn inline_features(s: &mut Server) {
@@ -339,7 +347,9 @@ fn inline_features(s: &mut Server) {
     for want in ["\"label\":\": color\"", "\"label\":\": f64\"", "\"label\":\"scale:\"", "\"label\":\"by:\""] {
         assert!(h.contains(want), "inlay hints lack {want}: {h}");
     }
-    for unwanted in ["\"label\":\": circle\"", "\"label\":\"s:\""] {
+    // an if's binding gets one; the hidden locals an if binding or a struct update is parsed into don't
+    assert!(h.contains("\"label\":\": u16\""), "inlay hints lack the if binding's type: {h}");
+    for unwanted in ["\"label\":\": circle\"", "\"label\":\"s:\"", "\"label\":\": u16?\""] {
         assert!(!h.contains(unwanted), "inlay hints have {unwanted}: {h}");
     }
 

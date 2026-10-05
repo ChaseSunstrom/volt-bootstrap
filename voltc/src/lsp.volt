@@ -31,6 +31,10 @@ struct lsp_local {
 }
 
 attach fn lsp_add_local(this: checker&, c: u32, name: str, ty: u32, def: span, mutable: bool, param: bool) -> void {
+    // a hidden local (an if binding's or a struct update's) isn't in the source to show
+    if (name.len > 0 && name[0] == '@') {
+        return;
+    }
     this.lsp_local_idx.put(c, this.lsp_locals.len);
     val generic = this.env_at(this.cx.env).generics.len > 0;
     put(&this.lsp_locals, { c: c, name: name, ty: ty, def: def, mutable: mutable, param: param, generic: generic });

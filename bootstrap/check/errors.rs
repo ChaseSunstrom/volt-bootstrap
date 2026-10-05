@@ -74,6 +74,11 @@ impl Checker {
     /// `x catch |e| handler`: the payload, or the handler's value on error. The handler may leave
     /// (return/break) instead; when x has no payload it must give no value
     pub fn catch_expr(&mut self, x: &Expr, cap: Option<&(String, Span)>, handler: &Expr, span: Span) -> Res<Val> {
+        if let (Some(t), Some((n, _))) = (self.if_bind_ty(x), cap) {
+            if !matches!(self.t.get(t), Ty::ErrUnion(..)) {
+                return err(x.span, format!("else |{n}| needs an error union, found {}", self.ty_name(t)));
+            }
+        }
         let v = self.expr(x, None)?;
         let v = self.take(v, x.span)?; // the payload comes out, so an owning local moves
         let Ty::ErrUnion(e, t) = self.t.get(v.ty).clone() else {
@@ -139,7 +144,24 @@ impl Checker {
     }
 
     /// `a ?? b`: a's payload, or b when a is none or null. b may leave instead (`?? return x`)
+    /// the type of a hidden local holding an `if (val v = e)`'s e (see Parser::if_bind), when a is one
+    fn if_bind_ty(&self, a: &Expr) -> Option<TyId> {
+        match &a.kind {
+            ExprKind::Path(p) if p.is_single() && p.segs[0].name == IF_TMP => self.lookup_local(IF_TMP).map(|l| l.ty),
+            _ => None,
+        }
+    }
+
     pub fn orelse(&mut self, a: &Expr, b: &Expr, span: Span) -> Res<Val> {
+        // an if/while binding: an error union there is unwrapped by its catch
+        if let Some(t) = self.if_bind_ty(a) {
+            match self.t.get(t) {
+                Ty::ErrUnion(..) => return self.catch_expr(a, None, b, span),
+                Ty::Opt(_) => {}
+                _ if self.t.is_ptr(t) => {}
+                _ => return err(a.span, format!("if (val ...) needs an optional or an error union, found {}", self.ty_name(t))),
+            }
+        }
         let av = self.expr(a, None)?;
         let av = self.take(av, a.span)?; // the payload comes out, so an owning optional moves
         if self.t.is_ptr(av.ty) {
