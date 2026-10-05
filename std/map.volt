@@ -40,7 +40,7 @@ public struct map {
     // len counts the keys held, cap the slots
     len: usize = 0;  // the keys held
     used: usize = 0; // full + removed
-    cap: usize = 0;  // the slots
+    cap: usize = 0;  // the slots: 0, or a power of two (8, then doubling)
     allocator: Allocator = {}; // where the arrays come from
 }
 
@@ -55,7 +55,8 @@ public attach fn new_in(static this: std::map<K, V>, allocator: A) -> std::map<K
 attach fn slot(this: std::map<K, V, A>&, key: K&) -> usize {
     val state = @slice(this.state, this.cap);
     val keys = @slice(this.keys, this.cap);
-    var i = @cast<usize>(key.hash()) % this.cap;
+    val mask = this.cap - 1; // cap is a power of two: 8, then doubling
+    var i = @cast<usize>(key.hash()) & mask;
     var free = this.cap; // first removed slot seen
     loop {
         if (state[i] == 0) {
@@ -71,7 +72,7 @@ attach fn slot(this: std::map<K, V, A>&, key: K&) -> usize {
         } else if (keys[i].eq(key)) {
             return i;
         }
-        i = (i + 1) % this.cap;
+        i = (i + 1) & mask;
     }
 }
 
