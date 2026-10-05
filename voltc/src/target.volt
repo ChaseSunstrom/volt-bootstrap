@@ -13,16 +13,17 @@ struct target_info {
     features: str;
     arch: str;     // @cfg("arch")
     bits: str;     // @cfg("pointer_bits")
-    cfg: str[3];   // the --cfg settings that make @cfg see the target
+    cfg: str[4];   // the --cfg settings that make @cfg see the target
 }
 
 fn targets() -> std::vec<target_info> {
     var v: std::vec<target_info> = {};
     // -relax: the start code doesn't set gp, so the linker mustn't relax addresses through it
-    put(&v, { name: "riscv32-none", triple: "riscv32-unknown-none-elf", cpu: "generic-rv32", features: "+m,+a,+c,-relax", arch: "riscv32", bits: "32", cfg: { "os=none", "arch=riscv32", "pointer_bits=32" } });
-    put(&v, { name: "riscv64-none", triple: "riscv64-unknown-none-elf", cpu: "generic-rv64", features: "+m,+a,+f,+d,+c,-relax", arch: "riscv64", bits: "64", cfg: { "os=none", "arch=riscv64", "pointer_bits=64" } });
-    put(&v, { name: "thumbv7m-none", triple: "thumbv7m-none-eabi", cpu: "cortex-m3", features: "", arch: "arm", bits: "32", cfg: { "os=none", "arch=arm", "pointer_bits=32" } });
-    put(&v, { name: "thumbv7em-none", triple: "thumbv7em-none-eabi", cpu: "cortex-m4", features: "", arch: "arm", bits: "32", cfg: { "os=none", "arch=arm", "pointer_bits=32" } });
+    put(&v, { name: "riscv32-none", triple: "riscv32-unknown-none-elf", cpu: "generic-rv32", features: "+m,+a,+c,-relax", arch: "riscv32", bits: "32", cfg: { "os=none", "arch=riscv32", "target=riscv32-none", "pointer_bits=32" } });
+    put(&v, { name: "riscv64-none", triple: "riscv64-unknown-none-elf", cpu: "generic-rv64", features: "+m,+a,+f,+d,+c,-relax", arch: "riscv64", bits: "64", cfg: { "os=none", "arch=riscv64", "target=riscv64-none", "pointer_bits=64" } });
+    put(&v, { name: "thumbv6m-none", triple: "thumbv6m-none-eabi", cpu: "cortex-m0", features: "", arch: "arm", bits: "32", cfg: { "os=none", "arch=arm", "target=thumbv6m-none", "pointer_bits=32" } });
+    put(&v, { name: "thumbv7m-none", triple: "thumbv7m-none-eabi", cpu: "cortex-m3", features: "", arch: "arm", bits: "32", cfg: { "os=none", "arch=arm", "target=thumbv7m-none", "pointer_bits=32" } });
+    put(&v, { name: "thumbv7em-none", triple: "thumbv7em-none-eabi", cpu: "cortex-m4", features: "", arch: "arm", bits: "32", cfg: { "os=none", "arch=arm", "target=thumbv7em-none", "pointer_bits=32" } });
     return v;
 }
 
@@ -152,12 +153,14 @@ fn start_asm(t: target_info) -> std::string {
             "    .globl volt_hook_console_write",
             "    .type volt_hook_console_write,%function",
             "volt_hook_console_write:",
-            "    b volt_console_write",
+            "    push {r4, lr}",
+            "    bl volt_console_write",
+            "    pop {r4, pc}",
             "    .thumb_func",
             "    .globl volt_hook_exit",
             "    .type volt_hook_exit,%function",
             "volt_hook_exit:",
-            "    b volt_exit",
+            "    bl volt_exit",
             "",
             "    .section .bss.volt_args,\"aw\",%nobits",
             "    .globl volt_argc",

@@ -1,0 +1,8 @@
+led on
+led off
+led on
+led off
+led on
+led off
+3 blinks on micro:bit (Cortex-M0)
+on 50.0% of the time, 0.5 of 1

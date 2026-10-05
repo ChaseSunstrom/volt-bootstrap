@@ -1833,7 +1833,8 @@ pub fn attr_str(a: &Expr) -> Option<String> {
 
 impl Checker {
     /// @cfg(KEY) / @cfg(KEY, VALUE), as a builtin or an item's attribute: was --cfg KEY[=VALUE] given for
-    /// the package the code at span is in, or is it one of the target's keys (os, arch, pointer_bits)?
+    /// the package the code at span is in, or is it one of the target's keys (os, arch, pointer_bits,
+    /// target)?
     pub fn cfg_on(&self, parts: &[String], span: Span) -> Res<bool> {
         let key_only = parts.len() == 1;
         let want = match parts {
@@ -1861,8 +1862,9 @@ impl Checker {
             return Ok(matches!(os.as_str(), "linux" | "macos" | "freebsd"));
         }
         let host = [std::env::consts::OS.to_string(), std::env::consts::ARCH.to_string(), usize::BITS.to_string()];
-        let on_target = TARGET.iter().zip(host).any(|(k, h)| matches(&format!("{k}={}", given(k).unwrap_or(h))));
-        let is_target = |c: &str| TARGET.contains(&c.split('=').next().unwrap_or(""));
+        // and target: the --target name, on bare metal only (a hosted build has none)
+        let on_target = TARGET.iter().zip(host).any(|(k, h)| matches(&format!("{k}={}", given(k).unwrap_or(h)))) || given("target").is_some_and(|t| matches(&format!("target={t}")));
+        let is_target = |c: &str| TARGET.contains(&c.split('=').next().unwrap_or("")) || c.split('=').next() == Some("target");
         let set = self.opts.cfg.iter().any(|(p, c)| p.as_ref() == pkg && !is_target(c) && matches(c));
         Ok(set || on_target)
     }

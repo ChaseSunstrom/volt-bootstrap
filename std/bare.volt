@@ -2,7 +2,8 @@
 // C. Panics, bounds and printing go to the board's volt_console_write; the program ends in the board's
 // volt_exit (voltc's start code has defaults for both). Memory comes from a heap between the linker
 // script's __heap_start and __heap_end. It also gives what LLVM calls for copies, fills, 64-bit
-// division and floating point on 32-bit cores, which a C library and libgcc would.
+// division and floating point on 32-bit cores (and division, 64-bit shifts and multiplies on a
+// Cortex-M0), which a C library and libgcc would.
 // (Part of package std: the package loader wraps every file in `namespace std`.)
 
 @attributes([@cfg("os", "none")])
@@ -182,50 +183,6 @@ namespace bare {
         return q;
     }
 
-    // ---- 64-bit division by shifts, for 32-bit cores ----
-
-    fn udivmod64(n: u64, d: u64, rem: u64*) -> u64 {
-        var q: u64 = 0;
-        var r: u64 = 0;
-        var i: u64 = 64;
-        while (i > 0) {
-            i -= 1;
-            r = (r << 1) | ((n >> i) & 1);
-            if (r >= d) {
-                r -= d;
-                q |= @cast<u64>(1) << i;
-            }
-        }
-        if (rem != null) {
-            *rem = r;
-        }
-        return q;
-    }
-
-    fn sdivmod64(n: i64, d: i64, rem: i64*) -> i64 {
-        // magnitudes, wrapping so the most negative number works too
-        var un = @cast<u64>(n);
-        if (n < 0) {
-            un = 0 -% un;
-        }
-        var ud = @cast<u64>(d);
-        if (d < 0) {
-            ud = 0 -% ud;
-        }
-        var ur: u64 = 0;
-        var q = udivmod64(un, ud, &ur);
-        if ((n < 0) != (d < 0)) {
-            q = 0 -% q;
-        }
-        if (n < 0) {
-            ur = 0 -% ur;
-        }
-        if (rem != null) {
-            *rem = @cast<i64>(ur);
-        }
-        return @cast<i64>(q);
-    }
-
     // float % (LLVM's frem), which LLVM makes a call to the C library's fmod or fmodf
     export fn fmod(x: f64, y: f64) -> f64 {
         return std::math::portable::fmod(x, y);
@@ -236,21 +193,43 @@ namespace bare {
         return std::math::portable::fmod(x, y);
     }
 
-    // what LLVM calls for 64-bit division on 32-bit cores
+    // what LLVM calls for 64-bit division on 32-bit cores (std::softint)
     @attributes([@cfg("pointer_bits", "32")])
     namespace div32 {
-        export fn __udivdi3(a: u64, b: u64) -> u64 { return udivmod64(a, b, null); }
+        export fn __udivdi3(a: u64, b: u64) -> u64 { return std::softint::udivmod64(a, b, null); }
         export fn __umoddi3(a: u64, b: u64) -> u64 {
             var r: u64 = 0;
-            udivmod64(a, b, &r);
+            std::softint::udivmod64(a, b, &r);
             return r;
         }
-        export fn __divdi3(a: i64, b: i64) -> i64 { return sdivmod64(a, b, null); }
+        export fn __divdi3(a: i64, b: i64) -> i64 { return std::softint::sdivmod64(a, b, null); }
         export fn __moddi3(a: i64, b: i64) -> i64 {
             var r: i64 = 0;
-            sdivmod64(a, b, &r);
+            std::softint::sdivmod64(a, b, &r);
             return r;
         }
+    }
+
+    // and on a Cortex-M0, which has no divide instruction and shifts and multiplies 64-bit numbers
+    // in software too
+    @attributes([@cfg("target", "thumbv6m-none")])
+    namespace v6m {
+        export fn __udivsi3(a: u32, b: u32) -> u32 { return std::softint::udivmod32(a, b, null); }
+        export fn __umodsi3(a: u32, b: u32) -> u32 {
+            var r: u32 = 0;
+            std::softint::udivmod32(a, b, &r);
+            return r;
+        }
+        export fn __divsi3(a: i32, b: i32) -> i32 { return std::softint::sdivmod32(a, b, null); }
+        export fn __modsi3(a: i32, b: i32) -> i32 {
+            var r: i32 = 0;
+            std::softint::sdivmod32(a, b, &r);
+            return r;
+        }
+        export fn __ashldi3(a: u64, s: i32) -> u64 { return std::softint::shl64(a, @cast<u32>(s)); }
+        export fn __lshrdi3(a: u64, s: i32) -> u64 { return std::softint::lshr64(a, @cast<u32>(s)); }
+        export fn __ashrdi3(a: i64, s: i32) -> i64 { return std::softint::ashr64(a, @cast<u32>(s)); }
+        export fn __muldi3(a: u64, b: u64) -> u64 { return std::softint::mul64(a, b); }
     }
 
     // ---- the C library's memory functions, which LLVM calls for copies and fills (size_t is the

@@ -13,6 +13,7 @@ emulates:
 | Directory | Board | `--target` |
 | --- | --- | --- |
 | `riscv-virt` | qemu's RISC-V `virt` (a UART, and a test device that stops qemu with an exit code) | `riscv32-none`, or `riscv64-none` with `TARGET=riscv64-none` |
+| `microbit` | the BBC micro:bit, an nRF51822 (UART0, the top-left LED of the 5x5 matrix) | `thumbv6m-none` (a Cortex-M0) |
 | `cortex-m3` | the LM3S6965 evaluation board (UART0, the user LED on port F) | `thumbv7m-none`, or `thumbv7em-none` (run as a Cortex-M4) with `TARGET=thumbv7em-none` |
 
 Each has its `board.volt` (the hardware: the console hook, the LED, the exit), a linker script, and

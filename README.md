@@ -84,8 +84,8 @@ fn main() -> !void {
   debug info for gdb in debug builds.
 - **Embeddable, like Lua**: `libvoltvm` compiles Volt source in memory and runs it through LLVM's
   JIT, with host functions, sandboxes, and C, C++, Rust and Python bindings.
-- **Bare metal with no C at all**: `--target riscv32-none`, `riscv64-none`, `thumbv7m-none` or
-  `thumbv7em-none` builds through LLVM and ld.lld with no C compiler, libc or C runtime.
+- **Bare metal with no C at all**: `--target riscv32-none`, `riscv64-none`, `thumbv6m-none`,
+  `thumbv7m-none` or `thumbv7em-none` builds through LLVM and ld.lld with no C compiler, libc or C runtime.
 - **A standard library** with collections, text, JSON, files, processes, networking, threads,
   allocators you choose per container, hashing and encodings.
 - **Interop**: real C headers (unions and bitfields too), C++ classes, templates and the standard

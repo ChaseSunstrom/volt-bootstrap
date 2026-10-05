@@ -789,11 +789,13 @@ attach fn decl_global(this: lg&, g: u32) -> llvm::LLVMOpaqueValue* {
     var t = this.lt(gl.ty);
     var init: llvm::LLVMOpaqueValue* = null;
     val defined = !gl.header && gl.link != linkage::EXTERNAL;
+    var by_ctor = false;
     if (defined) {
         if (gl.init) {
             init = this.cval(gl.init, gl.ty);
             if (init == null) {
                 put(&this.ctors, g);
+                by_ctor = true;
             }
         }
         if (init == null) {
@@ -813,6 +815,11 @@ attach fn decl_global(this: lg&, g: u32) -> llvm::LLVMOpaqueValue* {
         if (defined) {
             llvm::LLVMSetInitializer(gv, init);
             llvm::LLVMSetAlignment(gv, this.align_of(this.lt(gl.ty)));
+            // a val set by a constant never changes (the checker refuses writes, even through
+            // this&): read-only data, in flash on bare metal rather than RAM
+            if (!gl.mutable && !gl.tls && gl.init != null && !by_ctor) {
+                llvm::LLVMSetGlobalConstant(gv, 1);
+            }
             if (gl.link == linkage::STATIC) {
                 llvm::LLVMSetLinkage(gv, llvm::LLVMInternalLinkage);
             }

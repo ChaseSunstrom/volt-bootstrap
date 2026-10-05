@@ -2147,7 +2147,7 @@ fn is_target_key(set: str) -> bool {
     if (eq) {
         key = set[0..eq];
     }
-    return key == "os" || key == "arch" || key == "pointer_bits";
+    return key == "os" || key == "arch" || key == "pointer_bits" || key == "target";
 }
 
 // the value --cfg KEY=VALUE gives a target key, for any package
@@ -3186,6 +3186,13 @@ attach fn cfg_on(this: checker&, parts: std::vec<std::string>&, span: span) -> c
     var bits = S("pointer_bits=");
     bits.append(this.cfg_given("pointer_bits") ?? host_bits.as_str());
     val on_target = cfg_matches(os.as_str(), want.as_str(), key_only) || cfg_matches(arch.as_str(), want.as_str(), key_only) || cfg_matches(bits.as_str(), want.as_str(), key_only);
+    // and target: the --target name, on bare metal only (a hosted build has none)
+    val tg = this.cfg_given("target");
+    if (tg) {
+        var t = S("target=");
+        t.append(tg);
+        return on_target || cfg_matches(t.as_str(), want.as_str(), key_only);
+    }
     return on_target;
 }
 

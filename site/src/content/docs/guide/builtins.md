@@ -26,7 +26,7 @@ Builtins start with `@`. They're part of the language, not a library.
 | `@attaches(T, some_trait)` | `bool` | does `T` attach the trait, as a `<T: some_trait>` bound asks (comptime). See [Comptime](/volt-bootstrap/guide/comptime/#does-a-type-attach-a-trait-attaches) |
 | `@panic("msg")` | `never` | stops the program with a message (exit code 101) |
 | `@compile_error("msg")` | `never` | fails compilation where it's reached |
-| `@cfg("key")`, `@cfg("key", "value")` | `bool` | a `--cfg` setting, the target's `os`, `arch` or `pointer_bits`, `"hosted"` (an OS at all), `"unix"` (Linux, macOS or FreeBSD), or `"release"` for a `--release` build (comptime) |
+| `@cfg("key")`, `@cfg("key", "value")` | `bool` | a `--cfg` setting, the target's `os`, `arch` or `pointer_bits`, `target` (the `--target` name, on bare metal), `"hosted"` (an OS at all), `"unix"` (Linux, macOS or FreeBSD), or `"release"` for a `--release` build (comptime) |
 | `@slice(ptr, len)` | `T[..]` | a slice over `len` values starting at `ptr`, unchecked |
 | `@write(ptr, value)` | `void` | store into memory without deleting what was there |
 | `@read(ptr)` | `T` | move a value out of memory without copying or deleting it |
