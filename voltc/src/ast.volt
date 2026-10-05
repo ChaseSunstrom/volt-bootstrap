@@ -199,6 +199,11 @@ enum expr_kind {
     MATCH: match_node,
 }
 
+// the label of the block a struct update `{ ..base, a: x }` is parsed into, and its temporary (a
+// hidden local: source can't name either)
+val UPDATE_LABEL: str = "@update";
+val UPDATE_TMP: str = "@base";
+
 struct expr {
     kind: expr_kind;
     span: span;

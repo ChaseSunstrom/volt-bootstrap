@@ -244,6 +244,37 @@ attach fn decl_type(this: checker&, t: ty&, init: expr*) -> compile_error!u32 {
 
 // `var`/`val`: check the initializer against the declared type (or take its type), then bind a
 // name or destructure a tuple. The value moves in.
+// a struct update's base (`{ ..base, a: x }`, see the parser's update) is a value: through a
+// reference, the value it reaches, so the update can't write through it. A plain one is copied; an
+// owned one has to be (`..copy r`), as with any move out of a reference.
+attach fn update_base(this: checker&, init: expr&) -> compile_error!tval {
+    var x = init;
+    var copied = false;
+    match (init.kind) {
+        .COPY(inner) => {
+            x = &*inner;
+            copied = true;
+        },
+        default => {},
+    }
+    var v = try this.expr(x, null);
+    match (*this.t.get(v.ty)) {
+        .REF(t) => {
+            var r = vnew(t, this.ir.deref(v.c, t));
+            r.lv = true;
+            r.mutable = true;
+            r.pure = v.pure;
+            through(&r, v);
+            v = r;
+        },
+        default => {},
+    }
+    if (copied) {
+        return this.copy_val(v, init.span);
+    }
+    return v;
+}
+
 attach fn let_stmt(this: checker&, l: let_stmt&) -> compile_error!code {
     if (l.init) {
         match (l.init.kind) {
@@ -267,7 +298,17 @@ attach fn let_stmt(this: checker&, l: let_stmt&) -> compile_error!code {
             val x = try this.expr(init, t);
             v = try this.take_into(x, t, init.span);
         } else {
-            val x = try this.expr(init, null);
+            var x = vnew(0, 0);
+            match (l.pat.kind) {
+                .BIND(name) => {
+                    if (name == UPDATE_TMP) {
+                        x = try this.update_base(init);
+                    } else {
+                        x = try this.expr(init, null);
+                    }
+                },
+                default => { x = try this.expr(init, null); },
+            }
             if (x.ty == NULL_TY) {
                 return fails(init.span, "can't tell the type of null here; add a type: var x: T? = null");
             }

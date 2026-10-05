@@ -594,6 +594,9 @@ attach fn primary(this: parser&) -> compile_error!expr {
     }
     if (this.is("{")) {
         this.bump();
+        if (this.eat("..")) {
+            return this.update(start);
+        }
         var entries: std::vec<lit_entry> = {};
         while (!this.eat("}")) {
             var name: str? = null;
@@ -990,4 +993,54 @@ attach fn quote(this: parser&) -> compile_error!expr {
         this.bump();
     }
     return { kind: expr_kind::QUOTE(move parts), span: start.to(this.prev_span()) };
+}
+
+// `{ ..base, a: x, b }` (after the `{ ..`): base with the named fields replaced. It's the block the
+// language already has, `:u { var t = base; t.a = x; t.b = b; break :u t; }` (a val when nothing is
+// replaced), so an owned base moves and a plain one copies as in any `var t = base`, and assigning a
+// field deletes its old value. Source can't name the label or t.
+attach fn update(this: parser&, start: span) -> compile_error!expr {
+    var base = try this.expr();
+    var stmts: std::vec<stmt> = {};
+    var names: std::vec<str> = {};
+    while (this.eat(",") && !this.is("}")) {
+        var name = "";
+        if (this.is_ident() && this.is_at(1, ":")) {
+            name = (try this.ident()).name;
+            this.bump();
+        }
+        var value = try this.expr();
+        if (name.len == 0) {
+            match (value.kind) {
+                .PATH(p) => {
+                    if (p.is_single()) {
+                        name = p.segs.at(0).name;
+                    }
+                },
+                default => {},
+            }
+            if (name.len == 0) {
+                return fails(value.span, "struct literal entries need names: { field: value }");
+            }
+        }
+        for (n&) in names.items() {
+            if (*n == name) {
+                return fail(value.span, fmt("field '{}' is set twice", S(name)));
+            }
+        }
+        put(&names, name);
+        val sp = value.span;
+        var place: expr = { kind: expr_kind::FIELD(bx(update_tmp(sp)), name, null), span: sp };
+        put(&stmts, { kind: stmt_kind::EXPR({ kind: expr_kind::ASSIGN(null, bx(move place), bx(move value)), span: sp }), span: sp });
+    }
+    try this.expect("}");
+    val sp = start.to(this.prev_span());
+    val t: let_stmt = { mutable: stmts.len > 0, is_comptime: false, is_static: false, pat: { kind: pat_kind::BIND(UPDATE_TMP), span: base.span }, ty: null, init: move base, span: sp };
+    stmts.insert(0, { kind: stmt_kind::LET(move t), span: sp }) catch @panic("out of memory");
+    put(&stmts, { kind: stmt_kind::EXPR({ kind: expr_kind::BREAK(UPDATE_LABEL, bx(update_tmp(sp))), span: sp }), span: sp });
+    return { kind: expr_kind::BLOCK(UPDATE_LABEL, { stmts: move stmts, span: sp }), span: sp };
+}
+
+fn update_tmp(sp: span) -> expr {
+    return { kind: expr_kind::PATH(single_path(UPDATE_TMP, sp)), span: sp };
 }

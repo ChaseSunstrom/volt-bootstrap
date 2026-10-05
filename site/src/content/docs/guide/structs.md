@@ -45,6 +45,41 @@ fn main() -> void {
 // error: missing field 'b'
 ```
 
+A literal can start from another value: `{ ..base, field: value }` is `base` with the named fields
+replaced, and its type is base's when nothing else gives one. It takes base the way
+`var t = base;` would: a plain struct is copied, one that owns memory moves (`..copy base` keeps
+it), and a replaced field's old value is deleted. Through a reference (`this` in a method) base is
+the value it reaches, so an update never writes through it. The new values are worked out after
+base is taken, so they can read a copied base, not a moved one.
+
+```volt
+use std::io;
+
+struct window {
+    title: str;
+    width: i32 = 800;
+    height: i32 = 600;
+}
+
+struct note {
+    text: std::string;
+    pinned: bool = false;
+}
+
+fn main() -> void {
+    val w: window = { title: "editor", width: 1024 };
+    val wide = { ..w, width: w.width * 2 };
+    val turned: window = { ..w, width: w.height, height: w.width };
+    std::println("{} {} {}", wide.width, turned.width, turned.height);
+
+    val n: note = { text: std::string::from("buy milk") };
+    val kept: note = { ..copy n, pinned: true };          // n is still there
+    std::println("{} {}", n.text.as_str(), kept.pinned);
+}
+// expect: 2048 600 1024
+// expect: buy milk true
+```
+
 An empty struct (`struct marker {}` or `struct marker;`) takes no space.
 
 ## Methods

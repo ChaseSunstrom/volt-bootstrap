@@ -1695,7 +1695,7 @@ impl Checker {
             if let (false, None, Some(init)) = (v.pure, &v.lit, &l.init) {
                 // a { x; n } (or a struct whose defaults hold one), or operators over constants
                 // (1 << 13, FLAG | 0x10), is worked out now; a call isn't, unless it's to a comptime fn
-                let lit = matches!(init.kind, ExprKind::Literal(_) | ExprKind::Repeat(..));
+                let lit = matches!(&init.kind, ExprKind::Literal(_) | ExprKind::Repeat(..)) || matches!(&init.kind, ExprKind::Block(Some(l), _) if l == UPDATE_LABEL); // { ..base, a: x }
                 v = match (lit || foldable(init)).then(|| self.ct_eval_in(env.clone(), init, want).and_then(|cv| self.ct_to_val(cv, want, init.span))) {
                     Some(Ok(c)) if c.pure => c,
                     _ => return err(init.span, "global initializers must be constants"),

@@ -1256,6 +1256,45 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// `{ ..base, a: x, b }` (after the `{ ..`): base with the named fields replaced. It's the block
+    /// the language already has, `:u { var t = base; t.a = x; t.b = b; break :u t; }` (a val when
+    /// nothing is replaced), so an owned base moves and a plain one copies as in any `var t = base`,
+    /// and assigning a field deletes its old value. Source can't name the label or t.
+    fn update(&mut self, start: Span) -> Res<Expr> {
+        let tmp = |sp: Span| Expr { kind: ExprKind::Path(Path::single(UPDATE_TMP, sp)), span: sp };
+        let base = self.expr()?;
+        let mut sets = Vec::new();
+        let mut names: Vec<String> = Vec::new();
+        while self.eat(",") && !self.is("}") {
+            let (name, value) = if self.is_ident() && self.is_at(1, ":") {
+                let n = self.ident()?.0;
+                self.bump();
+                (n, self.expr()?)
+            } else {
+                let e = self.expr()?;
+                match &e.kind {
+                    ExprKind::Path(p) if p.is_single() => (p.segs[0].name.clone(), e),
+                    _ => return err(e.span, "struct literal entries need names: { field: value }"),
+                }
+            };
+            if names.contains(&name) {
+                return err(value.span, format!("field '{name}' is set twice"));
+            }
+            names.push(name.clone());
+            let sp = value.span;
+            let place = Expr { kind: ExprKind::Field(Box::new(tmp(sp)), name, None), span: sp };
+            sets.push(Stmt { kind: StmtKind::Expr(Expr { kind: ExprKind::Assign(None, Box::new(place), Box::new(value)), span: sp }), span: sp });
+        }
+        self.expect("}")?;
+        let span = start.to(self.prev_span());
+        let pat = Pat { kind: PatKind::Bind(UPDATE_TMP.into()), span: base.span };
+        let t = Let { mutable: !sets.is_empty(), comptime: false, is_static: false, pat, ty: None, init: Some(base), span, c_name: None };
+        let mut stmts = vec![Stmt { kind: StmtKind::Let(t), span }];
+        stmts.extend(sets);
+        stmts.push(Stmt { kind: StmtKind::Expr(Expr { kind: ExprKind::Break(Some(UPDATE_LABEL.into()), Some(Box::new(tmp(span)))), span }), span });
+        Ok(Expr { kind: ExprKind::Block(Some(UPDATE_LABEL.into()), Block { stmts, span }), span })
+    }
+
     /// quote { ... }: its Volt source as a comptime str, with $(expr) and $name splices filled in
     /// when it's evaluated
     fn quote(&mut self) -> Res<Expr> {
@@ -1350,6 +1389,9 @@ impl<'a> Parser<'a> {
             }
             Tok::Punct("{") => {
                 self.bump();
+                if self.eat("..") {
+                    return self.update(start);
+                }
                 let mut entries = Vec::new();
                 while !self.eat("}") {
                     let name = if self.is_ident() && self.is_at(1, ":") {

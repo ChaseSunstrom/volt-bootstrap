@@ -1095,6 +1095,11 @@ attach fn global_init(this: checker&, l: let_stmt&, span: span) -> compile_error
             match (l.init.kind) {
                 .LITERAL(x) => { lit = true; },
                 .REPEAT(x, n) => { lit = true; },
+                .BLOCK(lab, b) => {
+                    if ((lab ?? "") == UPDATE_LABEL) {
+                        lit = true; // { ..base, a: x }
+                    }
+                },
                 default => {},
             }
             if (!lit) {

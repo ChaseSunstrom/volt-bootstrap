@@ -131,6 +131,21 @@ impl Checker {
 
     /// `var`/`val`: check the initializer against the declared type (or take its type), then bind a
     /// name or destructure a tuple. The value moves in.
+    /// a struct update's base (`{ ..base, a: x }`, see Parser::update) is a value: through a
+    /// reference, the value it reaches, so the update can't write through it. A plain one is
+    /// copied; an owned one has to be (`..copy r`), as with any move out of a reference.
+    fn update_base(&mut self, init: &Expr) -> Res<Val> {
+        let (x, copy) = match &init.kind {
+            ExprKind::Copy(x) => (&**x, true),
+            _ => (init, false),
+        };
+        let mut v = self.expr(x, None)?;
+        if let Ty::Ref(t) = self.t.get(v.ty).clone() {
+            v = Self::through(Val { lv: true, mutable: true, pure: v.pure, ..Val::new(t, format!("(*({}))", v.c)) }, &v);
+        }
+        if copy { self.copy_val(v, init.span) } else { Ok(v) }
+    }
+
     fn let_stmt(&mut self, l: &Let) -> Res<(String, bool)> {
         if let Some(Expr { kind: ExprKind::Async(call), .. }) = &l.init {
             return self.async_let(l, call);
@@ -149,7 +164,7 @@ impl Checker {
                 self.take_into(v, t, init.span)?
             }
             (Some(init), None) => {
-                let v = self.expr(init, None)?;
+                let v = if matches!(&l.pat.kind, PatKind::Bind(n) if n == UPDATE_TMP) { self.update_base(init)? } else { self.expr(init, None)? };
                 match v.ty {
                     NULL => return err(init.span, "can't tell the type of null here; add a type: var x: T? = null"),
                     VOID => return err(init.span, "this has no value"),

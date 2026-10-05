@@ -128,6 +128,11 @@ pub enum CapMode {
     Move,
 }
 
+/// the label of the block a struct update `{ ..base, a: x }` is parsed into, and its temporary (a
+/// hidden local: source can't name either)
+pub const UPDATE_LABEL: &str = "@update";
+pub const UPDATE_TMP: &str = "@base";
+
 /// `Int` holds the literal's magnitude; a leading `-` is Unary(Neg, ..)
 #[derive(Clone, Debug)]
 pub enum ExprKind {
