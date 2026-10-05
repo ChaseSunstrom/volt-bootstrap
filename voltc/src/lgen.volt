@@ -875,7 +875,14 @@ attach fn int_const(this: lg&, v: i128, t: u32) -> llvm::LLVMOpaqueValue* {
             words[1] = @cast<u64>(u >> 64);
             return llvm::LLVMConstIntOfArbitraryPrecision(l, 2, &words[0]);
         }
-        return llvm::LLVMConstInt(l, @cast<u64>(@cast<u128>(v) & 18446744073709551615), 0);
+        // exactly the type's bits: LLVM takes the u64 as is (without truncating it), so an i32's -1
+        // passed as 0xFFFFFFFFFFFFFFFF would be a corrupt constant that folds wrongly
+        val w = llvm::LLVMGetIntTypeWidth(l);
+        var bits = @cast<u64>(@cast<u128>(v) & 18446744073709551615);
+        if (w < 64) {
+            bits &= (@cast<u64>(1) << @cast<u64>(w)) - 1;
+        }
+        return llvm::LLVMConstInt(l, bits, 0);
     }
     if (k == llvm::LLVMPointerTypeKind) {
         if (v == 0) {

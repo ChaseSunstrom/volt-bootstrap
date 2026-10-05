@@ -144,27 +144,44 @@ fn release_voltc_works() {
     }
     let o = Command::new(&second).args(["lib", "std", "--std"]).arg(&std_dir).arg("-o").arg(tmp.join("libstd.a")).output().unwrap();
     assert!(o.status.success(), "release voltc lib std: {}", String::from_utf8_lossy(&o.stderr));
-    let mut runs: Vec<(PathBuf, &str)> = std::fs::read_dir(root.join("tests/run")).unwrap().map(|e| (e.unwrap().path(), "c")).collect();
-    runs.push((root.join("tests/run/temp_lifetimes.volt"), "llvm"));
-    runs.push((root.join("tests/run/typeid.volt"), "llvm"));
-    runs.push((root.join("tests/run/closure_fn_drop.volt"), "llvm"));
+    let mut runs: Vec<(PathBuf, &str, bool)> = std::fs::read_dir(root.join("tests/run")).unwrap().map(|e| (e.unwrap().path(), "c", false)).collect();
+    runs.push((root.join("tests/run/temp_lifetimes.volt"), "llvm", false));
+    runs.push((root.join("tests/run/typeid.volt"), "llvm", false));
+    runs.push((root.join("tests/run/closure_fn_drop.volt"), "llvm", false));
+    // every program optimized through LLVM too: that's where a wrong constant or flag shows (a
+    // corrupt i32 constant once printed fine and folded wrongly). Those with an `// exit:` line
+    // (traps, exit codes) behave differently in release, and C imports are left to the C runs
+    let optimized: Vec<PathBuf> = runs.iter().filter(|r| r.1 == "c").map(|r| r.0.clone()).collect();
+    for p in optimized {
+        let text = std::fs::read_to_string(&p).unwrap_or_default();
+        if p.extension().is_some_and(|x| x == "volt") && !text.contains("// exit:") && !text.contains(".h\"") {
+            runs.push((p, "llvm", true));
+        }
+    }
     let clang = Command::new("clang").arg("--version").output().is_ok_and(|o| o.status.success());
     let mut bad = Vec::new();
-    for (file, backend) in &runs {
+    for (file, backend, release) in &runs {
         let text = std::fs::read_to_string(file).unwrap();
         let want: Vec<&str> = text.lines().filter_map(|l| l.strip_prefix("// expect: ")).map(|l| l.trim_end()).collect();
         if want.is_empty() {
             continue;
         }
         let flags: Vec<&str> = text.lines().find_map(|l| l.strip_prefix("// flags:")).map(|f| f.split_whitespace().collect()).unwrap_or_default();
-        let mut cmd = Command::new(&second);
+        // a miscompile can loop forever (std_math did): `timeout` ends the run and the program it started
+        let mut cmd = Command::new("timeout");
+        cmd.arg("300").arg(&second);
         if clang && *backend == "c" {
             cmd.env("CC", "clang");
         }
-        let o = cmd.arg("run").arg(file).arg("--std").arg(&std_dir).args(["--backend", backend]).args(&flags).current_dir(root).output().unwrap();
+        cmd.arg("run").arg(file).arg("--std").arg(&std_dir).args(["--backend", backend]).args(&flags);
+        if *release {
+            cmd.arg("--release");
+        }
+        let o = cmd.current_dir(root).output().unwrap();
         let out = String::from_utf8_lossy(&o.stdout);
         if out.lines().map(|l| l.trim_end()).collect::<Vec<_>>() != want {
-            bad.push(format!("{} ({backend}):\n{out}{}", file.display(), String::from_utf8_lossy(&o.stderr)));
+            let how = if *release { " --release" } else { "" };
+            bad.push(format!("{} ({backend}{how}):\n{out}{}", file.display(), String::from_utf8_lossy(&o.stderr)));
         }
     }
     assert!(bad.is_empty(), "the release voltc built by itself differs on:\n{}", bad.join("\n"));
