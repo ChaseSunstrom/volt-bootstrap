@@ -624,6 +624,14 @@ impl Checker {
         want: Option<TyId>,
         span: Span,
     ) -> Res<Val> {
+        // a call with no receiver: a method of the same name (use std::json makes json's attached
+        // write reachable as std::write) isn't a candidate when a plain function is there
+        if cands.len() > 1 && recv.is_none() && static_ty.is_none() {
+            let plain: Vec<DeclId> = cands.iter().copied().filter(|d| !matches!(self.recv_of(*d), Recv::Val(_))).collect();
+            if !plain.is_empty() && plain.len() < cands.len() {
+                return self.resolve_call(name, &plain, recv, static_ty, explicit, args, want, span);
+            }
+        }
         if let [d] = cands {
             if let Some(intr) = self.intrinsic_of(*d).filter(|i| matches!(i.as_str(), "println" | "print" | "eprintln" | "eprint" | "write" | "format")) {
                 // format makes a value of the type its declaration returns (std says std::string)

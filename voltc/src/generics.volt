@@ -1226,6 +1226,20 @@ attach fn blanket_positions(this: checker&, d: u32) -> i32 {
 // it isn't generic. The best score has to be unique, or the call is ambiguous; between equal
 // scores, the one with fewer blanket positions (more specific) wins.
 attach fn resolve_call(this: checker&, name: str, cands: std::vec<u32>&, rv: tval?, static_ty: u32?, explicit: std::vec<garg>&, args: std::vec<expr>&, want: u32?, span: span) -> compile_error!tval {
+    // a call with no receiver: a method of the same name (use std::json makes json's attached
+    // write reachable as std::write) isn't a candidate when a plain function is there
+    if (cands.len > 1 && rv == null && static_ty == null) {
+        var plain: std::vec<u32> = {};
+        for (d&) in cands.items() {
+            match (this.recv_of(*d)) {
+                .VAL(x) => {},
+                default => { put(&plain, *d); },
+            }
+        }
+        if (plain.len > 0 && plain.len < cands.len) {
+            return this.resolve_call(name, &plain, rv, static_ty, explicit, args, want, span);
+        }
+    }
     if (cands.len == 1) {
         val intr = intrinsic_of(this.item_of(*cands.at(0)));
         if (intr) {
