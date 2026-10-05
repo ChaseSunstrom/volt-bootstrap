@@ -39,8 +39,9 @@ fn compress(input: u8[..]) -> !std::vec<u8> {
     try prev_table.resize(WINDOW, 0);
     val head = head_table.items();
     val prev = prev_table.items();
-    var out: std::vec<u8> = {};
     val n = input.len;
+    var out: std::vec<u8> = {};
+    try out.reserve(n + n / 128 + 16); // the most the output can take, as the C sizes its buffer
     var i: usize = 0;
     var lit: usize = 0;
     while (i + MIN_MATCH <= n) {

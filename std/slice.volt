@@ -3,10 +3,68 @@
 // (Part of package std: the package loader wraps every file in `namespace std`.)
 
 // sorts in place, smallest first by cmp; stable (equal elements keep their order). Past 16 elements
-// it takes scratch room for n elements from allocator
+// it takes scratch room for n elements from allocator. Integers sort by their bits (a radix sort, in
+// a few passes over the elements, with no compares), the rest with a merge sort
 <T: type, A: std::mem::allocator = std::mem::default_allocator>
 public attach fn sort(this: T[..]&, allocator: A = {}) -> void {
+    comptime match (@typeinfo(T).kind) {
+        .INT(k) => {
+            if (this.len >= 256) {
+                std::radix_sort(*this, k.0, move allocator);
+                return;
+            }
+        },
+        default => {},
+    }
     this.sort_by(|| (a: T&, b: T&) -> i32 { return a.cmp(b); }, move allocator);
+}
+
+// a stable LSD radix sort of integers, a byte at a time from the lowest; a signed type's top bit is
+// flipped, so negatives come first. A pass where every element has the same byte is skipped
+<T: type, A: std::mem::allocator>
+fn radix_sort(xs: T[..], signed: bool, allocator: A) -> void {
+    val n = xs.len;
+    val scratch: T* = allocator.malloc<T>(n) catch @panic("out of memory");
+    var src = xs;
+    var dst = @slice(scratch, n);
+    val bits = @sizeof(T) * 8;
+    var flip: u64 = 0;
+    if (signed) {
+        flip = @cast<u64>(1) << @cast<u64>(bits - 1);
+    }
+    var count: usize[256];
+    for (b) in 0..@sizeof(T) {
+        val shift = @cast<u64>(b * 8);
+        for (c&) in count {
+            *c = 0;
+        }
+        for (x) in src {
+            count[@cast<usize>(((@cast<u64>(x) ^ flip) >> shift) & 255)] += 1;
+        }
+        if (count[@cast<usize>(((@cast<u64>(src[0]) ^ flip) >> shift) & 255)] == n) {
+            continue;
+        }
+        var at: usize = 0;
+        for (c&) in count {
+            val here = *c;
+            *c = at;
+            at += here;
+        }
+        for (x) in src {
+            val d = @cast<usize>(((@cast<u64>(x) ^ flip) >> shift) & 255);
+            dst[count[d]] = x;
+            count[d] += 1;
+        }
+        val t = src;
+        src = dst;
+        dst = t;
+    }
+    if (src.ptr != xs.ptr) {
+        for (k) in 0..n {
+            xs[k] = src[k];
+        }
+    }
+    allocator.free<T>(scratch, n);
 }
 
 // sorts in place by order(a, b) (negative: a goes first); stable
@@ -36,45 +94,58 @@ public attach fn sort_by(this: T[..]&, order: F, allocator: A = {}) -> void {
     if (n <= run) {
         return;
     }
-    // scratch for the left run of each merge
+    // merge runs pairwise, doubling their length, from xs into the scratch and back: each pass moves
+    // every element once, and a last odd run moves over as it is
     val scratch: T* = allocator.malloc<T>(n) catch @panic("out of memory");
-    val buf = @slice(scratch, n);
+    var src = xs;
+    var dst = @slice(scratch, n);
     var width = run;
     while (width < n) {
         var start: usize = 0;
-        while (start + width < n) {
-            val mid = start + width;
+        while (start < n) {
+            var mid = start + width;
+            if (mid > n) {
+                mid = n;
+            }
             var end = mid + width;
             if (end > n) {
                 end = n;
             }
-            // left run out to buf, then merge buf and the right run back into xs
-            for (k) in start..mid {
-                @write(&buf[k - start], @read(&xs[k]));
-            }
-            var i: usize = 0;
-            val left = mid - start;
+            var i = start;
             var j = mid;
             var k = start;
-            while (i < left && j < end) {
-                // take from the right only when strictly smaller: that keeps it stable
-                if (order(&xs[j], &buf[i]) < 0) {
-                    @write(&xs[k], @read(&xs[j]));
-                    j += 1;
-                } else {
-                    @write(&xs[k], @read(&buf[i]));
-                    i += 1;
-                }
+            while (i < mid && j < end) {
+                // take from the right only when strictly smaller (that keeps it stable); picked
+                // without a branch, since on unsorted input which side wins is a coin flip
+                val right = order(&src[j], &src[i]) < 0;
+                val from = if (right) &src[j] else &src[i];
+                @write(&dst[k], @read(from));
+                j += if (right) 1 else 0;
+                i += if (right) 0 else 1;
                 k += 1;
             }
-            while (i < left) {
-                @write(&xs[k], @read(&buf[i]));
+            while (i < mid) {
+                @write(&dst[k], @read(&src[i]));
                 i += 1;
+                k += 1;
+            }
+            while (j < end) {
+                @write(&dst[k], @read(&src[j]));
+                j += 1;
                 k += 1;
             }
             start = end;
         }
+        val t = src;
+        src = dst;
+        dst = t;
         width *= 2;
+    }
+    // the sorted elements are in src: when that's the scratch, they move back
+    if (src.ptr != xs.ptr) {
+        for (k) in 0..n {
+            @write(&xs[k], @read(&src[k]));
+        }
     }
     allocator.free<T>(scratch, n);
 }

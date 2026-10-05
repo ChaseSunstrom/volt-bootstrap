@@ -47,26 +47,13 @@ public attach fn push(this: std::string<A>&, byte: u8) -> void {
     this.bytes.push(byte) catch @panic("out of memory");
 }
 
-// append s
+// append s (s can be part of this string: vec.extend finds it again if growing moves it). Inlined:
+// out of line it took the string's address, so a caller building text kept the string in memory and
+// reloaded it after every byte it pushed
 <A: std::mem::allocator>
+@attributes([@inline])
 public attach fn append(this: std::string<A>&, s: str) -> void {
-    // s can be part of this string (s.append(s.as_str())), and growing moves the buffer it's in:
-    // copy it out first
-    val base = @cast<usize>(this.bytes.ptr);
-    val src = @cast<usize>(s.ptr);
-    if (s.len > 0 && this.bytes.cap > 0 && src >= base && src < base + this.bytes.cap) {
-        val apart = std::string::from(s, copy this.bytes.allocator);
-        this.append(apart.as_str());
-        return;
-    }
-    this.bytes.reserve(this.bytes.len + s.len) catch @panic("out of memory");
-    // a plain loop over the room reserved: compilers turn it into memcpy
-    val room = @slice(this.bytes.ptr, this.bytes.cap);
-    val at = this.bytes.len;
-    for (b, i) in s {
-        room[at + i] = b;
-    }
-    this.bytes.len += s.len;
+    this.bytes.extend(@cast<u8[..]>(s)) catch @panic("out of memory");
 }
 
 // decimal digits of v

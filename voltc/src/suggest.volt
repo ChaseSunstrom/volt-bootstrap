@@ -75,13 +75,11 @@ fn closest(name: str, cands: std::vec<str>&) -> str? {
     return best;
 }
 
-// the keys of a map (in slot order: callers only take the closest, so order doesn't matter)
+// the keys of a map (in no particular order: callers only take the closest, so order doesn't matter)
 <V: type>
 fn map_keys(m: std::map<str, V>&, out: std::vec<str>&) -> void {
-    for (i) in 0..m.cap {
-        if (m.state[i] == 1) {
-            put(out, m.keys[i]);
-        }
+    for (e) in m.iter() {
+        put(out, *e.key);
     }
 }
 

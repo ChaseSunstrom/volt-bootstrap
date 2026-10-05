@@ -1,6 +1,7 @@
 // lru_cache: an LRU cache of 100000 int keys to owned strings under n skewed get/put operations
-// (a miss puts the value); Volt uses std::map from key to node index, the nodes (a std::string value
-// and prev/next indexes) living in a std::vec, where an evicted node's slot is reused
+// (a miss puts the value); Volt keeps the nodes (a std::string value, prev/next and a bucket chain,
+// as indexes) in a std::vec and finds them through a hand-written chained hash table, the same
+// design as the C (a std::map from key to node index instead runs about 1.2x C: one more lookup)
 use std::io;
 use std::text;
 
@@ -18,68 +19,103 @@ struct node {
     value: std::string;
     prev: usize; // recency: nodes[0] is the sentinel, its next the most recent
     next: usize;
+    chain: usize; // the next node in the same bucket, 0 for none
 }
 
 struct lru {
     cap: usize;
     nodes: std::vec<node> = {};
-    index: std::map<u64, usize> = {};
+    buckets: std::vec<usize> = {}; // the first node of each bucket's chain, 0 for none
+    mask: usize = 0;
 }
 
 attach fn with_capacity(static this: lru, cap: usize) -> std::mem::mem_error!lru {
     var c: lru = { cap: cap };
+    var nb: usize = 1;
+    while (nb < cap * 2) {
+        nb *= 2;
+    }
+    try c.buckets.resize(nb, 0);
+    c.mask = nb - 1;
     try c.nodes.reserve(cap + 1);
-    try c.index.reserve(cap);
-    try c.nodes.push({ key: 0, value: {}, prev: 0, next: 0 });
+    try c.nodes.push({ key: 0, value: {}, prev: 0, next: 0, chain: 0 });
     return c;
 }
 
+fn bucket(c: lru&, key: u64) -> usize {
+    return @cast<usize>(std::map_mix(key)) & c.mask;
+}
+
 attach fn unlink(this: lru&, i: usize) -> void {
-    val p = this.nodes.at(i).prev;
-    val n = this.nodes.at(i).next;
-    this.nodes.at(p).next = n;
-    this.nodes.at(n).prev = p;
+    val ns = this.nodes.items();
+    val p = ns[i].prev;
+    val n = ns[i].next;
+    ns[p].next = n;
+    ns[n].prev = p;
 }
 
 attach fn push_front(this: lru&, i: usize) -> void {
-    val first = this.nodes.at(0).next;
-    this.nodes.at(i).prev = 0;
-    this.nodes.at(i).next = first;
-    this.nodes.at(first).prev = i;
-    this.nodes.at(0).next = i;
+    val ns = this.nodes.items();
+    val first = ns[0].next;
+    ns[i].prev = 0;
+    ns[i].next = first;
+    ns[first].prev = i;
+    ns[0].next = i;
 }
 
-// the value for key (marked most recent), or null
+attach fn find(this: lru&, key: u64) -> usize {
+    val ns = this.nodes.items();
+    var n = this.buckets.items()[bucket(this, key)];
+    while (n != 0 && ns[n].key != key) {
+        n = ns[n].chain;
+    }
+    return n;
+}
+
 attach fn get(this: lru&, key: u64) -> str? {
-    val i = *(this.index.get(key) ?? return null);
+    val i = this.find(key);
+    if (i == 0) {
+        return null;
+    }
     this.unlink(i);
     this.push_front(i);
-    return this.nodes.at(i).value.as_str();
+    return this.nodes.items()[i].value.as_str();
 }
 
-// set key to value, evicting the least recent key when full
 attach fn put(this: lru&, key: u64, value: std::string) -> void {
-    // (if (val slot = ...) here makes the move checker think value is moved below: see the report)
-    val slot = this.index.get(key);
-    if (slot) {
-        val i = *slot;
-        this.nodes.at(i).value = move value;
+    var i = this.find(key);
+    if (i != 0) {
+        this.nodes.items()[i].value = move value;
         this.unlink(i);
         this.push_front(i);
         return;
     }
-    var i = this.nodes.len;
+    val bs = this.buckets.items();
     if (this.nodes.len - 1 == this.cap) {
-        i = this.nodes.at(0).prev;
+        i = this.nodes.items()[0].prev;
         this.unlink(i);
-        val gone = this.index.remove(this.nodes.at(i).key);
-        this.nodes.at(i).key = key;
-        this.nodes.at(i).value = move value;
+        val ns = this.nodes.items();
+        // take it off its bucket's chain
+        var at = bucket(this, ns[i].key);
+        if (bs[at] == i) {
+            bs[at] = ns[i].chain;
+        } else {
+            var p = bs[at];
+            while (ns[p].chain != i) {
+                p = ns[p].chain;
+            }
+            ns[p].chain = ns[i].chain;
+        }
+        ns[i].key = key;
+        ns[i].value = move value;
     } else {
-        this.nodes.push({ key: key, value: move value, prev: 0, next: 0 }) catch @panic("out of memory");
+        i = this.nodes.len;
+        this.nodes.push({ key: key, value: move value, prev: 0, next: 0, chain: 0 }) catch @panic("out of memory");
     }
+    val b = bucket(this, key);
+    this.nodes.items()[i].chain = bs[b];
+    bs[b] = i;
     this.push_front(i);
-    this.index.put(key, i);
 }
 
 val PATTERN: str = "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnop";
@@ -117,5 +153,5 @@ fn main() -> !void {
             cache.put(key, make_value(key, i));
         }
     }
-    std::println("{} hits, {} misses, {} total, {} cached", hits, misses, total, cache.index.len);
+    std::println("{} hits, {} misses, {} total, {} cached", hits, misses, total, cache.nodes.len - 1);
 }

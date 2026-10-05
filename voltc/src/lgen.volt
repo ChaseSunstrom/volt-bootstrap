@@ -662,10 +662,18 @@ attach fn decl_fn(this: lg&, i: u32) -> llvm::LLVMOpaqueValue* {
             llvm::LLVMAddAttributeAtIndex(fv, 4294967295, this.attr("nounwind"));
             llvm::LLVMAddAttributeAtIndex(fv, 4294967295, this.attr("willreturn"));
         }
+        if (f.body != null) {
+            // Volt code never unwinds (a panic ends the program), as the C backend's C, which clang
+            // marks nounwind: calls need no unwind paths, and LLVM moves code around them freely
+            llvm::LLVMAddAttributeAtIndex(fv, 4294967295, this.attr("nounwind"));
+        }
         if (this.c.opts.target != null) {
             // bare metal has no C library: loops stay loops, not calls to strlen or memcpy (which
             // std/bare.volt's memcpy and the like would turn into calls to themselves)
             llvm::LLVMAddAttributeAtIndex(fv, 4294967295, llvm::LLVMCreateStringAttribute(this.ctx, "no-builtins", 11, "", 0));
+        } else {
+            // schedule for current x86-64 chips, as clang does by default, not for the first ones
+            llvm::LLVMAddAttributeAtIndex(fv, 4294967295, llvm::LLVMCreateStringAttribute(this.ctx, "tune-cpu", 8, "generic", 7));
         }
         if (this.c.opts.line_info) {
             // --profiler and debug builds: bolt hot's sampler and debuggers walk the stack by frame pointers
@@ -1079,7 +1087,15 @@ attach fn byte_gep(this: lg&, p: llvm::LLVMOpaqueValue*, off: u64) -> llvm::LLVM
     }
     var idx: std::vec<llvm::LLVMOpaqueValue*> = {};
     put(&idx, this.i64c(off));
-    return llvm::LLVMBuildGEP2(this.b, this.i8t(), p, idx.ptr, 1, "");
+    return this.inbounds_gep(this.i8t(), p, &idx);
+}
+
+// an element or member address inside the object p points into: inbounds and nuw, which tells
+// LLVM's alias analysis and loop passes the address stays in that object (an index past the end
+// is undefined anyway: release builds don't check it, debug builds stop first)
+attach fn inbounds_gep(this: lg&, ty: llvm::LLVMOpaqueType*, p: llvm::LLVMOpaqueValue*, idx: std::vec<llvm::LLVMOpaqueValue*>&) -> llvm::LLVMOpaqueValue* {
+    val flags = @cast<u32>(llvm::LLVMGEPFlagInBounds) | @cast<u32>(llvm::LLVMGEPFlagNUW);
+    return llvm::LLVMBuildGEPWithNoWrapFlags(this.b, ty, p, idx.ptr, @cast<u32>(idx.len), "", flags);
 }
 
 // the address of member i of the aggregate at p
@@ -1290,15 +1306,15 @@ attach fn addr(this: lg&, n: u32) -> llvm::LLVMOpaqueValue* {
                 .ARRAY(x, k) => {
                     put(&idx, this.i64c(0));
                     put(&idx, ix);
-                    return llvm::LLVMBuildGEP2(this.b, this.lt(bt), this.addr(b), idx.ptr, 2, "");
+                    return this.inbounds_gep(this.lt(bt), this.addr(b), &idx);
                 },
                 .CSTR => {
                     put(&idx, ix);
-                    return llvm::LLVMBuildGEP2(this.b, this.i8t(), this.rv(b), idx.ptr, 1, "");
+                    return this.inbounds_gep(this.i8t(), this.rv(b), &idx);
                 },
                 default => {
                     put(&idx, ix);
-                    return llvm::LLVMBuildGEP2(this.b, this.lt(t), this.rv(b), idx.ptr, 1, "");
+                    return this.inbounds_gep(this.lt(t), this.rv(b), &idx);
                 },
             }
         },

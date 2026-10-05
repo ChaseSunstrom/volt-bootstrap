@@ -38,45 +38,48 @@ public attach fn push(this: std::heap<T, A>&, value: T) -> void {
     this.items.push(move value) catch @panic("out of memory");
     val xs = this.items.items();
     var i = xs.len - 1;
-    // move it up while it sorts before its parent
+    // the new element comes out, leaving a hole that moves up past each parent it sorts before
+    // (moves, not swaps), then it goes into the hole
+    val x = @read(&xs[i]);
     while (i > 0) {
         val up = (i - 1) / 2;
-        if (xs[i].cmp(&xs[up]) >= 0) {
+        if (x.cmp(&xs[up]) >= 0) {
             break;
         }
-        xs.swap(i, up);
+        @write(&xs[i], @read(&xs[up]));
         i = up;
     }
+    @write(&xs[i], move x);
 }
 
 // the smallest element, moved out
 <T: type, A: std::mem::allocator>
 public attach fn pop(this: std::heap<T, A>&) -> T? {
-    val n = this.items.len;
-    if (n == 0) {
-        return null;
-    }
-    this.items.items().swap(0, n - 1);
-    val out = this.items.pop();
+    val last = this.items.pop() ?? return null;
     val xs = this.items.items();
+    if (xs.len == 0) {
+        return last;
+    }
+    // the root comes out, leaving a hole at the top; the old last element sinks from there, the
+    // hole moving down past each smaller child (moves, not swaps)
+    val out = @read(&xs[0]);
     var i: usize = 0;
-    // move the new root down while a child sorts before it
     loop {
-        var least = i;
         val l = 2 * i + 1;
-        val r = l + 1;
-        if (l < xs.len && xs[l].cmp(&xs[least]) < 0) {
-            least = l;
-        }
-        if (r < xs.len && xs[r].cmp(&xs[least]) < 0) {
-            least = r;
-        }
-        if (least == i) {
+        if (l >= xs.len) {
             break;
         }
-        xs.swap(i, least);
-        i = least;
+        var c = l;
+        if (l + 1 < xs.len && xs[l + 1].cmp(&xs[l]) < 0) {
+            c = l + 1;
+        }
+        if (xs[c].cmp(&last) >= 0) {
+            break;
+        }
+        @write(&xs[i], @read(&xs[c]));
+        i = c;
     }
+    @write(&xs[i], move last);
     return out;
 }
 

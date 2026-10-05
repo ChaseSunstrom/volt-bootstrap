@@ -30,18 +30,31 @@ public fn map_mix(x: u64) -> u64 {
     return z ^ (z >> 31);
 }
 
-// A hash map with open addressing (linear probing, tombstones for removed keys).
+// A hash map with open addressing: linear probing, and a removal shifts the entries after it back
+// into the gap, so there are no removed markers and a probe stops at the first empty slot.
 <K: type, V: type, Allocator: std::mem::allocator = std::mem::default_allocator>
 public struct map {
-    // keys, vals and state are parallel arrays of cap slots; nothing is allocated until the first put
-    keys: K* = @cast<K*>(@alignof(K));
-    vals: V* = @cast<V*>(@alignof(V)); // the values, parallel to keys
-    state: u8* = @cast<u8*>(1); // per slot: 0 empty, 1 full, 2 removed
-    // len counts the keys held, cap the slots
-    len: usize = 0;  // the keys held
-    used: usize = 0; // full + removed
-    cap: usize = 0;  // the slots: 0, or a power of two (8, then doubling)
+    // slots and state are parallel arrays of cap slots; nothing is allocated until the first put. A key
+    // and its value share a slot, so a hit reads one place
+    slots: std::map_slot<K, V>* = @cast<std::map_slot<K, V>*>(@alignof(std::map_slot<K, V>));
+    // per slot: 0 empty, else its key's tag (map_tag), so most probes that miss compare a byte
+    // instead of the key
+    state: u8* = @cast<u8*>(1);
+    len: usize = 0; // the keys held
+    cap: usize = 0; // the slots: 0, or a power of two (8, then doubling)
     allocator: Allocator = {}; // where the arrays come from
+}
+
+// one slot of a map: a key and its value, side by side
+<K: type, V: type>
+struct map_slot {
+    key: K;
+    value: V;
+}
+
+// a full slot's state byte for a key hashing to h: its top 7 bits, with 0x80 set so it's never 0
+fn map_tag(h: u64) -> u8 {
+    return @cast<u8>((h >> 57) | 0x80);
 }
 
 // an empty map that allocates from allocator
@@ -50,26 +63,17 @@ public attach fn new_in(static this: std::map<K, V>, allocator: A) -> std::map<K
     return { allocator: move allocator };
 }
 
-// the slot holding key, or where it would go
+// the slot holding key (which hashes to h), or the empty slot where it would go
 <K: type, V: type, A: std::mem::allocator>
-attach fn slot(this: std::map<K, V, A>&, key: K&) -> usize {
+attach fn slot(this: std::map<K, V, A>&, key: K&, h: u64) -> usize {
     val state = @slice(this.state, this.cap);
-    val keys = @slice(this.keys, this.cap);
+    val slots = @slice(this.slots, this.cap);
     val mask = this.cap - 1; // cap is a power of two: 8, then doubling
-    var i = @cast<usize>(key.hash()) & mask;
-    var free = this.cap; // first removed slot seen
+    val tag = std::map_tag(h);
+    var i = @cast<usize>(h) & mask;
     loop {
-        if (state[i] == 0) {
-            if (free < this.cap) {
-                return free;
-            }
-            return i;
-        }
-        if (state[i] == 2) {
-            if (free == this.cap) {
-                free = i;
-            }
-        } else if (keys[i].eq(key)) {
+        val s = state[i];
+        if (s == 0 || (s == tag && slots[i].key.eq(key))) {
             return i;
         }
         i = (i + 1) & mask;
@@ -102,27 +106,20 @@ attach fn grow(this: std::map<K, V, A>&) -> void {
     this.rehash(cap) catch @panic("out of memory");
 }
 
-// cap new slots, with every entry put back and the removed markers dropped
+// cap new slots, with every entry put back
 <K: type, V: type, A: std::mem::allocator>
 attach fn rehash(this: std::map<K, V, A>&, cap: usize) -> std::mem::mem_error!void {
     val old_cap = this.cap;
-    val (old_keys, old_vals, old_state) = (this.keys, this.vals, this.state);
-    val k: K* = try this.allocator.malloc<K>(cap);
-    val v: V* = this.allocator.malloc<V>(cap) catch |e| {
-        this.allocator.free<K>(k, cap);
+    val (old_slots, old_state) = (this.slots, this.state);
+    val e: std::map_slot<K, V>* = try this.allocator.malloc<std::map_slot<K, V>>(cap);
+    val s: u8* = this.allocator.malloc<u8>(cap) catch |err| {
+        this.allocator.free<std::map_slot<K, V>>(e, cap);
         return std::mem::mem_error::OUT_OF_MEMORY;
     };
-    val s: u8* = this.allocator.malloc<u8>(cap) catch |e| {
-        this.allocator.free<K>(k, cap);
-        this.allocator.free<V>(v, cap);
-        return std::mem::mem_error::OUT_OF_MEMORY;
-    };
-    this.keys = k;
-    this.vals = v;
+    this.slots = e;
     this.state = s;
     this.cap = cap;
     this.len = 0;
-    this.used = 0;
     for (st&) in @slice(this.state, cap) {
         *st = 0;
     }
@@ -131,37 +128,36 @@ attach fn rehash(this: std::map<K, V, A>&, cap: usize) -> std::mem::mem_error!vo
     }
     // move every entry over
     for (i) in 0..old_cap {
-        if (@slice(old_state, old_cap)[i] == 1) {
-            val key = @read(&(@slice(old_keys, old_cap)[i]));
-            val value = @read(&(@slice(old_vals, old_cap)[i]));
+        if (@slice(old_state, old_cap)[i] != 0) {
+            val old = &(@slice(old_slots, old_cap)[i]);
+            val key = @read(&old.key);
+            val value = @read(&old.value);
             this.put(move key, move value);
         }
     }
-    this.allocator.free<K>(old_keys, old_cap);
-    this.allocator.free<V>(old_vals, old_cap);
+    this.allocator.free<std::map_slot<K, V>>(old_slots, old_cap);
     this.allocator.free<u8>(old_state, old_cap);
 }
 
 // set key to value (an old value for it is deleted)
 <K: type, V: type, A: std::mem::allocator>
 public attach fn put(this: std::map<K, V, A>&, key: K, value: V) -> void {
-    // keep used slots under 3/4 (removed ones count), so a probe always reaches an empty slot
-    if ((this.used + 1) * 4 > this.cap * 3) {
+    // keep the keys under 3/4 of the slots, so a probe soon reaches an empty slot
+    if ((this.len + 1) * 4 > this.cap * 3) {
         this.grow();
     }
-    val i = this.slot(&key);
+    val h = key.hash();
+    val i = this.slot(&key, h);
     val state = @slice(this.state, this.cap);
-    if (state[i] == 1) {
-        @slice(this.vals, this.cap)[i] = move value; // deletes the old value; the old key stays
+    if (state[i] != 0) {
+        @slice(this.slots, this.cap)[i].value = move value; // deletes the old value; the old key stays
         return;
     }
-    if (state[i] == 0) {
-        this.used += 1;
-    }
-    state[i] = 1;
+    state[i] = std::map_tag(h);
     this.len += 1;
-    @write(&(@slice(this.keys, this.cap)[i]), move key);
-    @write(&(@slice(this.vals, this.cap)[i]), move value);
+    val at = &(@slice(this.slots, this.cap)[i]);
+    @write(&at.key, move key);
+    @write(&at.value, move value);
 }
 
 // the value for key, if there is one
@@ -176,11 +172,11 @@ attach fn lookup(this: std::map<K, V, A>&, key: K&) -> V* {
     if (this.cap == 0) {
         return null;
     }
-    val i = this.slot(key);
-    if (@slice(this.state, this.cap)[i] != 1) {
+    val i = this.slot(key, key.hash());
+    if (@slice(this.state, this.cap)[i] == 0) {
         return null;
     }
-    return &(@slice(this.vals, this.cap)[i]);
+    return &(@slice(this.slots, this.cap)[i].value);
 }
 
 // whether key has a value
@@ -195,15 +191,31 @@ public attach fn remove(this: std::map<K, V, A>&, key: K) -> V? {
     if (this.cap == 0) {
         return null;
     }
-    val i = this.slot(&key);
+    val i = this.slot(&key, key.hash());
     val state = @slice(this.state, this.cap);
-    if (state[i] != 1) {
+    if (state[i] == 0) {
         return null;
     }
-    state[i] = 2;
+    val slots = @slice(this.slots, this.cap);
+    val k = @read(&slots[i].key); // deleted here
+    val out = @read(&slots[i].value);
     this.len -= 1;
-    val k = @read(&(@slice(this.keys, this.cap)[i])); // deleted here
-    return @read(&(@slice(this.vals, this.cap)[i]));
+    // close the gap: an entry after it moves back into the gap when the gap lies between the
+    // entry's home slot and where it sits, so every key stays reachable from its home
+    val mask = this.cap - 1;
+    var gap = i;
+    var j = (i + 1) & mask;
+    while (state[j] != 0) {
+        val home = @cast<usize>(slots[j].key.hash()) & mask;
+        if (((j -% home) & mask) >= ((j -% gap) & mask)) {
+            state[gap] = state[j];
+            @write(&slots[gap], @read(&slots[j]));
+            gap = j;
+        }
+        j = (j + 1) & mask;
+    }
+    state[gap] = 0;
+    return out;
 }
 
 // deletes every key and value, keeping the slots
@@ -211,15 +223,15 @@ public attach fn remove(this: std::map<K, V, A>&, key: K) -> V? {
 public attach fn clear(this: std::map<K, V, A>&) -> void {
     for (i) in 0..this.cap {
         val st = &(@slice(this.state, this.cap)[i]);
-        if (*st == 1) {
+        if (*st != 0) {
             // moved out, so both are deleted at the end of this iteration
-            val k = @read(&(@slice(this.keys, this.cap)[i]));
-            val v = @read(&(@slice(this.vals, this.cap)[i]));
+            val at = &(@slice(this.slots, this.cap)[i]);
+            val k = @read(&at.key);
+            val v = @read(&at.value);
         }
         *st = 0;
     }
     this.len = 0;
-    this.used = 0;
 }
 
 // a key and its value, as for (e) in m.iter() gives them (don't change the key: the map is
@@ -233,8 +245,7 @@ public struct entry {
 // walks a map's entries in no particular order; changing the map while walking isn't allowed
 <K: type, V: type>
 public struct map_iter {
-    keys: K*;
-    vals: V*;
+    slots: std::map_slot<K, V>*;
     state: u8*;
     cap: usize;
     i: usize = 0; // the next slot to look at
@@ -243,7 +254,7 @@ public struct map_iter {
 // for (e) in m.iter(): each entry, with e.value a reference into the map
 <K: type, V: type, A: std::mem::allocator>
 public attach fn iter(this: std::map<K, V, A>&) -> std::map_iter<K, V> {
-    return { keys: this.keys, vals: this.vals, state: this.state, cap: this.cap };
+    return { slots: this.slots, state: this.state, cap: this.cap };
 }
 
 // the next full slot's entry
@@ -252,8 +263,9 @@ public attach fn next(this: std::map_iter<K, V>&) -> std::entry<K, V>? {
     while (this.i < this.cap) {
         val i = this.i;
         this.i += 1;
-        if (@slice(this.state, this.cap)[i] == 1) {
-            return { key: &(@slice(this.keys, this.cap)[i]), value: &(@slice(this.vals, this.cap)[i]) };
+        if (@slice(this.state, this.cap)[i] != 0) {
+            val at = &(@slice(this.slots, this.cap)[i]);
+            return { key: &at.key, value: &at.value };
         }
     }
     return null;
@@ -264,8 +276,9 @@ public attach fn next(this: std::map_iter<K, V>&) -> std::entry<K, V>? {
 public attach fn copy(this: std::map<K, V, A>&) -> std::map<K, V, A> {
     var out: std::map<K, V, A> = { allocator: copy this.allocator };
     for (i) in 0..this.cap {
-        if (@slice(this.state, this.cap)[i] == 1) {
-            out.put(copy @slice(this.keys, this.cap)[i], copy @slice(this.vals, this.cap)[i]);
+        if (@slice(this.state, this.cap)[i] != 0) {
+            val at = &(@slice(this.slots, this.cap)[i]);
+            out.put(copy at.key, copy at.value);
         }
     }
     return out;
@@ -278,13 +291,13 @@ public attach fn delete(this: std::map<K, V, A>&) -> void {
         return;
     }
     for (i) in 0..this.cap {
-        if (@slice(this.state, this.cap)[i] == 1) {
+        if (@slice(this.state, this.cap)[i] != 0) {
             // moved out, so both are deleted at the end of this iteration
-            val k = @read(&(@slice(this.keys, this.cap)[i]));
-            val v = @read(&(@slice(this.vals, this.cap)[i]));
+            val at = &(@slice(this.slots, this.cap)[i]);
+            val k = @read(&at.key);
+            val v = @read(&at.value);
         }
     }
-    this.allocator.free<K>(this.keys, this.cap);
-    this.allocator.free<V>(this.vals, this.cap);
+    this.allocator.free<std::map_slot<K, V>>(this.slots, this.cap);
     this.allocator.free<u8>(this.state, this.cap);
 }

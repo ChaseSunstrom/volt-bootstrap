@@ -1,6 +1,6 @@
 // wordfreq: count the words of a text of n words drawn from a Zipf-like vocabulary in a hash map keyed
 // by string, then print the 20 most frequent; Volt uses std::map with str keys viewing the text, and
-// sort_by with a closure
+// sort_by with a closure (the vocabulary sits in rows of 10 bytes, as in the C)
 use std::io;
 use std::text;
 
@@ -20,22 +20,26 @@ struct ranked {
 
 fn main() -> !void {
     val n = (std::process::arg(1) ?? "20000000").parse_int() catch 20000000;
-    // the vocabulary: random lowercase words of 3 to 10 letters
-    var words: std::vec<std::string> = {};
+    // the vocabulary: random lowercase words of 3 to 10 letters, in rows of 10 bytes as the C keeps them
+    var words: std::vec<u8> = {};
+    try words.resize(262144 * 10, 0);
+    var lens: std::vec<usize> = {};
+    try lens.reserve(262144);
+    val rows = words.items();
     for (k) in 0..262144 {
         val len = 3 + next() % 8;
-        var w: std::string = {};
         for (j) in 0..len {
-            w.push(@cast<u8>('a' + next() % 26));
+            rows[@cast<usize>(k) * 10 + @cast<usize>(j)] = @cast<u8>('a' + next() % 26);
         }
-        try words.push(move w);
+        try lens.push(@cast<usize>(len));
     }
     // the text: word k is picked about 1/k as often as word 1
     var text: std::string = {};
     for (i) in 0..n {
         val bits = next() % 19;
         val k = next() & ((@cast<u64>(1) << bits) - 1);
-        text.append(words.at(@cast<usize>(k)).as_str());
+        val at = @cast<usize>(k) * 10;
+        text.append(@cast<str>(rows[at..at + *lens.at(@cast<usize>(k))]));
         text.push(' ');
     }
     var counts: std::map<str, i64> = {};

@@ -14,6 +14,9 @@ namespace mem {
     fn c_realloc(ptr: void*, size: usize) -> void*;
     @attributes([@intrinsic("volt_rt_free")])
     fn c_free(ptr: void*) -> void;
+    // n bytes from s to d, which don't overlap (bare metal has its own memcpy in std::bare)
+    @attributes([@intrinsic("volt_memcpy")])
+    fn c_memcpy(d: void*, s: void*, n: usize) -> void*;
 
     // What everything in std that owns memory allocates through: box, vec, string, map, set, deque,
     // heap, sorted_map, shared, channel, and the functions that return such values. A failed malloc or

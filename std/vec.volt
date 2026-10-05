@@ -170,10 +170,38 @@ public attach fn resize(this: std::vec<T, A>&, n: usize, value: T) -> std::mem::
 // append a copy of each element of xs
 <T: type, A: std::mem::allocator>
 public attach fn extend(this: std::vec<T, A>&, xs: T[..]) -> std::mem::mem_error!void {
-    try this.reserve(this.len + xs.len);
-    for (x&) in xs {
-        try this.push(copy *x);
+    if (xs.len == 0) {
+        return;
     }
+    // xs can be part of this vec (v.extend(v.items())), and growing moves the buffer it's in: read
+    // it from where it moved to
+    val base = @cast<usize>(this.ptr);
+    val src = @cast<usize>(xs.ptr);
+    val inside = this.cap > 0 && src >= base && src < base + this.cap * @sizeof(T);
+    try this.reserve(this.len + xs.len);
+    var from = xs;
+    if (inside) {
+        from = @slice(@cast<T*>(@cast<usize>(this.ptr) + (src - base)), xs.len);
+    }
+    val to = @slice(this.ptr, this.cap);
+    // numbers and bools copy bit for bit, all at once; anything else one copy at a time
+    comptime match (@typeinfo(T).kind) {
+        .INT(k) => {
+            std::mem::c_memcpy(@cast<void*>(&to[this.len]), @cast<void*>(from.ptr), from.len * @sizeof(T));
+        },
+        .FLOAT(b) => {
+            std::mem::c_memcpy(@cast<void*>(&to[this.len]), @cast<void*>(from.ptr), from.len * @sizeof(T));
+        },
+        .BOOL => {
+            std::mem::c_memcpy(@cast<void*>(&to[this.len]), @cast<void*>(from.ptr), from.len * @sizeof(T));
+        },
+        default => {
+            for (x&, i) in from {
+                @write(&to[this.len + i], copy *x);
+            }
+        },
+    }
+    this.len += from.len;
 }
 
 // delete each element equal (by eq) to the one kept before it, so a run of equals keeps its first
@@ -218,8 +246,14 @@ public attach fn retain(this: std::vec<T, A>&, keep: F) -> void {
 // delete every element, keep the memory
 <T: type, A: std::mem::allocator>
 public attach fn clear(this: std::vec<T, A>&) -> void {
-    while (this.len > 0) {
-        this.pop();
+    // last to first, as pops would; for elements that own nothing the loop does nothing and compiles
+    // away (a loop of pops didn't)
+    val xs = @slice(this.ptr, this.len);
+    this.len = 0;
+    var i = xs.len;
+    while (i > 0) {
+        i -= 1;
+        val dropped = @read(&xs[i]); // deleted here
     }
 }
 

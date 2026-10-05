@@ -17,7 +17,7 @@ programmers would usually write it. Every program prints the same output in each
 | `mandelbrot` | a tight float loop with an early exit |
 | `hashmap` | `std::map` against a hand-written C hash table and `std::unordered_map` |
 | `strings` | building and splitting text (`std::string` against a C buffer and `std::string`) |
-| `sort` | `slice.sort` (stable) against `qsort` and `std::stable_sort` |
+| `sort` | sorting 5 million integers with each standard library's sort: `slice.sort` (stable; for integers a radix sort) against `qsort` and `std::stable_sort` |
 | `closures` | closures passed to a template, against C function pointers and C++ lambdas |
 | `matmul` | a dense matrix multiply over growable arrays (`std::vec` against `malloc` and `std::vector`) |
 | `sieve` | the sieve of Eratosthenes over a 200 MB byte array |
@@ -32,7 +32,7 @@ programmers would usually write it. Every program prints the same output in each
 | `json` | writing a 73 MB JSON document, parsing it into a tree and walking it (`std::json` against hand-written C and C++ parsers) |
 | `csv` | formatting and parsing records with floats and quoted fields (`{:.2}` and `parse_float` against `snprintf` and `strtod`, and C++'s `std::format_to` and `from_chars`) |
 | `wordfreq` | counting 20 million words and taking the top 20 (`std::map<str, i64>` against a C hash table and `std::unordered_map<std::string, long>`) |
-| `lru_cache` | an LRU cache under 20 million skewed operations (`std::map` and `std::vec` against C linked nodes in a chained table and C++'s `std::list` with `std::unordered_map`) |
+| `lru_cache` | an LRU cache under 20 million skewed operations: a chained hash table over linked nodes (in a `std::vec` with indexes, against C's malloc'd nodes and pointers), and C++'s `std::list` with `std::unordered_map` |
 | `heap` | a priority queue of numbers and of structs (`std::heap` against a C `void*` heap with a comparator and `std::priority_queue`) |
 | `dijkstra` | shortest paths across a 1500 by 1500 grid with a binary heap |
 | `nqueens` | counting N-queens solutions with bitboards and recursion |
