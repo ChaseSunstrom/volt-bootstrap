@@ -158,6 +158,7 @@
   "scripts": {
     "vscode:prepublish": "tsc -p .",
     "build": "tsc -p .",
+    "pretest": "tsc -p .",
     "test": "vscode-tmgrammar-test 'tests/grammar/*.test.volt' && vscode-tmgrammar-snap 'tests/snap/*.volt' && node --test tests/*.test.js",
     "install-extension": "vsce package -o volt.vsix && code --install-extension volt.vsix",
     "test:e2e": "node tests/e2e/run.js"

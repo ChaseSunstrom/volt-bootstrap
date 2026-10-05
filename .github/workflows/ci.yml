@@ -33,7 +33,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 180
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       # LLVM and libclang for voltc's LLVM backend and C imports; clang, llvm-nm and ld.lld for the
       # cross-compile and bare-metal tests; qemu runs the bare-metal boards
       - name: Install LLVM, qemu and test tools
@@ -74,8 +74,8 @@ jobs:
       run:
         working-directory: editors/vscode
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
@@ -100,19 +100,22 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Build the compilers
         run: cargo build --release --bins
-      # the front end everywhere: every test program without flags checks (the failure tests must not)
+      # the front end everywhere: the test programs check, and the failure tests (with their flags)
+      # don't. Those importing C headers are left out: reading a header takes a C preprocessor
       - name: Check the test programs
         run: |
           bad=0
           for f in tests/run/*.volt; do
-            grep -q '^// flags:' "$f" && continue
+            grep -q -e '^// flags:' -e '\.h"' "$f" && continue
             ./target/release/voltc-bootstrap check "$f" > /dev/null 2>&1 || { echo "::error file=$f::doesn't check"; bad=1; }
           done
           for f in tests/fail/*.volt; do
-            ./target/release/voltc-bootstrap check "$f" > /dev/null 2>&1 && { echo "::error file=$f::checks but shouldn't"; bad=1; }
+            grep -q '\.h"' "$f" && continue
+            # shellcheck disable=SC2046
+            ./target/release/voltc-bootstrap check "$f" $(sed -n 's|^// flags: ||p' "$f") > /dev/null 2>&1 && { echo "::error file=$f::checks but shouldn't"; bad=1; }
           done
           exit $bad
       # compiling through C and running: not supported off Linux yet, so this step may fail
