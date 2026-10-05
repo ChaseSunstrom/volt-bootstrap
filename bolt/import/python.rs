@@ -740,8 +740,13 @@ const RUNTIME: &str = r#"    use { "{PYH}" } as py;
         return std::string::from(@cast<str>(@slice(@cast<u8*>(p), @cast<usize>(n))));
     }
 
+    // Py_None, borrowed, in every Python 3 (Py_GetConstantBorrowed is 3.13's, and &_Py_NoneStruct
+    // needs PyObject's layout): Py_BuildValue("") returns it with a reference this gives back, since
+    // None outlives every reference
     fn none() -> py::PyObject* {
-        return py::Py_GetConstantBorrowed(@cast<u32>(py::Py_CONSTANT_NONE));
+        val p = py::Py_BuildValue("");
+        py::Py_DecRef(p);
+        return p;
     }
 
     fn attr(o: py::PyObject*, name: str) -> py::PyObject* {

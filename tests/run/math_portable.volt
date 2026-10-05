@@ -71,8 +71,9 @@ fn same32(what: str, x: f32, want: f32, got: f32, exact: bool) -> void {
 
 val NAMES: str[25] = { "sqrt", "cbrt", "pow", "exp", "exp2", "expm1", "log", "log2", "log10", "sin", "cos", "tan", "asin", "acos", "atan", "atan2", "sinh", "cosh", "tanh", "hypot", "floor", "ceil", "round", "trunc", "fmod" };
 // the most ulps each may be off from glibc by (0: exact). glibc's own cbrt is up to 2.1 ulps from
-// the true value and its log10 1.5 (Volt's are within 0.52 on those inputs), so those two get more
-val ALLOW: u64[25] = { 0, 3, 1, 1, 1, 1, 1, 1, 2, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 1, 0, 0, 0, 0, 0 };
+// the true value and its log10 1.5 (Volt's are within 0.52 on those inputs), so those two get more;
+// glibc 2.39's tanh (Ubuntu 24.04) is 1.82 ulps off at 0.44355931921741654, where Volt's is 1.18
+val ALLOW: u64[25] = { 0, 3, 1, 1, 1, 1, 1, 1, 2, 1, 1, 1, 1, 1, 1, 1, 2, 2, 3, 1, 0, 0, 0, 0, 0 };
 var worst: u64[25];
 var bad: u64[25];
 var count: u64[25];
