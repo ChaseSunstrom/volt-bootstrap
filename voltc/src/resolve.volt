@@ -1048,6 +1048,35 @@ attach fn global(this: checker&, d: u32, span: span) -> compile_error!global_ref
     return g;
 }
 
+// literals, names and operators over them, with no calls: a global's initializer that's worked out at
+// compile time even when it isn't a { } literal
+fn foldable(e: expr&) -> bool {
+    match (e.kind) {
+        .INT(v) => { return true; },
+        .FLOAT(v) => { return true; },
+        .CHAR(v) => { return true; },
+        .STR(s&) => { return true; },
+        .BOOL(b) => { return true; },
+        .NULL => { return true; },
+        .PATH(p&) => { return true; },
+        .DOT_VARIANT(n) => { return true; },
+        .UNARY(op, x) => { return foldable(x); },
+        .CAST(x, t&) => { return foldable(x); },
+        .FIELD(x, name, g&) => { return foldable(x); },
+        .BINARY(op, a, b) => { return foldable(a) && foldable(b); },
+        .INDEX(a, b) => { return foldable(a) && foldable(b); },
+        .TUPLE(xs&) => {
+            for (x&) in xs.items() {
+                if (!foldable(x)) {
+                    return false;
+                }
+            }
+            return true;
+        },
+        default => { return false; },
+    }
+}
+
 // a global's initial value: its initializer as a constant of the declared type, or zero
 attach fn global_init(this: checker&, l: let_stmt&, span: span) -> compile_error!tval {
     var want: u32? = null;
@@ -1060,8 +1089,9 @@ attach fn global_init(this: checker&, l: let_stmt&, span: span) -> compile_error
             v = try this.coerce(v, want, l.init.span);
         }
         if (!v.pure && v.lit == null) {
-            // a { x; n } (or a struct whose defaults hold one) is worked out now, as constants
-            var lit = false;
+            // a { x; n } (or a struct whose defaults hold one), or operators over constants
+            // (1 << 13, FLAG | 0x10), is worked out now; a call isn't, unless it's to a comptime fn
+            var lit = foldable(&l.init);
             match (l.init.kind) {
                 .LITERAL(x) => { lit = true; },
                 .REPEAT(x, n) => { lit = true; },
@@ -1078,6 +1108,10 @@ attach fn global_init(this: checker&, l: let_stmt&, span: span) -> compile_error
             };
             if (!c.pure) {
                 return fails(l.init.span, "global initializers must be constants");
+            }
+            // the declared type, checked: 1 << 9 doesn't fit in a u8
+            if (want) {
+                return try this.coerce(c, want, l.init.span);
             }
             return c;
         }

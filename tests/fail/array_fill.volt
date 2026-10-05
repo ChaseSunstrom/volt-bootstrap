@@ -22,7 +22,8 @@ fn five() -> i32 {
     return 5;
 }
 
-// a global's initializer runs at compile time only when it is a { } or { x; n } literal
+// a global's initializer is worked out at compile time when it's a { } or { x; n } literal or operators
+// over constants; a call to a function that isn't comptime is an error
 val G: i32 = five();
 
 fn uses_g() -> i32 {

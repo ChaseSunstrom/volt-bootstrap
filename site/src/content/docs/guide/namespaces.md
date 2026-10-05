@@ -69,7 +69,8 @@ function.
 ## Globals
 
 `val` and `var` work at the top level and in namespaces. A global's value must be known at compile
-time (it can call `comptime` functions).
+time: arithmetic and bit operations over constants and other `val` globals work (`1 << 13`,
+`FLAG | 0x10`), and so do calls to `comptime` functions. The result must fit the global's type.
 
 ```volt
 use std::io;

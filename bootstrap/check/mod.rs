@@ -1690,12 +1690,17 @@ impl Checker {
             };
             let mut v = v;
             if let (false, None, Some(init)) = (v.pure, &v.lit, &l.init) {
-                // a { x; n } (or a struct whose defaults hold one) is worked out now, as constants
+                // a { x; n } (or a struct whose defaults hold one), or operators over constants
+                // (1 << 13, FLAG | 0x10), is worked out now; a call isn't, unless it's to a comptime fn
                 let lit = matches!(init.kind, ExprKind::Literal(_) | ExprKind::Repeat(..));
-                v = match lit.then(|| self.ct_eval_in(env.clone(), init, want).and_then(|cv| self.ct_to_val(cv, want, init.span))) {
+                v = match (lit || foldable(init)).then(|| self.ct_eval_in(env.clone(), init, want).and_then(|cv| self.ct_to_val(cv, want, init.span))) {
                     Some(Ok(c)) if c.pure => c,
                     _ => return err(init.span, "global initializers must be constants"),
                 };
+                // the declared type, checked: 1 << 9 doesn't fit in a u8
+                if let Some(w) = want {
+                    v = self.coerce(v, w, init.span)?;
+                }
             }
             Ok((v.ty, v.c))
         })();
@@ -2038,4 +2043,17 @@ pub fn array_len(n: i128, span: Span) -> Res<u64> {
         return err(span, format!("array length {n} is too big"));
     }
     Ok(n as u64)
+}
+
+/// literals, names and operators over them, with no calls: a global's initializer that's worked out at
+/// compile time even when it isn't a { } literal
+fn foldable(e: &Expr) -> bool {
+    match &e.kind {
+        ExprKind::Int(_) | ExprKind::Float(_) | ExprKind::Char(_) | ExprKind::Str(_) | ExprKind::Bool(_) | ExprKind::Null => true,
+        ExprKind::Path(_) | ExprKind::DotVariant(_) => true,
+        ExprKind::Unary(_, x) | ExprKind::Cast(x, _) | ExprKind::Field(x, _, _) => foldable(x),
+        ExprKind::Binary(_, a, b) | ExprKind::Index(a, b) => foldable(a) && foldable(b),
+        ExprKind::Tuple(xs) => xs.iter().all(foldable),
+        _ => false,
+    }
 }
