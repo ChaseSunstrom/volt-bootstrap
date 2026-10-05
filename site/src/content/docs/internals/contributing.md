@@ -24,3 +24,12 @@ sidebar:
 cargo build && cargo test
 cd voltc && VOLTC=../target/debug/voltc-bootstrap ../target/debug/bolt build bootstrap
 ```
+
+CI (`.github/workflows/ci.yml`) runs on every push to main and every pull request:
+
+- **Linux x86-64 and arm64:** the whole `cargo test`, with LLVM 23, lld and qemu installed. A build
+  that warns fails. Failing tests are listed on the run's summary page.
+- **The editor extension:** its grammar and extension tests.
+- **macOS (arm64, x86-64) and Windows (x86-64, arm64):** build the compilers, check every test
+  program with the front end, and try running a few programs. These jobs are experimental and
+  report without failing the run, since the test suite itself runs on Linux only for now.

@@ -1,0 +1,129 @@
+# Builds and tests Volt on every push to main and every pull request.
+#
+# Linux (x86-64 and arm64) runs the whole suite: both compilers, std, bolt, the language server, the
+# docs and site, interop, and bare metal under qemu. The suite itself is Linux-only for now (it
+# leans on .so files, sh scripts and GNU ld), so macOS and Windows build the compilers, check every
+# test program with the front end, and try running programs; those jobs are experimental: they
+# report without failing the run.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: never
+  LLVM_VERSION: 23
+
+jobs:
+  linux:
+    name: test (linux ${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: x86-64, os: ubuntu-24.04 }
+          - { arch: arm64, os: ubuntu-24.04-arm }
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      # LLVM and libclang for voltc's LLVM backend and C imports; clang, llvm-nm and ld.lld for the
+      # cross-compile and bare-metal tests; qemu runs the bare-metal boards
+      - name: Install LLVM, qemu and test tools
+        run: |
+          wget -q https://apt.llvm.org/llvm.sh
+          sudo bash llvm.sh "$LLVM_VERSION" all
+          sudo apt-get install -y qemu-system-arm qemu-system-misc
+          echo "/usr/lib/llvm-$LLVM_VERSION/bin" >> "$GITHUB_PATH"
+          echo "LLVM_CONFIG=/usr/lib/llvm-$LLVM_VERSION/bin/llvm-config" >> "$GITHUB_ENV"
+      - name: Build (no warnings)
+        run: |
+          cargo build 2>&1 | tee build.log
+          ! grep -q '^warning' build.log
+      - name: Test
+        run: |
+          set -o pipefail
+          cargo test --no-fail-fast 2>&1 | tee test.log
+      # what failed, as annotations on the run's summary page
+      - name: Report failures
+        if: failure()
+        run: |
+          [ -f test.log ] || exit 0
+          tests=$(grep -E '^test .* \.\.\. FAILED$' test.log | sed 's/^test //; s/ \.\.\. FAILED$//' | head -40 | paste -sd ' ')
+          [ -n "$tests" ] && echo "::error title=failed tests::$tests"
+          golden=$(grep '✗' test.log | head -30 | sed ':a;N;$!ba;s/\n/%0A/g')
+          [ -n "$golden" ] && echo "::error title=failed programs::$golden"
+          grep -n 'panicked at' test.log | head -8 | while IFS=: read -r n _; do
+            ctx=$(sed -n "${n},$((n + 12))p" test.log | sed ':a;N;$!ba;s/\n/%0A/g')
+            echo "::error title=panic::$ctx"
+          done
+          exit 0
+
+  editor:
+    name: editor (grammar and extension)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: editors/vscode
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: editors/vscode/package-lock.json
+      - run: npm ci
+      - run: npm test
+
+  portability:
+    name: build (${{ matrix.name }}, experimental)
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: macos arm64, os: macos-latest }
+          - { name: macos x86-64, os: macos-15-intel }
+          - { name: windows x86-64, os: windows-latest }
+          - { name: windows arm64, os: windows-11-arm }
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the compilers
+        run: cargo build --release --bins
+      # the front end everywhere: every test program without flags checks (the failure tests must not)
+      - name: Check the test programs
+        run: |
+          bad=0
+          for f in tests/run/*.volt; do
+            grep -q '^// flags:' "$f" && continue
+            ./target/release/voltc-bootstrap check "$f" > /dev/null 2>&1 || { echo "::error file=$f::doesn't check"; bad=1; }
+          done
+          for f in tests/fail/*.volt; do
+            ./target/release/voltc-bootstrap check "$f" > /dev/null 2>&1 && { echo "::error file=$f::checks but shouldn't"; bad=1; }
+          done
+          exit $bad
+      # compiling through C and running: not supported off Linux yet, so this step may fail
+      - name: Build and run programs (C backend)
+        continue-on-error: true
+        run: |
+          for f in tests/run/operators.volt tests/run/struct_update.volt tests/run/match_slices.volt; do
+            echo "== $f"
+            ./target/release/voltc-bootstrap run "$f"
+          done
+      - name: Golden tests (macOS)
+        if: runner.os == 'macOS'
+        continue-on-error: true
+        run: cargo test --test golden
