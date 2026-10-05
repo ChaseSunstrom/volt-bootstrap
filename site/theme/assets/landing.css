@@ -1,10 +1,10 @@
-/* The landing page (src/pages/index.astro). It is a Starlight splash page, so the frame around it is
+/* The landing page (site/theme/landing.html). It is a Starlight splash page, so the frame around it is
    the docs' own; the rules at the top undo Starlight's title panel and content width for it.
 
    Motion means current: an amber spark runs along a wire, and what it reaches comes on. On load
    (:root[data-intro]) the mark draws itself and its spark lights, then current runs from main.volt
    to the C voltc writes and on to the terminal. Below that, one trace runs from the mark's spark
-   down the page (.current, laid out by src/scripts/current.ts), and scrolling carries a spark along
+   down the page (.current, laid out by current.js), and scrolling carries a spark along
    it; what it passes gets .on. Things wait in their starting state only while :root[data-motion]
    is set, so without the script, or with reduced motion, every part shows how it ends. */
 

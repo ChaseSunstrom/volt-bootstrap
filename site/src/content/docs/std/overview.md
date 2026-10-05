@@ -39,9 +39,10 @@ Linux, macOS, FreeBSD and Windows, 64-bit, on x86-64 and ARM64, picked with
 | [`std::net`](/volt-bootstrap/std/net/) | TCP (`listen`, `connect`, streams), UDP, `resolve`, timeouts; the same on Linux, macOS, FreeBSD and Windows ([Networking](/volt-bootstrap/std/networking/)) |
 | [`std::thread`](/volt-bootstrap/std/thread/) | threads (`spawn`, `join`), `mutex<T>` and its guard, `cond`, `atomic_i64`/`atomic_bool`, `shared<T>`, `channel<T>` ([Threads](/volt-bootstrap/std/threads/)) |
 | [`std::json`](/volt-bootstrap/std/json/) | JSON values: parse, build and print ([JSON](/volt-bootstrap/std/json-data/)) |
-| [`std::base64`, `std::hex`](/volt-bootstrap/std/encoding/) | bytes as base64 (standard and URL-safe) or hex text, and back ([Encoding and hashing](/volt-bootstrap/std/encoding/)) |
+| [`std::base64`, `std::hex`](/volt-bootstrap/std/encoding/) | bytes as base64 (standard and URL-safe) or hex text, and back ([Encoding and hashing](/volt-bootstrap/std/encoding-hashing/)) |
 | [`std::digest`](/volt-bootstrap/std/digest/) | CRC-32, 64-bit FNV-1a and SHA-256 (in one call, or fed in pieces) |
 | [`std::softfloat`](/volt-bootstrap/std/softfloat/) | IEEE 754 arithmetic, comparison and conversion on the bits of `f32`s and `f64`s with integer instructions only: what [bare metal](/volt-bootstrap/voltc/bare-metal/) cores without a floating-point unit use |
+| [`std::softint`](/volt-bootstrap/std/softint/) | division, 64-bit shifts and wide multiplies from 32-bit operations, for cores without them (a Cortex-M0); [`std/bare.volt`](/volt-bootstrap/std/bare/) hands them and the rest of a bare-metal program's runtime to the compiler, in place of C's |
 | [`std::testing`](/volt-bootstrap/std/testing/) | assertions that print the values they compared (`assert_eq`, `assert_near`, ...), and `run` for a file of tests ([Tests](/volt-bootstrap/bolt/testing/)) |
 
 ## Reaching the names

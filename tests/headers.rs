@@ -18,7 +18,7 @@ fn walk(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
 fn every_source_file_has_a_header_comment() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let mut files = Vec::new();
-    for d in ["bootstrap", "voltc", "bolt", "std", "runtime", "examples", "bench"] {
+    for d in ["bootstrap", "voltc", "bolt", "std", "runtime", "examples", "bench", "site/gen"] {
         walk(&root.join(d), &mut files);
     }
     for e in std::fs::read_dir(root.join("tests")).unwrap() {

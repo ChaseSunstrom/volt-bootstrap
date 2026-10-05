@@ -16,7 +16,9 @@ sidebar:
 - **Formatting.** `bootstrap/` isn't run through rustfmt; follow the style around the code you
   change. Comments say why, in plain words.
 - **Docs.** A user-visible change updates this site (`site/src/content/docs`); its code blocks are
-  compiled by `cargo test --test docs`, and `npm run build` in `site/` checks every link.
+  compiled by `cargo test --test docs`, and `cargo test --test site` builds it and checks every
+  link. To look at it, build it into `site/dist` and serve that directory under `/volt-bootstrap/`:
+  `voltc-bootstrap run site/gen/*.volt --std std -- site site/dist`.
 
 ```sh
 cargo build && cargo test

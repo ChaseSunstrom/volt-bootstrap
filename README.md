@@ -121,7 +121,7 @@ Then `bolt new hello && cd hello && bolt run`. The
 | [`bolt/`](bolt) | the build tool, and the API its build files use |
 | [`editors/vscode/`](editors/vscode) | the VS Code extension |
 | [`interop/`](interop) | `volt-build` (Cargo build scripts) and `volt.zig` (`build.zig`): Rust and Zig projects that use Volt; `python`, `java`, `dotnet` and `lua`: Volt programs that call Python, Java, .NET and Lua; `node`: Node.js addons written in Volt |
-| [`site/`](site) | the website and documentation |
+| [`site/`](site) | the website and documentation: Markdown pages, and `site/gen`, the generator (in Volt) that builds them |
 | [`examples/`](examples), [`tests/`](tests) | the tour and example programs; the test suites |
 | [`assets/logo/`](assets/logo) | the logo, drawn by `logo.ts` |
 

@@ -1,11 +1,12 @@
-# Builds site/ (Astro + Starlight) and publishes it to GitHub Pages on every push to main.
+# Builds the site with its generator (site/gen, in Volt, compiled by the bootstrap compiler with the C
+# backend) and publishes it to GitHub Pages on every push to main.
 # In the repository's settings, Pages' source has to be "GitHub Actions".
 name: Pages
 
 on:
   push:
     branches: [main]
-    paths: ["site/**", "editors/vscode/syntaxes/**", ".github/workflows/pages.yml"]
+    paths: ["site/**", "std/**", "bootstrap/**", ".github/workflows/pages.yml"]
   workflow_dispatch:
 
 permissions:
@@ -22,15 +23,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: site/package-lock.json
-      - run: npm ci
-        working-directory: site
-      - run: npm run build
-        working-directory: site
+      - run: cargo build --release --bin voltc-bootstrap
+      - run: ./target/release/voltc-bootstrap run site/gen/*.volt --std std -- site site/dist
       - uses: actions/upload-pages-artifact@v3
         with:
           path: site/dist

@@ -38,7 +38,7 @@ under qemu.
   what `main` returns to `volt_exit`. On a Cortex-M it's also the vector table: the stack top, the
   reset entry, and the fault entries. On a Cortex-M4 and on `riscv64-none` it turns the FPU on.
 - **std**, in Volt. Printing, `box`, `vec`, `map`, `string` and the other collections, `std::math`
-  (as [`std::math::portable`](/volt-bootstrap/std/math/#in-volt-stdmathportable)), and panics all
+  (as [`std::math::portable`](/volt-bootstrap/std/math-functions/#in-volt-stdmathportable)), and panics all
   work. Memory comes from a heap between two addresses the linker script gives. What
   needs an OS (files, threads, sockets, the clock, the process's arguments) isn't there: calling it
   fails to link, naming the function.

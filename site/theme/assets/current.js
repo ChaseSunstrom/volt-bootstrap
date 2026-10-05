@@ -7,24 +7,23 @@
 // everything shows as it ends.
 const root = document.documentElement;
 const still = matchMedia("(prefers-reduced-motion: reduce)").matches;
-const landing = document.querySelector<HTMLElement>(".landing")!;
+const landing = document.querySelector(".landing");
 
-for (const out of document.querySelectorAll<HTMLElement>(".stage-out .out")) {
-  out.querySelectorAll<HTMLElement>(".line").forEach((line, i) => line.style.setProperty("--i", String(i)));
+for (const out of document.querySelectorAll(".stage-out .out")) {
+  out.querySelectorAll(".line").forEach((line, i) => line.style.setProperty("--i", String(i)));
 }
 
 // once the load sequence has run, switching backends replays only the lines
 setTimeout(() => delete root.dataset.intro, 6000);
 
-type Pt = [number, number];
 const NS = "http://www.w3.org/2000/svg";
-function add<K extends keyof SVGElementTagNameMap>(tag: K, cls: string, parent: Element) {
+function add(tag, cls, parent) {
   const e = document.createElementNS(NS, tag);
   e.setAttribute("class", cls);
   parent.append(e);
   return e;
 }
-const smooth = (t: number) => {
+const smooth = (t) => {
   t = Math.min(1, Math.max(0, t));
   return t * t * (3 - 2 * t);
 };
@@ -41,12 +40,12 @@ if (!still && "ResizeObserver" in window) {
   const spark = add("circle", "spark", svg);
   spark.setAttribute("r", "4.5");
 
-  let pts: Pt[] = [];
+  let pts       = [];
   let total = 0;
   let pageTop = 0; // the landing page's top, in the document
   let start = 0; // the hero spark's height in the document
   let end = 0; // where the trace ends: the terminal's first line
-  let stops: { el: Element; y: number; tap?: Element }[] = [];
+  let stops                                              = [];
   let cur = 0;
   let goal = 0;
   let frame = 0;
@@ -54,7 +53,7 @@ if (!still && "ResizeObserver" in window) {
 
   // the length along the trace at which it first reaches height y; a level run counts once y is
   // past it, so the spark crosses it in one go
-  function lengthAt(y: number) {
+  function lengthAt(y) {
     let len = 0;
     for (let i = 1; i < pts.length; i++) {
       const [x0, y0] = pts[i - 1];
@@ -70,7 +69,7 @@ if (!still && "ResizeObserver" in window) {
     return len;
   }
 
-  function pointAt(len: number): Pt {
+  function pointAt(len)     {
     for (let i = 1; i < pts.length; i++) {
       const [x0, y0] = pts[i - 1];
       const [x1, y1] = pts[i];
@@ -91,16 +90,16 @@ if (!still && "ResizeObserver" in window) {
     svg.setAttribute("viewBox", `0 0 ${w} ${h}`);
 
     // the trace leaves the mark's spark, runs out to the right margin, down it, and into the terminal
-    const hero = landing.querySelector<HTMLElement>(".hero")!;
+    const hero = landing.querySelector(".hero");
     const right = w - parseFloat(getComputedStyle(hero).paddingRight);
     const rail = right + Math.min(32, (w - right) / 2);
-    const mark = landing.querySelector<SVGSVGElement>(".hero-mark")!;
+    const mark = landing.querySelector(".hero-mark");
     const m = mark.getBoundingClientRect();
-    const dot = mark.querySelector("circle.spark")!;
+    const dot = mark.querySelector("circle.spark");
     const k = m.width / 100; // the mark's viewBox is 0 22 100 56
-    const sx = m.left - box.left + (+dot.getAttribute("cx")! + +dot.getAttribute("r")!) * k;
-    const sy = m.top - box.top + (+dot.getAttribute("cy")! - 22) * k;
-    const shell = landing.querySelector(".shell")!.getBoundingClientRect();
+    const sx = m.left - box.left + (+dot.getAttribute("cx")  + +dot.getAttribute("r")) * k;
+    const sy = m.top - box.top + (+dot.getAttribute("cy")  - 22) * k;
+    const shell = landing.querySelector(".shell").getBoundingClientRect();
     const ex = shell.right - box.left;
     const ey = shell.top - box.top + 30;
     const c = Math.min(14, (rail - sx) / 2);
@@ -117,7 +116,7 @@ if (!still && "ResizeObserver" in window) {
     for (const el of landing.querySelectorAll(".charge, .breakers li, .chart-row, .network, .shell")) {
       const r = el.getBoundingClientRect();
       const y = Math.min(r.top - box.top + Math.min(r.height / 2, 48), ey);
-      let tap: Element | undefined;
+      let tap;
       if (el.matches(".breakers li")) {
         tap = add("g", el.classList.contains("on") ? "tap lit" : "tap", taps);
         const line = add("line", "", tap);
@@ -161,13 +160,13 @@ if (!still && "ResizeObserver" in window) {
     spark.setAttribute("cy", y.toFixed(1));
     spark.style.opacity = cur > 3 ? "1" : "0";
     while (stops.length && stops[0].y <= y + 1) {
-      const s = stops.shift()!;
+      const s = stops.shift();
       s.el.classList.add("on");
       s.tap?.classList.add("lit");
     }
   }
 
-  function tick(t: number) {
+  function tick(t) {
     const dt = last ? Math.min(64, t - last) : 16;
     last = t;
     cur += (goal - cur) * (1 - Math.exp(-dt / 110));
