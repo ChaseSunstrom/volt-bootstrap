@@ -397,9 +397,7 @@ attach fn wrapper_field(this: checker&, b: tval&, name: str, span: span) -> comp
                 val obj = this.ir.deref(o.c, b.ty);
                 var stmts = nodes(this.ir.decl(o.id, this.ir.addr(b.c, pt)));
                 val p = this.opt_parts(b.ty, obj);
-                if (!this.opts.release) {
-                    put(&stmts, this.ir.if_(this.ir.unary(unop_ir::NOT, p.has, BOOL), this.ir.panic("unwrapped a null value", loc), null));
-                }
+                put(&stmts, this.ir.if_(this.ir.unary(unop_ir::NOT, p.has, BOOL), this.on_bad("unwrapped a null value", loc), null));
                 val it = this.t.ref_to(inner);
                 val at = this.ir.seq(move stmts, this.ir.addr(p.value, it), it);
                 var r = vnew(inner, this.ir.deref(at, inner));
@@ -410,9 +408,7 @@ attach fn wrapper_field(this: checker&, b: tval&, name: str, span: span) -> comp
             val o = this.tmp_local("o", b.ty);
             var stmts = nodes(this.ir.decl(o.id, b.c));
             val p = this.opt_parts(b.ty, o.c);
-            if (!this.opts.release) {
-                put(&stmts, this.ir.if_(this.ir.unary(unop_ir::NOT, p.has, BOOL), this.ir.panic("unwrapped a null value", loc), null));
-            }
+            put(&stmts, this.ir.if_(this.ir.unary(unop_ir::NOT, p.has, BOOL), this.on_bad("unwrapped a null value", loc), null));
             return vnew(inner, this.ir.seq(move stmts, p.value, inner));
         },
         .ERR_UNION(e, t) => {
@@ -459,9 +455,7 @@ attach fn wrapper_field(this: checker&, b: tval&, name: str, span: span) -> comp
                 val x = this.tmp_local("x", pt);
                 val obj = this.ir.deref(x.c, b.ty);
                 var stmts = nodes(this.ir.decl(x.id, this.ir.addr(b.c, pt)));
-                if (!this.opts.release) {
-                    put(&stmts, this.ir.if_(this.nonzero(this.eu_code(b.ty, obj)), this.ir.panic("unwrapped an error", loc), null));
-                }
+                put(&stmts, this.ir.if_(this.nonzero(this.eu_code(b.ty, obj)), this.on_bad("unwrapped an error", loc), null));
                 val tt = this.t.ref_to(t);
                 val at = this.ir.seq(move stmts, this.ir.addr(this.ir.field(obj, 1, t), tt), tt);
                 var r = vnew(t, this.ir.deref(at, t));
@@ -471,9 +465,7 @@ attach fn wrapper_field(this: checker&, b: tval&, name: str, span: span) -> comp
             }
             val x = this.tmp_local("x", b.ty);
             var stmts = nodes(this.ir.decl(x.id, b.c));
-            if (!this.opts.release) {
-                put(&stmts, this.ir.if_(this.nonzero(this.eu_code(b.ty, x.c)), this.ir.panic("unwrapped an error", loc), null));
-            }
+            put(&stmts, this.ir.if_(this.nonzero(this.eu_code(b.ty, x.c)), this.on_bad("unwrapped an error", loc), null));
             return vnew(t, this.ir.seq(move stmts, this.ir.field(x.c, 1, t), t));
         },
         default => { return null; },

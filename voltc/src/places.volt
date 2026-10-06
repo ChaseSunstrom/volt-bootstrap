@@ -191,7 +191,7 @@ attach fn field(this: checker&, b0: tval, name: str, span: span) -> compile_erro
                 return r;
             }
         },
-        // a variant's payload, in place; a debug build checks the value holds that variant
+        // a variant's payload, in place; checked to hold that variant (a release build traps)
         .ENUM(eid) => {
             val vi = this.variant_index(eid, name);
             if (vi) {
@@ -200,24 +200,22 @@ attach fn field(this: checker&, b0: tval, name: str, span: span) -> compile_erro
                 val pt = payload ?? return fail(span, fmt("{} has no payload", S(name)));
                 val fi = @cast<u32>(idx) + 1;
                 var r = vnew(pt, this.ir.field(obj, fi, pt));
-                if (!this.opts.release) {
-                    val msg = this.intern(fmt("reading {}'s payload, but the value is another variant", S(name)));
-                    val k = this.tag_const(eid, idx);
-                    var stmts: std::vec<u32> = {};
-                    if (lv) {
-                        val ept = this.t.intern(tyk::PTR(t));
-                        val ppt = this.t.intern(tyk::PTR(pt));
-                        val te = this.tmp_local("e", ept);
-                        val e = this.ir.deref(te.c, t);
-                        put(&stmts, this.ir.decl(te.id, this.ir.addr(obj, ept)));
-                        put(&stmts, this.ir.if_(this.ir.binary(binop_ir::NE, this.tag_of(eid, e), k, BOOL), this.ir.panic(msg, this.loc(span)), null));
-                        r.c = this.ir.deref(this.ir.seq(move stmts, this.ir.addr(this.ir.field(e, fi, pt), ppt), ppt), pt);
-                    } else {
-                        val te = this.tmp_local("e", t);
-                        put(&stmts, this.ir.decl(te.id, obj));
-                        put(&stmts, this.ir.if_(this.ir.binary(binop_ir::NE, this.tag_of(eid, te.c), k, BOOL), this.ir.panic(msg, this.loc(span)), null));
-                        r.c = this.ir.seq(move stmts, this.ir.field(te.c, fi, pt), pt);
-                    }
+                val msg = this.intern(fmt("reading {}'s payload, but the value is another variant", S(name)));
+                val k = this.tag_const(eid, idx);
+                var stmts: std::vec<u32> = {};
+                if (lv) {
+                    val ept = this.t.intern(tyk::PTR(t));
+                    val ppt = this.t.intern(tyk::PTR(pt));
+                    val te = this.tmp_local("e", ept);
+                    val e = this.ir.deref(te.c, t);
+                    put(&stmts, this.ir.decl(te.id, this.ir.addr(obj, ept)));
+                    put(&stmts, this.ir.if_(this.ir.binary(binop_ir::NE, this.tag_of(eid, e), k, BOOL), this.on_bad(msg, this.loc(span)), null));
+                    r.c = this.ir.deref(this.ir.seq(move stmts, this.ir.addr(this.ir.field(e, fi, pt), ppt), ppt), pt);
+                } else {
+                    val te = this.tmp_local("e", t);
+                    put(&stmts, this.ir.decl(te.id, obj));
+                    put(&stmts, this.ir.if_(this.ir.binary(binop_ir::NE, this.tag_of(eid, te.c), k, BOOL), this.on_bad(msg, this.loc(span)), null));
+                    r.c = this.ir.seq(move stmts, this.ir.field(te.c, fi, pt), pt);
                 }
                 r.lv = lv;
                 r.mutable = mutable;
@@ -311,6 +309,15 @@ attach fn bounds_check(this: checker&, stmts: std::vec<u32>&, bad: u32, i: u32, 
         return;
     }
     put(stmts, this.ir.if_(bad, this.ir.rt_call("volt_bounds", nodes3(i, len, this.ir.node(ir_kind::CSTR(loc), CSTR)), NEVER), null));
+}
+
+// what a failed check does: a debug build panics with msg at loc; a release build traps on the spot
+// (one instruction, no call, no message)
+attach fn on_bad(this: checker&, msg: str, loc: str) -> u32 {
+    if (this.opts.release) {
+        return this.ir.node(ir_kind::TRAP, NEVER);
+    }
+    return this.ir.panic(msg, loc);
 }
 
 // is the fn being checked @unchecked? (a global's initializer is no fn's; an async fn's body is built

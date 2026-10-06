@@ -58,7 +58,8 @@ fn main() -> void {
 `.QUIT` is short for `event::QUIT` wherever the type is already known.
 
 A variant's payload is also a field named after it, to read, change or borrow where the value is
-known to hold that variant. A debug build checks: reading it from another variant stops the program.
+known to hold that variant. It's checked: reading it from another variant stops the program (with a
+message in a debug build, a trap in a release one).
 `@discriminant(x)` says which variant `x` holds.
 
 ```volt
