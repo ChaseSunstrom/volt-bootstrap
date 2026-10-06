@@ -1,5 +1,5 @@
 // Golden tests. tests/run/*.volt and examples/*.volt: compiled and run, stdout must equal the `// expect: ` lines
-// (and exit code the `// exit: N` line, default 0; `// flags: --release` passes flags; each `// expect-stderr: ` line must be
+// (and exit code the `// exit: N` line, default 0, or one of `// exit: N|M`; `// flags: --release` passes flags; each `// expect-stderr: ` line must be
 // in stderr). tests/fail/*.volt: `voltc check` must fail with every `// error: ` substring in its stderr.
 // voltc is stage 1: voltc/src built by the bootstrap compiler.
 mod common;
@@ -33,16 +33,18 @@ fn golden() {
         count += 1;
         let src = std::fs::read_to_string(&f).unwrap();
         let want = directives(&src, "expect").join("\n");
-        let want_code: i32 = directives(&src, "exit").first().map(|s| s.trim().parse().unwrap()).unwrap_or(0);
+        // `// exit: 132|133`: any of them (a trap is SIGILL on x86-64, SIGTRAP on arm64)
+        let want_codes: Vec<i32> = directives(&src, "exit").first().map(|s| s.split('|').map(|c| c.trim().parse().unwrap()).collect()).unwrap_or(vec![0]);
         let flags: Vec<String> = directives(&src, "flags").iter().flat_map(|l| l.split_whitespace().map(String::from).collect::<Vec<_>>()).collect();
-        let out = Command::new(&bin).arg("run").arg(&f).args(&flags).output().unwrap();
+        // a program that hangs (a release build reading out of bounds can) fails instead of stopping the run
+        let out = Command::new("timeout").arg("120").arg(&bin).arg("run").arg(&f).args(&flags).output().unwrap();
         let got = String::from_utf8_lossy(&out.stdout);
         let code = out.status.code().unwrap_or(-1);
         let err = String::from_utf8_lossy(&out.stderr);
         let err_missing = directives(&src, "expect-stderr").iter().any(|w| !err.contains(w.as_str()));
-        if got.trim_end() != want.trim_end() || code != want_code || err_missing {
+        if got.trim_end() != want.trim_end() || !want_codes.contains(&code) || err_missing {
             failures.push(format!(
-                "{}: exit {code} (want {want_code})\n--- want\n{want}\n--- got\n{got}\n--- stderr\n{}",
+                "{}: exit {code} (want {want_codes:?})\n--- want\n{want}\n--- got\n{got}\n--- stderr\n{}",
                 f.display(),
                 String::from_utf8_lossy(&out.stderr)
             ));

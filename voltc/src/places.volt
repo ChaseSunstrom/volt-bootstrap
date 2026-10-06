@@ -299,14 +299,34 @@ fn parse_index(s: str) -> usize? {
     return n;
 }
 
-// if (i >= len) volt_bounds(i, len, loc)
-attach fn bounds_check(this: checker&, i: u32, len: u32, loc: str) -> u32 {
-    val big = this.ir.binary(binop_ir::GE, i, len, BOOL);
-    val call = this.ir.rt_call("volt_bounds", nodes3(i, len, this.ir.node(ir_kind::CSTR(loc), CSTR)), NEVER);
-    return this.ir.if_(big, call, null);
+// the check before b[i] (bad: i >= len) or b[lo..hi], added to stmts: a debug build calls
+// volt_bounds (the place, the index, the length); a release build traps on the spot, one compare and
+// one instruction with no call (bare metal has no hidden calls); an @unchecked fn has none
+attach fn bounds_check(this: checker&, stmts: std::vec<u32>&, bad: u32, i: u32, len: u32, loc: str) -> void {
+    if (this.fn_unchecked()) {
+        return;
+    }
+    if (this.opts.release) {
+        put(stmts, this.ir.if_(bad, this.ir.node(ir_kind::TRAP, NEVER), null));
+        return;
+    }
+    put(stmts, this.ir.if_(bad, this.ir.rt_call("volt_bounds", nodes3(i, len, this.ir.node(ir_kind::CSTR(loc), CSTR)), NEVER), null));
 }
 
-// `b[i]`, bounds-checked in debug builds for arrays, slices and strs (pointers and cstrs aren't);
+// is the fn being checked @unchecked? (a global's initializer is no fn's; an async fn's body is built
+// in its step fn, which has the fn's attributes on the fn itself)
+attach fn fn_unchecked(this: checker&) -> bool {
+    if (this.cx.body == null) {
+        return false;
+    }
+    var irf = this.cx.irf;
+    if (this.cx.frame) {
+        irf = this.fns.at(@cast<usize>(this.cx.frame)).ir;
+    }
+    return @cast<usize>(irf) < this.ir.fns.len && this.ir.fns.at(@cast<usize>(irf)).attrs.unchecked;
+}
+
+// `b[i]`, bounds-checked for arrays, slices and strs (pointers and cstrs aren't; see bounds_check);
 // `b[lo..hi]` is slice_expr
 attach fn index(this: checker&, be: expr&, ie: expr&, span: span) -> compile_error!tval {
     match (ie.kind) {
@@ -376,18 +396,14 @@ attach fn index(this: checker&, be: expr&, ie: expr&, span: span) -> compile_err
             val pt = this.t.intern(tyk::PTR(t));
             if (b.lv) {
                 put(&stmts, this.ir.decl(ti.id, this.ir.conv(i.c, USIZE)));
-                if (!this.opts.release) {
-                    put(&stmts, this.bounds_check(ti.c, this.ir.int(@cast<i128>(n), USIZE), loc));
-                }
+                this.bounds_check(&stmts, this.ir.binary(binop_ir::GE, ti.c, this.ir.int(@cast<i128>(n), USIZE), BOOL), ti.c, this.ir.int(@cast<i128>(n), USIZE), loc);
                 c = this.ir.deref(this.ir.seq(copy stmts, this.ir.addr(this.ir.index(b.c, ti.c, t), pt), pt), t);
                 lv = true;
             } else {
                 val ta = this.tmp_local("a", b.ty);
                 put(&stmts, this.ir.decl(ta.id, b.c));
                 put(&stmts, this.ir.decl(ti.id, this.ir.conv(i.c, USIZE)));
-                if (!this.opts.release) {
-                    put(&stmts, this.bounds_check(ti.c, this.ir.int(@cast<i128>(n), USIZE), loc));
-                }
+                this.bounds_check(&stmts, this.ir.binary(binop_ir::GE, ti.c, this.ir.int(@cast<i128>(n), USIZE), BOOL), ti.c, this.ir.int(@cast<i128>(n), USIZE), loc);
                 c = this.ir.seq(copy stmts, this.ir.index(ta.c, ti.c, t), t);
             }
         },
@@ -397,9 +413,7 @@ attach fn index(this: checker&, be: expr&, ie: expr&, span: span) -> compile_err
             val ts = this.tmp_local("s", b.ty);
             put(&stmts, this.ir.decl(ts.id, b.c));
             put(&stmts, this.ir.decl(ti.id, this.ir.conv(i.c, USIZE)));
-            if (!this.opts.release) {
-                put(&stmts, this.bounds_check(ti.c, this.ir.field(ts.c, 1, USIZE), loc));
-            }
+            this.bounds_check(&stmts, this.ir.binary(binop_ir::GE, ti.c, this.ir.field(ts.c, 1, USIZE), BOOL), ti.c, this.ir.field(ts.c, 1, USIZE), loc);
             val at = this.ir.index(this.ir.field(ts.c, 0, pt), ti.c, t);
             c = this.ir.deref(this.ir.seq(copy stmts, this.ir.addr(at, pt), pt), t);
             lv = true;
@@ -410,9 +424,7 @@ attach fn index(this: checker&, be: expr&, ie: expr&, span: span) -> compile_err
             val ts = this.tmp_local("s", STR);
             put(&stmts, this.ir.decl(ts.id, b.c));
             put(&stmts, this.ir.decl(ti.id, this.ir.conv(i.c, USIZE)));
-            if (!this.opts.release) {
-                put(&stmts, this.bounds_check(ti.c, this.ir.field(ts.c, 1, USIZE), loc));
-            }
+            this.bounds_check(&stmts, this.ir.binary(binop_ir::GE, ti.c, this.ir.field(ts.c, 1, USIZE), BOOL), ti.c, this.ir.field(ts.c, 1, USIZE), loc);
             c = this.ir.seq(copy stmts, this.ir.index(this.ir.field(ts.c, 0, pt), ti.c, U8), U8);
         },
         .CSTR => {
@@ -523,11 +535,8 @@ attach fn slice_expr(this: checker&, be: expr&, lo: expr*, hi: expr*, incl: bool
     }
     put(&stmts, this.ir.decl(tlo.id, lo_c));
     put(&stmts, this.ir.decl(thi.id, hi_c));
-    if (!this.opts.release) {
-        val bad = this.ir.binary(binop_ir::OR, this.ir.binary(binop_ir::GT, tlo.c, thi.c, BOOL), this.ir.binary(binop_ir::GT, thi.c, len, BOOL), BOOL);
-        val call = this.ir.rt_call("volt_bounds", nodes3(thi.c, len, this.ir.node(ir_kind::CSTR(this.loc(span)), CSTR)), NEVER);
-        put(&stmts, this.ir.if_(bad, call, null));
-    }
+    val bad = this.ir.binary(binop_ir::OR, this.ir.binary(binop_ir::GT, tlo.c, thi.c, BOOL), this.ir.binary(binop_ir::GT, thi.c, len, BOOL), BOOL);
+    this.bounds_check(&stmts, bad, thi.c, len, this.loc(span));
     val pt = this.t.intern(tyk::PTR(elem));
     var inits: std::vec<field_init> = {};
     put(&inits, { field: 0, value: this.ir.binary(binop_ir::ADD, base, tlo.c, pt) });

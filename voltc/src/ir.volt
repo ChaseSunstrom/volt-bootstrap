@@ -78,6 +78,7 @@ enum ir_kind {
     RETURN: u32?,
     BLOCK: std::vec<u32>,
     UNREACHABLE,
+    TRAP,           // stop the program here: one trap instruction, no call and no message
     AT: (u32, u32), // the next statement's place in the source (file, line): #line, for --profiler
 }
 
@@ -104,6 +105,7 @@ struct fn_attrs {
     section: str? = null;
     align: str? = null;
     deprecated: bool = false;
+    unchecked: bool = false; // @unchecked: no bounds checks in its body
 }
 
 struct ir_fn {

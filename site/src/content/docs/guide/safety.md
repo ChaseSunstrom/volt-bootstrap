@@ -35,8 +35,12 @@ The message names the place: `app.volt:7:22: panic: index 3 out of bounds (len 3
 ## Release builds
 
 `--release` (bolt: `--release` or a profile with `optimize = true`) builds with optimization and
-without these checks: integer arithmetic wraps, a shift by at least the type's width shifts by the
-amount modulo the width, and indexing isn't checked. Code that wants
+without most of these checks: integer arithmetic wraps, and a shift by at least the type's width
+shifts by the amount modulo the width. Indexing and slicing stay checked, as one compare and a trap
+instruction: no call and no message, so a bare-metal build still makes no hidden calls. A bad index
+stops the program with a signal (SIGILL on x86-64), and output still buffered is lost, as with C's
+`abort`; run the debug build to see where. A function with `@attributes([@unchecked])` has no bounds
+checks in its body, for a hot loop known to stay in range. Code that wants
 wrapping in every mode uses `+%`, `-%` and `*%`.
 
 ## Leaks

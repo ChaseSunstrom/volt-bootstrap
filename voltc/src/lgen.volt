@@ -1996,6 +1996,18 @@ attach fn stmt(this: lg&, n: u32) -> void {
             llvm::LLVMBuildUnreachable(this.b);
             this.dead();
         },
+        .TRAP => {
+            // llvm.trap is an instruction (ud2, udf, unimp), not a call
+            val name = "llvm.trap";
+            val id = llvm::LLVMLookupIntrinsicID(this.z(name), name.len);
+            var tys: std::vec<llvm::LLVMOpaqueType*> = {};
+            val fv = llvm::LLVMGetIntrinsicDeclaration(this.m, id, tys.ptr, 0);
+            val fty = llvm::LLVMIntrinsicGetType(this.ctx, id, tys.ptr, 0);
+            var args: std::vec<llvm::LLVMOpaqueValue*> = {};
+            llvm::LLVMBuildCall2(this.b, fty, fv, args.ptr, 0, "");
+            llvm::LLVMBuildUnreachable(this.b);
+            this.dead();
+        },
         .AT(f, l) => { this.di_at(f, l); },
         default => { this.rv(n); },
     }

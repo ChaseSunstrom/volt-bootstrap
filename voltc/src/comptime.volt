@@ -3615,6 +3615,7 @@ fn attr_defs() -> std::vec<attr_def> {
     var v: std::vec<attr_def> = {};
     put(&v, { name: "inline", args: 0 });
     put(&v, { name: "noinline", args: 0 });
+    put(&v, { name: "unchecked", args: 0 }); // a fn without bounds checks in its body
     put(&v, { name: "opt", args: 1 });
     put(&v, { name: "section", args: 1 });
     put(&v, { name: "align", args: 1 });
@@ -3843,6 +3844,8 @@ attach fn fn_attrs_of(this: checker&, attrs: std::vec<expr>&) -> fn_attrs {
                     r.align = arg ?? "";
                 } else if (n == "deprecated") {
                     r.deprecated = true;
+                } else if (n == "unchecked") {
+                    r.unchecked = true;
                 }
             },
             default => {},

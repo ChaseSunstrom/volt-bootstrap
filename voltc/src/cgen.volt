@@ -1620,6 +1620,10 @@ attach fn stmt(this: cgen&, out: std::string&, n: u32) -> void {
             this.nl(out);
             out.append("__builtin_unreachable();");
         },
+        .TRAP => {
+            this.nl(out);
+            out.append("__builtin_trap();");
+        },
         .AT(f, l) => {
             // the directive itself goes before each statement after this (not inside a ({ ... }),
             // which is written on one line)

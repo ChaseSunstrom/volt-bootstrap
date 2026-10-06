@@ -229,9 +229,18 @@ fn golden(stage: str, std_dir: str, backend: str) -> i32 {
         val want = expected(src.as_str());
         var exits: std::vec<str> = {};
         directives(src.as_str(), "exit", &exits);
-        var want_code: i32 = 0;
+        // `// exit: N|M`: any of them (a trap is SIGILL on x86-64, SIGTRAP on arm64)
+        var want_text = "0";
         if (exits.len > 0) {
-            want_code = parse_int(*exits.at(0));
+            want_text = *exits.at(0);
+        }
+        var want_codes: std::vec<i32> = {};
+        var from: usize = 0;
+        for (i) in 0..want_text.len + 1 {
+            if (i == want_text.len || want_text[i] == 124) {
+                want_codes.push(parse_int(want_text[from..i])) catch @panic("out of memory");
+                from = i + 1;
+            }
         }
         var flags: std::vec<str> = {};
         directives(src.as_str(), "flags", &flags);
@@ -262,8 +271,14 @@ fn golden(stage: str, std_dir: str, backend: str) -> i32 {
             }
         }
         val r = std::process::capture(argv.items(), "") catch |e| die(std::string::from("can't run a test"));
-        if (trim_end(r.out.as_str()) != trim_end(want.as_str()) || r.code != want_code) {
-            std::eprintln("FAIL {}: exit {} (want {})\n--- want\n{}\n--- got\n{}\n--- stderr\n{}", f, r.code, want_code, want, r.out, r.err);
+        var code_ok = false;
+        for (c) in want_codes.items() {
+            if (c == r.code) {
+                code_ok = true;
+            }
+        }
+        if (trim_end(r.out.as_str()) != trim_end(want.as_str()) || !code_ok) {
+            std::eprintln("FAIL {}: exit {} (want {})\n--- want\n{}\n--- got\n{}\n--- stderr\n{}", f, r.code, want_text, want, r.out, r.err);
             failed += 1;
         }
     }
