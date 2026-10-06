@@ -5,4 +5,4 @@ fn main() -> void {
     val a: r = { x: 1 };
     for (i) in 0..3 { eat(a); }
 }
-// error: can't move 'a' inside a loop
+// error: 'a' is moved inside a loop and has no new value before the next pass

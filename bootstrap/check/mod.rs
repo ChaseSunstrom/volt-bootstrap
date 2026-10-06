@@ -169,6 +169,7 @@ pub struct LoopCx {
     pub has_break: bool,
     pub depth: usize,                                      // scope depth outside the loop
     pub moved_at_break: std::collections::HashSet<String>, // moved when some break left the loop
+    pub moved_at_entry: std::collections::HashSet<String>, // moved before the loop began
 }
 
 /// the state of the fn instance being checked; replaced for each instance (and swapped out while a
@@ -186,9 +187,7 @@ pub struct FnCx {
     /// view into one (`f().as_str()`, `f().items()`) stays valid. None where they're deleted at once
     pub keep_temps: Option<Vec<(String, TyId, String)>>,
     pub keep_scope: usize, // the scope whose exits delete them (early exits included)
-    pub exiting: u32,                              // inside a return/break value
     pub dead: u32,                                 // in statements after one that always leaves
-    pub reassigning: Option<String>,               // `x = f(move x)`: x gets a new value right away
     pub frame: Option<usize>,                      // generating this async fn's step function
     pub suspends: Vec<Span>,                       // suspend points so far (state n = index + 1)
     pub no_suspend: u32,                           // inside code where suspend can't go (defers)
@@ -209,9 +208,7 @@ impl FnCx {
             move_sites: Default::default(),
             keep_temps: None,
             keep_scope: 0,
-            exiting: 0,
             dead: 0,
-            reassigning: None,
             frame: None,
             suspends: Vec::new(),
             no_suspend: 0,

@@ -338,10 +338,7 @@ impl Checker {
         let val = match v {
             Some(e) => {
                 self.escapes(e, ret)?;
-                self.cx.exiting += 1;
-                let r = self.expr(e, Some(ret)).and_then(|v| self.take_into(v, ret, e.span));
-                self.cx.exiting -= 1;
-                let r = r?;
+                let r = self.expr(e, Some(ret)).and_then(|v| self.take_into(v, ret, e.span))?;
                 self.note_return(&r);
                 Some(r)
             }
@@ -435,10 +432,7 @@ impl Checker {
             if self.cx.loops[li].result.is_none() {
                 return err(e.span, "only loop and labeled blocks can break with a value");
             }
-            self.cx.exiting += 1;
-            let got = self.expr(e, self.cx.loops[li].break_ty).and_then(|v| self.take(v, e.span));
-            self.cx.exiting -= 1;
-            let got = got?;
+            let got = self.expr(e, self.cx.loops[li].break_ty).and_then(|v| self.take(v, e.span))?;
             // a value that leaves first (break :l return x, an if value's arm that's continue) never
             // gets to break: it gives the block no value and no type
             if got.ty == NEVER {
@@ -476,6 +470,7 @@ impl Checker {
     /// `continue`: run the exits of the scopes it leaves, then jump to the loop's next round
     pub fn cont(&mut self, label: Option<&str>, span: Span) -> Res<Val> {
         let li = self.find_loop(label, true, span)?;
+        self.back_edge(li)?;
         let top = self.cx.scopes.len() - 1;
         let depth = self.cx.loops[li].depth;
         let defers = if top >= depth { self.scope_exit_code(top, depth, false)? } else { String::new() };
@@ -483,6 +478,23 @@ impl Checker {
     }
 
     // ---------- control flow ----------
+
+    /// Where a loop goes around again (the end of its body, a continue): a variable from outside the loop
+    /// that this pass moved needs a new value by then, or the next pass would use it after it's gone
+    fn back_edge(&self, li: usize) -> Res<()> {
+        if self.cx.dead > 0 {
+            return Ok(());
+        }
+        let outer = self.cx.loops[..=li].iter().filter(|l| !l.is_block).count();
+        let entry = &self.cx.loops[li].moved_at_entry;
+        let gone = self.cx.scopes.iter().flat_map(|s| s.vars.iter()).filter(|(_, l)| l.loops < outer && self.cx.moved.contains(&l.c) && !entry.contains(&l.c));
+        // the first move in the source, so the message doesn't depend on the order of a hash map
+        let first = gone.filter_map(|(n, l)| self.cx.move_sites.get(&l.c).map(|s| (*s, n))).min_by_key(|(s, n)| (s.file, s.lo, (*n).clone()));
+        match first {
+            Some((at, name)) => err(at, format!("'{name}' is moved inside a loop and has no new value before the next pass; give it one before the loop goes around, or move it after the loop")),
+            None => Ok(()),
+        }
+    }
 
     /// start a loop or labeled block: its labels, and a result variable when it can break with a value
     fn push_loop(&mut self, label: Option<&str>, is_block: bool, value: bool, want: Option<TyId>) -> usize {
@@ -497,6 +509,7 @@ impl Checker {
             has_break: false,
             depth: self.cx.scopes.len(),
             moved_at_break: Default::default(),
+            moved_at_entry: self.cx.moved.clone(),
         };
         self.cx.loops.push(lc);
         self.cx.loops.len() - 1
@@ -550,8 +563,8 @@ impl Checker {
     pub fn loop_expr(&mut self, label: Option<&str>, b: &Block, want: Option<TyId>, span: Span) -> Res<Val> {
         let li = self.push_loop(label, false, true, want);
         let cont = self.cx.loops[li].cont.clone().unwrap();
-        match self.block_code(b) {
-            Ok((body, _)) => self.finish_loop(format!("for (;;) {{ {body} {cont}:; }}"), true, span, false),
+        match self.block_code(b).and_then(|(body, div)| if div { Ok(body) } else { self.back_edge(li).map(|_| body) }) {
+            Ok(body) => self.finish_loop(format!("for (;;) {{ {body} {cont}:; }}"), true, span, false),
             Err(e) => {
                 self.cx.loops.pop();
                 Err(e)
@@ -583,7 +596,10 @@ impl Checker {
                 let w = self.tmp("wc");
                 format!("bool {w} = ({test}); {drops}if (!{w}) break;")
             };
-            let (body, _) = self.narrowed(narrow, |c| c.block_code(b))?;
+            let (body, div) = self.narrowed(narrow, |c| c.block_code(b))?;
+            if !div {
+                self.back_edge(li)?;
+            }
             Ok(format!("for (;;) {{ {test} {body} {cont}:; }}"))
         })();
         match r {
@@ -861,7 +877,10 @@ impl Checker {
                     let (c, flag) = self.owned_local(name, v.ty, false)?;
                     binds.push_str(&format!(" {};{flag}", Self::decl(&mt, &c, &v.c)));
                 }
-                let (body, _) = self.block_code(&f.body)?;
+                let (body, div) = self.block_code(&f.body)?;
+                if !div {
+                    self.back_edge(li)?;
+                }
                 // the round's owned bindings, deleted on the way to the next round (break and continue
                 // delete them themselves)
                 let round = self.cx.scopes.len() - 1;

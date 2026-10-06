@@ -690,7 +690,30 @@ attach fn assign(this: checker&, op: binop?, le: expr&, re: expr&, span: span) -
         },
         default => {},
     }
-    val l = try this.expr(le, null);
+    // `x = ...` gives a moved local a new value: naming it as the place isn't a use of what's gone
+    // (the right side still can't read it)
+    var revive: u32? = null;
+    if (op == null) {
+        match (le.kind) {
+            .PATH(p) => {
+                if (p.is_single()) {
+                    val lo = this.lookup_local(p.segs.at(0).name);
+                    if (lo != null && this.cx.moved.has((lo ?? { c: 0, ty: 0, mutable: false }).c)) {
+                        revive = (lo ?? { c: 0, ty: 0, mutable: false }).c;
+                    }
+                }
+            },
+            default => {},
+        }
+    }
+    if (revive) {
+        this.cx.moved.remove(revive);
+    }
+    val lr = this.expr(le, null);
+    if (revive) {
+        this.cx.moved.add(revive);
+    }
+    val l = try lr;
     if (!l.lv) {
         return fails(le.span, "can't assign to this; it's a temporary value");
     }
@@ -725,24 +748,9 @@ attach fn assign(this: checker&, op: binop?, le: expr&, re: expr&, span: span) -
                 return this.store(l, r, re.span);
             }
         }
-        // `x = f(move x)` may move x even inside a loop: it gets a new value right away
-        var target: u32? = null;
-        if (l.owner) {
-            val ol = this.lookup_local(l.owner);
-            if (ol) {
-                target = (ol).c;
-            }
-        }
-        val saved = this.cx.reassigning;
-        this.cx.reassigning = target;
-        val rr = this.expr(re, l.ty) catch |e| {
-            this.cx.reassigning = saved;
-            return copy e;
-        };
+        val rr = try this.expr(re, l.ty);
         this.note_store(&l, &rr);
-        val res = this.store(l, rr, re.span);
-        this.cx.reassigning = saved;
-        return res;
+        return this.store(l, rr, re.span);
     }
     val bop = op ?? binop::ADD;
     val by_op = try this.op_assign(bop, l, re, span);
@@ -1121,20 +1129,7 @@ attach fn op_assign(this: checker&, op: binop, l: tval, re: expr&, span: span) -
     var args: std::vec<expr> = {};
     put(&args, copy *re);
     // x += y may move x into the operator even inside a loop: it gets the result right away
-    var target: u32? = null;
-    if (l.owner) {
-        val ol = this.lookup_local(l.owner);
-        if (ol) {
-            target = (ol).c;
-        }
-    }
-    val saved = this.cx.reassigning;
-    this.cx.reassigning = target;
-    var v = this.op_pick(name, &cands, cur, b, &args, l.ty, span, &pre, &post) catch |e| {
-        this.cx.reassigning = saved;
-        return copy e;
-    };
-    this.cx.reassigning = saved;
+    var v = try this.op_pick(name, &cands, cur, b, &args, l.ty, span, &pre, &post);
     if (post) {
         v.c = this.after_lend({}, post, v.c, v.ty);
         v.pure = false;

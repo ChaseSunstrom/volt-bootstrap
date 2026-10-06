@@ -633,14 +633,8 @@ attach fn ret(this: checker&, v: expr*, span: span) -> compile_error!tval {
     if (v) {
         val e = v;
         try this.escapes(e, rt);
-        this.cx.exiting += 1;
-        val x = this.expr(e, rt) catch |er| {
-            this.cx.exiting -= 1;
-            return copy er;
-        };
-        val r = this.take_into(x, rt, e.span);
-        this.cx.exiting -= 1;
-        val rv = try r;
+        val x = try this.expr(e, rt);
+        val rv = try this.take_into(x, rt, e.span);
         this.note_return(&rv);
         value = rv;
     } else if (rt == VOID) {
@@ -707,14 +701,8 @@ attach fn brk(this: checker&, label: str?, v: expr*, span: span) -> compile_erro
         if (!this.cx.loops.at(li).can_value) {
             return fails(e.span, "only loop and labeled blocks can break with a value");
         }
-        this.cx.exiting += 1;
-        val g = this.expr(e, this.cx.loops.at(li).break_ty) catch |er| {
-            this.cx.exiting -= 1;
-            return copy er;
-        };
-        val got = this.take(g, e.span);
-        this.cx.exiting -= 1;
-        var value = try got;
+        val g = try this.expr(e, this.cx.loops.at(li).break_ty);
+        var value = try this.take(g, e.span);
         // a value that leaves first (break :l return x, an if value's arm that's continue) never gets
         // to break: it gives the block no value and no type
         if (value.ty == NEVER) {
@@ -767,6 +755,7 @@ attach fn loop_result(this: checker&, li: usize) -> u32 {
 // `continue`: run the exits of the scopes it leaves, then jump to the loop's next round
 attach fn cont(this: checker&, label: str?, span: span) -> compile_error!tval {
     val li = try this.find_loop(label, true, span);
+    try this.back_edge(li);
     val top = this.cx.scopes.len - 1;
     val depth = this.cx.loops.at(li).depth;
     var stmts: std::vec<u32> = {};
@@ -781,6 +770,38 @@ attach fn cont(this: checker&, label: str?, span: span) -> compile_error!tval {
 
 // ---------- control flow ----------
 
+// Where a loop goes around again (the end of its body, a continue): a variable from outside the loop
+// that this pass moved needs a new value by then, or the next pass would use it after it's gone
+attach fn back_edge(this: checker&, li: usize) -> compile_error!void {
+    if (this.cx.dead > 0) {
+        return;
+    }
+    var outer: usize = 0;
+    for (k) in 0..li + 1 {
+        if (!this.cx.loops.at(k).is_block) {
+            outer += 1;
+        }
+    }
+    // the first move in the source, so the message doesn't depend on the order of a hash map
+    var first: span? = null;
+    var who = S("");
+    for (s&) in this.cx.scopes.items() {
+        for (e) in s.vars.iter() {
+            val c = e.value->c;
+            if (e.value->loops < outer && this.cx.moved.has(c) && !this.cx.loops.at(li).moved_at_entry.has(c)) {
+                val at = *(this.cx.move_sites.get(c) ?? continue);
+                val f = first ?? at;
+                if (first == null || at.file < f.file || (at.file == f.file && (at.lo < f.lo || (at.lo == f.lo && (*e.key).cmp(who.as_str()) < 0)))) {
+                    first = at;
+                    who = S(*e.key);
+                }
+            }
+        }
+    }
+    val at = first ?? return;
+    return fail(at, fmt("'{}' is moved inside a loop and has no new value before the next pass; give it one before the loop goes around, or move it after the loop", copy who));
+}
+
 // start a loop or labeled block: its labels; the result local comes later (loop_result)
 attach fn push_loop(this: checker&, label: str?, is_block: bool, value: bool, want: u32?) -> usize {
     this.cx.next_id += 1;
@@ -792,7 +813,7 @@ attach fn push_loop(this: checker&, label: str?, is_block: bool, value: bool, wa
     if (value) {
         bt = want;
     }
-    put(&this.cx.loops, { label: label, is_block: is_block, brk: this.ir.label(), cont: cont, result: null, break_ty: bt, can_value: value, depth: this.cx.scopes.len });
+    put(&this.cx.loops, { label: label, is_block: is_block, brk: this.ir.label(), cont: cont, result: null, break_ty: bt, can_value: value, depth: this.cx.scopes.len, moved_at_entry: copy this.cx.moved });
     return this.cx.loops.len - 1;
 }
 
@@ -856,6 +877,12 @@ attach fn loop_expr(this: checker&, label: str?, b: block&, want: u32?, span: sp
         this.cx.loops.pop();
         return copy e;
     };
+    if (!bc.div) {
+        this.back_edge(li) catch |e| {
+            this.cx.loops.pop();
+            return copy e;
+        };
+    }
     val body = this.ir.block(nodes2(bc.c, this.ir.label_at(cont)));
     return this.finish_loop(nodes(this.ir.node(ir_kind::LOOP(body), VOID)), true, span, false);
 }
@@ -882,6 +909,12 @@ attach fn while_expr(this: checker&, label: str?, c: expr&, b: block&, span: spa
         this.cx.loops.pop();
         return copy e;
     };
+    if (!bc.div) {
+        this.back_edge(li) catch |e| {
+            this.cx.loops.pop();
+            return copy e;
+        };
+    }
     var test = cd.test;
     var round: std::vec<u32> = {};
     if (drops.len > 0) {
@@ -1318,6 +1351,9 @@ attach fn for_body(this: checker&, f: for_loop&, elem_ty: u32, elem: u32, index:
         }
     }
     val bc = try this.block_code(&f.body);
+    if (!bc.div) {
+        try this.back_edge(this.cx.loops.len - 1);
+    }
     put(&out, bc.c);
     // the round's owned bindings, deleted on the way to the next round (break and continue delete
     // them themselves)

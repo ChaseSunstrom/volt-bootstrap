@@ -45,7 +45,7 @@ it exits with code 102.
 
 ## What the compiler checks
 
-Some mistakes never compile: using a moved value, moving inside a loop, copying a type with a
-`delete` hook but no `copy` hook, a `match` that misses a case, a null `T&`, an unhandled `E!T`
-(it has to be `try`'d, `catch`'d or kept as a value), and format strings that don't match their
-arguments.
+Some mistakes never compile: using a moved value, moving inside a loop without a new value before
+the next pass, copying a type with a `delete` hook but no `copy` hook, a `match` that misses a case,
+a null `T&`, an unhandled `E!T` (it has to be `try`'d, `catch`'d or kept as a value), and format
+strings that don't match their arguments.

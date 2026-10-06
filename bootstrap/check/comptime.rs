@@ -2021,6 +2021,7 @@ impl Checker {
                 has_break: false,
                 depth: self.cx.scopes.len(),
                 moved_at_break: Default::default(),
+                moved_at_entry: self.cx.moved.clone(),
             });
             self.cx.loops.len() - 1
         };

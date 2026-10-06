@@ -470,10 +470,7 @@ attach fn take(this: checker&, v: tval, span: span) -> compile_error!tval {
     }
     val name = v.owner ?? return fail(span, fmt("can't move a {} out of a field, element or reference; copy it instead: copy x", this.ty_name(v.ty)));
     val l = this.lookup_local(name) ?? return fails(span, "");
-    val loops_now = this.loops_around();
-    if (l.loops < loops_now && this.cx.exiting == 0 && !(this.cx.reassigning != null && (this.cx.reassigning ?? 0) == l.c)) {
-        return fail(span, fmt("can't move '{}' inside a loop (the next time around it would already be gone); move it before the loop, or return/break right after", S(name)));
-    }
+    // inside a loop it needs a new value before the next pass: checked where the loop goes around
     this.cx.moved.add(l.c);
     this.cx.move_sites.put(l.c, span);
     val flag = l.flag ?? return fails(span, "");

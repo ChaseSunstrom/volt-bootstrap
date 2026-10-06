@@ -192,6 +192,7 @@ struct loop_cx {
     has_break: bool = false;
     depth: usize;         // scope depth outside the loop
     moved_at_break: idset = {}; // moved when some break left the loop
+    moved_at_entry: idset = {}; // moved before the loop began
     can_value: bool = false;    // a break may give a value (loop, labeled block)
     result_id: u32 = 0;         // the local holding it
 }
@@ -213,9 +214,7 @@ struct fn_cx {
     keeping: bool = false;
     kept: std::vec<kept_temp> = {};
     keep_scope: usize = 0; // the scope whose exits delete them (early exits included)
-    exiting: u32 = 0;          // inside a return/break value
     dead: u32 = 0;             // in statements after one that always leaves
-    reassigning: u32? = null;  // `x = f(move x)`: x gets a new value right away
     frame: u32? = null;        // generating this async fn's step function
     frame_ptr: u32 = 0;        // its frame pointer (a place)
     suspends: std::vec<span> = {};

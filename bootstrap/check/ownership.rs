@@ -368,10 +368,7 @@ impl Checker {
             return err(span, format!("can't move a {} out of a field, element or reference; copy it instead: copy x", self.ty_name(v.ty)));
         };
         let l = self.lookup_local(&name).unwrap();
-        let loops_now = self.cx.loops.iter().filter(|l| !l.is_block).count();
-        if l.loops < loops_now && self.cx.exiting == 0 && self.cx.reassigning.as_deref() != Some(l.c.as_str()) {
-            return err(span, format!("can't move '{name}' inside a loop (the next time around it would already be gone); move it before the loop, or return/break right after"));
-        }
+        // inside a loop it needs a new value before the next pass: checked where the loop goes around
         self.cx.moved.insert(l.c.clone());
         self.cx.move_sites.insert(l.c.clone(), span);
         let flag = l.flag.unwrap();

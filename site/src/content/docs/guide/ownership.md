@@ -100,8 +100,9 @@ fn main() -> void {
 // error: 'v' was moved earlier
 ```
 
-Moving inside a loop is also an error (the second time around there'd be nothing to move). Values
-that own nothing, like numbers and plain structs, are copied instead of moved.
+A variable moved inside a loop needs a new value before the loop goes around, or the next pass
+would find nothing there: `val c = move a; a = move b; b = c;` is fine in a loop, `eat(move a);` on its
+own is an error. Values that own nothing, like numbers and plain structs, are copied instead of moved.
 
 To lend a value without giving it up, pass a reference:
 

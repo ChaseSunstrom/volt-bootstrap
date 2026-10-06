@@ -397,7 +397,20 @@ impl Checker {
                 return self.ct_assign(op, &p.segs[0].name, re, span);
             }
         }
-        let l = self.expr(le, None)?;
+        // `x = ...` gives a moved local a new value: naming it as the place isn't a use of what's gone
+        // (the right side still can't read it)
+        let revive = match (&op, &le.kind) {
+            (None, ExprKind::Path(p)) if p.is_single() => self.lookup_local(&p.segs[0].name).map(|l| l.c).filter(|c| self.cx.moved.contains(c)),
+            _ => None,
+        };
+        if let Some(c) = &revive {
+            self.cx.moved.remove(c);
+        }
+        let l = self.expr(le, None);
+        if let Some(c) = revive {
+            self.cx.moved.insert(c);
+        }
+        let l = l?;
         if !l.lv {
             return err(le.span, "can't assign to this; it's a temporary value");
         }
@@ -422,9 +435,6 @@ impl Checker {
                 }
                 return self.store(l, r, re.span);
             }
-            // `x = f(move x)` may move x even inside a loop: it gets a new value right away
-            let target = l.owner.as_ref().and_then(|n| self.lookup_local(n)).map(|x| x.c);
-            let saved = std::mem::replace(&mut self.cx.reassigning, target);
             // a local, or a field of one: nothing in the value can move its address (a longer chain
             // may read through a reference field the value's calls reassign)
             let fixed = l.pure
@@ -442,7 +452,6 @@ impl Checker {
                 let r = self.take_into(r, l.ty, re.span)?;
                 Ok(Val::stmt(format!("({{ {} _v = {}; {} = _v; }})", self.cty(l.ty), r.c, l.c)))
             });
-            self.cx.reassigning = saved;
             return r;
         };
         if let Some(v) = self.op_assign(op, l.clone(), re, span)? {
@@ -668,12 +677,7 @@ impl Checker {
         };
         let b = self.expr(re, Some(l.ty))?;
         let mut post = String::new();
-        // `x += y` may move x into the operator even inside a loop: it gets the result right away
-        let target = l.owner.as_ref().and_then(|n| self.lookup_local(n)).map(|x| x.c);
-        let saved = std::mem::replace(&mut self.cx.reassigning, target);
-        let v = self.op_pick(&name, &cands, cur.clone(), b, re, Some(l.ty), span, &mut pre, &mut post);
-        self.cx.reassigning = saved;
-        let v = v?;
+        let v = self.op_pick(&name, &cands, cur.clone(), b, re, Some(l.ty), span, &mut pre, &mut post)?;
         let v = if post.is_empty() { v } else { Val { c: self.after_lend("", &post, &v), pure: false, ..v } };
         self.note_store(&cur, &v);
         let st = self.store(cur, v, span)?;
