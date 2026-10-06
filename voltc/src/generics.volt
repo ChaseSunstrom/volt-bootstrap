@@ -1893,6 +1893,10 @@ attach fn member_path(this: checker&, p: path&) -> compile_error!(member?) {
     val prefix: path = { segs: move segs, span: p.span };
     val e = this.cx.env;
     val t = this.resolve_type_path(&prefix, e) catch |x| {
+        // a type alias that can't be worked out (its comptime fn fails, say): that's the error
+        if (this.names_alias(&prefix, e)) {
+            return copy x;
+        }
         val family = this.pattern_family(&prefix, this.env_at(e).ns);
         if (family) {
             try this.visible(family, p.span); // an internal type of another package: say so, not "unknown name"
@@ -1900,6 +1904,29 @@ attach fn member_path(this: checker&, p: path&) -> compile_error!(member?) {
         return this.generic_enum_member(&prefix, p.last(), e);
     };
     return member::OF(t, p.last());
+}
+
+// whether p names a type alias
+attach fn names_alias(this: checker&, p: path&, e: u32) -> bool {
+    val ns = this.env_at(e).ns;
+    var f: found? = null;
+    if (p.segs.len == 1) {
+        f = this.lookup(ns, p.segs.at(0).name);
+    } else {
+        f = this.lookup_path_ns(ns, p);
+    }
+    match (f ?? found::NS(0)) {
+        .DECLS(l) => {
+            for (d&) in this.list(l).items() {
+                match (this.item_of(*d).kind) {
+                    .ALIAS(n, t) => { return true; },
+                    default => {},
+                }
+            }
+        },
+        default => {},
+    }
+    return false;
 }
 
 // a generic enum written without its args: generic_enum::VALUE(1)
