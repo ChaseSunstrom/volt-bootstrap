@@ -16,6 +16,7 @@ public attach fn new_in(static this: std::heap<T>, allocator: A) -> std::heap<T,
 
 // room for n elements without growing
 <T: type, A: std::mem::allocator>
+@attributes([@invalidates])
 public attach fn reserve(this: std::heap<T, A>&, n: usize) -> std::mem::mem_error!void {
     return this.items.reserve(n);
 }
@@ -34,6 +35,7 @@ public attach fn peek(this: std::heap<T, A>&) -> T* {
 
 // add value
 <T: type, A: std::mem::allocator>
+@attributes([@invalidates])
 public attach fn push(this: std::heap<T, A>&, value: T) -> void {
     this.items.push(move value) catch @panic("out of memory");
     val xs = this.items.items();
@@ -54,6 +56,7 @@ public attach fn push(this: std::heap<T, A>&, value: T) -> void {
 
 // the smallest element, moved out
 <T: type, A: std::mem::allocator>
+@attributes([@invalidates])
 public attach fn pop(this: std::heap<T, A>&) -> T? {
     val last = this.items.pop() ?? return null;
     val xs = this.items.items();
@@ -85,6 +88,7 @@ public attach fn pop(this: std::heap<T, A>&) -> T? {
 
 // delete every element
 <T: type, A: std::mem::allocator>
+@attributes([@invalidates])
 public attach fn clear(this: std::heap<T, A>&) -> void {
     this.items.clear();
 }

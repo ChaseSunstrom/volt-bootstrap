@@ -1595,6 +1595,23 @@ attach fn emit_call(this: checker&, inst: u32, a: adj, rv: tval?, pre: std::vec<
     }
     this.use_fn(inst);
     this.warn_deprecated(inst, span);
+    // the borrow warnings: the container a by-reference receiver is, when it's a whole local (a
+    // container, or a reference to one); a field's isn't told apart from its struct's other fields,
+    // so it's left out
+    var lent: u32? = null;
+    if (rv) {
+        val r = rv;
+        var by_ref = false;
+        match (a) {
+            .REF => { by_ref = true; },
+            .NONE => { by_ref = this.t.ref_inner(r.ty) != null; },
+            default => {},
+        }
+        if (by_ref && r.own != null && r.c == (r.own ?? 0)) {
+            lent = r.own;
+            this.invalidate(inst, r.own ?? 0, span);
+        }
+    }
     var seq = this.seq_vals(&vals);
     var cs: std::vec<u32> = {};
     for (v&) in vals.items() {
@@ -1618,9 +1635,9 @@ attach fn emit_call(this: checker&, inst: u32, a: adj, rv: tval?, pre: std::vec<
         val t = this.tmp_local("cr", ac.ty);
         put(&prefix, this.ir.decl(t.id, ac.c));
         put(&prefix, post);
-        return site_result(vnew(ac.ty, this.ir.seq(move prefix, t.c, ac.ty)), site);
+        return this.lent_by(site_result(vnew(ac.ty, this.ir.seq(move prefix, t.c, ac.ty)), site), inst, lent);
     }
-    return site_result(vnew(ac.ty, this.wrap_pre(move prefix, ac.c, ac.ty)), site);
+    return this.lent_by(site_result(vnew(ac.ty, this.wrap_pre(move prefix, ac.c, ac.ty)), site), inst, lent);
 }
 
 // x.name(args): fn-typed field, trait-union dispatch, or an attached method

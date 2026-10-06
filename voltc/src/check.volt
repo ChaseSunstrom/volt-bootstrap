@@ -193,6 +193,8 @@ struct loop_cx {
     depth: usize;         // scope depth outside the loop
     moved_at_break: idset = {}; // moved when some break left the loop
     moved_at_entry: idset = {}; // moved before the loop began
+    view_reads: std::vec<view_read> = {}; // views read in it that were made before it (borrows.volt)
+    fresh_views: idset = {};    // views given a new value in it so far
     can_value: bool = false;    // a break may give a value (loop, labeled block)
     result_id: u32 = 0;         // the local holding it
 }
@@ -226,6 +228,37 @@ struct fn_cx {
     ret_local: local_ref? = null; // fn_exit's _ret
     body: u64? = null;            // the fn instance or closure being checked (lends.volt)
     var_params: std::vec<var_param> = {}; // its var parameters, and whether it changed them yet
+    // the borrow warnings (borrows.volt): each view local's loan, where a view went stale, and the
+    // for loops going over a container
+    loans: std::map<u32, loan> = {};
+    stale_notes: std::map<u32, stale_note> = {};
+    iterating: std::vec<iter_loan> = {};
+    ref_holders: std::map<u32, str> = {}; // a local holding a reference to one of the fn's own: that one's name
+}
+
+// a view local's loan: the container it looks into (its place and name), and its own name
+struct loan {
+    owner: u32;
+    owner_name: str;
+    view_name: str;
+}
+
+// the call after which a view may be stale
+struct stale_note {
+    span: span;
+    what: str; // the method
+}
+
+// a for loop going over a container's items
+struct iter_loan {
+    owner: u32;
+    span: span;
+}
+
+// a read of a view inside a loop, checked when the loop goes around
+struct view_read {
+    c: u32;
+    span: span;
 }
 
 // a var parameter of the fn being checked: its place and name
@@ -270,6 +303,10 @@ struct tval {
     pvia: reach? = null;
     root: str? = null;
     own: u32? = null; // a place in a local's own storage (the local's place): changing it needs its var
+    // a view a method gave out of a local container it took by reference: the container's place and
+    // name (borrows.volt)
+    loan: u32? = null;
+    loan_name: str? = null;
     wraps: bool = false; // a literal a wrapping operator (+% -% *%) gave: it wraps in the type it gets
 }
 
@@ -418,6 +455,7 @@ struct checker {
     ct_steps: u64 = 0;
     // deprecated decls already warned about (once each)
     warned: idset = {};
+    warned_views: idset = {}; // views already warned about as stale
     frames: std::vec<fn_frame> = {}; // async fn instance -> frame fields
     c_includes: std::vec<str> = {};
     c_imports: std::map<str, u32> = {}; // an imported C symbol shared by every import of it

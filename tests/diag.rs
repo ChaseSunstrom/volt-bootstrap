@@ -1,5 +1,5 @@
 // Diagnostic snapshots: `voltc check` (stage 1) on each tests/diag/NAME.volt must print exactly
-// tests/diag/NAME.stderr (colours off). `// flags: ...` on a line passes flags. VOLT_BLESS=1 rewrites
+// tests/diag/NAME.stderr (colours off), and fail when that has an error (a file that only warns builds). `// flags: ...` on a line passes flags. VOLT_BLESS=1 rewrites
 // the snapshots from the current output; review the diff before keeping it.
 mod common;
 
@@ -33,7 +33,9 @@ fn diagnostics_match_snapshots() {
             continue;
         }
         let want = std::fs::read_to_string(&snap).unwrap_or_default();
-        if out.status.success() || got != want {
+        // the check fails when the snapshot has an error, and succeeds when it only warns
+        let errs = want.contains("error:") || want.contains("error\u{1b}");
+        if out.status.success() == errs || got != want {
             bad.push(format!("{}:\n--- want\n{want}--- got (exit {:?})\n{got}", rel.display(), out.status.code()));
         }
     }

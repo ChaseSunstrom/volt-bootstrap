@@ -18,6 +18,7 @@ public attach fn new_in(static this: std::sorted_map<K, V>, allocator: A) -> std
 
 // room for n keys without growing
 <K: type, V: type, A: std::mem::allocator>
+@attributes([@invalidates])
 public attach fn reserve(this: std::sorted_map<K, V, A>&, n: usize) -> std::mem::mem_error!void {
     try this.keys.reserve(n);
     return this.vals.reserve(n);
@@ -39,6 +40,7 @@ attach fn place(this: std::sorted_map<K, V, A>&, key: K&) -> (bool, usize) {
 
 // set key to value (an old value for it is deleted)
 <K: type, V: type, A: std::mem::allocator>
+@attributes([@invalidates])
 public attach fn put(this: std::sorted_map<K, V, A>&, key: K, value: V) -> void {
     val (found, at) = this.place(&key);
     if (found) {
@@ -68,6 +70,7 @@ public attach fn contains(this: std::sorted_map<K, V, A>&, key: K) -> bool {
 
 // take key's value out of the map
 <K: type, V: type, A: std::mem::allocator>
+@attributes([@invalidates])
 public attach fn remove(this: std::sorted_map<K, V, A>&, key: K) -> V? {
     val (found, at) = this.place(&key);
     if (!found) {
@@ -79,6 +82,7 @@ public attach fn remove(this: std::sorted_map<K, V, A>&, key: K) -> V? {
 
 // delete every key and value
 <K: type, V: type, A: std::mem::allocator>
+@attributes([@invalidates])
 public attach fn clear(this: std::sorted_map<K, V, A>&) -> void {
     this.keys.clear();
     this.vals.clear();

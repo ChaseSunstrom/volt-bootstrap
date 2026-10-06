@@ -737,12 +737,36 @@ attach fn assign(this: checker&, op: binop?, le: expr&, re: expr&, span: span) -
             default => {},
         }
     }
+    // a view given a new value: naming it isn't a read of the stale one (borrows.volt)
+    var fresh: u32? = null;
+    var fresh_name = "";
+    if (op == null) {
+        match (le.kind) {
+            .PATH(p) => {
+                if (p.is_single()) {
+                    val lo = this.lookup_local(p.segs.at(0).name);
+                    if (lo) {
+                        fresh = lo.c;
+                        fresh_name = p.segs.at(0).name;
+                    }
+                }
+            },
+            default => {},
+        }
+    }
+    val was_stale = fresh != null && this.cx.moved.has((fresh ?? 0) | STALE);
+    if (was_stale) {
+        this.cx.moved.remove((fresh ?? 0) | STALE);
+    }
     if (revive) {
         this.cx.moved.remove(revive);
     }
     val lr = this.expr(le, null);
     if (revive) {
         this.cx.moved.add(revive);
+    }
+    if (was_stale) {
+        this.cx.moved.add((fresh ?? 0) | STALE);
     }
     val l = try lr;
     if (!l.lv) {
@@ -770,6 +794,9 @@ attach fn assign(this: checker&, op: binop?, le: expr&, re: expr&, span: span) -
                 val loc = lo ?? { c: 0, ty: 0, mutable: false };
                 val r = try this.expr(re, l.ty);
                 this.note_store(&l, &r);
+                if (fresh) {
+                    this.note_loan(fresh, fresh_name, &r);
+                }
                 if (!this.coercible(&r, l.ty) || this.narrow_recheck(&loc)) {
                     var whole = vpure(loc.orig_ty, loc.orig_c ?? 0);
                     whole.lv = true;
@@ -781,6 +808,24 @@ attach fn assign(this: checker&, op: binop?, le: expr&, re: expr&, span: span) -
         }
         val rr = try this.expr(re, l.ty);
         this.note_store(&l, &rr);
+        if (fresh) {
+            this.note_loan(fresh, fresh_name, &rr);
+            this.note_held(fresh, l.ty, re, true);
+        } else {
+            // a part of a local given a reference (v.x = &n)
+            match (le.kind) {
+                .FIELD(b, n, g) => {
+                    val bk = this.place_key(b);
+                    if (bk) {
+                        val bl = this.lookup_local(bk);
+                        if (bl) {
+                            this.note_held(bl.c, bl.ty, re, false);
+                        }
+                    }
+                },
+                default => {},
+            }
+        }
         return this.store(l, rr, re.span);
     }
     val bop = op ?? binop::ADD;

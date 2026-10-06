@@ -82,6 +82,7 @@ attach fn slot(this: std::map<K, V, A>&, key: K&, h: u64) -> usize {
 
 // room for n keys without growing: the slots double (at least 8) until n fit under 3/4 of them
 <K: type, V: type, A: std::mem::allocator>
+@attributes([@invalidates])
 public attach fn reserve(this: std::map<K, V, A>&, n: usize) -> std::mem::mem_error!void {
     if (n * 4 <= this.cap * 3) {
         return;
@@ -98,6 +99,7 @@ public attach fn reserve(this: std::map<K, V, A>&, n: usize) -> std::mem::mem_er
 
 // doubles the slots (at least 8), for one more key
 <K: type, V: type, A: std::mem::allocator>
+@attributes([@invalidates])
 attach fn grow(this: std::map<K, V, A>&) -> void {
     var cap = this.cap * 2;
     if (cap < 8) {
@@ -108,6 +110,7 @@ attach fn grow(this: std::map<K, V, A>&) -> void {
 
 // cap new slots, with every entry put back
 <K: type, V: type, A: std::mem::allocator>
+@attributes([@invalidates])
 attach fn rehash(this: std::map<K, V, A>&, cap: usize) -> std::mem::mem_error!void {
     val old_cap = this.cap;
     val (old_slots, old_state) = (this.slots, this.state);
@@ -141,6 +144,7 @@ attach fn rehash(this: std::map<K, V, A>&, cap: usize) -> std::mem::mem_error!vo
 
 // set key to value (an old value for it is deleted)
 <K: type, V: type, A: std::mem::allocator>
+@attributes([@invalidates])
 public attach fn put(this: std::map<K, V, A>&, key: K, value: V) -> void {
     // keep the keys under 3/4 of the slots, so a probe soon reaches an empty slot
     if ((this.len + 1) * 4 > this.cap * 3) {
@@ -187,6 +191,7 @@ public attach fn contains(this: std::map<K, V, A>&, key: K) -> bool {
 
 // take key's value out of the map
 <K: type, V: type, A: std::mem::allocator>
+@attributes([@invalidates])
 public attach fn remove(this: std::map<K, V, A>&, key: K) -> V? {
     if (this.cap == 0) {
         return null;
@@ -220,6 +225,7 @@ public attach fn remove(this: std::map<K, V, A>&, key: K) -> V? {
 
 // deletes every key and value, keeping the slots
 <K: type, V: type, A: std::mem::allocator>
+@attributes([@invalidates])
 public attach fn clear(this: std::map<K, V, A>&) -> void {
     for (i) in 0..this.cap {
         val st = &(@slice(this.state, this.cap)[i]);
@@ -286,6 +292,7 @@ public attach fn copy(this: std::map<K, V, A>&) -> std::map<K, V, A> {
 
 // deletes every key and value, then frees the arrays
 <K: type, V: type, A: std::mem::allocator>
+@attributes([@invalidates])
 public attach fn delete(this: std::map<K, V, A>&) -> void {
     if (this.cap == 0) {
         return;

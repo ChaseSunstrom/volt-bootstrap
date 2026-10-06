@@ -16,12 +16,14 @@ public attach fn new_in(static this: std::set<T>, allocator: A) -> std::set<T, A
 
 // room for n values without growing
 <T: type, A: std::mem::allocator>
+@attributes([@invalidates])
 public attach fn reserve(this: std::set<T, A>&, n: usize) -> std::mem::mem_error!void {
     return this.m.reserve(n);
 }
 
 // add value; false when it was already there (then value is deleted)
 <T: type, A: std::mem::allocator>
+@attributes([@invalidates])
 public attach fn add(this: std::set<T, A>&, value: T) -> bool {
     if (this.m.lookup(&value) != null) {
         return false;
@@ -38,6 +40,7 @@ public attach fn contains(this: std::set<T, A>&, value: T) -> bool {
 
 // take value out; false when it wasn't there
 <T: type, A: std::mem::allocator>
+@attributes([@invalidates])
 public attach fn remove(this: std::set<T, A>&, value: T) -> bool {
     return this.m.remove(move value) != null;
 }
@@ -50,6 +53,7 @@ public attach fn len(this: std::set<T, A>&) -> usize {
 
 // delete every value
 <T: type, A: std::mem::allocator>
+@attributes([@invalidates])
 public attach fn clear(this: std::set<T, A>&) -> void {
     this.m.clear();
 }

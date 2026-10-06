@@ -3616,6 +3616,7 @@ fn attr_defs() -> std::vec<attr_def> {
     put(&v, { name: "inline", args: 0 });
     put(&v, { name: "noinline", args: 0 });
     put(&v, { name: "unchecked", args: 0 }); // a fn without bounds checks in its body
+    put(&v, { name: "invalidates", args: 0 }); // a method that may move or free its receiver's storage (borrows.volt)
     put(&v, { name: "opt", args: 1 });
     put(&v, { name: "section", args: 1 });
     put(&v, { name: "align", args: 1 });

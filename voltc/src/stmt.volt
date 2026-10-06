@@ -355,6 +355,10 @@ attach fn let_stmt(this: checker&, l: let_stmt&) -> compile_error!code {
             if (this.holds(t)) {
                 this.local_prov(name, t, &v);
             }
+            this.note_loan(o.c, name, &v);
+            if (l.init) {
+                this.note_held(o.c, t, &l.init, true);
+            }
             var stmts: std::vec<u32> = {};
             put(&stmts, this.decl_at(o.c, v.c));
             if (o.flag) {
@@ -633,6 +637,7 @@ attach fn ret(this: checker&, v: expr*, span: span) -> compile_error!tval {
     if (v) {
         val e = v;
         try this.escapes(e, rt);
+        this.warn_held_return(e);
         val x = try this.expr(e, rt);
         val rv = try this.take_into(x, rt, e.span);
         this.note_return(&rv);
@@ -776,6 +781,7 @@ attach fn back_edge(this: checker&, li: usize) -> compile_error!void {
     if (this.cx.dead > 0) {
         return;
     }
+    this.stale_at_back_edge(li);
     var outer: usize = 0;
     for (k) in 0..li + 1 {
         if (!this.cx.loops.at(k).is_block) {
@@ -1019,6 +1025,7 @@ attach fn for_expr(this: checker&, f: for_loop&, want: u32?, span: span) -> comp
 attach fn for_inner(this: checker&, f: for_loop&, want: u32?, span: span) -> compile_error!tval {
     var pre: std::vec<u32> = {};
     var init_flags: std::vec<u32> = {}; // the kept temporaries' live flags, set before the iterable
+    var iterates: u32? = null; // the local container whose items the loop goes over (borrows.volt)
     var acc_decl: u32? = null;
     var acc: local? = null;
     var ep = vnew(0, 0); // what (x&) reaches: read-only, through a parameter, and its root (lends.volt)
@@ -1093,6 +1100,10 @@ attach fn for_inner(this: checker&, f: for_loop&, want: u32?, span: span) -> com
         val ke = this.keep_end(m, &init_flags, &after);
         val v = try vr;
         try ke;
+        iterates = v.loan;
+        if (v.own != null && v.c == (v.own ?? 0) && !this.is_view(v.ty)) {
+            iterates = v.own;
+        }
         if (!v.lv && (try this.needs_drop(v.ty))) {
             return fails(f.iter.span, "store this in a variable before looping over it (its elements own memory)");
         }
@@ -1254,7 +1265,13 @@ attach fn for_inner(this: checker&, f: for_loop&, want: u32?, span: span) -> com
         }
     }
     put(&this.cx.scopes, {});
+    if (iterates) {
+        put(&this.cx.iterating, { owner: iterates, span: f.iter.span });
+    }
     val r = this.for_body(f, elem_ty, elem, index, addressable, owned_elem, &ep);
+    if (iterates) {
+        this.cx.iterating.pop();
+    }
     this.cx.scopes.pop();
     val binds_body = r catch |e| {
         this.cx.loops.pop();

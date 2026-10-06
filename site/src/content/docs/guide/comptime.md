@@ -630,6 +630,7 @@ fn main() -> void {
 | --- | --- |
 | `@inline`, `@noinline` | inlining hints |
 | `@unchecked` | no bounds checks in this function's body (closures in it keep theirs): for a hot loop whose indexes are known to be in range |
+| `@invalidates` | a method that may move or free its receiver's storage (`push`, `clear`...): a view into the receiver used after it warns ([safety](/volt-bootstrap/guide/safety/#what-the-compiler-warns-about)) |
 | `@opt(n)` | optimization level for this function (0 to 3) |
 | `@section(".name")` | put the function in a section |
 | `@align(n)` | alignment |

@@ -54,3 +54,30 @@ Some mistakes never compile: using a moved value, moving inside a loop without a
 the next pass, copying a type with a `delete` hook but no `copy` hook, a `match` that misses a case,
 a null `T&`, an unhandled `E!T` (it has to be `try`'d, `catch`'d or kept as a value), and format
 strings that don't match their arguments.
+
+## What the compiler warns about
+
+Some mistakes with references are warnings: the program still builds, and the warning says what to
+change. Volt has no lifetimes to write and no borrow errors; it looks at each function on its own.
+
+- **A view used after its container changed.** A slice, `str`, reference or iterator a method gave
+  out of a local container (`xs.items()`, `name.as_str()`, `m.get(k)`) looks into the container's
+  storage. A call that may move or free that storage (`push`, `insert`, `reserve`, `append`,
+  `clear`, `remove` and the like, marked `@invalidates` in std) leaves the view looking at what
+  may be gone:
+
+  ```volt ignore
+  val s = xs.items();
+  xs.push(2) catch @panic("out of memory");
+  std::println(s.len);   // warning: 's' looks into 'xs', whose items may have moved or been
+                         // freed since: get 's' again after the change
+  ```
+
+  A read on any path after the change warns, a loop's next pass included. Changing a container
+  inside a `for` loop over its items warns at the change: the loop goes on over the old items.
+  What isn't followed yet: a field's container (`this.items.items()`), only a local's or a
+  parameter's; giving the container a new value (`xs = ys`); and views used inside closures.
+- **A reference to a local, returned in a value.** Returning `&n` itself, or a literal holding it,
+  is an error. Returning a local that holds a reference to one of the function's own locals (a
+  struct with `{ x: &n }`, a `v.x = &n`, a pointer `val r = &n`) warns: what it refers to is gone
+  once the function returns.

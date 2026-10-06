@@ -30,6 +30,7 @@ public attach fn at(this: std::vec<T, A>&, i: usize) -> T& {
 
 // room for at least n elements
 <T: type, A: std::mem::allocator>
+@attributes([@invalidates])
 public attach fn reserve(this: std::vec<T, A>&, n: usize) -> std::mem::mem_error!void {
     if (n <= this.cap) {
         return;
@@ -60,6 +61,7 @@ fn moved_to(ptr: T*, old: usize, cap: usize, allocator: A) -> std::mem::mem_erro
 
 // append value (moved in), growing the memory when it's full
 <T: type, A: std::mem::allocator>
+@attributes([@invalidates])
 public attach fn push(this: std::vec<T, A>&, value: T) -> std::mem::mem_error!void {
     if (this.len == this.cap) {
         try this.reserve(this.len + 1);
@@ -98,6 +100,7 @@ public attach fn last(this: std::vec<T, A>&) -> T* {
 
 // put value at index i (0..=len), moving the elements from i on up by one
 <T: type, A: std::mem::allocator>
+@attributes([@invalidates])
 public attach fn insert(this: std::vec<T, A>&, i: usize, value: T) -> std::mem::mem_error!void {
     if (i > this.len) {
         @panic("vec insert index out of range");
@@ -115,6 +118,7 @@ public attach fn insert(this: std::vec<T, A>&, i: usize, value: T) -> std::mem::
 
 // take element i out, moving the ones after it down by one
 <T: type, A: std::mem::allocator>
+@attributes([@invalidates])
 public attach fn remove(this: std::vec<T, A>&, i: usize) -> T {
     if (i >= this.len) {
         @panic("vec remove index out of range");
@@ -130,6 +134,7 @@ public attach fn remove(this: std::vec<T, A>&, i: usize) -> T {
 
 // take element i out and put the last element in its place: O(1), but changes the order
 <T: type, A: std::mem::allocator>
+@attributes([@invalidates])
 public attach fn swap_remove(this: std::vec<T, A>&, i: usize) -> T {
     if (i >= this.len) {
         @panic("vec swap_remove index out of range");
@@ -145,6 +150,7 @@ public attach fn swap_remove(this: std::vec<T, A>&, i: usize) -> T {
 
 // delete the elements from index n on (nothing when n >= len)
 <T: type, A: std::mem::allocator>
+@attributes([@invalidates])
 public attach fn truncate(this: std::vec<T, A>&, n: usize) -> void {
     while (this.len > n) {
         this.pop();
@@ -154,6 +160,7 @@ public attach fn truncate(this: std::vec<T, A>&, n: usize) -> void {
 // n elements: copies of value added at the end, or the ones past n deleted. Filling is one plain
 // loop, which the C compiler turns into a memset for bytes
 <T: type, A: std::mem::allocator>
+@attributes([@invalidates])
 public attach fn resize(this: std::vec<T, A>&, n: usize, value: T) -> std::mem::mem_error!void {
     if (n <= this.len) {
         this.truncate(n);
@@ -169,6 +176,7 @@ public attach fn resize(this: std::vec<T, A>&, n: usize, value: T) -> std::mem::
 
 // append a copy of each element of xs
 <T: type, A: std::mem::allocator>
+@attributes([@invalidates])
 public attach fn extend(this: std::vec<T, A>&, xs: T[..]) -> std::mem::mem_error!void {
     if (xs.len == 0) {
         return;
@@ -206,6 +214,7 @@ public attach fn extend(this: std::vec<T, A>&, xs: T[..]) -> std::mem::mem_error
 
 // delete each element equal (by eq) to the one kept before it, so a run of equals keeps its first
 <T: type, A: std::mem::allocator>
+@attributes([@invalidates])
 public attach fn dedup(this: std::vec<T, A>&) -> void {
     val xs = @slice(this.ptr, this.len);
     if (xs.len == 0) {
@@ -227,6 +236,7 @@ public attach fn dedup(this: std::vec<T, A>&) -> void {
 
 // delete the elements keep(&x) returns false for, keeping the others in order
 <T: type, A: std::mem::allocator, F: type>
+@attributes([@invalidates])
 public attach fn retain(this: std::vec<T, A>&, keep: F) -> void {
     val xs = @slice(this.ptr, this.len);
     var w: usize = 0; // elements kept so far, at the front
@@ -245,6 +255,7 @@ public attach fn retain(this: std::vec<T, A>&, keep: F) -> void {
 
 // delete every element, keep the memory
 <T: type, A: std::mem::allocator>
+@attributes([@invalidates])
 public attach fn clear(this: std::vec<T, A>&) -> void {
     // last to first, as pops would; for elements that own nothing the loop does nothing and compiles
     // away (a loop of pops didn't)
@@ -259,6 +270,7 @@ public attach fn clear(this: std::vec<T, A>&) -> void {
 
 // deletes the elements, then frees the memory
 <T: type, A: std::mem::allocator>
+@attributes([@invalidates])
 public attach fn delete(this: std::vec<T, A>&) -> void {
     this.clear();
     if (this.cap > 0) {

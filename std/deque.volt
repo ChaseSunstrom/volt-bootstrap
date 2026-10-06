@@ -26,6 +26,7 @@ attach fn slot(this: std::deque<T, A>&, i: usize) -> T& {
 // room for at least n elements: when it grows (to double, at least 8), the elements move to the
 // front of the new slots in order
 <T: type, A: std::mem::allocator>
+@attributes([@invalidates])
 public attach fn reserve(this: std::deque<T, A>&, n: usize) -> std::mem::mem_error!void {
     if (n <= this.cap) {
         return;
@@ -52,6 +53,7 @@ public attach fn reserve(this: std::deque<T, A>&, n: usize) -> std::mem::mem_err
 
 // room for one more
 <T: type, A: std::mem::allocator>
+@attributes([@invalidates])
 attach fn grow(this: std::deque<T, A>&) -> void {
     this.reserve(this.len + 1) catch @panic("out of memory");
 }
@@ -85,6 +87,7 @@ public attach fn back(this: std::deque<T, A>&) -> T* {
 
 // append value at the back
 <T: type, A: std::mem::allocator>
+@attributes([@invalidates])
 public attach fn push_back(this: std::deque<T, A>&, value: T) -> void {
     if (this.len == this.cap) {
         this.grow();
@@ -95,6 +98,7 @@ public attach fn push_back(this: std::deque<T, A>&, value: T) -> void {
 
 // put value at the front
 <T: type, A: std::mem::allocator>
+@attributes([@invalidates])
 public attach fn push_front(this: std::deque<T, A>&, value: T) -> void {
     if (this.len == this.cap) {
         this.grow();
@@ -128,6 +132,7 @@ public attach fn pop_front(this: std::deque<T, A>&) -> T? {
 
 // delete every element, keep the memory
 <T: type, A: std::mem::allocator>
+@attributes([@invalidates])
 public attach fn clear(this: std::deque<T, A>&) -> void {
     while (this.len > 0) {
         this.pop_back();
@@ -169,6 +174,7 @@ public attach fn copy(this: std::deque<T, A>&) -> std::deque<T, A> {
 
 // deletes the elements, then frees the memory
 <T: type, A: std::mem::allocator>
+@attributes([@invalidates])
 public attach fn delete(this: std::deque<T, A>&) -> void {
     this.clear();
     if (this.cap > 0) {

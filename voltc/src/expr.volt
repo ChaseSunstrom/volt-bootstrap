@@ -781,6 +781,7 @@ attach fn path_expr(this: checker&, p: path&, want: u32?, span: span) -> compile
                 }
                 return e;
             }
+            this.read_view(&l, span);
             var v = vpure(l.ty, l.c);
             v.lv = true;
             v.mutable = l.mutable;
@@ -788,6 +789,11 @@ attach fn path_expr(this: checker&, p: path&, want: u32?, span: span) -> compile
             v.via = l.via;
             v.root = l.root;
             v.own = l.own;
+            val ln = this.cx.loans.get(l.c);
+            if (ln) {
+                v.loan = ln->owner;
+                v.loan_name = ln->owner_name;
+            }
             if (l.flag != null) {
                 v.owner = name;
             }

@@ -1,0 +1,39 @@
+warning: 's' looks into 'xs', whose items may have moved or been freed since: get 's' again after the change
+  ┌─ tests/diag/borrow_stale_view.volt:8:12
+  │
+7 │     xs.push(4) catch @panic("out of memory");
+  │     ---------- xs.push may move or free them here
+8 │     return s.len;
+  │            ^
+
+warning: 's' looks into 'xs', whose items may have moved or been freed since: get 's' again after the change
+   ┌─ tests/diag/borrow_stale_view.volt:15:18
+   │
+14 │     xs.push(2) catch @panic("out of memory");
+   │     ---------- xs.push may move or free them here
+15 │     std::println(s.len);
+   │                  ^
+
+warning: ys.push inside a loop over ys's items: the loop goes on over the old ones, which this may move or free; collect the changes and make them after the loop
+   ┌─ tests/diag/borrow_stale_view.volt:24:9
+   │
+23 │     for (y) in ys.items() {
+   │                ---------- the loop over ys
+24 │         ys.push(y) catch @panic("out of memory");
+   │         ^^^^^^^^^^
+
+warning: 'first' looks into 'zs', whose items may have moved or been freed since (on the loop's next pass): get 'first' again after the change
+   ┌─ tests/diag/borrow_stale_view.volt:30:22
+   │
+30 │         std::println(first.len);
+   │                      ^^^^^
+31 │         zs.push(k) catch @panic("out of memory");
+   │         ---------- zs.push may move or free them here
+
+warning: 'n' looks into 'name', whose items may have moved or been freed since: get 'n' again after the change
+   ┌─ tests/diag/borrow_stale_view.volt:36:18
+   │
+35 │     name.append("cd");
+   │     ----------------- name.append may move or free them here
+36 │     std::println(n.len);
+   │                  ^

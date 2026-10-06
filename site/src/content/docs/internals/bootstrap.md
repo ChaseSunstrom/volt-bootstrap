@@ -32,4 +32,6 @@ The bootstrap compiler's one job is building stage1, so it's frozen: the languag
 That holds as long as `voltc/src`, and the parts of std it uses, are written in what stage 0
 compiles: a feature added since stays out of them. Every test run builds stage1 with stage 0, so
 code stage 0 can't compile fails there first. The site's generator (`site/gen`) is under the same
-rule, since the Pages workflow builds it with stage 0.
+rule, since the Pages workflow builds it with stage 0. A builtin attribute std puts on its own
+declarations is the one change stage 0 still takes: it has to know the name to accept it (and
+ignores it), as with `@invalidates`.

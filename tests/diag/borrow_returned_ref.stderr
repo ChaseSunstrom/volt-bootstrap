@@ -1,0 +1,17 @@
+warning: 'v' holds a reference to 'n', which is gone once this function returns: return what it refers to, or keep 'n' where the caller can
+  ┌─ tests/diag/borrow_returned_ref.volt:9:12
+  │
+9 │     return v;
+  │            ^
+
+warning: 'v' holds a reference to 'm', which is gone once this function returns: return what it refers to, or keep 'm' where the caller can
+   ┌─ tests/diag/borrow_returned_ref.volt:16:12
+   │
+16 │     return v;
+   │            ^
+
+warning: 'r' holds a reference to 'n', which is gone once this function returns: return what it refers to, or keep 'n' where the caller can
+   ┌─ tests/diag/borrow_returned_ref.volt:21:12
+   │
+21 │     return r;
+   │            ^

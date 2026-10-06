@@ -25,6 +25,7 @@ public attach fn new_in(static this: std::string, allocator: A) -> std::string<A
 
 // room for n bytes without growing
 <A: std::mem::allocator>
+@attributes([@invalidates])
 public attach fn reserve(this: std::string<A>&, n: usize) -> std::mem::mem_error!void {
     return this.bytes.reserve(n);
 }
@@ -43,6 +44,7 @@ public attach fn len(this: std::string<A>&) -> usize {
 
 // append one byte
 <A: std::mem::allocator>
+@attributes([@invalidates])
 public attach fn push(this: std::string<A>&, byte: u8) -> void {
     this.bytes.push(byte) catch @panic("out of memory");
 }
@@ -51,13 +53,14 @@ public attach fn push(this: std::string<A>&, byte: u8) -> void {
 // out of line it took the string's address, so a caller building text kept the string in memory and
 // reloaded it after every byte it pushed
 <A: std::mem::allocator>
-@attributes([@inline])
+@attributes([@invalidates, @inline])
 public attach fn append(this: std::string<A>&, s: str) -> void {
     this.bytes.extend(@cast<u8[..]>(s)) catch @panic("out of memory");
 }
 
 // decimal digits of v
 <A: std::mem::allocator>
+@attributes([@invalidates])
 public attach fn append_int(this: std::string<A>&, v: i64) -> void {
     if (v < 0) {
         this.push(45); // '-'
@@ -70,6 +73,7 @@ public attach fn append_int(this: std::string<A>&, v: i64) -> void {
 
 // decimal digits of v
 <A: std::mem::allocator>
+@attributes([@invalidates])
 public attach fn append_uint(this: std::string<A>&, v: u64) -> void {
     var digits: u8[20];
     var n: usize = 0;
@@ -98,12 +102,14 @@ public attach fn is_empty(this: std::string<A>&) -> bool {
 
 // make it empty (the memory stays for reuse)
 <A: std::mem::allocator>
+@attributes([@invalidates])
 public attach fn clear(this: std::string<A>&) -> void {
     this.bytes.clear();
 }
 
 // keep the first n bytes (nothing happens when it's already that short)
 <A: std::mem::allocator>
+@attributes([@invalidates])
 public attach fn truncate(this: std::string<A>&, n: usize) -> void {
     while (this.bytes.len > n) {
         val b = this.bytes.pop();
@@ -118,6 +124,7 @@ public attach fn pop(this: std::string<A>&) -> u8? {
 
 // s inserted at byte index at (the end when at is past it)
 <A: std::mem::allocator>
+@attributes([@invalidates])
 public attach fn insert(this: std::string<A>&, at: usize, s: str) -> void {
     var i = at;
     if (i > this.bytes.len) {
@@ -133,6 +140,7 @@ public attach fn insert(this: std::string<A>&, at: usize, s: str) -> void {
 
 // append a character, as UTF-8 (one that isn't a character is U+FFFD)
 <A: std::mem::allocator>
+@attributes([@invalidates])
 public attach fn push_char(this: std::string<A>&, c: u32) -> void {
     var cp = c;
     if (cp > 0x10FFFF || (cp >= 0xD800 && cp <= 0xDFFF)) {
@@ -175,6 +183,7 @@ public attach fn hash(this: std::string<A>&) -> u64 {
 
 // append s: this makes a string a writer, for std::write (and std::format)
 <A: std::mem::allocator>
+@attributes([@invalidates])
 public attach fn write_str(this: std::string<A>&, s: str) -> void {
     this.append(s);
 }

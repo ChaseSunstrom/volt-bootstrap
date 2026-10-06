@@ -375,7 +375,16 @@ fn compile(files: std::vec<source_file>&, asts: std::vec<std::vec<item>>&, o: op
 fn all_diags(c: checker&) -> std::vec<diag> {
     var out: std::vec<diag> = {};
     for (w&) in c.warnings.items() {
-        put(&out, copy *w);
+        // a generic fn's warning comes up once per instance
+        var seen = false;
+        for (d&) in out.items() {
+            if (same_span(d.span, w.span) && d.msg.as_str() == w.msg.as_str()) {
+                seen = true;
+            }
+        }
+        if (!seen) {
+            put(&out, copy *w);
+        }
     }
     for (e&) in c.errors.items() {
         var seen = false;
