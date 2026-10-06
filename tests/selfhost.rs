@@ -207,9 +207,49 @@ fn bare_metal(voltc: &Path, std_dir: &Path) {
             let want = std::fs::read_to_string(dir.join("expected.txt")).unwrap();
             let out = String::from_utf8_lossy(&o.stdout);
             assert!(o.status.success() && out == want, "bare metal {board} {target} (release: {}) exited {:?}, printed:\n{out}{}", release == "1", o.status.code(), String::from_utf8_lossy(&o.stderr));
+            only_volt(&dir.join("blinky.elf"), &root, board, target, release == "1");
         }
         let _ = std::fs::remove_file(dir.join("blinky.elf"));
     }
+}
+
+/// the image holds nothing but Volt: no undefined symbol (no libc, no C runtime, no unwinder), and
+/// every function is the compiler's (a mangled name, main, the start code) or one that std or the
+/// program defines under a C name (`export fn`, or `extern "C" fn` with a body: memcpy, the
+/// soft-float helpers, to_console)
+fn only_volt(elf: &Path, examples: &Path, board: &str, target: &str, release: bool) {
+    let nm = |args: &[&str]| Command::new("llvm-nm").args(args).arg(elf).output().ok().filter(|o| o.status.success()).map(|o| String::from_utf8_lossy(&o.stdout).to_string());
+    let Some(undefined) = nm(&["-u"]) else { return }; // no llvm-nm: nothing to check with
+    assert!(undefined.trim().is_empty(), "bare metal {board} {target} (release: {release}) refers to symbols nothing defines:\n{undefined}");
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut sources = Vec::new();
+    for dir in [root.join("std"), examples.to_path_buf(), examples.join(board)] {
+        for e in std::fs::read_dir(dir).unwrap().flatten() {
+            if e.path().extension().is_some_and(|x| x == "volt") {
+                sources.push(std::fs::read_to_string(e.path()).unwrap());
+            }
+        }
+    }
+    let mut c_names = std::collections::HashSet::new();
+    for line in sources.iter().flat_map(|s| s.lines()) {
+        let line = line.trim();
+        let rest = line.split_once("export fn ").map(|p| p.1).or_else(|| line.split_once("extern \"C\" fn ").filter(|_| line.ends_with('{')).map(|p| p.1));
+        if let Some(name) = rest.and_then(|r| r.split(|c: char| !(c.is_alphanumeric() || c == '_')).next()) {
+            c_names.insert(name.to_string());
+        }
+    }
+    let defined = nm(&["--defined-only"]).unwrap();
+    let foreign: Vec<&str> = defined
+        .lines()
+        .filter_map(|l| {
+            let mut w = l.split_whitespace().rev();
+            let (name, kind) = (w.next()?, w.next()?);
+            // .L labels (RISC-V's auipc pairs) and $t/$d (ARM's code and data markers) aren't functions
+            ("TtWw".contains(kind) && !name.starts_with(".L") && !name.starts_with('$')).then_some(name)
+        })
+        .filter(|n| !(n.starts_with("v_") || n.starts_with("vp_") || n.starts_with("volt_") || ["main", "_start"].contains(n) || c_names.contains(*n)))
+        .collect();
+    assert!(foreign.is_empty(), "bare metal {board} {target} (release: {release}) has functions that aren't Volt's: {foreign:?}");
 }
 
 /// bolt hot with that voltc: a program's hot function and line are found and named the Volt way, and

@@ -50,6 +50,12 @@ under qemu.
   and `f64` on `riscv32-none`, `thumbv6m-none` and `thumbv7m-none`, and `f64` on `thumbv7em-none`,
   whose FPU does `f32` only.
 
+That's all an image holds: no C library, no C runtime, no compiler support library and no unwinder.
+The test suite checks it for every board, debug and release: the linked image refers to no symbol it
+doesn't define, and every function in it is either the compiler's own (the start code, `main`, a
+compiled Volt function) or one that std or the program defines under a C name (`memcpy`,
+`__adddf3`, `to_console` and the like, each written in Volt).
+
 Printing a float with a precision (`{:.3}`, `{:.5e}`) works out its exact digits on the stack, about 2
 KB while it runs (about 5 KB in a debug build for a Cortex-M0), and reading one (`parse_float`, a JSON
 number) about 1 KB; leave room for that in the stack the linker script sets aside. Reading floats also

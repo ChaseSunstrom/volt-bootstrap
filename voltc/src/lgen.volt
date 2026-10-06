@@ -646,12 +646,18 @@ attach fn decl_fn(this: lg&, i: u32) -> llvm::LLVMOpaqueValue* {
     val a = this.fn_abi(i);
     val name = this.z(this.symbol(f));
     var fv = llvm::LLVMGetNamedFunction(this.m, name);
-    if (fv == null) {
+    val fresh = fv == null;
+    if (fresh) {
         fv = llvm::LLVMAddFunction(this.m, name, a.ty);
         if (f.link == linkage::STATIC && f.body != null && !f.prelude) {
             llvm::LLVMSetLinkage(fv, llvm::LLVMInternalLinkage);
         }
         this.abi_attrs(&a, fv ?? @panic("fn"), false);
+    }
+    // the attributes, also when the definition comes after the compiler declared it (rt_fn:
+    // volt_panic, volt_bounds, memcpy... that std/bare.volt defines): without them those could
+    // unwind (a reference to ARM's C++ unwinder), and bare metal's memcpy could call itself
+    if (fresh || f.body != null) {
         if (f.noreturn || f.ret == NEVER) {
             llvm::LLVMAddAttributeAtIndex(fv, 4294967295, this.attr("noreturn"));
         }
