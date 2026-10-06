@@ -150,23 +150,37 @@ fn pct(r: f64, out: std::string&) -> void {
     std::write(out, "{}%", x / 1.4 * 100.0);
 }
 
-// the chart's rows: each program's Volt times as a fraction of C's, from the benchmark table
+// the chart's rows: each program's Volt times as a fraction of C's, from the benchmark table's
+// Volt (C, clang) and Volt (LLVM) columns, found by their headings
 fn bench_rows(md: str, out: std::string&) -> void {
     val (_, after) = md.split_once("<!-- bench:start -->") ?? return;
     val (table, _) = after.split_once("<!-- bench:end -->") ?? return;
+    var c_col: usize = 0;
+    var llvm_col: usize = 0;
     for (l&) in table.lines().items() {
+        if (l.starts_with("| Program")) {
+            for (h&, i) in l.split("|").items() {
+                if (h.trim() == "Volt (C, clang)") {
+                    c_col = i;
+                }
+                if (h.trim() == "Volt (LLVM)") {
+                    llvm_col = i;
+                }
+            }
+            continue;
+        }
         // | name | ...: a program's row (lower case, as the header's isn't)
         if (!l.starts_with("| ") || !((*l)[2] >= 'a' && (*l)[2] <= 'z')) {
             continue;
         }
         val cells = l.split("|");
-        if (cells.len < 7) {
+        if (c_col == 0 || llvm_col == 0 || cells.len <= c_col || cells.len <= llvm_col) {
             continue;
         }
         val name = cells.at(1).trim();
         std::write(out, "<div class=\"chart-row\" role=\"row\"><span class=\"prog\" role=\"rowheader\">{}</span>", name);
-        bar(ratio(*cells.at(5)), out);
-        bar(ratio(*cells.at(6)), out);
+        bar(ratio(*cells.at(c_col)), out);
+        bar(ratio(*cells.at(llvm_col)), out);
         out.append("</div>");
     }
 }

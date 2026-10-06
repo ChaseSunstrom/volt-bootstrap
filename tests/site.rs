@@ -118,3 +118,29 @@ fn broken_links_fail_the_build() {
     }
     assert!(err.contains("5 broken link(s)"), "{err}");
 }
+
+/// the landing page's chart shows each program's Volt (C, clang) and Volt (LLVM) ratios from the
+/// benchmarks table, whatever columns the table has
+#[test]
+fn landing_chart_shows_the_volt_columns() {
+    let out = temp("chart");
+    let r = generate(&Path::new(ROOT).join("site"), &out);
+    assert!(r.status.success(), "the generator failed:\n{}", String::from_utf8_lossy(&r.stderr));
+    let html = std::fs::read_to_string(out.join("index.html")).unwrap();
+    let md = std::fs::read_to_string(Path::new(ROOT).join("site/src/content/docs/internals/benchmarks.md")).unwrap();
+    let measured = md.split("<!-- bench:start -->").nth(1).and_then(|s| s.split("<!-- bench:end -->").next()).expect("the measured table");
+    let table: Vec<&str> = measured.lines().filter(|l| l.starts_with("| ")).collect();
+    let head: Vec<&str> = table[0].split('|').map(str::trim).collect();
+    let col = |name: &str| head.iter().position(|h| *h == name).unwrap_or_else(|| panic!("no {name} column"));
+    let (c, llvm) = (col("Volt (C, clang)"), col("Volt (LLVM)"));
+    let ratio = |cell: &str| cell.split('(').nth(1).and_then(|s| s.split("x)").next()).unwrap_or("").to_string();
+    let mut rows = 0;
+    for row in table.iter().filter(|l| l.as_bytes()[2].is_ascii_lowercase()) {
+        let cells: Vec<&str> = row.split('|').map(str::trim).collect();
+        let at = html.find(&format!("role=\"rowheader\">{}</span>", cells[1])).unwrap_or_else(|| panic!("no chart row for {}", cells[1]));
+        let shown: Vec<&str> = html[at..].split("<span class=\"num\">").skip(1).take(2).map(|s| s.split('×').next().unwrap()).collect();
+        assert_eq!(shown, [ratio(cells[c]), ratio(cells[llvm])], "{}'s bars", cells[1]);
+        rows += 1;
+    }
+    assert!(rows > 20, "only {rows} rows");
+}
