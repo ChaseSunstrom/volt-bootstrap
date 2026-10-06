@@ -639,6 +639,28 @@ attach fn expr(this: checker&, e: expr&, want: u32?) -> compile_error!tval {
                 }
             }
             val b = try this.expr(base, null);
+            // `if (val x = opt) a else |e| b` reads the hidden @if's error first: say what the
+            // statement form says when there's no error to read
+            if (name == "err") {
+                var is_eu = false;
+                match (*this.t.get(b.ty)) {
+                    .ERR_UNION(x, y) => { is_eu = true; },
+                    default => {},
+                }
+                match (base.kind) {
+                    .PATH(p) => {
+                        if (!is_eu && p.is_single() && p.segs.at(0).name == IF_TMP) {
+                            val text = this.files.at(@cast<usize>(span.file)).text;
+                            var cap = "e";
+                            if (span.hi <= text.len && span.lo < span.hi) {
+                                cap = text[@cast<usize>(span.lo)..@cast<usize>(span.hi)];
+                            }
+                            return fail(span, fmt2("else |{}| needs an error union, found {}", S(cap), this.ty_name(b.ty)));
+                        }
+                    },
+                    default => {},
+                }
+            }
             return this.field(b, name, span);
         },
         .INDEX(base, idx) => { return this.index(base, idx, span); },

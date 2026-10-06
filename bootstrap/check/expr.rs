@@ -348,6 +348,13 @@ impl Checker {
                     return Ok(self.local_val(&l, span));
                 }
                 let b = self.expr(base, None)?;
+                // `if (val x = opt) a else |e| b` reads the hidden @if's error first: say what the
+                // statement form says when there's no error to read
+                if name == "err" && matches!(&base.kind, ExprKind::Path(p) if p.is_single() && p.segs[0].name == IF_TMP) && !matches!(self.t.get(b.ty), Ty::ErrUnion(..)) {
+                    let text = &self.sm.files[span.file as usize].1;
+                    let cap = text.get(span.lo as usize..span.hi as usize).unwrap_or("e");
+                    return err(span, format!("else |{cap}| needs an error union, found {}", self.ty_name(b.ty)));
+                }
                 self.field(b, name, span)
             }
             ExprKind::Index(base, idx) => self.index(base, idx, span),
