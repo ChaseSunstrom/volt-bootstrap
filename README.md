@@ -128,7 +128,7 @@ Then `bolt new hello && cd hello && bolt run`. The
 ## Testing
 
 ```sh
-cargo test                  # goldens, compiler parity, bolt, interop, the language server, the docs
+cargo test                  # goldens, bolt, interop, the language server, the docs
 cd voltc && VOLTC=../target/release/voltc-bootstrap ../target/release/bolt build bootstrap
 ```
 

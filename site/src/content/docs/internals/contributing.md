@@ -5,9 +5,10 @@ sidebar:
   order: 6
 ---
 
-- **Both compilers.** A change to the language (syntax, checking, diagnostics) goes into
-  `bootstrap/` and `voltc/src/`, and `tests/selfhost.rs` must pass. Features only the self-hosted
-  compiler has (the LLVM backend, C++ import, the language server) live in `voltc/src` alone.
+- **One compiler.** A change to the language (syntax, checking, diagnostics) goes into `voltc/src`
+  alone; the tests run stage1, voltc built by `bootstrap/`. The bootstrap is stage 0 and frozen: it
+  only builds voltc, so `voltc/src`, the parts of std it uses and `site/gen` stay within what it
+  compiles ([Bootstrapping](/volt-bootstrap/internals/bootstrap/)).
 - **Both backends.** A change to code generation keeps the C and LLVM backends in agreement: run the
   bootstrap check.
 - **std stays a library.** Nothing in the compiler may know std's names; what std needs from the
@@ -31,6 +32,6 @@ CI (`.github/workflows/ci.yml`) runs on every push to main and every pull reques
   the TypeScript checks) installed. A build that warns fails. Failing tests are listed on the run's
   summary page. arm64 reports without failing the run until the LLVM backend runs on aarch64.
 - **The editor extension:** its grammar and extension tests.
-- **macOS (arm64, x86-64) and Windows (x86-64, arm64):** build the compilers, check every test
-  program with the front end, and try running a few programs. These jobs are experimental and
-  report without failing the run, since the test suite itself runs on Linux only for now.
+- **macOS (arm64, x86-64) and Windows (x86-64, arm64):** build the compilers and try running a few
+  programs. These jobs are experimental and report without failing the run, since the test suite
+  itself runs on Linux only for now.

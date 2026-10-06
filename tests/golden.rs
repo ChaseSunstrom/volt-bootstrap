@@ -1,6 +1,8 @@
 // Golden tests. tests/run/*.volt and examples/*.volt: compiled and run, stdout must equal the `// expect: ` lines
 // (and exit code the `// exit: N` line, default 0; `// flags: --release` passes flags; each `// expect-stderr: ` line must be
 // in stderr). tests/fail/*.volt: `voltc check` must fail with every `// error: ` substring in its stderr.
+// voltc is stage 1: voltc/src built by the bootstrap compiler.
+mod common;
 use std::path::Path;
 use std::process::Command;
 
@@ -23,7 +25,7 @@ fn files(dir: &str) -> Vec<std::path::PathBuf> {
 
 #[test]
 fn golden() {
-    let bin = env!("CARGO_BIN_EXE_voltc-bootstrap");
+    let bin = common::voltc();
     let mut failures = Vec::new();
     let mut count = 0;
     // programs: run, then compare stdout and the exit code
@@ -33,7 +35,7 @@ fn golden() {
         let want = directives(&src, "expect").join("\n");
         let want_code: i32 = directives(&src, "exit").first().map(|s| s.trim().parse().unwrap()).unwrap_or(0);
         let flags: Vec<String> = directives(&src, "flags").iter().flat_map(|l| l.split_whitespace().map(String::from).collect::<Vec<_>>()).collect();
-        let out = Command::new(bin).arg("run").arg(&f).args(&flags).output().unwrap();
+        let out = Command::new(&bin).arg("run").arg(&f).args(&flags).output().unwrap();
         let got = String::from_utf8_lossy(&out.stdout);
         let code = out.status.code().unwrap_or(-1);
         let err = String::from_utf8_lossy(&out.stderr);
@@ -51,7 +53,7 @@ fn golden() {
         count += 1;
         let src = std::fs::read_to_string(&f).unwrap();
         let flags: Vec<String> = directives(&src, "flags").iter().flat_map(|l| l.split_whitespace().map(String::from).collect::<Vec<_>>()).collect();
-        let out = Command::new(bin).arg("check").arg(&f).args(&flags).output().unwrap();
+        let out = Command::new(&bin).arg("check").arg(&f).args(&flags).output().unwrap();
         let stderr = String::from_utf8_lossy(&out.stderr);
         let wants = directives(&src, "error");
         if out.status.success() || wants.is_empty() || wants.iter().any(|w| !stderr.contains(w.as_str())) {
@@ -64,18 +66,18 @@ fn golden() {
 /// test.volt, the language sketch, parses
 #[test]
 fn spec_sketch_parses() {
-    let out = Command::new(env!("CARGO_BIN_EXE_voltc-bootstrap")).args(["parse", "test.volt"]).current_dir(env!("CARGO_MANIFEST_DIR")).output().unwrap();
+    let out = Command::new(common::voltc()).args(["parse", "test.volt", "--sexp"]).current_dir(env!("CARGO_MANIFEST_DIR")).output().unwrap();
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
 }
 
 /// packages precompiled with `voltc lib` and linked: same output as compiling them from source
 #[test]
 fn std_linked() {
-    let bin = env!("CARGO_BIN_EXE_voltc-bootstrap");
+    let bin = common::voltc();
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("linked-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    let voltc = |args: &[&str]| Command::new(bin).args(args).current_dir(root).output().unwrap();
+    let voltc = |args: &[&str]| Command::new(&bin).args(args).current_dir(root).output().unwrap();
     let (std_a, geo_a) = (dir.join("libstd.a"), dir.join("libgeo.a"));
     let (std_a, geo_a) = (std_a.to_str().unwrap(), geo_a.to_str().unwrap());
     for (pkg, out) in [("std", std_a), ("geo", geo_a)] {
@@ -105,7 +107,7 @@ fn multiline_strings_crlf() {
     std::fs::create_dir_all(&dir).unwrap();
     let f = dir.join("crlf.volt");
     std::fs::write(&f, src.replace('\n', "\r\n")).unwrap();
-    let out = Command::new(env!("CARGO_BIN_EXE_voltc-bootstrap")).arg("run").arg(&f).output().unwrap();
+    let out = Command::new(common::voltc()).arg("run").arg(&f).output().unwrap();
     let _ = std::fs::remove_dir_all(&dir);
     assert_eq!(String::from_utf8_lossy(&out.stdout).trim_end(), directives(&src, "expect").join("\n"), "{}", String::from_utf8_lossy(&out.stderr));
 }

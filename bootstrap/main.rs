@@ -7,7 +7,6 @@ mod cimport;
 mod diag;
 mod lexer;
 mod parser;
-mod sexp;
 mod types;
 
 use diag::SourceMap;
@@ -17,7 +16,7 @@ use std::process::{Command, exit};
 fn usage() -> ! {
     eprintln!(
         "usage: voltc <command> FILES... [options]\n\
-         commands:\n  parse FILE [--dump|--sexp] parse only\n  check FILES            type check\n  \
+         commands:\n  parse FILE [--dump]     parse only\n  check FILES            type check\n  \
          emit-c FILES           print the generated C\n  build FILES [-o OUT]   compile to an executable\n  \
          run FILES [-- ARGS]    build and run\n  \
          lib NAME [-o OUT.a]    precompile package NAME's non-generic code into a static library\n  \
@@ -84,7 +83,6 @@ struct Cli {
     test: bool,
     test_pkgs: Vec<String>,
     dump: bool,
-    sexp: bool,
     format: diag::Format,
     /// auto, always or never
     color: String,
@@ -108,7 +106,6 @@ fn parse_cli() -> Cli {
                 cli.test_pkgs.push(args.next().unwrap_or_else(|| usage()));
             }
             "--dump" => cli.dump = true,
-            "--sexp" => cli.sexp = true,
             "--no-std" => cli.no_std = true,
             "-o" => cli.out = Some(args.next().unwrap_or_else(|| usage()).into()),
             "--std" => cli.std_dir = Some(args.next().unwrap_or_else(|| usage()).into()),
@@ -441,20 +438,6 @@ fn main() {
             let id = sm.add(file, text);
             let src = sm.files[id as usize].1.clone();
             let parsed = parser::parse_files(&[(id, &src)]);
-            if cli.sexp {
-                // the canonical form the self-hosted parser is checked against
-                let mut w = sexp::W { out: String::new() };
-                match &parsed {
-                    Ok(files) => w.items(&files[0]),
-                    Err(ds) => {
-                        for d in ds {
-                            w.out.push_str(&format!("(error @{}:{} \"{}\")\n", d.span.lo, d.span.hi, d.msg.replace('"', "'")));
-                        }
-                    }
-                }
-                print!("{}", w.out);
-                exit(if parsed.is_ok() { 0 } else { 1 });
-            }
             let files = parsed.unwrap_or_else(|ds| die(&cli, &sm, &ds));
             if cli.dump {
                 println!("{:#?}", files[0]);

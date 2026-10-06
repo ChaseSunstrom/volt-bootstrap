@@ -345,6 +345,7 @@ pub struct Field {
     pub name: String,
     pub ty: Type,
     pub default: Option<Expr>,
+    #[allow(dead_code)] // in the tree (--dump shows it), not read
     pub vis: Vis,
     pub span: Span,
     pub attrs: Vec<Expr>, // a library's attributes (@typeinfo's field_info.attributes)
@@ -355,7 +356,9 @@ pub struct StructDecl {
     pub name: String,
     pub spec: Option<Vec<GenericArg>>, // struct holder<T*>
     pub fields: Vec<Field>,
+    #[allow(dead_code)] // in the tree (--dump shows it), not read
     pub is_extern: bool,
+    #[allow(dead_code)] // in the tree (--dump shows it), not read
     pub is_comptime: bool,
     pub c_name: Option<String>, // defined by an imported C header under this C type name
     pub c_union: bool,          // ...a C union: its fields share offset 0
@@ -377,7 +380,9 @@ pub struct Variant {
 pub enum Member {
     Field(Field, Option<Expr>),
     Variant(Variant, Option<Expr>),
+    #[allow(dead_code)] // in the tree (--dump shows it), not read
     For { bindings: Vec<(String, bool, Span)>, iter: Expr, body: Vec<Member>, span: Span },
+    #[allow(dead_code)] // in the tree (--dump shows it), not read
     If { cond: Expr, then: Vec<Member>, els: Vec<Member>, span: Span },
 }
 
@@ -420,8 +425,10 @@ pub enum ItemKind {
     Use(Path),
     UseC { headers: Vec<String>, alias: String },
     /// `use cpp { "shapes.hpp" } as shapes;`: C++ headers (read by the self-hosted voltc)
+    #[allow(dead_code)] // in the tree (--dump shows it), not read
     UseCpp { headers: Vec<String>, alias: String },
     /// `use rust { "geom" } as geom;`: code in another language (the self-hosted voltc's)
+    #[allow(dead_code)] // in the tree (--dump shows it), not read
     UseLang { lang: String, args: Vec<String>, alias: String },
     Global(Let),
     /// another name for a type: `type name = T;`, or a C typedef (cimport.rs)

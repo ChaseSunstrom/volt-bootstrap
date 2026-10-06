@@ -2,7 +2,7 @@
 // program, a Python one and a Rust one run Volt through it: tests/embed/host.c, host.py and host.rs.
 // The C host runs with no C compiler on PATH, since nothing at run time should need one.
 mod common;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::{Command, Output};
 
 const ROOT: &str = env!("CARGO_MANIFEST_DIR");
@@ -23,11 +23,8 @@ fn embedded_volt() {
     let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("embed-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
-    // voltc, built by the bootstrap; it builds libvoltvm through bolt
-    let voltc = dir.join("voltc");
-    let mut srcs: Vec<PathBuf> = std::fs::read_dir(Path::new(ROOT).join("voltc/src")).unwrap().map(|e| e.unwrap().path()).filter(|p| p.extension().is_some_and(|x| x == "volt")).collect();
-    srcs.sort();
-    ok(Command::new(env!("CARGO_BIN_EXE_voltc-bootstrap")).arg("build").args(&srcs).args(common::llvm_cc_args()).arg("-o").arg(&voltc).output().unwrap(), "building voltc");
+    // stage 1 builds libvoltvm through bolt
+    let voltc = common::voltc();
     let target = dir.join("target");
     ok(Command::new(env!("CARGO_BIN_EXE_bolt")).args(["build", "-q", "--target-dir"]).arg(&target).current_dir(Path::new(ROOT).join("voltc/embed")).env("VOLTC", &voltc).env("BOLT_HOME", dir.join("bolthome")).output().unwrap(), "bolt build voltc/embed");
     let lib_dir = target.join("debug");

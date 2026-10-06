@@ -44,16 +44,11 @@ impl Server {
         let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("lsp-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        let voltc = dir.join("voltc");
-        let mut srcs: Vec<PathBuf> = std::fs::read_dir(Path::new(ROOT).join("voltc/src")).unwrap().map(|e| e.unwrap().path()).filter(|p| p.extension().is_some_and(|x| x == "volt")).collect();
-        srcs.sort();
-        let b = Command::new(env!("CARGO_BIN_EXE_voltc-bootstrap")).arg("build").args(&srcs).args(common::llvm_cc_args()).arg("-o").arg(&voltc).output().unwrap();
-        assert!(b.status.success(), "building voltc/src failed:\n{}", String::from_utf8_lossy(&b.stderr));
         // bolt on PATH: the server asks it for a package's dependencies
         let bolt_dir = Path::new(env!("CARGO_BIN_EXE_bolt")).parent().unwrap().to_path_buf();
         let path = std::env::join_paths(std::iter::once(bolt_dir).chain(std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()))).unwrap();
         // started the way VS Code's client starts it: with --stdio
-        let mut child = Command::new(&voltc)
+        let mut child = Command::new(common::voltc())
             .args(["lsp", "--stdio"])
             .env("VOLT_STD", Path::new(ROOT).join("std"))
             .env("PATH", path)
@@ -405,7 +400,7 @@ fn inline_features(s: &mut Server) {
     assert!(e.contains("\"result\":[]"), "volt/expand of a line without comptime code: {e}");
     // the same from the command line: voltc expand FILE, and FILE:LINE for one line's
     let expand = |arg: &str| {
-        let out = Command::new(s.dir.join("voltc")).args(["expand", arg]).current_dir(ROOT).env("VOLT_STD", Path::new(ROOT).join("std")).output().unwrap();
+        let out = Command::new(common::voltc()).args(["expand", arg]).current_dir(ROOT).env("VOLT_STD", Path::new(ROOT).join("std")).output().unwrap();
         assert!(out.status.success(), "voltc expand {arg}: {}", String::from_utf8_lossy(&out.stderr));
         String::from_utf8_lossy(&out.stdout).into_owned()
     };

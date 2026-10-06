@@ -1,7 +1,7 @@
-// Diagnostic snapshots: `voltc-bootstrap check` on each tests/diag/NAME.volt must print exactly
+// Diagnostic snapshots: `voltc check` (stage 1) on each tests/diag/NAME.volt must print exactly
 // tests/diag/NAME.stderr (colours off). `// flags: ...` on a line passes flags. VOLT_BLESS=1 rewrites
-// the snapshots from the current output; review the diff before keeping it. tests/selfhost.rs checks
-// that the self-hosted compiler prints the same.
+// the snapshots from the current output; review the diff before keeping it.
+mod common;
 
 use std::path::Path;
 use std::process::Command;
@@ -18,7 +18,7 @@ fn diagnostics_match_snapshots() {
         let src = std::fs::read_to_string(f).unwrap();
         let flags: Vec<&str> = src.lines().filter_map(|l| l.strip_prefix("// flags: ")).flat_map(|l| l.split_whitespace()).collect();
         let rel = f.strip_prefix(root).unwrap();
-        let out = Command::new(env!("CARGO_BIN_EXE_voltc-bootstrap"))
+        let out = Command::new(common::voltc())
             .arg("check")
             .arg(rel)
             .args(&flags)

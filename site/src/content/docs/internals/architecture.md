@@ -5,15 +5,14 @@ sidebar:
   order: 1
 ---
 
-Volt has two compilers that implement the same language:
+Volt has one compiler, and a second that builds it the first time:
 
-- **voltc-bootstrap** (`bootstrap/`): the stage0 compiler, in Rust with no crates, generating C.
-  It exists to build the real compiler the first time.
 - **voltc** (`voltc/src/`): the compiler, written in Volt. It generates C or, through LLVM, native
-  code, and adds the C++ importer, the language server, bindings and docs.
-
-Both parse to the same tree and report the same diagnostics: `tests/selfhost.rs` compares them on
-every `.volt` file in the repository. Every change to the language goes into both.
+  code, and adds the C++ importer, the language server, bindings and docs. The language changes
+  here.
+- **voltc-bootstrap** (`bootstrap/`): the stage0 compiler, in Rust with no crates, generating C.
+  It exists to build voltc from `voltc/src`, and it's frozen: it compiles what voltc's own sources
+  use, not features added since (see [Bootstrapping](/volt-bootstrap/internals/bootstrap/)).
 
 ## The pipeline
 
@@ -35,7 +34,7 @@ source ─▶ lexer ─▶ parser ─▶ checker ─▶ typed IR ─┬─▶ cg
 | File | What it does |
 | --- | --- |
 | `lexer.volt`, `parser.volt`, `parser_expr.volt`, `ast.volt` | source to syntax tree |
-| `sexp.volt` | the canonical tree text (`parse --sexp`), for comparing with the bootstrap |
+| `sexp.volt` | the canonical tree text (`parse --sexp`) |
 | `check.volt`, `program.volt` | the checker's state, collecting, and the whole-program walk |
 | `types.volt`, `resolve.volt` | interned types; types, instances and constants from syntax |
 | `expr.volt`, `stmt.volt`, `places.volt`, `operators.volt`, `calls.volt` | checking and lowering code |

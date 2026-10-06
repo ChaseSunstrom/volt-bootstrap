@@ -6,16 +6,6 @@ use std::process::Command;
 
 const ROOT: &str = env!("CARGO_MANIFEST_DIR");
 
-/// voltc/src built by the bootstrap compiler, in dir
-fn stage1(dir: &Path) -> PathBuf {
-    let voltc = dir.join("voltc");
-    let mut srcs: Vec<PathBuf> = std::fs::read_dir(Path::new(ROOT).join("voltc/src")).unwrap().map(|e| e.unwrap().path()).filter(|p| p.extension().is_some_and(|x| x == "volt")).collect();
-    srcs.sort();
-    let b = Command::new(env!("CARGO_BIN_EXE_voltc-bootstrap")).arg("build").args(&srcs).args(common::llvm_cc_args()).arg("-o").arg(&voltc).output().unwrap();
-    assert!(b.status.success(), "building voltc/src failed:\n{}", String::from_utf8_lossy(&b.stderr));
-    voltc
-}
-
 /// a ```volt block from one of the site's pages
 struct Block {
     page: PathBuf,
@@ -84,7 +74,7 @@ fn code_blocks() {
     }
     let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("doc-blocks-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    let mut stage1: Option<PathBuf> = None;
+    let voltc = common::voltc();
     let mut bad = Vec::new();
     let mut checked = 0;
     for (n, b) in all.iter().enumerate() {
@@ -105,8 +95,7 @@ fn code_blocks() {
         };
         let expect = directives(&code, "expect");
         let exit: Option<i32> = directives(&code, "exit").first().map(|e| e.parse().unwrap());
-        let compiler = if common::imports_foreign(&code) { stage1.get_or_insert_with(|| self::stage1(&dir)).clone() } else { PathBuf::from(env!("CARGO_BIN_EXE_voltc-bootstrap")) };
-        let mut cmd = Command::new(compiler);
+        let mut cmd = Command::new(&voltc);
         let run = (!expect.is_empty() || exit.is_some()) && !flags.contains(&"fail");
         cmd.arg(if run { "run" } else { "check" }).arg(&file).arg("--std").arg(root.join("std"));
         for f in directives(&code, "flags") {
@@ -135,7 +124,6 @@ fn code_blocks() {
     // the landing page's excerpts of what voltc writes for hero.volt: each paragraph is in the output
     let samples = root.join("site/src/samples");
     std::fs::copy(samples.join("hero.volt"), dir.join("main.volt")).unwrap();
-    let voltc = stage1.get_or_insert_with(|| self::stage1(&dir)).clone();
     for (cmd, excerpt) in [("emit-c", "hero.c.txt"), ("emit-llvm", "hero.ll.txt")] {
         let o = Command::new(&voltc).arg(cmd).arg("main.volt").arg("--std").arg(root.join("std")).current_dir(&dir).output().unwrap();
         let out = String::from_utf8_lossy(&o.stdout);
@@ -151,10 +139,7 @@ fn code_blocks() {
 
 #[test]
 fn std_reference() {
-    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("docs-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let voltc = stage1(&dir);
-    let o = Command::new(&voltc).args(["doc", "std", "--std"]).arg(Path::new(ROOT).join("std")).output().unwrap();
+    let o = Command::new(common::voltc()).args(["doc", "std", "--std"]).arg(Path::new(ROOT).join("std")).output().unwrap();
     assert!(o.status.success(), "voltc doc std: {}", String::from_utf8_lossy(&o.stderr));
     let json = String::from_utf8(o.stdout).unwrap();
     // a fn with its comment, a struct with its fields, a method with its receiver, an error set, a
@@ -177,7 +162,6 @@ fn std_reference() {
     }
     let have = std::fs::read_to_string(&path).unwrap_or_default();
     assert!(have == json, "site/src/data/std.json is stale: VOLT_REGEN=1 cargo test --test docs std_reference");
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// the README's relative links and images point at files that exist

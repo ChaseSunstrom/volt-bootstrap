@@ -13,7 +13,7 @@ const ROOT: &str = env!("CARGO_MANIFEST_DIR");
 /// callback with the caller's data and an export struct (shims voltc lib adds)
 const MATHLIB_OUT: &str = "add 5\ndot 11\nscale 2 4\nlen 5\nnext 2\nsqrt 3 1\nerror negative\ngreet hello, volt\nrepeat abab\nrepeat negative\nsum 6.5\nfind 2 none\neach 4 5 6 = 15\ncounter clicks 5\ntake negative\n";
 
-/// voltc/src built by the bootstrap compiler, and a scratch directory; both removed when dropped
+/// stage 1 (common::voltc), and a scratch directory, removed when dropped
 struct Env {
     voltc: PathBuf,
     dir: PathBuf,
@@ -24,12 +24,7 @@ impl Env {
         let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("interop-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        let voltc = dir.join("voltc");
-        let mut srcs: Vec<PathBuf> = std::fs::read_dir(Path::new(ROOT).join("voltc/src")).unwrap().map(|e| e.unwrap().path()).filter(|p| p.extension().is_some_and(|x| x == "volt")).collect();
-        srcs.sort();
-        let b = Command::new(env!("CARGO_BIN_EXE_voltc-bootstrap")).arg("build").args(&srcs).args(common::llvm_cc_args()).arg("-o").arg(&voltc).output().unwrap();
-        assert!(b.status.success(), "building voltc/src failed:\n{}", String::from_utf8_lossy(&b.stderr));
-        Env { voltc, dir }
+        Env { voltc: common::voltc(), dir }
     }
     /// voltc with ROOT's std, in tests/interop
     fn voltc(&self, args: &[&str]) -> Output {
@@ -1251,7 +1246,8 @@ fn interop_examples() {
 
 /// A package's library (voltc lib) that calls a C shared library links when the linker drops
 /// libraries nothing has asked for yet (--as-needed, Ubuntu's gcc default): both compilers put
-/// --cc's -l libraries after the archives that use them
+/// --cc's -l libraries after the archives that use them (stage 0 too: it links stage 1 against LLVM
+/// with --cc -lLLVM)
 #[test]
 fn libraries_link_after_archives() {
     let e = Env::new("linkorder");

@@ -1,4 +1,5 @@
-//! What the test harnesses that build voltc (the compiler written in Volt) share.
+//! What the test harnesses share: the stage-1 voltc they run (voltc/src built by the Rust bootstrap
+//! compiler, stage 0) and how to link it against LLVM.
 
 use std::process::Command;
 
@@ -68,14 +69,65 @@ pub fn llvm_cc_args() -> Vec<String> {
     flags.into_iter().flat_map(|f| ["--cc".to_string(), f]).collect()
 }
 
-/// does this Volt source import C++ (or another language) — what only the self-hosted voltc reads?
-/// `use cpp { }`, `use rust { }`..., or a plain `use { }` of a file the extension says isn't C. (A
-/// crate directory by itself, `use { "../geom" }`, can't be told from the text: tests write `use rust`)
-pub fn imports_foreign(code: &str) -> bool {
-    const EXTS: [&str; 24] = [".hpp\"", ".hh\"", ".hxx\"", ".h++\"", ".cpp\"", ".cc\"", ".cxx\"", ".c++\"", ".ipp\"", ".tpp\"", ".ixx\"", ".rs\"", ".zig\"", ".swift\"", ".go\"", ".java\"", ".jar\"", ".cs\"", ".dll\"", ".py\"", ".ts\"", ".mts\"", ".js\"", ".mjs\""];
-    code.lines().map(str::trim).any(|l| {
-        let Some(rest) = l.strip_prefix("use ") else { return false };
-        let explicit = rest.split_once('{').is_some_and(|(lang, _)| !lang.trim().is_empty());
-        explicit || (rest.starts_with('{') && EXTS.iter().any(|e| rest.to_ascii_lowercase().contains(e)))
-    })
+/// voltc/src built by the bootstrap compiler (stage 0), debug: the compiler the tests run. Built once
+/// for a state of voltc/src, std and the bootstrap binary, whichever test binary gets there first (the
+/// others wait on a lock file), and kept in CARGO_TARGET_TMPDIR for the next run
+#[allow(dead_code)]
+pub fn voltc() -> std::path::PathBuf {
+    // a failed build is kept too, so the binary's other tests report it instead of building again
+    static STAGE1: std::sync::OnceLock<Result<std::path::PathBuf, String>> = std::sync::OnceLock::new();
+    STAGE1.get_or_init(build_stage1).clone().unwrap_or_else(|e| panic!("{e}"))
+}
+
+fn build_stage1() -> Result<std::path::PathBuf, String> {
+    use std::hash::{Hash, Hasher};
+    use std::path::{Path, PathBuf};
+    fn volt_files(dir: &Path, out: &mut Vec<PathBuf>) {
+        for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                volt_files(&p, out);
+            } else if p.extension().is_some_and(|x| x == "volt") {
+                out.push(p);
+            }
+        }
+    }
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let stage0 = Path::new(env!("CARGO_BIN_EXE_voltc-bootstrap"));
+    let (mut srcs, mut stdf) = (Vec::new(), Vec::new());
+    volt_files(&root.join("voltc/src"), &mut srcs);
+    volt_files(&root.join("std"), &mut stdf);
+    srcs.sort();
+    stdf.sort();
+    let cc = llvm_cc_args();
+    let mut h = std::hash::DefaultHasher::new();
+    for f in srcs.iter().chain(&stdf) {
+        f.hash(&mut h);
+        std::fs::read(f).unwrap().hash(&mut h);
+    }
+    let meta = std::fs::metadata(stage0).unwrap();
+    (meta.len(), meta.modified().unwrap(), &cc).hash(&mut h);
+    let tmp = Path::new(env!("CARGO_TARGET_TMPDIR"));
+    let exe = tmp.join(format!("voltc-stage1-{:016x}", h.finish()));
+    let lock = std::fs::File::create(tmp.join("voltc-stage1.lock")).unwrap();
+    lock.lock().unwrap();
+    if exe.exists() {
+        // its time is when a run last took it, so the clean-up below leaves it to runs still going
+        let _ = std::fs::File::open(&exe).and_then(|f| f.set_modified(std::time::SystemTime::now()));
+    } else {
+        // the stage 1s of other source states go, once no run has taken one for two hours
+        for e in std::fs::read_dir(tmp).unwrap().flatten() {
+            let old = e.metadata().and_then(|m| m.modified()).is_ok_and(|t| t.elapsed().is_ok_and(|d| d.as_secs() > 7200));
+            if old && e.file_name().to_string_lossy().starts_with("voltc-stage1-") {
+                let _ = std::fs::remove_file(e.path());
+            }
+        }
+        let part = exe.with_extension("part");
+        let b = Command::new(stage0).arg("build").args(&srcs).args(&cc).arg("-o").arg(&part).output().unwrap();
+        if !b.status.success() {
+            return Err(format!("stage 0 failed to build voltc/src:\n{}", String::from_utf8_lossy(&b.stderr)));
+        }
+        std::fs::rename(&part, &exe).unwrap();
+    }
+    Ok(exe)
 }

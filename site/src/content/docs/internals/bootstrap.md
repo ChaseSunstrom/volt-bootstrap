@@ -25,9 +25,11 @@ VOLTC=../target/release/voltc-bootstrap ../target/release/bolt build bootstrap
 
 and it runs in `cargo test` (`tests/selfhost.rs`, `bootstrap_reproduces_itself`).
 
-## Keeping two compilers in step
+## Stage 0 is frozen
 
-The bootstrap compiler isn't a throwaway: it's the reference the self-hosted compiler is checked
-against. `tests/selfhost.rs` requires the same parse tree for every `.volt` file in the repository
-and the same diagnostics (text and exit code) for every test and example. So every change to the
-language lands in both.
+The bootstrap compiler's one job is building stage1, so it's frozen: the language changes in
+`voltc/src` alone, and the tests run stage1 (`tests/common/mod.rs` builds it once for a test run).
+That holds as long as `voltc/src`, and the parts of std it uses, are written in what stage 0
+compiles: a feature added since stays out of them. Every test run builds stage1 with stage 0, so
+code stage 0 can't compile fails there first. The site's generator (`site/gen`) is under the same
+rule, since the Pages workflow builds it with stage 0.

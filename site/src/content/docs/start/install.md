@@ -53,7 +53,7 @@ lib/volt/std that sits beside its bin directory. `$VOLT_STD` or `--std DIR` pick
 
 ```sh
 voltc run examples/tour.volt      # the language tour: it prints what each part does
-cargo test                        # the whole suite: goldens, parity, bolt, interop, the site's code
+cargo test                        # the whole suite: goldens, bolt, interop, the site's code
 ```
 
 Next, [write a first program](/volt-bootstrap/start/hello/).

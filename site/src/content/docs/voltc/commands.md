@@ -6,7 +6,8 @@ sidebar:
 ---
 
 `voltc` is the compiler. Every file named on the command line is part of one program.
-`voltc-bootstrap`, the stage0 compiler, takes the same commands except where noted.
+`voltc-bootstrap`, the stage0 compiler, takes the same commands except where noted, but it's frozen
+at what voltc's own sources use: newer language features need voltc.
 
 ## Commands
 

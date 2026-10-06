@@ -1,6 +1,7 @@
 // bolt end to end: a new package with a path dependency, a git dependency (a local repo), a build
 // file with steps, tests, and libraries that aren't rebuilt when nothing changed; workspaces,
 // features, profiles and targets; and every command (add/remove, update, tree, metadata, install...).
+mod common;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
@@ -26,7 +27,7 @@ fn bolt() {
         Command::new(env!("CARGO_BIN_EXE_bolt"))
             .args(args)
             .current_dir(dir)
-            .env("VOLTC", env!("CARGO_BIN_EXE_voltc-bootstrap"))
+            .env("VOLTC", common::voltc())
             .env("BOLT_HOME", tmp.join("cache"))
             .output()
             .unwrap()
@@ -143,9 +144,9 @@ fn bolt() {
     write(&pinned.join("src/main.volt"), "fn main() -> void {}\n");
     write(&pinned.join("build.volt"), "fn main() -> void {}\n");
     let stale = tmp.join("no-such-std");
-    let o = Command::new(env!("CARGO_BIN_EXE_bolt")).arg("build").current_dir(&pinned).env("VOLTC", env!("CARGO_BIN_EXE_voltc-bootstrap")).env("BOLT_HOME", tmp.join("cache")).env("VOLT_STD", &stale).output().unwrap();
+    let o = Command::new(env!("CARGO_BIN_EXE_bolt")).arg("build").current_dir(&pinned).env("VOLTC", common::voltc()).env("BOLT_HOME", tmp.join("cache")).env("VOLT_STD", &stale).output().unwrap();
     ok(o, "bolt build ([std] path, a stale $VOLT_STD)");
-    let o = Command::new(env!("CARGO_BIN_EXE_voltc-bootstrap")).arg("std-dir").env("VOLT_STD", &stale).output().unwrap();
+    let o = Command::new(common::voltc()).arg("std-dir").env("VOLT_STD", &stale).output().unwrap();
     let err = String::from_utf8_lossy(&o.stderr);
     assert!(!o.status.success() && err.contains("$VOLT_STD") && err.contains("no-such-std"), "{err}");
 
@@ -198,7 +199,7 @@ impl Env {
         Command::new(env!("CARGO_BIN_EXE_bolt"))
             .args(args)
             .current_dir(dir)
-            .env("VOLTC", env!("CARGO_BIN_EXE_voltc-bootstrap"))
+            .env("VOLTC", common::voltc())
             .env("BOLT_HOME", self.tmp.join("cache"))
             .env_remove("BOLT_INSTALL_ROOT")
             .output()

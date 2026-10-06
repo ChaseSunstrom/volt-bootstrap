@@ -1,6 +1,6 @@
-// The self-hosted compiler (voltc/src, built by the bootstrap compiler) must agree with the Rust one:
-// the same canonical parse tree for every .volt file in the repo (errors included), and the same
-// `check` result (diagnostic text and exit code) for every test program and example.
+// The self-hosted compiler: stage 1 (voltc/src built by the Rust bootstrap compiler, stage 0) checks
+// itself, builds in release, reproduces itself (stage2 == stage3) and runs on bare metal; and what it
+// emits for other systems compiles there.
 mod common;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -20,62 +20,22 @@ fn volt_files(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
-/// voltc/src built by the bootstrap compiler; removed when dropped
-struct Stage1(PathBuf);
-
-impl Stage1 {
-    fn build(tag: &str) -> Stage1 {
-        let bin = env!("CARGO_BIN_EXE_voltc-bootstrap");
-        let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-        let exe = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("voltc-stage1-{tag}-{}", std::process::id()));
-        let mut srcs = Vec::new();
-        volt_files(&root.join("voltc/src"), &mut srcs);
-        let b = Command::new(bin).arg("build").args(&srcs).args(common::llvm_cc_args()).arg("-o").arg(&exe).output().unwrap();
-        assert!(b.status.success(), "building voltc/src failed:\n{}", String::from_utf8_lossy(&b.stderr));
-        Stage1(exe)
-    }
-}
-
-impl Drop for Stage1 {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.0);
-    }
-}
-
-/// stage1's `check` prints the same diagnostics and exits the same as the bootstrap's on every test and
-/// example; then a few stage1-only checks
+/// stage 1 checks its own sources, and its readable C (emit-c -o DIR) is what tests/cgen/point holds
 #[test]
-fn self_hosted_checker_matches() {
-    let bin = env!("CARGO_BIN_EXE_voltc-bootstrap");
+fn checks_itself_and_emits_readable_c() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let exe = Stage1::build("check");
-    let mut files = Vec::new();
-    for dir in ["tests/fail", "tests/run", "tests/diag", "examples"] {
-        volt_files(&root.join(dir), &mut files);
-    }
-    files.sort();
-    // C++ imports are the self-hosted voltc's alone (tests/interop.rs checks them)
-    files.retain(|f| !common::imports_foreign(&std::fs::read_to_string(f).unwrap_or_default()));
+    let exe = common::voltc();
     let std_dir = root.join("std");
-    let mut bad = Vec::new();
-    for f in &files {
-        let want = Command::new(bin).arg("check").arg(f).arg("--std").arg(&std_dir).output().unwrap();
-        let got = Command::new(&exe.0).arg("check").arg(f).arg("--std").arg(&std_dir).output().unwrap();
-        if want.stderr != got.stderr || want.status.code() != got.status.code() {
-            bad.push(format!("{}:\n  want: {}\n  got:  {}", f.display(), String::from_utf8_lossy(&want.stderr).trim(), String::from_utf8_lossy(&got.stderr).trim()));
-        }
-    }
-    // it checks itself too
     let mut srcs = Vec::new();
     volt_files(&root.join("voltc/src"), &mut srcs);
-    let own = Command::new(&exe.0).arg("check").args(&srcs).arg("--std").arg(&std_dir).output().unwrap();
+    let own = Command::new(&exe).arg("check").args(&srcs).arg("--std").arg(&std_dir).output().unwrap();
     assert!(own.status.success(), "the self-hosted checker rejects its own sources:\n{}", String::from_utf8_lossy(&own.stderr));
     // the readable C: emit-c -o DIR of tests/cgen/point.volt matches the reviewed files in tests/cgen/point
     // (volt.h from its types on: the prelude before them has its own tests), and builds and runs.
     // VOLT_BLESS=1 rewrites them
     let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("cgen-{}", std::process::id()));
     let _ = std::fs::create_dir_all(&dir);
-    let e = Command::new(&exe.0).args(["emit-c", "tests/cgen/point.volt", "--no-std", "-o"]).arg(&dir).current_dir(root).output().unwrap();
+    let e = Command::new(&exe).args(["emit-c", "tests/cgen/point.volt", "--no-std", "-o"]).arg(&dir).current_dir(root).output().unwrap();
     assert!(e.status.success(), "emit-c -o: {}", String::from_utf8_lossy(&e.stderr));
     let snap = root.join("tests/cgen/point");
     let mut names: Vec<String> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().to_string()).collect();
@@ -99,10 +59,6 @@ fn self_hosted_checker_matches() {
     let run = Command::new(&prog).output().unwrap();
     assert_eq!(String::from_utf8_lossy(&run.stdout), "4 6 12 3\n");
     let _ = std::fs::remove_dir_all(&dir);
-    // $CC with a wrapper word (see tests/cc_env.rs), for reading headers and building
-    let cc = Command::new(&exe.0).args(["run", "tests/run/c_import.volt", "--std"]).arg(&std_dir).env("CC", "env cc").current_dir(root).output().unwrap();
-    assert!(cc.status.success(), "CC='env cc': {}", String::from_utf8_lossy(&cc.stderr));
-    assert!(bad.is_empty(), "self-hosted checker differs on:\n{}", bad.join("\n"));
 }
 
 /// C structs Volt can't read all of (a bitfield, a __typeof__ field, an anonymous member): libclang
@@ -111,13 +67,13 @@ fn self_hosted_checker_matches() {
 fn partial_struct_layouts() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let std_dir = root.join("std");
-    let exe = Stage1::build("partial");
+    let exe = common::voltc();
     let unions = std::fs::read_to_string(root.join("tests/run/c_union.volt")).unwrap();
     let unions: Vec<&str> = unions.lines().filter_map(|l| l.strip_prefix("// expect: ")).collect();
     let unions = unions.join("\n");
     for (file, want) in [("tests/llvm/partial_struct.volt", "3"), ("tests/llvm/partial_typeof.volt", "4"), ("tests/run/c_union.volt", unions.as_str())] {
         for backend in ["c", "llvm"] {
-            let o = Command::new(&exe.0).args(["run", file, "--std"]).arg(&std_dir).args(["--backend", backend]).current_dir(root).output().unwrap();
+            let o = Command::new(&exe).args(["run", file, "--std"]).arg(&std_dir).args(["--backend", backend]).current_dir(root).output().unwrap();
             assert!(o.status.success() && String::from_utf8_lossy(&o.stdout).trim() == want, "{file}, {backend} backend: {}", String::from_utf8_lossy(&o.stderr));
         }
     }
@@ -293,8 +249,8 @@ fn toolchain_layout_and_link_errors() {
     std::os::unix::fs::symlink(root.join("std"), tmp.join("std")).unwrap();
     let tiny = tmp.join("tiny.volt");
     std::fs::write(&tiny, "fn main() -> void {}\n").unwrap();
-    let stage1 = Stage1::build("layout");
-    for (name, from) in [("voltc-bootstrap", Path::new(env!("CARGO_BIN_EXE_voltc-bootstrap"))), ("voltc", stage1.0.as_path())] {
+    let stage1 = common::voltc();
+    for (name, from) in [("voltc-bootstrap", Path::new(env!("CARGO_BIN_EXE_voltc-bootstrap"))), ("voltc", stage1.as_path())] {
         let exe = bin_dir.join(name);
         std::fs::copy(from, &exe).unwrap();
         let o = Command::new(&exe).arg("std-dir").env_remove("VOLT_STD").output().unwrap();
@@ -308,36 +264,13 @@ fn toolchain_layout_and_link_errors() {
     // links it from there
     let cache = tmp.join("cache");
     for _ in 0..2 {
-        let o = Command::new(&stage1.0).arg("build").arg(&tiny).args(["--backend", "llvm", "--std"]).arg(root.join("std")).arg("-o").arg(tmp.join("tiny_llvm")).env("VOLT_CACHE", &cache).output().unwrap();
+        let o = Command::new(&stage1).arg("build").arg(&tiny).args(["--backend", "llvm", "--std"]).arg(root.join("std")).arg("-o").arg(tmp.join("tiny_llvm")).env("VOLT_CACHE", &cache).output().unwrap();
         assert!(o.status.success(), "LLVM build with a runtime cache: {}", String::from_utf8_lossy(&o.stderr));
         assert!(Command::new(tmp.join("tiny_llvm")).status().unwrap().success());
     }
     let objs: Vec<String> = std::fs::read_dir(cache.join("runtime")).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().to_string()).collect();
     assert!(objs.len() == 1 && objs[0].starts_with("rt-") && objs[0].ends_with(".o"), "the runtime cache holds {objs:?}");
     let _ = std::fs::remove_dir_all(&tmp);
-}
-
-/// stage1's `parse --sexp` prints the same tree (or error) as the bootstrap's for every .volt file in the repo
-#[test]
-fn self_hosted_parser_matches() {
-    let bin = env!("CARGO_BIN_EXE_voltc-bootstrap");
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let stage1 = Stage1::build("parse");
-    let exe = &stage1.0;
-
-    let mut files = Vec::new();
-    volt_files(root, &mut files);
-    files.sort();
-    assert!(files.len() > 100, "only {} .volt files found", files.len());
-    let mut bad = Vec::new();
-    for f in &files {
-        let want = Command::new(bin).arg("parse").arg(f).arg("--sexp").output().unwrap();
-        let got = Command::new(exe).arg("parse").arg(f).arg("--sexp").output().unwrap();
-        if want.stdout != got.stdout || want.status.code() != got.status.code() {
-            bad.push(f.display().to_string());
-        }
-    }
-    assert!(bad.is_empty(), "self-hosted parser differs on:\n{}", bad.join("\n"));
 }
 
 /// voltc/src/runtime_c.volt: the C prelude and runtime (runtime/prelude.h, runtime/runtime.h) as Volt
@@ -440,7 +373,7 @@ fn std_compiles_for_other_systems() {
         for prog in programs {
             let name = format!("{prog}-{os}-{arch}");
             let c = dir.join(format!("{name}.c"));
-            let o = Command::new(env!("CARGO_BIN_EXE_voltc-bootstrap"))
+            let o = Command::new(common::voltc())
                 .args(["emit-c", &format!("tests/run/{prog}.volt"), "--cfg", &format!("os={os}"), "--cfg", &format!("arch={arch}")])
                 .current_dir(root)
                 .output()
@@ -470,7 +403,7 @@ fn windows_paths_run() {
     let file = "tests/cross/windows_paths.volt";
     let src = std::fs::read_to_string(root.join(file)).unwrap();
     let want: Vec<&str> = src.lines().filter_map(|l| l.strip_prefix("// expect: ")).collect();
-    let o = Command::new(env!("CARGO_BIN_EXE_voltc-bootstrap"))
+    let o = Command::new(common::voltc())
         .args(["run", file, "--cfg", "os=windows", "--cc", "-no-pie", "--cc", "-Wl,--unresolved-symbols=ignore-all"])
         .current_dir(root)
         .output()
