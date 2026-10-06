@@ -190,7 +190,7 @@ fn bindings_round_trip() {
                 let want = "too big for i32 RangeError\nNaN TypeError\nInfinity TypeError\nfraction for i32 TypeError\nstring for a number TypeError\nnot a counter TypeError\nclosed counter TypeError\nbigint 2\n";
                 assert_eq!(ok(n, "node client_edges.js"), want, "node client_edges.js ({backend})");
                 if Command::new("tsc").arg("--version").output().is_ok_and(|o| o.status.success()) {
-                    ok(Command::new("tsc").args(["--noEmit", "--strict", "--module", "nodenext", "--moduleResolution", "nodenext", "--target", "es2022", "client.mts"]).current_dir(&e.dir).output().unwrap(), "tsc client.mts");
+                    ok(Command::new("tsc").args(["--noEmit", "--strict", "--module", "nodenext", "--moduleResolution", "nodenext", "--target", "es2022", "--types", "node", "client.mts"]).current_dir(&e.dir).output().unwrap(), "tsc client.mts");
                 }
             }
             None => eprintln!("node isn't installed (or has no headers): skipping the JavaScript clients"),
