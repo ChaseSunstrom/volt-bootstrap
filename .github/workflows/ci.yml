@@ -14,6 +14,10 @@ on:
   pull_request:
   workflow_dispatch:
 
+# the jobs only read the code
+permissions:
+  contents: read
+
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
