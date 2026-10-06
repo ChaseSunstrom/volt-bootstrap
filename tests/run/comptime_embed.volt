@@ -1,6 +1,5 @@
 // @embed("path"): a file's bytes as a compile-time str, the path relative to this file. Comptime
-// code can read it: here a struct is built from a small JSON schema (the guide's @embed example,
-// comptime.md, which the docs test can't run: it needs the file beside it)
+// code can read it: here a struct is built from a small JSON schema
 use std::io;
 
 // "string" | "integer" | "number" | "boolean" → a Volt type

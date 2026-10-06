@@ -953,6 +953,14 @@ body:has(.landing) .sl-container {
   margin: 0;
   font-size: 0.97rem;
 }
+.spec dt a {
+  color: inherit;
+}
+@media (min-width: 72rem) {
+  .spec.meta dl {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
 
 /* ---------- start: the first command types itself ---------- */
 

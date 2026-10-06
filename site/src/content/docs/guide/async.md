@@ -2,7 +2,7 @@
 title: Async
 description: Stackless frames driven by hand with async, suspend, resume and await.
 sidebar:
-  order: 12
+  order: 13
 ---
 
 An `async fn` can pause itself with `suspend` and be continued later. Its state lives in a

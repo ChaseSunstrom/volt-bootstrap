@@ -464,74 +464,24 @@ fit equally well, one whose type parameter has a trait bound is chosen over one 
 ## Reading files: @embed
 
 `@embed("path")` is a file's bytes as a compile-time `str`, the path relative to the source file.
-Runtime code gets it as a string constant; comptime code can read it, and so build types and
-functions from data. Here a struct comes from a small JSON schema:
+Runtime code gets it as a string constant:
 
-```volt ignore
+```volt
 use std::io;
 
-// "string" | "integer" | "number" | "boolean" → a Volt type
-comptime fn json_type(t: str) -> type {
-    if (t == "string") {
-        return std::string;
-    }
-    if (t == "integer") {
-        return i64;
-    }
-    if (t == "number") {
-        return f64;
-    }
-    return bool;
-}
-
-// the k-th "..." in text (from 0), without its quotes; "" past the last
-comptime fn nth_str(text: str, k: usize) -> str {
-    var seen: usize = 0;
-    var i: usize = 0;
-    while (i < text.len) {
-        if (text[i] == '"') {
-            var j = i + 1;
-            while (text[j] != '"') {
-                j += 1;
-            }
-            if (seen == k) {
-                return text[i + 1..j];
-            }
-            seen += 1;
-            i = j;
-        }
-        i += 1;
-    }
-    return "";
-}
-
-// { "properties": { "NAME": { "type": "TYPE" }, ... } }: after "properties", three strings a property
-comptime fn from_schema(json: str) -> type {
-    return struct {
-        comptime for (i) in 0..count(json) {
-            (nth_str(json, 1 + 3 * i)): json_type(nth_str(json, 3 + 3 * i));
-        }
-    };
-}
-
-comptime fn count(json: str) -> usize {
-    var n: usize = 0;
-    while (nth_str(json, 1 + 3 * n) != "") {
-        n += 1;
-    }
-    return n;
-}
-
-type user = from_schema(@embed("user.schema.json"));
+// user.schema.json, beside this file: read while compiling
+val schema: str = @embed("user.schema.json");
 
 fn main() -> void {
-    val u: user = { name: std::string::from("ada"), age: 36, admin: true };
-    std::println("{} {}", u.name.as_str(), u.age);
+    std::println("{} {}", schema.len, schema[0..1]);
 }
-// expect: ada 36
+// expect: 129 {
 ```
 
-A package's compile-time code is trusted like its `build.volt`: `@embed` reads any path it's given.
+Comptime code can read it too, and so build types and functions from data: [a struct from a
+schema file](/volt-bootstrap/guide/metaprogramming/#a-struct-from-a-schema-file) does it for this
+file. A package's compile-time code is trusted like its `build.volt`: `@embed` reads any path it's
+given.
 
 ## What comptime code became: @expand and voltc expand
 

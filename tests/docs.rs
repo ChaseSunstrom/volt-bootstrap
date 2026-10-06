@@ -52,7 +52,7 @@ fn directives(src: &str, key: &str) -> Vec<String> {
 }
 
 /// Every ```volt block in the site's pages and the README, and every sample under
-/// site/src/samples, compiles.
+/// site/src/samples, compiles (beside the samples' .json files, which @embed examples read).
 /// A block without `fn main` gets an empty one. `// expect:` lines make it run, printing them, and
 /// `// exit: N` run it expecting that exit code; `// flags:` passes flags. Flags after ```volt: `fail` (it must not compile, and each `// error:`
 /// text must be in what it prints), `ignore` (skipped) and `bolt` (a build file: it gets the
@@ -74,6 +74,15 @@ fn code_blocks() {
     }
     let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("doc-blocks-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
+    // the data files the pages' @embed examples read sit beside the blocks
+    if let Ok(samples) = std::fs::read_dir(root.join("site/src/samples")) {
+        for e in samples {
+            let p = e.unwrap().path();
+            if p.extension().is_some_and(|x| x == "json") {
+                std::fs::copy(&p, dir.join(p.file_name().unwrap())).unwrap();
+            }
+        }
+    }
     let voltc = common::voltc();
     let mut bad = Vec::new();
     let mut checked = 0;
@@ -184,4 +193,13 @@ fn readme_links() {
     assert!(!local.is_empty(), "the README links to nothing local");
     let broken: Vec<&&String> = local.iter().filter(|t| !root.join(t.split('#').next().unwrap()).exists()).collect();
     assert!(broken.is_empty(), "README links to missing files: {broken:?}");
+}
+
+/// the schema the metaprogramming page shows is the file its example reads
+#[test]
+fn shown_schema_is_the_sample() {
+    let root = Path::new(ROOT);
+    let page = std::fs::read_to_string(root.join("site/src/content/docs/guide/metaprogramming.md")).unwrap();
+    let shown = page.split("```json\n").nth(1).and_then(|s| s.split("```").next()).expect("a json block");
+    assert_eq!(shown, std::fs::read_to_string(root.join("site/src/samples/user.schema.json")).unwrap());
 }

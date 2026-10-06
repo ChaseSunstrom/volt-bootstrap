@@ -144,3 +144,21 @@ fn landing_chart_shows_the_volt_columns() {
     }
     assert!(rows > 20, "only {rows} rows");
 }
+
+/// the landing page's "Code that writes code" section links every example on the metaprogramming
+/// page (the generator fails on a link to an anchor that isn't there)
+#[test]
+fn landing_links_each_metaprogramming_example() {
+    let out = temp("meta");
+    let r = generate(&Path::new(ROOT).join("site"), &out);
+    assert!(r.status.success(), "the generator failed:\n{}", String::from_utf8_lossy(&r.stderr));
+    let html = std::fs::read_to_string(out.join("index.html")).unwrap();
+    let md = std::fs::read_to_string(Path::new(ROOT).join("site/src/content/docs/guide/metaprogramming.md")).unwrap();
+    let headings: Vec<&str> = md.lines().filter_map(|l| l.strip_prefix("## ")).collect();
+    assert!(headings.len() >= 6, "only {} examples", headings.len());
+    for h in headings {
+        // slug() for a heading of letters, digits and spaces (the page's are)
+        let anchor = h.to_lowercase().replace(' ', "-");
+        assert!(html.contains(&format!("href=\"/volt-bootstrap/guide/metaprogramming/#{anchor}\"")), "the landing page doesn't link {h}");
+    }
+}

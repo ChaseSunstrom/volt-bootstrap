@@ -2,7 +2,7 @@
 title: Builtins
 description: Every @builtin function, what it does and where it's allowed.
 sidebar:
-  order: 15
+  order: 16
 ---
 
 Builtins start with `@`. They're part of the language, not a library.

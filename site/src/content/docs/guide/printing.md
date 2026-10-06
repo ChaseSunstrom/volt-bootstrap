@@ -2,7 +2,7 @@
 title: Strings and printing
 description: str, cstr and std::string; formatted printing.
 sidebar:
-  order: 14
+  order: 15
 ---
 
 ## Three kinds of text

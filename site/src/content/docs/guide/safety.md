@@ -2,7 +2,7 @@
 title: Safety checks
 description: What debug builds check, what release builds drop, and the exit codes.
 sidebar:
-  order: 16
+  order: 17
 ---
 
 Debug builds (the default) check the mistakes C leaves undefined, and stop the program with a

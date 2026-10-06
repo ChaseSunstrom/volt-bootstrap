@@ -2,7 +2,7 @@
 title: Namespaces, globals and packages
 description: namespace blocks, use paths, globals, visibility, and how packages become namespaces.
 sidebar:
-  order: 13
+  order: 14
 ---
 
 ## Namespaces
