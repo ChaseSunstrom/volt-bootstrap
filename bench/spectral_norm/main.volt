@@ -3,7 +3,7 @@ use std::io;
 use std::math;
 use std::text;
 
-fn a(i: usize, j: usize) -> f64 {
+fn a(i: i32, j: i32) -> f64 {
     return 1.0 / @cast<f64>((i + j) * (i + j + 1) / 2 + i + 1);
 }
 
@@ -11,7 +11,7 @@ fn times(v: f64[..], out: f64[..]) -> void {
     for (i) in 0..v.len {
         var s = 0.0;
         for (j) in 0..v.len {
-            s += a(i, j) * v[j];
+            s += a(@cast<i32>(i), @cast<i32>(j)) * v[j];
         }
         out[i] = s;
     }
@@ -21,7 +21,7 @@ fn times_t(v: f64[..], out: f64[..]) -> void {
     for (i) in 0..v.len {
         var s = 0.0;
         for (j) in 0..v.len {
-            s += a(j, i) * v[j];
+            s += a(@cast<i32>(j), @cast<i32>(i)) * v[j];
         }
         out[i] = s;
     }

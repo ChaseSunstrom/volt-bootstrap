@@ -23,9 +23,9 @@ fn run(code: instr[..]) -> i64 {
     var sp: usize = 0;
     var pc: usize = 0;
     loop {
-        val ins = code[pc];
+        val ins = &code[pc];
         pc += 1;
-        match (ins) {
+        match (*ins) {
             .PUSH(v) => {
                 stack[sp] = v;
                 sp += 1;

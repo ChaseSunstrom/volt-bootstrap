@@ -48,9 +48,9 @@ programmers would usually write it. Every program prints the same output in each
 cargo test --release --test bench -- --ignored --nocapture
 ```
 
-The harness builds each program five ways. C is built with clang `-O2` and with gcc `-O2`, and C++
+The harness builds each program six ways. C is built with clang `-O2` and with gcc `-O2`, and C++
 with clang++ `-O2`. Volt is built with `--release` through both of voltc's backends: C, compiled by
-clang, and LLVM. Each build runs best of three, and every build has to print the same output.
+clang and by gcc, and LLVM. Each build runs best of three, and every build has to print the same output.
 `BENCH_ONLY=nbody,sort` runs only some of the programs, and `BENCH_RUNS=5` takes the best of five.
 `BENCH_MAX_RATIO=1.25` fails when a Volt build takes more than 1.25 times as long as C (clang). A
 full run rewrites the table below.
@@ -74,39 +74,39 @@ Measured 2026-10-05 on:
 - **Volt**: voltc --release; its LLVM backend on LLVM 23.1.1
 - **Timing**: best of 3 runs, wall clock
 
-| Program | C (clang) | C (gcc) | C++ (clang++) | Volt (C backend) | Volt (LLVM) |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| bigint | 0.536 s | 0.446 s (0.83x) | 0.543 s (1.01x) | 0.546 s (1.02x) | 0.545 s (1.02x) |
-| binary_trees | 0.707 s | 0.660 s (0.93x) | 0.914 s (1.29x) | 0.348 s (0.49x) | 0.282 s (0.40x) |
-| closures | 0.472 s | 0.734 s (1.56x) | 0.533 s (1.13x) | 0.534 s (1.13x) | 0.480 s (1.02x) |
-| crc32 | 0.711 s | 0.709 s (1.00x) | 0.702 s (0.99x) | 0.701 s (0.99x) | 0.702 s (0.99x) |
-| csv | 0.651 s | 0.648 s (1.00x) | 0.568 s (0.87x) | 0.342 s (0.53x) | 0.363 s (0.56x) |
-| dijkstra | 0.434 s | 0.507 s (1.17x) | 0.443 s (1.02x) | 0.514 s (1.18x) | 0.500 s (1.15x) |
-| errors | 0.682 s | 0.700 s (1.03x) | 1.322 s (1.94x) | 0.655 s (0.96x) | 0.660 s (0.97x) |
-| fannkuch | 1.858 s | 1.903 s (1.02x) | 1.935 s (1.04x) | 1.969 s (1.06x) | 1.992 s (1.07x) |
-| fib | 0.449 s | 0.175 s (0.39x) | 0.452 s (1.00x) | 0.438 s (0.97x) | 0.433 s (0.96x) |
-| hashmap | 0.545 s | 0.569 s (1.04x) | 1.342 s (2.46x) | 0.548 s (1.01x) | 0.570 s (1.05x) |
-| heap | 0.599 s | 1.343 s (2.24x) | 0.600 s (1.00x) | 0.610 s (1.02x) | 0.617 s (1.03x) |
-| json | 0.639 s | 0.655 s (1.03x) | 0.570 s (0.89x) | 0.484 s (0.76x) | 0.442 s (0.69x) |
-| knucleotide | 0.743 s | 0.904 s (1.22x) | 0.737 s (0.99x) | 1.045 s (1.41x) | 1.054 s (1.42x) |
-| lexer | 0.554 s | 0.657 s (1.19x) | 0.748 s (1.35x) | 0.493 s (0.89x) | 0.461 s (0.83x) |
-| lru_cache | 0.571 s | 0.563 s (0.99x) | 1.307 s (2.29x) | 1.023 s (1.79x) | 1.019 s (1.78x) |
-| lz77 | 0.605 s | 0.578 s (0.96x) | 0.640 s (1.06x) | 0.697 s (1.15x) | 0.682 s (1.13x) |
-| mandelbrot | 0.637 s | 0.616 s (0.97x) | 0.638 s (1.00x) | 0.638 s (1.00x) | 0.639 s (1.00x) |
-| matmul | 0.515 s | 0.476 s (0.92x) | 0.510 s (0.99x) | 0.513 s (1.00x) | 0.511 s (0.99x) |
-| nbody | 0.698 s | 0.714 s (1.02x) | 0.681 s (0.97x) | 0.699 s (1.00x) | 0.727 s (1.04x) |
-| nqueens | 0.831 s | 0.803 s (0.97x) | 0.866 s (1.04x) | 0.847 s (1.02x) | 0.832 s (1.00x) |
-| print | 1.012 s | 1.008 s (1.00x) | 0.048 s (0.05x) | 0.043 s (0.04x) | 0.044 s (0.04x) |
-| raytrace | 0.753 s | 0.848 s (1.13x) | 0.719 s (0.95x) | 0.747 s (0.99x) | 0.666 s (0.88x) |
-| sha256 | 1.016 s | 1.038 s (1.02x) | 1.000 s (0.98x) | 1.026 s (1.01x) | 1.005 s (0.99x) |
-| shapes | 0.882 s | 0.896 s (1.02x) | 0.873 s (0.99x) | 0.631 s (0.71x) | 0.673 s (0.76x) |
-| sieve | 0.588 s | 0.585 s (0.99x) | 0.596 s (1.01x) | 0.605 s (1.03x) | 0.596 s (1.01x) |
-| sort | 0.559 s | 0.696 s (1.24x) | 0.191 s (0.34x) | 0.233 s (0.42x) | 0.228 s (0.41x) |
-| spectral_norm | 0.969 s | 0.648 s (0.67x) | 0.936 s (0.97x) | 0.946 s (0.98x) | 0.936 s (0.97x) |
-| strings | 0.294 s | 0.285 s (0.97x) | 0.374 s (1.27x) | 0.258 s (0.88x) | 0.264 s (0.90x) |
-| vec_grow | 0.559 s | 0.553 s (0.99x) | 1.335 s (2.39x) | 0.546 s (0.98x) | 0.551 s (0.99x) |
-| vm_interp | 0.781 s | 0.848 s (1.09x) | 0.582 s (0.74x) | 0.924 s (1.18x) | 0.913 s (1.17x) |
-| wordfreq | 0.548 s | 0.563 s (1.03x) | 1.003 s (1.83x) | 0.712 s (1.30x) | 0.705 s (1.29x) |
+| Program | C (clang) | C (gcc) | C++ (clang++) | Volt (C, clang) | Volt (C, gcc) | Volt (LLVM) |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| bigint | 0.539 s | 0.445 s (0.83x) | 0.558 s (1.03x) | 0.545 s (1.01x) | 0.544 s (1.01x) | 0.553 s (1.03x) |
+| binary_trees | 0.725 s | 0.664 s (0.92x) | 0.925 s (1.28x) | 0.363 s (0.50x) | 0.372 s (0.51x) | 0.288 s (0.40x) |
+| closures | 0.478 s | 0.738 s (1.54x) | 0.535 s (1.12x) | 0.537 s (1.12x) | 0.653 s (1.37x) | 0.480 s (1.01x) |
+| crc32 | 0.722 s | 0.712 s (0.99x) | 0.715 s (0.99x) | 0.715 s (0.99x) | 0.729 s (1.01x) | 0.722 s (1.00x) |
+| csv | 0.658 s | 0.652 s (0.99x) | 0.587 s (0.89x) | 0.316 s (0.48x) | 0.346 s (0.53x) | 0.366 s (0.56x) |
+| dijkstra | 0.448 s | 0.532 s (1.19x) | 0.486 s (1.09x) | 0.408 s (0.91x) | 0.452 s (1.01x) | 0.406 s (0.91x) |
+| errors | 0.687 s | 0.695 s (1.01x) | 1.327 s (1.93x) | 0.665 s (0.97x) | 0.743 s (1.08x) | 0.673 s (0.98x) |
+| fannkuch | 1.875 s | 1.893 s (1.01x) | 1.955 s (1.04x) | 1.998 s (1.07x) | 1.830 s (0.98x) | 1.991 s (1.06x) |
+| fib | 0.450 s | 0.177 s (0.39x) | 0.450 s (1.00x) | 0.440 s (0.98x) | 0.171 s (0.38x) | 0.441 s (0.98x) |
+| hashmap | 0.600 s | 0.594 s (0.99x) | 1.555 s (2.59x) | 0.506 s (0.84x) | 0.490 s (0.82x) | 0.499 s (0.83x) |
+| heap | 0.600 s | 1.356 s (2.26x) | 0.606 s (1.01x) | 0.550 s (0.92x) | 0.609 s (1.01x) | 0.544 s (0.91x) |
+| json | 0.664 s | 0.675 s (1.02x) | 0.598 s (0.90x) | 0.480 s (0.72x) | 0.646 s (0.97x) | 0.433 s (0.65x) |
+| knucleotide | 0.746 s | 0.908 s (1.22x) | 0.733 s (0.98x) | 0.707 s (0.95x) | 0.850 s (1.14x) | 0.711 s (0.95x) |
+| lexer | 0.563 s | 0.660 s (1.17x) | 0.753 s (1.34x) | 0.459 s (0.81x) | 0.544 s (0.97x) | 0.451 s (0.80x) |
+| lru_cache | 0.574 s | 0.568 s (0.99x) | 1.318 s (2.29x) | 0.522 s (0.91x) | 0.584 s (1.02x) | 0.525 s (0.91x) |
+| lz77 | 0.605 s | 0.587 s (0.97x) | 0.664 s (1.10x) | 0.648 s (1.07x) | 0.704 s (1.16x) | 0.650 s (1.08x) |
+| mandelbrot | 0.639 s | 0.618 s (0.97x) | 0.641 s (1.00x) | 0.638 s (1.00x) | 0.624 s (0.98x) | 0.646 s (1.01x) |
+| matmul | 0.516 s | 0.485 s (0.94x) | 0.513 s (0.99x) | 0.510 s (0.99x) | 0.855 s (1.66x) | 0.514 s (1.00x) |
+| nbody | 0.712 s | 0.720 s (1.01x) | 0.680 s (0.96x) | 0.702 s (0.99x) | 0.772 s (1.09x) | 0.730 s (1.03x) |
+| nqueens | 0.837 s | 0.813 s (0.97x) | 0.876 s (1.05x) | 0.852 s (1.02x) | 1.419 s (1.70x) | 0.837 s (1.00x) |
+| print | 1.006 s | 1.015 s (1.01x) | 0.050 s (0.05x) | 0.045 s (0.04x) | 0.046 s (0.05x) | 0.045 s (0.04x) |
+| raytrace | 0.757 s | 0.849 s (1.12x) | 0.735 s (0.97x) | 0.758 s (1.00x) | 0.877 s (1.16x) | 0.684 s (0.90x) |
+| sha256 | 1.007 s | 1.070 s (1.06x) | 1.015 s (1.01x) | 1.047 s (1.04x) | 1.102 s (1.09x) | 1.014 s (1.01x) |
+| shapes | 0.883 s | 0.901 s (1.02x) | 0.875 s (0.99x) | 0.635 s (0.72x) | 0.570 s (0.65x) | 0.675 s (0.77x) |
+| sieve | 0.644 s | 0.628 s (0.97x) | 0.652 s (1.01x) | 0.642 s (1.00x) | 0.636 s (0.99x) | 0.636 s (0.99x) |
+| sort | 0.580 s | 0.553 s (0.95x) | 0.197 s (0.34x) | 0.061 s (0.11x) | 0.064 s (0.11x) | 0.059 s (0.10x) |
+| spectral_norm | 0.973 s | 0.650 s (0.67x) | 0.938 s (0.96x) | 0.970 s (1.00x) | 0.789 s (0.81x) | 0.980 s (1.01x) |
+| strings | 0.299 s | 0.288 s (0.96x) | 0.402 s (1.34x) | 0.254 s (0.85x) | 0.388 s (1.30x) | 0.245 s (0.82x) |
+| vec_grow | 0.565 s | 0.595 s (1.05x) | 1.461 s (2.59x) | 0.594 s (1.05x) | 0.591 s (1.05x) | 0.584 s (1.03x) |
+| vm_interp | 0.790 s | 0.854 s (1.08x) | 0.580 s (0.73x) | 0.495 s (0.63x) | 0.813 s (1.03x) | 0.493 s (0.62x) |
+| wordfreq | 0.574 s | 0.602 s (1.05x) | 1.052 s (1.83x) | 0.617 s (1.08x) | 0.593 s (1.03x) | 0.613 s (1.07x) |
 <!-- bench:end -->
 
 ## Reading the results
@@ -114,8 +114,15 @@ Measured 2026-10-05 on:
 - **Most rows are a tie.** Volt compiles to the same machine code as C for the same loops: the C
   backend hands clang C that does what the C program does, and the LLVM backend emits the same IR
   clang would.
-- **`sort`: templates beat function pointers.** `slice.sort` and `std::stable_sort` are templates,
-  so the comparison is inlined; C's `qsort` calls a function through a pointer for every one.
+- **`sort`: a radix sort for integers.** `slice.sort` sorts integers of 256 or more elements by
+  their bytes (it's stable, and integers have no order but their bits), in a few passes over the
+  data, with no comparisons at all. `std::stable_sort` is a merge sort with the comparison inlined;
+  C's `qsort` calls a function through a pointer for every comparison.
+- **`vm_interp`: a `match` on an enum is a jump table.** A match whose arms test whole variants
+  (no guards, no payload patterns) becomes a switch on the tag, and since the arms cover every tag
+  it needs no default: LLVM copies the dispatch into the end of each arm, so each instruction jumps
+  straight to the next one's code. C's `switch` keeps a range check and one shared dispatch;
+  `std::visit` gets the same copied dispatch, a little behind.
 - **`vec_grow`: Volt values move by copying bytes**, so `std::vec` grows with `realloc`, which can
   extend a buffer in place, as the hand-written C does. `std::vector` can't: it allocates a new
   buffer and moves each element across.
@@ -139,5 +146,13 @@ Measured 2026-10-05 on:
   whole statement and puts its pieces into stdio's buffer with `fwrite_unlocked`, with no format
   string to parse, where C++ makes a `printf` call per line. It is still stdio's buffer, so a C
   library's `printf` output stays in order with Volt's.
-- **gcc's own wins** (`fib`, `spectral_norm`) are its optimizer's: it turns much of `fib`'s
-  recursion into loops. Volt's C backend is compiled by clang here, so it follows clang.
+- **gcc's own wins** are its optimizer's, and the **Volt (C, gcc)** column shows how much of them
+  Volt's C output gets. `fib`: gcc turns much of the recursion into loops, for Volt's C as for the
+  C program. `spectral_norm`: gcc vectorizes the inner loops at `-O2`, doing the divisions two at
+  a time while keeping the sum in order (clang only vectorizes a float sum it may reorder); Volt's C
+  gets most of that, since its `a(i, j)` does its math in `i32` as the C does (in `usize`, the
+  unsigned 64-bit to `f64` conversion has no SSE2 vector form). `bigint`'s gcc win isn't Volt's yet.
+- **Where Volt still trails** by a few percent: `lz77` and `wordfreq`. Volt appends to a
+  `std::string` with a capacity check per call, where the C checks once per word and then writes
+  without checks, and `wordfreq`'s `sort_by` (a stable merge sort) is a little slower than `qsort`
+  on its 24-byte rows.

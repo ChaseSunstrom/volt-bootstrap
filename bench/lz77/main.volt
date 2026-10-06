@@ -20,6 +20,9 @@ fn hash4(p: u8[..], i: usize) -> usize {
     return @cast<usize>((v *% 2654435761) >> (32 - HASH_BITS));
 }
 
+// inlined, as clang inlines the C's: out of line it takes out's address, and compress then keeps
+// out's length in memory around every byte it adds
+@attributes([@inline])
 fn put_literals(out: std::vec<u8>&, input: u8[..], var from: usize, to: usize) -> !void {
     while (from < to) {
         var k = to - from;
@@ -74,9 +77,8 @@ fn compress(input: u8[..]) -> !std::vec<u8> {
         head[h] = @cast<i32>(i);
         if (best >= MIN_MATCH) {
             try put_literals(&out, input, lit, i);
-            try out.push(@cast<u8>(128 + best - MIN_MATCH));
-            try out.push(@cast<u8>(dist & 255));
-            try out.push(@cast<u8>(dist >> 8));
+            val tag: u8[3] = { @cast<u8>(128 + best - MIN_MATCH), @cast<u8>(dist & 255), @cast<u8>(dist >> 8) };
+            try out.extend(tag[..]);
             // the positions inside the match go into the table too
             var j = i + 1;
             while (j < i + best && j + MIN_MATCH <= n) {
@@ -181,14 +183,7 @@ fn main() -> !void {
         std::eprintln("corrupt: {}", e);
         std::process::exit(1);
     };
-    var same = back.len == n;
-    for (b, i) in back.items() {
-        if (b != input[i]) {
-            same = false;
-            break;
-        }
-    }
-    if (!same) {
+    if (!back.items().eq(&input)) {
         std::eprintln("round trip failed");
         std::process::exit(1);
     }

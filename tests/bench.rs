@@ -1,6 +1,6 @@
 //! Volt against C and C++: each program under bench/ is written in all three. They're built for
 //! speed: C with clang and gcc -O2, C++ with clang++ -O2, and Volt with --release through both of
-//! voltc's backends (C, compiled by clang, and LLVM). Each runs best of BENCH_RUNS (default 3), and
+//! voltc's backends (C, compiled by clang and by gcc, and LLVM). Each runs best of BENCH_RUNS (default 3), and
 //! every build has to print the same thing. Prints a table and rewrites the one in
 //! site/src/content/docs/internals/benchmarks.md, with the machine and toolchain it ran on.
 //!
@@ -17,11 +17,12 @@ struct Lang {
     file: &'static str,
 }
 
-const LANGS: [Lang; 5] = [
+const LANGS: [Lang; 6] = [
     Lang { name: "C (clang)", file: "main.c" },
     Lang { name: "C (gcc)", file: "main.c" },
     Lang { name: "C++ (clang++)", file: "main.cpp" },
-    Lang { name: "Volt (C backend)", file: "main.volt" },
+    Lang { name: "Volt (C, clang)", file: "main.volt" },
+    Lang { name: "Volt (C, gcc)", file: "main.volt" },
     Lang { name: "Volt (LLVM)", file: "main.volt" },
 ];
 
@@ -42,7 +43,7 @@ fn machine(runs: usize) -> String {
     let os = read("/etc/os-release").lines().find_map(|l| l.strip_prefix("PRETTY_NAME=")).map(|s| s.trim_matches('"').to_string()).unwrap_or_else(|| std::env::consts::OS.to_string());
     let governor = read("/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor");
     let governor = if governor.trim().is_empty() { String::new() } else { format!(", `{}` frequency governor", governor.trim()) };
-    let llvm = ["llvm-config", "llvm-config-22"].iter().map(|c| first_line(c, &["--version"])).find(|v| !v.is_empty()).unwrap_or_default();
+    let llvm = ["llvm-config", "llvm-config-23"].iter().map(|c| first_line(c, &["--version"])).find(|v| !v.is_empty()).unwrap_or_default();
     format!(
         "Measured {} on:\n\n- **CPU**: {cpu} ({cores}{threads} threads{governor})\n- **Memory**: {:.0} GiB\n- **OS**: {os}, kernel {}\n- **C and C++**: {}; {}\n- **Volt**: voltc --release; its LLVM backend on LLVM {llvm}\n- **Timing**: best of {runs} runs, wall clock\n\n",
         first_line("date", &["+%Y-%m-%d"]),
@@ -87,7 +88,7 @@ fn bench() {
                 0 => run(Command::new("clang").args(["-O2", "-o"]).arg(&exe).arg(&src).arg("-lm")),
                 1 => run(Command::new("gcc").args(["-O2", "-o"]).arg(&exe).arg(&src).arg("-lm")),
                 2 => run(Command::new("clang++").args(["-O2", "-std=c++20", "-o"]).arg(&exe).arg(&src)),
-                3 => run(Command::new(&voltc).arg("build").arg(&src).args(["--release", "--backend", "c", "--std"]).arg(root.join("std")).arg("-o").arg(&exe).env("CC", "clang")),
+                3 | 4 => run(Command::new(&voltc).arg("build").arg(&src).args(["--release", "--backend", "c", "--std"]).arg(root.join("std")).arg("-o").arg(&exe).env("CC", if k == 3 { "clang" } else { "gcc" })),
                 _ => run(Command::new(&voltc).arg("build").arg(&src).args(["--release", "--backend", "llvm", "--std"]).arg(root.join("std")).arg("-o").arg(&exe)),
             };
             let mut best = Duration::MAX;

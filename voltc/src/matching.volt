@@ -28,6 +28,9 @@ struct pat_out {
     binds: std::vec<pat_bind> = {};
     irrefutable: bool;
     variant: usize? = null;
+    // a pattern matching a whole variant: the tag it tests and the value, so a match can switch on it
+    case_tag: u32? = null;
+    case_value: i128 = 0;
     bool_val: bool? = null;
     // a slice pattern whose elements all match anything: the lengths it covers, lens_n exactly or
     // (lens_open, with a `..`) lens_n and more
@@ -94,6 +97,7 @@ attach fn match_expr(this: checker&, scrut: expr&, arms: std::vec<arm>&, want: u
     // sees the moves of the arms that reach it
     var base = copy this.cx.moved;
     var after = copy base;
+    var codes: std::vec<arm_code> = {};
     for (a&) in arms.items() {
         this.cx.moved = copy base;
         put(&this.cx.scopes, {});
@@ -103,17 +107,31 @@ attach fn match_expr(this: checker&, scrut: expr&, arms: std::vec<arm>&, want: u
             this.cx.scopes.pop();
             return copy e;
         };
-        put(&stmts, arm_c);
+        put(&codes, arm_c);
     }
     this.cx.scopes.pop();
     after.add_all(&base);
     this.cx.moved = move after;
     try this.check_exhaustive(st, &cov, span);
-    // the arms cover every value, so falling off the chain means a corrupt value (say, a bad tag from C)
+    // the arms cover every value, so falling off them means a corrupt value (say, a bad tag from C)
+    var none_matched = this.ir.panic("no match arm matched", this.loc(span));
     if (this.opts.release) {
-        put(&stmts, this.ir.node(ir_kind::UNREACHABLE, NEVER));
+        none_matched = this.ir.node(ir_kind::UNREACHABLE, NEVER);
+    }
+    // whole variants and a last catch-all: a switch on the tag, with an unreachable default when
+    // nothing catches all (an interpreter's match in a loop then gets a jump table LLVM can copy into
+    // each arm, instead of one shared dispatch); else the if-chain
+    var sw: u32? = null;
+    if (codes.len >= 2) {
+        sw = this.match_switch(&codes, none_matched);
+    }
+    if (sw) {
+        put(&stmts, sw);
     } else {
-        put(&stmts, this.ir.panic("no match arm matched", this.loc(span)));
+        for (c&) in codes.items() {
+            put(&stmts, c.code);
+        }
+        put(&stmts, none_matched);
     }
     put(&stmts, this.ir.label_at(end));
     if (tmp_drop) {
@@ -134,9 +152,19 @@ attach fn match_expr(this: checker&, scrut: expr&, arms: std::vec<arm>&, want: u
     return vnew(t, this.ir.seq(move stmts, null, t));
 }
 
-// one arm: `if (test) { binds; [if (guard)] { body; goto end; } }`. Updates the shared result type and
-// slot, coverage and move sets
-attach fn match_arm(this: checker&, a: arm&, m: u32, st: u32, result_ty: u32?&, r: local_ref?&, cov: coverage&, all_never: bool&, end: u32, base: idset&, after: idset&, mp: tval&, outp: tval&) -> compile_error!u32 {
+// one arm's code: the whole arm, `if (test) { binds; [if (guard)] { body; goto end; } }`, and its
+// parts for a switch: what's inside the if, and the tag and value that decide it (none when the test
+// is anything else, or there's a guard)
+struct arm_code {
+    code: u32;
+    inner: u32;
+    case_tag: u32?;
+    case_value: i128;
+    irrefutable: bool;
+}
+
+// one arm (see arm_code). Updates the shared result type and slot, coverage and move sets
+attach fn match_arm(this: checker&, a: arm&, m: u32, st: u32, result_ty: u32?&, r: local_ref?&, cov: coverage&, all_never: bool&, end: u32, base: idset&, after: idset&, mp: tval&, outp: tval&) -> compile_error!arm_code {
     val p = try this.pat_code(&a.pat, m, st);
     var body_stmts: std::vec<u32> = {};
     this.lsp_at = a.pat.span;
@@ -222,10 +250,45 @@ attach fn match_arm(this: checker&, a: arm&, m: u32, st: u32, result_ty: u32?&, 
         }
     }
     val inner = this.ir.block(move body_stmts);
-    if (p.test) {
-        return this.ir.if_(p.test, inner, null);
+    var case_tag: u32? = null;
+    if (a.guard == null) {
+        case_tag = p.case_tag;
     }
-    return inner;
+    val irrefutable = a.guard == null && p.test == null;
+    if (p.test) {
+        return { code: this.ir.if_(p.test, inner, null), inner: inner, case_tag: case_tag, case_value: p.case_value, irrefutable: irrefutable };
+    }
+    return { code: inner, inner: inner, case_tag: case_tag, case_value: p.case_value, irrefutable: irrefutable };
+}
+
+// the arms as a switch on their tag (see match_expr), or none when an arm is guarded or tests anything
+// but the tag. A catch-all arm is the default (the arms after it never run); an arm whose variant an
+// earlier one took never runs either
+attach fn match_switch(this: checker&, codes: std::vec<arm_code>&, none_matched: u32) -> u32? {
+    var tag: u32? = null;
+    var cases: std::vec<case_arm> = {};
+    var dflt = none_matched;
+    for (c&) in codes.items() {
+        if (c.irrefutable) {
+            dflt = c.inner;
+            break;
+        }
+        val t = c.case_tag ?? return null;
+        if (tag == null) {
+            tag = t;
+        }
+        var seen = false;
+        for (x&) in cases.items() {
+            if (x.value == c.case_value) {
+                seen = true;
+            }
+        }
+        if (!seen) {
+            put(&cases, { value: c.case_value, body: c.inner });
+        }
+    }
+    val on = tag ?? return null;
+    return this.ir.node(ir_kind::SWITCH(on, move cases, dflt), VOID);
 }
 
 // an error unless an unguarded arm matches anything, or the unguarded arms cover every variant of an
@@ -505,7 +568,7 @@ attach fn union_pat(this: checker&, pp: path&, args: std::vec<pat>*, c: u32, t: 
     val test = this.ir.binary(binop_ir::EQ, tag, this.ir.int(@cast<i128>(i), int_id(int_ty::U16)), BOOL);
     val mc = this.ir.field(c, @cast<u32>(i) + 1, mty);
     if (args == null || (args ?? return fails(span, "")).len == 0) {
-        return { test: test, irrefutable: false, variant: i };
+        return { test: test, irrefutable: false, variant: i, case_tag: tag, case_value: @cast<i128>(i) };
     }
     val a = args ?? return fails(span, "");
     if (a.len != 1) {
@@ -518,6 +581,8 @@ attach fn union_pat(this: checker&, pp: path&, args: std::vec<pat>*, c: u32, t: 
     o.variant = null;
     if (full) {
         o.variant = i;
+        o.case_tag = tag;
+        o.case_value = @cast<i128>(i);
     }
     o.bool_val = null;
     return o;
@@ -571,10 +636,15 @@ attach fn ctor_pat(this: checker&, path: ctor_path&, args: std::vec<pat>*, c: u3
     if (ety == t) {
         variant = idx;
     }
-    val pats = args ?? return { test: test, irrefutable: false, variant: variant };
+    // the tag test alone decides a whole-variant pattern of this enum: a match may switch on it
+    var case_tag: u32? = null;
+    if (variant != null) {
+        case_tag = tag_expr;
+    }
+    val pats = args ?? return { test: test, irrefutable: false, variant: variant, case_tag: case_tag, case_value: value };
     if (payload == null) {
         if (pats.len == 0) {
-            return { test: test, irrefutable: false, variant: variant };
+            return { test: test, irrefutable: false, variant: variant, case_tag: case_tag, case_value: value };
         }
         return fail(span, fmt("{} has no payload", S(name)));
     }
@@ -602,8 +672,11 @@ attach fn ctor_pat(this: checker&, path: ctor_path&, args: std::vec<pat>*, c: u3
     out.test = this.and_test(test, out.test);
     out.irrefutable = false;
     out.variant = null;
+    out.case_tag = null;
     if (sub_irrefutable) {
         out.variant = variant;
+        out.case_tag = case_tag;
+        out.case_value = value;
     }
     out.bool_val = null;
     return out;

@@ -18,18 +18,37 @@ public attach fn eq(this: T?&, other: T?&) -> bool {
     return this.value.eq(&other.value);
 }
 
-// vectors: as long, and equal element by element
-<T: type, A: std::mem::allocator, B: std::mem::allocator>
-public attach fn eq(this: std::vec<T, A>&, other: std::vec<T, B>&) -> bool {
+// slices: as long, and equal element by element. Integers and bools compare as bytes, all at once
+// (floats can't: NaN isn't equal to itself, and -0.0 is equal to 0.0)
+<T: type>
+public attach fn eq(this: T[..]&, other: T[..]&) -> bool {
     if (this.len != other.len) {
         return false;
     }
-    for (i) in 0..this.len {
-        if (!this.at(i).eq(other.at(i))) {
+    comptime if (@cfg("hosted")) {
+        comptime match (@typeinfo(T).kind) {
+            .INT(k) => {
+                return this.len == 0 || std::text::libc::memcmp(@cast<void*>(this.ptr), @cast<void*>(other.ptr), this.len * @sizeof(T)) == 0;
+            },
+            .BOOL => {
+                return this.len == 0 || std::text::libc::memcmp(@cast<void*>(this.ptr), @cast<void*>(other.ptr), this.len * @sizeof(T)) == 0;
+            },
+            default => {},
+        }
+    }
+    for (x&, i) in *this {
+        if (!x.eq(&(*other)[i])) {
             return false;
         }
     }
     return true;
+}
+
+// vectors: their elements, as slices
+<T: type, A: std::mem::allocator, B: std::mem::allocator>
+public attach fn eq(this: std::vec<T, A>&, other: std::vec<T, B>&) -> bool {
+    val b = other.items();
+    return this.items().eq(&b);
 }
 
 // -1, 0 or 1: how this sorts against other, by <

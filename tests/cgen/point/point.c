@@ -6,14 +6,18 @@ static int32_t v_area(v_shape s) {
     int32_t r;
 
     _mp = &s;
-    if (_mp->tag == (uint8_t)0) {
+    switch (_mp->tag) {
+    case (uint8_t)0:
         return 0;
-    }
-    if (_mp->tag == (uint8_t)1) {
+        break;
+    case (uint8_t)1:
         r = _mp->u.v1;
         return volt_mul_i32(volt_mul_i32(3, r, "tests/cgen/point.volt:22:32"), r, "tests/cgen/point.volt:22:32");
+        break;
+    default:
+        volt_panic("no match arm matched", "tests/cgen/point.volt:20:5");
+        break;
     }
-    volt_panic("no match arm matched", "tests/cgen/point.volt:20:5");
 }
 
 // add (tests/cgen/point.volt:15)
