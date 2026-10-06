@@ -387,7 +387,10 @@ fn cc(c_src: &str, out: &PathBuf, release: bool, libs: &[(String, PathBuf)], ext
         // a library's C still includes the headers its code imports: -I, -D, -U from --cc
         cmd.arg("-c").args(cimport::preprocessor_flags(extra));
     } else {
-        cmd.args(extra).args(libs.iter().map(|l| &l.1)).args(["-lm", "-lpthread"]); // the runtime has threads (libpthread before glibc 2.34)
+        // the order GNU ld needs: objects and flags, the archives, then the -l libraries they use (Ubuntu's gcc
+        // links --as-needed, which drops a library named before anything uses it)
+        let (needed, rest): (Vec<&String>, Vec<&String>) = extra.iter().partition(|a| a.starts_with("-l"));
+        cmd.args(rest).args(libs.iter().map(|l| &l.1)).args(needed).args(["-lm", "-lpthread"]); // the runtime has threads (libpthread before glibc 2.34)
     }
     if release {
         cmd.args(["-O2", "-fwrapv"]);

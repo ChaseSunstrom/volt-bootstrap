@@ -1,7 +1,8 @@
 # Builds and tests Volt on every push to main and every pull request.
 #
 # Linux (x86-64 and arm64) runs the whole suite: both compilers, std, bolt, the language server, the
-# docs and site, interop, and bare metal under qemu. The suite itself is Linux-only for now (it
+# docs and site, interop, and bare metal under qemu. arm64 reports without failing the run until the
+# LLVM backend runs on aarch64 hosts (it refuses them today, and voltc's own build uses it). The suite itself is Linux-only for now (it
 # leans on .so files, sh scripts and GNU ld), so macOS and Windows build the compilers, check every
 # test program with the front end, and try running programs; those jobs are experimental: they
 # report without failing the run.
@@ -28,9 +29,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { arch: x86-64, os: ubuntu-24.04 }
-          - { arch: arm64, os: ubuntu-24.04-arm }
+          - { arch: x86-64, os: ubuntu-24.04, experimental: false }
+          - { arch: arm64, os: ubuntu-24.04-arm, experimental: true }
     runs-on: ${{ matrix.os }}
+    continue-on-error: ${{ matrix.experimental }}
     timeout-minutes: 180
     steps:
       - uses: actions/checkout@v5
@@ -48,6 +50,10 @@ jobs:
           echo "C_INCLUDE_PATH=/usr/lib/llvm-$LLVM_VERSION/include" >> "$GITHUB_ENV"
           echo "LIBRARY_PATH=/usr/lib/llvm-$LLVM_VERSION/lib" >> "$GITHUB_ENV"
           echo "LD_LIBRARY_PATH=/usr/lib/llvm-$LLVM_VERSION/lib" >> "$GITHUB_ENV"
+      # Node's types for the TypeScript checks (tsc comes with the runner): the clients import
+      # node:module, and tsc finds @types in the node_modules of any folder above them
+      - name: Install Node's types
+        run: npm install --no-save --no-package-lock --no-audit --no-fund @types/node
       - name: Build (no warnings)
         run: |
           cargo build 2>&1 | tee build.log

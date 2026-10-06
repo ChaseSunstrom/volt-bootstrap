@@ -213,7 +213,8 @@ fn main() -> void {
 ### Binding by reference
 
 A binding copies the payload. `.V(x&)` binds a reference to the payload in place instead, to read
-a large value without copying it, or to change it.
+a large value without copying it, or to change it. A match on a reference (`r: slot&`) matches what
+it refers to, so `x&` there changes the caller's value.
 
 ```volt
 use std::io;

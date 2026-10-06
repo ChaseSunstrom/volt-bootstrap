@@ -5579,6 +5579,13 @@ attach fn ts_text(this: bind&) -> std::string {
         out.append(this.ts_doc(e.f, "").as_str());
         out.append(fmt3("export declare function {}({}): {};\n", S(info.c_name), this.ts_params(e.f, 0), this.ts_ty(info.ret, false)).as_str());
     }
+    // a class's [Symbol.dispose] needs TypeScript's disposable lib, which an older --target (es2022)
+    // doesn't load by itself: the file asks for it
+    if (out.as_str().contains("[Symbol.dispose]")) {
+        var top = S("/// <reference lib=\"esnext.disposable\" />\n");
+        top.append(out.as_str());
+        return top;
+    }
     return out;
 }
 

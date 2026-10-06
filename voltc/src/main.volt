@@ -1276,8 +1276,15 @@ fn cc_run(inputs: std::vec<str>&, out: str, c: cli&, object: bool) -> void {
             put(&argv, *f);
         }
     } else {
+        // the order GNU ld needs: objects and flags, the archives, then the -l libraries they use
+        // (Ubuntu's gcc links --as-needed, which drops a library named before anything uses it)
+        var needed: std::vec<str> = {};
         for (a&) in c.cc_args.items() {
-            put(&argv, *a);
+            if (a.starts_with("-l")) {
+                put(&needed, *a);
+            } else {
+                put(&argv, *a);
+            }
         }
         for (l&) in c.links.items() {
             put(&argv, l.path);
@@ -1293,6 +1300,9 @@ fn cc_run(inputs: std::vec<str>&, out: str, c: cli&, object: bool) -> void {
         }
         for (f&) in lib_flags.items() {
             put(&argv, f.as_str());
+        }
+        for (a&) in needed.items() {
+            put(&argv, *a);
         }
         put(&argv, "-lm");
         put(&argv, "-lpthread"); // the runtime has threads (libpthread before glibc 2.34)

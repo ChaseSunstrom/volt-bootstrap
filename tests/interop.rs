@@ -813,7 +813,9 @@ fn python_direct() {
     tools(&mut c);
     let o = c.output().unwrap();
     assert_eq!(o.status.code(), Some(101), "an exception stops the program: {}", String::from_utf8_lossy(&o.stderr));
-    assert!(String::from_utf8_lossy(&o.stderr).contains("ZeroDivisionError: division by zero"), "{}", String::from_utf8_lossy(&o.stderr));
+    // the exception's name: its message varies with Python's version ("division by zero" in 3.14,
+    // "integer division or modulo by zero" before)
+    assert!(String::from_utf8_lossy(&o.stderr).contains("ZeroDivisionError"), "{}", String::from_utf8_lossy(&o.stderr));
     // the same program in a bolt package
     let app = dir.join("app");
     std::fs::create_dir_all(app.join("src")).unwrap();
@@ -1245,4 +1247,45 @@ fn interop_examples() {
     }
     eprintln!("interop examples: ran {ran:?}; skipped (no toolchain) {skipped:?}");
     assert!(ran.iter().any(|n| n == "calls-volt/c") && ran.iter().any(|n| n == "volt-calls/c"), "the C examples always run");
+}
+
+/// A package's library (voltc lib) that calls a C shared library links when the linker drops
+/// libraries nothing has asked for yet (--as-needed, Ubuntu's gcc default): both compilers put
+/// --cc's -l libraries after the archives that use them
+#[test]
+fn libraries_link_after_archives() {
+    let e = Env::new("linkorder");
+    let d = &e.dir;
+    std::fs::write(d.join("answer.c"), "int c_answer(void) { return 42; }\n").unwrap();
+    ok(Command::new("cc").args(["-shared", "-fPIC", "-o"]).arg(d.join("libanswer.so")).arg(d.join("answer.c")).output().unwrap(), "cc -shared");
+    std::fs::create_dir_all(d.join("ans")).unwrap();
+    std::fs::write(d.join("ans/ans.volt"), "extern \"C\" fn c_answer() -> i32;\npublic fn answer() -> i32 { return c_answer(); }\n").unwrap();
+    std::fs::write(d.join("main.volt"), "use std::io;\nfn main() -> void { std::println(ans::answer()); }\n").unwrap();
+    let std_dir = Path::new(ROOT).join("std");
+    for (name, compiler) in [("bootstrap", PathBuf::from(env!("CARGO_BIN_EXE_voltc-bootstrap"))), ("voltc", e.voltc.clone())] {
+        let lib = d.join(format!("libans-{name}.a"));
+        let pkg = format!("ans={}", d.join("ans").display());
+        ok(Command::new(&compiler).args(["lib", "ans", "--pkg", &pkg, "-o"]).arg(&lib).arg("--std").arg(&std_dir).output().unwrap(), &format!("{name} lib"));
+        let exe = d.join(format!("prog-{name}"));
+        // voltc through its C backend, the one CI's dotnet test links with (the bootstrap is C only)
+        let backend: &[&str] = if name == "voltc" { &["--backend", "c"] } else { &[] };
+        let o = Command::new(&compiler)
+            .arg("build")
+            .arg(d.join("main.volt"))
+            .args(["--pkg", &pkg, "--link"])
+            .arg(format!("ans={}", lib.display()))
+            .args(backend)
+            .args(["--cc", "-Wl,--as-needed", "--cc"])
+            .arg(format!("-L{}", d.display()))
+            .args(["--cc", "-lanswer", "--cc"])
+            .arg(format!("-Wl,-rpath,{}", d.display()))
+            .arg("--std")
+            .arg(&std_dir)
+            .arg("-o")
+            .arg(&exe)
+            .output()
+            .unwrap();
+        ok(o, &format!("{name} build with --as-needed"));
+        assert_eq!(ok(Command::new(&exe).output().unwrap(), &format!("{name}'s program")), "42\n");
+    }
 }
