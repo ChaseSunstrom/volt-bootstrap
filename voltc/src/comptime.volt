@@ -114,8 +114,7 @@ attach fn ct_eval_in(this: checker&, env: u32, e: expr&, want: u32?) -> compile_
 // is this expression only meaningful at compile time (so it gets evaluated, not emitted)?
 attach fn is_ct_expr(this: checker&, e: expr&) -> bool {
     match (e.kind) {
-        .QUOTE(p) => { return true; },
-        .BUILTIN(n, g, a) => { return n == "typeinfo" || n == "typeof" || n == "compile_error" || n == "cfg" || n == "attaches" || n == "has_method" || n == "has_field"; },
+        .BUILTIN(n, g, a) => { return n == "typeinfo" || n == "typeof" || n == "compile_error" || n == "cfg" || n == "attaches" || n == "has_method" || n == "has_field" || n == "embed"; },
         .CALL(c, args) => {
             match (c.kind) {
                 .PATH(p&) => {
@@ -151,7 +150,23 @@ attach fn is_ct_expr(this: checker&, e: expr&) -> bool {
         },
         .FIELD(b, n, g) => { return g == null && this.is_ct_expr(b); },
         .INDEX(b, i) => { return this.is_ct_expr(b); },
-        .PATH(p) => { return p.is_single() && this.const_local(p.segs.at(0).name) != null; },
+        .PATH(p) => {
+            if (!p.is_single()) {
+                return false;
+            }
+            val n = p.segs.at(0).name;
+            if (this.const_local(n) != null) {
+                return true;
+            }
+            // a value a comptime fn's declaration captured (a list a comptime for can go over)
+            if (this.lookup_local(n) != null) {
+                return false;
+            }
+            match (this.env_generic(this.cx.env, n) ?? gval::INT(0)) {
+                .VAL(i) => { return true; },
+                default => { return false; },
+            }
+        },
         default => { return false; },
     }
 }
@@ -698,18 +713,6 @@ attach fn ct_expr(this: checker&, e: expr&, want: u32?) -> compile_error!cval {
         },
         .STR(s) => { return cval::STR(copy s); },
         .TYPE_BODY(b) => { return this.ct_type_body(b, span); },
-        .QUOTE(parts&) => {
-            var out: std::string = {};
-            for (p&) in parts.items() {
-                out.append(p.text);
-                if (p.splice) {
-                    val x = &p.splice;
-                    val v = try this.ct_expr(x, null);
-                    out.append((try this.splice_text(v, x.span)).as_str());
-                }
-            }
-            return cval::STR(move out);
-        },
         .BOOL(b) => { return cval::BOOL(b); },
         .NULL => { return cval::NULL; },
         .PATH(p&) => { return this.ct_path(p, want, span); },
@@ -796,6 +799,44 @@ attach fn ct_expr(this: checker&, e: expr&, want: u32?) -> compile_error!cval {
         },
         .INDEX(b, i) => {
             val bv = try this.ct_expr(b, null);
+            match (i.kind) {
+                .RANGE(lo, hi, incl) => {
+                    // a str's bytes or an array's items from lo up to hi (all of them by default)
+                    var n: usize = 0;
+                    match (bv) {
+                        .STR(x) => { n = x.len(); },
+                        .ARRAY(es, t) => { n = es.len; },
+                        default => { return fails(span, "can't slice this at compile time"); },
+                    }
+                    var a: i128 = 0;
+                    var z = @cast<i128>(n);
+                    if (lo) {
+                        a = try this.ct_index(lo);
+                    }
+                    if (hi) {
+                        z = try this.ct_index(hi);
+                        if (incl && z >= 0) {
+                            z += 1;
+                        }
+                    }
+                    if (a < 0 || z < 0 || a > z || z > @cast<i128>(n)) {
+                        return fail(span, fmt3("slice {}..{} out of bounds (len {})", num(a), num(z), unum(@cast<u64>(n))));
+                    }
+                    val (from, to) = (@cast<usize>(a), @cast<usize>(z));
+                    match (bv) {
+                        .STR(x) => { return cval::STR(S(x.as_str()[from..to])); },
+                        .ARRAY(es, t) => {
+                            var out: std::vec<cval> = {};
+                            for (k) in from..to {
+                                put(&out, copy *es.at(k));
+                            }
+                            return cval::ARRAY(move out, t);
+                        },
+                        default => {},
+                    }
+                },
+                default => {},
+            }
             val iv = try this.ct_expr(i, USIZE);
             var k: i128 = 0;
             match (iv) {
@@ -1948,6 +1989,14 @@ attach fn ct_pat(this: checker&, p: pat&, v: cval&) -> compile_error!bool {
 
 // ---------- calls ----------
 
+// an index or slice bound at compile time
+attach fn ct_index(this: checker&, e: expr&) -> compile_error!i128 {
+    match (try this.ct_expr(e, USIZE)) {
+        .INT(x, t) => { return x; },
+        default => { return fails(e.span, "index must be an integer"); },
+    }
+}
+
 // a call at compile time: a fn by name (overloads picked by arity, then by return type == want), or an
 // enum variant with a payload
 attach fn ct_call_expr(this: checker&, callee: expr&, args: std::vec<expr>&, want: u32?, span: span) -> compile_error!cval {
@@ -2379,7 +2428,6 @@ attach fn ct_declare(this: checker&, it: item&, span: span) -> compile_error!voi
             if (f.is_attach) {
                 what = S("attach fn ");
             }
-            what.append(f.name);
         },
         default => {},
     }
@@ -2400,7 +2448,15 @@ attach fn ct_declare(this: checker&, it: item&, span: span) -> compile_error!voi
         this.decls.at(i).ns = held;
     }
     this.ct_declared.put(this.intern(move key), 0);
-    this.expanded(span, move what);
+    // voltc expand and the editor show the signature it was declared with
+    if (this.opts.expand || this.opts.lsp) {
+        for (i) in first..this.decls.len {
+            val inst = this.fn_inst(@cast<u32>(i), {}, span) catch |e| { continue; };
+            var text = copy what;
+            text.append(this.inst_label(inst).as_str());
+            this.expanded(span, move text);
+        }
+    }
 }
 
 // a compile-time value as a generic argument: a type as itself, anything else kept in ct_consts
@@ -2775,9 +2831,39 @@ fn cfg_matches(set: str, want: str, key_only: bool) -> bool {
     return set == want || (key_only && set.len > want.len && set[0..want.len] == want && set[want.len] == '=');
 }
 
-// @typeinfo, @typeid, @typeof, @compile_error, @cfg, @attaches, @sizeof, @alignof, @cast and @panic at compile time
+// @embed, @typeinfo, @typeid, @typeof, @compile_error, @cfg, @attaches, @sizeof, @alignof, @cast and @panic at
+// compile time
 attach fn ct_builtin(this: checker&, name: str, gargs: std::vec<garg>&, args: std::vec<garg>&, want: u32?, span: span) -> compile_error!cval {
     val env = this.ct_top().env;
+    if (name == "embed") {
+        // @embed("path"): the file's bytes, the path relative to this source file's directory
+        if (args.len != 1) {
+            return fails(span, "@embed takes one path: @embed(\"data.json\")");
+        }
+        var rel = S("");
+        match (try this.ct_expr(try this.garg_value(args.at(0)), STR)) {
+            .STR(s) => { rel = copy s; },
+            default => { return fails(span, "@embed takes a str path known at compile time"); },
+        }
+        var path: std::string = {};
+        if (!starts_with(rel.as_str(), "/")) {
+            val from = this.files.at(@cast<usize>(span.file)).name;
+            var slash: usize? = null;
+            for (k) in 0..from.len {
+                if (from[k] == '/') {
+                    slash = k;
+                }
+            }
+            if (slash) {
+                path.append(from[0..slash + 1]);
+            }
+        }
+        path.append(rel.as_str());
+        val text = std::fs::read_file(path.as_str()) catch |e| {
+            return fail(span, fmt("@embed can't read {}", move path));
+        };
+        return cval::STR(move text);
+    }
     if (name == "typeinfo") {
         if (args.len != 1) {
             return fails(span, "@typeinfo(T) takes one type");
@@ -3269,25 +3355,6 @@ attach fn inst_label(this: checker&, i: u32) -> std::string {
         ps.append(this.ty_name(f.params.at(k).ty).as_str());
     }
     return fmt3("{}({}) -> {}", S(f.name), move ps, this.ty_name(f.ret));
-}
-
-// a value spliced into a quote, as source text: a str's text (a name, or code), a type by its name, a
-// number, a bool
-attach fn splice_text(this: checker&, v: cval, span: span) -> compile_error!std::string {
-    match (v) {
-        .STR(s) => { return copy s; },
-        .TYPE(t) => { return this.ty_name(t); },
-        .INT(n, k) => { return num(n); },
-        .BOOL(b) => {
-            if (b) {
-                return S("true");
-            }
-            return S("false");
-        },
-        .STRUCT(t, fs) => { return fail(span, fmt("can't splice a {} into code (it takes text, a type, a number or a bool)", this.ty_name(t))); },
-        default => {},
-    }
-    return fails(span, "can't splice this value into code (it takes text, a type, a number or a bool)");
 }
 
 // a library's attribute: a struct (or comptime fn) named and called, or a comptime value's name;

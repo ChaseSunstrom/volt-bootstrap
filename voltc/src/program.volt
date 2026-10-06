@@ -355,7 +355,7 @@ fn compile(files: std::vec<source_file>&, asts: std::vec<std::vec<item>>&, o: op
         };
     }
     if (ok) {
-        c.run_emits() catch |e| {
+        c.run_comptime_items() catch |e| {
             put(&c.errors, err_diag(&e));
             ok = false;
         };

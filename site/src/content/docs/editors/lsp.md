@@ -14,7 +14,7 @@ is exactly what `voltc check` would.
 | | |
 | --- | --- |
 | Diagnostics | errors and warnings, updated as the text changes |
-| Hover | a local's or field's type, a function's declaration; on a type, its fields or variants and every fn attached to it, grouped by the trait it's attached for (with the trait's generic arguments); on a trait, its fns and the types that attach it; on comptime code, what it became (**expands to**: a value and its type, a `comptime if`'s or `match`'s branch, a `comptime for`'s copies, the generic instance a call runs, an `@emit`'s source) |
+| Hover | a local's or field's type, a function's declaration; on a type, its fields or variants and every fn attached to it, grouped by the trait it's attached for (with the trait's generic arguments); on a trait, its fns and the types that attach it; on comptime code, what it became (**expands to**: a value and its type, a `comptime if`'s or `match`'s branch, a `comptime for`'s copies, the generic instance a call runs, a type a comptime fn built, a fn it declared) |
 | `volt/expand` | `{ textDocument, line? }`: what the comptime code in the document (on that 0-based line) became, as `[{ range, text }]`; VS Code's **Volt: Expand Comptime** shows it |
 | Go to definition | functions, methods, fields (in a struct literal too), locals, parameters, globals, types, into std and dependencies too |
 | References | every use of a function, field, local or global |

@@ -747,7 +747,6 @@ attach fn expr(this: checker&, e: expr&, want: u32?) -> compile_error!tval {
         .CLOSURE(c&) => { return this.closure_expr(c, want, span); },
         .AWAIT(x) => { return this.await_expr(x, want); },
         .ASYNC(x) => { return fails(span, "async f() builds a frame in place, so it only works as `val fr = async f()`"); },
-        .QUOTE(p) => { return fails(span, "a quote is evaluated at compile time"); },
         .TYPE_BODY(b) => {
             if (b.is_enum) {
                 return fails(span, "enum { } makes a type, a value only at compile time: return it from a comptime fn or name it with type name = enum { ... };");

@@ -416,15 +416,6 @@ attach fn starts_item(this: parser&) -> bool {
 // export attach extern "abi"), then the keyword that says what it is
 attach fn item(this: parser&) -> compile_error!item {
     val start = this.span();
-    // @emit(code); declares what the comptime str of Volt source holds
-    if (this.is_builtin("emit")) {
-        this.bump();
-        try this.expect("(");
-        val e = try this.expr();
-        try this.expect(")");
-        try this.expect(";");
-        return { kind: item_kind::EMIT(move e), span: start.to(this.prev_span()), attrs: {}, vis: vis::PUBLIC, generics: {} };
-    }
     // comptime f(args); runs f for the fns it declares (comptime followed by a word that isn't a
     // keyword, or by no word)
     if (this.is_kw("comptime") && !is_keyword(ident_of(this.tok_at(1)) ?? "")) {

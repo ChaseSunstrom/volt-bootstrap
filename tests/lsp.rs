@@ -405,11 +405,11 @@ fn inline_features(s: &mut Server) {
         String::from_utf8_lossy(&out.stdout).into_owned()
     };
     let all = expand("tests/run/expand.volt");
-    for want in [":6:22: attach eq -> point {}", ":20:7: attach fn get_x(this: point&) -> i32 {", ":32:13: 32 (usize)", ":36:13: = \"hi\" (str)", ":39:9: comptime match: 16, this arm", ":42:25: comptime for: 3 copies, i = 0, 1, 2", ":47:18: comptime if: true, this branch"] {
+    for want in [":6:22: attach eq -> point {}", ":13:5: attach fn get_x(this: point&) -> i32", ":30:13: 32 (usize)", ":34:13: = \"hi\" (str)", ":37:9: comptime match: 16, this arm", ":40:25: comptime for: 3 copies, i = 0, 1, 2", ":45:18: comptime if: true, this branch"] {
         assert!(all.contains(want), "voltc expand lacks {want}: {all}");
     }
-    let one = expand("tests/run/expand.volt:34");
-    assert!(one.contains(":34:21: calls twice<i64>(v: i64) -> i64") && !one.contains(":33:"), "voltc expand FILE:34: {one}");
+    let one = expand("tests/run/expand.volt:32");
+    assert!(one.contains(":32:21: calls twice<i64>(v: i64) -> i64") && !one.contains(":31:"), "voltc expand FILE:32: {one}");
     // a type built at compile time: its members, where it's built
     let built = expand("tests/run/comptime_types.volt:15");
     assert!(built.contains(":15:12: struct { x: std::vec<f32, std::mem::default_allocator>; y: "), "voltc expand of a built type: {built}");

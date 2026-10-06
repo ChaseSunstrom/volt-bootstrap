@@ -45,6 +45,14 @@ comptime fn codes(names: str[], base: i32) -> type {
         }
         return null;
     }
+    // a captured list unrolls too
+    attach fn listed(static this: E) -> usize {
+        var n: usize = 0;
+        comptime for (name) in names {
+            n += name.len;
+        }
+        return n;
+    }
     return E;
 }
 
@@ -113,7 +121,7 @@ fn main() -> void {
     ps.push({ x: 3.0, y: 4.0, alive: false });
     std::println("{} {} {}", ps.len(), *ps.y.at(1), @typeinfo(soa(particle)).short_name);
     val s = status::parse("GONE") ?? status::OK;
-    std::println("{} {} {}", s as i32, status::MOVED as i32, status::parse("NOPE") == null);
+    std::println("{} {} {} {}", s as i32, status::MOVED as i32, status::parse("NOPE") == null, status::listed());
     val p: point = { x: 3, y: 4 };
     std::println("{} {}", p.get_x(), p.get_y());
     std::println("{} {}", ten(), twenty());
@@ -122,7 +130,7 @@ fn main() -> void {
     std::println("{} {}", w.count(), w.first());
 }
 // expect: 2 4 soa(particle)
-// expect: 202 201 true
+// expect: 202 201 true 11
 // expect: 3 4
 // expect: 10 20
 // expect: 104

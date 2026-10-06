@@ -1,6 +1,6 @@
 // @expand(expr) is expr, and reports what it became as a note at compile time: a comptime value,
 // or the generic instance a call runs. voltc expand FILE[:LINE] and the editor's hover show the
-// same, and what comptime if, @emit and @derive did
+// same, and what comptime if, the fns a comptime fn declared and @derive did
 use std::io;
 
 @attributes([@derive(eq)])
@@ -9,15 +9,13 @@ struct point {
     y: f64;
 }
 
-comptime fn getter(T: type) -> str {
-    return quote {
-        attach fn get_x(this: $(T)&) -> i32 {
-            return this.x;
-        }
-    };
+comptime fn getter(T: type) -> void {
+    attach fn get_x(this: T&) -> i32 {
+        return this.x;
+    }
 }
 
-@emit(getter(point));
+comptime getter(point);
 
 comptime fn greeting() -> str {
     return "hi";
