@@ -12,18 +12,18 @@ Volt is built from source. The first compiler, `voltc-bootstrap`, is written in 
 
 - **Rust** (stable) and **a C compiler**: `cc` by default, or set `$CC` (`gcc`, `clang`, even
   `ccache gcc`).
-- **LLVM 22** with its C headers, and **libclang** (`llvm-c/` and `clang-c/`). voltc links libLLVM
+- **LLVM 23** with its C headers, and **libclang** (`llvm-c/` and `clang-c/`). voltc links libLLVM
   for its LLVM backend and libclang to read C layouts and C++ headers. On Arch that's the `llvm` and
   `clang` packages. On Debian and Ubuntu, add LLVM's own apt repository and install the dev packages:
 
   ```sh
-  wget https://apt.llvm.org/llvm.sh && sudo bash llvm.sh 22
-  sudo apt install llvm-22-dev libclang-22-dev
+  wget https://apt.llvm.org/llvm.sh && sudo bash llvm.sh 23
+  sudo apt install llvm-23-dev libclang-23-dev
   ```
 
-  voltc's build asks `llvm-config` where LLVM is (`$LLVM_CONFIG`, else `llvm-config-22`, else
+  voltc's build asks `llvm-config` where LLVM is (`$LLVM_CONFIG`, else `llvm-config-23`, else
   `llvm-config` on your `PATH`), so it can live off the default paths, like Ubuntu's
-  `/usr/lib/llvm-22`.
+  `/usr/lib/llvm-23`.
 - Optional, for the interop tests: `c++`, `rustc`, `python3` and `zig`.
 
 ## Build

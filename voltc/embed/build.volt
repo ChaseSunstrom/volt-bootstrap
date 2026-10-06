@@ -33,7 +33,7 @@ fn use_llvm_config(tool: str) -> bool {
 
 // the compiler's LLVM backend (the llvm-c API) and its C and C++ import (libclang). Debian and Ubuntu
 // keep them in /usr/lib/llvm-N, off the C compiler's default paths, so llvm-config says where:
-// $LLVM_CONFIG, else llvm-config-22 (the version voltc is built for, when several are installed),
+// $LLVM_CONFIG, else llvm-config-23 (the version voltc is built for, when several are installed),
 // else llvm-config on PATH. Without one, the default paths (Arch, most source installs)
 fn link_llvm() -> void {
     val chosen = std::process::env("LLVM_CONFIG");
@@ -44,7 +44,7 @@ fn link_llvm() -> void {
         }
         return;
     }
-    if (use_llvm_config("llvm-config-22") || use_llvm_config("llvm-config")) {
+    if (use_llvm_config("llvm-config-23") || use_llvm_config("llvm-config")) {
         return;
     }
     bolt::link_c("LLVM");

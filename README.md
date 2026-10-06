@@ -97,8 +97,8 @@ fn main() -> !void {
 
 ## Build
 
-You need stable Rust, a C compiler, and LLVM 22 with libclang (`llvm-c/` and `clang-c/` headers; on
-Debian and Ubuntu, `llvm-22-dev` and `libclang-22-dev` from [apt.llvm.org](https://apt.llvm.org)).
+You need stable Rust, a C compiler, and LLVM 23 with libclang (`llvm-c/` and `clang-c/` headers; on
+Debian and Ubuntu, `llvm-23-dev` and `libclang-23-dev` from [apt.llvm.org](https://apt.llvm.org)).
 
 ```sh
 cargo build --release                                        # voltc-bootstrap and bolt

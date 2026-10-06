@@ -40,7 +40,7 @@ pub fn relocated_llvm_config(dir: &std::path::Path) -> Option<std::path::PathBuf
 }
 
 /// `--cc` args linking libLLVM and libclang wherever this system keeps them, as voltc/build.volt
-/// does for bolt: llvm-config says where ($LLVM_CONFIG, else llvm-config-22, else llvm-config on
+/// does for bolt: llvm-config says where ($LLVM_CONFIG, else llvm-config-23, else llvm-config on
 /// PATH); without one, the default paths
 pub fn llvm_cc_args() -> Vec<String> {
     let ask = |tool: &str, what: &str| {
@@ -63,7 +63,7 @@ pub fn llvm_cc_args() -> Vec<String> {
     };
     let flags = match std::env::var("LLVM_CONFIG") {
         Ok(tool) => from(&tool).unwrap_or_else(|| panic!("$LLVM_CONFIG ({tool}) didn't answer --includedir, --libdir and --libs")),
-        Err(_) => from("llvm-config-22").or_else(|| from("llvm-config")).unwrap_or_else(|| vec!["-lLLVM".into(), "-lclang".into()]),
+        Err(_) => from("llvm-config-23").or_else(|| from("llvm-config")).unwrap_or_else(|| vec!["-lLLVM".into(), "-lclang".into()]),
     };
     flags.into_iter().flat_map(|f| ["--cc".to_string(), f]).collect()
 }
