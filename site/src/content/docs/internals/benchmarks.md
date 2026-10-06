@@ -76,37 +76,37 @@ Measured 2026-10-06 on:
 
 | Program | C (clang) | C (gcc) | C++ (clang++) | Volt (C, clang) | Volt (C, gcc) | Volt (LLVM) |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| bigint | 0.537 s | 0.444 s (0.83x) | 0.544 s (1.01x) | 0.546 s (1.02x) | 1.857 s (3.46x) | 0.554 s (1.03x) |
-| binary_trees | 0.721 s | 0.654 s (0.91x) | 0.907 s (1.26x) | 0.354 s (0.49x) | 0.364 s (0.50x) | 0.294 s (0.41x) |
-| closures | 0.479 s | 0.738 s (1.54x) | 0.540 s (1.13x) | 0.539 s (1.13x) | 0.654 s (1.37x) | 0.483 s (1.01x) |
-| crc32 | 0.719 s | 0.710 s (0.99x) | 0.707 s (0.98x) | 0.700 s (0.97x) | 0.761 s (1.06x) | 0.706 s (0.98x) |
-| csv | 0.656 s | 0.648 s (0.99x) | 0.580 s (0.88x) | 0.304 s (0.46x) | 0.394 s (0.60x) | 0.371 s (0.56x) |
-| dijkstra | 0.428 s | 0.517 s (1.21x) | 0.455 s (1.06x) | 0.486 s (1.14x) | 0.503 s (1.17x) | 0.498 s (1.16x) |
-| errors | 0.690 s | 0.699 s (1.01x) | 1.310 s (1.90x) | 0.676 s (0.98x) | 0.735 s (1.07x) | 0.726 s (1.05x) |
-| fannkuch | 1.867 s | 1.899 s (1.02x) | 1.931 s (1.03x) | 1.996 s (1.07x) | 1.679 s (0.90x) | 1.977 s (1.06x) |
-| fib | 0.452 s | 0.174 s (0.38x) | 0.452 s (1.00x) | 0.451 s (1.00x) | 0.164 s (0.36x) | 0.440 s (0.97x) |
-| hashmap | 0.560 s | 0.581 s (1.04x) | 1.523 s (2.72x) | 0.498 s (0.89x) | 0.573 s (1.02x) | 0.503 s (0.90x) |
-| heap | 0.595 s | 1.345 s (2.26x) | 0.609 s (1.02x) | 0.524 s (0.88x) | 0.620 s (1.04x) | 0.520 s (0.87x) |
-| json | 0.640 s | 0.672 s (1.05x) | 0.597 s (0.93x) | 0.475 s (0.74x) | 0.642 s (1.00x) | 0.432 s (0.67x) |
-| knucleotide | 0.757 s | 0.914 s (1.21x) | 0.737 s (0.97x) | 0.711 s (0.94x) | 1.053 s (1.39x) | 0.703 s (0.93x) |
-| lexer | 0.550 s | 0.649 s (1.18x) | 0.745 s (1.35x) | 0.466 s (0.85x) | 0.562 s (1.02x) | 0.522 s (0.95x) |
-| lru_cache | 0.572 s | 0.566 s (0.99x) | 1.309 s (2.29x) | 0.527 s (0.92x) | 0.767 s (1.34x) | 0.536 s (0.94x) |
-| lz77 | 0.604 s | 0.588 s (0.97x) | 0.649 s (1.07x) | 0.693 s (1.15x) | 0.783 s (1.29x) | 0.675 s (1.12x) |
-| mandelbrot | 0.637 s | 0.616 s (0.97x) | 0.639 s (1.00x) | 0.639 s (1.00x) | 0.619 s (0.97x) | 0.638 s (1.00x) |
-| matmul | 0.507 s | 0.481 s (0.95x) | 0.505 s (1.00x) | 0.516 s (1.02x) | 1.016 s (2.00x) | 0.517 s (1.02x) |
-| nbody | 0.702 s | 0.715 s (1.02x) | 0.680 s (0.97x) | 0.701 s (1.00x) | 0.772 s (1.10x) | 0.722 s (1.03x) |
-| nqueens | 0.832 s | 0.802 s (0.96x) | 0.876 s (1.05x) | 0.849 s (1.02x) | 1.425 s (1.71x) | 0.833 s (1.00x) |
-| print | 1.006 s | 1.027 s (1.02x) | 0.049 s (0.05x) | 0.046 s (0.05x) | 0.047 s (0.05x) | 0.046 s (0.05x) |
-| raytrace | 0.754 s | 0.850 s (1.13x) | 0.722 s (0.96x) | 0.749 s (0.99x) | 0.860 s (1.14x) | 0.678 s (0.90x) |
-| sha256 | 1.009 s | 1.059 s (1.05x) | 1.012 s (1.00x) | 1.034 s (1.03x) | 1.139 s (1.13x) | 1.021 s (1.01x) |
-| shapes | 0.884 s | 0.900 s (1.02x) | 0.870 s (0.98x) | 0.626 s (0.71x) | 0.549 s (0.62x) | 0.668 s (0.76x) |
-| sieve | 0.601 s | 0.579 s (0.96x) | 0.583 s (0.97x) | 0.607 s (1.01x) | 0.664 s (1.10x) | 0.605 s (1.01x) |
-| sort | 0.568 s | 0.576 s (1.01x) | 0.193 s (0.34x) | 0.053 s (0.09x) | 0.060 s (0.11x) | 0.054 s (0.09x) |
-| spectral_norm | 0.973 s | 0.647 s (0.66x) | 0.954 s (0.98x) | 0.962 s (0.99x) | 0.962 s (0.99x) | 0.957 s (0.98x) |
-| strings | 0.295 s | 0.293 s (1.00x) | 0.378 s (1.28x) | 0.246 s (0.83x) | 0.360 s (1.22x) | 0.239 s (0.81x) |
-| vec_grow | 0.554 s | 0.560 s (1.01x) | 1.357 s (2.45x) | 0.592 s (1.07x) | 0.630 s (1.14x) | 0.566 s (1.02x) |
-| vm_interp | 0.779 s | 0.853 s (1.10x) | 0.579 s (0.74x) | 0.688 s (0.88x) | 1.087 s (1.40x) | 0.794 s (1.02x) |
-| wordfreq | 0.552 s | 0.559 s (1.01x) | 1.026 s (1.86x) | 0.598 s (1.08x) | 0.610 s (1.11x) | 0.589 s (1.07x) |
+| bigint | 0.536 s | 0.444 s (0.83x) | 0.543 s (1.01x) | 0.547 s (1.02x) | 1.872 s (3.49x) | 0.546 s (1.02x) |
+| binary_trees | 0.710 s | 0.659 s (0.93x) | 0.921 s (1.30x) | 0.359 s (0.51x) | 0.361 s (0.51x) | 0.287 s (0.40x) |
+| closures | 0.468 s | 0.734 s (1.57x) | 0.534 s (1.14x) | 0.536 s (1.15x) | 0.653 s (1.40x) | 0.479 s (1.02x) |
+| crc32 | 0.708 s | 0.692 s (0.98x) | 0.692 s (0.98x) | 0.701 s (0.99x) | 0.751 s (1.06x) | 0.702 s (0.99x) |
+| csv | 0.655 s | 0.643 s (0.98x) | 0.569 s (0.87x) | 0.296 s (0.45x) | 0.389 s (0.59x) | 0.364 s (0.56x) |
+| dijkstra | 0.417 s | 0.518 s (1.24x) | 0.432 s (1.04x) | 0.388 s (0.93x) | 0.408 s (0.98x) | 0.385 s (0.92x) |
+| errors | 0.699 s | 0.713 s (1.02x) | 1.321 s (1.89x) | 0.655 s (0.94x) | 0.740 s (1.06x) | 0.655 s (0.94x) |
+| fannkuch | 1.843 s | 1.885 s (1.02x) | 1.927 s (1.05x) | 1.975 s (1.07x) | 1.680 s (0.91x) | 1.976 s (1.07x) |
+| fib | 0.451 s | 0.173 s (0.38x) | 0.448 s (0.99x) | 0.449 s (0.99x) | 0.162 s (0.36x) | 0.446 s (0.99x) |
+| hashmap | 0.554 s | 0.558 s (1.01x) | 1.326 s (2.39x) | 0.483 s (0.87x) | 0.542 s (0.98x) | 0.466 s (0.84x) |
+| heap | 0.599 s | 1.306 s (2.18x) | 0.610 s (1.02x) | 0.519 s (0.87x) | 0.571 s (0.95x) | 0.521 s (0.87x) |
+| json | 0.617 s | 0.639 s (1.04x) | 0.562 s (0.91x) | 0.445 s (0.72x) | 0.638 s (1.03x) | 0.428 s (0.69x) |
+| knucleotide | 0.746 s | 0.901 s (1.21x) | 0.729 s (0.98x) | 0.711 s (0.95x) | 1.064 s (1.43x) | 0.709 s (0.95x) |
+| lexer | 0.550 s | 0.654 s (1.19x) | 0.750 s (1.36x) | 0.480 s (0.87x) | 0.561 s (1.02x) | 0.457 s (0.83x) |
+| lru_cache | 0.568 s | 0.573 s (1.01x) | 1.282 s (2.26x) | 0.533 s (0.94x) | 0.770 s (1.36x) | 0.545 s (0.96x) |
+| lz77 | 0.607 s | 0.594 s (0.98x) | 0.647 s (1.07x) | 0.698 s (1.15x) | 0.793 s (1.31x) | 0.700 s (1.15x) |
+| mandelbrot | 0.638 s | 0.614 s (0.96x) | 0.636 s (1.00x) | 0.638 s (1.00x) | 0.636 s (1.00x) | 0.653 s (1.02x) |
+| matmul | 0.519 s | 0.498 s (0.96x) | 0.501 s (0.97x) | 0.520 s (1.00x) | 1.015 s (1.96x) | 0.514 s (0.99x) |
+| nbody | 0.698 s | 0.719 s (1.03x) | 0.679 s (0.97x) | 0.704 s (1.01x) | 0.788 s (1.13x) | 0.725 s (1.04x) |
+| nqueens | 0.837 s | 0.812 s (0.97x) | 0.892 s (1.07x) | 0.866 s (1.03x) | 1.425 s (1.70x) | 0.833 s (0.99x) |
+| print | 1.010 s | 1.041 s (1.03x) | 0.050 s (0.05x) | 0.046 s (0.05x) | 0.048 s (0.05x) | 0.046 s (0.05x) |
+| raytrace | 0.756 s | 0.865 s (1.15x) | 0.731 s (0.97x) | 0.752 s (1.00x) | 0.862 s (1.14x) | 0.670 s (0.89x) |
+| sha256 | 0.991 s | 1.032 s (1.04x) | 0.976 s (0.98x) | 1.039 s (1.05x) | 1.113 s (1.12x) | 0.999 s (1.01x) |
+| shapes | 0.903 s | 0.928 s (1.03x) | 0.890 s (0.99x) | 0.640 s (0.71x) | 0.566 s (0.63x) | 0.673 s (0.75x) |
+| sieve | 0.607 s | 0.587 s (0.97x) | 0.594 s (0.98x) | 0.609 s (1.00x) | 0.697 s (1.15x) | 0.631 s (1.04x) |
+| sort | 0.577 s | 0.565 s (0.98x) | 0.196 s (0.34x) | 0.063 s (0.11x) | 0.064 s (0.11x) | 0.062 s (0.11x) |
+| spectral_norm | 0.982 s | 0.649 s (0.66x) | 0.935 s (0.95x) | 0.965 s (0.98x) | 0.952 s (0.97x) | 0.953 s (0.97x) |
+| strings | 0.290 s | 0.291 s (1.00x) | 0.371 s (1.28x) | 0.251 s (0.86x) | 0.341 s (1.17x) | 0.240 s (0.83x) |
+| vec_grow | 0.522 s | 0.535 s (1.02x) | 1.371 s (2.63x) | 0.581 s (1.11x) | 0.604 s (1.16x) | 0.543 s (1.04x) |
+| vm_interp | 0.771 s | 0.844 s (1.09x) | 0.583 s (0.76x) | 0.666 s (0.86x) | 1.093 s (1.42x) | 0.787 s (1.02x) |
+| wordfreq | 0.544 s | 0.552 s (1.01x) | 1.017 s (1.87x) | 0.599 s (1.10x) | 0.597 s (1.10x) | 0.578 s (1.06x) |
 <!-- bench:end -->
 
 ## Reading the results
@@ -118,10 +118,13 @@ Measured 2026-10-06 on:
   compare and a trap instruction ([safety](/volt-bootstrap/guide/safety/#release-builds)). Most
   rows don't notice: the compiler drops a check it can prove, and a loop over `0..xs.len` proves
   its own. The rows that index with values only known at run time pay: `vm_interp` (its stack
-  pointer, local slots and program counter) is 1.02x where it was 0.62x unchecked, `dijkstra` 1.16x,
-  `lz77` 1.12x. `@attributes([@unchecked])` on `vm_interp`'s `run` gives the unchecked time back
-  (0.49 s). The gcc column pays more: gcc slows `bigint`'s addition loop down 3.4x for a check
-  clang barely notices, still being looked into.
+  pointer, local slots and program counter) is 1.02x where it was 0.62x unchecked, and `lz77`
+  1.15x. `@attributes([@unchecked])` on `vm_interp`'s `run` gives the unchecked time back
+  (0.49 s). `dijkstra` paid 1.16x until std's heap stopped checking the indices its sift loops
+  can't get wrong; it's 0.92x now. The gcc column pays more on `bigint` (3.49x): gcc's jump
+  threading copies the checked store in `rs[i] = if (over) x - BASE else x` into both arms of
+  the branch on the carry, so the branch stays and mispredicts, where clang makes it a
+  conditional move.
 - **`sort`: a radix sort for integers.** `slice.sort` sorts integers of 256 or more elements by
   their bytes (it's stable, and integers have no order but their bits), in a few passes over the
   data, with no comparisons at all. `std::stable_sort` is a merge sort with the comparison inlined;
@@ -161,7 +164,7 @@ Measured 2026-10-06 on:
   a time while keeping the sum in order (clang only vectorizes a float sum it may reorder); Volt's C
   gets most of that, since its `a(i, j)` does its math in `i32` as the C does (in `usize`, the
   unsigned 64-bit to `f64` conversion has no SSE2 vector form). `bigint`'s gcc win isn't Volt's yet.
-- **Where Volt still trails**: `vm_interp`, `dijkstra` and `lz77` pay for their bounds checks
+- **Where Volt still trails**: `vm_interp` and `lz77` pay for their bounds checks
   (above). `lz77` and `wordfreq` also append to a `std::string` with a capacity check per call,
   where the C checks once per word and then writes without checks, and `wordfreq`'s `sort_by` (a
   stable merge sort) is a little slower than `qsort` on its 24-byte rows.

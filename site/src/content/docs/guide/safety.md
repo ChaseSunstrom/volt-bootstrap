@@ -47,6 +47,13 @@ build to see where. A function with `@attributes([@unchecked])` has no bounds ch
 for a hot loop known to stay in range. Code that wants wrapping in every mode uses `+%`, `-%` and
 `*%`.
 
+The optimizer removes a check it can prove passes, such as `xs[i]` in `for (i) in 0..xs.len` over a
+slice or array (that loop then vectorizes as it would in C), so most loops pay nothing. Over the
+[benchmarks](/volt-bootstrap/internals/benchmarks/), the checks release keeps cost under 3%
+(geomean, LLVM backend), paid by code that indexes with values it computes: a bytecode interpreter's
+stack pointer costs it the most, 1.6x its unchecked time. std skips the check in a few internals
+where the index is in range by construction: sifting a heap, and writing a number's digits.
+
 ## Leaks
 
 `--leak-check` makes a debug build count allocations: if any is still live when the program ends,

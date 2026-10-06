@@ -71,9 +71,9 @@ public attach fn append_int(this: std::string<A>&, v: i64) -> void {
     this.append_uint(@cast<u64>(v));
 }
 
-// decimal digits of v
+// decimal digits of v (unchecked: a u64 has at most 20 digits, and the room for them was reserved)
 <A: std::mem::allocator>
-@attributes([@invalidates])
+@attributes([@invalidates, @unchecked])
 public attach fn append_uint(this: std::string<A>&, v: u64) -> void {
     var digits: u8[20];
     var n: usize = 0;

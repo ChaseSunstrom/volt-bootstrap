@@ -33,9 +33,9 @@ public attach fn peek(this: std::heap<T, A>&) -> T* {
     return this.items.first();
 }
 
-// add value
+// add value (unchecked: i starts at len - 1 and only goes to (i - 1) / 2, below it)
 <T: type, A: std::mem::allocator>
-@attributes([@invalidates])
+@attributes([@invalidates, @unchecked])
 public attach fn push(this: std::heap<T, A>&, value: T) -> void {
     this.items.push(move value) catch @panic("out of memory");
     val xs = this.items.items();
@@ -54,9 +54,10 @@ public attach fn push(this: std::heap<T, A>&, value: T) -> void {
     @write(&xs[i], move x);
 }
 
-// the smallest element, moved out
+// the smallest element, moved out (unchecked: len > 0; a child is read only below len, and i is always
+// 0 or a child read before)
 <T: type, A: std::mem::allocator>
-@attributes([@invalidates])
+@attributes([@invalidates, @unchecked])
 public attach fn pop(this: std::heap<T, A>&) -> T? {
     val last = this.items.pop() ?? return null;
     val xs = this.items.items();
