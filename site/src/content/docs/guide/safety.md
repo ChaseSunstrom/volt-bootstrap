@@ -35,7 +35,8 @@ The message names the place: `app.volt:7:22: panic: index 3 out of bounds (len 3
 ## Release builds
 
 `--release` (bolt: `--release` or a profile with `optimize = true`) builds with optimization and
-without these checks: integer arithmetic wraps, and indexing isn't checked. Code that wants
+without these checks: integer arithmetic wraps, a shift by at least the type's width shifts by the
+amount modulo the width, and indexing isn't checked. Code that wants
 wrapping in every mode uses `+%`, `-%` and `*%`.
 
 ## Leaks

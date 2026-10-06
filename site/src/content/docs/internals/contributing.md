@@ -14,6 +14,10 @@ sidebar:
 - **std stays a library.** Nothing in the compiler may know std's names; what std needs from the
   compiler goes through `@intrinsic` and `@owns`, which any library can use.
 - **Tests first.** A fix starts with a failing golden test (`tests/run`, `tests/fail`) or suite test.
+- **Fuzzing.** `cargo test --test fuzz` checks 1500 broken variants of the test programs (`voltc
+  check` must answer with diagnostics, never crash or hang) and runs 37 generated programs through
+  both backends, debug and release (all four must print the same). `VOLT_FUZZ=20000` runs more and
+  `VOLT_FUZZ_SEED=N` others; what fails stays in `target/tmp/fuzz` and `target/tmp/fuzz-backends`.
 - **Formatting.** `bootstrap/` isn't run through rustfmt; follow the style around the code you
   change. Comments say why, in plain words.
 - **Docs.** A user-visible change updates this site (`site/src/content/docs`); its code blocks are

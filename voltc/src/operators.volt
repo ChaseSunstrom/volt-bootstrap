@@ -358,17 +358,31 @@ attach fn binary(this: checker&, op: binop, ae: expr&, be: expr&, want: u32?, sp
             var r: i128? = null;
             match (op) {
                 .ADD => { r = add_i128(x, y); },
-                .WADD => { r = add_i128(x, y); },
+                .WADD => { r = x +% y; },
                 .SUB => { r = sub_i128(x, y); },
-                .WSUB => { r = sub_i128(x, y); },
+                .WSUB => { r = x -% y; },
                 .MUL => { r = mul_i128(x, y); },
-                .WMUL => { r = mul_i128(x, y); },
+                .WMUL => { r = x *% y; },
                 .DIV => { r = div_i128(x, y); },
                 .REM => { r = rem_i128(x, y); },
                 .BITAND => { r = x & y; },
                 .BITOR => { r = x | y; },
                 .BITXOR => { r = x ^ y; },
                 default => {},
+            }
+            // a wrapping operator's value wraps in the type it's wanted as; with none yet it stays
+            // exact, and wraps when it gets one (coerce)
+            val wrapping = op == binop::WADD || op == binop::WSUB || op == binop::WMUL;
+            if (r != null && wrapping && want != null) {
+                val k = this.t.int_of(want ?? I32);
+                if (k) {
+                    val kk = k;
+                    r = wrap_bits(r ?? 0, kk.bits(), kk.signed());
+                    if (!kk.fits(r ?? 0)) {
+                        // a u128 past i128's range: the same bits, as a typed value
+                        return vpure(want ?? I32, this.ir.int(r ?? 0, want ?? I32));
+                    }
+                }
             }
             if (r) {
                 var t = want;
@@ -379,7 +393,12 @@ attach fn binary(this: checker&, op: binop, ae: expr&, be: expr&, want: u32?, sp
                 if (w == null) {
                     w = t;
                 }
-                return this.int_lit(r, w);
+                var folded = this.int_lit(r, w);
+                // + - * & | ^ give the same low bits at any width, so an operand that wraps later
+                // makes the result wrap later too
+                val same_bits = op == binop::ADD || op == binop::SUB || op == binop::MUL || op == binop::BITAND || op == binop::BITOR || op == binop::BITXOR;
+                folded.wraps = wrapping || (same_bits && (a.wraps || b.wraps));
+                return folded;
             }
             if (!is_cmp) {
                 return fails(span, "constant overflow or division by zero");
@@ -535,7 +554,8 @@ attach fn int_arith(this: checker&, op: binop, k: int_ty, a: u32, b: u32, span: 
     return this.ir.binary(o, a, b, t);
 }
 
-// a << b, a >> b; debug builds trap when b is at least a's bit width
+// a << b, a >> b; debug builds trap when b is at least a's bit width, release ones shift by b modulo
+// the width
 attach fn shift(this: checker&, op: binop, a: tval, b: tval, span: span) -> compile_error!tval {
     val k = this.t.int_of(a.ty) ?? return fail(span, fmt("can't shift a {}", this.ty_name(a.ty)));
     var bb = b;
@@ -550,7 +570,18 @@ attach fn shift(this: checker&, op: binop, a: tval, b: tval, span: span) -> comp
         o = binop_ir::SHR;
     }
     if (this.opts.release) {
-        return vnew(a.ty, this.ir.binary(o, a.c, bb.c, a.ty));
+        // the amount wraps to the width, so the result is defined (C and LLVM leave it undefined);
+        // a constant under the width needs no and
+        var under = false;
+        match (bb.lit ?? lit::STR("")) {
+            .INT(n) => { under = n >= 0 && n < @cast<i128>(k.bits()); },
+            default => {},
+        }
+        var amt = bb.c;
+        if (!under) {
+            amt = this.ir.binary(binop_ir::BITAND, bb.c, this.ir.int(@cast<i128>(k.bits() - 1), bb.ty), bb.ty);
+        }
+        return vnew(a.ty, this.ir.binary(o, a.c, amt, a.ty));
     }
     val ta = this.tmp_local("a", a.ty);
     val u64t = int_id(int_ty::U64);

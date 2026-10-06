@@ -241,7 +241,7 @@ attach fn coercible(this: checker&, v: tval&, to: u32) -> bool {
         match (v.lit) {
             .INT(n) => {
                 match (*tt) {
-                    .INT(k) => { return k.fits(n); },
+                    .INT(k) => { return k.fits(n) || v.wraps; },
                     .FLOAT(b) => { return true; },
                     default => {},
                 }
@@ -358,6 +358,14 @@ attach fn coerce(this: checker&, v: tval, to: u32, span: span) -> compile_error!
                 match (*this.t.get(to)) {
                     .INT(k) => {
                         if (!k.fits(n)) {
+                            if (v.wraps) {
+                                val w = wrap_bits(n, k.bits(), k.signed());
+                                if (k.fits(w)) {
+                                    return this.int_lit(w, to);
+                                }
+                                // a u128 past i128's range: the same bits, as a typed value
+                                return vpure(to, this.ir.int(w, to));
+                            }
                             return fail(span, fmt2("{} doesn't fit in {}", num(n), S(k.name())));
                         }
                         return this.int_lit(n, to);

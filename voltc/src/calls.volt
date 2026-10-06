@@ -592,6 +592,10 @@ attach fn builtin(this: checker&, name: str, gargs: std::vec<garg>&, args_opt: s
         val tu = u ?? return vpure(u64t, this.ir.int(@cast<i128>(this.type_id(v.ty)), u64t));
         // tag == 0 ? id0 : tag == 1 ? id1 : ... idN
         val members = copy this.ui(tu).members;
+        if (members.len == 0) {
+            // nothing implements the trait, so no value of it exists to ask
+            return vpure(u64t, this.ir.int(0, u64t));
+        }
         val u16t = int_id(int_ty::U16);
         val tag = this.tmp_local("tag", u16t);
         var r = this.ir.int(@cast<i128>(this.type_id(*members.at(members.len - 1))), u64t);

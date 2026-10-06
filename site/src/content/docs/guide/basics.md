@@ -131,7 +131,10 @@ fn main() -> void {
 The arithmetic, comparison, logical and bitwise operators are C's. What's different:
 
 - Integer overflow **traps** in debug builds and wraps in `--release` builds. `+%`, `-%` and `*%`
-  always wrap, for hashes and checksums.
+  always wrap, for hashes and checksums; on two literals they wrap in the type the value gets
+  (`val b: u8 = 134 *% 115;` is 50).
+- A shift by at least the type's width (`x >> 64` on a `u64`) traps in debug builds; `--release`
+  builds shift by the amount modulo the width.
 - `x++` and `x--` are statements, not expressions.
 - `x as T` converts only when nothing can be lost (widening an integer, integer to float, `T&` to
   `T*`); anything else is a compile error. `@cast<T>(x)` converts anything to anything, unchecked.

@@ -270,6 +270,7 @@ struct tval {
     pvia: reach? = null;
     root: str? = null;
     own: u32? = null; // a place in a local's own storage (the local's place): changing it needs its var
+    wraps: bool = false; // a literal a wrapping operator (+% -% *%) gave: it wraps in the type it gets
 }
 
 // a literal's value, kept on a tval so the literal can still adapt to the type it ends up as
