@@ -425,6 +425,22 @@ attach fn item(this: parser&) -> compile_error!item {
         try this.expect(";");
         return { kind: item_kind::EMIT(move e), span: start.to(this.prev_span()), attrs: {}, vis: vis::PUBLIC, generics: {} };
     }
+    // comptime f(args); runs f for the fns it declares (comptime followed by a word that isn't a
+    // keyword, or by no word)
+    if (this.is_kw("comptime") && !is_keyword(ident_of(this.tok_at(1)) ?? "")) {
+        this.bump();
+        val e = try this.expr();
+        var call = false;
+        match (e.kind) {
+            .CALL(c, a) => { call = true; },
+            default => {},
+        }
+        if (!call) {
+            return fails(e.span, "comptime at the top level runs a call: comptime f(args);");
+        }
+        try this.expect(";");
+        return { kind: item_kind::COMPTIME(move e), span: start.to(this.prev_span()), attrs: {}, vis: vis::PUBLIC, generics: {} };
+    }
     // test "name" { ... }: a fn named test returning !void, with its name in a @test attribute (the
     // driver keeps it, named uniquely, under --test, and leaves it out otherwise)
     if (this.is_kw("test")) {
@@ -833,8 +849,14 @@ attach fn fn_decl(this: parser&, op: bool) -> compile_error!fn_decl {
     val at = this.span();
     // `copy` is a keyword but also the name of the copy hook: attach fn copy(this: T&) -> T
     var name = "copy";
+    var named: expr? = null;
     if (op) {
         name = try this.operator_name();
+    } else if (this.eat("(")) {
+        // fn (expr)(...): a name worked out when a comptime fn declares it
+        named = try this.expr();
+        try this.expect(")");
+        name = "(computed)";
     } else if (!this.eat_kw("copy")) {
         name = (try this.ident()).name;
     }
@@ -909,6 +931,7 @@ attach fn fn_decl(this: parser&, op: bool) -> compile_error!fn_decl {
         extern_abi: null,
         is_export: false,
         is_attach: false,
+        named: move named,
     };
 }
 

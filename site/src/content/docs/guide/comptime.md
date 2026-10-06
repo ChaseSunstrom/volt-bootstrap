@@ -123,6 +123,85 @@ fn main() -> void {
   `(prefix + "_count"): i32;`.
 - `voltc expand` shows each built type's members where it's built.
 
+### Functions a comptime function declares
+
+A `fn` or `attach fn` written in a comptime function's body is declared when the function runs. Its
+body sees the function's compile-time values as constants: parameters, the types it built, loop
+variables. Its name can be worked out too: `fn (expr)(...)`. A top-level `comptime f(args);` runs
+`f`, which returns `void`, for the functions it declares.
+
+```volt
+use std::io;
+
+struct particle {
+    x: f32;
+    y: f32;
+}
+
+// a struct of arrays with its own push
+comptime fn soa(T: type) -> type {
+    val S = struct {
+        comptime for (f) in @typeinfo(T).fields {
+            f.name: std::vec<f.field_type> = {};
+        }
+    };
+    attach fn push(this: S&, v: T) -> void {
+        comptime for (f) in @typeinfo(T).fields {
+            @field(this, f.name).push(@field(v, f.name));
+        }
+    }
+    return S;
+}
+
+// a variant per name, and a lookup by text; T[] takes the argument's length
+comptime fn codes(names: str[], base: i32) -> type {
+    val E = enum {
+        comptime for (i) in 0..names.len {
+            names[i] = base + @cast<i32>(i),
+        }
+    };
+    attach fn parse(static this: E, text: str) -> E? {
+        comptime for (v) in @typeinfo(E).variants {
+            if (text == v.name) {
+                return @field(E, v.name);
+            }
+        }
+        return null;
+    }
+    return E;
+}
+
+type status = codes({ "OK", "MOVED", "GONE" }, 200);
+
+// get_x() and get_y()
+comptime fn getters(T: type) -> void {
+    for (f) in @typeinfo(T).fields {
+        attach fn ("get_" + f.name)(this: T&) -> f.field_type {
+            return @field(this, f.name);
+        }
+    }
+}
+
+comptime getters(particle);
+
+fn main() -> void {
+    var ps: soa(particle) = {};
+    ps.push({ x: 1.0, y: 2.0 });
+    val p: particle = { x: 3.0, y: 4.0 };
+    std::println("{} {}", ps.y.len, p.get_y());
+    std::println("{}", (status::parse("GONE") ?? status::OK) as i32);
+}
+// expect: 1 4
+// expect: 202
+```
+
+- The functions live in the comptime function's namespace. Their bodies are checked when they're
+  first used, like a generic instance's.
+- A declaration made again with the same values is the one already made, so `soa(particle)` written
+  twice has one `push`.
+- A `var` the body sees is its value at the time of the declaration.
+- `@field(E, name)` on an enum type is its variant called `name`.
+
 ## comptime if, match and for
 
 Inside any function, `comptime if`, `comptime match` and `comptime for` are decided in the

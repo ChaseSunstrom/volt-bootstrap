@@ -299,6 +299,7 @@ enum stmt_kind {
     ERR_DEFER: expr,
     SUSPEND,
     RESUME: expr,
+    ITEM: std::box<item>, // a fn or attach fn in a comptime fn's body, declared when it runs
 }
 
 struct stmt {
@@ -349,6 +350,7 @@ struct fn_decl {
     extern_abi: str?;
     is_export: bool;
     is_attach: bool;
+    named: expr? = null; // `fn (expr)(...)`: a name worked out at compile time (in a comptime fn's body)
 }
 
 struct field {
@@ -438,6 +440,7 @@ enum item_kind {
     GLOBAL: let_stmt,
     ALIAS: (str, ty), // another name for a type: `type name = T;`, or a C typedef (cimport.volt)
     EMIT: expr, // `@emit(code);`: the declarations a comptime str of Volt source holds (a quote, usually)
+    COMPTIME: expr, // `comptime f(args);`: runs f for the fns it declares
 }
 
 // a top-level declaration with its `@attributes(...)` and the `<...>` generic params written before it

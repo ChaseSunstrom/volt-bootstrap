@@ -577,6 +577,7 @@ attach fn gval_cval(this: checker&, g: gval&) -> cval {
         .TY(t) => { return cval::TYPE(t); },
         .INT(v) => { return cval::INT(v, VOID); },
         .STR(s) => { return cval::STR(S(s)); },
+        .VAL(i) => { return copy *this.ct_consts.at(@cast<usize>(i)); },
         .PACK(l) => {
             var es: std::vec<cval> = {};
             for (t&) in this.list(l).items() {
@@ -1614,6 +1615,7 @@ attach fn ct_stmt(this: checker&, s: stmt&) -> compile_error!void {
             try this.ct_expr(e, null);
             return;
         },
+        .ITEM(it) => { return this.ct_declare(it, s.span); },
         default => { return fails(s.span, "defer/suspend/resume don't run at compile time"); },
     }
 }
@@ -2126,7 +2128,7 @@ attach fn ct_call(this: checker&, decl: u32, explicit: std::vec<garg>&, args: st
             return fail(span, fmt("missing argument '{}'", S(q.name)));
         }
         if (q.ty) {
-            val t = try this.resolve_type(&q.ty, env);
+            val t = try this.ct_param_type(&q.ty, &v, env);
             v = try this.ct_coerce(move v, t, span);
         }
         sc.put(q.name, { value: move v, mutable: q.mutable });
@@ -2167,6 +2169,26 @@ attach fn ct_call(this: checker&, decl: u32, explicit: std::vec<garg>&, args: st
     return this.ct_coerce(move out, ret, span);
 }
 
+// a compile-time parameter's type: a T[] takes its length from the argument
+attach fn ct_param_type(this: checker&, t: ty&, v: cval&, env: u32) -> compile_error!u32 {
+    match (t.kind) {
+        .ARRAY(inner, n) => {
+            if (n == null) {
+                var len: usize = 0;
+                match (*v) {
+                    .ARRAY(vs&, et) => { len = vs.len; },
+                    .TUPLE(vs&) => { len = vs.len; },
+                    default => {},
+                }
+                val i = try this.resolve_type(inner, env);
+                return this.t.intern(tyk::ARRAY(i, @cast<u64>(len)));
+            }
+        },
+        default => {},
+    }
+    return this.resolve_type(t, env);
+}
+
 // ---------- types built at compile time ----------
 
 // `struct { ... }` / `enum { ... }`: its comptime for and if unrolled, its worked-out names, field types
@@ -2199,12 +2221,7 @@ attach fn ct_type_body(this: checker&, b: type_body&, span: span) -> compile_err
     }
     for (i) in 0..names.len {
         val n = *names.at(i);
-        if (!is_name_text(n)) {
-            return fail(*spans.at(i), fmt("'{}' isn't a name: a letter or _, then letters, digits and _", S(n)));
-        }
-        if (is_keyword(n)) {
-            return fail(*spans.at(i), fmt("'{}' is a keyword, so it can't be a name", S(n)));
-        }
+        try check_name(n, *spans.at(i));
         for (j) in 0..i {
             if (*names.at(j) == n) {
                 if (b.is_enum) {
@@ -2320,6 +2337,102 @@ attach fn cvals_key(this: checker&, vs: std::vec<cval>&) -> std::string {
         out.append(this.cval_key(vs.at(i)).as_str());
     }
     return out;
+}
+
+// a worked-out name has to be one: an identifier that isn't a keyword
+fn check_name(n: str, sp: span) -> compile_error!void {
+    if (!is_name_text(n)) {
+        return fail(sp, fmt("'{}' isn't a name: a letter or _, then letters, digits and _", S(n)));
+    }
+    if (is_keyword(n)) {
+        return fail(sp, fmt("'{}' is a keyword, so it can't be a name", S(n)));
+    }
+}
+
+// ---------- fns a comptime fn declares ----------
+
+// `fn`/`attach fn` in a comptime fn's body, declared when the fn runs: in the fn's namespace, its body
+// seeing the fn's compile-time locals (parameters, types it built, loop variables) the way a generic
+// instance sees its arguments. They're held by a namespace of its own under the fn's (its consts), so
+// every lookup from the new fn finds them. A declaration seeing the same values again was made
+// already: a memoized type's methods come with it once.
+attach fn ct_declare(this: checker&, it: item&, span: span) -> compile_error!void {
+    var key = std::format("{}:{}|", span.file, span.lo);
+    key.append(this.frame_values().as_str());
+    if (this.ct_declared.get(key.as_str()) != null) {
+        return;
+    }
+    var own = copy *it;
+    var what = S("fn ");
+    match (own.kind) {
+        .FN(f&) => {
+            var nspan = span;
+            if (f.named) {
+                nspan = f.named.span;
+            }
+            val n = try this.ct_named(&f.named);
+            if (n) {
+                try check_name(n, nspan);
+                f.name = n;
+                f.named = null;
+            }
+            if (f.is_attach) {
+                what = S("attach fn ");
+            }
+            what.append(f.name);
+        },
+        default => {},
+    }
+    val fr = this.ct_top();
+    val home = this.env_at(fr.env).ns;
+    var consts = copy this.env_at(fr.env).generics;
+    for (sc&) in fr.scopes.items() {
+        for (e) in sc.iter() {
+            put(&consts, { name: *e.key, g: this.cval_gval(&e.value.value) });
+        }
+    }
+    put(&this.nss, bx<ns_info>({ path: copy this.ns(home).path, parent: home, consts: move consts }));
+    val held = @cast<u32>(this.nss.len - 1);
+    put(&this.owned_items, bx(move own));
+    val first = this.decls.len;
+    try this.collect_item(*this.owned_items.at(this.owned_items.len - 1), home, null);
+    for (i) in first..this.decls.len {
+        this.decls.at(i).ns = held;
+    }
+    this.ct_declared.put(this.intern(move key), 0);
+    this.expanded(span, move what);
+}
+
+// a compile-time value as a generic argument: a type as itself, anything else kept in ct_consts
+attach fn cval_gval(this: checker&, v: cval&) -> gval {
+    match (*v) {
+        .TYPE(t) => { return gval::TY(t); },
+        default => {
+            put(&this.ct_consts, copy *v);
+            return gval::VAL(@cast<u32>(this.ct_consts.len - 1));
+        },
+    }
+}
+
+// `comptime f(args);`: runs f for the fns it declares, so f returns void
+attach fn run_comptime_item(this: checker&, e: expr&, env: u32) -> compile_error!void {
+    val v = try this.ct_eval_in(env, e, null);
+    match (v) {
+        .VOID => {},
+        default => {
+            var name = S("it");
+            match (e.kind) {
+                .CALL(callee, args) => {
+                    match (callee.kind) {
+                        .PATH(p&) => { name = S(p.segs.at(p.segs.len - 1).name); },
+                        default => {},
+                    }
+                },
+                default => {},
+            }
+            return fail(e.span, fmt2("comptime runs '{}' for the fns it declares, so it returns void, not {}", move name, this.ty_name(this.ct_type_of(&v))));
+        },
+    }
 }
 
 // a letter or _, then letters, digits and _
@@ -2530,7 +2643,17 @@ attach fn ct_subst(this: checker&, t: ty&) -> compile_error!ty {
         .PTR(i) => { return { kind: type_kind::PTR(bx(try this.ct_subst(i))), span: t.span }; },
         .OPTIONAL(i) => { return { kind: type_kind::OPTIONAL(bx(try this.ct_subst(i))), span: t.span }; },
         .SLICE(i) => { return { kind: type_kind::SLICE(bx(try this.ct_subst(i))), span: t.span }; },
-        .ARRAY(i, n&) => { return { kind: type_kind::ARRAY(bx(try this.ct_subst(i)), copy *n), span: t.span }; },
+        .ARRAY(i, n&) => {
+            // a length the frame works out (T[n] with n a parameter) is put in as its number
+            var len = copy *n;
+            if (len) {
+                val lit = this.ct_lit(len, USIZE);
+                if (lit) {
+                    len = bx(copy lit);
+                }
+            }
+            return { kind: type_kind::ARRAY(bx(try this.ct_subst(i)), move len), span: t.span };
+        },
         .TUPLE(es&) => {
             var out: std::vec<tuple_elem> = {};
             for (x&) in es.items() {

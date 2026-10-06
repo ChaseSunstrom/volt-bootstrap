@@ -203,6 +203,7 @@ attach fn stmt(this: checker&, s: stmt&) -> compile_error!code {
         },
         .SUSPEND => { return { c: try this.suspend_code(s.span), div: false }; },
         .RESUME(e&) => { return { c: try this.resume_code(e, s.span), div: false }; },
+        .ITEM(it) => { return fails(s.span, "a fn is declared inside another only by a comptime fn, when it runs"); },
     }
 }
 

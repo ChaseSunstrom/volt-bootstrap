@@ -286,6 +286,11 @@ attach fn item(this: sexp_writer&, it: item&) -> void {
             this.expr(e);
             this.close();
         },
+        .COMPTIME(e&) => {
+            this.open("comptime");
+            this.expr(e);
+            this.close();
+        },
     }
     this.close();
 }
@@ -587,6 +592,7 @@ attach fn stmt(this: sexp_writer&, s: stmt&) -> void {
             this.expr(e);
             this.close();
         },
+        .ITEM(it) => { this.item(it); },
     }
     this.span(s.span);
 }

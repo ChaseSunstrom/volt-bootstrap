@@ -809,6 +809,7 @@ attach fn path_expr(this: checker&, p: path&, want: u32?, span: span) -> compile
         if (g) {
             match (g) {
                 .INT(v) => { return this.int_lit(v, want); },
+                .VAL(i) => { return this.ct_to_val(copy *this.ct_consts.at(@cast<usize>(i)), want, span); },
                 .STR(s) => {
                     val v = this.str_val(s);
                     if (want != null && (want ?? 0) == CSTR) {

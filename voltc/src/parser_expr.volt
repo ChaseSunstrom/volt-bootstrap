@@ -152,6 +152,8 @@ attach fn stmt(this: parser&) -> compile_error!stmt {
     } else if (this.is_kw("comptime") && (this.is_kw_at(1, "var") || this.is_kw_at(1, "val"))) {
         this.bump();
         kind = stmt_kind::LET(try this.let_stmt(true));
+    } else if (this.is_kw("fn") || (this.is_kw("attach") && this.is_kw_at(1, "fn"))) {
+        kind = stmt_kind::ITEM(bx(try this.item()));
     } else if (this.is_kw("defer") || this.is_kw("errdefer")) {
         val is_err = this.is_kw("errdefer");
         this.bump();

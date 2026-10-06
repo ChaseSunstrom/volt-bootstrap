@@ -23,6 +23,7 @@ struct ns_info {
     names: std::map<str, u32> = {}; // name -> decl list (checker.lists)
     children: std::map<str, u32> = {};
     uses: std::vec<path&> = {}; // `use a::b::c;` makes c's members (or c itself) reachable as a::name
+    consts: std::vec<gbind> = {}; // what a fn a comptime fn declared sees of its locals (comptime.volt ct_declare)
 }
 
 // a generic argument's value: a type, an integer, a type pack (T...) or a string
@@ -31,6 +32,7 @@ enum gval {
     INT: i128,
     PACK: u32, // a type list (checker.lists)
     STR: str,
+    VAL: u32,  // any other compile-time value (checker.ct_consts)
 }
 
 struct gbind {
@@ -456,6 +458,8 @@ struct checker {
     // deprecated decls already warned about (once each)
     warned: idset = {};
     warned_views: idset = {}; // views already warned about as stale
+    ct_consts: std::vec<cval> = {};    // the compile-time values gval::VAL names
+    ct_declared: std::map<str, u32> = {}; // fns comptime fns declared, by where and what they saw
     frames: std::vec<fn_frame> = {}; // async fn instance -> frame fields
     c_includes: std::vec<str> = {};
     c_imports: std::map<str, u32> = {}; // an imported C symbol shared by every import of it
@@ -575,7 +579,16 @@ attach fn named(this: checker&, m: std::map<str, u32>&, name: str) -> std::vec<u
     return {};
 }
 
-attach fn new_env(this: checker&, e: env) -> u32 {
+// an env, seeing first what its namespace holds of a comptime fn's locals (ns_info.consts)
+attach fn new_env(this: checker&, var e: env) -> u32 {
+    val held = &this.ns(e.ns).consts;
+    if (held.len > 0) {
+        var gs = copy *held;
+        for (g&) in e.generics.items() {
+            put(&gs, *g);
+        }
+        e.generics = move gs;
+    }
     put(&this.envs, bx(move e));
     return @cast<u32>(this.envs.len - 1);
 }
@@ -681,6 +694,10 @@ attach fn collect_item(this: checker&, it: item&, ns: u32, parent: u32?) -> comp
             put(&this.pending_emits, { e: e, ns: ns });
             return;
         },
+        .COMPTIME(e&) => {
+            put(&this.pending_emits, { e: e, ns: ns, run: true });
+            return;
+        },
         .NAMESPACE(path, items) => {
             var n = ns;
             for (p&) in path.items() {
@@ -716,6 +733,9 @@ attach fn collect_item(this: checker&, it: item&, ns: u32, parent: u32?) -> comp
             return this.import_lang(lang, args, alias, ns, it.span);
         },
         .FN(f) => {
+            if (f.named) {
+                return fails(f.named.span, "a worked-out name is for a fn a comptime fn declares when it runs");
+            }
             name = f.name;
             is_attach_fn = f.is_attach;
         },
@@ -812,6 +832,7 @@ attach fn expanded(this: checker&, at: span, text: std::string) -> void {
 struct pending_emit {
     e: expr*;
     ns: u32;
+    run: bool = false; // `comptime f(args);`: runs f for what it declares
 }
 
 // Run the @emit(...)s, in order: each one's value is Volt source (a quote, usually), parsed as a file
@@ -827,6 +848,10 @@ attach fn run_emits(this: checker&) -> compile_error!void {
             return fail(e.span, fmt("@emit expands without end (over {} of them): an @emit's code keeps emitting more", unum(@cast<u64>(MAX_EMITS))));
         }
         val env = this.new_env({ ns: pe.ns });
+        if (pe.run) {
+            try this.run_comptime_item(e, env);
+            continue;
+        }
         var text = S("");
         match (try this.ct_eval_in(env, e, STR)) {
             .STR(s) => { text = copy s; },
@@ -1360,6 +1385,7 @@ attach fn gval_name(this: checker&, s: std::string&, g: gval) -> void {
                 this.put_ty(s, *ts.at(i));
             }
         },
+        .VAL(i) => { s.append(this.cval_text(this.ct_consts.at(@cast<usize>(i))).as_str()); },
         .STR(x) => {
             // like Rust's {:?} of a string
             s.push('"');
@@ -1418,6 +1444,10 @@ attach fn inst_key(this: checker&, d: u32, args: std::vec<gval>&) -> std::string
                 k.push(':');
                 k.append(x);
             },
+            .VAL(i) => {
+                k.push('v');
+                k.append_uint(@cast<u64>(i));
+            },
         }
     }
     return k;
@@ -1440,6 +1470,12 @@ attach fn gval_eq(this: checker&, a: gval, b: gval) -> bool {
         .STR(x) => {
             match (b) {
                 .STR(y) => { return x == y; },
+                default => { return false; },
+            }
+        },
+        .VAL(x) => {
+            match (b) {
+                .VAL(y) => { return x == y; },
                 default => { return false; },
             }
         },

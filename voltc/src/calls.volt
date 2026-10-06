@@ -278,7 +278,30 @@ attach fn field_form(this: checker&, base: garg&, name: garg&, span: span) -> co
         },
         default => { return fails(n.span, "@field(v, \"name\"): the name is a comptime string (or a tuple element's index)"); },
     }
+    // @field(E, name) on an enum type: its variant called name, E::name
+    match (b.kind) {
+        .PATH(p&) => {
+            if (this.names_enum(p)) {
+                var vp = copy *p;
+                put(&vp.segs, { name: this.intern(move fname), args: null });
+                return { kind: expr_kind::PATH(move vp), span: span };
+            }
+        },
+        default => {},
+    }
     return { kind: expr_kind::FIELD(bx(copy *b), this.intern(move fname), null), span: span };
+}
+
+// whether p names an enum type (not a local)
+attach fn names_enum(this: checker&, p: path&) -> bool {
+    if (p.is_single() && this.lookup_local(p.segs.at(0).name) != null) {
+        return false;
+    }
+    val t = this.resolve_type_path(p, this.cx.env) catch |e| { return false; };
+    match (*this.t.get(t)) {
+        .ENUM(x) => { return true; },
+        default => { return false; },
+    }
 }
 
 attach fn garg_expr(this: checker&, g: garg&, want: u32?) -> compile_error!tval {
