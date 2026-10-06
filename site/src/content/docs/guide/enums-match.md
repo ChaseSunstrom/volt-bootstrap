@@ -171,6 +171,45 @@ fn main() -> void {
 // expect: 2 and true
 ```
 
+### Alternatives
+
+`p1 | p2 => body` matches either pattern. Alternatives can bind a name, as long as each one binds it,
+and count toward covering every case:
+
+```volt
+use std::io;
+
+enum shape {
+    CIRCLE: f64,
+    SQUARE: f64,
+    POINT,
+}
+
+fn kind(c: u8) -> str {
+    return match (c) {
+        '(' | ')' | '[' | ']' => "bracket",
+        '0'..='9' | '_' => "digit or _",
+        default => "other",
+    };
+}
+
+fn size(s: shape) -> f64 {
+    return match (s) {
+        .CIRCLE(r) | .SQUARE(r) => r,
+        .POINT => 0.0,
+    };
+}
+
+fn main() -> void {
+    std::println("{} {} {}", kind(']'), kind('5'), size(shape::SQUARE(2.5)));
+}
+// expect: bracket digit or _ 2.5
+```
+
+The alternatives sit at the top of an arm: `(0 | 1, x)` inside a tuple isn't one. Each alternative
+is its own arm with the same guard and body, so a guard runs once for each alternative that matches,
+and the body is compiled once for each: keep a long body in a function the arm calls.
+
 ### Slice patterns
 
 `[...]` matches a slice, an array or a `str` (its bytes) by its elements: `[]` is empty, `[x]` has

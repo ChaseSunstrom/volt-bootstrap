@@ -39,7 +39,10 @@ fn is_keyword(word: str) -> bool {
 }
 
 fn is_punct(c: u8) -> bool {
-    return c == '(' || c == ')' || c == '{' || c == '}' || c == '[' || c == ']' || c == ';' || c == ',' || c == '.';
+    return match (c) {
+        '(' | ')' | '{' | '}' | '[' | ']' | ';' | ',' | '.' => true,
+        default => false,
+    };
 }
 
 attach fn at(this: lexer&, i: usize, c: u8) -> bool {

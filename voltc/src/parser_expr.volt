@@ -888,7 +888,12 @@ attach fn loop_expr(this: parser&, lab: str?, is_comptime: bool) -> compile_erro
         var arms: std::vec<arm> = {};
         while (!this.eat("}")) {
             val astart = this.span();
-            val p = try this.pat();
+            var alts: std::vec<pat> = {};
+            put(&alts, try this.pat());
+            while (this.eat("|")) {
+                put(&alts, try this.pat());
+            }
+            try same_names(&alts);
             var guard: expr? = null;
             if (this.eat_kw("if")) {
                 guard = try this.expr();
@@ -902,7 +907,11 @@ attach fn loop_expr(this: parser&, lab: str?, is_comptime: bool) -> compile_erro
             } else {
                 body = try this.expr();
             }
-            put(&arms, { pat: move p, guard: move guard, body: move body, span: astart.to(this.prev_span()) });
+            // `p1 | p2 => body`: an arm for each alternative, with the same guard and body
+            val asp = astart.to(this.prev_span());
+            for (a&) in alts.items() {
+                put(&arms, { pat: copy *a, guard: copy guard, body: copy body, span: asp });
+            }
             if (!this.eat(",") && !this.eat(";") && !this.is("}")) {
                 return this.unexpected("',' or '}' after match arm");
             }
@@ -1028,6 +1037,78 @@ attach fn is_lit_tok(this: parser&) -> bool {
     return this.is_kw("true") || this.is_kw("false") || this.is_kw("null");
 }
 
+// the names a pattern binds, in order
+fn pat_names(p: pat&, out: std::vec<str>&) -> void {
+    match (p.kind) {
+        .BIND(n) => { put(out, n); },
+        .BIND_REF(n) => { put(out, n); },
+        .CTOR(c, args) => {
+            if (args) {
+                for (a&) in args.items() {
+                    pat_names(a, out);
+                }
+            }
+        },
+        .TUPLE(xs&) => {
+            for (x&) in xs.items() {
+                pat_names(x, out);
+            }
+        },
+        .SLICE(xs&, rest) => {
+            for (x&) in xs.items() {
+                pat_names(x, out);
+            }
+            if (rest) {
+                if (rest.name) {
+                    put(out, rest.name);
+                }
+            }
+        },
+        default => {},
+    }
+}
+
+// an arm's alternatives each bind the same names (each becomes an arm of its own, whose body uses them)
+fn same_names(alts: std::vec<pat>&) -> compile_error!void {
+    if (alts.len < 2) {
+        return;
+    }
+    var first: std::vec<str> = {};
+    pat_names(alts.at(0), &first);
+    for (i) in 1..alts.len {
+        var these: std::vec<str> = {};
+        pat_names(alts.at(i), &these);
+        for (n&) in first.items() {
+            if (!has_name(&these, *n)) {
+                return fail(alts.at(i).span, fmt("every alternative binds the same names, and this one doesn't bind '{}'", S(*n)));
+            }
+        }
+        for (n&) in these.items() {
+            if (!has_name(&first, *n)) {
+                return fail(alts.at(i).span, fmt("every alternative binds the same names, and the first doesn't bind '{}'", S(*n)));
+            }
+        }
+    }
+}
+
+fn has_name(xs: std::vec<str>&, n: str) -> bool {
+    for (x&) in xs.items() {
+        if (*x == n) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// a pattern inside another (a tuple's element, a payload): alternatives go at the top of an arm
+attach fn sub_pat(this: parser&) -> compile_error!pat {
+    val p = try this.pat();
+    if (this.is("|")) {
+        return fails(this.span(), "alternatives (a | b) go at the top of a match arm, not inside a pattern");
+    }
+    return p;
+}
+
 // a match pattern. A bare name binds (`n`, or `n&` by reference); a constructor needs `.X`, a
 // qualified path or parentheses
 attach fn pat(this: parser&) -> compile_error!pat {
@@ -1047,7 +1128,7 @@ attach fn pat(this: parser&) -> compile_error!pat {
     if (this.eat("(")) {
         var elems: std::vec<pat> = {};
         while (!this.eat(")")) {
-            put(&elems, try this.pat());
+            put(&elems, try this.sub_pat());
             if (!this.eat(",") && !this.is(")")) {
                 return this.unexpected("',' or ')'");
             }
@@ -1072,7 +1153,7 @@ attach fn pat(this: parser&) -> compile_error!pat {
                 }
                 rest = r;
             } else {
-                put(&elems, try this.pat());
+                put(&elems, try this.sub_pat());
             }
             if (!this.eat(",") && !this.is("]")) {
                 return this.unexpected("',' or ']'");
@@ -1110,7 +1191,7 @@ attach fn pat_args(this: parser&) -> compile_error!(std::vec<pat>?) {
     }
     var args: std::vec<pat> = {};
     while (!this.eat(")")) {
-        put(&args, try this.pat());
+        put(&args, try this.sub_pat());
         if (!this.eat(",") && !this.is(")")) {
             return this.unexpected("',' or ')'");
         }
