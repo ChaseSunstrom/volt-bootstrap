@@ -41,7 +41,19 @@ struct pat_out {
 // `match (scrut) { arms }`: an if-chain over the scrutinee's slot. Its type is want, else the first arm
 // with a value; NEVER when every arm leaves
 attach fn match_expr(this: checker&, scrut: expr&, arms: std::vec<arm>&, want: u32?, span: span) -> compile_error!tval {
-    val s = try this.expr(scrut, null);
+    var s = try this.expr(scrut, null);
+    // a reference is matched as what it refers to, in place: match (r) is match (*r)
+    match (*this.t.get(s.ty)) {
+        .REF(t) => {
+            var r = vnew(t, this.ir.deref(s.c, t));
+            r.lv = true;
+            r.mutable = true;
+            r.pure = s.pure;
+            through(&r, s);
+            s = r;
+        },
+        default => {},
+    }
     if (s.ty == VOID || s.ty == NEVER || s.ty == NULL_TY) {
         return fails(scrut.span, "can't match on this; it has no value");
     }

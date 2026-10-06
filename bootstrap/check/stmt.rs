@@ -505,8 +505,13 @@ impl Checker {
     /// wrap finished loop code as a value (break with value) or a statement
     fn finish_loop(&mut self, code: String, body_div: bool, span: Span, value_needs_break: bool) -> Res<Val> {
         let lc = self.cx.loops.pop().unwrap();
-        // what was moved on the way to a break is moved after the loop too
-        self.cx.moved.extend(lc.moved_at_break.iter().cloned());
+        // what was moved on the way to a break is moved after the loop too; when the body always leaves
+        // (a return, an endless loop), its end is never reached, and only the breaks count
+        if body_div {
+            self.cx.moved = lc.moved_at_break.clone();
+        } else {
+            self.cx.moved.extend(lc.moved_at_break.iter().cloned());
+        }
         let brk = format!("{}:;", lc.brk);
         if let (Some(r), Some(t)) = (&lc.result, lc.break_ty) {
             if lc.has_break {

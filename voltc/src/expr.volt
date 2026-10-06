@@ -693,8 +693,10 @@ attach fn expr(this: checker&, e: expr&, want: u32?) -> compile_error!tval {
         },
         .ERROR_ANY => { return vpure(ANYERR, this.ir.int(1, ANYERR)); },
         .THIS => {
-            val l = this.lookup_local("this") ?? return fails(span, "no 'this' here (static functions don't have one)");
-            return this.local_val(&l, span);
+            // a local like any other: a by-value this moves (and can't be used after), as a param would
+            this.lookup_local("this") ?? return fails(span, "no 'this' here (static functions don't have one)");
+            val p = single_path("this", span);
+            return this.path_expr(&p, want, span);
         },
         .DOT_VARIANT(n) => { return this.dot_variant(n, null, want, span); },
         .TRY(x) => { return this.try_expr(x, span); },

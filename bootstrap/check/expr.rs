@@ -390,8 +390,9 @@ impl Checker {
                 self.copy_val(v, span)
             }
             ExprKind::ErrorAny => Ok(Val::pure(ANYERR, "((uint32_t)1)")),
+            // a local like any other: a by-value this moves (and can't be used after), as a param would
             ExprKind::This => match self.lookup_local("this") {
-                Some(l) => Ok(self.local_val(&l, span)),
+                Some(_) => self.path_expr(&Path::single("this", span), want, span),
                 None => err(span, "no 'this' here (static functions don't have one)"),
             },
             ExprKind::DotVariant(n) => self.dot_variant(n, None, want, span),

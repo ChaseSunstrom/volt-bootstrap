@@ -799,8 +799,13 @@ attach fn push_loop(this: checker&, label: str?, is_block: bool, value: bool, wa
 // wrap finished loop code as a value (break with value) or a statement
 attach fn finish_loop(this: checker&, body: std::vec<u32>, body_div: bool, span: span, value_needs_break: bool) -> compile_error!tval {
     val lc = this.cx.loops.pop() ?? return fails(span, "");
-    // what was moved on the way to a break is moved after the loop too
-    this.cx.moved.add_all(&lc.moved_at_break);
+    // what was moved on the way to a break is moved after the loop too; when the body always leaves
+    // (a return, an endless loop), its end is never reached, and only the breaks count
+    if (body_div) {
+        this.cx.moved = copy lc.moved_at_break;
+    } else {
+        this.cx.moved.add_all(&lc.moved_at_break);
+    }
     var stmts = move body;
     put(&stmts, this.ir.label_at(lc.brk));
     if (lc.can_value && lc.break_ty != null && lc.has_break) {

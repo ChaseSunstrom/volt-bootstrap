@@ -34,6 +34,11 @@ impl Checker {
     /// with a value; NEVER when every arm leaves
     pub fn match_expr(&mut self, scrut: &Expr, arms: &[Arm], want: Option<TyId>, span: Span) -> Res<Val> {
         let s = self.expr(scrut, None)?;
+        // a reference is matched as what it refers to, in place: match (r) is match (*r)
+        let s = match self.t.get(s.ty).clone() {
+            Ty::Ref(t) => Self::through(Val { lv: true, mutable: true, pure: s.pure, ..Val::new(t, format!("(*({}))", s.c)) }, &s),
+            _ => s,
+        };
         if matches!(s.ty, VOID | NEVER | NULL) {
             return err(scrut.span, "can't match on this; it has no value");
         }
