@@ -75,8 +75,24 @@ attach fn fits(this: int_ty&, v: i128) -> bool {
     return v < (@cast<i128>(1) << b);
 }
 
-// lossless conversion from this to other; i64/isize and u64/usize don't widen into each other (same
-// width, but distinct types)
+// does a float of `bits` hold every value of this integer type exactly (its mantissa is wide enough)?
+attach fn exact_in_float(this: int_ty&, bits: u16) -> bool {
+    var mag = this.bits();
+    if (this.signed()) {
+        mag -= 1;
+    }
+    var mant: u32 = 53;
+    if (bits <= 32) {
+        mant = 24;
+    }
+    if (bits <= 16) {
+        mant = 11;
+    }
+    return mag <= mant;
+}
+
+// lossless conversion from this to other: to a wider type of the same signedness (usize and u64,
+// isize and i64, are the same width), or from unsigned to a wider signed type
 attach fn widens_to(this: int_ty&, other: int_ty) -> bool {
     if (*this == other) {
         return true;
@@ -84,7 +100,8 @@ attach fn widens_to(this: int_ty&, other: int_ty) -> bool {
     val (sa, sb) = (this.signed(), other.signed());
     val (ba, bb) = (this.bits(), other.bits());
     if (sa == sb) {
-        return ba <= bb && !(ba == 64 && bb == 64);
+        // usize and u64 (isize and i64) are the same 64 bits on every target, so each is the other
+        return ba <= bb;
     }
     if (!sa && sb) {
         return ba < bb;

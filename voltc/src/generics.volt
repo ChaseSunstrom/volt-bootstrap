@@ -1222,8 +1222,8 @@ attach fn blanket_positions(this: checker&, d: u32) -> i32 {
 }
 
 // Pick one of the overloads cands for a call and emit it. Every candidate that fits is scored:
-// per argument 3 for its exact type, 1 for a coercion; 2 when it returns the wanted type, 1 when
-// it isn't generic. The best score has to be unique, or the call is ambiguous; between equal
+// per argument 6 for its exact type, 2 for a coercion (1 for an integer becoming a float, so an
+// integer overload beats a float one); 4 when it returns the wanted type, 2 when it isn't generic. The best score has to be unique, or the call is ambiguous; between equal
 // scores, the one with fewer blanket positions (more specific) wins.
 attach fn resolve_call(this: checker&, name: str, cands: std::vec<u32>&, rv: tval?, static_ty: u32?, explicit: std::vec<garg>&, args: std::vec<expr>&, want: u32?, span: span) -> compile_error!tval {
     // a call with no receiver: a method of the same name (use std::json makes json's attached
@@ -1375,9 +1375,12 @@ attach fn pick_call(this: checker&, name: str, cands: std::vec<u32>&, rp: tval*,
                 val vv = v ?? vnew(0, 0);
                 val pt = f.params.at(i + offset).ty;
                 if (vv.ty == pt) {
-                    score += 3;
+                    score += 6;
                 } else if (this.coercible(&vv, pt)) {
-                    score += 1;
+                    score += 2;
+                    if (this.t.int_of(vv.ty) != null && this.t.is_float(pt)) {
+                        score -= 1;
+                    }
                 } else {
                     ok = false;
                     var m = fmt3("argument {} is a {}, but '{}' wants a ", unum(@cast<u64>(i + 1)), this.ty_name(vv.ty), S(name));
@@ -1402,10 +1405,10 @@ attach fn pick_call(this: checker&, name: str, cands: std::vec<u32>&, rp: tval*,
             continue;
         }
         if (want != null && (want ?? 0) == f.ret) {
-            score += 2;
+            score += 4;
         }
         if (this.fn_generics(d).len == 0) {
-            score += 1;
+            score += 2;
         }
         put(&vs, { inst: inst, a: a, score: score, blanket: this.blanket_positions(d) });
     }

@@ -136,8 +136,15 @@ The arithmetic, comparison, logical and bitwise operators are C's. What's differ
 - A shift by at least the type's width (`x >> 64` on a `u64`) traps in debug builds; `--release`
   builds shift by the amount modulo the width.
 - `x++` and `x--` are statements, not expressions.
+- A value converts by itself where nothing can be lost: an integer to a wider one of the same
+  signedness (`u32` to `u64`, `i8` to `i32`), an unsigned one to a wider signed one (`u32` to
+  `i64`), `usize` and `u64` either way (and `isize` and `i64`: the same 64 bits on every target),
+  an integer to a float that holds all its values (`i32` or `u32` to `f64`, `u16` to `f32`), and
+  `f32` to `f64`. So `xs.len` passes as a `u64`, and `n * 1.5` with an `i32` `n` is an `f64`.
 - `x as T` converts only when nothing can be lost (widening an integer, integer to float, `T&` to
-  `T*`); anything else is a compile error. `@cast<T>(x)` converts anything to anything, unchecked.
+  `T*`; any integer to a float, rounding when it must); anything else is a compile error.
+  `@cast<T>(x)` converts anything to anything, unchecked: narrowing (`u64` to `u32`) and changing
+  sign take it.
 - `a ?? b` is the value of optional `a`, or `b` when it's null.
 - `==` and `!=` on a struct (or an enum with payloads) call its `eq(other)`: one it attaches, like
   `std::string`'s (`attach operator ==` is another way to write it), or a

@@ -264,6 +264,7 @@ attach fn coercible(this: checker&, v: tval&, to: u32) -> bool {
         .INT(a) => {
             match (*tt) {
                 .INT(b) => { return a.widens_to(b); },
+                .FLOAT(b) => { return a.exact_in_float(b); },
                 default => {},
             }
         },
@@ -401,6 +402,11 @@ attach fn coerce(this: checker&, v: tval, to: u32, span: span) -> compile_error!
             match (*tt) {
                 .INT(b) => {
                     if (a.widens_to(b)) {
+                        return retyped(&v, to, this.ir.conv(v.c, to));
+                    }
+                },
+                .FLOAT(b) => {
+                    if (a.exact_in_float(b)) {
                         return retyped(&v, to, this.ir.conv(v.c, to));
                     }
                 },
