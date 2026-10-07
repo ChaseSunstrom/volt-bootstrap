@@ -1,6 +1,6 @@
 ---
 title: Code that writes code
-description: "Small comptime programs that build types and functions: a struct of arrays, an enum's name table, getters and an argument parser, a struct from a schema file, register blocks and a state machine."
+description: "Small comptime programs that build types and functions: a struct of arrays, an enum's name table, getters and an argument parser, a struct from a schema file, register blocks, a state machine, and code from the fns attached to any type."
 sidebar:
   order: 12
 ---
@@ -400,3 +400,83 @@ fn main() -> void {
 }
 // expect: lock (open refused) unlock open true
 ```
+
+## Code from the fns attached to any type
+
+A function can be attached to any type, not only one you declared: `i32`, `str`, std's types, a C
+struct or a C++ class from an import. Comptime code reads a type's attached fns
+(`@typeinfo(T).methods`) as it reads its fields, and calls one by a name it works out
+(`@field(v, name)(...)`), so a layer over every type that has some kind of fn is one comptime
+function. Zig generates code from a type's fields too, but it can't add a method to a type it
+doesn't own; here `i32` gets one, and a command dispatcher comes from whatever `cmd_` fns a type
+has:
+
+```volt
+use std::io;
+
+attach fn kib(this: i32) -> i32 {
+    return this * 1024;
+}
+
+struct lamp {
+    on: bool;
+    level: i32;
+}
+
+attach fn cmd_toggle(this: lamp&) -> void {
+    this.on = !this.on;
+}
+
+attach fn cmd_brighter(this: lamp&) -> void {
+    this.level += 10;
+}
+
+// run(cmd) calls T's cmd_ fn of that name; commands() lists them. Nothing here names lamp's fns
+comptime fn commands(T: type) -> void {
+    attach fn run(this: T&, cmd: str) -> bool {
+        comptime for (m) in @typeinfo(T).methods {
+            comptime if (m.name.len > 4 && m.name[0..4] == "cmd_") {
+                if (cmd == m.name[4..]) {
+                    @field(this, m.name)();
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+    attach fn commands(static this: T) -> std::string {
+        var out = std::string::from("commands:");
+        comptime for (m) in @typeinfo(T).methods {
+            comptime if (m.name.len > 4 && m.name[0..4] == "cmd_") {
+                out.append(" ");
+                out.append(m.name[4..]);
+            }
+        }
+        return out;
+    }
+}
+
+comptime commands(lamp);
+
+fn main() -> void {
+    var l: lamp = { on: false, level: 0 };
+    val script: str[] = { "toggle", "brighter", "fly" };
+    for (cmd) in script {
+        if (!l.run(cmd)) {
+            std::println("no {}", cmd);
+        }
+    }
+    val n: i32 = 4;
+    std::println("{} {} {} {}", lamp::commands(), l.on, l.level, n.kib());
+}
+// expect: no fly
+// expect: commands: toggle brighter true 10 4096
+```
+
+One call can write a lot. [examples/units.volt](https://github.com/ChaseSunstrom/volt-bootstrap/blob/main/examples/units.volt)
+gives `conversions` 40 units and their lengths in meters, and it attaches a fn to `f64` for every
+pair (`d.km_to_mi()`, 1560 of them) and declares `convert(v, "km", "mi")` over all of them:
+`voltc expand examples/units.volt` lists every fn the call declared. [examples/attach_anything.volt](https://github.com/ChaseSunstrom/volt-bootstrap/blob/main/examples/attach_anything.volt)
+adds `str` and `std::vec<T>` and a field printer, and
+[attach-foreign](https://github.com/ChaseSunstrom/volt-bootstrap/tree/main/examples/interop/volt-calls/attach-foreign)
+attaches fns to a C struct and C++ classes.

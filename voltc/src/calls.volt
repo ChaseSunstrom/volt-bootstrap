@@ -38,6 +38,14 @@ attach fn use_fn(this: checker&, idx: u32) -> void {
 attach fn call(this: checker&, callee: expr&, args: std::vec<expr>&, want: u32?, span: span) -> compile_error!tval {
     match (callee.kind) {
         .DOT_VARIANT(n) => { return this.dot_variant(n, args, want, span); },
+        // @field(v, "name")(...) is v.name(...), the method named at compile time (and on a type,
+        // T::name(...))
+        .BUILTIN(n, g, ba) => {
+            if (n == "field" && ba != null && ba.value.len == 2) {
+                val fe = try this.field_form(ba.value.at(0), ba.value.at(1), callee.span);
+                return this.call(&fe, args, want, span);
+            }
+        },
         .FIELD(base, name, gargs) => {
             val recv = try this.expr(base, null);
             var none: std::vec<garg> = {};
@@ -278,7 +286,7 @@ attach fn field_form(this: checker&, base: garg&, name: garg&, span: span) -> co
         },
         default => { return fails(n.span, "@field(v, \"name\"): the name is a comptime string (or a tuple element's index)"); },
     }
-    // @field(E, name) on an enum type: its variant called name, E::name
+    // @field(E, name) on an enum type: its variant called name, E::name (on a struct type, T::name)
     match (b.kind) {
         .PATH(p&) => {
             if (this.names_enum(p)) {
@@ -292,7 +300,7 @@ attach fn field_form(this: checker&, base: garg&, name: garg&, span: span) -> co
     return { kind: expr_kind::FIELD(bx(copy *b), this.intern(move fname), null), span: span };
 }
 
-// whether p names an enum type (not a local)
+// whether p names an enum or struct type (not a local): @field(T, name) is T::name
 attach fn names_enum(this: checker&, p: path&) -> bool {
     if (p.is_single() && this.lookup_local(p.segs.at(0).name) != null) {
         return false;
@@ -300,6 +308,7 @@ attach fn names_enum(this: checker&, p: path&) -> bool {
     val t = this.resolve_type_path(p, this.cx.env) catch |e| { return false; };
     match (*this.t.get(t)) {
         .ENUM(x) => { return true; },
+        .STRUCT(x) => { return true; },
         default => { return false; },
     }
 }

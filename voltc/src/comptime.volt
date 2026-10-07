@@ -1602,12 +1602,57 @@ attach fn ct_literal(this: checker&, entries: std::vec<lit_entry>&, want: u32?, 
 }
 
 // field access at compile time; `.len`, `.none`/`.value`, and a type's fields are its typeinfo's
+// typeinfo's methods, worked out when read (ct_field): the fns attached to t (with this), in the
+// order they're declared, each
+// one's name, the trait it's attached for ("" when none) and its parameters' names after this;
+// @field(v, m.name)(...) calls one
+attach fn ct_methods(this: checker&, t: u32) -> cval {
+    var ms: std::vec<cval> = {};
+    // in the order they're declared
+    var all = this.attached_to(t);
+    all.items().sort_by(|| (a: attached_fn&, b: attached_fn&) -> i32 {
+        if (a.decl < b.decl) {
+            return -1;
+        }
+        if (a.decl > b.decl) {
+            return 1;
+        }
+        return 0;
+    });
+    for (a&) in all.items() {
+        val fd = this.fn_decl_of(a.decl) ?? continue;
+        var ps: std::vec<cval> = {};
+        for (p&) in fd.params.items() {
+            if (p.name != "this") {
+                put(&ps, cval::STR(S(p.name)));
+            }
+        }
+        var m: std::vec<cfield> = {};
+        put(&m, cf("name", cval::STR(S(fd.name))));
+        put(&m, cf("trait", cval::STR(copy a.group)));
+        put(&m, cf("params", cval::ARRAY(move ps, VOID)));
+        put(&ms, rec1(move m));
+    }
+    return cval::ARRAY(move ms, VOID);
+}
+
 attach fn ct_field(this: checker&, v: cval, name: str, span: span) -> compile_error!cval {
     match (v) {
         .STRUCT(t, fields) => {
             for (f&) in fields.items() {
                 if (f.name == name) {
                     return copy f.v;
+                }
+            }
+            if (name == "methods") {
+                // a typeinfo's (listing them for every @typeinfo would slow derive's loops down)
+                for (f&) in fields.items() {
+                    if (f.name == "id") {
+                        match (f.v) {
+                            .INT(id, it) => { return this.ct_methods(@cast<u32>(id)); },
+                            default => {},
+                        }
+                    }
                 }
             }
             return fail(span, fmt("no field '{}'", S(name)));
@@ -3861,7 +3906,7 @@ fn builtin_defs() -> std::vec<attr_def> {
     put(&v, { name: "expand", args: 1, sig: "@expand(expr)", doc: "expr, noting at compile time what it became: a comptime value, or the generic instance a call runs" });
     put(&v, { name: "embed", args: 1, sig: "@embed(\"path\") -> str", doc: "a file's bytes, read at compile time (the path is relative to the source file)" });
     put(&v, { name: "discriminant", args: 1, sig: "@discriminant(v) -> i64", doc: "which variant an enum value holds" });
-    put(&v, { name: "field", args: 2, sig: "@field(v, \"name\")", doc: "v.name, the name a comptime string (or a tuple index): read, assigned, borrowed" });
+    put(&v, { name: "field", args: 2, sig: "@field(v, \"name\")", doc: "v.name, the name a comptime string (or a tuple index): read, assigned, borrowed, or called as a method" });
     put(&v, { name: "has_field", args: 2, sig: "@has_field(T, \"name\") -> bool", doc: "is T a struct with that field (comptime)" });
     put(&v, { name: "has_method", args: 2, sig: "@has_method(T, \"name\", A...) -> bool", doc: "does T have a method of that name, taking A... first (comptime)" });
     put(&v, { name: "attaches", args: 2, sig: "@attaches(T, trait) -> bool", doc: "does T attach the trait, as a <T: trait> bound asks (comptime)" });

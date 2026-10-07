@@ -113,3 +113,17 @@ fn multiline_strings_crlf() {
     let _ = std::fs::remove_dir_all(&dir);
     assert_eq!(String::from_utf8_lossy(&out.stdout).trim_end(), directives(&src, "expect").join("\n"), "{}", String::from_utf8_lossy(&out.stderr));
 }
+
+/// examples/units.volt: one comptime call declares a fn for every pair of its 40 units, which
+/// voltc expand lists (the example says so)
+#[test]
+fn units_example_expands() {
+    let out = Command::new(common::voltc())
+        .args(["expand", "units.volt", "--std", "../std"])
+        .current_dir(Path::new(env!("CARGO_MANIFEST_DIR")).join("examples"))
+        .output()
+        .unwrap();
+    let text = String::from_utf8_lossy(&out.stdout).to_string() + &String::from_utf8_lossy(&out.stderr);
+    let fns = text.lines().filter(|l| l.contains(": attach fn ") && l.contains("_to_")).count();
+    assert_eq!(fns, 40 * 39, "fns units.volt's one call declared: {text}");
+}

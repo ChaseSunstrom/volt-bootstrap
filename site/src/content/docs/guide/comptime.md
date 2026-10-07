@@ -248,7 +248,11 @@ fn main() -> void {
 
 `@typeof(expr)` is an expression's type. `@typeinfo(T)` describes a type at compile time: its name,
 size, alignment, kind (with fields, variants, element types) and more. Its `fields` and `variants`
-are a struct's fields and an enum's variants (empty for other types), ready for a `comptime for`.
+are a struct's fields and an enum's variants (empty for other types), ready for a `comptime for`,
+and its `methods` are the fns attached to the type (any type: `i32`'s too), in the order they're
+declared: each one's `name`, the `trait` it's attached for (`""` when none) and its `params` (their
+names, after `this`). `@field(v, m.name)(args)` calls one ([Code that writes
+code](/volt-bootstrap/guide/metaprogramming/#code-from-the-fns-attached-to-any-type)).
 
 ```volt
 use std::io;

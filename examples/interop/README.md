@@ -40,6 +40,7 @@ language it is.
 | C++ | [volt-calls/cpp](volt-calls/cpp) | `use { "counter.hpp" } as cpp;`: classes, templates, destructors |
 | Rust | [volt-calls/rust](volt-calls/rust) | `use { "stats.rs" } as stats;` (or a crate's directory) |
 | Zig | [volt-calls/zig](volt-calls/zig) | `use { "stats.zig" } as stats;` |
+| C and C++ | [volt-calls/attach-foreign](volt-calls/attach-foreign) | Volt fns attached to a C struct and C++ classes from the imports, and comptime code reading the C struct's fields |
 
 Go, Python, JavaScript, Java and .NET are next, imported the same way: `use { "gomath/" }`, `use {
 "stats.py" }`, `use { "stats.js" }`, `use { "Stats.java" }`, `use { "Stats.dll" }`. Until then, the
