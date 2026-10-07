@@ -52,9 +52,9 @@ static v_point v_add(v_point a, v_point b) {
 The LLVM backend generates native code through LLVM's C API, with no C compiler in between (`cc`
 still links the program and compiles the tiny C runtime). `voltc emit-llvm` prints the IR.
 
-It's the default where it's complete: x86-64 with the System V calling convention (Linux, macOS,
-FreeBSD). Elsewhere (Windows, aarch64) the default is C until those calling conventions are in;
-`--backend c` or `--backend llvm` chooses either way. A program the LLVM backend can't lower (a C
+It's the default on x86-64 and aarch64 (Linux, macOS, FreeBSD). It lowers Windows x64's calling
+convention too, but C stays the default there until voltc itself runs on Windows; `--backend c` or
+`--backend llvm` chooses either way. A program the LLVM backend can't lower (a C
 struct from a header that only the C compiler can lay out) is built through C instead, unless
 `--backend llvm` asked for LLVM. C's `static inline` functions from headers are reached through
 pointers that a small generated C unit exports.

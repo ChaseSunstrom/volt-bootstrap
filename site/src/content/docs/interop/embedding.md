@@ -14,7 +14,7 @@ file. Its interface is a C one, and `bolt build` also writes it for C++, Rust an
 cd voltc/embed && bolt build      # target/debug/libvoltvm.so, and bindings/voltvm.{h,hpp,rs,py,pyi}
 ```
 
-It needs LLVM 23, as voltc does, and runs on x86-64 for now (the hosts voltc's LLVM backend
+It needs LLVM 23, as voltc does, and runs on x86-64 and aarch64 (the hosts voltc's LLVM backend
 compiles for).
 
 ## A VM

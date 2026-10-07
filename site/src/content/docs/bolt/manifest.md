@@ -116,7 +116,7 @@ An optional dependency is also a feature of the same name. Code reads features w
 | `inherits` | the profile it starts from (required for a new profile) |
 | `optimize` | `--release`: optimized, without debug checks |
 | `leak-check` | `--leak-check` |
-| `backend` | `"c"` or `"llvm"`; left out, voltc's default: LLVM on x86-64 (but Windows), C elsewhere ([backends](/volt-bootstrap/voltc/backends/)) |
+| `backend` | `"c"` or `"llvm"`; left out, voltc's default: LLVM on x86-64 and aarch64 (but Windows), C elsewhere ([backends](/volt-bootstrap/voltc/backends/)) |
 | `cc-flags` | extra flags for the C compiler |
 
 The built-in profiles are `dev` (target/debug), `release`, `test` (like dev) and `bench` (like

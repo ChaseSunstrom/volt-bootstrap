@@ -1,16 +1,26 @@
 // The LLVM backend: the IR (ir.volt) lowered through the llvm-c API into an object file. Layouts
 // mirror cgen's C ones (struct members in order, void members dropped, a payload union as its most
-// aligned member plus padding) and every function uses the C ABI (SysV x86-64), so LLVM-built code
-// shares memory and calls with C-backend libraries, C headers and the runtime (compiled by cc).
+// aligned member plus padding) and every function uses the target's C ABI (SysV x86-64, AAPCS64,
+// Apple's arm64 or Windows x64), so LLVM-built code shares memory and calls with C-backend libraries,
+// C headers and the runtime (compiled by cc).
 use std::mem;
 use { "llvm-c/Core.h", "llvm-c/Target.h", "llvm-c/TargetMachine.h", "llvm-c/Analysis.h", "llvm-c/Transforms/PassBuilder.h", "llvm-c/DebugInfo.h", "llvm-c/LLJIT.h", "llvm-c/Orc.h" } as llvm;
 
-// how a value crosses a call (SysV x86-64)
+// the C calling convention, from the triple
+enum callconv {
+    SYSV,     // x86-64 but Windows (and bare metal, where only Volt calls Volt)
+    AAPCS64,  // aarch64 Linux and the like
+    DARWIN64, // Apple's arm64: AAPCS64, with small ints extended by the caller
+    WIN64,    // Windows x64
+}
+
+// how a value crosses a call
 enum pass {
     NONE,   // void or empty: nothing
     DIRECT, // as its own LLVM type (a scalar)
-    PIECES, // an aggregate of at most 16 bytes, as one or two eightbyte scalars
-    MEMORY, // params: a pointer to a copy (byval); returns: a pointer the caller gives (sret)
+    PIECES, // SysV: an aggregate of at most 16 bytes, as one or two eightbyte scalars
+    COERCE, // AAPCS64, Windows: the whole value as one LLVM type (cty), reinterpreted through memory
+    MEMORY, // params: a pointer to a copy (byval on SysV); returns: a pointer the caller gives (sret)
 }
 
 // how one param or return value crosses a call
@@ -18,6 +28,8 @@ struct abi_part {
     how: pass;
     ty: u32 = 0;                                  // the Volt type
     pieces: std::vec<llvm::LLVMOpaqueType*> = {}; // PIECES: the eightbytes' types
+    cty: llvm::LLVMOpaqueType* = null;            // COERCE: the type it crosses as
+    hfa: bool = false;                            // COERCE: floats in FP registers (AAPCS64)
     ext: u32 = 0;                                 // DIRECT small ints: 1 zeroext, 2 signext
 }
 
@@ -63,6 +75,7 @@ struct lg {
     // sret: the hidden return-slot param when the current fn returns by memory
     sret: llvm::LLVMOpaqueValue* = null;
     tm: llvm::LLVMOpaqueTargetMachine* = null;
+    cc: callconv = callconv::SYSV;
     hdr: std::vec<str> = {}; // C header functions called through the runtime unit's pointers
     err: std::string = {};   // a program this backend can't lower (reported after the module)
     // debug info (DWARF line tables, when the IR marks statements' lines): the builder, a file per
@@ -324,7 +337,7 @@ attach fn offset_of(this: lg&, agg: u32, i: u32) -> u64 {
     return llvm::LLVMOffsetOfElement(this.td, this.lt(agg), this.elem(agg, i));
 }
 
-// ---------- the C ABI (SysV x86-64) ----------
+// ---------- the C ABI ----------
 
 attach fn int_signed(this: lg&, t: u32) -> bool {
     match (*this.c.t.get(t)) {
@@ -396,16 +409,26 @@ attach fn classify(this: lg&, t: u32, off: u64, ebs: eightbyte[2]&) -> void {
     }
 }
 
-// how a value of type t crosses a call
-attach fn part(this: lg&, t: u32) -> abi_part {
+// how a value of type t crosses a call: as a param, or as the result when ret is set
+attach fn part(this: lg&, t: u32, ret: bool) -> abi_part {
     if (this.is_void(t)) {
         return { how: pass::NONE, ty: t };
     }
     val l = this.lt(t);
     val k = llvm::LLVMGetTypeKind(l);
     if (k != llvm::LLVMStructTypeKind && k != llvm::LLVMArrayTypeKind) {
+        val bits = int_bits(l);
+        if (this.cc == callconv::WIN64 && bits == 128) {
+            // Windows: an i128 goes by a pointer to a copy and comes back in xmm0
+            if (ret) {
+                return { how: pass::COERCE, ty: t, cty: llvm::LLVMVectorType(llvm::LLVMInt64TypeInContext(this.ctx), 2) };
+            }
+            return { how: pass::MEMORY, ty: t };
+        }
+        // a small int is extended by the caller on SysV and Apple's arm64 (to 32 bits); AAPCS64
+        // leaves it to the callee, and Windows extends only a bool
         var ext: u32 = 0;
-        if (k == llvm::LLVMIntegerTypeKind && llvm::LLVMGetIntTypeWidth(l) < 32) {
+        if (bits > 0 && bits < 32 && (this.cc == callconv::SYSV || this.cc == callconv::DARWIN64 || (this.cc == callconv::WIN64 && t == BOOL))) {
             ext = 1;
             if (this.int_signed(t)) {
                 ext = 2;
@@ -417,6 +440,16 @@ attach fn part(this: lg&, t: u32) -> abi_part {
     if (size == 0) {
         return { how: pass::NONE, ty: t };
     }
+    if (this.cc == callconv::WIN64) {
+        // Windows: 1, 2, 4 or 8 bytes as an integer that size; anything else by a pointer to a copy
+        if (size == 1 || size == 2 || size == 4 || size == 8) {
+            return { how: pass::COERCE, ty: t, cty: llvm::LLVMIntTypeInContext(this.ctx, @cast<u32>(size * 8)) };
+        }
+        return { how: pass::MEMORY, ty: t };
+    }
+    if (this.cc != callconv::SYSV) {
+        return this.aapcs_part(t, size, ret);
+    }
     if (size > 16) {
         return { how: pass::MEMORY, ty: t };
     }
@@ -425,6 +458,13 @@ attach fn part(this: lg&, t: u32) -> abi_part {
     ebs[1] = {};
     this.classify(t, 0, &ebs);
     var r: abi_part = { how: pass::PIECES, ty: t };
+    var leaves: std::vec<llvm::LLVMOpaqueType*> = {};
+    scalar_leaves(l, &leaves);
+    if (leaves.len == 1 && int_bits(*leaves.at(0)) == 128) {
+        // an i128 inside: one i128 piece (two registers, or the stack whole), as clang has it
+        put(&r.pieces, *leaves.at(0));
+        return r;
+    }
     val n = (size + 7) / 8;
     for (i) in 0..n {
         val e = ebs[@cast<usize>(i)];
@@ -450,20 +490,109 @@ attach fn part(this: lg&, t: u32) -> abi_part {
     return r;
 }
 
-// the INTEGER registers a PIECES value needs (the rest are SSE)
-fn int_pieces(p: abi_part&) -> u32 {
-    var ints: u32 = 0;
-    for (x) in p.pieces.items() {
-        if (llvm::LLVMGetTypeKind(x) == llvm::LLVMIntegerTypeKind) {
-            ints += 1;
+// an integer type's width, 0 for any other type
+fn int_bits(l: llvm::LLVMOpaqueType*) -> u32 {
+    if (llvm::LLVMGetTypeKind(l) != llvm::LLVMIntegerTypeKind) {
+        return 0;
+    }
+    return llvm::LLVMGetIntTypeWidth(l);
+}
+
+// AAPCS64's aggregates: an HFA (one to four of the same float type, nested or not) in FP registers;
+// up to 16 bytes in one or two x registers (a pair as an i128 when it's 16-byte aligned); anything
+// bigger by a pointer to a copy, or returned through x8
+attach fn aapcs_part(this: lg&, t: u32, size: u64, ret: bool) -> abi_part {
+    val l = this.lt(t);
+    var leaves: std::vec<llvm::LLVMOpaqueType*> = {};
+    scalar_leaves(l, &leaves);
+    if (leaves.len >= 1 && leaves.len <= 4) {
+        val e = *leaves.at(0);
+        val ek = llvm::LLVMGetTypeKind(e);
+        var same = ek == llvm::LLVMHalfTypeKind || ek == llvm::LLVMFloatTypeKind || ek == llvm::LLVMDoubleTypeKind || ek == llvm::LLVMFP128TypeKind;
+        for (x) in leaves.items() {
+            if (x != e) {
+                same = false;
+            }
+        }
+        if (same) {
+            // as clang has it: a param is an array of them, a result the aggregate itself
+            var cty = llvm::LLVMArrayType2(e, @cast<u64>(leaves.len));
+            if (ret) {
+                cty = l;
+            }
+            return { how: pass::COERCE, ty: t, cty: cty, hfa: true };
         }
     }
-    return ints;
+    if (size > 16) {
+        return { how: pass::MEMORY, ty: t };
+    }
+    var cty = llvm::LLVMInt64TypeInContext(this.ctx);
+    if (this.align_of(l) == 16) {
+        cty = llvm::LLVMIntTypeInContext(this.ctx, 128);
+    } else if (size > 8) {
+        cty = llvm::LLVMArrayType2(cty, 2);
+    } else if (ret) {
+        cty = llvm::LLVMIntTypeInContext(this.ctx, @cast<u32>(size * 8));
+    }
+    return { how: pass::COERCE, ty: t, cty: cty };
+}
+
+// the scalars l is made of, in order; it stops past 5 (more than an HFA can have)
+fn scalar_leaves(l: llvm::LLVMOpaqueType*, out: std::vec<llvm::LLVMOpaqueType*>&) -> void {
+    val k = llvm::LLVMGetTypeKind(l);
+    if (k == llvm::LLVMStructTypeKind) {
+        for (i) in 0..llvm::LLVMCountStructElementTypes(l) {
+            if (out.len > 4) {
+                return;
+            }
+            scalar_leaves(llvm::LLVMStructGetTypeAtIndex(l, i), out);
+        }
+    } else if (k == llvm::LLVMArrayTypeKind) {
+        val e = llvm::LLVMGetElementType(l);
+        for (i) in 0..llvm::LLVMGetArrayLength2(l) {
+            if (out.len > 4) {
+                return;
+            }
+            scalar_leaves(e, out);
+        }
+    } else {
+        put(out, l);
+    }
+}
+
+// memory for a COERCE value: room and alignment for both its Volt type and the type it crosses as
+attach fn coerce_slot(this: lg&, p: abi_part&) -> llvm::LLVMOpaqueValue* {
+    val l = this.lt(p.ty);
+    var t = p.cty;
+    if (this.size_of(l) > this.size_of(t)) {
+        t = l;
+    }
+    val a = this.alloca(t);
+    var al = this.align_of(l);
+    if (this.align_of(p.cty) > al) {
+        al = this.align_of(p.cty);
+    }
+    llvm::LLVMSetAlignment(a, al);
+    return a;
+}
+
+// the INTEGER registers a PIECES value needs (an i128 two), and its SSE pieces
+fn int_pieces(p: abi_part&) -> (u32, u32) {
+    var ints: u32 = 0;
+    var sses: u32 = 0;
+    for (x) in p.pieces.items() {
+        if (llvm::LLVMGetTypeKind(x) == llvm::LLVMIntegerTypeKind) {
+            ints += (llvm::LLVMGetIntTypeWidth(x) + 63) / 64;
+        } else {
+            sses += 1;
+        }
+    }
+    return (ints, sses);
 }
 
 // a function's calling convention from its Volt signature
 attach fn sig(this: lg&, params: std::vec<u32>&, ret: u32, va: bool) -> abi_fn {
-    var a: abi_fn = { ret: this.part(ret), va: va };
+    var a: abi_fn = { ret: this.part(ret, true), va: va };
     // the argument registers left: 6 INTEGER (one fewer with an sret pointer) and 8 SSE; a PIECES param
     // that doesn't fit whole goes by memory instead
     var ints: u32 = 6;
@@ -472,10 +601,9 @@ attach fn sig(this: lg&, params: std::vec<u32>&, ret: u32, va: bool) -> abi_fn {
         ints -= 1;
     }
     for (p) in params.items() {
-        var x = this.part(p);
+        var x = this.part(p, false);
         if (x.how == pass::PIECES) {
-            val ni = int_pieces(&x);
-            val ns = @cast<u32>(x.pieces.len) - ni;
+            val (ni, ns) = int_pieces(&x);
             if (ni <= ints && ns <= sses) {
                 ints -= ni;
                 sses -= ns;
@@ -485,8 +613,13 @@ attach fn sig(this: lg&, params: std::vec<u32>&, ret: u32, va: bool) -> abi_fn {
         } else if (x.how == pass::DIRECT) {
             val k = llvm::LLVMGetTypeKind(this.lt(p));
             if (k == llvm::LLVMIntegerTypeKind || k == llvm::LLVMPointerTypeKind) {
-                if (ints > 0) {
-                    ints -= 1;
+                // an i128 takes two, or goes on the stack whole and leaves the last one free
+                var need: u32 = 1;
+                if (int_bits(this.lt(p)) == 128) {
+                    need = 2;
+                }
+                if (need <= ints) {
+                    ints -= need;
                 }
             } else if (sses > 0) {
                 sses -= 1;
@@ -507,6 +640,8 @@ attach fn sig(this: lg&, params: std::vec<u32>&, ret: u32, va: bool) -> abi_fn {
         rt = this.lt(ret);
     } else if (a.ret.how == pass::PIECES) {
         rt = this.pieces_ty(&a.ret);
+    } else if (a.ret.how == pass::COERCE) {
+        rt = a.ret.cty;
     }
     var v: i32 = 0;
     if (va) {
@@ -524,6 +659,8 @@ attach fn param_types(this: lg&, x: abi_part&, ps: std::vec<llvm::LLVMOpaqueType
         for (p) in x.pieces.items() {
             put(ps, p);
         }
+    } else if (x.how == pass::COERCE) {
+        put(ps, x.cty);
     } else if (x.how == pass::MEMORY) {
         put(ps, this.ptrt());
     }
@@ -547,7 +684,8 @@ attach fn type_attr(this: lg&, name: str, t: llvm::LLVMOpaqueType*) -> llvm::LLV
     return llvm::LLVMCreateTypeAttribute(this.ctx, k, t);
 }
 
-// the ABI's attributes (sret, byval, zeroext/signext) on a function, or on a call when `call` is set
+// the ABI's attributes (sret, byval, zeroext/signext, alignstack) on a function, or on a call when
+// `call` is set
 attach fn abi_attrs(this: lg&, a: abi_fn&, f: llvm::LLVMOpaqueValue*, call: bool) -> void {
     var idx: u32 = 1;
     if (a.ret.how == pass::MEMORY) {
@@ -570,10 +708,24 @@ attach fn abi_attrs(this: lg&, a: abi_fn&, f: llvm::LLVMOpaqueValue*, call: bool
             idx += 1;
         } else if (x.how == pass::PIECES) {
             idx += @cast<u32>(x.pieces.len);
+        } else if (x.how == pass::COERCE) {
+            if (x.hfa && this.cc == callconv::AAPCS64) {
+                // an HFA that ends up on the stack takes whole 8-byte slots, 16 for f128s (Apple's
+                // packs them)
+                var al: u64 = 8;
+                if (this.align_of(llvm::LLVMGetElementType(x.cty)) > 8) {
+                    al = 16;
+                }
+                add_attr(f, call, idx, llvm::LLVMCreateEnumAttribute(this.ctx, llvm::LLVMGetEnumAttributeKindForName("alignstack", 10), al));
+            }
+            idx += 1;
         } else if (x.how == pass::MEMORY) {
-            add_attr(f, call, idx, this.type_attr("byval", this.lt(x.ty)));
-            val al = llvm::LLVMCreateEnumAttribute(this.ctx, llvm::LLVMGetEnumAttributeKindForName("align", 5), @cast<u64>(this.align_of(this.lt(x.ty))));
-            add_attr(f, call, idx, al);
+            // SysV copies it onto the stack (byval); elsewhere the pointer is to the caller's copy
+            if (this.cc == callconv::SYSV) {
+                add_attr(f, call, idx, this.type_attr("byval", this.lt(x.ty)));
+                val al = llvm::LLVMCreateEnumAttribute(this.ctx, llvm::LLVMGetEnumAttributeKindForName("align", 5), @cast<u64>(this.align_of(this.lt(x.ty))));
+                add_attr(f, call, idx, al);
+            }
             idx += 1;
         }
     }
@@ -678,7 +830,7 @@ attach fn decl_fn(this: lg&, i: u32) -> llvm::LLVMOpaqueValue* {
             // std/bare.volt's memcpy and the like would turn into calls to themselves)
             llvm::LLVMAddAttributeAtIndex(fv, 4294967295, llvm::LLVMCreateStringAttribute(this.ctx, "no-builtins", 11, "", 0));
         } else {
-            // schedule for current x86-64 chips, as clang does by default, not for the first ones
+            // schedule for current chips, as clang does by default (on x86-64, not for the first ones)
             llvm::LLVMAddAttributeAtIndex(fv, 4294967295, llvm::LLVMCreateStringAttribute(this.ctx, "tune-cpu", 8, "generic", 7));
         }
         if (this.c.opts.line_info) {
@@ -1836,7 +1988,7 @@ attach fn call(this: lg&, f: u32, args: std::vec<u32>&, t: u32) -> llvm::LLVMOpa
                 }
                 at = I32;
             }
-            val p = this.part(at);
+            val p = this.part(at, false);
             this.pass_arg(&p, v, &vals);
             put(&extra, move p);
         }
@@ -1861,6 +2013,11 @@ attach fn call(this: lg&, f: u32, args: std::vec<u32>&, t: u32) -> llvm::LLVMOpa
         this.store_pieces(&a.ret, c, slot);
         return this.load(t, slot);
     }
+    if (a.ret.how == pass::COERCE) {
+        val slot = this.coerce_slot(&a.ret);
+        llvm::LLVMBuildStore(this.b, c, slot);
+        return this.load(t, slot);
+    }
     if (a.ret.how == pass::NONE) {
         return null;
     }
@@ -1874,6 +2031,12 @@ attach fn pass_arg(this: lg&, p: abi_part&, v: llvm::LLVMOpaqueValue*, vals: std
     }
     if (p.how == pass::DIRECT) {
         put(vals, v);
+        return;
+    }
+    if (p.how == pass::COERCE) {
+        val slot = this.coerce_slot(p);
+        this.store(v, slot);
+        put(vals, llvm::LLVMBuildLoad2(this.b, p.cty, slot, ""));
         return;
     }
     val mem = this.spill(v, p.ty);
@@ -2037,6 +2200,10 @@ attach fn ret(this: lg&, v: u32?) -> void {
     } else if (a.ret.how == pass::MEMORY) {
         this.store(x, this.sret);
         llvm::LLVMBuildRetVoid(this.b);
+    } else if (a.ret.how == pass::COERCE) {
+        val slot = this.coerce_slot(&a.ret);
+        this.store(x, slot);
+        llvm::LLVMBuildRet(this.b, llvm::LLVMBuildLoad2(this.b, a.ret.cty, slot, ""));
     } else {
         val mem = this.spill(x, f.ret);
         if (a.ret.pieces.len == 1) {
@@ -2095,6 +2262,11 @@ attach fn fn_body(this: lg&, i: u32) -> void {
             pi += 1;
         } else if (p.how == pass::MEMORY) {
             *this.locals.at(li) = llvm::LLVMGetParam(this.f, pi);
+            pi += 1;
+        } else if (p.how == pass::COERCE) {
+            val slot = this.coerce_slot(p);
+            llvm::LLVMBuildStore(this.b, llvm::LLVMGetParam(this.f, pi), slot);
+            *this.locals.at(li) = slot;
             pi += 1;
         } else if (p.how == pass::PIECES) {
             val mem = *this.locals.at(li);
@@ -2413,8 +2585,8 @@ attach fn keep_used(this: lg&) -> void {
 
 // ---------- the module ----------
 
-// the program as an LLVM module, with a target machine for the host or --target; an error message,
-// or ""
+// the program as an LLVM module, with a target machine for the host (for emit-llvm, $VOLT_TRIPLE's
+// instead, to see how another host's code lowers) or --target; an error message, or ""
 attach fn llvm_build(this: checker&, g: lg&) -> std::string {
     var level = llvm::LLVMCodeGenLevelNone;
     if (this.opts.release) {
@@ -2441,15 +2613,33 @@ attach fn llvm_build(this: checker&, g: lg&) -> std::string {
         }
         triple.append(bare.triple);
     } else {
-        llvm::LLVMInitializeX86TargetInfo();
-        llvm::LLVMInitializeX86Target();
-        llvm::LLVMInitializeX86TargetMC();
-        llvm::LLVMInitializeX86AsmPrinter();
-        val host = llvm::LLVMGetDefaultTargetTriple();
-        triple.append(c_text(host));
-        llvm::LLVMDisposeMessage(host);
-        if (triple.len() < 6 || triple.as_str()[0..6] != "x86_64") {
-            return fmt("the LLVM backend builds for x86-64 hosts only (for now), not {}; use --backend c", copy triple);
+        if (this.opts.triple) {
+            triple.append(this.opts.triple);
+        } else {
+            val host = llvm::LLVMGetDefaultTargetTriple();
+            triple.append(c_text(host));
+            llvm::LLVMDisposeMessage(host);
+        }
+        val ts = triple.as_str();
+        if (ts.starts_with("x86_64")) {
+            llvm::LLVMInitializeX86TargetInfo();
+            llvm::LLVMInitializeX86Target();
+            llvm::LLVMInitializeX86TargetMC();
+            llvm::LLVMInitializeX86AsmPrinter();
+            if (ts.contains("windows") || ts.contains("mingw") || ts.contains("cygwin") || ts.contains("win32")) {
+                g.cc = callconv::WIN64;
+            }
+        } else if ((ts.starts_with("aarch64") || ts.starts_with("arm64")) && !ts.contains("windows")) {
+            llvm::LLVMInitializeAArch64TargetInfo();
+            llvm::LLVMInitializeAArch64Target();
+            llvm::LLVMInitializeAArch64TargetMC();
+            llvm::LLVMInitializeAArch64AsmPrinter();
+            g.cc = callconv::AAPCS64;
+            if (ts.contains("apple") || ts.contains("darwin")) {
+                g.cc = callconv::DARWIN64;
+            }
+        } else {
+            return fmt("the LLVM backend builds for x86-64 and aarch64 hosts but Windows on ARM (for now), not {}; use --backend c", copy triple);
         }
     }
     var target: llvm::LLVMTarget* = null;
@@ -2467,7 +2657,14 @@ attach fn llvm_build(this: checker&, g: lg&) -> std::string {
         }
         g.tm = llvm::LLVMCreateTargetMachine(target, triple.c_str(), cpu.c_str(), feats.c_str(), level, llvm::LLVMRelocStatic, model);
     } else {
-        g.tm = llvm::LLVMCreateTargetMachine(target, triple.c_str(), "x86-64", "", level, llvm::LLVMRelocPIC, llvm::LLVMCodeModelDefault);
+        // clang's default CPUs: the first x86-64, any armv8-a, Apple's M1
+        var cpu = S("x86-64");
+        if (g.cc == callconv::DARWIN64) {
+            cpu = S("apple-m1");
+        } else if (g.cc == callconv::AAPCS64) {
+            cpu = S("generic");
+        }
+        g.tm = llvm::LLVMCreateTargetMachine(target, triple.c_str(), cpu.c_str(), "", level, llvm::LLVMRelocPIC, llvm::LLVMCodeModelDefault);
     }
     g.ctx = llvm::LLVMContextCreate();
     g.m = llvm::LLVMModuleCreateWithNameInContext("volt", g.ctx);

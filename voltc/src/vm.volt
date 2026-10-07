@@ -35,10 +35,18 @@ export struct volt_vm {
 // functions)
 export fn volt_vm_new(std_dir: str) -> volt_vm {
     var v: volt_vm = { std_dir: std::string::from(std_dir) };
-    llvm::LLVMInitializeX86TargetInfo();
-    llvm::LLVMInitializeX86Target();
-    llvm::LLVMInitializeX86TargetMC();
-    llvm::LLVMInitializeX86AsmPrinter();
+    // the host's target, for the JIT
+    comptime if (@cfg("arch", "aarch64")) {
+        llvm::LLVMInitializeAArch64TargetInfo();
+        llvm::LLVMInitializeAArch64Target();
+        llvm::LLVMInitializeAArch64TargetMC();
+        llvm::LLVMInitializeAArch64AsmPrinter();
+    } else {
+        llvm::LLVMInitializeX86TargetInfo();
+        llvm::LLVMInitializeX86Target();
+        llvm::LLVMInitializeX86TargetMC();
+        llvm::LLVMInitializeX86AsmPrinter();
+    }
     var j: llvm::LLVMOrcOpaqueLLJIT* = null;
     val e = llvm::LLVMOrcCreateLLJIT(&j, null);
     if (e != null) {

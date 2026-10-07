@@ -22,8 +22,12 @@ compiler's overflow builtins; release builds use plain wrapping arithmetic.
 ## lgen: LLVM
 
 `lgen.volt` builds an LLVM module through the llvm-c API. Layouts are computed to match C's
-exactly, and every function uses the C calling convention, including the System V rules for
-passing and returning structs in registers or memory. A small C unit is still compiled for the
+exactly, and every function uses the target's C calling convention: System V on x86-64, AAPCS64
+on aarch64 (with Apple's variant, where the caller extends small ints), or Windows x64. Each has its
+own rules for passing and returning structs in registers or memory, and `tests/abi.rs` checks them
+against clang: `VOLT_TRIPLE=aarch64-unknown-linux-gnu voltc emit-llvm` lowers for another host, and
+each export fn in `tests/abi/sigs.volt` has to get the signature clang gives the same C. On aarch64,
+C and Volt also call each other under `qemu-aarch64`. A small C unit is still compiled for the
 runtime and for C headers' `static inline` functions, which the LLVM code reaches through pointers.
 
 A few rules keep the LLVM output correct:

@@ -364,6 +364,7 @@ struct opts {
     expand: bool = false;               // record what comptime code became (voltc expand, the LSP)
     line_info: bool = false;            // mark each statement's source line in the IR (--profiler)
     target: str? = null;                // --target (target.volt): bare metal, through LLVM
+    triple: str? = null;                // emit-llvm: $VOLT_TRIPLE, the host to lower for (tests/abi.rs)
 }
 
 // an error variant's code, its name and its qualified name (for volt_err_name)
