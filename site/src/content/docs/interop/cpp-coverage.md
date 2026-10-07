@@ -23,7 +23,8 @@ doesn't map, with the way around each.
 | a class or enum inside a class | `Outer_Inner` |
 | constructors, destructors, copy constructors | `T::new(...)`, the `delete` and `copy` hooks |
 | methods, static methods, method templates, operators | methods, `T::f(...)`, generic methods, `op_add`, `to_T()`, `assign(v)` |
-| public fields, static data members | getters and `set_` methods |
+| public fields (bit-fields too), static data members | getters and `set_` methods (a `std::function` field's takes a closure and keeps it) |
+| namespace variables, constants clang can't work out | `name()`: a reference into a variable (or a copy and `set_name(v)`), a constant read through a wrapper |
 | `const`/`constexpr` constants | `val`s |
 | enums (scoped or not) | enums |
 | virtual methods | overridden by name in an `attach C -> T` block; `C::derive` makes the subclass (no RTTI, no call through a table) |
@@ -70,8 +71,6 @@ it), and the rest still works. What Volt can't declare ahead (variadic and non-t
 | --- | --- | --- |
 | class templates with non-type or template template parameters (glm's `vec<3, float>`) | Volt's generic structs take types (functions with them are [called per use](/volt-bootstrap/interop/cpp/#calls-worked-out-per-use)) | a `using vec3 = glm::vec3;` with wrapper functions over it |
 | C++20 modules (`import std;`) | the import reads headers | the headers the module is built from |
-| bit-fields | a Volt field can't be part of a byte | a getter and setter in C++ |
-| a `std::function` field's setter | a Volt closure stored in C++ would outlive the call | a C++ method that takes it and copies what it needs |
 
 Explicit specializations (`template <> struct S<void>`) and what a library adds to namespace `std`
 (`std::hash<T>` specializations, `swap` overloads) are left out on purpose: the template, and Volt's

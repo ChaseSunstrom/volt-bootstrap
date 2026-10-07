@@ -252,7 +252,9 @@ are a struct's fields and an enum's variants (empty for other types), ready for 
 and its `methods` are the fns attached to the type (any type: `i32`'s too), in the order they're
 declared: each one's `name`, the `trait` it's attached for (`""` when none) and its `params` (their
 names, after `this`). `@field(v, m.name)(args)` calls one ([Code that writes
-code](/volt-bootstrap/guide/metaprogramming/#code-from-the-fns-attached-to-any-type)).
+code](/volt-bootstrap/guide/metaprogramming/#code-from-the-fns-attached-to-any-type)). `borrows` says
+whether a value of it points into something it doesn't own (a reference or slice in it, a closure's
+capture by reference), so it mustn't be kept past what it points at.
 
 ```volt
 use std::io;

@@ -3302,6 +3302,19 @@ attach fn typeinfo(this: checker&, t: u32, span: span) -> compile_error!cval {
     put(&r, cf("align", this.opt_usize(align)));
     put(&r, cf("stride", this.opt_usize(size)));
     put(&r, cf("is_pod", cval::BOOL(is_pod)));
+    // does a value of it point into something it doesn't own (a reference or slice in it; a
+    // closure's capture by reference)
+    var borrows = this.holds(t);
+    match (*this.t.get(t)) {
+        .CLOSURE(c) => {
+            borrows = false;
+            for (x&) in this.ci(c).caps.items() {
+                borrows = borrows || this.holds(x.ty);
+            }
+        },
+        default => {},
+    }
+    put(&r, cf("borrows", cval::BOOL(borrows)));
     put(&r, cf("is_comptime_only", cval::BOOL(t == TYPE)));
     put(&r, cf("generic_args", cval::ARRAY(move gargs, VOID)));
     put(&r, cf("visibility", kind_of("PUBLIC", null)));

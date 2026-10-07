@@ -491,6 +491,16 @@ attach fn take_into(this: checker&, v: tval, to: u32, span: span) -> compile_err
         val bi = this.box_inner(v.ty);
         borrow = bi != null && (bi ?? 0) == target;
     }
+    // a fn(...) value borrows a closure (closure_to_fn): one that owns what it captured stays put
+    match (*this.t.get(to)) {
+        .FN_VAL(ps, r) => {
+            match (*this.t.get(v.ty)) {
+                .CLOSURE(c) => { borrow = true; },
+                default => {},
+            }
+        },
+        default => {},
+    }
     var x = v;
     if (!borrow) {
         x = try this.take(v, span);

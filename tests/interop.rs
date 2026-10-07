@@ -1252,6 +1252,19 @@ fn cpp_errors() {
 }
 
 #[test]
+fn cpp_fields() {
+    // bit-fields, a std::function field keeping the closure Volt set, namespace variables C++ may
+    // change, constants clang can't work out
+    let e = Env::new("cpp-fields");
+    for backend in ["c", "llvm"] {
+        assert_eq!(ok(e.voltc(&["run", "cpp_fields.volt", "--backend", backend]), "voltc run cpp_fields.volt"), "flags 1 5 9\ndevice 1 true\nscaled 21\ntally 3 gone\nscaled 8\ncounter 11 11\nbanner bye\nmain 1\n42 bits and bytes\n", "C++ fields and values ({backend})");
+    }
+    let o = e.voltc(&["check", "cpp_fields_borrow.volt"]);
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(!o.status.success() && err.contains("can't capture by reference") && err.contains("cpp_fields_borrow.volt:7"), "a closure capturing by reference can't be kept: {err}");
+}
+
+#[test]
 fn cpp_handles_are_never_empty() {
     // {} default-constructs a class held by handle, in a variable or a struct's field; one with no
     // default constructor makes {} an error at the literal

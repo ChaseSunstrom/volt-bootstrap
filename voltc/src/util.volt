@@ -55,6 +55,16 @@ fn fmt4(f: str, a: std::string, b: std::string, c: std::string, d: std::string) 
     return fmt_parts(f, &parts);
 }
 
+fn fmt5(f: str, a: std::string, b: std::string, c: std::string, d: std::string, e: std::string) -> std::string {
+    var parts: std::vec<std::string> = {};
+    put(&parts, move a);
+    put(&parts, move b);
+    put(&parts, move c);
+    put(&parts, move d);
+    put(&parts, move e);
+    return fmt_parts(f, &parts);
+}
+
 // fmt's worker: each {} takes the next part (once they run out, {} stays), {{ and }} are braces
 fn fmt_parts(f: str, parts: std::vec<std::string>&) -> std::string {
     var out: std::string = {};

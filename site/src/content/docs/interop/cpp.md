@@ -229,7 +229,10 @@ fn main() -> void {
 | a method template | a generic method: `c.cast_to<f64>()` |
 | a `std::function<R(A...)>` parameter | `fn(A...) -> R`: a closure or function; C++ calls it while the call lasts (it mustn't keep it) |
 | a `std::function` result | `stdcxx::function`: `call(...)` runs it, and it's deleted with the Volt value |
-| a `std::function` field | a getter only: setting it from a Volt closure would keep the closure past the call |
+| a `std::function` field | a getter, and `set_f(closure)`: the closure moves into the field, which keeps it (and deletes it once C++ is done with every copy) |
+| a bit-field | `f()` and `set_f(v)`, on a class held by value or by handle (C++ does the bit work) |
+| a namespace variable | `name()`: a reference into it (`*cpp::ns::count() = 3`), a borrowed handle for a class held by handle, or for others (a `std::string`) a copy, with `set_name(v)` |
+| a constant clang can't work out (`const std::string`, `const int x = f()`) | `name()`, read through a wrapper |
 
 ### Types by what they can do
 
@@ -389,7 +392,8 @@ without RTTI, a cast or a type name stops the program, and `derived<T>()` on suc
   `op_eq`, `op_index`, a lambda's `f.op_call(5)`). A name the class doesn't have is an error in
   clang's words. The import declares one for its own types; another library's (the standard
   library's) come through a call made per use.
-  A constant whose value clang can't work out (or a variable that isn't `const`) isn't a `val`.
+  A constant whose value clang can't work out, and a variable C++ may change, are functions
+  (`name()`), not `val`s.
 - Generic arguments written on a method template's call parse when there's one of them, when the
   call passes nothing, or when each can only be a type (`x.get<i32>()`, `x.pair<i32, f64>()`,
   `c.convert<i32, f64>(2)`, `m.find<ns::Key, std::string>(k)`): `f(a.x < b, c > (d))` stays two
