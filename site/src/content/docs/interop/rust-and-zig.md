@@ -31,12 +31,15 @@ The crate is plain Rust: `pub fn`, `pub struct`, `impl` blocks, `String`, `Vec`,
 Nothing in it is written for Volt, with no `extern "C"`, `#[no_mangle]` or `#[repr(C)]`. voltc runs
 `bolt import`, which reads the crate's public API as rustdoc sees it, builds a small shim crate with
 cargo, and gives voltc the Volt declarations. Being rustdoc's view, it has what macros make, the
-side of each `#[cfg]` that holds for the build, and what `pub use` re-exports (by its public path:
-`pub use inner::helper as renamed;` is `renamed`, `pub use extra::*;` brings `extra`'s items in),
-and each `const`'s value as rustc works it out. (rustdoc writes this as JSON, which stable's rustdoc
-does with `RUSTC_BOOTSTRAP=1`; bolt sets it. A toolchain whose rustdoc can't falls back to reading
-the source, which sees none of those.) It caches the result and redoes it when the crate changes. It works the
-same with `voltc run main.volt` and in a bolt package.
+side of each `#[cfg]` that holds for the build, what `pub use` re-exports, by its public path
+(`pub use inner::helper as renamed;` is `renamed`; `pub use extra::*;` brings `extra`'s items in),
+and each `const`'s value as rustc works it out. An item under `#[cfg(doc)]`, which only
+documentation sees, is kept when the build has one of its name (rustc's expanded source of the
+crate says), so a documented stand-in brings in the item it documents. rustdoc writes this as
+JSON, which stable's rustdoc does with `RUSTC_BOOTSTRAP=1` (bolt sets it); with a toolchain whose
+rustdoc can't, bolt reads the source instead, which sees none of those, and says so. It caches the
+result and redoes it when the crate changes. It works the same with `voltc run main.volt` and in a
+bolt package.
 
 The import names a directory with a `Cargo.toml`, or a single `.rs` file: `use { "stats.rs" } as
 stats;` makes that file a crate of its own (the files its `mod x;` lines name sit next to it), for

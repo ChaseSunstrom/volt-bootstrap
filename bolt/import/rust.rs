@@ -74,17 +74,28 @@ pub fn import(r: &Req) -> Result<(), String> {
     if !shim_dir.join("lib.rs").is_file() {
         crate::build::write_if_changed(&shim_dir.join("lib.rs"), "")?;
     }
-    let model = match rustdoc_model(&dir, &shim_dir.join("Cargo.toml"), &pkg, &r.out.join("target"), &lib) {
-        Some(m) => m,
-        None => {
+    let (mut model, doc_only) = match rustdoc_model(&dir, &shim_dir.join("Cargo.toml"), &pkg, &r.out.join("target"), &lib) {
+        Ok(read) => read,
+        Err(why) => {
             let text = std::fs::read_to_string(&root).map_err(|e| format!("use rust: can't read {}: {e}", root.display()))?;
             let mut w = Walker::default();
             w.walk(&lex(&text), &[], &src);
             let mut m = w.model();
-            m.left_out.push("(rustdoc couldn't write JSON bolt reads, so this was read from the source: what macros make, what's under #[cfg] and pub use re-exports are left out)".into());
-            m
+            let note = format!("rustdoc couldn't write JSON bolt reads ({why}), so {} was read from its source: what macros make, what's under #[cfg] and pub use re-exports are left out", path.display());
+            eprintln!("bolt: {note}");
+            m.left_out.push(format!("({note})"));
+            (m, Vec::new())
         }
     };
+    // rustdoc sees what's under #[cfg(doc)], which the build doesn't: such an item stays when the
+    // build declares one of its name too (rustc's expanded source of the crate says), as a stand-in
+    // for the build's (which rustdoc can't see)
+    if !doc_only.is_empty() {
+        if let Some(real) = build_names(&dir, &shim_dir.join("Cargo.toml"), &pkg, &r.out.join("target")) {
+            let gone: Vec<(Vec<String>, String)> = doc_only.into_iter().filter(|(_, n)| !real.contains(n)).collect();
+            without(&mut model, &gone);
+        }
+    }
     let lang = Rust { lib: lib.clone() };
     let (shim, volt) = Gen::new(&model, &r.alias, &lang).write("the crate");
 
@@ -140,19 +151,54 @@ fn rs_files(dir: &Path, out: &mut Vec<PathBuf>) {
 
 // ---------- the crate's public API, as rustdoc sees it ----------
 
-/// the crate's public API from rustdoc's JSON, documenting package pkg as the shim's dependency;
-/// None when rustdoc can't write it (an older toolchain, no rustdoc) or writes a format this doesn't
-/// read
-fn rustdoc_model(dir: &Path, shim: &Path, pkg: &str, target: &Path, lib: &str) -> Option<Model> {
+/// the crate's public API from rustdoc's JSON, documenting package pkg as the shim's dependency, and
+/// the items only under #[cfg(doc)] (module, name); why not, when rustdoc can't write it (an older
+/// toolchain, no rustdoc) or writes a format this doesn't read
+fn rustdoc_model(dir: &Path, shim: &Path, pkg: &str, target: &Path, lib: &str) -> Result<(Model, Vec<(Vec<String>, String)>), String> {
     let mut c = Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()));
     c.current_dir(dir).env("RUSTC_BOOTSTRAP", "1").args(["rustdoc", "-q", "--lib", "-p", pkg, "--manifest-path"]).arg(shim).arg("--target-dir").arg(target);
     c.args(["--", "-Z", "unstable-options", "--output-format", "json"]);
+    let o = c.output().map_err(|e| format!("can't run cargo rustdoc: {e}"))?;
+    if !o.status.success() {
+        let err = String::from_utf8_lossy(&o.stderr);
+        return Err(err.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("cargo rustdoc failed").trim().to_string());
+    }
+    let file = target.join("doc").join(format!("{lib}.json"));
+    let text = std::fs::read_to_string(&file).map_err(|e| format!("can't read {}: {e}", file.display()))?;
+    let j = crate::json::parse(&text)?;
+    Doc::read(&j, dir).ok_or_else(|| format!("its JSON (format {}) isn't one bolt reads", j.get("format_version").and_then(Json::key).unwrap_or_default()))
+}
+
+/// the names of the pub items the build of package pkg declares (fns, types, consts, in any module),
+/// from rustc's macro-expanded source of it; None when rustc can't write that
+fn build_names(dir: &Path, shim: &Path, pkg: &str, target: &Path) -> Option<BTreeSet<String>> {
+    let mut c = Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()));
+    c.current_dir(dir).env("RUSTC_BOOTSTRAP", "1").args(["rustc", "-q", "--lib", "-p", pkg, "--manifest-path"]).arg(shim).arg("--target-dir").arg(target);
+    c.args(["--", "-Z", "unpretty=expanded"]);
     let o = c.output().ok()?;
     if !o.status.success() {
         return None;
     }
-    let text = std::fs::read_to_string(target.join("doc").join(format!("{lib}.json"))).ok()?;
-    Doc::read(&crate::json::parse(&text).ok()?, dir)
+    let mut w = Walker::default();
+    w.walk(&lex(&String::from_utf8_lossy(&o.stdout)), &[], dir);
+    let m = w.model();
+    let mut out: BTreeSet<String> = m.fns.iter().map(|(_, s)| s.name.clone()).collect();
+    out.extend(m.types.iter().map(|t| t.name.clone()));
+    out.extend(m.consts.iter().map(|c| c.1.clone()));
+    out.extend(m.left_out.iter().filter_map(|l| l.strip_prefix("const ")).filter_map(|l| l.split_whitespace().next()).map(String::from));
+    Some(out)
+}
+
+/// the model without these items (module, name)
+fn without(m: &mut Model, gone: &[(Vec<String>, String)]) {
+    let has = |module: &Vec<String>, name: &str| gone.iter().any(|(gm, gn)| gm == module && gn == name);
+    m.fns.retain(|(module, s)| !has(module, &s.name));
+    m.consts.retain(|(module, name, _, _)| !has(module, name));
+    let types: Vec<String> = m.types.iter().filter(|t| has(&t.module, &t.name)).map(|t| t.name.clone()).collect();
+    m.types.retain(|t| !has(&t.module, &t.name));
+    for t in types {
+        m.methods.remove(&t);
+    }
 }
 
 /// rustdoc's index, read into the model
@@ -162,15 +208,28 @@ struct Doc<'a> {
     m: Model,
     /// each public type's name, by id: its shallowest public path's
     names: BTreeMap<String, String>,
+    /// the items under a #[cfg] that names doc (rustdoc sets it; the build doesn't)
+    doc_only: Vec<(Vec<String>, String)>,
 }
 
 impl<'a> Doc<'a> {
-    fn read(j: &'a Json, dir: &'a Path) -> Option<Model> {
+    fn read(j: &'a Json, dir: &'a Path) -> Option<(Model, Vec<(Vec<String>, String)>)> {
+        // the formats this reads (an item's kind as the key of its inner): 40 on, and a newer one is
+        // tried; one whose keys moved shows up as a crate with nothing public, below
+        if j.get("format_version").and_then(Json::key).and_then(|v| v.parse::<u32>().ok()).is_none_or(|v| v < 40) {
+            return None;
+        }
         let idx = j.get("index")?.obj()?;
         let root = j.get("root")?.key()?;
-        idx.get(&root)?.get("inner")?.get("module")?;
-        let mut d = Doc { idx, dir, m: Model::default(), names: BTreeMap::new() };
-        let items = d.public(&root);
+        let root_items = idx.get(&root)?.get("inner")?.get("module")?.get("items")?.arr().len();
+        let mut d = Doc { idx, dir, m: Model::default(), names: BTreeMap::new(), doc_only: Vec::new() };
+        let mut items = d.public(&root);
+        // an item reached twice at one path (pub use a::X next to pub use a::*) is one item
+        let mut once = BTreeSet::new();
+        items.retain(|(module, id, name)| once.insert((module.clone(), id.clone(), name.clone())));
+        if root_items > 0 && items.is_empty() && idx.values().filter(|it| it.get("crate_id").and_then(Json::key).as_deref() == Some("0")).any(|it| it.get("visibility").and_then(Json::str) == Some("public") && it.get("inner").and_then(|i| i.get("function")).is_some()) {
+            return None;
+        }
         for (_, id, name) in &items {
             let inner = d.idx.get(id).and_then(|it| it.get("inner"));
             if inner.is_some_and(|i| i.get("struct").is_some() || i.get("enum").is_some()) && !d.names.contains_key(id) {
@@ -181,6 +240,9 @@ impl<'a> Doc<'a> {
         for (module, id, name) in items {
             let Some(it) = d.idx.get(&id) else { continue };
             let Some(inner) = it.get("inner") else { continue };
+            if under_cfg_doc(it) {
+                d.doc_only.push((module.clone(), name.clone()));
+            }
             if let Some(f) = inner.get("function") {
                 let s = d.sig(it, f, &name);
                 d.m.fns.push((module, s));
@@ -193,7 +255,7 @@ impl<'a> Doc<'a> {
                 d.constant(module, name, c);
             }
         }
-        Some(d.m)
+        Some((d.m, d.doc_only))
     }
 
     /// every public item reachable from module `root`, with the module path and name it's public
@@ -202,12 +264,22 @@ impl<'a> Doc<'a> {
     fn public(&self, root: &str) -> Vec<(Vec<String>, String, String)> {
         let mut out = Vec::new();
         let mut walked = BTreeSet::new();
-        let mut queue = std::collections::VecDeque::from([(root.to_string(), Vec::<String>::new())]);
-        while let Some((mid, path)) = queue.pop_front() {
-            // a module re-exported into itself, or one path's glob of another, would loop
-            if path.len() > 32 || !walked.insert((mid.clone(), path.clone())) {
+        // a module, the path it's public at, and the modules entered to reach it: a glob of an
+        // enclosing module (pub mod prelude { pub use super::*; }) brings its items in, but a module
+        // is never entered again inside itself (Rust's prelude::prelude::... goes on forever)
+        let mut queue = std::collections::VecDeque::from([(root.to_string(), Vec::<String>::new(), vec![root.to_string()])]);
+        while let Some((mid, path, chain)) = queue.pop_front() {
+            // ponytail: modules globbing each other in a ring multiply paths; capped, not pruned
+            if walked.len() > 10_000 || !walked.insert((mid.clone(), path.clone())) {
                 continue;
             }
+            let mut push = |tid: String, p: Vec<String>, glob: bool| {
+                if if glob { tid != mid } else { !chain.contains(&tid) } {
+                    let mut c = chain.clone();
+                    c.push(tid.clone());
+                    queue.push_back((tid, p, c));
+                }
+            };
             let Some(items) = self.idx.get(&mid).and_then(|m| m.get("inner")).and_then(|i| i.get("module")).and_then(|m| m.get("items")) else { continue };
             for iid in items.arr() {
                 let Some(id) = iid.key() else { continue };
@@ -224,12 +296,12 @@ impl<'a> Doc<'a> {
                     let Some(name) = u.get("name").and_then(Json::str) else { continue };
                     if u.get("is_glob").and_then(Json::bool) == Some(true) {
                         if is_mod {
-                            queue.push_back((tid, path.clone()));
+                            push(tid, path.clone(), true);
                         }
                     } else if is_mod {
                         let mut p = path.clone();
                         p.push(name.to_string());
-                        queue.push_back((tid, p));
+                        push(tid, p, false);
                     } else {
                         out.push((path.clone(), tid, name.to_string()));
                     }
@@ -239,7 +311,7 @@ impl<'a> Doc<'a> {
                 if inner.get("module").is_some() {
                     let mut p = path.clone();
                     p.push(name.to_string());
-                    queue.push_back((id, p));
+                    push(id, p, false);
                 } else {
                     out.push((path.clone(), id, name.to_string()));
                 }
@@ -308,7 +380,17 @@ impl<'a> Doc<'a> {
         let (Some(text), Some(lo), Some(hi)) = (text, line("begin"), line("end")) else { return format!("fn {name}") };
         let lines: Vec<&str> = text.lines().skip(lo.saturating_sub(1)).take(hi + 1 - lo.min(hi)).collect();
         let joined = lines.join(" ");
-        let head = joined.split(['{', ';']).next().unwrap_or("");
+        // up to its body or its ; (not one inside [T; N])
+        let mut depth = 0i32;
+        let end = joined.char_indices().find(|&(_, c)| {
+            match c {
+                '[' | '(' => depth += 1,
+                ']' | ')' => depth -= 1,
+                _ => {}
+            }
+            c == '{' || (c == ';' && depth == 0)
+        });
+        let head = &joined[..end.map_or(joined.len(), |(i, _)| i)];
         head.split_whitespace().collect::<Vec<_>>().join(" ")
     }
 
@@ -382,7 +464,7 @@ impl<'a> Doc<'a> {
         let lit = match c.get("type").and_then(|t| self.ty(t)) {
             Some(Ty::Prim("bool")) => value.or(expr).filter(|v| *v == "true" || *v == "false").map(|v| ("bool".to_string(), v.to_string())),
             Some(Ty::Prim(x)) => value.or(expr).and_then(|v| volt_number(v, x)).map(|v| (x.to_string(), v)),
-            Some(Ty::Str) => expr.filter(|e| e.len() >= 2 && e.starts_with('"') && e.ends_with('"')).map(|e| ("str".to_string(), e.to_string())),
+            Some(Ty::Str) => expr.filter(|e| plain_string(e)).map(|e| ("str".to_string(), e.to_string())),
             _ => None,
         };
         match lit {
@@ -427,12 +509,14 @@ impl<'a> Doc<'a> {
         if let Some(local) = p.get("id").and_then(Json::key).and_then(|id| self.names.get(&id)) {
             return args.is_empty().then(|| Ty::Named(local.clone()));
         }
+        // another crate's type named like one of this crate's (std::io::Error next to an Error)
+        let shadowed = self.names.values().any(|n| *n == last);
         match (last.as_str(), args.len()) {
             ("String", 0) => Some(Ty::String),
             ("Vec", 1) => Some(Ty::Vec(one()?)),
             ("Option", 1) => Some(Ty::Opt(one()?)),
             ("Result", 1 | 2) => Some(Ty::Res(one()?)),
-            (_, 0) if last.starts_with(|c: char| c.is_ascii_uppercase()) => Some(Ty::Named(last)),
+            (_, 0) if !shadowed && last.starts_with(|c: char| c.is_ascii_uppercase()) => Some(Ty::Named(last)),
             _ => None,
         }
     }
@@ -443,15 +527,43 @@ fn generic(g: Option<&Json>) -> bool {
     g.and_then(|g| g.get("params")).map_or(&[][..], Json::arr).iter().any(|p| p.get("kind").is_some_and(|k| k.get("lifetime").is_none()))
 }
 
-/// a number rustdoc wrote (42i32, -5i64, 1_000usize, 0.5f64) without its type suffix
+/// a number rustdoc wrote (42i32, -5i64, 1_000usize, 0.5f64) without its type suffix (a hex
+/// literal's f32 is digits)
 fn int_text(v: &str) -> String {
     let v = v.replace('_', "");
+    let hex = v.trim_start_matches('-').starts_with("0x");
     for s in ["usize", "isize", "u128", "i128", "u64", "i64", "u32", "i32", "u16", "i16", "u8", "i8", "f64", "f32"] {
+        if hex && s.starts_with('f') {
+            continue;
+        }
         if let Some(x) = v.strip_suffix(s) {
             return x.to_string();
         }
     }
     v
+}
+
+/// one string literal with no escapes but \\ \" \n \t \r (which Volt writes the same)
+fn plain_string(e: &str) -> bool {
+    let Some(body) = e.strip_prefix('"').and_then(|b| b.strip_suffix('"')) else { return false };
+    let mut chars = body.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '"' => return false,
+            '\\' => {
+                if !matches!(chars.next(), Some('\\' | '"' | 'n' | 't' | 'r')) {
+                    return false;
+                }
+            }
+            _ => {}
+        }
+    }
+    true
+}
+
+/// whether an item is under a #[cfg] that names doc (rustdoc's own cfg)
+fn under_cfg_doc(it: &Json) -> bool {
+    it.get("attrs").map_or(&[][..], Json::arr).iter().any(|a| a.get("other").and_then(Json::str).is_some_and(|s| s.contains("CfgTrace") && s.contains("name: \"doc\"")))
 }
 
 /// a number rustdoc wrote as a Volt literal of type x (None for what Volt can't write: inf, NaN)

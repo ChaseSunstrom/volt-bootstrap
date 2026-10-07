@@ -545,7 +545,7 @@ fn rust_direct() {
         let mut c = Command::new(&e.voltc);
         c.args(["run", "--backend", backend, "single.volt"]).current_dir(&dir).env("VOLT_STD", Path::new(ROOT).join("std"));
         tools(&mut c);
-        assert_eq!(ok(c.output().unwrap(), "voltc run single.volt"), "3 n=70\n", "a single .rs file ({backend})");
+        assert_eq!(ok(c.output().unwrap(), "voltc run single.volt"), "3 n=70 20 3\n", "a single .rs file ({backend})");
     }
     // each Volt fn says what it is in Rust, above it (the editor's hover shows that comment)
     let mut c = Command::new(&e.voltc);
