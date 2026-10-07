@@ -1,8 +1,10 @@
-//! Volt against C and C++: each program under bench/ is written in all three. They're built for
-//! speed: C with clang and gcc -O2, C++ with clang++ -O2, and Volt with --release through both of
-//! voltc's backends (C, compiled by clang and by gcc, and LLVM). Each runs best of BENCH_RUNS (default 3), and
-//! every build has to print the same thing. Prints a table and rewrites the one in
-//! site/src/content/docs/internals/benchmarks.md, with the machine and toolchain it ran on.
+//! Volt against C, C++, Rust and Zig: each program under bench/ is written in all five. They're
+//! built for speed: C with clang and gcc -O2, C++ with clang++ -O2, Rust with rustc -C opt-level=3,
+//! Zig with -O ReleaseFast (skipped, "—" in the table, when zig isn't installed), and Volt with
+//! --release through both of voltc's backends (C, compiled by clang and by gcc, and LLVM). Each runs
+//! best of BENCH_RUNS (default 3), and every build has to print the same thing. Prints a table and
+//! rewrites the one in site/src/content/docs/internals/benchmarks.md, with the machine and
+//! toolchain it ran on.
 //!
 //!     cargo test --release --test bench -- --ignored --nocapture
 //!     BENCH_ONLY=nbody,sort BENCH_RUNS=5 cargo test --release --test bench -- --ignored --nocapture
@@ -17,10 +19,12 @@ struct Lang {
     file: &'static str,
 }
 
-const LANGS: [Lang; 6] = [
+const LANGS: [Lang; 8] = [
     Lang { name: "C (clang)", file: "main.c" },
     Lang { name: "C (gcc)", file: "main.c" },
     Lang { name: "C++ (clang++)", file: "main.cpp" },
+    Lang { name: "Rust (rustc)", file: "main.rs" },
+    Lang { name: "Zig (ReleaseFast)", file: "main.zig" },
     Lang { name: "Volt (C, clang)", file: "main.volt" },
     Lang { name: "Volt (C, gcc)", file: "main.volt" },
     Lang { name: "Volt (LLVM)", file: "main.volt" },
@@ -29,6 +33,12 @@ const LANGS: [Lang; 6] = [
 /// a command's first line of output ("" if it can't run)
 fn first_line(cmd: &str, args: &[&str]) -> String {
     Command::new(cmd).args(args).output().ok().map(|o| String::from_utf8_lossy(&o.stdout).lines().next().unwrap_or("").trim().to_string()).unwrap_or_default()
+}
+
+/// zig on PATH, or in ~/.local/bin where its tarball is often unpacked; None when it isn't installed
+fn zig() -> Option<String> {
+    let home = format!("{}/.local/bin/zig", std::env::var("HOME").unwrap_or_default());
+    ["zig".to_string(), home].into_iter().find(|z| !first_line(z, &["version"]).is_empty())
 }
 
 /// the machine and toolchain a run measures, for the page: CPU, memory, OS, compilers
@@ -45,12 +55,14 @@ fn machine(runs: usize) -> String {
     let governor = if governor.trim().is_empty() { String::new() } else { format!(", `{}` frequency governor", governor.trim()) };
     let llvm = ["llvm-config", "llvm-config-23"].iter().map(|c| first_line(c, &["--version"])).find(|v| !v.is_empty()).unwrap_or_default();
     format!(
-        "Measured {} on:\n\n- **CPU**: {cpu} ({cores}{threads} threads{governor})\n- **Memory**: {:.0} GiB\n- **OS**: {os}, kernel {}\n- **C and C++**: {}; {}\n- **Volt**: voltc --release; its LLVM backend on LLVM {llvm}\n- **Timing**: best of {runs} runs, wall clock\n\n",
+        "Measured {} on:\n\n- **CPU**: {cpu} ({cores}{threads} threads{governor})\n- **Memory**: {:.0} GiB\n- **OS**: {os}, kernel {}\n- **C and C++**: {}; {}\n- **Rust**: {}\n- **Zig**: {}\n- **Volt**: voltc --release; its LLVM backend on LLVM {llvm}\n- **Timing**: best of {runs} runs, wall clock\n\n",
         first_line("date", &["+%Y-%m-%d"]),
         mem_kib as f64 / 1048576.0,
         first_line("uname", &["-r"]),
         first_line("clang", &["--version"]),
         first_line("gcc", &["--version"]),
+        first_line("rustc", &["--version"]),
+        zig().map(|z| format!("zig {}", first_line(&z, &["version"]))).unwrap_or_else(|| "not installed".into()),
     )
 }
 
@@ -76,6 +88,7 @@ fn bench() {
     let mut programs: Vec<String> = std::fs::read_dir(root.join("bench")).unwrap().map(|e| e.unwrap()).filter(|e| e.path().is_dir()).map(|e| e.file_name().to_string_lossy().to_string()).collect();
     programs.sort();
     programs.retain(|p| only.as_ref().is_none_or(|o| o.contains(p)));
+    let zig = zig();
     let mut rows = Vec::new();
     for prog in &programs {
         let dir = root.join("bench").join(prog);
@@ -85,10 +98,19 @@ fn bench() {
             let src = dir.join(lang.file);
             let exe = tmp.join(format!("{prog}-{k}"));
             match k {
+                4 if zig.is_none() => {
+                    times.push(None);
+                    continue;
+                }
                 0 => run(Command::new("clang").args(["-O2", "-o"]).arg(&exe).arg(&src).arg("-lm")),
                 1 => run(Command::new("gcc").args(["-O2", "-o"]).arg(&exe).arg(&src).arg("-lm")),
                 2 => run(Command::new("clang++").args(["-O2", "-std=c++20", "-o"]).arg(&exe).arg(&src)),
-                3 | 4 => run(Command::new(&voltc).arg("build").arg(&src).args(["--release", "--backend", "c", "--std"]).arg(root.join("std")).arg("-o").arg(&exe).env("CC", if k == 3 { "clang" } else { "gcc" })),
+                3 => run(Command::new("rustc").args(["--edition", "2024", "-C", "opt-level=3", "-o"]).arg(&exe).arg(&src)),
+                4 => {
+                    let cache = tmp.join("zig-cache");
+                    run(Command::new(zig.as_ref().unwrap()).args(["build-exe", "-O", "ReleaseFast"]).arg(format!("-femit-bin={}", exe.display())).arg("--cache-dir").arg(&cache).arg("--global-cache-dir").arg(&cache).arg(&src))
+                }
+                5 | 6 => run(Command::new(&voltc).arg("build").arg(&src).args(["--release", "--backend", "c", "--std"]).arg(root.join("std")).arg("-o").arg(&exe).env("CC", if k == 5 { "clang" } else { "gcc" })),
                 _ => run(Command::new(&voltc).arg("build").arg(&src).args(["--release", "--backend", "llvm", "--std"]).arg(root.join("std")).arg("-o").arg(&exe)),
             };
             let mut best = Duration::MAX;
@@ -102,11 +124,11 @@ fn bench() {
                     Some(want) => assert_eq!(&out, want, "{prog}: {} prints something else", lang.name),
                 }
             }
-            times.push(best);
+            times.push(Some(best));
         }
         rows.push((prog.clone(), times));
     }
-    // the table: seconds, and each one against C (clang)
+    // the table: seconds, and each one against C (clang); "—" for a build that was skipped
     let mut table = String::from("| Program |");
     for l in &LANGS {
         table.push_str(&format!(" {} |", l.name));
@@ -118,12 +140,12 @@ fn bench() {
     table.push('\n');
     for (prog, times) in &rows {
         table.push_str(&format!("| {prog} |"));
+        let c = times[0].unwrap().as_secs_f64();
         for (k, t) in times.iter().enumerate() {
-            let secs = t.as_secs_f64();
-            if k == 0 {
-                table.push_str(&format!(" {secs:.3} s |"));
-            } else {
-                table.push_str(&format!(" {secs:.3} s ({:.2}x) |", secs / times[0].as_secs_f64()));
+            match t.map(|t| t.as_secs_f64()) {
+                None => table.push_str(" — |"),
+                Some(secs) if k == 0 => table.push_str(&format!(" {secs:.3} s |")),
+                Some(secs) => table.push_str(&format!(" {secs:.3} s ({:.2}x) |", secs / c)),
             }
         }
         table.push('\n');
@@ -132,8 +154,8 @@ fn bench() {
     // BENCH_MAX_RATIO=1.25: fail when a Volt build takes longer than that against C (clang)
     if let Some(max) = std::env::var("BENCH_MAX_RATIO").ok().and_then(|s| s.parse::<f64>().ok()) {
         for (prog, times) in &rows {
-            for k in 3..LANGS.len() {
-                let ratio = times[k].as_secs_f64() / times[0].as_secs_f64();
+            for k in (0..LANGS.len()).filter(|&k| LANGS[k].file == "main.volt") {
+                let ratio = times[k].unwrap().as_secs_f64() / times[0].unwrap().as_secs_f64();
                 assert!(ratio <= max, "{prog}: {} takes {ratio:.2}x C's time (more than {max})", LANGS[k].name);
             }
         }
