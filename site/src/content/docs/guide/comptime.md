@@ -695,6 +695,7 @@ fn main() -> void {
 | `@intrinsic("name")` | a compiler builtin or runtime function (for std-like libraries) |
 | `@owns("field")` | this struct owns what the field points at, like `box` |
 | `@export_text("method")` | an export fn returning this struct hands other languages its text, as `method()` gives it (std's `string` has it) |
+| `@instance(T, ...)` | on a generic export fn: export this instance, a type per generic parameter (`sum_i32` for `sum<i32>`; [bindings](/volt-bootstrap/interop/other-languages/#they-call-volt)) |
 | `@thread_local` | a global `var` each thread has its own copy of, starting from its initial value |
 | `@cfg("key")`, `@cfg("key", "value")` | the declaration is only in builds where this `@cfg` holds; on a namespace, everything in it |
 | `@optional` | on a trait fn: attach blocks may leave it out (`@has_method` says which did) |

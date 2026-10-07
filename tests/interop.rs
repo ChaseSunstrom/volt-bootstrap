@@ -358,19 +358,57 @@ fn bindings_round_trip() {
     let o = e.voltc(&["bindings", "bad", "--pkg", &format!("bad={}", bad.display()), "--lang", "c"]);
     let err = String::from_utf8_lossy(&o.stderr);
     assert!(!o.status.success() && err.contains("bad_pair") && err.contains("(i32, i32)"), "{err}");
-    // owned values only come out, closures only go in
-    for (src, want) in [
-        ("export struct thing { n: i32; }\nexport fn bad_in(t: thing) -> i32 { return t.n; }\n", "only comes out of export fns"),
-        ("fn twice(x: i32) -> i32 { return x * 2; }\nexport fn bad_out() -> fn(i32) -> i32 { return twice; }\n", "closures only go into export fns"),
+    // in the other languages, owned values only come out and closures only go in (C and C++ take
+    // both: see bindings_shapes)
+    for (src, lang, want) in [
+        ("export struct thing { n: i32; }\nexport fn bad_in(t: thing) -> i32 { return t.n; }\n", "python", "only take as a result"),
+        ("fn twice(x: i32) -> i32 { return x * 2; }\nexport fn bad_out() -> fn(i32) -> i32 { return twice; }\n", "rust", "only take closures as parameters"),
         // the names voltc lib adds itself
-        ("export struct thing { n: i32; }\nexport fn thing_new() -> thing { return { n: 1 }; }\nexport fn thing_free(t: thing&) -> void {}\n", "makes thing_free itself"),
-        ("namespace __export { fn x() -> void {} }\nexport fn one() -> i32 { return 1; }\n", "namespace __export"),
+        ("export struct thing { n: i32; }\nexport fn thing_new() -> thing { return { n: 1 }; }\nexport fn thing_free(t: thing&) -> void {}\n", "c", "makes thing_free itself"),
+        ("namespace __export { fn x() -> void {} }\nexport fn one() -> i32 { return 1; }\n", "c", "namespace __export"),
     ] {
         std::fs::write(bad.join("bad.volt"), src).unwrap();
-        let o = e.voltc(&["bindings", "bad", "--pkg", &format!("bad={}", bad.display()), "--lang", "c"]);
+        let o = e.voltc(&["bindings", "bad", "--pkg", &format!("bad={}", bad.display()), "--lang", lang]);
         let err = String::from_utf8_lossy(&o.stderr);
         assert!(!o.status.success() && err.contains(want), "{err}");
     }
+}
+
+const SHAPES_OUT: &str = "biggest 9 1.5\naccount bea 300\nvisit 301 get 301\nclosed 301 1\ncircle of area 3\ncircle gone\ngrown 27\nsquare 9 square of area 9\nhey!\ntry 4 OVERDRAWN\nopened 25\nclosed 2\n42 hello, volt\ncircle gone\n";
+
+#[test]
+fn bindings_shapes() {
+    // what C and C++ call beyond the plain shapes: a generic's instances, a struct that owns text
+    // held by a handle with its methods, owned values passed in, a trait implemented on either side,
+    // closures taking and giving text and handles, closures given back. The library is a leak-checked
+    // build, and leak_report.c prints how many of its allocations are live when the client is done
+    let e = Env::new("shapes");
+    let pkg = "shapelib=shapelib/lib";
+    for (lang, file) in [("c", "shapelib.h"), ("cpp", "shapelib.hpp")] {
+        ok(e.voltc(&["bindings", "shapelib", "--pkg", pkg, "--lang", lang, "-o", &e.path(file)]), &format!("voltc bindings --lang {lang}"));
+    }
+    for backend in ["c", "llvm"] {
+        let lib = e.path(backend);
+        std::fs::create_dir_all(e.dir.join(backend)).unwrap();
+        ok(e.voltc(&["lib", "shapelib", "--pkg", pkg, "--shared", "--leak-check", "--backend", backend, "-o", &format!("{lib}/libshapelib.so")]), "voltc lib --shared");
+        let rpath = format!("-Wl,-rpath,{lib}");
+        for (cc, std, client) in [("cc", "-std=c11", "client_shapes.c"), ("c++", "-std=c++17", "client_shapes.cpp")] {
+            let bin = e.dir.join(format!("{backend}_{cc}"));
+            ok(run(Command::new(cc).args([std, "-Wall", "-Werror", client, "leak_report.c", "-I", &e.path(""), "-L", &lib, "-lshapelib", &rpath, "-o"]).arg(&bin)), &format!("{cc} {client}"));
+            let o = Command::new(&bin).output().unwrap();
+            assert_eq!(String::from_utf8_lossy(&o.stderr), "volt live: 0\n", "{client} ({backend}): the library's allocations at exit");
+            assert_eq!(ok(o, client), SHAPES_OUT, "{client} ({backend})");
+        }
+    }
+    // the model has the trait, and how a fn takes its object
+    let json = ok(e.voltc(&["bindings", "shapelib", "--pkg", pkg, "--lang", "json"]), "voltc bindings --lang json");
+    for want in [r#"{"kind":"trait","name":"shape","c_name":"shapelib_shape","table":"shapelib_shape_vt""#, r#"{"kind":"object","trait":"shape","owned":false}"#, r#""name":"biggest_i32""#, r#""class":"account","method":"deposit""#] {
+        assert!(json.contains(want), "the JSON model lacks {want}:\n{json}");
+    }
+    // the other languages' bindings say what only C and C++ take
+    let o = e.voltc(&["bindings", "shapelib", "--pkg", pkg, "--lang", "python"]);
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(!o.status.success() && err.contains("C and C++"), "{err}");
 }
 
 #[test]
