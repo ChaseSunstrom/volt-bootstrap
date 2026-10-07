@@ -188,3 +188,50 @@ pub enum Mode {
 pub fn mode_name(m: Mode) -> String {
     format!("{m:?}")
 }
+
+// what only rustdoc sees: a fn a macro makes, the branch of a #[cfg] that holds, an item re-exported
+// under another name from a private module, a glob re-export, and consts rustc works out
+macro_rules! constant_fn {
+    ($name:ident, $v:expr) => {
+        pub fn $name() -> i32 {
+            $v
+        }
+    };
+}
+constant_fn!(answer, 42);
+
+#[cfg(target_pointer_width = "64")]
+pub fn word_bits() -> u32 {
+    64
+}
+#[cfg(not(target_pointer_width = "64"))]
+pub fn word_bits() -> u32 {
+    32
+}
+
+mod hidden {
+    pub fn twice(x: i32) -> i32 {
+        x * 2
+    }
+    pub struct Pair {
+        pub a: i32,
+        pub b: i32,
+    }
+}
+pub use hidden::twice as doubled;
+pub use hidden::Pair;
+
+pub mod extra {
+    pub fn plus_one(x: i32) -> i32 {
+        x + 1
+    }
+}
+pub use extra::*;
+
+pub fn pair_sum(p: Pair) -> i32 {
+    p.a + p.b
+}
+
+pub const AREA: u32 = (LIMIT * LIMIT) as u32;
+pub const RATIO: f64 = 1.0 / 4.0;
+pub const BIG: bool = AREA > 50;

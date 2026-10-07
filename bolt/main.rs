@@ -8,6 +8,7 @@ mod commands;
 mod foreign;
 mod hot;
 mod import;
+mod json;
 mod manifest;
 mod progress;
 mod resolve;

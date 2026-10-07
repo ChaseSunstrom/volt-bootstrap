@@ -75,6 +75,11 @@ fn run() -> geom::rust_error!void {
     std::println("problem {} clash {}", geom::error_::make(3).code, geom::clash(1, 2, 3));
     std::println("settings {} mode {}", geom::Settings::new(4).level(), geom::mode_name(geom::Mode::Slow));
 
+    // what only rustdoc sees: macro-made, under a #[cfg], re-exported, computed consts
+    val pr: geom::Pair = { a: 1, b: 2 };
+    std::println("rustdoc {} {} {} {} {}", geom::answer(), geom::word_bits(), geom::doubled(21), geom::plus_one(1), geom::pair_sum(pr));
+    std::println("consts {} {} {}", geom::AREA, geom::RATIO, geom::BIG);
+
     // a type that isn't Clone: moved, never copied
     var k = geom::shapes::Counter::new();
     k.tick();

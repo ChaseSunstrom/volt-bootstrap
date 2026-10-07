@@ -528,7 +528,7 @@ fn rust_direct() {
     let e = Env::new("rust_direct");
     let dir = e.dir.join("rd");
     copy_dir(&Path::new(ROOT).join("tests/interop/rust_direct"), &dir);
-    let want = "dist 5 norm 5\nscaled 6 8\nhello, volt QUIET first\ngeom 10\nsum 7\ndoubled 2 4 6\nsquares 4 last 16\nwords 3 three\njoin a-b-c\nfind 2 true\nnickname lucky true\nor_default 5 -1\nparse 42\nbad ERROR(invalid digit found in string)\ndiv 3\nzero ERROR(1 / 0)\ncolor blue green\npixel 2 green 65\nperimeter 7 12 name tri\nside 4\nmissing ERROR(tri has no side 9)\nlongest tri\ncentroid 4.5\nconsumed 3 into tri\nproblem 3 clash 123\nsettings 4 mode Slow\nticks 2\n";
+    let want = "dist 5 norm 5\nscaled 6 8\nhello, volt QUIET first\ngeom 10\nsum 7\ndoubled 2 4 6\nsquares 4 last 16\nwords 3 three\njoin a-b-c\nfind 2 true\nnickname lucky true\nor_default 5 -1\nparse 42\nbad ERROR(invalid digit found in string)\ndiv 3\nzero ERROR(1 / 0)\ncolor blue green\npixel 2 green 65\nperimeter 7 12 name tri\nside 4\nmissing ERROR(tri has no side 9)\nlongest tri\ncentroid 4.5\nconsumed 3 into tri\nproblem 3 clash 123\nsettings 4 mode Slow\nrustdoc 42 64 42 2 3\nconsts 100 0.25 true\nticks 2\n";
     let tools = |c: &mut Command| {
         c.env("VOLTC", &e.voltc).env("BOLT", env!("CARGO_BIN_EXE_bolt")).env("VOLT_CACHE", e.dir.join("cache")).env("BOLT_HOME", e.dir.join("bolthome")).env("RUSTUP_TOOLCHAIN", rust_toolchain());
     };
@@ -538,6 +538,8 @@ fn rust_direct() {
         tools(&mut c);
         assert_eq!(ok(c.output().unwrap(), "voltc run"), want, "voltc run ({backend})");
     }
+    // reading the crate (rustdoc documents it as the shim's dependency) writes nothing into it
+    assert!(!dir.join("geom/Cargo.lock").exists() && !dir.join("geom/target").exists(), "the import wrote into the crate");
     // one .rs file is a crate of its own (its `mod x;` files next to it)
     for backend in ["c", "llvm"] {
         let mut c = Command::new(&e.voltc);

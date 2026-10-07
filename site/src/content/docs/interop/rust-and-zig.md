@@ -29,8 +29,13 @@ fn main() -> !void {
 
 The crate is plain Rust: `pub fn`, `pub struct`, `impl` blocks, `String`, `Vec`, `Option`, `Result`.
 Nothing in it is written for Volt, with no `extern "C"`, `#[no_mangle]` or `#[repr(C)]`. voltc runs
-`bolt import`, which reads the crate's public API, builds a small shim crate with cargo, and gives
-voltc the Volt declarations. It caches the result and redoes it when the crate changes. It works the
+`bolt import`, which reads the crate's public API as rustdoc sees it, builds a small shim crate with
+cargo, and gives voltc the Volt declarations. Being rustdoc's view, it has what macros make, the
+side of each `#[cfg]` that holds for the build, and what `pub use` re-exports (by its public path:
+`pub use inner::helper as renamed;` is `renamed`, `pub use extra::*;` brings `extra`'s items in),
+and each `const`'s value as rustc works it out. (rustdoc writes this as JSON, which stable's rustdoc
+does with `RUSTC_BOOTSTRAP=1`; bolt sets it. A toolchain whose rustdoc can't falls back to reading
+the source, which sees none of those.) It caches the result and redoes it when the crate changes. It works the
 same with `voltc run main.volt` and in a bolt package.
 
 The import names a directory with a `Cargo.toml`, or a single `.rs` file: `use { "stats.rs" } as
@@ -49,7 +54,7 @@ code that has no Cargo project around it.
 | a struct whose fields are all `pub` numbers, `bool`s, `char`s, fieldless enums or such structs | a Volt struct with those fields, passed by value |
 | any other struct, or an enum with data | an owned handle: deleting it drops the Rust value, `copy` clones it (when it's `Clone`); a method taking `self` empties it |
 | a fieldless enum | a Volt enum with the same values |
-| `pub const` of a number, `bool` or `&str` | a `val` |
+| `pub const` of a number, `bool` or `&str`, however it's computed | a `val` of its value |
 
 Generic functions, trait objects, closures and references returned into Rust-owned data aren't
 callable from Volt; they're left out, listed in a comment of the generated declarations

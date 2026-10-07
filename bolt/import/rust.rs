@@ -1,7 +1,10 @@
 // use { "geom.rs" } as NAME; (one file, a crate of its own) or use { "../geom" } as NAME; (a directory
-// with Cargo.toml) — an ordinary Cargo library crate, called from Volt. bolt reads
-// the crate's public API from its source (pub fns, structs, enums, impl blocks' pub fns, consts and
-// pub mods), writes a shim crate that depends on it and wraps each one in an extern "C" function,
+// with Cargo.toml) — an ordinary Cargo library crate, called from Volt. bolt reads the crate's
+// public API as rustdoc sees it (its JSON, which stable's rustdoc writes with RUSTC_BOOTSTRAP=1):
+// pub fns, structs, enums, impl blocks' pub fns, consts with their computed values and pub mods,
+// including what macros make, what's under a #[cfg] that holds and what `pub use` re-exports, by
+// its public path. (Without that JSON, it reads the source, which sees none of those three.) It
+// writes a shim crate that depends on the crate and wraps each one in an extern "C" function,
 // builds the shim with cargo as a static library, and writes the Volt side (glue.rs). Nothing in
 // the crate changes.
 //
@@ -10,12 +13,13 @@
 //   a struct whose fields are all pub and plain -> a Volt struct, by value; any other struct, an
 //   enum with data, a #[non_exhaustive] struct -> an owned handle (delete drops it, copy clones it
 //   when it's Clone, a method taking self takes the handle and leaves it empty)
-//   a fieldless enum -> a Volt enum; pub const of a literal -> val; pub mod -> namespace
+//   a fieldless enum -> a Volt enum; pub const of a number, bool or string -> val; pub mod -> namespace
 // Generics, traits, closures and references returned into Rust-owned data are left out, with a
 // comment in the Volt source (VOLT_SHOW_IMPORT=1 makes voltc print it).
 use super::glue::{number, prim, Gen, Kind, Lang, Model, Recv, ShimOut, ShimParam, Sig, Ty, TypeDef, TypeInfo};
 use super::{arg_path, fresh, save, stamp, Made, Req};
 use crate::foreign::{int_value, lex, tok_text, toks_line, Cur, Tok};
+use crate::json::Json;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
 use std::path::{Path, PathBuf};
@@ -63,16 +67,28 @@ pub fn import(r: &Req) -> Result<(), String> {
         return Ok(());
     }
 
-    let text = std::fs::read_to_string(&root).map_err(|e| format!("use rust: can't read {}: {e}", root.display()))?;
-    let mut w = Walker::default();
-    w.walk(&lex(&text), &[], &src);
-    let model = w.model();
+    // the shim crate (its lib.rs comes from the model): rustdoc documents the crate as its
+    // dependency, so nothing is written into the crate (not even a Cargo.lock)
+    let shim_dir = r.out.join("shim");
+    crate::build::write_if_changed(&shim_dir.join("Cargo.toml"), &format!("[package]\nname = \"volt_import_{}\"\nversion = \"0.0.0\"\nedition = \"2021\"\npublish = false\n\n[lib]\npath = \"lib.rs\"\n\n[dependencies]\n{pkg} = {{ path = {:?} }}\n\n[workspace]\n", r.alias, krate.display().to_string()))?;
+    if !shim_dir.join("lib.rs").is_file() {
+        crate::build::write_if_changed(&shim_dir.join("lib.rs"), "")?;
+    }
+    let model = match rustdoc_model(&dir, &shim_dir.join("Cargo.toml"), &pkg, &r.out.join("target"), &lib) {
+        Some(m) => m,
+        None => {
+            let text = std::fs::read_to_string(&root).map_err(|e| format!("use rust: can't read {}: {e}", root.display()))?;
+            let mut w = Walker::default();
+            w.walk(&lex(&text), &[], &src);
+            let mut m = w.model();
+            m.left_out.push("(rustdoc couldn't write JSON bolt reads, so this was read from the source: what macros make, what's under #[cfg] and pub use re-exports are left out)".into());
+            m
+        }
+    };
     let lang = Rust { lib: lib.clone() };
     let (shim, volt) = Gen::new(&model, &r.alias, &lang).write("the crate");
 
     // the shim crate: its own target directory, cargo run from the crate's (its rust-toolchain.toml)
-    let shim_dir = r.out.join("shim");
-    crate::build::write_if_changed(&shim_dir.join("Cargo.toml"), &format!("[package]\nname = \"volt_import_{}\"\nversion = \"0.0.0\"\nedition = \"2021\"\npublish = false\n\n[lib]\npath = \"lib.rs\"\n\n[dependencies]\n{pkg} = {{ path = {:?} }}\n\n[workspace]\n", r.alias, krate.display().to_string()))?;
     crate::build::write_if_changed(&shim_dir.join("lib.rs"), &shim)?;
     let mut c = Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()));
     c.current_dir(&dir).args(["rustc", "-q", "--lib", "--crate-type", "staticlib", "--manifest-path"]).arg(shim_dir.join("Cargo.toml")).arg("--target-dir").arg(r.out.join("target"));
@@ -122,7 +138,340 @@ fn rs_files(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
-// ---------- the crate's public API ----------
+// ---------- the crate's public API, as rustdoc sees it ----------
+
+/// the crate's public API from rustdoc's JSON, documenting package pkg as the shim's dependency;
+/// None when rustdoc can't write it (an older toolchain, no rustdoc) or writes a format this doesn't
+/// read
+fn rustdoc_model(dir: &Path, shim: &Path, pkg: &str, target: &Path, lib: &str) -> Option<Model> {
+    let mut c = Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()));
+    c.current_dir(dir).env("RUSTC_BOOTSTRAP", "1").args(["rustdoc", "-q", "--lib", "-p", pkg, "--manifest-path"]).arg(shim).arg("--target-dir").arg(target);
+    c.args(["--", "-Z", "unstable-options", "--output-format", "json"]);
+    let o = c.output().ok()?;
+    if !o.status.success() {
+        return None;
+    }
+    let text = std::fs::read_to_string(target.join("doc").join(format!("{lib}.json"))).ok()?;
+    Doc::read(&crate::json::parse(&text).ok()?, dir)
+}
+
+/// rustdoc's index, read into the model
+struct Doc<'a> {
+    idx: &'a BTreeMap<String, Json>,
+    dir: &'a Path,
+    m: Model,
+    /// each public type's name, by id: its shallowest public path's
+    names: BTreeMap<String, String>,
+}
+
+impl<'a> Doc<'a> {
+    fn read(j: &'a Json, dir: &'a Path) -> Option<Model> {
+        let idx = j.get("index")?.obj()?;
+        let root = j.get("root")?.key()?;
+        idx.get(&root)?.get("inner")?.get("module")?;
+        let mut d = Doc { idx, dir, m: Model::default(), names: BTreeMap::new() };
+        let items = d.public(&root);
+        for (_, id, name) in &items {
+            let inner = d.idx.get(id).and_then(|it| it.get("inner"));
+            if inner.is_some_and(|i| i.get("struct").is_some() || i.get("enum").is_some()) && !d.names.contains_key(id) {
+                d.names.insert(id.clone(), name.clone());
+            }
+        }
+        let mut made = BTreeSet::new();
+        for (module, id, name) in items {
+            let Some(it) = d.idx.get(&id) else { continue };
+            let Some(inner) = it.get("inner") else { continue };
+            if let Some(f) = inner.get("function") {
+                let s = d.sig(it, f, &name);
+                d.m.fns.push((module, s));
+            } else if let Some(body) = inner.get("struct").or_else(|| inner.get("enum")) {
+                // a type re-exported again is the same type, under its shallowest path
+                if made.insert(id.clone()) {
+                    d.typedef(module, name, it, body, inner.get("enum").is_some());
+                }
+            } else if let Some(c) = inner.get("constant") {
+                d.constant(module, name, c);
+            }
+        }
+        Some(d.m)
+    }
+
+    /// every public item reachable from module `root`, with the module path and name it's public
+    /// under: modules breadth first (a re-export nearer the root names a type), `pub use` followed
+    /// (a glob brings in a module's items), each module once per path
+    fn public(&self, root: &str) -> Vec<(Vec<String>, String, String)> {
+        let mut out = Vec::new();
+        let mut walked = BTreeSet::new();
+        let mut queue = std::collections::VecDeque::from([(root.to_string(), Vec::<String>::new())]);
+        while let Some((mid, path)) = queue.pop_front() {
+            // a module re-exported into itself, or one path's glob of another, would loop
+            if path.len() > 32 || !walked.insert((mid.clone(), path.clone())) {
+                continue;
+            }
+            let Some(items) = self.idx.get(&mid).and_then(|m| m.get("inner")).and_then(|i| i.get("module")).and_then(|m| m.get("items")) else { continue };
+            for iid in items.arr() {
+                let Some(id) = iid.key() else { continue };
+                let Some(it) = self.idx.get(&id) else { continue };
+                if it.get("visibility").and_then(Json::str) != Some("public") {
+                    continue;
+                }
+                let Some(inner) = it.get("inner") else { continue };
+                if let Some(u) = inner.get("use") {
+                    // an item of another crate that rustdoc didn't inline has no entry here
+                    let Some(tid) = u.get("id").and_then(Json::key) else { continue };
+                    let Some(target) = self.idx.get(&tid) else { continue };
+                    let is_mod = target.get("inner").and_then(|i| i.get("module")).is_some();
+                    let Some(name) = u.get("name").and_then(Json::str) else { continue };
+                    if u.get("is_glob").and_then(Json::bool) == Some(true) {
+                        if is_mod {
+                            queue.push_back((tid, path.clone()));
+                        }
+                    } else if is_mod {
+                        let mut p = path.clone();
+                        p.push(name.to_string());
+                        queue.push_back((tid, p));
+                    } else {
+                        out.push((path.clone(), tid, name.to_string()));
+                    }
+                    continue;
+                }
+                let Some(name) = it.get("name").and_then(Json::str) else { continue };
+                if inner.get("module").is_some() {
+                    let mut p = path.clone();
+                    p.push(name.to_string());
+                    queue.push_back((id, p));
+                } else {
+                    out.push((path.clone(), id, name.to_string()));
+                }
+            }
+        }
+        out
+    }
+
+    /// a function or method, under the name it's called by
+    fn sig(&self, it: &Json, f: &Json, name: &str) -> Sig {
+        let mut s = Sig { name: name.to_string(), recv: Recv::None, params: Vec::new(), ret: Some(Ty::Unit), skip: None, src: self.src(it, name) };
+        let generics = f.get("generics");
+        if f.get("header").and_then(|h| h.get("is_async")).and_then(Json::bool) == Some(true) {
+            s.skip = Some("it's async");
+        }
+        if generic(generics) {
+            s.skip = Some("it's generic");
+        } else if generics.and_then(|g| g.get("where_predicates")).is_some_and(|w| !w.arr().is_empty()) {
+            s.skip = Some("it has a where clause");
+        }
+        let Some(sig) = f.get("sig") else {
+            s.skip = Some("its parameters");
+            return s;
+        };
+        if sig.get("is_c_variadic").and_then(Json::bool) == Some(true) {
+            s.skip = Some("it's variadic");
+        }
+        for (n, p) in sig.get("inputs").map_or(&[][..], Json::arr).iter().enumerate() {
+            let [pn, pt] = p.arr() else {
+                s.skip = Some("a parameter");
+                continue;
+            };
+            let pname = pn.str().unwrap_or("");
+            if n == 0 && pname == "self" {
+                let by_ref = pt.get("borrowed_ref");
+                let target = by_ref.and_then(|r| r.get("type")).unwrap_or(pt);
+                s.recv = match (target.get("generic").and_then(Json::str), by_ref) {
+                    (Some("Self"), None) => Recv::Value,
+                    (Some("Self"), Some(r)) if r.get("is_mutable").and_then(Json::bool) == Some(true) => Recv::Mut,
+                    (Some("Self"), Some(_)) => Recv::Ref,
+                    _ => {
+                        s.skip = Some("its self parameter");
+                        Recv::None
+                    }
+                };
+                continue;
+            }
+            // a pattern (a tuple, _) is no name
+            let named = !pname.is_empty() && pname != "_" && pname.chars().all(|c| c.is_alphanumeric() || c == '_');
+            let pname = if named { pname.to_string() } else { format!("a{n}") };
+            s.params.push((pname, self.ty(pt)));
+        }
+        s.ret = match sig.get("output") {
+            None | Some(Json::Null) => Some(Ty::Unit),
+            Some(t) => self.ty(t),
+        };
+        s
+    }
+
+    /// the declaration as it's written, on one line (a macro's item: where the macro made it)
+    fn src(&self, it: &Json, name: &str) -> String {
+        let span = it.get("span");
+        let file = span.and_then(|s| s.get("filename")).and_then(Json::str).map(|f| self.dir.join(f));
+        let line = |k: &str| span.and_then(|s| s.get(k)).map(|b| b.arr()).and_then(|b| b.first()).and_then(Json::key).and_then(|n| n.parse::<usize>().ok());
+        let text = file.and_then(|f| std::fs::read_to_string(f).ok());
+        let (Some(text), Some(lo), Some(hi)) = (text, line("begin"), line("end")) else { return format!("fn {name}") };
+        let lines: Vec<&str> = text.lines().skip(lo.saturating_sub(1)).take(hi + 1 - lo.min(hi)).collect();
+        let joined = lines.join(" ");
+        let head = joined.split(['{', ';']).next().unwrap_or("");
+        head.split_whitespace().collect::<Vec<_>>().join(" ")
+    }
+
+    fn typedef(&mut self, module: Vec<String>, name: String, it: &Json, body: &Json, is_enum: bool) {
+        let opaque = it.get("attrs").map_or(&[][..], Json::arr).iter().any(|a| a.str() == Some("non_exhaustive") || a.get("other").and_then(Json::str).is_some_and(|s| s.contains("non_exhaustive")));
+        let mut d = TypeDef { module, name: name.clone(), generic: generic(body.get("generics")), fields: None, variants: None, is_enum, clone: false, opaque };
+        if let Some(p) = body.get("kind").and_then(|k| k.get("plain")) {
+            let mut fields = Vec::new();
+            for fid in p.get("fields").map_or(&[][..], Json::arr) {
+                let Some(f) = fid.key().and_then(|k| self.idx.get(&k)) else { continue };
+                let public = f.get("visibility").and_then(Json::str) == Some("public");
+                let ty = f.get("inner").and_then(|i| i.get("struct_field")).and_then(|t| self.ty(t));
+                fields.push((f.get("name").and_then(Json::str).unwrap_or("_").to_string(), public, ty));
+            }
+            // fields rustdoc doesn't show are private
+            if p.get("has_stripped_fields").and_then(Json::bool) == Some(true) {
+                fields.push(("_".into(), false, None));
+            }
+            d.fields = Some(fields);
+        }
+        if is_enum {
+            let mut vs = Vec::new();
+            let mut next: i128 = 0;
+            let mut plain = body.get("has_stripped_variants").and_then(Json::bool) != Some(true);
+            for vid in body.get("variants").map_or(&[][..], Json::arr) {
+                let Some(v) = vid.key().and_then(|k| self.idx.get(&k)) else { continue };
+                let var = v.get("inner").and_then(|i| i.get("variant"));
+                if var.and_then(|x| x.get("kind")).and_then(Json::str) != Some("plain") {
+                    plain = false;
+                }
+                if let Some(n) = var.and_then(|x| x.get("discriminant")).and_then(|x| x.get("value")).and_then(Json::str).and_then(|x| int_text(x).parse().ok()) {
+                    next = n;
+                }
+                vs.push((v.get("name").and_then(Json::str).unwrap_or("_").to_string(), next));
+                next += 1;
+            }
+            d.variants = plain.then_some(vs);
+        }
+        // its impls: Clone, and the inherent ones' pub fns as its methods
+        for iid in body.get("impls").map_or(&[][..], Json::arr) {
+            let Some(im) = iid.key().and_then(|k| self.idx.get(&k)).and_then(|x| x.get("inner")).and_then(|i| i.get("impl")) else { continue };
+            if im.get("blanket_impl").is_some_and(|b| !b.is_null()) || im.get("is_synthetic").and_then(Json::bool) == Some(true) {
+                continue;
+            }
+            match im.get("trait").filter(|t| !t.is_null()) {
+                Some(tr) => {
+                    if tr.get("path").and_then(Json::str).is_some_and(|p| p.rsplit("::").next() == Some("Clone")) {
+                        d.clone = true;
+                    }
+                }
+                None => {
+                    for fid in im.get("items").map_or(&[][..], Json::arr) {
+                        let Some(f) = fid.key().and_then(|k| self.idx.get(&k)) else { continue };
+                        let (Some(func), Some(fname)) = (f.get("inner").and_then(|i| i.get("function")), f.get("name").and_then(Json::str)) else { continue };
+                        if f.get("visibility").and_then(Json::str) == Some("public") {
+                            let s = self.sig(f, func, fname);
+                            self.m.methods.entry(name.clone()).or_default().push(s);
+                        }
+                    }
+                }
+            }
+        }
+        self.m.types.push(d);
+    }
+
+    /// a const of a number, bool or string, with the value rustc worked out
+    fn constant(&mut self, module: Vec<String>, name: String, c: &Json) {
+        let k = c.get("const");
+        let value = k.and_then(|k| k.get("value")).and_then(Json::str);
+        let expr = k.and_then(|k| k.get("expr")).and_then(Json::str);
+        let lit = match c.get("type").and_then(|t| self.ty(t)) {
+            Some(Ty::Prim("bool")) => value.or(expr).filter(|v| *v == "true" || *v == "false").map(|v| ("bool".to_string(), v.to_string())),
+            Some(Ty::Prim(x)) => value.or(expr).and_then(|v| volt_number(v, x)).map(|v| (x.to_string(), v)),
+            Some(Ty::Str) => expr.filter(|e| e.len() >= 2 && e.starts_with('"') && e.ends_with('"')).map(|e| ("str".to_string(), e.to_string())),
+            _ => None,
+        };
+        match lit {
+            Some((ty, lit)) => self.m.consts.push((module, name, ty, lit)),
+            None => self.m.left_out.push(format!("const {name} (not a number, bool or string)")),
+        }
+    }
+
+    /// a type Volt can name, from rustdoc's form of it
+    fn ty(&self, t: &Json) -> Option<Ty> {
+        if let Some(p) = t.get("primitive").and_then(Json::str) {
+            return if p == "char" { Some(Ty::Char) } else { prim(p).map(Ty::Prim) };
+        }
+        if let Some(tup) = t.get("tuple") {
+            return tup.arr().is_empty().then_some(Ty::Unit);
+        }
+        if let Some(g) = t.get("generic").and_then(Json::str) {
+            return (g == "Self").then_some(Ty::SelfTy);
+        }
+        if let Some(r) = t.get("borrowed_ref") {
+            let mutable = r.get("is_mutable").and_then(Json::bool) == Some(true);
+            let inner = r.get("type")?;
+            if inner.get("primitive").and_then(Json::str) == Some("str") {
+                return (!mutable).then_some(Ty::Str);
+            }
+            if let Some(e) = inner.get("slice") {
+                return Some(Ty::Slice(Box::new(self.ty(e)?), mutable));
+            }
+            return match self.ty(inner)? {
+                Ty::String if !mutable => Some(Ty::Str),
+                Ty::Vec(e) => Some(Ty::Slice(e, mutable)),
+                x @ (Ty::Named(_) | Ty::SelfTy) => Some(Ty::Ref(Box::new(x), mutable)),
+                x @ (Ty::Prim(_) | Ty::Char) if !mutable => Some(x),
+                _ => None,
+            };
+        }
+        let p = t.get("resolved_path")?;
+        let last = p.get("path").and_then(Json::str)?.rsplit("::").next()?.to_string();
+        // its type arguments (lifetimes aren't types)
+        let args: Vec<&Json> = p.get("args").and_then(|a| a.get("angle_bracketed")).and_then(|a| a.get("args")).map_or(Vec::new(), |a| a.arr().iter().filter_map(|x| x.get("type")).collect());
+        let one = || -> Option<Box<Ty>> { Some(Box::new(self.ty(args.first()?)?)) };
+        if let Some(local) = p.get("id").and_then(Json::key).and_then(|id| self.names.get(&id)) {
+            return args.is_empty().then(|| Ty::Named(local.clone()));
+        }
+        match (last.as_str(), args.len()) {
+            ("String", 0) => Some(Ty::String),
+            ("Vec", 1) => Some(Ty::Vec(one()?)),
+            ("Option", 1) => Some(Ty::Opt(one()?)),
+            ("Result", 1 | 2) => Some(Ty::Res(one()?)),
+            (_, 0) if last.starts_with(|c: char| c.is_ascii_uppercase()) => Some(Ty::Named(last)),
+            _ => None,
+        }
+    }
+}
+
+/// whether generics hold type or const parameters (lifetimes don't count)
+fn generic(g: Option<&Json>) -> bool {
+    g.and_then(|g| g.get("params")).map_or(&[][..], Json::arr).iter().any(|p| p.get("kind").is_some_and(|k| k.get("lifetime").is_none()))
+}
+
+/// a number rustdoc wrote (42i32, -5i64, 1_000usize, 0.5f64) without its type suffix
+fn int_text(v: &str) -> String {
+    let v = v.replace('_', "");
+    for s in ["usize", "isize", "u128", "i128", "u64", "i64", "u32", "i32", "u16", "i16", "u8", "i8", "f64", "f32"] {
+        if let Some(x) = v.strip_suffix(s) {
+            return x.to_string();
+        }
+    }
+    v
+}
+
+/// a number rustdoc wrote as a Volt literal of type x (None for what Volt can't write: inf, NaN)
+fn volt_number(v: &str, x: &str) -> Option<String> {
+    let n = int_text(v);
+    if x.starts_with('f') {
+        let f: f64 = n.parse().ok()?;
+        if !f.is_finite() {
+            return None;
+        }
+        return Some(if n.contains(['.', 'e', 'E']) { n } else { format!("{n}.0") });
+    }
+    let parsed = match n.strip_prefix("0x") {
+        Some(h) => i128::from_str_radix(h, 16).ok(),
+        None => n.parse::<i128>().ok(),
+    };
+    parsed.map(|_| n)
+}
+
+// ---------- the crate's public API, read from its source (when rustdoc's JSON isn't there) ----------
 
 /// what the walk finds; derives and trait impls decide which types are Clone
 #[derive(Default)]
