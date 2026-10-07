@@ -211,6 +211,13 @@ fn cursor_file(c: clang::CXCursor) -> std::string {
     return cx_str(clang::clang_getFileName(f));
 }
 
+// where in its file a cursor starts (its expansion's byte offset)
+fn cursor_offset(c: clang::CXCursor) -> u32 {
+    var off: u32 = 0;
+    clang::clang_getExpansionLocation(clang::clang_getCursorLocation(c), null, null, null, &off);
+    return off;
+}
+
 // the direct children of c
 fn children(c: clang::CXCursor) -> std::vec<clang::CXCursor> {
     var out: std::vec<clang::CXCursor> = {};

@@ -1212,7 +1212,19 @@ fn cpp_opaque() {
     }
     let o = e.voltc(&["check", "cpp_opaque_no_default.volt"]);
     let err = String::from_utf8_lossy(&o.stderr);
-    assert!(!o.status.success() && err.contains("C++'s op::box<int> can't be made from nothing") && err.contains("cpp_opaque_no_default.volt:5"), "{{}} of an instance with no default constructor: {err}");
+    assert!(!o.status.success() && err.contains("C++'s op::box<int32_t> can't be made from nothing") && err.contains("cpp_opaque_no_default.volt:5"), "{{}} of an instance with no default constructor: {err}");
+}
+
+#[test]
+fn cpp_stdlib() {
+    // the C++ standard library: class templates by the headers' names (held by handle, members per
+    // use, for over each), and optional, pair, tuple, array, span, string_view, variant and a view
+    // in a header's signatures as Volt's own forms
+    let e = Env::new("cpp-stdlib");
+    let want = "1:10 2:20 | 2 20\n1.5 1 true 4 1 2 3\n4 true 4 -1\n3 0.75 | 12 true 1.5\n2.5 9 25\n6 15 42\ntwo 4\nint 7\ndouble 2.5\nsquares 30\n";
+    for backend in ["c", "llvm"] {
+        assert_eq!(ok(e.voltc(&["run", "cpp_stdlib.volt", "--backend", backend]), "voltc run cpp_stdlib.volt"), want, "the C++ standard library ({backend})");
+    }
 }
 
 #[test]

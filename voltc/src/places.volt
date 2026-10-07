@@ -891,6 +891,10 @@ attach fn field_default(this: checker&, sid: u32, f: field_info&, span: span) ->
                 return fail(span, S(why));
             }
         }
+        // a generic C++ handle's instance: as one of its own (instance handles) says above
+        if (f.name == "cpp" && this.si(sid).args.len > 0) {
+            try this.cpp_can_default(sid, span);
+        }
         val e = this.si(sid).env;
         return this.in_env_expr_as(e, f.fallback, f.ty);
     }

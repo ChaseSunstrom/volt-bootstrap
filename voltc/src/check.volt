@@ -495,6 +495,8 @@ struct checker {
     cpp_ctxs: std::vec<cpp_import_ctx> = {};
     cpp_dyn: std::map<str, u32> = {};
     cpp_dyn_n: u32 = 0;
+    cpp_dyn_ret: std::map<u32, str> = {}; // each one's result, as its Volt source spells it
+    cpp_ranges: std::map<str, bool> = {}; // the C++ ranges a loop went over (cpp_range)
     // C++ declarations of the imports' own (Volt's subclasses of C++ classes, what each import's
     // exceptions are): each one's name and text, in the C++ unit when a wrapper names it
     cpp_decl_names: std::vec<std::string> = {};

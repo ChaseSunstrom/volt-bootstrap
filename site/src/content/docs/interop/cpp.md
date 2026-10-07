@@ -226,6 +226,72 @@ fn main() -> void {
 | a `std::function` result | `stdcxx::function`: `call(...)` runs it, and it's deleted with the Volt value |
 | a `std::function` field | a getter only: setting it from a Volt closure would keep the closure past the call |
 
+### Types by what they can do
+
+Other class templates' instances, from the standard library or any other, read as Volt's own types
+by what clang says they can do (the protocols C++'s own library and structured bindings use), not by
+their names:
+
+| a type that | reads as |
+| --- | --- |
+| dereferences to its `T`, tests as a `bool`, and is made from a `T` or from nothing (`std::optional<T>`) | `T?` |
+| has `std::tuple_size` and `get<I>` (`std::pair`, `std::tuple`) | a tuple `(A, B, ...)` |
+| ...and its elements contiguous, `data()` (`std::array<T, N>`) | `T[N]` |
+| has `data()` and `size()` and doesn't own them (`std::span<T>`) | `T[..]` (`str` of `char`s), alive as long as C++ keeps them |
+| has `data()` and `size()` and owns them | `std::vec<T>` (`std::string` of `char`s), a copy |
+| has `std::variant_size`, `index()` and `get<I>` (`std::variant`) | an enum with a variant each alternative, named after its type (`I32`, `F64`, a class's name) |
+| has `begin(r)` and `end(r)` (a container, a view), held by handle | what `for (x) in r` loops over: each `*it`, as it reads in Volt |
+
+Each works both ways (as a parameter and a result), its elements being numbers, `bool`s, enums,
+pointers and classes Volt holds by value; one with other elements is held by handle. Any other type
+is held by handle with its members worked out per use, `std::map` among them.
+
+```cpp
+// stock.hpp
+namespace stock {
+std::optional<int> find(std::span<const int> xs, int x);
+std::tuple<int, int, bool> minmax(std::span<const int> xs);
+std::variant<int, double> price(bool exact);
+std::map<int, int> counts(std::span<const int> xs);
+}
+```
+
+```volt
+use std::io;
+use { "stock.hpp" } as cpp;
+use cpp { "map" } as cs;
+
+fn main() -> void {
+    val xs: i32[5] = { 4, 9, 4, 1, 9 };
+    std::println("{} {}", cpp::stock::find(xs[..], 1) ?? -1, cpp::stock::find(xs[..], 7) == null);
+    val (lo, hi, flat) = cpp::stock::minmax(xs[..]);
+    std::println("{} {} {}", lo, hi, flat);
+    match (cpp::stock::price(false)) {
+        .I32(n) => { std::println("{} exactly", n); },
+        .F64(x) => { std::println("about {}", x); },
+    }
+    val counts = cpp::stock::counts(xs[..]);
+    for (kv) in counts {
+        std::print("{}x{} ", kv.0, kv.1);
+    }
+    std::println("");
+    // the standard library's own headers: their class templates under stdcxx
+    var m: cs::stdcxx::map<i64, f64> = {};
+    m.insert_or_assign(7, 0.5);
+    std::println("{} {}", m.size(), m.contains(7));
+}
+// expect: 3 true
+// expect: 1 9 false
+// expect: about 2.75
+// expect: 1x1 4x2 9x2
+// expect: 1 true
+```
+
+A use that names the standard library's own headers (`use cpp { "map", "deque", "ranges" }`)
+declares what they declare under `stdcxx` (Volt's `std` is its own): each class template Volt can't
+lay out is a generic handle, `cs::stdcxx::map<K, V>`, made by `{}` (or a compile error at the
+literal, for an instance with no default constructor) and with its members worked out per use.
+
 A function that can throw (it isn't `noexcept`) also gets a `try_` form that returns the exception
 as a `cpp_error` instead of stopping the program. Its variant says which exception it was:
 `OUT_OF_RANGE`, `INVALID_ARGUMENT`, `LENGTH_ERROR`, `DOMAIN_ERROR`, `LOGIC_ERROR`, `RANGE_ERROR`,
@@ -304,10 +370,13 @@ without RTTI, a cast or a type name stops the program, and `derived<T>()` on suc
 
 ## Limits
 
-- What doesn't map is left out, with a comment in the generated source: a standard library type
-  other than those above (or a non-const reference to one), a `std::function` whose signature has a
-  class in it (other than text). A function whose parameters or result only a call settles is
+- What doesn't map is left out, with a comment in the generated source: a non-const reference to a
+  standard library string or vector, a `std::function` whose signature has a class in it (other than
+  text). A function whose parameters or result only a call settles is
   [called per use](#calls-worked-out-per-use) instead.
+- A loop over a C++ range holds its iterators in Volt's own words, so they must be trivially copyable
+  and destructible (the standard library's and the views' are); C++ reads ranges under C++11 or
+  newer.
 - A type Volt can't lay out (a class template's instance with private fields, bases or virtual
   methods, like `basic_json`; a lambda's own type; a coroutine's task type) is held by handle,
   named after the type (`basic_json_0`, `lambda_3`) or by the header's `using` alias for it, and its

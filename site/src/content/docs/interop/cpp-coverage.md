@@ -30,10 +30,14 @@ doesn't map, with the way around each.
 | public bases, `dynamic_cast`, `typeid` | `as_Base()`, `as_Derived()`, `cpp_type_name()` |
 | exceptions | `try_` forms returning a `cpp_error` naming the exception |
 | `std::string`, `std::string_view`, `std::vector`, `std::unique_ptr`, `std::shared_ptr`, `std::function` | `str`/`std::string`, `T[..]`/`std::vec<T>`, `stdcxx::` handles, `fn(...)` values |
+| a type by what it can do: optional-like, tuple-like, contiguous, variant-like (`std::optional`, `std::pair`, `std::tuple`, `std::array`, `std::span`, `std::variant`, any library's own) | `T?`, tuples, `T[N]`, `T[..]`/`std::vec<T>`, an enum to `match` on |
+| a range (`begin(r)`, `end(r)`: containers, views) | `for (x) in r` |
+| the standard library's own headers (`use cpp { "map" }`) | their declarations under `stdcxx`, class templates as generic handles (`stdcxx::map<K, V>`) |
 
 A library found on the include path (`use cpp { "re2/re2.h" }`, `use { "nlohmann/json.hpp" }`)
 brings in the declarations of the files under its own directory (`re2/`, `nlohmann/`), not the rest
-of the system's headers or the C++ standard library's.
+of the system's headers or the C++ standard library's. A standard header named on its own (`map`,
+`optional`) brings in the files implementing it.
 
 ## Tested against
 
@@ -45,6 +49,9 @@ The interop tests import these and run what maps, on both backends:
   namespace; its free functions and enums (`detail::value_t`, `detail::op_lt`) run, and `json`
   (`basic_json<>`, a class template with private state) is held by handle: `{}` is a null json,
   and `json::parse(text)`, `size()` and `dump()` are worked out per use.
+- **The C++ standard library**: `map`, `unordered_map`, `set`, `deque` and `list` by their headers'
+  names, looped over with `for`; `optional`, `pair`, `tuple`, `array`, `span`, `string_view` and
+  `variant` in a header's signatures, both ways; a C++20 view (`iota | transform`) looped over.
 - **glm** (`glm/glm.hpp`): its generic functions over numbers (`glm::abs`, `glm::min`,
   `glm::clamp`).
 - **A framework sample** with pure virtual interfaces, an event bus calling its listeners by
@@ -65,7 +72,6 @@ it), and the rest still works. What Volt can't declare ahead (variadic and non-t
 | pointers to classes held by handle (`T*`), non-const `T&` results of them | Volt can't tell who owns the object | a reference parameter (`T&`), or `as_Base()` and `as_Derived()` |
 | bit-fields | a Volt field can't be part of a byte | a getter and setter in C++ |
 | a `std::function` field's setter | a Volt closure stored in C++ would outlive the call | a C++ method that takes it and copies what it needs |
-| standard library types other than the ones above (`std::map`, `std::optional`...) | each needs its own mapping | a wrapper returning one of the ones above |
 
 Explicit specializations (`template <> struct S<void>`) and what a library adds to namespace `std`
 (`std::hash<T>` specializations, `swap` overloads) are left out on purpose: the template, and Volt's

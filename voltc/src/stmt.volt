@@ -1192,12 +1192,33 @@ attach fn for_inner(this: checker&, f: for_loop&, want: u32?, span: span) -> com
             default => {
                 // a type that attaches next(this: T&) -> X? (or -> X*) is an iterator: next until it's
                 // null. A pointer binds as an X&
-                val h = (try this.hook(t, "next")) ?? return fail(f.iter.span, fmt2("can't loop over a {} (a type loops when it attaches next(this: {}&) -> T? or -> T*)", this.ty_name(v.ty), this.ty_name(t)));
+                var it_t = t;
+                var it_c = v.c;
+                var it_ref = through_ref;
+                var it_var = v.lv && v.mutable;
+                var h0 = try this.hook(t, "next");
+                if (h0 == null && (try this.cpp_range(t, f.iter.span))) {
+                    // a C++ range: the loop goes over an iterator started from it (volt_range)
+                    val sh = (try this.hook(t, "volt_range")) ?? return fails(f.iter.span, "the C++ range's iterator wasn't declared");
+                    this.use_fn(sh);
+                    var ra = v.c;
+                    if (!through_ref) {
+                        ra = this.ir.addr(v.c, this.t.ref_to(t));
+                    }
+                    it_t = this.fi(sh).ret;
+                    it_c = this.call_fn(this.fi(sh).ir, nodes(ra), it_t);
+                    it_ref = false;
+                    it_var = false;
+                    h0 = try this.hook(it_t, "next");
+                }
+                val h = h0 ?? return fail(f.iter.span, fmt2("can't loop over a {} (a type loops when it attaches next(this: {}&) -> T? or -> T*)", this.ty_name(v.ty), this.ty_name(t)));
                 this.use_fn(h);
                 val ot = this.fi(h).ret;
-                val pt = this.t.ref_to(t);
+                val pt = this.t.ref_to(it_t);
                 val p = this.slot("_ip", pt);
-                if (through_ref) {
+                if (it_t != t) {
+                    // (the range is read through a reference: begin and end don't change it)
+                } else if (through_ref) {
                     this.note_arg(body_key(BODY_FN, h), 0, &v, f.iter.span, null);
                 } else if (v.lv && v.mutable) {
                     this.note_mut(&v);
@@ -1206,13 +1227,13 @@ attach fn for_inner(this: checker&, f: for_loop&, want: u32?, span: span) -> com
                     this.note_arg(body_key(BODY_FN, h), 0, &a, f.iter.span, null);
                 }
                 // a var (or a reference to one) is advanced in place; a val or a temporary is copied
-                var addr = v.c;
-                if (!through_ref) {
-                    if (v.lv && v.mutable) {
-                        addr = this.ir.addr(v.c, pt);
+                var addr = it_c;
+                if (!it_ref) {
+                    if (it_var) {
+                        addr = this.ir.addr(it_c, pt);
                     } else {
-                        val tv = this.slot("_iv", t);
-                        put(&pre, this.decl_at(tv, v.c));
+                        val tv = this.slot("_iv", it_t);
+                        put(&pre, this.decl_at(tv, it_c));
                         addr = this.ir.addr(tv, pt);
                     }
                 }
