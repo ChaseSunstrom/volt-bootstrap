@@ -665,6 +665,7 @@ attach fn ct_path(this: checker&, p: path&, want: u32?, span: span) -> compile_e
                     .STRUCT(s) => { return cval::TYPE(try this.resolve_type_path(p, env)); },
                     .ENUM(x) => { return cval::TYPE(try this.resolve_type_path(p, env)); },
                     .TRAIT(n, items) => { return cval::TYPE(try this.resolve_type_path(p, env)); },
+                    .ALIAS(n, t) => { return cval::TYPE(try this.resolve_type_path(p, env)); },
                     default => { return fail(span, fmt("'{}' isn't a compile-time value", S(p.last()))); },
                 }
             }
