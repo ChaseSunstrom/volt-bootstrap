@@ -1665,10 +1665,14 @@ attach fn c_text(this: cmapper&, t: ctype&, c_names: std::map<str, str>&) -> std
 }
 
 // a static inline C function `volt_cw_NAME` calling fn f with its long doubles as doubles and its
-// complexes as volt_cf32/volt_cf64 { re, im }; none if a type can't be written
+// complexes as volt_cf32/volt_cf64 { re, im }; none if a type can't be written. It calls f through a
+// declaration of its own bound to f's symbol (volt_cr_NAME): a header may declare f only under a
+// feature macro the program's C doesn't set (python's strtold_l), and an unused wrapper is never
+// compiled into a call; a static f, only its header's, by its name
 attach fn wrapper(this: cmapper&, f: cfn&, c_names: std::map<str, str>&) -> std::string? {
     var params = S("");
     var args = S("");
+    var orig = S(""); // f's own parameter types
     for (i) in 0..f.params.len {
         val p = f.params.at(i);
         val r = this.resolve(&p.ty, 0) ?? return null;
@@ -1678,20 +1682,26 @@ attach fn wrapper(this: cmapper&, f: cfn&, c_names: std::map<str, str>&) -> std:
         }
         var a = S("volt_a");
         a.append_uint(@cast<u64>(i));
+        if (i > 0) {
+            orig.append(", ");
+        }
         match (*r) {
             .LDOUBLE => {
                 params.append("double");
                 args.append(a.as_str());
+                orig.append("long double");
             },
             .COMPLEX(e) => {
                 params.append("volt_");
                 params.append(complex_name(e));
                 args.append(fmt4("__builtin_complex(({}){}.re, ({}){}.im)", S(e), copy a, S(e), copy a).as_str());
+                orig.append(fmt("{} _Complex", S(e)).as_str());
             },
             default => {
                 val t = this.c_text(&p.ty, c_names) ?? return null;
                 params.append(t.as_str());
                 args.append(a.as_str());
+                orig.append(t.as_str());
             },
         }
         params.push(' ');
@@ -1699,26 +1709,42 @@ attach fn wrapper(this: cmapper&, f: cfn&, c_names: std::map<str, str>&) -> std:
     }
     if (f.params.len == 0) {
         params.append("void");
+        orig.append("void");
     }
-    val call = fmt2("{}({})", S(f.name), move args);
+    var callee = S(f.name);
+    if (!f.stat) {
+        callee = fmt("volt_cr_{}", S(f.name));
+    }
+    val call = fmt2("{}({})", copy callee, move args);
     var ret = S("double");
+    var orig_ret = S("long double");
     var body = fmt("return {};", copy call);
     val rr = this.resolve(&f.ret, 0) ?? return null;
     match (*rr) {
         .VOID => {
             ret = S("void");
+            orig_ret = S("void");
             body = fmt("{};", copy call);
         },
         .LDOUBLE => {},
         .COMPLEX(e) => {
             ret = fmt("volt_{}", S(complex_name(e)));
+            orig_ret = fmt("{} _Complex", S(e));
             body = fmt3("{} _Complex volt_r = {}; {} volt_o; volt_o.re = __real__ volt_r; volt_o.im = __imag__ volt_r; return volt_o;", S(e), copy call, copy ret);
         },
         default => {
             ret = this.c_text(&f.ret, c_names) ?? return null;
+            orig_ret = copy ret;
         },
     }
-    return fmt4("static __inline__ {} volt_cw_{}({}) {{ {} }}", move ret, S(f.name), move params, move body);
+    var out = S("");
+    if (!f.stat) {
+        // the symbol, with the platform's prefix (Mach-O's _)
+        out.append("#ifndef VOLT_CW_SYM\n#define VOLT_CW_STR2(x) #x\n#define VOLT_CW_STR(x) VOLT_CW_STR2(x)\n#define VOLT_CW_SYM(n) __asm__(VOLT_CW_STR(__USER_LABEL_PREFIX__) n)\n#endif\n");
+        out.append(fmt4("extern {} {}({}) VOLT_CW_SYM(\"{}\");\n", move orig_ret, copy callee, move orig, S(f.name)).as_str());
+    }
+    out.append(fmt4("static __inline__ {} volt_cw_{}({}) {{ {} }}", move ret, S(f.name), move params, move body).as_str());
+    return out;
 }
 
 // a public item at the import's span
