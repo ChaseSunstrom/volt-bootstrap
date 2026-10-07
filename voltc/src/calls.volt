@@ -330,6 +330,7 @@ attach fn cast_scalar(this: checker&, t: u32) -> bool {
         .CSTR => { return true; },
         .FN_PTR(a, b, c) => { return true; },
         .OPT(i) => { return this.t.is_niche(i); },
+        .ENUM(e) => { return this.ei(e).c_enum; }, // a C enum converts as its number
         default => { return false; },
     }
 }

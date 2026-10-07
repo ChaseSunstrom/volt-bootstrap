@@ -685,8 +685,13 @@ attach fn ct_path(this: checker&, p: path&, want: u32?, span: span) -> compile_e
         },
         default => {},
     }
-    // Enum::VARIANT or a type path
-    val m = try this.member_path(p);
+    // Enum::VARIANT or a type path, named from where the code is (a global's value is its
+    // namespace's code)
+    val was = this.cx.env;
+    this.cx.env = env;
+    val mr = this.member_path(p);
+    this.cx.env = was;
+    val m = try mr;
     if (m) {
         match (m) {
             .OF(t, name) => {
@@ -735,7 +740,8 @@ attach fn ct_expr(this: checker&, e: expr&, want: u32?) -> compile_error!cval {
             return cval::VARIANT(t, n, null);
         },
         .UNARY(op, x) => {
-            val v = try this.ct_expr(x, want);
+            var v = try this.ct_expr(x, want);
+            this.c_enum_ct(&v); // a C enum's value is its number to operators
             match (v) {
                 .INT(n, t) => {
                     if (op == unop::NEG) {
@@ -767,7 +773,8 @@ attach fn ct_expr(this: checker&, e: expr&, want: u32?) -> compile_error!cval {
                 }
                 return cval::BOOL(try this.ct_bool(b));
             }
-            val av = try this.ct_expr(a, null);
+            var av = try this.ct_expr(a, null);
+            this.c_enum_ct(&av);
             var at: u32? = null;
             match (av) {
                 .INT(x, t) => {
@@ -851,7 +858,8 @@ attach fn ct_expr(this: checker&, e: expr&, want: u32?) -> compile_error!cval {
                 },
                 default => {},
             }
-            val iv = try this.ct_expr(i, USIZE);
+            var iv = try this.ct_expr(i, USIZE);
+            this.c_enum_ct(&iv);
             var k: i128 = 0;
             match (iv) {
                 .INT(x, t) => { k = x; },
@@ -1036,7 +1044,10 @@ attach fn ct_bool(this: checker&, e: expr&) -> compile_error!bool {
 
 // a binary op on two values; an int meeting a float becomes a float, and any two values compare with
 // == and !=
-attach fn ct_binop(this: checker&, op: binop, a: cval, b: cval, span: span) -> compile_error!cval {
+attach fn ct_binop(this: checker&, op: binop, var a: cval, var b: cval, span: span) -> compile_error!cval {
+    // a C enum's value is its number to operators
+    this.c_enum_ct(&a);
+    this.c_enum_ct(&b);
     match (a) {
         .INT(x, ta) => {
             match (b) {
@@ -1420,7 +1431,8 @@ attach fn ct_write(this: checker&, whole: cval&, place: expr&, v: cval, span: sp
         },
         .INDEX(b, ix) => {
             var parent = try this.ct_expr(b, null);
-            val iv = try this.ct_expr(ix, USIZE);
+            var iv = try this.ct_expr(ix, USIZE);
+            this.c_enum_ct(&iv);
             var i: i128 = 0;
             match (iv) {
                 .INT(x, t) => { i = x; },
@@ -1770,8 +1782,10 @@ attach fn ct_items(this: checker&, iter: expr&, span: span) -> compile_error!(st
         .RANGE(lo, hi, incl) => {
             if (lo != null && hi != null) {
                 ranged = true;
-                val a = try this.ct_expr(lo.value, null);
-                val b = try this.ct_expr(hi.value, null);
+                var a = try this.ct_expr(lo.value, null);
+                var b = try this.ct_expr(hi.value, null);
+                this.c_enum_ct(&a);
+                this.c_enum_ct(&b);
                 var x: i128 = 0;
                 var y: i128 = 0;
                 var t = VOID;
@@ -2050,7 +2064,9 @@ attach fn ct_pat(this: checker&, p: pat&, v: cval&) -> compile_error!bool {
 
 // an index or slice bound at compile time
 attach fn ct_index(this: checker&, e: expr&) -> compile_error!i128 {
-    match (try this.ct_expr(e, USIZE)) {
+    var v = try this.ct_expr(e, USIZE);
+    this.c_enum_ct(&v);
+    match (v) {
         .INT(x, t) => { return x; },
         default => { return fails(e.span, "index must be an integer"); },
     }

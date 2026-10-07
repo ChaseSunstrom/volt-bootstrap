@@ -9,7 +9,7 @@ use std::mem;
 attach fn unary(this: checker&, op: unop, x: expr&, want: u32?, span: span) -> compile_error!tval {
     match (op) {
         .NEG => {
-            val v = try this.expr(x, want);
+            val v = this.c_enum_view(try this.expr(x, want));
             if (v.lit) {
                 match (v.lit) {
                     .INT(n) => {
@@ -54,7 +54,7 @@ attach fn unary(this: checker&, op: unop, x: expr&, want: u32?, span: span) -> c
             return r;
         },
         .BITNOT => {
-            val v = try this.expr(x, want);
+            val v = this.c_enum_view(try this.expr(x, want));
             var none: std::vec<expr> = {};
             val called = try this.op_call("~", v, &none, want, span);
             if (called) {
@@ -307,7 +307,8 @@ attach fn binary(this: checker&, op: binop, ae: expr&, be: expr&, want: u32?, sp
             operand_want = w;
         }
     }
-    val a = try this.expr(ae, operand_want);
+    // a C enum's value is its number to operators, as in C
+    val a = this.c_enum_view(try this.expr(ae, operand_want));
     if (op != binop::EQ && op != binop::NE && this.has_ops(a.ty)) {
         return this.op_binary(op, a, ae, be, want, span);
     }
@@ -326,7 +327,7 @@ attach fn binary(this: checker&, op: binop, ae: expr&, be: expr&, want: u32?, sp
     if (be_null || a.lit != null || a.ty == NULL_TY) {
         b_want = operand_want;
     }
-    val b = try this.expr(be, b_want);
+    val b = this.c_enum_view(try this.expr(be, b_want));
     if (!is_cmp) {
         val pa = try this.pointer_arith(op, a, b, span);
         if (pa) {
@@ -833,19 +834,22 @@ attach fn assign(this: checker&, op: binop?, le: expr&, re: expr&, span: span) -
     if (by_op) {
         return by_op;
     }
-    val r = try this.expr(re, l.ty);
-    val lty = l.ty;
+    // a C enum's place computes on its number, and takes the result back
+    val place_ty = l.ty;
+    val lty = this.c_enum_tag(place_ty) ?? place_ty;
+    val r = this.c_enum_view(try this.expr(re, lty));
     // evaluate the target once
     var pre: std::vec<u32> = {};
     var target = l.c;
     if (!l.pure) {
-        val pt = this.t.ref_to(lty);
+        val pt = this.t.ref_to(place_ty);
         val p = this.tmp_local("p", pt);
         put(&pre, this.ir.decl(p.id, this.ir.addr(l.c, pt)));
-        target = this.ir.deref(p.c, lty);
+        target = this.ir.deref(p.c, place_ty);
     }
     var cur = l;
     cur.c = target;
+    cur = this.c_enum_view(cur);
     var v = vnew(0, 0);
     val is_ptr = this.t.get(lty);
     var ptr_target = false;
@@ -866,13 +870,13 @@ attach fn assign(this: checker&, op: binop?, le: expr&, re: expr&, span: span) -
         if (bop == binop::SUB) {
             o = binop_ir::SUB;
         }
-        v = vnew(lty, this.ir.binary(o, target, rr.c, lty));
+        v = vnew(lty, this.ir.binary(o, cur.c, rr.c, lty));
     } else if (bop == binop::SHL || bop == binop::SHR) {
         v = try this.shift(bop, cur, r, span);
     } else {
         val rc = try this.coerce(r, lty, re.span);
         match (*this.t.get(lty)) {
-            .INT(k) => { v = vnew(lty, try this.int_arith(bop, k, target, rc.c, span, lty)); },
+            .INT(k) => { v = vnew(lty, try this.int_arith(bop, k, cur.c, rc.c, span, lty)); },
             .FLOAT(b) => {
                 var o = binop_ir::ADD;
                 match (bop) {
@@ -882,12 +886,16 @@ attach fn assign(this: checker&, op: binop?, le: expr&, re: expr&, span: span) -
                     .DIV => { o = binop_ir::DIV; },
                     default => { return fail(span, fmt3("can't use {}= on {}{}", S(binop_text(bop)), this.ty_name(lty), this.op_hint(lty, binop_text(bop)))); },
                 }
-                v = vnew(lty, this.ir.binary(o, target, rc.c, lty));
+                v = vnew(lty, this.ir.binary(o, cur.c, rc.c, lty));
             },
             default => { return fail(span, fmt3("can't use {}= on {}{}", S(binop_text(bop)), this.ty_name(lty), this.op_hint(lty, binop_text(bop)))); },
         }
     }
-    val code = this.ir.assign(target, v.c);
+    var result = v.c;
+    if (lty != place_ty) {
+        result = this.ir.conv(result, place_ty);
+    }
+    val code = this.ir.assign(target, result);
     if (pre.len == 0) {
         return this.vstmt(code);
     }

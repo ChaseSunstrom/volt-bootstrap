@@ -367,7 +367,7 @@ attach fn index(this: checker&, be: expr&, ie: expr&, span: span) -> compile_err
         through(&r, v);
         return r;
     }
-    val i = try this.expr(ie, USIZE);
+    val i = this.c_enum_view(try this.expr(ie, USIZE)); // a C enum indexes by its number
     if (this.t.int_of(i.ty) == null) {
         return fail(ie.span, fmt("index must be an integer, found {}", this.ty_name(i.ty)));
     }
@@ -972,8 +972,9 @@ attach fn range_val(this: checker&, lo: expr*, hi: expr*, incl: bool, want: u32?
             default => {},
         }
     }
-    val a = try this.expr(l, null);
-    val b = try this.expr(h, null);
+    // a C enum's end is its number
+    val a = this.c_enum_view(try this.expr(l, null));
+    val b = this.c_enum_view(try this.expr(h, null));
     val u = try this.unify(a, b, span);
     if (this.t.int_of(u.a.ty) == null) {
         return fails(span, "ranges need integers");

@@ -245,6 +245,10 @@ attach fn coercible(this: checker&, v: tval&, to: u32) -> bool {
                     .FLOAT(b) => { return true; },
                     default => {},
                 }
+                val ct = this.c_enum_tag(to);
+                if (ct) {
+                    return (this.t.int_of(ct) ?? int_ty::I32).fits(n);
+                }
             },
             .FLOAT(f) => {
                 match (*tt) {
@@ -283,6 +287,9 @@ attach fn coercible(this: checker&, v: tval&, to: u32) -> bool {
             }
         },
         default => {},
+    }
+    if (this.c_enum_int(v.ty, to)) {
+        return true;
     }
     val inner = this.t.opt_inner(to);
     if (inner) {
@@ -374,6 +381,14 @@ attach fn coerce(this: checker&, v: tval, to: u32, span: span) -> compile_error!
                     .FLOAT(b) => { return this.float_lit(@cast<f64>(n), to); },
                     default => {},
                 }
+                // a C enum takes a number its integer type holds
+                val ct = this.c_enum_tag(to);
+                if (ct) {
+                    if (!(this.t.int_of(ct) ?? int_ty::I32).fits(n)) {
+                        return fail(span, fmt2("{} doesn't fit in {}", num(n), this.ty_name(to)));
+                    }
+                    return vpure(to, this.ir.conv(this.int_lit(n, ct).c, to));
+                }
             },
             .FLOAT(f) => {
                 match (*this.t.get(to)) {
@@ -432,6 +447,9 @@ attach fn coerce(this: checker&, v: tval, to: u32, span: span) -> compile_error!
             }
         },
         default => {},
+    }
+    if (this.c_enum_int(v.ty, to)) {
+        return retyped(&v, to, this.ir.conv(v.c, to));
     }
     val inner = this.t.opt_inner(to);
     if (inner != null && this.coercible(&v, inner ?? 0)) {

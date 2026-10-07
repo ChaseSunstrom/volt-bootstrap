@@ -1195,7 +1195,7 @@ fn c_versions_flag() {
     // one C standard for the whole program: gnu17, so the C23 header (@standard("c23")) is kept out
     // of Volt's C, in a unit of its own, as the C89 and C99 ones are
     let e = Env::new("c-versions-flag");
-    let want = "5 1 3.5\n32 true\n6\n10 42 true true\n";
+    let want = "5 1 3.5 1.5\n32 true\n6\n10 42 true true\n";
     for backend in ["c", "llvm"] {
         assert_eq!(ok(e.voltc(&["run", "../run/c_versions.volt", "--cc", "-std=gnu17", "--backend", backend]), "voltc run c_versions.volt --cc -std=gnu17"), want, "C versions under gnu17 ({backend})");
     }

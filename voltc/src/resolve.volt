@@ -614,13 +614,14 @@ attach fn const_int(this: checker&, e: expr&, env: u32) -> compile_error!i128 {
 // const_int's fallback, the comptime interpreter. Only its overflow and compile-time errors are
 // reported; any other failure reports first, the simple path's error
 attach fn const_int_ct(this: checker&, e: expr&, env: u32, first: compile_error) -> compile_error!i128 {
-    val v = this.ct_eval_in(env, e, null) catch |d| {
+    var v = this.ct_eval_in(env, e, null) catch |d| {
         val m = err_msg(&d);
         if (contains(m, "compile") || contains(m, "overflow")) {
             return copy d;
         }
         return first;
     };
+    this.c_enum_ct(&v);
     match (v) {
         .INT(x, t) => { return x; },
         default => { return fails(e.span, "expected an integer"); },
@@ -793,7 +794,7 @@ attach fn fn_inst(this: checker&, d: u32, args: std::vec<gval>, span: span) -> c
         n.append(f.name);
         c_name = this.intern(move n);
     } else if (f.extern_abi != null || f.is_export) {
-        c_name = f.name;
+        c_name = f.c_name ?? f.name;
     } else if (f.name == "main" && path.len() == 0 && args.len == 0) {
         c_name = "v_main";
     } else if (this.pkg_of(d) != null && args.len == 0) {

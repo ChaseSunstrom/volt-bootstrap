@@ -45,12 +45,15 @@ How C's types come in:
 | --- | --- |
 | `int`, `long`, `size_t`, `uint8_t`... | the integer type of the same size and sign |
 | `double`, `float` | `f64`, `f32` |
+| `long double` | `f64`, through a C wrapper (below) |
+| `float _Complex`, `double _Complex` | the struct `ns::cf32` or `ns::cf64`, `{ re, im }`, through a C wrapper |
 | `T *` | `T*`, which may be null |
 | `char *`, `const char *` | `cstr?` (string literals convert to `cstr`) |
 | `void *` | `void*` |
 | a function pointer | `extern "C" fn(...) -> R` |
 | `struct`, `union` | the same, with C's layout |
-| `enum` | its integer type, and a constant per enumerator |
+| a named `enum` | a Volt enum of the same values and integer type, which converts to and from integers |
+| an anonymous `enum` | a constant per enumerator, of its integer type |
 | `static inline` functions | callable: voltc compiles a small C unit that exports them |
 
 Flags for the preprocessor (`-I`, `-D`, `-U`) come from `--cc`: `voltc run app.volt --cc -Iinclude
@@ -95,13 +98,56 @@ fn main() -> void {
 Both backends build all of these: the LLVM backend lays out unions, bitfields' neighbours and
 anonymous members where libclang says C puts them.
 
+### Enums, long double and complex numbers
+
+A named enum (by its tag, or the `typedef` that names it) is a Volt enum with C's values and
+integer type, so `match` takes its variants, and each enumerator is a constant of it. C passes any
+integer where one goes, so it stands for its integer type too: it passes for that type or a wider
+one, an integer that widens to that type passes for it (an integer's address for a pointer to one),
+and operators, indexes, ranges, array lengths, `@cast` and `{}` see its number. An anonymous enum's
+enumerators are integer constants. In a function pointer's type an enum is its integer, so a Volt
+function written against the numbers passes as a callback.
+
+`long double` and `_Complex` have no Volt type. A function taking or giving one by value is called
+through a small C wrapper that converts it: a `long double` is an `f64` (what it holds past an
+`f64`'s precision is lost), and a complex is the struct `cf32` (for `float _Complex`) or `cf64`
+`{ re, im }` of the import's namespace. A struct member of either type is C's to read and write, as
+a member Volt can't read is, and a pointer to one is a `void*`.
+
+```c
+/* levels.h */
+enum level { LEVEL_LOW, LEVEL_HIGH = 10 };
+static inline enum level level_up(enum level l) { return l == LEVEL_LOW ? LEVEL_HIGH : l; }
+static inline long double gain(long double x) { return x * 1.5L; }
+static inline double _Complex turn(double _Complex z) { return z * __builtin_complex(0.0, 1.0); }
+```
+
+```volt
+use std::io;
+use { "levels.h" } as lv;
+
+fn main() -> void {
+    val l: lv::level = lv::level_up(lv::LEVEL_LOW);
+    match (l) {
+        .LEVEL_HIGH => { std::println("high: {} {}", l, l as i32 + 1); },
+        default => { std::println("low"); },
+    }
+    val n: i32 = lv::LEVEL_HIGH;
+    std::println("{} {}", n, lv::level_up(0) == lv::LEVEL_HIGH);
+    val z = lv::turn({ re: 1.0, im: 2.0 });
+    std::println("{} {} {}", lv::gain(2.0), z.re, z.im);
+}
+// expect: high: 10 11
+// expect: 10 true
+// expect: 3 -2 1
+```
+
 ### What doesn't come in
 
 - Function-like macros (`#define MAX(a, b) ...`): they have no types until they're used. Wrap one
   in a `static inline` function in a header of your own and import that.
-- A named C enum is its integer type (`i32`), with a constant per enumerator, not a Volt enum: C
-  code passes any integer there.
-- `long double`, `_Complex` and `va_list`: functions using them are left out.
+- `va_list`: functions using it are left out, as are varargs functions taking or giving a `long
+  double` or a `_Complex` (their wrapper would need the arguments' types).
 
 Every `typedef` is a type name you can write: `c::size_t`, `c::pthread_t`, a pointer typedef like
 Node-API's `napi_env`, a function-pointer typedef (a callback type), or a struct's second name. A

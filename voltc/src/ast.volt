@@ -344,6 +344,7 @@ struct fn_decl {
     is_export: bool;
     is_attach: bool;
     named: expr? = null; // `fn (expr)(...)`: a name worked out at compile time (in a comptime fn's body)
+    c_name: str? = null; // an imported C header's fn defined under another C name (a wrapper of cimport.volt's)
 }
 
 struct field {
@@ -416,6 +417,7 @@ struct enum_decl {
     backing: ty?;
     variants: std::vec<variant>;
     is_error: bool;
+    c_enum: bool = false; // a named C enum (cimport.volt): converts to and from integers, prints as one
 }
 
 // ATTACH is `attach Trait -> Target { fns }`; USE_C is `use { "header.h" } as alias;`

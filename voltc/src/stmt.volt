@@ -1057,8 +1057,9 @@ attach fn for_inner(this: checker&, f: for_loop&, want: u32?, span: span) -> com
                 range_it = true;
                 val le: expr& = lo.value;
                 val he: expr& = hi.value;
-                var a = try this.expr(le, null);
-                var b = try this.expr(he, a.ty);
+                // a C enum's end is its number
+                var a = this.c_enum_view(try this.expr(le, null));
+                var b = this.c_enum_view(try this.expr(he, a.ty));
                 if (a.lit != null && b.lit == null) {
                     a = try this.coerce(a, b.ty, le.span);
                 } else {
