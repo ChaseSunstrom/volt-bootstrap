@@ -231,7 +231,10 @@ fn main() -> void {
 
 A Volt function passes as a C function pointer where one is expected, and `extern "C" fn` with a
 body defines a function with the C calling convention. `export fn` also gives it an unmangled
-symbol name, so C code linked with the program (or a library) can call it.
+symbol name, so C code linked with the program (or a library) can call it. A library C programs call gets its header
+from `voltc bindings NAME --lang c`, which takes every shape: generics' instances, structs held by
+handles with their methods, owned values, traits and closures both ways
+([They call Volt](/volt-bootstrap/interop/other-languages/#they-call-volt)).
 
 ```volt
 use std::io;

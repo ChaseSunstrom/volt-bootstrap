@@ -711,6 +711,39 @@ fn array_len(n: i128, sp: span) -> compile_error!u64 {
 
 // ---------- functions ----------
 
+// an export fn's C symbol: its name; an attach fn's after its struct's (counter_add); an instance
+// of a generic one with its arguments after it (sum_i32)
+attach fn export_c_name(this: checker&, d: u32, name: str, is_attach: bool, params: std::vec<param_info>&, args: std::vec<gval>&) -> str {
+    val pkg = this.pkg_of(d) ?? "";
+    var n: std::string = {};
+    if (is_attach && params.len > 0) {
+        var t = params.at(0).ty;
+        match (*this.t.get(t)) {
+            .REF(x) => { t = x; },
+            .PTR(x) => { t = x; },
+            default => {},
+        }
+        n = ident_of(strip_pkg(this.ty_name(t).as_str(), pkg));
+        n.push('_');
+    }
+    n.append(name);
+    for (a&) in args.items() {
+        var g: std::string = {};
+        this.gval_name(&g, *a);
+        n.push('_');
+        n.append(ident_of(strip_pkg(g.as_str(), pkg)).as_str());
+    }
+    return this.intern(move n);
+}
+
+// a type's name without package pkg's own namespace (mathlib::vec2 is vec2 in mathlib)
+fn strip_pkg(name: str, pkg: str) -> str {
+    if (pkg.len > 0 && name.len > pkg.len + 2 && name[0..pkg.len] == pkg && name[pkg.len..pkg.len + 2] == "::") {
+        return name[pkg.len + 2..name.len];
+    }
+    return name;
+}
+
 // The fn instance for decl d with these generic args, made once per argument set: resolves the
 // signature, picks the C name, claims extern/export C symbols and adds an empty ir fn. Doesn't
 // check the body; use_fn queues that once the instance is called.
@@ -793,6 +826,8 @@ attach fn fn_inst(this: checker&, d: u32, args: std::vec<gval>, span: span) -> c
         }
         n.append(f.name);
         c_name = this.intern(move n);
+    } else if (f.is_export && f.c_name == null) {
+        c_name = this.export_c_name(d, f.name, f.is_attach, &params, &args);
     } else if (f.extern_abi != null || f.is_export) {
         c_name = f.c_name ?? f.name;
     } else if (f.name == "main" && path.len() == 0 && args.len == 0) {

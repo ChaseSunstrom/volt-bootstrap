@@ -2,6 +2,47 @@
 // part of bootstrap/check/mod.rs. The result is checker.ir, which a backend turns into code.
 use std::mem;
 
+// a generic export fn's instances: one per @instance(T, ...) on it (a type per generic parameter),
+// each its own C symbol (sum_i32)
+attach fn export_instances(this: checker&, d: u32) -> compile_error!void {
+    val it = this.item_of(d);
+    val e = this.new_env({ ns: this.dl(d).ns });
+    var any = false;
+    for (a&) in it.attrs.items() {
+        match (a.kind) {
+            .BUILTIN(n, g, xs&) => {
+                val ap = ptr_of(xs);
+                if (n != "instance" || ap == null) {
+                    continue;
+                }
+                var args: std::vec<gval> = {};
+                for (ga&) in ap->items() {
+                    match (*ga) {
+                        .TYPE(x&) => { put(&args, gval::TY(try this.resolve_type(x, e))); },
+                        .EXPR(x&) => {
+                            match (x.kind) {
+                                .PATH(p&) => {
+                                    val t: ty = { kind: type_kind::PATH(copy *p), span: x.span };
+                                    put(&args, gval::TY(try this.resolve_type(&t, e)));
+                                },
+                                default => { return fails(x.span, "@instance takes types: @instance(i32)"); },
+                            }
+                        },
+                    }
+                }
+                val i = try this.fn_inst(d, move args, a.span);
+                this.use_fn(i);
+                any = true;
+            },
+            default => {},
+        }
+    }
+    if (!any) {
+        return with_help(fails(it.span, "a generic export fn exports the instances it names"), S("name them: @attributes([@instance(i32)]), one type per generic parameter, once per instance"));
+    }
+    return;
+}
+
 // check the whole program from its roots (main, and every non-generic fn) into this.ir
 attach fn program(this: checker&) -> compile_error!void {
     val lib = this.opts.lib;
@@ -39,6 +80,20 @@ attach fn program(this: checker&) -> compile_error!void {
         if (!mine) {
             val pkg = this.pkg_of(d);
             mine = pkg != null && (pkg ?? "") == (lib ?? "");
+        }
+        if (mine && !((f.is_export || f.unexported) && this.fn_generics(d).len > 0)) {
+            for (a&) in this.item_of(d).attrs.items() {
+                if (attr_named(a, "instance")) {
+                    val e = fail(a.span, S("@instance goes on a generic export fn: it names an instance to export"));
+                    put(&this.errors, err_diag(&e));
+                }
+            }
+        }
+        if (mine && f.is_export && this.fn_generics(d).len > 0) {
+            this.export_instances(d) catch |e| {
+                put(&this.errors, err_diag(&e));
+            };
+            continue;
         }
         if (mine && (f.is_export || (f.body != null && f.spec == null && !f.is_comptime && !in_trait && this.fn_generics(d).len == 0))) {
             val i = this.fn_inst(d, {}, this.item_of(d).span) catch |e| {

@@ -100,9 +100,12 @@ These types cross as they are laid out in Volt, which is how C lays them out:
 Three more need converting at the edge. `voltc lib` adds that code when it builds the library:
 - **Owned text.** An export fn can return a `std::string`, or any type with
   `@attributes([@export_text("method")])`. The caller gets the text and frees it when it's done.
-- **Classes.** Other languages hold an `export struct` by a handle and never see its fields. An
-  export fn that returns one by value makes one, and the caller owns it. Export fns named
-  `NAME_method` that take it as `NAME&` first are its methods. voltc adds `NAME_free`.
+- **Classes.** Other languages hold an `export struct` by a handle and never see its fields, and so
+  is any struct C can't hold by value: one that owns something (it has a `delete`, or a field
+  does, like a `std::string`) or has a field without a C form. An export fn that returns one by
+  value makes one, and the caller owns it. Its methods are the `export attach fn`s on it, and
+  export fns named `NAME_method` that take it as `NAME&` first. voltc adds `NAME_free`, which runs
+  its `delete`.
 - **Callbacks.** A closure parameter `fn(A) -> R` takes a function from the other language. In C,
   that's a function pointer that gets the caller's data first, and then the data itself.
 
@@ -153,6 +156,87 @@ Each language gets these in its own style:
 | Swift | throws its error set's enum | `String` | `inout` arrays (written back), `T?` | a class with `close()`, freed by `deinit` | a closure |
 | Kotlin/Native | throws a `VoltException` subclass per error set | `String` | primitive arrays (in place) or `List`s, `T?` | an `AutoCloseable` class, freed by a `Cleaner` if not closed | a lambda |
 | Ruby | raises a `Mod::Error` subclass per error set | a `String` | `Array`s (written back), `nil` | a class with `close`, freed by the GC | a block or a `Proc` |
+
+A generic export fn exports the instances it names, one `@instance` per instance with a type per
+generic parameter. Each is a function of its own, named after its arguments:
+
+```volt
+<T: type>
+@attributes([@instance(i32), @instance(f64)])
+export fn biggest(xs: T[..]) -> T {
+    var best = xs[0];
+    for (x) in xs {
+        if (x > best) {
+            best = x;
+        }
+    }
+    return best;
+}
+```
+
+C calls `biggest_i32` and `biggest_f64`; C++ calls `biggest`, an overload per instance (each keeps
+its C name when two take the same parameters).
+
+### C and C++: every shape
+
+C and C++ take more than the other languages (whose bindings name what they don't take):
+
+- **Owned values as parameters.** Text (`std::string`) comes in as a `str` that Volt copies; a
+  handle by value is given to the fn, which deletes it (C++'s class gives it up).
+- **Traits.** A fn taking a trait (`s: shape&`, lent, or `s: shape`, which the fn takes over) takes
+  any object the other language has: in C a `shapelib_shape`, a table of the trait's functions
+  (each taking the object first), the object, and what frees it (null when lent). In C++ the trait
+  is an abstract class to subclass, passed as `shape &` or `std::unique_ptr<shape>`. A Volt value
+  of the trait comes back the same way: C calls its table and its `drop`, C++ gets a
+  `std::unique_ptr<shape>`.
+- **Closures taking and giving text and handles**, in callbacks and in traits' functions: text in
+  is a `str` (a `std::string` in C++), text back is owned (`volt_text`; a `std::string` in C++), a
+  handle is the class, and one Volt lends is a class that never frees it.
+- **Closures given back.** A fn returning `fn(A) -> R` gives a struct of the function, its data and
+  what frees it; in C++ a `std::function`, which frees it with its last copy. (A Volt fn value
+  borrows its closure, so what comes back is a function or one a longer-lived value holds.)
+
+```volt
+use std::string;
+
+public trait shape {
+    fn area(this) -> f64;
+    fn name(this) -> std::string;
+}
+
+public struct square {
+    side: f64;
+}
+
+attach shape -> square {
+    fn area(this) -> f64 {
+        return this.side * this.side;
+    }
+    fn name(this) -> std::string {
+        return std::string::from("square");
+    }
+}
+
+export fn describe(s: shape&) -> std::string {
+    var out = s.name();
+    out.append(" of area ");
+    out.append_int(@cast<i64>(s.area()));
+    return out;
+}
+```
+
+```cpp
+struct circle : shapelib::shape {
+    double r = 1;
+    double area() override { return 3 * r * r; }
+    std::string name() override { return "circle"; }
+};
+
+circle c;
+std::printf("%s\n", shapelib::describe(c).c_str()); // circle of area 3
+```
+
+An override that throws ends the program: Volt code doesn't unwind C++ exceptions.
 
 Python, JavaScript and TypeScript, C#, Java and Lua have pages of their own, each with both
 directions: [Python](/volt-bootstrap/interop/python/#python-calls-volt),
@@ -326,8 +410,9 @@ object.
     "returns": {"kind": "i64"}}]}
 ```
 
-The types are structs (with fields), plain enums (`tag` and `values`), error sets (`codes`), and
-classes, which are export structs. A class has its `free` function. A function's `name` is its C
+The types are structs (with fields), plain enums (`tag` and `values`), error sets (`codes`),
+classes (structs held by a handle), with their `free` function, and traits, with their `table`
+(the C struct of their `fns`, each taking the object first). A function's `name` is its C
 symbol. A function that belongs to a class has `class`, `method` and `static`, and `NAME_free`
 has `frees`. `doc` is the comment above the Volt function.
 
@@ -347,7 +432,8 @@ Each parameter and return type is `{"kind": ...}`:
 | `slice` (`of`), `optional` (`of`) | `{ T *ptr; size_t len }`, `{ T value; bool has }` |
 | `handle` (`class`, `owned`, `nullable`) | a pointer to the class; owned ones are freed with its `free` |
 | `function` (`params`, `returns`) | an `extern "C"` function pointer |
-| `callback` (`params`, `returns`) | two parameters: a C function that gets the data first, and the data (`void *`) |
+| `callback` (`params`, `returns`, `c_name`) | two parameters: a C function that gets the data first, and the data (`void *`); one a function returns is the struct `c_name` of the function, the data and its `drop` |
+| `object` (`trait`, `owned`) | a trait's object: its table, the object and its `drop` (null when only lent) |
 
 `version` changes when a field or a kind changes meaning.
 

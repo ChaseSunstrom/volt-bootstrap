@@ -447,19 +447,25 @@ fn compile_lib(c: cli&, first: sources&, s: sources&) -> std::box<checker> {
 }
 
 // the package's export fns that shims stand in for stop being exports (the shims take their names)
-fn unexport(items: std::vec<item>&, prefix: str, names: std::vec<std::string>&) -> void {
+fn unexport(items: std::vec<item>&, prefix: str, file: str, names: std::vec<std::string>&) -> void {
     for (it&) in items.items() {
         match (it.kind) {
             .FN(fd&) => {
                 if (!fd.is_export) {
                     continue;
                 }
+                // full::name@file:offset: two attach fns can share a name
                 var full = S(prefix);
                 full.append("::");
                 full.append(fd.name);
+                full.push('@');
+                full.append(file);
+                full.push(':');
+                full.append_uint(@cast<u64>(it.span.lo));
                 for (n&) in names.items() {
                     if (n.as_str() == full.as_str()) {
                         fd.is_export = false;
+                        fd.unexported = true;
                     }
                 }
             },
@@ -471,7 +477,7 @@ fn unexport(items: std::vec<item>&, prefix: str, names: std::vec<std::string>&) 
                     }
                     p.append(*seg);
                 }
-                unexport(inner, p.as_str(), names);
+                unexport(inner, p.as_str(), file, names);
             },
             default => {},
         }
@@ -599,8 +605,8 @@ fn compile_with(c: cli&, s: sources&, shim: shim_src*) -> std::box<checker> {
         std::process::exit(1);
     }
     if (shim != null) {
-        for (a&) in s.asts.items() {
-            unexport(a, "", &shim->unexport);
+        for (i) in 0..s.asts.len {
+            unexport(s.asts.at(i), "", s.files.at(i).name, &shim->unexport);
         }
     }
     // the runtime lives in the program's own C unit, never in a library

@@ -345,6 +345,7 @@ struct fn_decl {
     is_attach: bool;
     named: expr? = null; // `fn (expr)(...)`: a name worked out at compile time (in a comptime fn's body)
     c_name: str? = null; // an imported C header's fn defined under another C name (a wrapper of cimport.volt's)
+    unexported: bool = false; // an export fn a voltc lib shim stands in for (main.volt's unexport)
 }
 
 struct field {
