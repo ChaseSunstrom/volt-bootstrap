@@ -86,7 +86,7 @@ attach fn rust_made(this: checker&, d: u32, base: str, path: str, args: std::vec
         var prefix = copy line;
         prefix.push('\t');
         for (l) in text.as_str().lines().items() {
-            if (starts_with(l, prefix.as_str())) {
+            if (starts_with(l, prefix.as_str()) && !starts_with(l[prefix.len()..l.len], "::")) {
                 return with_help(fail(span, fmt2("{}: Rust doesn't take these types: {}", move what, S(l[prefix.len()..l.len]))), S("each instance a program calls is built by rustc, which checks the fn's bounds for its types"));
             }
         }
@@ -114,29 +114,61 @@ attach fn rust_made(this: checker&, d: u32, base: str, path: str, args: std::vec
     return null;
 }
 
-// asks each import's bolt for the instances the check wanted: adds them to its OUT/instances (what
-// was there stays: other programs share the import); whether any are new
+// asks each import's bolt for the instances the check wanted: appends them to its OUT/instances
+// (what was there stays: other programs share the import; appending keeps a line two runs add at
+// once), leaving out those rustc rejected (OUT/instances.failed: asking again changes nothing);
+// whether any are new. A file it can't write is an error
 attach fn ask_rust(this: checker&) -> bool {
     var added = false;
     for (w&) in this.rust_wants.items() {
         var file = copy w.out;
         file.append("/instances");
-        var text = std::fs::read_file(file.as_str()) catch |e| S("");
+        var failed = copy file;
+        failed.append(".failed");
+        var known = std::fs::read_file(file.as_str()) catch |e| S("");
+        val failed_text = std::fs::read_file(failed.as_str()) catch |e| S("");
+        known.append(failed_text.as_str());
         var have = false;
-        for (l) in text.as_str().lines().items() {
-            if (l == w.line.as_str()) {
+        for (l) in known.as_str().lines().items() {
+            // the line, or rustc's rejection of it (not of one of its methods: line\t::m)
+            val after = w.line.len() + 1;
+            if (l == w.line.as_str() || (starts_with(l, w.line.as_str()) && l.len > after && l[w.line.len()] == '\t' && !starts_with(l[after..l.len], "::"))) {
                 have = true;
             }
         }
         if (have) {
             continue;
         }
-        text.append(w.line.as_str());
-        text.push('\n');
-        std::fs::write_file(file.as_str(), text.as_str()) catch |e| {
-            continue;
+        var line = copy w.line;
+        line.push('\n');
+        std::fs::append_file(file.as_str(), line.as_str()) catch |e| {
+            val err = fail(NO_SPAN, fmt("use rust: can't write {}, where bolt reads the instances a program needs", copy file));
+            put(&this.errors, err_diag(&err));
+            return false;
         };
         added = true;
     }
     return added;
+}
+
+// compile, and again while the check asks bolt for instances of generic Rust fns and types it
+// hasn't made (they're made as its import runs again, and the program is checked without the last
+// check's imports), until nothing new is asked for (a check that didn't get far asks for less);
+// then one still not made is an error
+fn compile_rounds(files: std::vec<source_file>&, asts: std::vec<std::vec<item>>&, o0: opts) -> std::box<checker> {
+    var o = move o0;
+    val nfiles = files.len;
+    var chk = compile(files, asts, copy o);
+    var rounds = 0;
+    while (chk.rust_wants.len > 0 && !o.rust_again) {
+        rounds += 1;
+        if (!chk.ask_rust() || rounds > 4) {
+            o.rust_again = true;
+        }
+        while (files.len > nfiles) {
+            files.pop();
+        }
+        chk = compile(files, asts, copy o);
+    }
+    return chk;
 }

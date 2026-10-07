@@ -377,6 +377,13 @@ impl<'a> Gen<'a> {
                 p.ext.push(format!("{a}: u32"));
                 p.args.push(vn);
             }
+            // &T of a number in a generic's instance: lent in Volt, its value to the shim
+            Ty::Ref(x, false) if matches!(**x, Ty::Prim(_)) => {
+                let Ty::Prim(x) = **x else { return None };
+                p.param = format!("{vn}: {x}&");
+                p.ext.push(format!("{a}: {x}"));
+                p.args.push(format!("*{vn}"));
+            }
             Ty::Str | Ty::String => {
                 p.param = format!("{vn}: str");
                 p.ext.extend([format!("{a}: u8*"), format!("{a}_n: usize")]);
@@ -784,7 +791,6 @@ impl<'a> Gen<'a> {
         v
     }
 
-    /// the shim's source and the Volt source
     /// a generic function's Volt declaration: generic over its type parameters, marked
     /// @rust_generic (voltc calls the instance made for a call's types, NAME__T, and asks for the
     /// ones not made yet); its body only stands in until then
@@ -846,6 +852,7 @@ impl<'a> Gen<'a> {
         })
     }
 
+    /// the shim's source and the Volt source
     pub fn write(mut self, what: &str) -> (String, String) {
         let names: Vec<String> = self.types.keys().cloned().collect();
         for n in &names {

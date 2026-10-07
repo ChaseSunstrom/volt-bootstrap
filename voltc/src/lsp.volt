@@ -1129,7 +1129,7 @@ attach fn check_doc(this: lsp_server&, doc: lsp_doc&) -> std::vec<diag> {
             put(&o.pkg_files, { file: u.file, pkg: u.pkg });
         }
     }
-    val chk = compile(&s.files, &s.asts, move o);
+    val chk = compile_rounds(&s.files, &s.asts, move o);
     for (d&) in all_diags(&*chk).items() {
         if (d.span.file == file) {
             put(&diags, copy *d);

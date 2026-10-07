@@ -19,5 +19,10 @@ fn main() -> void {
     st.push(5);
     var names = geom::Stack<std::string>::new();
     names.push("volt");
-    std::println("stack {} {} {}", st.len(), st.top() ?? 0, names.top() ?? std::string::from("none"));
+    std::println("stack {} {} {} {}", st.len(), st.top() ?? 0, names.top() ?? std::string::from("none"), st.show());
+    var pts = geom::Stack<geom::Point>::new();
+    pts.push(geom::Point::new(1.0, 1.0));
+    val a = 3;
+    val b = 8;
+    std::println("points {} bigger {}", pts.len(), geom::bigger(&a, &b));
 }

@@ -137,7 +137,7 @@ export fn volt_vm_load(v: volt_vm&, name: str, source: str) -> vm_error!void {
             put(&o.pkg_files, { file: u.file, pkg: u.pkg });
         }
     }
-    val chk = compile(&s.files, &s.asts, move o);
+    val chk = compile_rounds(&s.files, &s.asts, move o);
     if (chk.errors.len > 0) {
         val diags = all_diags(&*chk);
         return v.fail(vm_error::COMPILE, report(&s.files, &diags, 0, false, 20).as_str());

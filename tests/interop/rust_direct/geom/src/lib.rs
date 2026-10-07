@@ -260,22 +260,40 @@ pub fn dup<T: Clone>(x: &T) -> T {
     x.clone()
 }
 
-// a generic type: a Volt type per instance a program names
+// a generic type: a Volt type per instance a program names (each impl's bounds apply to its own
+// methods: Stack<Point> has no show)
 pub struct Stack<T> {
     items: Vec<T>,
 }
 
-impl<T: Clone> Stack<T> {
+impl<T> Stack<T> {
     pub fn new() -> Stack<T> {
         Stack { items: Vec::new() }
     }
     pub fn push(&mut self, x: T) {
         self.items.push(x);
     }
+    pub fn len(&self) -> usize {
+        self.items.len()
+    }
+}
+
+impl<T: Clone> Stack<T> {
     pub fn top(&self) -> Option<T> {
         self.items.last().cloned()
     }
-    pub fn len(&self) -> usize {
-        self.items.len()
+}
+
+impl<T: std::fmt::Display> Stack<T> {
+    pub fn show(&self) -> String {
+        self.items.iter().map(|x| x.to_string()).collect::<Vec<_>>().join(",")
+    }
+}
+
+pub fn bigger<T: PartialOrd + Copy>(a: &T, b: &T) -> T {
+    if *a > *b {
+        *a
+    } else {
+        *b
     }
 }
