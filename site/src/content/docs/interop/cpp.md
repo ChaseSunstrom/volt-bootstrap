@@ -322,8 +322,9 @@ without RTTI, a cast or a type name stops the program, and `derived<T>()` on suc
 - Volt moves values by copying their bytes, which a C++ object that points into itself (as
   libstdc++'s `std::string` does) doesn't survive. So a class clang says isn't trivially copyable
   (`__is_trivially_copyable`, asked of the imported headers) is held by handle: moving it moves the
-  pointer, and the object stays where C++ made it. A handle made with `{}` is empty, and using it
-  stops the program.
+  pointer, and the object stays where C++ made it. A handle is never empty: `{}` makes the object
+  as C++'s `T{}` would, and for a class that can't be made from nothing (no default constructor)
+  `{}` is a compile error that says to use `T::new(...)`.
 - A handle class can't be reached through a C++ pointer (`T*`), a non-const reference result (`T&`)
   or a smart pointer or class template over it; those are left out, as is a class template with a
   field of one. A `const T&` result is copied into a new handle, so it's left out when the class

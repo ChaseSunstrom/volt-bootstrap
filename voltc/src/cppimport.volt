@@ -1452,7 +1452,13 @@ attach fn handle_class(this: cpp_gen&, c: clang::CXCursor, vn: str, q: str) -> v
         this.line(fmt("@attributes([@attach_as(\"{}_virtuals\")])", S(vn)).as_str());
     }
     this.line(fmt("struct {} {{", S(vn)).as_str());
-    this.line("    cpp: void* = null; // the C++ object (null when there's none, as in one made with {})");
+    // {} makes the object as C++'s T{} would, or is a compile error: a handle is never empty
+    val abstract0 = clang::clang_CXXRecord_isAbstract(c) != 0;
+    if (tr.defaults && tr.destructible && !abstract0) {
+        this.line(fmt("    cpp: void* = @cpp<void*>(\"new {}()\"); // the C++ object ({} makes one)", S(q)).as_str());
+    } else {
+        this.line(fmt2("    cpp: void* = @compile_error(\"C++'s {} can't be made from nothing: make one with {}::new(...)\"); // the C++ object", S(q), S(vn)).as_str());
+    }
     this.line("    borrowed: bool = false; // the object is something else's (as_Base made it): not deleted");
     if (maps) {
         this.line("    volt: void* = null; // the Volt side, when derive made the object (or it's a method's self)");
@@ -1493,7 +1499,7 @@ attach fn handle_class(this: cpp_gen&, c: clang::CXCursor, vn: str, q: str) -> v
     if (tr.copyable) {
         this.line(fmt2("attach fn copy(this: {}&) -> {} {{", S(vn), S(vn)).as_str());
         this.line("    if (this.cpp == null) {");
-        this.line("        return {};");
+        this.line("        return { cpp: null };");
         this.line("    }");
         this.line(fmt2("    return {{ cpp: @cpp<void*>(\"new {}(*({} *){{0}})\", this.cpp) }};", S(q), S(q)).as_str());
         this.line("}");

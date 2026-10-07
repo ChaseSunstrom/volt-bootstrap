@@ -883,6 +883,14 @@ attach fn literal(this: checker&, entries: std::vec<lit_entry>&, want: u32?, spa
 // value for a field left out of a struct literal
 attach fn field_default(this: checker&, sid: u32, f: field_info&, span: span) -> compile_error!tval {
     if (f.fallback) {
+        // a default that's @compile_error("why") says why this literal can't leave the field out:
+        // the error is the literal's (a C++ class that can't be made from nothing, say)
+        if (attr_named(&*f.fallback, "compile_error")) {
+            val why = attr_str(&*f.fallback);
+            if (why) {
+                return fail(span, S(why));
+            }
+        }
         val e = this.si(sid).env;
         return this.in_env_expr_as(e, f.fallback, f.ty);
     }

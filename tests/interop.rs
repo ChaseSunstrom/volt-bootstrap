@@ -1201,6 +1201,19 @@ fn c_versions_flag() {
     }
 }
 
+#[test]
+fn cpp_handles_are_never_empty() {
+    // {} default-constructs a class held by handle, in a variable or a struct's field; one with no
+    // default constructor makes {} an error at the literal
+    let e = Env::new("cpp-handle-default");
+    for backend in ["c", "llvm"] {
+        assert_eq!(ok(e.voltc(&["run", "cpp_handle_default.volt", "--backend", backend]), "voltc run cpp_handle_default.volt"), "anon anon 2 given\n", "{{}} handles ({backend})");
+    }
+    let o = e.voltc(&["check", "cpp_handle_no_default.volt"]);
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(!o.status.success() && err.contains("C++'s h::only can't be made from nothing") && err.contains("cpp_handle_no_default.volt:5"), "{{}} of a class with no default constructor: {err}");
+}
+
 /// is a C++ library's header on the usual include paths?
 fn installed(header: &str) -> bool {
     ["/usr/include", "/usr/local/include", "/opt/homebrew/include"].iter().any(|d| Path::new(d).join(header).is_file())
