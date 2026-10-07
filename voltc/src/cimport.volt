@@ -13,11 +13,11 @@ use std::mem;
 // the extern_abi of fns declared by an imported header (C's own prototype is used)
 val C_HEADER: str = "C header";
 
-// a C token; a string literal keeps no text (it only needs skipping)
+// a C token; a string literal keeps the text between its quotes (an asm label's symbol)
 enum ctok {
     ID: str,
     NUM: str,
-    STR,
+    STR: str,
     CHR: u32,
     P: str,
 }
@@ -92,7 +92,7 @@ fn c_lex(src: str) -> std::vec<ctok> {
             val body = src[s..e];
             i += 1;
             if (c == '"') {
-                put(&out, ctok::STR);
+                put(&out, ctok::STR(body));
             } else {
                 put(&out, ctok::CHR(char_value(body)));
             }
@@ -544,6 +544,7 @@ struct cfn {
     ret: ctype;
     variadic: bool;
     stat: bool = false; // static: defined in the header, no symbol of its own
+    label: str? = null; // its symbol, when an asm label names it (glibc's __REDIRECT)
 }
 
 struct cvar {
@@ -582,6 +583,7 @@ struct cdecls {
     anon: u32 = 0;
     last_params: std::vec<str?> = {}; // names in the param list read last (the declared fn's own)
     kr: bool = false;                    // ...which was a K&R identifier list
+    label: str? = null;                  // the asm label read last (the declared fn's)
     names: std::vec<std::string> = {}; // made-up names (anonymous tags) the others point into
     anon_in: std::map<str, anon_field> = {}; // anonymous tag -> the named field it types
 }
@@ -714,8 +716,21 @@ attach fn skip_noise(this: cparser&) -> bool? {
     val n = this.peek_id() ?? return false;
     if (n == "__attribute__" || n == "__attribute" || n == "__asm__" || n == "__asm" || n == "asm" || n == "__declspec" || n == "_Alignas" || n == "alignas" || n == "__typeof__") {
         this.i += 1;
+        val start = this.i;
         if (this.is("(") && !this.skip_group()) {
             return null;
+        }
+        if (n == "__asm__" || n == "__asm" || n == "asm") {
+            // a label: its string literals joined
+            var label = S("");
+            for (k&) in this.t[start..this.i] {
+                match (*k) {
+                    .STR(x) => { label.append(x); },
+                    default => {},
+                }
+            }
+            put(&this.d.names, move label);
+            this.d.label = this.d.names.at(this.d.names.len - 1).as_str();
         }
         return true;
     }
@@ -1337,6 +1352,7 @@ attach fn top(this: cparser&) -> void {
         if (this.peek() == null || this.is(";")) {
             return;
         }
+        this.d.label = null;
         var dc = this.declarator(copy base) ?? return;
         val name = dc.name ?? return;
         if (this.eat("=")) {
@@ -1387,7 +1403,7 @@ attach fn top(this: cparser&) -> void {
                         }
                         put(&cps, { name: pn, ty: copy *ps.at(i) });
                     }
-                    put(&this.d.fns, { name: name, params: move cps, ret: copy *ret.ptr, variadic: variadic, stat: stat });
+                    put(&this.d.fns, { name: name, params: move cps, ret: copy *ret.ptr, variadic: variadic, stat: stat, label: this.d.label });
                 },
                 default => {
                     if (!stat) {
@@ -1480,6 +1496,8 @@ struct cmapper {
     enum_ints: std::map<str, str> = {};  // enum tag -> the integer type its values take
     in_fn: bool = false;                 // mapping a function pointer's type
     complex: std::vec<str> = {};         // the complex structs wrappers use: cf32, cf64
+    cf32: str = "cf32";                  // their Volt names (with _ added past a header's own)
+    cf64: str = "cf64";
 }
 
 // a Volt type naming `name`
@@ -1597,12 +1615,21 @@ attach fn needs_wrap(this: cmapper&, t: ctype&) -> bool {
     }
 }
 
-// the complex struct standing for C's complex of real type e: cf32 for float, else cf64
+// the complex struct standing for C's complex of real type e: cf32 for float, else cf64 (volt_cf32,
+// volt_cf64 to C)
 fn complex_name(e: str) -> str {
     if (e == "float") {
         return "cf32";
     }
     return "cf64";
+}
+
+// complex struct n's Volt name
+attach fn complex_volt(this: cmapper&, n: str) -> str {
+    if (n == "cf32") {
+        return this.cf32;
+    }
+    return this.cf64;
 }
 
 // t as a wrapper's parameter or result: a long double is an f64, a complex its struct
@@ -1619,9 +1646,17 @@ attach fn wrap_ty(this: cmapper&, t: ctype&) -> ty? {
             if (!have) {
                 put(&this.complex, n);
             }
-            return this.path_ty(n);
+            return this.path_ty(this.complex_volt(n));
         },
         default => { return this.ty_of(t); },
+    }
+}
+
+// is t a pointer c_text spells itself (by its pointee's width, not the header's name)?
+fn spelled_ptr(t: ctype&) -> bool {
+    match (*t) {
+        .PTR(x) => { return true; },
+        default => { return false; },
     }
 }
 
@@ -1666,9 +1701,11 @@ attach fn c_text(this: cmapper&, t: ctype&, c_names: std::map<str, str>&) -> std
 
 // a static inline C function `volt_cw_NAME` calling fn f with its long doubles as doubles and its
 // complexes as volt_cf32/volt_cf64 { re, im }; none if a type can't be written. It calls f through a
-// declaration of its own bound to f's symbol (volt_cr_NAME): a header may declare f only under a
-// feature macro the program's C doesn't set (python's strtold_l), and an unused wrapper is never
-// compiled into a call; a static f, only its header's, by its name
+// declaration of its own bound to f's symbol (volt_cr_NAME; its asm label's, as glibc's __REDIRECT
+// gives one): a header may declare f only under a feature macro the program's C doesn't set
+// (python's strtold_l), and an unused wrapper is never compiled into a call; a static f, only its
+// header's, by its name. A pointer c_text spells by width (long long * for a long *) passes as a
+// void *, which C converts to f's own
 attach fn wrapper(this: cmapper&, f: cfn&, c_names: std::map<str, str>&) -> std::string? {
     var params = S("");
     var args = S("");
@@ -1700,6 +1737,9 @@ attach fn wrapper(this: cmapper&, f: cfn&, c_names: std::map<str, str>&) -> std:
             default => {
                 val t = this.c_text(&p.ty, c_names) ?? return null;
                 params.append(t.as_str());
+                if (spelled_ptr(&p.ty)) {
+                    args.append("(void *)");
+                }
                 args.append(a.as_str());
                 orig.append(t.as_str());
             },
@@ -1715,7 +1755,10 @@ attach fn wrapper(this: cmapper&, f: cfn&, c_names: std::map<str, str>&) -> std:
     if (!f.stat) {
         callee = fmt("volt_cr_{}", S(f.name));
     }
-    val call = fmt2("{}({})", copy callee, move args);
+    var call = fmt2("{}({})", copy callee, move args);
+    if (spelled_ptr(&f.ret)) {
+        call = fmt("(void *){}", move call);
+    }
     var ret = S("double");
     var orig_ret = S("long double");
     var body = fmt("return {};", copy call);
@@ -1741,7 +1784,12 @@ attach fn wrapper(this: cmapper&, f: cfn&, c_names: std::map<str, str>&) -> std:
     if (!f.stat) {
         // the symbol, with the platform's prefix (Mach-O's _)
         out.append("#ifndef VOLT_CW_SYM\n#define VOLT_CW_STR2(x) #x\n#define VOLT_CW_STR(x) VOLT_CW_STR2(x)\n#define VOLT_CW_SYM(n) __asm__(VOLT_CW_STR(__USER_LABEL_PREFIX__) n)\n#endif\n");
-        out.append(fmt4("extern {} {}({}) VOLT_CW_SYM(\"{}\");\n", move orig_ret, copy callee, move orig, S(f.name)).as_str());
+        var sym = fmt("VOLT_CW_SYM(\"{}\")", S(f.name));
+        val label = f.label;
+        if (label) {
+            sym = fmt("__asm__(\"{}\")", S(label));
+        }
+        out.append(fmt4("extern {} {}({}) {};\n", move orig_ret, copy callee, move orig, move sym).as_str());
     }
     out.append(fmt4("static __inline__ {} volt_cw_{}({}) {{ {} }}", move ret, S(f.name), move params, move body).as_str());
     return out;
@@ -2338,6 +2386,9 @@ attach fn c_items(this: checker&, d: cdecls&, res: c_imported&, span: span) -> v
         taken.put(n, true);
         put(&res.items, m.citem(item_kind::ALIAS(n, move vt)));
     }
+    // the complex structs' names (past a header's own cf64)
+    m.cf32 = this.untaken(&taken, "cf32");
+    m.cf64 = this.untaken(&taken, "cf64");
     // functions (the first declaration wins); one with a param or return type Volt can't use is
     // skipped. One taking or giving a long double or a _Complex is called through a wrapper (C
     // converts them: the ABI is the C compiler's), unless it's varargs
@@ -2401,7 +2452,7 @@ attach fn c_items(this: checker&, d: cdecls&, res: c_imported&, span: span) -> v
         var fields: std::vec<field> = {};
         put(&fields, { name: "re", ty: m.path_ty(re), fallback: null, vis: vis::PUBLIC, span: span });
         put(&fields, { name: "im", ty: m.path_ty(re), fallback: null, vis: vis::PUBLIC, span: span });
-        put(&res.items, m.citem(item_kind::STRUCT({ name: *n, spec: null, fields: move fields, is_extern: true, is_comptime: false, c_name: this.intern(fmt("volt_{}", S(*n))) })));
+        put(&res.items, m.citem(item_kind::STRUCT({ name: m.complex_volt(*n), spec: null, fields: move fields, is_extern: true, is_comptime: false, c_name: this.intern(fmt("volt_{}", S(*n))) })));
     }
     for (w&) in wraps.items() {
         put(&res.includes, copy *w);
@@ -2457,6 +2508,15 @@ attach fn c_items(this: checker&, d: cdecls&, res: c_imported&, span: span) -> v
         val pt: pat = { kind: pat_kind::BIND(k.name), span: span };
         put(&res.items, m.citem(item_kind::GLOBAL({ mutable: false, is_comptime: false, is_static: false, pat: pt, ty: m.path_ty(tn), init: move init, span: span, c_name: null })));
     }
+}
+
+// base, with _ added while a header's type has the name (a header's own cf64)
+attach fn untaken(this: checker&, taken: std::map<str, bool>&, base: str) -> str {
+    var n = S(base);
+    while (taken.get(n.as_str()) != null) {
+        n.push('_');
+    }
+    return this.intern(move n);
 }
 
 // x as a Volt integer literal (a negative one is -literal)

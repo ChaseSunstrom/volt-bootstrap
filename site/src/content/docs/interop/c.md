@@ -111,7 +111,8 @@ function written against the numbers passes as a callback.
 `long double` and `_Complex` have no Volt type. A function taking or giving one by value is called
 through a small C wrapper that converts it: a `long double` is an `f64` (what it holds past an
 `f64`'s precision is lost), and a complex is the struct `cf32` (for `float _Complex`) or `cf64`
-`{ re, im }` of the import's namespace. A struct member of either type is C's to read and write, as
+`{ re, im }` of the import's namespace (`cf64_` when the header has a type named `cf64`, and so on
+for `cf32`). A struct member of either type is C's to read and write, as
 a member Volt can't read is, and a pointer to one is a `void*`.
 
 ```c
