@@ -27,7 +27,7 @@ doesn't map, with the way around each.
 | namespace variables, constants clang can't work out | `name()`: a reference into a variable (or a copy and `set_name(v)`), a constant read through a wrapper |
 | `const`/`constexpr` constants | `val`s |
 | enums (scoped or not) | enums |
-| virtual methods | overridden by name in an `attach C -> T` block; `C::derive` makes the subclass (no RTTI, no call through a table) |
+| virtual methods | overridden by name in an `attach C -> T` block; `C::derive` makes the subclass (no RTTI; C++ calls each override directly, not through a table of Volt functions) |
 | public bases (one reached by two paths, by its path), `dynamic_cast`, `typeid` | `as_Base()`, `as_B1_A()`, `as_Derived()`, `cpp_type_name()` |
 | `T*`, `T&`, `T&&`, `const T&`, `std::unique_ptr<T>`, `std::shared_ptr<T>` of a class held by handle | borrowed handles (`T?` for a pointer), owning ones for a `unique_ptr`; a `shared_ptr` is a handle whose `get()` borrows |
 | exceptions | `try_` forms (for every function that can throw) returning a `cpp_error` naming the exception; one thrown under a Volt callback rethrown to the C++ that called it, with its own type |

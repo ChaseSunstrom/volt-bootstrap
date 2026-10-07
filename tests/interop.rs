@@ -1122,6 +1122,22 @@ fn cpp_derive() {
 }
 
 #[test]
+fn cpp_derive_any() {
+    // a Volt subclass overriding methods that take a std::map, a class held by handle, a
+    // std::function, a std::vector to fill and a T&&, and give back a std::map; a std::map ordered
+    // by std::greater isn't stdcxx::map<i32, i32>; copying the derived object copies the Volt side;
+    // a derived Mid seen through as_Base(); a derived object C++ hands back is still known
+    // (derived<T>(), cpp_type_name(), deleted as what it is: the base's destructor isn't virtual),
+    // with or without RTTI
+    let e = Env::new("cpp-derive-any");
+    let want = "31 10 701 140 4\ncopy 1031 1001\nsummer 1001 gone\n7 summer\nsink 109 top 5\nmid -1 plain true\nsame 1 summer\npassed 1031 summer\nsummer 1001 gone\nsummer 1 gone\n";
+    for backend in ["c", "llvm"] {
+        assert_eq!(ok(e.voltc(&["run", "cpp_derive2.volt", "--backend", backend]), "voltc run cpp_derive2.volt"), want, "C++ derive, any types ({backend})");
+    }
+    assert_eq!(ok(e.voltc_cxx(&["run", "cpp_derive2.volt"], Some("c++ -fno-rtti")), "voltc run cpp_derive2.volt (-fno-rtti)"), want, "C++ derive, any types, without RTTI");
+}
+
+#[test]
 fn cpp_rtti() {
     // casts between classes (multiple inheritance, a base held by value), dynamic types, and a
     // cpp_error variant each exception: the standard ones and the library's own
@@ -1177,7 +1193,7 @@ fn cpp_versions() {
     // headers for C++98 (what C++17 removed: auto_ptr, throw(), register), 11, 17, 20 and 23 in one
     // program, each read and compiled under its own standard
     let e = Env::new("cpp-versions");
-    let want = "5 42\n49 3 2\n4 1 107\n4 11\n5 15 5\n";
+    let want = "5 42\n0 v98::Shape\n49 3 2\n4 1 107\n4 11\n5 15 5\n";
     for backend in ["c", "llvm"] {
         assert_eq!(ok(e.voltc(&["run", "cpp_versions.volt", "--backend", backend]), "voltc run cpp_versions.volt"), want, "C++ versions ({backend})");
     }

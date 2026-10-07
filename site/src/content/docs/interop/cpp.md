@@ -352,13 +352,25 @@ fn main() -> void {
   `Widget`), and so do private ones that are pure. A private one that isn't pure (or one inherited
   through a base that isn't public) stays `C`'s: the subclass couldn't call `C`'s own when the
   struct doesn't override it.
-- What crosses into an override: numbers, `bool`, enums, pointers, strings (`str`, a view for the
-  call), classes Volt holds by value (a copy, or a reference for `T&`) and classes held by handle
-  (a handle Volt borrows for the call). What comes back: those numbers, enums and pointers, a class
-  held by value, and `std::string`. A virtual method with other types stays `C`'s (a comment in the
-  generated source says so); a pure one with other types means the class can't be derived from.
-- `derive` is there for a class with a virtual method, a public virtual destructor, and not
-  `final`. Copying a derived handle copies only the `C` part, as in C++.
+- What crosses into an override is what the import makes of each type anywhere else: numbers,
+  `bool`, enums and pointers as they are (a reference for a non-const `T&`), strings as `str` (a view
+  for the call), a class Volt holds by value (a copy, or a reference for `T&`), a class held by
+  handle as a handle Volt borrows for the call (a `const std::map<int, int>&` is a
+  `stdcxx::map<i32, i32>&`), and the rest in their Volt forms (a `std::function` is a
+  `stdcxx::function`, a `std::optional<int>` an `i32?`). A `T&&` comes as a `const T&` does. What
+  comes back is any of those too, made into C++'s result type (a `std::vector<int>` from an
+  `i32[..]`, a `std::map` the override made). A virtual method only C++ can override stays `C`'s
+  (a comment in the generated source says so): one taking a non-const reference to text, as
+  anywhere in an import ([limits](#limits)), or giving back a reference.
+- `derive` is there for a class with a virtual method that isn't `final`; its destructor needn't be
+  virtual. Volt deletes a derived object as what it is, its Volt value with it; C++ deleting one
+  through a `C*` whose destructor isn't virtual is C++'s own undefined behavior, as for any
+  subclass.
+- `copy` of a derived handle copies the whole object: the `C` part with `C`'s copy constructor (a
+  protected one, or an abstract class's, too) and the Volt value with its type's `copy` (a type
+  that can't be copied stops the program there, saying so). An abstract class's handle has `copy`
+  for that; on an object C++ made (of a C++ subclass) it stops the program, as C++ can't copy one
+  through its base. `cpp_type_name()` of a derived object is the Volt type's name.
 
 ### What it costs
 
@@ -369,18 +381,19 @@ call to a C++ subclass does. A type with methods of the same name for two classe
 `Listener` and of a `Plugin`) overrides each class's separately.
 
 Nothing here needs RTTI, so a program built with `-fno-rtti` (`CXX="c++ -fno-rtti"`) subclasses the
-same way. `derived<T>()` and the protected members know a derived object from the handle `derive`
-made (or `self`, in an override). Only these use RTTI: `as_Derived()` casts, `cpp_type_name()`, and
-`derived<T>()` or a protected method on an object C++ handed back (a handle `derive` didn't make);
-without RTTI, a cast or a type name stops the program, and `derived<T>()` on such a handle is
-`null`.
+same way. `derived<T>()`, `cpp_type_name()`, `copy`, deleting and the protected members know a
+derived object from the handle `derive` made (or `self`, in an override), and from one C++ handed
+back (`Base&` or `std::unique_ptr<Base>` results): with RTTI by `dynamic_cast`, without it by a table
+of the objects `derive` made (an object made or deleted takes a lock to update it). What's C++'s own
+rule: `as_Derived()` between two C++ classes is a `dynamic_cast`, and so is `cpp_type_name()` of an
+object `derive` didn't make; without RTTI, either stops the program saying so.
 
 ## Limits
 
 - What doesn't map is left out, with a comment in the generated source: a non-const reference to a
-  standard library string or vector, a `std::function` whose signature has a class in it (other than
-  text). A function whose parameters or result only a call settles is
-  [called per use](#calls-worked-out-per-use) instead.
+  standard library string (a vector's is a `stdcxx::vector<T>&` handle, changed in place), a
+  `std::function` whose signature has a class in it (other than text). A function whose parameters
+  or result only a call settles is [called per use](#calls-worked-out-per-use) instead.
 - A loop over a C++ range holds its iterators in Volt's own words, so they must be trivially copyable
   and destructible (the standard library's and the views' are); C++ reads ranges under C++11 or
   newer.
