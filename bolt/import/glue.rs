@@ -47,6 +47,18 @@ pub enum Ty {
     Alloc,
     /// a generic function's type parameter (each instance has a type in its place)
     Generic(String),
+    /// a closure: its parameters, result, how it's passed (in) or held (out), and whether it can
+    /// only be called once
+    Fn(Vec<Ty>, Box<Ty>, FnPass, bool),
+}
+
+/// how a closure crosses: by value (impl Fn, a generic F), lent (&dyn Fn, &mut dyn FnMut), or boxed
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum FnPass {
+    Value,
+    Ref,
+    MutRef,
+    Boxed,
 }
 
 pub const PRIMS: &[&str] = &["i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "isize", "usize", "f32", "f64", "bool"];
@@ -189,6 +201,11 @@ pub trait Lang {
     fn type_glue(&self, g: &Gen, ti: &TypeInfo) -> String;
     /// what every shim has: its helpers and the functions freeing what Volt was given
     fn prelude(&self, g: &Gen) -> String;
+    /// a closure handed to Volt: the shim functions calling it (SYM_call(h, args.., out)) and
+    /// freeing it (SYM_drop(h))
+    fn fn_glue(&self, _g: &Gen, _sym: &str, _ps: &[Ty], _r: &Ty, _once: bool) -> Option<String> {
+        None
+    }
     /// a shim whose functions are found while the program runs (not linked): the Volt source, in
     /// the shim namespace, of `fn load(slot: void**, name: str) -> void*`, which finds function
     /// `name` (once: slot keeps it)
@@ -233,6 +250,10 @@ pub struct Gen<'a> {
     /// the shim's symbols so far (overloads get one each), and the Volt signatures
     syms: BTreeSet<String>,
     sigs: BTreeSet<String>,
+    /// closure signatures Volt gives (a trampoline each: tramp_K) and takes back (a handle type
+    /// each: fn_K), by their Volt fn type
+    tramps: Vec<String>,
+    fn_handles: Vec<String>,
 }
 
 pub fn zero(p: &str) -> &'static str {
@@ -288,7 +309,7 @@ impl<'a> Gen<'a> {
                 break;
             }
         }
-        Gen { m, alias: alias.to_string(), lang, types, vec_elems: BTreeSet::new(), strs: false, errors: false, shim: String::new(), ext: String::new(), helpers: String::new(), modules: BTreeMap::new(), left_out: Vec::new(), syms: BTreeSet::new(), sigs: BTreeSet::new() }
+        Gen { m, alias: alias.to_string(), lang, types, vec_elems: BTreeSet::new(), strs: false, errors: false, shim: String::new(), ext: String::new(), helpers: String::new(), modules: BTreeMap::new(), left_out: Vec::new(), syms: BTreeSet::new(), sigs: BTreeSet::new(), tramps: Vec::new(), fn_handles: Vec::new() }
     }
 
     /// the Volt declaration of shim function sym (params: "name: type"): an extern "C" fn, or for
@@ -376,6 +397,15 @@ impl<'a> Gen<'a> {
                 p.param = format!("{vn}: u32");
                 p.ext.push(format!("{a}: u32"));
                 p.args.push(vn);
+            }
+            Ty::Fn(ps, r, _, _) => {
+                // a Volt fn value: a trampoline that calls it, and the value as its data (lent for
+                // the call: Volt's closure has to outlive what Rust does with it)
+                let k = self.tramp(ps, r)?;
+                let ns = self.shim_ns();
+                p.param = format!("{vn}: {}", self.fn_volt_ty(ps, r)?);
+                p.ext.extend([format!("{a}: void*"), format!("{a}_env: void*")]);
+                p.args.extend([format!("@cast<void*>({ns}::tramp_{k})"), format!("@cast<void*>(&{vn})")]);
             }
             // &T of a number in a generic's instance: lent in Volt, its value to the shim
             Ty::Ref(x, false) if matches!(**x, Ty::Prim(_)) => {
@@ -468,6 +498,11 @@ impl<'a> Gen<'a> {
         Some(match t {
             Ty::Prim(x) => VoltOut { ext: vec![format!("{o}: {x}*")], locals: vec![format!("var {o}: {x} = {};", zero(x))], args: vec![format!("&{o}")], value: o.to_string(), ty: x.to_string() },
             Ty::Char => VoltOut { ext: vec![format!("{o}: u32*")], locals: vec![format!("var {o}: u32 = 0;")], args: vec![format!("&{o}")], value: o.to_string(), ty: "u32".into() },
+            // a Rust closure: a handle (the value is returned, so its type gives the literal's)
+            Ty::Fn(ps, r, _, once) => {
+                let k = self.fn_handle(ps, r, *once)?;
+                VoltOut { ext: vec![format!("{o}: void**")], locals: vec![format!("var {o}: void* = null;")], args: vec![format!("&{o}")], value: format!("{{ h: {o} }}"), ty: format!("{ns}::fn_{k}") }
+            }
             Ty::Str | Ty::String => VoltOut {
                 ext: vec![format!("{o}: u8**"), format!("{o}_n: usize*")],
                 locals: vec![format!("var {o}: u8* = null;"), format!("var {o}_n: usize = 0;")],
@@ -789,6 +824,111 @@ impl<'a> Gen<'a> {
             }
         }
         v
+    }
+
+    /// a type in a closure's signature, as Volt spells it (numbers, bool, char as u32, str)
+    fn cb_volt_ty(t: &Ty) -> Option<String> {
+        Some(match t {
+            Ty::Unit => "void".into(),
+            Ty::Prim(x) => x.to_string(),
+            Ty::Char => "u32".into(),
+            Ty::Str => "str".into(),
+            _ => return None,
+        })
+    }
+
+    /// a closure's Volt type: fn(A, B) -> R
+    fn fn_volt_ty(&self, ps: &[Ty], r: &Ty) -> Option<String> {
+        let mut a = Vec::new();
+        for p in ps {
+            a.push(Self::cb_volt_ty(p)?);
+        }
+        Some(format!("fn({}) -> {}", a.join(", "), Self::cb_volt_ty(r)?))
+    }
+
+    /// the trampoline for Volt closures of this signature, which the shim calls with the closure as
+    /// its data: tramp_K (made once per signature)
+    fn tramp(&mut self, ps: &[Ty], r: &Ty) -> Option<usize> {
+        let ft = self.fn_volt_ty(ps, r)?;
+        if let Some(k) = self.tramps.iter().position(|x| *x == ft) {
+            return Some(k);
+        }
+        let k = self.tramps.len();
+        let mut params = vec!["env: void*".to_string()];
+        let mut args = Vec::new();
+        for (i, p) in ps.iter().enumerate() {
+            match p {
+                Ty::Str => {
+                    params.extend([format!("a{i}: u8*"), format!("a{i}_n: usize")]);
+                    args.push(format!("@cast<str>(@slice(a{i}, a{i}_n))"));
+                }
+                _ => {
+                    params.push(format!("a{i}: {}", Self::cb_volt_ty(p)?));
+                    args.push(format!("a{i}"));
+                }
+            }
+        }
+        if matches!(r, Ty::Str) {
+            return None;
+        }
+        let rt = Self::cb_volt_ty(r)?;
+        let call = format!("(*f)({})", args.join(", "));
+        let body = if rt == "void" { format!("{call};") } else { format!("return {call};") };
+        let _ = write!(self.helpers, "\n    // calls a Volt {ft} for the shim (the closure is its data)\n    extern \"C\" fn tramp_{k}({}) -> {rt} {{\n        val f = @cast<({ft})*>(env);\n        {body}\n    }}\n", params.join(", "));
+        self.tramps.push(ft);
+        Some(k)
+    }
+
+    /// the handle type of closures of this signature the shim gives Volt: fn_K, called with
+    /// call(...), freed when it goes (made once per signature)
+    fn fn_handle(&mut self, ps: &[Ty], r: &Ty, once: bool) -> Option<usize> {
+        let ft = format!("{}{}", if once { "once " } else { "" }, self.fn_volt_ty(ps, r)?);
+        if let Some(k) = self.fn_handles.iter().position(|x| *x == ft) {
+            return Some(k);
+        }
+        let k = self.fn_handles.len();
+        let sym = format!("volt_{}_{}_fn{k}", self.lang.short(), self.alias);
+        let glue = self.lang.fn_glue(self, &sym, ps, r, once)?;
+        let mut vps = Vec::new();
+        let mut ext = vec!["h: void*".to_string()];
+        let mut args = vec!["this.h".to_string()];
+        for (i, p) in ps.iter().enumerate() {
+            vps.push(format!("a{i}: {}", Self::cb_volt_ty(p)?));
+            match p {
+                Ty::Str => {
+                    ext.extend([format!("a{i}: u8*"), format!("a{i}_n: usize")]);
+                    args.extend([format!("@cast<u8*>(a{i}.ptr)"), format!("a{i}.len")]);
+                }
+                _ => {
+                    ext.push(format!("a{i}: {}", Self::cb_volt_ty(p)?));
+                    args.push(format!("a{i}"));
+                }
+            }
+        }
+        let rt = Self::cb_volt_ty(r)?;
+        if matches!(r, Ty::Str) {
+            return None;
+        }
+        let mut body = Vec::new();
+        if rt != "void" {
+            ext.push(format!("o: {rt}*"));
+            args.push("&o".into());
+            body.push(format!("var o: {rt} = {};", match r { Ty::Prim(x) => zero(x), _ => "0" }));
+        }
+        let ns = self.shim_ns();
+        body.push(format!("{ns}::{sym}_call({});", args.join(", ")));
+        if rt != "void" {
+            body.push("return o;".into());
+        }
+        let decl = self.ext_fn(&format!("{sym}_call"), &ext, "void");
+        self.ext.push_str(&decl);
+        let decl = self.ext_fn(&format!("{sym}_drop"), &["h: void*".to_string()], "void");
+        self.ext.push_str(&decl);
+        let lines: String = body.iter().map(|l| format!("        {l}\n")).collect();
+        let _ = write!(self.helpers, "\n    // a {} closure, {ft}: call(...) calls it; it's freed when it goes\n    struct fn_{k} {{\n        h: void* = null;\n    }}\n\n    attach fn call(this: fn_{k}&, {}) -> {rt} {{\n        if (this.h == null) {{\n            @panic(\"a {} closure called after it was given away\");\n        }}\n{lines}    }}\n\n    attach fn delete(this: fn_{k}&) -> void {{\n        if (this.h != null) {{\n            {ns}::{sym}_drop(this.h);\n            this.h = null;\n        }}\n    }}\n", self.lang.name(), vps.join(", "), self.lang.name());
+        self.shim.push_str(&glue);
+        self.fn_handles.push(ft);
+        Some(k)
     }
 
     /// a generic function's Volt declaration: generic over its type parameters, marked

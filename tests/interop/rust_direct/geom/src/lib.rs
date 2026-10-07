@@ -297,3 +297,39 @@ pub fn bigger<T: PartialOrd + Copy>(a: &T, b: &T) -> T {
         *b
     }
 }
+
+// closures: Volt's passed in (impl Fn, a bound in a where clause, impl FnMut over text, a Box<dyn
+// Fn>), Rust's handed out (impl Fn, Box<dyn FnMut>, impl FnOnce)
+pub fn each_word(s: &str, mut f: impl FnMut(&str)) {
+    for w in s.split_whitespace() {
+        f(w);
+    }
+}
+
+pub fn count_with<F>(xs: &[i32], f: F) -> usize
+where
+    F: Fn(i32) -> bool,
+{
+    xs.iter().filter(|x| f(**x)).count()
+}
+
+pub fn call_boxed(f: Box<dyn Fn(i32) -> i32>) -> i32 {
+    f(10)
+}
+
+pub fn adder(n: i32) -> impl Fn(i32) -> i32 {
+    move |x| x + n
+}
+
+pub fn counter() -> Box<dyn FnMut() -> u32> {
+    let mut c = 0;
+    Box::new(move || {
+        c += 1;
+        c
+    })
+}
+
+pub fn initial_of(word: &str) -> impl FnOnce() -> char {
+    let c = word.chars().next().unwrap_or('?');
+    move || c
+}

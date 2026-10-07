@@ -16,7 +16,7 @@
 //   a fieldless enum -> a Volt enum; pub const of a number, bool or string -> val; pub mod -> namespace
 // Generics, traits, closures and references returned into Rust-owned data are left out, with a
 // comment in the Volt source (VOLT_SHOW_IMPORT=1 makes voltc print it).
-use super::glue::{number, prim, Gen, Kind, Lang, Model, Recv, ShimOut, ShimParam, Sig, Ty, TypeDef, TypeInfo};
+use super::glue::{number, prim, FnPass, Gen, Kind, Lang, Model, Recv, ShimOut, ShimParam, Sig, Ty, TypeDef, TypeInfo};
 use super::{arg_path, fresh, save, stamp, Made, Req};
 use crate::foreign::{int_value, lex, tok_text, toks_line, Cur, Tok};
 use crate::json::Json;
@@ -456,6 +456,33 @@ fn rust_ty(t: &Ty, lib: &str, types: &BTreeMap<String, Vec<String>>) -> String {
     }
 }
 
+/// a closure as Rust holds it for Volt: dyn FnMut(A) -> R (or FnOnce), as Rust names its types
+fn dyn_fn(ps: &[Ty], r: &Ty, once: bool) -> Option<String> {
+    let mut a = Vec::new();
+    for p in ps {
+        a.push(match p {
+            Ty::Prim(x) => x.to_string(),
+            Ty::Char => "char".into(),
+            Ty::Str => "&str".into(),
+            _ => return None,
+        });
+    }
+    let ret = match r {
+        Ty::Unit => String::new(),
+        Ty::Prim(x) => format!(" -> {x}"),
+        Ty::Char => " -> char".into(),
+        _ => return None,
+    };
+    Some(format!("dyn {}({}){ret}", if once { "FnOnce" } else { "FnMut" }, a.join(", ")))
+}
+
+/// what a closure's handle points at: Box<dyn FnMut(..)>, or Option<Box<dyn FnOnce(..)>> (taken
+/// by its one call)
+fn held_fn(ps: &[Ty], r: &Ty, once: bool) -> Option<String> {
+    let d = dyn_fn(ps, r, once)?;
+    Some(if once { format!("Option<Box<{d}>>") } else { format!("Box<{d}>") })
+}
+
 /// t with its type parameters replaced (and a generic type, "type NAME", by its instance)
 fn substitute(t: &Ty, s: &BTreeMap<String, Ty>) -> Ty {
     match t {
@@ -465,10 +492,14 @@ fn substitute(t: &Ty, s: &BTreeMap<String, Ty>) -> Ty {
         Ty::Vec(e) => Ty::Vec(Box::new(substitute(e, s))),
         Ty::Opt(e) => Ty::Opt(Box::new(substitute(e, s))),
         Ty::Res(e) => Ty::Res(Box::new(substitute(e, s))),
+        // a closure parameter's type stands for the closure itself
+        Ty::Fn(ps, r, p, once) => Ty::Fn(ps.iter().map(|x| substitute(x, s)).collect(), Box::new(substitute(r, s)), *p, *once),
         // &T of text is str and of a Vec a slice, as the reader maps them; of a number it stays a
         // reference (the generic's Volt side takes T&)
         Ty::Ref(e, m) => match (substitute(e, s), *m) {
             (Ty::String | Ty::Str, false) => Ty::Str,
+            // &F of a closure type: the closure, lent
+            (Ty::Fn(ps, r, _, o), m) => Ty::Fn(ps, r, if m { FnPass::MutRef } else { FnPass::Ref }, o),
             (Ty::Vec(x), m) => Ty::Slice(x, m),
             (x, m) => Ty::Ref(Box::new(x), m),
         },
@@ -615,15 +646,37 @@ impl<'a> Doc<'a> {
             s.skip = Some("it's async");
         }
         // type parameters make a generic fn, built per instance a program uses (their bounds are
-        // rustc's to check, for each); a const parameter or an impl Trait one isn't one of those
+        // rustc's to check, for each); one bound by Fn, FnMut or FnOnce (inline or in a where
+        // clause; impl Fn(..) is one too) is a closure Volt passes; a const parameter, or an impl
+        // Trait one that isn't a closure, isn't one of those
+        let mut closures: BTreeMap<String, Ty> = BTreeMap::new();
+        for w in generics.and_then(|g| g.get("where_predicates")).map_or(&[][..], Json::arr) {
+            let Some(bp) = w.get("bound_predicate") else { continue };
+            if let (Some(n), Some(f)) = (bp.get("type").and_then(|t| t.get("generic")).and_then(Json::str), self.fn_bound(bp.get("bounds"), FnPass::Value)) {
+                closures.insert(n.to_string(), f);
+            }
+        }
         for p in generics.and_then(|g| g.get("params")).map_or(&[][..], Json::arr) {
             let Some(k) = p.get("kind") else { continue };
             if k.get("lifetime").is_some() {
                 continue;
             }
-            match (k.get("type"), p.get("name").and_then(Json::str)) {
-                (Some(t), Some(n)) if t.get("is_synthetic").and_then(Json::bool) != Some(true) => s.generics.push(n.to_string()),
-                _ => s.skip = Some("it's generic over more than types"),
+            let name = p.get("name").and_then(Json::str).unwrap_or("");
+            let Some(t) = k.get("type") else {
+                s.skip = Some("it's generic over more than types");
+                continue;
+            };
+            if let Some(f) = self.fn_bound(t.get("bounds"), FnPass::Value) {
+                closures.insert(name.to_string(), f);
+                continue;
+            }
+            if closures.contains_key(name) {
+                continue;
+            }
+            if t.get("is_synthetic").and_then(Json::bool) == Some(true) {
+                s.skip = Some("it's generic over more than types");
+            } else {
+                s.generics.push(name.to_string());
             }
         }
         let Some(sig) = f.get("sig") else {
@@ -662,7 +715,34 @@ impl<'a> Doc<'a> {
             None | Some(Json::Null) => Some(Ty::Unit),
             Some(t) => self.ty(t),
         };
+        if !closures.is_empty() {
+            s.params = s.params.iter().map(|(n, t)| (n.clone(), t.as_ref().map(|t| substitute(t, &closures)))).collect();
+            s.ret = s.ret.as_ref().map(|t| substitute(t, &closures));
+        }
         s
+    }
+
+    /// the closure a trait bound list names (Fn, FnMut or FnOnce with its arguments), passed so
+    fn fn_bound(&self, bounds: Option<&Json>, pass: FnPass) -> Option<Ty> {
+        for b in bounds.map_or(&[][..], Json::arr) {
+            let tr = b.get("trait_bound").and_then(|x| x.get("trait")).or_else(|| b.get("trait"));
+            let Some(tr) = tr else { continue };
+            let Some(kind) = tr.get("path").and_then(Json::str).and_then(|p| p.rsplit("::").next()) else { continue };
+            if !matches!(kind, "Fn" | "FnMut" | "FnOnce") {
+                continue;
+            }
+            let pa = tr.get("args").and_then(|a| a.get("parenthesized"))?;
+            let mut ps = Vec::new();
+            for i in pa.get("inputs").map_or(&[][..], Json::arr) {
+                ps.push(self.ty(i)?);
+            }
+            let r = match pa.get("output") {
+                None | Some(Json::Null) => Ty::Unit,
+                Some(o) => self.ty(o)?,
+            };
+            return Some(Ty::Fn(ps, Box::new(r), pass, kind == "FnOnce"));
+        }
+        None
     }
 
     /// the declaration as it's written, on one line (a macro's item: where the macro made it)
@@ -778,12 +858,18 @@ impl<'a> Doc<'a> {
         if let Some(tup) = t.get("tuple") {
             return tup.arr().is_empty().then_some(Ty::Unit);
         }
+        if let Some(it) = t.get("impl_trait") {
+            return self.fn_bound(Some(it), FnPass::Value);
+        }
         if let Some(g) = t.get("generic").and_then(Json::str) {
             return Some(if g == "Self" { Ty::SelfTy } else { Ty::Generic(g.to_string()) });
         }
         if let Some(r) = t.get("borrowed_ref") {
             let mutable = r.get("is_mutable").and_then(Json::bool) == Some(true);
             let inner = r.get("type")?;
+            if let Some(d) = inner.get("dyn_trait") {
+                return self.fn_bound(d.get("traits"), if mutable { FnPass::MutRef } else { FnPass::Ref });
+            }
             if inner.get("primitive").and_then(Json::str) == Some("str") {
                 return (!mutable).then_some(Ty::Str);
             }
@@ -803,6 +889,11 @@ impl<'a> Doc<'a> {
         // its type arguments (lifetimes aren't types)
         let args: Vec<&Json> = p.get("args").and_then(|a| a.get("angle_bracketed")).and_then(|a| a.get("args")).map_or(Vec::new(), |a| a.arr().iter().filter_map(|x| x.get("type")).collect());
         let one = || -> Option<Box<Ty>> { Some(Box::new(self.ty(args.first()?)?)) };
+        if last == "Box" && args.len() == 1 {
+            if let Some(d) = args[0].get("dyn_trait") {
+                return self.fn_bound(d.get("traits"), FnPass::Boxed);
+            }
+        }
         if let Some(local) = p.get("id").and_then(Json::key).and_then(|id| self.names.get(&id)) {
             // a generic type over type parameters (Stack<T> in its own impl): each instance's
             // methods name the instance
@@ -1310,6 +1401,47 @@ impl Lang for Rust {
                 p.params.push(format!("{a}: {x}"));
                 p.arg = format!("&{a}");
             }
+            // a Volt closure: its trampoline and the closure (the trampoline's data), made a Rust
+            // closure that calls them, passed the way the fn takes it
+            Ty::Fn(ps, r, pass, _) => {
+                let mut cps = vec!["*mut c_void".to_string()];
+                let mut binds = Vec::new();
+                let mut args = vec![format!("{a}_env")];
+                for (i, t) in ps.iter().enumerate() {
+                    match t {
+                        Ty::Prim(x) => {
+                            cps.push(x.to_string());
+                            binds.push(format!("x{i}: {x}"));
+                            args.push(format!("x{i}"));
+                        }
+                        Ty::Char => {
+                            cps.push("u32".into());
+                            binds.push(format!("x{i}: char"));
+                            args.push(format!("x{i} as u32"));
+                        }
+                        Ty::Str => {
+                            cps.extend(["*const u8".to_string(), "usize".to_string()]);
+                            binds.push(format!("x{i}: &str"));
+                            args.extend([format!("x{i}.as_ptr()"), format!("x{i}.len()")]);
+                        }
+                        _ => return None,
+                    }
+                }
+                let (cret, wrap) = match &**r {
+                    Ty::Unit => (String::new(), ("", "")),
+                    Ty::Prim(x) => (format!(" -> {x}"), ("", "")),
+                    Ty::Char => (" -> u32".to_string(), ("char::from_u32(", ").unwrap_or('\\u{fffd}')")),
+                    _ => return None,
+                };
+                p.params.extend([format!("{a}: extern \"C\" fn({}){cret}", cps.join(", ")), format!("{a}_env: *mut c_void")]);
+                let clo = format!("move |{}| {}{a}({}){}", binds.join(", "), wrap.0, args.join(", "), wrap.1);
+                p.arg = match pass {
+                    FnPass::Value => clo,
+                    FnPass::Ref => format!("&{clo}"),
+                    FnPass::MutRef => format!("&mut {clo}"),
+                    FnPass::Boxed => format!("Box::new({clo})"),
+                };
+            }
             Ty::Str | Ty::String => {
                 p.params.extend([format!("{a}: *const u8"), format!("{a}_n: usize")]);
                 p.arg = if *t == Ty::String { format!("s({a}, {a}_n).to_string()") } else { format!("s({a}, {a}_n)") };
@@ -1423,6 +1555,11 @@ impl Lang for Rust {
         Some(match t {
             Ty::Prim(x) => ShimOut { params: vec![format!("{o}: *mut {x}")], store: format!("*{o} = $v;") },
             Ty::Char => ShimOut { params: vec![format!("{o}: *mut u32")], store: format!("*{o} = $v as u32;") },
+            Ty::Fn(ps, r, _, once) => {
+                let held = held_fn(ps, r, *once)?;
+                let boxed = if *once { format!("Some(Box::new($v) as Box<{}>)", dyn_fn(ps, r, true)?) } else { format!("Box::new($v) as {held}") };
+                ShimOut { params: vec![format!("{o}: *mut *mut c_void")], store: format!("*{o} = Box::into_raw(Box::new({boxed})) as *mut c_void;") }
+            }
             Ty::Str | Ty::String => ShimOut { params: vec![format!("{o}: *mut *mut u8"), format!("{o}_n: *mut usize")], store: format!("put_str($v.to_string(), {o}, {o}_n);") },
             Ty::Slice(e, _) | Ty::Vec(e) => match **e {
                 Ty::Prim(x) => ShimOut { params: vec![format!("{o}: *mut *mut {x}"), format!("{o}_n: *mut usize")], store: format!("put_vec($v.to_vec(), {o}, {o}_n);") },
@@ -1453,6 +1590,47 @@ impl Lang for Rust {
             }
             _ => return None,
         })
+    }
+
+    fn fn_glue(&self, _g: &Gen, sym: &str, ps: &[Ty], r: &Ty, once: bool) -> Option<String> {
+        let held = held_fn(ps, r, once)?;
+        let mut cps = vec!["h: *mut c_void".to_string()];
+        let mut args = Vec::new();
+        for (i, t) in ps.iter().enumerate() {
+            match t {
+                Ty::Prim(x) => {
+                    cps.push(format!("a{i}: {x}"));
+                    args.push(format!("a{i}"));
+                }
+                Ty::Char => {
+                    cps.push(format!("a{i}: u32"));
+                    args.push(format!("char::from_u32(a{i}).unwrap_or('\\u{{fffd}}')"));
+                }
+                Ty::Str => {
+                    cps.extend([format!("a{i}: *const u8"), format!("a{i}_n: usize")]);
+                    args.push(format!("s(a{i}, a{i}_n)"));
+                }
+                _ => return None,
+            }
+        }
+        let store = match r {
+            Ty::Unit => String::new(),
+            Ty::Prim(x) => {
+                cps.push(format!("o: *mut {x}"));
+                "*o = v;".to_string()
+            }
+            Ty::Char => {
+                cps.push("o: *mut u32".into());
+                "*o = v as u32;".to_string()
+            }
+            _ => return None,
+        };
+        let get = if once {
+            format!("let f = (*(h as *mut {held})).take().expect(\"a FnOnce closure called twice\");")
+        } else {
+            format!("let f = &mut *(h as *mut {held});")
+        };
+        Some(format!("#[no_mangle]\npub unsafe extern \"C\" fn {sym}_call({}) {{\n    {get}\n    let v = f({});\n    let _ = &v;\n    {store}\n}}\n\n#[no_mangle]\npub unsafe extern \"C\" fn {sym}_drop(h: *mut c_void) {{\n    drop(Box::from_raw(h as *mut {held}));\n}}\n\n", cps.join(", "), args.join(", ")))
     }
 
     fn call(&self, _g: &Gen, module: &[String], s: &Sig, self_ty: Option<&TypeInfo>, recv: Option<&str>, args: &[String]) -> String {
