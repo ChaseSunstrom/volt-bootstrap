@@ -1160,6 +1160,35 @@ fn cpp_templates() {
     assert!(!o.status.success() && err.contains("cpp_concept.volt:3") && err.contains("constraints not satisfied"), "a call the concept rejects: {err}");
 }
 
+#[test]
+fn cpp_versions() {
+    // headers for C++98 (what C++17 removed: auto_ptr, throw(), register), 11, 17, 20 and 23 in one
+    // program, each read and compiled under its own standard
+    let e = Env::new("cpp-versions");
+    let want = "5 42\n49 3 2\n4 1 107\n4 11\n5 15 5\n";
+    for backend in ["c", "llvm"] {
+        assert_eq!(ok(e.voltc(&["run", "cpp_versions.volt", "--backend", backend]), "voltc run cpp_versions.volt"), want, "C++ versions ({backend})");
+    }
+    // one standard for the whole program (--cc -std=...); with none, the newest the compilers take,
+    // where C++17's removals are errors
+    assert_eq!(ok(e.voltc(&["run", "cpp_std_flag.volt", "--cc", "-std=c++14"]), "voltc run --cc -std=c++14"), "42 201402\n");
+    let o = e.voltc(&["run", "cpp_std_flag.volt"]);
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(!o.status.success() && err.contains("dynamic exception specifications"), "the newest standard by default: {err}");
+    assert_eq!(ok(e.voltc(&["run", "cpp_old_only.volt"]), "voltc run cpp_old_only.volt"), "42\n");
+}
+
+#[test]
+fn c_versions_flag() {
+    // one C standard for the whole program: gnu17, so the C23 header (@standard("c23")) is kept out
+    // of Volt's C, in a unit of its own, as the C89 and C99 ones are
+    let e = Env::new("c-versions-flag");
+    let want = "5 1 3.5\n32 true\n6\n10 42 true true\n";
+    for backend in ["c", "llvm"] {
+        assert_eq!(ok(e.voltc(&["run", "../run/c_versions.volt", "--cc", "-std=gnu17", "--backend", backend]), "voltc run c_versions.volt --cc -std=gnu17"), want, "C versions under gnu17 ({backend})");
+    }
+}
+
 /// is a C++ library's header on the usual include paths?
 fn installed(header: &str) -> bool {
     ["/usr/include", "/usr/local/include", "/opt/homebrew/include"].iter().any(|d| Path::new(d).join(header).is_file())

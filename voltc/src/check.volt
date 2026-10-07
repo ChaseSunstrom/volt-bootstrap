@@ -360,6 +360,8 @@ struct opts {
     guards: std::vec<guard> = {};       // package -> guard symbol
     cfg: std::vec<cfg_arg> = {};        // --cfg, for @cfg
     pp_flags: std::vec<str> = {};       // the --cc flags the C preprocessor needs (-I, -D...)
+    c_std: str = "";                    // --cc -std=...: the C and C++ imports' standard (else the newest)
+    cpp_std: str = "";
     lsp: bool = false;                  // record names for the language server (lsp.volt)
     expand: bool = false;               // record what comptime code became (voltc expand, the LSP)
     line_info: bool = false;            // mark each statement's source line in the IR (--profiler)
@@ -476,6 +478,19 @@ struct checker {
     go_packages: std::vec<std::string> = {}; // use go's glue packages, linked as one (link_go)
     import_deps: std::vec<std::string> = {}; // the files they were made from (OUT.deps, for bolt)
     cpp_shims: std::vec<std::string> = {};
+    // a C++ unit per standard the imports are compiled under (its -std), and which unit each
+    // #include line and wrapper is in; the newest standard the compilers take (an import's default)
+    cpp_units: std::vec<str> = {};
+    cpp_include_unit: std::vec<u32> = {};
+    cpp_shim_unit: std::vec<u32> = {};
+    // C imports under another standard than Volt's own C (cimport.volt): a unit per standard (its
+    // -std, and its text: the #include lines, the C they add, a pointer to each function, which
+    // Volt calls through), and what Volt reaches that way, by C name; the import being read's
+    c_units: std::vec<str> = {};
+    c_unit_text: std::vec<std::string> = {};
+    c_unit_weak: std::vec<std::string> = {}; // its constructor's lines: a stub for each function nothing defines
+    c_kept: std::map<str, u32> = {};
+    c_import_std: str = "";
     // the C++ imports, kept for the calls made per use, and those calls' Volt fns by what they call
     cpp_ctxs: std::vec<cpp_import_ctx> = {};
     cpp_dyn: std::map<str, u32> = {};
@@ -653,6 +668,49 @@ attach fn add_name(this: checker&, m: std::map<str, u32>&, name: str, d: u32) ->
     m.put(name, id);
 }
 
+fn has_standard(it: item&) -> bool {
+    for (a&) in it.attrs.items() {
+        if (attr_named(a, "standard")) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// a use's @standard("c11") / @standard("c++17"): the standard its headers are read and compiled
+// under ("": the newest the compiler takes); a C one for C headers, a C++ one for C++
+attach fn use_standard(this: checker&, it: item&, cpp: bool) -> compile_error!str {
+    for (a&) in it.attrs.items() {
+        if (attr_named(a, "standard")) {
+            val s = attr_str(a) ?? return fails(it.span, "@standard(\"c++17\") takes the standard as a string");
+            var rest = s;
+            var is_cpp = false;
+            val pre: str[4] = { "c++", "gnu++", "c", "gnu" };
+            for (p) in pre {
+                if (rest == s && starts_with(s, p)) {
+                    rest = s[p.len..];
+                    is_cpp = p.len > 3 || p == "c++";
+                }
+            }
+            var digits = rest.len == 2;
+            for (ch) in rest {
+                digits = digits && ((ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'z'));
+            }
+            if (rest == s || !digits) {
+                return fail(it.span, fmt("@standard: {} isn't a C or C++ standard (c89, c99, c11, c17, c23, gnu11, c++98, c++11, c++17, c++20, c++23, gnu++20, ...)", S(s)));
+            }
+            if (is_cpp != cpp) {
+                if (cpp) {
+                    return fail(it.span, fmt("@standard: {} is a C standard, and these are C++ headers (c++98 ... c++26)", S(s)));
+                }
+                return fail(it.span, fmt("@standard: {} is a C++ standard, and these are C headers (c89 ... c23)", S(s)));
+            }
+            return s;
+        }
+    }
+    return "";
+}
+
 // declare one item (and a trait's or attach block's fns, with it as their parent); attached fns
 // also go into `attached`, found by method name
 attach fn collect_item(this: checker&, it: item&, ns: u32, parent: u32?) -> compile_error!void {
@@ -719,16 +777,22 @@ attach fn collect_item(this: checker&, it: item&, ns: u32, parent: u32?) -> comp
             val lang = try this.import_language(headers, it.span);
             if (lang) {
                 if (lang == "cpp") {
-                    return this.import_cpp(headers, alias, ns, it.span);
+                    return this.import_cpp(headers, alias, ns, try this.use_standard(it, true), it.span);
+                }
+                if (has_standard(it)) {
+                    return fails(it.span, "@standard is for C and C++ imports");
                 }
                 return this.import_lang(lang, headers, alias, ns, it.span);
             }
-            return this.import_c(headers, alias, ns, it.span);
+            return this.import_c(headers, alias, ns, try this.use_standard(it, false), it.span);
         },
         .USE_CPP(headers&, alias) => {
-            return this.import_cpp(headers, alias, ns, it.span);
+            return this.import_cpp(headers, alias, ns, try this.use_standard(it, true), it.span);
         },
         .USE_LANG(lang, args&, alias) => {
+            if (has_standard(it)) {
+                return fails(it.span, "@standard is for C and C++ imports");
+            }
             return this.import_lang(lang, args, alias, ns, it.span);
         },
         .FN(f) => {

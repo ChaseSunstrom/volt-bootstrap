@@ -912,7 +912,11 @@ attach fn expr(this: cgen&, out: std::string&, n: u32) -> void {
                 out.append(gl.name);
             }
         },
-        .FN(f) => { out.append(this.c.ir.fn_at(f).name); },
+        .FN(f) => {
+            if (!this.kept_fn(out, f)) {
+                out.append(this.c.ir.fn_at(f).name);
+            }
+        },
         .RT(name) => { out.append(name); },
         .FIELD(b, i) => {
             val bt = this.c.ir.ty_of(b);
@@ -1316,6 +1320,26 @@ fn builtin_math(f: ir_fn&) -> str? {
     return null;
 }
 
+// fn i, when a C header kept out of Volt's C (another standard: cimport's keep_out) declares it:
+// the pointer its unit defines, as the function's type
+attach fn kept_fn(this: cgen&, out: std::string&, i: u32) -> bool {
+    val f = this.c.ir.fn_at(i);
+    if (!f.from_header || this.c.c_kept.get(f.name) == null) {
+        return false;
+    }
+    var ptys: std::vec<u32> = {};
+    for (p&) in f.params.items() {
+        put(&ptys, f.locals.at(@cast<usize>(*p)).ty);
+    }
+    val ft = this.c.t.intern(tyk::FN_PTR(move ptys, f.ret, f.c_varargs));
+    out.append("((");
+    out.append(this.ty(ft));
+    out.append(")volt_c_");
+    out.append(f.name);
+    out.push(')');
+    return true;
+}
+
 attach fn call(this: cgen&, out: std::string&, f: u32, args: std::vec<u32>&, t: u32) -> void {
     var direct = false;
     var params: std::vec<u32> = {};
@@ -1327,7 +1351,7 @@ attach fn call(this: cgen&, out: std::string&, f: u32, args: std::vec<u32>&, t: 
             if (m) {
                 out.append("__builtin_");
                 out.append(m);
-            } else {
+            } else if (!this.kept_fn(out, i)) {
                 out.append(sym);
             }
             val fl = this.c.ir.fn_at(i);
@@ -1995,6 +2019,11 @@ attach fn fn_body(this: cgen&, out: std::string&, i: u32) -> void {
 // a global's declaration for volt.h: extern, or a static one's tentative definition
 attach fn global_decl(this: cgen&, out: std::string&, g: u32) -> void {
     val gl = this.c.ir.globals.at(@cast<usize>(g));
+    if (gl.link == linkage::STATIC && gl.tls) {
+        // C23 has no tentative definition of a thread-local: defined here, where it's declared
+        this.global_text(out, g);
+        return;
+    }
     if (gl.link == linkage::STATIC) {
         out.append("static ");
     } else {
@@ -2010,6 +2039,14 @@ attach fn global_decl(this: cgen&, out: std::string&, g: u32) -> void {
 }
 
 attach fn global_def(this: cgen&, out: std::string&, g: u32) -> void {
+    val gl = this.c.ir.globals.at(@cast<usize>(g));
+    if (gl.link == linkage::STATIC && gl.tls) {
+        return; // global_decl defined it
+    }
+    this.global_text(out, g);
+}
+
+attach fn global_text(this: cgen&, out: std::string&, g: u32) -> void {
     val gl = this.c.ir.globals.at(@cast<usize>(g));
     if (gl.header) {
         return; // an included header (or the runtime prelude) declares it
@@ -2116,8 +2153,8 @@ attach fn c_files(this: checker&) -> std::vec<c_file> {
     var global_decls: std::string = {};
     for (i) in 0..this.ir.globals.len {
         val gl = this.ir.globals.at(i);
-        if (gl.header) {
-            continue;
+        if (gl.header && this.c_kept.get(gl.name) == null) {
+            continue; // its header declares it (one kept out of Volt's C doesn't)
         }
         g.global_decl(&global_decls, @cast<u32>(i));
         if (gl.link == linkage::EXTERNAL) {
@@ -2129,6 +2166,15 @@ attach fn c_files(this: checker&) -> std::vec<c_file> {
             at = @cast<usize>(o.file);
         }
         g.global_def(parts.at(at), @cast<u32>(i));
+    }
+    // the pointers to functions of C headers kept out of Volt's C (another standard: cimport's
+    // keep_out), which their unit defines
+    var kept_defs: std::string = {};
+    for (o&) in this.ir.order.items() {
+        val f = this.ir.fn_at(*o);
+        if (f.from_header && live.get(*o) != null && this.c_kept.get(f.name) != null) {
+            kept_defs.append(fmt("extern void *volt_c_{};\n", S(f.name)).as_str());
+        }
     }
     // every type is named by now, so its definitions can go out
     g.type_defs();
@@ -2146,6 +2192,7 @@ attach fn c_files(this: checker&) -> std::vec<c_file> {
     h.append("\n// ---------- types ----------\n\n");
     h.append(g.fwd.as_str());
     h.append(g.defs.as_str());
+    h.append(kept_defs.as_str());
     h.append("\n// ---------- functions ----------\n\n");
     h.append(protos.as_str());
     if (global_decls.len() > 0) {

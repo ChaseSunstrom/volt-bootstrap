@@ -142,7 +142,7 @@ export fn volt_vm_load(v: volt_vm&, name: str, source: str) -> vm_error!void {
         val diags = all_diags(&*chk);
         return v.fail(vm_error::COMPILE, report(&s.files, &diags, 0, false, 20).as_str());
     }
-    if (chk.c_includes.len > 0 || chk.link_flags.len > 0) {
+    if (chk.c_includes.len > 0 || chk.c_units.len > 0 || chk.link_flags.len > 0) {
         return v.fail(vm_error::COMPILE, "a script can't import C headers or code in other languages (no C compiler runs)");
     }
     var init = S("volt_vm_init_");

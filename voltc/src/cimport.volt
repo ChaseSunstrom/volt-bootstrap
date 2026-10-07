@@ -538,6 +538,7 @@ struct cfn {
     params: std::vec<cparam>;
     ret: ctype;
     variadic: bool;
+    stat: bool = false; // static: defined in the header, no symbol of its own
 }
 
 struct cvar {
@@ -565,6 +566,7 @@ struct cdecls {
     // counter for made-up tags of anonymous structs
     anon: u32 = 0;
     last_params: std::vec<str?> = {}; // names in the param list read last (the declared fn's own)
+    kr: bool = false;                    // ...which was a K&R identifier list
     names: std::vec<std::string> = {}; // made-up names (anonymous tags) the others point into
     anon_in: std::map<str, anon_field> = {}; // anonymous tag -> the named field it types
 }
@@ -611,6 +613,7 @@ struct cparser {
     t: ctok[..];
     i: usize;
     d: cdecls&;
+    body: bool = false; // a function body follows (a K&R definition's names are its parameters)
 }
 
 attach fn peek(this: cparser&) -> ctok* {
@@ -665,7 +668,7 @@ attach fn skip_group(this: cparser&) -> bool {
 
 // qualifiers and storage words that don't change the type Volt sees
 fn is_noise_word(n: str) -> bool {
-    val words: str[22] = { "const", "__const", "volatile", "__volatile__", "restrict", "__restrict", "__restrict__", "inline", "__inline", "__inline__", "extern", "register", "_Noreturn", "__extension__", "auto", "_Nonnull", "_Nullable", "_Null_unspecified", "", "", "", "" };
+    val words: str[22] = { "const", "__const", "volatile", "__volatile__", "restrict", "__restrict", "__restrict__", "inline", "__inline", "__inline__", "extern", "register", "_Noreturn", "__extension__", "auto", "_Nonnull", "_Nullable", "_Null_unspecified", "constexpr", "", "", "" };
     for (w) in words {
         if (w.len > 0 && w == n) {
             return true;
@@ -677,8 +680,15 @@ fn is_noise_word(n: str) -> bool {
 // __attribute__((...)), __asm__("..."), and other noise that carries no type information.
 // none: a group didn't close (the declaration is unreadable)
 attach fn skip_noise(this: cparser&) -> bool? {
+    // C23's [[attribute]]
+    if (this.is("[") && this.i + 1 < this.t.len && is_p(&this.t[this.i + 1], "[")) {
+        if (!this.skip_group()) {
+            return null;
+        }
+        return true;
+    }
     val n = this.peek_id() ?? return false;
-    if (n == "__attribute__" || n == "__attribute" || n == "__asm__" || n == "__asm" || n == "asm" || n == "__declspec" || n == "_Alignas" || n == "__typeof__") {
+    if (n == "__attribute__" || n == "__attribute" || n == "__asm__" || n == "__asm" || n == "asm" || n == "__declspec" || n == "_Alignas" || n == "alignas" || n == "__typeof__") {
         this.i += 1;
         if (this.is("(") && !this.skip_group()) {
             return null;
@@ -707,7 +717,6 @@ fn known_typedef(n: str) -> str? {
     if (n == "uint16_t") { return "u16"; }
     if (n == "uint32_t") { return "u32"; }
     if (n == "uint64_t") { return "u64"; }
-    if (n == "bool") { return "bool"; }
     return null;
 }
 
@@ -725,7 +734,7 @@ attach fn specs(this: cparser&, stat: bool&) -> ctype? {
         }
         val n = this.peek_id() ?? break;
         val seen = base != null || signed || unsigned || short || longs > 0 || int;
-        if (n == "static" || n == "_Thread_local" || n == "__thread") {
+        if (n == "static" || n == "_Thread_local" || n == "thread_local" || n == "__thread") {
             *stat = true;
         } else if (n == "signed" || n == "__signed__" || n == "__signed") {
             signed = true;
@@ -741,7 +750,7 @@ attach fn specs(this: cparser&, stat: bool&) -> ctype? {
             base = ctype::CHAR;
         } else if (n == "void") {
             base = ctype::VOID;
-        } else if (n == "_Bool" || n == "bool") {
+        } else if (n == "_Bool" || (n == "bool" && !seen && this.d.typedefs.get("bool") == null)) {
             base = ctype::BOOL;
         } else if (n == "float" || n == "_Float32") {
             base = ctype::PRIM("f32");
@@ -1084,6 +1093,110 @@ attach fn suffixes(this: cparser&, ty: ctype) -> ctype? {
     return ty;
 }
 
+// t[a..b] (a parenthesized list after a function's name) is a K&R definition's names, and its
+// parameters' declarations follow it, up to the body
+fn kr_head(t: ctok[..], a: usize, b: usize) -> bool {
+    if (a < 2) {
+        return false;
+    }
+    match (t[a - 2]) {
+        .ID(n) => {
+            val not_names: str[10] = { "typeof", "__typeof__", "__typeof", "typeof_unqual", "__attribute__", "__attribute", "_Alignas", "alignas", "sizeof", "__declspec" };
+            for (w) in not_names {
+                if (n == w) {
+                    return false;
+                }
+            }
+        },
+        default => { return false; },
+    }
+    match (t[b + 1]) {
+        .ID(n) => {
+            if (n == "__attribute__" || n == "__asm__" || n == "__asm" || n == "asm") {
+                return false;
+            }
+        },
+        default => { return false; },
+    }
+    var names = b > a;
+    var k = a;
+    while (k < b) {
+        match (t[k]) {
+            .ID(n) => { names = names && (k - a) % 2 == 0 && !is_param_word(n) && known_typedef(n) == null; },
+            .P(p) => { names = names && p == "," && (k - a) % 2 == 1; },
+            default => { names = false; },
+        }
+        k += 1;
+    }
+    return names;
+}
+
+// a K&R definition's parameter list: names only (no type words, no typedef names)
+fn is_id_list(t: ctok[..], d: cdecls&) -> bool {
+    if (t.len == 0) {
+        return false;
+    }
+    for (part) in split_top(t, ",").items() {
+        if (part.len != 1) {
+            return false;
+        }
+        match (part[0]) {
+            .ID(n) => {
+                if (d.typedefs.get(n) != null || known_typedef(n) != null || is_param_word(n) || n == "bool") {
+                    return false;
+                }
+            },
+            default => { return false; },
+        }
+    }
+    return true;
+}
+
+// a K&R definition's parameter declarations (int a; char *b;), after its name list: each name's
+// type, as a caller passes it (char and short as int, float as double: there's no prototype)
+attach fn kr_params(this: cparser&, dc: cdecl&) -> void {
+    var names: std::vec<str?> = copy this.d.last_params;
+    match (dc.ty) {
+        .FUNC(ps&, r, v) => {
+            while (this.peek() != null) {
+                var stat = false;
+                val base = this.specs(&stat) ?? return;
+                loop {
+                    val pd = this.declarator(copy base) ?? return;
+                    val pn = pd.name ?? "";
+                    for (k) in 0..names.len {
+                        if (pn.len > 0 && (*names.at(k) ?? "") == pn) {
+                            var ty = copy pd.ty;
+                            match (pd.ty) {
+                                .ARRAY(inner, n) => { ty = ctype::PTR(copy inner); },
+                                .PRIM(p) => {
+                                    if (p == "i8" || p == "u8" || p == "i16" || p == "u16") {
+                                        ty = ctype::PRIM("i32");
+                                    } else if (p == "f32") {
+                                        ty = ctype::PRIM("f64");
+                                    }
+                                },
+                                .CHAR => { ty = ctype::PRIM("i32"); },
+                                .BOOL => { ty = ctype::PRIM("i32"); },
+                                default => {},
+                            }
+                            *ps.at(k) = move ty;
+                        }
+                    }
+                    if (!this.eat(",")) {
+                        break;
+                    }
+                }
+                if (!this.eat(";")) {
+                    return;
+                }
+            }
+        },
+        default => {},
+    }
+    this.d.last_params = move names;
+}
+
 // is this parameter list just `(void)`?
 fn only_void(t: ctok[..]) -> bool {
     if (t.len != 1) {
@@ -1105,7 +1218,23 @@ attach fn params(this: cparser&, variadic: bool&) -> std::vec<cparam>? {
     val close = this.i - 1;
     val toks = this.t[open + 1..close];
     var out: std::vec<cparam> = {};
+    this.d.kr = false;
     if (toks.len == 0 || only_void(toks)) {
+        return out;
+    }
+    if (this.body && is_id_list(toks, this.d)) {
+        // K&R: f(a, b) int a; ...: names only; their types come from the declarations after it
+        for (part) in split_top(toks, ",").items() {
+            match (part[0]) {
+                .ID(n) => { put(&out, { name: n, ty: ctype::PRIM("i32") }); },
+                default => {},
+            }
+        }
+        this.d.kr = true;
+        this.d.last_params = {};
+        for (p&) in out.items() {
+            put(&this.d.last_params, p.name);
+        }
         return out;
     }
     for (part) in split_top(toks, ",").items() {
@@ -1138,8 +1267,21 @@ attach fn params(this: cparser&, variadic: bool&) -> std::vec<cparam>? {
 
 // one top-level declaration (the tokens up to its `;`, or up to a function body)
 attach fn top(this: cparser&) -> void {
-    if ((this.peek_id() ?? "") == "_Static_assert") {
+    val first = this.peek_id() ?? "";
+    if (first == "_Static_assert" || first == "static_assert") {
         return;
+    }
+    // C23's constexpr: a constant (read like an enumerator), not static data
+    var is_constexpr = false;
+    for (t&) in this.t {
+        match (*t) {
+            .ID(n) => {
+                if (n == "constexpr") {
+                    is_constexpr = true;
+                }
+            },
+            default => {},
+        }
     }
     val is_typedef = (this.peek_id() ?? "") == "typedef";
     if (is_typedef) {
@@ -1151,10 +1293,20 @@ attach fn top(this: cparser&) -> void {
         if (this.peek() == null || this.is(";")) {
             return;
         }
-        val dc = this.declarator(copy base) ?? return;
+        var dc = this.declarator(copy base) ?? return;
         val name = dc.name ?? return;
         if (this.eat("=")) {
+            if (is_constexpr) {
+                val v = const_eval(this.t[this.i..this.t.len], &this.d.env);
+                if (v) {
+                    this.d.env.put(name, v);
+                    put(&this.d.consts, { name: name, v: v });
+                }
+            }
             return; // initialized variables in headers are static data, not imports
+        }
+        if (this.d.kr) {
+            this.kr_params(&dc);
         }
         if (is_typedef) {
             match (dc.ty) {
@@ -1186,7 +1338,7 @@ attach fn top(this: cparser&) -> void {
                         }
                         put(&cps, { name: pn, ty: copy *ps.at(i) });
                     }
-                    put(&this.d.fns, { name: name, params: move cps, ret: copy *ret.ptr, variadic: variadic });
+                    put(&this.d.fns, { name: name, params: move cps, ret: copy *ret.ptr, variadic: variadic, stat: stat });
                 },
                 default => {
                     if (!stat) {
@@ -1225,17 +1377,31 @@ fn split_top(t: ctok[..], sep: str) -> std::vec<ctok[..]> {
     return out;
 }
 
-// end of the declaration starting at i: its `;`, or the `{` of a function body
+// end of the declaration starting at i: its `;`, or the `{` of a function body (a K&R one's after
+// its parameter declarations: f(a, b) int a; int b; {)
 fn decl_end(t: ctok[..], start: usize) -> usize {
     var depth: i32 = 0;
     var i = start;
+    var open: usize = 0;
     while (i < t.len) {
         match (t[i]) {
             .P(p) => {
                 if (p == "(" || p == "[") {
+                    if (depth == 0) {
+                        open = i;
+                    }
                     depth += 1;
                 } else if (p == ")" || p == "]") {
                     depth -= 1;
+                    if (depth == 0 && p == ")" && i + 1 < t.len && kr_head(t, open + 1, i)) {
+                        var j = i + 1;
+                        while (j < t.len && !is_p(&t[j], "{") && !is_p(&t[j], "}")) {
+                            j += 1;
+                        }
+                        if (j < t.len && is_p(&t[j], "{") && is_p(&t[j - 1], ";")) {
+                            return j;
+                        }
+                    }
                 } else if (p == "{") {
                     if (depth == 0 && i > 0 && is_p(&t[i - 1], ")")) {
                         return i;
@@ -1359,13 +1525,23 @@ attach fn citem(this: cmapper&, k: item_kind) -> item {
 struct c_imported {
     items: std::vec<item> = {};
     includes: std::vec<std::string> = {};
+    statics: std::vec<str> = {}; // the static functions (defined by the headers)
 }
 
 // the C compiler as a command: $CC split at whitespace (CC="ccache gcc"), else cc. Pushes the words
 // onto argv; returns $CC's text for messages. ponytail: no quoting, so a compiler path with spaces
 // needs a wrapper script
 fn c_command(argv: std::vec<str>&) -> str {
-    var text = std::process::env("CC") ?? "cc";
+    return command_from(argv, "CC", "cc");
+}
+
+// the C++ compiler, the same way from $CXX (c++)
+fn cxx_command(argv: std::vec<str>&) -> str {
+    return command_from(argv, "CXX", "c++");
+}
+
+fn command_from(argv: std::vec<str>&, var_name: str, dflt: str) -> str {
+    var text = std::process::env(var_name) ?? dflt;
     val start = argv.len;
     var i: usize = 0;
     while (i < text.len) {
@@ -1382,7 +1558,7 @@ fn c_command(argv: std::vec<str>&) -> str {
         i = e;
     }
     if (argv.len == start) {
-        text = "cc";
+        text = dflt;
         put(argv, text);
     }
     return text;
@@ -1475,7 +1651,7 @@ attach fn lay_out_partial(this: checker&, res: c_imported&, items: std::vec<usiz
     var args: std::vec<str> = {};
     put(&args, "-x");
     put(&args, "c");
-    put(&args, "-std=gnu11");
+    put(&args, this.intern(fmt("-std={}", S(this.c_import_std))));
     for (f&) in this.opts.pp_flags.items() {
         put(&args, *f);
     }
@@ -1563,7 +1739,8 @@ attach fn preprocess(this: checker&, src: str, extra: str, span: span) -> compil
     for (f&) in this.opts.pp_flags.items() {
         put(&args, *f);
     }
-    val rest: str[6] = { "-E", extra, "-std=gnu11", "-x", "c", "-" };
+    val std_flag = fmt("-std={}", S(this.c_import_std));
+    val rest: str[6] = { "-E", extra, std_flag.as_str(), "-x", "c", "-" };
     for (a) in rest {
         put(&args, a);
     }
@@ -1624,7 +1801,7 @@ fn parse_decls(text: str, d: cdecls&) -> void {
     var i: usize = 0;
     while (i < toks.len) {
         val end = decl_end(all, i);
-        var p: cparser = { t: all[i..end], i: 0, d: d };
+        var p: cparser = { t: all[i..end], i: 0, d: d, body: end < toks.len && is_p(toks.at(end), "{") };
         p.top();
         i = end;
         if (i < toks.len && is_p(toks.at(i), "{")) {
@@ -1870,6 +2047,9 @@ attach fn c_items(this: checker&, d: cdecls&, res: c_imported&, span: span) -> v
             continue;
         }
         seen_fns.put(f.name, true);
+        if (f.stat) {
+            put(&res.statics, f.name);
+        }
         var params: std::vec<param> = {};
         var ok = true;
         for (i) in 0..f.params.len {
@@ -1946,8 +2126,139 @@ attach fn c_items(this: checker&, d: cdecls&, res: c_imported&, span: span) -> v
     }
 }
 
+// the newest C standard both libclang and the C compiler take, in GNU's form (POSIX's names stay
+// in the headers): a C import's, unless its @standard or the program's --cc -std=... says otherwise
+var c_newest_found: str = "";
+
+attach fn c_newest(this: checker&) -> str {
+    if (this.opts.c_std.len > 0) {
+        return this.opts.c_std;
+    }
+    if (c_newest_found.len == 0) {
+        c_newest_found = "gnu99";
+        val all: str[3] = { "gnu23", "gnu17", "gnu11" };
+        for (s) in all {
+            var flag = S("-std=");
+            flag.append(s);
+            var args: std::vec<str> = {};
+            put(&args, "-x");
+            put(&args, "c");
+            put(&args, flag.as_str());
+            val tu = clang_parse("volt_c_std.c", "", &args);
+            if (tu.tu == null || tu.first_error() != null) {
+                continue;
+            }
+            var argv: std::vec<str> = {};
+            c_command(&argv);
+            val rest: str[5] = { flag.as_str(), "-x", "c", "-fsyntax-only", "-" };
+            for (a) in rest {
+                put(&argv, a);
+            }
+            val r = std::process::capture(argv.items(), "") catch |e| {
+                c_newest_found = s; // no C compiler (an editor): libclang's says
+                break;
+            };
+            if (r.code == 0) {
+                c_newest_found = s;
+                break;
+            }
+        }
+    }
+    return c_newest_found;
+}
+
+// the standard Volt's own C is compiled under: the GNU form of the C imports' default (it
+// includes their headers; the runtime needs POSIX's names), C99 at the least (what Volt's C needs)
+attach fn c_own_std(this: checker&) -> str {
+    val s = c_gnu(this.c_newest());
+    if (s == "gnu89" || s == "gnu90") {
+        return "gnu99";
+    }
+    return s;
+}
+
+// a C standard's GNU form (c11: gnu11), which shares Volt's own C unit with it
+fn c_gnu(s: str) -> str {
+    val iso: str[7] = { "iso9899:1990", "iso9899:199409", "iso9899:1999", "iso9899:2011", "iso9899:2017", "iso9899:2018", "iso9899:2024" };
+    val gnu: str[7] = { "gnu90", "gnu90", "gnu99", "gnu11", "gnu17", "gnu17", "gnu23" };
+    for (i) in 0..7 {
+        if (s == iso[i]) {
+            return gnu[i];
+        }
+    }
+    if (s.len > 1 && s[0] == 'c' && s[1] != '+') {
+        if (s == "c99") { return "gnu99"; }
+        if (s == "c89") { return "gnu89"; }
+        if (s == "c90") { return "gnu90"; }
+        if (s == "c11") { return "gnu11"; }
+        if (s == "c17") { return "gnu17"; }
+        if (s == "c18") { return "gnu17"; }
+        if (s == "c23") { return "gnu23"; }
+        if (s == "c2x") { return "gnu2x"; }
+        if (s == "c2y") { return "gnu2y"; }
+    }
+    return s;
+}
+
+// the C unit for standard s (one per standard other than Volt's own C's)
+attach fn c_unit_for(this: checker&, s: str) -> u32 {
+    for (i) in 0..this.c_units.len {
+        if (*this.c_units.at(i) == s) {
+            return @cast<u32>(i);
+        }
+    }
+    put(&this.c_units, s);
+    var head = fmt2("/* generated by voltc: C headers compiled under -std={}, which Volt's own C (-std={}) can't\n   include; Volt calls their functions through these pointers */\n", S(s), S(this.c_own_std()));
+    head.append("#include <stdio.h>\n#include <stdlib.h>\n\n/* a function the headers declare and nothing defines (its library isn't linked), when called */\nstatic void volt_c_missing(const char *name) {\n    fprintf(stderr, \"panic: the C function %s isn't defined anywhere (is its library linked?)\\n\", name);\n    exit(101);\n}\n\n");
+    put(&this.c_unit_text, move head);
+    put(&this.c_unit_weak, {});
+    return @cast<u32>(this.c_units.len - 1);
+}
+
+// an item of an import kept out of Volt's C (unit u): a function is reached through a pointer the
+// unit defines (weak for one the headers only declare: one nothing defines panics when called, as
+// the unit's constructor points it at a stub), a global by its symbol, and a struct is laid out
+// by Volt
+attach fn keep_out(this: checker&, it: item&, imp: c_imported&, u: u32, span: span) -> compile_error!void {
+    var name: str = "";
+    match (it.kind) {
+        .FN(f&) => { name = f.name; },
+        .GLOBAL(l&) => {
+            this.c_kept.put(l.c_name ?? return, u);
+            return;
+        },
+        .STRUCT(sd&) => {
+            if (sd.c_partial || sd.c_union || sd.c_offsets != null) {
+                return fail(span, fmt2("the C struct {} shares or hides its fields' bytes (a union, a bitfield), and its header's standard ({}) isn't Volt's own C's: only that standard's C can lay it out; import it under the program's standard", S(sd.c_name ?? sd.name), S(*this.c_units.at(@cast<usize>(u)))));
+            }
+            sd.c_name = null;
+            return;
+        },
+        default => { return; },
+    }
+    if (this.c_kept.get(name) != null) {
+        return;
+    }
+    this.c_kept.put(name, u);
+    var stat = false;
+    for (x&) in imp.statics.items() {
+        if (*x == name) {
+            stat = true;
+        }
+    }
+    val text = this.c_unit_text.at(@cast<usize>(u));
+    if (!stat) {
+        text.append(fmt("#pragma weak {}\n", S(name)).as_str());
+    }
+    text.append(fmt2("void *volt_c_{} = (void *){};\n", S(name), S(name)).as_str());
+    if (!stat) {
+        text.append(fmt2("static void volt_c_no_{}(void) {{\n    volt_c_missing(\"{}\");\n}}\n", S(name), S(name)).as_str());
+        this.c_unit_weak.at(@cast<usize>(u)).append(fmt3("    if (!volt_c_{}) {{\n        volt_c_{} = (void *)volt_c_no_{};\n    }}\n", S(name), S(name), S(name)).as_str());
+    }
+}
+
 // `use { "a.h", "b.h" } as alias;`: the headers' declarations as namespace alias
-attach fn import_c(this: checker&, headers: std::vec<std::string>&, alias: str, ns: u32, span: span) -> compile_error!void {
+attach fn import_c(this: checker&, headers: std::vec<std::string>&, alias: str, ns: u32, standard: str, span: span) -> compile_error!void {
     val file = this.files.at(@cast<usize>(span.file)).name;
     // headers next to the source file first; std (no file) only sees system headers
     var dir: str? = null;
@@ -1968,8 +2279,32 @@ attach fn import_c(this: checker&, headers: std::vec<std::string>&, alias: str, 
             dir = ".";
         }
     }
+    // read under its standard; one other than Volt's own C's is kept out of Volt's C, in a unit
+    // of its own standard that Volt calls through pointers
+    var std_name = standard;
+    if (std_name.len == 0) {
+        std_name = this.c_newest();
+        if (dir == null) {
+            std_name = this.c_own_std(); // std's own: always in Volt's C
+        }
+    }
+    this.c_import_std = std_name;
     val imp = try this.import_headers(headers, dir, span);
+    val keep = c_gnu(std_name) != this.c_own_std();
+    var kept: u32 = 0;
+    if (keep) {
+        kept = this.c_unit_for(std_name);
+    }
     for (inc&) in imp.includes.items() {
+        if (keep) {
+            val text = this.c_unit_text.at(@cast<usize>(kept));
+            var line = copy *inc;
+            line.push('\n');
+            if (!contains(text.as_str(), line.as_str())) {
+                text.append(line.as_str());
+            }
+            continue;
+        }
         var have = false;
         for (x&) in this.c_includes.items() {
             if (*x == inc.as_str()) {
@@ -2038,7 +2373,11 @@ attach fn import_c(this: checker&, headers: std::vec<std::string>&, alias: str, 
             }
         } else {
             this.c_imports.put(this.intern(move k), @cast<u32>(this.decls.len));
-            put(&this.owned_items, bx(copy *it));
+            var mine = copy *it;
+            if (keep) {
+                try this.keep_out(&mine, &imp, kept, span);
+            }
+            put(&this.owned_items, bx(move mine));
             val kept = this.owned_items.at(this.owned_items.len - 1);
             this.importing_c = true;
             val r = this.collect_item(*kept, n, null);

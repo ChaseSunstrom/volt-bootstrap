@@ -781,7 +781,9 @@ attach fn header_fn(this: lg&, i: u32) -> llvm::LLVMOpaqueValue* {
     var g = llvm::LLVMGetNamedGlobal(this.m, name);
     if (g == null) {
         g = llvm::LLVMAddGlobal(this.m, this.ptrt(), name);
-        put(&this.hdr, sym);
+        if (this.c.c_kept.get(sym) == null) {
+            put(&this.hdr, sym); // (a header kept out of Volt's C has its own unit's pointer)
+        }
     }
     val l = llvm::LLVMBuildLoad2(this.b, this.ptrt(), g, "");
     return l;

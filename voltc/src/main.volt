@@ -20,6 +20,9 @@ struct cli {
     pkgs: std::vec<pkg_arg> = {};
     links: std::vec<pkg_arg> = {};
     cc_args: std::vec<str> = {};
+    c_std: str = "";   // --cc -std=c11: C imports' standard
+    cpp_std: str = ""; // --cc -std=c++17: C++ imports'
+    c_unit_std: str = "gnu11"; // what Volt's own C is compiled under
     cfg: std::vec<cfg_arg> = {}; // --cfg [PKG:]KEY[=VALUE]
     lib: str? = null;             // check --lib NAME
     shared: bool = false;         // lib --shared: a self-contained shared library, for any language
@@ -150,7 +153,17 @@ fn parse_cli() -> cli {
             } else if (a == "--std") {
                 c.std_dir = v;
             } else if (a == "--cc") {
-                put(&c.cc_args, v);
+                if (starts_with(v, "-std=")) {
+                    // the standard C or C++ imports are read and compiled under, unless one says
+                    // (@standard); Volt's own C keeps its own
+                    if (contains(v, "++")) {
+                        c.cpp_std = v[5..];
+                    } else {
+                        c.c_std = v[5..];
+                    }
+                } else {
+                    put(&c.cc_args, v);
+                }
             } else if (a == "--lib") {
                 c.lib = v;
             } else if (a == "--lang") {
@@ -591,7 +604,7 @@ fn compile_with(c: cli&, s: sources&, shim: shim_src*) -> std::box<checker> {
         }
     }
     // the runtime lives in the program's own C unit, never in a library
-    var o: opts = { release: c.release, leak_check: c.leak_check, guards: move guards, lib: lib, runtime: lib == null || c.shared || c.standalone, cfg: copy c.cfg, pp_flags: preprocessor_flags(&c.cc_args), expand: c.cmd == "expand", line_info: c.profiler || (c.llvm && !c.release && (c.cmd == "build" || c.cmd == "run")), target: c.target };
+    var o: opts = { release: c.release, leak_check: c.leak_check, guards: move guards, lib: lib, runtime: lib == null || c.shared || c.standalone, cfg: copy c.cfg, pp_flags: preprocessor_flags(&c.cc_args), c_std: c.c_std, cpp_std: c.cpp_std, expand: c.cmd == "expand", line_info: c.profiler || (c.llvm && !c.release && (c.cmd == "build" || c.cmd == "run")), target: c.target };
     if (c.cmd == "emit-llvm") {
         o.triple = std::process::env("VOLT_TRIPLE");
     }
@@ -614,6 +627,9 @@ fn compile_with(c: cli&, s: sources&, shim: shim_src*) -> std::box<checker> {
         if (e) {
             die(copy e);
         }
+    }
+    if (chk.c_includes.len > 0 || chk.c_units.len > 0) {
+        c.c_unit_std = chk.c_own_std(); // Volt's C includes the C imports' headers: their standard
     }
     return chk;
 }
@@ -661,7 +677,7 @@ fn parse_sexp(file: str) -> i32 {
 }
 
 fn main() -> i32 {
-    val c = parse_cli();
+    var c = parse_cli();
     if (c.cmd == "parse") {
         if (!c.sexp) {
             usage();
@@ -748,9 +764,11 @@ fn main() -> i32 {
         }
         var lc = copy c;
         val cdir = fresh_dir();
-        val cpp_o = cpp_object(&*chk, &c, cdir.as_str());
-        if (cpp_o) {
-            put(&lc.cc_args, cpp_o.as_str());
+        val cpp_os = cpp_objects(&*chk, &c, cdir.as_str());
+        for (o&) in cpp_os.items() {
+            put(&lc.cc_args, o.as_str());
+        }
+        if (chk.cpp_shims.len > 0) {
             put(&lc.cc_args, "-lstdc++");
         }
         for (f&) in chk.link_flags.items() {
@@ -763,8 +781,8 @@ fn main() -> i32 {
         if (c.profiler) {
             write_voltmap(&*chk, out.as_str());
         }
-        if (cpp_o) {
-            unlink_path(cpp_o.as_str());
+        for (o&) in cpp_os.items() {
+            unlink_path(o.as_str());
         }
         rmdir_path(cdir.as_str());
         return 0;
@@ -799,9 +817,11 @@ fn main() -> i32 {
         }
         var lc = copy c;
         val cdir = fresh_dir();
-        val cpp_o = cpp_object(&*chk, &c, cdir.as_str());
-        if (cpp_o) {
-            put(&lc.cc_args, cpp_o.as_str());
+        val cpp_os = cpp_objects(&*chk, &c, cdir.as_str());
+        for (o&) in cpp_os.items() {
+            put(&lc.cc_args, o.as_str());
+        }
+        if (chk.cpp_shims.len > 0) {
             put(&lc.cc_args, "-lstdc++");
         }
         for (f&) in chk.link_flags.items() {
@@ -811,8 +831,8 @@ fn main() -> i32 {
             cc(chk.c_unit().as_str(), out.as_str(), &lc, false);
         }
         write_deps(out.as_str(), &chk.import_deps);
-        if (cpp_o) {
-            unlink_path(cpp_o.as_str());
+        for (o&) in cpp_os.items() {
+            unlink_path(o.as_str());
         }
         rmdir_path(cdir.as_str());
         return 0;
@@ -844,9 +864,9 @@ fn main() -> i32 {
         put(&ar, "rcs");
         put(&ar, out.as_str());
         put(&ar, obj.as_str());
-        val cpp_o = cpp_object(&*chk, &c, dir.as_str());
-        if (cpp_o) {
-            put(&ar, cpp_o.as_str()); // the program links -lstdc++ too
+        val cpp_os = cpp_objects(&*chk, &c, dir.as_str());
+        for (o&) in cpp_os.items() {
+            put(&ar, o.as_str()); // the program links -lstdc++ too
         }
         var via_llvm = c.llvm;
         if (via_llvm) {
@@ -888,8 +908,8 @@ fn main() -> i32 {
         unlink_path(o_c.as_str());
         unlink_path(rt_o.as_str());
         unlink_path(rt_c.as_str());
-        if (cpp_o) {
-            unlink_path(cpp_o.as_str());
+        for (o&) in cpp_os.items() {
+            unlink_path(o.as_str());
         }
         rmdir_path(dir.as_str());
         if (st != 0) {
@@ -905,9 +925,11 @@ fn main() -> i32 {
         var exe = copy dir;
         exe.append("/prog");
         var lc = copy c;
-        val cpp_o = cpp_object(&*chk, &c, dir.as_str());
-        if (cpp_o) {
-            put(&lc.cc_args, cpp_o.as_str());
+        val cpp_os = cpp_objects(&*chk, &c, dir.as_str());
+        for (o&) in cpp_os.items() {
+            put(&lc.cc_args, o.as_str());
+        }
+        if (chk.cpp_shims.len > 0) {
             put(&lc.cc_args, "-lstdc++");
         }
         for (f&) in chk.link_flags.items() {
@@ -916,8 +938,8 @@ fn main() -> i32 {
         if (!c.llvm || !llvm_exe(&*chk, exe.as_str(), &lc)) {
             cc(chk.c_unit().as_str(), exe.as_str(), &lc, false);
         }
-        if (cpp_o) {
-            unlink_path(cpp_o.as_str());
+        for (o&) in cpp_os.items() {
+            unlink_path(o.as_str());
         }
         var argv: std::vec<str> = {};
         put(&argv, exe.as_str());
@@ -1056,35 +1078,76 @@ fn cc(src: str, out: str, c: cli&, object: bool) -> void {
     cc_run(&inputs, out, c, object);
 }
 
-// the program's C++ wrappers (use cpp) compiled with $CXX (c++ unless set) into dir: the object, when
-// the program calls C++ at all
-fn cpp_object(chk: checker&, c: cli&, dir: str) -> std::string? {
-    val text = chk.cpp_unit();
+// the imports' own objects: a C++ unit per standard, and a C unit per standard Volt's C can't
+// include
+fn cpp_objects(chk: checker&, c: cli&, dir: str) -> std::vec<std::string> {
+    var objs: std::vec<std::string> = {};
+    for (u) in 0..chk.cpp_units.len {
+        val o = cpp_object(chk, c, dir, @cast<u32>(u));
+        if (o) {
+            put(&objs, copy o);
+        }
+    }
+    for (u) in 0..chk.c_units.len {
+        var src = S(dir);
+        src.append(fmt("/volt_c_{}.c", unum(@cast<u64>(u))).as_str());
+        var obj = S(dir);
+        obj.append(fmt("/volt_c_{}.o", unum(@cast<u64>(u))).as_str());
+        var text = copy *chk.c_unit_text.at(u);
+        if (chk.c_unit_weak.at(u).len() > 0) {
+            text.append("\n/* functions nothing defines: a stub that says so */\n__attribute__((constructor)) static void volt_c_check(void) {\n");
+            text.append(chk.c_unit_weak.at(u).as_str());
+            text.append("}\n");
+        }
+        std::fs::write_file(src.as_str(), text.as_str()) catch |e| {
+            die(fmt("can't write {}", copy src));
+        };
+        var argv: std::vec<str> = {};
+        val cc = c_command(&argv);
+        val std_flag = fmt("-std={}", S(*chk.c_units.at(u)));
+        val fixed: str[4] = { std_flag.as_str(), "-fPIC", "-w", "-c" };
+        for (f) in fixed {
+            put(&argv, f);
+        }
+        put(&argv, src.as_str());
+        put(&argv, "-o");
+        put(&argv, obj.as_str());
+        for (f&) in preprocessor_flags(&c.cc_args).items() {
+            put(&argv, *f);
+        }
+        if (c.release) {
+            put(&argv, "-O2");
+        }
+        val r = std::process::capture(argv.items(), "") catch |e| {
+            die(fmt("can't run the C compiler '{}'", S(cc)));
+        };
+        unlink_path(src.as_str());
+        if (r.code != 0) {
+            die(fmt2("the C compiler failed on the headers imported under {}:\n{}", copy std_flag, copy r.err));
+        }
+        put(&objs, move obj);
+    }
+    return objs;
+}
+
+// the program's C++ wrappers (use cpp) of unit u compiled under its standard with $CXX (c++ unless
+// set) into dir: the object, when its imports make calls
+fn cpp_object(chk: checker&, c: cli&, dir: str, u: u32) -> std::string? {
+    val text = chk.cpp_unit(u);
     if (text.len() == 0) {
         return null;
     }
     var src = S(dir);
-    src.append("/volt_cpp.cpp");
+    src.append(fmt("/volt_cpp_{}.cpp", unum(@cast<u64>(u))).as_str());
     var obj = S(dir);
-    obj.append("/volt_cpp.o");
+    obj.append(fmt("/volt_cpp_{}.o", unum(@cast<u64>(u))).as_str());
     std::fs::write_file(src.as_str(), text.as_str()) catch |e| {
         die(fmt("can't write {}", copy src));
     };
     var argv: std::vec<str> = {};
-    val cxx = std::process::env("CXX") ?? "c++";
-    var start: usize = 0;
-    for (i) in 0..cxx.len + 1 {
-        if (i == cxx.len || cxx[i] == ' ') {
-            if (i > start) {
-                put(&argv, cxx[start..i]);
-            }
-            start = i + 1;
-        }
-    }
-    if (argv.len == 0) {
-        put(&argv, "c++");
-    }
-    val fixed: str[4] = { "-std=c++20", "-fPIC", "-w", "-c" };
+    val cxx = cxx_command(&argv);
+    val std_flag = fmt("-std={}", S(*chk.cpp_units.at(@cast<usize>(u))));
+    val fixed: str[4] = { std_flag.as_str(), "-fPIC", "-w", "-c" };
     for (f) in fixed {
         put(&argv, f);
     }
@@ -1105,7 +1168,7 @@ fn cpp_object(chk: checker&, c: cli&, dir: str) -> std::string? {
     };
     unlink_path(src.as_str());
     if (r.code != 0) {
-        die(fmt("the C++ compiler failed on the wrappers for use cpp:\n{}", copy r.err));
+        die(fmt2("the C++ compiler failed on the wrappers for use cpp ({}):\n{}", copy std_flag, copy r.err));
     }
     return obj;
 }
@@ -1117,6 +1180,7 @@ fn runtime_object(text: str, c: cli&, dir: str) -> std::string {
     key.append(std::process::os());
     key.append(std::process::arch());
     key.append(std::process::env("CC") ?? "cc");
+    key.append(c.c_unit_std);
     if (c.profiler && on_path("clang")) {
         key.append("|clang"); // cc_run compiles --profiler builds with clang when it's there
     }
@@ -1264,7 +1328,8 @@ fn cc_run(inputs: std::vec<str>&, out: str, c: cli&, object: bool) -> void {
     } else {
         compiler = c_command(&argv);
     }
-    put(&argv, "-std=gnu11");
+    val std_flag = fmt("-std={}", S(c.c_unit_std));
+    put(&argv, std_flag.as_str());
     put(&argv, "-w");
     put(&argv, "-Wno-error=incompatible-pointer-types");
     put(&argv, "-Wno-error=int-conversion");

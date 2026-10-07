@@ -110,6 +110,26 @@ function-pointer typedef is an optional function, as C's can be null.
 Importing the same header in two places gives the same types: a `FILE*` from one import is the
 same type as from another.
 
+### C versions
+
+Headers are read and compiled under a C standard: the newest both libclang and `$CC` take, in GNU's
+form (`gnu23` with a current compiler), unless `--cc -std=c11` sets one for the whole program or
+`@standard` one for the import:
+
+```volt ignore
+@attributes([@standard("c89")])
+use { "legacy.h" } as old;   // typedef int bool; K&R definitions
+use { "modern.h" } as c;     // constexpr, nullptr, [[attributes]]: C23
+```
+
+Volt's own C (the C backend's output, the LLVM backend's runtime) is compiled under the GNU form of
+the program's standard, and includes the headers imported under it (or its GNU or ISO twin: `c11`
+and `gnu11` share it). A header imported under another one is compiled in a unit of its own
+standard instead, and Volt calls its functions through pointers that unit defines (calling one the
+header declares and nothing defines panics, naming it); its structs are laid out by Volt, so one
+with a union or bitfield member has to come in under the program's standard. A K&R definition's parameters take the types a caller without a prototype passes (`char`
+and `short` as `int`, `float` as `double`).
+
 ## Declaring C functions
 
 `extern "C" fn` declares any function with a C ABI, from a C library, or a Rust `extern "C"`, Zig

@@ -96,6 +96,24 @@ inside a generic function gets that instance's: `@cpp<i32>("apply<{&0}, {=1}>({2
 
 `VOLT_SHOW_CPP=1` prints the Volt declarations voltc generated from the headers.
 
+## C++ versions
+
+Each import is read and compiled under a C++ standard: the newest both libclang and `$CXX` take
+(found once), unless `--cc -std=c++17` sets one for the whole program or `@standard` one for the
+import. Headers written for different standards meet in one program, each compiled under its own:
+C++98 code that uses what C++17 removed beside C++23 code that needs it.
+
+```volt ignore
+@attributes([@standard("c++98")])
+use { "legacy.hpp" } as old;   // std::auto_ptr, throw(int)
+use { "modern.hpp" } as cpp;   // concepts, std::expected: the newest standard
+```
+
+voltc compiles the wrappers in one C++ unit per standard, each including only its imports' headers,
+so everything above works under C++98 through C++26: functions, classes and their handles, `try_`
+forms, exceptions, and calls worked out per use (which under C++98 give their result by value).
+Subclassing a C++ class (`derive`, below) needs its import under C++17 or newer.
+
 ## Calls worked out per use
 
 Some C++ has no declaration Volt can write ahead: a variadic template (`template <class... A>`), a
