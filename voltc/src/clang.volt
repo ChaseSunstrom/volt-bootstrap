@@ -104,6 +104,38 @@ attach fn errors_text(this: clang_tu&, main: str) -> std::string? {
     return out;
 }
 
+// the lines of the main file clang's errors are at, or were instantiated from (a note's)
+attach fn error_lines(this: clang_tu&, main: str) -> std::vec<u32> {
+    var out: std::vec<u32> = {};
+    if (this.tu == null) {
+        return out;
+    }
+    val n = clang::clang_getNumDiagnostics(this.tu);
+    for (i) in 0..n {
+        val d = clang::clang_getDiagnostic(this.tu, i);
+        if (clang::clang_getDiagnosticSeverity(d) >= 3) {
+            put_main_line(&out, d, main);
+            val notes = clang::clang_getChildDiagnostics(d);
+            for (j) in 0..clang::clang_getNumDiagnosticsInSet(notes) {
+                val note = clang::clang_getDiagnosticInSet(notes, j);
+                put_main_line(&out, note, main);
+                clang::clang_disposeDiagnostic(note);
+            }
+        }
+        clang::clang_disposeDiagnostic(d);
+    }
+    return out;
+}
+
+fn put_main_line(out: std::vec<u32>&, d: clang::CXDiagnostic, main: str) -> void {
+    var f: clang::CXFile = null;
+    var line: u32 = 0;
+    clang::clang_getExpansionLocation(clang::clang_getDiagnosticLocation(d), &f, &line, null, null);
+    if (f != null && ends_with(cx_str(clang::clang_getFileName(f)).as_str(), main)) {
+        put(out, line);
+    }
+}
+
 // one diagnostic as a line of out: "file:line:col: note: what", or "what" in the main file
 fn put_diag_line(out: std::string&, d: clang::CXDiagnostic, main: str) -> void {
     var line = cx_str(clang::clang_formatDiagnostic(d, clang::clang_defaultDiagnosticDisplayOptions()));

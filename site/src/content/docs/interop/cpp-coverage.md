@@ -27,7 +27,8 @@ doesn't map, with the way around each.
 | `const`/`constexpr` constants | `val`s |
 | enums (scoped or not) | enums |
 | virtual methods | overridden by name in an `attach C -> T` block; `C::derive` makes the subclass (no RTTI, no call through a table) |
-| public bases, `dynamic_cast`, `typeid` | `as_Base()`, `as_Derived()`, `cpp_type_name()` |
+| public bases (one reached by two paths, by its path), `dynamic_cast`, `typeid` | `as_Base()`, `as_B1_A()`, `as_Derived()`, `cpp_type_name()` |
+| `T*`, `T&`, `T&&`, `const T&`, `std::unique_ptr<T>`, `std::shared_ptr<T>` of a class held by handle | borrowed handles (`T?` for a pointer), owning ones for a `unique_ptr`; a `shared_ptr` is a handle whose `get()` borrows |
 | exceptions | `try_` forms returning a `cpp_error` naming the exception |
 | `std::string`, `std::string_view`, `std::vector`, `std::unique_ptr`, `std::shared_ptr`, `std::function` | `str`/`std::string`, `T[..]`/`std::vec<T>`, `stdcxx::` handles, `fn(...)` values |
 | a type by what it can do: optional-like, tuple-like, contiguous, variant-like (`std::optional`, `std::pair`, `std::tuple`, `std::array`, `std::span`, `std::variant`, any library's own) | `T?`, tuples, `T[N]`, `T[..]`/`std::vec<T>`, an enum to `match` on |
@@ -69,7 +70,6 @@ it), and the rest still works. What Volt can't declare ahead (variadic and non-t
 | --- | --- | --- |
 | class templates with non-type or template template parameters (glm's `vec<3, float>`) | Volt's generic structs take types (functions with them are [called per use](/volt-bootstrap/interop/cpp/#calls-worked-out-per-use)) | a `using vec3 = glm::vec3;` with wrapper functions over it |
 | C++20 modules (`import std;`) | the import reads headers | the headers the module is built from |
-| pointers to classes held by handle (`T*`), non-const `T&` results of them | Volt can't tell who owns the object | a reference parameter (`T&`), or `as_Base()` and `as_Derived()` |
 | bit-fields | a Volt field can't be part of a byte | a getter and setter in C++ |
 | a `std::function` field's setter | a Volt closure stored in C++ would outlive the call | a C++ method that takes it and copies what it needs |
 

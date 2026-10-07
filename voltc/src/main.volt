@@ -1082,8 +1082,12 @@ fn cc(src: str, out: str, c: cli&, object: bool) -> void {
 // include
 fn cpp_objects(chk: checker&, c: cli&, dir: str) -> std::vec<std::string> {
     var objs: std::vec<std::string> = {};
+    var live: std::map<u32, bool> = {};
+    if (chk.cpp_units.len > 0) {
+        live = reachable(chk);
+    }
     for (u) in 0..chk.cpp_units.len {
-        val o = cpp_object(chk, c, dir, @cast<u32>(u));
+        val o = cpp_object(chk, c, dir, @cast<u32>(u), &live);
         if (o) {
             put(&objs, copy o);
         }
@@ -1132,8 +1136,8 @@ fn cpp_objects(chk: checker&, c: cli&, dir: str) -> std::vec<std::string> {
 
 // the program's C++ wrappers (use cpp) of unit u compiled under its standard with $CXX (c++ unless
 // set) into dir: the object, when its imports make calls
-fn cpp_object(chk: checker&, c: cli&, dir: str, u: u32) -> std::string? {
-    val text = chk.cpp_unit(u);
+fn cpp_object(chk: checker&, c: cli&, dir: str, u: u32, live: std::map<u32, bool>&) -> std::string? {
+    val text = chk.cpp_unit(u, live);
     if (text.len() == 0) {
         return null;
     }

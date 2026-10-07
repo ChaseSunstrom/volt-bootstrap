@@ -56,7 +56,10 @@ fn main() -> void {
 | a trivially copyable class or struct | a struct with C++'s size and layout: public fields by name, the rest as padding |
 | a class with virtual methods | a handle, as below, and a Volt type can subclass it (see [Subclassing](#subclassing-a-c-class-in-volt)) |
 | any other class | a handle to an object C++ allocates (`new`, and `delete` when the Volt value goes): a public field `f` is the method `f()` (a copy) and `set_f(v)` (when it can be assigned, and the class has no `set_f` of its own); `cpp_type_name()` is its type as C++ names it (the dynamic type, for a class with virtual methods) |
-| a public base class `B` (direct or not) | `d.as_B()`: a handle that borrows the object (never deleted), or a `B&` for a class held by value; a base reached twice isn't one |
+| a public base class `B` (direct or not) | `d.as_B()`: a handle that borrows the object (never deleted), or a `B&` for a class held by value; a base reached by two paths (each its own object) has a cast for each, named by the path: `d.as_B1_A()`, `d.as_B2_A()` |
+| a `T*` of a class held by handle | a result: `T?`, a handle borrowing the object (C++ keeps owning it), none for `nullptr`; a parameter: `T*`, so `&h` or `null` |
+| a `T&` result (or a `const T&` of a class that can't be copied) | a handle borrowing the object: changes through it are C++'s object's |
+| `std::unique_ptr<T>` of a class held by handle | the object, handed over: a result is `T?` (an owning handle, none for an empty one), a parameter takes a `T` (Volt's handle no longer owns it) |
 | `dynamic_cast` | `b.as_D()` on a base with virtual methods: a borrowed handle to the `D`, or null when the object isn't one |
 | constructors | `T::new(...)`, one per overload (a default argument adds an overload without it); `T::new()` for a class that declares none, when it can be made from nothing |
 | destructor | a `delete` hook (only when the class needs one) |
@@ -215,7 +218,7 @@ fn main() -> void {
 | `std::unique_ptr<T>`, `std::shared_ptr<T>` | `stdcxx::unique_ptr<T>`, `stdcxx::shared_ptr<T>`: `get()`, and `use_count()` for the shared one; deleting one is C++'s destructor, copying a shared one adds an owner |
 | operators | methods and functions named after them: `op_add` (`+`), `op_sub`, `op_mul`, `op_div`, `op_rem`, `op_eq`, `op_ne`, `op_lt`, `op_le`, `op_gt`, `op_ge`, `op_index` (`[]`), `op_call` (`()`), `op_neg` (unary `-`), `op_not`, `op_add_assign` (`+=`)... |
 | `T&&` parameters | `T`: Volt hands the value over and C++ moves from it |
-| a `T&&` result | `T`: a copy of what it refers to (for a class held by handle, a new object moved from it) |
+| a `T&&` result | `T`: a copy of what it refers to (for a class held by handle, a new object moved from it, or a borrowed handle when it can't be moved) |
 | a `const` or `constexpr` constant (a number, `bool`, enum or text) in a namespace | a `val` of its value |
 | a static data member `m` | `T::m()` (a copy) and `T::set_m(v)` when it can be assigned |
 | a class or enum inside a class (`Outer::Inner`) | `Outer_Inner`, beside `Outer` (an unscoped enum's names stay in it: `Outer_Mode::Low`) |
@@ -393,7 +396,8 @@ without RTTI, a cast or a type name stops the program, and `derived<T>()` on suc
 - A C++ exception that reaches Volt through a function's plain form stops the program, like a
   panic; its `try_` form returns it as an error. Either way it never passes through Volt frames, and
   a Volt panic (in a method C++ calls, say) ends the program without unwinding through C++'s.
-- A handle borrowed from `as_` doesn't keep the object alive: it's good while what it came from is.
+- A borrowed handle (from `as_`, a `T*` or a `T&`) doesn't keep the object alive: it's good while
+  what it came from is.
   Passed by value, it gives C++ a copy of the object (an owned handle is moved from), and `copy` of
   it is an object of its own.
 - Volt moves values by copying their bytes, which a C++ object that points into itself (as
@@ -402,10 +406,9 @@ without RTTI, a cast or a type name stops the program, and `derived<T>()` on suc
   pointer, and the object stays where C++ made it. A handle is never empty: `{}` makes the object
   with its default constructor (`new T()`), and for a class that can't be made from nothing `{}` is
   a compile error that says to use `T::new(...)`.
-- A handle class can't be reached through a C++ pointer (`T*`), a non-const reference result (`T&`)
-  or a smart pointer or class template over it; those are left out, as is a class template with a
-  field of one. A `const T&` result is copied into a new handle, so it's left out when the class
-  can't be copied (an abstract one, say).
+- A class clang says can be copied but whose copy doesn't compile (one holding a
+  `std::vector<std::unique_ptr<T>>`: the vector's copy constructor is declared for any element)
+  has no `copy`: the import tries each class's copy, and one that fails isn't copyable.
 - A class whose destructor isn't public can't be owned by Volt: it has no `T::new`, and only its
   static methods are of use.
 

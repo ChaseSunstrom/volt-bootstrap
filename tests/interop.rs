@@ -1228,6 +1228,19 @@ fn cpp_stdlib() {
 }
 
 #[test]
+fn cpp_refs() {
+    // T*, T&, const T& of an uncopyable class, unique_ptr and shared_ptr over handle classes, a
+    // class whose copy doesn't compile, a diamond's bases by path
+    let e = Env::new("cpp-refs");
+    for backend in ["c", "llvm"] {
+        assert_eq!(ok(e.voltc(&["run", "cpp_refs.volt", "--backend", backend]), "voltc run cpp_refs.volt"), "find 2 true\nfirst 101 last 2\nid_of 2 -1\ntake 2 1\nput 2\nowned 2\nshare 7\ndiamond 1 1\n", "reference shapes ({backend})");
+    }
+    let o = e.voltc(&["check", "cpp_refs_no_copy.volt"]);
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(!o.status.success() && err.contains("can't copy cpp::rf::Shelf") && err.contains("cpp_refs_no_copy.volt:7"), "a class whose copy doesn't compile has no copy: {err}");
+}
+
+#[test]
 fn cpp_handles_are_never_empty() {
     // {} default-constructs a class held by handle, in a variable or a struct's field; one with no
     // default constructor makes {} an error at the literal

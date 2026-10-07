@@ -2680,9 +2680,11 @@ attach fn llvm_build(this: checker&, g: lg&) -> std::string {
         // the IR marks each statement's line: DWARF line tables, so a debugger steps through Volt
         g.di_start();
     }
+    // the bodies the program reaches, as the C backend writes (and so the C++ wrappers compiled)
+    val live = reachable(this);
     for (b) in this.ir.bodies.items() {
         val f = this.ir.fn_at(b);
-        if (f.body != null && f.used && f.link != linkage::EXTERNAL) {
+        if (f.body != null && f.used && f.link != linkage::EXTERNAL && live.get(b) != null) {
             g.fn_body(b);
         }
     }
