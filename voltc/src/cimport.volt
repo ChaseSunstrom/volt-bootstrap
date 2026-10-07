@@ -509,7 +509,8 @@ enum ctype {
     FUNC: (std::vec<ctype>, std::box<ctype>, bool),
     LDOUBLE,      // long double: an f64 through a wrapper
     COMPLEX: str, // _Complex of its real type's C name (float, double, long double): through a wrapper
-    BAD,          // va_list...: can't be used by value
+    VA_LIST,      // va_list: a function taking one last is called with varargs (va_wrapper)
+    BAD,          // _Float16...: can't be used by value
 }
 
 struct cfield_decl {
@@ -586,6 +587,7 @@ struct cdecls {
     label: str? = null;                  // the asm label read last (the declared fn's)
     names: std::vec<std::string> = {}; // made-up names (anonymous tags) the others point into
     anon_in: std::map<str, anon_field> = {}; // anonymous tag -> the named field it types
+    fn_macros: std::vec<str> = {};     // function-like #defines (MAX(a, b)): called per use
 }
 
 // a made-up tag for an anonymous struct or enum: prefix and a number
@@ -804,7 +806,9 @@ attach fn specs(this: cparser&, stat: bool&) -> ctype? {
             base = ctype::PRIM("u128");
         } else if (n == "_Complex" || n == "__complex__") {
             complex = true;
-        } else if (n == "__builtin_va_list" || n == "_Float32x" || n == "_Float64x" || n == "_Float128x" || n == "_Float16") {
+        } else if (n == "__builtin_va_list") {
+            base = ctype::VA_LIST;
+        } else if (n == "_Float32x" || n == "_Float64x" || n == "_Float128x" || n == "_Float16") {
             base = ctype::BAD;
         } else if (n == "struct" || n == "union") {
             this.i += 1;
@@ -1795,6 +1799,80 @@ attach fn wrapper(this: cmapper&, f: cfn&, c_names: std::map<str, str>&) -> std:
     return out;
 }
 
+// a static C function `volt_cv_NAME` taking fn f's parameters but its last, a va_list, then C's
+// ...: it calls f with the varargs as that va_list. f is called through a declaration of its own
+// (as wrapper's is). None when f has no parameter before the va_list (va_start needs one before
+// C23) or a type can't be written
+attach fn va_wrapper(this: cmapper&, f: cfn&, c_names: std::map<str, str>&) -> std::string? {
+    if (f.params.len < 2) {
+        return null;
+    }
+    var params = S("");
+    var args = S("");
+    var orig = S("");
+    for (i) in 0..f.params.len - 1 {
+        val t = this.c_text(&f.params.at(i).ty, c_names) ?? return null;
+        var a = S("volt_a");
+        a.append_uint(@cast<u64>(i));
+        params.append(fmt2("{} {}, ", copy t, copy a).as_str());
+        if (spelled_ptr(&f.params.at(i).ty)) {
+            args.append("(void *)");
+        }
+        args.append(fmt("{}, ", copy a).as_str());
+        orig.append(fmt("{}, ", copy t).as_str());
+    }
+    params.append("...");
+    args.append("volt_ap");
+    orig.append("va_list");
+    var callee = S(f.name);
+    if (!f.stat) {
+        callee = fmt("volt_cr_{}", S(f.name));
+    }
+    val ret = this.c_text(&f.ret, c_names) ?? return null;
+    var call = fmt2("{}({})", copy callee, move args);
+    var body = fmt("va_list volt_ap; va_start(volt_ap, volt_a{}); ", unum(@cast<u64>(f.params.len - 2)));
+    if (ret.as_str() == "void") {
+        body.append(fmt("{}; va_end(volt_ap);", move call).as_str());
+    } else {
+        if (spelled_ptr(&f.ret)) {
+            call = fmt("(void *){}", move call);
+        }
+        body.append(fmt2("{} volt_r = {}; va_end(volt_ap); return volt_r;", copy ret, move call).as_str());
+    }
+    var out = S("#include <stdarg.h>\n");
+    if (!f.stat) {
+        out.append("#ifndef VOLT_CW_SYM\n#define VOLT_CW_STR2(x) #x\n#define VOLT_CW_STR(x) VOLT_CW_STR2(x)\n#define VOLT_CW_SYM(n) __asm__(VOLT_CW_STR(__USER_LABEL_PREFIX__) n)\n#endif\n");
+        var sym = fmt("VOLT_CW_SYM(\"{}\")", S(f.name));
+        val label = f.label;
+        if (label) {
+            sym = fmt("__asm__(\"{}\")", S(label));
+        }
+        out.append(fmt4("extern {} {}({}) {};\n", copy ret, copy callee, move orig, move sym).as_str());
+    }
+    out.append(fmt4("static {} volt_cv_{}({}) {{ {} }}", copy ret, S(f.name), move params, move body).as_str());
+    return out;
+}
+
+// complex struct n (cf32, cf64) as C's typedef for it, and as the Volt struct bound to it (c_name)
+fn complex_c(n: str) -> std::string {
+    var e = "double";
+    if (n == "cf32") {
+        e = "float";
+    }
+    return fmt2("typedef struct {{ {} re, im; }} volt_{};", S(e), S(n));
+}
+
+attach fn complex_item(this: cmapper&, n: str, c_name: str) -> item {
+    var re = "f64";
+    if (n == "cf32") {
+        re = "f32";
+    }
+    var fields: std::vec<field> = {};
+    put(&fields, { name: "re", ty: this.path_ty(re), fallback: null, vis: vis::PUBLIC, span: this.span });
+    put(&fields, { name: "im", ty: this.path_ty(re), fallback: null, vis: vis::PUBLIC, span: this.span });
+    return this.citem(item_kind::STRUCT({ name: this.complex_volt(n), spec: null, fields: move fields, is_extern: true, is_comptime: false, c_name: c_name }));
+}
+
 // a public item at the import's span
 attach fn citem(this: cmapper&, k: item_kind) -> item {
     return { kind: move k, span: this.span, attrs: {}, vis: vis::PUBLIC, generics: {} };
@@ -1805,6 +1883,17 @@ struct c_imported {
     items: std::vec<item> = {};
     includes: std::vec<std::string> = {};
     statics: std::vec<str> = {}; // the static functions (defined by the headers)
+    // what's called per use (cuse.volt): function-like macros and varargs functions needing a
+    // wrapper, and what mapping a probed type takes (the declarations, the names given)
+    per_use: std::vec<str> = {};
+    ctx: usize? = null; // their c_ctx
+    names: std::map<str, str> = {};
+    c_names: std::map<str, str> = {};
+    enum_names: std::map<str, str> = {};
+    enum_ints: std::map<str, str> = {};
+    complex: std::vec<str> = {};
+    cf32: str = "cf32";
+    cf64: str = "cf64";
 }
 
 // the C compiler as a command: $CC split at whitespace (CC="ccache gcc"), else cc. Pushes the words
@@ -2069,6 +2158,11 @@ attach fn import_headers(this: checker&, headers: std::vec<std::string>&, dir: s
     parse_decls(dtext, &d);
     try this.c_macros(&d, mtext);
     this.c_items(&d, &res, span);
+    if (res.per_use.len > 0) {
+        // what its per-use calls map types with (import_c says where it is: c_per_use)
+        put(&this.c_ctxs, { ns: 0, src: move src, standard: this.c_import_std, keep: false, kept: 0, d: move d, names: copy res.names, c_names: copy res.c_names, enum_names: copy res.enum_names, enum_ints: copy res.enum_ints, complex: copy res.complex, cf32: res.cf32, cf64: res.cf64 });
+        res.ctx = this.c_ctxs.len - 1;
+    }
     return res;
 }
 
@@ -2136,6 +2230,9 @@ attach fn c_macros(this: checker&, d: cdecls&, macros: str) -> compile_error!voi
         }
         val body = rest[n..rest.len];
         if (body.len > 0 && body[0] == '(') {
+            if (n > 0 && rest[0] != '_') {
+                put(&d.fn_macros, rest[0..n]);
+            }
             continue;
         }
         put(&defs, { name: rest[0..n], body: c_lex(body) });
@@ -2407,11 +2504,24 @@ attach fn c_items(this: checker&, d: cdecls&, res: c_imported&, span: span) -> v
             wrap = wrap || m.needs_wrap(&p.ty);
         }
         if (wrap && f.variadic) {
+            put(&res.per_use, f.name); // a wrapper per call's argument types
             continue;
+        }
+        // a va_list last: called with varargs, through a variadic wrapper that makes the va_list
+        var va = false;
+        if (f.params.len > 0 && !f.variadic && !wrap) {
+            match (*(m.resolve(&f.params.at(f.params.len - 1).ty, 0) ?? continue)) {
+                .VA_LIST => { va = true; },
+                default => {},
+            }
+        }
+        var np = f.params.len;
+        if (va) {
+            np -= 1;
         }
         var params: std::vec<param> = {};
         var ok = true;
-        for (i) in 0..f.params.len {
+        for (i) in 0..np {
             val p = f.params.at(i);
             val t = m.wrap_ty(&p.ty);
             if (t == null) {
@@ -2431,6 +2541,13 @@ attach fn c_items(this: checker&, d: cdecls&, res: c_imported&, span: span) -> v
         }
         val ret = m.wrap_ty(&f.ret) ?? continue;
         var c_name: str? = null;
+        if (va) {
+            val w = m.va_wrapper(f, &c_names) ?? continue;
+            put(&wraps, move w);
+            val cn = this.intern(fmt("volt_cv_{}", S(f.name)));
+            put(&res.statics, cn);
+            c_name = cn;
+        }
         if (wrap) {
             val w = m.wrapper(f, &c_names) ?? continue;
             put(&wraps, move w);
@@ -2438,21 +2555,20 @@ attach fn c_items(this: checker&, d: cdecls&, res: c_imported&, span: span) -> v
             put(&res.statics, cn);
             c_name = cn;
         }
-        put(&res.items, m.citem(item_kind::FN({ name: f.name, spec: null, params: move params, c_varargs: f.variadic, ret: move ret, body: null, is_async: false, is_comptime: false, extern_abi: C_HEADER, is_export: false, is_attach: false, c_name: c_name })));
+        put(&res.items, m.citem(item_kind::FN({ name: f.name, spec: null, params: move params, c_varargs: f.variadic || va, ret: move ret, body: null, is_async: false, is_comptime: false, extern_abi: C_HEADER, is_export: false, is_attach: false, c_name: c_name })));
+    }
+    // function-like macros no function or type has the name of
+    for (n) in d.fn_macros.items() {
+        if (seen_fns.get(n) != null || taken.get(n) != null) {
+            continue;
+        }
+        seen_fns.put(n, true);
+        put(&res.per_use, n);
     }
     // the complex structs the wrappers take and give (C's layout of a complex), then the wrappers
     for (n&) in m.complex.items() {
-        var e = "double";
-        var re = "f64";
-        if (*n == "cf32") {
-            e = "float";
-            re = "f32";
-        }
-        put(&res.includes, fmt2("typedef struct {{ {} re, im; }} volt_{};", S(e), S(*n)));
-        var fields: std::vec<field> = {};
-        put(&fields, { name: "re", ty: m.path_ty(re), fallback: null, vis: vis::PUBLIC, span: span });
-        put(&fields, { name: "im", ty: m.path_ty(re), fallback: null, vis: vis::PUBLIC, span: span });
-        put(&res.items, m.citem(item_kind::STRUCT({ name: m.complex_volt(*n), spec: null, fields: move fields, is_extern: true, is_comptime: false, c_name: this.intern(fmt("volt_{}", S(*n))) })));
+        put(&res.includes, complex_c(*n));
+        put(&res.items, m.complex_item(*n, this.intern(fmt("volt_{}", S(*n)))));
     }
     for (w&) in wraps.items() {
         put(&res.includes, copy *w);
@@ -2508,6 +2624,14 @@ attach fn c_items(this: checker&, d: cdecls&, res: c_imported&, span: span) -> v
         val pt: pat = { kind: pat_kind::BIND(k.name), span: span };
         put(&res.items, m.citem(item_kind::GLOBAL({ mutable: false, is_comptime: false, is_static: false, pat: pt, ty: m.path_ty(tn), init: move init, span: span, c_name: null })));
     }
+    // what a call made per use maps its types with
+    res.names = copy m.names;
+    res.c_names = move c_names;
+    res.enum_names = copy m.enum_names;
+    res.enum_ints = copy m.enum_ints;
+    res.complex = copy m.complex;
+    res.cf32 = m.cf32;
+    res.cf64 = m.cf64;
 }
 
 // base, with _ added while a header's type has the name (a header's own cf64)
@@ -2792,4 +2916,5 @@ attach fn import_c(this: checker&, headers: std::vec<std::string>&, alias: str, 
             try r;
         }
     }
+    try this.c_per_use(&imp, n, keep, kept, span);
 }

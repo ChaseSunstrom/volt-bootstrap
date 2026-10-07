@@ -494,6 +494,8 @@ struct checker {
     c_import_std: str = "";
     // the C++ imports, kept for the calls made per use, and those calls' Volt fns by what they call
     cpp_ctxs: std::vec<cpp_import_ctx> = {};
+    c_ctxs: std::vec<c_ctx> = {}; // C imports' per-use calls (cuse.volt)
+    c_used: u32 = 0;              // C functions made for them
     cpp_dyn: std::map<str, u32> = {};
     cpp_dyn_n: u32 = 0;
     cpp_dyn_ret: std::map<u32, str> = {}; // each one's result, as its Volt source spells it

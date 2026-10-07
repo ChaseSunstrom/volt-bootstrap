@@ -143,12 +143,44 @@ fn main() -> void {
 // expect: 3 -2 1
 ```
 
-### What doesn't come in
+### Macros and varargs
 
-- Function-like macros (`#define MAX(a, b) ...`): they have no types until they're used. Wrap one
-  in a `static inline` function in a header of your own and import that.
-- `va_list`: functions using it are left out, as are varargs functions taking or giving a `long
-  double` or a `_Complex` (their wrapper would need the arguments' types).
+A function-like macro (`#define CLAMP(x, lo, hi) ...`) has no types until it's used, so each call
+is worked out from its arguments' types: clang reads the call in C with the import's headers, its
+result is the expansion's type, and a small C function made for those argument types makes the
+call (one per distinct list of types, made once). So is a varargs function that takes or gives a
+`long double` or a `_Complex`. A function whose last parameter is a `va_list` (`vsnprintf`) takes
+varargs in its place: a C wrapper makes the `va_list` from them.
+
+```c
+/* shapes.h */
+struct box { int w, h; };
+#define AREA(b) ((b)->w * (b)->h)
+#define CLAMP(x, lo, hi) ((x) < (lo) ? (lo) : (x) > (hi) ? (hi) : (x))
+static inline int vtotal(int n, va_list ap) { ... }   /* the sum of n ints */
+```
+
+```volt
+use std::io;
+use { "shapes.h" } as sh;
+
+fn main() -> void {
+    var b: sh::box = { w: 3, h: 4 };
+    val big: f64 = 7.5;
+    std::println("{} {} {}", sh::AREA(&b), sh::CLAMP(big, 0.0, 5.0), sh::vtotal(3, 1, 2, 3));
+}
+// expect: 12 5 6
+```
+
+A macro sees its arguments as C would: a variable or field (any place) is the place itself, so
+`INC(n)` for `#define INC(x) (++(x))` changes `n` (a `val` is `const` to C: changing one is C's
+error), and a string or integer literal is written into the call as it is (`sizeof` of `"abc"` is
+4, `#x` of `5` is `"5"`). Any other argument is its value. An argument needs a type of its own
+(`null` or `{...}` alone doesn't have one: give it one with a typed `val`), and one C has: a number,
+`bool`, a pointer or reference (C's pointer), a C string (`cstr`), or a struct or enum of a C
+import. A call C rejects is a compile error with C's message, as is a result Volt has no type for
+(an anonymous struct by value); a string result (`#x`) is a `cstr`. A `va_list` function needs a
+parameter before the `va_list` (C's `va_start` does, before C23).
 
 Every `typedef` is a type name you can write: `c::size_t`, `c::pthread_t`, a pointer typedef like
 Node-API's `napi_env`, a function-pointer typedef (a callback type), or a struct's second name. A

@@ -5440,6 +5440,10 @@ attach fn cpp_range(this: checker&, t: u32, span: span) -> compile_error!bool {
 // template arguments, made per use (cpp_instance) and called like any fn
 attach fn cpp_dyn_call(this: checker&, d: u32, name: str, rv: tval?, explicit: std::vec<garg>&, args: std::vec<expr>&, want: u32?, span: span) -> compile_error!tval {
     var callee = this.cpp_call_attr(d) ?? "";
+    // "c:NAME": a C import's (cuse.volt)
+    if (starts_with(callee, "c:")) {
+        return this.c_dyn_call(d, callee[2..callee.len], name, explicit, args, want, span);
+    }
     // "#NAME" is a function-like macro: what it expands to comes back by value
     val macro = starts_with(callee, "#");
     if (macro) {
