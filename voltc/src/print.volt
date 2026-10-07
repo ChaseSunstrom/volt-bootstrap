@@ -641,7 +641,15 @@ attach fn print_code(this: checker&, code: std::vec<u32>&, sink: u32, c: u32, t:
             }
             put(code, this.out_s(sink, " }"));
         },
-        .ENUM(e) => { try this.print_enum(code, sink, c, e, span); },
+        .ENUM(e) => {
+            // a C enum prints its number, as C's code can hold any
+            val ct = this.c_enum_tag(t);
+            if (ct) {
+                try this.print_code(code, sink, this.ir.conv(c, ct), ct, span);
+            } else {
+                try this.print_enum(code, sink, c, e, span);
+            }
+        },
         .TRAIT_UNION(u) => {
             val members = copy this.ui(u).members;
             var cases: std::vec<case_arm> = {};

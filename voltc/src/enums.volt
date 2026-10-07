@@ -118,9 +118,42 @@ attach fn enum_inst(this: checker&, d: u32, args: std::vec<gval>, span: span) ->
         }
     }
     val id = @cast<u32>(this.enums.len);
-    put(&this.enums, bx<enum_info>({ decl: d, family: d, args: move args, env: env, name: name, c_name: c_name, tag: tag, is_error: e.is_error, has_payload: has_payload, names: move names, values: move values }));
+    put(&this.enums, bx<enum_info>({ decl: d, family: d, args: move args, env: env, name: name, c_name: c_name, tag: tag, is_error: e.is_error, has_payload: has_payload, names: move names, values: move values, c_enum: e.c_enum }));
     this.enum_ids.put(this.intern(move key), id);
     return this.t.intern(tyk::ENUM(id));
+}
+
+// a C header's named enum as the integer type it holds (it converts to and from integers, as in C);
+// none for any other type
+attach fn c_enum_tag(this: checker&, t: u32) -> u32? {
+    match (*this.t.get(t)) {
+        .ENUM(e) => {
+            if (this.ei(e).c_enum) {
+                return this.t.intern(tyk::INT(this.ei(e).tag));
+            }
+        },
+        default => {},
+    }
+    return null;
+}
+
+// is one of from and to a C enum, the other an integer? Or a pointer to one, the other a pointer
+// to its integer (an int's address passes for one, as in C)?
+attach fn c_enum_int(this: checker&, from: u32, to: u32) -> bool {
+    if ((this.c_enum_tag(from) != null && this.t.int_of(to) != null) || (this.c_enum_tag(to) != null && this.t.int_of(from) != null)) {
+        return true;
+    }
+    val a = this.pointee(from) ?? return false;
+    match (*this.t.get(to)) {
+        .PTR(b) => { return (this.c_enum_tag(a) ?? NO_TY) == b || (this.c_enum_tag(b) ?? NO_TY) == a; },
+        default => { return false; },
+    }
+}
+
+// v as its integer when it's a C enum's value (operators see C's number)
+attach fn c_enum_view(this: checker&, v: tval) -> tval {
+    val t = this.c_enum_tag(v.ty) ?? return v;
+    return retyped(&v, t, this.ir.conv(v.c, t));
 }
 
 // where code is (or goes) in the sorted error table

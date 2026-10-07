@@ -284,6 +284,9 @@ attach fn coercible(this: checker&, v: tval&, to: u32) -> bool {
         },
         default => {},
     }
+    if (this.c_enum_int(v.ty, to)) {
+        return true;
+    }
     val inner = this.t.opt_inner(to);
     if (inner) {
         return this.coercible(v, inner);
@@ -432,6 +435,9 @@ attach fn coerce(this: checker&, v: tval, to: u32, span: span) -> compile_error!
             }
         },
         default => {},
+    }
+    if (this.c_enum_int(v.ty, to)) {
+        return retyped(&v, to, this.ir.conv(v.c, to));
     }
     val inner = this.t.opt_inner(to);
     if (inner != null && this.coercible(&v, inner ?? 0)) {

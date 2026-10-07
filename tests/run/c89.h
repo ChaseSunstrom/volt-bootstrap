@@ -15,3 +15,5 @@ static double kr_mix(c, f)
 {
     return c + f;
 }
+/* long double is C89's too: Volt calls it through a C wrapper, as an f64 */
+static long double ld_third(long double x) { return x / 3; }

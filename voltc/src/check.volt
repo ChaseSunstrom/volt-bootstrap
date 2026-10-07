@@ -86,6 +86,7 @@ struct enum_info {
     values: std::vec<i128>;
     payloads: std::vec<u32?> = {};
     has_payloads: bool = false;
+    c_enum: bool = false; // a C header's: converts to and from integers, prints as one
 }
 
 // a trait used as a type: a tagged union of the types attached to it (members)

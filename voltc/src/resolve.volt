@@ -793,7 +793,7 @@ attach fn fn_inst(this: checker&, d: u32, args: std::vec<gval>, span: span) -> c
         n.append(f.name);
         c_name = this.intern(move n);
     } else if (f.extern_abi != null || f.is_export) {
-        c_name = f.name;
+        c_name = f.c_name ?? f.name;
     } else if (f.name == "main" && path.len() == 0 && args.len == 0) {
         c_name = "v_main";
     } else if (this.pkg_of(d) != null && args.len == 0) {

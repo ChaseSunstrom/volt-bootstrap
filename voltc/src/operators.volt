@@ -9,7 +9,7 @@ use std::mem;
 attach fn unary(this: checker&, op: unop, x: expr&, want: u32?, span: span) -> compile_error!tval {
     match (op) {
         .NEG => {
-            val v = try this.expr(x, want);
+            val v = this.c_enum_view(try this.expr(x, want));
             if (v.lit) {
                 match (v.lit) {
                     .INT(n) => {
@@ -54,7 +54,7 @@ attach fn unary(this: checker&, op: unop, x: expr&, want: u32?, span: span) -> c
             return r;
         },
         .BITNOT => {
-            val v = try this.expr(x, want);
+            val v = this.c_enum_view(try this.expr(x, want));
             var none: std::vec<expr> = {};
             val called = try this.op_call("~", v, &none, want, span);
             if (called) {
@@ -307,7 +307,8 @@ attach fn binary(this: checker&, op: binop, ae: expr&, be: expr&, want: u32?, sp
             operand_want = w;
         }
     }
-    val a = try this.expr(ae, operand_want);
+    // a C enum's value is its number to operators, as in C
+    val a = this.c_enum_view(try this.expr(ae, operand_want));
     if (op != binop::EQ && op != binop::NE && this.has_ops(a.ty)) {
         return this.op_binary(op, a, ae, be, want, span);
     }
@@ -326,7 +327,7 @@ attach fn binary(this: checker&, op: binop, ae: expr&, be: expr&, want: u32?, sp
     if (be_null || a.lit != null || a.ty == NULL_TY) {
         b_want = operand_want;
     }
-    val b = try this.expr(be, b_want);
+    val b = this.c_enum_view(try this.expr(be, b_want));
     if (!is_cmp) {
         val pa = try this.pointer_arith(op, a, b, span);
         if (pa) {

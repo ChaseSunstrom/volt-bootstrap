@@ -3,8 +3,10 @@
 // constants, numeric #defines and extern variables, as ordinary items of namespace `c`. The headers
 // are #included in the generated C, so calls go through C's own prototypes and structs keep C's
 // layout. A union is a struct whose fields share offset 0; a bitfield gets two static inline C
-// functions, S_get_F and S_set_F, next to the #include (C does the bit work on both backends). The
-// parser is tolerant: a declaration it can't read or map (long double, va_list...) is skipped, not
+// functions, S_get_F and S_set_F, next to the #include (C does the bit work on both backends), and so
+// does a function taking or giving a long double (an f64 to Volt) or a _Complex (a cf32 or cf64
+// { re, im }): a wrapper converting them. A named enum is a Volt enum that converts to and from
+// integers. The parser is tolerant: a declaration it can't read or map (va_list...) is skipped, not
 // an error. C pointers can be null: raw T*, a char* is a cstr?, a function pointer an optional fn.
 use std::mem;
 
@@ -501,10 +503,13 @@ enum ctype {
     PRIM: str,    // a Volt primitive name
     NAMED: str,   // a typedef name
     STRUCT: str,  // by tag (anonymous ones get a made-up tag)
+    ENUM: str,    // by tag, the same way
     PTR: std::box<ctype>,
     ARRAY: (std::box<ctype>, u64?),
     FUNC: (std::vec<ctype>, std::box<ctype>, bool),
-    BAD,          // long double, va_list...: can't be used by value
+    LDOUBLE,      // long double: an f64 through a wrapper
+    COMPLEX: str, // _Complex of its real type's C name (float, double, long double): through a wrapper
+    BAD,          // va_list...: can't be used by value
 }
 
 struct cfield_decl {
@@ -549,6 +554,14 @@ struct cvar {
 struct cconst {
     name: str;
     v: cnum;
+    in_enum: str? = null; // an enumerator: its enum's tag
+}
+
+// a C enum's enumerators that have values, by tag (anonymous ones get a made-up tag)
+struct cenum {
+    tag: str;
+    names: std::vec<str> = {};
+    values: std::vec<i128> = {};
 }
 
 // everything read from the preprocessed headers
@@ -561,6 +574,8 @@ struct cdecls {
     // evaluating later ones
     consts: std::vec<cconst> = {};
     env: std::map<str, cnum> = {};
+    enums: std::vec<cenum> = {};
+    enum_typedef_of: std::map<str, str> = {}; // enum tag -> first typedef naming it
     fns: std::vec<cfn> = {};
     vars: std::vec<cvar> = {};
     // counter for made-up tags of anonymous structs
@@ -569,6 +584,15 @@ struct cdecls {
     kr: bool = false;                    // ...which was a K&R identifier list
     names: std::vec<std::string> = {}; // made-up names (anonymous tags) the others point into
     anon_in: std::map<str, anon_field> = {}; // anonymous tag -> the named field it types
+}
+
+// a made-up tag for an anonymous struct or enum: prefix and a number
+attach fn made_up(this: cdecls&, prefix: str) -> str {
+    this.anon += 1;
+    var a = S(prefix);
+    a.append_uint(@cast<u64>(this.anon));
+    put(&this.names, move a);
+    return this.names.at(this.names.len - 1).as_str();
 }
 
 // records a struct tag; a later definition fills in the fields of an earlier declaration
@@ -727,6 +751,7 @@ attach fn specs(this: cparser&, stat: bool&) -> ctype? {
     var short = false;
     var longs = 0;
     var int = false;
+    var complex = false;
     var base: ctype? = null;
     loop {
         if (this.skip_noise() ?? return null) {
@@ -762,7 +787,9 @@ attach fn specs(this: cparser&, stat: bool&) -> ctype? {
             base = ctype::PRIM("i128");
         } else if (n == "__uint128_t") {
             base = ctype::PRIM("u128");
-        } else if (n == "_Complex" || n == "__builtin_va_list" || n == "_Float32x" || n == "_Float64x" || n == "_Float128x" || n == "_Float16") {
+        } else if (n == "_Complex" || n == "__complex__") {
+            complex = true;
+        } else if (n == "__builtin_va_list" || n == "_Float32x" || n == "_Float64x" || n == "_Float128x" || n == "_Float16") {
             base = ctype::BAD;
         } else if (n == "struct" || n == "union") {
             this.i += 1;
@@ -773,11 +800,7 @@ attach fn specs(this: cparser&, stat: bool&) -> ctype? {
                 tag = t;
                 this.i += 1;
             } else {
-                this.d.anon += 1;
-                var a = S("#anon");
-                a.append_uint(@cast<u64>(this.d.anon));
-                put(&this.d.names, move a);
-                tag = this.d.names.at(this.d.names.len - 1).as_str();
+                tag = this.d.made_up("#anon");
             }
             while (this.skip_noise() ?? return null) {}
             val is_union = n == "union";
@@ -792,15 +815,20 @@ attach fn specs(this: cparser&, stat: bool&) -> ctype? {
         } else if (n == "enum") {
             this.i += 1;
             while (this.skip_noise() ?? return null) {}
-            if (this.peek_id() != null) {
+            var tag: str = "";
+            val t = this.peek_id();
+            if (t) {
+                tag = t;
                 this.i += 1;
+            } else {
+                tag = this.d.made_up("#enum");
             }
             if (this.is("{")) {
-                if (!this.enumerators()) {
+                if (!this.enumerators(tag)) {
                     return null;
                 }
             }
-            base = ctype::PRIM("i32");
+            base = ctype::ENUM(tag);
             continue;
         } else if (!seen && (this.d.typedefs.get(n) != null || known_typedef(n) != null)) {
             base = ctype::NAMED(n);
@@ -821,14 +849,26 @@ attach fn specs(this: cparser&, stat: bool&) -> ctype? {
             },
             .PRIM(p) => {
                 if (p == "f64" && longs > 0) {
-                    return ctype::BAD; // long double
+                    if (complex) {
+                        return ctype::COMPLEX("long double");
+                    }
+                    return ctype::LDOUBLE;
+                }
+                if (complex && p == "f64") {
+                    return ctype::COMPLEX("double");
+                }
+                if (complex && p == "f32") {
+                    return ctype::COMPLEX("float");
                 }
             },
             default => {},
         }
+        if (complex) {
+            return ctype::BAD; // GNU's complex integers
+        }
         return copy base;
     }
-    if (!(signed || unsigned || short || longs > 0 || int)) {
+    if (complex || !(signed || unsigned || short || longs > 0 || int)) {
         return null;
     }
     var bits = 32;
@@ -940,11 +980,13 @@ attach fn fields(this: cparser&, tag: str) -> std::vec<cfield_decl>? {
     return out;
 }
 
-// `{ A, B = 5, ... }`: each constant goes into consts and env
-attach fn enumerators(this: cparser&) -> bool {
+// `{ A, B = 5, ... }` of enum `tag`: each constant goes into consts and env, and into its cenum
+attach fn enumerators(this: cparser&, tag: str) -> bool {
     if (!this.eat("{")) {
         return false;
     }
+    put(&this.d.enums, { tag: tag });
+    val at = this.d.enums.len - 1;
     var next = cint(0, false, false);
     while (!this.eat("}")) {
         val name = this.peek_id() ?? return false;
@@ -978,7 +1020,9 @@ attach fn enumerators(this: cparser&) -> bool {
         }
         if (value) {
             this.d.env.put(name, value);
-            put(&this.d.consts, { name: name, v: value });
+            put(&this.d.consts, { name: name, v: value, in_enum: tag });
+            put(&this.d.enums.at(at).names, name);
+            put(&this.d.enums.at(at).values, value.v);
             next = cbinop("+", value, cint(1, false, false)) ?? return false;
         }
         this.eat(",");
@@ -1038,7 +1082,7 @@ attach fn declarator(this: cparser&, base: ctype) -> cdecl? {
 
 // words that start a parameter declaration (see starts_params)
 fn is_param_word(n: str) -> bool {
-    val words: str[23] = { "void", "char", "short", "int", "long", "float", "double", "signed", "unsigned", "_Bool", "struct", "union", "enum", "const", "volatile", "__const", "__extension__", "__attribute__", "__builtin_va_list", "__signed__", "__int128", "_Float128", "__restrict" };
+    val words: str[24] = { "void", "char", "short", "int", "long", "float", "double", "signed", "unsigned", "_Bool", "struct", "union", "enum", "const", "volatile", "__const", "__extension__", "__attribute__", "__builtin_va_list", "__signed__", "__int128", "_Float128", "__restrict", "_Complex" };
     for (w) in words {
         if (w == n) {
             return true;
@@ -1319,6 +1363,11 @@ attach fn top(this: cparser&) -> void {
                         *e = name;
                     }
                 },
+                .ENUM(tag) => {
+                    if (this.d.enum_typedef_of.get(tag) == null) {
+                        this.d.enum_typedef_of.put(tag, name);
+                    }
+                },
                 default => {},
             }
             if (this.d.typedefs.get(name) == null) {
@@ -1427,6 +1476,10 @@ struct cmapper {
     d: cdecls&;
     names: std::map<str, str> = {}; // struct tag -> Volt name
     span: span;
+    enum_names: std::map<str, str> = {}; // enum tag -> Volt name (a named one's)
+    enum_ints: std::map<str, str> = {};  // enum tag -> the integer type its values take
+    in_fn: bool = false;                 // mapping a function pointer's type
+    complex: std::vec<str> = {};         // the complex structs wrappers use: cf32, cf64
 }
 
 // a Volt type naming `name`
@@ -1461,8 +1514,17 @@ attach fn void_ptr(this: cmapper&) -> ty {
     return this.wrap(type_kind::PTR(bx(this.path_ty("void"))));
 }
 
-// a C function type as an extern "C" Volt fn type; none if a param or the return can't map
+// a C function type as an extern "C" Volt fn type; none if a param or the return can't map. Its
+// enums are their integers, so a Volt fn written against them passes as one
 attach fn fn_ty(this: cmapper&, ps: std::vec<ctype>&, ret: ctype&, va: bool) -> ty? {
+    val was = this.in_fn;
+    this.in_fn = true;
+    val f = this.fn_ty_in(ps, ret, va);
+    this.in_fn = was;
+    return f;
+}
+
+attach fn fn_ty_in(this: cmapper&, ps: std::vec<ctype>&, ret: ctype&, va: bool) -> ty? {
     var params: std::vec<ty> = {};
     for (p&) in ps.items() {
         put(&params, this.ty_of(p) ?? return null);
@@ -1483,6 +1545,15 @@ attach fn ty_of(this: cmapper&, t0: ctype&) -> ty? {
         .STRUCT(tag) => {
             val n = this.names.get(tag) ?? return null;
             return this.path_ty(*n);
+        },
+        .ENUM(tag) => {
+            // a named one is its Volt enum; an anonymous one is the integer its values take
+            val n = this.enum_names.get(tag);
+            if (n != null && !this.in_fn) {
+                return this.path_ty(*n);
+            }
+            val k = this.enum_ints.get(tag) ?? return this.path_ty("i32");
+            return this.path_ty(*k);
         },
         .PTR(inner) => {
             // C pointers may be null: raw T* (a char* is a cstr?, a function pointer an optional fn)
@@ -1514,6 +1585,140 @@ attach fn ty_of(this: cmapper&, t0: ctype&) -> ty? {
         },
         default => { return null; },
     }
+}
+
+// does a function taking or giving t by value need a wrapper (a long double, a _Complex)?
+attach fn needs_wrap(this: cmapper&, t: ctype&) -> bool {
+    val r = this.resolve(t, 0) ?? return false;
+    match (*r) {
+        .LDOUBLE => { return true; },
+        .COMPLEX(e) => { return true; },
+        default => { return false; },
+    }
+}
+
+// the complex struct standing for C's complex of real type e: cf32 for float, else cf64
+fn complex_name(e: str) -> str {
+    if (e == "float") {
+        return "cf32";
+    }
+    return "cf64";
+}
+
+// t as a wrapper's parameter or result: a long double is an f64, a complex its struct
+attach fn wrap_ty(this: cmapper&, t: ctype&) -> ty? {
+    val r = this.resolve(t, 0) ?? return null;
+    match (*r) {
+        .LDOUBLE => { return this.path_ty("f64"); },
+        .COMPLEX(e) => {
+            val n = complex_name(e);
+            var have = false;
+            for (x&) in this.complex.items() {
+                have = have || *x == n;
+            }
+            if (!have) {
+                put(&this.complex, n);
+            }
+            return this.path_ty(n);
+        },
+        default => { return this.ty_of(t); },
+    }
+}
+
+// t as C text for a wrapper's declaration (an integer by its width); none for one it can't write
+attach fn c_text(this: cmapper&, t: ctype&, c_names: std::map<str, str>&) -> std::string? {
+    match (*t) {
+        .VOID => { return S("void"); },
+        .BOOL => { return S("_Bool"); },
+        .CHAR => { return S("char"); },
+        .PRIM(p) => {
+            val vs: str[12] = { "i8", "u8", "i16", "u16", "i32", "u32", "i64", "u64", "i128", "u128", "f32", "f64" };
+            val cs: str[12] = { "signed char", "unsigned char", "short", "unsigned short", "int", "unsigned int", "long long", "unsigned long long", "__int128", "unsigned __int128", "float", "double" };
+            for (i) in 0..12 {
+                if (vs[i] == p) {
+                    return S(cs[i]);
+                }
+            }
+            return null;
+        },
+        .NAMED(n) => { return S(n); },
+        .STRUCT(tag) => {
+            val c = c_names.get(tag) ?? return null;
+            return S(*c);
+        },
+        .ENUM(tag) => {
+            if (tag[0] != '#') {
+                return fmt("enum {}", S(tag));
+            }
+            val td = this.d.enum_typedef_of.get(tag) ?? return S("int");
+            return S(*td);
+        },
+        .PTR(inner) => {
+            var s = this.c_text(inner, c_names) ?? return null;
+            s.append(" *");
+            return s;
+        },
+        .LDOUBLE => { return S("long double"); },
+        .COMPLEX(e) => { return fmt("{} _Complex", S(e)); },
+        default => { return null; },
+    }
+}
+
+// a static inline C function `volt_cw_NAME` calling fn f with its long doubles as doubles and its
+// complexes as volt_cf32/volt_cf64 { re, im }; none if a type can't be written
+attach fn wrapper(this: cmapper&, f: cfn&, c_names: std::map<str, str>&) -> std::string? {
+    var params = S("");
+    var args = S("");
+    for (i) in 0..f.params.len {
+        val p = f.params.at(i);
+        val r = this.resolve(&p.ty, 0) ?? return null;
+        if (i > 0) {
+            params.append(", ");
+            args.append(", ");
+        }
+        var a = S("volt_a");
+        a.append_uint(@cast<u64>(i));
+        match (*r) {
+            .LDOUBLE => {
+                params.append("double");
+                args.append(a.as_str());
+            },
+            .COMPLEX(e) => {
+                params.append("volt_");
+                params.append(complex_name(e));
+                args.append(fmt4("__builtin_complex(({}){}.re, ({}){}.im)", S(e), copy a, S(e), copy a).as_str());
+            },
+            default => {
+                val t = this.c_text(&p.ty, c_names) ?? return null;
+                params.append(t.as_str());
+                args.append(a.as_str());
+            },
+        }
+        params.push(' ');
+        params.append(a.as_str());
+    }
+    if (f.params.len == 0) {
+        params.append("void");
+    }
+    val call = fmt2("{}({})", S(f.name), move args);
+    var ret = S("double");
+    var body = fmt("return {};", copy call);
+    val rr = this.resolve(&f.ret, 0) ?? return null;
+    match (*rr) {
+        .VOID => {
+            ret = S("void");
+            body = fmt("{};", copy call);
+        },
+        .LDOUBLE => {},
+        .COMPLEX(e) => {
+            ret = fmt("volt_{}", S(complex_name(e)));
+            body = fmt3("{} _Complex volt_r = {}; {} volt_o; volt_o.re = __real__ volt_r; volt_o.im = __imag__ volt_r; return volt_o;", S(e), copy call, copy ret);
+        },
+        default => {
+            ret = this.c_text(&f.ret, c_names) ?? return null;
+        },
+    }
+    return fmt4("static __inline__ {} volt_cw_{}({}) {{ {} }}", move ret, S(f.name), move params, move body);
 }
 
 // a public item at the import's span
@@ -1956,6 +2161,73 @@ attach fn c_items(this: checker&, d: cdecls&, res: c_imported&, span: span) -> v
             break;
         }
     }
+    // a named enum (by its first typedef, else its tag) is a Volt enum of C's values and integer
+    // type, each enumerator a constant of it (one repeating a value names the first one's variant);
+    // an anonymous one's stay integer constants
+    for (e&) in d.enums.items() {
+        var lo: i128 = 0;
+        var hi: i128 = 0;
+        for (x&) in e.values.items() {
+            if (*x < lo) {
+                lo = *x;
+            }
+            if (*x > hi) {
+                hi = *x;
+            }
+        }
+        var int: str = "i32";
+        if (lo < -2147483648 || hi > 2147483647) {
+            if (lo >= 0 && hi <= 4294967295) {
+                int = "u32";
+            } else if (hi <= 9223372036854775807) {
+                int = "i64";
+            } else {
+                int = "u64";
+            }
+        }
+        m.enum_ints.put(e.tag, int);
+        // (by its tag when the typedef is reserved and the tag isn't, as a struct is)
+        var name = e.tag;
+        val anon = e.tag[0] == '#';
+        val td = d.enum_typedef_of.get(e.tag);
+        if (td) {
+            if (anon || !starts_with(*td, "__")) {
+                name = *td;
+            }
+        } else if (anon) {
+            continue;
+        }
+        if (e.names.len == 0 || starts_with(name, "__") || taken.get(name) != null) {
+            continue;
+        }
+        taken.put(name, true);
+        m.enum_names.put(e.tag, name);
+        var variants: std::vec<variant> = {};
+        var firsts: std::vec<str> = {};
+        for (i) in 0..e.names.len {
+            var first = *e.names.at(i);
+            var dup = false;
+            for (k) in 0..i {
+                if (!dup && *e.values.at(k) == *e.values.at(i)) {
+                    first = *e.names.at(k);
+                    dup = true;
+                }
+            }
+            if (!dup) {
+                put(&variants, { name: first, payload: null, value: c_int_expr(*e.values.at(i), span), span: span });
+            }
+            put(&firsts, first);
+        }
+        put(&res.items, m.citem(item_kind::ENUM({ name: name, backing: m.path_ty(int), variants: move variants, is_error: false, c_enum: true })));
+        for (i) in 0..e.names.len {
+            var segs: std::vec<path_seg> = {};
+            put(&segs, { name: name, args: null });
+            put(&segs, { name: *firsts.at(i), args: null });
+            var init: expr = { kind: expr_kind::PATH({ segs: move segs, span: span }), span: span };
+            val pt: pat = { kind: pat_kind::BIND(*e.names.at(i)), span: span };
+            put(&res.items, m.citem(item_kind::GLOBAL({ mutable: false, is_comptime: false, is_static: false, pat: pt, ty: m.path_ty(name), init: move init, span: span, c_name: null })));
+        }
+    }
     // each bitfield's accessors: C reads and writes it, so neither backend needs its bits
     var protos = S("");
     for (s&) in d.structs.items() {
@@ -2040,8 +2312,11 @@ attach fn c_items(this: checker&, d: cdecls&, res: c_imported&, span: span) -> v
         taken.put(n, true);
         put(&res.items, m.citem(item_kind::ALIAS(n, move vt)));
     }
-    // functions (the first declaration wins); one with a param or return type Volt can't use is skipped
+    // functions (the first declaration wins); one with a param or return type Volt can't use is
+    // skipped. One taking or giving a long double or a _Complex is called through a wrapper (C
+    // converts them: the ABI is the C compiler's), unless it's varargs
     var seen_fns: std::map<str, bool> = {};
+    var wraps: std::vec<std::string> = {};
     for (f&) in d.fns.items() {
         if (seen_fns.get(f.name) != null) {
             continue;
@@ -2050,11 +2325,18 @@ attach fn c_items(this: checker&, d: cdecls&, res: c_imported&, span: span) -> v
         if (f.stat) {
             put(&res.statics, f.name);
         }
+        var wrap = m.needs_wrap(&f.ret);
+        for (p&) in f.params.items() {
+            wrap = wrap || m.needs_wrap(&p.ty);
+        }
+        if (wrap && f.variadic) {
+            continue;
+        }
         var params: std::vec<param> = {};
         var ok = true;
         for (i) in 0..f.params.len {
             val p = f.params.at(i);
-            val t = m.ty_of(&p.ty);
+            val t = m.wrap_ty(&p.ty);
             if (t == null) {
                 ok = false;
                 break;
@@ -2070,8 +2352,33 @@ attach fn c_items(this: checker&, d: cdecls&, res: c_imported&, span: span) -> v
         if (!ok) {
             continue;
         }
-        val ret = m.ty_of(&f.ret) ?? continue;
-        put(&res.items, m.citem(item_kind::FN({ name: f.name, spec: null, params: move params, c_varargs: f.variadic, ret: move ret, body: null, is_async: false, is_comptime: false, extern_abi: C_HEADER, is_export: false, is_attach: false })));
+        val ret = m.wrap_ty(&f.ret) ?? continue;
+        var c_name: str? = null;
+        if (wrap) {
+            val w = m.wrapper(f, &c_names) ?? continue;
+            put(&wraps, move w);
+            val cn = this.intern(fmt("volt_cw_{}", S(f.name)));
+            put(&res.statics, cn);
+            c_name = cn;
+        }
+        put(&res.items, m.citem(item_kind::FN({ name: f.name, spec: null, params: move params, c_varargs: f.variadic, ret: move ret, body: null, is_async: false, is_comptime: false, extern_abi: C_HEADER, is_export: false, is_attach: false, c_name: c_name })));
+    }
+    // the complex structs the wrappers take and give (C's layout of a complex), then the wrappers
+    for (n&) in m.complex.items() {
+        var e = "double";
+        var re = "f64";
+        if (*n == "cf32") {
+            e = "float";
+            re = "f32";
+        }
+        put(&res.includes, fmt2("typedef struct {{ {} re, im; }} volt_{};", S(e), S(*n)));
+        var fields: std::vec<field> = {};
+        put(&fields, { name: "re", ty: m.path_ty(re), fallback: null, vis: vis::PUBLIC, span: span });
+        put(&fields, { name: "im", ty: m.path_ty(re), fallback: null, vis: vis::PUBLIC, span: span });
+        put(&res.items, m.citem(item_kind::STRUCT({ name: *n, spec: null, fields: move fields, is_extern: true, is_comptime: false, c_name: this.intern(fmt("volt_{}", S(*n))) })));
+    }
+    for (w&) in wraps.items() {
+        put(&res.includes, copy *w);
     }
     // extern variables, bound to their C names
     for (v&) in d.vars.items() {
@@ -2082,7 +2389,7 @@ attach fn c_items(this: checker&, d: cdecls&, res: c_imported&, span: span) -> v
     // constants: an int gets the first of i32, u32, i64, u64 that its suffixes allow and its value fits,
     // a float f64; a negative value is `-literal`
     for (k&) in d.consts.items() {
-        if (starts_with(k.name, "__")) {
+        if (starts_with(k.name, "__") || m.enum_names.get(k.in_enum ?? "") != null) {
             continue;
         }
         val v = k.v;
@@ -2124,6 +2431,15 @@ attach fn c_items(this: checker&, d: cdecls&, res: c_imported&, span: span) -> v
         val pt: pat = { kind: pat_kind::BIND(k.name), span: span };
         put(&res.items, m.citem(item_kind::GLOBAL({ mutable: false, is_comptime: false, is_static: false, pat: pt, ty: m.path_ty(tn), init: move init, span: span, c_name: null })));
     }
+}
+
+// x as a Volt integer literal (a negative one is -literal)
+fn c_int_expr(x: i128, span: span) -> expr {
+    if (x < 0) {
+        var lit: expr = { kind: expr_kind::INT(@cast<u128>(-x)), span: span };
+        return { kind: expr_kind::UNARY(unop::NEG, bx(move lit)), span: span };
+    }
+    return { kind: expr_kind::INT(@cast<u128>(x)), span: span };
 }
 
 // the newest C standard both libclang and the C compiler take, in GNU's form (POSIX's names stay
@@ -2222,7 +2538,7 @@ attach fn c_unit_for(this: checker&, s: str) -> u32 {
 attach fn keep_out(this: checker&, it: item&, imp: c_imported&, u: u32, span: span) -> compile_error!void {
     var name: str = "";
     match (it.kind) {
-        .FN(f&) => { name = f.name; },
+        .FN(f&) => { name = f.c_name ?? f.name; },
         .GLOBAL(l&) => {
             this.c_kept.put(l.c_name ?? return, u);
             return;
@@ -2345,6 +2661,11 @@ attach fn import_c(this: checker&, headers: std::vec<std::string>&, alias: str, 
                 kind = 3;
                 key_name = a;
                 name = a;
+            },
+            .ENUM(e) => {
+                kind = 4;
+                key_name = e.name;
+                name = e.name;
             },
             default => { continue; },
         }

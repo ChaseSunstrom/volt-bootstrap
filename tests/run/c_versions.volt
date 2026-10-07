@@ -12,7 +12,7 @@ use { "c11.h" } as c11;
 use { "c23.h" } as c23;
 
 fn main() -> void {
-    std::println("{} {} {}", old::kr_add(2, 3), old::is_even(4), old::kr_mix(1, 2.5));
+    std::println("{} {} {} {}", old::kr_add(2, 3), old::is_even(4), old::kr_mix(1, 2.5), old::ld_third(4.5));
     val a: i32[] = { 1, 2, 3 };
     val b: i32[] = { 4, 5, 6 };
     std::println("{} {}", c99::dot3(&a[0], &b[0]), c99::c99_flag());
@@ -23,7 +23,7 @@ fn main() -> void {
     std::println("{}", c11::c11_span(s));
     std::println("{} {} {} {}", c23::c23_limit, c23::c23_twice(21), c23::c23_ok(), c23::c23_none() == null);
 }
-// expect: 5 1 3.5
+// expect: 5 1 3.5 1.5
 // expect: 32 true
 // expect: 6
 // expect: 10 42 true true
