@@ -45,6 +45,29 @@ fn main() -> void {
 // error: missing field 'b'
 ```
 
+When the type is known, the fields can also come in declaration order, without names; a bare name
+in its own field's place still reads as that field (`{ move segs, span }`). A local moves into a
+field without `move` (using it afterwards is an error that says where it moved), as it does into an
+argument or a `return`:
+
+```volt
+use std::io;
+struct span { lo: u32; hi: u32; }
+struct path { segs: std::vec<i32>; at: span; tag: u8 = 9; }
+
+fn main() -> void {
+    var segs: std::vec<i32> = {};
+    segs.push(4);
+    val at: span = { 3, 8 };                         // lo, then hi
+    val p: path = { segs, at };                      // by name: segs moves in
+    std::println("{} {} {}", p.segs.len, p.at.hi, p.tag);
+}
+// expect: 1 8 9
+```
+
+A literal gives its fields all by name or all in order: `{ x: 1, 2 }` is an error, as is a bare name
+in another field's place.
+
 A literal can start from another value: `{ ..base, field: value }` is `base` with the named fields
 replaced, and its type is base's when nothing else gives one. It takes base the way
 `var t = base;` would: a plain struct is copied, one that owns memory moves (`..copy base` keeps

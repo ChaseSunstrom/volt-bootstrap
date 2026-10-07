@@ -699,8 +699,33 @@ attach fn fill_array(this: checker&, at: u32, t: u32, len: u64, c: u32) -> tval 
     return vnew(at, this.ir.seq(move stmts, r.c, at));
 }
 
-// A `{ ... }` literal of the wanted type: a struct (fields by name, the rest from their
-// defaults), an array, a tuple, or one of those inside an optional or error union.
+// an entry's expression as a bare name (`{ x }` is `{ x: x }`): "" when it isn't one
+fn bare_name(e: expr&) -> str {
+    match (e.kind) {
+        .PATH(p) => {
+            if (p.is_single()) {
+                return p.segs.at(0).name;
+            }
+        },
+        default => {},
+    }
+    return "";
+}
+
+fn field_named(fs: std::vec<field_info>&, n: str) -> bool {
+    if (n.len == 0) {
+        return false;
+    }
+    for (f&) in fs.items() {
+        if (f.name == n) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// A `{ ... }` literal of the wanted type: a struct (fields by name or all in order, the rest from
+// their defaults), an array, a tuple, or one of those inside an optional or error union.
 attach fn literal(this: checker&, entries: std::vec<lit_entry>&, want: u32?, span: span) -> compile_error!tval {
     val w = want ?? return fails(span, "can't tell what type this literal is; give the variable a type");
     match (*this.t.get(w)) {
@@ -721,32 +746,40 @@ attach fn literal(this: checker&, entries: std::vec<lit_entry>&, want: u32?, spa
             for (i) in 0..fs.len {
                 put(&given, null);
             }
+            // fields by name ({ x: 1, y }: y is y: y) or, when an entry is neither, all in
+            // declaration order ({ 1, 2 }, { move segs, span }: a bare name in its own field's place)
+            var named = false;
+            var in_order = false;
             for (en&) in entries.items() {
-                val e = &en.value;
-                var n = "";
-                if (en.name) {
-                    n = en.name;
-                } else {
-                    var ok = false;
-                    match (e.kind) {
-                        .PATH(p) => {
-                            if (p.is_single()) {
-                                n = p.segs.at(0).name;
-                                ok = true;
-                            }
-                        },
-                        default => {},
-                    }
-                    if (!ok) {
-                        return fails(e.span, "struct literal entries need names: { field: value }");
-                    }
+                if (en.name != null) {
+                    named = true;
+                } else if (!field_named(fs, bare_name(&en.value))) {
+                    in_order = true;
                 }
+            }
+            if (named && in_order) {
+                return fails(span, "a struct literal gives its fields all by name ({ x: 1, y }, y being y: y) or all in order ({ 1, 2 }), not both");
+            }
+            if (in_order && entries.len > fs.len) {
+                return fail(span, fmt2("{} has {} fields, and this literal gives more", this.ty_name(w), unum(@cast<u64>(fs.len))));
+            }
+            for (k) in 0..entries.len {
+                val en = entries.at(k);
+                val e = &en.value;
+                var n = en.name ?? bare_name(e);
                 var idx: usize? = null;
                 for (i) in 0..fs.len {
                     if (fs.at(i).name == n) {
                         idx = i;
                         break;
                     }
+                }
+                if (in_order) {
+                    if (idx != null && (idx ?? k) != k) {
+                        return fail(e.span, fmt4("'{}' names {}'s field {}, and sits in {}'s place: give the fields all by name or all in order", S(n), this.ty_name(w), S(n), S(fs.at(k).name)));
+                    }
+                    idx = k;
+                    n = fs.at(k).name;
                 }
                 if (idx == null) {
                     var names: std::vec<str> = {};
