@@ -386,7 +386,7 @@ fn inline_features(s: &mut Server) {
 
     // hover on a type: its fields, then what's attached to it, grouped by trait; a trait's attachers
     let h = s.request("textDocument/hover", &at(31, 12));
-    assert!(h.contains("struct circle {\\n    r: f64;\\n}\\n// shape\\nfn area(this) -> f64\\n// attached\\nattach operator +(this: circle, other: circle) -> circle\\nattach fn grow(this: circle&, by: f64) -> void"), "hover circle: {h}");
+    assert!(h.contains("// size 8, align 8\\nstruct circle {\\n    r: f64; // offset 0, size 8\\n}\\n// shape\\nfn area(this) -> f64\\n// attached\\nattach operator +(this: circle, other: circle) -> circle\\nattach fn grow(this: circle&, by: f64) -> void"), "hover circle: {h}");
     let h = s.request("textDocument/hover", &at(2, 8));
     assert!(h.contains("// attached by\\ncircle"), "hover shape: {h}");
 
@@ -500,4 +500,69 @@ fn builtins_and_std_files() {
     }
     // std's own: not offered in a program
     assert!(!c.contains("\"label\":\"intrinsic\""), "a program is offered @intrinsic: {c}");
+}
+
+/// hover tells what clangd tells for C++: a type's generics, size, alignment, each field's offset and
+/// size and the padding between, a value's size, the doc comment; an imported C++ function's
+/// declaration, and for a call worked out per use, the call clang chose
+#[test]
+fn hovers_show_layout_and_foreign_declarations() {
+    let mut s = Server::start();
+    s.request("initialize", &format!("{{\"processId\":null,\"rootUri\":\"file://{}\",\"capabilities\":{{}}}}", s.dir.display()));
+    s.notify("initialized", "{}");
+    std::fs::write(s.dir.join("geo.hpp"), "#pragma once\nnamespace geo {\ninline double scale(double x, int k) { return x * k; }\ntemplate <class... A>\nauto sum(A... a) { return (a + ... + 0); }\n}\n").unwrap();
+    let src = "use std::io;
+use { \"geo.hpp\" } as cpp;
+
+// a point with a tag in front
+struct tagged {
+    tag: u8;
+    x: f64;
+    y: i32;
+}
+
+<T: type>
+struct pair {
+    a: T;
+    b: T;
+}
+
+enum shade {
+    DARK,
+    LIGHT: i64,
+}
+
+fn main() -> void {
+    val t: tagged = { tag: 1, x: 2.0, y: 3 };
+    val p: pair<i16> = { a: 1, b: 2 };
+    val k = shade::LIGHT(4);
+    std::println(\"{} {} {}\", t.tag, p.a, cpp::geo::scale(1.5, 2) + cpp::geo::sum(1, 2.5));
+}
+// not abs's doc
+use { \"stdlib.h\" } as libc;
+fn other() -> i32 {
+    return libc::abs(-3);
+}
+";
+    let uri = format!("file://{}/hover.volt", s.dir.display());
+    let doc = format!("{{\"uri\":\"{uri}\"}}");
+    let at = |line: u32, ch: u32| format!("{{\"textDocument\":{doc},\"position\":{{\"line\":{line},\"character\":{ch}}}}}");
+    s.notify("textDocument/didOpen", &format!("{{\"textDocument\":{{\"uri\":\"{uri}\",\"languageId\":\"volt\",\"version\":1,\"text\":{}}}}}", js(src)));
+    let _ = s.diagnostics_for(&uri);
+    let h = s.request("textDocument/hover", &at(22, 12));
+    assert!(h.contains("// size 24, align 8\\nstruct tagged {\\n    tag: u8; // offset 0, size 1\\n    // 7 bytes padding\\n    x: f64; // offset 8, size 8\\n    y: i32; // offset 16, size 4\\n    // 4 bytes padding\\n}"), "hover tagged: {h}");
+    assert!(h.contains("a point with a tag in front"), "hover tagged's doc: {h}");
+    let h = s.request("textDocument/hover", &at(23, 12));
+    assert!(h.contains("struct pair<T: type> {\\n    a: T;\\n    b: T;\\n}"), "hover pair: {h}");
+    let h = s.request("textDocument/hover", &at(25, 37));
+    assert!(h.contains("// size 4, align 2\\np: pair<i16>"), "hover p: {h}");
+    let h = s.request("textDocument/hover", &at(24, 13));
+    assert!(h.contains("enum shade {"), "hover shade: {h}");
+    let h = s.request("textDocument/hover", &at(25, 52));
+    assert!(h.contains("C++: double geo::scale(double x, int k)"), "hover scale: {h}");
+    let h = s.request("textDocument/hover", &at(25, 78));
+    assert!(h.contains("fn sum(a0: i32, a1: f64) -> f64") && h.contains("C++: geo::sum(int32_t, double) -> double, as clang resolves it"), "hover sum: {h}");
+    let h = s.request("textDocument/hover", &at(30, 18));
+    assert!(h.contains("abs") && !h.contains("not abs's doc"), "a C fn's hover has no doc of the use's: {h}");
+    let _ = std::fs::remove_dir_all(&s.dir);
 }

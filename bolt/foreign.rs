@@ -479,6 +479,23 @@ fn repr_int(attrs: &[Vec<Tok>]) -> Option<&'static str> {
     None
 }
 
+/// tokens back as one line of source: `pub fn area(w: f64) -> f64`, `fn get(self: *Self) u32`
+pub(crate) fn toks_line(t: &[Tok]) -> String {
+    let mut out = String::new();
+    let mut prev = String::new();
+    for x in t {
+        let s = tok_text(x);
+        let glue_left = matches!(s.as_str(), "," | ")" | "]" | ":" | ";" | "." | "?" | ">" | "::" | "(" | "<" | "!") && prev != "->";
+        let glue_right = matches!(prev.as_str(), "(" | "[" | "&" | "*" | "." | "::" | "<" | "!" | "@") || (prev == "]" && out.ends_with("[]"));
+        if !out.is_empty() && !glue_left && !glue_right {
+            out.push(' ');
+        }
+        out.push_str(&s);
+        prev = s;
+    }
+    out
+}
+
 pub(crate) fn tok_text(t: &Tok) -> String {
     match t {
         Tok::Id(s) | Tok::Num(s) | Tok::P(s) => s.clone(),

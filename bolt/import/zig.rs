@@ -13,7 +13,7 @@
 //   an enum -> a Volt enum with the same values
 use super::glue::{number, prim, Gen, Kind, Lang, Model, Recv, ShimOut, ShimParam, Sig, Ty, TypeDef, TypeInfo};
 use super::{arg_path, fresh, save, stamp, Made, Req};
-use crate::foreign::{int_value, lex, Cur, Tok};
+use crate::foreign::{int_value, lex, toks_line, Cur, Tok};
 use std::collections::BTreeSet;
 use std::fmt::Write;
 use std::path::{Path, PathBuf};
@@ -348,7 +348,7 @@ fn sig(head: &[Tok], owner: Option<&str>) -> Sig {
         Some(Tok::Id(n)) => n.clone(),
         _ => String::new(),
     };
-    let mut s = Sig { name, recv: Recv::None, params: Vec::new(), ret: None, skip: None };
+    let mut s = Sig { name, recv: Recv::None, params: Vec::new(), ret: None, skip: None, src: format!("pub {}", toks_line(head)) };
     let mut c = Cur { t: head, i: 2 };
     if !c.is("(") {
         s.skip = Some("its parameters");

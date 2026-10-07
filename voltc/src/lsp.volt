@@ -17,6 +17,7 @@ struct lsp_ref {
     kind: u8 = 255; // what it is, for semantic tokens (LK_*, lsp_inline.volt); 255: none
     mods: u32 = 0;  // LM_* (readonly for a val)
     decl: u32? = null; // a declared type's decl (hover lists what's attached to it)
+    ty: u32? = null;   // a value's type (hover adds its size)
 }
 
 // a local variable or parameter: its place, name, type and where it's declared
@@ -58,14 +59,23 @@ attach fn lsp_param(this: checker&, d: u32, name: str, c: u32, ty: u32) -> void 
 attach fn lsp_local_use(this: checker&, c: u32, name: str, ty: u32, span: span) -> void {
     val i = this.lsp_local_idx.get(c) ?? return;
     val l = this.lsp_locals.at(*i);
-    put(&this.lsp_refs, { at: span, def: l.def, label: fmt2("{}: {}", S(name), this.ty_name(ty)), kind: local_kind(l), mods: local_mods(l) });
+    put(&this.lsp_refs, { at: span, def: l.def, label: fmt2("{}: {}", S(name), this.ty_name(ty)), kind: local_kind(l), mods: local_mods(l), ty: ty });
 }
 
 // a use of fn decl d (instance inst, when there is one) somewhere in span: a call, or d as a value
 attach fn lsp_fn_use(this: checker&, d: u32, inst: u32?, span: span) -> void {
     val f = this.fn_decl_of(d) ?? return;
-    val at = this.lsp_word(span, f.name, false) ?? return; // not written there: an operator, a hook
+    this.lsp_fn_use_as(d, inst, span, f.name);
+}
+
+// ...written as `written` (a C++ call worked out per use: its instance has a name of its own)
+attach fn lsp_fn_use_as(this: checker&, d: u32, inst: u32?, span: span, written: str) -> void {
+    val f = this.fn_decl_of(d) ?? return;
+    val at = this.lsp_word(span, written, false) ?? return; // not written there: an operator, a hook
     var label = this.lsp_decl_text(d);
+    if (written != f.name) {
+        label = replace_all(label.as_str(), f.name, written);
+    }
     if (label.len() == 0 && inst != null) {
         label = this.lsp_c_signature(inst ?? 0);
     }
@@ -81,7 +91,7 @@ attach fn lsp_fn_use(this: checker&, d: u32, inst: u32?, span: span) -> void {
             kind = LK_METHOD;
         }
     }
-    put(&this.lsp_refs, { at: at, def: this.name_span(def, f.name), label: move label, kind: kind });
+    put(&this.lsp_refs, { at: at, def: this.name_span(def, f.name), label: move label, kind: kind, decl: d });
 }
 
 // field `name` (of type ty) of struct instance sid, used at the end of span (x.name)
@@ -98,7 +108,7 @@ attach fn lsp_field_use(this: checker&, sid: u32, name: str, ty: u32, span: span
         },
         default => {},
     }
-    put(&this.lsp_refs, { at: at, def: def, kind: LK_PROPERTY, label: fmt2("{}: {}", S(name), this.ty_name(ty)) });
+    put(&this.lsp_refs, { at: at, def: def, kind: LK_PROPERTY, label: fmt2("{}: {}", S(name), this.ty_name(ty)), ty: ty });
 }
 
 // decl d (a global), named `name` at the end of span
@@ -1424,17 +1434,25 @@ attach fn hover(this: lsp_server&, params: std::json::value&) -> std::json::valu
     val c = &*doc.chk.value;
     val at = doc_offset(doc, params);
     var label: std::string = {};
+    var about: std::string = {}; // the declaration's doc comment, under the code
     val r = ref_at(c, doc.file, at);
     if (r) {
         label = copy r->label;
         if (r->decl != null && (r->kind == LK_STRUCT || r->kind == LK_ENUM || r->kind == LK_INTERFACE)) {
             label = c.type_hover(r->decl ?? 0);
         }
+        if (r->ty) {
+            label = fmt2("{}{}", c.size_note(r->ty ?? 0), move label);
+        }
+        if (r->decl) {
+            about = c.decl_doc(r->decl ?? 0);
+        }
     } else {
         // a local declared here and never used
         for (l&) in c.lsp_locals.items() {
             if (contains(l.def, doc.file, at)) {
-                label = fmt2("{}: {}", S(l.name), c.ty_name(l.ty));
+                label = fmt2("{}{}: ", c.size_note(l.ty), S(l.name));
+                label.append(c.ty_name(l.ty).as_str());
             }
         }
     }
@@ -1447,6 +1465,10 @@ attach fn hover(this: lsp_server&, params: std::json::value&) -> std::json::valu
         text.append("```volt\n");
         text.append(label.as_str());
         text.append("\n```\n");
+    }
+    if (about.len() > 0) {
+        text.append(about.as_str());
+        text.push('\n');
     }
     if (exp.len() > 0) {
         text.append("expands to\n```volt\n");

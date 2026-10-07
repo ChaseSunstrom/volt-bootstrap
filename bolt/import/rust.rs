@@ -15,7 +15,7 @@
 // comment in the Volt source (VOLT_SHOW_IMPORT=1 makes voltc print it).
 use super::glue::{number, prim, Gen, Kind, Lang, Model, Recv, ShimOut, ShimParam, Sig, Ty, TypeDef, TypeInfo};
 use super::{arg_path, fresh, save, stamp, Made, Req};
-use crate::foreign::{int_value, lex, tok_text, Cur, Tok};
+use crate::foreign::{int_value, lex, tok_text, toks_line, Cur, Tok};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
 use std::path::{Path, PathBuf};
@@ -390,7 +390,8 @@ fn sig(item: &[Tok]) -> Sig {
         Some(Tok::Id(n)) => n.clone(),
         _ => String::new(),
     };
-    let mut s = Sig { name, recv: Recv::None, params: Vec::new(), ret: Some(Ty::Unit), skip: None };
+    let head = item.iter().position(|x| matches!(x, Tok::P(p) if p == "{" || p == ";")).unwrap_or(item.len());
+    let mut s = Sig { name, recv: Recv::None, params: Vec::new(), ret: Some(Ty::Unit), skip: None, src: toks_line(&item[..head]) };
     if item[..k].iter().any(|x| *x == Tok::Id("async".into())) {
         s.skip = Some("it's async");
     }

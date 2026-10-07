@@ -365,7 +365,7 @@ fn read(desc: &str) -> (Model, Dotnet) {
                     }
                     _ => {}
                 }
-                m.methods.entry(tv).or_default().push(Sig { name, recv, params, ret, skip: None });
+                m.methods.entry(tv).or_default().push(Sig { name, recv, params, ret, skip: None, src: String::new() });
             }
             "end" => {
                 m.types.extend(def.take());

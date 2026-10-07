@@ -896,6 +896,63 @@ attach fn attachers(this: checker&, d: u32) -> std::vec<u32> {
     return out;
 }
 
+// each field's size, and its offset in place of an alignment, laid out as layout() does; null when
+// a field has no layout
+attach fn field_offsets(this: checker&, sid: u32, span: span) -> std::vec<lay>? {
+    val fs = this.struct_fields(sid, span) catch |x| {
+        return null;
+    };
+    var out: std::vec<lay> = {};
+    var at: u64 = 0;
+    for (f&) in fs.items() {
+        val l = this.layout_opt(f.ty, span) ?? return null;
+        at = (at + l.align - 1) / l.align * l.align;
+        put(&out, { size: l.size, align: at });
+        at += l.size;
+    }
+    return out;
+}
+
+// `<T: type, n: usize>`: a declaration's generic parameters, as written ("" when it has none)
+attach fn generics_label(this: checker&, it: item&) -> std::string {
+    var out: std::string = {};
+    for (i) in 0..it.generics.len {
+        if (i == 0) {
+            out.push('<');
+        } else {
+            out.append(", ");
+        }
+        out.append(this.span_text(it.generics.at(i).span).as_str());
+    }
+    if (out.len() > 0) {
+        out.push('>');
+    }
+    return out;
+}
+
+// `// size 16, align 8` and a newline, for a type with a layout ("" for one without: a generic
+// parameter, a C struct only C lays out)
+attach fn size_note(this: checker&, t: u32) -> std::string {
+    val l = this.layout_opt(t, { file: 0, lo: 0, hi: 0 }) ?? return {};
+    return fmt2("// size {}, align {}\n", unum(l.size), unum(l.align));
+}
+
+// a declaration's doc comment: the `//` lines directly above it ("" for none, one not in a file, or
+// a C header's)
+attach fn decl_doc(this: checker&, d: u32) -> std::string {
+    // a C header's items have their `use` as their place: the comment above it isn't theirs
+    for (e) in this.c_imports.iter() {
+        if (*e.value == d) {
+            return {};
+        }
+    }
+    val sp = this.item_of(d).span;
+    if (@cast<usize>(sp.file) >= this.files.len) {
+        return {};
+    }
+    return doc_above(this.files.at(@cast<usize>(sp.file)).text, @cast<usize>(sp.lo));
+}
+
 // what hover shows for a type: its declaration (fields, variants) and every fn attached to it,
 // grouped by the trait it's attached for; for a trait, its fns and the types that attach it
 attach fn type_hover(this: checker&, d: u32) -> std::string {
@@ -903,9 +960,50 @@ attach fn type_hover(this: checker&, d: u32) -> std::string {
     val it = this.item_of(d);
     match (it.kind) {
         .STRUCT(s&) => {
-            out.append(fmt("struct {} {{", S(s.name)).as_str());
-            for (f&) in s.fields.items() {
-                out.append(fmt2("\n    {}: {};", S(f.name), this.span_text(f.ty.span)).as_str());
+            // a non-generic struct's layout, as clangd shows C's: size and alignment, each field's
+            // offset and size, and the padding between
+            var offs: std::vec<lay> = {};
+            var whole: lay? = null;
+            if (it.generics.len == 0) {
+                val t = this.type_of_decl(d);
+                if (t) {
+                    match (*this.t.get(t)) {
+                        .STRUCT(sid) => {
+                            val got = this.field_offsets(sid, it.span);
+                            if (got) {
+                                if (got.len == s.fields.len) {
+                                    offs = copy got;
+                                    whole = this.layout_opt(t, it.span);
+                                }
+                            }
+                        },
+                        default => {},
+                    }
+                }
+            }
+            if (whole) {
+                out.append(fmt2("// size {}, align {}\n", unum(whole.size), unum(whole.align)).as_str());
+            }
+            out.append(fmt2("struct {}{} {{", S(s.name), this.generics_label(it)).as_str());
+            var end: u64 = 0;
+            for (i) in 0..s.fields.len {
+                val f = s.fields.at(i);
+                if (whole) {
+                    // (offs: each field's size, and its offset in place of an alignment)
+                    val o = offs.at(i);
+                    if (o.align > end) {
+                        out.append(fmt("\n    // {} bytes padding", unum(o.align - end)).as_str());
+                    }
+                    out.append(fmt4("\n    {}: {}; // offset {}, size {}", S(f.name), this.span_text(f.ty.span), unum(o.align), unum(o.size)).as_str());
+                    end = o.align + o.size;
+                } else {
+                    out.append(fmt2("\n    {}: {};", S(f.name), this.span_text(f.ty.span)).as_str());
+                }
+            }
+            if (whole) {
+                if (whole.size > end) {
+                    out.append(fmt("\n    // {} bytes padding", unum(whole.size - end)).as_str());
+                }
             }
             out.append("\n}");
         },
@@ -914,7 +1012,13 @@ attach fn type_hover(this: checker&, d: u32) -> std::string {
             if (e.is_error) {
                 kw = "error";
             }
-            out.append(fmt2("{} {} {{", S(kw), S(e.name)).as_str());
+            if (it.generics.len == 0) {
+                val t = this.type_of_decl(d);
+                if (t) {
+                    out.append(this.size_note(t).as_str());
+                }
+            }
+            out.append(fmt3("{} {}{} {{", S(kw), S(e.name), this.generics_label(it)).as_str());
             for (v&) in e.variants.items() {
                 out.append("\n    ");
                 out.append(v.name);

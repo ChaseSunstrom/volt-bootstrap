@@ -545,6 +545,12 @@ fn rust_direct() {
         tools(&mut c);
         assert_eq!(ok(c.output().unwrap(), "voltc run single.volt"), "3 n=70\n", "a single .rs file ({backend})");
     }
+    // each Volt fn says what it is in Rust, above it (the editor's hover shows that comment)
+    let mut c = Command::new(&e.voltc);
+    c.args(["check", "single.volt"]).current_dir(&dir).env("VOLT_STD", Path::new(ROOT).join("std")).env("VOLT_SHOW_IMPORT", "1");
+    tools(&mut c);
+    let o = c.output().unwrap();
+    assert!(String::from_utf8_lossy(&o.stderr).contains("// Rust: pub fn mean(xs: &[f64]) -> f64\nfn mean("), "the Rust signature above its Volt fn: {}", String::from_utf8_lossy(&o.stderr));
     // a handle Rust never made stops the program, with no crash inside Rust (`use rust { }` says the
     // language outright)
     let mut c = Command::new(&e.voltc);
@@ -600,6 +606,12 @@ fn zig_direct() {
         tools(&mut c);
         assert_eq!(ok(c.output().unwrap(), "voltc run"), want, "voltc run ({backend})");
     }
+    // each Volt fn says what it is in Zig, above it (the editor's hover shows that comment)
+    let mut c = Command::new(&e.voltc);
+    c.args(["check", "main.volt"]).current_dir(&dir).env("VOLT_STD", Path::new(ROOT).join("std")).env("VOLT_SHOW_IMPORT", "1");
+    tools(&mut c);
+    let o = c.output().unwrap();
+    assert!(String::from_utf8_lossy(&o.stderr).contains("// Zig: pub fn scale(self: *Point, k: f64) void\nattach fn scale("), "the Zig signature above its Volt fn: {}", String::from_utf8_lossy(&o.stderr));
     // a handle Zig never made stops the program
     let mut c = Command::new(&e.voltc);
     c.args(["run", "empty.volt"]).current_dir(&dir).env("VOLT_STD", Path::new(ROOT).join("std"));

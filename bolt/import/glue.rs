@@ -93,6 +93,8 @@ pub struct Sig {
     pub ret: Option<Ty>,
     /// why it can't be called from Volt at all, when it can't
     pub skip: Option<&'static str>,
+    /// its declaration in its own language, on one line (shown above the Volt fn: hover shows it)
+    pub src: String,
 }
 
 #[derive(Clone)]
@@ -683,7 +685,11 @@ impl<'a> Gen<'a> {
             (Some(_), _) => format!("attach fn {}({}) -> {ret_ty}", volt_name(&s.name), vps.join(", ")),
             (None, _) => format!("fn {}({}) -> {ret_ty}", volt_name(&s.name), vps.join(", ")),
         };
-        let mut f = format!("{head} {{\n");
+        let mut f = String::new();
+        if !s.src.is_empty() {
+            f.push_str(&format!("// {}: {}\n", self.lang.name(), s.src));
+        }
+        f.push_str(&format!("{head} {{\n"));
         for l in lines {
             f.push_str(&format!("    {l}\n"));
         }

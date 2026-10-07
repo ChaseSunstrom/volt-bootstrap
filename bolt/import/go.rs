@@ -535,11 +535,13 @@ fn read(desc: &str) -> (Model, String) {
             "func" => {
                 let (name, recv_ty, recv) = (field(1).to_string(), field(2).to_string(), field(3));
                 let (mut params, mut results, mut variadic) = (Vec::new(), Vec::new(), false);
+                let mut go_params: Vec<String> = Vec::new();
                 while i < rows.len() && rows[i][0] != "end" {
                     let r = &rows[i];
                     match (r[0], r.len()) {
                         ("param", 3) => {
                             let n = if r[1].is_empty() || r[1] == "_" { format!("p{}", params.len()) } else { r[1].to_string() };
+                            go_params.push(format!("{n} {}", r[2]));
                             params.push((n, go_ty(r[2], &names)));
                         }
                         ("result", 2) => results.push(r[1]),
@@ -564,7 +566,13 @@ fn read(desc: &str) -> (Model, String) {
                     "ptr" => Recv::Mut,
                     _ => Recv::None,
                 };
-                let s = Sig { name, recv, params, ret, skip };
+                let rs = match results.as_slice() {
+                    [] => String::new(),
+                    [t] => format!(" {t}"),
+                    ts => format!(" ({})", ts.join(", ")),
+                };
+                let src = if recv_ty.is_empty() { format!("func {name}({}){rs}", go_params.join(", ")) } else { format!("func ({}) {name}({}){rs}", recv_ty, go_params.join(", ")) };
+                let s = Sig { name, recv, params, ret, skip, src };
                 if recv == Recv::None {
                     m.fns.push((vec![], s));
                 } else {

@@ -43,6 +43,7 @@ struct cpp_traits {
 struct cpp_gen {
     c: checker&;
     out: std::string = {};
+    note: std::string = {}; // the C++ declaration the next fn wraps, as a comment above it (hover shows it)
     classes: std::map<str, str> = {};
     enums: std::map<str, str> = {};
     templates: std::map<str, str> = {};
@@ -762,6 +763,80 @@ fn param_count(c: clang::CXCursor) -> usize {
 // what the Volt fn passes first (this), if anything. A default argument adds an overload without
 // it, and one that can throw a try_ form too
 attach fn callable(this: cpp_gen&, generics: str, head: str, has_params: bool, fn_cursor: clang::CXCursor, ret: cpp_ret?, call: str, self_arg: str?, extra: str, tparams: std::vec<str>&, what: str) -> void {
+    this.note = cpp_decl_text(fn_cursor);
+    this.callable_of(generics, head, has_params, fn_cursor, ret, call, self_arg, extra, tparams, what);
+    this.note = {};
+}
+
+// the C++ declaration the next fn wraps, as the comment above it (once)
+attach fn put_note(this: cpp_gen&) -> void {
+    if (this.note.len() > 0) {
+        this.line(fmt("// C++: {}", copy this.note).as_str());
+        this.note = {};
+    }
+}
+
+// a C++ function's declaration on one line: `double geo::scale(double x, int k) const`
+fn cpp_decl_text(c: clang::CXCursor) -> std::string {
+    var out: std::string = {};
+    val k = clang::clang_getCursorKind(c);
+    if (k == clang::CXCursor_FunctionTemplate) {
+        var tps: std::vec<std::string> = {};
+        for (ch&) in children(c).items() {
+            val ck = clang::clang_getCursorKind(*ch);
+            if (ck == clang::CXCursor_TemplateTypeParameter) {
+                put(&tps, fmt("class {}", cursor_name(*ch)));
+            } else if (ck == clang::CXCursor_NonTypeTemplateParameter) {
+                put(&tps, fmt2("{} {}", type_spelling(clang::clang_getCursorType(*ch)), cursor_name(*ch)));
+            }
+        }
+        out.append("template <");
+        for (i) in 0..tps.len {
+            if (i > 0) {
+                out.append(", ");
+            }
+            out.append(tps.at(i).as_str());
+        }
+        out.append("> ");
+    }
+    if (clang::clang_CXXMethod_isStatic(c) != 0) {
+        out.append("static ");
+    }
+    if (clang::clang_CXXMethod_isVirtual(c) != 0) {
+        out.append("virtual ");
+    }
+    if (k != clang::CXCursor_Constructor && k != clang::CXCursor_Destructor) {
+        out.append(type_spelling(clang::clang_getCursorResultType(c)).as_str());
+        out.push(' ');
+    }
+    out.append(cpp_qual(c).as_str());
+    out.push('(');
+    val ps = params_of(c);
+    for (i) in 0..ps.len {
+        if (i > 0) {
+            out.append(", ");
+        }
+        out.append(type_spelling(clang::clang_getCursorType(*ps.at(i))).as_str());
+        val n = cursor_name(*ps.at(i));
+        if (n.len() > 0) {
+            out.push(' ');
+            out.append(n.as_str());
+        }
+    }
+    if (clang::clang_Cursor_isVariadic(c) != 0) {
+        if (ps.len > 0) {
+            out.append(", ");
+        }
+        out.append("...");
+    }
+    out.push(')');
+    if (clang::clang_CXXMethod_isConst(c) != 0) {
+        out.append(" const");
+    }
+    return out;
+}
+
+attach fn callable_of(this: cpp_gen&, generics: str, head: str, has_params: bool, fn_cursor: clang::CXCursor, ret: cpp_ret?, call: str, self_arg: str?, extra: str, tparams: std::vec<str>&, what: str) -> void {
     var r: cpp_ret = { vty: S("void") };
     if (ret) {
         r = copy ret;
@@ -878,6 +953,7 @@ attach fn first_time(this: cpp_gen&, head: str, types: str) -> bool {
 
 // a Volt fn whose body makes the C++ call (sig: its signature up to the result type)
 attach fn fn_text(this: cpp_gen&, generics: str, sig: str, r: cpp_ret&, cpp: str, tail: str, extra: str) -> void {
+    this.put_note();
     if (generics.len > 0) {
         this.line(generics);
     }
@@ -2651,6 +2727,7 @@ attach fn per_use(this: cpp_gen&, head: str, call: str, method: bool) -> void {
     if (!this.first_time(head, "#per-use")) {
         return;
     }
+    this.put_note();
     if (method && this.class_gen.len() > 0) {
         this.line(this.class_gen.as_str());
     }
@@ -3341,6 +3418,12 @@ attach fn cpp_instance(this: checker&, k: usize, expr: str, types: std::vec<u32>
         body.push(expr[i]);
         i += 1;
     }
+    // the call clang worked out, with its argument and result types
+    var inst = S(expr);
+    for (j) in 0..ptys.len {
+        inst = replace_all(inst.as_str(), fmt("{{{}}}", unum(@cast<u64>(j))).as_str(), ptys.at(j).as_str());
+    }
+    g.note = fmt2("{} -> {}, as clang resolves it", move inst, type_spelling(rt));
     g.fn_text("", sig.as_str(), &rr, body.as_str(), tail.as_str(), "");
     var out = copy g.out;
     g.out = {};
@@ -3454,7 +3537,12 @@ attach fn cpp_dyn_call(this: checker&, d: u32, name: str, rv: tval?, explicit: s
     var cands: std::vec<u32> = {};
     put(&cands, made);
     var none: std::vec<garg> = {};
-    return this.pick_call(name, &cands, rp, null, &none, &pre, args, want, span);
+    val r = try this.pick_call(name, &cands, rp, null, &none, &pre, args, want, span);
+    if (this.opts.lsp) {
+        // hover on the name shows the instance (and, above it, the call clang worked out)
+        this.lsp_fn_use_as(made, null, span, name);
+    }
+    return r;
 }
 
 // @cpp("C++ expression", args...) with no result type: clang works it out, as for a call made per
