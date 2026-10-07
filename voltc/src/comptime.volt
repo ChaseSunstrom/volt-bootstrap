@@ -508,6 +508,19 @@ attach fn ct_coerce(this: checker&, v: cval, t: u32, span: span) -> compile_erro
                 default => {},
             }
         },
+        .SLICE(et) => {
+            // a slice at compile time is the array it views
+            match (v) {
+                .ARRAY(es, x) => {
+                    var out: std::vec<cval> = {};
+                    for (e&) in es.items() {
+                        put(&out, try this.ct_coerce(copy *e, et, span));
+                    }
+                    return cval::ARRAY(move out, et);
+                },
+                default => {},
+            }
+        },
         .TUPLE(ts, names) => {
             match (v) {
                 .TUPLE(es) => {
