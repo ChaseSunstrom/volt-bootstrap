@@ -928,6 +928,7 @@ attach fn loop_expr(this: parser&, lab: str?, is_comptime: bool) -> compile_erro
     } else if (this.eat_kw("loop")) {
         kind = expr_kind::LOOP(lab, try this.block());
     } else if (this.eat_kw("for")) {
+        val names_at = this.span();
         try this.expect("(");
         var bindings: std::vec<binding> = {};
         while (!this.eat(")")) {
@@ -937,6 +938,10 @@ attach fn loop_expr(this: parser&, lab: str?, is_comptime: bool) -> compile_erro
             if (!this.eat(",") && !this.is(")")) {
                 return this.unexpected("',' or ')'");
             }
+        }
+        // (a runtime, comptime or comptime fn's for alike)
+        if (bindings.len == 0 || bindings.len > 2) {
+            return fails(names_at.to(this.prev_span()), "for takes one or two names: for (value) or for (value, index)");
         }
         try this.expect_kw("in");
         val iter = try this.expr();

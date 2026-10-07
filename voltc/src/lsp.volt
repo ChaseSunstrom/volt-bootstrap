@@ -448,6 +448,28 @@ attach fn lsp_callees(this: checker&, callee: str, method: bool) -> std::vec<u32
 
 // ---------- JSON pieces ----------
 
+// the builtin or attribute named name
+fn find_builtin(name: str) -> attr_def? {
+    for (d&) in builtin_defs().items() {
+        if (d.name == name) {
+            return *d;
+        }
+    }
+    for (d&) in attr_defs().items() {
+        if (d.name == name) {
+            return *d;
+        }
+    }
+    return null;
+}
+
+// a builtin's or attribute's completion item: its name, how it's written, what it does
+fn builtin_item(d: attr_def&, kind: f64) -> std::json::value {
+    var o = lsp_item(d.name, kind, d.sig);
+    o.set("documentation", std::json::string(d.doc));
+    return o;
+}
+
 fn lsp_item(label: str, kind: f64, detail: str) -> std::json::value {
     var o = std::json::object();
     o.set("label", std::json::string(label));
@@ -828,6 +850,7 @@ fn lsp_capabilities() -> std::json::value {
     var trig = std::json::array();
     trig.add(std::json::string("."));
     trig.add(std::json::string(":"));
+    trig.add(std::json::string("@"));
     var comp = std::json::object();
     comp.set("triggerCharacters", move trig);
     caps.set("completionProvider", move comp);
@@ -1011,6 +1034,18 @@ attach fn update(this: lsp_server&, i: usize) -> void {
     lsp_notify("textDocument/publishDiagnostics", move p);
 }
 
+// is path one of std's files (under the std directory)?
+attach fn in_std(this: lsp_server&, path: str) -> bool {
+    if (this.std_dir == null) {
+        return false;
+    }
+    var dir = copy this.std_dir.value;
+    if (!ends_with(dir.as_str(), "/")) {
+        dir.push('/');
+    }
+    return starts_with(path, dir.as_str());
+}
+
 // Check doc: std, the libraries its bolt package can use (bolt metadata), the other files of its
 // program (the .volt files under the src/ it's in), and its text. Keeps the check when everything
 // parsed. The document's diagnostics
@@ -1019,13 +1054,19 @@ attach fn check_doc(this: lsp_server&, doc: lsp_doc&) -> std::vec<diag> {
     var sb = bx<sources>({});
     val s = &*sb;
     val path = uri_path(doc.uri.as_str());
+    // a std file is std's own (its @intrinsic attributes are std's to use), not a program's
+    var own: str? = null;
+    if (this.in_std(path.as_str())) {
+        own = "std";
+    }
     if (this.std_dir != null) {
         for (f&) in volt_files(this.std_dir.value.as_str()).items() {
-            lsp_add_file(s, f.as_str(), "std");
+            if (f.as_str() != path.as_str()) {
+                lsp_add_file(s, f.as_str(), "std");
+            }
         }
     }
     // the libraries its bolt package can use; a document inside one of them is part of it
-    var own: str? = null;
     val root = package_root(path.as_str());
     if (root) {
         val libs = this.libs_for(root.as_str());
@@ -1354,6 +1395,31 @@ fn lsp_location(doc: lsp_doc&, c: checker&, s: span) -> std::json::value {
 }
 
 attach fn hover(this: lsp_server&, params: std::json::value&) -> std::json::value {
+    val bdoc = this.find_doc(params);
+    if (bdoc) {
+        // on @name: the builtin's or attribute's signature and what it does
+        val text = bdoc.text.as_str();
+        val at = lsp_offset(text, params.get("position"));
+        var lo = at;
+        while (lo > 0 && is_word_byte(text[lo - 1])) {
+            lo -= 1;
+        }
+        var hi = at;
+        while (hi < text.len && is_word_byte(text[hi])) {
+            hi += 1;
+        }
+        if (lo > 0 && text[lo - 1] == '@' && hi > lo && (lo < 2 || !is_word_byte(text[lo - 2]))) {
+            val found = find_builtin(text[lo..hi]);
+            if (found) {
+                var contents = std::json::object();
+                contents.set("kind", std::json::string("markdown"));
+                contents.set("value", std::json::string(fmt2("```volt\n{}\n```\n{}", S(found.sig), S(found.doc)).as_str()));
+                var h = std::json::object();
+                h.set("contents", move contents);
+                return h;
+            }
+        }
+    }
     val doc = this.checked_doc(params) ?? return std::json::value::NULL;
     val c = &*doc.chk.value;
     val at = doc_offset(doc, params);
@@ -1590,6 +1656,20 @@ attach fn complete(this: lsp_server&, params: std::json::value&) -> std::json::v
     var i = at;
     while (i > 0 && is_word_byte(text[i - 1])) {
         i -= 1;
+    }
+    if (i > 0 && text[i - 1] == '@' && (i < 2 || !is_word_byte(text[i - 2]))) {
+        // every builtin and attribute (not after a word: a@b is text), with how it's written and what it does (std's own
+        // attributes only in std)
+        val in_std = this.in_std(uri_path(doc.uri.as_str()).as_str());
+        for (d&) in builtin_defs().items() {
+            out.add(builtin_item(d, 3.0));
+        }
+        for (d&) in attr_defs().items() {
+            if (!d.pkg || in_std) {
+                out.add(builtin_item(d, 10.0));
+            }
+        }
+        return out;
     }
     if (doc.chk == null) {
         for (k) in KEYWORDS {

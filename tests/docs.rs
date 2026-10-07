@@ -203,3 +203,19 @@ fn shown_schema_is_the_sample() {
     let shown = page.split("```json\n").nth(1).and_then(|s| s.split("```").next()).expect("a json block");
     assert_eq!(shown, std::fs::read_to_string(root.join("site/src/samples/user.schema.json")).unwrap());
 }
+
+#[test]
+fn builtins_page_is_complete() {
+    // every builtin and attribute voltc knows (its builtin_defs and attr_defs) is on the builtins page
+    let src = std::fs::read_to_string(Path::new(ROOT).join("voltc/src/comptime.volt")).unwrap();
+    let page = std::fs::read_to_string(Path::new(ROOT).join("site/src/content/docs/guide/builtins.md")).unwrap();
+    let mut names = Vec::new();
+    for line in src.lines() {
+        if let Some(rest) = line.trim().strip_prefix("put(&v, { name: \"") {
+            names.push(rest.split('"').next().unwrap().to_string());
+        }
+    }
+    assert!(names.len() > 40, "found only {} names in builtin_defs and attr_defs", names.len());
+    let missing: Vec<&String> = names.iter().filter(|n| !page.contains(&format!("`@{n}"))).collect();
+    assert!(missing.is_empty(), "guide/builtins.md doesn't list: {missing:?}");
+}

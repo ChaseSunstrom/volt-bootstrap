@@ -3807,34 +3807,72 @@ attach fn ct_unroll_body(this: checker&, f: for_loop&, li: usize) -> compile_err
 
 // ---------- attributes ----------
 
-// an attribute's name and argument count
+// an attribute's name, argument count, how it's written and what it does (the editor shows them);
+// pkg: only a package's own files may use it (std, a library)
 struct attr_def {
     name: str;
     args: usize;
+    sig: str = "";
+    doc: str = "";
+    pkg: bool = false;
 }
 
-// the attributes that exist (enum attribute in the spec); @intrinsic is for packages (a std, or
-// any library) to bind compiler-provided functions like println
+// the attributes that exist (enum attribute in the spec); @intrinsic and @runtime are for packages
+// (std, or any library) to bind compiler-provided functions like println. guide/builtins.md lists
+// each one (tests/docs.rs checks it)
 fn attr_defs() -> std::vec<attr_def> {
     var v: std::vec<attr_def> = {};
-    put(&v, { name: "inline", args: 0 });
-    put(&v, { name: "noinline", args: 0 });
-    put(&v, { name: "unchecked", args: 0 }); // a fn without bounds checks in its body
-    put(&v, { name: "invalidates", args: 0 }); // a method that may move or free its receiver's storage (borrows.volt)
-    put(&v, { name: "opt", args: 1 });
-    put(&v, { name: "section", args: 1 });
-    put(&v, { name: "align", args: 1 });
-    put(&v, { name: "deprecated", args: 1 });
-    put(&v, { name: "owns", args: 1 });
-    put(&v, { name: "cpp_type", args: 1 }); // a struct is this C++ class (use cpp writes it)
-    put(&v, { name: "cpp_call", args: 1 }); // a C++ name called per use: clang works out each call (use cpp writes it)
-    put(&v, { name: "export_text", args: 1 }); // a struct is text, as this method gives it, to other languages (voltc bindings)
-    put(&v, { name: "thread_local", args: 0 }); // a global var each thread has its own of
-    put(&v, { name: "cfg", args: 2 }); // the item is only in builds where this @cfg holds (1 or 2 arguments)
-    put(&v, { name: "optional", args: 0 }); // a trait fn an attach block may leave out
-    put(&v, { name: "closed", args: 0 }); // a trait whose attach blocks hold its fns only
-    put(&v, { name: "attach_as", args: 1 }); // a struct attach blocks name for this trait (a C++ class's virtuals)
-    put(&v, { name: "derive", args: 1 }); // attach these traits (std::derive's when not in scope) to the struct or enum
+    put(&v, { name: "inline", args: 0, sig: "@inline", doc: "always inline this fn" });
+    put(&v, { name: "noinline", args: 0, sig: "@noinline", doc: "never inline this fn" });
+    put(&v, { name: "unchecked", args: 0, sig: "@unchecked", doc: "no bounds checks in this fn's body (for code that proves its own indices)" });
+    put(&v, { name: "invalidates", args: 0, sig: "@invalidates", doc: "a method that may move or free its receiver's storage: borrows into it end at the call" });
+    put(&v, { name: "opt", args: 1, sig: "@opt(level)", doc: "this fn's optimization level" });
+    put(&v, { name: "section", args: 1, sig: "@section(\"name\")", doc: "put this fn or global in a linker section" });
+    put(&v, { name: "align", args: 1, sig: "@align(n)", doc: "this global's or struct's alignment, in bytes" });
+    put(&v, { name: "deprecated", args: 1, sig: "@deprecated(\"why\")", doc: "using it warns with this message" });
+    put(&v, { name: "owns", args: 1, sig: "@owns(\"field\")", doc: "the struct owns what this pointer field points to (for borrow checking)" });
+    put(&v, { name: "cpp_type", args: 1, sig: "@cpp_type(\"ns::Class\")", doc: "this struct is that C++ class (use cpp writes it)" });
+    put(&v, { name: "cpp_call", args: 1, sig: "@cpp_call(\"ns::f\")", doc: "a C++ name called per use: clang works out each call (use cpp writes it)" });
+    put(&v, { name: "export_text", args: 1, sig: "@export_text(\"method\")", doc: "the struct is text to other languages, as this method gives it (voltc bindings)" });
+    put(&v, { name: "thread_local", args: 0, sig: "@thread_local", doc: "each thread has its own copy of this global var" });
+    put(&v, { name: "cfg", args: 2, sig: "@cfg(\"key\", \"value\") -> bool", doc: "whether a --cfg setting or the target's os, arch or pointer_bits is so (comptime, 1 or 2 arguments); on an item, the item is only in builds where it is" });
+    put(&v, { name: "optional", args: 0, sig: "@optional", doc: "a trait fn an attach block may leave out" });
+    put(&v, { name: "closed", args: 0, sig: "@closed", doc: "a trait whose attach blocks hold its fns only: its values are a closed set, and calls on them switches" });
+    put(&v, { name: "attach_as", args: 1, sig: "@attach_as(\"Struct\")", doc: "the struct attach blocks name for this trait (a C++ class's virtuals)" });
+    put(&v, { name: "derive", args: 1, sig: "@derive(trait, ...)", doc: "attach these traits (std::derive's when not in scope) to the struct or enum" });
+    put(&v, { name: "intrinsic", args: 1, sig: "@intrinsic(\"name\")", doc: "binds a function the compiler provides, like println (std's and libraries' own files only)", pkg: true });
+    put(&v, { name: "runtime", args: 1, sig: "@runtime(\"symbol\")", doc: "a function the compiler calls from the code it generates (std's and libraries' own files only)", pkg: true });
+    return v;
+}
+
+// the builtins (@name(...) in an expression), how each is written and what it does: the editor's
+// completion and hover read them, and guide/builtins.md lists each (tests/docs.rs checks it)
+fn builtin_defs() -> std::vec<attr_def> {
+    var v: std::vec<attr_def> = {};
+    put(&v, { name: "cast", args: 1, sig: "@cast<T>(x) -> T", doc: "converts anything to anything, unchecked; prefer x as T, which only allows safe conversions" });
+    put(&v, { name: "bitcast", args: 1, sig: "@bitcast<T>(x) -> T", doc: "the same bits read as type T, which must be the same size; plain data only" });
+    put(&v, { name: "sizeof", args: 1, sig: "@sizeof(T) -> usize", doc: "a type's size in bytes" });
+    put(&v, { name: "alignof", args: 1, sig: "@alignof(T) -> usize", doc: "a type's alignment in bytes" });
+    put(&v, { name: "offsetof", args: 2, sig: "@offsetof(T, field) -> usize", doc: "a field's offset in its struct, in bytes" });
+    put(&v, { name: "typeof", args: 1, sig: "@typeof(expr) -> type", doc: "an expression's type (comptime)" });
+    put(&v, { name: "typeinfo", args: 1, sig: "@typeinfo(T) -> typeinfo", doc: "a type's description (comptime): name, size, kind, fields, variants" });
+    put(&v, { name: "typeid", args: 1, sig: "@typeid(T) -> u64", doc: "a type's id, the same in every build; for a trait value, the id of the type it holds" });
+    put(&v, { name: "expand", args: 1, sig: "@expand(expr)", doc: "expr, noting at compile time what it became: a comptime value, or the generic instance a call runs" });
+    put(&v, { name: "embed", args: 1, sig: "@embed(\"path\") -> str", doc: "a file's bytes, read at compile time (the path is relative to the source file)" });
+    put(&v, { name: "discriminant", args: 1, sig: "@discriminant(v) -> i64", doc: "which variant an enum value holds" });
+    put(&v, { name: "field", args: 2, sig: "@field(v, \"name\")", doc: "v.name, the name a comptime string (or a tuple index): read, assigned, borrowed" });
+    put(&v, { name: "has_field", args: 2, sig: "@has_field(T, \"name\") -> bool", doc: "is T a struct with that field (comptime)" });
+    put(&v, { name: "has_method", args: 2, sig: "@has_method(T, \"name\", A...) -> bool", doc: "does T have a method of that name, taking A... first (comptime)" });
+    put(&v, { name: "attaches", args: 2, sig: "@attaches(T, trait) -> bool", doc: "does T attach the trait, as a <T: trait> bound asks (comptime)" });
+    put(&v, { name: "panic", args: 1, sig: "@panic(\"msg\") -> never", doc: "stops the program with a message (exit code 101)" });
+    put(&v, { name: "compile_error", args: 1, sig: "@compile_error(\"msg\") -> never", doc: "fails compilation where it's reached" });
+    put(&v, { name: "slice", args: 2, sig: "@slice(ptr, len) -> T[..]", doc: "a slice over len values starting at ptr, unchecked" });
+    put(&v, { name: "write", args: 2, sig: "@write(ptr, value) -> void", doc: "stores into memory without deleting what was there" });
+    put(&v, { name: "read", args: 1, sig: "@read(ptr) -> T", doc: "moves a value out of memory without copying or deleting it" });
+    put(&v, { name: "volatile_read", args: 1, sig: "@volatile_read(ptr) -> T", doc: "a load the compiler keeps, in order, exactly as written (hardware registers)" });
+    put(&v, { name: "volatile_write", args: 2, sig: "@volatile_write(ptr, value) -> void", doc: "a store the compiler keeps, in order, exactly as written (hardware registers)" });
+    put(&v, { name: "cpp", args: 1, sig: "@cpp<R>(\"C++ expression\", args...) -> R", doc: "calls C++: {i} is argument i; without <R>, clang works out the result type" });
+    put(&v, { name: "attributes", args: 1, sig: "@attributes([...])", doc: "attributes on the next declaration" });
     return v;
 }
 
@@ -3978,16 +4016,20 @@ attach fn check_attr(this: checker&, a: expr&, file: u32) -> compile_error!void 
         }
         return fails(a.span, "@derive names the traits to attach: @derive(eq, hash)");
     }
-    if (name == "intrinsic" || name == "runtime") {
-        for (pf&) in this.opts.pkg_files.items() {
-            if (pf.file == file) {
-                return;
-            }
-        }
-    }
     val defs = attr_defs();
     for (d&) in defs.items() {
         if (d.name == name) {
+            if (d.pkg) {
+                var mine = false;
+                for (pf&) in this.opts.pkg_files.items() {
+                    if (pf.file == file) {
+                        mine = true;
+                    }
+                }
+                if (!mine) {
+                    return fail(a.span, fmt("@{} is for a package's own files (std, a library), not a program's", S(name)));
+                }
+            }
             if (d.args == n_args) {
                 return;
             }

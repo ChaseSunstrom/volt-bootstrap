@@ -31,7 +31,7 @@ Builtins start with `@`. They're part of the language, not a library.
 | `@write(ptr, value)` | `void` | store into memory without deleting what was there |
 | `@read(ptr)` | `T` | move a value out of memory without copying or deleting it |
 | `@volatile_read(ptr)`, `@volatile_write(ptr, value)` | `T`, `void` | a load or store the compiler keeps, in order, exactly as written: memory-mapped hardware registers. Plain values only (ints, floats, pointers) |
-| `@cpp<R>("expr", args...)` | `R` | call C++ code (in a file that imports C++ headers); see [C++](/volt-bootstrap/interop/cpp/) |
+| `@cpp<R>("expr", args...)`, `@cpp("expr", args...)` | `R` | call C++ code (in a file that imports C++ headers); without `<R>`, clang works out the result type. See [C++](/volt-bootstrap/interop/cpp/#calls-worked-out-per-use) |
 | `@attributes([...])` | | attributes on the next declaration; see [Comptime](/volt-bootstrap/guide/comptime/#attributes) |
 
 ```volt
@@ -52,3 +52,29 @@ fn main() -> void {
 
 `@read` and `@write` are for containers that manage raw memory, like std's `vec`: they move values
 in and out of memory that isn't a variable, without running `delete` on garbage.
+
+## Attributes
+
+Attributes go in `@attributes([...])` before a declaration (see
+[Comptime](/volt-bootstrap/guide/comptime/#attributes)). The editor lists them, and the builtins
+above, after `@`, with what each does.
+
+| Attribute | On | What it does |
+| --- | --- | --- |
+| `@inline`, `@noinline` | a fn | always, or never, inline it |
+| `@opt(level)` | a fn | its optimization level |
+| `@unchecked` | a fn | no bounds checks in its body, for code that proves its own indices |
+| `@invalidates` | a method | it may move or free its receiver's storage: borrows into it end at the call |
+| `@section("name")` | a fn, a global | put it in a linker section |
+| `@align(n)` | a global, a struct | its alignment, in bytes |
+| `@deprecated("why")` | anything | using it warns with this message |
+| `@owns("field")` | a struct | it owns what this pointer field points to (for borrow checking) |
+| `@thread_local` | a global `var` | each thread has its own copy |
+| `@cfg("key", "value")` | any item | the item is only in builds where this holds (as the builtin above) |
+| `@derive(trait, ...)` | a struct, an enum | attach these traits (std's derive when they aren't in scope) |
+| `@optional` | a trait fn | an attach block may leave it out |
+| `@closed` | a trait | its attach blocks hold its fns only: its values are a closed set, and calls on them switches |
+| `@attach_as("Struct")` | a trait | the struct attach blocks name for it (a C++ class's virtuals) |
+| `@export_text("method")` | a struct | it's text to other languages, as the method gives it (`voltc bindings`) |
+| `@cpp_type("ns::Class")`, `@cpp_call("ns::f")` | a struct, a fn | what `use cpp` writes: the struct is that C++ class; the fn is called per use |
+| `@intrinsic("name")`, `@runtime("symbol")` | a fn | std's and libraries' own files only: binds a function the compiler provides (`println`), or one the generated code calls |

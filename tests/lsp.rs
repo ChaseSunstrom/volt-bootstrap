@@ -467,3 +467,37 @@ fn numbers(json: &str, key: &str) -> Vec<usize> {
 fn doc_param(doc: &str) -> String {
     format!("{{\"textDocument\":{doc}}}")
 }
+
+#[test]
+fn builtins_and_std_files() {
+    // a std file opened in the editor is checked as std's own (its @intrinsic attributes are fine);
+    // every builtin and attribute shows up after `@` with its signature, and on hover
+    let mut s = Server::start();
+    let init = s.request("initialize", &format!("{{\"processId\":null,\"rootUri\":\"file://{}\",\"capabilities\":{{}}}}", s.dir.display()));
+    assert!(init.contains("\"@\""), "@ isn't a completion trigger: {init}");
+    s.notify("initialized", "{}");
+    let mem = Path::new(ROOT).join("std/mem.volt");
+    let muri = format!("file://{}", mem.display());
+    let text = std::fs::read_to_string(&mem).unwrap();
+    assert!(text.contains("@intrinsic("), "std/mem.volt no longer has an @intrinsic to check");
+    s.notify("textDocument/didOpen", &format!("{{\"textDocument\":{{\"uri\":\"{muri}\",\"languageId\":\"volt\",\"version\":1,\"text\":{}}}}}", js(&text)));
+    let d = s.diagnostics_for(&muri);
+    assert!(d.contains("\"diagnostics\":[]"), "std/mem.volt in the editor: {d}");
+
+    let uri = format!("file://{}/b.volt", s.dir.display());
+    let doc = format!("{{\"uri\":\"{uri}\"}}");
+    let at = |line: u32, ch: u32| format!("{{\"textDocument\":{doc},\"position\":{{\"line\":{line},\"character\":{ch}}}}}");
+    s.notify("textDocument/didOpen", &format!("{{\"textDocument\":{{\"uri\":\"{uri}\",\"languageId\":\"volt\",\"version\":1,\"text\":{}}}}}", js("fn main() -> void {\n    val n = @sizeof(i32);\n}\n")));
+    let _ = s.diagnostics_for(&uri);
+    let h = s.request("textDocument/hover", &at(1, 15));
+    assert!(h.contains("@sizeof(T) -> usize") && h.contains("size in bytes"), "hover @sizeof: {h}");
+    // while typing: the text after `@` doesn't parse yet
+    s.notify("textDocument/didChange", &format!("{{\"textDocument\":{{\"uri\":\"{uri}\",\"version\":2}},\"contentChanges\":[{{\"text\":{}}}]}}", js("fn main() -> void {\n    val n = @\n}\n")));
+    let _ = s.diagnostics_for(&uri);
+    let c = s.request("textDocument/completion", &at(1, 13));
+    for item in ["\"label\":\"sizeof\"", "\"label\":\"typeinfo\"", "\"label\":\"cpp\"", "\"label\":\"inline\"", "\"label\":\"derive\"", "@sizeof(T) -> usize", "@derive("] {
+        assert!(c.contains(item), "completion after @ lacks {item}: {c}");
+    }
+    // std's own: not offered in a program
+    assert!(!c.contains("\"label\":\"intrinsic\""), "a program is offered @intrinsic: {c}");
+}
