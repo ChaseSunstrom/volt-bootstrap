@@ -21,6 +21,24 @@ fn main() -> void {
     m::axis_last(&i);
     std::println("{} {} {} {} {}", a, a as i32, i, m::axis_rank(m::AXIS_Z), m::axis_rank(1));
     std::println("{} {} {} {}", m::AXIS_Y | m::AXIS_Z, m::MODE_DEFAULT == m::MODE_ON, m::mode_flip(m::MODE_OFF), m::ANON_LIMIT + 1);
+    // its number to compound assignment, indexing, ranges, array lengths and @cast; an unsigned's
+    // address passes for a pointer to one too (C's enums are int or unsigned int)
+    var k = m::AXIS_X;
+    k += 1;
+    k |= 4;
+    k++;
+    k <<= 1;
+    var flags: i32 = 0;
+    flags |= m::AXIS_Z;
+    var u: u32 = 0;
+    m::axis_last(&u);
+    val names: str[m::AXIS_Z + 1] = { "x", "y", "-", "-", "z" };
+    var steps = 0;
+    for (x) in m::AXIS_X..m::AXIS_Z {
+        steps += x;
+    }
+    val wide: i64 = m::AXIS_Z;
+    std::println("{} {} {} {} {} {} {} {}", k, flags, u, names[m::AXIS_Z], names[a], names.len, steps, wide + @cast<i64>(m::AXIS_Y));
     // a complex field is C's to read and write (a struct of its own to Volt only by value)
     var p: m::sample = { along: m::AXIS_Y };
     m::sample_set(&p, { re: 0.5, im: 2.0 });
@@ -32,4 +50,5 @@ fn main() -> void {
 // expect: next is y
 // expect: 1 1 4 3 2
 // expect: 5 true 1 10
+// expect: 12 4 4 z y 5 6 5
 // expect: 3.5 true

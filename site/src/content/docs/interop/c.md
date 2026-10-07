@@ -102,10 +102,11 @@ anonymous members where libclang says C puts them.
 
 A named enum (by its tag, or the `typedef` that names it) is a Volt enum with C's values and
 integer type, so `match` takes its variants, and each enumerator is a constant of it. C passes any
-integer where one goes, so it converts to and from integers as C's does: an integer passes for it,
-it passes for an integer (and an integer's address for a pointer to one), and operators and `{}`
-see its number. An anonymous enum's enumerators are integer constants. In a function pointer's
-type an enum is its integer, so a Volt function written against the numbers passes as a callback.
+integer where one goes, so it stands for its integer type too: it passes for that type or a wider
+one, an integer that widens to that type passes for it (an integer's address for a pointer to one),
+and operators, indexes, ranges, array lengths, `@cast` and `{}` see its number. An anonymous enum's
+enumerators are integer constants. In a function pointer's type an enum is its integer, so a Volt
+function written against the numbers passes as a callback.
 
 `long double` and `_Complex` have no Volt type. A function taking or giving one by value is called
 through a small C wrapper that converts it: a `long double` is an `f64` (what it holds past an

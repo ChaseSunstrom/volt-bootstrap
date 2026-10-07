@@ -5,4 +5,5 @@
 // expect: next is y
 // expect: 1 1 4 3 2
 // expect: 5 true 1 10
+// expect: 12 4 4 z y 5 6 5
 // expect: 3.5 true

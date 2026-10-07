@@ -137,16 +137,65 @@ attach fn c_enum_tag(this: checker&, t: u32) -> u32? {
     return null;
 }
 
-// is one of from and to a C enum, the other an integer? Or a pointer to one, the other a pointer
-// to its integer (an int's address passes for one, as in C)?
+// does a value of type from convert to type to as a C enum and its integer do: a C enum where its
+// integer type would (to a wider integer, a float that holds it), an integer that widens to its
+// integer type for one (C converts any, but Volt doesn't narrow implicitly), and a pointer to an
+// integer of its size for a pointer to one or back (an int's address passes for one, as in C, whose
+// enums are int or unsigned int)
 attach fn c_enum_int(this: checker&, from: u32, to: u32) -> bool {
-    if ((this.c_enum_tag(from) != null && this.t.int_of(to) != null) || (this.c_enum_tag(to) != null && this.t.int_of(from) != null)) {
-        return true;
+    val fe = this.c_enum_tag(from);
+    if (fe) {
+        val a = this.t.int_of(fe) ?? return false;
+        match (*this.t.get(to)) {
+            .INT(b) => { return a.widens_to(b); },
+            .FLOAT(b) => { return a.exact_in_float(b); },
+            default => {},
+        }
     }
-    val a = this.pointee(from) ?? return false;
+    val te = this.c_enum_tag(to);
+    val fi = this.t.int_of(from);
+    if (te != null && fi != null) {
+        val b = this.t.int_of(te ?? NO_TY) ?? return false;
+        return (fi ?? int_ty::I32).widens_to(b);
+    }
+    val pa = this.pointee(from) ?? return false;
     match (*this.t.get(to)) {
-        .PTR(b) => { return (this.c_enum_tag(a) ?? NO_TY) == b || (this.c_enum_tag(b) ?? NO_TY) == a; },
+        .PTR(pb) => { return this.enum_sized(pa, pb) || this.enum_sized(pb, pa); },
         default => { return false; },
+    }
+}
+
+// is e a C enum and i an integer of its size?
+attach fn enum_sized(this: checker&, e: u32, i: u32) -> bool {
+    val et = this.c_enum_tag(e) ?? return false;
+    val a = this.t.int_of(et) ?? return false;
+    val b = this.t.int_of(i) ?? return false;
+    return a.bits() == b.bits();
+}
+
+// a C enum's value at compile time becomes its integer (other values stay as they are)
+attach fn c_enum_ct(this: checker&, v: cval&) -> void {
+    var n: i128? = null;
+    var it: u32 = 0;
+    match (*v) {
+        .VARIANT(t, name, p&) => {
+            val ct = this.c_enum_tag(t) ?? return;
+            match (*this.t.get(t)) {
+                .ENUM(e) => {
+                    for (i) in 0..this.ei(e).names.len {
+                        if (*this.ei(e).names.at(i) == name) {
+                            n = *this.ei(e).values.at(i);
+                            it = ct;
+                        }
+                    }
+                },
+                default => {},
+            }
+        },
+        default => {},
+    }
+    if (n) {
+        *v = cval::INT(n, it);
     }
 }
 
