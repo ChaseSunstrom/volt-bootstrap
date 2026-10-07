@@ -43,6 +43,22 @@ language's programmers would usually write it: Rust and Zig with their standard 
 | `knucleotide` | counting k-mers of a 25 million base DNA string with rolling 2-bit keys in hash tables (the Benchmarks Game) |
 | `lexer` | tokenizing 32 MiB of source text: a `match` on `str` keywords against C `memcmp` tables and C++ `string_view` compares |
 
+The Rust and Zig programs use what those languages' standard libraries give, which isn't always the
+same work as the C. Worth knowing when reading their columns:
+
+- **Hash maps**: Rust's `HashMap` hashes with SipHash, which resists flooding and is slower than the
+  multiply-and-shift or FNV hashes the C tables use; Zig's maps use Wyhash. That shows in
+  `hashmap`, `knucleotide`, `wordfreq` and `lru_cache`, and it's the hash, not the language.
+- **Allocation**: Rust's `Box` and `Vec` go through glibc's `malloc`, as C does; the Zig programs
+  allocate through Zig's general-purpose allocator. In `lru_cache` the Rust and Zig versions reuse
+  an evicted node's slot where C frees it and allocates a new one.
+- **Bounds checks**: safe Rust checks every index (as Volt's release builds do, where the check can
+  fail); C and Zig's ReleaseFast don't. `vm_interp` is where it costs most.
+- **Library routines**: `sort` is each standard library's own sort (`slice::sort`, `std.mem.sort`),
+  and `print` is Rust's own shortest-float formatting, where C's tries `%.*g` at each precision.
+- **Target CPU**: Zig builds for the machine it runs on; clang, gcc, rustc and voltc build for any
+  x86-64.
+
 ## Running it
 
 ```sh
