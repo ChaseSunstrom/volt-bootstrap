@@ -115,6 +115,8 @@ use { "modern.hpp" } as cpp;   // concepts, std::expected: the newest standard
 voltc compiles the wrappers in one C++ unit per standard, each including only its imports' headers,
 so everything above works under C++98 through C++26: functions, classes and their handles, `try_`
 forms, exceptions, and calls worked out per use (which under C++98 give their result by value).
+An exception going back through Volt code to the C++ that called it needs C++11 (it travels as a
+`std::exception_ptr`); under C++98 it stops the program.
 Subclassing a C++ class (`derive`, below) needs its import under C++17 or newer.
 
 ## Calls worked out per use
@@ -301,8 +303,7 @@ as a `cpp_error` instead of stopping the program. Its variant says which excepti
 `OVERFLOW_ERROR`, `UNDERFLOW_ERROR`, `RUNTIME_ERROR`, `BAD_ALLOC` and `BAD_CAST` for the standard
 ones, one named after each class of the headers that derives from `std::exception` (the most
 derived one that matches), `EXCEPTION` for any other `std::exception` and `UNKNOWN` for a thrown
-value that isn't one. `last_exception()`, in the import's namespace, is what the exception said. (A `try_` form isn't made for a function returning a C++
-object, a reference or an optional; for one returning a vector, catch the exception in C++.)
+value that isn't one. `last_exception()`, in the import's namespace, is what the exception said.
 
 ## Subclassing a C++ class in Volt
 
@@ -394,8 +395,10 @@ without RTTI, a cast or a type name stops the program, and `derived<T>()` on suc
   `c.convert<i32, f64>(2)`, `m.find<ns::Key, std::string>(k)`): `f(a.x < b, c > (d))` stays two
   comparisons. Otherwise they come from the call's arguments, as a generic function's can.
 - A C++ exception that reaches Volt through a function's plain form stops the program, like a
-  panic; its `try_` form returns it as an error. Either way it never passes through Volt frames, and
-  a Volt panic (in a method C++ calls, say) ends the program without unwinding through C++'s.
+  panic; its `try_` form returns it as an error. In Volt code C++ called (a closure passed as a
+  `std::function`, an override of a virtual method), it goes back to that C++ instead, rethrown with
+  its own type, so a `catch` there gets it; the Volt frames between are left without running their
+  deletes. A Volt panic ends the program, in a callback too.
 - A borrowed handle (from `as_`, a `T*` or a `T&`) doesn't keep the object alive: it's good while
   what it came from is.
   Passed by value, it gives C++ a copy of the object (an owned handle is moved from), and `copy` of

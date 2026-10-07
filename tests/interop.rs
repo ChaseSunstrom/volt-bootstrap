@@ -1241,6 +1241,17 @@ fn cpp_refs() {
 }
 
 #[test]
+fn cpp_errors() {
+    // try_ forms whatever the result (a handle, a reference, an optional, a vector), and an
+    // exception from C++ Volt called in a callback reaching the C++ that called the callback
+    let e = Env::new("cpp-errors");
+    let want = "make 2: 2\nmake -2: INVALID_ARGUMENT negative box\nat 0: 1\nat 3: OUT_OF_RANGE no box 3\nparse '42': 42\nparse 'x': -1\nparse '': bad_input empty\nrange 3: 3\nrange -1: LENGTH_ERROR negative range\nok 20\ncaught bad_input: too big\nok -1\nwalked 6\nwalk caught bad_input: too big\nlimit 4: 4\nlimit 12: OUT_OF_RANGE\nnew -5: INVALID_ARGUMENT\npair -1: DOMAIN_ERROR\npair 1: 1 0.5\nas 5: 2.5\nas -5: bad_input\nslot 0: 7\nslot 1: OUT_OF_RANGE\n";
+    for backend in ["c", "llvm"] {
+        assert_eq!(ok(e.voltc(&["run", "cpp_errors.volt", "--backend", backend]), "voltc run cpp_errors.volt"), want, "C++ exceptions ({backend})");
+    }
+}
+
+#[test]
 fn cpp_handles_are_never_empty() {
     // {} default-constructs a class held by handle, in a variable or a struct's field; one with no
     // default constructor makes {} an error at the literal
