@@ -1084,7 +1084,7 @@ fn cpp_object(chk: checker&, c: cli&, dir: str) -> std::string? {
     if (argv.len == 0) {
         put(&argv, "c++");
     }
-    val fixed: str[4] = { "-std=c++17", "-fPIC", "-w", "-c" };
+    val fixed: str[4] = { "-std=c++20", "-fPIC", "-w", "-c" };
     for (f) in fixed {
         put(&argv, f);
     }

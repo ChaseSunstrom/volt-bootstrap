@@ -51,20 +51,19 @@ The interop tests import these and run what maps, on both backends:
 
 Every wrapper the import writes is compiled with the program, called or not. So whatever a header
 has that doesn't map is left out with a comment in the generated source (`VOLT_SHOW_CPP=1` prints
-it), and the rest still works.
+it), and the rest still works. What Volt can't declare ahead (variadic and non-type templates,
+`auto` results, constrained templates, function-like macros) is
+[called per use](/volt-bootstrap/interop/cpp/#calls-worked-out-per-use): clang works out each call.
 
 ## What can't
 
 | C++ | Why | The way around it |
 | --- | --- | --- |
-| function-like macros (`#define MAX(a, b) ...`) | they're text, not declarations: libclang sees no function | a C++ `inline` function in a header of your own that uses the macro |
-| variadic templates (`template <class... A>`) | Volt's generics have no type packs to give them | an overload, or a wrapper, for each argument list you need |
-| non-type and template template parameters (`template <int N>`, glm's `vec<3, float>`) | Volt's generics take types | a `using vec3 = glm::vec3;` with wrapper functions over it |
+| class templates with non-type or template template parameters (glm's `vec<3, float>`) | Volt's generic structs take types (functions with them are [called per use](/volt-bootstrap/interop/cpp/#calls-worked-out-per-use)) | a `using vec3 = glm::vec3;` with wrapper functions over it |
 | a class template with private fields, bases or virtual methods (`basic_json`) | Volt lays out a class template's instances itself, and can't see what's private | wrapper functions over one instance (`nlohmann::json`) in a header of your own |
-| a lambda's own type, `auto` results | they have no name to declare | take or return a `std::function` |
+| a lambda's own type | it has no name to declare (a function's `auto` result is called per use) | take or return a `std::function` |
 | C++20 modules (`import std;`) | the import reads headers | the headers the module is built from |
 | coroutines (`co_await`, `co_return`) | their results are coroutine handles and promise types | a wrapper that runs the coroutine and returns its result |
-| concepts (`template <std::integral T>`) | a constrained template is a template: Volt doesn't check the concept, C++ does when the wrapper compiles | pass types that satisfy it |
 | pointers to classes held by handle (`T*`), non-const `T&` results of them | Volt can't tell who owns the object | a reference parameter (`T&`), or `as_Base()` and `as_Derived()` |
 | bit-fields | a Volt field can't be part of a byte | a getter and setter in C++ |
 | a `std::function` field's setter | a Volt closure stored in C++ would outlive the call | a C++ method that takes it and copies what it needs |

@@ -722,6 +722,34 @@ attach fn recv_of(this: checker&, d: u32) -> recv {
     return recv::VAL(pat);
 }
 
+// does declaration d take this receiver (rv), or belong to this type (a static call), or neither
+// when there's neither?
+attach fn cpp_dyn_fits(this: checker&, d: u32, rv: tval?, static_ty: u32?) -> bool {
+    val gps = this.fn_generics(d);
+    var binds: std::vec<gval?> = {};
+    for (i) in 0..gps.len {
+        put(&binds, null);
+    }
+    val ns = this.decls.at(@cast<usize>(d)).ns;
+    match (this.recv_of(d)) {
+        .NONE => { return rv == null && static_ty == null; },
+        .VAL(pat) => {
+            if (rv) {
+                return this.match_recv(pat ?? return false, rv.ty, gps, &binds, ns) != null;
+            }
+            return false;
+        },
+        .STATIC(pat) => {
+            if (static_ty) {
+                val p = pat ?? return false;
+                this.infer(p, static_ty, gps, &binds, ns);
+                return (this.recv_pat_type(p, gps, &binds, ns) ?? NO_TY) == static_ty;
+            }
+            return false;
+        },
+    }
+}
+
 // a receiver pattern's type; `this: T*` takes its receiver like `this: T&`
 attach fn recv_pat_type(this: checker&, pat: ty&, gps: std::vec<gparam>&, binds: std::vec<gval?>&, ns: u32) -> u32? {
     val t = this.resolve_partial(pat, gps, binds, ns) ?? return null;
@@ -1226,6 +1254,13 @@ attach fn blanket_positions(this: checker&, d: u32) -> i32 {
 // integer overload beats a float one); 4 when it returns the wanted type, 2 when it isn't generic. The best score has to be unique, or the call is ambiguous; between equal
 // scores, the one with fewer blanket positions (more specific) wins.
 attach fn resolve_call(this: checker&, name: str, cands: std::vec<u32>&, rv: tval?, static_ty: u32?, explicit: std::vec<garg>&, args: std::vec<expr>&, want: u32?, span: span) -> compile_error!tval {
+    // a C++ name Volt couldn't declare ahead (use cpp's @cpp_call), of this receiver's or type's
+    // class: clang works out this call
+    for (d&) in cands.items() {
+        if (this.cpp_call_attr(*d) != null && this.cpp_dyn_fits(*d, rv, static_ty)) {
+            return this.cpp_dyn_call(*d, name, rv, explicit, args, want, span);
+        }
+    }
     // a call with no receiver: a method of the same name (use std::json makes json's attached
     // write reachable as std::write) isn't a candidate when a plain function is there
     if (cands.len > 1 && rv == null && static_ty == null) {

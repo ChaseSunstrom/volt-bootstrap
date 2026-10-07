@@ -10,9 +10,17 @@ const std = @import("std");
 
 pub fn addPackage(b: *std.Build, compile: *std.Build.Step.Compile, name: []const u8, dir: []const u8) void {
     const voltc = b.graph.environ_map.get("VOLTC") orelse "voltc";
-    const pkg = b.fmt("{s}={s}", .{ name, b.pathFromRoot(dir) });
-    const lib = b.addSystemCommand(&.{ voltc, "lib", name, "--pkg", pkg });
-    const bindings = b.addSystemCommand(&.{ voltc, "bindings", name, "--pkg", pkg, "--lang", "zig" });
+    // --pkg NAME=DIR: an absolute DIR as it is, a relative one from the build root
+    const lib = b.addSystemCommand(&.{ voltc, "lib", name, "--pkg" });
+    const bindings = b.addSystemCommand(&.{ voltc, "bindings", name, "--pkg" });
+    if (std.fs.path.isAbsolute(dir)) {
+        lib.addArg(b.fmt("{s}={s}", .{ name, dir }));
+        bindings.addArg(b.fmt("{s}={s}", .{ name, dir }));
+    } else {
+        lib.addPrefixedDirectoryArg(b.fmt("{s}=", .{name}), b.path(dir));
+        bindings.addPrefixedDirectoryArg(b.fmt("{s}=", .{name}), b.path(dir));
+    }
+    bindings.addArgs(&.{ "--lang", "zig" });
     if (b.graph.environ_map.get("VOLT_STD")) |s| {
         lib.addArgs(&.{ "--std", s });
         bindings.addArgs(&.{ "--std", s });

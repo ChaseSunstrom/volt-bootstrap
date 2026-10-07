@@ -1142,6 +1142,24 @@ fn cpp_surface() {
     assert!(!o.status.success() && err.contains("{&0} is a function's symbol: pass a function"), "{{&0}} of a number: {err}");
 }
 
+#[test]
+fn cpp_templates() {
+    // what Volt's generics can't declare (variadic and non-type templates, auto results, constrained
+    // templates, function-like macros, method templates), called per use: clang types each call
+    let e = Env::new("cpp-templates");
+    let want = "6.5 4\n12\n42 2.5\n3 6\n40\n25 2\n6 18\n6\n";
+    for backend in ["c", "llvm"] {
+        assert_eq!(ok(e.voltc(&["run", "cpp_templates.volt", "--backend", backend]), "voltc run cpp_templates.volt"), want, "C++ templates ({backend})");
+    }
+    // a call C++ rejects is an error at the Volt call, in C++'s words: here the concept
+    let hpp = Path::new(ROOT).join("tests/interop/templates.hpp");
+    let src = format!("use {{ \"{}\" }} as cpp;\nfn main() -> void {{\n    val x = cpp::tpl::twice(1.5);\n}}\n", hpp.display());
+    std::fs::write(e.dir.join("cpp_concept.volt"), src).unwrap();
+    let o = e.voltc(&["check", &e.path("cpp_concept.volt")]);
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(!o.status.success() && err.contains("cpp_concept.volt:3") && err.contains("constraints not satisfied"), "a call the concept rejects: {err}");
+}
+
 /// is a C++ library's header on the usual include paths?
 fn installed(header: &str) -> bool {
     ["/usr/include", "/usr/local/include", "/opt/homebrew/include"].iter().any(|d| Path::new(d).join(header).is_file())

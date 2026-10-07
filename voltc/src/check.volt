@@ -476,6 +476,10 @@ struct checker {
     go_packages: std::vec<std::string> = {}; // use go's glue packages, linked as one (link_go)
     import_deps: std::vec<std::string> = {}; // the files they were made from (OUT.deps, for bolt)
     cpp_shims: std::vec<std::string> = {};
+    // the C++ imports, kept for the calls made per use, and those calls' Volt fns by what they call
+    cpp_ctxs: std::vec<cpp_import_ctx> = {};
+    cpp_dyn: std::map<str, u32> = {};
+    cpp_dyn_n: u32 = 0;
     // C++ declarations of the imports' own (Volt's subclasses of C++ classes, what each import's
     // exceptions are): each one's name and text, in the C++ unit when a wrapper names it
     cpp_decl_names: std::vec<std::string> = {};

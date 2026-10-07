@@ -774,7 +774,9 @@ attach fn try_generic_args(this: parser&) -> std::vec<garg>? {
 
 // `.name<...>`'s generic args: a name the program declares generic takes them; any other only when a
 // call follows (`x.get<i32>()`: a method declared where the program's names aren't collected, like an
-// import's), with one argument or none passed (`f(a.x < b, c > (d))` is two comparisons)
+// import's), with one argument, none passed, or arguments that can only be types
+// (`c.convert<i32, f64>(2)`, `m.find<ns::Key, std::string>(k)`): `f(a.x < b, c > (d))` is two
+// comparisons
 attach fn method_generic_args(this: parser&, name: str) -> std::vec<garg>? {
     if (!this.is("<")) {
         return null;
@@ -784,15 +786,44 @@ attach fn method_generic_args(this: parser&, name: str) -> std::vec<garg>? {
     }
     val save = this.pos;
     val a = this.try_generic_args();
-    var n: usize = 0;
     if (a) {
-        n = a.len;
-    }
-    if (a != null && this.is("(") && (n == 1 || this.is_at(1, ")"))) {
-        return a;
+        if (this.is("(") && (a.len == 1 || this.is_at(1, ")") || only_types(&a))) {
+            return copy a;
+        }
     }
     this.pos = save;
     return null;
+}
+
+// is each one a type that can't be read as a value: a primitive's name, a path with ::, a generic
+// type, or a pointer, reference, slice, array, optional, tuple or fn type
+fn only_types(gs: std::vec<garg>&) -> bool {
+    for (g&) in gs.items() {
+        match (*g) {
+            .TYPE(t&) => {
+                match (t.kind) {
+                    .PATH(p&) => {
+                        if (p.segs.len == 1 && p.segs.at(0).args == null && !is_primitive(p.segs.at(0).name)) {
+                            return false;
+                        }
+                    },
+                    .EXPR(e) => { return false; },
+                    default => {},
+                }
+            },
+            .EXPR(e) => { return false; },
+        }
+    }
+    return true;
+}
+
+fn is_primitive(n: str) -> bool {
+    for (k) in PRIMITIVES {
+        if (k == n) {
+            return true;
+        }
+    }
+    return false;
 }
 
 attach fn generic_args(this: parser&) -> compile_error!std::vec<garg> {

@@ -96,6 +96,51 @@ inside a generic function gets that instance's: `@cpp<i32>("apply<{&0}, {=1}>({2
 
 `VOLT_SHOW_CPP=1` prints the Volt declarations voltc generated from the headers.
 
+## Calls worked out per use
+
+Some C++ has no declaration Volt can write ahead: a variadic template (`template <class... A>`), a
+template with non-type parameters (`template <std::size_t N>`), a function whose `auto` result hangs
+on its template arguments, a constrained template, a function-like macro. The import declares those
+names, and each call is worked out where it's made: clang takes the call with the arguments' types
+(choosing among overloads, deducing template arguments, checking concepts) and says what it returns,
+and Volt calls that instance. Template arguments written on the call are passed through, numbers
+included.
+
+```cpp
+// algos.hpp
+#define CLAMP01(x) ((x) < 0 ? 0 : (x) > 1 ? 1 : (x))
+
+namespace algo {
+template <class... A>
+auto sum(A... a) { return (a + ... + 0); }
+
+template <std::size_t N>
+std::size_t padded(std::size_t n) { return (n + N - 1) / N * N; }
+
+template <std::integral T>
+T halve(T x) { return x / 2; }
+}
+```
+
+```volt
+use std::io;
+use { "algos.hpp" } as cpp;
+
+fn main() -> void {
+    std::println("{} {}", cpp::algo::sum(1, 2.5, 3), cpp::algo::padded<16>(@cast<usize>(20)));
+    std::println("{} {}", cpp::algo::halve(@cast<i64>(9)), cpp::CLAMP01(1.75));
+    std::println("{}", @cpp("{0} * {1}", 4, 1.5));
+}
+// expect: 6.5 32
+// expect: 4 1
+// expect: 6
+```
+
+A call C++ rejects is an error at the Volt call, in clang's words: `cpp::algo::halve(1.5)` says no
+`halve` takes a `double`, because `double` doesn't satisfy `integral`. `@cpp` with no result type
+(`@cpp("{0} * {1}", 4, 1.5)`) is worked out the same way. A macro's result comes back by value; a
+function's reference result stays a reference, as it does for a declared function.
+
 ## The standard library, operators and exceptions
 
 Signatures that use the standard library's strings, vectors and smart pointers map to Volt's:
@@ -243,12 +288,13 @@ without RTTI, a cast or a type name stops the program, and `derived<T>()` on suc
 
 - What doesn't map is left out, with a comment in the generated source: a standard library type
   other than those above (or a non-const reference to one), a `std::function` whose signature has a
-  class in it (other than text), variadic templates, a lambda's own type (take a `std::function`),
-  and function-like macros. A constant whose value clang can't work out (or a variable that isn't
-  `const`) isn't a `val`.
-- Generic arguments written on a method template's call parse when there's one of them or the
-  call passes nothing (`x.get<i32>()`, `x.pair<i32, f64>()`); otherwise they come from the call's
-  arguments, as a generic function's can.
+  class in it (other than text), and a lambda's own type (take a `std::function`). A function whose
+  parameters or result only a call settles is [called per use](#calls-worked-out-per-use) instead.
+  A constant whose value clang can't work out (or a variable that isn't `const`) isn't a `val`.
+- Generic arguments written on a method template's call parse when there's one of them, when the
+  call passes nothing, or when each can only be a type (`x.get<i32>()`, `x.pair<i32, f64>()`,
+  `c.convert<i32, f64>(2)`, `m.find<ns::Key, std::string>(k)`): `f(a.x < b, c > (d))` stays two
+  comparisons. Otherwise they come from the call's arguments, as a generic function's can.
 - A C++ exception that reaches Volt through a function's plain form stops the program, like a
   panic; its `try_` form returns it as an error. Either way it never passes through Volt frames, and
   a Volt panic (in a method C++ calls, say) ends the program without unwinding through C++'s.

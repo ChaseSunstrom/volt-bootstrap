@@ -3827,6 +3827,7 @@ fn attr_defs() -> std::vec<attr_def> {
     put(&v, { name: "deprecated", args: 1 });
     put(&v, { name: "owns", args: 1 });
     put(&v, { name: "cpp_type", args: 1 }); // a struct is this C++ class (use cpp writes it)
+    put(&v, { name: "cpp_call", args: 1 }); // a C++ name called per use: clang works out each call (use cpp writes it)
     put(&v, { name: "export_text", args: 1 }); // a struct is text, as this method gives it, to other languages (voltc bindings)
     put(&v, { name: "thread_local", args: 0 }); // a global var each thread has its own of
     put(&v, { name: "cfg", args: 2 }); // the item is only in builds where this @cfg holds (1 or 2 arguments)

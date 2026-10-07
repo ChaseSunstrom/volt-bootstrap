@@ -73,6 +73,9 @@ struct cpp_gen {
     // the std::function signatures results come back as (stdcxx::function's call overloads), by
     // their C++ type (int(int))
     fn_sigs: std::map<str, clang::CXType> = {};
+    // the class template whose members are being written: its generic list (a member called per
+    // use keeps it, for its receiver's type)
+    class_gen: std::string = {};
 }
 
 // ---------- names ----------
@@ -763,7 +766,8 @@ attach fn callable(this: cpp_gen&, generics: str, head: str, has_params: bool, f
     if (ret) {
         r = copy ret;
     } else {
-        this.line(fmt("// left out: {} (its return type)", S(what)).as_str());
+        // its result hangs on the call (auto, a template's): clang types each call
+        this.per_use(head, call, self_arg != null);
         return;
     }
     val parms = params_of(fn_cursor);
@@ -785,7 +789,8 @@ attach fn callable(this: cpp_gen&, generics: str, head: str, has_params: bool, f
         if (ao) {
             a = copy ao;
         } else {
-            this.line(fmt2("// left out: {} (parameter {}'s type)", S(what), copy name).as_str());
+            // a parameter pack, or a type only a call settles: clang types each call
+            this.per_use(head, call, self_arg != null);
             return;
         }
         // a default argument shows up as an expression under the parameter
@@ -1579,6 +1584,13 @@ fn type_word(vty: str) -> std::string {
 // the object in a C++ expression, self_arg what the Volt method passes for it; self_ty and cpp_self
 // the class in Volt and C++; gen, extra and tp a class template's generics
 attach fn members(this: cpp_gen&, c: clang::CXCursor, self_ty: str, cpp_self: str, obj: str, self_arg: str, gen: str, extra: str, tp: std::vec<str>&, q: str) -> void {
+    val outer_gen = copy this.class_gen;
+    this.class_gen = S(gen);
+    this.member_list(c, self_ty, cpp_self, obj, self_arg, gen, extra, tp, q);
+    this.class_gen = outer_gen;
+}
+
+attach fn member_list(this: cpp_gen&, c: clang::CXCursor, self_ty: str, cpp_self: str, obj: str, self_arg: str, gen: str, extra: str, tp: std::vec<str>&, q: str) -> void {
     for (ch&) in children(c).items() {
         val k = clang::clang_getCursorKind(*ch);
         if (!is_public(*ch)) {
@@ -1596,7 +1608,22 @@ attach fn members(this: cpp_gen&, c: clang::CXCursor, self_ty: str, cpp_self: st
             if (gen.len > 0 || clang::clang_getTemplateCursorKind(*ch) != clang::CXCursor_CXXMethod) {
                 continue;
             }
-            tps = template_params(*ch) ?? continue;
+            val got = template_params(*ch);
+            if (got == null || constrained(*ch)) {
+                // the Volt name as for any method (operators by their op_ names)
+                val cn = cursor_name(*ch);
+                var pn = vname(cn.as_str());
+                if (starts_with(cn.as_str(), "operator")) {
+                    pn = S(op_name(cn.as_str(), param_count(*ch) + 1) ?? continue);
+                }
+                if (!is_static_cursor(*ch)) {
+                    this.per_use(fmt2("attach fn {}(this: {}&", move pn, S(self_ty)).as_str(), fmt2("{}.{}(", S(obj), copy cn).as_str(), true);
+                } else {
+                    this.per_use(fmt2("attach fn {}(static this: {}", move pn, S(self_ty)).as_str(), fmt2("{}::{}(", S(cpp_self), copy cn).as_str(), false);
+                }
+                continue;
+            }
+            tps = got ?? continue;
         } else if (k != clang::CXCursor_CXXMethod && k != clang::CXCursor_ConversionFunction) {
             continue;
         }
@@ -2524,12 +2551,111 @@ attach fn emit(this: cpp_gen&, c: clang::CXCursor) -> void {
                 this.free_fn(*ch, &none);
             } else {
                 val tps = template_params(*ch);
+                var typed = false;
                 if (tps) {
-                    this.free_fn(*ch, &tps);
+                    if (!constrained(*ch)) {
+                        this.free_fn(*ch, &tps);
+                        typed = true;
+                    }
+                }
+                if (!typed) {
+                    // non-type, template-template or constrained parameters: per use (an operator
+                    // by its op_ name, as free_fn has it)
+                    val cn = cursor_name(*ch);
+                    var pn = vname(cn.as_str());
+                    var named = true;
+                    if (starts_with(cn.as_str(), "operator")) {
+                        val on = op_name(cn.as_str(), param_count(*ch));
+                        if (on) {
+                            pn = S(on);
+                        } else {
+                            named = false;
+                        }
+                    }
+                    if (named) {
+                        this.per_use(fmt("fn {}(", move pn).as_str(), fmt("{}(", cpp_qual(*ch)).as_str(), false);
+                    }
+                }
+            }
+        } else if (k == clang::CXCursor_MacroDefinition && clang::clang_Cursor_isMacroFunctionLike(*ch) != 0 && clang::clang_Cursor_isMacroBuiltin(*ch) == 0 && this.scope.len() == 0 && !this.skip(*ch)) {
+            // a function-like macro: each call is expanded where it's made
+            val mn = cursor_name(*ch);
+            this.per_use(fmt("fn {}(", vname(mn.as_str())).as_str(), fmt("#{}(", copy mn).as_str(), false);
+        }
+    }
+}
+
+// does template c constrain its parameters (a requires clause, or a concept in place of class)?
+// Volt's generics can't say it, so a call is checked by clang where it's made
+fn is_static_cursor(c: clang::CXCursor) -> bool {
+    return clang::clang_CXXMethod_isStatic(c) != 0;
+}
+
+fn constrained(c: clang::CXCursor) -> bool {
+    for (ch&) in children(c).items() {
+        val k = clang::clang_getCursorKind(*ch);
+        if (clang::clang_isExpression(k) != 0) {
+            return true;
+        }
+        if (k == clang::CXCursor_TemplateTypeParameter) {
+            for (d&) in children(*ch).items() {
+                // template <std::integral T>: a reference to a concept
+                if (clang::clang_getCursorKind(clang::clang_getCursorReferenced(*d)) == clang::CXCursor_ConceptDecl) {
+                    return true;
                 }
             }
         }
     }
+    return false;
+}
+
+// a fn (head: its Volt signature up to the parameters) whose C++ (call: up to its arguments) Volt
+// can't declare ahead: @cpp_call, so each call is worked out by clang where it's made (cpp_dyn_call).
+// method: call is "obj.f(", and what's called is ".f"
+attach fn per_use(this: cpp_gen&, head: str, call: str, method: bool) -> void {
+    var callee = S(call);
+    if (ends_with(callee.as_str(), "(")) {
+        callee = S(callee.as_str()[0..callee.len() - 1]);
+    }
+    // explicit template arguments come from the Volt call (or C++ deduces them)
+    val cs = callee.as_str();
+    // (not operator>, >>, -> or <=>, whose names end in one)
+    if (ends_with(cs, ">") && !ends_with(cs, "operator>") && !ends_with(cs, "operator>>") && !ends_with(cs, "operator->") && !ends_with(cs, "operator<=>")) {
+        var depth: i32 = 0;
+        var at = cs.len;
+        while (at > 0) {
+            at -= 1;
+            if (cs[at] == '>') {
+                depth += 1;
+            } else if (cs[at] == '<') {
+                depth -= 1;
+                if (depth == 0) {
+                    break;
+                }
+            }
+        }
+        if (depth == 0 && at > 0) {
+            callee = S(cs[0..at]);
+        }
+    }
+    if (method) {
+        val ms = callee.as_str();
+        var dot = ms.len;
+        while (dot > 0 && ms[dot - 1] != '.') {
+            dot -= 1;
+        }
+        if (dot > 0) {
+            callee = S(ms[dot - 1..ms.len]);
+        }
+    }
+    if (!this.first_time(head, "#per-use")) {
+        return;
+    }
+    if (method && this.class_gen.len() > 0) {
+        this.line(this.class_gen.as_str());
+    }
+    this.line(fmt("@attributes([@cpp_call(\"{}\")])", move callee).as_str());
+    this.line(fmt("{}) -> void {{}}", S(head)).as_str());
 }
 
 // is this c's first declaration the import sees (by USR)? it's noted as seen
@@ -2876,11 +3002,12 @@ attach fn import_cpp(this: checker&, headers: std::vec<std::string>&, alias: str
     var args: std::vec<str> = {};
     put(&args, "-x");
     put(&args, "c++");
-    put(&args, "-std=c++17");
+    put(&args, "-std=c++20");
     for (f&) in this.opts.pp_flags.items() {
         put(&args, *f);
     }
-    var tu = clang_parse("volt_cpp_import.cpp", src.as_str(), &args);
+    // CXTranslationUnit_SkipFunctionBodies | DetailedPreprocessingRecord (the macros)
+    var tu = clang_parse_opts("volt_cpp_import.cpp", src.as_str(), &args, 65);
     val bad = tu.first_error();
     if (bad) {
         return fail(span, fmt("libclang couldn't read these C++ headers: {}", copy bad));
@@ -2893,6 +3020,8 @@ attach fn import_cpp(this: checker&, headers: std::vec<std::string>&, alias: str
     g.out.append(fmt("// the Volt side of use cpp {{ ... }} as {} (generated by voltc from the headers)\n", S(alias)).as_str());
     g.emit(tu.root());
     g.std_extras();
+    val n = this.ns_child(ns, alias);
+    // kept for the calls made per use (cpp_dyn_call)
     // it's Volt source like any other: lexed, parsed and declared in namespace `alias`
     var fname = S("<use cpp as ");
     fname.append(alias);
@@ -2902,6 +3031,9 @@ attach fn import_cpp(this: checker&, headers: std::vec<std::string>&, alias: str
         std::eprint("{}", g.out);
     }
     put(&this.c_texts, copy g.out);
+    g.out = {};
+    // kept for the calls made per use (cpp_dyn_call)
+    put(&this.cpp_ctxs, { ns: n, src: copy src, args: copy args, gen: move g, tu: move tu });
     val text = this.c_texts.at(this.c_texts.len - 1).as_str();
     put(this.files, { name: this.intern(move fname), text: text });
     val file = @cast<u32>(this.files.len - 1);
@@ -2911,8 +3043,397 @@ attach fn import_cpp(this: checker&, headers: std::vec<std::string>&, alias: str
     var p: parser = { src: text, toks: &toks, pos: 0, generics: &names };
     val items = try p.parse_file();
     put(&this.cpp_items, bx(move items));
-    val n = this.ns_child(ns, alias);
     return this.collect(*this.cpp_items.at(this.cpp_items.len - 1), n);
+}
+
+// ---------- calls made per use ----------
+
+// A C++ import kept for the calls Volt can't declare ahead (a variadic or non-type template, an auto
+// result, a constrained template, a function-like macro: @cpp_call names them): its namespace, the
+// headers and clang's arguments, what its scan learned (cpp_gen's maps, whose cursors point into
+// tu), and the unit each call is worked out in (its preamble the headers, parsed once)
+struct cpp_import_ctx {
+    ns: u32;
+    src: std::string;
+    args: std::vec<str>;
+    gen: cpp_gen;
+    tu: clang_tu;
+    probe: clang_tu = { index: null, tu: null };
+}
+
+// what a call per use declares in C++ besides the headers: the types an argument may come as
+val CPP_PROBE_HEAD: str = "\n#include <cstddef>\n#include <cstdint>\n#include <functional>\n#include <string>\n#include <string_view>\n#include <utility>\n#include <vector>\n";
+
+// the import namespace ns is in (or under), by its context's index
+attach fn cpp_ctx_of(this: checker&, ns: u32) -> usize? {
+    var at: u32? = ns;
+    while (at) {
+        val n = at;
+        for (k) in 0..this.cpp_ctxs.len {
+            if (this.cpp_ctxs.at(k).ns == n) {
+                return k;
+            }
+        }
+        at = this.ns(n).parent;
+    }
+    return null;
+}
+
+// the C++ an @cpp_call declaration names ("ns::f", or ".f" for a method), if d is one
+attach fn cpp_call_attr(this: checker&, d: u32) -> str? {
+    for (a&) in this.item_of(d).attrs.items() {
+        match (a.kind) {
+            .BUILTIN(n, g, x) => {
+                if (n == "cpp_call") {
+                    return attr_str(a);
+                }
+            },
+            default => {},
+        }
+    }
+    return null;
+}
+
+// the C++ type a value of Volt type t is handed to C++ as, in a call made per use: the one the
+// importer maps back to t (a str as a const std::string &, a reference as a C++ reference, a class
+// by value, a fn value as a std::function)
+attach fn cpp_probe_type(this: checker&, t: u32) -> std::string? {
+    match (*this.t.get(t)) {
+        .STR => { return S("const std::string &"); },
+        .REF(x) => {
+            var s = this.cpp_probe_type(x) ?? return null;
+            if (ends_with(s.as_str(), "&")) {
+                return s;
+            }
+            s.append(" &");
+            return s;
+        },
+        .SLICE(x) => {
+            val e = this.cpp_probe_type(x) ?? return null;
+            return fmt("const std::vector<{}> &", move e);
+        },
+        default => { return this.cpp_spell(t); },
+    }
+}
+
+// a C++ expression with holes ({0}, {1}...) for these Volt types, as a Volt fn made for them: clang
+// works out the expression's type with each hole a parameter of the C++ type the argument comes as
+// (an error is its words, at span), and the importer writes the fn as it would for a C++ function of
+// that signature. recv: {0} is the receiver, so it's an attach fn on it. The fn's declaration
+attach fn cpp_instance(this: checker&, k: usize, expr: str, types: std::vec<u32>&, recv: bool, value: bool, span: span) -> compile_error!u32 {
+    var ptys: std::vec<std::string> = {};
+    // a reference result can only be into the receiver, a reference argument or something that
+    // outlives the call: with none of the first two, it's into the wrapper's own copies, so the
+    // value comes back
+    var by_value = value || !recv;
+    for (t&) in types.items() {
+        put(&ptys, this.cpp_probe_type(*t) ?? return fail(span, fmt("C++ can't be handed {}", this.ty_name(*t))));
+        match (*this.t.get(*t)) {
+            .REF(x) => { by_value = value; },
+            default => {},
+        }
+    }
+    var key = fmt2("{}|{}|", unum(@cast<u64>(k)), S(expr));
+    if (by_value) {
+        key.append("value|");
+    }
+    for (p&) in ptys.items() {
+        key.append(p.as_str());
+        key.push(',');
+    }
+    val have = this.cpp_dyn.get(key.as_str());
+    if (have) {
+        return *have;
+    }
+    val n = @cast<u64>(this.cpp_dyn_n);
+    this.cpp_dyn_n += 1;
+    // the probe: a function of the arguments' types whose result is the expression's
+    var params: std::string = {};
+    for (i) in 0..ptys.len {
+        if (i > 0) {
+            params.append(", ");
+        }
+        params.append(fmt2("{} a{}", copy *ptys.at(i), unum(@cast<u64>(i))).as_str());
+    }
+    var probe_expr: std::string = {};
+    var i: usize = 0;
+    while (i < expr.len) {
+        if (expr[i] == '{') {
+            var e = i + 1;
+            while (e < expr.len && expr[e] != '}') {
+                e += 1;
+            }
+            val h = hole_index(expr[i + 1..e]);
+            if (h != null && (h ?? 0) < ptys.len) {
+                // a class by value is moved into the call, as the wrapper does
+                val hi = h ?? 0;
+                if (this.cpp_is_class(*types.at(hi))) {
+                    probe_expr.append(fmt("std::move(a{})", unum(@cast<u64>(hi))).as_str());
+                } else {
+                    probe_expr.append(fmt("a{}", unum(@cast<u64>(hi))).as_str());
+                }
+                i = e + 1;
+                continue;
+            }
+        }
+        probe_expr.push(expr[i]);
+        i += 1;
+    }
+    val pname = fmt("volt_probe_{}", unum(n));
+    var text = copy this.cpp_ctxs.at(k).src;
+    text.append(CPP_PROBE_HEAD);
+    if (by_value) {
+        // a macro's or an expression's lvalue is the wrapper's own parameter: its value comes back
+        probe_expr = fmt("std::decay_t<decltype({})>", move probe_expr);
+    } else {
+        probe_expr = fmt("decltype({})", move probe_expr);
+    }
+    text.append(fmt3("auto {}({}) -> {};\n", copy pname, move params, move probe_expr).as_str());
+    val main = "volt_cpp_call.cpp";
+    val x = this.cpp_ctxs.at(k);
+    if (x.probe.tu == null || !x.probe.reparse(main, text.as_str())) {
+        // CXTranslationUnit_PrecompiledPreamble | CreatePreambleOnFirstParse: the headers once
+        x.probe = clang_parse_opts(main, text.as_str(), &x.args, 260);
+    }
+    val tu = &x.probe;
+    val errs = tu.errors_text(main);
+    if (errs) {
+        return fail(span, fmt("C++ can't make this call:\n{}", copy errs));
+    }
+    var found: clang::CXCursor? = null;
+    for (c&) in children(tu.root()).items() {
+        if (clang::clang_getCursorKind(*c) == clang::CXCursor_FunctionDecl && cursor_name(*c).as_str() == pname.as_str()) {
+            found = *c;
+        }
+    }
+    val fc = found ?? return fails(span, "libclang lost the call");
+    // the Volt fn, written by the importer from the probe's now concrete signature
+    val g = &this.cpp_ctxs.at(k).gen;
+    val none: std::vec<str> = {};
+    val fname = fmt("volt_cpp_call_{}", unum(n));
+    // the type itself, not decltype(...) of the probe
+    val rt = clang::clang_getCanonicalType(clang::clang_getCursorResultType(fc));
+    val r = g.result(rt, &none);
+    var why: std::string? = null;
+    if (r == null) {
+        why = fmt("its result, {}, has no Volt form yet", type_spelling(rt));
+    }
+    var sig = S("fn ");
+    if (recv) {
+        sig = S("attach fn ");
+    }
+    sig.append(fname.as_str());
+    sig.push('(');
+    var body = S("");
+    var tail = S("");
+    val parms = params_of(fc);
+    var args: std::vec<cpp_arg> = {};
+    for (j) in 0..parms.len {
+        var an = fmt("a{}", unum(@cast<u64>(j)));
+        if (recv && j == 0) {
+            an = S("this");
+        }
+        val pt = clang::clang_getCursorType(*parms.at(j));
+        val a = g.param(pt, an.as_str(), j, &none);
+        if (a == null && why == null) {
+            why = fmt("{} has no Volt form yet", type_spelling(pt));
+        }
+        if (a) {
+            if (j > 0) {
+                sig.append(", ");
+            }
+            sig.append(fmt2("{}: {}", copy an, copy a.vty).as_str());
+            tail.append(", ");
+            tail.append(a.pass.as_str());
+            put(&args, copy a);
+        }
+    }
+    if (why) {
+        return fail(span, fmt("Volt can't take this C++ call yet: {}", copy why));
+    }
+    var rr: cpp_ret = { vty: S("void") };
+    if (r) {
+        rr = copy r;
+    }
+    sig.append(fmt(") -> {}", copy rr.vty).as_str());
+    // the expression again, each hole the importer's conversion of its argument
+    i = 0;
+    while (i < expr.len) {
+        if (expr[i] == '{') {
+            var e = i + 1;
+            while (e < expr.len && expr[e] != '}') {
+                e += 1;
+            }
+            val h = hole_index(expr[i + 1..e]);
+            if (h != null && (h ?? 0) < args.len) {
+                body.append(args.at(h ?? 0).cpp.as_str());
+                i = e + 1;
+                continue;
+            }
+        }
+        body.push(expr[i]);
+        i += 1;
+    }
+    g.fn_text("", sig.as_str(), &rr, body.as_str(), tail.as_str(), "");
+    var out = copy g.out;
+    g.out = {};
+    // declared in the import's namespace, as the import's own fns are
+    put(&this.c_texts, move out);
+    val src = this.c_texts.at(this.c_texts.len - 1).as_str();
+    var fl = S("<C++ call ");
+    fl.append(expr);
+    fl.push('>');
+    put(this.files, { name: this.intern(move fl), text: src });
+    val file = @cast<u32>(this.files.len - 1);
+    val toks = try lex(src, file);
+    var names: std::map<str, bool> = {};
+    collect_generic_names(&toks, &names);
+    var p: parser = { src: src, toks: &toks, pos: 0, generics: &names };
+    val items = try p.parse_file();
+    put(&this.cpp_items, bx(move items));
+    val first = this.decls.len;
+    val at = this.cpp_items.len - 1;
+    val home = this.cpp_ctxs.at(k).ns;
+    for (j) in 0..(*this.cpp_items.at(at)).len {
+        try this.collect_item((*this.cpp_items.at(at)).at(j), home, null);
+    }
+    var d: u32? = null;
+    for (j) in first..this.decls.len {
+        val fd = this.fn_decl_of(@cast<u32>(j));
+        if (fd != null && d == null) {
+            d = @cast<u32>(j);
+        }
+    }
+    val made = d ?? return fails(span, "the C++ call's Volt fn wasn't declared");
+    this.cpp_dyn.put(this.intern(move key), made);
+    return made;
+}
+
+// a call of an @cpp_call declaration (d): the C++ it names, with these arguments and explicit
+// template arguments, made per use (cpp_instance) and called like any fn
+attach fn cpp_dyn_call(this: checker&, d: u32, name: str, rv: tval?, explicit: std::vec<garg>&, args: std::vec<expr>&, want: u32?, span: span) -> compile_error!tval {
+    var callee = this.cpp_call_attr(d) ?? "";
+    // "#NAME" is a function-like macro: what it expands to comes back by value
+    val macro = starts_with(callee, "#");
+    if (macro) {
+        callee = callee[1..callee.len];
+    }
+    val k = this.cpp_ctx_of(this.decls.at(@cast<usize>(d)).ns) ?? return fails(span, "this C++ name's import is gone");
+    var targs = S("");
+    if (explicit.len > 0) {
+        targs.push('<');
+        for (j) in 0..explicit.len {
+            if (j > 0) {
+                targs.append(", ");
+            }
+            match (*explicit.at(j)) {
+                .TYPE(t&) => {
+                    val ty = try this.garg_type(explicit.at(j));
+                    targs.append((this.cpp_spell(ty) ?? return fail(t.span, fmt("{} has no C++ spelling", this.ty_name(ty)))).as_str());
+                },
+                .EXPR(e&) => {
+                    match (try this.ct_eval(e, null)) {
+                        .INT(v, t) => { targs.append(num(v).as_str()); },
+                        .BOOL(b) => {
+                            if (b) {
+                                targs.append("true");
+                            } else {
+                                targs.append("false");
+                            }
+                        },
+                        .TYPE(ty) => { targs.append((this.cpp_spell(ty) ?? return fail(e.span, fmt("{} has no C++ spelling", this.ty_name(ty)))).as_str()); },
+                        default => { return fails(e.span, "a C++ template argument is a type, an integer or a bool"); },
+                    }
+                },
+            }
+        }
+        targs.push('>');
+    }
+    var types: std::vec<u32> = {};
+    var pre: std::vec<tval?> = {};
+    var expr = S("");
+    var holes: usize = 0;
+    var rp: tval* = null;
+    var rcopy = rv ?? vnew(0, 0);
+    if (rv) {
+        // {0}.f(...): the receiver as a reference
+        rp = &rcopy;
+        var rt = rcopy.ty;
+        match (*this.t.get(rt)) {
+            .REF(x) => { rt = x; },
+            default => {},
+        }
+        put(&types, this.t.intern(tyk::REF(rt)));
+        expr = fmt2("{{0}}{}{}(", S(callee), copy targs);
+        holes = 1;
+    } else {
+        expr = fmt2("{}{}(", S(callee), copy targs);
+    }
+    for (j) in 0..args.len {
+        val a = args.at(j);
+        if (needs_context(a)) {
+            return fails(a.span, "C++ works this call out from its arguments' types: give this one a type (a typed val)");
+        }
+        val v = try this.expr(a, null);
+        put(&types, v.ty);
+        put(&pre, v);
+        if (j > 0) {
+            expr.append(", ");
+        }
+        expr.append(fmt("{{{}}}", unum(@cast<u64>(holes + j))).as_str());
+    }
+    expr.push(')');
+    val made = try this.cpp_instance(k, expr.as_str(), &types, rv != null, macro, span);
+    var cands: std::vec<u32> = {};
+    put(&cands, made);
+    var none: std::vec<garg> = {};
+    return this.pick_call(name, &cands, rp, null, &none, &pre, args, want, span);
+}
+
+// @cpp("C++ expression", args...) with no result type: clang works it out, as for a call made per
+// use, in the first C++ import's headers (or none)
+attach fn cpp_typed_by_clang(this: checker&, args: std::vec<garg>&, span: span) -> compile_error!tval {
+    val fe = try this.garg_value(args.at(0));
+    var text: std::string = {};
+    match (fe.kind) {
+        .STR(s) => { text = copy s; },
+        default => { return fails(span, "@cpp's first argument is the C++ expression, as a string literal"); },
+    }
+    if (contains(text.as_str(), "{&") || contains(text.as_str(), "{=") || contains(text.as_str(), "{t")) {
+        return fails(span, "@cpp with {&i}, {=i} or {tN} holes says its result type: @cpp<R>(...)");
+    }
+    var types: std::vec<u32> = {};
+    var pre: std::vec<tval?> = {};
+    var es: std::vec<expr> = {};
+    for (i) in 1..args.len {
+        match (*args.at(i)) {
+            .EXPR(e&) => {
+                val v = try this.expr(e, null);
+                put(&types, v.ty);
+                put(&pre, v);
+                put(&es, copy *e);
+            },
+            .TYPE(t&) => { return fails(t.span, "@cpp's arguments are values"); },
+        }
+    }
+    if (this.cpp_ctxs.len == 0) {
+        // no import: the C++ standard library's headers alone
+        var cargs: std::vec<str> = {};
+        put(&cargs, "-x");
+        put(&cargs, "c++");
+        put(&cargs, "-std=c++20");
+        for (f&) in this.opts.pp_flags.items() {
+            put(&cargs, *f);
+        }
+        var g: cpp_gen = { c: this, kinds: S("volt_cpp_kinds_none") };
+        val tu = clang_parse("volt_cpp_none.cpp", "", &cargs);
+        put(&this.cpp_ctxs, { ns: this.env_at(this.cx.env).ns, src: {}, args: move cargs, gen: move g, tu: move tu });
+    }
+    val made = try this.cpp_instance(0, text.as_str(), &types, false, true, span);
+    var cands: std::vec<u32> = {};
+    put(&cands, made);
+    var none: std::vec<garg> = {};
+    return this.pick_call("@cpp", &cands, null, null, &none, &pre, &es, null, span);
 }
 
 // ---------- @cpp: calling C++ ----------
@@ -3016,8 +3537,11 @@ attach fn cpp_is_class(this: checker&, t: u32) -> bool {
 // program's C++ file (cpp_unit): a C++ class comes back through a pointer to the result's place,
 // a reference as a pointer, anything else by value
 attach fn cpp_call(this: checker&, gargs: std::vec<garg>&, args: std::vec<garg>&, span: span) -> compile_error!tval {
-    if (gargs.len == 0 || args.len == 0) {
+    if (args.len == 0) {
         return fails(span, "@cpp<R>(\"C++ expression\", args...)");
+    }
+    if (gargs.len == 0) {
+        return this.cpp_typed_by_clang(args, span);
     }
     val r = try this.garg_type(gargs.at(0));
     var types: std::vec<std::string> = {};

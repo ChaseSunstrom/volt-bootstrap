@@ -40,6 +40,12 @@ fn clang_resource_dir() -> std::string? {
 
 // `text` parsed as the file `name`, with args (-x c++, -std=..., -I...); declarations only
 fn clang_parse(name: str, text: str, args: std::vec<str>&) -> clang_tu {
+    // CXTranslationUnit_SkipFunctionBodies: the declarations are all that's read
+    return clang_parse_opts(name, text, args, 64);
+}
+
+// clang_parse with these CXTranslationUnit options
+fn clang_parse_opts(name: str, text: str, args: std::vec<str>&, opts: u32) -> clang_tu {
     var owned: std::vec<std::string> = {};
     val res = clang_resource_dir();
     if (res) {
@@ -57,9 +63,74 @@ fn clang_parse(name: str, text: str, args: std::vec<str>&) -> clang_tu {
     var t = S(text);
     var file: clang::CXUnsavedFile = { Filename: n.c_str(), Contents: t.c_str(), Length: @cast<u64>(t.len()) };
     val index = clang::clang_createIndex(0, 0);
-    // CXTranslationUnit_SkipFunctionBodies: the declarations are all that's read
-    val tu = clang::clang_parseTranslationUnit(index, n.c_str(), argv.ptr, @cast<i32>(argv.len), &file, 1, 64);
+    val tu = clang::clang_parseTranslationUnit(index, n.c_str(), argv.ptr, @cast<i32>(argv.len), &file, 1, opts);
     return { index: index, tu: tu };
+}
+
+// the unit again with its main file now this text: one made with a precompiled preamble
+// (CXTranslationUnit_PrecompiledPreamble) reuses it while the leading #include lines stay the same;
+// false when clang couldn't
+attach fn reparse(this: clang_tu&, name: str, text: str) -> bool {
+    var n = S(name);
+    var t = S(text);
+    var file: clang::CXUnsavedFile = { Filename: n.c_str(), Contents: t.c_str(), Length: @cast<u64>(t.len()) };
+    return clang::clang_reparseTranslationUnit(this.tu, 1, &file, clang::clang_defaultReparseOptions(this.tu)) == 0;
+}
+
+// every error clang reported, each with its notes, one a line: in clang's words, with the place
+// when it's in a header (not in main, the generated file)
+attach fn errors_text(this: clang_tu&, main: str) -> std::string? {
+    if (this.tu == null) {
+        return S("libclang couldn't parse it");
+    }
+    var out: std::string = {};
+    val n = clang::clang_getNumDiagnostics(this.tu);
+    for (i) in 0..n {
+        val d = clang::clang_getDiagnostic(this.tu, i);
+        if (clang::clang_getDiagnosticSeverity(d) >= 3) {
+            put_diag_line(&out, d, main);
+            val notes = clang::clang_getChildDiagnostics(d);
+            for (j) in 0..clang::clang_getNumDiagnosticsInSet(notes) {
+                val note = clang::clang_getDiagnosticInSet(notes, j);
+                put_diag_line(&out, note, main);
+                clang::clang_disposeDiagnostic(note);
+            }
+        }
+        clang::clang_disposeDiagnostic(d);
+    }
+    if (out.len() == 0) {
+        return null;
+    }
+    return out;
+}
+
+// one diagnostic as a line of out: "file:line:col: note: what", or "what" in the main file
+fn put_diag_line(out: std::string&, d: clang::CXDiagnostic, main: str) -> void {
+    var line = cx_str(clang::clang_formatDiagnostic(d, clang::clang_defaultDiagnosticDisplayOptions()));
+    val text = line.as_str();
+    if (starts_with(text, main)) {
+        // past "main:line:col: " and "error: "
+        var colons: u32 = 0;
+        var at: usize = 0;
+        while (at < text.len && colons < 3) {
+            if (text[at] == ':') {
+                colons += 1;
+            }
+            at += 1;
+        }
+        var rest = text[at..text.len];
+        while (rest.len > 0 && rest[0] == ' ') {
+            rest = rest[1..rest.len];
+        }
+        if (starts_with(rest, "error: ")) {
+            rest = rest[7..rest.len];
+        }
+        line = S(rest);
+    }
+    if (out.len() > 0) {
+        out.push('\n');
+    }
+    out.append(line.as_str());
 }
 
 // the first error clang reported (with its place), if any
