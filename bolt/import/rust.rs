@@ -62,6 +62,10 @@ pub fn import(r: &Req) -> Result<(), String> {
     if !files.contains(&krate.join("Cargo.toml")) {
         files.push(krate.join("Cargo.toml"));
     }
+    // the instances of its generics a program asked for (voltc writes them)
+    if r.out.join("instances").is_file() {
+        files.push(r.out.join("instances"));
+    }
     let st = stamp(&files, &format!("rust {} {} release={}", r.alias, path.display(), r.release));
     if fresh(r, &st) {
         return Ok(());
@@ -97,21 +101,48 @@ pub fn import(r: &Req) -> Result<(), String> {
         }
     }
     let lang = Rust { lib: lib.clone() };
-    let (shim, volt) = Gen::new(&model, &r.alias, &lang).write("the crate");
-
-    // the shim crate: its own target directory, cargo run from the crate's (its rust-toolchain.toml)
-    crate::build::write_if_changed(&shim_dir.join("lib.rs"), &shim)?;
-    let mut c = Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()));
-    c.current_dir(&dir).args(["rustc", "-q", "--lib", "--crate-type", "staticlib", "--manifest-path"]).arg(shim_dir.join("Cargo.toml")).arg("--target-dir").arg(r.out.join("target"));
-    if r.release {
-        c.arg("--release");
-    }
-    c.args(["--", "--print", "native-static-libs"]);
-    let o = c.output().map_err(|e| format!("use rust: can't run cargo: {e}"))?;
-    let err = String::from_utf8_lossy(&o.stderr);
-    if !o.status.success() {
-        return Err(format!("use rust: cargo couldn't build the glue for {}:\n{err}", dir.display()));
-    }
+    // the shim crate, with the instances of generics asked for: its own target directory, cargo run
+    // from the crate's (its rust-toolchain.toml); its Volt side, or cargo's errors
+    let build = |lines: &[String]| -> Result<(String, String), String> {
+        let mut m = model.clone();
+        instances(&mut m, lines, &r.alias, &lib);
+        let (shim, volt) = Gen::new(&m, &r.alias, &lang).write("the crate");
+        crate::build::write_if_changed(&shim_dir.join("lib.rs"), &shim)?;
+        let mut c = Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()));
+        c.current_dir(&dir).args(["rustc", "-q", "--lib", "--crate-type", "staticlib", "--manifest-path"]).arg(shim_dir.join("Cargo.toml")).arg("--target-dir").arg(r.out.join("target"));
+        if r.release {
+            c.arg("--release");
+        }
+        c.args(["--", "--print", "native-static-libs"]);
+        let o = c.output().map_err(|e| format!("can't run cargo: {e}"))?;
+        let err = String::from_utf8_lossy(&o.stderr).into_owned();
+        if o.status.success() { Ok((volt, err)) } else { Err(err) }
+    };
+    let wanted: Vec<String> = std::fs::read_to_string(r.out.join("instances")).unwrap_or_default().lines().filter(|l| !l.trim().is_empty()).map(String::from).collect();
+    let (volt, err) = match build(&wanted) {
+        Ok(x) => x,
+        Err(e) if wanted.is_empty() => return Err(format!("use rust: cargo couldn't build the glue for {}:\n{e}", dir.display())),
+        Err(_) => {
+            // an instance rustc rejects (types that don't meet a bound) is left out, with rustc's
+            // reason in OUT/instances.failed (voltc reports it at the call)
+            let mut good: Vec<String> = Vec::new();
+            let mut failed = String::new();
+            for l in &wanted {
+                let mut with = good.clone();
+                with.push(l.clone());
+                match build(&with) {
+                    Ok(_) => good = with,
+                    Err(e) => {
+                        let why = e.lines().find(|x| x.starts_with("error")).unwrap_or("rustc rejected it").trim().to_string();
+                        let _ = writeln!(failed, "{l}\t{why}");
+                    }
+                }
+            }
+            crate::build::write_if_changed(&r.out.join("instances"), &good.iter().map(|l| format!("{l}\n")).collect::<String>())?;
+            crate::build::write_if_changed(&r.out.join("instances.failed"), &failed)?;
+            build(&good).map_err(|e| format!("use rust: cargo couldn't build the glue for {}:\n{e}", dir.display()))?
+        }
+    };
     let lib_file = r.out.join("target").join(if r.release { "release" } else { "debug" }).join(format!("libvolt_import_{}.a", r.alias));
     let mut flags = vec![lib_file.display().to_string()];
     for line in err.lines() {
@@ -187,6 +218,184 @@ fn build_names(dir: &Path, shim: &Path, pkg: &str, target: &Path) -> Option<BTre
     out.extend(m.consts.iter().map(|c| c.1.clone()));
     out.extend(m.left_out.iter().filter_map(|l| l.strip_prefix("const ")).filter_map(|l| l.split_whitespace().next()).map(String::from));
     Some(out)
+}
+
+// ---------- generics, per instance ----------
+
+/// The instances voltc asked for (OUT/instances: a line per instance, `module::fn` or
+/// `module::Type::method`, then each type argument as Volt names it, tab-separated), each made a
+/// function of its own: NAME__ARGS in Volt (the args as an identifier, as voltc spells them), calling
+/// NAME::<ARGS> in Rust
+fn instances(m: &mut Model, lines: &[String], alias: &str, lib: &str) {
+    let mut types: BTreeMap<String, Vec<String>> = m.types.iter().map(|t| (t.name.clone(), t.module.clone())).collect();
+    for line in lines {
+        let mut parts = line.split('\t');
+        let Some(path) = parts.next().filter(|p| !p.is_empty()) else { continue };
+        let args: Vec<&str> = parts.collect();
+        let segs: Vec<String> = path.split("::").map(String::from).collect();
+        let Some((name, owner)) = segs.split_last() else { continue };
+        // a generic type's instance: the type with its arguments in place, and its methods
+        if let Some(gt) = m.types.iter().find(|t| t.module[..] == owner[..] && t.name == *name && !t.params.is_empty()).cloned() {
+            let what = format!("{path}<{}>", args.join(", "));
+            let inst = format!("{name}__{}", args.iter().map(|a| ident(a)).collect::<Vec<_>>().join("_"));
+            if types.contains_key(&inst) {
+                continue;
+            }
+            if args.len() != gt.params.len() {
+                m.left_out.push(format!("{what} (it takes {} types)", gt.params.len()));
+                continue;
+            }
+            let mut subst = BTreeMap::new();
+            let mut rust = Vec::new();
+            for (gp, a) in gt.params.iter().zip(&args) {
+                if let Some(t) = volt_ty(a, alias, &types) {
+                    rust.push(rust_ty(&t, lib, &types));
+                    subst.insert(gp.clone(), t);
+                }
+            }
+            if subst.len() != args.len() {
+                m.left_out.push(format!("{what} (a type argument has no Rust type here)"));
+                continue;
+            }
+            let mut d = gt.clone();
+            d.name = inst.clone();
+            d.generic = false;
+            d.params.clear();
+            d.rust_name = Some(format!("{name}<{}>", rust.join(", ")));
+            d.fields = d.fields.map(|fs| fs.into_iter().map(|(n, p, t)| (n, p, t.map(|t| substitute(&t, &subst)))).collect());
+            subst.insert(format!("type {name}"), Ty::Named(inst.clone()));
+            let ms: Vec<Sig> = m.methods.get(name).cloned().unwrap_or_default().into_iter().map(|mut s| {
+                s.params = s.params.iter().map(|(n, t)| (n.clone(), t.as_ref().map(|t| substitute(t, &subst)))).collect();
+                s.ret = s.ret.as_ref().map(|t| substitute(t, &subst));
+                s
+            }).collect();
+            m.methods.insert(inst.clone(), ms);
+            types.insert(inst, d.module.clone());
+            m.types.push(d);
+            continue;
+        }
+        // a method of a type (the segment before it names one in that module), or a fn
+        let method = owner.last().filter(|t| types.get(*t).is_some_and(|tm| tm[..] == owner[..owner.len() - 1]));
+        let found = match method {
+            Some(t) => m.methods.get(t).and_then(|ms| ms.iter().find(|s| s.name == *name && !s.generics.is_empty())).cloned(),
+            None => m.fns.iter().find(|(md, s)| md[..] == owner[..] && s.name == *name && !s.generics.is_empty()).map(|x| x.1.clone()),
+        };
+        let Some(g) = found else { continue };
+        let what = format!("{path}<{}>", args.join(", "));
+        if args.len() != g.generics.len() {
+            m.left_out.push(format!("{what} (it takes {} types)", g.generics.len()));
+            continue;
+        }
+        let mut subst = BTreeMap::new();
+        let mut rust = Vec::new();
+        let mut ok = true;
+        for (gp, a) in g.generics.iter().zip(&args) {
+            match volt_ty(a, alias, &types) {
+                Some(t) => {
+                    rust.push(rust_ty(&t, lib, &types));
+                    subst.insert(gp.clone(), t);
+                }
+                None => {
+                    m.left_out.push(format!("{what} (Volt's {a} has no Rust type here)"));
+                    ok = false;
+                }
+            }
+        }
+        if !ok {
+            continue;
+        }
+        let mut s = g.clone();
+        s.params = s.params.iter().map(|(n, t)| (n.clone(), t.as_ref().map(|t| substitute(t, &subst)))).collect();
+        s.ret = s.ret.as_ref().map(|t| substitute(t, &subst));
+        s.generics.clear();
+        s.call = Some(format!("{name}::<{}>", rust.join(", ")));
+        s.name = format!("{name}__{}", args.iter().map(|a| ident(a)).collect::<Vec<_>>().join("_"));
+        s.src = format!("{} [{}]", s.src, g.generics.iter().zip(&args).map(|(p, a)| format!("{p} = {a}")).collect::<Vec<_>>().join(", "));
+        match method {
+            Some(t) => m.methods.entry(t.clone()).or_default().push(s),
+            None => m.fns.push((owner.to_vec(), s)),
+        }
+    }
+}
+
+/// a Volt type name as an identifier: std::vec<i32> is std_vec_i32 (voltc's ident_of)
+fn ident(s: &str) -> String {
+    let mut out = String::new();
+    for c in s.chars() {
+        if c.is_ascii_alphanumeric() || c == '_' {
+            out.push(c);
+        } else if !out.is_empty() && !out.ends_with('_') {
+            out.push('_');
+        }
+    }
+    out.trim_end_matches('_').to_string()
+}
+
+/// the type a Volt type name stands for in the crate (alias:: names one of its types)
+fn volt_ty(v: &str, alias: &str, types: &BTreeMap<String, Vec<String>>) -> Option<Ty> {
+    let v = v.trim();
+    if let Some(inner) = v.strip_suffix('?') {
+        return Some(Ty::Opt(Box::new(volt_ty(inner, alias, types)?)));
+    }
+    if let Some(p) = prim(v) {
+        return Some(Ty::Prim(p));
+    }
+    if v == "str" {
+        return Some(Ty::Str);
+    }
+    if v == "std::string" || v.starts_with("std::string<") {
+        return Some(Ty::String);
+    }
+    if let Some(inner) = v.strip_prefix("std::vec<").and_then(|x| x.strip_suffix('>')) {
+        // std::vec<T, A>: its allocator isn't Rust's business
+        let elem = inner.split(", std::mem::").next()?;
+        return Some(Ty::Vec(Box::new(volt_ty(elem, alias, types)?)));
+    }
+    let local = v.strip_prefix(alias)?.strip_prefix("::")?;
+    let segs: Vec<&str> = local.split("::").collect();
+    let (name, module) = segs.split_last()?;
+    let tm = types.get(*name)?;
+    (tm.iter().map(|m| crate::import::volt_name(m)).collect::<Vec<_>>() == module.iter().map(|m| m.to_string()).collect::<Vec<_>>()).then(|| Ty::Named(name.to_string()))
+}
+
+/// a type as Rust code names it from the shim
+fn rust_ty(t: &Ty, lib: &str, types: &BTreeMap<String, Vec<String>>) -> String {
+    match t {
+        Ty::Prim(p) => p.to_string(),
+        Ty::Char => "char".into(),
+        Ty::Str => "&str".into(),
+        Ty::String => "String".into(),
+        Ty::Vec(e) => format!("Vec<{}>", rust_ty(e, lib, types)),
+        Ty::Opt(e) => format!("Option<{}>", rust_ty(e, lib, types)),
+        Ty::Named(n) => {
+            let mut p = vec![lib.to_string()];
+            p.extend(types.get(n).cloned().unwrap_or_default());
+            p.push(n.clone());
+            format!("::{}", p.join("::"))
+        }
+        _ => "_".into(),
+    }
+}
+
+/// t with its type parameters replaced (and a generic type, "type NAME", by its instance)
+fn substitute(t: &Ty, s: &BTreeMap<String, Ty>) -> Ty {
+    match t {
+        Ty::Generic(g) => s.get(g).cloned().unwrap_or_else(|| t.clone()),
+        Ty::Named(n) => s.get(&format!("type {n}")).cloned().unwrap_or_else(|| t.clone()),
+        Ty::Slice(e, m) => Ty::Slice(Box::new(substitute(e, s)), *m),
+        Ty::Vec(e) => Ty::Vec(Box::new(substitute(e, s))),
+        Ty::Opt(e) => Ty::Opt(Box::new(substitute(e, s))),
+        Ty::Res(e) => Ty::Res(Box::new(substitute(e, s))),
+        // &T of a type that's plain or text is as the reader maps a reference to one: &i32 is i32,
+        // &String is str, &Vec<E> is a slice
+        Ty::Ref(e, m) => match (substitute(e, s), *m) {
+            (x @ (Ty::Prim(_) | Ty::Char), false) => x,
+            (Ty::String | Ty::Str, false) => Ty::Str,
+            (Ty::Vec(x), m) => Ty::Slice(x, m),
+            (x, m) => Ty::Ref(Box::new(x), m),
+        },
+        _ => t.clone(),
+    }
 }
 
 /// the model without these items (module, name)
@@ -322,15 +531,22 @@ impl<'a> Doc<'a> {
 
     /// a function or method, under the name it's called by
     fn sig(&self, it: &Json, f: &Json, name: &str) -> Sig {
-        let mut s = Sig { name: name.to_string(), recv: Recv::None, params: Vec::new(), ret: Some(Ty::Unit), skip: None, src: self.src(it, name) };
+        let mut s = Sig { name: name.to_string(), recv: Recv::None, params: Vec::new(), ret: Some(Ty::Unit), skip: None, src: self.src(it, name), generics: Vec::new(), call: None };
         let generics = f.get("generics");
         if f.get("header").and_then(|h| h.get("is_async")).and_then(Json::bool) == Some(true) {
             s.skip = Some("it's async");
         }
-        if generic(generics) {
-            s.skip = Some("it's generic");
-        } else if generics.and_then(|g| g.get("where_predicates")).is_some_and(|w| !w.arr().is_empty()) {
-            s.skip = Some("it has a where clause");
+        // type parameters make a generic fn, built per instance a program uses (their bounds are
+        // rustc's to check, for each); a const parameter or an impl Trait one isn't one of those
+        for p in generics.and_then(|g| g.get("params")).map_or(&[][..], Json::arr) {
+            let Some(k) = p.get("kind") else { continue };
+            if k.get("lifetime").is_some() {
+                continue;
+            }
+            match (k.get("type"), p.get("name").and_then(Json::str)) {
+                (Some(t), Some(n)) if t.get("is_synthetic").and_then(Json::bool) != Some(true) => s.generics.push(n.to_string()),
+                _ => s.skip = Some("it's generic over more than types"),
+            }
         }
         let Some(sig) = f.get("sig") else {
             s.skip = Some("its parameters");
@@ -396,7 +612,8 @@ impl<'a> Doc<'a> {
 
     fn typedef(&mut self, module: Vec<String>, name: String, it: &Json, body: &Json, is_enum: bool) {
         let opaque = it.get("attrs").map_or(&[][..], Json::arr).iter().any(|a| a.str() == Some("non_exhaustive") || a.get("other").and_then(Json::str).is_some_and(|s| s.contains("non_exhaustive")));
-        let mut d = TypeDef { module, name: name.clone(), generic: generic(body.get("generics")), fields: None, variants: None, is_enum, clone: false, opaque };
+        let params: Vec<String> = body.get("generics").and_then(|g| g.get("params")).map_or(&[][..], Json::arr).iter().filter(|p| p.get("kind").is_some_and(|k| k.get("type").is_some())).filter_map(|p| p.get("name").and_then(Json::str)).map(String::from).collect();
+        let mut d = TypeDef { module, name: name.clone(), generic: generic(body.get("generics")), fields: None, variants: None, is_enum, clone: false, opaque, params, rust_name: None };
         if let Some(p) = body.get("kind").and_then(|k| k.get("plain")) {
             let mut fields = Vec::new();
             for fid in p.get("fields").map_or(&[][..], Json::arr) {
@@ -482,7 +699,7 @@ impl<'a> Doc<'a> {
             return tup.arr().is_empty().then_some(Ty::Unit);
         }
         if let Some(g) = t.get("generic").and_then(Json::str) {
-            return (g == "Self").then_some(Ty::SelfTy);
+            return Some(if g == "Self" { Ty::SelfTy } else { Ty::Generic(g.to_string()) });
         }
         if let Some(r) = t.get("borrowed_ref") {
             let mutable = r.get("is_mutable").and_then(Json::bool) == Some(true);
@@ -496,7 +713,7 @@ impl<'a> Doc<'a> {
             return match self.ty(inner)? {
                 Ty::String if !mutable => Some(Ty::Str),
                 Ty::Vec(e) => Some(Ty::Slice(e, mutable)),
-                x @ (Ty::Named(_) | Ty::SelfTy) => Some(Ty::Ref(Box::new(x), mutable)),
+                x @ (Ty::Named(_) | Ty::SelfTy | Ty::Generic(_)) => Some(Ty::Ref(Box::new(x), mutable)),
                 x @ (Ty::Prim(_) | Ty::Char) if !mutable => Some(x),
                 _ => None,
             };
@@ -507,7 +724,9 @@ impl<'a> Doc<'a> {
         let args: Vec<&Json> = p.get("args").and_then(|a| a.get("angle_bracketed")).and_then(|a| a.get("args")).map_or(Vec::new(), |a| a.arr().iter().filter_map(|x| x.get("type")).collect());
         let one = || -> Option<Box<Ty>> { Some(Box::new(self.ty(args.first()?)?)) };
         if let Some(local) = p.get("id").and_then(Json::key).and_then(|id| self.names.get(&id)) {
-            return args.is_empty().then(|| Ty::Named(local.clone()));
+            // a generic type over type parameters (Stack<T> in its own impl): each instance's
+            // methods name the instance
+            return (args.is_empty() || args.iter().all(|a| a.get("generic").is_some())).then(|| Ty::Named(local.clone()));
         }
         // another crate's type named like one of this crate's (std::io::Error next to an Error)
         let shadowed = self.names.values().any(|n| *n == last);
@@ -671,7 +890,7 @@ impl Walker {
                 let Some(Tok::Id(name)) = item.get(k + 1) else { return };
                 let generic = matches!(item.get(k + 2), Some(Tok::P(p)) if p == "<") && generic_args(item, k + 2);
                 let opaque = attrs.iter().any(|a| matches!(a.first(), Some(Tok::Id(w)) if w == "non_exhaustive"));
-                let mut d = TypeDef { module: module.to_vec(), name: name.clone(), generic, fields: None, variants: None, is_enum: kind == "enum", clone: false, opaque };
+                let mut d = TypeDef { module: module.to_vec(), name: name.clone(), generic, fields: None, variants: None, is_enum: kind == "enum", clone: false, opaque, params: Vec::new(), rust_name: None };
                 let open = item.iter().position(|x| *x == Tok::P("{".into()));
                 if kind == "struct" {
                     if let Some(open) = open {
@@ -852,7 +1071,7 @@ fn sig(item: &[Tok]) -> Sig {
         _ => String::new(),
     };
     let head = item.iter().position(|x| matches!(x, Tok::P(p) if p == "{" || p == ";")).unwrap_or(item.len());
-    let mut s = Sig { name, recv: Recv::None, params: Vec::new(), ret: Some(Ty::Unit), skip: None, src: toks_line(&item[..head]) };
+    let mut s = Sig { name, recv: Recv::None, params: Vec::new(), ret: Some(Ty::Unit), skip: None, src: toks_line(&item[..head]), generics: Vec::new(), call: None };
     if item[..k].iter().any(|x| *x == Tok::Id("async".into())) {
         s.skip = Some("it's async");
     }
@@ -977,7 +1196,7 @@ impl Rust {
     fn path(&self, def: &TypeDef) -> String {
         let mut p = vec![self.lib.clone()];
         p.extend(def.module.iter().cloned());
-        p.push(def.name.clone());
+        p.push(def.rust_name.clone().unwrap_or_else(|| def.name.clone()));
         format!("::{}", p.join("::"))
     }
 }
@@ -1154,12 +1373,12 @@ impl Lang for Rust {
     fn call(&self, _g: &Gen, module: &[String], s: &Sig, self_ty: Option<&TypeInfo>, recv: Option<&str>, args: &[String]) -> String {
         let args = args.join(", ");
         match (recv, self_ty) {
-            (Some(r), _) => format!("{r}.{}({args})", s.name),
-            (None, Some(ti)) => format!("{}::{}({args})", self.path(&ti.def), s.name),
+            (Some(r), _) => format!("{r}.{}({args})", s.call.as_ref().unwrap_or(&s.name)),
+            (None, Some(ti)) => format!("<{}>::{}({args})", self.path(&ti.def), s.call.as_ref().unwrap_or(&s.name)),
             (None, None) => {
                 let mut p = vec![self.lib.clone()];
                 p.extend(module.iter().cloned());
-                p.push(s.name.clone());
+                p.push(s.call.clone().unwrap_or_else(|| s.name.clone()));
                 format!("::{}({args})", p.join("::"))
             }
         }

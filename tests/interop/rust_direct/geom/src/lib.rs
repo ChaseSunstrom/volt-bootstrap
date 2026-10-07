@@ -235,3 +235,47 @@ pub fn pair_sum(p: Pair) -> i32 {
 pub const AREA: u32 = (LIMIT * LIMIT) as u32;
 pub const RATIO: f64 = 1.0 / 4.0;
 pub const BIG: bool = AREA > 50;
+
+// generics: each instance a program calls is made for it
+pub fn repeat<T: Clone>(x: T, n: usize) -> Vec<T> {
+    vec![x; n]
+}
+
+pub fn pick<T>(first: bool, a: T, b: T) -> T {
+    if first {
+        a
+    } else {
+        b
+    }
+}
+
+impl Point {
+    pub fn scaled_by<K: Into<f64>>(&self, k: K) -> Point {
+        let k = k.into();
+        Point { x: self.x * k, y: self.y * k }
+    }
+}
+
+pub fn dup<T: Clone>(x: &T) -> T {
+    x.clone()
+}
+
+// a generic type: a Volt type per instance a program names
+pub struct Stack<T> {
+    items: Vec<T>,
+}
+
+impl<T: Clone> Stack<T> {
+    pub fn new() -> Stack<T> {
+        Stack { items: Vec::new() }
+    }
+    pub fn push(&mut self, x: T) {
+        self.items.push(x);
+    }
+    pub fn top(&self) -> Option<T> {
+        self.items.last().cloned()
+    }
+    pub fn len(&self) -> usize {
+        self.items.len()
+    }
+}

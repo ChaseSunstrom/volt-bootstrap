@@ -151,7 +151,7 @@ impl Parser {
             }
             for (params, labels) in sigs {
                 let name = if self.taken.contains(&(t.clone(), "new".to_string())) { format!("new_{}", labels.first().cloned().unwrap_or_default()) } else { "new".into() };
-                let s = Sig { name: name.clone(), recv: Recv::None, params, ret: Some(Ty::SelfTy), skip: None, src: String::new() };
+                let s = Sig { name: name.clone(), recv: Recv::None, params, ret: Some(Ty::SelfTy), skip: None, src: String::new(), generics: Vec::new(), call: None };
                 self.inits.insert((t.clone(), name));
                 self.add(Some(&t), s, labels);
             }
@@ -397,7 +397,7 @@ impl Parser {
             Some(_) if m.mutating => Recv::Mut,
             Some(_) => Recv::Ref,
         };
-        let mut s = Sig { name, recv, params: Vec::new(), ret: if throws { ret.map(|t| Ty::Res(Box::new(t))) } else { ret }, skip: None, src: String::new() };
+        let mut s = Sig { name, recv, params: Vec::new(), ret: if throws { ret.map(|t| Ty::Res(Box::new(t))) } else { ret }, skip: None, src: String::new(), generics: Vec::new(), call: None };
         let labels = Self::params(&items, owner, &mut s);
         if generic {
             s.skip = Some("it's generic");
@@ -466,7 +466,7 @@ impl Parser {
         if throws {
             ret = Ty::Res(Box::new(ret));
         }
-        let mut s = Sig { name: String::new(), recv: Recv::None, params: Vec::new(), ret: Some(ret), skip: None, src: String::new() };
+        let mut s = Sig { name: String::new(), recv: Recv::None, params: Vec::new(), ret: Some(ret), skip: None, src: String::new(), generics: Vec::new(), call: None };
         let labels = Self::params(&items, owner, &mut s);
         s.name = if self.taken.contains(&(o.to_string(), "new".to_string())) { format!("new_{}", labels.first().filter(|l| *l != "_").cloned().unwrap_or_default()) } else { "new".into() };
         if generic {
@@ -544,6 +544,8 @@ impl Parser {
                         is_enum,
                         clone: true,
                         opaque: false,
+                        params: Vec::new(),
+                        rust_name: None,
                     });
                     if kw == "class" {
                         self.classes.insert(name.clone());
@@ -652,7 +654,7 @@ impl Parser {
         if m.private {
             return;
         }
-        let s = Sig { name: name.clone(), recv: Recv::Ref, params: Vec::new(), ret: ty, skip: getter.or(m.barred), src: String::new() };
+        let s = Sig { name: name.clone(), recv: Recv::Ref, params: Vec::new(), ret: ty, skip: getter.or(m.barred), src: String::new(), generics: Vec::new(), call: None };
         self.props.insert((o.to_string(), name));
         self.add(owner, s, Vec::new());
     }

@@ -58,10 +58,15 @@ code that has no Cargo project around it.
 | any other struct, or an enum with data | an owned handle: deleting it drops the Rust value, `copy` clones it (when it's `Clone`); a method taking `self` empties it |
 | a fieldless enum | a Volt enum with the same values |
 | `pub const` of a number, `bool` or `&str`, however it's computed | a `val` of its value |
+| a generic `fn`, method or type (`largest<T: PartialOrd>`, `Stack<T>`) | a generic `fn` or `struct`: each instance the program uses (`geom::largest(xs)`, `geom::Stack<i32>::new()`) is built for it |
 
-Generic functions, trait objects, closures and references returned into Rust-owned data aren't
-callable from Volt; they're left out, listed in a comment of the generated declarations
-(`VOLT_SHOW_IMPORT=1 voltc check main.volt` prints them). A panic stops the program, as it does
+A generic is built per instance: when a check calls `geom::largest` with `i32` and `f64`, voltc asks
+bolt for those two, which it builds into the shim as `largest::<i32>` and `largest::<f64>`, and
+checks the program again (only when the instances it needs change). rustc checks each instance's
+bounds: types that don't meet them are an error at the call, with rustc's reason. Trait objects,
+closures and references returned into Rust-owned data aren't callable from Volt; they're left out,
+listed in a comment of the generated declarations (`VOLT_SHOW_IMPORT=1 voltc check main.volt`
+prints them). A panic stops the program, as it does
 in Rust. cargo builds the shim from the crate's directory, so its `rust-toolchain.toml` and
 dependencies apply.
 

@@ -518,7 +518,7 @@ fn read(desc: &str) -> (Model, String) {
                     i += 1;
                 }
                 i += 1;
-                m.types.push(TypeDef { module: vec![], name: field(1).to_string(), generic: false, fields: Some(fields), variants: None, is_enum: false, clone: false, opaque: false });
+                m.types.push(TypeDef { module: vec![], name: field(1).to_string(), generic: false, fields: Some(fields), variants: None, is_enum: false, clone: false, opaque: false, params: Vec::new(), rust_name: None });
             }
             "enum" => {
                 let mut vs = Vec::new();
@@ -530,7 +530,7 @@ fn read(desc: &str) -> (Model, String) {
                     i += 1;
                 }
                 i += 1;
-                m.types.push(TypeDef { module: vec![], name: field(1).to_string(), generic: false, fields: None, variants: Some(vs), is_enum: true, clone: false, opaque: false });
+                m.types.push(TypeDef { module: vec![], name: field(1).to_string(), generic: false, fields: None, variants: Some(vs), is_enum: true, clone: false, opaque: false, params: Vec::new(), rust_name: None });
             }
             "func" => {
                 let (name, recv_ty, recv) = (field(1).to_string(), field(2).to_string(), field(3));
@@ -572,7 +572,7 @@ fn read(desc: &str) -> (Model, String) {
                     ts => format!(" ({})", ts.join(", ")),
                 };
                 let src = if recv_ty.is_empty() { format!("func {name}({}){rs}", go_params.join(", ")) } else { format!("func ({}) {name}({}){rs}", recv_ty, go_params.join(", ")) };
-                let s = Sig { name, recv, params, ret, skip, src };
+                let s = Sig { name, recv, params, ret, skip, src, generics: Vec::new(), call: None };
                 if recv == Recv::None {
                     m.fns.push((vec![], s));
                 } else {

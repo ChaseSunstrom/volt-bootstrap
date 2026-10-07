@@ -45,6 +45,8 @@ pub enum Ty {
     SelfTy,
     /// a Zig std.mem.Allocator parameter: the shim passes one, the Volt function has none
     Alloc,
+    /// a generic function's type parameter (each instance has a type in its place)
+    Generic(String),
 }
 
 pub const PRIMS: &[&str] = &["i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "isize", "usize", "f32", "f64", "bool"];
@@ -95,6 +97,11 @@ pub struct Sig {
     pub skip: Option<&'static str>,
     /// its declaration in its own language, on one line (shown above the Volt fn: hover shows it)
     pub src: String,
+    /// a generic one's type parameters: Volt gets a generic declaration, and a function per
+    /// instance a program uses (made with `call` set)
+    pub generics: Vec<String>,
+    /// an instance's callee in its own language (largest::<i32>), in place of name
+    pub call: Option<String>,
 }
 
 #[derive(Clone)]
@@ -110,10 +117,14 @@ pub struct TypeDef {
     pub clone: bool,
     /// never by value, whatever its fields (Rust's #[non_exhaustive]; a Zig type with deinit)
     pub opaque: bool,
+    /// a generic one's type parameters (Volt gets a type per instance a program names)
+    pub params: Vec<String>,
+    /// an instance's name in its own language (Stack<i32>), in place of name
+    pub rust_name: Option<String>,
 }
 
 /// a file's (or crate's) public API
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct Model {
     pub fns: Vec<(Vec<String>, Sig)>,
     pub types: Vec<TypeDef>,
@@ -520,6 +531,9 @@ impl<'a> Gen<'a> {
         if let Some(why) = s.skip {
             return Err(format!("{what} ({why})"));
         }
+        if !s.generics.is_empty() {
+            return self.generic(module, s, self_ty, &what);
+        }
         let lang = self.lang;
         if self_ty.is_some_and(|t| !self.types.contains_key(t)) {
             return Err(format!("{what} (its type isn't one Volt can name)"));
@@ -771,6 +785,67 @@ impl<'a> Gen<'a> {
     }
 
     /// the shim's source and the Volt source
+    /// a generic function's Volt declaration: generic over its type parameters, marked
+    /// @rust_generic (voltc calls the instance made for a call's types, NAME__T, and asks for the
+    /// ones not made yet); its body only stands in until then
+    fn generic(&mut self, module: &[String], s: &Sig, self_ty: Option<&str>, what: &str) -> Result<String, String> {
+        let unnamed = || format!("{what} (it's generic, and Volt can't spell its signature)");
+        let mut ps = Vec::new();
+        if let Some(t) = self_ty {
+            let vp = self.volt_path(&self.types.get(t).ok_or_else(unnamed)?.def);
+            match s.recv {
+                Recv::None => ps.push(format!("static this: {vp}")),
+                Recv::Value => ps.push(format!("this: {vp}")),
+                Recv::Ref | Recv::Mut => ps.push(format!("this: {vp}&")),
+            }
+        }
+        for (n, t) in &s.params {
+            let t = t.clone().map(|t| self.resolve(t, self_ty)).ok_or_else(unnamed)?;
+            ps.push(format!("{}: {}", Self::param_name(n), self.generic_ty(&t, false).ok_or_else(unnamed)?));
+        }
+        let ret = s.ret.clone().map(|t| self.resolve(t, self_ty)).ok_or_else(unnamed)?;
+        let rt = self.generic_ty(&ret, true).ok_or_else(unnamed)?;
+        let mut path: Vec<String> = module.to_vec();
+        if let Some(t) = self_ty {
+            path.push(t.to_string());
+        }
+        path.push(s.name.clone());
+        let path = path.join("::");
+        let tps: Vec<String> = s.generics.iter().map(|g| format!("{g}: type")).collect();
+        let kw = if self_ty.is_some() { "attach fn" } else { "fn" };
+        let mut f = String::new();
+        if !s.src.is_empty() {
+            f.push_str(&format!("// {}: {}\n", self.lang.name(), s.src));
+        }
+        f.push_str(&format!("<{}>\n@attributes([@rust_generic(\"{path}\")])\n{kw} {}({}) -> {rt} {{\n", tps.join(", "), volt_name(&s.name), ps.join(", ")));
+        f.push_str(&format!("    @panic(\"{}'s instance for these types isn't built\");\n}}\n", path));
+        Ok(f)
+    }
+
+    /// a type in a generic declaration's signature, as Volt spells it (out: a result)
+    fn generic_ty(&mut self, t: &Ty, out: bool) -> Option<String> {
+        Some(match t {
+            Ty::Generic(g) => g.clone(),
+            Ty::Unit => "void".into(),
+            Ty::Prim(x) => x.to_string(),
+            Ty::Char => "u32".into(),
+            Ty::Str | Ty::String => (if out { "std::string" } else { "str" }).into(),
+            Ty::Slice(e, _) | Ty::Vec(e) => {
+                let e = self.generic_ty(e, out)?;
+                if out { format!("std::vec<{e}>") } else { format!("{e}[..]") }
+            }
+            Ty::Opt(e) => format!("{}?", self.generic_ty(e, out)?),
+            Ty::Named(n) => self.volt_path(&self.types.get(n)?.def),
+            Ty::Ref(x, _) => format!("{}&", self.generic_ty(x, out)?),
+            Ty::Res(x) => {
+                self.errors = true;
+                let x = self.generic_ty(x, out)?;
+                format!("{}::{}_error!{x}", self.alias, self.lang.short())
+            }
+            _ => return None,
+        })
+    }
+
     pub fn write(mut self, what: &str) -> (String, String) {
         let names: Vec<String> = self.types.keys().cloned().collect();
         for n in &names {
@@ -797,8 +872,15 @@ impl<'a> Gen<'a> {
             self.modules.entry(module).or_default().push_str(&format!("\nval {}: {ty} = {lit};\n", volt_name(&name)));
         }
         for t in &self.m.types {
-            if t.generic {
-                self.left_out.push(format!("{} (it's generic)", t.name));
+            if t.generic && t.params.is_empty() {
+                self.left_out.push(format!("{} (it's generic over more than types)", t.name));
+            } else if t.generic {
+                // a type per instance a program names (TYPE__ARGS, made as voltc asks for it)
+                let mut path = t.module.clone();
+                path.push(t.name.clone());
+                let tps: Vec<String> = t.params.iter().map(|g| format!("{g}: type")).collect();
+                let d = format!("// {}: {} (generic: a type per instance a program names)\n<{}>\n@attributes([@rust_generic(\"{}\")])\nstruct {} {{\n}}\n", self.lang.name(), t.name, tps.join(", "), path.join("::"), volt_name(&t.name));
+                self.modules.entry(t.module.clone()).or_default().push_str(&format!("\n{d}"));
             }
         }
         self.left_out.extend(self.m.left_out.iter().cloned());

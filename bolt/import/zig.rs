@@ -226,7 +226,7 @@ impl Walker {
                     self.container(b, &sub, None, dir);
                     return;
                 }
-                self.m.types.push(TypeDef { module: module.to_vec(), name: name.to_string(), generic: false, fields: Some(fields), variants: None, is_enum: false, clone: false, opaque: false });
+                self.m.types.push(TypeDef { module: module.to_vec(), name: name.to_string(), generic: false, fields: Some(fields), variants: None, is_enum: false, clone: false, opaque: false, params: Vec::new(), rust_name: None });
                 self.container(b, module, Some(name), dir);
             }
             Some("enum") => {
@@ -250,7 +250,7 @@ impl Walker {
                         break;
                     }
                 }
-                self.m.types.push(TypeDef { module: module.to_vec(), name: name.to_string(), generic: false, fields: None, variants: Some(vs), is_enum: true, clone: true, opaque: false });
+                self.m.types.push(TypeDef { module: module.to_vec(), name: name.to_string(), generic: false, fields: None, variants: Some(vs), is_enum: true, clone: true, opaque: false, params: Vec::new(), rust_name: None });
                 self.container(&b[c.i..], module, Some(name), dir);
             }
             Some("@import") => {
@@ -348,7 +348,7 @@ fn sig(head: &[Tok], owner: Option<&str>) -> Sig {
         Some(Tok::Id(n)) => n.clone(),
         _ => String::new(),
     };
-    let mut s = Sig { name, recv: Recv::None, params: Vec::new(), ret: None, skip: None, src: format!("pub {}", toks_line(head)) };
+    let mut s = Sig { name, recv: Recv::None, params: Vec::new(), ret: None, skip: None, src: format!("pub {}", toks_line(head)), generics: Vec::new(), call: None };
     let mut c = Cur { t: head, i: 2 };
     if !c.is("(") {
         s.skip = Some("its parameters");

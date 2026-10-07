@@ -354,6 +354,9 @@ struct cfg_arg {
 struct opts {
     release: bool = false;
     leak_check: bool = false;
+    // checking again once bolt made the Rust instances the first check asked for: one still not
+    // made is an error
+    rust_again: bool = false;
     runtime: bool = true;              // define the runtime in this unit
     pkg_files: std::vec<pkg_file> = {}; // file -> its package
     lib: str? = null;                   // building this package into a library, no main
@@ -478,6 +481,10 @@ struct checker {
     link_flags: std::vec<std::string> = {};
     go_packages: std::vec<std::string> = {}; // use go's glue packages, linked as one (link_go)
     import_deps: std::vec<std::string> = {}; // the files they were made from (OUT.deps, for bolt)
+    // use rust's generics (@rust_generic): each import's directory, by the file of its Volt text,
+    // and the instances calls need that bolt hasn't made yet (compile_with asks it for them)
+    import_outs: std::map<u32, std::string> = {};
+    rust_wants: std::vec<rust_want> = {};
     cpp_shims: std::vec<std::string> = {};
     // a C++ unit per standard the imports are compiled under (its -std), and which unit each
     // #include line and wrapper is in; the newest standard the compilers take (an import's default)

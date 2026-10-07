@@ -290,6 +290,16 @@ attach fn struct_inst(this: checker&, d: u32, args: std::vec<gval>, span: span) 
     if (have) {
         return this.t.intern(tyk::STRUCT(*have));
     }
+    // a generic Rust type: the instance bolt made for these types, when it has
+    if (args.len > 0) {
+        val rg = this.rust_generic_of(d);
+        if (rg) {
+            val made = try this.rust_type_instance(d, rg, &args, span);
+            if (made) {
+                return made;
+            }
+        }
+    }
     val dns = this.dl(d).ns;
     var sd: struct_decl* = null;
     match (this.item_of(d).kind) {
@@ -752,6 +762,16 @@ attach fn fn_inst(this: checker&, d: u32, args: std::vec<gval>, span: span) -> c
     val have = this.fn_ids.get(key.as_str());
     if (have) {
         return *have;
+    }
+    // a generic Rust fn: the instance bolt made for these types, when it has
+    if (args.len > 0) {
+        val rg = this.rust_generic_of(d);
+        if (rg) {
+            val made = try this.rust_instance(d, rg, &args, span);
+            if (made) {
+                return made;
+            }
+        }
     }
     val it = this.item_of(d);
     val dns = this.dl(d).ns;

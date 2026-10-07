@@ -576,6 +576,20 @@ fn rust_direct() {
         tools(&mut c);
         assert_eq!(ok(c.output().unwrap(), "voltc run"), want, "voltc run ({backend})");
     }
+    // generics: each instance the program uses is made for it (fns, a method, a type), and one whose
+    // types Rust's bounds reject is an error at the call, with rustc's reason
+    for backend in ["c", "llvm"] {
+        let mut c = Command::new(&e.voltc);
+        c.args(["run", "--backend", backend, "generics.volt"]).current_dir(&dir).env("VOLT_STD", Path::new(ROOT).join("std"));
+        tools(&mut c);
+        assert_eq!(ok(c.output().unwrap(), "voltc run generics.volt"), "largest 9 1.5\nrepeat 3 7 0.5\npick b 1\nscaled 3 6\nstack 2 5 volt\n", "generics ({backend})");
+    }
+    let mut c = Command::new(&e.voltc);
+    c.args(["run", "generics_bad.volt"]).current_dir(&dir).env("VOLT_STD", Path::new(ROOT).join("std"));
+    tools(&mut c);
+    let o = c.output().unwrap();
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(!o.status.success() && err.contains("dup<geom::shapes::Counter>") && err.contains("Counter: Clone"), "a rejected instance: {err}");
     // reading the crate (rustdoc documents it as the shim's dependency) writes nothing into it
     assert!(!dir.join("geom/Cargo.lock").exists() && !dir.join("geom/target").exists(), "the import wrote into the crate");
     // one .rs file is a crate of its own (its `mod x;` files next to it)

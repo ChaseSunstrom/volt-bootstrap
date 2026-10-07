@@ -622,7 +622,23 @@ fn compile_with(c: cli&, s: sources&, shim: shim_src*) -> std::box<checker> {
     for (l&) in c.links.items() {
         put(&o.linked, l.name);
     }
-    var chk = compile(&s.files, &s.asts, move o);
+    val nfiles = s.files.len;
+    var chk = compile(&s.files, &s.asts, copy o);
+    // the instances of generic Rust fns and types calls need that bolt hasn't made: bolt makes them
+    // (its import reads them), and the program is checked again (without the last check's imports),
+    // until nothing new is asked for (a check that didn't get far asks for less); then one that's
+    // still not made is an error
+    var rounds = 0;
+    while (chk.rust_wants.len > 0 && !o.rust_again) {
+        rounds += 1;
+        if (!chk.ask_rust() || rounds > 4) {
+            o.rust_again = true;
+        }
+        while (s.files.len > nfiles) {
+            s.files.pop();
+        }
+        chk = compile(&s.files, &s.asts, copy o);
+    }
     val diags = all_diags(&*chk);
     report_diags(c, &s.files, &diags);
     if (chk.errors.len > 0) {

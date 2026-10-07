@@ -319,6 +319,8 @@ fn read(desc: &str) -> (Model, Dotnet) {
                     is_enum: k == "enum",
                     clone: k != "enum",
                     opaque: k != "struct" && k != "enum",
+                    params: Vec::new(),
+                    rust_name: None,
                 });
             }
             "value" if f.len() == 3 => {
@@ -365,7 +367,7 @@ fn read(desc: &str) -> (Model, Dotnet) {
                     }
                     _ => {}
                 }
-                m.methods.entry(tv).or_default().push(Sig { name, recv, params, ret, skip: None, src: String::new() });
+                m.methods.entry(tv).or_default().push(Sig { name, recv, params, ret, skip: None, src: String::new(), generics: Vec::new(), call: None });
             }
             "end" => {
                 m.types.extend(def.take());

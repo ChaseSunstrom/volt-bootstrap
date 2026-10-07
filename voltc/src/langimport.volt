@@ -161,6 +161,7 @@ attach fn import_lang(this: checker&, lang: str, args: std::vec<std::string>&, a
     var fname = fmt2("<use {} as {}>", S(lang), S(alias));
     put(this.files, { name: this.intern(move fname), text: text });
     val file = @cast<u32>(this.files.len - 1);
+    this.import_outs.put(file, copy out);
     val toks = try lex(text, file);
     var names: std::map<str, bool> = {};
     collect_generic_names(&toks, &names);

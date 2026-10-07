@@ -3916,6 +3916,7 @@ fn attr_defs() -> std::vec<attr_def> {
     put(&v, { name: "closed", args: 0, sig: "@closed", doc: "a trait whose attach blocks hold its fns only: its values are a closed set, and calls on them switches" });
     put(&v, { name: "attach_as", args: 1, sig: "@attach_as(\"Struct\")", doc: "the struct attach blocks name for this trait (a C++ class's virtuals)" });
     put(&v, { name: "instance", args: 1, sig: "@instance(T, ...)", doc: "an instance of a generic export fn to export, one type per generic parameter (sum_i32 for sum<i32>; voltc bindings)" });
+    put(&v, { name: "rust_generic", args: 1, sig: "@rust_generic(\"mod::f\")", doc: "a generic Rust fn or type, made per instance a program uses (use rust writes it)" });
     put(&v, { name: "derive", args: 1, sig: "@derive(trait, ...)", doc: "attach these traits (std::derive's when not in scope) to the struct or enum" });
     put(&v, { name: "intrinsic", args: 1, sig: "@intrinsic(\"name\")", doc: "binds a function the compiler provides, like println (std's and libraries' own files only)", pkg: true });
     put(&v, { name: "runtime", args: 1, sig: "@runtime(\"symbol\")", doc: "a function the compiler calls from the code it generates (std's and libraries' own files only)", pkg: true });
