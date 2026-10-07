@@ -77,5 +77,5 @@ above, after `@`, with what each does.
 | `@attach_as("Struct")` | a trait | the struct attach blocks name for it (a C++ class's virtuals) |
 | `@export_text("method")` | a struct | it's text to other languages, as the method gives it (`voltc bindings`) |
 | `@standard("c++17")` | a `use { "x.h" }` | the C or C++ standard its headers are read and compiled under (`c89` ... `c23`, `c++98` ... `c++26`, GNU's `gnu11`, `gnu++20` too); the newest the compilers take when left out |
-| `@cpp_type("ns::Class")`, `@cpp_call("ns::f")` | a struct, a fn | what `use cpp` writes: the struct is that C++ class; the fn is called per use |
+| `@cpp_type("ns::Class")`, `@cpp_handle("ns::Class")`, `@cpp_call("ns::f")` | a struct, a fn | what `use cpp` writes: the struct is that C++ class (laid out by Volt, or held by handle: then a method it doesn't have is worked out by clang per use); the fn is called per use |
 | `@intrinsic("name")`, `@runtime("symbol")` | a fn | std's and libraries' own files only: binds a function the compiler provides (`println`), or one the generated code calls |

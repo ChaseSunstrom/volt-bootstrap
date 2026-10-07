@@ -306,8 +306,16 @@ without RTTI, a cast or a type name stops the program, and `derived<T>()` on suc
 
 - What doesn't map is left out, with a comment in the generated source: a standard library type
   other than those above (or a non-const reference to one), a `std::function` whose signature has a
-  class in it (other than text), and a lambda's own type (take a `std::function`). A function whose
-  parameters or result only a call settles is [called per use](#calls-worked-out-per-use) instead.
+  class in it (other than text). A function whose parameters or result only a call settles is
+  [called per use](#calls-worked-out-per-use) instead.
+- A type Volt can't lay out (a class template's instance with private fields, bases or virtual
+  methods, like `basic_json`; a lambda's own type; a coroutine's task type) is held by handle,
+  named after the type (`basic_json_0`, `lambda_3`) or by the header's `using` alias for it, and its
+  members are worked out per use: methods (`d.get("a")`), static functions
+  (`json::parse(text)`), constructors (`T::new(...)`) and operators by their Volt names (`op_add`,
+  `op_eq`, `op_index`, a lambda's `f.op_call(5)`). A name the class doesn't have is an error in
+  clang's words. The import declares one for its own types; another library's (the standard
+  library's) come through a call made per use.
   A constant whose value clang can't work out (or a variable that isn't `const`) isn't a `val`.
 - Generic arguments written on a method template's call parse when there's one of them, when the
   call passes nothing, or when each can only be a type (`x.get<i32>()`, `x.pair<i32, f64>()`,
@@ -323,8 +331,8 @@ without RTTI, a cast or a type name stops the program, and `derived<T>()` on suc
   libstdc++'s `std::string` does) doesn't survive. So a class clang says isn't trivially copyable
   (`__is_trivially_copyable`, asked of the imported headers) is held by handle: moving it moves the
   pointer, and the object stays where C++ made it. A handle is never empty: `{}` makes the object
-  as C++'s `T{}` would, and for a class that can't be made from nothing (no default constructor)
-  `{}` is a compile error that says to use `T::new(...)`.
+  with its default constructor (`new T()`), and for a class that can't be made from nothing `{}` is
+  a compile error that says to use `T::new(...)`.
 - A handle class can't be reached through a C++ pointer (`T*`), a non-const reference result (`T&`)
   or a smart pointer or class template over it; those are left out, as is a class template with a
   field of one. A `const T&` result is copied into a new handle, so it's left out when the class

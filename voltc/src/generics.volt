@@ -1727,6 +1727,21 @@ attach fn method_call(this: checker&, r: tval, name: str, gargs: std::vec<garg>&
             default => {},
         }
     }
+    // a C++ class held by handle: a method Volt didn't declare for it is worked out by clang
+    match (*this.t.get(base)) {
+        .STRUCT(sid) => {
+            if (this.cpp_handle_of(sid) != null) {
+                var own = false;
+                for (d&) in cands.items() {
+                    own = own || this.takes_this(*d, base);
+                }
+                if (!own) {
+                    return this.cpp_handle_method(sid, r, name, gargs, args, want, span);
+                }
+            }
+        },
+        default => {},
+    }
     if (cands.len == 0) {
         return fail(span, fmt2("{} has no method '{}'", this.ty_name(r.ty), S(name)));
     }
@@ -1741,6 +1756,22 @@ attach fn static_call(this: checker&, t: u32, name: str, gargs: std::vec<garg>&,
             .STATIC(x) => { put(&cands, *d); },
             default => {},
         }
+    }
+    // a C++ class held by handle: a static function Volt didn't declare for it is worked out by
+    // clang (Q::name(...))
+    match (*this.t.get(t)) {
+        .STRUCT(sid) => {
+            if (this.cpp_handle_of(sid) != null) {
+                if (cands.len == 0) {
+                    return this.cpp_handle_static(sid, name, gargs, args, want, span);
+                }
+                val r = this.resolve_call(name, &cands, null, t, gargs, args, want, span) catch |e| {
+                    return this.cpp_handle_static(sid, name, gargs, args, want, span);
+                };
+                return r;
+            }
+        },
+        default => {},
     }
     if (cands.len == 0) {
         return fail(span, fmt2("{} has no static function '{}'", this.ty_name(t), S(name)));

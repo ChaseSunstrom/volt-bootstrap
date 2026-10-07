@@ -3877,6 +3877,7 @@ fn attr_defs() -> std::vec<attr_def> {
     put(&v, { name: "deprecated", args: 1, sig: "@deprecated(\"why\")", doc: "using it warns with this message" });
     put(&v, { name: "owns", args: 1, sig: "@owns(\"field\")", doc: "the struct owns what this pointer field points to (for borrow checking)" });
     put(&v, { name: "cpp_type", args: 1, sig: "@cpp_type(\"ns::Class\")", doc: "this struct is that C++ class (use cpp writes it)" });
+    put(&v, { name: "cpp_handle", args: 1, sig: "@cpp_handle(\"ns::Class\")", doc: "this struct holds that C++ class by handle (use cpp writes it); a method it doesn't have is worked out by clang per use" });
     put(&v, { name: "cpp_call", args: 1, sig: "@cpp_call(\"ns::f\")", doc: "a C++ name called per use: clang works out each call (use cpp writes it)" });
     put(&v, { name: "standard", args: 1, sig: "@standard(\"c++17\")", doc: "the C or C++ standard a use { \"x.h\" } import is read and compiled under (c89..c2y, c++98..c++26; the newest the compiler takes when left out)" });
     put(&v, { name: "export_text", args: 1, sig: "@export_text(\"method\")", doc: "the struct is text to other languages, as this method gives it (voltc bindings)" });

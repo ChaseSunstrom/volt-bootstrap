@@ -1202,6 +1202,20 @@ fn c_versions_flag() {
 }
 
 #[test]
+fn cpp_opaque() {
+    // C++ types Volt can't lay out, by value: a class template with private state and a base (and
+    // the alias naming its instance), one with virtual methods, a lambda's type, a coroutine-style
+    // task; their methods worked out per use
+    let e = Env::new("cpp-opaque");
+    for backend in ["c", "llvm"] {
+        assert_eq!(ok(e.voltc(&["run", "cpp_opaque.volt", "--backend", backend]), "voltc run cpp_opaque.volt"), "2 1 -1\n5 1\n7 9\n15\n42 true\n-4 7 true\n2\n", "opaque C++ types ({backend})");
+    }
+    let o = e.voltc(&["check", "cpp_opaque_no_default.volt"]);
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(!o.status.success() && err.contains("C++'s op::box<int> can't be made from nothing") && err.contains("cpp_opaque_no_default.volt:5"), "{{}} of an instance with no default constructor: {err}");
+}
+
+#[test]
 fn cpp_handles_are_never_empty() {
     // {} default-constructs a class held by handle, in a variable or a struct's field; one with no
     // default constructor makes {} an error at the literal
@@ -1227,7 +1241,7 @@ fn cpp_libs() {
     let e = Env::new("cpp-libs");
     let libs = [
         ("re2/re2.h", "libs/re2.volt", &["--cc", "-lre2"][..], "true a(b+)c 1\nfalse\n"),
-        ("nlohmann/json.hpp", "libs/json.volt", &[][..], "true 3\n"),
+        ("nlohmann/json.hpp", "libs/json.volt", &[][..], "true 3\ntrue 2 {\"a\":3,\"b\":[1,2]}\n"),
         ("glm/glm.hpp", "libs/glm.volt", &[][..], "2.5 3 1\n"),
     ];
     for (header, file, flags, want) in libs {

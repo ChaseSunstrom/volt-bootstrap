@@ -19,6 +19,7 @@ doesn't map, with the way around each.
 | a trivially copyable class | a struct with C++'s layout |
 | any other class | a handle to the object C++ allocates |
 | class templates Volt can lay out (public fields, no bases) | generic structs |
+| an instance Volt can't lay out (a class template with private fields, bases or virtual methods, such as `basic_json`; a lambda's own type; a coroutine-style task), and the `using` alias naming it | a handle to the object (`{}` makes one with its default constructor), its members worked out per use: methods, static functions, `T::new(...)`, operators by their Volt names (`op_call` is `()`) |
 | a class or enum inside a class | `Outer_Inner` |
 | constructors, destructors, copy constructors | `T::new(...)`, the `delete` and `copy` hooks |
 | methods, static methods, method templates, operators | methods, `T::f(...)`, generic methods, `op_add`, `to_T()`, `assign(v)` |
@@ -41,9 +42,9 @@ The interop tests import these and run what maps, on both backends:
 - **re2** (`re2/re2.h`, linked with `--cc -lre2`): `RE2::new(pattern)`, `ok()`, `pattern()`,
   `NumberOfCapturingGroups()`.
 - **nlohmann::json** (`nlohmann/json.hpp`): the header imports cleanly through its inline ABI
-  namespace, and its free functions and enums (`detail::value_t`, `detail::op_lt`) run.
-  `basic_json` itself is a class template with private state, so it isn't one of the ones Volt
-  can use; see below.
+  namespace; its free functions and enums (`detail::value_t`, `detail::op_lt`) run, and `json`
+  (`basic_json<>`, a class template with private state) is held by handle: `{}` is a null json,
+  and `json::parse(text)`, `size()` and `dump()` are worked out per use.
 - **glm** (`glm/glm.hpp`): its generic functions over numbers (`glm::abs`, `glm::min`,
   `glm::clamp`).
 - **A framework sample** with pure virtual interfaces, an event bus calling its listeners by
@@ -60,10 +61,7 @@ it), and the rest still works. What Volt can't declare ahead (variadic and non-t
 | C++ | Why | The way around it |
 | --- | --- | --- |
 | class templates with non-type or template template parameters (glm's `vec<3, float>`) | Volt's generic structs take types (functions with them are [called per use](/volt-bootstrap/interop/cpp/#calls-worked-out-per-use)) | a `using vec3 = glm::vec3;` with wrapper functions over it |
-| a class template with private fields, bases or virtual methods (`basic_json`) | Volt lays out a class template's instances itself, and can't see what's private | wrapper functions over one instance (`nlohmann::json`) in a header of your own |
-| a lambda's own type | it has no name to declare (a function's `auto` result is called per use) | take or return a `std::function` |
 | C++20 modules (`import std;`) | the import reads headers | the headers the module is built from |
-| coroutines (`co_await`, `co_return`) | their results are coroutine handles and promise types | a wrapper that runs the coroutine and returns its result |
 | pointers to classes held by handle (`T*`), non-const `T&` results of them | Volt can't tell who owns the object | a reference parameter (`T&`), or `as_Base()` and `as_Derived()` |
 | bit-fields | a Volt field can't be part of a byte | a getter and setter in C++ |
 | a `std::function` field's setter | a Volt closure stored in C++ would outlive the call | a C++ method that takes it and copies what it needs |
