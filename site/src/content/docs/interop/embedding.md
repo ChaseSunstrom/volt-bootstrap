@@ -160,8 +160,10 @@ rustc --edition 2021 main.rs -L target/debug -l voltvm
 
 ## Limits
 
-- A script can't import C headers or code in other languages: those need a C compiler or bolt at
-  run time.
+- A script imports C and C++ headers (and C++ modules) when the compilers are on `PATH` (`$CC`, and
+  `$CXX` for C++): what the imports need (a header's functions, the calls made per use, C++'s
+  wrappers) is compiled into a library the VM loads with the script, linked with the libraries the
+  imports name. A sandbox's script can't import them (their code would reach past it).
 - A panic in a script (a failed bounds check, an overflow in a debug VM, `@panic`) ends the
   process, as it would in a Volt program.
 - A script's code stays until its VM is freed; loading again with the same `export fn` names is an

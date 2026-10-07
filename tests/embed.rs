@@ -35,6 +35,12 @@ fn embedded_volt() {
     ok(Command::new("cc").arg("-o").arg(&host).arg(Path::new(ROOT).join("tests/embed/host.c")).arg("-I").arg(&bindings).arg("-L").arg(&lib_dir).arg("-lvoltvm").arg(format!("-Wl,-rpath,{}", lib_dir.display())).output().unwrap(), "compiling host.c");
     let out = ok(Command::new(&host).arg(&std_dir).env_clear().env("PATH", "/nonexistent").output().unwrap(), "host");
     assert_eq!(out, C_OUT);
+    // a script importing a C header and a C++ one, with the compilers on PATH: their code is
+    // compiled for it as it loads
+    let imports = dir.join("host_imports");
+    ok(Command::new("cc").arg("-o").arg(&imports).arg(Path::new(ROOT).join("tests/embed/host_imports.c")).arg("-I").arg(&bindings).arg("-L").arg(&lib_dir).arg("-lvoltvm").arg(format!("-Wl,-rpath,{}", lib_dir.display())).output().unwrap(), "compiling host_imports.c");
+    let out = ok(Command::new(&imports).arg(&std_dir).arg(Path::new(ROOT).join("tests/embed")).output().unwrap(), "host_imports");
+    assert_eq!(out, "run 53\nbox: a sandbox's script can't import C or C++ (their code would reach past the sandbox)\n");
     // Python, through the generated module (which loads the library without RTLD_GLOBAL)
     if Command::new("python3").arg("--version").output().is_ok_and(|o| o.status.success()) {
         let out = ok(Command::new("python3").arg(Path::new(ROOT).join("tests/embed/host.py")).arg(&std_dir).env("PYTHONPATH", &bindings).env("VOLT_VOLTVM_LIB", lib_dir.join("libvoltvm.so")).output().unwrap(), "host.py");

@@ -2772,16 +2772,13 @@ attach fn llvm_object(this: checker&, path: str, hdr: std::vec<str>&) -> std::st
     return S("");
 }
 
-// the program as a module for a JIT (vm.volt): built as for an object file, but with no C header
-// pointers (there's no C unit to hold them), and its globals' initializer an external function
-// named `init` for the JIT's user to call (nothing runs llvm.global_ctors there)
+// the program as a module for a JIT (vm.volt): built as for an object file (the C header functions'
+// pointers it reads, g.hdr, are a C unit's: vm_native), and its globals' initializer an external
+// function named `init` for the JIT's user to call (nothing runs llvm.global_ctors there)
 attach fn llvm_jit_module(this: checker&, g: lg&, init: str) -> std::string {
     val e = this.llvm_build(g);
     if (e.len() > 0) {
         return e;
-    }
-    if (g.hdr.len > 0) {
-        return S("a script can't call functions from C headers (no C compiler runs to define them)");
     }
     val ctors = llvm::LLVMGetNamedGlobal(g.m, "llvm.global_ctors");
     if (ctors) {

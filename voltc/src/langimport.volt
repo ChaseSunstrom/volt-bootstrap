@@ -29,7 +29,7 @@ fn language_of(path: str, dir: str) -> str? {
         lower = name[at..name.len].to_lower(); // Shapes.HPP is C++ too
     }
     val ext = lower.as_str();
-    val cpp: str[11] = { "hpp", "hh", "hxx", "h++", "cpp", "cc", "cxx", "c++", "ipp", "tpp", "ixx" };
+    val cpp: str[17] = { "hpp", "hh", "hxx", "h++", "cpp", "cc", "cxx", "c++", "ipp", "tpp", "ixx", "cppm", "ccm", "cxxm", "c++m", "mpp", "mxx" };
     for (c) in cpp {
         if (ext == c) {
             return "cpp";

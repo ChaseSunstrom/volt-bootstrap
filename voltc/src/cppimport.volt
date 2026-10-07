@@ -109,6 +109,11 @@ struct cpp_gen {
     closures: bool = false;
     // the Volt fns reading an override's argument (virt_reader), by its C++ type
     readers: std::map<str, str> = {};
+    // a C++20 module's interface, read as its importers see it (kids): its file, and where its
+    // export blocks are in it ([from, to) offsets)
+    module_file: std::string = {};
+    export_from: std::vec<u32> = {};
+    export_to: std::vec<u32> = {};
     // a foreign template's instance by its leading arguments (map<int, int>) -> the whole type a
     // header wrote that way (its defaults filled in): what Volt's name for it stands for
     defaulted: std::map<str, str> = {};
@@ -140,9 +145,21 @@ fn in_system(c: clang::CXCursor) -> bool {
     return clang::clang_Location_isInSystemHeader(clang::clang_getCursorLocation(c)) != 0;
 }
 
+// a declaration the import's probes added (namespace volt_probe, volt_copies, their instances), or
+// in the generated main file (which only includes the headers)
+fn probe_decl(c: clang::CXCursor) -> bool {
+    if (clang::clang_getCursorKind(c) == clang::CXCursor_Namespace && starts_with(cursor_name(c).as_str(), "volt_")) {
+        return true;
+    }
+    return cursor_file(c).as_str() == "volt_cpp_import.cpp";
+}
+
 // is c none of the import's own: in a system header, and not in a library one of the use names
 // (see roots)
 attach fn skip(this: cpp_gen&, c: clang::CXCursor) -> bool {
+    if (probe_decl(c)) {
+        return true;
+    }
     // a deduction guide (template <...> map(...) -> map<...>) is clang's, not a function
     if (clang::clang_getCursorKind(c) == clang::CXCursor_FunctionTemplate && starts_with(cursor_name(c).as_str(), "<")) {
         return true;
@@ -660,6 +677,9 @@ attach fn pre_walk(this: cpp_gen&, c: clang::CXCursor, found: std::vec<std::stri
     }
     for (ch&) in children(c).items() {
         val k = clang::clang_getCursorKind(*ch);
+        if (probe_decl(*ch)) {
+            continue;
+        }
         if (k == clang::CXCursor_Namespace || k == clang::CXCursor_ClassDecl || k == clang::CXCursor_StructDecl || k == clang::CXCursor_ClassTemplate) {
             if (!in_system(*ch) || this.own_type(*ch) || k == clang::CXCursor_Namespace) {
                 this.pre_walk(*ch, found, seen, depth + 1);
@@ -3405,17 +3425,17 @@ attach fn library_roots(this: cpp_gen&, headers: std::vec<std::string>&, tu: cla
     }
 }
 
-// what clang says of each class, from a second parse of the same headers with these appended:
+// what clang says of each class, from the import's parse reparsed with these appended (its
+// precompiled preamble the headers: they aren't read again):
 //     static const bool t0 = __is_trivially_copyable(::geo::Shape); (d0, c0, a0, n0, p0, f0, v0, e0, m0 likewise)
 // (static const, not constexpr: a header read under C++98 is probed the same way)
 // A class it can't answer for is held by handle, and Volt neither makes, copies nor assigns one.
-// ponytail: the second parse reads every header again (<string>, <vector>: about twice the
-// import's time); a precompiled preamble with clang_reparseTranslationUnit if that ever matters
-attach fn probe(this: cpp_gen&, src: str, args: std::vec<str>&) -> void {
+// Whether the reparse worked (the parse is gone when it didn't)
+attach fn probe(this: cpp_gen&, tu: clang_tu&, main: str, base: str, args: std::vec<str>&) -> bool {
     var names: std::vec<str> = {};
-    var text = S(src);
+    var text = S(base);
     // clang's builtins, which every standard has (C++98's library has no <type_traits>)
-    text.append("#include <exception>\nnamespace volt_probe {\n");
+    text.append("namespace volt_probe {\n");
     for (e) in this.classes.iter() {
         val i = unum(@cast<u64>(names.len));
         val q = S(*e.key);
@@ -3434,15 +3454,12 @@ attach fn probe(this: cpp_gen&, src: str, args: std::vec<str>&) -> void {
     }
     text.append("}\n");
     if (names.len == 0) {
-        return;
+        return true;
     }
     // each class's copy, made for those clang says can be copied (copy_check)
     val first = copies_text(&text, &names, true);
-    var pargs = copy *args;
-    put(&pargs, "-ferror-limit=0");
-    var tu = clang_parse("volt_cpp_probe.cpp", text.as_str(), &pargs);
-    if (tu.tu == null) {
-        return;
+    if (tu.tu == null || !tu.reparse(main, text.as_str())) {
+        return false;
     }
     for (ns&) in children(tu.root()).items() {
         if (clang::clang_getCursorKind(*ns) != clang::CXCursor_Namespace || cursor_name(*ns).as_str() != "volt_probe") {
@@ -3500,11 +3517,12 @@ attach fn probe(this: cpp_gen&, src: str, args: std::vec<str>&) -> void {
             put(&subs, *n);
         }
     }
-    val lines = tu.error_lines("volt_cpp_probe.cpp");
+    val lines = tu.error_lines(main);
     this.copy_failures(&cands, &lines, first, &names, false);
     if (cands.len > 0 || subs.len > 0) {
-        this.copy_check(src, &pargs, cands, subs);
+        this.copy_check(base, args, cands, subs);
     }
+    return true;
 }
 
 // the copy of each class in names, a function on a line of its own (the first's line returned);
@@ -3583,15 +3601,16 @@ attach fn copy_failures(this: cpp_gen&, cands: std::vec<str>&, lines: std::vec<u
 // can't be: each one's copy is made in a function on a line of its own (copies_text), and an error
 // there (or in what it instantiates) says which. A failing instantiation is reported once, so when
 // the probe's found some it asks again of the rest until none fails
-attach fn copy_check(this: cpp_gen&, src: str, args: std::vec<str>&, cands0: std::vec<str>, subs0: std::vec<str>) -> void {
+attach fn copy_check(this: cpp_gen&, base: str, args: std::vec<str>&, cands0: std::vec<str>, subs0: std::vec<str>) -> void {
     var cands = move cands0;
     var subs = move subs0;
+    // a parse of its own: the import's skips function bodies, and a copy's errors are in them
     val main = "volt_cpp_copies.cpp";
     var tu: clang_tu = { index: null, tu: null };
     var round: u32 = 0;
     while ((cands.len > 0 || subs.len > 0) && round < 8) {
         round += 1;
-        var text = S(src);
+        var text = S(base);
         val names = copy cands;
         val first = copies_text(&text, &names, false);
         val snames = copy subs;
@@ -4295,10 +4314,104 @@ attach fn enum_decl(this: cpp_gen&, c: clang::CXCursor) -> void {
 
 // ---------- walking the headers ----------
 
+// a namespace's (or the file's) declarations; a module interface's as an importer sees them: the
+// namespaces, and what's in an export block (export namespace geo { ... }, export int f();)
+attach fn kids(this: cpp_gen&, c: clang::CXCursor) -> std::vec<clang::CXCursor> {
+    val all = children(c);
+    if (this.module_file.len() == 0) {
+        return all;
+    }
+    var out: std::vec<clang::CXCursor> = {};
+    for (ch&) in all.items() {
+        if (clang::clang_getCursorKind(*ch) == clang::CXCursor_Namespace) {
+            put(&out, *ch);
+            continue;
+        }
+        if (cursor_file(*ch).as_str() != this.module_file.as_str()) {
+            continue;
+        }
+        val at = cursor_offset(*ch);
+        for (i) in 0..this.export_from.len {
+            if (at >= *this.export_from.at(i) && at < *this.export_to.at(i)) {
+                put(&out, *ch);
+                break;
+            }
+        }
+    }
+    return out;
+}
+
+// the export blocks among c's declarations (a namespace's too): their extents, into from and to
+fn export_spans(c: clang::CXCursor, text: str, from: std::vec<u32>&, to: std::vec<u32>&, depth: u32) -> void {
+    if (depth > 32) {
+        return;
+    }
+    for (ch&) in children(c).items() {
+        val k = clang::clang_getCursorKind(*ch);
+        if (k == clang::CXCursor_Namespace) {
+            export_spans(*ch, text, from, to, depth + 1);
+            continue;
+        }
+        if (k != clang::CXCursor_UnexposedDecl) {
+            continue;
+        }
+        val r = clang::clang_getCursorExtent(*ch);
+        var a: u32 = 0;
+        var b: u32 = 0;
+        clang::clang_getExpansionLocation(clang::clang_getRangeStart(r), null, null, null, &a);
+        clang::clang_getExpansionLocation(clang::clang_getRangeEnd(r), null, null, null, &b);
+        val at = @cast<usize>(a);
+        if (at + 6 <= text.len && text[at..at + 6] == "export") {
+            put(from, a);
+            put(to, b);
+        }
+    }
+}
+
+// a module interface as a header: its module declarations (module;, export module m;, and
+// module :private; with what follows) and its export keywords blanked, the rest where it was, so a
+// declaration's offset is the same in both
+fn module_as_header(text: str, from: std::vec<u32>&) -> std::string {
+    var blank: std::vec<bool> = {};
+    for (i) in 0..text.len {
+        put(&blank, false);
+    }
+    for (f) in from.items() {
+        for (i) in 0..6 {
+            *blank.at(@cast<usize>(f) + @cast<usize>(i)) = true;
+        }
+    }
+    var i: usize = 0;
+    var private_ = false;
+    while (i < text.len) {
+        var e = i;
+        while (e < text.len && text[e] != '\n') {
+            e += 1;
+        }
+        val line = text[i..e].trim();
+        if (private_ || line == "module;" || starts_with(line, "export module ") || starts_with(line, "module ")) {
+            private_ = private_ || starts_with(line, "module :private") || starts_with(line, "module : private");
+            for (k) in i..e {
+                *blank.at(k) = true;
+            }
+        }
+        i = e + 1;
+    }
+    var out = S("");
+    for (k) in 0..text.len {
+        if (*blank.at(k)) {
+            out.push(' ');
+        } else {
+            out.push(text[k]);
+        }
+    }
+    return out;
+}
+
 // the classes, enums and class templates the headers declare (outside system headers), with the
 // Volt path each gets inside the import's namespace
 attach fn scan(this: cpp_gen&, c: clang::CXCursor, vpath: str) -> void {
-    for (ch&) in children(c).items() {
+    for (ch&) in this.kids(c).items() {
         if (this.skip(*ch)) {
             continue;
         }
@@ -4345,7 +4458,7 @@ attach fn scan(this: cpp_gen&, c: clang::CXCursor, vpath: str) -> void {
 
 // the Volt source for the declarations under c
 attach fn emit(this: cpp_gen&, c: clang::CXCursor) -> void {
-    for (ch&) in children(c).items() {
+    for (ch&) in this.kids(c).items() {
         if (this.skip(*ch)) {
             continue;
         }
@@ -4959,12 +5072,19 @@ attach fn import_cpp(this: checker&, headers: std::vec<std::string>&, alias: str
         std_name = this.cpp_newest();
     }
     val unit = this.cpp_unit_for(std_name);
-    // the #include lines: a header next to the source file by its full path, others from the system
+    var args = this.cpp_args(std_name);
+    // the #include lines: a header next to the source file by its full path, others from the system.
+    // A C++20 module's interface (geomod.cppm) imports on its own, as its importers see it: import
+    // geomod; with the module precompiled for clang (and std, which it or a header may import)
     var src: std::string = {};
     val dir = this.header_dir(span);
+    var mod_path = S("");
+    var mod_text = S("");
     for (h&) in headers.items() {
         var local: std::string? = null;
-        if (dir) {
+        if (h.len() > 0 && h.as_str()[0] == '/') {
+            local = real_file(h.as_str());
+        } else if (dir) {
             var p = S(dir);
             p.push('/');
             p.append(h.as_str());
@@ -4972,7 +5092,34 @@ attach fn import_cpp(this: checker&, headers: std::vec<std::string>&, alias: str
         }
         var line: std::string = {};
         if (local) {
-            line = fmt("#include \"{}\"", copy local);
+            val text = std::fs::read_file(local.as_str()) catch |e| {
+                return fail(span, fmt("can't read {}", copy local));
+            };
+            if (contains(text.as_str(), "import std;") || contains(text.as_str(), "import std.compat;")) {
+                try this.std_modules(&args, std_name, unit, contains(text.as_str(), "import std.compat;"), false, span);
+            }
+            if (module_interface(h.as_str())) {
+                if (headers.len > 1) {
+                    return fails(span, "a C++ module's interface imports on its own: use { \"geo.cppm\" } as geo;");
+                }
+                val name = module_name(text.as_str()) ?? return fail(span, fmt("{} has no `export module NAME;`: it isn't a module's interface", copy local));
+                val pcm = try this.module_pcm(name.as_str(), local.as_str(), &args, std_name, false, span);
+                put(&args, this.intern(fmt2("-fmodule-file={}={}", copy name, copy pcm)));
+                var have = false;
+                for (m&) in this.cpp_modules.items() {
+                    have = have || (m.unit == unit && m.name == name.as_str());
+                }
+                if (!have) {
+                    put(&this.cpp_modules, { unit: unit, name: this.intern(copy name), path: this.intern(copy local) });
+                }
+                line = fmt("import {};", copy name);
+                mod_path = copy local;
+                mod_text = copy text;
+            } else {
+                line = fmt("#include \"{}\"", copy local);
+            }
+        } else if (module_interface(h.as_str())) {
+            return fail(span, fmt("there's no module interface {} next to this file", copy *h));
         } else {
             line = fmt("#include <{}>", copy *h);
         }
@@ -4989,19 +5136,52 @@ attach fn import_cpp(this: checker&, headers: std::vec<std::string>&, alias: str
             put(&this.cpp_include_unit, unit);
         }
     }
-    val args = this.cpp_args(std_name);
-    // CXTranslationUnit_SkipFunctionBodies | DetailedPreprocessingRecord (the macros)
-    var tu = clang_parse_opts("volt_cpp_import.cpp", src.as_str(), &args, 65);
-    val bad = tu.first_error();
+    // CXTranslationUnit_DetailedPreprocessingRecord (the macros) | PrecompiledPreamble |
+    // SkipFunctionBodies | CreatePreambleOnFirstParse: the headers' declarations are read once, and
+    // the probe reparses only what it appends (the probe's <exception> is the import's own, so the
+    // preamble stays the same); a module's interface is read itself
+    src.append("#include <exception>\n");
+    put(&args, "-ferror-limit=0");
+    var main = S("volt_cpp_import.cpp");
+    var base = copy src;
+    var tu: clang_tu = { index: null, tu: null };
+    var exp_from: std::vec<u32> = {};
+    var exp_to: std::vec<u32> = {};
+    if (mod_path.len() > 0) {
+        // where its export blocks are (libclang doesn't look inside one), then it as a header
+        var margs = copy args;
+        *margs.at(1) = "c++-module";
+        var mtu = clang_parse_opts(mod_path.as_str(), mod_text.as_str(), &margs, 65);
+        val mbad = mtu.first_error();
+        if (mbad) {
+            return fail(span, fmt("libclang couldn't read this C++ module: {}", copy mbad));
+        }
+        export_spans(mtu.root(), mod_text.as_str(), &exp_from, &exp_to, 0);
+        base = module_as_header(mod_text.as_str(), &exp_from);
+        base.append("\n#include <exception>\n");
+        main = copy mod_path;
+    }
+    tu = clang_parse_opts(main.as_str(), base.as_str(), &args, 325);
+    var bad = tu.first_error();
+    if (bad != null && (try this.module_retry(&tu, main.as_str(), base.as_str(), &args, std_name, unit, span))) {
+        bad = tu.first_error();
+    }
     if (bad) {
         return fail(span, fmt("libclang couldn't read these C++ headers: {}", copy bad));
     }
     var g: cpp_gen = { c: this, kinds: fmt("volt_cpp_kinds_{}", unum(@cast<u64>(this.cpp_items.len))) };
+    g.module_file = move mod_path;
+    g.export_from = move exp_from;
+    g.export_to = move exp_to;
     g.library_roots(headers, &tu);
     g.inst_src = copy src;
     g.inst_args = copy args;
     g.scan(tu.root(), "");
-    g.probe(src.as_str(), &args);
+    if (!g.probe(&tu, main.as_str(), base.as_str(), &args)) {
+        return fails(span, "libclang couldn't reparse these C++ headers for its probe");
+    }
+    // (the probe reparsed it: its cursors are new)
+    g.scan(tu.root(), "");
     g.prune();
     g.instancing = true;
     g.pre_instances(tu.root());
@@ -5033,6 +5213,220 @@ attach fn import_cpp(this: checker&, headers: std::vec<std::string>&, alias: str
     val items = try p.parse_file();
     put(&this.cpp_items, bx(move items));
     return this.collect(*this.cpp_items.at(this.cpp_items.len - 1), n);
+}
+
+// ---------- C++20 modules ----------
+
+// a named module a C++ unit imports: its name and its interface file
+struct cpp_module {
+    unit: u32;
+    name: str;
+    path: str;
+}
+
+// is file h a C++20 module's interface (by its extension)
+fn module_interface(h: str) -> bool {
+    val exts: str[7] = { ".cppm", ".ccm", ".cxxm", ".c++m", ".mpp", ".mxx", ".ixx" };
+    for (e) in exts {
+        if (ends_with(h, e)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// a module interface's name: what its `export module` line names (geomod, geo.shapes)
+fn module_name(text: str) -> std::string? {
+    var i: usize = 0;
+    while (i < text.len) {
+        var j = i;
+        while (j < text.len && (text[j] == ' ' || text[j] == '\t')) {
+            j += 1;
+        }
+        if (starts_with(text[j..text.len], "export module ")) {
+            var a = j + 14;
+            var b = a;
+            while (b < text.len && text[b] != ';' && text[b] != '\n') {
+                b += 1;
+            }
+            while (b > a && text[b - 1] == ' ') {
+                b -= 1;
+            }
+            if (b > a) {
+                return S(text[a..b]);
+            }
+        }
+        while (i < text.len && text[i] != '\n') {
+            i += 1;
+        }
+        i += 1;
+    }
+    return null;
+}
+
+// the C++ library's module `logical`'s source (std, std.compat), as the compiler cmd finds it: its
+// modules manifest (libstdc++.modules.json, libc++.modules.json) names it
+fn std_module_source(cmd: std::vec<str>&, logical: str) -> std::string? {
+    val libs: str[2] = { "libstdc++.modules.json", "libc++.modules.json" };
+    for (lib) in libs {
+        var argv = copy *cmd;
+        val flag = fmt("-print-file-name={}", S(lib));
+        put(&argv, flag.as_str());
+        val r = std::process::capture(argv.items(), "") catch |e| {
+            continue;
+        };
+        val path = S(r.out.as_str().trim());
+        if (r.code != 0 || path.as_str() == lib) {
+            continue;
+        }
+        val text = std::fs::read_file(path.as_str()) catch |e| {
+            continue;
+        };
+        val doc = std::json::parse(text.as_str()) catch |e| {
+            continue;
+        };
+        val mods = doc.get("modules");
+        for (i) in 0..mods.len() {
+            if ((mods.at(i).get("logical-name").as_str() ?? "") != logical) {
+                continue;
+            }
+            val sp = mods.at(i).get("source-path").as_str() ?? continue;
+            if (sp.len > 0 && sp[0] == '/') {
+                return S(sp);
+            }
+            var at = path.len();
+            while (at > 0 && path.as_str()[at - 1] != '/') {
+                at -= 1;
+            }
+            var full = S(path.as_str()[0..at]);
+            full.append(sp);
+            return real_file(full.as_str()) ?? full;
+        }
+    }
+    return null;
+}
+
+// a module precompiled by clang for libclang to read, kept in Volt's cache by what made it (its
+// interface's text, the arguments); the precompiled std module's path when name is std
+attach fn module_pcm(this: checker&, name: str, path: str, args: std::vec<str>&, standard: str, force: bool, span: span) -> compile_error!std::string {
+    val text = std::fs::read_file(path) catch |e| {
+        return fail(span, fmt("can't read {}", S(path)));
+    };
+    var key = copy text;
+    for (a) in args.items() {
+        key.append(a);
+        key.push(' ');
+    }
+    key.append(cx_str(clang::clang_getClangVersion()).as_str());
+    val dir = fmt("{}/cpp-modules", cache_base());
+    std::fs::create_dir_all(dir.as_str()) catch |e| {};
+    var safe = S("");
+    for (ch) in name {
+        if (ch == ':' || ch == '/') {
+            safe.push('-');
+        } else {
+            safe.push(ch);
+        }
+    }
+    val out = std::fmt::format("{}/{}-{:x}.pcm", dir.as_str(), safe.as_str(), std::digest::fnv1a(key.as_str()));
+    if (!force && std::fs::exists(out.as_str())) {
+        return out;
+    }
+    var argv: std::vec<str> = {};
+    put(&argv, "clang++");
+    for (a) in args.items() {
+        if (a != "-x" && a != "c++") {
+            put(&argv, a);
+        }
+    }
+    val fixed: str[5] = { "-Wno-reserved-module-identifier", "--precompile", "-x", "c++-module", "-o" };
+    for (f) in fixed {
+        put(&argv, f);
+    }
+    put(&argv, out.as_str());
+    put(&argv, path);
+    val r = std::process::capture(argv.items(), "") catch |e| {
+        return fails(span, "C++ modules need clang++ (the clang libclang is) to read them, and it isn't on PATH");
+    };
+    if (r.code != 0) {
+        return fail(span, fmt2("clang++ couldn't precompile the module {}:\n{}", S(name), copy r.err));
+    }
+    return out;
+}
+
+// the C++ library's std module (and std.compat, which imports it), precompiled for libclang under
+// standard s, passed in args; unit u's C++ imports them (force: built again, not taken from the
+// cache)
+attach fn std_modules(this: checker&, args: std::vec<str>&, s: str, u: u32, compat: bool, force: bool, span: span) -> compile_error!void {
+    var cmd: std::vec<str> = {};
+    put(&cmd, "clang++");
+    val src = std_module_source(&cmd, "std") ?? return fails(span, "import std; needs the C++ library's std module, and clang++ finds no modules manifest (libstdc++.modules.json, libc++.modules.json)");
+    var sargs = this.cpp_args(s);
+    val pcm = try this.module_pcm("std", src.as_str(), &sargs, s, force, span);
+    val flag = this.intern(fmt("-fmodule-file=std={}", copy pcm));
+    var have = false;
+    for (a) in args.items() {
+        have = have || a == flag;
+    }
+    if (!have) {
+        put(args, flag);
+    }
+    put(&sargs, flag);
+    if (compat) {
+        val csrc = std_module_source(&cmd, "std.compat") ?? return fails(span, "import std.compat; needs the C++ library's std.compat module, and its modules manifest names none");
+        val cpcm = try this.module_pcm("std.compat", csrc.as_str(), &sargs, s, force, span);
+        put(args, this.intern(fmt("-fmodule-file=std.compat={}", copy cpcm)));
+    }
+    var seen = false;
+    for (x) in this.cpp_std_units.items() {
+        seen = seen || x == u;
+    }
+    if (!seen) {
+        put(&this.cpp_std_units, u);
+    }
+    if (compat) {
+        var cseen = false;
+        for (x) in this.cpp_compat_units.items() {
+            cseen = cseen || x == u;
+        }
+        if (!cseen) {
+            put(&this.cpp_compat_units, u);
+        }
+    }
+}
+
+// the import's parse failed: when for a module (std through a header the headers include, or one
+// precompiled before a header it reads changed), the modules built again and it parsed again;
+// whether it was
+attach fn module_retry(this: checker&, tu: clang_tu&, main: str, text: str, args: std::vec<str>&, s: str, u: u32, span: span) -> compile_error!bool {
+    val err = tu.first_error() ?? return false;
+    val e = err.as_str();
+    val std_missing = contains(e, "module 'std' not found") || contains(e, "module 'std.compat' not found");
+    val stale = contains(e, "modified since") || contains(e, "precompiled file") || contains(e, "module file");
+    if (!std_missing && !stale) {
+        return false;
+    }
+    try this.std_modules(args, s, u, contains(e, "std.compat"), stale, span);
+    if (stale) {
+        // the named modules too
+        for (m&) in this.cpp_modules.items() {
+            if (m.unit != u) {
+                continue;
+            }
+            var margs = copy *args;
+            val pcm = try this.module_pcm(m.name, m.path, &margs, s, true, span);
+            val flag = this.intern(fmt2("-fmodule-file={}={}", S(m.name), copy pcm));
+            var have = false;
+            for (a) in args.items() {
+                have = have || a == flag;
+            }
+            if (!have) {
+                put(args, flag);
+            }
+        }
+    }
+    *tu = clang_parse_opts(main, text, args, 325);
+    return true;
 }
 
 // ---------- calls made per use ----------
@@ -5960,13 +6354,13 @@ fn hole_index(s: str) -> usize? {
 
 // the start of each C++ unit, before the headers: what it includes, and what its wrappers write
 // differently by standard (valid C++98 through C++26, as is CPP_PRELUDE)
-val CPP_UNIT_HEAD: str = "#include <algorithm>\n#include <csetjmp>\n#include <cstddef>\n#include <cstdio>\n#include <cstdlib>\n#include <cstring>\n#include <exception>\n#include <functional>\n#include <memory>\n#include <new>\n#include <stdexcept>\n#include <stdint.h>\n#include <string>\n#include <typeinfo>\n#include <utility>\n#include <vector>\n#if __cplusplus >= 201103L\n#include <cstdint>\n#include <type_traits>\n#endif\n#if __cplusplus >= 201703L\n#include <string_view>\n#endif\n#if __has_include(<cxxabi.h>)\n#include <cxxabi.h>\n#endif\n\n// RTTI (dynamic_cast, typeid): only what needs it uses it, and a build without it (-fno-rtti) has the rest\n#if defined(__GXX_RTTI) || defined(__cpp_rtti) || defined(_CPPRTTI)\n#define VOLT_RTTI 1\n#else\n#define VOLT_RTTI 0\n#endif\n\n// what the wrappers write differently by standard: a move, a type spelled anywhere, an expression's\n// type without its reference (C++98 has no moves, decltype or alias templates)\ntemplate <class T>\nstruct volt_idt {\n    typedef T type;\n};\n\n#if __cplusplus >= 201103L\n#define VOLT_MOVE(...) std::move(__VA_ARGS__)\n#define VOLT_NOREF(...) std::remove_reference<decltype(__VA_ARGS__)>::type\n#define VOLT_NORETURN [[noreturn]]\n#define VOLT_TLS thread_local\n#else\n#define VOLT_MOVE(...) (__VA_ARGS__)\n#define VOLT_NOREF(...) __typeof__(__VA_ARGS__)\n#define VOLT_NORETURN __attribute__((noreturn))\n#define VOLT_TLS\n#endif\n#define VOLT_ID(...) volt_idt<__VA_ARGS__ >::type\n";
+val CPP_UNIT_HEAD: str = "#include <algorithm>\n#include <csetjmp>\n#include <cstddef>\n#include <cstdio>\n#include <cstdlib>\n#include <cstring>\n#include <exception>\n#include <functional>\n#include <memory>\n#include <new>\n#include <stdexcept>\n#include <stdint.h>\n#include <string>\n#include <typeinfo>\n#include <utility>\n#include <vector>\n#if __cplusplus >= 201103L\n#include <cstdint>\n#include <iterator>\n#include <type_traits>\n#endif\n#if __cplusplus >= 201703L\n#include <string_view>\n#endif\n#if __has_include(<cxxabi.h>)\n#include <cxxabi.h>\n#endif\n\n// RTTI (dynamic_cast, typeid): only what needs it uses it, and a build without it (-fno-rtti) has the rest\n#if defined(__GXX_RTTI) || defined(__cpp_rtti) || defined(_CPPRTTI)\n#define VOLT_RTTI 1\n#else\n#define VOLT_RTTI 0\n#endif\n\n// what the wrappers write differently by standard: a move, a type spelled anywhere, an expression's\n// type without its reference (C++98 has no moves, decltype or alias templates)\ntemplate <class T>\nstruct volt_idt {\n    typedef T type;\n};\n\n#if __cplusplus >= 201103L\n#define VOLT_MOVE(...) std::move(__VA_ARGS__)\n#define VOLT_NOREF(...) std::remove_reference<decltype(__VA_ARGS__)>::type\n#define VOLT_NORETURN [[noreturn]]\n#define VOLT_TLS thread_local\n#else\n#define VOLT_MOVE(...) (__VA_ARGS__)\n#define VOLT_NOREF(...) __typeof__(__VA_ARGS__)\n#define VOLT_NORETURN __attribute__((noreturn))\n#define VOLT_TLS\n#endif\n#define VOLT_ID(...) volt_idt<__VA_ARGS__ >::type\n";
 
 // after the headers: what the wrappers call
 // what Volt's subclasses of C++ classes (derive) use, in a unit that has one
-val CPP_DIR_PRELUDE: str = "\n// what Volt's subclasses of C++ classes (derive) do to an object as what it is (its class's\n// destructor needn't be virtual): copy it (out: the copy's Volt side; null when its Volt type can't\n// be copied), delete it, and name its type (the Volt type's). A derived object's Volt side starts with\n// its subclass's, and a table by address knows one C++ handed back (any standard compiles this; only\n// C++17 and newer have subclasses). One table for all of a program's C++ units\nstruct volt_dir_ops {\n    void *(*copy)(void *o, void **out);\n    void (*del)(void *o);\n    std::string (*name)(void *o);\n    const void *tag; // the subclass's (volt_dir_find)\n};\n\n#if __cplusplus >= 201703L\n#include <mutex>\n#include <unordered_map>\n\nstruct volt_dir_reg {\n    std::mutex m;\n    std::unordered_map<const void *, const volt_dir_ops *> objs;\n};\nextern \"C\" {\n__attribute__((weak)) volt_dir_reg *volt_dir_regs = 0;\n}\n\n// an object derive made, or (ops null) one going\nstatic void volt_dir_put(const void *p, const volt_dir_ops *ops) {\n    volt_dir_reg *r = __atomic_load_n(&volt_dir_regs, __ATOMIC_ACQUIRE);\n    if (!r) {\n        volt_dir_reg *n = new volt_dir_reg(); // (never deleted: objects can outlive static destructors)\n        if (__atomic_compare_exchange_n(&volt_dir_regs, &r, n, false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {\n            r = n;\n        } else {\n            delete n;\n        }\n    }\n    std::lock_guard<std::mutex> g(r->m);\n    if (ops) {\n        r->objs[p] = ops;\n    } else {\n        r->objs.erase(p);\n    }\n}\n#endif\n\n// a handle's object's ops, when derive made it: the handle's Volt side has them, else the table\nstatic const volt_dir_ops *volt_dir_lookup(void *p, void *volt) {\n    if (volt) {\n        return *(const volt_dir_ops *const *)volt;\n    }\n#if __cplusplus >= 201703L\n    volt_dir_reg *r = __atomic_load_n(&volt_dir_regs, __ATOMIC_ACQUIRE);\n    if (p && r) {\n        std::lock_guard<std::mutex> g(r->m);\n        std::unordered_map<const void *, const volt_dir_ops *>::iterator i = r->objs.find(p);\n        if (i != r->objs.end()) {\n            return i->second;\n        }\n    }\n#endif\n    (void)p;\n    return 0;\n}\n\n// a handle's object deleted, copied and named: one derive made as what it is, another as a B (as C++\n// would through a B; C: B can be copied from outside it)\ntemplate <class B>\nstatic void volt_dir_delete(void *p, void *volt) {\n    if (const volt_dir_ops *o = volt_dir_lookup(p, volt)) {\n        o->del(p);\n    } else {\n        delete (B *)p;\n    }\n}\n\ntemplate <class B, bool C>\nstruct volt_dir_plain {\n    static void *copy(void *p) { return new B(volt_cpp_obj<B>(p)); }\n};\n\ntemplate <class B>\nstruct volt_dir_plain<B, false> {\n    static void *copy(void *) {\n        std::fprintf(stderr, \"panic: a C++ object derive didn't make copied, and only a subclass can copy its class\\n\");\n        std::exit(101);\n    }\n};\n\ntemplate <class B, bool C>\nstatic void *volt_dir_copy(void *p, void *volt, void **out) {\n    *out = 0;\n    if (const volt_dir_ops *o = volt_dir_lookup(p, volt)) {\n        void *c = o->copy(p, out);\n        if (!c) {\n            std::fprintf(stderr, \"panic: a C++ object derive made copied, and its Volt type can't be copied\\n\");\n            std::exit(101);\n        }\n        return c;\n    }\n    return volt_dir_plain<B, C>::copy(p);\n}\n\ntemplate <class B>\nstatic std::string volt_dir_name(void *p, void *volt) {\n    if (const volt_dir_ops *o = volt_dir_lookup(p, volt)) {\n        return o->name(p);\n    }\n    return volt_cpp_type_name(volt_cpp_obj<B>(p));\n}\n\n#if __cplusplus >= 201703L\n// the subclass D (of B) behind a handle, when derive made the object as one: for a protected member,\n// and the Volt side (derived<T>())\ntemplate <class D, class B>\nstatic D *volt_dir_find(void *p, void *volt) {\n    const volt_dir_ops *o = volt_dir_lookup(p, volt);\n    return o && o->tag == &D::volt_tag ? static_cast<D *>((B *)p) : 0;\n}\n\ntemplate <class D, class B>\nstatic D &volt_dir_of(void *p, void *volt) {\n    volt_cpp_obj<B>(p);\n    if (D *d = volt_dir_find<D, B>(p, volt)) {\n        return *d;\n    }\n    std::fprintf(stderr, \"panic: a protected member of a C++ object Volt didn't make with derive\\n\");\n    std::exit(101);\n}\n\ntemplate <class D, class B>\nstatic void *volt_dir_block(void *p) {\n    D *d = volt_dir_find<D, B>(p, 0);\n    return d ? d->volt_d : 0;\n}\n#endif\n";
+val CPP_DIR_PRELUDE: str = "\n// what Volt's subclasses of C++ classes (derive) do to an object as what it is (its class's\n// destructor needn't be virtual): copy it (out: the copy's Volt side; null when its Volt type can't\n// be copied), delete it, and name its type (the Volt type's). A derived object's Volt side starts with\n// its subclass's, and a table by address knows one C++ handed back (any standard compiles this; only\n// C++17 and newer have subclasses). One table for all of a program's C++ units\nstruct volt_dir_ops {\n    void *(*copy)(void *o, void **out);\n    void (*del)(void *o);\n    std::string (*name)(void *o);\n    const void *tag; // the subclass's (volt_dir_find)\n};\n\n#if __cplusplus >= 201703L\nstruct volt_dir_reg {\n    std::mutex m;\n    std::unordered_map<const void *, const volt_dir_ops *> objs;\n};\nextern \"C\" {\n__attribute__((weak)) volt_dir_reg *volt_dir_regs = 0;\n}\n\n// an object derive made, or (ops null) one going\nstatic void volt_dir_put(const void *p, const volt_dir_ops *ops) {\n    volt_dir_reg *r = __atomic_load_n(&volt_dir_regs, __ATOMIC_ACQUIRE);\n    if (!r) {\n        volt_dir_reg *n = new volt_dir_reg(); // (never deleted: objects can outlive static destructors)\n        if (__atomic_compare_exchange_n(&volt_dir_regs, &r, n, false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {\n            r = n;\n        } else {\n            delete n;\n        }\n    }\n    std::lock_guard<std::mutex> g(r->m);\n    if (ops) {\n        r->objs[p] = ops;\n    } else {\n        r->objs.erase(p);\n    }\n}\n#endif\n\n// a handle's object's ops, when derive made it: the handle's Volt side has them, else the table\nstatic const volt_dir_ops *volt_dir_lookup(void *p, void *volt) {\n    if (volt) {\n        return *(const volt_dir_ops *const *)volt;\n    }\n#if __cplusplus >= 201703L\n    volt_dir_reg *r = __atomic_load_n(&volt_dir_regs, __ATOMIC_ACQUIRE);\n    if (p && r) {\n        std::lock_guard<std::mutex> g(r->m);\n        std::unordered_map<const void *, const volt_dir_ops *>::iterator i = r->objs.find(p);\n        if (i != r->objs.end()) {\n            return i->second;\n        }\n    }\n#endif\n    (void)p;\n    return 0;\n}\n\n// a handle's object deleted, copied and named: one derive made as what it is, another as a B (as C++\n// would through a B; C: B can be copied from outside it)\ntemplate <class B>\nstatic void volt_dir_delete(void *p, void *volt) {\n    if (const volt_dir_ops *o = volt_dir_lookup(p, volt)) {\n        o->del(p);\n    } else {\n        delete (B *)p;\n    }\n}\n\ntemplate <class B, bool C>\nstruct volt_dir_plain {\n    static void *copy(void *p) { return new B(volt_cpp_obj<B>(p)); }\n};\n\ntemplate <class B>\nstruct volt_dir_plain<B, false> {\n    static void *copy(void *) {\n        std::fprintf(stderr, \"panic: a C++ object derive didn't make copied, and only a subclass can copy its class\\n\");\n        std::exit(101);\n    }\n};\n\ntemplate <class B, bool C>\nstatic void *volt_dir_copy(void *p, void *volt, void **out) {\n    *out = 0;\n    if (const volt_dir_ops *o = volt_dir_lookup(p, volt)) {\n        void *c = o->copy(p, out);\n        if (!c) {\n            std::fprintf(stderr, \"panic: a C++ object derive made copied, and its Volt type can't be copied\\n\");\n            std::exit(101);\n        }\n        return c;\n    }\n    return volt_dir_plain<B, C>::copy(p);\n}\n\ntemplate <class B>\nstatic std::string volt_dir_name(void *p, void *volt) {\n    if (const volt_dir_ops *o = volt_dir_lookup(p, volt)) {\n        return o->name(p);\n    }\n    return volt_cpp_type_name(volt_cpp_obj<B>(p));\n}\n\n#if __cplusplus >= 201703L\n// the subclass D (of B) behind a handle, when derive made the object as one: for a protected member,\n// and the Volt side (derived<T>())\ntemplate <class D, class B>\nstatic D *volt_dir_find(void *p, void *volt) {\n    const volt_dir_ops *o = volt_dir_lookup(p, volt);\n    return o && o->tag == &D::volt_tag ? static_cast<D *>((B *)p) : 0;\n}\n\ntemplate <class D, class B>\nstatic D &volt_dir_of(void *p, void *volt) {\n    volt_cpp_obj<B>(p);\n    if (D *d = volt_dir_find<D, B>(p, volt)) {\n        return *d;\n    }\n    std::fprintf(stderr, \"panic: a protected member of a C++ object Volt didn't make with derive\\n\");\n    std::exit(101);\n}\n\ntemplate <class D, class B>\nstatic void *volt_dir_block(void *p) {\n    D *d = volt_dir_find<D, B>(p, 0);\n    return d ? d->volt_d : 0;\n}\n#endif\n";
 
-val CPP_PRELUDE: str = "\n// an exception that reaches Volt stops the program, like a panic\nVOLT_NORETURN static void volt_cpp_throw(const char *what) {\n    std::fprintf(stderr, \"panic: C++ exception: %s\\n\", what);\n    std::exit(101);\n}\n\n// the object behind a handle (Volt holds a class that isn't trivially copyable by pointer)\ntemplate <class T>\nstatic T &volt_cpp_obj(void *p) {\n    if (!p) {\n        std::fprintf(stderr, \"panic: a C++ object Volt holds by handle was never made (its handle is empty)\\n\");\n        std::exit(101);\n    }\n    return *(T *)p;\n}\n\n// C++ exceptions and Volt. Every wrapper catches what its call throws (volt_cpp_caught): in a try_\n// form's call (catch mode: kinds, the import's function numbering exceptions) it records which and\n// returns a zero value, the try_ form returning the error; inside a call C++ made into Volt (jump:\n// that call's, volt_cpp_enter) it keeps the exception (pending) and, once out of its catch, jumps\n// back there, and C++ gets it rethrown with its own type (the Volt frames between are left, their\n// deletes not run); otherwise it stops the program, like a panic. One state for all of a program's\n// C++ units, whatever their standards\nstruct volt_cpp_state {\n    int (*kinds)();\n    int kind;\n    void *jump;    // a std::jmp_buf\n    void *pending; // a std::exception_ptr\n};\nextern \"C\" {\n__attribute__((weak)) __thread volt_cpp_state volt_cpp_st = {0, 0, 0, 0};\n}\n\ntemplate <class T>\nstatic T volt_cpp_zero() {\n    return T();\n}\n\nstatic void volt_cpp_caught() {\n    if (volt_cpp_st.kinds) {\n        if (!volt_cpp_st.kind) {\n            volt_cpp_st.kind = volt_cpp_st.kinds();\n        }\n        return;\n    }\n#if __cplusplus >= 201103L\n    if (volt_cpp_st.jump) {\n        if (!volt_cpp_st.pending) {\n            volt_cpp_st.pending = new std::exception_ptr(std::current_exception());\n        }\n        return;\n    }\n#endif\n    try {\n        throw;\n    } catch (const std::exception &e) {\n        volt_cpp_throw(e.what());\n    } catch (...) {\n        volt_cpp_throw(\"an exception that isn't a std::exception\");\n    }\n}\n\nstatic void volt_cpp_after() {\n#if __cplusplus >= 201103L\n    if (volt_cpp_st.pending && volt_cpp_st.jump) {\n        std::longjmp(*(std::jmp_buf *)volt_cpp_st.jump, 1);\n    }\n#endif\n}\n\n// a try_ form: catch mode on (the mode it was in comes back to be put back), then which exception\n// its call threw (0: none)\nstatic void *volt_cpp_catch_begin(int (*kinds)()) {\n    void *prev = (void *)volt_cpp_st.kinds;\n    volt_cpp_st.kinds = kinds;\n    volt_cpp_st.kind = 0;\n    return prev;\n}\n\nstatic int volt_cpp_catch_end(void *prev) {\n    int k = volt_cpp_st.kind;\n    volt_cpp_st.kinds = (int (*)())prev;\n    volt_cpp_st.kind = 0;\n    return k;\n}\n\n#if __cplusplus >= 201103L\n// C++ calling Volt (f): where an exception thrown in a C++ call the Volt code makes comes back to,\n// to be rethrown here\ntemplate <class R>\nstruct volt_cpp_leave {\n    template <class F>\n    static R run(F &f, const volt_cpp_state &saved) {\n        R r = f();\n        volt_cpp_st = saved;\n        return r;\n    }\n};\n\ntemplate <>\nstruct volt_cpp_leave<void> {\n    template <class F>\n    static void run(F &f, const volt_cpp_state &saved) {\n        f();\n        volt_cpp_st = saved;\n    }\n};\n\ntemplate <class F>\nstatic auto volt_cpp_enter(F f) -> decltype(f()) {\n    std::jmp_buf jb;\n    const volt_cpp_state saved = volt_cpp_st;\n    if (setjmp(jb) != 0) {\n        std::exception_ptr *p = (std::exception_ptr *)volt_cpp_st.pending;\n        volt_cpp_st = saved;\n        std::exception_ptr e = *p;\n        delete p;\n        std::rethrow_exception(e);\n    }\n    volt_cpp_st.kinds = 0;\n    volt_cpp_st.kind = 0;\n    volt_cpp_st.jump = &jb;\n    volt_cpp_st.pending = 0;\n    return volt_cpp_leave<decltype(f())>::run(f, saved);\n}\n#endif\n\n// Volt's str and T[..]\nstruct volt_str {\n    const unsigned char *ptr;\n    size_t len;\n};\n\ntemplate <class T>\nstruct volt_slice {\n    T *ptr;\n    size_t len;\n};\n\n// text copied out of C++, in memory the Volt side frees (std::free); and a view's bytes\nstatic inline volt_str volt_cpp_dup(const char *s, size_t n) {\n    unsigned char *p = (unsigned char *)std::malloc(n ? n : 1);\n    if (!p) {\n        volt_cpp_throw(\"out of memory\");\n    }\n    std::memcpy(p, s, n);\n    volt_str r = {p, n};\n    return r;\n}\n\nstatic inline volt_str volt_cpp_view(const char *s, size_t n) {\n    volt_str r = {(const unsigned char *)s, n};\n    return r;\n}\n\n#if __cplusplus >= 201703L\nstatic inline volt_str volt_cpp_dup(std::string_view s) {\n    return volt_cpp_dup(s.data(), s.size());\n}\n\nstatic inline volt_str volt_cpp_view(std::string_view s) {\n    return volt_cpp_view(s.data(), s.size());\n}\n#else\nstatic inline volt_str volt_cpp_dup(const std::string &s) {\n    return volt_cpp_dup(s.data(), s.size());\n}\n\nstatic inline volt_str volt_cpp_dup(const char *s) {\n    return volt_cpp_dup(s, std::strlen(s));\n}\n\nstatic inline volt_str volt_cpp_view(const std::string &s) {\n    return volt_cpp_view(s.data(), s.size());\n}\n\nstatic inline volt_str volt_cpp_view(const char *s) {\n    return volt_cpp_view(s, std::strlen(s));\n}\n#endif\n\n// a std::vector's elements copied out the same way\ntemplate <class T>\nstatic volt_slice<T> volt_cpp_dup_vec(const std::vector<T> &v) {\n#if __cplusplus >= 201103L\n    static_assert(std::is_trivially_copyable<T>::value, \"Volt copies out a std::vector of plain values\");\n#endif\n    T *p = (T *)std::malloc(sizeof(T) * (v.size() ? v.size() : 1));\n    if (!p) {\n        volt_cpp_throw(\"out of memory\");\n    }\n    std::copy(v.begin(), v.end(), p);\n    volt_slice<T> r = {p, v.size()};\n    return r;\n}\n\n// the types Volt reads by what they can do (form_of in voltc): an optional-like's value, a\n// contiguous one's elements (viewed where they are, or copied out into memory the Volt side frees),\n// a fixed-size one's, a tuple-like's and a variant-like's, into the Volt side's locals; and an\n// optional-like, contiguous or fixed-size one made from Volt's\ntemplate <class O, class T>\nstatic bool volt_cpp_opt_out(const O &o, T &out) {\n    if (!(o ? true : false)) {\n        return false;\n    }\n    out = (T)(*o);\n    return true;\n}\n\ntemplate <class T>\nstruct volt_opt {\n    T v;\n    bool has;\n};\n\ntemplate <class O, class T>\nstatic O volt_cpp_opt_in(const void *p) {\n    const volt_opt<T> *o = (const volt_opt<T> *)p;\n    if (o->has) {\n        return O(o->v);\n    }\n    return O();\n}\n\ntemplate <class C>\nstruct volt_seq {\n    const C &c;\n    bool dup;\n    template <class T>\n    operator volt_slice<T>() const {\n        size_t n = c.size();\n        T *p = (T *)c.data();\n        if (dup) {\n            p = (T *)std::malloc(sizeof(T) * (n ? n : 1));\n            if (!p) {\n                volt_cpp_throw(\"out of memory\");\n            }\n            for (size_t i = 0; i < n; i++) {\n                p[i] = (T)c.data()[i];\n            }\n        }\n        volt_slice<T> r = {p, n};\n        return r;\n    }\n    operator volt_str() const {\n        if (dup) {\n            return volt_cpp_dup((const char *)c.data(), c.size());\n        }\n        return volt_cpp_view((const char *)c.data(), c.size());\n    }\n};\n\ntemplate <class C>\nstatic volt_seq<C> volt_cpp_seq_view(const C &c) {\n    volt_seq<C> s = {c, false};\n    return s;\n}\n\ntemplate <class C>\nstatic volt_seq<C> volt_cpp_seq_dup(const C &c) {\n    volt_seq<C> s = {c, true};\n    return s;\n}\n\ntemplate <class C>\nstatic void volt_cpp_copy_out(const C &c, void *out) {\n    std::memcpy(out, (const void *)c.data(), sizeof(*c.data()) * c.size());\n}\n\ntemplate <class C>\nstatic C volt_cpp_copy_in(const void *p) {\n    C c;\n    std::memcpy((void *)c.data(), p, sizeof(*c.data()) * c.size());\n    return c;\n}\n\n#if __cplusplus >= 201103L\ntemplate <size_t I, class P>\nstatic void volt_cpp_get(const P &) {}\n\ntemplate <size_t I, class P, class T, class... R>\nstatic void volt_cpp_get(const P &p, T &out, R &... rest) {\n    using std::get;\n    out = (T)(get<I>(p));\n    volt_cpp_get<I + 1>(p, rest...);\n}\n\ntemplate <size_t I, class V>\nstatic void volt_cpp_alt(const V &, size_t) {}\n\ntemplate <size_t I, class V, class T, class... R>\nstatic void volt_cpp_alt(const V &v, size_t i, T &out, R &... rest) {\n    using std::get;\n    if (i == I) {\n        out = (T)(get<I>(v));\n    } else {\n        volt_cpp_alt<I + 1>(v, i, rest...);\n    }\n}\n\ntemplate <class V, class... T>\nstatic size_t volt_cpp_variant_out(const V &v, T &... out) {\n    size_t i = v.index();\n    if (i >= sizeof...(T)) {\n        volt_cpp_throw(\"a variant with no value (valueless by exception)\");\n    }\n    volt_cpp_alt<0>(v, i, out...);\n    return i;\n}\n#endif\n\n#if __cplusplus >= 201103L\n// std::function and Volt: a Volt fn(...) value is its function (taking the env first) and its env;\n// what a Volt function takes and gives for a C++ type (text as volt_str, an enum as its integer)\nstruct volt_fnval {\n    void *fn;\n    void *env;\n};\n\ntemplate <class T, class = void>\nstruct volt_abi {\n    typedef T type;\n    static T in(T v) { return v; }\n    static T out(T v) { return v; }\n};\n\ntemplate <class T>\nstruct volt_abi<T, typename std::enable_if<std::is_enum<T>::value>::type> {\n    typedef typename std::underlying_type<T>::type type;\n    static type in(T v) { return (type)v; }\n    static T out(type v) { return (T)v; }\n};\n\n#if __cplusplus >= 201703L\ntemplate <>\nstruct volt_abi<std::string_view> {\n    typedef volt_str type;\n    static volt_str in(std::string_view s) { return volt_cpp_view(s); }\n};\n#endif\n\ntemplate <>\nstruct volt_abi<std::string> {\n    typedef volt_str type;\n    static volt_str in(const std::string &s) { return volt_cpp_view(s); }\n};\n\n// a call of the Volt fn f, giving R (or nothing)\ntemplate <class R, class... A>\nstruct volt_call {\n    static R run(volt_fnval f, A... a) {\n        typedef typename volt_abi<R>::type (*Fn)(void *, typename volt_abi<typename std::decay<A>::type>::type...);\n        return volt_abi<R>::out(volt_cpp_enter([&]() { return ((Fn)f.fn)(f.env, volt_abi<typename std::decay<A>::type>::in(a)...); }));\n    }\n};\n\ntemplate <class... A>\nstruct volt_call<void, A...> {\n    static void run(volt_fnval f, A... a) {\n        volt_cpp_enter([&]() { ((void (*)(void *, typename volt_abi<typename std::decay<A>::type>::type...))f.fn)(f.env, volt_abi<typename std::decay<A>::type>::in(a)...); });\n    }\n};\n\n// a Volt fn value (at p) as a std::function\ntemplate <class R, class... A>\nstatic std::function<R(A...)> volt_cpp_fn(void *p) {\n    volt_fnval f = *(volt_fnval *)p;\n    return [f](A... a) -> R { return volt_call<R, A...>::run(f, a...); };\n}\n\n// a std::function a field keeps: the closure's function (fv's) with the boxed closure as its env,\n// the box deleted by drop when the last copy goes\ntemplate <class S>\nstruct volt_owned_fn_of;\n\ntemplate <class R, class... A>\nstruct volt_owned_fn_of<R(A...)> {\n    static std::function<R(A...)> make(void *fv, void *box, void (*drop)(void *)) {\n        volt_fnval f = *(volt_fnval *)fv;\n        f.env = box;\n        std::shared_ptr<void> keep(box, drop);\n        return [f, keep](A... a) -> R { return volt_call<R, A...>::run(f, a...); };\n    }\n};\n\ntemplate <class S>\nstatic std::function<S> volt_cpp_owned_fn(void *fv, void *box, void (*drop)(void *)) {\n    return volt_owned_fn_of<S>::make(fv, box, drop);\n}\n\n// a std::function C++ gave Volt (stdcxx::function), and its callable for one signature (sig: that\n// signature's tag)\ntemplate <class S>\nstruct volt_sig {\n    static char tag;\n};\n\ntemplate <class S>\nchar volt_sig<S>::tag = 0;\n\nstruct volt_fn_box {\n    const void *sig;\n    explicit volt_fn_box(const void *s) : sig(s) {}\n    virtual ~volt_fn_box() = default;\n};\n\ntemplate <class S>\nstruct volt_fn_holder : volt_fn_box {\n    std::function<S> f;\n    volt_fn_holder(std::function<S> g) : volt_fn_box(&volt_sig<S>::tag), f(std::move(g)) {}\n};\n\ntemplate <class S>\nstatic std::function<S> &volt_cpp_holder(void *p) {\n    volt_fn_box *b = (volt_fn_box *)p;\n    volt_fn_holder<S> *h = b && b->sig == &volt_sig<S>::tag ? static_cast<volt_fn_holder<S> *>(b) : nullptr;\n    if (!h) {\n        std::fprintf(stderr, \"panic: a stdcxx::function called with another signature's arguments, or empty\\n\");\n        std::exit(101);\n    }\n    return h->f;\n}\n#endif\n\n// what the exception a try_ form caught said (a kinds function sets it)\nstatic VOLT_TLS std::string volt_cpp_last;\n\n\n// a handle's object for a by-value parameter: moved from when the handle owns it, copied when it\n// only borrows it (as_Base's: the object is something else's) and Volt found it copies (C: C++'s\n// is_copy_constructible says yes for a class whose copy doesn't compile)\nstruct volt_handle {\n    void *cpp;\n    bool borrowed;\n};\n\n#if __cplusplus >= 201103L\ntemplate <class T>\nstatic T volt_cpp_copy(T &o, std::true_type) {\n    return o;\n}\n\ntemplate <class T>\nstatic T volt_cpp_copy(T &, std::false_type) {\n    std::fprintf(stderr, \"panic: a borrowed C++ object passed by value, and it can't be copied\\n\");\n    std::exit(101);\n}\n#endif\n\ntemplate <class T, bool C>\nstatic T volt_cpp_take(void *h) {\n    volt_handle *v = (volt_handle *)h;\n    T &o = volt_cpp_obj<T>(v->cpp);\n#if __cplusplus >= 201103L\n    if (v->borrowed) {\n        return volt_cpp_copy(o, std::integral_constant<bool, C>());\n    }\n    return std::move(o);\n#else\n    return o; // no moves before C++11: copied either way\n#endif\n}\n\n// what needs RTTI: an object's dynamic type's name, a cast to a derived class (without RTTI they stop\n// the program, when called)\nVOLT_NORETURN static void volt_cpp_no_rtti(const char *what) {\n    std::fprintf(stderr, \"panic: %s needs RTTI, and the C++ was built without it (-fno-rtti)\\n\", what);\n    std::exit(101);\n}\n\ntemplate <class D, class B>\nstatic D *volt_cpp_down(B *p) {\n#if VOLT_RTTI\n    return dynamic_cast<D *>(p);\n#else\n    volt_cpp_no_rtti(\"a cast to a derived class (as_)\");\n#endif\n}\n\nstatic inline std::string volt_cpp_demangle(const char *name);\n\ntemplate <class T>\nstatic std::string volt_cpp_type_name(const T &o) {\n#if VOLT_RTTI\n    return volt_cpp_demangle(typeid(o).name());\n#else\n    volt_cpp_no_rtti(\"cpp_type_name\");\n#endif\n}\n\n// a type's name as C++ writes it (typeid's, demangled where the C++ library can)\nstatic inline std::string volt_cpp_demangle(const char *name) {\n#if __has_include(<cxxabi.h>)\n    int status = 0;\n    char *d = abi::__cxa_demangle(name, 0, 0, &status);\n    if (d) {\n        std::string s = d;\n        std::free(d);\n        return s;\n    }\n#endif\n    return name;\n}\n\n// Volt's subclasses of C++ classes (derive): a type spelled anywhere\n#if __cplusplus >= 201103L\ntemplate <class T>\nusing volt_id = T;\n#endif\n\n#if __cplusplus >= 201103L\n#include <iterator>\n#endif\n\n#if __cplusplus >= 201103L\n// a range Volt loops over (for (x) in r): what begin(r) and end(r) give (end's may be a sentinel), and\n// *it++ by value\nnamespace volt_rng {\nusing std::begin;\nusing std::end;\ntemplate <class R>\nauto b(R &r) -> decltype(begin(r)) {\n    return begin(r);\n}\ntemplate <class R>\nauto e(R &r) -> decltype(end(r)) {\n    return end(r);\n}\n}\ntemplate <class R>\nstruct volt_range_of {\n    typedef decltype(volt_rng::b(std::declval<R &>())) it;\n    typedef decltype(volt_rng::e(std::declval<R &>())) end;\n    typedef typename std::decay<decltype(*std::declval<it &>())>::type elem;\n};\ntemplate <class R>\nstatic void volt_range_start(R &r, void *it, void *end) {\n    new (it) typename volt_range_of<R>::it(volt_rng::b(r));\n    new (end) typename volt_range_of<R>::end(volt_rng::e(r));\n}\ntemplate <class R>\nstatic bool volt_range_done(void *it, void *end) {\n    return *(typename volt_range_of<R>::it *)it == *(typename volt_range_of<R>::end *)end;\n}\ntemplate <class R>\nstatic typename volt_range_of<R>::elem volt_range_take(void *it) {\n    typename volt_range_of<R>::it &i = *(typename volt_range_of<R>::it *)it;\n    typename volt_range_of<R>::elem v = *i;\n    ++i;\n    return v;\n}\n#endif\n\n#if __cplusplus >= 201103L\n// a Volt tuple's field I, where C lays out a struct of the fields T...\ntemplate <size_t I, size_t At, class... T>\nstruct volt_field;\ntemplate <size_t At, class F, class... T>\nstruct volt_field<0, At, F, T...> {\n    static const size_t at = (At + alignof(F) - 1) / alignof(F) * alignof(F);\n    typedef F type;\n};\ntemplate <size_t I, size_t At, class F, class... T>\nstruct volt_field<I, At, F, T...> : volt_field<I - 1, (At + alignof(F) - 1) / alignof(F) * alignof(F) + sizeof(F), T...> {};\ntemplate <size_t I, class... T>\nstatic const typename volt_field<I, 0, T...>::type &volt_tuple_at(const void *p) {\n    return *(const typename volt_field<I, 0, T...>::type *)((const char *)p + volt_field<I, 0, T...>::at);\n}\n#endif\n#if __cplusplus >= 201703L\n// a variant-like made from the Volt enum it reads as: its u32 tag, then the variant's value where C\n// puts the union of them\ntemplate <class... A>\nstruct volt_max_align {\n    static const size_t v = 1;\n};\ntemplate <class F, class... A>\nstruct volt_max_align<F, A...> {\n    static const size_t v = alignof(F) > volt_max_align<A...>::v ? alignof(F) : volt_max_align<A...>::v;\n};\ntemplate <class X, size_t I, size_t Off, class... A>\nstruct volt_alt_in {\n    static X make(const char *, uint32_t) { volt_cpp_throw(\"a Volt enum's tag names no variant\"); }\n};\ntemplate <class X, size_t I, size_t Off, class F, class... A>\nstruct volt_alt_in<X, I, Off, F, A...> {\n    static X make(const char *p, uint32_t tag) {\n        if (tag == I) {\n            return X(std::in_place_index<I>, *(const F *)(p + Off));\n        }\n        return volt_alt_in<X, I + 1, Off, A...>::make(p, tag);\n    }\n};\ntemplate <class X, class... A>\nstatic X volt_variant_in(const void *p) {\n    const size_t al = volt_max_align<A...>::v;\n    return volt_alt_in<X, 0, (sizeof(uint32_t) + al - 1) / al * al, A...>::make((const char *)p, *(const uint32_t *)p);\n}\n#endif\n\n// a reference result: the address of what it refers to (operator& or not), for a borrowed handle\ntemplate <class T>\nstatic void *volt_cpp_addr(const T &r) {\n    return (void *)&reinterpret_cast<const volatile char &>(r);\n}\n\n// a T* parameter from a Volt H* (null, or the handle's object)\ntemplate <class T>\nstatic T *volt_cpp_ptr(void *h) {\n    return h ? (T *)((volt_handle *)h)->cpp : 0;\n}\n\n#if __cplusplus >= 201103L\ntemplate <class T>\nstatic T *volt_cpp_clone(T *p, std::true_type) {\n    return new T(*p);\n}\n\ntemplate <class T>\nstatic T *volt_cpp_clone(T *, std::false_type) {\n    std::fprintf(stderr, \"panic: a borrowed C++ object handed over to be owned, and it can't be copied\\n\");\n    std::exit(101);\n}\n\n// a std::unique_ptr parameter's object: the handle's, which it no longer owns (its delete does\n// nothing), or a copy of a borrowed one's\ntemplate <class T, bool C>\nstatic T *volt_cpp_release(void *h) {\n    volt_handle *v = (volt_handle *)h;\n    T *p = &volt_cpp_obj<T>(v->cpp);\n    if (v->borrowed) {\n        return volt_cpp_clone(p, std::integral_constant<bool, C>());\n    }\n    v->cpp = 0;\n    return p;\n}\n#endif\n";
+val CPP_PRELUDE: str = "\n// an exception that reaches Volt stops the program, like a panic\nVOLT_NORETURN static void volt_cpp_throw(const char *what) {\n    std::fprintf(stderr, \"panic: C++ exception: %s\\n\", what);\n    std::exit(101);\n}\n\n// the object behind a handle (Volt holds a class that isn't trivially copyable by pointer)\ntemplate <class T>\nstatic T &volt_cpp_obj(void *p) {\n    if (!p) {\n        std::fprintf(stderr, \"panic: a C++ object Volt holds by handle was never made (its handle is empty)\\n\");\n        std::exit(101);\n    }\n    return *(T *)p;\n}\n\n// C++ exceptions and Volt. Every wrapper catches what its call throws (volt_cpp_caught): in a try_\n// form's call (catch mode: kinds, the import's function numbering exceptions) it records which and\n// returns a zero value, the try_ form returning the error; inside a call C++ made into Volt (jump:\n// that call's, volt_cpp_enter) it keeps the exception (pending) and, once out of its catch, jumps\n// back there, and C++ gets it rethrown with its own type (the Volt frames between are left, their\n// deletes not run); otherwise it stops the program, like a panic. One state for all of a program's\n// C++ units, whatever their standards\nstruct volt_cpp_state {\n    int (*kinds)();\n    int kind;\n    void *jump;    // a std::jmp_buf\n    void *pending; // a std::exception_ptr\n};\nextern \"C\" {\n__attribute__((weak)) __thread volt_cpp_state volt_cpp_st = {0, 0, 0, 0};\n}\n\ntemplate <class T>\nstatic T volt_cpp_zero() {\n    return T();\n}\n\nstatic void volt_cpp_caught() {\n    if (volt_cpp_st.kinds) {\n        if (!volt_cpp_st.kind) {\n            volt_cpp_st.kind = volt_cpp_st.kinds();\n        }\n        return;\n    }\n#if __cplusplus >= 201103L\n    if (volt_cpp_st.jump) {\n        if (!volt_cpp_st.pending) {\n            volt_cpp_st.pending = new std::exception_ptr(std::current_exception());\n        }\n        return;\n    }\n#endif\n    try {\n        throw;\n    } catch (const std::exception &e) {\n        volt_cpp_throw(e.what());\n    } catch (...) {\n        volt_cpp_throw(\"an exception that isn't a std::exception\");\n    }\n}\n\nstatic void volt_cpp_after() {\n#if __cplusplus >= 201103L\n    if (volt_cpp_st.pending && volt_cpp_st.jump) {\n        std::longjmp(*(std::jmp_buf *)volt_cpp_st.jump, 1);\n    }\n#endif\n}\n\n// a try_ form: catch mode on (the mode it was in comes back to be put back), then which exception\n// its call threw (0: none)\nstatic void *volt_cpp_catch_begin(int (*kinds)()) {\n    void *prev = (void *)volt_cpp_st.kinds;\n    volt_cpp_st.kinds = kinds;\n    volt_cpp_st.kind = 0;\n    return prev;\n}\n\nstatic int volt_cpp_catch_end(void *prev) {\n    int k = volt_cpp_st.kind;\n    volt_cpp_st.kinds = (int (*)())prev;\n    volt_cpp_st.kind = 0;\n    return k;\n}\n\n#if __cplusplus >= 201103L\n// C++ calling Volt (f): where an exception thrown in a C++ call the Volt code makes comes back to,\n// to be rethrown here\ntemplate <class R>\nstruct volt_cpp_leave {\n    template <class F>\n    static R run(F &f, const volt_cpp_state &saved) {\n        R r = f();\n        volt_cpp_st = saved;\n        return r;\n    }\n};\n\ntemplate <>\nstruct volt_cpp_leave<void> {\n    template <class F>\n    static void run(F &f, const volt_cpp_state &saved) {\n        f();\n        volt_cpp_st = saved;\n    }\n};\n\ntemplate <class F>\nstatic auto volt_cpp_enter(F f) -> decltype(f()) {\n    std::jmp_buf jb;\n    const volt_cpp_state saved = volt_cpp_st;\n    if (setjmp(jb) != 0) {\n        std::exception_ptr *p = (std::exception_ptr *)volt_cpp_st.pending;\n        volt_cpp_st = saved;\n        std::exception_ptr e = *p;\n        delete p;\n        std::rethrow_exception(e);\n    }\n    volt_cpp_st.kinds = 0;\n    volt_cpp_st.kind = 0;\n    volt_cpp_st.jump = &jb;\n    volt_cpp_st.pending = 0;\n    return volt_cpp_leave<decltype(f())>::run(f, saved);\n}\n#endif\n\n// Volt's str and T[..]\nstruct volt_str {\n    const unsigned char *ptr;\n    size_t len;\n};\n\ntemplate <class T>\nstruct volt_slice {\n    T *ptr;\n    size_t len;\n};\n\n// text copied out of C++, in memory the Volt side frees (std::free); and a view's bytes\nstatic inline volt_str volt_cpp_dup(const char *s, size_t n) {\n    unsigned char *p = (unsigned char *)std::malloc(n ? n : 1);\n    if (!p) {\n        volt_cpp_throw(\"out of memory\");\n    }\n    std::memcpy(p, s, n);\n    volt_str r = {p, n};\n    return r;\n}\n\nstatic inline volt_str volt_cpp_view(const char *s, size_t n) {\n    volt_str r = {(const unsigned char *)s, n};\n    return r;\n}\n\n#if __cplusplus >= 201703L\nstatic inline volt_str volt_cpp_dup(std::string_view s) {\n    return volt_cpp_dup(s.data(), s.size());\n}\n\nstatic inline volt_str volt_cpp_view(std::string_view s) {\n    return volt_cpp_view(s.data(), s.size());\n}\n#else\nstatic inline volt_str volt_cpp_dup(const std::string &s) {\n    return volt_cpp_dup(s.data(), s.size());\n}\n\nstatic inline volt_str volt_cpp_dup(const char *s) {\n    return volt_cpp_dup(s, std::strlen(s));\n}\n\nstatic inline volt_str volt_cpp_view(const std::string &s) {\n    return volt_cpp_view(s.data(), s.size());\n}\n\nstatic inline volt_str volt_cpp_view(const char *s) {\n    return volt_cpp_view(s, std::strlen(s));\n}\n#endif\n\n// a std::vector's elements copied out the same way\ntemplate <class T>\nstatic volt_slice<T> volt_cpp_dup_vec(const std::vector<T> &v) {\n#if __cplusplus >= 201103L\n    static_assert(std::is_trivially_copyable<T>::value, \"Volt copies out a std::vector of plain values\");\n#endif\n    T *p = (T *)std::malloc(sizeof(T) * (v.size() ? v.size() : 1));\n    if (!p) {\n        volt_cpp_throw(\"out of memory\");\n    }\n    std::copy(v.begin(), v.end(), p);\n    volt_slice<T> r = {p, v.size()};\n    return r;\n}\n\n// the types Volt reads by what they can do (form_of in voltc): an optional-like's value, a\n// contiguous one's elements (viewed where they are, or copied out into memory the Volt side frees),\n// a fixed-size one's, a tuple-like's and a variant-like's, into the Volt side's locals; and an\n// optional-like, contiguous or fixed-size one made from Volt's\ntemplate <class O, class T>\nstatic bool volt_cpp_opt_out(const O &o, T &out) {\n    if (!(o ? true : false)) {\n        return false;\n    }\n    out = (T)(*o);\n    return true;\n}\n\ntemplate <class T>\nstruct volt_opt {\n    T v;\n    bool has;\n};\n\ntemplate <class O, class T>\nstatic O volt_cpp_opt_in(const void *p) {\n    const volt_opt<T> *o = (const volt_opt<T> *)p;\n    if (o->has) {\n        return O(o->v);\n    }\n    return O();\n}\n\ntemplate <class C>\nstruct volt_seq {\n    const C &c;\n    bool dup;\n    template <class T>\n    operator volt_slice<T>() const {\n        size_t n = c.size();\n        T *p = (T *)c.data();\n        if (dup) {\n            p = (T *)std::malloc(sizeof(T) * (n ? n : 1));\n            if (!p) {\n                volt_cpp_throw(\"out of memory\");\n            }\n            for (size_t i = 0; i < n; i++) {\n                p[i] = (T)c.data()[i];\n            }\n        }\n        volt_slice<T> r = {p, n};\n        return r;\n    }\n    operator volt_str() const {\n        if (dup) {\n            return volt_cpp_dup((const char *)c.data(), c.size());\n        }\n        return volt_cpp_view((const char *)c.data(), c.size());\n    }\n};\n\ntemplate <class C>\nstatic volt_seq<C> volt_cpp_seq_view(const C &c) {\n    volt_seq<C> s = {c, false};\n    return s;\n}\n\ntemplate <class C>\nstatic volt_seq<C> volt_cpp_seq_dup(const C &c) {\n    volt_seq<C> s = {c, true};\n    return s;\n}\n\ntemplate <class C>\nstatic void volt_cpp_copy_out(const C &c, void *out) {\n    std::memcpy(out, (const void *)c.data(), sizeof(*c.data()) * c.size());\n}\n\ntemplate <class C>\nstatic C volt_cpp_copy_in(const void *p) {\n    C c;\n    std::memcpy((void *)c.data(), p, sizeof(*c.data()) * c.size());\n    return c;\n}\n\n#if __cplusplus >= 201103L\ntemplate <size_t I, class P>\nstatic void volt_cpp_get(const P &) {}\n\ntemplate <size_t I, class P, class T, class... R>\nstatic void volt_cpp_get(const P &p, T &out, R &... rest) {\n    using std::get;\n    out = (T)(get<I>(p));\n    volt_cpp_get<I + 1>(p, rest...);\n}\n\ntemplate <size_t I, class V>\nstatic void volt_cpp_alt(const V &, size_t) {}\n\ntemplate <size_t I, class V, class T, class... R>\nstatic void volt_cpp_alt(const V &v, size_t i, T &out, R &... rest) {\n    using std::get;\n    if (i == I) {\n        out = (T)(get<I>(v));\n    } else {\n        volt_cpp_alt<I + 1>(v, i, rest...);\n    }\n}\n\ntemplate <class V, class... T>\nstatic size_t volt_cpp_variant_out(const V &v, T &... out) {\n    size_t i = v.index();\n    if (i >= sizeof...(T)) {\n        volt_cpp_throw(\"a variant with no value (valueless by exception)\");\n    }\n    volt_cpp_alt<0>(v, i, out...);\n    return i;\n}\n#endif\n\n#if __cplusplus >= 201103L\n// std::function and Volt: a Volt fn(...) value is its function (taking the env first) and its env;\n// what a Volt function takes and gives for a C++ type (text as volt_str, an enum as its integer)\nstruct volt_fnval {\n    void *fn;\n    void *env;\n};\n\ntemplate <class T, class = void>\nstruct volt_abi {\n    typedef T type;\n    static T in(T v) { return v; }\n    static T out(T v) { return v; }\n};\n\ntemplate <class T>\nstruct volt_abi<T, typename std::enable_if<std::is_enum<T>::value>::type> {\n    typedef typename std::underlying_type<T>::type type;\n    static type in(T v) { return (type)v; }\n    static T out(type v) { return (T)v; }\n};\n\n#if __cplusplus >= 201703L\ntemplate <>\nstruct volt_abi<std::string_view> {\n    typedef volt_str type;\n    static volt_str in(std::string_view s) { return volt_cpp_view(s); }\n};\n#endif\n\ntemplate <>\nstruct volt_abi<std::string> {\n    typedef volt_str type;\n    static volt_str in(const std::string &s) { return volt_cpp_view(s); }\n};\n\n// a call of the Volt fn f, giving R (or nothing)\ntemplate <class R, class... A>\nstruct volt_call {\n    static R run(volt_fnval f, A... a) {\n        typedef typename volt_abi<R>::type (*Fn)(void *, typename volt_abi<typename std::decay<A>::type>::type...);\n        return volt_abi<R>::out(volt_cpp_enter([&]() { return ((Fn)f.fn)(f.env, volt_abi<typename std::decay<A>::type>::in(a)...); }));\n    }\n};\n\ntemplate <class... A>\nstruct volt_call<void, A...> {\n    static void run(volt_fnval f, A... a) {\n        volt_cpp_enter([&]() { ((void (*)(void *, typename volt_abi<typename std::decay<A>::type>::type...))f.fn)(f.env, volt_abi<typename std::decay<A>::type>::in(a)...); });\n    }\n};\n\n// a Volt fn value (at p) as a std::function\ntemplate <class R, class... A>\nstatic std::function<R(A...)> volt_cpp_fn(void *p) {\n    volt_fnval f = *(volt_fnval *)p;\n    return [f](A... a) -> R { return volt_call<R, A...>::run(f, a...); };\n}\n\n// a std::function a field keeps: the closure's function (fv's) with the boxed closure as its env,\n// the box deleted by drop when the last copy goes\ntemplate <class S>\nstruct volt_owned_fn_of;\n\ntemplate <class R, class... A>\nstruct volt_owned_fn_of<R(A...)> {\n    static std::function<R(A...)> make(void *fv, void *box, void (*drop)(void *)) {\n        volt_fnval f = *(volt_fnval *)fv;\n        f.env = box;\n        std::shared_ptr<void> keep(box, drop);\n        return [f, keep](A... a) -> R { return volt_call<R, A...>::run(f, a...); };\n    }\n};\n\ntemplate <class S>\nstatic std::function<S> volt_cpp_owned_fn(void *fv, void *box, void (*drop)(void *)) {\n    return volt_owned_fn_of<S>::make(fv, box, drop);\n}\n\n// a std::function C++ gave Volt (stdcxx::function), and its callable for one signature (sig: that\n// signature's tag)\ntemplate <class S>\nstruct volt_sig {\n    static char tag;\n};\n\ntemplate <class S>\nchar volt_sig<S>::tag = 0;\n\nstruct volt_fn_box {\n    const void *sig;\n    explicit volt_fn_box(const void *s) : sig(s) {}\n    virtual ~volt_fn_box() = default;\n};\n\ntemplate <class S>\nstruct volt_fn_holder : volt_fn_box {\n    std::function<S> f;\n    volt_fn_holder(std::function<S> g) : volt_fn_box(&volt_sig<S>::tag), f(std::move(g)) {}\n};\n\ntemplate <class S>\nstatic std::function<S> &volt_cpp_holder(void *p) {\n    volt_fn_box *b = (volt_fn_box *)p;\n    volt_fn_holder<S> *h = b && b->sig == &volt_sig<S>::tag ? static_cast<volt_fn_holder<S> *>(b) : nullptr;\n    if (!h) {\n        std::fprintf(stderr, \"panic: a stdcxx::function called with another signature's arguments, or empty\\n\");\n        std::exit(101);\n    }\n    return h->f;\n}\n#endif\n\n// what the exception a try_ form caught said (a kinds function sets it)\nstatic VOLT_TLS std::string volt_cpp_last;\n\n\n// a handle's object for a by-value parameter: moved from when the handle owns it, copied when it\n// only borrows it (as_Base's: the object is something else's) and Volt found it copies (C: C++'s\n// is_copy_constructible says yes for a class whose copy doesn't compile)\nstruct volt_handle {\n    void *cpp;\n    bool borrowed;\n};\n\n#if __cplusplus >= 201103L\ntemplate <class T>\nstatic T volt_cpp_copy(T &o, std::true_type) {\n    return o;\n}\n\ntemplate <class T>\nstatic T volt_cpp_copy(T &, std::false_type) {\n    std::fprintf(stderr, \"panic: a borrowed C++ object passed by value, and it can't be copied\\n\");\n    std::exit(101);\n}\n#endif\n\ntemplate <class T, bool C>\nstatic T volt_cpp_take(void *h) {\n    volt_handle *v = (volt_handle *)h;\n    T &o = volt_cpp_obj<T>(v->cpp);\n#if __cplusplus >= 201103L\n    if (v->borrowed) {\n        return volt_cpp_copy(o, std::integral_constant<bool, C>());\n    }\n    return std::move(o);\n#else\n    return o; // no moves before C++11: copied either way\n#endif\n}\n\n// what needs RTTI: an object's dynamic type's name, a cast to a derived class (without RTTI they stop\n// the program, when called)\nVOLT_NORETURN static void volt_cpp_no_rtti(const char *what) {\n    std::fprintf(stderr, \"panic: %s needs RTTI, and the C++ was built without it (-fno-rtti)\\n\", what);\n    std::exit(101);\n}\n\ntemplate <class D, class B>\nstatic D *volt_cpp_down(B *p) {\n#if VOLT_RTTI\n    return dynamic_cast<D *>(p);\n#else\n    volt_cpp_no_rtti(\"a cast to a derived class (as_)\");\n#endif\n}\n\nstatic inline std::string volt_cpp_demangle(const char *name);\n\ntemplate <class T>\nstatic std::string volt_cpp_type_name(const T &o) {\n#if VOLT_RTTI\n    return volt_cpp_demangle(typeid(o).name());\n#else\n    volt_cpp_no_rtti(\"cpp_type_name\");\n#endif\n}\n\n// a type's name as C++ writes it (typeid's, demangled where the C++ library can)\nstatic inline std::string volt_cpp_demangle(const char *name) {\n#if __has_include(<cxxabi.h>)\n    int status = 0;\n    char *d = abi::__cxa_demangle(name, 0, 0, &status);\n    if (d) {\n        std::string s = d;\n        std::free(d);\n        return s;\n    }\n#endif\n    return name;\n}\n\n// Volt's subclasses of C++ classes (derive): a type spelled anywhere\n#if __cplusplus >= 201103L\ntemplate <class T>\nusing volt_id = T;\n#endif\n\n#if __cplusplus >= 201103L\n// a range Volt loops over (for (x) in r): what begin(r) and end(r) give (end's may be a sentinel), and\n// *it++ by value\nnamespace volt_rng {\nusing std::begin;\nusing std::end;\ntemplate <class R>\nauto b(R &r) -> decltype(begin(r)) {\n    return begin(r);\n}\ntemplate <class R>\nauto e(R &r) -> decltype(end(r)) {\n    return end(r);\n}\n}\ntemplate <class R>\nstruct volt_range_of {\n    typedef decltype(volt_rng::b(std::declval<R &>())) it;\n    typedef decltype(volt_rng::e(std::declval<R &>())) end;\n    typedef typename std::decay<decltype(*std::declval<it &>())>::type elem;\n};\ntemplate <class R>\nstatic void volt_range_start(R &r, void *it, void *end) {\n    new (it) typename volt_range_of<R>::it(volt_rng::b(r));\n    new (end) typename volt_range_of<R>::end(volt_rng::e(r));\n}\ntemplate <class R>\nstatic bool volt_range_done(void *it, void *end) {\n    return *(typename volt_range_of<R>::it *)it == *(typename volt_range_of<R>::end *)end;\n}\ntemplate <class R>\nstatic typename volt_range_of<R>::elem volt_range_take(void *it) {\n    typename volt_range_of<R>::it &i = *(typename volt_range_of<R>::it *)it;\n    typename volt_range_of<R>::elem v = *i;\n    ++i;\n    return v;\n}\n#endif\n\n#if __cplusplus >= 201103L\n// a Volt tuple's field I, where C lays out a struct of the fields T...\ntemplate <size_t I, size_t At, class... T>\nstruct volt_field;\ntemplate <size_t At, class F, class... T>\nstruct volt_field<0, At, F, T...> {\n    static const size_t at = (At + alignof(F) - 1) / alignof(F) * alignof(F);\n    typedef F type;\n};\ntemplate <size_t I, size_t At, class F, class... T>\nstruct volt_field<I, At, F, T...> : volt_field<I - 1, (At + alignof(F) - 1) / alignof(F) * alignof(F) + sizeof(F), T...> {};\ntemplate <size_t I, class... T>\nstatic const typename volt_field<I, 0, T...>::type &volt_tuple_at(const void *p) {\n    return *(const typename volt_field<I, 0, T...>::type *)((const char *)p + volt_field<I, 0, T...>::at);\n}\n#endif\n#if __cplusplus >= 201703L\n// a variant-like made from the Volt enum it reads as: its u32 tag, then the variant's value where C\n// puts the union of them\ntemplate <class... A>\nstruct volt_max_align {\n    static const size_t v = 1;\n};\ntemplate <class F, class... A>\nstruct volt_max_align<F, A...> {\n    static const size_t v = alignof(F) > volt_max_align<A...>::v ? alignof(F) : volt_max_align<A...>::v;\n};\ntemplate <class X, size_t I, size_t Off, class... A>\nstruct volt_alt_in {\n    static X make(const char *, uint32_t) { volt_cpp_throw(\"a Volt enum's tag names no variant\"); }\n};\ntemplate <class X, size_t I, size_t Off, class F, class... A>\nstruct volt_alt_in<X, I, Off, F, A...> {\n    static X make(const char *p, uint32_t tag) {\n        if (tag == I) {\n            return X(std::in_place_index<I>, *(const F *)(p + Off));\n        }\n        return volt_alt_in<X, I + 1, Off, A...>::make(p, tag);\n    }\n};\ntemplate <class X, class... A>\nstatic X volt_variant_in(const void *p) {\n    const size_t al = volt_max_align<A...>::v;\n    return volt_alt_in<X, 0, (sizeof(uint32_t) + al - 1) / al * al, A...>::make((const char *)p, *(const uint32_t *)p);\n}\n#endif\n\n// a reference result: the address of what it refers to (operator& or not), for a borrowed handle\ntemplate <class T>\nstatic void *volt_cpp_addr(const T &r) {\n    return (void *)&reinterpret_cast<const volatile char &>(r);\n}\n\n// a T* parameter from a Volt H* (null, or the handle's object)\ntemplate <class T>\nstatic T *volt_cpp_ptr(void *h) {\n    return h ? (T *)((volt_handle *)h)->cpp : 0;\n}\n\n#if __cplusplus >= 201103L\ntemplate <class T>\nstatic T *volt_cpp_clone(T *p, std::true_type) {\n    return new T(*p);\n}\n\ntemplate <class T>\nstatic T *volt_cpp_clone(T *, std::false_type) {\n    std::fprintf(stderr, \"panic: a borrowed C++ object handed over to be owned, and it can't be copied\\n\");\n    std::exit(101);\n}\n\n// a std::unique_ptr parameter's object: the handle's, which it no longer owns (its delete does\n// nothing), or a copy of a borrowed one's\ntemplate <class T, bool C>\nstatic T *volt_cpp_release(void *h) {\n    volt_handle *v = (volt_handle *)h;\n    T *p = &volt_cpp_obj<T>(v->cpp);\n    if (v->borrowed) {\n        return volt_cpp_clone(p, std::integral_constant<bool, C>());\n    }\n    v->cpp = 0;\n    return p;\n}\n#endif\n";
 
 // a C++ unit of the program: the headers of the imports compiled under its standard, and a wrapper
 // for each C++ call they make (empty when they make none)
@@ -5986,6 +6380,19 @@ attach fn cpp_unit(this: checker&, unit: u32, live: std::map<u32, bool>&) -> std
     }
     out.append("// generated by voltc: the C++ this program calls (use cpp); each function wraps one call\n");
     out.append(CPP_UNIT_HEAD);
+    // every #include before the headers (one may import std;, after which C++ takes no include):
+    // derive's (CPP_DIR_PRELUDE), when the unit has a subclass
+    var dirs = false;
+    for (i) in 0..this.cpp_decls.len {
+        if (this.cpp_decl_names.at(i).as_str() == "volt_dir_") {
+            for (j) in 0..this.cpp_shims.len {
+                dirs = dirs || (*keep.at(j) && contains(this.cpp_shims.at(j).as_str(), "volt_dir_"));
+            }
+        }
+    }
+    if (dirs) {
+        out.append("#if __cplusplus >= 201703L\n#include <mutex>\n#include <unordered_map>\n#endif\n");
+    }
     for (i) in 0..this.cpp_includes.len {
         if (*this.cpp_include_unit.at(i) == unit) {
             out.append(*this.cpp_includes.at(i));

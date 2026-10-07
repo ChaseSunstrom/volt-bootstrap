@@ -483,6 +483,9 @@ struct checker {
     // #include line and wrapper is in; the newest standard the compilers take (an import's default)
     cpp_units: std::vec<str> = {};
     cpp_include_unit: std::vec<u32> = {};
+    cpp_modules: std::vec<cpp_module> = {}; // the named modules C++ units import (their interfaces)
+    cpp_std_units: std::vec<u32> = {};      // the C++ units that import the std module
+    cpp_compat_units: std::vec<u32> = {};   // ...and std.compat
     cpp_shim_unit: std::vec<u32> = {};
     // C imports under another standard than Volt's own C (cimport.volt): a unit per standard (its
     // -std, and its text: the #include lines, the C they add, a pointer to each function, which

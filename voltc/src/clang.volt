@@ -203,6 +203,11 @@ fn cursor_name(c: clang::CXCursor) -> std::string {
     return cx_str(clang::clang_getCursorSpelling(c));
 }
 
+// a declaration's unified symbol resolution: the same for it across parses and redeclarations
+fn cursor_usr(c: clang::CXCursor) -> std::string {
+    return cx_str(clang::clang_getCursorUSR(c));
+}
+
 fn type_spelling(t: clang::CXType) -> std::string {
     return cx_str(clang::clang_getTypeSpelling(t));
 }

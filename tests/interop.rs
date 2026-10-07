@@ -1138,6 +1138,24 @@ fn cpp_derive_any() {
 }
 
 #[test]
+fn cpp_module() {
+    // a C++20 named module (its interface imports std) and a header doing `import std;`: read by
+    // libclang from clang-precompiled modules, built by $CXX its own way (g++'s module mapper,
+    // clang's -fmodule-file); what the module doesn't export isn't there
+    let e = Env::new("cpp-module");
+    let want = "42 n=7 12 6\n6 hi volt 8\n";
+    for backend in ["c", "llvm"] {
+        assert_eq!(ok(e.voltc(&["run", "cpp_module.volt", "--backend", backend]), "voltc run cpp_module.volt"), want, "C++ modules ({backend})");
+    }
+    assert_eq!(ok(e.voltc_cxx(&["run", "cpp_module.volt"], Some("clang++")), "voltc run cpp_module.volt (clang++)"), want, "C++ modules built by clang++");
+    let src = format!("use {{ \"{}\" }} as gm;\nfn main() -> void {{\n    val x = gm::hidden_helper(1);\n}}\n", Path::new(ROOT).join("tests/interop/geomod.cppm").display());
+    std::fs::write(e.dir.join("cpp_module_hidden.volt"), src).unwrap();
+    let o = e.voltc(&["check", &e.path("cpp_module_hidden.volt")]);
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(!o.status.success() && err.contains("unknown name 'hidden_helper'"), "an unexported name: {err}");
+}
+
+#[test]
 fn cpp_rtti() {
     // casts between classes (multiple inheritance, a base held by value), dynamic types, and a
     // cpp_error variant each exception: the standard ones and the library's own

@@ -119,6 +119,37 @@ An exception going back through Volt code to the C++ that called it needs C++11 
 `std::exception_ptr`); under C++98 it stops the program.
 Subclassing a C++ class (`derive`, below) needs its import under C++17 or newer.
 
+### C++20 modules
+
+A named module's interface (`.cppm`, `.ixx`, `.mpp`, `.cxxm`, `.ccm`) imports as a header does, on
+its own in its `use`, with what it exports: an `export namespace geo { ... }`, an `export` function
+or class. What it doesn't export isn't there, as for C++ code that imports it. A header (or the
+module) may `import std;`:
+
+```cpp
+// geo.cppm
+export module geo;
+import std;
+export namespace geo {
+int twice(int x) { return 2 * x; }
+std::string label(int n) { return std::format("n={}", n); }
+}
+```
+
+```volt ignore
+use { "geo.cppm" } as gm;
+
+fn main() -> void {
+    std::println("{} {}", gm::geo::twice(21), gm::geo::label(7)); // 42 n=7
+}
+```
+
+libclang reads a module through clang's own build of it, kept in Volt's cache, and the program's
+C++ is built by `$CXX` its own way: g++ (15 or newer) with `-fmodules`, clang with its precompiled
+modules. The standard library's `std` module comes from the source the C++ library names in its
+modules manifest (`libstdc++.modules.json`, `libc++.modules.json`), so both need a library that
+ships one (GCC 15's libstdc++, LLVM 19's libc++), and reading a module needs `clang++` on `PATH`.
+
 ## Calls worked out per use
 
 Some C++ has no declaration Volt can write ahead: a variadic template (`template <class... A>`), a

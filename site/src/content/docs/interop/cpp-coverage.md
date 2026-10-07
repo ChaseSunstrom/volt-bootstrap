@@ -35,6 +35,7 @@ doesn't map, with the way around each.
 | a type by what it can do: optional-like, tuple-like, contiguous, variant-like (`std::optional`, `std::pair`, `std::tuple`, `std::array`, `std::span`, `std::variant`, any library's own) | `T?`, tuples, `T[N]`, `T[..]`/`std::vec<T>`, an enum to `match` on |
 | a range (`begin(r)`, `end(r)`: containers, views) | `for (x) in r` |
 | the standard library's own headers (`use cpp { "map" }`) | their declarations under `stdcxx`, class templates as generic handles (`stdcxx::map<K, V>`) |
+| C++20 modules: a named module's interface (`use { "geo.cppm" }`), a header doing `import std;` | what the module exports, as a header's declarations ([modules](/volt-bootstrap/interop/cpp/#c20-modules)) |
 
 A library found on the include path (`use cpp { "re2/re2.h" }`, `use { "nlohmann/json.hpp" }`)
 brings in the declarations of the files under its own directory (`re2/`, `nlohmann/`), not the rest
@@ -59,9 +60,9 @@ The interop tests import these and run what maps, on both backends:
 - **A framework sample** with pure virtual interfaces, an event bus calling its listeners by
   priority and a plugin registry: the listeners and plugins are Volt types, made with `derive`.
 
-Every wrapper the import writes is compiled with the program, called or not. So whatever a header
-has that doesn't map is left out with a comment in the generated source (`VOLT_SHOW_CPP=1` prints
-it), and the rest still works. What Volt can't declare ahead (variadic and non-type templates,
+Only the wrappers the program reaches are compiled, so a header's function that needs a library the
+program doesn't link costs nothing until it's called. Whatever a header has that doesn't map is left
+out with a comment in the generated source (`VOLT_SHOW_CPP=1` prints it), and the rest still works. What Volt can't declare ahead (variadic and non-type templates,
 `auto` results, constrained templates, function-like macros) is
 [called per use](/volt-bootstrap/interop/cpp/#calls-worked-out-per-use): clang works out each call.
 
@@ -70,7 +71,6 @@ it), and the rest still works. What Volt can't declare ahead (variadic and non-t
 | C++ | Why | The way around it |
 | --- | --- | --- |
 | class templates with non-type or template template parameters (glm's `vec<3, float>`) | Volt's generic structs take types (functions with them are [called per use](/volt-bootstrap/interop/cpp/#calls-worked-out-per-use)) | a `using vec3 = glm::vec3;` with wrapper functions over it |
-| C++20 modules (`import std;`) | the import reads headers | the headers the module is built from |
 
 Explicit specializations (`template <> struct S<void>`) and what a library adds to namespace `std`
 (`std::hash<T>` specializations, `swap` overloads) are left out on purpose: the template, and Volt's

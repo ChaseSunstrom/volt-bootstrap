@@ -142,9 +142,6 @@ export fn volt_vm_load(v: volt_vm&, name: str, source: str) -> vm_error!void {
         val diags = all_diags(&*chk);
         return v.fail(vm_error::COMPILE, report(&s.files, &diags, 0, false, 20).as_str());
     }
-    if (chk.c_includes.len > 0 || chk.c_units.len > 0 || chk.link_flags.len > 0) {
-        return v.fail(vm_error::COMPILE, "a script can't import C headers or code in other languages (no C compiler runs)");
-    }
     var init = S("volt_vm_init_");
     init.append_uint(@cast<u64>(v.loads));
     var g: lg = { c: &*chk };
@@ -152,6 +149,21 @@ export fn volt_vm_load(v: volt_vm&, name: str, source: str) -> vm_error!void {
     if (e.len() > 0) {
         drop_backend(&g, true);
         return v.fail(vm_error::COMPILE, e.as_str());
+    }
+    // what its C and C++ imports need, built by the C and C++ compilers into a library the JIT
+    // finds their symbols in (a sandbox's script can't: that code would reach past it)
+    var native: std::string? = null;
+    if (g.hdr.len > 0 || chk.c_includes.len > 0 || chk.c_units.len > 0 || chk.cpp_units.len > 0 || chk.link_flags.len > 0) {
+        if (v.sandbox) {
+            drop_backend(&g, true);
+            return v.fail(vm_error::COMPILE, "a sandbox's script can't import C or C++ (their code would reach past the sandbox)");
+        }
+        var err = S("");
+        native = vm_native(&*chk, &g.hdr, v.loads, &err);
+        if (native == null) {
+            drop_backend(&g, true);
+            return v.fail(vm_error::COMPILE, err.as_str());
+        }
     }
     if (!v.searching) {
         // the process's symbols (libc, the runtime this library exports), filtered in a sandbox
@@ -187,6 +199,17 @@ export fn volt_vm_load(v: volt_vm&, name: str, source: str) -> vm_error!void {
             }
         }
     }
+    if (native) {
+        var lib_gen: llvm::LLVMOrcOpaqueDefinitionGenerator* = null;
+        var path = S(native.as_str());
+        val le = llvm::LLVMOrcCreateDynamicLibrarySearchGeneratorForPath(&lib_gen, path.c_str(), llvm::LLVMOrcLLJITGetGlobalPrefix(j), null, null);
+        vm_native_done(native.as_str());
+        if (le != null) {
+            drop_backend(&g, true);
+            return v.fail(vm_error::JIT, jit_error(le).as_str());
+        }
+        llvm::LLVMOrcJITDylibAddGenerator(v.jd, lib_gen);
+    }
     // the module and its context go to the JIT (so ask it what it has first); the rest of the
     // backend's state goes now
     val has_init = llvm::LLVMGetNamedFunction(g.m, init.c_str()) != null;
@@ -207,6 +230,160 @@ export fn volt_vm_load(v: volt_vm&, name: str, source: str) -> vm_error!void {
     val run = @cast<extern "C" fn() -> void>(@cast<void*>(@cast<usize>(addr)));
     run();
     return;
+}
+
+// a script's native code (its imports' C: their headers' functions' pointers, a C unit of another
+// standard; C++ wrappers and modules; the libraries --cc links), built by $CC and $CXX into a shared
+// library under /tmp: its path, or why not in err
+fn vm_native(chk: checker&, hdr: std::vec<str>&, n: u64, err: std::string&) -> std::string? {
+    var t = S("/tmp/voltvm-XXXXXX");
+    t.push(0);
+    if (mkdtemp(@cast<u8*>(t.as_str().ptr)) == null) {
+        *err = S("can't make a build directory in /tmp for the script's C");
+        return null;
+    }
+    val dir = S(t.as_str()[0..t.len() - 1]);
+    val so = vm_build(chk, hdr, dir.as_str(), n, err);
+    if (so == null) {
+        vm_clean(dir.as_str());
+    }
+    return so;
+}
+
+// vm_native's work in dir
+fn vm_build(chk: checker&, hdr: std::vec<str>&, dir: str, n: u64, err: std::string&) -> std::string? {
+    var objs: std::vec<std::string> = {};
+    // C: Volt's own (the headers, the functions' pointers), and each kept unit
+    var cs: std::vec<std::string> = {};
+    var stds: std::vec<str> = {};
+    put(&cs, llvm_runtime_c(chk, hdr, false));
+    put(&stds, chk.c_own_std());
+    for (u) in 0..chk.c_units.len {
+        var text = copy *chk.c_unit_text.at(u);
+        if (chk.c_unit_weak.at(u).len() > 0) {
+            text.append("\n__attribute__((constructor)) static void volt_c_check(void) {\n");
+            text.append(chk.c_unit_weak.at(u).as_str());
+            text.append("}\n");
+        }
+        put(&cs, move text);
+        put(&stds, *chk.c_units.at(u));
+    }
+    for (i) in 0..cs.len {
+        val src = fmt2("{}/c{}.c", S(dir), unum(@cast<u64>(i)));
+        val obj = fmt2("{}/c{}.o", S(dir), unum(@cast<u64>(i)));
+        std::fs::write_file(src.as_str(), cs.at(i).as_str()) catch |e| {
+            *err = fmt("can't write {}", copy src);
+            return null;
+        };
+        var argv: std::vec<str> = {};
+        val cc = c_command(&argv);
+        val std_flag = fmt("-std={}", S(*stds.at(i)));
+        val fixed: str[6] = { std_flag.as_str(), "-fPIC", "-w", "-c", "-o", obj.as_str() };
+        for (f) in fixed {
+            put(&argv, f);
+        }
+        put(&argv, src.as_str());
+        for (f&) in chk.opts.pp_flags.items() {
+            put(&argv, *f);
+        }
+        if (!vm_run(&argv, cc, err)) {
+            return null;
+        }
+        put(&objs, obj);
+    }
+    // C++: each unit's wrappers the script reaches, with the modules it imports
+    var any_cpp = false;
+    var linked: std::vec<std::string> = {};
+    if (chk.cpp_units.len > 0) {
+        val live = reachable(chk);
+        for (u) in 0..chk.cpp_units.len {
+            val text = chk.cpp_unit(@cast<u32>(u), &live);
+            if (text.len() == 0) {
+                continue;
+            }
+            any_cpp = true;
+            val src = fmt2("{}/cpp{}.cpp", S(dir), unum(@cast<u64>(u)));
+            val obj = fmt2("{}/cpp{}.o", S(dir), unum(@cast<u64>(u)));
+            std::fs::write_file(src.as_str(), text.as_str()) catch |e| {
+                *err = fmt("can't write {}", copy src);
+                return null;
+            };
+            val std_flag = fmt("-std={}", S(*chk.cpp_units.at(u)));
+            val mflags = cpp_module_flags(chk, &chk.opts.pp_flags, dir, @cast<u32>(u), std_flag.as_str(), &objs, &linked, err);
+            if (err.len() > 0) {
+                return null;
+            }
+            var argv: std::vec<str> = {};
+            val cxx = cxx_command(&argv);
+            val fixed: str[6] = { std_flag.as_str(), "-fPIC", "-w", "-c", "-o", obj.as_str() };
+            for (f) in fixed {
+                put(&argv, f);
+            }
+            put(&argv, src.as_str());
+            for (f&) in chk.opts.pp_flags.items() {
+                put(&argv, *f);
+            }
+            for (f&) in mflags.items() {
+                put(&argv, f.as_str());
+            }
+            if (!vm_run(&argv, cxx, err)) {
+                return null;
+            }
+            put(&objs, obj);
+        }
+    }
+    // linked as a shared library (by the C++ compiler when there's C++: its runtime)
+    val so = std::fmt::format("{}/script{}.so", dir, n);
+    var argv: std::vec<str> = {};
+    var link = "";
+    if (any_cpp) {
+        link = cxx_command(&argv);
+    } else {
+        link = c_command(&argv);
+    }
+    put(&argv, "-shared");
+    put(&argv, "-o");
+    put(&argv, so.as_str());
+    for (o&) in objs.items() {
+        put(&argv, o.as_str());
+    }
+    for (f&) in chk.link_flags.items() {
+        put(&argv, f.as_str());
+    }
+    if (!vm_run(&argv, link, err)) {
+        return null;
+    }
+    return so;
+}
+
+// argv run: whether it did, else its compiler's error in err
+fn vm_run(argv: std::vec<str>&, tool: str, err: std::string&) -> bool {
+    val r = std::process::capture(argv.items(), "") catch |e| {
+        *err = fmt("can't run '{}': a script importing C or C++ needs a C compiler ($CC) and, for C++, $CXX", S(tool));
+        return false;
+    };
+    if (r.code != 0) {
+        *err = fmt2("'{}' failed on the script's C or C++:\n{}", S(tool), copy r.err);
+        return false;
+    }
+    return true;
+}
+
+// the native library loaded (the JIT keeps it mapped): its directory goes
+fn vm_native_done(so: str) -> void {
+    var at = so.len;
+    while (at > 0 && so[at - 1] != '/') {
+        at -= 1;
+    }
+    vm_clean(so[0..at - 1]);
+}
+
+// a build directory of vm_native's, and what's in it, gone
+fn vm_clean(dir: str) -> void {
+    for (f&) in (std::fs::list_dir(dir) catch |e| { return; }).items() {
+        unlink_path(fmt2("{}/{}", S(dir), copy *f).as_str());
+    }
+    rmdir_path(dir);
 }
 
 // the address of a script's export fn (or a host function), 0 when there's none; cast it to a
