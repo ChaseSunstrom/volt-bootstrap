@@ -49,11 +49,6 @@ enum shape {
 
 // what can sit inside another type's C form (a field, an element, a fn pointer's parameter): not the
 // shapes that only work at the edge of an export fn
-// the languages whose bindings take every shape (bind.wide), as messages name them
-fn wide_langs() -> std::string {
-    return S("C, C++, Rust, Zig, Go, Python, Dart, Java, C#, JavaScript, Lua, Ruby and Swift");
-}
-
 fn plain(s: shape) -> bool {
     match (s) {
         .TEXT(t) => { return false; },
@@ -87,9 +82,6 @@ struct bind {
     // the struct, optional and E!T types C holds by value, each after what it holds (the order C
     // declares them in)
     layout: std::vec<u32> = {};
-    // the shapes only the wide languages (wide_langs) take (traits, closures given out or taking text and
-    // handles, owned values as parameters, lists): false for the other languages' generators
-    wide: bool = true;
     uses_str: bool = false;
     // structs whose fields are being looked at (a pointer back to one is fine: C declares them first)
     visiting: std::vec<u32> = {};
@@ -134,17 +126,11 @@ attach fn elem(this: bind&, t: u32) -> shape? {
     val s = this.shape_of(t) ?? return null;
     match (s) {
         .TEXT(x) => {
-            // converted at the edge (not in other languages yet)
-            if (!this.wide) {
-                return this.no_form(t);
-            }
+            // converted at the edge
             this.uses_str = true;
             return s;
         },
         .HANDLE(h) => {
-            if (!this.wide) {
-                return this.no_form(t);
-            }
             this.shape_of(this.view_of(t)) ?? return null;
             return s;
         },
@@ -224,7 +210,7 @@ attach fn is_handle(this: bind&, s: u32) -> bool {
         return true;
     }
     // its fields, looked at without collecting what they need
-    var probe: bind = { c: this.c, pkg: this.pkg, wide: this.wide, visiting: copy this.visiting };
+    var probe: bind = { c: this.c, pkg: this.pkg, visiting: copy this.visiting };
     put(&probe.visiting, s);
     for (f&) in this.c.si(s).fields.items() {
         if (probe.inner(f.ty) == null) {
@@ -325,12 +311,9 @@ attach fn shape_of(this: bind&, t: u32) -> shape? {
                 .FN_PTR(ps, r, va) => { return this.shape_of(x); },
                 default => {},
             }
-            // an optional text or handle (converted at the edge; not in other languages yet)
+            // an optional text or handle (converted at the edge)
             match (this.shape_of(x) ?? return null) {
                 .TEXT(y) => {
-                    if (!this.wide) {
-                        return this.no_form(t);
-                    }
                     this.uses_str = true;
                     this.shape_of(this.c.t.intern(tyk::OPT(STR))) ?? return null;
                     add_u32(&this.opts, x);
@@ -338,9 +321,6 @@ attach fn shape_of(this: bind&, t: u32) -> shape? {
                     return shape::OPT(x);
                 },
                 .HANDLE(h) => {
-                    if (!this.wide) {
-                        return this.no_form(t);
-                    }
                     this.shape_of(this.c.t.intern(tyk::REF(x))) ?? return null;
                     return shape::OPT(x);
                 },
@@ -367,18 +347,13 @@ attach fn shape_of(this: bind&, t: u32) -> shape? {
         },
         .STRUCT(s) => {
             if (this.text_method(s) != null && !this.is_export_struct(s)) {
-                // C and C++ take text as a str (a parameter, a callback's argument)
-                if (this.wide) {
-                    this.uses_str = true;
-                }
+                // taken as a str (a parameter, a callback's argument)
+                this.uses_str = true;
                 add_u32(&this.texts, t);
                 return shape::TEXT(t);
             }
             if (this.is_list(s) && !this.is_export_struct(s)) {
-                // owned elements: a list out, a slice of their views in (not in other languages yet)
-                if (!this.wide) {
-                    return this.no_form(t);
-                }
+                // owned elements: a list out, a slice of their views in
                 val e = this.list_elem(t);
                 this.elem(e) ?? return null;
                 val v = this.view_of(e);
@@ -463,9 +438,6 @@ attach fn shape_of(this: bind&, t: u32) -> shape? {
                     return shape::TRAIT(@cast<u32>(i));
                 }
             }
-            if (!this.wide) {
-                return this.no_form(t);
-            }
             val fns = this.trait_fns(u) ?? return this.no_form(t);
             // a pointer back to the trait from its own fns is fine: it's declared by then
             put(&this.traits, t);
@@ -489,12 +461,9 @@ attach fn is_export_struct(this: bind&, s: u32) -> bool {
     }
 }
 
-// a type in a closure's or a trait fn's signature: what sits inside other types, and (in C and C++)
-// text, str and handles, owned or lent, which the callers convert
+// a type in a closure's or a trait fn's signature: what sits inside other types, and text, str and
+// handles, owned or lent, which the callers convert
 attach fn sig_part(this: bind&, t: u32) -> shape? {
-    if (!this.wide) {
-        return this.inner(t);
-    }
     val s = this.shape_of(t) ?? return null;
     match (s) {
         .TEXT(x) => { return s; },
@@ -518,6 +487,7 @@ struct trait_fn {
     name: str;
     params: std::vec<u32>; // the types after this
     ret: u32;
+    names: std::vec<str> = {}; // the parameters' names
 }
 
 // the fns of trait union u (none when its trait or one of its fns is generic: C has no generics);
@@ -539,6 +509,7 @@ attach fn trait_fns(this: bind&, u: u32) -> std::vec<trait_fn>? {
                             return null;
                         }
                         var ps: std::vec<u32> = {};
+                        var ns: std::vec<str> = {};
                         var takes_this = false;
                         for (p&) in fd.params.items() {
                             if (p.name == "this") {
@@ -549,13 +520,14 @@ attach fn trait_fns(this: bind&, u: u32) -> std::vec<trait_fn>? {
                                 return null;
                             }
                             put(&ps, this.c.resolve_type(&p.ty.value, e) catch return null);
+                            put(&ns, p.name);
                         }
                         var r = VOID;
                         if (fd.ret) {
                             r = this.c.resolve_type(&fd.ret, e) catch return null;
                         }
                         if (takes_this) {
-                            put(&out, { name: fd.name, params: move ps, ret: r });
+                            put(&out, { name: fd.name, params: move ps, ret: r, names: move ns });
                         }
                     },
                     default => {},
@@ -692,7 +664,7 @@ attach fn no_c_form(this: bind&, at: span, what: std::string, t: u32) -> compile
     if (this.bad != t) {
         msg.append(fmt(" (because of the {} in it)", this.c.ty_name(this.bad)).as_str());
     }
-    return with_help(fail(at, move msg), fmt("bindings take numbers, bool, pointers and references, cstr, str, slices, optionals, structs of those, plain enums, error sets, E!T, extern \"C\" fns, closures as parameters, and structs held by handles and owned text (@export_text) as results; {} take traits, owned values as parameters, closures given back, lists (std::vec), and optional text and handles too", wide_langs()));
+    return with_help(fail(at, move msg), S("bindings take numbers, bool, pointers and references, cstr, str, slices, optionals, structs of those, plain enums, error sets, E!T, extern \"C\" fns, closures, traits, structs held by handles, owned text (@export_text) and lists (std::vec)"));
 }
 
 // is a shape owned when it comes out of Volt (text, a handle by value, a closure, a trait's object),
@@ -723,21 +695,13 @@ attach fn check_all(this: bind&) -> compile_error!void {
         val at = this.c.dl(f.decl).item.span;
         for (p&) in f.params.items() {
             val s = this.shape_of(p.ty) ?? return this.no_c_form(at, fmt2("export fn {}: its parameter {}", S(f.name), S(p.name)), p.ty);
-            var owned = false;
             match (s) {
-                .TEXT(t) => { owned = true; },
-                .HANDLE(h) => { owned = true; },
-                .LIST(x) => { owned = true; },
-                .OPT(x) => { owned = this.opt_owned(s); },
                 .RESULT(e, x) => {
                     if (this.owned_result(s)) {
                         return fail(at, fmt3("export fn {}: its parameter {} is {}, which only comes out of export fns", S(f.name), S(p.name), this.c.ty_name(p.ty)));
                     }
                 },
                 default => {},
-            }
-            if (owned && !this.wide) {
-                return with_help(fail(at, fmt3("export fn {}: its parameter {} is {}, which this language's bindings only take as a result", S(f.name), S(p.name), this.c.ty_name(p.ty))), fmt("take an export struct as X& (or X*) and text as str; {} bindings take owned values too", wide_langs()));
             }
         }
         val r = this.shape_of(f.ret) ?? return this.no_c_form(at, fmt("export fn {}: its return type", S(f.name)), f.ret);
@@ -751,14 +715,6 @@ attach fn check_all(this: bind&) -> compile_error!void {
         }
         match (given) {
             .CLOSURE(c) => { add_u32(&this.closures_out, c); },
-            default => {},
-        }
-        match (r) {
-            .CLOSURE(c) => {
-                if (!this.wide) {
-                    return fail(at, fmt3("export fn {}: it returns {}, and this language's bindings only take closures as parameters ({} take them back too)", S(f.name), this.c.ty_name(f.ret), wide_langs()));
-                }
-            },
             default => {},
         }
     }
@@ -13452,6 +13408,13 @@ attach fn swift_text(this: bind&) -> std::string {
 }
 
 // ---------- Kotlin/Native (over the C header, through cinterop as package c<pkg>) ----------
+// A call converts every argument first (into its memScoped memory), then VoltArgs checks what it
+// gives up (handles, Volt's trait values: open, its own, not in use, once) and gives it all at once,
+// and lends the rest for the call (in use until it's back, so a callback can't close or give it). What
+// Volt calls in Kotlin (a callback through staticCFunction and a StableRef to its box, a Kotlin
+// object's trait fns through a table) runs in a try: what it throws is kept, Volt gets a stand-in, and
+// the call into Volt throws it once it's back (a callback that must give a handle has no stand-in, so
+// its failure ends the program)
 
 fn kt_keyword(s: str) -> bool {
     val words: str[] = { "as", "break", "class", "continue", "do", "else", "false", "for", "fun", "if", "in", "interface", "is", "null", "object", "package", "return", "super", "this", "throw", "true", "try", "typealias", "typeof", "val", "var", "when", "while" };
@@ -13468,6 +13431,15 @@ fn kt_ident(s: str) -> std::string {
         return fmt("`{}`", S(s));
     }
     return S(s);
+}
+
+// a method's name in a class that's AutoCloseable (an Any): close, toString, hashCode and equals get
+// a _
+fn kt_member(s: str) -> std::string {
+    if (s == "close" || s == "toString" || s == "hashCode" || s == "equals") {
+        return fmt("{}_", S(s));
+    }
+    return kt_ident(s);
 }
 
 fn kt_int(k: int_ty) -> str {
@@ -13489,7 +13461,21 @@ attach fn kt_cpkg(this: bind&) -> std::string {
     return fmt("c{}", S(this.pkg));
 }
 
-// a type as cinterop gives its C form
+// an export struct's C struct as cinterop names it (only pointed at)
+attach fn kt_cn(this: bind&, s: u32) -> std::string {
+    return fmt("cnames.structs.{}", this.c_named(this.c.si(s).name, false));
+}
+
+// what a pointer to t points at, as cinterop types it
+attach fn kt_pointee(this: bind&, t: u32) -> std::string {
+    match (this.shape_of(t) ?? shape::VOID) {
+        .HANDLE(s) => { return this.kt_cn(s); },
+        default => { return this.kt_var(t); },
+    }
+}
+
+// a type as cinterop gives its C form (a callback's parameter, a raw field): numbers, pointers, and a
+// CValue of what C holds as a struct
 attach fn kt_c(this: bind&, t: u32) -> std::string {
     match (this.shape_of(t) ?? shape::VOID) {
         .VOID => { return S("Unit"); },
@@ -13508,18 +13494,23 @@ attach fn kt_c(this: bind&, t: u32) -> std::string {
             if (x == VOID) {
                 return S("COpaquePointer?");
             }
-            match (this.shape_of(x) ?? shape::VOID) {
-                .HANDLE(s) => { return fmt("CPointer<cnames.structs.{}>?", this.c_named(this.c.si(s).name, false)); },
-                default => {},
-            }
-            return fmt("CPointer<{}>?", this.kt_var(x));
+            return fmt("CPointer<{}>?", this.kt_pointee(x));
         },
-        .HANDLE(s) => { return fmt("CPointer<cnames.structs.{}>?", this.c_named(this.c.si(s).name, false)); },
-        default => { return fmt("CValue<{}>", this.c_prim(t, false)); },
+        .HANDLE(s) => { return fmt("CPointer<{}>?", this.kt_cn(s)); },
+        .FN(i) => { return fmt("{}?", this.c_prim(t, false)); },
+        .OPT(x) => {
+            val h = this.handle_of(x);
+            if (h) {
+                return fmt("CPointer<{}>?", this.kt_cn(h));
+            }
+        },
+        default => {},
     }
+    return fmt("CValue<{}>", this.c_prim(t, false));
 }
 
-// the C variable type cinterop has for a type (IntVar, a struct's class, CPointerVar<...>)
+// the C variable cinterop has for a type (IntVar, a struct's class, CPointerVar<...>): what an array
+// of it holds
 attach fn kt_var(this: bind&, t: u32) -> std::string {
     match (this.shape_of(t) ?? shape::VOID) {
         .BOOL => { return S("BooleanVar"); },
@@ -13532,23 +13523,56 @@ attach fn kt_var(this: bind&, t: u32) -> std::string {
         },
         .ENUM(e) => { return fmt("{}Var", S(kt_int(this.c.ei(e).tag))); },
         .CODE => { return S("UIntVar"); },
-        .PTR(x) => { return fmt("CPointerVar<{}>", this.kt_var(x)); },
+        .PTR(x) => {
+            if (x == VOID) {
+                return S("COpaquePointerVar");
+            }
+            return fmt("CPointerVar<{}>", this.kt_pointee(x));
+        },
         .CSTR => { return S("CPointerVar<ByteVar>"); },
-        .HANDLE(s) => { return fmt("CPointerVar<cnames.structs.{}>", this.c_named(this.c.si(s).name, false)); },
-        default => { return this.c_prim(t, false); },
+        .HANDLE(s) => { return fmt("CPointerVar<{}>", this.kt_cn(s)); },
+        .FN(i) => { return fmt("{}Var", this.c_prim(t, false)); },
+        .OPT(x) => {
+            val h = this.handle_of(x);
+            if (h) {
+                return fmt("CPointerVar<{}>", this.kt_cn(h));
+            }
+        },
+        default => {},
     }
+    return this.c_prim(t, false);
 }
 
-// the primitive array a slice of t is in Kotlin (none: a List of structs)
-fn kt_array(k: str) -> std::string {
-    return fmt("{}Array", S(k));
+// the primitive array numbers of type x go in (IntArray...); empty for anything else
+attach fn kt_prim(this: bind&, x: u32) -> std::string {
+    match (this.shape_of(x) ?? shape::VOID) {
+        .BOOL => {},
+        .INT(k) => {},
+        .FLOAT(b) => {},
+        .CODE => {},
+        default => { return {}; },
+    }
+    return fmt("{}Array", this.kt_c(x));
+}
+
+// Kotlin's sequence of x's: a primitive array of numbers, else a List
+attach fn kt_seq(this: bind&, x: u32) -> std::string {
+    val a = this.kt_prim(x);
+    if (a.len() > 0) {
+        return a;
+    }
+    return fmt("List<{}>", this.kt_ty(x));
 }
 
 // a type as the Kotlin API shows it
 attach fn kt_ty(this: bind&, t: u32) -> std::string {
     val h = this.lent_handle(t);
     if (h) {
-        return this.local(this.c.si(h).name);
+        var n = this.local(this.c.si(h).name);
+        if (this.nullable_ptr(t)) {
+            n.push('?');
+        }
+        return n;
     }
     match (this.shape_of(t) ?? shape::VOID) {
         .CSTR => { return S("String?"); },
@@ -13565,271 +13589,615 @@ attach fn kt_ty(this: bind&, t: u32) -> std::string {
                 }
                 return n;
             }
-            return this.kt_c(t);
         },
         .HANDLE(s) => { return this.local(this.c.si(s).name); },
-        .SLICE(x) => {
-            match (this.shape_of(x) ?? shape::VOID) {
-                .STRUCT(s) => { return fmt("List<{}>", this.local(this.c.si(s).name)); },
-                default => { return kt_array(this.kt_c(x).as_str()); },
-            }
-        },
+        .SLICE(x) => { return this.kt_seq(x); },
+        .ARRAY(x, n) => { return this.kt_seq(x); },
+        .LIST(x) => { return fmt("List<{}>", this.kt_ty(this.list_elem(t))); },
         .OPT(x) => { return fmt("{}?", this.kt_ty(x)); },
-        .RESULT(e, x) => { return this.kt_ty(x); },
+        .RESULT(e, x) => { return fmt("Result<{}>", this.kt_ty(x)); },
+        .TRAIT(i) => { return this.short(this.trait_of(t)); },
         .CLOSURE(i) => {
-            match (*this.c.t.get(t)) {
-                .FN_VAL(ps&, r) => {
-                    var args: std::string = {};
-                    for (p&) in ps.items() {
-                        if (args.len() > 0) {
-                            args.append(", ");
-                        }
-                        args.append(this.kt_ty(*p).as_str());
-                    }
-                    return fmt2("({}) -> {}", move args, this.kt_ty(r));
-                },
-                default => { return S("() -> Unit"); },
+            var ps: std::vec<u32> = {};
+            val r = this.fn_parts(t, &ps);
+            var args: std::string = {};
+            for (p&) in ps.items() {
+                if (args.len() > 0) {
+                    args.append(", ");
+                }
+                args.append(this.kt_ty(*p).as_str());
             }
+            return fmt2("({}) -> {}", move args, this.kt_given(r));
         },
-        default => { return this.kt_c(t); },
+        default => {},
+    }
+    return this.kt_c(t);
+}
+
+// what a function gives as Kotlin types it: E!T's T (an error is thrown), else the type
+attach fn kt_given(this: bind&, t: u32) -> std::string {
+    match (this.shape_of(t) ?? shape::VOID) {
+        .RESULT(e, x) => { return this.kt_ty(x); },
+        default => { return this.kt_ty(t); },
     }
 }
 
-// an expression turning API value v (of type t) into its C form, for numbers, bool, enums, structs
-attach fn kt_in(this: bind&, t: u32, v: str) -> std::string {
+// ": T" for a wrapper's result (nothing for Unit): Volt's own trait value and closures are classes
+attach fn kt_ret(this: bind&, t: u32) -> std::string {
+    if (this.lent_handle(t) != null) {
+        return fmt(": {}", this.kt_ty(t));
+    }
     match (this.shape_of(t) ?? shape::VOID) {
-        .ENUM(e) => { return fmt("{}.value", S(v)); },
-        .STRUCT(s) => { return fmt("{}.toC()", S(v)); },
+        .VOID => { return {}; },
+        .RESULT(e, x) => { return this.kt_ret(x); },
+        .TRAIT(i) => { return fmt(": volt_{}", this.short(this.trait_of(t))); },
+        .CLOSURE(i) => { return fmt(": Closure{}", unum(@cast<u64>(i))); },
+        .PTR(x) => { return fmt(": {}", this.kt_c(t)); },
+        default => { return fmt(": {}", this.kt_ty(t)); },
+    }
+}
+
+// does cinterop pass t's C form as a struct by value (a CValue)?
+attach fn kt_cvalue(this: bind&, t: u32) -> bool {
+    match (this.shape_of(t) ?? shape::VOID) {
+        .STR => { return true; },
+        .TEXT(x) => { return true; },
+        .STRUCT(s) => { return true; },
+        .SLICE(x) => { return true; },
+        .LIST(x) => { return true; },
+        .TRAIT(i) => { return true; },
+        .CLOSURE(i) => { return true; },
+        .RESULT(e, x) => { return true; },
+        .OPT(x) => { return this.handle_of(x) == null; },
+        default => { return false; },
+    }
+}
+
+// head { body }, on one line or more
+fn kt_block(head: std::string, body: std::string) -> std::string {
+    if (contains(body.as_str(), "\n")) {
+        return fmt2("{} {{\n{}}}", move head, indent(fmt("{}\n", move body).as_str()));
+    }
+    return fmt2("{} {{ {} }}", move head, move body);
+}
+
+// the Kotlin value of C value v of type t (a struct's variable, for what cinterop holds as a struct;
+// d: how deep in sequences): text copied (owned text then freed), a handle the caller's own (one Volt
+// lends a view that never frees it), a list copied out (then freed)
+attach fn kt_from(this: bind&, t: u32, v: str, d: usize) -> std::string {
+    val h = this.lent_handle(t);
+    if (h) {
+        if (this.nullable_ptr(t)) {
+            return fmt2("{}?.let {{ {}(it, false) }}", S(v), this.local(this.c.si(h).name));
+        }
+        return fmt2("{}({}!!, false)", this.local(this.c.si(h).name), S(v));
+    }
+    match (this.shape_of(t) ?? shape::VOID) {
+        .VOID => { return S("Unit"); },
+        .CSTR => { return fmt("{}?.toKString()", S(v)); },
+        .STR => { return fmt("voltStringVar({})", S(v)); },
+        .TEXT(x) => { return fmt("voltTakeVar({})", S(v)); },
+        .ENUM(e) => { return fmt2("{}.of({})", this.local(this.c.ei(e).name), S(v)); },
+        .STRUCT(s) => { return fmt("{}.toKotlin()", S(v)); },
+        .HANDLE(s) => { return fmt2("{}({}!!)", this.local(this.c.si(s).name), S(v)); },
+        .OPT(x) => {
+            val oh = this.handle_of(x);
+            if (oh) {
+                return fmt2("{}?.let {{ {}(it) }}", S(v), this.local(this.c.si(oh).name));
+            }
+            return fmt2("if ({}.has) {} else null", S(v), this.kt_from(x, fmt("{}.value", S(v)).as_str(), d));
+        },
+        .LIST(x) => { return fmt2("voltList{}({})", index_of(&this.lists, t), S(v)); },
+        .TRAIT(k) => { return fmt2("volt_{}({}.readValue())", this.short(this.trait_of(t)), S(v)); },
+        .CLOSURE(k) => { return fmt2("Closure{}({}.readValue())", unum(@cast<u64>(k)), S(v)); },
+        .SLICE(x) => { return this.kt_seq_from(x, fmt("{}.len.toInt()", S(v)), fmt("{}.ptr!!", S(v)), d); },
+        .ARRAY(x, n) => { return this.kt_seq_from(x, unum(n), S(v), d); },
+        .RESULT(e, x) => {
+            val got = this.kt_from(x, fmt("{}.value", S(v)).as_str(), d);
+            return fmt3("if ({}.error != 0u) Result.failure(voltError({}.error)) else Result.success({})", S(v), S(v), move got);
+        },
         default => { return S(v); },
     }
 }
 
-// an expression turning C value r (of type t) into the API's, for the plain types and str (r is a
-// CValue for a struct or str, or the struct's variable when var_ is true)
-attach fn kt_out(this: bind&, t: u32, r: str, var_: bool) -> std::string {
+// n x's read from at[i] (a slice's pointer, an array): a primitive array of numbers, or a List
+attach fn kt_seq_from(this: bind&, x: u32, n: std::string, at: std::string, d: usize) -> std::string {
+    val i = fmt("volt_i{}", unum(@cast<u64>(d)));
+    val e = fmt2("{}[{}]", copy at, copy i);
+    val a = this.kt_prim(x);
+    if (a.len() > 0) {
+        return fmt4("{}({}) {{ {} -> {} }}", copy a, move n, copy i, copy e);
+    }
+    return fmt3("List({}) {{ {} -> {} }}", move n, copy i, this.kt_from(x, e.as_str(), d + 1));
+}
+
+// the Kotlin value of C result r (of type t) a call gave (raw: a handle stays a pointer)
+attach fn kt_result(this: bind&, t: u32, r: str, raw: bool) -> std::string {
     match (this.shape_of(t) ?? shape::VOID) {
-        .ENUM(e) => { return fmt2("{}.of({})", this.local(this.c.ei(e).name), S(r)); },
-        .STRUCT(s) => {
-            if (var_) {
-                return fmt("{}.toKotlin()", S(r));
+        .HANDLE(s) => {
+            if (raw) {
+                return fmt("{}!!", S(r));
             }
-            return fmt("{}.useContents {{ toKotlin() }}", S(r));
         },
-        .STR => {
-            if (var_) {
-                return fmt("voltString({}.readValue())", S(r));
+        .RESULT(e, x) => {
+            // the value, or the error thrown
+            var got = this.kt_from(x, "this.value", 0);
+            if (raw) {
+                got = S("this.value!!");
             }
-            return fmt("voltString({})", S(r));
+            return fmt2("{}.useContents {{\n    if (this.error != 0u) throw voltError(this.error)\n{}}}", S(r), indent(fmt("{}\n", move got).as_str()));
         },
-        default => { return S(r); },
+        .STR => { return fmt("voltString({})", S(r)); },
+        .TEXT(x) => { return fmt("voltTake({})", S(r)); },
+        .TRAIT(k) => { return fmt2("volt_{}({})", this.short(this.trait_of(t)), S(r)); },
+        .CLOSURE(k) => { return fmt2("Closure{}({})", unum(@cast<u64>(k)), S(r)); },
+        default => {},
+    }
+    return this.kt_value(t, r);
+}
+
+// the Kotlin value of C value r of type t as cinterop gives it (a CValue for a struct): E!T a Result
+attach fn kt_value(this: bind&, t: u32, r: str) -> std::string {
+    if (this.kt_cvalue(t)) {
+        return kt_block(fmt("{}.useContents", S(r)), this.kt_from(t, "this", 0));
+    }
+    return this.kt_from(t, r, 0);
+}
+
+// statements writing Kotlin value v (of type t) into C variable slot (an lvalue, or a struct's
+// variable), with memory from m (an AutofreeScope): text as a str, a handle given up or lent through
+// volt_a (a VoltArgs), a sequence as a slice of its elements (pre names the temporaries, d how deep)
+attach fn kt_put(this: bind&, t: u32, v: str, slot: str, pre: str, d: usize, m: str) -> std::string {
+    val h = this.lent_handle(t);
+    if (h) {
+        if (this.nullable_ptr(t)) {
+            return fmt2("{} = {}?.let {{ volt_a.lend(it) }}?.reinterpret()\n", S(slot), S(v));
+        }
+        return fmt2("{} = volt_a.lend({}).reinterpret()\n", S(slot), S(v));
+    }
+    val dd = unum(@cast<u64>(d));
+    match (this.shape_of(t) ?? shape::VOID) {
+        .ENUM(e) => { return fmt2("{} = {}.value\n", S(slot), S(v)); },
+        .STRUCT(s) => { return fmt3("{}.write({}, {})\n", S(v), S(slot), S(m)); },
+        .STR => { return fmt3("voltStrTo({}, {}, {})\n", S(m), S(v), S(slot)); },
+        .TEXT(x) => { return fmt3("voltStrTo({}, {}, {})\n", S(m), S(v), S(slot)); },
+        .CSTR => { return fmt3("{} = voltCstr({}, {})\n", S(slot), S(m), S(v)); },
+        .HANDLE(s) => { return fmt2("{} = volt_a.give({}).reinterpret()\n", S(slot), S(v)); },
+        .OPT(x) => {
+            if (this.handle_of(x) != null) {
+                return fmt2("{} = {}?.let {{ volt_a.give(it) }}?.reinterpret()\n", S(slot), S(v));
+            }
+            // (a local: a property can't be smart-cast)
+            val o = fmt2("{}_o{}", S(pre), copy dd);
+            var out = fmt2("val {} = {}\n", copy o, S(v));
+            out.append(fmt3("{}.has = {} != null\nif ({} != null) {{\n", S(slot), copy o, copy o).as_str());
+            out.append(indent(this.kt_put(x, o.as_str(), fmt("{}.value", S(slot)).as_str(), pre, d + 1, m).as_str()).as_str());
+            out.append("}\n");
+            return out;
+        },
+        .RESULT(e, x) => {
+            // a Result: its value, or its error's code (a VoltException's, else E's first)
+            val o = fmt2("{}_r{}", S(pre), copy dd);
+            var out = fmt2("val {} = {}\n", copy o, S(v));
+            out.append(fmt2("if ({}.isSuccess) {{\n    {}.error = 0u\n", copy o, S(slot)).as_str());
+            if (x != VOID) {
+                out.append(indent(this.kt_put(x, fmt("{}.getOrThrow()", copy o).as_str(), fmt("{}.value", S(slot)).as_str(), pre, d + 1, m).as_str()).as_str());
+            }
+            out.append(fmt3("}} else {{\n    {}.error = ({}.exceptionOrNull() as? VoltException)?.code?.takeIf {{ it != 0u }} ?: {}\n}}\n", S(slot), copy o, this.lua_first_code(e)).as_str());
+            return out;
+        },
+        .SLICE(x) => { return this.kt_put_seq(x, v, slot, pre, d, m); },
+        .LIST(x) => { return this.kt_put_seq(this.list_elem(t), v, slot, pre, d, m); },
+        .ARRAY(x, n) => {
+            val i = fmt2("{}_i{}", S(pre), copy dd);
+            val e = fmt2("{}_x{}", S(pre), copy dd);
+            var out = fmt3("require({}.size == {}) {{ \"{} elements, not \" + ", S(v), unum(n), unum(n));
+            out.append(fmt("{}.size }}\n", S(v)).as_str());
+            out.append(fmt3("{}.forEachIndexed {{ {}, {} ->\n", S(v), copy i, copy e).as_str());
+            out.append(indent(this.kt_put(x, e.as_str(), fmt2("{}[{}]", S(slot), copy i).as_str(), pre, d + 1, m).as_str()).as_str());
+            out.append("}\n");
+            return out;
+        },
+        default => { return fmt2("{} = {}\n", S(slot), S(v)); },
     }
 }
 
-// one parameter of a wrapper: its declaration, what the call passes, the statements before the call
-// (inside memScoped), what copies changes back, and the callbacks' boxes (rethrown after the call)
-struct kt_arg {
-    decl: std::string = {};
-    pass: std::string = {};
-    pre: std::string = {};
-    after: std::string = {};
-    scope: std::string = {}; // a usePinned block the call runs in
-    box: std::string = {}; // a callback: the name its box and StableRef are named after
-    box_ty: std::string = {};
-    scoped: bool = false; // it needs memScoped
+// a slice of x's (a list's: of its elements' views) made from Kotlin sequence v, in m's memory
+attach fn kt_put_seq(this: bind&, x: u32, v: str, slot: str, pre: str, d: usize, m: str) -> std::string {
+    val dd = unum(@cast<u64>(d));
+    val e = fmt2("{}_e{}", S(pre), copy dd);
+    val i = fmt2("{}_i{}", S(pre), copy dd);
+    val y = fmt2("{}_x{}", S(pre), copy dd);
+    var out = fmt4("val {} = {}.allocArray<{}>({}.size.coerceAtLeast(1))\n", copy e, S(m), this.kt_var(this.view_of(x)), S(v));
+    val each = this.kt_put(x, y.as_str(), fmt2("{}[{}]", copy e, copy i).as_str(), pre, d + 1, m);
+    out.append(fmt4("{}.forEachIndexed {{ {}, {} ->\n{}}}\n", S(v), copy i, copy y, indent(each.as_str())).as_str());
+    out.append(fmt3("{}.ptr = {}\n{}.len = ", S(slot), copy e, S(slot)).as_str());
+    out.append(fmt("{}.size.convert()\n", S(v)).as_str());
+    return out;
 }
 
-attach fn kt_arg_of(this: bind&, t: u32, name0: str, a: kt_arg&) -> compile_error!void {
+// one parameter of a wrapper: its declaration, the statements converting it (before anything is
+// given up), what the call passes, what copies changes back, and a usePinned block the call runs in
+struct kt_arg {
+    decl: std::string = {};
+    pre: std::string = {};
+    pass: std::string = {};
+    after: std::string = {};
+    scope: std::string = {};
+}
+
+attach fn kt_arg_of(this: bind&, t: u32, name0: str, a: kt_arg&) -> void {
     val nm = kt_ident(name0);
     val n = nm.as_str();
+    val c = fmt("{}_c", S(name0));
     a.decl = fmt2("{}: {}", S(n), this.kt_ty(t));
     val h = this.lent_handle(t);
     if (h) {
-        a.pass = fmt("{}.voltHandle()", S(n));
+        // lent for the call
+        if (this.nullable_ptr(t)) {
+            a.pre = fmt2("val {} = {}?.let {{ volt_a.lend(it) }}\n", copy c, S(n));
+            a.pass = fmt("{}?.reinterpret()", copy c);
+        } else {
+            a.pre = fmt2("val {} = volt_a.lend({})\n", copy c, S(n));
+            a.pass = fmt("{}.reinterpret()", copy c);
+        }
         return;
     }
     match (this.shape_of(t) ?? shape::VOID) {
-        .STR => {
-            a.pass = fmt("voltStr({})", S(n));
-            a.scoped = true;
+        .CSTR => {
+            a.pass = S(n);
+            return;
         },
-        .CSTR => { a.pass = S(n); },
+        .ENUM(e) => {
+            a.pass = fmt("{}.value", S(n));
+            return;
+        },
+        .HANDLE(s) => {
+            // given up, once every argument is converted and checked
+            a.pre = fmt2("val {} = volt_a.give({})\n", copy c, S(n));
+            a.pass = fmt("{}.reinterpret()", copy c);
+            return;
+        },
         .PTR(x) => {
             val s = this.ref_struct(t);
             if (s) {
                 // a copy goes in, and what Volt changed comes back
                 val cn = this.c_named(this.c.si(s).name, false);
-                a.scoped = true;
                 if (this.nullable_ptr(t)) {
-                    a.pre = fmt4("val {}_p = if ({} == null) null else alloc<{}>().also {{ {}.write(it) }}\n", S(name0), S(n), copy cn, S(n));
-                    a.pass = fmt("{}_p?.ptr", S(name0));
-                    a.after = fmt3("if ({} != null) {{\n    {}.readFrom({}_p!!)\n}}\n", S(n), S(n), S(name0));
+                    a.pre = fmt4("val {} = if ({} == null) null else volt_m.alloc<{}>().also {{ {}.write(it, volt_m) }}\n", copy c, S(n), copy cn, S(n));
+                    a.pass = fmt("{}?.ptr", copy c);
+                    a.after = fmt3("if ({} != null) {{\n    {}.readFrom({}!!)\n}}\n", S(n), S(n), copy c);
                 } else {
-                    a.pre = fmt3("val {}_p = alloc<{}>().also {{ {}.write(it) }}\n", S(name0), copy cn, S(n));
-                    a.pass = fmt("{}_p.ptr", S(name0));
-                    a.after = fmt2("{}.readFrom({}_p)\n", S(n), S(name0));
+                    a.pre = fmt3("val {} = volt_m.alloc<{}>().also {{ {}.write(it, volt_m) }}\n", copy c, copy cn, S(n));
+                    a.pass = fmt("{}.ptr", copy c);
+                    a.after = fmt2("{}.readFrom({})\n", S(n), copy c);
                 }
                 return;
             }
             a.pass = S(n);
+            return;
         },
         .SLICE(x) => {
             val sc = this.c_prim(t, false);
+            if (this.kt_prim(x).len() > 0) {
+                // the array itself, pinned: what Volt writes is in it
+                a.pre = fmt2("val {}_n = {}.size\n", S(name0), S(n));
+                a.scope = fmt2("{}.usePinned {{ {}_pin ->", S(n), S(name0));
+                a.pass = fmt4("cValue<{}> {{ this.ptr = if ({}_n == 0) null else {}_pin.addressOf(0); this.len = {}_n.convert() }}", copy sc, S(name0), S(name0), S(name0));
+                return;
+            }
             match (this.shape_of(x) ?? shape::VOID) {
                 .STRUCT(s) => {
                     // the elements copied into C memory, and back
-                    val cn = this.c_named(this.c.si(s).name, false);
-                    a.scoped = true;
-                    a.pre = fmt3("val {}_p = allocArray<{}>({}.size.coerceAtLeast(1))\n", S(name0), copy cn, S(n));
-                    a.pre.append(fmt2("{}.forEachIndexed {{ i, e -> e.write({}_p[i]) }}\n", S(n), S(name0)).as_str());
-                    a.pass = fmt4("cValue<{}> {{ ptr = {}_p; len = {}.size.convert() }}", copy sc, S(name0), S(n), S(""));
-                    a.after = fmt2("{}.forEachIndexed {{ i, e -> e.readFrom({}_p[i]) }}\n", S(n), S(name0));
+                    val p = fmt("{}_p", S(name0));
+                    val i = fmt("{}_i", S(name0));
+                    val y = fmt("{}_x", S(name0));
+                    a.pre = fmt3("val {} = volt_m.allocArray<{}>({}.size.coerceAtLeast(1))\n", copy p, this.c_named(this.c.si(s).name, false), S(n));
+                    a.pre.append(fmt4("{}.forEachIndexed {{ {}, {} -> {}.write(", S(n), copy i, copy y, copy y).as_str());
+                    a.pre.append(fmt2("{}[{}], volt_m) }}\n", copy p, copy i).as_str());
+                    a.pre.append(fmt2("val {}_n = {}.size\n", S(name0), S(n)).as_str());
+                    a.pass = fmt3("cValue<{}> {{ this.ptr = {}; this.len = {}_n.convert() }}", copy sc, copy p, S(name0));
+                    a.after = fmt4("{}.forEachIndexed {{ {}, {} -> {}.readFrom(", S(n), copy i, copy y, copy y);
+                    a.after.append(fmt2("{}[{}]) }}\n", copy p, copy i).as_str());
+                    return;
                 },
-                default => {
-                    if (!this.simple_value(x)) {
-                        return fail(NO_SPAN, fmt("a slice of {} can't come from Kotlin", this.c.ty_name(x)));
-                    }
-                    // the array itself, pinned: what Volt writes is in it
-                    a.scope = fmt2("{}.usePinned {{ {}_pin ->", S(n), S(name0));
-                    a.pass = fmt4("cValue<{}> {{ ptr = if ({}.isEmpty()) null else {}_pin.addressOf(0); len = ", copy sc, S(n), S(name0), S(""));
-                    a.pass.append(fmt("{}.size.convert() }", S(n)).as_str());
-                },
+                default => {},
             }
+        },
+        .ARRAY(x, k) => {
+            a.pre = fmt3("val {} = volt_m.allocArray<{}>({})\n", copy c, this.kt_var(x), unum(k));
+            a.pre.append(this.kt_put(t, n, c.as_str(), name0, 0, "volt_m").as_str());
+            a.pass = copy c;
+            return;
         },
         .OPT(x) => {
-            if (!this.simple_value(x)) {
-                return fail(NO_SPAN, fmt("an optional {} can't come from Kotlin", this.c.ty_name(x)));
-            }
-            var set = fmt2("value = {}", this.kt_in(x, n), S(""));
-            match (this.shape_of(x) ?? shape::VOID) {
-                .STRUCT(s) => { set = fmt("{}.write(value)", S(n)); },
-                default => {},
-            }
-            a.pass = fmt4("cValue<{}> {{ if ({} != null) {{ {}; has = true }} }}", this.c_prim(t, false), S(n), move set, S(""));
-        },
-        .CLOSURE(i) => {
-            match (*this.c.t.get(t)) {
-                .FN_VAL(ps&, r) => {
-                    // the function, in a box the C function finds through a StableRef; what it
-                    // throws is kept (the later calls are skipped) and thrown once the call is back
-                    var params = S("u: COpaquePointer?");
-                    var args: std::string = {};
-                    for (k) in 0..ps.len {
-                        val ak = fmt("a{}", unum(@cast<u64>(k)));
-                        match (this.shape_of(*ps.at(k)) ?? shape::VOID) {
-                            .STR => {},
-                            default => {
-                                if (!this.simple_value(*ps.at(k))) {
-                                    return fail(NO_SPAN, fmt("a callback taking {} can't call Kotlin", this.c.ty_name(*ps.at(k))));
-                                }
-                            },
-                        }
-                        params.append(fmt2(", {}: {}", copy ak, this.kt_c(*ps.at(k))).as_str());
-                        if (k > 0) {
-                            args.append(", ");
-                        }
-                        args.append(this.kt_out(*ps.at(k), ak.as_str(), false).as_str());
-                    }
-                    var dflt: std::string = {};
-                    match (this.shape_of(r) ?? shape::VOID) {
-                        .VOID => {},
-                        .BOOL => { dflt = S("false"); },
-                        .FLOAT(b) => {
-                            dflt = S("0.0");
-                            if (b == 32) {
-                                dflt = S("0.0f");
-                            }
-                        },
-                        .INT(k) => { dflt = fmt("0.to{}()", S(kt_int(k))); },
-                        .ENUM(e) => { dflt = fmt("0.to{}()", S(kt_int(this.c.ei(e).tag))); },
-                        .CODE => { dflt = S("0u"); },
-                        default => { return fail(NO_SPAN, fmt("a callback returning {} can't call Kotlin", this.c.ty_name(r))); },
-                    }
-                    var ret = S("Unit");
-                    if (dflt.len() > 0) {
-                        ret = copy dflt;
-                    }
-                    val call = fmt2("b.f({})", move args, S(""));
-                    val ft = this.kt_ty(t);
-                    a.box = S(name0);
-                    a.box_ty = fmt2("VoltBox<{}>({})", copy ft, S(n));
-                    a.pass = fmt4("staticCFunction {{ {} ->\n    val b = u!!.asStableRef<VoltBox<{}>>().get()\n    if (b.error != null) {}", move params, copy ft, copy ret, S(""));
-                    a.pass.append(fmt3(" else try {{\n        {}\n    }} catch (e: Throwable) {{\n        b.error = e\n        {}\n    }}\n}}", this.kt_in(r, call.as_str()), copy ret, S("")).as_str());
-                    a.pass.append(fmt(", {}_ref.asCPointer()", S(name0)).as_str());
-                },
-                default => {},
+            if (this.handle_of(x) != null) {
+                // given up, once every argument is converted and checked
+                a.pre = fmt2("val {} = {}?.let {{ volt_a.give(it) }}\n", copy c, S(n));
+                a.pass = fmt("{}?.reinterpret()", copy c);
+                return;
             }
         },
-        default => { a.pass = this.kt_in(t, n); },
+        .TRAIT(k) => {
+            var given = S("true");
+            if (this.is_ref(t)) {
+                given = S("false");
+            }
+            a.pre = fmt4("val {} = voltObj_{}(volt_m, {}, volt_a, {})\n", copy c, this.short(this.trait_of(t)), S(n), move given);
+            a.pass = copy c;
+            return;
+        },
+        .CLOSURE(k) => {
+            // the function, in a box the C function finds through a StableRef (kept for the call)
+            val ft = this.kt_ty(t);
+            a.pre = fmt3("val {}_box = VoltBox<{}>({})\n", S(name0), copy ft, S(n));
+            a.pre.append(fmt3("val {}_ref = StableRef.create({}_box)\nvolt_m.defer {{ {}_ref.dispose() }}\n", S(name0), S(name0), S(name0)).as_str());
+            var ps: std::vec<u32> = {};
+            val r = this.fn_parts(t, &ps);
+            a.pass = fmt2("{}, {}_ref.asCPointer()", this.kt_upcall(&ps, r, ft.as_str(), ""), S(name0));
+            return;
+        },
+        .STR => {},
+        .TEXT(x) => {},
+        .STRUCT(s) => {},
+        .LIST(x) => {},
+        default => {
+            a.pass = S(n);
+            return;
+        },
     }
-    return;
+    // made in the call's memory: text as a str, a list as a slice of its elements' views, a slice of
+    // text, handles or optionals, an optional text
+    a.pre = fmt2("val {} = volt_m.alloc<{}>()\n", copy c, this.c_prim(this.in_ty(t), false));
+    a.pre.append(this.kt_put(t, n, c.as_str(), name0, 0, "volt_m").as_str());
+    a.pass = fmt("{}.readValue()", copy c);
 }
 
-// an expression turning C result r (of type t) into the API's value (raw: a handle stays a pointer)
-attach fn kt_result(this: bind&, t: u32, r: str, raw: bool) -> compile_error!std::string {
-    match (this.shape_of(t) ?? shape::VOID) {
+// what Volt gets from a callback or a trait fn whose Kotlin code threw: zeros, empty text, E!T's first
+// error (so Volt sees it fail)
+attach fn kt_stand_in(this: bind&, r: u32) -> std::string {
+    match (this.shape_of(r) ?? shape::VOID) {
         .VOID => { return S("Unit"); },
-        .CSTR => { return fmt("{}?.toKString()", S(r)); },
-        .TEXT(x) => { return fmt("voltTake({})", S(r)); },
+        .BOOL => { return S("false"); },
+        .INT(k) => { return fmt("0.to{}()", S(kt_int(k))); },
+        .FLOAT(b) => {
+            if (b == 32) {
+                return S("0.0f");
+            }
+            return S("0.0");
+        },
+        .ENUM(e) => {
+            val info = this.c.ei(e);
+            var first: i128 = 0;
+            if (info.values.len > 0) {
+                first = *info.values.at(0);
+            }
+            return fmt2("{}.to{}()", num(first), S(kt_int(info.tag)));
+        },
+        .CODE => { return S("0u"); },
+        .RESULT(e, x) => { return fmt2("cValue<{}> {{ error = {} }}", this.c_prim(r, false), this.lua_first_code(e)); },
+        default => {},
+    }
+    if (this.kt_cvalue(r)) {
+        return fmt("cValue<{}>()", this.c_prim(r, false));
+    }
+    return S("null");
+}
+
+// statements giving Kotlin's result (expression got, of type r) back to C as Volt takes it: text given
+// (Volt frees it), a str, a cstr or a slice in memory kept until the next one (voltKept)
+attach fn kt_give(this: bind&, r: u32, got: str) -> std::string {
+    val h = this.lent_handle(r);
+    if (h) {
+        if (this.nullable_ptr(r)) {
+            return fmt2("{}?.voltPtr()?.reinterpret<{}>()\n", S(got), this.kt_cn(h));
+        }
+        return fmt2("{}.voltPtr().reinterpret<{}>()\n", S(got), this.kt_cn(h));
+    }
+    match (this.shape_of(r) ?? shape::VOID) {
+        .ENUM(e) => { return fmt("{}.value\n", S(got)); },
+        .TEXT(x) => { return fmt("voltGiveText({})\n", S(got)); },
+        .CSTR => { return fmt("voltCstr(voltKept(), {})\n", S(got)); },
+        default => {},
+    }
+    if (!this.kt_cvalue(r)) {
+        return fmt("{}\n", S(got));
+    }
+    var out = fmt("val volt_v = {}\n", S(got));
+    val w = this.kt_put(r, "volt_v", "this", "volt", 0, "volt_k");
+    if (contains(w.as_str(), "volt_k")) {
+        out.append("val volt_k = voltKept()\n");
+    }
+    out.append(fmt2("cValue<{}> {{\n{}}}\n", this.c_prim(r, false), indent(w.as_str())).as_str());
+    return out;
+}
+
+// the staticCFunction Volt calls for a callback (box: its function's type, in the VoltBox its data
+// points at) or a Kotlin object's trait fn (callee: the method, on the object its self is a StableRef
+// to): its arguments converted (a handle Volt lends is a view, closed once it returns), the Kotlin
+// function called, its result given back as C takes it, inside the try. What it throws is kept for
+// the call into Volt (which gets a stand-in; a callback's later calls are skipped); one that must give
+// a handle has no stand-in, so its failure ends the program
+attach fn kt_upcall(this: bind&, ps: std::vec<u32>&, r: u32, box: str, callee: str) -> std::string {
+    var params = S("volt_s: COpaquePointer?");
+    var head: std::string = {};
+    var call = S(callee);
+    if (box.len > 0) {
+        params = S("volt_u: COpaquePointer?");
+        head = fmt("val volt_b = volt_u!!.asStableRef<VoltBox<{}>>().get()\n", S(box));
+        call = S("volt_b.f");
+    }
+    var args: std::string = {};
+    var fin: std::string = {};
+    var skipped: std::string = {};
+    for (k) in 0..ps.len {
+        val p = *ps.at(k);
+        val a = fmt("volt_p{}", unum(@cast<u64>(k)));
+        params.append(fmt2(", {}: {}", copy a, this.kt_c(this.in_ty(p))).as_str());
+        if (k > 0) {
+            args.append(", ");
+        }
+        val h = this.lent_handle(p);
+        if (h) {
+            // lent for the call: a view, closed once the function returns
+            val l = fmt("volt_l{}", unum(@cast<u64>(k)));
+            val cls = this.local(this.c.si(h).name);
+            if (this.nullable_ptr(p)) {
+                head.append(fmt3("val {} = {}?.let {{ {}(it, false) }}\n", copy l, copy a, copy cls).as_str());
+                fin.append(fmt("{}?.voltRaw?.p = null\n", copy l).as_str());
+            } else {
+                head.append(fmt3("val {} = {}({}!!, false)\n", copy l, copy cls, copy a).as_str());
+                fin.append(fmt("{}.voltRaw.p = null\n", copy l).as_str());
+            }
+            args.append(l.as_str());
+        } else if (this.handle_of(p) != null) {
+            // given: the function's (freed here when a failed callback's call is skipped)
+            val o = fmt("volt_o{}", unum(@cast<u64>(k)));
+            head.append(fmt2("val {} = {}\n", copy o, this.kt_value(p, a.as_str())).as_str());
+            skipped.append(fmt("{}.voltRaw.release()\n", copy o).as_str());
+            args.append(o.as_str());
+        } else {
+            args.append(this.kt_value(this.in_ty(p), a.as_str()).as_str());
+        }
+    }
+    val got = fmt2("{}({})", move call, move args);
+    val stand = this.kt_stand_in(r);
+    var body: std::string = {};
+    var gives_handle = false;
+    var code_of: std::string = {};
+    match (this.shape_of(r) ?? shape::VOID) {
         .HANDLE(s) => {
-            if (raw) {
-                return fmt("{}!!", S(r));
-            }
-            return fmt2("{}({}!!)", this.local(this.c.si(s).name), S(r));
-        },
-        .OPT(x) => {
-            if (!this.simple_value(x)) {
-                return fail(NO_SPAN, fmt("an optional {} can't go to Kotlin", this.c.ty_name(x)));
-            }
-            return fmt2("{}.useContents {{ if (has) {} else null }}", S(r), this.kt_out(x, "value", true));
-        },
-        .SLICE(x) => {
-            match (this.shape_of(x) ?? shape::VOID) {
-                .STRUCT(s) => { return fmt("{}.useContents {{ List(len.toInt()) {{ ptr!![it].toKotlin() }} }", S(r)); },
-                default => {},
-            }
-            if (!this.simple_value(x)) {
-                return fail(NO_SPAN, fmt("a slice of {} can't go to Kotlin", this.c.ty_name(x)));
-            }
-            return fmt2("{}.useContents {{ {}(len.toInt()) {{ ptr!![it] }} }", S(r), kt_array(this.kt_c(x).as_str()));
+            gives_handle = true;
+            body = fmt2("voltGiveUp({}).reinterpret<{}>()\n", copy got, this.kt_cn(s));
         },
         .RESULT(e, x) => {
-            // the value is read inside useContents: a text or a handle by its fields
-            var v: std::string = {};
-            match (this.shape_of(x) ?? shape::VOID) {
-                .VOID => { v = S("Unit"); },
-                .TEXT(y) => { v = S("voltTakeVar(value)"); },
-                .STRUCT(s) => { v = S("value.toKotlin()"); },
-                .STR => { v = S("voltString(value.readValue())"); },
-                .HANDLE(s) => {
-                    if (raw) {
-                        v = S("value!!");
-                    } else {
-                        v = fmt("{}(value!!)", this.local(this.c.si(s).name));
-                    }
-                },
-                .OPT(y) => { v = fmt("if (value.has) {} else null", this.kt_out(y, "value.value", true)); },
-                default => {
-                    if (!this.simple_value(x)) {
-                        return fail(NO_SPAN, fmt("{} can't go to Kotlin", this.c.ty_name(x)));
-                    }
-                    v = this.kt_out(x, "value", true);
-                },
+            // a VoltException thrown is the error Volt gets
+            val cr = this.c_prim(r, false);
+            code_of = fmt2(" catch (volt_e: VoltException) {{\n    cValue<{}> {{ error = if (volt_e.code != 0u) volt_e.code else {} }}\n}}", copy cr, this.lua_first_code(e));
+            if (x == VOID) {
+                body = fmt2("{}\ncValue<{}> {{ error = 0u }}\n", copy got, copy cr);
+            } else {
+                body = fmt("val volt_v = {}\n", copy got);
+                val w = this.kt_put(x, "volt_v", "value", "volt", 0, "volt_k");
+                if (contains(w.as_str(), "volt_k")) {
+                    body.append("val volt_k = voltKept()\n");
+                }
+                body.append(fmt2("cValue<{}> {{\n    error = 0u\n{}}}\n", copy cr, indent(w.as_str())).as_str());
             }
-            return fmt2("{}.useContents {{\n    if (error != 0u) throw voltError(error)\n    {}\n}}", S(r), move v);
         },
-        default => { return this.kt_out(t, r, false); },
+        default => { body = this.kt_give(r, got.as_str()); },
     }
+    var t = fmt("try {{\n{}}}", indent(body.as_str()));
+    t.append(code_of.as_str());
+    t.append(" catch (volt_e: Throwable) {\n");
+    if (gives_handle) {
+        t.append("    voltFatal(volt_e)\n");
+    } else {
+        if (box.len > 0) {
+            t.append("    volt_b.failed = true\n");
+        }
+        t.append("    voltKeep(volt_e)\n");
+        if (r != VOID) {
+            t.append(fmt("    {}\n", copy stand).as_str());
+        }
+    }
+    t.append("}");
+    if (fin.len() > 0) {
+        t.append(fmt(" finally {{\n{}}}", indent(fin.as_str())).as_str());
+    }
+    var inner = copy head;
+    if (box.len > 0 && !gives_handle) {
+        if (skipped.len() > 0) {
+            inner.append(fmt2("if (volt_b.failed) {{\n{}    {}\n}} else ", indent(skipped.as_str()), copy stand).as_str());
+        } else {
+            inner.append(fmt("if (volt_b.failed) {} else ", copy stand).as_str());
+        }
+    }
+    inner.append(t.as_str());
+    inner.append("\n");
+    var out = fmt("staticCFunction {{ {} ->\n", move params);
+    out.append(indent(inner.as_str()).as_str());
+    out.append("}");
+    return out;
 }
 
-// ": T" for a wrapper's result (nothing for Unit)
-attach fn kt_ret(this: bind&, t: u32) -> std::string {
-    match (this.shape_of(t) ?? shape::VOID) {
-        .VOID => { return {}; },
-        .RESULT(e, x) => { return this.kt_ret(x); },
-        .SLICE(x) => { return fmt(": {}", this.kt_ty(t)); },
-        .PTR(x) => { return fmt(": {}", this.kt_c(t)); },
-        default => { return fmt(": {}", this.kt_ty(t)); },
+// a wrapper's body: its arguments converted (pre), then what it gives up checked and given and the
+// rest lent (VoltArgs), the call (callee; self_of: the class whose this goes first, lent; cast: as
+// its handle's pointer), its result converted and what Kotlin code Volt called threw thrown; inside
+// memScoped when it needs memory
+attach fn kt_body(this: bind&, ret: u32, callee: str, self_of: str, cast: bool, args: std::vec<kt_arg>&, raw: bool) -> std::string {
+    var pre: std::string = {};
+    var passes: std::string = {};
+    var after: std::string = {};
+    var scopes: std::vec<std::string> = {};
+    if (self_of.len > 0) {
+        pre.append(fmt("val volt_self = volt_a.lend(this@{})\n", S(self_of)).as_str());
+        passes = S("volt_self");
+        if (cast) {
+            passes.append(".reinterpret()");
+        }
     }
+    for (a&) in args.items() {
+        if (passes.len() > 0) {
+            passes.append(", ");
+        }
+        passes.append(a.pass.as_str());
+        pre.append(a.pre.as_str());
+        after.append(a.after.as_str());
+        if (a.scope.len() > 0) {
+            put(&scopes, copy a.scope);
+        }
+    }
+    val upcalls = this.closures.len > 0 || this.traits.len > 0;
+    var inner: std::string = {};
+    val call = fmt2("{}({})", S(callee), move passes);
+    if (ret == VOID) {
+        inner.append(fmt("{}\n", copy call).as_str());
+    } else {
+        inner.append(fmt("val volt_r = {}\n", copy call).as_str());
+    }
+    inner.append(after.as_str());
+    if (ret != VOID) {
+        val conv = this.kt_result(ret, "volt_r", raw);
+        if (!upcalls) {
+            inner.append(fmt("{}\n", copy conv).as_str());
+        } else if (conv.as_str() == "volt_r") {
+            inner.append("voltThrown()\nvolt_r\n");
+        } else {
+            // converted first (owned text is freed then), but what Kotlin code Volt called threw wins
+            inner.append(fmt("val volt_v = {}\nvoltThrown()\nvolt_v.getOrThrow()\n", kt_block(S("runCatching"), copy conv)).as_str());
+        }
+    } else if (upcalls) {
+        inner.append("voltThrown()\n");
+    }
+    val gives = contains(pre.as_str(), "volt_a");
+    if (gives) {
+        var level = S("volt_a.start()\ntry {\n");
+        level.append(indent(inner.as_str()).as_str());
+        level.append("} finally {\n    volt_a.end()\n}\n");
+        inner = move level;
+    }
+    var k = scopes.len;
+    while (k > 0) {
+        k -= 1;
+        var level = fmt("{}\n", copy *scopes.at(k));
+        level.append(indent(inner.as_str()).as_str());
+        level.append("}\n");
+        inner = move level;
+    }
+    var body: std::string = {};
+    if (gives) {
+        body.append("val volt_a = VoltArgs()\n");
+    }
+    body.append(pre.as_str());
+    body.append(inner.as_str());
+    if (contains(pre.as_str(), "volt_m")) {
+        var level = S("memScoped {\n    val volt_m = this\n");
+        level.append(indent(body.as_str()).as_str());
+        level.append("}\n");
+        body = move level;
+    }
+    return body;
 }
 
 attach fn kt_doc(this: bind&, f: u32, ind: str) -> std::string {
@@ -13841,105 +14209,129 @@ attach fn kt_doc(this: bind&, f: u32, ind: str) -> std::string {
     return fmt2("{}/** {} */\n", S(ind), move d);
 }
 
-// a wrapper: its head (the parameters from first on spliced in at {}) and body; first == 1: a
-// method (its own handle first)
-attach fn kt_fn(this: bind&, f: u32, first: usize, head: str, raw: bool, ind: str) -> compile_error!std::string {
+attach fn kt_args(this: bind&, f: u32, first: usize) -> std::vec<kt_arg> {
     val info = this.c.fi(f);
-    var decls: std::string = {};
-    var passes: std::string = {};
-    var pre: std::string = {};
-    var after: std::string = {};
-    var scopes: std::vec<std::string> = {};
-    var boxes: std::vec<std::string> = {};
-    var box_tys: std::vec<std::string> = {};
-    var scoped = false;
-    if (first == 1) {
-        passes = S("voltHandle()");
-    }
+    var out: std::vec<kt_arg> = {};
     for (k) in first..info.params.len {
-        val p = info.params.at(k);
         var a: kt_arg = {};
-        try this.kt_arg_of(p.ty, p.name, &a);
-        if (decls.len() > 0) {
-            decls.append(", ");
+        this.kt_arg_of(info.params.at(k).ty, info.params.at(k).name, &a);
+        put(&out, move a);
+    }
+    return out;
+}
+
+fn kt_decls(args: std::vec<kt_arg>&) -> std::string {
+    var s: std::string = {};
+    for (a&) in args.items() {
+        if (s.len() > 0) {
+            s.append(", ");
         }
-        decls.append(a.decl.as_str());
-        if (passes.len() > 0) {
-            passes.append(", ");
-        }
-        passes.append(a.pass.as_str());
-        pre.append(a.pre.as_str());
-        after.append(a.after.as_str());
-        if (a.scope.len() > 0) {
-            put(&scopes, copy a.scope);
-        }
-        if (a.box.len() > 0) {
-            put(&boxes, copy a.box);
-            put(&box_tys, copy a.box_ty);
-        }
-        scoped = scoped || a.scoped;
+        s.append(a.decl.as_str());
     }
-    // the innermost body: the call, a callback's error, the result, what comes back
-    var inner = copy pre;
-    val call = fmt3("{}.{}({})", this.kt_cpkg(), S(info.c_name), move passes);
-    if (info.ret == VOID) {
-        inner.append(fmt("{}\n", copy call).as_str());
-    } else {
-        inner.append(fmt("val volt_r = {}\n", copy call).as_str());
-    }
-    for (b&) in boxes.items() {
-        inner.append(fmt("{}_box.error?.let { throw it }\n", copy *b).as_str());
-    }
-    if (info.ret != VOID) {
-        inner.append(fmt("val volt_v = {}\n", try this.kt_result(info.ret, "volt_r", raw)).as_str());
-    }
-    inner.append(after.as_str());
-    if (info.ret != VOID) {
-        inner.append("volt_v\n");
-    }
-    var k = scopes.len;
-    while (k > 0) {
-        k -= 1;
-        var level = fmt("{}\n", copy *scopes.at(k));
-        level.append(indent_n(inner.as_str(), 4).as_str());
-        level.append("}\n");
-        inner = move level;
-    }
-    if (scoped) {
-        var level = S("memScoped {\n");
-        level.append(indent_n(inner.as_str(), 4).as_str());
-        level.append("}\n");
-        inner = move level;
-    }
-    // callbacks: a StableRef to each box, disposed after the call
-    k = boxes.len;
-    while (k > 0) {
-        k -= 1;
-        val bn = boxes.at(k);
-        var level = fmt2("val {}_box = {}\n", copy *bn, copy *box_tys.at(k));
-        level.append(fmt2("val {}_ref = StableRef.create({}_box)\ntry {{\n", copy *bn, copy *bn).as_str());
-        level.append(indent_n(inner.as_str(), 4).as_str());
-        level.append(fmt("}} finally {{\n    {}_ref.dispose()\n}}\n", copy *bn).as_str());
-        inner = move level;
-    }
+    return s;
+}
+
+// a wrapper of export fn f: its head (the parameters from first on spliced in at {}) and body; a
+// method's own handle (self_of, its class) goes first, lent
+attach fn kt_fn(this: bind&, f: u32, first: usize, head: str, raw: bool, ind: str, self_of: str) -> std::string {
+    val info = this.c.fi(f);
+    val args = this.kt_args(f, first);
     var out = this.kt_doc(f, ind);
-    out.append(fmt2("{}{}\n", S(ind), replace_all(head, "{}", decls.as_str())).as_str());
-    out.append(indent_n(inner.as_str(), ind.len + 4).as_str());
+    out.append(fmt2("{}{}\n", S(ind), replace_all(head, "{}", kt_decls(&args).as_str())).as_str());
+    val callee = fmt2("{}.{}", this.kt_cpkg(), S(info.c_name));
+    out.append(indent_n(this.kt_body(info.ret, callee.as_str(), self_of, true, &args, raw).as_str(), ind.len + 4).as_str());
     out.append(fmt("{}}\n", S(ind)).as_str());
     return out;
 }
 
-attach fn kt_text(this: bind&) -> compile_error!std::string {
+// a struct field's Kotlin type: pointers and fn pointers stay their C forms
+attach fn kt_fty(this: bind&, t: u32) -> std::string {
+    match (this.shape_of(t) ?? shape::VOID) {
+        .PTR(x) => { return this.kt_c(t); },
+        .FN(i) => { return this.kt_c(t); },
+        default => { return this.kt_ty(t); },
+    }
+}
+
+// statements writing a field's value v into its C variable slot (memory from volt_m)
+attach fn kt_fput(this: bind&, t: u32, v: str, slot: str, pre: str) -> std::string {
+    match (this.shape_of(t) ?? shape::VOID) {
+        .PTR(x) => { return fmt2("{} = {}\n", S(slot), S(v)); },
+        .FN(i) => { return fmt2("{} = {}\n", S(slot), S(v)); },
+        default => { return this.kt_put(t, v, slot, pre, 0, "volt_m"); },
+    }
+}
+
+// a field's Kotlin value, read from its C variable v
+attach fn kt_ffrom(this: bind&, t: u32, v: str) -> std::string {
+    match (this.shape_of(t) ?? shape::VOID) {
+        .PTR(x) => { return S(v); },
+        .FN(i) => { return S(v); },
+        default => { return this.kt_from(t, v, 0); },
+    }
+}
+
+// trait K: a Kotlin interface; the table Volt calls a Kotlin object's fns through (its self a
+// StableRef to it), what makes the object Volt takes, and volt_T, Volt's own value of it
+attach fn kt_trait(this: bind&, k: u32, out: std::string&) -> void {
+    val t = *this.traits.at(k);
+    val tr = this.short(t);
+    val fns = this.fns_of(t);
+    val cn = this.c_named(tr.as_str(), false);
+    val vt = this.c_named(fmt("{}_vt", copy tr).as_str(), false);
+    var iface: std::string = {};
+    var table: std::string = {};
+    var calls: std::string = {};
+    for (f&) in fns.items() {
+        var args: std::vec<kt_arg> = {};
+        for (q) in 0..f.params.len {
+            var a: kt_arg = {};
+            var pn = fmt("p{}", unum(@cast<u64>(q) + 1));
+            if (q < f.names.len) {
+                pn = S(*f.names.at(q));
+            }
+            this.kt_arg_of(*f.params.at(q), pn.as_str(), &a);
+            put(&args, move a);
+        }
+        // (the table's field keeps the fn's name; the Kotlin method may not)
+        val fname = kt_ident(f.name);
+        val mname = kt_member(f.name);
+        iface.append(fmt3("    fun {}({}){}\n", copy mname, kt_decls(&args), this.kt_ret(f.ret)).as_str());
+        val callee = fmt2("volt_s!!.asStableRef<{}>().get().{}", copy tr, copy mname);
+        val up = indent(this.kt_upcall(&f.params, f.ret, "", callee.as_str()).as_str());
+        table.append(fmt2("    {} = {}\n", copy fname, S(up.as_str()[4..up.len()])).as_str());
+        calls.append(fmt3("\n    override fun {}({}){} = run {{\n", copy mname, kt_decls(&args), this.kt_ret(f.ret)).as_str());
+        val via = fmt("voltVt.pointed.{}!!.invoke", copy fname);
+        calls.append(indent_n(this.kt_body(f.ret, via.as_str(), fmt("volt_{}", copy tr).as_str(), false, &args, false).as_str(), 8).as_str());
+        calls.append("    }\n");
+    }
+    out.append(fmt4("\n/** trait {}: implement it to lend or give Volt a {} (Volt closes one it was given, when it's\n * AutoCloseable, once it's done); volt_{} is Volt's own */\ninterface {} {{\n", this.c.ty_name(t), copy tr, copy tr, copy tr).as_str());
+    out.append(iface.as_str());
+    out.append("}\n");
+    out.append(fmt4("\n// the table Volt calls a Kotlin {} through (its self a StableRef to it)\nprivate val voltVt_{}: CPointer<{}> = nativeHeap.alloc<{}>().apply {{\n", copy tr, copy tr, copy vt, copy vt).as_str());
+    out.append(table.as_str());
+    out.append("}.ptr\n");
+    out.append(fmt4("\n// a {} as Volt takes it: Volt's own as it is (given: let go here), or a Kotlin object behind a\n// StableRef (lent for the call, or given: kept until Volt drops it)\ninternal fun voltObj_{}(volt_m: MemScope, v: {}, va: VoltArgs, given: Boolean): CValue<{}> {{\n", copy tr, copy tr, copy tr, copy cn).as_str());
+    out.append(fmt2("    if (v is volt_{}) {{\n        val p = if (given) va.give(v) else va.lend(v)\n        return cValue {{\n            vt = v.voltVt\n            self = p\n            drop = if (given) v.voltDrop else null\n        }}\n    }}\n    val ref = StableRef.create(v)\n    volt_m.defer {{\n        if (!given || !va.started) {{\n            ref.dispose()\n        }}\n    }}\n    return cValue {{\n        vt = voltVt_{}\n", copy tr, copy tr).as_str());
+    out.append("        self = ref.asCPointer()\n        drop = if (given) voltDropObj else null\n    }\n}\n");
+    out.append(fmt4("\n/** trait {}'s value Volt made: close() (or use {{}}) frees it, as a cleaner does once it's\n * collected */\nclass volt_{} internal constructor(o: CValue<{}>) : VoltObject(o.useContents {{ self!! }}, true, \"{}\", ", this.c.ty_name(t), copy tr, copy cn, copy tr).as_str());
+    out.append(fmt2("voltFreer(o.useContents {{ drop }})), {} {{\n    internal val voltVt: CPointer<{}> = o.useContents {{ vt!! }}\n    internal val voltDrop = o.useContents {{ drop }}\n", copy tr, copy vt).as_str());
+    out.append(calls.as_str());
+    out.append("}\n");
+}
+
+attach fn kt_text(this: bind&) -> std::string {
     val ents = this.entries();
     val p = this.pkg;
     val cp = this.kt_cpkg();
     var out = fmt("// {}: generated by voltc bindings; the Volt package for Kotlin/Native. It calls the C\n", S(p));
     out.append(fmt3("// functions of --lang c's header through cinterop, in package {}: a {}.def of\n//   headers = {}.h\n", copy cp, S(p), S(p)).as_str());
     out.append(fmt3("//   package = {}\n// (cinterop -def {}.def -compiler-option -I<dir> -o {}.klib; then kotlinc-native -l ", copy cp, S(p), S(p)).as_str());
-    out.append(fmt3("{}.klib\n// -linker-options \"-L<dir> -l{}\"). Errors are thrown as VoltException, one subclass per error set;\n// an export struct is an AutoCloseable class (a Cleaner frees it too, once it's collected).\n", S(p), S(p), S("")).as_str());
+    out.append(fmt2("{}.klib\n// -linker-options \"-L<dir> -l{}\"). Errors are thrown as VoltException, one subclass per error set;\n", S(p), S(p)).as_str());
+    out.append("// an export struct, Volt's value of a trait and a closure Volt gives back are AutoCloseable classes\n// (a Cleaner frees them too, once they're collected); a trait is an interface; a callback any function;\n// std::vec a List, an optional T? (null: none).\n");
     out.append("@file:OptIn(kotlinx.cinterop.ExperimentalForeignApi::class, kotlin.experimental.ExperimentalNativeApi::class, ExperimentalUnsignedTypes::class)\n@file:Suppress(\"ClassName\", \"FunctionName\", \"EnumEntryName\", \"LocalVariableName\", \"PropertyName\")\n\n");
-    out.append(fmt2("package {}\n\nimport {}.*\nimport kotlinx.cinterop.*\nimport kotlin.native.ref.createCleaner\n", S(p), copy cp).as_str());
-    out.append("\n/** an error a Volt function returned: its code and name */\nopen class VoltException(val code: UInt, val name: String) : Exception(name)\n");
+    out.append(fmt2("package {}\n\nimport {}.*\nimport kotlinx.cinterop.*\nimport kotlin.native.concurrent.ThreadLocal\nimport kotlin.native.ref.createCleaner\n", S(p), copy cp).as_str());
+    out.append("\n/** an error a Volt function returned: its code and name */\nopen class VoltException(val code: UInt, val name: String) : Exception(name) {\n    companion object {\n        /** the exception of an error code (a callback throws one to give Volt that error) */\n        fun of(code: UInt): VoltException = voltError(code)\n    }\n}\n");
     out.append("\ninternal fun voltError(code: UInt): VoltException = when (code) {\n");
     for (c&) in this.all_codes().items() {
         out.append(fmt3("    {}u -> {}(code, \"{}\")\n", num(c.code), copy c.set, S(c.name)).as_str());
@@ -13950,7 +14342,7 @@ attach fn kt_text(this: bind&) -> compile_error!std::string {
             .ENUM(e) => {
                 val info = this.c.ei(e);
                 val n = this.local(info.name);
-                out.append(fmt3("\n/** error set {}: thrown for its errors; its codes */\nclass {}(code: UInt, name: String) : VoltException(code, name) {{\n    companion object {{\n", S(info.name), copy n, S("")).as_str());
+                out.append(fmt2("\n/** error set {}: thrown for its errors; its codes */\nclass {}(code: UInt, name: String) : VoltException(code, name) {{\n    companion object {{\n", S(info.name), copy n).as_str());
                 for (i) in 0..info.names.len {
                     out.append(fmt2("        const val {}: UInt = {}u\n", S(*info.names.at(i)), num(*info.values.at(i))).as_str());
                 }
@@ -13959,13 +14351,26 @@ attach fn kt_text(this: bind&) -> compile_error!std::string {
             default => {},
         }
     }
-    out.append("\ninternal fun voltString(s: CValue<volt_str>): String = s.useContents { if (len == 0UL) \"\" else ptr!!.readBytes(len.toInt()).decodeToString() }\n");
-    out.append("\n// a String's UTF-8 bytes, in the memScoped block's memory\ninternal fun MemScope.voltStr(s: String): CValue<volt_str> {\n    val b = s.encodeToByteArray()\n    val p = allocArray<UByteVar>(b.size.coerceAtLeast(1))\n    b.forEachIndexed { i, x -> p[i] = x.toUByte() }\n    return cValue<volt_str> {\n        ptr = p\n        len = b.size.convert()\n    }\n}\n");
+    // what every package's calls share: the errors Kotlin code Volt called threw, handles' state
+    out.append("\n// what Kotlin code Volt called threw (a callback, a trait fn): Volt got a stand-in, and the first is\n// thrown once the call into Volt is back\n@ThreadLocal\nprivate var voltPending: Throwable? = null\n\ninternal fun voltKeep(e: Throwable) {\n    if (voltPending == null) {\n        voltPending = e\n    }\n}\n\ninternal fun voltThrown() {\n    val e = voltPending ?: return\n    voltPending = null\n    throw e\n}\n");
+    out.append("\n// what has no stand-in failed (a callback that must give Volt a handle): the program ends, as a Volt\n// panic does\ninternal fun voltFatal(e: Throwable): Nothing {\n    platform.posix.fputs(\"panic: a callback gave Volt no handle: $e\\n\", platform.posix.stderr)\n    kotlin.system.exitProcess(101)\n}\n");
+    out.append("\n// a function passed for a callback; once it threw, Volt's later calls of it are skipped\ninternal class VoltBox<F>(val f: F) {\n    var failed = false\n}\n");
+    out.append("\n// what a Volt value held by a handle holds: its pointer (null once closed or given to Volt), whether\n// it's its own to free (one Volt lends a callback isn't), and how many running calls it's lent to\n// ponytail: p and busy aren't atomic, so a value is used from one thread at a time; a lock if shared\ninternal class VoltRaw(var p: COpaquePointer?, val owned: Boolean, val what: String, val free: (COpaquePointer) -> Unit) {\n    var busy = 0\n\n    fun release() {\n        val q = p ?: return\n        p = null\n        if (owned) {\n            free(q)\n        }\n    }\n}\n");
+    out.append("\n/** a Volt value held by a handle: close() (or use {}) frees it once, as a cleaner does once it's\n * collected */\nabstract class VoltObject internal constructor(p: COpaquePointer, owned: Boolean, what: String, free: (COpaquePointer) -> Unit) : AutoCloseable {\n    internal val voltRaw = VoltRaw(p, owned, what, free)\n    private val voltCleaner = createCleaner(voltRaw) { it.release() }\n\n    /** frees it now (not while a running call holds it) */\n    override fun close() {\n        check(voltRaw.busy == 0) { \"this ${voltRaw.what} is in use by a running call\" }\n        voltRaw.release()\n        voltThrown()\n    }\n\n    internal fun voltPtr(): COpaquePointer = voltRaw.p ?: throw IllegalStateException(\"this ${voltRaw.what} is closed\")\n}\n");
+    out.append("\n// what frees a Volt value: its drop, on its pointer\ninternal fun voltFreer(d: CPointer<CFunction<(COpaquePointer?) -> Unit>>?): (COpaquePointer) -> Unit = { d?.invoke(it) }\n");
+    out.append("\n// a call's handles: what it lends (in use while it runs, so it's not closed or given meanwhile) and\n// what it gives up, all checked before any is let go\ninternal class VoltArgs {\n    private val lent = ArrayList<VoltObject>()\n    private val given = ArrayList<VoltObject>()\n    var started = false\n\n    fun lend(o: VoltObject): COpaquePointer = o.voltPtr().also { lent.add(o) }\n\n    fun give(o: VoltObject): COpaquePointer = o.voltPtr().also { given.add(o) }\n\n");
+    out.append("    fun start() {\n        for ((i, o) in given.withIndex()) {\n            val r = o.voltRaw\n            check(r.owned) { \"this ${r.what} is lent to a callback, not its to give\" }\n            check(r.busy == 0 && lent.none { it === o }) { \"this ${r.what} is in use by a running call\" }\n            check((0 until i).none { given[it] === o }) { \"this ${r.what} is given twice\" }\n        }\n        for (o in given) {\n            o.voltRaw.p = null\n        }\n        for (o in lent) {\n            o.voltRaw.busy++\n        }\n        started = true\n    }\n\n    fun end() {\n        for (o in lent) {\n            o.voltRaw.busy--\n        }\n    }\n}\n");
+    out.append("\n// a handle Kotlin gives Volt (a callback's result): checked, then let go\ninternal fun voltGiveUp(o: VoltObject): COpaquePointer {\n    val va = VoltArgs()\n    val p = va.give(o)\n    va.start()\n    return p\n}\n");
+    out.append("\n// what Volt only borrows from a callback (a str, a slice): kept until the next one on this thread\n// ponytail: Volt reads it before the callback runs again; hold more if a fn keeps two\n@ThreadLocal\nprivate var voltKeptMem: Arena? = null\n\ninternal fun voltKept(): Arena {\n    voltKeptMem?.clear()\n    return Arena().also { voltKeptMem = it }\n}\n");
+    out.append("\n// Volt drops a Kotlin object it was given: let go, and closed when it's AutoCloseable\nprivate val voltDropObj = staticCFunction { self: COpaquePointer? ->\n    val r = self!!.asStableRef<Any>()\n    val o = r.get()\n    r.dispose()\n    if (o is AutoCloseable) {\n        try {\n            o.close()\n        } catch (e: Throwable) {\n            voltKeep(e)\n        }\n    }\n}\n");
+    out.append("\n// a String? as a C string in m's memory\ninternal fun voltCstr(m: AutofreeScope, s: String?): CPointer<ByteVar>? = s?.cstr?.getPointer(m)\n");
+    if (this.uses_str) {
+        out.append("\ninternal fun voltStringVar(s: volt_str): String = if (s.len == 0UL) \"\" else s.ptr!!.readBytes(s.len.toInt()).decodeToString()\n\ninternal fun voltString(s: CValue<volt_str>): String = s.useContents { voltStringVar(this) }\n");
+        out.append("\n// a String's UTF-8 bytes as a str, in m's memory\ninternal fun voltStrTo(m: AutofreeScope, s: String, v: volt_str) {\n    val c = s.utf8\n    v.ptr = c.getPointer(m).reinterpret()\n    v.len = (c.size - 1).convert()\n}\n");
+    }
     if (this.texts.len > 0) {
         out.append("\n// owned text: copied into a String, then freed\ninternal fun voltTakeVar(t: volt_text): String {\n    val s = if (t.len == 0UL) \"\" else t.ptr!!.readBytes(t.len.toInt()).decodeToString()\n    t.drop?.invoke(t.owner)\n    return s\n}\n\ninternal fun voltTake(t: CValue<volt_text>): String = t.useContents { voltTakeVar(this) }\n");
-    }
-    if (this.closures.len > 0) {
-        out.append("\n// a function passed for a callback, and what it threw\ninternal class VoltBox<F>(val f: F) {\n    var error: Throwable? = null\n}\n");
+        out.append("\n// a String as owned text for Volt (a callback's or a trait fn's result), which frees it with drop\ninternal fun voltGiveText(s: String): CValue<volt_text> {\n    val b = s.encodeToByteArray()\n    val p = nativeHeap.allocArray<UByteVar>(b.size.coerceAtLeast(1))\n    b.forEachIndexed { i, x -> p[i] = x.toUByte() }\n    return cValue {\n        ptr = p\n        len = b.size.convert()\n        owner = p\n        drop = voltFreeText\n    }\n}\n\nprivate val voltFreeText = staticCFunction { o: COpaquePointer? -> nativeHeap.free(o!!.rawValue) }\n");
     }
     for (e&) in this.enums.items() {
         val info = this.c.ei(*e);
@@ -13992,47 +14397,62 @@ attach fn kt_text(this: bind&) -> compile_error!std::string {
         var news: std::string = {};
         for (f&) in info.fields.items() {
             val fname = kt_ident(f.name);
-            match (*this.c.t.get(f.ty)) {
-                .ARRAY(e, k) => { return fail(NO_SPAN, fmt2("struct {} has an array field ({}), which Kotlin bindings can't copy", S(info.name), S(f.name))); },
-                default => {},
-            }
             if (fields.len() > 0) {
                 fields.append(", ");
                 news.append(", ");
             }
-            match (this.shape_of(f.ty) ?? shape::VOID) {
-                .STRUCT(fs) => {
-                    fields.append(fmt2("var {}: {}", copy fname, this.local(this.c.si(fs).name)).as_str());
-                    writes.append(fmt2("    {}.write(c.{})\n", copy fname, copy fname).as_str());
-                    reads.append(fmt2("    {}.readFrom(c.{})\n", copy fname, copy fname).as_str());
-                    news.append(fmt("{}.toKotlin()", copy fname).as_str());
-                },
-                default => {
-                    fields.append(fmt2("var {}: {}", copy fname, this.kt_c(f.ty)).as_str());
-                    writes.append(fmt2("    c.{} = {}\n", copy fname, copy fname).as_str());
-                    reads.append(fmt2("    {} = c.{}\n", copy fname, copy fname).as_str());
-                    news.append(fname.as_str());
-                },
-            }
+            fields.append(fmt2("var {}: {}", copy fname, this.kt_fty(f.ty)).as_str());
+            writes.append(indent(this.kt_fput(f.ty, fname.as_str(), fmt("volt_c.{}", copy fname).as_str(), f.name).as_str()).as_str());
+            reads.append(fmt2("    {} = {}\n", copy fname, this.kt_ffrom(f.ty, fmt("volt_c.{}", copy fname).as_str())).as_str());
+            news.append(this.kt_ffrom(f.ty, fmt("this.{}", copy fname).as_str()).as_str());
         }
         out.append(fmt2("\ndata class {}({})\n", copy n, move fields).as_str());
-        out.append(fmt3("\ninternal fun {}.write(c: {}) {{\n{}}}\n", copy n, copy cn, move writes).as_str());
-        out.append(fmt3("\ninternal fun {}.readFrom(c: {}) {{\n{}}}\n", copy n, copy cn, move reads).as_str());
-        out.append(fmt3("\ninternal fun {}.toKotlin(): {} = {}(", copy cn, copy n, copy n).as_str());
-        out.append(fmt("{})\n", move news).as_str());
-        out.append(fmt3("\ninternal fun {}.toC(): CValue<{}> = cValue {{ this@toC.write(this) }}\n", copy n, copy cn, S("")).as_str());
+        out.append(fmt3("\ninternal fun {}.write(volt_c: {}, volt_m: AutofreeScope) {{\n{}}}\n", copy n, copy cn, move writes).as_str());
+        out.append(fmt3("\ninternal fun {}.readFrom(volt_c: {}) {{\n{}}}\n", copy n, copy cn, move reads).as_str());
+        out.append(fmt4("\ninternal fun {}.toKotlin(): {} = {}({})\n", copy cn, copy n, copy n, move news).as_str());
     }
-    // a class per export struct: AutoCloseable, and a Cleaner for when it's collected
+    // lists Volt gives out
+    for (k) in 0..this.lists.len {
+        val lt = *this.lists.at(k);
+        val e = this.list_elem(lt);
+        var v = this.view_of(e);
+        if (this.handle_of(e) != null) {
+            v = e;
+        }
+        out.append(fmt3("\n// {}, given out by Volt: its elements copied out (each handle the caller's), then it's freed\ninternal fun voltList{}(l: {}): ", this.c.ty_name(lt), unum(@cast<u64>(k)), this.c_prim(lt, false)).as_str());
+        out.append(fmt2("List<{}> {{\n    val out = List(l.len.toInt()) {{ volt_i0 -> {} }}\n    l.drop?.invoke(l.owner)\n    return out\n}}\n", this.kt_ty(e), this.kt_from(v, "l.ptr!![volt_i0]", 1)).as_str());
+    }
+    for (k) in 0..this.traits.len {
+        this.kt_trait(@cast<u32>(k), &out);
+    }
+    // closures Volt gives back: callable classes
+    for (i) in 0..this.closures.len {
+        if (!has_u32(&this.closures_out, @cast<u32>(i))) {
+            continue;
+        }
+        val ct = *this.closures.at(i);
+        var ps: std::vec<u32> = {};
+        val r = this.fn_parts(ct, &ps);
+        val ii = unum(@cast<u64>(i));
+        var args: std::vec<kt_arg> = {};
+        for (q) in 0..ps.len {
+            var a: kt_arg = {};
+            this.kt_arg_of(*ps.at(q), fmt("p{}", unum(@cast<u64>(q) + 1)).as_str(), &a);
+            put(&args, move a);
+        }
+        val cls = fmt("Closure{}", copy ii);
+        out.append(fmt4("\n/** {}, given out by Volt: call it; close() (or use {{}}) frees it, as a cleaner does once it's\n * collected */\nclass {} internal constructor(c: CValue<{}>) : VoltObject(c.useContents {{ self!! }}, true, \"closure\", voltFreer(c.useContents {{ drop }})), {} {{\n", this.c.ty_name(ct), copy cls, this.c_named(fmt("closure{}", copy ii).as_str(), false), this.kt_ty(ct)).as_str());
+        out.append(fmt3("    private val voltFn = c.useContents {{ call!! }}\n\n    override fun invoke({}){} = run {{\n{}", kt_decls(&args), this.kt_ret(r), indent_n(this.kt_body(r, "voltFn.invoke", cls.as_str(), false, &args, false).as_str(), 8)).as_str());
+        out.append("    }\n}\n");
+    }
+    // a class per export struct
     for (s&) in this.handles.items() {
         val cls = this.local(this.c.si(*s).name);
-        val cn = fmt("cnames.structs.{}", this.c_named(this.c.si(*s).name, false));
-        val fr = this.free_name(*s);
-        out.append(fmt3("\n// what a {} holds, freed once (by close or the cleaner)\ninternal class {}_raw(var p: CPointer<{}>?) {{\n", copy cls, copy cls, copy cn).as_str());
-        out.append(fmt2("    fun free() {{\n        p?.let {{ {}.{}(it) }}\n        p = null\n    }}\n}}\n", copy cp, copy fr).as_str());
-        out.append(fmt3("\n/** export struct {}; close() (or the cleaner, once it's collected) frees it */\nclass {} internal constructor(h: CPointer<{}>) : AutoCloseable {{\n", S(this.c.si(*s).name), copy cls, copy cn).as_str());
-        out.append(fmt2("    private val voltRaw = {}_raw(h)\n    private val voltCleaner = createCleaner(voltRaw) {{ it.free() }}\n\n    override fun close() = voltRaw.free()\n\n", copy cls, S("")).as_str());
-        out.append(fmt2("    internal fun voltHandle(): CPointer<{}> = voltRaw.p ?: throw IllegalStateException(\"this {} is closed\")\n", copy cn, copy cls).as_str());
+        val cn = this.kt_cn(*s);
+        out.append(fmt3("\n/** export struct {}: close() (or use {{}}) frees it, as a cleaner does once it's collected */\nclass {} internal constructor(h: CPointer<{}>, owned: Boolean = true) : ", S(this.c.si(*s).name), copy cls, copy cn).as_str());
+        out.append(fmt3("VoltObject(h, owned, \"{}\", {{ {}.{}(it.reinterpret()) }}) {{\n", copy cls, copy cp, this.free_name(*s)).as_str());
         var statics: std::string = {};
+        var first = true;
         for (e&) in ents.items() {
             if (e.free_of != null) {
                 continue;
@@ -14040,34 +14460,41 @@ attach fn kt_text(this: bind&) -> compile_error!std::string {
             val m = this.member_of(e.f, *s) ?? continue;
             val info = this.c.fi(e.f);
             if (this.node_is_method(e.f, *s)) {
-                out.append("\n");
-                val head = fmt2("fun {}({{}}){} = run {{", kt_ident(m), this.kt_ret(info.ret));
-                out.append((try this.kt_fn(e.f, 1, head.as_str(), false, "    ")).as_str());
+                if (!first) {
+                    out.append("\n");
+                }
+                first = false;
+                val head = fmt2("fun {}({{}}){} = run {{", kt_member(m), this.kt_ret(info.ret));
+                out.append(this.kt_fn(e.f, 1, head.as_str(), false, "    ", cls.as_str()).as_str());
             } else if (m == "new" && this.made_by(e.f, *s)) {
                 // a constructor: make the handle, then the instance holding it
-                var args: std::string = {};
+                val args = this.kt_args(e.f, 0);
                 var names: std::string = {};
                 for (k) in 0..info.params.len {
                     if (k > 0) {
-                        args.append(", ");
                         names.append(", ");
                     }
-                    args.append(fmt2("{}: {}", kt_ident(info.params.at(k).name), this.kt_ty(info.params.at(k).ty)).as_str());
                     names.append(kt_ident(info.params.at(k).name).as_str());
                 }
-                out.append("\n");
+                if (!first) {
+                    out.append("\n");
+                }
+                first = false;
                 out.append(this.kt_doc(e.f, "    ").as_str());
-                out.append(fmt2("    constructor({}) : this(voltMake({}))\n", move args, move names).as_str());
+                out.append(fmt2("    constructor({}) : this(voltMake({}))\n", kt_decls(&args), move names).as_str());
                 statics.append("\n");
-                statics.append((try this.kt_fn(e.f, 0, fmt("private fun voltMake({{}}): CPointer<{}> = run {{", copy cn).as_str(), true, "        ")).as_str());
+                statics.append(this.kt_fn(e.f, 0, fmt("private fun voltMake({{}}): CPointer<{}> = run {{", copy cn).as_str(), true, "        ", "").as_str());
             } else {
                 statics.append("\n");
                 val head = fmt2("fun {}({{}}){} = run {{", kt_ident(m), this.kt_ret(info.ret));
-                statics.append((try this.kt_fn(e.f, 0, head.as_str(), false, "        ")).as_str());
+                statics.append(this.kt_fn(e.f, 0, head.as_str(), false, "        ", "").as_str());
             }
         }
         if (statics.len() > 0) {
-            out.append(fmt("\n    companion object {{{}    }\n", move statics).as_str());
+            if (!first) {
+                out.append("\n");
+            }
+            out.append(fmt("    companion object {{{}    }\n", move statics).as_str());
         }
         out.append("}\n");
     }
@@ -14079,7 +14506,7 @@ attach fn kt_text(this: bind&) -> compile_error!std::string {
         val info = this.c.fi(e.f);
         out.append("\n");
         val head = fmt2("fun {}({{}}){} = run {{", kt_ident(info.c_name), this.kt_ret(info.ret));
-        out.append((try this.kt_fn(e.f, 0, head.as_str(), false, "")).as_str());
+        out.append(this.kt_fn(e.f, 0, head.as_str(), false, "", "").as_str());
     }
     return out;
 }
@@ -15233,7 +15660,7 @@ attach fn rb_text(this: bind&) -> compile_error!std::string {
 // the bindings of package pkg in lang (see the top of the file; node, js and ts are a Node-API
 // addon, its loader and its types; json is the model itself)
 attach fn bindings(this: checker&, pkg: str, lang: str) -> compile_error!std::string {
-    var b: bind = { c: this, pkg: pkg, wide: lang == "c" || lang == "cpp" || lang == "rust" || lang == "zig" || lang == "go" || lang == "python" || lang == "dart" || lang == "pyi" || lang == "java" || lang == "csharp" || lang == "node" || lang == "js" || lang == "ts" || lang == "lua" || lang == "ruby" || lang == "swift" || lang == "json" };
+    var b: bind = { c: this, pkg: pkg };
     val fns = b.exports();
     if (fns.len == 0) {
         return fail(NO_SPAN, fmt("package {} has no export fns to make bindings for", S(pkg)));
