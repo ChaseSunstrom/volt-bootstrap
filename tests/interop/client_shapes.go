@@ -181,8 +181,19 @@ func inUse() {
 	}()
 }
 
+// what Volt writes into a slice of optionals comes back (it prints only what's wrong)
+func fillSome() {
+	three := int64(3)
+	xs := []*int64{&three, nil}
+	shapelib.FillSome(xs)
+	if xs[0] == nil || xs[1] == nil || *xs[0] != 6 || *xs[1] != 20 {
+		fmt.Println("fill_some: Volt's writes didn't come back")
+	}
+}
+
 func main() {
 	run()
 	inUse()
+	fillSome()
 	fmt.Fprintf(os.Stderr, "volt live: %d\n", C.volt_live_allocs)
 }

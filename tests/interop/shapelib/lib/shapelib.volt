@@ -297,3 +297,10 @@ export fn visit_over(xs: account&[..], f: fn(account&) -> i64) -> i64 {
 export fn lend_give(a: account&, b: account) -> i64 {
     return a.cents + b.cents;
 }
+
+// writes into a slice of optionals (what the caller sees after): a value doubles, none becomes 20
+export fn fill_some(xs: i64?[..]) -> void {
+    for (i) in 0..xs.len {
+        xs[i] = (xs[i] ?? 10) * 2;
+    }
+}

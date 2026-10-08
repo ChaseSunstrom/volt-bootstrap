@@ -8130,10 +8130,12 @@ attach fn go_slice_arg(this: bind&, x: u32, given: bool, name: str, a: go_arg&) 
     a.pass = move pass;
     match (this.shape_of(x) ?? shape::VOID) {
         .OPT(v) => {
-            // optionals: a C copy (what Volt writes in it doesn't come back)
+            // optionals: a C copy, and what Volt wrote comes back (a value, or nil for none)
             val on = this.made_name("opt", v, false);
             a.before = fmt4("{}_c := make([]C.{}, len({})+1)\nfor i, v := range {} {{\n", copy n, copy on, copy n, copy n);
             a.before.append(fmt3("    if v != nil {{\n        {}_c[i] = C.{}{{value: {}, has: true}}\n    }}\n}}\n", copy n, copy on, this.go_to_c(v, "*v")).as_str());
+            a.after = fmt3("for i := range {} {{\n    if {}_c[i].has {{\n        v := {}\n", copy n, copy n, this.go_from_c(v, fmt("{}_c[i].value", copy n).as_str()));
+            a.after.append(fmt2("        {}[i] = &v\n    }} else {{\n        {}[i] = nil\n    }}\n}}\n", copy n, copy n).as_str());
             return;
         },
         default => {},
