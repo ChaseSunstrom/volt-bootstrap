@@ -405,7 +405,7 @@ fn bindings_nested_slices() {
     assert_eq!(ok(Command::new(e.dir.join("main")).output().unwrap(), "main"), "6\n7 7\n");
 }
 
-const SHAPES_OUT: &str = "biggest 9 1.5\naccount bea 300\nvisit 301 get 301\nclosed 301 1\ncircle of area 3\ncircle gone\ngrown 27\nsquare 9 square of area 9\nhey!\ntry 4 OVERDRAWN\nopened 25\nclosed 2\n42 hello, volt\nowners 2 ann bobby\nrichest 9 after 6 10\nopened 2 dee\nsquares 4 16 sum 30\njoined a-b-c total 3\nhello, ann; hello, nobody\nnick 1 ann 0\nopen_if 1 1\nclose_if 0 -1\nclose_all 2\nsome 2\nrows 6\nlists closed 7\ncircle gone\n";
+const SHAPES_OUT: &str = "biggest 9 1.5\naccount bea 300\nvisit 301 get 301\nclosed 301 1\ncircle of area 3\ncircle gone\ngrown 27\nsquare 9 square of area 9\nhey!\ntry 4 OVERDRAWN\nopened 25\nclosed 2\n42 hello, volt\nowners 2 ann bobby\nrichest 9 after 6 10\nopened 2 dee\nsquares 4 16 sum 30\njoined a-b-c total 3\nhello, ann; hello, nobody\nnick 1 ann 0\nopen_if 1 1\nclose_if 0 -1\nclose_all 2\nsome 2\nrows 6\narrays 12 13 11 2.5 1.5 2 3 4\nlists closed 7\ncircle gone\n";
 
 #[test]
 fn bindings_shapes() {
@@ -494,7 +494,7 @@ fn bindings_shapes() {
         // after the rest, what only Python checks: callbacks' exceptions, what Volt can't take)
         let py = Command::new("python3").arg(Path::new(ROOT).join("tests/interop/client_shapes.py")).env("PYTHONPATH", e.path("")).env("VOLT_SHAPELIB_LIB", format!("{lib}/libshapelib.so")).output().unwrap();
         assert_eq!(String::from_utf8_lossy(&py.stderr), "volt live: 0\n", "client_shapes.py ({backend}): the library's allocations at exit");
-        let tail = "raised ValueError ValueError ValueError ValueError\nwrong type TypeError\nrefused ValueError ValueError ValueError\nkept ValueError ann 5\nfatal 101 True\n";
+        let tail = "raised ValueError ValueError ValueError ValueError\nwrong type TypeError\nwrong length ValueError ValueError\nrefused ValueError ValueError ValueError\nkept ValueError ann 5\nfatal 101 True\n";
         assert_eq!(ok(py, "python3 client_shapes.py"), format!("checked true OVERDRAWN\nlimit true OVERDRAWN\nsign positive not positive\n{SHAPES_OUT}{tail}"), "client_shapes.py ({backend})");
         // Go: a module with the generated cgo package; the client prints the leak report to stderr
         // itself (a Go program's exit runs no C destructors)

@@ -64,6 +64,8 @@ fn lists() {
     println!("some {}", count_some(&mut [VoltOpt::from(Some(1)), VoltOpt::from(None), VoltOpt::from(Some(3))]));
     let (mut r1, mut r2) = ([1i64, 2], [3i64]);
     println!("rows {}", total_rows(&mut [VoltSlice::from(&mut r1[..]), VoltSlice::from(&mut r2[..])]));
+    let (rot, sw, bu) = (rotated([11, 12, 13]), swapped([1.5, 2.5]), bumped([1, 2, 3]));
+    println!("arrays {} {} {} {} {} {} {} {}", rot[0], rot[1], rot[2], sw[0], sw[1], bu[0], bu[1], bu[2]);
     println!("lists closed {}", closed_accounts());
 }
 

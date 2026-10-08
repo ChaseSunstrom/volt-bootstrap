@@ -135,6 +135,10 @@ static void lists(void) {
     int64_t r1[] = {1, 2}, r2[] = {3};
     shapelib_slice_i64 rr[] = {{r1, 2}, {r2, 1}};
     printf("rows %lld\n", (long long)total_rows((shapelib_slice_slice_i64){rr, 2}));
+    shapelib_array_i64_3 rot = rotated((shapelib_array_i64_3){{11, 12, 13}});
+    shapelib_array_f64_2 sw = swapped((shapelib_array_f64_2){{1.5, 2.5}});
+    shapelib_array_u8_3 bu = bumped((shapelib_array_u8_3){{1, 2, 3}});
+    printf("arrays %lld %lld %lld %g %g %d %d %d\n", (long long)rot.v[0], (long long)rot.v[1], (long long)rot.v[2], sw.v[0], sw.v[1], bu.v[0], bu.v[1], bu.v[2]);
     printf("lists closed %d\n", closed_accounts());
 }
 

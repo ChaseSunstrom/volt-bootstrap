@@ -118,6 +118,8 @@ void lists() {
   print('close_all ${close_all(both)}');
   print('some ${count_some([1, null, 3])}');
   print('rows ${total_rows([[1, 2], [3]])}');
+  final rot = rotated([11, 12, 13]), sw = swapped([1.5, 2.5]), bu = bumped([1, 2, 3]);
+  print('arrays ${rot.join(' ')} ${sw.join(' ')} ${bu.join(' ')}');
   print('lists closed ${closed_accounts()}');
 }
 

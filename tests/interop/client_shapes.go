@@ -97,6 +97,8 @@ func lists() {
 	one, three := int64(1), int64(3)
 	fmt.Println("some", shapelib.CountSome([]*int64{&one, nil, &three}))
 	fmt.Println("rows", shapelib.TotalRows([][]int64{{1, 2}, {3}}))
+	rot, sw, bu := shapelib.Rotated([3]int64{11, 12, 13}), shapelib.Swapped([2]float64{1.5, 2.5}), shapelib.Bumped([3]uint8{1, 2, 3})
+	fmt.Println("arrays", rot[0], rot[1], rot[2], sw[0], sw[1], bu[0], bu[1], bu[2])
 	fmt.Println("lists closed", shapelib.ClosedAccounts())
 }
 

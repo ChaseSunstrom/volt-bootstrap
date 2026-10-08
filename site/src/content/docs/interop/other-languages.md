@@ -231,6 +231,12 @@ Python's on
   in Java and C#, `[[T]]` in Swift, `[][]T` in Go, a `List` of arrays (`LongArray`) in Kotlin, a
   list of lists in Python, Dart, JavaScript and Ruby, a table of tables in Lua, and a slice of slices in C, C++, Rust and Zig; what
   Volt writes into the elements comes back.
+- **Arrays by value.** An export fn taking or giving a `T[N]` (numbers, bools, enums, or structs of
+  those) passes it whole, as C passes a struct wrapping it: `PKG_array_T_N` (its elements in `v`)
+  in C, `std::array<T, N>` in C++, `[T; N]` in Rust, `[N]T` in Zig and Go, a list in Python and
+  Dart, `long[]` (and the like) in Java and C#, an array in JavaScript, Ruby and Swift, a
+  `LongArray` (and the like) in Kotlin and a table in Lua. One of the wrong length is refused.
+  Callbacks, trait fns and `extern "C"` fn types don't take arrays by value yet.
 - **Closures given back.** A fn returning `fn(A) -> R` gives a struct of the function, its data and
   what frees it; in C++ a `std::function`, which frees it with its last copy; in Rust a
   `Box<dyn FnMut(A) -> R>`, which frees it when dropped; in Zig a struct with `call` and

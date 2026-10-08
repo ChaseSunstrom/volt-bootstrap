@@ -1,6 +1,7 @@
 // C++ calls shapelib (voltc bindings --lang cpp): a generic's instances as overloads, a struct held
 // by a class with methods, owned values passed in, a Volt trait as an abstract class both ways,
 // closures taking and giving text and handles, and closures given back as std::function
+#include <array>
 #include <cstdio>
 #include <memory>
 #include <vector>
@@ -49,6 +50,10 @@ static void lists() {
     std::vector<int64_t> r1{1, 2}, r2{3};
     shapelib::slice_i64 rr[] = {r1, r2};
     std::printf("rows %lld\n", (long long)shapelib::total_rows(rr));
+    std::array<int64_t, 3> rot = shapelib::rotated({11, 12, 13});
+    std::array<double, 2> sw = shapelib::swapped({1.5, 2.5});
+    std::array<uint8_t, 3> bu = shapelib::bumped({1, 2, 3});
+    std::printf("arrays %lld %lld %lld %g %g %d %d %d\n", (long long)rot[0], (long long)rot[1], (long long)rot[2], sw[0], sw[1], bu[0], bu[1], bu[2]);
     std::printf("lists closed %d\n", shapelib::closed_accounts());
 }
 

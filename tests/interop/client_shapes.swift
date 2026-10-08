@@ -84,6 +84,8 @@ func lists() {
     print("some", count_some(&some))
     var rows: [[Int64]] = [[1, 2], [3]]
     print("rows", total_rows(&rows))
+    let rot = rotated([11, 12, 13]), sw = swapped([1.5, 2.5]), bu = bumped([1, 2, 3])
+    print("arrays", rot[0], rot[1], rot[2], sw[0], sw[1], bu[0], bu[1], bu[2])
     print("lists closed", closed_accounts())
 }
 

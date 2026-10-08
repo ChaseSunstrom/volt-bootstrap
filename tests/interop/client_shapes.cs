@@ -184,6 +184,10 @@ static void Lists()
     Console.WriteLine($"close_all {Api.close_all(both)}");
     Console.WriteLine($"some {Api.count_some(new opt_i64[] { 1, null, 3 })}");
     Console.WriteLine($"rows {Api.total_rows(new long[][] { new long[] { 1, 2 }, new long[] { 3 } })}");
+    long[] rot = Api.rotated(new long[] { 11, 12, 13 });
+    double[] sw = Api.swapped(new double[] { 1.5, 2.5 });
+    byte[] bu = Api.bumped(new byte[] { 1, 2, 3 });
+    Console.WriteLine($"arrays {rot[0]} {rot[1]} {rot[2]} {sw[0]} {sw[1]} {bu[0]} {bu[1]} {bu[2]}");
     Console.WriteLine($"lists closed {Api.closed_accounts()}");
 }
 

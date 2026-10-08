@@ -103,6 +103,10 @@ fn lists() void {
     var r2 = [_]i64{3};
     var rr = [_]s.VoltSlice(i64){ s.VoltSlice(i64).from(&r1), s.VoltSlice(i64).from(&r2) };
     print("rows {d}\n", .{s.total_rows(&rr)});
+    const rot = s.rotated(.{ 11, 12, 13 });
+    const sw = s.swapped(.{ 1.5, 2.5 });
+    const bu = s.bumped(.{ 1, 2, 3 });
+    print("arrays {d} {d} {d} {d} {d} {d} {d} {d}\n", .{ rot[0], rot[1], rot[2], sw[0], sw[1], bu[0], bu[1], bu[2] });
     print("lists closed {d}\n", .{s.closed_accounts()});
 }
 

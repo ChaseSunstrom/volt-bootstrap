@@ -114,6 +114,10 @@ public class ClientShapes {
         System.out.println("close_all " + shapelib.close_all(ab));
         System.out.println("some " + shapelib.count_some(new Long[] {1L, null, 3L}));
         System.out.println("rows " + shapelib.total_rows(new long[][] {{1, 2}, {3}}));
+        long[] rot = shapelib.rotated(new long[] {11, 12, 13});
+        double[] sw = shapelib.swapped(new double[] {1.5, 2.5});
+        byte[] bu = shapelib.bumped(new byte[] {1, 2, 3});
+        System.out.println("arrays " + rot[0] + " " + rot[1] + " " + rot[2] + " " + sw[0] + " " + sw[1] + " " + bu[0] + " " + bu[1] + " " + bu[2]);
         System.out.println("lists closed " + shapelib.closed_accounts());
     }
 

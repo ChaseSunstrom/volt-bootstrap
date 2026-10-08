@@ -72,6 +72,7 @@ def lists
   puts "close_all #{S.close_all(both)}"
   puts "some #{S.count_some([1, nil, 3])}"
   puts "rows #{S.total_rows([[1, 2], [3]])}"
+  puts "arrays #{(S.rotated([11, 12, 13]) + S.swapped([1.5, 2.5]) + S.bumped([1, 2, 3])).join(' ')}"
   puts "lists closed #{S.closed_accounts}"
 end
 

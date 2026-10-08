@@ -1,3 +1,4 @@
+@file:OptIn(ExperimentalUnsignedTypes::class)
 // Kotlin/Native calls shapelib (voltc bindings --lang kotlin): a generic's instances, a struct held
 // by a class with methods, owned values passed in, a Volt trait as a Kotlin interface both ways,
 // callbacks taking and giving text, handles and errors, closures given back as callable classes,
@@ -83,6 +84,10 @@ fun lists() {
     println("close_all ${close_all(ab)}")
     println("some ${count_some(listOf(1L, null, 3L))}")
     println("rows ${total_rows(listOf(longArrayOf(1, 2), longArrayOf(3)))}")
+    val rot = rotated(longArrayOf(11, 12, 13))
+    val sw = swapped(doubleArrayOf(1.5, 2.5))
+    val bu = bumped(ubyteArrayOf(1u, 2u, 3u))
+    println("arrays ${rot.joinToString(" ")} ${sw.joinToString(" ")} ${bu.joinToString(" ")}")
     println("lists closed ${closed_accounts()}")
 }
 

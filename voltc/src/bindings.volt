@@ -79,6 +79,7 @@ struct bind {
     traits: std::vec<u32> = {};   // trait union types
     closures_out: std::vec<u32> = {}; // the closures (indexes in closures) export fns give out
     lists: std::vec<u32> = {};    // owned element types (std::vec<T>)
+    arrays: std::vec<u32> = {};   // arrays an export fn takes or gives (see add_array)
     // the struct, optional and E!T types C holds by value, each after what it holds (the order C
     // declares them in)
     layout: std::vec<u32> = {};
@@ -184,6 +185,21 @@ attach fn opt_owned(this: bind&, s: shape) -> bool {
 fn add_u32(v: std::vec<u32>&, x: u32) -> void {
     if (!has_u32(v, x)) {
         put(v, x);
+    }
+}
+
+// an array by value an export fn takes or gives: C passes and returns it as a struct wrapping it
+// (pkg_array_T_N), as voltc does (C itself would pass a pointer, and can't return one), declared
+// after its elements
+attach fn add_array(this: bind&, t: u32) -> void {
+    match (*this.c.t.get(t)) {
+        .ARRAY(e, n) => {
+            if (!has_u32(&this.arrays, t)) {
+                put(&this.arrays, t);
+                add_u32(&this.layout, t);
+            }
+        },
+        default => {},
     }
 }
 
@@ -421,8 +437,10 @@ attach fn shape_of(this: bind&, t: u32) -> shape? {
             }
             for (p&) in ps.items() {
                 this.inner(*p) ?? return null;
+                this.not_array(*p) ?? return null;
             }
             this.inner(r) ?? return null;
+            this.not_array(r) ?? return null;
             for (i) in 0..this.fns.len {
                 if (*this.fns.at(i) == t) {
                     return shape::FN(@cast<u32>(i));
@@ -491,7 +509,18 @@ attach fn sig_part(this: bind&, t: u32) -> shape? {
     if (!plain(s) || this.converted(t)) {
         return this.no_form(t);
     }
-    return s;
+    return this.not_array(t);
+}
+
+// t's form, unless it's an array by value, which only an export fn takes or gives (see add_array)
+// ponytail: callbacks, traits and extern "C" fn types don't wrap arrays; wrap them there too when
+// one needs to
+attach fn not_array(this: bind&, t: u32) -> shape? {
+    val s = this.shape_of(t) ?? return null;
+    match (s) {
+        .ARRAY(e, n) => { return this.no_form(t); },
+        default => { return s; },
+    }
 }
 
 // one fn of a trait, as other languages implement or call it
@@ -707,6 +736,7 @@ attach fn check_all(this: bind&) -> compile_error!void {
         val at = this.c.dl(f.decl).item.span;
         for (p&) in f.params.items() {
             val s = this.shape_of(p.ty) ?? return this.no_c_form(at, fmt2("export fn {}: its parameter {}", S(f.name), S(p.name)), p.ty);
+            this.add_array(p.ty);
             match (s) {
                 .RESULT(e, x) => {
                     if (this.owned_result(s)) {
@@ -717,6 +747,7 @@ attach fn check_all(this: bind&) -> compile_error!void {
             }
         }
         val r = this.shape_of(f.ret) ?? return this.no_c_form(at, fmt("export fn {}: its return type", S(f.name)), f.ret);
+        this.add_array(f.ret);
         if (this.converted(f.ret)) {
             return with_help(fail(at, fmt2("export fn {}: it returns {}, a slice of what crosses converted, which nothing would own", S(f.name), this.c.ty_name(f.ret))), S("return a std::vec of them: it crosses as a list the caller frees"));
         }
@@ -1543,6 +1574,7 @@ attach fn short(this: bind&, t: u32) -> std::string {
         // elements)
         .OPT(x) => { return fmt("opt_{}", this.short(x)); },
         .SLICE(x) => { return fmt("slice_{}", this.short(x)); },
+        .ARRAY(x, n) => { return fmt2("{}_{}", this.short(x), unum(n)); },
         default => { return ident_of(this.c.ty_name(t).as_str()); },
     }
 }
@@ -1669,6 +1701,14 @@ attach fn c_prim(this: bind&, t: u32, cpp: bool) -> std::string {
     }
 }
 
+// type t's C form as a whole value: an array an export fn takes or gives is the struct wrapping it
+attach fn c_val(this: bind&, t: u32, cpp: bool) -> std::string {
+    if (has_u32(&this.arrays, t)) {
+        return this.made_name("array", t, cpp);
+    }
+    return this.c_prim(t, cpp);
+}
+
 // type t's C form as a parameter: text comes in as a str (see in_ty)
 attach fn c_in(this: bind&, t: u32, cpp: bool) -> std::string {
     return this.c_prim(this.in_ty(t), cpp);
@@ -1682,7 +1722,7 @@ attach fn c_out(this: bind&, t: u32, cpp: bool) -> std::string {
             n.append_uint(@cast<u64>(i));
             return this.c_named(n.as_str(), cpp);
         },
-        default => { return this.c_prim(t, cpp); },
+        default => { return this.c_val(t, cpp); },
     }
 }
 
@@ -1710,23 +1750,36 @@ fn spaced(t: std::string) -> std::string {
     return s;
 }
 
+// "T name" for a parameter: an array an export fn takes is the struct wrapping it (see add_array)
+attach fn c_param(this: bind&, t: u32, name: str, cpp: bool) -> std::string {
+    if (has_u32(&this.arrays, t)) {
+        var s = spaced(this.c_val(t, cpp));
+        s.append(c_ident(name, cpp).as_str());
+        return s;
+    }
+    return this.c_decl(t, name, cpp);
+}
+
+// a name as C (or C++) takes it
+fn c_ident(name: str, cpp: bool) -> std::string {
+    if (cpp) {
+        return cpp_ident(name);
+    } else if (name == "this") {
+        return S("self");
+    } else if (cpp_keyword(name)) {
+        // a C (or C++, since C++ includes the header) keyword
+        return fmt("{}_", S(name));
+    }
+    return S(name);
+}
+
 // "T name" (with [N] after the name for arrays)
 attach fn c_decl(this: bind&, t: u32, name: str, cpp: bool) -> std::string {
     var s = this.c_prim(t, cpp);
     if (!ends_with(s.as_str(), "*")) {
         s.push(' ');
     }
-    if (cpp) {
-        s.append(cpp_ident(name).as_str());
-    } else if (name == "this") {
-        s.append("self");
-    } else if (cpp_keyword(name)) {
-        // a C (or C++, since C++ includes the header) keyword
-        s.append(name);
-        s.push('_');
-    } else {
-        s.append(name);
-    }
+    s.append(c_ident(name, cpp).as_str());
     var cur = t;
     loop {
         match (*this.c.t.get(cur)) {
@@ -1759,7 +1812,7 @@ attach fn c_params(this: bind&, e: entry&, cpp: bool) -> std::string {
                 args.append(this.c_decl(p.ty, p.name, cpp).as_str());
                 args.append(fmt(", void *{}_user", S(p.name)).as_str());
             },
-            default => { args.append(this.c_decl(this.in_ty(p.ty), p.name, cpp).as_str()); },
+            default => { args.append(this.c_param(this.in_ty(p.ty), p.name, cpp).as_str()); },
         }
     }
     if (f.params.len == 0) {
@@ -1794,6 +1847,7 @@ attach fn c_types(this: bind&, cpp: bool, out: std::string&) -> void {
     for (lt&) in this.layout.items() {
         match (*this.c.t.get(*lt)) {
             .OPT(x) => { put(&named, this.made_name("opt", x, cpp)); },
+            .ARRAY(x, k) => { put(&named, this.made_name("array", *lt, cpp)); },
             default => {},
         }
     }
@@ -1949,6 +2003,9 @@ attach fn c_types(this: bind&, cpp: bool, out: std::string&) -> void {
     // what C holds by value, each after what it holds
     for (lt&) in this.layout.items() {
         match (*this.c.t.get(*lt)) {
+            .ARRAY(x, k) => {
+                out.append(fmt3("\n// {} by value: C passes and returns it as this struct, as Volt does\nstruct {} {{\n    {};\n}};\n", this.c.ty_name(*lt), this.made_name("array", *lt, cpp), this.c_decl(*lt, "v", cpp)).as_str());
+            },
             .STRUCT(s) => {
                 val info = this.c.si(s);
                 out.append(fmt("\nstruct {} {{\n", this.c_named(info.name, cpp)).as_str());
@@ -2101,6 +2158,11 @@ attach fn cpp_param(this: bind&, t: u32, name0: str, ty: std::string&, arg: std:
         return;
     }
     match (this.shape_of(t) ?? shape::VOID) {
+        .ARRAY(e, n) => {
+            // a std::array, passed as the struct wrapping it (see add_array)
+            ty.append(fmt2("const {} &{}", this.cpp_array(t), S(name)).as_str());
+            arg.append(fmt2("volt_bits<{}>({})", this.made_name("array", t, true), S(name)).as_str());
+        },
         .OPT(x) => {
             val v = this.c_prim(x, true);
             ty.append(fmt2("std::optional<{}> {}", copy v, S(name)).as_str());
@@ -2336,9 +2398,18 @@ attach fn cpp_call_in(this: bind&, call: str, self: str, ps: std::vec<u32>&, r: 
     }
 }
 
+// an array as C++ holds it: std::array (of std::arrays, for an array of arrays)
+attach fn cpp_array(this: bind&, t: u32) -> std::string {
+    match (*this.c.t.get(t)) {
+        .ARRAY(e, n) => { return fmt2("std::array<{}, {}>", this.cpp_array(e), unum(n)); },
+        default => { return this.c_prim(t, true); },
+    }
+}
+
 // what a wrapper returns in C++ for a C result of type t
 attach fn cpp_ret(this: bind&, t: u32) -> std::string {
     match (this.shape_of(t) ?? shape::VOID) {
+        .ARRAY(e, n) => { return this.cpp_array(t); },
         .STR => { return S("std::string"); },
         .TEXT(x) => { return S("std::string"); },
         .HANDLE(s) => { return this.local(this.c.si(s).name); },
@@ -2358,6 +2429,7 @@ attach fn cpp_ret(this: bind&, t: u32) -> std::string {
 // the C++ value of C result r (of type t)
 attach fn cpp_value(this: bind&, t: u32, r: str) -> std::string {
     match (this.shape_of(t) ?? shape::VOID) {
+        .ARRAY(e, n) => { return fmt2("volt_bits<{}>({})", this.cpp_array(t), S(r)); },
         .STR => { return fmt2("std::string((const char *){}.ptr, {}.len)", S(r), S(r)); },
         .TEXT(x) => { return fmt("take_text({})", S(r)); },
         .HANDLE(s) => { return fmt2("{}({})", this.local(this.c.si(s).name), S(r)); },
@@ -2470,7 +2542,7 @@ attach fn cpp_text(this: bind&) -> std::string {
     var out: std::string = {};
     out.append(fmt("// {}: generated by voltc bindings; the Volt package for C++17\n", S(this.pkg)).as_str());
     out.append("// (build it with voltc lib NAME --shared or --static). Errors are thrown as error.\n");
-    out.append("#pragma once\n#include <cstddef>\n#include <cstdint>\n#include <cstring>\n#include <functional>\n#include <memory>\n#include <optional>\n#include <stdexcept>\n#include <string>\n#include <string_view>\n#include <utility>\n#include <vector>\n\n");
+    out.append("#pragma once\n#include <array>\n#include <cstddef>\n#include <cstdint>\n#include <cstring>\n#include <functional>\n#include <memory>\n#include <optional>\n#include <stdexcept>\n#include <string>\n#include <string_view>\n#include <utility>\n#include <vector>\n\n");
     out.append(fmt("namespace {} {{\n\n", S(this.pkg)).as_str());
     if (this.uses_str) {
         out.append("// a Volt str: bytes and a length (no terminator)\nstruct str {\n    const uint8_t *ptr;\n    size_t len;\n    str() : ptr(nullptr), len(0) {}\n    str(const char *s) : ptr((const uint8_t *)s), len(std::strlen(s)) {}\n    str(std::string_view s) : ptr((const uint8_t *)s.data()), len(s.size()) {}\n    str(const std::string &s) : ptr((const uint8_t *)s.data()), len(s.size()) {}\n    std::string_view view() const { return {(const char *)ptr, len}; }\n};\n\n");
@@ -2483,6 +2555,9 @@ attach fn cpp_text(this: bind&) -> std::string {
     }
     if (this.lists.len > 0) {
         out.append("// a list Volt gave out, as a std::vector (the list is freed)\ntemplate <class T, class L, class F> std::vector<T> take_list(L l, F f) {\n    std::vector<T> v;\n    v.reserve(l.len);\n    for (size_t i = 0; i < l.len; i++) {\n        v.push_back(f(l.ptr[i]));\n    }\n    if (l.drop) {\n        l.drop(l.owner);\n    }\n    return v;\n}\n\n");
+    }
+    if (this.arrays.len > 0) {
+        out.append("// a std::array as the C struct wrapping the same elements, or back\ntemplate <class T, class F> T volt_bits(const F &f) {\n    static_assert(sizeof(T) == sizeof(F), \"the same elements\");\n    T t;\n    std::memcpy(&t, &f, sizeof t);\n    return t;\n}\n\n");
     }
     // the handles' C types, which the C declarations below point at
     if (this.handles.len > 0) {
@@ -3567,14 +3642,27 @@ attach fn zig_in(this: bind&, t: u32) -> std::string {
         },
         default => {},
     }
-    return this.zig_ty(this.in_ty(t));
+    return this.zig_val(this.in_ty(t));
+}
+
+// type t's C form as a whole value: an array an export fn takes or gives is VoltArray (see add_array)
+attach fn zig_val(this: bind&, t: u32) -> std::string {
+    match (*this.c.t.get(t)) {
+        .ARRAY(e, n) => {
+            if (has_u32(&this.arrays, t)) {
+                return fmt2("VoltArray({}, {})", this.zig_ty(e), unum(n));
+            }
+        },
+        default => {},
+    }
+    return this.zig_ty(t);
 }
 
 // type t's C form as a result: a closure comes out boxed (closureN)
 attach fn zig_out(this: bind&, t: u32) -> std::string {
     match (this.shape_of(t) ?? shape::VOID) {
         .CLOSURE(i) => { return fmt("closure{}", unum(@cast<u64>(i))); },
-        default => { return this.zig_ty(t); },
+        default => { return this.zig_val(t); },
     }
 }
 
@@ -3877,6 +3965,10 @@ attach fn zig_param(this: bind&, t: u32, name0: str, ty: std::string&, arg: std:
             pre.append(fmt2("    const {}_call = struct {{\n{}    }};\n", S(name), indent_n(cb.as_str(), 8)).as_str());
             arg.append(fmt2("{}_call.call, @ptrCast(@constCast(&{}_context))", S(name), S(name)).as_str());
         },
+        .ARRAY(e, n) => {
+            ty.append(fmt2("{}: {}", S(name), this.zig_ty(t)).as_str());
+            arg.append(fmt2("{}{{ .v = {} }}", this.zig_val(t), S(name)).as_str());
+        },
         default => {
             ty.append(fmt2("{}: {}", S(name), this.zig_ty(t)).as_str());
             arg.append(name);
@@ -3947,6 +4039,7 @@ attach fn zig_value(this: bind&, t: u32, r: str) -> std::string {
         },
         .TRAIT(i) => { return fmt2("volt_{}{{ .o = {} }}", this.short(this.trait_of(t)), S(r)); },
         .CLOSURE(i) => { return fmt2("fn{}{{ .c = {} }}", unum(@cast<u64>(i)), S(r)); },
+        .ARRAY(e, n) => { return fmt("{}.v", S(r)); },
         default => { return S(r); },
     }
 }
@@ -4030,6 +4123,9 @@ attach fn zig_text(this: bind&) -> std::string {
     }
     if (this.slices.len > 0) {
         out.append("\n/// a Volt slice: elements and how many\npub fn VoltSlice(comptime T: type) type {\n    return extern struct {\n        ptr: [*]T,\n        len: usize,\n        pub fn from(s: []T) @This() {\n            return .{ .ptr = s.ptr, .len = s.len };\n        }\n    };\n}\n");
+    }
+    if (this.arrays.len > 0) {
+        out.append("\n/// an array by value as C passes and returns it: a struct wrapping it\npub fn VoltArray(comptime T: type, comptime n: usize) type {\n    return extern struct {\n        v: [n]T,\n    };\n}\n");
     }
     if (this.opts.len > 0) {
         out.append("\n/// a Volt optional: has says whether value is there\npub fn VoltOpt(comptime T: type) type {\n    return extern struct {\n        value: T,\n        has: bool,\n        pub fn from(o: ?T) @This() {\n            return if (o) |v| .{ .value = v, .has = true } else .{ .value = std.mem.zeroes(T), .has = false };\n        }\n        pub fn get(self: @This()) ?T {\n            return if (self.has) self.value else null;\n        }\n    };\n}\n");
@@ -4298,8 +4394,17 @@ attach fn py_ty(this: bind&, t: u32) -> std::string {
 attach fn py_out_ty(this: bind&, t: u32) -> std::string {
     match (this.shape_of(t) ?? shape::VOID) {
         .CLOSURE(i) => { return fmt("closure{}", unum(@cast<u64>(i))); },
-        default => { return this.py_ty(t); },
+        default => { return this.py_val(t); },
     }
+}
+
+// type t as a whole value: an array an export fn takes or gives is the Structure wrapping it (ctypes
+// would pass a pointer, and can't return one; see add_array)
+attach fn py_val(this: bind&, t: u32) -> std::string {
+    if (has_u32(&this.arrays, t)) {
+        return this.made_name("array", t, true);
+    }
+    return this.py_ty(t);
 }
 
 attach fn py_fn_ty(this: bind&, t: u32, user: bool) -> std::string {
@@ -4411,6 +4516,7 @@ attach fn py_in(this: bind&, t: u32, x: str) -> std::string {
             return fmt3("(ctypes.byref({}) if isinstance({}, ctypes.Structure) else {})", S(x), S(x), S(x));
         },
         .HANDLE(s) => { return fmt("_giving(_gift, {})", S(x)); },
+        .ARRAY(e, n) => { return fmt4("_array({}, {}, {}, {})", this.py_val(t), this.py_ty(t), unum(n), S(x)); },
         .SLICE(v) => { return fmt3("_slice({}, {}, {})", this.made_name("slice", v, true), this.py_ty(v), this.py_elems(this.slice_elem(t), false, x)); },
         .LIST(y) => {
             // a slice of the elements' views, which Volt copies (and the handles, Volt takes)
@@ -4594,6 +4700,7 @@ attach fn py_value(this: bind&, t: u32, r: str) -> std::string {
         },
         .TRAIT(i) => { return fmt2("_volt_{}({})", this.short(this.trait_of(t)), S(r)); },
         .CLOSURE(i) => { return fmt2("VoltFn({}, _call{})", S(r), unum(@cast<u64>(i))); },
+        .ARRAY(e, n) => { return fmt("list({}.v)", S(r)); },
         default => { return S(r); },
     }
 }
@@ -4847,7 +4954,7 @@ attach fn py_text(this: bind&) -> std::string {
             if (types.len() > 0) {
                 types.append(", ");
             }
-            types.append(this.py_ty(this.in_ty(p.ty)).as_str());
+            types.append(this.py_val(this.in_ty(p.ty)).as_str());
             match (this.shape_of(p.ty) ?? shape::VOID) {
                 .CLOSURE(i) => { types.append(", ctypes.c_void_p"); },
                 default => {},
@@ -5006,6 +5113,9 @@ attach fn py_text(this: bind&) -> std::string {
     if (this.slices.len > 0) {
         out.append("\n\ndef _slice(cls, elem, xs):\n    arr = (elem * len(xs))(*xs)\n    v = cls(ctypes.cast(arr, ctypes.POINTER(elem)), len(xs))\n    v._keep = (arr, xs)\n    return v\n");
     }
+    if (this.arrays.len > 0) {
+        out.append("\n\ndef _array(cls, arr, n, xs):\n    if len(xs) != n:\n        raise ValueError(f\"expected {n} elements, not {len(xs)}\")\n    return cls(arr(*xs))\n");
+    }
     if (this.opts.len > 0) {
         out.append("\n\ndef _opt(cls, x):\n    o = cls()\n    if x is not None:\n        o.value = x\n        o.has = True\n        o._keep = x\n    return o\n");
     }
@@ -5057,6 +5167,9 @@ attach fn py_text(this: bind&) -> std::string {
     for (x&) in this.opts.items() {
         put(&named, this.made_name("opt", *x, true));
     }
+    for (x&) in this.arrays.items() {
+        put(&named, this.made_name("array", *x, true));
+    }
     for (lt&) in this.lists.items() {
         put(&named, this.py_ty(*lt));
     }
@@ -5091,6 +5204,9 @@ attach fn py_text(this: bind&) -> std::string {
     }
     for (x&) in this.opts.items() {
         out.append(fmt2("\n{}._fields_ = [(\"value\", {}), (\"has\", ctypes.c_bool)]", this.made_name("opt", *x, true), this.py_ty(*x)).as_str());
+    }
+    for (x&) in this.arrays.items() {
+        out.append(fmt2("\n{}._fields_ = [(\"v\", {})]", this.made_name("array", *x, true), this.py_ty(*x)).as_str());
     }
     for (lt&) in this.lists.items() {
         out.append(fmt2("\n{}._fields_ = [(\"ptr\", ctypes.POINTER({})), (\"len\", ctypes.c_size_t), (\"owner\", ctypes.c_void_p), (\"drop\", ctypes.CFUNCTYPE(None, ctypes.c_void_p))]", this.py_ty(*lt), this.py_ty(this.view_of(this.list_elem(*lt)))).as_str());
@@ -5663,7 +5779,8 @@ attach fn cs_raw(this: bind&, t: u32) -> std::string {
         .ENUM(e) => { return this.local(this.c.ei(e).name); },
         .CODE => { return S("uint"); },
         .RESULT(e, x) => { return this.result_name(t); },
-        .ARRAY(elem, n) => { return S("IntPtr"); },
+        // passed and returned as the struct wrapping it (see add_array)
+        .ARRAY(elem, n) => { return this.made_name("array", t, true); },
         .SLICE(x) => { return this.made_name("slice", x, true); },
         .OPT(x) => {
             // an optional handle is its pointer (null: none)
@@ -5767,6 +5884,7 @@ attach fn cs_ty(this: bind&, t: u32) -> std::string {
         .OPT(x) => { return fmt("{}?", this.cs_elem(x)); },
         .RESULT(e, x) => { return this.cs_ty(x); },
         .TRAIT(i) => { return this.short(this.trait_of(t)); },
+        .ARRAY(e, n) => { return fmt("{}[]", this.cs_ty(e)); },
         .CLOSURE(i) => {
             var ps: std::vec<u32> = {};
             val r = this.fn_parts(t, &ps);
@@ -5944,10 +6062,56 @@ attach fn cs_arg_of(this: bind&, t: u32, name0: str, a: cs_arg&) -> void {
             a.pass = fmt2("&Callbacks.cb{}, GCHandle.ToIntPtr({}_g)", unum(@cast<u64>(i)), S(name0));
             a.close = fmt2("}}\nfinally {{\n    {}_g.Free();\n}}\n{}_s.Rethrow();\n", S(name0), S(name0));
         },
+        .ARRAY(e, n) => {
+            a.decl = fmt2("{} {}", this.cs_ty(t), S(name));
+            a.pass = fmt2("{}.From({})", this.cs_raw(t), S(name));
+        },
         default => {
             a.decl = fmt2("{} {}", this.cs_ty(t), S(name));
             a.pass = S(name);
         },
+    }
+}
+
+// an array by value's struct (see add_array), and those of the arrays in it: fields v0..vN-1, From
+// a C# array of N, and ToArray (done: what's declared already)
+attach fn cs_array(this: bind&, t: u32, done: std::vec<u32>&, out: std::string&) -> void {
+    match (*this.c.t.get(t)) {
+        .ARRAY(e, n) => {
+            if (has_u32(done, t)) {
+                return;
+            }
+            put(done, t);
+            this.cs_array(e, done, out);
+            val cn = this.made_name("array", t, true);
+            val ct = this.cs_ty(t);
+            out.append(fmt3("\n/// <summary>{} by value, as C passes it</summary>\n[StructLayout(LayoutKind.Sequential)]\npublic struct {}\n{{\n    public {} ", this.c.ty_name(t), copy cn, this.cs_raw(e)).as_str());
+            var from: std::string = {};
+            var to: std::string = {};
+            for (i) in 0..n {
+                val v = fmt("v{}", unum(i));
+                val x = fmt("a[{}]", unum(i));
+                if (i > 0) {
+                    out.append(", ");
+                    from.append(", ");
+                    to.append(", ");
+                }
+                out.append(v.as_str());
+                match (this.shape_of(e) ?? shape::VOID) {
+                    .BOOL => { from.append(fmt2("{} = (byte)({} ? 1 : 0)", copy v, copy x).as_str()); },
+                    .ARRAY(e2, n2) => { from.append(fmt3("{} = {}.From({})", copy v, this.cs_raw(e), copy x).as_str()); },
+                    default => { from.append(fmt2("{} = {}", copy v, copy x).as_str()); },
+                }
+                match (this.shape_of(e) ?? shape::VOID) {
+                    .ARRAY(e2, n2) => { to.append(fmt("{}.ToArray()", copy v).as_str()); },
+                    default => { to.append(this.cs_value(e, v.as_str()).as_str()); },
+                }
+            }
+            out.append(fmt5(";\n\n    public static {} From({} a)\n    {{\n        if (a.Length != {})\n        {{\n            throw new ArgumentException(\"expected {} elements\");\n        }}\n", copy cn, copy ct, unum(n), unum(n), S("")).as_str());
+            out.append(fmt2("        return new {} {{ {} }};\n    }}\n\n", copy cn, move from).as_str());
+            out.append(fmt3("    public {} ToArray() => new {} {{ {} }};\n}}\n", copy ct, copy ct, move to).as_str());
+        },
+        default => {},
     }
 }
 
@@ -6029,6 +6193,7 @@ attach fn cs_value(this: bind&, t: u32, r: str) -> std::string {
         },
         .CLOSURE(i) => { return fmt2("new closure{}({})", unum(@cast<u64>(i)), S(r)); },
         .TRAIT(i) => { return fmt2("new volt_{}({})", this.short(this.trait_of(t)), S(r)); },
+        .ARRAY(e, n) => { return fmt("{}.ToArray()", S(r)); },
         default => { return S(r); },
     }
 }
@@ -6370,6 +6535,10 @@ attach fn cs_text(this: bind&) -> std::string {
         }
         out.append("}\n");
     }
+    var arrays_done: std::vec<u32> = {};
+    for (x&) in this.arrays.items() {
+        this.cs_array(*x, &arrays_done, &out);
+    }
     for (rt&) in this.results.items() {
         match (*this.c.t.get(*rt)) {
             .ERR_UNION(e, x) => {
@@ -6669,6 +6838,7 @@ attach fn java_is_struct(this: bind&, t: u32) -> bool {
         .LIST(x) => { return true; },
         .TRAIT(i) => { return true; },
         .CLOSURE(i) => { return true; },
+        .ARRAY(e, n) => { return has_u32(&this.arrays, t); },
         default => { return false; },
     }
 }
@@ -6793,8 +6963,18 @@ attach fn java_ty(this: bind&, t: u32, boxed: bool) -> std::string {
         .RESULT(e, x) => { return this.java_ty(x, boxed); },
         .TRAIT(i) => { return fmt("volt_{}", this.short(this.trait_of(t))); },
         .CLOSURE(i) => { return fmt("Closure{}", unum(@cast<u64>(i))); },
+        .ARRAY(e, n) => { return fmt("{}[]", this.java_ty(e, false)); },
         default => { return S("MemorySegment"); },
     }
+}
+
+// the MemoryLayout a downcall passes or returns t as: an array an export fn takes or gives is the
+// struct wrapping it (see add_array)
+attach fn java_val_layout(this: bind&, t: u32) -> std::string {
+    if (has_u32(&this.arrays, t)) {
+        return fmt("L_{}", this.made_name("array", t, true));
+    }
+    return this.java_layout(t);
 }
 
 // the Java expression for a value of type t read from segment seg at offset off
@@ -7005,6 +7185,10 @@ attach fn java_arg_of(this: bind&, t: u32, name: str, a: java_arg&) -> void {
             a.pass = fmt("{}_up, MemorySegment.NULL", S(name));
             a.after = fmt("rethrow({}_err[0]);\n", S(name));
         },
+        .ARRAY(e, n) => {
+            a.decl = fmt2("{} {}", this.java_ty(t, false), S(name));
+            a.pass = fmt2("{}(arena, {})", this.made_name("array", t, true), S(name));
+        },
         default => {
             a.decl = fmt2("{} {}", this.java_ty(t, false), S(name));
             a.pass = S(name);
@@ -7138,16 +7322,16 @@ attach fn java_desc(this: bind&, f: u32) -> std::string {
         }
         match (this.shape_of(p.ty) ?? shape::VOID) {
             .CLOSURE(i) => { args.append("ADDRESS, ADDRESS"); },
-            default => { args.append(this.java_layout(this.in_ty(p.ty)).as_str()); },
+            default => { args.append(this.java_val_layout(this.in_ty(p.ty)).as_str()); },
         }
     }
     if (info.ret == VOID) {
         return fmt("FunctionDescriptor.ofVoid({})", move args);
     }
     if (args.len() > 0) {
-        return fmt2("FunctionDescriptor.of({}, {})", this.java_layout(info.ret), move args);
+        return fmt2("FunctionDescriptor.of({}, {})", this.java_val_layout(info.ret), move args);
     }
-    return fmt("FunctionDescriptor.of({})", this.java_layout(info.ret));
+    return fmt("FunctionDescriptor.of({})", this.java_val_layout(info.ret));
 }
 
 // the Java cast for invokeExact's result
@@ -7199,6 +7383,7 @@ attach fn java_value(this: bind&, t: u32, r: str) -> std::string {
             return fmt3("({}.get(JAVA_BOOLEAN, {}) ? {} : null)", S(r), unum(this.csize(x).size), this.java_read(x, r, 0));
         },
         .LIST(x) => { return fmt2("list_{}({})", index_of(&this.lists, t), S(r)); },
+        .ARRAY(e, n) => { return fmt2("{}({})", this.made_name("array", t, true), S(r)); },
         .TRAIT(i) => { return fmt2("new volt_{}({})", this.short(this.trait_of(t)), S(r)); },
         .CLOSURE(i) => { return fmt2("new Closure{}({})", unum(@cast<u64>(i)), S(r)); },
         .SLICE(x) => {
@@ -7625,6 +7810,24 @@ attach fn java_text(this: bind&) -> std::string {
         out.append("        }\n    }\n");
         out.append(fmt2("\n    static final StructLayout L_{} = {};\n", copy n, move layout).as_str());
     }
+    // arrays by value (see add_array): a struct wrapping one, made from a Java array and read back
+    // ponytail: elements Java reads and writes in place (numbers, bool, enums, structs of those);
+    // an array of arrays doesn't compile
+    for (x&) in this.arrays.items() {
+        match (*this.c.t.get(*x)) {
+            .ARRAY(e, n) => {
+                val an = this.made_name("array", *x, true);
+                val jt = this.java_ty(*x, false);
+                val at = fmt("s.asSlice(i * {}L)", unum(this.csize(e).size));
+                out.append(fmt4("\n    // {} by value, as C passes it: a struct wrapping it\n    static final StructLayout L_{} = MemoryLayout.structLayout({}.withName(\"v\"));\n", this.c.ty_name(*x), copy an, this.java_layout(*x), S("")).as_str());
+                out.append(fmt5("\n    static MemorySegment {}(SegmentAllocator arena, {} a) {{\n        if (a.length != {}) {{\n            throw new IllegalArgumentException(\"expected {} elements\");\n        }}\n        MemorySegment s = arena.allocate(L_{});\n", copy an, copy jt, unum(n), unum(n), copy an).as_str());
+                out.append(fmt2("        for (int i = 0; i < {}; i++) {{\n            {}\n        }}\n        return s;\n    }}\n", unum(n), this.java_write(e, at.as_str(), 0, "a[i]")).as_str());
+                out.append(fmt4("\n    static {} {}(MemorySegment s) {{\n        {} a = new {};\n", copy jt, copy an, copy jt, fmt2("{}[{}]", this.java_ty(e, false), unum(n))).as_str());
+                out.append(fmt2("        for (int i = 0; i < {}; i++) {{\n            a[i] = {};\n        }}\n        return a;\n    }}\n", unum(n), this.java_read(e, at.as_str(), 0)).as_str());
+            },
+            default => {},
+        }
+    }
     // callbacks: an interface each, and the upcall that calls one (what it throws is kept, and
     // rethrown after the call)
     for (i) in 0..this.closures.len {
@@ -7881,6 +8084,7 @@ attach fn go_ty(this: bind&, t: u32) -> std::string {
             val r = this.fn_parts(t, &ps);
             return fmt2("func({}){}", this.go_tys(&ps), this.go_results(r));
         },
+        .ARRAY(e, n) => { return fmt2("[{}]{}", unum(n), this.go_ty(e)); },
         default => { return S("unsafe.Pointer"); },
     }
 }
@@ -7917,7 +8121,12 @@ attach fn go_cty(this: bind&, t: u32) -> std::string {
                 return this.go_cty(x);
             }
         },
-        .ARRAY(e, n) => { return S("unsafe.Pointer"); },
+        .ARRAY(e, n) => {
+            if (has_u32(&this.arrays, t)) {
+                return fmt("C.{}", this.made_name("array", t, false));
+            }
+            return fmt2("[{}]{}", unum(n), this.go_cty(e));
+        },
         .FN(i) => { return S("unsafe.Pointer"); },
         default => {},
     }
@@ -7940,6 +8149,12 @@ attach fn go_same_layout(this: bind&, t: u32) -> bool {
 attach fn go_to_c(this: bind&, t: u32, v: str) -> std::string {
     match (this.shape_of(t) ?? shape::VOID) {
         .STRUCT(s) => { return fmt("{}.c()", S(v)); },
+        .ARRAY(e, n) => {
+            if (has_u32(&this.arrays, t)) {
+                return fmt2("{}ToC({})", this.made_name("array", t, true), S(v));
+            }
+            return fmt2("{}({})", this.go_cty(t), S(v));
+        },
         .STR => { return fmt("goStr({})", S(v)); },
         default => { return fmt2("{}({})", this.go_cty(t), S(v)); },
     }
@@ -7955,6 +8170,12 @@ attach fn go_from_c(this: bind&, t: u32, v: str) -> std::string {
     }
     match (this.shape_of(t) ?? shape::VOID) {
         .STRUCT(s) => { return fmt2("{}FromC({})", this.go_tname(this.c.si(s).name), S(v)); },
+        .ARRAY(e, n) => {
+            if (has_u32(&this.arrays, t)) {
+                return fmt2("{}FromC({})", this.made_name("array", t, true), S(v));
+            }
+            return fmt2("{}({})", this.go_ty(t), S(v));
+        },
         .BOOL => { return fmt("bool({})", S(v)); },
         .STR => { return fmt("goString({})", S(v)); },
         .TEXT(x) => { return fmt("goString({})", S(v)); },
@@ -8044,6 +8265,7 @@ attach fn go_export(this: bind&, name: str, first: str, target: str, ps: std::ve
 
 attach fn go_plain(this: bind&, t: u32) -> bool {
     match (this.shape_of(t) ?? shape::VOID) {
+        .ARRAY(e, n) => { return has_u32(&this.arrays, t) && this.go_plain(e); },
         .BOOL => { return true; },
         .INT(k) => { return true; },
         .FLOAT(b) => { return true; },
@@ -8693,6 +8915,17 @@ attach fn go_text(this: bind&) -> std::string {
         g.append(fromc.as_str());
         g.append("    }\n}\n");
     }
+    // arrays by value (see add_array): to and from the C struct wrapping one
+    for (x&) in this.arrays.items() {
+        match (*this.c.t.get(*x)) {
+            .ARRAY(e, n) => {
+                val an = this.made_name("array", *x, true);
+                g.append(fmt4("\nfunc {}ToC(v {}) (c {}) {{\n\tfor i := range v {{\n\t\tc.v[i] = {}\n\t}}\n\treturn\n}}\n", copy an, this.go_ty(*x), this.go_cty(*x), this.go_to_c(e, "v[i]")).as_str());
+                g.append(fmt4("\nfunc {}FromC(c {}) (v {}) {{\n\tfor i := range c.v {{\n\t\tv[i] = {}\n\t}}\n\treturn\n}}\n", copy an, this.go_cty(*x), this.go_ty(*x), this.go_from_c(e, "c.v[i]")).as_str());
+            },
+            default => {},
+        }
+    }
     // what Volt calls back: Go functions, kept by a callback, and exported functions the C side
     // calls with its handle
     if (calls) {
@@ -8963,6 +9196,20 @@ attach fn node_put(this: bind&, t: u32, c: str, dst: str, d: u32) -> compile_err
             return fmt3("if ({}.has) {{ {} }} else {{ {} = vn_null(env); }}", S(c), copy v, S(dst));
         },
         .SLICE(x) => { return try this.node_array(x, c, dst, d); },
+        .ARRAY(e, n) => {
+            // a new array (an export fn's comes in the struct wrapping it, see add_array)
+            var v = S(c);
+            if (has_u32(&this.arrays, t)) {
+                v.append(".v");
+            }
+            val i = fmt("i{}", unum(@cast<u64>(d)));
+            val x = fmt("e{}", unum(@cast<u64>(d)));
+            val put = try this.node_put(e, fmt2("{}[{}]", copy v, copy i).as_str(), x.as_str(), d + 1);
+            var out = fmt4("napi_create_array_with_length(env, {}, &{}); for (size_t {} = 0; {} < ", unum(n), S(dst), copy i, copy i);
+            out.append(fmt4("{}; {}++) {{ napi_value {} = NULL; {}", unum(n), copy i, copy x, copy put).as_str());
+            out.append(fmt3(" napi_set_element(env, {}, (uint32_t){}, {}); }", S(dst), copy i, copy x).as_str());
+            return out;
+        },
         .LIST(x) => {
             // text copied out of its str, a handle held by its instance; then the list freed
             var e = this.list_elem(t);
@@ -9069,6 +9316,16 @@ attach fn node_arg_of(this: bind&, t: u32, js: str, c: str, a: node_arg&) -> com
         },
         .SLICE(x) => {
             try this.node_elems(this.slice_elem(t), false, js, c, a);
+        },
+        .ARRAY(e, n) => {
+            // an array of exactly n, into the struct wrapping it (see add_array)
+            if (!this.node_simple(e)) {
+                return fail(NO_SPAN, fmt("{} can't come from JavaScript (an array of numbers, bools, enums or structs of those can)", this.c.ty_name(t)));
+            }
+            a.decl = fmt2("{} {};", this.c_val(t, false), S(c));
+            a.get = fmt4("{{ uint32_t n_ = 0; if (!vn_array(env, {}, &n_)) {{ goto fail; }} if (n_ != {}) {{ vn_throw(env, \"expected an array of {}\"); goto fail; }} for (uint32_t i_ = 0; i_ < {}; i_++) {{ napi_value e_ = NULL; ", S(js), unum(n), unum(n), unum(n));
+            a.get.append(fmt3("napi_get_element(env, {}, i_, &e_); {} }} }", S(js), this.node_get_simple(e, "e_", fmt("{}.v[i_]", S(c)).as_str()), S("")).as_str());
+            a.pass = S(c);
         },
         .PTR(x) => {
             if (x != VOID && this.node_simple(x)) {
@@ -9859,6 +10116,7 @@ attach fn ts_ty(this: bind&, t: u32, incoming: bool) -> std::string {
             return S("unknown");
         },
         .SLICE(x) => { return ts_array(this.ts_ty(x, incoming)); },
+        .ARRAY(x, n) => { return ts_array(this.ts_ty(x, incoming)); },
         .LIST(x) => { return ts_array(this.ts_ty(this.list_elem(t), incoming)); },
         .OPT(x) => {
             var v = this.ts_ty(x, incoming);
@@ -10128,7 +10386,8 @@ attach fn lua_get(this: bind&, t: u32, idx: str, c: str, what: str) -> std::stri
         .FN(i) => { return fmt4("{} = ({})vl_pointer(L, {}, {});", S(c), this.c_prim(t, false), S(idx), S(what)); },
         .ARRAY(elem, n) => {
             val d = lua_depth(c);
-            var s = fmt5("{{ int t{} = lua_absindex(L, {}); (void)vl_seq(L, t{}, {}); for (size_t i{} = 0; ", copy d, S(idx), copy d, S(what), copy d);
+            var s = fmt5("{{ int t{} = lua_absindex(L, {}); if (vl_seq(L, t{}, {}) != {}) {{ ", copy d, S(idx), copy d, S(what), unum(n));
+            s.append(fmt3("luaL_error(L, \"%s: expected {} elements\", {}); }} for (size_t i{} = 0; ", unum(n), S(what), copy d).as_str());
             s.append(fmt5("i{} < {}; i{}++) {{ lua_geti(L, t{}, (lua_Integer)i{} + 1); ", copy d, unum(n), copy d, copy d, copy d).as_str());
             val el = this.lua_get(elem, fmt("e{}", copy d).as_str(), fmt2("{}[i{}]", S(c), copy d).as_str(), what);
             s.append(fmt3("int e{} = lua_gettop(L); {} lua_remove(L, e{}); }} }", copy d, move el, copy d).as_str());
@@ -10387,9 +10646,14 @@ attach fn lua_in(this: bind&, t: u32, idx: str, c: str, what: str, kp: str, a: l
         },
         default => {},
     }
-    // anything else crosses as itself (text as a str, an optional text as a str?)
+    // anything else crosses as itself (text as a str, an optional text as a str?, an array in the
+    // struct wrapping it)
     val v = this.in_ty(t);
-    a.decl = fmt2("{} {};", this.c_prim(v, false), S(c));
+    a.decl = fmt2("{} {};", this.c_val(v, false), S(c));
+    if (has_u32(&this.arrays, v)) {
+        a.get = this.lua_get(v, idx, fmt("{}.v", S(c)).as_str(), what);
+        return;
+    }
     a.get = this.lua_get(v, idx, c, what);
 }
 
@@ -10427,6 +10691,13 @@ attach fn lua_out(this: bind&, t: u32, r: str) -> std::string {
                 return {};
             }
             return fmt2("if ({}.error == 0) {{ {} }", S(r), move v);
+        },
+        .ARRAY(e, n) => {
+            // an export fn's comes in the struct wrapping it
+            if (has_u32(&this.arrays, t)) {
+                return this.lua_push(t, fmt("{}.v", S(r)).as_str());
+            }
+            return this.lua_push(t, r);
         },
         default => { return this.lua_push(t, r); },
     }
@@ -11402,7 +11673,8 @@ attach fn dart_native(this: bind&, t: u32) -> std::string {
         .ENUM(e) => { return S(dart_int(this.c.ei(e).tag)); },
         .CODE => { return S("Uint32"); },
         .RESULT(e, x) => { return this.result_name(t); },
-        .ARRAY(elem, n) => { return S("Pointer<Void>"); },
+        // passed and returned as the struct wrapping it (see add_array)
+        .ARRAY(elem, n) => { return this.made_name("array", t, true); },
         .SLICE(x) => { return this.made_name("slice", x, true); },
         .OPT(x) => {
             if (this.handle_of(x) != null) {
@@ -11487,6 +11759,7 @@ attach fn dart_ty(this: bind&, t: u32) -> std::string {
         .HANDLE(s) => { return this.local(this.c.si(s).name); },
         .SLICE(x) => { return fmt("List<{}>", this.dart_ty(this.slice_elem(t))); },
         .LIST(x) => { return fmt("List<{}>", this.dart_ty(this.list_elem(t))); },
+        .ARRAY(e, n) => { return fmt("List<{}>", this.dart_ty(e)); },
         .OPT(x) => { return fmt("{}?", this.dart_ty(x)); },
         // (a callback's argument: the struct)
         .RESULT(e, x) => { return this.dart_native(t); },
@@ -11826,6 +12099,15 @@ attach fn dart_arg_of(this: bind&, t: u32, name0: str, a: dart_arg&) -> compile_
             a.pass = fmt("${}, nullptr", S(n));
         },
         .ENUM(e) => { a.pass = fmt("{}.value", S(n)); },
+        .ARRAY(e, k) => {
+            // the struct wrapping it (see add_array), filled from the List
+            // ponytail: elements Dart can set in place (numbers, bool, enums); an array of arrays or
+            // of structs doesn't compile
+            a.pre = fmt3("if ({}.length != {}) {{\n  throw ArgumentError.value({}, ", S(n), unum(k), S(n));
+            a.pre.append(fmt2("'{}', 'expected {} elements');\n}}\n", S(n), unum(k)).as_str());
+            a.pre.append(fmt2("final ${} = Struct.create<{}>();\n", S(n), this.dart_native(t)).as_str());
+            a.pre.append(fmt3("for (var i = 0; i < {}; i++) {{\n  ${}.v[i] = {};\n}}\n", unum(k), S(n), this.dart_in(e, fmt("{}[i]", S(n)).as_str())).as_str());
+        },
         default => { a.pass = S(n); },
     }
     return;
@@ -11967,6 +12249,7 @@ attach fn dart_result(this: bind&, t: u32, r: str) -> compile_error!std::string 
         },
         .TRAIT(i) => { return fmt2("final v$ = volt_{}._({});\n", this.short(this.trait_of(t)), S(r)); },
         .CLOSURE(i) => { return fmt2("final v$ = closure{}._({});\n", unum(@cast<u64>(i)), S(r)); },
+        .ARRAY(e, k) => { return fmt3("final v$ = List.generate({}, (i) => {});\n", unum(k), this.dart_read(e, fmt("{}.v[i]", S(r)).as_str()), S("")); },
         .RESULT(e, x) => {
             var out = fmt("if ({}.error != 0) {{\n  throw VoltError.of(", S(r));
             out.append(fmt("{}.error);\n}\n", S(r)).as_str());
@@ -12346,6 +12629,9 @@ attach fn dart_text(this: bind&) -> compile_error!std::string {
         out.append(fmt("{};\n", move sets).as_str());
         out.append(fmt2("\n  void copyFrom({} from) {{\n{}  }}\n}}\n", copy n, move copies).as_str());
     }
+    for (x&) in this.arrays.items() {
+        out.append(fmt3("\n/// {} by value, as C passes it: a struct wrapping it\nfinal class {} extends Struct {{\n{}}}\n", this.c.ty_name(*x), this.made_name("array", *x, true), this.dart_field(*x, "v")).as_str());
+    }
     for (x&) in this.slices.items() {
         out.append(fmt2("\n/// a Volt slice: elements and how many\nfinal class {} extends Struct {{\n  external Pointer<{}> ptr;\n  @Size()\n  external int len;\n}}\n", this.made_name("slice", *x, true), this.dart_native(*x)).as_str());
     }
@@ -12607,6 +12893,7 @@ attach fn swift_ty(this: bind&, t: u32, cb: bool) -> std::string {
             return fmt("inout [{}]", this.swift_item(x, false));
         },
         .LIST(x) => { return fmt("[{}]", this.swift_item(this.list_elem(t), true)); },
+        .ARRAY(e, n) => { return fmt("[{}]", this.swift_ty(e, cb)); },
         .OPT(x) => { return this.swift_opt_ty(t, x); },
         .RESULT(e, x) => { return this.swift_ty(x, cb); },
         .TRAIT(i) => { return fmt("any {}", this.short(this.trait_of(t))); },
@@ -12880,6 +13167,16 @@ attach fn swift_arg_of(this: bind&, t: u32, name0: str, a: swift_arg&, cb: bool)
             this.swift_scope(a, fmt2("withoutActuallyEscaping({}) {{ {}_f in", S(n), S(name0)), fmt2("let {}_box = VoltBox({}_f)\n", S(name0), S(name0)));
             this.swift_scope(a, fmt("withExtendedLifetime({}_box) {", S(name0)), {});
             a.pass = fmt2("{}, Unmanaged.passUnretained({}_box).toOpaque()", this.swift_thunk(&ps, r, this.swift_ty(t, false).as_str(), "voltBox.f"), S(name0));
+        },
+        .ARRAY(e, k) => {
+            // the struct wrapping it (see add_array): the elements' bytes
+            // ponytail: elements laid out as C has them (numbers, bool, enums as their values,
+            // structs); an array of arrays doesn't compile
+            var v = S(n);
+            if (this.swift_in(e, "$0").as_str() != "$0") {
+                v = fmt2("{}.map {{ {} }}", S(n), this.swift_in(e, "$0"));
+            }
+            a.pass = fmt3("voltArray({}, {}, as: {}.self)", move v, unum(k), this.c_val(t, false));
         },
         default => { a.pass = this.swift_in(t, n); },
     }
@@ -13240,6 +13537,13 @@ attach fn swift_result(this: bind&, t: u32, r: str, raw: bool, cb: bool) -> std:
         },
         .CLOSURE(i) => { return fmt2("return VoltClosure{}({})\n", unum(@cast<u64>(i)), S(r)); },
         .TRAIT(i) => { return fmt2("return volt_{}({})\n", this.short(this.trait_of(t)), S(r)); },
+        .ARRAY(e, k) => {
+            val v = this.swift_out(e, "$0");
+            if (v.as_str() == "$0") {
+                return fmt2("return voltArray({}, {})\n", S(r), unum(k));
+            }
+            return fmt4("return (voltArray({}, {}) as [{}]).map {{ {} }}\n", S(r), unum(k), this.swift_c(e), copy v);
+        },
         default => { return fmt("return {}\n", this.swift_out(t, r)); },
     }
 }
@@ -13473,6 +13777,9 @@ attach fn swift_text(this: bind&) -> std::string {
         out.append(fmt3("    case {}: return {}.{}\n", num(c.code), copy c.set, S(c.name)).as_str());
     }
     out.append("    default: return VoltError(code: code)\n    }\n}\n");
+    if (this.arrays.len > 0) {
+        out.append("\n// an array by value as C passes it (the struct wrapping its elements), from a Swift array, and back\nfunc voltArray<T, A>(_ a: [T], _ n: Int, as: A.Type) -> A {\n    precondition(a.count == n, \"expected \\(n) elements\")\n    return a.withUnsafeBytes { $0.load(as: A.self) }\n}\n\nfunc voltArray<T, A>(_ c: A, _ n: Int) -> [T] {\n    return withUnsafeBytes(of: c) { Array($0.bindMemory(to: T.self).prefix(n)) }\n}\n");
+    }
     if (this.uses_str) {
         out.append("\nfunc voltString(_ s: volt_str) -> String {\n    return String(decoding: UnsafeBufferPointer(start: s.ptr, count: s.len), as: UTF8.self)\n}\n");
         out.append("\n// text lent to a Volt call: the bytes of xs in one buffer, a str of each, and which are there\nfunc voltWithStrs<R>(_ xs: [String?], _ body: (UnsafeMutableBufferPointer<volt_str>, [Bool]) throws -> R) rethrows -> R {\n    var bytes: [UInt8] = []\n    var ends: [Int] = []\n    for x in xs {\n        bytes.append(contentsOf: (x ?? \"\").utf8)\n        ends.append(bytes.count)\n    }\n");
@@ -13688,7 +13995,7 @@ attach fn kt_c(this: bind&, t: u32) -> std::string {
         },
         default => {},
     }
-    return fmt("CValue<{}>", this.c_prim(t, false));
+    return fmt("CValue<{}>", this.c_val(t, false));
 }
 
 // the C variable cinterop has for a type (IntVar, a struct's class, CPointerVar<...>): what an array
@@ -13831,6 +14138,7 @@ attach fn kt_cvalue(this: bind&, t: u32) -> bool {
         .CLOSURE(i) => { return true; },
         .RESULT(e, x) => { return true; },
         .OPT(x) => { return this.handle_of(x) == null; },
+        .ARRAY(x, n) => { return has_u32(&this.arrays, t); },
         default => { return false; },
     }
 }
@@ -13920,6 +14228,10 @@ attach fn kt_result(this: bind&, t: u32, r: str, raw: bool) -> std::string {
 
 // the Kotlin value of C value r of type t as cinterop gives it (a CValue for a struct): E!T a Result
 attach fn kt_value(this: bind&, t: u32, r: str) -> std::string {
+    if (has_u32(&this.arrays, t)) {
+        // the struct wrapping it (see add_array)
+        return kt_block(fmt("{}.useContents", S(r)), this.kt_from(t, "v", 0));
+    }
     if (this.kt_cvalue(t)) {
         return kt_block(fmt("{}.useContents", S(r)), this.kt_from(t, "this", 0));
     }
@@ -14087,9 +14399,10 @@ attach fn kt_arg_of(this: bind&, t: u32, name0: str, a: kt_arg&) -> void {
             }
         },
         .ARRAY(x, k) => {
-            a.pre = fmt3("val {} = volt_m.allocArray<{}>({})\n", copy c, this.kt_var(x), unum(k));
-            a.pre.append(this.kt_put(t, n, c.as_str(), name0, 0, "volt_m").as_str());
-            a.pass = copy c;
+            // the struct wrapping it (see add_array), filled from the Kotlin sequence
+            a.pre = fmt2("val {} = volt_m.alloc<{}>()\n", copy c, this.c_val(t, false));
+            a.pre.append(this.kt_put(t, n, fmt("{}.v", copy c).as_str(), name0, 0, "volt_m").as_str());
+            a.pass = fmt("{}.readValue()", copy c);
             return;
         },
         .OPT(x) => {
@@ -14802,6 +15115,21 @@ attach fn rb_out(this: bind&, t: u32, c: str, pre: std::string&, tmp: str) -> st
             pre.append(fmt("{});\n    }}\n", move v).as_str());
             return S(tmp);
         },
+        .ARRAY(x, n) => {
+            // an Array (an export fn's comes in the struct wrapping it, see add_array)
+            var at = fmt("({})[i]", S(c));
+            if (has_u32(&this.arrays, t)) {
+                at = fmt("({}).v[i]", S(c));
+            }
+            var inner: std::string = {};
+            val v = this.rb_out(x, at.as_str(), &inner, tmp) ?? return null;
+            if (inner.len() > 0) {
+                return null;
+            }
+            pre.append(fmt4("    VALUE {} = rb_ary_new_capa({});\n    for (size_t i = 0; i < {}; i++) {{\n        rb_ary_push({}, ", S(tmp), unum(n), unum(n), S(tmp)).as_str());
+            pre.append(fmt("{});\n    }}\n", move v).as_str());
+            return S(tmp);
+        },
         default => { return null; },
     }
 }
@@ -15296,6 +15624,16 @@ attach fn rb_arg_of(this: bind&, t: u32, v: str, c: str, what: str, a: rb_arg&) 
                 a.give = fmt4("if ({}_b) {{ {}{}.drop = NULL; {}_b->busy++; }}", S(c), copy own, S(c), S(c));
                 a.done = fmt2("if ({}_b) {{ {}_b->busy--; }}", S(c), S(c));
             }
+        },
+        .ARRAY(e, n) => {
+            // an Array of exactly n, into the struct wrapping it (see add_array)
+            if (!this.node_simple(e)) {
+                return fail(NO_SPAN, fmt("{} can't come from Ruby (an array of numbers, bools, enums or structs of those can)", this.c.ty_name(t)));
+            }
+            a.decl = fmt2("{} {};", this.c_val(t, false), S(c));
+            a.get = fmt4("{{ VALUE a_ = rb_Array({}); if (RARRAY_LEN(a_) != {}) {{ rb_raise(rb_eArgError, \"expected an Array of {}\"); }} for (long i_ = 0; i_ < {}; i_++) {{ ", S(v), unum(n), unum(n), unum(n));
+            a.get.append(fmt("{} } }", this.rb_get(e, "rb_ary_entry(a_, i_)", fmt("{}.v[i_]", S(c)).as_str(), what)).as_str());
+            a.pass = S(c);
         },
         default => { return fail(NO_SPAN, fmt("{} can't come from Ruby", this.c.ty_name(t))); },
     }

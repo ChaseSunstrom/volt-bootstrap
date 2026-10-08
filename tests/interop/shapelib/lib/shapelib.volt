@@ -315,3 +315,17 @@ export fn total_rows(rows: i64[..][..]) -> i64 {
     }
     return t;
 }
+
+// arrays by value, going in and coming back (C passes each as a struct wrapping it): more than 16
+// bytes go by memory, two doubles in registers, three bytes in one (x86-64)
+export fn rotated(xs: i64[3]) -> i64[3] {
+    return { xs[1], xs[2], xs[0] };
+}
+
+export fn swapped(xs: f64[2]) -> f64[2] {
+    return { xs[1], xs[0] };
+}
+
+export fn bumped(xs: u8[3]) -> u8[3] {
+    return { xs[0] + 1, xs[1] + 1, xs[2] + 1 };
+}

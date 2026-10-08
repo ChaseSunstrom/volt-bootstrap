@@ -80,6 +80,8 @@ local function lists()
     say("close_all", m.close_all({ a, b }))
     say("some", m.count_some(table.pack(1, nil, 3)))
     say("rows", m.total_rows({ { 1, 2 }, { 3 } }))
+    local rot, sw, bu = m.rotated({ 11, 12, 13 }), m.swapped({ 1.5, 2.5 }), m.bumped({ 1, 2, 3 })
+    say("arrays", rot[1], rot[2], rot[3], sw[1], sw[2], bu[1], bu[2], bu[3])
     say("lists closed", m.closed_accounts())
 end
 
@@ -90,6 +92,7 @@ local function rejects()
     assert(not pcall(m.close_all, { a, a }), "a handle given twice")
     assert(not pcall(m.close_all, { a, "x" }), "a string for a handle")
     assert(not pcall(m.visit, a, a), "an account for a callback")
+    assert(not pcall(m.rotated, { 1, 2 }) and not pcall(m.rotated, { 1, 2, 3, 4 }), "an array of the wrong length")
     local kept
     m.visit(a, function(lent)
         kept = lent

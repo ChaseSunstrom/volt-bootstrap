@@ -142,6 +142,7 @@ function lists() {
     console.log("close_all", m.close_all(ab));
     console.log("some", m.count_some([1, null, 3]));
     console.log("rows", m.total_rows([[1, 2], [3]]));
+    console.log("arrays", ...m.rotated([11, 12, 13]), ...m.swapped([1.5, 2.5]), ...m.bumped([1, 2, 3]));
     console.log("lists closed", m.closed_accounts());
 }
 

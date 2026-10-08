@@ -81,6 +81,7 @@ def lists():
     print("close_all", s.close_all(both))
     print("some", s.count_some([1, None, 3]))
     print("rows", s.total_rows([[1, 2], [3]]))
+    print("arrays", *s.rotated([11, 12, 13]), *s.swapped([1.5, 2.5]), *s.bumped([1, 2, 3]))
     print("lists closed", s.closed_accounts())
 
 
@@ -158,6 +159,7 @@ def python_extras():
     a.deposit(5)
     print("raised", raised(lambda: s.shout(boom, "hey")), raised(lambda: s.try_twice(boom, 1)), raised(lambda: s.visit(a, boom)), raised(lambda: s.describe(Broken())))
     print("wrong type", raised(lambda: s.shout(lambda t: 5, "hey")))
+    print("wrong length", raised(lambda: s.rotated([1, 2])), raised(lambda: s.rotated([1, 2, 3, 4])))
     gone = s.account.open("gone")
     s.close_account(gone)
     print("refused", raised(lambda: s.close_account(gone)), raised(lambda: s.visit(a, lambda b: s.close_account(b))), raised(lambda: s.close_all([a, a])))
