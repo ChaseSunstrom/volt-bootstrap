@@ -76,6 +76,12 @@ fn c_member(n: str) -> str {
 
 // n as a C member name, renamed volt_kw_n when it is a C keyword
 attach fn put_member(this: cgen&, out: std::string&, n: str) -> void {
+    if (n.len > 0 && n[0] == '@') {
+        // padding in Volt's copy of a C struct (clang.volt's pad_fields): @pad0 is volt_pad0
+        out.append("volt_");
+        out.append(n[1..]);
+        return;
+    }
     if (c_member(n).len == 0) {
         out.append("volt_kw_");
     }
