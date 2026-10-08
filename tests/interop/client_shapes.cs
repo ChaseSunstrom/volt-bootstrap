@@ -51,6 +51,7 @@ using (var hi = Api.greeter())
     Console.WriteLine($"{d.Invoke(21)} {hi.Invoke("volt")}");
 }
 Lists();
+InUse();
 c.Dispose();
 // what the library still holds (it was built with --leak-check)
 var lib = NativeLibrary.Load("shapelib", typeof(Api).Assembly, null);
@@ -99,6 +100,53 @@ static void Extras()
     using (var sign = Api.labeler())
     {
         Console.WriteLine($"sign {sign.Invoke(5)} {sign.Invoke(-1)}");
+    }
+}
+
+// an account a running call lent to Volt can't be closed or given away by a callback meanwhile (it
+// prints only what was wrongly accepted)
+static void InUse()
+{
+    using var a = account.open("busy");
+    try
+    {
+        Api.visit(a, b => { a.Dispose(); return 0; });
+        Console.WriteLine("accepted: closing an account a call holds");
+    }
+    catch (InvalidOperationException)
+    {
+    }
+    try
+    {
+        Api.visit(a, b => Api.close_account(a));
+        Console.WriteLine("accepted: giving away an account a call holds");
+    }
+    catch (InvalidOperationException)
+    {
+    }
+    try
+    {
+        Api.visit_over(new[] { a }, b => { a.Dispose(); return 0; });
+        Console.WriteLine("accepted: closing an account a call holds in an array");
+    }
+    catch (InvalidOperationException)
+    {
+    }
+    try
+    {
+        Api.lend_give(a, a);
+        Console.WriteLine("accepted: lending and giving one account in one call");
+    }
+    catch (InvalidOperationException)
+    {
+    }
+    // a callback that throws leaves what the call lent as it was (disposable after)
+    try
+    {
+        Api.visit_then(b => throw new ArgumentException("thrown"), a);
+    }
+    catch (ArgumentException)
+    {
     }
 }
 

@@ -96,6 +96,12 @@ local function rejects()
         return 0
     end)
     assert(not pcall(kept.get, kept), "a lent account used after the callback")
+    -- an account a running call lent can't be closed or given away by its callback meanwhile
+    assert(not pcall(m.visit, a, function() a:close() return 0 end), "closing an account a call holds")
+    assert(not pcall(m.visit, a, function() return m.close_account(a) end), "giving away an account a call holds")
+    assert(not pcall(m.visit_over, { a }, function() a:close() return 0 end), "closing an account a call holds in a sequence")
+    assert(not pcall(m.lend_give, a, a), "lending and giving one account in one call")
+    assert(not pcall(m.visit_then, function() error("thrown") end, a), "a callback's error")
     assert(a:get() == 0, "still a's")
     local ok, err = pcall(m.describe, { area = function() return 1 end, name = function() error("no name") end, grow = function() end })
     assert(not ok and tostring(err):find("no name"), "a trait fn's error")

@@ -165,7 +165,32 @@ def python_extras():
     print("fatal", p.returncode, "ZeroDivisionError" in p.stderr)
 
 
+# an account a running call lent to Volt can't be closed or given away by a callback meanwhile (it
+# prints only what was wrongly accepted)
+def in_use():
+    a = s.account.open("busy")
+    for what, f in [("closing", lambda b: a.close()), ("giving away", lambda b: s.close_account(a))]:
+        try:
+            s.visit(a, f)
+            print("accepted:", what, "an account a call holds")
+        except ValueError:
+            pass
+    for what, f in [("closing one in a slice", lambda: s.visit_over([a], lambda b: a.close())), ("lending and giving one", lambda: s.lend_give(a, a))]:
+        try:
+            f()
+            print("accepted:", what)
+        except ValueError:
+            pass
+    # a callback that raises leaves what the call lent as it was (closable after)
+    try:
+        s.visit_then(lambda b: 1 // 0, a)
+    except ZeroDivisionError:
+        pass
+    a.close()
+
+
 main()
+in_use()
 python_extras()
 # the library's allocations still live (a --leak-check build counts them): 0 when it freed everything
 print("volt live:", ctypes.c_size_t.in_dll(s._lib, "volt_live_allocs").value, file=sys.stderr)

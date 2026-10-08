@@ -143,7 +143,46 @@ func run() {
 	lists()
 }
 
+// an account a running call lent to Volt can't be closed or given away by a callback meanwhile
+// (it prints only what was wrongly accepted)
+func inUse() {
+	a := shapelib.AccountOpen("busy")
+	defer a.Close()
+	refused := func(what string, f func()) {
+		defer func() {
+			if recover() == nil {
+				fmt.Println("accepted:", what)
+			}
+		}()
+		f()
+	}
+	refused("closing an account a call holds", func() {
+		shapelib.Visit(a, func(*shapelib.Account) int64 {
+			a.Close()
+			return 0
+		})
+	})
+	refused("giving away an account a call holds", func() {
+		shapelib.Visit(a, func(*shapelib.Account) int64 { return shapelib.CloseAccount(a) })
+	})
+	refused("closing an account a call holds in a slice", func() {
+		shapelib.VisitOver([]*shapelib.Account{a}, func(*shapelib.Account) int64 {
+			a.Close()
+			return 0
+		})
+	})
+	refused("lending and giving one account in one call", func() {
+		shapelib.LendGive(a, a)
+	})
+	// a callback that panics leaves what the call lent as it was (closable after)
+	func() {
+		defer func() { recover() }()
+		shapelib.VisitThen(func(*shapelib.Account) int64 { panic("thrown") }, a)
+	}()
+}
+
 func main() {
 	run()
+	inUse()
 	fmt.Fprintf(os.Stderr, "volt live: %d\n", C.volt_live_allocs)
 }
