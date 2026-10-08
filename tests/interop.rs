@@ -381,6 +381,22 @@ fn bindings_round_trip() {
     }
 }
 
+// a slice of slices has a C type of its own (slice_slice_i64), not its elements' name again
+#[test]
+fn bindings_nested_slices() {
+    let e = Env::new("nested");
+    let dir = e.dir.join("nested");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("nested.volt"), "export fn total(rows: i64[..][..]) -> i64 {\n    var t: i64 = 0;\n    for (r) in rows {\n        for (x) in r {\n            t += x;\n        }\n    }\n    return t;\n}\n").unwrap();
+    let pkg = format!("nested={}", dir.display());
+    ok(e.voltc(&["lib", "nested", "--pkg", &pkg, "--shared", "-o", &e.path("libnested.so")]), "voltc lib nested --shared");
+    ok(e.voltc(&["bindings", "nested", "--pkg", &pkg, "--lang", "c", "-o", &e.path("nested.h")]), "voltc bindings nested --lang c");
+    std::fs::write(e.dir.join("main.c"), "#include \"nested.h\"\n#include <stdio.h>\n\nint main(void) {\n    int64_t a[] = {1, 2}, b[] = {3};\n    nested_slice_i64 rows[] = {{a, 2}, {b, 1}};\n    printf(\"%lld\\n\", (long long)total((nested_slice_slice_i64){rows, 2}));\n    return 0;\n}\n").unwrap();
+    let rpath = format!("-Wl,-rpath,{}", e.path(""));
+    ok(Command::new("cc").args(["-Wall", "-Werror", "main.c", "-I", &e.path(""), "-L", &e.path(""), "-lnested", &rpath, "-o", "main"]).current_dir(&e.dir).output().unwrap(), "cc main.c");
+    assert_eq!(ok(Command::new(e.dir.join("main")).output().unwrap(), "main"), "6\n");
+}
+
 const SHAPES_OUT: &str = "biggest 9 1.5\naccount bea 300\nvisit 301 get 301\nclosed 301 1\ncircle of area 3\ncircle gone\ngrown 27\nsquare 9 square of area 9\nhey!\ntry 4 OVERDRAWN\nopened 25\nclosed 2\n42 hello, volt\nowners 2 ann bobby\nrichest 9 after 6 10\nopened 2 dee\nsquares 4 16 sum 30\njoined a-b-c total 3\nhello, ann; hello, nobody\nnick 1 ann 0\nopen_if 1 1\nclose_if 0 -1\nclose_all 2\nsome 2\nlists closed 7\ncircle gone\n";
 
 #[test]

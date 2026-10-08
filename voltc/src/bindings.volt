@@ -1571,8 +1571,10 @@ attach fn short(this: bind&, t: u32) -> std::string {
         .ENUM(e) => { return this.local(this.c.ei(e).name); },
         .TRAIT_UNION(u) => { return this.local(this.c.ty_name(t).as_str()); },
         .ANYERR => { return S("error"); },
-        // (a slice of optionals isn't a slice of their values)
+        // (a slice of optionals isn't a slice of their values, nor one of slices a slice of their
+        // elements)
         .OPT(x) => { return fmt("opt_{}", this.short(x)); },
+        .SLICE(x) => { return fmt("slice_{}", this.short(x)); },
         default => { return ident_of(this.c.ty_name(t).as_str()); },
     }
 }
