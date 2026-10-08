@@ -114,6 +114,18 @@ fn ruby_headers() -> Option<(PathBuf, Vec<String>)> {
     (dirs.len() == 2 && Path::new(&dirs[0]).join("ruby.h").is_file()).then_some((ruby, dirs))
 }
 
+/// cc building Ruby extension src against library lib (in lib_dir), with the leak report linked in
+/// (it prints the library's live allocations at exit, once Ruby has freed its objects); -o next
+fn ruby_ext(hdrs: &[String], src: &Path, lib_dir: &str, lib: &str) -> Command {
+    let mut cc = Command::new("cc");
+    cc.args(["-shared", "-fPIC", "-Wall", "-Wextra", "-Wno-unused-parameter", "-Werror"]);
+    for h in hdrs {
+        cc.arg("-I").arg(h);
+    }
+    cc.arg(src).args(["leak_report.c", "-L", lib_dir, &format!("-l{lib}"), &format!("-Wl,-rpath,{lib_dir}"), "-o"]);
+    cc
+}
+
 fn run(cmd: &mut Command) -> Output {
     cmd.current_dir(Path::new(ROOT).join("tests/interop")).output().unwrap()
 }
@@ -401,13 +413,13 @@ const SHAPES_OUT: &str = "biggest 9 1.5\naccount bea 300\nvisit 301 get 301\nclo
 
 #[test]
 fn bindings_shapes() {
-    // what C, C++, Rust, Zig, Go, Python, Java, C#, JavaScript and Lua call beyond the plain shapes: a generic's instances, a struct that owns text
+    // what C, C++, Rust, Zig, Go, Python, Java, C#, JavaScript, Lua and Ruby call beyond the plain shapes: a generic's instances, a struct that owns text
     // held by a handle with its methods, owned values passed in, a trait implemented on either side,
     // closures taking and giving text and handles, closures given back. The library is a leak-checked
     // build, and leak_report.c (or the client) prints how many of its allocations are live when the client is done
     let e = Env::new("shapes");
     let pkg = "shapelib=shapelib/lib";
-    for (lang, file) in [("c", "shapelib.h"), ("cpp", "shapelib.hpp"), ("rust", "shapelib.rs"), ("zig", "shapelib.zig"), ("go", "shapelib.go"), ("python", "shapelib.py"), ("pyi", "shapelib.pyi"), ("java", "shapelib.java"), ("node", "shapelib_node.c"), ("js", "shapelib.js"), ("ts", "shapelib.d.ts"), ("lua", "shapelib_lua.c")] {
+    for (lang, file) in [("c", "shapelib.h"), ("cpp", "shapelib.hpp"), ("rust", "shapelib.rs"), ("zig", "shapelib.zig"), ("go", "shapelib.go"), ("python", "shapelib.py"), ("pyi", "shapelib.pyi"), ("java", "shapelib.java"), ("node", "shapelib_node.c"), ("js", "shapelib.js"), ("ts", "shapelib.d.ts"), ("lua", "shapelib_lua.c"), ("ruby", "shapelib_ruby.c")] {
         ok(e.voltc(&["bindings", "shapelib", "--pkg", pkg, "--lang", lang, "-o", &e.path(file)]), &format!("voltc bindings --lang {lang}"));
     }
     // Rust: client_shapes.rs next to its shapelib.rs module, with the leak report as an object
@@ -537,6 +549,20 @@ fn bindings_shapes() {
         } else {
             eprintln!("lua (5.4 or later, with its headers) isn't installed: skipping the Lua shapes client");
         }
+        // Ruby: client_shapes.rb with the C extension, which has the leak report linked in (it runs
+        // at exit, once Ruby has freed its objects); after the rest, what only Ruby checks
+        match ruby_headers() {
+            Some((ruby, hdrs)) => {
+                let rdir = e.dir.join(format!("ruby-{backend}"));
+                std::fs::create_dir_all(&rdir).unwrap();
+                ok(run(ruby_ext(&hdrs, &e.dir.join("shapelib_ruby.c"), &lib, "shapelib").arg(rdir.join("shapelib.so"))), "cc shapelib_ruby.c");
+                let o = Command::new(&ruby).arg("-I").arg(&rdir).arg(Path::new(ROOT).join("tests/interop/client_shapes.rb")).output().unwrap();
+                assert_eq!(String::from_utf8_lossy(&o.stderr), "volt live: 0\n", "client_shapes.rb ({backend}): the library's allocations at exit");
+                let tail = "raised ArgumentError ArgumentError ArgumentError ArgumentError\nwrong type TypeError TypeError\nrefused RuntimeError ArgumentError ArgumentError\nin use RuntimeError RuntimeError\nkept RuntimeError ann 5\nlent after RuntimeError\nshrinking closed\nclosed anyway ArgumentError\nbreak 7\nfatal 101 true\n";
+                assert_eq!(ok(o, "ruby client_shapes.rb"), format!("checked true OVERDRAWN\nlimit true OVERDRAWN\nsign positive not positive\n{SHAPES_OUT}{tail}"), "client_shapes.rb ({backend})");
+            }
+            None => eprintln!("ruby (with its headers) isn't installed: skipping the Ruby shapes client"),
+        }
     }
     // the TypeScript types: checked by tsc when it's installed, else parsed (node 23.2+ strips them)
     if Command::new("tsc").arg("--version").output().is_ok_and(|o| o.status.success()) {
@@ -558,6 +584,26 @@ fn bindings_shapes() {
     let check = "import ctypes, pyopt as p\nprint(p.count_text(['ab', None, 'c']), p.sum_things([p.thing(2), None, p.thing(5)]))\nprint(ctypes.c_size_t.in_dll(p._lib, 'volt_live_allocs').value)\n";
     let o = Command::new("python3").args(["-c", check]).env("PYTHONPATH", e.path("")).env("VOLT_PYOPT_LIB", e.path("libpyopt.so")).output().unwrap();
     assert_eq!(ok(o, "python3 (pyopt)"), "3 7\n0\n", "Python: optionals of text and handles in slices");
+    // Ruby: the same, nil for none (the leak report linked into the extension)
+    if let Some((ruby, hdrs)) = ruby_headers() {
+        ok(e.voltc(&["bindings", "pyopt", "--pkg", &opkg, "--lang", "ruby", "-o", &e.path("pyopt_ruby.c")]), "voltc bindings pyopt --lang ruby");
+        let rdir = e.dir.join("ruby-pyopt");
+        std::fs::create_dir_all(&rdir).unwrap();
+        ok(run(ruby_ext(&hdrs, &e.dir.join("pyopt_ruby.c"), &e.path(""), "pyopt").arg(rdir.join("pyopt.so"))), "cc pyopt_ruby.c");
+        let o = Command::new(&ruby).arg("-I").arg(&rdir).args(["-e", "require 'pyopt'; puts \"#{Pyopt.count_text(['ab', nil, 'c'])} #{Pyopt.sum_things([Pyopt::Thing.new(2), nil, Pyopt::Thing.new(5)])}\""]).output().unwrap();
+        assert_eq!(String::from_utf8_lossy(&o.stderr), "volt live: 0\n", "Ruby (pyopt): the library's allocations at exit");
+        assert_eq!(ok(o, "ruby (pyopt)"), "3 7\n", "Ruby: optionals of text and handles in slices");
+        // what shapelib doesn't have: client_moreshapes.rb with moreshapes (a trait object Volt keeps
+        // past the call, handles given to a callback, a str a callback gives, ...)
+        let mpkg = "moreshapes=moreshapes/lib";
+        ok(e.voltc(&["bindings", "moreshapes", "--pkg", mpkg, "--lang", "ruby", "-o", &e.path("moreshapes_ruby.c")]), "voltc bindings moreshapes --lang ruby");
+        ok(e.voltc(&["lib", "moreshapes", "--pkg", mpkg, "--shared", "--leak-check", "-o", &e.path("libmoreshapes.so")]), "voltc lib moreshapes --shared");
+        ok(run(ruby_ext(&hdrs, &e.dir.join("moreshapes_ruby.c"), &e.path(""), "moreshapes").arg(rdir.join("moreshapes.so"))), "cc moreshapes_ruby.c");
+        let o = Command::new(&ruby).arg("-I").arg(&rdir).arg(Path::new(ROOT).join("tests/interop/client_moreshapes.rb")).output().unwrap();
+        assert_eq!(String::from_utf8_lossy(&o.stderr), "volt live: 0\n", "client_moreshapes.rb: the library's allocations at exit");
+        let want = "measure 70 tag sizer\nsizer closed\neach 0,1,2 gone 4\nstopped stop gone 7\nlabel pos neg\nslice 6\nresult 5 -1\nmaybe yes nil cstr 5\nlist [1, nil]\ngetter 9 [9]\nbig [5, 7]\nfixed 1020 RuntimeError\nbad ArgumentError TypeError\nclosed meanwhile RuntimeError RuntimeError gone 14\n";
+        assert_eq!(ok(o, "ruby client_moreshapes.rb"), want, "client_moreshapes.rb");
+    }
     // the model has the trait, and how a fn takes its object
     let json = ok(e.voltc(&["bindings", "shapelib", "--pkg", pkg, "--lang", "json"]), "voltc bindings --lang json");
     for want in [r#"{"kind":"trait","name":"shape","c_name":"shapelib_shape","table":"shapelib_shape_vt""#, r#"{"kind":"object","trait":"shape","owned":false}"#, r#""name":"biggest_i32""#, r#""class":"account","method":"deposit""#] {
@@ -566,7 +612,7 @@ fn bindings_shapes() {
     // the other languages' bindings say which languages take every shape
     let o = e.voltc(&["bindings", "shapelib", "--pkg", pkg, "--lang", "kotlin"]);
     let err = String::from_utf8_lossy(&o.stderr);
-    assert!(!o.status.success() && err.contains("JavaScript and Lua"), "{err}");
+    assert!(!o.status.success() && err.contains("Lua and Ruby"), "{err}");
 }
 
 #[test]

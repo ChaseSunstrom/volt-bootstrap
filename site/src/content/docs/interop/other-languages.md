@@ -155,7 +155,7 @@ Each language gets these in its own style:
 | Dart | throws a `VoltError` subclass per error set | `String` | `List`s (written back), `null` | a class with `close()`, and a `NativeFinalizer` | any function |
 | Swift | throws its error set's enum | `String` | `inout` arrays (written back), `T?` | a class with `close()`, freed by `deinit` | a closure |
 | Kotlin/Native | throws a `VoltException` subclass per error set | `String` | primitive arrays (in place) or `List`s, `T?` | an `AutoCloseable` class, freed by a `Cleaner` if not closed | a lambda |
-| Ruby | raises a `Mod::Error` subclass per error set | a `String` | `Array`s (written back), `nil` | a class with `close`, freed by the GC | a block or a `Proc` |
+| Ruby | raises a `Mod::Error` subclass per error set | a `String` | `Array`s (written back), `nil` | a class with `close`, freed by the GC | a block, or anything with `call` |
 
 A generic export fn exports the instances it names, one `@instance` per instance with a type per
 generic parameter. Each is a function of its own, named after its arguments:
@@ -179,13 +179,13 @@ C and Rust call `biggest_i32` and `biggest_f64`; C++ calls `biggest`, an overloa
 
 ### Every shape
 
-C, C++, Rust, Zig, Go, Python, Java, C#, JavaScript and Lua take more than the other languages
-(whose bindings name what they don't take); Go's forms are under [Go](#go), Python's on
+C, C++, Rust, Zig, Go, Python, Java, C#, JavaScript, Lua and Ruby take more than the other
+languages (whose bindings name what they don't take); Go's forms are under [Go](#go), Python's on
 [its page](/volt-bootstrap/interop/python/#python-calls-volt), Java's on
 [its page](/volt-bootstrap/interop/java/#java-calls-volt), C#'s on
 [its page](/volt-bootstrap/interop/dotnet/#every-shape), JavaScript's on
 [Node.js's](/volt-bootstrap/interop/node/#every-shape), Lua's on
-[its page](/volt-bootstrap/interop/lua/#every-shape):
+[its page](/volt-bootstrap/interop/lua/#every-shape), Ruby's [below](#every-shape-in-ruby):
 
 - **Owned values as parameters.** Text (`std::string`) comes in as a `str` that Volt copies (a
   `&str` in Rust, a `[]const u8` in Zig); a handle by value is given to the fn, which deletes it
@@ -452,8 +452,61 @@ c.close                                       # or leave it to the GC
 
 The package is a module (its name capitalized), structs are `Struct` classes (a `Hash` with the
 fields works too), enums are modules of constants, and error sets are `Mathlib::Error` subclasses
-holding their codes. A callback is a block or a `Proc`; an exception it raises comes out of the
-Volt call. Integers that don't fit the parameter, and wrong types, raise.
+holding their codes (`Mathlib::MathError.new(Mathlib::MathError::NEGATIVE)` makes one). A callback
+is a block or a `Proc` (anything with `call`); an exception it raises comes out of the Volt call.
+Integers that don't fit the parameter, and wrong types, raise.
+
+### Every shape in Ruby
+
+Ruby takes [every shape](#every-shape) C does:
+
+- **Owned values as parameters.** Text (`std::string`) is a `String`, which Volt copies. A handle
+  by value is given to the fn: the object lets its handle go (it's closed after), and Volt deletes
+  it.
+- **Traits.** Any object with the trait's methods passes: `s: shape&` lends it for the call, and
+  `s: shape` gives it, kept from the GC until Volt drops it and calls its `close` (when it has one,
+  and unless Volt drops it while the GC runs, as at exit). A Volt value of the trait comes back as
+  a `Mod::Shape`, whose methods call Volt's, freed by `close` or the GC.
+- **Callbacks taking and giving text, handles and errors.** Text is a `String` both ways, a handle
+  is its class (one Volt lends is closed once the callback returns), and an `E!T` callback returns
+  its `T` or raises one of the error set's errors. A `str` (not owned text) a callback gives back
+  is kept for good, one copy per value, since nothing frees it.
+- **Lists, and text and handles in slices and optionals.** A `std::vec<T>` comes back as an `Array`
+  (of `String`s, or of objects, each the caller's), and goes in as one, as does a slice of text or
+  of an export struct (lent for the call; a list's handles are given). `nil` is an optional's none,
+  in a slice too.
+- **Closures given back.** A fn returning `fn(A) -> R` gives a `Mod::Fn`: `call` it (or `.()` it,
+  or pass it as a block with `&`), and `close` frees it (or the GC does).
+
+With a library like the one in [Every shape](#every-shape) (a `shape` trait, `describe(s: shape&)`,
+`grow_twice(s: shape)`, `shout`, `greeter` and `owners`):
+
+```ruby
+class Circle
+  def initialize(r) = @r = r
+  def area = 3 * @r * @r
+  def name = "circle"
+  def grow(by) = @r += by
+  def close = puts("circle gone")
+end
+
+puts Shapelib.describe(Circle.new(1))                # circle of area 3, lent
+puts Shapelib.grow_twice(Circle.new(1))              # circle gone, then 27.0: given
+puts Shapelib.shout(->(s) { s + "!" }, "hey")        # hey!
+hi = Shapelib.greeter
+puts hi.("volt")                                     # hello, volt
+hi.close
+ann = Shapelib::Account.open("ann")
+p Shapelib.owners([ann])                             # ["ann"]
+```
+
+What a callback or a trait's method raises doesn't unwind through Volt: it's kept, Volt gets an
+empty value (or, for `E!T`, an error), and the call that led there raises it once it returns; a
+block's `break` works the same way. One that has to give Volt a handle has nothing to give
+instead, so the program ends, as a Volt panic does. Volt can't take a handle that's closed, lent
+to a callback, given twice, or in use by a running call (a callback can't close or give away what
+the call it's in uses), nor one closed while the call's other arguments were converted: those raise
+before anything is given.
 
 ### Go
 
