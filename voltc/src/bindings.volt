@@ -621,6 +621,129 @@ fn has_u32(v: std::vec<u32>&, x: u32) -> bool {
     return false;
 }
 
+// does s start with one of words that end in * (volt* is voltRaw, volt_r...)?
+fn has_prefix(words: str[..], s: str) -> bool {
+    for (w) in words {
+        if (w.len > 0 && w[w.len - 1] == '*' && starts_with(s, w[0..w.len - 1])) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// is s one of words (a word ending in # is it and any digits: "a#" is a0, a1...)?
+fn has_word(words: str[..], s: str) -> bool {
+    for (w) in words {
+        if (w == s) {
+            return true;
+        }
+        if (w.len > 0 && w[w.len - 1] == '#' && s.len >= w.len && starts_with(s, w[0..w.len - 1])) {
+            var digits = true;
+            for (c) in s[w.len - 1..s.len] {
+                digits = digits && is_digit(c);
+            }
+            if (digits) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+// is name a type the package's bindings declare (a struct, enum, error set or trait, or one made for
+// a slice, optional, array, list, E!T or callback), as most languages spell it?
+attach fn declares(this: bind&, name: str) -> bool {
+    var ns: std::vec<std::string> = {};
+    for (s&) in this.structs.items() {
+        put(&ns, this.local(this.c.si(*s).name));
+    }
+    for (s&) in this.handles.items() {
+        put(&ns, this.local(this.c.si(*s).name));
+    }
+    for (e&) in this.enums.items() {
+        put(&ns, this.local(this.c.ei(*e).name));
+    }
+    for (e&) in this.codes.items() {
+        put(&ns, this.short(*e));
+    }
+    for (r&) in this.results.items() {
+        put(&ns, this.result_name(*r));
+    }
+    for (x&) in this.opts.items() {
+        put(&ns, this.made_name("opt", *x, true));
+    }
+    for (x&) in this.slices.items() {
+        put(&ns, this.made_name("slice", *x, true));
+    }
+    for (x&) in this.lists.items() {
+        put(&ns, this.made_name("list", *x, true));
+    }
+    for (x&) in this.arrays.items() {
+        put(&ns, this.made_name("array", *x, true));
+    }
+    for (i) in 0..this.closures.len {
+        put(&ns, this.cb_name(@cast<u32>(i), true));
+    }
+    for (t&) in this.traits.items() {
+        val tr = this.short(*t);
+        put(&ns, fmt("volt_{}", copy tr));
+        val suffixes: str[] = { "_table", "_lend", "_give", "_obj", "_vt" };
+        for (suffix) in suffixes {
+            put(&ns, fmt2("{}{}", copy tr, S(suffix)));
+        }
+        put(&ns, move tr);
+    }
+    for (n&) in ns.items() {
+        if (n.as_str() == name) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// a wrapper's parameter names (ns, each already a name the language takes) made its own: one gets a _
+// when it starts like the wrapper's own names (a words entry ending in *) or is another parameter's
+// name and one of derived after it (what the wrapper names that one's locals: "_" is _ and anything),
+// then while it's one of words (the wrapper's own locals and helpers), a type the package declares,
+// or an earlier parameter's name. So C++'s auto r can't hide a parameter called r, nor a parameter
+// called vec2 the type vec2
+attach fn escape_params(this: bind&, ns: std::vec<std::string>&, words: str[..], derived: str[..]) -> void {
+    var orig: std::vec<std::string> = {};
+    for (n&) in ns.items() {
+        put(&orig, copy *n);
+    }
+    for (i) in 0..orig.len {
+        var n = copy *ns.at(i);
+        var hit = has_prefix(words, n.as_str());
+        for (j) in 0..orig.len {
+            for (d) in derived {
+                if (j == i) {
+                    continue;
+                }
+                if (d == "_") {
+                    hit = hit || starts_with(n.as_str(), fmt("{}_", copy *orig.at(j)).as_str());
+                } else {
+                    hit = hit || n.as_str() == fmt2("{}{}", copy *orig.at(j), S(d)).as_str();
+                }
+            }
+        }
+        if (hit) {
+            n.push('_');
+        }
+        loop {
+            var taken = has_word(words, n.as_str()) || this.declares(n.as_str());
+            for (j) in 0..i {
+                taken = taken || ns.at(j).as_str() == n.as_str();
+            }
+            if (!taken) {
+                break;
+            }
+            n.push('_');
+        }
+        *ns.at(i) = move n;
+    }
+}
+
 // does a type lend export struct s (X& or X*)?
 attach fn lends(this: bind&, t: u32, s: u32) -> bool {
     val h = this.lent_handle(t) ?? return false;
@@ -1773,6 +1896,29 @@ fn c_ident(name: str, cpp: bool) -> std::string {
     return S(name);
 }
 
+// a name C keeps for itself: reserved (__x, _X), a C keyword (C23's too), or a macro the
+// standard headers define as a value (errno, NULL, the ..._MAX limits; unix and linux in GNU C)
+// ponytail: the standard headers' value macros, by name; a header a binding's own code includes
+// (ruby.h, lua.h) can define more, but those are capitalised or prefixed
+fn c_kept(s: str) -> bool {
+    if (starts_with(s, "__") || (s.len > 1 && s[0] == '_' && s[1] >= 'A' && s[1] <= 'Z')) {
+        return true;
+    }
+    val words: str[] = { "typeof", "typeof_unqual", "errno", "unix", "linux", "i386", "NULL", "EOF", "BUFSIZ", "CHAR_BIT", "MB_LEN_MAX", "RAND_MAX", "EXIT_SUCCESS", "EXIT_FAILURE", "WEOF" };
+    if (is_c_keyword(s) || has_word(words, s)) {
+        return true;
+    }
+    // INT32_MAX, SIZE_MAX, INT64_C...: capitals, digits and an _
+    var caps = false;
+    for (c) in s {
+        if (c >= 'a' && c <= 'z') {
+            return false;
+        }
+        caps = caps || c == '_';
+    }
+    return caps && s.len > 2;
+}
+
 // "T name" (with [N] after the name for arrays)
 attach fn c_decl(this: bind&, t: u32, name: str, cpp: bool) -> std::string {
     var s = this.c_prim(t, cpp);
@@ -1803,16 +1949,29 @@ attach fn c_params(this: bind&, e: entry&, cpp: bool) -> std::string {
         return this.c_decl_handle(s, cpp);
     }
     val f = this.c.fi(e.f);
+    var ns: std::vec<std::string> = {};
     for (p&) in f.params.items() {
+        var n = c_ident(p.name, cpp);
+        if (c_kept(n.as_str())) {
+            n.push('_');
+        }
+        put(&ns, move n);
+    }
+    val none: str[] = {};
+    val derived: str[] = { "_user" };
+    this.escape_params(&ns, none, derived);
+    for (k) in 0..f.params.len {
+        val p = f.params.at(k);
+        val n = ns.at(k).as_str();
         if (args.len() > 0) {
             args.append(", ");
         }
         match (this.shape_of(p.ty) ?? shape::VOID) {
             .CLOSURE(i) => {
-                args.append(this.c_decl(p.ty, p.name, cpp).as_str());
-                args.append(fmt(", void *{}_user", S(p.name)).as_str());
+                args.append(this.c_decl(p.ty, n, cpp).as_str());
+                args.append(fmt(", void *{}_user", S(n)).as_str());
             },
-            default => { args.append(this.c_param(this.in_ty(p.ty), p.name, cpp).as_str()); },
+            default => { args.append(this.c_param(this.in_ty(p.ty), n, cpp).as_str()); },
         }
     }
     if (f.params.len == 0) {
@@ -2132,6 +2291,24 @@ attach fn cpp_errors(this: bind&, out: std::string&) -> void {
         }
     }
     out.append("    }\n    return \"error\";\n}\n\n// what a function throws when the Volt function returns an error\nstruct error : std::runtime_error {\n    uint32_t code;\n    explicit error(uint32_t c) : std::runtime_error(error_name(c)), code(c) {}\n};\n");
+}
+
+// export fn f's parameter names (from first) in its C++ wrapper (see escape_params): r is the
+// result, p_ the handle a method's class holds; the rest are the header's helpers
+attach fn cpp_pnames(this: bind&, f: u32, first: usize) -> std::vec<std::string> {
+    var ns: std::vec<std::string> = {};
+    val info = this.c.fi(f);
+    for (k) in first..info.params.len {
+        var n = cpp_ident(info.params.at(k).name);
+        if (c_kept(n.as_str())) {
+            n.push('_');
+        }
+        put(&ns, move n);
+    }
+    val words: str[] = { "r", "p_", "own_", "str", "text", "error", "error_name", "hold", "take_text", "give_text", "take_list", "volt_bits", "raw" };
+    val none: str[] = {};
+    this.escape_params(&ns, words, none);
+    return ns;
 }
 
 // what a wrapper's parameter is in C++, and the C argument(s) it passes
@@ -2602,12 +2779,13 @@ attach fn cpp_text(this: bind&) -> std::string {
             if (!this.made_by(e.f, *s) || (info.params.len > 0 && this.lends(info.params.at(0).ty, *s))) {
                 first = 1;
             }
+            val ns = this.cpp_pnames(e.f, first);
             for (k) in first..info.params.len {
                 if (ps.len() > 0) {
                     ps.append(", ");
                 }
                 var a: std::string = {};
-                this.cpp_param(info.params.at(k).ty, info.params.at(k).name, &ps, &a);
+                this.cpp_param(info.params.at(k).ty, ns.at(k - first).as_str(), &ps, &a);
             }
             if (first == 0 && m == "new") {
                 out.append(fmt2("    {}({});\n", copy cls, move ps).as_str());
@@ -2638,6 +2816,7 @@ attach fn cpp_text(this: bind&) -> std::string {
                 args.append("p_");
             }
         }
+        val ns = this.cpp_pnames(e.f, first);
         for (k) in first..info.params.len {
             if (ps.len() > 0) {
                 ps.append(", ");
@@ -2645,7 +2824,7 @@ attach fn cpp_text(this: bind&) -> std::string {
             if (args.len() > 0) {
                 args.append(", ");
             }
-            this.cpp_param(info.params.at(k).ty, info.params.at(k).name, &ps, &args);
+            this.cpp_param(info.params.at(k).ty, ns.at(k - first).as_str(), &ps, &args);
         }
         if (cls_id) {
             val cls = this.local(this.c.si(cls_id).name);
@@ -2828,10 +3007,33 @@ fn rust_keyword(s: str) -> bool {
 }
 
 fn rust_ident(s: str) -> std::string {
+    if (s == "self" || s == "Self" || s == "super" || s == "crate") {
+        // keywords even raw
+        return fmt("{}_", S(s));
+    }
     if (rust_keyword(s)) {
         return fmt("r#{}", S(s));
     }
     return S(s);
+}
+
+// export fn f's parameter names (from first) in its Rust wrapper and declaration (see
+// escape_params): r is the result; a parameter's locals are its name and _r, _v or _user
+attach fn rust_pnames(this: bind&, f: u32, first: usize) -> std::vec<std::string> {
+    var ns: std::vec<std::string> = {};
+    val info = this.c.fi(f);
+    for (k) in first..info.params.len {
+        var n = S(info.params.at(k).name);
+        if (n.as_str() == "self" || n.as_str() == "Self" || n.as_str() == "super" || n.as_str() == "crate") {
+            n.push('_');
+        }
+        put(&ns, move n);
+    }
+    // (None, Some, Ok and Err would be patterns)
+    val words: str[] = { "r", "None", "Some", "Ok", "Err" };
+    val derived: str[] = { "_r", "_v", "_user" };
+    this.escape_params(&ns, words, derived);
+    return ns;
 }
 
 // a type in the C functions' declarations (module raw sees the top level's types through super)
@@ -3490,13 +3692,15 @@ attach fn rust_text(this: bind&) -> std::string {
             continue;
         }
         val f = this.c.fi(e.f);
-        for (p&) in f.params.items() {
+        val ns = this.rust_pnames(e.f, 0);
+        for (k) in 0..f.params.len {
+            val p = f.params.at(k);
             if (args.len() > 0) {
                 args.append(", ");
             }
-            args.append(fmt2("{}: {}", rust_ident(p.name), this.rust_in(p.ty)).as_str());
+            args.append(fmt2("{}: {}", rust_ident(ns.at(k).as_str()), this.rust_in(p.ty)).as_str());
             match (this.shape_of(p.ty) ?? shape::VOID) {
-                .CLOSURE(i) => { args.append(fmt(", {}_user: *mut std::os::raw::c_void", S(p.name)).as_str()); },
+                .CLOSURE(i) => { args.append(fmt(", {}_user: *mut std::os::raw::c_void", copy *ns.at(k)).as_str()); },
                 default => {},
             }
         }
@@ -3534,6 +3738,7 @@ attach fn rust_text(this: bind&) -> std::string {
                 ps.append("&self");
                 args.append("self.raw");
             }
+            val ns = this.rust_pnames(e.f, first);
             for (k) in first..info.params.len {
                 if (ps.len() > 0) {
                     ps.append(", ");
@@ -3541,7 +3746,7 @@ attach fn rust_text(this: bind&) -> std::string {
                 if (args.len() > 0) {
                     args.append(", ");
                 }
-                this.rust_param(info.params.at(k).ty, info.params.at(k).name, &ps, &args, &pre, &gens);
+                this.rust_param(info.params.at(k).ty, ns.at(k - first).as_str(), &ps, &args, &pre, &gens);
             }
             if (gens.len() > 0) {
                 gens = fmt("<{}>", move gens);
@@ -3563,12 +3768,13 @@ attach fn rust_text(this: bind&) -> std::string {
         var args: std::string = {};
         var pre: std::string = {};
         var gens: std::string = {};
-        for (p&) in info.params.items() {
+        val ns = this.rust_pnames(e.f, 0);
+        for (k) in 0..info.params.len {
             if (ps.len() > 0) {
                 ps.append(", ");
                 args.append(", ");
             }
-            this.rust_param(p.ty, p.name, &ps, &args, &pre, &gens);
+            this.rust_param(info.params.at(k).ty, ns.at(k).as_str(), &ps, &args, &pre, &gens);
         }
         if (gens.len() > 0) {
             gens = fmt("<{}>", move gens);
@@ -3695,9 +3901,27 @@ attach fn zig_fn_ty(this: bind&, t: u32, user: bool) -> std::string {
     return s;
 }
 
+// a Zig keyword, or a primitive's name (i32, u7, f64, type...), which a parameter can't have
+fn zig_keyword(s: str) -> bool {
+    val words: str[] = { "addrspace", "align", "allowzero", "and", "anyframe", "anytype", "asm", "async", "await", "break", "callconv", "catch", "comptime", "const", "continue", "defer", "else", "enum", "errdefer", "error", "export", "extern", "fn", "for", "if", "inline", "linksection", "noalias", "noinline", "nosuspend", "opaque", "or", "orelse", "packed", "pub", "resume", "return", "struct", "suspend", "switch", "test", "threadlocal", "try", "union", "unreachable", "usingnamespace", "var", "volatile", "while", "true", "false", "null", "undefined", "bool", "void", "noreturn", "type", "anyerror", "anyopaque", "comptime_int", "comptime_float", "isize", "usize", "c_char", "c_short", "c_ushort", "c_int", "c_uint", "c_long", "c_ulong", "c_longlong", "c_ulonglong", "c_longdouble", "f16", "f32", "f64", "f80", "f128" };
+    if (has_word(words, s)) {
+        return true;
+    }
+    // iN and uN, any N
+    if (s.len < 2 || (s[0] != 'i' && s[0] != 'u')) {
+        return false;
+    }
+    for (c) in s[1..s.len] {
+        if (!is_digit(c)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 // Zig doesn't let a parameter shadow a declaration: a name the file declares gets a _
 attach fn zig_name(this: bind&, name: str) -> std::string {
-    var taken = name == "std" || name == "raw" || name == "Error" || name == "err_of" || name == "code_of" || name == "self" || name == "print";
+    var taken = name == "std" || name == "raw" || name == "Error" || name == "err_of" || name == "code_of" || name == "self" || name == "print" || zig_keyword(name);
     for (s&) in this.handles.items() {
         if (this.local(this.c.si(*s).name).as_str() == name) {
             taken = true;
@@ -3741,6 +3965,21 @@ attach fn zig_name(this: bind&, name: str) -> std::string {
         n.push('_');
     }
     return n;
+}
+
+// export fn f's parameter names (from first) in its Zig wrapper and declaration (see escape_params):
+// no local or capture in the wrapper can have a parameter's name, nor a parameter one its locals
+// are named after (xs_v, f_context, f_call)
+attach fn zig_pnames(this: bind&, f: u32, first: usize) -> std::vec<std::string> {
+    var ns: std::vec<std::string> = {};
+    val info = this.c.fi(f);
+    for (k) in first..info.params.len {
+        put(&ns, this.zig_name(info.params.at(k).name));
+    }
+    val words: str[] = { "r", "o", "p", "q", "t", "d", "u", "v", "x", "s", "e", "h", "ctx", "vt", "call", "drop", "a#", "T", "Owned", "VoltStr", "VoltText", "VoltSlice", "VoltOpt", "VoltArray" };
+    val derived: str[] = { "_" };
+    this.escape_params(&ns, words, derived);
+    return ns;
 }
 
 // what a closure or a trait's fn takes or gives in Zig (ctx 0: a parameter; 1: what Zig gives
@@ -3880,9 +4119,7 @@ attach fn zig_call_out(this: bind&, call: str, self: str, ps: std::vec<u32>&, r:
     return fmt("return {};", this.zig_took(r, c.as_str()));
 }
 
-attach fn zig_param(this: bind&, t: u32, name0: str, ty: std::string&, arg: std::string&, pre: std::string&) -> void {
-    val zn = this.zig_name(name0);
-    val name = zn.as_str();
+attach fn zig_param(this: bind&, t: u32, name: str, ty: std::string&, arg: std::string&, pre: std::string&) -> void {
     val h = this.lent_handle(t);
     if (h) {
         ty.append(fmt2("{}: {}", S(name), this.local(this.c.si(h).name)).as_str());
@@ -4239,13 +4476,15 @@ attach fn zig_text(this: bind&) -> std::string {
             continue;
         }
         val f = this.c.fi(e.f);
-        for (p&) in f.params.items() {
+        val ns = this.zig_pnames(e.f, 0);
+        for (k) in 0..f.params.len {
+            val p = f.params.at(k);
             if (args.len() > 0) {
                 args.append(", ");
             }
-            args.append(fmt2("{}: {}", S(p.name), this.zig_in(p.ty)).as_str());
+            args.append(fmt2("{}: {}", copy *ns.at(k), this.zig_in(p.ty)).as_str());
             match (this.shape_of(p.ty) ?? shape::VOID) {
-                .CLOSURE(i) => { args.append(fmt(", {}_user: ?*anyopaque", S(p.name)).as_str()); },
+                .CLOSURE(i) => { args.append(fmt(", {}_user: ?*anyopaque", copy *ns.at(k)).as_str()); },
                 default => {},
             }
         }
@@ -4271,6 +4510,7 @@ attach fn zig_text(this: bind&) -> std::string {
                 ps.append(fmt("self: {}", copy cls).as_str());
                 args.append("self.raw");
             }
+            val ns = this.zig_pnames(e.f, first);
             for (k) in first..info.params.len {
                 if (ps.len() > 0) {
                     ps.append(", ");
@@ -4278,7 +4518,7 @@ attach fn zig_text(this: bind&) -> std::string {
                 if (args.len() > 0) {
                     args.append(", ");
                 }
-                this.zig_param(info.params.at(k).ty, info.params.at(k).name, &ps, &args, &pre);
+                this.zig_param(info.params.at(k).ty, ns.at(k - first).as_str(), &ps, &args, &pre);
             }
             out.append(fmt3("\n    pub fn {}({}) {} {{\n", S(m), move ps, this.zig_ret(info.ret)).as_str());
             var body = this.zig_body(e.f, move args, move pre);
@@ -4295,12 +4535,13 @@ attach fn zig_text(this: bind&) -> std::string {
         var ps: std::string = {};
         var args: std::string = {};
         var pre: std::string = {};
-        for (p&) in info.params.items() {
+        val ns = this.zig_pnames(e.f, 0);
+        for (k) in 0..info.params.len {
             if (ps.len() > 0) {
                 ps.append(", ");
                 args.append(", ");
             }
-            this.zig_param(p.ty, p.name, &ps, &args, &pre);
+            this.zig_param(info.params.at(k).ty, ns.at(k).as_str(), &ps, &args, &pre);
         }
         out.append(fmt3("\npub fn {}({}) {} {{\n", S(info.c_name), move ps, this.zig_ret(info.ret)).as_str());
         out.append(this.zig_body(e.f, move args, move pre).as_str());
@@ -5007,6 +5248,7 @@ attach fn py_text(this: bind&) -> std::string {
                 names.append("self");
                 conv.append("self._lend_to(_lent)");
             }
+            val ns = this.py_pnames(e.f, first);
             for (k) in first..info.params.len {
                 if (names.len() > 0) {
                     names.append(", ");
@@ -5014,8 +5256,8 @@ attach fn py_text(this: bind&) -> std::string {
                 if (conv.len() > 0) {
                     conv.append(", ");
                 }
-                names.append(info.params.at(k).name);
-                this.py_arg(info.params.at(k).ty, info.params.at(k).name, &conv, &pre);
+                names.append(ns.at(k - first).as_str());
+                this.py_arg(info.params.at(k).ty, ns.at(k - first).as_str(), &conv, &pre);
             }
             if (!is_method && m == "new") {
                 // the constructor
@@ -5066,13 +5308,14 @@ attach fn py_text(this: bind&) -> std::string {
         var names: std::string = {};
         var conv: std::string = {};
         var pre: std::string = {};
-        for (p&) in info.params.items() {
+        val ns = this.py_pnames(e.f, 0);
+        for (k) in 0..info.params.len {
             if (names.len() > 0) {
                 names.append(", ");
                 conv.append(", ");
             }
-            names.append(p.name);
-            this.py_arg(p.ty, p.name, &conv, &pre);
+            names.append(ns.at(k).as_str());
+            this.py_arg(info.params.at(k).ty, ns.at(k).as_str(), &conv, &pre);
         }
         body.append(fmt2("\n\ndef {}({}):\n", S(info.c_name), move names).as_str());
         body.append(this.py_body(e.f, move conv, move pre).as_str());
@@ -5580,14 +5823,39 @@ attach fn pyi_ty(this: bind&, t: u32, incoming: bool) -> std::string {
 // "name: T, ..." for f's parameters from first on
 attach fn pyi_params(this: bind&, f: u32, first: usize) -> std::string {
     val info = this.c.fi(f);
+    val ns = this.py_pnames(f, first);
     var ps: std::string = {};
     for (k) in first..info.params.len {
         if (ps.len() > 0) {
             ps.append(", ");
         }
-        ps.append(fmt2("{}: {}", S(info.params.at(k).name), this.pyi_ty(info.params.at(k).ty, true)).as_str());
+        ps.append(fmt2("{}: {}", copy *ns.at(k - first), this.pyi_ty(info.params.at(k).ty, true)).as_str());
     }
     return ps;
+}
+
+fn py_keyword(s: str) -> bool {
+    val words: str[] = { "False", "None", "True", "and", "as", "assert", "async", "await", "break", "class", "continue", "def", "del", "elif", "else", "except", "finally", "for", "from", "global", "if", "import", "in", "is", "lambda", "nonlocal", "not", "or", "pass", "raise", "return", "try", "while", "with", "yield" };
+    return has_word(words, s);
+}
+
+// export fn f's parameter names (from first) in its Python wrapper and stub (see escape_params): a
+// keyword gets a _ (from_), and so does what the wrapper uses itself (self, r, the module's helpers,
+// the classes its conversions name)
+attach fn py_pnames(this: bind&, f: u32, first: usize) -> std::vec<std::string> {
+    var ns: std::vec<std::string> = {};
+    val info = this.c.fi(f);
+    for (k) in first..info.params.len {
+        var n = S(info.params.at(k).name);
+        if (py_keyword(n.as_str())) {
+            n.push('_');
+        }
+        put(&ns, move n);
+    }
+    val words: str[] = { "self", "r", "v", "o", "ctypes", "isinstance", "str", "list", "VoltFn", "VoltStr", "_lent", "_lib", "_gift", "_given", "_raise", "_reraise", "_giving", "_idle", "_str", "_slice", "_opt", "_array", "_list", "_hold", "_take", "_wrap", "_a", "_x", "_c", "_Relay", "_fn" };
+    val none: str[] = {};
+    this.escape_params(&ns, words, none);
+    return ns;
 }
 
 // the doc comment above f as a docstring line, or "..."
@@ -6362,13 +6630,29 @@ fn indent_n(s: str, n: usize) -> std::string {
 
 attach fn cs_args(this: bind&, f: u32, first: usize) -> std::vec<cs_arg> {
     val info = this.c.fi(f);
+    val ns = this.cs_pnames(f, first);
     var out: std::vec<cs_arg> = {};
     for (k) in first..info.params.len {
         var a: cs_arg = {};
-        this.cs_arg_of(info.params.at(k).ty, info.params.at(k).name, &a);
+        this.cs_arg_of(info.params.at(k).ty, ns.at(k - first).as_str(), &a);
         put(&out, move a);
     }
     return out;
+}
+
+// export fn f's parameter names (from first) in its C# wrapper, before cs_ident (see escape_params):
+// C# lets no local or lambda parameter in it have a parameter's name (words: the wrappers' own); a
+// parameter's locals are its name, _ and more
+attach fn cs_pnames(this: bind&, f: u32, first: usize) -> std::vec<std::string> {
+    var ns: std::vec<std::string> = {};
+    val info = this.c.fi(f);
+    for (k) in first..info.params.len {
+        put(&ns, S(info.params.at(k).name));
+    }
+    val words: str[] = { "r", "result", "made", "b", "bs", "c", "e", "h", "i", "o_", "p", "s", "v", "x", "self_ref", "a#" };
+    val derived: str[] = { "_" };
+    this.escape_params(&ns, words, derived);
+    return ns;
 }
 
 // a closure's or a trait fn's params (a0, a1...) as C# passes them to Volt
@@ -6646,11 +6930,11 @@ attach fn cs_text(this: bind&) -> std::string {
                 var args = this.cs_args(e.f, 0);
                 out.append(fmt2("    public {}({}) : this(Make(", copy cls, cs_decls(&args)).as_str());
                 var names: std::string = {};
-                for (k) in 0..info.params.len {
-                    if (k > 0) {
+                for (n&) in this.cs_pnames(e.f, 0).items() {
+                    if (names.len() > 0) {
                         names.append(", ");
                     }
-                    names.append(cs_ident(info.params.at(k).name).as_str());
+                    names.append(cs_ident(n.as_str()).as_str());
                 }
                 out.append(fmt2("{})) {{ }}\n\n    private static {}Handle Make(", move names, copy cls).as_str());
                 out.append(fmt("{})\n    {\n", cs_decls(&args)).as_str());
@@ -7658,13 +7942,29 @@ attach fn java_trait(this: bind&, k: u32, out: std::string&) -> void {
 
 attach fn java_args(this: bind&, f: u32, first: usize) -> std::vec<java_arg> {
     val info = this.c.fi(f);
+    val ns = this.java_pnames(f, first);
     var out: std::vec<java_arg> = {};
     for (k) in first..info.params.len {
         var a: java_arg = {};
-        this.java_arg_of(info.params.at(k).ty, java_ident(info.params.at(k).name).as_str(), &a);
+        this.java_arg_of(info.params.at(k).ty, ns.at(k - first).as_str(), &a);
         put(&out, move a);
     }
     return out;
+}
+
+// export fn f's parameter names (from first) in its Java wrapper (see escape_params): Java lets no
+// local or lambda parameter in it have a parameter's name, and a method sees its class's fields (h,
+// busy...); a parameter's locals are its name, _ and more
+attach fn java_pnames(this: bind&, f: u32, first: usize) -> std::vec<std::string> {
+    var ns: std::vec<std::string> = {};
+    val info = this.c.fi(f);
+    for (k) in first..info.params.len {
+        put(&ns, java_ident(info.params.at(k).name));
+    }
+    val words: str[] = { "arena", "r", "e", "i", "i#", "c", "x", "h", "l", "o", "s", "n", "v", "t", "a#", "self", "self_h", "drop", "code", "len", "bytes", "id", "value", "vt", "live", "closed", "busy", "cleanable" };
+    val derived: str[] = { "_" };
+    this.escape_params(&ns, words, derived);
+    return ns;
 }
 
 fn java_keyword(s: str) -> bool {
@@ -7954,11 +8254,11 @@ attach fn java_text(this: bind&) -> std::string {
             } else if (m == "new") {
                 val args = this.java_args(e.f, 0);
                 var names: std::string = {};
-                for (k) in 0..info.params.len {
-                    if (k > 0) {
+                for (n&) in this.java_pnames(e.f, 0).items() {
+                    if (names.len() > 0) {
                         names.append(", ");
                     }
-                    names.append(java_ident(info.params.at(k).name).as_str());
+                    names.append(n.as_str());
                 }
                 out.append(fmt3("        public {}({}) {{\n            this(make({}).h);\n", copy n, java_decls(&args), copy names).as_str());
                 out.append(fmt3("        }}\n\n        private static {} make({}) {{\n", copy n, java_decls(&args), S("")).as_str());
@@ -8614,10 +8914,18 @@ fn go_param(s: str) -> std::string {
 
 attach fn go_args(this: bind&, f: u32, first: usize) -> std::vec<go_arg> {
     val info = this.c.fi(f);
+    var ns: std::vec<std::string> = {};
+    for (k) in first..info.params.len {
+        put(&ns, go_param(info.params.at(k).name));
+    }
+    // a parameter's locals are its name, _ and more (xs_c)
+    val none: str[] = {};
+    val derived: str[] = { "_" };
+    this.escape_params(&ns, none, derived);
     var out: std::vec<go_arg> = {};
     for (k) in first..info.params.len {
         var a: go_arg = {};
-        this.go_arg_of(info.params.at(k).ty, go_param(info.params.at(k).name).as_str(), &a);
+        this.go_arg_of(info.params.at(k).ty, ns.at(k - first).as_str(), &a);
         put(&out, move a);
     }
     return out;
@@ -9665,6 +9973,24 @@ attach fn node_call(this: bind&, name: str, what: str, ps: std::vec<u32>&, names
 }
 
 // the C function behind one JS function (self: the export struct a method's this is, if any)
+// export fn f's parameters (from first) as the C glue's locals (Node, Ruby, Lua): p_ and the name,
+// which a method's own p_self, or another parameter's locals (p_xs_buf...), can't be
+attach fn glue_pnames(this: bind&, f: u32, first: usize) -> std::vec<std::string> {
+    var ns: std::vec<std::string> = {};
+    val info = this.c.fi(f);
+    for (k) in first..info.params.len {
+        put(&ns, S(info.params.at(k).name));
+    }
+    val words: str[] = { "self" };
+    val derived: str[] = { "_" };
+    this.escape_params(&ns, words, derived);
+    var out: std::vec<std::string> = {};
+    for (n&) in ns.items() {
+        put(&out, fmt("p_{}", copy *n));
+    }
+    return out;
+}
+
 attach fn node_fn(this: bind&, f: u32, wname: str, self_class: u32?, out: std::string&) -> compile_error!void {
     val info = this.c.fi(f);
     var first: usize = 0;
@@ -9679,10 +10005,9 @@ attach fn node_fn(this: bind&, f: u32, wname: str, self_class: u32?, out: std::s
         pass = S("p_self");
     }
     var ps: std::vec<u32> = {};
-    var names: std::vec<std::string> = {};
+    val names = this.glue_pnames(f, first);
     for (k) in first..info.params.len {
         put(&ps, info.params.at(k).ty);
-        put(&names, fmt("p_{}", S(info.params.at(k).name)));
     }
     try this.node_call(wname, info.c_name, &ps, &names, self_decl.as_str(), self_get.as_str(), info.c_name, pass.as_str(), info.ret, out);
     return;
@@ -10258,6 +10583,14 @@ attach fn ts_ty(this: bind&, t: u32, incoming: bool) -> std::string {
 
 attach fn ts_params(this: bind&, f: u32, first: usize) -> std::string {
     val info = this.c.fi(f);
+    // a word JavaScript reserves can't name a parameter
+    var ns: std::vec<std::string> = {};
+    for (k) in first..info.params.len {
+        put(&ns, S(info.params.at(k).name));
+    }
+    val words: str[] = { "break", "case", "catch", "class", "const", "continue", "debugger", "default", "delete", "do", "else", "enum", "export", "extends", "false", "finally", "for", "function", "if", "import", "in", "instanceof", "new", "null", "return", "super", "switch", "this", "throw", "true", "try", "typeof", "var", "void", "while", "with", "yield", "let", "static", "implements", "interface", "package", "private", "protected", "public", "await", "arguments", "eval" };
+    val none: str[] = {};
+    this.escape_params(&ns, words, none);
     var ps: std::string = {};
     for (k) in first..info.params.len {
         if (ps.len() > 0) {
@@ -10274,7 +10607,7 @@ attach fn ts_params(this: bind&, f: u32, first: usize) -> std::string {
             .RESULT(e, x) => { ty.append(" | VoltError"); },
             default => {},
         }
-        ps.append(fmt3("{}{}: {}", S(info.params.at(k).name), S(opt), move ty).as_str());
+        ps.append(fmt3("{}{}: {}", copy *ns.at(k - first), S(opt), move ty).as_str());
     }
     return ps;
 }
@@ -11621,10 +11954,9 @@ attach fn lua_text(this: bind&) -> compile_error!std::string {
         if (e.free_of == null) {
             val info = this.c.fi(e.f);
             var ps: std::vec<u32> = {};
-            var pnames: std::vec<std::string> = {};
+            val pnames = this.glue_pnames(e.f, 0);
             for (q&) in info.params.items() {
                 put(&ps, q.ty);
-                put(&pnames, fmt("p_{}", S(q.name)));
             }
             this.lua_wrapper(fmt("f_{}", S(info.c_name)).as_str(), info.c_name, &ps, &pnames, 1, "", info.c_name, "", info.ret, &out);
         }
@@ -12116,6 +12448,20 @@ struct dart_arg {
     gives: bool = false;
 }
 
+// export fn f's parameter names (from first) in its Dart wrapper, before dart_ident (see
+// escape_params): the types and helpers its body names (its own locals have a $ no Volt name has)
+attach fn dart_pnames(this: bind&, f: u32, first: usize) -> std::vec<std::string> {
+    var ns: std::vec<std::string> = {};
+    val info = this.c.fi(f);
+    for (k) in first..info.params.len {
+        put(&ns, S(info.params.at(k).name));
+    }
+    val words: str[] = { "Native", "Pointer", "Void", "Function", "String", "List", "Struct", "Union", "Array", "Opaque", "Handle", "NativeCallable", "NativeFunction", "NativeType", "StateError", "ArgumentError", "RangeError", "Error", "Exception", "StackTrace", "Object", "Never", "Set", "Map", "Int8", "Int16", "Int32", "Int64", "Uint8", "Uint16", "Uint32", "Uint64", "Float", "Double", "Bool", "Char", "Size", "IntPtr", "utf8", "sizeOf", "nullptr", "identity", "stderr", "exit", "calloc", "malloc", "Volt*", "_*" };
+    val none: str[] = {};
+    this.escape_params(&ns, words, none);
+    return ns;
+}
+
 attach fn dart_arg_of(this: bind&, t: u32, name0: str, a: dart_arg&) -> compile_error!void {
     val nm = dart_ident(name0);
     val n = nm.as_str();
@@ -12475,10 +12821,11 @@ attach fn dart_fn(this: bind&, f: u32, first: usize, head: str, ind: str) -> com
     val info = this.c.fi(f);
     var decls: std::string = {};
     var args: std::vec<dart_arg> = {};
+    val ns = this.dart_pnames(f, first);
     for (k) in first..info.params.len {
         val p = info.params.at(k);
         var a: dart_arg = {};
-        try this.dart_arg_of(p.ty, p.name, &a);
+        try this.dart_arg_of(p.ty, ns.at(k - first).as_str(), &a);
         if (decls.len() > 0) {
             decls.append(", ");
         }
@@ -13283,6 +13630,21 @@ attach fn swift_arg_of(this: bind&, t: u32, name0: str, a: swift_arg&, cb: bool)
 
 // a parameter's name in Swift: a keyword quoted, and one a type here has gets a _ after it (else the
 // parameter would hide the type in the wrapper)
+// export fn f's parameter names (from first) in its Swift wrapper, before swift_param (see
+// escape_params): a method's self and its class's members (voltRaw...), the wrapper's locals, and a
+// parameter's locals (its name, _ and more)
+attach fn swift_pnames(this: bind&, f: u32, first: usize) -> std::vec<std::string> {
+    var ns: std::vec<std::string> = {};
+    val info = this.c.fi(f);
+    for (k) in first..info.params.len {
+        put(&ns, S(info.params.at(k).name));
+    }
+    val words: str[] = { "self", "r", "v", "e", "p", "s", "x", "w", "n", "f", "at", "box", "bytes", "code", "out", "outer", "views", "kept", "ends", "a#", "volt*" };
+    val derived: str[] = { "_" };
+    this.escape_params(&ns, words, derived);
+    return ns;
+}
+
 attach fn swift_param(this: bind&, name: str) -> std::string {
     var types: std::vec<std::string> = {};
     for (s&) in this.handles.items() {
@@ -13744,9 +14106,10 @@ attach fn swift_fn(this: bind&, f: u32, method: bool, head: str, raw: bool, ind:
         first = 1;
         self_pass = S("voltRaw");
     }
+    val ns = this.swift_pnames(f, first);
     for (k) in first..info.params.len {
         put(&ps, info.params.at(k).ty);
-        put(&names, S(info.params.at(k).name));
+        put(&names, copy *ns.at(k - first));
     }
     var decls: std::string = {};
     var throws = false;
@@ -13954,6 +14317,7 @@ attach fn swift_text(this: bind&) -> std::string {
                 // an init: make the handle, then the instance holding it
                 var names: std::string = {};
                 var args: std::string = {};
+                val ns = this.swift_pnames(e.f, 0);
                 for (k) in 0..info.params.len {
                     if (k > 0) {
                         names.append(", ");
@@ -13962,8 +14326,8 @@ attach fn swift_text(this: bind&) -> std::string {
                     if (starts_with(this.swift_ty(info.params.at(k).ty, false).as_str(), "inout ")) {
                         names.push('&');
                     }
-                    names.append(this.swift_param(info.params.at(k).name).as_str());
-                    args.append(fmt2("_ {}: {}", this.swift_param(info.params.at(k).name), this.swift_ty(info.params.at(k).ty, false)).as_str());
+                    names.append(this.swift_param(ns.at(k).as_str()).as_str());
+                    args.append(fmt2("_ {}: {}", this.swift_param(ns.at(k).as_str()), this.swift_ty(info.params.at(k).ty, false)).as_str());
                 }
                 var tr = S("");
                 var spec = S("");
@@ -14805,10 +15169,11 @@ attach fn kt_doc(this: bind&, f: u32, ind: str) -> std::string {
 
 attach fn kt_args(this: bind&, f: u32, first: usize) -> std::vec<kt_arg> {
     val info = this.c.fi(f);
+    val ns = this.kt_pnames(f, first);
     var out: std::vec<kt_arg> = {};
     for (k) in first..info.params.len {
         var a: kt_arg = {};
-        this.kt_arg_of(info.params.at(k).ty, info.params.at(k).name, &a);
+        this.kt_arg_of(info.params.at(k).ty, ns.at(k - first).as_str(), &a);
         put(&out, move a);
     }
     return out;
@@ -15064,11 +15429,11 @@ attach fn kt_text(this: bind&) -> std::string {
                 // a constructor: make the handle, then the instance holding it
                 val args = this.kt_args(e.f, 0);
                 var names: std::string = {};
-                for (k) in 0..info.params.len {
-                    if (k > 0) {
+                for (n&) in this.kt_pnames(e.f, 0).items() {
+                    if (names.len() > 0) {
                         names.append(", ");
                     }
-                    names.append(kt_ident(info.params.at(k).name).as_str());
+                    names.append(kt_ident(n.as_str()).as_str());
                 }
                 if (!first) {
                     out.append("\n");
@@ -15103,6 +15468,22 @@ attach fn kt_text(this: bind&) -> std::string {
         out.append(this.kt_fn(e.f, 0, head.as_str(), false, "", "").as_str());
     }
     return out;
+}
+
+// export fn f's parameter names (from first) in its Kotlin wrapper, before kt_ident (see
+// escape_params): Kotlin warns when a local in it hides one (its own are o, q, r and volt_...), and
+// a parameter's locals are its name, _ and more. (Kotlin calls name their arguments: only what
+// clashes changes)
+attach fn kt_pnames(this: bind&, f: u32, first: usize) -> std::vec<std::string> {
+    var ns: std::vec<std::string> = {};
+    val info = this.c.fi(f);
+    for (k) in first..info.params.len {
+        put(&ns, S(info.params.at(k).name));
+    }
+    val words: str[] = { "o", "q", "r", "it", "a#", "volt_*" };
+    val derived: str[] = { "_" };
+    this.escape_params(&ns, words, derived);
+    return ns;
 }
 
 // ---------- Ruby: a C extension ----------
@@ -15983,6 +16364,7 @@ attach fn rb_fn(this: bind&, f: u32, self_first: bool, out: std::string&) -> com
         }
     }
     var args: std::vec<rb_arg> = {};
+    val cnames = this.glue_pnames(f, 0);
     for (k) in 0..info.params.len {
         val p = info.params.at(k);
         var a: rb_arg = {};
@@ -15991,8 +16373,7 @@ attach fn rb_fn(this: bind&, f: u32, self_first: bool, out: std::string&) -> com
             v = fmt("argv[{}]", unum(@cast<u64>(k - first)));
         }
         val what = fmt2("\"argument {} of {}\"", S(p.name), S(info.c_name));
-        val cname = fmt("p_{}", S(p.name));
-        try this.rb_arg_of(p.ty, v.as_str(), cname.as_str(), what.as_str(), &a);
+        try this.rb_arg_of(p.ty, v.as_str(), cnames.at(k).as_str(), what.as_str(), &a);
         put(&args, move a);
     }
     out.append(fmt("\nstatic VALUE vr_f_{}(int argc, VALUE *argv, VALUE self) {{\n", S(info.c_name)).as_str());

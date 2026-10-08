@@ -237,6 +237,10 @@ Python's on
   Dart, `long[]` (and the like) in Java and C#, an array in JavaScript, Ruby and Swift, a
   `LongArray` (and the like) in Kotlin and a table in Lua. One of the wrong length is refused.
   Callbacks, trait fns and `extern "C"` fn types don't take arrays by value yet.
+- **Any parameter name.** A parameter named like a word the language keeps (`from` in Python,
+  `type` in Zig, `self` in Rust, `typeof` in C), like one of the package's types, or like a name
+  the wrapper uses itself gets a `_` after it in that language (`from_`), so it still gets its
+  own value.
 - **Closures given back.** A fn returning `fn(A) -> R` gives a struct of the function, its data and
   what frees it; in C++ a `std::function`, which frees it with its last copy; in Rust a
   `Box<dyn FnMut(A) -> R>`, which frees it when dropped; in Zig a struct with `call` and

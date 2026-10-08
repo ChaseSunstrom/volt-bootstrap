@@ -12,6 +12,7 @@ puts "dot #{n(Mathlib.ml_dot(a, b))}"
 Mathlib.ml_scale(a, 2.0)
 puts "scale #{n(a.x)} #{n(a.y)}"
 puts "len #{Mathlib.ml_len("hello")}"
+puts "clash #{Mathlib.ml_clash(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, "ab", 13, 14)}"
 puts "next #{Mathlib.ml_next(Mathlib::Color::GREEN)}"
 puts "sqrt #{n(Mathlib.ml_sqrt(9.0))} 1"
 begin

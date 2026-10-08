@@ -13,6 +13,7 @@ public class Client {
         mathlib.ml_scale(a, 2);
         System.out.println("scale " + fmt(a.x) + " " + fmt(a.y));
         System.out.println("len " + mathlib.ml_len("hello"));
+        System.out.println("clash " + mathlib.ml_clash(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, "ab", 13, 14));
         System.out.println("next " + mathlib.ml_next(mathlib.color.GREEN).value);
         System.out.println("sqrt " + fmt(mathlib.ml_sqrt(9)) + " 1");
         try {

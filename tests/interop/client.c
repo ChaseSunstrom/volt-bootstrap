@@ -16,6 +16,8 @@ int main(void) {
     printf("scale %g %g\n", a.x, a.y);
     volt_str s = {(const uint8_t *)"hello", 5};
     printf("len %zu\n", ml_len(s));
+    volt_str ab = {(const uint8_t *)"ab", 2};
+    printf("clash %d\n", ml_clash(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, ab, 13, 14));
     printf("next %d\n", (int)ml_next(MATHLIB_COLOR_GREEN));
     mathlib_math_error_or_f64 r = ml_sqrt(9);
     printf("sqrt %g %d\n", r.value, r.error == 0);

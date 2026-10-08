@@ -19,6 +19,7 @@ pub fn main() void {
     m.ml_scale(&a, 2);
     print("scale {d} {d}\n", .{ a.x, a.y });
     print("len {d}\n", .{m.ml_len("hello")});
+    print("clash {d}\n", .{m.ml_clash(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, "ab", 13, 14)});
     print("next {d}\n", .{@intFromEnum(m.ml_next(m.color.GREEN))});
     print("sqrt {d} 1\n", .{m.ml_sqrt(9) catch unreachable});
     if (m.ml_sqrt(-1)) |_| {} else |e| print("error {s}\n", .{if (e == error.NEGATIVE) "negative" else "?"});

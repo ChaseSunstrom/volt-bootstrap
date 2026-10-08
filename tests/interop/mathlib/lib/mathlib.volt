@@ -34,6 +34,13 @@ export fn ml_len(s: str) -> usize {
     return s.len;
 }
 
+// parameters named like what the bindings' wrappers name their own locals, helpers and types (C++'s r,
+// C#'s result, Java's arena, Rust's self, the type vec2...), keywords (None, from, type, typeof) and
+// one parameter's locals (name_s): each still gets its own value
+export fn ml_clash(r: i32, result: i32, arena: i32, e: i32, self: i32, vec2: i32, ctx: i32, None: i32, from: i32, type: i32, a0: i32, name: str, name_s: i32, typeof: i32) -> i32 {
+    return r + 2 * result + 3 * arena + 4 * e + 5 * self + 6 * vec2 + 7 * ctx + 8 * None + 9 * from + 10 * type + 11 * a0 + 12 * @cast<i32>(name.len) + 13 * name_s + 14 * typeof;
+}
+
 export fn ml_next(c: color) -> color {
     match (c) {
         .RED => { return color::GREEN; },

@@ -18,6 +18,7 @@ func main() {
 	mathlib.MlScale(&a, 2)
 	fmt.Println("scale", a.X, a.Y)
 	fmt.Println("len", mathlib.MlLen("hello"))
+	fmt.Println("clash", mathlib.MlClash(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, "ab", 13, 14))
 	fmt.Println("next", int(mathlib.MlNext(mathlib.ColorGreen)))
 	r, _ := mathlib.MlSqrt(9)
 	fmt.Println("sqrt", r, 1)
