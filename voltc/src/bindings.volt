@@ -11,8 +11,14 @@
 //   returned by value, the caller owns it and frees it with X_free; as X& or X*, it's lent;
 // - owned text (a type with @export_text, like std::string), returned as volt_text: the bytes, and
 //   what frees them (volt_text_free);
+// - owned elements (std::vec<T>), returned as a list: the elements as C sees them (text as a lent
+//   str, a handle as a pointer the caller owns), how many, and what frees them (the list, not the
+//   handles); as a parameter, a slice of those (Volt copies them; handles are given up);
+// - a slice of text or handles, as a slice of str or of the handles' pointers (lent); an optional
+//   text or handle: as a parameter a str? or a pointer (null: none), as a result an optional of
+//   volt_text or a pointer the caller owns;
 // - a closure parameter fn(A) -> R: a C function taking the caller's data first, and that data.
-// The last three differ from how Volt passes them, so voltc lib adds shims (see shims below).
+// The last five differ from how Volt passes them, so voltc lib adds shims (see shims below).
 // Anything else is an error naming the fn and the type.
 use std::mem;
 
@@ -37,6 +43,7 @@ enum shape {
     TEXT: u32,         // owned text: the Volt type (a struct with @export_text)
     CLOSURE: u32,      // a fn(A) -> R (its index in bind.closures)
     TRAIT: u32,        // a trait as a type (its index in bind.traits): a table of its fns and the object
+    LIST: u32,         // owned elements: the Volt type (std::vec<T>)
 }
 
 // what can sit inside another type's C form (a field, an element, a fn pointer's parameter): not the
@@ -48,6 +55,7 @@ fn plain(s: shape) -> bool {
         .CLOSURE(c) => { return false; },
         .OPT(t) => { return false; },
         .TRAIT(t) => { return false; },
+        .LIST(t) => { return false; },
         default => { return true; },
     }
 }
@@ -69,6 +77,7 @@ struct bind {
     closures: std::vec<u32> = {}; // fn(A) -> R types
     traits: std::vec<u32> = {};   // trait union types
     closures_out: std::vec<u32> = {}; // the closures (indexes in closures) export fns give out
+    lists: std::vec<u32> = {};    // owned element types (std::vec<T>)
     // the struct, optional and E!T types C holds by value, each after what it holds (the order C
     // declares them in)
     layout: std::vec<u32> = {};
@@ -90,10 +99,94 @@ attach fn no_form(this: bind&, t: u32) -> shape? {
 // an inner type's form, which has to be plain (see plain)
 attach fn inner(this: bind&, t: u32) -> shape? {
     val s = this.shape_of(t) ?? return null;
-    if (!plain(s)) {
+    if (!plain(s) || this.converted(t)) {
         return this.no_form(t);
     }
     return s;
+}
+
+// is t a slice whose elements cross converted (text, handles), which only an export fn's parameter
+// takes?
+attach fn converted(this: bind&, t: u32) -> bool {
+    val e = this.slice_elem(t);
+    return e != VOID && this.view_of(e) != e;
+}
+
+// what a slice's or a list's element is to C, lent: text is its str, a handle its pointer, anything
+// else itself
+attach fn view_of(this: bind&, t: u32) -> u32 {
+    match (this.shape_of(t) ?? shape::VOID) {
+        .TEXT(x) => { return STR; },
+        .HANDLE(h) => { return this.c.t.intern(tyk::REF(t)); },
+        default => { return t; },
+    }
+}
+
+// a slice's or a list's element: what sits inside other types, text and handles (lent, see
+// view_of), and optionals of what sits inside
+attach fn elem(this: bind&, t: u32) -> shape? {
+    val s = this.shape_of(t) ?? return null;
+    match (s) {
+        .TEXT(x) => {
+            // converted at the edge (not in other languages yet)
+            if (!this.wide) {
+                return this.no_form(t);
+            }
+            this.uses_str = true;
+            return s;
+        },
+        .HANDLE(h) => {
+            if (!this.wide) {
+                return this.no_form(t);
+            }
+            this.shape_of(this.view_of(t)) ?? return null;
+            return s;
+        },
+        .OPT(x) => {
+            if (plain(this.shape_of(x) ?? shape::VOID) && !this.converted(x)) {
+                return s;
+            }
+            return this.no_form(t);
+        },
+        default => {},
+    }
+    if (!plain(s) || this.converted(t)) {
+        return this.no_form(t);
+    }
+    return s;
+}
+
+// the type whose C form t takes as an export fn's parameter: text as str, a list as a slice of its
+// elements' views, an optional text as str?, an optional handle as its pointer
+attach fn in_ty(this: bind&, t: u32) -> u32 {
+    match (this.shape_of(t) ?? shape::VOID) {
+        .TEXT(x) => { return STR; },
+        .LIST(x) => { return this.c.t.intern(tyk::SLICE(this.view_of(this.list_elem(t)))); },
+        .OPT(x) => {
+            match (this.shape_of(x) ?? shape::VOID) {
+                .TEXT(y) => { return this.c.t.intern(tyk::OPT(STR)); },
+                .HANDLE(h) => { return this.c.t.intern(tyk::REF(x)); },
+                default => {},
+            }
+        },
+        default => {},
+    }
+    return t;
+}
+
+// is s an optional whose value is converted (text, a handle)?
+attach fn opt_owned(this: bind&, s: shape) -> bool {
+    match (s) {
+        .OPT(x) => {
+            match (this.shape_of(x) ?? shape::VOID) {
+                .TEXT(y) => { return true; },
+                .HANDLE(h) => { return true; },
+                default => {},
+            }
+        },
+        default => {},
+    }
+    return false;
 }
 
 fn add_u32(v: std::vec<u32>&, x: u32) -> void {
@@ -150,6 +243,41 @@ attach fn text_method(this: bind&, s: u32) -> str? {
     return null;
 }
 
+// is struct s a list (std::vec: other languages get its elements, through its items())?
+attach fn is_list(this: bind&, s: u32) -> bool {
+    return starts_with(this.c.ty_name(this.c.t.intern(tyk::STRUCT(s))).as_str(), "std::vec<");
+}
+
+// a slice type's element (its shape holds the element's view, see view_of)
+attach fn slice_elem(this: bind&, t: u32) -> u32 {
+    match (*this.c.t.get(t)) {
+        .SLICE(e) => { return e; },
+        default => { return VOID; },
+    }
+}
+
+// the export struct an element is a handle of (by value, or lent as T& or T*), if it is one
+attach fn handle_of(this: bind&, e: u32) -> u32? {
+    match (this.shape_of(e) ?? shape::VOID) {
+        .HANDLE(h) => { return h; },
+        default => { return this.lent_handle(e); },
+    }
+}
+
+// a list type's element type (its first type argument)
+attach fn list_elem(this: bind&, t: u32) -> u32 {
+    match (*this.c.t.get(t)) {
+        .STRUCT(s) => {
+            match (*this.c.si(s).args.at(0)) {
+                .TY(e) => { return e; },
+                default => {},
+            }
+        },
+        default => {},
+    }
+    return VOID;
+}
+
 // the C form of type t, collecting the declarations it needs; none (with the type in bad) when it has none
 attach fn shape_of(this: bind&, t: u32) -> shape? {
     match (*this.c.t.get(t)) {
@@ -191,6 +319,27 @@ attach fn shape_of(this: bind&, t: u32) -> shape? {
                 .FN_PTR(ps, r, va) => { return this.shape_of(x); },
                 default => {},
             }
+            // an optional text or handle (converted at the edge; not in other languages yet)
+            match (this.shape_of(x) ?? return null) {
+                .TEXT(y) => {
+                    if (!this.wide) {
+                        return this.no_form(t);
+                    }
+                    this.uses_str = true;
+                    this.shape_of(this.c.t.intern(tyk::OPT(STR))) ?? return null;
+                    add_u32(&this.opts, x);
+                    add_u32(&this.layout, t);
+                    return shape::OPT(x);
+                },
+                .HANDLE(h) => {
+                    if (!this.wide) {
+                        return this.no_form(t);
+                    }
+                    this.shape_of(this.c.t.intern(tyk::REF(x))) ?? return null;
+                    return shape::OPT(x);
+                },
+                default => {},
+            }
             if (this.c.niche(x)) {
                 return this.no_form(t);
             }
@@ -204,9 +353,11 @@ attach fn shape_of(this: bind&, t: u32) -> shape? {
             return shape::ARRAY(elem, n);
         },
         .SLICE(elem) => {
-            this.inner(elem) ?? return null;
-            add_u32(&this.slices, elem);
-            return shape::SLICE(elem);
+            // text and handles cross as their views (str, the handle's pointer), converted at the edge
+            this.elem(elem) ?? return null;
+            val v = this.view_of(elem);
+            add_u32(&this.slices, v);
+            return shape::SLICE(v);
         },
         .STRUCT(s) => {
             if (this.text_method(s) != null && !this.is_export_struct(s)) {
@@ -216,6 +367,18 @@ attach fn shape_of(this: bind&, t: u32) -> shape? {
                 }
                 add_u32(&this.texts, t);
                 return shape::TEXT(t);
+            }
+            if (this.is_list(s) && !this.is_export_struct(s)) {
+                // owned elements: a list out, a slice of their views in (not in other languages yet)
+                if (!this.wide) {
+                    return this.no_form(t);
+                }
+                val e = this.list_elem(t);
+                this.elem(e) ?? return null;
+                val v = this.view_of(e);
+                add_u32(&this.slices, v);
+                add_u32(&this.lists, t);
+                return shape::LIST(t);
             }
             if (this.is_handle(s)) {
                 add_u32(&this.handles, s);
@@ -338,7 +501,7 @@ attach fn sig_part(this: bind&, t: u32) -> shape? {
         },
         default => {},
     }
-    if (!plain(s)) {
+    if (!plain(s) || this.converted(t)) {
         return this.no_form(t);
     }
     return s;
@@ -423,6 +586,7 @@ attach fn pointer(this: bind&, x: u32) -> shape? {
             .CLOSURE(y) => { return this.no_form(x); },
             .OPT(y) => { return this.no_form(x); },
             .TRAIT(y) => { return this.no_form(x); },
+            .LIST(y) => { return this.no_form(x); },
             default => {},
         }
     }
@@ -522,7 +686,7 @@ attach fn no_c_form(this: bind&, at: span, what: std::string, t: u32) -> compile
     if (this.bad != t) {
         msg.append(fmt(" (because of the {} in it)", this.c.ty_name(this.bad)).as_str());
     }
-    return with_help(fail(at, move msg), S("bindings take numbers, bool, pointers and references, cstr, str, slices, optionals, structs of those, plain enums, error sets, E!T, extern \"C\" fns, closures as parameters, and structs held by handles and owned text (@export_text) as results; C, C++, Rust and Zig take traits, owned values as parameters and closures given back too"));
+    return with_help(fail(at, move msg), S("bindings take numbers, bool, pointers and references, cstr, str, slices, optionals, structs of those, plain enums, error sets, E!T, extern \"C\" fns, closures as parameters, and structs held by handles and owned text (@export_text) as results; C, C++, Rust and Zig take traits, owned values as parameters, closures given back, lists (std::vec), and optional text and handles too"));
 }
 
 // is a shape owned when it comes out of Volt (text, a handle by value, a closure, a trait's object),
@@ -533,6 +697,8 @@ attach fn owned_result(this: bind&, s: shape) -> bool {
         .HANDLE(h) => { return true; },
         .CLOSURE(c) => { return true; },
         .TRAIT(x) => { return true; },
+        .LIST(x) => { return true; },
+        .OPT(x) => { return this.opt_owned(s); },
         .RESULT(e, x) => {
             val v = this.shape_of(x) ?? return false;
             match (v) {
@@ -555,6 +721,8 @@ attach fn check_all(this: bind&) -> compile_error!void {
             match (s) {
                 .TEXT(t) => { owned = true; },
                 .HANDLE(h) => { owned = true; },
+                .LIST(x) => { owned = true; },
+                .OPT(x) => { owned = this.opt_owned(s); },
                 .RESULT(e, x) => {
                     if (this.owned_result(s)) {
                         return fail(at, fmt3("export fn {}: its parameter {} is {}, which only comes out of export fns", S(f.name), S(p.name), this.c.ty_name(p.ty)));
@@ -567,6 +735,9 @@ attach fn check_all(this: bind&) -> compile_error!void {
             }
         }
         val r = this.shape_of(f.ret) ?? return this.no_c_form(at, fmt("export fn {}: its return type", S(f.name)), f.ret);
+        if (this.converted(f.ret)) {
+            return with_help(fail(at, fmt2("export fn {}: it returns {}, a slice of what crosses converted, which nothing would own", S(f.name), this.c.ty_name(f.ret))), S("return a std::vec of them: it crosses as a list the caller frees"));
+        }
         var given = r;
         match (r) {
             .RESULT(e, x) => { given = this.shape_of(x) ?? shape::VOID; },
@@ -601,6 +772,18 @@ attach fn check_all(this: bind&) -> compile_error!void {
     return;
 }
 
+// does an export fn take a slice of text or handles (which C++ passes from a std::vector)?
+attach fn converts_slices(this: bind&) -> bool {
+    for (i&) in this.exports().items() {
+        for (p&) in this.c.fi(*i).params.items() {
+            if (this.converted(p.ty)) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 // does export fn f need a shim (its C form differs from how Volt passes it, or it's a generic's
 // instance, which the shim names)?
 attach fn needs_shim(this: bind&, f: u32) -> bool {
@@ -614,7 +797,16 @@ attach fn needs_shim(this: bind&, f: u32) -> bool {
             .TRAIT(x) => { return true; },
             .TEXT(x) => { return true; },
             .HANDLE(h) => { return true; },
+            .LIST(x) => { return true; },
+            .OPT(x) => {
+                if (this.opt_owned(shape::OPT(x))) {
+                    return true;
+                }
+            },
             default => {},
+        }
+        if (this.converted(p.ty)) {
+            return true;
         }
     }
     return this.owned_result(this.shape_of(info.ret) ?? shape::VOID);
@@ -673,6 +865,15 @@ attach fn wrap_owned(this: bind&, t: u32, v: std::string) -> std::string {
         .HANDLE(s) => { return fmt2("own_{}({})", index_of(&this.handles, s), move v); },
         .CLOSURE(i) => { return fmt2("box_{}({})", unum(@cast<u64>(i)), move v); },
         .TRAIT(i) => { return fmt2("give_{}({})", unum(@cast<u64>(i)), move v); },
+        .LIST(x) => { return fmt2("give_list_{}({})", index_of(&this.lists, t), move v); },
+        .OPT(x) => {
+            match (this.shape_of(x) ?? shape::VOID) {
+                .TEXT(y) => { return fmt2("give_opt_text_{}({})", index_of(&this.texts, x), move v); },
+                .HANDLE(h) => { return fmt2("opt_own_{}({})", index_of(&this.handles, h), move v); },
+                default => {},
+            }
+            return v;
+        },
         default => { return v; },
     }
 }
@@ -688,6 +889,15 @@ attach fn unwrap_in(this: bind&, t: u32, v: std::string, result: bool) -> std::s
             return fmt2("{}::from({})", this.src(t), move v);
         },
         .HANDLE(s) => { return fmt2("take_{}({})", index_of(&this.handles, s), move v); },
+        .LIST(x) => { return fmt2("unlist_{}({})", index_of(&this.lists, t), move v); },
+        .OPT(x) => {
+            match (this.shape_of(x) ?? shape::VOID) {
+                .TEXT(y) => { return fmt2("opt_in_{}({})", index_of(&this.texts, x), move v); },
+                .HANDLE(h) => { return fmt2("opt_take_{}({})", index_of(&this.handles, h), move v); },
+                default => {},
+            }
+            return v;
+        },
         default => { return v; },
     }
 }
@@ -725,9 +935,39 @@ attach fn c_src(this: bind&, t: u32, result: bool) -> std::string {
                 return fmt2("{}!{}", this.err_src(e), this.c_src(x, true));
             }
         },
+        .LIST(x) => {
+            if (result) {
+                return fmt("list_{}", index_of(&this.lists, t));
+            }
+            return fmt("{}[..]", this.view_src(this.list_elem(t)));
+        },
+        .OPT(x) => {
+            match (this.shape_of(x) ?? shape::VOID) {
+                .TEXT(y) => {
+                    if (result) {
+                        return fmt("opt_text_{}", index_of(&this.texts, x));
+                    }
+                    return S("str?");
+                },
+                .HANDLE(h) => { return fmt("({}*)", this.src(x)); },
+                default => {},
+            }
+        },
         default => {},
     }
+    if (this.converted(t)) {
+        return fmt("{}[..]", this.view_src(this.slice_elem(t)));
+    }
     return this.src(t);
+}
+
+// a slice's or a list's element as C sees it, as Volt source: text as str, a handle as its pointer
+attach fn view_src(this: bind&, t: u32) -> std::string {
+    match (this.shape_of(t) ?? shape::VOID) {
+        .TEXT(x) => { return S("str"); },
+        .HANDLE(h) => { return fmt("({}*)", this.src(t)); },
+        default => { return this.src(t); },
+    }
 }
 
 // an extern "C" fn type as Volt source: the data first, then params' C forms, then r's
@@ -849,7 +1089,23 @@ attach fn shim_fn(this: bind&, f: u32, out: std::string&) -> void {
             },
             default => {
                 params.append(fmt2("{}: {}", copy pn, this.c_src(p.ty, false)).as_str());
-                put(&args, this.unwrap_in(p.ty, copy pn, false));
+                if (this.converted(p.ty)) {
+                    // the elements as Volt holds them, made for the call: text copied, handles' values
+                    // moved in and back after it
+                    val elem = this.slice_elem(p.ty);
+                    var helper = S("texts");
+                    var k = index_of(&this.texts, elem);
+                    val h = this.handle_of(elem);
+                    if (h) {
+                        helper = S("handles");
+                        k = index_of(&this.handles, h);
+                    }
+                    pre.append(fmt4("        val {}_v = {}_in_{}({});\n", copy pn, copy helper, copy k, copy pn).as_str());
+                    pre.append(fmt4("        defer {}_done_{}({}_v, {});\n", copy helper, copy k, copy pn, copy pn).as_str());
+                    put(&args, fmt2("@slice({}_v, {}.len)", copy pn, copy pn));
+                } else {
+                    put(&args, this.unwrap_in(p.ty, copy pn, false));
+                }
             },
         }
     }
@@ -916,7 +1172,7 @@ attach fn shims(this: checker&, pkg: str) -> compile_error!shim_plan {
         }
     }
     val ents = b.entries();
-    if (fns.len() == 0 && b.handles.len == 0 && b.texts.len == 0 && b.closures.len == 0 && b.traits.len == 0) {
+    if (fns.len() == 0 && b.handles.len == 0 && b.texts.len == 0 && b.closures.len == 0 && b.traits.len == 0 && b.lists.len == 0) {
         return plan;
     }
     // what the shims give out: a closure's box, a trait's objects (given only when returned)
@@ -952,6 +1208,56 @@ attach fn shims(this: checker&, pkg: str) -> compile_error!shim_plan {
             out.append(fmt3("\n    fn untext_{}(t: text) -> {} {{\n        val v = {}::from(@cast<str>(@slice(t.ptr, t.len)));\n        val d = t.drop;\n        d(t.owner);\n        return v;\n    }}\n", copy kk, copy ts, copy ts).as_str());
         }
     }
+    for (k) in 0..b.texts.len {
+        val ts = b.src(*b.texts.at(k));
+        val kk = unum(@cast<u64>(k));
+        if (contains(used.as_str(), fmt("opt_in_{}(", copy kk).as_str())) {
+            out.append(fmt3("\n    fn opt_in_{}(x: str?) -> {}? {{\n        val s = x ?? return null;\n        return {}::from(s);\n    }}\n", copy kk, copy ts, copy ts).as_str());
+        }
+        if (contains(used.as_str(), fmt("give_opt_text_{}(", copy kk).as_str())) {
+            out.append(fmt5("\n    // an optional text given to C: has, and the text when it has\n    struct opt_text_{} {{\n        value: text;\n        has: bool;\n    }}\n\n    extern \"C\" fn drop_none_{}(p: void*) -> void {{\n    }}\n\n    fn give_opt_text_{}(v: {}?) -> opt_text_{} {{\n", copy kk, copy kk, copy kk, copy ts, copy kk).as_str());
+            out.append(fmt2("        val x = v ?? return {{ value: {{ ptr: null, len: 0, owner: null, drop: drop_none_{} }}, has: false }};\n        return {{ value: text_{}(move x), has: true }};\n    }}\n", copy kk, copy kk).as_str());
+        }
+        if (contains(used.as_str(), fmt("texts_in_{}(", copy kk).as_str())) {
+            out.append(fmt4("\n    // text C lends, as Volt's for a call (texts_done_{} frees it)\n    fn texts_in_{}(xs: str[..]) -> {}* {{\n        fits(xs.len, @sizeof({}));\n", copy kk, copy kk, copy ts, copy ts).as_str());
+            out.append(fmt("        val p = @cast<{}*>(rt_malloc(xs.len * @sizeof(", copy ts).as_str());
+            out.append(fmt4("{}) + 1) ?? @panic(\"out of memory\"));\n        for (k) in 0..xs.len {{\n            @write(@cast<{}*>(@cast<usize>(p) + k * @sizeof({})), {}::from(xs[k]));\n        }}\n        return p;\n    }}\n", copy ts, copy ts, copy ts, copy ts).as_str());
+            out.append(fmt4("\n    fn texts_done_{}(p: {}*, xs: str[..]) -> void {{\n        for (k) in 0..xs.len {{\n            val v = @read(@cast<{}*>(@cast<usize>(p) + k * @sizeof({})));\n        }}\n        rt_free(@cast<void*>(p));\n    }}\n", copy kk, copy ts, copy ts, copy ts).as_str());
+        }
+    }
+    for (k) in 0..b.handles.len {
+        val xs = S(this.si(*b.handles.at(k)).name);
+        val kk = unum(@cast<u64>(k));
+        if (contains(used.as_str(), fmt("opt_own_{}(", copy kk).as_str())) {
+            out.append(fmt3("\n    fn opt_own_{}(v: {}?) -> {}* {{\n        val x = v ?? return null;\n", copy kk, copy xs, copy xs).as_str());
+            out.append(fmt("        return own_{}(move x);\n    }\n", copy kk).as_str());
+        }
+        if (contains(used.as_str(), fmt("opt_take_{}(", copy kk).as_str())) {
+            out.append(fmt4("\n    fn opt_take_{}(p: {}*) -> {}? {{\n        if (p == null) {{\n            return null;\n        }}\n        return take_{}(p);\n    }}\n", copy kk, copy xs, copy xs, copy kk).as_str());
+        }
+        if (contains(used.as_str(), fmt("handles_in_{}(", copy kk).as_str())) {
+            // handles C lends as a slice: their values moved into one array for the call, and back
+            // (each once: two copies of one value would each own what it holds)
+            out.append(fmt4("\n    fn handles_in_{}(xs: ({}*)[..]) -> {}* {{\n        fits(xs.len, @sizeof({}));\n        distinct(@cast<(void*)[..]>(xs));\n", copy kk, copy xs, copy xs, copy xs).as_str());
+            out.append(fmt("        val p = @cast<{}*>(rt_malloc(xs.len * @sizeof(", copy xs).as_str());
+            out.append(fmt3("{}) + 1) ?? @panic(\"out of memory\"));\n        for (k) in 0..xs.len {{\n            @write(@cast<{}*>(@cast<usize>(p) + k * @sizeof({})), @read(xs[k]));\n        }}\n        return p;\n    }}\n", copy xs, copy xs, copy xs).as_str());
+            out.append(fmt4("\n    fn handles_done_{}(p: {}*, xs: ({}*)[..]) -> void {{\n        for (k) in 0..xs.len {{\n            @write(xs[k], @read(@cast<{}*>(@cast<usize>(p) + k * @sizeof(", copy kk, copy xs, copy xs, copy xs).as_str());
+            out.append(fmt("{}))));\n        }\n        rt_free(@cast<void*>(p));\n    }\n", copy xs).as_str());
+        }
+    }
+    for (k) in 0..b.lists.len {
+        b.list_shim(@cast<u32>(k), used.as_str(), &out);
+    }
+    if (contains(out.as_str(), "fits(")) {
+        out.append("\n    // a slice C gives: n elements of size bytes have to fit in memory (one more byte is added)\n    fn fits(n: usize, size: usize) -> void {\n        if (size != 0 && n >= (@cast<usize>(0) -% 1) / size) {\n            @panic(\"a slice from C is too long\");\n        }\n    }\n");
+    }
+    if (contains(out.as_str(), "distinct(")) {
+        // ponytail: compares each pair (O(n^2)); sort a copy if huge slices of handles show up
+        out.append("\n    // handles C gives in one slice: each once (two copies of a value would both own what it holds)\n    fn distinct(xs: (void*)[..]) -> void {\n        for (i) in 0..xs.len {\n            for (j) in 0..i {\n                if (xs[i] == xs[j]) {\n                    @panic(\"a handle is in the slice twice\");\n                }\n            }\n        }\n    }\n");
+    }
+    if (b.lists.len > 0) {
+        out.append(fmt("\n    // frees a list an export fn gave out, for languages that can't call a C function pointer\n    export fn {}_list_free(owner: void*, drop: extern \"C\" fn(void*) -> void) -> void {{\n        drop(owner);\n    }}\n", S(pkg)).as_str());
+    }
     if (b.texts.len > 0) {
         // owned text freed by a real symbol, for languages that can't call a C function pointer
         out.append(fmt("\n    // frees owned text an export fn gave out\n    export fn {}_text_free(t: text) -> void {{\n        val d = t.drop;\n        d(t.owner);\n    }}\n", S(pkg)).as_str());
@@ -974,6 +1280,66 @@ attach fn shims(this: checker&, pkg: str) -> compile_error!shim_plan {
     out.append("}\n");
     plan.text = move out;
     return plan;
+}
+
+// list type K (std::vec<T>): given to C as its elements' views, how many, and what frees them
+// (give_list_K); taken from C as a slice of views, copied (unlist_K: text copied, handles given)
+attach fn list_shim(this: bind&, k: u32, used: str, out: std::string&) -> void {
+    val t = *this.lists.at(k);
+    val e = this.list_elem(t);
+    val vs = this.src(t);
+    val es = this.src(e);
+    val kk = unum(@cast<u64>(k));
+    val view = this.view_src(e);
+    val items = S("items");
+    if (contains(used, fmt("give_list_{}(", copy kk).as_str())) {
+        out.append(fmt3("\n    // {} given to C: its elements (lent), how many, and what frees them\n    struct list_{} {{\n        ptr: {}*;\n        len: usize;\n        owner: void*;\n        drop: extern \"C\" fn(void*) -> void;\n    }}\n", copy vs, copy kk, copy view).as_str());
+        if (this.view_of(e) == e) {
+            // the vec's own elements
+            out.append(fmt3("\n    extern \"C\" fn drop_list_{}(p: void*) -> void {{\n        val v = @read(@cast<{}*>(p));\n        rt_free(p);\n    }}\n\n    fn give_list_{}(", copy kk, copy vs, copy kk).as_str());
+            out.append(fmt4("v: {}) -> list_{} {{\n        val p = @cast<{}*>(rt_malloc(@sizeof({})) ?? @panic(\"out of memory\"));\n", copy vs, copy kk, copy vs, copy vs).as_str());
+            out.append(fmt2("        @write(p, move v);\n        val xs = p->{}();\n        return {{ ptr: xs.ptr, len: xs.len, owner: @cast<void*>(p), drop: drop_list_{} }};\n    }}\n", copy items, copy kk).as_str());
+        } else if (this.view_of(e) == STR) {
+            // the vec, and its text's views next to it
+            var method = S("as_str");
+            match (*this.c.t.get(e)) {
+                .STRUCT(st) => { method = S(this.text_method(st) ?? "as_str"); },
+                default => {},
+            }
+            out.append(fmt3("\n    struct held_{} {{\n        v: {};\n        views: str*;\n    }}\n\n    extern \"C\" fn drop_list_{}(p: void*) -> void {{\n", copy kk, copy vs, copy kk).as_str());
+            out.append(fmt2("        val h = @read(@cast<held_{}*>(p));\n        rt_free(@cast<void*>(h.views));\n        rt_free(p);\n    }}\n\n    fn give_list_{}(", copy kk, copy kk).as_str());
+            out.append(fmt4("v: {}) -> list_{} {{\n        val p = @cast<held_{}*>(rt_malloc(@sizeof(held_{})) ?? @panic(\"out of memory\"));\n", copy vs, copy kk, copy kk, copy kk).as_str());
+            out.append(fmt2("        val n = v.{}().len;\n        val views = @cast<str*>(rt_malloc(n * @sizeof(str) + 1) ?? @panic(\"out of memory\"));\n        @write(p, {{ v: move v, views: views }});\n        val xs = p->v.{}();\n", copy items, copy items).as_str());
+            out.append(fmt2("        for (k) in 0..n {{\n            @write(@cast<str*>(@cast<usize>(views) + k * @sizeof(str)), xs[k].{}());\n        }}\n        return {{ ptr: views, len: n, owner: @cast<void*>(p), drop: drop_list_{} }};\n    }}\n", move method, copy kk).as_str());
+        } else {
+            // each handle given its own (the caller frees each); the list holds their pointers
+            var hk = S("0");
+            match (this.shape_of(e) ?? shape::VOID) {
+                .HANDLE(h) => { hk = index_of(&this.handles, h); },
+                default => {},
+            }
+            out.append(fmt3("\n    extern \"C\" fn drop_list_{}(p: void*) -> void {{\n        rt_free(p);\n    }}\n\n    fn give_list_{}(v: {}) -> list_", copy kk, copy kk, copy vs).as_str());
+            out.append(fmt4("{} {{\n        var w = move v;\n        val n = w.{}().len;\n        val hs = @cast<{}*>(rt_malloc(n * @sizeof({}) + 1) ?? @panic(\"out of memory\"));\n", copy kk, copy items, copy view, copy view).as_str());
+            out.append(fmt3("        var k = n;\n        while (k > 0) {{\n            k -= 1;\n            val x = w.pop() ?? @panic(\"a list's element is gone\");\n            @write(@cast<{}*>(@cast<usize>(hs) + k * @sizeof({})), own_{}(move x));\n        }}\n", copy view, copy view, copy hk).as_str());
+            out.append(fmt("        return {{ ptr: hs, len: n, owner: @cast<void*>(hs), drop: drop_list_{} }};\n    }}\n", copy kk).as_str());
+        }
+    }
+    if (contains(used, fmt("unlist_{}(", copy kk).as_str())) {
+        var conv = S("x");
+        var check: std::string = {};
+        match (this.shape_of(e) ?? shape::VOID) {
+            .TEXT(x) => { conv = fmt("{}::from(x)", copy es); },
+            .HANDLE(h) => {
+                conv = fmt("take_{}(x)", index_of(&this.handles, h));
+                // each taken once
+                check = S("        distinct(@cast<(void*)[..]>(xs));\n");
+            },
+            default => {},
+        }
+        out.append(fmt4("\n    // {} from C: its elements copied (handles given to Volt)\n    fn unlist_{}(xs: {}[..]) -> {} {{\n", copy vs, copy kk, copy view, copy vs).as_str());
+        out.append(check.as_str());
+        out.append(fmt2("        var v: {} = {{}};\n        for (x) in xs {{\n            v.push({}) catch @panic(\"out of memory\");\n        }}\n        return v;\n    }}\n", copy vs, move conv).as_str());
+    }
 }
 
 // closure type K given to C (an export fn returns it): boxed, with the C function that calls it and
@@ -1103,6 +1469,8 @@ attach fn short(this: bind&, t: u32) -> std::string {
         .ENUM(e) => { return this.local(this.c.ei(e).name); },
         .TRAIT_UNION(u) => { return this.local(this.c.ty_name(t).as_str()); },
         .ANYERR => { return S("error"); },
+        // (a slice of optionals isn't a slice of their values)
+        .OPT(x) => { return fmt("opt_{}", this.short(x)); },
         default => { return ident_of(this.c.ty_name(t).as_str()); },
     }
 }
@@ -1202,7 +1570,14 @@ attach fn c_prim(this: bind&, t: u32, cpp: bool) -> std::string {
             return n;
         },
         .SLICE(x) => { return this.made_name("slice", x, cpp); },
-        .OPT(x) => { return this.made_name("opt", x, cpp); },
+        .OPT(x) => {
+            // an optional handle is its pointer (null: none)
+            match (this.shape_of(x) ?? shape::VOID) {
+                .HANDLE(s) => { return this.handle_c(s, cpp); },
+                default => {},
+            }
+            return this.made_name("opt", x, cpp);
+        },
         .HANDLE(s) => { return this.handle_c(s, cpp); },
         .TEXT(x) => {
             if (cpp) {
@@ -1210,6 +1585,7 @@ attach fn c_prim(this: bind&, t: u32, cpp: bool) -> std::string {
             }
             return S("volt_text");
         },
+        .LIST(x) => { return this.made_name("list", this.list_elem(x), cpp); },
         .CLOSURE(i) => { return this.cb_name(i, cpp); },
         .TRAIT(i) => {
             // the object (a table and the object's pointer): pkg_T in C, T_obj in C++ (T is the class)
@@ -1221,12 +1597,9 @@ attach fn c_prim(this: bind&, t: u32, cpp: bool) -> std::string {
     }
 }
 
-// type t's C form as a parameter: text comes in as a str
+// type t's C form as a parameter: text comes in as a str (see in_ty)
 attach fn c_in(this: bind&, t: u32, cpp: bool) -> std::string {
-    match (this.shape_of(t) ?? shape::VOID) {
-        .TEXT(x) => { return this.c_prim(STR, cpp); },
-        default => { return this.c_prim(t, cpp); },
-    }
+    return this.c_prim(this.in_ty(t), cpp);
 }
 
 // type t's C form as a result: a closure comes out boxed
@@ -1314,8 +1687,7 @@ attach fn c_params(this: bind&, e: entry&, cpp: bool) -> std::string {
                 args.append(this.c_decl(p.ty, p.name, cpp).as_str());
                 args.append(fmt(", void *{}_user", S(p.name)).as_str());
             },
-            .TEXT(x) => { args.append(this.c_decl(STR, p.name, cpp).as_str()); },
-            default => { args.append(this.c_decl(p.ty, p.name, cpp).as_str()); },
+            default => { args.append(this.c_decl(this.in_ty(p.ty), p.name, cpp).as_str()); },
         }
     }
     if (f.params.len == 0) {
@@ -1346,6 +1718,12 @@ attach fn c_types(this: bind&, cpp: bool, out: std::string&) -> void {
     }
     for (rt&) in this.results.items() {
         put(&named, this.c_named(this.result_name(*rt).as_str(), cpp));
+    }
+    for (lt&) in this.layout.items() {
+        match (*this.c.t.get(*lt)) {
+            .OPT(x) => { put(&named, this.made_name("opt", x, cpp)); },
+            default => {},
+        }
     }
     for (n&) in named.items() {
         if (cpp) {
@@ -1417,6 +1795,15 @@ attach fn c_types(this: bind&, cpp: bool, out: std::string&) -> void {
             out.append("};\n");
         } else {
             out.append(fmt2("\n// a Volt slice: elements and how many\ntypedef struct {{\n    {} *ptr;\n    size_t len;\n}} {};\n", copy elem, copy n).as_str());
+        }
+    }
+    for (lt&) in this.lists.items() {
+        val n = this.c_prim(*lt, cpp);
+        val elem = spaced(this.c_prim(this.view_of(this.list_elem(*lt)), cpp));
+        if (cpp) {
+            out.append(fmt3("\n// {}, given out by a Volt function: its elements (lent), how many, and what frees them\nstruct {} {{\n    {}*ptr;\n    size_t len;\n    void *owner;\n    void (*drop)(void *owner);\n}};\n", this.c.ty_name(*lt), copy n, copy elem).as_str());
+        } else {
+            out.append(fmt3("\n// {}, given out by a Volt function: its elements (lent), how many, and what frees them\n// (drop(owner), or volt_list_free)\ntypedef struct {{\n    {}*ptr;\n    size_t len;\n    void *owner;\n    void (*drop)(void *owner);\n}} {};\n", this.c.ty_name(*lt), copy elem, copy n).as_str());
         }
     }
     for (i) in 0..this.fns.len {
@@ -1500,11 +1887,7 @@ attach fn c_types(this: bind&, cpp: bool, out: std::string&) -> void {
             },
             .OPT(x) => {
                 val n = this.made_name("opt", x, cpp);
-                if (cpp) {
-                    out.append(fmt2("\n// a Volt optional: has says whether value is there\nstruct {} {{\n    {} value;\n    bool has;\n}};\n", copy n, this.c_prim(x, cpp)).as_str());
-                } else {
-                    out.append(fmt2("\n// a Volt optional: has says whether value is there\ntypedef struct {{\n    {} value;\n    bool has;\n}} {};\n", this.c_prim(x, cpp), copy n).as_str());
-                }
+                out.append(fmt2("\n// a Volt optional: has says whether value is there\nstruct {} {{\n    {} value;\n    bool has;\n}};\n", copy n, this.c_prim(x, cpp)).as_str());
             },
             .ERR_UNION(e, x) => {
                 out.append(fmt("\n// {}: error is 0, or the error's code\n", this.c.ty_name(*lt)).as_str());
@@ -1552,6 +1935,9 @@ attach fn c_text(this: bind&) -> std::string {
     if (this.texts.len > 0) {
         out.append("#ifndef VOLT_TEXT_DEFINED\n#define VOLT_TEXT_DEFINED\n// owned text a Volt function gave out: bytes and a length (no terminator); free it with\n// volt_text_free once you're done with the bytes\ntypedef struct {\n    const uint8_t *ptr;\n    size_t len;\n    void *owner;\n    void (*drop)(void *owner);\n} volt_text;\n\nstatic inline void volt_text_free(volt_text t) {\n    if (t.drop) {\n        t.drop(t.owner);\n    }\n}\n#endif\n\n");
     }
+    if (this.lists.len > 0) {
+        out.append("#ifndef VOLT_LIST_DEFINED\n#define VOLT_LIST_DEFINED\n// any list a Volt function gave out (each has these fields): free it with volt_list_free once\n// you're done with its elements\ntypedef struct {\n    const void *ptr;\n    size_t len;\n    void *owner;\n    void (*drop)(void *owner);\n} volt_list;\n\n#define volt_list_free(l) do { if ((l).drop) { (l).drop((l).owner); } } while (0)\n#endif\n\n");
+    }
     this.c_types(false, &out);
     out.append("\n");
     for (e&) in ents.items() {
@@ -1559,6 +1945,9 @@ attach fn c_text(this: bind&) -> std::string {
     }
     if (this.texts.len > 0) {
         out.append(fmt("// the same as volt_text_free, as a function of the library\nvoid {}_text_free(volt_text t);\n", S(this.pkg)).as_str());
+    }
+    if (this.lists.len > 0) {
+        out.append(fmt("// frees any list (its owner and drop), as a function of the library\nvoid {}_list_free(void *owner, void (*drop)(void *owner));\n", S(this.pkg)).as_str());
     }
     out.append(fmt("\n#ifdef __cplusplus\n}\n#endif\n#endif // {}_H\n", copy guard).as_str());
     return out;
@@ -1635,6 +2024,10 @@ attach fn cpp_param(this: bind&, t: u32, name0: str, ty: std::string&, arg: std:
         }
         return;
     }
+    // what C takes converted: containers of elements, optional text and handles
+    if (this.cpp_conv_param(t, name, ty, arg)) {
+        return;
+    }
     match (this.shape_of(t) ?? shape::VOID) {
         .OPT(x) => {
             val v = this.c_prim(x, true);
@@ -1681,6 +2074,70 @@ attach fn cpp_param(this: bind&, t: u32, name0: str, ty: std::string&, arg: std:
                 },
             }
         },
+    }
+}
+
+// a parameter C takes converted, as C++ passes it (true when t is one): a std::vector of the
+// elements for a list or a slice of text or handles (held for the call: hold), std::optional for an
+// optional text or handle
+attach fn cpp_conv_param(this: bind&, t: u32, name: str, ty: std::string&, arg: std::string&) -> bool {
+    var elem = VOID;
+    var given = false;
+    match (this.shape_of(t) ?? shape::VOID) {
+        .LIST(x) => {
+            elem = this.list_elem(t);
+            given = true;
+        },
+        .SLICE(v) => { elem = this.slice_elem(t); },
+        .OPT(x) => {
+            if (this.in_ty(x) == STR) {
+                ty.append(fmt("std::optional<str> {}", S(name)).as_str());
+                arg.append(fmt3("{}{{{}.value_or(str()), {}.has_value()}}", this.made_name("opt", STR, true), S(name), S(name)).as_str());
+                return true;
+            }
+            val h = this.handle_of(x) ?? return false;
+            // given to Volt: the class gives it up
+            ty.append(fmt2("std::optional<{}> {}", this.local(this.c.si(h).name), S(name)).as_str());
+            arg.append(fmt2("({} ? {}->release() : nullptr)", S(name), S(name)).as_str());
+            return true;
+        },
+        default => { return false; },
+    }
+    val sl = this.made_name("slice", this.view_of(elem), true);
+    val h = this.handle_of(elem);
+    if (h) {
+        val cls = this.local(this.c.si(h).name);
+        if (given) {
+            // given to Volt: each class gives its handle up
+            ty.append(fmt2("std::vector<{}> {}", copy cls, S(name)).as_str());
+            arg.append(fmt4("hold<{}, raw::{} *>({}, []({} &x) {{ return x.release(); }})", copy sl, copy cls, S(name), copy cls).as_str());
+        } else {
+            ty.append(fmt2("std::vector<{}> &{}", copy cls, S(name)).as_str());
+            arg.append(fmt4("hold<{}, raw::{} *>({}, []({} &x) {{ return x.get(); }})", copy sl, copy cls, S(name), copy cls).as_str());
+        }
+        return true;
+    }
+    if (this.view_of(elem) == STR) {
+        ty.append(fmt("const std::vector<std::string> &{}", S(name)).as_str());
+        arg.append(fmt2("hold<{}, str>({}, [](const std::string &x) {{ return str(x); }})", copy sl, S(name)).as_str());
+        return true;
+    }
+    if (!given) {
+        // a slice of what C holds as it is: from a vector or an array
+        return false;
+    }
+    val et = this.c_prim(elem, true);
+    ty.append(fmt2("const std::vector<{}> &{}", copy et, S(name)).as_str());
+    arg.append(fmt4("hold<{}, {}>({}, [](const {} &x) {{ return x; }})", copy sl, copy et, S(name), copy et).as_str());
+    return true;
+}
+
+// the C++ type a list's element comes back as: text as std::string, a handle as its class
+attach fn cpp_elem(this: bind&, e: u32) -> std::string {
+    match (this.shape_of(e) ?? shape::VOID) {
+        .TEXT(x) => { return S("std::string"); },
+        .HANDLE(h) => { return this.local(this.c.si(h).name); },
+        default => { return this.c_prim(e, true); },
     }
 }
 
@@ -1813,7 +2270,8 @@ attach fn cpp_ret(this: bind&, t: u32) -> std::string {
         .STR => { return S("std::string"); },
         .TEXT(x) => { return S("std::string"); },
         .HANDLE(s) => { return this.local(this.c.si(s).name); },
-        .OPT(x) => { return fmt("std::optional<{}>", this.c_prim(x, true)); },
+        .OPT(x) => { return fmt("std::optional<{}>", this.cpp_elem(x)); },
+        .LIST(x) => { return fmt("std::vector<{}>", this.cpp_elem(this.list_elem(t))); },
         .RESULT(e, x) => { return this.cpp_ret(x); },
         .CLOSURE(i) => {
             var ps: std::vec<u32> = {};
@@ -1831,7 +2289,24 @@ attach fn cpp_value(this: bind&, t: u32, r: str) -> std::string {
         .STR => { return fmt2("std::string((const char *){}.ptr, {}.len)", S(r), S(r)); },
         .TEXT(x) => { return fmt("take_text({})", S(r)); },
         .HANDLE(s) => { return fmt2("{}({})", this.local(this.c.si(s).name), S(r)); },
-        .OPT(x) => { return fmt3("{}.has ? std::optional<{}>({}.value) : std::nullopt", S(r), this.c_prim(x, true), S(r)); },
+        .OPT(x) => {
+            match (this.shape_of(x) ?? shape::VOID) {
+                .TEXT(y) => { return fmt2("{}.has ? std::optional<std::string>(take_text({}.value)) : std::nullopt", S(r), S(r)); },
+                .HANDLE(h) => { return fmt4("{} ? std::optional<{}>({}({})) : std::nullopt", S(r), this.local(this.c.si(h).name), this.local(this.c.si(h).name), S(r)); },
+                default => {},
+            }
+            return fmt3("{}.has ? std::optional<{}>({}.value) : std::nullopt", S(r), this.c_prim(x, true), S(r));
+        },
+        .LIST(x) => {
+            // copied into a std::vector, and the list freed (a handle's class owns it)
+            val e = this.list_elem(t);
+            val ce = this.cpp_elem(e);
+            match (this.shape_of(e) ?? shape::VOID) {
+                .TEXT(y) => { return fmt("take_list<std::string>({}, [](str x) { return std::string(x.view()); })", S(r)); },
+                .HANDLE(h) => { return fmt4("take_list<{}>({}, [](raw::{} *x) {{ return {}(x); }})", copy ce, S(r), copy ce, copy ce); },
+                default => { return fmt3("take_list<{}>({}, [](const {} &x) {{ return x; }})", copy ce, S(r), copy ce); },
+            }
+        },
         .CLOSURE(i) => {
             // a closure Volt gave out: freed when the last copy of the std::function goes
             var ps: std::vec<u32> = {};
@@ -1926,10 +2401,16 @@ attach fn cpp_text(this: bind&) -> std::string {
     out.append("#pragma once\n#include <cstddef>\n#include <cstdint>\n#include <cstring>\n#include <functional>\n#include <memory>\n#include <optional>\n#include <stdexcept>\n#include <string>\n#include <string_view>\n#include <utility>\n#include <vector>\n\n");
     out.append(fmt("namespace {} {{\n\n", S(this.pkg)).as_str());
     if (this.uses_str) {
-        out.append("// a Volt str: bytes and a length (no terminator)\nstruct str {\n    const uint8_t *ptr;\n    size_t len;\n    str(const char *s) : ptr((const uint8_t *)s), len(std::strlen(s)) {}\n    str(std::string_view s) : ptr((const uint8_t *)s.data()), len(s.size()) {}\n    str(const std::string &s) : ptr((const uint8_t *)s.data()), len(s.size()) {}\n    std::string_view view() const { return {(const char *)ptr, len}; }\n};\n\n");
+        out.append("// a Volt str: bytes and a length (no terminator)\nstruct str {\n    const uint8_t *ptr;\n    size_t len;\n    str() : ptr(nullptr), len(0) {}\n    str(const char *s) : ptr((const uint8_t *)s), len(std::strlen(s)) {}\n    str(std::string_view s) : ptr((const uint8_t *)s.data()), len(s.size()) {}\n    str(const std::string &s) : ptr((const uint8_t *)s.data()), len(s.size()) {}\n    std::string_view view() const { return {(const char *)ptr, len}; }\n};\n\n");
     }
     if (this.texts.len > 0) {
         out.append("// owned text a Volt function gave out (the wrappers copy it into a std::string and free it)\nstruct text {\n    const uint8_t *ptr;\n    size_t len;\n    void *owner;\n    void (*drop)(void *owner);\n};\n\ninline std::string take_text(text t) {\n    std::string s((const char *)t.ptr, t.len);\n    if (t.drop) {\n        t.drop(t.owner);\n    }\n    return s;\n}\n\n// text C++ gives Volt (a callback's result): Volt frees it when it's done\ninline text give_text(std::string s) {\n    auto *o = new std::string(std::move(s));\n    return text{(const uint8_t *)o->data(), o->size(), o, [](void *p) { delete static_cast<std::string *>(p); }};\n}\n\n");
+    }
+    if (this.lists.len > 0 || this.converts_slices()) {
+        out.append("// a container's elements as C takes them, held for one call\ntemplate <class S, class T> struct held {\n    std::unique_ptr<T[]> p;\n    size_t n;\n    operator S() { return S(p.get(), n); }\n};\n\ntemplate <class S, class T, class V, class F> held<S, T> hold(V &&v, F f) {\n    held<S, T> h{std::unique_ptr<T[]>(new T[v.size() + 1]), v.size()};\n    for (size_t i = 0; i < h.n; i++) {\n        h.p[i] = f(v[i]);\n    }\n    return h;\n}\n\n");
+    }
+    if (this.lists.len > 0) {
+        out.append("// a list Volt gave out, as a std::vector (the list is freed)\ntemplate <class T, class L, class F> std::vector<T> take_list(L l, F f) {\n    std::vector<T> v;\n    v.reserve(l.len);\n    for (size_t i = 0; i < l.len; i++) {\n        v.push_back(f(l.ptr[i]));\n    }\n    if (l.drop) {\n        l.drop(l.owner);\n    }\n    return v;\n}\n\n");
     }
     // the handles' C types, which the C declarations below point at
     if (this.handles.len > 0) {
@@ -2240,20 +2721,25 @@ attach fn rust_ty(this: bind&, t: u32) -> std::string {
         .ARRAY(elem, n) => { return fmt2("[{}; {}]", this.rust_ty(elem), unum(n)); },
         .FN(i) => { return this.rust_fn_ty(t, false); },
         .SLICE(x) => { return fmt("VoltSlice<{}>", this.rust_ty(x)); },
-        .OPT(x) => { return fmt("VoltOpt<{}>", this.rust_ty(x)); },
+        .OPT(x) => {
+            // an optional handle is its pointer (null: none)
+            match (this.shape_of(x) ?? shape::VOID) {
+                .HANDLE(s) => { return fmt("*mut raw::{}", this.local(this.c.si(s).name)); },
+                default => {},
+            }
+            return fmt("VoltOpt<{}>", this.rust_ty(x));
+        },
         .HANDLE(s) => { return fmt("*mut raw::{}", this.local(this.c.si(s).name)); },
         .TEXT(x) => { return S("VoltText"); },
         .CLOSURE(i) => { return this.rust_fn_ty(t, true); },
         .TRAIT(i) => { return fmt("{}_obj", this.short(this.trait_of(t))); },
+        .LIST(x) => { return fmt("VoltList<{}>", this.rust_ty(this.view_of(this.list_elem(x)))); },
     }
 }
 
-// type t's C form as a parameter: text comes in as a str
+// type t's C form as a parameter: text comes in as a str (see in_ty)
 attach fn rust_in(this: bind&, t: u32) -> std::string {
-    match (this.shape_of(t) ?? shape::VOID) {
-        .TEXT(x) => { return S("VoltStr"); },
-        default => { return this.rust_ty(t); },
-    }
+    return this.rust_ty(this.in_ty(t));
 }
 
 // type t's C form as a result: a closure comes out boxed (closureN)
@@ -2510,12 +2996,37 @@ attach fn rust_param(this: bind&, t: u32, name: str, ty: std::string&, arg: std:
             }
         },
         .SLICE(x) => {
-            ty.append(fmt2("{}: &mut [{}]", copy n, this.rust_ty(x)).as_str());
-            arg.append(fmt("VoltSlice::from({})", copy n).as_str());
+            if (!this.rust_elems(this.slice_elem(t), false, n.as_str(), ty, arg, pre, gens)) {
+                ty.append(fmt2("{}: &mut [{}]", copy n, this.rust_ty(x)).as_str());
+                arg.append(fmt("VoltSlice::from({})", copy n).as_str());
+            }
+        },
+        .LIST(x) => {
+            // given to Volt, which copies the elements (and takes the handles)
+            val elem = this.list_elem(t);
+            if (!this.rust_elems(elem, true, n.as_str(), ty, arg, pre, gens)) {
+                ty.append(fmt2("mut {}: Vec<{}>", copy n, this.rust_ty(elem)).as_str());
+                arg.append(fmt("VoltSlice::from(&mut {}[..])", copy n).as_str());
+            }
         },
         .OPT(x) => {
-            ty.append(fmt2("{}: Option<{}>", copy n, this.rust_ty(x)).as_str());
-            arg.append(fmt("VoltOpt::from({})", copy n).as_str());
+            if (this.in_ty(x) == STR) {
+                // str? or an optional text: Volt copies the text
+                ty.append(fmt("{}: Option<&str>", copy n).as_str());
+                arg.append(fmt("VoltOpt::from({}.map(VoltStr::from))", copy n).as_str());
+                return;
+            }
+            match (this.shape_of(x) ?? shape::VOID) {
+                .HANDLE(h) => {
+                    // given to Volt, which frees it
+                    ty.append(fmt2("{}: Option<{}>", copy n, this.local(this.c.si(h).name)).as_str());
+                    arg.append(fmt("{}.map_or(std::ptr::null_mut(), |x| x.into_raw())", copy n).as_str());
+                },
+                default => {
+                    ty.append(fmt2("{}: Option<{}>", copy n, this.rust_ty(x)).as_str());
+                    arg.append(fmt("VoltOpt::from({})", copy n).as_str());
+                },
+            }
         },
         .CLOSURE(i) => {
             // any Rust closure (a generic F_name): a C function calls it through the caller's data
@@ -2547,6 +3058,41 @@ attach fn rust_param(this: bind&, t: u32, name: str, ty: std::string&, arg: std:
     }
 }
 
+// a slice or a list of text or handles, as Rust passes it (true when elem is one): text from any
+// &[impl AsRef<str>], handles from &mut [T] (lent) or Vec<T> (given), gathered for the call
+attach fn rust_elems(this: bind&, elem: u32, given: bool, n: str, ty: std::string&, arg: std::string&, pre: std::string&, gens: std::string&) -> bool {
+    if (this.view_of(elem) == STR) {
+        if (gens.len() > 0) {
+            gens.append(", ");
+        }
+        gens.append(fmt("S_{}: AsRef<str>", S(n)).as_str());
+        ty.append(fmt2("{}: &[S_{}]", S(n), S(n)).as_str());
+        pre.append(fmt2("    let mut {}_v: Vec<VoltStr> = {}.iter().map(|x| VoltStr::from(x.as_ref())).collect();\n", S(n), S(n)).as_str());
+        arg.append(fmt("VoltSlice::from(&mut {}_v[..])", S(n)).as_str());
+        return true;
+    }
+    val hs = this.handle_of(elem) ?? return false;
+    val cls = this.local(this.c.si(hs).name);
+    if (given) {
+        ty.append(fmt2("{}: Vec<{}>", S(n), copy cls).as_str());
+        pre.append(fmt3("    let mut {}_v: Vec<*mut raw::{}> = {}.into_iter().map(|x| x.into_raw()).collect();\n", S(n), copy cls, S(n)).as_str());
+    } else {
+        ty.append(fmt2("{}: &mut [{}]", S(n), copy cls).as_str());
+        pre.append(fmt3("    let mut {}_v: Vec<*mut raw::{}> = {}.iter().map(|x| x.as_raw()).collect();\n", S(n), copy cls, S(n)).as_str());
+    }
+    arg.append(fmt("VoltSlice::from(&mut {}_v[..])", S(n)).as_str());
+    return true;
+}
+
+// the Rust type a list's element or an optional's value comes back as
+attach fn rust_elem(this: bind&, e: u32) -> std::string {
+    match (this.shape_of(e) ?? shape::VOID) {
+        .TEXT(x) => { return S("String"); },
+        .HANDLE(h) => { return this.local(this.c.si(h).name); },
+        default => { return this.rust_ty(e); },
+    }
+}
+
 // what a wrapper returns in Rust for a C result of type t
 attach fn rust_ret(this: bind&, t: u32) -> std::string {
     match (this.shape_of(t) ?? shape::VOID) {
@@ -2554,7 +3100,8 @@ attach fn rust_ret(this: bind&, t: u32) -> std::string {
         .STR => { return S("String"); },
         .TEXT(x) => { return S("String"); },
         .HANDLE(s) => { return this.local(this.c.si(s).name); },
-        .OPT(x) => { return fmt("Option<{}>", this.rust_ty(x)); },
+        .OPT(x) => { return fmt("Option<{}>", this.rust_elem(x)); },
+        .LIST(x) => { return fmt("Vec<{}>", this.rust_elem(this.list_elem(t))); },
         .RESULT(e, x) => { return fmt("Result<{}, Error>", this.rust_ret(x)); },
         .TRAIT(i) => { return fmt("Box<dyn {}>", this.short(this.trait_of(t))); },
         .CLOSURE(i) => {
@@ -2572,7 +3119,22 @@ attach fn rust_value(this: bind&, t: u32, r: str) -> std::string {
         .STR => { return fmt("unsafe {{ {}.to_string() }}", S(r)); },
         .TEXT(x) => { return fmt("{}.take()", S(r)); },
         .HANDLE(s) => { return fmt2("{}::from_raw({})", this.local(this.c.si(s).name), S(r)); },
-        .OPT(x) => { return fmt("{}.get()", S(r)); },
+        .OPT(x) => {
+            match (this.shape_of(x) ?? shape::VOID) {
+                .TEXT(y) => { return fmt("{}.get().map(|t| t.take())", S(r)); },
+                .HANDLE(h) => { return fmt2("{{ let p = {}; if p.is_null() {{ None }} else {{ Some({}::from_raw(p)) }} }}", S(r), this.local(this.c.si(h).name)); },
+                default => {},
+            }
+            return fmt("{}.get()", S(r));
+        },
+        .LIST(x) => {
+            // copied into a Vec, and the list freed (each handle is the Vec's)
+            match (this.shape_of(this.list_elem(t)) ?? shape::VOID) {
+                .TEXT(y) => { return fmt("{}.take(|x| unsafe { x.to_string() })", S(r)); },
+                .HANDLE(h) => { return fmt2("{}.take(|x| {}::from_raw(*x))", S(r), this.local(this.c.si(h).name)); },
+                default => { return fmt("{}.take(|x| *x)", S(r)); },
+            }
+        },
         .TRAIT(i) => { return fmt2("Box::new(volt_{}({}))", this.short(this.trait_of(t)), S(r)); },
         .CLOSURE(i) => {
             // a closure Volt gave out: freed when the Box goes (o, captured whole)
@@ -2680,6 +3242,9 @@ attach fn rust_text(this: bind&) -> std::string {
     }
     if (this.slices.len > 0) {
         out.append("\n/// a Volt slice: elements and how many\n#[repr(C)]\n#[derive(Clone, Copy, Debug)]\npub struct VoltSlice<T> {\n    pub ptr: *mut T,\n    pub len: usize,\n}\n\nimpl<T> VoltSlice<T> {\n    pub fn from(s: &mut [T]) -> VoltSlice<T> {\n        VoltSlice { ptr: s.as_mut_ptr(), len: s.len() }\n    }\n}\n");
+    }
+    if (this.lists.len > 0) {
+        out.append("\n/// a list Volt gave out: its elements, how many, and what frees them (take copies them out\n/// and frees it)\n#[repr(C)]\npub struct VoltList<T> {\n    pub ptr: *mut T,\n    pub len: usize,\n    pub owner: *mut std::os::raw::c_void,\n    pub drop: Option<unsafe extern \"C\" fn(*mut std::os::raw::c_void)>,\n}\n\nimpl<T> VoltList<T> {\n    pub fn take<U>(self, f: impl Fn(&T) -> U) -> Vec<U> {\n        let v = if self.len == 0 {\n            Vec::new()\n        } else {\n            unsafe { std::slice::from_raw_parts(self.ptr, self.len) }.iter().map(f).collect()\n        };\n        if let Some(d) = self.drop {\n            unsafe { d(self.owner) };\n        }\n        v\n    }\n}\n");
     }
     if (this.opts.len > 0) {
         out.append("\n/// a Volt optional: has says whether value is there\n#[repr(C)]\n#[derive(Clone, Copy, Debug)]\npub struct VoltOpt<T> {\n    pub value: T,\n    pub has: bool,\n}\n\nimpl<T> VoltOpt<T> {\n    pub fn from(o: Option<T>) -> VoltOpt<T> {\n        match o {\n            Some(value) => VoltOpt { value, has: true },\n            None => VoltOpt { value: unsafe { std::mem::zeroed() }, has: false },\n        }\n    }\n    pub fn get(self) -> Option<T> {\n        if self.has {\n            Some(self.value)\n        } else {\n            None\n        }\n    }\n}\n");
@@ -2903,20 +3468,34 @@ attach fn zig_ty(this: bind&, t: u32) -> std::string {
         .ARRAY(elem, n) => { return fmt2("[{}]{}", unum(n), this.zig_ty(elem)); },
         .FN(i) => { return this.zig_fn_ty(t, false); },
         .SLICE(x) => { return fmt("VoltSlice({})", this.zig_ty(x)); },
-        .OPT(x) => { return fmt("VoltOpt({})", this.zig_ty(x)); },
+        .OPT(x) => {
+            match (this.shape_of(x) ?? shape::VOID) {
+                .HANDLE(s) => { return fmt("?*raw.{}", this.local(this.c.si(s).name)); },
+                default => {},
+            }
+            return fmt("VoltOpt({})", this.zig_ty(x));
+        },
         .HANDLE(s) => { return fmt("*raw.{}", this.local(this.c.si(s).name)); },
         .TEXT(x) => { return S("VoltText"); },
         .CLOSURE(i) => { return this.zig_fn_ty(t, true); },
         .TRAIT(i) => { return fmt("{}_obj", this.short(this.trait_of(t))); },
+        .LIST(x) => { return fmt("VoltList({})", this.zig_ty(this.view_of(this.list_elem(x)))); },
     }
 }
 
-// type t's C form as a parameter: text comes in as a str
+// type t's C form as a parameter: text comes in as a str (see in_ty; an optional handle is nullable)
 attach fn zig_in(this: bind&, t: u32) -> std::string {
     match (this.shape_of(t) ?? shape::VOID) {
-        .TEXT(x) => { return S("VoltStr"); },
-        default => { return this.zig_ty(t); },
+        .OPT(x) => {
+            // an optional handle given: null is none
+            match (this.shape_of(x) ?? shape::VOID) {
+                .HANDLE(h) => { return fmt("?*raw.{}", this.local(this.c.si(h).name)); },
+                default => {},
+            }
+        },
+        default => {},
     }
+    return this.zig_ty(this.in_ty(t));
 }
 
 // type t's C form as a result: a closure comes out boxed (closureN)
@@ -3177,12 +3756,39 @@ attach fn zig_param(this: bind&, t: u32, name0: str, ty: std::string&, arg: std:
             }
         },
         .SLICE(x) => {
-            ty.append(fmt2("{}: []{}", S(name), this.zig_ty(x)).as_str());
-            arg.append(fmt2("VoltSlice({}).from({})", this.zig_ty(x), S(name)).as_str());
+            if (!this.zig_elems(this.slice_elem(t), name, ty, arg, pre)) {
+                ty.append(fmt2("{}: []{}", S(name), this.zig_ty(x)).as_str());
+                arg.append(fmt2("VoltSlice({}).from({})", this.zig_ty(x), S(name)).as_str());
+            }
+        },
+        .LIST(x) => {
+            // given to Volt, which copies the elements (and takes the handles: don't deinit them)
+            val elem = this.list_elem(t);
+            if (!this.zig_elems(elem, name, ty, arg, pre)) {
+                val et = this.zig_ty(elem);
+                ty.append(fmt2("{}: []const {}", S(name), copy et).as_str());
+                arg.append(fmt2("VoltSlice({}){{ .ptr = @constCast({}.ptr), .len = ", copy et, S(name)).as_str());
+                arg.append(fmt("{}.len }", S(name)).as_str());
+            }
         },
         .OPT(x) => {
-            ty.append(fmt2("{}: ?{}", S(name), this.zig_ty(x)).as_str());
-            arg.append(fmt2("VoltOpt({}).from({})", this.zig_ty(x), S(name)).as_str());
+            if (this.in_ty(x) == STR) {
+                // str? or an optional text: Volt copies the text
+                ty.append(fmt("{}: ?[]const u8", S(name)).as_str());
+                arg.append(fmt("VoltOpt(VoltStr).from(if ({}) |s| VoltStr.from(s) else null)", S(name)).as_str());
+                return;
+            }
+            match (this.shape_of(x) ?? shape::VOID) {
+                .HANDLE(h) => {
+                    // given to Volt, which frees it (don't deinit it after)
+                    ty.append(fmt2("{}: ?{}", S(name), this.local(this.c.si(h).name)).as_str());
+                    arg.append(fmt("if ({}) |h| h.raw else null", S(name)).as_str());
+                },
+                default => {
+                    ty.append(fmt2("{}: ?{}", S(name), this.zig_ty(x)).as_str());
+                    arg.append(fmt2("VoltOpt({}).from({})", this.zig_ty(x), S(name)).as_str());
+                },
+            }
         },
         .CLOSURE(i) => {
             // context is passed to f with each call: f(context, args...)
@@ -3206,11 +3812,43 @@ attach fn zig_param(this: bind&, t: u32, name0: str, ty: std::string&, arg: std:
     }
 }
 
+// a slice or a list of text or handles, as Zig passes it (true when elem is one): text from any
+// []const []const u8 (each made a VoltStr for the call), handles from []const T (T is laid out as
+// its pointer)
+attach fn zig_elems(this: bind&, elem: u32, name: str, ty: std::string&, arg: std::string&, pre: std::string&) -> bool {
+    if (this.view_of(elem) == STR) {
+        ty.append(fmt("{}: []const []const u8", S(name)).as_str());
+        pre.append(fmt3("    const {}_v = std.heap.c_allocator.alloc(VoltStr, {}.len) catch @panic(\"out of memory\");\n    defer std.heap.c_allocator.free({}_v);\n", S(name), S(name), S(name)).as_str());
+        pre.append(fmt2("    for ({}, {}_v) |x, *s| s.* = VoltStr.from(x);\n", S(name), S(name)).as_str());
+        arg.append(fmt("VoltSlice(VoltStr).from({}_v)", S(name)).as_str());
+        return true;
+    }
+    val hs = this.handle_of(elem) ?? return false;
+    val cls = this.local(this.c.si(hs).name);
+    ty.append(fmt2("{}: []const {}", S(name), copy cls).as_str());
+    arg.append(fmt3("VoltSlice(*raw.{}){{ .ptr = @ptrCast(@constCast({}.ptr)), .len = {}.len }}", copy cls, S(name), S(name)).as_str());
+    return true;
+}
+
 attach fn zig_ret(this: bind&, t: u32) -> std::string {
     match (this.shape_of(t) ?? shape::VOID) {
         .STR => { return S("[]const u8"); },
         .HANDLE(s) => { return this.local(this.c.si(s).name); },
-        .OPT(x) => { return fmt("?{}", this.zig_ty(x)); },
+        .OPT(x) => {
+            match (this.shape_of(x) ?? shape::VOID) {
+                .HANDLE(h) => { return fmt("?{}", this.local(this.c.si(h).name)); },
+                default => {},
+            }
+            return fmt("?{}", this.zig_ty(x));
+        },
+        .LIST(x) => {
+            // a handle's type is laid out as its pointer: the list holds the handles
+            match (this.shape_of(this.list_elem(t)) ?? shape::VOID) {
+                .HANDLE(h) => { return fmt("VoltList({})", this.local(this.c.si(h).name)); },
+                default => {},
+            }
+            return this.zig_ty(t);
+        },
         .RESULT(e, x) => { return fmt("Error!{}", this.zig_ret(x)); },
         .TRAIT(i) => { return fmt("volt_{}", this.short(this.trait_of(t))); },
         .CLOSURE(i) => { return fmt("fn{}", unum(@cast<u64>(i))); },
@@ -3222,7 +3860,19 @@ attach fn zig_value(this: bind&, t: u32, r: str) -> std::string {
     match (this.shape_of(t) ?? shape::VOID) {
         .STR => { return fmt("{}.slice()", S(r)); },
         .HANDLE(s) => { return fmt2("{}{{ .raw = {} }}", this.local(this.c.si(s).name), S(r)); },
-        .OPT(x) => { return fmt("{}.get()", S(r)); },
+        .OPT(x) => {
+            match (this.shape_of(x) ?? shape::VOID) {
+                .HANDLE(h) => { return fmt2("if ({}) |p| {}{{ .raw = p }} else null", S(r), this.local(this.c.si(h).name)); },
+                default => {},
+            }
+            return fmt("{}.get()", S(r));
+        },
+        .LIST(x) => {
+            match (this.shape_of(this.list_elem(t)) ?? shape::VOID) {
+                .HANDLE(h) => { return fmt5("{}{{ .ptr = @ptrCast({}.ptr), .len = {}.len, .owner = {}.owner, .drop = {}.drop }}", this.zig_ret(t), S(r), S(r), S(r), S(r)); },
+                default => { return S(r); },
+            }
+        },
         .TRAIT(i) => { return fmt2("volt_{}{{ .o = {} }}", this.short(this.trait_of(t)), S(r)); },
         .CLOSURE(i) => { return fmt2("fn{}{{ .c = {} }}", unum(@cast<u64>(i)), S(r)); },
         default => { return S(r); },
@@ -3302,6 +3952,9 @@ attach fn zig_text(this: bind&) -> std::string {
     if (this.texts.len > 0) {
         out.append("\n/// owned text a Volt function gave out: bytes(), then deinit() to free it\npub const VoltText = extern struct {\n    ptr: [*]const u8,\n    len: usize,\n    owner: ?*anyopaque,\n    drop: ?*const fn (?*anyopaque) callconv(.c) void,\n    pub fn bytes(self: VoltText) []const u8 {\n        return self.ptr[0..self.len];\n    }\n    pub fn deinit(self: VoltText) void {\n        if (self.drop) |d| d(self.owner);\n    }\n");
         out.append("    /// text Zig gives Volt (a callback's result): a copy, which Volt frees (a VoltText goes as it is)\n    pub fn give(v: anytype) VoltText {\n        if (@TypeOf(v) == VoltText) return v;\n        const Owned = struct { b: []u8 };\n        const o = std.heap.c_allocator.create(Owned) catch @panic(\"out of memory\");\n        o.b = std.heap.c_allocator.dupe(u8, v) catch @panic(\"out of memory\");\n        const d = struct {\n            fn drop(p: ?*anyopaque) callconv(.c) void {\n                const q: *Owned = @ptrCast(@alignCast(p));\n                std.heap.c_allocator.free(q.b);\n                std.heap.c_allocator.destroy(q);\n            }\n        };\n        return .{ .ptr = o.b.ptr, .len = o.b.len, .owner = o, .drop = d.drop };\n    }\n};\n");
+    }
+    if (this.lists.len > 0) {
+        out.append("\n/// a list Volt gave out: items(), then deinit() to free it (a handle in it is yours to deinit)\npub fn VoltList(comptime T: type) type {\n    return extern struct {\n        ptr: ?[*]T,\n        len: usize,\n        owner: ?*anyopaque,\n        drop: ?*const fn (?*anyopaque) callconv(.c) void,\n        pub fn items(self: @This()) []T {\n            return if (self.ptr) |p| p[0..self.len] else &[_]T{};\n        }\n        pub fn deinit(self: @This()) void {\n            if (self.drop) |d| d(self.owner);\n        }\n    };\n}\n");
     }
     if (this.slices.len > 0) {
         out.append("\n/// a Volt slice: elements and how many\npub fn VoltSlice(comptime T: type) type {\n    return extern struct {\n        ptr: [*]T,\n        len: usize,\n        pub fn from(s: []T) @This() {\n            return .{ .ptr = s.ptr, .len = s.len };\n        }\n    };\n}\n");
@@ -3433,7 +4086,7 @@ attach fn zig_text(this: bind&) -> std::string {
     out.append("};\n");
     for (s&) in this.handles.items() {
         val cls = this.local(this.c.si(*s).name);
-        out.append(fmt4("\n/// export struct {}: owns a handle; deinit() frees it (one Volt lends, or one given to Volt,\n/// isn't yours to deinit)\npub const {} = struct {{\n    raw: *raw.{},\n\n    pub fn deinit(self: {}) void {{\n", S(this.c.si(*s).name), copy cls, copy cls, copy cls).as_str());
+        out.append(fmt4("\n/// export struct {}: owns a handle; deinit() frees it (one Volt lends, or one given to Volt,\n/// isn't yours to deinit)\npub const {} = extern struct {{\n    raw: *raw.{},\n\n    pub fn deinit(self: {}) void {{\n", S(this.c.si(*s).name), copy cls, copy cls, copy cls).as_str());
         out.append(fmt("        raw.{}(self.raw);\n    }\n", this.free_name(*s)).as_str());
         for (e&) in ents.items() {
             if (e.free_of != null) {
@@ -3557,6 +4210,7 @@ attach fn py_ty(this: bind&, t: u32) -> std::string {
         .TEXT(x) => { return S("VoltText"); },
         .CLOSURE(i) => { return this.py_fn_ty(t, true); },
         .TRAIT(i) => { return S("void"); }, // only C, C++, Rust and Zig take traits (bind.wide)
+        .LIST(x) => { return S("void"); }, // only C, C++, Rust and Zig take lists (bind.wide)
     }
 }
 
@@ -3932,6 +4586,12 @@ attach fn json_ty(this: bind&, t: u32) -> std::json::value {
             o.set("trait", std::json::string(this.short(this.trait_of(t)).as_str()));
             o.set("owned", std::json::boolean(!this.is_ref(t)));
         },
+        .LIST(x) => {
+            // owned elements: a list out (its c_name: ptr, len, owner, drop), a slice of them in
+            o.set("kind", std::json::string("list"));
+            o.set("of", this.json_ty(this.view_of(this.list_elem(x))));
+            o.set("c_name", std::json::string(this.c_prim(x, false).as_str()));
+        },
     }
     return o;
 }
@@ -4167,6 +4827,7 @@ attach fn pyi_ty(this: bind&, t: u32, incoming: bool) -> std::string {
             }
         },
         .TRAIT(i) => { return S("void"); }, // only C, C++, Rust and Zig take traits (bind.wide)
+        .LIST(x) => { return S("void"); }, // only C, C++, Rust and Zig take lists (bind.wide)
     }
 }
 
@@ -4364,6 +5025,7 @@ attach fn cs_raw(this: bind&, t: u32) -> std::string {
         .FN(i) => { return S("IntPtr"); },
         .CLOSURE(i) => { return this.cs_fnptr(t); },
         .TRAIT(i) => { return S("void"); }, // only C, C++, Rust and Zig take traits (bind.wide)
+        .LIST(x) => { return S("void"); }, // only C, C++, Rust and Zig take lists (bind.wide)
     }
 }
 
@@ -7511,6 +8173,7 @@ attach fn dart_native(this: bind&, t: u32) -> std::string {
         .FN(i) => { return S("Pointer<Void>"); },
         .CLOSURE(i) => { return fmt("Pointer<NativeFunction<{}>>", this.dart_cb_sig(t, true)); },
         .TRAIT(i) => { return S("void"); }, // only C, C++, Rust and Zig take traits (bind.wide)
+        .LIST(x) => { return S("void"); }, // only C, C++, Rust and Zig take lists (bind.wide)
     }
 }
 

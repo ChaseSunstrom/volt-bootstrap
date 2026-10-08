@@ -175,3 +175,107 @@ fn sign_of(x: i32) -> str {
 export fn labeler() -> fn(i32) -> str {
     return sign_of;
 }
+
+// lists (std::vec given out, and taken), slices of text and handles, optional text and handles
+export fn owners(xs: account&[..]) -> std::vec<std::string> {
+    var out: std::vec<std::string> = {};
+    for (a) in xs {
+        out.push(std::string::from(a.owner.as_str())) catch @panic("out of memory");
+    }
+    return out;
+}
+
+export fn open_all(names: str[..]) -> std::vec<account> {
+    var out: std::vec<account> = {};
+    for (n) in names {
+        out.push(account_open(n)) catch @panic("out of memory");
+    }
+    return out;
+}
+
+export fn squares_upto(n: i64) -> std::vec<i64> {
+    var out: std::vec<i64> = {};
+    for (i) in 1..n + 1 {
+        out.push(i * i) catch @panic("out of memory");
+    }
+    return out;
+}
+
+export fn sum_all(xs: std::vec<i64>) -> i64 {
+    var t: i64 = 0;
+    for (x) in xs.items() {
+        t += x;
+    }
+    return t;
+}
+
+export fn joined(xs: std::string[..], sep: str) -> std::string {
+    var out = std::string::from("");
+    for (i) in 0..xs.len {
+        if (i > 0) {
+            out.append(sep);
+        }
+        out.append(xs[i].as_str());
+    }
+    return out;
+}
+
+export fn richest(xs: account[..]) -> i64 {
+    var best: i64 = 0;
+    for (i) in 0..xs.len {
+        if (xs[i].cents > best) {
+            best = xs[i].cents;
+        }
+        xs[i].cents += 1;
+    }
+    return best;
+}
+
+export fn total_len(xs: std::vec<std::string>) -> i64 {
+    var t: i64 = 0;
+    for (x) in xs.items() {
+        t += @cast<i64>(x.as_str().len);
+    }
+    return t;
+}
+
+export fn close_all(xs: std::vec<account>) -> i64 {
+    return @cast<i64>(xs.items().len);
+}
+
+export fn greeting(name: str?) -> std::string {
+    val n = name ?? return std::string::from("hello, nobody");
+    var out = std::string::from("hello, ");
+    out.append(n);
+    return out;
+}
+
+export fn nickname(a: account&) -> std::string? {
+    if (a.owner.as_str().len > 3) {
+        return null;
+    }
+    return std::string::from(a.owner.as_str());
+}
+
+export fn open_if(owner: str, ok: bool) -> account? {
+    if (!ok) {
+        return null;
+    }
+    return account_open(owner);
+}
+
+export fn close_if(a: account?) -> i64 {
+    val x = a ?? return -1;
+    return x.cents;
+}
+
+// optionals in a slice (as Volt lays them out)
+export fn count_some(xs: i64?[..]) -> i64 {
+    var n: i64 = 0;
+    for (x) in xs {
+        if (x != null) {
+            n += 1;
+        }
+    }
+    return n;
+}

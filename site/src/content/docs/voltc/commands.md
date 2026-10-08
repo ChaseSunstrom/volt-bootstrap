@@ -64,6 +64,7 @@ at what voltc's own sources use: newer language features need voltc.
 | `BOLT` | the bolt that imports Rust and Zig code (`use { "geom.rs" }`, `use { "fm.zig" }`) (default: the bolt next to voltc, then `bolt` on the PATH) |
 | `VOLT_CACHE` | where imports of Rust and Zig code keep their work (default `$XDG_CACHE_HOME/volt`, then `~/.cache/volt`) |
 | `VOLT_SHOW_IMPORT` | `1`: print the Volt declarations generated for imported Rust and Zig code |
+| `VOLT_SHOW_SHIMS` | `1`: print the shims `voltc lib` adds in front of a package's export fns (their C forms) |
 | `ZIG` | the zig that builds imported Zig code (default `zig`) |
 
 ## Exit codes

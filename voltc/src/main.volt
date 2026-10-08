@@ -442,6 +442,10 @@ fn compile_lib(c: cli&, first: sources&, s: sources&) -> std::box<checker> {
     if (plan.text.len() == 0) {
         return chk;
     }
+    // VOLT_SHOW_SHIMS=1 prints them: the export fns in the forms other languages call
+    if (std::process::env("VOLT_SHOW_SHIMS") != null) {
+        std::eprint("{}", plan.text);
+    }
     var shim: shim_src = { pkg: pkg, text: copy plan.text, unexport: copy plan.unexport };
     return compile_with(c, s, &shim);
 }

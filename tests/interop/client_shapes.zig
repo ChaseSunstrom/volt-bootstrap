@@ -59,6 +59,49 @@ fn extras() void {
     print("sign {s} {s}\n", .{ sign.call(5), sign.call(-1) });
 }
 
+// lists (VoltList out, slices in), slices of text and handles, optional text and handles
+fn lists() void {
+    const a = s.account.open("ann");
+    _ = a.deposit(5);
+    const b = s.account.open("bobby");
+    _ = b.deposit(9);
+    var ab = [_]s.account{ a, b };
+    const os = s.owners(&ab);
+    print("owners {d} {s} {s}\n", .{ os.items().len, os.items()[0].slice(), os.items()[1].slice() });
+    os.deinit();
+    print("richest {d}", .{s.richest(&ab)});
+    print(" after {d} {d}\n", .{ a.get(), b.get() });
+    const opened = s.open_all(&.{ "cy", "dee" });
+    print("opened {d} {s}\n", .{ opened.items().len, opened.items()[1].owner() });
+    for (opened.items()) |x| x.deinit();
+    opened.deinit();
+    const sq = s.squares_upto(4);
+    print("squares {d} {d} sum {d}\n", .{ sq.items().len, sq.items()[3], s.sum_all(sq.items()) });
+    sq.deinit();
+    const parts = [_][]const u8{ "a", "b", "c" };
+    const j = s.joined(&parts, "-");
+    defer j.deinit();
+    print("joined {s} total {d}\n", .{ j.bytes(), s.total_len(&parts) });
+    const g1 = s.greeting("ann");
+    defer g1.deinit();
+    const g2 = s.greeting(null);
+    defer g2.deinit();
+    print("{s}; {s}\n", .{ g1.bytes(), g2.bytes() });
+    const n1 = s.nickname(a);
+    const n2 = s.nickname(b);
+    print("nick {d} {s} {d}\n", .{ @intFromBool(n1 != null), n1.?.bytes(), @intFromBool(n2 != null) });
+    if (n1) |t| t.deinit();
+    const c = s.open_if("eve", true);
+    const d = s.open_if("x", false);
+    print("open_if {d} {d}\n", .{ @intFromBool(c != null), @intFromBool(d == null) });
+    const c1 = s.close_if(c);
+    print("close_if {d} {d}\n", .{ c1, s.close_if(null) });
+    print("close_all {d}\n", .{s.close_all(&ab)});
+    var some = [_]s.VoltOpt(i64){ .from(1), .from(null), .from(3) };
+    print("some {d}\n", .{s.count_some(&some)});
+    print("lists closed {d}\n", .{s.closed_accounts()});
+}
+
 pub fn main() void {
     extras();
     var xs = [_]i32{ 3, 9, 4 };
@@ -103,4 +146,5 @@ pub fn main() void {
     const g = hi.call("volt");
     defer g.deinit();
     print("{d} {s}\n", .{ d.call(21), g.bytes() });
+    lists();
 }

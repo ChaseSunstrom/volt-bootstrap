@@ -78,6 +78,63 @@ static shapelib_account *open_cb(void *user, volt_str owner) {
     return a;
 }
 
+#define TEXT(t) (int)(t).len, (const char *)(t).ptr
+
+// lists (std::vec), slices of text and handles, optional text and handles
+static void lists(void) {
+    shapelib_account *a = account_open(S("ann"));
+    account_deposit(a, 5);
+    shapelib_account *b = account_open(S("bobby"));
+    account_deposit(b, 9);
+    shapelib_account *ab[] = {a, b};
+    shapelib_slice_shapelib_account both = {ab, 2};
+    shapelib_list_text os = owners(both);
+    printf("owners %zu %.*s %.*s\n", os.len, TEXT(os.ptr[0]), TEXT(os.ptr[1]));
+    volt_list_free(os);
+    printf("richest %lld", (long long)richest(both));
+    printf(" after %lld %lld\n", (long long)account_get(a), (long long)account_get(b));
+    volt_str names[] = {S("cy"), S("dee")};
+    shapelib_slice_str ns = {names, 2};
+    shapelib_list_account opened = open_all(ns);
+    printf("opened %zu %.*s\n", opened.len, TEXT(account_owner(opened.ptr[1])));
+    // the handles are the caller's; the list holds their pointers
+    for (size_t i = 0; i < opened.len; i++) {
+        account_free(opened.ptr[i]);
+    }
+    volt_list_free(opened);
+    shapelib_list_i64 sq = squares_upto(4);
+    shapelib_slice_i64 sqs = {sq.ptr, sq.len};
+    printf("squares %zu %lld sum %lld\n", sq.len, (long long)sq.ptr[3], (long long)sum_all(sqs));
+    volt_list_free(sq);
+    volt_str parts[] = {S("a"), S("b"), S("c")};
+    shapelib_slice_str ps = {parts, 3};
+    volt_text j = joined(ps, S("-"));
+    printf("joined %.*s total %lld\n", TEXT(j), (long long)total_len(ps));
+    volt_text_free(j);
+    shapelib_opt_str ann = {S("ann"), true};
+    shapelib_opt_str none = {{0}, false};
+    volt_text g1 = greeting(ann);
+    volt_text g2 = greeting(none);
+    printf("%.*s; %.*s\n", TEXT(g1), TEXT(g2));
+    volt_text_free(g1);
+    volt_text_free(g2);
+    shapelib_opt_text n1 = nickname(a);
+    shapelib_opt_text n2 = nickname(b);
+    printf("nick %d %.*s %d\n", n1.has, TEXT(n1.value), n2.has);
+    if (n1.has) {
+        volt_text_free(n1.value);
+    }
+    shapelib_account *c = open_if(S("eve"), true);
+    shapelib_account *d = open_if(S("x"), false);
+    printf("open_if %d %d\n", c != NULL, d == NULL);
+    printf("close_if %lld %lld\n", (long long)close_if(c), (long long)close_if(NULL));
+    printf("close_all %lld\n", (long long)close_all(both));
+    shapelib_opt_i64 some[] = {{1, true}, {0, false}, {3, true}};
+    shapelib_slice_opt_i64 ss = {some, 3};
+    printf("some %lld\n", (long long)count_some(ss));
+    printf("lists closed %d\n", closed_accounts());
+}
+
 int main(void) {
     int32_t xs[] = {3, 9, 4};
     double ys[] = {1.5, 0.5};
@@ -129,6 +186,7 @@ int main(void) {
     volt_text_free(t);
     d.drop(d.self);
     hi.drop(hi.self);
+    lists();
     printf("circle gone\n");
     return 0;
 }

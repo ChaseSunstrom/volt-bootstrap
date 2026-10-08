@@ -97,7 +97,7 @@ These types cross as they are laid out in Volt, which is how C lays them out:
 - slices `T[..]`, as a pointer and a count, and optionals `T?`, as the value and a `has` flag;
 - `extern "C"` function pointers.
 
-Three more need converting at the edge. `voltc lib` adds that code when it builds the library:
+More need converting at the edge. `voltc lib` adds that code when it builds the library:
 - **Owned text.** An export fn can return a `std::string`, or any type with
   `@attributes([@export_text("method")])`. The caller gets the text and frees it when it's done.
 - **Classes.** Other languages hold an `export struct` by a handle and never see its fields, and so
@@ -199,6 +199,18 @@ C, C++, Rust and Zig take more than the other languages (whose bindings name wha
   and Zig's type), and one Volt lends is a class that never frees it (in Rust a `&T`). Rust takes
   any closure (`impl FnMut`), Zig a context and a function, and an `E!T` callback gives back a
   `Result<T, Error>` (Zig's `Error!T`).
+- **Lists, and text and handles in slices and optionals.** An export fn can return a
+  `std::vec<T>`: in C the caller gets its elements, how many, and what frees them
+  (`volt_list_free`); text in it is lent as a `str` until then, and each handle in it is the
+  caller's. As a parameter, a `std::vec<T>` takes a slice of those, which Volt copies (handles in
+  it are given up). A `std::string[..]` or a slice of an export struct takes a slice of `str`s or
+  of handles (each once), made into Volt's for the call (a handle's value is with the call until it
+  returns, so a callback reaching it through the handle sees it as it was). A `std::string?` comes back as an
+  optional owned text and goes in as a `str?`; an optional handle is its pointer, null for none.
+  A `std::vec<T>` comes back as a `std::vector` in C++ (of `std::string`s, or of the classes), a
+  `Vec` in Rust, and a `VoltList(T)` with `items()` and `deinit()` in Zig. Containers of text and handles go in from a `std::vector`, from
+  `&[impl AsRef<str>]` and `&mut [T]` (or a `Vec<T>` given) in Rust, and from `[]const []const u8`
+  and `[]const T` in Zig. Optional text and handles are `std::optional`, `Option` and `?T`.
 - **Closures given back.** A fn returning `fn(A) -> R` gives a struct of the function, its data and
   what frees it; in C++ a `std::function`, which frees it with its last copy; in Rust a
   `Box<dyn FnMut(A) -> R>`, which frees it when dropped; in Zig a struct with `call` and

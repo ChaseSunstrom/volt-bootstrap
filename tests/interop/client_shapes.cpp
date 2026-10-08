@@ -15,6 +15,40 @@ struct circle : shapelib::shape {
     void grow(double by) override { r += by; }
 };
 
+// lists (std::vector both ways), containers of text and handles, std::optional text and handles
+static void lists() {
+    std::vector<shapelib::account> ab;
+    ab.push_back(shapelib::account::open("ann"));
+    ab[0].deposit(5);
+    ab.push_back(shapelib::account::open("bobby"));
+    ab[1].deposit(9);
+    auto os = shapelib::owners(ab);
+    std::printf("owners %zu %s %s\n", os.size(), os[0].c_str(), os[1].c_str());
+    std::printf("richest %lld", (long long)shapelib::richest(ab));
+    std::printf(" after %lld %lld\n", (long long)ab[0].get_(), (long long)ab[1].get_());
+    std::vector<std::string> names{"cy", "dee"};
+    auto opened = shapelib::open_all(names);
+    std::printf("opened %zu %s\n", opened.size(), opened[1].owner().c_str());
+    opened.clear();
+    auto sq = shapelib::squares_upto(4);
+    std::printf("squares %zu %lld sum %lld\n", sq.size(), (long long)sq[3], (long long)shapelib::sum_all(sq));
+    std::vector<std::string> parts{"a", "b", "c"};
+    std::printf("joined %s total %lld\n", shapelib::joined(parts, "-").c_str(), (long long)shapelib::total_len(parts));
+    std::printf("%s; %s\n", shapelib::greeting(shapelib::str("ann")).c_str(), shapelib::greeting(std::nullopt).c_str());
+    auto n1 = shapelib::nickname(ab[0]);
+    auto n2 = shapelib::nickname(ab[1]);
+    std::printf("nick %d %s %d\n", n1.has_value(), n1->c_str(), n2.has_value());
+    auto c = shapelib::open_if("eve", true);
+    auto d = shapelib::open_if("x", false);
+    std::printf("open_if %d %d\n", c.has_value(), !d.has_value());
+    long long c1 = shapelib::close_if(std::move(c));
+    std::printf("close_if %lld %lld\n", c1, (long long)shapelib::close_if(std::nullopt));
+    std::printf("close_all %lld\n", (long long)shapelib::close_all(std::move(ab)));
+    std::vector<shapelib::opt_i64> some{{1, true}, {0, false}, {3, true}};
+    std::printf("some %lld\n", (long long)shapelib::count_some(some));
+    std::printf("lists closed %d\n", shapelib::closed_accounts());
+}
+
 int main() {
     std::vector<int32_t> xs{3, 9, 4};
     std::vector<double> ys{1.5, 0.5};
@@ -53,4 +87,5 @@ int main() {
     auto d = shapelib::doubler();
     auto hi = shapelib::greeter();
     std::printf("%d %s\n", d(21), hi("volt").c_str());
+    lists();
 }

@@ -36,6 +36,35 @@ fn extras() {
     println!("sign {} {}", sign(5), sign(-1));
 }
 
+// lists (Vec both ways), slices of text and handles, Option text and handles
+fn lists() {
+    let mut ab = vec![account::open("ann"), account::open("bobby")];
+    ab[0].deposit(5);
+    ab[1].deposit(9);
+    let os = owners(&mut ab);
+    println!("owners {} {} {}", os.len(), os[0], os[1]);
+    print!("richest {}", richest(&mut ab));
+    println!(" after {} {}", ab[0].get(), ab[1].get());
+    let opened = open_all(&["cy", "dee"][..]);
+    println!("opened {} {}", opened.len(), opened[1].owner());
+    drop(opened);
+    let sq = squares_upto(4);
+    println!("squares {} {} sum {}", sq.len(), sq[3], sum_all(sq.clone()));
+    let parts = ["a", "b", "c"];
+    println!("joined {} total {}", joined(&parts[..], "-"), total_len(&parts[..]));
+    println!("{}; {}", greeting(Some("ann")), greeting(None));
+    let (n1, n2) = (nickname(&ab[0]), nickname(&ab[1]));
+    println!("nick {} {} {}", n1.is_some() as i32, n1.unwrap_or_default(), n2.is_some() as i32);
+    let c = open_if("eve", true);
+    let d = open_if("x", false);
+    println!("open_if {} {}", c.is_some() as i32, d.is_none() as i32);
+    let c1 = close_if(c);
+    println!("close_if {} {}", c1, close_if(None));
+    println!("close_all {}", close_all(ab));
+    println!("some {}", count_some(&mut [VoltOpt::from(Some(1)), VoltOpt::from(None), VoltOpt::from(Some(3))]));
+    println!("lists closed {}", closed_accounts());
+}
+
 fn main() {
     extras();
     println!("biggest {} {}", biggest_i32(&mut [3, 9, 4]), biggest_f64(&mut [1.5, 0.5]));
@@ -70,4 +99,5 @@ fn main() {
     let mut d = doubler();
     let mut hi = greeter();
     println!("{} {}", d(21), hi("volt"));
+    lists();
 }

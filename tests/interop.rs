@@ -366,6 +366,9 @@ fn bindings_round_trip() {
         // the names voltc lib adds itself
         ("export struct thing { n: i32; }\nexport fn thing_new() -> thing { return { n: 1 }; }\nexport fn thing_free(t: thing&) -> void {}\n", "c", "makes thing_free itself"),
         ("namespace __export { fn x() -> void {} }\nexport fn one() -> i32 { return 1; }\n", "c", "namespace __export"),
+        // a slice of what crosses converted has no owner as a result; lists aren't in Python yet
+        ("use std::string;\nexport fn bad_view(xs: std::string[..]) -> std::string[..] { return xs; }\n", "c", "which nothing would own"),
+        ("export fn bad_list() -> std::vec<i32> { return {}; }\n", "python", "has no C form"),
     ] {
         std::fs::write(bad.join("bad.volt"), src).unwrap();
         let o = e.voltc(&["bindings", "bad", "--pkg", &format!("bad={}", bad.display()), "--lang", lang]);
@@ -374,7 +377,7 @@ fn bindings_round_trip() {
     }
 }
 
-const SHAPES_OUT: &str = "biggest 9 1.5\naccount bea 300\nvisit 301 get 301\nclosed 301 1\ncircle of area 3\ncircle gone\ngrown 27\nsquare 9 square of area 9\nhey!\ntry 4 OVERDRAWN\nopened 25\nclosed 2\n42 hello, volt\ncircle gone\n";
+const SHAPES_OUT: &str = "biggest 9 1.5\naccount bea 300\nvisit 301 get 301\nclosed 301 1\ncircle of area 3\ncircle gone\ngrown 27\nsquare 9 square of area 9\nhey!\ntry 4 OVERDRAWN\nopened 25\nclosed 2\n42 hello, volt\nowners 2 ann bobby\nrichest 9 after 6 10\nopened 2 dee\nsquares 4 16 sum 30\njoined a-b-c total 3\nhello, ann; hello, nobody\nnick 1 ann 0\nopen_if 1 1\nclose_if 0 -1\nclose_all 2\nsome 2\nlists closed 7\ncircle gone\n";
 
 #[test]
 fn bindings_shapes() {
