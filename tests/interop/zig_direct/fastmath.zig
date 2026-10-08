@@ -121,7 +121,7 @@ pub const util = struct {
     }
 };
 
-// not callable from Volt: a packed struct, a declaration without a body, comptime parameters
+// not callable from Volt: a packed struct, a declaration without a body
 pub const Flags = packed struct {
     a: bool = false,
     b: bool = false,
@@ -129,6 +129,71 @@ pub const Flags = packed struct {
 
 pub extern fn defined_elsewhere(x: i32) i32;
 
+// generics: zig builds an instance per one a program uses
 pub fn largest(comptime T: type, xs: []const T) T {
     return std.mem.max(T, xs);
+}
+
+pub fn biggerOf(a: anytype, b: @TypeOf(a)) @TypeOf(a) {
+    return if (a > b) a else b;
+}
+
+pub fn times(comptime n: usize, x: i32) i32 {
+    return x * @as(i32, @intCast(n));
+}
+
+pub fn scaled(comptime k: comptime_int, x: i64) i64 {
+    return x * k;
+}
+
+// what it allocates is never freed: it's Volt's memory, so Volt's leak check sees it
+pub fn leakBytes(allocator: std.mem.Allocator, n: usize) void {
+    _ = allocator.alloc(u8, n) catch return;
+}
+
+pub fn Pair(comptime T: type) type {
+    return struct {
+        a: T,
+        b: T,
+
+        pub fn sum(self: @This()) T {
+            return self.a + self.b;
+        }
+    };
+}
+
+pub fn Stack(comptime T: type) type {
+    return struct {
+        const Self = @This();
+        items: []T,
+        n: usize,
+
+        pub fn init(allocator: std.mem.Allocator, cap: usize) !Self {
+            return .{ .items = try allocator.alloc(T, cap), .n = 0 };
+        }
+
+        pub fn push(self: *Self, x: T) bool {
+            if (self.n == self.items.len) return false;
+            self.items[self.n] = x;
+            self.n += 1;
+            return true;
+        }
+
+        // a number's (zig rejects it for a Stack(bool): that instance has the rest)
+        pub fn total(self: *const Self) T {
+            var t: T = 0;
+            for (self.items[0..self.n]) |x| t += x;
+            return t;
+        }
+
+        pub fn pop(self: *Self) ?T {
+            if (self.n == 0) return null;
+            self.n -= 1;
+            return self.items[self.n];
+        }
+
+        pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
+            allocator.free(self.items);
+        }
+    };
 }

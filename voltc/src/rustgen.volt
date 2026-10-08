@@ -1,10 +1,10 @@
-// use rust's generics: bolt declares a generic Rust fn as a Volt generic marked
-// @rust_generic("mod::f"), and makes a fn per instance a program asks for, f__ARGS next to it. A
-// call's instance is that fn; one bolt hasn't made yet is asked for (rust_wants), and compile_with
-// has bolt make them and checks the program again.
+// use rust's and use zig's generics: bolt declares a generic Rust or Zig fn as a Volt generic
+// marked @rust_generic("mod::f"), and makes a fn per instance a program asks for, f__ARGS next to
+// it. A call's instance is that fn; one bolt hasn't made yet is asked for (rust_wants), and
+// compile_with has bolt make them and checks the program again.
 
 // an instance to ask an import's bolt for: its line in OUT/instances (the fn's path, then each
-// type argument as Volt names it, tab-separated)
+// argument as Volt names it, a type or a number, tab-separated)
 struct rust_want {
     out: std::string;
     line: std::string;
@@ -57,6 +57,19 @@ attach fn rust_made(this: checker&, d: u32, base: str, path: str, args: std::vec
                 line.push('\t');
                 line.append(tn.as_str());
             },
+            // a Zig comptime integer
+            .INT(v) => {
+                val vn = num(v);
+                if (k > 0) {
+                    name.push('_');
+                }
+                if (v < 0) {
+                    name.push('n');
+                }
+                name.append(ident_of(vn.as_str()).as_str());
+                line.push('\t');
+                line.append(vn.as_str());
+            },
             default => { return null; },
         }
     }
@@ -75,7 +88,9 @@ attach fn rust_made(this: checker&, d: u32, base: str, path: str, args: std::vec
     }
     val out = this.import_outs.get(this.dl(d).item.span.file) ?? return null;
     if (this.opts.rust_again) {
-        // bolt was asked: rustc's reason, when it rejected the instance (OUT/instances.failed)
+        // bolt was asked: rustc's or zig's reason, when it rejected the instance
+        // (OUT/instances.failed)
+        val zig = starts_with(this.files.at(@cast<usize>(this.dl(d).item.span.file)).name, "<use zig ");
         var what = S(path);
         what.push('<');
         what.append(line.as_str()[path.len + 1..line.len()].replace("\t", ", ").as_str());
@@ -87,6 +102,9 @@ attach fn rust_made(this: checker&, d: u32, base: str, path: str, args: std::vec
         prefix.push('\t');
         for (l) in text.as_str().lines().items() {
             if (starts_with(l, prefix.as_str()) && !starts_with(l[prefix.len()..l.len], "::")) {
+                if (zig) {
+                    return with_help(fail(span, fmt2("{}: Zig doesn't take these arguments: {}", move what, S(l[prefix.len()..l.len]))), S("each instance a program calls is built by zig, which checks the fn's body for its arguments"));
+                }
                 return with_help(fail(span, fmt2("{}: Rust doesn't take these types: {}", move what, S(l[prefix.len()..l.len]))), S("each instance a program calls is built by rustc, which checks the fn's bounds for its types"));
             }
         }
@@ -142,7 +160,7 @@ attach fn ask_rust(this: checker&) -> bool {
         var line = copy w.line;
         line.push('\n');
         std::fs::append_file(file.as_str(), line.as_str()) catch |e| {
-            val err = fail(NO_SPAN, fmt("use rust: can't write {}, where bolt reads the instances a program needs", copy file));
+            val err = fail(NO_SPAN, fmt("can't write {}, where bolt reads the instances a program needs", copy file));
             put(&this.errors, err_diag(&err));
             return false;
         };
@@ -151,7 +169,7 @@ attach fn ask_rust(this: checker&) -> bool {
     return added;
 }
 
-// compile, and again while the check asks bolt for instances of generic Rust fns and types it
+// compile, and again while the check asks bolt for instances of generic Rust and Zig fns and types it
 // hasn't made (they're made as its import runs again, and the program is checked without the last
 // check's imports), until nothing new is asked for (a check that didn't get far asks for less);
 // then one still not made is an error

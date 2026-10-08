@@ -16,7 +16,7 @@
 //   a fieldless enum -> a Volt enum; pub const of a number, bool or string -> val; pub mod -> namespace
 // Generics, traits, closures and references returned into Rust-owned data are left out, with a
 // comment in the Volt source (VOLT_SHOW_IMPORT=1 makes voltc print it).
-use super::glue::{number, prim, FnPass, Gen, Kind, Lang, Model, Recv, ShimOut, ShimParam, Sig, Ty, TraitDef, TypeDef, TypeInfo, Variant};
+use super::glue::{ident, number, prim, substitute, volt_ty, FnPass, Gen, Kind, Lang, Model, Recv, ShimOut, ShimParam, Sig, Ty, TraitDef, TypeDef, TypeInfo, Variant};
 use super::{arg_path, fresh, save, stamp, Made, Req};
 use crate::foreign::{int_value, lex, tok_text, toks_line, Cur, Tok};
 use crate::json::Json;
@@ -128,89 +128,12 @@ pub fn import(r: &Req) -> Result<(), String> {
         let err = String::from_utf8_lossy(&o.stderr).into_owned();
         if o.status.success() { Ok((volt, err)) } else { Err(err) }
     };
-    // the instances programs asked for. Those rustc rejected (OUT/instances.failed: a line, or a
-    // line and ::method for one method of a type's instance, then rustc's reason) stay out until
-    // the crate changes; then they're tried again
-    let mut wanted: Vec<String> = std::fs::read_to_string(r.out.join("instances")).unwrap_or_default().lines().filter(|l| !l.trim().is_empty()).map(String::from).collect();
-    let failed_file = r.out.join("instances.failed");
-    let old_failed = std::fs::read_to_string(&failed_file).unwrap_or_default();
-    let mut failed = format!("# {}\n", crate_st.replace('\n', " "));
-    let mut skip: BTreeMap<String, String> = BTreeMap::new();
-    if old_failed.lines().next() == failed.lines().next() {
-        for l in old_failed.lines().skip(1) {
-            let mut f = l.splitn(3, '\t');
-            let (line, rest) = (f.next().unwrap_or(""), f.next().unwrap_or(""));
-            match rest.strip_prefix("::") {
-                Some(method) => {
-                    skip.insert(format!("{line}::{method}"), f.next().unwrap_or("").to_string());
-                }
-                None => wanted.retain(|w| w != line),
-            }
-            if !failed.lines().any(|x| x == l) {
-                let _ = writeln!(failed, "{l}");
-            }
-        }
-    } else {
-        for l in old_failed.lines().skip(1) {
-            let line = l.split('\t').next().unwrap_or("").to_string();
-            if !line.is_empty() && !wanted.contains(&line) {
-                wanted.push(line);
-            }
-        }
-    }
-    let (volt, err) = match build(&wanted, &skip) {
-        Ok(x) => {
-            crate::build::write_if_changed(&failed_file, &failed)?;
-            x
-        }
-        Err(e) if wanted.is_empty() => return Err(format!("use rust: cargo couldn't build the glue for {}:\n{e}", dir.display())),
-        Err(_) => {
-            // an instance rustc rejects (types that don't meet a bound) is left out, with rustc's
-            // reason (voltc reports it at the call); of a type's instance, only the methods it
-            // rejects (each impl block has its own bounds)
-            let why = |e: &str| e.lines().find(|x| x.starts_with("error")).unwrap_or("rustc rejected it").trim().to_string();
-            let mut good: Vec<String> = Vec::new();
-            for l in &wanted {
-                let mut with = good.clone();
-                with.push(l.clone());
-                let Err(e) = build(&with, &skip) else {
-                    good = with;
-                    continue;
-                };
-                let mut probe = model.clone();
-                let made = instances(&mut probe, std::slice::from_ref(l), &r.alias, &lib, &skip);
-                let methods: Vec<String> = made.first().cloned().flatten().and_then(|t| probe.methods.get(&t).cloned()).unwrap_or_default().into_iter().map(|s| s.name).collect();
-                let mut bare = skip.clone();
-                for m in &methods {
-                    bare.entry(format!("{l}::{m}")).or_insert_with(|| "left out while its type was tried".into());
-                }
-                if methods.is_empty() || build(&with, &bare).is_err() {
-                    let _ = writeln!(failed, "{l}\t{}", why(&e));
-                    continue;
-                }
-                good = with;
-                for m in &methods {
-                    let key = format!("{l}::{m}");
-                    if skip.contains_key(&key) {
-                        continue;
-                    }
-                    bare.remove(&key);
-                    if let Err(e) = build(&good, &bare) {
-                        let w = why(&e);
-                        let entry = format!("{l}\t::{m}\t{w}");
-                        if !failed.lines().any(|x| x == entry) {
-                            let _ = writeln!(failed, "{entry}");
-                        }
-                        bare.insert(key.clone(), w.clone());
-                        skip.insert(key, w);
-                    }
-                }
-            }
-            crate::build::write_if_changed(&r.out.join("instances"), &good.iter().map(|l| format!("{l}\n")).collect::<String>())?;
-            crate::build::write_if_changed(&failed_file, &failed)?;
-            build(&good, &skip).map_err(|e| format!("use rust: cargo couldn't build the glue for {}:\n{e}", dir.display()))?
-        }
+    let methods = |l: &str, skip: &BTreeMap<String, String>| -> Vec<String> {
+        let mut probe = model.clone();
+        let made = instances(&mut probe, std::slice::from_ref(&l.to_string()), &r.alias, &lib, skip);
+        made.first().cloned().flatten().and_then(|t| probe.methods.get(&t).cloned()).unwrap_or_default().into_iter().map(|s| s.name).collect()
     };
+    let (volt, err) = super::with_instances(r, &crate_st, build, methods, |e| format!("use rust: cargo couldn't build the glue for {}:\n{e}", dir.display()))?;
     let lib_file = r.out.join("target").join(if r.release { "release" } else { "debug" }).join(format!("libvolt_import_{}.a", r.alias));
     let mut flags = vec![lib_file.display().to_string()];
     for line in err.lines() {
@@ -319,7 +242,7 @@ fn instances(m: &mut Model, lines: &[String], alias: &str, lib: &str, skip: &BTr
             let mut subst = BTreeMap::new();
             let mut rust = Vec::new();
             for (gp, a) in gt.params.iter().zip(&args) {
-                if let Some(t) = volt_ty(a, alias, &types) {
+                if let Some(t) = volt_ty(a, alias, &types).filter(|t| !matches!(t, Ty::Slice(..))) {
                     rust.push(rust_ty(&t, lib, &types));
                     subst.insert(gp.clone(), t);
                 }
@@ -359,6 +282,15 @@ fn instances(m: &mut Model, lines: &[String], alias: &str, lib: &str, skip: &BTr
         };
         let Some(g) = found else { continue };
         let what = format!("{path}<{}>", args.join(", "));
+        // (a line twice: two programs asked at once)
+        let inst = format!("{name}__{}", args.iter().map(|a| ident(a)).collect::<Vec<_>>().join("_"));
+        let made_already = match method {
+            Some(t) => m.methods.get(t).is_some_and(|ms| ms.iter().any(|s| s.name == inst)),
+            None => m.fns.iter().any(|(md, s)| md[..] == owner[..] && s.name == inst),
+        };
+        if made_already {
+            continue;
+        }
         if args.len() != g.generics.len() {
             m.left_out.push(format!("{what} (it takes {} types)", g.generics.len()));
             continue;
@@ -367,7 +299,7 @@ fn instances(m: &mut Model, lines: &[String], alias: &str, lib: &str, skip: &BTr
         let mut rust = Vec::new();
         let mut ok = true;
         for (gp, a) in g.generics.iter().zip(&args) {
-            match volt_ty(a, alias, &types) {
+            match volt_ty(a, alias, &types).filter(|t| !matches!(t, Ty::Slice(..))) {
                 Some(t) => {
                     rust.push(rust_ty(&t, lib, &types));
                     subst.insert(gp.clone(), t);
@@ -386,7 +318,7 @@ fn instances(m: &mut Model, lines: &[String], alias: &str, lib: &str, skip: &BTr
         s.ret = s.ret.as_ref().map(|t| substitute(t, &subst));
         s.generics.clear();
         s.call = Some(format!("{name}::<{}>", rust.join(", ")));
-        s.name = format!("{name}__{}", args.iter().map(|a| ident(a)).collect::<Vec<_>>().join("_"));
+        s.name = inst;
         s.src = format!("{} [{}]", s.src, g.generics.iter().zip(&args).map(|(p, a)| format!("{p} = {a}")).collect::<Vec<_>>().join(", "));
         match method {
             Some(t) => m.methods.entry(t.clone()).or_default().push(s),
@@ -394,55 +326,6 @@ fn instances(m: &mut Model, lines: &[String], alias: &str, lib: &str, skip: &BTr
         }
     }
     made
-}
-
-/// a Volt type name as an identifier: std::vec<i32> is std_vec_i32 (voltc's ident_of)
-fn ident(s: &str) -> String {
-    let mut out = String::new();
-    for c in s.chars() {
-        if c.is_ascii_alphanumeric() || c == '_' {
-            out.push(c);
-        } else if !out.is_empty() && !out.ends_with('_') {
-            out.push('_');
-        }
-    }
-    out.trim_end_matches('_').to_string()
-}
-
-/// the type a Volt type name stands for in the crate (alias:: names one of its types)
-fn volt_ty(v: &str, alias: &str, types: &BTreeMap<String, Vec<String>>) -> Option<Ty> {
-    let v = v.trim();
-    if let Some(inner) = v.strip_suffix('?') {
-        return Some(Ty::Opt(Box::new(volt_ty(inner, alias, types)?)));
-    }
-    if let Some(p) = prim(v) {
-        return Some(Ty::Prim(p));
-    }
-    if v == "str" {
-        return Some(Ty::Str);
-    }
-    if v == "std::string" || v.starts_with("std::string<") {
-        return Some(Ty::String);
-    }
-    if let Some(inner) = v.strip_prefix("std::vec<").and_then(|x| x.strip_suffix('>')) {
-        // std::vec<T, A>: its allocator isn't Rust's business
-        let mut depth = 0;
-        let end = inner.char_indices().find(|&(_, c)| {
-            match c {
-                '<' => depth += 1,
-                '>' => depth -= 1,
-                _ => {}
-            }
-            c == ',' && depth == 0
-        });
-        let elem = &inner[..end.map_or(inner.len(), |(i, _)| i)];
-        return Some(Ty::Vec(Box::new(volt_ty(elem, alias, types)?)));
-    }
-    let local = v.strip_prefix(alias)?.strip_prefix("::")?;
-    let segs: Vec<&str> = local.split("::").collect();
-    let (name, module) = segs.split_last()?;
-    let tm = types.get(*name)?;
-    (tm.iter().map(|m| crate::import::volt_name(m)).collect::<Vec<_>>() == module.iter().map(|m| m.to_string()).collect::<Vec<_>>()).then(|| Ty::Named(name.to_string()))
 }
 
 /// a type as Rust code names it from the shim
@@ -533,33 +416,6 @@ fn dyn_fn(ps: &[Ty], r: &Ty, once: bool) -> Option<String> {
 fn held_fn(ps: &[Ty], r: &Ty, once: bool) -> Option<String> {
     let d = dyn_fn(ps, r, once)?;
     Some(if once { format!("Option<Box<{d}>>") } else { format!("Box<{d}>") })
-}
-
-/// t with its type parameters replaced (and a generic type, "type NAME", by its instance)
-fn substitute(t: &Ty, s: &BTreeMap<String, Ty>) -> Ty {
-    match t {
-        Ty::Generic(g) => s.get(g).cloned().unwrap_or_else(|| t.clone()),
-        Ty::Named(n) => s.get(&format!("type {n}")).cloned().unwrap_or_else(|| t.clone()),
-        Ty::Slice(e, m) => Ty::Slice(Box::new(substitute(e, s)), *m),
-        Ty::Vec(e) => Ty::Vec(Box::new(substitute(e, s))),
-        Ty::Opt(e) => Ty::Opt(Box::new(substitute(e, s))),
-        Ty::Res(e) => Ty::Res(Box::new(substitute(e, s))),
-        Ty::Fails(e, x) => Ty::Fails(Box::new(substitute(e, s)), x.clone()),
-        Ty::Future(e) => Ty::Future(Box::new(substitute(e, s))),
-        // a closure parameter's type stands for the closure itself
-        Ty::Fn(ps, r, p, once) => Ty::Fn(ps.iter().map(|x| substitute(x, s)).collect(), Box::new(substitute(r, s)), *p, *once),
-        // &T of text is str and of a Vec a slice, as the reader maps them; of a number it stays a
-        // reference (the generic's Volt side takes T&)
-        Ty::Ref(e, m) => match (substitute(e, s), *m) {
-            (Ty::String | Ty::Str, false) => Ty::Str,
-            // &F of a closure type: the closure, lent (and &S of a trait's type, its value)
-            (Ty::Fn(ps, r, _, o), m) => Ty::Fn(ps, r, if m { FnPass::MutRef } else { FnPass::Ref }, o),
-            (Ty::Dyn(tr, _), m) => Ty::Dyn(tr, if m { FnPass::MutRef } else { FnPass::Ref }),
-            (Ty::Vec(x), m) => Ty::Slice(x, m),
-            (x, m) => Ty::Ref(Box::new(x), m),
-        },
-        _ => t.clone(),
-    }
 }
 
 /// the model without these items (module, name)

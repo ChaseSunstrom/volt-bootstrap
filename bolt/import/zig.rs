@@ -6,15 +6,20 @@
 //
 //   []const u8 -> str in, std::string out ([]u8 out too); []const T, []T -> T[..] in, std::vec<T>
 //   out; ?T -> T?; E!T -> zig_error!T (the error's name); *T, *const T of a struct -> T&
-//   a std.mem.Allocator parameter -> none in Volt: the shim passes std.heap.c_allocator, and a
-//   slice such a function returns is the shim's to free (others are copied)
+//   a std.mem.Allocator parameter -> none in Volt: the shim passes Volt's allocator (the program's
+//   std::mem::default_allocator, as a std.mem.Allocator: the shim's own memory comes from it too, so
+//   no C library malloc is needed), and a slice such a function returns is the program's to free
+//   (others are copied)
+//   comptime T: type, x: anytype, comptime n: usize -> a generic Volt fn (<T: type>, <T_x: type>,
+//   <n: usize>; @TypeOf(x) is T_x); fn Name(comptime T: type) type { return struct {..}; } -> a
+//   generic Volt struct. Zig builds an instance per one a program uses (voltc asks for them)
 //   a struct whose fields are all plain -> a Volt struct, by value; any other struct -> an owned
-//   handle (made with the C allocator; delete calls its deinit, when it has one, and frees it)
+//   handle (made with Volt's allocator; delete calls its deinit, when it has one, and frees it)
 //   an enum -> a Volt enum with the same values
-use super::glue::{number, prim, Gen, Kind, Lang, Model, Recv, ShimOut, ShimParam, Sig, Ty, TypeDef, TypeInfo};
+use super::glue::{ident, number, prim, substitute, volt_ty, Gen, Kind, Lang, Model, Recv, ShimOut, ShimParam, Sig, Ty, TypeDef, TypeInfo};
 use super::{arg_path, fresh, save, stamp, Made, Req};
 use crate::foreign::{int_value, lex, toks_line, Cur, Tok};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -32,6 +37,12 @@ pub fn import(r: &Req) -> Result<(), String> {
     if let Some(d) = file.parent() {
         zig_files(d, &mut files);
     }
+    // the file's own inputs (the instances zig rejected stay rejected until these change)
+    let own_st = stamp(&files, "zig");
+    // the instances of its generics a program asked for (voltc writes them)
+    if r.out.join("instances").is_file() {
+        files.push(r.out.join("instances"));
+    }
     let st = stamp(&files, &format!("zig {} {} release={}", r.alias, file.display(), r.release));
     if fresh(r, &st) {
         return Ok(());
@@ -40,21 +51,31 @@ pub fn import(r: &Req) -> Result<(), String> {
     let mut w = Walker::default();
     w.file(&file, &[]);
     let model = w.model();
-    let lang = Zig { deinit: w.deinit };
-    let (shim, volt) = Gen::new(&model, &r.alias, &lang).write("the file");
-
     let shim_file = r.out.join("shim.zig");
-    crate::build::write_if_changed(&shim_file, &shim)?;
     let lib_file = r.out.join(format!("libvolt_import_{}.a", r.alias));
     let zig = std::env::var("ZIG").unwrap_or_else(|_| "zig".into());
     let mode = if r.release { "ReleaseSafe" } else { "Debug" };
-    let mut c = Command::new(&zig);
-    c.args(["build-lib", "-fPIC", "-fcompiler-rt", "-lc", "-O", mode, "--dep", "user"]).arg(format!("-Mroot={}", shim_file.display())).arg(format!("-Muser={}", file.display())).arg(format!("-femit-bin={}", lib_file.display()));
-    c.arg("--cache-dir").arg(r.out.join("zig-cache"));
-    let o = c.output().map_err(|e| format!("use zig: can't run {zig}: {e} (set $ZIG to the zig to use)"))?;
-    if !o.status.success() {
-        return Err(format!("use zig: zig couldn't build the glue for {}:\n{}", file.display(), String::from_utf8_lossy(&o.stderr)));
-    }
+    // the shim with these instances, built: its Volt side, or zig's errors
+    let build = |lines: &[String], skip: &BTreeMap<String, String>| -> Result<(String, String), String> {
+        let mut m = model.clone();
+        let mut deinit = w.deinit.clone();
+        instances(&mut m, &mut deinit, lines, &r.alias, skip);
+        let lang = Zig { deinit };
+        let (shim, volt) = Gen::new(&m, &r.alias, &lang).write("the file");
+        crate::build::write_if_changed(&shim_file, &shim)?;
+        let mut c = Command::new(&zig);
+        c.args(["build-lib", "-fPIC", "-fcompiler-rt", "-lc", "-O", mode, "--dep", "user"]).arg(format!("-Mroot={}", shim_file.display())).arg(format!("-Muser={}", file.display())).arg(format!("-femit-bin={}", lib_file.display()));
+        c.arg("--cache-dir").arg(r.out.join("zig-cache"));
+        let o = c.output().map_err(|e| format!("can't run {zig}: {e} (set $ZIG to the zig to use)"))?;
+        let err = String::from_utf8_lossy(&o.stderr).into_owned();
+        if o.status.success() { Ok((volt, err)) } else { Err(err) }
+    };
+    let methods = |l: &str, skip: &BTreeMap<String, String>| -> Vec<String> {
+        let mut probe = model.clone();
+        let made = instances(&mut probe, &mut w.deinit.clone(), std::slice::from_ref(&l.to_string()), &r.alias, skip);
+        made.first().cloned().flatten().and_then(|t| probe.methods.get(&t).cloned()).unwrap_or_default().into_iter().map(|s| s.name).collect()
+    };
+    let (volt, _) = super::with_instances(r, &own_st, build, methods, |e| format!("use zig: zig couldn't build the glue for {}:\n{e}", file.display()))?;
     save(r, &Made { volt, flags: vec![lib_file.display().to_string()], deps: files }, &st)
 }
 
@@ -101,12 +122,12 @@ impl Walker {
         }
         let Ok(text) = std::fs::read_to_string(&path) else { return };
         let t = lex(&text);
-        self.container(&t, module, None, path.parent().unwrap_or(Path::new(".")));
+        self.container(&t, module, None, path.parent().unwrap_or(Path::new(".")), &[]);
     }
 
     /// a container's declarations (a file's, or a struct's or enum's body); `owner` is the type
-    /// whose methods its fns are
-    fn container(&mut self, t: &[Tok], module: &[String], owner: Option<&str>, dir: &Path) {
+    /// whose methods its fns are, `gens` the type parameters in scope (a generic type's)
+    fn container(&mut self, t: &[Tok], module: &[String], owner: Option<&str>, dir: &Path, gens: &[String]) {
         let mut c = Cur { t, i: 0 };
         while c.i < t.len() {
             let start = c.i;
@@ -131,6 +152,7 @@ impl Walker {
                 }
                 let head = &t[s..c.i];
                 let has_body = c.is("{");
+                let body_at = c.i;
                 if has_body {
                     c.skip_group();
                 } else {
@@ -142,8 +164,11 @@ impl Walker {
                         _ => String::new(),
                     };
                     self.m.left_out.push(format!("{name} (a declaration without a body{})", if qualified { ", defined elsewhere" } else { "" }));
+                } else if public && owner.is_none() && matches!(head.last(), Some(Tok::Id(x)) if x == "type") {
+                    // fn Name(comptime T: type) type { ... return struct { ... }; }: a generic type
+                    self.type_fn(head, &t[body_at + 1..c.i - 1], module, dir);
                 } else if public {
-                    let sig = sig(head, owner);
+                    let sig = sig_in(head, owner, gens);
                     match owner {
                         Some(o) if sig.name == "deinit" => {
                             self.deinit.insert(o.to_string(), sig.params.iter().any(|p| p.1 == Some(Ty::Alloc)));
@@ -218,16 +243,16 @@ impl Walker {
         match words.first().copied() {
             Some("struct") | Some("extern") if words.contains(&"struct") => {
                 let Some(b) = body() else { return };
-                let fields = fields(b);
+                let fields = fields_in(b, &[]);
                 if fields.is_empty() {
                     // a struct without fields is a namespace
                     let mut sub = module.to_vec();
                     sub.push(name.to_string());
-                    self.container(b, &sub, None, dir);
+                    self.container(b, &sub, None, dir, &[]);
                     return;
                 }
                 self.m.types.push(TypeDef { module: module.to_vec(), name: name.to_string(), generic: false, fields: Some(fields), variants: None, is_enum: false, clone: false, opaque: false, params: Vec::new(), rust_name: None });
-                self.container(b, module, Some(name), dir);
+                self.container(b, module, Some(name), dir, &[]);
             }
             Some("enum") => {
                 let Some(b) = body() else { return };
@@ -251,7 +276,7 @@ impl Walker {
                     }
                 }
                 self.m.types.push(TypeDef { module: module.to_vec(), name: name.to_string(), generic: false, fields: None, variants: Some(vs), is_enum: true, clone: true, opaque: false, params: Vec::new(), rust_name: None });
-                self.container(&b[c.i..], module, Some(name), dir);
+                self.container(&b[c.i..], module, Some(name), dir, &[]);
             }
             Some("@import") => {
                 // pub const shapes = @import("shapes.zig"): a namespace
@@ -282,6 +307,176 @@ impl Walker {
             }
         }
     }
+
+    /// pub fn Name(comptime T: type, ..) type { .. return struct { .. }; }: a generic type (its
+    /// parameters all comptime), Zig's Name(args) per instance
+    fn type_fn(&mut self, head: &[Tok], body: &[Tok], module: &[String], dir: &Path) {
+        let s = sig_in(head, None, &[]);
+        if s.skip.is_some() || s.params.iter().any(|(_, t)| !matches!(t, Some(Ty::Comptime(_)))) {
+            self.m.left_out.push(format!("{} (a fn making a type, with a parameter that isn't comptime)", s.name));
+            return;
+        }
+        // its struct: the body's `return [extern] struct { .. };`
+        let mut c = Cur { t: body, i: 0 };
+        let mut found = None;
+        while c.i < body.len() && found.is_none() {
+            if c.is_id("return") {
+                c.i += 1;
+                c.eat("extern");
+                if c.is_id("struct") && matches!(body.get(c.i + 1), Some(Tok::P(p)) if p == "{") {
+                    c.i += 1;
+                    let o = c.i;
+                    c.skip_group();
+                    found = Some(&body[o + 1..c.i - 1]);
+                }
+                continue;
+            }
+            if c.is("{") || c.is("(") || c.is("[") {
+                c.skip_group();
+                continue;
+            }
+            c.i += 1;
+        }
+        let Some(b) = found else {
+            self.m.left_out.push(format!("{} (a fn making a type: bolt reads one that returns struct {{ .. }})", s.name));
+            return;
+        };
+        let gens: Vec<String> = s.generics.iter().filter(|g| !g.contains(':')).cloned().collect();
+        self.m.types.push(TypeDef { module: module.to_vec(), name: s.name.clone(), generic: true, fields: Some(fields_in(b, &gens)), variants: None, is_enum: false, clone: false, opaque: false, params: s.generics.clone(), rust_name: None });
+        self.container(b, module, Some(&s.name), dir, &gens);
+    }
+}
+
+/// The instances voltc asked for (OUT/instances: a line per instance, the generic's path, then each
+/// argument as Volt names it): a generic type's (NAME__ARGS, Zig's Name(args)) with its methods,
+/// or a fn's (NAME__ARGS, its comptime parameters given the arguments); what each line made
+fn instances(m: &mut Model, deinit: &mut BTreeMap<String, bool>, lines: &[String], alias: &str, skip: &BTreeMap<String, String>) -> Vec<Option<String>> {
+    let mut types: BTreeMap<String, Vec<String>> = m.types.iter().map(|t| (t.name.clone(), t.module.clone())).collect();
+    let mut made = Vec::new();
+    for line in lines {
+        made.push(None);
+        let mut parts = line.split('\t');
+        let Some(path) = parts.next().filter(|p| !p.is_empty()) else { continue };
+        let args: Vec<&str> = parts.collect();
+        let segs: Vec<String> = path.split("::").map(String::from).collect();
+        let Some((name, owner)) = segs.split_last() else { continue };
+        let what = format!("{path}<{}>", args.join(", "));
+        // (a negative number is n and its digits, as voltc names it)
+        let inst = format!("{name}__{}", args.iter().map(|a| a.strip_prefix('-').filter(|d| d.parse::<u128>().is_ok()).map_or_else(|| ident(a), |d| format!("n{d}"))).collect::<Vec<_>>().join("_"));
+        // the arguments: each one's type (or value) and its Zig spelling
+        let bind = |m: &mut Model, gs: &[String]| -> Option<(BTreeMap<String, Ty>, Vec<String>)> {
+            if args.len() != gs.len() {
+                m.left_out.push(format!("{what} (it takes {} arguments)", gs.len()));
+                return None;
+            }
+            let mut subst = BTreeMap::new();
+            let mut zig = Vec::new();
+            for (g, a) in gs.iter().zip(&args) {
+                let z = match g.split_once(':') {
+                    // a value: a number
+                    Some((g, _)) => {
+                        let Ok(v) = a.parse::<i128>() else {
+                            m.left_out.push(format!("{what} ({g} takes a number)"));
+                            return None;
+                        };
+                        (g.trim().to_string(), v.to_string())
+                    }
+                    None => {
+                        let t = match volt_ty(a, alias, &types) {
+                            Some(Ty::String) => Ty::Str,
+                            Some(Ty::Vec(e)) => Ty::Slice(e, false),
+                            Some(t) => t,
+                            None => {
+                                m.left_out.push(format!("{what} (Volt's {a} has no Zig type here)"));
+                                return None;
+                            }
+                        };
+                        let Some(z) = zig_ty(&t, m) else {
+                            m.left_out.push(format!("{what} (Volt's {a} has no Zig type here)"));
+                            return None;
+                        };
+                        subst.insert(g.clone(), t);
+                        (g.clone(), z)
+                    }
+                };
+                subst.insert(format!("comptime {}", z.0), Ty::Comptime(z.1.clone()));
+                zig.push(z.1);
+            }
+            Some((subst, zig))
+        };
+        // a generic type's instance: the type with its arguments in place, and its methods
+        if let Some(gt) = m.types.iter().find(|t| t.module[..] == owner[..] && t.name == *name && t.generic).cloned() {
+            if types.contains_key(&inst) {
+                continue;
+            }
+            let Some((mut subst, zig)) = bind(m, &gt.params) else { continue };
+            let mut d = gt.clone();
+            d.name = inst.clone();
+            d.generic = false;
+            d.params.clear();
+            d.rust_name = Some(format!("{name}({})", zig.join(", ")));
+            d.fields = d.fields.map(|fs| fs.into_iter().map(|(n, p, t)| (n, p, t.map(|t| substitute(&t, &subst)))).collect());
+            subst.insert(format!("type {name}"), Ty::Named(inst.clone()));
+            let mut ms: Vec<Sig> = Vec::new();
+            for mut s in m.methods.get(name).cloned().unwrap_or_default() {
+                if let Some(w) = skip.get(&format!("{line}::{}", s.name)) {
+                    m.left_out.push(format!("{inst}::{} (zig: {w})", s.name));
+                    continue;
+                }
+                s.params = s.params.iter().map(|(n, t)| (n.clone(), t.as_ref().map(|t| substitute(t, &subst)))).collect();
+                s.ret = s.ret.as_ref().map(|t| substitute(t, &subst));
+                ms.push(s);
+            }
+            if let Some(&a) = deinit.get(name) {
+                deinit.insert(inst.clone(), a);
+            }
+            m.methods.insert(inst.clone(), ms);
+            *made.last_mut().unwrap() = Some(inst.clone());
+            types.insert(inst, d.module.clone());
+            m.types.push(d);
+            continue;
+        }
+        // a method of a type (the segment before it names one in that module), or a fn
+        let method = owner.last().filter(|t| types.get(*t).is_some_and(|tm| tm[..] == owner[..owner.len() - 1])).cloned();
+        let found = match &method {
+            Some(t) => m.methods.get(t).and_then(|ms| ms.iter().find(|s| s.name == *name && !s.generics.is_empty())).cloned(),
+            None => m.fns.iter().find(|(md, s)| md[..] == owner[..] && s.name == *name && !s.generics.is_empty()).map(|x| x.1.clone()),
+        };
+        let Some(g) = found else { continue };
+        // (a line twice: two programs asked at once)
+        let made_already = match &method {
+            Some(t) => m.methods.get(t).is_some_and(|ms| ms.iter().any(|s| s.name == inst)),
+            None => m.fns.iter().any(|(md, s)| md[..] == owner[..] && s.name == inst),
+        };
+        if made_already {
+            continue;
+        }
+        let Some((subst, _)) = bind(m, &g.generics) else { continue };
+        let mut s = g.clone();
+        s.params = s.params.iter().map(|(n, t)| (n.clone(), t.as_ref().map(|t| substitute(t, &subst)))).collect();
+        s.ret = s.ret.as_ref().map(|t| substitute(t, &subst));
+        s.generics.clear();
+        s.call = Some(name.clone());
+        s.name = inst;
+        s.src = format!("{} [{}]", s.src, g.generics.iter().zip(&args).map(|(p, a)| format!("{} = {a}", p.split(':').next().unwrap_or(p).trim())).collect::<Vec<_>>().join(", "));
+        match method {
+            Some(t) => m.methods.entry(t).or_default().push(s),
+            None => m.fns.push((owner.to_vec(), s)),
+        }
+    }
+    made
+}
+
+/// a type as Zig spells it from the shim (m is the user's file)
+fn zig_ty(t: &Ty, m: &Model) -> Option<String> {
+    Some(match t {
+        Ty::Prim(p) => p.to_string(),
+        Ty::Str => "[]const u8".into(),
+        Ty::Slice(e, mutable) => format!("[]{}{}", if *mutable { "" } else { "const " }, zig_ty(e, m)?),
+        Ty::Opt(e) => format!("?{}", zig_ty(e, m)?),
+        Ty::Named(n) => Zig::path(m.types.iter().find(|t| t.name == *n)?),
+        _ => return None,
+    })
 }
 
 /// past a declaration: up to and past its `;` (or a block's end), groups included
@@ -304,8 +499,9 @@ fn skip_decl(c: &mut Cur) {
     }
 }
 
-/// a struct body's fields: name: Type [= default], (every Zig field is visible outside)
-fn fields(b: &[Tok]) -> Vec<(String, bool, Option<Ty>)> {
+/// a struct body's fields: name: Type [= default], (every Zig field is visible outside); `gens`
+/// are the type parameters in scope
+fn fields_in(b: &[Tok], gens: &[String]) -> Vec<(String, bool, Option<Ty>)> {
     let mut out = Vec::new();
     let mut c = Cur { t: b, i: 0 };
     while c.i < b.len() {
@@ -328,7 +524,7 @@ fn fields(b: &[Tok]) -> Vec<(String, bool, Option<Ty>)> {
             }
             c.i += 1;
         }
-        let ty = parse_ty(&b[s..c.i], None);
+        let ty = parse_ty_in(&b[s..c.i], None, gens);
         while c.i < b.len() && !c.is(",") {
             if c.is("(") || c.is("{") || c.is("[") {
                 c.skip_group();
@@ -342,8 +538,9 @@ fn fields(b: &[Tok]) -> Vec<(String, bool, Option<Ty>)> {
     out
 }
 
-/// a fn's signature: `fn name(params) Ret`; `owner` is the struct it's declared in
-fn sig(head: &[Tok], owner: Option<&str>) -> Sig {
+/// a fn's signature: `fn name(params) Ret`; `owner` is the struct it's declared in, `outer` the
+/// type parameters in scope. comptime parameters and anytype ones make it generic
+fn sig_in(head: &[Tok], owner: Option<&str>, outer: &[String]) -> Sig {
     let name = match head.get(1) {
         Some(Tok::Id(n)) => n.clone(),
         _ => String::new(),
@@ -354,12 +551,10 @@ fn sig(head: &[Tok], owner: Option<&str>) -> Sig {
         s.skip = Some("its parameters");
         return s;
     }
+    let mut gens = outer.to_vec();
     for (n, p) in c.group_items().into_iter().enumerate() {
-        if matches!(p.first(), Some(Tok::Id(w)) if w == "comptime") {
-            s.skip = Some("it has comptime parameters");
-            continue;
-        }
-        let p: Vec<Tok> = p.into_iter().filter(|x| *x != Tok::Id("noalias".into())).collect();
+        let comptime = matches!(p.first(), Some(Tok::Id(w)) if w == "comptime");
+        let p: Vec<Tok> = p.into_iter().filter(|x| *x != Tok::Id("noalias".into()) && *x != Tok::Id("comptime".into())).collect();
         let Some(colon) = p.iter().position(|x| *x == Tok::P(":".into())) else {
             s.skip = Some("a parameter");
             continue;
@@ -368,7 +563,31 @@ fn sig(head: &[Tok], owner: Option<&str>) -> Sig {
             Some(Tok::Id(x)) if colon == 1 && x != "_" => x.clone(),
             _ => format!("a{n}"),
         };
-        let ty = parse_ty(&p[colon + 1..], owner);
+        if comptime {
+            // comptime T: type is a type parameter; comptime n: usize a value one (its type a number)
+            let pt = &p[colon + 1..];
+            if matches!(pt, [Tok::Id(t)] if t == "type") {
+                s.generics.push(pname.clone());
+                gens.push(pname.clone());
+            } else {
+                match parse_ty(pt, owner) {
+                    Some(Ty::Prim(x)) if x != "bool" && !x.starts_with('f') => s.generics.push(format!("{pname}: {x}")),
+                    _ if matches!(pt, [Tok::Id(t)] if t == "comptime_int") => s.generics.push(format!("{pname}: i64")),
+                    _ => s.skip = Some("a comptime parameter that isn't a type or an integer"),
+                }
+            }
+            s.params.push((pname.clone(), Some(Ty::Comptime(pname))));
+            continue;
+        }
+        if matches!(&p[colon + 1..], [Tok::Id(t)] if t == "anytype") {
+            // a type parameter of its own, T_x (@TypeOf(x) names it)
+            let g = format!("T_{pname}");
+            s.generics.push(g.clone());
+            gens.push(g.clone());
+            s.params.push((pname, Some(Ty::Generic(g))));
+            continue;
+        }
+        let ty = parse_ty_in(&p[colon + 1..], owner, &gens);
         // the first parameter of the owner's own type makes a method
         if n == 0 && owner.is_some() {
             let recv = match &ty {
@@ -381,9 +600,6 @@ fn sig(head: &[Tok], owner: Option<&str>) -> Sig {
                 continue;
             }
         }
-        if matches!(ty, Some(Ty::Named(ref x)) if x == "anytype") {
-            s.skip = Some("it has anytype parameters");
-        }
         s.params.push((pname, ty));
     }
     let rest = &head[c.i..];
@@ -393,7 +609,7 @@ fn sig(head: &[Tok], owner: Option<&str>) -> Sig {
         rc.i += 1;
         rc.skip_group();
     }
-    s.ret = parse_ty(&rest[rc.i..], owner).map(|t| match t {
+    s.ret = parse_ty_in(&rest[rc.i..], owner, &gens).map(|t| match t {
         // bytes come back as text
         Ty::Slice(e, _) if *e == Ty::Prim("u8") => Ty::Str,
         Ty::Res(x) if matches!(&*x, Ty::Slice(e, _) if **e == Ty::Prim("u8")) => Ty::Res(Box::new(Ty::Str)),
@@ -405,8 +621,18 @@ fn sig(head: &[Tok], owner: Option<&str>) -> Sig {
 
 /// a Zig type from its tokens, when it's one Volt can name; `owner`'s name is Self
 fn parse_ty(t: &[Tok], owner: Option<&str>) -> Option<Ty> {
+    parse_ty_in(t, owner, &[])
+}
+
+/// parse_ty, with these type parameters in scope (and @TypeOf(x) of an anytype x, T_x)
+fn parse_ty_in(t: &[Tok], owner: Option<&str>, gens: &[String]) -> Option<Ty> {
     let is = |i: usize, p: &str| matches!(t.get(i), Some(Tok::P(q)) if q == p);
+    let parse_ty = |t: &[Tok], owner: Option<&str>| parse_ty_in(t, owner, gens);
     match t {
+        [Tok::Id(n)] if gens.contains(n) => Some(Ty::Generic(n.clone())),
+        [Tok::Id(f), Tok::P(a), Tok::Id(x), Tok::P(b)] if f == "@TypeOf" && a == "(" && b == ")" && gens.contains(&format!("T_{x}")) => Some(Ty::Generic(format!("T_{x}"))),
+        // Name(T) in its own struct: Self
+        [Tok::Id(n), Tok::P(a), .., Tok::P(b)] if owner == Some(n.as_str()) && a == "(" && b == ")" => Some(Ty::SelfTy),
         [Tok::Id(v)] if v == "void" => Some(Ty::Unit),
         [Tok::P(q), rest @ ..] if q == "?" => Some(Ty::Opt(Box::new(parse_ty(rest, owner)?))),
         [Tok::P(q), rest @ ..] if q == "!" => Some(Ty::Res(Box::new(parse_ty(rest, owner)?))),
@@ -427,7 +653,7 @@ fn parse_ty(t: &[Tok], owner: Option<&str>) -> Option<Ty> {
             };
             match parse_ty(rest, owner)? {
                 Ty::Prim("u8") if !mutable => Some(Ty::Str),
-                e @ (Ty::Prim(_) | Ty::Str) => Some(Ty::Slice(Box::new(e), mutable)),
+                e @ (Ty::Prim(_) | Ty::Str | Ty::Generic(_)) => Some(Ty::Slice(Box::new(e), mutable)),
                 _ => None,
             }
         }
@@ -479,7 +705,8 @@ impl Zig {
     fn path(def: &TypeDef) -> String {
         let mut p = vec!["m".to_string()];
         p.extend(def.module.iter().cloned());
-        p.push(def.name.clone());
+        // a generic type's instance: Name(args)
+        p.push(def.rust_name.clone().unwrap_or_else(|| def.name.clone()));
         p.join(".")
     }
 }
@@ -502,6 +729,7 @@ impl Lang for Zig {
         let mut p = ShimParam::default();
         match t {
             Ty::Alloc => p.arg = "alloc".into(),
+            Ty::Comptime(z) => p.arg = z.clone(),
             Ty::Prim(x) => {
                 p.params.push(format!("{a}: {x}"));
                 p.arg = a.to_string();
@@ -657,13 +885,15 @@ impl Lang for Zig {
 
     fn call(&self, _g: &Gen, module: &[String], s: &Sig, self_ty: Option<&TypeInfo>, recv: Option<&str>, args: &[String]) -> String {
         let args = args.join(", ");
+        // an instance calls its generic
+        let name = s.call.as_ref().unwrap_or(&s.name);
         match (recv, self_ty) {
-            (Some(r), _) => format!("{r}.{}({args})", s.name),
-            (None, Some(ti)) => format!("{}.{}({args})", Self::path(&ti.def), s.name),
+            (Some(r), _) => format!("{r}.{name}({args})"),
+            (None, Some(ti)) => format!("{}.{name}({args})", Self::path(&ti.def)),
             (None, None) => {
                 let mut p = vec!["m".to_string()];
                 p.extend(module.iter().cloned());
-                p.push(s.name.clone());
+                p.push(name.clone());
                 format!("{}({args})", p.join("."))
             }
         }
@@ -760,9 +990,19 @@ impl Lang for Zig {
         out
     }
 
+    fn volt_glue(&self, g: &Gen) -> String {
+        format!("    // the shim's allocator: op 0 gives n bytes, 1 resizes p's old bytes to n (it may move them), 2 frees p's old bytes\n    export fn volt_zig_{}_mem(op: u8, p: u8*, old: usize, n: usize) -> u8* {{\n        val a: std::mem::default_allocator = {{}};\n        var out: u8* = null;\n        if (op == 0) {{\n            out = a.malloc<u8>(n) catch |e| null;\n        }} else if (op == 1) {{\n            out = a.realloc<u8>(p, old, n) catch |e| null;\n        }} else {{\n            a.free<u8>(p, old);\n        }}\n        return out;\n    }}\n", g.alias)
+    }
+
     fn prelude(&self, g: &Gen) -> String {
         let free = |what: &str| format!("volt_zig_{}_free_{what}", g.alias);
-        let mut s = String::from("// the glue between a Volt program and this file, written by bolt import (use zig)\nconst std = @import(\"std\");\nconst m = @import(\"user\");\nconst alloc = std.heap.c_allocator;\n\n");
+        let mut s = String::from("// the glue between a Volt program and this file, written by bolt import (use zig)\nconst std = @import(\"std\");\nconst m = @import(\"user\");\n\n");
+        // Volt's allocator, as Zig's: the program's default_allocator (volt_glue), for blocks aligned
+        // to at most 16 bytes, which it gives; resized in place only to the same size (its free
+        // checks the size, so a block's size changes only through remap, which may move it)
+        // ponytail: alignments above 16 get null (out of memory); over-allocate if a file needs them
+        let mem = format!("volt_zig_{}_mem", g.alias);
+        let _ = write!(s, "// the program's allocator (Volt's): what this file and the shim allocate comes from it\nextern fn {mem}(op: u8, p: ?[*]u8, old: usize, n: usize) ?[*]u8;\nfn va_alloc(_: *anyopaque, n: usize, a: std.mem.Alignment, _: usize) ?[*]u8 {{\n    return if (a.toByteUnits() > 16) null else {mem}(0, null, 0, n);\n}}\nfn va_resize(_: *anyopaque, b: []u8, _: std.mem.Alignment, n: usize, _: usize) bool {{\n    return n == b.len;\n}}\nfn va_remap(_: *anyopaque, b: []u8, _: std.mem.Alignment, n: usize, _: usize) ?[*]u8 {{\n    return {mem}(1, b.ptr, b.len, n);\n}}\nfn va_free(_: *anyopaque, b: []u8, _: std.mem.Alignment, _: usize) void {{\n    _ = {mem}(2, b.ptr, b.len, 0);\n}}\nvar va_ctx: u8 = 0;\nconst alloc = std.mem.Allocator{{ .ptr = &va_ctx, .vtable = &.{{ .alloc = va_alloc, .resize = va_resize, .remap = va_remap, .free = va_free }} }};\n\n");
         s.push_str("const VoltStr = extern struct { p: ?[*]const u8, n: usize };\nconst VoltOwnedStr = extern struct { p: ?[*]u8, n: usize };\n\n");
         s.push_str("fn s(p: ?[*]const u8, n: usize) []const u8 {\n    return if (p) |q| q[0..n] else \"\";\n}\n");
         s.push_str("fn sl(comptime T: type, p: ?[*]const T, n: usize) []const T {\n    return if (p) |q| q[0..n] else &[_]T{};\n}\n");

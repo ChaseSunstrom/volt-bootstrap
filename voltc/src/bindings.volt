@@ -72,7 +72,7 @@ struct bind {
     // the struct, optional and E!T types C holds by value, each after what it holds (the order C
     // declares them in)
     layout: std::vec<u32> = {};
-    // the shapes only C, C++ and Rust take (traits, closures given out or taking text and handles, owned
+    // the shapes only C, C++, Rust and Zig take (traits, closures given out or taking text and handles, owned
     // values as parameters): false for the other languages' generators
     wide: bool = true;
     uses_str: bool = false;
@@ -522,7 +522,7 @@ attach fn no_c_form(this: bind&, at: span, what: std::string, t: u32) -> compile
     if (this.bad != t) {
         msg.append(fmt(" (because of the {} in it)", this.c.ty_name(this.bad)).as_str());
     }
-    return with_help(fail(at, move msg), S("bindings take numbers, bool, pointers and references, cstr, str, slices, optionals, structs of those, plain enums, error sets, E!T, extern \"C\" fns, closures as parameters, and structs held by handles and owned text (@export_text) as results; C, C++ and Rust take traits, owned values as parameters and closures given back too"));
+    return with_help(fail(at, move msg), S("bindings take numbers, bool, pointers and references, cstr, str, slices, optionals, structs of those, plain enums, error sets, E!T, extern \"C\" fns, closures as parameters, and structs held by handles and owned text (@export_text) as results; C, C++, Rust and Zig take traits, owned values as parameters and closures given back too"));
 }
 
 // is a shape owned when it comes out of Volt (text, a handle by value, a closure, a trait's object),
@@ -563,7 +563,7 @@ attach fn check_all(this: bind&) -> compile_error!void {
                 default => {},
             }
             if (owned && !this.wide) {
-                return with_help(fail(at, fmt3("export fn {}: its parameter {} is {}, which this language's bindings only take as a result", S(f.name), S(p.name), this.c.ty_name(p.ty))), S("take an export struct as X& (or X*) and text as str; C, C++ and Rust bindings take owned values too"));
+                return with_help(fail(at, fmt3("export fn {}: its parameter {} is {}, which this language's bindings only take as a result", S(f.name), S(p.name), this.c.ty_name(p.ty))), S("take an export struct as X& (or X*) and text as str; C, C++, Rust and Zig bindings take owned values too"));
             }
         }
         val r = this.shape_of(f.ret) ?? return this.no_c_form(at, fmt("export fn {}: its return type", S(f.name)), f.ret);
@@ -579,7 +579,7 @@ attach fn check_all(this: bind&) -> compile_error!void {
         match (r) {
             .CLOSURE(c) => {
                 if (!this.wide) {
-                    return fail(at, fmt2("export fn {}: it returns {}, and this language's bindings only take closures as parameters (C, C++ and Rust take them back too)", S(f.name), this.c.ty_name(f.ret)));
+                    return fail(at, fmt2("export fn {}: it returns {}, and this language's bindings only take closures as parameters (C, C++, Rust and Zig take them back too)", S(f.name), this.c.ty_name(f.ret)));
                 }
             },
             default => {},
@@ -2907,7 +2907,23 @@ attach fn zig_ty(this: bind&, t: u32) -> std::string {
         .HANDLE(s) => { return fmt("*raw.{}", this.local(this.c.si(s).name)); },
         .TEXT(x) => { return S("VoltText"); },
         .CLOSURE(i) => { return this.zig_fn_ty(t, true); },
-        .TRAIT(i) => { return S("void"); }, // only C, C++ and Rust take traits (bind.wide)
+        .TRAIT(i) => { return fmt("{}_obj", this.short(this.trait_of(t))); },
+    }
+}
+
+// type t's C form as a parameter: text comes in as a str
+attach fn zig_in(this: bind&, t: u32) -> std::string {
+    match (this.shape_of(t) ?? shape::VOID) {
+        .TEXT(x) => { return S("VoltStr"); },
+        default => { return this.zig_ty(t); },
+    }
+}
+
+// type t's C form as a result: a closure comes out boxed (closureN)
+attach fn zig_out(this: bind&, t: u32) -> std::string {
+    match (this.shape_of(t) ?? shape::VOID) {
+        .CLOSURE(i) => { return fmt("closure{}", unum(@cast<u64>(i))); },
+        default => { return this.zig_ty(t); },
     }
 }
 
@@ -2933,16 +2949,16 @@ attach fn zig_fn_ty(this: bind&, t: u32, user: bool) -> std::string {
         if (k > 0 || user) {
             s.append(", ");
         }
-        s.append(this.zig_ty(*ps.at(k)).as_str());
+        s.append(this.zig_in(*ps.at(k)).as_str());
     }
     s.append(") callconv(.c) ");
-    s.append(this.zig_ty(r).as_str());
+    s.append(this.zig_out(r).as_str());
     return s;
 }
 
 // Zig doesn't let a parameter shadow a declaration: a name the file declares gets a _
 attach fn zig_name(this: bind&, name: str) -> std::string {
-    var taken = name == "std" || name == "raw" || name == "Error" || name == "err_of" || name == "self" || name == "print";
+    var taken = name == "std" || name == "raw" || name == "Error" || name == "err_of" || name == "code_of" || name == "self" || name == "print";
     for (s&) in this.handles.items() {
         if (this.local(this.c.si(*s).name).as_str() == name) {
             taken = true;
@@ -2964,6 +2980,18 @@ attach fn zig_name(this: bind&, name: str) -> std::string {
             taken = true;
         }
     }
+    for (t&) in this.traits.items() {
+        val tr = this.short(*t);
+        val suffixes: str[] = { "_table", "_lend", "_give", "_obj", "_vt" };
+        for (suffix) in suffixes {
+            if (name == fmt2("{}{}", copy tr, S(suffix)).as_str()) {
+                taken = true;
+            }
+        }
+        if (name == fmt("volt_{}", copy tr).as_str()) {
+            taken = true;
+        }
+    }
     for (f&) in this.exports().items() {
         if (this.c.fi(*f).c_name == name) {
             taken = true;
@@ -2974,6 +3002,143 @@ attach fn zig_name(this: bind&, name: str) -> std::string {
         n.push('_');
     }
     return n;
+}
+
+// what a closure or a trait's fn takes or gives in Zig (ctx 0: a parameter; 1: what Zig gives
+// Volt back; 2: what Volt gives Zig back): text as []const u8 (Volt's, owned, a VoltText), a lent
+// handle or an owned one as its type, E!T as Error!T
+attach fn zig_cb_ty(this: bind&, t: u32, ctx: u8) -> std::string {
+    if (ctx == 0) {
+        val h = this.lent_handle(t);
+        if (h) {
+            return this.local(this.c.si(h).name);
+        }
+    }
+    match (this.shape_of(t) ?? shape::VOID) {
+        .VOID => { return S("void"); },
+        .STR => { return S("[]const u8"); },
+        .TEXT(x) => {
+            if (ctx == 2) {
+                return S("VoltText");
+            }
+            return S("[]const u8");
+        },
+        .HANDLE(s) => { return this.local(this.c.si(s).name); },
+        .RESULT(e, x) => { return fmt("Error!{}", this.zig_cb_ty(x, ctx)); },
+        default => { return this.zig_ty(t); },
+    }
+}
+
+// the Zig value of C argument a (of type t) Volt passes to Zig
+attach fn zig_from_c(this: bind&, t: u32, a: str) -> std::string {
+    val h = this.lent_handle(t);
+    if (h) {
+        return fmt2("{}{{ .raw = {} }}", this.local(this.c.si(h).name), S(a));
+    }
+    match (this.shape_of(t) ?? shape::VOID) {
+        .STR => { return fmt("{}.slice()", S(a)); },
+        .TEXT(x) => { return fmt("{}.slice()", S(a)); },
+        .HANDLE(s) => { return fmt2("{}{{ .raw = {} }}", this.local(this.c.si(s).name), S(a)); },
+        default => { return S(a); },
+    }
+}
+
+// the C form of Zig value r (of type t) Zig gives Volt back
+attach fn zig_give(this: bind&, t: u32, r: str) -> std::string {
+    match (this.shape_of(t) ?? shape::VOID) {
+        .STR => { return fmt("VoltStr.from({})", S(r)); },
+        .TEXT(x) => { return fmt("VoltText.give({})", S(r)); },
+        .HANDLE(s) => { return fmt("{}.raw", S(r)); },
+        .RESULT(e, x) => {
+            val rn = this.result_name(t);
+            if (x == VOID) {
+                return fmt4("if ({}) |_| {}{{ .@\"error\" = 0 }} else |e| {}{{ .@\"error\" = code_of(e) }}", S(r), copy rn, copy rn, S(""));
+            }
+            var out = fmt3("if ({}) |v| {}{{ .@\"error\" = 0, .value = {} }} ", S(r), copy rn, this.zig_give(x, "v"));
+            out.append(fmt("else |e| {}{{ .@\"error\" = code_of(e), .value = undefined }}", copy rn).as_str());
+            return out;
+        },
+        default => { return S(r); },
+    }
+}
+
+// the C argument of Zig value a (of type t) Zig passes to Volt
+attach fn zig_pass(this: bind&, t: u32, a: str) -> std::string {
+    if (this.lent_handle(t)) {
+        return fmt("{}.raw", S(a));
+    }
+    match (this.shape_of(t) ?? shape::VOID) {
+        .STR => { return fmt("VoltStr.from({})", S(a)); },
+        .TEXT(x) => { return fmt("VoltStr.from({})", S(a)); },
+        .HANDLE(s) => { return fmt("{}.raw", S(a)); },
+        default => { return S(a); },
+    }
+}
+
+// the Zig value of C result r (of type t) Volt gives Zig back from a closure or a trait's fn
+attach fn zig_took(this: bind&, t: u32, r: str) -> std::string {
+    match (this.shape_of(t) ?? shape::VOID) {
+        .STR => { return fmt("{}.slice()", S(r)); },
+        .HANDLE(s) => { return fmt2("{}{{ .raw = {} }}", this.local(this.c.si(s).name), S(r)); },
+        .RESULT(e, x) => {
+            if (x == VOID) {
+                return fmt("blk: {{\n            const q = {};\n            if (q.@\"error\" != 0) break :blk err_of(q.@\"error\");\n            break :blk {{}};\n        }}", S(r));
+            }
+            return fmt2("blk: {{\n            const q = {};\n            if (q.@\"error\" != 0) break :blk err_of(q.@\"error\");\n            break :blk {};\n        }}", S(r), this.zig_took(x, "q.value"));
+        },
+        default => { return S(r); },
+    }
+}
+
+// "a0: A, a1: B": Zig parameters of ps' callback types
+attach fn zig_cb_params(this: bind&, ps: std::vec<u32>&) -> std::string {
+    var out: std::string = {};
+    for (k) in 0..ps.len {
+        out.append(fmt2(", a{}: {}", unum(@cast<u64>(k)), this.zig_cb_ty(*ps.at(k), 0)).as_str());
+    }
+    return out;
+}
+
+// the C function Volt calls with the data u first and ps' C forms: `target` is the call's callee
+// (reaching the callable through u, with get first: its statements), called with Zig values; it
+// gives back r's C form
+attach fn zig_callback(this: bind&, name: str, get: str, target: str, first: str, ps: std::vec<u32>&, r: u32) -> std::string {
+    var cps = S("u: ?*anyopaque");
+    var args = S(first);
+    for (k) in 0..ps.len {
+        val p = *ps.at(k);
+        val a = fmt("a{}", unum(@cast<u64>(k)));
+        cps.append(fmt2(", {}: {}", copy a, this.zig_in(p)).as_str());
+        if (args.len() > 0) {
+            args.append(", ");
+        }
+        args.append(this.zig_from_c(p, a.as_str()).as_str());
+    }
+    val call = fmt2("{}({})", S(target), move args);
+    var body: std::string = {};
+    if (r == VOID) {
+        body = fmt("{};", move call);
+    } else {
+        body = fmt("return {};", this.zig_give(r, call.as_str()));
+    }
+    var out = fmt4("fn {}({}) callconv(.c) {} {{\n    {}", S(name), move cps, this.zig_out(r), S(get));
+    out.append(fmt("    {}\n}}\n", move body).as_str());
+    return out;
+}
+
+// Zig calling into Volt: call (a C function, an expression) with self first and Zig values a0..
+// of ps, as a statement returning r's Zig value
+attach fn zig_call_out(this: bind&, call: str, self: str, ps: std::vec<u32>&, r: u32) -> std::string {
+    var args = S(self);
+    for (k) in 0..ps.len {
+        args.append(", ");
+        args.append(this.zig_pass(*ps.at(k), fmt("a{}", unum(@cast<u64>(k))).as_str()).as_str());
+    }
+    val c = fmt2("{}({})", S(call), move args);
+    if (r == VOID) {
+        return fmt("{};", move c);
+    }
+    return fmt("return {};", this.zig_took(r, c.as_str()));
 }
 
 attach fn zig_param(this: bind&, t: u32, name0: str, ty: std::string&, arg: std::string&, pre: std::string&) -> void {
@@ -2990,6 +3155,27 @@ attach fn zig_param(this: bind&, t: u32, name0: str, ty: std::string&, arg: std:
             ty.append(fmt("{}: []const u8", S(name)).as_str());
             arg.append(fmt("VoltStr.from({})", S(name)).as_str());
         },
+        .TEXT(x) => {
+            // owned text in: Volt copies it
+            ty.append(fmt("{}: []const u8", S(name)).as_str());
+            arg.append(fmt("VoltStr.from({})", S(name)).as_str());
+        },
+        .HANDLE(s) => {
+            // given to Volt, which frees it (don't deinit it after)
+            ty.append(fmt2("{}: {}", S(name), this.local(this.c.si(s).name)).as_str());
+            arg.append(fmt("{}.raw", S(name)).as_str());
+        },
+        .TRAIT(i) => {
+            val tr = this.short(this.trait_of(t));
+            ty.append(fmt("{}: anytype", S(name)).as_str());
+            if (this.is_ref(t)) {
+                // a pointer to any type with the trait's fns, lent for the call
+                arg.append(fmt2("{}_lend({})", copy tr, S(name)).as_str());
+            } else {
+                // a value of any type with the trait's fns, given: Volt deinits and frees it
+                arg.append(fmt2("{}_give({})", copy tr, S(name)).as_str());
+            }
+        },
         .SLICE(x) => {
             ty.append(fmt2("{}: []{}", S(name), this.zig_ty(x)).as_str());
             arg.append(fmt2("VoltSlice({}).from({})", this.zig_ty(x), S(name)).as_str());
@@ -2999,25 +3185,19 @@ attach fn zig_param(this: bind&, t: u32, name0: str, ty: std::string&, arg: std:
             arg.append(fmt2("VoltOpt({}).from({})", this.zig_ty(x), S(name)).as_str());
         },
         .CLOSURE(i) => {
-            match (*this.c.t.get(t)) {
-                .FN_VAL(ps&, r) => {
-                    // context is passed to f with each call: f(context, args...)
-                    var fps = fmt("@TypeOf({}_context)", S(name));
-                    var cps = S("u: ?*anyopaque");
-                    var cargs = fmt("ctx.*", S(""));
-                    for (k) in 0..ps.len {
-                        fps.append(", ");
-                        fps.append(this.zig_ty(*ps.at(k)).as_str());
-                        cps.append(fmt2(", a{}: {}", unum(@cast<u64>(k)), this.zig_ty(*ps.at(k))).as_str());
-                        cargs.append(fmt(", a{}", unum(@cast<u64>(k))).as_str());
-                    }
-                    ty.append(fmt4("{}_context: anytype, comptime {}: fn ({}) {}", S(name), S(name), move fps, this.zig_ty(r)).as_str());
-                    pre.append(fmt4("    const {}_call = struct {{\n        fn call({}) callconv(.c) {} {{\n            const ctx: *const @TypeOf({}_context) = @ptrCast(@alignCast(u));\n", S(name), move cps, this.zig_ty(r), S(name)).as_str());
-                    pre.append(fmt2("            return {}({});\n        }}\n    }};\n", S(name), move cargs).as_str());
-                    arg.append(fmt2("{}_call.call, @ptrCast(@constCast(&{}_context))", S(name), S(name)).as_str());
-                },
-                default => {},
+            // context is passed to f with each call: f(context, args...)
+            var ps: std::vec<u32> = {};
+            val r = this.fn_parts(t, &ps);
+            var fps = fmt("@TypeOf({}_context)", S(name));
+            for (k) in 0..ps.len {
+                fps.append(", ");
+                fps.append(this.zig_cb_ty(*ps.at(k), 0).as_str());
             }
+            ty.append(fmt4("{}_context: anytype, comptime {}: fn ({}) {}", S(name), S(name), move fps, this.zig_cb_ty(r, 1)).as_str());
+            val get = fmt2("const ctx: *const @TypeOf({}_context) = @ptrCast(@alignCast(u));\n{}", S(name), S("    "));
+            val cb = this.zig_callback("call", get.as_str(), name, "ctx.*", &ps, r);
+            pre.append(fmt2("    const {}_call = struct {{\n{}    }};\n", S(name), indent_n(cb.as_str(), 8)).as_str());
+            arg.append(fmt2("{}_call.call, @ptrCast(@constCast(&{}_context))", S(name), S(name)).as_str());
         },
         default => {
             ty.append(fmt2("{}: {}", S(name), this.zig_ty(t)).as_str());
@@ -3032,6 +3212,8 @@ attach fn zig_ret(this: bind&, t: u32) -> std::string {
         .HANDLE(s) => { return this.local(this.c.si(s).name); },
         .OPT(x) => { return fmt("?{}", this.zig_ty(x)); },
         .RESULT(e, x) => { return fmt("Error!{}", this.zig_ret(x)); },
+        .TRAIT(i) => { return fmt("volt_{}", this.short(this.trait_of(t))); },
+        .CLOSURE(i) => { return fmt("fn{}", unum(@cast<u64>(i))); },
         default => { return this.zig_ty(t); },
     }
 }
@@ -3041,6 +3223,8 @@ attach fn zig_value(this: bind&, t: u32, r: str) -> std::string {
         .STR => { return fmt("{}.slice()", S(r)); },
         .HANDLE(s) => { return fmt2("{}{{ .raw = {} }}", this.local(this.c.si(s).name), S(r)); },
         .OPT(x) => { return fmt("{}.get()", S(r)); },
+        .TRAIT(i) => { return fmt2("volt_{}{{ .o = {} }}", this.short(this.trait_of(t)), S(r)); },
+        .CLOSURE(i) => { return fmt2("fn{}{{ .c = {} }}", unum(@cast<u64>(i)), S(r)); },
         default => { return S(r); },
     }
 }
@@ -3067,16 +3251,57 @@ attach fn zig_body(this: bind&, f: u32, args: std::string, pre: std::string) -> 
     return out;
 }
 
+// trait K in Zig: any type with its fns passes where Volt takes one (T_lend a pointer, T_give a
+// value Volt deinits and frees); the table is made per type at comptime; volt_T is one Volt made
+attach fn zig_trait(this: bind&, k: u32, out: std::string&) -> void {
+    val t = *this.traits.at(k);
+    val tr = this.short(t);
+    val fns = this.fns_of(t);
+    var names: std::string = {};
+    for (f&) in fns.items() {
+        if (names.len() > 0) {
+            names.append(", ");
+        }
+        names.append(f.name);
+    }
+    out.append(fmt4("\n/// trait {}: any type with its fns ({}) passes where Volt takes one: lent ({}_lend(&x)),\n", this.c.ty_name(t), move names, copy tr, S("")).as_str());
+    out.append(fmt2("/// or given ({}_give(x): Volt calls its deinit, if it has one, and frees it); one Volt gives\n/// back is a volt_{}\n", copy tr, copy tr).as_str());
+    out.append(fmt3("pub fn {}_table(comptime T: type) *const {}_vt {{\n    const t = struct {{\n", copy tr, copy tr, S("")).as_str());
+    var table: std::string = {};
+    for (f&) in fns.items() {
+        val cb = this.zig_callback(f.name, "const o: *T = @ptrCast(@alignCast(u));\n    ", fmt("o.{}", S(f.name)).as_str(), "", &f.params, f.ret);
+        out.append(indent_n(cb.as_str(), 8).as_str());
+        table.append(fmt2(" .{} = {},", S(f.name), S(f.name)).as_str());
+    }
+    out.append(fmt2("        const vt = {}_vt{{{} }};\n    }};\n    return &t.vt;\n}}\n", copy tr, move table).as_str());
+    out.append(fmt4("\npub fn {}_lend(o: anytype) {}_obj {{\n    return .{{ .vt = {}_table(@TypeOf(o.*)), .self = o, .drop = null }};\n}}\n", copy tr, copy tr, copy tr, S("")).as_str());
+    out.append(fmt2("\npub fn {}_give(v: anytype) {}_obj {{\n    const T = @TypeOf(v);\n    const p = std.heap.c_allocator.create(T) catch @panic(\"out of memory\");\n    p.* = v;\n", copy tr, copy tr).as_str());
+    out.append("    const d = struct {\n        fn drop(u: ?*anyopaque) callconv(.c) void {\n            const q: *T = @ptrCast(@alignCast(u));\n            if (@hasDecl(T, \"deinit\")) q.deinit();\n            std.heap.c_allocator.destroy(q);\n        }\n    };\n");
+    out.append(fmt("    return .{{ .vt = {}_table(T), .self = p, .drop = d.drop }};\n}}\n", copy tr).as_str());
+    // one Volt made
+    out.append(fmt4("\n/// a {} Volt gave out: calls Volt's; deinit() frees it\npub const volt_{} = struct {{\n    o: {}_obj,\n{}", copy tr, copy tr, copy tr, S("")).as_str());
+    for (f&) in fns.items() {
+        var ret = S("void");
+        if (f.ret != VOID) {
+            ret = this.zig_cb_ty(f.ret, 2);
+        }
+        out.append(fmt4("\n    pub fn {}(self: *volt_{}{}) {} {{\n", S(f.name), copy tr, this.zig_cb_params(&f.params), move ret).as_str());
+        out.append(fmt("        {}\n    }\n", this.zig_call_out(fmt("self.o.vt.{}", S(f.name)).as_str(), "self.o.self", &f.params, f.ret)).as_str());
+    }
+    out.append(fmt("\n    pub fn deinit(self: *volt_{}) void {{\n        if (self.o.drop) |d| d(self.o.self);\n    }}\n}};\n", copy tr).as_str());
+}
+
 attach fn zig_text(this: bind&) -> std::string {
     val ents = this.entries();
     var out: std::string = {};
     out.append(fmt("// {}: generated by voltc bindings; the Volt package for Zig. Struct raw has the C\n", S(this.pkg)).as_str());
     out.append("// functions; the functions and types here wrap them (errors come back as Error).\nconst std = @import(\"std\");\n");
-    if (this.uses_str) {
+    if (this.uses_str || this.texts.len > 0) {
         out.append("\n/// a Volt str: bytes and a length (no terminator)\npub const VoltStr = extern struct {\n    ptr: [*]const u8,\n    len: usize,\n    pub fn from(s: []const u8) VoltStr {\n        return .{ .ptr = s.ptr, .len = s.len };\n    }\n    pub fn slice(self: VoltStr) []const u8 {\n        return self.ptr[0..self.len];\n    }\n};\n");
     }
     if (this.texts.len > 0) {
-        out.append("\n/// owned text a Volt function gave out: bytes(), then deinit() to free it\npub const VoltText = extern struct {\n    ptr: [*]const u8,\n    len: usize,\n    owner: ?*anyopaque,\n    drop: ?*const fn (?*anyopaque) callconv(.c) void,\n    pub fn bytes(self: VoltText) []const u8 {\n        return self.ptr[0..self.len];\n    }\n    pub fn deinit(self: VoltText) void {\n        if (self.drop) |d| d(self.owner);\n    }\n};\n");
+        out.append("\n/// owned text a Volt function gave out: bytes(), then deinit() to free it\npub const VoltText = extern struct {\n    ptr: [*]const u8,\n    len: usize,\n    owner: ?*anyopaque,\n    drop: ?*const fn (?*anyopaque) callconv(.c) void,\n    pub fn bytes(self: VoltText) []const u8 {\n        return self.ptr[0..self.len];\n    }\n    pub fn deinit(self: VoltText) void {\n        if (self.drop) |d| d(self.owner);\n    }\n");
+        out.append("    /// text Zig gives Volt (a callback's result): a copy, which Volt frees (a VoltText goes as it is)\n    pub fn give(v: anytype) VoltText {\n        if (@TypeOf(v) == VoltText) return v;\n        const Owned = struct { b: []u8 };\n        const o = std.heap.c_allocator.create(Owned) catch @panic(\"out of memory\");\n        o.b = std.heap.c_allocator.dupe(u8, v) catch @panic(\"out of memory\");\n        const d = struct {\n            fn drop(p: ?*anyopaque) callconv(.c) void {\n                const q: *Owned = @ptrCast(@alignCast(p));\n                std.heap.c_allocator.free(q.b);\n                std.heap.c_allocator.destroy(q);\n            }\n        };\n        return .{ .ptr = o.b.ptr, .len = o.b.len, .owner = o, .drop = d.drop };\n    }\n};\n");
     }
     if (this.slices.len > 0) {
         out.append("\n/// a Volt slice: elements and how many\npub fn VoltSlice(comptime T: type) type {\n    return extern struct {\n        ptr: [*]T,\n        len: usize,\n        pub fn from(s: []T) @This() {\n            return .{ .ptr = s.ptr, .len = s.len };\n        }\n    };\n}\n");
@@ -3115,7 +3340,11 @@ attach fn zig_text(this: bind&) -> std::string {
         for (c&) in codes.items() {
             out.append(fmt2("        {} => error.{},\n", num(c.code), S(c.name)).as_str());
         }
-        out.append("        else => error.Unknown,\n    };\n}\n");
+        out.append("        else => error.Unknown,\n    };\n}\n\n/// an error's code, for Volt (a callback's error)\npub fn code_of(e: Error) u32 {\n    return switch (e) {\n");
+        for (c&) in codes.items() {
+            out.append(fmt2("        error.{} => {},\n", S(c.name), num(c.code)).as_str());
+        }
+        out.append("        error.Unknown => 0xffffffff,\n    };\n}\n");
     }
     for (s&) in this.structs.items() {
         val info = this.c.si(*s);
@@ -3130,12 +3359,52 @@ attach fn zig_text(this: bind&) -> std::string {
             .ERR_UNION(e, x) => {
                 out.append(fmt2("\n/// {}: error is 0, or the error's code\npub const {} = extern struct {{\n    @\"error\": u32,\n", this.c.ty_name(*rt), this.result_name(*rt)).as_str());
                 if (x != VOID) {
-                    out.append(fmt("    value: {},\n", this.zig_ty(x)).as_str());
+                    out.append(fmt("    value: {},\n", this.zig_out(x)).as_str());
                 }
                 out.append("};\n");
             },
             default => {},
         }
+    }
+    // a closure Volt gives out: the C struct, and fnN, which calls it (call) and frees it (deinit)
+    for (i) in 0..this.closures.len {
+        if (!has_u32(&this.closures_out, @cast<u32>(i))) {
+            continue;
+        }
+        val ct = *this.closures.at(i);
+        val ki = unum(@cast<u64>(i));
+        out.append(fmt3("\n/// {}, given out by Volt: call(self, ...) calls it, drop(self) frees it\npub const closure{} = extern struct {{\n    call: {},\n", this.c.ty_name(ct), copy ki, this.zig_fn_ty(ct, true)).as_str());
+        out.append("    self: ?*anyopaque,\n    drop: ?*const fn (?*anyopaque) callconv(.c) void,\n};\n");
+        var ps: std::vec<u32> = {};
+        val r = this.fn_parts(ct, &ps);
+        var ret = S("void");
+        if (r != VOID) {
+            ret = this.zig_cb_ty(r, 2);
+        }
+        out.append(fmt3("\n/// {}, Volt's: call(...) calls it; deinit() frees it\npub const fn{} = struct {{\n    c: closure{},\n", this.c.ty_name(ct), copy ki, copy ki).as_str());
+        out.append(fmt4("\n    pub fn call(self: fn{}{}) {} {{\n        {}\n    }}\n", copy ki, this.zig_cb_params(&ps), move ret, this.zig_call_out("self.c.call", "self.c.self", &ps, r)).as_str());
+        out.append(fmt("\n    pub fn deinit(self: fn{}) void {{\n        if (self.c.drop) |d| d(self.c.self);\n    }}\n}};\n", copy ki).as_str());
+    }
+    // a trait's object (its fns' table and the object; drop: null when it's lent) and table
+    for (t&) in this.traits.items() {
+        val tr = this.short(*t);
+        out.append(fmt4("\n/// trait {}: a table of its fns and the object they're called on; drop frees the object\n/// (null: it's lent)\npub const {}_obj = extern struct {{\n    vt: *const {}_vt,\n{}", this.c.ty_name(*t), copy tr, copy tr, S("")).as_str());
+        out.append("    self: ?*anyopaque,\n    drop: ?*const fn (?*anyopaque) callconv(.c) void,\n};\n");
+        out.append(fmt2("\n/// trait {}'s fns, each taking the object first\npub const {}_vt = extern struct {{\n", this.c.ty_name(*t), copy tr).as_str());
+        for (f&) in this.fns_of(*t).items() {
+            var s = S("*const fn (?*anyopaque");
+            for (p&) in f.params.items() {
+                s.append(", ");
+                s.append(this.zig_in(*p).as_str());
+            }
+            s.append(") callconv(.c) ");
+            s.append(this.zig_out(f.ret).as_str());
+            out.append(fmt2("    {}: {},\n", S(f.name), move s).as_str());
+        }
+        out.append("};\n");
+    }
+    for (k) in 0..this.traits.len {
+        this.zig_trait(@cast<u32>(k), &out);
     }
     out.append("\n/// the C functions (the wrappers below are easier to use)\npub const raw = struct {\n");
     for (s&) in this.handles.items() {
@@ -3153,18 +3422,18 @@ attach fn zig_text(this: bind&) -> std::string {
             if (args.len() > 0) {
                 args.append(", ");
             }
-            args.append(fmt2("{}: {}", S(p.name), this.zig_ty(p.ty)).as_str());
+            args.append(fmt2("{}: {}", S(p.name), this.zig_in(p.ty)).as_str());
             match (this.shape_of(p.ty) ?? shape::VOID) {
                 .CLOSURE(i) => { args.append(fmt(", {}_user: ?*anyopaque", S(p.name)).as_str()); },
                 default => {},
             }
         }
-        out.append(fmt3("    pub extern fn {}({}) {};\n", copy e.name, move args, this.zig_ty(f.ret)).as_str());
+        out.append(fmt3("    pub extern fn {}({}) {};\n", copy e.name, move args, this.zig_out(f.ret)).as_str());
     }
     out.append("};\n");
     for (s&) in this.handles.items() {
         val cls = this.local(this.c.si(*s).name);
-        out.append(fmt4("\n/// export struct {}: owns a handle; deinit() frees it\npub const {} = struct {{\n    raw: *raw.{},\n\n    pub fn deinit(self: {}) void {{\n", S(this.c.si(*s).name), copy cls, copy cls, copy cls).as_str());
+        out.append(fmt4("\n/// export struct {}: owns a handle; deinit() frees it (one Volt lends, or one given to Volt,\n/// isn't yours to deinit)\npub const {} = struct {{\n    raw: *raw.{},\n\n    pub fn deinit(self: {}) void {{\n", S(this.c.si(*s).name), copy cls, copy cls, copy cls).as_str());
         out.append(fmt("        raw.{}(self.raw);\n    }\n", this.free_name(*s)).as_str());
         for (e&) in ents.items() {
             if (e.free_of != null) {
@@ -3287,7 +3556,7 @@ attach fn py_ty(this: bind&, t: u32) -> std::string {
         .HANDLE(s) => { return S("ctypes.c_void_p"); },
         .TEXT(x) => { return S("VoltText"); },
         .CLOSURE(i) => { return this.py_fn_ty(t, true); },
-        .TRAIT(i) => { return S("void"); }, // only C, C++ and Rust take traits (bind.wide)
+        .TRAIT(i) => { return S("void"); }, // only C, C++, Rust and Zig take traits (bind.wide)
     }
 }
 
@@ -3897,7 +4166,7 @@ attach fn pyi_ty(this: bind&, t: u32, incoming: bool) -> std::string {
                 default => { return S("Callable[..., Any]"); },
             }
         },
-        .TRAIT(i) => { return S("void"); }, // only C, C++ and Rust take traits (bind.wide)
+        .TRAIT(i) => { return S("void"); }, // only C, C++, Rust and Zig take traits (bind.wide)
     }
 }
 
@@ -4094,7 +4363,7 @@ attach fn cs_raw(this: bind&, t: u32) -> std::string {
         .OPT(x) => { return this.made_name("opt", x, true); },
         .FN(i) => { return S("IntPtr"); },
         .CLOSURE(i) => { return this.cs_fnptr(t); },
-        .TRAIT(i) => { return S("void"); }, // only C, C++ and Rust take traits (bind.wide)
+        .TRAIT(i) => { return S("void"); }, // only C, C++, Rust and Zig take traits (bind.wide)
     }
 }
 
@@ -7241,7 +7510,7 @@ attach fn dart_native(this: bind&, t: u32) -> std::string {
         .OPT(x) => { return this.made_name("opt", x, true); },
         .FN(i) => { return S("Pointer<Void>"); },
         .CLOSURE(i) => { return fmt("Pointer<NativeFunction<{}>>", this.dart_cb_sig(t, true)); },
-        .TRAIT(i) => { return S("void"); }, // only C, C++ and Rust take traits (bind.wide)
+        .TRAIT(i) => { return S("void"); }, // only C, C++, Rust and Zig take traits (bind.wide)
     }
 }
 
@@ -9512,7 +9781,7 @@ attach fn rb_text(this: bind&) -> compile_error!std::string {
 // the bindings of package pkg in lang (see the top of the file; node, js and ts are a Node-API
 // addon, its loader and its types; json is the model itself)
 attach fn bindings(this: checker&, pkg: str, lang: str) -> compile_error!std::string {
-    var b: bind = { c: this, pkg: pkg, wide: lang == "c" || lang == "cpp" || lang == "rust" || lang == "json" };
+    var b: bind = { c: this, pkg: pkg, wide: lang == "c" || lang == "cpp" || lang == "rust" || lang == "zig" || lang == "json" };
     val fns = b.exports();
     if (fns.len == 0) {
         return fail(NO_SPAN, fmt("package {} has no export fns to make bindings for", S(pkg)));

@@ -45,6 +45,9 @@ pub enum Ty {
     SelfTy,
     /// a Zig std.mem.Allocator parameter: the shim passes one, the Volt function has none
     Alloc,
+    /// a Zig comptime parameter (by name; an instance's, by its argument as Zig spells it): the
+    /// shim passes it, the Volt function has none (it's the generic's parameter)
+    Comptime(String),
     /// a generic function's type parameter (each instance has a type in its place)
     Generic(String),
     /// a closure: its parameters, result, how it's passed (in) or held (out), and whether it can
@@ -296,6 +299,10 @@ pub trait Lang {
     /// `name` (once: slot keeps it)
     fn loader(&self, _g: &Gen) -> Option<String> {
         None
+    }
+    /// Volt source the shim calls by its C name (in the shim namespace)
+    fn volt_glue(&self, _g: &Gen) -> String {
+        String::new()
     }
 }
 
@@ -843,8 +850,8 @@ impl<'a> Gen<'a> {
             let t = t.clone().map(|t| self.resolve(t, self_ty)).ok_or(format!("{what} (parameter {n}'s type)"))?;
             let a = format!("a{i}");
             let shim = lang.param(self, &t, &a).ok_or(format!("{what} (parameter {n}'s type)"))?;
-            if t == Ty::Alloc {
-                owned = true;
+            if matches!(t, Ty::Alloc | Ty::Comptime(_)) {
+                owned |= t == Ty::Alloc;
                 params.push((shim, None));
                 continue;
             }
@@ -1569,6 +1576,9 @@ impl<'a> Gen<'a> {
         }
         for (n, t) in &s.params {
             let t = t.clone().map(|t| self.resolve(t, self_ty)).ok_or_else(unnamed)?;
+            if matches!(t, Ty::Alloc | Ty::Comptime(_)) {
+                continue;
+            }
             ps.push(format!("{}: {}", Self::param_name(n), self.generic_ty(&t, false).ok_or_else(unnamed)?));
         }
         let ret = s.ret.clone().map(|t| self.resolve(t, self_ty)).ok_or_else(unnamed)?;
@@ -1579,7 +1589,7 @@ impl<'a> Gen<'a> {
         }
         path.push(s.name.clone());
         let path = path.join("::");
-        let tps: Vec<String> = s.generics.iter().map(|g| format!("{g}: type")).collect();
+        let tps: Vec<String> = s.generics.iter().map(|g| generic_param(g)).collect();
         let kw = if self_ty.is_some() { "attach fn" } else { "fn" };
         let mut f = String::new();
         if !s.src.is_empty() {
@@ -1683,7 +1693,7 @@ impl<'a> Gen<'a> {
                 // a type per instance a program names (TYPE__ARGS, made as voltc asks for it)
                 let mut path = t.module.clone();
                 path.push(t.name.clone());
-                let tps: Vec<String> = t.params.iter().map(|g| format!("{g}: type")).collect();
+                let tps: Vec<String> = t.params.iter().map(|g| generic_param(g)).collect();
                 let d = format!("// {}: {} (generic: a type per instance a program names)\n<{}>\n@attributes([@rust_generic(\"{}\")])\nstruct {} {{\n}}\n", self.lang.name(), t.name, tps.join(", "), path.join("::"), volt_name(&t.name));
                 self.modules.entry(t.module.clone()).or_default().push_str(&format!("\n{d}"));
             }
@@ -1737,6 +1747,7 @@ impl<'a> Gen<'a> {
             let _ = write!(helpers, "    // stops the program at a {} panic, with its message\n    fn panicked(p: u8*, n: usize) -> void {{\n        val m = take(p, n);\n        @panic(m.as_str());\n    }}\n", self.lang.name());
         }
         helpers.push_str(&self.helpers);
+        helpers.push_str(&self.lang.volt_glue(&self));
         if let Some(l) = self.lang.loader(&self) {
             helpers.push_str(&l);
         }
@@ -1771,6 +1782,92 @@ mod tests {
         assert_eq!(n("1.5"), Some(("1.5".into(), true)));
         assert_eq!(n("-2.25f64"), Some(("-2.25".into(), true)));
         assert_eq!(n("1 + 2"), None);
+    }
+}
+
+/// a generic's parameter as Volt declares it: a type (T), or a value of a type (N: usize)
+fn generic_param(g: &str) -> String {
+    if g.contains(':') { g.to_string() } else { format!("{g}: type") }
+}
+
+/// a Volt type name as an identifier: std::vec<i32> is std_vec_i32 (voltc's ident_of)
+pub fn ident(s: &str) -> String {
+    let mut out = String::new();
+    for c in s.chars() {
+        if c.is_ascii_alphanumeric() || c == '_' {
+            out.push(c);
+        } else if !out.is_empty() && !out.ends_with('_') {
+            out.push('_');
+        }
+    }
+    out.trim_end_matches('_').to_string()
+}
+
+/// the type a Volt type name stands for in the crate (alias:: names one of its types)
+pub fn volt_ty(v: &str, alias: &str, types: &BTreeMap<String, Vec<String>>) -> Option<Ty> {
+    let v = v.trim();
+    if let Some(inner) = v.strip_suffix('?') {
+        return Some(Ty::Opt(Box::new(volt_ty(inner, alias, types)?)));
+    }
+    if let Some(p) = prim(v) {
+        return Some(Ty::Prim(p));
+    }
+    if let Some(e) = v.strip_suffix("[..]") {
+        return Some(Ty::Slice(Box::new(volt_ty(e, alias, types)?), false));
+    }
+    if v == "str" {
+        return Some(Ty::Str);
+    }
+    if v == "std::string" || v.starts_with("std::string<") {
+        return Some(Ty::String);
+    }
+    if let Some(inner) = v.strip_prefix("std::vec<").and_then(|x| x.strip_suffix('>')) {
+        // std::vec<T, A>: its allocator isn't Rust's business
+        let mut depth = 0;
+        let end = inner.char_indices().find(|&(_, c)| {
+            match c {
+                '<' => depth += 1,
+                '>' => depth -= 1,
+                _ => {}
+            }
+            c == ',' && depth == 0
+        });
+        let elem = &inner[..end.map_or(inner.len(), |(i, _)| i)];
+        return Some(Ty::Vec(Box::new(volt_ty(elem, alias, types)?)));
+    }
+    let local = v.strip_prefix(alias)?.strip_prefix("::")?;
+    let segs: Vec<&str> = local.split("::").collect();
+    let (name, module) = segs.split_last()?;
+    let tm = types.get(*name)?;
+    (tm.iter().map(|m| volt_name(m)).collect::<Vec<_>>() == module.iter().map(|m| m.to_string()).collect::<Vec<_>>()).then(|| Ty::Named(name.to_string()))
+}
+
+/// t with its type parameters replaced (and a generic type, "type NAME", by its instance)
+pub fn substitute(t: &Ty, s: &BTreeMap<String, Ty>) -> Ty {
+    match t {
+        Ty::Generic(g) => s.get(g).cloned().unwrap_or_else(|| t.clone()),
+        Ty::Named(n) => s.get(&format!("type {n}")).cloned().unwrap_or_else(|| t.clone()),
+        // a Zig comptime parameter: the instance's argument, as Zig spells it ("comptime NAME")
+        Ty::Comptime(g) => s.get(&format!("comptime {g}")).cloned().unwrap_or_else(|| t.clone()),
+        Ty::Slice(e, m) => Ty::Slice(Box::new(substitute(e, s)), *m),
+        Ty::Vec(e) => Ty::Vec(Box::new(substitute(e, s))),
+        Ty::Opt(e) => Ty::Opt(Box::new(substitute(e, s))),
+        Ty::Res(e) => Ty::Res(Box::new(substitute(e, s))),
+        Ty::Fails(e, x) => Ty::Fails(Box::new(substitute(e, s)), x.clone()),
+        Ty::Future(e) => Ty::Future(Box::new(substitute(e, s))),
+        // a closure parameter's type stands for the closure itself
+        Ty::Fn(ps, r, p, once) => Ty::Fn(ps.iter().map(|x| substitute(x, s)).collect(), Box::new(substitute(r, s)), *p, *once),
+        // &T of text is str and of a Vec a slice, as the reader maps them; of a number it stays a
+        // reference (the generic's Volt side takes T&)
+        Ty::Ref(e, m) => match (substitute(e, s), *m) {
+            (Ty::String | Ty::Str, false) => Ty::Str,
+            // &F of a closure type: the closure, lent (and &S of a trait's type, its value)
+            (Ty::Fn(ps, r, _, o), m) => Ty::Fn(ps, r, if m { FnPass::MutRef } else { FnPass::Ref }, o),
+            (Ty::Dyn(tr, _), m) => Ty::Dyn(tr, if m { FnPass::MutRef } else { FnPass::Ref }),
+            (Ty::Vec(x), m) => Ty::Slice(x, m),
+            (x, m) => Ty::Ref(Box::new(x), m),
+        },
+        _ => t.clone(),
     }
 }
 

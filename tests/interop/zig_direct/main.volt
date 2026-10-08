@@ -69,6 +69,24 @@ fn run() -> fm::zig_error!void {
     var k2 = copy k;
     k2.tick();
     std::println("ticks {} {}", k.tick(), k2.tick());
+
+    // generics: comptime types, anytype, a comptime number and fns making types, each instance
+    // built by zig as the program uses it
+    val ws: i32[3] = { 4, 9, 2 };
+    val fs: f64[2] = { 0.5, 2.5 };
+    std::println("largest {} {}", fm::largest(ws[..]), fm::largest<f64>(fs[..]));
+    std::println("bigger {} {} times {} scaled {} {}", fm::biggerOf(3, 8), fm::biggerOf(2.5, 1.5), fm::times<3>(7), fm::scaled<4>(5), fm::scaled<-2>(5));
+    val pr: fm::Pair<i32> = { a: 2, b: 5 };
+    std::println("pair {}", pr.sum());
+    var st = try fm::Stack<u8>::init(2);
+    val p1 = st.push(1);
+    val p2 = st.push(2);
+    val p3 = st.push(3);
+    val total = st.total();
+    std::println("stack {} {} {} total {} pop {} {} {}", p1, p2, p3, total, st.pop() ?? 0, st.pop() ?? 0, st.pop() == null);
+    var flags = try fm::Stack<bool>::init(1);
+    val pushed = flags.push(true);
+    std::println("flags {} {}", pushed, flags.pop() ?? false);
 }
 
 fn main() -> !void {

@@ -7,6 +7,8 @@
 // OUT/import.flags, what a program using them links, one flag a line. The glue is generated from
 // the other language's own declarations, so nothing there needs marking up for Volt. Nothing is
 // redone while the sources are as they were.
+use std::collections::BTreeMap;
+use std::fmt::Write;
 use std::path::{Path, PathBuf};
 
 mod dotnet;
@@ -134,5 +136,98 @@ pub fn volt_name(n: &str) -> String {
         format!("{n}_")
     } else {
         n.to_string()
+    }
+}
+
+/// builds an import with the instances of its generics programs asked for (OUT/instances: voltc
+/// appends a line per instance it needs). Those the compiler rejected (OUT/instances.failed: a
+/// line, or a line and ::method for one method of a type's instance, then the compiler's reason)
+/// stay out until the import's own inputs change (own_st); then they're tried again. `build` builds
+/// with these lines, leaving out these methods, giving the Volt side and the build's messages;
+/// `methods` names the methods of a line's type instance; `fail` words a failed build
+pub fn with_instances(r: &Req, own_st: &str, build: impl Fn(&[String], &BTreeMap<String, String>) -> Result<(String, String), String>, methods: impl Fn(&str, &BTreeMap<String, String>) -> Vec<String>, fail: impl Fn(String) -> String) -> Result<(String, String), String> {
+    let mut wanted: Vec<String> = std::fs::read_to_string(r.out.join("instances")).unwrap_or_default().lines().filter(|l| !l.trim().is_empty()).map(String::from).collect();
+    let failed_file = r.out.join("instances.failed");
+    let old_failed = std::fs::read_to_string(&failed_file).unwrap_or_default();
+    let mut failed = format!("# {}\n", own_st.replace('\n', " "));
+    let mut skip: BTreeMap<String, String> = BTreeMap::new();
+    if old_failed.lines().next() == failed.lines().next() {
+        for l in old_failed.lines().skip(1) {
+            // line\twhy, or line\t::method\twhy (the line's own fields are tab-separated too)
+            match l.split_once("\t::") {
+                Some((line, rest)) => {
+                    let (method, why) = rest.split_once('\t').unwrap_or((rest, ""));
+                    skip.insert(format!("{line}::{method}"), why.to_string());
+                }
+                None => {
+                    let line = l.rsplit_once('\t').map_or(l, |x| x.0);
+                    wanted.retain(|w| w != line);
+                }
+            }
+            if !failed.lines().any(|x| x == l) {
+                let _ = writeln!(failed, "{l}");
+            }
+        }
+    } else {
+        for l in old_failed.lines().skip(1) {
+            let line = l.split_once("\t::").map_or_else(|| l.rsplit_once('\t').map_or(l, |x| x.0), |x| x.0).to_string();
+            if !line.is_empty() && !wanted.contains(&line) {
+                wanted.push(line);
+            }
+        }
+    }
+    match build(&wanted, &skip) {
+        Ok(x) => {
+            crate::build::write_if_changed(&failed_file, &failed)?;
+            Ok(x)
+        }
+        Err(e) if wanted.is_empty() => Err(fail(e)),
+        Err(_) => {
+            // an instance the compiler rejects (types that don't meet a bound) is left out, with its
+            // reason (voltc reports it at the call); of a type's instance, only the methods it
+            // rejects (each impl block has its own bounds)
+            // (rustc's error[..]: line, or zig's file:line:col: error: line, past its place); a
+            // failure without one (the compiler didn't run) is no instance's, and stops the build
+            let why = |e: &str| e.lines().find(|x| x.starts_with("error") || x.contains(": error: ")).map(|x| x.split_once(": error: ").map_or(x, |p| p.1).trim().to_string());
+            let mut good: Vec<String> = Vec::new();
+            for l in &wanted {
+                let mut with = good.clone();
+                with.push(l.clone());
+                let Err(e) = build(&with, &skip) else {
+                    good = with;
+                    continue;
+                };
+                let Some(w) = why(&e) else { return Err(fail(e)) };
+                let methods = methods(l, &skip);
+                let mut bare = skip.clone();
+                for m in &methods {
+                    bare.entry(format!("{l}::{m}")).or_insert_with(|| "left out while its type was tried".into());
+                }
+                if methods.is_empty() || build(&with, &bare).is_err() {
+                    let _ = writeln!(failed, "{l}\t{w}");
+                    continue;
+                }
+                good = with;
+                for m in &methods {
+                    let key = format!("{l}::{m}");
+                    if skip.contains_key(&key) {
+                        continue;
+                    }
+                    bare.remove(&key);
+                    if let Err(e) = build(&good, &bare) {
+                        let Some(w) = why(&e) else { return Err(fail(e)) };
+                        let entry = format!("{l}\t::{m}\t{w}");
+                        if !failed.lines().any(|x| x == entry) {
+                            let _ = writeln!(failed, "{entry}");
+                        }
+                        bare.insert(key.clone(), w.clone());
+                        skip.insert(key, w);
+                    }
+                }
+            }
+            crate::build::write_if_changed(&r.out.join("instances"), &good.iter().map(|l| format!("{l}\n")).collect::<String>())?;
+            crate::build::write_if_changed(&failed_file, &failed)?;
+            build(&good, &skip).map_err(fail)
+        }
     }
 }

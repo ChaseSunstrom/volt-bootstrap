@@ -362,7 +362,7 @@ fn bindings_round_trip() {
     // both: see bindings_shapes)
     for (src, lang, want) in [
         ("export struct thing { n: i32; }\nexport fn bad_in(t: thing) -> i32 { return t.n; }\n", "python", "only take as a result"),
-        ("fn twice(x: i32) -> i32 { return x * 2; }\nexport fn bad_out() -> fn(i32) -> i32 { return twice; }\n", "zig", "only take closures as parameters"),
+        ("fn twice(x: i32) -> i32 { return x * 2; }\nexport fn bad_out() -> fn(i32) -> i32 { return twice; }\n", "go", "only take closures as parameters"),
         // the names voltc lib adds itself
         ("export struct thing { n: i32; }\nexport fn thing_new() -> thing { return { n: 1 }; }\nexport fn thing_free(t: thing&) -> void {}\n", "c", "makes thing_free itself"),
         ("namespace __export { fn x() -> void {} }\nexport fn one() -> i32 { return 1; }\n", "c", "namespace __export"),
@@ -378,13 +378,13 @@ const SHAPES_OUT: &str = "biggest 9 1.5\naccount bea 300\nvisit 301 get 301\nclo
 
 #[test]
 fn bindings_shapes() {
-    // what C, C++ and Rust call beyond the plain shapes: a generic's instances, a struct that owns text
+    // what C, C++, Rust and Zig call beyond the plain shapes: a generic's instances, a struct that owns text
     // held by a handle with its methods, owned values passed in, a trait implemented on either side,
     // closures taking and giving text and handles, closures given back. The library is a leak-checked
     // build, and leak_report.c prints how many of its allocations are live when the client is done
     let e = Env::new("shapes");
     let pkg = "shapelib=shapelib/lib";
-    for (lang, file) in [("c", "shapelib.h"), ("cpp", "shapelib.hpp"), ("rust", "shapelib.rs")] {
+    for (lang, file) in [("c", "shapelib.h"), ("cpp", "shapelib.hpp"), ("rust", "shapelib.rs"), ("zig", "shapelib.zig")] {
         ok(e.voltc(&["bindings", "shapelib", "--pkg", pkg, "--lang", lang, "-o", &e.path(file)]), &format!("voltc bindings --lang {lang}"));
     }
     // Rust: client_shapes.rs next to its shapelib.rs module, with the leak report as an object
@@ -407,16 +407,31 @@ fn bindings_shapes() {
         let o = Command::new(&bin).output().unwrap();
         assert_eq!(String::from_utf8_lossy(&o.stderr), "volt live: 0\n", "client_shapes.rs ({backend}): the library's allocations at exit");
         assert_eq!(ok(o, "client_shapes.rs"), format!("checked true OVERDRAWN\nlimit true OVERDRAWN\nsign positive not positive\n{SHAPES_OUT}"), "client_shapes.rs ({backend})");
+        // Zig: client_shapes.zig next to its shapelib.zig, printing to stderr (the leak report last)
+        if let Some(zig) = zig() {
+            for f in ["client_shapes.zig", "leak_report.c"] {
+                std::fs::copy(Path::new(ROOT).join("tests/interop").join(f), e.dir.join(f)).unwrap();
+            }
+            let mut target = Vec::new();
+            if cfg!(target_os = "linux") {
+                target = vec!["-target".to_string(), format!("{}-linux-gnu", std::env::consts::ARCH)];
+            }
+            let z = Command::new(zig).args(["run", "client_shapes.zig", "leak_report.c"]).args(&target).args(["-lc", "-L", &lib, "-lshapelib"]).current_dir(&e.dir).env("LD_LIBRARY_PATH", &lib).output().unwrap();
+            assert!(z.status.success(), "zig run client_shapes.zig: {}", String::from_utf8_lossy(&z.stderr));
+            assert_eq!(String::from_utf8_lossy(&z.stderr), format!("checked true OVERDRAWN\nlimit true OVERDRAWN\nsign positive not positive\n{SHAPES_OUT}volt live: 0\n"), "client_shapes.zig ({backend})");
+        } else {
+            eprintln!("zig isn't installed: skipping the Zig shapes client");
+        }
     }
     // the model has the trait, and how a fn takes its object
     let json = ok(e.voltc(&["bindings", "shapelib", "--pkg", pkg, "--lang", "json"]), "voltc bindings --lang json");
     for want in [r#"{"kind":"trait","name":"shape","c_name":"shapelib_shape","table":"shapelib_shape_vt""#, r#"{"kind":"object","trait":"shape","owned":false}"#, r#""name":"biggest_i32""#, r#""class":"account","method":"deposit""#] {
         assert!(json.contains(want), "the JSON model lacks {want}:\n{json}");
     }
-    // the other languages' bindings say what only C, C++ and Rust take
+    // the other languages' bindings say what only C, C++, Rust and Zig take
     let o = e.voltc(&["bindings", "shapelib", "--pkg", pkg, "--lang", "python"]);
     let err = String::from_utf8_lossy(&o.stderr);
-    assert!(!o.status.success() && err.contains("C, C++ and Rust"), "{err}");
+    assert!(!o.status.success() && err.contains("C, C++, Rust and Zig"), "{err}");
 }
 
 #[test]
@@ -693,16 +708,37 @@ fn zig_direct() {
     let e = Env::new("zig_direct");
     let dir = e.dir.join("zd");
     copy_dir(&Path::new(ROOT).join("tests/interop/zig_direct"), &dir);
-    let want = "dist 5 norm 5\nscaled 6 8\n42 fastmath 10 1.5\nfirst QUIET\nsum 7\ndoubled 2 4 6\nsquares 4 last 16\njoin a-b-c\nfind 2 true\nor_default 5 -1\nparse 42\nbad ERROR(InvalidCharacter)\ndiv 3\nzero ERROR(DivisionByZero)\ncolor blue green\npixel 2 green\ntwice 42\nperimeter 7 10 name tri\nside 4\nmissing ERROR(NoSuchSide)\nlongest quad\nconsumed 2\nticks 2 3\n";
+    let want = "dist 5 norm 5\nscaled 6 8\n42 fastmath 10 1.5\nfirst QUIET\nsum 7\ndoubled 2 4 6\nsquares 4 last 16\njoin a-b-c\nfind 2 true\nor_default 5 -1\nparse 42\nbad ERROR(InvalidCharacter)\ndiv 3\nzero ERROR(DivisionByZero)\ncolor blue green\npixel 2 green\ntwice 42\nperimeter 7 10 name tri\nside 4\nmissing ERROR(NoSuchSide)\nlongest quad\nconsumed 2\nticks 2 3\nlargest 9 2.5\nbigger 8 2.5 times 21 scaled 20 -10\npair 7\nstack true true false total 3 pop 2 1 true\nflags true true\n";
     let tools = |c: &mut Command| {
         c.env("VOLTC", &e.voltc).env("BOLT", env!("CARGO_BIN_EXE_bolt")).env("VOLT_CACHE", e.dir.join("cache")).env("BOLT_HOME", e.dir.join("bolthome")).env("ZIG", &zig);
     };
+    // (leak-checked: what Zig allocates is Volt's memory, so it's counted too)
     for backend in ["c", "llvm"] {
         let mut c = Command::new(&e.voltc);
-        c.args(["run", "--backend", backend, "main.volt"]).current_dir(&dir).env("VOLT_STD", Path::new(ROOT).join("std"));
+        c.args(["run", "--leak-check", "--backend", backend, "main.volt"]).current_dir(&dir).env("VOLT_STD", Path::new(ROOT).join("std"));
         tools(&mut c);
         assert_eq!(ok(c.output().unwrap(), "voltc run"), want, "voltc run ({backend})");
     }
+    // an instance zig rejects: zig's reason, at the call
+    std::fs::write(dir.join("bad.volt"), "use std::io;\nuse { \"fastmath.zig\" } as fm;\nfn main() -> void {\n    std::println(\"{}\", fm::biggerOf(\"a\", \"b\"));\n}\n").unwrap();
+    let mut c = Command::new(&e.voltc);
+    c.args(["check", "bad.volt"]).current_dir(&dir).env("VOLT_STD", Path::new(ROOT).join("std"));
+    tools(&mut c);
+    let o = c.output().unwrap();
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(!o.status.success() && err.contains("biggerOf<str>: Zig doesn't take these arguments: operator > not allowed for type '[]const u8'"), "zig's rejection: {err}");
+    std::fs::remove_file(dir.join("bad.volt")).unwrap();
+    // Stack(bool) is made without total, which zig rejects for it (the rest of its methods stay)
+    let failed: String = std::fs::read_dir(e.dir.join("cache/imports")).unwrap().filter_map(|d| std::fs::read_to_string(d.ok()?.path().join("instances.failed")).ok()).collect();
+    assert!(failed.contains("Stack\tbool\t::total\t"), "Stack(bool)'s total left out: {failed}");
+    // what Zig allocates is Volt's memory: a block it never frees is a leak the check reports
+    std::fs::write(dir.join("leak.volt"), "use { \"fastmath.zig\" } as fm;\nfn main() -> void {\n    fm::leakBytes(5);\n}\n").unwrap();
+    let mut c = Command::new(&e.voltc);
+    c.args(["run", "--leak-check", "leak.volt"]).current_dir(&dir).env("VOLT_STD", Path::new(ROOT).join("std"));
+    tools(&mut c);
+    let o = c.output().unwrap();
+    assert_eq!(o.status.code(), Some(102), "Zig's leak is Volt's: {}", String::from_utf8_lossy(&o.stderr));
+    std::fs::remove_file(dir.join("leak.volt")).unwrap();
     // each Volt fn says what it is in Zig, above it (the editor's hover shows that comment)
     let mut c = Command::new(&e.voltc);
     c.args(["check", "main.volt"]).current_dir(&dir).env("VOLT_STD", Path::new(ROOT).join("std")).env("VOLT_SHOW_IMPORT", "1");

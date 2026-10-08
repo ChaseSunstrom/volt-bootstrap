@@ -131,6 +131,11 @@ fn main() -> !void {
 
     var s = try fm::shapes::Shape::init("tri");             // owns memory: delete calls its deinit
     try s.addSide(3.0);
+
+    val xs: i32[3] = { 4, 9, 2 };
+    std::println("{}", fm::largest(xs[..]));                // 9: zig built largest(i32, ..)
+    var st = try fm::Stack<u8>::init(2);                    // fn Stack(comptime T: type) type
+    st.push(1);
 }
 ```
 
@@ -144,14 +149,19 @@ fn main() -> !void {
 | `[]const T`, `[]T`, `[]const []const u8` | `T[..]`, `str[..]` in; `std::vec<T>` out |
 | `?T` | `T?` |
 | `E!T`, `!T` | `zig_error!T`; the error's name is in `zig_error::ERROR` |
-| `std.mem.Allocator` parameter | none: the shim passes `std.heap.c_allocator`, and frees what such a function returns once Volt has copied it |
+| `std.mem.Allocator` parameter | none: the shim passes Volt's allocator (the program's `std::mem::default_allocator`, as a `std.mem.Allocator`), so what Zig allocates is Volt's memory (not the C library's `malloc`), and `--leak-check` counts it |
+| `comptime T: type`, `x: anytype` (and `@TypeOf(x)`), `comptime n: usize` | a generic fn: `<T: type>`, `<T_x: type>`, `<n: usize>` |
+| `pub fn Name(comptime T: type) type { return struct { ... }; }` | a generic struct, `Name<T>`, with its fields and methods |
 | a struct whose fields are all numbers, `bool`s, enums or such structs | a Volt struct with those fields, passed by value |
 | any other struct, or one with a `deinit` | an owned handle: deleting it calls `deinit` (with the allocator when it takes one) and frees it; `copy` copies it when it has no `deinit` |
 | an `enum` | a Volt enum with the same values |
 | `pub const` of a number, `bool` or string | a `val` |
 
-Functions with `comptime` or `anytype` parameters are left out, listed in a comment of the
-generated declarations. bolt reads `$ZIG` for the compiler, else `zig` on the PATH.
+Generic functions and types get an instance per one a program uses: a call to
+`fm::largest(xs[..])`, `fm::times<3>(7)` or a use of `fm::Stack<u8>` has bolt add that instance and
+zig build it, as with Rust's generics above. One zig rejects is an error at the call,
+with zig's reason (`fm::biggerOf("a", "b")`: operator > not allowed for type '[]const u8'). bolt
+reads `$ZIG` for the compiler, else `zig` on the PATH.
 
 ## Volt calls Go
 
@@ -357,7 +367,9 @@ and Node projects get the same from pip and npm: see
 bindings' types are in [They call Volt](/volt-bootstrap/interop/other-languages/#they-call-volt):
 `Result` for errors, `String` and `&str` for text, a type that frees itself when dropped for an
 export struct (with its methods), and the same in Zig with error unions, slices and `deinit()`.
-Rust takes [every shape](/volt-bootstrap/interop/other-languages/#c-c-and-rust-every-shape), as C
+Rust takes [every shape](/volt-bootstrap/interop/other-languages/#c-c-rust-and-zig-every-shape), as C
 and C++ do: a generic's instances (`biggest_i32`), owned values as parameters, a Volt trait as a
 Rust trait to implement (or one Volt made, as a `Box<dyn T>`), any closure (`impl FnMut`) taking
-and giving text and handles, and closures given back as `Box<dyn FnMut>`.
+and giving text and handles, and closures given back as `Box<dyn FnMut>`. So does Zig: a Volt
+trait takes any Zig value with its methods (lent as a pointer or given), callbacks are a context
+and a function, and closures come back as a struct with `call` and `deinit()`.

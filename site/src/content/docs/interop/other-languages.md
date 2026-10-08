@@ -177,29 +177,33 @@ export fn biggest(xs: T[..]) -> T {
 C and Rust call `biggest_i32` and `biggest_f64`; C++ calls `biggest`, an overload per instance
 (each keeps its C name when two take the same parameters).
 
-### C, C++ and Rust: every shape
+### C, C++, Rust and Zig: every shape
 
-C, C++ and Rust take more than the other languages (whose bindings name what they don't take):
+C, C++, Rust and Zig take more than the other languages (whose bindings name what they don't take):
 
 - **Owned values as parameters.** Text (`std::string`) comes in as a `str` that Volt copies (a
-  `&str` in Rust); a handle by value is given to the fn, which deletes it (C++'s class gives it up,
-  Rust's type is moved in).
+  `&str` in Rust, a `[]const u8` in Zig); a handle by value is given to the fn, which deletes it
+  (C++'s class gives it up, Rust's type is moved in, Zig's is given up).
 - **Traits.** A fn taking a trait (`s: shape&`, lent, or `s: shape`, which the fn takes over) takes
   any object the other language has: in C a `shapelib_shape`, a table of the trait's functions
   (each taking the object first), the object, and what frees it (null when lent). In C++ the trait
   is an abstract class to subclass, passed as `shape &` or `std::unique_ptr<shape>`; in Rust it's
-  a trait to implement, passed as `&mut dyn shape` or `Box<dyn shape>`. A Volt value of the trait
-  comes back the same way: C calls its table and its `drop`, C++ gets a `std::unique_ptr<shape>`,
-  Rust a `Box<dyn shape>` (a `volt_shape`, which frees it when dropped).
+  a trait to implement, passed as `&mut dyn shape` or `Box<dyn shape>`; in Zig it's any value with
+  the trait's methods, lent as a pointer or given by value (its `deinit` runs when Volt is done).
+  A Volt value of the trait comes back the same way: C calls its table and its `drop`, C++ gets a
+  `std::unique_ptr<shape>`, Rust a `Box<dyn shape>` (a `volt_shape`, which frees it when dropped),
+  Zig a `volt_shape` with the methods and `deinit()`.
 - **Closures taking and giving text and handles**, in callbacks and in traits' functions: text in
   is a `str` (a `std::string` in C++, a `String` in Rust), text back is owned (`volt_text`; a
-  `std::string` in C++, a `String` in Rust), a handle is the class (Rust's type), and one Volt
-  lends is a class that never frees it (in Rust a `&T`). Rust takes any closure (`impl FnMut`), and
-  an `E!T` callback gives back a `Result<T, Error>`.
+  `std::string` in C++, a `String` in Rust, `[]const u8` in Zig), a handle is the class (Rust's
+  and Zig's type), and one Volt lends is a class that never frees it (in Rust a `&T`). Rust takes
+  any closure (`impl FnMut`), Zig a context and a function, and an `E!T` callback gives back a
+  `Result<T, Error>` (Zig's `Error!T`).
 - **Closures given back.** A fn returning `fn(A) -> R` gives a struct of the function, its data and
   what frees it; in C++ a `std::function`, which frees it with its last copy; in Rust a
-  `Box<dyn FnMut(A) -> R>`, which frees it when dropped. (A Volt fn value borrows its closure, so
-  what comes back is a function or one a longer-lived value holds.)
+  `Box<dyn FnMut(A) -> R>`, which frees it when dropped; in Zig a struct with `call` and
+  `deinit()`. (A Volt fn value borrows its closure, so what comes back is a function or one a
+  longer-lived value holds.)
 
 ```volt
 use std::string;
@@ -253,6 +257,24 @@ impl shapelib::shape for Circle {
 
 let mut c = Circle { r: 1.0 };
 println!("{}", shapelib::describe(&mut c)); // circle of area 3
+```
+
+```zig
+const Circle = struct {
+    r: f64,
+    pub fn area(self: *Circle) f64 {
+        return 3 * self.r * self.r;
+    }
+    pub fn name(self: *Circle) []const u8 {
+        _ = self;
+        return "circle";
+    }
+};
+
+var c = Circle{ .r = 1 };
+const d = shapelib.describe(&c);
+defer d.deinit();
+std.debug.print("{s}\n", .{d.bytes()}); // circle of area 3
 ```
 
 An override that throws (or panics, in Rust) ends the program: Volt code doesn't unwind C++
