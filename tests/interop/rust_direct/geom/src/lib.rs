@@ -333,3 +333,155 @@ pub fn initial_of(word: &str) -> impl FnOnce() -> char {
     let c = word.chars().next().unwrap_or('?');
     move || c
 }
+
+// text out of closures: a String a Volt closure makes, and a Rust closure taking and giving one
+pub fn mark_each(words: &[&str], f: impl Fn(&str) -> String) -> String {
+    words.iter().map(|w| f(w)).collect::<Vec<_>>().join(" ")
+}
+
+pub fn greeter(greeting: String) -> impl Fn(String) -> String {
+    move |name| format!("{greeting}, {name}")
+}
+
+// keeps the closure it's given past the call (a Volt one is Rust's to drop)
+pub fn keep_boxed(f: Box<dyn Fn(i32) -> i32>) -> impl Fn(i32) -> i32 {
+    move |x| f(x) * 2
+}
+
+// traits: Rust's trait objects handed out (Box<dyn Shape>, impl Shape) as values with the trait's
+// methods; Volt's types attaching Shape passed where Rust takes &dyn Shape, &mut dyn Shape, impl
+// Shape, S: Shape or Box<dyn Shape> (kept by Rust, and dropped by it)
+pub trait Shape {
+    fn area(&self) -> f64;
+    fn name(&self) -> String;
+    fn label(&self) -> &str;
+    fn grow(&mut self, by: f64);
+    fn describe(&self) -> String {
+        format!("{} of area {}", self.name(), self.area())
+    }
+}
+
+pub struct Circle {
+    pub r: f64,
+}
+
+impl Shape for Circle {
+    fn area(&self) -> f64 {
+        3.0 * self.r * self.r
+    }
+    fn name(&self) -> String {
+        "circle".into()
+    }
+    fn label(&self) -> &str {
+        "C"
+    }
+    fn grow(&mut self, by: f64) {
+        self.r += by;
+    }
+}
+
+pub struct Square {
+    side: f64,
+}
+
+impl Square {
+    pub fn new(side: f64) -> Square {
+        Square { side }
+    }
+}
+
+// counts the squares dropped: one a Volt handle or a Rust value holds is dropped once
+static SQUARES_DROPPED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+impl Drop for Square {
+    fn drop(&mut self) {
+        SQUARES_DROPPED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+pub fn squares_dropped() -> usize {
+    SQUARES_DROPPED.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+impl Shape for Square {
+    fn area(&self) -> f64 {
+        self.side * self.side
+    }
+    fn name(&self) -> String {
+        "square".into()
+    }
+    fn label(&self) -> &str {
+        "S"
+    }
+    fn grow(&mut self, by: f64) {
+        self.side += by;
+    }
+    fn describe(&self) -> String {
+        format!("a square of side {}", self.side)
+    }
+}
+
+pub fn area_of(s: &dyn Shape) -> f64 {
+    s.area()
+}
+
+pub fn grow_twice(s: &mut dyn Shape, by: f64) {
+    s.grow(by);
+    s.grow(by);
+}
+
+pub fn describe_it(s: impl Shape) -> String {
+    format!("{} [{}]", s.describe(), s.label())
+}
+
+pub fn larger<S: Shape>(a: &S, b: &S) -> f64 {
+    a.area().max(b.area())
+}
+
+pub fn unit_square() -> Box<dyn Shape> {
+    Box::new(Square::new(1.0))
+}
+
+pub fn circle_of(r: f64) -> impl Shape {
+    Circle { r }
+}
+
+// keeps the shapes it's given (a Volt one is freed when the canvas drops it)
+pub struct Canvas {
+    shapes: Vec<Box<dyn Shape>>,
+}
+
+impl Canvas {
+    pub fn new() -> Canvas {
+        Canvas { shapes: Vec::new() }
+    }
+    pub fn add(&mut self, s: Box<dyn Shape>) {
+        self.shapes.push(s);
+    }
+    pub fn total(&self) -> f64 {
+        self.shapes.iter().map(|s| s.area()).sum()
+    }
+    pub fn names(&self) -> String {
+        self.shapes.iter().map(|s| s.name()).collect::<Vec<_>>().join(",")
+    }
+}
+
+// a trait Volt can't declare (its associated type): left out, with the reason
+pub trait Source {
+    type Item;
+    fn next_item(&mut self) -> Option<Self::Item>;
+}
+
+// bounds a Volt value doesn't meet (Clone besides Shape, Clone besides Fn): generics rustc builds
+// per instance, never a Volt trait value or closure the shim can't pass
+pub fn clone_area<S: Shape>(s: &S) -> f64
+where
+    S: Clone,
+{
+    s.clone().area()
+}
+
+pub fn call_twice<F: Fn(i32) -> i32 + Clone>(f: F) -> i32 {
+    let g = f.clone();
+    f(1) + g(2)
+}

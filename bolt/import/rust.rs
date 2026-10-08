@@ -16,7 +16,7 @@
 //   a fieldless enum -> a Volt enum; pub const of a number, bool or string -> val; pub mod -> namespace
 // Generics, traits, closures and references returned into Rust-owned data are left out, with a
 // comment in the Volt source (VOLT_SHOW_IMPORT=1 makes voltc print it).
-use super::glue::{number, prim, FnPass, Gen, Kind, Lang, Model, Recv, ShimOut, ShimParam, Sig, Ty, TypeDef, TypeInfo};
+use super::glue::{number, prim, FnPass, Gen, Kind, Lang, Model, Recv, ShimOut, ShimParam, Sig, Ty, TraitDef, TypeDef, TypeInfo};
 use super::{arg_path, fresh, save, stamp, Made, Req};
 use crate::foreign::{int_value, lex, tok_text, toks_line, Cur, Tok};
 use crate::json::Json;
@@ -464,6 +464,7 @@ fn dyn_fn(ps: &[Ty], r: &Ty, once: bool) -> Option<String> {
             Ty::Prim(x) => x.to_string(),
             Ty::Char => "char".into(),
             Ty::Str => "&str".into(),
+            Ty::String => "String".into(),
             _ => return None,
         });
     }
@@ -471,6 +472,7 @@ fn dyn_fn(ps: &[Ty], r: &Ty, once: bool) -> Option<String> {
         Ty::Unit => String::new(),
         Ty::Prim(x) => format!(" -> {x}"),
         Ty::Char => " -> char".into(),
+        Ty::String => " -> String".into(),
         _ => return None,
     };
     Some(format!("dyn {}({}){ret}", if once { "FnOnce" } else { "FnMut" }, a.join(", ")))
@@ -498,8 +500,9 @@ fn substitute(t: &Ty, s: &BTreeMap<String, Ty>) -> Ty {
         // reference (the generic's Volt side takes T&)
         Ty::Ref(e, m) => match (substitute(e, s), *m) {
             (Ty::String | Ty::Str, false) => Ty::Str,
-            // &F of a closure type: the closure, lent
+            // &F of a closure type: the closure, lent (and &S of a trait's type, its value)
             (Ty::Fn(ps, r, _, o), m) => Ty::Fn(ps, r, if m { FnPass::MutRef } else { FnPass::Ref }, o),
+            (Ty::Dyn(tr, _), m) => Ty::Dyn(tr, if m { FnPass::MutRef } else { FnPass::Ref }),
             (Ty::Vec(x), m) => Ty::Slice(x, m),
             (x, m) => Ty::Ref(Box::new(x), m),
         },
@@ -513,7 +516,12 @@ fn without(m: &mut Model, gone: &[(Vec<String>, String)]) {
     m.fns.retain(|(module, s)| !has(module, &s.name));
     m.consts.retain(|(module, name, _, _)| !has(module, name));
     let types: Vec<String> = m.types.iter().filter(|t| has(&t.module, &t.name)).map(|t| t.name.clone()).collect();
-    m.types.retain(|t| !has(&t.module, &t.name));
+    // a trait gone takes its objects' handle (dyn_T) with it
+    let traits: Vec<String> = m.traits.iter().filter(|t| has(&t.module, &t.name)).map(|t| format!("dyn_{}", t.name)).collect();
+    m.traits.retain(|t| !has(&t.module, &t.name));
+    m.types.retain(|t| !has(&t.module, &t.name) && !traits.contains(&t.name));
+    let gone_traits: Vec<String> = traits.iter().map(|t| t["dyn_".len()..].to_string()).collect();
+    m.impls.retain(|(ty, tr)| !traits.contains(ty) && !gone_traits.contains(tr) && !types.contains(ty));
     for t in types {
         m.methods.remove(&t);
     }
@@ -528,6 +536,9 @@ struct Doc<'a> {
     names: BTreeMap<String, String>,
     /// the items under a #[cfg] that names doc (rustdoc sets it; the build doesn't)
     doc_only: Vec<(Vec<String>, String)>,
+    /// the crate's name, and its public traits' names by id
+    lib: String,
+    traits: BTreeMap<String, String>,
 }
 
 impl<'a> Doc<'a> {
@@ -540,7 +551,8 @@ impl<'a> Doc<'a> {
         let idx = j.get("index")?.obj()?;
         let root = j.get("root")?.key()?;
         let root_items = idx.get(&root)?.get("inner")?.get("module")?.get("items")?.arr().len();
-        let mut d = Doc { idx, dir, m: Model::default(), names: BTreeMap::new(), doc_only: Vec::new() };
+        let lib = idx.get(&root)?.get("name").and_then(Json::str)?.to_string();
+        let mut d = Doc { idx, dir, m: Model::default(), names: BTreeMap::new(), doc_only: Vec::new(), lib, traits: BTreeMap::new() };
         let mut items = d.public(&root);
         // an item reached twice at one path (pub use a::X next to pub use a::*) is one item
         let mut once = BTreeSet::new();
@@ -552,6 +564,9 @@ impl<'a> Doc<'a> {
             let inner = d.idx.get(id).and_then(|it| it.get("inner"));
             if inner.is_some_and(|i| i.get("struct").is_some() || i.get("enum").is_some()) && !d.names.contains_key(id) {
                 d.names.insert(id.clone(), name.clone());
+            }
+            if inner.is_some_and(|i| i.get("trait").is_some()) && !d.traits.contains_key(id) {
+                d.traits.insert(id.clone(), name.clone());
             }
         }
         let mut made = BTreeSet::new();
@@ -571,6 +586,10 @@ impl<'a> Doc<'a> {
                 }
             } else if let Some(c) = inner.get("constant") {
                 d.constant(module, name, c);
+            } else if let Some(t) = inner.get("trait") {
+                if made.insert(id.clone()) {
+                    d.traitdef(module, name, t);
+                }
             }
         }
         Some((d.m, d.doc_only))
@@ -649,11 +668,28 @@ impl<'a> Doc<'a> {
         // rustc's to check, for each); one bound by Fn, FnMut or FnOnce (inline or in a where
         // clause; impl Fn(..) is one too) is a closure Volt passes; a const parameter, or an impl
         // Trait one that isn't a closure, isn't one of those
-        let mut closures: BTreeMap<String, Ty> = BTreeMap::new();
+        // each type parameter's bounds, inline and in where clauses together (T: Shape where T:
+        // Clone asks more than Shape: it stays a generic)
+        let mut bounds: BTreeMap<String, Vec<Json>> = BTreeMap::new();
         for w in generics.and_then(|g| g.get("where_predicates")).map_or(&[][..], Json::arr) {
             let Some(bp) = w.get("bound_predicate") else { continue };
-            if let (Some(n), Some(f)) = (bp.get("type").and_then(|t| t.get("generic")).and_then(Json::str), self.fn_bound(bp.get("bounds"), FnPass::Value)) {
-                closures.insert(n.to_string(), f);
+            let Some(n) = bp.get("type").and_then(|t| t.get("generic")).and_then(Json::str) else { continue };
+            bounds.entry(n.to_string()).or_default().extend(bp.get("bounds").map_or(&[][..], Json::arr).iter().cloned());
+        }
+        for p in generics.and_then(|g| g.get("params")).map_or(&[][..], Json::arr) {
+            if let (Some(n), Some(t)) = (p.get("name").and_then(Json::str), p.get("kind").and_then(|k| k.get("type"))) {
+                bounds.entry(n.to_string()).or_default().extend(t.get("bounds").map_or(&[][..], Json::arr).iter().cloned());
+            }
+        }
+        let mut closures: BTreeMap<String, Ty> = BTreeMap::new();
+        for (n, list) in bounds {
+            let list = Json::Arr(list);
+            if let Some(f) = self.fn_bound(Some(&list), FnPass::Value) {
+                closures.insert(n, f);
+            } else if let Some(tr) = self.trait_bound(Some(&list)) {
+                // a type bound by one of the crate's traits (impl Trait, or S: Trait): a Volt
+                // value attaching it
+                closures.insert(n, Ty::Dyn(tr, FnPass::Value));
             }
         }
         for p in generics.and_then(|g| g.get("params")).map_or(&[][..], Json::arr) {
@@ -666,10 +702,6 @@ impl<'a> Doc<'a> {
                 s.skip = Some("it's generic over more than types");
                 continue;
             };
-            if let Some(f) = self.fn_bound(t.get("bounds"), FnPass::Value) {
-                closures.insert(name.to_string(), f);
-                continue;
-            }
             if closures.contains_key(name) {
                 continue;
             }
@@ -724,6 +756,14 @@ impl<'a> Doc<'a> {
 
     /// the closure a trait bound list names (Fn, FnMut or FnOnce with its arguments), passed so
     fn fn_bound(&self, bounds: Option<&Json>, pass: FnPass) -> Option<Ty> {
+        // F: Fn(..) + Clone asks more of F than a Volt closure has
+        let others = bounds.map_or(&[][..], Json::arr).iter().any(|b| {
+            let tr = b.get("trait_bound").and_then(|x| x.get("trait")).or_else(|| b.get("trait"));
+            tr.is_some_and(|t| !matches!(t.get("path").and_then(Json::str).and_then(|p| p.rsplit("::").next()), Some("Fn" | "FnMut" | "FnOnce" | "Send" | "Sync" | "Sized")))
+        });
+        if others {
+            return None;
+        }
         for b in bounds.map_or(&[][..], Json::arr) {
             let tr = b.get("trait_bound").and_then(|x| x.get("trait")).or_else(|| b.get("trait"));
             let Some(tr) = tr else { continue };
@@ -743,6 +783,75 @@ impl<'a> Doc<'a> {
             return Some(Ty::Fn(ps, Box::new(r), pass, kind == "FnOnce"));
         }
         None
+    }
+
+    /// the crate's trait a bound list names, when that's all it asks (Send, Sync and Sized aside)
+    fn trait_bound(&self, bounds: Option<&Json>) -> Option<String> {
+        let mut found = None;
+        for b in bounds.map_or(&[][..], Json::arr) {
+            let tr = b.get("trait_bound").and_then(|x| x.get("trait")).or_else(|| b.get("trait"));
+            let Some(tr) = tr else { continue };
+            if let Some(name) = tr.get("id").and_then(Json::key).and_then(|id| self.traits.get(&id)) {
+                if found.is_some() || tr.get("args").is_some_and(|a| !a.is_null()) {
+                    return None;
+                }
+                found = Some(name.clone());
+            } else if !matches!(tr.get("path").and_then(Json::str).and_then(|p| p.rsplit("::").next()), Some("Send" | "Sync" | "Sized")) {
+                return None;
+            }
+        }
+        found
+    }
+
+    /// a trait: its methods (called through it: Trait::method(x, ..)), and its objects' handle
+    /// (dyn_T) when it can make them; it and that handle attached by the types implementing it
+    fn traitdef(&mut self, module: Vec<String>, name: String, t: &Json) {
+        let mut path = vec![String::new(), self.lib.clone()];
+        path.extend(module.iter().cloned());
+        path.push(name.clone());
+        let path = path.join("::");
+        let mut td = TraitDef { module: module.clone(), name: name.clone(), methods: Vec::new(), skip: None };
+        if generic(t.get("generics")) {
+            td.skip = Some("it's generic".into());
+        }
+        for b in t.get("bounds").map_or(&[][..], Json::arr) {
+            let sup = b.get("trait_bound").and_then(|x| x.get("trait")).and_then(|x| x.get("path")).and_then(Json::str).and_then(|p| p.rsplit("::").next()).unwrap_or("?");
+            if !matches!(sup, "Send" | "Sync" | "Sized") {
+                td.skip = Some(format!("it extends {sup}"));
+            }
+        }
+        for iid in t.get("items").map_or(&[][..], Json::arr) {
+            let Some(it) = iid.key().and_then(|k| self.idx.get(&k)) else { continue };
+            let Some(inner) = it.get("inner") else { continue };
+            let mname = it.get("name").and_then(Json::str).unwrap_or("_");
+            if let Some(f) = inner.get("function") {
+                let mut s = self.sig(it, f, mname);
+                s.call = Some(format!("{path}::{mname}"));
+                td.methods.push((s, f.get("has_body").and_then(Json::bool) == Some(true)));
+            } else if inner.get("assoc_type").is_some() {
+                td.skip = Some(format!("its associated type {mname}"));
+            } else if inner.get("assoc_const").is_some() {
+                td.skip = Some(format!("its associated const {mname}"));
+            }
+        }
+        // the crate's types implementing it (not a generic one's instances, or a blanket impl)
+        for iid in t.get("implementations").map_or(&[][..], Json::arr) {
+            let Some(im) = iid.key().and_then(|k| self.idx.get(&k)).and_then(|x| x.get("inner")).and_then(|i| i.get("impl")) else { continue };
+            if im.get("blanket_impl").is_some_and(|b| !b.is_null()) || generic(im.get("generics")) {
+                continue;
+            }
+            let Some(rp) = im.get("for").and_then(|f| f.get("resolved_path")) else { continue };
+            if let Some(ty) = rp.get("id").and_then(Json::key).and_then(|id| self.names.get(&id)) {
+                self.m.impls.push((ty.clone(), name.clone()));
+            }
+        }
+        let dyn_ok = t.get("is_dyn_compatible").or_else(|| t.get("is_object_safe")).and_then(Json::bool) == Some(true);
+        if dyn_ok && td.skip.is_none() {
+            let h = format!("dyn_{name}");
+            self.m.types.push(TypeDef { module, name: h.clone(), generic: false, fields: None, variants: None, is_enum: false, clone: false, opaque: true, params: Vec::new(), rust_name: Some(format!("{DYN_BOX}{path}>")) });
+            self.m.impls.push((h, name.clone()));
+        }
+        self.m.traits.push(td);
     }
 
     /// the declaration as it's written, on one line (a macro's item: where the macro made it)
@@ -859,7 +968,7 @@ impl<'a> Doc<'a> {
             return tup.arr().is_empty().then_some(Ty::Unit);
         }
         if let Some(it) = t.get("impl_trait") {
-            return self.fn_bound(Some(it), FnPass::Value);
+            return self.fn_bound(Some(it), FnPass::Value).or_else(|| Some(Ty::Dyn(self.trait_bound(Some(it))?, FnPass::Value)));
         }
         if let Some(g) = t.get("generic").and_then(Json::str) {
             return Some(if g == "Self" { Ty::SelfTy } else { Ty::Generic(g.to_string()) });
@@ -867,8 +976,12 @@ impl<'a> Doc<'a> {
         if let Some(r) = t.get("borrowed_ref") {
             let mutable = r.get("is_mutable").and_then(Json::bool) == Some(true);
             let inner = r.get("type")?;
+            let pass = if mutable { FnPass::MutRef } else { FnPass::Ref };
             if let Some(d) = inner.get("dyn_trait") {
-                return self.fn_bound(d.get("traits"), if mutable { FnPass::MutRef } else { FnPass::Ref });
+                return self.fn_bound(d.get("traits"), pass).or_else(|| Some(Ty::Dyn(self.trait_bound(d.get("traits"))?, pass)));
+            }
+            if let Some(it) = inner.get("impl_trait") {
+                return self.fn_bound(Some(it), pass).or_else(|| Some(Ty::Dyn(self.trait_bound(Some(it))?, pass)));
             }
             if inner.get("primitive").and_then(Json::str) == Some("str") {
                 return (!mutable).then_some(Ty::Str);
@@ -891,7 +1004,7 @@ impl<'a> Doc<'a> {
         let one = || -> Option<Box<Ty>> { Some(Box::new(self.ty(args.first()?)?)) };
         if last == "Box" && args.len() == 1 {
             if let Some(d) = args[0].get("dyn_trait") {
-                return self.fn_bound(d.get("traits"), FnPass::Boxed);
+                return self.fn_bound(d.get("traits"), FnPass::Boxed).or_else(|| Some(Ty::Dyn(self.trait_bound(d.get("traits"))?, FnPass::Boxed)));
             }
         }
         if let Some(local) = p.get("id").and_then(Json::key).and_then(|id| self.names.get(&id)) {
@@ -1362,12 +1475,26 @@ struct Rust {
     lib: String,
 }
 
+/// a trait object's handle holds a Box<dyn Trait> (its type's rust_name: this, the trait's path, >)
+const DYN_BOX: &str = "::std::boxed::Box<dyn ";
+
 impl Rust {
     /// the Rust path of a named type, from the shim
     fn path(&self, def: &TypeDef) -> String {
+        if let Some(r) = def.rust_name.as_ref().filter(|r| r.starts_with("::")) {
+            return r.clone();
+        }
         let mut p = vec![self.lib.clone()];
         p.extend(def.module.iter().cloned());
         p.push(def.rust_name.clone().unwrap_or_else(|| def.name.clone()));
+        format!("::{}", p.join("::"))
+    }
+
+    /// a trait's Rust path, from the shim
+    fn trait_path(&self, t: &TraitDef) -> String {
+        let mut p = vec![self.lib.clone()];
+        p.extend(t.module.iter().cloned());
+        p.push(t.name.clone());
         format!("::{}", p.join("::"))
     }
 }
@@ -1419,9 +1546,9 @@ impl Lang for Rust {
                             binds.push(format!("x{i}: char"));
                             args.push(format!("x{i} as u32"));
                         }
-                        Ty::Str => {
+                        Ty::Str | Ty::String => {
                             cps.extend(["*const u8".to_string(), "usize".to_string()]);
-                            binds.push(format!("x{i}: &str"));
+                            binds.push(format!("x{i}: {}", if *t == Ty::Str { "&str" } else { "String" }));
                             args.extend([format!("x{i}.as_ptr()"), format!("x{i}.len()")]);
                         }
                         _ => return None,
@@ -1431,15 +1558,41 @@ impl Lang for Rust {
                     Ty::Unit => (String::new(), ("", "")),
                     Ty::Prim(x) => (format!(" -> {x}"), ("", "")),
                     Ty::Char => (" -> u32".to_string(), ("char::from_u32(", ").unwrap_or('\\u{fffd}')")),
+                    // a String: Volt puts it where o points
+                    Ty::String => {
+                        cps.push("*mut c_void".into());
+                        args.push("&mut o as *mut String as *mut c_void".into());
+                        (String::new(), ("{ let mut o = String::new(); ", "; o }"))
+                    }
                     _ => return None,
                 };
                 p.params.extend([format!("{a}: extern \"C\" fn({}){cret}", cps.join(", ")), format!("{a}_env: *mut c_void")]);
-                let clo = format!("move |{}| {}{a}({}){}", binds.join(", "), wrap.0, args.join(", "), wrap.1);
+                let clo = if matches!(pass, FnPass::Value | FnPass::Boxed) {
+                    // owned: the closure holds Volt's value (g, whole: not just its env field) and
+                    // drops it with itself
+                    p.params.push(format!("{a}_drop: Option<unsafe extern \"C\" fn(*mut c_void)>"));
+                    args[0] = "g.env".into();
+                    format!("{{ let g = VoltEnv {{ env: {a}_env, drop: {a}_drop }}; move |{}| {{ let g = &g; {}{a}({}){} }} }}", binds.join(", "), wrap.0, args.join(", "), wrap.1)
+                } else {
+                    format!("move |{}| {}{a}({}){}", binds.join(", "), wrap.0, args.join(", "), wrap.1)
+                };
                 p.arg = match pass {
                     FnPass::Value => clo,
                     FnPass::Ref => format!("&{clo}"),
                     FnPass::MutRef => format!("&mut {clo}"),
                     FnPass::Boxed => format!("Box::new({clo})"),
+                };
+            }
+            // a Volt value and its methods' table: a Volt_T, which implements the trait
+            Ty::Dyn(tr, pass) => {
+                let mg = Gen::trait_mangle(g.traits.get(tr)?);
+                p.params.extend([format!("{a}: *mut c_void"), format!("{a}_t: *const VT_{mg}")]);
+                let v = format!("Volt_{mg} {{ env: {a}, t: *{a}_t }}");
+                p.arg = match pass {
+                    FnPass::Value => v,
+                    FnPass::Ref => format!("&{v}"),
+                    FnPass::MutRef => format!("&mut {v}"),
+                    FnPass::Boxed => format!("Box::new({v})"),
                 };
             }
             Ty::Str | Ty::String => {
@@ -1528,9 +1681,23 @@ impl Lang for Rust {
                         p.arg = "(&mut this_v)".into();
                         p.post.push(format!("*this = to_{mg}(&this_v);"));
                     }
-                    Recv::Ref => p.arg = format!("(&from_{mg}(&*this))"),
+                    // bound, not a temporary: a trait method's lent text outlives the call
+                    // (a Plain type has only numbers, so that text can only be 'static)
+                    Recv::Ref => {
+                        p.pre.push(format!("let this_v = from_{mg}(&*this);"));
+                        p.arg = "(&this_v)".into();
+                    }
                     _ => p.arg = format!("from_{mg}(&*this)"),
                 }
+            }
+            // a trait object's: the object, not its box
+            Kind::Handle if rp.starts_with(DYN_BOX) => {
+                p.params.push("this: *mut c_void".into());
+                p.arg = match recv {
+                    Recv::Mut => format!("(&mut **(this as *mut {rp}))"),
+                    Recv::Ref => format!("(&**(this as *const {rp}))"),
+                    _ => return None,
+                };
             }
             Kind::Handle => {
                 p.params.push("this: *mut c_void".into());
@@ -1560,6 +1727,13 @@ impl Lang for Rust {
                 let boxed = if *once { format!("Some(Box::new($v) as Box<{}>)", dyn_fn(ps, r, true)?) } else { format!("Box::new($v) as {held}") };
                 ShimOut { params: vec![format!("{o}: *mut *mut c_void")], store: format!("*{o} = Box::into_raw(Box::new({boxed})) as *mut c_void;") }
             }
+            Ty::Dyn(tr, pass @ (FnPass::Value | FnPass::Boxed)) => {
+                let tp = self.trait_path(g.traits.get(tr)?);
+                let b = if *pass == FnPass::Boxed { format!("$v as Box<dyn {tp}>") } else { format!("Box::new($v) as Box<dyn {tp}>") };
+                ShimOut { params: vec![format!("{o}: *mut *mut c_void")], store: format!("*{o} = Box::into_raw(Box::new({b})) as *mut c_void;") }
+            }
+            // lent text: where it is (a Plain receiver's text can only be 'static)
+            Ty::StrRef => ShimOut { params: vec![format!("{o}: *mut *mut u8"), format!("{o}_n: *mut usize")], store: format!("{{ let w: &str = $v; *{o} = w.as_ptr() as *mut u8; *{o}_n = w.len(); }}") },
             Ty::Str | Ty::String => ShimOut { params: vec![format!("{o}: *mut *mut u8"), format!("{o}_n: *mut usize")], store: format!("put_str($v.to_string(), {o}, {o}_n);") },
             Ty::Slice(e, _) | Ty::Vec(e) => match **e {
                 Ty::Prim(x) => ShimOut { params: vec![format!("{o}: *mut *mut {x}"), format!("{o}_n: *mut usize")], store: format!("put_vec($v.to_vec(), {o}, {o}_n);") },
@@ -1610,10 +1784,18 @@ impl Lang for Rust {
                     cps.extend([format!("a{i}: *const u8"), format!("a{i}_n: usize")]);
                     args.push(format!("s(a{i}, a{i}_n)"));
                 }
+                Ty::String => {
+                    cps.extend([format!("a{i}: *const u8"), format!("a{i}_n: usize")]);
+                    args.push(format!("s(a{i}, a{i}_n).to_string()"));
+                }
                 _ => return None,
             }
         }
         let store = match r {
+            Ty::String => {
+                cps.extend(["o: *mut *mut u8".to_string(), "o_n: *mut usize".to_string()]);
+                "put_str(v, o, o_n);".to_string()
+            }
             Ty::Unit => String::new(),
             Ty::Prim(x) => {
                 cps.push(format!("o: *mut {x}"));
@@ -1633,9 +1815,100 @@ impl Lang for Rust {
         Some(format!("#[no_mangle]\npub unsafe extern \"C\" fn {sym}_call({}) {{\n    {get}\n    let v = f({});\n    let _ = &v;\n    {store}\n}}\n\n#[no_mangle]\npub unsafe extern \"C\" fn {sym}_drop(h: *mut c_void) {{\n    drop(Box::from_raw(h as *mut {held}));\n}}\n\n", cps.join(", "), args.join(", ")))
     }
 
+    fn put_glue(&self, sym: &str) -> Option<String> {
+        Some(format!("// a String a Volt function gives back, put where o points\n#[no_mangle]\npub unsafe extern \"C\" fn {sym}(o: *mut c_void, p: *const u8, n: usize) {{\n    *(o as *mut String) = s(p, n).to_string();\n}}\n\n"))
+    }
+
+    fn trait_glue(&self, _g: &Gen, t: &TraitDef, ms: &[(Sig, bool)]) -> Option<String> {
+        let (tp, mg) = (self.trait_path(t), Gen::trait_mangle(t));
+        let mut out = String::new();
+        let mut fields = vec!["    drop: Option<unsafe extern \"C\" fn(*mut c_void)>,".to_string()];
+        let (mut imp, mut def) = (String::new(), String::new());
+        let mut provided_any = false;
+        for (s, provided) in ms {
+            let n = &s.name;
+            let mut cps = vec!["*mut c_void".to_string()];
+            let mut rps = vec![if s.recv == Recv::Mut { "&mut self" } else { "&self" }.to_string()];
+            let mut args = vec!["self.env".to_string()];
+            let mut names = Vec::new();
+            for (i, (_, t)) in s.params.iter().enumerate() {
+                names.push(format!("a{i}"));
+                match t.as_ref()? {
+                    Ty::Prim(x) => {
+                        cps.push(x.to_string());
+                        rps.push(format!("a{i}: {x}"));
+                        args.push(format!("a{i}"));
+                    }
+                    Ty::Char => {
+                        cps.push("u32".into());
+                        rps.push(format!("a{i}: char"));
+                        args.push(format!("a{i} as u32"));
+                    }
+                    x @ (Ty::Str | Ty::String) => {
+                        cps.extend(["*const u8".to_string(), "usize".to_string()]);
+                        rps.push(format!("a{i}: {}", if *x == Ty::Str { "&str" } else { "String" }));
+                        args.extend([format!("a{i}.as_ptr()"), format!("a{i}.len()")]);
+                    }
+                    _ => return None,
+                }
+            }
+            let (rret, pre, value) = match s.ret.as_ref()? {
+                Ty::Unit => (String::new(), String::new(), String::new()),
+                Ty::Prim(x) => {
+                    cps.push(format!("*mut {x}"));
+                    args.push("&mut o".into());
+                    (format!(" -> {x}"), format!("let mut o: {x} = Default::default(); "), " o".to_string())
+                }
+                Ty::Char => {
+                    cps.push("*mut u32".into());
+                    args.push("&mut o".into());
+                    (" -> char".to_string(), "let mut o: u32 = 0; ".to_string(), " char::from_u32(o).unwrap_or('\\u{fffd}')".to_string())
+                }
+                Ty::Str => {
+                    cps.extend(["*mut *const u8".to_string(), "*mut usize".to_string()]);
+                    args.extend(["&mut o".to_string(), "&mut o_n".to_string()]);
+                    (" -> &str".to_string(), "let mut o: *const u8 = std::ptr::null(); let mut o_n: usize = 0; ".to_string(), " s(o, o_n)".to_string())
+                }
+                Ty::String => {
+                    cps.push("*mut c_void".into());
+                    args.push("&mut o as *mut String as *mut c_void".into());
+                    (" -> String".to_string(), "let mut o = String::new(); ".to_string(), " o".to_string())
+                }
+                _ => return None,
+            };
+            let head = format!("fn {n}({}){rret}", rps.join(", "));
+            let call = |f: &str| format!("unsafe {{ {pre}{f}({});{value} }}", args.join(", "));
+            let fty = format!("unsafe extern \"C\" fn({})", cps.join(", "));
+            let me = if s.recv == Recv::Mut { "&mut " } else { "&" };
+            let mut fwd = vec![format!("{me}self.0")];
+            fwd.extend(names.iter().cloned());
+            if *provided {
+                provided_any = true;
+                fields.push(format!("    m_{n}: Option<{fty}>,"));
+                let mut d = vec![format!("{me}d")];
+                d.extend(names.iter().cloned());
+                let _ = write!(imp, "    {head} {{\n        match self.t.m_{n} {{\n            Some(f) => {},\n            None => {{\n                let {}d = Def_{mg}(Volt_{mg} {{ env: self.env, t: VT_{mg} {{ drop: None, ..self.t }} }});\n                {tp}::{n}({})\n            }}\n        }}\n    }}\n", call("f"), if s.recv == Recv::Mut { "mut " } else { "" }, d.join(", "));
+            } else {
+                fields.push(format!("    m_{n}: {fty},"));
+                let _ = writeln!(imp, "    {head} {{\n        {}\n    }}", call(&format!("(self.t.m_{n})")));
+                let _ = writeln!(def, "    {head} {{\n        {tp}::{n}({})\n    }}", fwd.join(", "));
+            }
+        }
+        let _ = write!(out, "// {tp} on a Volt value: its methods' table (drop: None when it's lent), and the type implementing the trait by calling it\n#[repr(C)]\n#[derive(Clone, Copy)]\npub struct VT_{mg} {{\n{}\n}}\n\npub struct Volt_{mg} {{\n    env: *mut c_void,\n    t: VT_{mg},\n}}\n\n", fields.join("\n"));
+        let _ = write!(out, "// Volt has no Send or Sync: a Volt value another thread uses is the program's to share, as in C\nunsafe impl Send for Volt_{mg} {{}}\nunsafe impl Sync for Volt_{mg} {{}}\n\nimpl Drop for Volt_{mg} {{\n    fn drop(&mut self) {{\n        if let Some(d) = self.t.drop {{\n            unsafe {{ d(self.env) }}\n        }}\n    }}\n}}\n\nimpl {tp} for Volt_{mg} {{\n{imp}}}\n\n");
+        if provided_any {
+            // ponytail: a default body sees Volt's required methods but Rust's other defaults, even
+            // where the Volt type wrote one (Rust can't call a trait's default from an impl)
+            let _ = write!(out, "// the trait's own bodies of the methods a Volt type left out, over its required ones\nstruct Def_{mg}(Volt_{mg});\n\nimpl {tp} for Def_{mg} {{\n{def}}}\n\n");
+        }
+        Some(out)
+    }
+
     fn call(&self, _g: &Gen, module: &[String], s: &Sig, self_ty: Option<&TypeInfo>, recv: Option<&str>, args: &[String]) -> String {
         let args = args.join(", ");
         match (recv, self_ty) {
+            // a trait's method: Trait::method(recv, ..), whichever other traits have one so named
+            (Some(r), _) if s.call.as_ref().is_some_and(|c| c.starts_with("::")) => format!("{}({r}{}{args})", s.call.as_ref().unwrap(), if args.is_empty() { "" } else { ", " }),
             (Some(r), _) => format!("{r}.{}({args})", s.call.as_ref().unwrap_or(&s.name)),
             (None, Some(ti)) => format!("<{}>::{}({args})", self.path(&ti.def), s.call.as_ref().unwrap_or(&s.name)),
             (None, None) => {
@@ -1734,7 +2007,8 @@ impl Lang for Rust {
 
     fn prelude(&self, g: &Gen) -> String {
         let free = |what: &str| format!("volt_rust_{}_free_{what}", g.alias);
-        let mut s = String::from("// the glue between a Volt program and this crate, written by bolt import (use rust)\n#![allow(non_snake_case, unused_unsafe, unused_mut, unused_variables, unreachable_patterns, clippy::all)]\nuse std::ffi::c_void;\n\n");
+        let mut s = String::from("// the glue between a Volt program and this crate, written by bolt import (use rust)\n#![allow(non_snake_case, non_camel_case_types, unused_parens, unused_unsafe, unused_mut, unused_variables, unreachable_patterns, clippy::all)]\nuse std::ffi::c_void;\n\n");
+        s.push_str("// a Volt value the shim owns (a closure Rust keeps): drop frees it\npub struct VoltEnv {\n    env: *mut c_void,\n    drop: Option<unsafe extern \"C\" fn(*mut c_void)>,\n}\nunsafe impl Send for VoltEnv {}\nunsafe impl Sync for VoltEnv {}\nimpl Drop for VoltEnv {\n    fn drop(&mut self) {\n        if let Some(d) = self.drop {\n            unsafe { d(self.env) }\n        }\n    }\n}\n\n");
         s.push_str("#[repr(C)]\npub struct VoltStr {\n    p: *const u8,\n    n: usize,\n}\n#[repr(C)]\npub struct VoltOwnedStr {\n    p: *mut u8,\n    n: usize,\n}\n\n");
         s.push_str("unsafe fn s<'a>(p: *const u8, n: usize) -> &'a str {\n    if n == 0 {\n        return \"\";\n    }\n    let b = std::slice::from_raw_parts(p, n);\n    match std::str::from_utf8(b) {\n        Ok(s) => s,\n        Err(e) => std::str::from_utf8_unchecked(&b[..e.valid_up_to()]),\n    }\n}\n");
         s.push_str("unsafe fn sl<'a, T>(p: *const T, n: usize) -> &'a [T] {\n    if n == 0 { &[] } else { std::slice::from_raw_parts(p, n) }\n}\nunsafe fn slm<'a, T>(p: *mut T, n: usize) -> &'a mut [T] {\n    if n == 0 { &mut [] } else { std::slice::from_raw_parts_mut(p, n) }\n}\n");

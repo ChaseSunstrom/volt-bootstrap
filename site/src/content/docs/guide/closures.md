@@ -158,7 +158,8 @@ fn main() -> void {
 for a C API that takes callbacks as `void*`, and it casts back to its `extern "C" fn` type.
 
 A generic function is a value once its generic arguments are given: `name<Args>` is that instance,
-as a `fn` value or as a C function pointer.
+as a `fn` value or as a C function pointer. A generic `extern "C" fn` is a C function per instance,
+each under a symbol of its own (C can't name one, so a callback per type is how it's used).
 
 ```volt
 use std::io;

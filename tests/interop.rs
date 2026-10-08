@@ -584,6 +584,23 @@ fn rust_direct() {
         tools(&mut c);
         assert_eq!(ok(c.output().unwrap(), "voltc run generics.volt"), "largest 9 1.5\nrepeat 3 7 0.5\npick b 1\nscaled 3 6\nstack 2 5 volt 4,5\npoints 1 bigger 8\n", "generics ({backend})");
     }
+    // closures and traits both ways: Volt's into Rust (lent, or kept and dropped by Rust once: drops 2, and Rust's squares 2),
+    // Rust's back as values Volt calls
+    for backend in ["c", "llvm"] {
+        let mut c = Command::new(&e.voltc);
+        c.args(["run", "--backend", backend, "closures.volt"]).current_dir(&dir).env("VOLT_STD", Path::new(ROOT).join("std"));
+        tools(&mut c);
+        assert_eq!(ok(c.output().unwrap(), "voltc run closures.volt"), "apply 15 count 2 boxed 13\n[rust][calls][volt]\nadder 42 counter 2 initial 118\nkept 8 dropped 0\ndropped 1\n<a> <b> / hi, volt\n", "closures ({backend})");
+        let mut c = Command::new(&e.voltc);
+        c.args(["run", "--backend", backend, "traits.volt"]).current_dir(&dir).env("VOLT_STD", Path::new(ROOT).join("std"));
+        tools(&mut c);
+        assert_eq!(ok(c.output().unwrap(), "voltc run traits.volt"), "area 6 larger 6\ngrown 15\ntri of area 15 [T]\na blob of its own [B]\nrust 1 a square of side 1 circle 12\ncircle 12 C\nunion 12\ncanvas 18 tri,blob,square\ndrops 2 squares 2\n", "traits ({backend})");
+    }
+    let mut c = Command::new(&e.voltc);
+    c.args(["check", "traits.volt"]).current_dir(&dir).env("VOLT_STD", Path::new(ROOT).join("std")).env("VOLT_SHOW_IMPORT", "1");
+    tools(&mut c);
+    let shown = String::from_utf8_lossy(&c.output().unwrap().stderr).to_string();
+    assert!(shown.contains("trait Source (its associated type Item)"), "a trait Volt can't declare is left out, with why: {shown}");
     let mut c = Command::new(&e.voltc);
     c.args(["run", "generics_bad.volt"]).current_dir(&dir).env("VOLT_STD", Path::new(ROOT).join("std"));
     tools(&mut c);

@@ -84,7 +84,7 @@ struct Walker {
 
 impl Walker {
     fn model(&self) -> Model {
-        let mut m = Model { fns: self.m.fns.clone(), types: self.m.types.clone(), consts: self.m.consts.clone(), methods: self.m.methods.clone(), left_out: self.m.left_out.clone() };
+        let mut m = Model { fns: self.m.fns.clone(), types: self.m.types.clone(), consts: self.m.consts.clone(), methods: self.m.methods.clone(), left_out: self.m.left_out.clone(), ..Model::default() };
         for t in &mut m.types {
             // a type that frees what it holds can't be copied (or held by value) safely
             let has_deinit = self.deinit.contains_key(&t.name);

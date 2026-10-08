@@ -835,6 +835,16 @@ attach fn fn_inst(this: checker&, d: u32, args: std::vec<gval>, span: span) -> c
     val intr = intrinsic ?? "";
     if (intrinsic != null && starts_with(intr, "volt_")) {
         c_name = intr; // a prelude function
+    } else if (f.extern_abi != null && args.len > 0 && f.body != null && !f.is_export) {
+        // a generic extern fn's instance (a callback per type): C can't name it, so each gets
+        // its own symbol
+        var n = S("v_");
+        if (path.len() > 0) {
+            n.append(path.as_str());
+            n.append("__");
+        }
+        n.append(c_word(f.name));
+        c_name = this.fresh_c_name(n.as_str());
     } else if (f.extern_abi != null && (f.extern_abi ?? "") == "C" && !f.is_export) {
         // declared under our own name, bound to the real symbol, so it never clashes with a C
         // header's prototype of the same function; a package's carries its namespace too, so std's
@@ -886,7 +896,7 @@ attach fn fn_inst(this: checker&, d: u32, args: std::vec<gval>, span: span) -> c
     if (intrinsic == null && f.body == null && f.extern_abi == null) {
         return fail(it.span, fmt("function '{}' needs a body (only extern fns can leave it off)", S(f.name)));
     }
-    if (f.extern_abi != null || f.is_export) {
+    if ((f.extern_abi != null && !(args.len > 0 && f.body != null)) || f.is_export) {
         // C has no overloading: one symbol, one signature
         var sig_ps: std::vec<u32> = {};
         for (p&) in params.items() {

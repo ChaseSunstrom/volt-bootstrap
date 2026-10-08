@@ -59,14 +59,52 @@ code that has no Cargo project around it.
 | a fieldless enum | a Volt enum with the same values |
 | `pub const` of a number, `bool` or `&str`, however it's computed | a `val` of its value |
 | a generic `fn`, method or type (`largest<T: PartialOrd>`, `Stack<T>`) | a generic `fn` or `struct`: each instance the program uses (`geom::largest(xs)`, `geom::Stack<i32>::new()`) is built for it |
+| a parameter of `impl Fn(A) -> R` (or `FnMut`, `FnOnce`), `F: Fn(A) -> R`, `&dyn Fn(A) -> R`, `&mut dyn FnMut(A)`, `Box<dyn Fn(A) -> R>` | a Volt fn value `fn(A) -> R`: lent for the call when Rust borrows it (`&dyn`), otherwise moved to Rust, which drops it when it's done with it |
+| a result of `impl Fn(A) -> R`, `Box<dyn FnMut(A) -> R>`, `impl FnOnce() -> R` | a value called with `f.call(a)`; deleting it drops the closure |
+| `pub trait T` | a Volt trait `T` (a method with a body in Rust is `@optional`); the crate's types implementing it attach it |
+| a parameter of `&dyn T`, `&mut dyn T`, `&impl T`, `impl T`, `S: T`, `Box<dyn T>` | a value of any type attaching `T`, Volt's own or the crate's: lent for the call when Rust borrows it, otherwise moved to Rust, which drops it when it's done with it |
+| a result of `Box<dyn T>` or `impl T` | a `dyn_T`, which attaches `T`; deleting it drops the Rust value |
 
 A generic is built per instance: when a check calls `geom::largest` with `i32` and `f64`, voltc asks
 bolt for those two, which it builds into the shim as `largest::<i32>` and `largest::<f64>`, and
 checks the program again (only when the instances it needs change). rustc checks each instance's
-bounds: types that don't meet them are an error at the call, with rustc's reason. Trait objects,
-closures and references returned into Rust-owned data aren't callable from Volt; they're left out,
-listed in a comment of the generated declarations (`VOLT_SHOW_IMPORT=1 voltc check main.volt`
-prints them). A panic stops the program, as it does
+bounds: types that don't meet them are an error at the call, with rustc's reason.
+
+Closures and traits cross both ways. Their methods' and closures' types are numbers, `bool`,
+`char`, and text: `&str` and `String` in as `str`, `String` out as `std::string`, and a trait
+method's `&str` result as `str` (lent, as in Rust). A Rust type's own impl of a method with a body
+(`Square`'s `describe`) runs on its `dyn_T` and on the type; a Volt type that writes an `@optional`
+one has it called by Rust, while a value of the trait union passes with Rust's body for it (a union
+can't say which of its members wrote one). Rust may hand a Volt value it was given to another
+thread, as C code could: Volt has no `Send`.
+
+```volt ignore
+use std::io;
+use std::string;
+use { "geom" } as geom;
+
+struct tri { b: f64; h: f64; }
+
+// pub trait Shape { fn area(&self) -> f64; fn name(&self) -> String; }
+attach geom::Shape -> tri {
+    fn area(this) -> f64 { return this.b * this.h / 2.0; }
+    fn name(this) -> std::string { return std::string::from("tri"); }
+}
+
+fn main() -> void {
+    val t: tri = { b: 4.0, h: 3.0 };
+    std::println("{}", geom::area_of(&t));              // pub fn area_of(s: &dyn Shape) -> f64
+    val u = geom::unit_square();                        // -> Box<dyn Shape>: a geom::dyn_Shape
+    std::println("{} {}", u.area(), u.name());
+    val add2 = geom::adder(2);                          // -> impl Fn(i32) -> i32
+    std::println("{}", geom::apply(|| (x: i32) -> i32 { return x * 10; }, add2.call(1)));
+}
+```
+
+A trait with an associated type or const, generic parameters, or a supertrait beyond `Send`, `Sync`
+and `Sized` is left out, as are functions returning a reference into Rust-owned data (other than
+text, which is copied), listed in a comment of the generated declarations (`VOLT_SHOW_IMPORT=1
+voltc check main.volt` prints them). A panic stops the program, as it does
 in Rust. cargo builds the shim from the crate's directory, so its `rust-toolchain.toml` and
 dependencies apply.
 
