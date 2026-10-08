@@ -401,13 +401,13 @@ const SHAPES_OUT: &str = "biggest 9 1.5\naccount bea 300\nvisit 301 get 301\nclo
 
 #[test]
 fn bindings_shapes() {
-    // what C, C++, Rust, Zig, Go, Python, Java, C#, JavaScript and Lua call beyond the plain shapes: a generic's instances, a struct that owns text
+    // what C, C++, Rust, Zig, Go, Python, Java, C#, JavaScript, Lua and Swift call beyond the plain shapes: a generic's instances, a struct that owns text
     // held by a handle with its methods, owned values passed in, a trait implemented on either side,
     // closures taking and giving text and handles, closures given back. The library is a leak-checked
     // build, and leak_report.c (or the client) prints how many of its allocations are live when the client is done
     let e = Env::new("shapes");
     let pkg = "shapelib=shapelib/lib";
-    for (lang, file) in [("c", "shapelib.h"), ("cpp", "shapelib.hpp"), ("rust", "shapelib.rs"), ("zig", "shapelib.zig"), ("go", "shapelib.go"), ("python", "shapelib.py"), ("pyi", "shapelib.pyi"), ("java", "shapelib.java"), ("node", "shapelib_node.c"), ("js", "shapelib.js"), ("ts", "shapelib.d.ts"), ("lua", "shapelib_lua.c")] {
+    for (lang, file) in [("c", "shapelib.h"), ("cpp", "shapelib.hpp"), ("rust", "shapelib.rs"), ("zig", "shapelib.zig"), ("go", "shapelib.go"), ("python", "shapelib.py"), ("pyi", "shapelib.pyi"), ("java", "shapelib.java"), ("node", "shapelib_node.c"), ("js", "shapelib.js"), ("ts", "shapelib.d.ts"), ("lua", "shapelib_lua.c"), ("swift", "shapelib.swift")] {
         ok(e.voltc(&["bindings", "shapelib", "--pkg", pkg, "--lang", lang, "-o", &e.path(file)]), &format!("voltc bindings --lang {lang}"));
     }
     // Rust: client_shapes.rs next to its shapelib.rs module, with the leak report as an object
@@ -537,6 +537,46 @@ fn bindings_shapes() {
         } else {
             eprintln!("lua (5.4 or later, with its headers) isn't installed: skipping the Lua shapes client");
         }
+        // Swift: shapelib.swift over the C header (module Cshapelib), with the leak report linked in;
+        // then what it refuses, each a failed precondition
+        if let Some(swiftc) = local_tool("swiftc", "--version") {
+            let sdir = e.dir.join(format!("swift-{backend}"));
+            std::fs::create_dir_all(sdir.join("Cshapelib")).unwrap();
+            std::fs::copy(e.dir.join("shapelib.h"), sdir.join("Cshapelib/shapelib.h")).unwrap();
+            std::fs::write(sdir.join("Cshapelib/module.modulemap"), "module Cshapelib {\n    header \"shapelib.h\"\n    export *\n}\n").unwrap();
+            std::fs::copy(e.dir.join("shapelib.swift"), sdir.join("shapelib.swift")).unwrap();
+            std::fs::copy(Path::new(ROOT).join("tests/interop/client_shapes.swift"), sdir.join("main.swift")).unwrap();
+            let o = Command::new(&swiftc).args(["-warnings-as-errors", "-I", "Cshapelib", "shapelib.swift", "main.swift"]).arg(e.dir.join("leak_report.o")).args(["-L", &lib, "-lshapelib", "-Xlinker", "-rpath", "-Xlinker", &lib, "-o", "client"]).current_dir(&sdir).output().unwrap();
+            ok(o, "swiftc client_shapes.swift");
+            let o = Command::new(sdir.join("client")).output().unwrap();
+            assert_eq!(String::from_utf8_lossy(&o.stderr), "volt live: 0\n", "client_shapes.swift ({backend}): the library's allocations at exit");
+            assert_eq!(ok(o, "client_shapes.swift"), format!("checked true OVERDRAWN\nlimit true OVERDRAWN\nsign positive not positive\n{SHAPES_OUT}thrown Odd()\n"), "client_shapes.swift ({backend})");
+            for (what, msg) in [("busy", "account can't be closed: a running Volt call holds it"), ("held", "account can't be given away: a running Volt call holds it"), ("twice", "account is given twice"), ("lent", "account is lent by Volt: it isn't Swift's to give")] {
+                let o = Command::new(sdir.join("client")).arg(what).output().unwrap();
+                let err = String::from_utf8_lossy(&o.stderr);
+                assert!(!o.status.success() && err.contains(msg), "client_shapes.swift {what} ({backend}): {err}");
+            }
+            // swiftedge: the shapes shapelib doesn't have (rarer callbacks, a trait with E!T and handles,
+            // lists of enums and optionals, E!T of a list, a handle and a trait, names Swift has)
+            let edir = e.dir.join(format!("swiftedge-{backend}"));
+            std::fs::create_dir_all(edir.join("Cswiftedge")).unwrap();
+            let epkg = "swiftedge=swiftedge/lib";
+            for (lang, file) in [("c", "Cswiftedge/swiftedge.h"), ("swift", "swiftedge.swift")] {
+                ok(e.voltc(&["bindings", "swiftedge", "--pkg", epkg, "--lang", lang, "-o", &edir.join(file).display().to_string()]), &format!("voltc bindings swiftedge --lang {lang}"));
+            }
+            let elib = edir.display().to_string();
+            ok(e.voltc(&["lib", "swiftedge", "--pkg", epkg, "--shared", "--leak-check", "--backend", backend, "-o", &format!("{elib}/libswiftedge.so")]), "voltc lib swiftedge");
+            std::fs::write(edir.join("Cswiftedge/module.modulemap"), "module Cswiftedge {\n    header \"swiftedge.h\"\n    export *\n}\n").unwrap();
+            std::fs::copy(Path::new(ROOT).join("tests/interop/client_swiftedge.swift"), edir.join("main.swift")).unwrap();
+            let o = Command::new(&swiftc).args(["-warnings-as-errors", "-I", "Cswiftedge", "swiftedge.swift", "main.swift"]).arg(e.dir.join("leak_report.o")).args(["-L", &elib, "-lswiftedge", "-Xlinker", "-rpath", "-Xlinker", &elib, "-o", "client"]).current_dir(&edir).output().unwrap();
+            ok(o, "swiftc client_swiftedge.swift");
+            let o = Command::new(edir.join("client")).output().unwrap();
+            assert_eq!(String::from_utf8_lossy(&o.stderr), "volt live: 0\n", "client_swiftedge.swift ({backend}): the library's allocations at exit");
+            let want = "names 40 6\ncount_text 3 sum_things 9\nslice_cb 3 [9, 2, 3]\ncstr_cb 1 -1\nstr_cb 3\nenum_cb BLUE\npoint_cb 12.0\nstr_result_cb 4 -1 Odd()\nany_cb 2 WORSE Odd()\nswallow got 1 Odd() caught\nlent_ptr_cb 4 -1\nrun_counter 1010 2\ngive_counter 5\nvolts 3 t4 volt WORSE\nrun volts 7 give volts 10\nnamer n4 8 3 4\ncolors [\"BLUE\", \"RED\"] 11\nmaybes [\"5\", \"nil\"] 101\nopt_point 2.0 1.0 true\nopt_color GREEN nil\nmaybe_str yes nil\nenum_slice 2\nlisty [\"a\"] NOPE\nmk_thing 9 WORSE\nmk_counter 101 NOPE\ntexts_in 2 maybe_thing 4 -1\n";
+            assert_eq!(ok(o, "client_swiftedge.swift"), want, "client_swiftedge.swift ({backend})");
+        } else {
+            eprintln!("swiftc isn't installed: skipping the Swift shapes client");
+        }
     }
     // the TypeScript types: checked by tsc when it's installed, else parsed (node 23.2+ strips them)
     if Command::new("tsc").arg("--version").output().is_ok_and(|o| o.status.success()) {
@@ -566,7 +606,7 @@ fn bindings_shapes() {
     // the other languages' bindings say which languages take every shape
     let o = e.voltc(&["bindings", "shapelib", "--pkg", pkg, "--lang", "kotlin"]);
     let err = String::from_utf8_lossy(&o.stderr);
-    assert!(!o.status.success() && err.contains("JavaScript and Lua"), "{err}");
+    assert!(!o.status.success() && err.contains("JavaScript, Lua and Swift"), "{err}");
 }
 
 #[test]
