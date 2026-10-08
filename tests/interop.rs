@@ -233,6 +233,8 @@ fn bindings_round_trip() {
             let flags = format!("-L{lib_dir} -Wl,-rpath,{lib_dir}");
             let go = |args: &[&str]| Command::new("go").args(args).current_dir(&gdir).env("CGO_LDFLAGS", &flags).env("GOFLAGS", "-mod=mod").env("GOPROXY", "off").output().unwrap();
             ok(go(&["vet", "./..."]), "go vet");
+            let unformatted = ok(Command::new("gofmt").args(["-l", "mathlib"]).current_dir(&gdir).output().unwrap(), "gofmt -l");
+            assert_eq!(unformatted, "", "gofmt would change the Go bindings ({backend})");
             assert_eq!(ok(go(&["run", "."]), "go run"), MATHLIB_OUT, "Go ({backend})");
         } else {
             eprintln!("go isn't installed: skipping the Go client");
@@ -361,8 +363,8 @@ fn bindings_round_trip() {
     // in the other languages, owned values only come out and closures only go in (C and C++ take
     // both: see bindings_shapes)
     for (src, lang, want) in [
-        ("export struct thing { n: i32; }\nexport fn bad_in(t: thing) -> i32 { return t.n; }\n", "lua", "only take as a result"),
-        ("fn twice(x: i32) -> i32 { return x * 2; }\nexport fn bad_out() -> fn(i32) -> i32 { return twice; }\n", "go", "only take closures as parameters"),
+        ("export struct thing { n: i32; }\nexport fn bad_in(t: thing) -> i32 { return t.n; }\n", "kotlin", "only take as a result"),
+        ("fn twice(x: i32) -> i32 { return x * 2; }\nexport fn bad_out() -> fn(i32) -> i32 { return twice; }\n", "kotlin", "only take closures as parameters"),
         // the names voltc lib adds itself
         ("export struct thing { n: i32; }\nexport fn thing_new() -> thing { return { n: 1 }; }\nexport fn thing_free(t: thing&) -> void {}\n", "c", "makes thing_free itself"),
         ("namespace __export { fn x() -> void {} }\nexport fn one() -> i32 { return 1; }\n", "c", "namespace __export"),
@@ -383,13 +385,13 @@ const SHAPES_OUT: &str = "biggest 9 1.5\naccount bea 300\nvisit 301 get 301\nclo
 
 #[test]
 fn bindings_shapes() {
-    // what C, C++, Rust, Zig, Java and C# call beyond the plain shapes: a generic's instances, a struct that owns text
+    // what C, C++, Rust, Zig, Go, Python, Java and C# call beyond the plain shapes: a generic's instances, a struct that owns text
     // held by a handle with its methods, owned values passed in, a trait implemented on either side,
     // closures taking and giving text and handles, closures given back. The library is a leak-checked
-    // build, and leak_report.c prints how many of its allocations are live when the client is done
+    // build, and leak_report.c (or the client) prints how many of its allocations are live when the client is done
     let e = Env::new("shapes");
     let pkg = "shapelib=shapelib/lib";
-    for (lang, file) in [("c", "shapelib.h"), ("cpp", "shapelib.hpp"), ("rust", "shapelib.rs"), ("zig", "shapelib.zig"), ("python", "shapelib.py"), ("pyi", "shapelib.pyi"), ("java", "shapelib.java")] {
+    for (lang, file) in [("c", "shapelib.h"), ("cpp", "shapelib.hpp"), ("rust", "shapelib.rs"), ("zig", "shapelib.zig"), ("go", "shapelib.go"), ("python", "shapelib.py"), ("pyi", "shapelib.pyi"), ("java", "shapelib.java")] {
         ok(e.voltc(&["bindings", "shapelib", "--pkg", pkg, "--lang", lang, "-o", &e.path(file)]), &format!("voltc bindings --lang {lang}"));
     }
     // Rust: client_shapes.rs next to its shapelib.rs module, with the leak report as an object
@@ -466,6 +468,26 @@ fn bindings_shapes() {
         assert_eq!(String::from_utf8_lossy(&py.stderr), "volt live: 0\n", "client_shapes.py ({backend}): the library's allocations at exit");
         let tail = "raised ValueError ValueError ValueError ValueError\nwrong type TypeError\nrefused ValueError ValueError ValueError\nkept ValueError ann 5\nfatal 101 True\n";
         assert_eq!(ok(py, "python3 client_shapes.py"), format!("checked true OVERDRAWN\nlimit true OVERDRAWN\nsign positive not positive\n{SHAPES_OUT}{tail}"), "client_shapes.py ({backend})");
+        // Go: a module with the generated cgo package; the client prints the leak report to stderr
+        // itself (a Go program's exit runs no C destructors)
+        if Command::new("go").arg("version").output().is_ok_and(|o| o.status.success()) {
+            let gdir = e.dir.join(format!("go-{backend}"));
+            std::fs::create_dir_all(gdir.join("shapelib")).unwrap();
+            std::fs::copy(e.dir.join("shapelib.go"), gdir.join("shapelib/shapelib.go")).unwrap();
+            std::fs::copy(Path::new(ROOT).join("tests/interop/client_shapes.go"), gdir.join("main.go")).unwrap();
+            std::fs::write(gdir.join("go.mod"), "module client\n\ngo 1.22\n").unwrap();
+            let flags = format!("-L{lib} {rpath}");
+            let go = |args: &[&str]| Command::new("go").args(args).current_dir(&gdir).env("CGO_LDFLAGS", &flags).env("GOFLAGS", "-mod=mod").env("GOPROXY", "off").output().unwrap();
+            let unformatted = ok(Command::new("gofmt").args(["-l", "."]).current_dir(&gdir).output().unwrap(), "gofmt -l");
+            assert_eq!(unformatted, "", "gofmt would change these ({backend})");
+            ok(go(&["vet", "./..."]), "go vet (shapes)");
+            ok(go(&["build", "-o", "client", "."]), "go build (shapes)");
+            let o = Command::new(gdir.join("client")).output().unwrap();
+            assert_eq!(String::from_utf8_lossy(&o.stderr), "volt live: 0\n", "client_shapes.go ({backend}): the library's allocations at exit");
+            assert_eq!(ok(o, "client_shapes.go"), format!("checked true OVERDRAWN\nlimit true OVERDRAWN\nsign positive not positive\n{SHAPES_OUT}"), "client_shapes.go ({backend})");
+        } else {
+            eprintln!("go isn't installed: skipping the Go shapes client");
+        }
     }
     let parse = format!("import ast; ast.parse(open({:?}).read())", e.path("shapelib.pyi"));
     ok(run(Command::new("python3").args(["-c", &parse])), "parse shapelib.pyi");
@@ -486,7 +508,7 @@ fn bindings_shapes() {
         assert!(json.contains(want), "the JSON model lacks {want}:\n{json}");
     }
     // the other languages' bindings say which languages take every shape
-    let o = e.voltc(&["bindings", "shapelib", "--pkg", pkg, "--lang", "lua"]);
+    let o = e.voltc(&["bindings", "shapelib", "--pkg", pkg, "--lang", "kotlin"]);
     let err = String::from_utf8_lossy(&o.stderr);
     assert!(!o.status.success() && err.contains("Java and C#"), "{err}");
 }

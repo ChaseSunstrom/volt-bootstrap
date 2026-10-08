@@ -51,7 +51,7 @@ enum shape {
 // shapes that only work at the edge of an export fn
 // the languages whose bindings take every shape (bind.wide), as messages name them
 fn wide_langs() -> std::string {
-    return S("C, C++, Rust, Zig, Python, Java and C#");
+    return S("C, C++, Rust, Zig, Go, Python, Java and C#");
 }
 
 fn plain(s: shape) -> bool {
@@ -7758,50 +7758,63 @@ attach fn go_ty(this: bind&, t: u32) -> std::string {
         },
         .HANDLE(s) => { return fmt("*{}", this.go_tname(this.c.si(s).name)); },
         .SLICE(x) => { return fmt("[]{}", this.go_ty(x)); },
-        .OPT(x) => { return fmt("*{}", this.go_ty(x)); },
-        .RESULT(e, x) => { return this.go_ty(x); },
-        .CLOSURE(i) => {
-            match (*this.c.t.get(t)) {
-                .FN_VAL(ps&, r) => {
-                    var s = S("func(");
-                    for (k) in 0..ps.len {
-                        if (k > 0) {
-                            s.append(", ");
-                        }
-                        s.append(this.go_ty(*ps.at(k)).as_str());
-                    }
-                    s.push(')');
-                    if (r != VOID) {
-                        s.push(' ');
-                        s.append(this.go_ty(r).as_str());
-                    }
-                    return s;
-                },
-                default => { return S("func()"); },
+        .LIST(x) => { return fmt("[]{}", this.go_ty(this.list_elem(t))); },
+        .OPT(x) => {
+            // an optional handle is the type's pointer (nil: none)
+            match (this.shape_of(x) ?? shape::VOID) {
+                .HANDLE(h) => { return this.go_ty(x); },
+                default => {},
             }
+            return fmt("*{}", this.go_ty(x));
+        },
+        .RESULT(e, x) => { return this.go_ty(x); },
+        .TRAIT(i) => { return go_name(this.short(this.trait_of(t)).as_str()); },
+        .CLOSURE(i) => {
+            var ps: std::vec<u32> = {};
+            val r = this.fn_parts(t, &ps);
+            return fmt2("func({}){}", this.go_tys(&ps), this.go_results(r));
         },
         default => { return S("unsafe.Pointer"); },
     }
 }
 
-// the C type cgo calls it (C.int32_t, C.mathlib_vec2...)
-attach fn go_cty(this: bind&, t: u32) -> std::string {
-    match (this.shape_of(t) ?? shape::VOID) {
-        .BOOL => { return S("C.bool"); },
-        .INT(k) => { return fmt("C.{}", S(int_c(k))); },
-        .FLOAT(b) => {
-            if (b == 32) {
-                return S("C.float");
-            }
-            return S("C.double");
-        },
-        .ENUM(e) => { return fmt("C.{}", this.c_named(this.c.ei(e).name, false)); },
-        .CODE => { return S("C.uint32_t"); },
-        .STRUCT(s) => { return fmt("C.{}", this.c_named(this.c.si(s).name, false)); },
-        .STR => { return S("C.volt_str"); },
-        .TEXT(x) => { return S("C.volt_text"); },
-        default => { return S("unsafe.Pointer"); },
+// "A, B": the Go types of ps
+attach fn go_tys(this: bind&, ps: std::vec<u32>&) -> std::string {
+    var s: std::string = {};
+    for (k) in 0..ps.len {
+        if (k > 0) {
+            s.append(", ");
+        }
+        s.append(this.go_ty(*ps.at(k)).as_str());
     }
+    return s;
+}
+
+// the C type cgo calls it (C.int32_t, C.mathlib_vec2, *C.mathlib_counter...)
+attach fn go_cty(this: bind&, t: u32) -> std::string {
+    val h = this.handle_of(t);
+    if (h) {
+        return fmt("*C.{}", this.c_named(this.c.si(h).name, false));
+    }
+    match (this.shape_of(t) ?? shape::VOID) {
+        .VOID => { return {}; },
+        .CSTR => { return S("*C.char"); },
+        .PTR(x) => {
+            if (x == VOID) {
+                return S("unsafe.Pointer");
+            }
+            return fmt("*{}", this.go_cty(x));
+        },
+        .OPT(x) => {
+            if (this.handle_of(x) != null) {
+                return this.go_cty(x);
+            }
+        },
+        .ARRAY(e, n) => { return S("unsafe.Pointer"); },
+        .FN(i) => { return S("unsafe.Pointer"); },
+        default => {},
+    }
+    return fmt("C.{}", this.c_out(t, false));
 }
 
 // is t a scalar whose Go and C forms have the same size (so a []T can be passed in place)
@@ -7816,21 +7829,110 @@ attach fn go_same_layout(this: bind&, t: u32) -> bool {
     }
 }
 
-// the Go expression converting Go value v (of plain type t) to C
+// the Go expression converting Go value v (of plain type t, or a str lent for the call) to C
 attach fn go_to_c(this: bind&, t: u32, v: str) -> std::string {
     match (this.shape_of(t) ?? shape::VOID) {
         .STRUCT(s) => { return fmt("{}.c()", S(v)); },
+        .STR => { return fmt("goStr({})", S(v)); },
         default => { return fmt2("{}({})", this.go_cty(t), S(v)); },
     }
 }
 
-// the Go expression converting C value v (of plain type t) to Go
+// the Go expression converting C value v (of plain type t, or what Volt passes a Go function) to
+// Go: text as a string (a copy), a handle Volt lends as one that never frees it, one it gives as
+// the caller's
 attach fn go_from_c(this: bind&, t: u32, v: str) -> std::string {
+    val h = this.lent_handle(t);
+    if (h) {
+        return fmt2("&{}{{h: {}, lent: true}}", this.go_tname(this.c.si(h).name), S(v));
+    }
     match (this.shape_of(t) ?? shape::VOID) {
         .STRUCT(s) => { return fmt2("{}FromC({})", this.go_tname(this.c.si(s).name), S(v)); },
         .BOOL => { return fmt("bool({})", S(v)); },
+        .STR => { return fmt("goString({})", S(v)); },
+        .TEXT(x) => { return fmt("goString({})", S(v)); },
+        .CSTR => { return fmt("C.GoString({})", S(v)); },
+        .HANDLE(s) => { return fmt2("wrap{}({})", this.go_tname(this.c.si(s).name), S(v)); },
+        .PTR(x) => { return fmt("unsafe.Pointer({})", S(v)); },
         default => { return fmt2("{}({})", this.go_ty(t), S(v)); },
     }
+}
+
+// the C form of Go value v (of type t) a Go function gives Volt back (s is its callback): text
+// copied into C memory Volt frees, a str into C memory freed when the call s was passed to
+// returns, a handle given up
+attach fn go_give(this: bind&, t: u32, v: str) -> std::string {
+    if (this.lent_handle(t) != null) {
+        return fmt("{}.handle()", S(v));
+    }
+    match (this.shape_of(t) ?? shape::VOID) {
+        .TEXT(x) => { return fmt("goText({})", S(v)); },
+        .STR => { return fmt("s.str({})", S(v)); },
+        .CSTR => { return fmt("(*C.char)(unsafe.Pointer(s.str({} + \"\\x00\").ptr))", S(v)); },
+        .HANDLE(h) => { return fmt("{}.give()", S(v)); },
+        .PTR(x) => { return fmt2("({})({})", this.go_cty(t), S(v)); },
+        default => { return this.go_to_c(t, v); },
+    }
+}
+
+// the statements of a Go function Volt calls that give back the C form of r, call's result (E!T
+// comes from Go as (T, error), E!void as error)
+attach fn go_return(this: bind&, r: u32, call: str) -> std::string {
+    match (this.shape_of(r) ?? shape::VOID) {
+        .VOID => { return fmt("{}\n", S(call)); },
+        .RESULT(e, x) => {
+            val rn = this.c_named(this.result_name(r).as_str(), false);
+            if (x == VOID) {
+                return fmt2("return C.{}{{error: codeOf({})}}\n", copy rn, S(call));
+            }
+            var out = fmt2("v, err := {}\nif err != nil {{\n    return C.{}{{error: codeOf(err)}}\n}}\n", S(call), copy rn);
+            out.append(fmt2("return C.{}{{value: {}}}\n", copy rn, this.go_give(x, "v")).as_str());
+            return out;
+        },
+        default => { return fmt("return {}\n", this.go_give(r, call)); },
+    }
+}
+
+// a Go function Volt calls with the handle of a callback (first) and ps' C forms: it calls target
+// with Go values and gives back r's C form. A panic is kept in the callback (re-panicked when the
+// call it was passed to returns): Volt gets r's zero (empty text), or, when r is a handle, which
+// has none, the program ends
+attach fn go_export(this: bind&, name: str, first: str, target: str, ps: std::vec<u32>&, r: u32) -> std::string {
+    var params = fmt("{} unsafe.Pointer", S(first));
+    var args: std::string = {};
+    // a handle Volt lends is good for this call only: its value is cleared when it returns
+    var lent: std::string = {};
+    for (k) in 0..ps.len {
+        val a = fmt("a{}", unum(@cast<u64>(k)));
+        params.append(fmt2(", {} {}", copy a, this.go_cty(this.in_ty(*ps.at(k)))).as_str());
+        if (k > 0) {
+            args.append(", ");
+        }
+        if (this.lent_handle(*ps.at(k)) != null) {
+            lent.append(fmt3("    {}_l := {}\n    defer func() {{ {}_l.h = nil }}()\n", copy a, this.go_from_c(*ps.at(k), a.as_str()), copy a).as_str());
+            args.append(fmt("{}_l", copy a).as_str());
+            continue;
+        }
+        args.append(this.go_from_c(*ps.at(k), a.as_str()).as_str());
+    }
+    var ret: std::string = {};
+    if (r != VOID) {
+        ret = fmt(" (out {})", this.go_cty(r));
+    }
+    var caught = S("            s.catch(v)\n");
+    if (this.handle_of(r) != null || this.is_ref(r)) {
+        caught = S("            fatal(v)\n");
+    }
+    match (this.shape_of(r) ?? shape::VOID) {
+        .TEXT(x) => { caught.append("            out = goText(\"\")\n"); },
+        default => {},
+    }
+    var out = fmt4("\n//export {}\nfunc {}({}){} {{\n", S(name), S(name), move params, move ret);
+    out.append(fmt2("    s := (*cgo.Handle)({}).Value().(*callback)\n    defer func() {{\n        if v := recover(); v != nil {{\n{}        }}\n    }}()\n", S(first), move caught).as_str());
+    out.append(lent.as_str());
+    out.append(indent(this.go_return(r, fmt2("{}({})", S(target), move args).as_str()).as_str()).as_str());
+    out.append("}\n");
+    return out;
 }
 
 attach fn go_plain(this: bind&, t: u32) -> bool {
@@ -7856,33 +7958,39 @@ struct go_arg {
     decl: std::string = {};
     pass: std::string = {};
     before: std::string = {};
+    give: std::string = {}; // after every argument's before: letting go of what's given to Volt
     after: std::string = {};
+    // first: what has to stay alive until the wrapper returns (the result may borrow from it, and
+    // a finalizer would free it once the last use is the call)
+    keep: std::string = {};
 }
 
 attach fn go_arg_of(this: bind&, t: u32, name: str, a: go_arg&) -> void {
-    val h = this.lent_handle(t);
-    if (h) {
-        a.decl = fmt2("{} {}", S(name), this.go_ty(t));
-        a.pass = fmt("{}.handle()", S(name));
-        a.after = fmt("runtime.KeepAlive({})\n", S(name));
+    val n = S(name);
+    a.decl = fmt2("{} {}", copy n, this.go_ty(t));
+    if (this.lent_handle(t) != null) {
+        a.pass = fmt("{}.handle()", copy n);
+        a.keep = fmt("defer runtime.KeepAlive({})\n", copy n);
         return;
     }
     if (this.go_plain(t)) {
-        a.decl = fmt2("{} {}", S(name), this.go_ty(t));
         a.pass = this.go_to_c(t, name);
         return;
     }
     match (this.shape_of(t) ?? shape::VOID) {
         .STR => {
-            a.decl = fmt("{} string", S(name));
-            a.pass = fmt("goStr({})", S(name));
-            a.after = fmt("runtime.KeepAlive({})\n", S(name));
+            a.pass = fmt("goStr({})", copy n);
+            a.keep = fmt("defer runtime.KeepAlive({})\n", copy n);
+        },
+        .TEXT(x) => {
+            // owned text in: Volt copies it
+            a.pass = fmt("goStr({})", copy n);
+            a.keep = fmt("defer runtime.KeepAlive({})\n", copy n);
         },
         .CSTR => {
-            a.decl = fmt("{} string", S(name));
-            a.before = fmt2("{}_c := C.CString({})\ndefer C.free(unsafe.Pointer(", S(name), S(name));
-            a.before.append(fmt("{}_c))\n", S(name)).as_str());
-            a.pass = fmt("{}_c", S(name));
+            a.before = fmt2("{}_c := C.CString({})\ndefer C.free(unsafe.Pointer(", copy n, copy n);
+            a.before.append(fmt("{}_c))\n", copy n).as_str());
+            a.pass = fmt("{}_c", copy n);
         },
         .PTR(x) => {
             if (x != VOID) {
@@ -7890,63 +7998,126 @@ attach fn go_arg_of(this: bind&, t: u32, name: str, a: go_arg&) -> void {
                     .STRUCT(s) => {
                         // a copy goes in, and what Volt changed comes back
                         val cn = this.c_named(this.c.si(s).name, false);
-                        a.decl = fmt2("{} {}", S(name), this.go_ty(t));
-                        a.before = fmt3("var {}_c *C.{}\nif {} != nil {{\n", S(name), copy cn, S(name));
-                        a.before.append(fmt3("    v := {}.c()\n    {}_c = &v\n}}\n", S(name), S(name), S("")).as_str());
-                        a.pass = fmt("{}_c", S(name));
-                        a.after = fmt3("if {} != nil {{\n    *{} = {}FromC(*", S(name), S(name), this.go_tname(this.c.si(s).name));
-                        a.after.append(fmt("{}_c)\n}\n", S(name)).as_str());
+                        a.before = fmt3("var {}_c *C.{}\nif {} != nil {{\n", copy n, copy cn, copy n);
+                        a.before.append(fmt2("    v := {}.c()\n    {}_c = &v\n}}\n", copy n, copy n).as_str());
+                        a.pass = fmt("{}_c", copy n);
+                        a.after = fmt3("if {} != nil {{\n    *{} = {}FromC(*", copy n, copy n, this.go_tname(this.c.si(s).name));
+                        a.after.append(fmt("{}_c)\n}\n", copy n).as_str());
                         return;
                     },
                     default => {},
                 }
             }
-            a.decl = fmt("{} unsafe.Pointer", S(name));
-            a.pass = S(name);
+            a.decl = fmt("{} unsafe.Pointer", copy n);
+            a.pass = copy n;
         },
-        .SLICE(x) => {
-            val sn = this.made_name("slice", x, false);
-            a.decl = fmt2("{} {}", S(name), this.go_ty(t));
-            if (this.go_same_layout(x)) {
-                // the Go elements are the C elements: passed in place
-                a.before = fmt4("var {}_p *{}\nif len({}) > 0 {{\n    {}_p = ", S(name), this.go_cty(x), S(name), S(name));
-                a.before.append(fmt3("(*{})(unsafe.Pointer(&{}[0]))\n}}\n", this.go_cty(x), S(name), S("")).as_str());
-                a.pass = fmt4("C.{}{{ptr: {}_p, len: C.size_t(len({}))}}", copy sn, S(name), S(name), S(""));
-                a.after = fmt("runtime.KeepAlive({})\n", S(name));
-            } else {
-                // structs: a C copy, and what Volt wrote comes back
-                a.before = fmt4("{}_c := make([]{}, len({}) + 1)\nfor i, v := range {} {{\n", S(name), this.go_cty(x), S(name), S(name));
-                a.before.append(fmt2("    {}_c[i] = {}\n}}\n", S(name), this.go_to_c(x, "v")).as_str());
-                a.pass = fmt4("C.{}{{ptr: &{}_c[0], len: C.size_t(len({}))}}", copy sn, S(name), S(name), S(""));
-                a.after = fmt3("for i := range {} {{\n    {}[i] = ", S(name), S(name), S(""));
-                a.after.append(fmt("{}\n}\n", this.go_from_c(x, fmt("{}_c[i]", S(name)).as_str())).as_str());
+        .HANDLE(s) => {
+            // given to Volt, which frees it (let go once every argument is checked)
+            a.before = fmt2("{}_h := {}.owned()\n", copy n, copy n);
+            a.give = fmt("{}.forget()\n", copy n);
+            a.pass = fmt("{}_h", copy n);
+        },
+        .TRAIT(i) => {
+            // lent for the call, or given (see ofT)
+            var given = S("true");
+            if (this.is_ref(t)) {
+                given = S("false");
             }
+            a.before = fmt5("{}_o, {}_done := of{}({}, {})\n", copy n, copy n, go_name(this.short(this.trait_of(t)).as_str()), copy n, move given);
+            a.before.append(fmt("defer {}_done()\n", copy n).as_str());
+            a.pass = fmt("{}_o", copy n);
+        },
+        .SLICE(x) => { this.go_slice_arg(x, false, name, a); },
+        .LIST(x) => {
+            // given to Volt, which copies the elements (and takes the handles)
+            this.go_slice_arg(this.view_of(this.list_elem(t)), true, name, a);
         },
         .OPT(x) => {
-            val on = this.made_name("opt", x, false);
-            a.decl = fmt2("{} {}", S(name), this.go_ty(t));
-            a.before = fmt3("var {}_c C.{}\nif {} != nil {{\n", S(name), copy on, S(name));
-            a.before.append(fmt3("    {}_c.value = {}\n    {}_c.has = true\n}}\n", S(name), this.go_to_c(x, fmt("*{}", S(name)).as_str()), S(name)).as_str());
-            a.pass = fmt("{}_c", S(name));
+            if (this.handle_of(x) != null) {
+                // given to Volt, which frees it (nil: none)
+                a.before = fmt4("var {}_c {}\nif {} != nil {{\n    {}_c = ", copy n, this.go_cty(x), copy n, copy n);
+                a.before.append(fmt("{}.owned()\n}\n", copy n).as_str());
+                a.give = fmt2("if {} != nil {{\n    {}.forget()\n}}\n", copy n, copy n);
+                a.pass = fmt("{}_c", copy n);
+                return;
+            }
+            // text as a str, which Volt copies
+            val v = this.in_ty(x);
+            a.before = fmt3("var {}_c C.{}\nif {} != nil {{\n", copy n, this.made_name("opt", v, false), copy n);
+            a.before.append(fmt3("    {}_c.value = {}\n    {}_c.has = true\n}}\n", copy n, this.go_to_c(v, fmt("*{}", copy n).as_str()), copy n).as_str());
+            a.pass = fmt("{}_c", copy n);
+            a.keep = fmt("defer runtime.KeepAlive({})\n", copy n);
         },
         .CLOSURE(i) => {
-            a.decl = fmt2("{} {}", S(name), this.go_ty(t));
             // the C side calls back through an exported Go function, which finds f by its handle
-            a.before = fmt3("{}_s := &callback{{f: {}}}\n{}_h := cgo.NewHandle(", S(name), S(name), S(name));
-            a.before.append(fmt2("{}_s)\ndefer {}_h.Delete()\n", S(name), S(name)).as_str());
+            a.before = fmt3("{}_s := &callback{{f: {}}}\n{}_h := cgo.NewHandle(", copy n, copy n, copy n);
+            a.before.append(fmt3("{}_s)\ndefer {}_h.Delete()\ndefer {}_s.done()\n", copy n, copy n, copy n).as_str());
             // a pointer to the handle (cgo's rule: C may use it during the call, and it holds no Go pointers)
             a.pass = fmt3("C.{}(C.{}cb{}), unsafe.Pointer(&", this.cb_name(i, false), S(this.pkg), unum(@cast<u64>(i)));
-            a.pass.append(fmt("{}_h)", S(name)).as_str());
-            a.after = fmt("{}_s.repanic()\n", S(name));
+            a.pass.append(fmt("{}_h)", copy n).as_str());
         },
-        default => {
-            a.decl = fmt2("{} {}", S(name), this.go_ty(t));
-            a.pass = S(name);
-        },
+        default => { a.pass = copy n; },
     }
 }
 
-// what a wrapper returns: Go result types, and whether it adds an error or a found flag
+// a slice parameter whose elements C takes as x (text as str, a handle as its pointer); given: a
+// list's, whose handles are given up
+attach fn go_slice_arg(this: bind&, x: u32, given: bool, name: str, a: go_arg&) -> void {
+    val n = S(name);
+    val sn = this.made_name("slice", x, false);
+    if (x == STR) {
+        // the strings' bytes, pinned for the call (see goStrs)
+        a.before = fmt2("var {}_pin runtime.Pinner\ndefer {}_pin.Unpin()\n", copy n, copy n);
+        a.pass = fmt2("goStrs({}, &{}_pin)", copy n, copy n);
+        a.keep = fmt("defer runtime.KeepAlive({})\n", copy n);
+        return;
+    }
+    // what C reads: the elements in place, or a copy
+    var pass = fmt3("C.{}{{ptr: &{}_c[0], len: C.size_t(len({}))}}", copy sn, copy n, copy n);
+    if (this.handle_of(x) != null) {
+        // the handles' pointers, each checked before any is given up
+        var get = S("handle");
+        if (given) {
+            get = S("owned");
+        }
+        a.before = fmt4("{}_c := make([]{}, len({})+1)\nfor i, x := range {} {{\n", copy n, this.go_cty(x), copy n, copy n);
+        a.before.append(fmt2("    {}_c[i] = x.{}()\n}}\n", copy n, move get).as_str());
+        a.pass = move pass;
+        if (given) {
+            a.give = fmt("for _, x := range {} {{\n    x.forget()\n}}\n", copy n);
+        } else {
+            a.keep = fmt("defer runtime.KeepAlive({})\n", copy n);
+        }
+        return;
+    }
+    if (this.go_same_layout(x)) {
+        // the Go elements are the C elements: passed in place
+        a.before = fmt4("var {}_p *{}\nif len({}) > 0 {{\n    {}_p = ", copy n, this.go_cty(x), copy n, copy n);
+        a.before.append(fmt2("(*{})(unsafe.Pointer(&{}[0]))\n}}\n", this.go_cty(x), copy n).as_str());
+        a.pass = fmt3("C.{}{{ptr: {}_p, len: C.size_t(len({}))}}", copy sn, copy n, copy n);
+        a.keep = fmt("defer runtime.KeepAlive({})\n", copy n);
+        return;
+    }
+    a.pass = move pass;
+    match (this.shape_of(x) ?? shape::VOID) {
+        .OPT(v) => {
+            // optionals: a C copy (what Volt writes in it doesn't come back)
+            val on = this.made_name("opt", v, false);
+            a.before = fmt4("{}_c := make([]C.{}, len({})+1)\nfor i, v := range {} {{\n", copy n, copy on, copy n, copy n);
+            a.before.append(fmt3("    if v != nil {{\n        {}_c[i] = C.{}{{value: {}, has: true}}\n    }}\n}}\n", copy n, copy on, this.go_to_c(v, "*v")).as_str());
+            return;
+        },
+        default => {},
+    }
+    // structs: a C copy, and what Volt wrote comes back
+    a.before = fmt4("{}_c := make([]{}, len({})+1)\nfor i, v := range {} {{\n", copy n, this.go_cty(x), copy n, copy n);
+    a.before.append(fmt2("    {}_c[i] = {}\n}}\n", copy n, this.go_to_c(x, "v")).as_str());
+    a.after = fmt2("for i := range {} {{\n    {}[i] = ", copy n, copy n);
+    a.after.append(fmt("{}\n}\n", this.go_from_c(x, fmt("{}_c[i]", copy n).as_str())).as_str());
+}
+
+// what a wrapper returns: Go result types, and whether it adds an error or a found flag (an
+// optional handle is nil for none)
 attach fn go_results(this: bind&, t: u32) -> std::string {
     match (this.shape_of(t) ?? shape::VOID) {
         .VOID => { return {}; },
@@ -7954,23 +8125,50 @@ attach fn go_results(this: bind&, t: u32) -> std::string {
             if (x == VOID) {
                 return S(" error");
             }
-            return fmt(" ({}, error)", this.go_ty(x));
+            return fmt(" ({}, error)", this.go_ret(x));
         },
-        .OPT(x) => { return fmt(" ({}, bool)", this.go_ty(x)); },
-        default => { return fmt(" {}", this.go_ty(t)); },
+        .OPT(x) => {
+            if (this.handle_of(x) != null) {
+                return fmt(" {}", this.go_ty(x));
+            }
+            return fmt(" ({}, bool)", this.go_ty(x));
+        },
+        default => { return fmt(" {}", this.go_ret(t)); },
+    }
+}
+
+// the Go type of a value Volt gives back: a trait's as VoltT, a closure as ClosureN
+attach fn go_ret(this: bind&, t: u32) -> std::string {
+    match (this.shape_of(t) ?? shape::VOID) {
+        .TRAIT(i) => { return fmt("*Volt{}", go_name(this.short(this.trait_of(t)).as_str())); },
+        .CLOSURE(i) => { return fmt("*Closure{}", unum(@cast<u64>(i))); },
+        default => { return this.go_ty(t); },
     }
 }
 
 // the Go value of C result r (of type t)
 attach fn go_value(this: bind&, t: u32, r: str) -> std::string {
-    if (this.go_plain(t)) {
+    if (this.go_plain(t) || this.lent_handle(t) != null) {
         return this.go_from_c(t, r);
     }
     match (this.shape_of(t) ?? shape::VOID) {
-        .STR => { return fmt3("C.GoStringN((*C.char)(unsafe.Pointer({}.ptr)), C.int({}.len))", S(r), S(r), S("")); },
+        .STR => { return fmt("goString({})", S(r)); },
         .CSTR => { return fmt("C.GoString({})", S(r)); },
         .TEXT(x) => { return fmt("takeText({})", S(r)); },
         .HANDLE(s) => { return fmt2("wrap{}({})", this.go_tname(this.c.si(s).name), S(r)); },
+        .TRAIT(i) => { return fmt2("wrapVolt{}({})", go_name(this.short(this.trait_of(t)).as_str()), S(r)); },
+        .CLOSURE(i) => { return fmt2("wrapClosure{}({})", unum(@cast<u64>(i)), S(r)); },
+        .LIST(x) => {
+            // copied into a slice (text copied, each handle the slice's), and the list freed
+            val e = this.list_elem(t);
+            var f = fmt3("func(x {}) {} {{ return {} }}", this.go_cty(this.view_of(e)), this.go_ty(e), this.go_value(e, "x"));
+            match (this.shape_of(e) ?? shape::VOID) {
+                .TEXT(y) => { f = S("goString"); },
+                .HANDLE(h) => { f = fmt("wrap{}", this.go_tname(this.c.si(h).name)); },
+                default => {},
+            }
+            return fmt5("takeList({}.ptr, {}.len, {}.owner, {}.drop, {})", S(r), S(r), S(r), S(r), move f);
+        },
         .SLICE(x) => {
             if (this.go_same_layout(x)) {
                 return fmt4("append([]{}(nil), unsafe.Slice((*{})(unsafe.Pointer({}.ptr)), int({}.len))...)", this.go_ty(x), this.go_ty(x), S(r), S(r));
@@ -7981,15 +8179,20 @@ attach fn go_value(this: bind&, t: u32, r: str) -> std::string {
     }
 }
 
-attach fn go_body(this: bind&, f: u32, args: std::vec<go_arg>&, self_pass: str?) -> std::string {
-    val info = this.c.fi(f);
+// the statements of a Go wrapper calling call (a C function) with self_pass first (a method's
+// receiver, o) and args, returning t's Go value
+attach fn go_call(this: bind&, call: std::string, self_pass: str?, args: std::vec<go_arg>&, t: u32) -> std::string {
     var passes: std::string = {};
     var before: std::string = {};
+    var give: std::string = {};
     var after: std::string = {};
     val sp = self_pass;
     if (sp) {
         passes.append(sp);
-        after.append("runtime.KeepAlive(o)\n");
+        before.append("defer runtime.KeepAlive(o)\n");
+    }
+    for (a&) in args.items() {
+        before.append(a.keep.as_str());
     }
     for (a&) in args.items() {
         if (passes.len() > 0) {
@@ -7997,37 +8200,49 @@ attach fn go_body(this: bind&, f: u32, args: std::vec<go_arg>&, self_pass: str?)
         }
         passes.append(a.pass.as_str());
         before.append(a.before.as_str());
+        give.append(a.give.as_str());
         after.append(a.after.as_str());
     }
     var out = move before;
-    val call = fmt2("C.{}({})", S(info.c_name), move passes);
-    if (info.ret == VOID) {
-        out.append(fmt("{}\n", move call).as_str());
+    out.append(give.as_str());
+    val c = fmt2("{}({})", move call, move passes);
+    if (t == VOID) {
+        out.append(fmt("{}\n", move c).as_str());
         out.append(after.as_str());
         return out;
     }
-    out.append(fmt("r := {}\n", move call).as_str());
+    out.append(fmt("r := {}\n", move c).as_str());
     out.append(after.as_str());
-    match (this.shape_of(info.ret) ?? shape::VOID) {
+    match (this.shape_of(t) ?? shape::VOID) {
         .RESULT(e, x) => {
             if (x == VOID) {
                 out.append("if r.error != 0 {\n    return errorOf(uint32(r.error))\n}\nreturn nil\n");
             } else {
-                out.append(fmt("if r.error != 0 {\n    var zero {}\n    return zero, errorOf(uint32(r.error))\n}\n", this.go_ty(x)).as_str());
+                out.append(fmt("if r.error != 0 {\n    var zero {}\n    return zero, errorOf(uint32(r.error))\n}\n", this.go_ret(x)).as_str());
                 out.append(fmt("return {}, nil\n", this.go_value(x, "r.value")).as_str());
             }
         },
         .OPT(x) => {
+            if (this.handle_of(x) != null) {
+                // nil for none
+                out.append(fmt("return {}\n", this.go_value(x, "r")).as_str());
+                return out;
+            }
             out.append(fmt("if !r.has {\n    var zero {}\n    return zero, false\n}\n", this.go_ty(x)).as_str());
             out.append(fmt("return {}, true\n", this.go_value(x, "r.value")).as_str());
         },
-        default => { out.append(fmt("return {}\n", this.go_value(info.ret, "r")).as_str()); },
+        default => { out.append(fmt("return {}\n", this.go_value(t, "r")).as_str()); },
     }
     return out;
 }
 
+attach fn go_body(this: bind&, f: u32, args: std::vec<go_arg>&, self_pass: str?) -> std::string {
+    val info = this.c.fi(f);
+    return this.go_call(fmt("C.{}", S(info.c_name)), self_pass, args, info.ret);
+}
+
 fn go_keyword(s: str) -> bool {
-    val words: str[] = { "break", "case", "chan", "const", "continue", "default", "defer", "else", "fallthrough", "for", "func", "go", "goto", "if", "import", "interface", "map", "package", "range", "return", "select", "struct", "switch", "type", "var", "len", "cap", "new", "make", "error", "string" };
+    val words: str[] = { "break", "case", "chan", "const", "continue", "default", "defer", "else", "fallthrough", "for", "func", "go", "goto", "if", "import", "interface", "map", "package", "range", "return", "select", "struct", "switch", "type", "var", "len", "cap", "new", "make", "error", "string", "r", "o", "C", "runtime", "unsafe", "cgo" };
     for (w) in words {
         if (w == s) {
             return true;
@@ -8075,58 +8290,246 @@ attach fn go_doc(this: bind&, f: u32, name: str) -> std::string {
     return fmt2("// {}: {}\n", S(name), move d);
 }
 
+// s, then spaces up to n bytes (gofmt's columns)
+fn pad_to(s: str, n: usize) -> std::string {
+    var out = S(s);
+    while (out.len() < n) {
+        out.push(' ');
+    }
+    return out;
+}
+
+// what Go calls through C function pointers (it can't call one itself), and the tables of Go values
+// of traits: static inline C, so each copy of the preamble (cgo makes two) has its own, and they
+// may sit next to //export
+attach fn go_c_helpers(this: bind&) -> std::string {
+    val p = S(this.pkg);
+    var out: std::string = {};
+    if (this.lists.len > 0 || this.closures_out.len > 0 || this.traits.len > 0) {
+        out.append(fmt("static inline void {}_go_drop(void (*drop)(void *), void *self) {{\n    if (drop) {{\n        drop(self);\n    }}\n}}\n", copy p).as_str());
+    }
+    if (this.texts.len > 0) {
+        // text Go gives Volt: bytes in C memory, freed with free
+        out.append(fmt("static inline void {}_go_free(void *p) {{\n    free(p);\n}}\n", copy p).as_str());
+        out.append(fmt2("static inline volt_text {}_go_text(void *p, size_t n) {{\n    volt_text t = {{(const uint8_t *)p, n, p, {}_go_free}};\n    return t;\n}}\n", copy p, copy p).as_str());
+    }
+    for (i) in 0..this.closures.len {
+        if (!has_u32(&this.closures_out, @cast<u32>(i))) {
+            continue;
+        }
+        val ct = *this.closures.at(i);
+        var ps: std::vec<u32> = {};
+        val r = this.fn_parts(ct, &ps);
+        out.append(this.go_c_call(fmt2("{}_go_closure{}", copy p, unum(@cast<u64>(i))).as_str(), fmt("{} c", this.c_out(ct, false)).as_str(), "c.call(c.self", &ps, r).as_str());
+    }
+    if (this.traits.len > 0) {
+        out.append(fmt("extern void {}GoDrop(void *self);\n", copy p).as_str());
+    }
+    for (t&) in this.traits.items() {
+        val sh = this.short(*t);
+        val tn = go_name(sh.as_str());
+        var vt = copy sh;
+        vt.append("_vt");
+        val vtn = this.c_named(vt.as_str(), false);
+        val fns = this.fns_of(*t);
+        var names: std::string = {};
+        for (f&) in fns.items() {
+            var params = S("void *self");
+            for (k) in 0..f.params.len {
+                params.append(fmt2(", {}a{}", spaced(this.c_in(*f.params.at(k), false)), unum(@cast<u64>(k))).as_str());
+            }
+            val gn = fmt3("{}{}{}", copy p, copy tn, go_name(f.name));
+            out.append(fmt3("extern {}{}({});\n", spaced(this.c_out(f.ret, false)), copy gn, move params).as_str());
+            if (names.len() > 0) {
+                names.append(", ");
+            }
+            names.append(gn.as_str());
+        }
+        out.append(fmt5("static inline const {} *{}_go_{}_vt(void) {{\n    static const {} vt = {{{}}};\n    return &vt;\n}}\n", copy vtn, copy p, copy sh, copy vtn, move names).as_str());
+        for (f&) in fns.items() {
+            out.append(this.go_c_call(fmt3("{}_go_{}_{}", copy p, copy sh, S(f.name)).as_str(), fmt("{} o", this.c_named(sh.as_str(), false)).as_str(), fmt("o.vt->{}(o.self", S(f.name)).as_str(), &f.params, f.ret).as_str());
+        }
+    }
+    if (out.len() == 0) {
+        return out;
+    }
+    return fmt("// what Go calls through C function pointers, and the tables of Go values of traits (static\n// inline: each copy of this preamble has its own, so they may sit next to //export)\n{}", move out);
+}
+
+// a static inline C function name(first, a0..) calling a function pointer: call (up to its first
+// argument), a0..)
+attach fn go_c_call(this: bind&, name: str, first: str, call: str, ps: std::vec<u32>&, r: u32) -> std::string {
+    var params = S(first);
+    var args = S(call);
+    for (k) in 0..ps.len {
+        val a = fmt("a{}", unum(@cast<u64>(k)));
+        params.append(fmt2(", {}{}", spaced(this.c_in(*ps.at(k), false)), copy a).as_str());
+        args.append(fmt(", {}", copy a).as_str());
+    }
+    var ret = S("return ");
+    if (r == VOID) {
+        ret = {};
+    }
+    return fmt5("static inline {}{}({}) {{\n    {}{});\n}}\n", spaced(this.c_out(r, false)), S(name), move params, move ret, move args);
+}
+
+// a Go method of a value Volt gave out (o): its C call (a helper above), with ps as a0..
+attach fn go_method(this: bind&, recv: str, name: str, call: std::string, ps: std::vec<u32>&, r: u32) -> std::string {
+    var args: std::vec<go_arg> = {};
+    for (k) in 0..ps.len {
+        var a: go_arg = {};
+        this.go_arg_of(*ps.at(k), fmt("a{}", unum(@cast<u64>(k))).as_str(), &a);
+        put(&args, move a);
+    }
+    var out = fmt4("\nfunc (o *{}) {}({}){} {{\n", S(recv), S(name), go_decls(&args), this.go_results(r));
+    out.append(indent(this.go_call(move call, "o.live()", &args, r).as_str()).as_str());
+    out.append("}\n");
+    return out;
+}
+
+// closure type K given out by Volt: a type with Call and Close
+attach fn go_closure(this: bind&, k: u32, out: std::string&) -> void {
+    val ct = *this.closures.at(k);
+    var ps: std::vec<u32> = {};
+    val r = this.fn_parts(ct, &ps);
+    val n = fmt("Closure{}", unum(@cast<u64>(k)));
+    var tpl = S("\n// $N is $T, given out by Volt: Call calls it; Close frees it (or the garbage collector does).\ntype $N struct {\n    c C.$C\n}\n\nfunc wrap$N(c C.$C) *$N {\n    o := &$N{c: c}\n    runtime.SetFinalizer(o, (*$N).Close)\n    return o\n}\n");
+    tpl.append("\n// Close frees the closure (once; later calls do nothing).\nfunc (o *$N) Close() {\n    if o.c.call != nil {\n        C.$P_go_drop(o.c.drop, o.c.self)\n        o.c = C.$C{}\n        runtime.SetFinalizer(o, nil)\n    }\n}\n");
+    tpl.append("\nfunc (o *$N) live() C.$C {\n    if o.c.call == nil {\n        panic(\"$N: used after Close\")\n    }\n    return o.c\n}\n");
+    tpl = replace_all(tpl.as_str(), "$N", n.as_str());
+    tpl = replace_all(tpl.as_str(), "$T", this.c.ty_name(ct).as_str());
+    tpl = replace_all(tpl.as_str(), "$C", this.c_out(ct, false).as_str());
+    out.append(replace_all(tpl.as_str(), "$P", this.pkg).as_str());
+    out.append("\n// Call calls the closure.");
+    out.append(this.go_method(n.as_str(), "Call", fmt2("C.{}_go_closure{}", S(this.pkg), unum(@cast<u64>(k))), &ps, r).as_str());
+}
+
+// trait K in Go: an interface (any Go value with its methods passes where Volt takes one, through
+// a table of exported Go functions), VoltT for one Volt gave out, and ofT, which makes a Go value
+// Volt's object
+attach fn go_trait(this: bind&, k: u32, out: std::string&) -> void {
+    val t = *this.traits.at(k);
+    val sh = this.short(t);
+    val tn = go_name(sh.as_str());
+    val fns = this.fns_of(t);
+    out.append(fmt3("\n// {} is Volt trait {}: any Go value with its methods passes where Volt takes one (lent for the call, or given: Volt calls its Close, if it has one, when it's done with it). One Volt gives back is a *Volt{}.\ntype ", copy tn, this.c.ty_name(t), copy tn).as_str());
+    out.append(fmt("{} interface {{\n", copy tn).as_str());
+    for (f&) in fns.items() {
+        out.append(fmt3("    {}({}){}\n", go_name(f.name), this.go_tys(&f.params), this.go_results(f.ret)).as_str());
+    }
+    out.append("}\n");
+    // the table's functions, which call the Go value's methods
+    for (f&) in fns.items() {
+        out.append(this.go_export(fmt3("{}{}{}", S(this.pkg), copy tn, go_name(f.name)).as_str(), "self", fmt2("s.f.({}).{}", copy tn, go_name(f.name)).as_str(), &f.params, f.ret).as_str());
+    }
+    var tpl = S("\n// Volt$T is a $T Volt gave out: its methods call Volt's; Close frees it (or the garbage collector does).\ntype Volt$T struct {\n    o C.$O\n}\n\nfunc wrapVolt$T(o C.$O) *Volt$T {\n    w := &Volt$T{o: o}\n    runtime.SetFinalizer(w, (*Volt$T).Close)\n    return w\n}\n");
+    tpl.append("\n// Close frees it (once; later calls do nothing).\nfunc (w *Volt$T) Close() {\n    if w.o.vt != nil {\n        C.$P_go_drop(w.o.drop, w.o.self)\n        w.o = C.$O{}\n        runtime.SetFinalizer(w, nil)\n    }\n}\n");
+    tpl.append("\nfunc (w *Volt$T) live() C.$O {\n    if w.o.vt == nil {\n        panic(\"Volt$T: used after Close\")\n    }\n    return w.o\n}\n");
+    var methods: std::string = {};
+    for (f&) in fns.items() {
+        methods.append(this.go_method(fmt("Volt{}", copy tn).as_str(), go_name(f.name).as_str(), fmt3("C.{}_go_{}_{}", S(this.pkg), copy sh, S(f.name)), &f.params, f.ret).as_str());
+    }
+    tpl.append(methods.as_str());
+    tpl.append("\n// of$T is v as Volt's $T for a call: a *Volt$T as it is (given: Volt's from here), any other value through a table calling its methods (lent for the call, or given: Volt drops it). done ends the call: it lets go of what only the call needed, and re-panics what v's methods panicked with.\n");
+    tpl.append("func of$T(v $T, given bool) (o C.$O, done func()) {\n    if v == nil {\n        panic(\"$P: a nil $T\")\n    }\n    if w, ok := v.(*Volt$T); ok {\n        o = w.live()\n        if given {\n            w.o = C.$O{}\n            runtime.SetFinalizer(w, nil)\n        } else {\n            o.drop = nil\n        }\n        return o, func() { runtime.KeepAlive(w) }\n    }\n");
+    tpl.append("    s := &callback{f: v}\n    h := (*cgo.Handle)(C.malloc(C.size_t(unsafe.Sizeof(cgo.Handle(0)))))\n    *h = cgo.NewHandle(s)\n    o = C.$O{vt: C.$P_go_$S_vt(), self: unsafe.Pointer(h)}\n    if given {\n        o.drop = (*[0]byte)(C.$PGoDrop)\n        return o, s.done\n    }\n    return o, func() {\n        h.Delete()\n        C.free(unsafe.Pointer(h))\n        s.done()\n    }\n}\n");
+    tpl = replace_all(tpl.as_str(), "$T", tn.as_str());
+    tpl = replace_all(tpl.as_str(), "$O", this.c_named(sh.as_str(), false).as_str());
+    tpl = replace_all(tpl.as_str(), "$S", sh.as_str());
+    out.append(replace_all(tpl.as_str(), "$P", this.pkg).as_str());
+}
+
+// the Go part (after import "C") indented with tabs, as gofmt does
+fn go_tabs(s: str) -> std::string {
+    var out: std::string = {};
+    var start = true;
+    var i: usize = 0;
+    while (i < s.len) {
+        if (start && i + 4 <= s.len && s[i..i + 4] == "    ") {
+            out.push('\t');
+            i += 4;
+            continue;
+        }
+        start = s[i] == '\n';
+        out.push(s[i]);
+        i += 1;
+    }
+    return out;
+}
+
 attach fn go_text(this: bind&) -> std::string {
     val ents = this.entries();
     val p = this.pkg;
+    // Go functions Volt calls back (closures as parameters, the methods of traits' Go values)
+    val calls = this.closures.len > 0 || this.traits.len > 0;
     var out = S("// Code generated by voltc bindings. DO NOT EDIT.\n\n");
     out.append(fmt("// Package {}: the Volt package for Go, through cgo. It links\n", S(p)).as_str());
     out.append(fmt("// lib{} (set CGO_LDFLAGS=-L<dir> for where it is). Errors come back as *Error values.\n", S(p)).as_str());
     out.append(fmt("package {}\n\n/*\n", S(p)).as_str());
     out.append(fmt("#cgo LDFLAGS: -l{}\n#include <stdlib.h>\n", S(p)).as_str());
-    // only declarations here: this file exports Go functions to C, and cgo allows no C definitions
-    // next to //export
+    // only declarations here (and static inline helpers): this file exports Go functions to C, and
+    // cgo allows no C definitions next to //export
     var hdr = this.c_text();
     hdr = without_inline_text_free(hdr.as_str());
     out.append(hdr.as_str());
     for (i) in 0..this.closures.len {
-        match (*this.c.t.get(*this.closures.at(i))) {
-            .FN_VAL(ps&, r) => {
-                var params = S("void *user");
-                for (k) in 0..ps.len {
-                    params.append(fmt2(", {}a{}", spaced(this.c_prim(*ps.at(k), false)), unum(@cast<u64>(k))).as_str());
-                }
-                out.append(fmt4("extern {}{}cb{}({});\n", spaced(this.c_prim(r, false)), S(p), unum(@cast<u64>(i)), move params).as_str());
-            },
-            default => {},
+        var ps: std::vec<u32> = {};
+        val r = this.fn_parts(*this.closures.at(i), &ps);
+        var params = S("void *user");
+        for (k) in 0..ps.len {
+            params.append(fmt2(", {}a{}", spaced(this.c_in(*ps.at(k), false)), unum(@cast<u64>(k))).as_str());
         }
+        out.append(fmt4("extern {}{}cb{}({});\n", spaced(this.c_prim(r, false)), S(p), unum(@cast<u64>(i)), move params).as_str());
     }
-    out.append("*/\nimport \"C\"\n\nimport (\n    \"fmt\"\n    \"runtime\"\n    \"runtime/cgo\"\n    \"unsafe\"\n)\n");
-    out.append("\nvar _ = fmt.Sprint\nvar _ cgo.Handle\n");
+    out.append(this.go_c_helpers().as_str());
+    out.append("*/\nimport \"C\"\n");
+    // the Go part
+    var g = S("\nimport (\n    \"errors\"\n    \"fmt\"\n    \"os\"\n    \"runtime\"\n    \"runtime/cgo\"\n    \"unsafe\"\n)\n");
+    g.append("\nvar _ = fmt.Sprint\nvar _ = os.Exit\nvar _ = runtime.KeepAlive\nvar _ unsafe.Pointer\nvar _ cgo.Handle\n");
     // errors
-    out.append("\n// Error is an error a Volt function returned: its code and name. Each code is one value, so\n// errors.Is (or ==) against the package's Err... variables works.\ntype Error struct {\n    Code uint32\n    Name string\n}\n\nfunc (e *Error) Error() string { return e.Name }\n");
+    g.append("\n// Error is an error a Volt function returned: its code and name. Each code is one value, so\n// errors.Is (or ==) against the package's Err... variables works.\ntype Error struct {\n    Code uint32\n    Name string\n}\n\nfunc (e *Error) Error() string { return e.Name }\n");
     var codes: std::string = {};
     for (c&) in this.all_codes().items() {
         val v = fmt2("{}{}", go_name(c.set.as_str()), go_name(c.name));
-        out.append(fmt4("\n// {} is error {} of {}.\nvar {} = ", copy v, S(c.name), copy c.set, copy v).as_str());
-        out.append(fmt2("&Error{{Code: {}, Name: \"{}\"}}\n", num(c.code), S(c.name)).as_str());
-        codes.append(fmt3("    case {}:\n        return {}\n{}", num(c.code), copy v, S("")).as_str());
+        g.append(fmt4("\n// {} is error {} of {}.\nvar {} = ", copy v, S(c.name), copy c.set, copy v).as_str());
+        g.append(fmt2("&Error{{Code: {}, Name: \"{}\"}}\n", num(c.code), S(c.name)).as_str());
+        codes.append(fmt2("    case {}:\n        return {}\n", num(c.code), copy v).as_str());
     }
-    out.append(fmt("\nfunc errorOf(code uint32) error {\n    switch code {\n{}    }\n    return &Error{Code: code, Name: fmt.Sprint(\"error \", code)}\n}\n", move codes).as_str());
+    g.append(fmt("\nfunc errorOf(code uint32) error {\n    switch code {\n{}    }\n    return &Error{Code: code, Name: fmt.Sprint(\"error \", code)}\n}\n", move codes).as_str());
+    g.append("\n// codeOf is err's code for Volt (a Go function's error): an *Error's, else one no error set has\nfunc codeOf(err error) C.uint32_t {\n    if err == nil {\n        return 0\n    }\n    var e *Error\n    if errors.As(err, &e) && e.Code != 0 {\n        return C.uint32_t(e.Code)\n    }\n    return C.uint32_t(0xffffffff)\n}\n");
     // text and strings
-    out.append("\n// a string as a Volt str (the bytes stay Go's; C only reads them during the call)\nfunc goStr(s string) C.volt_str {\n    return C.volt_str{ptr: (*C.uint8_t)(unsafe.Pointer(unsafe.StringData(s))), len: C.size_t(len(s))}\n}\n");
+    if (this.uses_str) {
+        g.append("\n// a string as a Volt str (the bytes stay Go's; C only reads them during the call)\nfunc goStr(s string) C.volt_str {\n    return C.volt_str{ptr: (*C.uint8_t)(unsafe.Pointer(unsafe.StringData(s))), len: C.size_t(len(s))}\n}\n");
+        g.append("\n// a Volt str as a Go string (a copy)\nfunc goString(s C.volt_str) string {\n    return C.GoStringN((*C.char)(unsafe.Pointer(s.ptr)), C.int(s.len))\n}\n");
+    }
+    if (has_u32(&this.slices, STR)) {
+        g.append(fmt2("\n// strings as a Volt slice of strs for a call (pin keeps their bytes where they are until it's\n// unpinned)\nfunc goStrs(xs []string, pin *runtime.Pinner) C.{} {{\n    vs := make([]C.volt_str, len(xs)+1)\n    for i, x := range xs {{\n        if len(x) > 0 {{\n            pin.Pin(unsafe.StringData(x))\n            vs[i] = goStr(x)\n        }}\n    }}\n    return C.{}{{ptr: &vs[0], len: C.size_t(len(xs))}}\n}}\n", this.made_name("slice", STR, false), this.made_name("slice", STR, false)).as_str());
+    }
     if (this.texts.len > 0) {
-        out.append(fmt("\nfunc takeText(t C.volt_text) string {\n    s := C.GoStringN((*C.char)(unsafe.Pointer(t.ptr)), C.int(t.len))\n    C.{}_text_free(t)\n    return s\n}\n", S(p)).as_str());
+        g.append(fmt("\nfunc takeText(t C.volt_text) string {\n    s := C.GoStringN((*C.char)(unsafe.Pointer(t.ptr)), C.int(t.len))\n    C.{}_text_free(t)\n    return s\n}\n", S(p)).as_str());
+        g.append(fmt("\n// text Go gives Volt: a copy in C memory, which Volt frees\nfunc goText(s string) C.volt_text {\n    return C.{}_go_text(C.CBytes([]byte(s)), C.size_t(len(s)))\n}\n", S(p)).as_str());
+    }
+    if (this.lists.len > 0) {
+        g.append(fmt("\n// takeList copies a list Volt gave out into a Go slice (each element through f), then frees it\nfunc takeList[E, G any](ptr *E, n C.size_t, owner unsafe.Pointer, drop *[0]byte, f func(E) G) []G {\n    out := make([]G, int(n))\n    if n > 0 {\n        for i, x := range unsafe.Slice(ptr, int(n)) {\n            out[i] = f(x)\n        }\n    }\n    C.{}_go_drop(drop, owner)\n    return out\n}\n", S(p)).as_str());
     }
     // enums
     for (e&) in this.enums.items() {
         val info = this.c.ei(*e);
         val n = this.go_tname(info.name);
-        out.append(fmt2("\n// {} is Volt enum {}.\n", copy n, S(info.name)).as_str());
-        out.append(fmt2("type {} {}\n\nconst (\n", copy n, this.go_ty(int_id(info.tag))).as_str());
+        var w: usize = 0;
         for (i) in 0..info.names.len {
-            out.append(fmt4("    {}{} {} = {}\n", copy n, go_name(*info.names.at(i)), copy n, num(*info.values.at(i))).as_str());
+            val c = fmt2("{}{}", copy n, go_name(*info.names.at(i)));
+            if (c.len() > w) {
+                w = c.len();
+            }
         }
-        out.append(")\n");
+        g.append(fmt2("\n// {} is Volt enum {}.\n", copy n, S(info.name)).as_str());
+        g.append(fmt2("type {} {}\n\nconst (\n", copy n, this.go_ty(int_id(info.tag))).as_str());
+        for (i) in 0..info.names.len {
+            val c = fmt2("{}{}", copy n, go_name(*info.names.at(i)));
+            g.append(fmt3("    {} {} = {}\n", pad_to(c.as_str(), w), copy n, num(*info.values.at(i))).as_str());
+        }
+        g.append(")\n");
     }
     // structs
     for (s&) in this.structs.items() {
@@ -8136,66 +8539,80 @@ attach fn go_text(this: bind&) -> std::string {
         val info = this.c.si(*s);
         val n = this.go_tname(info.name);
         val cn = this.c_named(info.name, false);
-        out.append(fmt2("\n// {} is Volt struct {}.\ntype ", copy n, S(info.name)).as_str());
-        out.append(fmt("{} struct {{\n", copy n).as_str());
+        // gofmt's columns: the fields' names, and the keys of the conversions' literals
+        var w: usize = 0;
+        var cw: usize = 0;
+        for (f&) in info.fields.items() {
+            if (go_name(f.name).len() > w) {
+                w = go_name(f.name).len();
+            }
+            if (f.name.len > cw) {
+                cw = f.name.len;
+            }
+        }
+        g.append(fmt2("\n// {} is Volt struct {}.\ntype ", copy n, S(info.name)).as_str());
+        g.append(fmt("{} struct {{\n", copy n).as_str());
         var toc: std::string = {};
         var fromc: std::string = {};
         for (f&) in info.fields.items() {
-            out.append(fmt2("    {} {}\n", go_name(f.name), this.go_ty(f.ty)).as_str());
-            toc.append(fmt2("        {}: {},\n", S(f.name), this.go_to_c(f.ty, fmt("v.{}", go_name(f.name)).as_str())).as_str());
-            fromc.append(fmt2("        {}: {},\n", go_name(f.name), this.go_from_c(f.ty, fmt("c.{}", S(f.name)).as_str())).as_str());
+            val gn = go_name(f.name);
+            g.append(fmt2("    {} {}\n", pad_to(gn.as_str(), w), this.go_ty(f.ty)).as_str());
+            toc.append(fmt2("        {} {},\n", pad_to(fmt("{}:", S(f.name)).as_str(), cw + 1), this.go_to_c(f.ty, fmt("v.{}", copy gn).as_str())).as_str());
+            fromc.append(fmt2("        {} {},\n", pad_to(fmt("{}:", copy gn).as_str(), w + 1), this.go_from_c(f.ty, fmt("c.{}", S(f.name)).as_str())).as_str());
         }
-        out.append(fmt3("}}\n\nfunc (v {}) c() C.{} {{\n    return C.{}{{\n", copy n, copy cn, copy cn).as_str());
-        out.append(toc.as_str());
-        out.append(fmt3("    }}\n}}\n\nfunc {}FromC(c C.{}) {} {{\n", copy n, copy cn, copy n).as_str());
-        out.append(fmt("    return {}{{\n", copy n).as_str());
-        out.append(fromc.as_str());
-        out.append("    }\n}\n");
+        g.append(fmt3("}}\n\nfunc (v {}) c() C.{} {{\n    return C.{}{{\n", copy n, copy cn, copy cn).as_str());
+        g.append(toc.as_str());
+        g.append(fmt3("    }}\n}}\n\nfunc {}FromC(c C.{}) {} {{\n", copy n, copy cn, copy n).as_str());
+        g.append(fmt("    return {}{{\n", copy n).as_str());
+        g.append(fromc.as_str());
+        g.append("    }\n}\n");
     }
-    // callbacks: exported Go functions the C side calls with the handle of a callback
-    if (this.closures.len > 0) {
-        out.append("\n// a Go function passed for a callback, and what it panicked with (re-panicked after the call)\ntype callback struct {\n    f      any\n    panicked any\n}\n\nfunc (s *callback) repanic() {\n    if s.panicked != nil {\n        panic(s.panicked)\n    }\n}\n");
+    // what Volt calls back: Go functions, kept by a callback, and exported functions the C side
+    // calls with its handle
+    if (calls) {
+        g.append("\n// a Go value Volt calls (a func, or a trait's value): what it panicked with, re-panicked when the\n// call it was passed to returns, and the C copies of the strs it gave Volt\ntype callback struct {\n    f        any\n    panicked any\n    kept     []unsafe.Pointer\n}\n");
+        g.append("\n// catch keeps what a call from Volt panicked with (the first), rather than unwind through C\nfunc (s *callback) catch(v any) {\n    if s.panicked == nil {\n        s.panicked = v\n    }\n}\n");
+        if (this.uses_str) {
+            g.append("\n// a str Go gives Volt: a copy in C memory, freed when the call s was passed to returns\nfunc (s *callback) str(v string) C.volt_str {\n    p := C.CBytes([]byte(v))\n    s.kept = append(s.kept, p)\n    return C.volt_str{ptr: (*C.uint8_t)(p), len: C.size_t(len(v))}\n}\n");
+        }
+        g.append("\n// done ends the call s was passed to: it frees the strs s gave Volt, and re-panics what s panicked\n// with\nfunc (s *callback) done() {\n    for _, p := range s.kept {\n        C.free(p)\n    }\n    s.kept = nil\n    if s.panicked != nil {\n        panic(s.panicked)\n    }\n}\n");
+        g.append("\n// fatal ends the program: a Go function that had to give Volt a handle panicked, and there's no\n// handle to give it\nfunc fatal(v any) {\n    fmt.Fprintln(os.Stderr, \"panic:\", v, \"(in a Go function giving Volt a handle)\")\n    os.Exit(2)\n}\n");
     }
     for (i) in 0..this.closures.len {
         val ct = *this.closures.at(i);
-        match (*this.c.t.get(ct)) {
-            .FN_VAL(ps&, r) => {
-                var params = S("user unsafe.Pointer");
-                var args: std::string = {};
-                for (k) in 0..ps.len {
-                    params.append(fmt2(", a{} {}", unum(@cast<u64>(k)), this.go_cty(*ps.at(k))).as_str());
-                    if (k > 0) {
-                        args.append(", ");
-                    }
-                    args.append(this.go_from_c(*ps.at(k), fmt("a{}", unum(@cast<u64>(k))).as_str()).as_str());
-                }
-                var ret: std::string = {};
-                if (r != VOID) {
-                    ret = fmt(" (out {})", this.go_cty(r));
-                }
-                out.append(fmt4("\n//export {}cb{}\nfunc {}cb{}(", S(p), unum(@cast<u64>(i)), S(p), unum(@cast<u64>(i))).as_str());
-                out.append(fmt2("{}){} {{\n    s := (*cgo.Handle)(user).Value().(*callback)\n    defer func() {{\n        if v := recover(); v != nil && s.panicked == nil {{\n            s.panicked = v\n        }}\n    }}()\n", move params, move ret).as_str());
-                if (r == VOID) {
-                    out.append(fmt2("    s.f.({})({})\n", this.go_ty(ct), move args).as_str());
-                    out.append("}\n");
-                } else {
-                    out.append(fmt2("    v := s.f.({})({})\n", this.go_ty(ct), move args).as_str());
-                    out.append(fmt("    return {}\n}\n", this.go_to_c(r, "v")).as_str());
-                }
-            },
-            default => {},
+        var ps: std::vec<u32> = {};
+        val r = this.fn_parts(ct, &ps);
+        g.append(this.go_export(fmt2("{}cb{}", S(p), unum(@cast<u64>(i))).as_str(), "user", fmt("s.f.({})", this.go_ty(ct)).as_str(), &ps, r).as_str());
+    }
+    // closures Volt gives out
+    for (i) in 0..this.closures.len {
+        if (has_u32(&this.closures_out, @cast<u32>(i))) {
+            this.go_closure(@cast<u32>(i), &g);
         }
+    }
+    // traits
+    for (k) in 0..this.traits.len {
+        this.go_trait(@cast<u32>(k), &g);
+    }
+    if (this.traits.len > 0) {
+        // a Go value given to Volt, which is done with it: its Close runs
+        g.append(fmt2("\n//export {}GoDrop\nfunc {}GoDrop(self unsafe.Pointer) {{\n    h := (*cgo.Handle)(self)\n    s := h.Value().(*callback)\n    h.Delete()\n    C.free(self)\n    defer func() {{\n        if v := recover(); v != nil {{\n            s.catch(v)\n        }}\n    }}()\n", S(p), S(p)).as_str());
+        g.append("    switch c := s.f.(type) {\n    case interface{ Close() }:\n        c.Close()\n    case interface{ Close() error }:\n        c.Close()\n    }\n}\n");
     }
     // classes
     for (s&) in this.handles.items() {
         val n = this.go_tname(this.c.si(*s).name);
         val cn = this.c_named(this.c.si(*s).name, false);
-        out.append(fmt3("\n// {} is Volt export struct {}. Close frees it (or the garbage collector does).\ntype {} struct {{\n", copy n, S(this.c.si(*s).name), copy n).as_str());
-        out.append(fmt3("    h *C.{}\n}}\n\nfunc wrap{}(h *C.", copy cn, copy n, S("")).as_str());
-        out.append(fmt4("{}) *{} {{\n    o := &{}{{h: h}}\n    runtime.SetFinalizer(o, (*{}).Close)\n    return o\n}}\n", copy cn, copy n, copy n, copy n).as_str());
-        out.append(fmt3("\n// Close frees the handle (once; later calls do nothing).\nfunc (o *{}) Close() {{\n    if o.h != nil {{\n        C.{}(o.h)\n        o.h = nil\n        runtime.SetFinalizer(o, nil)\n    }}\n}}\n", copy n, this.free_name(*s), S("")).as_str());
-        out.append(fmt2("\nfunc (o *{}) handle() *C.{} {{\n    if o.h == nil {{\n        panic(\"", copy n, copy cn).as_str());
-        out.append(fmt2("{}: used after Close\")\n    }}\n    return o.h\n}}\n", copy n, S("")).as_str());
+        var tpl = S("\n// $N is Volt export struct $V. Close frees it (or the garbage collector does).\ntype $N struct {\n    h    *C.$C\n    lent bool // Volt lent it: never freed here, and not Go's to give\n}\n\nfunc wrap$N(h *C.$C) *$N {\n    if h == nil {\n        return nil\n    }\n    o := &$N{h: h}\n    runtime.SetFinalizer(o, (*$N).Close)\n    return o\n}\n");
+        tpl.append("\n// Close frees the handle (once; later calls do nothing).\nfunc (o *$N) Close() {\n    if o.h != nil {\n        if !o.lent {\n            C.$F(o.h)\n        }\n        o.h = nil\n        runtime.SetFinalizer(o, nil)\n    }\n}\n");
+        tpl.append("\nfunc (o *$N) handle() *C.$C {\n    if o.h == nil {\n        panic(\"$N: used after Close, or after the Volt call that lent it\")\n    }\n    return o.h\n}\n");
+        tpl.append("\n// owned is the handle, to give to Volt (not one Volt lent)\nfunc (o *$N) owned() *C.$C {\n    if o.lent {\n        panic(\"$N: Volt lent it, so it isn't Go's to give\")\n    }\n    return o.handle()\n}\n");
+        tpl.append("\n// forget lets go of the handle: it's Volt's from here\nfunc (o *$N) forget() {\n    o.h = nil\n    runtime.SetFinalizer(o, nil)\n}\n");
+        tpl.append("\n// give gives the handle to Volt\nfunc (o *$N) give() *C.$C {\n    h := o.owned()\n    o.forget()\n    return h\n}\n");
+        tpl = replace_all(tpl.as_str(), "$N", n.as_str());
+        tpl = replace_all(tpl.as_str(), "$V", this.c.si(*s).name);
+        tpl = replace_all(tpl.as_str(), "$C", cn.as_str());
+        g.append(replace_all(tpl.as_str(), "$F", this.free_name(*s).as_str()).as_str());
         for (e&) in ents.items() {
             if (e.free_of != null) {
                 continue;
@@ -8204,11 +8621,11 @@ attach fn go_text(this: bind&) -> std::string {
             val info = this.c.fi(e.f);
             if (this.node_is_method(e.f, *s)) {
                 val args = this.go_args(e.f, 1);
-                out.append("\n");
-                out.append(this.go_doc(e.f, go_name(m).as_str()).as_str());
-                out.append(fmt4("func (o *{}) {}({}){} {{\n", copy n, go_name(m), go_decls(&args), this.go_results(info.ret)).as_str());
-                out.append(indent(this.go_body(e.f, &args, "o.handle()").as_str()).as_str());
-                out.append("}\n");
+                g.append("\n");
+                g.append(this.go_doc(e.f, go_name(m).as_str()).as_str());
+                g.append(fmt4("func (o *{}) {}({}){} {{\n", copy n, go_name(m), go_decls(&args), this.go_results(info.ret)).as_str());
+                g.append(indent(this.go_body(e.f, &args, "o.handle()").as_str()).as_str());
+                g.append("}\n");
             } else {
                 // New for new, NewX... for the others
                 var fname = fmt("New{}", copy n);
@@ -8216,11 +8633,11 @@ attach fn go_text(this: bind&) -> std::string {
                     fname = fmt2("{}{}", copy n, go_name(m));
                 }
                 val args = this.go_args(e.f, 0);
-                out.append("\n");
-                out.append(this.go_doc(e.f, fname.as_str()).as_str());
-                out.append(fmt3("func {}({}){} {{\n", copy fname, go_decls(&args), this.go_results(info.ret)).as_str());
-                out.append(indent(this.go_body(e.f, &args, null).as_str()).as_str());
-                out.append("}\n");
+                g.append("\n");
+                g.append(this.go_doc(e.f, fname.as_str()).as_str());
+                g.append(fmt3("func {}({}){} {{\n", copy fname, go_decls(&args), this.go_results(info.ret)).as_str());
+                g.append(indent(this.go_body(e.f, &args, null).as_str()).as_str());
+                g.append("}\n");
             }
         }
     }
@@ -8232,12 +8649,13 @@ attach fn go_text(this: bind&) -> std::string {
         val info = this.c.fi(e.f);
         val args = this.go_args(e.f, 0);
         val gn = go_name(info.c_name);
-        out.append("\n");
-        out.append(this.go_doc(e.f, gn.as_str()).as_str());
-        out.append(fmt4("func {}({}){} {{\n{}", copy gn, go_decls(&args), this.go_results(info.ret), S("")).as_str());
-        out.append(indent(this.go_body(e.f, &args, null).as_str()).as_str());
-        out.append("}\n");
+        g.append("\n");
+        g.append(this.go_doc(e.f, gn.as_str()).as_str());
+        g.append(fmt3("func {}({}){} {{\n", copy gn, go_decls(&args), this.go_results(info.ret)).as_str());
+        g.append(indent(this.go_body(e.f, &args, null).as_str()).as_str());
+        g.append("}\n");
     }
+    out.append(go_tabs(g.as_str()).as_str());
     return out;
 }
 
@@ -11782,7 +12200,7 @@ attach fn rb_text(this: bind&) -> compile_error!std::string {
 // the bindings of package pkg in lang (see the top of the file; node, js and ts are a Node-API
 // addon, its loader and its types; json is the model itself)
 attach fn bindings(this: checker&, pkg: str, lang: str) -> compile_error!std::string {
-    var b: bind = { c: this, pkg: pkg, wide: lang == "c" || lang == "cpp" || lang == "rust" || lang == "zig" || lang == "python" || lang == "pyi" || lang == "java" || lang == "csharp" || lang == "json" };
+    var b: bind = { c: this, pkg: pkg, wide: lang == "c" || lang == "cpp" || lang == "rust" || lang == "zig" || lang == "go" || lang == "python" || lang == "pyi" || lang == "java" || lang == "csharp" || lang == "json" };
     val fns = b.exports();
     if (fns.len == 0) {
         return fail(NO_SPAN, fmt("package {} has no export fns to make bindings for", S(pkg)));

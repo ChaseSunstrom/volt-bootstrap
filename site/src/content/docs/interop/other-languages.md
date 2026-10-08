@@ -150,7 +150,7 @@ Each language gets these in its own style:
 | JavaScript | throws an `Error` whose `code` is the name | a string | arrays, `null` | a class with `close()` and `Symbol.dispose` | any function |
 | C# | throws a `VoltException` subclass per error set | `string` | `Span<T>` (text and handles from any `IEnumerable`), `T?` | an `IDisposable` class over a `SafeHandle` | `Action` or `Func` |
 | Java | throws a `VoltException` subclass per error set | `String` | arrays, `null` | an `AutoCloseable` class, freed by a `Cleaner` if not closed | a functional interface |
-| Go | `(T, error)`, with an `*Error` value per code for `errors.Is` | `string` | slices; `*T` in, `(T, bool)` out | a type with `Close`, and a finalizer | a `func` |
+| Go | `(T, error)`, with an `*Error` value per code for `errors.Is` | `string` | slices; `*T` in, `(T, bool)` out (a handle: `nil` for none) | a type with `Close`, and a finalizer | a `func` |
 | Lua | raises a table with its `name` and `code` | a string | sequences (written back), `nil` | a userdata with `close()`, `<close>` and `__gc` | any function |
 | Dart | throws a `VoltError` subclass per error set | `String` | `List`s (written back), `null` | a class with `close()`, and a `NativeFinalizer` | any function |
 | Swift | throws its error set's enum | `String` | `inout` arrays (written back), `T?` | a class with `close()`, freed by `deinit` | a closure |
@@ -179,9 +179,10 @@ C and Rust call `biggest_i32` and `biggest_f64`; C++ calls `biggest`, an overloa
 
 ### Every shape
 
-C, C++, Rust, Zig, Python, Java and C# take more than the other languages (whose bindings name
-what they don't take); Python's forms are on [its page](/volt-bootstrap/interop/python/#python-calls-volt),
-Java's on [its page](/volt-bootstrap/interop/java/#java-calls-volt), C#'s on
+C, C++, Rust, Zig, Go, Python, Java and C# take more than the other languages (whose bindings
+name what they don't take); Go's forms are under [Go](#go), Python's on
+[its page](/volt-bootstrap/interop/python/#python-calls-volt), Java's on
+[its page](/volt-bootstrap/interop/java/#java-calls-volt), C#'s on
 [its page](/volt-bootstrap/interop/dotnet/#every-shape):
 
 - **Owned values as parameters.** Text (`std::string`) comes in as a `str` that Volt copies (a
@@ -466,6 +467,32 @@ defer c.Close()
 if _, err := mathlib.MlSqrt(-1); errors.Is(err, mathlib.MathErrorNegative) {
     fmt.Println(err)                          // NEGATIVE
 }
+```
+
+Go takes [every shape](#every-shape). Owned text goes in as a `string` (Volt copies it), and a
+handle by value as its type, which gives the handle up. A trait is an interface: any Go value with
+its methods passes where Volt takes one, lent for the call or given (Volt calls its `Close`, if it
+has one, when it's done with it), and one Volt gives back is a `*VoltT` with the methods and
+`Close`. A callback is a `func` taking and giving `string`s, handles (one Volt lends never frees
+it) and `(T, error)`; a closure given back is a `*ClosureN` with `Call` and `Close`. A
+`std::vec<T>` comes back as a `[]T` and goes in from one (handles in it are given up), slices of
+text and handles go in from `[]string` and `[]*T`, an optional text is a `*string` in and
+`(string, bool)` out, and an optional handle is `nil` for none. A panic in a Go function Volt
+calls doesn't unwind through Volt: it comes out of the call the function was passed to (when the
+function had to give Volt a handle, there's none to give, and the program ends).
+
+```go
+type circle struct{ r float64 }
+
+func (c *circle) Area() float64 { return 3 * c.r * c.r }
+func (c *circle) Name() string  { return "circle" }
+
+fmt.Println(shapelib.Describe(&circle{r: 1})) // circle of area 3
+sq := shapelib.MakeSquare(2)                  // a *VoltShape
+defer sq.Close()
+d := shapelib.Doubler()                       // a *Closure1
+defer d.Close()
+fmt.Println(sq.Area(), d.Call(21))            // 4 42
 ```
 
 A library that returns owned text also exports `NAME_text_free`, which frees it the way
