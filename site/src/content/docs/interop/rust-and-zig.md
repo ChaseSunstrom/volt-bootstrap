@@ -194,19 +194,77 @@ fn main() -> !void {
 | `int`, `uint` | `isize`, `usize` |
 | `int8`…`uint64`, `float32`, `float64`, `bool`, `byte`, `rune` | the same sizes (`u8`, `i32`) |
 | `string` | `str` in, `std::string` out |
-| `[]T` of numbers or strings | `T[..]`, `str[..]` in (Go sees Volt's elements, and changes them in place); `std::vec<T>` out |
+| `[]T`, `[N]T` | `T[..]` in (Go sees Volt's numbers and changes them in place; the package's types are converted for the call, and Go's changes come back; an array's length is checked), `std::vec<T>` out |
+| `...T` (variadic) | `T[..]` |
 | `(T, error)`, `error` | `go_error!T`, `go_error!void`; the error's text is in `go_error::ERROR` |
 | `(T, bool)` | `T?` |
+| several results; with an `error` last | a tuple, its elements named as Go names them (`(lo: isize, hi: isize)`); `go_error!(A, B)` |
 | a struct whose fields are all exported numbers, `bool`s, enums or such structs | a Volt struct with those fields, passed by value |
-| any other struct | an owned handle (a cgo `Handle`): Go's collector keeps the value until Volt deletes it; a `*T` result is a handle to that same value, a `T` one to a copy |
+| any other struct | an owned handle (a cgo `Handle`): Go's collector keeps the value until Volt deletes it. `T::new()` is Go's zero value, `copy` copies it as Go's assignment does, an exported field `F` is `F()` and `set_F(v)`. A `*T` result is a handle to that same value, a `T` one to a copy |
+| `*int` and other pointers to numbers | `isize&` in (Go's change comes back); out, a `ptr<isize>` handle with `get()` and `put(v)` |
 | `type T int` with constants of type `T` | a Volt enum with the same values |
-| an exported constant of a number, `bool` or string | a `val` |
+| any other named number or `bool` (`time.Duration` too) | a Volt struct `{ value: T }`; a named `string` is a handle with `value()` and `T::new(s)` |
+| `complex64`, `complex128` | a Volt struct `{ re, im }` |
+| `map[K]V` | a `map<K, V>` handle (`k::map<std::string, isize>::new()` makes one): `get(k)` (a `V?`), `put(k, v)`, `contains(k)`, `remove(k)`, `len()`, `keys()` |
+| `map[K]struct{}` (a set) | a `set<K>` handle: `add(k)`, `contains(k)`, `remove(k)`, `len()`, `keys()` |
+| `chan T`, `<-chan T`, `chan<- T` | one `chan<T>` handle whichever way it goes: `chan<T>::new(capacity)`, `send(v)`, `recv()` (a `T?`: null once it's closed and empty), `close()`, `len()`, `cap()`; a call taking a `<-chan T` takes it |
+| a slice of other elements (`[][]int`: `slice<std::vec<isize>>`), a pointer to another type (`ptr<T>`), an array of other elements, a named slice, array, map, channel or pointer type, `any`, another package's struct | a handle: a slice's `get(i)`, `put(i, v)`, `push(v)`, `len()`, `items()`; a pointer's `get()`, `put(v)`; with a named type's own methods |
+| `func(...) ...`, a named func type (`type Op = fn(...) -> ...;` in Volt too) | a Volt fn value in (Go keeps it until its collector is done with it, then deletes it); a value called with `f.call(...)` out. It takes and gives numbers, `bool`s, text, slices, the package's types and funcs, several results (a tuple), `(T, bool)` (`T?`) and an `error` last (`go_error!T`); a `*int` parameter is an `isize&` |
+| an interface | a Volt trait: the Go types with its methods attach it, a Volt type attaching it passes where Go takes one, and Go's values of it are `dyn_I` handles (`t.as_I()` of a Go type, `dyn_I::new(v)` of a Volt value). A Volt type's methods have the fn values' types |
+| a generic `func` or type (`Max[T cmp.Ordered]`, `Stack[T]`) | a generic `fn` or `struct`: each instance a program uses is built for it, and go checks its constraints (one they reject is an error at the call, with go's reason). Maps, sets, channels, pointers and slices of slices of its type parameters are `map<K, V>`, `set<K>`, `chan<T>`, `ptr<T>` and `slice<std::vec<T>>` |
+| an exported constant of any type | a `val` of its value |
+| an exported variable `V` | `V()` and `set_V(v)` |
+| `type A = B` | `type A = B;` |
+| another package's type the API names (`time.Time`) | the same, in a namespace of its package's name (`geom::time::Time`), with its methods |
+
+The newer forms in use (`kinds.go` is ordinary Go, as in the table):
+
+```volt ignore
+use std::io;
+use { "kinds.go" } as k;
+
+struct tri { b: f64; h: f64; }
+
+// type Figure interface { Area() float64; Name() string }
+attach k::Figure -> tri {
+    fn Area(this) -> f64 { return this.b * this.h / 2.0; }
+    fn Name(this) -> std::string { return std::string::from("tri"); }
+}
+
+fn main() -> k::go_error!void {
+    val xs: isize[3] = { 3, 9, 4 };
+    std::println("{}", k::Max(xs[..]));                         // func Max[T cmp.Ordered](xs ...T) T
+    std::println("{}", k::Apply(|| (x: isize) -> isize { return x * 3; }, 5));   // f func(int) int
+    val (lo, hi) = k::MinMax(xs[..]);                           // (lo, hi int)
+    val words: str[3] = { "a", "b", "a" };
+    var counts = k::Count(words[..]);                           // map[string]int
+    std::println("{} {} {}", lo, hi, counts.get("a") ?? 0);
+    val r = k::Range(3);                                        // <-chan int, filled by a goroutine
+    while (true) {
+        val x = r.recv() ?? break;
+        std::println("{}", x);
+    }
+    std::println("{}", k::Tell({ b: 4.0, h: 3.0 } as tri));     // func Tell(f Figure) string
+    // func Spread(f func(int) (int, string)) string: a closure giving several results
+    std::println("{}", k::Spread(|| (n: isize) -> (isize, std::string) { return (n, std::string::from("ab")); }));
+    val chunks = k::Chunk(xs[..], 2);                           // [][]T: a slice<std::vec<isize>>
+    val bad = k::try_At(xs[..], 5);                             // a panic, as go_error::PANIC
+}
+```
 
 A `main` package works too (its `main` isn't run). The program links every `use go` import into
-one library, so it has one Go runtime, started when the program starts. Generic functions and types,
-variadic functions, and `func`, `map`, `chan` and interface types are left out, listed in a comment
-of the generated declarations. bolt reads `$GO` for the go command, else `go` on the PATH; cgo needs
-a C compiler.
+one library, so it has one Go runtime, started when the program starts. A panic stops the program
+with Go's message, as it does in Go; each function's `try_` form (and a Go func value's
+`try_call`) returns it as `go_error::PANIC` instead. The shim recovers it, so it never unwinds
+through C. Errors cross as their text: an error a Volt function gives Go is a new Go error with that
+text. Calls are safe from any Volt thread, and Go may call a Volt closure from any goroutine, as C
+code could. bolt reads `$GO` for the go command, else `go` on the PATH; cgo needs a C compiler.
+
+What Go's own rules keep out, listed in a comment of the generated declarations
+(`VOLT_SHOW_IMPORT=1 voltc check main.volt` prints them): an unexported type, or an internal
+package's, which no other package can name; an interface with unexported methods, which only its
+own package's types can have (Go's values of it are still `dyn_I` handles); a constraint, which
+only a type parameter can have; and an untyped constant no Go number holds (`1 << 100`).
 
 ## Go, and C APIs you write yourself
 

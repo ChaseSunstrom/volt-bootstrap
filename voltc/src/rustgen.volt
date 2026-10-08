@@ -1,4 +1,4 @@
-// use rust's and use zig's generics: bolt declares a generic Rust or Zig fn as a Volt generic
+// use rust's, use zig's and use go's generics: bolt declares a generic Rust, Zig or Go fn as a Volt generic
 // marked @rust_generic("mod::f"), and makes a fn per instance a program asks for, f__ARGS next to
 // it. A call's instance is that fn; one bolt hasn't made yet is asked for (rust_wants), and
 // compile_with has bolt make them and checks the program again.
@@ -88,9 +88,10 @@ attach fn rust_made(this: checker&, d: u32, base: str, path: str, args: std::vec
     }
     val out = this.import_outs.get(this.dl(d).item.span.file) ?? return null;
     if (this.opts.rust_again) {
-        // bolt was asked: rustc's or zig's reason, when it rejected the instance
+        // bolt was asked: rustc's, zig's or go's reason, when it rejected the instance
         // (OUT/instances.failed)
         val zig = starts_with(this.files.at(@cast<usize>(this.dl(d).item.span.file)).name, "<use zig ");
+        val go = starts_with(this.files.at(@cast<usize>(this.dl(d).item.span.file)).name, "<use go ");
         var what = S(path);
         what.push('<');
         what.append(line.as_str()[path.len + 1..line.len()].replace("\t", ", ").as_str());
@@ -104,6 +105,9 @@ attach fn rust_made(this: checker&, d: u32, base: str, path: str, args: std::vec
             if (starts_with(l, prefix.as_str()) && !starts_with(l[prefix.len()..l.len], "::")) {
                 if (zig) {
                     return with_help(fail(span, fmt2("{}: Zig doesn't take these arguments: {}", move what, S(l[prefix.len()..l.len]))), S("each instance a program calls is built by zig, which checks the fn's body for its arguments"));
+                }
+                if (go) {
+                    return with_help(fail(span, fmt2("{}: Go doesn't take these types: {}", move what, S(l[prefix.len()..l.len]))), S("each instance a program calls is built by go, which checks the fn's constraints for its types"));
                 }
                 return with_help(fail(span, fmt2("{}: Rust doesn't take these types: {}", move what, S(l[prefix.len()..l.len]))), S("each instance a program calls is built by rustc, which checks the fn's bounds for its types"));
             }

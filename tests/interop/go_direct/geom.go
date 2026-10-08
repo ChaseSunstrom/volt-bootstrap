@@ -136,7 +136,7 @@ func Check(ok bool) error {
 	return nil
 }
 
-// Volt can't call these: they're listed in a comment of what bolt writes
+// a func, a variadic and a generic: Volt calls these too
 func Apply(f func(int) int, x int) int { return f(x) }
 
 func Total(xs ...int) int { return len(xs) }
