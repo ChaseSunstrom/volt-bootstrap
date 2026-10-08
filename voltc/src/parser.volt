@@ -1021,7 +1021,13 @@ attach fn params(this: parser&, out: std::vec<param>&) -> compile_error!bool {
         }
         var name = "this";
         if (!this.eat_kw("this")) {
-            name = (try this.ident()).name;
+            val id = try this.ident();
+            name = id.name;
+            for (p&) in out.items() {
+                if (p.name == name) {
+                    return fail(id.span, fmt("'{}' is already a parameter of this fn", S(name)));
+                }
+            }
         }
         var t: ty? = null;
         if (this.eat(":")) {
