@@ -110,6 +110,51 @@ Here is how values convert:
   of its names (for `error math_error { NEGATIVE }`, `greet.math_error.NEGATIVE` is `"NEGATIVE"`).
 - Each class checks that its methods get an instance of it.
 
+### Every shape
+
+JavaScript takes [every shape](/volt-bootstrap/interop/other-languages/#every-shape):
+- **Owned values as parameters.** A `std::string` parameter takes a string (Volt copies it). An
+  export struct by value takes its instance, which gives its handle up (closing it after does
+  nothing). A call checks every instance it's given first (open, owned, each once), so one that
+  throws gives nothing up. An instance lent to a call that hasn't returned yet (a callback can
+  reach it) can't be closed or given away until it does.
+- **Traits.** A Volt trait is any object with its methods, lent (`s: shape&`) or given (`s:
+  shape`). When Volt is done with one it was given, it calls the object's `[Symbol.dispose]()` or
+  `close()`, if it has one. A Volt value of the trait comes back as a `volt_shape`, with the
+  methods, `close()` and `Symbol.dispose`.
+- **Callbacks taking and giving text and handles.** A function gets strings and instances, and
+  gives them back. An instance Volt lends is let go of when the callback returns. A callback for
+  `E!T` throws `voltError(name)` to give Volt that error. Anything else it throws is thrown by the
+  call once Volt is back, and Volt gets a stand-in meanwhile: the error set's first error, empty
+  text, or zero. A callback that has to give a handle has no stand-in, so a throw there stops the
+  program, as a Volt panic does. Callbacks run on the thread that made the call.
+- **Closures given back** are functions with `close()` and `Symbol.dispose`. One that isn't closed
+  is freed when it's collected.
+- **Lists, and arrays of text and handles.** A `std::vec<T>` comes back as an array: strings, or
+  instances the caller owns. Arrays go in for lists, for `std::string[..]` and for slices of
+  handles. An optional text or handle is the value or `null`.
+
+For a library `shapes` with a trait `shape` (`area`, `name`, `grow`), `describe(s: shape&) ->
+std::string`, `make_square(side: f64) -> shape`, `doubler() -> fn(i32) -> i32` and `owners(xs:
+account&[..]) -> std::vec<std::string>`:
+
+```js
+const circle = {
+    r: 1,
+    area() { return 3 * this.r * this.r; },
+    name() { return "circle"; },
+    grow(by) { this.r += by; },
+};
+console.log(shapes.describe(circle));      // circle of area 3
+const sq = shapes.make_square(2);          // Volt's own shape
+console.log(sq.name(), sq.area());         // square 4
+sq.close();
+const d = shapes.doubler();
+console.log(d(21));                        // 42
+d.close();
+console.log(shapes.owners([a, b]));        // [ 'ann', 'bob' ]: a std::vec<std::string>
+```
+
 ## Addons written in Volt
 
 The `interop/node` package (in the repository) writes Node.js addons in Volt over Node-API: Volt

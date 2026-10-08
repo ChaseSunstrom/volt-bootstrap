@@ -51,7 +51,7 @@ enum shape {
 // shapes that only work at the edge of an export fn
 // the languages whose bindings take every shape (bind.wide), as messages name them
 fn wide_langs() -> std::string {
-    return S("C, C++, Rust, Zig, Go, Python, Java and C#");
+    return S("C, C++, Rust, Zig, Go, Python, Java, C# and JavaScript");
 }
 
 fn plain(s: shape) -> bool {
@@ -8681,6 +8681,12 @@ fn without_inline_text_free(s: str) -> std::string {
 }
 
 // ---------- JavaScript: a Node-API addon (Node.js, Bun), its loader and TypeScript types ----------
+// Every C form crosses. A class instance holds a handle (and lets go of it when it's given to Volt),
+// a callback is any function and a trait any object with its methods (lent for a call, or given:
+// held until Volt drops it), and what Volt gives out frees itself: text and lists are copied out,
+// and Volt's closures and trait values are functions and classes with close() and Symbol.dispose
+// (freed when collected otherwise). A callback runs on the JS thread that made the call; what it
+// throws is kept, Volt gets a stand-in, and the call throws it once it's back
 
 // the C name a struct's JS converters use
 attach fn node_sname(this: bind&, s: u32) -> std::string {
@@ -8764,15 +8770,113 @@ attach fn node_put_simple(this: bind&, t: u32, c: str) -> std::string {
     }
 }
 
-// one argument of an export fn: its C local(s) (decl), the statements that fill them from js
-// (get), what the call passes (pass), what runs after the call (after: writing back into JS
-// objects and arrays) and what frees its temporaries (cleanup)
+// C statements reading JS value js into C lvalue c (of type t), as a callback gives it back or an
+// array holds it; they `goto fail` with a JS exception thrown when js doesn't fit. A str's bytes are
+// kept (see vn_kept), text is given to Volt, and so is a handle (its instance lets go of it)
+attach fn node_get(this: bind&, t: u32, js: str, c: str) -> compile_error!std::string {
+    if (this.node_simple(t)) {
+        return this.node_get_simple(t, js, c);
+    }
+    val h = this.lent_handle(t);
+    if (h) {
+        val g = fmt4("if (!vn_unwrap(env, {}, vn_tags_{}, 0, (void **)&{}, \"{}\")) { goto fail; }", S(js), this.node_sname(h), S(c), this.node_sname(h));
+        if (this.is_ref(t)) {
+            return g;
+        }
+        return fmt2("if (!vn_is_nullish(env, {})) {{ {} }}", S(js), copy g);
+    }
+    match (this.shape_of(t) ?? shape::VOID) {
+        .STR => { return fmt2("if (!vn_str_kept(env, {}, &{})) { goto fail; }", S(js), S(c)); },
+        .CSTR => { return fmt2("if (!vn_cstr_kept(env, {}, &{})) { goto fail; }", S(js), S(c)); },
+        .TEXT(x) => { return fmt2("if (!vn_text(env, {}, &{})) { goto fail; }", S(js), S(c)); },
+        .HANDLE(s) => {
+            val sn = this.node_sname(s);
+            var g = fmt4("if (!vn_unwrap(env, {}, vn_tags_{}, 1, (void **)&{}, \"{}\")) { goto fail; }", S(js), copy sn, S(c), copy sn);
+            g.append(fmt(" vn_detach(env, {});", S(js)).as_str());
+            return g;
+        },
+        .OPT(x) => {
+            var g = fmt4("memset(&{}, 0, sizeof {}); if (!vn_is_nullish(env, {})) {{ {}.has = true; ", S(c), S(c), S(js), S(c));
+            g.append((try this.node_get(x, js, fmt("{}.value", S(c)).as_str())).as_str());
+            g.append(" }");
+            return g;
+        },
+        .RESULT(e, x) => {
+            // the value (an error is thrown)
+            if (x == VOID) {
+                return {};
+            }
+            return try this.node_get(x, js, fmt("{}.value", S(c)).as_str());
+        },
+        .PTR(x) => { return fmt2("if (!vn_external(env, {}, (void **)&{})) { goto fail; }", S(js), S(c)); },
+        .FN(i) => { return fmt2("if (!vn_external(env, {}, (void **)&{})) { goto fail; }", S(js), S(c)); },
+        default => { return fail(NO_SPAN, fmt("{} can't come from JavaScript", this.c.ty_name(t))); },
+    }
+}
+
+// C statements making JS value dst of C value c (of type t), as Volt gives it: text and lists are
+// copied out and freed, a handle, a closure or a trait's value is held by an object that frees it;
+// d tells nested loops' indexes apart
+attach fn node_put(this: bind&, t: u32, c: str, dst: str, d: u32) -> compile_error!std::string {
+    if (this.node_simple(t)) {
+        return fmt2("{} = {};", S(dst), this.node_put_simple(t, c));
+    }
+    match (this.shape_of(t) ?? shape::VOID) {
+        .STR => { return fmt3("{} = vn_from_str(env, {}.ptr, {}.len);", S(dst), S(c), S(c)); },
+        .CSTR => { return fmt2("{} = vn_from_cstr(env, {});", S(dst), S(c)); },
+        .TEXT(x) => { return fmt2("{} = vn_take_text(env, {});", S(dst), S(c)); },
+        .HANDLE(s) => { return fmt3("{} = vn_wrap_{}(env, {});", S(dst), this.node_sname(s), S(c)); },
+        .OPT(x) => {
+            // an optional handle is its pointer (null: none)
+            val h = this.handle_of(x);
+            if (h) {
+                return fmt4("{} = {} ? vn_wrap_{}(env, {}) : vn_null(env);", S(dst), S(c), this.node_sname(h), S(c));
+            }
+            val v = try this.node_put(x, fmt("{}.value", S(c)).as_str(), dst, d);
+            return fmt3("if ({}.has) {{ {} }} else {{ {} = vn_null(env); }}", S(c), copy v, S(dst));
+        },
+        .SLICE(x) => { return try this.node_array(x, c, dst, d); },
+        .LIST(x) => {
+            // text copied out of its str, a handle held by its instance; then the list freed
+            var e = this.list_elem(t);
+            if (this.view_of(e) == STR) {
+                e = STR;
+            }
+            var out = try this.node_array(e, c, dst, d);
+            out.append(fmt(" volt_list_free({});", S(c)).as_str());
+            return out;
+        },
+        .CLOSURE(i) => { return fmt3("{} = vn_make_fn(env, &{}, vn_call_closure{});", S(dst), S(c), unum(@cast<u64>(i))); },
+        .TRAIT(i) => { return fmt3("{} = vn_wrap_obj(env, vn_class_volt_{}, &{});", S(dst), this.short(this.trait_of(t)), S(c)); },
+        .PTR(x) => { return fmt2("{} = vn_from_external(env, (void *){});", S(dst), S(c)); },
+        .FN(i) => { return fmt2("{} = vn_from_external(env, (void *){});", S(dst), S(c)); },
+        default => { return fail(NO_SPAN, fmt("{} can't go to JavaScript", this.c.ty_name(t))); },
+    }
+}
+
+// C statements making JS array dst of the elements (of type e) of C slice or list c
+attach fn node_array(this: bind&, e: u32, c: str, dst: str, d: u32) -> compile_error!std::string {
+    val i = fmt("i{}", unum(@cast<u64>(d)));
+    val x = fmt("e{}", unum(@cast<u64>(d)));
+    val put = try this.node_put(e, fmt2("{}.ptr[{}]", S(c), copy i).as_str(), x.as_str(), d + 1);
+    var out = fmt4("napi_create_array_with_length(env, {}.len, &{}); for (size_t {} = 0; {} < ", S(c), S(dst), copy i, copy i);
+    out.append(fmt4("{}.len; {}++) {{ napi_value {} = NULL; {}", S(c), copy i, copy x, copy put).as_str());
+    out.append(fmt3(" napi_set_element(env, {}, (uint32_t){}, {}); }", S(dst), copy i, copy x).as_str());
+    return out;
+}
+
+// one argument of a JS call into Volt: its C local(s) (decl), the statements that fill them from js
+// (get), what runs once every argument is in (give: what the call takes over), what the call passes
+// (pass), what runs after the call (after: writing back into JS objects and arrays) and what frees
+// its temporaries (cleanup); gives: it adds to the call's gives (see vn_gives)
 struct node_arg {
     decl: std::string = {};
     get: std::string = {};
+    give: std::string = {};
     pass: std::string = {};
     after: std::string = {};
     cleanup: std::string = {};
+    gives: bool = false;
 }
 
 attach fn node_arg_of(this: bind&, t: u32, js: str, c: str, a: node_arg&) -> compile_error!void {
@@ -8785,22 +8889,59 @@ attach fn node_arg_of(this: bind&, t: u32, js: str, c: str, a: node_arg&) -> com
     val h = this.lent_handle(t);
     if (h) {
         a.decl = fmt2("{}{} = NULL;", spaced(this.handle_c(h, false)), S(c));
-        a.get = fmt4("if (!vn_unwrap(env, {}, &vn_tag_{}, (void **)&{}, \"{}\")) { goto fail; }", S(js), this.node_sname(h), S(c), this.node_sname(h));
+        a.get = fmt4("if (!vn_unwrap(env, {}, vn_tags_{}, 0, (void **)&{}, \"{}\")) { goto fail; }", S(js), this.node_sname(h), S(c), this.node_sname(h));
         a.pass = S(c);
         return;
     }
+    if (this.in_ty(t) == STR) {
+        // a str, or owned text (Volt copies it)
+        a.decl = fmt2("volt_str {}; char *{}_buf = NULL;", S(c), S(c));
+        a.get = fmt3("if (!vn_str(env, {}, &{}, &{}_buf)) { goto fail; }", S(js), S(c), S(c));
+        a.pass = S(c);
+        a.cleanup = fmt("free({}_buf);", S(c));
+        return;
+    }
     match (this.shape_of(t) ?? shape::VOID) {
-        .STR => {
-            a.decl = fmt2("volt_str {}; char *{}_buf = NULL;", S(c), S(c));
-            a.get = fmt3("if (!vn_str(env, {}, &{}, &{}_buf)) { goto fail; }", S(js), S(c), S(c));
-            a.pass = S(c);
-            a.cleanup = fmt("free({}_buf);", S(c));
-        },
         .CSTR => {
             a.decl = fmt2("const char *{} = NULL; char *{}_buf = NULL;", S(c), S(c));
             a.get = fmt3("if (!vn_cstr(env, {}, &{}, &{}_buf)) { goto fail; }", S(js), S(c), S(c));
             a.pass = S(c);
             a.cleanup = fmt("free({}_buf);", S(c));
+        },
+        .HANDLE(s) => {
+            // given to Volt: its instance lets go of it once every argument is in
+            val sn = this.node_sname(s);
+            a.decl = fmt2("{}{} = NULL;", spaced(this.handle_c(s, false)), S(c));
+            a.get = fmt4("if (!vn_unwrap(env, {}, vn_tags_{}, 1, (void **)&{}, \"{}\")", S(js), copy sn, S(c), copy sn);
+            a.get.append(fmt2(" || !vn_add_give(env, &gives, {}, {}, 0)) { goto fail; }", S(js), S(c)).as_str());
+            a.pass = S(c);
+            a.gives = true;
+        },
+        .TRAIT(i) => {
+            // a JS object with the trait's fns (lent, or given: held until Volt drops it), or Volt's
+            // own value (lent, or given back)
+            val tr = this.short(this.trait_of(t));
+            a.decl = fmt2("{} {};", this.c_prim(t, false), S(c));
+            var lent = S("NULL");
+            var g = S("&gives");
+            if (this.is_ref(t)) {
+                a.decl.append(fmt(" struct vn_obj {}_o;", S(c)).as_str());
+                lent = fmt("&{}_o", S(c));
+                g = S("NULL");
+            } else {
+                a.give = fmt4("if ({}.vt == &vn_vt_{}) {{ {}.self = vn_obj_new(env, {}); }}", S(c), copy tr, S(c), S(js));
+                a.gives = true;
+            }
+            a.get = fmt5("if (!vn_get_obj(env, {}, vn_tags_volt_{}, &vn_vt_{}, vn_fns_{}, \"{}\", ", S(js), copy tr, copy tr, copy tr, copy tr);
+            a.get.append(fmt3("{}, {}, &{})) { goto fail; }", copy lent, copy g, S(c)).as_str());
+            a.pass = S(c);
+        },
+        .LIST(x) => {
+            // given to Volt, which copies the elements (and takes the handles)
+            try this.node_elems(this.list_elem(t), true, js, c, a);
+        },
+        .SLICE(x) => {
+            try this.node_elems(this.slice_elem(t), false, js, c, a);
         },
         .PTR(x) => {
             if (x != VOID && this.node_simple(x)) {
@@ -8830,42 +8971,90 @@ attach fn node_arg_of(this: bind&, t: u32, js: str, c: str, a: node_arg&) -> com
             a.get = fmt2("if (!vn_external(env, {}, (void **)&{})) { goto fail; }", S(js), S(c));
             a.pass = S(c);
         },
-        .SLICE(x) => {
-            if (!this.node_simple(x)) {
-                return fail(NO_SPAN, fmt("a slice of {} can't come from JavaScript (numbers, bool, enums and structs of those can)", this.c.ty_name(x)));
-            }
-            val et = this.c_prim(x, false);
-            a.decl = fmt3("{} {}; {} *", this.c_prim(t, false), S(c), copy et);
-            a.decl.append(fmt2("{}_buf = NULL; uint32_t {}_n = 0;", S(c), S(c)).as_str());
-            a.get = fmt3("if (!vn_array(env, {}, &{}_n)) { goto fail; } {}_buf = ", S(js), S(c), S(c));
-            a.get.append(fmt3("malloc(sizeof({}) * ({}_n ? {}_n : 1));", copy et, S(c), S(c)).as_str());
-            a.get.append(fmt(" if (!{}_buf) {{ vn_throw(env, \"out of memory\"); goto fail; }}", S(c)).as_str());
-            a.get.append(fmt3(" for (uint32_t i = 0; i < {}_n; i++) {{ napi_value e; napi_get_element(env, {}, i, &e); {} }}", S(c), S(js), this.node_get_simple(x, "e", fmt("{}_buf[i]", S(c)).as_str())).as_str());
-            a.get.append(fmt4(" {}.ptr = {}_buf; {}.len = {}_n;", S(c), S(c), S(c), S(c)).as_str());
-            a.pass = S(c);
-            // what Volt wrote into the elements comes back
-            a.after = fmt4("for (uint32_t i = 0; i < {}_n; i++) napi_set_element(env, {}, i, {});", S(c), S(js), this.node_put_simple(x, fmt("{}_buf[i]", S(c)).as_str()), S(""));
-            a.cleanup = fmt("free({}_buf);", S(c));
-        },
         .OPT(x) => {
-            if (!this.node_simple(x)) {
-                return fail(NO_SPAN, fmt("an optional {} can't come from JavaScript (numbers, bool, enums and structs of those can)", this.c.ty_name(x)));
+            val oh = this.handle_of(x);
+            if (oh) {
+                // given to Volt (null: none)
+                val sn = this.node_sname(oh);
+                a.decl = fmt2("{}{} = NULL;", spaced(this.handle_c(oh, false)), S(c));
+                a.get = fmt5("if (!vn_is_nullish(env, {}) && (!vn_unwrap(env, {}, vn_tags_{}, 1, (void **)&{}, \"{}\")", S(js), S(js), copy sn, S(c), copy sn);
+                a.get.append(fmt2(" || !vn_add_give(env, &gives, {}, {}, 0))) { goto fail; }", S(js), S(c)).as_str());
+                a.pass = S(c);
+                a.gives = true;
+                return;
+            }
+            if (this.in_ty(x) == STR) {
+                // a str?, or an optional text (Volt copies it)
+                a.decl = fmt3("{} {}; char *{}_buf = NULL;", this.c_prim(this.in_ty(t), false), S(c), S(c));
+                a.get = fmt4("memset(&{}, 0, sizeof {}); if (!vn_is_nullish(env, {})) {{ {}.has = true; ", S(c), S(c), S(js), S(c));
+                a.get.append(fmt3("if (!vn_str(env, {}, &{}.value, &{}_buf)) { goto fail; } }", S(js), S(c), S(c)).as_str());
+                a.pass = S(c);
+                a.cleanup = fmt("free({}_buf);", S(c));
+                return;
             }
             a.decl = fmt2("{} {};", this.c_prim(t, false), S(c));
-            a.get = fmt4("memset(&{}, 0, sizeof {}); if (!vn_is_nullish(env, {})) {{ {}.has = true; ", S(c), S(c), S(js), S(c));
-            a.get.append(fmt("{} }", this.node_get_simple(x, js, fmt("{}.value", S(c)).as_str())).as_str());
+            a.get = try this.node_get(t, js, c);
             a.pass = S(c);
         },
         .CLOSURE(i) => {
             a.decl = fmt("struct vn_cb {}_cb;", S(c));
             a.get = fmt4("if (!vn_function(env, {})) { goto fail; } {}_cb.env = env; {}_cb.fn = {};", S(js), S(c), S(c), S(js));
-            a.pass = fmt3("vn_cb{}, &{}_cb", unum(@cast<u64>(i)), S(c), S(""));
+            a.pass = fmt2("vn_cb{}, &{}_cb", unum(@cast<u64>(i)), S(c));
         },
         default => {
             return fail(NO_SPAN, fmt("{} can't come from JavaScript", this.c.ty_name(t)));
         },
     }
     return;
+}
+
+// a slice's or a list's elements from a JS array (elem: the element type; given: a list's, which
+// Volt takes): strings for text, class instances for handles (lent, or given up), the value or null
+// for an optional, and numbers and structs as C holds them (what Volt writes into a slice's comes
+// back into the array)
+attach fn node_elems(this: bind&, elem: u32, given: bool, js: str, c: str, a: node_arg&) -> compile_error!void {
+    val v = this.view_of(elem);
+    val st = this.made_name("slice", v, false);
+    val h = this.handle_of(elem);
+    a.pass = S(c);
+    if (v == STR) {
+        a.decl = fmt3("{} {}; volt_str *{}_buf = NULL; ", copy st, S(c), S(c));
+        a.decl.append(fmt("uint32_t {}_n = 0;", S(c)).as_str());
+        a.get = fmt3("if (!vn_strs(env, {}, &{}_buf, &{}_n)) { goto fail; } ", S(js), S(c), S(c));
+        a.get.append(fmt4("{}.ptr = {}_buf; {}.len = {}_n;", S(c), S(c), S(c), S(c)).as_str());
+        a.cleanup = fmt2("vn_free_strs({}_buf, {}_n);", S(c), S(c));
+        return;
+    }
+    if (h) {
+        val sn = this.node_sname(h);
+        var g = S("NULL");
+        if (given) {
+            g = S("&gives");
+            a.gives = true;
+        }
+        a.decl = fmt3("{} {}; void **{}_buf = NULL; ", copy st, S(c), S(c));
+        a.decl.append(fmt("uint32_t {}_n = 0;", S(c)).as_str());
+        a.get = fmt5("if (!vn_handles(env, {}, vn_tags_{}, \"{}\", {}, &{}_buf, ", S(js), copy sn, copy sn, copy g, S(c));
+        a.get.append(fmt5("&{}_n)) { goto fail; } {}.ptr = ({} **){}_buf; {}.len = ", S(c), S(c), this.c_named(this.c.si(h).name, false), S(c), S(c)).as_str());
+        a.get.append(fmt("{}_n;", S(c)).as_str());
+        a.cleanup = fmt("free({}_buf);", S(c));
+        return;
+    }
+    // values as C holds them
+    val et = this.c_prim(v, false);
+    val get = try this.node_get(v, "e", fmt("{}_buf[i]", S(c)).as_str());
+    a.decl = fmt3("{} {}; {} *", copy st, S(c), copy et);
+    a.decl.append(fmt2("{}_buf = NULL; uint32_t {}_n = 0;", S(c), S(c)).as_str());
+    a.get = fmt3("if (!vn_array(env, {}, &{}_n)) { goto fail; } {}_buf = ", S(js), S(c), S(c));
+    a.get.append(fmt3("calloc({}_n ? {}_n : 1, sizeof({}));", S(c), S(c), copy et).as_str());
+    a.get.append(fmt(" if (!{}_buf) {{ vn_throw(env, \"out of memory\"); goto fail; }}", S(c)).as_str());
+    a.get.append(fmt3(" for (uint32_t i = 0; i < {}_n; i++) {{ napi_value e; napi_get_element(env, {}, i, &e); {} }}", S(c), S(js), copy get).as_str());
+    a.get.append(fmt4(" {}.ptr = {}_buf; {}.len = {}_n;", S(c), S(c), S(c), S(c)).as_str());
+    a.cleanup = fmt("free({}_buf);", S(c));
+    if (!given && this.node_simple(v)) {
+        // what Volt wrote into the elements comes back
+        a.after = fmt3("for (uint32_t i = 0; i < {}_n; i++) napi_set_element(env, {}, i, {});", S(c), S(js), this.node_put_simple(v, fmt("{}_buf[i]", S(c)).as_str()));
+    }
 }
 
 // which vn_set_ writes a C value back into a JS object (a struct's fields)
@@ -8876,72 +9065,46 @@ attach fn node_ptr_set_name(this: bind&, x: u32) -> std::string {
     }
 }
 
-// C statements that turn C result r (of type t) into JS value `result`; an error result throws
+// C statements that turn C result r (of type t) into JS value `result`; an error result throws (what
+// a callback threw, when that's why)
 attach fn node_result(this: bind&, t: u32, r: str) -> compile_error!std::string {
     if (t == VOID) {
         return S("napi_get_undefined(env, &result);");
     }
-    if (this.node_simple(t)) {
-        return fmt("result = {};", this.node_put_simple(t, r));
-    }
     match (this.shape_of(t) ?? shape::VOID) {
-        .STR => { return fmt3("result = vn_from_str(env, {}.ptr, {}.len);", S(r), S(r), S("")); },
-        .CSTR => { return fmt("result = vn_from_cstr(env, {});", S(r)); },
-        .TEXT(x) => { return fmt3("result = vn_from_str(env, {}.ptr, {}.len); volt_text_free({});", S(r), S(r), S(r)); },
-        .HANDLE(s) => { return fmt2("result = vn_wrap_{}(env, {});", this.node_sname(s), S(r)); },
-        .OPT(x) => {
-            if (!this.node_simple(x)) {
-                return fail(NO_SPAN, fmt("an optional {} can't go to JavaScript", this.c.ty_name(x)));
-            }
-            return fmt3("if ({}.has) result = {}; else napi_get_null(env, &result);", S(r), this.node_put_simple(x, fmt("{}.value", S(r)).as_str()), S(""));
-        },
-        .SLICE(x) => {
-            if (!this.node_simple(x)) {
-                return fail(NO_SPAN, fmt("a slice of {} can't go to JavaScript", this.c.ty_name(x)));
-            }
-            return fmt4("napi_create_array_with_length(env, {}.len, &result); for (size_t i = 0; i < {}.len; i++) napi_set_element(env, result, (uint32_t)i, {});", S(r), S(r), this.node_put_simple(x, fmt("{}.ptr[i]", S(r)).as_str()), S(""));
-        },
         .RESULT(e, x) => {
-            var out = fmt("if ({}.error != 0) { vn_throw_code(env, ", S(r));
-            out.append(fmt("{}.error); goto fail; } ", S(r)).as_str());
-            if (x == VOID) {
-                out.append("napi_get_undefined(env, &result);");
-            } else {
-                out.append((try this.node_result(x, fmt("{}.value", S(r)).as_str())).as_str());
-            }
+            var out = fmt2("if ({}.error != 0) {{ vn_throw_err(env, {}.error, thrown); goto fail; }} ", S(r), S(r));
+            out.append((try this.node_result(x, fmt("{}.value", S(r)).as_str())).as_str());
             return out;
         },
-        .PTR(x) => { return fmt("result = vn_from_external(env, (void *){});", S(r)); },
-        default => { return fail(NO_SPAN, fmt("{} can't go to JavaScript", this.c.ty_name(t))); },
+        default => { return try this.node_put(t, r, "result", 0); },
     }
 }
 
-// the C function behind one JS function (self: the export struct a method's this is, if any)
-attach fn node_fn(this: bind&, f: u32, wname: str, self_class: u32?, out: std::string&) -> compile_error!void {
-    val info = this.c.fi(f);
-    var first: usize = 0;
+// the C function behind a JS function calling into Volt: name; what (its name in messages); its
+// params' types (ps) and C names, from argv; self_decl and self_get, what find what it's called on;
+// callee, what it calls, with first before the params; ret, the result's type. Every argument is
+// converted before anything is given (so a failing one leaks nothing), and what a callback threw
+// during the call is thrown once it's back
+attach fn node_call(this: bind&, name: str, what: str, ps: std::vec<u32>&, names: std::vec<std::string>&, self_decl: str, self_get: str, callee: str, first: str, ret: u32, out: std::string&) -> compile_error!void {
     var decls: std::string = {};
     var gets: std::string = {};
-    var passes: std::string = {};
+    var gives: std::string = {};
+    var passes = S(first);
     var afters: std::string = {};
     var cleanups: std::string = {};
-    val sc = self_class;
-    if (sc) {
-        first = 1;
-        decls.append(fmt2("    {}p_self = NULL;\n", spaced(this.handle_c(sc, false)), S("")).as_str());
-        gets.append(fmt2("    if (!vn_unwrap(env, self, &vn_tag_{}, (void **)&p_self, \"{}\")) { goto fail; }\n", this.node_sname(sc), this.node_sname(sc)).as_str());
-        passes.append("p_self");
-    }
-    val n = info.params.len - first;
+    var any_give = false;
     var required: usize = 0;
-    for (k) in first..info.params.len {
-        val p = info.params.at(k);
+    for (k) in 0..ps.len {
+        val t = *ps.at(k);
         var a: node_arg = {};
-        val js = fmt("argv[{}]", unum(@cast<u64>(k - first)));
-        val cname = fmt("p_{}", S(p.name));
-        try this.node_arg_of(p.ty, js.as_str(), cname.as_str(), &a);
+        val js = fmt("argv[{}]", unum(@cast<u64>(k)));
+        try this.node_arg_of(t, js.as_str(), names.at(k).as_str(), &a);
         decls.append(fmt("    {}\n", copy a.decl).as_str());
         gets.append(fmt("    {}\n", copy a.get).as_str());
+        if (a.give.len() > 0) {
+            gives.append(fmt("    {}\n", copy a.give).as_str());
+        }
         if (passes.len() > 0) {
             passes.append(", ");
         }
@@ -8952,47 +9115,228 @@ attach fn node_fn(this: bind&, f: u32, wname: str, self_class: u32?, out: std::s
         if (a.cleanup.len() > 0) {
             cleanups.append(fmt("    {}\n", copy a.cleanup).as_str());
         }
-        match (this.shape_of(p.ty) ?? shape::VOID) {
+        if (a.gives) {
+            any_give = true;
+        }
+        match (this.shape_of(t) ?? shape::VOID) {
             .OPT(x) => {},
-            default => { required = k - first + 1; },
+            default => { required = k + 1; },
         }
     }
-    var argn = n;
+    var argn = ps.len;
     if (argn == 0) {
         argn = 1;
     }
-    out.append(fmt3("\nstatic napi_value {}(napi_env env, napi_callback_info info) {{\n    size_t argc = {};\n    napi_value argv[{}], self = NULL, result = NULL;\n", S(wname), unum(@cast<u64>(n)), unum(@cast<u64>(argn))).as_str());
+    out.append(fmt3("\nstatic napi_value {}(napi_env env, napi_callback_info info) {{\n    size_t argc = {};\n    napi_value argv[{}], self = NULL, result = NULL, saved = NULL, thrown = NULL;\n    void *data = NULL;\n    size_t busy = vn_nbusy;\n", S(name), unum(@cast<u64>(ps.len)), unum(@cast<u64>(argn))).as_str());
+    out.append(self_decl);
     out.append(decls.as_str());
-    out.append("    if (napi_get_cb_info(env, info, &argc, argv, &self, NULL) != napi_ok) {\n        return NULL;\n    }\n");
+    if (any_give) {
+        out.append("    struct vn_gives gives = {NULL, 0, 0};\n");
+    }
+    out.append("    if (napi_get_cb_info(env, info, &argc, argv, &self, &data) != napi_ok) {\n        return NULL;\n    }\n    (void)self;\n    (void)data;\n");
     if (required > 0) {
-        out.append(fmt3("    if (argc < {}) {{\n        napi_throw_type_error(env, NULL, \"{} takes {} arguments\");\n        return NULL;\n    }}\n", unum(@cast<u64>(required)), S(info.c_name), unum(@cast<u64>(required))).as_str());
+        out.append(fmt3("    if (argc < {}) {{\n        napi_throw_type_error(env, NULL, \"{} takes {} arguments\");\n        return NULL;\n    }}\n", unum(@cast<u64>(required)), S(what), unum(@cast<u64>(required))).as_str());
     }
+    out.append(self_get);
     out.append(gets.as_str());
-    out.append("    if (0) {\n        goto fail;\n    }\n    {\n");
-    val call = fmt2("{}({})", S(info.c_name), move passes);
-    if (info.ret == VOID) {
-        out.append(fmt("        {};\n", move call).as_str());
-    } else {
-        out.append(fmt2("        {}r = {};\n", spaced(this.c_prim(info.ret, false)), move call).as_str());
+    if (any_give) {
+        out.append("    vn_give_all(env, &gives);\n");
     }
+    out.append(gives.as_str());
+    out.append("    if (0) {\n        goto fail;\n    }\n    saved = vn_thrown;\n    vn_thrown = NULL;\n    {\n");
+    val call = fmt2("{}({})", S(callee), copy passes);
+    if (ret == VOID) {
+        out.append(fmt("        {};\n", copy call).as_str());
+    } else {
+        out.append(fmt2("        {}r = {};\n", spaced(this.c_out(ret, false)), copy call).as_str());
+    }
+    out.append("        thrown = vn_thrown;\n        vn_thrown = saved;\n");
     // the result first: an error throws (goto fail) before anything is written back
-    out.append(fmt("        {}\n", try this.node_result(info.ret, "r")).as_str());
+    out.append(fmt("        {}\n", try this.node_result(ret, "r")).as_str());
     out.append(afters.as_str());
-    out.append("    }\nfail:\n");
+    out.append("        if (thrown) {\n            napi_throw(env, thrown);\n            result = NULL;\n        }\n    }\nfail:\n");
     out.append(cleanups.as_str());
-    out.append("    return result;\n}\n");
+    if (any_give) {
+        out.append("    free(gives.at);\n");
+    }
+    // what was lent to this call isn't any more
+    out.append("    vn_nbusy = busy;\n    return result;\n}\n");
     return;
 }
 
-// a stable 128-bit tag for export struct s, so a method can check what its this is
-attach fn node_tag(this: bind&, s: u32) -> std::string {
-    var name = S(this.pkg);
-    name.append("::");
-    name.append(this.node_sname(s).as_str());
-    val a = fnv64(name.as_str());
-    name.append("#");
-    val b = fnv64(name.as_str());
-    return fmt2("{{0x{}ULL, 0x{}ULL}}", hex_u64(a), hex_u64(b));
+// the C function behind one JS function (self: the export struct a method's this is, if any)
+attach fn node_fn(this: bind&, f: u32, wname: str, self_class: u32?, out: std::string&) -> compile_error!void {
+    val info = this.c.fi(f);
+    var first: usize = 0;
+    var self_decl: std::string = {};
+    var self_get: std::string = {};
+    var pass: std::string = {};
+    val sc = self_class;
+    if (sc) {
+        first = 1;
+        self_decl = fmt("    {}p_self = NULL;\n", spaced(this.handle_c(sc, false)));
+        self_get = fmt2("    if (!vn_unwrap(env, self, vn_tags_{}, 0, (void **)&p_self, \"{}\")) {\n        goto fail;\n    }\n", this.node_sname(sc), this.node_sname(sc));
+        pass = S("p_self");
+    }
+    var ps: std::vec<u32> = {};
+    var names: std::vec<std::string> = {};
+    for (k) in first..info.params.len {
+        put(&ps, info.params.at(k).ty);
+        put(&names, fmt("p_{}", S(info.params.at(k).name)));
+    }
+    try this.node_call(wname, info.c_name, &ps, &names, self_decl.as_str(), self_get.as_str(), info.c_name, pass.as_str(), info.ret, out);
+    return;
+}
+
+// a C function Volt calls JS through (a callback's, or the fn of a trait a JS object implements):
+// sig is its signature, head its first lines (env, and c: what it calls), call the C expression
+// calling JS (true when it returned); ps are the params' types (a0..), r the result's. A handle Volt
+// lends is an instance that lets go of it when the call returns, and a struct or a slice Volt lends
+// gets back what JS wrote into it. What JS throws (or gives back that doesn't fit) is kept for the
+// Volt call it's in, and Volt gets a stand-in (see node_standin)
+attach fn node_upcall(this: bind&, sig: std::string, head: str, call: str, ps: std::vec<u32>&, r: u32) -> compile_error!std::string {
+    var argn = ps.len;
+    if (argn == 0) {
+        argn = 1;
+    }
+    var out = fmt3("\nstatic {} {{\n{}    napi_escapable_handle_scope scope = NULL;\n    napi_value argv[{}], ret = NULL, err = NULL;\n", copy sig, S(head), unum(@cast<u64>(argn)));
+    if (r != VOID) {
+        out.append(fmt("    {}out;\n    memset(&out, 0, sizeof out);\n", spaced(this.c_prim(r, false))).as_str());
+    }
+    out.append("    napi_open_escapable_handle_scope(env, &scope);\n");
+    var back: std::string = {};
+    var unlend: std::string = {};
+    for (k) in 0..ps.len {
+        val p = *ps.at(k);
+        val a = fmt("a{}", unum(@cast<u64>(k)));
+        val av = fmt("argv[{}]", unum(@cast<u64>(k)));
+        val h = this.lent_handle(p);
+        if (h) {
+            if (this.is_ref(p)) {
+                out.append(fmt3("    {} = vn_lend_{}(env, {});\n", copy av, this.node_sname(h), copy a).as_str());
+            } else {
+                out.append(fmt4("    {} = {} ? vn_lend_{}(env, {}) : vn_null(env);\n", copy av, copy a, this.node_sname(h), copy a).as_str());
+            }
+            unlend.append(fmt("    vn_detach(env, {});\n", copy av).as_str());
+            continue;
+        }
+        var done = false;
+        match (this.shape_of(p) ?? shape::VOID) {
+            .PTR(x) => {
+                match (this.shape_of(x) ?? shape::VOID) {
+                    .STRUCT(s) => {
+                        if (this.node_simple(x)) {
+                            // a struct Volt lends: a copy, and what JS changed in it goes back
+                            val sn = this.node_sname(s);
+                            out.append(fmt4("    {} = {} ? vn_new_{}(env, {}) : vn_null(env);\n", copy av, copy a, copy sn, copy a).as_str());
+                            back.append(fmt4("    if ({} && !vn_get_{}(env, {}, {})) {{\n        goto fail;\n    }}\n", copy a, copy sn, copy av, copy a).as_str());
+                            done = true;
+                        }
+                    },
+                    default => {},
+                }
+            },
+            .SLICE(x) => {
+                if (this.node_simple(x)) {
+                    // what JS wrote into the array goes back into Volt's elements
+                    back.append(fmt3("    for (size_t i = 0; i < {}.len; i++) {{\n        napi_value e = NULL;\n        napi_get_element(env, {}, (uint32_t)i, &e);\n        {}\n    }}\n", copy a, copy av, this.node_get_simple(x, "e", fmt("{}.ptr[i]", copy a).as_str())).as_str());
+                }
+            },
+            default => {},
+        }
+        if (!done) {
+            out.append(fmt("    {}\n", try this.node_put(this.in_ty(p), a.as_str(), av.as_str(), 0)).as_str());
+        }
+    }
+    out.append(fmt("    if (!({})) {{\n        goto fail;\n    }}\n", S(call)).as_str());
+    out.append(back.as_str());
+    if (r != VOID) {
+        out.append(fmt("    {}\n", try this.node_get(r, "ret", "out")).as_str());
+    }
+    out.append(unlend.as_str());
+    out.append("    napi_close_escapable_handle_scope(env, scope);\n");
+    var ret = S("    return;\n");
+    if (r != VOID) {
+        ret = S("    return out;\n");
+    }
+    out.append(ret.as_str());
+    // the exception taken first: napi does nothing else while one is pending
+    out.append("fail:\n    err = vn_caught(env);\n");
+    out.append(unlend.as_str());
+    out.append(this.node_standin(r).as_str());
+    out.append("    napi_close_escapable_handle_scope(env, scope);\n");
+    out.append(ret.as_str());
+    out.append("}\n");
+    return out;
+}
+
+// what an upcall gives Volt when JS threw err (kept for the Volt call, which throws it): for E!T
+// the error a thrown VoltError names (then nothing is kept), else the error set's first; empty text;
+// zero; a handle has no stand-in, so the program stops, as a Volt panic does
+attach fn node_standin(this: bind&, r: u32) -> std::string {
+    val keep = "    vn_keep(env, scope, err);\n";
+    val h = this.lent_handle(r);
+    if (h) {
+        if (this.is_ref(r)) {
+            return fmt("    vn_fatal(env, err, \"a callback giving a {} threw\");\n", this.node_sname(h));
+        }
+        return S(keep);
+    }
+    match (this.shape_of(r) ?? shape::VOID) {
+        .HANDLE(s) => { return fmt("    vn_fatal(env, err, \"a callback giving a {} threw\");\n", this.node_sname(s)); },
+        .TEXT(x) => { return fmt("{}    out.ptr = (const uint8_t *)\"\";\n    out.drop = vn_no_drop;\n", S(keep)); },
+        .CSTR => { return fmt("{}    out = \"\";\n", S(keep)); },
+        .RESULT(e, x) => {
+            val set = this.node_codes(e);
+            var out = fmt("    out.error = vn_code_of(env, err, {});\n    if (!out.error) {\n", copy set);
+            out.append(fmt2("        out.error = {}[0] ? {}[0] : 1;\n        vn_keep(env, scope, err);\n    }\n", copy set, copy set).as_str());
+            return out;
+        },
+        default => { return S(keep); },
+    }
+}
+
+// the codes (see node_text) of error set type e
+attach fn node_codes(this: bind&, e: u32) -> std::string {
+    match (*this.c.t.get(e)) {
+        .ENUM(x) => { return fmt("vn_codes_{}", this.local(this.c.ei(x).name)); },
+        default => { return S("vn_codes_all"); },
+    }
+}
+
+// does an export fn take closure type i as a callback (which JS gives as a function)?
+attach fn node_cb_used(this: bind&, i: u32) -> bool {
+    for (f&) in this.exports().items() {
+        for (p&) in this.c.fi(*f).params.items() {
+            match (this.shape_of(p.ty) ?? shape::VOID) {
+                .CLOSURE(j) => {
+                    if (j == i) {
+                        return true;
+                    }
+                },
+                default => {},
+            }
+        }
+    }
+    return false;
+}
+
+// two stable 128-bit tags for class name: its instances JS owns, and those lent to a callback (so a
+// function can check what it's given)
+attach fn node_tags(this: bind&, name: str) -> std::string {
+    var n = S(this.pkg);
+    n.append("::");
+    n.append(name);
+    val a = fnv64(n.as_str());
+    n.append("#");
+    val b = fnv64(n.as_str());
+    n.append("lent");
+    val c = fnv64(n.as_str());
+    n.append("#");
+    val d = fnv64(n.as_str());
+    var out = fmt2("{{{{0x{}ULL, 0x{}ULL}}, ", hex_u64(a), hex_u64(b));
+    out.append(fmt2("{{0x{}ULL, 0x{}ULL}}}}", hex_u64(c), hex_u64(d)).as_str());
+    return out;
 }
 
 fn fnv64(s: str) -> u64 {
@@ -9037,14 +9381,47 @@ attach fn node_text(this: bind&) -> compile_error!std::string {
     out.append("static inline int vn_array(napi_env env, napi_value v, uint32_t *n) {\n    bool is = false;\n    napi_is_array(env, v, &is);\n    if (!is || napi_get_array_length(env, v, n) != napi_ok) {\n        return vn_throw(env, \"expected an array\");\n    }\n    return 1;\n}\n\n");
     out.append("static inline int vn_function(napi_env env, napi_value v) {\n    napi_valuetype t = napi_undefined;\n    napi_typeof(env, v, &t);\n    return t == napi_function || vn_throw(env, \"expected a function\");\n}\n\n");
     out.append("static inline int vn_external(napi_env env, napi_value v, void **out) {\n    if (vn_is_nullish(env, v)) {\n        *out = NULL;\n        return 1;\n    }\n    return napi_get_value_external(env, v, out) == napi_ok || vn_throw(env, \"expected a pointer from this library\");\n}\n\n");
-    out.append("// a class instance's handle (after a check that it is one), or an error once it's closed\nstatic inline int vn_unwrap(napi_env env, napi_value v, const napi_type_tag *tag, void **out, const char *what) {\n    bool is = false;\n    char msg[160];\n    if (napi_check_object_type_tag(env, v, tag, &is) != napi_ok || !is) {\n        snprintf(msg, sizeof msg, \"expected a %s\", what);\n        return vn_throw(env, msg);\n    }\n    if (napi_unwrap(env, v, out) != napi_ok || !*out) {\n        snprintf(msg, sizeof msg, \"this %s is closed\", what);\n        return vn_throw(env, msg);\n    }\n    return 1;\n}\n\n");
+    out.append("// what the calls that are running hold lent (handles, Volt's trait values, its closures being called):\n// closing one, or giving it to Volt, has to wait until the call is back. Each call drops what it\n// added when it returns\nstatic _Thread_local void **vn_busy;\nstatic _Thread_local size_t vn_nbusy, vn_cap_busy;\n\nstatic inline int vn_busy_add(napi_env env, void *p) {\n    if (vn_nbusy == vn_cap_busy) {\n        size_t cap = vn_cap_busy ? vn_cap_busy * 2 : 8;\n        void **b = realloc(vn_busy, cap * sizeof *b);\n        if (!b) {\n            return vn_throw(env, \"out of memory\");\n        }\n        vn_busy = b;\n        vn_cap_busy = cap;\n    }\n    vn_busy[vn_nbusy++] = p;\n    return 1;\n}\n\n// 1 when p isn't lent to a call that's running; else it throws\nstatic inline int vn_busy_check(napi_env env, void *p, const char *what) {\n    char msg[160];\n    for (size_t i = 0; i < vn_nbusy; i++) {\n        if (vn_busy[i] == p) {\n            snprintf(msg, sizeof msg, \"this %s is lent to a call that hasn't returned\", what);\n            return vn_throw(env, msg);\n        }\n    }\n    return 1;\n}\n\n// a class instance's handle (after a check that it is one: own asks for one JavaScript owns, which\n// it can give up, not one lent to a callback or to a call that's running), or an error once it's\n// closed; one that isn't given is lent until the call is back\nstatic inline int vn_unwrap(napi_env env, napi_value v, const napi_type_tag *tags, int own, void **out, const char *what) {\n    bool is = false, lent = false;\n    char msg[160];\n    napi_check_object_type_tag(env, v, &tags[0], &is);\n    if (!is) {\n        napi_check_object_type_tag(env, v, &tags[1], &lent);\n    }\n    if (!is && !lent) {\n        snprintf(msg, sizeof msg, \"expected a %s\", what);\n        return vn_throw(env, msg);\n    }\n    if (lent && own) {\n        snprintf(msg, sizeof msg, \"this %s is lent to a callback, which can't give it away\", what);\n        return vn_throw(env, msg);\n    }\n    if (napi_unwrap(env, v, out) != napi_ok || !*out) {\n        snprintf(msg, sizeof msg, \"this %s is closed\", what);\n        return vn_throw(env, msg);\n    }\n    return own ? vn_busy_check(env, *out, what) : vn_busy_add(env, *out);\n}\n\n// an instance lets go of its handle (given up, or lent no longer)\nstatic inline void vn_detach(napi_env env, napi_value v) {\n    void *h = NULL;\n    napi_remove_wrap(env, v, &h);\n}\n\n");
     out.append("static inline napi_value vn_num(napi_env env, double d) {\n    napi_value v = NULL;\n    napi_create_double(env, d, &v);\n    return v;\n}\n\nstatic inline napi_value vn_from_bool(napi_env env, bool b) {\n    napi_value v = NULL;\n    napi_get_boolean(env, b, &v);\n    return v;\n}\n\nstatic inline napi_value vn_from_str(napi_env env, const uint8_t *p, size_t n) {\n    napi_value v = NULL;\n    napi_create_string_utf8(env, (const char *)p, n, &v);\n    return v;\n}\n\nstatic inline napi_value vn_from_cstr(napi_env env, const char *s) {\n    napi_value v = NULL;\n    if (s) {\n        napi_create_string_utf8(env, s, NAPI_AUTO_LENGTH, &v);\n    } else {\n        napi_get_null(env, &v);\n    }\n    return v;\n}\n\nstatic inline napi_value vn_from_external(napi_env env, void *p) {\n    napi_value v = NULL;\n    if (p) {\n        napi_create_external(env, p, NULL, NULL, &v);\n    } else {\n        napi_get_null(env, &v);\n    }\n    return v;\n}\n\n");
     // errors: an Error whose code is the error's name
     out.append("static inline const char *vn_error_name(uint32_t code) {\n    switch (code) {\n");
     for (c&) in this.all_codes().items() {
         out.append(fmt2("    case {}u: return \"{}\";\n", num(c.code), S(c.name)).as_str());
     }
-    out.append("    }\n    return \"ERROR\";\n}\n\n// throw an Error for a Volt error code: its code and message are the error's name\nstatic inline void vn_throw_code(napi_env env, uint32_t code) {\n    napi_value msg = NULL, name = NULL, err = NULL, num = NULL;\n    napi_create_string_utf8(env, vn_error_name(code), NAPI_AUTO_LENGTH, &name);\n    napi_create_string_utf8(env, vn_error_name(code), NAPI_AUTO_LENGTH, &msg);\n    napi_create_error(env, name, msg, &err);\n    napi_create_uint32(env, code, &num);\n    napi_set_named_property(env, err, \"errno\", num);\n    napi_throw(env, err);\n}\n");
+    out.append("    }\n    return \"ERROR\";\n}\n\n");
+    out.append("// the Error for a Volt error code: its code and message are the error's name, its errno the code\nstatic inline napi_value vn_code_error(napi_env env, uint32_t code) {\n    napi_value msg = NULL, name = NULL, err = NULL, num = NULL;\n    napi_create_string_utf8(env, vn_error_name(code), NAPI_AUTO_LENGTH, &name);\n    napi_create_string_utf8(env, vn_error_name(code), NAPI_AUTO_LENGTH, &msg);\n    napi_create_error(env, name, msg, &err);\n    napi_create_uint32(env, code, &num);\n    napi_set_named_property(env, err, \"errno\", num);\n    return err;\n}\n\nstatic inline void vn_throw_code(napi_env env, uint32_t code) {\n    napi_throw(env, vn_code_error(env, code));\n}\n");
+    // every error's code, then each error set's (each ends with 0)
+    out.append("\n// every error's code, then each error set's (each ends with 0)\nstatic const uint32_t vn_codes_all[] = {");
+    for (c&) in this.all_codes().items() {
+        out.append(fmt("{}u, ", num(c.code)).as_str());
+    }
+    out.append("0};\n");
+    for (et&) in this.codes.items() {
+        match (*this.c.t.get(*et)) {
+            .ENUM(e) => {
+                val info = this.c.ei(e);
+                out.append(fmt("static const uint32_t vn_codes_{}[] = {{", this.local(info.name)).as_str());
+                for (i) in 0..info.names.len {
+                    out.append(fmt("{}u, ", num(*info.values.at(i))).as_str());
+                }
+                out.append("0};\n");
+            },
+            default => {},
+        }
+    }
+    out.append("\n// the code of an error a callback threw (an Error whose code is the error's name), when it's one of\n// codes (they end with 0); else 0\nstatic inline uint32_t vn_code_of(napi_env env, napi_value e, const uint32_t *codes) {\n    napi_value c = NULL;\n    napi_valuetype t = napi_undefined;\n    char name[128];\n    size_t n = 0;\n    napi_typeof(env, e, &t);\n    if (t != napi_object || napi_get_named_property(env, e, \"code\", &c) != napi_ok) {\n        return 0;\n    }\n    napi_typeof(env, c, &t);\n    if (t != napi_string || napi_get_value_string_utf8(env, c, name, sizeof name, &n) != napi_ok) {\n        return 0;\n    }\n    for (; *codes; codes++) {\n        if (strcmp(vn_error_name(*codes), name) == 0) {\n            return *codes;\n        }\n    }\n    return 0;\n}\n\n// voltError(name): the Error a Volt function throws for that error (a callback throws one to give\n// Volt the error)\nstatic napi_value vn_volt_error(napi_env env, napi_callback_info info) {\n    size_t argc = 1, len = 0;\n    napi_value argv[1];\n    char *name = NULL;\n    char msg[160];\n    if (napi_get_cb_info(env, info, &argc, argv, NULL, NULL) != napi_ok || !vn_utf8(env, argv[0], &name, &len)) {\n        return NULL;\n    }\n    for (const uint32_t *c = vn_codes_all; *c; c++) {\n        if (strcmp(vn_error_name(*c), name) == 0) {\n            free(name);\n            return vn_code_error(env, *c);\n        }\n    }\n    snprintf(msg, sizeof msg, \"no error is named %.100s\", name);\n    free(name);\n    vn_throw(env, msg);\n    return NULL;\n}\n\n// ---------- calls back into JavaScript ----------\n\n// what a callback (or a trait fn a JavaScript object implements) threw while Volt called it: kept,\n// Volt gets a stand-in, and the Volt call it happened in throws it once it's back (an exception\n// never unwinds through Volt). Callbacks run on the JS thread that made the call\nstatic _Thread_local napi_value vn_thrown;\n\nstatic inline napi_value vn_null(napi_env env) {\n    napi_value v = NULL;\n    napi_get_null(env, &v);\n    return v;\n}\n\n// the exception pending (cleared), or an Error saying the call failed\nstatic inline napi_value vn_caught(napi_env env) {\n    napi_value e = NULL, msg = NULL;\n    bool pending = false;\n    napi_is_exception_pending(env, &pending);\n    if (pending) {\n        napi_get_and_clear_last_exception(env, &e);\n    }\n    if (!e) {\n        napi_create_string_utf8(env, \"a call from Volt into JavaScript failed\", NAPI_AUTO_LENGTH, &msg);\n        napi_create_error(env, NULL, msg, &e);\n    }\n    return e;\n}\n\n// keeps e (the first one) for the Volt call it happened in\nstatic inline void vn_keep(napi_env env, napi_escapable_handle_scope scope, napi_value e) {\n    if (!vn_thrown) {\n        napi_escape_handle(env, scope, e, &vn_thrown);\n    }\n}\n\n// a Volt call's error: what a callback threw, when that's why, else the error's own\nstatic inline void vn_throw_err(napi_env env, uint32_t code, napi_value thrown) {\n    if (thrown) {\n        napi_throw(env, thrown);\n    } else {\n        vn_throw_code(env, code);\n    }\n}\n\n// a callback that has to give Volt a handle threw: there's nothing to give, so the program stops, as\n// a Volt panic does\nstatic inline void vn_fatal(napi_env env, napi_value e, const char *what) {\n    char buf[512];\n    size_t n = 0;\n    napi_value s = NULL;\n    buf[0] = 0;\n    if (napi_coerce_to_string(env, e, &s) == napi_ok) {\n        napi_get_value_string_utf8(env, s, buf, sizeof buf, &n);\n    }\n    fprintf(stderr, \"panic: %s: %s\\n\", what, buf);\n    exit(101);\n}\n\nstatic inline int vn_call(napi_env env, napi_value f, size_t argc, const napi_value *argv, napi_value *ret) {\n    napi_value undef = NULL;\n    napi_get_undefined(env, &undef);\n    return napi_call_function(env, undef, f, argc, argv, ret) == napi_ok;\n}\n\nstatic inline int vn_call_method(napi_env env, napi_value o, const char *name, size_t argc, const napi_value *argv, napi_value *ret) {\n    napi_value f = NULL;\n    napi_valuetype t = napi_undefined;\n    char msg[160];\n    if (napi_get_named_property(env, o, name, &f) != napi_ok) {\n        return 0;\n    }\n    napi_typeof(env, f, &t);\n    if (t != napi_function) {\n        snprintf(msg, sizeof msg, \"the object has no %s()\", name);\n        return vn_throw(env, msg);\n    }\n    return napi_call_function(env, o, f, argc, argv, ret) == napi_ok;\n}\n\n// the bytes of a str or cstr a callback gives Volt: kept until the next one on this thread\n// ponytail: Volt reads it before the callback runs again; hold more if a fn keeps two\nstatic _Thread_local char *vn_kept;\n\nstatic inline int vn_cstr_kept(napi_env env, napi_value v, const char **out) {\n    char *buf = NULL;\n    if (!vn_cstr(env, v, out, &buf)) {\n        free(buf);\n        return 0;\n    }\n    free(vn_kept);\n    vn_kept = buf;\n    return 1;\n}\n\n// what an export fn's call takes over (class instances given up, Volt's trait values given back):\n// each checked as it's added (open, owned, there once), then all given at once, when nothing can\n// fail any more\nstruct vn_give {\n    napi_value v;\n    void *p;\n    int box; // Volt's trait value: its box is freed (the call has its object)\n};\n\nstruct vn_gives {\n    struct vn_give *at;\n    size_t n, cap;\n};\n\n// ponytail: the twice check is O(n^2); a set if calls give thousands\nstatic inline int vn_add_give(napi_env env, struct vn_gives *g, napi_value v, void *p, int box) {\n    for (size_t i = 0; i < g->n; i++) {\n        if (g->at[i].p == p) {\n            return vn_throw(env, \"the same object is given twice\");\n        }\n    }\n    if (g->n == g->cap) {\n        size_t cap = g->cap ? g->cap * 2 : 4;\n        struct vn_give *at = realloc(g->at, cap * sizeof *at);\n        if (!at) {\n            return vn_throw(env, \"out of memory\");\n        }\n        g->at = at;\n        g->cap = cap;\n    }\n    g->at[g->n].v = v;\n    g->at[g->n].p = p;\n    g->at[g->n].box = box;\n    g->n++;\n    return 1;\n}\n\nstatic inline void vn_give_all(napi_env env, struct vn_gives *g) {\n    for (size_t i = 0; i < g->n; i++) {\n        vn_detach(env, g->at[i].v);\n        if (g->at[i].box) {\n            free(g->at[i].p);\n        }\n    }\n}\n\n// an array of class instances as their handles: lent for the call, or given up (g)\nstatic inline int vn_handles(napi_env env, napi_value v, const napi_type_tag *tags, const char *what, struct vn_gives *g, void ***out, uint32_t *n) {\n    if (!vn_array(env, v, n)) {\n        return 0;\n    }\n    *out = calloc(*n ? *n : 1, sizeof **out);\n    if (!*out) {\n        return vn_throw(env, \"out of memory\");\n    }\n    for (uint32_t i = 0; i < *n; i++) {\n        napi_value e = NULL;\n        napi_get_element(env, v, i, &e);\n        if (!vn_unwrap(env, e, tags, g != NULL, &(*out)[i], what) || (g && !vn_add_give(env, g, e, (*out)[i], 0))) {\n            return 0;\n        }\n    }\n    return 1;\n}\n");
+    if (this.uses_str) {
+        out.append("\nstatic inline int vn_str_kept(napi_env env, napi_value v, volt_str *out) {\n    char *buf = NULL;\n    if (!vn_str(env, v, out, &buf)) {\n        free(buf);\n        return 0;\n    }\n    free(vn_kept);\n    vn_kept = buf;\n    return 1;\n}\n\n// an array of strings as strs (each one's bytes its own, freed with vn_free_strs)\nstatic inline int vn_strs(napi_env env, napi_value v, volt_str **out, uint32_t *n) {\n    if (!vn_array(env, v, n)) {\n        return 0;\n    }\n    *out = calloc(*n ? *n : 1, sizeof **out);\n    if (!*out) {\n        return vn_throw(env, \"out of memory\");\n    }\n    for (uint32_t i = 0; i < *n; i++) {\n        napi_value e = NULL;\n        char *buf = NULL;\n        napi_get_element(env, v, i, &e);\n        if (!vn_str(env, e, &(*out)[i], &buf)) {\n            free(buf);\n            return 0;\n        }\n    }\n    return 1;\n}\n\nstatic inline void vn_free_strs(volt_str *s, uint32_t n) {\n    if (s) {\n        for (uint32_t i = 0; i < n; i++) {\n            free((void *)s[i].ptr);\n        }\n        free(s);\n    }\n}\n");
+    }
+    if (this.texts.len > 0) {
+        out.append("\n// owned text Volt gave out: a string, then freed\nstatic inline napi_value vn_take_text(napi_env env, volt_text t) {\n    napi_value v = vn_from_str(env, t.ptr, t.len);\n    volt_text_free(t);\n    return v;\n}\n\n// a string as owned text for Volt (what a callback gives back), which frees it\nstatic inline int vn_text(napi_env env, napi_value v, volt_text *out) {\n    char *buf = NULL;\n    size_t len = 0;\n    if (!vn_utf8(env, v, &buf, &len)) {\n        free(buf);\n        return 0;\n    }\n    out->ptr = (const uint8_t *)buf;\n    out->len = len;\n    out->owner = buf;\n    out->drop = free;\n    return 1;\n}\n\n// what frees the empty text a callback that threw gives Volt: nothing\nstatic inline void vn_no_drop(void *owner) {\n    (void)owner;\n}\n");
+    }
+    if (this.traits.len > 0) {
+        out.append("\n// ---------- traits ----------\n\n// a trait's object as C passes it: its table, the object, and what frees it (null: it's lent)\nstruct vn_tobj {\n    const void *vt;\n    void *self;\n    void (*drop)(void *self);\n};\n\n// a JavaScript object Volt calls a trait's fns on: lent for a call (v), or given to Volt (a\n// reference, until Volt drops it)\nstruct vn_obj {\n    napi_env env;\n    napi_value v;\n    napi_ref ref;\n};\n\nstatic inline napi_value vn_obj_value(struct vn_obj *o) {\n    napi_value v = o->v;\n    if (!v) {\n        napi_get_reference_value(o->env, o->ref, &v);\n    }\n    return v;\n}\n\n// Volt drops a JavaScript object it was given: its [Symbol.dispose]() or close() runs, when it has one\nstatic inline void vn_obj_drop(void *self) {\n    struct vn_obj *o = self;\n    napi_env env = o->env;\n    napi_escapable_handle_scope scope = NULL;\n    napi_value v = NULL, g = NULL, sym = NULL, f = NULL, ret = NULL;\n    napi_valuetype t = napi_undefined;\n    napi_open_escapable_handle_scope(env, &scope);\n    v = vn_obj_value(o);\n    napi_get_global(env, &g);\n    napi_get_named_property(env, g, \"Symbol\", &sym);\n    napi_get_named_property(env, sym, \"dispose\", &sym);\n    napi_typeof(env, sym, &t);\n    if (t == napi_symbol) {\n        napi_get_property(env, v, sym, &f);\n    }\n    t = napi_undefined;\n    if (f) {\n        napi_typeof(env, f, &t);\n    }\n    if (t != napi_function) {\n        napi_get_named_property(env, v, \"close\", &f);\n        napi_typeof(env, f, &t);\n    }\n    if (t == napi_function && napi_call_function(env, v, f, 0, NULL, &ret) != napi_ok) {\n        vn_keep(env, scope, vn_caught(env));\n    }\n    napi_close_escapable_handle_scope(env, scope);\n    napi_delete_reference(env, o->ref);\n    free(o);\n}\n\n// a JavaScript object given to Volt: held until Volt drops it\nstatic inline struct vn_obj *vn_obj_new(napi_env env, napi_value v) {\n    struct vn_obj *o = malloc(sizeof *o);\n    if (!o) {\n        fprintf(stderr, \"panic: out of memory\\n\");\n        exit(101);\n    }\n    o->env = env;\n    o->v = NULL;\n    napi_create_reference(env, v, 1, &o->ref);\n    return o;\n}\n\n// a trait's object from v: Volt's own (tags: an instance of its class; given, the call takes it\n// over), or a JavaScript object with the trait's fns (their names end with NULL), called through vt:\n// lent for the call, or (no lent) given, which the call's give makes\nstatic inline int vn_get_obj(napi_env env, napi_value v, const napi_type_tag *tags, const void *vt, const char *const *fns, const char *what, struct vn_obj *lent, struct vn_gives *g, void *out) {\n    struct vn_tobj *o = out;\n    napi_valuetype t = napi_undefined;\n    bool is = false;\n    char msg[200];\n    napi_check_object_type_tag(env, v, &tags[0], &is);\n    if (is) {\n        struct vn_tobj *box = NULL;\n        if (napi_unwrap(env, v, (void **)&box) != napi_ok || !box) {\n            snprintf(msg, sizeof msg, \"this volt_%s is closed\", what);\n            return vn_throw(env, msg);\n        }\n        *o = *box;\n        if (lent) {\n            o->drop = NULL;\n            return vn_busy_add(env, box);\n        }\n        return vn_busy_check(env, box, what) && vn_add_give(env, g, v, box, 1);\n    }\n    napi_typeof(env, v, &t);\n    if (t == napi_object || t == napi_function) {\n        for (; *fns; fns++) {\n            napi_value f = NULL;\n            napi_valuetype ft = napi_undefined;\n            if (napi_get_named_property(env, v, *fns, &f) != napi_ok) {\n                return 0;\n            }\n            napi_typeof(env, f, &ft);\n            if (ft != napi_function) {\n                snprintf(msg, sizeof msg, \"expected a %s: the object has no %s()\", what, *fns);\n                return vn_throw(env, msg);\n            }\n        }\n        o->vt = vt;\n        if (lent) {\n            lent->env = env;\n            lent->v = v;\n            lent->ref = NULL;\n            o->self = lent;\n            o->drop = NULL;\n        } else {\n            o->self = NULL;\n            o->drop = vn_obj_drop;\n        }\n        return 1;\n    }\n    snprintf(msg, sizeof msg, \"expected a %s (an object with its methods)\", what);\n    return vn_throw(env, msg);\n}\n\nstatic void vn_finalize_obj(napi_env env, void *data, void *hint) {\n    struct vn_tobj *o = data;\n    (void)env;\n    (void)hint;\n    if (o->drop) {\n        o->drop(o->self);\n    }\n    free(o);\n}\n\n// frees Volt's trait value now (it's freed when the object is collected otherwise); data: the tags\nstatic napi_value vn_close_obj(napi_env env, napi_callback_info info) {\n    napi_value self = NULL, undef = NULL;\n    void *data = NULL, *o = NULL;\n    bool is = false;\n    napi_get_cb_info(env, info, NULL, NULL, &self, &data);\n    if (napi_check_object_type_tag(env, self, data, &is) == napi_ok && is && napi_unwrap(env, self, &o) == napi_ok && o) {\n        if (!vn_busy_check(env, o, \"value\")) {\n            return NULL;\n        }\n        napi_remove_wrap(env, self, &o);\n        vn_finalize_obj(env, o, NULL);\n    }\n    napi_get_undefined(env, &undef);\n    return undef;\n}\n\nstatic inline napi_value vn_obj_ctor(napi_env env, napi_callback_info info, const napi_type_tag *tags, const char *what) {\n    size_t argc = 1;\n    napi_value argv[1], self = NULL;\n    napi_valuetype t0 = napi_undefined;\n    void *o = NULL;\n    char msg[160];\n    if (napi_get_cb_info(env, info, &argc, argv, &self, NULL) != napi_ok) {\n        return NULL;\n    }\n    if (argc >= 1) {\n        napi_typeof(env, argv[0], &t0);\n    }\n    if (t0 != napi_external) {\n        snprintf(msg, sizeof msg, \"volt_%s is made by the library's functions\", what);\n        napi_throw_type_error(env, NULL, msg);\n        return NULL;\n    }\n    napi_get_value_external(env, argv[0], &o);\n    napi_wrap(env, self, o, vn_finalize_obj, NULL, NULL);\n    napi_type_tag_object(env, self, &tags[0]);\n    return self;\n}\n\n// an instance of class cls holding o, a trait's object Volt gave out (freed with it)\nstatic inline napi_value vn_wrap_obj(napi_env env, napi_ref cls, const void *o) {\n    napi_value c = NULL, ext = NULL, obj = NULL;\n    struct vn_tobj *box = malloc(sizeof *box);\n    if (!box) {\n        const struct vn_tobj *x = o;\n        if (x->drop) {\n            x->drop(x->self);\n        }\n        vn_throw(env, \"out of memory\");\n        return NULL;\n    }\n    memcpy(box, o, sizeof *box);\n    napi_get_reference_value(env, cls, &c);\n    napi_create_external(env, box, NULL, NULL, &ext);\n    napi_new_instance(env, c, 1, &ext, &obj);\n    return obj;\n}\n");
+    }
+    if (this.closures_out.len > 0) {
+        out.append("\n// ---------- closures Volt gives out ----------\n\n// a closure Volt gave out, held by the JavaScript function that calls it: call, self and drop (as\n// the closure's struct has them), and whether it's still there\nstruct vn_fn {\n    void (*call)(void);\n    void *self;\n    void (*drop)(void *self);\n    int live;\n};\n\nstatic const napi_type_tag vn_tag_fn = {0x766f6c74666e0001ULL, 0x6e6f64652d666e00ULL};\n\nstatic inline void vn_fn_free(struct vn_fn *b) {\n    if (b->live) {\n        b->live = 0;\n        if (b->drop) {\n            b->drop(b->self);\n        }\n    }\n}\n\nstatic void vn_finalize_fn(napi_env env, void *data, void *hint) {\n    (void)env;\n    (void)hint;\n    vn_fn_free(data);\n    free(data);\n}\n\n// frees the closure now (it's freed when the function is collected otherwise)\nstatic napi_value vn_close_fn(napi_env env, napi_callback_info info) {\n    napi_value self = NULL, undef = NULL;\n    void *b = NULL;\n    bool is = false;\n    napi_get_cb_info(env, info, NULL, NULL, &self, NULL);\n    if (napi_check_object_type_tag(env, self, &vn_tag_fn, &is) == napi_ok && is && napi_unwrap(env, self, &b) == napi_ok && b) {\n        if (!vn_busy_check(env, b, \"function\")) {\n            return NULL;\n        }\n        vn_fn_free(b);\n    }\n    napi_get_undefined(env, &undef);\n    return undef;\n}\n\n// obj[Symbol.dispose] = close, where there's a Symbol.dispose (for `using`)\nstatic inline void vn_set_dispose(napi_env env, napi_value obj, napi_value close) {\n    napi_value g = NULL, sym = NULL, d = NULL;\n    napi_valuetype t = napi_undefined;\n    napi_get_global(env, &g);\n    napi_get_named_property(env, g, \"Symbol\", &sym);\n    napi_get_named_property(env, sym, \"dispose\", &d);\n    napi_typeof(env, d, &t);\n    if (t == napi_symbol) {\n        napi_set_property(env, obj, d, close);\n    }\n}\n\n// a JavaScript function calling closure c (the struct a Volt function gave out), with close()\nstatic inline napi_value vn_make_fn(napi_env env, const void *c, napi_callback call) {\n    napi_value f = NULL, close = NULL;\n    struct vn_fn *b = malloc(sizeof *b);\n    if (!b) {\n        const struct vn_fn *x = c;\n        if (x->drop) {\n            x->drop(x->self);\n        }\n        vn_throw(env, \"out of memory\");\n        return NULL;\n    }\n    memcpy(b, c, offsetof(struct vn_fn, live));\n    b->live = 1;\n    napi_create_function(env, NULL, 0, call, b, &f);\n    napi_wrap(env, f, b, vn_finalize_fn, NULL, NULL);\n    napi_type_tag_object(env, f, &vn_tag_fn);\n    napi_create_function(env, \"close\", NAPI_AUTO_LENGTH, vn_close_fn, NULL, &close);\n    napi_set_named_property(env, f, \"close\", close);\n    vn_set_dispose(env, f, close);\n    return f;\n}\n\nstatic inline int vn_fn_live(napi_env env, void *data, void **out) {\n    struct vn_fn *b = data;\n    if (!b || !b->live) {\n        return vn_throw(env, \"this function is closed\");\n    }\n    *out = b;\n    return vn_busy_add(env, b);\n}\n");
+    }
     // structs: to and from plain objects
     for (s&) in this.structs.items() {
         if (!this.node_simple(this.c.t.intern(tyk::STRUCT(*s)))) {
@@ -9054,7 +9431,7 @@ attach fn node_text(this: bind&) -> compile_error!std::string {
         val cn = this.c_named(this.c.si(*s).name, false);
         out.append(fmt3("\nstatic inline int vn_get_{}(napi_env env, napi_value v, {} *out) {{\n    napi_valuetype t = napi_undefined;\n    napi_typeof(env, v, &t);\n    if (t != napi_object) {{\n        return vn_throw(env, \"expected a {} object\");\n    }}\n", copy sn, copy cn, copy sn).as_str());
         for (f&) in this.c.si(*s).fields.items() {
-            out.append(fmt3("    {{\n        napi_value f;\n        napi_get_named_property(env, v, \"{}\", &f);\n        {}\n    }}\n", S(f.name), this.node_get_simple(f.ty, "f", fmt("out->{}", S(f.name)).as_str()), S("")).as_str());
+            out.append(fmt2("    {{\n        napi_value f;\n        napi_get_named_property(env, v, \"{}\", &f);\n        {}\n    }}\n", S(f.name), this.node_get_simple(f.ty, "f", fmt("out->{}", S(f.name)).as_str())).as_str());
         }
         out.append("    return 1;\nfail:\n    return 0;\n}\n");
         out.append(fmt2("\nstatic inline void vn_set_{}(napi_env env, napi_value v, const {} *in) {{\n", copy sn, copy cn).as_str());
@@ -9064,58 +9441,91 @@ attach fn node_text(this: bind&) -> compile_error!std::string {
         out.append("}\n");
         out.append(fmt3("\nstatic inline napi_value vn_new_{}(napi_env env, const {} *in) {{\n    napi_value v = NULL;\n    napi_create_object(env, &v);\n    vn_set_{}(env, v, in);\n    return v;\n}}\n", copy sn, copy cn, copy sn).as_str());
     }
-    // callbacks: the C function a Volt closure parameter calls, which calls the JS function
-    out.append("\n// a JS function passed for a callback (only used during the call)\nstruct vn_cb {\n    napi_env env;\n    napi_value fn;\n};\n");
-    for (i) in 0..this.closures.len {
-        match (*this.c.t.get(*this.closures.at(i))) {
-            .FN_VAL(ps&, r) => {
-                var params = S("void *user");
-                for (k) in 0..ps.len {
-                    params.append(fmt2(", {}a{}", spaced(this.c_prim(*ps.at(k), false)), unum(@cast<u64>(k))).as_str());
-                }
-                out.append(fmt3("\nstatic {}vn_cb{}({}) {{\n    struct vn_cb *c = user;\n    napi_env env = c->env;\n    napi_value global = NULL, ret = NULL;\n", spaced(this.c_prim(r, false)), unum(@cast<u64>(i)), move params).as_str());
-                var argn = ps.len;
-                if (argn == 0) {
-                    argn = 1;
-                }
-                out.append(fmt("    napi_value argv[{}];\n", unum(@cast<u64>(argn))).as_str());
-                if (r != VOID) {
-                    out.append(fmt("    {}out;\n    memset(&out, 0, sizeof out);\n", spaced(this.c_prim(r, false))).as_str());
-                }
-                for (k) in 0..ps.len {
-                    if (!this.node_simple(*ps.at(k))) {
-                        match (this.shape_of(*ps.at(k)) ?? shape::VOID) {
-                            .STR => { out.append(fmt3("    argv[{}] = vn_from_str(env, a{}.ptr, a{}.len);\n", unum(@cast<u64>(k)), unum(@cast<u64>(k)), unum(@cast<u64>(k))).as_str()); },
-                            default => { return fail(NO_SPAN, fmt("a callback taking {} can't call JavaScript", this.c.ty_name(*ps.at(k)))); },
-                        }
-                    } else {
-                        out.append(fmt2("    argv[{}] = {};\n", unum(@cast<u64>(k)), this.node_put_simple(*ps.at(k), fmt("a{}", unum(@cast<u64>(k))).as_str())).as_str());
-                    }
-                }
-                out.append(fmt("    napi_get_global(env, &global);\n    if (napi_call_function(env, global, c->fn, {}, argv, &ret) != napi_ok) {\n        goto fail;\n    }\n", unum(@cast<u64>(ps.len))).as_str());
-                if (r != VOID) {
-                    if (!this.node_simple(r)) {
-                        return fail(NO_SPAN, fmt("a callback returning {} can't call JavaScript", this.c.ty_name(r)));
-                    }
-                    out.append(fmt("    {}\n", this.node_get_simple(r, "ret", "out")).as_str());
-                    out.append("    return out;\nfail:\n    return out;\n}\n");
-                } else {
-                    out.append("fail:\n    return;\n}\n");
-                }
-            },
-            default => {},
-        }
-    }
-    // classes: a JS class per export struct, owning its handle
+    // classes: a JS class per export struct, owning its handle (or lent it by Volt, for a callback)
     for (s&) in this.handles.items() {
         val sn = this.node_sname(*s);
         val cn = this.handle_c(*s, false);
-        out.append(fmt4("\n// export struct {}\nstatic napi_ref vn_class_{};\nstatic const napi_type_tag vn_tag_{} = {};\n", S(this.c.si(*s).name), copy sn, copy sn, this.node_tag(*s)).as_str());
-        out.append(fmt3("\nstatic void vn_finalize_{}(napi_env env, void *data, void *hint) {{\n    (void)env;\n    (void)hint;\n    {}((void *)data);\n}}\n", copy sn, this.free_name(*s), S("")).as_str());
-        out.append(fmt4("\n// an instance owning handle h\nstatic napi_value vn_wrap_{}(napi_env env, {}h) {{\n    napi_value cls = NULL, ext = NULL, obj = NULL;\n    napi_get_reference_value(env, vn_class_{}, &cls);\n    napi_create_external(env, h, NULL, NULL, &ext);\n    napi_new_instance(env, cls, 1, &ext, &obj);\n    return obj;\n}}\n", copy sn, spaced(copy cn), copy sn, S("")).as_str());
-        out.append(fmt2("\n// frees the handle now (it's freed when the object is collected otherwise)\nstatic napi_value vn_close_{}(napi_env env, napi_callback_info info) {{\n    napi_value self = NULL, undef = NULL;\n    void *h = NULL;\n    napi_get_cb_info(env, info, NULL, NULL, &self, NULL);\n    if (napi_remove_wrap(env, self, &h) == napi_ok && h) {{\n        {}(h);\n    }}\n", copy sn, this.free_name(*s)).as_str());
-        out.append("    napi_get_undefined(env, &undef);\n    return undef;\n}\n");
-        // the constructor: a handle from C (an External), or the class's new
+        out.append(fmt4("\n// export struct {}\nstatic napi_ref vn_class_{};\nstatic const napi_type_tag vn_tags_{}[2] = {};\n", S(this.c.si(*s).name), copy sn, copy sn, this.node_tags(sn.as_str())).as_str());
+        out.append(fmt2("\nstatic void vn_finalize_{}(napi_env env, void *data, void *hint) {{\n    (void)env;\n    (void)hint;\n    {}((void *)data);\n}}\n", copy sn, this.free_name(*s)).as_str());
+        out.append(fmt3("\n// an instance owning handle h\nstatic napi_value vn_wrap_{}(napi_env env, {}h) {{\n    napi_value cls = NULL, ext = NULL, obj = NULL;\n    napi_get_reference_value(env, vn_class_{}, &cls);\n    napi_create_external(env, h, NULL, NULL, &ext);\n    napi_new_instance(env, cls, 1, &ext, &obj);\n    return obj;\n}}\n", copy sn, spaced(copy cn), copy sn).as_str());
+        out.append(fmt3("\n// an instance Volt lends handle h to (for a callback): it never frees it, and lets go of it when\n// the callback returns\nstatic inline napi_value vn_lend_{}(napi_env env, {}h) {{\n    napi_value cls = NULL, args[2], obj = NULL;\n    napi_get_reference_value(env, vn_class_{}, &cls);\n    napi_create_external(env, h, NULL, NULL, &args[0]);\n    napi_get_boolean(env, true, &args[1]);\n    napi_new_instance(env, cls, 2, args, &obj);\n    return obj;\n}}\n", copy sn, spaced(copy cn), copy sn).as_str());
+        out.append(fmt3("\n// frees the handle now (it's freed when the object is collected otherwise; not while it's lent to a\n// call that's running); one Volt lent is let go of\nstatic napi_value vn_close_{}(napi_env env, napi_callback_info info) {{\n    napi_value self = NULL, undef = NULL;\n    void *h = NULL;\n    bool own = false, lent = false;\n    napi_get_cb_info(env, info, NULL, NULL, &self, NULL);\n    napi_check_object_type_tag(env, self, &vn_tags_{}[0], &own);\n    napi_check_object_type_tag(env, self, &vn_tags_{}[1], &lent);\n", copy sn, copy sn, copy sn).as_str());
+        out.append(fmt2("    if ((own || lent) && napi_unwrap(env, self, &h) == napi_ok && h) {\n        if (own && !vn_busy_check(env, h, \"{}\")) {\n            return NULL;\n        }\n        napi_remove_wrap(env, self, &h);\n        if (own) {\n            {}(h);\n        }\n    }\n    napi_get_undefined(env, &undef);\n    return undef;\n}\n", copy sn, this.free_name(*s)).as_str());
+    }
+    // callbacks: the C function a Volt closure parameter calls, which calls the JS function
+    out.append("\n// a JS function passed for a callback (only used during the call)\nstruct vn_cb {\n    napi_env env;\n    napi_value fn;\n};\n");
+    for (i) in 0..this.closures.len {
+        if (!this.node_cb_used(@cast<u32>(i))) {
+            continue;
+        }
+        var ps: std::vec<u32> = {};
+        val r = this.fn_parts(*this.closures.at(i), &ps);
+        var sig = fmt2("{}vn_cb{}(void *user", spaced(this.c_prim(r, false)), unum(@cast<u64>(i)));
+        for (k) in 0..ps.len {
+            sig.append(fmt2(", {}a{}", spaced(this.c_in(*ps.at(k), false)), unum(@cast<u64>(k))).as_str());
+        }
+        sig.push(')');
+        val call = fmt("vn_call(env, c->fn, {}, argv, &ret)", unum(@cast<u64>(ps.len)));
+        out.append((try this.node_upcall(copy sig, "    struct vn_cb *c = user;\n    napi_env env = c->env;\n", call.as_str(), &ps, r)).as_str());
+    }
+    // traits: the table Volt calls a JS object's methods through, and volt_T, a class of Volt's own
+    // values that calls theirs
+    for (k) in 0..this.traits.len {
+        val t = *this.traits.at(k);
+        val tr = this.short(t);
+        val fns = this.fns_of(t);
+        out.append(fmt4("\n// trait {}: any JS object with its methods, or volt_{}, Volt's own value\nstatic napi_ref vn_class_volt_{};\nstatic const napi_type_tag vn_tags_volt_{}[2] = ", this.c.ty_name(t), copy tr, copy tr, copy tr).as_str());
+        out.append(fmt2("{};\nstatic const char *const vn_fns_{}[] = {{", this.node_tags(fmt("volt_{}", copy tr).as_str()), copy tr).as_str());
+        for (f&) in fns.items() {
+            out.append(fmt("\"{}\", ", S(f.name)).as_str());
+        }
+        out.append("NULL};\n");
+        var table: std::string = {};
+        for (f&) in fns.items() {
+            val nm = fmt2("vn_up_{}_{}", copy tr, S(f.name));
+            var sig = fmt2("{}{}(void *user", spaced(this.c_out(f.ret, false)), copy nm);
+            for (q) in 0..f.params.len {
+                sig.append(fmt2(", {}a{}", spaced(this.c_in(*f.params.at(q), false)), unum(@cast<u64>(q))).as_str());
+            }
+            sig.push(')');
+            val call = fmt2("vn_call_method(env, vn_obj_value(c), \"{}\", {}, argv, &ret)", S(f.name), unum(@cast<u64>(f.params.len)));
+            out.append((try this.node_upcall(copy sig, "    struct vn_obj *c = user;\n    napi_env env = c->env;\n", call.as_str(), &f.params, f.ret)).as_str());
+            if (table.len() > 0) {
+                table.append(", ");
+            }
+            table.append(nm.as_str());
+        }
+        out.append(fmt3("\nstatic const {} vn_vt_{} = {{{}}};\n", this.c_named(fmt("{}_vt", copy tr).as_str(), false), copy tr, copy table).as_str());
+        out.append(fmt3("\nstatic napi_value vn_ctor_volt_{}(napi_env env, napi_callback_info info) {{\n    return vn_obj_ctor(env, info, vn_tags_volt_{}, \"{}\");\n}}\n", copy tr, copy tr, copy tr).as_str());
+        val self_decl = fmt("    {} *p_self = NULL;\n", this.c_named(tr.as_str(), false));
+        val self_get = fmt2("    if (!vn_unwrap(env, self, vn_tags_volt_{}, 0, (void **)&p_self, \"volt_{}\")) {\n        goto fail;\n    }\n", copy tr, copy tr);
+        for (f&) in fns.items() {
+            var names: std::vec<std::string> = {};
+            for (q) in 0..f.params.len {
+                put(&names, fmt("p_a{}", unum(@cast<u64>(q))));
+            }
+            try this.node_call(fmt2("vn_m_volt_{}_{}", copy tr, S(f.name)).as_str(), f.name, &f.params, &names, self_decl.as_str(), self_get.as_str(), fmt("p_self->vt->{}", S(f.name)).as_str(), "p_self->self", f.ret, &out);
+        }
+    }
+    // closures Volt gives out: a JS function calls each
+    for (i) in 0..this.closures.len {
+        if (!has_u32(&this.closures_out, @cast<u32>(i))) {
+            continue;
+        }
+        var ps: std::vec<u32> = {};
+        val r = this.fn_parts(*this.closures.at(i), &ps);
+        var names: std::vec<std::string> = {};
+        for (k) in 0..ps.len {
+            put(&names, fmt("p_a{}", unum(@cast<u64>(k))));
+        }
+        val self_decl = fmt("    {} *p_fn = NULL;\n", this.c_named(fmt("closure{}", unum(@cast<u64>(i))).as_str(), false));
+        out.append(fmt("\n// {}, given out by Volt: a JS function calls it\n", this.c.ty_name(*this.closures.at(i))).as_str());
+        try this.node_call(fmt("vn_call_closure{}", unum(@cast<u64>(i))).as_str(), "the function", &ps, &names, self_decl.as_str(), "    if (!vn_fn_live(env, data, (void **)&p_fn)) {\n        goto fail;\n    }\n", "p_fn->call", "p_fn->self", r, &out);
+    }
+    // the classes' constructors: a handle from C (an External, lent with a second argument), or the
+    // class's new
+    for (s&) in this.handles.items() {
+        val sn = this.node_sname(*s);
         var maker: u32? = null;
         for (e&) in ents.items() {
             if (e.free_of == null && this.member_of(e.f, *s) != null && (this.member_of(e.f, *s) ?? "") == "new" && this.made_by(e.f, *s) && !this.node_is_method(e.f, *s)) {
@@ -9126,14 +9536,14 @@ attach fn node_text(this: bind&) -> compile_error!std::string {
         if (mk) {
             try this.node_fn(mk, fmt("vn_new_{}", copy sn).as_str(), null, &out);
         }
-        out.append(fmt2("\nstatic napi_value vn_ctor_{}(napi_env env, napi_callback_info info) {{\n    size_t argc = 1;\n    napi_value argv[1], self = NULL, made = NULL;\n    napi_valuetype t0 = napi_undefined;\n    void *h = NULL;\n    if (napi_get_cb_info(env, info, &argc, argv, &self, NULL) != napi_ok) {{\n        return NULL;\n    }}\n    if (argc >= 1) {{\n        napi_typeof(env, argv[0], &t0);\n    }}\n    if (t0 == napi_external) {{\n        napi_get_value_external(env, argv[0], &h);\n    }} else {{\n", copy sn, S("")).as_str());
+        out.append(fmt2("\nstatic napi_value vn_ctor_{}(napi_env env, napi_callback_info info) {{\n    size_t argc = 2;\n    napi_value argv[2], self = NULL, made = NULL;\n    napi_valuetype t0 = napi_undefined;\n    void *h = NULL;\n    if (napi_get_cb_info(env, info, &argc, argv, &self, NULL) != napi_ok) {{\n        return NULL;\n    }}\n    if (argc >= 1) {{\n        napi_typeof(env, argv[0], &t0);\n    }}\n    if (t0 == napi_external) {{\n        napi_get_value_external(env, argv[0], &h);\n        if (argc >= 2) {{\n            // lent by Volt: never freed here\n            napi_wrap(env, self, h, NULL, NULL, NULL);\n            napi_type_tag_object(env, self, &vn_tags_{}[1]);\n            return self;\n        }}\n    }} else {{\n", copy sn, copy sn).as_str());
         if (mk) {
             // run new with the same arguments, then take its handle from the instance it made
-            out.append(fmt2("        made = vn_new_{}(env, info);\n        if (!made || napi_remove_wrap(env, made, &h) != napi_ok) {{\n            return NULL;\n        }}\n", copy sn, S("")).as_str());
+            out.append(fmt("        made = vn_new_{}(env, info);\n        if (!made || napi_remove_wrap(env, made, &h) != napi_ok) {\n            return NULL;\n        }\n", copy sn).as_str());
         } else {
-            out.append(fmt("        napi_throw_type_error(env, NULL, \"{} is made by the library's functions\");\n        return NULL;\n", copy sn).as_str());
+            out.append(fmt("        (void)made;\n        napi_throw_type_error(env, NULL, \"{} is made by the library's functions\");\n        return NULL;\n", copy sn).as_str());
         }
-        out.append(fmt3("    }}\n    napi_wrap(env, self, h, vn_finalize_{}, NULL, NULL);\n    napi_type_tag_object(env, self, &vn_tag_{});\n    return self;\n}}\n", copy sn, copy sn, S("")).as_str());
+        out.append(fmt2("    }}\n    napi_wrap(env, self, h, vn_finalize_{}, NULL, NULL);\n    napi_type_tag_object(env, self, &vn_tags_{}[0]);\n    return self;\n}}\n", copy sn, copy sn).as_str());
     }
     // the functions
     for (e&) in ents.items() {
@@ -9157,23 +9567,21 @@ attach fn node_text(this: bind&) -> compile_error!std::string {
     // the module
     out.append("\nstatic inline void vn_set_num(napi_env env, napi_value obj, const char *name, double v) {\n    napi_set_named_property(env, obj, name, vn_num(env, v));\n}\n\nstatic inline void vn_set_text(napi_env env, napi_value obj, const char *name, const char *v) {\n    napi_value s = NULL;\n    napi_create_string_utf8(env, v, NAPI_AUTO_LENGTH, &s);\n    napi_set_named_property(env, obj, name, s);\n}\n");
     out.append("\nNAPI_MODULE_EXPORT napi_value napi_register_module_v1(napi_env env, napi_value exports) {\n");
-    var nfree: usize = 0;
+    var nfree: usize = 1;
     for (e&) in ents.items() {
         if (e.free_of == null && this.class_of(e.f) == null) {
             nfree += 1;
         }
     }
-    if (nfree > 0) {
-        out.append("    napi_property_descriptor fns[] = {\n");
-        for (e&) in ents.items() {
-            if (e.free_of != null || this.class_of(e.f) != null) {
-                continue;
-            }
-            val n = S(this.c.fi(e.f).c_name);
-            out.append(fmt2("        {{\"{}\", NULL, vn_f_{}, NULL, NULL, NULL, napi_enumerable, NULL}},\n", copy n, copy n).as_str());
+    out.append("    napi_property_descriptor fns[] = {\n        {\"voltError\", NULL, vn_volt_error, NULL, NULL, NULL, napi_enumerable, NULL},\n");
+    for (e&) in ents.items() {
+        if (e.free_of != null || this.class_of(e.f) != null) {
+            continue;
         }
-        out.append(fmt("    };\n    napi_define_properties(env, exports, {}, fns);\n", unum(@cast<u64>(nfree))).as_str());
+        val n = S(this.c.fi(e.f).c_name);
+        out.append(fmt2("        {{\"{}\", NULL, vn_f_{}, NULL, NULL, NULL, napi_enumerable, NULL}},\n", copy n, copy n).as_str());
     }
+    out.append(fmt("    };\n    napi_define_properties(env, exports, {}, fns);\n", unum(@cast<u64>(nfree))).as_str());
     for (en&) in this.enums.items() {
         val info = this.c.ei(*en);
         out.append("    {\n        napi_value o = NULL;\n        napi_create_object(env, &o);\n");
@@ -9212,11 +9620,23 @@ attach fn node_text(this: bind&) -> compile_error!std::string {
             if (!this.node_is_method(e.f, *s)) {
                 attr = S("napi_static");
             }
-            out.append(fmt3("            {{\"{}\", NULL, vn_f_{}, NULL, NULL, NULL, {}, NULL}},\n", S(m), S(this.c.fi(e.f).c_name), move attr).as_str());
+            out.append(fmt3("            {{\"{}\", NULL, vn_f_{}, NULL, NULL, NULL, {}, NULL}},\n", S(m), S(this.c.fi(e.f).c_name), copy attr).as_str());
             nps += 1;
         }
         out.append(fmt4("        };\n        napi_value cls = NULL;\n        napi_define_class(env, \"{}\", NAPI_AUTO_LENGTH, vn_ctor_{}, NULL, {}, ps, &cls);\n        napi_create_reference(env, cls, 1, &vn_class_{});\n", copy sn, copy sn, unum(@cast<u64>(nps)), copy sn).as_str());
         out.append(fmt("        napi_set_named_property(env, exports, \"{}\", cls);\n    }\n", copy sn).as_str());
+    }
+    for (t&) in this.traits.items() {
+        val tr = this.short(*t);
+        out.append("    {\n        napi_property_descriptor ps[] = {\n");
+        out.append(fmt("            {\"close\", NULL, vn_close_obj, NULL, NULL, NULL, napi_default_method, (void *)vn_tags_volt_{}},\n", copy tr).as_str());
+        var nps: usize = 1;
+        for (f&) in this.fns_of(*t).items() {
+            out.append(fmt3("            {{\"{}\", NULL, vn_m_volt_{}_{}, NULL, NULL, NULL, napi_default_method, NULL}},\n", S(f.name), copy tr, S(f.name)).as_str());
+            nps += 1;
+        }
+        out.append(fmt4("        };\n        napi_value cls = NULL;\n        napi_define_class(env, \"volt_{}\", NAPI_AUTO_LENGTH, vn_ctor_volt_{}, NULL, {}, ps, &cls);\n        napi_create_reference(env, cls, 1, &vn_class_volt_{});\n", copy tr, copy tr, unum(@cast<u64>(nps)), copy tr).as_str());
+        out.append(fmt("        napi_set_named_property(env, exports, \"volt_{}\", cls);\n    }\n", copy tr).as_str());
     }
     out.append("    return exports;\n}\n");
     return out;
@@ -9234,12 +9654,28 @@ attach fn js_text(this: bind&) -> std::string {
     var out = fmt("// {}: generated by voltc bindings; loads the Node-API addon (voltc bindings --lang node)\n", S(this.pkg));
     out.append(fmt2("// from $VOLT_{}_NODE, else {}.node next to this file.\n\"use strict\";\nconst path = require(\"path\");\n", upper(this.pkg), S(this.pkg)).as_str());
     out.append(fmt2("const addon = require(process.env.VOLT_{}_NODE || path.join(__dirname, \"{}.node\"));\n", upper(this.pkg), S(this.pkg)).as_str());
+    var classes: std::vec<std::string> = {};
     for (s&) in this.handles.items() {
-        val sn = this.node_sname(*s);
-        out.append(fmt2("if (Symbol.dispose) {{\n    addon.{}.prototype[Symbol.dispose] = addon.{}.prototype.close;\n}}\n", copy sn, copy sn).as_str());
+        put(&classes, this.node_sname(*s));
+    }
+    for (t&) in this.traits.items() {
+        put(&classes, fmt("volt_{}", this.short(*t)));
+    }
+    for (cn&) in classes.items() {
+        out.append(fmt2("if (Symbol.dispose) {{\n    addon.{}.prototype[Symbol.dispose] = addon.{}.prototype.close;\n}}\n", copy *cn, copy *cn).as_str());
     }
     out.append("module.exports = addon;\n");
     return out;
+}
+
+// an array of e in TypeScript (a union or a function type in parentheses)
+fn ts_array(e: std::string) -> std::string {
+    var s = copy e;
+    if (s.as_str().contains(" | ") || s.as_str().contains("=>")) {
+        s = fmt("({})", copy s);
+    }
+    s.append("[]");
+    return s;
 }
 
 // TypeScript's view of a type, as a parameter (in) or a result
@@ -9270,14 +9706,8 @@ attach fn ts_ty(this: bind&, t: u32, incoming: bool) -> std::string {
             }
             return S("unknown");
         },
-        .SLICE(x) => {
-            var e = this.ts_ty(x, incoming);
-            if (ends_with(e.as_str(), "bigint")) {
-                e = fmt("({})", move e);
-            }
-            e.append("[]");
-            return e;
-        },
+        .SLICE(x) => { return ts_array(this.ts_ty(x, incoming)); },
+        .LIST(x) => { return ts_array(this.ts_ty(this.list_elem(t), incoming)); },
         .OPT(x) => {
             var v = this.ts_ty(x, incoming);
             v.append(" | null");
@@ -9288,22 +9718,36 @@ attach fn ts_ty(this: bind&, t: u32, incoming: bool) -> std::string {
         },
         .HANDLE(s) => { return this.node_sname(s); },
         .RESULT(e, x) => { return this.ts_ty(x, incoming); },
-        .CLOSURE(i) => {
-            match (*this.c.t.get(t)) {
-                .FN_VAL(ps&, r) => {
-                    var s = S("(");
-                    for (k) in 0..ps.len {
-                        if (k > 0) {
-                            s.append(", ");
-                        }
-                        s.append(fmt2("a{}: {}", unum(@cast<u64>(k)), this.ts_ty(*ps.at(k), false)).as_str());
-                    }
-                    s.append(") => ");
-                    s.append(this.ts_ty(r, true).as_str());
-                    return s;
-                },
-                default => { return S("Function"); },
+        .TRAIT(i) => {
+            // any object with the trait's methods goes in; Volt's own comes out
+            val tr = this.short(this.trait_of(t));
+            if (incoming) {
+                return tr;
             }
+            return fmt("volt_{}", copy tr);
+        },
+        .CLOSURE(i) => {
+            // a function JS gives (a callback) takes what Volt gives, and the other way round for one
+            // Volt gives out
+            var ps: std::vec<u32> = {};
+            val r = this.fn_parts(t, &ps);
+            var s = S("(");
+            for (k) in 0..ps.len {
+                if (k > 0) {
+                    s.append(", ");
+                }
+                var pt = this.ts_ty(*ps.at(k), !incoming);
+                if (incoming) {
+                    pt = this.ts_lent(*ps.at(k));
+                }
+                s.append(fmt2("a{}: {}", unum(@cast<u64>(k)), copy pt).as_str());
+            }
+            s.append(") => ");
+            s.append(this.ts_ty(r, incoming).as_str());
+            if (incoming) {
+                return s;
+            }
+            return fmt("VoltFunction<{}>", copy s);
         },
         default => { return S("unknown"); },
     }
@@ -9333,14 +9777,43 @@ attach fn ts_doc(this: bind&, f: u32, indent_by: str) -> std::string {
     if (d.len() == 0) {
         return {};
     }
-    return fmt3("{}/** {} */\n{}", S(indent_by), move d, S(""));
+    return fmt3("{}/** {} */\n{}", S(indent_by), copy d, S(""));
+}
+
+// what JS gets for a callback's or a trait fn's parameter of type t (null for a T* Volt passes as none)
+attach fn ts_lent(this: bind&, t: u32) -> std::string {
+    var s = this.ts_ty(t, false);
+    if (this.lent_handle(t) != null && !this.is_ref(t)) {
+        s.append(" | null");
+    }
+    return s;
+}
+
+// a trait fn's methods in TypeScript: as a JS object implements it (vf: false; Volt gives the
+// arguments) or as volt_T has it
+attach fn ts_trait_fn(this: bind&, f: trait_fn&, vf: bool) -> std::string {
+    var ps: std::string = {};
+    for (q) in 0..f.params.len {
+        if (q > 0) {
+            ps.append(", ");
+        }
+        var pt = this.ts_ty(*f.params.at(q), true);
+        if (!vf) {
+            pt = this.ts_lent(*f.params.at(q));
+        }
+        ps.append(fmt2("a{}: {}", unum(@cast<u64>(q)), copy pt).as_str());
+    }
+    return fmt3("    {}({}): {};\n", S(f.name), copy ps, this.ts_ty(f.ret, !vf));
 }
 
 attach fn ts_text(this: bind&) -> std::string {
     val ents = this.entries();
     var out = fmt("// {}: generated by voltc bindings; TypeScript types for the Node-API addon\n", S(this.pkg));
-    out.append("// (voltc bindings --lang node) and its loader (--lang js). An error a Volt function returns is\n// thrown as a VoltError: its code is the error's name.\n\n");
-    out.append("export interface VoltError extends Error {\n    code: string;\n    errno: number;\n}\n");
+    out.append("// (voltc bindings --lang node) and its loader (--lang js). An error a Volt function returns is\n// thrown as a VoltError: its code is the error's name. A callback throws voltError(name) to give Volt\n// that error.\n\n");
+    out.append("export interface VoltError extends Error {\n    code: string;\n    errno: number;\n}\n\n/** the VoltError a Volt function throws for the error named name */\nexport declare function voltError(name: string): VoltError;\n");
+    if (this.closures_out.len > 0) {
+        out.append("\n/** a function Volt gave out: close() frees it now (or `using`); otherwise it's freed when collected */\nexport type VoltFunction<F> = F & { close(): void; [Symbol.dispose](): void };\n");
+    }
     for (s&) in this.structs.items() {
         if (!this.node_simple(this.c.t.intern(tyk::STRUCT(*s)))) {
             continue;
@@ -9363,7 +9836,7 @@ attach fn ts_text(this: bind&) -> std::string {
             }
             union.append(num(*info.values.at(i)).as_str());
         }
-        out.append(fmt2("}};\nexport type {} = {};\n", copy n, move union).as_str());
+        out.append(fmt2("}};\nexport type {} = {};\n", copy n, copy union).as_str());
     }
     for (et&) in this.codes.items() {
         match (*this.c.t.get(*et)) {
@@ -9379,9 +9852,22 @@ attach fn ts_text(this: bind&) -> std::string {
             default => {},
         }
     }
+    for (t&) in this.traits.items() {
+        val tr = this.short(*t);
+        out.append(fmt2("\n/** trait {}: any object with these methods, lent to Volt or given (Volt calls a given one's\n * [Symbol.dispose]() or close(), if it has one, when it's done with it) */\nexport interface {} {{\n", this.c.ty_name(*t), copy tr).as_str());
+        for (f&) in this.fns_of(*t).items() {
+            out.append(this.ts_trait_fn(f, false).as_str());
+        }
+        out.append(fmt3("}}\n\n/** a {} Volt made: close() frees it now (or `using`); otherwise it's freed when collected */\nexport declare class volt_{} implements {} {{\n    private constructor();\n", copy tr, copy tr, copy tr).as_str());
+        for (f&) in this.fns_of(*t).items() {
+            out.append(this.ts_trait_fn(f, true).as_str());
+        }
+        out.append("    close(): void;\n    [Symbol.dispose](): void;\n}\n");
+    }
     for (s&) in this.handles.items() {
         val sn = this.node_sname(*s);
         out.append(fmt2("\n/** export struct {}: close() frees it now (or `using`); otherwise it's freed when collected */\nexport declare class {} {{\n", S(this.c.si(*s).name), copy sn).as_str());
+        var made = false;
         for (e&) in ents.items() {
             if (e.free_of != null) {
                 continue;
@@ -9393,9 +9879,14 @@ attach fn ts_text(this: bind&) -> std::string {
                 out.append(fmt3("    {}({}): {};\n", S(m), this.ts_params(e.f, 1), this.ts_ty(info.ret, false)).as_str());
             } else if (m == "new") {
                 out.append(fmt("    constructor({});\n", this.ts_params(e.f, 0)).as_str());
+                made = true;
             } else {
                 out.append(fmt3("    static {}({}): {};\n", S(m), this.ts_params(e.f, 0), this.ts_ty(info.ret, false)).as_str());
             }
+        }
+        if (!made) {
+            // the library's functions make it
+            out.append("    private constructor();\n");
         }
         out.append("    close(): void;\n    [Symbol.dispose](): void;\n}\n");
     }
@@ -12200,7 +12691,7 @@ attach fn rb_text(this: bind&) -> compile_error!std::string {
 // the bindings of package pkg in lang (see the top of the file; node, js and ts are a Node-API
 // addon, its loader and its types; json is the model itself)
 attach fn bindings(this: checker&, pkg: str, lang: str) -> compile_error!std::string {
-    var b: bind = { c: this, pkg: pkg, wide: lang == "c" || lang == "cpp" || lang == "rust" || lang == "zig" || lang == "go" || lang == "python" || lang == "pyi" || lang == "java" || lang == "csharp" || lang == "json" };
+    var b: bind = { c: this, pkg: pkg, wide: lang == "c" || lang == "cpp" || lang == "rust" || lang == "zig" || lang == "go" || lang == "python" || lang == "pyi" || lang == "java" || lang == "csharp" || lang == "node" || lang == "js" || lang == "ts" || lang == "json" };
     val fns = b.exports();
     if (fns.len == 0) {
         return fail(NO_SPAN, fmt("package {} has no export fns to make bindings for", S(pkg)));

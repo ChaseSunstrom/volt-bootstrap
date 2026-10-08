@@ -147,7 +147,7 @@ Each language gets these in its own style:
 | Rust | `Result<T, Error>` | `String` | `&mut [T]`, `Option` | a type that frees itself when dropped | `&mut dyn FnMut` |
 | Python | raises a class per error set, all deriving from `Error` | `str` | lists, `None` | a class with `close()` and `with` | any callable |
 | Zig | `Error!T` | `VoltText`, with `bytes()` and `deinit()` | `[]T`, `?T` | a type with `deinit()` | a context and a function |
-| JavaScript | throws an `Error` whose `code` is the name | a string | arrays, `null` | a class with `close()` and `Symbol.dispose` | any function |
+| JavaScript | throws an `Error` whose `code` is the name | a string | arrays (written back), `null` | a class with `close()` and `Symbol.dispose` | any function (one throws `voltError(name)` to give Volt an error) |
 | C# | throws a `VoltException` subclass per error set | `string` | `Span<T>` (text and handles from any `IEnumerable`), `T?` | an `IDisposable` class over a `SafeHandle` | `Action` or `Func` |
 | Java | throws a `VoltException` subclass per error set | `String` | arrays, `null` | an `AutoCloseable` class, freed by a `Cleaner` if not closed | a functional interface |
 | Go | `(T, error)`, with an `*Error` value per code for `errors.Is` | `string` | slices; `*T` in, `(T, bool)` out (a handle: `nil` for none) | a type with `Close`, and a finalizer | a `func` |
@@ -179,11 +179,12 @@ C and Rust call `biggest_i32` and `biggest_f64`; C++ calls `biggest`, an overloa
 
 ### Every shape
 
-C, C++, Rust, Zig, Go, Python, Java and C# take more than the other languages (whose bindings
-name what they don't take); Go's forms are under [Go](#go), Python's on
+C, C++, Rust, Zig, Go, Python, Java, C# and JavaScript take more than the other languages (whose
+bindings name what they don't take); Go's forms are under [Go](#go), Python's on
 [its page](/volt-bootstrap/interop/python/#python-calls-volt), Java's on
 [its page](/volt-bootstrap/interop/java/#java-calls-volt), C#'s on
-[its page](/volt-bootstrap/interop/dotnet/#every-shape):
+[its page](/volt-bootstrap/interop/dotnet/#every-shape), JavaScript's on
+[Node.js's](/volt-bootstrap/interop/node/#every-shape):
 
 - **Owned values as parameters.** Text (`std::string`) comes in as a `str` that Volt copies (a
   `&str` in Rust, a `[]const u8` in Zig); a handle by value is given to the fn, which deletes it
