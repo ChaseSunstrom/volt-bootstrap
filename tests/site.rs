@@ -77,6 +77,8 @@ fn every_page_with_starlights_structure() {
         let path = out.join(page).join("index.html");
         let html = std::fs::read_to_string(&path).unwrap_or_else(|_| panic!("no page for {page}"));
         // header with search and theme, sidebar with this page current, table of contents, footer
+        // made by site/gen, not by Astro and Starlight (whose markup it was cut from)
+        assert!(!html.contains("name=\"generator\""), "{page} names a generator");
         for part in ["<header class=\"header", "<site-search", "<starlight-theme-select", "id=\"starlight__sidebar\"", "aria-current=\"page\"", "<starlight-toc", "<mobile-starlight-toc", "pagination-links", "/volt-bootstrap/search.js"] {
             assert!(html.contains(part), "{page}: no {part}");
         }
