@@ -550,8 +550,10 @@ c.close                                       # or leave it to the GC
 ```
 
 The package is a module (its name capitalized), structs are `Struct` classes (a `Hash` with the
-fields works too), enums are modules of constants, and error sets are `Mathlib::Error` subclasses
-holding their codes (`Mathlib::MathError.new(Mathlib::MathError::NEGATIVE)` makes one). A callback
+fields works too; text in one is a `String`, an array an `Array` of exactly its length, a pointer a
+`Pointer` from another call or `nil`), enums are modules of constants, and error sets are
+`Mathlib::Error` subclasses holding their codes (`Mathlib::MathError.new(Mathlib::MathError::NEGATIVE)`
+makes one, and an `E!T` parameter takes it or the value). A callback
 is a block or a `Proc` (anything with `call`); an exception it raises comes out of the Volt call.
 Integers that don't fit the parameter, and wrong types, raise.
 

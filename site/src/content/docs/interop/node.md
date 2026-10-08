@@ -102,6 +102,9 @@ Here is how values convert:
   `RangeError`, and a fraction, NaN or infinity given for an integer throws a `TypeError`.
   64-bit integers also take a `BigInt`. They come back as numbers, which are exact up to 2^53.
 - A struct is a plain object. Passed as `T&`, what Volt changes in it comes back to the object.
+  Its fields can be text (a string, kept until the call is back), arrays (an array of exactly
+  their length), structs, and pointers (an object from another call, or `null`).
+- An `E!T` parameter takes the value, or the `Error` `voltError(name)` makes for one of its errors.
 - A slice is an array, and what Volt writes into its elements comes back too.
 - An optional is the value or `null`.
 - A callback is any function. It's called during the call it was passed to.
