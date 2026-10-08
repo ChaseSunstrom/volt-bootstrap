@@ -122,8 +122,8 @@ int main(void) {
     n = opened_by(open_cb, NULL);
     printf("opened %lld\n", n);
     printf("closed %d\n", closed_accounts());
-    shapelib_closure0 d = doubler();
-    shapelib_closure1 hi = greeter();
+    shapelib_closure1 d = doubler();
+    shapelib_closure2 hi = greeter();
     t = hi.call(hi.self, S("volt"));
     printf("%d %.*s\n", d.call(d.self, 21), (int)t.len, (const char *)t.ptr);
     volt_text_free(t);

@@ -149,3 +149,29 @@ export fn doubler() -> fn(i32) -> i32 {
 export fn greeter() -> fn(str) -> std::string {
     return hello;
 }
+
+// a callback's E!void, and closures given back giving E!void and a str
+export fn checked(f: fn(i32) -> bank_error!void, x: i32) -> bank_error!void {
+    return f(x);
+}
+
+fn under_ten(x: i32) -> bank_error!void {
+    if (x >= 10) {
+        return bank_error::OVERDRAWN;
+    }
+}
+
+export fn limiter() -> fn(i32) -> bank_error!void {
+    return under_ten;
+}
+
+fn sign_of(x: i32) -> str {
+    if (x > 0) {
+        return "positive";
+    }
+    return "not positive";
+}
+
+export fn labeler() -> fn(i32) -> str {
+    return sign_of;
+}

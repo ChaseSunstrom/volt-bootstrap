@@ -174,27 +174,32 @@ export fn biggest(xs: T[..]) -> T {
 }
 ```
 
-C calls `biggest_i32` and `biggest_f64`; C++ calls `biggest`, an overload per instance (each keeps
-its C name when two take the same parameters).
+C and Rust call `biggest_i32` and `biggest_f64`; C++ calls `biggest`, an overload per instance
+(each keeps its C name when two take the same parameters).
 
-### C and C++: every shape
+### C, C++ and Rust: every shape
 
-C and C++ take more than the other languages (whose bindings name what they don't take):
+C, C++ and Rust take more than the other languages (whose bindings name what they don't take):
 
-- **Owned values as parameters.** Text (`std::string`) comes in as a `str` that Volt copies; a
-  handle by value is given to the fn, which deletes it (C++'s class gives it up).
+- **Owned values as parameters.** Text (`std::string`) comes in as a `str` that Volt copies (a
+  `&str` in Rust); a handle by value is given to the fn, which deletes it (C++'s class gives it up,
+  Rust's type is moved in).
 - **Traits.** A fn taking a trait (`s: shape&`, lent, or `s: shape`, which the fn takes over) takes
   any object the other language has: in C a `shapelib_shape`, a table of the trait's functions
   (each taking the object first), the object, and what frees it (null when lent). In C++ the trait
-  is an abstract class to subclass, passed as `shape &` or `std::unique_ptr<shape>`. A Volt value
-  of the trait comes back the same way: C calls its table and its `drop`, C++ gets a
-  `std::unique_ptr<shape>`.
+  is an abstract class to subclass, passed as `shape &` or `std::unique_ptr<shape>`; in Rust it's
+  a trait to implement, passed as `&mut dyn shape` or `Box<dyn shape>`. A Volt value of the trait
+  comes back the same way: C calls its table and its `drop`, C++ gets a `std::unique_ptr<shape>`,
+  Rust a `Box<dyn shape>` (a `volt_shape`, which frees it when dropped).
 - **Closures taking and giving text and handles**, in callbacks and in traits' functions: text in
-  is a `str` (a `std::string` in C++), text back is owned (`volt_text`; a `std::string` in C++), a
-  handle is the class, and one Volt lends is a class that never frees it.
+  is a `str` (a `std::string` in C++, a `String` in Rust), text back is owned (`volt_text`; a
+  `std::string` in C++, a `String` in Rust), a handle is the class (Rust's type), and one Volt
+  lends is a class that never frees it (in Rust a `&T`). Rust takes any closure (`impl FnMut`), and
+  an `E!T` callback gives back a `Result<T, Error>`.
 - **Closures given back.** A fn returning `fn(A) -> R` gives a struct of the function, its data and
-  what frees it; in C++ a `std::function`, which frees it with its last copy. (A Volt fn value
-  borrows its closure, so what comes back is a function or one a longer-lived value holds.)
+  what frees it; in C++ a `std::function`, which frees it with its last copy; in Rust a
+  `Box<dyn FnMut(A) -> R>`, which frees it when dropped. (A Volt fn value borrows its closure, so
+  what comes back is a function or one a longer-lived value holds.)
 
 ```volt
 use std::string;
@@ -236,7 +241,23 @@ circle c;
 std::printf("%s\n", shapelib::describe(c).c_str()); // circle of area 3
 ```
 
-An override that throws ends the program: Volt code doesn't unwind C++ exceptions.
+```rust
+struct Circle {
+    r: f64,
+}
+
+impl shapelib::shape for Circle {
+    fn area(&mut self) -> f64 { 3.0 * self.r * self.r }
+    fn name(&mut self) -> String { "circle".to_string() }
+}
+
+let mut c = Circle { r: 1.0 };
+println!("{}", shapelib::describe(&mut c)); // circle of area 3
+```
+
+An override that throws (or panics, in Rust) ends the program: Volt code doesn't unwind C++
+exceptions or Rust panics (Rust 1.81 and later abort when a panic reaches an `extern "C"`
+function).
 
 Python, JavaScript and TypeScript, C#, Java and Lua have pages of their own, each with both
 directions: [Python](/volt-bootstrap/interop/python/#python-calls-volt),

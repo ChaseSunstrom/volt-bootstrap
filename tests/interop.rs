@@ -362,7 +362,7 @@ fn bindings_round_trip() {
     // both: see bindings_shapes)
     for (src, lang, want) in [
         ("export struct thing { n: i32; }\nexport fn bad_in(t: thing) -> i32 { return t.n; }\n", "python", "only take as a result"),
-        ("fn twice(x: i32) -> i32 { return x * 2; }\nexport fn bad_out() -> fn(i32) -> i32 { return twice; }\n", "rust", "only take closures as parameters"),
+        ("fn twice(x: i32) -> i32 { return x * 2; }\nexport fn bad_out() -> fn(i32) -> i32 { return twice; }\n", "zig", "only take closures as parameters"),
         // the names voltc lib adds itself
         ("export struct thing { n: i32; }\nexport fn thing_new() -> thing { return { n: 1 }; }\nexport fn thing_free(t: thing&) -> void {}\n", "c", "makes thing_free itself"),
         ("namespace __export { fn x() -> void {} }\nexport fn one() -> i32 { return 1; }\n", "c", "namespace __export"),
@@ -378,15 +378,18 @@ const SHAPES_OUT: &str = "biggest 9 1.5\naccount bea 300\nvisit 301 get 301\nclo
 
 #[test]
 fn bindings_shapes() {
-    // what C and C++ call beyond the plain shapes: a generic's instances, a struct that owns text
+    // what C, C++ and Rust call beyond the plain shapes: a generic's instances, a struct that owns text
     // held by a handle with its methods, owned values passed in, a trait implemented on either side,
     // closures taking and giving text and handles, closures given back. The library is a leak-checked
     // build, and leak_report.c prints how many of its allocations are live when the client is done
     let e = Env::new("shapes");
     let pkg = "shapelib=shapelib/lib";
-    for (lang, file) in [("c", "shapelib.h"), ("cpp", "shapelib.hpp")] {
+    for (lang, file) in [("c", "shapelib.h"), ("cpp", "shapelib.hpp"), ("rust", "shapelib.rs")] {
         ok(e.voltc(&["bindings", "shapelib", "--pkg", pkg, "--lang", lang, "-o", &e.path(file)]), &format!("voltc bindings --lang {lang}"));
     }
+    // Rust: client_shapes.rs next to its shapelib.rs module, with the leak report as an object
+    std::fs::copy(Path::new(ROOT).join("tests/interop/client_shapes.rs"), e.dir.join("client_shapes.rs")).unwrap();
+    ok(run(Command::new("cc").args(["-c", "leak_report.c", "-o"]).arg(e.dir.join("leak_report.o"))), "cc -c leak_report.c");
     for backend in ["c", "llvm"] {
         let lib = e.path(backend);
         std::fs::create_dir_all(e.dir.join(backend)).unwrap();
@@ -399,16 +402,21 @@ fn bindings_shapes() {
             assert_eq!(String::from_utf8_lossy(&o.stderr), "volt live: 0\n", "{client} ({backend}): the library's allocations at exit");
             assert_eq!(ok(o, client), SHAPES_OUT, "{client} ({backend})");
         }
+        let bin = e.dir.join(format!("{backend}_rs"));
+        ok(run(Command::new("rustc").arg(e.dir.join("client_shapes.rs")).args(["--edition", "2021", "-L", &lib, "-l", "shapelib", "-C"]).arg(format!("link-arg={}", e.path("leak_report.o"))).args(["-C", &format!("link-arg={rpath}"), "-o"]).arg(&bin)), "rustc client_shapes.rs");
+        let o = Command::new(&bin).output().unwrap();
+        assert_eq!(String::from_utf8_lossy(&o.stderr), "volt live: 0\n", "client_shapes.rs ({backend}): the library's allocations at exit");
+        assert_eq!(ok(o, "client_shapes.rs"), format!("checked true OVERDRAWN\nlimit true OVERDRAWN\nsign positive not positive\n{SHAPES_OUT}"), "client_shapes.rs ({backend})");
     }
     // the model has the trait, and how a fn takes its object
     let json = ok(e.voltc(&["bindings", "shapelib", "--pkg", pkg, "--lang", "json"]), "voltc bindings --lang json");
     for want in [r#"{"kind":"trait","name":"shape","c_name":"shapelib_shape","table":"shapelib_shape_vt""#, r#"{"kind":"object","trait":"shape","owned":false}"#, r#""name":"biggest_i32""#, r#""class":"account","method":"deposit""#] {
         assert!(json.contains(want), "the JSON model lacks {want}:\n{json}");
     }
-    // the other languages' bindings say what only C and C++ take
+    // the other languages' bindings say what only C, C++ and Rust take
     let o = e.voltc(&["bindings", "shapelib", "--pkg", pkg, "--lang", "python"]);
     let err = String::from_utf8_lossy(&o.stderr);
-    assert!(!o.status.success() && err.contains("C and C++"), "{err}");
+    assert!(!o.status.success() && err.contains("C, C++ and Rust"), "{err}");
 }
 
 #[test]

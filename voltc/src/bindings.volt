@@ -72,7 +72,7 @@ struct bind {
     // the struct, optional and E!T types C holds by value, each after what it holds (the order C
     // declares them in)
     layout: std::vec<u32> = {};
-    // the shapes only C and C++ take (traits, closures given out or taking text and handles, owned
+    // the shapes only C, C++ and Rust take (traits, closures given out or taking text and handles, owned
     // values as parameters): false for the other languages' generators
     wide: bool = true;
     uses_str: bool = false;
@@ -522,7 +522,7 @@ attach fn no_c_form(this: bind&, at: span, what: std::string, t: u32) -> compile
     if (this.bad != t) {
         msg.append(fmt(" (because of the {} in it)", this.c.ty_name(this.bad)).as_str());
     }
-    return with_help(fail(at, move msg), S("bindings take numbers, bool, pointers and references, cstr, str, slices, optionals, structs of those, plain enums, error sets, E!T, extern \"C\" fns, closures as parameters, and structs held by handles and owned text (@export_text) as results; C and C++ take traits, owned values as parameters and closures given back too"));
+    return with_help(fail(at, move msg), S("bindings take numbers, bool, pointers and references, cstr, str, slices, optionals, structs of those, plain enums, error sets, E!T, extern \"C\" fns, closures as parameters, and structs held by handles and owned text (@export_text) as results; C, C++ and Rust take traits, owned values as parameters and closures given back too"));
 }
 
 // is a shape owned when it comes out of Volt (text, a handle by value, a closure, a trait's object),
@@ -563,7 +563,7 @@ attach fn check_all(this: bind&) -> compile_error!void {
                 default => {},
             }
             if (owned && !this.wide) {
-                return with_help(fail(at, fmt3("export fn {}: its parameter {} is {}, which this language's bindings only take as a result", S(f.name), S(p.name), this.c.ty_name(p.ty))), S("take an export struct as X& (or X*) and text as str; C and C++ bindings take owned values too"));
+                return with_help(fail(at, fmt3("export fn {}: its parameter {} is {}, which this language's bindings only take as a result", S(f.name), S(p.name), this.c.ty_name(p.ty))), S("take an export struct as X& (or X*) and text as str; C, C++ and Rust bindings take owned values too"));
             }
         }
         val r = this.shape_of(f.ret) ?? return this.no_c_form(at, fmt("export fn {}: its return type", S(f.name)), f.ret);
@@ -579,7 +579,7 @@ attach fn check_all(this: bind&) -> compile_error!void {
         match (r) {
             .CLOSURE(c) => {
                 if (!this.wide) {
-                    return fail(at, fmt2("export fn {}: it returns {}, and this language's bindings only take closures as parameters (C and C++ take them back too)", S(f.name), this.c.ty_name(f.ret)));
+                    return fail(at, fmt2("export fn {}: it returns {}, and this language's bindings only take closures as parameters (C, C++ and Rust take them back too)", S(f.name), this.c.ty_name(f.ret)));
                 }
             },
             default => {},
@@ -2244,7 +2244,23 @@ attach fn rust_ty(this: bind&, t: u32) -> std::string {
         .HANDLE(s) => { return fmt("*mut raw::{}", this.local(this.c.si(s).name)); },
         .TEXT(x) => { return S("VoltText"); },
         .CLOSURE(i) => { return this.rust_fn_ty(t, true); },
-        .TRAIT(i) => { return S("void"); }, // only C and C++ take traits (bind.wide)
+        .TRAIT(i) => { return fmt("{}_obj", this.short(this.trait_of(t))); },
+    }
+}
+
+// type t's C form as a parameter: text comes in as a str
+attach fn rust_in(this: bind&, t: u32) -> std::string {
+    match (this.shape_of(t) ?? shape::VOID) {
+        .TEXT(x) => { return S("VoltStr"); },
+        default => { return this.rust_ty(t); },
+    }
+}
+
+// type t's C form as a result: a closure comes out boxed (closureN)
+attach fn rust_out(this: bind&, t: u32) -> std::string {
+    match (this.shape_of(t) ?? shape::VOID) {
+        .CLOSURE(i) => { return fmt("closure{}", unum(@cast<u64>(i))); },
+        default => { return this.rust_ty(t); },
     }
 }
 
@@ -2271,18 +2287,193 @@ attach fn rust_fn_ty(this: bind&, t: u32, user: bool) -> std::string {
         if (k > 0 || user) {
             s.append(", ");
         }
-        s.append(this.rust_ty(*ps.at(k)).as_str());
+        s.append(this.rust_in(*ps.at(k)).as_str());
     }
     s.push(')');
     if (r != VOID) {
         s.append(" -> ");
-        s.append(this.rust_ty(r).as_str());
+        s.append(this.rust_out(r).as_str());
     }
     return s;
 }
 
-// a wrapper's parameter in Rust, and the C argument(s) it passes (pre: statements before the call)
-attach fn rust_param(this: bind&, t: u32, name: str, ty: std::string&, arg: std::string&, pre: std::string&) -> void {
+// a type a closure or a trait's fn takes or gives in Rust (ctx 0: a parameter; 1: what a Rust
+// closure gives Volt back; 2: what a Volt closure gives Rust back; 3: a trait fn's result): text as
+// String, a str as &str (a Rust closure's, &'static str; a Volt closure's, a copy as String; a
+// trait fn's borrows from the object), a lent handle as &T, an owned one as T, E!T as Result
+attach fn rust_cb_ty(this: bind&, t: u32, ctx: u8) -> std::string {
+    if (ctx == 0) {
+        val h = this.lent_handle(t);
+        if (h) {
+            return fmt("&{}", this.local(this.c.si(h).name));
+        }
+    }
+    match (this.shape_of(t) ?? shape::VOID) {
+        .VOID => { return S("()"); },
+        .STR => {
+            if (ctx == 0 || ctx == 3) {
+                return S("&str");
+            }
+            if (ctx == 2) {
+                return S("String");
+            }
+            return S("&'static str");
+        },
+        .TEXT(x) => { return S("String"); },
+        .HANDLE(s) => { return this.local(this.c.si(s).name); },
+        .RESULT(e, x) => { return fmt("Result<{}, Error>", this.rust_cb_ty(x, ctx)); },
+        default => { return this.rust_ty(t); },
+    }
+}
+
+// FnMut(A, B) -> R: a closure's Rust signature (out: one Volt gives Rust)
+attach fn rust_sig(this: bind&, ps: std::vec<u32>&, r: u32, out: bool) -> std::string {
+    var s = S("FnMut(");
+    for (k) in 0..ps.len {
+        if (k > 0) {
+            s.append(", ");
+        }
+        s.append(this.rust_cb_ty(*ps.at(k), 0).as_str());
+    }
+    s.push(')');
+    if (r != VOID) {
+        s.append(" -> ");
+        var ctx: u8 = 1;
+        if (out) {
+            ctx = 2;
+        }
+        s.append(this.rust_cb_ty(r, ctx).as_str());
+    }
+    return s;
+}
+
+// the Rust value of C argument a (of type t) Volt passes to Rust
+attach fn rust_from_c(this: bind&, t: u32, a: str) -> std::string {
+    val h = this.lent_handle(t);
+    if (h) {
+        // a handle Volt lends: a value that never frees it
+        return fmt2("&*std::mem::ManuallyDrop::new({}::from_raw({}))", this.local(this.c.si(h).name), S(a));
+    }
+    match (this.shape_of(t) ?? shape::VOID) {
+        .STR => { return fmt("unsafe {{ {}.as_str() }}", S(a)); },
+        .TEXT(x) => { return fmt("unsafe {{ {}.to_string() }}", S(a)); },
+        .HANDLE(s) => { return fmt2("{}::from_raw({})", this.local(this.c.si(s).name), S(a)); },
+        default => { return S(a); },
+    }
+}
+
+// the C form of Rust value r (of type t) Rust gives Volt back
+attach fn rust_give(this: bind&, t: u32, r: str) -> std::string {
+    match (this.shape_of(t) ?? shape::VOID) {
+        .STR => { return fmt("VoltStr::from({})", S(r)); },
+        .TEXT(x) => { return fmt("VoltText::give({})", S(r)); },
+        .HANDLE(s) => { return fmt("{}.into_raw()", S(r)); },
+        .RESULT(e, x) => {
+            val rn = this.result_name(t);
+            if (x == VOID) {
+                return fmt4("match {} {{ Ok(()) => {} {{ error: 0 }}, Err(e) => {} {{ error: e.code }} }}", S(r), copy rn, copy rn, S(""));
+            }
+            var out = fmt3("match {} {{ Ok(v) => {} {{ error: 0, value: {} }}, ", S(r), copy rn, this.rust_give(x, "v"));
+            out.append(fmt("Err(e) => {} { error: e.code, value: unsafe { std::mem::zeroed() } } }", copy rn).as_str());
+            return out;
+        },
+        default => { return S(r); },
+    }
+}
+
+// the C argument of Rust value a (of type t) Rust passes to Volt
+attach fn rust_pass(this: bind&, t: u32, a: str) -> std::string {
+    if (this.lent_handle(t)) {
+        return fmt("{}.as_raw()", S(a));
+    }
+    match (this.shape_of(t) ?? shape::VOID) {
+        .STR => { return fmt("VoltStr::from({})", S(a)); },
+        .TEXT(x) => { return fmt("VoltStr::from({}.as_str())", S(a)); },
+        .HANDLE(s) => { return fmt("{}.into_raw()", S(a)); },
+        default => { return S(a); },
+    }
+}
+
+// the Rust value of C result r (of type t) Volt gives Rust back from a closure (lend: from a
+// trait's fn, whose str borrows from the object)
+attach fn rust_took(this: bind&, t: u32, r: str, lend: bool) -> std::string {
+    match (this.shape_of(t) ?? shape::VOID) {
+        .STR => {
+            if (lend) {
+                return fmt("unsafe {{ {}.as_str() }}", S(r));
+            }
+            return fmt("unsafe {{ {}.to_string() }}", S(r));
+        },
+        .TEXT(x) => { return fmt("{}.take()", S(r)); },
+        .HANDLE(s) => { return fmt2("{}::from_raw({})", this.local(this.c.si(s).name), S(r)); },
+        .RESULT(e, x) => {
+            if (x == VOID) {
+                return fmt("{{ let r = {}; if r.error != 0 {{ Err(Error {{ code: r.error }}) }} else {{ Ok(()) }} }}", S(r));
+            }
+            return fmt2("{{ let r = {}; if r.error != 0 {{ Err(Error {{ code: r.error }}) }} else {{ Ok({}) }} }}", S(r), this.rust_took(x, "r.value", lend));
+        },
+        default => { return S(r); },
+    }
+}
+
+// a C function Volt calls with the caller's data u first and ps' C forms: it calls target (Rust
+// reaching the callable through u) with Rust values, and gives back r's C form
+attach fn rust_callback(this: bind&, name: str, generics: str, target: str, ps: std::vec<u32>&, r: u32) -> std::string {
+    var cps = S("u: *mut std::os::raw::c_void");
+    var args: std::string = {};
+    for (k) in 0..ps.len {
+        val p = *ps.at(k);
+        val a = fmt("a{}", unum(@cast<u64>(k)));
+        cps.append(fmt2(", {}: {}", copy a, this.rust_in(p)).as_str());
+        if (k > 0) {
+            args.append(", ");
+        }
+        args.append(this.rust_from_c(p, a.as_str()).as_str());
+    }
+    var ret: std::string = {};
+    if (r != VOID) {
+        ret = fmt(" -> {}", this.rust_out(r));
+    }
+    val call = fmt2("{}({})", S(target), move args);
+    var body = move call;
+    if (r != VOID) {
+        body = this.rust_give(r, body.as_str());
+    }
+    var out = fmt4("extern \"C\" fn {}{}({}){}", S(name), S(generics), move cps, move ret);
+    out.append(fmt(" {{\n    {}\n}}\n", move body).as_str());
+    return out;
+}
+
+// Rust calling into Volt: call (a C function, an expression) with self first and Rust values a0..
+// of ps; the expression's value is r's Rust value (lend: a trait's fn's)
+attach fn rust_call_out(this: bind&, call: str, self: str, ps: std::vec<u32>&, r: u32, lend: bool) -> std::string {
+    var args = S(self);
+    for (k) in 0..ps.len {
+        args.append(", ");
+        args.append(this.rust_pass(*ps.at(k), fmt("a{}", unum(@cast<u64>(k))).as_str()).as_str());
+    }
+    val c = fmt3("unsafe {{ ({})({}) }}{}", S(call), move args, S(""));
+    if (r == VOID) {
+        return c;
+    }
+    return this.rust_took(r, c.as_str(), lend);
+}
+
+// "a0: A, a1: B": Rust parameters of ps' callback types
+attach fn rust_cb_params(this: bind&, ps: std::vec<u32>&) -> std::string {
+    var out: std::string = {};
+    for (k) in 0..ps.len {
+        if (k > 0) {
+            out.append(", ");
+        }
+        out.append(fmt2("a{}: {}", unum(@cast<u64>(k)), this.rust_cb_ty(*ps.at(k), 0)).as_str());
+    }
+    return out;
+}
+
+// a wrapper's parameter in Rust, and the C argument(s) it passes (pre: statements before the call;
+// gens: the wrapper's generics, for a closure's type)
+attach fn rust_param(this: bind&, t: u32, name: str, ty: std::string&, arg: std::string&, pre: std::string&, gens: std::string&) -> void {
     val n = rust_ident(name);
     val h = this.lent_handle(t);
     if (h) {
@@ -2295,6 +2486,29 @@ attach fn rust_param(this: bind&, t: u32, name: str, ty: std::string&, arg: std:
             ty.append(fmt("{}: &str", copy n).as_str());
             arg.append(fmt("VoltStr::from({})", copy n).as_str());
         },
+        .TEXT(x) => {
+            // owned text in: Volt copies it
+            ty.append(fmt("{}: &str", copy n).as_str());
+            arg.append(fmt("VoltStr::from({})", copy n).as_str());
+        },
+        .HANDLE(s) => {
+            // given to Volt, which frees it
+            ty.append(fmt2("{}: {}", copy n, this.local(this.c.si(s).name)).as_str());
+            arg.append(fmt("{}.into_raw()", copy n).as_str());
+        },
+        .TRAIT(i) => {
+            val tr = this.short(this.trait_of(t));
+            if (this.is_ref(t)) {
+                // lent for the call
+                ty.append(fmt2("{}: &mut dyn {}", copy n, copy tr).as_str());
+                pre.append(fmt3("    let mut {}_r: &mut dyn {} = {};\n", copy n, copy tr, copy n).as_str());
+                arg.append(fmt2("{}_lend(&mut {}_r)", copy tr, copy n).as_str());
+            } else {
+                // given: Volt drops it
+                ty.append(fmt2("{}: Box<dyn {}>", copy n, copy tr).as_str());
+                arg.append(fmt2("{}_give({})", copy tr, copy n).as_str());
+            }
+        },
         .SLICE(x) => {
             ty.append(fmt2("{}: &mut [{}]", copy n, this.rust_ty(x)).as_str());
             arg.append(fmt("VoltSlice::from({})", copy n).as_str());
@@ -2304,34 +2518,19 @@ attach fn rust_param(this: bind&, t: u32, name: str, ty: std::string&, arg: std:
             arg.append(fmt("VoltOpt::from({})", copy n).as_str());
         },
         .CLOSURE(i) => {
-            match (*this.c.t.get(t)) {
-                .FN_VAL(ps&, r) => {
-                    var sig = S("dyn FnMut(");
-                    var cps = S("u: *mut std::os::raw::c_void");
-                    var cargs: std::string = {};
-                    for (k) in 0..ps.len {
-                        if (k > 0) {
-                            sig.append(", ");
-                            cargs.append(", ");
-                        }
-                        sig.append(this.rust_ty(*ps.at(k)).as_str());
-                        cps.append(fmt2(", a{}: {}", unum(@cast<u64>(k)), this.rust_ty(*ps.at(k))).as_str());
-                        cargs.append(fmt("a{}", unum(@cast<u64>(k))).as_str());
-                    }
-                    sig.push(')');
-                    var ret: std::string = {};
-                    if (r != VOID) {
-                        ret = fmt(" -> {}", this.rust_ty(r));
-                        sig.append(ret.as_str());
-                    }
-                    ty.append(fmt2("mut {}: &mut {}", copy n, copy sig).as_str());
-                    // the C function calls the closure that the caller's data points at
-                    pre.append(fmt4("    extern \"C\" fn call_{}({}){} {{\n        let f = unsafe {{ &mut *(u as *mut &mut {}) }};\n", S(name), move cps, copy ret, copy sig).as_str());
-                    pre.append(fmt("        f({})\n    }\n", move cargs).as_str());
-                    arg.append(fmt4("call_{}, &mut {} as *mut &mut {} as *mut std::os::raw::c_void", S(name), copy n, copy sig, S("")).as_str());
-                },
-                default => {},
+            // any Rust closure (a generic F_name): a C function calls it through the caller's data
+            var ps: std::vec<u32> = {};
+            val r = this.fn_parts(t, &ps);
+            val g = fmt("F_{}", S(name));
+            val sig = this.rust_sig(&ps, r, false);
+            if (gens.len() > 0) {
+                gens.append(", ");
             }
+            gens.append(fmt2("{}: {}", copy g, copy sig).as_str());
+            ty.append(fmt2("mut {}: {}", copy n, copy g).as_str());
+            val cb = this.rust_callback(fmt("call_{}", S(name)).as_str(), fmt("<F: {}>", copy sig).as_str(), "(unsafe { &mut *(u as *mut F) })", &ps, r);
+            pre.append(indent(cb.as_str()).as_str());
+            arg.append(fmt4("call_{}::<{}>, &mut {} as *mut {} as *mut std::os::raw::c_void", S(name), copy g, copy n, copy g).as_str());
         },
         default => {
             match (*this.c.t.get(t)) {
@@ -2357,6 +2556,12 @@ attach fn rust_ret(this: bind&, t: u32) -> std::string {
         .HANDLE(s) => { return this.local(this.c.si(s).name); },
         .OPT(x) => { return fmt("Option<{}>", this.rust_ty(x)); },
         .RESULT(e, x) => { return fmt("Result<{}, Error>", this.rust_ret(x)); },
+        .TRAIT(i) => { return fmt("Box<dyn {}>", this.short(this.trait_of(t))); },
+        .CLOSURE(i) => {
+            var ps: std::vec<u32> = {};
+            val r = this.fn_parts(t, &ps);
+            return fmt("Box<dyn {}>", this.rust_sig(&ps, r, true));
+        },
         default => { return this.rust_ty(t); },
     }
 }
@@ -2368,6 +2573,15 @@ attach fn rust_value(this: bind&, t: u32, r: str) -> std::string {
         .TEXT(x) => { return fmt("{}.take()", S(r)); },
         .HANDLE(s) => { return fmt2("{}::from_raw({})", this.local(this.c.si(s).name), S(r)); },
         .OPT(x) => { return fmt("{}.get()", S(r)); },
+        .TRAIT(i) => { return fmt2("Box::new(volt_{}({}))", this.short(this.trait_of(t)), S(r)); },
+        .CLOSURE(i) => {
+            // a closure Volt gave out: freed when the Box goes (o, captured whole)
+            var ps: std::vec<u32> = {};
+            val res = this.fn_parts(t, &ps);
+            var out = fmt2("{{ let c = {}; let o = VoltOwned {{ self_: c.self_, drop: c.drop }}; let call = c.call; Box::new(move |{}| ", S(r), this.rust_cb_params(&ps));
+            out.append(fmt("{{ let o = &o; {} }}) }}", this.rust_call_out("call", "o.self_", &ps, res, false)).as_str());
+            return out;
+        },
         default => { return S(r); },
     }
 }
@@ -2391,17 +2605,78 @@ attach fn rust_body(this: bind&, f: u32, args: std::string, pre: std::string) ->
     return out;
 }
 
+// trait K in Rust: a Rust trait (implement it to hand Volt one: lent as &mut dyn T, given as
+// Box<dyn T>), the table calling a Rust object's fns, and volt_T, a T Volt gave out
+attach fn rust_trait(this: bind&, k: u32, out: std::string&) -> void {
+    val t = *this.traits.at(k);
+    val tr = this.short(t);
+    val fns = this.fns_of(t);
+    out.append(fmt4("\n/// trait {}: implement it to hand Volt a {} (lent: &mut dyn {}; given: Box<dyn {}>,\n", this.c.ty_name(t), copy tr, copy tr, copy tr).as_str());
+    out.append(fmt2("/// which Volt drops); one Volt gives back is a volt_{}\npub trait {} {{\n", copy tr, copy tr).as_str());
+    for (f&) in fns.items() {
+        var ps = S("&mut self");
+        val cps = this.rust_cb_params(&f.params);
+        if (cps.len() > 0) {
+            ps.append(", ");
+            ps.append(cps.as_str());
+        }
+        var ret: std::string = {};
+        if (f.ret != VOID) {
+            ret = fmt(" -> {}", this.rust_cb_ty(f.ret, 3));
+        }
+        out.append(fmt3("    fn {}({}){};\n", rust_ident(f.name), move ps, move ret).as_str());
+    }
+    out.append("}\n");
+    // the table, in a module of its own: a C function per fn, calling the Rust object's (the object
+    // is a &mut dyn T)
+    var table: std::string = {};
+    out.append(fmt("\nmod {}__table {{\n    use super::*;\n", copy tr).as_str());
+    for (f&) in fns.items() {
+        out.append("\n");
+        out.append(indent(this.rust_callback(S(f.name).as_str(), "", fmt2("(unsafe {{ &mut **(u as *mut &mut dyn {}) }}).{}", copy tr, rust_ident(f.name)).as_str(), &f.params, f.ret).as_str()).as_str());
+        table.append(fmt2("{}: {}, ", rust_ident(f.name), rust_ident(f.name)).as_str());
+    }
+    out.append(fmt3("\n    pub static TABLE: {}_vt = {}_vt {{ {}}};\n}}\n", copy tr, copy tr, move table).as_str());
+    out.append(fmt4("\n/// lends Volt a {}: Volt never frees it\npub fn {}_lend(s: &mut &mut dyn {}) -> {}_obj {{\n", copy tr, copy tr, copy tr, copy tr).as_str());
+    out.append(fmt3("    {}_obj {{ vt: &{}__table::TABLE, self_: s as *mut &mut dyn {} as *mut std::os::raw::c_void, drop: None }}\n}}\n", copy tr, copy tr, copy tr).as_str());
+    out.append(fmt4("\n/// gives Volt a {}: Volt drops it when it's done\npub fn {}_give(s: Box<dyn {}>) -> {}_obj {{\n", copy tr, copy tr, copy tr, copy tr).as_str());
+    out.append(fmt2("    extern \"C\" fn drop_it(o: *mut std::os::raw::c_void) {{\n        unsafe {{\n            let r = Box::from_raw(o as *mut &mut dyn {});\n            drop(Box::from_raw(*r as *mut dyn {}));\n        }}\n    }}\n", copy tr, copy tr).as_str());
+    out.append(fmt3("    let r: &'static mut dyn {} = Box::leak(s);\n    {}_obj {{ vt: &{}__table::TABLE, self_: Box::into_raw(Box::new(r)) as *mut std::os::raw::c_void, drop: Some(drop_it) }}\n}}\n", copy tr, copy tr, copy tr).as_str());
+    // one Volt made
+    out.append(fmt4("\n/// a {} Volt gave out: calls Volt's, which is freed when this is dropped\npub struct volt_{}({}_obj);\n\nimpl Drop for volt_{} {{\n", copy tr, copy tr, copy tr, copy tr).as_str());
+    out.append("    fn drop(&mut self) {\n        if let Some(d) = self.0.drop {\n            d(self.0.self_);\n        }\n    }\n}\n");
+    out.append(fmt2("\nimpl {} for volt_{} {{\n", copy tr, copy tr).as_str());
+    for (f&) in fns.items() {
+        var ps = S("&mut self");
+        val cps = this.rust_cb_params(&f.params);
+        if (cps.len() > 0) {
+            ps.append(", ");
+            ps.append(cps.as_str());
+        }
+        var ret: std::string = {};
+        if (f.ret != VOID) {
+            ret = fmt(" -> {}", this.rust_cb_ty(f.ret, 3));
+        }
+        out.append(fmt3("    fn {}({}){} {{\n", rust_ident(f.name), move ps, move ret).as_str());
+        out.append(fmt("        {}\n    }\n", this.rust_call_out(fmt("(*self.0.vt).{}", rust_ident(f.name)).as_str(), "self.0.self_", &f.params, f.ret, true)).as_str());
+    }
+    out.append("}\n");
+}
+
 attach fn rust_text(this: bind&) -> std::string {
     val ents = this.entries();
     var out: std::string = {};
     out.append(fmt("// {}: generated by voltc bindings; the Volt package for Rust. Link the library\n", S(this.pkg)).as_str());
     out.append("// yourself (-l NAME, or #[link] in a build script): shared or static. Module raw has the C\n// functions; the functions and types here wrap them (errors come back as Err(Error)).\n");
-    out.append("#![allow(non_camel_case_types, non_upper_case_globals, non_snake_case, dead_code, unused_mut)]\n");
-    if (this.uses_str) {
-        out.append("\n/// a Volt str: bytes and a length (no terminator)\n#[repr(C)]\n#[derive(Clone, Copy, Debug)]\npub struct VoltStr {\n    pub ptr: *const u8,\n    pub len: usize,\n}\n\nimpl VoltStr {\n    pub fn from(s: &str) -> VoltStr {\n        VoltStr { ptr: s.as_ptr(), len: s.len() }\n    }\n    /// the bytes (valid as long as what the str points into)\n    pub unsafe fn bytes<'a>(self) -> &'a [u8] {\n        std::slice::from_raw_parts(self.ptr, self.len)\n    }\n    /// a copy of the text\n    pub unsafe fn to_string(self) -> String {\n        String::from_utf8_lossy(self.bytes()).into_owned()\n    }\n}\n");
+    out.append("#![allow(non_camel_case_types, non_upper_case_globals, non_snake_case, dead_code, unused_mut, unused_unsafe, clippy::all)]\n");
+    if (this.uses_str || this.texts.len > 0) {
+        out.append("\n/// a Volt str: bytes and a length (no terminator)\n#[repr(C)]\n#[derive(Clone, Copy, Debug)]\npub struct VoltStr {\n    pub ptr: *const u8,\n    pub len: usize,\n}\n\nimpl VoltStr {\n    pub fn from(s: &str) -> VoltStr {\n        VoltStr { ptr: s.as_ptr(), len: s.len() }\n    }\n    /// the bytes (valid as long as what the str points into)\n    pub unsafe fn bytes<'a>(self) -> &'a [u8] {\n        if self.len == 0 {\n            return &[];\n        }\n        std::slice::from_raw_parts(self.ptr, self.len)\n    }\n    /// the text (valid as long as what the str points into; bytes that aren't UTF-8 end it)\n    pub unsafe fn as_str<'a>(self) -> &'a str {\n        let b = self.bytes();\n        match std::str::from_utf8(b) {\n            Ok(s) => s,\n            Err(e) => std::str::from_utf8_unchecked(&b[..e.valid_up_to()]),\n        }\n    }\n    /// a copy of the text\n    pub unsafe fn to_string(self) -> String {\n        String::from_utf8_lossy(self.bytes()).into_owned()\n    }\n}\n");
     }
     if (this.texts.len > 0) {
-        out.append("\n/// owned text a Volt function gave out: take() copies it into a String and frees it\n#[repr(C)]\npub struct VoltText {\n    pub ptr: *const u8,\n    pub len: usize,\n    pub owner: *mut std::os::raw::c_void,\n    pub drop: Option<extern \"C\" fn(*mut std::os::raw::c_void)>,\n}\n\nimpl VoltText {\n    pub fn take(self) -> String {\n        let s = unsafe { String::from_utf8_lossy(std::slice::from_raw_parts(self.ptr, self.len)).into_owned() };\n        if let Some(d) = self.drop {\n            d(self.owner);\n        }\n        s\n    }\n}\n");
+        out.append("\n/// owned text a Volt function gave out: take() copies it into a String and frees it\n#[repr(C)]\npub struct VoltText {\n    pub ptr: *const u8,\n    pub len: usize,\n    pub owner: *mut std::os::raw::c_void,\n    pub drop: Option<extern \"C\" fn(*mut std::os::raw::c_void)>,\n}\n\nimpl VoltText {\n    pub fn take(self) -> String {\n        let s = if self.len == 0 { String::new() } else { unsafe { String::from_utf8_lossy(std::slice::from_raw_parts(self.ptr, self.len)).into_owned() } };\n        if let Some(d) = self.drop {\n            d(self.owner);\n        }\n        s\n    }\n    /// text Rust gives Volt (a callback's result): Volt frees it when it's done\n    pub fn give(s: String) -> VoltText {\n        extern \"C\" fn drop_it(o: *mut std::os::raw::c_void) {\n            unsafe { drop(Box::from_raw(o as *mut String)) }\n        }\n        let b = Box::new(s);\n        VoltText { ptr: b.as_ptr(), len: b.len(), owner: Box::into_raw(b) as *mut std::os::raw::c_void, drop: Some(drop_it) }\n    }\n}\n");
+    }
+    if (this.closures_out.len > 0) {
+        out.append("\n/// a value Volt gave out (a closure's data): dropping this frees it\npub struct VoltOwned {\n    pub self_: *mut std::os::raw::c_void,\n    pub drop: Option<extern \"C\" fn(*mut std::os::raw::c_void)>,\n}\n\nimpl Drop for VoltOwned {\n    fn drop(&mut self) {\n        if let Some(d) = self.drop {\n            d(self.self_);\n        }\n    }\n}\n");
     }
     if (this.slices.len > 0) {
         out.append("\n/// a Volt slice: elements and how many\n#[repr(C)]\n#[derive(Clone, Copy, Debug)]\npub struct VoltSlice<T> {\n    pub ptr: *mut T,\n    pub len: usize,\n}\n\nimpl<T> VoltSlice<T> {\n    pub fn from(s: &mut [T]) -> VoltSlice<T> {\n        VoltSlice { ptr: s.as_mut_ptr(), len: s.len() }\n    }\n}\n");
@@ -2451,12 +2726,41 @@ attach fn rust_text(this: bind&) -> std::string {
             .ERR_UNION(e, x) => {
                 out.append(fmt2("\n/// {}: error is 0, or the error's code\n#[repr(C)]\npub struct {} {{\n    pub error: u32,\n", this.c.ty_name(*rt), this.result_name(*rt)).as_str());
                 if (x != VOID) {
-                    out.append(fmt("    pub value: {},\n", this.rust_ty(x)).as_str());
+                    out.append(fmt("    pub value: {},\n", this.rust_out(x)).as_str());
                 }
                 out.append("}\n");
             },
             default => {},
         }
+    }
+    // a closure Volt gives out: call(self_, ...) calls it, drop(self_) frees it
+    for (i) in 0..this.closures.len {
+        if (!has_u32(&this.closures_out, @cast<u32>(i))) {
+            continue;
+        }
+        out.append(fmt3("\n/// {}, given out by Volt: call(self_, ...) calls it, drop(self_) frees it\n#[repr(C)]\npub struct closure{} {{\n    pub call: {},\n", this.c.ty_name(*this.closures.at(i)), unum(@cast<u64>(i)), this.rust_fn_ty(*this.closures.at(i), true)).as_str());
+        out.append("    pub self_: *mut std::os::raw::c_void,\n    pub drop: Option<extern \"C\" fn(*mut std::os::raw::c_void)>,\n}\n");
+    }
+    // a trait's object (its fns' table and the object; drop: None when it's lent) and table
+    for (t&) in this.traits.items() {
+        val tr = this.short(*t);
+        out.append(fmt4("\n/// trait {}: a table of its fns and the object they're called on; drop frees the object\n/// (None: it's lent)\n#[repr(C)]\npub struct {}_obj {{\n    pub vt: *const {}_vt,\n{}", this.c.ty_name(*t), copy tr, copy tr, S("")).as_str());
+        out.append("    pub self_: *mut std::os::raw::c_void,\n    pub drop: Option<extern \"C\" fn(*mut std::os::raw::c_void)>,\n}\n");
+        out.append(fmt2("\n/// trait {}'s fns, each taking the object first\n#[repr(C)]\npub struct {}_vt {{\n", this.c.ty_name(*t), copy tr).as_str());
+        for (f&) in this.fns_of(*t).items() {
+            var s = S("extern \"C\" fn(*mut std::os::raw::c_void");
+            for (p&) in f.params.items() {
+                s.append(", ");
+                s.append(this.rust_in(*p).as_str());
+            }
+            s.push(')');
+            if (f.ret != VOID) {
+                s.append(" -> ");
+                s.append(this.rust_out(f.ret).as_str());
+            }
+            out.append(fmt2("    pub {}: {},\n", rust_ident(f.name), move s).as_str());
+        }
+        out.append("}\n");
     }
     // the C functions
     out.append("\n/// the C functions (the wrappers below are easier to use)\npub mod raw {\n    use super::*;\n");
@@ -2478,7 +2782,7 @@ attach fn rust_text(this: bind&) -> std::string {
             if (args.len() > 0) {
                 args.append(", ");
             }
-            args.append(fmt2("{}: {}", rust_ident(p.name), this.rust_ty(p.ty)).as_str());
+            args.append(fmt2("{}: {}", rust_ident(p.name), this.rust_in(p.ty)).as_str());
             match (this.shape_of(p.ty) ?? shape::VOID) {
                 .CLOSURE(i) => { args.append(fmt(", {}_user: *mut std::os::raw::c_void", S(p.name)).as_str()); },
                 default => {},
@@ -2486,11 +2790,14 @@ attach fn rust_text(this: bind&) -> std::string {
         }
         var ret: std::string = {};
         if (f.ret != VOID) {
-            ret = fmt(" -> {}", this.rust_ty(f.ret));
+            ret = fmt(" -> {}", this.rust_out(f.ret));
         }
         out.append(fmt3("        pub fn {}({}){};\n", copy e.name, move args, move ret).as_str());
     }
     out.append("    }\n}\n");
+    for (k) in 0..this.traits.len {
+        this.rust_trait(@cast<u32>(k), &out);
+    }
     // a type per export struct: it owns its handle
     for (s&) in this.handles.items() {
         val cls = this.local(this.c.si(*s).name);
@@ -2498,6 +2805,7 @@ attach fn rust_text(this: bind&) -> std::string {
         out.append(fmt("    fn drop(&mut self) {\n        if !self.raw.is_null() {\n            unsafe { raw::{}(self.raw) }\n        }\n    }\n}\n", this.free_name(*s)).as_str());
         out.append(fmt3("\nimpl {} {{\n    /// takes ownership of a handle an export fn returned\n    pub fn from_raw(raw: *mut raw::{}) -> {} {{\n", copy cls, copy cls, copy cls).as_str());
         out.append(fmt2("        {} {{ raw }}\n    }}\n    pub fn as_raw(&self) -> *mut raw::{} {{\n        self.raw\n    }}\n", copy cls, copy cls).as_str());
+        out.append(fmt("    /// gives the handle up (to Volt, or to free it yourself)\n    pub fn into_raw(self) -> *mut raw::{} {{\n        let r = self.raw;\n        std::mem::forget(self);\n        r\n    }}\n", copy cls).as_str());
         for (e&) in ents.items() {
             if (e.free_of != null) {
                 continue;
@@ -2507,6 +2815,7 @@ attach fn rust_text(this: bind&) -> std::string {
             var ps: std::string = {};
             var args: std::string = {};
             var pre: std::string = {};
+            var gens: std::string = {};
             var first: usize = 0;
             if (info.params.len > 0 && this.lends(info.params.at(0).ty, *s)) {
                 first = 1;
@@ -2520,9 +2829,12 @@ attach fn rust_text(this: bind&) -> std::string {
                 if (args.len() > 0) {
                     args.append(", ");
                 }
-                this.rust_param(info.params.at(k).ty, info.params.at(k).name, &ps, &args, &pre);
+                this.rust_param(info.params.at(k).ty, info.params.at(k).name, &ps, &args, &pre, &gens);
             }
-            out.append(fmt3("    pub fn {}({}) -> {} {{\n", rust_ident(m), move ps, this.rust_ret(info.ret)).as_str());
+            if (gens.len() > 0) {
+                gens = fmt("<{}>", move gens);
+            }
+            out.append(fmt4("    pub fn {}{}({}) -> {} {{\n", rust_ident(m), move gens, move ps, this.rust_ret(info.ret)).as_str());
             var body = this.rust_body(e.f, move args, move pre);
             out.append(indent(body.as_str()).as_str());
             out.append("    }\n");
@@ -2538,14 +2850,18 @@ attach fn rust_text(this: bind&) -> std::string {
         var ps: std::string = {};
         var args: std::string = {};
         var pre: std::string = {};
+        var gens: std::string = {};
         for (p&) in info.params.items() {
             if (ps.len() > 0) {
                 ps.append(", ");
                 args.append(", ");
             }
-            this.rust_param(p.ty, p.name, &ps, &args, &pre);
+            this.rust_param(p.ty, p.name, &ps, &args, &pre, &gens);
         }
-        out.append(fmt3("\npub fn {}({}) -> {} {{\n", rust_ident(info.c_name), move ps, this.rust_ret(info.ret)).as_str());
+        if (gens.len() > 0) {
+            gens = fmt("<{}>", move gens);
+        }
+        out.append(fmt4("\npub fn {}{}({}) -> {} {{\n", rust_ident(info.c_name), move gens, move ps, this.rust_ret(info.ret)).as_str());
         out.append(this.rust_body(e.f, move args, move pre).as_str());
         out.append("}\n");
     }
@@ -2591,7 +2907,7 @@ attach fn zig_ty(this: bind&, t: u32) -> std::string {
         .HANDLE(s) => { return fmt("*raw.{}", this.local(this.c.si(s).name)); },
         .TEXT(x) => { return S("VoltText"); },
         .CLOSURE(i) => { return this.zig_fn_ty(t, true); },
-        .TRAIT(i) => { return S("void"); }, // only C and C++ take traits (bind.wide)
+        .TRAIT(i) => { return S("void"); }, // only C, C++ and Rust take traits (bind.wide)
     }
 }
 
@@ -2971,7 +3287,7 @@ attach fn py_ty(this: bind&, t: u32) -> std::string {
         .HANDLE(s) => { return S("ctypes.c_void_p"); },
         .TEXT(x) => { return S("VoltText"); },
         .CLOSURE(i) => { return this.py_fn_ty(t, true); },
-        .TRAIT(i) => { return S("void"); }, // only C and C++ take traits (bind.wide)
+        .TRAIT(i) => { return S("void"); }, // only C, C++ and Rust take traits (bind.wide)
     }
 }
 
@@ -3581,7 +3897,7 @@ attach fn pyi_ty(this: bind&, t: u32, incoming: bool) -> std::string {
                 default => { return S("Callable[..., Any]"); },
             }
         },
-        .TRAIT(i) => { return S("void"); }, // only C and C++ take traits (bind.wide)
+        .TRAIT(i) => { return S("void"); }, // only C, C++ and Rust take traits (bind.wide)
     }
 }
 
@@ -3778,7 +4094,7 @@ attach fn cs_raw(this: bind&, t: u32) -> std::string {
         .OPT(x) => { return this.made_name("opt", x, true); },
         .FN(i) => { return S("IntPtr"); },
         .CLOSURE(i) => { return this.cs_fnptr(t); },
-        .TRAIT(i) => { return S("void"); }, // only C and C++ take traits (bind.wide)
+        .TRAIT(i) => { return S("void"); }, // only C, C++ and Rust take traits (bind.wide)
     }
 }
 
@@ -6925,7 +7241,7 @@ attach fn dart_native(this: bind&, t: u32) -> std::string {
         .OPT(x) => { return this.made_name("opt", x, true); },
         .FN(i) => { return S("Pointer<Void>"); },
         .CLOSURE(i) => { return fmt("Pointer<NativeFunction<{}>>", this.dart_cb_sig(t, true)); },
-        .TRAIT(i) => { return S("void"); }, // only C and C++ take traits (bind.wide)
+        .TRAIT(i) => { return S("void"); }, // only C, C++ and Rust take traits (bind.wide)
     }
 }
 
@@ -9196,7 +9512,7 @@ attach fn rb_text(this: bind&) -> compile_error!std::string {
 // the bindings of package pkg in lang (see the top of the file; node, js and ts are a Node-API
 // addon, its loader and its types; json is the model itself)
 attach fn bindings(this: checker&, pkg: str, lang: str) -> compile_error!std::string {
-    var b: bind = { c: this, pkg: pkg, wide: lang == "c" || lang == "cpp" || lang == "json" };
+    var b: bind = { c: this, pkg: pkg, wide: lang == "c" || lang == "cpp" || lang == "rust" || lang == "json" };
     val fns = b.exports();
     if (fns.len == 0) {
         return fail(NO_SPAN, fmt("package {} has no export fns to make bindings for", S(pkg)));
