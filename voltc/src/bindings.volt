@@ -51,7 +51,7 @@ enum shape {
 // shapes that only work at the edge of an export fn
 // the languages whose bindings take every shape (bind.wide), as messages name them
 fn wide_langs() -> std::string {
-    return S("C, C++, Rust, Zig, Go, Python, Java, C# and JavaScript");
+    return S("C, C++, Rust, Zig, Go, Python, Java, C#, JavaScript and Lua");
 }
 
 fn plain(s: shape) -> bool {
@@ -9910,23 +9910,115 @@ attach fn ts_text(this: bind&) -> std::string {
 }
 
 // ---------- Lua (5.4 and later): a C module ----------
-// A Lua error longjmps, so nothing is held across one: a slice's elements live in a userdata (the
-// collector frees them), and an owned result is freed before a callback's error is raised. A
-// callback's Lua function runs in a protected call; its error is raised once the Volt call is back
+// A Lua error longjmps, so a call into Volt converts every argument first (what that makes lives on
+// Lua's stack, collected if a later one fails), then gives Volt what it takes, then calls it. A Lua
+// function Volt calls (a callback, a Lua object's method) runs in a protected call: its first error
+// is kept in the registry, Volt gets a stand-in, and the error is raised once the Volt call is back
 
-// C statements reading the Lua value at stack index idx into C lvalue c (simple types: numbers,
-// bool, enums, error codes and structs of those); what (a C string expression) names the value in
-// the error raised when it doesn't fit
+// a metatable's name, quoted: "pkg.name"
+attach fn lua_mt(this: bind&, name: str) -> std::string {
+    return fmt2("\"{}.{}\"", S(this.pkg), S(name));
+}
+
+// how deep in arrays and slices C lvalue c is: its loops' variables are named after it
+fn lua_depth(c: str) -> std::string {
+    var n: u64 = 0;
+    for (ch) in c {
+        if (ch == '[') {
+            n += 1;
+        }
+    }
+    return unum(n);
+}
+
+// a C expression: the handle of export struct s in the userdata at idx, lent (how 1), given (2) or
+// copied in for the call (3), marked in the call's table kp (see vl_mark)
+attach fn lua_handle(this: bind&, s: u32, idx: str, kp: str, how: str, what: str) -> std::string {
+    return fmt5("vl_handle_in(L, {}, {}, {}, {}, {})->h", S(idx), this.lua_mt(this.node_sname(s).as_str()), S(kp), S(how), S(what));
+}
+
+// the C function giving error set e's code for the error a Lua function names (see vl_error_of)
+attach fn lua_code_fn(this: bind&, e: u32) -> std::string {
+    if (e == ANYERR) {
+        return S("vl_code_any");
+    }
+    return fmt("vl_code_{}", this.short(e));
+}
+
+// C statements reading the Lua value at stack index idx into C lvalue c, for a value that crosses as
+// itself (what sits inside other types, and optionals of it); what (a C string expression) names the
+// value in the error raised when it doesn't fit. What they push stays on the stack (memory for a
+// slice) until the call is done
 attach fn lua_get(this: bind&, t: u32, idx: str, c: str, what: str) -> std::string {
     match (this.shape_of(t) ?? shape::VOID) {
+        .VOID => { return {}; },
         .BOOL => { return fmt3("{} = vl_bool(L, {}, {});", S(c), S(idx), S(what)); },
         .FLOAT(b) => { return fmt4("{} = ({})vl_num(L, {}, {});", S(c), this.c_prim(t, false), S(idx), S(what)); },
         .INT(k) => { return fmt4("{} = ({})vl_int(L, {}, {});", S(c), this.c_prim(t, false), S(idx), fmt2("{}, {}", lua_limits(k), S(what))); },
         .ENUM(e) => { return fmt4("{} = ({})vl_int(L, {}, {});", S(c), this.c_prim(t, false), S(idx), fmt2("{}, {}", lua_limits(this.c.ei(e).tag), S(what))); },
         .CODE => { return fmt3("{} = (uint32_t)vl_int(L, {}, 0, UINT32_MAX, {});", S(c), S(idx), S(what)); },
         .STRUCT(s) => { return fmt4("vl_get_{}(L, {}, &{}, {});", this.node_sname(s), S(idx), S(c), S(what)); },
-        default => { return S("luaL_error(L, \"unsupported\");"); },
+        .STR => { return fmt4("{}.ptr = (const uint8_t *)vl_str(L, {}, &{}.len, {});", S(c), S(idx), S(c), S(what)); },
+        .CSTR => { return fmt4("{} = lua_isnoneornil(L, {}) ? NULL : vl_str(L, {}, NULL, {});", S(c), S(idx), S(idx), S(what)); },
+        .PTR(x) => {
+            // nil is null, a handle is lent, anything else is a pointer from this library
+            var p = fmt2("vl_pointer(L, {}, {})", S(idx), S(what));
+            val h = this.struct_handle(x);
+            if (h) {
+                p = this.lua_handle(h, idx, "0", "1", what);
+            }
+            return fmt4("{} = NULL; if (!lua_isnoneornil(L, {})) {{ {} = {}; }", S(c), S(idx), S(c), move p);
+        },
+        .FN(i) => { return fmt4("{} = ({})vl_pointer(L, {}, {});", S(c), this.c_prim(t, false), S(idx), S(what)); },
+        .ARRAY(elem, n) => {
+            val d = lua_depth(c);
+            var s = fmt5("{{ int t{} = lua_absindex(L, {}); (void)vl_seq(L, t{}, {}); for (size_t i{} = 0; ", copy d, S(idx), copy d, S(what), copy d);
+            s.append(fmt5("i{} < {}; i{}++) {{ lua_geti(L, t{}, (lua_Integer)i{} + 1); ", copy d, unum(n), copy d, copy d, copy d).as_str());
+            val el = this.lua_get(elem, fmt("e{}", copy d).as_str(), fmt2("{}[i{}]", S(c), copy d).as_str(), what);
+            s.append(fmt3("int e{} = lua_gettop(L); {} lua_remove(L, e{}); }} }", copy d, move el, copy d).as_str());
+            return s;
+        },
+        .SLICE(x) => { return this.lua_seq(x, idx, c, what, "0", "1"); },
+        .OPT(x) => {
+            var s = fmt4("memset(&{}, 0, sizeof {}); if (!lua_isnoneornil(L, {})) {{ {}.has = true; ", S(c), S(c), S(idx), S(c));
+            s.append(fmt("{} }", this.lua_get(x, idx, fmt("{}.value", S(c)).as_str(), what)).as_str());
+            return s;
+        },
+        .RESULT(e, x) => {
+            // an error from Volt is its code, anything else the value
+            var s = fmt4("if (vl_is_error(L, {})) {{ {}.error = {}(L, {}, ", S(idx), S(c), this.lua_code_fn(e), S(idx));
+            s.append(fmt3("{}); }} else {{ {} {}.error = 0; }", S(what), this.lua_get(x, idx, fmt("{}.value", S(c)).as_str(), what), S(c)).as_str());
+            return s;
+        },
+        default => { return fmt("luaL_error(L, \"%s: unsupported\", {});", S(what)); },
     }
+}
+
+// statements reading the sequence at idx into C slice c, each element as e's view (see lua_elem),
+// into memory left on the stack
+attach fn lua_seq(this: bind&, e: u32, idx: str, c: str, what: str, kp: str, how: str) -> std::string {
+    val d = lua_depth(c);
+    val el = this.lua_elem(e, fmt("e{}", copy d).as_str(), fmt2("{}.ptr[i{}]", S(c), copy d).as_str(), what, kp, how);
+    var s = fmt5("{{ int t{} = lua_absindex(L, {}); {}.len = vl_seq(L, t{}, {}); ", copy d, S(idx), S(c), copy d, S(what));
+    s.append(fmt4("{}.ptr = vl_buffer(L, sizeof *{}.ptr, {}.len); for (size_t i{} = 0; ", S(c), S(c), S(c), copy d).as_str());
+    s.append(fmt5("i{} < {}.len; i{}++) {{ lua_geti(L, t{}, (lua_Integer)i{} + 1); ", copy d, S(c), copy d, copy d, copy d).as_str());
+    s.append(fmt3("int e{} = lua_gettop(L); {} lua_remove(L, e{}); }} }", copy d, move el, copy d).as_str());
+    return s;
+}
+
+// statements reading the sequence element at idx into C lvalue c, as element type e's view (see
+// view_of): text is a str (kept in the call's table kp), a handle is lent (how 1), given (2) or
+// copied in for the call (3)
+attach fn lua_elem(this: bind&, e: u32, idx: str, c: str, what: str, kp: str, how: str) -> std::string {
+    val h = this.handle_of(e);
+    if (h) {
+        return fmt2("{} = {};", S(c), this.lua_handle(h, idx, kp, how, what));
+    }
+    var s = this.lua_get(this.view_of(e), idx, c, what);
+    if (this.view_of(e) == STR && kp != "0") {
+        s.append(fmt3(" vl_mark(L, {}, {}, 1, {});", S(kp), S(idx), S(what)).as_str());
+    }
+    return s;
 }
 
 // the range of a C integer type, as two lua_Integer expressions
@@ -9945,51 +10037,145 @@ fn lua_limits(k: int_ty) -> std::string {
     }
 }
 
-// a C statement pushing simple C value c (of type t)
+// a C statement pushing C value c of type t, a value that crosses as itself: a str is copied, a
+// pointer is a light userdata (nil for null), an array or a slice a new sequence, E!T its value or
+// the error
 attach fn lua_push(this: bind&, t: u32, c: str) -> std::string {
     match (this.shape_of(t) ?? shape::VOID) {
         .BOOL => { return fmt("lua_pushboolean(L, {});", S(c)); },
         .FLOAT(b) => { return fmt("lua_pushnumber(L, (lua_Number)({}));", S(c)); },
         .STRUCT(s) => { return fmt2("vl_new_{}(L, &{});", this.node_sname(s), S(c)); },
+        .STR => { return fmt2("lua_pushlstring(L, (const char *){}.ptr, {}.len);", S(c), S(c)); },
+        .CSTR => { return fmt2("if ({}) {{ lua_pushstring(L, {}); }} else {{ lua_pushnil(L); }}", S(c), S(c)); },
+        .PTR(x) => { return fmt2("if ({}) {{ lua_pushlightuserdata(L, (void *){}); }} else {{ lua_pushnil(L); }}", S(c), S(c)); },
+        .FN(i) => { return fmt2("if ({}) {{ lua_pushlightuserdata(L, (void *){}); }} else {{ lua_pushnil(L); }}", S(c), S(c)); },
+        .ARRAY(elem, n) => {
+            val d = lua_depth(c);
+            val el = this.lua_push(elem, fmt2("{}[i{}]", S(c), copy d).as_str());
+            var s = fmt3("lua_createtable(L, {}, 0); for (size_t i{} = 0; i{} < ", unum(n), copy d, copy d);
+            s.append(fmt4("{}; i{}++) {{ {} lua_seti(L, -2, (lua_Integer)i{} + 1); }", unum(n), copy d, move el, copy d).as_str());
+            return s;
+        },
+        .SLICE(x) => {
+            val el = this.lua_push(x, fmt2("{}.ptr[i{}]", S(c), lua_depth(c)).as_str());
+            return this.lua_seq_out(x, c, move el);
+        },
+        .OPT(x) => { return fmt2("if ({}.has) {{ {} }} else {{ lua_pushnil(L); }}", S(c), this.lua_push(x, fmt("{}.value", S(c)).as_str())); },
+        .RESULT(e, x) => {
+            var ok = this.lua_push(x, fmt("{}.value", S(c)).as_str());
+            if (x == VOID) {
+                ok = S("lua_pushboolean(L, 1);");
+            }
+            return fmt3("if ({}.error != 0) {{ vl_push_error(L, {}.error); }} else {{ {} }", S(c), S(c), move ok);
+        },
         default => { return fmt("lua_pushinteger(L, (lua_Integer)({}));", S(c)); },
     }
 }
 
-// one argument of an export fn: its C locals (decl), the statements that fill them from the Lua
-// argument (get), what the call passes (pass), what writes changes back into Lua tables (after),
-// and a callback's vl_cb (cb)
+// statements pushing a new sequence of the elements of C slice or list r (of x's; el pushes element
+// r.ptr[iN]), with its n field when they're optionals (nil for none, as table.pack gives)
+attach fn lua_seq_out(this: bind&, x: u32, r: str, el: std::string) -> std::string {
+    val d = lua_depth(r);
+    var s = fmt3("lua_createtable(L, {}.len < INT_MAX ? (int){}.len : 0, 0); for (size_t i{} = 0; ", S(r), S(r), copy d);
+    s.append(fmt5("i{} < {}.len; i{}++) {{ {} lua_seti(L, -2, (lua_Integer)i{} + 1); }", copy d, S(r), copy d, move el, copy d).as_str());
+    match (*this.c.t.get(x)) {
+        .OPT(v) => { s.append(fmt(" lua_pushinteger(L, (lua_Integer){}.len); lua_setfield(L, -2, \"n\");", S(r)).as_str()); },
+        default => {},
+    }
+    return s;
+}
+
+// one argument of a call into Volt: its C locals (decl), the statements that fill them from the Lua
+// argument (get), what the call passes (pass), and what writes Volt's changes back into Lua tables
+// (after)
 struct lua_arg {
     decl: std::string = {};
     get: std::string = {};
     pass: std::string = {};
     after: std::string = {};
-    cb: std::string = {};
 }
 
-attach fn lua_arg_of(this: bind&, t: u32, idx: str, c: str, what: str, a: lua_arg&) -> compile_error!void {
-    if (this.node_simple(t)) {
-        a.decl = fmt2("{} {};", this.c_prim(t, false), S(c));
-        a.get = this.lua_get(t, idx, c, what);
-        a.pass = S(c);
-        return;
+// does a parameter of type t need its call's table (see vl_mark): it gives Volt something, or a
+// sequence of strings or handles is held for the call
+attach fn lua_keeps(this: bind&, t: u32) -> bool {
+    match (this.shape_of(t) ?? shape::VOID) {
+        .HANDLE(h) => { return true; },
+        .TRAIT(i) => { return !this.is_ref(t); },
+        .OPT(x) => { return this.handle_of(x) != null; },
+        .LIST(x) => { return this.lua_keeps(this.in_ty(t)); },
+        .SLICE(x) => { return x == STR || this.lent_handle(x) != null; },
+        default => { return false; },
     }
+}
+
+// fills a for C parameter c of type t from the Lua argument at idx; kp is the call's table (keep, or
+// 0 when it has none)
+attach fn lua_in(this: bind&, t: u32, idx: str, c: str, what: str, kp: str, a: lua_arg&) -> void {
+    a.pass = S(c);
     val h = this.lent_handle(t);
     if (h) {
         a.decl = fmt2("{}{};", spaced(this.handle_c(h, false)), S(c));
-        a.get = fmt4("{} = vl_check_{}(L, {}, {});", S(c), this.node_sname(h), S(idx), S(what));
-        a.pass = S(c);
+        a.get = fmt2("{} = {};", S(c), this.lua_handle(h, idx, kp, "1", what));
         return;
     }
     match (this.shape_of(t) ?? shape::VOID) {
-        .STR => {
-            a.decl = fmt("volt_str {};", S(c));
-            a.get = fmt4("{}.ptr = (const uint8_t *)vl_str(L, {}, &{}.len, {});", S(c), S(idx), S(c), S(what));
-            a.pass = S(c);
+        .HANDLE(s) => {
+            // given to Volt: its userdata is closed once every argument has converted
+            a.decl = fmt2("{}{};", spaced(this.handle_c(s, false)), S(c));
+            a.get = fmt2("{} = {};", S(c), this.lua_handle(s, idx, kp, "2", what));
+            return;
         },
-        .CSTR => {
-            a.decl = fmt("const char *{} = NULL;", S(c));
-            a.get = fmt4("if (!lua_isnoneornil(L, {})) {{ {} = vl_str(L, {}, NULL, {}); }}", S(idx), S(c), S(idx), S(what));
-            a.pass = S(c);
+        .OPT(x) => {
+            val oh = this.handle_of(x);
+            if (oh) {
+                // nil, or an export struct given to Volt
+                a.decl = fmt2("{}{} = NULL;", spaced(this.handle_c(oh, false)), S(c));
+                a.get = fmt3("if (!lua_isnoneornil(L, {})) {{ {} = {}; }", S(idx), S(c), this.lua_handle(oh, idx, kp, "2", what));
+                return;
+            }
+        },
+        .TRAIT(i) => {
+            // Volt's own object, or a Lua object with the trait's methods: lent from the stack, or
+            // given (held until Volt drops it)
+            a.decl = fmt2("{} {};", this.c_prim(t, false), S(c));
+            var o = S("NULL");
+            if (this.is_ref(t)) {
+                a.decl.append(fmt2(" vl_lua {}_o = {{L, {}, LUA_NOREF};", S(c), S(idx)).as_str());
+                o = fmt("&{}_o", S(c));
+            }
+            a.get = fmt5("{} = vl_obj_{}(L, {}, {}, {}, ", S(c), this.short(this.trait_of(t)), S(idx), move o, S(kp));
+            a.get.append(fmt("{});", S(what)).as_str());
+            return;
+        },
+        .CLOSURE(i) => {
+            // a Lua function, which Volt calls during the call (vl_up_cbN)
+            a.decl = fmt2("vl_lua {}_cb = {{L, {}, LUA_NOREF};", S(c), S(idx));
+            a.get = fmt2("vl_callable(L, {}, {});", S(idx), S(what));
+            a.pass = fmt2("vl_up_cb{}, &{}_cb", unum(@cast<u64>(i)), S(c));
+            return;
+        },
+        .LIST(x) => {
+            // a sequence: Volt copies its elements (and takes the handles)
+            a.decl = fmt2("{} {};", this.c_prim(this.in_ty(t), false), S(c));
+            a.get = this.lua_seq(this.list_elem(t), idx, c, what, kp, "2");
+            return;
+        },
+        .SLICE(x) => {
+            if (this.lua_keeps(t)) {
+                // strings and handles, held for the call; Volt has handles' values for the call
+                var how = S("1");
+                match (this.shape_of(this.slice_elem(t)) ?? shape::VOID) {
+                    .HANDLE(s) => { how = S("3"); },
+                    default => {},
+                }
+                a.decl = fmt2("{} {};", this.c_prim(t, false), S(c));
+                a.get = this.lua_seq(this.slice_elem(t), idx, c, what, kp, how.as_str());
+                return;
+            }
+            if (this.node_simple(x)) {
+                // what Volt wrote into the elements comes back
+                a.after = fmt3("for (size_t i = 0; i < {}.len; i++) {{ {} lua_seti(L, {}, (lua_Integer)i + 1); }", S(c), this.lua_push(x, fmt("{}.ptr[i]", S(c)).as_str()), S(idx));
+            }
         },
         .PTR(x) => {
             if (x != VOID && this.node_simple(x)) {
@@ -9997,120 +10183,70 @@ attach fn lua_arg_of(this: bind&, t: u32, idx: str, c: str, what: str, a: lua_ar
                 // into the table (a number has nowhere to go back to)
                 val v = fmt("{}_val", S(c));
                 a.decl = fmt2("{} {};", this.c_prim(x, false), copy v);
-                var nullable = true;
-                match (*this.c.t.get(t)) {
-                    .REF(y) => { nullable = false; },
-                    default => {},
-                }
                 var back: std::string = {};
                 match (this.shape_of(x) ?? shape::VOID) {
                     .STRUCT(s) => { back = fmt3("vl_set_{}(L, {}, &{});", this.node_sname(s), S(idx), copy v); },
                     default => {},
                 }
-                if (nullable) {
-                    a.decl.append(fmt(" bool {}_null;", S(c)).as_str());
-                    a.get = fmt4("{}_null = lua_isnoneornil(L, {}); if (!{}_null) {{ {} }}", S(c), S(idx), S(c), this.lua_get(x, idx, v.as_str(), what));
-                    a.pass = fmt2("({}_null ? NULL : &{})", S(c), copy v);
-                    if (back.len() > 0) {
-                        a.after = fmt2("if (!{}_null) {{ {} }}", S(c), move back);
-                    }
-                } else {
+                if (this.is_ref(t)) {
                     a.get = this.lua_get(x, idx, v.as_str(), what);
                     a.pass = fmt("&{}", copy v);
                     a.after = move back;
+                } else {
+                    a.decl.append(fmt(" bool {}_null;", S(c)).as_str());
+                    a.get = fmt4("{}_null = lua_isnoneornil(L, {}); if (!{}_null) {{ {} }", S(c), S(idx), S(c), this.lua_get(x, idx, v.as_str(), what));
+                    a.pass = fmt2("({}_null ? NULL : &{})", S(c), copy v);
+                    if (back.len() > 0) {
+                        a.after = fmt2("if (!{}_null) {{ {} }", S(c), move back);
+                    }
                 }
                 return;
             }
-            // anything else behind a pointer: a light userdata from another call
-            a.decl = fmt2("{}{} = NULL;", spaced(this.c_prim(t, false)), S(c));
-            a.get = fmt4("if (!lua_isnoneornil(L, {})) {{ {} = vl_pointer(L, {}, {}); }}", S(idx), S(c), S(idx), S(what));
-            a.pass = S(c);
         },
-        .SLICE(x) => {
-            if (!this.node_simple(x)) {
-                return fail(NO_SPAN, fmt("a slice of {} can't come from Lua (numbers, bool, enums and structs of those can)", this.c.ty_name(x)));
-            }
-            a.decl = fmt2("{} {};", this.c_prim(t, false), S(c));
-            a.get = fmt4("{}.len = vl_seq(L, {}, {}); {}.ptr = ", S(c), S(idx), S(what), S(c));
-            a.get.append(fmt3("lua_newuserdatauv(L, sizeof *{}.ptr * ({}.len ? {}.len : 1), 0);", S(c), S(c), S(c)).as_str());
-            a.get.append(fmt3(" for (size_t i = 0; i < {}.len; i++) {{ lua_geti(L, {}, (lua_Integer)i + 1); {} lua_pop(L, 1); }}", S(c), S(idx), this.lua_get(x, "-1", fmt("{}.ptr[i]", S(c)).as_str(), what)).as_str());
-            a.pass = S(c);
-            // what Volt wrote into the elements comes back
-            a.after = fmt3("for (size_t i = 0; i < {}.len; i++) {{ {} lua_seti(L, {}, (lua_Integer)i + 1); }}", S(c), this.lua_push(x, fmt("{}.ptr[i]", S(c)).as_str()), S(idx));
-        },
-        .OPT(x) => {
-            if (!this.node_simple(x)) {
-                return fail(NO_SPAN, fmt("an optional {} can't come from Lua (numbers, bool, enums and structs of those can)", this.c.ty_name(x)));
-            }
-            a.decl = fmt2("{} {};", this.c_prim(t, false), S(c));
-            a.get = fmt4("memset(&{}, 0, sizeof {}); if (!lua_isnoneornil(L, {})) {{ {}.has = true; ", S(c), S(c), S(idx), S(c));
-            a.get.append(fmt("{} }", this.lua_get(x, idx, fmt("{}.value", S(c)).as_str(), what)).as_str());
-            a.pass = S(c);
-        },
-        .CLOSURE(i) => {
-            a.decl = fmt("struct vl_cb {}_cb;", S(c));
-            a.get = fmt4("luaL_checktype(L, {}, LUA_TFUNCTION); {}_cb.L = L; {}_cb.fn = {}; ", S(idx), S(c), S(c), S(idx));
-            a.get.append(fmt("{}_cb.err = LUA_NOREF;", S(c)).as_str());
-            a.pass = fmt2("vl_cb{}, &{}_cb", unum(@cast<u64>(i)), S(c));
-            a.cb = fmt("{}_cb", S(c));
-        },
-        default => { return fail(NO_SPAN, fmt("{} can't come from Lua", this.c.ty_name(t))); },
+        default => {},
     }
-    return;
+    // anything else crosses as itself (text as a str, an optional text as a str?)
+    val v = this.in_ty(t);
+    a.decl = fmt2("{} {};", this.c_prim(v, false), S(c));
+    a.get = this.lua_get(v, idx, c, what);
 }
 
-// statements pushing C result r (of type t), or raising its error
-attach fn lua_result(this: bind&, t: u32, r: str) -> compile_error!std::string {
-    if (t == VOID) {
-        return {};
-    }
-    if (this.node_simple(t)) {
-        return this.lua_push(t, r);
-    }
+// statements pushing C value r of type t (an export fn's result, or an argument of a Lua function
+// Volt calls): what Volt gives becomes Lua's (text a string, a handle, Volt's object or closure a
+// userdata that frees it, a list a sequence, then freed); E!T pushes its value when there's no error
+attach fn lua_out(this: bind&, t: u32, r: str) -> std::string {
     match (this.shape_of(t) ?? shape::VOID) {
-        .STR => { return fmt2("lua_pushlstring(L, (const char *){}.ptr, {}.len);", S(r), S(r)); },
-        .CSTR => { return fmt2("if ({}) {{ lua_pushstring(L, {}); }} else {{ lua_pushnil(L); }}", S(r), S(r)); },
+        .VOID => { return {}; },
         .TEXT(x) => { return fmt("vl_push_text(L, {});", S(r)); },
-        .HANDLE(s) => { return fmt2("vl_wrap_{}(L, {});", this.node_sname(s), S(r)); },
+        .HANDLE(s) => { return fmt2("vl_wrap(L, {}, false, {});", S(r), this.lua_mt(this.node_sname(s).as_str())); },
+        .TRAIT(i) => { return fmt3("vl_box(L, &{}, sizeof {}, {});", S(r), S(r), this.lua_mt(this.short(this.trait_of(t)).as_str())); },
+        .CLOSURE(i) => { return fmt3("vl_box(L, &{}, sizeof {}, {});", S(r), S(r), this.lua_mt(fmt("closure{}", unum(@cast<u64>(i))).as_str())); },
+        .LIST(x) => {
+            // text lent until the list is freed, each handle the caller's
+            val e = this.list_elem(t);
+            val at = fmt2("{}.ptr[i{}]", S(r), lua_depth(r));
+            var el = this.lua_push(this.view_of(e), at.as_str());
+            if (this.handle_of(e) != null) {
+                el = this.lua_out(e, at.as_str());
+            }
+            var s = this.lua_seq_out(this.view_of(e), r, move el);
+            s.append(fmt(" volt_list_free({});", S(r)).as_str());
+            return s;
+        },
         .OPT(x) => {
-            if (!this.node_simple(x)) {
-                return fail(NO_SPAN, fmt("an optional {} can't go to Lua", this.c.ty_name(x)));
+            if (this.handle_of(x) != null) {
+                return fmt2("if ({}) {{ {} }} else {{ lua_pushnil(L); }}", S(r), this.lua_out(x, r));
             }
-            return fmt2("if ({}.has) {{ {} }} else {{ lua_pushnil(L); }}", S(r), this.lua_push(x, fmt("{}.value", S(r)).as_str()));
-        },
-        .SLICE(x) => {
-            if (!this.node_simple(x)) {
-                return fail(NO_SPAN, fmt("a slice of {} can't go to Lua", this.c.ty_name(x)));
-            }
-            return fmt4("lua_createtable(L, {}.len < INT_MAX ? (int){}.len : 0, 0); for (size_t i = 0; i < {}.len; i++) {{ {} lua_seti(L, -2, (lua_Integer)i + 1); }}", S(r), S(r), S(r), this.lua_push(x, fmt("{}.ptr[i]", S(r)).as_str()));
+            return fmt2("if ({}.has) {{ {} }} else {{ lua_pushnil(L); }}", S(r), this.lua_out(x, fmt("{}.value", S(r)).as_str()));
         },
         .RESULT(e, x) => {
-            var out = fmt2("if ({}.error != 0) {{ vl_raise(L, {}.error); }}", S(r), S(r));
-            val value = try this.lua_result(x, fmt("{}.value", S(r)).as_str());
-            if (value.len() > 0) {
-                out.append(" ");
-                out.append(value.as_str());
-            }
-            return out;
-        },
-        .PTR(x) => { return fmt2("if ({}) {{ lua_pushlightuserdata(L, (void *){}); }} else {{ lua_pushnil(L); }}", S(r), S(r)); },
-        default => { return fail(NO_SPAN, fmt("{} can't go to Lua", this.c.ty_name(t))); },
-    }
-}
-
-// what frees owned C result r (of type t) when a callback's error is raised instead
-attach fn lua_drop(this: bind&, t: u32, r: str) -> std::string {
-    match (this.shape_of(t) ?? shape::VOID) {
-        .TEXT(x) => { return fmt("volt_text_free({}); ", S(r)); },
-        .HANDLE(s) => { return fmt2("{}({}); ", this.free_name(s), S(r)); },
-        .RESULT(e, x) => {
-            val inner = this.lua_drop(x, fmt("{}.value", S(r)).as_str());
-            if (inner.len() == 0) {
+            val v = this.lua_out(x, fmt("{}.value", S(r)).as_str());
+            if (v.len() == 0) {
                 return {};
             }
-            return fmt2("if ({}.error == 0) {{ {}}} ", S(r), move inner);
+            return fmt2("if ({}.error == 0) {{ {} }", S(r), move v);
         },
-        default => { return {}; },
+        default => { return this.lua_push(t, r); },
     }
 }
 
@@ -10123,23 +10259,42 @@ attach fn lua_count(this: bind&, t: u32) -> usize {
     }
 }
 
-// the C function behind one Lua function (a method's self is its argument 1)
-attach fn lua_fn(this: bind&, f: u32, out: std::string&) -> compile_error!void {
-    val info = this.c.fi(f);
-    var decls: std::string = {};
+// can Volt call into Lua (a callback, a Lua object)? Then each call into Volt raises what Lua raised
+attach fn lua_upcalls(this: bind&) -> bool {
+    return this.closures.len > 0 || this.traits.len > 0;
+}
+
+// vl_NAME, the C function behind a Lua function (lname in messages): its Lua arguments from first on
+// (1 is the userdata a closure or Volt's object is called on, which pre checks) converted to ps's C
+// forms, the call (callee with them, after self when there's one), the result pushed, then what a
+// Lua function raised during the call, then Volt's error
+attach fn lua_wrapper(this: bind&, name: str, lname: str, ps: std::vec<u32>&, names: std::vec<std::string>&, first: usize, pre: str, callee: str, self: str, ret: u32, out: std::string&) -> void {
+    var keeps = false;
+    for (p&) in ps.items() {
+        if (this.lua_keeps(*p)) {
+            keeps = true;
+        }
+    }
+    var kp = S("0");
+    out.append(fmt("\nstatic int vl_{}(lua_State *L) {{\n", S(name)).as_str());
+    out.append(pre);
+    // the arguments in their places (none missing: what conversions push goes after them)
+    val top = unum(@cast<u64>(first - 1 + ps.len));
+    out.append(fmt("    lua_settop(L, {});\n", copy top).as_str());
+    if (keeps) {
+        // the call's table, after the arguments
+        kp = S("keep");
+        out.append(fmt("    lua_newtable(L);\n    const int keep = {} + 1;\n", copy top).as_str());
+    }
     var gets: std::string = {};
-    var passes: std::string = {};
+    var passes = S(self);
     var afters: std::string = {};
-    var raises: std::string = {};
-    val drop = this.lua_drop(info.ret, "r");
-    for (k) in 0..info.params.len {
-        val p = info.params.at(k);
+    for (k) in 0..ps.len {
         var a: lua_arg = {};
-        val idx = unum(@cast<u64>(k + 1));
-        val what = fmt2("\"argument #{} to '{}'\"", copy idx, S(info.c_name));
-        val cname = fmt("p_{}", S(p.name));
-        try this.lua_arg_of(p.ty, idx.as_str(), cname.as_str(), what.as_str(), &a);
-        decls.append(fmt("    {}\n", copy a.decl).as_str());
+        val idx = unum(@cast<u64>(k + first));
+        val what = fmt2("\"argument #{} to '{}'\"", copy idx, S(lname));
+        this.lua_in(*ps.at(k), idx.as_str(), names.at(k).as_str(), what.as_str(), kp.as_str(), &a);
+        out.append(fmt("    {}\n", copy a.decl).as_str());
         gets.append(fmt("    {}\n", copy a.get).as_str());
         if (passes.len() > 0) {
             passes.append(", ");
@@ -10148,28 +10303,237 @@ attach fn lua_fn(this: bind&, f: u32, out: std::string&) -> compile_error!void {
         if (a.after.len() > 0) {
             afters.append(fmt("    {}\n", copy a.after).as_str());
         }
-        if (a.cb.len() > 0) {
-            raises.append(fmt3("    if ({}.err != LUA_NOREF) {{ {}vl_rethrow(L, {}.err); }}\n", copy a.cb, copy drop, copy a.cb).as_str());
-        }
     }
-    out.append(fmt("\nstatic int vl_f_{}(lua_State *L) {{\n", S(info.c_name)).as_str());
-    out.append(decls.as_str());
     out.append(gets.as_str());
-    val call = fmt2("{}({})", S(info.c_name), move passes);
-    if (info.ret == VOID) {
+    if (keeps) {
+        out.append("    vl_give_all(L, keep);\n");
+    }
+    val call = fmt2("{}({})", S(callee), move passes);
+    if (ret == VOID) {
         out.append(fmt("    {};\n", move call).as_str());
     } else {
-        out.append(fmt2("    {}r = {};\n", spaced(this.c_prim(info.ret, false)), move call).as_str());
+        out.append(fmt2("    {}r = {};\n", spaced(this.c_out(ret, false)), move call).as_str());
     }
-    // a callback's error first, then the result (or its error), then what Volt changed comes back
-    out.append(raises.as_str());
-    val res = try this.lua_result(info.ret, "r");
+    val res = this.lua_out(ret, "r");
     if (res.len() > 0) {
         out.append(fmt("    {}\n", copy res).as_str());
     }
+    if (this.lua_upcalls()) {
+        out.append("    vl_reraise(L);\n");
+    }
+    match (this.shape_of(ret) ?? shape::VOID) {
+        .RESULT(e, x) => { out.append("    if (r.error != 0) {\n        return vl_raise(L, r.error);\n    }\n"); },
+        default => {},
+    }
     out.append(afters.as_str());
-    out.append(fmt("    return {};\n}\n", unum(@cast<u64>(this.lua_count(info.ret)))).as_str());
-    return;
+    out.append(fmt("    return {};\n}\n", unum(@cast<u64>(this.lua_count(ret)))).as_str());
+}
+
+// what Volt gets for E!T when the Lua function giving it raised: E's first error
+attach fn lua_first_code(this: bind&, e: u32) -> std::string {
+    match (*this.c.t.get(e)) {
+        .ENUM(id) => {
+            if (this.c.ei(id).values.len > 0) {
+                return fmt("{}u", num(*this.c.ei(id).values.at(0)));
+            }
+        },
+        default => {},
+    }
+    val all = this.all_codes();
+    if (all.len > 0) {
+        return fmt("{}u", num(all.at(0).code));
+    }
+    return S("1u");
+}
+
+// statements converting what a Lua function gave back into C lvalue c of type r, as Volt takes it:
+// text copied, a handle given up, and for E!T Lua's `value` or `nil, err` (err an error's name, or an
+// error from Volt)
+attach fn lua_up_get(this: bind&, r: u32, c: str, what: str) -> std::string {
+    match (this.shape_of(r) ?? shape::VOID) {
+        .TEXT(x) => { return fmt2("{} = vl_give_text(L, -1, {});", S(c), S(what)); },
+        .HANDLE(s) => { return fmt3("{} = vl_take(vl_handle_in(L, -1, {}, 0, 2, {}));", S(c), this.lua_mt(this.node_sname(s).as_str()), S(what)); },
+        .RESULT(e, x) => {
+            var s = fmt3("if (!lua_isnil(L, -1)) {{ {}.error = {}(L, -1, {}); }} else {{ ", S(c), this.lua_code_fn(e), S(what));
+            s.append(fmt2("{} {}.error = 0; }", this.lua_get(x, "-2", fmt("{}.value", S(c)).as_str(), what), S(c)).as_str());
+            return s;
+        },
+        default => { return this.lua_get(r, "-1", c, what); },
+    }
+}
+
+// vl_up_NAME, the C function Volt calls for a Lua function (method: the Lua object's method of that
+// name), taking self (a vl_lua) then ps, giving r; and vl_run_NAME, which calls the Lua function and
+// converts what it gives back, in a protected call. When it raises, Volt gets a stand-in (zeros,
+// empty text, E!T's first error) and the error is kept for the call into Volt to raise; nothing
+// stands in for a handle, so the program stops
+attach fn lua_upcall(this: bind&, name: str, method: str, ps: std::vec<u32>&, r: u32) -> std::string {
+    val rc = this.c_prim(r, false);
+    val rs = this.shape_of(r) ?? shape::VOID;
+    var gives_handle = false;
+    var nres = S("1");
+    match (rs) {
+        .VOID => { nres = S("0"); },
+        .RESULT(e, x) => { nres = S("2"); },
+        .HANDLE(s) => { gives_handle = true; },
+        default => {},
+    }
+    var what = S("\"the callback's result\"");
+    if (method.len > 0) {
+        what = fmt("\"the result of method {}\"", S(method));
+    }
+    var out = fmt("\n// 1: where the result goes, 2: the Lua function (or object), then its arguments\nstatic inline int vl_run_{}(lua_State *L) {{\n", S(name));
+    if (r != VOID) {
+        out.append(fmt("    {}*out = lua_touserdata(L, 1);\n", spaced(copy rc)).as_str());
+    }
+    out.append("    lua_remove(L, 1);\n");
+    if (method.len > 0) {
+        out.append(fmt("    lua_getfield(L, 1, \"{}\");\n    lua_insert(L, 1);\n", S(method)).as_str());
+    }
+    out.append(fmt("    lua_call(L, lua_gettop(L) - 1, {});\n", move nres).as_str());
+    if (r != VOID) {
+        out.append(fmt("    {}\n", this.lua_up_get(r, "(*out)", what.as_str())).as_str());
+        // what the result points into (a string, a slice's memory) is held until the next one
+        var held = r;
+        match (rs) {
+            .RESULT(e, x) => { held = x; },
+            default => {},
+        }
+        if (held != VOID && !this.node_simple(held) && !this.owned_result(this.shape_of(held) ?? shape::VOID)) {
+            out.append("    vl_keep_results(L);\n");
+        }
+    }
+    out.append("    return 0;\n}\n");
+    var params = S("void *self");
+    for (k) in 0..ps.len {
+        params.append(fmt2(", {}a{}", spaced(this.c_in(*ps.at(k), false)), unum(@cast<u64>(k))).as_str());
+    }
+    out.append(fmt3("\nstatic inline {}vl_up_{}({}) {{\n    vl_lua *c = self;\n    lua_State *L = c->L;\n", spaced(copy rc), S(name), move params).as_str());
+    out.append(fmt("    vl_room(L, {});\n", unum(@cast<u64>(ps.len * 2 + 4))).as_str());
+    var ret = S("return;");
+    var place = S("NULL");
+    if (r != VOID) {
+        out.append(fmt("    {}out;\n    memset(&out, 0, sizeof out);\n", spaced(copy rc)).as_str());
+        match (rs) {
+            .TEXT(x) => { out.append("    out = vl_no_text();\n"); },
+            .RESULT(e, x) => { out.append(fmt("    out.error = {};\n", this.lua_first_code(e)).as_str()); },
+            default => {},
+        }
+        ret = S("return out;");
+        place = S("&out");
+    }
+    if (!gives_handle) {
+        // skipped: the handles Volt gives it are freed
+        var frees: std::string = {};
+        for (k) in 0..ps.len {
+            match (this.shape_of(*ps.at(k)) ?? shape::VOID) {
+                .HANDLE(s) => { frees.append(fmt2("        {}(a{});\n", this.free_name(s), unum(@cast<u64>(k))).as_str()); },
+                default => {},
+            }
+        }
+        out.append(fmt2("    if (vl_failed(L)) {{\n{}        {}\n    }}\n", move frees, copy ret).as_str());
+    }
+    // a handle Volt lends: a userdata closed when the Lua function returns
+    var lent = false;
+    var closes: std::string = {};
+    for (k) in 0..ps.len {
+        val h = this.lent_handle(*ps.at(k));
+        if (h) {
+            if (!lent) {
+                out.append("    int base = lua_gettop(L);\n");
+                lent = true;
+            }
+            val kk = unum(@cast<u64>(k));
+            out.append(fmt4("    vl_handle *u{} = vl_wrap(L, a{}, true, {});\n    int k{} = lua_gettop(L);\n", copy kk, copy kk, this.lua_mt(this.node_sname(h).as_str()), copy kk).as_str());
+            closes.append(fmt("    u{}->h = NULL;\n", copy kk).as_str());
+        }
+    }
+    out.append(fmt2("    lua_pushcfunction(L, vl_run_{});\n    lua_pushlightuserdata(L, {});\n    vl_push_lua(c);\n", S(name), move place).as_str());
+    for (k) in 0..ps.len {
+        val kk = unum(@cast<u64>(k));
+        if (this.lent_handle(*ps.at(k)) != null) {
+            out.append(fmt("    lua_pushvalue(L, k{});\n", copy kk).as_str());
+        } else {
+            out.append(fmt("    {}\n", this.lua_out(this.in_ty(*ps.at(k)), fmt("a{}", copy kk).as_str())).as_str());
+        }
+    }
+    out.append(fmt("    if (lua_pcall(L, {}, 0, 0) != LUA_OK) {{\n", unum(@cast<u64>(ps.len + 2))).as_str());
+    if (gives_handle) {
+        out.append("        vl_die(L);\n    }\n");
+    } else {
+        out.append("        vl_keep_error(L);\n    }\n");
+    }
+    if (lent) {
+        out.append(closes.as_str());
+        out.append("    lua_settop(L, base);\n");
+    }
+    out.append(fmt("    {}\n}\n", move ret).as_str());
+    return out;
+}
+
+// vl_close_NAME, close, __close and __gc (with a true upvalue) of a userdata of Volt's: free is the
+// statements freeing what it holds, once; what a Lua function raised meanwhile comes out of close and
+// __close (see vl_drop_begin)
+attach fn lua_close_fn(this: bind&, name: str, cn: str, free: str) -> std::string {
+    var out = fmt3("\n// close, __close and __gc: frees it (once)\nstatic int vl_close_{}(lua_State *L) {{\n    {}*o = luaL_checkudata(L, 1, {});\n", S(name), spaced(S(cn)), this.lua_mt(name));
+    if (!this.lua_upcalls()) {
+        out.append(fmt("{}    return 0;\n}\n", S(free)).as_str());
+        return out;
+    }
+    out.append(fmt("    int gc = lua_toboolean(L, lua_upvalueindex(1));\n    vl_drop_begin(L, gc);\n{}    vl_drop_end(L, gc);\n    return 0;\n}\n", S(free)).as_str());
+    return out;
+}
+
+// statements freeing Volt's object or closure o (first, its first field, is NULL once it's closed)
+fn lua_drop(first: str) -> std::string {
+    return fmt2("    if (o->{}) {{\n        o->{} = NULL;\n        if (o->drop) {{\n            o->drop(o->self);\n        }}\n    }}\n", S(first), S(first));
+}
+
+// a metatable in luaopen, left on the stack: __index (close, then the methods), __gc and __close
+attach fn lua_meta(this: bind&, name: str, methods: str) -> std::string {
+    var out = fmt2("    luaL_newmetatable(L, {});\n    lua_newtable(L);\n    lua_pushcfunction(L, vl_close_{});\n    lua_setfield(L, -2, \"close\");\n", this.lua_mt(name), S(name));
+    out.append(methods);
+    out.append(fmt2("    lua_setfield(L, -2, \"__index\");\n    lua_pushboolean(L, 1);\n    lua_pushcclosure(L, vl_close_{}, 1);\n    lua_setfield(L, -2, \"__gc\");\n    lua_pushcfunction(L, vl_close_{});\n    lua_setfield(L, -2, \"__close\");\n", S(name), S(name)).as_str());
+    return out;
+}
+
+// trait k: a Lua object with its methods, lent or given to Volt (vl_obj_T makes Volt's object of it,
+// whose table, vl_up_T_fn, calls the methods), and Volt's own object, a userdata whose methods call
+// its table
+attach fn lua_trait(this: bind&, k: u32, out: std::string&) -> void {
+    val t = *this.traits.at(k);
+    val tr = this.short(t);
+    val on = this.c_named(tr.as_str(), false);
+    var vt = copy tr;
+    vt.append("_vt");
+    val fns = this.fns_of(t);
+    var table: std::string = {};
+    var names: std::string = {};
+    for (f&) in fns.items() {
+        val n = fmt2("{}_{}", copy tr, S(f.name));
+        out.append(this.lua_upcall(n.as_str(), f.name, &f.params, f.ret).as_str());
+        if (table.len() > 0) {
+            table.append(", ");
+        }
+        table.append(fmt("vl_up_{}", copy n).as_str());
+        names.append(fmt("\"{}\", ", S(f.name)).as_str());
+    }
+    val mt = this.lua_mt(tr.as_str());
+    out.append(fmt3("\n// a {} for Volt from the value at idx: Volt's own (lent, or given: closed once the call takes it), or a\n// Lua object with its methods, lent (o: on the stack for the call) or given (held until Volt drops it)\nstatic inline {} vl_obj_{}(", copy tr, copy on, copy tr).as_str());
+    out.append(fmt3("lua_State *L, int idx, vl_lua *o, int keep, const char *what) {{\n    static const char *const fns[] = {{{}NULL}};\n    static const {} vt = {{{}}};\n", move names, this.c_named(vt.as_str(), false), move table).as_str());
+    out.append(fmt4("    {}*v = luaL_testudata(L, idx, {});\n    if (v) {{\n        vl_open(L, idx, {}, what);\n        vl_mark(L, keep, idx, o ? 1 : 2, what);\n        return *v;\n    }}\n    vl_check_obj(L, idx, \"{}\", fns, what);\n", spaced(copy on), copy mt, copy mt, copy tr).as_str());
+    out.append(fmt("    {} r = {{&vt, o, NULL};\n    if (!o) {{\n        r.self = vl_holder(L, idx, keep, what);\n        r.drop = vl_drop_lua;\n    }}\n    return r;\n}\n", copy on).as_str());
+    // Volt's own: each method calls its table
+    for (f&) in fns.items() {
+        val ln = fmt2("{}:{}", copy tr, S(f.name));
+        var pnames: std::vec<std::string> = {};
+        for (q) in 0..f.params.len {
+            put(&pnames, fmt("p_{}", unum(@cast<u64>(q))));
+        }
+        val pre = fmt3("    {}*self = vl_open(L, 1, {}, \"argument #1 to '{}'\");\n", spaced(copy on), copy mt, copy ln);
+        this.lua_wrapper(fmt2("m_{}_{}", copy tr, S(f.name)).as_str(), ln.as_str(), &f.params, &pnames, 2, pre.as_str(), fmt("self->vt->{}", S(f.name)).as_str(), "self->self", f.ret, out);
+    }
+    out.append(this.lua_close_fn(tr.as_str(), on.as_str(), lua_drop("vt").as_str()).as_str());
 }
 
 attach fn lua_text(this: bind&) -> compile_error!std::string {
@@ -10177,40 +10541,458 @@ attach fn lua_text(this: bind&) -> compile_error!std::string {
     val p = this.pkg;
     var out = fmt("// {}: generated by voltc bindings; a Lua (5.4 or later) C module for the Volt package.\n", S(p));
     out.append(fmt3("// Build it against the library and Lua's headers:\n//   cc -shared -fPIC {}_lua.c -L. -l{} -o {}.so\n", S(p), S(p), S(p)).as_str());
-    out.append(fmt("// then require \"{}\". An error is raised as a table with its name and code.\n#include <lua.h>\n#include <lauxlib.h>\n#include <limits.h>\n#include <stdlib.h>\n#include <string.h>\n\n", S(p)).as_str());
+    out.append(fmt("// then require \"{}\". An error is raised as a table with its name and code.\n#include <lua.h>\n#include <lauxlib.h>\n#include <limits.h>\n#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\n\n", S(p)).as_str());
     out.append(this.c_text().as_str());
-    out.append("\n// ---------- conversions: each raises an error naming what didn't fit ----------\n\n");
-    out.append("static inline lua_Integer vl_int(lua_State *L, int idx, lua_Integer lo, lua_Integer hi, const char *what) {\n    int ok = 0;\n    lua_Integer v = lua_tointegerx(L, idx, &ok);\n    if (!ok) {\n        luaL_error(L, \"%s: expected an integer, got %s\", what, luaL_typename(L, idx));\n    }\n    if (v < lo || v > hi) {\n        luaL_error(L, \"%s: %I doesn't fit\", what, v);\n    }\n    return v;\n}\n\n");
-    out.append("static inline lua_Number vl_num(lua_State *L, int idx, const char *what) {\n    int ok = 0;\n    lua_Number v = lua_tonumberx(L, idx, &ok);\n    if (!ok) {\n        luaL_error(L, \"%s: expected a number, got %s\", what, luaL_typename(L, idx));\n    }\n    return v;\n}\n\n");
-    out.append("static inline bool vl_bool(lua_State *L, int idx, const char *what) {\n    if (!lua_isboolean(L, idx)) {\n        luaL_error(L, \"%s: expected a boolean, got %s\", what, luaL_typename(L, idx));\n    }\n    return lua_toboolean(L, idx);\n}\n\n");
-    out.append("// a string's bytes (Lua keeps them while the string is on the stack)\nstatic inline const char *vl_str(lua_State *L, int idx, size_t *len, const char *what) {\n    if (lua_type(L, idx) != LUA_TSTRING) {\n        luaL_error(L, \"%s: expected a string, got %s\", what, luaL_typename(L, idx));\n    }\n    return lua_tolstring(L, idx, len);\n}\n\n");
-    out.append("// a sequence's length\nstatic inline size_t vl_seq(lua_State *L, int idx, const char *what) {\n    if (!lua_istable(L, idx)) {\n        luaL_error(L, \"%s: expected a table, got %s\", what, luaL_typename(L, idx));\n    }\n    return (size_t)luaL_len(L, idx);\n}\n\n");
-    out.append("static inline void *vl_pointer(lua_State *L, int idx, const char *what) {\n    if (!lua_islightuserdata(L, idx)) {\n        luaL_error(L, \"%s: expected a pointer from this library, got %s\", what, luaL_typename(L, idx));\n    }\n    return lua_touserdata(L, idx);\n}\n");
+    out.append(fmt3("\n// the error metatable; where the registry keeps the error a Lua function raised while Volt called\n// it, and what the last one gave Volt\n#define VL_ERROR \"{}.error\"\n#define VL_RAISED \"{}.raised\"\n#define VL_KEPT \"{}.kept\"\n", S(p), S(p), S(p)).as_str());
+    out.append(r"""
+
+        // ---------- conversions: each raises an error naming what didn't fit ----------
+
+        static inline lua_Integer vl_int(lua_State *L, int idx, lua_Integer lo, lua_Integer hi, const char *what) {
+            int ok = 0;
+            lua_Integer v = lua_tointegerx(L, idx, &ok);
+            if (!ok) {
+                luaL_error(L, "%s: expected an integer, got %s", what, luaL_typename(L, idx));
+            }
+            if (v < lo || v > hi) {
+                luaL_error(L, "%s: %I doesn't fit", what, v);
+            }
+            return v;
+        }
+
+        static inline lua_Number vl_num(lua_State *L, int idx, const char *what) {
+            int ok = 0;
+            lua_Number v = lua_tonumberx(L, idx, &ok);
+            if (!ok) {
+                luaL_error(L, "%s: expected a number, got %s", what, luaL_typename(L, idx));
+            }
+            return v;
+        }
+
+        static inline bool vl_bool(lua_State *L, int idx, const char *what) {
+            if (!lua_isboolean(L, idx)) {
+                luaL_error(L, "%s: expected a boolean, got %s", what, luaL_typename(L, idx));
+            }
+            return lua_toboolean(L, idx);
+        }
+
+        // a string's bytes (Lua keeps them while the string is on the stack, or in a table there)
+        static inline const char *vl_str(lua_State *L, int idx, size_t *len, const char *what) {
+            if (lua_type(L, idx) != LUA_TSTRING) {
+                luaL_error(L, "%s: expected a string, got %s", what, luaL_typename(L, idx));
+            }
+            return lua_tolstring(L, idx, len);
+        }
+
+        // a sequence's length: its n field when it has one (as table.pack gives, for nil elements), else #
+        static inline size_t vl_seq(lua_State *L, int idx, const char *what) {
+            if (!lua_istable(L, idx)) {
+                luaL_error(L, "%s: expected a table, got %s", what, luaL_typename(L, idx));
+            }
+            lua_Integer n = lua_getfield(L, idx, "n") == LUA_TNUMBER && lua_isinteger(L, -1) ? lua_tointeger(L, -1) : -1;
+            lua_pop(L, 1);
+            if (n < 0) {
+                n = luaL_len(L, idx);
+            }
+            if (n < 0) {
+                luaL_error(L, "%s: a negative length", what);
+            }
+            return (size_t)n;
+        }
+
+        // memory for n elements of size bytes: a userdata left on the stack (collected after the call)
+        static inline void *vl_buffer(lua_State *L, size_t size, size_t n) {
+            if (n > SIZE_MAX / size) {
+                luaL_error(L, "a sequence of %I elements is too long", (lua_Integer)n);
+            }
+            luaL_checkstack(L, 1, "too many slices in one call");
+            return lua_newuserdatauv(L, n ? size * n : 1, 0);
+        }
+
+        static inline void *vl_pointer(lua_State *L, int idx, const char *what) {
+            if (!lua_islightuserdata(L, idx)) {
+                luaL_error(L, "%s: expected a pointer from this library, got %s", what, luaL_typename(L, idx));
+            }
+            return lua_touserdata(L, idx);
+        }
+
+        // ---------- userdata, and what a call into Volt takes ----------
+        // Every userdata here starts with what it holds (a handle, Volt's object's table, a closure's
+        // function), NULL once it's closed or given to Volt
+
+        // an export struct's userdata: its handle, and whether Volt only lends it to Lua (then Lua never
+        // frees it, and it's closed when the Lua function it was lent to returns)
+        typedef struct {
+            void *h;
+            bool lent;
+        } vl_handle;
+
+        static inline vl_handle *vl_wrap(lua_State *L, void *h, bool lent, const char *mt) {
+            vl_handle *u = lua_newuserdatauv(L, sizeof *u, 0);
+            u->h = h;
+            u->lent = lent;
+            luaL_setmetatable(L, mt);
+            return u;
+        }
+
+        // pushes a userdata holding a copy of Volt's object or closure v (n bytes)
+        static inline void vl_box(lua_State *L, const void *v, size_t n, const char *mt) {
+            memcpy(lua_newuserdatauv(L, n, 0), v, n);
+            luaL_setmetatable(L, mt);
+        }
+
+        // the open userdata at idx with metatable mt ("pkg.name"): an error when it's something else, or
+        // closed
+        static inline void *vl_open(lua_State *L, int idx, const char *mt, const char *what) {
+            void **u = luaL_testudata(L, idx, mt);
+            if (!u) {
+                luaL_error(L, "%s: expected a %s, got %s", what, strchr(mt, '.') + 1, luaL_typename(L, idx));
+            }
+            if (!*u) {
+                luaL_error(L, "%s: this %s is closed", what, strchr(mt, '.') + 1);
+            }
+            return u;
+        }
+
+        // the table at keep (0: none) of what a call passes Volt, which holds it for the call: a value
+        // Volt takes (how 2: given, 3: copied in for the call) goes once, one it lends (1) any number of
+        // times; 4 marks the holder of a Lua object given to Volt
+        static inline void vl_mark(lua_State *L, int keep, int idx, int how, const char *what) {
+            if (!keep) {
+                return;
+            }
+            idx = lua_absindex(L, idx);
+            lua_pushvalue(L, idx);
+            int had = lua_rawget(L, keep) == LUA_TNIL ? 0 : (int)lua_tointeger(L, -1);
+            lua_pop(L, 1);
+            if (had && (had != 1 || how != 1)) {
+                luaL_error(L, "%s: Volt takes this %s, so it can't be passed twice in one call", what, luaL_typename(L, idx));
+            }
+            lua_pushvalue(L, idx);
+            lua_pushinteger(L, how);
+            lua_rawset(L, keep);
+        }
+
+        // the export struct's userdata at idx (metatable mt), its handle lent to Volt (how 1), given (2,
+        // which only an owner can) or copied in for the call (3)
+        static inline vl_handle *vl_handle_in(lua_State *L, int idx, const char *mt, int keep, int how, const char *what) {
+            vl_handle *u = vl_open(L, idx, mt, what);
+            if (how == 2 && u->lent) {
+                luaL_error(L, "%s: this %s is only lent to Lua", what, strchr(mt, '.') + 1);
+            }
+            vl_mark(L, keep, idx, how, what);
+            return u;
+        }
+
+        // a handle a Lua function gives Volt: its userdata is closed
+        static inline void *vl_take(vl_handle *u) {
+            void *h = u->h;
+            u->h = NULL;
+            return h;
+        }
+
+        // a Lua value Volt calls: at idx on L's stack while a call lends it, or (given) in the registry
+        // (ref) as the user value of this holder
+        typedef struct {
+            lua_State *L;
+            int idx;
+            int ref;
+        } vl_lua;
+
+        static inline void vl_push_lua(vl_lua *o) {
+            if (o->ref == LUA_NOREF) {
+                lua_pushvalue(o->L, o->idx);
+                return;
+            }
+            lua_rawgeti(o->L, LUA_REGISTRYINDEX, o->ref);
+            lua_getiuservalue(o->L, -1, 1);
+            lua_remove(o->L, -2);
+        }
+
+        // a holder of the Lua value at idx, given to Volt: Volt calls it on the main thread, and it's
+        // anchored in the registry once the call takes it (vl_give_all) until Volt drops it
+        static inline vl_lua *vl_holder(lua_State *L, int idx, int keep, const char *what) {
+            idx = lua_absindex(L, idx);
+            vl_lua *o = lua_newuserdatauv(L, sizeof *o, 1);
+            lua_rawgeti(L, LUA_REGISTRYINDEX, LUA_RIDX_MAINTHREAD);
+            o->L = lua_tothread(L, -1);
+            lua_pop(L, 1);
+            o->idx = 0;
+            o->ref = LUA_NOREF;
+            lua_pushvalue(L, idx);
+            lua_setiuservalue(L, -2, 1);
+            vl_mark(L, keep, -1, 4, what);
+            return o;
+        }
+
+        // gives Volt what the call takes, once every argument has converted: each userdata given (2) is
+        // closed, each holder (4) anchored
+        static inline void vl_give_all(lua_State *L, int keep) {
+            lua_pushnil(L);
+            while (lua_next(L, keep)) {
+                lua_Integer how = lua_tointeger(L, -1);
+                lua_pop(L, 1);
+                if (how == 2) {
+                    *(void **)lua_touserdata(L, -1) = NULL;
+                } else if (how == 4) {
+                    vl_lua *o = lua_touserdata(L, -1);
+                    lua_pushvalue(L, -1);
+                    o->ref = luaL_ref(L, LUA_REGISTRYINDEX);
+                }
+            }
+        }
+
+        // ---------- Lua functions Volt calls ----------
+
+        // the first error a Lua function raised while Volt called it: kept in the registry (Volt gets a
+        // stand-in, and the later calls into Lua are skipped) until the call into Volt is back and
+        // raises it
+        static inline void vl_keep_error(lua_State *L) {
+            if (lua_isnil(L, -1)) {
+                lua_pop(L, 1);
+                lua_pushliteral(L, "a Lua function Volt called raised nil");
+            }
+            if (lua_getfield(L, LUA_REGISTRYINDEX, VL_RAISED) == LUA_TNIL) {
+                lua_pop(L, 1);
+                lua_setfield(L, LUA_REGISTRYINDEX, VL_RAISED);
+            } else {
+                lua_pop(L, 2);
+            }
+        }
+
+        static inline bool vl_failed(lua_State *L) {
+            bool failed = lua_getfield(L, LUA_REGISTRYINDEX, VL_RAISED) != LUA_TNIL;
+            lua_pop(L, 1);
+            return failed;
+        }
+
+        // after a call into Volt: raises what a Lua function raised during it
+        static inline void vl_reraise(lua_State *L) {
+            if (lua_getfield(L, LUA_REGISTRYINDEX, VL_RAISED) != LUA_TNIL) {
+                lua_pushnil(L);
+                lua_setfield(L, LUA_REGISTRYINDEX, VL_RAISED);
+                lua_error(L);
+            }
+            lua_pop(L, 1);
+        }
+
+        // around a drop: in __gc (gc), a call into Volt's pending error stays pending and what the drop
+        // raised is dropped (the collector runs whenever Lua allocates); in close and __close, what it
+        // raised is raised
+        static inline void vl_drop_begin(lua_State *L, int gc) {
+            if (gc) {
+                lua_getfield(L, LUA_REGISTRYINDEX, VL_RAISED);
+                lua_pushnil(L);
+                lua_setfield(L, LUA_REGISTRYINDEX, VL_RAISED);
+            }
+        }
+
+        static inline void vl_drop_end(lua_State *L, int gc) {
+            if (gc) {
+                lua_setfield(L, LUA_REGISTRYINDEX, VL_RAISED);
+            } else {
+                vl_reraise(L);
+            }
+        }
+
+        // a callback: a function, or anything with __call (a closure Volt gave back)
+        static inline void vl_callable(lua_State *L, int idx, const char *what) {
+            if (lua_isfunction(L, idx)) {
+                return;
+            }
+            if (luaL_getmetafield(L, idx, "__call") != LUA_TNIL) {
+                lua_pop(L, 1);
+                return;
+            }
+            luaL_error(L, "%s: expected a function, got %s", what, luaL_typename(L, idx));
+        }
+
+        // holds what a Lua function gave Volt (strings, slices' memory: the stack) until the next one
+        // gives its own
+        // ponytail: Volt reads a result before it calls Lua again; hold more if a fn keeps two
+        static inline void vl_keep_results(lua_State *L) {
+            int n = lua_gettop(L);
+            lua_createtable(L, n, 0);
+            for (int i = 1; i <= n; i++) {
+                lua_pushvalue(L, i);
+                lua_rawseti(L, -2, i);
+            }
+            lua_setfield(L, LUA_REGISTRYINDEX, VL_KEPT);
+        }
+
+        // room for n values on the stack, to call a Lua function: without it nothing runs, so the program
+        // stops, as a Volt panic does (Lua's stack holds a million)
+        static inline void vl_room(lua_State *L, int n) {
+            if (!lua_checkstack(L, n)) {
+                fprintf(stderr, "panic: Lua's stack is full\n");
+                exit(101);
+            }
+        }
+
+        // a Lua function that had to give Volt a handle raised: nothing can stand in, so the program
+        // stops, as a Volt panic does
+        static inline void vl_die(lua_State *L) {
+            const char *m = lua_tostring(L, -1);
+            fprintf(stderr, "panic: a Lua function giving Volt a handle raised: %s\n", m ? m : luaL_typename(L, -1));
+            exit(101);
+        }
+
+        // checks the value at idx is a Lua object with each method in fns (a table or a userdata)
+        static inline void vl_check_obj(lua_State *L, int idx, const char *trait, const char *const *fns, const char *what) {
+            if (!lua_istable(L, idx) && lua_type(L, idx) != LUA_TUSERDATA) {
+                luaL_error(L, "%s: expected a %s, got %s", what, trait, luaL_typename(L, idx));
+            }
+            for (; *fns; fns++) {
+                if (lua_getfield(L, idx, *fns) == LUA_TNIL) {
+                    luaL_error(L, "%s: expected a %s, got a %s without %s", what, trait, luaL_typename(L, idx), *fns);
+                }
+                lua_pop(L, 1);
+            }
+        }
+
+        // Volt is done with a Lua object it was given: its close method runs (when it has one), and it's
+        // let go
+        static inline int vl_run_close(lua_State *L) {
+            if (lua_getfield(L, 1, "close") != LUA_TNIL) {
+                lua_insert(L, 1);
+                lua_call(L, 1, 0);
+            }
+            return 0;
+        }
+
+        static inline void vl_drop_lua(void *self) {
+            vl_lua *o = self;
+            lua_State *L = o->L;
+            vl_room(L, 3);
+            lua_pushcfunction(L, vl_run_close);
+            vl_push_lua(o);
+            if (lua_pcall(L, 1, 0, 0) != LUA_OK) {
+                vl_keep_error(L);
+            }
+            luaL_unref(L, LUA_REGISTRYINDEX, o->ref);
+        }
+
+        """);
     if (this.texts.len > 0) {
-        out.append("\n// owned text: a Lua string, and the text freed\nstatic inline void vl_push_text(lua_State *L, volt_text t) {\n    lua_pushlstring(L, (const char *)t.ptr, t.len);\n    volt_text_free(t);\n}\n");
-    }
-    if (this.closures.len > 0) {
-        out.append("\n// raises again what a callback raised\nstatic inline int vl_rethrow(lua_State *L, int ref) {\n    lua_rawgeti(L, LUA_REGISTRYINDEX, ref);\n    luaL_unref(L, LUA_REGISTRYINDEX, ref);\n    return lua_error(L);\n}\n");
+        out.append(r"""
+            // owned text: a Lua string, and the text freed
+            static inline void vl_push_text(lua_State *L, volt_text t) {
+                lua_pushlstring(L, (const char *)t.ptr, t.len);
+                volt_text_free(t);
+            }
+
+            // text for Volt, copied from the string at idx (Volt frees it)
+            static inline volt_text vl_give_text(lua_State *L, int idx, const char *what) {
+                size_t n;
+                const char *s = vl_str(L, idx, &n, what);
+                char *b = malloc(n ? n : 1);
+                if (!b) {
+                    luaL_error(L, "out of memory");
+                }
+                memcpy(b, s, n);
+                volt_text t = {(const uint8_t *)b, n, b, free};
+                return t;
+            }
+
+            static inline void vl_no_drop(void *owner) {
+                (void)owner;
+            }
+
+            // what Volt gets for text when the Lua function giving it raised
+            static inline volt_text vl_no_text(void) {
+                volt_text t = {(const uint8_t *)"", 0, NULL, vl_no_drop};
+                return t;
+            }
+
+            """);
     }
     // errors: a table {name = NAME, code = N} whose tostring is its name
-    out.append("\nstatic inline const char *vl_error_name(uint32_t code) {\n    switch (code) {\n");
+    out.append("// ---------- errors: a table {name = NAME, code = N}, whose tostring is its name ----------\n\nstatic inline const char *vl_error_name(uint32_t code) {\n    switch (code) {\n");
     for (c&) in this.all_codes().items() {
         out.append(fmt2("    case {}u: return \"{}\";\n", num(c.code), S(c.name)).as_str());
     }
-    out.append(fmt("    }\n    return \"ERROR\";\n}\n\n// raises the error object for a Volt error code\nstatic inline int vl_raise(lua_State *L, uint32_t code) {\n    lua_createtable(L, 0, 2);\n    lua_pushstring(L, vl_error_name(code));\n    lua_setfield(L, -2, \"name\");\n    lua_pushinteger(L, (lua_Integer)code);\n    lua_setfield(L, -2, \"code\");\n    luaL_setmetatable(L, \"{}.error\");\n    return lua_error(L);\n}\n", S(p)).as_str());
-    out.append("\nstatic int vl_error_tostring(lua_State *L) {\n    lua_getfield(L, 1, \"name\");\n    return 1;\n}\n");
+    out.append(r"""
+            }
+            return "ERROR";
+        }
+
+        static inline void vl_push_error(lua_State *L, uint32_t code) {
+            lua_createtable(L, 0, 2);
+            lua_pushstring(L, vl_error_name(code));
+            lua_setfield(L, -2, "name");
+            lua_pushinteger(L, (lua_Integer)code);
+            lua_setfield(L, -2, "code");
+            luaL_setmetatable(L, VL_ERROR);
+        }
+
+        static inline int vl_raise(lua_State *L, uint32_t code) {
+            vl_push_error(L, code);
+            return lua_error(L);
+        }
+
+        static int vl_error_tostring(lua_State *L) {
+            lua_getfield(L, 1, "name");
+            return 1;
+        }
+
+        // is the value at idx an error from Volt?
+        static inline bool vl_is_error(lua_State *L, int idx) {
+            bool is = false;
+            if (lua_getmetatable(L, idx)) {
+                luaL_getmetatable(L, VL_ERROR);
+                is = lua_rawequal(L, -1, -2);
+                lua_pop(L, 2);
+            }
+            return is;
+        }
+
+        // the name of the error a Lua function gives Volt: a string (one of the module's error sets'
+        // names), or an error from Volt
+        static inline const char *vl_error_of(lua_State *L, int idx, const char *what) {
+            idx = lua_absindex(L, idx);
+            if (lua_istable(L, idx)) {
+                lua_getfield(L, idx, "name");
+                lua_replace(L, idx);
+            }
+            return vl_str(L, idx, NULL, what);
+        }
+
+        """);
+    // each error set's codes by name (vl_code_any: any error's)
+    var sets: std::vec<std::string> = {};
+    var codes: std::vec<std::vec<code_name>> = {};
+    for (et&) in this.codes.items() {
+        match (*this.c.t.get(*et)) {
+            .ENUM(e) => {
+                val info = this.c.ei(e);
+                var cs: std::vec<code_name> = {};
+                for (i) in 0..info.names.len {
+                    put(&cs, { code: *info.values.at(i), name: *info.names.at(i), set: this.local(info.name) });
+                }
+                put(&sets, this.short(*et));
+                put(&codes, move cs);
+            },
+            default => {},
+        }
+    }
+    put(&sets, S("any"));
+    put(&codes, this.all_codes());
+    for (i) in 0..sets.len {
+        out.append(fmt("\nstatic inline uint32_t vl_code_{}(lua_State *L, int idx, const char *what) {{\n    const char *n = vl_error_of(L, idx, what);\n", copy *sets.at(i)).as_str());
+        for (c&) in codes.at(i).items() {
+            out.append(fmt2("    if (strcmp(n, \"{}\") == 0) {{\n        return {}u;\n    }}\n", S(c.name), num(c.code)).as_str());
+        }
+        out.append(fmt("    luaL_error(L, \"%s: %s isn't an error of {}\", what, n);\n    return 0;\n}\n", copy *sets.at(i)).as_str());
+    }
     // structs: to and from tables
     for (s&) in this.structs.items() {
-        if (!this.node_simple(this.c.t.intern(tyk::STRUCT(*s)))) {
-            continue;
-        }
         val sn = this.node_sname(*s);
         val cn = this.c_named(this.c.si(*s).name, false);
         out.append(fmt2("\nstatic inline void vl_get_{}(lua_State *L, int idx, {} *out, const char *what) {{\n    idx = lua_absindex(L, idx);\n    if (!lua_istable(L, idx)) {{\n", copy sn, copy cn).as_str());
         out.append("        luaL_error(L, \"%s: expected a table, got %s\", what, luaL_typename(L, idx));\n    }\n");
         for (f&) in this.c.si(*s).fields.items() {
             val fw = fmt2("\"field {} of {}\"", S(f.name), copy sn);
-            out.append(fmt2("    lua_getfield(L, idx, \"{}\");\n    {}\n    lua_pop(L, 1);\n", S(f.name), this.lua_get(f.ty, "-1", fmt("out->{}", S(f.name)).as_str(), fw.as_str())).as_str());
+            out.append(fmt2("    {{\n        lua_getfield(L, idx, \"{}\");\n        int at = lua_gettop(L);\n        {}\n        lua_remove(L, at);\n    }}\n", S(f.name), this.lua_get(f.ty, "at", fmt("out->{}", S(f.name)).as_str(), fw.as_str())).as_str());
         }
         out.append("}\n");
         out.append(fmt2("\nstatic inline void vl_set_{}(lua_State *L, int idx, const {} *in) {{\n    idx = lua_absindex(L, idx);\n", copy sn, copy cn).as_str());
@@ -10220,78 +11002,82 @@ attach fn lua_text(this: bind&) -> compile_error!std::string {
         out.append("}\n");
         out.append(fmt3("\nstatic inline void vl_new_{}(lua_State *L, const {} *in) {{\n    lua_newtable(L);\n    vl_set_{}(L, -1, in);\n}}\n", copy sn, copy cn, copy sn).as_str());
     }
-    // callbacks: the C function a Volt closure parameter calls; it calls the Lua function (and
-    // converts its result) in a protected call, vl_runN
-    if (this.closures.len > 0) {
-        out.append("\n// a Lua function passed for a callback: its place on the stack during the call, and the\n// registry reference of the first error it raised (later calls are skipped)\nstruct vl_cb {\n    lua_State *L;\n    int fn;\n    int err;\n};\n");
-    }
-    for (i) in 0..this.closures.len {
-        match (*this.c.t.get(*this.closures.at(i))) {
-            .FN_VAL(ps&, r) => {
-                val n = unum(@cast<u64>(i));
-                out.append(fmt("\n// 1: the Lua function, 2: where its result goes, then its arguments\nstatic int vl_run{}(lua_State *L) {{\n", copy n).as_str());
-                if (r != VOID) {
-                    if (!this.node_simple(r)) {
-                        return fail(NO_SPAN, fmt("a callback returning {} can't call Lua", this.c.ty_name(r)));
-                    }
-                    out.append(fmt("    {}*out = lua_touserdata(L, 2);\n    lua_remove(L, 2);\n    lua_call(L, lua_gettop(L) - 1, 1);\n", spaced(this.c_prim(r, false))).as_str());
-                    out.append(fmt("    {}\n    return 0;\n}\n", this.lua_get(r, "-1", "*out", "\"the callback's result\"")).as_str());
-                } else {
-                    out.append("    lua_remove(L, 2);\n    lua_call(L, lua_gettop(L) - 1, 0);\n    return 0;\n}\n");
-                }
-                var params = S("void *user");
-                for (k) in 0..ps.len {
-                    params.append(fmt2(", {}a{}", spaced(this.c_prim(*ps.at(k), false)), unum(@cast<u64>(k))).as_str());
-                }
-                out.append(fmt3("\nstatic {}vl_cb{}({}) {{\n    struct vl_cb *c = user;\n    lua_State *L = c->L;\n", spaced(this.c_prim(r, false)), copy n, move params).as_str());
-                var ret = S("return;");
-                var place = S("NULL");
-                if (r != VOID) {
-                    out.append(fmt("    {}out;\n    memset(&out, 0, sizeof out);\n", spaced(this.c_prim(r, false))).as_str());
-                    ret = S("return out;");
-                    place = S("&out");
-                }
-                out.append(fmt2("    if (c->err != LUA_NOREF) {{\n        {}\n    }}\n    lua_pushcfunction(L, vl_run{});\n    lua_pushvalue(L, c->fn);\n", copy ret, copy n).as_str());
-                out.append(fmt("    lua_pushlightuserdata(L, {});\n", move place).as_str());
-                for (k) in 0..ps.len {
-                    val ak = fmt("a{}", unum(@cast<u64>(k)));
-                    match (this.shape_of(*ps.at(k)) ?? shape::VOID) {
-                        .STR => { out.append(fmt2("    lua_pushlstring(L, (const char *){}.ptr, {}.len);\n", copy ak, copy ak).as_str()); },
-                        default => {
-                            if (!this.node_simple(*ps.at(k))) {
-                                return fail(NO_SPAN, fmt("a callback taking {} can't call Lua", this.c.ty_name(*ps.at(k))));
-                            }
-                            out.append(fmt("    {}\n", this.lua_push(*ps.at(k), ak.as_str())).as_str());
-                        },
-                    }
-                }
-                out.append(fmt2("    if (lua_pcall(L, {}, 0, 0) != LUA_OK) {{\n        c->err = luaL_ref(L, LUA_REGISTRYINDEX);\n    }}\n    {}\n}}\n", unum(@cast<u64>(ps.len + 2)), move ret).as_str());
-            },
-            default => {},
+    // callbacks: the C function each closure parameter's Lua function is called through
+    var cbs: std::vec<u32> = {};
+    for (f&) in this.exports().items() {
+        for (q&) in this.c.fi(*f).params.items() {
+            match (this.shape_of(q.ty) ?? shape::VOID) {
+                .CLOSURE(i) => { add_u32(&cbs, i); },
+                default => {},
+            }
         }
     }
-    // classes: a full userdata holding the handle (NULL once closed)
+    for (i&) in cbs.items() {
+        var ps: std::vec<u32> = {};
+        val r = this.fn_parts(*this.closures.at(*i), &ps);
+        out.append(this.lua_upcall(fmt("cb{}", unum(@cast<u64>(*i))).as_str(), "", &ps, r).as_str());
+    }
+    // classes: a userdata holding the handle
     for (s&) in this.handles.items() {
         val sn = this.node_sname(*s);
-        val cn = this.handle_c(*s, false);
-        val mt = fmt2("{}.{}", S(p), copy sn);
-        out.append(fmt3("\n// export struct {}\nstatic inline {}vl_check_{}(lua_State *L, int idx, const char *what) {{\n", S(this.c.si(*s).name), spaced(copy cn), copy sn).as_str());
-        out.append(fmt3("    {}*h = luaL_testudata(L, idx, \"{}\");\n    if (!h) {{\n        luaL_error(L, \"%s: expected a {}, got %s\", what, luaL_typename(L, idx));\n    }}\n", spaced(copy cn), copy mt, copy sn).as_str());
-        out.append(fmt("    if (!*h) {{\n        luaL_error(L, \"%s: this {} is closed\", what);\n    }}\n    return *h;\n}}\n", copy sn).as_str());
-        out.append(fmt3("\nstatic inline void vl_wrap_{}(lua_State *L, {}h) {{\n    {}*u = lua_newuserdatauv(L, sizeof h, 0);\n", copy sn, spaced(copy cn), spaced(copy cn)).as_str());
-        out.append(fmt("    *u = h;\n    luaL_setmetatable(L, \"{}\");\n}\n", copy mt).as_str());
-        out.append(fmt3("\n// close, __close and __gc: frees the handle (once)\nstatic int vl_close_{}(lua_State *L) {{\n    {}*h = luaL_checkudata(L, 1, \"{}\");\n", copy sn, spaced(copy cn), copy mt).as_str());
-        out.append(fmt("    if (*h) {{\n        {}(*h);\n        *h = NULL;\n    }}\n    return 0;\n}}\n", this.free_name(*s)).as_str());
+        // the handle is freed once, and never a lent one
+        val free = fmt("    if (o->h) {{\n        if (!o->lent) {{\n            {}(o->h);\n        }}\n        o->h = NULL;\n    }}\n", this.free_name(*s));
+        out.append(this.lua_close_fn(sn.as_str(), "vl_handle", free.as_str()).as_str());
+    }
+    // traits
+    for (k) in 0..this.traits.len {
+        this.lua_trait(@cast<u32>(k), &out);
+    }
+    // closures given back: a userdata called like a function
+    for (i) in 0..this.closures.len {
+        if (!has_u32(&this.closures_out, @cast<u32>(i))) {
+            continue;
+        }
+        var ps: std::vec<u32> = {};
+        val r = this.fn_parts(*this.closures.at(i), &ps);
+        val n = fmt("closure{}", unum(@cast<u64>(i)));
+        val cn = this.c_named(n.as_str(), false);
+        var pnames: std::vec<std::string> = {};
+        for (q) in 0..ps.len {
+            put(&pnames, fmt("p_{}", unum(@cast<u64>(q))));
+        }
+        val pre = fmt3("    {}*self = vl_open(L, 1, {}, \"argument #1 to '{}'\");\n", spaced(copy cn), this.lua_mt(n.as_str()), copy n);
+        this.lua_wrapper(n.as_str(), n.as_str(), &ps, &pnames, 2, pre.as_str(), "self->call", "self->self", r, &out);
+        out.append(this.lua_close_fn(n.as_str(), cn.as_str(), lua_drop("call").as_str()).as_str());
     }
     // the functions
     for (e&) in ents.items() {
         if (e.free_of == null) {
-            try this.lua_fn(e.f, &out);
+            val info = this.c.fi(e.f);
+            var ps: std::vec<u32> = {};
+            var pnames: std::vec<std::string> = {};
+            for (q&) in info.params.items() {
+                put(&ps, q.ty);
+                put(&pnames, fmt("p_{}", S(q.name)));
+            }
+            this.lua_wrapper(fmt("f_{}", S(info.c_name)).as_str(), info.c_name, &ps, &pnames, 1, "", info.c_name, "", info.ret, &out);
         }
     }
     // the module: its functions, enums (tables of numbers), error sets (tables of names) and classes
     out.append(fmt("\nLUAMOD_API int luaopen_{}(lua_State *L) {{\n", S(p)).as_str());
-    out.append(fmt("    luaL_newmetatable(L, \"{}.error\");\n    lua_pushcfunction(L, vl_error_tostring);\n    lua_setfield(L, -2, \"__tostring\");\n    lua_pop(L, 1);\n    lua_newtable(L);\n", S(p)).as_str());
+    out.append("    luaL_newmetatable(L, VL_ERROR);\n    lua_pushcfunction(L, vl_error_tostring);\n    lua_setfield(L, -2, \"__tostring\");\n    lua_pop(L, 1);\n");
+    for (k) in 0..this.traits.len {
+        val tr = this.short(*this.traits.at(k));
+        var methods: std::string = {};
+        for (f&) in this.fns_of(*this.traits.at(k)).items() {
+            methods.append(fmt3("    lua_pushcfunction(L, vl_m_{}_{});\n    lua_setfield(L, -2, \"{}\");\n", copy tr, S(f.name), S(f.name)).as_str());
+        }
+        out.append(this.lua_meta(tr.as_str(), methods.as_str()).as_str());
+        out.append("    lua_pop(L, 1);\n");
+    }
+    for (i) in 0..this.closures.len {
+        if (has_u32(&this.closures_out, @cast<u32>(i))) {
+            val n = fmt("closure{}", unum(@cast<u64>(i)));
+            out.append(this.lua_meta(n.as_str(), "").as_str());
+            out.append(fmt("    lua_pushcfunction(L, vl_{});\n    lua_setfield(L, -2, \"__call\");\n    lua_pop(L, 1);\n", copy n).as_str());
+        }
+    }
+    out.append("    lua_newtable(L);\n");
     for (e&) in ents.items() {
         if (e.free_of != null || this.class_of(e.f) != null) {
             continue;
@@ -10323,8 +11109,7 @@ attach fn lua_text(this: bind&) -> compile_error!std::string {
     for (s&) in this.handles.items() {
         val sn = this.node_sname(*s);
         // its metatable (__index: the methods) and its table (what makes one: counter.new(...))
-        out.append(fmt2("    luaL_newmetatable(L, \"{}.{}\");\n    lua_newtable(L);\n", S(p), copy sn).as_str());
-        out.append(fmt("    lua_pushcfunction(L, vl_close_{});\n    lua_setfield(L, -2, \"close\");\n", copy sn).as_str());
+        var methods: std::string = {};
         var statics: std::string = {};
         for (e&) in ents.items() {
             if (e.free_of != null) {
@@ -10333,13 +11118,13 @@ attach fn lua_text(this: bind&) -> compile_error!std::string {
             val m = this.member_of(e.f, *s) ?? continue;
             val line = fmt2("    lua_pushcfunction(L, vl_f_{});\n    lua_setfield(L, -2, \"{}\");\n", S(this.c.fi(e.f).c_name), S(m));
             if (this.node_is_method(e.f, *s)) {
-                out.append(line.as_str());
+                methods.append(line.as_str());
             } else {
                 statics.append(line.as_str());
             }
         }
-        out.append(fmt2("    lua_setfield(L, -2, \"__index\");\n    lua_pushcfunction(L, vl_close_{});\n    lua_setfield(L, -2, \"__gc\");\n    lua_pushcfunction(L, vl_close_{});\n", copy sn, copy sn).as_str());
-        out.append("    lua_setfield(L, -2, \"__close\");\n    lua_pop(L, 1);\n    lua_newtable(L);\n");
+        out.append(this.lua_meta(sn.as_str(), methods.as_str()).as_str());
+        out.append("    lua_pop(L, 1);\n    lua_newtable(L);\n");
         out.append(statics.as_str());
         out.append(fmt("    lua_setfield(L, -2, \"{}\");\n", copy sn).as_str());
     }
@@ -12691,7 +13476,7 @@ attach fn rb_text(this: bind&) -> compile_error!std::string {
 // the bindings of package pkg in lang (see the top of the file; node, js and ts are a Node-API
 // addon, its loader and its types; json is the model itself)
 attach fn bindings(this: checker&, pkg: str, lang: str) -> compile_error!std::string {
-    var b: bind = { c: this, pkg: pkg, wide: lang == "c" || lang == "cpp" || lang == "rust" || lang == "zig" || lang == "go" || lang == "python" || lang == "pyi" || lang == "java" || lang == "csharp" || lang == "node" || lang == "js" || lang == "ts" || lang == "json" };
+    var b: bind = { c: this, pkg: pkg, wide: lang == "c" || lang == "cpp" || lang == "rust" || lang == "zig" || lang == "go" || lang == "python" || lang == "pyi" || lang == "java" || lang == "csharp" || lang == "node" || lang == "js" || lang == "ts" || lang == "lua" || lang == "json" };
     val fns = b.exports();
     if (fns.len == 0) {
         return fail(NO_SPAN, fmt("package {} has no export fns to make bindings for", S(pkg)));

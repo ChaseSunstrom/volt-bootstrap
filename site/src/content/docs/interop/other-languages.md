@@ -151,7 +151,7 @@ Each language gets these in its own style:
 | C# | throws a `VoltException` subclass per error set | `string` | `Span<T>` (text and handles from any `IEnumerable`), `T?` | an `IDisposable` class over a `SafeHandle` | `Action` or `Func` |
 | Java | throws a `VoltException` subclass per error set | `String` | arrays, `null` | an `AutoCloseable` class, freed by a `Cleaner` if not closed | a functional interface |
 | Go | `(T, error)`, with an `*Error` value per code for `errors.Is` | `string` | slices; `*T` in, `(T, bool)` out (a handle: `nil` for none) | a type with `Close`, and a finalizer | a `func` |
-| Lua | raises a table with its `name` and `code` | a string | sequences (written back), `nil` | a userdata with `close()`, `<close>` and `__gc` | any function |
+| Lua | raises a table with its `name` and `code` (a callback gives `nil, err`) | a string | sequences (written back), `nil` | a userdata with `close()`, `<close>` and `__gc` | any function |
 | Dart | throws a `VoltError` subclass per error set | `String` | `List`s (written back), `null` | a class with `close()`, and a `NativeFinalizer` | any function |
 | Swift | throws its error set's enum | `String` | `inout` arrays (written back), `T?` | a class with `close()`, freed by `deinit` | a closure |
 | Kotlin/Native | throws a `VoltException` subclass per error set | `String` | primitive arrays (in place) or `List`s, `T?` | an `AutoCloseable` class, freed by a `Cleaner` if not closed | a lambda |
@@ -179,12 +179,13 @@ C and Rust call `biggest_i32` and `biggest_f64`; C++ calls `biggest`, an overloa
 
 ### Every shape
 
-C, C++, Rust, Zig, Go, Python, Java, C# and JavaScript take more than the other languages (whose
-bindings name what they don't take); Go's forms are under [Go](#go), Python's on
+C, C++, Rust, Zig, Go, Python, Java, C#, JavaScript and Lua take more than the other languages
+(whose bindings name what they don't take); Go's forms are under [Go](#go), Python's on
 [its page](/volt-bootstrap/interop/python/#python-calls-volt), Java's on
 [its page](/volt-bootstrap/interop/java/#java-calls-volt), C#'s on
 [its page](/volt-bootstrap/interop/dotnet/#every-shape), JavaScript's on
-[Node.js's](/volt-bootstrap/interop/node/#every-shape):
+[Node.js's](/volt-bootstrap/interop/node/#every-shape), Lua's on
+[its page](/volt-bootstrap/interop/lua/#every-shape):
 
 - **Owned values as parameters.** Text (`std::string`) comes in as a `str` that Volt copies (a
   `&str` in Rust, a `[]const u8` in Zig); a handle by value is given to the fn, which deletes it

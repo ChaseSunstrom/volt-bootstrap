@@ -368,9 +368,9 @@ fn bindings_round_trip() {
         // the names voltc lib adds itself
         ("export struct thing { n: i32; }\nexport fn thing_new() -> thing { return { n: 1 }; }\nexport fn thing_free(t: thing&) -> void {}\n", "c", "makes thing_free itself"),
         ("namespace __export { fn x() -> void {} }\nexport fn one() -> i32 { return 1; }\n", "c", "namespace __export"),
-        // a slice of what crosses converted has no owner as a result; lists aren't in Lua yet
+        // a slice of what crosses converted has no owner as a result; lists aren't in Kotlin yet
         ("use std::string;\nexport fn bad_view(xs: std::string[..]) -> std::string[..] { return xs; }\n", "c", "which nothing would own"),
-        ("export fn bad_list() -> std::vec<i32> { return {}; }\n", "lua", "has no C form"),
+        ("export fn bad_list() -> std::vec<i32> { return {}; }\n", "kotlin", "has no C form"),
         // a slice a Python function gives back would dangle once it returns
         ("export fn bad_cb(f: fn(i32) -> i32[..]) -> i32 { return f(1)[0]; }\n", "python", "a Python function can't"),
     ] {
@@ -385,13 +385,13 @@ const SHAPES_OUT: &str = "biggest 9 1.5\naccount bea 300\nvisit 301 get 301\nclo
 
 #[test]
 fn bindings_shapes() {
-    // what C, C++, Rust, Zig, Go, Python, Java, C# and JavaScript call beyond the plain shapes: a generic's instances, a struct that owns text
+    // what C, C++, Rust, Zig, Go, Python, Java, C#, JavaScript and Lua call beyond the plain shapes: a generic's instances, a struct that owns text
     // held by a handle with its methods, owned values passed in, a trait implemented on either side,
     // closures taking and giving text and handles, closures given back. The library is a leak-checked
     // build, and leak_report.c (or the client) prints how many of its allocations are live when the client is done
     let e = Env::new("shapes");
     let pkg = "shapelib=shapelib/lib";
-    for (lang, file) in [("c", "shapelib.h"), ("cpp", "shapelib.hpp"), ("rust", "shapelib.rs"), ("zig", "shapelib.zig"), ("go", "shapelib.go"), ("python", "shapelib.py"), ("pyi", "shapelib.pyi"), ("java", "shapelib.java"), ("node", "shapelib_node.c"), ("js", "shapelib.js"), ("ts", "shapelib.d.ts")] {
+    for (lang, file) in [("c", "shapelib.h"), ("cpp", "shapelib.hpp"), ("rust", "shapelib.rs"), ("zig", "shapelib.zig"), ("go", "shapelib.go"), ("python", "shapelib.py"), ("pyi", "shapelib.pyi"), ("java", "shapelib.java"), ("node", "shapelib_node.c"), ("js", "shapelib.js"), ("ts", "shapelib.d.ts"), ("lua", "shapelib_lua.c")] {
         ok(e.voltc(&["bindings", "shapelib", "--pkg", pkg, "--lang", lang, "-o", &e.path(file)]), &format!("voltc bindings --lang {lang}"));
     }
     // Rust: client_shapes.rs next to its shapelib.rs module, with the leak report as an object
@@ -509,6 +509,18 @@ fn bindings_shapes() {
             }
             None => eprintln!("node isn't installed (or has no headers): skipping the JavaScript shapes client"),
         }
+        // Lua: the C module with the leak report in it (it runs when lua_close unloads the module,
+        // after the finalizers), and client_shapes.lua
+        if let Some(inc) = lua_include() {
+            let ldir = e.dir.join(format!("lua-{backend}"));
+            std::fs::create_dir_all(&ldir).unwrap();
+            ok(run(Command::new("cc").args(["-shared", "-fPIC", "-Wall", "-Wextra", "-Werror", "-I", inc]).arg(e.dir.join("shapelib_lua.c")).args(["leak_report.c", "-I", &e.path(""), "-L", &lib, "-lshapelib", &rpath, "-o"]).arg(ldir.join("shapelib.so"))), "cc shapelib_lua.c");
+            let o = Command::new("lua").arg(Path::new(ROOT).join("tests/interop/client_shapes.lua")).env("LUA_CPATH", ldir.join("?.so")).output().unwrap();
+            assert_eq!(String::from_utf8_lossy(&o.stderr), "volt live: 0\n", "client_shapes.lua ({backend}): the library's allocations at exit");
+            assert_eq!(ok(o, "lua client_shapes.lua"), format!("checked true OVERDRAWN\nlimit true OVERDRAWN\nsign positive not positive\n{SHAPES_OUT}"), "client_shapes.lua ({backend})");
+        } else {
+            eprintln!("lua (5.4 or later, with its headers) isn't installed: skipping the Lua shapes client");
+        }
     }
     // the TypeScript types: checked by tsc when it's installed, else parsed (node 23.2+ strips them)
     if Command::new("tsc").arg("--version").output().is_ok_and(|o| o.status.success()) {
@@ -538,7 +550,7 @@ fn bindings_shapes() {
     // the other languages' bindings say which languages take every shape
     let o = e.voltc(&["bindings", "shapelib", "--pkg", pkg, "--lang", "kotlin"]);
     let err = String::from_utf8_lossy(&o.stderr);
-    assert!(!o.status.success() && err.contains("C# and JavaScript"), "{err}");
+    assert!(!o.status.success() && err.contains("JavaScript and Lua"), "{err}");
 }
 
 #[test]
