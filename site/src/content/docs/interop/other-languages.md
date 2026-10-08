@@ -154,7 +154,7 @@ Each language gets these in its own style:
 | Lua | raises a table with its `name` and `code` (a callback gives `nil, err`) | a string | sequences (written back), `nil` | a userdata with `close()`, `<close>` and `__gc` | any function |
 | Dart | throws a `VoltError` subclass per error set | `String` | `List`s (written back), `null` | a class with `close()`, and a `NativeFinalizer` | any function |
 | Swift | throws its error set's enum | `String` | `inout` arrays (written back), `T?` | a class with `close()`, freed by `deinit` | a closure |
-| Kotlin/Native | throws a `VoltException` subclass per error set | `String` | primitive arrays (in place) or `List`s, `T?` | an `AutoCloseable` class, freed by a `Cleaner` if not closed | a lambda |
+| Kotlin/Native | throws a `VoltException` subclass per error set | `String` | primitive arrays (in place) or `List`s, `T?` | an `AutoCloseable` class, freed by a `Cleaner` if not closed | any function (one throws `VoltException.of(code)` to give Volt an error) |
 | Ruby | raises a `Mod::Error` subclass per error set | a `String` | `Array`s (written back), `nil` | a class with `close`, freed by the GC | a block or a `Proc` |
 
 A generic export fn exports the instances it names, one `@instance` per instance with a type per
@@ -179,8 +179,8 @@ C and Rust call `biggest_i32` and `biggest_f64`; C++ calls `biggest`, an overloa
 
 ### Every shape
 
-C, C++, Rust, Zig, Go, Python, Java, C#, JavaScript and Lua take more than the other languages
-(whose bindings name what they don't take); Go's forms are under [Go](#go), Python's on
+Every language's bindings take more than the plain shapes; Go's forms are under [Go](#go),
+Kotlin/Native's under [Kotlin/Native](#kotlinnative), Python's on
 [its page](/volt-bootstrap/interop/python/#python-calls-volt), Java's on
 [its page](/volt-bootstrap/interop/java/#java-calls-volt), C#'s on
 [its page](/volt-bootstrap/interop/dotnet/#every-shape), JavaScript's on
@@ -421,8 +421,40 @@ counter("clicks").use { it.add(2) }           // freed by use, close or a Cleane
 
 Structs are data classes, copied in and out (and back, when Volt takes one by reference). A slice
 of numbers is a primitive array (`IntArray`, `DoubleArray`, ...), which Volt reads and writes in
-place; a slice of structs is a `List`. Enums are enum classes, error sets `VoltException`
-subclasses, and callbacks are lambdas: an exception one throws comes out of the Volt call.
+place; a slice of anything else (structs, enums, text) is a `List`. Enums are enum classes, error
+sets `VoltException` subclasses, and callbacks are any function: an exception one throws comes out
+of the Volt call. An `E!T` passed as a value (a parameter, a callback's argument, a field) is a
+`Result<T>`. A method named like Kotlin's own (`close`, `toString`, `hashCode`, `equals`) gets a
+`_`: an export struct's `close` is `close_()`, since `close()` frees it.
+
+Kotlin/Native takes [every shape](#every-shape). Owned text goes in as a `String` (Volt copies it),
+and a handle by value as its class, which gives the handle up. A trait is an interface: any Kotlin
+object implementing it passes where Volt takes one, lent for the call or given (kept until Volt is
+done with it, then closed if it's `AutoCloseable`), and one Volt gives back is a `volt_T` with the
+methods and `close()`. A callback takes and gives `String`s and handles (one Volt lends is a view,
+closed once the callback returns), and one giving `E!T` throws `VoltException.of(code)` for an
+error; a closure given back is a `ClosureN`, a function you can call (and pass as a callback) with
+`close()`. A `std::vec<T>` comes back as a `List` and goes in from one (handles in it are given
+up), slices of text and handles go in from `List<String>` and `List<T>`, and optional text and
+handles are `T?`. A call converts all its arguments and checks what it gives up (open, its own, not
+in use by a running call, once) before anything is given; a running call's handles can't be closed
+or given meanwhile. An exception in Kotlin code Volt calls doesn't unwind through Volt: Volt gets
+a stand-in, and the call throws it once it's back (when the code had to give Volt a handle, there's
+none to give, and the program ends).
+
+```kotlin
+class Circle(var r: Double) : shapelib.shape {
+    override fun area() = 3 * r * r
+    override fun name() = "circle"
+    override fun grow(by: Double) { r += by }
+}
+
+println(describe(Circle(1.0)))                // circle of area 3
+make_square(2.0).use { sq ->                  // a volt_shape
+    doubler().use { d -> println("${sq.area()} ${d(21)}") } // 4.0 42
+}
+account.open("ann").use { println(owners(listOf(it))) } // [ann]
+```
 
 ### Ruby
 

@@ -360,17 +360,12 @@ fn bindings_round_trip() {
     let o = e.voltc(&["bindings", "bad", "--pkg", &format!("bad={}", bad.display()), "--lang", "c"]);
     let err = String::from_utf8_lossy(&o.stderr);
     assert!(!o.status.success() && err.contains("bad_pair") && err.contains("(i32, i32)"), "{err}");
-    // in the other languages, owned values only come out and closures only go in (C and C++ take
-    // both: see bindings_shapes)
     for (src, lang, want) in [
-        ("export struct thing { n: i32; }\nexport fn bad_in(t: thing) -> i32 { return t.n; }\n", "kotlin", "only take as a result"),
-        ("fn twice(x: i32) -> i32 { return x * 2; }\nexport fn bad_out() -> fn(i32) -> i32 { return twice; }\n", "kotlin", "only take closures as parameters"),
         // the names voltc lib adds itself
         ("export struct thing { n: i32; }\nexport fn thing_new() -> thing { return { n: 1 }; }\nexport fn thing_free(t: thing&) -> void {}\n", "c", "makes thing_free itself"),
         ("namespace __export { fn x() -> void {} }\nexport fn one() -> i32 { return 1; }\n", "c", "namespace __export"),
-        // a slice of what crosses converted has no owner as a result; lists aren't in Kotlin yet
+        // a slice of what crosses converted has no owner as a result
         ("use std::string;\nexport fn bad_view(xs: std::string[..]) -> std::string[..] { return xs; }\n", "c", "which nothing would own"),
-        ("export fn bad_list() -> std::vec<i32> { return {}; }\n", "kotlin", "has no C form"),
         // a slice a Python function gives back would dangle once it returns
         ("export fn bad_cb(f: fn(i32) -> i32[..]) -> i32 { return f(1)[0]; }\n", "python", "a Python function can't"),
     ] {
@@ -401,14 +396,18 @@ const SHAPES_OUT: &str = "biggest 9 1.5\naccount bea 300\nvisit 301 get 301\nclo
 
 #[test]
 fn bindings_shapes() {
-    // what C, C++, Rust, Zig, Go, Python, Java, C#, JavaScript and Lua call beyond the plain shapes: a generic's instances, a struct that owns text
+    // what every language calls beyond the plain shapes: a generic's instances, a struct that owns text
     // held by a handle with its methods, owned values passed in, a trait implemented on either side,
     // closures taking and giving text and handles, closures given back. The library is a leak-checked
     // build, and leak_report.c (or the client) prints how many of its allocations are live when the client is done
     let e = Env::new("shapes");
     let pkg = "shapelib=shapelib/lib";
-    for (lang, file) in [("c", "shapelib.h"), ("cpp", "shapelib.hpp"), ("rust", "shapelib.rs"), ("zig", "shapelib.zig"), ("go", "shapelib.go"), ("python", "shapelib.py"), ("pyi", "shapelib.pyi"), ("java", "shapelib.java"), ("node", "shapelib_node.c"), ("js", "shapelib.js"), ("ts", "shapelib.d.ts"), ("lua", "shapelib_lua.c")] {
+    for (lang, file) in [("c", "shapelib.h"), ("cpp", "shapelib.hpp"), ("rust", "shapelib.rs"), ("zig", "shapelib.zig"), ("go", "shapelib.go"), ("python", "shapelib.py"), ("pyi", "shapelib.pyi"), ("java", "shapelib.java"), ("node", "shapelib_node.c"), ("js", "shapelib.js"), ("ts", "shapelib.d.ts"), ("lua", "shapelib_lua.c"), ("kotlin", "shapelib.kt")] {
         ok(e.voltc(&["bindings", "shapelib", "--pkg", pkg, "--lang", lang, "-o", &e.path(file)]), &format!("voltc bindings --lang {lang}"));
+    }
+    let konanc = local_tool("kotlinc-native", "-version");
+    if konanc.is_none() {
+        eprintln!("kotlinc-native isn't installed: skipping the Kotlin shapes client");
     }
     // Rust: client_shapes.rs next to its shapelib.rs module, with the leak report as an object
     std::fs::copy(Path::new(ROOT).join("tests/interop/client_shapes.rs"), e.dir.join("client_shapes.rs")).unwrap();
@@ -537,6 +536,30 @@ fn bindings_shapes() {
         } else {
             eprintln!("lua (5.4 or later, with its headers) isn't installed: skipping the Lua shapes client");
         }
+        // Kotlin/Native: cinterop makes the C header package cshapelib, and client_shapes.kt with the
+        // generated shapelib.kt is compiled once, with the leak report linked in (each backend's
+        // library found through LD_LIBRARY_PATH); after SHAPES_OUT it prints what only it checks
+        if let Some(konanc) = &konanc {
+            let kdir = e.dir.join("kotlin");
+            if backend == "c" {
+                std::fs::create_dir_all(&kdir).unwrap();
+                for f in ["shapelib.h", "shapelib.kt"] {
+                    std::fs::copy(e.dir.join(f), kdir.join(f)).unwrap();
+                }
+                std::fs::copy(Path::new(ROOT).join("tests/interop/client_shapes.kt"), kdir.join("client_shapes.kt")).unwrap();
+                std::fs::write(kdir.join("shapelib.def"), "headers = shapelib.h\npackage = cshapelib\n").unwrap();
+                let k = |tool: &Path, args: &[&str]| Command::new(tool).args(args).current_dir(&kdir).output().unwrap();
+                ok(k(&konanc.with_file_name("cinterop"), &["-def", "shapelib.def", "-compiler-option", "-I.", "-o", "shapelib_c"]), "cinterop shapelib.def");
+                let link = format!("{} -L{lib} -lshapelib --allow-shlib-undefined", e.path("leak_report.o"));
+                let o = k(konanc, &["shapelib.kt", "client_shapes.kt", "-l", "shapelib_c.klib", "-linker-options", &link, "-o", "client"]);
+                assert!(!String::from_utf8_lossy(&o.stderr).contains("warning:"), "kotlinc-native warns: {}", String::from_utf8_lossy(&o.stderr));
+                ok(o, "kotlinc-native client_shapes.kt");
+            }
+            let o = Command::new(kdir.join("client.kexe")).env("LD_LIBRARY_PATH", &lib).output().unwrap();
+            assert_eq!(String::from_utf8_lossy(&o.stderr), "volt live: 0\n", "client_shapes.kt ({backend}): the library's allocations at exit");
+            let tail = "raised shout twice name\nrefused this account is in use by a running call; this account is given twice; this account is closed\nkept ann 5\nclosed this account is closed\n";
+            assert_eq!(ok(o, "client_shapes.kt"), format!("checked true OVERDRAWN\nlimit true OVERDRAWN\nsign positive not positive\n{SHAPES_OUT}{tail}"), "client_shapes.kt ({backend})");
+        }
     }
     // the TypeScript types: checked by tsc when it's installed, else parsed (node 23.2+ strips them)
     if Command::new("tsc").arg("--version").output().is_ok_and(|o| o.status.success()) {
@@ -563,10 +586,40 @@ fn bindings_shapes() {
     for want in [r#"{"kind":"trait","name":"shape","c_name":"shapelib_shape","table":"shapelib_shape_vt""#, r#"{"kind":"object","trait":"shape","owned":false}"#, r#""name":"biggest_i32""#, r#""class":"account","method":"deposit""#] {
         assert!(json.contains(want), "the JSON model lacks {want}:\n{json}");
     }
-    // the other languages' bindings say which languages take every shape
-    let o = e.voltc(&["bindings", "shapelib", "--pkg", pkg, "--lang", "kotlin"]);
-    let err = String::from_utf8_lossy(&o.stderr);
-    assert!(!o.status.success() && err.contains("JavaScript and Lua"), "{err}");
+}
+
+/// Kotlin/Native calls what shapelib's clients don't (ktshapes/lib): the library leak-checked on both
+/// backends, client_ktshapes.kt compiled once (each backend's library found through LD_LIBRARY_PATH)
+#[test]
+fn bindings_kotlin_shapes() {
+    let Some(konanc) = local_tool("kotlinc-native", "-version") else {
+        eprintln!("kotlinc-native isn't installed: skipping the Kotlin ktshapes client");
+        return;
+    };
+    let e = Env::new("ktshapes");
+    let pkg = "ktshapes=ktshapes/lib";
+    for (lang, file) in [("c", "ktshapes.h"), ("kotlin", "ktshapes.kt")] {
+        ok(e.voltc(&["bindings", "ktshapes", "--pkg", pkg, "--lang", lang, "-o", &e.path(file)]), &format!("voltc bindings ktshapes --lang {lang}"));
+    }
+    ok(run(Command::new("cc").args(["-c", "leak_report.c", "-o"]).arg(e.dir.join("leak_report.o"))), "cc -c leak_report.c");
+    std::fs::copy(Path::new(ROOT).join("tests/interop/client_ktshapes.kt"), e.dir.join("client_ktshapes.kt")).unwrap();
+    std::fs::write(e.dir.join("ktshapes.def"), "headers = ktshapes.h\npackage = cktshapes\n").unwrap();
+    let k = |tool: &Path, args: &[&str]| Command::new(tool).args(args).current_dir(&e.dir).output().unwrap();
+    ok(k(&konanc.with_file_name("cinterop"), &["-def", "ktshapes.def", "-compiler-option", "-I.", "-o", "ktshapes_c"]), "cinterop ktshapes.def");
+    for backend in ["c", "llvm"] {
+        let lib = e.path(backend);
+        std::fs::create_dir_all(e.dir.join(backend)).unwrap();
+        ok(e.voltc(&["lib", "ktshapes", "--pkg", pkg, "--shared", "--leak-check", "--backend", backend, "-o", &format!("{lib}/libktshapes.so")]), "voltc lib ktshapes --shared");
+        if backend == "c" {
+            let link = format!("{} -L{lib} -lktshapes --allow-shlib-undefined", e.path("leak_report.o"));
+            let o = k(&konanc, &["ktshapes.kt", "client_ktshapes.kt", "-l", "ktshapes_c.klib", "-linker-options", &link, "-o", "client"]);
+            assert!(!String::from_utf8_lossy(&o.stderr).contains("warning:"), "kotlinc-native warns: {}", String::from_utf8_lossy(&o.stderr));
+            ok(o, "kotlinc-native client_ktshapes.kt");
+        }
+        let o = Command::new(e.dir.join("client.kexe")).env("LD_LIBRARY_PATH", &lib).output().unwrap();
+        assert_eq!(String::from_utf8_lossy(&o.stderr), "volt live: 0\n", "client_ktshapes.kt ({backend}): the library's allocations at exit");
+        assert_eq!(ok(o, "client_ktshapes.kt"), "measure 50 kotlin\nsizer gone\nfixed 50 fixed\neach [0, 1, 2]\nfailed each 8\nclose_ 700 7\nshut\nlabel n7\nslice 6\nresult 5 9\nmaybe yes null\ncstr 5\nsome [1, null]\ngetter 8\nbig [5, 9]\nlend 8\ngive 7\nrec 14\nbumped 2 9 ab tag BLUE 1\nmade 6\ntotal2 6\ntext 3\nblues 2\nfirst_two [4, 5]\nmaybe_get 5 -1\nslice_back 3\nstr_result 4 -1 -1\ntext_in 4\nlist_or [a] BAD\nsizer_or fixed\ngone 18\n", "client_ktshapes.kt ({backend})");
+    }
 }
 
 #[test]
