@@ -381,13 +381,13 @@ const SHAPES_OUT: &str = "biggest 9 1.5\naccount bea 300\nvisit 301 get 301\nclo
 
 #[test]
 fn bindings_shapes() {
-    // what C, C++, Rust, Zig and Java call beyond the plain shapes: a generic's instances, a struct that owns text
+    // what C, C++, Rust, Zig, Java and JavaScript call beyond the plain shapes: a generic's instances, a struct that owns text
     // held by a handle with its methods, owned values passed in, a trait implemented on either side,
     // closures taking and giving text and handles, closures given back. The library is a leak-checked
     // build, and leak_report.c prints how many of its allocations are live when the client is done
     let e = Env::new("shapes");
     let pkg = "shapelib=shapelib/lib";
-    for (lang, file) in [("c", "shapelib.h"), ("cpp", "shapelib.hpp"), ("rust", "shapelib.rs"), ("zig", "shapelib.zig"), ("java", "shapelib.java")] {
+    for (lang, file) in [("c", "shapelib.h"), ("cpp", "shapelib.hpp"), ("rust", "shapelib.rs"), ("zig", "shapelib.zig"), ("java", "shapelib.java"), ("node", "shapelib_node.c"), ("js", "shapelib.js"), ("ts", "shapelib.d.ts")] {
         ok(e.voltc(&["bindings", "shapelib", "--pkg", pkg, "--lang", lang, "-o", &e.path(file)]), &format!("voltc bindings --lang {lang}"));
     }
     // Rust: client_shapes.rs next to its shapelib.rs module, with the leak report as an object
@@ -440,6 +440,34 @@ fn bindings_shapes() {
             }
             None => eprintln!("no JDK 22 or later (javac): skipping the Java shapes client"),
         }
+        // JavaScript: the Node-API addon, with the leak report linked into it (printed when node
+        // exits, after the objects still held are finalized)
+        match node_include() {
+            Some(inc) => {
+                let ndir = e.dir.join(format!("node-{backend}"));
+                std::fs::create_dir_all(&ndir).unwrap();
+                std::fs::copy(e.dir.join("shapelib.js"), ndir.join("shapelib.js")).unwrap();
+                std::fs::copy(Path::new(ROOT).join("tests/interop/client_shapes.js"), ndir.join("client_shapes.js")).unwrap();
+                ok(run(Command::new("cc").args(["-shared", "-fPIC", "-I", &inc]).arg(e.dir.join("shapelib_node.c")).args(["leak_report.c", "-L", &lib, "-lshapelib", &rpath, "-o"]).arg(ndir.join("shapelib.node"))), "cc shapelib_node.c");
+                let o = Command::new("node").arg("client_shapes.js").current_dir(&ndir).output().unwrap();
+                assert_eq!(String::from_utf8_lossy(&o.stderr), "volt live: 0\n", "client_shapes.js ({backend}): the library's allocations at exit");
+                assert_eq!(ok(o, "node client_shapes.js"), format!("checked true OVERDRAWN\nlimit true OVERDRAWN\nsign positive not positive\n{SHAPES_OUT}"), "client_shapes.js ({backend})");
+                // Bun runs the same addon (it exits without running the library's destructors, so
+                // without the leak report)
+                if Command::new("bun").arg("--version").output().is_ok_and(|o| o.status.success()) {
+                    let b = Command::new("bun").arg("client_shapes.js").current_dir(&ndir).output().unwrap();
+                    assert_eq!(ok(b, "bun client_shapes.js"), format!("checked true OVERDRAWN\nlimit true OVERDRAWN\nsign positive not positive\n{SHAPES_OUT}"), "bun client_shapes.js ({backend})");
+                }
+            }
+            None => eprintln!("node isn't installed (or has no headers): skipping the JavaScript shapes client"),
+        }
+    }
+    // the TypeScript types: checked by tsc when it's installed, else parsed (node 23.2+ strips them)
+    if Command::new("tsc").arg("--version").output().is_ok_and(|o| o.status.success()) {
+        ok(Command::new("tsc").args(["--noEmit", "--strict", "--target", "es2022", "shapelib.d.ts"]).current_dir(&e.dir).output().unwrap(), "tsc shapelib.d.ts");
+    } else if node_include().is_some() {
+        let parse = "const m = require('module'); if (m.stripTypeScriptTypes) { m.stripTypeScriptTypes(require('fs').readFileSync('shapelib.d.ts', 'utf8')); }";
+        ok(Command::new("node").args(["-e", parse]).current_dir(&e.dir).output().unwrap(), "parse shapelib.d.ts");
     }
     // the model has the trait, and how a fn takes its object
     let json = ok(e.voltc(&["bindings", "shapelib", "--pkg", pkg, "--lang", "json"]), "voltc bindings --lang json");
@@ -449,7 +477,7 @@ fn bindings_shapes() {
     // the other languages' bindings say which languages take every shape
     let o = e.voltc(&["bindings", "shapelib", "--pkg", pkg, "--lang", "python"]);
     let err = String::from_utf8_lossy(&o.stderr);
-    assert!(!o.status.success() && err.contains("Zig and Java"), "{err}");
+    assert!(!o.status.success() && err.contains("Java and JavaScript"), "{err}");
 }
 
 #[test]
