@@ -145,5 +145,42 @@ LD_LIBRARY_PATH=target/debug java --enable-native-access=ALL-UNNAMED -cp classes
 The class loads `libNAME.so` (or the library `-Dvolt.NAME.lib` names). An error set becomes a
 `VoltException` subclass, thrown with the error's name. Structs are mutable classes: what Volt
 changes through a `T&` comes back to the object. Unsigned integers use the Java type of the same
-size, as `int` for `u32`; slices are arrays, optionals the value or `null`, and a callback is a
-functional interface. An export struct a program doesn't close is freed by a `Cleaner`.
+size, as `int` for `u32`; slices and lists (`std::vec`) are arrays, optionals the value or `null`,
+and a callback is a functional interface. An export struct a program doesn't close is freed by a
+`Cleaner`.
+
+Java takes [every shape](/volt-bootstrap/interop/other-languages/#every-shape):
+- **Owned values as parameters.** A `std::string` parameter takes a `String` (Volt copies it); an
+  export struct by value takes its object, which gives its handle up (closing it after does
+  nothing).
+- **Traits.** A Volt trait is a Java interface: any object implementing it can be lent (`s:
+  shape&`) or given (`s: shape`; Volt closes it when it's done, when it's `AutoCloseable`). A Volt
+  value of the trait comes back as `volt_shape`, which implements the interface and is
+  `AutoCloseable`.
+- **Callbacks taking and giving text and handles.** A lambda gets `String`s and the objects (one
+  Volt lends is never closed by Java) and gives them back; one for an `E!T` callback throws
+  `VoltException.of(code)` to give that error.
+- **Closures given back** are `AutoCloseable` objects with a `call` method.
+- **Lists and arrays of text and handles.** A `std::vec<T>` comes back as an array (`String[]`, or
+  the objects, which the caller closes); `String[]` and object arrays go in for `std::string[..]`,
+  slices of handles and lists; an optional text or handle is the value or `null`.
+
+For a library `shapes` with a trait `shape` (`area`, `name`, `grow`), `describe(s: shape&) ->
+std::string`, `make_square(side: f64) -> shape` and `owners(xs: account&[..]) ->
+std::vec<std::string>`:
+
+```java
+class Circle implements shapes.shape, AutoCloseable {
+    double r = 1;
+    public double area() { return 3 * r * r; }
+    public String name() { return "circle"; }
+    public void grow(double by) { r += by; }
+    public void close() {}
+}
+
+System.out.println(shapes.describe(new Circle()));                 // circle of area 3
+try (var sq = shapes.make_square(2)) {                             // Volt's own shape
+    System.out.println(sq.name() + " " + sq.area());               // square 4.0
+}
+String[] names = shapes.owners(new shapes.account[] {a, b});       // a std::vec<std::string>
+```

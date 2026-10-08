@@ -81,7 +81,7 @@ struct bind {
     // the struct, optional and E!T types C holds by value, each after what it holds (the order C
     // declares them in)
     layout: std::vec<u32> = {};
-    // the shapes only C, C++, Rust and Zig take (traits, closures given out or taking text and handles, owned
+    // the shapes only C, C++, Rust, Zig and Java take (traits, closures given out or taking text and handles, owned
     // values as parameters): false for the other languages' generators
     wide: bool = true;
     uses_str: bool = false;
@@ -686,7 +686,7 @@ attach fn no_c_form(this: bind&, at: span, what: std::string, t: u32) -> compile
     if (this.bad != t) {
         msg.append(fmt(" (because of the {} in it)", this.c.ty_name(this.bad)).as_str());
     }
-    return with_help(fail(at, move msg), S("bindings take numbers, bool, pointers and references, cstr, str, slices, optionals, structs of those, plain enums, error sets, E!T, extern \"C\" fns, closures as parameters, and structs held by handles and owned text (@export_text) as results; C, C++, Rust and Zig take traits, owned values as parameters, closures given back, lists (std::vec), and optional text and handles too"));
+    return with_help(fail(at, move msg), S("bindings take numbers, bool, pointers and references, cstr, str, slices, optionals, structs of those, plain enums, error sets, E!T, extern \"C\" fns, closures as parameters, and structs held by handles and owned text (@export_text) as results; C, C++, Rust, Zig and Java take traits, owned values as parameters, closures given back, lists (std::vec), and optional text and handles too"));
 }
 
 // is a shape owned when it comes out of Volt (text, a handle by value, a closure, a trait's object),
@@ -731,7 +731,7 @@ attach fn check_all(this: bind&) -> compile_error!void {
                 default => {},
             }
             if (owned && !this.wide) {
-                return with_help(fail(at, fmt3("export fn {}: its parameter {} is {}, which this language's bindings only take as a result", S(f.name), S(p.name), this.c.ty_name(p.ty))), S("take an export struct as X& (or X*) and text as str; C, C++, Rust and Zig bindings take owned values too"));
+                return with_help(fail(at, fmt3("export fn {}: its parameter {} is {}, which this language's bindings only take as a result", S(f.name), S(p.name), this.c.ty_name(p.ty))), S("take an export struct as X& (or X*) and text as str; C, C++, Rust, Zig and Java bindings take owned values too"));
             }
         }
         val r = this.shape_of(f.ret) ?? return this.no_c_form(at, fmt("export fn {}: its return type", S(f.name)), f.ret);
@@ -750,7 +750,7 @@ attach fn check_all(this: bind&) -> compile_error!void {
         match (r) {
             .CLOSURE(c) => {
                 if (!this.wide) {
-                    return fail(at, fmt2("export fn {}: it returns {}, and this language's bindings only take closures as parameters (C, C++, Rust and Zig take them back too)", S(f.name), this.c.ty_name(f.ret)));
+                    return fail(at, fmt2("export fn {}: it returns {}, and this language's bindings only take closures as parameters (C, C++, Rust, Zig and Java take them back too)", S(f.name), this.c.ty_name(f.ret)));
                 }
             },
             default => {},
@@ -4209,8 +4209,8 @@ attach fn py_ty(this: bind&, t: u32) -> std::string {
         .HANDLE(s) => { return S("ctypes.c_void_p"); },
         .TEXT(x) => { return S("VoltText"); },
         .CLOSURE(i) => { return this.py_fn_ty(t, true); },
-        .TRAIT(i) => { return S("void"); }, // only C, C++, Rust and Zig take traits (bind.wide)
-        .LIST(x) => { return S("void"); }, // only C, C++, Rust and Zig take lists (bind.wide)
+        .TRAIT(i) => { return S("void"); }, // only the wide languages take traits (bind.wide)
+        .LIST(x) => { return S("void"); }, // only the wide languages take lists (bind.wide)
     }
 }
 
@@ -4826,8 +4826,8 @@ attach fn pyi_ty(this: bind&, t: u32, incoming: bool) -> std::string {
                 default => { return S("Callable[..., Any]"); },
             }
         },
-        .TRAIT(i) => { return S("void"); }, // only C, C++, Rust and Zig take traits (bind.wide)
-        .LIST(x) => { return S("void"); }, // only C, C++, Rust and Zig take lists (bind.wide)
+        .TRAIT(i) => { return S("void"); }, // only the wide languages take traits (bind.wide)
+        .LIST(x) => { return S("void"); }, // only the wide languages take lists (bind.wide)
     }
 }
 
@@ -5024,8 +5024,8 @@ attach fn cs_raw(this: bind&, t: u32) -> std::string {
         .OPT(x) => { return this.made_name("opt", x, true); },
         .FN(i) => { return S("IntPtr"); },
         .CLOSURE(i) => { return this.cs_fnptr(t); },
-        .TRAIT(i) => { return S("void"); }, // only C, C++, Rust and Zig take traits (bind.wide)
-        .LIST(x) => { return S("void"); }, // only C, C++, Rust and Zig take lists (bind.wide)
+        .TRAIT(i) => { return S("void"); }, // only the wide languages take traits (bind.wide)
+        .LIST(x) => { return S("void"); }, // only the wide languages take lists (bind.wide)
     }
 }
 
@@ -5550,12 +5550,18 @@ attach fn csize(this: bind&, t: u32) -> c_size {
         .STR => { return { size: 16, align: 8 }; },
         .SLICE(x) => { return { size: 16, align: 8 }; },
         .TEXT(x) => { return { size: 32, align: 8 }; },
+        .LIST(x) => { return { size: 32, align: 8 }; },
+        .TRAIT(i) => { return { size: 24, align: 8 }; },
+        .CLOSURE(i) => { return { size: 24, align: 8 }; },
         .ARRAY(elem, n) => {
             val e = this.csize(elem);
             return { size: e.size * n, align: e.align };
         },
         .STRUCT(s) => { return this.struct_size(s); },
         .OPT(x) => {
+            if (this.handle_of(x) != null) {
+                return { size: 8, align: 8 };
+            }
             val v = this.csize(x);
             return { size: align_to(v.size + 1, v.align), align: v.align };
         },
@@ -5632,8 +5638,11 @@ attach fn java_is_struct(this: bind&, t: u32) -> bool {
         .STR => { return true; },
         .TEXT(x) => { return true; },
         .SLICE(x) => { return true; },
-        .OPT(x) => { return true; },
+        .OPT(x) => { return this.handle_of(x) == null; },
         .RESULT(e, x) => { return true; },
+        .LIST(x) => { return true; },
+        .TRAIT(i) => { return true; },
+        .CLOSURE(i) => { return true; },
         default => { return false; },
     }
 }
@@ -5645,8 +5654,15 @@ attach fn java_layout(this: bind&, t: u32) -> std::string {
         .STR => { return S("L_STR"); },
         .TEXT(x) => { return S("L_TEXT"); },
         .SLICE(x) => { return S("L_SLICE"); },
+        .LIST(x) => { return S("L_LIST"); },
+        .TRAIT(i) => { return S("L_OBJ"); },
+        .CLOSURE(i) => { return S("L_OBJ"); },
         .ARRAY(elem, n) => { return fmt2("MemoryLayout.sequenceLayout({}, {})", unum(n), this.java_layout(elem)); },
         .OPT(x) => {
+            // an optional handle is its pointer
+            if (this.handle_of(x) != null) {
+                return S("ADDRESS");
+            }
             val v = this.csize(x);
             val pad = this.csize(t).size - v.size - 1;
             var s = fmt2("MemoryLayout.structLayout({}.withName(\"value\"), JAVA_BOOLEAN.withName(\"has\"){}", this.java_layout(x), S(""));
@@ -5746,9 +5762,11 @@ attach fn java_ty(this: bind&, t: u32, boxed: bool) -> std::string {
         },
         .HANDLE(s) => { return this.local(this.c.si(s).name); },
         .SLICE(x) => { return fmt("{}[]", this.java_ty(x, false)); },
+        .LIST(x) => { return fmt("{}[]", this.java_ty(this.view_of(this.list_elem(x)), false)); },
         .OPT(x) => { return this.java_ty(x, true); },
         .RESULT(e, x) => { return this.java_ty(x, boxed); },
-        .CLOSURE(i) => { return fmt("Callback{}", unum(@cast<u64>(i))); },
+        .TRAIT(i) => { return fmt("volt_{}", this.short(this.trait_of(t))); },
+        .CLOSURE(i) => { return fmt("Closure{}", unum(@cast<u64>(i))); },
         default => { return S("MemorySegment"); },
     }
 }
@@ -5757,6 +5775,10 @@ attach fn java_ty(this: bind&, t: u32, boxed: bool) -> std::string {
 attach fn java_read(this: bind&, t: u32, seg: str, off: u64) -> std::string {
     match (this.shape_of(t) ?? shape::VOID) {
         .STRUCT(s) => { return fmt3("{}.read({}.asSlice({}))", this.local(this.c.si(s).name), S(seg), unum(off)); },
+        .STR => { return fmt2("text({}.asSlice({}, L_STR))", S(seg), unum(off)); },
+        .TEXT(x) => { return fmt2("take({}.asSlice({}, L_TEXT))", S(seg), unum(off)); },
+        .HANDLE(h) => { return fmt3("new {}({}.get(ADDRESS, {}))", this.local(this.c.si(h).name), S(seg), unum(off)); },
+        .OPT(x) => { return fmt3("({}.get(JAVA_BOOLEAN, {}) ? {} : null)", S(seg), unum(off + this.csize(x).size), this.java_read(x, seg, off)); },
         .ENUM(e) => { return fmt4("{}.of({}.get({}, {}))", this.local(this.c.ei(e).name), S(seg), this.java_vl(t), unum(off)); },
         default => { return fmt3("{}.get({}, {})", S(seg), this.java_vl(t), unum(off)); },
     }
@@ -5766,6 +5788,11 @@ attach fn java_read(this: bind&, t: u32, seg: str, off: u64) -> std::string {
 attach fn java_write(this: bind&, t: u32, seg: str, off: u64, v: str) -> std::string {
     match (this.shape_of(t) ?? shape::VOID) {
         .STRUCT(s) => { return fmt3("{}.write({}.asSlice({}));", S(v), S(seg), unum(off)); },
+        .OPT(x) => {
+            var w = fmt3("if ({} != null) {{\n    {}\n    {}", S(v), this.java_write(x, seg, off, v), S(seg));
+            w.append(fmt(".set(JAVA_BOOLEAN, {}, true);\n}", unum(off + this.csize(x).size)).as_str());
+            return w;
+        },
         .ENUM(e) => { return fmt4("{}.set({}, {}, {}.value);", S(seg), this.java_vl(t), unum(off), S(v)); },
         default => { return fmt4("{}.set({}, {}, {});", S(seg), this.java_vl(t), unum(off), S(v)); },
     }
@@ -5775,6 +5802,7 @@ attach fn java_write(this: bind&, t: u32, seg: str, off: u64, v: str) -> std::st
 attach fn java_simple(this: bind&, t: u32) -> bool {
     match (this.shape_of(t) ?? shape::VOID) {
         .BOOL => { return true; },
+        .OPT(x) => { return this.handle_of(x) == null && this.java_simple(x); },
         .INT(k) => { return true; },
         .FLOAT(b) => { return true; },
         .ENUM(e) => { return true; },
@@ -5804,6 +5832,7 @@ attach fn java_arg_of(this: bind&, t: u32, name: str, a: java_arg&) -> void {
     if (h) {
         a.decl = fmt2("{} {}", this.local(this.c.si(h).name), S(name));
         a.pass = fmt("{}.handle()", S(name));
+        a.after = fmt("java.lang.ref.Reference.reachabilityFence({});\n", S(name));
         return;
     }
     match (this.shape_of(t) ?? shape::VOID) {
@@ -5811,6 +5840,37 @@ attach fn java_arg_of(this: bind&, t: u32, name: str, a: java_arg&) -> void {
             a.decl = fmt("String {}", S(name));
             a.before = fmt2("MemorySegment {}_s = str(arena, {});\n", S(name), S(name));
             a.pass = fmt("{}_s", S(name));
+        },
+        .TEXT(x) => {
+            // owned text in: Volt copies it
+            a.decl = fmt("String {}", S(name));
+            a.before = fmt2("MemorySegment {}_s = str(arena, {});\n", S(name), S(name));
+            a.pass = fmt("{}_s", S(name));
+        },
+        .HANDLE(h) => {
+            // given to Volt, which frees it
+            a.decl = fmt2("{} {}", this.local(this.c.si(h).name), S(name));
+            a.pass = fmt("{}.release()", S(name));
+        },
+        .TRAIT(i) => {
+            // a Java object (lent for the call, or given: Volt closes it when it's done), or Volt's own
+            val tr = this.short(this.trait_of(t));
+            var given = S("true");
+            if (this.is_ref(t)) {
+                given = S("false");
+            }
+            a.decl = fmt2("{} {}", copy tr, S(name));
+            a.before = fmt4("MemorySegment {}_o = {}_obj(arena, {}, {});\n", S(name), copy tr, S(name), move given);
+            a.pass = fmt("{}_o", S(name));
+            if (this.is_ref(t)) {
+                a.after = fmt2("forget({}_o);\njava.lang.ref.Reference.reachabilityFence({});\n", S(name), S(name));
+            }
+        },
+        .LIST(x) => {
+            // given to Volt, which copies the elements (and takes the handles)
+            if (!this.java_elems(this.list_elem(t), true, name, a)) {
+                this.java_arg_of(this.in_ty(t), name, a);
+            }
         },
         .CSTR => {
             a.decl = fmt("String {}", S(name));
@@ -5846,6 +5906,9 @@ attach fn java_arg_of(this: bind&, t: u32, name: str, a: java_arg&) -> void {
             a.pass = S(name);
         },
         .SLICE(x) => {
+            if (this.java_elems(x, false, name, a)) {
+                return;
+            }
             val z = this.csize(x);
             a.decl = fmt2("{}[] {}", this.java_ty(x, false), S(name));
             a.before = fmt3("MemorySegment {}_e = arena.allocate({}L * Math.max(1, {}.length), ", S(name), unum(z.size), S(name));
@@ -5861,6 +5924,23 @@ attach fn java_arg_of(this: bind&, t: u32, name: str, a: java_arg&) -> void {
             a.after = fmt3("for (int i = 0; i < {}.length; i++) {{\n    {}[i] = {};\n}}\n", S(name), S(name), move back);
         },
         .OPT(x) => {
+            val h = this.handle_of(x);
+            if (h) {
+                // given to Volt, which frees it
+                a.decl = fmt2("{} {}", this.local(this.c.si(h).name), S(name));
+                // (a local: invokeExact would take the conditional itself as an Object)
+                a.before = fmt3("MemorySegment {}_p = {} == null ? MemorySegment.NULL : {}.release();\n", S(name), S(name), S(name));
+                a.pass = fmt("{}_p", S(name));
+                return;
+            }
+            if (this.in_ty(x) == STR) {
+                // str? or an optional text (Volt copies it)
+                a.decl = fmt("String {}", S(name));
+                a.before = fmt2("MemorySegment {}_s = arena.allocate({});\n", S(name), this.java_layout(this.in_ty(t)));
+                a.before.append(fmt4("if ({} != null) {{\n    MemorySegment.copy(str(arena, {}), 0, {}_s, 0, 16);\n    {}_s.set(JAVA_BOOLEAN, 16, true);\n}}\n", S(name), S(name), S(name), S(name)).as_str());
+                a.pass = fmt("{}_s", S(name));
+                return;
+            }
             a.decl = fmt2("{} {}", this.java_ty(x, true), S(name));
             a.before = fmt2("MemorySegment {}_s = arena.allocate({});\n", S(name), this.java_layout(t));
             a.before.append(fmt2("if ({} != null) {{\n    {}\n", S(name), this.java_write(x, fmt("{}_s", S(name)).as_str(), 0, S(name).as_str())).as_str());
@@ -5880,6 +5960,50 @@ attach fn java_arg_of(this: bind&, t: u32, name: str, a: java_arg&) -> void {
             a.pass = S(name);
         },
     }
+}
+
+// a slice or a list of text, handles or optionals (true when x, the element as C sees it, is one):
+// text from a String[], handles from an array of their classes (lent, or given up), optionals from
+// an array of boxed values (null: none)
+attach fn java_elems(this: bind&, x: u32, given: bool, name: str, a: java_arg&) -> bool {
+    val e = this.view_of(x);
+    val h = this.handle_of(x);
+    var put = S("");
+    var decl = S("");
+    if (e == STR) {
+        decl = S("String");
+        put = fmt3("MemorySegment.copy(str(arena, {}[i]), 0, {}_e, i * 16L, 16);", S(name), S(name), S(""));
+    } else if (h) {
+        decl = this.local(this.c.si(h).name);
+        var how = S("handle");
+        if (given) {
+            how = S("release");
+        }
+        put = fmt3("{}_e.setAtIndex(ADDRESS, i, {}[i].{}());", S(name), S(name), move how);
+    } else {
+        match (this.shape_of(e) ?? shape::VOID) {
+            .OPT(v) => {
+                decl = this.java_ty(e, false);
+                put = this.java_write(e, fmt2("{}_e.asSlice(i * {}L)", S(name), unum(this.csize(e).size)).as_str(), 0, fmt("{}[i]", S(name)).as_str());
+            },
+            default => { return false; },
+        }
+    }
+    val z = this.csize(e);
+    a.decl = fmt3("{}[] {}", move decl, S(name), S(""));
+    a.before = fmt4("MemorySegment {}_e = arena.allocate({}L * Math.max(1, {}.length), {});\n", S(name), unum(z.size), S(name), unum(z.align));
+    if (h != null && given) {
+        // each there before any is given up
+        a.before.append(fmt("for (var x : {}) {{\n    java.util.Objects.requireNonNull(x);\n}}\n", S(name)).as_str());
+    }
+    a.before.append(fmt2("for (int i = 0; i < {}.length; i++) {{\n    {}\n}}\n", S(name), move put).as_str());
+    a.before.append(fmt3("MemorySegment {}_s = arena.allocate(L_SLICE);\n{}_s.set(ADDRESS, 0, {}_e);\n", S(name), S(name), S(name)).as_str());
+    a.before.append(fmt2("{}_s.set(JAVA_LONG, 8, {}.length);\n", S(name), S(name)).as_str());
+    a.pass = fmt("{}_s", S(name));
+    if (h != null && !given) {
+        a.after = fmt("java.lang.ref.Reference.reachabilityFence({});\n", S(name));
+    }
+    return true;
 }
 
 // array element code uses offset 0 with "i * SIZE" added: replaced here
@@ -5913,7 +6037,7 @@ attach fn java_desc(this: bind&, f: u32) -> std::string {
         }
         match (this.shape_of(p.ty) ?? shape::VOID) {
             .CLOSURE(i) => { args.append("ADDRESS, ADDRESS"); },
-            default => { args.append(this.java_layout(p.ty).as_str()); },
+            default => { args.append(this.java_layout(this.in_ty(p.ty)).as_str()); },
         }
     }
     if (info.ret == VOID) {
@@ -5967,8 +6091,15 @@ attach fn java_value(this: bind&, t: u32, r: str) -> std::string {
         .STRUCT(s) => { return fmt2("{}.read({})", this.local(this.c.si(s).name), S(r)); },
         .HANDLE(s) => { return fmt2("new {}({})", this.local(this.c.si(s).name), S(r)); },
         .OPT(x) => {
+            val h = this.handle_of(x);
+            if (h) {
+                return fmt3("({}.equals(MemorySegment.NULL) ? null : new {}({}))", S(r), this.local(this.c.si(h).name), S(r));
+            }
             return fmt3("({}.get(JAVA_BOOLEAN, {}) ? {} : null)", S(r), unum(this.csize(x).size), this.java_read(x, r, 0));
         },
+        .LIST(x) => { return fmt2("list_{}({})", index_of(&this.lists, t), S(r)); },
+        .TRAIT(i) => { return fmt2("new volt_{}({})", this.short(this.trait_of(t)), S(r)); },
+        .CLOSURE(i) => { return fmt2("new Closure{}({})", unum(@cast<u64>(i)), S(r)); },
         .SLICE(x) => {
             val z = this.csize(x);
             var el = this.java_read(x, "e", 0);
@@ -5982,10 +6113,16 @@ attach fn java_value(this: bind&, t: u32, r: str) -> std::string {
 // a wrapper's body
 attach fn java_body(this: bind&, f: u32, args: std::vec<java_arg>&, self_pass: str?) -> std::string {
     val info = this.c.fi(f);
+    return this.java_call(info.ret, fmt("H_{}", S(info.c_name)).as_str(), args, self_pass);
+}
+
+// a call of method handle callee (returning ret) with args after self_pass: the arena they're made
+// in, the call, its error thrown and its value returned
+attach fn java_call(this: bind&, ret: u32, callee: str, args: std::vec<java_arg>&, self_pass: str?) -> std::string {
     var passes: std::string = {};
     var before: std::string = {};
     var after: std::string = {};
-    if (this.java_is_struct(info.ret)) {
+    if (this.java_is_struct(ret)) {
         passes.append("(SegmentAllocator) arena");
     }
     val sp = self_pass;
@@ -6003,38 +6140,211 @@ attach fn java_body(this: bind&, f: u32, args: std::vec<java_arg>&, self_pass: s
         before.append(a.before.as_str());
         after.append(a.after.as_str());
     }
-    var out = S("try (Arena arena = Arena.ofConfined()) {\n");
-    out.append(indent(before.as_str()).as_str());
-    val call = fmt2("H_{}.invokeExact({})", S(info.c_name), move passes);
-    if (info.ret == VOID) {
-        out.append(fmt("    {};\n", move call).as_str());
+    var body: std::string = {};
+    val call = fmt2("{}.invokeExact({})", S(callee), move passes);
+    if (ret == VOID) {
+        body.append(fmt("{};\n", move call).as_str());
     } else {
-        out.append(fmt2("    var r = ({}) {};\n", this.java_carrier(info.ret), move call).as_str());
+        body.append(fmt2("var r = ({}) {};\n", this.java_carrier(ret), move call).as_str());
     }
-    match (this.shape_of(info.ret) ?? shape::VOID) {
+    match (this.shape_of(ret) ?? shape::VOID) {
         .RESULT(e, x) => {
-            out.append("    int code = r.get(JAVA_INT, 0);\n    if (code != 0) {\n        throw VoltException.of(code);\n    }\n");
-            out.append(indent(after.as_str()).as_str());
+            body.append("int code = r.get(JAVA_INT, 0);\nif (code != 0) {\n    throw VoltException.of(code);\n}\n");
             if (x != VOID) {
                 val off = align_to(4, this.csize(x).align);
                 var v = this.java_read(x, "r", off);
                 match (this.shape_of(x) ?? shape::VOID) {
-                    .TEXT(y) => { v = fmt2("take(r.asSlice({}, L_TEXT))", unum(off), S("")); },
-                    .HANDLE(s) => { v = fmt3("new {}(r.get(ADDRESS, {}))", this.local(this.c.si(s).name), unum(off), S("")); },
-                    .STR => { v = fmt("text(r.asSlice({}, L_STR))", unum(off)); },
+                    .LIST(y) => { v = this.java_value(x, fmt2("r.asSlice({}, {})", unum(off), this.java_layout(x)).as_str()); },
+                    .TRAIT(y) => { v = this.java_value(x, fmt2("r.asSlice({}, {})", unum(off), this.java_layout(x)).as_str()); },
+                    .CLOSURE(y) => { v = this.java_value(x, fmt2("r.asSlice({}, {})", unum(off), this.java_layout(x)).as_str()); },
+                    .OPT(y) => {
+                        if (this.handle_of(y) != null) {
+                            v = this.java_value(x, fmt("r.get(ADDRESS, {})", unum(off)).as_str());
+                        }
+                    },
                     default => {},
                 }
-                out.append(fmt("    return {};\n", move v).as_str());
+                body.append(fmt("return {};\n", move v).as_str());
             }
         },
-        .VOID => { out.append(indent(after.as_str()).as_str()); },
-        default => {
-            out.append(indent(after.as_str()).as_str());
-            out.append(fmt("    return {};\n", this.java_value(info.ret, "r")).as_str());
-        },
+        .VOID => {},
+        default => { body.append(fmt("return {};\n", this.java_value(ret, "r")).as_str()); },
+    }
+    // what follows the call runs even when it gives an error: lent objects forgotten, slices'
+    // elements read back, what a callback or a trait fn threw rethrown
+    if (this.traits.len > 0) {
+        after.append("thrown();\n");
+    }
+    if (sp) {
+        after.append("java.lang.ref.Reference.reachabilityFence(this);\n");
+    }
+    var out = S("try (Arena arena = Arena.ofConfined()) {\n");
+    out.append(indent(before.as_str()).as_str());
+    if (after.len() > 0) {
+        out.append(fmt2("    try {{\n{}    }} finally {{\n{}    }}\n", indent(indent(body.as_str()).as_str()), indent(indent(after.as_str()).as_str())).as_str());
+    } else {
+        out.append(indent(body.as_str()).as_str());
     }
     out.append("} catch (RuntimeException | Error e) {\n    throw e;\n} catch (Throwable e) {\n    throw new RuntimeException(e);\n}\n");
     return out;
+}
+
+// the Java value of C argument a (of type t) an upcall gets: text as a String, a handle Volt gives
+// as its class, one it lends as a class that never frees it
+attach fn java_from_c(this: bind&, t: u32, a: str) -> std::string {
+    val h = this.lent_handle(t);
+    if (h) {
+        return fmt2("new {}({}, false)", this.local(this.c.si(h).name), S(a));
+    }
+    match (this.shape_of(t) ?? shape::VOID) {
+        .ENUM(e) => { return fmt2("{}.of({})", this.local(this.c.ei(e).name), S(a)); },
+        .STR => { return fmt("text({}.reinterpret(L_STR.byteSize()))", S(a)); },
+        .TEXT(x) => { return fmt("text({}.reinterpret(L_STR.byteSize()))", S(a)); },
+        .STRUCT(s) => { return fmt2("{}.read({})", this.local(this.c.si(s).name), S(a)); },
+        .HANDLE(s) => { return fmt2("new {}({})", this.local(this.c.si(s).name), S(a)); },
+        default => { return S(a); },
+    }
+}
+
+// statements writing Java's v (of type t) into seg at off as C takes it back: text given (Volt frees
+// it), a handle given up
+attach fn java_put(this: bind&, t: u32, seg: str, off: u64, v: str) -> std::string {
+    match (this.shape_of(t) ?? shape::VOID) {
+        .TEXT(x) => { return fmt4("MemorySegment.copy(give({}), 0, {}, {}, 32);", S(v), S(seg), unum(off), S("")); },
+        .HANDLE(h) => { return fmt3("{}.set(ADDRESS, {}, {}.release());", S(seg), unum(off), S(v)); },
+        default => { return this.java_write(t, seg, off, v); },
+    }
+}
+
+// an upcall's statements returning call (Java's result, of type r) to C: text given, a handle given
+// up, E!T as its struct (a VoltException thrown is its error)
+attach fn java_to_c(this: bind&, r: u32, call: str) -> std::string {
+    if (r == VOID) {
+        return fmt("{};\n", S(call));
+    }
+    match (this.shape_of(r) ?? shape::VOID) {
+        .ENUM(e) => { return fmt2("return ({}) {}.value;\n", this.java_carrier(r), S(call)); },
+        .STR => { return fmt("return keep(str(Arena.ofAuto(), {}));\n", S(call)); },
+        .TEXT(x) => { return fmt("return give({});\n", S(call)); },
+        .HANDLE(s) => { return fmt("return {}.release();\n", S(call)); },
+        .STRUCT(s) => { return fmt2("MemorySegment s = Arena.ofAuto().allocate(L_{});\n{}.write(s);\nreturn s;\n", this.local(this.c.si(s).name), S(call)); },
+        .RESULT(e, x) => {
+            var out = fmt("MemorySegment s = Arena.ofAuto().allocate({});\ntry {\n", this.java_layout(r));
+            if (x == VOID) {
+                out.append(fmt("    {};\n", S(call)).as_str());
+            } else {
+                out.append(fmt("    var v = {};\n", S(call)).as_str());
+                out.append(fmt("    {}\n", this.java_put(x, "s", align_to(4, this.csize(x).align), "v")).as_str());
+            }
+            out.append("} catch (VoltException e) {\n    s.set(JAVA_INT, 0, e.code);\n}\nreturn s;\n");
+            return out;
+        },
+        default => { return fmt("return {};\n", S(call)); },
+    }
+}
+
+// what an upcall gives C when its Java code threw (the exception is rethrown after the call)
+attach fn java_zero(this: bind&, r: u32) -> std::string {
+    match (this.shape_of(r) ?? shape::VOID) {
+        .BOOL => { return S("false"); },
+        .TEXT(x) => { return S("give(\"\")"); },
+        default => {},
+    }
+    if (this.java_is_struct(r)) {
+        return fmt("Arena.ofAuto().allocate({})", this.java_layout(r));
+    }
+    val c = this.java_carrier(r);
+    if (c.as_str() == "MemorySegment") {
+        return S("MemorySegment.NULL");
+    }
+    if (c.as_str() == "int") {
+        return S("0");
+    }
+    return fmt("({}) 0", move c);
+}
+
+// the method type and descriptor of an upcall taking self (when it has one) then ps, giving r
+attach fn java_up_types(this: bind&, ps: std::vec<u32>&, r: u32, mt: std::string&, desc: std::string&) -> void {
+    var vls: std::string = {};
+    for (p&) in ps.items() {
+        mt.append(fmt(", {}.class", this.java_carrier(this.in_ty(*p))).as_str());
+        vls.append(", ");
+        vls.append(this.java_layout(this.in_ty(*p)).as_str());
+    }
+    if (r == VOID) {
+        desc.append(fmt("FunctionDescriptor.ofVoid(ADDRESS{})", move vls).as_str());
+    } else {
+        desc.append(fmt2("FunctionDescriptor.of({}, ADDRESS{})", this.java_layout(r), move vls).as_str());
+    }
+}
+
+// trait K: a Java interface; its table of upcalls into a Java object (behind an id), what makes the
+// object Volt takes, and volt_T, Volt's own value of it
+attach fn java_trait(this: bind&, k: u32, out: std::string&) -> void {
+    val t = *this.traits.at(k);
+    val tr = this.short(t);
+    val fns = this.fns_of(t);
+    val cls = this.pkg;
+    var iface: std::string = {};
+    var ups: std::string = {};
+    var table: std::string = {};
+    var calls: std::string = {};
+    for (j) in 0..fns.len {
+        val f = fns.at(j);
+        val jj = unum(@cast<u64>(j) * 8);
+        var params: std::string = {};
+        var cparams = S("MemorySegment self");
+        var largs: std::string = {};
+        var args: std::vec<java_arg> = {};
+        for (q) in 0..f.params.len {
+            val p = *f.params.at(q);
+            val qq = unum(@cast<u64>(q));
+            if (q > 0) {
+                params.append(", ");
+                largs.append(", ");
+            }
+            params.append(fmt2("{} a{}", this.java_ty(p, false), copy qq).as_str());
+            cparams.append(fmt2(", {} a{}", this.java_carrier(this.in_ty(p)), copy qq).as_str());
+            largs.append(this.java_from_c(p, fmt("a{}", copy qq).as_str()).as_str());
+            var ja: java_arg = {};
+            this.java_arg_of(p, fmt("a{}", copy qq).as_str(), &ja);
+            put(&args, move ja);
+        }
+        val jr = this.java_ty(f.ret, false);
+        iface.append(fmt3("        {} {}({});\n", copy jr, java_ident(f.name), copy params).as_str());
+        var target_ret = this.java_carrier(f.ret);
+        var mt = fmt("{}.class, MemorySegment.class", this.java_carrier(f.ret));
+        if (f.ret == VOID) {
+            target_ret = S("void");
+            mt = S("void.class, MemorySegment.class");
+        }
+        var desc: std::string = {};
+        this.java_up_types(&f.params, f.ret, &mt, &desc);
+        ups.append(fmt4("\n    private static {} {}_{}({}) {{\n", move target_ret, copy tr, S(f.name), move cparams).as_str());
+        ups.append(fmt2("        try {{\n            var o = ({}) OBJECTS.get(self.address());\n{}", copy tr, indent(indent(indent(this.java_to_c(f.ret, fmt2("o.{}({})", java_ident(f.name), copy largs).as_str()).as_str()).as_str()).as_str())).as_str());
+        ups.append("        } catch (Throwable t) {\n            if (THROWN.get() == null) {\n                THROWN.set(t);\n            }\n");
+        if (f.ret != VOID) {
+            ups.append(fmt("            return {};\n", this.java_zero(f.ret)).as_str());
+        }
+        ups.append("        }\n    }\n");
+        table.append(fmt4("            vt.set(ADDRESS, {}, LINKER.upcallStub(l.findStatic({}.class, \"{}_{}\", ", copy jj, S(cls), copy tr, S(f.name)).as_str());
+        table.append(fmt2("MethodType.methodType({})), {}, Arena.global()));\n", move mt, copy desc).as_str());
+        calls.append(fmt3("\n        public {} {}({}) {{\n", copy jr, java_ident(f.name), copy params).as_str());
+        calls.append(fmt3("            MethodHandle h = LINKER.downcallHandle(o.get(ADDRESS, 0).reinterpret({}L).get(ADDRESS, {}), {});\n", unum(@cast<u64>(fns.len) * 8), copy jj, move desc).as_str());
+        calls.append(indent(indent(indent(this.java_call(f.ret, "h", &args, "o.get(ADDRESS, 8)").as_str()).as_str()).as_str()).as_str());
+        calls.append("        }\n");
+    }
+    out.append(fmt4("\n    /** trait {}: implement it in Java (lent or given to Volt, which closes a given AutoCloseable when\n     * it's done with it), or call Volt's own (volt_{}) */\n    public interface {} {{\n{}    }}\n", this.c.ty_name(t), copy tr, copy tr, move iface).as_str());
+    out.append(ups.as_str());
+    out.append(fmt4("\n    static final MemorySegment VT_{} = vt_{}();\n\n    private static MemorySegment vt_{}() {{\n        try {{\n            var l = MethodHandles.lookup();\n            MemorySegment vt = Arena.global().allocate({}L, 8);\n", copy tr, copy tr, copy tr, unum(@cast<u64>(fns.len) * 8 + 8)).as_str());
+    out.append(fmt("{}            return vt;\n        } catch (ReflectiveOperationException e) {\n            throw new RuntimeException(e);\n        }\n    }\n", move table).as_str());
+    out.append(fmt4("\n    // a {} for Volt: Volt's own as it is (given: no longer freed here), or a Java object behind an id\n    static MemorySegment {}_obj(Arena arena, {} v, boolean given) {{\n        MemorySegment o = arena.allocate(L_OBJ);\n        if (v instanceof volt_{} w) {{\n", copy tr, copy tr, copy tr, copy tr).as_str());
+    out.append("            MemorySegment.copy(w.o, 0, o, 0, 24);\n            if (given) {\n                w.live[0] = false;\n            } else {\n                o.set(ADDRESS, 16, MemorySegment.NULL);\n            }\n            return o;\n        }\n        long id = NEXT.incrementAndGet();\n        OBJECTS.put(id, v);\n");
+    out.append(fmt("        o.set(ADDRESS, 0, VT_{});\n        o.set(ADDRESS, 8, MemorySegment.ofAddress(id));\n        o.set(ADDRESS, 16, given ? DROP_OBJ : MemorySegment.NULL);\n        return o;\n    }\n", copy tr).as_str());
+    out.append(fmt4("\n    /** trait {}'s value Volt made: close() frees it (or it's freed once unreachable) */\n    public static final class volt_{} implements {}, AutoCloseable {{\n        final MemorySegment o;\n        final boolean[] live;\n        private final Cleaner.Cleanable cleanable;\n\n        volt_{}(MemorySegment r) {{\n", this.c.ty_name(t), copy tr, copy tr, copy tr).as_str());
+    out.append(fmt("            o = Arena.ofAuto().allocate(L_OBJ);\n            MemorySegment.copy(r, 0, o, 0, 24);\n            MemorySegment self = o.get(ADDRESS, 8);\n            MemorySegment drop = o.get(ADDRESS, 16);\n            boolean[] l = {true};\n            live = l;\n            cleanable = CLEANER.register(this, () -> {\n                if (l[0]) {\n                    l[0] = false;\n                    {}.drop(drop, self);\n                }\n            });\n        }\n", S(cls)).as_str());
+    out.append(calls.as_str());
+    out.append("\n        public void close() {\n            cleanable.clean();\n        }\n    }\n");
 }
 
 attach fn java_args(this: bind&, f: u32, first: usize) -> std::vec<java_arg> {
@@ -6091,7 +6401,7 @@ attach fn java_text(this: bind&) -> std::string {
     val cls = this.pkg;
     var out = fmt("// {}: generated by voltc bindings; the Volt package for Java 22+, through the FFM API\n", S(cls));
     out.append(fmt2("// (java.lang.foreign). It loads lib{}.so (or the library -Dvolt.{}.lib names); run with\n", S(cls), S(cls)).as_str());
-    out.append("// --enable-native-access=ALL-UNNAMED. Errors are thrown as VoltException, one subclass per error set.\nimport java.lang.foreign.*;\nimport java.lang.invoke.*;\nimport java.lang.ref.Cleaner;\nimport java.nio.charset.StandardCharsets;\nimport static java.lang.foreign.ValueLayout.*;\n\n");
+    out.append("// --enable-native-access=ALL-UNNAMED. Errors are thrown as VoltException, one subclass per error set.\nimport java.lang.foreign.*;\nimport java.lang.invoke.*;\nimport java.lang.ref.Cleaner;\nimport java.nio.charset.StandardCharsets;\nimport java.util.concurrent.ConcurrentHashMap;\nimport java.util.concurrent.atomic.AtomicLong;\nimport static java.lang.foreign.ValueLayout.*;\n\n");
     // restricted: the FFM calls (allowed with --enable-native-access); try: an arena a call doesn't use
     out.append(fmt2("@SuppressWarnings({{\"restricted\", \"try\"}})\npublic final class {} {{\n    private {}() {{}}\n\n", S(cls), S(cls)).as_str());
     out.append("    private static final Linker LINKER = Linker.nativeLinker();\n");
@@ -6100,14 +6410,19 @@ attach fn java_text(this: bind&) -> std::string {
     out.append("    static final StructLayout L_STR = MemoryLayout.structLayout(ADDRESS.withName(\"ptr\"), JAVA_LONG.withName(\"len\"));\n");
     out.append("    static final StructLayout L_SLICE = MemoryLayout.structLayout(ADDRESS.withName(\"ptr\"), JAVA_LONG.withName(\"len\"));\n");
     out.append("    static final StructLayout L_TEXT = MemoryLayout.structLayout(ADDRESS.withName(\"ptr\"), JAVA_LONG.withName(\"len\"), ADDRESS.withName(\"owner\"), ADDRESS.withName(\"drop\"));\n");
-    out.append("    private static final MethodHandle CALL_DROP = LINKER.downcallHandle(FunctionDescriptor.ofVoid(ADDRESS));\n\n");
+    out.append("    static final StructLayout L_LIST = MemoryLayout.structLayout(ADDRESS.withName(\"ptr\"), JAVA_LONG.withName(\"len\"), ADDRESS.withName(\"owner\"), ADDRESS.withName(\"drop\"));\n");
+    out.append("    static final StructLayout L_OBJ = MemoryLayout.structLayout(ADDRESS.withName(\"vt\"), ADDRESS.withName(\"self\"), ADDRESS.withName(\"drop\"));\n");
+    out.append("    private static final MethodHandle CALL_DROP = LINKER.downcallHandle(FunctionDescriptor.ofVoid(ADDRESS));\n");
+    out.append("    // Java objects Volt holds (by id: lent for a call, or given until Volt drops them), and the\n    // memory of text given to Volt (freed when Volt drops it)\n    private static final ConcurrentHashMap<Long, Object> OBJECTS = new ConcurrentHashMap<>();\n    private static final ConcurrentHashMap<Long, Arena> GIVEN = new ConcurrentHashMap<>();\n    private static final AtomicLong NEXT = new AtomicLong();\n");
+    out.append(fmt2("    private static final MemorySegment DROP_OBJ = up(\"dropObj\");\n    private static final MemorySegment DROP_TEXT = up(\"dropText\");\n\n    private static MemorySegment up(String name) {{\n        try {{\n            var h = MethodHandles.lookup().findStatic({}.class, name, MethodType.methodType(void.class, MemorySegment.class));\n            return LINKER.upcallStub(h, FunctionDescriptor.ofVoid(ADDRESS), Arena.global());\n        }} catch (ReflectiveOperationException e) {{\n            throw new RuntimeException(e);\n        }}\n    }}\n\n", S(cls), S("")).as_str());
+    out.append("    // Volt drops a Java object it was given: forgotten, and closed when it's AutoCloseable\n    private static void dropObj(MemorySegment self) {\n        Object v = OBJECTS.remove(self.address());\n        if (v instanceof AutoCloseable c) {\n            try {\n                c.close();\n            } catch (Exception e) {\n                throw new RuntimeException(e);\n            }\n        }\n    }\n\n    private static void dropText(MemorySegment owner) {\n        Arena a = GIVEN.remove(owner.address());\n        if (a != null) {\n            a.close();\n        }\n    }\n\n    // a lent Java object, forgotten after the call\n    static void forget(MemorySegment o) {\n        OBJECTS.remove(o.get(ADDRESS, 8).address());\n    }\n\n    // what a trait fn's Java code threw while Volt called it: rethrown after the call\n    private static final ThreadLocal<Throwable> THROWN = new ThreadLocal<>();\n\n    static void thrown() {\n        Throwable t = THROWN.get();\n        if (t != null) {\n            THROWN.remove();\n            rethrow(t);\n        }\n    }\n\n    // a str a callback gives Volt: kept until the next one on this thread\n    // ponytail: Volt reads it before the callback runs again; hold more if a fn keeps two\n    private static final ThreadLocal<MemorySegment> KEPT = new ThreadLocal<>();\n\n    static MemorySegment keep(MemorySegment s) {\n        KEPT.set(s);\n        return s;\n    }\n\n    // owned text for Volt (a callback's or a trait fn's result): freed when Volt drops it\n    static MemorySegment give(String s) {\n        Arena a = Arena.ofShared();\n        long id = NEXT.incrementAndGet();\n        GIVEN.put(id, a);\n        byte[] b = s.getBytes(StandardCharsets.UTF_8);\n        MemorySegment bytes = a.allocate(Math.max(1, b.length));\n        MemorySegment.copy(b, 0, bytes, JAVA_BYTE, 0, b.length);\n        MemorySegment t = a.allocate(L_TEXT);\n        t.set(ADDRESS, 0, bytes);\n        t.set(JAVA_LONG, 8, b.length);\n        t.set(ADDRESS, 16, MemorySegment.ofAddress(id));\n        t.set(ADDRESS, 24, DROP_TEXT);\n        return t;\n    }\n\n    // calls what frees what Volt gave out (owner, through its drop)\n    static void drop(MemorySegment drop, MemorySegment owner) {\n        if (!drop.equals(MemorySegment.NULL)) {\n            try {\n                CALL_DROP.invokeExact(drop, owner);\n            } catch (Throwable e) {\n                throw new RuntimeException(e);\n            }\n        }\n    }\n\n");
     out.append("    // a String as a Volt str (UTF-8 in arena)\n    static MemorySegment str(Arena arena, String s) {\n        byte[] b = s.getBytes(StandardCharsets.UTF_8);\n        MemorySegment bytes = arena.allocate(Math.max(1, b.length));\n        MemorySegment.copy(b, 0, bytes, JAVA_BYTE, 0, b.length);\n        MemorySegment v = arena.allocate(L_STR);\n        v.set(ADDRESS, 0, bytes);\n        v.set(JAVA_LONG, 8, b.length);\n        return v;\n    }\n\n");
     out.append("    // a Volt str's text\n    static String text(MemorySegment v) {\n        long len = v.get(JAVA_LONG, 8);\n        byte[] b = v.get(ADDRESS, 0).reinterpret(len).toArray(JAVA_BYTE);\n        return new String(b, StandardCharsets.UTF_8);\n    }\n\n");
     out.append("    // owned text: copied out, then freed\n    static String take(MemorySegment t) {\n        String s = text(t);\n        MemorySegment drop = t.get(ADDRESS, 24);\n        if (!drop.equals(MemorySegment.NULL)) {\n            try {\n                CALL_DROP.invokeExact(drop, t.get(ADDRESS, 16));\n            } catch (Throwable e) {\n                throw new RuntimeException(e);\n            }\n        }\n        return s;\n    }\n\n");
     out.append("    static void rethrow(Throwable t) {\n        if (t instanceof RuntimeException e) {\n            throw e;\n        }\n        if (t instanceof Error e) {\n            throw e;\n        }\n        if (t != null) {\n            throw new RuntimeException(t);\n        }\n    }\n\n");
     out.append("    static MethodHandle find(String name, FunctionDescriptor d) {\n        return LINKER.downcallHandle(LIB.find(name).orElseThrow(() -> new UnsatisfiedLinkError(name)), d);\n    }\n");
     // errors
-    out.append("\n    /** an error a Volt function returned: its code and name */\n    public static class VoltException extends RuntimeException {\n        private static final long serialVersionUID = 1L;\n        public final int code;\n        public final String name;\n\n        public VoltException(int code, String name) {\n            super(name);\n            this.code = code;\n            this.name = name;\n        }\n\n        static VoltException of(int code) {\n            switch (code) {\n");
+    out.append("\n    /** an error a Volt function returned: its code and name */\n    public static class VoltException extends RuntimeException {\n        private static final long serialVersionUID = 1L;\n        public final int code;\n        public final String name;\n\n        public VoltException(int code, String name) {\n            super(name);\n            this.code = code;\n            this.name = name;\n        }\n\n        /** the exception of an error code (a callback throws one to give Volt that error) */\n        public static VoltException of(int code) {\n            switch (code) {\n");
     for (c&) in this.all_codes().items() {
         out.append(fmt3("                case (int) {}L: return new {}(code, \"{}\");\n", num(c.code), copy c.set, S(c.name)).as_str());
     }
@@ -6191,73 +6506,67 @@ attach fn java_text(this: bind&) -> std::string {
         out.append("        }\n    }\n");
         out.append(fmt2("\n    static final StructLayout L_{} = {};\n", copy n, move layout).as_str());
     }
-    // callbacks
+    // callbacks: an interface each, and the upcall that calls one (what it throws is kept, and
+    // rethrown after the call)
     for (i) in 0..this.closures.len {
-        match (*this.c.t.get(*this.closures.at(i))) {
-            .FN_VAL(ps&, r) => {
-                var params: std::string = {};
-                var cparams = S("MemorySegment user");
-                var largs: std::string = {};
-                var vls: std::string = {};
-                // the target's method type: its result, the bound f and err, then the C parameters
-                var mt = fmt("{}.class", this.java_carrier(r));
-                if (r == VOID) {
-                    mt = S("void.class");
-                }
-                mt.append(fmt(", Callback{}.class, Throwable[].class, MemorySegment.class", unum(@cast<u64>(i))).as_str());
-                for (k) in 0..ps.len {
-                    val p = *ps.at(k);
-                    if (k > 0) {
-                        params.append(", ");
-                        largs.append(", ");
-                    }
-                    params.append(fmt2("{} a{}", this.java_ty(p, false), unum(@cast<u64>(k))).as_str());
-                    cparams.append(fmt2(", {} a{}", this.java_carrier(p), unum(@cast<u64>(k))).as_str());
-                    match (this.shape_of(p) ?? shape::VOID) {
-                        .ENUM(e) => { largs.append(fmt2("{}.of(a{})", this.local(this.c.ei(e).name), unum(@cast<u64>(k))).as_str()); },
-                        .STR => { largs.append(fmt("text(a{}.reinterpret(L_STR.byteSize()))", unum(@cast<u64>(k))).as_str()); },
-                        .STRUCT(s) => { largs.append(fmt2("{}.read(a{})", this.local(this.c.si(s).name), unum(@cast<u64>(k))).as_str()); },
-                        default => { largs.append(fmt("a{}", unum(@cast<u64>(k))).as_str()); },
-                    }
-                    vls.append(", ");
-                    vls.append(this.java_layout(p).as_str());
-                    mt.append(fmt(", {}.class", this.java_carrier(p)).as_str());
-                }
-                val ii = unum(@cast<u64>(i));
-                out.append(fmt3("\n    /** a callback: {} */\n    @FunctionalInterface\n    public interface Callback{} {{\n        ", this.c.ty_name(*this.closures.at(i)), copy ii, S("")).as_str());
-                out.append(fmt3("{} call({});\n    }}\n", this.java_ty(r, false), move params, S("")).as_str());
-                // the upcall target: calls f, keeping the first exception for after the call
-                var target_ret = this.java_carrier(r);
-                if (r == VOID) {
-                    target_ret = S("void");
-                }
-                out.append(fmt3("\n    private static {} call{}(Callback{} f, Throwable[] err, ", move target_ret, copy ii, copy ii).as_str());
-                out.append(fmt("{}) {{\n        try {{\n            ", move cparams).as_str());
-                if (r == VOID) {
-                    out.append(fmt("f.call({});\n", move largs).as_str());
-                } else {
-                    match (this.shape_of(r) ?? shape::VOID) {
-                        .ENUM(e) => { out.append(fmt2("return ({}) f.call({}).value;\n", this.java_carrier(r), move largs).as_str()); },
-                        default => { out.append(fmt("return f.call({});\n", move largs).as_str()); },
-                    }
-                }
-                out.append("        } catch (Throwable t) {\n            if (err[0] == null) {\n                err[0] = t;\n            }\n");
-                if (r != VOID) {
-                    out.append(fmt("            return ({}) 0;\n", this.java_carrier(r)).as_str());
-                }
-                out.append("        }\n    }\n");
-                var desc = S("FunctionDescriptor.ofVoid(ADDRESS");
-                if (r != VOID) {
-                    desc = fmt("FunctionDescriptor.of({}, ADDRESS", this.java_layout(r));
-                }
-                desc.append(vls.as_str());
-                desc.push(')');
-                out.append(fmt4("\n    private static MemorySegment upcall{}(Arena arena, Callback{} f, Throwable[] err) {{\n        try {{\n            MethodHandle h = MethodHandles.lookup().findStatic({}.class, \"call{}\", ", copy ii, copy ii, S(cls), copy ii).as_str());
-                out.append(fmt2("MethodType.methodType({}));\n            h = MethodHandles.insertArguments(h, 0, f, err);\n            return LINKER.upcallStub(h, {}, arena);\n", move mt, move desc).as_str());
-                out.append("        } catch (ReflectiveOperationException e) {\n            throw new RuntimeException(e);\n        }\n    }\n");
-            },
-            default => {},
+        val ct = *this.closures.at(i);
+        var ps: std::vec<u32> = {};
+        val r = this.fn_parts(ct, &ps);
+        val ii = unum(@cast<u64>(i));
+        var params: std::string = {};
+        var cparams = S("MemorySegment user");
+        var largs: std::string = {};
+        for (k) in 0..ps.len {
+            val p = *ps.at(k);
+            val kk = unum(@cast<u64>(k));
+            if (k > 0) {
+                params.append(", ");
+                largs.append(", ");
+            }
+            params.append(fmt2("{} a{}", this.java_ty(p, false), copy kk).as_str());
+            cparams.append(fmt2(", {} a{}", this.java_carrier(this.in_ty(p)), copy kk).as_str());
+            largs.append(this.java_from_c(p, fmt("a{}", copy kk).as_str()).as_str());
         }
+        out.append(fmt3("\n    /** a callback: {} */\n    @FunctionalInterface\n    public interface Callback{} {{\n        {} call(", this.c.ty_name(ct), copy ii, this.java_ty(r, false)).as_str());
+        out.append(fmt("{});\n    }\n", copy params).as_str());
+        var target_ret = this.java_carrier(r);
+        var mt = fmt("{}.class", this.java_carrier(r));
+        if (r == VOID) {
+            target_ret = S("void");
+            mt = S("void.class");
+        }
+        mt.append(fmt(", Callback{}.class, Throwable[].class, MemorySegment.class", copy ii).as_str());
+        var desc: std::string = {};
+        this.java_up_types(&ps, r, &mt, &desc);
+        out.append(fmt3("\n    private static {} call{}(Callback{} f, Throwable[] err, ", move target_ret, copy ii, copy ii).as_str());
+        out.append(fmt("{}) {{\n        try {{\n", move cparams).as_str());
+        out.append(indent(indent(indent(this.java_to_c(r, fmt("f.call({})", copy largs).as_str()).as_str()).as_str()).as_str()).as_str());
+        out.append("        } catch (Throwable t) {\n            if (err[0] == null) {\n                err[0] = t;\n            }\n");
+        if (r != VOID) {
+            out.append(fmt("            return {};\n", this.java_zero(r)).as_str());
+        }
+        out.append("        }\n    }\n");
+        out.append(fmt4("\n    private static MemorySegment upcall{}(Arena arena, Callback{} f, Throwable[] err) {{\n        try {{\n            MethodHandle h = MethodHandles.lookup().findStatic({}.class, \"call{}\", ", copy ii, copy ii, S(cls), copy ii).as_str());
+        out.append(fmt2("MethodType.methodType({}));\n            h = MethodHandles.insertArguments(h, 0, f, err);\n            return LINKER.upcallStub(h, {}, arena);\n", move mt, copy desc).as_str());
+        out.append("        } catch (ReflectiveOperationException e) {\n            throw new RuntimeException(e);\n        }\n    }\n");
+        if (!has_u32(&this.closures_out, @cast<u32>(i))) {
+            continue;
+        }
+        // one Volt gave out: called through its function, freed through its drop
+        var args: std::vec<java_arg> = {};
+        for (k) in 0..ps.len {
+            var ja: java_arg = {};
+            this.java_arg_of(*ps.at(k), fmt("a{}", unum(@cast<u64>(k))).as_str(), &ja);
+            put(&args, move ja);
+        }
+        out.append(fmt4("\n    /** {}, given out by Volt: call(...) calls it; close() frees it (or it's freed once unreachable) */\n    public static final class Closure{} implements Callback{}, AutoCloseable {{\n        private static final FunctionDescriptor DESC = {};\n", this.c.ty_name(ct), copy ii, copy ii, move desc).as_str());
+        out.append(fmt2("        private final MemorySegment self;\n        private final MethodHandle h;\n        private final Cleaner.Cleanable cleanable;\n\n        Closure{}(MemorySegment c) {\n            MemorySegment self = c.get(ADDRESS, 8);\n            MemorySegment drop = c.get(ADDRESS, 16);\n            this.self = self;\n            this.h = LINKER.downcallHandle(c.get(ADDRESS, 0), DESC);\n            this.cleanable = CLEANER.register(this, () -> {}.drop(drop, self));\n        }}\n\n", copy ii, S(cls)).as_str());
+        out.append(fmt2("        public {} call({}) {{\n", this.java_ty(r, false), move params).as_str());
+        out.append(indent(indent(indent(this.java_call(r, "h", &args, "self").as_str()).as_str()).as_str()).as_str());
+        out.append("        }\n\n        public void close() {\n            cleanable.clean();\n        }\n    }\n");
+    }
+    for (k) in 0..this.traits.len {
+        this.java_trait(@cast<u32>(k), &out);
     }
     // slices that come back
     for (x&) in this.slices.items() {
@@ -6269,6 +6578,19 @@ attach fn java_text(this: bind&) -> std::string {
         out.append(fmt4("\n    interface Read_{} {{\n        {} get(MemorySegment e, long i);\n    }}\n\n    static {}[] slice_", copy sh, copy et, copy et, S("")).as_str());
         out.append(fmt3("{}(MemorySegment v, Read_{} read) {{\n        long n = v.get(JAVA_LONG, 8);\n        MemorySegment e = v.get(ADDRESS, 0).reinterpret(n * {}L);\n", copy sh, copy sh, unum(this.csize(*x).size)).as_str());
         out.append(fmt2("        {}[] out = new {}[(int) n];\n        for (int i = 0; i < n; i++) {{\n            out[i] = read.get(e, i);\n        }}\n        return out;\n    }}\n", copy et, copy et).as_str());
+    }
+    // lists that come back: their elements copied out (each handle the caller's), then freed
+    for (k) in 0..this.lists.len {
+        val e = this.list_elem(*this.lists.at(k));
+        var v = this.view_of(e);
+        if (this.handle_of(e) != null) {
+            v = e;
+        }
+        val et = this.java_ty(this.view_of(e), false);
+        val z = this.csize(this.view_of(e)).size;
+        out.append(fmt3("\n    static {}[] list_{}(MemorySegment v) {{\n        long n = v.get(JAVA_LONG, 8);\n        MemorySegment e = v.get(ADDRESS, 0).reinterpret(n * {}L);\n", copy et, unum(@cast<u64>(k)), unum(z)).as_str());
+        out.append(fmt3("        {}[] out = new {}[(int) n];\n        for (int i = 0; i < n; i++) {{\n            out[i] = {};\n        }}\n", copy et, copy et, this.java_read(v, fmt("e.asSlice(i * {}L)", unum(z)).as_str(), 0)).as_str());
+        out.append("        drop(v.get(ADDRESS, 24), v.get(ADDRESS, 16));\n        return out;\n    }\n");
     }
     // the downcalls
     out.append("\n");
@@ -6283,9 +6605,10 @@ attach fn java_text(this: bind&) -> std::string {
     // classes
     for (s&) in this.handles.items() {
         val n = this.local(this.c.si(*s).name);
-        out.append(fmt4("\n    /** export struct {}: close() (or try-with-resources) frees it; otherwise it's freed once unreachable */\n    public static final class {} implements AutoCloseable {{\n        private final MemorySegment h;\n        private final Cleaner.Cleanable cleanable;\n\n        {}(MemorySegment h) {{\n            this.h = h;\n", S(this.c.si(*s).name), copy n, copy n, S("")).as_str());
-        out.append(fmt("            this.cleanable = CLEANER.register(this, () -> free(h));\n        }\n\n        private static void free(MemorySegment h) {\n            try {\n                H_{}.invokeExact(h);\n            } catch (Throwable e) {\n                throw new RuntimeException(e);\n            }\n        }\n\n", this.free_name(*s)).as_str());
-        out.append("        public void close() {\n            cleanable.clean();\n        }\n\n        MemorySegment handle() {\n            return h;\n        }\n");
+        out.append(fmt4("\n    /** export struct {}: close() (or try-with-resources) frees it; otherwise it's freed once unreachable */\n    public static final class {} implements AutoCloseable {{\n        private final MemorySegment h;\n        private final boolean[] live;\n        private final Cleaner.Cleanable cleanable;\n\n        {}(MemorySegment h) {{\n            this(h, true);\n        }}\n\n", S(this.c.si(*s).name), copy n, copy n, S("")).as_str());
+        out.append(fmt("        // own: freed here (one Volt lends never is)\n        {}(MemorySegment h, boolean own) {\n            this.h = h;\n            boolean[] l = {own};\n            this.live = l;\n", copy n).as_str());
+        out.append(fmt("            this.cleanable = CLEANER.register(this, () -> {\n                if (l[0]) {\n                    l[0] = false;\n                    free(h);\n                }\n            });\n        }\n\n        private static void free(MemorySegment h) {\n            try {\n                H_{}.invokeExact(h);\n            } catch (Throwable e) {\n                throw new RuntimeException(e);\n            }\n        }\n\n", this.free_name(*s)).as_str());
+        out.append("        public void close() {\n            cleanable.clean();\n        }\n\n        MemorySegment handle() {\n            return h;\n        }\n\n        // gives the handle up (to Volt, which frees it)\n        MemorySegment release() {\n            live[0] = false;\n            return h;\n        }\n");
         for (e&) in ents.items() {
             if (e.free_of != null) {
                 continue;
@@ -8172,8 +8495,8 @@ attach fn dart_native(this: bind&, t: u32) -> std::string {
         .OPT(x) => { return this.made_name("opt", x, true); },
         .FN(i) => { return S("Pointer<Void>"); },
         .CLOSURE(i) => { return fmt("Pointer<NativeFunction<{}>>", this.dart_cb_sig(t, true)); },
-        .TRAIT(i) => { return S("void"); }, // only C, C++, Rust and Zig take traits (bind.wide)
-        .LIST(x) => { return S("void"); }, // only C, C++, Rust and Zig take lists (bind.wide)
+        .TRAIT(i) => { return S("void"); }, // only the wide languages take traits (bind.wide)
+        .LIST(x) => { return S("void"); }, // only the wide languages take lists (bind.wide)
     }
 }
 
@@ -10444,7 +10767,7 @@ attach fn rb_text(this: bind&) -> compile_error!std::string {
 // the bindings of package pkg in lang (see the top of the file; node, js and ts are a Node-API
 // addon, its loader and its types; json is the model itself)
 attach fn bindings(this: checker&, pkg: str, lang: str) -> compile_error!std::string {
-    var b: bind = { c: this, pkg: pkg, wide: lang == "c" || lang == "cpp" || lang == "rust" || lang == "zig" || lang == "json" };
+    var b: bind = { c: this, pkg: pkg, wide: lang == "c" || lang == "cpp" || lang == "rust" || lang == "zig" || lang == "java" || lang == "json" };
     val fns = b.exports();
     if (fns.len == 0) {
         return fail(NO_SPAN, fmt("package {} has no export fns to make bindings for", S(pkg)));

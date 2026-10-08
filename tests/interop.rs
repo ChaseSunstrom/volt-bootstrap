@@ -381,13 +381,13 @@ const SHAPES_OUT: &str = "biggest 9 1.5\naccount bea 300\nvisit 301 get 301\nclo
 
 #[test]
 fn bindings_shapes() {
-    // what C, C++, Rust and Zig call beyond the plain shapes: a generic's instances, a struct that owns text
+    // what C, C++, Rust, Zig and Java call beyond the plain shapes: a generic's instances, a struct that owns text
     // held by a handle with its methods, owned values passed in, a trait implemented on either side,
     // closures taking and giving text and handles, closures given back. The library is a leak-checked
     // build, and leak_report.c prints how many of its allocations are live when the client is done
     let e = Env::new("shapes");
     let pkg = "shapelib=shapelib/lib";
-    for (lang, file) in [("c", "shapelib.h"), ("cpp", "shapelib.hpp"), ("rust", "shapelib.rs"), ("zig", "shapelib.zig")] {
+    for (lang, file) in [("c", "shapelib.h"), ("cpp", "shapelib.hpp"), ("rust", "shapelib.rs"), ("zig", "shapelib.zig"), ("java", "shapelib.java")] {
         ok(e.voltc(&["bindings", "shapelib", "--pkg", pkg, "--lang", lang, "-o", &e.path(file)]), &format!("voltc bindings --lang {lang}"));
     }
     // Rust: client_shapes.rs next to its shapelib.rs module, with the leak report as an object
@@ -425,16 +425,31 @@ fn bindings_shapes() {
         } else {
             eprintln!("zig isn't installed: skipping the Zig shapes client");
         }
+        // Java (22 or later): ClientShapes.java next to its shapelib.java, through the FFM API (the
+        // leak report from the library's volt_live_allocs, on stderr)
+        match jdk_bin() {
+            Some(bin) => {
+                let jdir = e.dir.join(format!("java-{backend}"));
+                std::fs::create_dir_all(&jdir).unwrap();
+                std::fs::copy(e.dir.join("shapelib.java"), jdir.join("shapelib.java")).unwrap();
+                std::fs::copy(Path::new(ROOT).join("tests/interop/ClientShapes.java"), jdir.join("ClientShapes.java")).unwrap();
+                ok(Command::new(bin.join("javac")).args(["-Xlint:all", "-Werror", "-d", "classes", "shapelib.java", "ClientShapes.java"]).current_dir(&jdir).output().unwrap(), "javac ClientShapes.java");
+                let o = Command::new(bin.join("java")).args(["--enable-native-access=ALL-UNNAMED", "-cp", "classes", "ClientShapes"]).current_dir(&jdir).env("LD_LIBRARY_PATH", &lib).output().unwrap();
+                assert_eq!(String::from_utf8_lossy(&o.stderr), "volt live: 0\n", "ClientShapes.java ({backend}): the library's allocations at exit");
+                assert_eq!(ok(o, "java ClientShapes"), format!("checked true OVERDRAWN\nlimit true OVERDRAWN\nsign positive not positive\n{SHAPES_OUT}"), "ClientShapes.java ({backend})");
+            }
+            None => eprintln!("no JDK 22 or later (javac): skipping the Java shapes client"),
+        }
     }
     // the model has the trait, and how a fn takes its object
     let json = ok(e.voltc(&["bindings", "shapelib", "--pkg", pkg, "--lang", "json"]), "voltc bindings --lang json");
     for want in [r#"{"kind":"trait","name":"shape","c_name":"shapelib_shape","table":"shapelib_shape_vt""#, r#"{"kind":"object","trait":"shape","owned":false}"#, r#""name":"biggest_i32""#, r#""class":"account","method":"deposit""#] {
         assert!(json.contains(want), "the JSON model lacks {want}:\n{json}");
     }
-    // the other languages' bindings say what only C, C++, Rust and Zig take
+    // the other languages' bindings say which languages take every shape
     let o = e.voltc(&["bindings", "shapelib", "--pkg", pkg, "--lang", "python"]);
     let err = String::from_utf8_lossy(&o.stderr);
-    assert!(!o.status.success() && err.contains("C, C++, Rust and Zig"), "{err}");
+    assert!(!o.status.success() && err.contains("Zig and Java"), "{err}");
 }
 
 #[test]

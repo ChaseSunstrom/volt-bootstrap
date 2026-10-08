@@ -177,9 +177,10 @@ export fn biggest(xs: T[..]) -> T {
 C and Rust call `biggest_i32` and `biggest_f64`; C++ calls `biggest`, an overload per instance
 (each keeps its C name when two take the same parameters).
 
-### C, C++, Rust and Zig: every shape
+### Every shape
 
-C, C++, Rust and Zig take more than the other languages (whose bindings name what they don't take):
+C, C++, Rust, Zig and Java take more than the other languages (whose bindings name what they don't
+take); Java's forms are on [its page](/volt-bootstrap/interop/java/#java-calls-volt):
 
 - **Owned values as parameters.** Text (`std::string`) comes in as a `str` that Volt copies (a
   `&str` in Rust, a `[]const u8` in Zig); a handle by value is given to the fn, which deletes it
