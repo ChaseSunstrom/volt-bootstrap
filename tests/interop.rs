@@ -413,13 +413,13 @@ const SHAPES_OUT: &str = "biggest 9 1.5\naccount bea 300\nvisit 301 get 301\nclo
 
 #[test]
 fn bindings_shapes() {
-    // what C, C++, Rust, Zig, Go, Python, Java, C#, JavaScript, Lua and Ruby call beyond the plain shapes: a generic's instances, a struct that owns text
+    // what C, C++, Rust, Zig, Go, Python, Dart, Java, C#, JavaScript, Lua and Ruby call beyond the plain shapes: a generic's instances, a struct that owns text
     // held by a handle with its methods, owned values passed in, a trait implemented on either side,
     // closures taking and giving text and handles, closures given back. The library is a leak-checked
     // build, and leak_report.c (or the client) prints how many of its allocations are live when the client is done
     let e = Env::new("shapes");
     let pkg = "shapelib=shapelib/lib";
-    for (lang, file) in [("c", "shapelib.h"), ("cpp", "shapelib.hpp"), ("rust", "shapelib.rs"), ("zig", "shapelib.zig"), ("go", "shapelib.go"), ("python", "shapelib.py"), ("pyi", "shapelib.pyi"), ("java", "shapelib.java"), ("node", "shapelib_node.c"), ("js", "shapelib.js"), ("ts", "shapelib.d.ts"), ("lua", "shapelib_lua.c"), ("ruby", "shapelib_ruby.c")] {
+    for (lang, file) in [("c", "shapelib.h"), ("cpp", "shapelib.hpp"), ("rust", "shapelib.rs"), ("zig", "shapelib.zig"), ("go", "shapelib.go"), ("python", "shapelib.py"), ("pyi", "shapelib.pyi"), ("java", "shapelib.java"), ("node", "shapelib_node.c"), ("js", "shapelib.js"), ("ts", "shapelib.d.ts"), ("lua", "shapelib_lua.c"), ("ruby", "shapelib_ruby.c"), ("dart", "shapelib.dart")] {
         ok(e.voltc(&["bindings", "shapelib", "--pkg", pkg, "--lang", lang, "-o", &e.path(file)]), &format!("voltc bindings --lang {lang}"));
     }
     // Rust: client_shapes.rs next to its shapelib.rs module, with the leak report as an object
@@ -563,6 +563,24 @@ fn bindings_shapes() {
             }
             None => eprintln!("ruby (with its headers) isn't installed: skipping the Ruby shapes client"),
         }
+        // Dart: client_shapes.dart next to its shapelib.dart (dart analyze checks both), printing the
+        // library's leak report itself, and after the rest what only Dart checks: callbacks'
+        // exceptions, what Volt can't take, a callback that has to give a handle and throws
+        if let Some(dart) = local_tool("dart", "--version") {
+            let ddir = e.dir.join(format!("dart-{backend}"));
+            std::fs::create_dir_all(&ddir).unwrap();
+            std::fs::copy(e.dir.join("shapelib.dart"), ddir.join("shapelib.dart")).unwrap();
+            std::fs::copy(Path::new(ROOT).join("tests/interop/client_shapes.dart"), ddir.join("client_shapes.dart")).unwrap();
+            if backend == "c" {
+                ok(Command::new(&dart).args(["analyze", "--fatal-infos", "shapelib.dart", "client_shapes.dart"]).current_dir(&ddir).output().unwrap(), "dart analyze (shapes)");
+            }
+            let o = Command::new(&dart).args(["run", "client_shapes.dart"]).current_dir(&ddir).env("VOLT_SHAPELIB_LIB", format!("{lib}/libshapelib.so")).output().unwrap();
+            assert_eq!(String::from_utf8_lossy(&o.stderr), "volt live: 0\n", "client_shapes.dart ({backend}): the library's allocations at exit");
+            let tail = "raised StateError StateError StateError StateError\nrefused StateError StateError StateError StateError StateError StateError StateError\nkept StateError ann 5\nfatal 101 true\n";
+            assert_eq!(ok(o, "dart run client_shapes.dart"), format!("checked true OVERDRAWN\nlimit true OVERDRAWN\nsign positive not positive\n{SHAPES_OUT}{tail}"), "client_shapes.dart ({backend})");
+        } else {
+            eprintln!("dart isn't installed: skipping the Dart shapes client");
+        }
     }
     // the TypeScript types: checked by tsc when it's installed, else parsed (node 23.2+ strips them)
     if Command::new("tsc").arg("--version").output().is_ok_and(|o| o.status.success()) {
@@ -603,6 +621,69 @@ fn bindings_shapes() {
         assert_eq!(String::from_utf8_lossy(&o.stderr), "volt live: 0\n", "client_moreshapes.rb: the library's allocations at exit");
         let want = "measure 70 tag sizer\nsizer closed\neach 0,1,2 gone 4\nstopped stop gone 7\nlabel pos neg\nslice 6\nresult 5 -1\nmaybe yes nil cstr 5\nlist [1, nil]\ngetter 9 [9]\nbig [5, 7]\nfixed 1020 RuntimeError\nbad ArgumentError TypeError\nclosed meanwhile RuntimeError RuntimeError gone 14\n";
         assert_eq!(ok(o, "ruby client_moreshapes.rb"), want, "client_moreshapes.rb");
+    }
+    // Dart: what shapelib's clients don't call (optional text and nullable handles in slices,
+    // callbacks giving a str and a reference or taking a slice, parameters named like the
+    // wrappers' own locals, a doc comment of two lines), from a package of its own
+    if let Some(dart) = local_tool("dart", "--version") {
+        let more = e.dir.join("dartmore");
+        std::fs::create_dir_all(&more).unwrap();
+        let src = r#"export struct thing {
+    n: i64;
+}
+
+export fn thing_new(n: i64) -> thing {
+    return { n: n };
+}
+
+export fn count_text(xs: str?[..]) -> i64 {
+    var t: i64 = 0;
+    for (x) in xs {
+        val s = x ?? continue;
+        t += @cast<i64>(s.len);
+    }
+    return t;
+}
+
+export fn sum_things(xs: thing*[..]) -> i64 {
+    var t: i64 = 0;
+    for (x) in xs {
+        if (x != null) {
+            t += x->n;
+        }
+    }
+    return t;
+}
+
+export fn label(f: fn(i64) -> str, x: i64) -> i64 {
+    return @cast<i64>(f(x).len);
+}
+
+export fn pick(a: thing&, f: fn(thing&) -> thing&) -> i64 {
+    return f(a).n;
+}
+
+// a callback taking a slice,
+// and text parameters named v and r
+export fn total(f: fn(i64[..]) -> i64, v: str, r: str) -> i64 {
+    val xs: i64[] = { 1, 2, 3 };
+    return f(xs[..]) + @cast<i64>(v.len) + @cast<i64>(r.len);
+}
+
+export fn run(call: fn(i64) -> i64) -> i64 {
+    return call(4);
+}
+"#;
+        std::fs::write(more.join("dartmore.volt"), src).unwrap();
+        let mpkg = format!("dartmore={}", more.display());
+        let at = |f: &str| more.join(f).display().to_string();
+        ok(e.voltc(&["bindings", "dartmore", "--pkg", &mpkg, "--lang", "dart", "-o", &at("dartmore.dart")]), "voltc bindings dartmore --lang dart");
+        ok(e.voltc(&["lib", "dartmore", "--pkg", &mpkg, "--shared", "--leak-check", "-o", &at("libdartmore.so")]), "voltc lib dartmore --shared");
+        let client = "import 'dart:ffi';\nimport 'dart:io';\n\nimport 'dartmore.dart';\n\nvoid main() {\n  final a = thing(2), b = thing(5);\n  print('${count_text(['ab', null, 'c'])} ${sum_things([a, null, b])} ${label((x) => 'n$x', 42)} ${pick(a, (t) => t)} ${total((xs) => xs.reduce((x, y) => x + y), 'ab', 'c')} ${run((x) => x + 1)}');\n  a.close();\n  b.close();\n  print(DynamicLibrary.open(Platform.environment['VOLT_DARTMORE_LIB']!).lookup<Size>('volt_live_allocs').value);\n}\n";
+        std::fs::write(more.join("more.dart"), client).unwrap();
+        ok(Command::new(&dart).args(["analyze", "--fatal-infos", "dartmore.dart", "more.dart"]).current_dir(&more).output().unwrap(), "dart analyze (dartmore)");
+        let o = Command::new(&dart).args(["run", "more.dart"]).current_dir(&more).env("VOLT_DARTMORE_LIB", at("libdartmore.so")).output().unwrap();
+        assert_eq!(ok(o, "dart run more.dart"), "3 7 3 2 9 5\n0\n", "Dart: optionals in slices, callbacks giving a str and a reference or taking a slice");
     }
     // the model has the trait, and how a fn takes its object
     let json = ok(e.voltc(&["bindings", "shapelib", "--pkg", pkg, "--lang", "json"]), "voltc bindings --lang json");

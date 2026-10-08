@@ -152,7 +152,7 @@ Each language gets these in its own style:
 | Java | throws a `VoltException` subclass per error set | `String` | arrays, `null` | an `AutoCloseable` class, freed by a `Cleaner` if not closed | a functional interface |
 | Go | `(T, error)`, with an `*Error` value per code for `errors.Is` | `string` | slices; `*T` in, `(T, bool)` out (a handle: `nil` for none) | a type with `Close`, and a finalizer | a `func` |
 | Lua | raises a table with its `name` and `code` (a callback gives `nil, err`) | a string | sequences (written back), `nil` | a userdata with `close()`, `<close>` and `__gc` | any function |
-| Dart | throws a `VoltError` subclass per error set | `String` | `List`s (written back), `null` | a class with `close()`, and a `NativeFinalizer` | any function |
+| Dart | throws a `VoltError` subclass per error set | `String` | `List`s (plain values written back), `T?` | a `VoltObject` with `close()`, and a `NativeFinalizer` | any function |
 | Swift | throws its error set's enum | `String` | `inout` arrays (written back), `T?` | a class with `close()`, freed by `deinit` | a closure |
 | Kotlin/Native | throws a `VoltException` subclass per error set | `String` | primitive arrays (in place) or `List`s, `T?` | an `AutoCloseable` class, freed by a `Cleaner` if not closed | a lambda |
 | Ruby | raises a `Mod::Error` subclass per error set | a `String` | `Array`s (written back), `nil` | a class with `close`, freed by the GC | a block, or anything with `call` |
@@ -179,8 +179,9 @@ C and Rust call `biggest_i32` and `biggest_f64`; C++ calls `biggest`, an overloa
 
 ### Every shape
 
-C, C++, Rust, Zig, Go, Python, Java, C#, JavaScript, Lua and Ruby take more than the other
-languages (whose bindings name what they don't take); Go's forms are under [Go](#go), Python's on
+C, C++, Rust, Zig, Go, Python, Dart, Java, C#, JavaScript, Lua and Ruby take more than the
+other languages (whose bindings name what they don't take); Go's forms are under [Go](#go), Dart's
+under [Dart](#every-shape-in-dart), Python's on
 [its page](/volt-bootstrap/interop/python/#python-calls-volt), Java's on
 [its page](/volt-bootstrap/interop/java/#java-calls-volt), C#'s on
 [its page](/volt-bootstrap/interop/dotnet/#every-shape), JavaScript's on
@@ -360,6 +361,59 @@ Structs are `dart:ffi` structs, with `of` to make one and `copyFrom`; slices are
 Volt writes into one comes back. Enums are Dart enums, error sets are `VoltError` subclasses with
 their codes as constants, and callbacks are functions: an exception one throws comes out of the
 Volt call. The plain C functions are in class `Native`.
+
+### Every shape in Dart
+
+Dart takes [every shape](#every-shape) C does. What Volt gives out (an export struct, a closure, a
+trait's value) is a `VoltObject`: `close()` frees it now, or its `NativeFinalizer` once it's
+collected, and it can't be closed or given while a call it's lent to runs.
+
+- **Owned values as parameters.** Text (`std::string`) is a `String`, which Volt copies. A handle
+  by value is given to the fn, which deletes it: the object lets its handle go. What a call gives
+  is checked first (open, not lent, given once), and given only once every argument converts.
+- **Traits.** A Volt trait is an `abstract interface class` to implement. A fn taking `s: shape&`
+  lends Volt the object for the call; one taking `s: shape` gives it, and Volt calls `close()` on
+  it once it's done when it's also a `VoltCloseable`. A Volt value of the trait comes back as a
+  `volt_shape`, which implements the interface.
+- **Callbacks taking and giving text, handles and errors.** Text is a `String` both ways, a handle
+  is its class (one Volt lends is closed once the callback returns), and an `E!T` callback returns
+  its `T` or throws: `VoltError.of(code)` makes the error for one of the set's codes. Any other
+  exception comes out of the call that led there once Volt returns: Volt gets a stand-in meanwhile
+  (the set's first error for `E!T`, empty text, zero), and a callback that has to give a handle
+  ends the program instead (exit 101), as a Volt panic does. A `str` one gives back is kept for the
+  program's life (once per value); give `std::string` for text made per call.
+- **Lists, and text and handles in slices and optionals.** A `std::vec<T>` comes back as a
+  `List<T>` (of `String`s, or of the classes, each the caller's), and goes in from one (its
+  handles given). A slice of text or of an export struct takes a `List` (lent for the call), an
+  optional text or handle is a `String?` or a nullable class, and an optional in a slice is a `T?`.
+- **Closures given back.** A fn returning `fn(A) -> R` gives a `closureN`, called like a function.
+
+```dart
+class Circle implements shape, VoltCloseable {
+  double r = 1;
+  @override
+  double area() => 3 * r * r;
+  @override
+  String name() => 'circle';
+  @override
+  void grow(double by) => r += by;
+  @override
+  void close() => print('circle gone');
+}
+
+print(describe(Circle()));                  // circle of area 3, lent
+print(grow_twice(Circle()));                // circle gone, then 27.0: given
+print(shout((s) => '$s!', 'hey'));          // hey!
+final hi = greeter();
+print(hi('volt'));                          // hello, volt
+hi.close();
+final ann = account.open('ann');
+print(owners([ann]));                       // [ann]: a List<String>
+```
+
+A Dart function Volt calls runs on the thread that called Volt (its `NativeCallable` is
+isolate-local): one Volt keeps and calls later from another thread, or from a `NativeFinalizer`
+(a handle holding a Dart object Volt was given, collected without `close()`), can't reach Dart.
 
 ### Swift
 
