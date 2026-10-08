@@ -51,7 +51,7 @@ enum shape {
 // shapes that only work at the edge of an export fn
 // the languages whose bindings take every shape (bind.wide), as messages name them
 fn wide_langs() -> std::string {
-    return S("C, C++, Rust, Zig, Python, Java and C#");
+    return S("C, C++, Rust, Zig, Python, Java, C# and Ruby");
 }
 
 fn plain(s: shape) -> bool {
@@ -11278,9 +11278,13 @@ attach fn kt_text(this: bind&) -> compile_error!std::string {
 }
 
 // ---------- Ruby: a C extension ----------
-// A Ruby exception longjmps, so nothing malloc'd is held across one: temporaries are ALLOCV
-// buffers (the GC frees them), callbacks run (and convert their result) under rb_protect, and their
-// exception is raised again once the Volt call is back (an owned result freed first)
+// The package is a module. An export struct, Volt's own value of a trait and a closure Volt gives
+// out are objects holding it in a box (vr_box); a trait from Ruby is any object with its methods.
+// A Ruby exception longjmps, so nothing malloc'd is held across one: temporaries are ALLOCV buffers
+// (the GC frees them), and what a call gives Volt is given up only once every argument is
+// converted. What Volt calls in Ruby (a callback, a trait's method, close on what Volt drops) runs,
+// its result converted, under rb_protect: what it raises is kept, Volt gets a stand-in, and the
+// Volt call that led there raises it once it's back (its owned result freed first)
 
 // a Ruby constant's name: vec2 is Vec2, math_error is MathError
 fn rb_const(s: str) -> std::string {
@@ -11298,6 +11302,11 @@ fn rb_const(s: str) -> std::string {
         }
     }
     return out;
+}
+
+// the Ruby class of name in the package's module (Shapelib::Account)
+attach fn rb_class(this: bind&, name: str) -> std::string {
+    return fmt2("{}::{}", rb_const(this.pkg), rb_const(name));
 }
 
 // C statements reading Ruby value v into C lvalue c (simple types: numbers, bool, enums, error
@@ -11347,14 +11356,376 @@ attach fn rb_put(this: bind&, t: u32, c: str) -> std::string {
     }
 }
 
-// one argument of an export fn: its C locals (decl), the statements filling them from argv (get),
-// what the call passes (pass), what writes changes back (after), and a callback's vr_cb (cb)
+// an expression making the Ruby value of plain C value c (of type t): a str copied into a String, a
+// pointer as a Pointer (nil for null), an optional's value or nil, a slice as an Array (made by
+// statements in pre, into tmp); none when t isn't one of those
+attach fn rb_out(this: bind&, t: u32, c: str, pre: std::string&, tmp: str) -> std::string? {
+    if (this.node_simple(t)) {
+        return this.rb_put(t, c);
+    }
+    match (this.shape_of(t) ?? shape::VOID) {
+        .STR => { return fmt2("rb_utf8_str_new((const char *)({}).ptr, (long)({}).len)", S(c), S(c)); },
+        .CSTR => { return fmt2("(({}) ? rb_utf8_str_new_cstr({}) : Qnil)", S(c), S(c)); },
+        .PTR(x) => { return fmt2("(({}) ? vr_from_pointer((void *)({})) : Qnil)", S(c), S(c)); },
+        .FN(i) => { return fmt2("(({}) ? vr_from_pointer((void *)({})) : Qnil)", S(c), S(c)); },
+        .OPT(x) => {
+            var inner: std::string = {};
+            val v = this.rb_out(x, fmt("({}).value", S(c)).as_str(), &inner, tmp) ?? return null;
+            if (inner.len() > 0) {
+                return null;
+            }
+            return fmt2("(({}).has ? {} : Qnil)", S(c), move v);
+        },
+        .SLICE(x) => {
+            var inner: std::string = {};
+            val v = this.rb_out(x, fmt("({}).ptr[i]", S(c)).as_str(), &inner, tmp) ?? return null;
+            if (inner.len() > 0) {
+                return null;
+            }
+            pre.append(fmt4("    VALUE {} = rb_ary_new_capa((long)({}).len);\n    for (size_t i = 0; i < ({}).len; i++) {{\n        rb_ary_push({}, ", S(tmp), S(c), S(c), S(tmp)).as_str());
+            pre.append(fmt("{});\n    }}\n", move v).as_str());
+            return S(tmp);
+        },
+        default => { return null; },
+    }
+}
+
+// C statements giving C lvalue c (of type t) what a Ruby method Volt called returned, v: a number,
+// a struct, text (copied: Volt frees it), a str (kept for good, see vr_static), a handle (given up)
+// or one lent, a pointer, an optional or E!T of those; none when Ruby can't give t back
+attach fn rb_give(this: bind&, t: u32, v: str, c: str, what: str) -> std::string? {
+    if (this.node_simple(t)) {
+        return this.rb_get(t, v, c, what);
+    }
+    val h = this.lent_handle(t);
+    if (h) {
+        val get = fmt4("{} = vr_lend({}, &vr_type_{}, vr_next(), {})->h;", S(c), S(v), this.node_sname(h), S(what));
+        if (this.nullable_ptr(t)) {
+            return fmt3("if (NIL_P({})) {{ {} = NULL; }} else {{ {} }}", S(v), S(c), move get);
+        }
+        return get;
+    }
+    match (this.shape_of(t) ?? shape::VOID) {
+        .STR => { return fmt4("{}.ptr = (const uint8_t *)vr_static({}, &{}.len, {});", S(c), S(v), S(c), S(what)); },
+        .CSTR => {
+            var s = fmt4("if (NIL_P({})) {{ {} = NULL; }} else {{ size_t n_; {} = vr_static({}, &n_, ", S(v), S(c), S(c), S(v));
+            s.append(fmt("{}); }}", S(what)).as_str());
+            return s;
+        },
+        .TEXT(x) => { return fmt3("{} = vr_give_text({}, {});", S(c), S(v), S(what)); },
+        .HANDLE(s) => { return fmt4("{} = vr_give_box({}, &vr_type_{}, {});", S(c), S(v), this.node_sname(s), S(what)); },
+        .PTR(x) => { return fmt3("{} = NIL_P({}) ? NULL : vr_pointer({});", S(c), S(v), S(v)); },
+        .FN(i) => { return fmt4("{} = NIL_P({}) ? NULL : ({})vr_pointer({});", S(c), S(v), this.c_prim(t, false), S(v)); },
+        .OPT(x) => {
+            val inner = this.rb_give(x, v, fmt("{}.value", S(c)).as_str(), what) ?? return null;
+            return fmt3("if (!NIL_P({})) {{ {}.has = true; {} }}", S(v), S(c), move inner);
+        },
+        .RESULT(e, x) => {
+            if (x == VOID) {
+                return fmt2("(void){}; {}.error = 0;", S(v), S(c));
+            }
+            val inner = this.rb_give(x, v, fmt("{}.value", S(c)).as_str(), what) ?? return null;
+            return fmt2("{}.error = 0; {}", S(c), move inner);
+        },
+        default => { return null; },
+    }
+}
+
+// what Volt gets from a Ruby method that raised (or was skipped: one before it raised) instead of
+// giving r: statements setting u.out, where st says which (see vr_run); none when there's nothing
+// Volt could go on with (a handle, a reference, a function), and the program ends (see vr_fatal)
+attach fn rb_stand_in(this: bind&, r: u32) -> std::string? {
+    match (*this.c.t.get(r)) {
+        .REF(x) => { return null; },
+        default => {},
+    }
+    match (this.shape_of(r) ?? shape::VOID) {
+        .HANDLE(s) => { return null; },
+        .FN(i) => { return null; },
+        .STR => { return S("        u.out.ptr = (const uint8_t *)\"\";\n        u.out.len = 0;\n"); },
+        .CSTR => { return S("        u.out = \"\";\n"); },
+        .TEXT(x) => { return S("        memset(&u.out, 0, sizeof u.out);\n        u.out.ptr = (const uint8_t *)\"\";\n"); },
+        .RESULT(e, x) => {
+            // the code of the Volt error it raised, else an error of E's own (its first), so Volt sees it fail
+            var code = S("1");
+            match (*this.c.t.get(e)) {
+                .ENUM(id) => {
+                    if (this.c.ei(id).values.len > 0) {
+                        code = num(*this.c.ei(id).values.at(0));
+                    }
+                },
+                default => {},
+            }
+            return fmt("        memset(&u.out, 0, sizeof u.out);\n        if (st < 0 || !vr_take_code(&u.out.error)) {{\n            u.out.error = {}u;\n        }}\n", move code);
+        },
+        default => { return S("        memset(&u.out, 0, sizeof u.out);\n"); },
+    }
+}
+
+// the C function Volt calls for a callback or a trait's method (name; it takes its data first,
+// self), calling method mid of recv (a C expression of self) with the arguments under rb_protect
+// (vr_run), its result converted there too. A handle Volt lends is an object closed once the method
+// returns; one Volt gives is the object's, or freed when it never got to Ruby. What names it in
+// errors: what
+attach fn rb_upcall(this: bind&, name: str, recv: str, mid: str, ps: std::vec<u32>&, r: u32, what: str, out: std::string&) -> compile_error!void {
+    var fields = S("    VALUE recv;\n");
+    var params = S("void *self");
+    var sets = fmt("    u.recv = {};\n", S(recv));
+    var pre: std::string = {};
+    var conv: std::string = {};
+    var after: std::string = {};
+    var lents: u64 = 0;
+    for (k) in 0..ps.len {
+        val p = *ps.at(k);
+        val kk = unum(@cast<u64>(k));
+        val ct = spaced(this.c_in(p, false));
+        fields.append(fmt2("    {}a{};\n", copy ct, copy kk).as_str());
+        params.append(fmt2(", {}a{}", copy ct, copy kk).as_str());
+        sets.append(fmt2("    u.a{} = a{};\n", copy kk, copy kk).as_str());
+        val h = this.lent_handle(p);
+        if (h) {
+            // lent: an object closed once the method returns
+            val sn = this.node_sname(h);
+            val j = unum(lents);
+            lents += 1;
+            var w = fmt4("(u->lent[{}] = vr_wrap(vr_class_{}, &vr_type_{}, (void *)u->a{}, true))", copy j, copy sn, copy sn, copy kk);
+            if (this.nullable_ptr(p)) {
+                w = fmt2("(u->a{} ? {} : Qnil)", copy kk, move w);
+            }
+            conv.append(fmt2("    argv[{}] = {};\n", copy kk, move w).as_str());
+            after.append(fmt3("    if (u.lent[{}]) {{\n        vr_unlend(u.lent[{}], &vr_type_{});\n    }}\n", copy j, copy j, copy sn).as_str());
+        } else {
+            match (this.shape_of(p) ?? shape::VOID) {
+                .HANDLE(s) => {
+                    // given: the object's, or freed when it never got to Ruby
+                    val sn = this.node_sname(s);
+                    conv.append(fmt4("    argv[{}] = vr_wrap(vr_class_{}, &vr_type_{}, u->a{}, false);\n", copy kk, copy sn, copy sn, copy kk).as_str());
+                    conv.append(fmt("    u->a{} = NULL;\n", copy kk).as_str());
+                    after.append(fmt3("    if (u.a{}) {{\n        {}(u.a{});\n    }}\n", copy kk, this.free_name(s), copy kk).as_str());
+                },
+                .TEXT(x) => {
+                    // lent as a str: copied
+                    val v = this.rb_out(STR, fmt("u->a{}", copy kk).as_str(), &pre, "") ?? return fail(NO_SPAN, fmt("{} takes text, which can't go to Ruby", S(what)));
+                    conv.append(fmt2("    argv[{}] = {};\n", copy kk, move v).as_str());
+                },
+                .RESULT(e, x) => {
+                    // E!T: its error (a Mod::Error), or its value
+                    var v = S("Qnil");
+                    if (x != VOID) {
+                        v = this.rb_out(x, fmt("u->a{}.value", copy kk).as_str(), &pre, fmt("ary{}", copy kk).as_str()) ?? return fail(NO_SPAN, fmt2("{} takes {}, which can't go to Ruby", S(what), this.c.ty_name(p)));
+                    }
+                    conv.append(fmt4("    argv[{}] = u->a{}.error ? vr_error_new(u->a{}.error) : {};\n", copy kk, copy kk, copy kk, move v).as_str());
+                },
+                default => {
+                    val v = this.rb_out(p, fmt("u->a{}", copy kk).as_str(), &pre, fmt("ary{}", copy kk).as_str()) ?? return fail(NO_SPAN, fmt2("{} takes {}, which can't go to Ruby", S(what), this.c.ty_name(p)));
+                    conv.append(fmt2("    argv[{}] = {};\n", copy kk, move v).as_str());
+                },
+            }
+        }
+    }
+    if (lents > 0) {
+        fields.append(fmt("    VALUE lent[{}];\n", unum(lents)).as_str());
+    }
+    val rc = this.c_out(r, false);
+    var give = S("    (void)ret;\n");
+    var stand_in: std::string = {};
+    var fatal = false;
+    if (r != VOID) {
+        fields.append(fmt("    {}out;\n", spaced(copy rc)).as_str());
+        val g = this.rb_give(r, "ret", "u->out", fmt("\"the result of {}\"", S(what)).as_str()) ?? return fail(NO_SPAN, fmt2("{} gives back {}, which Ruby can't give: nothing would keep it", S(what), this.c.ty_name(r)));
+        give = fmt("    {}\n", move g);
+        val si = this.rb_stand_in(r);
+        if (si) {
+            stand_in = copy si;
+        } else {
+            fatal = true;
+        }
+    }
+    out.append(fmt2("\nstruct {}_up {{\n{}}};\n", S(name), move fields).as_str());
+    out.append(fmt3("\nstatic VALUE {}_run(VALUE arg) {{\n    struct {}_up *u = (struct {}_up *)arg;\n", S(name), S(name), S(name)).as_str());
+    var argv = S("NULL");
+    if (ps.len > 0) {
+        out.append(fmt("    VALUE argv[{}];\n", unum(@cast<u64>(ps.len))).as_str());
+        argv = S("argv");
+    }
+    out.append(pre.as_str());
+    out.append(conv.as_str());
+    out.append(fmt3("    VALUE ret = rb_funcallv(u->recv, rb_intern(\"{}\"), {}, {});\n", S(mid), unum(@cast<u64>(ps.len)), move argv).as_str());
+    out.append(give.as_str());
+    out.append("    return Qnil;\n}\n");
+    out.append(fmt3("\nstatic {}{}({}) {{\n", spaced(copy rc), S(name), move params).as_str());
+    out.append(fmt2("    struct {}_up u;\n    memset(&u, 0, sizeof u);\n{}", S(name), move sets).as_str());
+    if (fatal || stand_in.len() > 0) {
+        out.append(fmt2("    int st = vr_run({}_run, &u);\n{}", S(name), move after).as_str());
+        if (fatal) {
+            out.append("    if (st != 0) {\n        vr_fatal();\n    }\n");
+        } else {
+            out.append(fmt("    if (st != 0) {{\n{}    }}\n", move stand_in).as_str());
+        }
+    } else {
+        out.append(fmt2("    vr_run({}_run, &u);\n{}", S(name), move after).as_str());
+    }
+    if (r != VOID) {
+        out.append("    return u.out;\n");
+    }
+    out.append("}\n");
+    return;
+}
+
+// one argument of a call from Ruby: its C locals (decl), the statements converting its Ruby value
+// (get: they may raise), what checks again that a handle it took is open once every argument is
+// converted (check: a conversion can run Ruby, which could close it), what gives it up or marks it
+// in use (give: nothing raises from there until the call is back), what the call passes (pass; none
+// for a method's own object), what ends that once it's back (done), and what writes Volt's changes
+// back (after)
 struct rb_arg {
     decl: std::string = {};
     get: std::string = {};
+    check: std::string = {};
+    give: std::string = {};
     pass: std::string = {};
+    done: std::string = {};
     after: std::string = {};
-    cb: std::string = {};
+}
+
+// a str argument: the bytes of a frozen copy of the String, kept for the call (a callback can't
+// change them under Volt)
+fn rb_str_arg(v: str, c: str, what: str, a: rb_arg&) -> void {
+    a.decl = fmt2("volt_str {}; VALUE {}_keep = Qnil;", S(c), S(c));
+    a.get = fmt4("{}.ptr = (const uint8_t *)vr_str({}, &{}.len, &{}_keep, ", S(c), S(v), S(c), S(c));
+    a.get.append(fmt("{});", S(what)).as_str());
+    a.pass = S(c);
+    a.done = fmt("RB_GC_GUARD({}_keep);", S(c));
+}
+
+// an export struct's handle given to Volt: the object lets go of it once every argument is
+// converted (nullable: nil for none)
+attach fn rb_gift_arg(this: bind&, s: u32, v: str, c: str, what: str, nullable: bool, a: rb_arg&) -> void {
+    a.decl = fmt3("struct vr_box *{}_b = NULL; {}{} = NULL;", S(c), spaced(this.handle_c(s, false)), S(c));
+    val get = fmt4("{}_b = vr_gift({}, &vr_type_{}, vr_sn, {});", S(c), S(v), this.node_sname(s), S(what));
+    if (nullable) {
+        a.get = fmt2("if (!NIL_P({})) {{ {} }}", S(v), move get);
+    } else {
+        a.get = move get;
+    }
+    a.check = fmt2("vr_check({}_b, {});", S(c), S(what));
+    a.give = fmt4("if ({}_b) {{ {} = {}_b->h; {}_b->h = NULL; }}", S(c), S(c), S(c), S(c));
+    a.pass = S(c);
+}
+
+// C statements reading Ruby value x into dst, an element of a slice (of view type t) made for a
+// call: a number or a struct, text (its bytes copied into the call's buffer buf, a cursor; uses says
+// it's needed), a pointer, an optional of those; none when t isn't one of those
+attach fn rb_elem_in(this: bind&, t: u32, x: str, dst: str, what: str, buf: str, uses: bool&) -> std::string? {
+    if (this.node_simple(t)) {
+        return this.rb_get(t, x, dst, what);
+    }
+    match (this.shape_of(t) ?? shape::VOID) {
+        .STR => {
+            *uses = true;
+            var s = fmt4("{{ size_t n_; const char *p_ = vr_bytes({}, &n_, {}); memcpy({}, p_, n_); {}.ptr = ", S(x), S(what), S(buf), S(dst));
+            s.append(fmt3("(const uint8_t *){}; {}.len = n_; {} += n_; }}", S(buf), S(dst), S(buf)).as_str());
+            return s;
+        },
+        .CSTR => {
+            *uses = true;
+            var s = fmt4("if (NIL_P({})) {{ {} = NULL; }} else {{ size_t n_; const char *p_ = vr_bytes({}, &n_, {}); ", S(x), S(dst), S(x), S(what));
+            s.append(fmt5("memcpy({}, p_, n_); {}[n_] = 0; {} = {}; {} += n_ + 1; }}", S(buf), S(buf), S(dst), S(buf), S(buf)).as_str());
+            return s;
+        },
+        .PTR(y) => { return fmt3("{} = NIL_P({}) ? NULL : vr_pointer({});", S(dst), S(x), S(x)); },
+        .FN(i) => { return fmt4("{} = NIL_P({}) ? NULL : ({})vr_pointer({});", S(dst), S(x), this.c_prim(t, false), S(x)); },
+        .OPT(y) => {
+            val inner = this.rb_elem_in(y, x, fmt("{}.value", S(dst)).as_str(), what, buf, uses) ?? return null;
+            return fmt5("memset(&{}, 0, sizeof {}); if (!NIL_P({})) {{ {}.has = true; {} }}", S(dst), S(dst), S(x), S(dst), move inner);
+        },
+        default => { return null; },
+    }
+}
+
+// a slice argument (or a list's: given) from a Ruby Array, as a slice of e's views: numbers,
+// structs and optionals of them (what Volt writes into a slice comes back), text (its bytes copied
+// for the call), handles (lent: in use until the call is back; given from a list: given up),
+// pointers
+attach fn rb_slice_arg(this: bind&, t: u32, e: u32, from_list: bool, v: str, c: str, what: str, a: rb_arg&) -> compile_error!void {
+    val ev = this.view_of(e);
+    val hb = this.handle_of(e);
+    var src = fmt2("vr_array({}, {})", S(v), S(what));
+    if (hb != null) {
+        // the elements (their boxes) kept for the call, whatever becomes of the Array
+        src = fmt("rb_ary_dup({})", move src);
+    }
+    a.decl = fmt4("{} {}; VALUE {}_tmp = 0, {}_ary;", this.c_prim(this.in_ty(t), false), S(c), S(c), S(c));
+    a.get = fmt4("{}_ary = {}; {}.len = (size_t)RARRAY_LEN({}_ary);", S(c), move src, S(c), S(c));
+    a.get.append(fmt4(" {}.ptr = ALLOCV({}_tmp, sizeof *{}.ptr * ({}.len ? ", S(c), S(c), S(c), S(c)).as_str());
+    a.get.append(fmt("{}.len : 1));", S(c)).as_str());
+    a.pass = S(c);
+    // the buffers (ALLOCV's objects, when they're big) live until the call is back
+    a.done = fmt2("RB_GC_GUARD({}_tmp); RB_GC_GUARD({}_ary);", S(c), S(c));
+    val each = fmt2(" for (size_t i = 0; i < {}.len; i++) {{ VALUE x_ = rb_ary_entry({}_ary, (long)i); ", S(c), S(c));
+    if (hb) {
+        var gives = false;
+        if (from_list) {
+            match (this.shape_of(e) ?? shape::VOID) {
+                .HANDLE(s) => { gives = true; },
+                default => {},
+            }
+        }
+        a.decl.append(fmt2(" VALUE {}_btmp = 0; struct vr_box **{}_b;", S(c), S(c)).as_str());
+        a.get.append(fmt4(" {}_b = ALLOCV({}_btmp, sizeof *{}_b * ({}.len ? ", S(c), S(c), S(c), S(c)).as_str());
+        a.get.append(fmt("{}.len : 1));", S(c)).as_str());
+        var take = S("vr_lend");
+        if (gives) {
+            take = S("vr_gift");
+        }
+        var one = fmt4("{}_b[i] = {}(x_, &vr_type_{}, vr_sn, {});", S(c), move take, this.node_sname(hb), S(what));
+        if (this.nullable_ptr(ev)) {
+            one = fmt2("if (NIL_P(x_)) {{ {}_b[i] = NULL; }} else {{ {} }}", S(c), move one);
+        }
+        a.get.append(each.as_str());
+        a.get.append(fmt2("{} {}.ptr[i] = NULL; }}", move one, S(c)).as_str());
+        a.check = fmt3("for (size_t i = 0; i < {}.len; i++) {{ vr_check({}_b[i], {}); }}", S(c), S(c), S(what));
+        val each_b = fmt2("for (size_t i = 0; i < {}.len; i++) {{ if ({}_b[i]) {{ ", S(c), S(c));
+        a.done.append(fmt(" RB_GC_GUARD({}_btmp);", S(c)).as_str());
+        if (gives) {
+            a.give = fmt4("{}{}.ptr[i] = {}_b[i]->h; {}_b[i]->h = NULL; } }", copy each_b, S(c), S(c), S(c));
+        } else {
+            a.give = fmt4("{}{}.ptr[i] = {}_b[i]->h; {}_b[i]->busy++; } }", copy each_b, S(c), S(c), S(c));
+            a.done.append(fmt2(" {}{}_b[i]->busy--; } }", copy each_b, S(c)).as_str());
+        }
+        return;
+    }
+    var uses = false;
+    val one = this.rb_elem_in(ev, "x_", fmt("{}.ptr[i]", S(c)).as_str(), what, fmt("{}_buf", S(c)).as_str(), &uses) ?? return fail(NO_SPAN, fmt("a slice of {} can't come from Ruby", this.c.ty_name(e)));
+    if (uses) {
+        // room for the text's bytes, which Volt reads during the call
+        a.decl.append(fmt2(" VALUE {}_btmp = 0; char *{}_buf;", S(c), S(c)).as_str());
+        a.get.append(fmt3(" {}_buf = vr_room({}_ary, &{}_btmp);", S(c), S(c), S(c)).as_str());
+        a.done.append(fmt(" RB_GC_GUARD({}_btmp);", S(c)).as_str());
+    }
+    a.get.append(each.as_str());
+    a.get.append(fmt("{} }", move one).as_str());
+    if (from_list) {
+        return;
+    }
+    // what Volt wrote into the elements comes back
+    var back: std::string = {};
+    if (this.node_simple(ev)) {
+        back = this.rb_put(ev, fmt("{}.ptr[i]", S(c)).as_str());
+    } else {
+        match (this.shape_of(ev) ?? shape::VOID) {
+            .OPT(y) => {
+                if (this.node_simple(y)) {
+                    back = fmt2("({}.ptr[i].has ? {} : Qnil)", S(c), this.rb_put(y, fmt("{}.ptr[i].value", S(c)).as_str()));
+                }
+            },
+            default => {},
+        }
+    }
+    if (back.len() > 0) {
+        a.after = fmt3("for (size_t i = 0; i < {}.len; i++) {{ rb_ary_store({}_ary, (long)i, {}); }}", S(c), S(c), move back);
+    }
+    return;
 }
 
 attach fn rb_arg_of(this: bind&, t: u32, v: str, c: str, what: str, a: rb_arg&) -> compile_error!void {
@@ -11366,17 +11737,24 @@ attach fn rb_arg_of(this: bind&, t: u32, v: str, c: str, what: str, a: rb_arg&) 
     }
     val h = this.lent_handle(t);
     if (h) {
-        a.decl = fmt2("{}{};", spaced(this.handle_c(h, false)), S(c));
-        a.get = fmt3("{} = vr_check_{}({});", S(c), this.node_sname(h), S(v));
-        a.pass = S(c);
+        // lent: in use until the call is back
+        a.decl = fmt("struct vr_box *{} = NULL;", S(c));
+        val get = fmt4("{} = vr_lend({}, &vr_type_{}, vr_sn, {});", S(c), S(v), this.node_sname(h), S(what));
+        if (this.nullable_ptr(t)) {
+            a.get = fmt2("if (!NIL_P({})) {{ {} }}", S(v), move get);
+            a.pass = fmt2("({} ? {}->h : NULL)", S(c), S(c));
+        } else {
+            a.get = move get;
+            a.pass = fmt("{}->h", S(c));
+        }
+        a.check = fmt2("vr_check({}, {});", S(c), S(what));
+        a.give = fmt2("if ({}) {{ {}->busy++; }}", S(c), S(c));
+        a.done = fmt2("if ({}) {{ {}->busy--; }}", S(c), S(c));
         return;
     }
     match (this.shape_of(t) ?? shape::VOID) {
-        .STR => {
-            a.decl = fmt("volt_str {};", S(c));
-            a.get = fmt4("{}.ptr = (const uint8_t *)vr_str({}, &{}.len, {});", S(c), S(v), S(c), S(what));
-            a.pass = S(c);
-        },
+        .STR => { rb_str_arg(v, c, what, a); },
+        .TEXT(x) => { rb_str_arg(v, c, what, a); }, // owned text comes in as a str, which Volt copies
         .CSTR => {
             a.decl = fmt("const char *{} = NULL;", S(c));
             a.get = fmt3("if (!NIL_P({})) {{ VALUE s_ = {}; {} = StringValueCStr(s_); }}", S(v), S(v), S(c));
@@ -11410,80 +11788,156 @@ attach fn rb_arg_of(this: bind&, t: u32, v: str, c: str, what: str, a: rb_arg&) 
             a.get = fmt3("if (!NIL_P({})) {{ {} = vr_pointer({}); }}", S(v), S(c), S(v));
             a.pass = S(c);
         },
-        .SLICE(x) => {
-            if (!this.node_simple(x)) {
-                return fail(NO_SPAN, fmt("a slice of {} can't come from Ruby (numbers, bool, enums and structs of those can)", this.c.ty_name(x)));
-            }
-            a.decl = fmt3("{} {}; VALUE {}_tmp = 0;", this.c_prim(t, false), S(c), S(c));
-            a.get = fmt3("Check_Type({}, T_ARRAY); {}.len = (size_t)RARRAY_LEN({}); ", S(v), S(c), S(v));
-            a.get.append(fmt3("{}.ptr = ALLOCV({}_tmp, sizeof *{}.ptr * ", S(c), S(c), S(c)).as_str());
-            a.get.append(fmt2("({}.len ? {}.len : 1));", S(c), S(c)).as_str());
-            a.get.append(fmt3(" for (size_t i = 0; i < {}.len; i++) {{ {} }}", S(c), this.rb_get(x, fmt("rb_ary_entry({}, (long)i)", S(v)).as_str(), fmt("{}.ptr[i]", S(c)).as_str(), what), S("")).as_str());
+        .FN(i) => {
+            a.decl = fmt2("{} {} = NULL;", this.c_prim(t, false), S(c));
+            a.get = fmt4("if (!NIL_P({})) {{ {} = ({})vr_pointer({}); }}", S(v), S(c), this.c_prim(t, false), S(v));
             a.pass = S(c);
-            // what Volt wrote into the elements comes back
-            a.after = fmt3("for (size_t i = 0; i < {}.len; i++) {{ rb_ary_store({}, (long)i, {}); }}", S(c), S(v), this.rb_put(x, fmt("{}.ptr[i]", S(c)).as_str()));
         },
+        .HANDLE(s) => { this.rb_gift_arg(s, v, c, what, false, a); },
+        .SLICE(x) => { try this.rb_slice_arg(t, this.slice_elem(t), false, v, c, what, a); },
+        .LIST(x) => { try this.rb_slice_arg(t, this.list_elem(t), true, v, c, what, a); },
         .OPT(x) => {
-            if (!this.node_simple(x)) {
-                return fail(NO_SPAN, fmt("an optional {} can't come from Ruby (numbers, bool, enums and structs of those can)", this.c.ty_name(x)));
+            match (this.shape_of(x) ?? shape::VOID) {
+                .HANDLE(s) => {
+                    this.rb_gift_arg(s, v, c, what, true, a);
+                    return;
+                },
+                default => {},
             }
-            a.decl = fmt2("{} {};", this.c_prim(t, false), S(c));
+            a.decl = fmt2("{} {};", this.c_prim(this.in_ty(t), false), S(c));
+            var inner: std::string = {};
+            if (this.in_ty(x) == STR) {
+                // text: a str of a frozen copy, as rb_str_arg
+                a.decl.append(fmt(" VALUE {}_keep = Qnil;", S(c)).as_str());
+                inner = fmt4("{}.value.ptr = (const uint8_t *)vr_str({}, &{}.value.len, &{}_keep, ", S(c), S(v), S(c), S(c));
+                inner.append(fmt("{});", S(what)).as_str());
+                a.done = fmt("RB_GC_GUARD({}_keep);", S(c));
+            } else if (this.node_simple(x)) {
+                inner = this.rb_get(x, v, fmt("{}.value", S(c)).as_str(), what);
+            } else {
+                return fail(NO_SPAN, fmt("an optional {} can't come from Ruby", this.c.ty_name(x)));
+            }
             a.get = fmt4("memset(&{}, 0, sizeof {}); if (!NIL_P({})) {{ {}.has = true; ", S(c), S(c), S(v), S(c));
-            a.get.append(fmt("{} }", this.rb_get(x, v, fmt("{}.value", S(c)).as_str(), what)).as_str());
+            a.get.append(fmt("{} }}", move inner).as_str());
             a.pass = S(c);
         },
         .CLOSURE(i) => {
-            a.decl = fmt("struct vr_cb {}_cb;", S(c));
-            a.get = fmt3("{}_cb.fn = vr_callable({}); {}_cb.state = 0;", S(c), S(v), S(c));
-            a.pass = fmt2("vr_cb{}, &{}_cb", unum(@cast<u64>(i)), S(c));
-            a.cb = fmt("{}_cb", S(c));
+            // a Proc (or a block), which Volt calls through vr_cbN with it as the data
+            a.decl = fmt("VALUE {};", S(c));
+            a.get = fmt2("{} = vr_callable({});", S(c), S(v));
+            a.pass = fmt2("vr_cb{}, (void *){}", unum(@cast<u64>(i)), S(c));
+            a.done = fmt("RB_GC_GUARD({});", S(c));
+        },
+        .TRAIT(i) => {
+            // Volt's own (lent, or given up), or any object with the trait's methods (lent for the
+            // call, or given: kept until Volt drops it)
+            val tn = this.short(this.trait_of(t));
+            val given = !this.is_ref(t);
+            a.decl = fmt4("{} {}; struct vr_keep {}_k; struct vr_box *{}_b = NULL;", this.c_named(tn.as_str(), false), S(c), S(c), S(c));
+            var g = S("false");
+            if (given) {
+                g = S("true");
+            }
+            a.get = fmt5("{}_b = vr_as_{}({}, &{}, &{}_k, ", S(c), copy tn, S(v), S(c), S(c));
+            a.get.append(fmt2("{}, vr_sn, {});", move g, S(what)).as_str());
+            a.pass = S(c);
+            a.check = fmt2("vr_check({}_b, {});", S(c), S(what));
+            // Volt's own: its object, as it is once every argument is converted
+            val own = fmt3("{} = *({} *){}_b->h; ", S(c), this.c_named(tn.as_str(), false), S(c));
+            if (given) {
+                a.give = fmt4("if ({}_b) {{ {}free({}_b->h); {}_b->h = NULL; }}", S(c), copy own, S(c), S(c));
+                a.give.append(fmt3(" else {{ {}.self = vr_keep_new({}); {}.drop = vr_drop_kept; }}", S(c), S(v), S(c)).as_str());
+            } else {
+                a.give = fmt4("if ({}_b) {{ {}{}.drop = NULL; {}_b->busy++; }}", S(c), copy own, S(c), S(c));
+                a.done = fmt2("if ({}_b) {{ {}_b->busy--; }}", S(c), S(c));
+            }
         },
         default => { return fail(NO_SPAN, fmt("{} can't come from Ruby", this.c.ty_name(t))); },
     }
     return;
 }
 
-// an expression making the Ruby value of C result r (of type t); statements before it (pre) raise
-// the result's error
+// a method's own object (of box type vr_type_NAME, holding a C ctype): lent to the call, as o
+fn rb_self_arg(name: str, ctype: str) -> rb_arg {
+    var a: rb_arg = {};
+    a.decl = fmt("struct vr_box *vr_self = NULL; {} *o;", S(ctype));
+    a.get = fmt("vr_self = vr_lend(self, &vr_type_{}, vr_sn, \"self\");", S(name));
+    a.check = S("vr_check(vr_self, \"self\");");
+    a.give = S("o = vr_self->h; vr_self->busy++;");
+    a.done = S("vr_self->busy--;");
+    return a;
+}
+
+// an expression making the Ruby value of C result r (of type t), which the caller owns (text, a
+// handle, a list, a closure, a trait's object); statements before it (pre) raise the result's error
 attach fn rb_result(this: bind&, t: u32, r: str, pre: std::string&) -> compile_error!std::string {
     if (t == VOID) {
         return S("Qnil");
     }
-    if (this.node_simple(t)) {
-        return this.rb_put(t, r);
-    }
     match (this.shape_of(t) ?? shape::VOID) {
-        .STR => { return fmt2("rb_utf8_str_new((const char *){}.ptr, (long){}.len)", S(r), S(r)); },
-        .CSTR => { return fmt2("({} ? rb_utf8_str_new_cstr({}) : Qnil)", S(r), S(r)); },
         .TEXT(x) => { return fmt("vr_take({})", S(r)); },
-        .HANDLE(s) => { return fmt2("vr_wrap_{}({})", this.node_sname(s), S(r)); },
-        .OPT(x) => {
-            if (!this.node_simple(x)) {
-                return fail(NO_SPAN, fmt("an optional {} can't go to Ruby", this.c.ty_name(x)));
+        .HANDLE(s) => { return fmt3("vr_wrap(vr_class_{}, &vr_type_{}, {}, false)", this.node_sname(s), this.node_sname(s), S(r)); },
+        .CLOSURE(i) => { return fmt2("vr_wrap_closure{}({})", unum(@cast<u64>(i)), S(r)); },
+        .TRAIT(i) => { return fmt2("vr_wrap_{}({})", this.short(this.trait_of(t)), S(r)); },
+        .LIST(x) => {
+            // an Array of the elements (text copied, each handle the caller's), and the list freed
+            val e = this.list_elem(t);
+            var conv: std::string = {};
+            match (this.shape_of(e) ?? shape::VOID) {
+                .TEXT(y) => { conv = fmt2("rb_utf8_str_new((const char *){}.ptr[i].ptr, (long){}.ptr[i].len)", S(r), S(r)); },
+                .HANDLE(s) => { conv = fmt3("vr_wrap(vr_class_{}, &vr_type_{}, {}.ptr[i], false)", this.node_sname(s), this.node_sname(s), S(r)); },
+                default => {
+                    var inner: std::string = {};
+                    conv = this.rb_out(e, fmt("{}.ptr[i]", S(r)).as_str(), &inner, "") ?? return fail(NO_SPAN, fmt("{} can't go to Ruby", this.c.ty_name(t)));
+                    if (inner.len() > 0) {
+                        return fail(NO_SPAN, fmt("{} can't go to Ruby", this.c.ty_name(t)));
+                    }
+                },
             }
-            return fmt2("({}.has ? {} : Qnil)", S(r), this.rb_put(x, fmt("{}.value", S(r)).as_str()));
-        },
-        .SLICE(x) => {
-            if (!this.node_simple(x)) {
-                return fail(NO_SPAN, fmt("a slice of {} can't go to Ruby", this.c.ty_name(x)));
-            }
-            pre.append(fmt3("    VALUE list = rb_ary_new_capa((long){}.len);\n    for (size_t i = 0; i < {}.len; i++) {{\n        rb_ary_push(list, {});\n    }}\n", S(r), S(r), this.rb_put(x, fmt("{}.ptr[i]", S(r)).as_str())).as_str());
+            pre.append(fmt3("    VALUE list = rb_ary_new_capa((long){}.len);\n    for (size_t i = 0; i < {}.len; i++) {{\n        rb_ary_push(list, {});\n    }}\n", S(r), S(r), move conv).as_str());
+            pre.append(fmt3("    if ({}.drop) {{\n        {}.drop({}.owner);\n    }}\n", S(r), S(r), S(r)).as_str());
             return S("list");
+        },
+        .OPT(x) => {
+            match (this.shape_of(x) ?? shape::VOID) {
+                .TEXT(y) => { return fmt2("({}.has ? vr_take({}.value) : Qnil)", S(r), S(r)); },
+                .HANDLE(s) => { return fmt4("({} ? vr_wrap(vr_class_{}, &vr_type_{}, {}, false) : Qnil)", S(r), this.node_sname(s), this.node_sname(s), S(r)); },
+                default => {},
+            }
         },
         .RESULT(e, x) => {
             pre.append(fmt2("    if ({}.error != 0) {{\n        vr_raise({}.error);\n    }}\n", S(r), S(r)).as_str());
             return this.rb_result(x, fmt("{}.value", S(r)).as_str(), pre);
         },
-        .PTR(x) => { return fmt2("({} ? vr_from_pointer((void *){}) : Qnil)", S(r), S(r)); },
-        default => { return fail(NO_SPAN, fmt("{} can't go to Ruby", this.c.ty_name(t))); },
+        default => {},
     }
+    val v = this.rb_out(t, r, pre, "list") ?? return fail(NO_SPAN, fmt("{} can't go to Ruby", this.c.ty_name(t)));
+    return v;
 }
 
-// what frees owned C result r (of type t) when a callback's exception is raised instead
+// what frees owned C result r (of type t) when what a Ruby method Volt called raised is raised instead
 attach fn rb_drop(this: bind&, t: u32, r: str) -> std::string {
     match (this.shape_of(t) ?? shape::VOID) {
         .TEXT(x) => { return fmt("volt_text_free({}); ", S(r)); },
         .HANDLE(s) => { return fmt2("{}({}); ", this.free_name(s), S(r)); },
+        .CLOSURE(i) => { return fmt3("if ({}.drop) {{ {}.drop({}.self); }} ", S(r), S(r), S(r)); },
+        .TRAIT(i) => { return fmt3("if ({}.drop) {{ {}.drop({}.self); }} ", S(r), S(r), S(r)); },
+        .LIST(x) => {
+            var each: std::string = {};
+            match (this.shape_of(this.list_elem(t)) ?? shape::VOID) {
+                .HANDLE(s) => { each = fmt3("for (size_t i = 0; i < {}.len; i++) {{ {}({}.ptr[i]); }} ", S(r), this.free_name(s), S(r)); },
+                default => {},
+            }
+            return fmt4("{}if ({}.drop) {{ {}.drop({}.owner); }} ", move each, S(r), S(r), S(r));
+        },
+        .OPT(x) => {
+            match (this.shape_of(x) ?? shape::VOID) {
+                .TEXT(y) => { return fmt2("if ({}.has) {{ volt_text_free({}.value); }} ", S(r), S(r)); },
+                .HANDLE(s) => { return fmt3("if ({}) {{ {}({}); }} ", S(r), this.free_name(s), S(r)); },
+                default => {},
+            }
+            return {};
+        },
         .RESULT(e, x) => {
             val inner = this.rb_drop(x, fmt("{}.value", S(r)).as_str());
             if (inner.len() == 0) {
@@ -11495,6 +11949,81 @@ attach fn rb_drop(this: bind&, t: u32, r: str) -> std::string {
     }
 }
 
+// the statements of a call from Ruby (in a C function taking argc/argv): the arguments converted,
+// what they give up or mark in use, the call of callee (lead, when there is one, first), what a Ruby
+// method Volt called raised (the result freed first), the result's error, and the result, with what
+// Volt changed written back
+attach fn rb_call(this: bind&, args: std::vec<rb_arg>&, ret: u32, callee: str, lead: str, out: std::string&) -> compile_error!void {
+    var decls: std::string = {};
+    var gets: std::string = {};
+    var checks: std::string = {};
+    var gives: std::string = {};
+    var passes = S(lead);
+    var dones: std::string = {};
+    var afters: std::string = {};
+    for (a&) in args.items() {
+        if (a.decl.len() > 0) {
+            decls.append(fmt("    {}\n", copy a.decl).as_str());
+        }
+        if (a.get.len() > 0) {
+            gets.append(fmt("    {}\n", copy a.get).as_str());
+        }
+        if (a.check.len() > 0) {
+            checks.append(fmt("    {}\n", copy a.check).as_str());
+        }
+        if (a.give.len() > 0) {
+            gives.append(fmt("    {}\n", copy a.give).as_str());
+        }
+        if (a.pass.len() > 0) {
+            if (passes.len() > 0) {
+                passes.append(", ");
+            }
+            passes.append(a.pass.as_str());
+        }
+        if (a.done.len() > 0) {
+            dones.append(fmt("    {}\n", copy a.done).as_str());
+        }
+        if (a.after.len() > 0) {
+            afters.append(fmt("    {}\n", copy a.after).as_str());
+        }
+    }
+    out.append(decls.as_str());
+    if (contains(gets.as_str(), "vr_sn")) {
+        // the call's serial: a handle can't be given twice to it, or lent and given
+        out.append("    unsigned long vr_sn = vr_next();\n");
+    }
+    out.append(gets.as_str());
+    out.append(checks.as_str());
+    out.append(gives.as_str());
+    val call = fmt2("{}({})", S(callee), move passes);
+    if (ret == VOID) {
+        out.append(fmt("    {};\n", move call).as_str());
+    } else {
+        out.append(fmt2("    {}r = {};\n", spaced(this.c_out(ret, false)), move call).as_str());
+    }
+    out.append(dones.as_str());
+    if (this.py_calls_back()) {
+        out.append(fmt("    if (vr_pending()) {{\n        {}vr_reraise();\n    }}\n", this.rb_drop(ret, "r")).as_str());
+    }
+    var pre: std::string = {};
+    val res = try this.rb_result(ret, "r", &pre);
+    out.append(pre.as_str());
+    out.append(fmt("    VALUE result = {};\n", copy res).as_str());
+    out.append(afters.as_str());
+    out.append("    return result;\n");
+    return;
+}
+
+// "static VALUE NAME(int argc, VALUE *argv, VALUE self) {" and its arity check (n arguments)
+fn rb_head(name: str, n: usize) -> std::string {
+    var out = fmt("\nstatic VALUE {}(int argc, VALUE *argv, VALUE self) {{\n", S(name));
+    if (n == 0) {
+        out.append("    (void)argv;\n");
+    }
+    out.append(fmt2("    rb_check_arity(argc, {}, {});\n", unum(@cast<u64>(n)), unum(@cast<u64>(n))).as_str());
+    return out;
+}
+
 // the C function behind one Ruby method (self_first: an instance method, whose self is the first
 // parameter); it takes argc/argv, so the last callback can be a block
 attach fn rb_fn(this: bind&, f: u32, self_first: bool, out: std::string&) -> compile_error!void {
@@ -11503,12 +12032,6 @@ attach fn rb_fn(this: bind&, f: u32, self_first: bool, out: std::string&) -> com
     if (self_first) {
         first = 1;
     }
-    var decls: std::string = {};
-    var gets: std::string = {};
-    var passes: std::string = {};
-    var afters: std::string = {};
-    var raises: std::string = {};
-    val drop = this.rb_drop(info.ret, "r");
     val n = info.params.len - first;
     var block_last = false;
     if (n > 0) {
@@ -11517,6 +12040,7 @@ attach fn rb_fn(this: bind&, f: u32, self_first: bool, out: std::string&) -> com
             default => {},
         }
     }
+    var args: std::vec<rb_arg> = {};
     for (k) in 0..info.params.len {
         val p = info.params.at(k);
         var a: rb_arg = {};
@@ -11527,18 +12051,7 @@ attach fn rb_fn(this: bind&, f: u32, self_first: bool, out: std::string&) -> com
         val what = fmt2("\"argument {} of {}\"", S(p.name), S(info.c_name));
         val cname = fmt("p_{}", S(p.name));
         try this.rb_arg_of(p.ty, v.as_str(), cname.as_str(), what.as_str(), &a);
-        decls.append(fmt("    {}\n", copy a.decl).as_str());
-        gets.append(fmt("    {}\n", copy a.get).as_str());
-        if (passes.len() > 0) {
-            passes.append(", ");
-        }
-        passes.append(a.pass.as_str());
-        if (a.after.len() > 0) {
-            afters.append(fmt("    {}\n", copy a.after).as_str());
-        }
-        if (a.cb.len() > 0) {
-            raises.append(fmt3("    if ({}.state) {{\n        {}rb_jump_tag({}.state);\n    }}\n", copy a.cb, copy drop, copy a.cb).as_str());
-        }
+        put(&args, move a);
     }
     out.append(fmt("\nstatic VALUE vr_f_{}(int argc, VALUE *argv, VALUE self) {{\n", S(info.c_name)).as_str());
     if (n == 0) {
@@ -11549,26 +12062,96 @@ attach fn rb_fn(this: bind&, f: u32, self_first: bool, out: std::string&) -> com
     }
     if (block_last) {
         // the last callback can be a block
-        out.append(fmt3("    VALUE args[{}];\n    if (argc == {} && rb_block_given_p()) {{\n", unum(@cast<u64>(n)), unum(@cast<u64>(n - 1)), S("")).as_str());
-        out.append(fmt3("        for (int i = 0; i < argc; i++) {{\n            args[i] = argv[i];\n        }}\n        args[{}] = rb_block_proc();\n        argc = {};\n        argv = args;\n    }}\n", unum(@cast<u64>(n - 1)), unum(@cast<u64>(n)), S("")).as_str());
+        out.append(fmt2("    VALUE args[{}];\n    if (argc == {} && rb_block_given_p()) {{\n", unum(@cast<u64>(n)), unum(@cast<u64>(n - 1))).as_str());
+        out.append(fmt2("        for (int i = 0; i < argc; i++) {{\n            args[i] = argv[i];\n        }}\n        args[{}] = rb_block_proc();\n        argc = {};\n        argv = args;\n    }}\n", unum(@cast<u64>(n - 1)), unum(@cast<u64>(n))).as_str());
     }
     out.append(fmt2("    rb_check_arity(argc, {}, {});\n", unum(@cast<u64>(n)), unum(@cast<u64>(n))).as_str());
-    out.append(decls.as_str());
-    out.append(gets.as_str());
-    val call = fmt2("{}({})", S(info.c_name), move passes);
-    if (info.ret == VOID) {
-        out.append(fmt("    {};\n", move call).as_str());
-    } else {
-        out.append(fmt2("    {}r = {};\n", spaced(this.c_prim(info.ret, false)), move call).as_str());
+    try this.rb_call(&args, info.ret, info.c_name, "", out);
+    out.append("}\n");
+    return;
+}
+
+// the box type of class cls's objects (vr_type_NAME): what they hold is freed with vr_release_NAME
+// by close, or by the GC (unless it's lent)
+fn rb_box_type(name: str, cls: str, out: std::string&) -> void {
+    out.append(fmt2("\nstatic void vr_dfree_{}(void *p) {{\n    vr_dfree_box(p, vr_release_{});\n}}\n", S(name), S(name)).as_str());
+    out.append(fmt3("\nstatic const rb_data_type_t vr_type_{} = {{.wrap_struct_name = \"{}\", .function = {{.dfree = vr_dfree_{}}}, .flags = RUBY_TYPED_FREE_IMMEDIATELY}};\n", S(name), S(cls), S(name)).as_str());
+    out.append(fmt3("\nstatic VALUE vr_close_{}(VALUE self) {{\n    return vr_close_box(self, &vr_type_{}, vr_release_{});\n}}\n", S(name), S(name), S(name)).as_str());
+}
+
+// vr_wrap_NAME: a Ruby object of class klass (a C variable) holding a copy of C struct value o (of
+// type ctype, with its drop and self), which Volt gave out
+fn rb_wrap_fn(name: str, ctype: str, klass: str, out: std::string&) -> void {
+    out.append(fmt3("\nstatic inline VALUE vr_wrap_{}({} o) {{\n    {} *p = malloc(sizeof *p);\n", S(name), S(ctype), S(ctype)).as_str());
+    out.append("    if (!p) {\n        if (o.drop) {\n            o.drop(o.self);\n        }\n        rb_memerror();\n    }\n    *p = o;\n");
+    out.append(fmt2("    return vr_wrap({}, &vr_type_{}, p, false);\n}}\n", S(klass), S(name)).as_str());
+}
+
+// the closures (indexes in closures) and traits (in traits) export fns take as parameters, which
+// Volt calls in Ruby
+attach fn rb_taken(this: bind&, closures: std::vec<u32>&, traits: std::vec<u32>&) -> void {
+    for (i&) in this.exports().items() {
+        for (p&) in this.c.fi(*i).params.items() {
+            match (this.shape_of(p.ty) ?? shape::VOID) {
+                .CLOSURE(c) => { add_u32(closures, c); },
+                .TRAIT(t) => { add_u32(traits, t); },
+                default => {},
+            }
+        }
     }
-    // a callback's exception first, then the result (or its error), then what Volt changed comes back
-    out.append(raises.as_str());
-    var pre: std::string = {};
-    val res = try this.rb_result(info.ret, "r", &pre);
-    out.append(pre.as_str());
-    out.append(fmt("    VALUE result = {};\n", copy res).as_str());
-    out.append(afters.as_str());
-    out.append("    return result;\n}\n");
+}
+
+// trait k's class (Volt's own value: Mod::T, whose methods call Volt's) and, when export fns take
+// it (taken), how Volt calls a Ruby object with its methods (vr_vt_T) and takes one (vr_as_T)
+attach fn rb_trait(this: bind&, k: u32, taken: bool, out: std::string&) -> compile_error!void {
+    val t = *this.traits.at(k);
+    val tn = this.short(t);
+    val cn = this.c_named(tn.as_str(), false);
+    val cls = this.rb_class(tn.as_str());
+    val fns = this.fns_of(t);
+    out.append(fmt3("\n// trait {}: Volt's own value is a {}, whose methods call Volt's (any Ruby object with its\n// methods is one too)\nstatic VALUE vr_class_{};\n", this.c.ty_name(t), copy cls, copy tn).as_str());
+    out.append(fmt2("\nstatic void vr_release_{}(void *h) {{\n    {} *o = h;\n    if (o->drop) {{\n        o->drop(o->self);\n    }}\n    free(o);\n}}\n", copy tn, copy cn).as_str());
+    rb_box_type(tn.as_str(), cls.as_str(), out);
+    rb_wrap_fn(tn.as_str(), cn.as_str(), fmt("vr_class_{}", copy tn).as_str(), out);
+    for (f&) in fns.items() {
+        val n = f.params.len;
+        out.append(rb_head(fmt2("vr_m_{}_{}", copy tn, S(f.name)).as_str(), n).as_str());
+        var args: std::vec<rb_arg> = {};
+        put(&args, rb_self_arg(tn.as_str(), cn.as_str()));
+        for (j) in 0..n {
+            var a: rb_arg = {};
+            val jj = unum(@cast<u64>(j));
+            val what = fmt3("\"argument {} of {}.{}\"", unum(@cast<u64>(j + 1)), copy tn, S(f.name));
+            try this.rb_arg_of(*f.params.at(j), fmt("argv[{}]", copy jj).as_str(), fmt("p{}", copy jj).as_str(), what.as_str(), &a);
+            put(&args, move a);
+        }
+        try this.rb_call(&args, f.ret, fmt("o->vt->{}", S(f.name)).as_str(), "o->self", out);
+        out.append("}\n");
+    }
+    if (!taken) {
+        return;
+    }
+    var vt: std::string = {};
+    var names: std::string = {};
+    for (f&) in fns.items() {
+        val fname = fmt2("vr_{}_{}", copy tn, S(f.name));
+        try this.rb_upcall(fname.as_str(), "((struct vr_keep *)self)->obj", f.name, &f.params, f.ret, fmt2("{}.{}", copy tn, S(f.name)).as_str(), out);
+        if (vt.len() > 0) {
+            vt.append(", ");
+            names.append(", ");
+        }
+        vt.append(fname.as_str());
+        names.append(fmt("\"{}\"", S(f.name)).as_str());
+    }
+    out.append(fmt3("\nstatic const {}_vt vr_vt_{} = {{{}}};\n", copy cn, copy tn, move vt).as_str());
+    out.append(fmt2("\n// v as Volt's {}: Volt's own (a {}: its box, whose object the call copies once every argument\n// is converted), or any object with the trait's methods, lent (k holds it for the call) or given\n// (kept once every argument is converted)\n", copy tn, copy cls).as_str());
+    out.append(fmt2("static inline struct vr_box *vr_as_{}(VALUE v, {} *o, struct vr_keep *k, bool given, unsigned long s, const char *what) {{\n", copy tn, copy cn).as_str());
+    out.append(fmt3("    if (rb_typeddata_is_kind_of(v, &vr_type_{})) {{\n        return given ? vr_gift(v, &vr_type_{}, s, what) : vr_lend(v, &vr_type_{}, s, what);\n    }}\n", copy tn, copy tn, copy tn).as_str());
+    if (fns.len > 0) {
+        out.append(fmt2("    static const char *const fns[] = {{{}}};\n    for (size_t i = 0; i < {}; i++) {{\n        if (!rb_respond_to(v, rb_intern(fns[i]))) {{\n", move names, unum(@cast<u64>(fns.len))).as_str());
+        out.append(fmt("            rb_raise(rb_eTypeError, \"%s: expected a {} or an object with its methods (%\" PRIsVALUE \" has no %s)\", what, rb_obj_class(v), fns[i]);\n        }}\n    }}\n", copy cls).as_str());
+    }
+    out.append(fmt("    k->obj = v;\n    o->vt = &vr_vt_{};\n    o->self = k;\n    o->drop = NULL;\n    return NULL;\n}}\n", copy tn).as_str());
     return;
 }
 
@@ -11578,15 +12161,18 @@ attach fn rb_text(this: bind&) -> compile_error!std::string {
     val mod = rb_const(p);
     var out = fmt("// {}: generated by voltc bindings; a Ruby C extension for the Volt package. Build it\n", S(p));
     out.append(fmt3("// against the library and Ruby's headers:\n//   cc -shared -fPIC -I<rubyhdrdir> -I<rubyarchhdrdir> {}_ruby.c -L. -l{} -o {}.so\n", S(p), S(p), S(p)).as_str());
-    out.append(fmt3("// then require \"{}\": module {}. Errors are raised as {}::Error, one subclass per error set.\n#include <ruby.h>\n#include <stdint.h>\n#include <stdio.h>\n#include <string.h>\n\n", S(p), copy mod, copy mod).as_str());
+    out.append(fmt3("// then require \"{}\": module {}. Errors are raised as {}::Error, one subclass per error set.\n#include <ruby.h>\n#include <stdint.h>\n#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\n#include <unistd.h>\n\n", S(p), copy mod, copy mod).as_str());
     out.append(this.c_text().as_str());
-    out.append(fmt("\nstatic VALUE vr_module, vr_error;\n", S("")).as_str());
+    out.append("\nstatic VALUE vr_module, vr_error;\n");
     out.append("\n// ---------- conversions: each raises naming what didn't fit ----------\n\n");
     out.append("static inline long long vr_int(VALUE v, long long lo, long long hi, const char *what) {\n    if (!RB_INTEGER_TYPE_P(v)) {\n        rb_raise(rb_eTypeError, \"%s: expected an Integer, got %\" PRIsVALUE, what, rb_obj_class(v));\n    }\n    long long x = NUM2LL(v);\n    if (x < lo || x > hi) {\n        rb_raise(rb_eRangeError, \"%s: %lld doesn't fit\", what, x);\n    }\n    return x;\n}\n\n");
     out.append("static inline unsigned long long vr_uint(VALUE v, unsigned long long hi, const char *what) {\n    if (!RB_INTEGER_TYPE_P(v)) {\n        rb_raise(rb_eTypeError, \"%s: expected an Integer, got %\" PRIsVALUE, what, rb_obj_class(v));\n    }\n    if (RTEST(rb_funcall(v, '<', 1, INT2FIX(0)))) {\n        rb_raise(rb_eRangeError, \"%s: %\" PRIsVALUE \" is negative\", what, v);\n    }\n    unsigned long long x = NUM2ULL(v);\n    if (x > hi) {\n        rb_raise(rb_eRangeError, \"%s: %llu doesn't fit\", what, x);\n    }\n    return x;\n}\n\n");
     out.append("static inline double vr_num(VALUE v, const char *what) {\n    if (!RB_FLOAT_TYPE_P(v) && !RB_INTEGER_TYPE_P(v)) {\n        rb_raise(rb_eTypeError, \"%s: expected a number, got %\" PRIsVALUE, what, rb_obj_class(v));\n    }\n    return NUM2DBL(v);\n}\n\n");
     out.append("static inline bool vr_bool(VALUE v, const char *what) {\n    if (v != Qtrue && v != Qfalse) {\n        rb_raise(rb_eTypeError, \"%s: expected true or false, got %\" PRIsVALUE, what, rb_obj_class(v));\n    }\n    return v == Qtrue;\n}\n\n");
-    out.append("// a String's bytes (the String stays on the caller's stack for the call)\nstatic inline const char *vr_str(VALUE v, size_t *len, const char *what) {\n    if (!RB_TYPE_P(v, T_STRING)) {\n        rb_raise(rb_eTypeError, \"%s: expected a String, got %\" PRIsVALUE, what, rb_obj_class(v));\n    }\n    *len = (size_t)RSTRING_LEN(v);\n    return RSTRING_PTR(v);\n}\n\n");
+    out.append("// a String's bytes, to copy now\nstatic inline const char *vr_bytes(VALUE v, size_t *len, const char *what) {\n    if (!RB_TYPE_P(v, T_STRING)) {\n        rb_raise(rb_eTypeError, \"%s: expected a String, got %\" PRIsVALUE, what, rb_obj_class(v));\n    }\n    *len = (size_t)RSTRING_LEN(v);\n    return RSTRING_PTR(v);\n}\n\n");
+    out.append("// a String's bytes for a call: a frozen copy's (kept in *keep, on the caller's stack), which nothing\n// changes under Volt\nstatic inline const char *vr_str(VALUE v, size_t *len, VALUE *keep, const char *what) {\n    vr_bytes(v, len, what);\n    *keep = rb_str_new_frozen(v);\n    *len = (size_t)RSTRING_LEN(*keep);\n    return RSTRING_PTR(*keep);\n}\n\n");
+    out.append("// an Array (or what converts to one)\nstatic inline VALUE vr_array(VALUE v, const char *what) {\n    VALUE a = rb_check_array_type(v);\n    if (NIL_P(a)) {\n        rb_raise(rb_eTypeError, \"%s: expected an Array, got %\" PRIsVALUE, what, rb_obj_class(v));\n    }\n    return a;\n}\n\n");
+    out.append("// room for the bytes of an Array's Strings, each terminated, for a call (kept in *keep)\nstatic inline char *vr_room(VALUE ary, VALUE *keep) {\n    size_t n = 1;\n    for (long i = 0; i < RARRAY_LEN(ary); i++) {\n        VALUE x = rb_ary_entry(ary, i);\n        if (RB_TYPE_P(x, T_STRING)) {\n            n += (size_t)RSTRING_LEN(x) + 1;\n        }\n    }\n    return rb_alloc_tmp_buffer(keep, (long)n);\n}\n\n");
     out.append("// a struct's field, from a Struct (or anything with the reader) or a Hash\nstatic inline VALUE vr_field(VALUE v, const char *name) {\n    if (RB_TYPE_P(v, T_HASH)) {\n        return rb_hash_aref(v, ID2SYM(rb_intern(name)));\n    }\n    return rb_funcall(v, rb_intern(name), 0);\n}\n\nstatic inline void vr_set_field(VALUE v, const char *name, VALUE x) {\n    if (RB_TYPE_P(v, T_HASH)) {\n        rb_hash_aset(v, ID2SYM(rb_intern(name)), x);\n    } else {\n        char setter[128];\n        snprintf(setter, sizeof setter, \"%s=\", name);\n        rb_funcall(v, rb_intern(setter), 1, x);\n    }\n}\n\n");
     out.append(fmt("// a pointer from another call (an opaque object)\nstatic VALUE vr_cPointer;\nstatic const rb_data_type_t vr_type_pointer = {{.wrap_struct_name = \"{}::Pointer\", .flags = RUBY_TYPED_FREE_IMMEDIATELY}};\n\nstatic inline VALUE vr_from_pointer(void *p) {{\n    return TypedData_Wrap_Struct(vr_cPointer, &vr_type_pointer, p);\n}}\n\nstatic inline void *vr_pointer(VALUE v) {{\n    return rb_check_typeddata(v, &vr_type_pointer);\n}}\n", copy mod).as_str());
     if (this.texts.len > 0) {
@@ -11597,7 +12183,8 @@ attach fn rb_text(this: bind&) -> compile_error!std::string {
     for (c&) in this.all_codes().items() {
         out.append(fmt2("    case {}u: return \"{}\";\n", num(c.code), S(c.name)).as_str());
     }
-    out.append("    }\n    return \"error\";\n}\n\nstatic inline VALUE vr_error_class(uint32_t code);\n\n// raises the exception for a Volt error code\nstatic inline void vr_raise(uint32_t code) {\n    VALUE e = rb_exc_new_cstr(vr_error_class(code), vr_error_name(code));\n    rb_iv_set(e, \"@code\", UINT2NUM(code));\n    rb_exc_raise(e);\n}\n");
+    out.append("    }\n    return \"error\";\n}\n\nstatic inline VALUE vr_error_class(uint32_t code);\n\n// the exception for a Volt error code\nstatic inline VALUE vr_error_new(uint32_t code) {\n    VALUE c = UINT2NUM(code);\n    return rb_class_new_instance(1, &c, vr_error_class(code));\n}\n\nstatic inline void vr_raise(uint32_t code) {\n    rb_exc_raise(vr_error_new(code));\n}\n");
+    out.append("\n// Error.new(code) (so raise Mod::SomeError, Mod::SomeError::NAME, and new): the error of that code,\n// its name the message; else as Ruby's own\nstatic VALUE vr_error_init(int argc, VALUE *argv, VALUE self) {\n    if (argc == 1 && RB_INTEGER_TYPE_P(argv[0])) {\n        uint32_t code = (uint32_t)vr_uint(argv[0], UINT32_MAX, \"an error code\");\n        rb_iv_set(self, \"@code\", argv[0]);\n        VALUE msg = rb_str_new_cstr(vr_error_name(code));\n        return rb_call_super(1, &msg);\n    }\n    return rb_call_super(argc, argv);\n}\n");
     var classes: std::string = {};
     for (et&) in this.codes.items() {
         match (*this.c.t.get(*et)) {
@@ -11621,7 +12208,7 @@ attach fn rb_text(this: bind&) -> compile_error!std::string {
         out.append(fmt("{} *out, const char *what) {{\n    (void)what;\n", copy cn).as_str());
         for (f&) in this.c.si(*s).fields.items() {
             val fw = fmt2("\"field {} of {}\"", S(f.name), copy sn);
-            out.append(fmt3("    {{\n        VALUE f = vr_field(v, \"{}\");\n        {}\n    }}\n", S(f.name), this.rb_get(f.ty, "f", fmt("out->{}", S(f.name)).as_str(), fw.as_str()), S("")).as_str());
+            out.append(fmt2("    {{\n        VALUE f = vr_field(v, \"{}\");\n        {}\n    }}\n", S(f.name), this.rb_get(f.ty, "f", fmt("out->{}", S(f.name)).as_str(), fw.as_str())).as_str());
         }
         out.append("}\n");
         out.append(fmt2("\nstatic inline void vr_set_{}(VALUE v, const {} *in) {{\n", copy sn, copy cn).as_str());
@@ -11638,69 +12225,74 @@ attach fn rb_text(this: bind&) -> compile_error!std::string {
         }
         out.append(fmt2("    return rb_class_new_instance({}, args, vr_class_{});\n}\n", unum(@cast<u64>(k)), copy sn).as_str());
     }
-    // callbacks: run (with the result converted) under rb_protect; the first exception is kept and
-    // the later calls skipped
-    if (this.closures.len > 0) {
-        out.append("\n// a Proc passed for a callback, and the state of the exception it raised\nstruct vr_cb {\n    VALUE fn;\n    int state;\n};\n\nstatic inline VALUE vr_callable(VALUE v) {\n    if (!rb_respond_to(v, rb_intern(\"call\"))) {\n        rb_raise(rb_eTypeError, \"expected a Proc (or a block)\");\n    }\n    return v;\n}\n");
+    // the classes, the C functions Volt calls in Ruby, and the functions, after the helpers they use
+    var taken_cbs: std::vec<u32> = {};
+    var taken_traits: std::vec<u32> = {};
+    this.rb_taken(&taken_cbs, &taken_traits);
+    var body: std::string = {};
+    if (taken_cbs.len > 0) {
+        body.append("\n// a Proc (or a block) passed for a callback\nstatic inline VALUE vr_callable(VALUE v) {\n    if (!rb_respond_to(v, rb_intern(\"call\"))) {\n        rb_raise(rb_eTypeError, \"expected a Proc (or a block), got %\" PRIsVALUE, rb_obj_class(v));\n    }\n    return v;\n}\n");
     }
-    for (i) in 0..this.closures.len {
-        match (*this.c.t.get(*this.closures.at(i))) {
-            .FN_VAL(ps&, r) => {
-                val n = unum(@cast<u64>(i));
-                out.append(fmt2("\nstruct vr_run{} {{\n    VALUE fn;\n    VALUE argv[{}];\n", copy n, unum(@cast<u64>(ps.len + 1))).as_str());
-                if (r != VOID) {
-                    if (!this.node_simple(r)) {
-                        return fail(NO_SPAN, fmt("a callback returning {} can't call Ruby", this.c.ty_name(r)));
-                    }
-                    out.append(fmt("    {}out;\n", spaced(this.c_prim(r, false))).as_str());
-                }
-                out.append(fmt3("}};\n\nstatic VALUE vr_run{}(VALUE arg) {{\n    struct vr_run{} *a = (struct vr_run{} *)arg;\n", copy n, copy n, copy n).as_str());
-                out.append(fmt("    VALUE ret = rb_funcallv(a->fn, rb_intern(\"call\"), {}, a->argv);\n", unum(@cast<u64>(ps.len))).as_str());
-                if (r != VOID) {
-                    out.append(fmt("    {}\n", this.rb_get(r, "ret", "a->out", "\"the callback's result\"")).as_str());
-                } else {
-                    out.append("    (void)ret;\n");
-                }
-                out.append("    return Qnil;\n}\n");
-                var params = S("void *user");
-                for (k) in 0..ps.len {
-                    params.append(fmt2(", {}a{}", spaced(this.c_prim(*ps.at(k), false)), unum(@cast<u64>(k))).as_str());
-                }
-                out.append(fmt3("\nstatic {}vr_cb{}({}) {{\n    struct vr_cb *c = user;\n", spaced(this.c_prim(r, false)), copy n, move params).as_str());
-                out.append(fmt2("    struct vr_run{} a;\n    memset(&a, 0, sizeof a);\n    a.fn = c->fn;\n", copy n, S("")).as_str());
-                for (k) in 0..ps.len {
-                    val ak = fmt("a{}", unum(@cast<u64>(k)));
-                    match (this.shape_of(*ps.at(k)) ?? shape::VOID) {
-                        .STR => { out.append(fmt3("    a.argv[{}] = rb_utf8_str_new((const char *){}.ptr, (long){}.len);\n", unum(@cast<u64>(k)), copy ak, copy ak).as_str()); },
-                        default => {
-                            if (!this.node_simple(*ps.at(k))) {
-                                return fail(NO_SPAN, fmt("a callback taking {} can't call Ruby", this.c.ty_name(*ps.at(k))));
-                            }
-                            out.append(fmt2("    a.argv[{}] = {};\n", unum(@cast<u64>(k)), this.rb_put(*ps.at(k), ak.as_str())).as_str());
-                        },
-                    }
-                }
-                out.append(fmt("    if (!c->state) {{\n        rb_protect(vr_run{}, (VALUE)&a, &c->state);\n    }}\n", copy n).as_str());
-                if (r != VOID) {
-                    out.append("    return a.out;\n");
-                }
-                out.append("}\n");
-            },
-            default => {},
-        }
-    }
-    // classes: a TypedData object holding the handle (NULL once closed)
+    // classes: an object holding the handle, closed (NULL) once freed or given to Volt
     for (s&) in this.handles.items() {
         val sn = this.node_sname(*s);
-        val cn = this.handle_c(*s, false);
-        out.append(fmt3("\n// export struct {}\nstatic VALUE vr_class_{};\n\nstatic void vr_dfree_{}(void *h) {{\n", S(this.c.si(*s).name), copy sn, copy sn).as_str());
-        out.append(fmt("    if (h) {{\n        {}(h);\n    }}\n}}\n", this.free_name(*s)).as_str());
-        out.append(fmt4("\nstatic const rb_data_type_t vr_type_{} = {{.wrap_struct_name = \"{}::{}\", .function = {{.dfree = vr_dfree_{}}}, .flags = RUBY_TYPED_FREE_IMMEDIATELY}};\n", copy sn, copy mod, rb_const(sn.as_str()), copy sn).as_str());
-        out.append(fmt4("\nstatic inline {}vr_check_{}(VALUE v) {{\n    {}h = rb_check_typeddata(v, &vr_type_{});\n", spaced(copy cn), copy sn, spaced(copy cn), copy sn).as_str());
-        out.append(fmt("    if (!h) {{\n        rb_raise(rb_eRuntimeError, \"this {} is closed\");\n    }}\n    return h;\n}}\n", copy sn).as_str());
-        out.append(fmt4("\nstatic inline VALUE vr_wrap_{}({}h) {{\n    return TypedData_Wrap_Struct(vr_class_{}, &vr_type_{}, h);\n}}\n", copy sn, spaced(copy cn), copy sn, copy sn).as_str());
-        out.append(fmt3("\n// close: frees the handle now (otherwise the GC does)\nstatic VALUE vr_close_{}(VALUE self) {{\n    void *h = rb_check_typeddata(self, &vr_type_{});\n    if (h) {{\n        {}(h);\n", copy sn, copy sn, this.free_name(*s)).as_str());
-        out.append("        DATA_PTR(self) = NULL;\n    }\n    return Qnil;\n}\n");
+        body.append(fmt3("\n// export struct {}\nstatic VALUE vr_class_{};\n\nstatic void vr_release_{}(void *h) {{\n", S(this.c.si(*s).name), copy sn, copy sn).as_str());
+        body.append(fmt("    {}(h);\n}}\n", this.free_name(*s)).as_str());
+        rb_box_type(sn.as_str(), this.rb_class(sn.as_str()).as_str(), &body);
+    }
+    // closures Volt gives out: Mod::Fn, with call (and to_proc), freed by close or the GC
+    if (this.closures_out.len > 0) {
+        body.append(fmt("\n// a closure Volt gave out: a {}, called with call (or .(), or as a block through to_proc)\nstatic VALUE vr_class_fn;\n", this.rb_class("fn")).as_str());
+    }
+    for (i) in 0..this.closures.len {
+        if (!has_u32(&this.closures_out, @cast<u32>(i))) {
+            continue;
+        }
+        val nm = fmt("closure{}", unum(@cast<u64>(i)));
+        val cn = this.c_named(nm.as_str(), false);
+        body.append(fmt3("\n// {}, given out by Volt\nstatic void vr_release_{}(void *h) {{\n    {} *c = h;\n", this.c.ty_name(*this.closures.at(i)), copy nm, copy cn).as_str());
+        body.append("    if (c->drop) {\n        c->drop(c->self);\n    }\n    free(c);\n}\n");
+        rb_box_type(nm.as_str(), this.rb_class("fn").as_str(), &body);
+        rb_wrap_fn(nm.as_str(), cn.as_str(), "vr_class_fn", &body);
+    }
+    // callbacks: what Volt calls for a Proc
+    for (i&) in taken_cbs.items() {
+        var ps: std::vec<u32> = {};
+        val r = this.fn_parts(*this.closures.at(*i), &ps);
+        try this.rb_upcall(fmt("vr_cb{}", unum(@cast<u64>(*i))).as_str(), "(VALUE)self", "call", &ps, r, "a callback", &body);
+    }
+    for (k) in 0..this.traits.len {
+        try this.rb_trait(@cast<u32>(k), has_u32(&taken_traits, @cast<u32>(k)), &body);
+    }
+    // a closure's call (and close) by its type
+    if (this.closures_out.len > 0) {
+        var calls: std::string = {};
+        var closes: std::string = {};
+        for (i) in 0..this.closures.len {
+            if (!has_u32(&this.closures_out, @cast<u32>(i))) {
+                continue;
+            }
+            val nm = fmt("closure{}", unum(@cast<u64>(i)));
+            var ps: std::vec<u32> = {};
+            val r = this.fn_parts(*this.closures.at(i), &ps);
+            body.append(rb_head(fmt("vr_call_{}", copy nm).as_str(), ps.len).as_str());
+            var args: std::vec<rb_arg> = {};
+            put(&args, rb_self_arg(nm.as_str(), this.c_named(nm.as_str(), false).as_str()));
+            for (j) in 0..ps.len {
+                var a: rb_arg = {};
+                val jj = unum(@cast<u64>(j));
+                val what = fmt("\"argument {} of a closure\"", unum(@cast<u64>(j + 1)));
+                try this.rb_arg_of(*ps.at(j), fmt("argv[{}]", copy jj).as_str(), fmt("p{}", copy jj).as_str(), what.as_str(), &a);
+                put(&args, move a);
+            }
+            try this.rb_call(&args, r, "o->call", "o->self", &body);
+            body.append("}\n");
+            calls.append(fmt2("    if (rb_typeddata_is_kind_of(self, &vr_type_{})) {{\n        return vr_call_{}(argc, argv, self);\n    }}\n", copy nm, copy nm).as_str());
+            closes.append(fmt2("    if (rb_typeddata_is_kind_of(self, &vr_type_{})) {{\n        return vr_close_{}(self);\n    }}\n", copy nm, copy nm).as_str());
+        }
+        body.append(fmt("\nstatic VALUE vr_fn_call(int argc, VALUE *argv, VALUE self) {{\n{}    rb_raise(rb_eTypeError, \"not a closure Volt gave out\");\n}}\n", move calls).as_str());
+        body.append(fmt("\n// close: frees the closure now (otherwise the GC does)\nstatic VALUE vr_fn_close(VALUE self) {{\n{}    rb_raise(rb_eTypeError, \"not a closure Volt gave out\");\n}}\n", move closes).as_str());
+        body.append("\n// to_proc: a Proc calling it (to pass it as a block)\nstatic VALUE vr_fn_to_proc(VALUE self) {\n    return rb_funcall(rb_obj_method(self, ID2SYM(rb_intern(\"call\"))), rb_intern(\"to_proc\"), 0);\n}\n");
     }
     // the functions
     for (e&) in ents.items() {
@@ -11712,11 +12304,50 @@ attach fn rb_text(this: bind&) -> compile_error!std::string {
         if (cls) {
             method = this.node_is_method(e.f, cls);
         }
-        try this.rb_fn(e.f, method, &out);
+        try this.rb_fn(e.f, method, &body);
     }
+    // what the classes and the functions use
+    val calls_back = this.py_calls_back();
+    if (calls_back) {
+        out.append("\n// ---------- Volt calling Ruby ----------\n// A Ruby method Volt calls (a callback, a trait's method, close on what Volt drops) runs under\n// rb_protect: what it raises is kept (per thread), Volt gets a stand-in, and the Volt call that led\n// there raises it once it's back. While one is kept, the others are skipped.\nstatic ID vr_id_raised;\n\nstatic inline VALUE vr_raised(void) {\n    return rb_thread_local_aref(rb_thread_current(), vr_id_raised);\n}\n\nstatic inline bool vr_pending(void) {\n    return !NIL_P(vr_raised());\n}\n");
+        out.append("\n// runs f(arg): 0 when it returned, else what it raised is kept (-1: it was skipped, as it is while\n// the GC runs, which can't call Ruby)\nstatic inline int vr_run(VALUE (*f)(VALUE), void *arg) {\n    if (rb_during_gc() || vr_pending()) {\n        return -1;\n    }\n    int state = 0;\n    rb_protect(f, (VALUE)arg, &state);\n    if (state) {\n        // an exception is raised again; anything else (break, throw) is that jump, made again\n        VALUE e = rb_errinfo();\n        if (!RB_SPECIAL_CONST_P(e) && RB_BUILTIN_TYPE(e) == T_OBJECT && rb_obj_is_kind_of(e, rb_eException)) {\n            rb_set_errinfo(Qnil);\n        } else {\n            e = INT2FIX(state);\n        }\n        rb_thread_local_aset(rb_thread_current(), vr_id_raised, e);\n    }\n    return state;\n}\n");
+        out.append("\n// once the Volt call is back: raises what a Ruby method it called raised\nstatic inline void vr_reraise(void) {\n    VALUE e = vr_raised();\n    if (NIL_P(e)) {\n        return;\n    }\n    rb_thread_local_aset(rb_thread_current(), vr_id_raised, Qnil);\n    if (FIXNUM_P(e)) {\n        rb_jump_tag(FIX2INT(e));\n    }\n    rb_exc_raise(e);\n}\n");
+        out.append("\n// E!T: the code of the Volt error a Ruby method raised, which is its result (not raised again)\nstatic inline bool vr_take_code(uint32_t *code) {\n    VALUE e = vr_raised();\n    if (RB_SPECIAL_CONST_P(e) || !rb_obj_is_kind_of(e, vr_error)) {\n        return false;\n    }\n    VALUE c = rb_ivar_get(e, rb_intern(\"@code\"));\n    if (!FIXNUM_P(c) || FIX2LONG(c) <= 0 || FIX2LONG(c) > (long)UINT32_MAX) {\n        return false;\n    }\n    *code = (uint32_t)FIX2LONG(c);\n    rb_thread_local_aset(rb_thread_current(), vr_id_raised, Qnil);\n    return true;\n}\n");
+        out.append("\nstatic inline VALUE vr_fatal_run(VALUE e) {\n    if (RB_SPECIAL_CONST_P(e)) {\n        rb_io_write(rb_stderr, rb_str_new_cstr(\"a Ruby method Volt called jumped out of it\\n\"));\n    } else {\n        rb_io_write(rb_stderr, rb_funcall(e, rb_intern(\"full_message\"), 0));\n    }\n    rb_io_flush(rb_stdout);\n    rb_io_flush(rb_stderr);\n    return Qnil;\n}\n\n// a Ruby method that had to give Volt a handle (or a reference) raised: Volt can't go on, so the\n// program ends, saying why, as a Volt panic does\nstatic inline void vr_fatal(void) {\n    if (rb_during_gc()) {\n        fputs(\"a Ruby method Volt called couldn't run while the GC ran\\n\", stderr);\n    } else {\n        int state = 0;\n        rb_protect(vr_fatal_run, vr_raised(), &state);\n    }\n    fflush(stdout);\n    fflush(stderr);\n    _exit(101);\n}\n");
+    }
+    if (taken_traits.len > 0) {
+        out.append("\n// a Ruby object given to Volt (a trait's object): kept from the GC until Volt drops it\nstruct vr_keep {\n    VALUE obj;\n    struct vr_keep *prev, *next;\n};\n\nstatic struct vr_keep vr_kept = {Qnil, &vr_kept, &vr_kept};\nstatic VALUE vr_keeper;\n\nstatic void vr_mark_kept(void *p) {\n    (void)p;\n    for (struct vr_keep *k = vr_kept.next; k != &vr_kept; k = k->next) {\n        rb_gc_mark(k->obj);\n    }\n}\n\nstatic const rb_data_type_t vr_type_kept = {.wrap_struct_name = \"volt kept\", .function = {.dmark = vr_mark_kept}};\n");
+        out.append("\nstatic inline struct vr_keep *vr_keep_new(VALUE obj) {\n    struct vr_keep *k = malloc(sizeof *k);\n    if (!k) {\n        rb_memerror();\n    }\n    k->obj = obj;\n    k->prev = &vr_kept;\n    k->next = vr_kept.next;\n    vr_kept.next->prev = k;\n    vr_kept.next = k;\n    return k;\n}\n\nstatic inline VALUE vr_close_run(VALUE obj) {\n    if (rb_respond_to(obj, rb_intern(\"close\"))) {\n        rb_funcall(obj, rb_intern(\"close\"), 0);\n    }\n    return Qnil;\n}\n\n// Volt drops what it was given: no longer kept, and closed when it has close, even when what one of\n// its methods raised is kept (that stays the one raised). Not while the GC runs, which can't call\n// Ruby, nor while a jump (break, throw) waits to be made\nstatic inline void vr_drop_kept(void *self) {\n    struct vr_keep *k = self;\n    VALUE obj = k->obj;\n    k->prev->next = k->next;\n    k->next->prev = k->prev;\n    free(k);\n    if (rb_during_gc()) {\n        return;\n    }\n    VALUE kept = vr_raised();\n    if (FIXNUM_P(kept)) {\n        return;\n    }\n    rb_thread_local_aset(rb_thread_current(), vr_id_raised, Qnil);\n    vr_run(vr_close_run, (void *)obj);\n    if (!NIL_P(kept)) {\n        rb_thread_local_aset(rb_thread_current(), vr_id_raised, kept);\n    }\n    RB_GC_GUARD(obj);\n    RB_GC_GUARD(kept);\n}\n");
+    }
+    if (contains(body.as_str(), "vr_static(")) {
+        out.append("\n// a str a Ruby method gives Volt, which may keep it (nothing frees a str): a copy (terminated)\n// kept as long as the program, one per value\nstatic VALUE vr_static_strs;\n\nstatic inline const char *vr_static(VALUE v, size_t *len, const char *what) {\n    const char *p = vr_bytes(v, len, what);\n    VALUE c = rb_hash_aref(vr_static_strs, v);\n    if (!NIL_P(c)) {\n        return (const char *)(uintptr_t)NUM2ULL(c);\n    }\n    char *m = malloc(*len + 1);\n    if (!m) {\n        rb_memerror();\n    }\n    memcpy(m, p, *len);\n    m[*len] = 0;\n    rb_hash_aset(vr_static_strs, rb_str_new_frozen(v), ULL2NUM((uintptr_t)m));\n    return m;\n}\n");
+    }
+    if (contains(body.as_str(), "vr_give_text(")) {
+        out.append("\n// text a Ruby method gives Volt: a copy, which Volt frees\nstatic void vr_free_text(void *p) {\n    free(p);\n}\n\nstatic inline volt_text vr_give_text(VALUE v, const char *what) {\n    size_t len;\n    const char *p = vr_bytes(v, &len, what);\n    char *m = malloc(len ? len : 1);\n    if (!m) {\n        rb_memerror();\n    }\n    memcpy(m, p, len);\n    volt_text t = {(const uint8_t *)m, len, m, vr_free_text};\n    return t;\n}\n");
+    }
+    if (this.handles.len > 0 || this.traits.len > 0 || this.closures_out.len > 0) {
+        out.append("\n// ---------- objects holding what Volt gave out ----------\n// An export struct's object, Volt's own trait object and a closure Volt gave out hold it in a box: h\n// (NULL once closed or given to Volt), whether it's lent (Volt lent it to a Ruby method: never\n// freed here), how many running calls use it (it can't be closed or given away meanwhile), and the\n// last calls that lent it and gave it (each call from Ruby has its serial)\nstruct vr_box {\n    void *h;\n    bool lent;\n    int busy;\n    unsigned long lend, gift;\n};\n\nstatic unsigned long vr_serial;\n\nstatic inline unsigned long vr_next(void) {\n    return ++vr_serial;\n}\n\nstatic inline VALUE vr_wrap(VALUE klass, const rb_data_type_t *t, void *h, bool lent) {\n    struct vr_box *b;\n    VALUE o = TypedData_Make_Struct(klass, struct vr_box, t, b);\n    b->h = h;\n    b->lent = lent;\n    return o;\n}\n");
+        out.append("\nstatic inline struct vr_box *vr_open(VALUE v, const rb_data_type_t *t, const char *what) {\n    struct vr_box *b = rb_check_typeddata(v, t);\n    if (!b->h) {\n        rb_raise(rb_eRuntimeError, \"%s: this %s is closed or given away\", what, t->wrap_struct_name);\n    }\n    return b;\n}\n\n// v, lent to the call with serial s\nstatic inline struct vr_box *vr_lend(VALUE v, const rb_data_type_t *t, unsigned long s, const char *what) {\n    struct vr_box *b = vr_open(v, t, what);\n    if (b->gift == s) {\n        rb_raise(rb_eArgError, \"%s: this %s is given to the same call\", what, t->wrap_struct_name);\n    }\n    b->lend = s;\n    return b;\n}\n");
+        out.append("\n// v, to be given to Volt by the call with serial s (given up once every argument is converted)\nstatic inline struct vr_box *vr_gift(VALUE v, const rb_data_type_t *t, unsigned long s, const char *what) {\n    struct vr_box *b = vr_open(v, t, what);\n    if (b->lent) {\n        rb_raise(rb_eArgError, \"%s: this %s is lent: Volt can't take it\", what, t->wrap_struct_name);\n    }\n    if (b->busy) {\n        rb_raise(rb_eRuntimeError, \"%s: this %s is in use by a running call\", what, t->wrap_struct_name);\n    }\n    if (b->gift == s || b->lend == s) {\n        rb_raise(rb_eArgError, \"%s: this %s is given twice (or lent too) in one call\", what, t->wrap_struct_name);\n    }\n    b->gift = s;\n    return b;\n}\n\n// v's handle, given up to Volt (a Ruby method's result)\nstatic inline void *vr_give_box(VALUE v, const rb_data_type_t *t, const char *what) {\n    struct vr_box *b = vr_gift(v, t, vr_next(), what);\n    void *h = b->h;\n    b->h = NULL;\n    return h;\n}\n\n// what Volt lent a Ruby method: closed once it's back\nstatic inline void vr_unlend(VALUE o, const rb_data_type_t *t) {\n    struct vr_box *b = rb_check_typeddata(o, t);\n    b->h = NULL;\n}\n\n// a box a call took, checked again once every argument is converted (a conversion can run Ruby,\n// which could have closed it)\nstatic inline void vr_check(struct vr_box *b, const char *what) {\n    if (b && !b->h) {\n        rb_raise(rb_eRuntimeError, \"%s: closed while the call's arguments were converted\", what);\n    }\n}\n");
+        var reraise: std::string = {};
+        if (calls_back) {
+            reraise = S("    vr_reraise();\n");
+        }
+        out.append(fmt("\nstatic inline void vr_dfree_box(void *p, void (*release)(void *)) {{\n    struct vr_box *b = p;\n    if (b->h && !b->lent) {{\n        release(b->h);\n    }}\n    ruby_xfree(b);\n}}\n\n// close: frees what the object holds now (otherwise the GC does)\nstatic inline VALUE vr_close_box(VALUE self, const rb_data_type_t *t, void (*release)(void *)) {{\n    struct vr_box *b = rb_check_typeddata(self, t);\n    if (b->busy) {{\n        rb_raise(rb_eRuntimeError, \"this %s is in use by a running call\", t->wrap_struct_name);\n    }}\n    void *h = b->h;\n    b->h = NULL;\n    if (h && !b->lent) {{\n        release(h);\n    }}\n{}    return Qnil;\n}}\n", move reraise).as_str());
+    }
+    out.append(body.as_str());
     // Init: the module, its functions, enums and error sets (modules of constants), structs and classes
-    out.append(fmt3("\nRUBY_FUNC_EXPORTED void Init_{}(void) {{\n    vr_module = rb_define_module(\"{}\");\n    vr_error = rb_define_class_under(vr_module, \"Error\", rb_eStandardError);\n    rb_define_attr(vr_error, \"code\", 1, 0);\n", S(p), copy mod, S("")).as_str());
+    out.append(fmt2("\nRUBY_FUNC_EXPORTED void Init_{}(void) {{\n    vr_module = rb_define_module(\"{}\");\n    vr_error = rb_define_class_under(vr_module, \"Error\", rb_eStandardError);\n    rb_define_attr(vr_error, \"code\", 1, 0);\n    rb_define_method(vr_error, \"initialize\", vr_error_init, -1);\n", S(p), copy mod).as_str());
     out.append("    vr_cPointer = rb_define_class_under(vr_module, \"Pointer\", rb_cObject);\n    rb_undef_alloc_func(vr_cPointer);\n");
+    if (calls_back) {
+        out.append("    vr_id_raised = rb_intern(\"__volt_raised\");\n");
+    }
+    if (taken_traits.len > 0) {
+        out.append("    rb_gc_register_address(&vr_keeper);\n    vr_keeper = TypedData_Wrap_Struct(0, &vr_type_kept, &vr_kept);\n");
+    }
+    if (contains(body.as_str(), "vr_static(")) {
+        out.append("    rb_gc_register_address(&vr_static_strs);\n    vr_static_strs = rb_hash_new();\n");
+    }
     for (et&) in this.codes.items() {
         match (*this.c.t.get(*et)) {
             .ENUM(e) => {
@@ -11747,6 +12378,7 @@ attach fn rb_text(this: bind&) -> compile_error!std::string {
         for (f&) in this.c.si(*s).fields.items() {
             members.append(fmt(", ID2SYM(rb_intern(\"{}\"))", S(f.name)).as_str());
         }
+        out.append(fmt("    rb_gc_register_address(&vr_class_{});\n", copy sn).as_str());
         out.append(fmt3("    vr_class_{} = rb_funcall(rb_cStruct, rb_intern(\"new\"), {}{});\n", copy sn, unum(@cast<u64>(this.c.si(*s).fields.len)), move members).as_str());
         out.append(fmt2("    rb_define_const(vr_module, \"{}\", vr_class_{});\n", rb_const(sn.as_str()), copy sn).as_str());
     }
@@ -11773,6 +12405,18 @@ attach fn rb_text(this: bind&) -> compile_error!std::string {
             }
         }
     }
+    for (t&) in this.traits.items() {
+        val tn = this.short(*t);
+        out.append(fmt2("    vr_class_{} = rb_define_class_under(vr_module, \"{}\", rb_cObject);\n", copy tn, rb_const(tn.as_str())).as_str());
+        out.append(fmt3("    rb_undef_alloc_func(vr_class_{});\n    rb_define_method(vr_class_{}, \"close\", vr_close_{}, 0);\n", copy tn, copy tn, copy tn).as_str());
+        for (f&) in this.fns_of(*t).items() {
+            out.append(fmt4("    rb_define_method(vr_class_{}, \"{}\", vr_m_{}_{}, -1);\n", copy tn, S(f.name), copy tn, S(f.name)).as_str());
+        }
+    }
+    if (this.closures_out.len > 0) {
+        out.append(fmt("    vr_class_fn = rb_define_class_under(vr_module, \"{}\", rb_cObject);\n    rb_undef_alloc_func(vr_class_fn);\n", rb_const("fn")).as_str());
+        out.append("    rb_define_method(vr_class_fn, \"call\", vr_fn_call, -1);\n    rb_define_method(vr_class_fn, \"to_proc\", vr_fn_to_proc, 0);\n    rb_define_method(vr_class_fn, \"close\", vr_fn_close, 0);\n");
+    }
     out.append("}\n");
     return out;
 }
@@ -11782,7 +12426,7 @@ attach fn rb_text(this: bind&) -> compile_error!std::string {
 // the bindings of package pkg in lang (see the top of the file; node, js and ts are a Node-API
 // addon, its loader and its types; json is the model itself)
 attach fn bindings(this: checker&, pkg: str, lang: str) -> compile_error!std::string {
-    var b: bind = { c: this, pkg: pkg, wide: lang == "c" || lang == "cpp" || lang == "rust" || lang == "zig" || lang == "python" || lang == "pyi" || lang == "java" || lang == "csharp" || lang == "json" };
+    var b: bind = { c: this, pkg: pkg, wide: lang == "c" || lang == "cpp" || lang == "rust" || lang == "zig" || lang == "python" || lang == "pyi" || lang == "java" || lang == "csharp" || lang == "ruby" || lang == "json" };
     val fns = b.exports();
     if (fns.len == 0) {
         return fail(NO_SPAN, fmt("package {} has no export fns to make bindings for", S(pkg)));
