@@ -1,4 +1,4 @@
-// sort: n pseudo-random 64-bit integers with std's sort (a stable merge sort)
+// sort: n pseudo-random 64-bit integers with std's sort (for i64, an LSD radix sort)
 use std::io;
 use std::text;
 
