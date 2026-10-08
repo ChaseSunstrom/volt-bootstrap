@@ -179,28 +179,35 @@ C and Rust call `biggest_i32` and `biggest_f64`; C++ calls `biggest`, an overloa
 
 ### Every shape
 
-C, C++, Rust, Zig, Java and C# take more than the other languages (whose bindings name what they
-don't take); Java's forms are on [its page](/volt-bootstrap/interop/java/#java-calls-volt), C#'s on
+C, C++, Rust, Zig, Python, Java and C# take more than the other languages (whose bindings name
+what they don't take); Python's forms are on [its page](/volt-bootstrap/interop/python/#python-calls-volt),
+Java's on [its page](/volt-bootstrap/interop/java/#java-calls-volt), C#'s on
 [its page](/volt-bootstrap/interop/dotnet/#every-shape):
 
 - **Owned values as parameters.** Text (`std::string`) comes in as a `str` that Volt copies (a
   `&str` in Rust, a `[]const u8` in Zig); a handle by value is given to the fn, which deletes it
-  (C++'s class gives it up, Rust's type is moved in, Zig's is given up).
+  (C++'s class gives it up, Rust's type is moved in, Zig's and Python's are given up).
 - **Traits.** A fn taking a trait (`s: shape&`, lent, or `s: shape`, which the fn takes over) takes
   any object the other language has: in C a `shapelib_shape`, a table of the trait's functions
   (each taking the object first), the object, and what frees it (null when lent). In C++ the trait
   is an abstract class to subclass, passed as `shape &` or `std::unique_ptr<shape>`; in Rust it's
   a trait to implement, passed as `&mut dyn shape` or `Box<dyn shape>`; in Zig it's any value with
-  the trait's methods, lent as a pointer or given by value (its `deinit` runs when Volt is done).
-  A Volt value of the trait comes back the same way: C calls its table and its `drop`, C++ gets a
-  `std::unique_ptr<shape>`, Rust a `Box<dyn shape>` (a `volt_shape`, which frees it when dropped),
-  Zig a `volt_shape` with the methods and `deinit()`.
+  the trait's methods, lent as a pointer or given by value (its `deinit` runs when Volt is done);
+  in Python it's a class to subclass (its fns abstract), and any object with the fns passes, lent or
+  given (kept until Volt drops it). A Volt value of the trait comes back the same way: C calls its
+  table and its `drop`, C++ gets a `std::unique_ptr<shape>`, Rust a `Box<dyn shape>` (a
+  `volt_shape`, which frees it when dropped), Zig a `volt_shape` with the methods and `deinit()`,
+  Python a `shape` whose fns call Volt's (freed by `close()`, a `with` block or the garbage
+  collector).
 - **Closures taking and giving text and handles**, in callbacks and in traits' functions: text in
   is a `str` (a `std::string` in C++, a `String` in Rust), text back is owned (`volt_text`; a
   `std::string` in C++, a `String` in Rust, `[]const u8` in Zig), a handle is the class (Rust's
   and Zig's type), and one Volt lends is a class that never frees it (in Rust a `&T`). Rust takes
-  any closure (`impl FnMut`), Zig a context and a function, and an `E!T` callback gives back a
-  `Result<T, Error>` (Zig's `Error!T`).
+  any closure (`impl FnMut`), Zig a context and a function, Python any callable, and an `E!T`
+  callback gives back a `Result<T, Error>` (Zig's `Error!T`; in Python it returns the value or
+  raises the error set's class). Python's `ctypes` can't make a C function that gives a struct
+  (text, `E!T`), so the library has a relay for each callback and trait fn that does, which takes
+  the result from Python through a pointer.
 - **Lists, and text and handles in slices and optionals.** An export fn can return a
   `std::vec<T>`: in C the caller gets its elements, how many, and what frees them
   (`volt_list_free`); text in it is lent as a `str` until then, and each handle in it is the
@@ -210,14 +217,17 @@ don't take); Java's forms are on [its page](/volt-bootstrap/interop/java/#java-c
   returns, so a callback reaching it through the handle sees it as it was). A `std::string?` comes back as an
   optional owned text and goes in as a `str?`; an optional handle is its pointer, null for none.
   A `std::vec<T>` comes back as a `std::vector` in C++ (of `std::string`s, or of the classes), a
-  `Vec` in Rust, and a `VoltList(T)` with `items()` and `deinit()` in Zig. Containers of text and handles go in from a `std::vector`, from
-  `&[impl AsRef<str>]` and `&mut [T]` (or a `Vec<T>` given) in Rust, and from `[]const []const u8`
-  and `[]const T` in Zig. Optional text and handles are `std::optional`, `Option` and `?T`.
+  `Vec` in Rust, a `VoltList(T)` with `items()` and `deinit()` in Zig, and a `list` in Python.
+  Containers of text and handles go in from a `std::vector`, from `&[impl AsRef<str>]` and
+  `&mut [T]` (or a `Vec<T>` given) in Rust, from `[]const []const u8` and `[]const T` in Zig, and
+  from any sequence in Python. Optional text and handles are `std::optional`, `Option`, `?T` and
+  `None` or the value.
 - **Closures given back.** A fn returning `fn(A) -> R` gives a struct of the function, its data and
   what frees it; in C++ a `std::function`, which frees it with its last copy; in Rust a
   `Box<dyn FnMut(A) -> R>`, which frees it when dropped; in Zig a struct with `call` and
-  `deinit()`. (A Volt fn value borrows its closure, so what comes back is a function or one a
-  longer-lived value holds.)
+  `deinit()`; in Python a callable, freed by `close()`, a `with` block or the garbage collector. (A
+  Volt fn value borrows its closure, so what comes back is a function or one a longer-lived value
+  holds.)
 
 ```volt
 use std::string;
@@ -291,9 +301,29 @@ defer d.deinit();
 std.debug.print("{s}\n", .{d.bytes()}); // circle of area 3
 ```
 
+```python
+class Circle(shapelib.shape):
+    def __init__(self, r):
+        self.r = r
+
+    def area(self):
+        return 3 * self.r * self.r
+
+    def name(self):
+        return "circle"
+
+
+print(shapelib.describe(Circle(1)))  # circle of area 3
+```
+
 An override that throws (or panics, in Rust) ends the program: Volt code doesn't unwind C++
 exceptions or Rust panics (Rust 1.81 and later abort when a panic reaches an `extern "C"`
-function).
+function). In Python, an exception a callback or a trait's fn raises (other than an `E!T`'s
+error) comes out of the call that led to it once Volt returns: Volt gets a stand-in meanwhile (an
+error of the set for `E!T`, empty text, zero), and a function that has to give an object (a handle)
+ends the program instead, printing the exception, as a Volt panic does. A `str` a Python callback
+gives back is kept for the program's life (once per value), as Rust's `&'static str` is; give
+`std::string` for text made per call.
 
 Python, JavaScript and TypeScript, C#, Java and Lua have pages of their own, each with both
 directions: [Python](/volt-bootstrap/interop/python/#python-calls-volt),

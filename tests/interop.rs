@@ -361,14 +361,16 @@ fn bindings_round_trip() {
     // in the other languages, owned values only come out and closures only go in (C and C++ take
     // both: see bindings_shapes)
     for (src, lang, want) in [
-        ("export struct thing { n: i32; }\nexport fn bad_in(t: thing) -> i32 { return t.n; }\n", "python", "only take as a result"),
+        ("export struct thing { n: i32; }\nexport fn bad_in(t: thing) -> i32 { return t.n; }\n", "lua", "only take as a result"),
         ("fn twice(x: i32) -> i32 { return x * 2; }\nexport fn bad_out() -> fn(i32) -> i32 { return twice; }\n", "go", "only take closures as parameters"),
         // the names voltc lib adds itself
         ("export struct thing { n: i32; }\nexport fn thing_new() -> thing { return { n: 1 }; }\nexport fn thing_free(t: thing&) -> void {}\n", "c", "makes thing_free itself"),
         ("namespace __export { fn x() -> void {} }\nexport fn one() -> i32 { return 1; }\n", "c", "namespace __export"),
-        // a slice of what crosses converted has no owner as a result; lists aren't in Python yet
+        // a slice of what crosses converted has no owner as a result; lists aren't in Lua yet
         ("use std::string;\nexport fn bad_view(xs: std::string[..]) -> std::string[..] { return xs; }\n", "c", "which nothing would own"),
-        ("export fn bad_list() -> std::vec<i32> { return {}; }\n", "python", "has no C form"),
+        ("export fn bad_list() -> std::vec<i32> { return {}; }\n", "lua", "has no C form"),
+        // a slice a Python function gives back would dangle once it returns
+        ("export fn bad_cb(f: fn(i32) -> i32[..]) -> i32 { return f(1)[0]; }\n", "python", "a Python function can't"),
     ] {
         std::fs::write(bad.join("bad.volt"), src).unwrap();
         let o = e.voltc(&["bindings", "bad", "--pkg", &format!("bad={}", bad.display()), "--lang", lang]);
@@ -387,7 +389,7 @@ fn bindings_shapes() {
     // build, and leak_report.c prints how many of its allocations are live when the client is done
     let e = Env::new("shapes");
     let pkg = "shapelib=shapelib/lib";
-    for (lang, file) in [("c", "shapelib.h"), ("cpp", "shapelib.hpp"), ("rust", "shapelib.rs"), ("zig", "shapelib.zig"), ("java", "shapelib.java")] {
+    for (lang, file) in [("c", "shapelib.h"), ("cpp", "shapelib.hpp"), ("rust", "shapelib.rs"), ("zig", "shapelib.zig"), ("python", "shapelib.py"), ("pyi", "shapelib.pyi"), ("java", "shapelib.java")] {
         ok(e.voltc(&["bindings", "shapelib", "--pkg", pkg, "--lang", lang, "-o", &e.path(file)]), &format!("voltc bindings --lang {lang}"));
     }
     // Rust: client_shapes.rs next to its shapelib.rs module, with the leak report as an object
@@ -458,14 +460,33 @@ fn bindings_shapes() {
         } else {
             eprintln!("dotnet isn't installed: skipping the C# shapes client");
         }
+        // Python: client_shapes.py with shapelib.py, printing the library's leak report itself (and
+        // after the rest, what only Python checks: callbacks' exceptions, what Volt can't take)
+        let py = Command::new("python3").arg(Path::new(ROOT).join("tests/interop/client_shapes.py")).env("PYTHONPATH", e.path("")).env("VOLT_SHAPELIB_LIB", format!("{lib}/libshapelib.so")).output().unwrap();
+        assert_eq!(String::from_utf8_lossy(&py.stderr), "volt live: 0\n", "client_shapes.py ({backend}): the library's allocations at exit");
+        let tail = "raised ValueError ValueError ValueError ValueError\nwrong type TypeError\nrefused ValueError ValueError ValueError\nkept ValueError ann 5\nfatal 101 True\n";
+        assert_eq!(ok(py, "python3 client_shapes.py"), format!("checked true OVERDRAWN\nlimit true OVERDRAWN\nsign positive not positive\n{SHAPES_OUT}{tail}"), "client_shapes.py ({backend})");
     }
+    let parse = format!("import ast; ast.parse(open({:?}).read())", e.path("shapelib.pyi"));
+    ok(run(Command::new("python3").args(["-c", &parse])), "parse shapelib.pyi");
+    // Python: optional text and nullable handles in slices, from a package of its own (shapelib's
+    // other clients don't call these)
+    let opt = e.dir.join("pyopt");
+    std::fs::create_dir_all(&opt).unwrap();
+    std::fs::write(opt.join("pyopt.volt"), "export struct thing {\n    n: i64;\n}\n\nexport fn thing_new(n: i64) -> thing {\n    return { n: n };\n}\n\nexport fn count_text(xs: str?[..]) -> i64 {\n    var t: i64 = 0;\n    for (x) in xs {\n        val s = x ?? continue;\n        t += @cast<i64>(s.len);\n    }\n    return t;\n}\n\nexport fn sum_things(xs: thing*[..]) -> i64 {\n    var t: i64 = 0;\n    for (x) in xs {\n        if (x != null) {\n            t += x->n;\n        }\n    }\n    return t;\n}\n").unwrap();
+    let opkg = format!("pyopt={}", opt.display());
+    ok(e.voltc(&["bindings", "pyopt", "--pkg", &opkg, "--lang", "python", "-o", &e.path("pyopt.py")]), "voltc bindings pyopt --lang python");
+    ok(e.voltc(&["lib", "pyopt", "--pkg", &opkg, "--shared", "--leak-check", "-o", &e.path("libpyopt.so")]), "voltc lib pyopt --shared");
+    let check = "import ctypes, pyopt as p\nprint(p.count_text(['ab', None, 'c']), p.sum_things([p.thing(2), None, p.thing(5)]))\nprint(ctypes.c_size_t.in_dll(p._lib, 'volt_live_allocs').value)\n";
+    let o = Command::new("python3").args(["-c", check]).env("PYTHONPATH", e.path("")).env("VOLT_PYOPT_LIB", e.path("libpyopt.so")).output().unwrap();
+    assert_eq!(ok(o, "python3 (pyopt)"), "3 7\n0\n", "Python: optionals of text and handles in slices");
     // the model has the trait, and how a fn takes its object
     let json = ok(e.voltc(&["bindings", "shapelib", "--pkg", pkg, "--lang", "json"]), "voltc bindings --lang json");
     for want in [r#"{"kind":"trait","name":"shape","c_name":"shapelib_shape","table":"shapelib_shape_vt""#, r#"{"kind":"object","trait":"shape","owned":false}"#, r#""name":"biggest_i32""#, r#""class":"account","method":"deposit""#] {
         assert!(json.contains(want), "the JSON model lacks {want}:\n{json}");
     }
     // the other languages' bindings say which languages take every shape
-    let o = e.voltc(&["bindings", "shapelib", "--pkg", pkg, "--lang", "python"]);
+    let o = e.voltc(&["bindings", "shapelib", "--pkg", pkg, "--lang", "lua"]);
     let err = String::from_utf8_lossy(&o.stderr);
     assert!(!o.status.success() && err.contains("Java and C#"), "{err}");
 }
