@@ -279,3 +279,21 @@ export fn count_some(xs: i64?[..]) -> i64 {
     }
     return n;
 }
+
+// a callback while the call lends handles (one after it, a slice of them), and a handle lent and one
+// given in one call: what a call lends can't be closed or given away until it's back
+export fn visit_then(f: fn(account&) -> i64, a: account&) -> i64 {
+    return f(a) + a.cents;
+}
+
+export fn visit_over(xs: account&[..], f: fn(account&) -> i64) -> i64 {
+    var t: i64 = 0;
+    for (a) in xs {
+        t += f(a) + a.cents;
+    }
+    return t;
+}
+
+export fn lend_give(a: account&, b: account) -> i64 {
+    return a.cents + b.cents;
+}

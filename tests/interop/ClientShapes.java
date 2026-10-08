@@ -116,6 +116,46 @@ public class ClientShapes {
         System.out.println("lists closed " + shapelib.closed_accounts());
     }
 
+    // an account a running call lent to Volt can't be closed or given away by a callback meanwhile
+    // (it prints only what was wrongly accepted)
+    static void inUse() {
+        var a = shapelib.account.open("busy");
+        try {
+            shapelib.visit(a, x -> {
+                a.close();
+                return 0;
+            });
+            System.out.println("accepted: closing an account a call holds");
+        } catch (IllegalStateException e) {
+        }
+        try {
+            shapelib.visit(a, x -> shapelib.close_account(a));
+            System.out.println("accepted: giving away an account a call holds");
+        } catch (IllegalStateException e) {
+        }
+        try {
+            shapelib.visit_over(new shapelib.account[] {a}, x -> {
+                a.close();
+                return 0;
+            });
+            System.out.println("accepted: closing an account a call holds in an array");
+        } catch (IllegalStateException e) {
+        }
+        try {
+            shapelib.lend_give(a, a);
+            System.out.println("accepted: lending and giving one account in one call");
+        } catch (IllegalStateException e) {
+        }
+        // a callback that throws leaves what the call lent as it was (closable after)
+        try {
+            shapelib.visit_then(x -> {
+                throw new RuntimeException("thrown");
+            }, a);
+        } catch (RuntimeException e) {
+        }
+        a.close();
+    }
+
     @SuppressWarnings("restricted")
     public static void main(String[] args) {
         extras();
@@ -156,6 +196,7 @@ public class ClientShapes {
             System.out.println(d.call(21) + " " + hi.call("volt"));
         }
         lists();
+        inUse();
         c.close();
         // what the library still holds (0: everything was freed)
         var live = SymbolLookup.libraryLookup(System.getProperty("volt.shapelib.lib", System.mapLibraryName("shapelib")), Arena.global()).find("volt_live_allocs").orElseThrow();

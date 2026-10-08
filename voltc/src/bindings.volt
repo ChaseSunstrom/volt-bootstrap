@@ -4420,17 +4420,17 @@ attach fn py_in(this: bind&, t: u32, x: str) -> std::string {
     match (*this.c.t.get(t)) {
         .REF(y) => {
             if (this.lent_handle(t) != null) {
-                return fmt("{}._lend()", S(x));
+                return fmt("{}._lend_to(_lent)", S(x));
             }
         },
         .OPT(y) => {
             if (this.lent_handle(y) != null) {
-                return fmt2("(None if {} is None else {}._lend())", S(x), S(x));
+                return fmt2("(None if {} is None else {}._lend_to(_lent))", S(x), S(x));
             }
         },
         default => {
             if (this.lent_handle(t) != null) {
-                return fmt2("(None if {} is None else {}._lend())", S(x), S(x));
+                return fmt2("(None if {} is None else {}._lend_to(_lent))", S(x), S(x));
             }
         },
     }
@@ -4471,7 +4471,7 @@ attach fn py_elems(this: bind&, e: u32, given: bool, x: str) -> std::string {
     match (this.shape_of(e) ?? shape::VOID) {
         .HANDLE(h) => {
             if (!given) {
-                c = S("_x._lend()");
+                c = S("_x._lend_to(_lent)");
             }
         },
         default => {},
@@ -4649,15 +4649,28 @@ attach fn py_calls_back(this: bind&) -> bool {
 
 // "_gift = []" when the arguments give Volt anything (see py_invoke)
 fn py_gift(pre: str, args: str) -> std::string {
+    var out: std::string = {};
     if (contains(pre, "_gift") || contains(args, "_gift")) {
-        return S("    _gift = []\n");
+        out.append("    _gift = []\n");
     }
-    return {};
+    if (contains(pre, "_lent") || contains(args, "_lent")) {
+        out.append("    _lent = []\n");
+    }
+    return out;
 }
 
 // a call of C function f with args, its result in r: what it gives Volt (_gift) is given up only
 // once every argument is ready, so one that can't convert leaves the rest Python's
 attach fn py_invoke(this: bind&, f: str, args: std::string, gift: bool) -> std::string {
+    if (contains(args.as_str(), "_lent)")) {
+        // what it lends is busy until it returns: a callback can't close it or give it away
+        var out = fmt("    _a = ({},)\n", copy args);
+        if (contains(args.as_str(), "_gift")) {
+            out.append("    _given(_gift, _lent)\n");
+        }
+        out.append(fmt("    _hold(_lent, 1)\n    try:\n        r = {}(*_a)\n    finally:\n        _hold(_lent, -1)\n", S(f)).as_str());
+        return out;
+    }
     if (gift) {
         return fmt2("    _a = ({},)\n    _given(_gift)\n    r = {}(*_a)\n", move args, S(f));
     }
@@ -4900,9 +4913,9 @@ attach fn py_text(this: bind&) -> std::string {
     // a class per export struct: it owns its handle (close(), a with block, or the garbage collector frees it)
     for (s&) in this.handles.items() {
         val cls = this.local(this.c.si(*s).name);
-        body.append(fmt2("\n\nclass {}:\n    \"\"\"export struct {}: owns a handle; close() (or a with block) frees it\"\"\"\n\n    _h = None\n    _own = True\n", copy cls, S(this.c.si(*s).name)).as_str());
-        body.append("\n    @classmethod\n    def _wrap(cls, h):\n        o = cls.__new__(cls)\n        o._h = h\n        return o\n\n    @classmethod\n    def _lent(cls, h):\n        \"\"\"a handle Volt lends (a callback's argument): never freed here\"\"\"\n        o = cls._wrap(h)\n        o._own = False\n        return o\n\n    def _lend(self):\n        \"\"\"the handle, lent to Volt for a call\"\"\"\n        if not self._h:\n            raise ValueError(type(self).__name__ + \" is closed or given away\")\n        return self._h\n\n    def _give(self):\n        \"\"\"the handle, given up to Volt (a callback's result), which frees it\"\"\"\n        h = _giving([], self)\n        self._h = None\n        return h\n");
-        body.append(fmt("\n    def close(self):\n        if self._h and self._own:\n            _lib.{}(self._h)\n        self._h = None\n\n    def __enter__(self):\n        return self\n\n    def __exit__(self, *exc):\n        self.close()\n\n    def __del__(self):\n        self.close()\n", this.free_name(*s)).as_str());
+        body.append(fmt2("\n\nclass {}:\n    \"\"\"export struct {}: owns a handle; close() (or a with block) frees it\"\"\"\n\n    _h = None\n    _own = True\n    _busy = 0\n", copy cls, S(this.c.si(*s).name)).as_str());
+        body.append("\n    @classmethod\n    def _wrap(cls, h):\n        o = cls.__new__(cls)\n        o._h = h\n        return o\n\n    @classmethod\n    def _lent(cls, h):\n        \"\"\"a handle Volt lends (a callback's argument): never freed here\"\"\"\n        o = cls._wrap(h)\n        o._own = False\n        return o\n\n    def _lend(self):\n        \"\"\"the handle, lent to Volt\"\"\"\n        if not self._h:\n            raise ValueError(type(self).__name__ + \" is closed or given away\")\n        return self._h\n\n    def _lend_to(self, lent):\n        \"\"\"the handle, lent to Volt for a call (which counts it busy while it runs)\"\"\"\n        h = self._lend()\n        lent.append(self)\n        return h\n\n    def _give(self):\n        \"\"\"the handle, given up to Volt (a callback's result), which frees it\"\"\"\n        h = _giving([], self)\n        self._h = None\n        return h\n");
+        body.append(fmt("\n    def close(self):\n        _idle(self)\n        if self._h and self._own:\n            _lib.{}(self._h)\n        self._h = None\n\n    def __enter__(self):\n        return self\n\n    def __exit__(self, *exc):\n        self.close()\n\n    def __del__(self):\n        self.close()\n", this.free_name(*s)).as_str());
         for (e&) in ents.items() {
             if (e.free_of != null) {
                 continue;
@@ -4917,7 +4930,7 @@ attach fn py_text(this: bind&) -> std::string {
             if (is_method) {
                 first = 1;
                 names.append("self");
-                conv.append("self._lend()");
+                conv.append("self._lend_to(_lent)");
             }
             for (k) in first..info.params.len {
                 if (names.len() > 0) {
@@ -5008,7 +5021,7 @@ attach fn py_text(this: bind&) -> std::string {
         out.append("\n\ndef _object(cls, vt, s, keep, gift):\n    \"\"\"a trait's object Python hands Volt: its table vt, and s, what Volt passes its fns; one given\n    (gift: what the call gives) is kept from the call until Volt drops it\"\"\"\n    o = cls(ctypes.pointer(vt), ctypes.addressof(s))\n    keep = (vt, s, keep)\n    if gift is not None:\n        o.drop = _drop_kept\n        gift.append((o.self, keep))\n    return o, keep\n");
     }
     if (contains(body.as_str(), "_giving(")) {
-        out.append("\n\ndef _giving(gift, x):\n    \"\"\"x's handle, for Volt to take: checked now, given up with the rest of gift (_given)\"\"\"\n    if not x._h:\n        raise ValueError(type(x).__name__ + \" is closed or given away\")\n    if not x._own:\n        raise ValueError(type(x).__name__ + \" is lent: Volt can't take it\")\n    if any(y is x for y in gift):\n        raise ValueError(type(x).__name__ + \" is given twice\")\n    gift.append(x)\n    return x._h\n\n\ndef _given(gift):\n    \"\"\"what a call gives Volt, given up once every argument is ready: objects let go of their\n    handles, and Python objects are kept until Volt drops them\"\"\"\n    for x in gift:\n        if isinstance(x, tuple):\n            _kept[x[0]] = x[1]\n        else:\n            x._h = None\n");
+        out.append("\n\ndef _giving(gift, x):\n    \"\"\"x's handle, for Volt to take: checked now, given up with the rest of gift (_given)\"\"\"\n    if not x._h:\n        raise ValueError(type(x).__name__ + \" is closed or given away\")\n    if not x._own:\n        raise ValueError(type(x).__name__ + \" is lent: Volt can't take it\")\n    if any(y is x for y in gift):\n        raise ValueError(type(x).__name__ + \" is given twice\")\n    _idle(x)\n    gift.append(x)\n    return x._h\n\n\ndef _idle(x):\n    if x._busy:\n        raise ValueError(type(x).__name__ + \" is in use by a call that hasn't returned\")\n\n\ndef _hold(lent, n):\n    \"\"\"the handles a call lends Volt: busy (n=1) until it returns (n=-1)\"\"\"\n    for x in lent:\n        x._busy += n\n\n\ndef _given(gift, lent=()):\n    \"\"\"what a call gives Volt, given up once every argument is ready: objects let go of their\n    handles, and Python objects are kept until Volt drops them (none it lends too)\"\"\"\n    for x in gift:\n        if any(y is x for y in lent):\n            raise ValueError(type(x).__name__ + \" is lent to this call too\")\n    for x in gift:\n        if isinstance(x, tuple):\n            _kept[x[0]] = x[1]\n        else:\n            x._h = None\n");
     }
     if (contains(body.as_str(), "_stash(") || contains(body.as_str(), "_reraise(")) {
         out.append("\n\n# what a Python function Volt called raised, raised again once Volt returns (it got a stand-in)\n_raised = threading.local()\n\n\ndef _stash(e):\n    if getattr(_raised, \"e\", None) is None:\n        _raised.e = e\n\n\ndef _reraise():\n    e = getattr(_raised, \"e\", None)\n    if e is not None:\n        _raised.e = None\n        try:\n            raise e\n        finally:\n            e = None  # (else e, its traceback and this frame hold each other)\n\n\ndef _fatal(e):\n    \"\"\"a Python function that had to give Volt an object (a handle, a reference) raised: Volt has\n    nothing to go on with, so the program ends, as a Volt panic does\"\"\"\n    traceback.print_exception(e)\n    sys.stdout.flush()\n    sys.stderr.flush()\n    os._exit(101)\n");
@@ -5841,8 +5854,8 @@ attach fn cs_arg_of(this: bind&, t: u32, name0: str, a: cs_arg&) -> void {
         a.pass = fmt("{}.h.DangerousGetHandle()", S(name));
         // the handle stays alive (and can't be freed) for the call
         a.open = fmt2("bool {}_ref = false;\n{}.h.DangerousAddRef(ref ", S(name0), S(name));
-        a.open.append(fmt("{}_ref);\ntry {\n", S(name0)).as_str());
-        a.close = fmt2("}\nfinally {{\n    if ({}_ref) {{\n        {}.h.DangerousRelease();\n    }}\n}}\n", S(name0), S(name));
+        a.open.append(fmt2("{}_ref);\n{}.h.busy++;\ntry {{\n", S(name0), S(name)).as_str());
+        a.close = fmt3("}}\nfinally {{\n    {}.h.busy--;\n    if ({}_ref) {{\n        {}.h.DangerousRelease();\n    }}\n}}\n", S(name), S(name0), S(name));
         return;
     }
     if (this.in_ty(t) == STR) {
@@ -6294,6 +6307,9 @@ attach fn cs_doc(this: bind&, f: u32, ind: usize) -> std::string {
             q.append("&lt;");
         } else if (c == '&') {
             q.append("&amp;");
+        } else if (c == '\n') {
+            // (a comment of several lines: each a /// line)
+            q.append("\n/// ");
         } else {
             q.push(c);
         }
@@ -6431,14 +6447,17 @@ attach fn cs_text(this: bind&) -> std::string {
         out.append("}\n");
     }
     // a class per export struct, over a SafeHandle
+    if (this.handles.len > 0) {
+        out.append("\n/// <summary>a handle to an export struct: busy while calls that haven't returned have it lent to Volt\n/// (it can't be disposed or given up then)</summary>\npublic abstract class VoltHandle : SafeHandle\n{\n    internal int busy;\n\n    protected VoltHandle(bool owns) : base(IntPtr.Zero, owns) { }\n\n    internal void Idle(string what)\n    {\n        if (busy > 0)\n        {\n            throw new InvalidOperationException(what + \" is in use by a call that hasn't returned\");\n        }\n    }\n}\n");
+    }
     for (s&) in this.handles.items() {
         val cls = this.local(this.c.si(*s).name);
-        out.append(fmt4("\n/// <summary>owns a handle to export struct {}; Dispose (or a using block, or the finalizer) frees it</summary>\npublic sealed class {}Handle : SafeHandle\n{{\n    public {}Handle() : base(IntPtr.Zero, true) {{ }}\n    public {}Handle(IntPtr h) : base(IntPtr.Zero, true) => SetHandle(h);\n", S(this.c.si(*s).name), copy cls, copy cls, copy cls).as_str());
-        out.append(fmt("    // one Volt lends (owns: false) is never freed through this\n    public {}Handle(IntPtr h, bool owns) : base(IntPtr.Zero, owns) => SetHandle(h);\n", copy cls).as_str());
+        out.append(fmt4("\n/// <summary>owns a handle to export struct {}; Dispose (or a using block, or the finalizer) frees it</summary>\npublic sealed class {}Handle : VoltHandle\n{{\n    public {}Handle() : base(true) {{ }}\n    public {}Handle(IntPtr h) : base(true) => SetHandle(h);\n", S(this.c.si(*s).name), copy cls, copy cls, copy cls).as_str());
+        out.append(fmt("    // one Volt lends (owns: false) is never freed through this\n    public {}Handle(IntPtr h, bool owns) : base(owns) => SetHandle(h);\n", copy cls).as_str());
         out.append(fmt("    public override bool IsInvalid => handle == IntPtr.Zero;\n\n    protected override bool ReleaseHandle()\n    {\n        Native.{}(handle);\n        return true;\n    }\n}\n", cs_ident(this.free_name(*s).as_str())).as_str());
         out.append(fmt3("\n/// <summary>export struct {}</summary>\npublic sealed unsafe class {} : IDisposable\n{{\n    internal readonly {}Handle h;\n\n", S(this.c.si(*s).name), copy cls, copy cls).as_str());
-        out.append(fmt2("    public {}({}Handle h) => this.h = h;\n\n    public void Dispose() => h.Dispose();\n", copy cls, copy cls).as_str());
-        out.append(fmt("\n    /// <summary>gives the handle up (to Volt, or to free it yourself): this no longer frees it</summary>\n    public IntPtr Release()\n    {{\n        if (h.IsClosed || h.IsInvalid)\n        {{\n            throw new ObjectDisposedException(nameof({}));\n        }}\n        var p = h.DangerousGetHandle();\n        h.SetHandleAsInvalid();\n        return p;\n    }}\n", copy cls).as_str());
+        out.append(fmt3("    public {}({}Handle h) => this.h = h;\n\n    public void Dispose()\n    {{\n        h.Idle(nameof({}));\n        h.Dispose();\n    }}\n", copy cls, copy cls, copy cls).as_str());
+        out.append(fmt2("\n    /// <summary>gives the handle up (to Volt, or to free it yourself): this no longer frees it</summary>\n    public IntPtr Release()\n    {{\n        if (h.IsClosed || h.IsInvalid)\n        {{\n            throw new ObjectDisposedException(nameof({}));\n        }}\n        h.Idle(nameof({}));\n        var p = h.DangerousGetHandle();\n        h.SetHandleAsInvalid();\n        return p;\n    }}\n", copy cls, copy cls).as_str());
         for (e&) in ents.items() {
             if (e.free_of != null) {
                 continue;
@@ -6450,7 +6469,7 @@ attach fn cs_text(this: bind&) -> std::string {
             if (this.node_is_method(e.f, *s)) {
                 var args = this.cs_args(e.f, 1);
                 // this instance's handle stays alive (and can't be freed) for the call
-                var self_arg: cs_arg = { decl: {}, pass: S("h.DangerousGetHandle()"), open: S("bool self_ref = false;\nh.DangerousAddRef(ref self_ref);\ntry {\n"), close: S("}\nfinally {\n    if (self_ref) {\n        h.DangerousRelease();\n    }\n}\n") };
+                var self_arg: cs_arg = { decl: {}, pass: S("h.DangerousGetHandle()"), open: S("bool self_ref = false;\nh.DangerousAddRef(ref self_ref);\nh.busy++;\ntry {\n"), close: S("}\nfinally {\n    h.busy--;\n    if (self_ref) {\n        h.DangerousRelease();\n    }\n}\n") };
                 var all: std::vec<cs_arg> = {};
                 put(&all, move self_arg);
                 for (a&) in args.items() {
@@ -6513,7 +6532,7 @@ attach fn cs_text(this: bind&) -> std::string {
         out.append("\n// text lent to Volt for one call: each string's UTF-8 bytes, in one block Dispose frees\ninternal sealed unsafe class VoltStrs : IDisposable\n{\n    byte* p;\n    public readonly VoltStr[] Views;\n\n    public VoltStrs(IEnumerable<string> xs)\n    {\n        var bs = xs.Select(x => Encoding.UTF8.GetBytes(x)).ToArray();\n        var n = 0;\n        foreach (var b in bs)\n        {\n            n += b.Length;\n        }\n        p = (byte*)NativeMemory.Alloc((nuint)n + 1);\n        Views = new VoltStr[bs.Length];\n        var at = p;\n        for (var i = 0; i < bs.Length; i++)\n        {\n            bs[i].CopyTo(new Span<byte>(at, bs[i].Length));\n            Views[i] = new VoltStr { ptr = at, len = (nuint)bs[i].Length };\n            at += bs[i].Length;\n        }\n    }\n\n    public void Dispose()\n    {\n        NativeMemory.Free(p);\n        p = null;\n    }\n}\n");
     }
     if (contains(out.as_str(), "new VoltHandles(")) {
-        out.append("\n// handles lent to Volt for one call: each kept alive (and unfreeable) until Dispose\ninternal sealed class VoltHandles : IDisposable\n{\n    readonly SafeHandle[] hs;\n    readonly bool[] refs;\n    public readonly IntPtr[] Ptrs;\n\n    public VoltHandles(IEnumerable<SafeHandle> xs)\n    {\n        hs = xs.ToArray();\n        refs = new bool[hs.Length];\n        Ptrs = new IntPtr[hs.Length];\n        try\n        {\n            for (var i = 0; i < hs.Length; i++)\n            {\n                hs[i].DangerousAddRef(ref refs[i]);\n                Ptrs[i] = hs[i].DangerousGetHandle();\n            }\n        }\n        catch\n        {\n            Dispose();\n            throw;\n        }\n    }\n\n    public void Dispose()\n    {\n        for (var i = 0; i < hs.Length; i++)\n        {\n            if (refs[i])\n            {\n                hs[i].DangerousRelease();\n                refs[i] = false;\n            }\n        }\n    }\n}\n");
+        out.append("\n// handles lent to Volt for one call: each kept alive (and unfreeable) until Dispose\ninternal sealed class VoltHandles : IDisposable\n{\n    readonly VoltHandle[] hs;\n    readonly bool[] refs;\n    public readonly IntPtr[] Ptrs;\n\n    public VoltHandles(IEnumerable<VoltHandle> xs)\n    {\n        hs = xs.ToArray();\n        refs = new bool[hs.Length];\n        Ptrs = new IntPtr[hs.Length];\n        try\n        {\n            for (var i = 0; i < hs.Length; i++)\n            {\n                hs[i].DangerousAddRef(ref refs[i]);\n                hs[i].busy++;\n                Ptrs[i] = hs[i].DangerousGetHandle();\n            }\n        }\n        catch\n        {\n            Dispose();\n            throw;\n        }\n    }\n\n    public void Dispose()\n    {\n        for (var i = 0; i < hs.Length; i++)\n        {\n            if (refs[i])\n            {\n                hs[i].busy--;\n                hs[i].DangerousRelease();\n                refs[i] = false;\n            }\n        }\n    }\n}\n");
     }
     // the head, and the shared types
     var head = fmt("// {}: generated by voltc bindings; the Volt package for C# (.NET 7 or later). It calls\n", S(this.pkg));
@@ -6841,6 +6860,12 @@ struct java_arg {
     decl: std::string = {};
     pass: std::string = {};
     before: std::string = {};
+    // statements that can't throw, run once every argument is in (a lent handle counted busy), and
+    // their undoing (first in the call's finally)
+    lend: std::string = {};
+    unlend: std::string = {};
+    // statements giving handles up, after the lends (inside the call's try)
+    give: std::string = {};
     after: std::string = {};
 }
 
@@ -6848,7 +6873,10 @@ attach fn java_arg_of(this: bind&, t: u32, name: str, a: java_arg&) -> void {
     val h = this.lent_handle(t);
     if (h) {
         a.decl = fmt2("{} {}", this.local(this.c.si(h).name), S(name));
-        a.pass = fmt("{}.handle()", S(name));
+        a.before = fmt2("MemorySegment {}_h = {}.handle();\n", S(name), S(name));
+        a.pass = fmt("{}_h", S(name));
+        a.lend = fmt("{}.busy++;\n", S(name));
+        a.unlend = fmt("{}.busy--;\n", S(name));
         a.after = fmt("java.lang.ref.Reference.reachabilityFence({});\n", S(name));
         return;
     }
@@ -6946,7 +6974,8 @@ attach fn java_arg_of(this: bind&, t: u32, name: str, a: java_arg&) -> void {
                 // given to Volt, which frees it
                 a.decl = fmt2("{} {}", this.local(this.c.si(h).name), S(name));
                 // (a local: invokeExact would take the conditional itself as an Object)
-                a.before = fmt3("MemorySegment {}_p = {} == null ? MemorySegment.NULL : {}.release();\n", S(name), S(name), S(name));
+                a.before = fmt("MemorySegment {}_p;\n", S(name));
+                a.give = fmt3("{}_p = {} == null ? MemorySegment.NULL : {}.release();\n", S(name), S(name), S(name));
                 a.pass = fmt("{}_p", S(name));
                 return;
             }
@@ -7011,13 +7040,21 @@ attach fn java_elems(this: bind&, x: u32, given: bool, name: str, a: java_arg&) 
     a.before = fmt4("MemorySegment {}_e = arena.allocate({}L * Math.max(1, {}.length), {});\n", S(name), unum(z.size), S(name), unum(z.align));
     if (h != null && given) {
         // each there before any is given up
-        a.before.append(fmt("for (var x : {}) {{\n    java.util.Objects.requireNonNull(x);\n}}\n", S(name)).as_str());
+        a.before.append(fmt("for (var x$ : {}) {{\n    java.util.Objects.requireNonNull(x$);\n}}\n", S(name)).as_str());
     }
-    a.before.append(fmt2("for (int i = 0; i < {}.length; i++) {{\n    {}\n}}\n", S(name), move put).as_str());
+    val fill = fmt2("for (int i = 0; i < {}.length; i++) {{\n    {}\n}}\n", S(name), move put);
+    if (h != null && given) {
+        a.give = move fill;
+    } else {
+        a.before.append(fill.as_str());
+    }
     a.before.append(fmt3("MemorySegment {}_s = arena.allocate(L_SLICE);\n{}_s.set(ADDRESS, 0, {}_e);\n", S(name), S(name), S(name)).as_str());
     a.before.append(fmt2("{}_s.set(JAVA_LONG, 8, {}.length);\n", S(name), S(name)).as_str());
     a.pass = fmt("{}_s", S(name));
     if (h != null && !given) {
+        // each lent for the call: counted busy through it
+        a.lend = fmt("for (var x$ : {}) {{\n    x$.busy++;\n}}\n", S(name));
+        a.unlend = fmt("for (var x$ : {}) {{\n    x$.busy--;\n}}\n", S(name));
         a.after = fmt("java.lang.ref.Reference.reachabilityFence({});\n", S(name));
     }
     return true;
@@ -7142,12 +7179,23 @@ attach fn java_call(this: bind&, ret: u32, callee: str, args: std::vec<java_arg>
     if (this.java_is_struct(ret)) {
         passes.append("(SegmentAllocator) arena");
     }
+    var lend: std::string = {};
+    var unlend: std::string = {};
+    var give: std::string = {};
     val sp = self_pass;
     if (sp) {
         if (passes.len() > 0) {
             passes.append(", ");
         }
-        passes.append(sp);
+        if (sp == "h") {
+            // a handle's method: its object is lent like an argument
+            before.append("MemorySegment self_h = handle();\n");
+            lend.append("busy++;\n");
+            unlend.append("busy--;\n");
+            passes.append("self_h");
+        } else {
+            passes.append(sp);
+        }
     }
     for (a&) in args.items() {
         if (passes.len() > 0) {
@@ -7155,9 +7203,12 @@ attach fn java_call(this: bind&, ret: u32, callee: str, args: std::vec<java_arg>
         }
         passes.append(a.pass.as_str());
         before.append(a.before.as_str());
+        lend.append(a.lend.as_str());
+        unlend.append(a.unlend.as_str());
+        give.append(a.give.as_str());
         after.append(a.after.as_str());
     }
-    var body: std::string = {};
+    var body = move give;
     val call = fmt2("{}.invokeExact({})", S(callee), move passes);
     if (ret == VOID) {
         body.append(fmt("{};\n", move call).as_str());
@@ -7195,8 +7246,12 @@ attach fn java_call(this: bind&, ret: u32, callee: str, args: std::vec<java_arg>
     if (sp) {
         after.append("java.lang.ref.Reference.reachabilityFence(this);\n");
     }
+    // (the counts first: what follows can throw)
+    unlend.append(after.as_str());
+    after = move unlend;
     var out = S("try (Arena arena = Arena.ofConfined()) {\n");
     out.append(indent(before.as_str()).as_str());
+    out.append(indent(lend.as_str()).as_str());
     if (after.len() > 0) {
         out.append(fmt2("    try {{\n{}    }} finally {{\n{}    }}\n", indent(indent(body.as_str()).as_str()), indent(indent(after.as_str()).as_str())).as_str());
     } else {
@@ -7625,7 +7680,10 @@ attach fn java_text(this: bind&) -> std::string {
         out.append(fmt4("\n    /** export struct {}: close() (or try-with-resources) frees it; otherwise it's freed once unreachable */\n    public static final class {} implements AutoCloseable {{\n        private final MemorySegment h;\n        private final boolean[] live;\n        private final Cleaner.Cleanable cleanable;\n\n        {}(MemorySegment h) {{\n            this(h, true);\n        }}\n\n", S(this.c.si(*s).name), copy n, copy n, S("")).as_str());
         out.append(fmt("        // own: freed here (one Volt lends never is)\n        {}(MemorySegment h, boolean own) {\n            this.h = h;\n            boolean[] l = {own};\n            this.live = l;\n", copy n).as_str());
         out.append(fmt("            this.cleanable = CLEANER.register(this, () -> {\n                if (l[0]) {\n                    l[0] = false;\n                    free(h);\n                }\n            });\n        }\n\n        private static void free(MemorySegment h) {\n            try {\n                H_{}.invokeExact(h);\n            } catch (Throwable e) {\n                throw new RuntimeException(e);\n            }\n        }\n\n", this.free_name(*s)).as_str());
-        out.append("        public void close() {\n            cleanable.clean();\n        }\n\n        MemorySegment handle() {\n            return h;\n        }\n\n        // gives the handle up (to Volt, which frees it)\n        MemorySegment release() {\n            live[0] = false;\n            return h;\n        }\n");
+        out.append(fmt("        // closed or given away; how many calls that haven't returned have it lent to Volt\n        private boolean closed;\n        int busy;\n\n        private void idle() {{\n            if (busy > 0) {{\n                throw new IllegalStateException(\"{} is in use by a call that hasn't returned\");\n            }}\n        }}\n\n", copy n).as_str());
+        out.append("        public void close() {\n            idle();\n            closed = true;\n            cleanable.clean();\n        }\n\n");
+        out.append(fmt("        MemorySegment handle() {{\n            if (closed) {{\n                throw new IllegalStateException(\"{} is closed or given away\");\n            }}\n            return h;\n        }}\n\n", copy n).as_str());
+        out.append(fmt("        // gives the handle up (to Volt, which frees it): one this side owns, open and not in use\n        MemorySegment release() {{\n            idle();\n            if (closed || !live[0]) {{\n                throw new IllegalStateException(\"{} is closed, lent or given away\");\n            }}\n            closed = true;\n            live[0] = false;\n            return h;\n        }}\n", copy n).as_str());
         for (e&) in ents.items() {
             if (e.free_of != null) {
                 continue;
@@ -7972,7 +8030,7 @@ attach fn go_arg_of(this: bind&, t: u32, name: str, a: go_arg&) -> void {
     a.decl = fmt2("{} {}", copy n, this.go_ty(t));
     if (this.lent_handle(t) != null) {
         a.pass = fmt("{}.handle()", copy n);
-        a.keep = fmt("defer runtime.KeepAlive({})\n", copy n);
+        a.keep = fmt2("defer runtime.KeepAlive({})\ndefer {}.lend()()\n", copy n, copy n);
         return;
     }
     if (this.go_plain(t)) {
@@ -8088,7 +8146,8 @@ attach fn go_slice_arg(this: bind&, x: u32, given: bool, name: str, a: go_arg&) 
         if (given) {
             a.give = fmt("for _, x := range {} {{\n    x.forget()\n}}\n", copy n);
         } else {
-            a.keep = fmt("defer runtime.KeepAlive({})\n", copy n);
+            // each lent for the call: busy until the wrapper returns
+            a.keep = fmt2("defer runtime.KeepAlive({})\nfor _, x := range {} {{\n    defer x.lend()()\n}}\n", copy n, copy n);
         }
         return;
     }
@@ -8192,6 +8251,10 @@ attach fn go_call(this: bind&, call: std::string, self_pass: str?, args: std::ve
     if (sp) {
         passes.append(sp);
         before.append("defer runtime.KeepAlive(o)\n");
+        if (sp == "o.handle()") {
+            // a method's own object is lent like an argument
+            before.append("defer o.lend()()\n");
+        }
     }
     for (a&) in args.items() {
         before.append(a.keep.as_str());
@@ -8289,7 +8352,7 @@ attach fn go_doc(this: bind&, f: u32, name: str) -> std::string {
     if (d.len() == 0) {
         return {};
     }
-    return fmt2("// {}: {}\n", S(name), move d);
+    return fmt2("// {}: {}\n", S(name), replace_all(d.as_str(), "\n", "\n// "));
 }
 
 // s, then spaces up to n bytes (gofmt's columns)
@@ -8605,10 +8668,11 @@ attach fn go_text(this: bind&) -> std::string {
     for (s&) in this.handles.items() {
         val n = this.go_tname(this.c.si(*s).name);
         val cn = this.c_named(this.c.si(*s).name, false);
-        var tpl = S("\n// $N is Volt export struct $V. Close frees it (or the garbage collector does).\ntype $N struct {\n    h    *C.$C\n    lent bool // Volt lent it: never freed here, and not Go's to give\n}\n\nfunc wrap$N(h *C.$C) *$N {\n    if h == nil {\n        return nil\n    }\n    o := &$N{h: h}\n    runtime.SetFinalizer(o, (*$N).Close)\n    return o\n}\n");
-        tpl.append("\n// Close frees the handle (once; later calls do nothing).\nfunc (o *$N) Close() {\n    if o.h != nil {\n        if !o.lent {\n            C.$F(o.h)\n        }\n        o.h = nil\n        runtime.SetFinalizer(o, nil)\n    }\n}\n");
+        var tpl = S("\n// $N is Volt export struct $V. Close frees it (or the garbage collector does).\ntype $N struct {\n    h    *C.$C\n    lent bool // Volt lent it: never freed here, and not Go's to give\n    busy int  // calls that haven't returned have it lent to Volt\n}\n\nfunc wrap$N(h *C.$C) *$N {\n    if h == nil {\n        return nil\n    }\n    o := &$N{h: h}\n    runtime.SetFinalizer(o, (*$N).Close)\n    return o\n}\n");
+        tpl.append("\n// Close frees the handle (once; later calls do nothing).\nfunc (o *$N) Close() {\n    o.idle()\n    if o.h != nil {\n        if !o.lent {\n            C.$F(o.h)\n        }\n        o.h = nil\n        runtime.SetFinalizer(o, nil)\n    }\n}\n");
         tpl.append("\nfunc (o *$N) handle() *C.$C {\n    if o.h == nil {\n        panic(\"$N: used after Close, or after the Volt call that lent it\")\n    }\n    return o.h\n}\n");
-        tpl.append("\n// owned is the handle, to give to Volt (not one Volt lent)\nfunc (o *$N) owned() *C.$C {\n    if o.lent {\n        panic(\"$N: Volt lent it, so it isn't Go's to give\")\n    }\n    return o.handle()\n}\n");
+        tpl.append("\n// owned is the handle, to give to Volt (not one Volt lent, nor one a call has lent)\nfunc (o *$N) owned() *C.$C {\n    if o.lent {\n        panic(\"$N: Volt lent it, so it isn't Go's to give\")\n    }\n    o.idle()\n    return o.handle()\n}\n");
+        tpl.append("\n// lend counts a call that lends the handle to Volt; what it returns ends that\nfunc (o *$N) lend() func() {\n    o.busy++\n    return func() { o.busy-- }\n}\n\nfunc (o *$N) idle() {\n    if o.busy > 0 {\n        panic(\"$N: in use by a call that hasn't returned\")\n    }\n}\n");
         tpl.append("\n// forget lets go of the handle: it's Volt's from here\nfunc (o *$N) forget() {\n    o.h = nil\n    runtime.SetFinalizer(o, nil)\n}\n");
         tpl.append("\n// give gives the handle to Volt\nfunc (o *$N) give() *C.$C {\n    h := o.owned()\n    o.forget()\n    return h\n}\n");
         tpl = replace_all(tpl.as_str(), "$N", n.as_str());
@@ -9936,7 +10000,11 @@ fn lua_depth(c: str) -> std::string {
 // a C expression: the handle of export struct s in the userdata at idx, lent (how 1), given (2) or
 // copied in for the call (3), marked in the call's table kp (see vl_mark)
 attach fn lua_handle(this: bind&, s: u32, idx: str, kp: str, how: str, what: str) -> std::string {
-    return fmt5("vl_handle_in(L, {}, {}, {}, {}, {})->h", S(idx), this.lua_mt(this.node_sname(s).as_str()), S(kp), S(how), S(what));
+    return fmt("{}->h", this.lua_handle_u(s, idx, kp, how, what));
+}
+
+attach fn lua_handle_u(this: bind&, s: u32, idx: str, kp: str, how: str, what: str) -> std::string {
+    return fmt5("vl_handle_in(L, {}, {}, {}, {}, {})", S(idx), this.lua_mt(this.node_sname(s).as_str()), S(kp), S(how), S(what));
 }
 
 // the C function giving error set e's code for the error a Lua function names (see vl_error_of)
@@ -9980,7 +10048,7 @@ attach fn lua_get(this: bind&, t: u32, idx: str, c: str, what: str) -> std::stri
             s.append(fmt3("int e{} = lua_gettop(L); {} lua_remove(L, e{}); }} }", copy d, move el, copy d).as_str());
             return s;
         },
-        .SLICE(x) => { return this.lua_seq(x, idx, c, what, "0", "1"); },
+        .SLICE(x) => { return this.lua_seq(x, idx, c, what, "0", "1", ""); },
         .OPT(x) => {
             var s = fmt4("memset(&{}, 0, sizeof {}); if (!lua_isnoneornil(L, {})) {{ {}.has = true; ", S(c), S(c), S(idx), S(c));
             s.append(fmt("{} }", this.lua_get(x, idx, fmt("{}.value", S(c)).as_str(), what)).as_str());
@@ -9997,11 +10065,18 @@ attach fn lua_get(this: bind&, t: u32, idx: str, c: str, what: str) -> std::stri
 }
 
 // statements reading the sequence at idx into C slice c, each element as e's view (see lua_elem),
-// into memory left on the stack
-attach fn lua_seq(this: bind&, e: u32, idx: str, c: str, what: str, kp: str, how: str) -> std::string {
+// into memory left on the stack; us (when it isn't empty) gets each handle's userdata
+attach fn lua_seq(this: bind&, e: u32, idx: str, c: str, what: str, kp: str, how: str, us: str) -> std::string {
     val d = lua_depth(c);
-    val el = this.lua_elem(e, fmt("e{}", copy d).as_str(), fmt2("{}.ptr[i{}]", S(c), copy d).as_str(), what, kp, how);
+    var u: std::string = {};
+    if (us.len > 0) {
+        u = fmt2("{}[i{}]", S(us), copy d);
+    }
+    val el = this.lua_elem(e, fmt("e{}", copy d).as_str(), fmt2("{}.ptr[i{}]", S(c), copy d).as_str(), what, kp, how, u.as_str());
     var s = fmt5("{{ int t{} = lua_absindex(L, {}); {}.len = vl_seq(L, t{}, {}); ", copy d, S(idx), S(c), copy d, S(what));
+    if (us.len > 0) {
+        s.append(fmt3("{} = vl_buffer(L, sizeof *{}, {}.len); ", S(us), S(us), S(c)).as_str());
+    }
     s.append(fmt4("{}.ptr = vl_buffer(L, sizeof *{}.ptr, {}.len); for (size_t i{} = 0; ", S(c), S(c), S(c), copy d).as_str());
     s.append(fmt5("i{} < {}.len; i{}++) {{ lua_geti(L, t{}, (lua_Integer)i{} + 1); ", copy d, S(c), copy d, copy d, copy d).as_str());
     s.append(fmt3("int e{} = lua_gettop(L); {} lua_remove(L, e{}); }} }", copy d, move el, copy d).as_str());
@@ -10011,9 +10086,14 @@ attach fn lua_seq(this: bind&, e: u32, idx: str, c: str, what: str, kp: str, how
 // statements reading the sequence element at idx into C lvalue c, as element type e's view (see
 // view_of): text is a str (kept in the call's table kp), a handle is lent (how 1), given (2) or
 // copied in for the call (3)
-attach fn lua_elem(this: bind&, e: u32, idx: str, c: str, what: str, kp: str, how: str) -> std::string {
+attach fn lua_elem(this: bind&, e: u32, idx: str, c: str, what: str, kp: str, how: str, us: str) -> std::string {
     val h = this.handle_of(e);
     if (h) {
+        if (us.len > 0) {
+            var g = fmt3("{} = {}; {} = ", S(us), this.lua_handle_u(h, idx, kp, how, what), S(c));
+            g.append(fmt("{}->h;", S(us)).as_str());
+            return g;
+        }
         return fmt2("{} = {};", S(c), this.lua_handle(h, idx, kp, how, what));
     }
     var s = this.lua_get(this.view_of(e), idx, c, what);
@@ -10094,6 +10174,9 @@ struct lua_arg {
     decl: std::string = {};
     get: std::string = {};
     pass: std::string = {};
+    // a lent handle counted busy once every argument is in, and no longer once the call is back
+    lend: std::string = {};
+    unlend: std::string = {};
     after: std::string = {};
 }
 
@@ -10116,8 +10199,11 @@ attach fn lua_in(this: bind&, t: u32, idx: str, c: str, what: str, kp: str, a: l
     a.pass = S(c);
     val h = this.lent_handle(t);
     if (h) {
-        a.decl = fmt2("{}{};", spaced(this.handle_c(h, false)), S(c));
-        a.get = fmt2("{} = {};", S(c), this.lua_handle(h, idx, kp, "1", what));
+        a.decl = fmt3("{}{}; vl_handle *{}_u;", spaced(this.handle_c(h, false)), S(c), S(c));
+        a.get = fmt3("{}_u = {}; {} = ", S(c), this.lua_handle_u(h, idx, kp, "1", what), S(c));
+        a.get.append(fmt("{}_u->h;", S(c)).as_str());
+        a.lend = fmt("{}_u->busy++;", S(c));
+        a.unlend = fmt("{}_u->busy--;", S(c));
         return;
     }
     match (this.shape_of(t) ?? shape::VOID) {
@@ -10159,7 +10245,7 @@ attach fn lua_in(this: bind&, t: u32, idx: str, c: str, what: str, kp: str, a: l
         .LIST(x) => {
             // a sequence: Volt copies its elements (and takes the handles)
             a.decl = fmt2("{} {};", this.c_prim(this.in_ty(t), false), S(c));
-            a.get = this.lua_seq(this.list_elem(t), idx, c, what, kp, "2");
+            a.get = this.lua_seq(this.list_elem(t), idx, c, what, kp, "2", "");
             return;
         },
         .SLICE(x) => {
@@ -10171,7 +10257,15 @@ attach fn lua_in(this: bind&, t: u32, idx: str, c: str, what: str, kp: str, a: l
                     default => {},
                 }
                 a.decl = fmt2("{} {};", this.c_prim(t, false), S(c));
-                a.get = this.lua_seq(this.slice_elem(t), idx, c, what, kp, how.as_str());
+                if (this.handle_of(this.slice_elem(t)) != null) {
+                    // each lent for the call: busy until it's back
+                    a.decl.append(fmt(" vl_handle **{}_us = NULL;", S(c)).as_str());
+                    a.get = this.lua_seq(this.slice_elem(t), idx, c, what, kp, how.as_str(), fmt("{}_us", S(c)).as_str());
+                    a.lend = fmt2("for (size_t i = 0; i < {}.len; i++) {{ {}_us[i]->busy++; }", S(c), S(c));
+                    a.unlend = fmt2("for (size_t i = 0; i < {}.len; i++) {{ {}_us[i]->busy--; }", S(c), S(c));
+                    return;
+                }
+                a.get = this.lua_seq(this.slice_elem(t), idx, c, what, kp, how.as_str(), "");
                 return;
             }
             if (this.node_simple(x)) {
@@ -10291,6 +10385,8 @@ attach fn lua_wrapper(this: bind&, name: str, lname: str, ps: std::vec<u32>&, na
     var gets: std::string = {};
     var passes = S(self);
     var afters: std::string = {};
+    var lends: std::string = {};
+    var unlends: std::string = {};
     for (k) in 0..ps.len {
         var a: lua_arg = {};
         val idx = unum(@cast<u64>(k + first));
@@ -10298,6 +10394,10 @@ attach fn lua_wrapper(this: bind&, name: str, lname: str, ps: std::vec<u32>&, na
         this.lua_in(*ps.at(k), idx.as_str(), names.at(k).as_str(), what.as_str(), kp.as_str(), &a);
         out.append(fmt("    {}\n", copy a.decl).as_str());
         gets.append(fmt("    {}\n", copy a.get).as_str());
+        if (a.lend.len() > 0) {
+            lends.append(fmt("    {}\n", copy a.lend).as_str());
+            unlends.append(fmt("    {}\n", copy a.unlend).as_str());
+        }
         if (passes.len() > 0) {
             passes.append(", ");
         }
@@ -10310,12 +10410,16 @@ attach fn lua_wrapper(this: bind&, name: str, lname: str, ps: std::vec<u32>&, na
     if (keeps) {
         out.append("    vl_give_all(L, keep);\n");
     }
+    // what the call lends is busy until it's back: a Lua function it calls can't close it or give it
+    // away meanwhile
+    out.append(lends.as_str());
     val call = fmt2("{}({})", S(callee), move passes);
     if (ret == VOID) {
         out.append(fmt("    {};\n", move call).as_str());
     } else {
         out.append(fmt2("    {}r = {};\n", spaced(this.c_out(ret, false)), move call).as_str());
     }
+    out.append(unlends.as_str());
     val res = this.lua_out(ret, "r");
     if (res.len() > 0) {
         out.append(fmt("    {}\n", copy res).as_str());
@@ -10478,6 +10582,10 @@ attach fn lua_upcall(this: bind&, name: str, method: str, ps: std::vec<u32>&, r:
 // __close (see vl_drop_begin)
 attach fn lua_close_fn(this: bind&, name: str, cn: str, free: str) -> std::string {
     var out = fmt3("\n// close, __close and __gc: frees it (once)\nstatic int vl_close_{}(lua_State *L) {{\n    {}*o = luaL_checkudata(L, 1, {});\n", S(name), spaced(S(cn)), this.lua_mt(name));
+    if (cn == "vl_handle") {
+        // (one a running call lent to Volt stays open; the collector can't take one then)
+        out.append(fmt("    if (o->busy) {{\n        return luaL_error(L, \"this {} is in use by a call that hasn't returned\");\n    }}\n", S(name)).as_str());
+    }
     if (!this.lua_upcalls()) {
         out.append(fmt("{}    return 0;\n}\n", S(free)).as_str());
         return out;
@@ -10627,12 +10735,14 @@ attach fn lua_text(this: bind&) -> compile_error!std::string {
         typedef struct {
             void *h;
             bool lent;
+            int busy; // calls that haven't returned have it lent to Volt
         } vl_handle;
 
         static inline vl_handle *vl_wrap(lua_State *L, void *h, bool lent, const char *mt) {
             vl_handle *u = lua_newuserdatauv(L, sizeof *u, 0);
             u->h = h;
             u->lent = lent;
+            u->busy = 0;
             luaL_setmetatable(L, mt);
             return u;
         }
@@ -10681,6 +10791,9 @@ attach fn lua_text(this: bind&) -> compile_error!std::string {
             vl_handle *u = vl_open(L, idx, mt, what);
             if (how == 2 && u->lent) {
                 luaL_error(L, "%s: this %s is only lent to Lua", what, strchr(mt, '.') + 1);
+            }
+            if (how == 2 && u->busy) {
+                luaL_error(L, "%s: this %s is in use by a call that hasn't returned", what, strchr(mt, '.') + 1);
             }
             vl_mark(L, keep, idx, how, what);
             return u;
@@ -12999,7 +13112,7 @@ attach fn swift_doc(this: bind&, f: u32, ind: str) -> std::string {
     if (d.len() == 0) {
         return {};
     }
-    return fmt2("{}/// {}\n", S(ind), move d);
+    return fmt2("{}/// {}\n", S(ind), replace_all(d.as_str(), "\n", fmt("\n{}/// ", S(ind)).as_str()));
 }
 
 // a wrapper's body: callee (a C function, or a function Volt gave out) called with first (self's C
