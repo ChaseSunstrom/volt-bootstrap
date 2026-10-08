@@ -1158,6 +1158,21 @@ fn go_direct() {
     let o = c.output().unwrap();
     assert_eq!(o.status.code(), Some(101), "an empty handle panics: {}", String::from_utf8_lossy(&o.stderr));
     assert!(String::from_utf8_lossy(&o.stderr).contains("geom::Shape is empty"), "{}", String::from_utf8_lossy(&o.stderr));
+    // a Go panic through a plain call stops the program with Go's message (recovered in the shim:
+    // it never unwinds through C)
+    let mut c = Command::new(&e.voltc);
+    c.args(["run", "panic.volt"]).current_dir(&dir).env("VOLT_STD", Path::new(ROOT).join("std"));
+    tools(&mut c);
+    let o = c.output().unwrap();
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(o.status.code() == Some(101) && err.contains("index out of range [3] with length 2"), "a Go panic: {:?} {err}", o.status);
+    // an instance Go's constraint rejects is an error at the call, with go's reason
+    let mut c = Command::new(&e.voltc);
+    c.args(["run", "generics_bad.volt"]).current_dir(&dir).env("VOLT_STD", Path::new(ROOT).join("std"));
+    tools(&mut c);
+    let o = c.output().unwrap();
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(!o.status.success() && err.contains("Max<bool>: Go doesn't take these types") && err.contains("does not satisfy cmp.Ordered"), "a rejected instance: {err}");
     // the same program in a bolt package
     let app = dir.join("app");
     std::fs::create_dir_all(app.join("src")).unwrap();

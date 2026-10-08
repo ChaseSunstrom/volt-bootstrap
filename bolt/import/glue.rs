@@ -14,6 +14,9 @@
 //   plain struct         a: T* (mirror layout)    (out: o: T*)
 //   handle               a: void*                 (out: o: void**)
 //   enum                 a: i64                   (out: o: i64*)
+//   slice of named types a: void* (T[..]'s items: mirrors, handles, enums), a_n: usize (out: o: T**)
+//   &mut of a number     a: T* (out: none)
+//   tuple                (out: each element's outs, o0..., o1...)
 //   Result               the function returns bool (true: ok) and has e: u8**, e_n: usize* last
 // Out parameters follow the parameters; owned buffers go back through the shim's free functions.
 use super::volt_name;
@@ -63,6 +66,12 @@ pub enum Ty {
     Fails(Box<Ty>, String),
     /// an async function's result (a future of it): a Volt async fn
     Future(Box<Ty>),
+    /// several results (Go's): a Volt tuple, its elements named when they have names
+    Tuple(Vec<(String, Ty)>),
+    /// a fixed number of elements (Go's [N]T): T[..] in (the shim checks the count), std::vec<T> out
+    Array(Box<Ty>, usize),
+    /// a generic type's instance in a generic declaration (Stack<T>), by the generic type's name
+    Inst(String, Vec<Ty>),
 }
 
 /// an enum's variant, with its fields' names (a tuple variant's are 0, 1..) and types
@@ -198,6 +207,8 @@ pub struct Model {
     /// each enum's variants, and whether more may come (#[non_exhaustive], hidden ones)
     pub enums: BTreeMap<String, (Vec<Variant>, bool)>,
     pub left_out: Vec<String>,
+    /// type aliases (module, name, the type it names): Volt's `type name = T;`
+    pub aliases: Vec<(Vec<String>, String, Ty)>,
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -237,6 +248,12 @@ pub trait Lang {
     /// it returned, 2 a panic) and the error's or the panic's text in e, e_n; each Volt function
     /// then has a try_ form that returns the panic as an error (PANIC) instead of stopping
     fn catches(&self) -> bool {
+        false
+    }
+    /// its shim hands the Volt functions it calls (closures, a Volt type's trait methods) the
+    /// import's types too (a plain struct's copy, a handle the function owns, an enum) and slices
+    /// of numbers, and takes them back as results; else numbers, bools, chars and text alone
+    fn cb_types(&self) -> bool {
         false
     }
     /// "rust", "zig": the shim namespace (rust_shim), the error set (rust_error) and symbols
@@ -292,6 +309,12 @@ pub trait Lang {
     /// the function Volt gives a String result through: put(o, p, n) stores text p, n where o (a
     /// String of the shim's language) points
     fn put_glue(&self, _sym: &str) -> Option<String> {
+        None
+    }
+    /// the function a Volt closure's slice result goes through, an element at a time:
+    /// push(o, the element as a parameter of type e is passed) appends it to the slice o (a
+    /// handle of the shim's) says
+    fn push_glue(&self, _g: &Gen, _sym: &str, _e: &Ty) -> Option<String> {
         None
     }
     /// a shim whose functions are found while the program runs (not linked): the Volt source, in
@@ -350,12 +373,16 @@ pub struct Gen<'a> {
     /// each: fn_K), by their Volt fn type
     tramps: Vec<String>,
     fn_handles: Vec<String>,
+    /// each fn_K's signature, in the same order, and its call's Volt parameter types and result
+    fn_tys: Vec<(Vec<Ty>, Ty, Vec<String>, String)>,
     /// the traits by name, those Volt got (a declaration and its glue), and the one whose attach
     /// block function() is writing methods for
     pub traits: BTreeMap<String, TraitDef>,
     made_traits: BTreeSet<String>,
     block: Option<String>,
     put_string: bool,
+    /// the push functions made (by element type)
+    pushes: BTreeMap<String, String>,
     /// the enums Volt gets as error sets, and their sets' names (the enum's own, or NAME_error
     /// when it's a value too)
     err_sets: BTreeMap<String, String>,
@@ -437,7 +464,7 @@ impl<'a> Gen<'a> {
                 err_sets.insert(e.clone(), e.clone());
             }
         }
-        Gen { m, alias: alias.to_string(), lang, types, vec_elems: BTreeSet::new(), elem_types: BTreeSet::new(), strs: false, errors: false, shim: String::new(), ext: String::new(), helpers: String::new(), modules: BTreeMap::new(), left_out: Vec::new(), syms: BTreeSet::new(), sigs: BTreeSet::new(), tramps: Vec::new(), fn_handles: Vec::new(), traits, made_traits: BTreeSet::new(), block: None, put_string: false, err_sets }
+        Gen { m, alias: alias.to_string(), lang, types, vec_elems: BTreeSet::new(), elem_types: BTreeSet::new(), strs: false, errors: false, shim: String::new(), ext: String::new(), helpers: String::new(), modules: BTreeMap::new(), left_out: Vec::new(), syms: BTreeSet::new(), sigs: BTreeSet::new(), tramps: Vec::new(), fn_handles: Vec::new(), fn_tys: Vec::new(), traits, made_traits: BTreeSet::new(), block: None, put_string: false, pushes: BTreeMap::new(), err_sets }
     }
 
     /// the Volt declaration of shim function sym (params: "name: type"): an extern "C" fn, or for
@@ -480,7 +507,7 @@ impl<'a> Gen<'a> {
     /// a parameter's Volt name, kept apart from the glue's own locals (o, e, a0...)
     fn param_name(n: &str) -> String {
         let v = volt_name(n);
-        let glue = matches!(v.as_str(), "o" | "o_n" | "o_has" | "e" | "e_n" | "a_this" | "this") || (v.len() > 1 && v.starts_with('a') && v[1..].chars().all(|c| c.is_ascii_digit()));
+        let glue = matches!(v.as_str(), "o" | "o_n" | "o_has" | "e" | "e_n" | "a_this" | "this") || (v.len() > 1 && (v.starts_with('a') || v.starts_with('o')) && v[1..].chars().all(|c| c.is_ascii_digit()));
         if glue { format!("{v}_") } else { v }
     }
 
@@ -511,7 +538,17 @@ impl<'a> Gen<'a> {
             Ty::Res(x) => Ty::Res(Box::new(self.resolve(*x, self_ty))),
             Ty::Vec(x) => Ty::Vec(Box::new(self.resolve(*x, self_ty))),
             Ty::Slice(x, m) => Ty::Slice(Box::new(self.resolve(*x, self_ty)), m),
+            Ty::Array(x, n) => Ty::Array(Box::new(self.resolve(*x, self_ty)), n),
+            Ty::Tuple(es) => Ty::Tuple(es.into_iter().map(|(n, t)| (n, self.resolve(t, self_ty))).collect()),
             t => t,
+        }
+    }
+
+    /// a slice element that's one of the import's types (or a reference to one): its info
+    pub fn elem_info(&self, e: &Ty) -> Option<&TypeInfo> {
+        match e {
+            Ty::Ref(x, _) => self.info(x),
+            x => self.info(x),
         }
     }
 
@@ -536,6 +573,12 @@ impl<'a> Gen<'a> {
                 // a Volt fn value: a trampoline that calls it, and the value as its data: lent for
                 // the call (&dyn Fn), or moved to the heap for the other side to keep (impl Fn,
                 // Box<dyn Fn>), which drops it with drop_tramp_K
+                // (a closure taking the other side's closures: their handle types, made first)
+                for p in ps {
+                    if let Ty::Fn(fps, fr, _, once) = p {
+                        self.fn_handle(fps, fr, *once)?;
+                    }
+                }
                 let k = self.tramp(ps, r)?;
                 let ns = self.shim_ns();
                 p.param = format!("{vn}: {}", self.fn_volt_ty(ps, r)?);
@@ -564,12 +607,24 @@ impl<'a> Gen<'a> {
                     p.param = format!("{vn}: {tp}&");
                     p.pre.push(format!("var {a}_t = {ns}::table_{mg}<{tp}>(false);"));
                     p.args.push(format!("@cast<void*>(&*{vn})"));
+                } else if self.lang.cb_types() {
+                    // the other side's own value of it (dyn_T): passed as it is (a null table)
+                    p.param = format!("{vn}: {tp}");
+                    p.pre.extend([
+                        format!("var {a}_t = {ns}::table_{mg}<{tp}>(true);"),
+                        format!("var {a}_tp: {ns}::vt_{mg}* = &{a}_t;"),
+                        format!("var {a}: void* = null;"),
+                        format!("comptime if (@has_method({tp}, \"foreign_value\")) {{\n        {a} = {vn}.foreign_value();\n        {a}_tp = null;\n    }} else {{\n        {a} = {ns}::give_{mg}<{tp}>(move {vn});\n    }}"),
+                    ]);
+                    p.args.extend([a.clone(), format!("{a}_tp")]);
                 } else {
                     p.param = format!("{vn}: {tp}");
                     p.pre.extend([format!("var {a}_t = {ns}::table_{mg}<{tp}>(true);"), format!("val {a} = {ns}::give_{mg}<{tp}>(move {vn});")]);
                     p.args.push(a.clone());
                 }
-                p.args.push(format!("&{a}_t"));
+                if p.args.len() == 1 {
+                    p.args.push(format!("&{a}_t"));
+                }
                 p.ext.extend([format!("{a}: void*"), format!("{a}_t: {ns}::vt_{mg}*")]);
             }
             // &T of a number in a generic's instance: lent in Volt, its value to the shim
@@ -579,12 +634,26 @@ impl<'a> Gen<'a> {
                 p.ext.push(format!("{a}: {x}"));
                 p.args.push(format!("*{vn}"));
             }
+            // &mut of a number: Volt's, which the call may change
+            Ty::Ref(x, true) if matches!(**x, Ty::Prim(_)) => {
+                let Ty::Prim(x) = **x else { return None };
+                p.param = format!("{vn}: {x}&");
+                p.ext.push(format!("{a}: {x}*"));
+                p.args.push(vn);
+            }
+            // the import's types, in Volt's memory: plain structs' mirrors, handles, enums
+            Ty::Slice(e, _) | Ty::Vec(e) | Ty::Array(e, _) if self.elem_info(e).is_some() => {
+                let vp = self.volt_path(&self.elem_info(e)?.def);
+                p.param = format!("{vn}: {vp}[..]");
+                p.ext.extend([format!("{a}: void*"), format!("{a}_n: usize")]);
+                p.args.extend([format!("@cast<void*>({vn}.ptr)"), format!("{vn}.len")]);
+            }
             Ty::Str | Ty::String => {
                 p.param = format!("{vn}: str");
                 p.ext.extend([format!("{a}: u8*"), format!("{a}_n: usize")]);
                 p.args.extend([format!("@cast<u8*>({vn}.ptr)"), format!("{vn}.len")]);
             }
-            Ty::Slice(e, _) | Ty::Vec(e) => match **e {
+            Ty::Slice(e, _) | Ty::Vec(e) | Ty::Array(e, _) => match **e {
                 Ty::Prim(x) => {
                     p.param = format!("{vn}: {x}[..]");
                     p.ext.extend([format!("{a}: {x}*"), format!("{a}_n: usize")]);
@@ -686,7 +755,7 @@ impl<'a> Gen<'a> {
                 value: format!("{ns}::take({o}, {o}_n)"),
                 ty: "std::string".into(),
             },
-            Ty::Slice(e, _) | Ty::Vec(e) => match **e {
+            Ty::Slice(e, _) | Ty::Vec(e) | Ty::Array(e, _) => match **e {
                 Ty::Prim(x) => {
                     self.vec_elems.insert(x);
                     VoltOut {
@@ -699,8 +768,8 @@ impl<'a> Gen<'a> {
                 }
                 // the other side's values: handles (lent from a slice, owned from a Vec), plain
                 // structs and enums copied
-                Ty::Named(_) => {
-                    let ti = self.info(e)?;
+                Ty::Named(_) | Ty::Ref(..) => {
+                    let ti = self.elem_info(e)?;
                     let (vp, mg, kind, name) = (self.volt_path(&ti.def), Self::mangle(&ti.def), ti.kind, ti.def.name.clone());
                     self.elem_types.insert(name);
                     let (pt, extra) = match kind {
@@ -747,8 +816,28 @@ impl<'a> Gen<'a> {
                     Kind::Enum => VoltOut { ext: vec![format!("{o}: i64*")], locals: vec![format!("var {o}: i64 = 0;")], args: vec![format!("&{o}")], value: format!("{ns}::of_{mg}({o})"), ty: vp },
                 }
             }
+            // several results: each element's outs (o0..., o1...), the value a tuple of them
+            Ty::Tuple(es) => {
+                let mut t = VoltOut { ext: Vec::new(), locals: Vec::new(), args: Vec::new(), value: String::new(), ty: String::new() };
+                let (mut vals, mut tys) = (Vec::new(), Vec::new());
+                for (i, (n, et)) in es.iter().enumerate() {
+                    let x = self.volt_out(et, &format!("{o}{i}"))?;
+                    // (an optional's value needs its has check: not an expression)
+                    if x.ty.ends_with('?') {
+                        return None;
+                    }
+                    t.ext.extend(x.ext);
+                    t.locals.extend(x.locals);
+                    t.args.extend(x.args);
+                    vals.push(x.value);
+                    tys.push(if n.is_empty() || n == "_" { x.ty } else { format!("{}: {}", volt_name(n), x.ty) });
+                }
+                t.value = format!("({})", vals.join(", "));
+                t.ty = format!("({})", tys.join(", "));
+                t
+            }
             Ty::Opt(inner) => {
-                if matches!(**inner, Ty::Opt(_) | Ty::Res(_) | Ty::Unit) {
+                if matches!(**inner, Ty::Opt(_) | Ty::Res(_) | Ty::Unit | Ty::Tuple(_)) {
                     return None;
                 }
                 let x = self.volt_out(inner, o)?;
@@ -1137,6 +1226,10 @@ impl<'a> Gen<'a> {
                     self.ext.push_str(&decl);
                 }
                 let _ = write!(self.helpers, "    fn own_{mg}(h: void*) -> {vp} {{\n        return {{ h: h }};\n    }}\n\n    fn lend_{mg}(h: void*) -> {vp} {{\n        return {{ h: h, lent: true }};\n    }}\n");
+                // the other side's values of one of its traits: passed where it takes one as they are
+                if self.lang.cb_types() && def.name.starts_with("dyn_") {
+                    let _ = write!(v, "\n// {n}'s own value, where {n} takes a {}\nattach fn foreign_value(this: {vp}&) -> void* {{\n    return this.h;\n}}\n", &def.name["dyn_".len()..]);
+                }
             }
             Kind::Enum => {
                 let vs = def.variants.clone().unwrap_or_default();
@@ -1282,24 +1375,245 @@ impl<'a> Gen<'a> {
         p.join("__")
     }
 
-    /// a type in a trait method's signature, as Volt's trait spells it (out: its result): numbers,
-    /// bool, char as u32, text in as str, text out as std::string, or as str when it's lent
-    pub fn trait_ty(t: &Ty, out: bool) -> Option<String> {
+    /// a trait method's result, as Volt's trait spells it: numbers, bool, char as u32, text as
+    /// std::string, or as str when it's lent (and the import's types, for cb_types)
+    fn trait_ret(&self, t: &Ty) -> Option<String> {
+        match t {
+            Ty::Str => Some("str".into()),
+            t => self.cb_out_ty(t),
+        }
+    }
+
+    /// the methods of a trait Volt types can implement (the language calls them through a table
+    /// of Volt functions): one taking &self or &mut self, not generic, its types cb_in's and
+    /// trait_ret's
+    pub fn bridged(&self, s: &Sig) -> bool {
+        // a lifetime ties a lent result to something the glue can't name
+        s.skip.is_none() && s.generics.is_empty() && matches!(s.recv, Recv::Ref | Recv::Mut) && !s.src.contains('\'') && s.params.iter().enumerate().all(|(i, (_, t))| t.as_ref().is_some_and(|t| self.cb_in(t, i).is_some())) && s.ret.as_ref().is_some_and(|t| self.trait_ret(t).is_some())
+    }
+
+    /// a value the shim hands a Volt function it calls (a closure's or a trait method's i-th
+    /// parameter): its Volt type, the function's extern parameters, the lines before the call and
+    /// the argument
+    fn cb_in(&self, t: &Ty, i: usize) -> Option<(String, Vec<String>, Vec<String>, String)> {
+        let a = format!("a{i}");
         Some(match t {
-            Ty::Unit if out => "void".into(),
-            Ty::Prim(x) => x.to_string(),
-            Ty::Char => "u32".into(),
-            Ty::Str => "str".into(),
-            Ty::String => (if out { "std::string" } else { "str" }).into(),
+            Ty::Str | Ty::String => ("str".into(), vec![format!("{a}: u8*"), format!("{a}_n: usize")], Vec::new(), format!("@cast<str>(@slice({a}, {a}_n))")),
+            Ty::Prim(x) => (x.to_string(), vec![format!("{a}: {x}")], Vec::new(), a),
+            Ty::Char => ("u32".into(), vec![format!("{a}: u32")], Vec::new(), a),
+            _ if !self.lang.cb_types() => return None,
+            // the other side's closure: a Volt fn calling it (its handle, made already by
+            // fn_handle, freed with the fn)
+            Ty::Fn(ps, r, _, _) => {
+                let (k, (_, _, vts, rt)) = self.fn_tys.iter().enumerate().find(|(_, (a, b, _, _))| a == ps && b == &**r)?;
+                let ns = self.shim_ns();
+                let xs: Vec<String> = (0..vts.len()).map(|j| format!("x{j}")).collect();
+                let params: Vec<String> = xs.iter().zip(vts).map(|(x, t)| format!("{x}: {t}")).collect();
+                let call = format!("{a}_f.call({})", xs.join(", "));
+                let body = if rt == "void" { format!("{call};") } else { format!("return {call};") };
+                (format!("fn({}) -> {rt}", vts.join(", ")), vec![format!("{a}: void*")], vec![format!("var {a}_f: {ns}::fn_{k} = {{ h: {a} }};"), format!("val {a}_c = |move {a}_f| ({}) -> {rt} {{ {body} }};", params.join(", "))], format!("{a}_c"))
+            }
+            // the shim's elements, lent for the call: numbers, text, the import's types (plain
+            // structs' mirrors, handles Volt doesn't free, enums)
+            Ty::Slice(e, _) | Ty::Vec(e) => match &**e {
+                Ty::Prim(x) => (format!("{x}[..]"), vec![format!("{a}: {x}*"), format!("{a}_n: usize")], Vec::new(), format!("@slice({a}, {a}_n)")),
+                Ty::Str | Ty::String => ("str[..]".into(), vec![format!("{a}: void*"), format!("{a}_n: usize")], Vec::new(), format!("@slice(@cast<str*>({a}), {a}_n)")),
+                Ty::Named(_) | Ty::Ref(..) => {
+                    let vp = self.volt_path(&self.elem_info(e)?.def);
+                    (format!("{vp}[..]"), vec![format!("{a}: void*"), format!("{a}_n: usize")], Vec::new(), format!("@slice(@cast<{vp}*>({a}), {a}_n)"))
+                }
+                _ => return None,
+            },
+            // the shim's number, which the function may change
+            Ty::Ref(x, _) if matches!(**x, Ty::Prim(_)) => {
+                let Ty::Prim(x) = **x else { return None };
+                (format!("{x}&"), vec![format!("{a}: {x}*")], Vec::new(), format!("&*{a}"))
+            }
+            Ty::Named(_) | Ty::Ref(..) => {
+                let (named, by_ref) = match t {
+                    Ty::Ref(x, _) => (&**x, true),
+                    x => (x, false),
+                };
+                let ti = self.info(named)?;
+                let (vp, mg, ns) = (self.volt_path(&ti.def), Self::mangle(&ti.def), self.shim_ns());
+                match ti.kind {
+                    Kind::Plain if !by_ref => (vp.clone(), vec![format!("{a}: {vp}*")], Vec::new(), format!("*{a}")),
+                    // the shim's copy, which it copies back
+                    Kind::Plain => (format!("{vp}&"), vec![format!("{a}: {vp}*")], Vec::new(), format!("&*{a}")),
+                    // a handle of its own, freed when the call is done
+                    Kind::Handle => (format!("{vp}&"), vec![format!("{a}: void*")], vec![format!("var {a}_h = {ns}::own_{mg}({a});")], format!("&{a}_h")),
+                    Kind::Enum if !by_ref => (vp, vec![format!("{a}: i64")], Vec::new(), format!("{ns}::of_{mg}({a})")),
+                    _ => return None,
+                }
+            }
             _ => return None,
         })
     }
 
-    /// the methods of a trait Volt types can implement (the language calls them through a table
-    /// of Volt functions): one taking &self or &mut self, not generic, its types trait_ty's
-    pub fn bridged(s: &Sig) -> bool {
-        // a lifetime ties a lent result to something the glue can't name
-        s.skip.is_none() && s.generics.is_empty() && matches!(s.recv, Recv::Ref | Recv::Mut) && !s.src.contains('\'') && s.params.iter().all(|(_, t)| t.as_ref().is_some_and(|t| Self::trait_ty(t, false).is_some())) && s.ret.as_ref().is_some_and(|t| Self::trait_ty(t, true).is_some())
+    /// a Volt function's result the shim takes back (a closure's or a trait method's): its Volt
+    /// type (text out as std::string; an error, for cb_types: the import's error set)
+    fn cb_out_ty(&self, r: &Ty) -> Option<String> {
+        Some(match r {
+            Ty::Unit => "void".into(),
+            Ty::Prim(x) => x.to_string(),
+            Ty::Char => "u32".into(),
+            Ty::String => "std::string".into(),
+            _ if !self.lang.cb_types() => return None,
+            Ty::Res(x) => {
+                let t = self.cb_out_ty(x)?;
+                format!("{}::{}_error!{t}", self.alias, self.lang.short())
+            }
+            Ty::Vec(e) | Ty::Slice(e, _) => match &**e {
+                Ty::Prim(x) => format!("std::vec<{x}>"),
+                Ty::Str | Ty::String => "std::vec<std::string>".into(),
+                Ty::Named(_) | Ty::Ref(..) => format!("std::vec<{}>", self.volt_path(&self.elem_info(e)?.def)),
+                _ => return None,
+            },
+            Ty::Opt(x) => format!("{}?", self.cb_out_ty(x)?),
+            Ty::Fn(ps, r, _, _) => self.fn_volt_ty(ps, r)?,
+            Ty::Tuple(es) => {
+                let mut a = Vec::new();
+                for (n, t) in es {
+                    let x = self.cb_out_ty(t)?;
+                    a.push(if n.is_empty() || n == "_" { x } else { format!("{}: {x}", volt_name(n)) });
+                }
+                format!("({})", a.join(", "))
+            }
+            Ty::Named(_) | Ty::Ref(_, false) => {
+                let (named, by_ref) = match r {
+                    Ty::Ref(x, _) => (&**x, true),
+                    x => (x, false),
+                };
+                let ti = self.info(named)?;
+                match ti.kind {
+                    Kind::Handle => self.volt_path(&ti.def),
+                    _ if by_ref => return None,
+                    _ => self.volt_path(&ti.def),
+                }
+            }
+            _ => return None,
+        })
+    }
+
+    /// that result's code: the function's extern parameters (where it goes), its return type, and
+    /// the lines giving it ($c: the call). stored: a number goes through o too (a trait's table
+    /// functions return nothing but an error's status). An error: status 1, its text put where e
+    /// says (the shim's)
+    fn cb_out(&mut self, r: &Ty, stored: bool, o: &str) -> Option<(Vec<String>, String, String)> {
+        let ns = self.shim_ns();
+        let t = self.cb_out_ty(r)?;
+        Some(match r {
+            Ty::Unit => (Vec::new(), "void".into(), "$c;".into()),
+            Ty::Prim(_) | Ty::Char if stored => (vec![format!("{o}: {t}*")], "void".into(), format!("*{o} = $c;")),
+            Ty::Prim(_) | Ty::Char => (Vec::new(), t, "return $c;".into()),
+            // text: put (a copy) where o says, while Volt's lives
+            Ty::String => {
+                let put = self.put_sym()?;
+                (vec![format!("{o}: void*")], "void".into(), format!("val {o}_r = $c;\n        {ns}::{put}({o}, @cast<u8*>({o}_r.as_str().ptr), {o}_r.len());"))
+            }
+            Ty::Res(x) => {
+                let put = self.put_sym()?;
+                self.errors = true;
+                let (mut ext, _, inner) = self.cb_out(x, true, o)?;
+                ext.push("e: void*".into());
+                let text = format!("{ns}::{put}(e, @cast<u8*>(m.as_str().ptr), m.len());");
+                let fail = format!("catch |err| {{\n            match (err) {{\n                .ERROR(m) => {{ {text} }},\n                .PANIC(m) => {{ {text} }},\n            }}\n            return 1;\n        }}");
+                let body = if **x == Ty::Unit { format!("$c {fail};\n        return 0;") } else { format!("val v = $c {fail};\n        {}\n        return 0;", inner.replace("$c", "v")) };
+                (ext, "u8".into(), body)
+            }
+            // a slice: each element pushed onto the shim's (o)
+            Ty::Vec(e) | Ty::Slice(e, _) => {
+                let push = self.push_sym(e)?;
+                let args = match &**e {
+                    Ty::Prim(_) => "*x".to_string(),
+                    Ty::Str | Ty::String => "@cast<u8*>(x.as_str().ptr), x.len()".to_string(),
+                    _ => {
+                        let ti = self.elem_info(e)?;
+                        match ti.kind {
+                            Kind::Plain => "x".to_string(),
+                            Kind::Handle => "x.h".to_string(),
+                            Kind::Enum => format!("{ns}::tag_{}(*x)", Self::mangle(&ti.def)),
+                        }
+                    }
+                };
+                // (a handle: its value, which must be there)
+                let check = match self.elem_info(e) {
+                    Some(ti) if ti.kind == Kind::Handle => format!("{}\n            ", self.not_empty(&self.volt_path(&ti.def), "x.h")),
+                    _ => String::new(),
+                };
+                (vec![format!("{o}: void*")], "void".into(), format!("val {o}_r = $c;\n        for (x&) in {o}_r.items() {{\n            {check}{ns}::{push}({o}, {args});\n        }}"))
+            }
+            // a Volt closure, moved to the heap for the shim to keep: its trampoline, its data and
+            // the function freeing it
+            Ty::Fn(ps, r, _, _) => {
+                let k = self.tramp(ps, r)?;
+                (vec![format!("{o}: void**"), format!("{o}_env: void**"), format!("{o}_drop: void**")], "void".into(), format!("val {o}_f = $c;\n        *{o} = @cast<void*>({ns}::tramp_{k});\n        *{o}_env = {ns}::give_tramp_{k}(move {o}_f);\n        *{o}_drop = @cast<void*>({ns}::drop_tramp_{k});"))
+            }
+            // a value or none: its outs (ov), and whether there's one (o)
+            Ty::Opt(x) => {
+                let (mut ext, _, inner) = self.cb_out(x, true, &format!("{o}v"))?;
+                ext.push(format!("{o}: bool*"));
+                let body = format!("val {o}_o = $c;\n        *{o} = {o}_o != null;\n        if ({o}_o != null) {{\n            val {o}_x = {o}_o ?? @panic(\"unreachable\");\n            {}\n        }}", inner.replace("$c", &format!("{o}_x")).replace("\n        ", "\n            "));
+                (ext, "void".into(), body)
+            }
+            // several values: each through its own outs (o0, o1...)
+            Ty::Tuple(es) => {
+                let mut ext = Vec::new();
+                let names: Vec<String> = (0..es.len()).map(|i| format!("{o}{i}_v")).collect();
+                let mut body = format!("val ({}) = $c;", names.join(", "));
+                for (i, (_, et)) in es.iter().enumerate() {
+                    let (x, _, b) = self.cb_out(et, true, &format!("{o}{i}"))?;
+                    ext.extend(x);
+                    let _ = write!(body, "\n        {}", b.replace("$c", &names[i]));
+                }
+                (ext, "void".into(), body)
+            }
+            Ty::Named(_) | Ty::Ref(..) => {
+                let named = match r {
+                    Ty::Ref(x, _) => &**x,
+                    x => x,
+                };
+                let ti = self.info(named)?;
+                let (vp, mg) = (self.volt_path(&ti.def), Self::mangle(&ti.def));
+                match ti.kind {
+                    Kind::Plain => (vec![format!("{o}: {vp}*")], "void".into(), format!("*{o} = $c;")),
+                    // the handle given to the shim (which frees it)
+                    Kind::Handle => (vec![format!("{o}: void**")], "void".into(), format!("var {o}_r = $c;\n        {}\n        *{o} = {o}_r.h;\n        {o}_r.h = null;", self.not_lent(&vp, &format!("{o}_r")))),
+                    Kind::Enum => (vec![format!("{o}: i64*")], "void".into(), format!("*{o} = {ns}::tag_{mg}($c);")),
+                }
+            }
+            _ => return None,
+        })
+    }
+
+    /// the shim's function pushing an element of type e onto a slice of its (a Volt closure's
+    /// slice result), made the first time one is wanted
+    fn push_sym(&mut self, e: &Ty) -> Option<String> {
+        let key = format!("{e:?}");
+        if let Some(s) = self.pushes.get(&key) {
+            return Some(s.clone());
+        }
+        let sym = self.sym(&[&format!("push{}", self.pushes.len())]);
+        let mut ext = vec!["o: void*".to_string()];
+        match e {
+            Ty::Prim(x) => ext.push(format!("a: {x}")),
+            Ty::Str | Ty::String => ext.extend(["a: u8*".to_string(), "a_n: usize".to_string()]),
+            _ => {
+                let ti = self.elem_info(e)?;
+                let vp = self.volt_path(&ti.def);
+                ext.push(match ti.kind {
+                    Kind::Plain => format!("a: {vp}*"),
+                    Kind::Handle => "a: void*".into(),
+                    Kind::Enum => "a: i64".into(),
+                });
+            }
+        }
+        let glue = self.lang.push_glue(self, &sym, e)?;
+        self.shim.push_str(&glue);
+        let decl = self.ext_fn(&sym, &ext, "void");
+        self.ext.push_str(&decl);
+        self.pushes.insert(key, sym.clone());
+        Some(sym)
     }
 
     /// a trait's Volt declaration (its methods with a body there are optional), and its glue: the
@@ -1310,13 +1624,21 @@ impl<'a> Gen<'a> {
         if let Some(why) = &td.skip {
             return Err(format!("trait {name} ({why})"));
         }
-        let ms: Vec<(Sig, bool)> = td.methods.iter().filter(|(s, _)| Self::bridged(s)).cloned().collect();
-        if let Some((s, _)) = td.methods.iter().find(|(s, provided)| !provided && !Self::bridged(s)) {
+        // (the other side's closures its methods take: their handle types, made first)
+        if self.lang.cb_types() {
+            for (s, _) in &td.methods {
+                for (_, t) in &s.params {
+                    if let Some(Ty::Fn(fps, fr, _, once)) = t {
+                        self.fn_handle(fps, fr, *once);
+                    }
+                }
+            }
+        }
+        let ms: Vec<(Sig, bool)> = td.methods.iter().filter(|(s, _)| self.bridged(s)).cloned().collect();
+        if let Some((s, _)) = td.methods.iter().find(|(s, provided)| !provided && !self.bridged(s)) {
             return Err(format!("trait {name} (method {}'s types)", s.name));
         }
-        let ns = self.shim_ns();
         let (vt, mg) = (self.trait_path(&td), Self::trait_mangle(&td));
-        let put = if ms.iter().any(|(s, _)| s.ret == Some(Ty::String)) { self.put_sym().ok_or_else(|| format!("trait {name}"))? } else { String::new() };
         let glue = self.lang.trait_glue(self, &td, &ms).ok_or_else(|| format!("trait {name}"))?;
         self.shim.push_str(&glue);
         let mut decl = format!("// {} trait {}: Volt's types attaching it pass where {} takes one\ntrait {name} {{\n", self.lang.name(), td.name, self.lang.name());
@@ -1327,43 +1649,34 @@ impl<'a> Gen<'a> {
             let vn = volt_name(&s.name);
             let mut ps = vec!["this".to_string()];
             let mut tps = vec!["env: void*".to_string()];
-            let mut args = Vec::new();
+            let (mut pre, mut args) = (Vec::new(), Vec::new());
             for (i, (n, t)) in s.params.iter().enumerate() {
-                let t = t.as_ref().unwrap();
-                ps.push(format!("{}: {}", Self::param_name(n), Self::trait_ty(t, false).unwrap()));
-                match t {
-                    Ty::Str | Ty::String => {
-                        tps.extend([format!("a{i}: u8*"), format!("a{i}_n: usize")]);
-                        args.push(format!("@cast<str>(@slice(a{i}, a{i}_n))"));
-                    }
-                    _ => {
-                        tps.push(format!("a{i}: {}", Self::trait_ty(t, false).unwrap()));
-                        args.push(format!("a{i}"));
-                    }
-                }
+                let (vt, ext, before, arg) = self.cb_in(t.as_ref().unwrap(), i).unwrap();
+                ps.push(format!("{}: {vt}", Self::param_name(n)));
+                tps.extend(ext);
+                pre.extend(before);
+                args.push(arg);
             }
             let r = s.ret.as_ref().unwrap();
             if *provided {
                 decl.push_str("    @attributes([@optional])\n");
             }
-            let _ = writeln!(decl, "    fn {vn}({}) -> {};", ps.join(", "), Self::trait_ty(r, true).unwrap());
+            let _ = writeln!(decl, "    fn {vn}({}) -> {};", ps.join(", "), self.trait_ret(r).unwrap());
             let call = format!("@cast<T*>(env)->{vn}({})", args.join(", "));
-            let body = match r {
-                Ty::Unit => format!("{call};"),
+            let (rt, body) = match r {
                 Ty::Str => {
                     tps.extend(["o: u8**".to_string(), "o_n: usize*".to_string()]);
-                    format!("val r = {call};\n        *o = @cast<u8*>(r.ptr);\n        *o_n = r.len;")
+                    ("void".to_string(), format!("val r = {call};\n        *o = @cast<u8*>(r.ptr);\n        *o_n = r.len;"))
                 }
-                Ty::String => {
-                    tps.push("o: void*".into());
-                    format!("val r = {call};\n        {ns}::{put}(o, @cast<u8*>(r.as_str().ptr), r.len());")
-                }
+                // (a number through o: the table's functions return nothing but an error's status)
                 x => {
-                    tps.push(format!("o: {}*", Self::trait_ty(x, true).unwrap()));
-                    format!("*o = {call};")
+                    let (ext, rt, body) = self.cb_out(x, true, "o").ok_or_else(|| format!("trait {name}"))?;
+                    tps.extend(ext);
+                    (rt, body.replace("$c", &call))
                 }
             };
-            let _ = write!(h, "\n    <T: {vt}>\n    extern \"C\" fn t_{mg}_{}({}) -> void {{\n        {body}\n    }}\n", s.name, tps.join(", "));
+            let body: String = pre.iter().map(|l| format!("{l}\n        ")).collect::<String>() + &body;
+            let _ = write!(h, "\n    <T: {vt}>\n    extern \"C\" fn t_{mg}_{}({}) -> {rt} {{\n        {body}\n    }}\n", s.name, tps.join(", "));
             let _ = writeln!(fields, "        m_{}: void* = null;", s.name);
             let set = format!("t.m_{} = @cast<void*>(t_{mg}_{}<T>);", s.name, s.name);
             if *provided {
@@ -1411,24 +1724,14 @@ impl<'a> Gen<'a> {
         Ok(format!("attach {vt} -> {tvp} {{\n{body}}}\n"))
     }
 
-    /// a type in a closure's signature, as Volt spells it (numbers, bool, char as u32, str)
-    fn cb_volt_ty(t: &Ty) -> Option<String> {
-        Some(match t {
-            Ty::Unit => "void".into(),
-            Ty::Prim(x) => x.to_string(),
-            Ty::Char => "u32".into(),
-            Ty::Str | Ty::String => "str".into(),
-            _ => return None,
-        })
-    }
-
-    /// a closure's Volt type: fn(A, B) -> R
+    /// a closure's Volt type: fn(A, B) -> R (its parameters as the shim hands them, its result
+    /// as the shim takes it; text out as std::string)
     fn fn_volt_ty(&self, ps: &[Ty], r: &Ty) -> Option<String> {
         let mut a = Vec::new();
-        for p in ps {
-            a.push(Self::cb_volt_ty(p)?);
+        for (i, p) in ps.iter().enumerate() {
+            a.push(self.cb_in(p, i)?.0);
         }
-        let r = if *r == Ty::String { "std::string".to_string() } else { Self::cb_volt_ty(r)? };
+        let r = self.cb_out_ty(r)?;
         Some(format!("fn({}) -> {r}", a.join(", ")))
     }
 
@@ -1441,33 +1744,22 @@ impl<'a> Gen<'a> {
         }
         let k = self.tramps.len();
         let mut params = vec!["env: void*".to_string()];
-        let mut args = Vec::new();
+        let (mut pre, mut args) = (Vec::new(), Vec::new());
         for (i, p) in ps.iter().enumerate() {
-            match p {
-                Ty::Str | Ty::String => {
-                    params.extend([format!("a{i}: u8*"), format!("a{i}_n: usize")]);
-                    args.push(format!("@cast<str>(@slice(a{i}, a{i}_n))"));
-                }
-                _ => {
-                    params.push(format!("a{i}: {}", Self::cb_volt_ty(p)?));
-                    args.push(format!("a{i}"));
-                }
-            }
+            let (_, ext, before, arg) = self.cb_in(p, i)?;
+            params.extend(ext);
+            pre.extend(before);
+            args.push(arg);
         }
         if matches!(r, Ty::Str) {
             return None;
         }
         let call = format!("(*f)({})", args.join(", "));
         // a String result: put where o points, while the Volt one lives
-        let (rt, body) = if *r == Ty::String {
-            let put = self.put_sym()?;
-            params.push("o: void*".into());
-            ("void".to_string(), format!("val r = {call};\n        {}::{put}(o, @cast<u8*>(r.as_str().ptr), r.len());", self.shim_ns()))
-        } else {
-            let rt = Self::cb_volt_ty(r)?;
-            let body = if rt == "void" { format!("{call};") } else { format!("return {call};") };
-            (rt, body)
-        };
+        let (ext, rt, body) = self.cb_out(r, false, "o")?;
+        params.extend(ext);
+        let body = body.replace("$c", &call);
+        let body: String = pre.iter().map(|l| format!("{l}\n        ")).collect::<String>() + &body;
         let _ = write!(self.helpers, "\n    // calls a Volt {ft} for the shim (the closure is its data)\n    extern \"C\" fn tramp_{k}({}) -> {rt} {{\n        val f = @cast<({ft})*>(env);\n        {body}\n    }}\n", params.join(", "));
         let _ = write!(self.helpers, "\n    // a {ft} moved to the heap, for the shim to keep (drop_tramp_{k} frees it)\n    fn give_tramp_{k}(f: {ft}) -> void* {{\n        val a: std::mem::default_allocator = {{}};\n        val p: ({ft})* = a.malloc<({ft})>() catch @panic(\"out of memory\");\n        @write(p, move f);\n        return @cast<void*>(p);\n    }}\n\n    extern \"C\" fn drop_tramp_{k}(env: void*) -> void {{\n        val p = @cast<({ft})*>(env);\n        val f = @read(p);\n        val a: std::mem::default_allocator = {{}};\n        a.free<({ft})>(p);\n    }}\n");
         self.tramps.push(ft);
@@ -1477,53 +1769,62 @@ impl<'a> Gen<'a> {
     /// the handle type of closures of this signature the shim gives Volt: fn_K, called with
     /// call(...), freed when it goes (made once per signature)
     fn fn_handle(&mut self, ps: &[Ty], r: &Ty, once: bool) -> Option<usize> {
-        let ft = format!("{}{}", if once { "once " } else { "" }, self.fn_volt_ty(ps, r)?);
-        if let Some(k) = self.fn_handles.iter().position(|x| *x == ft) {
-            return Some(k);
-        }
-        let k = self.fn_handles.len();
-        let sym = format!("volt_{}_{}_fn{k}", self.lang.short(), self.alias);
-        let glue = self.lang.fn_glue(self, &sym, ps, r, once)?;
+        // its parameters and result as a function's (x0...: its parameters' Volt names)
         let mut vps = Vec::new();
         let mut ext = vec!["h: void*".to_string()];
         let mut args = vec!["this.h".to_string()];
+        let mut locals = Vec::new();
         for (i, p) in ps.iter().enumerate() {
-            vps.push(format!("a{i}: {}", Self::cb_volt_ty(p)?));
-            match p {
-                Ty::Str | Ty::String => {
-                    ext.extend([format!("a{i}: u8*"), format!("a{i}_n: usize")]);
-                    args.extend([format!("@cast<u8*>(a{i}.ptr)"), format!("a{i}.len")]);
-                }
-                _ => {
-                    ext.push(format!("a{i}: {}", Self::cb_volt_ty(p)?));
-                    args.push(format!("a{i}"));
-                }
+            let v = self.volt_param(&format!("x{i}"), p, i)?;
+            if v.generic.is_some() {
+                return None;
             }
+            vps.push(v.param);
+            ext.extend(v.ext);
+            locals.extend(v.pre);
+            args.extend(v.args);
         }
         if matches!(r, Ty::Str) {
             return None;
         }
         let ns = self.shim_ns();
         let catches = self.lang.catches();
-        let mut locals = Vec::new();
-        let mut give = Vec::new();
-        let rt = if *r == Ty::String {
-            // the closure's String: the shim's bytes, taken
-            ext.extend(["o: u8**".to_string(), "o_n: usize*".to_string()]);
-            args.extend(["&o".to_string(), "&o_n".to_string()]);
-            locals.extend(["var o: u8* = null;".to_string(), "var o_n: usize = 0;".to_string()]);
-            give.push(format!("return {ns}::take(o, o_n);"));
-            "std::string".to_string()
-        } else {
-            let rt = Self::cb_volt_ty(r)?;
-            if rt != "void" {
-                ext.push(format!("o: {rt}*"));
-                args.push("&o".into());
-                locals.push(format!("var o: {rt} = {};", match r { Ty::Prim(x) => zero(x), _ => "0" }));
-                give.push("return o;".into());
-            }
-            rt
+        let err = format!("{}::{}_error", self.alias, self.lang.short());
+        // an error it returns (status 1, with a catching shim): an error of the set
+        let (res, val) = match r {
+            Ty::Res(x) if catches => (true, &**x),
+            x => (false, x),
         };
+        let mut give = Vec::new();
+        let vt = if *val == Ty::Unit {
+            if res {
+                give.push("return;".into());
+            }
+            "void".to_string()
+        } else {
+            let o = self.volt_out(val, "o")?;
+            if o.ty.ends_with('?') {
+                // (a value or none: the shim says which)
+                if !self.lang.cb_types() || res {
+                    return None;
+                }
+                give.push("if (!o_has) {\n            return null;\n        }".into());
+            }
+            ext.extend(o.ext);
+            args.extend(o.args);
+            locals.extend(o.locals);
+            give.push(format!("return {};", o.value));
+            o.ty
+        };
+        let rt = if res { format!("{err}!{vt}") } else { vt };
+        let failed = format!("if (st == 1) {{\n            return {err}::ERROR({ns}::take(e, e_n));\n        }}");
+        let ft = format!("{}fn({}) -> {rt}", if once { "once " } else { "" }, vps.iter().map(|p: &String| p.split_once(": ").map_or(p.as_str(), |x| x.1)).collect::<Vec<_>>().join(", "));
+        if let Some(k) = self.fn_handles.iter().position(|x| *x == ft) {
+            return Some(k);
+        }
+        let k = self.fn_handles.len();
+        let sym = format!("volt_{}_{}_fn{k}", self.lang.short(), self.alias);
+        let glue = self.lang.fn_glue(self, &sym, ps, r, once)?;
         // a panic in the closure: the program stops (call), or it's an error (try_call)
         let mut body = locals.clone();
         let mut try_body = Vec::new();
@@ -1533,10 +1834,13 @@ impl<'a> Gen<'a> {
             body.extend(["var e: u8* = null;".to_string(), "var e_n: usize = 0;".to_string()]);
             try_body = body.clone();
             let quiet = self.sym(&["quiet"]);
-            let err = format!("{}::{}_error", self.alias, self.lang.short());
             body.push(format!("val st = {ns}::{sym}_call({});", args.join(", ")));
             body.push(format!("if (st == 2) {{\n            {ns}::panicked(e, e_n);\n        }}"));
             try_body.extend([format!("val quiet = {ns}::{quiet}(true);"), format!("val st = {ns}::{sym}_call({});", args.join(", ")), format!("{ns}::{quiet}(quiet);"), format!("if (st == 2) {{\n            return {err}::PANIC({ns}::take(e, e_n));\n        }}")]);
+            if res {
+                body.push(failed.clone());
+                try_body.push(failed);
+            }
             try_body.extend(give.clone());
             self.errors = true;
         } else {
@@ -1551,12 +1855,13 @@ impl<'a> Gen<'a> {
         let empty = format!("        if (this.h == null) {{\n            @panic(\"a {} closure called after it was given away\");\n        }}\n", self.lang.name());
         let _ = write!(self.helpers, "\n    // a {} closure, {ft}: call(...) calls it; it's freed when it goes\n    struct fn_{k} {{\n        h: void* = null;\n    }}\n\n    attach fn call(this: fn_{k}&, {}) -> {rt} {{\n{empty}{lines}    }}\n\n    attach fn delete(this: fn_{k}&) -> void {{\n        if (this.h != null) {{\n            {ns}::{sym}_drop(this.h);\n            this.h = null;\n        }}\n    }}\n", self.lang.name(), vps.join(", "));
         if catches {
-            let err = format!("{}::{}_error", self.alias, self.lang.short());
             let try_lines: String = try_body.iter().map(|l| format!("        {l}\n")).collect();
-            let _ = write!(self.helpers, "\n    // call, with a panic as {err}::PANIC\n    attach fn try_call(this: fn_{k}&, {}) -> {err}!{rt} {{\n{empty}{try_lines}    }}\n", vps.join(", "));
+            let try_rt = if res { rt.clone() } else { format!("{err}!{rt}") };
+            let _ = write!(self.helpers, "\n    // call, with a panic as {err}::PANIC\n    attach fn try_call(this: fn_{k}&, {}) -> {try_rt} {{\n{empty}{try_lines}    }}\n", vps.join(", "));
         }
         self.shim.push_str(&glue);
         self.fn_handles.push(ft);
+        self.fn_tys.push((ps.to_vec(), r.clone(), vps.iter().map(|p| p.split_once(": ").map_or(p.clone(), |x| x.1.to_string())).collect(), rt.clone()));
         Some(k)
     }
 
@@ -1616,9 +1921,37 @@ impl<'a> Gen<'a> {
             Ty::Prim(x) => x.to_string(),
             Ty::Char => "u32".into(),
             Ty::Str | Ty::String => (if out { "std::string" } else { "str" }).into(),
-            Ty::Slice(e, _) | Ty::Vec(e) => {
+            Ty::Slice(e, _) | Ty::Vec(e) | Ty::Array(e, _) => {
                 let e = self.generic_ty(e, out)?;
                 if out { format!("std::vec<{e}>") } else { format!("{e}[..]") }
+            }
+            // a closure: its types as a closure's (text in as str, out as std::string)
+            Ty::Fn(ps, r, _, _) => {
+                let mut a = Vec::new();
+                for p in ps {
+                    a.push(match p {
+                        Ty::Str | Ty::String => "str".to_string(),
+                        p => self.generic_ty(p, false)?,
+                    });
+                }
+                format!("fn({}) -> {}", a.join(", "), self.generic_ty(r, true)?)
+            }
+            Ty::Inst(n, args) => {
+                let d = self.m.types.iter().find(|t| t.name == *n && t.generic)?;
+                // (type arguments: text is std::string)
+                let mut a = Vec::new();
+                for x in args {
+                    a.push(self.generic_ty(x, true)?);
+                }
+                format!("{}<{}>", self.volt_path(d), a.join(", "))
+            }
+            Ty::Tuple(es) if out => {
+                let mut a = Vec::new();
+                for (n, t) in es {
+                    let x = self.generic_ty(t, true)?;
+                    a.push(if n.is_empty() || n == "_" { x } else { format!("{}: {x}", volt_name(n)) });
+                }
+                format!("({})", a.join(", "))
             }
             Ty::Opt(e) => format!("{}?", self.generic_ty(e, out)?),
             Ty::Named(n) => self.volt_path(&self.types.get(n)?.def),
@@ -1685,6 +2018,12 @@ impl<'a> Gen<'a> {
         }
         for (module, name, ty, lit) in self.m.consts.clone() {
             self.modules.entry(module).or_default().push_str(&format!("\nval {}: {ty} = {lit};\n", volt_name(&name)));
+        }
+        for (module, name, t) in self.m.aliases.clone() {
+            match self.generic_ty(&t, false) {
+                Some(v) => self.modules.entry(module).or_default().push_str(&format!("\n// {}: an alias\ntype {} = {v};\n", self.lang.name(), volt_name(&name))),
+                None => self.left_out.push(format!("{name} (an alias of a type Volt can't name)")),
+            }
         }
         for t in &self.m.types {
             if t.generic && t.params.is_empty() {
@@ -1855,6 +2194,9 @@ pub fn substitute(t: &Ty, s: &BTreeMap<String, Ty>) -> Ty {
         Ty::Res(e) => Ty::Res(Box::new(substitute(e, s))),
         Ty::Fails(e, x) => Ty::Fails(Box::new(substitute(e, s)), x.clone()),
         Ty::Future(e) => Ty::Future(Box::new(substitute(e, s))),
+        Ty::Array(e, n) => Ty::Array(Box::new(substitute(e, s)), *n),
+        Ty::Inst(n, args) => Ty::Inst(n.clone(), args.iter().map(|x| substitute(x, s)).collect()),
+        Ty::Tuple(es) => Ty::Tuple(es.iter().map(|(n, t)| (n.clone(), substitute(t, s))).collect()),
         // a closure parameter's type stands for the closure itself
         Ty::Fn(ps, r, p, once) => Ty::Fn(ps.iter().map(|x| substitute(x, s)).collect(), Box::new(substitute(r, s)), *p, *once),
         // &T of text is str and of a Vec a slice, as the reader maps them; of a number it stays a
@@ -1897,7 +2239,8 @@ fn value_use(m: &Model, name: &str) -> bool {
     fn names(t: &Ty, n: &str) -> bool {
         match t {
             Ty::Named(x) => x == n,
-            Ty::Opt(x) | Ty::Res(x) | Ty::Vec(x) | Ty::Slice(x, _) | Ty::Ref(x, _) => names(x, n),
+            Ty::Opt(x) | Ty::Res(x) | Ty::Vec(x) | Ty::Slice(x, _) | Ty::Ref(x, _) | Ty::Array(x, _) => names(x, n),
+            Ty::Tuple(es) => es.iter().any(|(_, t)| names(t, n)),
             Ty::Fails(x, _) | Ty::Future(x) => names(x, n),
             Ty::Fn(ps, r, _, _) => ps.iter().any(|p| names(p, n)) || names(r, n),
             _ => false,
