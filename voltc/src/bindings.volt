@@ -51,7 +51,7 @@ enum shape {
 // shapes that only work at the edge of an export fn
 // the languages whose bindings take every shape (bind.wide), as messages name them
 fn wide_langs() -> std::string {
-    return S("C, C++, Rust, Zig, Go, Python, Dart, Java, C#, JavaScript, Lua and Ruby");
+    return S("C, C++, Rust, Zig, Go, Python, Dart, Java, C#, JavaScript, Lua, Ruby and Swift");
 }
 
 fn plain(s: shape) -> bool {
@@ -12289,6 +12289,14 @@ fn swift_ident(s: str) -> std::string {
     return S(s);
 }
 
+// a method's name in Swift: as swift_ident, but close is close_ (close() frees the object)
+fn swift_member(m: str) -> std::string {
+    if (m == "close") {
+        return S("close_");
+    }
+    return swift_ident(m);
+}
+
 fn swift_int(k: int_ty) -> str {
     match (k) {
         .I8 => { return "Int8"; },
@@ -12337,20 +12345,22 @@ attach fn swift_c(this: bind&, t: u32) -> std::string {
     }
 }
 
-// a type as the Swift API shows it
-attach fn swift_ty(this: bind&, t: u32) -> std::string {
+// a type as the Swift API shows it, as a wrapper's parameter (cb: as a callback's or a trait fn's
+// parameter or result, which Volt passes or takes as it is: a slice is then a view of its elements)
+attach fn swift_ty(this: bind&, t: u32, cb: bool) -> std::string {
     val h = this.lent_handle(t);
     if (h) {
-        return this.local(this.c.si(h).name);
+        return this.swift_cls(h, this.nullable_ptr(t));
     }
     match (this.shape_of(t) ?? shape::VOID) {
+        .VOID => { return S("Void"); },
         .CSTR => { return S("String?"); },
         .STR => { return S("String"); },
         .TEXT(x) => { return S("String"); },
         .STRUCT(s) => { return this.local(this.c.si(s).name); },
         .ENUM(e) => { return this.local(this.c.ei(e).name); },
         .PTR(x) => {
-            if (x != VOID && !this.nullable_ptr(t)) {
+            if (!cb && x != VOID && !this.nullable_ptr(t)) {
                 match (this.shape_of(x) ?? shape::VOID) {
                     .STRUCT(s) => { return fmt("inout {}", this.local(this.c.si(s).name)); },
                     default => {},
@@ -12359,26 +12369,138 @@ attach fn swift_ty(this: bind&, t: u32) -> std::string {
             return this.swift_c(t);
         },
         .HANDLE(s) => { return this.local(this.c.si(s).name); },
-        .SLICE(x) => { return fmt("inout [{}]", this.swift_elem(x)); },
-        .OPT(x) => { return fmt("{}?", this.swift_ty(x)); },
-        .RESULT(e, x) => { return this.swift_ty(x); },
-        .CLOSURE(i) => {
-            match (*this.c.t.get(t)) {
-                .FN_VAL(ps&, r) => {
-                    var args: std::string = {};
-                    for (p&) in ps.items() {
-                        if (args.len() > 0) {
-                            args.append(", ");
-                        }
-                        args.append(this.swift_ty(*p).as_str());
-                    }
-                    return fmt2("({}) -> {}", move args, this.swift_ty(r));
-                },
-                default => { return S("() -> Void"); },
+        .SLICE(x) => {
+            if (cb) {
+                return fmt("UnsafeMutableBufferPointer<{}>", this.swift_elem(x));
             }
+            if (this.swift_slice_conv(x)) {
+                return fmt("[{}]", this.swift_item(x, false));
+            }
+            return fmt("inout [{}]", this.swift_item(x, false));
+        },
+        .LIST(x) => { return fmt("[{}]", this.swift_item(this.list_elem(t), true)); },
+        .OPT(x) => { return this.swift_opt_ty(t, x); },
+        .RESULT(e, x) => { return this.swift_ty(x, cb); },
+        .TRAIT(i) => { return fmt("any {}", this.short(this.trait_of(t))); },
+        .CLOSURE(i) => {
+            var ps: std::vec<u32> = {};
+            val r = this.fn_parts(t, &ps);
+            var args: std::string = {};
+            for (p&) in ps.items() {
+                if (args.len() > 0) {
+                    args.append(", ");
+                }
+                args.append(this.swift_ty(*p, true).as_str());
+            }
+            var thr = S("");
+            if (this.swift_throws(r)) {
+                thr = S(" throws");
+            }
+            return fmt3("({}){} -> {}", move args, move thr, this.swift_ty(r, true));
         },
         default => { return this.swift_c(t); },
     }
+}
+
+// export struct s's class (opt: as an optional)
+attach fn swift_cls(this: bind&, s: u32, opt: bool) -> std::string {
+    var n = this.local(this.c.si(s).name);
+    if (opt) {
+        n.push('?');
+    }
+    return n;
+}
+
+// optional t (of x) in Swift: String? for text, the class? for a handle, T? for a value; else its
+// C form
+attach fn swift_opt_ty(this: bind&, t: u32, x: u32) -> std::string {
+    match (this.shape_of(x) ?? shape::VOID) {
+        .STR => { return S("String?"); },
+        .TEXT(y) => { return S("String?"); },
+        .HANDLE(s) => { return this.swift_cls(s, true); },
+        default => {},
+    }
+    if (this.simple_value(x)) {
+        return fmt("{}?", this.swift_ty(x, false));
+    }
+    return this.swift_c(t);
+}
+
+// is t a str?
+attach fn swift_is_str(this: bind&, t: u32) -> bool {
+    match (this.shape_of(t) ?? shape::VOID) {
+        .STR => { return true; },
+        default => { return false; },
+    }
+}
+
+// does a slice of view x come from a Swift array it isn't written back to: text, optional text,
+// handles (lent)?
+attach fn swift_slice_conv(this: bind&, x: u32) -> bool {
+    if (this.swift_is_str(x) || this.handle_of(x) != null) {
+        return true;
+    }
+    match (this.shape_of(x) ?? shape::VOID) {
+        .OPT(y) => { return this.swift_is_str(y); },
+        default => { return false; },
+    }
+}
+
+// a container's element in Swift (e: a slice's view, or a list's element): String for text, the
+// class for a handle (a slice's lent through a pointer: class? when it can be null), T? for an
+// optional text or value, a list's enum as itself; else its C form
+attach fn swift_item(this: bind&, e: u32, list: bool) -> std::string {
+    if (!list) {
+        val h = this.handle_of(e);
+        if (h) {
+            return this.swift_cls(h, this.nullable_ptr(e));
+        }
+    }
+    match (this.shape_of(e) ?? shape::VOID) {
+        .STR => { return S("String"); },
+        .TEXT(x) => { return S("String"); },
+        .HANDLE(s) => { return this.swift_cls(s, false); },
+        .ENUM(x) => {
+            if (list) {
+                return this.swift_ty(e, false);
+            }
+        },
+        .OPT(x) => {
+            if (this.swift_is_str(x) || this.simple_value(x)) {
+                return this.swift_opt_ty(e, x);
+            }
+        },
+        default => {},
+    }
+    return this.swift_elem(e);
+}
+
+// the Swift value of a container's element v, as C has it (see swift_item)
+attach fn swift_item_out(this: bind&, e: u32, list: bool, v: str) -> std::string {
+    match (this.shape_of(e) ?? shape::VOID) {
+        .STR => { return fmt("voltString({})", S(v)); },
+        .TEXT(x) => { return fmt("voltString({})", S(v)); },
+        .HANDLE(s) => {
+            if (list) {
+                return fmt2("{}(handle: {})", this.swift_cls(s, false), S(v));
+            }
+        },
+        .ENUM(x) => {
+            if (list) {
+                return this.swift_out(e, v);
+            }
+        },
+        .OPT(x) => {
+            if (this.swift_is_str(x)) {
+                return fmt2("{}.has ? voltString({}.value) : nil", S(v), S(v));
+            }
+            if (this.simple_value(x)) {
+                return this.swift_opt_out(x, v);
+            }
+        },
+        default => {},
+    }
+    return S(v);
 }
 
 // a slice's element type: the C one (an enum's tag type), or the struct's name
@@ -12406,39 +12528,65 @@ attach fn swift_out(this: bind&, t: u32, r: str) -> std::string {
     }
 }
 
+// optional value v (a T?, x a plain value) as C's optional
+attach fn swift_opt_in(this: bind&, x: u32, v: str) -> std::string {
+    var value = fmt("{} ?? .init()", S(v));
+    match (this.shape_of(x) ?? shape::VOID) {
+        .ENUM(e) => { value = fmt("{}?.rawValue ?? .init()", S(v)); },
+        default => {},
+    }
+    return fmt3("{}(value: {}, has: {} != nil)", this.made_name("opt", x, false), move value, S(v));
+}
+
+// C's optional v (of plain value x) as Swift's T?
+attach fn swift_opt_out(this: bind&, x: u32, v: str) -> std::string {
+    return fmt2("{}.has ? {} : nil", S(v), this.swift_out(x, fmt("{}.value", S(v)).as_str()));
+}
+
 // one parameter of a wrapper: its declaration, what the call passes, statements at the top (pre),
-// and the scopes the call runs in (each `X { p in`, closed by `}`), with what starts each scope
+// the scopes the call runs in (each `X { p in`, closed by `}`) with what starts each scope, what
+// the call takes over (gift, for voltGiving), and whether a Swift function Volt calls can throw
 struct swift_arg {
     decl: std::string = {};
     pass: std::string = {};
     pre: std::string = {};
     scopes: std::vec<std::string> = {};
     inside: std::vec<std::string> = {}; // statements at the start of each scope
+    gift: std::string = {};
+    throws: bool = false;
 }
 
-attach fn swift_arg_of(this: bind&, t: u32, name0: str, a: swift_arg&) -> compile_error!void {
-    val nm = swift_ident(name0);
+attach fn swift_scope(this: bind&, a: swift_arg&, scope: std::string, inside: std::string) -> void {
+    put(&a.scopes, move scope);
+    put(&a.inside, move inside);
+}
+
+// parameter name0 of type t as Swift passes it to Volt (cb: as a trait fn has it): lent handles and
+// objects held by the call, what Volt takes over given once every argument is ready
+attach fn swift_arg_of(this: bind&, t: u32, name0: str, a: swift_arg&, cb: bool) -> void {
+    val nm = this.swift_param(name0);
     val n = nm.as_str();
-    a.decl = fmt3("_ {}: {}", S(n), this.swift_ty(t), S(""));
+    a.decl = fmt2("_ {}: {}", S(n), this.swift_ty(t, cb));
     val h = this.lent_handle(t);
     if (h) {
-        a.pass = fmt("{}.voltHandle()", S(n));
+        // lent: it can't be closed or given away until the call is back
+        this.swift_scope(a, fmt("voltLending([{}]) {", S(n)), {});
+        if (this.nullable_ptr(t)) {
+            a.pass = fmt("{}?.voltRaw", S(n));
+        } else {
+            a.pass = fmt("{}.voltRaw", S(n));
+        }
         return;
     }
     match (this.shape_of(t) ?? shape::VOID) {
-        .STR => {
-            a.pre = fmt2("var {}_s = {}\n", S(name0), S(n));
-            put(&a.scopes, fmt2("{}_s.withUTF8 {{ {}_p in", S(name0), S(name0)));
-            put(&a.inside, {});
-            a.pass = fmt2("volt_str(ptr: {}_p.baseAddress, len: {}_p.count)", S(name0), S(name0));
-        },
+        .STR => { this.swift_str_arg(n, name0, a); },
+        .TEXT(x) => { this.swift_str_arg(n, name0, a); },
         .CSTR => {
-            put(&a.scopes, fmt2("voltWithCString({}) {{ {}_p in", S(n), S(name0)));
-            put(&a.inside, {});
+            this.swift_scope(a, fmt2("voltWithCString({}) {{ {}_p in", S(n), S(name0)), {});
             a.pass = fmt("{}_p", S(name0));
         },
         .PTR(x) => {
-            if (x != VOID && !this.nullable_ptr(t)) {
+            if (!cb && x != VOID && !this.nullable_ptr(t)) {
                 match (this.shape_of(x) ?? shape::VOID) {
                     .STRUCT(s) => {
                         a.pass = fmt("&{}", S(n));
@@ -12449,58 +12597,164 @@ attach fn swift_arg_of(this: bind&, t: u32, name0: str, a: swift_arg&) -> compil
             }
             a.pass = S(n);
         },
-        .SLICE(x) => {
-            put(&a.scopes, fmt2("{}.withUnsafeMutableBufferPointer {{ {}_p in", S(n), S(name0)));
-            put(&a.inside, {});
-            a.pass = fmt3("{}(ptr: {}_p.baseAddress, len: {}_p.count)", this.c_prim(t, false), S(name0), S(name0));
+        .HANDLE(s) => {
+            a.gift = fmt("[{}]", S(n));
+            a.pass = fmt("{}.voltRaw", S(n));
         },
-        .OPT(x) => {
-            if (!this.simple_value(x)) {
-                return fail(NO_SPAN, fmt("an optional {} can't come from Swift", this.c.ty_name(x)));
+        .TRAIT(i) => {
+            val tr = this.short(this.trait_of(t));
+            a.throws = this.swift_can_throw(t);
+            if (this.is_ref(t)) {
+                this.swift_scope(a, fmt3("voltLend_{}({}) {{ {}_o in", copy tr, S(n), S(name0)), {});
+                a.pass = fmt("{}_o", S(name0));
+            } else {
+                a.gift = fmt2("[{} as? volt_{}]", S(n), copy tr);
+                a.pass = fmt2("voltGive_{}({})", copy tr, S(n));
             }
-            a.pre = fmt2("var {}_o = {}()\n", S(name0), this.c_prim(t, false));
-            a.pre.append(fmt3("if let v = {} {{\n    {}_o.value = {}\n", S(n), S(name0), this.swift_in(x, "v")).as_str());
-            a.pre.append(fmt("    {}_o.has = true\n}\n", S(name0)).as_str());
-            a.pass = fmt("{}_o", S(name0));
         },
-        .CLOSURE(i) => {
-            match (*this.c.t.get(t)) {
-                .FN_VAL(ps&, r) => {
-                    // the closure, in a box the C function finds through its user pointer
-                    put(&a.scopes, fmt2("withoutActuallyEscaping({}) {{ {}_f in", S(n), S(name0)));
-                    put(&a.inside, fmt2("let {}_box = VoltBox({}_f)\n", S(name0), S(name0)));
-                    put(&a.scopes, fmt("withExtendedLifetime({}_box) {", S(name0)));
-                    put(&a.inside, {});
-                    var params = S("u");
-                    var args: std::string = {};
-                    for (k) in 0..ps.len {
-                        val ak = fmt("a{}", unum(@cast<u64>(k)));
-                        params.append(fmt(", {}", copy ak).as_str());
-                        if (k > 0) {
-                            args.append(", ");
-                        }
-                        match (this.shape_of(*ps.at(k)) ?? shape::VOID) {
-                            .STR => {},
-                            default => {
-                                if (!this.simple_value(*ps.at(k))) {
-                                    return fail(NO_SPAN, fmt("a callback taking {} can't call Swift", this.c.ty_name(*ps.at(k))));
-                                }
-                            },
-                        }
-                        args.append(this.swift_out(*ps.at(k), ak.as_str()).as_str());
-                    }
-                    if (r != VOID && !this.simple_value(r)) {
-                        return fail(NO_SPAN, fmt("a callback returning {} can't call Swift", this.c.ty_name(r)));
-                    }
-                    val call = fmt4("Unmanaged<VoltBox<{}>>.fromOpaque(u!).takeUnretainedValue().f({}){}", this.swift_ty(t), move args, S(""), S(""));
-                    a.pass = fmt3("{{ {} in {} }}, Unmanaged.passUnretained({}_box).toOpaque()", move params, this.swift_in(r, call.as_str()), S(name0));
+        .SLICE(x) => {
+            if (cb) {
+                a.pass = fmt3("{}(ptr: {}.baseAddress, len: {}.count)", this.c_prim(t, false), S(n), S(n));
+                return;
+            }
+            this.swift_elems(x, false, n, name0, this.c_prim(t, false).as_str(), a);
+        },
+        .LIST(x) => { this.swift_elems(this.list_elem(t), true, n, name0, this.c_prim(this.in_ty(t), false).as_str(), a); },
+        .OPT(x) => {
+            match (this.shape_of(x) ?? shape::VOID) {
+                .HANDLE(s) => {
+                    a.gift = fmt("[{}]", S(n));
+                    a.pass = fmt("{}?.voltRaw", S(n));
+                    return;
                 },
                 default => {},
             }
+            if (this.in_ty(x) == STR) {
+                this.swift_scope(a, fmt3("voltWithStrs([{}]) {{ {}_v, {}_h in", S(n), S(name0), S(name0)), {});
+                a.pass = fmt3("{}(value: {}_v[0], has: {}_h[0])", this.c_prim(this.in_ty(t), false), S(name0), S(name0));
+            } else if (this.simple_value(x)) {
+                a.pass = this.swift_opt_in(x, n);
+            } else {
+                a.pass = S(n);
+            }
+        },
+        .CLOSURE(i) => {
+            // the closure, in a box the C function finds through its user pointer
+            var ps: std::vec<u32> = {};
+            val r = this.fn_parts(t, &ps);
+            a.throws = this.swift_throws(r);
+            this.swift_scope(a, fmt2("withoutActuallyEscaping({}) {{ {}_f in", S(n), S(name0)), fmt2("let {}_box = VoltBox({}_f)\n", S(name0), S(name0)));
+            this.swift_scope(a, fmt("withExtendedLifetime({}_box) {", S(name0)), {});
+            a.pass = fmt2("{}, Unmanaged.passUnretained({}_box).toOpaque()", this.swift_thunk(&ps, r, this.swift_ty(t, false).as_str(), "voltBox.f"), S(name0));
         },
         default => { a.pass = this.swift_in(t, n); },
     }
-    return;
+}
+
+// a parameter's name in Swift: a keyword quoted, and one a type here has gets a _ after it (else the
+// parameter would hide the type in the wrapper)
+attach fn swift_param(this: bind&, name: str) -> std::string {
+    var types: std::vec<std::string> = {};
+    for (s&) in this.handles.items() {
+        put(&types, this.local(this.c.si(*s).name));
+    }
+    for (s&) in this.structs.items() {
+        put(&types, this.local(this.c.si(*s).name));
+    }
+    for (e&) in this.enums.items() {
+        put(&types, this.local(this.c.ei(*e).name));
+    }
+    for (c&) in this.all_codes().items() {
+        put(&types, copy c.set);
+    }
+    for (t&) in this.traits.items() {
+        put(&types, this.short(*t));
+    }
+    for (x&) in types.items() {
+        if (x.as_str() == name) {
+            return fmt("{}_", S(name));
+        }
+    }
+    return swift_ident(name);
+}
+
+// text lent to the call as a str (Volt copies owned text)
+attach fn swift_str_arg(this: bind&, n: str, name0: str, a: swift_arg&) -> void {
+    a.pre = fmt2("var {}_s = {}\n", S(name0), S(n));
+    this.swift_scope(a, fmt2("{}_s.withUTF8 {{ {}_p in", S(name0), S(name0)), {});
+    a.pass = fmt2("volt_str(ptr: {}_p.baseAddress, len: {}_p.count)", S(name0), S(name0));
+}
+
+// a slice or a list parameter n (elements e: a slice's views, a list's elements; ct its C slice) as
+// Swift passes it: text from [String] (or [String?]), handles from [class] (a slice's lent, a list's
+// given up), optional values from [T?] (a slice's written back), enums in a list from [E], other
+// values from [T] (a slice's in place, inout)
+attach fn swift_elems(this: bind&, e: u32, list: bool, n: str, name0: str, ct: str, a: swift_arg&) -> void {
+    val sl = fmt3("{}(ptr: {}_p.baseAddress, len: {}_p.count)", S(ct), S(name0), S(name0));
+    var buf = fmt2("{}_v.withUnsafeMutableBufferPointer {{ {}_p in", S(name0), S(name0));
+    if (this.view_of(e) == STR) {
+        this.swift_scope(a, fmt2("voltWithStrs({}) {{ {}_p, _ in", S(n), S(name0)), {});
+        a.pass = copy sl;
+        return;
+    }
+    // (a list's handles are its elements by value; a slice's are views, lent)
+    var handles = this.handle_of(e) != null;
+    if (list) {
+        match (this.shape_of(e) ?? shape::VOID) {
+            .HANDLE(s) => {},
+            default => { handles = false; },
+        }
+    }
+    if (handles) {
+        var q = S("");
+        if (!list && this.nullable_ptr(e)) {
+            q = S("?");
+        }
+        a.pre = fmt3("var {}_v = {}.map {{ $0{}.voltRaw }}\n", S(name0), S(n), move q);
+        if (list) {
+            a.gift = S(n);
+        } else {
+            this.swift_scope(a, fmt("voltLending({}) {", S(n)), {});
+        }
+        this.swift_scope(a, move buf, {});
+        a.pass = copy sl;
+        return;
+    }
+    match (this.shape_of(e) ?? shape::VOID) {
+        .OPT(x) => {
+            if (this.swift_is_str(x)) {
+                this.swift_scope(a, fmt3("voltWithStrs({}) {{ {}_s, {}_h in", S(n), S(name0), S(name0)), fmt4("var {}_v = zip({}_s, {}_h).map {{ {}(value: $0, has: $1) }}\n", S(name0), S(name0), S(name0), this.c_prim(e, false)));
+                this.swift_scope(a, move buf, {});
+                a.pass = copy sl;
+                return;
+            }
+            if (this.simple_value(x)) {
+                a.pre = fmt3("var {}_v = {}.map {{ {} }}\n", S(name0), S(n), this.swift_opt_in(x, "$0"));
+                if (!list) {
+                    a.pre.append(fmt3("defer {{\n    {} = {}_v.map {{ {} }}\n}}\n", S(n), S(name0), this.swift_opt_out(x, "$0")).as_str());
+                }
+                this.swift_scope(a, move buf, {});
+                a.pass = copy sl;
+                return;
+            }
+        },
+        .ENUM(x) => {
+            if (list) {
+                a.pre = fmt2("var {}_v = {}.map {{ $0.rawValue }}\n", S(name0), S(n));
+                this.swift_scope(a, move buf, {});
+                a.pass = copy sl;
+                return;
+            }
+        },
+        default => {},
+    }
+    if (list) {
+        a.pre = fmt2("var {}_v = {}\n", S(name0), S(n));
+        this.swift_scope(a, move buf, {});
+    } else {
+        this.swift_scope(a, fmt2("{}.withUnsafeMutableBufferPointer {{ {}_p in", S(n), S(name0)), {});
+    }
+    a.pass = copy sl;
 }
 
 // does a call to f throw (it returns an error union)?
@@ -12511,9 +12765,177 @@ attach fn swift_throws(this: bind&, t: u32) -> bool {
     }
 }
 
+// can a parameter of type t make the call throw: a callback, or an object's fn, giving E!T (what it
+// throws that Volt can't take is thrown once the call is back)?
+attach fn swift_can_throw(this: bind&, t: u32) -> bool {
+    match (this.shape_of(t) ?? shape::VOID) {
+        .CLOSURE(i) => {
+            var ps: std::vec<u32> = {};
+            return this.swift_throws(this.fn_parts(t, &ps));
+        },
+        .TRAIT(i) => {
+            for (f&) in this.fns_of(this.trait_of(t)).items() {
+                if (this.swift_throws(f.ret)) {
+                    return true;
+                }
+            }
+        },
+        default => {},
+    }
+    return false;
+}
+
+// does a wrapper of export fn f throw?
+attach fn swift_fn_throws(this: bind&, f: u32) -> bool {
+    val info = this.c.fi(f);
+    if (this.swift_throws(info.ret)) {
+        return true;
+    }
+    for (p&) in info.params.items() {
+        if (this.swift_can_throw(p.ty)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// the code an error a Swift function threw stands in as, when Volt can't take it: error set e's first
+// (any error set's for anyerror)
+attach fn swift_first_code(this: bind&, e: u32) -> std::string {
+    match (*this.c.t.get(e)) {
+        .ENUM(id) => {
+            if (this.c.ei(id).values.len > 0) {
+                return num(*this.c.ei(id).values.at(0));
+            }
+        },
+        default => {},
+    }
+    val all = this.all_codes();
+    if (all.len > 0) {
+        return num(all.at(0).code);
+    }
+    return S("1");
+}
+
+// the Swift value of C argument a (the k-th, of type t) Volt passes to a Swift function: a handle it
+// lends is a class the function has until it returns (pre: statements before the call)
+attach fn swift_from_c(this: bind&, t: u32, a: str, k: usize, pre: std::string&) -> std::string {
+    val h = this.lent_handle(t);
+    if (h) {
+        val cls = this.swift_cls(h, false);
+        val x = fmt("x{}", unum(@cast<u64>(k)));
+        if (this.nullable_ptr(t)) {
+            pre.append(fmt3("let {} = {}.map {{ {}(handle: $0, owned: false) }}\n", copy x, S(a), copy cls).as_str());
+            pre.append(fmt("defer {{\n    {}?.voltLive = false\n}}\n", copy x).as_str());
+        } else {
+            pre.append(fmt3("let {} = {}(handle: {}, owned: false)\n", copy x, copy cls, S(a)).as_str());
+            pre.append(fmt("defer {{\n    {}.voltLive = false\n}}\n", copy x).as_str());
+        }
+        return x;
+    }
+    match (this.shape_of(t) ?? shape::VOID) {
+        .TEXT(x) => { return fmt("voltString({})", S(a)); },
+        .CSTR => { return fmt("{}.map {{ String(cString: $0) }}", S(a)); },
+        .HANDLE(s) => { return fmt2("{}(handle: {})", this.swift_cls(s, false), S(a)); },
+        .SLICE(x) => { return fmt2("UnsafeMutableBufferPointer(start: {}.ptr, count: {}.len)", S(a), S(a)); },
+        default => {},
+    }
+    return this.swift_out(t, a);
+}
+
+// Swift value v (a variable, of type t) as C takes it back from a Swift function: a str is kept in
+// the box until the next one
+attach fn swift_to_c(this: bind&, t: u32, v: str) -> std::string {
+    val h = this.lent_handle(t);
+    if (h) {
+        if (this.nullable_ptr(t)) {
+            return fmt("{}?.voltRaw", S(v));
+        }
+        return fmt("{}.voltRaw", S(v));
+    }
+    match (this.shape_of(t) ?? shape::VOID) {
+        .STR => { return fmt2("volt_str(ptr: voltBox.keep({}), len: {}.utf8.count)", S(v), S(v)); },
+        .CSTR => { return fmt("{}.map {{ UnsafeRawPointer(voltBox.keep($0)).assumingMemoryBound(to: CChar.self) }}", S(v)); },
+        .SLICE(x) => { return fmt3("{}(ptr: {}.baseAddress, len: {}.count)", this.c_prim(t, false), S(v), S(v)); },
+        default => {},
+    }
+    return this.swift_in(t, v);
+}
+
+// statements giving C what call (a Swift function's, of type r) returns: text given (Volt frees it), a
+// handle given up, E!T as its struct (an error of the set is its code; anything else thrown gets a
+// stand-in, and is thrown once the Volt call is back)
+attach fn swift_up_ret(this: bind&, r: u32, call: str) -> std::string {
+    if (r == VOID) {
+        return fmt("{}\n", S(call));
+    }
+    match (this.shape_of(r) ?? shape::VOID) {
+        .TEXT(x) => { return fmt("return voltGive({})\n", S(call)); },
+        .HANDLE(s) => { return fmt("let v = {}\nvoltGiving([v])\nreturn v.voltRaw\n", S(call)); },
+        .RESULT(e, x) => {
+            var out = fmt("var out = {}()\ndo {\n", this.c_prim(r, false));
+            if (x == VOID) {
+                out.append(fmt("    try {}\n", S(call)).as_str());
+            } else {
+                out.append(fmt2("    let v = try {}\n    out.value = {}\n", S(call), this.swift_to_c(x, "v")).as_str());
+            }
+            out.append("}");
+            match (*this.c.t.get(e)) {
+                .ENUM(id) => { out.append(fmt(" catch let e as {} {{\n    out.error = e.rawValue\n}", this.local(this.c.ei(id).name)).as_str()); },
+                default => {
+                    for (et&) in this.codes.items() {
+                        match (*this.c.t.get(*et)) {
+                            .ENUM(id) => { out.append(fmt(" catch let e as {} {{\n    out.error = e.rawValue\n}", this.local(this.c.ei(id).name)).as_str()); },
+                            default => {},
+                        }
+                    }
+                    out.append(" catch let e as VoltError {\n    out.error = e.code\n}");
+                },
+            }
+            out.append(fmt(" catch {\n    voltKeep(error)\n    out.error = {}\n}\nreturn out\n", this.swift_first_code(e)).as_str());
+            return out;
+        },
+        default => {},
+    }
+    val v = this.swift_to_c(r, "v");
+    if (v.as_str() == "v") {
+        return fmt("return {}\n", S(call));
+    }
+    return fmt2("let v = {}\nreturn {}\n", S(call), copy v);
+}
+
+// a C function Volt calls (a callback, a trait fn), as a Swift closure: it reaches the Swift value
+// through the box at u (the user pointer, or the object), calls target with ps' Swift values, and
+// gives back r's C form
+attach fn swift_thunk(this: bind&, ps: std::vec<u32>&, r: u32, boxty: str, target: str) -> std::string {
+    var params = S("u");
+    var args: std::string = {};
+    var body = fmt("let voltBox = Unmanaged<VoltBox<{}>>.fromOpaque(u!).takeUnretainedValue()\n", S(boxty));
+    for (k) in 0..ps.len {
+        val ak = fmt("a{}", unum(@cast<u64>(k)));
+        params.append(fmt(", {}", copy ak).as_str());
+        if (k > 0) {
+            args.append(", ");
+        }
+        args.append(this.swift_from_c(*ps.at(k), ak.as_str(), k, &body).as_str());
+    }
+    body.append(this.swift_up_ret(r, fmt2("{}({})", S(target), move args).as_str()).as_str());
+    return fmt2("{{ {} in\n{}}", move params, indent_n(body.as_str(), 4));
+}
+
 // statements turning C result r (of type t) into what the wrapper returns (raw: a handle stays a
-// pointer, for an init)
-attach fn swift_result(this: bind&, t: u32, r: str, raw: bool) -> compile_error!std::string {
+// pointer, for an init; cb: as a trait fn gives it, a slice a view of Volt's elements)
+attach fn swift_result(this: bind&, t: u32, r: str, raw: bool, cb: bool) -> std::string {
+    if (cb) {
+        // a handle one of Volt's trait values lends back (valid while that value is: not checked)
+        val h = this.lent_handle(t);
+        if (h) {
+            if (this.nullable_ptr(t)) {
+                return fmt2("return {}.map {{ {}(handle: $0, owned: false) }}\n", S(r), this.swift_cls(h, false));
+            }
+            return fmt2("return {}(handle: {}, owned: false)\n", this.swift_cls(h, false), S(r));
+        }
+    }
     match (this.shape_of(t) ?? shape::VOID) {
         .VOID => { return {}; },
         .CSTR => { return fmt("return {}.map {{ String(cString: $0) }}\n", S(r)); },
@@ -12522,29 +12944,51 @@ attach fn swift_result(this: bind&, t: u32, r: str, raw: bool) -> compile_error!
             if (raw) {
                 return fmt("return {}!\n", S(r));
             }
-            return fmt2("return {}(handle: {})\n", this.local(this.c.si(s).name), S(r));
+            return fmt2("return {}(handle: {})\n", this.swift_cls(s, false), S(r));
         },
         .OPT(x) => {
-            if (!this.simple_value(x)) {
-                return fail(NO_SPAN, fmt("an optional {} can't go to Swift", this.c.ty_name(x)));
+            match (this.shape_of(x) ?? shape::VOID) {
+                .TEXT(y) => { return fmt2("return {}.has ? voltTake({}.value) : nil\n", S(r), S(r)); },
+                .STR => { return fmt2("return {}.has ? voltString({}.value) : nil\n", S(r), S(r)); },
+                .HANDLE(s) => { return fmt2("return {}.map {{ {}(handle: $0) }}\n", S(r), this.swift_cls(s, false)); },
+                default => {},
             }
-            return fmt2("return {}.has ? {} : nil\n", S(r), this.swift_out(x, fmt("{}.value", S(r)).as_str()));
+            if (this.simple_value(x)) {
+                return fmt("return {}\n", this.swift_opt_out(x, r));
+            }
+            return fmt("return {}\n", S(r));
         },
         .SLICE(x) => {
-            if (!this.simple_value(x)) {
-                return fail(NO_SPAN, fmt("a slice of {} can't go to Swift", this.c.ty_name(x)));
+            if (cb) {
+                return fmt2("return UnsafeMutableBufferPointer(start: {}.ptr, count: {}.len)\n", S(r), S(r));
             }
-            return fmt2("return Array(UnsafeBufferPointer(start: {}.ptr, count: {}.len))\n", S(r), S(r));
+            val v = this.swift_item_out(x, false, "$0");
+            if (v.as_str() == "$0") {
+                return fmt2("return Array(UnsafeBufferPointer(start: {}.ptr, count: {}.len))\n", S(r), S(r));
+            }
+            return fmt3("return UnsafeBufferPointer(start: {}.ptr, count: {}.len).map {{ {} }}\n", S(r), S(r), copy v);
+        },
+        .LIST(x) => {
+            // copied (each handle is the caller's), then the list freed
+            val v = this.swift_item_out(this.list_elem(t), true, "$0");
+            var out = fmt2("let v = Array(UnsafeBufferPointer(start: {}.ptr, count: {}.len))\n", S(r), S(r));
+            if (v.as_str() != "$0") {
+                out = fmt3("let v = UnsafeBufferPointer(start: {}.ptr, count: {}.len).map {{ {} }}\n", S(r), S(r), copy v);
+            }
+            out.append(fmt2("{}.drop?({}.owner)\nreturn v\n", S(r), S(r)).as_str());
+            return out;
         },
         .RESULT(e, x) => {
             var out = fmt("if {}.error != 0 {{\n", S(r));
             match (*this.c.t.get(e)) {
-                .ENUM(id) => { out.append(fmt3("    throw voltError({}.error, {}.self)\n}}\n", S(r), this.local(this.c.ei(id).name), S("")).as_str()); },
+                .ENUM(id) => { out.append(fmt2("    throw voltError({}.error, {}.self)\n}}\n", S(r), this.local(this.c.ei(id).name)).as_str()); },
                 default => { out.append(fmt("    throw voltAnyError({}.error)\n}\n", S(r)).as_str()); },
             }
-            out.append((try this.swift_result(x, fmt("{}.value", S(r)).as_str(), raw)).as_str());
+            out.append(this.swift_result(x, fmt("{}.value", S(r)).as_str(), raw, cb).as_str());
             return out;
         },
+        .CLOSURE(i) => { return fmt2("return VoltClosure{}({})\n", unum(@cast<u64>(i)), S(r)); },
+        .TRAIT(i) => { return fmt2("return volt_{}({})\n", this.short(this.trait_of(t)), S(r)); },
         default => { return fmt("return {}\n", this.swift_out(t, r)); },
     }
 }
@@ -12558,22 +13002,25 @@ attach fn swift_doc(this: bind&, f: u32, ind: str) -> std::string {
     return fmt2("{}/// {}\n", S(ind), move d);
 }
 
-// a wrapper: its head (with the parameters from first on spliced in at {}), and its body, which
-// calls the C function inside its parameters' scopes; first == 1: a method (self's handle first)
-attach fn swift_fn(this: bind&, f: u32, first: usize, head: str, raw: bool, ind: str) -> compile_error!std::string {
-    val info = this.c.fi(f);
-    var decls: std::string = {};
-    var passes: std::string = {};
+// a wrapper's body: callee (a C function, or a function Volt gave out) called with first (self's C
+// value, lent for the call, when there is one) then ps (named names, as Swift has them; cb: as a
+// trait fn has them) in their C forms, inside the scopes they need, giving up what the call takes
+// once every argument is ready, and returning its result as Swift's. decls gets the parameters, and
+// throws whether the wrapper throws
+attach fn swift_call(this: bind&, ps: std::vec<u32>&, names: std::vec<std::string>&, cb: bool, callee: str, first: str, ret: u32, raw: bool, decls: std::string&, throws: bool&) -> std::string {
+    var passes = S(first);
     var pre: std::string = {};
     var scopes: std::vec<std::string> = {};
     var inside: std::vec<std::string> = {};
-    if (first == 1) {
-        passes = S("voltHandle()");
+    var gifts: std::string = {};
+    var rethrow = false;
+    if (first.len > 0) {
+        put(&scopes, S("voltLending([self]) {"));
+        put(&inside, {});
     }
-    for (k) in first..info.params.len {
-        val p = info.params.at(k);
+    for (k) in 0..ps.len {
         var a: swift_arg = {};
-        try this.swift_arg_of(p.ty, p.name, &a);
+        this.swift_arg_of(*ps.at(k), names.at(k).as_str(), &a, cb);
         if (decls.len() > 0) {
             decls.append(", ");
         }
@@ -12587,21 +13034,35 @@ attach fn swift_fn(this: bind&, f: u32, first: usize, head: str, raw: bool, ind:
             put(&scopes, copy *a.scopes.at(i));
             put(&inside, copy *a.inside.at(i));
         }
+        if (a.gift.len() > 0) {
+            if (gifts.len() > 0) {
+                gifts.append(", ");
+            }
+            gifts.append(a.gift.as_str());
+        }
+        rethrow = rethrow || a.throws;
     }
-    val throws = this.swift_throws(info.ret);
+    if (rethrow) {
+        // innermost: the call and its result's conversion, then what a Swift function threw
+        put(&scopes, S("voltCatching {"));
+        put(&inside, {});
+    }
+    *throws = rethrow || this.swift_throws(ret);
     var rt = S("return ");
-    if (throws) {
+    if (*throws) {
         rt = S("return try ");
     }
-    // the innermost body: the call, the error check, the result
+    // the innermost body: what the call takes given up, the call, the result
     var inner: std::string = {};
-    if (info.ret == VOID) {
-        inner = fmt2("{}.{}(", this.swift_cmod(), S(info.c_name));
-        inner.append(fmt("{})\n", move passes).as_str());
-    } else {
-        inner = fmt3("let r = {}.{}({})\n", this.swift_cmod(), S(info.c_name), move passes);
-        inner.append((try this.swift_result(info.ret, "r", raw)).as_str());
+    if (gifts.len() > 0) {
+        inner.append(fmt("voltGiving({})\n", move gifts).as_str());
     }
+    if (ret == VOID) {
+        inner.append(fmt2("{}({})\n", S(callee), move passes).as_str());
+    } else {
+        inner.append(fmt2("let r = {}({})\n", S(callee), move passes).as_str());
+    }
+    inner.append(this.swift_result(ret, "r", raw, cb).as_str());
     var k = scopes.len;
     while (k > 0) {
         k -= 1;
@@ -12614,6 +13075,28 @@ attach fn swift_fn(this: bind&, f: u32, first: usize, head: str, raw: bool, ind:
     }
     var body = move pre;
     body.append(inner.as_str());
+    return body;
+}
+
+// a wrapper of export fn f: its head (with the parameters spliced in at {}, and " THROWS" where
+// throws goes), and its body; method: self's handle is the first argument
+attach fn swift_fn(this: bind&, f: u32, method: bool, head: str, raw: bool, ind: str) -> std::string {
+    val info = this.c.fi(f);
+    var ps: std::vec<u32> = {};
+    var names: std::vec<std::string> = {};
+    var first: usize = 0;
+    var self_pass = S("");
+    if (method) {
+        first = 1;
+        self_pass = S("voltRaw");
+    }
+    for (k) in first..info.params.len {
+        put(&ps, info.params.at(k).ty);
+        put(&names, S(info.params.at(k).name));
+    }
+    var decls: std::string = {};
+    var throws = false;
+    val body = this.swift_call(&ps, &names, false, fmt2("{}.{}", this.swift_cmod(), S(info.c_name)).as_str(), self_pass.as_str(), info.ret, raw, &decls, &throws);
     var spec = S("");
     if (throws) {
         spec = S(" throws");
@@ -12630,20 +13113,107 @@ attach fn swift_ret(this: bind&, t: u32) -> std::string {
     match (this.shape_of(t) ?? shape::VOID) {
         .VOID => { return {}; },
         .RESULT(e, x) => { return this.swift_ret(x); },
-        .SLICE(x) => { return fmt(" -> [{}]", this.swift_elem(x)); },
+        .SLICE(x) => {
+            if (this.handle_of(x) != null) {
+                return fmt(" -> [{}]", this.swift_elem(x));
+            }
+            return fmt(" -> [{}]", this.swift_item(x, false));
+        },
         .PTR(x) => { return fmt(" -> {}", this.swift_c(t)); },
-        default => { return fmt(" -> {}", this.swift_ty(t)); },
+        .CLOSURE(i) => { return fmt(" -> VoltClosure{}", unum(@cast<u64>(i))); },
+        .TRAIT(i) => { return fmt(" -> volt_{}", this.short(this.trait_of(t))); },
+        default => { return fmt(" -> {}", this.swift_ty(t, false)); },
     }
 }
 
-attach fn swift_text(this: bind&) -> compile_error!std::string {
+// trait K: a Swift protocol (a class conforming to it is lent or given to Volt), the table Volt calls
+// one through, and volt_T, Volt's own value of it
+attach fn swift_trait(this: bind&, k: u32, out: std::string&) -> void {
+    val t = *this.traits.at(k);
+    val tr = this.short(t);
+    val obj = this.c_named(tr.as_str(), false);
+    var reqs: std::string = {};
+    var table: std::string = {};
+    var calls: std::string = {};
+    for (f&) in this.fns_of(t).items() {
+        var names: std::vec<std::string> = {};
+        for (q) in 0..f.params.len {
+            put(&names, fmt("a{}", unum(@cast<u64>(q))));
+        }
+        var decls: std::string = {};
+        var throws = false;
+        val body = this.swift_call(&f.params, &names, true, fmt("voltObj.vt.pointee.{}", swift_ident(f.name)).as_str(), "voltObj.`self`", f.ret, false, &decls, &throws);
+        var sig = fmt2("func {}({})", swift_member(f.name), move decls);
+        if (throws) {
+            sig.append(" throws");
+        }
+        if (f.ret != VOID) {
+            sig.append(fmt(" -> {}", this.swift_ty(f.ret, true)).as_str());
+        }
+        reqs.append(fmt("    {}\n", copy sig).as_str());
+        calls.append(fmt("\n    public {} {{\n", copy sig).as_str());
+        calls.append(indent_n(body.as_str(), 8).as_str());
+        calls.append("    }\n");
+        if (table.len() > 0) {
+            table.append(",\n");
+        }
+        table.append(fmt2("{}: {}", S(f.name), this.swift_thunk(&f.params, f.ret, fmt("any {}", copy tr).as_str(), fmt("voltBox.f.{}", swift_member(f.name)).as_str())).as_str());
+    }
+    if (table.len() > 0) {
+        table = fmt("\n{}", indent_n(table.as_str(), 8));
+    }
+    var tpl = S("\n/// trait $FULL: conform to it to hand Volt a $TN (lent for a call, or given: kept until Volt\n/// drops it); one Volt gives back is a volt_$TN\npublic protocol $TN: AnyObject {\n@REQS@}\n");
+    tpl.append("\n// the table Volt calls a Swift $TN's methods through\nnonisolated(unsafe) let voltVT_$TN: UnsafeMutablePointer<$OBJ_vt> = {\n    let vt = UnsafeMutablePointer<$OBJ_vt>.allocate(capacity: 1)\n    vt.initialize(to: $OBJ_vt(@TABLE@))\n    return vt\n}()\n");
+    tpl.append("\n// a $TN lent to a Volt call: Volt's own as it is (held by the call), any other through the table\nfunc voltLend_$TN<R>(_ s: any $TN, _ body: ($OBJ) throws -> R) rethrows -> R {\n    if let w = s as? volt_$TN {\n        return try voltLending([w]) {\n            try body($OBJ(vt: w.voltObj.vt, self: w.voltObj.`self`, drop: nil))\n        }\n    }\n");
+    tpl.append("    let box = VoltBox<any $TN>(s)\n    return try withExtendedLifetime(box) {\n        try body($OBJ(vt: voltVT_$TN, self: Unmanaged.passUnretained(box).toOpaque(), drop: nil))\n    }\n}\n");
+    tpl.append("\n// a $TN given to a Volt call (voltGiving has taken Volt's own): any other is kept until Volt drops it\nfunc voltGive_$TN(_ s: any $TN) -> $OBJ {\n    if let w = s as? volt_$TN {\n        return w.voltObj\n    }\n");
+    tpl.append("    return $OBJ(vt: voltVT_$TN, self: Unmanaged.passRetained(VoltBox<any $TN>(s)).toOpaque(), drop: { u in\n        Unmanaged<VoltBox<any $TN>>.fromOpaque(u!).release()\n    })\n}\n");
+    tpl.append("\n/// trait $FULL's value Volt made: it calls Volt's; close() (or deinit) frees it\npublic final class volt_$TN: VoltObject, $TN {\n    let voltObj: $OBJ\n\n    init(_ o: $OBJ) {\n        voltObj = o\n        super.init(owned: true)\n    }\n\n");
+    tpl.append("    deinit {\n        close()\n    }\n\n    override func voltDrop() {\n        voltObj.drop?(voltObj.`self`)\n    }\n@CALLS@}\n");
+    var s = replace_all(tpl.as_str(), "$FULL", this.c.ty_name(t).as_str());
+    s = replace_all(s.as_str(), "$OBJ", obj.as_str());
+    s = replace_all(s.as_str(), "$TN", tr.as_str());
+    s = replace_all(s.as_str(), "@REQS@", reqs.as_str());
+    s = replace_all(s.as_str(), "@TABLE@", table.as_str());
+    s = replace_all(s.as_str(), "@CALLS@", calls.as_str());
+    out.append(s.as_str());
+}
+
+// closure K Volt gives out: a class called as a function (callAsFunction), freed by close() or deinit
+attach fn swift_closure(this: bind&, k: u32, out: std::string&) -> void {
+    val t = *this.closures.at(k);
+    var ps: std::vec<u32> = {};
+    val r = this.fn_parts(t, &ps);
+    var names: std::vec<std::string> = {};
+    for (q) in 0..ps.len {
+        put(&names, fmt("a{}", unum(@cast<u64>(q))));
+    }
+    var decls: std::string = {};
+    var throws = false;
+    val body = this.swift_call(&ps, &names, false, "voltFn.call", "voltFn.`self`", r, false, &decls, &throws);
+    var sig = fmt("public func callAsFunction({})", move decls);
+    if (throws) {
+        sig.append(" throws");
+    }
+    sig.append(this.swift_ret(r).as_str());
+    var tpl = S("\n/// $FULL, given out by Volt: call it as a function; close() (or deinit) frees it\npublic final class VoltClosure$K: VoltObject {\n    let voltFn: $C\n\n    init(_ c: $C) {\n        voltFn = c\n        super.init(owned: true)\n    }\n\n");
+    tpl.append("    deinit {\n        close()\n    }\n\n    override func voltDrop() {\n        voltFn.drop?(voltFn.`self`)\n    }\n\n    @SIG@ {\n@BODY@    }\n}\n");
+    var s = replace_all(tpl.as_str(), "$FULL", this.c.ty_name(t).as_str());
+    s = replace_all(s.as_str(), "$K", unum(@cast<u64>(k)).as_str());
+    s = replace_all(s.as_str(), "$C", this.c_out(t, false).as_str());
+    s = replace_all(s.as_str(), "@SIG@", sig.as_str());
+    s = replace_all(s.as_str(), "@BODY@", indent_n(body.as_str(), 8).as_str());
+    out.append(s.as_str());
+}
+
+attach fn swift_text(this: bind&) -> std::string {
     val ents = this.entries();
     val p = this.pkg;
     val cm = this.swift_cmod();
     var out = fmt("// {}: generated by voltc bindings; the Volt package for Swift. It calls the C functions\n", S(p));
-    out.append(fmt3("// of --lang c's header, imported as module {}: put {}.h in a directory with a module.modulemap\n", copy cm, S(p), S("")).as_str());
-    out.append(fmt3("//   module {} {{ header \"{}.h\" export * }}\n// and build with -I <that directory> -L <the library's> -l", copy cm, S(p), S("")).as_str());
-    out.append(fmt("{}. Errors are thrown as their error set's\n// enum; an export struct is a class (close(), or deinit, frees it).\n", S(p)).as_str());
+    out.append(fmt2("// of --lang c's header, imported as module {}: put {}.h in a directory with a module.modulemap\n", copy cm, S(p)).as_str());
+    out.append(fmt2("//   module {} {{ header \"{}.h\" export * }}\n// and build with -I <that directory> -L <the library's> -l", copy cm, S(p)).as_str());
+    out.append(fmt("{}. Errors are thrown as their error set's\n// enum; an export struct is a class (close(), or deinit, frees it); a trait is a protocol.\n", S(p)).as_str());
     out.append(fmt("import {}\n", copy cm).as_str());
     out.append("\n/// an error code no error set here names\npublic struct VoltError: Error, CustomStringConvertible {\n    public let code: UInt32\n    public var description: String { \"error \\(code)\" }\n}\n");
     out.append("\nfunc voltError<E: RawRepresentable & Error>(_ code: UInt32, _ set: E.Type) -> Error where E.RawValue == UInt32 {\n    return E(rawValue: code) ?? VoltError(code: code)\n}\n");
@@ -12652,13 +13222,27 @@ attach fn swift_text(this: bind&) -> compile_error!std::string {
         out.append(fmt3("    case {}: return {}.{}\n", num(c.code), copy c.set, S(c.name)).as_str());
     }
     out.append("    default: return VoltError(code: code)\n    }\n}\n");
-    out.append("\nfunc voltString(_ s: volt_str) -> String {\n    return String(decoding: UnsafeBufferPointer(start: s.ptr, count: s.len), as: UTF8.self)\n}\n");
+    if (this.uses_str) {
+        out.append("\nfunc voltString(_ s: volt_str) -> String {\n    return String(decoding: UnsafeBufferPointer(start: s.ptr, count: s.len), as: UTF8.self)\n}\n");
+        out.append("\n// text lent to a Volt call: the bytes of xs in one buffer, a str of each, and which are there\nfunc voltWithStrs<R>(_ xs: [String?], _ body: (UnsafeMutableBufferPointer<volt_str>, [Bool]) throws -> R) rethrows -> R {\n    var bytes: [UInt8] = []\n    var ends: [Int] = []\n    for x in xs {\n        bytes.append(contentsOf: (x ?? \"\").utf8)\n        ends.append(bytes.count)\n    }\n");
+        out.append("    return try bytes.withUnsafeBufferPointer { b in\n        var views: [volt_str] = []\n        var at = 0\n        for e in ends {\n            views.append(volt_str(ptr: b.baseAddress.map { $0 + at }, len: e - at))\n            at = e\n        }\n        return try views.withUnsafeMutableBufferPointer { v in\n            try body(v, xs.map { $0 != nil })\n        }\n    }\n}\n");
+    }
     out.append("\nfunc voltWithCString<R>(_ s: String?, _ body: (UnsafePointer<CChar>?) throws -> R) rethrows -> R {\n    guard let s else {\n        return try body(nil)\n    }\n    return try s.withCString(body)\n}\n");
     if (this.texts.len > 0) {
         out.append("\n// owned text: copied into a String, then freed\nfunc voltTake(_ t: volt_text) -> String {\n    let s = String(decoding: UnsafeBufferPointer(start: t.ptr, count: t.len), as: UTF8.self)\n    volt_text_free(t)\n    return s\n}\n");
+        out.append("\n// owned text for Volt (a callback's or a trait fn's result): Volt frees it\nfunc voltGive(_ s: String) -> volt_text {\n    let n = s.utf8.count\n    let p = UnsafeMutablePointer<UInt8>.allocate(capacity: max(n, 1))\n    _ = UnsafeMutableBufferPointer(start: p, count: n).initialize(from: s.utf8)\n    return volt_text(ptr: p, len: n, owner: UnsafeMutableRawPointer(p), drop: { $0?.deallocate() })\n}\n");
     }
-    if (this.closures.len > 0) {
-        out.append("\n// a closure passed for a callback, which the C function finds through its user pointer\nfinal class VoltBox<F> {\n    let f: F\n\n    init(_ f: F) {\n        self.f = f\n    }\n}\n");
+    if (this.closures.len > 0 || this.traits.len > 0) {
+        out.append("\n// what a Swift function Volt called threw that Volt can't take: Volt got a stand-in, and the call it\n// happened in throws it once it's back (one that can't throw drops it)\n// ponytail: one slot for the process; a thread-local if threads call into Volt at once\nnonisolated(unsafe) var voltPending: Error?\n\nfunc voltKeep(_ e: Error) {\n    if voltPending == nil {\n        voltPending = e\n    }\n}\n\n// runs a Volt call whose Swift functions can throw, its result converted (what it owns is Swift's),\n// then throws what they threw that Volt couldn't take; a call this one runs in keeps its own\nfunc voltCatching<R>(_ body: () throws -> R) throws -> R {\n    let outer = voltPending\n    voltPending = nil\n    defer {\n        voltPending = outer\n    }\n    let v: R\n    do {\n        v = try body()\n    } catch {\n        throw voltPending ?? error\n    }\n    if let e = voltPending {\n        throw e\n    }\n    return v\n}\n");
+        out.append("\n// a Swift value Volt calls (a callback, an object for a trait), which the C functions find through\n// their user pointer; and the bytes of the str it gave Volt last, kept until the next or until it goes\nfinal class VoltBox<F> {\n    let f: F\n    var kept: UnsafeMutablePointer<UInt8>?\n\n    init(_ f: F) {\n        self.f = f\n    }\n\n    deinit {\n        kept?.deallocate()\n    }\n\n");
+        out.append("    // s's bytes (and a 0 after them), kept\n    func keep(_ s: String) -> UnsafePointer<UInt8> {\n        kept?.deallocate()\n        let n = s.utf8.count\n        let p = UnsafeMutablePointer<UInt8>.allocate(capacity: n + 1)\n        _ = UnsafeMutableBufferPointer(start: p, count: n).initialize(from: s.utf8)\n        p[n] = 0\n        kept = p\n        return UnsafePointer(p)\n    }\n}\n");
+    }
+    if (this.handles.len > 0 || this.traits.len > 0 || this.closures_out.len > 0) {
+        out.append("\n/// what Volt gives Swift (an export struct's value, a trait's, a closure): close() (or deinit) frees\n/// it. One Volt lends a Swift function is the function's until it returns, and never freed here.\npublic class VoltObject {\n    var voltLive = true\n    let voltOwned: Bool\n    // the Volt calls running now that hold it\n    // ponytail: a plain count; atomics if objects are shared across threads\n    var voltBusy = 0\n\n    init(owned: Bool) {\n        voltOwned = owned\n    }\n\n    // frees Volt's value (each class frees its own)\n    func voltDrop() {}\n\n");
+        out.append("    /// frees it (once: later calls do nothing); not while a Volt call that holds it is running\n    public func close() {\n        precondition(voltBusy == 0, \"\\(type(of: self)) can't be closed: a running Volt call holds it\")\n        if voltLive {\n            voltLive = false\n            if voltOwned {\n                voltDrop()\n            }\n        }\n    }\n}\n");
+        out.append("\n// lends xs (each checked open) to a Volt call: none can be closed or given away until body returns\nfunc voltLending<R>(_ xs: [VoltObject?], _ body: () throws -> R) rethrows -> R {\n    for x in xs {\n        if let x {\n            precondition(x.voltLive, \"\\(type(of: x)) is closed, given away, or was lent to a call that's over\")\n            x.voltBusy += 1\n        }\n    }\n    defer {\n        for x in xs {\n            x?.voltBusy -= 1\n        }\n    }\n    return try body()\n}\n");
+        out.append("\n// gives up what a Volt call takes over, each checked first (open, Swift's, not held by a running call,\n// given once), so nothing is given when one can't be\n// ponytail: the given-twice check is quadratic; a set if calls give thousands\nfunc voltGiving(_ groups: [VoltObject?]...) {\n    let xs = groups.flatMap { $0 }.compactMap { $0 }\n    for (i, x) in xs.enumerated() {\n        precondition(x.voltLive, \"\\(type(of: x)) is closed, given away, or was lent to a call that's over\")\n        precondition(x.voltOwned, \"\\(type(of: x)) is lent by Volt: it isn't Swift's to give\")\n");
+        out.append("        precondition(x.voltBusy == 0, \"\\(type(of: x)) can't be given away: a running Volt call holds it\")\n        precondition(!xs[..<i].contains { $0 === x }, \"\\(type(of: x)) is given twice\")\n    }\n    for x in xs {\n        x.voltLive = false\n    }\n}\n");
     }
     for (et&) in this.codes.items() {
         match (*this.c.t.get(*et)) {
@@ -12685,13 +13269,20 @@ attach fn swift_text(this: bind&) -> compile_error!std::string {
         val info = this.c.si(*s);
         out.append(fmt2("\npublic typealias {} = {}\n", this.local(info.name), this.c_named(info.name, false)).as_str());
     }
+    for (k) in 0..this.traits.len {
+        this.swift_trait(@cast<u32>(k), &out);
+    }
+    for (k) in 0..this.closures.len {
+        if (has_u32(&this.closures_out, @cast<u32>(k))) {
+            this.swift_closure(@cast<u32>(k), &out);
+        }
+    }
     // a class per export struct
     for (s&) in this.handles.items() {
         val cls = this.local(this.c.si(*s).name);
-        out.append(fmt2("\n/// export struct {}; close() (or deinit) frees it\npublic final class {} {{\n    private var voltRaw: OpaquePointer?\n\n", S(this.c.si(*s).name), copy cls).as_str());
-        out.append("    init(handle: OpaquePointer?) {\n        voltRaw = handle\n    }\n\n    deinit {\n        close()\n    }\n\n");
-        out.append(fmt3("    public func close() {{\n        if let h = voltRaw {{\n            {}.{}(h)\n            voltRaw = nil\n        }}\n    }}\n\n", copy cm, this.free_name(*s), S("")).as_str());
-        out.append(fmt("    func voltHandle() -> OpaquePointer {\n        guard let h = voltRaw else {\n            preconditionFailure(\"this {} is closed\")\n        }\n        return h\n    }\n", copy cls).as_str());
+        out.append(fmt2("\n/// export struct {}; close() (or deinit) frees it\npublic final class {}: VoltObject {{\n    let voltRaw: OpaquePointer?\n\n", S(this.c.si(*s).name), copy cls).as_str());
+        out.append("    init(handle: OpaquePointer?, owned: Bool = true) {\n        voltRaw = handle\n        super.init(owned: owned)\n    }\n\n    deinit {\n        close()\n    }\n\n");
+        out.append(fmt2("    override func voltDrop() {{\n        {}.{}(voltRaw)\n    }}\n", copy cm, this.free_name(*s)).as_str());
         for (e&) in ents.items() {
             if (e.free_of != null) {
                 continue;
@@ -12700,39 +13291,36 @@ attach fn swift_text(this: bind&) -> compile_error!std::string {
             val info = this.c.fi(e.f);
             out.append("\n");
             if (this.node_is_method(e.f, *s)) {
-                val head = fmt2("public func {}({{}}) THROWS{} {{", swift_ident(m), this.swift_ret(info.ret));
-                out.append((try this.swift_fn(e.f, 1, head.as_str(), false, "    ")).as_str());
+                val head = fmt2("public func {}({{}}) THROWS{} {{", swift_member(m), this.swift_ret(info.ret));
+                out.append(this.swift_fn(e.f, true, head.as_str(), false, "    ").as_str());
             } else if (m == "new" && this.made_by(e.f, *s)) {
                 // an init: make the handle, then the instance holding it
                 var names: std::string = {};
-                var tr = S("");
-                if (this.swift_throws(info.ret)) {
-                    tr = S("try ");
-                }
-                for (k) in 0..info.params.len {
-                    if (k > 0) {
-                        names.append(", ");
-                    }
-                    names.append(swift_ident(info.params.at(k).name).as_str());
-                }
-                out.append(this.swift_doc(e.f, "    ").as_str());
                 var args: std::string = {};
                 for (k) in 0..info.params.len {
                     if (k > 0) {
+                        names.append(", ");
                         args.append(", ");
                     }
-                    args.append(fmt2("_ {}: {}", swift_ident(info.params.at(k).name), this.swift_ty(info.params.at(k).ty)).as_str());
+                    if (starts_with(this.swift_ty(info.params.at(k).ty, false).as_str(), "inout ")) {
+                        names.push('&');
+                    }
+                    names.append(this.swift_param(info.params.at(k).name).as_str());
+                    args.append(fmt2("_ {}: {}", this.swift_param(info.params.at(k).name), this.swift_ty(info.params.at(k).ty, false)).as_str());
                 }
+                var tr = S("");
                 var spec = S("");
-                if (this.swift_throws(info.ret)) {
+                if (this.swift_fn_throws(e.f)) {
+                    tr = S("try ");
                     spec = S(" throws");
                 }
-                out.append(fmt3("    public convenience init({}){} {{\n        self.init(handle: ", move args, move spec, S("")).as_str());
+                out.append(this.swift_doc(e.f, "    ").as_str());
+                out.append(fmt2("    public convenience init({}){} {{\n        self.init(handle: ", move args, move spec).as_str());
                 out.append(fmt3("{}{}.voltMake({}))\n    }}\n\n", move tr, copy cls, move names).as_str());
-                out.append((try this.swift_fn(e.f, 0, "private static func voltMake({}) THROWS -> OpaquePointer {", true, "    ")).as_str());
+                out.append(this.swift_fn(e.f, false, "private static func voltMake({}) THROWS -> OpaquePointer {", true, "    ").as_str());
             } else {
-                val head = fmt2("public static func {}({{}}) THROWS{} {{", swift_ident(m), this.swift_ret(info.ret));
-                out.append((try this.swift_fn(e.f, 0, head.as_str(), false, "    ")).as_str());
+                val head = fmt2("public static func {}({{}}) THROWS{} {{", swift_member(m), this.swift_ret(info.ret));
+                out.append(this.swift_fn(e.f, false, head.as_str(), false, "    ").as_str());
             }
         }
         out.append("}\n");
@@ -12745,7 +13333,7 @@ attach fn swift_text(this: bind&) -> compile_error!std::string {
         val info = this.c.fi(e.f);
         out.append("\n");
         val head = fmt2("public func {}({{}}) THROWS{} {{", swift_ident(info.c_name), this.swift_ret(info.ret));
-        out.append((try this.swift_fn(e.f, 0, head.as_str(), false, "")).as_str());
+        out.append(this.swift_fn(e.f, false, head.as_str(), false, "").as_str());
     }
     return out;
 }
@@ -14532,7 +15120,7 @@ attach fn rb_text(this: bind&) -> compile_error!std::string {
 // the bindings of package pkg in lang (see the top of the file; node, js and ts are a Node-API
 // addon, its loader and its types; json is the model itself)
 attach fn bindings(this: checker&, pkg: str, lang: str) -> compile_error!std::string {
-    var b: bind = { c: this, pkg: pkg, wide: lang == "c" || lang == "cpp" || lang == "rust" || lang == "zig" || lang == "go" || lang == "python" || lang == "dart" || lang == "pyi" || lang == "java" || lang == "csharp" || lang == "node" || lang == "js" || lang == "ts" || lang == "lua" || lang == "ruby" || lang == "json" };
+    var b: bind = { c: this, pkg: pkg, wide: lang == "c" || lang == "cpp" || lang == "rust" || lang == "zig" || lang == "go" || lang == "python" || lang == "dart" || lang == "pyi" || lang == "java" || lang == "csharp" || lang == "node" || lang == "js" || lang == "ts" || lang == "lua" || lang == "ruby" || lang == "swift" || lang == "json" };
     val fns = b.exports();
     if (fns.len == 0) {
         return fail(NO_SPAN, fmt("package {} has no export fns to make bindings for", S(pkg)));
