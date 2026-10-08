@@ -117,6 +117,7 @@ void lists() {
   // given to Volt: a and b let their handles go
   print('close_all ${close_all(both)}');
   print('some ${count_some([1, null, 3])}');
+  print('rows ${total_rows([[1, 2], [3]])}');
   print('lists closed ${closed_accounts()}');
 }
 

@@ -5756,6 +5756,11 @@ attach fn cs_ty(this: bind&, t: u32) -> std::string {
             if (x == STR || this.handle_of(e) != null) {
                 return fmt("IEnumerable<{}>", this.cs_elem(e));
             }
+            match (this.shape_of(x) ?? shape::VOID) {
+                // a slice of slices: an array of arrays
+                .SLICE(y) => { return fmt("{}[][]", this.cs_raw(y)); },
+                default => {},
+            }
             return fmt("Span<{}>", this.cs_raw(x));
         },
         .LIST(x) => { return fmt("IEnumerable<{}>", this.cs_elem(this.list_elem(t))); },
@@ -5867,6 +5872,23 @@ attach fn cs_arg_of(this: bind&, t: u32, name0: str, a: cs_arg&) -> void {
             a.pass = S(name);
         },
         .SLICE(x) => {
+            match (this.shape_of(x) ?? shape::VOID) {
+                .SLICE(y) => {
+                    // a slice of slices: each inner array pinned for the call (Volt reads and writes it
+                    // in place), their views in an array of their own
+                    val sn = this.made_name("slice", y, true);
+                    a.decl = fmt2("{}[][] {}", this.cs_raw(y), S(name));
+                    a.open = fmt3("var {}_h = new GCHandle[{}.Length];\nvar {}_v = new ", S(name0), S(name), S(name0));
+                    a.open.append(fmt3("{}[{}.Length];\ntry {{\nfor (var i = 0; i < {}.Length; i++)\n{{\n", copy sn, S(name), S(name)).as_str());
+                    a.open.append(fmt3("    {}_h[i] = GCHandle.Alloc({}[i], GCHandleType.Pinned);\n    {}_v[i] = new ", S(name0), S(name), S(name0)).as_str());
+                    a.open.append(fmt4("{} {{ ptr = ({}*){}_h[i].AddrOfPinnedObject(), len = (nuint){}[i].Length }};\n}}\n", copy sn, this.cs_raw(y), S(name0), S(name)).as_str());
+                    a.open.append(fmt3("fixed ({}* {}_p = {}_v) {{\n", copy sn, S(name0), S(name0)).as_str());
+                    a.pass = fmt3("new {} {{ ptr = {}_p, len = (nuint){}_v.Length }}", this.made_name("slice", x, true), S(name0), S(name0));
+                    a.close = fmt("}}\n}}\nfinally {{\n    foreach (var h in {}_h)\n    {{\n        if (h.IsAllocated)\n        {{\n            h.Free();\n        }}\n    }}\n}}\n", S(name0));
+                    return;
+                },
+                default => {},
+            }
             a.decl = fmt2("Span<{}> {}", this.cs_raw(x), S(name));
             a.open = fmt3("fixed ({}* {}_p = {}) {{\n", this.cs_raw(x), S(name0), S(name));
             a.pass = fmt3("new {} {{ ptr = {}_p, len = (nuint){}.Length }}", this.made_name("slice", x, true), S(name0), S(name));
@@ -6922,6 +6944,20 @@ attach fn java_arg_of(this: bind&, t: u32, name: str, a: java_arg&) -> void {
             if (this.java_elems(x, false, name, a)) {
                 return;
             }
+            match (this.shape_of(x) ?? shape::VOID) {
+                .SLICE(y) => {
+                    // a slice of slices: each inner array in a buffer of its own (in the call's arena),
+                    // and what Volt wrote into their elements comes back
+                    a.decl = fmt2("{}[] {}", this.java_ty(x, false), S(name));
+                    a.before = fmt2("MemorySegment {}_e = arena.allocate(16L * Math.max(1, {}.length), 8);\n", S(name), S(name));
+                    this.java_rows(y, name, fmt("{}_e", S(name)).as_str(), 0, &a.before, &a.after);
+                    a.before.append(fmt3("MemorySegment {}_s = arena.allocate(L_SLICE);\n{}_s.set(ADDRESS, 0, {}_e);\n", S(name), S(name), S(name)).as_str());
+                    a.before.append(fmt2("{}_s.set(JAVA_LONG, 8, {}.length);\n", S(name), S(name)).as_str());
+                    a.pass = fmt("{}_s", S(name));
+                    return;
+                },
+                default => {},
+            }
             val z = this.csize(x);
             a.decl = fmt2("{}[] {}", this.java_ty(x, false), S(name));
             a.before = fmt3("MemorySegment {}_e = arena.allocate({}L * Math.max(1, {}.length), ", S(name), unum(z.size), S(name));
@@ -7026,6 +7062,49 @@ attach fn java_elems(this: bind&, x: u32, given: bool, name: str, a: java_arg&) 
         a.after = fmt("java.lang.ref.Reference.reachabilityFence({});\n", S(name));
     }
     return true;
+}
+
+// Java array of arrays src (inner element type y) into e, a buffer of slices ({ptr, len}, 16 bytes
+// each): each inner array copied into a buffer of its own (deeper ones the same way); after: what
+// Volt wrote into the innermost elements, back into the arrays. d tells nested loops apart
+attach fn java_rows(this: bind&, y: u32, src: str, e: str, d: u32, before: std::string&, after: std::string&) -> void {
+    val i = fmt("i{}", unum(@cast<u64>(d)));
+    val r = fmt2("{}_r{}", S(src), unum(@cast<u64>(d)));
+    val b = fmt2("{}_b{}", S(src), unum(@cast<u64>(d)));
+    before.append(fmt5("for (int {} = 0; {} < {}.length; {}++) {{\n    var {} = ", copy i, copy i, S(src), copy i, copy r).as_str());
+    before.append(fmt2("{}[{}];\n", S(src), copy i).as_str());
+    var inner: std::string = {};
+    var back: std::string = {};
+    match (this.shape_of(y) ?? shape::VOID) {
+        .SLICE(z) => {
+            inner = fmt2("MemorySegment {} = arena.allocate(16L * Math.max(1, {}.length), 8);\n", copy b, copy r);
+            // (after the call, this level's buffer again, from its parent's)
+            back = fmt4("var {} = {}.get(ADDRESS, {} * 16L).reinterpret(16L * {}.length);\n", copy b, S(e), copy i, copy r);
+            this.java_rows(z, r.as_str(), b.as_str(), d + 1, &inner, &back);
+        },
+        default => {
+            val zs = this.csize(y);
+            inner = fmt4("MemorySegment {} = arena.allocate({}L * Math.max(1, {}.length), {});\n", copy b, unum(zs.size), copy r, unum(zs.align));
+            var w = this.java_write(y, b.as_str(), 0, fmt("{}[i]", copy r).as_str());
+            w = replace_off(w.as_str(), unum(zs.size).as_str());
+            inner.append(fmt3("for (int i = 0; i < {}.length; i++) {{\n    {}\n}}\n", copy r, move w, S("")).as_str());
+            if (this.java_simple(y)) {
+                var rd = this.java_read(y, fmt("{}_v", copy b).as_str(), 0);
+                rd = replace_off(rd.as_str(), unum(zs.size).as_str());
+                back = fmt5("var {}_v = {}.get(ADDRESS, {} * 16L).reinterpret({}L * {}.length);\n", copy b, S(e), copy i, unum(zs.size), copy r);
+                back.append(fmt3("for (int i = 0; i < {}.length; i++) {{\n    {}[i] = {};\n}}\n", copy r, copy r, move rd).as_str());
+            }
+        },
+    }
+    before.append(indent(inner.as_str()).as_str());
+    before.append(fmt5("    {}.set(ADDRESS, {} * 16L, {});\n    {}.set(JAVA_LONG, {} * 16L + 8, ", S(e), copy i, copy b, S(e), copy i).as_str());
+    before.append(fmt("{}.length);\n}\n", copy r).as_str());
+    if (back.len() > 0) {
+        after.append(fmt5("for (int {} = 0; {} < {}.length; {}++) {{\n    var {} = ", copy i, copy i, S(src), copy i, copy r).as_str());
+        after.append(fmt2("{}[{}];\n", S(src), copy i).as_str());
+        after.append(indent(back.as_str()).as_str());
+        after.append("}\n");
+    }
 }
 
 // array element code uses offset 0 with "i * SIZE" added: replaced here
@@ -8129,6 +8208,18 @@ attach fn go_slice_arg(this: bind&, x: u32, given: bool, name: str, a: go_arg&) 
     }
     a.pass = move pass;
     match (this.shape_of(x) ?? shape::VOID) {
+        .SLICE(y) => {
+            // a slice of slices: each inner slice copied into C memory (Go memory C keeps can't hold
+            // Go pointers), what Volt wrote copied back, then freed
+            val yc = this.go_cty(y);
+            a.before = fmt4("{}_c := make([]C.{}, len({})+1)\nfor i, r := range {} {{\n", copy n, this.made_name("slice", y, false), copy n, copy n);
+            a.before.append(fmt3("    var z {}\n    p := (*{})(C.malloc(C.size_t(len(r)+1) * C.size_t(unsafe.Sizeof(z))))\n    b := unsafe.Slice(p, len(r)+1)\n", copy yc, copy yc, S("")).as_str());
+            a.before.append(fmt("    for j, x := range r {{\n        b[j] = {}\n    }}\n", this.go_to_c(y, "x")).as_str());
+            a.before.append(fmt2("    {}_c[i] = C.{}{{ptr: p, len: C.size_t(len(r))}}\n}}\n", copy n, this.made_name("slice", y, false)).as_str());
+            a.give = fmt2("defer func() {{\n    for i := range {} {{\n        C.free(unsafe.Pointer({}_c[i].ptr))\n    }}\n}}()\n", copy n, copy n);
+            a.after = fmt3("for i, r := range {} {{\n    b := unsafe.Slice({}_c[i].ptr, len(r)+1)\n    for j := range r {{\n        r[j] = {}\n    }}\n}}\n", copy n, copy n, this.go_from_c(y, "b[j]"));
+            return;
+        },
         .OPT(v) => {
             // optionals: a C copy, and what Volt wrote comes back (a value, or nil for none)
             val on = this.made_name("opt", v, false);
@@ -9075,6 +9166,31 @@ attach fn node_elems(this: bind&, elem: u32, given: bool, js: str, c: str, a: no
         a.get.append(fmt("{}_n;", S(c)).as_str());
         a.cleanup = fmt("free({}_buf);", S(c));
         return;
+    }
+    match (this.shape_of(v) ?? shape::VOID) {
+        .SLICE(y) => {
+            if (!this.node_simple(y)) {
+                return fail(NO_SPAN, fmt("{} can't come from JavaScript (a slice of slices of numbers or structs can)", this.c.ty_name(elem)));
+            }
+            // a slice of slices: an array of arrays, each inner one in a buffer of its own (freed after
+            // the call), what Volt wrote coming back
+            val et = this.c_prim(v, false);
+            val yt = this.c_prim(y, false);
+            a.decl = fmt3("{} {}; {} *", copy st, S(c), copy et);
+            a.decl.append(fmt2("{}_buf = NULL; uint32_t {}_n = 0;", S(c), S(c)).as_str());
+            a.get = fmt3("if (!vn_array(env, {}, &{}_n)) { goto fail; } {}_buf = ", S(js), S(c), S(c));
+            a.get.append(fmt3("calloc({}_n ? {}_n : 1, sizeof({}));", S(c), S(c), copy et).as_str());
+            a.get.append(fmt(" if (!{}_buf) {{ vn_throw(env, \"out of memory\"); goto fail; }}", S(c)).as_str());
+            a.get.append(fmt2(" for (uint32_t i = 0; i < {}_n; i++) {{ napi_value e; uint32_t m = 0; napi_get_element(env, {}, i, &e);", S(c), S(js)).as_str());
+            a.get.append(fmt4(" if (!vn_array(env, e, &m)) {{ goto fail; }} {} *p = calloc(m ? m : 1, sizeof({})); if (!p) {{ vn_throw(env, \"out of memory\"); goto fail; }} {}_buf[i].ptr = p; {}_buf[i].len = m;", copy yt, copy yt, S(c), S(c)).as_str());
+            a.get.append(fmt(" for (uint32_t j = 0; j < m; j++) {{ napi_value f; napi_get_element(env, e, j, &f); {} }} }}", this.node_get_simple(y, "f", "p[j]")).as_str());
+            a.get.append(fmt4(" {}.ptr = {}_buf; {}.len = {}_n;", S(c), S(c), S(c), S(c)).as_str());
+            a.cleanup = fmt4("if ({}_buf) {{ for (uint32_t i = 0; i < {}_n; i++) {{ free({}_buf[i].ptr); }} }} free({}_buf);", S(c), S(c), S(c), S(c));
+            a.after = fmt3("for (uint32_t i = 0; i < {}_n; i++) {{ napi_value e; napi_get_element(env, {}, i, &e); for (size_t j = 0; j < {}", S(c), S(js), S(c));
+            a.after.append(fmt2("_buf[i].len; j++) {{ napi_set_element(env, e, (uint32_t)j, {}); }} }}", this.node_put_simple(y, fmt("{}_buf[i].ptr[j]", S(c)).as_str()), S("")).as_str());
+            return;
+        },
+        default => {},
     }
     // values as C holds them
     val et = this.c_prim(v, false);
@@ -11722,7 +11838,36 @@ attach fn dart_elems(this: bind&, e: u32, given: bool, n: str, a: dart_arg&) -> 
     val v = this.view_of(e);
     match (*this.c.t.get(v)) {
         .ARRAY(x, k) => { return fail(NO_SPAN, fmt("a slice of {} can't come from Dart (a Dart List can't hold C arrays)", this.c.ty_name(e))); },
-        .SLICE(x) => { return fail(NO_SPAN, fmt("a slice of {} can't come from Dart (a List of Lists isn't made into slices)", this.c.ty_name(e))); },
+        .SLICE(x) => {
+            if (!this.node_simple(x)) {
+                return fail(NO_SPAN, fmt("a slice of {} can't come from Dart (a slice of slices of numbers or structs can)", this.c.ty_name(e)));
+            }
+            // a slice of slices: each inner List in memory of its own the call holds, what Volt wrote
+            // coming back
+            val sn = this.made_name("slice", x, true);
+            val xn = this.dart_native(x);
+            a.pre = fmt4("final ${}$p = call$.alloc<{}>(sizeOf<{}>() * {}.length);\n", S(n), copy sn, copy sn, S(n));
+            a.pre.append(fmt2("for (var i$ = 0; i$ < {}.length; i$++) {{\n  final r$ = {}[i$];\n", S(n), S(n)).as_str());
+            a.pre.append(fmt2("  final q$ = call$.alloc<{}>(sizeOf<{}>() * r$.length);\n", copy xn, copy xn).as_str());
+            match (this.shape_of(x) ?? shape::VOID) {
+                .STRUCT(st) => { a.pre.append("  for (var j$ = 0; j$ < r$.length; j$++) {\n    (q$ + j$).ref = r$[j$];\n  }\n"); },
+                default => { a.pre.append(fmt("  for (var j$ = 0; j$ < r$.length; j$++) {{\n    q$[j$] = {};\n  }}\n", this.dart_in(x, "r$[j$]")).as_str()); },
+            }
+            a.pre.append(fmt("  (${}$p + i$).ref\n    ..ptr = q$\n    ..len = r$.length;\n}\n", S(n)).as_str());
+            a.pre.append(fmt4("final ${} = Struct.create<{}>()\n  ..ptr = ${}$p\n  ..len = {}.length;\n", S(n), this.made_name("slice", e, true), S(n), S(n)).as_str());
+            if (!given) {
+                // copied back where Volt changed it
+                a.after = fmt2("for (var i$ = 0; i$ < {}.length; i$++) {{\n  final w$ = {}[i$];\n", S(n), S(n));
+                a.after.append(fmt("  final q$ = (${}$p + i$).ref.ptr;\n  for (var j$ = 0; j$ < w$.length; j$++) {{\n", S(n)).as_str());
+                match (this.shape_of(x) ?? shape::VOID) {
+                    .STRUCT(st) => { a.after.append("    w$[j$].copyFrom((q$ + j$).ref);\n  }\n}\n"); },
+                    default => {
+                        a.after.append(fmt("    final b$ = {};\n    if (w$[j$] != b$) {{\n      w$[j$] = b$;\n    }}\n  }}\n}}\n", this.dart_read(x, "q$[j$]")).as_str());
+                    },
+                }
+            }
+            return;
+        },
         default => {},
     }
     val vn = this.dart_native(v);
@@ -12543,6 +12688,12 @@ attach fn swift_item(this: bind&, e: u32, list: bool) -> std::string {
         .STR => { return S("String"); },
         .TEXT(x) => { return S("String"); },
         .HANDLE(s) => { return this.swift_cls(s, false); },
+        // (a slice of slices: an array of arrays)
+        .SLICE(y) => {
+            if (this.node_simple(y)) {
+                return fmt("[{}]", this.swift_item(y, false));
+            }
+        },
         .ENUM(x) => {
             if (list) {
                 return this.swift_ty(e, false);
@@ -12775,6 +12926,23 @@ attach fn swift_str_arg(this: bind&, n: str, name0: str, a: swift_arg&) -> void 
 attach fn swift_elems(this: bind&, e: u32, list: bool, n: str, name0: str, ct: str, a: swift_arg&) -> void {
     val sl = fmt3("{}(ptr: {}_p.baseAddress, len: {}_p.count)", S(ct), S(name0), S(name0));
     var buf = fmt2("{}_v.withUnsafeMutableBufferPointer {{ {}_p in", S(name0), S(name0));
+    match (this.shape_of(this.view_of(e)) ?? shape::VOID) {
+        .SLICE(y) => {
+            if (!list && this.node_simple(y)) {
+                // a slice of slices: each inner array copied into memory of its own for the call, and
+                // what Volt wrote copied back (then freed) as the wrapper returns
+                val yt = this.swift_elem(y);
+                a.pre = fmt4("let {}_b = {}.map {{ r -> UnsafeMutableBufferPointer<{}> in\n    let p = UnsafeMutableBufferPointer<{}>.allocate(capacity: max(r.count, 1))\n", S(name0), S(n), copy yt, copy yt);
+                a.pre.append("    _ = p.initialize(from: r)\n    return p\n}\n");
+                a.pre.append(fmt4("defer {{\n    for (i, p) in {}_b.enumerated() {{\n        {}[i] = Array(p[0..<{}[i].count])\n        p.deallocate()\n    }}\n}}\n", S(name0), S(n), S(n), S("")).as_str());
+                a.pre.append(fmt4("var {}_v = {}_b.enumerated().map {{ {}(ptr: $1.baseAddress, len: {}[$0].count) }}\n", S(name0), S(name0), this.swift_c(this.view_of(e)), S(n)).as_str());
+                this.swift_scope(a, move buf, {});
+                a.pass = copy sl;
+                return;
+            }
+        },
+        default => {},
+    }
     if (this.view_of(e) == STR) {
         this.swift_scope(a, fmt2("voltWithStrs({}) {{ {}_p, _ in", S(n), S(name0)), {});
         a.pass = copy sl;
@@ -14942,6 +15110,35 @@ attach fn rb_slice_arg(this: bind&, t: u32, e: u32, from_list: bool, v: str, c: 
             a.done.append(fmt2(" {}{}_b[i]->busy--; } }", copy each_b, S(c)).as_str());
         }
         return;
+    }
+    match (this.shape_of(ev) ?? shape::VOID) {
+        .SLICE(y) => {
+            // a slice of slices: each inner Array converted once (kept in rows, ours), all their
+            // elements in one buffer, what Volt wrote coming back
+            var u = false;
+            val get1 = this.rb_elem_in(y, "y_", fmt("{}_in[k]", S(c)).as_str(), what, "", &u) ?? return fail(NO_SPAN, fmt("a slice of {} can't come from Ruby", this.c.ty_name(e)));
+            if (u || !this.node_simple(y)) {
+                return fail(NO_SPAN, fmt("a slice of {} can't come from Ruby (a slice of slices of numbers or structs can)", this.c.ty_name(e)));
+            }
+            val yt = this.c_prim(y, false);
+            a.decl.append(fmt3(" VALUE {}_rows, {}_itmp = 0; {} *", S(c), S(c), copy yt).as_str());
+            a.decl.append(fmt2("{}_in; size_t {}_tot = 0;", S(c), S(c)).as_str());
+            a.get.append(fmt2(" {}_rows = rb_ary_new_capa((long){}.len);", S(c), S(c)).as_str());
+            a.get.append(each.as_str());
+            a.get.append(fmt5("VALUE r_ = vr_array(x_, {}); rb_ary_push({}_rows, r_); {}.ptr[i].len = (size_t)RARRAY_LEN(r_); {}_tot += {}.ptr[i].len; }", S(what), S(c), S(c), S(c), S(c)).as_str());
+            a.get.append(fmt4(" {}_in = ALLOCV({}_itmp, sizeof *{}_in * ({}_tot ? ", S(c), S(c), S(c), S(c)).as_str());
+            a.get.append(fmt("{}_tot : 1)); {{ size_t k = 0;", S(c)).as_str());
+            a.get.append(fmt3(" for (size_t i = 0; i < {}.len; i++) {{ VALUE r_ = rb_ary_entry({}_rows, (long)i); {}", S(c), S(c), S(c)).as_str());
+            a.get.append(fmt2(".ptr[i].ptr = {}_in + k; for (size_t j = 0; j < {}.ptr[i].len; j++, k++) {{ VALUE y_ = rb_ary_entry(r_, (long)j); ", S(c), S(c)).as_str());
+            a.get.append(fmt("{} } } }", move get1).as_str());
+            a.done.append(fmt2(" RB_GC_GUARD({}_rows); RB_GC_GUARD({}_itmp);", S(c), S(c)).as_str());
+            if (!from_list) {
+                a.after = fmt3("for (size_t i = 0; i < {}.len; i++) {{ VALUE r_ = rb_ary_entry({}_rows, (long)i); for (size_t j = 0; j < {}", S(c), S(c), S(c));
+                a.after.append(fmt(".ptr[i].len; j++) {{ rb_ary_store(r_, (long)j, {}); }} }}", this.rb_put(y, fmt("{}.ptr[i].ptr[j]", S(c)).as_str())).as_str());
+            }
+            return;
+        },
+        default => {},
     }
     var uses = false;
     val one = this.rb_elem_in(ev, "x_", fmt("{}.ptr[i]", S(c)).as_str(), what, fmt("{}_buf", S(c)).as_str(), &uses) ?? return fail(NO_SPAN, fmt("a slice of {} can't come from Ruby", this.c.ty_name(e)));

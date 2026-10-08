@@ -113,6 +113,7 @@ public class ClientShapes {
         System.out.println("close_if " + c1 + " " + shapelib.close_if(null));
         System.out.println("close_all " + shapelib.close_all(ab));
         System.out.println("some " + shapelib.count_some(new Long[] {1L, null, 3L}));
+        System.out.println("rows " + shapelib.total_rows(new long[][] {{1, 2}, {3}}));
         System.out.println("lists closed " + shapelib.closed_accounts());
     }
 

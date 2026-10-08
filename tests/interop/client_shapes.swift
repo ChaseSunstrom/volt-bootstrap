@@ -82,6 +82,8 @@ func lists() {
     print("close_all", close_all(ab))
     var some: [Int64?] = [1, nil, 3]
     print("some", count_some(&some))
+    var rows: [[Int64]] = [[1, 2], [3]]
+    print("rows", total_rows(&rows))
     print("lists closed", closed_accounts())
 }
 

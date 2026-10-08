@@ -132,6 +132,9 @@ static void lists(void) {
     shapelib_opt_i64 some[] = {{1, true}, {0, false}, {3, true}};
     shapelib_slice_opt_i64 ss = {some, 3};
     printf("some %lld\n", (long long)count_some(ss));
+    int64_t r1[] = {1, 2}, r2[] = {3};
+    shapelib_slice_i64 rr[] = {{r1, 2}, {r2, 1}};
+    printf("rows %lld\n", (long long)total_rows((shapelib_slice_slice_i64){rr, 2}));
     printf("lists closed %d\n", closed_accounts());
 }
 

@@ -46,6 +46,9 @@ static void lists() {
     std::printf("close_all %lld\n", (long long)shapelib::close_all(std::move(ab)));
     std::vector<shapelib::opt_i64> some{{1, true}, {0, false}, {3, true}};
     std::printf("some %lld\n", (long long)shapelib::count_some(some));
+    std::vector<int64_t> r1{1, 2}, r2{3};
+    shapelib::slice_i64 rr[] = {r1, r2};
+    std::printf("rows %lld\n", (long long)shapelib::total_rows(rr));
     std::printf("lists closed %d\n", shapelib::closed_accounts());
 }
 

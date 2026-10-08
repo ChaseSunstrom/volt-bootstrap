@@ -227,6 +227,10 @@ Python's on
   `&mut [T]` (or a `Vec<T>` given) in Rust, from `[]const []const u8` and `[]const T` in Zig, and
   from any sequence in Python. Optional text and handles are `std::optional`, `Option`, `?T` and
   `None` or the value.
+- **Slices of slices.** A `T[..][..]` (of numbers or structs) takes an array of arrays: `long[][]`
+  in Java and C#, `[[T]]` in Swift, `[][]T` in Go, a `List` of arrays (`LongArray`) in Kotlin, a
+  list of lists in Python, Dart, JavaScript and Ruby, a table of tables in Lua, and a slice of slices in C, C++, Rust and Zig; what
+  Volt writes into the elements comes back.
 - **Closures given back.** A fn returning `fn(A) -> R` gives a struct of the function, its data and
   what frees it; in C++ a `std::function`, which frees it with its last copy; in Rust a
   `Box<dyn FnMut(A) -> R>`, which frees it when dropped; in Zig a struct with `call` and

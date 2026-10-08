@@ -304,3 +304,14 @@ export fn fill_some(xs: i64?[..]) -> void {
         xs[i] = (xs[i] ?? 10) * 2;
     }
 }
+
+// a slice of slices
+export fn total_rows(rows: i64[..][..]) -> i64 {
+    var t: i64 = 0;
+    for (r) in rows {
+        for (x) in r {
+            t += x;
+        }
+    }
+    return t;
+}

@@ -71,6 +71,7 @@ def lists
   puts "close_if #{S.close_if(c)} #{S.close_if(nil)}"
   puts "close_all #{S.close_all(both)}"
   puts "some #{S.count_some([1, nil, 3])}"
+  puts "rows #{S.total_rows([[1, 2], [3]])}"
   puts "lists closed #{S.closed_accounts}"
 end
 

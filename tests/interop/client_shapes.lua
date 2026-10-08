@@ -79,6 +79,7 @@ local function lists()
     say("close_if", m.close_if(c), m.close_if(nil))
     say("close_all", m.close_all({ a, b }))
     say("some", m.count_some(table.pack(1, nil, 3)))
+    say("rows", m.total_rows({ { 1, 2 }, { 3 } }))
     say("lists closed", m.closed_accounts())
 end
 

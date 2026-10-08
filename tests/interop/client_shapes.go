@@ -96,6 +96,7 @@ func lists() {
 	fmt.Println("close_all", shapelib.CloseAll(ab))
 	one, three := int64(1), int64(3)
 	fmt.Println("some", shapelib.CountSome([]*int64{&one, nil, &three}))
+	fmt.Println("rows", shapelib.TotalRows([][]int64{{1, 2}, {3}}))
 	fmt.Println("lists closed", shapelib.ClosedAccounts())
 }
 

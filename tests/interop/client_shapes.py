@@ -80,6 +80,7 @@ def lists():
     print("close_if", s.close_if(c), s.close_if(None))
     print("close_all", s.close_all(both))
     print("some", s.count_some([1, None, 3]))
+    print("rows", s.total_rows([[1, 2], [3]]))
     print("lists closed", s.closed_accounts())
 
 

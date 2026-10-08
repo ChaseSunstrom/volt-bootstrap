@@ -62,6 +62,8 @@ fn lists() {
     println!("close_if {} {}", c1, close_if(None));
     println!("close_all {}", close_all(ab));
     println!("some {}", count_some(&mut [VoltOpt::from(Some(1)), VoltOpt::from(None), VoltOpt::from(Some(3))]));
+    let (mut r1, mut r2) = ([1i64, 2], [3i64]);
+    println!("rows {}", total_rows(&mut [VoltSlice::from(&mut r1[..]), VoltSlice::from(&mut r2[..])]));
     println!("lists closed {}", closed_accounts());
 }
 

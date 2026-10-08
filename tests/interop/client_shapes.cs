@@ -183,6 +183,7 @@ static void Lists()
     // given to Volt: a and b let their handles go
     Console.WriteLine($"close_all {Api.close_all(both)}");
     Console.WriteLine($"some {Api.count_some(new opt_i64[] { 1, null, 3 })}");
+    Console.WriteLine($"rows {Api.total_rows(new long[][] { new long[] { 1, 2 }, new long[] { 3 } })}");
     Console.WriteLine($"lists closed {Api.closed_accounts()}");
 }
 

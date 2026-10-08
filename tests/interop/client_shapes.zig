@@ -99,6 +99,10 @@ fn lists() void {
     print("close_all {d}\n", .{s.close_all(&ab)});
     var some = [_]s.VoltOpt(i64){ .from(1), .from(null), .from(3) };
     print("some {d}\n", .{s.count_some(&some)});
+    var r1 = [_]i64{ 1, 2 };
+    var r2 = [_]i64{3};
+    var rr = [_]s.VoltSlice(i64){ s.VoltSlice(i64).from(&r1), s.VoltSlice(i64).from(&r2) };
+    print("rows {d}\n", .{s.total_rows(&rr)});
     print("lists closed {d}\n", .{s.closed_accounts()});
 }
 

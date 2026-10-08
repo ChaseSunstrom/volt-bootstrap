@@ -82,6 +82,7 @@ fun lists() {
     println("close_if ${close_if(c)} ${close_if(null)}")
     println("close_all ${close_all(ab)}")
     println("some ${count_some(listOf(1L, null, 3L))}")
+    println("rows ${total_rows(listOf(longArrayOf(1, 2), longArrayOf(3)))}")
     println("lists closed ${closed_accounts()}")
 }
 
