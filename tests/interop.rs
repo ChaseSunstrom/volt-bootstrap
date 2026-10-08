@@ -381,13 +381,13 @@ const SHAPES_OUT: &str = "biggest 9 1.5\naccount bea 300\nvisit 301 get 301\nclo
 
 #[test]
 fn bindings_shapes() {
-    // what C, C++, Rust, Zig and Java call beyond the plain shapes: a generic's instances, a struct that owns text
+    // what C, C++, Rust, Zig, Java and Lua call beyond the plain shapes: a generic's instances, a struct that owns text
     // held by a handle with its methods, owned values passed in, a trait implemented on either side,
     // closures taking and giving text and handles, closures given back. The library is a leak-checked
     // build, and leak_report.c prints how many of its allocations are live when the client is done
     let e = Env::new("shapes");
     let pkg = "shapelib=shapelib/lib";
-    for (lang, file) in [("c", "shapelib.h"), ("cpp", "shapelib.hpp"), ("rust", "shapelib.rs"), ("zig", "shapelib.zig"), ("java", "shapelib.java")] {
+    for (lang, file) in [("c", "shapelib.h"), ("cpp", "shapelib.hpp"), ("rust", "shapelib.rs"), ("zig", "shapelib.zig"), ("java", "shapelib.java"), ("lua", "shapelib_lua.c")] {
         ok(e.voltc(&["bindings", "shapelib", "--pkg", pkg, "--lang", lang, "-o", &e.path(file)]), &format!("voltc bindings --lang {lang}"));
     }
     // Rust: client_shapes.rs next to its shapelib.rs module, with the leak report as an object
@@ -440,6 +440,18 @@ fn bindings_shapes() {
             }
             None => eprintln!("no JDK 22 or later (javac): skipping the Java shapes client"),
         }
+        // Lua: the C module with the leak report in it (it runs when lua_close unloads the module,
+        // after the finalizers), and client_shapes.lua
+        if let Some(inc) = lua_include() {
+            let ldir = e.dir.join(format!("lua-{backend}"));
+            std::fs::create_dir_all(&ldir).unwrap();
+            ok(run(Command::new("cc").args(["-shared", "-fPIC", "-Wall", "-Wextra", "-Werror", "-I", inc]).arg(e.dir.join("shapelib_lua.c")).args(["leak_report.c", "-I", &e.path(""), "-L", &lib, "-lshapelib", &rpath, "-o"]).arg(ldir.join("shapelib.so"))), "cc shapelib_lua.c");
+            let o = Command::new("lua").arg(Path::new(ROOT).join("tests/interop/client_shapes.lua")).env("LUA_CPATH", ldir.join("?.so")).output().unwrap();
+            assert_eq!(String::from_utf8_lossy(&o.stderr), "volt live: 0\n", "client_shapes.lua ({backend}): the library's allocations at exit");
+            assert_eq!(ok(o, "lua client_shapes.lua"), format!("checked true OVERDRAWN\nlimit true OVERDRAWN\nsign positive not positive\n{SHAPES_OUT}"), "client_shapes.lua ({backend})");
+        } else {
+            eprintln!("lua (5.4 or later, with its headers) isn't installed: skipping the Lua shapes client");
+        }
     }
     // the model has the trait, and how a fn takes its object
     let json = ok(e.voltc(&["bindings", "shapelib", "--pkg", pkg, "--lang", "json"]), "voltc bindings --lang json");
@@ -449,7 +461,7 @@ fn bindings_shapes() {
     // the other languages' bindings say which languages take every shape
     let o = e.voltc(&["bindings", "shapelib", "--pkg", pkg, "--lang", "python"]);
     let err = String::from_utf8_lossy(&o.stderr);
-    assert!(!o.status.success() && err.contains("Zig and Java"), "{err}");
+    assert!(!o.status.success() && err.contains("Java and Lua"), "{err}");
 }
 
 #[test]
