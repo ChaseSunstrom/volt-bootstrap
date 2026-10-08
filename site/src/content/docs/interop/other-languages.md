@@ -316,8 +316,12 @@ print(shapelib.describe(Circle(1)))  # circle of area 3
 
 An override that throws (or panics, in Rust) ends the program: Volt code doesn't unwind C++
 exceptions or Rust panics (Rust 1.81 and later abort when a panic reaches an `extern "C"`
-function). In Python, an exception a callback raises (other than an `E!T`'s error) is printed by
-`ctypes`, which gives Volt zeros for its result.
+function). In Python, an exception a callback or a trait's fn raises (other than an `E!T`'s
+error) comes out of the call that led to it once Volt returns: Volt gets a stand-in meanwhile (an
+error of the set for `E!T`, empty text, zero), and a function that has to give an object (a handle)
+ends the program instead, printing the exception, as a Volt panic does. A `str` a Python callback
+gives back is kept for the program's life (once per value), as Rust's `&'static str` is; give
+`std::string` for text made per call.
 
 Python, JavaScript and TypeScript, C#, Java and Lua have pages of their own, each with both
 directions: [Python](/volt-bootstrap/interop/python/#python-calls-volt),

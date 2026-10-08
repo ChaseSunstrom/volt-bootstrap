@@ -369,6 +369,8 @@ fn bindings_round_trip() {
         // a slice of what crosses converted has no owner as a result; lists aren't in Lua yet
         ("use std::string;\nexport fn bad_view(xs: std::string[..]) -> std::string[..] { return xs; }\n", "c", "which nothing would own"),
         ("export fn bad_list() -> std::vec<i32> { return {}; }\n", "lua", "has no C form"),
+        // a slice a Python function gives back would dangle once it returns
+        ("export fn bad_cb(f: fn(i32) -> i32[..]) -> i32 { return f(1)[0]; }\n", "python", "a Python function can't"),
     ] {
         std::fs::write(bad.join("bad.volt"), src).unwrap();
         let o = e.voltc(&["bindings", "bad", "--pkg", &format!("bad={}", bad.display()), "--lang", lang]);
@@ -425,13 +427,26 @@ fn bindings_shapes() {
         } else {
             eprintln!("zig isn't installed: skipping the Zig shapes client");
         }
-        // Python: client_shapes.py with shapelib.py, printing the library's leak report itself
+        // Python: client_shapes.py with shapelib.py, printing the library's leak report itself (and
+        // after the rest, what only Python checks: callbacks' exceptions, what Volt can't take)
         let py = Command::new("python3").arg(Path::new(ROOT).join("tests/interop/client_shapes.py")).env("PYTHONPATH", e.path("")).env("VOLT_SHAPELIB_LIB", format!("{lib}/libshapelib.so")).output().unwrap();
         assert_eq!(String::from_utf8_lossy(&py.stderr), "volt live: 0\n", "client_shapes.py ({backend}): the library's allocations at exit");
-        assert_eq!(ok(py, "python3 client_shapes.py"), format!("checked true OVERDRAWN\nlimit true OVERDRAWN\nsign positive not positive\n{SHAPES_OUT}"), "client_shapes.py ({backend})");
+        let tail = "raised ValueError ValueError ValueError ValueError\nwrong type TypeError\nrefused ValueError ValueError ValueError\nkept ValueError ann 5\nfatal 101 True\n";
+        assert_eq!(ok(py, "python3 client_shapes.py"), format!("checked true OVERDRAWN\nlimit true OVERDRAWN\nsign positive not positive\n{SHAPES_OUT}{tail}"), "client_shapes.py ({backend})");
     }
     let parse = format!("import ast; ast.parse(open({:?}).read())", e.path("shapelib.pyi"));
     ok(run(Command::new("python3").args(["-c", &parse])), "parse shapelib.pyi");
+    // Python: optional text and nullable handles in slices, from a package of its own (shapelib's
+    // other clients don't call these)
+    let opt = e.dir.join("pyopt");
+    std::fs::create_dir_all(&opt).unwrap();
+    std::fs::write(opt.join("pyopt.volt"), "export struct thing {\n    n: i64;\n}\n\nexport fn thing_new(n: i64) -> thing {\n    return { n: n };\n}\n\nexport fn count_text(xs: str?[..]) -> i64 {\n    var t: i64 = 0;\n    for (x) in xs {\n        val s = x ?? continue;\n        t += @cast<i64>(s.len);\n    }\n    return t;\n}\n\nexport fn sum_things(xs: thing*[..]) -> i64 {\n    var t: i64 = 0;\n    for (x) in xs {\n        if (x != null) {\n            t += x->n;\n        }\n    }\n    return t;\n}\n").unwrap();
+    let opkg = format!("pyopt={}", opt.display());
+    ok(e.voltc(&["bindings", "pyopt", "--pkg", &opkg, "--lang", "python", "-o", &e.path("pyopt.py")]), "voltc bindings pyopt --lang python");
+    ok(e.voltc(&["lib", "pyopt", "--pkg", &opkg, "--shared", "--leak-check", "-o", &e.path("libpyopt.so")]), "voltc lib pyopt --shared");
+    let check = "import ctypes, pyopt as p\nprint(p.count_text(['ab', None, 'c']), p.sum_things([p.thing(2), None, p.thing(5)]))\nprint(ctypes.c_size_t.in_dll(p._lib, 'volt_live_allocs').value)\n";
+    let o = Command::new("python3").args(["-c", check]).env("PYTHONPATH", e.path("")).env("VOLT_PYOPT_LIB", e.path("libpyopt.so")).output().unwrap();
+    assert_eq!(ok(o, "python3 (pyopt)"), "3 7\n0\n", "Python: optionals of text and handles in slices");
     // the model has the trait, and how a fn takes its object
     let json = ok(e.voltc(&["bindings", "shapelib", "--pkg", pkg, "--lang", "json"]), "voltc bindings --lang json");
     for want in [r#"{"kind":"trait","name":"shape","c_name":"shapelib_shape","table":"shapelib_shape_vt""#, r#"{"kind":"object","trait":"shape","owned":false}"#, r#""name":"biggest_i32""#, r#""class":"account","method":"deposit""#] {

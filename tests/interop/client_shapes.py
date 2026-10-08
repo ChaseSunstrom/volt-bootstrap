@@ -3,6 +3,7 @@
 # callbacks taking and giving text, handles and E!T, closures given back as callables, lists,
 # slices of text and handles, and optional text and handles (None)
 import ctypes
+import subprocess
 import sys
 
 import shapelib as s
@@ -123,6 +124,48 @@ def main():
     lists()
 
 
+def raised(f):
+    """the class of what f raises"""
+    try:
+        f()
+    except Exception as e:
+        return type(e).__name__
+    return "nothing"
+
+
+class Broken(s.shape):
+    def area(self):
+        return 1.0
+
+    def name(self):
+        raise ValueError("no name")
+
+    def grow(self, by):
+        pass
+
+
+def boom(*a):
+    raise ValueError("boom")
+
+
+# Python's own (after the rest: it deletes accounts): an exception a callback raises comes out of the
+# call that led to it, once Volt (given a stand-in) returns; what Volt can't take (closed, lent, or
+# given twice) is refused before anything is given; a callback that has to give an object and
+# raises ends the program, saying why
+def python_extras():
+    a = s.account.open("ann")
+    a.deposit(5)
+    print("raised", raised(lambda: s.shout(boom, "hey")), raised(lambda: s.try_twice(boom, 1)), raised(lambda: s.visit(a, boom)), raised(lambda: s.describe(Broken())))
+    print("wrong type", raised(lambda: s.shout(lambda t: 5, "hey")))
+    gone = s.account.open("gone")
+    s.close_account(gone)
+    print("refused", raised(lambda: s.close_account(gone)), raised(lambda: s.visit(a, lambda b: s.close_account(b))), raised(lambda: s.close_all([a, a])))
+    print("kept", raised(lambda: s.close_all([a, gone])), a.owner(), a.get())
+    p = subprocess.run([sys.executable, "-c", "import shapelib\nshapelib.opened_by(lambda owner: 1 // 0)"], capture_output=True, text=True)
+    print("fatal", p.returncode, "ZeroDivisionError" in p.stderr)
+
+
 main()
+python_extras()
 # the library's allocations still live (a --leak-check build counts them): 0 when it freed everything
 print("volt live:", ctypes.c_size_t.in_dll(s._lib, "volt_live_allocs").value, file=sys.stderr)
