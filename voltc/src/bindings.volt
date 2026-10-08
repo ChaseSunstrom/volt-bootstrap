@@ -187,6 +187,18 @@ fn add_u32(v: std::vec<u32>&, x: u32) -> void {
     }
 }
 
+// a slice type to declare: once per name (a slice of lent handles and one of nullable ones are the
+// same C type, thing **)
+attach fn add_slice(this: bind&, v: u32) -> void {
+    val n = this.made_name("slice", v, false);
+    for (x&) in this.slices.items() {
+        if (this.made_name("slice", *x, false) == n) {
+            return;
+        }
+    }
+    put(&this.slices, v);
+}
+
 // is struct s held by a handle in other languages (they never look inside)? An export struct is,
 // and so is one C can't hold by value: one that owns something (has a delete, or a field that does)
 // or has a field without a C form that sits inside a struct (text, an optional, a closure)
@@ -342,7 +354,7 @@ attach fn shape_of(this: bind&, t: u32) -> shape? {
             // text and handles cross as their views (str, the handle's pointer), converted at the edge
             this.elem(elem) ?? return null;
             val v = this.view_of(elem);
-            add_u32(&this.slices, v);
+            this.add_slice(v);
             return shape::SLICE(v);
         },
         .STRUCT(s) => {
@@ -357,7 +369,7 @@ attach fn shape_of(this: bind&, t: u32) -> shape? {
                 val e = this.list_elem(t);
                 this.elem(e) ?? return null;
                 val v = this.view_of(e);
-                add_u32(&this.slices, v);
+                this.add_slice(v);
                 add_u32(&this.lists, t);
                 return shape::LIST(t);
             }
