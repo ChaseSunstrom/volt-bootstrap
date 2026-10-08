@@ -361,14 +361,14 @@ fn bindings_round_trip() {
     // in the other languages, owned values only come out and closures only go in (C and C++ take
     // both: see bindings_shapes)
     for (src, lang, want) in [
-        ("export struct thing { n: i32; }\nexport fn bad_in(t: thing) -> i32 { return t.n; }\n", "python", "only take as a result"),
+        ("export struct thing { n: i32; }\nexport fn bad_in(t: thing) -> i32 { return t.n; }\n", "lua", "only take as a result"),
         ("fn twice(x: i32) -> i32 { return x * 2; }\nexport fn bad_out() -> fn(i32) -> i32 { return twice; }\n", "go", "only take closures as parameters"),
         // the names voltc lib adds itself
         ("export struct thing { n: i32; }\nexport fn thing_new() -> thing { return { n: 1 }; }\nexport fn thing_free(t: thing&) -> void {}\n", "c", "makes thing_free itself"),
         ("namespace __export { fn x() -> void {} }\nexport fn one() -> i32 { return 1; }\n", "c", "namespace __export"),
-        // a slice of what crosses converted has no owner as a result; lists aren't in Python yet
+        // a slice of what crosses converted has no owner as a result; lists aren't in Lua yet
         ("use std::string;\nexport fn bad_view(xs: std::string[..]) -> std::string[..] { return xs; }\n", "c", "which nothing would own"),
-        ("export fn bad_list() -> std::vec<i32> { return {}; }\n", "python", "has no C form"),
+        ("export fn bad_list() -> std::vec<i32> { return {}; }\n", "lua", "has no C form"),
     ] {
         std::fs::write(bad.join("bad.volt"), src).unwrap();
         let o = e.voltc(&["bindings", "bad", "--pkg", &format!("bad={}", bad.display()), "--lang", lang]);
@@ -387,7 +387,7 @@ fn bindings_shapes() {
     // build, and leak_report.c prints how many of its allocations are live when the client is done
     let e = Env::new("shapes");
     let pkg = "shapelib=shapelib/lib";
-    for (lang, file) in [("c", "shapelib.h"), ("cpp", "shapelib.hpp"), ("rust", "shapelib.rs"), ("zig", "shapelib.zig")] {
+    for (lang, file) in [("c", "shapelib.h"), ("cpp", "shapelib.hpp"), ("rust", "shapelib.rs"), ("zig", "shapelib.zig"), ("python", "shapelib.py"), ("pyi", "shapelib.pyi")] {
         ok(e.voltc(&["bindings", "shapelib", "--pkg", pkg, "--lang", lang, "-o", &e.path(file)]), &format!("voltc bindings --lang {lang}"));
     }
     // Rust: client_shapes.rs next to its shapelib.rs module, with the leak report as an object
@@ -425,14 +425,20 @@ fn bindings_shapes() {
         } else {
             eprintln!("zig isn't installed: skipping the Zig shapes client");
         }
+        // Python: client_shapes.py with shapelib.py, printing the library's leak report itself
+        let py = Command::new("python3").arg(Path::new(ROOT).join("tests/interop/client_shapes.py")).env("PYTHONPATH", e.path("")).env("VOLT_SHAPELIB_LIB", format!("{lib}/libshapelib.so")).output().unwrap();
+        assert_eq!(String::from_utf8_lossy(&py.stderr), "volt live: 0\n", "client_shapes.py ({backend}): the library's allocations at exit");
+        assert_eq!(ok(py, "python3 client_shapes.py"), format!("checked true OVERDRAWN\nlimit true OVERDRAWN\nsign positive not positive\n{SHAPES_OUT}"), "client_shapes.py ({backend})");
     }
+    let parse = format!("import ast; ast.parse(open({:?}).read())", e.path("shapelib.pyi"));
+    ok(run(Command::new("python3").args(["-c", &parse])), "parse shapelib.pyi");
     // the model has the trait, and how a fn takes its object
     let json = ok(e.voltc(&["bindings", "shapelib", "--pkg", pkg, "--lang", "json"]), "voltc bindings --lang json");
     for want in [r#"{"kind":"trait","name":"shape","c_name":"shapelib_shape","table":"shapelib_shape_vt""#, r#"{"kind":"object","trait":"shape","owned":false}"#, r#""name":"biggest_i32""#, r#""class":"account","method":"deposit""#] {
         assert!(json.contains(want), "the JSON model lacks {want}:\n{json}");
     }
     // the other languages' bindings say what only C, C++, Rust and Zig take
-    let o = e.voltc(&["bindings", "shapelib", "--pkg", pkg, "--lang", "python"]);
+    let o = e.voltc(&["bindings", "shapelib", "--pkg", pkg, "--lang", "lua"]);
     let err = String::from_utf8_lossy(&o.stderr);
     assert!(!o.status.success() && err.contains("C, C++, Rust and Zig"), "{err}");
 }

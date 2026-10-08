@@ -161,4 +161,8 @@ PYTHONPATH=target/debug/bindings VOLT_GREET_LIB=target/debug/libgreet.so python3
 The module loads `libNAME.so` from `$VOLT_NAME_LIB` (the package's name in capitals), else from
 next to itself. An error set becomes an exception class deriving from the module's `Error`, raised
 with the error's name; slices are lists, optionals are the value or `None`, and a callback is any
-callable.
+callable. The module takes [every shape](/volt-bootstrap/interop/other-languages/#every-shape):
+owned text and objects go in (an object given to Volt is Python's no longer), a Volt trait is a
+class to subclass (any object with its fns passes), a callback can take and give text and objects
+and raise an error set's class for `E!T`, a closure Volt gives back is a callable (`close()` or a
+`with` block frees it, else the garbage collector), and a `std::vec` comes back as a `list`.
