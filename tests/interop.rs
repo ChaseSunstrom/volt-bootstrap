@@ -381,7 +381,7 @@ const SHAPES_OUT: &str = "biggest 9 1.5\naccount bea 300\nvisit 301 get 301\nclo
 
 #[test]
 fn bindings_shapes() {
-    // what C, C++, Rust, Zig and Java call beyond the plain shapes: a generic's instances, a struct that owns text
+    // what C, C++, Rust, Zig, Java and C# call beyond the plain shapes: a generic's instances, a struct that owns text
     // held by a handle with its methods, owned values passed in, a trait implemented on either side,
     // closures taking and giving text and handles, closures given back. The library is a leak-checked
     // build, and leak_report.c prints how many of its allocations are live when the client is done
@@ -440,6 +440,24 @@ fn bindings_shapes() {
             }
             None => eprintln!("no JDK 22 or later (javac): skipping the Java shapes client"),
         }
+        // C#: a console project around the generated shapelib.cs, the leak report on stderr
+        if let Some(dotnet) = local_tool("dotnet", "--version") {
+            ok(e.voltc(&["bindings", "shapelib", "--pkg", pkg, "--lang", "csharp", "-o", &e.path("shapelib.cs")]), "voltc bindings --lang csharp");
+            let v = String::from_utf8_lossy(&Command::new(&dotnet).arg("--version").output().unwrap().stdout).trim().to_string();
+            let major = v.split('.').next().unwrap_or("10").to_string();
+            let proj = e.dir.join(format!("cs-{backend}"));
+            std::fs::create_dir_all(&proj).unwrap();
+            std::fs::copy(e.dir.join("shapelib.cs"), proj.join("shapelib.cs")).unwrap();
+            std::fs::copy(Path::new(ROOT).join("tests/interop/client_shapes.cs"), proj.join("client_shapes.cs")).unwrap();
+            std::fs::write(proj.join("Client.csproj"), format!("<Project Sdk=\"Microsoft.NET.Sdk\">\n  <PropertyGroup>\n    <OutputType>Exe</OutputType>\n    <TargetFramework>net{major}.0</TargetFramework>\n    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>\n    <Nullable>enable</Nullable>\n    <InvariantGlobalization>true</InvariantGlobalization>\n    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>\n  </PropertyGroup>\n</Project>\n")).unwrap();
+            let o = Command::new(&dotnet).args(["run", "--nologo"]).current_dir(&proj).env("LD_LIBRARY_PATH", &lib).env("DOTNET_CLI_TELEMETRY_OPTOUT", "1").env("DOTNET_NOLOGO", "1").env("DOTNET_SKIP_FIRST_TIME_EXPERIENCE", "1").output().unwrap();
+            let err = String::from_utf8_lossy(&o.stderr).to_string();
+            let out = ok(o, "dotnet run client_shapes.cs");
+            assert_eq!(err, "volt live: 0\n", "client_shapes.cs ({backend}): the library's allocations at exit");
+            assert_eq!(out, format!("checked true OVERDRAWN\nlimit true OVERDRAWN\nsign positive not positive\n{SHAPES_OUT}"), "client_shapes.cs ({backend})");
+        } else {
+            eprintln!("dotnet isn't installed: skipping the C# shapes client");
+        }
     }
     // the model has the trait, and how a fn takes its object
     let json = ok(e.voltc(&["bindings", "shapelib", "--pkg", pkg, "--lang", "json"]), "voltc bindings --lang json");
@@ -449,7 +467,7 @@ fn bindings_shapes() {
     // the other languages' bindings say which languages take every shape
     let o = e.voltc(&["bindings", "shapelib", "--pkg", pkg, "--lang", "python"]);
     let err = String::from_utf8_lossy(&o.stderr);
-    assert!(!o.status.success() && err.contains("Zig and Java"), "{err}");
+    assert!(!o.status.success() && err.contains("Java and C#"), "{err}");
 }
 
 #[test]
