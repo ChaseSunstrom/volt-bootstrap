@@ -53,9 +53,13 @@ code that has no Cargo project around it.
 | `&str`, `String` | `str` in, `std::string` out (a copy) |
 | `&[T]`, `&mut [T]`, `Vec<T>` | `T[..]` in, `std::vec<T>` out; `&[&str]`, `Vec<String>`: `str[..]`, `std::vec<std::string>` |
 | `Option<T>` | `T?` |
-| `Result<T, E>` | `rust_error!T`; the `Err`'s `to_string()` is in `rust_error::ERROR` |
+| `Result<T, E>` with `E` one of the crate's enums (directly or through an alias like `type Result<T> = ...`) | `E!T`: a Volt error set of `E`'s variants, each with its fields (numbers, `char` as `u32`, text as `std::string`; a variant holding anything else carries the error's text), matched like an enum; named `E_error` when `E` is a value elsewhere too |
+| any other `Result<T, E>` | `rust_error!T`; the `Err`'s text (`Display`, else `Debug`) is in `rust_error::ERROR` |
 | a struct whose fields are all `pub` numbers, `bool`s, `char`s, fieldless enums or such structs | a Volt struct with those fields, passed by value |
-| any other struct, or an enum with data | an owned handle: deleting it drops the Rust value, `copy` clones it (when it's `Clone`); a method taking `self` empties it |
+| any other struct, or an enum with data | an owned handle: deleting it drops the Rust value, `copy` clones it (when it's `Clone`); a method taking `self` (or `self: Box<Self>`, `Rc<Self>`, `Arc<Self>`) empties it, one taking `&Rc<Self>`, `&Arc<Self>`, `Pin<&mut Self>` or `Pin<&Self>` borrows it |
+| a `&mut T`, or a `&T` of a type that isn't `Clone` (an `Option` of one too), as a result | a lent handle: a reference into Rust's value, which deleting doesn't free; giving it away (a by-value call) stops the program. A `Clone` type's `&T` is a clone |
+| `&[T]`, `Vec<T>` of the crate's types, as a result | `std::vec<T>`: of lent handles from a slice, of owned ones from a `Vec`; plain structs and enums copied |
+| `async fn f() -> T`, or a result of `impl Future<Output = T>` | a Volt `async fn f() -> T`: `await` it, or call it to run it to the end; each poll of Rust's future that finds it not done waits up to a millisecond for its waker, then suspends. A crate that depends on tokio has its futures polled in a tokio runtime |
 | a fieldless enum | a Volt enum with the same values |
 | `pub const` of a number, `bool` or `&str`, however it's computed | a `val` of its value |
 | a generic `fn`, method or type (`largest<T: PartialOrd>`, `Stack<T>`) | a generic `fn` or `struct`: each instance the program uses (`geom::largest(xs)`, `geom::Stack<i32>::new()`) is built for it |
@@ -102,11 +106,15 @@ fn main() -> void {
 ```
 
 A trait with an associated type or const, generic parameters, or a supertrait beyond `Send`, `Sync`
-and `Sized` is left out, as are functions returning a reference into Rust-owned data (other than
-text, which is copied), listed in a comment of the generated declarations (`VOLT_SHOW_IMPORT=1
-voltc check main.volt` prints them). A panic stops the program, as it does
-in Rust. cargo builds the shim from the crate's directory, so its `rust-toolchain.toml` and
-dependencies apply.
+and `Sized` is left out, listed in a comment of the generated declarations (`VOLT_SHOW_IMPORT=1
+voltc check main.volt` prints them).
+
+A panic through a function stops the program with Rust's message, as it would in Rust. Every
+function and method also has a `try_` form (`geom::try_at(xs, 9)`, and a closure's `try_call`)
+that returns the panic as `rust_error::PANIC` with its message instead, the way C++'s `try_` forms
+return exceptions; a `Result` function's `try_` form gives its own errors or `PANIC`. A crate
+built with `panic = "abort"` aborts instead, as Rust does. cargo builds the shim from the crate's
+directory, so its `rust-toolchain.toml` and dependencies apply.
 
 ## Volt calls Zig
 

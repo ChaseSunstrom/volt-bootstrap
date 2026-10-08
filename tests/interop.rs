@@ -596,6 +596,24 @@ fn rust_direct() {
         tools(&mut c);
         assert_eq!(ok(c.output().unwrap(), "voltc run traits.volt"), "area 6 larger 6\ngrown 15\ntri of area 15 [T]\na blob of its own [B]\nrust 1 a square of side 1 circle 12\ncircle 12 C\nunion 12\ncanvas 18 tri,blob,square\ndrops 2 squares 2\n", "traits ({backend})");
     }
+    // ownership and errors: every self form, references into Rust's data (lent), an error enum's
+    // variants matched, panics caught (try_ forms, a closure's try_call), async fns awaited
+    for backend in ["c", "llvm"] {
+        let mut c = Command::new(&e.voltc);
+        c.args(["run", "--backend", backend, "ownership.volt"]).current_dir(&dir).env("VOLT_STD", Path::new(ROOT).join("std"));
+        tools(&mut c);
+        assert_eq!(ok(c.output().unwrap(), "voltc run ownership.volt"), "self 5 6 5\nrc 20 arc 300\nrefs 10 2 3 3\nvecs 3 2 2 true\nasync 2 42 9\nasync error BadDigit(121)\nparsed 42\nempty\nbad digit 120\ntoo long 5 > 4\nraw Raw([35, 49])\ntimeout\nrefused busy\nclosed\nconnected 5\npeek 7 -2 drops 0\ncounted drops 1\nonce 119\nclosure PANIC(a FnOnce closure called twice)\ncaught PANIC(index out of bounds: the len is 3 but the index is 5)\n", "ownership ({backend})");
+    }
+    // a panic through a plain call stops the program with Rust's message; a lent handle can't be
+    // given away
+    for (prog, says) in [("panic.volt", "index out of bounds: the len is 2 but the index is 3"), ("lent_move.volt", "geom::Node is lent by Rust")] {
+        let mut c = Command::new(&e.voltc);
+        c.args(["run", prog]).current_dir(&dir).env("VOLT_STD", Path::new(ROOT).join("std"));
+        tools(&mut c);
+        let o = c.output().unwrap();
+        let err = String::from_utf8_lossy(&o.stderr);
+        assert!(o.status.code() == Some(101) && err.contains(says), "{prog}: {:?} {err}", o.status);
+    }
     let mut c = Command::new(&e.voltc);
     c.args(["check", "traits.volt"]).current_dir(&dir).env("VOLT_STD", Path::new(ROOT).join("std")).env("VOLT_SHOW_IMPORT", "1");
     tools(&mut c);

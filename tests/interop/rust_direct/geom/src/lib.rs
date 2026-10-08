@@ -485,3 +485,217 @@ pub fn call_twice<F: Fn(i32) -> i32 + Clone>(f: F) -> i32 {
     let g = f.clone();
     f(1) + g(2)
 }
+
+// every self form: through a Box, an Rc or Arc (given up, or lent as &Rc<Self>), pinned
+pub struct Node {
+    v: i32,
+}
+
+impl Node {
+    pub fn new(v: i32) -> Node {
+        Node { v }
+    }
+    pub fn boxed_value(self: Box<Self>) -> i32 {
+        self.v
+    }
+    pub fn rc_value(self: std::rc::Rc<Self>) -> i32 {
+        self.v * 10
+    }
+    pub fn arc_value(self: std::sync::Arc<Self>) -> i32 {
+        self.v * 100
+    }
+    pub fn peek_rc(self: &std::rc::Rc<Self>) -> i32 {
+        self.v + std::rc::Rc::strong_count(self) as i32
+    }
+    pub fn bump_pinned(self: std::pin::Pin<&mut Self>) {
+        self.get_mut().v += 1;
+    }
+    pub fn read_pinned(self: std::pin::Pin<&Self>) -> i32 {
+        self.v
+    }
+    pub fn value(&self) -> i32 {
+        self.v
+    }
+    pub fn set(&mut self, v: i32) {
+        self.v = v;
+    }
+}
+
+// references into Rust's data: lent handles (a &mut changes the tree's node), a slice of them,
+// and a Vec of owned ones; plain structs and enums copied
+pub struct Tree {
+    nodes: Vec<Node>,
+}
+
+impl Tree {
+    pub fn new(n: i32) -> Tree {
+        Tree { nodes: (1..=n).map(Node::new).collect() }
+    }
+    pub fn first(&self) -> &Node {
+        &self.nodes[0]
+    }
+    pub fn first_mut(&mut self) -> &mut Node {
+        &mut self.nodes[0]
+    }
+    pub fn find(&self, v: i32) -> Option<&Node> {
+        self.nodes.iter().find(|n| n.v == v)
+    }
+    pub fn all(&self) -> &[Node] {
+        &self.nodes
+    }
+    pub fn into_nodes(self) -> Vec<Node> {
+        self.nodes
+    }
+}
+
+pub fn corners() -> Vec<Point> {
+    vec![Point { x: 0.0, y: 0.0 }, Point { x: 1.0, y: 2.0 }]
+}
+
+pub fn palette() -> &'static [Color] {
+    &[Color::Red, Color::Blue]
+}
+
+// a panic: try_at gives it back as rust_error::PANIC; at stops the program with its message
+pub fn at(xs: &[i32], i: usize) -> i32 {
+    xs[i]
+}
+
+// an error enum keeps its variants: Volt matches them (one Volt can't hold, Raw, as its text);
+// Parsed<T> is the crate's alias of Result<T, ParseError>
+#[derive(Debug)]
+pub enum ParseError {
+    Empty,
+    BadDigit(char),
+    TooLong { max: usize, got: usize },
+    Raw(Vec<u8>),
+}
+
+pub type Parsed<T> = std::result::Result<T, ParseError>;
+
+pub fn parse_digits(s: &str) -> Parsed<u32> {
+    if s.is_empty() {
+        return Err(ParseError::Empty);
+    }
+    if s.len() > 4 {
+        return Err(ParseError::TooLong { max: 4, got: s.len() });
+    }
+    if s.starts_with('#') {
+        return Err(ParseError::Raw(s.bytes().collect()));
+    }
+    let mut n = 0;
+    for c in s.chars() {
+        n = n * 10 + c.to_digit(10).ok_or(ParseError::BadDigit(c))?;
+    }
+    Ok(n)
+}
+
+// async fns: futures Volt awaits (pending once; woken by another thread; failing with an enum
+// error; a method's)
+struct YieldOnce(bool);
+
+impl std::future::Future for YieldOnce {
+    type Output = ();
+    fn poll(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<()> {
+        if self.0 {
+            return std::task::Poll::Ready(());
+        }
+        self.0 = true;
+        cx.waker().wake_by_ref();
+        std::task::Poll::Pending
+    }
+}
+
+pub async fn later(x: i32) -> i32 {
+    YieldOnce(false).await;
+    x + 1
+}
+
+struct FromThread(std::sync::Arc<std::sync::Mutex<(Option<i32>, Option<std::task::Waker>)>>);
+
+impl std::future::Future for FromThread {
+    type Output = i32;
+    fn poll(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<i32> {
+        let mut s = self.0.lock().unwrap();
+        match s.0 {
+            Some(v) => std::task::Poll::Ready(v),
+            None => {
+                s.1 = Some(cx.waker().clone());
+                std::task::Poll::Pending
+            }
+        }
+    }
+}
+
+pub async fn from_thread(x: i32) -> i32 {
+    let state = std::sync::Arc::new(std::sync::Mutex::new((None, None::<std::task::Waker>)));
+    let s2 = state.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        let mut s = s2.lock().unwrap();
+        s.0 = Some(x * 2);
+        if let Some(w) = s.1.take() {
+            w.wake();
+        }
+    });
+    FromThread(state).await
+}
+
+pub async fn parse_later(s: &str) -> Parsed<u32> {
+    YieldOnce(false).await;
+    parse_digits(s)
+}
+
+impl Node {
+    pub async fn value_later(&self) -> i32 {
+        YieldOnce(false).await;
+        self.v
+    }
+}
+
+// a value lent through &Rc<Self> to a method that panics is put back, and dropped once (by its
+// handle); a #[non_exhaustive] error enum with a V() variant
+static COUNTED_DROPS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+pub struct Counted {
+    id: i32,
+}
+
+impl Counted {
+    pub fn new(id: i32) -> Counted {
+        Counted { id }
+    }
+    pub fn peek(self: &std::rc::Rc<Self>, fail: bool) -> i32 {
+        if fail {
+            panic!("peek failed");
+        }
+        self.id
+    }
+}
+
+impl Drop for Counted {
+    fn drop(&mut self) {
+        COUNTED_DROPS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+pub fn counted_drops() -> usize {
+    COUNTED_DROPS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum NetError {
+    Timeout,
+    Refused(String),
+    Closed(),
+}
+
+pub fn connect(code: i32) -> Result<i32, NetError> {
+    match code {
+        0 => Err(NetError::Timeout),
+        1 => Err(NetError::Refused("busy".into())),
+        2 => Err(NetError::Closed()),
+        n => Ok(n),
+    }
+}

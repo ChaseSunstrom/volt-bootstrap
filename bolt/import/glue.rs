@@ -55,6 +55,21 @@ pub enum Ty {
     Dyn(String, FnPass),
     /// text a trait's method lends (a str into the other side's memory, never copied)
     StrRef,
+    /// a Result whose error is one of the crate's enums (by name): a Volt error set of its
+    /// variants
+    Fails(Box<Ty>, String),
+    /// an async function's result (a future of it): a Volt async fn
+    Future(Box<Ty>),
+}
+
+/// an enum's variant, with its fields' names (a tuple variant's are 0, 1..) and types
+#[derive(Clone, Debug)]
+pub struct Variant {
+    pub name: String,
+    pub fields: Vec<(String, Option<Ty>)>,
+    /// its fields have names (V { a, b }), or it's a tuple variant (V(a, b), V())
+    pub named: bool,
+    pub tuple: bool,
 }
 
 /// how a closure crosses: by value (impl Fn, a generic F), lent (&dyn Fn, &mut dyn FnMut), or boxed
@@ -101,6 +116,19 @@ pub enum Recv {
     Ref,
     Mut,
     Value,
+    /// self: Box<Self>, Rc<Self>, Arc<Self> (that pointer's path): by value, through it
+    Own(&'static str),
+    /// self: &Rc<Self>, &Arc<Self>: lent, the value in that pointer for the call
+    Shared(&'static str),
+    /// self: Pin<&mut Self> (true) or Pin<&Self>
+    Pin(bool),
+}
+
+impl Recv {
+    /// the value goes into the call (a handle is left empty)
+    pub fn moves(self) -> bool {
+        matches!(self, Recv::Value | Recv::Own(_))
+    }
 }
 
 /// a function or method, its types mapped (None: one Volt can't name)
@@ -164,6 +192,8 @@ pub struct Model {
     pub traits: Vec<TraitDef>,
     /// (type, trait): the types implementing the traits
     pub impls: Vec<(String, String)>,
+    /// each enum's variants, and whether more may come (#[non_exhaustive], hidden ones)
+    pub enums: BTreeMap<String, (Vec<Variant>, bool)>,
     pub left_out: Vec<String>,
 }
 
@@ -200,6 +230,12 @@ pub struct ShimOut {
 
 /// the shim's half, in its language
 pub trait Lang {
+    /// its shim functions catch the language's panics: each returns a status (0 ok, 1 an error
+    /// it returned, 2 a panic) and the error's or the panic's text in e, e_n; each Volt function
+    /// then has a try_ form that returns the panic as an error (PANIC) instead of stopping
+    fn catches(&self) -> bool {
+        false
+    }
     /// "rust", "zig": the shim namespace (rust_shim), the error set (rust_error) and symbols
     fn short(&self) -> &'static str;
     /// "Rust", "Zig": in messages
@@ -221,6 +257,25 @@ pub trait Lang {
     fn type_glue(&self, g: &Gen, ti: &TypeInfo) -> String;
     /// what every shim has: its helpers and the functions freeing what Volt was given
     fn prelude(&self, g: &Gen) -> String;
+    /// a function whose error is one of the crate's enums: as `function` with res, its error's
+    /// variant stored by err_store (`$e` the error)
+    #[allow(clippy::too_many_arguments)]
+    fn function_err(&self, _sym: &str, _params: &[String], _pre: &[String], _call: &str, _post: &[String], _store: Option<&str>, _err_store: &str) -> Option<String> {
+        None
+    }
+    /// an async function's start: SYM(params.., h) makes its future, which runs nothing yet; the
+    /// prelude's poll(h, outs, e, e_n) runs it until it's done (3: not yet; else a status, its
+    /// value stored through outs, the out parameters' addresses in order), future_drop(h) frees
+    /// it. res: its result is a Result (err_store: an enum error's, else its text)
+    #[allow(clippy::too_many_arguments)]
+    fn async_function(&self, _sym: &str, _params: &[String], _pre: &[String], _call: &str, _post: &[String], _outs: &[String], _store: Option<&str>, _res: bool, _err_store: Option<&str>) -> Option<String> {
+        None
+    }
+    /// an enum error's shim side: its out parameters (k, the variant, then each variant's fields
+    /// as `out` gives them, x{variant}_{field}...) and the statement storing `$e` in them
+    fn err_out(&self, _g: &Gen, _e: &str) -> Option<ShimOut> {
+        None
+    }
     /// a closure handed to Volt: the shim functions calling it (SYM_call(h, args.., out)) and
     /// freeing it (SYM_drop(h))
     fn fn_glue(&self, _g: &Gen, _sym: &str, _ps: &[Ty], _r: &Ty, _once: bool) -> Option<String> {
@@ -272,6 +327,8 @@ pub struct Gen<'a> {
     pub types: BTreeMap<String, TypeInfo>,
     /// number types whose slices come back (a free function each), and whether text slices do
     pub vec_elems: BTreeSet<&'static str>,
+    /// named types whose slices or vecs come back (a take helper each)
+    pub elem_types: BTreeSet<String>,
     pub strs: bool,
     errors: bool,
     shim: String,
@@ -292,6 +349,9 @@ pub struct Gen<'a> {
     made_traits: BTreeSet<String>,
     block: Option<String>,
     put_string: bool,
+    /// the enums Volt gets as error sets, and their sets' names (the enum's own, or NAME_error
+    /// when it's a value too)
+    err_sets: BTreeMap<String, String>,
 }
 
 pub fn zero(p: &str) -> &'static str {
@@ -357,7 +417,20 @@ impl<'a> Gen<'a> {
         for n in dup {
             traits.remove(&n);
         }
-        Gen { m, alias: alias.to_string(), lang, types, vec_elems: BTreeSet::new(), strs: false, errors: false, shim: String::new(), ext: String::new(), helpers: String::new(), modules: BTreeMap::new(), left_out: Vec::new(), syms: BTreeSet::new(), sigs: BTreeSet::new(), tramps: Vec::new(), fn_handles: Vec::new(), traits, made_traits: BTreeSet::new(), block: None, put_string: false }
+        // an enum only ever an error is an error set of its name (not a type too)
+        let mut err_sets = BTreeMap::new();
+        for e in fails_of(m) {
+            if !m.enums.contains_key(&e) || !types.contains_key(&e) {
+                continue;
+            }
+            if value_use(m, &e) {
+                err_sets.insert(e.clone(), format!("{e}_error"));
+            } else {
+                types.remove(&e);
+                err_sets.insert(e.clone(), e.clone());
+            }
+        }
+        Gen { m, alias: alias.to_string(), lang, types, vec_elems: BTreeSet::new(), elem_types: BTreeSet::new(), strs: false, errors: false, shim: String::new(), ext: String::new(), helpers: String::new(), modules: BTreeMap::new(), left_out: Vec::new(), syms: BTreeSet::new(), sigs: BTreeSet::new(), tramps: Vec::new(), fn_handles: Vec::new(), traits, made_traits: BTreeSet::new(), block: None, put_string: false, err_sets }
     }
 
     /// the Volt declaration of shim function sym (params: "name: type"): an extern "C" fn, or for
@@ -408,6 +481,12 @@ impl<'a> Gen<'a> {
     fn not_empty(&self, vp: &str, h: &str) -> String {
         let n = self.lang.name();
         format!("if ({h} == null) {{ @panic(\"{vp} is empty: {n} never made it, or it was given to {n} already\"); }}")
+    }
+
+    /// Volt code that stops the program when handle `x` is lent (a move would free what the other
+    /// side owns)
+    fn not_lent(&self, vp: &str, x: &str) -> String {
+        format!("if ({x}.lent) {{ @panic(\"{vp} is lent by {}: it can't be given away\"); }}", self.lang.name())
     }
 
     pub fn info(&self, t: &Ty) -> Option<&TypeInfo> {
@@ -550,8 +629,10 @@ impl<'a> Gen<'a> {
                             p.param = format!("{vn}: {vp}&");
                             p.args.push(format!("{vn}.h"));
                         } else {
-                            // moved: the value goes into the call, the handle is left empty
+                            // moved: the value goes into the call, the handle is left empty (a lent
+                            // one isn't Volt's to give)
                             p.param = format!("var {vn}: {vp}");
+                            p.pre.push(self.not_lent(&vp, &vn));
                             p.pre.extend([format!("val {a} = {vn}.h;"), format!("{vn}.h = null;")]);
                             p.args.push(a.clone());
                         }
@@ -609,6 +690,28 @@ impl<'a> Gen<'a> {
                         ty: format!("std::vec<{x}>"),
                     }
                 }
+                // the other side's values: handles (lent from a slice, owned from a Vec), plain
+                // structs and enums copied
+                Ty::Named(_) => {
+                    let ti = self.info(e)?;
+                    let (vp, mg, kind, name) = (self.volt_path(&ti.def), Self::mangle(&ti.def), ti.kind, ti.def.name.clone());
+                    self.elem_types.insert(name);
+                    let (pt, extra) = match kind {
+                        Kind::Handle => ("void*".to_string(), format!(", {}", matches!(t, Ty::Slice(..)))),
+                        Kind::Plain => (vp.clone(), String::new()),
+                        Kind::Enum => {
+                            self.vec_elems.insert("i64");
+                            ("i64".to_string(), String::new())
+                        }
+                    };
+                    VoltOut {
+                        ext: vec![format!("{o}: {pt}**"), format!("{o}_n: usize*")],
+                        locals: vec![format!("var {o}: {pt}* = null;"), format!("var {o}_n: usize = 0;")],
+                        args: vec![format!("&{o}"), format!("&{o}_n")],
+                        value: format!("{ns}::take_{mg}s({o}, {o}_n{extra})"),
+                        ty: format!("std::vec<{vp}>"),
+                    }
+                }
                 Ty::Str | Ty::String => {
                     self.strs = true;
                     VoltOut {
@@ -622,14 +725,17 @@ impl<'a> Gen<'a> {
                 _ => return None,
             },
             Ty::Named(_) | Ty::Ref(..) => {
-                let named = match t {
-                    Ty::Ref(x, _) => &**x,
-                    x => x,
+                let (named, lent) = match t {
+                    Ty::Ref(x, m) => (&**x, *m || self.info(x).is_some_and(|ti| !ti.def.clone)),
+                    x => (x, false),
                 };
                 let ti = self.info(named)?;
                 let (vp, mg) = (self.volt_path(&ti.def), Self::mangle(&ti.def));
                 match ti.kind {
                     Kind::Plain => VoltOut { ext: vec![format!("{o}: {vp}*")], locals: vec![format!("var {o}: {vp} = {{}};")], args: vec![format!("&{o}")], value: o.to_string(), ty: vp },
+                    // a reference into the other side's value (a &mut, or a & of what can't be
+                    // cloned): a lent handle, never freed by Volt
+                    Kind::Handle if lent => VoltOut { ext: vec![format!("{o}: void**")], locals: vec![format!("var {o}: void* = null;")], args: vec![format!("&{o}")], value: format!("{ns}::lend_{mg}({o})"), ty: vp },
                     Kind::Handle => VoltOut { ext: vec![format!("{o}: void**")], locals: vec![format!("var {o}: void* = null;")], args: vec![format!("&{o}")], value: format!("{ns}::own_{mg}({o})"), ty: vp },
                     Kind::Enum => VoltOut { ext: vec![format!("{o}: i64*")], locals: vec![format!("var {o}: i64 = 0;")], args: vec![format!("&{o}")], value: format!("{ns}::of_{mg}({o})"), ty: vp },
                 }
@@ -711,8 +817,9 @@ impl<'a> Gen<'a> {
                 Kind::Handle => {
                     v.ext.push("a_this: void*".into());
                     v.pre.push(self.not_empty(&vp, "this.h"));
-                    if s.recv == Recv::Value && lang.by_value_moves(ti) {
+                    if s.recv.moves() && lang.by_value_moves(ti) {
                         v.param = format!("var this: {vp}");
+                        v.pre.push(self.not_lent(&vp, "this"));
                         v.pre.extend(["val a_this = this.h;".to_string(), "this.h = null;".to_string()]);
                         v.args.push("a_this".into());
                     } else {
@@ -752,13 +859,28 @@ impl<'a> Gen<'a> {
             return Err(format!("{what} (an overload Volt sees as the same as another)"));
         }
         let mut ret = s.ret.clone().map(|t| self.resolve(t, self_ty)).ok_or(format!("{what} (its return type)"))?;
+        // an async fn: a Volt async fn polling its future
+        let asynk = matches!(ret, Ty::Future(_));
+        if let Ty::Future(x) = ret {
+            if block.is_some() || !lang.catches() {
+                return Err(format!("{what} (it's async)"));
+            }
+            ret = *x;
+        }
         // a trait's method lends its text, as Volt's trait says (str)
         if block.is_some() && ret == Ty::Str {
             ret = Ty::StrRef;
         }
-        let (res, val_ty) = match ret {
-            Ty::Res(x) => (true, *x),
-            x => (false, x),
+        let (res, val_ty, fails) = match ret {
+            Ty::Res(x) => (true, *x, None),
+            Ty::Fails(x, e) if self.err_sets.contains_key(&e) => (true, *x, Some(e)),
+            Ty::Fails(x, _) => (true, *x, None),
+            x => (false, x, None),
+        };
+        // an enum error: its variant and fields come back in outs of their own
+        let fail_outs = match &fails {
+            Some(e) => Some((lang.err_out(self, e).ok_or(format!("{what} (its error type)"))?, self.err_volt(e).ok_or(format!("{what} (its error type)"))?)),
+            None => None,
         };
         let (shim_out, volt_out) = if val_ty == Ty::Unit {
             (None, None)
@@ -776,6 +898,7 @@ impl<'a> Gen<'a> {
         // the shim
         let shims: Vec<&ShimParam> = recv.iter().map(|r| &r.0).chain(params.iter().map(|p| &p.0)).collect();
         let mut sp: Vec<String> = shims.iter().flat_map(|p| p.params.clone()).collect();
+        let sp_in = sp.clone();
         if let Some(o) = &shim_out {
             sp.extend(o.params.clone());
         }
@@ -783,7 +906,20 @@ impl<'a> Gen<'a> {
         let post: Vec<String> = shims.iter().flat_map(|p| p.post.clone()).collect();
         let args: Vec<String> = params.iter().map(|p| p.0.arg.clone()).collect();
         let call = lang.call(self, module, s, self_ty.map(|t| &self.types[t]), recv.as_ref().map(|r| r.0.arg.as_str()), &args);
-        let text = lang.function(&sym, &sp, &pre, &call, &post, shim_out.as_ref().map(|o| o.store.as_str()), res);
+        let text = match &fail_outs {
+            _ if asynk => {
+                let mut outs: Vec<String> = shim_out.iter().flat_map(|o| o.params.clone()).collect();
+                if let Some((so, _)) = &fail_outs {
+                    outs.extend(so.params.clone());
+                }
+                lang.async_function(&sym, &sp_in, &pre, &call, &post, &outs, shim_out.as_ref().map(|o| o.store.as_str()), res, fail_outs.as_ref().map(|(so, _)| so.store.as_str())).ok_or(format!("{what} (it's async)"))?
+            }
+            Some((so, _)) => {
+                sp.extend(so.params.clone());
+                lang.function_err(&sym, &sp, &pre, &call, &post, shim_out.as_ref().map(|o| o.store.as_str()), &so.store).ok_or(format!("{what} (its error type)"))?
+            }
+            None => lang.function(&sym, &sp, &pre, &call, &post, shim_out.as_ref().map(|o| o.store.as_str()), res),
+        };
         self.shim.push_str(&text);
 
         // the Volt extern declaration
@@ -792,28 +928,45 @@ impl<'a> Gen<'a> {
         if let Some(o) = &volt_out {
             ve.extend(o.ext.clone());
         }
-        if res {
+        if let Some((_, eo)) = &fail_outs {
+            ve.extend(eo.ext.clone());
+        }
+        let catches = lang.catches();
+        if asynk {
+            // its start: the inputs, and where its future goes
+            ve = volts.iter().flat_map(|p| p.ext.clone()).collect();
+            ve.push("h: void**".into());
+        } else if res || catches {
             ve.extend(["e: u8**".to_string(), "e_n: usize*".to_string()]);
         }
-        let decl = self.ext_fn(&sym, &ve, if res { "bool" } else { "void" });
+        let decl = self.ext_fn(&sym, &ve, if asynk { "void" } else if catches { "u8" } else if res { "bool" } else { "void" });
         self.ext.push_str(&decl);
 
         // the Volt function
         let vt = volt_out.as_ref().map_or("void".to_string(), |o| o.ty.clone());
         let err = format!("{}::{}_error", self.alias, lang.short());
-        let ret_ty = if res { format!("{err}!{}", if vt.ends_with('?') { format!("({vt})") } else { vt.clone() }) } else { vt.clone() };
+        // the error set its errors are from (an enum error's own)
+        let set = fails.as_ref().map_or(err.clone(), |e| self.err_set_path(e));
+        let ret_ty = if res { format!("{set}!{}", if vt.ends_with('?') { format!("({vt})") } else { vt.clone() }) } else { vt.clone() };
         let vps: Vec<String> = volts.iter().map(|p| p.param.clone()).collect();
         let mut vargs: Vec<String> = volts.iter().flat_map(|p| p.args.clone()).collect();
+        let vargs_in = vargs.clone();
         let mut lines: Vec<String> = volts.iter().flat_map(|p| p.pre.clone()).collect();
         if let Some(o) = &volt_out {
             lines.extend(o.locals.clone());
             vargs.extend(o.args.clone());
         }
-        if res {
+        if let Some((_, eo)) = &fail_outs {
+            lines.extend(eo.locals.clone());
+            vargs.extend(eo.args.clone());
+        }
+        if res || catches {
             lines.extend(["var e: u8* = null;".to_string(), "var e_n: usize = 0;".to_string()]);
             vargs.extend(["&e".to_string(), "&e_n".to_string()]);
         }
         let ext_call = format!("{ns}::{sym}({})", vargs.join(", "));
+        // the try_ form's lines, until they part
+        let mut try_lines = lines.clone();
         let give = |o: &VoltOut| -> Vec<String> {
             if o.ty.ends_with('?') {
                 vec![format!("if (o_has) {{ return {}; }}", o.value), "return null;".into()]
@@ -821,7 +974,53 @@ impl<'a> Gen<'a> {
                 vec![format!("return {};", o.value)]
             }
         };
-        if res {
+        if catches {
+            // the plain form stops at a panic; the try_ form gives it back as PANIC (and the
+            // shim's panic hook keeps quiet about it)
+            self.errors = true;
+            let quiet = self.sym(&["quiet"]);
+            if asynk {
+                // the future made, freed when the frame goes, polled until it's done (suspending
+                // while it isn't), its value stored through the outs' addresses
+                let mut out_args: Vec<String> = volt_out.iter().flat_map(|o| o.args.clone()).collect();
+                if let Some((_, eo)) = &fail_outs {
+                    out_args.extend(eo.args.clone());
+                }
+                let outs = if out_args.is_empty() { "null".to_string() } else { "&outs[0]".to_string() };
+                let mut start_args = vargs_in.clone();
+                start_args.push("&h".to_string());
+                let mut start = vec!["var h: void* = null;".to_string(), format!("{ns}::{sym}({});", start_args.join(", ")), format!("defer {ns}::{}(h);", self.sym(&["future_drop"]))];
+                if !out_args.is_empty() {
+                    let casts: Vec<String> = out_args.iter().map(|a| format!("@cast<void*>({a})")).collect();
+                    start.push(format!("val outs: void*[{}] = {{ {} }};", out_args.len(), casts.join(", ")));
+                }
+                start.push("var st: u8 = 3;".into());
+                let poll = format!("{ns}::{}(h, {outs}, &e, &e_n)", self.sym(&["poll"]));
+                lines.extend(start.clone());
+                lines.push(format!("while (st == 3) {{\n        st = {poll};\n        if (st == 3) {{\n            suspend;\n        }}\n    }}"));
+                try_lines.extend(start);
+                try_lines.push(format!("while (st == 3) {{\n        val quiet = {ns}::{quiet}(true);\n        st = {poll};\n        {ns}::{quiet}(quiet);\n        if (st == 3) {{\n            suspend;\n        }}\n    }}"));
+            } else {
+                lines.push(format!("val st = {ext_call};"));
+                try_lines.push(format!("val quiet = {ns}::{quiet}(true);"));
+                try_lines.push(format!("val st = {ext_call};"));
+                try_lines.push(format!("{ns}::{quiet}(quiet);"));
+            }
+            lines.push(format!("if (st == 2) {{\n        {ns}::panicked(e, e_n);\n    }}"));
+            try_lines.push(format!("if (st == 2) {{\n        return {err}::PANIC({ns}::take(e, e_n));\n    }}"));
+            for ls in [&mut lines, &mut try_lines] {
+                match &fail_outs {
+                    Some((_, eo)) => ls.push(format!("if (st == 1) {{\n{}    }}", eo.value)),
+                    None if res => ls.push(format!("if (st == 1) {{\n        return {err}::ERROR({ns}::take(e, e_n));\n    }}")),
+                    None => {}
+                }
+                match &volt_out {
+                    Some(o) => ls.extend(give(o)),
+                    None if res => ls.push("return;".into()),
+                    None => {}
+                }
+            }
+        } else if res {
             lines.push(format!("if ({ext_call}) {{"));
             match &volt_out {
                 Some(o) => lines.extend(give(o).into_iter().map(|l| format!("    {l}"))),
@@ -852,18 +1051,34 @@ impl<'a> Gen<'a> {
             (None, _) => format!("fn {}({}) -> {ret_ty}", volt_name(&s.name), vps.join(", ")),
         };
         let mut f = String::new();
-        if !s.src.is_empty() {
-            f.push_str(&format!("// {}: {}\n", self.lang.name(), s.src));
-        }
         let tps: Vec<String> = volts.iter().filter_map(|p| p.generic.clone()).collect();
-        if !tps.is_empty() {
-            f.push_str(&format!("<{}>\n", tps.join(", ")));
+        let mut write_fn = |head: &str, lines: &[String], note: &str| {
+            if !f.is_empty() {
+                f.push('\n');
+            }
+            if !s.src.is_empty() {
+                f.push_str(&format!("// {}: {}{note}\n", self.lang.name(), s.src));
+            }
+            if !tps.is_empty() {
+                f.push_str(&format!("<{}>\n", tps.join(", ")));
+            }
+            f.push_str(&format!("{head} {{\n"));
+            for l in lines {
+                f.push_str(&format!("    {l}\n"));
+            }
+            f.push_str("}\n");
+        };
+        let head = if asynk { format!("async {head}") } else { head };
+        write_fn(&head, &lines, "");
+        // try_NAME: a panic as an error (not in an attach block: a trait says its fns)
+        if catches && block.is_none() {
+            let vt_err = if vt.ends_with('?') { format!("({vt})") } else { vt.clone() };
+            let named = head.replacen(&format!("fn {}(", volt_name(&s.name)), &format!("fn try_{}(", s.name), 1);
+            // an enum error's try_ form gives its variants or PANIC: whichever comes (!T)
+            let try_set = if fails.is_some() { String::new() } else { err.clone() };
+            let try_head = format!("{}-> {try_set}!{vt_err}", named.strip_suffix(&format!("-> {ret_ty}")).unwrap_or(&named));
+            write_fn(&try_head, &try_lines, &format!(" (try_{}: a panic is {err}::PANIC)", s.name));
         }
-        f.push_str(&format!("{head} {{\n"));
-        for l in lines {
-            f.push_str(&format!("    {l}\n"));
-        }
-        f.push_str("}\n");
         Ok(f)
     }
 
@@ -905,7 +1120,7 @@ impl<'a> Gen<'a> {
             Kind::Handle => {
                 let drop = self.sym(&[&mg, "drop"]);
                 let n = self.lang.name();
-                let _ = write!(v, "// a {n} {} (owned: deleting it frees it)\nstruct {} {{\n    h: void* = null;\n}}\n\nattach fn delete(this: {vp}&) -> void {{\n    if (this.h != null) {{\n        {ns}::{drop}(this.h);\n        this.h = null;\n    }}\n}}\n", def.name, def.name);
+                let _ = write!(v, "// a {n} {} (owned: deleting it frees it; lent: a reference into {n}'s value, never freed here)\nstruct {} {{\n    h: void* = null;\n    lent: bool = false;\n}}\n\nattach fn delete(this: {vp}&) -> void {{\n    if (this.h != null && !this.lent) {{\n        {ns}::{drop}(this.h);\n    }}\n    this.h = null;\n}}\n", def.name, def.name);
                 let decl = self.ext_fn(&drop, &["h: void*".to_string()], "void");
                 self.ext.push_str(&decl);
                 if def.clone {
@@ -914,7 +1129,7 @@ impl<'a> Gen<'a> {
                     let decl = self.ext_fn(&cl, &["h: void*".to_string()], "void*");
                     self.ext.push_str(&decl);
                 }
-                let _ = write!(self.helpers, "    fn own_{mg}(h: void*) -> {vp} {{\n        return {{ h: h }};\n    }}\n");
+                let _ = write!(self.helpers, "    fn own_{mg}(h: void*) -> {vp} {{\n        return {{ h: h }};\n    }}\n\n    fn lend_{mg}(h: void*) -> {vp} {{\n        return {{ h: h, lent: true }};\n    }}\n");
             }
             Kind::Enum => {
                 let vs = def.variants.clone().unwrap_or_default();
@@ -951,6 +1166,98 @@ impl<'a> Gen<'a> {
             self.put_string = true;
         }
         Some(put)
+    }
+
+    /// an enum error's Volt error set, from anywhere in the import
+    fn err_set_path(&self, e: &str) -> String {
+        let module = self.m.types.iter().find(|t| t.name == e).map_or(Vec::new(), |t| t.module.clone());
+        let mut p = vec![self.alias.clone()];
+        p.extend(module.iter().map(|m| volt_name(m)));
+        p.push(self.err_sets[e].clone());
+        p.join("::")
+    }
+
+    /// a variant field's Volt type in an error set (None: the variant carries the error's text)
+    fn err_field(t: &Option<Ty>) -> Option<String> {
+        Some(match t.as_ref()? {
+            Ty::Prim(x) => x.to_string(),
+            Ty::Char => "u32".into(),
+            Ty::Str | Ty::String => "std::string".into(),
+            _ => return None,
+        })
+    }
+
+    /// an enum error's Volt side: the outs (k, then each variant's fields: x{v}_{f}, or x{v} and
+    /// x{v}_n for a variant carried as text), and in `value`, the lines returning its variant
+    fn err_volt(&self, e: &str) -> Option<VoltOut> {
+        let (vs, open) = self.m.enums.get(e)?;
+        let ns = self.shim_ns();
+        let set = self.err_set_path(e);
+        let mut o = VoltOut { ext: vec!["k: u32*".into()], locals: vec!["var k: u32 = 0;".into()], args: vec!["&k".into()], value: String::new(), ty: set.clone() };
+        for (vi, v) in vs.iter().enumerate() {
+            let mut payload = Vec::new();
+            if v.fields.iter().all(|(_, t)| Self::err_field(t).is_some()) {
+                for (fi, (_, t)) in v.fields.iter().enumerate() {
+                    let x = format!("x{vi}_{fi}");
+                    match t.as_ref()? {
+                        Ty::Str | Ty::String => {
+                            o.ext.extend([format!("{x}: u8**"), format!("{x}_n: usize*")]);
+                            o.locals.extend([format!("var {x}: u8* = null;"), format!("var {x}_n: usize = 0;")]);
+                            o.args.extend([format!("&{x}"), format!("&{x}_n")]);
+                            payload.push(format!("{ns}::take({x}, {x}_n)"));
+                        }
+                        t => {
+                            let vt = Self::err_field(&Some(t.clone()))?;
+                            let init = if let Ty::Prim(p) = t { zero(p) } else { "0" };
+                            o.ext.push(format!("{x}: {vt}*"));
+                            o.locals.push(format!("var {x}: {vt} = {init};"));
+                            o.args.push(format!("&{x}"));
+                            payload.push(x);
+                        }
+                    }
+                }
+            } else {
+                let x = format!("x{vi}");
+                o.ext.extend([format!("{x}: u8**"), format!("{x}_n: usize*")]);
+                o.locals.extend([format!("var {x}: u8* = null;"), format!("var {x}_n: usize = 0;")]);
+                o.args.extend([format!("&{x}"), format!("&{x}_n")]);
+                payload.push(format!("{ns}::take({x}, {x}_n)"));
+            }
+            let val = match payload.len() {
+                0 => format!("{set}::{}", volt_name(&v.name)),
+                1 => format!("{set}::{}({})", volt_name(&v.name), payload[0]),
+                _ => format!("{set}::{}(({}))", volt_name(&v.name), payload.join(", ")),
+            };
+            let _ = writeln!(o.value, "        if (k == {vi}) {{\n            return {val};\n        }}");
+        }
+        // a variant this build of the crate doesn't show: its text
+        if *open {
+            let _ = writeln!(o.value, "        return {set}::Other({ns}::take(e, e_n));");
+        } else {
+            let _ = writeln!(o.value, "        @panic(\"{e}: a variant Volt doesn't know\");");
+        }
+        Some(o)
+    }
+
+    /// an enum error's Volt error set: its variants, with their fields
+    fn err_decl(&self, e: &str) -> Option<String> {
+        let (vs, open) = self.m.enums.get(e)?;
+        let mut d = format!("// {}'s {e}, as an error\nerror {} {{\n", self.lang.name(), self.err_sets[e]);
+        for v in vs {
+            let fs: Option<Vec<String>> = v.fields.iter().map(|(_, t)| Self::err_field(t)).collect();
+            let payload = match fs {
+                Some(fs) if fs.is_empty() => String::new(),
+                Some(fs) if fs.len() == 1 => format!(": {}", fs[0]),
+                Some(fs) => format!(": ({})", fs.join(", ")),
+                None => ": std::string".into(),
+            };
+            let _ = writeln!(d, "    {}{payload},", volt_name(&v.name));
+        }
+        if *open {
+            d.push_str("    // a variant this build of the crate doesn't show, as its text\n    Other: std::string,\n");
+        }
+        d.push_str("}\n");
+        Some(d)
     }
 
     /// a trait's Volt path, from anywhere in the import
@@ -1190,32 +1497,57 @@ impl<'a> Gen<'a> {
             return None;
         }
         let ns = self.shim_ns();
-        let mut body = Vec::new();
+        let catches = self.lang.catches();
+        let mut locals = Vec::new();
+        let mut give = Vec::new();
         let rt = if *r == Ty::String {
             // the closure's String: the shim's bytes, taken
             ext.extend(["o: u8**".to_string(), "o_n: usize*".to_string()]);
             args.extend(["&o".to_string(), "&o_n".to_string()]);
-            body.extend(["var o: u8* = null;".to_string(), "var o_n: usize = 0;".to_string(), format!("{ns}::{sym}_call({});", args.join(", ")), format!("return {ns}::take(o, o_n);")]);
+            locals.extend(["var o: u8* = null;".to_string(), "var o_n: usize = 0;".to_string()]);
+            give.push(format!("return {ns}::take(o, o_n);"));
             "std::string".to_string()
         } else {
             let rt = Self::cb_volt_ty(r)?;
             if rt != "void" {
                 ext.push(format!("o: {rt}*"));
                 args.push("&o".into());
-                body.push(format!("var o: {rt} = {};", match r { Ty::Prim(x) => zero(x), _ => "0" }));
-            }
-            body.push(format!("{ns}::{sym}_call({});", args.join(", ")));
-            if rt != "void" {
-                body.push("return o;".into());
+                locals.push(format!("var o: {rt} = {};", match r { Ty::Prim(x) => zero(x), _ => "0" }));
+                give.push("return o;".into());
             }
             rt
         };
-        let decl = self.ext_fn(&format!("{sym}_call"), &ext, "void");
+        // a panic in the closure: the program stops (call), or it's an error (try_call)
+        let mut body = locals.clone();
+        let mut try_body = Vec::new();
+        if catches {
+            ext.extend(["e: u8**".to_string(), "e_n: usize*".to_string()]);
+            args.extend(["&e".to_string(), "&e_n".to_string()]);
+            body.extend(["var e: u8* = null;".to_string(), "var e_n: usize = 0;".to_string()]);
+            try_body = body.clone();
+            let quiet = self.sym(&["quiet"]);
+            let err = format!("{}::{}_error", self.alias, self.lang.short());
+            body.push(format!("val st = {ns}::{sym}_call({});", args.join(", ")));
+            body.push(format!("if (st == 2) {{\n            {ns}::panicked(e, e_n);\n        }}"));
+            try_body.extend([format!("val quiet = {ns}::{quiet}(true);"), format!("val st = {ns}::{sym}_call({});", args.join(", ")), format!("{ns}::{quiet}(quiet);"), format!("if (st == 2) {{\n            return {err}::PANIC({ns}::take(e, e_n));\n        }}")]);
+            try_body.extend(give.clone());
+            self.errors = true;
+        } else {
+            body.push(format!("{ns}::{sym}_call({});", args.join(", ")));
+        }
+        body.extend(give);
+        let decl = self.ext_fn(&format!("{sym}_call"), &ext, if catches { "u8" } else { "void" });
         self.ext.push_str(&decl);
         let decl = self.ext_fn(&format!("{sym}_drop"), &["h: void*".to_string()], "void");
         self.ext.push_str(&decl);
         let lines: String = body.iter().map(|l| format!("        {l}\n")).collect();
-        let _ = write!(self.helpers, "\n    // a {} closure, {ft}: call(...) calls it; it's freed when it goes\n    struct fn_{k} {{\n        h: void* = null;\n    }}\n\n    attach fn call(this: fn_{k}&, {}) -> {rt} {{\n        if (this.h == null) {{\n            @panic(\"a {} closure called after it was given away\");\n        }}\n{lines}    }}\n\n    attach fn delete(this: fn_{k}&) -> void {{\n        if (this.h != null) {{\n            {ns}::{sym}_drop(this.h);\n            this.h = null;\n        }}\n    }}\n", self.lang.name(), vps.join(", "), self.lang.name());
+        let empty = format!("        if (this.h == null) {{\n            @panic(\"a {} closure called after it was given away\");\n        }}\n", self.lang.name());
+        let _ = write!(self.helpers, "\n    // a {} closure, {ft}: call(...) calls it; it's freed when it goes\n    struct fn_{k} {{\n        h: void* = null;\n    }}\n\n    attach fn call(this: fn_{k}&, {}) -> {rt} {{\n{empty}{lines}    }}\n\n    attach fn delete(this: fn_{k}&) -> void {{\n        if (this.h != null) {{\n            {ns}::{sym}_drop(this.h);\n            this.h = null;\n        }}\n    }}\n", self.lang.name(), vps.join(", "));
+        if catches {
+            let err = format!("{}::{}_error", self.alias, self.lang.short());
+            let try_lines: String = try_body.iter().map(|l| format!("        {l}\n")).collect();
+            let _ = write!(self.helpers, "\n    // call, with a panic as {err}::PANIC\n    attach fn try_call(this: fn_{k}&, {}) -> {err}!{rt} {{\n{empty}{try_lines}    }}\n", vps.join(", "));
+        }
         self.shim.push_str(&glue);
         self.fn_handles.push(ft);
         Some(k)
@@ -1231,8 +1563,8 @@ impl<'a> Gen<'a> {
             let vp = self.volt_path(&self.types.get(t).ok_or_else(unnamed)?.def);
             match s.recv {
                 Recv::None => ps.push(format!("static this: {vp}")),
-                Recv::Value => ps.push(format!("this: {vp}")),
-                Recv::Ref | Recv::Mut => ps.push(format!("this: {vp}&")),
+                Recv::Value | Recv::Own(_) => ps.push(format!("this: {vp}")),
+                _ => ps.push(format!("this: {vp}&")),
             }
         }
         for (n, t) in &s.params {
@@ -1255,6 +1587,14 @@ impl<'a> Gen<'a> {
         }
         f.push_str(&format!("<{}>\n@attributes([@rust_generic(\"{path}\")])\n{kw} {}({}) -> {rt} {{\n", tps.join(", "), volt_name(&s.name), ps.join(", ")));
         f.push_str(&format!("    @panic(\"{}'s instance for these types isn't built\");\n}}\n", path));
+        if self.lang.catches() {
+            // its try_ form (each instance has one)
+            self.errors = true;
+            let err = format!("{}::{}_error", self.alias, self.lang.short());
+            let rt_err = if rt.starts_with(&err) { rt.clone() } else { format!("{err}!{}", if rt.ends_with('?') { format!("({rt})") } else { rt.clone() }) };
+            f.push_str(&format!("\n<{}>\n@attributes([@rust_generic(\"{path}\")])\n{kw} try_{}({}) -> {rt_err} {{\n", tps.join(", "), s.name, ps.join(", ")));
+            f.push_str(&format!("    @panic(\"{}'s instance for these types isn't built\");\n}}\n", path));
+        }
         Ok(f)
     }
 
@@ -1327,6 +1667,12 @@ impl<'a> Gen<'a> {
                 Err(why) => self.left_out.push(why),
             }
         }
+        for e in self.err_sets.keys().cloned().collect::<Vec<_>>() {
+            let module = self.m.types.iter().find(|t| t.name == e).map_or(Vec::new(), |t| t.module.clone());
+            if let Some(d) = self.err_decl(&e) {
+                self.modules.entry(module).or_default().push_str(&format!("\n{d}"));
+            }
+        }
         for (module, name, ty, lit) in self.m.consts.clone() {
             self.modules.entry(module).or_default().push_str(&format!("\nval {}: {ty} = {lit};\n", volt_name(&name)));
         }
@@ -1357,10 +1703,38 @@ impl<'a> Gen<'a> {
             ext.push_str(&self.ext_fn(&f, &["p: ".to_string() + x + "*", "n: usize".to_string()], "void"));
             let _ = write!(helpers, "    fn take_{x}s(p: {x}*, n: usize) -> std::vec<{x}> {{\n        var out: std::vec<{x}> = {{}};\n        if (n == 0) {{\n            return out;\n        }}\n        for (x) in @slice(p, n) {{\n            out.push(x) catch @panic(\"out of memory\");\n        }}\n        {f}(p, n);\n        return out;\n    }}\n");
         }
+        for n in self.elem_types.clone() {
+            let Some(ti) = self.types.get(&n) else { continue };
+            let (vp, mg) = (self.volt_path(&ti.def), Self::mangle(&ti.def));
+            match ti.kind {
+                Kind::Handle => {
+                    let f = free("ptrs");
+                    if !ext.contains(&format!(" {f}(")) {
+                        ext.push_str(&self.ext_fn(&f, &["p: void**".to_string(), "n: usize".to_string()], "void"));
+                    }
+                    let _ = write!(helpers, "    fn take_{mg}s(p: void**, n: usize, lent: bool) -> std::vec<{vp}> {{\n        var out: std::vec<{vp}> = {{}};\n        if (n == 0) {{\n            return out;\n        }}\n        for (x) in @slice(p, n) {{\n            out.push({{ h: x, lent: lent }}) catch @panic(\"out of memory\");\n        }}\n        {f}(p, n);\n        return out;\n    }}\n");
+                }
+                Kind::Plain => {
+                    let f = free(&format!("{mg}s"));
+                    ext.push_str(&self.ext_fn(&f, &[format!("p: {vp}*"), "n: usize".to_string()], "void"));
+                    let _ = write!(helpers, "    fn take_{mg}s(p: {vp}*, n: usize) -> std::vec<{vp}> {{\n        var out: std::vec<{vp}> = {{}};\n        if (n == 0) {{\n            return out;\n        }}\n        for (x) in @slice(p, n) {{\n            out.push(x) catch @panic(\"out of memory\");\n        }}\n        {f}(p, n);\n        return out;\n    }}\n");
+                }
+                Kind::Enum => {
+                    let _ = write!(helpers, "    fn take_{mg}s(p: i64*, n: usize) -> std::vec<{vp}> {{\n        var out: std::vec<{vp}> = {{}};\n        if (n == 0) {{\n            return out;\n        }}\n        for (x) in @slice(p, n) {{\n            out.push(of_{mg}(x)) catch @panic(\"out of memory\");\n        }}\n        {}(p, n);\n        return out;\n    }}\n", free("i64s"));
+                }
+            }
+        }
         if self.strs {
             let f = free("strs");
             ext.push_str(&self.ext_fn(&f, &["p: owned_str*".to_string(), "n: usize".to_string()], "void"));
             let _ = write!(helpers, "    struct owned_str {{\n        p: u8*;\n        n: usize;\n    }}\n\n    fn take_strs(p: owned_str*, n: usize) -> std::vec<std::string> {{\n        var out: std::vec<std::string> = {{}};\n        if (n == 0) {{\n            return out;\n        }}\n        for (x) in @slice(p, n) {{\n            out.push(std::string::from(@cast<str>(@slice(x.p, x.n)))) catch @panic(\"out of memory\");\n        }}\n        {f}(p, n);\n        return out;\n    }}\n");
+        }
+        if self.lang.catches() {
+            let quiet = self.sym(&["quiet"]);
+            ext.push_str(&self.ext_fn(&quiet, &["on: bool".to_string()], "bool"));
+            ext.push_str(&self.ext_fn(&self.sym(&["poll"]), &["h: void*".to_string(), "outs: void**".to_string(), "e: u8**".to_string(), "e_n: usize*".to_string()], "u8"));
+            ext.push_str(&self.ext_fn(&self.sym(&["future_drop"]), &["h: void*".to_string()], "void"));
+            let _ = write!(helpers, "    // stops the program at a {} panic, with its message\n    fn panicked(p: u8*, n: usize) -> void {{\n        val m = take(p, n);\n        @panic(m.as_str());\n    }}\n", self.lang.name());
         }
         helpers.push_str(&self.helpers);
         if let Some(l) = self.lang.loader(&self) {
@@ -1369,7 +1743,8 @@ impl<'a> Gen<'a> {
         let short = self.lang.short();
         let mut volt = format!("// use {short} {{ ... }} as {}: {what}'s public API, called through its shim (written by bolt import)\n\nnamespace {short}_shim {{\n{ext}{}\n{helpers}}}\n", self.alias, self.ext);
         if self.errors {
-            let _ = write!(volt, "\n// a {} error, as its message\nerror {short}_error {{\n    ERROR: std::string,\n}}\n", self.lang.name());
+            let panic = if self.lang.catches() { format!("\n    // a panic, as its message (a try_ form's)\n    PANIC: std::string,") } else { String::new() };
+            let _ = write!(volt, "\n// a {} error, as its message\nerror {short}_error {{\n    ERROR: std::string,{panic}\n}}\n", self.lang.name());
         }
         volt.push_str(&nest(&self.modules));
         if !self.left_out.is_empty() {
@@ -1397,6 +1772,50 @@ mod tests {
         assert_eq!(n("-2.25f64"), Some(("-2.25".into(), true)));
         assert_eq!(n("1 + 2"), None);
     }
+}
+
+/// the enums a function's Result has as its error
+fn fails_of(m: &Model) -> BTreeSet<String> {
+    let mut out = BTreeSet::new();
+    let sigs = m.fns.iter().map(|(_, s)| s).chain(m.methods.values().flatten());
+    for s in sigs {
+        match &s.ret {
+            Some(Ty::Fails(_, e)) => {
+                out.insert(e.clone());
+            }
+            Some(Ty::Future(x)) => {
+                if let Ty::Fails(_, e) = &**x {
+                    out.insert(e.clone());
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+/// whether a type is used as a value (a parameter, a result, a field, its own methods), not
+/// only as an error
+fn value_use(m: &Model, name: &str) -> bool {
+    fn names(t: &Ty, n: &str) -> bool {
+        match t {
+            Ty::Named(x) => x == n,
+            Ty::Opt(x) | Ty::Res(x) | Ty::Vec(x) | Ty::Slice(x, _) | Ty::Ref(x, _) => names(x, n),
+            Ty::Fails(x, _) | Ty::Future(x) => names(x, n),
+            Ty::Fn(ps, r, _, _) => ps.iter().any(|p| names(p, n)) || names(r, n),
+            _ => false,
+        }
+    }
+    if m.methods.get(name).is_some_and(|ms| !ms.is_empty()) {
+        return true;
+    }
+    let sigs = m.fns.iter().map(|(_, s)| s).chain(m.methods.values().flatten()).chain(m.traits.iter().flat_map(|t| t.methods.iter().map(|(s, _)| s)));
+    for s in sigs {
+        if s.params.iter().any(|(_, t)| t.as_ref().is_some_and(|t| names(t, name))) || s.ret.as_ref().is_some_and(|t| names(t, name)) {
+            return true;
+        }
+    }
+    m.types.iter().any(|t| t.fields.iter().flatten().any(|(_, _, ft)| ft.as_ref().is_some_and(|ft| names(ft, name))))
 }
 
 /// the modules' sources as nested namespaces

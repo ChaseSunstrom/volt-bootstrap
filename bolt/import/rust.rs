@@ -16,7 +16,7 @@
 //   a fieldless enum -> a Volt enum; pub const of a number, bool or string -> val; pub mod -> namespace
 // Generics, traits, closures and references returned into Rust-owned data are left out, with a
 // comment in the Volt source (VOLT_SHOW_IMPORT=1 makes voltc print it).
-use super::glue::{number, prim, FnPass, Gen, Kind, Lang, Model, Recv, ShimOut, ShimParam, Sig, Ty, TraitDef, TypeDef, TypeInfo};
+use super::glue::{number, prim, FnPass, Gen, Kind, Lang, Model, Recv, ShimOut, ShimParam, Sig, Ty, TraitDef, TypeDef, TypeInfo, Variant};
 use super::{arg_path, fresh, save, stamp, Made, Req};
 use crate::foreign::{int_value, lex, tok_text, toks_line, Cur, Tok};
 use crate::json::Json;
@@ -76,7 +76,15 @@ pub fn import(r: &Req) -> Result<(), String> {
     // the shim crate (its lib.rs comes from the model): rustdoc documents the crate as its
     // dependency, so nothing is written into the crate (not even a Cargo.lock)
     let shim_dir = r.out.join("shim");
-    crate::build::write_if_changed(&shim_dir.join("Cargo.toml"), &format!("[package]\nname = \"volt_import_{}\"\nversion = \"0.0.0\"\nedition = \"2021\"\npublish = false\n\n[lib]\npath = \"lib.rs\"\n\n[dependencies]\n{pkg} = {{ path = {:?} }}\n\n[workspace]\n", r.alias, krate.display().to_string()))?;
+    // a crate on tokio: the shim polls its futures in a runtime of the same tokio
+    let tokio = std::fs::read_to_string(krate.join("Cargo.toml")).ok().and_then(|t| crate::toml::parse(&t).ok()).is_some_and(|t| {
+        // tokio 1 (a version, or one in its table; a path or git one is taken to be 1 too)
+        let dep = t.get("dependencies").and_then(|d| d.as_table()).and_then(|d| d.get("tokio")).cloned();
+        let version = dep.as_ref().and_then(|v| v.as_str().map(String::from).or_else(|| v.as_table().and_then(|t| t.get("version")).and_then(|v| v.as_str()).map(String::from)));
+        dep.is_some() && version.is_none_or(|v| v.trim_start_matches(['^', '=', '~', ' ']).starts_with('1'))
+    });
+    let tokio_dep = if tokio { "tokio = { version = \"1\", features = [\"rt-multi-thread\"] }\n" } else { "" };
+    crate::build::write_if_changed(&shim_dir.join("Cargo.toml"), &format!("[package]\nname = \"volt_import_{}\"\nversion = \"0.0.0\"\nedition = \"2021\"\npublish = false\n\n[lib]\npath = \"lib.rs\"\n\n[dependencies]\n{pkg} = {{ path = {:?} }}\n{tokio_dep}\n[workspace]\n", r.alias, krate.display().to_string()))?;
     if !shim_dir.join("lib.rs").is_file() {
         crate::build::write_if_changed(&shim_dir.join("lib.rs"), "")?;
     }
@@ -102,7 +110,7 @@ pub fn import(r: &Req) -> Result<(), String> {
             without(&mut model, &gone);
         }
     }
-    let lang = Rust { lib: lib.clone() };
+    let lang = Rust { lib: lib.clone(), tokio };
     // the shim crate, with the instances of generics asked for: its own target directory, cargo run
     // from the crate's (its rust-toolchain.toml); its Volt side, or cargo's errors
     let build = |lines: &[String], skip: &BTreeMap<String, String>| -> Result<(String, String), String> {
@@ -456,6 +464,48 @@ fn rust_ty(t: &Ty, lib: &str, types: &BTreeMap<String, Vec<String>>) -> String {
     }
 }
 
+/// a type with its generics replaced (an alias's parameters by its arguments)
+fn subst_json(t: &Json, m: &BTreeMap<String, Json>) -> Json {
+    match t {
+        Json::Obj(o) => {
+            if let Some(g) = o.get("generic").and_then(Json::str) {
+                if let Some(x) = m.get(g) {
+                    return x.clone();
+                }
+            }
+            Json::Obj(o.iter().map(|(k, v)| (k.clone(), subst_json(v, m))).collect())
+        }
+        Json::Arr(a) => Json::Arr(a.iter().map(|v| subst_json(v, m)).collect()),
+        x => x.clone(),
+    }
+}
+
+/// a receiver through a pointer type: Box<Self>, Rc<Self>, Arc<Self> (lent: &Rc<Self>, &Arc<Self>),
+/// Pin<&mut Self>, Pin<&Self>
+fn self_form(t: &Json, lent: bool) -> Option<Recv> {
+    let p = t.get("resolved_path")?;
+    let arg = p.get("args").and_then(|a| a.get("angle_bracketed")).and_then(|a| a.get("args")).and_then(|a| a.arr().first()).and_then(|a| a.get("type"))?;
+    let is_self = |x: &Json| x.get("generic").and_then(Json::str) == Some("Self");
+    let ptr = match p.get("path").and_then(Json::str)?.rsplit("::").next()? {
+        "Box" => "Box",
+        "Rc" => "::std::rc::Rc",
+        "Arc" => "::std::sync::Arc",
+        "Pin" if !lent => {
+            let r = arg.get("borrowed_ref")?;
+            return is_self(r.get("type")?).then(|| Recv::Pin(r.get("is_mutable").and_then(Json::bool) == Some(true)));
+        }
+        _ => return None,
+    };
+    if !is_self(arg) {
+        return None;
+    }
+    match (lent, ptr) {
+        (false, _) => Some(Recv::Own(ptr)),
+        (true, "Box") => None,
+        (true, _) => Some(Recv::Shared(ptr)),
+    }
+}
+
 /// a closure as Rust holds it for Volt: dyn FnMut(A) -> R (or FnOnce), as Rust names its types
 fn dyn_fn(ps: &[Ty], r: &Ty, once: bool) -> Option<String> {
     let mut a = Vec::new();
@@ -494,6 +544,8 @@ fn substitute(t: &Ty, s: &BTreeMap<String, Ty>) -> Ty {
         Ty::Vec(e) => Ty::Vec(Box::new(substitute(e, s))),
         Ty::Opt(e) => Ty::Opt(Box::new(substitute(e, s))),
         Ty::Res(e) => Ty::Res(Box::new(substitute(e, s))),
+        Ty::Fails(e, x) => Ty::Fails(Box::new(substitute(e, s)), x.clone()),
+        Ty::Future(e) => Ty::Future(Box::new(substitute(e, s))),
         // a closure parameter's type stands for the closure itself
         Ty::Fn(ps, r, p, once) => Ty::Fn(ps.iter().map(|x| substitute(x, s)).collect(), Box::new(substitute(r, s)), *p, *once),
         // &T of text is str and of a Vec a slice, as the reader maps them; of a number it stays a
@@ -661,9 +713,7 @@ impl<'a> Doc<'a> {
     fn sig(&self, it: &Json, f: &Json, name: &str) -> Sig {
         let mut s = Sig { name: name.to_string(), recv: Recv::None, params: Vec::new(), ret: Some(Ty::Unit), skip: None, src: self.src(it, name), generics: Vec::new(), call: None };
         let generics = f.get("generics");
-        if f.get("header").and_then(|h| h.get("is_async")).and_then(Json::bool) == Some(true) {
-            s.skip = Some("it's async");
-        }
+        let is_async = f.get("header").and_then(|h| h.get("is_async")).and_then(Json::bool) == Some(true);
         // type parameters make a generic fn, built per instance a program uses (their bounds are
         // rustc's to check, for each); one bound by Fn, FnMut or FnOnce (inline or in a where
         // clause; impl Fn(..) is one too) is a closure Volt passes; a const parameter, or an impl
@@ -731,10 +781,14 @@ impl<'a> Doc<'a> {
                     (Some("Self"), None) => Recv::Value,
                     (Some("Self"), Some(r)) if r.get("is_mutable").and_then(Json::bool) == Some(true) => Recv::Mut,
                     (Some("Self"), Some(_)) => Recv::Ref,
-                    _ => {
-                        s.skip = Some("its self parameter");
-                        Recv::None
-                    }
+                    // self: Box<Self>, Rc<Self>, &Arc<Self>, Pin<&mut Self>...
+                    _ => match self_form(target, by_ref.is_some()) {
+                        Some(r) => r,
+                        None => {
+                            s.skip = Some("its self parameter");
+                            Recv::None
+                        }
+                    },
                 };
                 continue;
             }
@@ -747,6 +801,10 @@ impl<'a> Doc<'a> {
             None | Some(Json::Null) => Some(Ty::Unit),
             Some(t) => self.ty(t),
         };
+        // an async fn's result comes from a future
+        if is_async {
+            s.ret = s.ret.map(|t| Ty::Future(Box::new(t)));
+        }
         if !closures.is_empty() {
             s.params = s.params.iter().map(|(n, t)| (n.clone(), t.as_ref().map(|t| substitute(t, &closures)))).collect();
             s.ret = s.ret.as_ref().map(|t| substitute(t, &closures));
@@ -900,10 +958,25 @@ impl<'a> Doc<'a> {
         if is_enum {
             let mut vs = Vec::new();
             let mut next: i128 = 0;
-            let mut plain = body.get("has_stripped_variants").and_then(Json::bool) != Some(true);
+            let stripped = body.get("has_stripped_variants").and_then(Json::bool) == Some(true);
+            let mut plain = !stripped;
+            // each variant with its fields (an error set's variants, when it's an error)
+            let mut full = Vec::new();
             for vid in body.get("variants").map_or(&[][..], Json::arr) {
                 let Some(v) = vid.key().and_then(|k| self.idx.get(&k)) else { continue };
                 let var = v.get("inner").and_then(|i| i.get("variant"));
+                let kind = var.and_then(|x| x.get("kind"));
+                let field_ids: Vec<&Json> = kind.and_then(|k| k.get("tuple")).or_else(|| kind.and_then(|k| k.get("struct")).and_then(|s| s.get("fields"))).map_or(Vec::new(), |f| f.arr().iter().collect());
+                let mut fields = Vec::new();
+                for (fi, f) in field_ids.iter().enumerate() {
+                    let fit = f.key().and_then(|k| self.idx.get(&k));
+                    let fname = fit.and_then(|x| x.get("name")).and_then(Json::str).filter(|n| !n.chars().all(|c| c.is_ascii_digit())).map_or(fi.to_string(), String::from);
+                    // a hidden field (a tuple variant's private one) has no type here
+                    fields.push((fname, fit.and_then(|x| x.get("inner")).and_then(|i| i.get("struct_field")).and_then(|t| self.ty(t))));
+                }
+                let named = kind.and_then(|k| k.get("struct")).is_some();
+                let tuple = kind.and_then(|k| k.get("tuple")).is_some();
+                full.push(Variant { name: v.get("name").and_then(Json::str).unwrap_or("_").to_string(), fields, named, tuple });
                 if var.and_then(|x| x.get("kind")).and_then(Json::str) != Some("plain") {
                     plain = false;
                 }
@@ -914,6 +987,7 @@ impl<'a> Doc<'a> {
                 next += 1;
             }
             d.variants = plain.then_some(vs);
+            self.m.enums.insert(name.clone(), (full, stripped || opaque));
         }
         // its impls: Clone, and the inherent ones' pub fns as its methods
         for iid in body.get("impls").map_or(&[][..], Json::arr) {
@@ -968,6 +1042,17 @@ impl<'a> Doc<'a> {
             return tup.arr().is_empty().then_some(Ty::Unit);
         }
         if let Some(it) = t.get("impl_trait") {
+            // impl Future<Output = T>: as an async fn's T
+            for b in it.arr() {
+                let tr = b.get("trait_bound").and_then(|x| x.get("trait"));
+                if tr.and_then(|t| t.get("path")).and_then(Json::str).and_then(|p| p.rsplit("::").next()) == Some("Future") {
+                    let out = tr.and_then(|t| t.get("args")).and_then(|a| a.get("angle_bracketed")).and_then(|a| a.get("constraints")).map_or(&[][..], Json::arr).iter().find(|c| c.get("name").and_then(Json::str) == Some("Output")).and_then(|c| c.get("binding")).and_then(|b| b.get("equality")).and_then(|e| e.get("type"));
+                    return Some(Ty::Future(Box::new(match out {
+                        Some(o) => self.ty(o)?,
+                        None => Ty::Unit,
+                    })));
+                }
+            }
             return self.fn_bound(Some(it), FnPass::Value).or_else(|| Some(Ty::Dyn(self.trait_bound(Some(it))?, FnPass::Value)));
         }
         if let Some(g) = t.get("generic").and_then(Json::str) {
@@ -1005,6 +1090,18 @@ impl<'a> Doc<'a> {
         if last == "Box" && args.len() == 1 {
             if let Some(d) = args[0].get("dyn_trait") {
                 return self.fn_bound(d.get("traits"), FnPass::Boxed).or_else(|| Some(Ty::Dyn(self.trait_bound(d.get("traits"))?, FnPass::Boxed)));
+            }
+        }
+        // the crate's type alias (type Result<T> = std::result::Result<T, Error>): what it names
+        if let Some(al) = p.get("id").and_then(Json::key).and_then(|id| self.idx.get(&id)).and_then(|it| it.get("inner")).and_then(|i| i.get("type_alias")) {
+            let ps: Vec<&str> = al.get("generics").and_then(|g| g.get("params")).map_or(&[][..], Json::arr).iter().filter(|x| x.get("kind").is_some_and(|k| k.get("type").is_some())).filter_map(|x| x.get("name").and_then(Json::str)).collect();
+            let map: BTreeMap<String, Json> = ps.iter().zip(args.iter()).map(|(n, a)| (n.to_string(), (*a).clone())).collect();
+            return self.ty(&subst_json(al.get("type")?, &map));
+        }
+        if last == "Result" && args.len() == 2 {
+            // an Err of one of the crate's enums keeps its variants
+            if let Some(e) = args[1].get("resolved_path").and_then(|r| r.get("id")).and_then(Json::key).filter(|id| self.idx.get(id).and_then(|it| it.get("inner")).is_some_and(|i| i.get("enum").is_some())).and_then(|id| self.names.get(&id)) {
+                return Some(Ty::Fails(one()?, e.clone()));
             }
         }
         if let Some(local) = p.get("id").and_then(Json::key).and_then(|id| self.names.get(&id)) {
@@ -1473,6 +1570,8 @@ fn parse_ty(t: &[Tok]) -> Option<Ty> {
 
 struct Rust {
     lib: String,
+    /// the crate uses tokio: its futures are polled inside a tokio runtime
+    tokio: bool,
 }
 
 /// a trait object's handle holds a Box<dyn Trait> (its type's rust_name: this, the trait's path, >)
@@ -1488,6 +1587,33 @@ impl Rust {
         p.extend(def.module.iter().cloned());
         p.push(def.rust_name.clone().unwrap_or_else(|| def.name.clone()));
         format!("::{}", p.join("::"))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    /// an exported shim function: its call caught (a panic is status 2), its result stored, err
+    /// (for a Result) storing its error
+    fn shim_fn(&self, sym: &str, params: &[String], pre: &[String], call: &str, post: &[String], store: Option<&str>, err: Option<&str>) -> String {
+        let res = err.is_some();
+        let mut ps = params.to_vec();
+        ps.extend(["e: *mut *mut u8".to_string(), "e_n: *mut usize".to_string()]);
+        let mut body = String::new();
+        for l in pre {
+            let _ = writeln!(body, "        {l}");
+        }
+        let _ = writeln!(body, "        let r = {call};");
+        // the result stored before what follows the call (which may move what it borrows from)
+        let store = store.unwrap_or("").replace("$v", "v");
+        if res {
+            let _ = writeln!(body, "        let st: u8 = match r {{\n            Ok(v) => {{ let _ = &v; {store} 0 }}\n            Err(err) => {{ {} 1 }}\n        }};", err.unwrap_or(""));
+        } else {
+            let _ = writeln!(body, "        let v = r;\n        let _ = &v;\n        {store}\n        let st: u8 = 0;");
+        }
+        for l in post {
+            let _ = writeln!(body, "        {l}");
+        }
+        let _ = writeln!(body, "        st");
+        // a panic is caught here (unwinding out of an extern "C" fn would abort)
+        format!("#[no_mangle]\npub unsafe extern \"C\" fn {sym}({}) -> u8 {{\n    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {{\n{body}    }})) {{\n        Ok(st) => st,\n        Err(p) => {{\n            put_str(panic_text(p), e, e_n);\n            2\n        }}\n    }}\n}}\n\n", ps.join(", "))
     }
 
     /// a trait's Rust path, from the shim
@@ -1687,6 +1813,18 @@ impl Lang for Rust {
                         p.pre.push(format!("let this_v = from_{mg}(&*this);"));
                         p.arg = "(&this_v)".into();
                     }
+                    Recv::Own(w) => p.arg = format!("{w}::new(from_{mg}(&*this))"),
+                    Recv::Shared(w) => {
+                        p.pre.push(format!("let this_v = {w}::new(from_{mg}(&*this));"));
+                        p.arg = "(&this_v)".into();
+                    }
+                    Recv::Pin(m) => {
+                        p.pre.push(format!("let mut this_v = from_{mg}(&*this);"));
+                        p.arg = format!("std::pin::Pin::new(&{}this_v)", if m { "mut " } else { "" });
+                        if m {
+                            p.post.push(format!("*this = to_{mg}(&this_v);"));
+                        }
+                    }
                     _ => p.arg = format!("from_{mg}(&*this)"),
                 }
             }
@@ -1696,6 +1834,9 @@ impl Lang for Rust {
                 p.arg = match recv {
                     Recv::Mut => format!("(&mut **(this as *mut {rp}))"),
                     Recv::Ref => format!("(&**(this as *const {rp}))"),
+                    Recv::Own("Box") => format!("(*Box::from_raw(this as *mut {rp}))"),
+                    Recv::Pin(true) => format!("std::pin::Pin::new_unchecked(&mut **(this as *mut {rp}))"),
+                    Recv::Pin(false) => format!("std::pin::Pin::new_unchecked(&**(this as *const {rp}))"),
                     _ => return None,
                 };
             }
@@ -1704,15 +1845,30 @@ impl Lang for Rust {
                 p.arg = match recv {
                     Recv::Mut => format!("(&mut *(this as *mut {rp}))"),
                     Recv::Ref => format!("(&*(this as *const {rp}))"),
+                    Recv::Own("Box") => format!("Box::from_raw(this as *mut {rp})"),
+                    Recv::Own(w) => format!("{w}::new(*Box::from_raw(this as *mut {rp}))"),
+                    // the value moved into an Rc (or Arc) for the call, and back into the handle's
+                    // box when it ends, by a panic too (Lent; the Box keeps the memory)
+                    Recv::Shared(w) => {
+                        p.pre.push(format!("let this_v = Lent(this as *mut {rp}, std::mem::ManuallyDrop::new({w}::new(std::ptr::read(this as *const {rp}))), {w}::try_unwrap);"));
+                        "(&*this_v.1)".into()
+                    }
+                    // a handle's value is boxed: its address never changes while Volt holds it
+                    Recv::Pin(true) => format!("std::pin::Pin::new_unchecked(&mut *(this as *mut {rp}))"),
+                    Recv::Pin(false) => format!("std::pin::Pin::new_unchecked(&*(this as *const {rp}))"),
                     _ => format!("(*Box::from_raw(this as *mut {rp}))"),
                 };
             }
             Kind::Enum => {
-                if recv == Recv::Mut {
-                    return None;
-                }
                 p.params.push("this: i64".into());
-                p.arg = if recv == Recv::Ref { format!("(&from_{mg}(this))") } else { format!("from_{mg}(this)") };
+                p.arg = match recv {
+                    Recv::Ref => format!("(&from_{mg}(this))"),
+                    Recv::Value => format!("from_{mg}(this)"),
+                    Recv::Own(w) => format!("{w}::new(from_{mg}(this))"),
+                    Recv::Shared(w) => format!("(&{w}::new(from_{mg}(this)))"),
+                    Recv::Pin(false) => format!("std::pin::Pin::new(&from_{mg}(this))"),
+                    _ => return None,
+                };
             }
         }
         Some(p)
@@ -1735,22 +1891,34 @@ impl Lang for Rust {
             // lent text: where it is (a Plain receiver's text can only be 'static)
             Ty::StrRef => ShimOut { params: vec![format!("{o}: *mut *mut u8"), format!("{o}_n: *mut usize")], store: format!("{{ let w: &str = $v; *{o} = w.as_ptr() as *mut u8; *{o}_n = w.len(); }}") },
             Ty::Str | Ty::String => ShimOut { params: vec![format!("{o}: *mut *mut u8"), format!("{o}_n: *mut usize")], store: format!("put_str($v.to_string(), {o}, {o}_n);") },
+            Ty::Slice(e, _) | Ty::Vec(e) if matches!(**e, Ty::Named(_)) => {
+                let ti = g.info(e)?;
+                let (rp, mg) = (self.path(&ti.def), Gen::mangle(&ti.def));
+                match ti.kind {
+                    // a Vec's handles own their values; a slice's are lent
+                    Kind::Handle if matches!(t, Ty::Vec(_)) => ShimOut { params: vec![format!("{o}: *mut *mut *mut c_void"), format!("{o}_n: *mut usize")], store: format!("put_vec($v.into_iter().map(|x| Box::into_raw(Box::new(x)) as *mut c_void).collect(), {o}, {o}_n);") },
+                    Kind::Handle => ShimOut { params: vec![format!("{o}: *mut *mut *mut c_void"), format!("{o}_n: *mut usize")], store: format!("put_vec($v.iter().map(|x| x as *const {rp} as *mut c_void).collect(), {o}, {o}_n);") },
+                    Kind::Plain => ShimOut { params: vec![format!("{o}: *mut *mut V_{mg}"), format!("{o}_n: *mut usize")], store: format!("put_vec($v.iter().map(|x| to_{mg}(x)).collect(), {o}, {o}_n);") },
+                    Kind::Enum => ShimOut { params: vec![format!("{o}: *mut *mut i64"), format!("{o}_n: *mut usize")], store: format!("put_vec($v.iter().map(|x| to_{mg}(x)).collect(), {o}, {o}_n);") },
+                }
+            }
             Ty::Slice(e, _) | Ty::Vec(e) => match **e {
                 Ty::Prim(x) => ShimOut { params: vec![format!("{o}: *mut *mut {x}"), format!("{o}_n: *mut usize")], store: format!("put_vec($v.to_vec(), {o}, {o}_n);") },
                 Ty::Str | Ty::String => ShimOut { params: vec![format!("{o}: *mut *mut VoltOwnedStr"), format!("{o}_n: *mut usize")], store: format!("put_strs($v.iter().map(|x| x.to_string()).collect(), {o}, {o}_n);") },
                 _ => return None,
             },
             Ty::Named(_) | Ty::Ref(..) => {
-                let (named, by_ref) = match t {
-                    Ty::Ref(x, _) => (&**x, true),
-                    x => (x, false),
+                let (named, by_ref, m) = match t {
+                    Ty::Ref(x, m) => (&**x, true, *m),
+                    x => (x, false, false),
                 };
                 let ti = g.info(named)?;
                 let (rp, mg) = (self.path(&ti.def), Gen::mangle(&ti.def));
                 match ti.kind {
                     Kind::Plain => ShimOut { params: vec![format!("{o}: *mut V_{mg}")], store: format!("*{o} = to_{mg}(&$v);") },
-                    // a reference into Rust-owned data can't be handed out; a clone can
-                    Kind::Handle if by_ref && !ti.def.clone => return None,
+                    // a reference into Rust-owned data: lent (a &mut, or what can't be cloned)
+                    Kind::Handle if by_ref && m => ShimOut { params: vec![format!("{o}: *mut *mut c_void")], store: format!("*{o} = $v as *mut {rp} as *mut c_void;") },
+                    Kind::Handle if by_ref && !ti.def.clone => ShimOut { params: vec![format!("{o}: *mut *mut c_void")], store: format!("*{o} = $v as *const {rp} as *mut c_void;") },
                     Kind::Handle if by_ref => ShimOut { params: vec![format!("{o}: *mut *mut c_void")], store: format!("*{o} = Box::into_raw(Box::new(<{rp} as Clone>::clone($v))) as *mut c_void;") },
                     Kind::Handle => ShimOut { params: vec![format!("{o}: *mut *mut c_void")], store: format!("*{o} = Box::into_raw(Box::new($v)) as *mut c_void;") },
                     Kind::Enum => ShimOut { params: vec![format!("{o}: *mut i64")], store: format!("*{o} = to_{mg}(&$v);") },
@@ -1812,7 +1980,9 @@ impl Lang for Rust {
         } else {
             format!("let f = &mut *(h as *mut {held});")
         };
-        Some(format!("#[no_mangle]\npub unsafe extern \"C\" fn {sym}_call({}) {{\n    {get}\n    let v = f({});\n    let _ = &v;\n    {store}\n}}\n\n#[no_mangle]\npub unsafe extern \"C\" fn {sym}_drop(h: *mut c_void) {{\n    drop(Box::from_raw(h as *mut {held}));\n}}\n\n", cps.join(", "), args.join(", ")))
+        cps.extend(["e: *mut *mut u8".to_string(), "e_n: *mut usize".to_string()]);
+        // a panic is caught (status 2), as a function's is
+        Some(format!("#[no_mangle]\npub unsafe extern \"C\" fn {sym}_call({}) -> u8 {{\n    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {{\n        {get}\n        let v = f({});\n        let _ = &v;\n        {store}\n    }})) {{\n        Ok(()) => 0,\n        Err(p) => {{\n            put_str(panic_text(p), e, e_n);\n            2\n        }}\n    }}\n}}\n\n#[no_mangle]\npub unsafe extern \"C\" fn {sym}_drop(h: *mut c_void) {{\n    drop(Box::from_raw(h as *mut {held}));\n}}\n\n", cps.join(", "), args.join(", ")))
     }
 
     fn put_glue(&self, sym: &str) -> Option<String> {
@@ -1920,27 +2090,96 @@ impl Lang for Rust {
         }
     }
 
+    fn catches(&self) -> bool {
+        true
+    }
+
     fn function(&self, sym: &str, params: &[String], pre: &[String], call: &str, post: &[String], store: Option<&str>, res: bool) -> String {
-        let mut ps = params.to_vec();
-        if res {
-            ps.extend(["e: *mut *mut u8".to_string(), "e_n: *mut usize".to_string()]);
-        }
+        self.shim_fn(sym, params, pre, call, post, store, res.then_some("put_str((&&&Msg(&err)).text(), e, e_n);"))
+    }
+
+    fn async_function(&self, sym: &str, params: &[String], pre: &[String], call: &str, post: &[String], outs: &[String], store: Option<&str>, res: bool, err_store: Option<&str>) -> Option<String> {
+        let store = store.unwrap_or("").replace("$v", "v");
         let mut body = String::new();
         for l in pre {
-            let _ = writeln!(body, "    {l}");
+            let _ = writeln!(body, "        {l}");
         }
-        let _ = writeln!(body, "    let r = {call};");
-        for l in post {
-            let _ = writeln!(body, "    {l}");
+        let _ = writeln!(body, "        let r = {call}.await;");
+        // the outs this poll was given: where the value goes
+        let _ = writeln!(body, "        let (outs, e, e_n) = POLL_OUTS.with(|c| c.get());\n        let _ = (outs, e, e_n);");
+        for (i, o) in outs.iter().enumerate() {
+            let (n, t) = o.split_once(": ")?;
+            let _ = writeln!(body, "        let {n} = *outs.add({i}) as {t};");
         }
-        let store = store.unwrap_or("").replace("$v", "v");
         if res {
-            let _ = writeln!(body, "    match r {{\n        Ok(v) => {{ let _ = &v; {store} true }}\n        Err(err) => {{ put_str(err.to_string(), e, e_n); false }}\n    }}");
+            let err = err_store.map_or("put_str((&&&Msg(&err)).text(), e, e_n);".to_string(), |x| x.replace("$e", "err"));
+            let _ = writeln!(body, "        let st: u8 = match r {{\n            Ok(v) => {{ let _ = &v; {store} 0 }}\n            Err(err) => {{ {err} 1 }}\n        }};");
         } else {
-            let _ = writeln!(body, "    let v = r;\n    let _ = &v;\n    {store}");
+            let _ = writeln!(body, "        let v = r;\n        let _ = &v;\n        {store}\n        let st: u8 = 0;");
         }
-        format!("#[no_mangle]\npub unsafe extern \"C\" fn {sym}({}){} {{\n{body}}}\n\n", ps.join(", "), if res { " -> bool" } else { "" })
+        for l in post {
+            let _ = writeln!(body, "        {l}");
+        }
+        let _ = writeln!(body, "        st");
+        let mut ps = params.to_vec();
+        ps.push("h: *mut *mut c_void".into());
+        // its future runs nothing until it's polled (and owns what the call borrows)
+        Some(format!("#[no_mangle]\npub unsafe extern \"C\" fn {sym}({}) {{\n    let f: VoltFuture = Box::pin(async move {{\n{body}    }});\n    *h = Box::into_raw(Box::new(f)) as *mut c_void;\n}}\n\n", ps.join(", ")))
     }
+
+    fn function_err(&self, sym: &str, params: &[String], pre: &[String], call: &str, post: &[String], store: Option<&str>, err_store: &str) -> Option<String> {
+        Some(self.shim_fn(sym, params, pre, call, post, store, Some(&err_store.replace("$e", "err"))))
+    }
+
+    fn err_out(&self, g: &Gen, e: &str) -> Option<ShimOut> {
+        let (vs, _) = g.m.enums.get(e)?;
+        let ti_path = {
+            let d = g.m.types.iter().find(|t| t.name == e)?;
+            self.path(d)
+        };
+        let mut params = vec!["k: *mut u32".to_string()];
+        let mut arms = String::new();
+        for (vi, v) in vs.iter().enumerate() {
+            let binds: Vec<String> = (0..v.fields.len()).map(|fi| format!("f{fi}")).collect();
+            // with .. (a #[non_exhaustive] variant's fields may grow; V() is a tuple variant)
+            let mut fs: Vec<String> = if v.named { v.fields.iter().zip(&binds).map(|((n, _), b)| format!("{n}: {b}")).collect() } else { binds.clone() };
+            fs.push("..".into());
+            let pat = match (v.tuple, v.named) {
+                (false, false) => String::new(),
+                (_, true) => format!(" {{ {} }}", fs.join(", ")),
+                (true, false) => format!("({})", fs.join(", ")),
+            };
+            let mut st = format!("*k = {vi}; ");
+            if v.fields.iter().all(|(_, t)| matches!(t, Some(Ty::Prim(_) | Ty::Char | Ty::Str | Ty::String))) {
+                for (fi, (_, t)) in v.fields.iter().enumerate() {
+                    let x = format!("x{vi}_{fi}");
+                    match t.as_ref()? {
+                        Ty::Prim(p) => {
+                            params.push(format!("{x}: *mut {p}"));
+                            let _ = write!(st, "*{x} = *f{fi}; ");
+                        }
+                        Ty::Char => {
+                            params.push(format!("{x}: *mut u32"));
+                            let _ = write!(st, "*{x} = *f{fi} as u32; ");
+                        }
+                        _ => {
+                            params.extend([format!("{x}: *mut *mut u8"), format!("{x}_n: *mut usize")]);
+                            let _ = write!(st, "put_str(f{fi}.to_string(), {x}, {x}_n); ");
+                        }
+                    }
+                }
+            } else {
+                let x = format!("x{vi}");
+                params.extend([format!("{x}: *mut *mut u8"), format!("{x}_n: *mut usize")]);
+                let _ = write!(st, "let _ = ({}); put_str((&&&Msg(ev)).text(), {x}, {x}_n); ", binds.join(", "));
+            }
+            let _ = writeln!(arms, "            {ti_path}::{}{pat} => {{ {st}}}", v.name);
+        }
+        // a variant the shim's view doesn't show (#[non_exhaustive], hidden): its text
+        let _ = writeln!(arms, "            _ => {{ *k = u32::MAX; put_str((&&&Msg(ev)).text(), e, e_n); }}");
+        Some(ShimOut { params, store: format!("{{\n        let ev = &$e;\n        match ev {{\n{arms}        }}\n    }}") })
+    }
+
 
     fn type_glue(&self, g: &Gen, ti: &TypeInfo) -> String {
         let (rp, mg) = (self.path(&ti.def), Gen::mangle(&ti.def));
@@ -2016,10 +2255,43 @@ impl Lang for Rust {
         s.push_str("unsafe fn put_str(v: String, p: *mut *mut u8, n: *mut usize) {\n    let b = v.into_bytes().into_boxed_slice();\n    *n = b.len();\n    *p = Box::into_raw(b) as *mut u8;\n}\n");
         s.push_str("unsafe fn put_vec<T>(v: Vec<T>, p: *mut *mut T, n: *mut usize) {\n    let b = v.into_boxed_slice();\n    *n = b.len();\n    *p = Box::into_raw(b) as *mut T;\n}\n");
         s.push_str("unsafe fn put_strs(v: Vec<String>, p: *mut *mut VoltOwnedStr, n: *mut usize) {\n    let xs: Vec<VoltOwnedStr> = v.into_iter().map(|x| { let mut q = std::ptr::null_mut(); let mut m = 0; put_str(x, &mut q, &mut m); VoltOwnedStr { p: q, n: m } }).collect();\n    put_vec(xs, p, n);\n}\n\n");
+        // an error's text: Display, else Debug, else its type's name (autoref picks the first
+        // its type has)
+        s.push_str("struct Msg<'a, T>(&'a T);\ntrait ByDisplay {\n    fn text(&self) -> String;\n}\nimpl<T: std::fmt::Display> ByDisplay for &&Msg<'_, T> {\n    fn text(&self) -> String {\n        self.0.to_string()\n    }\n}\ntrait ByDebug {\n    fn text(&self) -> String;\n}\nimpl<T: std::fmt::Debug> ByDebug for &Msg<'_, T> {\n    fn text(&self) -> String {\n        format!(\"{:?}\", self.0)\n    }\n}\ntrait ByName {\n    fn text(&self) -> String;\n}\nimpl<T> ByName for Msg<'_, T> {\n    fn text(&self) -> String {\n        std::any::type_name::<T>().to_string()\n    }\n}\n\n");
+        // a panic's message; a try_ form's call turns the panic hook's report off
+        s.push_str("fn panic_text(p: Box<dyn std::any::Any + Send>) -> String {\n    if let Some(s) = p.downcast_ref::<&str>() {\n        s.to_string()\n    } else if let Some(s) = p.downcast_ref::<String>() {\n        s.clone()\n    } else {\n        \"a panic\".to_string()\n    }\n}\n\nthread_local! {\n    static QUIET: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };\n}\n\n");
+        let _ = writeln!(s, "#[no_mangle]\npub extern \"C\" fn volt_rust_{}_quiet(on: bool) -> bool {{\n    static HOOK: std::sync::Once = std::sync::Once::new();\n    HOOK.call_once(|| {{\n        let prev = std::panic::take_hook();\n        std::panic::set_hook(Box::new(move |i| {{\n            if !QUIET.with(|q| q.get()) {{\n                prev(i)\n            }}\n        }}));\n    }});\n    QUIET.with(|q| q.replace(on))\n}}\n", g.alias);
+        // the futures of async fns: polled by Volt (3: not done yet), each poll handing the outs its
+        // value goes to; a waker unparks the polling thread, which waits a little while a future
+        // isn't done (or until it's woken)
+        s.push_str("type VoltFuture = std::pin::Pin<Box<dyn std::future::Future<Output = u8>>>;\n\nthread_local! {\n    static POLL_OUTS: std::cell::Cell<(*const *mut c_void, *mut *mut u8, *mut usize)> = const { std::cell::Cell::new((std::ptr::null(), std::ptr::null_mut(), std::ptr::null_mut())) };\n}\n\nstruct Unpark(std::thread::Thread);\n\nimpl std::task::Wake for Unpark {\n    fn wake(self: std::sync::Arc<Self>) {\n        self.0.unpark();\n    }\n}\n\n");
+        let (rt, enter) = if self.tokio { ("static RT: std::sync::OnceLock<tokio::runtime::Runtime> = std::sync::OnceLock::new();\n\n", "    let _rt = RT.get_or_init(|| tokio::runtime::Builder::new_multi_thread().enable_all().build().expect(\"a tokio runtime\")).enter();\n") } else { ("", "") };
+        s.push_str(rt);
+        let _ = writeln!(s, "#[no_mangle]\npub unsafe extern \"C\" fn volt_rust_{a}_poll(h: *mut c_void, outs: *const *mut c_void, e: *mut *mut u8, e_n: *mut usize) -> u8 {{\n    let f = &mut *(h as *mut VoltFuture);\n    let waker = std::task::Waker::from(std::sync::Arc::new(Unpark(std::thread::current())));\n    let mut cx = std::task::Context::from_waker(&waker);\n{enter}    // this poll's outs (an outer poll's back after it: a Volt callback may run another future)\n    let prev = POLL_OUTS.with(|c| c.replace((outs, e, e_n)));\n    let polled = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f.as_mut().poll(&mut cx)));\n    POLL_OUTS.with(|c| c.set(prev));\n    match polled {{\n        Ok(std::task::Poll::Ready(st)) => st,\n        Ok(std::task::Poll::Pending) => {{\n            std::thread::park_timeout(std::time::Duration::from_millis(1));\n            3\n        }}\n        Err(p) => {{\n            put_str(panic_text(p), e, e_n);\n            2\n        }}\n    }}\n}}\n\n#[no_mangle]\npub unsafe extern \"C\" fn volt_rust_{a}_future_drop(h: *mut c_void) {{\n    if !h.is_null() {{\n        drop(Box::from_raw(h as *mut VoltFuture));\n    }}\n}}\n", a = g.alias);
+        // a handle's value lent through an Rc (or Arc) for a call: put back in the handle's box when
+        // the call ends, a panic's unwinding too; a method that kept a clone of its Rc leaves two
+        // owners, which stops the program
+        s.push_str("struct Lent<P, T>(*mut T, std::mem::ManuallyDrop<P>, fn(P) -> Result<T, P>);\n\nimpl<P, T> Drop for Lent<P, T> {\n    fn drop(&mut self) {\n        let p = unsafe { std::mem::ManuallyDrop::take(&mut self.1) };\n        match (self.2)(p) {\n            Ok(v) => unsafe { std::ptr::write(self.0, v) },\n            Err(p) => {\n                std::mem::forget(p);\n                eprintln!(\"a method kept a clone of its Rc or Arc, which Volt's handle can't share\");\n                std::process::abort()\n            }\n        }\n    }\n}\n\n");
         let fb = free("bytes");
         let _ = writeln!(s, "#[no_mangle]\npub unsafe extern \"C\" fn {fb}(p: *mut u8, n: usize) {{\n    if !p.is_null() {{\n        drop(Box::from_raw(std::ptr::slice_from_raw_parts_mut(p, n)));\n    }}\n}}\n");
         for x in &g.vec_elems {
             let _ = writeln!(s, "#[no_mangle]\npub unsafe extern \"C\" fn {}(p: *mut {x}, n: usize) {{\n    if !p.is_null() {{\n        drop(Box::from_raw(std::ptr::slice_from_raw_parts_mut(p, n)));\n    }}\n}}\n", free(&format!("{x}s")));
+        }
+        // the arrays of handles and of plain structs Volt was given
+        let mut ptrs = false;
+        for n in &g.elem_types {
+            let Some(ti) = g.types.get(n) else { continue };
+            let mg = Gen::mangle(&ti.def);
+            match ti.kind {
+                Kind::Handle => ptrs = true,
+                Kind::Plain => {
+                    let _ = writeln!(s, "#[no_mangle]\npub unsafe extern \"C\" fn {}(p: *mut V_{mg}, n: usize) {{\n    if !p.is_null() {{\n        drop(Box::from_raw(std::ptr::slice_from_raw_parts_mut(p, n)));\n    }}\n}}\n", free(&format!("{mg}s")));
+                }
+                Kind::Enum => {}
+            }
+        }
+        if ptrs {
+            let _ = writeln!(s, "#[no_mangle]\npub unsafe extern \"C\" fn {}(p: *mut *mut c_void, n: usize) {{\n    if !p.is_null() {{\n        drop(Box::from_raw(std::ptr::slice_from_raw_parts_mut(p, n)));\n    }}\n}}\n", free("ptrs"));
         }
         if g.strs {
             let _ = writeln!(s, "#[no_mangle]\npub unsafe extern \"C\" fn {}(p: *mut VoltOwnedStr, n: usize) {{\n    if !p.is_null() {{\n        for x in Box::from_raw(std::ptr::slice_from_raw_parts_mut(p, n)).iter() {{\n            {fb}(x.p, x.n);\n        }}\n    }}\n}}\n", free("strs"));
@@ -2077,7 +2349,7 @@ mod tests {
         assert_eq!(m.methods["Shape"].len(), 1);
         assert!(m.fns.is_empty(), "the cfg(test) and pub(crate) fns aren't visible");
         assert_eq!(m.types[2].variants, Some(vec![("Red".into(), 0), ("Green".into(), 5), ("Blue".into(), 6)]));
-        let lang = Rust { lib: "geom".into() };
+        let lang = Rust { lib: "geom".into(), tokio: false };
         let g = Gen::new(&m, "geom", &lang);
         assert_eq!(g.types["Point"].kind, Kind::Plain);
         assert_eq!(g.types["Shape"].kind, Kind::Handle);
