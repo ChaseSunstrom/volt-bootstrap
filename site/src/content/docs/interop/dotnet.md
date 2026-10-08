@@ -178,3 +178,54 @@ LD_LIBRARY_PATH=/path/to/greet/target/debug dotnet run   # DYLD_LIBRARY_PATH on 
 
 An error set becomes a `VoltException` subclass whose `Code` and `Name` say which error it was;
 slices are `Span<T>`, optionals `T?`, and a callback an `Action` or a `Func`.
+
+### Every shape
+
+C# takes [every shape](/volt-bootstrap/interop/other-languages/#every-shape) C does:
+
+- **Owned values as parameters.** Text (`std::string`) is a `string`, which Volt copies. A handle
+  by value is given to the fn: the class lets its handle go (`Release()` does that by hand), and
+  Volt deletes it.
+- **Traits.** A Volt trait is an interface to implement. A fn taking `s: shape&` lends Volt the
+  object for the call; one taking `s: shape` gives it, and Volt calls `Dispose()` on it (when it's
+  `IDisposable`) once it's done. A Volt value of the trait comes back as a `volt_shape`, which
+  implements the interface and frees Volt's value on `Dispose()` (or in its finalizer).
+- **Callbacks taking and giving text, handles and errors.** Text is a `string` both ways, a
+  handle is its class (one Volt lends is a class that never frees it), and an `E!T` callback
+  returns its `T` or throws: `VoltException.For(code)` makes the exception for one of the error
+  set's codes. Any other exception comes out of the call that took the callback.
+- **Lists, and text and handles in slices and optionals.** A `std::vec<T>` comes back as a
+  `List<T>` (of `string`s, or of the classes, each the caller's). As a parameter it takes any
+  `IEnumerable<T>`, and so does a slice of text or of an export struct (lent for the call; a
+  list's handles are given). An optional text or handle is a `string?` or a nullable class, and an
+  optional in a slice converts from `T?`.
+- **Closures given back.** A fn returning `fn(A) -> R` gives a `closureN` with `Invoke`, which
+  frees Volt's closure on `Dispose()` (or in its finalizer).
+
+With a library like the one there (a `shape` trait, `describe(s: shape&)`, `grow_twice(s: shape)`,
+`shout`, `greeter` and `owners`):
+
+```csharp
+sealed class Circle : shape, IDisposable
+{
+    double r = 1;
+    public double area() => 3 * r * r;
+    public string name() => "circle";
+    public void grow(double by) => r += by;
+    public void Dispose() => Console.WriteLine("circle gone");
+}
+
+Console.WriteLine(Api.describe(new Circle()));        // circle of area 3, lent
+Console.WriteLine(Api.grow_twice(new Circle()));      // circle gone, then 27: given
+Console.WriteLine(Api.shout(s => s + "!", "hey"));    // hey!
+using (var hi = Api.greeter())
+{
+    Console.WriteLine(hi.Invoke("volt"));             // hello, volt
+}
+using var ann = account.open("ann");
+var names = Api.owners(new[] { ann });                // a List<string>: ann
+```
+
+A method of an interface that throws doesn't unwind into Volt: the exception is kept, the
+method gives Volt an empty value, and the call that lent or gave the object throws it when it
+returns.

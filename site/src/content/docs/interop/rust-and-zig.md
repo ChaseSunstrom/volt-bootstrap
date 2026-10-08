@@ -367,7 +367,7 @@ and Node projects get the same from pip and npm: see
 bindings' types are in [They call Volt](/volt-bootstrap/interop/other-languages/#they-call-volt):
 `Result` for errors, `String` and `&str` for text, a type that frees itself when dropped for an
 export struct (with its methods), and the same in Zig with error unions, slices and `deinit()`.
-Rust takes [every shape](/volt-bootstrap/interop/other-languages/#c-c-rust-and-zig-every-shape), as C
+Rust takes [every shape](/volt-bootstrap/interop/other-languages/#every-shape), as C
 and C++ do: a generic's instances (`biggest_i32`), owned values as parameters, a Volt trait as a
 Rust trait to implement (or one Volt made, as a `Box<dyn T>`), any closure (`impl FnMut`) taking
 and giving text and handles, and closures given back as `Box<dyn FnMut>`. So does Zig: a Volt

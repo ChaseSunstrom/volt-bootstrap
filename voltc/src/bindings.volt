@@ -5021,33 +5021,71 @@ attach fn cs_raw(this: bind&, t: u32) -> std::string {
         .RESULT(e, x) => { return this.result_name(t); },
         .ARRAY(elem, n) => { return S("IntPtr"); },
         .SLICE(x) => { return this.made_name("slice", x, true); },
-        .OPT(x) => { return this.made_name("opt", x, true); },
+        .OPT(x) => {
+            // an optional handle is its pointer (null: none)
+            if (this.handle_of(x) != null) {
+                return S("IntPtr");
+            }
+            return this.made_name("opt", x, true);
+        },
         .FN(i) => { return S("IntPtr"); },
         .CLOSURE(i) => { return this.cs_fnptr(t); },
-        .TRAIT(i) => { return S("void"); }, // only C, C++, Rust and Zig take traits (bind.wide)
-        .LIST(x) => { return S("void"); }, // only C, C++, Rust and Zig take lists (bind.wide)
+        .TRAIT(i) => { return fmt("{}_obj", this.short(this.trait_of(t))); },
+        .LIST(x) => { return this.made_name("list", this.list_elem(x), true); },
+    }
+}
+
+// type t's C form as a result: a closure comes out boxed (closureN_obj)
+attach fn cs_out(this: bind&, t: u32) -> std::string {
+    match (this.shape_of(t) ?? shape::VOID) {
+        .CLOSURE(i) => { return fmt("closure{}_obj", unum(@cast<u64>(i))); },
+        default => { return this.cs_raw(t); },
     }
 }
 
 // a closure parameter's C function: delegate* unmanaged<IntPtr, A..., R>
 attach fn cs_fnptr(this: bind&, t: u32) -> std::string {
+    var ps: std::vec<u32> = {};
+    val r = this.fn_parts(t, &ps);
+    return this.cs_fn_of(&ps, r);
+}
+
+// the C function a closure or a trait's fn is: the caller's data (or the object) first, text in as
+// a str
+attach fn cs_fn_of(this: bind&, ps: std::vec<u32>&, r: u32) -> std::string {
     var s = S("delegate* unmanaged<IntPtr");
-    match (*this.c.t.get(t)) {
-        .FN_VAL(ps&, r) => {
-            for (p&) in ps.items() {
-                s.append(", ");
-                s.append(this.cs_raw(*p).as_str());
-            }
-            s.append(", ");
-            s.append(this.cs_raw(r).as_str());
-        },
-        default => {},
+    for (p&) in ps.items() {
+        s.append(", ");
+        s.append(this.cs_raw(this.in_ty(*p)).as_str());
     }
+    s.append(", ");
+    s.append(this.cs_raw(r).as_str());
     s.push('>');
     return s;
 }
 
-// a type as the C# API shows it
+// what C# code gives or gets for t: E!T's T (its error is thrown), or t
+attach fn cs_ok(this: bind&, t: u32) -> u32 {
+    match (this.shape_of(t) ?? shape::VOID) {
+        .RESULT(e, x) => { return x; },
+        default => { return t; },
+    }
+}
+
+// the C# type of a container's element or an optional's value (copied: bool is a bool): text as a
+// string, a handle as its class
+attach fn cs_elem(this: bind&, t: u32) -> std::string {
+    if (this.in_ty(t) == STR) {
+        return S("string");
+    }
+    val h = this.handle_of(t);
+    if (h) {
+        return this.local(this.c.si(h).name);
+    }
+    return this.cs_ty(t);
+}
+
+// a type as the C# API shows it (a parameter's, or a callback's)
 attach fn cs_ty(this: bind&, t: u32) -> std::string {
     val h = this.lent_handle(t);
     if (h) {
@@ -5068,35 +5106,57 @@ attach fn cs_ty(this: bind&, t: u32) -> std::string {
             return this.cs_raw(t);
         },
         .HANDLE(s) => { return this.local(this.c.si(s).name); },
-        .SLICE(x) => { return fmt("Span<{}>", this.cs_raw(x)); },
-        .OPT(x) => { return fmt("{}?", this.cs_raw(x)); },
-        .RESULT(e, x) => { return this.cs_ty(x); },
-        .CLOSURE(i) => {
-            match (*this.c.t.get(t)) {
-                .FN_VAL(ps&, r) => {
-                    var args: std::string = {};
-                    for (p&) in ps.items() {
-                        if (args.len() > 0) {
-                            args.append(", ");
-                        }
-                        args.append(this.cs_ty(*p).as_str());
-                    }
-                    if (r == VOID) {
-                        if (ps.len == 0) {
-                            return S("Action");
-                        }
-                        return fmt("Action<{}>", move args);
-                    }
-                    if (args.len() > 0) {
-                        args.append(", ");
-                    }
-                    args.append(this.cs_ty(r).as_str());
-                    return fmt("Func<{}>", move args);
-                },
-                default => { return S("Delegate"); },
+        .SLICE(x) => {
+            // text and handles from any IEnumerable, what C holds as it is from a Span
+            val e = this.slice_elem(t);
+            if (x == STR || this.handle_of(e) != null) {
+                return fmt("IEnumerable<{}>", this.cs_elem(e));
             }
+            return fmt("Span<{}>", this.cs_raw(x));
+        },
+        .LIST(x) => { return fmt("IEnumerable<{}>", this.cs_elem(this.list_elem(t))); },
+        .OPT(x) => { return fmt("{}?", this.cs_elem(x)); },
+        .RESULT(e, x) => { return this.cs_ty(x); },
+        .TRAIT(i) => { return this.short(this.trait_of(t)); },
+        .CLOSURE(i) => {
+            var ps: std::vec<u32> = {};
+            val r = this.fn_parts(t, &ps);
+            var args: std::string = {};
+            for (p&) in ps.items() {
+                if (args.len() > 0) {
+                    args.append(", ");
+                }
+                // an E!T argument as its struct (an error a callback gets isn't thrown)
+                match (this.shape_of(*p) ?? shape::VOID) {
+                    .RESULT(e, x) => { args.append(this.cs_raw(*p).as_str()); },
+                    default => { args.append(this.cs_ty(*p).as_str()); },
+                }
+            }
+            if (this.cs_ok(r) == VOID) {
+                if (ps.len == 0) {
+                    return S("Action");
+                }
+                return fmt("Action<{}>", move args);
+            }
+            if (args.len() > 0) {
+                args.append(", ");
+            }
+            args.append(this.cs_ty(r).as_str());
+            return fmt("Func<{}>", move args);
         },
         default => { return this.cs_raw(t); },
+    }
+}
+
+// what a wrapper returns for a C result of type t: a closure as its closureN, a trait's value as
+// volt_T, a list as a List
+attach fn cs_ret(this: bind&, t: u32) -> std::string {
+    match (this.shape_of(t) ?? shape::VOID) {
+        .CLOSURE(i) => { return fmt("closure{}", unum(@cast<u64>(i))); },
+        .TRAIT(i) => { return fmt("volt_{}", this.short(this.trait_of(t))); },
+        .LIST(x) => { return fmt("List<{}>", this.cs_elem(this.list_elem(t))); },
+        .RESULT(e, x) => { return this.cs_ret(x); },
+        default => { return this.cs_ty(t); },
     }
 }
 
@@ -5122,17 +5182,22 @@ attach fn cs_arg_of(this: bind&, t: u32, name0: str, a: cs_arg&) -> void {
         a.close = fmt2("}\nfinally {{\n    if ({}_ref) {{\n        {}.h.DangerousRelease();\n    }}\n}}\n", S(name0), S(name));
         return;
     }
+    if (this.in_ty(t) == STR) {
+        // a str, or owned text (which Volt copies)
+        a.decl = fmt("string {}", S(name));
+        a.open = fmt3("byte[] {}_b = Encoding.UTF8.GetBytes({});\nfixed (byte* {}_p = ", S(name0), S(name), S(name0));
+        a.open.append(fmt("{}_b) {{\n", S(name0)).as_str());
+        a.pass = fmt2("new VoltStr {{ ptr = {}_p, len = (nuint){}_b.Length }}", S(name0), S(name0));
+        a.close = S("}\n");
+        return;
+    }
+    if (this.cs_elems(t, name0, name, a)) {
+        return;
+    }
     match (this.shape_of(t) ?? shape::VOID) {
         .BOOL => {
             a.decl = fmt("bool {}", S(name));
             a.pass = fmt("(byte)({} ? 1 : 0)", S(name));
-        },
-        .STR => {
-            a.decl = fmt("string {}", S(name));
-            a.open = fmt3("byte[] {}_b = Encoding.UTF8.GetBytes({});\nfixed (byte* {}_p = ", S(name0), S(name), S(name0));
-            a.open.append(fmt2("{}_b) {{\n", S(name0), S("")).as_str());
-            a.pass = fmt2("new VoltStr {{ ptr = {}_p, len = (nuint){}_b.Length }}", S(name0), S(name0));
-            a.close = S("}\n");
         },
         .CSTR => {
             a.decl = fmt("string? {}", S(name));
@@ -5164,17 +5229,54 @@ attach fn cs_arg_of(this: bind&, t: u32, name0: str, a: cs_arg&) -> void {
             a.close = S("}\n");
         },
         .OPT(x) => {
-            a.decl = fmt2("{}? {}", this.cs_raw(x), S(name));
-            a.pass = fmt3("new {} {{ value = {}.GetValueOrDefault(), has = (byte)({}.HasValue ? 1 : 0) }}", this.made_name("opt", x, true), S(name), S(name));
+            if (this.in_ty(x) == STR) {
+                // text, which Volt copies (null: none)
+                a.decl = fmt("string? {}", S(name));
+                a.open = fmt3("byte[]? {}_b = {} == null ? null : Encoding.UTF8.GetBytes({});\n", S(name0), S(name), S(name));
+                a.open.append(fmt2("fixed (byte* {}_p = {}_b) {{\n", S(name0), S(name0)).as_str());
+                a.pass = fmt4("new {} {{ value = new VoltStr {{ ptr = {}_p, len = (nuint)({}_b?.Length ?? 0) }}, has = (byte)({} != null ? 1 : 0) }}", this.made_name("opt", STR, true), S(name0), S(name0), S(name));
+                a.close = S("}\n");
+                return;
+            }
+            val oh = this.handle_of(x);
+            if (oh) {
+                // given to Volt, which frees it (null: none)
+                a.decl = fmt2("{}? {}", this.local(this.c.si(oh).name), S(name));
+                a.pass = fmt2("({} == null ? IntPtr.Zero : {}.Release())", S(name), S(name));
+                return;
+            }
+            a.decl = fmt2("{}? {}", this.cs_elem(x), S(name));
+            a.pass = fmt3("new {} {{ value = {}, has = (byte)({}.HasValue ? 1 : 0) }}", this.made_name("opt", x, true), this.cs_give(x, fmt("{}.GetValueOrDefault()", S(name)).as_str()), S(name));
+        },
+        .HANDLE(s) => {
+            // given to Volt, which frees it: the class lets its handle go
+            a.decl = fmt2("{} {}", this.local(this.c.si(s).name), S(name));
+            a.pass = fmt("{}.Release()", S(name));
+        },
+        .TRAIT(i) => {
+            // a C# object, reached through a GCHandle to it: lent for the call, or given (Volt drops
+            // it, which disposes it); what it throws comes out of this call
+            val tn = this.short(this.trait_of(t));
+            a.decl = fmt2("{} {}", copy tn, S(name));
+            a.open = fmt3("var {}_s = new Callback({});\nGCHandle {}_g = GCHandle.Alloc(", S(name0), S(name), S(name0));
+            a.open.append(fmt("{}_s);\n", S(name0)).as_str());
+            if (this.is_ref(t)) {
+                a.open.append("try {\n");
+                a.pass = fmt3("new {}_obj {{ vt = {}_table.Vt, self = GCHandle.ToIntPtr({}_g), drop = null }}", copy tn, copy tn, S(name0));
+                a.close = fmt2("}}\nfinally {{\n    {}_g.Free();\n}}\n{}_s.Rethrow();\n", S(name0), S(name0));
+            } else {
+                a.pass = fmt4("new {}_obj {{ vt = {}_table.Vt, self = GCHandle.ToIntPtr({}_g), drop = &{}_table.drop }}", copy tn, copy tn, S(name0), copy tn);
+                a.close = fmt("{}_s.Rethrow();\n", S(name0));
+            }
         },
         .CLOSURE(i) => {
             a.decl = fmt2("{} {}", this.cs_ty(t), S(name));
             // the C function finds the delegate through a GCHandle; an exception it throws comes back
             // out of this call
             a.open = fmt3("var {}_s = new Callback({});\nGCHandle {}_g = GCHandle.Alloc(", S(name0), S(name), S(name0));
-            a.open.append(fmt2("{}_s);\ntry {{\n", S(name0), S("")).as_str());
-            a.pass = fmt3("&Callbacks.cb{}, GCHandle.ToIntPtr({}_g)", unum(@cast<u64>(i)), S(name0), S(""));
-            a.close = fmt3("}}\nfinally {{\n    {}_g.Free();\n}}\n{}_s.Rethrow();\n", S(name0), S(name0), S(""));
+            a.open.append(fmt("{}_s);\ntry {{\n", S(name0)).as_str());
+            a.pass = fmt2("&Callbacks.cb{}, GCHandle.ToIntPtr({}_g)", unum(@cast<u64>(i)), S(name0));
+            a.close = fmt2("}}\nfinally {{\n    {}_g.Free();\n}}\n{}_s.Rethrow();\n", S(name0), S(name0));
         },
         default => {
             a.decl = fmt2("{} {}", this.cs_ty(t), S(name));
@@ -5183,22 +5285,167 @@ attach fn cs_arg_of(this: bind&, t: u32, name0: str, a: cs_arg&) -> void {
     }
 }
 
+// a slice of text or handles, or a list, as C# passes it (true when t is one): from any IEnumerable,
+// gathered for the call (text copied, handles lent; a list's handles are given up)
+attach fn cs_elems(this: bind&, t: u32, name0: str, name: str, a: cs_arg&) -> bool {
+    var elem = VOID;
+    var given = false;
+    match (this.shape_of(t) ?? shape::VOID) {
+        .LIST(x) => {
+            elem = this.list_elem(t);
+            given = true;
+        },
+        .SLICE(x) => { elem = this.slice_elem(t); },
+        default => { return false; },
+    }
+    val v = this.view_of(elem);
+    val h = this.handle_of(elem);
+    if (!given && v != STR && h == null) {
+        // a slice of what C holds as it is: a Span
+        return false;
+    }
+    a.decl = fmt2("{} {}", this.cs_ty(t), S(name));
+    a.pass = fmt3("new {} {{ ptr = {}_p, len = (nuint){}_v.Length }}", this.made_name("slice", v, true), S(name0), S(name0));
+    if (v == STR) {
+        a.open = fmt3("var {}_t = new VoltStrs({});\ntry {{\nvar {}_v = ", S(name0), S(name), S(name0));
+        a.open.append(fmt3("{}_t.Views;\nfixed (VoltStr* {}_p = {}_v) {{\n", S(name0), S(name0), S(name0)).as_str());
+        a.close = fmt("}}\n}}\nfinally {{\n    {}_t.Dispose();\n}}\n", S(name0));
+        return true;
+    }
+    if (h != null && !given) {
+        // each kept alive (and unfreeable) for the call
+        a.open = fmt3("var {}_l = new VoltHandles({}.Select(x => x.h));\ntry {{\nvar {}_v = ", S(name0), S(name), S(name0));
+        a.open.append(fmt3("{}_l.Ptrs;\nfixed (IntPtr* {}_p = {}_v) {{\n", S(name0), S(name0), S(name0)).as_str());
+        a.close = fmt("}}\n}}\nfinally {{\n    {}_l.Dispose();\n}}\n", S(name0));
+        return true;
+    }
+    var conv: std::string = {};
+    if (h != null) {
+        conv = S(".Select(x => x.Release())");
+    }
+    match (this.shape_of(elem) ?? shape::VOID) {
+        .BOOL => { conv = S(".Select(x => (byte)(x ? 1 : 0))"); },
+        default => {},
+    }
+    a.open = fmt4("var {}_v = {}{}.ToArray();\nfixed ({}* ", S(name0), S(name), move conv, this.cs_raw(v));
+    a.open.append(fmt2("{}_p = {}_v) {{\n", S(name0), S(name0)).as_str());
+    a.close = S("}\n");
+    return true;
+}
+
 // the C# value of C result r (of type t)
 attach fn cs_value(this: bind&, t: u32, r: str) -> std::string {
+    val lh = this.lent_handle(t);
+    if (lh) {
+        // a handle Volt lends: a class that never frees it
+        val cls = this.local(this.c.si(lh).name);
+        return fmt3("new {}(new {}Handle({}, false))", copy cls, copy cls, S(r));
+    }
     match (this.shape_of(t) ?? shape::VOID) {
         .BOOL => { return fmt("{} != 0", S(r)); },
         .STR => { return fmt("VoltStr.Text({})", S(r)); },
         .CSTR => { return fmt("Marshal.PtrToStringUTF8((IntPtr){})", S(r)); },
         .TEXT(x) => { return fmt("VoltText.Take({})", S(r)); },
         .HANDLE(s) => { return fmt3("new {}(new {}Handle({}))", this.local(this.c.si(s).name), this.local(this.c.si(s).name), S(r)); },
-        .OPT(x) => { return fmt3("{}.has != 0 ? {}.value : null", S(r), S(r), S("")); },
+        .OPT(x) => {
+            if (this.handle_of(x) != null) {
+                return fmt3("{} == IntPtr.Zero ? ({}?)null : {}", S(r), this.cs_elem(x), this.cs_value(x, r));
+            }
+            return fmt3("{}.has != 0 ? {} : ({}?)null", S(r), this.cs_value(x, fmt("{}.value", S(r)).as_str()), this.cs_elem(x));
+        },
+        .LIST(x) => {
+            // copied into a List, and the list freed (each handle is the List's)
+            var e = this.list_elem(t);
+            if (this.view_of(e) == STR) {
+                e = STR;
+            }
+            return fmt5("VoltList.Take({}.ptr, {}.len, {}.owner, {}.drop, x => {})", S(r), S(r), S(r), S(r), this.cs_value(e, "x"));
+        },
+        .CLOSURE(i) => { return fmt2("new closure{}({})", unum(@cast<u64>(i)), S(r)); },
+        .TRAIT(i) => { return fmt2("new volt_{}({})", this.short(this.trait_of(t)), S(r)); },
         default => { return S(r); },
     }
+}
+
+// the C form of C# value v (of type t) a callback gives Volt back: text given (Volt frees it), a str
+// kept, a handle given up
+attach fn cs_give(this: bind&, t: u32, v: str) -> std::string {
+    if (this.lent_handle(t) != null) {
+        return fmt("{}.h.DangerousGetHandle()", S(v));
+    }
+    match (this.shape_of(t) ?? shape::VOID) {
+        .BOOL => { return fmt("(byte)({} ? 1 : 0)", S(v)); },
+        .STR => { return fmt("VoltStr.Keep({})", S(v)); },
+        .TEXT(x) => { return fmt("VoltText.Give({})", S(v)); },
+        .HANDLE(s) => { return fmt("{}.Release()", S(v)); },
+        default => { return S(v); },
+    }
+}
+
+// a C function Volt calls (a closure parameter's, or a trait's fn on a C# object), with the GCHandle
+// of a Callback first and ps' C forms: it calls target with C# values and gives back r's C form; an
+// error set's exception is E!T's error, any other is kept for after the call
+attach fn cs_callback(this: bind&, name: str, target: str, ps: std::vec<u32>&, r: u32) -> std::string {
+    var params = S("IntPtr user");
+    var args: std::string = {};
+    for (k) in 0..ps.len {
+        val p = this.in_ty(*ps.at(k));
+        val a = fmt("a{}", unum(@cast<u64>(k)));
+        params.append(fmt2(", {} {}", this.cs_raw(p), copy a).as_str());
+        if (k > 0) {
+            args.append(", ");
+        }
+        args.append(this.cs_value(p, a.as_str()).as_str());
+    }
+    val raw = this.cs_raw(r);
+    var out = fmt3("\n    [UnmanagedCallersOnly]\n    public static {} {}({})\n    {{\n        var c = (Callback)GCHandle.FromIntPtr(user).Target!;\n        try\n        {{\n", copy raw, S(name), move params);
+    val call = fmt2("{}({})", S(target), move args);
+    val v = this.cs_ok(r);
+    val res = v != r;
+    // what goes back when it throws (text has to be text Volt can free)
+    var fallback = S("default");
+    match (this.shape_of(v) ?? shape::VOID) {
+        .TEXT(x) => { fallback = S("VoltText.Give(\"\")"); },
+        default => {},
+    }
+    if (res && fallback.as_str() != "default") {
+        fallback = fmt2("new {} {{ value = {} }}", copy raw, move fallback);
+    }
+    if (v == VOID) {
+        out.append(fmt("            {};\n", copy call).as_str());
+        if (res) {
+            out.append("            return default;\n");
+        }
+    } else if (res) {
+        out.append(fmt2("            return new {} {{ value = {} }};\n", copy raw, this.cs_give(v, call.as_str())).as_str());
+    } else {
+        out.append(fmt("            return {};\n", this.cs_give(r, call.as_str())).as_str());
+    }
+    out.append("        }\n");
+    if (res) {
+        out.append(fmt("        catch (VoltException e)\n        {{\n            return new {} {{ error = e.Code }};\n        }}\n", copy raw).as_str());
+    }
+    out.append("        catch (Exception e)\n        {\n            c.Error ??= e;\n");
+    if (r != VOID) {
+        out.append(fmt("            return {};\n", move fallback).as_str());
+    }
+    out.append("        }\n    }\n");
+    return out;
 }
 
 // a wrapper's body: the call inside its parameters' blocks, the error check, the result
 attach fn cs_body(this: bind&, f: u32, args: std::vec<cs_arg>&, ctor: bool) -> std::string {
     val info = this.c.fi(f);
+    var made = this.makes(f);
+    if (!ctor) {
+        made = null;
+    }
+    return this.cs_call(fmt("Native.{}", cs_ident(info.c_name)), info.ret, args, made);
+}
+
+// callee called with args inside their blocks, its error thrown, its result as C# has it (made: the
+// export struct whose handle a constructor keeps)
+attach fn cs_call(this: bind&, callee: std::string, ret: u32, args: std::vec<cs_arg>&, made: u32?) -> std::string {
     var passes: std::string = {};
     var open: std::string = {};
     var close: std::string = {};
@@ -5214,33 +5461,32 @@ attach fn cs_body(this: bind&, f: u32, args: std::vec<cs_arg>&, ctor: bool) -> s
         k -= 1;
         close.append(args.at(k).close.as_str());
     }
-    var call = fmt2("Native.{}({})", S(info.c_name), move passes);
+    var call = fmt2("{}({})", move callee, move passes);
     var body: std::string = {};
     var ret_decl: std::string = {};
-    if (info.ret == VOID) {
+    if (ret == VOID) {
         body = fmt("{};\n", move call);
     } else {
-        ret_decl = fmt("{} result;\n", this.cs_ty(info.ret));
-        val made = this.makes(f);
-        if (ctor && made != null) {
+        ret_decl = fmt("{} result;\n", this.cs_ret(ret));
+        if (made != null) {
             ret_decl = fmt("{}Handle result;\n", this.local(this.c.si(made ?? 0).name));
         }
-        match (this.shape_of(info.ret) ?? shape::VOID) {
+        match (this.shape_of(ret) ?? shape::VOID) {
             .RESULT(e, x) => {
                 body = fmt("var r = {};\nif (r.error != 0) {\n    throw VoltException.For(r.error);\n}\n", move call);
                 if (x == VOID) {
                     ret_decl = {};
-                } else if (ctor && made != null) {
+                } else if (made != null) {
                     body.append(fmt2("result = new {}Handle({});\n", this.local(this.c.si(made ?? 0).name), S("r.value")).as_str());
                 } else {
                     body.append(fmt("result = {};\n", this.cs_value(x, "r.value")).as_str());
                 }
             },
             default => {
-                if (ctor && made != null) {
+                if (made != null) {
                     body = fmt2("var r = {};\nresult = new {}Handle(r);\n", move call, this.local(this.c.si(made ?? 0).name));
                 } else {
-                    body = fmt2("var r = {};\nresult = {};\n", move call, this.cs_value(info.ret, "r"));
+                    body = fmt2("var r = {};\nresult = {};\n", move call, this.cs_value(ret, "r"));
                 }
             },
         }
@@ -5249,8 +5495,8 @@ attach fn cs_body(this: bind&, f: u32, args: std::vec<cs_arg>&, ctor: bool) -> s
     out.append(open.as_str());
     out.append(body.as_str());
     out.append(close.as_str());
-    if (info.ret != VOID) {
-        match (this.shape_of(info.ret) ?? shape::VOID) {
+    if (ret != VOID) {
+        match (this.shape_of(ret) ?? shape::VOID) {
             .RESULT(e, x) => {
                 if (x != VOID) {
                     out.append("return result;\n");
@@ -5289,6 +5535,79 @@ attach fn cs_args(this: bind&, f: u32, first: usize) -> std::vec<cs_arg> {
     return out;
 }
 
+// a closure's or a trait fn's params (a0, a1...) as C# passes them to Volt
+attach fn cs_sig_args(this: bind&, ps: std::vec<u32>&) -> std::vec<cs_arg> {
+    var out: std::vec<cs_arg> = {};
+    for (k) in 0..ps.len {
+        var a: cs_arg = {};
+        this.cs_arg_of(*ps.at(k), fmt("a{}", unum(@cast<u64>(k))).as_str(), &a);
+        put(&out, move a);
+    }
+    return out;
+}
+
+// "public R name(A a0, ...)" calling Volt's C function callee with what the class holds (o_) first:
+// a Volt closure's Invoke, or a method of volt_T
+attach fn cs_call_out(this: bind&, name: str, callee: str, ps: std::vec<u32>&, r: u32) -> std::string {
+    var args = this.cs_sig_args(ps);
+    var all: std::vec<cs_arg> = {};
+    put(&all, { decl: {}, pass: S("o_.self"), open: S("var o_ = O;\n"), close: {} });
+    for (a&) in args.items() {
+        put(&all, copy *a);
+    }
+    var out = fmt3("\n    public {} {}({})\n    {{\n", this.cs_ty(r), S(name), cs_decls(&args));
+    out.append(indent_n(this.cs_call(S(callee), r, &all, null).as_str(), 8).as_str());
+    out.append("    }\n");
+    return out;
+}
+
+// what a class holding o, a C struct Volt gave out, has: Dispose (or the finalizer) frees it once
+// (o.drop), and O is it while it's alive (live: its field that's null once it's freed)
+fn cs_owner(cls: str, raw: str, live: str) -> std::string {
+    var out = fmt4("    {} o;\n\n    internal {}({} o) => this.o = o;\n\n    ~{}() => Free();\n\n", S(raw), S(cls), S(raw), S(cls));
+    out.append("    public void Dispose()\n    {\n        Free();\n        GC.SuppressFinalize(this);\n    }\n\n    void Free()\n    {\n        var x = o;\n        o = default;\n        if (x.drop != null)\n        {\n            x.drop(x.self);\n        }\n    }\n\n");
+    out.append(fmt3("    {} O => o.{} != null ? o : throw new ObjectDisposedException(nameof({}));\n", S(raw), S(live), S(cls)).as_str());
+    return out;
+}
+
+// trait K in C#: an interface (implement it to hand Volt one), its C structs, the table Volt calls a
+// C# object through, and volt_T, one Volt gave out
+attach fn cs_trait(this: bind&, k: u32, out: std::string&) -> void {
+    val t = *this.traits.at(k);
+    val tn = this.short(t);
+    val fns = this.fns_of(t);
+    out.append(fmt4("\n/// <summary>trait {}: implement it to hand Volt a {} (lent, or given: Volt disposes it when it's\n/// done, when it's IDisposable); one Volt gives back is a volt_{}</summary>\npublic interface {}\n{{\n", this.c.ty_name(t), copy tn, copy tn, copy tn).as_str());
+    for (f&) in fns.items() {
+        var args = this.cs_sig_args(&f.params);
+        out.append(fmt3("    {} {}({});\n", this.cs_ty(f.ret), cs_ident(f.name), cs_decls(&args)).as_str());
+    }
+    out.append("}\n");
+    out.append(fmt2("\n/// <summary>trait {}'s fns, each taking the object first</summary>\n[StructLayout(LayoutKind.Sequential)]\npublic unsafe struct {}_vt\n{{\n", this.c.ty_name(t), copy tn).as_str());
+    for (f&) in fns.items() {
+        out.append(fmt2("    public {} {};\n", this.cs_fn_of(&f.params, f.ret), cs_ident(f.name)).as_str());
+    }
+    out.append("}\n");
+    out.append(fmt3("\n/// <summary>a {} as C passes it: its table, the object, and what frees it (null: it's lent)</summary>\n[StructLayout(LayoutKind.Sequential)]\npublic unsafe struct {}_obj\n{{\n    public {}_vt* vt;\n    public IntPtr self;\n    public delegate* unmanaged<IntPtr, void> drop;\n}}\n", copy tn, copy tn, copy tn).as_str());
+    // the table: a C function per fn, calling the C# object
+    out.append(fmt4("\n// the table Volt calls a C# {} through (its self is a GCHandle to a Callback holding it)\ninternal static unsafe class {}_table\n{{\n    internal static readonly {}_vt* Vt = Make();\n\n    static {}_vt* Make()\n    {{\n", copy tn, copy tn, copy tn, copy tn).as_str());
+    out.append(fmt2("        var vt = ({}_vt*)NativeMemory.Alloc((nuint)sizeof({}_vt));\n", copy tn, copy tn).as_str());
+    for (f&) in fns.items() {
+        out.append(fmt2("        vt->{} = &call_{};\n", cs_ident(f.name), S(f.name)).as_str());
+    }
+    out.append("        return vt;\n    }\n");
+    for (f&) in fns.items() {
+        out.append(this.cs_callback(fmt("call_{}", S(f.name)).as_str(), fmt2("(({})c.F).{}", copy tn, cs_ident(f.name)).as_str(), &f.params, f.ret).as_str());
+    }
+    out.append("\n    // Volt is done with one it was given: it's disposed, when it's IDisposable\n    [UnmanagedCallersOnly]\n    internal static void drop(IntPtr user)\n    {\n        var g = GCHandle.FromIntPtr(user);\n        var c = (Callback)g.Target!;\n        g.Free();\n        try\n        {\n            (c.F as IDisposable)?.Dispose();\n        }\n        catch (Exception e)\n        {\n            c.Error ??= e;\n        }\n    }\n}\n");
+    // one Volt gave out
+    out.append(fmt3("\n/// <summary>a {} Volt gave out: calls Volt's; Dispose (or the finalizer) frees it</summary>\npublic sealed unsafe class volt_{} : {}, IDisposable\n{{\n", copy tn, copy tn, copy tn).as_str());
+    out.append(cs_owner(fmt("volt_{}", copy tn).as_str(), fmt("{}_obj", copy tn).as_str(), "vt").as_str());
+    for (f&) in fns.items() {
+        out.append(this.cs_call_out(cs_ident(f.name).as_str(), fmt("o_.vt->{}", cs_ident(f.name)).as_str(), &f.params, f.ret).as_str());
+    }
+    out.append("}\n");
+}
+
 fn cs_decls(args: std::vec<cs_arg>&) -> std::string {
     var s: std::string = {};
     for (a&) in args.items() {
@@ -5321,25 +5640,32 @@ attach fn cs_doc(this: bind&, f: u32, ind: usize) -> std::string {
 
 attach fn cs_text(this: bind&) -> std::string {
     val ents = this.entries();
-    var out = fmt("// {}: generated by voltc bindings; the Volt package for C# (.NET 7 or later). It calls\n", S(this.pkg));
-    out.append(fmt2("// lib{}.so (or {}.dll, lib", S(this.pkg), S(this.pkg)).as_str());
-    out.append(fmt("{}.dylib) through LibraryImport; build with AllowUnsafeBlocks. Errors are thrown as\n// VoltException, one subclass per error set.\n", S(this.pkg)).as_str());
-    out.append("#nullable enable\n#pragma warning disable CS8981 // the type names are Volt's (lower case)\nusing System;\nusing System.Runtime.CompilerServices;\nusing System.Runtime.InteropServices;\nusing System.Text;\n\n");
-    out.append(fmt("namespace {};\n", S(this.pkg)).as_str());
-    out.append("\n/// <summary>a Volt str: UTF-8 bytes and a length</summary>\n[StructLayout(LayoutKind.Sequential)]\npublic unsafe struct VoltStr\n{\n    public byte* ptr;\n    public nuint len;\n\n    public static string Text(VoltStr s) => Encoding.UTF8.GetString(s.ptr, (int)s.len);\n}\n");
-    if (this.texts.len > 0) {
-        out.append("\n/// <summary>owned text a Volt function gave out (the wrappers copy it into a string and free it)</summary>\n[StructLayout(LayoutKind.Sequential)]\npublic unsafe struct VoltText\n{\n    public byte* ptr;\n    public nuint len;\n    public IntPtr owner;\n    public delegate* unmanaged<IntPtr, void> drop;\n\n    public static string Take(VoltText t)\n    {\n        string s = Encoding.UTF8.GetString(t.ptr, (int)t.len);\n        if (t.drop != null)\n        {\n            t.drop(t.owner);\n        }\n        return s;\n    }\n}\n");
-    }
+    // the body first (the helpers it needs are added around it)
+    var out: std::string = {};
     for (x&) in this.slices.items() {
         out.append(fmt2("\n/// <summary>a Volt slice: elements and how many</summary>\n[StructLayout(LayoutKind.Sequential)]\npublic unsafe struct {}\n{{\n    public {}* ptr;\n    public nuint len;\n}}\n", this.made_name("slice", *x, true), this.cs_raw(*x)).as_str());
     }
+    for (lt&) in this.lists.items() {
+        out.append(fmt3("\n/// <summary>{}, given out by a Volt function: its elements (lent), how many, and what frees them</summary>\n[StructLayout(LayoutKind.Sequential)]\npublic unsafe struct {}\n{{\n    public {}* ptr;\n    public nuint len;\n    public IntPtr owner;\n    public delegate* unmanaged<IntPtr, void> drop;\n}}\n", this.c.ty_name(*lt), this.cs_raw(*lt), this.cs_raw(this.view_of(this.list_elem(*lt)))).as_str());
+    }
     for (x&) in this.opts.items() {
-        out.append(fmt2("\n/// <summary>a Volt optional: has (0 or 1) says whether value is there</summary>\n[StructLayout(LayoutKind.Sequential)]\npublic struct {}\n{{\n    public {} value;\n    public byte has;\n}}\n", this.made_name("opt", *x, true), this.cs_raw(*x)).as_str());
+        val n = this.made_name("opt", *x, true);
+        out.append(fmt2("\n/// <summary>a Volt optional: has (0 or 1) says whether value is there</summary>\n[StructLayout(LayoutKind.Sequential)]\npublic struct {}\n{{\n    public {} value;\n    public byte has;\n", copy n, this.cs_raw(*x)).as_str());
+        var plain_value = this.simple_value(*x);
+        match (this.shape_of(*x) ?? shape::VOID) {
+            .BOOL => { plain_value = false; },
+            default => {},
+        }
+        if (plain_value) {
+            // so a T? is one (in a slice of them)
+            out.append(fmt3("\n    public static implicit operator {}({}? v) => new {} {{ value = v.GetValueOrDefault(), has = (byte)(v.HasValue ? 1 : 0) }};\n", copy n, this.cs_raw(*x), copy n).as_str());
+        }
+        out.append("}\n");
     }
     // errors: one exception class per error set, holding its codes too
-    out.append("\n/// <summary>an error a Volt function returned: its code and name</summary>\npublic class VoltException : Exception\n{\n    public uint Code { get; }\n    public string Name { get; }\n\n    public VoltException(uint code, string name) : base(name)\n    {\n        Code = code;\n        Name = name;\n    }\n\n    internal static VoltException For(uint code)\n    {\n        switch (code)\n        {\n");
+    out.append("\n/// <summary>an error a Volt function returned: its code and name</summary>\npublic class VoltException : Exception\n{\n    public uint Code { get; }\n    public string Name { get; }\n\n    public VoltException(uint code, string name) : base(name)\n    {\n        Code = code;\n        Name = name;\n    }\n\n    /// <summary>the exception for an error code (a callback throws it to give Volt that error)</summary>\n    public static VoltException For(uint code)\n    {\n        switch (code)\n        {\n");
     for (c&) in this.all_codes().items() {
-        out.append(fmt4("            case {}u: return new {}(code, \"{}\");\n", num(c.code), copy c.set, S(c.name), S("")).as_str());
+        out.append(fmt3("            case {}u: return new {}(code, \"{}\");\n", num(c.code), copy c.set, S(c.name)).as_str());
     }
     out.append("            default: return new VoltException(code, \"error\");\n        }\n    }\n}\n");
     for (et&) in this.codes.items() {
@@ -5387,6 +5713,24 @@ attach fn cs_text(this: bind&) -> std::string {
             default => {},
         }
     }
+    // a closure Volt gives out: its C struct, and a class that calls it (Invoke) and frees it
+    for (i) in 0..this.closures.len {
+        if (!has_u32(&this.closures_out, @cast<u32>(i))) {
+            continue;
+        }
+        val ct = *this.closures.at(i);
+        val n = fmt("closure{}", unum(@cast<u64>(i)));
+        var ps: std::vec<u32> = {};
+        val r = this.fn_parts(ct, &ps);
+        out.append(fmt3("\n/// <summary>{}, given out by Volt: call(self, ...) calls it, drop(self) frees it</summary>\n[StructLayout(LayoutKind.Sequential)]\npublic unsafe struct {}_obj\n{{\n    public {} call;\n    public IntPtr self;\n    public delegate* unmanaged<IntPtr, void> drop;\n}}\n", this.c.ty_name(ct), copy n, this.cs_fnptr(ct)).as_str());
+        out.append(fmt2("\n/// <summary>{}, given out by Volt: Invoke calls it; Dispose (or the finalizer) frees it</summary>\npublic sealed unsafe class {} : IDisposable\n{{\n", this.c.ty_name(ct), copy n).as_str());
+        out.append(cs_owner(n.as_str(), fmt("{}_obj", copy n).as_str(), "call").as_str());
+        out.append(this.cs_call_out("Invoke", "o_.call", &ps, r).as_str());
+        out.append("}\n");
+    }
+    for (k) in 0..this.traits.len {
+        this.cs_trait(@cast<u32>(k), &out);
+    }
     // the C functions
     out.append(fmt("\n/// <summary>the C functions (the classes below are easier to use)</summary>\npublic static unsafe partial class Native\n{{\n    public const string Lib = \"{}\";\n", S(this.pkg)).as_str());
     for (e&) in ents.items() {
@@ -5397,55 +5741,29 @@ attach fn cs_text(this: bind&) -> std::string {
             ps = S("IntPtr it");
         } else {
             val f = this.c.fi(e.f);
-            ret = this.cs_raw(f.ret);
+            ret = this.cs_out(f.ret);
             for (p&) in f.params.items() {
                 if (ps.len() > 0) {
                     ps.append(", ");
                 }
-                ps.append(fmt2("{} {}", this.cs_raw(p.ty), cs_ident(p.name)).as_str());
+                ps.append(fmt2("{} {}", this.cs_raw(this.in_ty(p.ty)), cs_ident(p.name)).as_str());
                 match (this.shape_of(p.ty) ?? shape::VOID) {
                     .CLOSURE(i) => { ps.append(fmt(", IntPtr {}_user", S(p.name)).as_str()); },
                     default => {},
                 }
             }
         }
-        out.append(fmt4("\n    [LibraryImport(Lib, EntryPoint = \"{}\")]\n    public static partial {} {}({});\n", copy e.name, move ret, copy e.name, move ps).as_str());
+        out.append(fmt4("\n    [LibraryImport(Lib, EntryPoint = \"{}\")]\n    public static partial {} {}({});\n", copy e.name, move ret, cs_ident(e.name.as_str()), move ps).as_str());
     }
     out.append("}\n");
     // callbacks: the C functions a closure parameter calls, which call the delegate
     if (this.closures.len > 0) {
-        out.append("\n// a delegate passed for a callback, and what it threw (rethrown after the call)\ninternal sealed class Callback\n{\n    public readonly Delegate F;\n    public Exception? Error;\n\n    public Callback(Delegate f) => F = f;\n\n    public void Rethrow()\n    {\n        if (Error != null)\n        {\n            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(Error).Throw();\n        }\n    }\n}\n\ninternal static unsafe class Callbacks\n{");
+        out.append("\ninternal static unsafe class Callbacks\n{");
         for (i) in 0..this.closures.len {
             val ct = *this.closures.at(i);
-            match (*this.c.t.get(ct)) {
-                .FN_VAL(ps&, r) => {
-                    var params = S("IntPtr user");
-                    var args: std::string = {};
-                    for (k) in 0..ps.len {
-                        params.append(fmt2(", {} a{}", this.cs_raw(*ps.at(k)), unum(@cast<u64>(k))).as_str());
-                        if (k > 0) {
-                            args.append(", ");
-                        }
-                        args.append(this.cs_value(*ps.at(k), fmt("a{}", unum(@cast<u64>(k))).as_str()).as_str());
-                    }
-                    out.append(fmt3("\n    [UnmanagedCallersOnly]\n    public static {} cb{}({})\n    {{\n        var c = (Callback)GCHandle.FromIntPtr(user).Target!;\n        try\n        {{\n", this.cs_raw(r), unum(@cast<u64>(i)), move params).as_str());
-                    val call = fmt3("(({})c.F)({})", this.cs_ty(ct), move args, S(""));
-                    if (r == VOID) {
-                        out.append(fmt("            {};\n", move call).as_str());
-                    } else {
-                        match (this.shape_of(r) ?? shape::VOID) {
-                            .BOOL => { out.append(fmt("            return (byte)({} ? 1 : 0);\n", move call).as_str()); },
-                            default => { out.append(fmt("            return {};\n", move call).as_str()); },
-                        }
-                    }
-                    out.append("        }\n        catch (Exception e)\n        {\n            c.Error ??= e;\n");
-                    if (r != VOID) {
-                        out.append("            return default;\n");
-                    }
-                    out.append("        }\n    }\n");
-                },
-                default => {},
-            }
+            var ps: std::vec<u32> = {};
+            val r = this.fn_parts(ct, &ps);
+            out.append(this.cs_callback(fmt("cb{}", unum(@cast<u64>(i))).as_str(), fmt("(({})c.F)", this.cs_ty(ct)).as_str(), &ps, r).as_str());
         }
         out.append("}\n");
     }
@@ -5453,9 +5771,11 @@ attach fn cs_text(this: bind&) -> std::string {
     for (s&) in this.handles.items() {
         val cls = this.local(this.c.si(*s).name);
         out.append(fmt4("\n/// <summary>owns a handle to export struct {}; Dispose (or a using block, or the finalizer) frees it</summary>\npublic sealed class {}Handle : SafeHandle\n{{\n    public {}Handle() : base(IntPtr.Zero, true) {{ }}\n    public {}Handle(IntPtr h) : base(IntPtr.Zero, true) => SetHandle(h);\n", S(this.c.si(*s).name), copy cls, copy cls, copy cls).as_str());
-        out.append(fmt("    public override bool IsInvalid => handle == IntPtr.Zero;\n\n    protected override bool ReleaseHandle()\n    {\n        Native.{}(handle);\n        return true;\n    }\n}\n", this.free_name(*s)).as_str());
+        out.append(fmt("    // one Volt lends (owns: false) is never freed through this\n    public {}Handle(IntPtr h, bool owns) : base(IntPtr.Zero, owns) => SetHandle(h);\n", copy cls).as_str());
+        out.append(fmt("    public override bool IsInvalid => handle == IntPtr.Zero;\n\n    protected override bool ReleaseHandle()\n    {\n        Native.{}(handle);\n        return true;\n    }\n}\n", cs_ident(this.free_name(*s).as_str())).as_str());
         out.append(fmt3("\n/// <summary>export struct {}</summary>\npublic sealed unsafe class {} : IDisposable\n{{\n    internal readonly {}Handle h;\n\n", S(this.c.si(*s).name), copy cls, copy cls).as_str());
         out.append(fmt2("    public {}({}Handle h) => this.h = h;\n\n    public void Dispose() => h.Dispose();\n", copy cls, copy cls).as_str());
+        out.append(fmt("\n    /// <summary>gives the handle up (to Volt, or to free it yourself): this no longer frees it</summary>\n    public IntPtr Release()\n    {{\n        if (h.IsClosed || h.IsInvalid)\n        {{\n            throw new ObjectDisposedException(nameof({}));\n        }}\n        var p = h.DangerousGetHandle();\n        h.SetHandleAsInvalid();\n        return p;\n    }}\n", copy cls).as_str());
         for (e&) in ents.items() {
             if (e.free_of != null) {
                 continue;
@@ -5473,7 +5793,7 @@ attach fn cs_text(this: bind&) -> std::string {
                 for (a&) in args.items() {
                     put(&all, copy *a);
                 }
-                out.append(fmt3("    public {} {}({})\n    {{\n", this.cs_ty(info.ret), cs_ident(m), cs_decls(&args)).as_str());
+                out.append(fmt3("    public {} {}({})\n    {{\n", this.cs_ret(info.ret), cs_ident(m), cs_decls(&args)).as_str());
                 out.append(indent_n(this.cs_body(e.f, &all, false).as_str(), 8).as_str());
                 out.append("    }\n");
             } else if (m == "new") {
@@ -5493,7 +5813,7 @@ attach fn cs_text(this: bind&) -> std::string {
                 out.append("    }\n");
             } else {
                 var args = this.cs_args(e.f, 0);
-                out.append(fmt3("    public static {} {}({})\n    {{\n", this.cs_ty(info.ret), cs_ident(m), cs_decls(&args)).as_str());
+                out.append(fmt3("    public static {} {}({})\n    {{\n", this.cs_ret(info.ret), cs_ident(m), cs_decls(&args)).as_str());
                 out.append(indent_n(this.cs_body(e.f, &args, false).as_str(), 8).as_str());
                 out.append("    }\n");
             }
@@ -5501,7 +5821,7 @@ attach fn cs_text(this: bind&) -> std::string {
         out.append("}\n");
     }
     // the functions
-    out.append(fmt("\n/// <summary>the package's functions</summary>\npublic static unsafe class Api\n{{\n", S("")).as_str());
+    out.append("\n/// <summary>the package's functions</summary>\npublic static unsafe class Api\n{\n");
     var firstfn = true;
     for (e&) in ents.items() {
         if (e.free_of != null || this.class_of(e.f) != null) {
@@ -5514,12 +5834,46 @@ attach fn cs_text(this: bind&) -> std::string {
         }
         firstfn = false;
         out.append(this.cs_doc(e.f, 4).as_str());
-        out.append(fmt3("    public static {} {}({})\n    {{\n", this.cs_ty(info.ret), cs_ident(info.c_name), cs_decls(&args)).as_str());
+        out.append(fmt3("    public static {} {}({})\n    {{\n", this.cs_ret(info.ret), cs_ident(info.c_name), cs_decls(&args)).as_str());
         out.append(indent_n(this.cs_body(e.f, &args, false).as_str(), 8).as_str());
         out.append("    }\n");
     }
     out.append("}\n");
-    return out;
+    // the helpers the body uses
+    if (this.closures.len > 0 || this.traits.len > 0) {
+        out.append("\n// a delegate or an object Volt calls, and what it threw (rethrown after the call)\ninternal sealed class Callback\n{\n    public readonly object F;\n    public Exception? Error;\n\n    public Callback(object f) => F = f;\n\n    public void Rethrow()\n    {\n        if (Error != null)\n        {\n            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(Error).Throw();\n        }\n    }\n}\n");
+    }
+    if (contains(out.as_str(), "VoltList.Take(")) {
+        out.append("\n// copies a list a Volt function gave out, and frees it\ninternal static unsafe class VoltList\n{\n    public static List<U> Take<T, U>(T* ptr, nuint len, IntPtr owner, delegate* unmanaged<IntPtr, void> drop, Func<T, U> f) where T : unmanaged\n    {\n        var v = new List<U>((int)len);\n        for (nuint i = 0; i < len; i++)\n        {\n            v.Add(f(ptr[i]));\n        }\n        if (drop != null)\n        {\n            drop(owner);\n        }\n        return v;\n    }\n}\n");
+    }
+    if (contains(out.as_str(), "new VoltStrs(")) {
+        out.append("\n// text lent to Volt for one call: each string's UTF-8 bytes, in one block Dispose frees\ninternal sealed unsafe class VoltStrs : IDisposable\n{\n    byte* p;\n    public readonly VoltStr[] Views;\n\n    public VoltStrs(IEnumerable<string> xs)\n    {\n        var bs = xs.Select(x => Encoding.UTF8.GetBytes(x)).ToArray();\n        var n = 0;\n        foreach (var b in bs)\n        {\n            n += b.Length;\n        }\n        p = (byte*)NativeMemory.Alloc((nuint)n + 1);\n        Views = new VoltStr[bs.Length];\n        var at = p;\n        for (var i = 0; i < bs.Length; i++)\n        {\n            bs[i].CopyTo(new Span<byte>(at, bs[i].Length));\n            Views[i] = new VoltStr { ptr = at, len = (nuint)bs[i].Length };\n            at += bs[i].Length;\n        }\n    }\n\n    public void Dispose()\n    {\n        NativeMemory.Free(p);\n        p = null;\n    }\n}\n");
+    }
+    if (contains(out.as_str(), "new VoltHandles(")) {
+        out.append("\n// handles lent to Volt for one call: each kept alive (and unfreeable) until Dispose\ninternal sealed class VoltHandles : IDisposable\n{\n    readonly SafeHandle[] hs;\n    readonly bool[] refs;\n    public readonly IntPtr[] Ptrs;\n\n    public VoltHandles(IEnumerable<SafeHandle> xs)\n    {\n        hs = xs.ToArray();\n        refs = new bool[hs.Length];\n        Ptrs = new IntPtr[hs.Length];\n        try\n        {\n            for (var i = 0; i < hs.Length; i++)\n            {\n                hs[i].DangerousAddRef(ref refs[i]);\n                Ptrs[i] = hs[i].DangerousGetHandle();\n            }\n        }\n        catch\n        {\n            Dispose();\n            throw;\n        }\n    }\n\n    public void Dispose()\n    {\n        for (var i = 0; i < hs.Length; i++)\n        {\n            if (refs[i])\n            {\n                hs[i].DangerousRelease();\n                refs[i] = false;\n            }\n        }\n    }\n}\n");
+    }
+    // the head, and the shared types
+    var head = fmt("// {}: generated by voltc bindings; the Volt package for C# (.NET 7 or later). It calls\n", S(this.pkg));
+    head.append(fmt2("// lib{}.so (or {}.dll, lib", S(this.pkg), S(this.pkg)).as_str());
+    head.append(fmt("{}.dylib) through LibraryImport; build with AllowUnsafeBlocks. Errors are thrown as\n// VoltException, one subclass per error set.\n", S(this.pkg)).as_str());
+    head.append("#nullable enable\n#pragma warning disable CS8981 // the type names are Volt's (lower case)\nusing System;\nusing System.Collections.Generic;\nusing System.Linq;\nusing System.Runtime.CompilerServices;\nusing System.Runtime.InteropServices;\nusing System.Text;\n\n");
+    head.append(fmt("namespace {};\n", S(this.pkg)).as_str());
+    head.append("\n/// <summary>a Volt str: UTF-8 bytes and a length</summary>\n[StructLayout(LayoutKind.Sequential)]\npublic unsafe struct VoltStr\n{\n    public byte* ptr;\n    public nuint len;\n\n    public static string Text(VoltStr s) => Encoding.UTF8.GetString(s.ptr, (int)s.len);\n");
+    if (contains(out.as_str(), "VoltStr.Keep(")) {
+        // ponytail: kept for good, like a 'static str (once per distinct text); free them after each
+        // call if callbacks give back many different strs
+        head.append("\n    static readonly Dictionary<string, VoltStr> kept = new();\n\n    // a str C# gives Volt back (a callback's result): its bytes are kept for good, once per text\n    public static VoltStr Keep(string s)\n    {\n        lock (kept)\n        {\n            if (!kept.TryGetValue(s, out var v))\n            {\n                var b = Encoding.UTF8.GetBytes(s);\n                v = new VoltStr { ptr = (byte*)NativeMemory.Alloc((nuint)b.Length + 1), len = (nuint)b.Length };\n                b.CopyTo(new Span<byte>(v.ptr, b.Length));\n                kept[s] = v;\n            }\n            return v;\n        }\n    }\n");
+    }
+    head.append("}\n");
+    if (this.texts.len > 0) {
+        head.append("\n/// <summary>owned text a Volt function gave out (the wrappers copy it into a string and free it)</summary>\n[StructLayout(LayoutKind.Sequential)]\npublic unsafe struct VoltText\n{\n    public byte* ptr;\n    public nuint len;\n    public IntPtr owner;\n    public delegate* unmanaged<IntPtr, void> drop;\n\n    public static string Take(VoltText t)\n    {\n        string s = Encoding.UTF8.GetString(t.ptr, (int)t.len);\n        if (t.drop != null)\n        {\n            t.drop(t.owner);\n        }\n        return s;\n    }\n");
+        if (contains(out.as_str(), "VoltText.Give(")) {
+            head.append("\n    // text C# gives Volt (a callback's result): Volt frees it when it's done\n    public static VoltText Give(string s)\n    {\n        var b = Encoding.UTF8.GetBytes(s);\n        var p = (byte*)NativeMemory.Alloc((nuint)b.Length + 1);\n        b.CopyTo(new Span<byte>(p, b.Length));\n        return new VoltText { ptr = p, len = (nuint)b.Length, owner = (IntPtr)p, drop = &Free };\n    }\n\n    [UnmanagedCallersOnly]\n    static void Free(IntPtr p) => NativeMemory.Free((void*)p);\n");
+        }
+        head.append("}\n");
+    }
+    head.append(out.as_str());
+    return head;
 }
 
 // ---------- Java (the FFM API, Java 22+) ----------
@@ -10444,7 +10798,7 @@ attach fn rb_text(this: bind&) -> compile_error!std::string {
 // the bindings of package pkg in lang (see the top of the file; node, js and ts are a Node-API
 // addon, its loader and its types; json is the model itself)
 attach fn bindings(this: checker&, pkg: str, lang: str) -> compile_error!std::string {
-    var b: bind = { c: this, pkg: pkg, wide: lang == "c" || lang == "cpp" || lang == "rust" || lang == "zig" || lang == "json" };
+    var b: bind = { c: this, pkg: pkg, wide: lang == "c" || lang == "cpp" || lang == "rust" || lang == "zig" || lang == "csharp" || lang == "json" };
     val fns = b.exports();
     if (fns.len == 0) {
         return fail(NO_SPAN, fmt("package {} has no export fns to make bindings for", S(pkg)));

@@ -425,6 +425,24 @@ fn bindings_shapes() {
         } else {
             eprintln!("zig isn't installed: skipping the Zig shapes client");
         }
+        // C#: a console project around the generated shapelib.cs, the leak report on stderr
+        if let Some(dotnet) = local_tool("dotnet", "--version") {
+            ok(e.voltc(&["bindings", "shapelib", "--pkg", pkg, "--lang", "csharp", "-o", &e.path("shapelib.cs")]), "voltc bindings --lang csharp");
+            let v = String::from_utf8_lossy(&Command::new(&dotnet).arg("--version").output().unwrap().stdout).trim().to_string();
+            let major = v.split('.').next().unwrap_or("10").to_string();
+            let proj = e.dir.join(format!("cs-{backend}"));
+            std::fs::create_dir_all(&proj).unwrap();
+            std::fs::copy(e.dir.join("shapelib.cs"), proj.join("shapelib.cs")).unwrap();
+            std::fs::copy(Path::new(ROOT).join("tests/interop/client_shapes.cs"), proj.join("client_shapes.cs")).unwrap();
+            std::fs::write(proj.join("Client.csproj"), format!("<Project Sdk=\"Microsoft.NET.Sdk\">\n  <PropertyGroup>\n    <OutputType>Exe</OutputType>\n    <TargetFramework>net{major}.0</TargetFramework>\n    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>\n    <Nullable>enable</Nullable>\n    <InvariantGlobalization>true</InvariantGlobalization>\n    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>\n  </PropertyGroup>\n</Project>\n")).unwrap();
+            let o = Command::new(&dotnet).args(["run", "--nologo"]).current_dir(&proj).env("LD_LIBRARY_PATH", &lib).env("DOTNET_CLI_TELEMETRY_OPTOUT", "1").env("DOTNET_NOLOGO", "1").env("DOTNET_SKIP_FIRST_TIME_EXPERIENCE", "1").output().unwrap();
+            let err = String::from_utf8_lossy(&o.stderr).to_string();
+            let out = ok(o, "dotnet run client_shapes.cs");
+            assert_eq!(err, "volt live: 0\n", "client_shapes.cs ({backend}): the library's allocations at exit");
+            assert_eq!(out, format!("checked true OVERDRAWN\nlimit true OVERDRAWN\nsign positive not positive\n{SHAPES_OUT}"), "client_shapes.cs ({backend})");
+        } else {
+            eprintln!("dotnet isn't installed: skipping the C# shapes client");
+        }
     }
     // the model has the trait, and how a fn takes its object
     let json = ok(e.voltc(&["bindings", "shapelib", "--pkg", pkg, "--lang", "json"]), "voltc bindings --lang json");
