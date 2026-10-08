@@ -1,15 +1,16 @@
 // The site's generator: the docs (site/src/content/docs, Markdown), the std reference
 // (site/src/data/std.json) and the landing page into site/dist, with Starlight's look: its page
-// markup (site/theme/page.html, cut from a Starlight build, with {{slots}}), the pieces it repeats
-// (site/theme/parts.html) and its built CSS and scripts (site/theme/assets). From the repository:
+// markup (site/theme/*.html, cut from a Starlight build, as std::html templates) and its built CSS
+// and scripts (site/theme/assets). From the repository:
 //   voltc run site/gen/*.volt -- [SITE_DIR [OUT_DIR]]
 use std::io;
 use std::fmt;
 use std::fs;
+use std::html;
+use std::json;
 
 val BASE: str = "/volt-bootstrap";
 val SITE_URL: str = "https://chasesunstrom.github.io/volt-bootstrap/";
-val EDIT_URL: str = "https://github.com/ChaseSunstrom/volt-bootstrap/edit/main/site/src/content/docs/";
 
 // a page: a doc, a std reference page or the landing page
 struct page {
@@ -26,37 +27,43 @@ struct page {
     headings: std::vec<heading> = {};
 }
 
-// the named pieces in parts.html
-struct parts {
-    names: std::vec<std::string>;
-    texts: std::vec<std::string>;
+// site/theme's templates (std::html), read once
+struct theme {
+    page: std::html::template;     // a docs or std reference page
+    landing: std::html::template;  // the landing page
+    stdref: std::html::template;   // a std reference page's content
+    heading: std::html::template;  // an h2 or h3 with its anchor link
+    code: std::html::template;     // an Expressive Code frame
+    shiki: std::html::template;    // code on the landing page
+    sitemap: std::html::template;
 }
 
-attach fn get(this: parts&, name: str) -> str {
-    for (n&, i) in this.names.items() {
-        if (n.as_str() == name) {
-            return this.texts.at(i).as_str();
-        }
-    }
-    @panic("no such part");
+fn load_theme(site: str) -> !theme {
+    return {
+        page: try read_template(site, "page.html"),
+        landing: try read_template(site, "landing.html"),
+        stdref: try read_template(site, "stdref.html"),
+        heading: try read_template(site, "heading.html"),
+        code: try read_template(site, "code.html"),
+        shiki: try read_template(site, "shiki.html"),
+        sitemap: try read_template(site, "sitemap.xml"),
+    };
 }
 
-fn load_parts(text: str) -> parts {
-    var p: parts = { names: {}, texts: {} };
-    var rest = text;
-    loop {
-        val (_, after) = rest.split_once("<!-- part: ") ?? break;
-        val (name, body) = after.split_once(" -->\n") ?? break;
-        var end = body.len;
-        val next = body.find("<!-- part: ");
-        if (next) {
-            end = next;
-        }
-        p.names.push(std::string::from(name));
-        p.texts.push(std::string::from(body[0..end].trim_end()));
-        rest = body[end..body.len];
-    }
-    return p;
+fn read_template(site: str, name: str) -> !std::html::template {
+    val t = std::html::template::read(std::format("{}/theme/{}", site, name).as_str()) catch |e| {
+        std::eprintln("site/theme/{}: {}", name, e);
+        return e;
+    };
+    return t;
+}
+
+// t with d's values, after out's text; a failure is a value the template names and site/gen doesn't
+// give it, a bug in one or the other
+fn fill(t: std::html::template&, d: std::json::value&, out: std::string&) -> void {
+    t.render(d, out) catch |e| {
+        @panic("a site/theme template names a value site/gen doesn't give it");
+    };
 }
 
 // the sidebar's groups, in order: a docs directory and its label
@@ -71,15 +78,6 @@ val GROUPS: (str, str)[8] = {
     ("internals", "Internals"),
 };
 
-// the header's sections: label, link and the path that makes it current
-val SECTIONS: (str, str, str)[5] = {
-    ("Learn", "start/install", "/start/"),
-    ("Guide", "guide/basics", "/guide/"),
-    ("std", "std/overview", "/std/"),
-    ("bolt", "bolt/overview", "/bolt/"),
-    ("Interop", "interop/c", "/interop/"),
-};
-
 error site_error {
     BROKEN_LINKS,
 }
@@ -88,9 +86,7 @@ fn main() -> !void {
     val site = std::process::arg(1) ?? "site";
     val out = std::process::arg(2) ?? "site/dist";
     val docs = std::format("{}/src/content/docs", site);
-    val tmpl = try std::fs::read_file(std::format("{}/theme/page.html", site).as_str());
-    val part_text = try std::fs::read_file(std::format("{}/theme/parts.html", site).as_str());
-    val parts = load_parts(part_text.as_str());
+    val th = try load_theme(site);
     val std_css = try std::fs::read_file(std::format("{}/theme/std.css", site).as_str());
 
     // the docs, grouped and ordered as the sidebar shows them
@@ -105,7 +101,7 @@ fn main() -> !void {
             }
         }
     }
-    try std_pages(site, 2, &pages);
+    try std_pages(site, 2, &th, &pages);
     pages.items().sort_by(|| (a: page&, b: page&) -> i32 {
         if (a.group != b.group) {
             return @cast<i32>(a.group) - @cast<i32>(b.group);
@@ -125,16 +121,16 @@ fn main() -> !void {
     var contents: std::vec<std::string> = {};
     for (p&, i) in pages.items() {
         var content: std::string = {};
-        var html = fill_page(tmpl.as_str(), std_css.as_str(), &parts, &sidebar_pages, i, p, &content);
+        var html = fill_page(&th, std_css.as_str(), &sidebar_pages, i, p, &content);
         try write_page(out, p.path.as_str(), html.as_str());
         written.push((copy p.path, move html));
         contents.push(move content);
     }
-    written.push((std::string::from(""), try landing(site, out)));
+    written.push((std::string::from(""), try landing(site, out, &th)));
     try std::fs::copy_file(std::format("{}/theme/404.html", site).as_str(), std::format("{}/404.html", out).as_str());
     // the files beside the pages, as links name them
     var files = try copy_assets(std::format("{}/theme/assets", site).as_str(), out);
-    try write_sitemap(out, &written);
+    try write_sitemap(&th, out, &written);
     try write_search(out, &pages, &contents);
     files.push(std::string::from("404.html"));
     files.push(std::string::from("sitemap-0.xml"));
@@ -147,8 +143,9 @@ fn main() -> !void {
     std::println("{} pages", written.len);
 }
 
-// sitemap-0.xml: every page, in order of URL (sitemap-index.xml, which points at it, is an asset)
-fn write_sitemap(out: str, pages: std::vec<(std::string, std::string)>&) -> !void {
+// sitemap-0.xml (site/theme/sitemap.xml): every page, in order of URL (sitemap-index.xml, which
+// points at it, is an asset)
+fn write_sitemap(th: theme&, out: str, pages: std::vec<(std::string, std::string)>&) -> !void {
     var urls: std::vec<std::string> = {};
     for (p&) in pages.items() {
         if (p.0.len() == 0) {
@@ -158,11 +155,14 @@ fn write_sitemap(out: str, pages: std::vec<(std::string, std::string)>&) -> !voi
         }
     }
     urls.items().sort();
-    var xml = std::string::from("<?xml version=\"1.0\" encoding=\"UTF-8\"?><urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\" xmlns:news=\"http://www.google.com/schemas/sitemap-news/0.9\" xmlns:xhtml=\"http://www.w3.org/1999/xhtml\" xmlns:image=\"http://www.google.com/schemas/sitemap-image/1.1\" xmlns:video=\"http://www.google.com/schemas/sitemap-video/1.1\">");
+    var us = std::json::array();
     for (u&) in urls.items() {
-        std::write(&xml, "<url><loc>{}</loc></url>", u.as_str());
+        us.add(std::json::string(u.as_str()));
     }
-    xml.append("</urlset>");
+    var d = std::json::object();
+    d.set("urls", move us);
+    var xml: std::string = {};
+    fill(&th.sitemap, &d, &xml);
     try std::fs::write_file(std::format("{}/sitemap-0.xml", out).as_str(), xml.as_str());
 }
 
@@ -198,158 +198,84 @@ fn unquote(s: str) -> str {
     return s;
 }
 
-// one docs page: the template with its slots filled
-fn fill_page(tmpl: str, std_css: str, parts: parts&, all: std::vec<(std::string, std::string, std::string)>&, at: usize, p: page&, content: std::string&) -> std::string {
+// one docs page: page.html rendered with its values
+fn fill_page(th: theme&, std_css: str, all: std::vec<(std::string, std::string, std::string)>&, at: usize, p: page&, content: std::string&) -> std::string {
     var r: rendered = { html: copy p.html, headings: copy p.headings };
     if (!p.reference) {
-        r = render_md(p.body.as_str(), parts);
+        r = render_md(p.body.as_str(), th);
     }
-    var html: std::string = {};
-    var rest = tmpl;
-    loop {
-        val (before, after) = rest.split_once("{{") ?? break;
-        val (slot, more) = after.split_once("}}") ?? break;
-        html.append(before);
-        if (slot == "title") {
-            attr(p.title.as_str(), &html);
-        } else if (slot == "description") {
-            attr(p.description.as_str(), &html);
-        } else if (slot == "url") {
-            std::write(&html, "{}{}/", SITE_URL, p.path.as_str());
-        } else if (slot == "h1") {
-            html.append("<h1 id=\"_top\" class=\"astro-bebwqqxs\">");
-            escape(p.title.as_str(), &html);
-            html.append("</h1>");
-        } else if (slot == "nav") {
-            nav(p.path.as_str(), &html);
-        } else if (slot == "sidebar") {
-            sidebar(all, at, parts, &html);
-        } else if (slot == "toc") {
-            toc(&r.headings, "", &html);
-        } else if (slot == "toc_mobile") {
-            toc(&r.headings, "isMobile ", &html);
-        } else if (slot == "content") {
-            html.append(r.html.as_str());
-            content.append(r.html.as_str());
-        } else if (slot == "footer") {
-            footer(all, at, p.file.as_str(), parts, &html);
-        } else if (slot == "head_extra") {
-            // the std reference pages' styles
-            if (p.reference) {
-                std::write(&html, "<style>{}</style>", std_css);
+    var d = std::json::object();
+    d.set("title", std::json::string(p.title.as_str()));
+    d.set("description", std::json::string(p.description.as_str()));
+    d.set("url", std::json::string(std::format("{}{}/", SITE_URL, p.path.as_str()).as_str()));
+    d.set("file", std::json::string(p.file.as_str()));
+    d.set("reference", std::json::boolean(p.reference));
+    d.set("std_css", std::json::string(std_css));
+    d.set("content", std::json::string(r.html.as_str()));
+    // the header's section: the path's first directory
+    var section = std::json::object();
+    section.set(p.section.as_str(), std::json::boolean(true));
+    d.set("section", move section);
+    // the sidebar: each group's pages, this one current
+    var groups = std::json::array();
+    for (g&, gi) in GROUPS {
+        var ps = std::json::array();
+        for (e&, i) in all.items() {
+            if (e.2.as_str() == g.0) {
+                var x = link(e);
+                x.set("current", std::json::boolean(i == at));
+                ps.add(move x);
             }
         }
-        rest = more;
+        var gv = std::json::object();
+        gv.set("label", std::json::string(g.1));
+        gv.set("index", std::json::number(@cast<f64>(gi)));
+        gv.set("pages", move ps);
+        groups.add(move gv);
     }
-    html.append(rest);
+    d.set("groups", move groups);
+    d.set("toc", toc(&r.headings));
+    if (at > 0) {
+        d.set("prev", link(all.at(at - 1)));
+    }
+    if (at + 1 < all.len) {
+        d.set("next", link(all.at(at + 1)));
+    }
+    var html: std::string = {};
+    fill(&th.page, &d, &html);
+    content.append(r.html.as_str());
     return html;
 }
 
-// text for an attribute value: & and " escaped
-fn attr(s: str, out: std::string&) -> void {
-    for (i) in 0..s.len {
-        if (s[i] == '"') {
-            out.append("&quot;");
-        } else if (s[i] == '&') {
-            out.append("&amp;");
-        } else {
-            out.push(s[i]);
-        }
-    }
+// a page to link to: its path and title
+fn link(e: (std::string, std::string, std::string)&) -> std::json::value {
+    var x = std::json::object();
+    x.set("path", std::json::string(e.0.as_str()));
+    x.set("title", std::json::string(e.1.as_str()));
+    return x;
 }
 
-fn nav(path: str, out: std::string&) -> void {
-    out.append("<nav class=\"v-links astro-nen7h5rs\" aria-label=\"Sections\">");
-    val here = std::format("{}/{}/", BASE, path);
-    for (s&) in SECTIONS {
-        std::write(out, "<a href=\"{}/{}/\"", BASE, s.1);
-        if (here.as_str().contains(s.2)) {
-            out.append(" aria-current=\"true\"");
-        }
-        std::write(out, " class=\"astro-nen7h5rs\">{}</a>", s.0);
-    }
-    out.append("</nav>");
-}
-
-fn sidebar(all: std::vec<(std::string, std::string, std::string)>&, at: usize, parts: parts&, out: std::string&) -> void {
-    out.append("<ul class=\"top-level astro-rmhv4bp6\">");
-    for (g&, gi) in GROUPS {
-        std::write(out, "<li class=\"astro-rmhv4bp6\"><details open class=\"astro-rmhv4bp6\"><summary class=\"astro-rmhv4bp6\"><span class=\"group-label astro-rmhv4bp6\"><span class=\"large astro-rmhv4bp6\">{}</span></span>{}</summary><sl-sidebar-restore data-index=\"{}\"></sl-sidebar-restore><ul class=\"astro-rmhv4bp6\">", g.1, parts.get("caret"), gi);
-        for (e&, i) in all.items() {
-            if (e.2.as_str() != g.0) {
-                continue;
-            }
-            std::write(out, "<li class=\"astro-rmhv4bp6\"><a href=\"{}/{}/\"", BASE, e.0.as_str());
-            if (i == at) {
-                out.append(" aria-current=\"page\"");
-            }
-            out.append(" class=\"astro-rmhv4bp6\"><span class=\"astro-rmhv4bp6\">");
-            escape(e.1.as_str(), out);
-            out.append("</span></a></li>");
-        }
-        out.append("</ul></details></li>");
-    }
-    out.append("</ul>");
-}
-
-// the table of contents: Overview, then the h2s with their h3s inside
-fn toc(hs: std::vec<heading>&, mobile: str, out: std::string&) -> void {
-    std::write(out, "<ul class=\"{}astro-jugkfwgx\" style=\"--depth: 0;\">", mobile);
-    toc_item("_top", "Overview", 0, out);
-    out.append("</li>");
-    var open_sub = false;
-    for (h&, i) in hs.items() {
+// the table of contents: Overview (with any h3s before the first h2), then the h2s with their h3s
+fn toc(hs: std::vec<heading>&) -> std::json::value {
+    var top = std::json::array();
+    top.add(toc_item("_top", "Overview"));
+    for (h&) in hs.items() {
         if (h.depth == 2) {
-            if (open_sub) {
-                out.append("</ul>");
-                open_sub = false;
-            }
-            if (i > 0) {
-                out.append("</li>");
-            }
-            toc_item(h.id.as_str(), h.text.as_str(), 0, out);
+            top.add(toc_item(h.id.as_str(), h.text.as_str()));
         } else {
-            if (!open_sub) {
-                std::write(out, "<ul class=\"{}astro-jugkfwgx\" style=\"--depth: 1;\">", mobile);
-                open_sub = true;
-            }
-            toc_item(h.id.as_str(), h.text.as_str(), 1, out);
-            out.append("</li>");
+            top.at(top.len() - 1).get("subs").add(toc_item(h.id.as_str(), h.text.as_str()));
         }
     }
-    if (open_sub) {
-        out.append("</ul>");
-    }
-    if (hs.len > 0) {
-        out.append("</li>");
-    }
-    out.append("</ul>");
+    return top;
 }
 
-// an item's <li> and link, left open for its sub-list
-fn toc_item(id: str, text: str, depth: u32, out: std::string&) -> void {
-    std::write(out, "<li style=\"--depth: {};\" class=\"astro-jugkfwgx\"><a href=\"#{}\" style=\"--depth: {};\" class=\"astro-jugkfwgx\"><span style=\"--depth: {};\" class=\"astro-jugkfwgx\">{}</span></a>", depth, id, depth, depth, text);
-}
-
-fn footer(all: std::vec<(std::string, std::string, std::string)>&, at: usize, file: str, parts: parts&, out: std::string&) -> void {
-    out.append("<footer class=\"sl-flex astro-ddtxxk7k\"><div class=\"meta sl-flex astro-ddtxxk7k\">");
-    if (file.len > 0) {
-        std::write(out, "<a href=\"{}{}\" class=\"sl-flex print:hidden astro-qlekgd3o\">{}Edit page</a>", EDIT_URL, file, parts.get("edit"));
-    }
-    out.append("</div><div class=\"pagination-links print:hidden astro-b5raizh3\" dir=\"ltr\">");
-    if (at > 0) {
-        val e = all.at(at - 1);
-        std::write(out, "<a href=\"{}/{}/\" rel=\"prev\" class=\"astro-b5raizh3\">{}<span class=\"astro-b5raizh3\">Previous<br class=\"astro-b5raizh3\"><span class=\"link-title astro-b5raizh3\">", BASE, e.0.as_str(), parts.get("prev"));
-        escape(e.1.as_str(), out);
-        out.append("</span></span></a>");
-    }
-    if (at + 1 < all.len) {
-        val e = all.at(at + 1);
-        std::write(out, "<a href=\"{}/{}/\" rel=\"next\" class=\"astro-b5raizh3\">{}<span class=\"astro-b5raizh3\">Next<br class=\"astro-b5raizh3\"><span class=\"link-title astro-b5raizh3\">", BASE, e.0.as_str(), parts.get("next"));
-        escape(e.1.as_str(), out);
-        out.append("</span></span></a>");
-    }
-    out.append("</div></footer>");
+// a heading in the table of contents (its text escaped already)
+fn toc_item(id: str, text: str) -> std::json::value {
+    var x = std::json::object();
+    x.set("id", std::json::string(id));
+    x.set("text", std::json::string(text));
+    x.set("subs", std::json::array());
+    return x;
 }
 
 fn write_page(out: str, path: str, html: str) -> !void {

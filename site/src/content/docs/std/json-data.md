@@ -1,6 +1,6 @@
 ---
 title: JSON
-description: "std::json: parsing JSON text into values, reading them, and building and printing new ones."
+description: "std::json: parsing JSON text into values, reading them, and building and printing new ones; std::html templates rendered from them."
 sidebar:
   order: 8
 ---
@@ -88,3 +88,37 @@ fn main() -> void {
 
 A value made from a `std::mem::arena` (`parse(text, arena.allocator())`) puts all of its strings and
 arrays in the arena, which frees them together; see [Allocators](/volt-bootstrap/std/allocators/).
+
+## HTML templates
+
+`std::html::escaped(s)` is `s` with `&`, `<`, `>`, `"` and `'` as entities, safe in an element's
+text and in a quoted attribute (`escape(s, &out)` appends it). A `std::html::template` is HTML with
+tags in it, parsed once (`template::parse(text)`, or `template::read(path)` for a file) and rendered
+from a JSON value as often as needed:
+
+- `{{path}}` is the value at path, escaped: a string, a number, `true` or `false`.
+- `{{{path}}}` is the value as it is, for HTML made elsewhere.
+- `{{for x in path}}...{{end}}` is the body once per element of the array at path, as `x`.
+- `{{if path}}...{{else}}...{{end}}` is the first part when the value is `true`, a non-empty string,
+  array or object, or a number other than 0, and the second (optional) part when it isn't.
+
+A path is names joined by dots (`p.name`); its first name is a loop's variable or a member of the
+value. A template's text can't hold a `{{` of its own (a script's, say): give it as a value. `render` fails with `template_error::MISSING` for a slot or a loop the value doesn't have,
+`parse` with `template_error::SYNTAX` for a tag it can't read (an unclosed `{{for}}`, an `{{end}}`
+with nothing open, a path that isn't one) and `read` with `template_error::READ` for a file it can't
+read. The site's pages are templates like this (`site/theme`).
+
+```volt
+use std::io;
+use std::html;
+use std::json;
+
+fn main() -> !void {
+    val list = try std::html::template::parse("<h1>{{title}}</h1><ul>{{for p in pages}}<li{{if p.new}} class=\"new\"{{end}}>{{p.name}}</li>{{end}}</ul>");
+    val data = try std::json::parse("{\"title\": \"Fish & chips\", \"pages\": [{\"name\": \"<menu>\", \"new\": true}, {\"name\": \"prices\"}]}");
+    var out: std::string = {};
+    try list.render(&data, &out);
+    std::println("{}", out.as_str());
+}
+// expect: <h1>Fish &amp; chips</h1><ul><li class="new">&lt;menu&gt;</li><li>prices</li></ul>
+```

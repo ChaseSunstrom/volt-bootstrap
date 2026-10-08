@@ -91,6 +91,8 @@ fn every_page_with_starlights_structure() {
     // the sitemap and the search index list every page
     let sitemap = std::fs::read_to_string(out.join("sitemap-0.xml")).unwrap();
     let search = std::fs::read_to_string(out.join("search.json")).unwrap();
+    // a copy button's text (its lines joined by DEL) stays in its attribute, out of the index
+    assert!(!search.contains('\u{7f}'), "copy-button text in the search index");
     for page in &pages {
         assert!(sitemap.contains(&format!("/volt-bootstrap/{page}/</loc>")), "{page} isn't in the sitemap");
         assert!(search.contains(&format!("\"/volt-bootstrap/{page}/\"")), "{page} isn't in the search index");

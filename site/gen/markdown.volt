@@ -3,6 +3,8 @@
 // ids and anchor links), paragraphs, lists, tables and fenced code (code.volt); inline: code, links,
 // strong and em, with typographic quotes, dashes and ellipses in prose.
 use std::fmt;
+use std::html;
+use std::json;
 
 // a heading, for the table of contents
 struct heading {
@@ -23,18 +25,18 @@ struct md_state {
     code_blocks: usize = 0;
 }
 
-// md (a page without its frontmatter) as HTML; parts has the anchor icon
-fn render_md(md: str, parts: parts&) -> rendered {
+// md (a page without its frontmatter) as HTML; th has the code frame and heading templates
+fn render_md(md: str, th: theme&) -> rendered {
     var st: md_state = { ids: {}, headings: {} };
     var html: std::string = {};
     val lines = md.lines();
-    blocks(&lines, false, &st, parts, &html);
+    blocks(&lines, false, &st, th, &html);
     html.push('\n');
     return { html: move html, headings: copy st.headings };
 }
 
 // lines as blocks, each after a newline; in a tight list's item a paragraph has no <p>
-fn blocks(lines: std::vec<str>&, tight: bool, st: md_state&, parts: parts&, out: std::string&) -> void {
+fn blocks(lines: std::vec<str>&, tight: bool, st: md_state&, th: theme&, out: std::string&) -> void {
     var para: std::vec<str> = {};
     var i: usize = 0;
     while (i < lines.len) {
@@ -72,7 +74,7 @@ fn blocks(lines: std::vec<str>&, tight: bool, st: md_state&, parts: parts&, out:
             }
             i += 1; // the closing fence
             block_start(out);
-            code_block(info, body.as_str(), st.code_blocks == 0, out);
+            code_frame(th, info, body.as_str(), st.code_blocks == 0, false, out);
             st.code_blocks += 1;
             continue;
         }
@@ -84,7 +86,7 @@ fn blocks(lines: std::vec<str>&, tight: bool, st: md_state&, parts: parts&, out:
             }
             val text = t[@cast<usize>(depth) + 1..t.len].trim();
             block_start(out);
-            heading_block(depth, text, st, parts, out);
+            heading_block(depth, text, st, th, out);
             i += 1;
             continue;
         }
@@ -103,7 +105,7 @@ fn blocks(lines: std::vec<str>&, tight: bool, st: md_state&, parts: parts&, out:
         if (item_start(l) != null && (para.len == 0 || interrupts)) {
             flush_para(&para, tight, out);
             block_start(out);
-            i = list(lines, i, st, parts, out);
+            i = list(lines, i, st, th, out);
             continue;
         }
         para.push(t);
@@ -143,15 +145,20 @@ fn flush_para(para: std::vec<str>&, tight: bool, out: std::string&) -> void {
 
 // ---------- headings ----------
 
-fn heading_block(depth: u32, text: str, st: md_state&, parts: parts&, out: std::string&) -> void {
+fn heading_block(depth: u32, text: str, st: md_state&, th: theme&, out: std::string&) -> void {
     var plain: std::string = {};
     plain_text(text, &plain);
     var id = slug(plain.as_str(), &st.ids);
     var shown: std::string = {};
     smart_escape(plain.as_str(), &shown);
-    std::write(out, "<div class=\"sl-heading-wrapper level-h{}\"><h{} id=\"{}\">", depth, depth, id.as_str());
-    inline(text, out);
-    std::write(out, "</h{}><a class=\"sl-anchor-link\" href=\"#{}\"><span aria-hidden=\"true\" class=\"sl-anchor-icon\">{}</span><span class=\"sr-only\" data-pagefind-ignore>Section titled “{}”</span></a></div>", depth, id.as_str(), parts.get("anchor"), shown.as_str());
+    var html: std::string = {};
+    inline(text, &html);
+    var d = std::json::object();
+    d.set("depth", std::json::number(@cast<f64>(depth)));
+    d.set("id", std::json::string(id.as_str()));
+    d.set("html", std::json::string(html.as_str()));
+    d.set("shown", std::json::string(shown.as_str()));
+    fill(&th.heading, &d, out);
     st.headings.push({ depth: depth, id: move id, text: move shown });
 }
 
@@ -267,7 +274,7 @@ fn item_start(l: str) -> usize? {
 // the list starting at lines[start]; returns the line after it. An item's lines go on while they're
 // indented to its text (or continue its paragraph); a blank line inside an item or between items
 // makes the list loose, and a loose list's paragraphs are <p>s
-fn list(lines: std::vec<str>&, start: usize, st: md_state&, parts: parts&, out: std::string&) -> usize {
+fn list(lines: std::vec<str>&, start: usize, st: md_state&, th: theme&, out: std::string&) -> usize {
     val first = *lines.at(start);
     val ordered = !first.trim_start().starts_with("-") && !first.trim_start().starts_with("*");
     var items: std::vec<std::vec<str>> = {};
@@ -322,7 +329,7 @@ fn list(lines: std::vec<str>&, start: usize, st: md_state&, parts: parts&, out: 
     out.append(either(ordered, "<ol>", "<ul>"));
     for (item&) in items.items() {
         var inner: std::string = {};
-        blocks(item, !loose, st, parts, &inner);
+        blocks(item, !loose, st, th, &inner);
         if (loose) {
             out.append("\n<li>\n");
             out.append(inner.as_str());
@@ -470,7 +477,7 @@ fn inline(s: str, out: std::string&) -> void {
                     smart_text(s[text_from..i], before(s, text_from), out);
                     val url = s[(close ?? 0) + 2..(close ?? 0) + end];
                     out.append("<a href=\"");
-                    escape(url, out);
+                    std::html::escape(url, out);
                     out.append("\">");
                     inline(s[i + 1..(close ?? 0)], out);
                     out.append("</a>");
@@ -590,12 +597,6 @@ fn either(c: bool, a: str, b: str) -> str {
         return a;
     }
     return b;
-}
-
-fn escape(s: str, out: std::string&) -> void {
-    for (i) in 0..s.len {
-        escape_char(s[i], out);
-    }
 }
 
 fn escape_char(c: u8, out: std::string&) -> void {

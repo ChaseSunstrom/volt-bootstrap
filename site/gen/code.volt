@@ -5,6 +5,8 @@
 // and a line is its runs of one colour. The first frame on a page brings Expressive Code's
 // stylesheet and script.
 use std::fmt;
+use std::html;
+use std::json;
 
 // the colours: Expressive Code's dark (--0) and light (--1) values for each
 val FG: u8 = 0;
@@ -36,13 +38,9 @@ struct carry {
     continued: bool = false;   // sh: the line before ended in \
 }
 
-fn code_block(info: str, body: str, first: bool, out: std::string&) -> void {
-    code_frame(info, body, first, false, out);
-}
-
-// a frame; component: as Starlight's Code component renders it (std reference pages): wrapped, the
-// longest line's length given, and < & written as &#x3C; &#x26;
-fn code_frame(info: str, body: str, first: bool, component: bool, out: std::string&) -> void {
+// a frame (site/theme/code.html); component: as Starlight's Code component renders it (std
+// reference pages): wrapped, the longest line's length given
+fn code_frame(th: theme&, info: str, body: str, first: bool, component: bool, out: std::string&) -> void {
     var lang = (info.split_once(" ") ?? (info, "")).0;
     if (lang.len == 0) {
         lang = "plaintext";
@@ -61,43 +59,22 @@ fn code_frame(info: str, body: str, first: bool, component: bool, out: std::stri
             lines.remove(0);
         }
     }
-    if (component) {
-        out.append("<div class=\"expressive-code astro-e45xea6i\">");
-    } else {
-        out.append("<div class=\"expressive-code\">");
-    }
-    if (first) {
-        std::write(out, "<link rel=\"stylesheet\" href=\"{}/_astro/ec.g9e2n.css\"><script type=\"module\" src=\"{}/_astro/ec.0vx5m.js\"></script>", BASE, BASE);
-    }
-    out.append("<figure class=\"frame ");
-    if (title) {
-        out.append("has-title ");
-    }
-    if (terminal) {
-        out.append("is-terminal ");
-    }
-    out.append("not-content\"><figcaption class=\"header\">");
-    if (title != null || terminal) {
-        out.append("<span class=\"title\">");
-        escape(title ?? "", out);
-        out.append("</span>");
-    }
-    if (terminal) {
-        out.append("<span class=\"sr-only\">Terminal window</span>");
-    }
-    out.append("</figcaption>");
-    if (component) {
-        var widest: usize = 0;
-        for (l&) in lines.items() {
-            val n = utf8_len(*l);
-            if (n > widest) {
-                widest = n;
-            }
+    var widest: usize = 0;
+    for (l&) in lines.items() {
+        val n = utf8_len(*l);
+        if (n > widest) {
+            widest = n;
         }
-        std::write(out, "<pre data-language=\"{}\" class=\"wrap\" style=\"--ecMaxLine:{}ch\"><code>", lang, widest);
-    } else {
-        std::write(out, "<pre data-language=\"{}\"><code>", lang);
     }
+    var d = std::json::object();
+    d.set("component", std::json::boolean(component));
+    d.set("first", std::json::boolean(first));
+    d.set("title", std::json::string(title ?? ""));
+    d.set("caption", std::json::boolean(title != null || terminal));
+    d.set("terminal", std::json::boolean(terminal));
+    d.set("lang", std::json::string(lang));
+    d.set("widest", std::json::number(@cast<f64>(widest)));
+    var ls = std::json::array();
     var c: carry = {};
     for (l&) in lines.items() {
         var colors: std::vec<u8> = {};
@@ -117,35 +94,19 @@ fn code_frame(info: str, body: str, first: bool, component: bool, out: std::stri
         } else {
             other_line(lang, *l, &c, &colors);
         }
-        line_html(*l, &colors, component, out);
+        ls.add(line_value(*l, &colors));
     }
-    out.append("</code></pre><div class=\"copy\"><div aria-live=\"polite\"></div><button title=\"Copy to clipboard\" data-copied=\"Copied!\" data-code=\"");
+    d.set("lines", move ls);
+    // the copy button's text: the lines joined by DEL
+    var code: std::string = {};
     for (l&, i) in lines.items() {
         if (i > 0) {
-            out.append("\x7f");
+            code.append("\x7f");
         }
-        for (k) in 0..l.len {
-            val ch = (*l)[k];
-            if (ch == '&' && component) {
-                out.append("&#x26;");
-            } else if (ch == '"' && component) {
-                out.append("&#x22;");
-            } else if (ch == '&') {
-                out.append("&amp;");
-            } else if (ch == '"') {
-                out.append("&quot;");
-            } else if (ch == '\'') {
-                out.append("&#x27;");
-            } else if (ch == '`') {
-                out.append("&#x60;");
-            } else if (ch == '\t') {
-                out.append("  ");
-            } else {
-                out.push(ch);
-            }
-        }
+        code.append(untab(*l).as_str());
     }
-    out.append("\"><div></div></button></div></figure></div>");
+    d.set("code", std::json::string(code.as_str()));
+    fill(&th.code, &d, out);
 }
 
 // a comment that only names a file (// lib/main.volt, # bolt.toml): the name
@@ -184,61 +145,54 @@ fn name_only(name: str) -> str? {
     return name;
 }
 
-// one line: its runs of one colour as spans; the indentation in a span of its own
-fn line_html(l: str, colors: std::vec<u8>&, component: bool, out: std::string&) -> void {
-    out.append("<div class=\"ec-line\"><div class=\"code\">");
-    if (l.len == 0) {
-        out.append("\n</div></div>");
-        return;
-    }
+// one line: its runs of one colour; the indentation a run of its own (with the colour of the run
+// it starts when that goes on past it)
+fn line_value(l: str, colors: std::vec<u8>&) -> std::json::value {
+    var x = std::json::object();
+    x.set("empty", std::json::boolean(l.len == 0));
     var indent: usize = 0;
     while (indent < l.len && (l[indent] == ' ' || l[indent] == '\t')) {
         indent += 1;
     }
     var i: usize = 0;
     if (indent > 0 && indent < l.len) {
-        // the first run: only the indentation, or the indentation and more of one colour
         var run_end: usize = 0;
         while (run_end < l.len && *colors.at(run_end) == *colors.at(0)) {
             run_end += 1;
         }
-        if (run_end <= indent) {
-            out.append("<span class=\"indent\">");
-            out.append(l[0..indent]);
-            out.append("</span>");
-        } else {
-            std::write(out, "<span class=\"indent\"><span style=\"{}\">{}</span></span>", STYLES[*colors.at(0)], l[0..indent]);
+        x.set("indent", std::json::string(l[0..indent]));
+        if (run_end > indent) {
+            x.set("indent_style", std::json::string(STYLES[*colors.at(0)]));
         }
         i = indent;
     }
+    var runs = std::json::array();
     while (i < l.len) {
         var j = i;
         while (j < l.len && *colors.at(j) == *colors.at(i)) {
             j += 1;
         }
-        std::write(out, "<span style=\"{}\">", STYLES[*colors.at(i)]);
-        code_text(l[i..j], component, out);
-        out.append("</span>");
+        var r = std::json::object();
+        r.set("style", std::json::string(STYLES[*colors.at(i)]));
+        r.set("text", std::json::string(untab(l[i..j]).as_str()));
+        runs.add(move r);
         i = j;
     }
-    out.append("</div></div>");
+    x.set("runs", move runs);
+    return x;
 }
 
-// code's text, escaped; a tab shows as two spaces
-fn code_text(s: str, component: bool, out: std::string&) -> void {
-    for (i) in 0..s.len {
-        if (s[i] == '\t') {
+// code's text as shown: a tab as two spaces
+fn untab(s: str) -> std::string {
+    var out: std::string = {};
+    for (c) in s {
+        if (c == '\t') {
             out.append("  ");
-        } else if (component && s[i] == '<') {
-            out.append("&#x3C;");
-        } else if (component && s[i] == '&') {
-            out.append("&#x26;");
-        } else if (component && s[i] == '>') {
-            out.push('>');
         } else {
-            escape_char(s[i], out);
+            out.push(c);
         }
     }
+    return out;
 }
 
 // characters, not bytes

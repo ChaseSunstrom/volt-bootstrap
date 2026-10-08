@@ -1,7 +1,9 @@
-// The landing page: site/theme/landing.html (cut from the Astro page it replaces) with what changes
-// filled in: the code samples from site/src/samples and their `// expect:` output, what voltc writes
+// The landing page: site/theme/landing.html (cut from the Astro page it replaces, a std::html
+// template) with what changes filled in: the code samples from site/src/samples and their `// expect:` output, what voltc writes
 // for the hero program, and the benchmark chart from the table in internals/benchmarks.md.
 use std::fmt;
+use std::html;
+use std::json;
 
 // the colours Shiki gives the dark theme's tokens, by colour class (code.volt)
 val SHIKI: str[8] = { "#E6E1FF", "#C4B5FF", "#9FB8FF", "#FFFFFF", "#F5B38A", "#7FD8C9", "#7D76A8", "#E6E1FF" };
@@ -33,8 +35,7 @@ fn read_sample(path: str) -> !sample {
     return s;
 }
 
-fn landing(site: str, out: str) -> !std::string {
-    val tmpl = try std::fs::read_file(std::format("{}/theme/landing.html", site).as_str());
+fn landing(site: str, out: str, th: theme&) -> !std::string {
     val dir = std::format("{}/src/samples", site);
     val hero = try read_sample(std::format("{}/hero.volt", dir.as_str()).as_str());
     val names: str[5] = { "errors", "ownership", "templates", "comptime", "interop" };
@@ -46,56 +47,44 @@ fn landing(site: str, out: str) -> !std::string {
     val hero_ll = try std::fs::read_file(std::format("{}/hero.ll.txt", dir.as_str()).as_str());
     val bench_md = try std::fs::read_file(std::format("{}/src/content/docs/internals/benchmarks.md", site).as_str());
 
-    var html: std::string = {};
-    var rest = tmpl.as_str();
-    loop {
-        val (before, after) = rest.split_once("{{") ?? break;
-        val (slot, more) = after.split_once("}}") ?? break;
-        html.append(before);
-        if (slot == "code0") {
-            shiki("volt", hero.code.as_str(), &html);
-        } else if (slot == "code1") {
-            shiki("c", hero_c.as_str().trim_end(), &html);
-        } else if (slot == "code2") {
-            shiki("llvm", hero_ll.as_str().trim_end(), &html);
-        } else if (slot.starts_with("code")) {
-            val k = @cast<usize>(slot[4..slot.len].parse_int() catch 3) - 3;
-            shiki("volt", tabs.at(k).code.as_str(), &html);
-        } else if (slot == "hero_out") {
-            for (o&, i) in hero.output.items() {
-                if (i > 0) {
-                    html.push('\n');
-                }
-                escape(o.as_str(), &html);
-            }
-        } else if (slot.starts_with("out")) {
-            val k = @cast<usize>(slot[3..slot.len].parse_int() catch 0);
-            for (o&, i) in tabs.at(k).output.items() {
-                std::write(&html, "<span style=\"--i:{}\">", i);
-                escape(o.as_str(), &html);
-                html.append("\n</span>");
-            }
-        } else if (slot == "bench_c") {
-            pct(1.0, &html);
-        } else if (slot == "bench_rows") {
-            bench_rows(bench_md.as_str(), &html);
+    var d = std::json::object();
+    d.set("code0", shiki_value(th, "volt", hero.code.as_str()));
+    d.set("code1", shiki_value(th, "c", hero_c.as_str().trim_end()));
+    d.set("code2", shiki_value(th, "llvm", hero_ll.as_str().trim_end()));
+    var hero_out: std::string = {};
+    for (o&, i) in hero.output.items() {
+        if (i > 0) {
+            hero_out.push('\n');
         }
-        rest = more;
+        hero_out.append(o.as_str());
     }
-    html.append(rest);
+    d.set("hero_out", std::json::string(hero_out.as_str()));
+    // the tabs: code3.. and their output lines out0..
+    for (t&, k) in tabs.items() {
+        d.set(std::format("code{}", k + 3).as_str(), shiki_value(th, "volt", t.code.as_str()));
+        var lines = std::json::array();
+        for (o&, i) in t.output.items() {
+            var x = std::json::object();
+            x.set("i", std::json::number(@cast<f64>(i)));
+            x.set("text", std::json::string(o.as_str()));
+            lines.add(move x);
+        }
+        d.set(std::format("out{}", k).as_str(), move lines);
+    }
+    d.set("bench_c", std::json::string(pct(1.0).as_str()));
+    d.set("bench", bench_rows(bench_md.as_str()));
+    var html: std::string = {};
+    fill(&th.landing, &d, &html);
     try std::fs::write_file(std::format("{}/index.html", out).as_str(), html.as_str());
     return html;
 }
 
-// code as Shiki's own renderer writes it (Astro's Code): one span per run of a colour, whitespace
-// joined to the run after it
-fn shiki(lang: str, code: str, out: std::string&) -> void {
-    std::write(out, "<pre class=\"astro-code volt-night\" style=\"background-color:#110d29;color:#e6e1ff; overflow-x: auto;\" tabindex=\"0\" data-language=\"{}\"><code>", lang);
+// code as Shiki's own renderer writes it (Astro's Code, site/theme/shiki.html), as a template's
+// value: one span per run of a colour, whitespace joined to the run after it
+fn shiki_value(th: theme&, lang: str, code: str) -> std::json::value {
+    var ls = std::json::array();
     var c: carry = {};
     for (l&, n) in code.lines().items() {
-        if (n > 0) {
-            out.push('\n');
-        }
         var colors: std::vec<u8> = {};
         for (i) in 0..l.len {
             colors.push(FG);
@@ -105,7 +94,7 @@ fn shiki(lang: str, code: str, out: std::string&) -> void {
         } else {
             other_line(lang, *l, &c, &colors);
         }
-        out.append("<span class=\"line\">");
+        var runs = std::json::array();
         var i: usize = 0;
         while (i < l.len) {
             var j = i;
@@ -122,14 +111,23 @@ fn shiki(lang: str, code: str, out: std::string&) -> void {
                 }
                 j = k;
             }
-            std::write(out, "<span style=\"color:{}\">", SHIKI[color]);
-            code_text((*l)[i..j], true, out);
-            out.append("</span>");
+            var r = std::json::object();
+            r.set("color", std::json::string(SHIKI[color]));
+            r.set("text", std::json::string(untab((*l)[i..j]).as_str()));
+            runs.add(move r);
             i = j;
         }
-        out.append("</span>");
+        var x = std::json::object();
+        x.set("nl", std::json::boolean(n > 0));
+        x.set("runs", move runs);
+        ls.add(move x);
     }
-    out.append("</code></pre>");
+    var d = std::json::object();
+    d.set("lang", std::json::string(lang));
+    d.set("lines", move ls);
+    var h: std::string = {};
+    fill(&th.shiki, &d, &h);
+    return std::json::string(h.as_str());
 }
 
 fn blank_run(s: str) -> bool {
@@ -142,19 +140,20 @@ fn blank_run(s: str) -> bool {
 }
 
 // a ratio's bar width: 0x to 1.4x of C's time across the chart, as JavaScript prints the number
-fn pct(r: f64, out: std::string&) -> void {
+fn pct(r: f64) -> std::string {
     var x = r;
     if (x > 1.4) {
         x = 1.4;
     }
-    std::write(out, "{}%", x / 1.4 * 100.0);
+    return std::format("{}%", x / 1.4 * 100.0);
 }
 
 // the chart's rows: each program's Volt times as a fraction of C's, from the benchmark table's
 // Volt (C, clang) and Volt (LLVM) columns, found by their headings
-fn bench_rows(md: str, out: std::string&) -> void {
-    val (_, after) = md.split_once("<!-- bench:start -->") ?? return;
-    val (table, _) = after.split_once("<!-- bench:end -->") ?? return;
+fn bench_rows(md: str) -> std::json::value {
+    var rows = std::json::array();
+    val (_, after) = md.split_once("<!-- bench:start -->") ?? return rows;
+    val (table, _) = after.split_once("<!-- bench:end -->") ?? return rows;
     var c_col: usize = 0;
     var llvm_col: usize = 0;
     for (l&) in table.lines().items() {
@@ -178,11 +177,15 @@ fn bench_rows(md: str, out: std::string&) -> void {
             continue;
         }
         val name = cells.at(1).trim();
-        std::write(out, "<div class=\"chart-row\" role=\"row\"><span class=\"prog\" role=\"rowheader\">{}</span>", name);
-        bar(ratio(*cells.at(c_col)), out);
-        bar(ratio(*cells.at(llvm_col)), out);
-        out.append("</div>");
+        var bars = std::json::array();
+        bars.add(bar(ratio(*cells.at(c_col))));
+        bars.add(bar(ratio(*cells.at(llvm_col))));
+        var row = std::json::object();
+        row.set("name", std::json::string(name));
+        row.set("bars", move bars);
+        rows.add(move row);
     }
+    return rows;
 }
 
 // the number in a cell's "(0.51x)"
@@ -192,12 +195,11 @@ fn ratio(cell: str) -> f64 {
     return num.parse_float() catch 1.0;
 }
 
-fn bar(r: f64, out: std::string&) -> void {
-    out.append("<span class=\"bar-cell\" role=\"cell\"><span class=\"track\"><span class=\"bar\" style=\"--w:");
-    pct(r, out);
-    out.push('"');
-    if (r < 0.97) {
-        out.append(" data-faster");
-    }
-    std::write(out, "></span></span><span class=\"num\">{:.2}×</span></span>", r);
+// a bar: its width, whether Volt beat C, and the ratio shown
+fn bar(r: f64) -> std::json::value {
+    var b = std::json::object();
+    b.set("w", std::json::string(pct(r).as_str()));
+    b.set("faster", std::json::boolean(r < 0.97));
+    b.set("r", std::json::string(std::format("{:.2}", r).as_str()));
+    return b;
 }

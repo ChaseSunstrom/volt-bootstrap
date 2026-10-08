@@ -1,14 +1,14 @@
 // The std reference: a page per std source file, from site/src/data/std.json (`voltc doc std`, kept
 // in sync by tests/docs.rs). Each type gets its fields or variants and the methods attached to it;
 // then the file's functions, methods on other types and globals. Rendered as the Astro page it
-// replaces (its elements carry that component's scoped class, its code goes through Starlight's
-// Code component).
+// replaces, through site/theme/stdref.html (its elements carry that component's scoped class, its
+// code goes through Starlight's Code component).
 use std::fmt;
-
-val SCOPED: str = "astro-e45xea6i";
+use std::html;
+use std::json;
 
 // the std reference's pages, after the std docs in the sidebar
-fn std_pages(site: str, group: usize, pages: std::vec<page>&) -> !void {
+fn std_pages(site: str, group: usize, th: theme&, pages: std::vec<page>&) -> !void {
     val text = try std::fs::read_file(std::format("{}/src/data/std.json", site).as_str());
     var doc = try std::json::parse(text.as_str());
     val files = doc.get("files");
@@ -21,7 +21,7 @@ fn std_pages(site: str, group: usize, pages: std::vec<page>&) -> !void {
         p.order = 2000000 + @cast<i64>(k);
         p.group = group;
         p.reference = true;
-        std_page(name, items, &p);
+        std_page(th, name, items, &p);
         pages.push(move p);
     }
 }
@@ -142,23 +142,10 @@ fn text(s: str, out: std::string&) -> void {
     }
 }
 
-fn doc_para(it: std::json::value&, out: std::string&) -> void {
-    val d = it.get("doc").as_str() ?? "";
-    if (d.len > 0) {
-        std::write(out, "<p class=\"{}\">", SCOPED);
-        prose(d, out);
-        out.append("</p>");
-    }
-}
-
-// one std page's content and table of contents
-fn std_page(name: str, items: std::json::value&, p: page&) -> void {
-    var out: std::string = {};
+// one std page's content (site/theme/stdref.html) and table of contents
+fn std_page(th: theme&, name: str, items: std::json::value&, p: page&) -> void {
     var first = true;
     val file = std::format("{}.volt", name);
-    std::write(&out, "<p class=\"{}\">", SCOPED);
-    prose(p.description.as_str(), &out);
-    std::write(&out, "</p><p class=\"std-source {}\">Source: <code class=\"{}\">std/{}.volt</code></p>", SCOPED, SCOPED, name);
     // what's in this file
     var types: std::vec<usize> = {};
     var fns: std::vec<usize> = {};
@@ -180,113 +167,110 @@ fn std_page(name: str, items: std::json::value&, p: page&) -> void {
             others.push(i);
         }
     }
+    // the values, in the page's order (its first signature brings the code stylesheet)
+    var d = std::json::object();
+    d.set("intro", prose_value(p.description.as_str()));
+    d.set("name", std::json::string(name));
+    var tv = std::json::array();
     if (types.len > 0) {
-        std::write(&out, "<h2 id=\"types\" class=\"{}\">Types</h2>", SCOPED);
         p.headings.push({ depth: 2, id: std::string::from("types"), text: std::string::from("Types") });
-        for (ti&) in types.items() {
-            val t = items.at(*ti);
-            val tname = t.get("name").as_str() ?? "";
-            val id = ref_slug(tname);
-            std::write(&out, "<section class=\"std-item {}\"><h3 id=\"{}\" class=\"{}\"><span class=\"std-kind {}\">{}</span> ", SCOPED, id.as_str(), SCOPED, SCOPED, kind_of(t));
-            qual(t, &out);
-            out.append("</h3>");
-            var shown: std::string = {};
-            text(tname, &shown);
-            p.headings.push({ depth: 3, id: move id, text: move shown });
-            component_code(t.get("signature").as_str() ?? "", &first, &out);
-            doc_para(t, &out);
-            for (i) in 0..items.len() {
-                val x = items.at(i);
-                if (kind_of(x) == "impl" && (x.get("name").as_str() ?? "") == tname) {
-                    std::write(&out, "<p class=\"{}\">Implements <code class=\"{}\">", SCOPED, SCOPED);
-                    text(x.get("trait").as_str() ?? "", &out);
-                    out.append("</code>.</p>");
-                }
-            }
-            // fields or variants
-            var members = t.get("fields");
-            var label = "Field";
-            if (members.is_null()) {
-                members = t.get("variants");
-                label = "Variant";
-            }
-            if (!members.is_null() && members.len() > 0) {
-                std::write(&out, "<table class=\"{}\"><thead class=\"{}\"><tr class=\"{}\"><th class=\"{}\">{}</th><th class=\"{}\"></th></tr></thead><tbody class=\"{}\">", SCOPED, SCOPED, SCOPED, SCOPED, label, SCOPED, SCOPED);
-                for (m) in 0..members.len() {
-                    val mm = members.at(m);
-                    std::write(&out, "<tr class=\"{}\"><td class=\"{}\"><code class=\"{}\">", SCOPED, SCOPED, SCOPED);
-                    text(mm.get("signature").as_str() ?? "", &out);
-                    std::write(&out, "</code></td><td class=\"{}\">", SCOPED);
-                    prose(mm.get("doc").as_str() ?? "", &out);
-                    out.append("</td></tr>");
-                }
-                out.append("</tbody></table>");
-            }
-            // a trait's required functions
-            val req = t.get("methods");
-            if (!req.is_null() && req.len() > 0) {
-                std::write(&out, "<h4 class=\"{}\">Required functions</h4>", SCOPED);
-                for (m) in 0..req.len() {
-                    std::write(&out, "<div class=\"std-fn {}\">", SCOPED);
-                    component_code(req.at(m).get("signature").as_str() ?? "", &first, &out);
-                    doc_para(req.at(m), &out);
-                    out.append("</div>");
-                }
-            }
-            // methods attached to it, from any file
-            var any = false;
-            for (i) in 0..items.len() {
-                val x = items.at(i);
-                if (kind_of(x) == "method" && (x.get("receiver").as_str() ?? "") == tname) {
-                    if (!any) {
-                        std::write(&out, "<h4 class=\"{}\">Methods</h4>", SCOPED);
-                        any = true;
-                    }
-                    std::write(&out, "<div class=\"std-fn {}\">", SCOPED);
-                    component_code(x.get("signature").as_str() ?? "", &first, &out);
-                    doc_para(x, &out);
-                    out.append("</div>");
-                }
-            }
-            out.append("</section>");
-        }
     }
+    for (ti&) in types.items() {
+        val t = items.at(*ti);
+        val tname = t.get("name").as_str() ?? "";
+        val id = ref_slug(tname);
+        var x = fn_value(th, t, &first);
+        x.set("id", std::json::string(id.as_str()));
+        x.set("kind", std::json::string(kind_of(t)));
+        var impls = std::json::array();
+        for (i) in 0..items.len() {
+            val m = items.at(i);
+            if (kind_of(m) == "impl" && (m.get("name").as_str() ?? "") == tname) {
+                impls.add(std::json::string(m.get("trait").as_str() ?? ""));
+            }
+        }
+        x.set("impls", move impls);
+        // fields or variants
+        var members = t.get("fields");
+        var label = "Field";
+        if (members.is_null()) {
+            members = t.get("variants");
+            label = "Variant";
+        }
+        x.set("label", std::json::string(label));
+        var ms = std::json::array();
+        for (m) in 0..members.len() {
+            var mv = std::json::object();
+            mv.set("sig", std::json::string(members.at(m).get("signature").as_str() ?? ""));
+            mv.set("doc", prose_value(members.at(m).get("doc").as_str() ?? ""));
+            ms.add(move mv);
+        }
+        x.set("members", move ms);
+        // a trait's required functions
+        val req = t.get("methods");
+        var rs = std::json::array();
+        for (m) in 0..req.len() {
+            rs.add(fn_value(th, req.at(m), &first));
+        }
+        x.set("required", move rs);
+        // methods attached to it, from any file
+        var methods = std::json::array();
+        for (i) in 0..items.len() {
+            val m = items.at(i);
+            if (kind_of(m) == "method" && (m.get("receiver").as_str() ?? "") == tname) {
+                methods.add(fn_value(th, m, &first));
+            }
+        }
+        x.set("methods", move methods);
+        tv.add(move x);
+        var shown: std::string = {};
+        text(tname, &shown);
+        p.headings.push({ depth: 3, id: move id, text: move shown });
+    }
+    d.set("types", move tv);
     if (fns.len > 0) {
-        std::write(&out, "<h2 id=\"functions\" class=\"{}\">Functions</h2>", SCOPED);
         p.headings.push({ depth: 2, id: std::string::from("functions"), text: std::string::from("Functions") });
-        for (fi&) in fns.items() {
-            val f = items.at(*fi);
-            std::write(&out, "<div class=\"std-fn {}\"><p class=\"std-name {}\"><code class=\"{}\">", SCOPED, SCOPED, SCOPED);
-            qual(f, &out);
-            out.append("</code></p>");
-            component_code(f.get("signature").as_str() ?? "", &first, &out);
-            doc_para(f, &out);
-            out.append("</div>");
-        }
     }
+    d.set("functions", fn_values(th, items, &fns, &first));
     if (others.len > 0) {
-        std::write(&out, "<h2 id=\"methods-on-other-types\" class=\"{}\">Methods on other types</h2><p class=\"{}\">Attached to built-in types, or to every type (<code class=\"{}\">T</code>).</p>", SCOPED, SCOPED, SCOPED);
         p.headings.push({ depth: 2, id: std::string::from("methods-on-other-types"), text: std::string::from("Methods on other types") });
-        for (oi&) in others.items() {
-            val m = items.at(*oi);
-            std::write(&out, "<div class=\"std-fn {}\">", SCOPED);
-            component_code(m.get("signature").as_str() ?? "", &first, &out);
-            doc_para(m, &out);
-            out.append("</div>");
-        }
     }
+    d.set("others", fn_values(th, items, &others, &first));
     if (globals.len > 0) {
-        std::write(&out, "<h2 id=\"globals\" class=\"{}\">Globals</h2>", SCOPED);
         p.headings.push({ depth: 2, id: std::string::from("globals"), text: std::string::from("Globals") });
-        for (gi&) in globals.items() {
-            val g = items.at(*gi);
-            std::write(&out, "<div class=\"std-fn {}\">", SCOPED);
-            component_code(g.get("signature").as_str() ?? "", &first, &out);
-            doc_para(g, &out);
-            out.append("</div>");
-        }
     }
+    d.set("globals", fn_values(th, items, &globals, &first));
+    var out: std::string = {};
+    fill(&th.stdref, &d, &out);
     p.html = move out;
+}
+
+// an item's signature (as code), doc (as HTML) and qualified name
+fn fn_value(th: theme&, it: std::json::value&, first: bool&) -> std::json::value {
+    var x = std::json::object();
+    var q: std::string = {};
+    qual(it, &q);
+    x.set("qual", std::json::string(q.as_str()));
+    var sig: std::string = {};
+    component_code(th, it.get("signature").as_str() ?? "", first, &sig);
+    x.set("sig", std::json::string(sig.as_str()));
+    x.set("doc", prose_value(it.get("doc").as_str() ?? ""));
+    return x;
+}
+
+fn fn_values(th: theme&, items: std::json::value&, which: std::vec<usize>&, first: bool&) -> std::json::value {
+    var xs = std::json::array();
+    for (i&) in which.items() {
+        xs.add(fn_value(th, items.at(*i), first));
+    }
+    return xs;
+}
+
+// a doc comment as HTML (see prose)
+fn prose_value(text: str) -> std::json::value {
+    var h: std::string = {};
+    prose(text, &h);
+    return std::json::string(h.as_str());
 }
 
 fn is_std_type(items: std::json::value&, name: str) -> bool {
@@ -300,7 +284,7 @@ fn is_std_type(items: std::json::value&, name: str) -> bool {
 }
 
 // a signature through Starlight's Code component (wrapped); the page's first brings the stylesheet
-fn component_code(sig: str, first: bool&, out: std::string&) -> void {
-    code_frame("volt", sig, *first, true, out);
+fn component_code(th: theme&, sig: str, first: bool&, out: std::string&) -> void {
+    code_frame(th, "volt", sig, *first, true, out);
     *first = false;
 }
