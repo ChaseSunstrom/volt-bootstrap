@@ -83,8 +83,12 @@ fn main() -> void {
 
 ## vec
 
-Besides `push`, `pop` and `at`, a vec edits in the middle: `insert` and `remove` move the elements
-after the index; `swap_remove` fills the hole with the last element instead, so it's O(1).
+`v[i]` is element `i` (`i` a `usize`, as for `at`), a place like an array's: read it, assign to
+it, `+=` it, borrow it with `&v[i]`. An index past the end panics in a debug build and traps in a
+release one; `at(i)` is the same check, giving the `T&` itself. Besides `push` and `pop`, a vec
+edits in the middle: `insert`
+and `remove` move the elements after the index; `swap_remove` fills the hole with the last element
+instead, so it's O(1).
 
 ```volt
 use std::io;
@@ -97,9 +101,10 @@ fn main() -> !void {
     val gone = v.remove(1);
     v.dedup();                                            // 9 1 4 1 5
     v.retain(|| (x: i32&) -> bool { return *x != 1; });   // 9 4 5
-    std::println("{} {} {} {}", gone, v.len, *(v.first() ?? return), *(v.last() ?? return));
+    v[1] += 10;                                           // 9 14 5
+    std::println("{} {} {} {}", gone, v.len, v[1], *(v.last() ?? return));
 }
-// expect: 3 3 9 5
+// expect: 3 3 14 5
 ```
 
 ## map and set

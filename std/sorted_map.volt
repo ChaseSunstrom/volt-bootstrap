@@ -44,7 +44,7 @@ attach fn place(this: std::sorted_map<K, V, A>&, key: K&) -> (bool, usize) {
 public attach fn put(this: std::sorted_map<K, V, A>&, key: K, value: V) -> void {
     val (found, at) = this.place(&key);
     if (found) {
-        *this.vals.at(at) = move value;
+        this.vals[at] = move value;
         return;
     }
     this.keys.insert(at, move key) catch @panic("out of memory");
@@ -58,7 +58,7 @@ public attach fn get(this: std::sorted_map<K, V, A>&, key: K) -> V* {
     if (!found) {
         return null;
     }
-    return this.vals.at(at);
+    return &this.vals[at];
 }
 
 // whether key has a value

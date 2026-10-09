@@ -62,7 +62,7 @@ fn main() -> !void {
     var ages: std::map<str, i32> = {};
     ages.put("volt", 1);
     val b: std::mem::box<i32> = try i32::new(5);
-    std::println("{} {} {} {}", names.len, names.at(0).as_str(), *(ages.get("volt") ?? return), b);
+    std::println("{} {} {} {}", names.len, names[0], *(ages.get("volt") ?? return), b);
 }
 // expect: 1 volt 1 5
 ```

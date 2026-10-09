@@ -40,7 +40,8 @@ half is still bytes, so split on what you searched for.
 ## Building text
 
 A `std::string` grows with `append`, `push` (a byte), `push_char` (a character, as UTF-8) and
-`append_int`. `std::format` builds one from a format string, with the same `{}` and specifiers as
+`append_int`; `s[i]` is its byte `i` (a `u8`, not a character), a place like a vec's element.
+`std::format` builds one from a format string, with the same `{}` and specifiers as
 [printing](/volt-bootstrap/guide/printing/); `std::write` adds to one that exists. `replace`,
 `repeat`, `to_upper` and `to_lower` make a new one from a `str`, and `std::join` puts parts
 together:
@@ -55,12 +56,13 @@ fn main() -> void {
     s.append(" ");
     s.append_int(42);
     s.push('!');
+    s[0] = 'V';
     val f = std::format("{}-{:>5}|{:.2}", "a", 7, 3.14159);
     val parts: str[3] = { "x", "y", "z" };
     std::println("{} {} {}", s, f, std::join(parts[..], "+"));
     std::println("{} {} {}", "a-b-c".replace("-", "/"), "ab".repeat(3), "Volt".to_upper());
 }
-// expect: volt 42! a-    7|3.14 x+y+z
+// expect: Volt 42! a-    7|3.14 x+y+z
 // expect: a/b/c ababab VOLT
 ```
 

@@ -274,7 +274,7 @@ namespace json {
                     if (i > 0) {
                         out.push(',');
                     }
-                    xs.at(i).write(out);
+                    xs[i].write(out);
                 }
                 out.push(']');
             },
@@ -284,9 +284,9 @@ namespace json {
                     if (i > 0) {
                         out.push(',');
                     }
-                    write_str(out, ms.at(i).name.as_str());
+                    write_str(out, ms[i].name.as_str());
                     out.push(':');
-                    ms.at(i).item.write(out);
+                    ms[i].item.write(out);
                 }
                 out.push('}');
             },
@@ -374,7 +374,7 @@ namespace json {
         match (*this) {
             .ARR(xs&) => {
                 if (i < xs.len) {
-                    return xs.at(i);
+                    return &xs[i];
                 }
             },
             default => {},
@@ -475,12 +475,12 @@ namespace json {
             .OBJ(ms&) => {
                 var found: usize? = null;
                 for (i) in 0..ms.len {
-                    if (ms.at(i).name.as_str() == key) {
+                    if (ms[i].name.as_str() == key) {
                         found = i;
                     }
                 }
                 if (found) {
-                    ms.at(found).item = move v;
+                    ms[found].item = move v;
                     return;
                 }
                 ms.push({ name: std::string::from(key, copy ms.allocator), item: move v }) catch @panic("out of memory");

@@ -344,7 +344,7 @@ namespace process {
         }
         if (pid == 0) {
             close(ep[0]); // the program only inherits stdin/out/err
-            execvp(owned.at(0).c_str(), ptrs.ptr);
+            execvp(owned[0].c_str(), ptrs.ptr);
             exec_failed(&ep); // the child stops here
         }
         if (exec_error(&ep, pid)) {
@@ -411,7 +411,7 @@ namespace process {
             dup2(errp[1], 2);
             close_all(&inp, &outp, &errp);
             close(ep[0]);
-            execvp(owned.at(0).c_str(), ptrs.ptr);
+            execvp(owned[0].c_str(), ptrs.ptr);
             exec_failed(&ep); // the child stops here
         }
         // the parent keeps the other ends

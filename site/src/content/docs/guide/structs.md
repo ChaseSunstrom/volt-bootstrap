@@ -266,6 +266,10 @@ fn main() -> void {
 // expect: 7
 ```
 
+std's containers index the same way: `std::vec<T>` attaches `[]` (a `usize` index) returning
+`T&`, so `v[i] = x`, `v[i] += x` and `&v[i]` work as on an array, with the same bounds check; a
+`std::string`'s `s[i]` is its byte `i`.
+
 ## Generic structs
 
 A struct can take generic parameters, with defaults:

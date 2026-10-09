@@ -22,10 +22,16 @@ public attach fn items(this: std::vec<T, A>&) -> T[..] {
     return @slice(this.ptr, this.len);
 }
 
-// element i (bounds-checked in debug builds)
+// element i, bounds-checked (v[i] is the same place)
 <T: type, A: std::mem::allocator>
 public attach fn at(this: std::vec<T, A>&, i: usize) -> T& {
     return &(@slice(this.ptr, this.len)[i]);
+}
+
+// v[i]: element i, a place (read it, assign to it, borrow it), bounds-checked like at()
+<T: type, A: std::mem::allocator>
+public attach operator [](this: std::vec<T, A>&, i: usize) -> T& {
+    return this.at(i);
 }
 
 // room for at least n elements

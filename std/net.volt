@@ -552,7 +552,7 @@ namespace net {
         if (found.len == 0) {
             return net_error::NOT_FOUND;
         }
-        val a = *found.at(0);
+        val a = found[0];
         var family = 2;
         if (a.v6) {
             family = af_inet6();
@@ -587,7 +587,7 @@ namespace net {
         if (found.len == 0) {
             return net_error::NOT_FOUND;
         }
-        val a = *found.at(0);
+        val a = found[0];
         var family = 2;
         if (a.v6) {
             family = af_inet6();
