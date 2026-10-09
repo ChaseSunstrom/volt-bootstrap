@@ -19,7 +19,15 @@ struct fd { a: f32; b: f64; }
 struct hd1 { x: f64; }
 struct hh2 { a: f16; b: f16; }
 struct hq2 { a: f128; b: f128; }
+struct hhf { a: f16; b: f32; }
+struct hh3 { a: f16; b: f16; c: f16; }
+struct hhi { a: f16; b: i32; }
+struct hq1 { x: f128; }
 
+export fn fhhf(x: hhf) -> hhf { return x; }
+export fn fhh3(x: hh3) -> hh3 { return x; }
+export fn fhhi(x: hhi) -> hhi { return x; }
+export fn fhq1(x: hq1) -> hq1 { return x; }
 export fn f1(x: s1) -> s1 { return x; }
 export fn f3(x: s3) -> s3 { return x; }
 export fn f4(x: s4) -> s4 { return x; }

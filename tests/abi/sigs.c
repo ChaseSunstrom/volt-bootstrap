@@ -17,11 +17,24 @@ typedef struct { float f; int i; } mix;
 typedef struct { __int128 a; } al16;
 typedef struct { float a; double b; } fd;
 typedef struct { double x; } hd1;
-#if defined(__aarch64__)
-/* half and quad floats make HFAs too (long double is a quad only on aarch64 Linux; elsewhere these
-   shapes lower another way, through rules this test doesn't cover yet) */
+#if defined(__aarch64__) || (defined(__x86_64__) && defined(__linux__))
+/* half floats make HFAs on aarch64 and SSE eightbytes on SysV x86-64 */
 typedef struct { _Float16 a, b; } hh2;
 hh2 fhh2(hh2 x) { return x; }
+#endif
+#if defined(__x86_64__) && defined(__linux__)
+typedef struct { _Float16 a; float b; } hhf;
+typedef struct { _Float16 a, b, c; } hh3;
+typedef struct { _Float16 a; int b; } hhi;
+typedef struct { __float128 x; } hq1;
+hhf fhhf(hhf x) { return x; }
+hh3 fhh3(hh3 x) { return x; }
+hhi fhhi(hhi x) { return x; }
+hq1 fhq1(hq1 x) { return x; }
+#endif
+#if defined(__aarch64__)
+/* quad floats make HFAs too (long double is a quad only on aarch64 Linux; elsewhere these
+   shapes lower another way, through rules this test doesn't cover yet) */
 #if !defined(__APPLE__)
 typedef struct { long double a, b; } hq2;
 hq2 fhq2(hq2 x) { return x; }

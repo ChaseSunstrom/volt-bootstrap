@@ -43,8 +43,9 @@ struct abi_fn {
 
 // one eightbyte's class while classifying an aggregate
 struct eightbyte {
-    cls: u32 = 0; // 0 none, 1 INTEGER, 2 SSE, 3 MEMORY
-    // the float and double scalars in it (pick the SSE piece's type)
+    cls: u32 = 0; // 0 none, 1 INTEGER, 2 SSE, 3 SSE+SSEUP (an fp128: both eightbytes of one register)
+    // the half, float and double scalars in it (pick the SSE piece's type)
+    halves: u32 = 0;
     floats: u32 = 0;
     doubles: u32 = 0;
 }
@@ -380,16 +381,20 @@ attach fn classify(this: lg&, t: u32, off: u64, ebs: eightbyte[2]&) -> void {
         return;
     }
     var cls: u32 = 1;
+    var hf: u32 = 0;
     var fl: u32 = 0;
     var db: u32 = 0;
-    if (k == llvm::LLVMFloatTypeKind) {
+    if (k == llvm::LLVMHalfTypeKind) {
+        cls = 2;
+        hf = 1;
+    } else if (k == llvm::LLVMFP128TypeKind) {
+        cls = 3;
+    } else if (k == llvm::LLVMFloatTypeKind) {
         cls = 2;
         fl = 1;
     } else if (k == llvm::LLVMDoubleTypeKind) {
         cls = 2;
         db = 1;
-    } else if (k == llvm::LLVMHalfTypeKind || k == llvm::LLVMFP128TypeKind) {
-        cls = 3; // ponytail: _Float16/__float128 inside an aggregate go by memory, not SSE
     }
     var at = off / 8;
     val last = (off + size - 1) / 8;
@@ -403,6 +408,7 @@ attach fn classify(this: lg&, t: u32, off: u64, ebs: eightbyte[2]&) -> void {
         } else {
             ebs[j].cls = 2;
         }
+        ebs[j].halves += hf;
         ebs[j].floats += fl;
         ebs[j].doubles += db;
         at += 1;
@@ -468,16 +474,29 @@ attach fn part(this: lg&, t: u32, ret: bool) -> abi_part {
     val n = (size + 7) / 8;
     for (i) in 0..n {
         val e = ebs[@cast<usize>(i)];
-        if (e.cls == 3) {
-            return { how: pass::MEMORY, ty: t };
-        }
         var bytes = size - i * 8;
         if (bytes > 8) {
             bytes = 8;
         }
+        if (e.cls == 3) {
+            put(&r.pieces, llvm::LLVMFP128TypeInContext(this.ctx));
+            return r; // both eightbytes
+        }
         if (e.cls == 2) {
             if (e.doubles > 0) {
                 put(&r.pieces, llvm::LLVMDoubleTypeInContext(this.ctx));
+            } else if (e.halves > 0) {
+                // as clang has it: a lone half, two halves, or four halves (a float among them too)
+                val h = llvm::LLVMHalfTypeInContext(this.ctx);
+                if (bytes <= 2) {
+                    put(&r.pieces, h);
+                } else {
+                    var lanes: u32 = 4;
+                    if (bytes <= 4) {
+                        lanes = 2;
+                    }
+                    put(&r.pieces, llvm::LLVMVectorType(h, lanes));
+                }
             } else if (e.floats >= 2) {
                 put(&r.pieces, llvm::LLVMVectorType(llvm::LLVMFloatTypeInContext(this.ctx), 2));
             } else {
