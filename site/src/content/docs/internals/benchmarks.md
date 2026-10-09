@@ -156,7 +156,8 @@ Measured 2026-10-06 on:
   `rs[i] = if (over) x - BASE else x` into both arms of the branch on the carry, so the branch
   stayed and mispredicted where clang made it a conditional move. An if value whose arms are
   plain values is C's `?:` now, and `if (c) 1 else 0` is `c` as a number, so gcc makes the
-  conditional move too: 0.82 s (1.53x), where gcc's C takes 0.45 s.
+  conditional move too: 0.82 s, then 0.64 s (1.43x of gcc's C, 0.45 s) once the program adds its
+  limbs in the C's order and `resize`'s fill became a `memset`.
 - **`sort`: a radix sort for integers.** `slice.sort` sorts integers of 256 or more elements by
   their bytes (it's stable, and integers have no order but their bits), in a few passes over the
   data, with no comparisons at all. `std::stable_sort` is a merge sort with the comparison inlined;
@@ -196,10 +197,9 @@ Measured 2026-10-06 on:
   a time while keeping the sum in order (clang only vectorizes a float sum it may reorder); Volt's C
   gets most of that, since its `a(i, j)` does its math in `i32` as the C does (in `usize`, the
   unsigned 64-bit to `f64` conversion has no SSE2 vector form). `bigint`'s gcc win isn't Volt's
-  yet: Volt's add puts the carry in before the second limb (a longer chain per limb than the C's
-  `a + b + carry`), its `resize` writes zeros the C's `realloc` doesn't (with a bounds check per
-  element, so gcc doesn't make it a `memset`), and its range loops' exit test hides from gcc that
-  the index is in bounds.
+  yet: Volt's C through clang matches gcc's C, so what's left is gcc on Volt's loops (the range
+  loops' exit test hides from gcc that the index is in bounds), and the zeros `resize` writes that
+  the C's `realloc` doesn't.
 - **Where Volt still trails**: `vm_interp` and `lz77` pay for their bounds checks
   (above). `lz77` and `wordfreq` also append to a `std::string` with a capacity check per call,
   where the C checks once per word and then writes without checks, and `wordfreq`'s `sort_by` (a

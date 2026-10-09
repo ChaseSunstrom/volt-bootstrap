@@ -158,9 +158,10 @@ public attach fn truncate(this: std::vec<T, A>&, n: usize) -> void {
 }
 
 // n elements: copies of value added at the end, or the ones past n deleted. Filling is one plain
-// loop, which the C compiler turns into a memset for bytes
+// loop, which the C compiler turns into a memset for bytes (unchecked: its indices are len..n of a
+// slice of n, and a check per element keeps gcc from making it a memset)
 <T: type, A: std::mem::allocator>
-@attributes([@invalidates])
+@attributes([@invalidates, @unchecked])
 public attach fn resize(this: std::vec<T, A>&, n: usize, value: T) -> std::mem::mem_error!void {
     if (n <= this.len) {
         this.truncate(n);

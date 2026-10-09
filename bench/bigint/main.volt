@@ -44,10 +44,12 @@ attach operator +(this: big&, o: big&) -> big {
     val rs = r.limbs.items();
     var carry: u32 = 0;
     for (i) in 0..ls.len {
-        var x = ls[i] + carry;
+        // the limbs first, then the carry, as the C adds them
+        var x = ls[i];
         if (i < ss.len) {
             x += ss[i];
         }
+        x += carry;
         val over = x >= BASE;
         rs[i] = if (over) x - BASE else x;
         carry = if (over) 1 else 0;
