@@ -15,7 +15,7 @@
 //   or a class's stored one -> a method without arguments
 use super::glue::{number, prim, Gen, Kind, Lang, Model, Recv, ShimOut, ShimParam, Sig, Ty, TypeDef, TypeInfo};
 use super::{arg_path, fresh, save, stamp, Made, Req};
-use crate::foreign::{int_value, lex, Cur, Tok};
+use crate::foreign::{int_value, lex, toks_line, Cur, Tok};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
 use std::path::PathBuf;
@@ -370,6 +370,7 @@ impl Parser {
 
     /// func NAME[<...>](params) [async] [throws] [-> T] [where ...] { ... }
     fn func(&mut self, c: &mut Cur, owner: Option<&str>, m: Mods) {
+        let start = c.i;
         c.i += 1;
         let Some(name) = c.id() else {
             // an operator
@@ -387,6 +388,7 @@ impl Parser {
         let items = c.group_items();
         let (asyn, throws) = Self::effects(c);
         let ret = if c.eat("->") { parse_ty(&Self::ty_tokens(c), owner) } else { Some(Ty::Unit) };
+        let src = toks_line(&c.t[start..c.i]);
         Self::past_body(c);
         if m.private {
             return;
@@ -397,7 +399,7 @@ impl Parser {
             Some(_) if m.mutating => Recv::Mut,
             Some(_) => Recv::Ref,
         };
-        let mut s = Sig { name, recv, params: Vec::new(), ret: if throws { ret.map(|t| Ty::Res(Box::new(t))) } else { ret }, skip: None, src: String::new(), generics: Vec::new(), call: None };
+        let mut s = Sig { name, recv, params: Vec::new(), ret: if throws { ret.map(|t| Ty::Res(Box::new(t))) } else { ret }, skip: None, src, generics: Vec::new(), call: None };
         let labels = Self::params(&items, owner, &mut s);
         if generic {
             s.skip = Some("it's generic");

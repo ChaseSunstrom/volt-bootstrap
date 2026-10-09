@@ -152,7 +152,8 @@ fn xml(s: &str) -> String {
 /// a C# program printing what an assembly's public types have, a declaration a line (tab-separated):
 ///   type FULLNAME class|abstract|static|interface|struct|enum, then super FULLNAME (an imported
 ///   base or interface), value NAME N (an enum's), field NAME settable TYPE (a struct's instance
-///   fields, in order), func NAME KIND (KIND: ctor, inst, static, get, sget, set, sset, cast) with
+///   fields, in order), func NAME KIND (KIND: ctor, inst, static, get, sget, set, sset, cast; then the
+///   method's C# declaration, when it has one) with
 ///   param NAME TYPE and result TYPE lines and end; end
 ///   other NAME WHY
 /// TYPE: void, bool, char, string, i8...f64, an imported type's full name, T[], T?, or other
@@ -187,8 +188,31 @@ static class Describe {
         return "other";
     }
 
-    static void Func(string name, string kind, IEnumerable<(string, Type)> ps, Type ret) {
-        Console.WriteLine($"func\t{name}\t{kind}");
+    static readonly Dictionary<Type, string> Words = new Dictionary<Type, string> {
+        { typeof(void), "void" }, { typeof(string), "string" }, { typeof(bool), "bool" }, { typeof(char), "char" },
+        { typeof(sbyte), "sbyte" }, { typeof(byte), "byte" }, { typeof(short), "short" }, { typeof(ushort), "ushort" },
+        { typeof(int), "int" }, { typeof(uint), "uint" }, { typeof(long), "long" }, { typeof(ulong), "ulong" },
+        { typeof(float), "float" }, { typeof(double), "double" }, { typeof(object), "object" },
+    };
+
+    // a type as C# spells it
+    static string Cs(Type t) {
+        var u = Nullable.GetUnderlyingType(t);
+        if (u != null) return Cs(u) + "?";
+        if (t.IsByRef) return Cs(t.GetElementType());
+        if (t.IsArray) return Cs(t.GetElementType()) + "[]";
+        return Words.TryGetValue(t, out var w) ? w : t.Name;
+    }
+
+    // a method or constructor as C# declares it: public static int Add(int a, int b)
+    static string Decl(MethodBase m) {
+        var ps = string.Join(", ", m.GetParameters().Select(p => Cs(p.ParameterType) + " " + p.Name));
+        var head = "public " + (m.IsStatic ? "static " : "");
+        return m is MethodInfo mi ? $"{head}{Cs(mi.ReturnType)} {m.Name}({ps})" : $"{head}{m.DeclaringType.Name}({ps})";
+    }
+
+    static void Func(string name, string kind, IEnumerable<(string, Type)> ps, Type ret, string decl = "") {
+        Console.WriteLine($"func\t{name}\t{kind}\t{decl}");
         foreach (var (n, t) in ps) Console.WriteLine($"param\t{n}\t{T(t)}");
         Console.WriteLine($"result\t{T(ret)}");
         Console.WriteLine("end");
@@ -228,7 +252,7 @@ static class Describe {
                 foreach (var f in t.GetFields(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)) Console.WriteLine($"field\t{f.Name}\t{(f.IsPublic && !f.IsInitOnly ? "true" : "false")}\t{T(f.FieldType)}");
             }
             if (kind == "class" || kind == "struct") {
-                foreach (var c in t.GetConstructors().OrderBy(c => c.ToString())) Func("new", "ctor", Params(c), t);
+                foreach (var c in t.GetConstructors().OrderBy(c => c.ToString())) Func("new", "ctor", Params(c), t, Decl(c));
             }
             foreach (var m in t.GetMethods(inst).Concat(t.GetMethods(stat)).OrderBy(m => m.Name).ThenBy(m => m.ToString())) {
                 if (m.IsSpecialName || m.DeclaringType == typeof(object) || m.DeclaringType == typeof(ValueType)) continue;
@@ -236,7 +260,7 @@ static class Describe {
                     Console.WriteLine($"other\t{t.Name}.{m.Name}\tit's generic");
                     continue;
                 }
-                Func(m.Name, m.IsStatic ? "static" : "inst", Params(m), m.ReturnType);
+                Func(m.Name, m.IsStatic ? "static" : "inst", Params(m), m.ReturnType, Decl(m));
             }
             foreach (var p in t.GetProperties(inst).Concat(t.GetProperties(stat)).OrderBy(p => p.Name)) {
                 if (p.GetIndexParameters().Length > 0) continue;
@@ -333,7 +357,7 @@ fn read(desc: &str) -> (Model, Dotnet) {
                     d.fields.get_or_insert_with(Vec::new).push((f[1].to_string(), f[2] == "true", ty(f[3], &names)));
                 }
             }
-            "func" if f.len() == 3 => {
+            "func" if f.len() == 3 || f.len() == 4 => {
                 let (mut params, mut ret) = (Vec::new(), None);
                 while i < rows.len() && rows[i][0] != "end" {
                     let r = &rows[i];
@@ -367,7 +391,7 @@ fn read(desc: &str) -> (Model, Dotnet) {
                     }
                     _ => {}
                 }
-                m.methods.entry(tv).or_default().push(Sig { name, recv, params, ret, skip: None, src: String::new(), generics: Vec::new(), call: None });
+                m.methods.entry(tv).or_default().push(Sig { name, recv, params, ret, skip: None, src: f.get(3).unwrap_or(&"").to_string(), generics: Vec::new(), call: None });
             }
             "end" => {
                 m.types.extend(def.take());
