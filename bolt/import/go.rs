@@ -171,6 +171,16 @@ fn instance_name(line: &str) -> String {
     let name = path.rsplit("::").next().unwrap_or(path);
     format!("{name}__{}", parts.map(ident).collect::<Vec<_>>().join("_"))
 }
+
+/// the generic Volt types Go's composites are instances of (map<K, V>, arrayN<T> for [N]T...)
+fn is_composite_kind(n: &str) -> bool {
+    matches!(n, "map" | "set" | "chan" | "ptr" | "slice") || n.strip_prefix("array").is_some_and(|x| x.parse::<usize>().is_ok())
+}
+
+fn generic_def(name: &str, params: &[&str]) -> TypeDef {
+    TypeDef { module: Vec::new(), name: name.into(), generic: true, fields: None, variants: None, is_enum: false, clone: true, opaque: false, params: params.iter().map(|p| p.to_string()).collect(), rust_name: None }
+}
+
 /// bolt import go-link --out OUT -- DIR...: a program's use go glue packages (DIRs) as one library,
 /// with the one Go runtime a program can have: a main package importing them all, built with
 /// go build -buildmode=c-archive
@@ -1170,7 +1180,7 @@ impl Reader<'_> {
         } else {
             let why = match d.decl {
                 Decl::Iface("sealed") => Some("it has unexported methods, so in Go only its own package's types have it"),
-                Decl::Iface("open") if !ms.is_empty() => Some("a method takes or gives an array, or gives a pointer to a plain struct or a number, which a Volt method can't"),
+                Decl::Iface("open") if !ms.is_empty() => Some("a method takes or gives a type a Volt method can't (a slice of slices or of arrays, say)"),
                 _ => None,
             };
             if let Some(why) = why {
@@ -1389,17 +1399,17 @@ impl Reader<'_> {
     /// whether a Volt type can have a method of this signature (glue's cb_in and cb_out, with the
     /// shim's: numbers, bools, text, slices of numbers in, and the package's types)
     fn bridgeable(&self, s: &Sig) -> bool {
-        let plain = |n: &str| self.decls.iter().any(|(g, d)| d.vname == n && self.plain(g, &mut BTreeSet::new()));
         let arg = |t: &Ty| match t {
             Ty::Prim(_) | Ty::Str | Ty::String | Ty::Named(_) | Ty::Fn(..) => true,
             Ty::Ref(x, _) => matches!(&**x, Ty::Named(_) | Ty::Prim(_)),
-            Ty::Vec(e) | Ty::Slice(e, _) => matches!(&**e, Ty::Prim(_) | Ty::Str | Ty::Named(_)) || matches!(&**e, Ty::Ref(x, _) if matches!(&**x, Ty::Named(_))),
+            Ty::Vec(e) | Ty::Slice(e, _) | Ty::Array(e, _) => matches!(&**e, Ty::Prim(_) | Ty::Str | Ty::Named(_)) || matches!(&**e, Ty::Ref(x, _) if matches!(&**x, Ty::Named(_))),
             _ => false,
         };
         let one = |t: &Ty| match t {
             Ty::Unit | Ty::Prim(_) | Ty::Str | Ty::String | Ty::Named(_) | Ty::Fn(..) => true,
-            Ty::Ref(x, false) => matches!(&**x, Ty::Named(n) if !plain(n)),
-            Ty::Vec(_) | Ty::Slice(..) => arg(t),
+            // (a plain struct's *T is its value, a copy)
+            Ty::Ref(x, false) => matches!(&**x, Ty::Named(_)),
+            Ty::Vec(_) | Ty::Slice(..) | Ty::Array(..) => arg(t),
             _ => false,
         };
         let one = |t: &Ty| match t {
@@ -1466,17 +1476,32 @@ impl Reader<'_> {
         Ok(t)
     }
 
-    /// a map's, a set's, a channel's, a pointer's or a slice's line as an instance of the generic
-    /// Volt type (map\tK\tV), when Volt names each of its types the way voltc does
-    fn generic_line(&mut self, g: &GT) -> Option<String> {
-        let (kind, args): (&str, Vec<&GT>) = match g {
-            GT::Map(k, v) if **v == GT::Empty => ("set", vec![k]),
-            GT::Map(k, v) => ("map", vec![k, v]),
-            GT::Chan(_, e) => ("chan", vec![e]),
-            GT::Ptr(e) => ("ptr", vec![e]),
-            GT::Slice(e) => ("slice", vec![e]),
+    /// the generic Volt type a composite is an instance of, and its type arguments: map, set, chan,
+    /// ptr, slice, and arrayN for [N]T (Volt's generics take types, so the length is in the name;
+    /// its type is made here)
+    fn composite_kind<'g>(&mut self, g: &'g GT) -> Option<(String, Vec<&'g GT>)> {
+        let (kind, args): (String, Vec<&GT>) = match g {
+            GT::Map(k, v) if **v == GT::Empty => ("set".into(), vec![k]),
+            GT::Map(k, v) => ("map".into(), vec![k, v]),
+            GT::Chan(_, e) => ("chan".into(), vec![e]),
+            GT::Ptr(e) => ("ptr".into(), vec![e]),
+            GT::Slice(e) => ("slice".into(), vec![e]),
+            GT::Array(n, e) => {
+                let kind = format!("array{n}");
+                if !self.m.types.iter().any(|t| t.name == kind) {
+                    self.m.types.push(generic_def(&kind, &["T"]));
+                }
+                (kind, vec![e])
+            }
             _ => return None,
         };
+        Some((kind, args))
+    }
+
+    /// a map's, a set's, a channel's, a pointer's, a slice's or an array's line as an instance of the generic
+    /// Volt type (map\tK\tV), when Volt names each of its types the way voltc does
+    fn generic_line(&mut self, g: &GT) -> Option<String> {
+        let (kind, args) = self.composite_kind(g)?;
         let mut texts = Vec::new();
         for a in args {
             let text = match a {
@@ -1510,8 +1535,8 @@ impl Reader<'_> {
     /// the generic Volt types map<K, V>, set<K>, chan<T>, ptr<T> and slice<T>, whose instances are
     /// Go's maps, sets, channels, pointers and slices (those Volt doesn't hold itself)
     fn generic_composites(&mut self) {
-        for (n, ps) in [("map", vec!["K", "V"]), ("set", vec!["K"]), ("chan", vec!["T"]), ("ptr", vec!["T"]), ("slice", vec!["T"])] {
-            self.m.types.push(TypeDef { module: Vec::new(), name: n.into(), generic: true, fields: None, variants: None, is_enum: false, clone: true, opaque: false, params: ps.into_iter().map(String::from).collect(), rust_name: None });
+        for (n, ps) in [("map", &["K", "V"][..]), ("set", &["K"]), ("chan", &["T"]), ("ptr", &["T"]), ("slice", &["T"])] {
+            self.m.types.push(generic_def(n, ps));
         }
     }
 
@@ -1738,14 +1763,9 @@ impl Reader<'_> {
     /// set<K> or chan<T>
     fn composite(&mut self, g: &GT) -> Result<Ty, String> {
         if self.has_tparam(g) {
-            let (kind, args): (&str, Vec<&GT>) = match g {
-                GT::Map(k, v) if **v == GT::Empty => ("set", vec![k]),
-                GT::Map(k, v) => ("map", vec![k, v]),
-                GT::Chan(_, e) => ("chan", vec![e]),
-                GT::Ptr(e) => ("ptr", vec![e]),
-                GT::Slice(e) => ("slice", vec![e]),
-                _ => return Err("it's generic over an array of composites of its type parameters, which Volt has no generic spelling of".into()),
-            };
+            let (kind, args) = self.composite_kind(g).ok_or("it's generic over a composite of its type parameters, which Volt has no generic spelling of")?;
+            let kind = kind.as_str();
+            let args: Vec<&GT> = args;
             let mut tys = Vec::new();
             for a in args {
                 let t = self.ty(a, Pos::Elem)?;
@@ -1871,7 +1891,7 @@ impl Reader<'_> {
             }
             return;
         }
-        if matches!(n.as_str(), "map" | "set" | "chan" | "ptr" | "slice") {
+        if is_composite_kind(&n) {
             if let Err(why) = self.composite_instance(&n, &args, &inst) {
                 self.m.left_out.push(format!("{inst} ({why})"));
             }
@@ -1905,6 +1925,10 @@ impl Reader<'_> {
     /// map<K, V>, set<K> or chan<T> for these Volt types: Go's map, set or channel of theirs
     fn composite_instance(&mut self, kind: &str, args: &[String], inst: &str) -> Result<(), String> {
         let want = if kind == "map" { 2 } else { 1 };
+        // (the type, if only a program names it)
+        if let Some(n) = kind.strip_prefix("array").and_then(|x| x.parse::<usize>().ok()) {
+            self.composite_kind(&GT::Array(n, Box::new(GT::Empty)));
+        }
         if args.len() != want {
             return Err(format!("it takes {want} types"));
         }
@@ -1918,7 +1942,8 @@ impl Reader<'_> {
             ("set", [k]) => GT::Map(Box::new(k.clone()), Box::new(GT::Empty)),
             ("ptr", [e]) => GT::Ptr(Box::new(e.clone())),
             ("slice", [e]) => GT::Slice(Box::new(e.clone())),
-            (_, [e]) => GT::Chan(Dir::Both, Box::new(e.clone())),
+            ("chan", [e]) => GT::Chan(Dir::Both, Box::new(e.clone())),
+            (k, [e]) => GT::Array(k.strip_prefix("array").and_then(|x| x.parse().ok()).ok_or("its types")?, Box::new(e.clone())),
             _ => return Err("its types".into()),
         };
         self.anonymous_named(&g, inst)?;
@@ -1960,10 +1985,7 @@ impl Reader<'_> {
             if !self.exprs.contains_key(&inst) {
                 // (made outside the instance being read)
                 let saved = std::mem::take(&mut self.tps);
-                let r = match n {
-                    "map" | "set" | "chan" | "ptr" | "slice" => self.composite_instance(n, &args, &inst),
-                    _ => self.type_instance(&line).map(|_| ()),
-                };
+                let r = if is_composite_kind(n) { self.composite_instance(n, &args, &inst) } else { self.type_instance(&line).map(|_| ()) };
                 self.tps = saved;
                 r.ok()?;
             }
@@ -2199,6 +2221,13 @@ impl Go {
                 let c = format!("{}*", c_prim(p));
                 (vec![(c.clone(), c)], Vec::new(), vec![format!("(*C.{})(unsafe.Pointer({x}))", c_prim(p))], Vec::new())
             }
+            // an array: a copy, so its slice goes (nothing comes back)
+            Ty::Array(e, _) => {
+                let s = format!("{x}_s");
+                let (cps, mut before, args, after) = self.cb_in(g, &Ty::Slice(e.clone(), false), &s)?;
+                before.insert(0, format!("{s} := {x}[:]"));
+                (cps, before, args, after)
+            }
             // Go's numbers, lent for the call; text copied (and freed after); the package's types as
             // Volt holds them (mirrors, handles it doesn't free, enums), Volt's changes put back
             Ty::Slice(e, _) | Ty::Vec(e) => {
@@ -2265,9 +2294,14 @@ impl Go {
             Ty::String => ("void".into(), vec![("uintptr_t".into(), "void*".into())], vec![format!("var {o} string"), format!("{o}h := cgo.NewHandle(&{o})")], vec![format!("C.uintptr_t({o}h)")], vec![format!("{o}h.Delete()")], o.into()),
             Ty::Str => ("void".into(), vec![same("uint8_t**"), same("size_t*")], vec![format!("var {o} *C.uint8_t"), format!("var {o}_n C.size_t")], vec![format!("&{o}"), format!("&{o}_n")], Vec::new(), format!("str(unsafe.Pointer({o}), uintptr({o}_n))")),
             // a slice: Volt pushes each element onto the one the handle o says
-            Ty::Vec(e) | Ty::Slice(e, _) => {
+            Ty::Vec(e) | Ty::Slice(e, _) | Ty::Array(e, _) => {
                 let t = self.cb_go(g, e)?;
-                ("void".into(), vec![("uintptr_t".into(), "void*".into())], vec![format!("var {o} []{t}"), format!("{o}h := cgo.NewHandle(&{o})")], vec![format!("C.uintptr_t({o}h)")], vec![format!("{o}h.Delete()")], o.into())
+                // (an array: exactly n of them)
+                let v = match r {
+                    Ty::Array(_, n) => format!("[{n}]{t}(count({o}, {n}))"),
+                    _ => o.into(),
+                };
+                ("void".into(), vec![("uintptr_t".into(), "void*".into())], vec![format!("var {o} []{t}"), format!("{o}h := cgo.NewHandle(&{o})")], vec![format!("C.uintptr_t({o}h)")], vec![format!("{o}h.Delete()")], v)
             }
             // a Volt closure: a Go func calling it through its trampoline
             Ty::Fn(ps, r, _, _) => {
@@ -2308,6 +2342,8 @@ impl Go {
                 let (gp, mg) = (Self::path(&ti.def), Gen::mangle(&ti.def));
                 match (ti.kind, by_ref) {
                     (Kind::Plain, false) => ("void".into(), vec![same("void*")], vec![format!("var {o} V_{mg}")], vec![format!("unsafe.Pointer(&{o})")], Vec::new(), format!("from_{mg}({o})")),
+                    // a *T: a pointer to a copy
+                    (Kind::Plain, true) => ("void".into(), vec![same("void*")], vec![format!("var {o} V_{mg}")], vec![format!("unsafe.Pointer(&{o})")], Vec::new(), format!("ptrTo(from_{mg}({o}))")),
                     // the handle Volt gave up: its value, the handle deleted
                     (Kind::Handle, _) => ("void".into(), vec![same("void*")], vec![format!("var {o} C.uintptr_t")], vec![format!("unsafe.Pointer(&{o})")], Vec::new(), format!("{}[{gp}](uintptr({o}))", if by_ref { "takeP" } else { "takeH" })),
                     (Kind::Enum, false) => ("void".into(), vec![same("int64_t*")], vec![format!("var {o} C.int64_t")], vec![format!("&{o}")], Vec::new(), format!("{gp}({o})")),
@@ -2418,6 +2454,12 @@ impl Go {
         Some(match e {
             Ty::Prim(x) => (format!("sl[{}]({a}, {a}_n)", go_prim(x)), None, None),
             Ty::Str | Ty::String => (format!("strs({a}, {a}_n)"), None, None),
+            // lists of numbers: Volt's lists, in place (each as a pointer and a length)
+            Ty::Vec(x) if matches!(**x, Ty::Prim(_)) => {
+                let Ty::Prim(x) = &**x else { return None };
+                let t = go_prim(x);
+                (format!("each({a}, {a}_n, func(x voltStr) []{t} {{ return sl[{t}](x.p, x.n) }})"), None, None)
+            }
             Ty::Named(_) | Ty::Ref(..) => {
                 let ti = g.elem_info(e)?;
                 let (gp, mg) = (Self::path(&ti.def), Gen::mangle(&ti.def));
@@ -2875,7 +2917,8 @@ impl Lang for Go {
         let t = self.cb_go(g, e)?;
         let pre: String = p.pre.iter().map(|l| format!("\t{l}\n")).collect();
         let post: String = p.post.iter().map(|l| format!("\t{l}\n")).collect();
-        Some(format!("// an element of a Volt function's slice result, appended to the slice o (a handle) says\n//export {sym}\nfunc {sym}(o uintptr, {}) {{\n{pre}\tp := cgo.Handle(o).Value().(*[]{t})\n\t*p = append(*p, {})\n{post}}}\n\n", p.params.join(", "), p.arg))
+        // (a panic, as the argument's handle being invalid, is recovered: it never unwinds through the Volt function)
+        Some(format!("// an element of a Volt function's slice result, appended to the slice o (a handle) says\n//export {sym}\nfunc {sym}(o uintptr, {}, e, e_n unsafe.Pointer) (st uint8) {{\n\tdefer catch(&st, e, e_n)\n{pre}\tp := cgo.Handle(o).Value().(*[]{t})\n\t*p = append(*p, {})\n{post}\treturn 0\n}}\n\n", p.params.join(", "), p.arg))
     }
 
     fn put_glue(&self, sym: &str) -> Option<String> {
@@ -2999,6 +3042,10 @@ func count[T any](s []T, n int) []T {
 		panic(fmt.Sprintf("Go takes %d elements here, and Volt gave %d", n, len(s)))
 	}
 	return s
+}
+
+func ptrTo[T any](x T) *T {
+	return &x
 }
 
 // the value a handle holds (a *T: Go's collector keeps it while Volt holds the handle)
@@ -3306,6 +3353,7 @@ mod tests {
             "func\tKeys\t-\tnone\ntparam\tK\ntparam\tV\nparam\tm\tmap[K]V\nresult\t\t[]K\nend",
             "func\tChunk\t-\tnone\ntparam\tT\nparam\txs\t[]T\nresult\t\t[][]T\nend",
             "func\tPtrOf\t-\tnone\ntparam\tT\nparam\tx\tT\nresult\t\t*T\nend",
+            "func\tTwice\t-\tnone\ntparam\tT\nparam\txs\t[]T\nresult\t\t[2][]T\nend",
             "func\tRange\t-\tnone\nparam\tn\tint\nresult\t\t<-chan int\nend",
             "func\tFill\t-\tnone\nparam\tc\tchan<- int\nparam\tf\tOp\nend",
             "func\tSpread\t-\tnone\nparam\tf\tfunc(int)(int,string,error)\nresult\t\tstring\nend",
@@ -3370,6 +3418,9 @@ mod tests {
         let tv = |t: Ty| Ty::Vec(Box::new(t));
         assert_eq!(f("PtrOf").ret, Some(Ty::Inst("ptr".into(), vec![Ty::Generic("T".into())])));
         assert_eq!(f("Chunk").ret, Some(Ty::Inst("slice".into(), vec![tv(Ty::Generic("T".into()))])));
+        // an array of slices of them: array2<std::vec<T>> (the length is in the type's name)
+        assert_eq!(f("Twice").ret, Some(Ty::Inst("array2".into(), vec![tv(Ty::Generic("T".into()))])));
+        assert!(m.types.iter().any(|t| t.name == "array2" && t.generic));
         assert_eq!(f("Chunk__isize").ret, Some(named("slice__std_vec_isize_std_mem_default_allocator")));
         assert_eq!(m.consts, [(vec![], "Boiling".to_string(), "geom::Celsius".to_string(), "{ value: 100.0 }".to_string())]);
         assert!(m.fns.iter().any(|(_, s)| s.name == "Counter") && m.fns.iter().any(|(_, s)| s.name == "set_Counter"));
