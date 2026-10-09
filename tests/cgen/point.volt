@@ -29,8 +29,10 @@ fn main() -> i32 {
     for (i) in 0..3 {
         total += i;
     }
+    // an if value whose arms are plain values is C's ?:
+    val shown = if (total > 2) total else 0;
     if (total > 2) {
-        printf("%d %d %d %d\n", p.x, p.y, area(shape::CIRCLE(2)), total);
+        printf("%d %d %d %d\n", p.x, p.y, area(shape::CIRCLE(2)), shown);
     } else {
         printf("small\n");
     }

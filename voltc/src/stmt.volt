@@ -845,6 +845,12 @@ attach fn finish_loop(this: checker&, body: std::vec<u32>, body_div: bool, span:
         }
         val t = lc.break_ty ?? VOID;
         val res = lc.result ?? return fails(span, "");
+        if ((lc.label ?? "") == IFV_LABEL) {
+            val pick = this.plain_if_value(&stmts, res, lc.brk, t);
+            if (pick) {
+                return vnew(t, pick);
+            }
+        }
         var all: std::vec<u32> = {};
         put(&all, this.ir.decl(lc.result_id, null));
         for (s&) in stmts.items() {
@@ -857,6 +863,82 @@ attach fn finish_loop(this: checker&, body: std::vec<u32>, body_div: bool, span:
         t = NEVER;
     }
     return vnew(t, this.ir.node(ir_kind::BLOCK(move stmts), t));
+}
+
+// `if (c) a else b` whose arms only give their value (`{ res = a; goto out; }`, nothing to delete on
+// the way out) is c ? a : b, as C writes it: no result local, no labels. Not in an async fn, where a
+// suspend in an arm needs the statements
+attach fn plain_if_value(this: checker&, stmts: std::vec<u32>&, res: u32, brk: u32, t: u32) -> u32? {
+    if (stmts.len != 2 || this.cx.frame != null) {
+        return null;
+    }
+    match (this.ir.at(this.sole(*stmts.at(0))).kind) {
+        .IF(c, a, b) => {
+            val x = this.arm_value(a, res, brk) ?? return null;
+            val y = this.arm_value(b ?? return null, res, brk) ?? return null;
+            // `if (c) 1 else 0` is c as a number: gcc's jump threading copies the code between two
+            // branches on c into both arms, and a ?: is still a branch to it (bigint's checked store
+            // before `carry = if (over) 1 else 0` stayed a mispredicted branch, T-0259)
+            if (this.t.int_of(t) != null && this.ir.ty_of(c) == BOOL && this.int_is(x, 1) && this.int_is(y, 0)) {
+                return this.ir.conv(c, t);
+            }
+            return this.ir.node(ir_kind::COND(c, x, y), t);
+        },
+        default => {},
+    }
+    return null;
+}
+
+attach fn int_is(this: checker&, n: u32, v: i128) -> bool {
+    match (this.ir.at(n).kind) {
+        .INT(k) => { return k == v; },
+        default => { return false; },
+    }
+}
+
+// n without the blocks of one statement around it
+attach fn sole(this: checker&, n: u32) -> u32 {
+    var x = n;
+    loop {
+        match (this.ir.at(x).kind) {
+            .BLOCK(xs&) => {
+                if (xs.len != 1) {
+                    return x;
+                }
+                x = *xs.at(0);
+            },
+            default => { return x; },
+        }
+    }
+}
+
+// the value of an if value's arm that's exactly `{ res = v; goto brk; }`
+attach fn arm_value(this: checker&, arm: u32, res: u32, brk: u32) -> u32? {
+    match (this.ir.at(this.sole(arm)).kind) {
+        .BLOCK(xs&) => {
+            if (xs.len != 2) {
+                return null;
+            }
+            match (this.ir.at(*xs.at(1)).kind) {
+                .GOTO(l) => {
+                    if (l != brk) {
+                        return null;
+                    }
+                },
+                default => { return null; },
+            }
+            match (this.ir.at(*xs.at(0)).kind) {
+                .ASSIGN(p, v) => {
+                    if (p == res) {
+                        return v;
+                    }
+                },
+                default => {},
+            }
+        },
+        default => {},
+    }
+    return null;
 }
 
 // `{ ... }`, or a labeled block that break can leave with a value
