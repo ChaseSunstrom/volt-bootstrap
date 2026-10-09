@@ -99,6 +99,9 @@ func lists() {
 	fmt.Println("rows", shapelib.TotalRows([][]int64{{1, 2}, {3}}))
 	rot, sw, bu := shapelib.Rotated([3]int64{11, 12, 13}), shapelib.Swapped([2]float64{1.5, 2.5}), shapelib.Bumped([3]uint8{1, 2, 3})
 	fmt.Println("arrays", rot[0], rot[1], rot[2], sw[0], sw[1], bu[0], bu[1], bu[2])
+	tv := shapelib.MakeTagged(5)
+	defer tv.Close()
+	fmt.Println("tagged", shapelib.TaggedSum(tg{}), tv.Type(), tv.From(4), tv.Int(), tv.Close_(), shapelib.TaggedSum(tv))
 	fmt.Println("lists closed", shapelib.ClosedAccounts())
 }
 
@@ -200,3 +203,11 @@ func main() {
 	fillSome()
 	fmt.Fprintf(os.Stderr, "volt live: %d\n", C.volt_live_allocs)
 }
+
+// Go's own tagged
+type tg struct{}
+
+func (tg) Type() int32        { return 1 }
+func (tg) From(x int32) int32 { return x + 1 }
+func (tg) Int() int32         { return 2 }
+func (tg) Close_() int32      { return 3 }

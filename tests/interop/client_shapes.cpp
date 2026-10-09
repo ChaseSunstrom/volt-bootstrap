@@ -54,6 +54,14 @@ static void lists() {
     std::array<double, 2> sw = shapelib::swapped({1.5, 2.5});
     std::array<uint8_t, 3> bu = shapelib::bumped({1, 2, 3});
     std::printf("arrays %lld %lld %lld %g %g %d %d %d\n", (long long)rot[0], (long long)rot[1], (long long)rot[2], sw[0], sw[1], bu[0], bu[1], bu[2]);
+    struct tg : shapelib::tagged {
+        int32_t type() override { return 1; }
+        int32_t from(int32_t x) override { return x + 1; }
+        int32_t int_() override { return 2; }
+        int32_t close() override { return 3; }
+    } t0;
+    auto tv = shapelib::make_tagged(5);
+    std::printf("tagged %d %d %d %d %d %d\n", shapelib::tagged_sum(t0), tv->type(), tv->from(4), tv->int_(), tv->close(), shapelib::tagged_sum(*tv));
     std::printf("lists closed %d\n", shapelib::closed_accounts());
 }
 

@@ -242,7 +242,12 @@ Python's on
   uses itself gets a `_` after it in that language (`from_`), so it still gets its own value. A
   struct field does too (`t.from_` in Python, `t.int_` in C, `t.self_` in Rust; Zig keeps it as
   `t.@"type"`, C# as `t.@int`), and so does an export fn's wrapper (`from_()` in Python). An export
-  fn C or C++ can't declare (`int`, `typeof`, `delete`) is exported as `int_`.
+  fn C or C++ can't declare (`int`, `typeof`, `delete`) is exported as `int_`. A trait's fn is a
+  method of that name in every language, with the same `_` where the language keeps the word
+  (`int_` in C's table, C++, Java and Dart, `from_` in Python, `r#type` in Rust) or the wrapper
+  has the name itself: Volt's value has its own `close`, so a trait fn `close` is `close_` in
+  Python, Java, Kotlin, Dart, Swift, Lua, Ruby and JavaScript (`Close_` in Go), and your own
+  objects implement it under that name.
 - **Closures given back.** A fn returning `fn(A) -> R` gives a struct of the function, its data and
   what frees it; in C++ a `std::function`, which frees it with its last copy; in Rust a
   `Box<dyn FnMut(A) -> R>`, which frees it when dropped; in Zig a struct with `call` and

@@ -82,6 +82,15 @@ local function lists()
     say("rows", m.total_rows({ { 1, 2 }, { 3 } }))
     local rot, sw, bu = m.rotated({ 11, 12, 13 }), m.swapped({ 1.5, 2.5 }), m.bumped({ 1, 2, 3 })
     say("arrays", rot[1], rot[2], rot[3], sw[1], sw[2], bu[1], bu[2], bu[3])
+    local t0 = {}
+    function t0:type() return 1 end
+    function t0:from(x) return x + 1 end
+    function t0:int() return 2 end
+    function t0:close_() return 3 end
+    do
+        local tv <close> = m.make_tagged(5)
+        say("tagged", m.tagged_sum(t0), tv:type(), tv:from(4), tv:int(), tv:close_(), m.tagged_sum(tv))
+    end
     say("lists closed", m.closed_accounts())
 end
 

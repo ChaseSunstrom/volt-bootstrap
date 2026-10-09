@@ -120,6 +120,9 @@ void lists() {
   print('rows ${total_rows([[1, 2], [3]])}');
   final rot = rotated([11, 12, 13]), sw = swapped([1.5, 2.5]), bu = bumped([1, 2, 3]);
   print('arrays ${rot.join(' ')} ${sw.join(' ')} ${bu.join(' ')}');
+  final tv = make_tagged(5);
+  print('tagged ${tagged_sum(Tg())} ${tv.type()} ${tv.from(4)} ${tv.int_()} ${tv.close_()} ${tagged_sum(tv)}');
+  tv.close();
   print('lists closed ${closed_accounts()}');
 }
 
@@ -207,4 +210,16 @@ void main(List<String> args) {
   // what the library still holds (it was built with --leak-check): 0 when it freed everything
   final lib = DynamicLibrary.open(Platform.environment['VOLT_SHAPELIB_LIB']!);
   stderr.writeln('volt live: ${lib.lookup<Size>('volt_live_allocs').value}');
+}
+
+// Dart's own tagged (int is int_: it would hide Dart's int)
+class Tg implements tagged {
+  @override
+  int type() => 1;
+  @override
+  int from(int x) => x + 1;
+  @override
+  int int_() => 2;
+  @override
+  int close_() => 3;
 }

@@ -188,6 +188,10 @@ static void Lists()
     double[] sw = Api.swapped(new double[] { 1.5, 2.5 });
     byte[] bu = Api.bumped(new byte[] { 1, 2, 3 });
     Console.WriteLine($"arrays {rot[0]} {rot[1]} {rot[2]} {sw[0]} {sw[1]} {bu[0]} {bu[1]} {bu[2]}");
+    using (var tv = Api.make_tagged(5))
+    {
+        Console.WriteLine($"tagged {Api.tagged_sum(new Tg())} {tv.@type()} {tv.@from(4)} {tv.@int()} {tv.close()} {Api.tagged_sum(tv)}");
+    }
     Console.WriteLine($"lists closed {Api.closed_accounts()}");
 }
 
@@ -205,4 +209,13 @@ sealed class Circle : shape, IDisposable
     public void grow(double by) => r += by;
 
     public void Dispose() => Console.WriteLine("circle gone");
+}
+
+// C#'s own tagged: its fns are named like words C# keeps (int is @int)
+sealed class Tg : tagged
+{
+    public int @type() => 1;
+    public int @from(int x) => x + 1;
+    public int @int() => 2;
+    public int close() => 3;
 }

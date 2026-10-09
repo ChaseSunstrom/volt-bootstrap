@@ -88,6 +88,15 @@ fun lists() {
     val sw = swapped(doubleArrayOf(1.5, 2.5))
     val bu = bumped(ubyteArrayOf(1u, 2u, 3u))
     println("arrays ${rot.joinToString(" ")} ${sw.joinToString(" ")} ${bu.joinToString(" ")}")
+    val t0 = object : tagged {
+        override fun type(): Int = 1
+        override fun from(x: Int): Int = x + 1
+        override fun int(): Int = 2
+        override fun close_(): Int = 3
+    }
+    make_tagged(5).use { tv ->
+        println("tagged ${tagged_sum(t0)} ${tv.type()} ${tv.from(4)} ${tv.int()} ${tv.close_()} ${tagged_sum(tv)}")
+    }
     println("lists closed ${closed_accounts()}")
 }
 

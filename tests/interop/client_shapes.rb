@@ -73,6 +73,14 @@ def lists
   puts "some #{S.count_some([1, nil, 3])}"
   puts "rows #{S.total_rows([[1, 2], [3]])}"
   puts "arrays #{(S.rotated([11, 12, 13]) + S.swapped([1.5, 2.5]) + S.bumped([1, 2, 3])).join(' ')}"
+  t0 = Class.new do
+    def type = 1
+    def from(x) = x + 1
+    def int = 2
+    def close_ = 3
+  end.new
+  tv = S.make_tagged(5)
+  puts "tagged #{S.tagged_sum(t0)} #{tv.type} #{tv.from(4)} #{tv.int} #{tv.close_} #{S.tagged_sum(tv)}"
   puts "lists closed #{S.closed_accounts}"
 end
 

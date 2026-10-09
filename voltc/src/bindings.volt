@@ -1938,6 +1938,75 @@ fn c_kept(s: str) -> bool {
     return caps && s.len > 2;
 }
 
+// trait t's fn called name as one of a language's methods (or a table's members): ident's spelling,
+// with a _ (or more) while it's a word in taken (the members, locals and helpers beside it: has_word,
+// and has_prefix once), a type the package declares (types: where a method's name would hide one) or
+// an earlier fn's. Every site naming a trait's fn in a language names it so
+// ponytail: names every fn to find one (fns squared per trait, with declares'); a table per trait if
+// traits get hundreds of fns
+attach fn trait_member(this: bind&, t: u32, name: str, ident: fn(str) -> std::string, taken: str[..], types: bool) -> std::string {
+    var ns: std::vec<std::string> = {};
+    var at: usize = 0;
+    val fs = this.fns_of(t);
+    for (k) in 0..fs.len {
+        var n = ident(fs.at(k).name);
+        if (has_prefix(taken, n.as_str())) {
+            n.push('_');
+        }
+        loop {
+            var dup = has_word(taken, n.as_str()) || (types && this.declares(n.as_str()));
+            for (j) in 0..k {
+                dup = dup || ns.at(j).as_str() == n.as_str();
+            }
+            if (!dup) {
+                break;
+            }
+            n.push('_');
+        }
+        put(&ns, move n);
+        if (fs.at(k).name == name) {
+            at = k;
+        }
+    }
+    return copy *ns.at(at);
+}
+
+val NO_WORDS: str[] = {};
+
+// macros the standard headers define as functions: a table member so named can't be called as
+// t.vt->assert(...)
+val C_CALLED: str[] = { "assert", "unreachable", "offsetof", "va_arg", "va_start", "va_end", "va_copy", "setjmp" };
+
+// a trait fn as a member of the C table: a name C keeps or a standard function-like macro gets a _
+fn c_vt_name(name: str) -> std::string {
+    var n = c_ident(name, false);
+    if (c_kept(n.as_str()) || has_word(C_CALLED, n.as_str())) {
+        n.push('_');
+    }
+    return n;
+}
+
+// and of C++'s copy of it, which is the trait class's method too
+fn cpp_vt_name(name: str) -> std::string {
+    var n = c_ident(name, true);
+    if (c_kept(n.as_str()) || has_word(C_CALLED, n.as_str())) {
+        n.push('_');
+    }
+    return n;
+}
+
+// trait t's fn called name as a member of its C table (cpp: C++'s copy of it, whose names are the
+// trait class's methods too: not volt_T's o_ nor a type's name). Everything that reads or writes the
+// C table names its members so, and calls one as (t.vt->m)(...), which no function-like macro of a
+// header included before it can take
+attach fn vt_member(this: bind&, t: u32, name: str, cpp: bool) -> std::string {
+    if (cpp) {
+        val taken: str[] = { "o_" };
+        return this.trait_member(t, name, cpp_vt_name, taken, true);
+    }
+    return this.trait_member(t, name, c_vt_name, NO_WORDS, false);
+}
+
 // the export fns as C glue calls them (Node, Ruby, Lua): each through a pointer of its own, prefix
 // and its name, since a local of the glue's (self, info, len...) can have an export fn's name
 attach fn c_callees(this: bind&, prefix: str) -> std::string {
@@ -2284,7 +2353,7 @@ attach fn c_types(this: bind&, cpp: bool, out: std::string&) -> void {
         vt.append("_vt");
         out.append(fmt2("\n// trait {}'s fns, each taking the object first\nstruct {} {{\n", this.c.ty_name(*t), this.c_named(vt.as_str(), cpp)).as_str());
         for (f&) in this.fns_of(*t).items() {
-            out.append(fmt("    {};\n", this.c_fn_decl(&f.params, f.ret, f.name, cpp)).as_str());
+            out.append(fmt("    {};\n", this.c_fn_decl(&f.params, f.ret, this.vt_member(*t, f.name, cpp).as_str(), cpp)).as_str());
         }
         out.append("};\n");
     }
@@ -2995,14 +3064,14 @@ attach fn cpp_trait(this: bind&, k: u32, out: std::string&) -> void {
     out.append(fmt3("\n// trait {}: subclass it to hand Volt a {} (an override mustn't throw: Volt code doesn't\n// unwind); one Volt gives back is a volt_{}\nclass ", this.c.ty_name(t), copy cls, copy cls).as_str());
     out.append(fmt2("{} {{\npublic:\n    virtual ~{}() = default;\n", copy cls, copy cls).as_str());
     for (f&) in fns.items() {
-        out.append(fmt3("    virtual {}{}({}) = 0;\n", spaced(this.cb_ty(f.ret)), cpp_ident(f.name), this.cb_params(&f.params)).as_str());
+        out.append(fmt3("    virtual {}{}({}) = 0;\n", spaced(this.cb_ty(f.ret)), this.vt_member(t, f.name, true), this.cb_params(&f.params)).as_str());
     }
     out.append("};\n");
     // the table: a C function per fn, calling the override
     out.append(fmt3("\ninline const {}_vt *{}_table() {{\n    static const {}", copy cls, copy cls, copy cls).as_str());
     out.append("_vt vt = {\n");
     for (f&) in fns.items() {
-        out.append(fmt("        {},\n", this.cpp_callback(fmt2("static_cast<{} *>(self)->{}", copy cls, cpp_ident(f.name)), &f.params, f.ret)).as_str());
+        out.append(fmt("        {},\n", this.cpp_callback(fmt2("static_cast<{} *>(self)->{}", copy cls, this.vt_member(t, f.name, true)), &f.params, f.ret)).as_str());
     }
     out.append("    };\n    return &vt;\n}\n");
     out.append(fmt4("\n// lends Volt a {}: Volt never frees it\ninline {}_obj {}_lend({} &o) {{\n", copy cls, copy cls, copy cls, copy cls).as_str());
@@ -3014,8 +3083,9 @@ attach fn cpp_trait(this: bind&, k: u32, out: std::string&) -> void {
     out.append(fmt4("    explicit volt_{}({}_obj o) : o_(o) {{}}\n    volt_{}(const volt_{} &) = delete;\n", copy cls, copy cls, copy cls, copy cls).as_str());
     out.append(fmt3("    volt_{} &operator=(const volt_{} &) = delete;\n    ~volt_{}() override {{\n        if (o_.drop) {{\n            o_.drop(o_.self);\n        }}\n    }}\n", copy cls, copy cls, copy cls).as_str());
     for (f&) in fns.items() {
-        out.append(fmt3("    {}{}({}) override {{\n", spaced(this.cb_ty(f.ret)), cpp_ident(f.name), this.cb_params(&f.params)).as_str());
-        out.append(fmt("        {}\n    }\n", this.cpp_call_in(fmt("o_.vt->{}", cpp_ident(f.name)).as_str(), "o_.self", &f.params, f.ret)).as_str());
+        val m = this.vt_member(t, f.name, true);
+        out.append(fmt3("    {}{}({}) override {{\n", spaced(this.cb_ty(f.ret)), copy m, this.cb_params(&f.params)).as_str());
+        out.append(fmt("        {}\n    }\n", this.cpp_call_in(fmt("(o_.vt->{})", move m).as_str(), "o_.self", &f.params, f.ret)).as_str());
     }
     out.append("};\n");
 }
@@ -3634,17 +3704,21 @@ attach fn rust_trait(this: bind&, k: u32, out: std::string&) -> void {
         if (f.ret != VOID) {
             ret = fmt(" -> {}", this.rust_cb_ty(f.ret, 3));
         }
-        out.append(fmt3("    fn {}({}){};\n", rust_ident(f.name), move ps, move ret).as_str());
+        out.append(fmt3("    fn {}({}){};\n", this.trait_member(t, f.name, rust_ident, NO_WORDS, false), move ps, move ret).as_str());
     }
     out.append("}\n");
     // the table, in a module of its own: a C function per fn, calling the Rust object's (the object
     // is a &mut dyn T)
     var table: std::string = {};
     out.append(fmt("\nmod {}__table {{\n    use super::*;\n", copy tr).as_str());
-    for (f&) in fns.items() {
+    for (j) in 0..fns.len {
+        val f = fns.at(j);
+        val m = this.trait_member(t, f.name, rust_ident, NO_WORDS, false);
+        // (the C functions are f0, f1...: a fn's own name could be one the module uses)
+        val cf = fmt("f{}", unum(@cast<u64>(j)));
         out.append("\n");
-        out.append(indent(this.rust_callback(S(f.name).as_str(), "", fmt2("(unsafe {{ &mut **(u as *mut &mut dyn {}) }}).{}", copy tr, rust_ident(f.name)).as_str(), &f.params, f.ret).as_str()).as_str());
-        table.append(fmt2("{}: {}, ", rust_ident(f.name), rust_ident(f.name)).as_str());
+        out.append(indent(this.rust_callback(cf.as_str(), "", fmt2("(unsafe {{ &mut **(u as *mut &mut dyn {}) }}).{}", copy tr, copy m).as_str(), &f.params, f.ret).as_str()).as_str());
+        table.append(fmt2("{}: {}, ", copy m, copy cf).as_str());
     }
     out.append(fmt3("\n    pub static TABLE: {}_vt = {}_vt {{ {}}};\n}}\n", copy tr, copy tr, move table).as_str());
     out.append(fmt4("\n/// lends Volt a {}: Volt never frees it\npub fn {}_lend(s: &mut &mut dyn {}) -> {}_obj {{\n", copy tr, copy tr, copy tr, copy tr).as_str());
@@ -3667,8 +3741,9 @@ attach fn rust_trait(this: bind&, k: u32, out: std::string&) -> void {
         if (f.ret != VOID) {
             ret = fmt(" -> {}", this.rust_cb_ty(f.ret, 3));
         }
-        out.append(fmt3("    fn {}({}){} {{\n", rust_ident(f.name), move ps, move ret).as_str());
-        out.append(fmt("        {}\n    }\n", this.rust_call_out(fmt("(*self.0.vt).{}", rust_ident(f.name)).as_str(), "self.0.self_", &f.params, f.ret, true)).as_str());
+        val m = this.trait_member(t, f.name, rust_ident, NO_WORDS, false);
+        out.append(fmt3("    fn {}({}){} {{\n", copy m, move ps, move ret).as_str());
+        out.append(fmt("        {}\n    }\n", this.rust_call_out(fmt("(*self.0.vt).{}", move m).as_str(), "self.0.self_", &f.params, f.ret, true)).as_str());
     }
     out.append("}\n");
 }
@@ -3773,7 +3848,7 @@ attach fn rust_text(this: bind&) -> std::string {
                 s.append(" -> ");
                 s.append(this.rust_out(f.ret).as_str());
             }
-            out.append(fmt2("    pub {}: {},\n", rust_ident(f.name), move s).as_str());
+            out.append(fmt2("    pub {}: {},\n", this.trait_member(*t, f.name, rust_ident, NO_WORDS, false), move s).as_str());
         }
         out.append("}\n");
     }
@@ -4433,6 +4508,11 @@ attach fn zig_body(this: bind&, f: u32, args: std::string, pre: std::string) -> 
 
 // trait K in Zig: any type with its fns passes where Volt takes one (T_lend a pointer, T_give a
 // value Volt deinits and frees); the table is made per type at comptime; volt_T is one Volt made
+// what a trait's methods in Zig can't be called: volt_T's o and deinit (a given value's deinit is called
+// when Volt drops it), and the locals, parameters and helpers its methods name (as zig_pnames'), which
+// Zig won't let them shadow
+val ZIG_MEMBERS: str[] = { "o", "deinit", "self", "r", "p", "q", "t", "d", "u", "v", "x", "s", "e", "h", "ctx", "vt", "call", "drop", "a#", "T", "Owned", "VoltStr", "VoltText", "VoltSlice", "VoltOpt", "VoltArray" };
+
 attach fn zig_trait(this: bind&, k: u32, out: std::string&) -> void {
     val t = *this.traits.at(k);
     val tr = this.short(t);
@@ -4442,16 +4522,20 @@ attach fn zig_trait(this: bind&, k: u32, out: std::string&) -> void {
         if (names.len() > 0) {
             names.append(", ");
         }
-        names.append(f.name);
+        names.append(this.trait_member(t, f.name, zig_field, ZIG_MEMBERS, true).as_str());
     }
     out.append(fmt4("\n/// trait {}: any type with its fns ({}) passes where Volt takes one: lent ({}_lend(&x)),\n", this.c.ty_name(t), move names, copy tr, S("")).as_str());
     out.append(fmt2("/// or given ({}_give(x): Volt calls its deinit, if it has one, and frees it); one Volt gives\n/// back is a volt_{}\n", copy tr, copy tr).as_str());
     out.append(fmt3("pub fn {}_table(comptime T: type) *const {}_vt {{\n    const t = struct {{\n", copy tr, copy tr, S("")).as_str());
     var table: std::string = {};
-    for (f&) in fns.items() {
-        val cb = this.zig_callback(f.name, "const o: *T = @ptrCast(@alignCast(u));\n    ", fmt("o.{}", S(f.name)).as_str(), "", &f.params, f.ret);
+    for (j) in 0..fns.len {
+        val f = fns.at(j);
+        // (the C functions are @"f0", @"f1"...: a fn's own name could be a local's, which Zig won't
+        // shadow, and f16 is a type)
+        val cf = fmt("@\"f{}\"", unum(@cast<u64>(j)));
+        val cb = this.zig_callback(cf.as_str(), "const o: *T = @ptrCast(@alignCast(u));\n    ", fmt("o.{}", this.trait_member(t, f.name, zig_field, ZIG_MEMBERS, true)).as_str(), "", &f.params, f.ret);
         out.append(indent_n(cb.as_str(), 8).as_str());
-        table.append(fmt2(" .{} = {},", S(f.name), S(f.name)).as_str());
+        table.append(fmt2(" .{} = {},", zig_field(f.name), copy cf).as_str());
     }
     out.append(fmt2("        const vt = {}_vt{{{} }};\n    }};\n    return &t.vt;\n}}\n", copy tr, move table).as_str());
     out.append(fmt4("\npub fn {}_lend(o: anytype) {}_obj {{\n    return .{{ .vt = {}_table(@TypeOf(o.*)), .self = o, .drop = null }};\n}}\n", copy tr, copy tr, copy tr, S("")).as_str());
@@ -4465,8 +4549,8 @@ attach fn zig_trait(this: bind&, k: u32, out: std::string&) -> void {
         if (f.ret != VOID) {
             ret = this.zig_cb_ty(f.ret, 2);
         }
-        out.append(fmt4("\n    pub fn {}(self: *volt_{}{}) {} {{\n", S(f.name), copy tr, this.zig_cb_params(&f.params), move ret).as_str());
-        out.append(fmt("        {}\n    }\n", this.zig_call_out(fmt("self.o.vt.{}", S(f.name)).as_str(), "self.o.self", &f.params, f.ret)).as_str());
+        out.append(fmt4("\n    pub fn {}(self: *volt_{}{}) {} {{\n", this.trait_member(t, f.name, zig_field, ZIG_MEMBERS, true), copy tr, this.zig_cb_params(&f.params), move ret).as_str());
+        out.append(fmt("        {}\n    }\n", this.zig_call_out(fmt("self.o.vt.{}", zig_field(f.name)).as_str(), "self.o.self", &f.params, f.ret)).as_str());
     }
     out.append(fmt("\n    pub fn deinit(self: *volt_{}) void {{\n        if (self.o.drop) |d| d(self.o.self);\n    }}\n}};\n", copy tr).as_str());
 }
@@ -4585,7 +4669,7 @@ attach fn zig_text(this: bind&) -> std::string {
             }
             s.append(") callconv(.c) ");
             s.append(this.zig_out(f.ret).as_str());
-            out.append(fmt2("    {}: {},\n", S(f.name), move s).as_str());
+            out.append(fmt2("    {}: {},\n", zig_field(f.name), move s).as_str());
         }
         out.append("};\n");
     }
@@ -5217,7 +5301,7 @@ attach fn py_trait(this: bind&, k: u32, out: std::string&) -> void {
     val fns = this.fns_of(t);
     out.append(fmt4("\n\nclass {}(abc.ABC):\n    \"\"\"trait {}: subclass it to hand Volt a {} (lent, or given: Volt drops it); one Volt\n    gives out is a {} too\"\"\"\n", copy tr, this.c.ty_name(t), copy tr, copy tr).as_str());
     for (f&) in fns.items() {
-        out.append(fmt2("\n    @abc.abstractmethod\n    def {}(self{}):\n        ...\n", S(f.name), py_params(f.params.len)).as_str());
+        out.append(fmt2("\n    @abc.abstractmethod\n    def {}(self{}):\n        ...\n", this.trait_member(t, f.name, py_method, PY_MEMBERS, true), py_params(f.params.len)).as_str());
     }
     out.append(fmt3("\n\nclass _volt_{}({}):\n    \"\"\"a {} Volt gave out: its fns call Volt's; close() (or a with block) frees it\"\"\"\n\n    def __init__(self, o):\n        self._o = o\n", copy tr, copy tr, copy tr).as_str());
     for (f&) in fns.items() {
@@ -5226,10 +5310,10 @@ attach fn py_trait(this: bind&, k: u32, out: std::string&) -> void {
             args.append(", ");
             args.append(this.py_in(*f.params.at(j), fmt("a{}", unum(@cast<u64>(j))).as_str()).as_str());
         }
-        out.append(fmt2("\n    def {}(self{}):\n        o = self._o\n", S(f.name), py_params(f.params.len)).as_str());
+        out.append(fmt2("\n    def {}(self{}):\n        o = self._o\n", this.trait_member(t, f.name, py_method, PY_MEMBERS, true), py_params(f.params.len)).as_str());
         var b = py_gift("", args.as_str());
         val gift = b.len() > 0;
-        b.append(this.py_call(f.ret, fmt("o.vt[0].{}", S(f.name)).as_str(), move args, gift).as_str());
+        b.append(this.py_call(f.ret, py_attr("o.vt[0]", f.name).as_str(), move args, gift).as_str());
         out.append(indent(b.as_str()).as_str());
     }
     out.append("\n    def close(self):\n        if self._o is not None:\n            if self._o.drop:\n                self._o.drop(self._o.self)\n            self._o = None\n\n    def __enter__(self):\n        return self\n\n    def __exit__(self, *exc):\n        self.close()\n\n    def __del__(self):\n        self.close()\n");
@@ -5250,7 +5334,7 @@ attach fn py_trait(this: bind&, k: u32, out: std::string&) -> void {
     for (j) in 0..fns.len {
         val f = fns.at(j);
         val jj = unum(@cast<u64>(j));
-        out.append(this.py_callback(fmt("_{}", S(f.name)).as_str(), fmt("o.{}", S(f.name)).as_str(), &f.params, f.ret).as_str());
+        out.append(this.py_callback(fmt("_{}", S(f.name)).as_str(), fmt("o.{}", this.trait_member(t, f.name, py_method, PY_MEMBERS, true)).as_str(), &f.params, f.ret).as_str());
         if (j > 0) {
             fs.append(", ");
             vt.append(", ");
@@ -5980,6 +6064,37 @@ attach fn py_fn_name(this: bind&, name: str) -> std::string {
     return n;
 }
 
+// a trait fn's method name in Python: a keyword gets a _ (from_)
+fn py_member(name: str) -> std::string {
+    var n = S(name);
+    if (py_keyword(name)) {
+        n.push('_');
+    }
+    return n;
+}
+
+// a trait fn's method name in Python: py_member's, with _s on one Python would mangle in a class
+// (__x, __x_) until it ends in __
+fn py_method(name: str) -> std::string {
+    var n = py_member(name);
+    while (starts_with(n.as_str(), "__") && !ends_with(n.as_str(), "__")) {
+        n.push('_');
+    }
+    return n;
+}
+
+// what a trait's methods in Python can't be called: Volt's value's close and _o, and a name like
+// Python's own (__init__, __del__, __enter__...)
+val PY_MEMBERS: str[] = { "close", "_o", "__*" };
+
+// o's attribute name (a ctypes field) as Python reaches it: o.f, or getattr(o, "from") for a keyword
+fn py_attr(o: str, name: str) -> std::string {
+    if (py_keyword(name)) {
+        return fmt2("getattr({}, \"{}\")", S(o), S(name));
+    }
+    return fmt2("{}.{}", S(o), S(name));
+}
+
 // the library's C function name as Python reaches it: _lib.f, or getattr(_lib, "from") for a keyword
 fn py_lib(name: str) -> std::string {
     if (py_keyword(name)) {
@@ -6078,7 +6193,7 @@ attach fn pyi_text(this: bind&) -> std::string {
             for (k) in 0..f.params.len {
                 ps.append(fmt2(", a{}: {}", unum(@cast<u64>(k)), this.pyi_ty(*f.params.at(k), false)).as_str());
             }
-            out.append(fmt3("    @abc.abstractmethod\n    def {}({}) -> {}: ...\n", S(f.name), move ps, this.pyi_ty(f.ret, true)).as_str());
+            out.append(fmt3("    @abc.abstractmethod\n    def {}({}) -> {}: ...\n", this.trait_member(*t, f.name, py_method, PY_MEMBERS, true), move ps, this.pyi_ty(f.ret, true)).as_str());
         }
     }
     for (s&) in this.handles.items() {
@@ -6846,6 +6961,10 @@ fn cs_owner(cls: str, raw: str, live: str) -> std::string {
     return out;
 }
 
+// what a trait's methods (and its table's members) in C# can't be called: volt_T's own members and an
+// object's
+val CS_MEMBERS: str[] = { "o", "freed", "Dispose", "Free", "O", "Equals", "GetHashCode", "GetType", "ToString", "MemberwiseClone", "Finalize", "ReferenceEquals" };
+
 // trait K in C#: an interface (implement it to hand Volt one), its C structs, the table Volt calls a
 // C# object through, and volt_T, one Volt gave out
 attach fn cs_trait(this: bind&, k: u32, out: std::string&) -> void {
@@ -6855,12 +6974,12 @@ attach fn cs_trait(this: bind&, k: u32, out: std::string&) -> void {
     out.append(fmt4("\n/// <summary>trait {}: implement it to hand Volt a {} (lent, or given: Volt disposes it when it's\n/// done, when it's IDisposable); one Volt gives back is a volt_{}</summary>\npublic interface {}\n{{\n", this.c.ty_name(t), copy tn, copy tn, copy tn).as_str());
     for (f&) in fns.items() {
         var args = this.cs_sig_args(&f.params);
-        out.append(fmt3("    {} {}({});\n", this.cs_ty(f.ret), cs_ident(f.name), cs_decls(&args)).as_str());
+        out.append(fmt3("    {} {}({});\n", this.cs_ty(f.ret), this.trait_member(t, f.name, cs_ident, CS_MEMBERS, true), cs_decls(&args)).as_str());
     }
     out.append("}\n");
     out.append(fmt2("\n/// <summary>trait {}'s fns, each taking the object first</summary>\n[StructLayout(LayoutKind.Sequential)]\npublic unsafe struct {}_vt\n{{\n", this.c.ty_name(t), copy tn).as_str());
     for (f&) in fns.items() {
-        out.append(fmt2("    public {} {};\n", this.cs_fn_of(&f.params, f.ret), cs_ident(f.name)).as_str());
+        out.append(fmt2("    public {} {};\n", this.cs_fn_of(&f.params, f.ret), this.trait_member(t, f.name, cs_ident, CS_MEMBERS, true)).as_str());
     }
     out.append("}\n");
     out.append(fmt3("\n/// <summary>a {} as C passes it: its table, the object, and what frees it (null: it's lent)</summary>\n[StructLayout(LayoutKind.Sequential)]\npublic unsafe struct {}_obj\n{{\n    public {}_vt* vt;\n    public IntPtr self;\n    public delegate* unmanaged<IntPtr, void> drop;\n}}\n", copy tn, copy tn, copy tn).as_str());
@@ -6868,18 +6987,19 @@ attach fn cs_trait(this: bind&, k: u32, out: std::string&) -> void {
     out.append(fmt4("\n// the table Volt calls a C# {} through (its self is a GCHandle to a Callback holding it)\ninternal static unsafe class {}_table\n{{\n    internal static readonly {}_vt* Vt = Make();\n\n    static {}_vt* Make()\n    {{\n", copy tn, copy tn, copy tn, copy tn).as_str());
     out.append(fmt2("        var vt = ({}_vt*)NativeMemory.Alloc((nuint)sizeof({}_vt));\n", copy tn, copy tn).as_str());
     for (f&) in fns.items() {
-        out.append(fmt2("        vt->{} = &call_{};\n", cs_ident(f.name), S(f.name)).as_str());
+        out.append(fmt2("        vt->{} = &call_{};\n", this.trait_member(t, f.name, cs_ident, CS_MEMBERS, true), S(f.name)).as_str());
     }
     out.append("        return vt;\n    }\n");
     for (f&) in fns.items() {
-        out.append(this.cs_callback(fmt("call_{}", S(f.name)).as_str(), fmt2("(({})c.F).{}", copy tn, cs_ident(f.name)).as_str(), &f.params, f.ret).as_str());
+        out.append(this.cs_callback(fmt("call_{}", S(f.name)).as_str(), fmt2("(({})c.F).{}", copy tn, this.trait_member(t, f.name, cs_ident, CS_MEMBERS, true)).as_str(), &f.params, f.ret).as_str());
     }
     out.append("\n    // Volt is done with one it was given: it's disposed, when it's IDisposable\n    [UnmanagedCallersOnly]\n    internal static void drop(IntPtr user)\n    {\n        var g = GCHandle.FromIntPtr(user);\n        var c = (Callback)g.Target!;\n        g.Free();\n        try\n        {\n            (c.F as IDisposable)?.Dispose();\n        }\n        catch (Exception e)\n        {\n            c.Error ??= e;\n        }\n    }\n}\n");
     // one Volt gave out
     out.append(fmt3("\n/// <summary>a {} Volt gave out: calls Volt's; Dispose (or the finalizer) frees it</summary>\npublic sealed unsafe class volt_{} : {}, IDisposable\n{{\n", copy tn, copy tn, copy tn).as_str());
     out.append(cs_owner(fmt("volt_{}", copy tn).as_str(), fmt("{}_obj", copy tn).as_str(), "vt").as_str());
     for (f&) in fns.items() {
-        out.append(this.cs_call_out(cs_ident(f.name).as_str(), fmt("o_.vt->{}", cs_ident(f.name)).as_str(), &f.params, f.ret).as_str());
+        val m = this.trait_member(t, f.name, cs_ident, CS_MEMBERS, true);
+        out.append(this.cs_call_out(m.as_str(), fmt("o_.vt->{}", copy m).as_str(), &f.params, f.ret).as_str());
     }
     out.append("}\n");
 }
@@ -8034,6 +8154,9 @@ attach fn java_up_types(this: bind&, ps: std::vec<u32>&, r: u32, mt: std::string
 
 // trait K: a Java interface; its table of upcalls into a Java object (behind an id), what makes the
 // object Volt takes, and volt_T, Volt's own value of it
+// what a trait's methods in Java can't be called: AutoCloseable's close and an Object's
+val JAVA_MEMBERS: str[] = { "close", "getClass", "hashCode", "equals", "toString", "notify", "notifyAll", "wait", "clone", "finalize" };
+
 attach fn java_trait(this: bind&, k: u32, out: std::string&) -> void {
     val t = *this.traits.at(k);
     val tr = this.short(t);
@@ -8065,7 +8188,8 @@ attach fn java_trait(this: bind&, k: u32, out: std::string&) -> void {
             put(&args, move ja);
         }
         val jr = this.java_ty(f.ret, false);
-        iface.append(fmt3("        {} {}({});\n", copy jr, java_ident(f.name), copy params).as_str());
+        val m = this.trait_member(t, f.name, java_ident, JAVA_MEMBERS, false);
+        iface.append(fmt3("        {} {}({});\n", copy jr, copy m, copy params).as_str());
         var target_ret = this.java_carrier(f.ret);
         var mt = fmt("{}.class, MemorySegment.class", this.java_carrier(f.ret));
         if (f.ret == VOID) {
@@ -8075,7 +8199,7 @@ attach fn java_trait(this: bind&, k: u32, out: std::string&) -> void {
         var desc: std::string = {};
         this.java_up_types(&f.params, f.ret, &mt, &desc);
         ups.append(fmt4("\n    private static {} {}_{}({}) {{\n", move target_ret, copy tr, S(f.name), move cparams).as_str());
-        ups.append(fmt2("        try {{\n            var o = ({}) OBJECTS.get(self.address());\n{}", copy tr, indent(indent(indent(this.java_to_c(f.ret, fmt2("o.{}({})", java_ident(f.name), copy largs).as_str()).as_str()).as_str()).as_str())).as_str());
+        ups.append(fmt2("        try {{\n            var o = ({}) OBJECTS.get(self.address());\n{}", copy tr, indent(indent(indent(this.java_to_c(f.ret, fmt2("o.{}({})", copy m, copy largs).as_str()).as_str()).as_str()).as_str())).as_str());
         ups.append("        } catch (Throwable t) {\n            if (THROWN.get() == null) {\n                THROWN.set(t);\n            }\n");
         if (f.ret != VOID) {
             ups.append(fmt("            return {};\n", this.java_zero(f.ret)).as_str());
@@ -8083,7 +8207,7 @@ attach fn java_trait(this: bind&, k: u32, out: std::string&) -> void {
         ups.append("        }\n    }\n");
         table.append(fmt4("            vt.set(ADDRESS, {}, LINKER.upcallStub(l.findStatic({}.class, \"{}_{}\", ", copy jj, S(cls), copy tr, S(f.name)).as_str());
         table.append(fmt2("MethodType.methodType({})), {}, Arena.global()));\n", move mt, copy desc).as_str());
-        calls.append(fmt3("\n        public {} {}({}) {{\n", copy jr, java_ident(f.name), copy params).as_str());
+        calls.append(fmt3("\n        public {} {}({}) {{\n", copy jr, copy m, copy params).as_str());
         calls.append(fmt3("            MethodHandle h = LINKER.downcallHandle(o.get(ADDRESS, 0).reinterpret({}L).get(ADDRESS, {}), {});\n", unum(@cast<u64>(fns.len) * 8), copy jj, move desc).as_str());
         calls.append(indent(indent(indent(this.java_call(f.ret, "h", &args, "o.get(ADDRESS, 8)").as_str()).as_str()).as_str()).as_str());
         calls.append("        }\n");
@@ -9185,7 +9309,7 @@ attach fn go_c_helpers(this: bind&) -> std::string {
             for (k) in 0..f.params.len {
                 params.append(fmt2(", {}a{}", spaced(this.c_in(*f.params.at(k), false)), unum(@cast<u64>(k))).as_str());
             }
-            val gn = fmt3("{}{}{}", copy p, copy tn, go_name(f.name));
+            val gn = fmt3("{}{}{}", copy p, copy tn, this.trait_member(*t, f.name, go_name, GO_MEMBERS, false));
             out.append(fmt3("extern {}{}({});\n", spaced(this.c_out(f.ret, false)), copy gn, move params).as_str());
             if (names.len() > 0) {
                 names.append(", ");
@@ -9193,8 +9317,10 @@ attach fn go_c_helpers(this: bind&) -> std::string {
             names.append(gn.as_str());
         }
         out.append(fmt5("static inline const {} *{}_go_{}_vt(void) {{\n    static const {} vt = {{{}}};\n    return &vt;\n}}\n", copy vtn, copy p, copy sh, copy vtn, move names).as_str());
-        for (f&) in fns.items() {
-            out.append(this.go_c_call(fmt3("{}_go_{}_{}", copy p, copy sh, S(f.name)).as_str(), fmt("{} o", this.c_named(sh.as_str(), false)).as_str(), fmt("o.vt->{}(o.self", S(f.name)).as_str(), &f.params, f.ret).as_str());
+        // (each fn's helper is p_go_T_0, p_go_T_1...: one called vt would be the table's)
+        for (j) in 0..fns.len {
+            val f = fns.at(j);
+            out.append(this.go_c_call(fmt3("{}_go_{}_{}", copy p, copy sh, unum(@cast<u64>(j))).as_str(), fmt("{} o", this.c_named(sh.as_str(), false)).as_str(), fmt("(o.vt->{})(o.self", this.vt_member(*t, f.name, false)).as_str(), &f.params, f.ret).as_str());
         }
     }
     if (out.len() == 0) {
@@ -9254,6 +9380,10 @@ attach fn go_closure(this: bind&, k: u32, out: std::string&) -> void {
 // trait K in Go: an interface (any Go value with its methods passes where Volt takes one, through
 // a table of exported Go functions), VoltT for one Volt gave out, and ofT, which makes a Go value
 // Volt's object
+// what a trait's methods in Go can't be called: Close is Volt$T's (and a given value's, called when
+// Volt drops it)
+val GO_MEMBERS: str[] = { "Close" };
+
 attach fn go_trait(this: bind&, k: u32, out: std::string&) -> void {
     val t = *this.traits.at(k);
     val sh = this.short(t);
@@ -9262,19 +9392,21 @@ attach fn go_trait(this: bind&, k: u32, out: std::string&) -> void {
     out.append(fmt3("\n// {} is Volt trait {}: any Go value with its methods passes where Volt takes one (lent for the call, or given: Volt calls its Close, if it has one, when it's done with it). One Volt gives back is a *Volt{}.\ntype ", copy tn, this.c.ty_name(t), copy tn).as_str());
     out.append(fmt("{} interface {{\n", copy tn).as_str());
     for (f&) in fns.items() {
-        out.append(fmt3("    {}({}){}\n", go_name(f.name), this.go_tys(&f.params), this.go_results(f.ret)).as_str());
+        out.append(fmt3("    {}({}){}\n", this.trait_member(t, f.name, go_name, GO_MEMBERS, false), this.go_tys(&f.params), this.go_results(f.ret)).as_str());
     }
     out.append("}\n");
     // the table's functions, which call the Go value's methods
     for (f&) in fns.items() {
-        out.append(this.go_export(fmt3("{}{}{}", S(this.pkg), copy tn, go_name(f.name)).as_str(), "self", fmt2("s.f.({}).{}", copy tn, go_name(f.name)).as_str(), &f.params, f.ret).as_str());
+        val m = this.trait_member(t, f.name, go_name, GO_MEMBERS, false);
+        out.append(this.go_export(fmt3("{}{}{}", S(this.pkg), copy tn, copy m).as_str(), "self", fmt2("s.f.({}).{}", copy tn, copy m).as_str(), &f.params, f.ret).as_str());
     }
     var tpl = S("\n// Volt$T is a $T Volt gave out: its methods call Volt's; Close frees it (or the garbage collector does).\ntype Volt$T struct {\n    o C.$O\n}\n\nfunc wrapVolt$T(o C.$O) *Volt$T {\n    w := &Volt$T{o: o}\n    runtime.SetFinalizer(w, (*Volt$T).Close)\n    return w\n}\n");
     tpl.append("\n// Close frees it (once; later calls do nothing).\nfunc (w *Volt$T) Close() {\n    if w.o.vt != nil {\n        C.$P_go_drop(w.o.drop, w.o.self)\n        w.o = C.$O{}\n        runtime.SetFinalizer(w, nil)\n    }\n}\n");
     tpl.append("\nfunc (w *Volt$T) live() C.$O {\n    if w.o.vt == nil {\n        panic(\"Volt$T: used after Close\")\n    }\n    return w.o\n}\n");
     var methods: std::string = {};
-    for (f&) in fns.items() {
-        methods.append(this.go_method(fmt("Volt{}", copy tn).as_str(), go_name(f.name).as_str(), fmt3("C.{}_go_{}_{}", S(this.pkg), copy sh, S(f.name)), &f.params, f.ret).as_str());
+    for (j) in 0..fns.len {
+        val f = fns.at(j);
+        methods.append(this.go_method(fmt("Volt{}", copy tn).as_str(), this.trait_member(t, f.name, go_name, GO_MEMBERS, false).as_str(), fmt3("C.{}_go_{}_{}", S(this.pkg), copy sh, unum(@cast<u64>(j))), &f.params, f.ret).as_str());
     }
     tpl.append(methods.as_str());
     tpl.append("\n// of$T is v as Volt's $T for a call: a *Volt$T as it is (given: Volt's from here), any other value through a table calling its methods (lent for the call, or given: Volt drops it). done ends the call: it lets go of what only the call needed, and re-panics what v's methods panicked with.\n");
@@ -10541,7 +10673,7 @@ attach fn node_text(this: bind&) -> compile_error!std::string {
         out.append(fmt4("\n// trait {}: any JS object with its methods, or volt_{}, Volt's own value\nstatic napi_ref vn_class_volt_{};\nstatic const napi_type_tag vn_tags_volt_{}[2] = ", this.c.ty_name(t), copy tr, copy tr, copy tr).as_str());
         out.append(fmt2("{};\nstatic const char *const vn_fns_{}[] = {{", this.node_tags(fmt("volt_{}", copy tr).as_str()), copy tr).as_str());
         for (f&) in fns.items() {
-            out.append(fmt("\"{}\", ", S(f.name)).as_str());
+            out.append(fmt("\"{}\", ", this.trait_member(t, f.name, S, JS_MEMBERS, false)).as_str());
         }
         out.append("NULL};\n");
         var table: std::string = {};
@@ -10552,7 +10684,7 @@ attach fn node_text(this: bind&) -> compile_error!std::string {
                 sig.append(fmt2(", {}a{}", spaced(this.c_in(*f.params.at(q), false)), unum(@cast<u64>(q))).as_str());
             }
             sig.push(')');
-            val call = fmt2("vn_call_method(env, vn_obj_value(c), \"{}\", {}, argv, &ret)", S(f.name), unum(@cast<u64>(f.params.len)));
+            val call = fmt2("vn_call_method(env, vn_obj_value(c), \"{}\", {}, argv, &ret)", this.trait_member(t, f.name, S, JS_MEMBERS, false), unum(@cast<u64>(f.params.len)));
             out.append((try this.node_upcall(copy sig, "    struct vn_obj *c = user;\n    napi_env env = c->env;\n", call.as_str(), &f.params, f.ret)).as_str());
             if (table.len() > 0) {
                 table.append(", ");
@@ -10568,7 +10700,7 @@ attach fn node_text(this: bind&) -> compile_error!std::string {
             for (q) in 0..f.params.len {
                 put(&names, fmt("p_a{}", unum(@cast<u64>(q))));
             }
-            try this.node_call(fmt2("vn_m_volt_{}_{}", copy tr, S(f.name)).as_str(), f.name, &f.params, &names, self_decl.as_str(), self_get.as_str(), fmt("p_self->vt->{}", S(f.name)).as_str(), "p_self->self", f.ret, &out);
+            try this.node_call(fmt2("vn_m_volt_{}_{}", copy tr, S(f.name)).as_str(), this.trait_member(t, f.name, S, JS_MEMBERS, false).as_str(), &f.params, &names, self_decl.as_str(), self_get.as_str(), fmt("(p_self->vt->{})", this.vt_member(t, f.name, false)).as_str(), "p_self->self", f.ret, &out);
         }
     }
     // closures Volt gives out: a JS function calls each
@@ -10696,7 +10828,7 @@ attach fn node_text(this: bind&) -> compile_error!std::string {
         out.append(fmt("            {\"close\", NULL, vn_close_obj, NULL, NULL, NULL, napi_default_method, (void *)vn_tags_volt_{}},\n", copy tr).as_str());
         var nps: usize = 1;
         for (f&) in this.fns_of(*t).items() {
-            out.append(fmt3("            {{\"{}\", NULL, vn_m_volt_{}_{}, NULL, NULL, NULL, napi_default_method, NULL}},\n", S(f.name), copy tr, S(f.name)).as_str());
+            out.append(fmt3("            {{\"{}\", NULL, vn_m_volt_{}_{}, NULL, NULL, NULL, napi_default_method, NULL}},\n", this.trait_member(*t, f.name, S, JS_MEMBERS, false), copy tr, S(f.name)).as_str());
             nps += 1;
         }
         out.append(fmt4("        };\n        napi_value cls = NULL;\n        napi_define_class(env, \"volt_{}\", NAPI_AUTO_LENGTH, vn_ctor_volt_{}, NULL, {}, ps, &cls);\n        napi_create_reference(env, cls, 1, &vn_class_volt_{});\n", copy tr, copy tr, unum(@cast<u64>(nps)), copy tr).as_str());
@@ -10873,7 +11005,12 @@ attach fn ts_lent(this: bind&, t: u32) -> std::string {
 
 // a trait fn's methods in TypeScript: as a JS object implements it (vf: false; Volt gives the
 // arguments) or as volt_T has it
-attach fn ts_trait_fn(this: bind&, f: trait_fn&, vf: bool) -> std::string {
+// what a trait's methods in JavaScript can't be called: close is Volt's value's (and a given object's,
+// called when Volt drops it), constructor a class's
+val JS_MEMBERS: str[] = { "close", "constructor" };
+
+// trait t's fn f in TypeScript (vf: Volt's value's, which takes what it lends as it is)
+attach fn ts_trait_fn(this: bind&, t: u32, f: trait_fn&, vf: bool) -> std::string {
     var ps: std::string = {};
     for (q) in 0..f.params.len {
         if (q > 0) {
@@ -10885,7 +11022,7 @@ attach fn ts_trait_fn(this: bind&, f: trait_fn&, vf: bool) -> std::string {
         }
         ps.append(fmt2("a{}: {}", unum(@cast<u64>(q)), copy pt).as_str());
     }
-    return fmt3("    {}({}): {};\n", S(f.name), copy ps, this.ts_ty(f.ret, !vf));
+    return fmt3("    {}({}): {};\n", this.trait_member(t, f.name, S, JS_MEMBERS, false), copy ps, this.ts_ty(f.ret, !vf));
 }
 
 attach fn ts_text(this: bind&) -> std::string {
@@ -10938,11 +11075,11 @@ attach fn ts_text(this: bind&) -> std::string {
         val tr = this.short(*t);
         out.append(fmt2("\n/** trait {}: any object with these methods, lent to Volt or given (Volt calls a given one's\n * [Symbol.dispose]() or close(), if it has one, when it's done with it) */\nexport interface {} {{\n", this.c.ty_name(*t), copy tr).as_str());
         for (f&) in this.fns_of(*t).items() {
-            out.append(this.ts_trait_fn(f, false).as_str());
+            out.append(this.ts_trait_fn(*t, f, false).as_str());
         }
         out.append(fmt3("}}\n\n/** a {} Volt made: close() frees it now (or `using`); otherwise it's freed when collected */\nexport declare class volt_{} implements {} {{\n    private constructor();\n", copy tr, copy tr, copy tr).as_str());
         for (f&) in this.fns_of(*t).items() {
-            out.append(this.ts_trait_fn(f, true).as_str());
+            out.append(this.ts_trait_fn(*t, f, true).as_str());
         }
         out.append("    close(): void;\n    [Symbol.dispose](): void;\n}\n");
     }
@@ -11644,6 +11781,10 @@ attach fn lua_meta(this: bind&, name: str, methods: str) -> std::string {
 // trait k: a Lua object with its methods, lent or given to Volt (vl_obj_T makes Volt's object of it,
 // whose table, vl_up_T_fn, calls the methods), and Volt's own object, a userdata whose methods call
 // its table
+// what a trait's methods in Lua can't be called: close is Volt's value's (and a given table's, called
+// when Volt drops it), and __x a metamethod's
+val LUA_MEMBERS: str[] = { "close", "__*" };
+
 attach fn lua_trait(this: bind&, k: u32, out: std::string&) -> void {
     val t = *this.traits.at(k);
     val tr = this.short(t);
@@ -11655,12 +11796,13 @@ attach fn lua_trait(this: bind&, k: u32, out: std::string&) -> void {
     var names: std::string = {};
     for (f&) in fns.items() {
         val n = fmt2("{}_{}", copy tr, S(f.name));
-        out.append(this.lua_upcall(n.as_str(), f.name, &f.params, f.ret).as_str());
+        val m = this.trait_member(t, f.name, S, LUA_MEMBERS, false);
+        out.append(this.lua_upcall(n.as_str(), m.as_str(), &f.params, f.ret).as_str());
         if (table.len() > 0) {
             table.append(", ");
         }
         table.append(fmt("vl_up_{}", copy n).as_str());
-        names.append(fmt("\"{}\", ", S(f.name)).as_str());
+        names.append(fmt("\"{}\", ", copy m).as_str());
     }
     val mt = this.lua_mt(tr.as_str());
     out.append(fmt3("\n// a {} for Volt from the value at idx: Volt's own (lent, or given: closed once the call takes it), or a\n// Lua object with its methods, lent (o: on the stack for the call) or given (held until Volt drops it)\nstatic inline {} vl_obj_{}(", copy tr, copy on, copy tr).as_str());
@@ -11669,13 +11811,13 @@ attach fn lua_trait(this: bind&, k: u32, out: std::string&) -> void {
     out.append(fmt("    {} r = {{&vt, o, NULL};\n    if (!o) {{\n        r.self = vl_holder(L, idx, keep, what);\n        r.drop = vl_drop_lua;\n    }}\n    return r;\n}\n", copy on).as_str());
     // Volt's own: each method calls its table
     for (f&) in fns.items() {
-        val ln = fmt2("{}:{}", copy tr, S(f.name));
+        val ln = fmt2("{}:{}", copy tr, this.trait_member(t, f.name, S, LUA_MEMBERS, false));
         var pnames: std::vec<std::string> = {};
         for (q) in 0..f.params.len {
             put(&pnames, fmt("p_{}", unum(@cast<u64>(q))));
         }
         val pre = fmt3("    {}*self = vl_open(L, 1, {}, \"argument #1 to '{}'\");\n", spaced(copy on), copy mt, copy ln);
-        this.lua_wrapper(fmt2("m_{}_{}", copy tr, S(f.name)).as_str(), ln.as_str(), &f.params, &pnames, 2, pre.as_str(), fmt("self->vt->{}", S(f.name)).as_str(), "self->self", f.ret, out);
+        this.lua_wrapper(fmt2("m_{}_{}", copy tr, S(f.name)).as_str(), ln.as_str(), &f.params, &pnames, 2, pre.as_str(), fmt("(self->vt->{})", this.vt_member(t, f.name, false)).as_str(), "self->self", f.ret, out);
     }
     out.append(this.lua_close_fn(tr.as_str(), on.as_str(), lua_drop("vt").as_str()).as_str());
 }
@@ -12217,7 +12359,7 @@ attach fn lua_text(this: bind&) -> compile_error!std::string {
         val tr = this.short(*this.traits.at(k));
         var methods: std::string = {};
         for (f&) in this.fns_of(*this.traits.at(k)).items() {
-            methods.append(fmt3("    lua_pushcfunction(L, vl_m_{}_{});\n    lua_setfield(L, -2, \"{}\");\n", copy tr, S(f.name), S(f.name)).as_str());
+            methods.append(fmt3("    lua_pushcfunction(L, vl_m_{}_{});\n    lua_setfield(L, -2, \"{}\");\n", copy tr, S(f.name), this.trait_member(*this.traits.at(k), f.name, S, LUA_MEMBERS, false)).as_str());
         }
         out.append(this.lua_meta(tr.as_str(), methods.as_str()).as_str());
         out.append("    lua_pop(L, 1);\n");
@@ -12705,15 +12847,27 @@ val DART_TAKEN: str[] = { "Native", "Pointer", "Void", "Function", "String", "Li
 // keyword or one the file uses itself (int, Int32, _lib) gets a _, and so does one of the
 // package's types when types is set
 attach fn dart_name(this: bind&, name: str, types: bool) -> std::string {
-    var n = dart_ident(name);
-    if (has_prefix(DART_TAKEN, n.as_str())) {
-        n.push('_');
-    }
+    var n = dart_member(name);
     while (has_word(DART_TAKEN, n.as_str()) || (types && this.declares(n.as_str()))) {
         n.push('_');
     }
     return n;
 }
+
+// dart_name without the types (trait_member checks those)
+fn dart_member(name: str) -> std::string {
+    var n = dart_ident(name);
+    if (has_prefix(DART_TAKEN, n.as_str())) {
+        n.push('_');
+    }
+    while (has_word(DART_TAKEN, n.as_str())) {
+        n.push('_');
+    }
+    return n;
+}
+
+// what a trait's methods in Dart can't be called: VoltObject's close and an Object's members
+val DART_MEMBERS: str[] = { "close", "hashCode", "runtimeType", "toString", "noSuchMethod" };
 
 // export fn f's parameter names (from first) in its Dart wrapper, before dart_ident (see
 // escape_params): the types and helpers its body names (its own locals have a $ no Volt name has)
@@ -13226,12 +13380,12 @@ attach fn dart_trait(this: bind&, k: u32, out: std::string&) -> compile_error!vo
             }
             params.append(fmt2("{} a{}", this.dart_ty(*f.params.at(q)), unum(@cast<u64>(q))).as_str());
         }
-        out.append(fmt3("  {} {}({});\n", this.dart_back(f.ret), dart_ident(f.name), move params).as_str());
+        out.append(fmt3("  {} {}({});\n", this.dart_back(f.ret), this.trait_member(t, f.name, dart_member, DART_MEMBERS, true), move params).as_str());
     }
     out.append("}\n");
     out.append(fmt2("\n/// trait {}'s fns, each taking the object first\nfinal class {}_vt extends Struct {{\n", this.c.ty_name(t), copy tn).as_str());
     for (f&) in fns.items() {
-        out.append(fmt2("  external Pointer<NativeFunction<{}>> {};\n", this.dart_fn_sig(&f.params, f.ret, true), dart_ident(f.name)).as_str());
+        out.append(fmt2("  external Pointer<NativeFunction<{}>> {};\n", this.dart_fn_sig(&f.params, f.ret, true), this.trait_member(t, f.name, dart_member, DART_MEMBERS, true)).as_str());
     }
     out.append("}\n");
     out.append(fmt3("\n/// a {} as C passes it: its table, the object, and what frees it (null: it's lent)\nfinal class {}_obj extends Struct {{\n  external Pointer<{}_vt> vt;\n", copy tn, copy tn, copy tn).as_str());
@@ -13239,9 +13393,10 @@ attach fn dart_trait(this: bind&, k: u32, out: std::string&) -> compile_error!vo
     // the table: a NativeCallable per fn, calling the Dart object (kept for good)
     var table = fmt2("final vt = _mem(sizeOf<{}_vt>()).cast<{}_vt>();\n", copy tn, copy tn);
     for (f&) in fns.items() {
-        val target = fmt2("(_objects[self$.address] as {}).{}(", copy tn, dart_ident(f.name));
+        val m = this.trait_member(t, f.name, dart_member, DART_MEMBERS, true);
+        val target = fmt2("(_objects[self$.address] as {}).{}(", copy tn, copy m);
         val up = try this.dart_upcall("self$", target.as_str(), &f.params, f.ret, "");
-        table.append(fmt2("vt.ref.{} = _forGood({});\n", dart_ident(f.name), copy up).as_str());
+        table.append(fmt2("vt.ref.{} = _forGood({});\n", copy m, copy up).as_str());
     }
     table.append("return vt;\n");
     out.append(fmt4("\n// the table Volt calls a Dart {} through (its self is the object's id in _objects)\nfinal Pointer<{}_vt> _{}_table = () {{\n{}}}();\n", copy tn, copy tn, copy tn, indent_n(table.as_str(), 2)).as_str());
@@ -13252,9 +13407,10 @@ attach fn dart_trait(this: bind&, k: u32, out: std::string&) -> compile_error!vo
     out.append(fmt4("\n/// a {} Volt gave out: its fns call Volt's; close() frees it (or its finalizer, once it's\n/// collected)\nclass volt_{} extends VoltObject implements {} {{\n  final Pointer<{}_vt> _vt;\n\n", copy tn, copy tn, copy tn, copy tn).as_str());
     out.append(fmt2("  volt_{}._({}_obj o)\n      : _vt = o.vt,\n        super._(o.self, o.drop);\n", copy tn, copy tn).as_str());
     for (f&) in fns.items() {
-        val callee = fmt2("_vt.ref.{}.asFunction<{}>()", dart_ident(f.name), this.dart_fn_sig(&f.params, f.ret, false));
+        val m = this.trait_member(t, f.name, dart_member, DART_MEMBERS, true);
+        val callee = fmt2("_vt.ref.{}.asFunction<{}>()", copy m, this.dart_fn_sig(&f.params, f.ret, false));
         out.append("\n  @override\n");
-        out.append((try this.dart_method(fmt2("{} {}", this.dart_back(f.ret), dart_ident(f.name)).as_str(), callee.as_str(), &f.params, f.ret)).as_str());
+        out.append((try this.dart_method(fmt2("{} {}", this.dart_back(f.ret), copy m).as_str(), callee.as_str(), &f.params, f.ret)).as_str());
     }
     out.append("}\n");
     return;
@@ -13550,6 +13706,25 @@ fn swift_member(m: str) -> std::string {
         return S("close_");
     }
     return swift_ident(m);
+}
+
+// a trait fn's method name in Swift: swift_member's, and one like VoltObject's own (voltDrop,
+// voltLive...) gets a _
+fn swift_method(m: str) -> std::string {
+    var n = swift_member(m);
+    if (m.len > 4 && starts_with(m, "volt") && m[4] >= 'A' && m[4] <= 'Z') {
+        n.push('_');
+    }
+    return n;
+}
+
+// a name as a call's argument label: any word but inout goes as it is (backticks on another are an
+// error)
+fn swift_label(s: str) -> std::string {
+    if (s == "inout") {
+        return fmt("`{}`", S(s));
+    }
+    return S(s);
 }
 
 fn swift_int(k: int_ty) -> str {
@@ -14463,8 +14638,9 @@ attach fn swift_trait(this: bind&, k: u32, out: std::string&) -> void {
         }
         var decls: std::string = {};
         var throws = false;
-        val body = this.swift_call(&f.params, &names, true, fmt("voltObj.vt.pointee.{}", swift_ident(f.name)).as_str(), "voltObj.`self`", f.ret, false, &decls, &throws);
-        var sig = fmt2("func {}({})", swift_member(f.name), move decls);
+        val body = this.swift_call(&f.params, &names, true, fmt("voltObj.vt.pointee.{}", swift_ident(this.vt_member(t, f.name, false).as_str())).as_str(), "voltObj.`self`", f.ret, false, &decls, &throws);
+        val m = this.trait_member(t, f.name, swift_method, NO_WORDS, false);
+        var sig = fmt2("func {}({})", copy m, move decls);
         if (throws) {
             sig.append(" throws");
         }
@@ -14478,7 +14654,7 @@ attach fn swift_trait(this: bind&, k: u32, out: std::string&) -> void {
         if (table.len() > 0) {
             table.append(",\n");
         }
-        table.append(fmt2("{}: {}", S(f.name), this.swift_thunk(&f.params, f.ret, fmt("any {}", copy tr).as_str(), fmt("voltBox.f.{}", swift_member(f.name)).as_str())).as_str());
+        table.append(fmt2("{}: {}", swift_label(this.vt_member(t, f.name, false).as_str()), this.swift_thunk(&f.params, f.ret, fmt("any {}", copy tr).as_str(), fmt("voltBox.f.{}", copy m).as_str())).as_str());
     }
     if (table.len() > 0) {
         table = fmt("\n{}", indent_n(table.as_str(), 8));
@@ -14696,6 +14872,16 @@ fn kt_member(s: str) -> std::string {
         return fmt("{}_", S(s));
     }
     return kt_ident(s);
+}
+
+// a trait fn's method name in Kotlin: kt_member's, and one like VoltObject's own (voltRaw, voltPtr...)
+// gets a _
+fn kt_method(s: str) -> std::string {
+    var n = kt_member(s);
+    if (s.len > 4 && starts_with(s, "volt") && s[4] >= 'A' && s[4] <= 'Z') {
+        n.push('_');
+    }
+    return n;
 }
 
 fn kt_int(k: int_ty) -> str {
@@ -15557,8 +15743,9 @@ attach fn kt_trait(this: bind&, k: u32, out: std::string&) -> void {
             put(&args, move a);
         }
         // (the table's field keeps the fn's name; the Kotlin method may not)
-        val fname = kt_ident(f.name);
-        val mname = kt_member(f.name);
+        // (fname: the C table's member, as cinterop has it)
+        val fname = kt_ident(this.vt_member(t, f.name, false).as_str());
+        val mname = this.trait_member(t, f.name, kt_method, NO_WORDS, false);
         iface.append(fmt3("    fun {}({}){}\n", copy mname, kt_decls(&args), this.kt_ret(f.ret)).as_str());
         val callee = fmt2("volt_s!!.asStableRef<{}>().get().{}", copy tr, copy mname);
         val up = indent(this.kt_upcall(&f.params, f.ret, "", callee.as_str()).as_str());
@@ -15573,7 +15760,7 @@ attach fn kt_trait(this: bind&, k: u32, out: std::string&) -> void {
     out.append("}\n");
     out.append(fmt4("\n// the table Volt calls a Kotlin {} through (its self a StableRef to it)\nprivate val voltVt_{}: CPointer<{}> = nativeHeap.alloc<{}>().apply {{\n", copy tr, copy tr, copy vt, copy vt).as_str());
     out.append(table.as_str());
-    out.append("}.ptr\n");
+    out.append("}.voltPtr()\n");
     out.append(fmt4("\n// a {} as Volt takes it: Volt's own as it is (given: let go here), or a Kotlin object behind a\n// StableRef (lent for the call, or given: kept until Volt drops it)\ninternal fun voltObj_{}(volt_m: MemScope, v: {}, va: VoltArgs, given: Boolean): CValue<{}> {{\n", copy tr, copy tr, copy tr, copy cn).as_str());
     out.append(fmt2("    if (v is volt_{}) {{\n        val p = if (given) va.give(v) else va.lend(v)\n        return cValue {{\n            vt = v.voltVt\n            self = p\n            drop = if (given) v.voltDrop else null\n        }}\n    }}\n    val ref = StableRef.create(v)\n    volt_m.defer {{\n        if (!given || !va.started) {{\n            ref.dispose()\n        }}\n    }}\n    return cValue {{\n        vt = voltVt_{}\n", copy tr, copy tr).as_str());
     out.append("        self = ref.asCPointer()\n        drop = if (given) voltDropObj else null\n    }\n}\n");
@@ -15627,7 +15814,7 @@ attach fn kt_text(this: bind&) -> std::string {
     out.append("\n// what Volt only borrows from a callback (a str, a slice): kept until the next one on this thread\n// ponytail: Volt reads it before the callback runs again; hold more if a fn keeps two\n@ThreadLocal\nprivate var voltKeptMem: Arena? = null\n\ninternal fun voltKept(): Arena {\n    voltKeptMem?.clear()\n    return Arena().also { voltKeptMem = it }\n}\n");
     out.append("\n// Volt drops a Kotlin object it was given: let go, and closed when it's AutoCloseable\nprivate val voltDropObj = staticCFunction { self: COpaquePointer? ->\n    val r = self!!.asStableRef<Any>()\n    val o = r.get()\n    r.dispose()\n    if (o is AutoCloseable) {\n        try {\n            o.close()\n        } catch (e: Throwable) {\n            voltKeep(e)\n        }\n    }\n}\n");
     out.append("\n// a String? as a C string in m's memory\ninternal fun voltCstr(m: AutofreeScope, s: String?): CPointer<ByteVar>? = s?.cstr?.getPointer(m)\n");
-    if (this.structs.len > 0) {
+    if (this.structs.len > 0 || this.traits.len > 0) {
         out.append("\n// a C struct's address (.ptr would be a field of its called ptr)\ninternal fun <T : CStructVar> T.voltPtr(): CPointer<T> = interpretCPointer<T>(rawPtr)!!\n");
     }
     if (this.uses_str) {
@@ -16747,6 +16934,11 @@ attach fn rb_taken(this: bind&, closures: std::vec<u32>&, traits: std::vec<u32>&
 
 // trait k's class (Volt's own value: Mod::T, whose methods call Volt's) and, when export fns take
 // it (taken), how Volt calls a Ruby object with its methods (vr_vt_T) and takes one (vr_as_T)
+// what a trait's methods in Ruby can't be called: close is Volt's value's (and a given object's, called
+// when Volt drops it), object_id and __x Ruby's own, and initialize (and its kin), which Ruby makes
+// private
+val RB_MEMBERS: str[] = { "close", "object_id", "initialize", "initialize_copy", "initialize_clone", "initialize_dup", "__*" };
+
 attach fn rb_trait(this: bind&, k: u32, taken: bool, out: std::string&) -> compile_error!void {
     val t = *this.traits.at(k);
     val tn = this.short(t);
@@ -16765,11 +16957,11 @@ attach fn rb_trait(this: bind&, k: u32, taken: bool, out: std::string&) -> compi
         for (j) in 0..n {
             var a: rb_arg = {};
             val jj = unum(@cast<u64>(j));
-            val what = fmt3("\"argument {} of {}.{}\"", unum(@cast<u64>(j + 1)), copy tn, S(f.name));
+            val what = fmt3("\"argument {} of {}.{}\"", unum(@cast<u64>(j + 1)), copy tn, this.trait_member(t, f.name, S, RB_MEMBERS, false));
             try this.rb_arg_of(*f.params.at(j), fmt("argv[{}]", copy jj).as_str(), fmt("p{}", copy jj).as_str(), what.as_str(), &a);
             put(&args, move a);
         }
-        try this.rb_call(&args, f.ret, fmt("o->vt->{}", S(f.name)).as_str(), "o->self", out);
+        try this.rb_call(&args, f.ret, fmt("(o->vt->{})", this.vt_member(t, f.name, false)).as_str(), "o->self", out);
         out.append("}\n");
     }
     if (!taken) {
@@ -16779,13 +16971,14 @@ attach fn rb_trait(this: bind&, k: u32, taken: bool, out: std::string&) -> compi
     var names: std::string = {};
     for (f&) in fns.items() {
         val fname = fmt2("vr_{}_{}", copy tn, S(f.name));
-        try this.rb_upcall(fname.as_str(), "((struct vr_keep *)self)->obj", f.name, &f.params, f.ret, fmt2("{}.{}", copy tn, S(f.name)).as_str(), out);
+        val m = this.trait_member(t, f.name, S, RB_MEMBERS, false);
+        try this.rb_upcall(fname.as_str(), "((struct vr_keep *)self)->obj", m.as_str(), &f.params, f.ret, fmt2("{}.{}", copy tn, copy m).as_str(), out);
         if (vt.len() > 0) {
             vt.append(", ");
             names.append(", ");
         }
         vt.append(fname.as_str());
-        names.append(fmt("\"{}\"", S(f.name)).as_str());
+        names.append(fmt("\"{}\"", copy m).as_str());
     }
     out.append(fmt3("\nstatic const {}_vt vr_vt_{} = {{{}}};\n", copy cn, copy tn, move vt).as_str());
     out.append(fmt2("\n// v as Volt's {}: Volt's own (a {}: its box, whose object the call copies once every argument\n// is converted), or any object with the trait's methods, lent (k holds it for the call) or given\n// (kept once every argument is converted)\n", copy tn, copy cls).as_str());
@@ -17060,7 +17253,7 @@ attach fn rb_text(this: bind&) -> compile_error!std::string {
         out.append(fmt2("    vr_class_{} = rb_define_class_under(vr_module, \"{}\", rb_cObject);\n", copy tn, rb_const(tn.as_str())).as_str());
         out.append(fmt3("    rb_undef_alloc_func(vr_class_{});\n    rb_define_method(vr_class_{}, \"close\", vr_close_{}, 0);\n", copy tn, copy tn, copy tn).as_str());
         for (f&) in this.fns_of(*t).items() {
-            out.append(fmt4("    rb_define_method(vr_class_{}, \"{}\", vr_m_{}_{}, -1);\n", copy tn, S(f.name), copy tn, S(f.name)).as_str());
+            out.append(fmt4("    rb_define_method(vr_class_{}, \"{}\", vr_m_{}_{}, -1);\n", copy tn, this.trait_member(*t, f.name, S, RB_MEMBERS, false), copy tn, S(f.name)).as_str());
         }
     }
     if (this.closures_out.len > 0) {

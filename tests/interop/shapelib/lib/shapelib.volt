@@ -85,6 +85,45 @@ attach shape -> square {
     }
 }
 
+// a trait whose fns are named like words the bindings' languages keep (Rust's and Go's type,
+// Python's from, C's int) and like close, which most languages' wrappers have themselves (there
+// it's close_): each language implements them and calls Volt's
+public trait tagged {
+    fn type(this) -> i32;
+    fn from(this, x: i32) -> i32;
+    fn int(this) -> i32;
+    fn close(this) -> i32;
+}
+
+public struct tags {
+    n: i32;
+}
+
+attach tagged -> tags {
+    fn type(this) -> i32 {
+        return this.n;
+    }
+    fn from(this, x: i32) -> i32 {
+        return this.n * x;
+    }
+    fn int(this) -> i32 {
+        return this.n + 2;
+    }
+    fn close(this) -> i32 {
+        return this.n + 3;
+    }
+}
+
+export fn tagged_sum(t: tagged&) -> i32 {
+    return t.type() + 2 * t.from(3) + 4 * t.int() + 8 * t.close();
+}
+
+export fn make_tagged(n: i32) -> tagged {
+    val q: tags = { n: n };
+    var t: tagged = move q;
+    return move t;
+}
+
 // a lent shape
 export fn describe(s: shape&) -> std::string {
     var out = s.name();

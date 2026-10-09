@@ -143,6 +143,12 @@ function lists() {
     console.log("some", m.count_some([1, null, 3]));
     console.log("rows", m.total_rows([[1, 2], [3]]));
     console.log("arrays", ...m.rotated([11, 12, 13]), ...m.swapped([1.5, 2.5]), ...m.bumped([1, 2, 3]));
+    {
+        const t0 = { type() { return 1; }, from(x) { return x + 1; }, int() { return 2; }, close_() { return 3; } };
+        const tv = m.make_tagged(5);
+        console.log("tagged", m.tagged_sum(t0), tv.type(), tv.from(4), tv.int(), tv.close_(), m.tagged_sum(tv));
+        tv.close();
+    }
     console.log("lists closed", m.closed_accounts());
 }
 

@@ -118,6 +118,26 @@ public class ClientShapes {
         double[] sw = shapelib.swapped(new double[] {1.5, 2.5});
         byte[] bu = shapelib.bumped(new byte[] {1, 2, 3});
         System.out.println("arrays " + rot[0] + " " + rot[1] + " " + rot[2] + " " + sw[0] + " " + sw[1] + " " + bu[0] + " " + bu[1] + " " + bu[2]);
+        final class Tg implements shapelib.tagged {
+            public int type() {
+                return 1;
+            }
+
+            public int from(int x) {
+                return x + 1;
+            }
+
+            public int int_() {
+                return 2;
+            }
+
+            public int close_() {
+                return 3;
+            }
+        }
+        try (var tv = shapelib.make_tagged(5)) {
+            System.out.println("tagged " + shapelib.tagged_sum(new Tg()) + " " + tv.type() + " " + tv.from(4) + " " + tv.int_() + " " + tv.close_() + " " + shapelib.tagged_sum(tv));
+        }
         System.out.println("lists closed " + shapelib.closed_accounts());
     }
 

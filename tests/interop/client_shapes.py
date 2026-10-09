@@ -82,6 +82,21 @@ def lists():
     print("some", s.count_some([1, None, 3]))
     print("rows", s.total_rows([[1, 2], [3]]))
     print("arrays", *s.rotated([11, 12, 13]), *s.swapped([1.5, 2.5]), *s.bumped([1, 2, 3]))
+    class Tg(s.tagged):
+        def type(self):
+            return 1
+
+        def from_(self, x):
+            return x + 1
+
+        def int(self):
+            return 2
+
+        def close_(self):
+            return 3
+
+    tv = s.make_tagged(5)
+    print("tagged", s.tagged_sum(Tg()), tv.type(), tv.from_(4), tv.int(), tv.close_(), s.tagged_sum(tv))
     print("lists closed", s.closed_accounts())
 
 

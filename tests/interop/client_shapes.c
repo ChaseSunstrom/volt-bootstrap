@@ -81,6 +81,29 @@ static shapelib_account *open_cb(void *user, volt_str owner) {
 #define TEXT(t) (int)(t).len, (const char *)(t).ptr
 
 // lists (std::vec), slices of text and handles, optional text and handles
+// C's own tagged: its fns are named like words C keeps (int is int_)
+static int32_t tg_type(void *self) {
+    (void)self;
+    return 1;
+}
+
+static int32_t tg_from(void *self, int32_t x) {
+    (void)self;
+    return x + 1;
+}
+
+static int32_t tg_int(void *self) {
+    (void)self;
+    return 2;
+}
+
+static int32_t tg_close(void *self) {
+    (void)self;
+    return 3;
+}
+
+static const shapelib_tagged_vt tg_vt = {tg_type, tg_from, tg_int, tg_close};
+
 static void lists(void) {
     shapelib_account *a = account_open(S("ann"));
     account_deposit(a, 5);
@@ -139,6 +162,10 @@ static void lists(void) {
     shapelib_array_f64_2 sw = swapped((shapelib_array_f64_2){{1.5, 2.5}});
     shapelib_array_u8_3 bu = bumped((shapelib_array_u8_3){{1, 2, 3}});
     printf("arrays %lld %lld %lld %g %g %d %d %d\n", (long long)rot.v[0], (long long)rot.v[1], (long long)rot.v[2], sw.v[0], sw.v[1], bu.v[0], bu.v[1], bu.v[2]);
+    shapelib_tagged tl = {&tg_vt, NULL, NULL};
+    shapelib_tagged tv = make_tagged(5);
+    printf("tagged %d %d %d %d %d %d\n", tagged_sum(tl), tv.vt->type(tv.self), tv.vt->from(tv.self, 4), tv.vt->int_(tv.self), tv.vt->close(tv.self), tagged_sum(tv));
+    tv.drop(tv.self);
     printf("lists closed %d\n", closed_accounts());
 }
 

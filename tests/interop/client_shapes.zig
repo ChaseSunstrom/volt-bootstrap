@@ -107,6 +107,28 @@ fn lists() void {
     const sw = s.swapped(.{ 1.5, 2.5 });
     const bu = s.bumped(.{ 1, 2, 3 });
     print("arrays {d} {d} {d} {d} {d} {d} {d} {d}\n", .{ rot[0], rot[1], rot[2], sw[0], sw[1], bu[0], bu[1], bu[2] });
+    const Tg = struct {
+        pub fn @"type"(self: *@This()) i32 {
+            _ = self;
+            return 1;
+        }
+        pub fn from(self: *@This(), x: i32) i32 {
+            _ = self;
+            return x + 1;
+        }
+        pub fn int(self: *@This()) i32 {
+            _ = self;
+            return 2;
+        }
+        pub fn close(self: *@This()) i32 {
+            _ = self;
+            return 3;
+        }
+    };
+    var t0 = Tg{};
+    var tv = s.make_tagged(5);
+    defer tv.deinit();
+    print("tagged {d} {d} {d} {d} {d} {d}\n", .{ s.tagged_sum(&t0), tv.@"type"(), tv.from(4), tv.int(), tv.close(), s.tagged_sum(&tv) });
     print("lists closed {d}\n", .{s.closed_accounts()});
 }
 

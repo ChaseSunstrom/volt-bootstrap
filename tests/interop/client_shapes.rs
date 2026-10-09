@@ -66,6 +66,24 @@ fn lists() {
     println!("rows {}", total_rows(&mut [VoltSlice::from(&mut r1[..]), VoltSlice::from(&mut r2[..])]));
     let (rot, sw, bu) = (rotated([11, 12, 13]), swapped([1.5, 2.5]), bumped([1, 2, 3]));
     println!("arrays {} {} {} {} {} {} {} {}", rot[0], rot[1], rot[2], sw[0], sw[1], bu[0], bu[1], bu[2]);
+    struct Tg;
+    impl tagged for Tg {
+        fn r#type(&mut self) -> i32 {
+            1
+        }
+        fn from(&mut self, x: i32) -> i32 {
+            x + 1
+        }
+        fn int(&mut self) -> i32 {
+            2
+        }
+        fn close(&mut self) -> i32 {
+            3
+        }
+    }
+    let mut tv = make_tagged(5);
+    let (a, b, c, d) = (tv.r#type(), tv.from(4), tv.int(), tv.close());
+    println!("tagged {} {} {} {} {} {}", tagged_sum(&mut Tg), a, b, c, d, tagged_sum(&mut *tv));
     println!("lists closed {}", closed_accounts());
 }
 
