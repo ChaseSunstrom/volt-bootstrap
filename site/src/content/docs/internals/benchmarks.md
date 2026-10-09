@@ -151,10 +151,12 @@ Measured 2026-10-06 on:
   pointer, local slots and program counter) is 1.03x where it was 0.62x unchecked, and `lz77`
   1.12x. `@attributes([@unchecked])` on `vm_interp`'s `run` gives the unchecked time back
   (0.49 s). `dijkstra` paid 1.16x until std's heap stopped checking the indices its sift loops
-  can't get wrong; it's 0.90x now. The gcc column pays more on `bigint` (3.46x): gcc's jump
-  threading copies the checked store in `rs[i] = if (over) x - BASE else x` into both arms of
-  the branch on the carry, so the branch stays and mispredicts, where clang makes it a
-  conditional move.
+  can't get wrong; it's 0.90x now. The gcc column paid more on `bigint` (3.46x): an if value
+  was a branch per arm storing its result, and gcc's jump threading copied the checked store in
+  `rs[i] = if (over) x - BASE else x` into both arms of the branch on the carry, so the branch
+  stayed and mispredicted where clang made it a conditional move. An if value whose arms are
+  plain values is C's `?:` now, and `if (c) 1 else 0` is `c` as a number, so gcc makes the
+  conditional move too: 0.82 s (1.53x), where gcc's C takes 0.45 s.
 - **`sort`: a radix sort for integers.** `slice.sort` sorts integers of 256 or more elements by
   their bytes (it's stable, and integers have no order but their bits), in a few passes over the
   data, with no comparisons at all. `std::stable_sort` is a merge sort with the comparison inlined;
@@ -193,7 +195,11 @@ Measured 2026-10-06 on:
   C program. `spectral_norm`: gcc vectorizes the inner loops at `-O2`, doing the divisions two at
   a time while keeping the sum in order (clang only vectorizes a float sum it may reorder); Volt's C
   gets most of that, since its `a(i, j)` does its math in `i32` as the C does (in `usize`, the
-  unsigned 64-bit to `f64` conversion has no SSE2 vector form). `bigint`'s gcc win isn't Volt's yet.
+  unsigned 64-bit to `f64` conversion has no SSE2 vector form). `bigint`'s gcc win isn't Volt's
+  yet: Volt's add puts the carry in before the second limb (a longer chain per limb than the C's
+  `a + b + carry`), its `resize` writes zeros the C's `realloc` doesn't (with a bounds check per
+  element, so gcc doesn't make it a `memset`), and its range loops' exit test hides from gcc that
+  the index is in bounds.
 - **Where Volt still trails**: `vm_interp` and `lz77` pay for their bounds checks
   (above). `lz77` and `wordfreq` also append to a `std::string` with a capacity check per call,
   where the C checks once per word and then writes without checks, and `wordfreq`'s `sort_by` (a

@@ -76,7 +76,10 @@ fn main() -> void {
     var x: u32 = 1300000000;
     val carry: u32 = if (x >= base) 1 else 0;
     x = if (x >= base) x - base else x;
-    std::println("{} {}", carry, x);
+    // `if (c) 1 else 0` is c as a number (0 too, and signed)
+    val none: u32 = if (x >= base) 1 else 0;
+    val wide: i64 = if (x < base) 1 else 0;
+    std::println("{} {} {} {}", carry, x, none, wide);
     // the then arm's value decides the type (usize here, not the else's i32 literal); a binding
     // moves an owned value out, and else |e| gets the error
     val name: str? = "volt";
@@ -100,6 +103,6 @@ fn main() -> void {
 // expect: 16 -1 2
 // expect: 200 42 big
 // expect: 11 yes
-// expect: 1 300000000
+// expect: 1 300000000 0 1
 // expect: 4 even failed ODD
 // expect: 12 and 9 is odd

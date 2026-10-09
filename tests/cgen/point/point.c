@@ -38,6 +38,7 @@ static int32_t v_main(void) {
     int32_t _hi;
     int32_t _it;
     int32_t i;
+    int32_t shown;
 
     p = v_add((v_point){ .x = 1, .y = 2 }, (v_point){ .x = 3, .y = 4 });
     total = 0;
@@ -55,8 +56,9 @@ static int32_t v_main(void) {
         }
     }
     volt_l3:;
+    shown = (total > 2) ? total : 0;
     if (total > 2) {
-        volt_ext_printf("%d %d %d %d\n", p.x, p.y, v_area((v_shape){ .tag = (uint8_t)1, .u.v1 = 2 }), total);
+        volt_ext_printf("%d %d %d %d\n", p.x, p.y, v_area((v_shape){ .tag = (uint8_t)1, .u.v1 = 2 }), shown);
     } else {
         volt_ext_printf("small\n");
     }
