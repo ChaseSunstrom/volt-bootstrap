@@ -74,6 +74,7 @@ fun main() {
     println("count ${ml_labels_count(listOf(la, lb))}")
     println("note ${ml_note_len(ml_note("abc", 1, 3))}")
     println("or_label ${ml_or_label(Result.success(la))} ${ml_or_label(Result.failure(VoltException.of(math_error.NEGATIVE)))}")
+    println("given ${ml_sum_given(3) { k -> longArrayOf(k.toLong(), 10L * k) }} ${ml_area_given { k -> listOf(vec2(1.5, k.toDouble()), vec2(2.0, 3.25)) }}")
 
     // a callback's exception comes out of the call (the later calls are skipped), and a closed
     // counter throws

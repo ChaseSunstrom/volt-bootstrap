@@ -61,3 +61,4 @@ console.log("relabel", lb.name, lb.sizes.join(" "));
 console.log("count", m.ml_labels_count([la, lb]));
 console.log("note", m.ml_note_len({ str: "abc", c: 1, k: 3 }));
 console.log("or_label", m.ml_or_label(la), m.ml_or_label(m.voltError(m.math_error.NEGATIVE)));
+console.log("given", m.ml_sum_given(3, (k) => [k, 10 * k]), m.ml_area_given((k) => [{ x: 1.5, y: k }, { x: 2, y: 3.25 }]));

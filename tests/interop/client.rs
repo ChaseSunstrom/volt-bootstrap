@@ -56,4 +56,15 @@ fn main() {
     println!("count {}", ml_labels_count(vec![la, lb]));
     println!("note {}", ml_note_len(ml_note { str: VoltStr::from("abc"), c: 1, k: 3 }));
     println!("or_label {} {}", ml_or_label(Ok(la)), ml_or_label(Err(Error { code: math_error::NEGATIVE })));
+    let mut given = [0i64; 2];
+    let mut points = [vec2 { x: 0.0, y: 0.0 }; 2];
+    let sum = ml_sum_given(3, |k| {
+        given = [k as i64, 10 * k as i64];
+        VoltSlice::from(&mut given)
+    });
+    let area = ml_area_given(|k| {
+        points = [vec2 { x: 1.5, y: k as f64 }, vec2 { x: 2.0, y: 3.25 }];
+        VoltSlice::from(&mut points)
+    });
+    println!("given {} {}", sum, area);
 }

@@ -80,6 +80,7 @@ Console.WriteLine($"relabel {lb.name} {lb.sizes[0]} {lb.sizes[1]} {lb.sizes[2]}"
 Console.WriteLine($"count {Api.ml_labels_count(new[] { la, lb })}");
 Console.WriteLine($"note {Api.ml_note_len(new ml_note { str = "abc", c = 1, k = 3 })}");
 Console.WriteLine($"or_label {Api.ml_or_label(la)} {Api.ml_or_label(VoltException.For(math_error.NEGATIVE))}");
+Console.WriteLine($"given {Api.ml_sum_given(3, k => new long[] { k, 10L * k })} {Api.ml_area_given(k => new vec2[] { new vec2 { x = 1.5, y = k }, new vec2 { x = 2, y = 3.25 } })}");
 
 static class Ext
 {

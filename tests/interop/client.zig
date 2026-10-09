@@ -67,6 +67,21 @@ pub fn main() void {
     print("count {d}\n", .{m.ml_labels_count(&[_]m.ml_label{ la, lb })});
     print("note {d}\n", .{m.ml_note_len(.{ .str = m.VoltStr.from("abc"), .c = 1, .k = 3 })});
     print("or_label {d} {d}\n", .{ m.ml_or_label(la), m.ml_or_label(error.NEGATIVE) });
+    print("given {d} {d}\n", .{ m.ml_sum_given(3, {}, give_pair), m.ml_area_given({}, give_points) });
+}
+
+// callbacks giving a slice (in memory of the client's: Volt reads it before calling again)
+var given: [2]i64 = undefined;
+var points: [2]m.vec2 = undefined;
+
+fn give_pair(_: void, k: i32) m.VoltSlice(i64) {
+    given = .{ k, 10 * @as(i64, k) };
+    return m.VoltSlice(i64).from(&given);
+}
+
+fn give_points(_: void, k: i32) m.VoltSlice(m.vec2) {
+    points = .{ .{ .x = 1.5, .y = @floatFromInt(k) }, .{ .x = 2, .y = 3.25 } };
+    return m.VoltSlice(m.vec2).from(&points);
 }
 
 fn give_label(_: void, k: i32) m.ml_label {

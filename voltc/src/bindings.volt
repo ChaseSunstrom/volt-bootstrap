@@ -5076,8 +5076,9 @@ attach fn py_from_c(this: bind&, t: u32, a: str) -> std::string {
 }
 
 // the C form of Python value v (of type t) a callback gives Volt back, checked here (a number of
-// the wrong type raises now, not after the callback)
-attach fn py_give(this: bind&, t: u32, v: str) -> std::string {
+// the wrong type raises now, not after the callback); a slice's memory is kept on keep, the
+// callback's function, until its next result
+attach fn py_give(this: bind&, t: u32, v: str, keep: str) -> std::string {
     if (this.lent_handle(t) != null) {
         return fmt("{}._lend()", S(v));
     }
@@ -5096,6 +5097,7 @@ attach fn py_give(this: bind&, t: u32, v: str) -> std::string {
             }
             return S(v);
         },
+        .SLICE(x) => { return fmt2("_held({}, {})", S(keep), this.py_in(t, v)); },
         default => { return S(v); },
     }
 }
@@ -5115,6 +5117,7 @@ attach fn py_stand_in(this: bind&, t: u32) -> std::string {
         .FN(i) => { return {}; },
         .PTR(x) => { return S("None"); },
         .STRUCT(s) => { return fmt("{}()", this.py_ty(t)); },
+        .SLICE(x) => { return fmt("{}()", this.py_ty(t)); },
         .RESULT(e, x) => {
             // an error of E's own (its first), so Volt sees it fail
             var code = S("1");
@@ -5161,11 +5164,11 @@ attach fn py_callback(this: bind&, name: str, target: str, ps: std::vec<u32>&, r
             if (x == VOID) {
                 out.append(fmt2("            {}\n            _r = {}(0)\n", move call, copy rn).as_str());
             } else {
-                out.append(fmt2("            _r = {}(0, {})\n", copy rn, this.py_give(x, call.as_str())).as_str());
+                out.append(fmt2("            _r = {}(0, {})\n", copy rn, this.py_give(x, call.as_str(), name)).as_str());
             }
             out.append(fmt("        except Error as e:\n            _r = {}(e.code)\n", copy rn).as_str());
         },
-        default => { out.append(fmt("            _r = {}\n", this.py_give(r, call.as_str())).as_str()); },
+        default => { out.append(fmt("            _r = {}\n", this.py_give(r, call.as_str(), name)).as_str()); },
     }
     out.append("        except BaseException as e:\n");
     val stand_in = this.py_stand_in(r);
@@ -5329,7 +5332,7 @@ attach fn py_body(this: bind&, f: u32, conv: std::string, pre: std::string) -> s
 }
 
 // what a Python function can't give Volt back, as a closure parameter's or a trait fn's result: a
-// slice (nothing would keep its elements once the function returns)
+// slice of handles (nothing would lend them)
 attach fn py_check(this: bind&) -> compile_error!void {
     for (i&) in this.exports().items() {
         val f = this.c.fi(*i);
@@ -5355,7 +5358,9 @@ attach fn py_check(this: bind&) -> compile_error!void {
                 }
                 match (this.shape_of(v) ?? shape::VOID) {
                     .SLICE(x) => {
-                        return with_help(fail(this.c.dl(f.decl).item.span, fmt3("export fn {}: its parameter {} gives back {}, which a Python function can't (nothing would keep the elements once it returns)", S(f.name), S(p.name), this.c.ty_name(*r))), S("give back text (std::string), a handle or plain values"));
+                        if (this.handle_of(this.slice_elem(v)) != null) {
+                            return with_help(fail(this.c.dl(f.decl).item.span, fmt3("export fn {}: its parameter {} gives back {}, which a Python function can't (nothing would lend the handles)", S(f.name), S(p.name), this.c.ty_name(*r))), S("give back a slice of numbers, structs or text"));
+                        }
                     },
                     default => {},
                 }
@@ -5637,6 +5642,9 @@ attach fn py_text(this: bind&) -> std::string {
     }
     if (this.closures_out.len > 0) {
         out.append("\n\nclass VoltFn:\n    \"\"\"a closure Volt gave out: call it like a function; close() (or a with block) frees it\"\"\"\n\n    def __init__(self, c, call):\n        self._c = c\n        self._call = call\n\n    def __call__(self, *a):\n        return self._call(self._c, *a)\n\n    def close(self):\n        if self._c is not None:\n            self._c.drop(self._c.self)\n            self._c = None\n\n    def __enter__(self):\n        return self\n\n    def __exit__(self, *exc):\n        self.close()\n\n    def __del__(self):\n        self.close()\n");
+    }
+    if (contains(body.as_str(), "_held(")) {
+        out.append("\n\ndef _held(f, v):\n    \"\"\"a slice callback f gives Volt: kept until f's next result (Volt reads it before then)\"\"\"\n    f.held = v\n    return v\n");
     }
     if (this.slices.len > 0) {
         out.append("\n\ndef _slice(cls, elem, xs):\n    arr = (elem * len(xs))(*xs)\n    v = cls(ctypes.cast(arr, ctypes.POINTER(elem)), len(xs))\n    v._keep = (arr, xs)\n    return v\n");
@@ -6925,6 +6933,23 @@ attach fn cs_give(this: bind&, t: u32, v: str) -> std::string {
     }
 }
 
+// is t a slice a callback gives back as a Span of what C holds (numbers, plain structs), which
+// Callback.Keep copies?
+attach fn cs_kept_slice(this: bind&, t: u32) -> bool {
+    match (this.shape_of(t) ?? shape::VOID) {
+        .SLICE(x) => {
+            if (x == STR || this.handle_of(this.slice_elem(t)) != null || this.holds_str(x)) {
+                return false;
+            }
+            match (this.shape_of(x) ?? shape::VOID) {
+                .SLICE(y) => { return false; },
+                default => { return true; },
+            }
+        },
+        default => { return false; },
+    }
+}
+
 // a C function Volt calls (a closure parameter's, or a trait's fn on a C# object), with the GCHandle
 // of a Callback first and ps' C forms: it calls target with C# values and gives back r's C form; an
 // error set's exception is E!T's error, any other is kept for after the call
@@ -6961,6 +6986,9 @@ attach fn cs_callback(this: bind&, name: str, target: str, ps: std::vec<u32>&, r
         }
     } else if (res) {
         out.append(fmt2("            return new {} {{ value = {} }};\n", copy raw, this.cs_give(v, call.as_str())).as_str());
+    } else if (this.cs_kept_slice(r)) {
+        // its elements copied into memory c keeps until its next result
+        out.append(fmt2("            var v = {};\n            return new {} {{ ptr = c.Keep(v), len = (nuint)v.Length }};\n", copy call, copy raw).as_str());
     } else {
         out.append(fmt("            return {};\n", this.cs_give(r, call.as_str())).as_str());
     }
@@ -7478,7 +7506,7 @@ attach fn cs_text(this: bind&) -> std::string {
     out.append("}\n");
     // the helpers the body uses
     if (this.closures.len > 0 || this.traits.len > 0) {
-        out.append("\n// a delegate or an object Volt calls, and what it threw (rethrown after the call)\ninternal sealed class Callback\n{\n    public readonly object F;\n    public Exception? Error;\n\n    public Callback(object f) => F = f;\n\n    public void Rethrow()\n    {\n        if (Error != null)\n        {\n            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(Error).Throw();\n        }\n    }\n}\n");
+        out.append("\n// a delegate or an object Volt calls, and what it threw (rethrown after the call)\ninternal sealed class Callback\n{\n    public readonly object F;\n    public Exception? Error;\n    // the memory of the slice F gave Volt last: kept until its next one (Volt reads it before then),\n    // freed by Rethrow once the call is back\n    unsafe void* kept;\n\n    public Callback(object f) => F = f;\n\n    public unsafe T* Keep<T>(Span<T> s) where T : unmanaged\n    {\n        NativeMemory.Free(kept);\n        var p = (T*)NativeMemory.Alloc((nuint)Math.Max(1, s.Length), (nuint)sizeof(T));\n        s.CopyTo(new Span<T>(p, s.Length));\n        kept = p;\n        return p;\n    }\n\n    public unsafe void Rethrow()\n    {\n        NativeMemory.Free(kept);\n        kept = null;\n        if (Error != null)\n        {\n            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(Error).Throw();\n        }\n    }\n}\n");
     }
     if (contains(out.as_str(), "VoltList.Take(")) {
         out.append("\n// copies a list a Volt function gave out, and frees it\ninternal static unsafe class VoltList\n{\n    public static List<U> Take<T, U>(T* ptr, nuint len, IntPtr owner, delegate* unmanaged<IntPtr, void> drop, Func<T, U> f) where T : unmanaged\n    {\n        var v = new List<U>((int)len);\n        for (nuint i = 0; i < len; i++)\n        {\n            v.Add(f(ptr[i]));\n        }\n        if (drop != null)\n        {\n            drop(owner);\n        }\n        return v;\n    }\n}\n");
@@ -8416,7 +8444,7 @@ attach fn java_put(this: bind&, t: u32, seg: str, off: u64, v: str) -> std::stri
 }
 
 // an upcall's statements returning call (Java's result, of type r) to C: text given, a handle given
-// up, E!T as its struct (a VoltException thrown is its error)
+// up, a slice kept, E!T as its struct (a VoltException thrown is its error)
 attach fn java_to_c(this: bind&, r: u32, call: str) -> std::string {
     if (r == VOID) {
         return fmt("{};\n", S(call));
@@ -8443,6 +8471,12 @@ attach fn java_to_c(this: bind&, r: u32, call: str) -> std::string {
             }
             out.append("} catch (VoltException e) {\n    s.set(JAVA_INT, 0, e.code);\n}\nreturn s;\n");
             return out;
+        },
+        .SLICE(x) => {
+            // its elements in an arena of their own, kept with the slice until the next one (see keep)
+            var a: java_arg = {};
+            this.java_arg_of(r, "v", &a);
+            return fmt2("var v = {};\nArena arena = Arena.ofAuto();\n{}return keep(v_s);\n", S(call), copy a.before);
         },
         default => { return fmt("return {};\n", S(call)); },
     }
@@ -9157,8 +9191,8 @@ attach fn go_from_c(this: bind&, t: u32, v: str) -> std::string {
 }
 
 // the C form of Go value v (of type t) a Go function gives Volt back (s is its callback): text
-// copied into C memory Volt frees, a str into C memory freed when the call s was passed to
-// returns, a handle given up
+// copied into C memory Volt frees, a str and a slice's elements into C memory freed when the call
+// s was passed to returns, a handle given up
 attach fn go_give(this: bind&, t: u32, v: str) -> std::string {
     if (this.lent_handle(t) != null) {
         return fmt("{}.handle()", S(v));
@@ -9174,6 +9208,16 @@ attach fn go_give(this: bind&, t: u32, v: str) -> std::string {
                 return fmt("{}.cWith(s.str)", S(v));
             }
             return this.go_to_c(t, v);
+        },
+        .SLICE(x) => {
+            // (a handle in it is lent: Volt only borrows the slice)
+            val e = this.slice_elem(t);
+            var one = this.go_give(e, "x");
+            if (this.handle_of(e) != null) {
+                one = S("x.handle()");
+            }
+            var f = fmt3("func(x {}) {} {{ return {} }}", this.go_ty(e), this.go_cty(x), move one);
+            return fmt5("{}{{ptr: (*{})(keepEach(s, {}, {})), len: C.size_t(len({}))}}", this.go_cty(t), this.go_cty(x), S(v), move f, S(v));
         },
         default => { return this.go_to_c(t, v); },
     }
@@ -9193,6 +9237,7 @@ attach fn go_return(this: bind&, r: u32, call: str) -> std::string {
             out.append(fmt2("return C.{}{{value: {}}}\n", copy rn, this.go_give(x, "v")).as_str());
             return out;
         },
+        .SLICE(x) => { return fmt2("v := {}\nreturn {}\n", S(call), this.go_give(r, "v")); },
         default => { return fmt("return {}\n", this.go_give(r, call)); },
     }
 }
@@ -10053,6 +10098,9 @@ attach fn go_text(this: bind&) -> std::string {
     for (k) in 0..this.traits.len {
         this.go_trait(@cast<u32>(k), &g);
     }
+    if (contains(g.as_str(), "keepEach(s, ")) {
+        g.append("\n// the elements of a slice Go gives Volt (a callback's result), each converted by c, in C memory\n// freed when the call s was passed to returns\nfunc keepEach[T, E any](s *callback, v []T, c func(T) E) unsafe.Pointer {\n    var e E\n    p := C.calloc(C.size_t(len(v)+1), C.size_t(unsafe.Sizeof(e)))\n    s.kept = append(s.kept, p)\n    out := unsafe.Slice((*E)(p), len(v))\n    for i, x := range v {\n        out[i] = c(x)\n    }\n    return p\n}\n");
+    }
     if (this.traits.len > 0) {
         // a Go value given to Volt, which is done with it: its Close runs
         g.append(fmt2("\n//export {}GoDrop\nfunc {}GoDrop(self unsafe.Pointer) {{\n    h := (*cgo.Handle)(self)\n    s := h.Value().(*callback)\n    h.Delete()\n    C.free(self)\n    defer func() {{\n        if v := recover(); v != nil {{\n            s.catch(v)\n        }}\n    }}()\n", S(p), S(p)).as_str());
@@ -10335,6 +10383,26 @@ attach fn node_get(this: bind&, t: u32, js: str, c: str) -> compile_error!std::s
             var g = fmt5("{{ uint32_t n{} = 0; if (!vn_array(env, {}, &n{})) {{ goto fail; }} if (n{} != {}) {{ ", copy d, S(js), copy d, copy d, unum(n));
             g.append(fmt5("vn_throw(env, \"expected an array of {}\"); goto fail; }} for (uint32_t i{} = 0; i{} < {}; i{}++) {{ ", unum(n), copy d, copy d, unum(n), copy d).as_str());
             g.append(fmt5("napi_value e{} = NULL; napi_get_element(env, {}, i{}, &e{}); {} } }", copy d, S(js), copy d, copy d, move el).as_str());
+            return g;
+        },
+        .SLICE(x) => {
+            // a callback's: an array's elements in memory held until the call into Volt is back (see
+            // vn_hold); a handle or text in it would have no owner
+            val e = this.slice_elem(t);
+            match (this.shape_of(e) ?? shape::VOID) {
+                .TEXT(y) => { return fail(NO_SPAN, fmt("{} can't come from JavaScript", this.c.ty_name(t))); },
+                default => {},
+            }
+            if (this.handle_of(e) != null) {
+                return fail(NO_SPAN, fmt("{} can't come from JavaScript", this.c.ty_name(t)));
+            }
+            val d = fmt("{}", unum(@cast<u64>(c.len)));
+            val el = try this.node_get(e, fmt("e{}", copy d).as_str(), fmt2("p{}[i{}]", copy d, copy d).as_str());
+            var g = fmt5("{{ uint32_t n{} = 0; if (!vn_array(env, {}, &n{})) {{ goto fail; }} {} *p{} = ", copy d, S(js), copy d, this.c_prim(this.view_of(e), false), copy d);
+            g.append(fmt5("calloc(n{} ? n{} : 1, sizeof *p{}); if (!p{}) {{ vn_throw(env, \"out of memory\"); goto fail; }} if (!vn_hold(env, p{})) {{ goto fail; }} ", copy d, copy d, copy d, copy d, copy d).as_str());
+            g.append(fmt5("for (uint32_t i{} = 0; i{} < n{}; i{}++) {{ napi_value e{} = NULL; ", copy d, copy d, copy d, copy d, copy d).as_str());
+            g.append(fmt5("napi_get_element(env, {}, i{}, &e{}); {} }} {}.ptr = ", S(js), copy d, copy d, move el, S(c)).as_str());
+            g.append(fmt3("p{}; {}.len = n{}; }", copy d, S(c), copy d).as_str());
             return g;
         },
         default => { return fail(NO_SPAN, fmt("{} can't come from JavaScript", this.c.ty_name(t))); },
@@ -13161,6 +13229,7 @@ attach fn dart_stand_in(this: bind&, t: u32) -> std::string {
         .BOOL => { return S("false"); },
         .FLOAT(b) => { return S("0.0"); },
         .STRUCT(s) => { return fmt("Struct.create<{}>()", this.dart_native(t)); },
+        .SLICE(x) => { return fmt("Struct.create<{}>()", this.dart_native(t)); },
         default => { return S("0"); },
     }
 }
@@ -13185,6 +13254,14 @@ attach fn dart_exceptional(this: bind&, t: u32) -> std::string {
         .CODE => { return S(", exceptionalReturn: 0"); },
         default => { return {}; },
     }
+}
+
+// statements giving Volt the List call gives back as slice t, $r$: its elements in memory kept until
+// the next one (see _keptCall), converted as an argument's are
+attach fn dart_give_slice(this: bind&, t: u32, call: str) -> compile_error!std::string {
+    var a: dart_arg = {};
+    try this.dart_elems(this.slice_elem(t), false, "r$", &a);
+    return fmt2("final r$ = {};\nfinal call$ = _keptCall();\n{}", S(call), copy a.pre);
 }
 
 // a NativeCallable Volt calls (a closure parameter's function, or a trait's fn on a Dart object),
@@ -13233,14 +13310,18 @@ attach fn dart_upcall(this: bind&, first: str, target: str, ps: std::vec<u32>&, 
     match (this.shape_of(r) ?? shape::VOID) {
         .VOID => { body = fmt("{};\n", copy call); },
         .RESULT(e, x) => {
-            match (this.shape_of(x) ?? shape::VOID) {
-                .SLICE(y) => { return fail(NO_SPAN, fmt("a Dart function can't give Volt {}: nothing would keep its elements once it returns", this.c.ty_name(r))); },
-                default => {},
-            }
             // the error's code (a VoltError thrown), or the value
             head.append(fmt("final o$ = Struct.create<{}>();\n", this.dart_native(r)).as_str());
+            var slice = false;
+            match (this.shape_of(x) ?? shape::VOID) {
+                .SLICE(y) => { slice = true; },
+                default => {},
+            }
             if (x == VOID) {
                 body = fmt("{};\n", copy call);
+            } else if (slice) {
+                body = try this.dart_give_slice(x, call.as_str());
+                body.append("o$.value = $r$;\n");
             } else {
                 body = fmt("o$.value = {};\n", this.dart_give(x, call.as_str()));
             }
@@ -13258,7 +13339,11 @@ attach fn dart_upcall(this: bind&, first: str, target: str, ps: std::vec<u32>&, 
             }
             tail = fmt("o$.error = {};\nreturn o$;\n", move code);
         },
-        .SLICE(x) => { return fail(NO_SPAN, fmt("a Dart function can't give Volt {}: nothing would keep its elements once it returns", this.c.ty_name(r))); },
+        .SLICE(x) => {
+            body = try this.dart_give_slice(r, call.as_str());
+            body.append("return $r$;\n");
+            tail = fmt("return {};\n", this.dart_stand_in(r));
+        },
         default => {
             body = fmt("return {};\n", this.dart_give(r, call.as_str()));
             val stand_in = this.dart_stand_in(r);
@@ -14246,6 +14331,9 @@ attach fn dart_text(this: bind&) -> compile_error!std::string {
     }
     if (contains(out.as_str(), "VoltResult<")) {
         out.append("\n/// E!T as a parameter: a value (ok), or an error (err)\nclass VoltResult<T> {\n  final T? value;\n  final VoltError? error;\n\n  VoltResult.ok(T v)\n      : value = v,\n        error = null;\n\n  VoltResult.err(VoltError e)\n      : value = null,\n        error = e;\n}\n");
+    }
+    if (contains(out.as_str(), " _keptCall()")) {
+        out.append("\n// the memory of a slice a Dart function gives Volt: kept until the next one (Volt reads a\n// callback's slice before calling again)\n// ponytail: one at a time, as Kotlin's; keep more if a Volt fn holds two callbacks' slices at once\n_Call? _slices;\n\n_Call _keptCall() {\n  _slices?.done();\n  return _slices = _Call();\n}\n");
     }
     if (contains(out.as_str(), " _keep(") || contains(out.as_str(), " _keepC(")) {
         out.append("\n// a str Dart gives Volt (a callback's result): its bytes are kept for good, once per text\n// ponytail: kept for the program's life; free them after the call if callbacks give back many different strs\nfinal _kept = <String, Pointer<Uint8>>{};\n\nVoltStr _keep(String s) {\n  final b = utf8.encode(s);\n  final p = _kept.putIfAbsent(s, () {\n    final q = _mem(b.length + 1).cast<Uint8>();\n    q.asTypedList(b.length + 1)\n      ..setAll(0, b)\n      ..[b.length] = 0;\n    return q;\n  });\n  return Struct.create<VoltStr>()\n    ..ptr = p\n    ..len = b.length;\n}\n\nPointer<Char> _keepC(String? s) => s == null ? nullptr : _keep(s).ptr.cast();\n");
@@ -16911,7 +16999,8 @@ attach fn rb_out(this: bind&, t: u32, c: str, pre: std::string&, tmp: str) -> st
 
 // C statements giving C lvalue c (of type t) what a Ruby method Volt called returned, v: a number,
 // a struct, text (copied: Volt frees it), a str (kept for good, see vr_static), a handle (given up)
-// or one lent, a pointer, an optional or E!T of those; none when Ruby can't give t back
+// or one lent, a pointer, a slice (kept until the next result, see vr_kept_room), an optional or E!T
+// of those; none when Ruby can't give t back
 attach fn rb_give(this: bind&, t: u32, v: str, c: str, what: str) -> std::string? {
     if (this.node_simple(t) || this.node_plain_struct(t)) {
         return this.rb_get(t, v, c, what);
@@ -16945,6 +17034,26 @@ attach fn rb_give(this: bind&, t: u32, v: str, c: str, what: str) -> std::string
             }
             val inner = this.rb_give(x, v, fmt("{}.value", S(c)).as_str(), what) ?? return null;
             return fmt2("{}.error = 0; {}", S(c), move inner);
+        },
+        .SLICE(x) => {
+            // an Array's elements, each given as a result is (a handle or text in it would have no
+            // owner); d tells nested slices' names apart
+            val e = this.slice_elem(t);
+            match (this.shape_of(e) ?? shape::VOID) {
+                .TEXT(y) => { return null; },
+                default => {},
+            }
+            if (this.handle_of(e) != null) {
+                return null;
+            }
+            val d = unum(@cast<u64>(c.len));
+            val one = this.rb_give(e, fmt("x{}_", copy d).as_str(), fmt2("p{}_[i{}_]", copy d, copy d).as_str(), what) ?? return null;
+            var g = fmt5("{{ VALUE a{}_ = vr_array({}, {}); long n{}_ = RARRAY_LEN(a{}_); ", copy d, S(v), S(what), copy d, copy d);
+            g.append(fmt5("{} *p{}_ = vr_kept_room(sizeof *p{}_ * (size_t)n{}_); for (long i{}_ = 0; ", this.c_prim(this.view_of(e), false), copy d, copy d, copy d, copy d).as_str());
+            g.append(fmt3("i{}_ < n{}_; i{}_++) {{ ", copy d, copy d, copy d).as_str());
+            g.append(fmt3("VALUE x{}_ = rb_ary_entry(a{}_, i{}_); ", copy d, copy d, copy d).as_str());
+            g.append(fmt5("{} }} {}.ptr = p{}_; {}.len = (size_t)n{}_; }}", move one, S(c), copy d, S(c), copy d).as_str());
+            return g;
         },
         default => { return null; },
     }
@@ -17052,7 +17161,12 @@ attach fn rb_upcall(this: bind&, name: str, recv: str, mid: str, ps: std::vec<u3
     if (r != VOID) {
         fields.append(fmt("    {}out;\n", spaced(copy rc)).as_str());
         val g = this.rb_give(r, "ret", "u->out", fmt("\"the result of {}\"", S(what)).as_str()) ?? return fail(NO_SPAN, fmt2("{} gives back {}, which Ruby can't give: nothing would keep it", S(what), this.c.ty_name(r)));
-        give = fmt("    {}\n", move g);
+        if (contains(g.as_str(), "vr_kept_room(")) {
+            // the slice the method gave last is done with
+            give = fmt("    vr_kept_free();\n    {}\n", move g);
+        } else {
+            give = fmt("    {}\n", move g);
+        }
         val si = this.rb_stand_in(r);
         if (si) {
             stand_in = copy si;
@@ -17923,6 +18037,9 @@ attach fn rb_text(this: bind&) -> compile_error!std::string {
     if (taken_traits.len > 0) {
         out.append("\n// a Ruby object given to Volt (a trait's object): kept from the GC until Volt drops it\nstruct vr_keep {\n    VALUE obj;\n    struct vr_keep *prev, *next;\n};\n\nstatic struct vr_keep vr_kept = {Qnil, &vr_kept, &vr_kept};\nstatic VALUE vr_keeper;\n\nstatic void vr_mark_kept(void *p) {\n    (void)p;\n    for (struct vr_keep *k = vr_kept.next; k != &vr_kept; k = k->next) {\n        rb_gc_mark(k->obj);\n    }\n}\n\nstatic const rb_data_type_t vr_type_kept = {.wrap_struct_name = \"volt kept\", .function = {.dmark = vr_mark_kept}};\n");
         out.append("\nstatic inline struct vr_keep *vr_keep_new(VALUE obj) {\n    struct vr_keep *k = malloc(sizeof *k);\n    if (!k) {\n        rb_memerror();\n    }\n    k->obj = obj;\n    k->prev = &vr_kept;\n    k->next = vr_kept.next;\n    vr_kept.next->prev = k;\n    vr_kept.next = k;\n    return k;\n}\n\nstatic inline VALUE vr_close_run(VALUE obj) {\n    if (rb_respond_to(obj, rb_intern(\"close\"))) {\n        rb_funcall(obj, rb_intern(\"close\"), 0);\n    }\n    return Qnil;\n}\n\n// Volt drops what it was given: no longer kept, and closed when it has close, even when what one of\n// its methods raised is kept (that stays the one raised). Not while the GC runs, which can't call\n// Ruby, nor while a jump (break, throw) waits to be made\nstatic inline void vr_drop_kept(void *self) {\n    struct vr_keep *k = self;\n    VALUE obj = k->obj;\n    k->prev->next = k->next;\n    k->next->prev = k->prev;\n    free(k);\n    if (rb_during_gc()) {\n        return;\n    }\n    VALUE kept = vr_raised();\n    if (FIXNUM_P(kept)) {\n        return;\n    }\n    rb_thread_local_aset(rb_thread_current(), vr_id_raised, Qnil);\n    vr_run(vr_close_run, (void *)obj);\n    if (!NIL_P(kept)) {\n        rb_thread_local_aset(rb_thread_current(), vr_id_raised, kept);\n    }\n    RB_GC_GUARD(obj);\n    RB_GC_GUARD(kept);\n}\n");
+    }
+    if (contains(body.as_str(), "vr_kept_room(")) {
+        out.append("\n// the memory of a slice a Ruby method gives Volt (and of slices in it): kept until the next\n// method's result on this thread (Volt reads a callback's slice before calling again)\n// ponytail: one result at a time, as Kotlin's; keep more if a Volt fn holds two callbacks' slices at once\nstatic _Thread_local void **vr_kept;\nstatic _Thread_local size_t vr_nkept, vr_capkept;\n\nstatic void vr_kept_free(void) {\n    while (vr_nkept > 0) {\n        free(vr_kept[--vr_nkept]);\n    }\n}\n\nstatic void *vr_kept_room(size_t n) {\n    if (vr_nkept == vr_capkept) {\n        size_t cap = vr_capkept ? vr_capkept * 2 : 4;\n        void **k = realloc(vr_kept, cap * sizeof *k);\n        if (!k) {\n            rb_memerror();\n        }\n        vr_kept = k;\n        vr_capkept = cap;\n    }\n    void *p = malloc(n ? n : 1);\n    if (!p) {\n        rb_memerror();\n    }\n    vr_kept[vr_nkept++] = p;\n    return p;\n}\n");
     }
     if (contains(body.as_str(), "vr_static(") || this.node_struct_strs()) {
         out.append("\n// a str a Ruby method gives Volt, which may keep it (nothing frees a str): a copy (terminated)\n// kept as long as the program, one per value\nstatic VALUE vr_static_strs;\n\nstatic inline const char *vr_static(VALUE v, size_t *len, const char *what) {\n    const char *p = vr_bytes(v, len, what);\n    VALUE c = rb_hash_aref(vr_static_strs, v);\n    if (!NIL_P(c)) {\n        return (const char *)(uintptr_t)NUM2ULL(c);\n    }\n    char *m = malloc(*len + 1);\n    if (!m) {\n        rb_memerror();\n    }\n    memcpy(m, p, *len);\n    m[*len] = 0;\n    rb_hash_aset(vr_static_strs, rb_str_new_frozen(v), ULL2NUM((uintptr_t)m));\n    return m;\n}\n");

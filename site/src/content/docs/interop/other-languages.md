@@ -214,7 +214,11 @@ Python's on
   callback gives back a `Result<T, Error>` (Zig's `Error!T`; in Python it returns the value or
   raises the error set's class). Python's `ctypes` can't make a C function that gives a struct
   (text, `E!T`), so the library has a relay for each callback and trait fn that does, which takes
-  the result from Python through a pointer.
+  the result from Python through a pointer. A callback can give back a slice of numbers or structs
+  (`fn(i32) -> i64[..]`): C, C++, Rust, Zig and Swift give memory of their own, which Volt
+  reads before it calls the callback again; every other language returns a list, which is copied
+  for Volt (Python, Dart, Ruby, Lua and Kotlin keep the copy until the callback's next result,
+  Node until the call into Volt returns).
 - **Lists, and text and handles in slices and optionals.** An export fn can return a
   `std::vec<T>`: in C the caller gets its elements, how many, and what frees them
   (`volt_list_free`); text in it is lent as a `str` until then, and each handle in it is the

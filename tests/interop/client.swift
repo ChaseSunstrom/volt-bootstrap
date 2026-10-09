@@ -68,3 +68,16 @@ print("relabel", lb.name, lb.sizes.0, lb.sizes.1, lb.sizes.2)
 print("count", ml_labels_count([la, lb]))
 print("note", ml_note_len(ml_note(str: "abc", c: 1, k: 3)))
 print("or_label", ml_or_label(.success(la)), ml_or_label(.failure(math_error.NEGATIVE)))
+let given = UnsafeMutableBufferPointer<Int64>.allocate(capacity: 2)
+let points = UnsafeMutableBufferPointer<vec2>.allocate(capacity: 2)
+print("given", ml_sum_given(3) { k in
+    given[0] = Int64(k)
+    given[1] = 10 * Int64(k)
+    return given
+}, ml_area_given { k in
+    points[0] = vec2(x: 1.5, y: Double(k))
+    points[1] = vec2(x: 2, y: 3.25)
+    return points
+})
+given.deallocate()
+points.deallocate()

@@ -81,4 +81,7 @@ func main() {
 	fmt.Println("count", mathlib.MlLabelsCount([]mathlib.MlLabel{la, lb}))
 	fmt.Println("note", mathlib.MlNoteLen(mathlib.MlNote{Str: "abc", C: 1, K: 3}))
 	fmt.Println("or_label", mathlib.MlOrLabel(la, nil), mathlib.MlOrLabel(mathlib.MlLabel{}, mathlib.MathErrorNegative))
+	fmt.Println("given", mathlib.MlSumGiven(3, func(k int32) []int64 { return []int64{int64(k), 10 * int64(k)} }), mathlib.MlAreaGiven(func(k int32) []mathlib.Vec2 {
+		return []mathlib.Vec2{{X: 1.5, Y: float64(k)}, {X: 2, Y: 3.25}}
+	}))
 }

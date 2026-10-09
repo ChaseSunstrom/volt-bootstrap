@@ -143,6 +143,26 @@ export fn ml_or_label(got: math_error!ml_label) -> i64 {
     return ml_label_len(l);
 }
 
+// a callback giving a slice, called for k = 1..n (each one read before the next call)
+export fn ml_sum_given(n: i32, f: fn(i32) -> i64[..]) -> i64 {
+    var s: i64 = 0;
+    for (k) in 1..n + 1 {
+        for (x) in f(k) {
+            s += x;
+        }
+    }
+    return s;
+}
+
+// a callback giving a slice of structs
+export fn ml_area_given(f: fn(i32) -> vec2[..]) -> f64 {
+    var s = 0.0;
+    for (p) in f(2) {
+        s += p.x * p.y;
+    }
+    return s;
+}
+
 export fn ml_next(c: color) -> color {
     match (c) {
         .RED => { return color::GREEN; },

@@ -69,6 +69,7 @@ say("relabel", lb.name, lb.sizes[1], lb.sizes[2], lb.sizes[3])
 say("count", m.ml_labels_count({ la, lb }))
 say("note", m.ml_note_len({ str = "abc", c = 1, k = 3 }))
 say("or_label", m.ml_or_label(la), m.ml_or_label(negative))
+say("given", m.ml_sum_given(3, function(k) return { k, 10 * k } end), m.ml_area_given(function(k) return { { x = 1.5, y = k }, { x = 2, y = 3.25 } } end))
 
 -- what the module rejects: numbers that don't fit, wrong types, a closed counter; and a callback's
 -- error comes out of the call (the later calls are skipped)

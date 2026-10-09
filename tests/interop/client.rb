@@ -64,6 +64,7 @@ puts "relabel #{lb.name} #{lb.sizes.join(' ')}"
 puts "count #{Mathlib.ml_labels_count([la, lb])}"
 puts "note #{Mathlib.ml_note_len({ str: "abc", c: 1, k: 3 })}"
 puts "or_label #{Mathlib.ml_or_label(la)} #{Mathlib.ml_or_label(Mathlib::MathError.new(Mathlib::MathError::NEGATIVE))}"
+puts "given #{Mathlib.ml_sum_given(3, proc { |k| [k, 10 * k] })} #{Mathlib.ml_area_given(proc { |k| [{ x: 1.5, y: k }, { x: 2, y: 3.25 }] })}"
 
 # what the extension rejects: numbers that don't fit, wrong types, a closed counter; and a
 # callback's exception comes out of the call (the later calls are skipped)

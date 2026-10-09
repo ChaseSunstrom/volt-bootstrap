@@ -14,6 +14,24 @@ static mathlib_ml_label give_label(void *user, int32_t k) {
     return (mathlib_ml_label){{(const uint8_t *)"abc", 3}, {k, k, k}, {3, 0}};
 }
 
+// callbacks giving a slice (in memory of the client's: Volt reads it before calling again)
+static int64_t given[2];
+static mathlib_vec2 points[2];
+
+static mathlib_slice_i64 give_pair(void *user, int32_t k) {
+    (void)user;
+    given[0] = k;
+    given[1] = 10 * (int64_t)k;
+    return (mathlib_slice_i64){given, 2};
+}
+
+static mathlib_slice_vec2 give_points(void *user, int32_t k) {
+    (void)user;
+    points[0] = (mathlib_vec2){1.5, k};
+    points[1] = (mathlib_vec2){2, 3.25};
+    return (mathlib_slice_vec2){points, 2};
+}
+
 int main(void) {
     printf("add %d\n", ml_add(2, 3));
     mathlib_vec2 a = {1, 2}, b = {3, 4};
@@ -82,5 +100,6 @@ int main(void) {
     printf("count %lld\n", (long long)ml_labels_count((mathlib_slice_ml_label){both, 2}));
     printf("note %lld\n", (long long)ml_note_len((mathlib_ml_note){.str = {(const uint8_t *)"abc", 3}, .c = 1, .k = 3}));
     printf("or_label %lld %lld\n", (long long)ml_or_label((mathlib_math_error_or_ml_label){.error = 0, .value = la}), (long long)ml_or_label((mathlib_math_error_or_ml_label){.error = MATHLIB_MATH_ERROR_NEGATIVE}));
+    printf("given %lld %g\n", (long long)ml_sum_given(3, give_pair, NULL), ml_area_given(give_points, NULL));
     return 0;
 }

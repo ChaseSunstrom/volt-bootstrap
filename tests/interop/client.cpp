@@ -70,4 +70,15 @@ int main() {
     std::printf("count %lld\n", (long long)mathlib::ml_labels_count({la, lb}));
     std::printf("note %lld\n", (long long)mathlib::ml_note_len({"abc", 1, 3}));
     std::printf("or_label %lld %lld\n", (long long)mathlib::ml_or_label({0, la}), (long long)mathlib::ml_or_label({mathlib::math_error::NEGATIVE, {}}));
+    int64_t given[2];
+    mathlib::vec2 points[2];
+    std::printf("given %lld %g\n", (long long)mathlib::ml_sum_given(3, [&](int32_t k) {
+        given[0] = k;
+        given[1] = 10 * (int64_t)k;
+        return mathlib::slice_i64{given, 2};
+    }), mathlib::ml_area_given([&](int32_t k) {
+        points[0] = {1.5, (double)k};
+        points[1] = {2, 3.25};
+        return mathlib::slice_vec2{points, 2};
+    }));
 }
