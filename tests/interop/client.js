@@ -65,3 +65,5 @@ console.log("given", m.ml_sum_given(3, (k) => [k, 10 * k]), m.ml_area_given((k) 
 const deep = [[[1, 2], [3]], [[4]]];
 const d = m.ml_deep(deep);
 console.log("deep", d, deep[0][0][1], deep[1][0][0], "words", m.ml_words([["ab", "c"], [], ["def"]]));
+console.log("text_given", m.ml_text_given((k) => ["ab", "cde"]), m.ml_labels_given((k) => [{ name: "abc", sizes: [k, k, k], at: { x: 3, y: 0 } }, { name: "de", sizes: [1, 1, 1], at: { x: 0, y: 0 } }]));
+console.log("turn", m.ml_turn((a) => [a[2], a[1], a[0]]));

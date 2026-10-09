@@ -87,4 +87,8 @@ func main() {
 	deep := [][][]int64{{{1, 2}, {3}}, {{4}}}
 	d := mathlib.MlDeep(deep)
 	fmt.Println("deep", d, deep[0][0][1], deep[1][0][0], "words", mathlib.MlWords([][]string{{"ab", "c"}, {}, {"def"}}))
+	fmt.Println("text_given", mathlib.MlTextGiven(func(k int32) []string { return []string{"ab", "cde"} }), mathlib.MlLabelsGiven(func(k int32) []mathlib.MlLabel {
+		return []mathlib.MlLabel{{Name: "abc", Sizes: [3]int32{k, k, k}, At: mathlib.Vec2{X: 3}}, {Name: "de", Sizes: [3]int32{1, 1, 1}}}
+	}))
+	fmt.Println("turn", mathlib.MlTurn(func(a [3]int32) [3]int32 { return [3]int32{a[2], a[1], a[0]} }))
 }

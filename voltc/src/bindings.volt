@@ -530,15 +530,12 @@ attach fn sig_part(this: bind&, t: u32) -> shape? {
     return this.not_array(t);
 }
 
-// t's form, unless it's an array by value, which only an export fn takes or gives (see add_array)
-// ponytail: callbacks, traits and extern "C" fn types don't wrap arrays; wrap them there too when
-// one needs to
+// t's form in a callback's, a trait fn's or an extern "C" fn type's signature: an array by value
+// crosses as the struct wrapping it, as an export fn's does (see add_array)
 attach fn not_array(this: bind&, t: u32) -> shape? {
     val s = this.shape_of(t) ?? return null;
-    match (s) {
-        .ARRAY(e, n) => { return this.no_form(t); },
-        default => { return s; },
-    }
+    this.add_array(t);
+    return s;
 }
 
 // one fn of a trait, as other languages implement or call it
@@ -1635,6 +1632,7 @@ attach fn by_out(this: bind&, t: u32) -> bool {
         .STRUCT(s) => { return true; },
         .RESULT(e, x) => { return true; },
         .SLICE(x) => { return true; },
+        .ARRAY(e, n) => { return true; },
         default => { return false; },
     }
 }
@@ -1886,9 +1884,19 @@ attach fn c_val(this: bind&, t: u32, cpp: bool) -> std::string {
     return this.c_prim(t, cpp);
 }
 
-// type t's C form as a parameter: text comes in as a str (see in_ty)
+// C lvalue c of type t as its elements are reached: an array by value in the struct wrapping it (see
+// add_array) is its v
+attach fn arr_c(this: bind&, t: u32, c: str) -> std::string {
+    if (has_u32(&this.arrays, t)) {
+        return fmt("{}.v", S(c));
+    }
+    return S(c);
+}
+
+// type t's C form as a parameter: text comes in as a str (see in_ty), an array by value as the
+// struct wrapping it (see add_array)
 attach fn c_in(this: bind&, t: u32, cpp: bool) -> std::string {
-    return this.c_prim(this.in_ty(t), cpp);
+    return this.c_val(this.in_ty(t), cpp);
 }
 
 // type t's C form as a result: a closure comes out boxed
@@ -2294,12 +2302,12 @@ attach fn c_types(this: bind&, cpp: bool, out: std::string&) -> void {
                     if (k > 0) {
                         args.append(", ");
                     }
-                    args.append(this.c_prim(*ps.at(k), cpp).as_str());
+                    args.append(this.c_val(*ps.at(k), cpp).as_str());
                 }
                 if (ps.len == 0) {
                     args.append("void");
                 }
-                out.append(fmt3("typedef {} (*{})({});\n", this.c_prim(r, cpp), this.c_prim(*this.fns.at(i), cpp), move args).as_str());
+                out.append(fmt3("typedef {} (*{})({});\n", this.c_val(r, cpp), this.c_prim(*this.fns.at(i), cpp), move args).as_str());
             },
             default => {},
         }
@@ -2310,9 +2318,9 @@ attach fn c_types(this: bind&, cpp: bool, out: std::string&) -> void {
                 var args = S("void *user");
                 for (k) in 0..ps.len {
                     args.append(", ");
-                    args.append(this.c_in(*ps.at(k), cpp).as_str());
+                    args.append(this.c_val(this.in_ty(*ps.at(k)), cpp).as_str());
                 }
-                out.append(fmt3("\n// a callback: called with the data passed along with it, then {}'s arguments\ntypedef {} (*{})(", this.c.ty_name(*this.closures.at(i)), this.c_prim(r, cpp), this.cb_name(@cast<u32>(i), cpp)).as_str());
+                out.append(fmt3("\n// a callback: called with the data passed along with it, then {}'s arguments\ntypedef {} (*{})(", this.c.ty_name(*this.closures.at(i)), this.c_val(r, cpp), this.cb_name(@cast<u32>(i), cpp)).as_str());
                 out.append(fmt("{});\n", move args).as_str());
             },
             default => {},
@@ -2669,6 +2677,7 @@ attach fn cb_ty(this: bind&, t: u32) -> std::string {
     match (this.shape_of(t) ?? shape::VOID) {
         .TEXT(x) => { return S("std::string"); },
         .HANDLE(s) => { return this.local(this.c.si(s).name); },
+        .ARRAY(e, n) => { return this.cpp_array(t); },
         default => { return this.c_prim(t, true); },
     }
 }
@@ -2715,6 +2724,7 @@ attach fn cpp_callback(this: bind&, target: std::string, ps: std::vec<u32>&, r: 
         match (this.shape_of(p) ?? shape::VOID) {
             .TEXT(x) => { args.append(fmt2("std::string((const char *){}.ptr, {}.len)", copy a, copy a).as_str()); },
             .HANDLE(s) => { args.append(fmt2("{}({})", this.local(this.c.si(s).name), copy a).as_str()); },
+            .ARRAY(e, n) => { args.append(fmt2("volt_bits<{}>({})", this.cpp_array(p), copy a).as_str()); },
             default => { args.append(a.as_str()); },
         }
     }
@@ -2726,6 +2736,7 @@ attach fn cpp_callback(this: bind&, target: std::string, ps: std::vec<u32>&, r: 
         match (this.shape_of(r) ?? shape::VOID) {
             .TEXT(x) => { body = fmt("return give_text({}); ", move call); },
             .HANDLE(s) => { body = fmt("return {}.release(); ", move call); },
+            .ARRAY(e, n) => { body = fmt2("return volt_bits<{}>({}); ", this.made_name("array", r, true), move call); },
             default => { body = fmt("return {}; ", move call); },
         }
     }
@@ -2764,6 +2775,7 @@ attach fn cpp_call_in(this: bind&, call: str, self: str, ps: std::vec<u32>&, r: 
         match (this.shape_of(p) ?? shape::VOID) {
             .TEXT(x) => { args.append(fmt("str({})", copy a).as_str()); },
             .HANDLE(s) => { args.append(fmt("{}.release()", copy a).as_str()); },
+            .ARRAY(e, n) => { args.append(fmt2("volt_bits<{}>({})", this.made_name("array", p, true), copy a).as_str()); },
             default => { args.append(a.as_str()); },
         }
     }
@@ -2774,6 +2786,7 @@ attach fn cpp_call_in(this: bind&, call: str, self: str, ps: std::vec<u32>&, r: 
     match (this.shape_of(r) ?? shape::VOID) {
         .TEXT(x) => { return fmt("return take_text({});", move c); },
         .HANDLE(s) => { return fmt2("return {}({});", this.local(this.c.si(s).name), move c); },
+        .ARRAY(e, n) => { return fmt2("return volt_bits<{}>({});", this.cpp_array(r), move c); },
         default => { return fmt("return {};", move c); },
     }
 }
@@ -4276,6 +4289,8 @@ attach fn zig_from_c(this: bind&, t: u32, a: str) -> std::string {
         .STR => { return fmt("{}.slice()", S(a)); },
         .TEXT(x) => { return fmt("{}.slice()", S(a)); },
         .HANDLE(s) => { return fmt2("{}{{ .raw = {} }}", this.local(this.c.si(s).name), S(a)); },
+        // an array by value, out of the struct wrapping it (see add_array)
+        .ARRAY(e, n) => { return fmt("{}.v", S(a)); },
         default => { return S(a); },
     }
 }
@@ -4295,6 +4310,7 @@ attach fn zig_give(this: bind&, t: u32, r: str) -> std::string {
             out.append(fmt("else |e| {}{{ .@\"error\" = code_of(e), .value = undefined }}", copy rn).as_str());
             return out;
         },
+        .ARRAY(e, n) => { return fmt2("{}{{ .v = {} }}", this.zig_val(t), S(r)); },
         default => { return S(r); },
     }
 }
@@ -4308,6 +4324,7 @@ attach fn zig_pass(this: bind&, t: u32, a: str) -> std::string {
         .STR => { return fmt("VoltStr.from({})", S(a)); },
         .TEXT(x) => { return fmt("VoltStr.from({})", S(a)); },
         .HANDLE(s) => { return fmt("{}.raw", S(a)); },
+        .ARRAY(e, n) => { return fmt2("{}{{ .v = {} }}", this.zig_val(t), S(a)); },
         default => { return S(a); },
     }
 }
@@ -4323,6 +4340,7 @@ attach fn zig_took(this: bind&, t: u32, r: str) -> std::string {
             }
             return fmt2("blk: {{\n            const q = {};\n            if (q.@\"error\" != 0) break :blk err_of(q.@\"error\");\n            break :blk {};\n        }}", S(r), this.zig_took(x, "q.value"));
         },
+        .ARRAY(e, n) => { return fmt("{}.v", S(r)); },
         default => { return S(r); },
     }
 }
@@ -4943,16 +4961,16 @@ attach fn py_fn_ty(this: bind&, t: u32, user: bool) -> std::string {
 attach fn py_cfn(this: bind&, ps: std::vec<u32>&, r: u32, data: bool, relay: bool) -> std::string {
     var s = S("ctypes.CFUNCTYPE(");
     if (relay) {
-        s.append(fmt("None, ctypes.c_void_p, ctypes.POINTER({})", this.py_ty(r)).as_str());
+        s.append(fmt("None, ctypes.c_void_p, ctypes.POINTER({})", this.py_val(r)).as_str());
     } else {
-        s.append(this.py_ty(r).as_str());
+        s.append(this.py_val(r).as_str());
         if (data) {
             s.append(", ctypes.c_void_p");
         }
     }
     for (p&) in ps.items() {
         s.append(", ");
-        s.append(this.py_ty(this.in_ty(*p)).as_str());
+        s.append(this.py_val(this.in_ty(*p)).as_str());
     }
     s.push(')');
     return s;
@@ -5108,6 +5126,7 @@ attach fn py_from_c(this: bind&, t: u32, a: str) -> std::string {
         .STR => { return fmt("str({})", S(a)); },
         .TEXT(x) => { return fmt("str({})", S(a)); },
         .HANDLE(s) => { return fmt2("{}._wrap({})", this.local(this.c.si(s).name), S(a)); },
+        .ARRAY(e, n) => { return fmt("list({}.v)", S(a)); },
         default => { return S(a); },
     }
 }
@@ -5135,6 +5154,7 @@ attach fn py_give(this: bind&, t: u32, v: str, keep: str) -> std::string {
             return S(v);
         },
         .SLICE(x) => { return fmt2("_held({}, {})", S(keep), this.py_in(t, v)); },
+        .ARRAY(e, n) => { return this.py_in(t, v); },
         default => { return S(v); },
     }
 }
@@ -5155,6 +5175,7 @@ attach fn py_stand_in(this: bind&, t: u32) -> std::string {
         .PTR(x) => { return S("None"); },
         .STRUCT(s) => { return fmt("{}()", this.py_ty(t)); },
         .SLICE(x) => { return fmt("{}()", this.py_ty(t)); },
+        .ARRAY(e, n) => { return fmt("{}()", this.py_val(t)); },
         .RESULT(e, x) => {
             // an error of E's own (its first), so Volt sees it fail
             var code = S("1");
@@ -7040,6 +7061,7 @@ attach fn cs_give(this: bind&, t: u32, v: str) -> std::string {
         .STR => { return fmt("VoltStr.Keep({})", S(v)); },
         .TEXT(x) => { return fmt("VoltText.Give({})", S(v)); },
         .HANDLE(s) => { return fmt("{}.Release()", S(v)); },
+        .ARRAY(e, n) => { return fmt2("{}.From({})", this.cs_raw(t), S(v)); },
         .STRUCT(s) => {
             if (this.holds_str(t)) {
                 return fmt("{}.ToC(VoltKeep.Kept)", S(v));
@@ -7063,6 +7085,14 @@ attach fn cs_kept_slice(this: bind&, t: u32) -> bool {
                 default => { return true; },
             }
         },
+        default => { return false; },
+    }
+}
+
+// is t a slice of text or of structs with text a callback gives back (see cs_callback)?
+attach fn cs_text_slice(this: bind&, t: u32) -> bool {
+    match (this.shape_of(t) ?? shape::VOID) {
+        .SLICE(x) => { return x == STR || this.holds_str(x); },
         default => { return false; },
     }
 }
@@ -7106,6 +7136,10 @@ attach fn cs_callback(this: bind&, name: str, target: str, ps: std::vec<u32>&, r
     } else if (this.cs_kept_slice(r)) {
         // its elements copied into memory c keeps until its next result
         out.append(fmt2("            var v = {};\n            return new {} {{ ptr = c.Keep(v), len = (nuint)v.Length }};\n", copy call, copy raw).as_str());
+    } else if (this.cs_text_slice(r)) {
+        // text, or structs with text: each converted as a result is (its text kept for good, see
+        // VoltStr.Keep), their C forms in memory c keeps until its next result
+        out.append(fmt3("            var v = {}.ToArray();\n            return new {} {{ ptr = c.Keep(v.Select(x => {}).ToArray()), len = (nuint)v.Length }};\n", copy call, copy raw, this.cs_give(this.slice_elem(r), "x")).as_str());
     } else {
         out.append(fmt("            return {};\n", this.cs_give(r, call.as_str())).as_str());
     }
@@ -8539,6 +8573,8 @@ attach fn java_from_c(this: bind&, t: u32, a: str) -> std::string {
         .TEXT(x) => { return fmt("text({}.reinterpret(L_STR.byteSize()))", S(a)); },
         .STRUCT(s) => { return fmt2("{}.read({})", this.local(this.c.si(s).name), S(a)); },
         .HANDLE(s) => { return fmt2("new {}({})", this.local(this.c.si(s).name), S(a)); },
+        // an array by value, out of the struct wrapping it (see add_array)
+        .ARRAY(e, n) => { return fmt2("{}({})", this.made_name("array", t, true), S(a)); },
         default => { return S(a); },
     }
 }
@@ -8590,6 +8626,7 @@ attach fn java_to_c(this: bind&, r: u32, call: str) -> std::string {
             out.append("} catch (VoltException e) {\n    s.set(JAVA_INT, 0, e.code);\n}\nreturn s;\n");
             return out;
         },
+        .ARRAY(e, n) => { return fmt2("return {}(Arena.ofAuto(), {});\n", this.made_name("array", r, true), S(call)); },
         .SLICE(x) => {
             // its elements in an arena of their own, kept with the slice until the next one (see keep)
             var a: java_arg = {};
@@ -8626,12 +8663,12 @@ attach fn java_up_types(this: bind&, ps: std::vec<u32>&, r: u32, mt: std::string
     for (p&) in ps.items() {
         mt.append(fmt(", {}.class", this.java_carrier(this.in_ty(*p))).as_str());
         vls.append(", ");
-        vls.append(this.java_layout(this.in_ty(*p)).as_str());
+        vls.append(this.java_val_layout(this.in_ty(*p)).as_str());
     }
     if (r == VOID) {
         desc.append(fmt("FunctionDescriptor.ofVoid(ADDRESS{})", move vls).as_str());
     } else {
-        desc.append(fmt2("FunctionDescriptor.of({}, ADDRESS{})", this.java_layout(r), move vls).as_str());
+        desc.append(fmt2("FunctionDescriptor.of({}, ADDRESS{})", this.java_val_layout(r), move vls).as_str());
     }
 }
 
@@ -9244,11 +9281,8 @@ attach fn go_field_to_c(this: bind&, t: u32, v: str) -> std::string {
                 return fmt("{}.cWith(str)", S(v));
             }
         },
-        .ARRAY(e, n) => {
-            if (!has_u32(&this.arrays, t)) {
-                return fmt2("*(*{})(unsafe.Pointer(&{}))", this.go_cty(t), S(v));
-            }
-        },
+        // (a field's array is never the struct wrapping one, see add_array)
+        .ARRAY(e, n) => { return fmt3("*(*[{}]{})(unsafe.Pointer(&{}))", unum(n), this.go_cty(e), S(v)); },
         default => {},
     }
     return this.go_to_c(t, v);
@@ -9257,11 +9291,7 @@ attach fn go_field_to_c(this: bind&, t: u32, v: str) -> std::string {
 // the Go expression converting a plain struct's C field v (of type t) to Go
 attach fn go_field_from_c(this: bind&, t: u32, v: str) -> std::string {
     match (this.shape_of(t) ?? shape::VOID) {
-        .ARRAY(e, n) => {
-            if (!has_u32(&this.arrays, t)) {
-                return fmt2("*(*{})(unsafe.Pointer(&{}))", this.go_ty(t), S(v));
-            }
-        },
+        .ARRAY(e, n) => { return fmt3("*(*[{}]{})(unsafe.Pointer(&{}))", unum(n), this.go_ty(e), S(v)); },
         default => {},
     }
     return this.go_from_c(t, v);
@@ -10175,7 +10205,7 @@ attach fn go_text(this: bind&) -> std::string {
         for (k) in 0..ps.len {
             params.append(fmt2(", {}a{}", spaced(this.c_in(*ps.at(k), false)), unum(@cast<u64>(k))).as_str());
         }
-        out.append(fmt4("extern {}{}cb{}({});\n", spaced(this.c_prim(r, false)), S(p), unum(@cast<u64>(i)), move params).as_str());
+        out.append(fmt4("extern {}{}cb{}({});\n", spaced(this.c_val(r, false)), S(p), unum(@cast<u64>(i)), move params).as_str());
     }
     out.append(this.go_c_helpers().as_str());
     // an export fn named like a Go keyword: cgo reaches it by another name
@@ -10650,11 +10680,9 @@ attach fn node_put(this: bind&, t: u32, c: str, dst: str, d: u32) -> compile_err
         },
         .SLICE(x) => { return try this.node_array(x, c, dst, d); },
         .ARRAY(e, n) => {
-            // a new array (an export fn's comes in the struct wrapping it, see add_array)
-            var v = S(c);
-            if (has_u32(&this.arrays, t)) {
-                v.append(".v");
-            }
+            // a new array (an export fn's or a callback's comes in the struct wrapping it: its caller
+            // passes c's v, see arr_c)
+            val v = S(c);
             val i = fmt("i{}", unum(@cast<u64>(d)));
             val x = fmt("e{}", unum(@cast<u64>(d)));
             val put = try this.node_put(e, fmt2("{}[{}]", copy v, copy i).as_str(), x.as_str(), d + 1);
@@ -11020,7 +11048,7 @@ attach fn node_result(this: bind&, t: u32, r: str) -> compile_error!std::string 
             out.append((try this.node_result(x, fmt("{}.value", S(r)).as_str())).as_str());
             return out;
         },
-        default => { return try this.node_put(t, r, "result", 0); },
+        default => { return try this.node_put(t, this.arr_c(t, r).as_str(), "result", 0); },
     }
 }
 
@@ -11161,7 +11189,7 @@ attach fn node_upcall(this: bind&, sig: std::string, head: str, call: str, ps: s
     }
     var out = fmt3("\nstatic {} {{\n{}    napi_escapable_handle_scope scope = NULL;\n    napi_value argv[{}], ret = NULL, err = NULL;\n", copy sig, S(head), unum(@cast<u64>(argn)));
     if (r != VOID) {
-        out.append(fmt("    {}out;\n    memset(&out, 0, sizeof out);\n", spaced(this.c_prim(r, false))).as_str());
+        out.append(fmt("    {}out;\n    memset(&out, 0, sizeof out);\n", spaced(this.c_val(r, false))).as_str());
     }
     out.append("    napi_open_escapable_handle_scope(env, &scope);\n");
     var back: std::string = {};
@@ -11205,13 +11233,13 @@ attach fn node_upcall(this: bind&, sig: std::string, head: str, call: str, ps: s
             default => {},
         }
         if (!done) {
-            out.append(fmt("    {}\n", try this.node_put(this.in_ty(p), a.as_str(), av.as_str(), 0)).as_str());
+            out.append(fmt("    {}\n", try this.node_put(this.in_ty(p), this.arr_c(p, a.as_str()).as_str(), av.as_str(), 0)).as_str());
         }
     }
     out.append(fmt("    if (!({})) {{\n        goto fail;\n    }}\n", S(call)).as_str());
     out.append(back.as_str());
     if (r != VOID) {
-        out.append(fmt("    {}\n", try this.node_get(r, "ret", "out")).as_str());
+        out.append(fmt("    {}\n", try this.node_get(r, "ret", this.arr_c(r, "out").as_str())).as_str());
     }
     out.append(unlend.as_str());
     out.append("    napi_close_escapable_handle_scope(env, scope);\n");
@@ -11426,7 +11454,7 @@ attach fn node_text(this: bind&) -> compile_error!std::string {
         }
         var ps: std::vec<u32> = {};
         val r = this.fn_parts(*this.closures.at(i), &ps);
-        var sig = fmt2("{}vn_cb{}(void *user", spaced(this.c_prim(r, false)), unum(@cast<u64>(i)));
+        var sig = fmt2("{}vn_cb{}(void *user", spaced(this.c_val(r, false)), unum(@cast<u64>(i)));
         for (k) in 0..ps.len {
             sig.append(fmt2(", {}a{}", spaced(this.c_in(*ps.at(k), false)), unum(@cast<u64>(k))).as_str());
         }
@@ -12428,7 +12456,7 @@ attach fn lua_up_get(this: bind&, r: u32, c: str, what: str) -> std::string {
             s.append(fmt2("{} {}.error = 0; }", this.lua_get(x, "-2", fmt("{}.value", S(c)).as_str(), what), S(c)).as_str());
             return s;
         },
-        default => { return this.lua_get(r, "-1", c, what); },
+        default => { return this.lua_get(r, "-1", this.arr_c(r, c).as_str(), what); },
     }
 }
 
@@ -12438,7 +12466,7 @@ attach fn lua_up_get(this: bind&, r: u32, c: str, what: str) -> std::string {
 // empty text, E!T's first error) and the error is kept for the call into Volt to raise; nothing
 // stands in for a handle, so the program stops
 attach fn lua_upcall(this: bind&, name: str, method: str, ps: std::vec<u32>&, r: u32) -> std::string {
-    val rc = this.c_prim(r, false);
+    val rc = this.c_val(r, false);
     val rs = this.shape_of(r) ?? shape::VOID;
     var gives_handle = false;
     var nres = S("1");
@@ -13508,6 +13536,7 @@ attach fn dart_stand_in(this: bind&, t: u32) -> std::string {
         .FLOAT(b) => { return S("0.0"); },
         .STRUCT(s) => { return fmt("Struct.create<{}>()", this.dart_native(t)); },
         .SLICE(x) => { return fmt("Struct.create<{}>()", this.dart_native(t)); },
+        .ARRAY(e, n) => { return fmt("Struct.create<{}>()", this.dart_native(t)); },
         default => { return S("0"); },
     }
 }
@@ -13577,7 +13606,11 @@ attach fn dart_upcall(this: bind&, first: str, target: str, ps: std::vec<u32>&, 
             owned.append(fmt2("final {} = {};\n", copy h, this.dart_read(p, a.as_str())).as_str());
             args.append(h.as_str());
         } else {
-            args.append(this.dart_read(p, a.as_str()).as_str());
+            match (this.shape_of(p) ?? shape::VOID) {
+                // an array by value, from the struct wrapping it (see add_array)
+                .ARRAY(e, n) => { args.append(fmt2("List.generate({}, (i) => {})", unum(n), this.dart_read(e, fmt("{}.v[i]", copy a).as_str())).as_str()); },
+                default => { args.append(this.dart_read(p, a.as_str()).as_str()); },
+            }
         }
     }
     val call = fmt2("{}{})", S(target), move args);
@@ -13620,6 +13653,13 @@ attach fn dart_upcall(this: bind&, first: str, target: str, ps: std::vec<u32>&, 
         .SLICE(x) => {
             body = try this.dart_give_slice(r, call.as_str());
             body.append("return $r$;\n");
+            tail = fmt("return {};\n", this.dart_stand_in(r));
+        },
+        .ARRAY(e, n) => {
+            // into the struct wrapping it (see add_array)
+            body = fmt3("final r$ = {};\nif (r$.length != {}) {{\n  throw ArgumentError.value(r$, 'result', ", copy call, unum(n), S(""));
+            body.append(fmt3("'expected {} elements');\n}}\nfinal o$ = Struct.create<{}>();\nfor (var i = 0; i < {}; i++) {{\n", unum(n), this.dart_native(r), unum(n)).as_str());
+            body.append(fmt("  o$.v[i] = {};\n}\nreturn o$;\n", this.dart_in(e, "r$[i]")).as_str());
             tail = fmt("return {};\n", this.dart_stand_in(r));
         },
         default => {
@@ -14829,7 +14869,7 @@ attach fn swift_ty(this: bind&, t: u32, cb: bool) -> std::string {
             if (this.swift_throws(r)) {
                 thr = S(" throws");
             }
-            return fmt3("({}){} -> {}", move args, move thr, this.swift_ty(r, true));
+            return fmt3("({}){} -> {}", move args, move thr, this.swift_ret_ty(r));
         },
         default => { return this.swift_c(t); },
     }
@@ -15434,6 +15474,14 @@ attach fn swift_from_c(this: bind&, t: u32, a: str, k: usize, pre: std::string&)
         .CSTR => { return fmt("{}.map {{ String(cString: $0) }}", S(a)); },
         .HANDLE(s) => { return fmt2("{}(handle: {})", this.swift_cls(s, false), S(a)); },
         .SLICE(x) => { return fmt2("UnsafeMutableBufferPointer(start: {}.ptr, count: {}.len)", S(a), S(a)); },
+        .ARRAY(e, n) => {
+            // from the struct wrapping it (see add_array)
+            val v = this.swift_out(e, "$0");
+            if (v.as_str() == "$0") {
+                return fmt2("voltArray({}, {})", S(a), unum(n));
+            }
+            return fmt4("(voltArray({}, {}) as [{}]).map {{ {} }}", S(a), unum(n), this.swift_c(e), copy v);
+        },
         default => {},
     }
     return this.swift_out(t, a);
@@ -15457,10 +15505,51 @@ attach fn swift_to_c(this: bind&, t: u32, v: str) -> std::string {
                 return fmt("{}.voltC(voltBox.keeper())", S(v));
             }
         },
-        .SLICE(x) => { return fmt3("{}(ptr: {}.baseAddress, len: {}.count)", this.c_prim(t, false), S(v), S(v)); },
+        .SLICE(x) => { return this.swift_keep_slice(t, v, true); },
+        .ARRAY(e, n) => {
+            // into the struct wrapping it (see add_array)
+            var xs = S(v);
+            if (this.swift_in(e, "$0").as_str() != "$0") {
+                xs = fmt2("{}.map {{ {} }}", S(v), this.swift_in(e, "$0"));
+            }
+            return fmt3("voltArray({}, {}, as: {}.self)", move xs, unum(n), this.c_val(t, false));
+        },
         default => {},
     }
     return this.swift_in(t, v);
+}
+
+// what a Swift function (a callback, a trait fn) gives back as r: a slice as an array (copied for
+// Volt, see swift_keep_slice), else as swift_ty has it
+attach fn swift_ret_ty(this: bind&, r: u32) -> std::string {
+    match (this.shape_of(r) ?? shape::VOID) {
+        .SLICE(x) => { return fmt("[{}]", this.swift_item(x, false)); },
+        .RESULT(e, x) => { return this.swift_ret_ty(x); },
+        default => { return this.swift_ty(r, true); },
+    }
+}
+
+// Swift array v (of slice type t) as the C slice a Swift function gives Volt: its elements (text, a
+// slice in it, the same way) in memory the box keeps until the next result (fresh: v is the
+// result, not part of one)
+attach fn swift_keep_slice(this: bind&, t: u32, v: str, fresh: bool) -> std::string {
+    val e = this.slice_elem(t);
+    var conv = S("x");
+    match (this.shape_of(e) ?? shape::VOID) {
+        .STR => { conv = S("volt_str(ptr: voltBox.keep(x, fresh: false), len: x.utf8.count)"); },
+        .STRUCT(s) => {
+            if (this.holds_str(e)) {
+                conv = S("x.voltC { s in volt_str(ptr: voltBox.keep(s, fresh: false), len: s.utf8.count) }");
+            }
+        },
+        .SLICE(y) => { conv = this.swift_keep_slice(e, "x", false); },
+        default => {},
+    }
+    var fr = S("");
+    if (!fresh) {
+        fr = S(", fresh: false");
+    }
+    return fmt5("{}(ptr: voltBox.keepSlice({}{}) {{ x in {} }}, len: {}.count)", this.c_prim(t, false), S(v), move fr, move conv, S(v));
 }
 
 // statements giving C what call (a Swift function's, of type r) returns: text given (Volt frees it), a
@@ -15758,7 +15847,7 @@ attach fn swift_trait(this: bind&, k: u32, out: std::string&) -> void {
             sig.append(" throws");
         }
         if (f.ret != VOID) {
-            sig.append(fmt(" -> {}", this.swift_ty(f.ret, true)).as_str());
+            sig.append(fmt(" -> {}", this.swift_ret_ty(f.ret)).as_str());
         }
         reqs.append(fmt("    {}\n", copy sig).as_str());
         calls.append(fmt("\n    public {} {{\n", copy sig).as_str());
@@ -15945,7 +16034,8 @@ attach fn swift_text(this: bind&) -> std::string {
     }
     if (this.closures.len > 0 || this.traits.len > 0) {
         out.append("\n// what a Swift function Volt called threw that Volt can't take: Volt got a stand-in, and the call it\n// happened in throws it once it's back (one that can't throw drops it)\n// ponytail: one slot for the process; a thread-local if threads call into Volt at once\nnonisolated(unsafe) var voltPending: Error?\n\nfunc voltKeep(_ e: Error) {\n    if voltPending == nil {\n        voltPending = e\n    }\n}\n\n// runs a Volt call whose Swift functions can throw, its result converted (what it owns is Swift's),\n// then throws what they threw that Volt couldn't take; a call this one runs in keeps its own\nfunc voltCatching<R>(_ body: () throws -> R) throws -> R {\n    let outer = voltPending\n    voltPending = nil\n    defer {\n        voltPending = outer\n    }\n    let v: R\n    do {\n        v = try body()\n    } catch {\n        throw voltPending ?? error\n    }\n    if let e = voltPending {\n        throw e\n    }\n    return v\n}\n");
-        out.append("\n// a Swift value Volt calls (a callback, an object for a trait), which the C functions find through\n// their user pointer; and the bytes of the str it gave Volt last, kept until the next or until it goes\nfinal class VoltBox<F> {\n    let f: F\n    var kept: [UnsafeMutablePointer<UInt8>] = []\n\n    init(_ f: F) {\n        self.f = f\n    }\n\n    deinit {\n        kept.forEach { $0.deallocate() }\n    }\n\n");
+        out.append("\n// a Swift value Volt calls (a callback, an object for a trait), which the C functions find through\n// their user pointer; and the bytes of the str it gave Volt last, kept until the next or until it goes\nfinal class VoltBox<F> {\n    let f: F\n    var kept: [UnsafeMutablePointer<UInt8>] = []\n    var slices: [UnsafeMutableRawPointer] = []\n\n    init(_ f: F) {\n        self.f = f\n    }\n\n    deinit {\n        kept.forEach { $0.deallocate() }\n        slices.forEach { $0.deallocate() }\n    }\n\n");
+        out.append("    // xs' elements, each converted by f (their text kept with them), in memory kept until the next\n    // result's (fresh: xs is a result, not a slice in one)\n    func keepSlice<T, E>(_ xs: [T], fresh: Bool = true, _ f: (T) -> E) -> UnsafeMutablePointer<E> {\n        if fresh {\n            kept.forEach { $0.deallocate() }\n            kept = []\n            slices.forEach { $0.deallocate() }\n            slices = []\n        }\n        let p = UnsafeMutablePointer<E>.allocate(capacity: max(xs.count, 1))\n        for (i, x) in xs.enumerated() {\n            (p + i).initialize(to: f(x))\n        }\n        slices.append(UnsafeMutableRawPointer(p))\n        return p\n    }\n");
         out.append("    // s's bytes (and a 0 after them), kept until the next result's (fresh: s is a result's first;\n    // else it's kept with the ones before it)\n    func keep(_ s: String, fresh: Bool = true) -> UnsafePointer<UInt8> {\n        if fresh {\n            kept.forEach { $0.deallocate() }\n            kept = []\n        }\n        let n = s.utf8.count\n        let p = UnsafeMutablePointer<UInt8>.allocate(capacity: n + 1)\n        _ = UnsafeMutableBufferPointer(start: p, count: n).initialize(from: s.utf8)\n        p[n] = 0\n        kept.append(p)\n        return UnsafePointer(p)\n    }\n");
         if (this.structs_hold_str()) {
             out.append("\n    // what makes one result's strs: each kept, together (see keep)\n    func keeper() -> (String) -> volt_str {\n        var fresh = true\n        return { s in\n            defer { fresh = false }\n            return volt_str(ptr: self.keep(s, fresh: fresh), len: s.utf8.count)\n        }\n    }\n");
@@ -16680,7 +16770,7 @@ attach fn kt_stand_in(this: bind&, r: u32) -> std::string {
         default => {},
     }
     if (this.kt_cvalue(r)) {
-        return fmt("cValue<{}>()", this.c_prim(r, false));
+        return fmt("cValue<{}>()", this.c_val(r, false));
     }
     return S("null");
 }
@@ -16705,11 +16795,11 @@ attach fn kt_give(this: bind&, r: u32, got: str) -> std::string {
         return fmt("{}\n", S(got));
     }
     var out = fmt("val volt_v = {}\n", S(got));
-    val w = this.kt_put(r, "volt_v", "this", "volt", 0, "volt_k");
+    val w = this.kt_put(r, "volt_v", this.arr_c(r, "this").as_str(), "volt", 0, "volt_k");
     if (contains(w.as_str(), "volt_k")) {
         out.append("val volt_k = voltKept()\n");
     }
-    out.append(fmt2("cValue<{}> {{\n{}}}\n", this.c_prim(r, false), indent(w.as_str())).as_str());
+    out.append(fmt2("cValue<{}> {{\n{}}}\n", this.c_val(r, false), indent(w.as_str())).as_str());
     return out;
 }
 
@@ -16773,7 +16863,7 @@ attach fn kt_upcall(this: bind&, ps: std::vec<u32>&, r: u32, box: str, callee: s
         },
         .RESULT(e, x) => {
             // a VoltException thrown is the error Volt gets
-            val cr = this.c_prim(r, false);
+            val cr = this.c_val(r, false);
             code_of = fmt2(" catch (volt_e: VoltException) {{\n    cValue<{}> {{ error = if (volt_e.code != 0u) volt_e.code else {} }}\n}}", copy cr, this.lua_first_code(e));
             if (x == VOID) {
                 body = fmt2("{}\ncValue<{}> {{ error = 0u }}\n", copy got, copy cr);
@@ -17439,6 +17529,13 @@ attach fn rb_give(this: bind&, t: u32, v: str, c: str, what: str) -> std::string
             return fmt2("{}.error = 0; {}", S(c), move inner);
         },
         .SLICE(x) => { return this.rb_slice_in(this.slice_elem(t), v, c, what, 0); },
+        .ARRAY(e, n) => {
+            // an Array of exactly n (into the struct wrapping it, see add_array)
+            if (has_u32(&this.arrays, t)) {
+                return this.rb_get(t, v, fmt("{}.v", S(c)).as_str(), what);
+            }
+            return this.rb_get(t, v, c, what);
+        },
         default => { return null; },
     }
 }

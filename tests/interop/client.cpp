@@ -88,4 +88,18 @@ int main() {
     mathlib::str w0[] = {"ab", "c"}, w2[] = {"def"};
     mathlib::slice_str ws[] = {{w0, 2}, {nullptr, 0}, {w2, 1}};
     std::printf("deep %lld %lld %lld words %lld\n", deep, (long long)d00[1], (long long)d10[0], (long long)mathlib::ml_words(ws));
+    mathlib::str texts[2];
+    mathlib::ml_label labels[2];
+    long long text_n = mathlib::ml_text_given([&](int32_t) {
+        texts[0] = "ab";
+        texts[1] = "cde";
+        return mathlib::slice_str{texts, 2};
+    });
+    long long labels_n = mathlib::ml_labels_given([&](int32_t k) {
+        labels[0] = mathlib::ml_label{"abc", {k, k, k}, {3, 0}};
+        labels[1] = mathlib::ml_label{"de", {1, 1, 1}, {0, 0}};
+        return mathlib::slice_ml_label{labels, 2};
+    });
+    std::printf("text_given %lld %lld\n", text_n, labels_n);
+    std::printf("turn %lld\n", (long long)mathlib::ml_turn([](std::array<int32_t, 3> a) { return std::array<int32_t, 3>{a[2], a[1], a[0]}; }));
 }

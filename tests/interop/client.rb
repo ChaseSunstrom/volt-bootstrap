@@ -68,6 +68,8 @@ puts "given #{Mathlib.ml_sum_given(3, proc { |k| [k, 10 * k] })} #{Mathlib.ml_ar
 deep = [[[1, 2], [3]], [[4]]]
 d = Mathlib.ml_deep(deep)
 puts "deep #{d} #{deep[0][0][1]} #{deep[1][0][0]} words #{Mathlib.ml_words([["ab", "c"], [], ["def"]])}"
+puts "text_given #{Mathlib.ml_text_given(proc { |k| ["ab", "cde"] })} #{Mathlib.ml_labels_given(proc { |k| [{ name: "abc", sizes: [k, k, k], at: { x: 3, y: 0 } }, { name: "de", sizes: [1, 1, 1], at: { x: 0, y: 0 } }] })}"
+puts "turn #{Mathlib.ml_turn(proc { |a| [a[2], a[1], a[0]] })}"
 
 # what the extension rejects: numbers that don't fit, wrong types, a closed counter; and a
 # callback's exception comes out of the call (the later calls are skipped)

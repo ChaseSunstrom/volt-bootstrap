@@ -80,6 +80,8 @@ pub fn main() void {
     var w2 = [_]m.VoltStr{m.VoltStr.from("def")};
     var ws = [_]m.VoltSlice(m.VoltStr){ m.VoltSlice(m.VoltStr).from(&w0), m.VoltSlice(m.VoltStr).from(&w1), m.VoltSlice(m.VoltStr).from(&w2) };
     print("deep {d} {d} {d} words {d}\n", .{ deep, d00[1], d10[0], m.ml_words(&ws) });
+    print("text_given {d} {d}\n", .{ m.ml_text_given({}, give_texts), m.ml_labels_given({}, give_labels) });
+    print("turn {d}\n", .{m.ml_turn({}, turn)});
 }
 
 // callbacks giving a slice (in memory of the client's: Volt reads it before calling again)
@@ -94,6 +96,25 @@ fn give_pair(_: void, k: i32) m.VoltSlice(i64) {
 fn give_points(_: void, k: i32) m.VoltSlice(m.vec2) {
     points = .{ .{ .x = 1.5, .y = @floatFromInt(k) }, .{ .x = 2, .y = 3.25 } };
     return m.VoltSlice(m.vec2).from(&points);
+}
+
+// a callback taking and giving an array by value
+fn turn(_: void, a: [3]i32) [3]i32 {
+    return .{ a[2], a[1], a[0] };
+}
+
+// callbacks giving a slice of text and of structs with text
+var texts: [2]m.VoltStr = undefined;
+var labels: [2]m.ml_label = undefined;
+
+fn give_texts(_: void, _: i32) m.VoltSlice(m.VoltStr) {
+    texts = .{ m.VoltStr.from("ab"), m.VoltStr.from("cde") };
+    return m.VoltSlice(m.VoltStr).from(&texts);
+}
+
+fn give_labels(_: void, k: i32) m.VoltSlice(m.ml_label) {
+    labels = .{ give_label({}, k), .{ .name = m.VoltStr.from("de"), .sizes = .{ 1, 1, 1 }, .at = .{ .x = 0, .y = 0 } } };
+    return m.VoltSlice(m.ml_label).from(&labels);
 }
 
 fn give_label(_: void, k: i32) m.ml_label {

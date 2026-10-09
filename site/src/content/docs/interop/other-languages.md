@@ -214,11 +214,12 @@ Python's on
   callback gives back a `Result<T, Error>` (Zig's `Error!T`; in Python it returns the value or
   raises the error set's class). Python's `ctypes` can't make a C function that gives a struct
   (text, `E!T`), so the library has a relay for each callback and trait fn that does, which takes
-  the result from Python through a pointer. A callback can give back a slice of numbers or structs
-  (`fn(i32) -> i64[..]`): C, C++, Rust, Zig and Swift give memory of their own, which Volt
-  reads before it calls the callback again; every other language returns a list, which is copied
-  for Volt (Python, Dart, Ruby, Lua and Kotlin keep the copy until the callback's next result,
-  Node until the call into Volt returns).
+  the result from Python through a pointer. A callback can give back a slice of numbers, structs, text or
+  structs with text (`fn(i32) -> i64[..]`, `-> str[..]`): C, C++, Rust and Zig give memory of
+  their own, which Volt reads before it calls the callback again; every other language returns a
+  list (an array in Swift, Java and C#), which is copied for Volt with its text (Python, Dart,
+  Ruby, Lua, Kotlin, Swift and C# keep the copy until the callback's next result, Node and Go
+  until the call into Volt returns).
 - **Lists, and text and handles in slices and optionals.** An export fn can return a
   `std::vec<T>`: in C the caller gets its elements, how many, and what frees them
   (`volt_list_free`); text in it is lent as a `str` until then, and each handle in it is the
@@ -239,12 +240,13 @@ Python's on
   Dart, JavaScript and Ruby, a table of tables in Lua, and a slice of slices (of their own memory)
   in C, C++, Rust and Zig. The others copy each inner array (text too) into memory the call holds,
   and what Volt writes into the numbers and structs comes back.
-- **Arrays by value.** An export fn taking or giving a `T[N]` (numbers, bools, enums, or structs of
-  those) passes it whole, as C passes a struct wrapping it: `PKG_array_T_N` (its elements in `v`)
+- **Arrays by value.** An export fn, a callback or a trait fn taking or giving a `T[N]` (numbers,
+  bools, enums, or structs of those) passes it whole, as C passes a struct wrapping it (an
+  `extern "C"` fn type too): `PKG_array_T_N` (its elements in `v`)
   in C, `std::array<T, N>` in C++, `[T; N]` in Rust, `[N]T` in Zig and Go, a list in Python and
   Dart, `long[]` (and the like) in Java and C#, an array in JavaScript, Ruby and Swift, a
-  `LongArray` (and the like) in Kotlin and a table in Lua. One of the wrong length is refused.
-  Callbacks, trait fns and `extern "C"` fn types don't take arrays by value yet.
+  `LongArray` (and the like) in Kotlin and a table in Lua: a callback `fn(i32[3]) -> i32[3]` takes
+  and returns those. One of the wrong length is refused.
 - **Structs with text, arrays and pointers in them.** A struct whose fields are text, arrays of
   numbers, pointers or such structs (`label { name: str; sizes: i32[3]; at: vec2; }`) crosses by
   value too: in, out, in a slice and from a callback. C, C++, Rust and Zig have its C form (the

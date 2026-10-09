@@ -73,6 +73,8 @@ say("given", m.ml_sum_given(3, function(k) return { k, 10 * k } end), m.ml_area_
 local deep = { { { 1, 2 }, { 3 } }, { { 4 } } }
 local d = m.ml_deep(deep)
 say("deep", d, deep[1][1][2], deep[2][1][1], "words", m.ml_words({ { "ab", "c" }, {}, { "def" } }))
+say("text_given", m.ml_text_given(function(k) return { "ab", "cde" } end), m.ml_labels_given(function(k) return { { name = "abc", sizes = { k, k, k }, at = { x = 3, y = 0 } }, { name = "de", sizes = { 1, 1, 1 }, at = { x = 0, y = 0 } } } end))
+say("turn", m.ml_turn(function(a) return { a[3], a[2], a[1] } end))
 
 -- what the module rejects: numbers that don't fit, wrong types, a closed counter; and a callback's
 -- error comes out of the call (the later calls are skipped)

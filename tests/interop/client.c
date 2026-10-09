@@ -32,6 +32,30 @@ static mathlib_slice_vec2 give_points(void *user, int32_t k) {
     return (mathlib_slice_vec2){points, 2};
 }
 
+// callbacks giving a slice of text and of structs with text
+static volt_str texts[2];
+static mathlib_ml_label labels[2];
+
+static mathlib_slice_str give_texts(void *user, int32_t k) {
+    (void)user;
+    (void)k;
+    texts[0] = (volt_str){(const uint8_t *)"ab", 2};
+    texts[1] = (volt_str){(const uint8_t *)"cde", 3};
+    return (mathlib_slice_str){texts, 2};
+}
+
+static mathlib_slice_ml_label give_labels(void *user, int32_t k) {
+    labels[0] = give_label(user, k);
+    labels[1] = (mathlib_ml_label){{(const uint8_t *)"de", 2}, {1, 1, 1}, {0, 0}};
+    return (mathlib_slice_ml_label){labels, 2};
+}
+
+// a callback taking and giving an array by value (the struct wrapping it)
+static mathlib_array_i32_3 turn(void *user, mathlib_array_i32_3 a) {
+    (void)user;
+    return (mathlib_array_i32_3){{a.v[2], a.v[1], a.v[0]}};
+}
+
 int main(void) {
     printf("add %d\n", ml_add(2, 3));
     mathlib_vec2 a = {1, 2}, b = {3, 4};
@@ -108,5 +132,7 @@ int main(void) {
     volt_str w0[] = {{(const uint8_t *)"ab", 2}, {(const uint8_t *)"c", 1}}, w2[] = {{(const uint8_t *)"def", 3}};
     mathlib_slice_str ws[] = {{w0, 2}, {NULL, 0}, {w2, 1}};
     printf("deep %lld %lld %lld words %lld\n", deep, (long long)d00[1], (long long)d10[0], (long long)ml_words((mathlib_slice_slice_str){ws, 3}));
+    printf("text_given %lld %lld\n", (long long)ml_text_given(give_texts, NULL), (long long)ml_labels_given(give_labels, NULL));
+    printf("turn %lld\n", (long long)ml_turn(turn, NULL));
     return 0;
 }

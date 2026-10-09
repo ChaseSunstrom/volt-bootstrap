@@ -78,6 +78,8 @@ fun main() {
     val deep = listOf(listOf(longArrayOf(1, 2), longArrayOf(3)), listOf(longArrayOf(4)))
     val d = ml_deep(deep)
     println("deep $d ${deep[0][0][1]} ${deep[1][0][0]} words ${ml_words(listOf(listOf("ab", "c"), listOf(), listOf("def")))}")
+    println("text_given ${ml_text_given { listOf("ab", "cde") }} ${ml_labels_given { k -> listOf(ml_label("abc", intArrayOf(k, k, k), vec2(3.0, 0.0)), ml_label("de", intArrayOf(1, 1, 1), vec2(0.0, 0.0))) }}")
+    println("turn ${ml_turn { a -> intArrayOf(a[2], a[1], a[0]) }}")
 
     // a callback's exception comes out of the call (the later calls are skipped), and a closed
     // counter throws

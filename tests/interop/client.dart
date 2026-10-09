@@ -84,6 +84,8 @@ void main() {
         [],
         ['def']
       ])}');
+  print('text_given ${ml_text_given((k) => ['ab', 'cde'])} ${ml_labels_given((k) => [ml_label(name: 'abc', sizes: [k, k, k], at: vec2.of(x: 3, y: 0)), ml_label(name: 'de', sizes: [1, 1, 1], at: vec2.of(x: 0, y: 0))])}');
+  print('turn ${ml_turn((a) => [a[2], a[1], a[0]])}');
 
   // a callback's exception comes out of the call (the later calls are skipped), and a closed
   // counter throws

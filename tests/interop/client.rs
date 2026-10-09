@@ -75,4 +75,13 @@ fn main() {
     let mut w2 = [VoltStr::from("def")];
     let words = ml_words(&mut [VoltSlice::from(&mut w0[..]), VoltSlice::from(&mut []), VoltSlice::from(&mut w2[..])]);
     println!("deep {} {} {} words {}", deep, d00[1], d10[0], words);
+    let mut texts = [VoltStr::from("ab"), VoltStr::from("cde")];
+    let text_n = ml_text_given(|_| VoltSlice::from(&mut texts[..]));
+    let mut labels = [ml_label { name: VoltStr::from("abc"), sizes: [0; 3], at: vec2 { x: 3.0, y: 0.0 } }, ml_label { name: VoltStr::from("de"), sizes: [1, 1, 1], at: vec2 { x: 0.0, y: 0.0 } }];
+    let labels_n = ml_labels_given(|k| {
+        labels[0].sizes = [k, k, k];
+        VoltSlice::from(&mut labels[..])
+    });
+    println!("text_given {} {}", text_n, labels_n);
+    println!("turn {}", ml_turn(|a| [a[2], a[1], a[0]]));
 }

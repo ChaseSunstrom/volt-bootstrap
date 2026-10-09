@@ -163,6 +163,12 @@ export fn ml_area_given(f: fn(i32) -> vec2[..]) -> f64 {
     return s;
 }
 
+// arrays by value through a callback: Volt passes one and takes one back
+export fn ml_turn(f: fn(i32[3]) -> i32[3]) -> i64 {
+    val r = f({ 1, 2, 3 });
+    return @cast<i64>(r[0]) * 100 + @cast<i64>(r[1]) * 10 + @cast<i64>(r[2]);
+}
+
 // a slice of slices at any depth: Volt sums the numbers and doubles each (what it wrote comes back)
 export fn ml_deep(xs: i64[..][..][..]) -> i64 {
     var s: i64 = 0;
@@ -175,6 +181,26 @@ export fn ml_deep(xs: i64[..][..][..]) -> i64 {
         }
     }
     return s;
+}
+
+// a callback giving a slice of text, called twice (each one read before the next call)
+export fn ml_text_given(f: fn(i32) -> str[..]) -> i64 {
+    var n: i64 = 0;
+    for (k) in 1..3 {
+        for (w) in f(k) {
+            n += @cast<i64>(w.len);
+        }
+    }
+    return n;
+}
+
+// a callback giving a slice of structs with text
+export fn ml_labels_given(f: fn(i32) -> ml_label[..]) -> i64 {
+    var n: i64 = 0;
+    for (l) in f(2) {
+        n += ml_label_len(l);
+    }
+    return n;
 }
 
 // text in a slice of slices

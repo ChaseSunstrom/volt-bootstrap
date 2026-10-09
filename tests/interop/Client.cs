@@ -84,6 +84,8 @@ Console.WriteLine($"given {Api.ml_sum_given(3, k => new long[] { k, 10L * k })} 
 long[][][] deep = [[[1, 2], [3]], [[4]]];
 var d = Api.ml_deep(deep);
 Console.WriteLine($"deep {d} {deep[0][0][1]} {deep[1][0][0]} words {Api.ml_words([["ab", "c"], [], ["def"]])}");
+Console.WriteLine($"text_given {Api.ml_text_given(k => new[] { "ab", "cde" })} {Api.ml_labels_given(k => new ml_label[] { new ml_label { name = "abc", sizes = new[] { k, k, k }, at = new vec2 { x = 3, y = 0 } }, new ml_label { name = "de", sizes = new[] { 1, 1, 1 }, at = new vec2 { x = 0, y = 0 } } })}");
+Console.WriteLine($"turn {Api.ml_turn(a => new[] { a[2], a[1], a[0] })}");
 
 static class Ext
 {

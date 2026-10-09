@@ -81,6 +81,8 @@ public class Client {
         long[][][] deep = {{{1, 2}, {3}}, {{4}}};
         long d = mathlib.ml_deep(deep);
         System.out.println("deep " + d + " " + deep[0][0][1] + " " + deep[1][0][0] + " words " + mathlib.ml_words(new String[][] {{"ab", "c"}, {}, {"def"}}));
+        System.out.println("text_given " + mathlib.ml_text_given(k -> new String[] {"ab", "cde"}) + " " + mathlib.ml_labels_given(k -> new mathlib.ml_label[] {new mathlib.ml_label("abc", new int[] {k, k, k}, new mathlib.vec2(3, 0)), new mathlib.ml_label("de", new int[] {1, 1, 1}, new mathlib.vec2(0, 0))}));
+        System.out.println("turn " + mathlib.ml_turn(t -> new int[] {t[2], t[1], t[0]}));
     }
 
     // numbers as the other clients print them: 11, not 11.0
