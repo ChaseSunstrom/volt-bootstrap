@@ -353,7 +353,7 @@ namespace fs {
         try scan(dir, &names, &dirs);
         for (n&, i) in names.items() {
             var full = std::path::join(dir, n.as_str(), copy out.allocator);
-            if (*dirs.at(i)) {
+            if (dirs[i]) {
                 try walk_into(full.as_str(), out);
             } else {
                 out.push(move full) catch @panic("out of memory");

@@ -105,7 +105,7 @@ fn main() -> void {
     var ps: soa(particle) = {};
     ps.x.push(1.5);
     ps.alive.push(true);
-    std::println("{} {} {}", ps.x.len, *ps.x.at(0), @typeinfo(soa(particle)).short_name);
+    std::println("{} {} {}", ps.x.len, ps.x[0], @typeinfo(soa(particle)).short_name);
     std::println("{}", status::GONE as i32);
 }
 // expect: 1 1.5 soa(particle)

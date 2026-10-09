@@ -238,8 +238,8 @@ namespace html {
         var k = scopes.len;
         while (k > 0) {
             k -= 1;
-            if (scopes.at(k).name == first) {
-                v = scopes.at(k).v;
+            if (scopes[k].name == first) {
+                v = scopes[k].v;
                 break;
             }
         }

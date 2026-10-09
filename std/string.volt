@@ -42,6 +42,12 @@ public attach fn len(this: std::string<A>&) -> usize {
     return this.bytes.len;
 }
 
+// s[i]: byte i (not character i), a place, bounds-checked like the vec it's kept in
+<A: std::mem::allocator>
+public attach operator [](this: std::string<A>&, i: usize) -> u8& {
+    return this.bytes.at(i);
+}
+
 // append one byte
 <A: std::mem::allocator>
 @attributes([@invalidates])

@@ -107,7 +107,7 @@ use std::io;
 
 fn main() -> !void {
     val found = try std::net::resolve("127.0.0.1", 8080);
-    val first = found.at(0).text();
+    val first = found[0].text();
     std::println("{}", first.as_str());
 }
 // expect: 127.0.0.1:8080
