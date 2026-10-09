@@ -51,4 +51,24 @@ pub fn main() void {
     _ = c.add(2);
     print("counter {s} {d}\n", .{ c.name(), c.add(3) });
     if (c.take(9)) |_| {} else |e| print("take {s}\n", .{if (e == error.NEGATIVE) "negative" else "?"});
+    // structs with text, an array and a struct in them (in, out, in a slice, from a function), one
+    // with a pointer, E!T as a parameter (an error union)
+    const la = m.ml_label{ .name = m.VoltStr.from("ab"), .sizes = .{ 1, 2, 3 }, .at = .{ .x = 7, .y = 0 } };
+    print("label {d}\n", .{m.ml_label_len(la)});
+    var lb = m.ml_label_of("ab", 3);
+    print("label_of {s} {d} {d} {d} {d}\n", .{ lb.name.slice(), lb.sizes[0], lb.sizes[1], lb.sizes[2], lb.at.x });
+    var ls = [_]m.ml_label{ la, lb };
+    print("labels {d}\n", .{m.ml_labels_len(&ls)});
+    print("holder {d}\n", .{m.ml_holder_k(.{ .p = null, .k = 3 })});
+    print("or {d} {d}\n", .{ m.ml_or(4.5, 9.5), m.ml_or(error.NEGATIVE, 9.5) });
+    print("ask {d}\n", .{m.ml_ask({}, give_label)});
+    m.ml_relabel(&lb, 4);
+    print("relabel {s} {d} {d} {d}\n", .{ lb.name.slice(), lb.sizes[0], lb.sizes[1], lb.sizes[2] });
+    print("count {d}\n", .{m.ml_labels_count(&[_]m.ml_label{ la, lb })});
+    print("note {d}\n", .{m.ml_note_len(.{ .str = m.VoltStr.from("abc"), .c = 1, .k = 3 })});
+    print("or_label {d} {d}\n", .{ m.ml_or_label(la), m.ml_or_label(error.NEGATIVE) });
+}
+
+fn give_label(_: void, k: i32) m.ml_label {
+    return .{ .name = m.VoltStr.from("abc"), .sizes = .{ k, k, k }, .at = .{ .x = 3, .y = 0 } };
 }

@@ -239,6 +239,24 @@ Python's on
   Dart, `long[]` (and the like) in Java and C#, an array in JavaScript, Ruby and Swift, a
   `LongArray` (and the like) in Kotlin and a table in Lua. One of the wrong length is refused.
   Callbacks, trait fns and `extern "C"` fn types don't take arrays by value yet.
+- **Structs with text, arrays and pointers in them.** A struct whose fields are text, arrays of
+  numbers, pointers or such structs (`label { name: str; sizes: i32[3]; at: vec2; }`) crosses by
+  value too: in, out, in a slice and from a callback. C, C++, Rust and Zig have its C form (the
+  text a pointer and a length); the other languages have a type of their own whose text is their
+  string and whose array is their array: a class in Python (ctypes; it takes a `str` for the text),
+  Java, C#, Dart and Swift (C's form is `NAME_c` in C# and Dart), a struct in Go, a data class in
+  Kotlin, an object in JavaScript and Ruby, and a table in Lua. Its text going in is lent for the
+  call (a callback's is kept, as a `str` it gives back is), and coming back it's copied before the
+  call returns, so one that points into a parameter's text is still whole. By reference (`T&`), a
+  copy goes in and what Volt changed comes back into yours. Python also takes a field that's an
+  array of text (`str[2]`) as a sequence of strings; the other languages don't yet.
+- **`E!T` as a parameter.** It takes a value or an error, in the form the language's callbacks give
+  one back: `Result<T, Error>` in Rust and Swift, `Result<T>` in Kotlin, `Error!T` in Zig, a
+  `VoltResult<T>` in Java and Dart (`VoltResult.ok(v)` or `VoltResult.err(e)`) and in C# (a value
+  or a `VoltException` converts to one), the value or the error in Python, JavaScript, Ruby and Lua,
+  the value and an `error` in Go (`f(v, nil)`, or `f(zero, err)`), and the struct of the code and
+  the value in C and C++. In C#, Dart, Python and Go an `E!void` parameter is the error, or none
+  (`null`, `None`, `nil`).
 - **Any name.** A parameter named like a word the language keeps (`from` in Python, `type` in
   Zig, `self` in Rust, `typeof` in C), like one of the package's types, or like a name the wrapper
   uses itself gets a `_` after it in that language (`from_`), so it still gets its own value. A

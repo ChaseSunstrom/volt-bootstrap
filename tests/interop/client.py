@@ -43,3 +43,18 @@ with m.counter("clicks") as c:
         c.take(9)
     except m.math_error as e:
         print("take", e.name.lower())
+# structs with text, an array and a struct in them (in, out, in a list, from a callback), one with a
+# pointer, E!T as a parameter (a value, or the error)
+la = m.ml_label(name="ab", sizes=(1, 2, 3), at=m.vec2(7, 0))
+print("label", m.ml_label_len(la))
+lb = m.ml_label_of("ab", 3)
+print("label_of", lb.name, *lb.sizes, lb.at.x)
+print("labels", m.ml_labels_len([la, lb]))
+print("holder", m.ml_holder_k(m.ml_holder(None, 3)))
+print("or", m.ml_or(4.5, 9.5), m.ml_or(m.math_error(m.math_error.NEGATIVE), 9.5))
+print("ask", m.ml_ask(lambda k: m.ml_label("abc", (k, k, k), m.vec2(3, 0))))
+m.ml_relabel(lb, 4)
+print("relabel", lb.name, *lb.sizes)
+print("count", m.ml_labels_count([la, lb]))
+print("note", m.ml_note_len(m.ml_note("abc", 1, 3)))
+print("or_label", m.ml_or_label(la), m.ml_or_label(m.math_error(m.math_error.NEGATIVE)))

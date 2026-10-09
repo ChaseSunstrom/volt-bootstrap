@@ -779,6 +779,34 @@ attach fn struct_handle(this: bind&, t: u32) -> u32? {
     return null;
 }
 
+// does a value of type t hold a str: itself, or in a field or an element at any depth (what a
+// wrapper copies out of a struct Volt gives back, before the text it points into can go)
+attach fn holds_str(this: bind&, t: u32) -> bool {
+    match (this.shape_of(t) ?? shape::VOID) {
+        .STR => { return true; },
+        .ARRAY(e, n) => { return this.holds_str(e); },
+        .STRUCT(s) => {
+            for (f&) in this.c.si(s).fields.items() {
+                if (this.holds_str(f.ty)) {
+                    return true;
+                }
+            }
+            return false;
+        },
+        default => { return false; },
+    }
+}
+
+// does any of the package's structs hold a str (see holds_str)
+attach fn structs_hold_str(this: bind&) -> bool {
+    for (s&) in this.structs.items() {
+        if (this.holds_str(this.c.t.intern(tyk::STRUCT(*s)))) {
+            return true;
+        }
+    }
+    return false;
+}
+
 // ---------- the exports ----------
 
 // one function other languages call: a package's export fn, or the X_free that voltc lib adds for
@@ -2321,9 +2349,9 @@ attach fn c_types(this: bind&, cpp: bool, out: std::string&) -> void {
                 for (k) in 0..info.fields.len {
                     val ft = info.fields.at(k).ty;
                     var d = this.c_decl(ft, fs.at(k).as_str(), cpp);
-                    if (cpp && this.declares(this.c_prim(ft, true).as_str())) {
-                        // the package's own type, by its full name: a field named like it (color color)
-                        // would otherwise change what the name means in the struct
+                    if (cpp && (this.declares(this.c_prim(ft, true).as_str()) || this.c_prim(ft, true).as_str() == "str")) {
+                        // the package's own type (or its str), by its full name: a field named like it
+                        // (color color, str str) would otherwise change what the name means in the struct
                         d = fmt2("::{}::{}", S(this.pkg), move d);
                     }
                     out.append(fmt("    {};\n", move d).as_str());
@@ -3500,6 +3528,11 @@ attach fn rust_param(this: bind&, t: u32, name: str, ty: std::string&, arg: std:
             ty.append(fmt2("{}: {}", copy n, this.local(this.c.si(s).name)).as_str());
             arg.append(fmt("{}.into_raw()", copy n).as_str());
         },
+        .RESULT(e, x) => {
+            // E!T: a Result, as a Rust closure gives one back
+            ty.append(fmt2("{}: {}", copy n, this.rust_cb_ty(t, 0)).as_str());
+            arg.append(this.rust_give(t, n.as_str()).as_str());
+        },
         .TRAIT(i) => {
             val tr = this.short(this.trait_of(t));
             if (this.is_ref(t)) {
@@ -3991,7 +4024,12 @@ attach fn zig_ty(this: bind&, t: u32) -> std::string {
                 .HANDLE(s) => { return fmt("*raw.{}", this.local(this.c.si(s).name)); },
                 default => {},
             }
+            // a T* can be null; a T& can't
             var s = S("*");
+            match (*this.c.t.get(t)) {
+                .PTR(y) => { s = S("?*"); },
+                default => {},
+            }
             s.append(this.zig_ty(x).as_str());
             return s;
         },
@@ -4343,6 +4381,11 @@ attach fn zig_param(this: bind&, t: u32, name: str, ty: std::string&, arg: std::
             // given to Volt, which frees it (don't deinit it after)
             ty.append(fmt2("{}: {}", S(name), this.local(this.c.si(s).name)).as_str());
             arg.append(fmt("{}.raw", S(name)).as_str());
+        },
+        .RESULT(e, x) => {
+            // E!T: an error union, as a Zig callback gives one back
+            ty.append(fmt2("{}: {}", S(name), this.zig_cb_ty(t, 0)).as_str());
+            arg.append(this.zig_give(t, name).as_str());
         },
         .TRAIT(i) => {
             val tr = this.short(this.trait_of(t));
@@ -4987,6 +5030,14 @@ attach fn py_in(this: bind&, t: u32, x: str) -> std::string {
             }
             return fmt2("_opt({}, {})", this.made_name("opt", v, true), S(x));
         },
+        .RESULT(e, y) => {
+            // a value, or an Error (Volt gets its code)
+            val rn = this.result_name(t);
+            if (y == VOID) {
+                return fmt3("{}({}.code if isinstance({}, Error) else 0)", copy rn, S(x), S(x));
+            }
+            return fmt5("({}({}.code) if isinstance({}, Error) else {}(0, {}))", copy rn, S(x), S(x), copy rn, this.py_in(y, x));
+        },
         default => { return S(x); },
     }
 }
@@ -5038,6 +5089,13 @@ attach fn py_give(this: bind&, t: u32, v: str) -> std::string {
         .FLOAT(b) => { return fmt2("{}({}).value", this.py_ty(t), S(v)); },
         .ENUM(e) => { return fmt2("{}({}).value", this.py_ty(t), S(v)); },
         .CODE => { return fmt2("{}({}).value", this.py_ty(t), S(v)); },
+        .STRUCT(s) => {
+            if (this.holds_str(t)) {
+                // its text kept, as a str's is (Volt may keep the struct)
+                return fmt("_own({}, _static)", S(v));
+            }
+            return S(v);
+        },
         default => { return S(v); },
     }
 }
@@ -5154,6 +5212,12 @@ attach fn py_value(this: bind&, t: u32, r: str) -> std::string {
         .TRAIT(i) => { return fmt2("_volt_{}({})", this.short(this.trait_of(t)), S(r)); },
         .CLOSURE(i) => { return fmt2("VoltFn({}, _call{})", S(r), unum(@cast<u64>(i))); },
         .ARRAY(e, n) => { return fmt("list({}.v)", S(r)); },
+        .STRUCT(s) => {
+            if (this.holds_str(t)) {
+                return fmt("_own({})", S(r));
+            }
+            return S(r);
+        },
         default => { return S(r); },
     }
 }
@@ -5189,7 +5253,7 @@ fn py_gift(pre: str, args: str) -> std::string {
 
 // a call of C function f with args, its result in r: what it gives Volt (_gift) is given up only
 // once every argument is ready, so one that can't convert leaves the rest Python's
-attach fn py_invoke(this: bind&, f: str, args: std::string, gift: bool) -> std::string {
+attach fn py_invoke(this: bind&, f: str, args: std::string, gift: bool, keep: bool) -> std::string {
     if (contains(args.as_str(), "_lent)")) {
         // what it lends is busy until it returns: a callback can't close it or give it away
         var out = fmt("    _a = ({},)\n", copy args);
@@ -5202,13 +5266,22 @@ attach fn py_invoke(this: bind&, f: str, args: std::string, gift: bool) -> std::
     if (gift) {
         return fmt2("    _a = ({},)\n    _given(_gift)\n    r = {}(*_a)\n", move args, S(f));
     }
+    if (keep && args.len() > 0) {
+        // the arguments live until the result's text (which may point into them) is copied
+        return fmt2("    _a = ({},)\n    r = {}(*_a)\n", move args, S(f));
+    }
     return fmt2("    r = {}({})\n", S(f), move args);
 }
 
 // statements calling f with args (giving t) and returning its Python value: an error is raised, and
 // so is what a Python function Volt called raised (once its result is Python's, to be freed)
 attach fn py_call(this: bind&, t: u32, f: str, args: std::string, gift: bool) -> std::string {
-    var out = this.py_invoke(f, move args, gift);
+    var keep = this.holds_str(t);
+    match (this.shape_of(t) ?? shape::VOID) {
+        .RESULT(e, x) => { keep = this.holds_str(x); },
+        default => {},
+    }
+    var out = this.py_invoke(f, move args, gift, keep);
     var back: std::string = {};
     if (this.py_calls_back()) {
         back = S("_reraise()\n");
@@ -5483,7 +5556,7 @@ attach fn py_text(this: bind&) -> std::string {
                 var b = py_gift(pre.as_str(), conv.as_str());
                 val gift = b.len() > 0;
                 b.append(pre.as_str());
-                b.append(this.py_invoke(py_lib(info.c_name).as_str(), move conv, gift).as_str());
+                b.append(this.py_invoke(py_lib(info.c_name).as_str(), move conv, gift, false).as_str());
                 var back: std::string = {};
                 if (this.py_calls_back()) {
                     back = S("_reraise()\n");
@@ -5535,7 +5608,7 @@ attach fn py_text(this: bind&) -> std::string {
     if (this.uses_str) {
         out.append("\n\nclass VoltStr(ctypes.Structure):\n    \"\"\"a Volt str: bytes and a length (no terminator)\"\"\"\n    _fields_ = [(\"ptr\", ctypes.c_void_p), (\"len\", ctypes.c_size_t)]\n\n    def __str__(self):\n        return ctypes.string_at(self.ptr, self.len).decode()\n\n\ndef _bytes(s):\n    if isinstance(s, str):\n        return s.encode()\n    if isinstance(s, (bytes, bytearray, memoryview)):\n        return bytes(s)\n    raise TypeError(\"expected str or bytes, not \" + type(s).__name__)\n\n\ndef _str(s):\n    b = _bytes(s)\n    v = VoltStr(ctypes.cast(ctypes.c_char_p(b), ctypes.c_void_p), len(b))\n    v._keep = b\n    return v\n");
     }
-    if (contains(body.as_str(), "_static(")) {
+    if (contains(body.as_str(), "_static(") || contains(body.as_str(), ", _static)")) {
         out.append("\n\n_static_strs = {}\n\n\ndef _static(s):\n    \"\"\"a str a callback gives Volt, which may keep it (it has no owner to free it, like Rust's\n    &'static str): kept as long as the program, once per value\"\"\"\n    return _static_strs.setdefault(s, _str(s))\n");
     }
     if (this.texts.len > 0) {
@@ -5567,6 +5640,9 @@ attach fn py_text(this: bind&) -> std::string {
     }
     if (this.slices.len > 0) {
         out.append("\n\ndef _slice(cls, elem, xs):\n    arr = (elem * len(xs))(*xs)\n    v = cls(ctypes.cast(arr, ctypes.POINTER(elem)), len(xs))\n    v._keep = (arr, xs)\n    return v\n");
+    }
+    if (this.structs_hold_str()) {
+        out.append("\n\ndef _text_init(cls):\n    \"\"\"a struct with text takes a str (or bytes) for it, and a sequence of them for an array of text,\n    kept as long as the struct\"\"\"\n    def text(t, x):\n        if t is VoltStr and not isinstance(x, VoltStr):\n            return _str(x)\n        if issubclass(t, ctypes.Array) and t._type_ is VoltStr and not isinstance(x, ctypes.Array):\n            return t(*[text(VoltStr, y) for y in x])\n        return x\n\n    def init(self, *a, **k):\n        a = list(a)\n        for i, (f, t) in enumerate(cls._fields_):\n            if i < len(a):\n                a[i] = text(t, a[i])\n            if f in k:\n                k[f] = text(t, k[f])\n        ctypes.Structure.__init__(self, *a, **k)\n    cls.__init__ = init\n\n\ndef _own(v, text=None):\n    \"\"\"v (a struct Volt gave back) with its text copied out of what Volt pointed it into; or one\n    a callback gives Volt, its text kept as long as the program (text=_static)\"\"\"\n    for f, t in type(v)._fields_:\n        if t is VoltStr:\n            setattr(v, f, (text or _str)(str(getattr(v, f))))\n        elif issubclass(t, ctypes.Structure):\n            _own(getattr(v, f), text)\n        elif issubclass(t, ctypes.Array) and t._type_ is VoltStr:\n            arr = getattr(v, f)\n            for i in range(len(arr)):\n                arr[i] = (text or _str)(str(arr[i]))\n        elif issubclass(t, ctypes.Array) and issubclass(t._type_, ctypes.Structure):\n            for x in getattr(v, f):\n                _own(x, text)\n    return v\n");
     }
     if (this.arrays.len > 0) {
         out.append("\n\ndef _array(cls, arr, n, xs):\n    if len(xs) != n:\n        raise ValueError(f\"expected {n} elements, not {len(xs)}\")\n    return cls(arr(*xs))\n");
@@ -5654,6 +5730,11 @@ attach fn py_text(this: bind&) -> std::string {
             fields.append(fmt2("(\"{}\", {}), ", copy *fs.at(k), this.py_ty(info.fields.at(k).ty)).as_str());
         }
         out.append(fmt2("\n{}._fields_ = [{}]", this.local(info.name), move fields).as_str());
+    }
+    for (s&) in this.structs.items() {
+        if (this.holds_str(this.c.t.intern(tyk::STRUCT(*s)))) {
+            out.append(fmt("\n_text_init({})", this.local(this.c.si(*s).name)).as_str());
+        }
     }
     for (x&) in this.slices.items() {
         out.append(fmt2("\n{}._fields_ = [(\"ptr\", ctypes.POINTER({})), (\"len\", ctypes.c_size_t)]", this.made_name("slice", *x, true), this.py_ty(*x)).as_str());
@@ -6042,7 +6123,12 @@ attach fn pyi_params(this: bind&, f: u32, first: usize) -> std::string {
         if (ps.len() > 0) {
             ps.append(", ");
         }
-        ps.append(fmt2("{}: {}", copy *ns.at(k - first), this.pyi_ty(info.params.at(k).ty, true)).as_str());
+        var ty = this.pyi_ty(info.params.at(k).ty, true);
+        match (this.shape_of(info.params.at(k).ty) ?? shape::VOID) {
+            .RESULT(e, x) => { ty.append(" | Error"); }, // E!T in: a value or the error
+            default => {},
+        }
+        ps.append(fmt2("{}: {}", copy *ns.at(k - first), move ty).as_str());
     }
     return ps;
 }
@@ -6314,7 +6400,12 @@ attach fn cs_raw(this: bind&, t: u32) -> std::string {
             return fmt("{}*", this.cs_raw(x));
         },
         .HANDLE(s) => { return S("IntPtr"); },
-        .STRUCT(s) => { return this.local(this.c.si(s).name); },
+        .STRUCT(s) => {
+            if (this.holds_str(t)) {
+                return fmt("{}_c", this.local(this.c.si(s).name));
+            }
+            return this.local(this.c.si(s).name);
+        },
         .ENUM(e) => { return this.local(this.c.ei(e).name); },
         .CODE => { return S("uint"); },
         .RESULT(e, x) => { return this.result_name(t); },
@@ -6415,6 +6506,7 @@ attach fn cs_ty(this: bind&, t: u32) -> std::string {
             match (this.shape_of(x) ?? shape::VOID) {
                 // a slice of slices: an array of arrays
                 .SLICE(y) => { return fmt("{}[][]", this.cs_raw(y)); },
+                .STRUCT(st) => { return fmt("Span<{}>", this.local(this.c.si(st).name)); },
                 default => {},
             }
             return fmt("Span<{}>", this.cs_raw(x));
@@ -6424,6 +6516,7 @@ attach fn cs_ty(this: bind&, t: u32) -> std::string {
         .RESULT(e, x) => { return this.cs_ty(x); },
         .TRAIT(i) => { return this.short(this.trait_of(t)); },
         .ARRAY(e, n) => { return fmt("{}[]", this.cs_ty(e)); },
+        .STRUCT(s) => { return this.local(this.c.si(s).name); },
         .CLOSURE(i) => {
             var ps: std::vec<u32> = {};
             val r = this.fn_parts(t, &ps);
@@ -6505,6 +6598,16 @@ attach fn cs_arg_of(this: bind&, t: u32, name0: str, a: cs_arg&) -> void {
             a.decl = fmt("bool {}", S(name));
             a.pass = fmt("(byte)({} ? 1 : 0)", S(name));
         },
+        .STRUCT(s) => {
+            a.decl = fmt2("{} {}", this.local(this.c.si(s).name), S(name));
+            a.pass = S(name);
+            if (this.holds_str(t)) {
+                // its text lent for the call
+                a.open = fmt2("var {}_k = new VoltKeep();\ntry {{\n{}", S(name0), S(""));
+                a.pass = fmt2("{}.ToC({}_k)", S(name), S(name0));
+                a.close = fmt("}}\nfinally {{\n    {}_k.Free();\n}}\n", S(name0));
+            }
+        },
         .CSTR => {
             a.decl = fmt("string? {}", S(name));
             a.open = fmt3("byte[]? {}_b = {} == null ? null : Encoding.UTF8.GetBytes({} + \"\\0\");\n", S(name0), S(name), S(name));
@@ -6517,6 +6620,13 @@ attach fn cs_arg_of(this: bind&, t: u32, name0: str, a: cs_arg&) -> void {
                 match (this.shape_of(x) ?? shape::VOID) {
                     .STRUCT(s) => {
                         a.decl = fmt2("ref {} {}", this.local(this.c.si(s).name), S(name));
+                        if (this.holds_str(x)) {
+                            // its C copy (the text lent for the call), and what Volt changed comes back
+                            a.open = fmt5("var {}_k = new VoltKeep();\ntry {{\nvar {}_c = {}.ToC({}_k);\n{}", S(name0), S(name0), S(name), S(name0), S(""));
+                            a.pass = fmt("&{}_c", S(name0));
+                            a.close = fmt4("{} = {}.FromC({}_c);\n}}\nfinally {{\n    {}_k.Free();\n}}\n", S(name), this.local(this.c.si(s).name), S(name0), S(name0));
+                            return;
+                        }
                         a.open = fmt3("fixed ({}* {}_p = &{}) {{\n", this.local(this.c.si(s).name), S(name0), S(name));
                         a.pass = fmt("{}_p", S(name0));
                         a.close = S("}\n");
@@ -6606,9 +6716,28 @@ attach fn cs_arg_of(this: bind&, t: u32, name0: str, a: cs_arg&) -> void {
             a.pass = fmt2("{}.From({})", this.cs_raw(t), S(name));
         },
         .RESULT(e, x) => {
-            // its struct: the error's code (0: none) and the value
-            a.decl = fmt2("{} {}", this.cs_raw(t), S(name));
-            a.pass = S(name);
+            // a VoltResult: its value, or its error (a value and a VoltException each convert to one);
+            // E!void's is the exception, or null
+            val rn = this.result_name(t);
+            if (x == VOID) {
+                a.decl = fmt("VoltException? {}", S(name));
+                a.pass = fmt2("new {} {{ error = {}?.Code ?? 0 }}", copy rn, S(name));
+                return;
+            }
+            a.decl = fmt2("VoltResult<{}> {}", this.cs_ty(x), S(name));
+            var v = this.cs_give(x, fmt("{}.Value", S(name)).as_str());
+            if (this.holds_str(x) || this.in_ty(x) == STR) {
+                // its text lent for the call
+                a.open = fmt2("var {}_k = new VoltKeep();\ntry {{\n{}", S(name0), S(""));
+                if (this.holds_str(x)) {
+                    v = fmt2("{}.Value.ToC({}_k)", S(name), S(name0));
+                } else {
+                    v = fmt2("{}_k.Str({}.Value)", S(name0), S(name));
+                }
+                a.close = fmt("}}\nfinally {{\n    {}_k.Free();\n}}\n", S(name0));
+            }
+            a.pass = fmt5("({}.Error != null ? new {} {{ error = {}.Error.Code }} : new {} {{ value = ", S(name), copy rn, S(name), copy rn, S(""));
+            a.pass.append(fmt("{} })", move v).as_str());
         },
         default => {
             a.decl = fmt2("{} {}", this.cs_ty(t), S(name));
@@ -6674,6 +6803,33 @@ attach fn cs_elems(this: bind&, t: u32, name0: str, name: str, a: cs_arg&) -> bo
     }
     val v = this.view_of(elem);
     val h = this.handle_of(elem);
+    match (this.shape_of(elem) ?? shape::VOID) {
+        .STRUCT(st) => {
+            if (this.holds_str(elem)) {
+                // C copies, their text lent for the call; what Volt wrote comes back (a slice's)
+                val own = this.local(this.c.si(st).name);
+                a.decl = fmt2("{} {}", this.cs_ty(t), S(name));
+                a.pass = fmt3("new {} {{ ptr = {}_p, len = (nuint){}_v.Length }}", this.made_name("slice", v, true), S(name0), S(name0));
+                // (a list's are any IEnumerable: an array of them first)
+                var src = S(name);
+                var arr: std::string = {};
+                if (given) {
+                    src = fmt("{}_a", S(name0));
+                    arr = fmt2("var {}_a = {}.ToArray();\n", S(name0), S(name));
+                }
+                a.open = fmt5("var {}_k = new VoltKeep();\ntry {{\n{}var {}_v = new {}_c[{}.Length];\n", S(name0), move arr, S(name0), copy own, copy src);
+                a.open.append(fmt4("for (var i = 0; i < {}.Length; i++)\n{{\n    {}_v[i] = {}[i].ToC({}_k);\n}}\n", copy src, S(name0), copy src, S(name0)).as_str());
+                a.open.append(fmt3("fixed ({}_c* {}_p = {}_v) {{\n", copy own, S(name0), S(name0)).as_str());
+                a.close = S("}\n");
+                if (!given) {
+                    a.close.append(fmt4("for (var i = 0; i < {}.Length; i++)\n{{\n    {}[i] = {}.FromC({}_v[i]);\n}}\n", S(name), S(name), copy own, S(name0)).as_str());
+                }
+                a.close.append(fmt("}}\nfinally {{\n    {}_k.Free();\n}}\n", S(name0)).as_str());
+                return true;
+            }
+        },
+        default => {},
+    }
     if (!given && v != STR && h == null) {
         // a slice of what C holds as it is: a Span
         return false;
@@ -6738,6 +6894,12 @@ attach fn cs_value(this: bind&, t: u32, r: str) -> std::string {
         .CLOSURE(i) => { return fmt2("new closure{}({})", unum(@cast<u64>(i)), S(r)); },
         .TRAIT(i) => { return fmt2("new volt_{}({})", this.short(this.trait_of(t)), S(r)); },
         .ARRAY(e, n) => { return fmt("{}.ToArray()", S(r)); },
+        .STRUCT(s) => {
+            if (this.holds_str(t)) {
+                return fmt2("{}.FromC({})", this.local(this.c.si(s).name), S(r));
+            }
+            return S(r);
+        },
         default => { return S(r); },
     }
 }
@@ -6753,6 +6915,12 @@ attach fn cs_give(this: bind&, t: u32, v: str) -> std::string {
         .STR => { return fmt("VoltStr.Keep({})", S(v)); },
         .TEXT(x) => { return fmt("VoltText.Give({})", S(v)); },
         .HANDLE(s) => { return fmt("{}.Release()", S(v)); },
+        .STRUCT(s) => {
+            if (this.holds_str(t)) {
+                return fmt("{}.ToC(VoltKeep.Kept)", S(v));
+            }
+            return S(v);
+        },
         default => { return S(v); },
     }
 }
@@ -7037,6 +7205,55 @@ attach fn cs_doc(this: bind&, f: u32, ind: usize) -> std::string {
     return indent_n(fmt("/// <summary>{}</summary>\n", move q).as_str(), ind);
 }
 
+// a struct holding text as the API has it: a struct of its own, its text a string, a fixed array an
+// array, made from C's (FromC, the text copied) and turned into C's (ToC, its text through k: lent for
+// a call, or kept for a callback's result)
+attach fn cs_text_struct(this: bind&, s: u32, fs: std::vec<std::string>&, out: std::string&) -> void {
+    val info = this.c.si(s);
+    val own = this.local(info.name);
+    var decls: std::string = {};
+    var from: std::string = {};
+    var to: std::string = {};
+    for (k) in 0..fs.len {
+        val f = info.fields.at(k);
+        val fname = cs_ident(fs.at(k).as_str());
+        match (*this.c.t.get(f.ty)) {
+            .ARRAY(elem, n) => {
+                decls.append(fmt2("    public {}[] {};\n", this.cs_raw(elem), copy fname).as_str());
+                var xs: std::string = {};
+                for (i) in 0..n {
+                    if (i > 0) {
+                        xs.append(", ");
+                    }
+                    xs.append(fmt2("volt_c.{}[{}]", copy fname, unum(i)).as_str());
+                }
+                from.append(fmt2("        {} = new[] {{ {} }},\n", copy fname, move xs).as_str());
+                to.append(fmt4("        if (this.{}.Length != {})\n        {{\n            throw new ArgumentException(\"{}: expected {} elements, not \" + ", copy fname, unum(n), copy fname, unum(n)).as_str());
+                to.append(fmt4("this.{}.Length);\n        }}\n        for (var i = 0; i < {}; i++)\n        {{\n            volt_c.{}[i] = this.{}[i];\n        }}\n", copy fname, unum(n), copy fname, copy fname).as_str());
+            },
+            default => {
+                decls.append(fmt2("    public {} {};\n", this.cs_ty(f.ty), copy fname).as_str());
+                from.append(fmt2("        {} = {},\n", copy fname, this.cs_value(f.ty, fmt("volt_c.{}", copy fname).as_str())).as_str());
+                var v = fmt("this.{}", copy fname);
+                match (this.shape_of(f.ty) ?? shape::VOID) {
+                    .STR => { v = fmt("volt_k.Str(this.{})", copy fname); },
+                    .STRUCT(x) => {
+                        if (this.holds_str(f.ty)) {
+                            v = fmt("this.{}.ToC(volt_k)", copy fname);
+                        }
+                    },
+                    default => {},
+                }
+                to.append(fmt2("        volt_c.{} = {};\n", copy fname, move v).as_str());
+            },
+        }
+    }
+    out.append(fmt2("\n/// <summary>Volt struct {}, its text a string</summary>\npublic struct {}\n{{\n", S(info.name), copy own).as_str());
+    out.append(decls.as_str());
+    out.append(fmt4("\n    internal static unsafe {} FromC({}_c volt_c) => new {}\n    {{\n{}    }};\n", copy own, copy own, copy own, move from).as_str());
+    out.append(fmt3("\n    internal unsafe {}_c ToC(VoltKeep volt_k)\n    {{\n        var volt_c = new {}_c();\n{}        return volt_c;\n    }}\n}}\n", copy own, copy own, move to).as_str());
+}
+
 attach fn cs_text(this: bind&) -> std::string {
     val ents = this.entries();
     // the body first (the helpers it needs are added around it)
@@ -7091,8 +7308,14 @@ attach fn cs_text(this: bind&) -> std::string {
     }
     for (s&) in this.structs.items() {
         val info = this.c.si(*s);
-        out.append(fmt("\n[StructLayout(LayoutKind.Sequential)]\npublic unsafe struct {}\n{{\n", this.local(info.name)).as_str());
         val own = this.local(info.name);
+        val texts = this.holds_str(this.c.t.intern(tyk::STRUCT(*s)));
+        if (texts) {
+            out.append(fmt("\n/// <summary>{} as C has it (see the struct of that name)</summary>", S(info.name)).as_str());
+            out.append(fmt("\n[StructLayout(LayoutKind.Sequential)]\npublic unsafe struct {}_c\n{{\n", copy own).as_str());
+        } else {
+            out.append(fmt("\n[StructLayout(LayoutKind.Sequential)]\npublic unsafe struct {}\n{{\n", copy own).as_str());
+        }
         val keep: str[] = { own.as_str() };
         val fs = this.field_names(*s, keep);
         for (k) in 0..fs.len {
@@ -7104,6 +7327,9 @@ attach fn cs_text(this: bind&) -> std::string {
             }
         }
         out.append("}\n");
+        if (texts) {
+            this.cs_text_struct(*s, &fs, &out);
+        }
     }
     var arrays_done: std::vec<u32> = {};
     for (x&) in this.arrays.items() {
@@ -7259,6 +7485,12 @@ attach fn cs_text(this: bind&) -> std::string {
     }
     if (contains(out.as_str(), "new VoltStrs(")) {
         out.append("\n// text lent to Volt for one call: each string's UTF-8 bytes, in one block Dispose frees\ninternal sealed unsafe class VoltStrs : IDisposable\n{\n    byte* p;\n    public readonly VoltStr[] Views;\n\n    public VoltStrs(IEnumerable<string> xs)\n    {\n        var bs = xs.Select(x => Encoding.UTF8.GetBytes(x)).ToArray();\n        var n = 0;\n        foreach (var b in bs)\n        {\n            n += b.Length;\n        }\n        p = (byte*)NativeMemory.Alloc((nuint)n + 1);\n        Views = new VoltStr[bs.Length];\n        var at = p;\n        for (var i = 0; i < bs.Length; i++)\n        {\n            bs[i].CopyTo(new Span<byte>(at, bs[i].Length));\n            Views[i] = new VoltStr { ptr = at, len = (nuint)bs[i].Length };\n            at += bs[i].Length;\n        }\n    }\n\n    public void Dispose()\n    {\n        NativeMemory.Free(p);\n        p = null;\n    }\n}\n");
+    }
+    if (contains(out.as_str(), "VoltResult<")) {
+        out.append("\n/// <summary>E!T as a parameter: a value, or an error (each converts to one)</summary>\npublic readonly struct VoltResult<T>\n{\n    public readonly T Value;\n    public readonly VoltException? Error;\n\n    VoltResult(T value, VoltException? error)\n    {\n        Value = value;\n        Error = error;\n    }\n\n    public static VoltResult<T> Ok(T value) => new(value, null);\n\n    public static VoltResult<T> Err(VoltException error) => new(default!, error);\n\n    public static implicit operator VoltResult<T>(T value) => Ok(value);\n\n    public static implicit operator VoltResult<T>(VoltException error) => Err(error);\n}\n");
+    }
+    if (this.structs_hold_str() || contains(out.as_str(), "new VoltKeep(")) {
+        out.append("\n// text a struct gives a Volt call: each string's UTF-8 bytes in memory of its own, freed by Free\n// once the call is back; Kept's, a callback's result's, kept for good (see VoltStr.Keep)\ninternal sealed unsafe class VoltKeep\n{\n    public static readonly VoltKeep Kept = new();\n    readonly List<IntPtr> ps = new();\n\n    public VoltStr Str(string s)\n    {\n        if (this == Kept)\n        {\n            return VoltStr.Keep(s);\n        }\n        var b = Encoding.UTF8.GetBytes(s);\n        var p = (byte*)NativeMemory.Alloc((nuint)b.Length + 1);\n        b.CopyTo(new Span<byte>(p, b.Length));\n        ps.Add((IntPtr)p);\n        return new VoltStr { ptr = p, len = (nuint)b.Length };\n    }\n\n    public void Free()\n    {\n        foreach (var p in ps)\n        {\n            NativeMemory.Free((void*)p);\n        }\n        ps.Clear();\n    }\n}\n");
     }
     if (contains(out.as_str(), "new VoltHandles(")) {
         out.append("\n// handles lent to Volt for one call: each kept alive (and unfreeable) until Dispose\ninternal sealed class VoltHandles : IDisposable\n{\n    readonly VoltHandle[] hs;\n    readonly bool[] refs;\n    public readonly IntPtr[] Ptrs;\n\n    public VoltHandles(IEnumerable<VoltHandle> xs)\n    {\n        hs = xs.ToArray();\n        refs = new bool[hs.Length];\n        Ptrs = new IntPtr[hs.Length];\n        try\n        {\n            for (var i = 0; i < hs.Length; i++)\n            {\n                hs[i].DangerousAddRef(ref refs[i]);\n                hs[i].busy++;\n                Ptrs[i] = hs[i].DangerousGetHandle();\n            }\n        }\n        catch\n        {\n            Dispose();\n            throw;\n        }\n    }\n\n    public void Dispose()\n    {\n        for (var i = 0; i < hs.Length; i++)\n        {\n            if (refs[i])\n            {\n                hs[i].busy--;\n                hs[i].DangerousRelease();\n                refs[i] = false;\n            }\n        }\n    }\n}\n");
@@ -7550,6 +7782,12 @@ attach fn java_val_layout(this: bind&, t: u32) -> std::string {
 // the Java expression for a value of type t read from segment seg at offset off
 attach fn java_read(this: bind&, t: u32, seg: str, off: u64) -> std::string {
     match (this.shape_of(t) ?? shape::VOID) {
+        .ARRAY(e, n) => {
+            if (this.java_num(e)) {
+                return fmt4("{}.asSlice({}, {}).toArray({})", S(seg), unum(off), unum(n * this.csize(e).size), this.java_vl(e));
+            }
+            return fmt3("{}.get({}, {})", S(seg), this.java_vl(t), unum(off));
+        },
         .STRUCT(s) => { return fmt3("{}.read({}.asSlice({}))", this.local(this.c.si(s).name), S(seg), unum(off)); },
         .STR => { return fmt2("text({}.asSlice({}, L_STR))", S(seg), unum(off)); },
         .TEXT(x) => { return fmt2("take({}.asSlice({}, L_TEXT))", S(seg), unum(off)); },
@@ -7563,7 +7801,22 @@ attach fn java_read(this: bind&, t: u32, seg: str, off: u64) -> std::string {
 // the Java statement writing value v (of type t) into segment seg at offset off
 attach fn java_write(this: bind&, t: u32, seg: str, off: u64, v: str) -> std::string {
     match (this.shape_of(t) ?? shape::VOID) {
-        .STRUCT(s) => { return fmt3("{}.write({}.asSlice({}));", S(v), S(seg), unum(off)); },
+        .STRUCT(s) => {
+            if (this.holds_str(t)) {
+                return fmt3("{}.write({}.asSlice({}), arena);", S(v), S(seg), unum(off));
+            }
+            return fmt3("{}.write({}.asSlice({}));", S(v), S(seg), unum(off));
+        },
+        .STR => { return fmt4("MemorySegment.copy(str(arena, {}), 0, {}, {}, 16);", S(v), S(seg), unum(off), S("")); },
+        .ARRAY(e, n) => {
+            if (this.java_num(e)) {
+                var w = fmt4("if ({}.length != {}) {{\n    throw new IllegalArgumentException(\"expected {} elements, not \" + {}.length);\n}}\n", S(v), unum(n), unum(n), S(v));
+                w.append(fmt5("MemorySegment.copy({}, 0, {}, {}, {}, {}", S(v), S(seg), this.java_vl(e), unum(off), unum(n)).as_str());
+                w.append(");");
+                return w;
+            }
+            return fmt4("{}.set({}, {}, {});", S(seg), this.java_vl(t), unum(off), S(v));
+        },
         .OPT(x) => {
             var w = fmt3("if ({} != null) {{\n    {}\n    {}", S(v), this.java_write(x, seg, off, v), S(seg));
             w.append(fmt(".set(JAVA_BOOLEAN, {}, true);\n}", unum(off + this.csize(x).size)).as_str());
@@ -7591,6 +7844,51 @@ attach fn java_simple(this: bind&, t: u32) -> bool {
             }
             return true;
         },
+        default => { return false; },
+    }
+}
+
+// can struct type t have a Java mirror class: fields Java reads and writes (see java_simple), text (a
+// String), arrays of numbers (Java arrays), pointers (MemorySegments) and such structs
+attach fn java_mirror(this: bind&, t: u32) -> bool {
+    match (this.shape_of(t) ?? shape::VOID) {
+        .STRUCT(s) => {
+            for (f&) in this.c.si(s).fields.items() {
+                if (!this.java_simple(f.ty) && !this.java_field(f.ty)) {
+                    return false;
+                }
+            }
+            return true;
+        },
+        default => { return this.java_simple(t); },
+    }
+}
+
+// a mirror class's field beyond what's simple (see java_mirror)
+attach fn java_field(this: bind&, t: u32) -> bool {
+    match (this.shape_of(t) ?? shape::VOID) {
+        .STR => { return true; },
+        .ARRAY(e, n) => { return this.java_num(e); },
+        .PTR(x) => {
+            if (x == VOID) {
+                return true;
+            }
+            match (this.shape_of(x) ?? shape::VOID) {
+                .STRUCT(st) => { return false; },
+                .HANDLE(h) => { return false; },
+                default => { return true; },
+            }
+        },
+        .STRUCT(st) => { return this.java_mirror(t); },
+        default => { return false; },
+    }
+}
+
+// is t a number (an array of them is a Java array of the same layout)
+attach fn java_num(this: bind&, t: u32) -> bool {
+    match (this.shape_of(t) ?? shape::VOID) {
+        .INT(k) => { return true; },
+        .FLOAT(b) => { return true; },
         default => { return false; },
     }
 }
@@ -7667,8 +7965,23 @@ attach fn java_arg_of(this: bind&, t: u32, name: str, a: java_arg&) -> void {
         },
         .STRUCT(s) => {
             a.decl = fmt2("{} {}", this.local(this.c.si(s).name), S(name));
-            a.before = fmt3("MemorySegment {}_s = arena.allocate(L_{});\n{}.write(", S(name), this.local(this.c.si(s).name), S(name));
-            a.before.append(fmt("{}_s);\n", S(name)).as_str());
+            a.before = fmt3("MemorySegment {}_s = arena.allocate(L_{});\n{}\n", S(name), this.local(this.c.si(s).name), this.java_write(t, fmt("{}_s", S(name)).as_str(), 0, name));
+            a.pass = fmt("{}_s", S(name));
+        },
+        .RESULT(e, x) => {
+            // a VoltResult: its value, or its error's code
+            var vt = S("Void");
+            if (x != VOID) {
+                vt = this.java_ty(x, true);
+            }
+            a.decl = fmt2("VoltResult<{}> {}", move vt, S(name));
+            a.before = fmt3("MemorySegment {}_s = arena.allocate({});\nif ({}.error != null) {{\n", S(name), this.java_layout(t), S(name));
+            a.before.append(fmt2("    {}_s.set(JAVA_INT, 0, {}.error.code);\n}}", S(name), S(name)).as_str());
+            if (x != VOID) {
+                val w = this.java_write(x, fmt("{}_s", S(name)).as_str(), align_to(4, this.csize(x).align), fmt("{}.value", S(name)).as_str());
+                a.before.append(fmt(" else {{\n{}}}", indent(fmt("{}\n", move w).as_str())).as_str());
+            }
+            a.before.append("\n");
             a.pass = fmt("{}_s", S(name));
         },
         .PTR(x) => {
@@ -7678,8 +7991,7 @@ attach fn java_arg_of(this: bind&, t: u32, name: str, a: java_arg&) -> void {
                         // a copy goes in, and what Volt changed comes back
                         a.decl = fmt2("{} {}", this.local(this.c.si(s).name), S(name));
                         a.before = fmt3("MemorySegment {}_s = {} == null ? MemorySegment.NULL : arena.allocate(L_{});\n", S(name), S(name), this.local(this.c.si(s).name));
-                        a.before.append(fmt2("if ({} != null) {{\n    {}.write(", S(name), S(name)).as_str());
-                        a.before.append(fmt("{}_s);\n}\n", S(name)).as_str());
+                        a.before.append(fmt2("if ({} != null) {{\n    {}\n}}\n", S(name), this.java_write(x, fmt("{}_s", S(name)).as_str(), 0, name)).as_str());
                         a.pass = fmt("{}_s", S(name));
                         a.after = fmt3("if ({} != null) {{\n    {}.load({}_s);\n}}\n", S(name), S(name), S(name));
                         return;
@@ -7867,8 +8179,13 @@ fn replace_off(s: str, size: str) -> std::string {
     var i: usize = 0;
     val pat = ", 0)";
     val pat2 = ", 0, ";
+    // (a struct element is its own slice: asSlice(0))
+    val pat3 = "asSlice(0)";
     while (i < s.len) {
-        if (i + pat.len <= s.len && s[i..i + pat.len] == pat) {
+        if (i + pat3.len <= s.len && s[i..i + pat3.len] == pat3) {
+            out.append(fmt("asSlice(i * {}L)", S(size)).as_str());
+            i += pat3.len;
+        } else if (i + pat.len <= s.len && s[i..i + pat.len] == pat) {
             out.append(fmt(", i * {}L)", S(size)).as_str());
             i += pat.len;
         } else if (i + pat2.len <= s.len && s[i..i + pat2.len] == pat2) {
@@ -8086,6 +8403,14 @@ attach fn java_put(this: bind&, t: u32, seg: str, off: u64, v: str) -> std::stri
     match (this.shape_of(t) ?? shape::VOID) {
         .TEXT(x) => { return fmt4("MemorySegment.copy(give({}), 0, {}, {}, 32);", S(v), S(seg), unum(off), S("")); },
         .HANDLE(h) => { return fmt3("{}.set(ADDRESS, {}, {}.release());", S(seg), unum(off), S(v)); },
+        .STRUCT(s) => {
+            if (this.holds_str(t)) {
+                // ponytail: its text kept for good (like a 'static str); free it after the call if
+                // callbacks give back many
+                return fmt3("{}.write({}.asSlice({}), Arena.global());", S(v), S(seg), unum(off));
+            }
+            return this.java_write(t, seg, off, v);
+        },
         default => { return this.java_write(t, seg, off, v); },
     }
 }
@@ -8101,7 +8426,13 @@ attach fn java_to_c(this: bind&, r: u32, call: str) -> std::string {
         .STR => { return fmt("return keep(str(Arena.ofAuto(), {}));\n", S(call)); },
         .TEXT(x) => { return fmt("return give({});\n", S(call)); },
         .HANDLE(s) => { return fmt("return {}.release();\n", S(call)); },
-        .STRUCT(s) => { return fmt2("MemorySegment s = Arena.ofAuto().allocate(L_{});\n{}.write(s);\nreturn s;\n", this.local(this.c.si(s).name), S(call)); },
+        .STRUCT(s) => {
+            if (this.holds_str(r)) {
+                // its text kept for good (see java_put)
+                return fmt2("MemorySegment s = Arena.ofAuto().allocate(L_{});\n{}.write(s, Arena.global());\nreturn s;\n", this.local(this.c.si(s).name), S(call));
+            }
+            return fmt2("MemorySegment s = Arena.ofAuto().allocate(L_{});\n{}.write(s);\nreturn s;\n", this.local(this.c.si(s).name), S(call));
+        },
         .RESULT(e, x) => {
             var out = fmt("MemorySegment s = Arena.ofAuto().allocate({});\ntry {\n", this.java_layout(r));
             if (x == VOID) {
@@ -8321,6 +8652,9 @@ attach fn java_text(this: bind&) -> std::string {
         out.append(fmt3("                case (int) {}L: return new {}(code, \"{}\");\n", num(c.code), copy c.set, S(c.name)).as_str());
     }
     out.append("                default: return new VoltException(code, \"error\");\n            }\n        }\n    }\n");
+    if (this.results.len > 0) {
+        out.append("\n    /** E!T as a parameter: a value (ok), or an error (err) */\n    public static final class VoltResult<T> {\n        final T value;\n        final VoltException error;\n\n        private VoltResult(T value, VoltException error) {\n            this.value = value;\n            this.error = error;\n        }\n\n        public static <T> VoltResult<T> ok(T value) {\n            return new VoltResult<>(value, null);\n        }\n\n        public static <T> VoltResult<T> err(VoltException error) {\n            return new VoltResult<>(null, error);\n        }\n    }\n");
+    }
     for (et&) in this.codes.items() {
         match (*this.c.t.get(*et)) {
             .ENUM(e) => {
@@ -8353,8 +8687,14 @@ attach fn java_text(this: bind&) -> std::string {
     for (s&) in this.structs.items() {
         val info = this.c.si(*s);
         val n = this.local(info.name);
-        if (!this.java_simple(this.c.t.intern(tyk::STRUCT(*s)))) {
+        val st = this.c.t.intern(tyk::STRUCT(*s));
+        if (!this.java_mirror(st)) {
             continue;
+        }
+        // (text is written in arena's memory)
+        var wparams = S("MemorySegment s");
+        if (this.holds_str(st)) {
+            wparams.append(", Arena arena");
         }
         out.append(fmt("\n    public static final class {} {{\n", copy n).as_str());
         var fields: std::string = {};
@@ -8401,7 +8741,7 @@ attach fn java_text(this: bind&) -> std::string {
         out.append(ctor_body.as_str());
         out.append("        }\n\n        void load(MemorySegment s) {\n");
         out.append(reads.as_str());
-        out.append(fmt3("        }}\n\n        static {} read(MemorySegment s) {{\n            var v = new {}();\n            v.load(s);\n            return v;\n        }}\n\n        void write(MemorySegment s) {{\n", copy n, copy n, S("")).as_str());
+        out.append(fmt3("        }}\n\n        static {} read(MemorySegment s) {{\n            var v = new {}();\n            v.load(s);\n            return v;\n        }}\n\n        void write({}) {{\n", copy n, copy n, move wparams).as_str());
         out.append(writes.as_str());
         out.append("        }\n    }\n");
         out.append(fmt2("\n    static final StructLayout L_{} = {};\n", copy n, move layout).as_str());
@@ -8741,6 +9081,40 @@ attach fn go_same_layout(this: bind&, t: u32) -> bool {
     }
 }
 
+// the Go expression converting a plain struct's field v (of type t) to C, inside its cWith (text
+// through str)
+attach fn go_field_to_c(this: bind&, t: u32, v: str) -> std::string {
+    match (this.shape_of(t) ?? shape::VOID) {
+        .STR => { return fmt("str({})", S(v)); },
+        .PTR(x) => { return fmt2("({})({})", this.go_cty(t), S(v)); },
+        .STRUCT(s) => {
+            if (this.holds_str(t)) {
+                return fmt("{}.cWith(str)", S(v));
+            }
+        },
+        .ARRAY(e, n) => {
+            if (!has_u32(&this.arrays, t)) {
+                return fmt2("*(*{})(unsafe.Pointer(&{}))", this.go_cty(t), S(v));
+            }
+        },
+        default => {},
+    }
+    return this.go_to_c(t, v);
+}
+
+// the Go expression converting a plain struct's C field v (of type t) to Go
+attach fn go_field_from_c(this: bind&, t: u32, v: str) -> std::string {
+    match (this.shape_of(t) ?? shape::VOID) {
+        .ARRAY(e, n) => {
+            if (!has_u32(&this.arrays, t)) {
+                return fmt2("*(*{})(unsafe.Pointer(&{}))", this.go_ty(t), S(v));
+            }
+        },
+        default => {},
+    }
+    return this.go_from_c(t, v);
+}
+
 // the Go expression converting Go value v (of plain type t, or a str lent for the call) to C
 attach fn go_to_c(this: bind&, t: u32, v: str) -> std::string {
     match (this.shape_of(t) ?? shape::VOID) {
@@ -8795,6 +9169,12 @@ attach fn go_give(this: bind&, t: u32, v: str) -> std::string {
         .CSTR => { return fmt("(*C.char)(unsafe.Pointer(s.str({} + \"\\x00\").ptr))", S(v)); },
         .HANDLE(h) => { return fmt("{}.give()", S(v)); },
         .PTR(x) => { return fmt2("({})({})", this.go_cty(t), S(v)); },
+        .STRUCT(st) => {
+            if (this.holds_str(t)) {
+                return fmt("{}.cWith(s.str)", S(v));
+            }
+            return this.go_to_c(t, v);
+        },
         default => { return this.go_to_c(t, v); },
     }
 }
@@ -8869,11 +9249,32 @@ attach fn go_plain(this: bind&, t: u32) -> bool {
         .CODE => { return true; },
         .STRUCT(s) => {
             for (f&) in this.c.si(s).fields.items() {
-                if (!this.go_plain(f.ty)) {
+                if (!this.go_plain(f.ty) && !this.go_plain_field(f.ty)) {
                     return false;
                 }
             }
             return true;
+        },
+        default => { return false; },
+    }
+}
+
+// what a plain struct's field may be besides what's plain: text (a Go string, lent to Volt for the
+// call), a pointer to anything but a struct or a handle (an unsafe.Pointer) and an array of
+// numbers (the C array's bytes)
+attach fn go_plain_field(this: bind&, t: u32) -> bool {
+    match (this.shape_of(t) ?? shape::VOID) {
+        .STR => { return true; },
+        .ARRAY(e, n) => { return this.go_same_layout(e); },
+        .PTR(x) => {
+            if (x == VOID) {
+                return true;
+            }
+            match (this.shape_of(x) ?? shape::VOID) {
+                .STRUCT(s) => { return false; },
+                .HANDLE(h) => { return false; },
+                default => { return true; },
+            }
         },
         default => { return false; },
     }
@@ -8900,9 +9301,28 @@ attach fn go_arg_of(this: bind&, t: u32, name: str, a: go_arg&) -> void {
     }
     if (this.go_plain(t)) {
         a.pass = this.go_to_c(t, name);
+        if (this.holds_str(t)) {
+            a.keep = fmt("defer runtime.KeepAlive({})\n", copy n);
+        }
         return;
     }
     match (this.shape_of(t) ?? shape::VOID) {
+        .RESULT(e, x) => {
+            // a value and an error, as a Go function gives them back: the error when it isn't nil
+            val rn = this.c_named(this.result_name(t).as_str(), false);
+            if (x == VOID) {
+                a.decl = fmt("{} error", copy n);
+                a.pass = fmt2("C.{}{{error: codeOf({})}}", copy rn, copy n);
+                return;
+            }
+            a.decl = fmt3("{} {}, {}Err error", copy n, this.go_ty(x), copy n);
+            a.before = fmt5("var {}_c C.{}\nif {}Err != nil {{\n    {}_c.error = codeOf({}Err)\n", copy n, copy rn, copy n, copy n, copy n);
+            a.before.append(fmt3("}} else {{\n    {}_c.value = {}\n}}\n", copy n, this.go_to_c(x, name), S("")).as_str());
+            a.pass = fmt("{}_c", copy n);
+            if (this.holds_str(x)) {
+                a.keep = fmt("defer runtime.KeepAlive({})\n", copy n);
+            }
+        },
         .STR => {
             a.pass = fmt("goStr({})", copy n);
             a.keep = fmt("defer runtime.KeepAlive({})\n", copy n);
@@ -8924,7 +9344,15 @@ attach fn go_arg_of(this: bind&, t: u32, name: str, a: go_arg&) -> void {
                         // a copy goes in, and what Volt changed comes back
                         val cn = this.c_named(this.c.si(s).name, false);
                         a.before = fmt3("var {}_c *C.{}\nif {} != nil {{\n", copy n, copy cn, copy n);
-                        a.before.append(fmt2("    v := {}.c()\n    {}_c = &v\n}}\n", copy n, copy n).as_str());
+                        if (this.holds_str(x)) {
+                            // its text pinned where it is: the copy C is given is Go memory
+                            var head = fmt2("var {}_pin runtime.Pinner\ndefer {}_pin.Unpin()\n", copy n, copy n);
+                            head.append(a.before.as_str());
+                            a.before = move head;
+                            a.before.append(fmt3("    v := {}.cWith(pinnedStr(&{}_pin))\n    {}_c = &v\n}}\n", copy n, copy n, copy n).as_str());
+                        } else {
+                            a.before.append(fmt2("    v := {}.c()\n    {}_c = &v\n}}\n", copy n, copy n).as_str());
+                        }
                         a.pass = fmt("{}_c", copy n);
                         a.after = fmt3("if {} != nil {{\n    *{} = {}FromC(*", copy n, copy n, this.go_tname(this.c.si(s).name));
                         a.after.append(fmt("{}_c)\n}\n", copy n).as_str());
@@ -9056,9 +9484,17 @@ attach fn go_slice_arg(this: bind&, x: u32, given: bool, name: str, a: go_arg&) 
         },
         default => {},
     }
-    // structs: a C copy, and what Volt wrote comes back
+    // structs: a C copy, and what Volt wrote comes back (their text pinned where it is for the call:
+    // Go memory C is given can't hold unpinned Go pointers)
     a.before = fmt4("{}_c := make([]{}, len({})+1)\nfor i, v := range {} {{\n", copy n, this.go_cty(x), copy n, copy n);
-    a.before.append(fmt2("    {}_c[i] = {}\n}}\n", copy n, this.go_to_c(x, "v")).as_str());
+    if (this.holds_str(x)) {
+        var head = fmt2("var {}_pin runtime.Pinner\ndefer {}_pin.Unpin()\n", copy n, copy n);
+        head.append(a.before.as_str());
+        a.before = move head;
+        a.before.append(fmt2("    {}_c[i] = v.cWith(pinnedStr(&{}_pin))\n}}\n", copy n, copy n).as_str());
+    } else {
+        a.before.append(fmt2("    {}_c[i] = {}\n}}\n", copy n, this.go_to_c(x, "v")).as_str());
+    }
     a.after = fmt2("for i := range {} {{\n    {}[i] = ", copy n, copy n);
     a.after.append(fmt("{}\n}\n", this.go_from_c(x, fmt("{}_c[i]", copy n).as_str())).as_str());
 }
@@ -9488,6 +9924,9 @@ attach fn go_text(this: bind&) -> std::string {
         g.append("\n// a string as a Volt str (the bytes stay Go's; C only reads them during the call)\nfunc goStr(s string) C.volt_str {\n    return C.volt_str{ptr: (*C.uint8_t)(unsafe.Pointer(unsafe.StringData(s))), len: C.size_t(len(s))}\n}\n");
         g.append("\n// a Volt str as a Go string (a copy)\nfunc goString(s C.volt_str) string {\n    return C.GoStringN((*C.char)(unsafe.Pointer(s.ptr)), C.int(s.len))\n}\n");
     }
+    if (this.structs_hold_str()) {
+        g.append("\n// pinnedStr lends strings as goStr does, each pinned where it is until pin is unpinned (for Go\n// memory C is given, which can't hold unpinned Go pointers)\nfunc pinnedStr(pin *runtime.Pinner) func(string) C.volt_str {\n    return func(s string) C.volt_str {\n        if len(s) > 0 {\n            pin.Pin(unsafe.StringData(s))\n        }\n        return goStr(s)\n    }\n}\n");
+    }
     if (has_u32(&this.slices, STR)) {
         g.append(fmt2("\n// strings as a Volt slice of strs for a call (pin keeps their bytes where they are until it's\n// unpinned)\nfunc goStrs(xs []string, pin *runtime.Pinner) C.{} {{\n    vs := make([]C.volt_str, len(xs)+1)\n    for i, x := range xs {{\n        if len(x) > 0 {{\n            pin.Pin(unsafe.StringData(x))\n            vs[i] = goStr(x)\n        }}\n    }}\n    return C.{}{{ptr: &vs[0], len: C.size_t(len(xs))}}\n}}\n", this.made_name("slice", STR, false), this.made_name("slice", STR, false)).as_str());
     }
@@ -9551,6 +9990,7 @@ attach fn go_text(this: bind&) -> std::string {
                 cw = cs.at(k).len();
             }
         }
+        val texts = this.holds_str(this.c.t.intern(tyk::STRUCT(*s)));
         g.append(fmt2("\n// {} is Volt struct {}.\ntype ", copy n, S(info.name)).as_str());
         g.append(fmt("{} struct {{\n", copy n).as_str());
         var toc: std::string = {};
@@ -9559,10 +9999,16 @@ attach fn go_text(this: bind&) -> std::string {
             val f = info.fields.at(k);
             val gn = copy *gs.at(k);
             g.append(fmt2("    {} {}\n", pad_to(gn.as_str(), w), this.go_ty(f.ty)).as_str());
-            toc.append(fmt2("        {} {},\n", pad_to(fmt("{}:", copy *cs.at(k)).as_str(), cw + 1), this.go_to_c(f.ty, fmt("v.{}", copy gn).as_str())).as_str());
-            fromc.append(fmt2("        {} {},\n", pad_to(fmt("{}:", copy gn).as_str(), w + 1), this.go_from_c(f.ty, fmt("c.{}", copy *cs.at(k)).as_str())).as_str());
+            toc.append(fmt2("        {} {},\n", pad_to(fmt("{}:", copy *cs.at(k)).as_str(), cw + 1), this.go_field_to_c(f.ty, fmt("v.{}", copy gn).as_str())).as_str());
+            fromc.append(fmt2("        {} {},\n", pad_to(fmt("{}:", copy gn).as_str(), w + 1), this.go_field_from_c(f.ty, fmt("c.{}", copy *cs.at(k)).as_str())).as_str());
         }
-        g.append(fmt3("}}\n\nfunc (v {}) c() C.{} {{\n    return C.{}{{\n", copy n, copy cn, copy cn).as_str());
+        if (texts) {
+            // its text through str: goStr lends it for a call, a callback's copies, a slice's pins
+            g.append(fmt3("}}\n\nfunc (v {}) c() C.{} {{\n    return v.cWith(goStr)\n}}\n\nfunc (v {}) cWith(str func(string) C.volt_str) C.", copy n, copy cn, copy n).as_str());
+            g.append(fmt2("{} {{\n    return C.{}{{\n", copy cn, copy cn).as_str());
+        } else {
+            g.append(fmt3("}}\n\nfunc (v {}) c() C.{} {{\n    return C.{}{{\n", copy n, copy cn, copy cn).as_str());
+        }
         g.append(toc.as_str());
         g.append(fmt3("    }}\n}}\n\nfunc {}FromC(c C.{}) {} {{\n", copy n, copy cn, copy n).as_str());
         g.append(fmt("    return {}{{\n", copy n).as_str());
@@ -11428,9 +11874,10 @@ attach fn lua_in(this: bind&, t: u32, idx: str, c: str, what: str, kp: str, a: l
             }
         },
         .PTR(x) => {
-            if (x != VOID && this.node_simple(x)) {
-                // a struct by reference: a copy goes in, and what Volt changed comes back into the
-                // table; a number by reference is a table of one, { n }, whose n Volt can change
+            if (x != VOID && (this.node_simple(x) || this.node_plain_struct(x))) {
+                // a struct by reference (text in it too): a copy goes in, and what Volt changed comes
+                // back into the table; a number by reference is a table of one, { n }, whose n Volt
+                // can change
                 val v = fmt("{}_val", S(c));
                 a.decl = fmt2("{} {};", this.c_prim(x, false), copy v);
                 var back: std::string = {};
@@ -12491,7 +12938,12 @@ attach fn dart_native(this: bind&, t: u32) -> std::string {
             return fmt("Pointer<{}>", this.dart_native(x));
         },
         .HANDLE(s) => { return S("Pointer<Void>"); },
-        .STRUCT(s) => { return this.local(this.c.si(s).name); },
+        .STRUCT(s) => {
+            if (this.holds_str(t)) {
+                return fmt("{}_c", this.local(this.c.si(s).name));
+            }
+            return this.local(this.c.si(s).name);
+        },
         .ENUM(e) => { return S(dart_int(this.c.ei(e).tag)); },
         .CODE => { return S("Uint32"); },
         .RESULT(e, x) => { return this.result_name(t); },
@@ -12579,6 +13031,7 @@ attach fn dart_ty(this: bind&, t: u32) -> std::string {
         .TEXT(x) => { return S("String"); },
         .ENUM(e) => { return this.local(this.c.ei(e).name); },
         .HANDLE(s) => { return this.local(this.c.si(s).name); },
+        .STRUCT(s) => { return this.local(this.c.si(s).name); },
         .SLICE(x) => { return fmt("List<{}>", this.dart_ty(this.slice_elem(t))); },
         .LIST(x) => { return fmt("List<{}>", this.dart_ty(this.list_elem(t))); },
         .ARRAY(e, n) => { return fmt("List<{}>", this.dart_ty(e)); },
@@ -12646,7 +13099,12 @@ attach fn dart_read(this: bind&, t: u32, a: str) -> std::string {
         .CSTR => { return fmt("_fromCstr({})", S(a)); },
         .ENUM(e) => { return fmt2("{}.of({})", this.local(this.c.ei(e).name), S(a)); },
         .HANDLE(s) => { return fmt2("{}._({})", this.local(this.c.si(s).name), S(a)); },
-        .STRUCT(s) => { return fmt2("(Struct.create<{}>()..copyFrom({}))", this.local(this.c.si(s).name), S(a)); },
+        .STRUCT(s) => {
+            if (this.holds_str(t)) {
+                return fmt2("{}._from({})", this.local(this.c.si(s).name), S(a));
+            }
+            return fmt2("(Struct.create<{}>()..copyFrom({}))", this.local(this.c.si(s).name), S(a));
+        },
         .OPT(x) => { return fmt2("({}.has ? {} : null)", S(a), this.dart_read(x, fmt("{}.value", S(a)).as_str())); },
         .SLICE(x) => {
             // copied: the elements are Volt's
@@ -12673,6 +13131,13 @@ attach fn dart_give(this: bind&, t: u32, v: str) -> std::string {
         .CSTR => { return fmt("_keepC({})", S(v)); },
         .HANDLE(s) => { return fmt("_giveUp({})", S(v)); },
         .ENUM(e) => { return fmt("{}.value", S(v)); },
+        .STRUCT(st) => {
+            if (this.holds_str(t)) {
+                // its text kept, as a str's is
+                return fmt("{}._c((s) => _keep(s))", S(v));
+            }
+            return S(v);
+        },
         default => { return S(v); },
     }
 }
@@ -12901,6 +13366,21 @@ attach fn dart_arg_of(this: bind&, t: u32, name0: str, a: dart_arg&) -> compile_
     if (rs) {
         // a copy goes in, and what Volt changed comes back
         val sn = this.local(this.c.si(rs).name);
+        if (this.holds_str(this.c.t.intern(tyk::STRUCT(rs)))) {
+            // (its C copy, the text in the call's memory)
+            if (this.nullable_ptr(t)) {
+                a.decl = fmt2("{}? {}", copy sn, S(n));
+                a.pre = fmt4("final ${} = {} == null ? nullptr : call$.alloc<{}_c>(sizeOf<{}_c>());\n", S(n), S(n), copy sn, copy sn);
+                a.pre.append(fmt3("if ({} != null) {{\n  ${}.ref = {}._c(call$.str);\n}}\n", S(n), S(n), S(n)).as_str());
+                a.after = fmt3("if ({} != null) {{\n  {}._load(${}.ref);\n}}\n", S(n), S(n), S(n));
+            } else {
+                a.decl = fmt2("{} {}", copy sn, S(n));
+                a.pre = fmt3("final ${} = call$.alloc<{}_c>(sizeOf<{}_c>());\n", S(n), copy sn, copy sn);
+                a.pre.append(fmt2("${}.ref = {}._c(call$.str);\n", S(n), S(n)).as_str());
+                a.after = fmt2("{}._load(${}.ref);\n", S(n), S(n));
+            }
+            return;
+        }
         if (this.nullable_ptr(t)) {
             a.decl = fmt2("{}? {}", copy sn, S(n));
             a.pre = fmt4("final ${} = {} == null ? nullptr : call$.alloc<{}>(sizeOf<{}>());\n", S(n), S(n), copy sn, copy sn);
@@ -12915,6 +13395,39 @@ attach fn dart_arg_of(this: bind&, t: u32, name0: str, a: dart_arg&) -> compile_
         return;
     }
     match (this.shape_of(t) ?? shape::VOID) {
+        .STRUCT(st) => {
+            if (this.holds_str(t)) {
+                a.pre = fmt2("final ${} = {}._c(call$.str);\n", S(n), S(n));
+            } else {
+                a.pass = S(n);
+            }
+        },
+        .RESULT(e, x) => {
+            // a VoltResult: its value (ok), or its error (err); E!void's is the error, or null
+            val rn = this.result_name(t);
+            if (x == VOID) {
+                a.decl = fmt("VoltError? {}", S(n));
+                a.pre = fmt3("final ${} = Struct.create<{}>()..error = {}?.code ?? 0;\n", S(n), copy rn, S(n));
+                return;
+            }
+            val xt = this.dart_ty(x);
+            a.decl = fmt2("VoltResult<{}> {}", copy xt, S(n));
+            a.pre = fmt3("final ${} = Struct.create<{}>()..error = {}.error?.code ?? 0;\n", S(n), copy rn, S(n));
+            val v = fmt2("({}.value as {})", S(n), copy xt);
+            var set = fmt2("${}.value = {};", S(n), this.dart_give(x, v.as_str()));
+            match (this.shape_of(x) ?? shape::VOID) {
+                .STR => { set = fmt2("${}.value = call$.str({});", S(n), copy v); },
+                .STRUCT(xs) => {
+                    if (this.holds_str(x)) {
+                        set = fmt2("${}.value.copyFrom({}._c(call$.str));", S(n), copy v);
+                    } else {
+                        set = fmt2("${}.value.copyFrom({});", S(n), copy v);
+                    }
+                },
+                default => {},
+            }
+            a.pre.append(fmt2("if ({}.error == null) {{\n  {}\n}}\n", S(n), move set).as_str());
+        },
         .STR => { a.pre = fmt2("final ${} = call$.str({});\n", S(n), S(n)); },
         // owned text: Volt copies it
         .TEXT(x) => { a.pre = fmt2("final ${} = call$.str({});\n", S(n), S(n)); },
@@ -13054,7 +13567,13 @@ attach fn dart_elems(this: bind&, e: u32, given: bool, n: str, a: dart_arg&) -> 
             },
             .STRUCT(s) => {
                 fill = fmt2("(${}$p + i$).ref = {}[i$];\n", S(n), S(n));
-                if (!given) {
+                if (this.holds_str(e)) {
+                    // their text in the call's memory; what Volt wrote comes back (a slice's)
+                    fill = fmt2("(${}$p + i$).ref = {}[i$]._c(call$.str);\n", S(n), S(n));
+                    if (!given) {
+                        a.after = fmt4("for (var i$ = 0; i$ < {}.length; i$++) {{\n  {}[i$] = {}._from((${}$p + i$).ref);\n}}\n", S(n), S(n), this.local(this.c.si(s).name), S(n));
+                    }
+                } else if (!given) {
                     // what Volt wrote into them
                     a.after = fmt3("for (var i$ = 0; i$ < {}.length; i$++) {{\n  {}[i$].copyFrom((${}$p + i$).ref);\n}}\n", S(n), S(n), S(n));
                 }
@@ -13091,7 +13610,12 @@ attach fn dart_result(this: bind&, t: u32, r: str) -> compile_error!std::string 
     match (this.shape_of(t) ?? shape::VOID) {
         .VOID => { return {}; },
         .TEXT(x) => { return fmt("final v$ = _take({});\n", S(r)); },
-        .STRUCT(s) => { return fmt("final v$ = {};\n", S(r)); },
+        .STRUCT(s) => {
+            if (this.holds_str(t)) {
+                return fmt("final v$ = {};\n", this.dart_read(t, r));
+            }
+            return fmt("final v$ = {};\n", S(r));
+        },
         .OPT(x) => {
             val h = this.handle_of(x);
             if (h) {
@@ -13416,6 +13940,60 @@ attach fn dart_trait(this: bind&, k: u32, out: std::string&) -> compile_error!vo
     return;
 }
 
+// a struct holding text as the API has it: a class of its own, its text a String, an array a List,
+// made from C's (_from, the text copied) and turned into C's (_c, its text through str: in a call's
+// memory, or kept for a callback's result)
+attach fn dart_text_struct(this: bind&, s: u32, fs: std::vec<std::string>&, out: std::string&) -> void {
+    val info = this.c.si(s);
+    val n = this.local(info.name);
+    var decls: std::string = {};
+    var params: std::string = {};
+    var from: std::string = {};
+    var load: std::string = {};
+    var to: std::string = {};
+    for (k) in 0..fs.len {
+        val f = info.fields.at(k);
+        val fname = copy *fs.at(k);
+        val ty = this.dart_ty(f.ty);
+        decls.append(fmt2("  {} {};\n", copy ty, copy fname).as_str());
+        if (k > 0) {
+            params.append(", ");
+        }
+        params.append(fmt("required this.{}", copy fname).as_str());
+        match (*this.c.t.get(f.ty)) {
+            .ARRAY(e, m) => {
+                val r = fmt2("List.generate({}, (i) => {})", unum(m), this.dart_read(e, fmt("c$.{}[i]", copy fname).as_str()));
+                from.append(fmt2("      {}: {},\n", copy fname, copy r).as_str());
+                load.append(fmt2("    this.{} = {};\n", copy fname, copy r).as_str());
+                to.append(fmt4("    if (this.{}.length != {}) {{\n      throw ArgumentError.value(this.{}, '{}', ", copy fname, unum(m), copy fname, copy fname).as_str());
+                to.append(fmt4("'expected {} elements');\n    }}\n    for (var i = 0; i < {}; i++) {{\n      c$.{}[i] = {};\n    }}\n", unum(m), unum(m), copy fname, this.dart_in(e, fmt("this.{}[i]", copy fname).as_str())).as_str());
+            },
+            default => {
+                val r = this.dart_read(f.ty, fmt("c$.{}", copy fname).as_str());
+                from.append(fmt2("      {}: {},\n", copy fname, copy r).as_str());
+                load.append(fmt2("    this.{} = {};\n", copy fname, copy r).as_str());
+                match (this.shape_of(f.ty) ?? shape::VOID) {
+                    .STR => { to.append(fmt2("    c$.{} = str$(this.{});\n", copy fname, copy fname).as_str()); },
+                    .STRUCT(x) => {
+                        if (this.holds_str(f.ty)) {
+                            to.append(fmt2("    c$.{}.copyFrom(this.{}._c(str$));\n", copy fname, copy fname).as_str());
+                        } else {
+                            to.append(fmt2("    c$.{}.copyFrom(this.{});\n", copy fname, copy fname).as_str());
+                        }
+                    },
+                    default => { to.append(fmt2("    c$.{} = {};\n", copy fname, this.dart_in(f.ty, fmt("this.{}", copy fname).as_str())).as_str()); },
+                }
+            },
+        }
+    }
+    out.append(fmt2("\n/// Volt struct {}, its text a String\nclass {} {{\n", S(info.name), copy n).as_str());
+    out.append(decls.as_str());
+    out.append(fmt2("\n  {}({{{}}});\n", copy n, move params).as_str());
+    out.append(fmt4("\n  static {} _from({}_c c$) => {}(\n{}      );\n", copy n, copy n, copy n, move from).as_str());
+    out.append(fmt2("\n  // what Volt wrote into its C copy\n  void _load({}_c c$) {{\n{}  }}\n", copy n, move load).as_str());
+    out.append(fmt3("\n  {}_c _c(VoltStr Function(String) str$) {{\n    final c$ = Struct.create<{}_c>();\n{}    return c$;\n  }}\n}}\n", copy n, copy n, move to).as_str());
+}
+
 attach fn dart_text(this: bind&) -> compile_error!std::string {
     val ents = this.entries();
     val p = this.pkg;
@@ -13469,7 +14047,12 @@ attach fn dart_text(this: bind&) -> compile_error!std::string {
     }
     for (s&) in this.structs.items() {
         val info = this.c.si(*s);
-        val n = this.local(info.name);
+        val texts = this.holds_str(this.c.t.intern(tyk::STRUCT(*s)));
+        var n = this.local(info.name);
+        if (texts) {
+            n.append("_c");
+            out.append(fmt("\n/// {} as C has it (see the class of that name)", S(info.name)).as_str());
+        }
         out.append(fmt("\nfinal class {} extends Struct {{\n", copy n).as_str());
         var named: std::string = {};
         var sets: std::string = {};
@@ -13511,6 +14094,9 @@ attach fn dart_text(this: bind&) -> compile_error!std::string {
         out.append(fmt("{};\n", move sets).as_str());
         // (from$: no field can have the name)
         out.append(fmt2("\n  void copyFrom({} from$) {{\n{}  }}\n}}\n", copy n, move copies).as_str());
+        if (texts) {
+            this.dart_text_struct(*s, &fs, &out);
+        }
     }
     for (x&) in this.arrays.items() {
         out.append(fmt3("\n/// {} by value, as C passes it: a struct wrapping it\nfinal class {} extends Struct {{\n{}}}\n", this.c.ty_name(*x), this.made_name("array", *x, true), this.dart_field(*x, "v")).as_str());
@@ -13657,6 +14243,9 @@ attach fn dart_text(this: bind&) -> compile_error!std::string {
     }
     if (contains(out.as_str(), " _give(")) {
         out.append("\nfinal _freeFn = _libc.lookup<NativeFunction<Void Function(Pointer<Void>)>>('free');\n\n// text Dart gives Volt (a callback's result): Volt frees it (with C's free) once it's done\nVoltText _give(String s) {\n  final b = utf8.encode(s);\n  final p = _mem(b.length).cast<Uint8>();\n  p.asTypedList(b.length).setAll(0, b);\n  return Struct.create<VoltText>()\n    ..ptr = p\n    ..len = b.length\n    ..owner = p.cast()\n    ..drop = _freeFn;\n}\n");
+    }
+    if (contains(out.as_str(), "VoltResult<")) {
+        out.append("\n/// E!T as a parameter: a value (ok), or an error (err)\nclass VoltResult<T> {\n  final T? value;\n  final VoltError? error;\n\n  VoltResult.ok(T v)\n      : value = v,\n        error = null;\n\n  VoltResult.err(VoltError e)\n      : value = null,\n        error = e;\n}\n");
     }
     if (contains(out.as_str(), " _keep(") || contains(out.as_str(), " _keepC(")) {
         out.append("\n// a str Dart gives Volt (a callback's result): its bytes are kept for good, once per text\n// ponytail: kept for the program's life; free them after the call if callbacks give back many different strs\nfinal _kept = <String, Pointer<Uint8>>{};\n\nVoltStr _keep(String s) {\n  final b = utf8.encode(s);\n  final p = _kept.putIfAbsent(s, () {\n    final q = _mem(b.length + 1).cast<Uint8>();\n    q.asTypedList(b.length + 1)\n      ..setAll(0, b)\n      ..[b.length] = 0;\n    return q;\n  });\n  return Struct.create<VoltStr>()\n    ..ptr = p\n    ..len = b.length;\n}\n\nPointer<Char> _keepC(String? s) => s == null ? nullptr : _keep(s).ptr.cast();\n");
@@ -13915,6 +14504,7 @@ attach fn swift_item(this: bind&, e: u32, list: bool) -> std::string {
 // the Swift value of a container's element v, as C has it (see swift_item)
 attach fn swift_item_out(this: bind&, e: u32, list: bool, v: str) -> std::string {
     match (this.shape_of(e) ?? shape::VOID) {
+        .STRUCT(s) => { return this.swift_out(e, v); },
         .STR => { return fmt("voltString({})", S(v)); },
         .TEXT(x) => { return fmt("voltString({})", S(v)); },
         .HANDLE(s) => {
@@ -13961,6 +14551,12 @@ attach fn swift_out(this: bind&, t: u32, r: str) -> std::string {
     match (this.shape_of(t) ?? shape::VOID) {
         .ENUM(e) => { return fmt2("{}(rawValue: {})!", this.local(this.c.ei(e).name), S(r)); },
         .STR => { return fmt("voltString({})", S(r)); },
+        .STRUCT(s) => {
+            if (this.holds_str(t)) {
+                return fmt2("{}(volt: {})", this.local(this.c.si(s).name), S(r));
+            }
+            return S(r);
+        },
         default => { return S(r); },
     }
 }
@@ -14022,10 +14618,52 @@ attach fn swift_arg_of(this: bind&, t: u32, name0: str, a: swift_arg&, cb: bool)
             this.swift_scope(a, fmt2("voltWithCString({}) {{ {}_p in", S(n), S(name0)), {});
             a.pass = fmt("{}_p", S(name0));
         },
+        .STRUCT(s) => {
+            if (this.holds_str(t)) {
+                // its text lent for the call
+                this.swift_scope(a, fmt2("voltWithStrs({}.voltStrs) {{ {}_t, _ in", S(n), S(name0)), fmt("var {}_i = 0\n", S(name0)));
+                a.pass = fmt4("{}.voltC {{ _ in {}_i += 1; return {}_t[{}_i - 1] }}", S(n), S(name0), S(name0), S(name0));
+            } else {
+                a.pass = S(n);
+            }
+        },
+        .RESULT(e, x) => {
+            // a Result: its value, or its error's code (an error set's, a VoltError's, else E's first)
+            val cr = this.c_prim(t, false);
+            a.decl = fmt2("_ {}: Result<{}, Error>", S(n), this.swift_ty(x, cb));
+            var ok = S("case .success:");
+            var value = S("");
+            if (x != VOID) {
+                value = S(", value: .init()");
+                if (this.swift_is_str(x) || this.in_ty(x) == STR) {
+                    this.swift_scope(a, fmt2("voltWithStrs([try? {}.get()]) {{ {}_t, _ in", S(n), S(name0)), {});
+                    ok = fmt2("case .success: return {}(error: 0, value: {}_t[0])", copy cr, S(name0));
+                } else if (this.holds_str(x)) {
+                    // (its text lent for the call)
+                    this.swift_scope(a, fmt2("voltWithStrs((try? {}.get())?.voltStrs ?? []) {{ {}_t, _ in", S(n), S(name0)), fmt("var {}_i = 0\n", S(name0)));
+                    ok = fmt4("case .success(let v): return {}(error: 0, value: v.voltC {{ _ in {}_i += 1; return {}_t[{}_i - 1] }})", copy cr, S(name0), S(name0), S(name0));
+                } else {
+                    ok = fmt2("case .success(let v): return {}(error: 0, value: {})", copy cr, this.swift_in(x, "v"));
+                }
+            } else {
+                ok = fmt("case .success: return {}(error: 0)", copy cr);
+            }
+            a.pass = fmt4("{{ () -> {} in\n    switch {} {{\n    {}\n    case .failure(let e): return ", copy cr, S(n), move ok, S(""));
+            a.pass.append(fmt3("{}(error: voltCode(e, {}){})\n    }}\n}}()", copy cr, this.swift_first_code(e), move value).as_str());
+        },
         .PTR(x) => {
             if (!cb && x != VOID && !this.nullable_ptr(t)) {
                 match (this.shape_of(x) ?? shape::VOID) {
                     .STRUCT(s) => {
+                        if (this.holds_str(x)) {
+                            // its C copy (the text lent for the call), and what Volt changed comes back
+                            var inside = fmt4("var {}_i = 0\nvar {}_c = {}.voltC {{ _ in {}_i += 1; ", S(name0), S(name0), S(n), S(name0));
+                            inside.append(fmt4("return {}_t[{}_i - 1] }}\ndefer {{\n    {} = {}", S(name0), S(name0), S(n), this.local(this.c.si(s).name)).as_str());
+                            inside.append(fmt("(volt: {}_c)\n}\n", S(name0)).as_str());
+                            this.swift_scope(a, fmt2("voltWithStrs({}.voltStrs) {{ {}_t, _ in", S(n), S(name0)), move inside);
+                            a.pass = fmt("&{}_c", S(name0));
+                            return;
+                        }
                         a.pass = fmt("&{}", S(n));
                         return;
                     },
@@ -14209,6 +14847,21 @@ attach fn swift_elems(this: bind&, e: u32, list: bool, n: str, name0: str, ct: s
         return;
     }
     match (this.shape_of(e) ?? shape::VOID) {
+        .STRUCT(st) => {
+            if (this.holds_str(e)) {
+                // the elements' text lent for the call, in one buffer; what Volt wrote comes back (a
+                // slice's, as its text copied)
+                var inside = fmt4("var {}_i = 0\nvar {}_v = {}.map {{ $0.voltC {{ _ in ", S(name0), S(name0), S(n), S(""));
+                inside.append(fmt3("{}_i += 1; return {}_t[{}_i - 1] }} }}\n", S(name0), S(name0), S(name0)).as_str());
+                if (!list) {
+                    inside.append(fmt3("defer {{\n    {} = {}_v.map {{ {}(volt: $0) }}\n}}\n", S(n), S(name0), this.local(this.c.si(st).name)).as_str());
+                }
+                this.swift_scope(a, fmt2("voltWithStrs({}.flatMap {{ $0.voltStrs }}) {{ {}_t, _ in", S(n), S(name0)), move inside);
+                this.swift_scope(a, move buf, {});
+                a.pass = copy sl;
+                return;
+            }
+        },
         .OPT(x) => {
             if (this.swift_is_str(x)) {
                 this.swift_scope(a, fmt3("voltWithStrs({}) {{ {}_s, {}_h in", S(n), S(name0), S(name0)), fmt4("var {}_v = zip({}_s, {}_h).map {{ {}(value: $0, has: $1) }}\n", S(name0), S(name0), S(name0), this.c_prim(e, false)));
@@ -14344,6 +14997,11 @@ attach fn swift_to_c(this: bind&, t: u32, v: str) -> std::string {
     match (this.shape_of(t) ?? shape::VOID) {
         .STR => { return fmt2("volt_str(ptr: voltBox.keep({}), len: {}.utf8.count)", S(v), S(v)); },
         .CSTR => { return fmt("{}.map {{ UnsafeRawPointer(voltBox.keep($0)).assumingMemoryBound(to: CChar.self) }}", S(v)); },
+        .STRUCT(s) => {
+            if (this.holds_str(t)) {
+                return fmt("{}.voltC(voltBox.keeper())", S(v));
+            }
+        },
         .SLICE(x) => { return fmt3("{}(ptr: {}.baseAddress, len: {}.count)", this.c_prim(t, false), S(v), S(v)); },
         default => {},
     }
@@ -14703,6 +15361,91 @@ attach fn swift_closure(this: bind&, k: u32, out: std::string&) -> void {
     out.append(s.as_str());
 }
 
+// a struct holding text: a Swift struct of its own, its text a String, made from C's (init(volt:), the
+// text copied) and turned into C's (voltC: its text through str, called once for each of voltStrs in
+// that order: lent for a call, or kept by a callback's box)
+attach fn swift_text_struct(this: bind&, s: u32, out: std::string&) -> void {
+    val info = this.c.si(s);
+    val n = this.local(info.name);
+    val cn = this.c_named(info.name, false);
+    val cs = this.c_fields(s, false);
+    var props: std::string = {};
+    var params: std::string = {};
+    var sets: std::string = {};
+    var froms: std::string = {};
+    var strs: std::string = {};
+    var lets: std::string = {};
+    var args: std::string = {};
+    for (k) in 0..info.fields.len {
+        val f = info.fields.at(k);
+        val fname = swift_ident(f.name);
+        val c = copy *cs.at(k);
+        val ty = this.swift_field_ty(f.ty);
+        props.append(fmt2("    public var {}: {}\n", copy fname, copy ty).as_str());
+        if (k > 0) {
+            params.append(", ");
+            args.append(", ");
+        }
+        params.append(fmt2("{}: {}", copy fname, copy ty).as_str());
+        sets.append(fmt2("        self.{} = {}\n", copy fname, copy fname).as_str());
+        var value = fmt("volt_c.{}", copy c);
+        var arg = fmt("self.{}", copy fname);
+        match (this.shape_of(f.ty) ?? shape::VOID) {
+            .STR => {
+                value = fmt("voltString(volt_c.{})", copy c);
+                if (strs.len() > 0) {
+                    strs.append(" + ");
+                }
+                strs.append(fmt("[self.{}]", copy fname).as_str());
+                lets.append(fmt2("        let volt_{}_c = voltStrOf(self.{})\n", copy c, copy fname).as_str());
+                arg = fmt("volt_{}_c", copy c);
+            },
+            .STRUCT(x) => {
+                if (this.holds_str(f.ty)) {
+                    value = fmt2("{}(volt: volt_c.{})", this.local(this.c.si(x).name), copy c);
+                    if (strs.len() > 0) {
+                        strs.append(" + ");
+                    }
+                    strs.append(fmt("self.{}.voltStrs", copy fname).as_str());
+                    lets.append(fmt2("        let volt_{}_c = self.{}.voltC(voltStrOf)\n", copy c, copy fname).as_str());
+                    arg = fmt("volt_{}_c", copy c);
+                }
+            },
+            default => {},
+        }
+        froms.append(fmt2("        self.{} = {}\n", copy fname, move value).as_str());
+        args.append(fmt2("{}: {}", swift_label(c.as_str()), move arg).as_str());
+    }
+    out.append(fmt2("\n/// Volt struct {}, its text a String\npublic struct {} {{\n", S(info.name), copy n).as_str());
+    out.append(props.as_str());
+    out.append(fmt2("\n    public init({}) {{\n{}    }}\n", move params, move sets).as_str());
+    out.append(fmt2("\n    // a copy of C's (its text copied)\n    init(volt volt_c: {}) {{\n{}    }}\n", copy cn, move froms).as_str());
+    out.append(fmt("\n    // its text, in the order voltC takes it\n    var voltStrs: [String] {{\n        {}\n    }}\n", move strs).as_str());
+    out.append(fmt4("\n    // C's form, its text through voltStrOf\n    func voltC(_ voltStrOf: (String) -> volt_str) -> {} {{\n{}        return {}({})\n    }}\n}}\n", copy cn, move lets, copy cn, move args).as_str());
+}
+
+// a field's type in a struct holding text: text as String, a struct as its Swift name, an array as C's
+// tuple, else as C has it
+attach fn swift_field_ty(this: bind&, t: u32) -> std::string {
+    match (this.shape_of(t) ?? shape::VOID) {
+        .STR => { return S("String"); },
+        .STRUCT(s) => { return this.local(this.c.si(s).name); },
+        .ARRAY(e, n) => {
+            var tu = S("(");
+            val et = this.swift_field_ty(e);
+            for (i) in 0..n {
+                if (i > 0) {
+                    tu.append(", ");
+                }
+                tu.append(et.as_str());
+            }
+            tu.append(")");
+            return tu;
+        },
+        default => { return this.swift_c(t); },
+    }
+}
+
 attach fn swift_text(this: bind&) -> std::string {
     val ents = this.entries();
     val p = this.pkg;
@@ -14719,6 +15462,16 @@ attach fn swift_text(this: bind&) -> std::string {
         out.append(fmt3("    case {}: return {}.{}\n", num(c.code), copy c.set, S(c.name)).as_str());
     }
     out.append("    default: return VoltError(code: code)\n    }\n}\n");
+    if (this.codes.len > 0) {
+        out.append("\n// an Error's code for Volt: an error set's, a VoltError's, else first\nfunc voltCode(_ e: Error, _ first: UInt32) -> UInt32 {\n");
+        for (et&) in this.codes.items() {
+            match (*this.c.t.get(*et)) {
+                .ENUM(id) => { out.append(fmt("    if let e = e as? {} {{\n        return e.rawValue\n    }}\n", this.local(this.c.ei(id).name)).as_str()); },
+                default => {},
+            }
+        }
+        out.append("    if let e = e as? VoltError {\n        return e.code\n    }\n    return first\n}\n");
+    }
     if (this.arrays.len > 0) {
         out.append("\n// an array by value as C passes it (the struct wrapping its elements), from a Swift array, and back\nfunc voltArray<T, A>(_ a: [T], _ n: Int, as: A.Type) -> A {\n    precondition(a.count == n, \"expected \\(n) elements\")\n    return a.withUnsafeBytes { $0.load(as: A.self) }\n}\n\nfunc voltArray<T, A>(_ c: A, _ n: Int) -> [T] {\n    return withUnsafeBytes(of: c) { Array($0.bindMemory(to: T.self).prefix(n)) }\n}\n");
     }
@@ -14734,8 +15487,12 @@ attach fn swift_text(this: bind&) -> std::string {
     }
     if (this.closures.len > 0 || this.traits.len > 0) {
         out.append("\n// what a Swift function Volt called threw that Volt can't take: Volt got a stand-in, and the call it\n// happened in throws it once it's back (one that can't throw drops it)\n// ponytail: one slot for the process; a thread-local if threads call into Volt at once\nnonisolated(unsafe) var voltPending: Error?\n\nfunc voltKeep(_ e: Error) {\n    if voltPending == nil {\n        voltPending = e\n    }\n}\n\n// runs a Volt call whose Swift functions can throw, its result converted (what it owns is Swift's),\n// then throws what they threw that Volt couldn't take; a call this one runs in keeps its own\nfunc voltCatching<R>(_ body: () throws -> R) throws -> R {\n    let outer = voltPending\n    voltPending = nil\n    defer {\n        voltPending = outer\n    }\n    let v: R\n    do {\n        v = try body()\n    } catch {\n        throw voltPending ?? error\n    }\n    if let e = voltPending {\n        throw e\n    }\n    return v\n}\n");
-        out.append("\n// a Swift value Volt calls (a callback, an object for a trait), which the C functions find through\n// their user pointer; and the bytes of the str it gave Volt last, kept until the next or until it goes\nfinal class VoltBox<F> {\n    let f: F\n    var kept: UnsafeMutablePointer<UInt8>?\n\n    init(_ f: F) {\n        self.f = f\n    }\n\n    deinit {\n        kept?.deallocate()\n    }\n\n");
-        out.append("    // s's bytes (and a 0 after them), kept\n    func keep(_ s: String) -> UnsafePointer<UInt8> {\n        kept?.deallocate()\n        let n = s.utf8.count\n        let p = UnsafeMutablePointer<UInt8>.allocate(capacity: n + 1)\n        _ = UnsafeMutableBufferPointer(start: p, count: n).initialize(from: s.utf8)\n        p[n] = 0\n        kept = p\n        return UnsafePointer(p)\n    }\n}\n");
+        out.append("\n// a Swift value Volt calls (a callback, an object for a trait), which the C functions find through\n// their user pointer; and the bytes of the str it gave Volt last, kept until the next or until it goes\nfinal class VoltBox<F> {\n    let f: F\n    var kept: [UnsafeMutablePointer<UInt8>] = []\n\n    init(_ f: F) {\n        self.f = f\n    }\n\n    deinit {\n        kept.forEach { $0.deallocate() }\n    }\n\n");
+        out.append("    // s's bytes (and a 0 after them), kept until the next result's (fresh: s is a result's first;\n    // else it's kept with the ones before it)\n    func keep(_ s: String, fresh: Bool = true) -> UnsafePointer<UInt8> {\n        if fresh {\n            kept.forEach { $0.deallocate() }\n            kept = []\n        }\n        let n = s.utf8.count\n        let p = UnsafeMutablePointer<UInt8>.allocate(capacity: n + 1)\n        _ = UnsafeMutableBufferPointer(start: p, count: n).initialize(from: s.utf8)\n        p[n] = 0\n        kept.append(p)\n        return UnsafePointer(p)\n    }\n");
+        if (this.structs_hold_str()) {
+            out.append("\n    // what makes one result's strs: each kept, together (see keep)\n    func keeper() -> (String) -> volt_str {\n        var fresh = true\n        return { s in\n            defer { fresh = false }\n            return volt_str(ptr: self.keep(s, fresh: fresh), len: s.utf8.count)\n        }\n    }\n");
+        }
+        out.append("}\n");
     }
     if (this.handles.len > 0 || this.traits.len > 0 || this.closures_out.len > 0) {
         out.append("\n/// what Volt gives Swift (an export struct's value, a trait's, a closure): close() (or deinit) frees\n/// it. One Volt lends a Swift function is the function's until it returns, and never freed here.\npublic class VoltObject {\n    var voltLive = true\n    let voltOwned: Bool\n    // the Volt calls running now that hold it\n    // ponytail: a plain count; atomics if objects are shared across threads\n    var voltBusy = 0\n\n    init(owned: Bool) {\n        voltOwned = owned\n    }\n\n    // frees Volt's value (each class frees its own)\n    func voltDrop() {}\n\n");
@@ -14767,7 +15524,11 @@ attach fn swift_text(this: bind&) -> std::string {
     }
     for (s&) in this.structs.items() {
         val info = this.c.si(*s);
-        out.append(fmt2("\npublic typealias {} = {}\n", this.local(info.name), this.c_named(info.name, false)).as_str());
+        if (this.holds_str(this.c.t.intern(tyk::STRUCT(*s)))) {
+            this.swift_text_struct(*s, &out);
+        } else {
+            out.append(fmt2("\npublic typealias {} = {}\n", this.local(info.name), this.c_named(info.name, false)).as_str());
+        }
     }
     for (k) in 0..this.traits.len {
         this.swift_trait(@cast<u32>(k), &out);
@@ -15389,13 +16150,14 @@ attach fn kt_arg_of(this: bind&, t: u32, name0: str, a: kt_arg&) -> void {
         .TEXT(x) => {},
         .STRUCT(s) => {},
         .LIST(x) => {},
+        .RESULT(e, x) => {},
         default => {
             a.pass = S(n);
             return;
         },
     }
     // made in the call's memory: text as a str, a list as a slice of its elements' views, a slice of
-    // text, handles or optionals, an optional text
+    // text, handles or optionals, an optional text, a Result as E!T
     a.pre = fmt2("val {} = volt_m.alloc<{}>()\n", copy c, this.c_prim(this.in_ty(t), false));
     a.pre.append(this.kt_put(t, n, c.as_str(), name0, 0, "volt_m").as_str());
     a.pass = fmt("{}.readValue()", copy c);

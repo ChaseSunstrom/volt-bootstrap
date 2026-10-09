@@ -53,6 +53,22 @@ do
     ok, err = pcall(c.take, c, 9)
     say("take", err.name:lower())
 end
+-- structs with text, an array and a struct in them (in, out, in a sequence, from a function), one
+-- with a pointer, E!T as a parameter (a value, or an error the module raised)
+local la = { name = "ab", sizes = { 1, 2, 3 }, at = { x = 7, y = 0 } }
+say("label", m.ml_label_len(la))
+local lb = m.ml_label_of("ab", 3)
+say("label_of", lb.name, lb.sizes[1], lb.sizes[2], lb.sizes[3], lb.at.x)
+say("labels", m.ml_labels_len({ la, lb }))
+say("holder", m.ml_holder_k({ p = nil, k = 3 }))
+local _, negative = pcall(m.ml_sqrt, -1)
+say("or", m.ml_or(4.5, 9.5), m.ml_or(negative, 9.5))
+say("ask", m.ml_ask(function(k) return { name = "abc", sizes = { k, k, k }, at = { x = 3, y = 0 } } end))
+m.ml_relabel(lb, 4)
+say("relabel", lb.name, lb.sizes[1], lb.sizes[2], lb.sizes[3])
+say("count", m.ml_labels_count({ la, lb }))
+say("note", m.ml_note_len({ str = "abc", c = 1, k = 3 }))
+say("or_label", m.ml_or_label(la), m.ml_or_label(negative))
 
 -- what the module rejects: numbers that don't fit, wrong types, a closed counter; and a callback's
 -- error comes out of the call (the later calls are skipped)

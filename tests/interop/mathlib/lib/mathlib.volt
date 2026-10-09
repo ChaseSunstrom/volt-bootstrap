@@ -67,6 +67,82 @@ export fn ml_bump(p: i32*, q: f64&) -> void {
     *q *= 2.0;
 }
 
+// a struct with text, an array and a struct in it: other languages pass and get it as any struct
+// (the text lent for the call)
+public struct ml_label {
+    name: str;
+    sizes: i32[3];
+    at: vec2;
+}
+
+// a struct with a pointer in it
+public struct ml_holder {
+    p: i64*;
+    k: i32;
+}
+
+export fn ml_label_len(l: ml_label) -> i64 {
+    return @cast<i64>(l.name.len) + @cast<i64>(l.sizes[0] + l.sizes[1] + l.sizes[2]) + @cast<i64>(l.at.x);
+}
+
+// a label naming what it was given (its text is the parameter's: read it before the call is back)
+export fn ml_label_of(name: str, k: i32) -> ml_label {
+    return { name: name, sizes: { k, k * 2, k * 3 }, at: { x: 1.5, y: 2.5 } };
+}
+
+export fn ml_labels_len(ls: ml_label[..]) -> i64 {
+    var t: i64 = 0;
+    for (l) in ls {
+        t += ml_label_len(l);
+    }
+    return t;
+}
+
+export fn ml_holder_k(h: ml_holder) -> i32 {
+    return h.k;
+}
+
+// E!T as a parameter: its value, or d when it's an error
+export fn ml_or(got: math_error!f64, d: f64) -> f64 {
+    return got catch d;
+}
+
+// a callback giving a struct with text
+export fn ml_ask(f: fn(i32) -> ml_label) -> i64 {
+    return ml_label_len(f(4));
+}
+
+// a struct with text by reference: Volt changes it in place (its text stays the caller's)
+export fn ml_relabel(l: ml_label&, k: i32) -> void {
+    l.sizes[0] += k;
+}
+
+// structs with text in a list (Volt copies the list; the text stays the caller's)
+export fn ml_labels_count(ls: std::vec<ml_label>) -> i64 {
+    var t: i64 = 0;
+    for (l) in ls.items() {
+        t += ml_label_len(l);
+    }
+    return t;
+}
+
+// fields named like the wrappers' own helpers and locals (str, c, k)
+public struct ml_note {
+    str: str;
+    c: i32;
+    k: i32;
+}
+
+export fn ml_note_len(n: ml_note) -> i64 {
+    return @cast<i64>(n.str.len) + @cast<i64>(n.c + n.k);
+}
+
+// E!T of a struct with text: its length, or -1 for an error
+export fn ml_or_label(got: math_error!ml_label) -> i64 {
+    val l = got catch return -1;
+    return ml_label_len(l);
+}
+
 export fn ml_next(c: color) -> color {
     match (c) {
         .RED => { return color::GREEN; },

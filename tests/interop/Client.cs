@@ -62,6 +62,24 @@ using (var c = new counter("clicks"))
         Console.WriteLine($"take {e.Name.ToLowerInvariant()}");
     }
 }
+// structs with text, an array and a struct in them (in, out, in a span, from a lambda), one with a
+// pointer, E!T as a parameter (a value, or a VoltException)
+var la = new ml_label { name = "ab", sizes = new[] { 1, 2, 3 }, at = new vec2 { x = 7, y = 0 } };
+Console.WriteLine($"label {Api.ml_label_len(la)}");
+var lb = Api.ml_label_of("ab", 3);
+Console.WriteLine($"label_of {lb.name} {lb.sizes[0]} {lb.sizes[1]} {lb.sizes[2]} {lb.at.x}");
+Console.WriteLine($"labels {Api.ml_labels_len(new[] { la, lb })}");
+unsafe
+{
+    Console.WriteLine($"holder {Api.ml_holder_k(new ml_holder { p = null, k = 3 })}");
+}
+Console.WriteLine($"or {Api.ml_or(4.5, 9.5)} {Api.ml_or(VoltException.For(math_error.NEGATIVE), 9.5)}");
+Console.WriteLine($"ask {Api.ml_ask(k => new ml_label { name = "abc", sizes = new[] { k, k, k }, at = new vec2 { x = 3, y = 0 } })}");
+Api.ml_relabel(ref lb, 4);
+Console.WriteLine($"relabel {lb.name} {lb.sizes[0]} {lb.sizes[1]} {lb.sizes[2]}");
+Console.WriteLine($"count {Api.ml_labels_count(new[] { la, lb })}");
+Console.WriteLine($"note {Api.ml_note_len(new ml_note { str = "abc", c = 1, k = 3 })}");
+Console.WriteLine($"or_label {Api.ml_or_label(la)} {Api.ml_or_label(VoltException.For(math_error.NEGATIVE))}");
 
 static class Ext
 {

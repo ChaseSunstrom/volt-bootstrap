@@ -54,4 +54,20 @@ int main() {
     } catch (const mathlib::error &e) {
         std::printf("take %s\n", e.code == mathlib::math_error::NEGATIVE ? "negative" : "?");
     }
+    // structs with text, an array and a struct in them (in, out, in a slice, from a callback), one
+    // with a pointer, E!T as a parameter
+    mathlib::ml_label la{"ab", {1, 2, 3}, {7, 0}};
+    std::printf("label %lld\n", (long long)mathlib::ml_label_len(la));
+    mathlib::ml_label lb = mathlib::ml_label_of("ab", 3);
+    std::printf("label_of %.*s %d %d %d %g\n", (int)lb.name.len, (const char *)lb.name.ptr, lb.sizes[0], lb.sizes[1], lb.sizes[2], lb.at.x);
+    std::vector<mathlib::ml_label> ls{la, lb};
+    std::printf("labels %lld\n", (long long)mathlib::ml_labels_len(ls));
+    std::printf("holder %d\n", mathlib::ml_holder_k({nullptr, 3}));
+    std::printf("or %g %g\n", mathlib::ml_or({0, 4.5}, 9.5), mathlib::ml_or({mathlib::math_error::NEGATIVE, 0}, 9.5));
+    std::printf("ask %lld\n", (long long)mathlib::ml_ask([](int32_t k) { return mathlib::ml_label{"abc", {k, k, k}, {3, 0}}; }));
+    mathlib::ml_relabel(lb, 4);
+    std::printf("relabel %.*s %d %d %d\n", (int)lb.name.len, (const char *)lb.name.ptr, lb.sizes[0], lb.sizes[1], lb.sizes[2]);
+    std::printf("count %lld\n", (long long)mathlib::ml_labels_count({la, lb}));
+    std::printf("note %lld\n", (long long)mathlib::ml_note_len({"abc", 1, 3}));
+    std::printf("or_label %lld %lld\n", (long long)mathlib::ml_or_label({0, la}), (long long)mathlib::ml_or_label({mathlib::math_error::NEGATIVE, {}}));
 }

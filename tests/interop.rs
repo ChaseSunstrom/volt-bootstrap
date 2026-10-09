@@ -11,7 +11,7 @@ const ROOT: &str = env!("CARGO_MANIFEST_DIR");
 
 /// what every language's mathlib client prints: plain C types, then owned text, slices, optionals, a
 /// callback with the caller's data and an export struct (shims voltc lib adds)
-const MATHLIB_OUT: &str = "add 5\ndot 11\nscale 2 4\nlen 5\nclash 895\ntags 1 2 3 4 34\nbump 8 5\nnext 2\nsqrt 3 1\nerror negative\ngreet hello, volt\nrepeat abab\nrepeat negative\nsum 6.5\nfind 2 none\neach 4 5 6 = 15\ncounter clicks 5\ntake negative\n";
+const MATHLIB_OUT: &str = "add 5\ndot 11\nscale 2 4\nlen 5\nclash 895\ntags 1 2 3 4 34\nbump 8 5\nnext 2\nsqrt 3 1\nerror negative\ngreet hello, volt\nrepeat abab\nrepeat negative\nsum 6.5\nfind 2 none\neach 4 5 6 = 15\ncounter clicks 5\ntake negative\nlabel 15\nlabel_of ab 3 6 9 1.5\nlabels 36\nholder 3\nor 4.5 9.5\nask 18\nrelabel ab 7 6 9\ncount 40\nnote 7\nor_label 15 -1\n";
 
 /// stage 1 (common::voltc), and a scratch directory, removed when dropped
 struct Env {
@@ -186,7 +186,7 @@ fn bindings_round_trip() {
         // clients (TypeScript by stripping its types; tsc checks them when it's installed)
         match node_include() {
             Some(inc) => {
-                ok(run(Command::new("cc").args(["-shared", "-fPIC", "-I", &inc]).arg(e.dir.join("mathlib_node.c")).args(["-L", &lib_dir, "-lmathlib", &rpath, "-o"]).arg(e.dir.join("mathlib.node"))), "cc mathlib_node.c");
+                ok(run(Command::new("cc").args(["-shared", "-fPIC", "-Wall", "-Werror", "-I", &inc]).arg(e.dir.join("mathlib_node.c")).args(["-L", &lib_dir, "-lmathlib", &rpath, "-o"]).arg(e.dir.join("mathlib.node"))), "cc mathlib_node.c");
                 for client in ["client.js", "client.mts"] {
                     std::fs::copy(Path::new(ROOT).join("tests/interop").join(client), e.dir.join(client)).unwrap();
                     let n = Command::new("node").arg(client).current_dir(&e.dir).output().unwrap();
@@ -403,48 +403,6 @@ fn bindings_nested_slices() {
     let rpath = format!("-Wl,-rpath,{}", e.path(""));
     ok(Command::new("cc").args(["-Wall", "-Werror", "main.c", "-I", &e.path(""), "-L", &e.path(""), "-lnested", &rpath, "-o", "main"]).current_dir(&e.dir).output().unwrap(), "cc main.c");
     assert_eq!(ok(Command::new(e.dir.join("main")).output().unwrap(), "main"), "6\n7 7\n");
-}
-
-/// the plain shapes beyond mathlib's, from Node and Ruby: plainlib's structs with text, arrays, structs
-/// and pointers in them (in, out, in an array, from a callback), E!T as a parameter
-#[test]
-fn bindings_plain_shapes() {
-    let want = "label 15\nlabel_of ab 3 6 9 1.5\nlabels 36\nholder 3\nor 4.5 9.5\nask 18\n";
-    let e = Env::new("plain");
-    let pkg = "plainlib=plainlib/lib";
-    for (lang, file) in [("node", "plainlib_node.c"), ("js", "plainlib.js"), ("ts", "plainlib.d.ts"), ("ruby", "plainlib_ruby.c")] {
-        ok(e.voltc(&["bindings", "plainlib", "--pkg", pkg, "--lang", lang, "-o", &e.path(file)]), &format!("voltc bindings --lang {lang}"));
-    }
-    for backend in ["c", "llvm"] {
-        let lib = e.path(backend);
-        std::fs::create_dir_all(e.dir.join(backend)).unwrap();
-        ok(e.voltc(&["lib", "plainlib", "--pkg", pkg, "--shared", "--backend", backend, "-o", &format!("{lib}/libplainlib.so")]), "voltc lib --shared");
-        let rpath = format!("-Wl,-rpath,{lib}");
-        match node_include() {
-            Some(inc) => {
-                ok(run(Command::new("cc").args(["-shared", "-fPIC", "-Wall", "-Werror", "-I", &inc]).arg(e.dir.join("plainlib_node.c")).args(["-I", &e.path(""), "-L", &lib, "-lplainlib", &rpath, "-o"]).arg(e.dir.join("plainlib.node"))), "cc plainlib_node.c");
-                std::fs::copy(Path::new(ROOT).join("tests/interop/client_plain.js"), e.dir.join("client_plain.js")).unwrap();
-                let n = Command::new("node").arg("client_plain.js").current_dir(&e.dir).output().unwrap();
-                assert_eq!(ok(n, "node client_plain.js"), want, "node ({backend})");
-            }
-            None => eprintln!("node (with its headers) isn't installed: skipping the Node client"),
-        }
-        match ruby_headers() {
-            Some((ruby, hdrs)) => {
-                let rdir = e.dir.join(format!("ruby-{backend}"));
-                std::fs::create_dir_all(&rdir).unwrap();
-                let mut cc = Command::new("cc");
-                cc.args(["-shared", "-fPIC", "-Wall", "-Wextra", "-Wno-unused-parameter", "-Werror"]);
-                for h in &hdrs {
-                    cc.arg("-I").arg(h);
-                }
-                ok(run(cc.arg(e.dir.join("plainlib_ruby.c")).args(["-I", &e.path(""), "-L", &lib, "-lplainlib", &rpath, "-o"]).arg(rdir.join("plainlib.so"))), "cc plainlib_ruby.c");
-                let o = Command::new(&ruby).arg("-I").arg(&rdir).arg(Path::new(ROOT).join("tests/interop/client_plain.rb")).output().unwrap();
-                assert_eq!(ok(o, "ruby client_plain.rb"), want, "Ruby ({backend})");
-            }
-            None => eprintln!("ruby (with its headers) isn't installed: skipping the Ruby client"),
-        }
-    }
 }
 
 const SHAPES_OUT: &str = "biggest 9 1.5\naccount bea 300\nvisit 301 get 301\nclosed 301 1\ncircle of area 3\ncircle gone\ngrown 27\nsquare 9 square of area 9\nhey!\ntry 4 OVERDRAWN\nopened 25\nclosed 2\n42 hello, volt\nowners 2 ann bobby\nrichest 9 after 6 10\nopened 2 dee\nsquares 4 16 sum 30\njoined a-b-c total 3\nhello, ann; hello, nobody\nnick 1 ann 0\nopen_if 1 1\nclose_if 0 -1\nclose_all 2\nsome 2\nrows 6\narrays 12 13 11 2.5 1.5 2 3 4\ntagged 41 5 20 7 8 127\nlists closed 7\ncircle gone\n";

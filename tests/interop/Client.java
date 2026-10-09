@@ -1,6 +1,7 @@
 // Java calls the Volt library through voltc bindings --lang java (the FFM API): errors are thrown
 // (one exception class per error set), owned text comes back as a String, an export struct is
 // AutoCloseable
+import java.lang.foreign.MemorySegment;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -61,6 +62,21 @@ public class Client {
                 System.out.println("take " + e.name.toLowerCase());
             }
         }
+        // structs with text, an array and a struct in them (in, out, in an array, from a lambda), one
+        // with a pointer, E!T as a parameter (a VoltResult)
+        var la = new mathlib.ml_label("ab", new int[] {1, 2, 3}, new mathlib.vec2(7, 0));
+        System.out.println("label " + mathlib.ml_label_len(la));
+        var lb = mathlib.ml_label_of("ab", 3);
+        System.out.println("label_of " + lb.name + " " + lb.sizes[0] + " " + lb.sizes[1] + " " + lb.sizes[2] + " " + lb.at.x);
+        System.out.println("labels " + mathlib.ml_labels_len(new mathlib.ml_label[] {la, lb}));
+        System.out.println("holder " + mathlib.ml_holder_k(new mathlib.ml_holder(MemorySegment.NULL, 3)));
+        System.out.println("or " + mathlib.ml_or(mathlib.VoltResult.ok(4.5), 9.5) + " " + mathlib.ml_or(mathlib.VoltResult.err(mathlib.VoltException.of(mathlib.math_error.NEGATIVE)), 9.5));
+        System.out.println("ask " + mathlib.ml_ask(k -> new mathlib.ml_label("abc", new int[] {k, k, k}, new mathlib.vec2(3, 0))));
+        mathlib.ml_relabel(lb, 4);
+        System.out.println("relabel " + lb.name + " " + lb.sizes[0] + " " + lb.sizes[1] + " " + lb.sizes[2]);
+        System.out.println("count " + mathlib.ml_labels_count(new mathlib.ml_label[] {la, lb}));
+        System.out.println("note " + mathlib.ml_note_len(new mathlib.ml_note("abc", 1, 3)));
+        System.out.println("or_label " + mathlib.ml_or_label(mathlib.VoltResult.ok(la)) + " " + mathlib.ml_or_label(mathlib.VoltResult.err(mathlib.VoltException.of(mathlib.math_error.NEGATIVE))));
     }
 
     // numbers as the other clients print them: 11, not 11.0

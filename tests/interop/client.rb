@@ -49,6 +49,21 @@ rescue Mathlib::MathError => e
   puts "take #{e.message.downcase}"
 end
 c.close
+# structs with text, an array and a struct in them (in, out, in an array, from a block), one with a
+# pointer, E!T as a parameter (a value, or the error)
+la = { name: "ab", sizes: [1, 2, 3], at: { x: 7, y: 0 } }
+puts "label #{Mathlib.ml_label_len(la)}"
+lb = Mathlib.ml_label_of("ab", 3)
+puts "label_of #{lb.name} #{lb.sizes.join(' ')} #{lb.at.x}"
+puts "labels #{Mathlib.ml_labels_len([la, lb])}"
+puts "holder #{Mathlib.ml_holder_k({ p: nil, k: 3 })}"
+puts "or #{Mathlib.ml_or(4.5, 9.5)} #{Mathlib.ml_or(Mathlib::MathError.new(Mathlib::MathError::NEGATIVE), 9.5)}"
+puts "ask #{Mathlib.ml_ask(proc { |k| { name: "abc", sizes: [k, k, k], at: { x: 3, y: 0 } } })}"
+Mathlib.ml_relabel(lb, 4)
+puts "relabel #{lb.name} #{lb.sizes.join(' ')}"
+puts "count #{Mathlib.ml_labels_count([la, lb])}"
+puts "note #{Mathlib.ml_note_len({ str: "abc", c: 1, k: 3 })}"
+puts "or_label #{Mathlib.ml_or_label(la)} #{Mathlib.ml_or_label(Mathlib::MathError.new(Mathlib::MathError::NEGATIVE))}"
 
 # what the extension rejects: numbers that don't fit, wrong types, a closed counter; and a
 # callback's exception comes out of the call (the later calls are skipped)

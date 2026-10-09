@@ -64,4 +64,21 @@ func main() {
 			fmt.Println("take", strings.ToLower(e.Name))
 		}
 	}
+	// structs with text, an array and a struct in them (in, out, in a slice, from a func), one with
+	// a pointer, E!T as a parameter (a value and an error)
+	la := mathlib.MlLabel{Name: "ab", Sizes: [3]int32{1, 2, 3}, At: mathlib.Vec2{X: 7}}
+	fmt.Println("label", mathlib.MlLabelLen(la))
+	lb := mathlib.MlLabelOf("ab", 3)
+	fmt.Println("label_of", lb.Name, lb.Sizes[0], lb.Sizes[1], lb.Sizes[2], lb.At.X)
+	fmt.Println("labels", mathlib.MlLabelsLen([]mathlib.MlLabel{la, lb}))
+	fmt.Println("holder", mathlib.MlHolderK(mathlib.MlHolder{P: nil, K: 3}))
+	fmt.Println("or", mathlib.MlOr(4.5, nil, 9.5), mathlib.MlOr(0, mathlib.MathErrorNegative, 9.5))
+	fmt.Println("ask", mathlib.MlAsk(func(k int32) mathlib.MlLabel {
+		return mathlib.MlLabel{Name: "abc", Sizes: [3]int32{k, k, k}, At: mathlib.Vec2{X: 3}}
+	}))
+	mathlib.MlRelabel(&lb, 4)
+	fmt.Println("relabel", lb.Name, lb.Sizes[0], lb.Sizes[1], lb.Sizes[2])
+	fmt.Println("count", mathlib.MlLabelsCount([]mathlib.MlLabel{la, lb}))
+	fmt.Println("note", mathlib.MlNoteLen(mathlib.MlNote{Str: "abc", C: 1, K: 3}))
+	fmt.Println("or_label", mathlib.MlOrLabel(la, nil), mathlib.MlOrLabel(mathlib.MlLabel{}, mathlib.MathErrorNegative))
 }

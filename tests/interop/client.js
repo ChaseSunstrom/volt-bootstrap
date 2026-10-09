@@ -46,3 +46,18 @@ try {
     console.log("take", e.code.toLowerCase());
 }
 c.close();
+// structs with text, an array and a struct in them (in, out, in an array, from a callback), one
+// with a pointer, E!T as a parameter (a value, or an Error naming the error)
+const la = { name: "ab", sizes: [1, 2, 3], at: { x: 7, y: 0 } };
+console.log("label", m.ml_label_len(la));
+const lb = m.ml_label_of("ab", 3);
+console.log("label_of", lb.name, lb.sizes.join(" "), lb.at.x);
+console.log("labels", m.ml_labels_len([la, lb]));
+console.log("holder", m.ml_holder_k({ p: null, k: 3 }));
+console.log("or", m.ml_or(4.5, 9.5), m.ml_or(m.voltError(m.math_error.NEGATIVE), 9.5));
+console.log("ask", m.ml_ask((k) => ({ name: "abc", sizes: [k, k, k], at: { x: 3, y: 0 } })));
+m.ml_relabel(lb, 4);
+console.log("relabel", lb.name, lb.sizes.join(" "));
+console.log("count", m.ml_labels_count([la, lb]));
+console.log("note", m.ml_note_len({ str: "abc", c: 1, k: 3 }));
+console.log("or_label", m.ml_or_label(la), m.ml_or_label(m.voltError(m.math_error.NEGATIVE)));

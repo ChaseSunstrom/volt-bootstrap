@@ -53,6 +53,21 @@ void main() {
     print('take ${e.name.toLowerCase()}');
   }
   c.close();
+  // structs with text, an array and a struct in them (in, out, in a list, from a function), one
+  // with a pointer, E!T as a parameter (ok or err)
+  final la = ml_label(name: 'ab', sizes: [1, 2, 3], at: vec2.of(x: 7, y: 0));
+  print('label ${ml_label_len(la)}');
+  final lb = ml_label_of('ab', 3);
+  print('label_of ${lb.name} ${lb.sizes.join(' ')} ${lb.at.x}');
+  print('labels ${ml_labels_len([la, lb])}');
+  print('holder ${ml_holder_k(ml_holder.of(p: nullptr, k: 3))}');
+  print('or ${ml_or(VoltResult.ok(4.5), 9.5)} ${ml_or(VoltResult.err(VoltError.of(math_error.NEGATIVE)), 9.5)}');
+  print('ask ${ml_ask((k) => ml_label(name: 'abc', sizes: [k, k, k], at: vec2.of(x: 3, y: 0)))}');
+  ml_relabel(lb, 4);
+  print('relabel ${lb.name} ${lb.sizes.join(' ')}');
+  print('count ${ml_labels_count([la, lb])}');
+  print('note ${ml_note_len(ml_note(str: 'abc', c: 1, k: 3))}');
+  print('or_label ${ml_or_label(VoltResult.ok(la))} ${ml_or_label(VoltResult.err(VoltError.of(math_error.NEGATIVE)))}');
 
   // a callback's exception comes out of the call (the later calls are skipped), and a closed
   // counter throws

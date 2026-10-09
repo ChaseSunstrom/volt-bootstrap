@@ -41,4 +41,19 @@ fn main() {
     c.add(2);
     println!("counter {} {}", c.name(), c.add(3));
     println!("take {}", c.take(9).unwrap_err().to_string().to_lowercase());
+    // structs with text, an array and a struct in them (in, out, in a slice, from a closure), one
+    // with a pointer, E!T as a parameter
+    let la = ml_label { name: VoltStr::from("ab"), sizes: [1, 2, 3], at: vec2 { x: 7.0, y: 0.0 } };
+    println!("label {}", ml_label_len(la));
+    let mut lb = ml_label_of("ab", 3);
+    println!("label_of {} {} {} {} {}", unsafe { lb.name.as_str() }, lb.sizes[0], lb.sizes[1], lb.sizes[2], lb.at.x);
+    println!("labels {}", ml_labels_len(&mut [la, lb]));
+    println!("holder {}", ml_holder_k(ml_holder { p: std::ptr::null_mut(), k: 3 }));
+    println!("or {} {}", ml_or(Ok(4.5), 9.5), ml_or(Err(Error { code: math_error::NEGATIVE }), 9.5));
+    println!("ask {}", ml_ask(|k| ml_label { name: VoltStr::from("abc"), sizes: [k, k, k], at: vec2 { x: 3.0, y: 0.0 } }));
+    ml_relabel(&mut lb, 4);
+    println!("relabel {} {} {} {}", unsafe { lb.name.as_str() }, lb.sizes[0], lb.sizes[1], lb.sizes[2]);
+    println!("count {}", ml_labels_count(vec![la, lb]));
+    println!("note {}", ml_note_len(ml_note { str: VoltStr::from("abc"), c: 1, k: 3 }));
+    println!("or_label {} {}", ml_or_label(Ok(la)), ml_or_label(Err(Error { code: math_error::NEGATIVE })));
 }

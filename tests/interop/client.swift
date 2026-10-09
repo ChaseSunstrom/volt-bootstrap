@@ -52,3 +52,19 @@ do {
     print("take", "\(e)".lowercased())
 }
 c.close()
+// structs with text, an array and a struct in them (in, out, in an array, from a closure), one with a
+// pointer, E!T as a parameter (a Result)
+let la = ml_label(name: "ab", sizes: (1, 2, 3), at: vec2(x: 7, y: 0))
+print("label", ml_label_len(la))
+var lb = ml_label_of("ab", 3)
+print("label_of", lb.name, lb.sizes.0, lb.sizes.1, lb.sizes.2, lb.at.x)
+var ls = [la, lb]
+print("labels", ml_labels_len(&ls))
+print("holder", ml_holder_k(ml_holder(p: nil, k: 3)))
+print("or", ml_or(.success(4.5), 9.5), ml_or(.failure(math_error.NEGATIVE), 9.5))
+print("ask", ml_ask { k in ml_label(name: "abc", sizes: (k, k, k), at: vec2(x: 3, y: 0)) })
+ml_relabel(&lb, 4)
+print("relabel", lb.name, lb.sizes.0, lb.sizes.1, lb.sizes.2)
+print("count", ml_labels_count([la, lb]))
+print("note", ml_note_len(ml_note(str: "abc", c: 1, k: 3)))
+print("or_label", ml_or_label(.success(la)), ml_or_label(.failure(math_error.NEGATIVE)))
