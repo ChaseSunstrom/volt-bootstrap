@@ -70,6 +70,9 @@ say("count", m.ml_labels_count({ la, lb }))
 say("note", m.ml_note_len({ str = "abc", c = 1, k = 3 }))
 say("or_label", m.ml_or_label(la), m.ml_or_label(negative))
 say("given", m.ml_sum_given(3, function(k) return { k, 10 * k } end), m.ml_area_given(function(k) return { { x = 1.5, y = k }, { x = 2, y = 3.25 } } end))
+local deep = { { { 1, 2 }, { 3 } }, { { 4 } } }
+local d = m.ml_deep(deep)
+say("deep", d, deep[1][1][2], deep[2][1][1], "words", m.ml_words({ { "ab", "c" }, {}, { "def" } }))
 
 -- what the module rejects: numbers that don't fit, wrong types, a closed counter; and a callback's
 -- error comes out of the call (the later calls are skipped)

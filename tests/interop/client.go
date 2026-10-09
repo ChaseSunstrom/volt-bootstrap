@@ -84,4 +84,7 @@ func main() {
 	fmt.Println("given", mathlib.MlSumGiven(3, func(k int32) []int64 { return []int64{int64(k), 10 * int64(k)} }), mathlib.MlAreaGiven(func(k int32) []mathlib.Vec2 {
 		return []mathlib.Vec2{{X: 1.5, Y: float64(k)}, {X: 2, Y: 3.25}}
 	}))
+	deep := [][][]int64{{{1, 2}, {3}}, {{4}}}
+	d := mathlib.MlDeep(deep)
+	fmt.Println("deep", d, deep[0][0][1], deep[1][0][0], "words", mathlib.MlWords([][]string{{"ab", "c"}, {}, {"def"}}))
 }

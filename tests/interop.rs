@@ -11,7 +11,7 @@ const ROOT: &str = env!("CARGO_MANIFEST_DIR");
 
 /// what every language's mathlib client prints: plain C types, then owned text, slices, optionals, a
 /// callback with the caller's data and an export struct (shims voltc lib adds)
-const MATHLIB_OUT: &str = "add 5\ndot 11\nscale 2 4\nlen 5\nclash 895\ntags 1 2 3 4 34\nbump 8 5\nnext 2\nsqrt 3 1\nerror negative\ngreet hello, volt\nrepeat abab\nrepeat negative\nsum 6.5\nfind 2 none\neach 4 5 6 = 15\ncounter clicks 5\ntake negative\nlabel 15\nlabel_of ab 3 6 9 1.5\nlabels 36\nholder 3\nor 4.5 9.5\nask 18\nrelabel ab 7 6 9\ncount 40\nnote 7\nor_label 15 -1\ngiven 66 9.5\n";
+const MATHLIB_OUT: &str = "add 5\ndot 11\nscale 2 4\nlen 5\nclash 895\ntags 1 2 3 4 34\nbump 8 5\nnext 2\nsqrt 3 1\nerror negative\ngreet hello, volt\nrepeat abab\nrepeat negative\nsum 6.5\nfind 2 none\neach 4 5 6 = 15\ncounter clicks 5\ntake negative\nlabel 15\nlabel_of ab 3 6 9 1.5\nlabels 36\nholder 3\nor 4.5 9.5\nask 18\nrelabel ab 7 6 9\ncount 40\nnote 7\nor_label 15 -1\ngiven 66 9.5\ndeep 10 4 8 words 6\n";
 
 /// stage 1 (common::voltc), and a scratch directory, removed when dropped
 struct Env {

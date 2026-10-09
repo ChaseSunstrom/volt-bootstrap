@@ -68,6 +68,18 @@ pub fn main() void {
     print("note {d}\n", .{m.ml_note_len(.{ .str = m.VoltStr.from("abc"), .c = 1, .k = 3 })});
     print("or_label {d} {d}\n", .{ m.ml_or_label(la), m.ml_or_label(error.NEGATIVE) });
     print("given {d} {d}\n", .{ m.ml_sum_given(3, {}, give_pair), m.ml_area_given({}, give_points) });
+    var d00 = [_]i64{ 1, 2 };
+    var d01 = [_]i64{3};
+    var d10 = [_]i64{4};
+    var d0 = [_]m.VoltSlice(i64){ m.VoltSlice(i64).from(&d00), m.VoltSlice(i64).from(&d01) };
+    var d1 = [_]m.VoltSlice(i64){m.VoltSlice(i64).from(&d10)};
+    var dd = [_]m.VoltSlice(m.VoltSlice(i64)){ m.VoltSlice(m.VoltSlice(i64)).from(&d0), m.VoltSlice(m.VoltSlice(i64)).from(&d1) };
+    const deep = m.ml_deep(&dd);
+    var w0 = [_]m.VoltStr{ m.VoltStr.from("ab"), m.VoltStr.from("c") };
+    var w1 = [_]m.VoltStr{};
+    var w2 = [_]m.VoltStr{m.VoltStr.from("def")};
+    var ws = [_]m.VoltSlice(m.VoltStr){ m.VoltSlice(m.VoltStr).from(&w0), m.VoltSlice(m.VoltStr).from(&w1), m.VoltSlice(m.VoltStr).from(&w2) };
+    print("deep {d} {d} {d} words {d}\n", .{ deep, d00[1], d10[0], m.ml_words(&ws) });
 }
 
 // callbacks giving a slice (in memory of the client's: Volt reads it before calling again)

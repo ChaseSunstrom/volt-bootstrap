@@ -67,4 +67,12 @@ fn main() {
         VoltSlice::from(&mut points)
     });
     println!("given {} {}", sum, area);
+    let (mut d00, mut d01, mut d10) = ([1i64, 2], [3i64], [4i64]);
+    let mut d0 = [VoltSlice::from(&mut d00[..]), VoltSlice::from(&mut d01[..])];
+    let mut d1 = [VoltSlice::from(&mut d10[..])];
+    let deep = ml_deep(&mut [VoltSlice::from(&mut d0[..]), VoltSlice::from(&mut d1[..])]);
+    let mut w0 = [VoltStr::from("ab"), VoltStr::from("c")];
+    let mut w2 = [VoltStr::from("def")];
+    let words = ml_words(&mut [VoltSlice::from(&mut w0[..]), VoltSlice::from(&mut []), VoltSlice::from(&mut w2[..])]);
+    println!("deep {} {} {} words {}", deep, d00[1], d10[0], words);
 }

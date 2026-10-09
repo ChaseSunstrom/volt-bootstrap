@@ -78,6 +78,9 @@ public class Client {
         System.out.println("note " + mathlib.ml_note_len(new mathlib.ml_note("abc", 1, 3)));
         System.out.println("or_label " + mathlib.ml_or_label(mathlib.VoltResult.ok(la)) + " " + mathlib.ml_or_label(mathlib.VoltResult.err(mathlib.VoltException.of(mathlib.math_error.NEGATIVE))));
         System.out.println("given " + mathlib.ml_sum_given(3, k -> new long[] {k, 10L * k}) + " " + mathlib.ml_area_given(k -> new mathlib.vec2[] {new mathlib.vec2(1.5, k), new mathlib.vec2(2, 3.25)}));
+        long[][][] deep = {{{1, 2}, {3}}, {{4}}};
+        long d = mathlib.ml_deep(deep);
+        System.out.println("deep " + d + " " + deep[0][0][1] + " " + deep[1][0][0] + " words " + mathlib.ml_words(new String[][] {{"ab", "c"}, {}, {"def"}}));
     }
 
     // numbers as the other clients print them: 11, not 11.0

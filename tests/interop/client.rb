@@ -65,6 +65,9 @@ puts "count #{Mathlib.ml_labels_count([la, lb])}"
 puts "note #{Mathlib.ml_note_len({ str: "abc", c: 1, k: 3 })}"
 puts "or_label #{Mathlib.ml_or_label(la)} #{Mathlib.ml_or_label(Mathlib::MathError.new(Mathlib::MathError::NEGATIVE))}"
 puts "given #{Mathlib.ml_sum_given(3, proc { |k| [k, 10 * k] })} #{Mathlib.ml_area_given(proc { |k| [{ x: 1.5, y: k }, { x: 2, y: 3.25 }] })}"
+deep = [[[1, 2], [3]], [[4]]]
+d = Mathlib.ml_deep(deep)
+puts "deep #{d} #{deep[0][0][1]} #{deep[1][0][0]} words #{Mathlib.ml_words([["ab", "c"], [], ["def"]])}"
 
 # what the extension rejects: numbers that don't fit, wrong types, a closed counter; and a
 # callback's exception comes out of the call (the later calls are skipped)

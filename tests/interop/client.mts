@@ -67,3 +67,6 @@ console.log("count", m.ml_labels_count([la, lb]));
 console.log("note", m.ml_note_len({ str: "abc", c: 1, k: 3 }));
 console.log("or_label", m.ml_or_label(la), m.ml_or_label(m.voltError(m.math_error.NEGATIVE)));
 console.log("given", m.ml_sum_given(3, (k: number) => [k, 10 * k]), m.ml_area_given((k: number) => [{ x: 1.5, y: k }, { x: 2, y: 3.25 }]));
+const deep = [[[1, 2], [3]], [[4]]];
+const d = m.ml_deep(deep);
+console.log("deep", d, deep[0][0][1], deep[1][0][0], "words", m.ml_words([["ab", "c"], [], ["def"]]));

@@ -81,3 +81,6 @@ print("given", ml_sum_given(3) { k in
 })
 given.deallocate()
 points.deallocate()
+var deep: [[[Int64]]] = [[[1, 2], [3]], [[4]]]
+let d = ml_deep(&deep)
+print("deep", d, deep[0][0][1], deep[1][0][0], "words", ml_words([["ab", "c"], [], ["def"]]))

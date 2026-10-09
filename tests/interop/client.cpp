@@ -81,4 +81,11 @@ int main() {
         points[1] = {2, 3.25};
         return mathlib::slice_vec2{points, 2};
     }));
+    int64_t d00[] = {1, 2}, d01[] = {3}, d10[] = {4};
+    mathlib::slice_i64 d0[] = {{d00, 2}, {d01, 1}}, d1[] = {{d10, 1}};
+    mathlib::slice_slice_i64 dd[] = {{d0, 2}, {d1, 1}};
+    long long deep = mathlib::ml_deep(dd);
+    mathlib::str w0[] = {"ab", "c"}, w2[] = {"def"};
+    mathlib::slice_str ws[] = {{w0, 2}, {nullptr, 0}, {w2, 1}};
+    std::printf("deep %lld %lld %lld words %lld\n", deep, (long long)d00[1], (long long)d10[0], (long long)mathlib::ml_words(ws));
 }

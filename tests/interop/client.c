@@ -101,5 +101,12 @@ int main(void) {
     printf("note %lld\n", (long long)ml_note_len((mathlib_ml_note){.str = {(const uint8_t *)"abc", 3}, .c = 1, .k = 3}));
     printf("or_label %lld %lld\n", (long long)ml_or_label((mathlib_math_error_or_ml_label){.error = 0, .value = la}), (long long)ml_or_label((mathlib_math_error_or_ml_label){.error = MATHLIB_MATH_ERROR_NEGATIVE}));
     printf("given %lld %g\n", (long long)ml_sum_given(3, give_pair, NULL), ml_area_given(give_points, NULL));
+    int64_t d00[] = {1, 2}, d01[] = {3}, d10[] = {4};
+    mathlib_slice_i64 d0[] = {{d00, 2}, {d01, 1}}, d1[] = {{d10, 1}};
+    mathlib_slice_slice_i64 dd[] = {{d0, 2}, {d1, 1}};
+    long long deep = ml_deep((mathlib_slice_slice_slice_i64){dd, 2});
+    volt_str w0[] = {{(const uint8_t *)"ab", 2}, {(const uint8_t *)"c", 1}}, w2[] = {{(const uint8_t *)"def", 3}};
+    mathlib_slice_str ws[] = {{w0, 2}, {NULL, 0}, {w2, 1}};
+    printf("deep %lld %lld %lld words %lld\n", deep, (long long)d00[1], (long long)d10[0], (long long)ml_words((mathlib_slice_slice_str){ws, 3}));
     return 0;
 }

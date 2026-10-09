@@ -233,10 +233,12 @@ Python's on
   `&mut [T]` (or a `Vec<T>` given) in Rust, from `[]const []const u8` and `[]const T` in Zig, and
   from any sequence in Python. Optional text and handles are `std::optional`, `Option`, `?T` and
   `None` or the value.
-- **Slices of slices.** A `T[..][..]` (of numbers or structs) takes an array of arrays: `long[][]`
-  in Java and C#, `[[T]]` in Swift, `[][]T` in Go, a `List` of arrays (`LongArray`) in Kotlin, a
-  list of lists in Python, Dart, JavaScript and Ruby, a table of tables in Lua, and a slice of slices in C, C++, Rust and Zig; what
-  Volt writes into the elements comes back.
+- **Slices of slices, at any depth.** A `T[..][..]` (or `T[..][..][..]`, and so on; of numbers,
+  structs or text) takes an array of arrays: `long[][]` and `string[][]` in Java and C#, `[[T]]`
+  in Swift, `[][]T` in Go, a `List` of arrays (`LongArray`) in Kotlin, a list of lists in Python,
+  Dart, JavaScript and Ruby, a table of tables in Lua, and a slice of slices (of their own memory)
+  in C, C++, Rust and Zig. The others copy each inner array (text too) into memory the call holds,
+  and what Volt writes into the numbers and structs comes back.
 - **Arrays by value.** An export fn taking or giving a `T[N]` (numbers, bools, enums, or structs of
   those) passes it whole, as C passes a struct wrapping it: `PKG_array_T_N` (its elements in `v`)
   in C, `std::array<T, N>` in C++, `[T; N]` in Rust, `[N]T` in Zig and Go, a list in Python and

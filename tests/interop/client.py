@@ -59,3 +59,6 @@ print("count", m.ml_labels_count([la, lb]))
 print("note", m.ml_note_len(m.ml_note("abc", 1, 3)))
 print("or_label", m.ml_or_label(la), m.ml_or_label(m.math_error(m.math_error.NEGATIVE)))
 print("given", m.ml_sum_given(3, lambda k: [k, 10 * k]), m.ml_area_given(lambda k: [m.vec2(1.5, k), m.vec2(2, 3.25)]))
+deep = [[[1, 2], [3]], [[4]]]
+d = m.ml_deep(deep)
+print("deep", d, deep[0][0][1], deep[1][0][0], "words", m.ml_words([["ab", "c"], [], ["def"]]))

@@ -268,6 +268,24 @@ attach fn is_list(this: bind&, s: u32) -> bool {
     return starts_with(this.c.ty_name(this.c.t.intern(tyk::STRUCT(s))).as_str(), "std::vec<");
 }
 
+// does an export fn take a slice of slices?
+attach fn takes_nested(this: bind&) -> bool {
+    for (i&) in this.exports().items() {
+        for (p&) in this.c.fi(*i).params.items() {
+            match (this.shape_of(p.ty) ?? shape::VOID) {
+                .SLICE(x) => {
+                    match (this.shape_of(x) ?? shape::VOID) {
+                        .SLICE(y) => { return true; },
+                        default => {},
+                    }
+                },
+                default => {},
+            }
+        }
+    }
+    return false;
+}
+
 // a slice type's element (its shape holds the element's view, see view_of)
 attach fn slice_elem(this: bind&, t: u32) -> u32 {
     match (*this.c.t.get(t)) {
@@ -4951,9 +4969,19 @@ fn py_params(n: usize) -> std::string {
 
 // a wrapper's argument: what it passes to the C function for Python value name (pre: statements
 // before the call, whose locals keep what Volt is lent alive until it returns; what Volt takes goes
-// in _gift, given up once every argument is ready, see py_invoke)
-attach fn py_arg(this: bind&, t: u32, name: str, conv: std::string&, pre: std::string&) -> void {
+// in _gift, given up once every argument is ready, see py_invoke; after: statements once it's back)
+attach fn py_arg(this: bind&, t: u32, name: str, conv: std::string&, pre: std::string&, after: std::string&) -> void {
     match (this.shape_of(t) ?? shape::VOID) {
+        .SLICE(x) => {
+            if (this.py_writable(this.slice_elem(t))) {
+                // what Volt writes into its numbers and structs comes back (see _back)
+                pre.append(fmt2("    _{}_s = {}\n", S(name), this.py_in(t, name)).as_str());
+                conv.append(fmt("_{}_s", S(name)).as_str());
+                after.append(fmt("    _back(_{}_s)\n", S(name)).as_str());
+                return;
+            }
+            conv.append(this.py_in(t, name).as_str());
+        },
         .CLOSURE(i) => {
             // a C function calling the Python one
             var ps: std::vec<u32> = {};
@@ -4979,6 +5007,15 @@ attach fn py_arg(this: bind&, t: u32, name: str, conv: std::string&, pre: std::s
             conv.append(fmt("_{}_o", S(name)).as_str());
         },
         default => { conv.append(this.py_in(t, name).as_str()); },
+    }
+}
+
+// can Volt write into a slice of e for Python to see (numbers, bools, enums and structs, or slices
+// of them)?
+attach fn py_writable(this: bind&, e: u32) -> bool {
+    match (this.shape_of(e) ?? shape::VOID) {
+        .SLICE(x) => { return this.py_writable(this.slice_elem(e)); },
+        default => { return this.node_simple(e); },
     }
 }
 
@@ -5278,13 +5315,14 @@ attach fn py_invoke(this: bind&, f: str, args: std::string, gift: bool, keep: bo
 
 // statements calling f with args (giving t) and returning its Python value: an error is raised, and
 // so is what a Python function Volt called raised (once its result is Python's, to be freed)
-attach fn py_call(this: bind&, t: u32, f: str, args: std::string, gift: bool) -> std::string {
+attach fn py_call(this: bind&, t: u32, f: str, args: std::string, gift: bool, after: str) -> std::string {
     var keep = this.holds_str(t);
     match (this.shape_of(t) ?? shape::VOID) {
         .RESULT(e, x) => { keep = this.holds_str(x); },
         default => {},
     }
     var out = this.py_invoke(f, move args, gift, keep);
+    out.append(after);
     var back: std::string = {};
     if (this.py_calls_back()) {
         back = S("_reraise()\n");
@@ -5322,12 +5360,12 @@ attach fn py_call(this: bind&, t: u32, f: str, args: std::string, gift: bool) ->
     return out;
 }
 
-attach fn py_body(this: bind&, f: u32, conv: std::string, pre: std::string) -> std::string {
+attach fn py_body(this: bind&, f: u32, conv: std::string, pre: std::string, after: std::string) -> std::string {
     val info = this.c.fi(f);
     var out = py_gift(pre.as_str(), conv.as_str());
     val gift = out.len() > 0;
     out.append(pre.as_str());
-    out.append(this.py_call(info.ret, py_lib(info.c_name).as_str(), move conv, gift).as_str());
+    out.append(this.py_call(info.ret, py_lib(info.c_name).as_str(), move conv, gift, after.as_str()).as_str());
     return out;
 }
 
@@ -5391,7 +5429,7 @@ attach fn py_trait(this: bind&, k: u32, out: std::string&) -> void {
         out.append(fmt2("\n    def {}(self{}):\n        o = self._o\n", this.trait_member(t, f.name, py_method, PY_MEMBERS, true), py_params(f.params.len)).as_str());
         var b = py_gift("", args.as_str());
         val gift = b.len() > 0;
-        b.append(this.py_call(f.ret, py_attr("o.vt[0]", f.name).as_str(), move args, gift).as_str());
+        b.append(this.py_call(f.ret, py_attr("o.vt[0]", f.name).as_str(), move args, gift, "").as_str());
         out.append(indent(b.as_str()).as_str());
     }
     out.append("\n    def close(self):\n        if self._o is not None:\n            if self._o.drop:\n                self._o.drop(self._o.self)\n            self._o = None\n\n    def __enter__(self):\n        return self\n\n    def __exit__(self, *exc):\n        self.close()\n\n    def __del__(self):\n        self.close()\n");
@@ -5510,7 +5548,7 @@ attach fn py_text(this: bind&) -> std::string {
         body.append(fmt3("\n\n# calls {}, given out by Volt as c\ndef _call{}(c{}):\n", this.c.ty_name(*this.closures.at(i)), unum(@cast<u64>(i)), py_params(ps.len)).as_str());
         var b = py_gift("", args.as_str());
         val gift = b.len() > 0;
-        b.append(this.py_call(r, "c.call", move args, gift).as_str());
+        b.append(this.py_call(r, "c.call", move args, gift, "").as_str());
         body.append(b.as_str());
     }
     for (k) in 0..this.traits.len {
@@ -5531,6 +5569,7 @@ attach fn py_text(this: bind&) -> std::string {
             var names: std::string = {};
             var conv: std::string = {};
             var pre: std::string = {};
+            var after: std::string = {};
             var first: usize = 0;
             var is_method = info.params.len > 0 && this.lends(info.params.at(0).ty, *s);
             if (is_method) {
@@ -5547,7 +5586,7 @@ attach fn py_text(this: bind&) -> std::string {
                     conv.append(", ");
                 }
                 names.append(ns.at(k - first).as_str());
-                this.py_arg(info.params.at(k).ty, ns.at(k - first).as_str(), &conv, &pre);
+                this.py_arg(info.params.at(k).ty, ns.at(k - first).as_str(), &conv, &pre, &after);
             }
             if (!is_method && m == "new") {
                 // the constructor
@@ -5562,6 +5601,7 @@ attach fn py_text(this: bind&) -> std::string {
                 val gift = b.len() > 0;
                 b.append(pre.as_str());
                 b.append(this.py_invoke(py_lib(info.c_name).as_str(), move conv, gift, false).as_str());
+                b.append(after.as_str());
                 var back: std::string = {};
                 if (this.py_calls_back()) {
                     back = S("_reraise()\n");
@@ -5586,7 +5626,7 @@ attach fn py_text(this: bind&) -> std::string {
                 body.append("\n    @staticmethod");
             }
             body.append(fmt2("\n    def {}({}):\n", S(m), move names).as_str());
-            var b = this.py_body(e.f, move conv, move pre);
+            var b = this.py_body(e.f, move conv, move pre, move after);
             body.append(indent(b.as_str()).as_str());
         }
     }
@@ -5598,6 +5638,7 @@ attach fn py_text(this: bind&) -> std::string {
         var names: std::string = {};
         var conv: std::string = {};
         var pre: std::string = {};
+        var after: std::string = {};
         val ns = this.py_pnames(e.f, 0);
         for (k) in 0..info.params.len {
             if (names.len() > 0) {
@@ -5605,10 +5646,10 @@ attach fn py_text(this: bind&) -> std::string {
                 conv.append(", ");
             }
             names.append(ns.at(k).as_str());
-            this.py_arg(info.params.at(k).ty, ns.at(k).as_str(), &conv, &pre);
+            this.py_arg(info.params.at(k).ty, ns.at(k).as_str(), &conv, &pre, &after);
         }
         body.append(fmt2("\n\ndef {}({}):\n", this.py_fn_name(info.c_name), move names).as_str());
-        body.append(this.py_body(e.f, move conv, move pre).as_str());
+        body.append(this.py_body(e.f, move conv, move pre, move after).as_str());
     }
     if (this.uses_str) {
         out.append("\n\nclass VoltStr(ctypes.Structure):\n    \"\"\"a Volt str: bytes and a length (no terminator)\"\"\"\n    _fields_ = [(\"ptr\", ctypes.c_void_p), (\"len\", ctypes.c_size_t)]\n\n    def __str__(self):\n        return ctypes.string_at(self.ptr, self.len).decode()\n\n\ndef _bytes(s):\n    if isinstance(s, str):\n        return s.encode()\n    if isinstance(s, (bytes, bytearray, memoryview)):\n        return bytes(s)\n    raise TypeError(\"expected str or bytes, not \" + type(s).__name__)\n\n\ndef _str(s):\n    b = _bytes(s)\n    v = VoltStr(ctypes.cast(ctypes.c_char_p(b), ctypes.c_void_p), len(b))\n    v._keep = b\n    return v\n");
@@ -5647,7 +5688,10 @@ attach fn py_text(this: bind&) -> std::string {
         out.append("\n\ndef _held(f, v):\n    \"\"\"a slice callback f gives Volt: kept until f's next result (Volt reads it before then)\"\"\"\n    f.held = v\n    return v\n");
     }
     if (this.slices.len > 0) {
-        out.append("\n\ndef _slice(cls, elem, xs):\n    arr = (elem * len(xs))(*xs)\n    v = cls(ctypes.cast(arr, ctypes.POINTER(elem)), len(xs))\n    v._keep = (arr, xs)\n    return v\n");
+        out.append("\n\ndef _slice(cls, elem, xs):\n    arr = (elem * len(xs))(*xs)\n    v = cls(ctypes.cast(arr, ctypes.POINTER(elem)), len(xs))\n    v._elems = (arr, xs)\n    return v\n");
+        if (contains(body.as_str(), "_back(")) {
+            out.append("\n\ndef _back(v):\n    \"\"\"what Volt wrote into slice v's elements, back where they came from: a number into its list, a\n    struct in place, a slice in it the same way\"\"\"\n    arr, xs = v._elems\n    for i, x in enumerate(xs):\n        if hasattr(x, \"_elems\"):\n            _back(x)\n        elif isinstance(x, ctypes.Structure):\n            ctypes.memmove(ctypes.addressof(x), ctypes.addressof(arr[i]), ctypes.sizeof(x))\n        elif isinstance(xs, list) and isinstance(x, (int, float)):\n            xs[i] = type(x)(arr[i])\n");
+        }
     }
     if (this.structs_hold_str()) {
         out.append("\n\ndef _text_init(cls):\n    \"\"\"a struct with text takes a str (or bytes) for it, and a sequence of them for an array of text,\n    kept as long as the struct\"\"\"\n    def text(t, x):\n        if t is VoltStr and not isinstance(x, VoltStr):\n            return _str(x)\n        if issubclass(t, ctypes.Array) and t._type_ is VoltStr and not isinstance(x, ctypes.Array):\n            return t(*[text(VoltStr, y) for y in x])\n        return x\n\n    def init(self, *a, **k):\n        a = list(a)\n        for i, (f, t) in enumerate(cls._fields_):\n            if i < len(a):\n                a[i] = text(t, a[i])\n            if f in k:\n                k[f] = text(t, k[f])\n        ctypes.Structure.__init__(self, *a, **k)\n    cls.__init__ = init\n\n\ndef _own(v, text=None):\n    \"\"\"v (a struct Volt gave back) with its text copied out of what Volt pointed it into; or one\n    a callback gives Volt, its text kept as long as the program (text=_static)\"\"\"\n    for f, t in type(v)._fields_:\n        if t is VoltStr:\n            setattr(v, f, (text or _str)(str(getattr(v, f))))\n        elif issubclass(t, ctypes.Structure):\n            _own(getattr(v, f), text)\n        elif issubclass(t, ctypes.Array) and t._type_ is VoltStr:\n            arr = getattr(v, f)\n            for i in range(len(arr)):\n                arr[i] = (text or _str)(str(arr[i]))\n        elif issubclass(t, ctypes.Array) and issubclass(t._type_, ctypes.Structure):\n            for x in getattr(v, f):\n                _own(x, text)\n    return v\n");
@@ -6513,7 +6557,7 @@ attach fn cs_ty(this: bind&, t: u32) -> std::string {
             }
             match (this.shape_of(x) ?? shape::VOID) {
                 // a slice of slices: an array of arrays
-                .SLICE(y) => { return fmt("{}[][]", this.cs_raw(y)); },
+                .SLICE(y) => { return this.cs_arr(t); },
                 .STRUCT(st) => { return fmt("Span<{}>", this.local(this.c.si(st).name)); },
                 default => {},
             }
@@ -6574,6 +6618,82 @@ struct cs_arg {
     pass: std::string = {};
     open: std::string = {};
     close: std::string = {};
+}
+
+// the C# type of a slice of slices (an array of arrays, down to numbers, structs or strings) or of
+// what's in one
+attach fn cs_arr(this: bind&, t: u32) -> std::string {
+    match (this.shape_of(t) ?? shape::VOID) {
+        .SLICE(x) => { return fmt("{}[]", this.cs_arr(this.slice_elem(t))); },
+        .STR => { return S("string"); },
+        .STRUCT(s) => { return this.local(this.c.si(s).name); },
+        default => { return this.cs_raw(t); },
+    }
+}
+
+// statements declaring C slice dst from C# array src (of slice type t), its elements in memory keep
+// holds for the call: numbers, structs, text and slices of them the same way (p and k name the
+// locals: an argument's, how deep)
+attach fn cs_slice_in(this: bind&, t: u32, src: str, dst: str, keep: str, p: str, k: u32) -> std::string {
+    val e = this.slice_elem(t);
+    val ec = this.cs_raw(this.view_of(e));
+    val sp = fmt2("{}_sp{}", S(p), unum(@cast<u64>(k)));
+    val si = fmt2("{}_si{}", S(p), unum(@cast<u64>(k)));
+    val x = fmt2("{}[{}]", S(src), copy si);
+    var fill: std::string = {};
+    match (this.shape_of(e) ?? shape::VOID) {
+        .SLICE(y) => {
+            val sv = fmt2("{}_sv{}", S(p), unum(@cast<u64>(k)));
+            fill = this.cs_slice_in(e, x.as_str(), sv.as_str(), keep, p, k + 1);
+            fill.append(fmt3("{}[{}] = {};\n", copy sp, copy si, copy sv).as_str());
+        },
+        .STR => { fill = fmt4("{}[{}] = {}.Str({});\n", copy sp, copy si, S(keep), copy x); },
+        .STRUCT(st) => {
+            if (this.holds_str(e)) {
+                fill = fmt4("{}[{}] = {}.ToC({});\n", copy sp, copy si, copy x, S(keep));
+            } else {
+                fill = fmt3("{}[{}] = {};\n", copy sp, copy si, copy x);
+            }
+        },
+        default => { fill = fmt3("{}[{}] = {};\n", copy sp, copy si, this.cs_give(e, x.as_str())); },
+    }
+    var out = fmt4("var {} = {}.Room<{}>({}.Length);\n", copy sp, S(keep), copy ec, S(src));
+    out.append(fmt4("for (var {} = 0; {} < {}.Length; {}++)\n{{\n", copy si, copy si, S(src), copy si).as_str());
+    out.append(indent(fill.as_str()).as_str());
+    out.append(fmt4("}}\nvar {} = new {} {{ ptr = {}, len = (nuint){}.Length }};\n", S(dst), this.made_name("slice", this.view_of(e), true), copy sp, S(src)).as_str());
+    return out;
+}
+
+// statements writing what Volt changed in C slice c (elements of type e) back into C# array src:
+// numbers and structs, at any depth (p and k name the locals; text stays as it was)
+attach fn cs_back(this: bind&, e: u32, src: str, c: str, p: str, k: u32) -> std::string {
+    val bi = fmt2("{}_bi{}", S(p), unum(@cast<u64>(k)));
+    var one: std::string = {};
+    match (this.shape_of(e) ?? shape::VOID) {
+        .SLICE(y) => {
+            one = this.cs_back(this.slice_elem(e), fmt2("{}[{}]", S(src), copy bi).as_str(), fmt2("{}.ptr[{}]", S(c), copy bi).as_str(), p, k + 1);
+            if (one.len() == 0) {
+                return {};
+            }
+        },
+        .STR => { return {}; },
+        .STRUCT(st) => {
+            if (this.holds_str(e)) {
+                return {};
+            }
+            one = fmt5("{}[{}] = {}.ptr[{}];\n", S(src), copy bi, S(c), copy bi, S(""));
+        },
+        default => {
+            if (!this.node_simple(e)) {
+                return {};
+            }
+            one = fmt3("{}[{}] = {};\n", S(src), copy bi, this.cs_value(e, fmt2("{}.ptr[{}]", S(c), copy bi).as_str()));
+        },
+    }
+    var out = fmt4("for (var {} = 0; {} < {}.Length; {}++)\n{{\n", copy bi, copy bi, S(src), copy bi);
+    out.append(indent(one.as_str()).as_str());
+    out.append("}\n");
+    return out;
 }
 
 attach fn cs_arg_of(this: bind&, t: u32, name0: str, a: cs_arg&) -> void {
@@ -6649,17 +6769,14 @@ attach fn cs_arg_of(this: bind&, t: u32, name0: str, a: cs_arg&) -> void {
         .SLICE(x) => {
             match (this.shape_of(x) ?? shape::VOID) {
                 .SLICE(y) => {
-                    // a slice of slices: each inner array pinned for the call (Volt reads and writes it
-                    // in place), their views in an array of their own
-                    val sn = this.made_name("slice", y, true);
-                    a.decl = fmt2("{}[][] {}", this.cs_raw(y), S(name));
-                    a.open = fmt3("var {}_h = new GCHandle[{}.Length];\nvar {}_v = new ", S(name0), S(name), S(name0));
-                    a.open.append(fmt3("{}[{}.Length];\ntry {{\nfor (var i = 0; i < {}.Length; i++)\n{{\n", copy sn, S(name), S(name)).as_str());
-                    a.open.append(fmt3("    {}_h[i] = GCHandle.Alloc({}[i], GCHandleType.Pinned);\n    {}_v[i] = new ", S(name0), S(name), S(name0)).as_str());
-                    a.open.append(fmt4("{} {{ ptr = ({}*){}_h[i].AddrOfPinnedObject(), len = (nuint){}[i].Length }};\n}}\n", copy sn, this.cs_raw(y), S(name0), S(name)).as_str());
-                    a.open.append(fmt3("fixed ({}* {}_p = {}_v) {{\n", copy sn, S(name0), S(name0)).as_str());
-                    a.pass = fmt3("new {} {{ ptr = {}_p, len = (nuint){}_v.Length }}", this.made_name("slice", x, true), S(name0), S(name0));
-                    a.close = fmt("}}\n}}\nfinally {{\n    foreach (var h in {}_h)\n    {{\n        if (h.IsAllocated)\n        {{\n            h.Free();\n        }}\n    }}\n}}\n", S(name0));
+                    // a slice of slices (any depth, text too): each inner array copied into memory the
+                    // call holds (see VoltKeep), what Volt wrote into numbers and structs copied back
+                    a.decl = fmt2("{} {}", this.cs_arr(t), S(name));
+                    a.open = fmt2("var {}_k = new VoltKeep();\ntry {{\n", S(name0), S(""));
+                    a.open.append(this.cs_slice_in(t, name, fmt("{}_v", S(name0)).as_str(), fmt("{}_k", S(name0)).as_str(), name0, 0).as_str());
+                    a.pass = fmt("{}_v", S(name0));
+                    a.close = this.cs_back(this.slice_elem(t), name, fmt("{}_v", S(name0)).as_str(), name0, 0);
+                    a.close.append(fmt("}}\nfinally {{\n    {}_k.Free();\n}}\n", S(name0)).as_str());
                     return;
                 },
                 default => {},
@@ -7518,7 +7635,7 @@ attach fn cs_text(this: bind&) -> std::string {
         out.append("\n/// <summary>E!T as a parameter: a value, or an error (each converts to one)</summary>\npublic readonly struct VoltResult<T>\n{\n    public readonly T Value;\n    public readonly VoltException? Error;\n\n    VoltResult(T value, VoltException? error)\n    {\n        Value = value;\n        Error = error;\n    }\n\n    public static VoltResult<T> Ok(T value) => new(value, null);\n\n    public static VoltResult<T> Err(VoltException error) => new(default!, error);\n\n    public static implicit operator VoltResult<T>(T value) => Ok(value);\n\n    public static implicit operator VoltResult<T>(VoltException error) => Err(error);\n}\n");
     }
     if (this.structs_hold_str() || contains(out.as_str(), "new VoltKeep(")) {
-        out.append("\n// text a struct gives a Volt call: each string's UTF-8 bytes in memory of its own, freed by Free\n// once the call is back; Kept's, a callback's result's, kept for good (see VoltStr.Keep)\ninternal sealed unsafe class VoltKeep\n{\n    public static readonly VoltKeep Kept = new();\n    readonly List<IntPtr> ps = new();\n\n    public VoltStr Str(string s)\n    {\n        if (this == Kept)\n        {\n            return VoltStr.Keep(s);\n        }\n        var b = Encoding.UTF8.GetBytes(s);\n        var p = (byte*)NativeMemory.Alloc((nuint)b.Length + 1);\n        b.CopyTo(new Span<byte>(p, b.Length));\n        ps.Add((IntPtr)p);\n        return new VoltStr { ptr = p, len = (nuint)b.Length };\n    }\n\n    public void Free()\n    {\n        foreach (var p in ps)\n        {\n            NativeMemory.Free((void*)p);\n        }\n        ps.Clear();\n    }\n}\n");
+        out.append("\n// text a struct gives a Volt call: each string's UTF-8 bytes in memory of its own, freed by Free\n// once the call is back; Kept's, a callback's result's, kept for good (see VoltStr.Keep)\ninternal sealed unsafe class VoltKeep\n{\n    public static readonly VoltKeep Kept = new();\n    readonly List<IntPtr> ps = new();\n\n    public VoltStr Str(string s)\n    {\n        if (this == Kept)\n        {\n            return VoltStr.Keep(s);\n        }\n        var b = Encoding.UTF8.GetBytes(s);\n        var p = (byte*)NativeMemory.Alloc((nuint)b.Length + 1);\n        b.CopyTo(new Span<byte>(p, b.Length));\n        ps.Add((IntPtr)p);\n        return new VoltStr { ptr = p, len = (nuint)b.Length };\n    }\n\n    // room for n elements a call takes (a slice in a slice), freed with the rest\n    public T* Room<T>(int n) where T : unmanaged\n    {\n        var p = (T*)NativeMemory.Alloc((nuint)Math.Max(1, n), (nuint)sizeof(T));\n        ps.Add((IntPtr)p);\n        return p;\n    }\n\n    public void Free()\n    {\n        foreach (var p in ps)\n        {\n            NativeMemory.Free((void*)p);\n        }\n        ps.Clear();\n    }\n}\n");
     }
     if (contains(out.as_str(), "new VoltHandles(")) {
         out.append("\n// handles lent to Volt for one call: each kept alive (and unfreeable) until Dispose\ninternal sealed class VoltHandles : IDisposable\n{\n    readonly VoltHandle[] hs;\n    readonly bool[] refs;\n    public readonly IntPtr[] Ptrs;\n\n    public VoltHandles(IEnumerable<VoltHandle> xs)\n    {\n        hs = xs.ToArray();\n        refs = new bool[hs.Length];\n        Ptrs = new IntPtr[hs.Length];\n        try\n        {\n            for (var i = 0; i < hs.Length; i++)\n            {\n                hs[i].DangerousAddRef(ref refs[i]);\n                hs[i].busy++;\n                Ptrs[i] = hs[i].DangerousGetHandle();\n            }\n        }\n        catch\n        {\n            Dispose();\n            throw;\n        }\n    }\n\n    public void Dispose()\n    {\n        for (var i = 0; i < hs.Length; i++)\n        {\n            if (refs[i])\n            {\n                hs[i].busy--;\n                hs[i].DangerousRelease();\n                refs[i] = false;\n            }\n        }\n    }\n}\n");
@@ -7835,7 +7952,8 @@ attach fn java_write(this: bind&, t: u32, seg: str, off: u64, v: str) -> std::st
             }
             return fmt3("{}.write({}.asSlice({}));", S(v), S(seg), unum(off));
         },
-        .STR => { return fmt4("MemorySegment.copy(str(arena, {}), 0, {}, {}, 16);", S(v), S(seg), unum(off), S("")); },
+        // (the source's offset is 0L: replace_off moves only the destination's)
+        .STR => { return fmt4("MemorySegment.copy(str(arena, {}), 0L, {}, {}, 16);", S(v), S(seg), unum(off), S("")); },
         .ARRAY(e, n) => {
             if (this.java_num(e)) {
                 var w = fmt4("if ({}.length != {}) {{\n    throw new IllegalArgumentException(\"expected {} elements, not \" + {}.length);\n}}\n", S(v), unum(n), unum(n), S(v));
@@ -9217,7 +9335,7 @@ attach fn go_give(this: bind&, t: u32, v: str) -> std::string {
                 one = S("x.handle()");
             }
             var f = fmt3("func(x {}) {} {{ return {} }}", this.go_ty(e), this.go_cty(x), move one);
-            return fmt5("{}{{ptr: (*{})(keepEach(s, {}, {})), len: C.size_t(len({}))}}", this.go_cty(t), this.go_cty(x), S(v), move f, S(v));
+            return fmt5("{}{{ptr: (*{})(keepEach(&s.kept, {}, {})), len: C.size_t(len({}))}}", this.go_cty(t), this.go_cty(x), S(v), move f, S(v));
         },
         default => { return this.go_to_c(t, v); },
     }
@@ -9465,6 +9583,120 @@ attach fn go_arg_of(this: bind&, t: u32, name: str, a: go_arg&) -> void {
     }
 }
 
+// the Go expression making Go slice v (of slice type t, in a slice of slices) a C slice, its
+// elements in C memory added to k (freed when the call is back), text pinned with pin: a call to
+// the cOf_ function go_slice_fns makes for t
+attach fn go_c_slice(this: bind&, t: u32, v: str, k: str, pin: str) -> std::string {
+    return fmt4("cOf_{}({}, {}, {})", this.made_name("slice", this.view_of(this.slice_elem(t)), false), S(k), S(pin), S(v));
+}
+
+// the cOf_ functions (see go_c_slice) for the slices in the slices of slices export fns take
+attach fn go_slice_fns(this: bind&) -> std::string {
+    var out: std::string = {};
+    var done: std::vec<std::string> = {};
+    for (i&) in this.exports().items() {
+        for (p&) in this.c.fi(*i).params.items() {
+            match (this.shape_of(p.ty) ?? shape::VOID) {
+                .SLICE(x) => {
+                    var t = this.slice_elem(p.ty);
+                    var more = true;
+                    while (more) {
+                        more = false;
+                        match (this.shape_of(t) ?? shape::VOID) {
+                            .SLICE(y) => {
+                                val e = this.slice_elem(t);
+                                val cn = this.made_name("slice", this.view_of(e), false);
+                                var seen = false;
+                                for (d&) in done.items() {
+                                    seen = seen || d.as_str() == cn.as_str();
+                                }
+                                if (!seen) {
+                                    var one = this.go_to_c(e, "x");
+                                    match (this.shape_of(e) ?? shape::VOID) {
+                                        .SLICE(z) => { one = this.go_c_slice(e, "x", "k", "pin"); },
+                                        .STR => { one = S("pinnedStr(pin)(x)"); },
+                                        .STRUCT(st) => {
+                                            if (this.holds_str(e)) {
+                                                one = S("x.cWith(pinnedStr(pin))");
+                                            }
+                                        },
+                                        default => {},
+                                    }
+                                    val ec = this.go_cty(this.view_of(e));
+                                    out.append(fmt5("\n// v as a C slice, its elements in C memory added to k (text pinned with pin)\nfunc cOf_{}(k *[]unsafe.Pointer, pin *runtime.Pinner, v []{}) C.{} {{\n    return C.{}{{ptr: (*{})", copy cn, this.go_ty(e), copy cn, copy cn, copy ec).as_str());
+                                    out.append(fmt4("(keepEach(k, v, func(x {}) {} {{ return {} }})), len: C.size_t(len(v))}}\n}}\n", this.go_ty(e), copy ec, move one, S("")).as_str());
+                                    done.push(move cn);
+                                }
+                                t = e;
+                                more = true;
+                            },
+                            default => {},
+                        }
+                    }
+                },
+                default => {},
+            }
+        }
+    }
+    return out;
+}
+
+// statements writing what Volt changed in C slice c (elements of type e) back into Go slice v:
+// numbers and structs, at any depth (k: how deep; text stays as it was)
+attach fn go_back(this: bind&, e: u32, v: str, c: str, k: u32) -> std::string {
+    val d = unum(@cast<u64>(k));
+    var one: std::string = {};
+    match (this.shape_of(e) ?? shape::VOID) {
+        .SLICE(y) => {
+            one = this.go_back(this.slice_elem(e), fmt2("{}[i{}]", S(v), copy d).as_str(), fmt2("s{}[i{}]", copy d, copy d).as_str(), k + 1);
+            if (one.len() == 0) {
+                return {};
+            }
+        },
+        .STR => { return {}; },
+        .STRUCT(st) => { one = fmt4("{}[i{}] = {}\n", S(v), copy d, this.go_from_c(e, fmt2("s{}[i{}]", copy d, copy d).as_str()), S("")); },
+        default => {
+            if (!this.node_simple(e)) {
+                return {};
+            }
+            one = fmt4("{}[i{}] = {}\n", S(v), copy d, this.go_from_c(e, fmt2("s{}[i{}]", copy d, copy d).as_str()), S(""));
+        },
+    }
+    var out = fmt3("s{} := unsafe.Slice({}.ptr, len({}))\n", copy d, S(c), S(v));
+    out.append(fmt2("for i{} := range {} {{\n", copy d, S(v)).as_str());
+    out.append(indent(one.as_str()).as_str());
+    out.append("}\n");
+    return out;
+}
+
+// does an export fn take text in a slice of slices (pinned for the call, see pinnedStr)?
+attach fn go_nested_strs(this: bind&) -> bool {
+    for (i&) in this.exports().items() {
+        for (p&) in this.c.fi(*i).params.items() {
+            match (this.shape_of(p.ty) ?? shape::VOID) {
+                .SLICE(x) => {
+                    if (this.go_strs_in(this.slice_elem(p.ty))) {
+                        return true;
+                    }
+                },
+                default => {},
+            }
+        }
+    }
+    return false;
+}
+
+// is t a slice with text at its bottom?
+attach fn go_strs_in(this: bind&, t: u32) -> bool {
+    match (this.shape_of(t) ?? shape::VOID) {
+        .SLICE(x) => {
+            val e = this.slice_elem(t);
+            return this.in_ty(e) == STR || this.go_strs_in(e);
+        },
+        default => { return false; },
+    }
+}
+
 // a slice parameter whose elements C takes as x (text as str, a handle as its pointer); given: a
 // list's, whose handles are given up
 attach fn go_slice_arg(this: bind&, x: u32, given: bool, name: str, a: go_arg&) -> void {
@@ -9507,15 +9739,19 @@ attach fn go_slice_arg(this: bind&, x: u32, given: bool, name: str, a: go_arg&) 
     a.pass = move pass;
     match (this.shape_of(x) ?? shape::VOID) {
         .SLICE(y) => {
-            // a slice of slices: each inner slice copied into C memory (Go memory C keeps can't hold
-            // Go pointers), what Volt wrote copied back, then freed
-            val yc = this.go_cty(y);
-            a.before = fmt4("{}_c := make([]C.{}, len({})+1)\nfor i, r := range {} {{\n", copy n, this.made_name("slice", y, false), copy n, copy n);
-            a.before.append(fmt3("    var z {}\n    p := (*{})(C.malloc(C.size_t(len(r)+1) * C.size_t(unsafe.Sizeof(z))))\n    b := unsafe.Slice(p, len(r)+1)\n", copy yc, copy yc, S("")).as_str());
-            a.before.append(fmt("    for j, x := range r {{\n        b[j] = {}\n    }}\n", this.go_to_c(y, "x")).as_str());
-            a.before.append(fmt2("    {}_c[i] = C.{}{{ptr: p, len: C.size_t(len(r))}}\n}}\n", copy n, this.made_name("slice", y, false)).as_str());
-            a.give = fmt2("defer func() {{\n    for i := range {} {{\n        C.free(unsafe.Pointer({}_c[i].ptr))\n    }}\n}}()\n", copy n, copy n);
-            a.after = fmt3("for i, r := range {} {{\n    b := unsafe.Slice({}_c[i].ptr, len(r)+1)\n    for j := range r {{\n        r[j] = {}\n    }}\n}}\n", copy n, copy n, this.go_from_c(y, "b[j]"));
+            // a slice of slices (any depth, text too): each inner slice copied into C memory (Go memory
+            // C keeps can't hold Go pointers; text is pinned where it is), what Volt wrote into
+            // numbers and structs copied back, then freed
+            a.before = fmt2("var {}_k []unsafe.Pointer\nvar {}_pin runtime.Pinner\n", copy n, copy n);
+            a.before.append(fmt3("defer func() {{\n    {}_pin.Unpin()\n    for _, p := range {}_k {{\n        C.free(p)\n    }}\n}}()\n", copy n, copy n, S("")).as_str());
+            a.before.append(fmt4("{}_c := make([]{}, len({})+1)\nfor i, x := range {} {{\n", copy n, this.go_cty(x), copy n, copy n).as_str());
+            a.before.append(fmt2("    {}_c[i] = {}\n}}\n", copy n, this.go_c_slice(x, "x", fmt("&{}_k", copy n).as_str(), fmt("&{}_pin", copy n).as_str())).as_str());
+            if (!given) {
+                val back = this.go_back(this.slice_elem(x), "r", fmt("{}_c[i]", copy n).as_str(), 0);
+                if (back.len() > 0) {
+                    a.after = fmt2("for i, r := range {} {{\n{}}}\n", copy n, indent(back.as_str()));
+                }
+            }
             return;
         },
         .OPT(v) => {
@@ -9969,7 +10205,7 @@ attach fn go_text(this: bind&) -> std::string {
         g.append("\n// a string as a Volt str (the bytes stay Go's; C only reads them during the call)\nfunc goStr(s string) C.volt_str {\n    return C.volt_str{ptr: (*C.uint8_t)(unsafe.Pointer(unsafe.StringData(s))), len: C.size_t(len(s))}\n}\n");
         g.append("\n// a Volt str as a Go string (a copy)\nfunc goString(s C.volt_str) string {\n    return C.GoStringN((*C.char)(unsafe.Pointer(s.ptr)), C.int(s.len))\n}\n");
     }
-    if (this.structs_hold_str()) {
+    if (this.structs_hold_str() || this.go_nested_strs()) {
         g.append("\n// pinnedStr lends strings as goStr does, each pinned where it is until pin is unpinned (for Go\n// memory C is given, which can't hold unpinned Go pointers)\nfunc pinnedStr(pin *runtime.Pinner) func(string) C.volt_str {\n    return func(s string) C.volt_str {\n        if len(s) > 0 {\n            pin.Pin(unsafe.StringData(s))\n        }\n        return goStr(s)\n    }\n}\n");
     }
     if (has_u32(&this.slices, STR)) {
@@ -10098,9 +10334,6 @@ attach fn go_text(this: bind&) -> std::string {
     for (k) in 0..this.traits.len {
         this.go_trait(@cast<u32>(k), &g);
     }
-    if (contains(g.as_str(), "keepEach(s, ")) {
-        g.append("\n// the elements of a slice Go gives Volt (a callback's result), each converted by c, in C memory\n// freed when the call s was passed to returns\nfunc keepEach[T, E any](s *callback, v []T, c func(T) E) unsafe.Pointer {\n    var e E\n    p := C.calloc(C.size_t(len(v)+1), C.size_t(unsafe.Sizeof(e)))\n    s.kept = append(s.kept, p)\n    out := unsafe.Slice((*E)(p), len(v))\n    for i, x := range v {\n        out[i] = c(x)\n    }\n    return p\n}\n");
-    }
     if (this.traits.len > 0) {
         // a Go value given to Volt, which is done with it: its Close runs
         g.append(fmt2("\n//export {}GoDrop\nfunc {}GoDrop(self unsafe.Pointer) {{\n    h := (*cgo.Handle)(self)\n    s := h.Value().(*callback)\n    h.Delete()\n    C.free(self)\n    defer func() {{\n        if v := recover(); v != nil {{\n            s.catch(v)\n        }}\n    }}()\n", S(p), S(p)).as_str());
@@ -10162,6 +10395,10 @@ attach fn go_text(this: bind&) -> std::string {
         g.append(fmt3("func {}({}){} {{\n", copy gn, go_decls(&args), this.go_results(info.ret)).as_str());
         g.append(indent(this.go_body(e.f, &args, null).as_str()).as_str());
         g.append("}\n");
+    }
+    g.append(this.go_slice_fns().as_str());
+    if (contains(g.as_str(), "keepEach(")) {
+        g.append("\n// the elements of a slice for Volt (an argument's, or a callback's result), each converted by c, in\n// C memory added to k, which is freed when the call is back\nfunc keepEach[T, E any](k *[]unsafe.Pointer, v []T, c func(T) E) unsafe.Pointer {\n    var e E\n    p := C.calloc(C.size_t(len(v)+1), C.size_t(unsafe.Sizeof(e)))\n    *k = append(*k, p)\n    out := unsafe.Slice((*E)(p), len(v))\n    for i, x := range v {\n        out[i] = c(x)\n    }\n    return p\n}\n");
     }
     out.append(go_tabs(g.as_str()).as_str());
     return out;
@@ -10385,26 +10622,7 @@ attach fn node_get(this: bind&, t: u32, js: str, c: str) -> compile_error!std::s
             g.append(fmt5("napi_value e{} = NULL; napi_get_element(env, {}, i{}, &e{}); {} } }", copy d, S(js), copy d, copy d, move el).as_str());
             return g;
         },
-        .SLICE(x) => {
-            // a callback's: an array's elements in memory held until the call into Volt is back (see
-            // vn_hold); a handle or text in it would have no owner
-            val e = this.slice_elem(t);
-            match (this.shape_of(e) ?? shape::VOID) {
-                .TEXT(y) => { return fail(NO_SPAN, fmt("{} can't come from JavaScript", this.c.ty_name(t))); },
-                default => {},
-            }
-            if (this.handle_of(e) != null) {
-                return fail(NO_SPAN, fmt("{} can't come from JavaScript", this.c.ty_name(t)));
-            }
-            val d = fmt("{}", unum(@cast<u64>(c.len)));
-            val el = try this.node_get(e, fmt("e{}", copy d).as_str(), fmt2("p{}[i{}]", copy d, copy d).as_str());
-            var g = fmt5("{{ uint32_t n{} = 0; if (!vn_array(env, {}, &n{})) {{ goto fail; }} {} *p{} = ", copy d, S(js), copy d, this.c_prim(this.view_of(e), false), copy d);
-            g.append(fmt5("calloc(n{} ? n{} : 1, sizeof *p{}); if (!p{}) {{ vn_throw(env, \"out of memory\"); goto fail; }} if (!vn_hold(env, p{})) {{ goto fail; }} ", copy d, copy d, copy d, copy d, copy d).as_str());
-            g.append(fmt5("for (uint32_t i{} = 0; i{} < n{}; i{}++) {{ napi_value e{} = NULL; ", copy d, copy d, copy d, copy d, copy d).as_str());
-            g.append(fmt5("napi_get_element(env, {}, i{}, &e{}); {} }} {}.ptr = ", S(js), copy d, copy d, move el, S(c)).as_str());
-            g.append(fmt3("p{}; {}.len = n{}; }", copy d, S(c), copy d).as_str());
-            return g;
-        },
+        .SLICE(x) => { return try this.node_slice_get(this.slice_elem(t), js, c, 0); },
         default => { return fail(NO_SPAN, fmt("{} can't come from JavaScript", this.c.ty_name(t))); },
     }
 }
@@ -10670,6 +10888,56 @@ attach fn node_arg_of(this: bind&, t: u32, js: str, c: str, a: node_arg&) -> com
     return;
 }
 
+// C statements making C slice c (elements of type e) from JS array js: the elements in memory held
+// until the call into Volt is back (see vn_hold), each read as node_get reads it, a slice in it the
+// same way (k: how deep, which names its locals); a handle or text in it would have no owner
+attach fn node_slice_get(this: bind&, e: u32, js: str, c: str, k: u32) -> compile_error!std::string {
+    match (this.shape_of(e) ?? shape::VOID) {
+        .TEXT(y) => { return fail(NO_SPAN, fmt("a slice of {} can't come from JavaScript", this.c.ty_name(e))); },
+        default => {},
+    }
+    if (this.handle_of(e) != null) {
+        return fail(NO_SPAN, fmt("a slice of {} can't come from JavaScript", this.c.ty_name(e)));
+    }
+    val d = unum(@cast<u64>(k));
+    val dst = fmt2("sp{}[si{}]", copy d, copy d);
+    var el: std::string = {};
+    match (this.shape_of(e) ?? shape::VOID) {
+        .SLICE(x) => { el = try this.node_slice_get(this.slice_elem(e), fmt("se{}", copy d).as_str(), dst.as_str(), k + 1); },
+        default => { el = try this.node_get(e, fmt("se{}", copy d).as_str(), dst.as_str()); },
+    }
+    var g = fmt5("{{ uint32_t sn{} = 0; if (!vn_array(env, {}, &sn{})) {{ goto fail; }} {} *sp{} = ", copy d, S(js), copy d, this.c_prim(this.view_of(e), false), copy d);
+    g.append(fmt5("calloc(sn{} ? sn{} : 1, sizeof *sp{}); if (!sp{}) {{ vn_throw(env, \"out of memory\"); goto fail; }} if (!vn_hold(env, sp{})) {{ goto fail; }} ", copy d, copy d, copy d, copy d, copy d).as_str());
+    g.append(fmt5("for (uint32_t si{} = 0; si{} < sn{}; si{}++) {{ napi_value se{} = NULL; ", copy d, copy d, copy d, copy d, copy d).as_str());
+    g.append(fmt5("napi_get_element(env, {}, si{}, &se{}); {} }} {}.ptr = ", S(js), copy d, copy d, move el, S(c)).as_str());
+    g.append(fmt3("sp{}; {}.len = sn{}; }", copy d, S(c), copy d).as_str());
+    return g;
+}
+
+// C statements writing what Volt changed in C slice c (elements of type e) back into JS array js:
+// numbers and structs, at any depth (k: how deep; text stays as it was)
+attach fn node_back(this: bind&, e: u32, js: str, c: str, k: u32) -> std::string {
+    val d = unum(@cast<u64>(k));
+    if (this.node_simple(e)) {
+        var b = fmt5("for (size_t bi{} = 0; bi{} < {}.len; bi{}++) {{ napi_set_element(env, {}, ", copy d, copy d, S(c), copy d, S(js));
+        b.append(fmt2("(uint32_t)bi{}, {}); }", copy d, this.node_put_simple(e, fmt2("{}.ptr[bi{}]", S(c), copy d).as_str())).as_str());
+        return b;
+    }
+    match (this.shape_of(e) ?? shape::VOID) {
+        .SLICE(x) => {
+            val inner = this.node_back(this.slice_elem(e), fmt("be{}", copy d).as_str(), fmt2("{}.ptr[bi{}]", S(c), copy d).as_str(), k + 1);
+            if (inner.len() == 0) {
+                return {};
+            }
+            var b = fmt4("for (size_t bi{} = 0; bi{} < {}.len; bi{}++) {{ ", copy d, copy d, S(c), copy d);
+            b.append(fmt4("napi_value be{} = NULL; napi_get_element(env, {}, (uint32_t)bi{}, &be{}); ", copy d, S(js), copy d, copy d).as_str());
+            b.append(fmt("{} }", move inner).as_str());
+            return b;
+        },
+        default => { return {}; },
+    }
+}
+
 // a slice's or a list's elements from a JS array (elem: the element type; given: a list's, which
 // Volt takes): strings for text, class instances for handles (lent, or given up), the value or null
 // for an optional, and numbers and structs as C holds them (what Volt writes into a slice's comes
@@ -10704,25 +10972,13 @@ attach fn node_elems(this: bind&, elem: u32, given: bool, js: str, c: str, a: no
     }
     match (this.shape_of(v) ?? shape::VOID) {
         .SLICE(y) => {
-            if (!this.node_simple(y)) {
-                return fail(NO_SPAN, fmt("{} can't come from JavaScript (a slice of slices of numbers or structs can)", this.c.ty_name(elem)));
+            // a slice of slices (any depth, text too): arrays of arrays, each in memory held for the
+            // call (see vn_hold), what Volt wrote into numbers and structs coming back
+            a.decl = fmt2("{} {};", copy st, S(c));
+            a.get = try this.node_slice_get(elem, js, c, 0);
+            if (!given) {
+                a.after = this.node_back(elem, js, c, 0);
             }
-            // a slice of slices: an array of arrays, each inner one in a buffer of its own (freed after
-            // the call), what Volt wrote coming back
-            val et = this.c_prim(v, false);
-            val yt = this.c_prim(y, false);
-            a.decl = fmt3("{} {}; {} *", copy st, S(c), copy et);
-            a.decl.append(fmt2("{}_buf = NULL; uint32_t {}_n = 0;", S(c), S(c)).as_str());
-            a.get = fmt3("if (!vn_array(env, {}, &{}_n)) { goto fail; } {}_buf = ", S(js), S(c), S(c));
-            a.get.append(fmt3("calloc({}_n ? {}_n : 1, sizeof({}));", S(c), S(c), copy et).as_str());
-            a.get.append(fmt(" if (!{}_buf) {{ vn_throw(env, \"out of memory\"); goto fail; }}", S(c)).as_str());
-            a.get.append(fmt2(" for (uint32_t i = 0; i < {}_n; i++) {{ napi_value e; uint32_t m = 0; napi_get_element(env, {}, i, &e);", S(c), S(js)).as_str());
-            a.get.append(fmt4(" if (!vn_array(env, e, &m)) {{ goto fail; }} {} *p = calloc(m ? m : 1, sizeof({})); if (!p) {{ vn_throw(env, \"out of memory\"); goto fail; }} {}_buf[i].ptr = p; {}_buf[i].len = m;", copy yt, copy yt, S(c), S(c)).as_str());
-            a.get.append(fmt(" for (uint32_t j = 0; j < m; j++) {{ napi_value f; napi_get_element(env, e, j, &f); {} }} }}", this.node_get_simple(y, "f", "p[j]")).as_str());
-            a.get.append(fmt4(" {}.ptr = {}_buf; {}.len = {}_n;", S(c), S(c), S(c), S(c)).as_str());
-            a.cleanup = fmt4("if ({}_buf) {{ for (uint32_t i = 0; i < {}_n; i++) {{ free({}_buf[i].ptr); }} }} free({}_buf);", S(c), S(c), S(c), S(c));
-            a.after = fmt3("for (uint32_t i = 0; i < {}_n; i++) {{ napi_value e; napi_get_element(env, {}, i, &e); for (size_t j = 0; j < {}", S(c), S(js), S(c));
-            a.after.append(fmt2("_buf[i].len; j++) {{ napi_set_element(env, e, (uint32_t)j, {}); }} }}", this.node_put_simple(y, fmt("{}_buf[i].ptr[j]", S(c)).as_str()), S("")).as_str());
             return;
         },
         default => {},
@@ -11822,6 +12078,30 @@ attach fn lua_push(this: bind&, t: u32, c: str) -> std::string {
     }
 }
 
+// C statements writing what Volt changed in C slice c (elements of type e) back into the table at
+// stack index tbl: numbers and structs, at any depth (k: how deep; text stays as it was)
+attach fn lua_back(this: bind&, e: u32, tbl: str, c: str, k: u32) -> std::string {
+    val d = unum(@cast<u64>(k));
+    if (this.node_simple(e)) {
+        var b = fmt4("for (size_t bi{} = 0; bi{} < {}.len; bi{}++) {{ ", copy d, copy d, S(c), copy d);
+        b.append(fmt3("{} lua_seti(L, {}, (lua_Integer)bi{} + 1); }", this.lua_push(e, fmt2("{}.ptr[bi{}]", S(c), copy d).as_str()), S(tbl), copy d).as_str());
+        return b;
+    }
+    match (this.shape_of(e) ?? shape::VOID) {
+        .SLICE(x) => {
+            val inner = this.lua_back(this.slice_elem(e), fmt("bt{}", copy d).as_str(), fmt2("{}.ptr[bi{}]", S(c), copy d).as_str(), k + 1);
+            if (inner.len() == 0) {
+                return {};
+            }
+            var b = fmt4("for (size_t bi{} = 0; bi{} < {}.len; bi{}++) {{ ", copy d, copy d, S(c), copy d);
+            b.append(fmt4("lua_geti(L, {}, (lua_Integer)bi{} + 1); int bt{} = lua_gettop(L); if (lua_istable(L, bt{})) {{ ", S(tbl), copy d, copy d, copy d).as_str());
+            b.append(fmt("{} } lua_pop(L, 1); }", move inner).as_str());
+            return b;
+        },
+        default => { return {}; },
+    }
+}
+
 // statements pushing a new sequence of the elements of C slice or list r (of x's; el pushes element
 // r.ptr[iN]), with its n field when they're optionals (nil for none, as table.pack gives)
 attach fn lua_seq_out(this: bind&, x: u32, r: str, el: std::string) -> std::string {
@@ -11936,10 +12216,8 @@ attach fn lua_in(this: bind&, t: u32, idx: str, c: str, what: str, kp: str, a: l
                 a.get = this.lua_seq(this.slice_elem(t), idx, c, what, kp, how.as_str(), "");
                 return;
             }
-            if (this.node_simple(x)) {
-                // what Volt wrote into the elements comes back
-                a.after = fmt3("for (size_t i = 0; i < {}.len; i++) {{ {} lua_seti(L, {}, (lua_Integer)i + 1); }", S(c), this.lua_push(x, fmt("{}.ptr[i]", S(c)).as_str()), S(idx));
-            }
+            // what Volt wrote into the numbers and structs comes back, at any depth
+            a.after = this.lua_back(this.slice_elem(t), idx, c, 0);
         },
         .PTR(x) => {
             if (x != VOID && (this.node_simple(x) || this.node_plain_struct(x))) {
@@ -13576,6 +13854,73 @@ attach fn dart_arg_of(this: bind&, t: u32, name0: str, a: dart_arg&) -> compile_
     return;
 }
 
+// statements filling C slice dst (a Struct, elements of type e) from Dart List src, in memory call$
+// holds: numbers, structs, text and slices of them the same way (k: how deep, which names its
+// locals)
+attach fn dart_slice_in(this: bind&, e: u32, src: str, dst: str, k: u32) -> compile_error!std::string {
+    val d = unum(@cast<u64>(k));
+    val vn = this.dart_native(this.view_of(e));
+    val at = fmt2("(sp{}$ + si{}$).ref", copy d, copy d);
+    val x = fmt2("{}[si{}$]", S(src), copy d);
+    var fill: std::string = {};
+    match (this.shape_of(e) ?? shape::VOID) {
+        .SLICE(y) => { fill = try this.dart_slice_in(this.slice_elem(e), x.as_str(), at.as_str(), k + 1); },
+        .STR => { fill = fmt2("{} = call$.str({});\n", copy at, copy x); },
+        .STRUCT(s) => {
+            if (this.holds_str(e)) {
+                fill = fmt2("{} = {}._c(call$.str);\n", copy at, copy x);
+            } else {
+                fill = fmt2("{} = {};\n", copy at, copy x);
+            }
+        },
+        default => {
+            if (!this.node_simple(e) || this.handle_of(e) != null) {
+                return fail(NO_SPAN, fmt("a slice of {} can't come from Dart", this.c.ty_name(e)));
+            }
+            fill = fmt3("sp{}$[si{}$] = {};\n", copy d, copy d, this.dart_in(e, x.as_str()));
+        },
+    }
+    var out = fmt4("final sp{}$ = call$.alloc<{}>(sizeOf<{}>() * {}.length);\n", copy d, copy vn, copy vn, S(src));
+    out.append(fmt4("for (var si{}$ = 0; si{}$ < {}.length; si{}$++) {{\n", copy d, copy d, S(src), copy d).as_str());
+    out.append(indent_n(fill.as_str(), 2).as_str());
+    out.append(fmt4("}}\n{}\n  ..ptr = sp{}$\n  ..len = {}.length;\n", S(dst), copy d, S(src), S("")).as_str());
+    return out;
+}
+
+// statements writing what Volt changed in C slice c (a Struct, elements of type e) back into Dart
+// List src: numbers and structs, at any depth (k: how deep; text stays as it was)
+attach fn dart_back(this: bind&, e: u32, src: str, c: str, k: u32) -> std::string {
+    val d = unum(@cast<u64>(k));
+    val x = fmt2("{}[bi{}$]", S(src), copy d);
+    val at = fmt2("({}.ptr + bi{}$).ref", S(c), copy d);
+    var one: std::string = {};
+    match (this.shape_of(e) ?? shape::VOID) {
+        .SLICE(y) => {
+            one = this.dart_back(this.slice_elem(e), x.as_str(), at.as_str(), k + 1);
+            if (one.len() == 0) {
+                return {};
+            }
+        },
+        .STRUCT(s) => {
+            if (this.holds_str(e)) {
+                return {};
+            }
+            one = fmt2("{}.copyFrom({});\n", copy x, copy at);
+        },
+        default => {
+            if (!this.node_simple(e)) {
+                return {};
+            }
+            one = fmt4("final b{}$ = {};\nif ({} != b{}$) {{\n", copy d, this.dart_read(e, fmt2("{}.ptr[bi{}$]", S(c), copy d).as_str()), copy x, copy d);
+            one.append(fmt2("  {} = b{}$;\n}}\n", copy x, copy d).as_str());
+        },
+    }
+    var out = fmt4("for (var bi{}$ = 0; bi{}$ < {}.length; bi{}$++) {{\n", copy d, copy d, S(src), copy d);
+    out.append(indent_n(one.as_str(), 2).as_str());
+    out.append("}\n");
+    return out;
+}
+
 // a slice's or a list's elements (e, each as C sees it, see view_of) from a Dart List, in memory the
 // call holds: text copied, handles lent (a list's given up), optionals as their structs; what Volt
 // writes into a slice of plain values comes back
@@ -13584,32 +13929,12 @@ attach fn dart_elems(this: bind&, e: u32, given: bool, n: str, a: dart_arg&) -> 
     match (*this.c.t.get(v)) {
         .ARRAY(x, k) => { return fail(NO_SPAN, fmt("a slice of {} can't come from Dart (a Dart List can't hold C arrays)", this.c.ty_name(e))); },
         .SLICE(x) => {
-            if (!this.node_simple(x)) {
-                return fail(NO_SPAN, fmt("a slice of {} can't come from Dart (a slice of slices of numbers or structs can)", this.c.ty_name(e)));
-            }
-            // a slice of slices: each inner List in memory of its own the call holds, what Volt wrote
-            // coming back
-            val sn = this.made_name("slice", x, true);
-            val xn = this.dart_native(x);
-            a.pre = fmt4("final ${}$p = call$.alloc<{}>(sizeOf<{}>() * {}.length);\n", S(n), copy sn, copy sn, S(n));
-            a.pre.append(fmt2("for (var i$ = 0; i$ < {}.length; i$++) {{\n  final r$ = {}[i$];\n", S(n), S(n)).as_str());
-            a.pre.append(fmt2("  final q$ = call$.alloc<{}>(sizeOf<{}>() * r$.length);\n", copy xn, copy xn).as_str());
-            match (this.shape_of(x) ?? shape::VOID) {
-                .STRUCT(st) => { a.pre.append("  for (var j$ = 0; j$ < r$.length; j$++) {\n    (q$ + j$).ref = r$[j$];\n  }\n"); },
-                default => { a.pre.append(fmt("  for (var j$ = 0; j$ < r$.length; j$++) {{\n    q$[j$] = {};\n  }}\n", this.dart_in(x, "r$[j$]")).as_str()); },
-            }
-            a.pre.append(fmt("  (${}$p + i$).ref\n    ..ptr = q$\n    ..len = r$.length;\n}\n", S(n)).as_str());
-            a.pre.append(fmt4("final ${} = Struct.create<{}>()\n  ..ptr = ${}$p\n  ..len = {}.length;\n", S(n), this.made_name("slice", e, true), S(n), S(n)).as_str());
+            // a slice of slices (any depth, text too): each inner List in memory of its own the call
+            // holds, what Volt wrote into numbers and structs coming back
+            a.pre = fmt2("final ${} = Struct.create<{}>();\n", S(n), this.made_name("slice", e, true));
+            a.pre.append((try this.dart_slice_in(e, n, fmt("${}", S(n)).as_str(), 0)).as_str());
             if (!given) {
-                // copied back where Volt changed it
-                a.after = fmt2("for (var i$ = 0; i$ < {}.length; i$++) {{\n  final w$ = {}[i$];\n", S(n), S(n));
-                a.after.append(fmt("  final q$ = (${}$p + i$).ref.ptr;\n  for (var j$ = 0; j$ < w$.length; j$++) {{\n", S(n)).as_str());
-                match (this.shape_of(x) ?? shape::VOID) {
-                    .STRUCT(st) => { a.after.append("    w$[j$].copyFrom((q$ + j$).ref);\n  }\n}\n"); },
-                    default => {
-                        a.after.append(fmt("    final b$ = {};\n    if (w$[j$] != b$) {{\n      w$[j$] = b$;\n    }}\n  }}\n}}\n", this.dart_read(x, "q$[j$]")).as_str());
-                    },
-                }
+                a.after = this.dart_back(e, n, fmt("${}", S(n)).as_str(), 0);
             }
             return;
         },
@@ -14550,6 +14875,7 @@ attach fn swift_slice_conv(this: bind&, x: u32) -> bool {
     }
     match (this.shape_of(x) ?? shape::VOID) {
         .OPT(y) => { return this.swift_is_str(y); },
+        .SLICE(y) => { return this.swift_slice_conv(this.slice_elem(x)); },
         default => { return false; },
     }
 }
@@ -14568,10 +14894,10 @@ attach fn swift_item(this: bind&, e: u32, list: bool) -> std::string {
         .STR => { return S("String"); },
         .TEXT(x) => { return S("String"); },
         .HANDLE(s) => { return this.swift_cls(s, false); },
-        // (a slice of slices: an array of arrays)
+        // (a slice of slices: an array of arrays, at any depth)
         .SLICE(y) => {
-            if (this.node_simple(y)) {
-                return fmt("[{}]", this.swift_item(y, false));
+            if (this.swift_nested_ok(e)) {
+                return fmt("[{}]", this.swift_item(this.slice_elem(e), false));
             }
         },
         .ENUM(x) => {
@@ -14882,6 +15208,45 @@ attach fn swift_str_arg(this: bind&, n: str, name0: str, a: swift_arg&) -> void 
     a.pass = fmt2("volt_str(ptr: {}_p.baseAddress, len: {}_p.count)", S(name0), S(name0));
 }
 
+// can Swift pass a slice of e (a slice of slices, at any depth: numbers, structs or text at the
+// bottom)?
+attach fn swift_nested_ok(this: bind&, e: u32) -> bool {
+    match (this.shape_of(e) ?? shape::VOID) {
+        .SLICE(y) => { return this.swift_nested_ok(this.slice_elem(e)); },
+        .STR => { return true; },
+        default => { return this.node_simple(e); },
+    }
+}
+
+// the Swift expression giving Volt x, an element of type e of a slice of slices, in memory VoltHeld h
+// holds (a slice in it the same way)
+attach fn swift_held(this: bind&, e: u32, h: str) -> std::string {
+    match (this.shape_of(e) ?? shape::VOID) {
+        .SLICE(y) => { return fmt4("{}(ptr: {}.slice(x) {{ x in {} }}, len: x.count)", this.swift_c(this.view_of(e)), S(h), this.swift_held(this.slice_elem(e), h), S("")); },
+        .STR => { return fmt("{}.str(x)", S(h)); },
+        default => { return S("x"); },
+    }
+}
+
+// statements writing what Volt changed in C slice c (elements of type e) back into Swift array src:
+// numbers and structs, at any depth (k: how deep; text stays as it was)
+attach fn swift_back(this: bind&, e: u32, src: str, c: str, k: u32) -> std::string {
+    if (this.node_simple(e)) {
+        return fmt3("{} = Array(UnsafeBufferPointer(start: {}.ptr, count: {}.count))\n", S(src), S(c), S(src));
+    }
+    match (this.shape_of(e) ?? shape::VOID) {
+        .SLICE(y) => {
+            val d = unum(@cast<u64>(k));
+            val inner = this.swift_back(this.slice_elem(e), fmt2("{}[b{}]", S(src), copy d).as_str(), fmt2("{}.ptr[b{}]", S(c), copy d).as_str(), k + 1);
+            if (inner.len() == 0) {
+                return {};
+            }
+            return fmt4("for b{} in 0..<{}.count {{\n{}}}\n", copy d, S(src), indent(inner.as_str()), S(""));
+        },
+        default => { return {}; },
+    }
+}
+
 // a slice or a list parameter n (elements e: a slice's views, a list's elements; ct its C slice) as
 // Swift passes it: text from [String] (or [String?]), handles from [class] (a slice's lent, a list's
 // given up), optional values from [T?] (a slice's written back), enums in a list from [E], other
@@ -14891,16 +15256,18 @@ attach fn swift_elems(this: bind&, e: u32, list: bool, n: str, name0: str, ct: s
     var buf = fmt2("{}_v.withUnsafeMutableBufferPointer {{ {}_p in", S(name0), S(name0));
     match (this.shape_of(this.view_of(e)) ?? shape::VOID) {
         .SLICE(y) => {
-            if (!list && this.node_simple(y)) {
-                // a slice of slices: each inner array copied into memory of its own for the call, and
-                // what Volt wrote copied back (then freed) as the wrapper returns
-                val yt = this.swift_elem(y);
-                a.pre = fmt4("let {}_b = {}.map {{ r -> UnsafeMutableBufferPointer<{}> in\n    let p = UnsafeMutableBufferPointer<{}>.allocate(capacity: max(r.count, 1))\n", S(name0), S(n), copy yt, copy yt);
-                a.pre.append("    _ = p.initialize(from: r)\n    return p\n}\n");
-                a.pre.append(fmt4("defer {{\n    for (i, p) in {}_b.enumerated() {{\n        {}[i] = Array(p[0..<{}[i].count])\n        p.deallocate()\n    }}\n}}\n", S(name0), S(n), S(n), S("")).as_str());
-                a.pre.append(fmt4("var {}_v = {}_b.enumerated().map {{ {}(ptr: $1.baseAddress, len: {}[$0].count) }}\n", S(name0), S(name0), this.swift_c(this.view_of(e)), S(n)).as_str());
-                this.swift_scope(a, move buf, {});
-                a.pass = copy sl;
+            if (!list && this.swift_nested_ok(e)) {
+                // a slice of slices (any depth, text too): each inner array copied into memory held
+                // for the call (see VoltHeld), what Volt wrote into numbers and structs copied back
+                val h = fmt("{}_h", S(name0));
+                a.pre = fmt2("let {} = VoltHeld()\ndefer {{ {}.free() }}\n", copy h, copy h);
+                a.pre.append(fmt5("let {}_c = {}(ptr: {}.slice({}) {{ x in {} }}, ", S(name0), S(ct), copy h, S(n), this.swift_held(e, h.as_str())).as_str());
+                a.pre.append(fmt("len: {}.count)\n", S(n)).as_str());
+                val back = this.swift_back(e, n, fmt("{}_c", S(name0)).as_str(), 0);
+                if (back.len() > 0) {
+                    a.pre.append(fmt("defer {{\n{}}}\n", indent(back.as_str())).as_str());
+                }
+                a.pass = fmt("{}_c", S(name0));
                 return;
             }
         },
@@ -15562,6 +15929,9 @@ attach fn swift_text(this: bind&) -> std::string {
     }
     if (this.arrays.len > 0) {
         out.append("\n// an array by value as C passes it (the struct wrapping its elements), from a Swift array, and back\nfunc voltArray<T, A>(_ a: [T], _ n: Int, as: A.Type) -> A {\n    precondition(a.count == n, \"expected \\(n) elements\")\n    return a.withUnsafeBytes { $0.load(as: A.self) }\n}\n\nfunc voltArray<T, A>(_ c: A, _ n: Int) -> [T] {\n    return withUnsafeBytes(of: c) { Array($0.bindMemory(to: T.self).prefix(n)) }\n}\n");
+    }
+    if (this.takes_nested()) {
+        out.append("\n// memory a call into Volt holds (the arrays of a slice of slices, text in them), freed once it's back\nfinal class VoltHeld {\n    var ps: [UnsafeMutableRawPointer] = []\n\n    // xs' elements, each converted by f, in memory of their own\n    func slice<T, E>(_ xs: [T], _ f: (T) -> E) -> UnsafeMutablePointer<E> {\n        let p = UnsafeMutablePointer<E>.allocate(capacity: max(xs.count, 1))\n        for (i, x) in xs.enumerated() {\n            (p + i).initialize(to: f(x))\n        }\n        ps.append(UnsafeMutableRawPointer(p))\n        return p\n    }\n\n    // s's UTF-8 bytes\n    func str(_ s: String) -> volt_str {\n        let n = s.utf8.count\n        let p = UnsafeMutablePointer<UInt8>.allocate(capacity: max(n, 1))\n        _ = UnsafeMutableBufferPointer(start: p, count: n).initialize(from: s.utf8)\n        ps.append(UnsafeMutableRawPointer(p))\n        return volt_str(ptr: UnsafePointer(p), len: n)\n    }\n\n    func free() {\n        ps.forEach { $0.deallocate() }\n        ps = []\n    }\n}\n");
     }
     if (this.uses_str) {
         out.append("\nfunc voltString(_ s: volt_str) -> String {\n    return String(decoding: UnsafeBufferPointer(start: s.ptr, count: s.len), as: UTF8.self)\n}\n");
@@ -16249,6 +16619,39 @@ attach fn kt_arg_of(this: bind&, t: u32, name0: str, a: kt_arg&) -> void {
     a.pre = fmt2("val {} = volt_m.alloc<{}>()\n", copy c, this.c_prim(this.in_ty(t), false));
     a.pre.append(this.kt_put(t, n, c.as_str(), name0, 0, "volt_m").as_str());
     a.pass = fmt("{}.readValue()", copy c);
+    match (this.shape_of(t) ?? shape::VOID) {
+        // what Volt wrote into a slice of slices' numbers and structs comes back
+        .SLICE(x) => { a.after = this.kt_back(this.slice_elem(t), n, c.as_str(), name0, 0); },
+        default => {},
+    }
+}
+
+// statements writing what Volt changed in C slice c (elements of type e) back into Kotlin sequence
+// src: numbers (in arrays) and structs, at any depth (p and k name the locals; text stays as it was)
+attach fn kt_back(this: bind&, e: u32, src: str, c: str, p: str, k: u32) -> std::string {
+    val bi = fmt2("{}_b{}", S(p), unum(@cast<u64>(k)));
+    val at = fmt2("{}.ptr!![{}]", S(c), copy bi);
+    var one: std::string = {};
+    if (this.kt_prim(e).len() > 0) {
+        one = fmt3("{}[{}] = {}\n", S(src), copy bi, copy at);
+    } else {
+        match (this.shape_of(e) ?? shape::VOID) {
+            .SLICE(x) => {
+                one = this.kt_back(this.slice_elem(e), fmt2("{}[{}]", S(src), copy bi).as_str(), at.as_str(), p, k + 1);
+                if (one.len() == 0) {
+                    return {};
+                }
+            },
+            .STRUCT(s) => {
+                if (this.holds_str(e)) {
+                    return {};
+                }
+                one = fmt3("{}[{}].readFrom({})\n", S(src), copy bi, copy at);
+            },
+            default => { return {}; },
+        }
+    }
+    return fmt3("for ({} in {}.indices) {{\n{}}}\n", copy bi, S(src), indent(one.as_str()));
 }
 
 // what Volt gets from a callback or a trait fn whose Kotlin code threw: zeros, empty text, E!T's first
@@ -17035,26 +17438,7 @@ attach fn rb_give(this: bind&, t: u32, v: str, c: str, what: str) -> std::string
             val inner = this.rb_give(x, v, fmt("{}.value", S(c)).as_str(), what) ?? return null;
             return fmt2("{}.error = 0; {}", S(c), move inner);
         },
-        .SLICE(x) => {
-            // an Array's elements, each given as a result is (a handle or text in it would have no
-            // owner); d tells nested slices' names apart
-            val e = this.slice_elem(t);
-            match (this.shape_of(e) ?? shape::VOID) {
-                .TEXT(y) => { return null; },
-                default => {},
-            }
-            if (this.handle_of(e) != null) {
-                return null;
-            }
-            val d = unum(@cast<u64>(c.len));
-            val one = this.rb_give(e, fmt("x{}_", copy d).as_str(), fmt2("p{}_[i{}_]", copy d, copy d).as_str(), what) ?? return null;
-            var g = fmt5("{{ VALUE a{}_ = vr_array({}, {}); long n{}_ = RARRAY_LEN(a{}_); ", copy d, S(v), S(what), copy d, copy d);
-            g.append(fmt5("{} *p{}_ = vr_kept_room(sizeof *p{}_ * (size_t)n{}_); for (long i{}_ = 0; ", this.c_prim(this.view_of(e), false), copy d, copy d, copy d, copy d).as_str());
-            g.append(fmt3("i{}_ < n{}_; i{}_++) {{ ", copy d, copy d, copy d).as_str());
-            g.append(fmt3("VALUE x{}_ = rb_ary_entry(a{}_, i{}_); ", copy d, copy d, copy d).as_str());
-            g.append(fmt5("{} }} {}.ptr = p{}_; {}.len = (size_t)n{}_; }}", move one, S(c), copy d, S(c), copy d).as_str());
-            return g;
-        },
+        .SLICE(x) => { return this.rb_slice_in(this.slice_elem(t), v, c, what, 0); },
         default => { return null; },
     }
 }
@@ -17161,9 +17545,9 @@ attach fn rb_upcall(this: bind&, name: str, recv: str, mid: str, ps: std::vec<u3
     if (r != VOID) {
         fields.append(fmt("    {}out;\n", spaced(copy rc)).as_str());
         val g = this.rb_give(r, "ret", "u->out", fmt("\"the result of {}\"", S(what)).as_str()) ?? return fail(NO_SPAN, fmt2("{} gives back {}, which Ruby can't give: nothing would keep it", S(what), this.c.ty_name(r)));
-        if (contains(g.as_str(), "vr_kept_room(")) {
+        if (contains(g.as_str(), "vr_slice_room(")) {
             // the slice the method gave last is done with
-            give = fmt("    vr_kept_free();\n    {}\n", move g);
+            give = fmt("    vr_slices_free();\n    {}\n", move g);
         } else {
             give = fmt("    {}\n", move g);
         }
@@ -17279,6 +17663,60 @@ attach fn rb_elem_in(this: bind&, t: u32, x: str, dst: str, what: str, buf: str,
     }
 }
 
+// C statements making C slice c (elements of type e) from Ruby Array v, its elements in memory from
+// vr_slice_room (kept for the call, or until a method's next result): numbers, structs, text (its
+// bytes copied) and slices of them the same way (k: how deep, which names its locals); none when an
+// element can't be one
+attach fn rb_slice_in(this: bind&, e: u32, v: str, c: str, what: str, k: u32) -> std::string? {
+    val d = unum(@cast<u64>(k));
+    val x = fmt("sx{}_", copy d);
+    val dst = fmt2("sp{}_[si{}_]", copy d, copy d);
+    var one: std::string = {};
+    match (this.shape_of(e) ?? shape::VOID) {
+        .SLICE(y) => { one = this.rb_slice_in(this.slice_elem(e), x.as_str(), dst.as_str(), what, k + 1) ?? return null; },
+        .STR => {
+            one = fmt3("{{ size_t n_; const char *b_ = vr_bytes({}, &n_, {}); char *m_ = vr_slice_room(vr_keep_p, n_); memcpy(m_, b_, n_); {}", copy x, S(what), copy dst);
+            one.append(fmt2(".ptr = (const uint8_t *)m_; {}.len = n_; }", copy dst, S("")).as_str());
+        },
+        default => {
+            if (!(this.node_simple(e) || this.node_plain_struct(e)) || this.handle_of(e) != null) {
+                return null;
+            }
+            one = this.rb_get(e, x.as_str(), dst.as_str(), what);
+        },
+    }
+    var g = fmt5("{{ VALUE sa{}_ = vr_array({}, {}); long sn{}_ = RARRAY_LEN(sa{}_); ", copy d, S(v), S(what), copy d, copy d);
+    g.append(fmt5("{} *sp{}_ = vr_slice_room(vr_keep_p, sizeof *sp{}_ * (size_t)sn{}_); for (long si{}_ = 0; ", this.c_prim(this.view_of(e), false), copy d, copy d, copy d, copy d).as_str());
+    g.append(fmt3("si{}_ < sn{}_; si{}_++) {{ ", copy d, copy d, copy d).as_str());
+    g.append(fmt3("VALUE {} = rb_ary_entry(sa{}_, si{}_); ", copy x, copy d, copy d).as_str());
+    g.append(fmt5("{} }} {}.ptr = sp{}_; {}.len = (size_t)sn{}_; }}", move one, S(c), copy d, S(c), copy d).as_str());
+    return g;
+}
+
+// C statements writing what Volt changed in C slice c (elements of type e) back into Ruby Array ary:
+// numbers and structs, at any depth (k: how deep; text stays as it was)
+attach fn rb_back(this: bind&, e: u32, ary: str, c: str, k: u32) -> std::string {
+    val d = unum(@cast<u64>(k));
+    if (this.node_simple(e)) {
+        var b = fmt5("for (size_t bi{} = 0; bi{} < {}.len; bi{}++) {{ rb_ary_store({}, ", copy d, copy d, S(c), copy d, S(ary));
+        b.append(fmt2("(long)bi{}, {}); }", copy d, this.rb_put(e, fmt2("{}.ptr[bi{}]", S(c), copy d).as_str())).as_str());
+        return b;
+    }
+    match (this.shape_of(e) ?? shape::VOID) {
+        .SLICE(x) => {
+            val inner = this.rb_back(this.slice_elem(e), fmt("be{}", copy d).as_str(), fmt2("{}.ptr[bi{}]", S(c), copy d).as_str(), k + 1);
+            if (inner.len() == 0) {
+                return {};
+            }
+            var b = fmt4("for (size_t bi{} = 0; bi{} < {}.len; bi{}++) {{ ", copy d, copy d, S(c), copy d);
+            b.append(fmt4("VALUE be{} = rb_ary_entry({}, (long)bi{}); if (RB_TYPE_P(be{}, T_ARRAY)) {{ ", copy d, S(ary), copy d, copy d).as_str());
+            b.append(fmt("{} } }", move inner).as_str());
+            return b;
+        },
+        default => { return {}; },
+    }
+}
+
 // a slice argument (or a list's: given) from a Ruby Array, as a slice of e's views: numbers,
 // structs and optionals of them (what Volt writes into a slice comes back), text (its bytes copied
 // for the call), handles (lent: in use until the call is back; given from a list: given up),
@@ -17333,28 +17771,13 @@ attach fn rb_slice_arg(this: bind&, t: u32, e: u32, from_list: bool, v: str, c: 
     }
     match (this.shape_of(ev) ?? shape::VOID) {
         .SLICE(y) => {
-            // a slice of slices: each inner Array converted once (kept in rows, ours), all their
-            // elements in one buffer, what Volt wrote coming back
-            var u = false;
-            val get1 = this.rb_elem_in(y, "y_", fmt("{}_in[k]", S(c)).as_str(), what, "", &u) ?? return fail(NO_SPAN, fmt("a slice of {} can't come from Ruby", this.c.ty_name(e)));
-            if (u || !this.node_simple(y)) {
-                return fail(NO_SPAN, fmt("a slice of {} can't come from Ruby (a slice of slices of numbers or structs can)", this.c.ty_name(e)));
-            }
-            val yt = this.c_prim(y, false);
-            a.decl.append(fmt3(" VALUE {}_rows, {}_itmp = 0; {} *", S(c), S(c), copy yt).as_str());
-            a.decl.append(fmt2("{}_in; size_t {}_tot = 0;", S(c), S(c)).as_str());
-            a.get.append(fmt2(" {}_rows = rb_ary_new_capa((long){}.len);", S(c), S(c)).as_str());
+            // a slice of slices (any depth, text too): each inner Array converted by rb_slice_in, its
+            // elements kept for the call (in vr_keep), what Volt wrote into numbers coming back
+            val one = this.rb_slice_in(this.slice_elem(ev), "x_", fmt("{}.ptr[i]", S(c)).as_str(), what, 0) ?? return fail(NO_SPAN, fmt("a slice of {} can't come from Ruby", this.c.ty_name(e)));
             a.get.append(each.as_str());
-            a.get.append(fmt5("VALUE r_ = vr_array(x_, {}); rb_ary_push({}_rows, r_); {}.ptr[i].len = (size_t)RARRAY_LEN(r_); {}_tot += {}.ptr[i].len; }", S(what), S(c), S(c), S(c), S(c)).as_str());
-            a.get.append(fmt4(" {}_in = ALLOCV({}_itmp, sizeof *{}_in * ({}_tot ? ", S(c), S(c), S(c), S(c)).as_str());
-            a.get.append(fmt("{}_tot : 1)); {{ size_t k = 0;", S(c)).as_str());
-            a.get.append(fmt3(" for (size_t i = 0; i < {}.len; i++) {{ VALUE r_ = rb_ary_entry({}_rows, (long)i); {}", S(c), S(c), S(c)).as_str());
-            a.get.append(fmt2(".ptr[i].ptr = {}_in + k; for (size_t j = 0; j < {}.ptr[i].len; j++, k++) {{ VALUE y_ = rb_ary_entry(r_, (long)j); ", S(c), S(c)).as_str());
-            a.get.append(fmt("{} } } }", move get1).as_str());
-            a.done.append(fmt2(" RB_GC_GUARD({}_rows); RB_GC_GUARD({}_itmp);", S(c), S(c)).as_str());
+            a.get.append(fmt("{} }", move one).as_str());
             if (!from_list) {
-                a.after = fmt3("for (size_t i = 0; i < {}.len; i++) {{ VALUE r_ = rb_ary_entry({}_rows, (long)i); for (size_t j = 0; j < {}", S(c), S(c), S(c));
-                a.after.append(fmt(".ptr[i].len; j++) {{ rb_ary_store(r_, (long)j, {}); }} }}", this.rb_put(y, fmt("{}.ptr[i].ptr[j]", S(c)).as_str())).as_str());
+                a.after = this.rb_back(ev, fmt("{}_ary", S(c)).as_str(), c, 0);
             }
             return;
         },
@@ -18038,8 +18461,8 @@ attach fn rb_text(this: bind&) -> compile_error!std::string {
         out.append("\n// a Ruby object given to Volt (a trait's object): kept from the GC until Volt drops it\nstruct vr_keep {\n    VALUE obj;\n    struct vr_keep *prev, *next;\n};\n\nstatic struct vr_keep vr_kept = {Qnil, &vr_kept, &vr_kept};\nstatic VALUE vr_keeper;\n\nstatic void vr_mark_kept(void *p) {\n    (void)p;\n    for (struct vr_keep *k = vr_kept.next; k != &vr_kept; k = k->next) {\n        rb_gc_mark(k->obj);\n    }\n}\n\nstatic const rb_data_type_t vr_type_kept = {.wrap_struct_name = \"volt kept\", .function = {.dmark = vr_mark_kept}};\n");
         out.append("\nstatic inline struct vr_keep *vr_keep_new(VALUE obj) {\n    struct vr_keep *k = malloc(sizeof *k);\n    if (!k) {\n        rb_memerror();\n    }\n    k->obj = obj;\n    k->prev = &vr_kept;\n    k->next = vr_kept.next;\n    vr_kept.next->prev = k;\n    vr_kept.next = k;\n    return k;\n}\n\nstatic inline VALUE vr_close_run(VALUE obj) {\n    if (rb_respond_to(obj, rb_intern(\"close\"))) {\n        rb_funcall(obj, rb_intern(\"close\"), 0);\n    }\n    return Qnil;\n}\n\n// Volt drops what it was given: no longer kept, and closed when it has close, even when what one of\n// its methods raised is kept (that stays the one raised). Not while the GC runs, which can't call\n// Ruby, nor while a jump (break, throw) waits to be made\nstatic inline void vr_drop_kept(void *self) {\n    struct vr_keep *k = self;\n    VALUE obj = k->obj;\n    k->prev->next = k->next;\n    k->next->prev = k->prev;\n    free(k);\n    if (rb_during_gc()) {\n        return;\n    }\n    VALUE kept = vr_raised();\n    if (FIXNUM_P(kept)) {\n        return;\n    }\n    rb_thread_local_aset(rb_thread_current(), vr_id_raised, Qnil);\n    vr_run(vr_close_run, (void *)obj);\n    if (!NIL_P(kept)) {\n        rb_thread_local_aset(rb_thread_current(), vr_id_raised, kept);\n    }\n    RB_GC_GUARD(obj);\n    RB_GC_GUARD(kept);\n}\n");
     }
-    if (contains(body.as_str(), "vr_kept_room(")) {
-        out.append("\n// the memory of a slice a Ruby method gives Volt (and of slices in it): kept until the next\n// method's result on this thread (Volt reads a callback's slice before calling again)\n// ponytail: one result at a time, as Kotlin's; keep more if a Volt fn holds two callbacks' slices at once\nstatic _Thread_local void **vr_kept;\nstatic _Thread_local size_t vr_nkept, vr_capkept;\n\nstatic void vr_kept_free(void) {\n    while (vr_nkept > 0) {\n        free(vr_kept[--vr_nkept]);\n    }\n}\n\nstatic void *vr_kept_room(size_t n) {\n    if (vr_nkept == vr_capkept) {\n        size_t cap = vr_capkept ? vr_capkept * 2 : 4;\n        void **k = realloc(vr_kept, cap * sizeof *k);\n        if (!k) {\n            rb_memerror();\n        }\n        vr_kept = k;\n        vr_capkept = cap;\n    }\n    void *p = malloc(n ? n : 1);\n    if (!p) {\n        rb_memerror();\n    }\n    vr_kept[vr_nkept++] = p;\n    return p;\n}\n");
+    if (contains(body.as_str(), "vr_slice_room(")) {
+        out.append("\n// the memory of a slice a Ruby method gives Volt (and of slices in it): kept until the next\n// method's result on this thread (Volt reads a callback's slice before calling again)\n// ponytail: one result at a time, as Kotlin's; keep more if a Volt fn holds two callbacks' slices at once\nstatic _Thread_local void **vr_slices;\nstatic _Thread_local size_t vr_nslices, vr_capslices;\n\nstatic inline void vr_slices_free(void) {\n    while (vr_nslices > 0) {\n        free(vr_slices[--vr_nslices]);\n    }\n}\n\n// n bytes of a slice's elements for Volt: kept in *keep (an Array a call holds, made on first use),\n// or, with no keep (what a method Volt called gives), until the method's next result\nstatic inline void *vr_slice_room(VALUE *keep, size_t n) {\n    if (keep) {\n        VALUE tmp = 0;\n        void *p = rb_alloc_tmp_buffer(&tmp, (long)(n ? n : 1));\n        if (NIL_P(*keep)) {\n            *keep = rb_ary_new();\n        }\n        rb_ary_push(*keep, tmp);\n        return p;\n    }\n    if (vr_nslices == vr_capslices) {\n        size_t cap = vr_capslices ? vr_capslices * 2 : 4;\n        void **k = realloc(vr_slices, cap * sizeof *k);\n        if (!k) {\n            rb_memerror();\n        }\n        vr_slices = k;\n        vr_capslices = cap;\n    }\n    void *p = malloc(n ? n : 1);\n    if (!p) {\n        rb_memerror();\n    }\n    vr_slices[vr_nslices++] = p;\n    return p;\n}\n");
     }
     if (contains(body.as_str(), "vr_static(") || this.node_struct_strs()) {
         out.append("\n// a str a Ruby method gives Volt, which may keep it (nothing frees a str): a copy (terminated)\n// kept as long as the program, one per value\nstatic VALUE vr_static_strs;\n\nstatic inline const char *vr_static(VALUE v, size_t *len, const char *what) {\n    const char *p = vr_bytes(v, len, what);\n    VALUE c = rb_hash_aref(vr_static_strs, v);\n    if (!NIL_P(c)) {\n        return (const char *)(uintptr_t)NUM2ULL(c);\n    }\n    char *m = malloc(*len + 1);\n    if (!m) {\n        rb_memerror();\n    }\n    memcpy(m, p, *len);\n    m[*len] = 0;\n    rb_hash_aset(vr_static_strs, rb_str_new_frozen(v), ULL2NUM((uintptr_t)m));\n    return m;\n}\n");

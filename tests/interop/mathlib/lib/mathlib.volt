@@ -163,6 +163,31 @@ export fn ml_area_given(f: fn(i32) -> vec2[..]) -> f64 {
     return s;
 }
 
+// a slice of slices at any depth: Volt sums the numbers and doubles each (what it wrote comes back)
+export fn ml_deep(xs: i64[..][..][..]) -> i64 {
+    var s: i64 = 0;
+    for (a) in xs {
+        for (b) in a {
+            for (i) in 0..b.len {
+                s += b[i];
+                b[i] *= 2;
+            }
+        }
+    }
+    return s;
+}
+
+// text in a slice of slices
+export fn ml_words(ws: str[..][..]) -> i64 {
+    var n: i64 = 0;
+    for (r) in ws {
+        for (w) in r {
+            n += @cast<i64>(w.len);
+        }
+    }
+    return n;
+}
+
 export fn ml_next(c: color) -> color {
     match (c) {
         .RED => { return color::GREEN; },

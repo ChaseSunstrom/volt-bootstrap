@@ -69,6 +69,21 @@ void main() {
   print('note ${ml_note_len(ml_note(str: 'abc', c: 1, k: 3))}');
   print('or_label ${ml_or_label(VoltResult.ok(la))} ${ml_or_label(VoltResult.err(VoltError.of(math_error.NEGATIVE)))}');
   print('given ${ml_sum_given(3, (k) => [k, 10 * k])} ${ml_area_given((k) => [vec2.of(x: 1.5, y: k.toDouble()), vec2.of(x: 2, y: 3.25)])}');
+  final deep = [
+    [
+      [1, 2],
+      [3]
+    ],
+    [
+      [4]
+    ]
+  ];
+  final d = ml_deep(deep);
+  print('deep $d ${deep[0][0][1]} ${deep[1][0][0]} words ${ml_words([
+        ['ab', 'c'],
+        [],
+        ['def']
+      ])}');
 
   // a callback's exception comes out of the call (the later calls are skipped), and a closed
   // counter throws
