@@ -1651,6 +1651,31 @@ fn node_addon() {
     }
 }
 
+/// a Swift, Kotlin or .NET import shows each fn's own declaration above its Volt fn (the hover's text),
+/// as Rust, Zig and Go do
+#[test]
+fn import_decl_comments() {
+    for (tool, arg, env, fixture, want) in [
+        ("swiftc", "--version", "SWIFTC", "swift_direct", "// Swift: func scaled(by k: Double) -> Point\n"),
+        ("kotlinc-native", "-version", "KOTLINC_NATIVE", "kotlin_direct", "// Kotlin: fun scaled(k: Double): Point\n"),
+        ("dotnet", "--version", "DOTNET", "dotnet_direct", "// .NET: public double Norm()\n"),
+    ] {
+        let Some(path) = local_tool(tool, arg) else {
+            eprintln!("{tool} isn't installed: skipping its declaration comments");
+            continue;
+        };
+        let e = Env::new(&format!("decl_{fixture}"));
+        let dir = e.dir.join("d");
+        copy_dir(&Path::new(ROOT).join("tests/interop").join(fixture), &dir);
+        let mut c = Command::new(&e.voltc);
+        c.args(["check", "main.volt"]).current_dir(&dir).env("VOLT_STD", Path::new(ROOT).join("std")).env("VOLT_SHOW_IMPORT", "1");
+        c.env("VOLTC", &e.voltc).env("BOLT", env!("CARGO_BIN_EXE_bolt")).env("VOLT_CACHE", e.dir.join("cache")).env("BOLT_HOME", e.dir.join("bolthome")).env(env, &path);
+        let o = c.output().unwrap();
+        let err = String::from_utf8_lossy(&o.stderr);
+        assert!(err.contains(want), "{fixture}: the declaration above its Volt fn: {err}");
+    }
+}
+
 /// copies directory from into to (made if needed)
 fn copy_dir(from: &Path, to: &Path) {
     std::fs::create_dir_all(to).unwrap();

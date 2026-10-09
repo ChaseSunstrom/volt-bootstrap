@@ -15,7 +15,7 @@
 //   -> a method without arguments; an object's or a companion object's funs -> T::f(...)
 use super::glue::{number, prim, Gen, Kind, Lang, Model, Recv, ShimOut, ShimParam, Sig, Ty, TypeDef, TypeInfo};
 use super::{arg_path, fresh, save, stamp, Made, Req};
-use crate::foreign::{int_value, lex, Cur, Tok};
+use crate::foreign::{int_value, lex, toks_line, Cur, Tok};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
 use std::path::PathBuf;
@@ -426,6 +426,7 @@ impl Parser {
 
     /// fun [<T>] [Recv.]NAME(params)[: T] [where ...] (= expr | { ... })
     fn func(&mut self, c: &mut Cur, owner: Option<&str>, m: Mods, statics: bool) {
+        let start = c.i;
         c.i += 1;
         let generic = c.is("<");
         if generic {
@@ -457,6 +458,7 @@ impl Parser {
         } else if c.is("=") {
             untyped = true;
         }
+        let src = toks_line(&c.t[start..c.i]);
         if c.is_id("where") {
             while c.i < c.t.len() && !c.is("{") && !c.is("=") && !Self::at_decl(c) {
                 c.i += 1;
@@ -475,7 +477,7 @@ impl Parser {
             return;
         }
         let recv = if owner.is_none() || statics { Recv::None } else { Recv::Ref };
-        let mut s = Sig { name, recv, params: Vec::new(), ret, skip: None, src: String::new(), generics: Vec::new(), call: None };
+        let mut s = Sig { name, recv, params: Vec::new(), ret, skip: None, src, generics: Vec::new(), call: None };
         Self::params(&items, owner, &mut s, &mut Vec::new());
         if generic {
             s.skip = Some("it's generic");
