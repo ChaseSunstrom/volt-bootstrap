@@ -1563,11 +1563,35 @@ attach fn ct_literal(this: checker&, entries: std::vec<lit_entry>&, want: u32?, 
     match (*this.t.get(w)) {
         .STRUCT(sid) => {
             val nf = (try this.struct_fields(sid, span)).len;
+            // positional ({ 'a', 0.3 }): as many entries as fields, none naming one (by name, or as a
+            // variable named like one)
+            var positional = entries.len == nf;
+            for (en&) in entries.items() {
+                if (en.name != null) {
+                    positional = false;
+                }
+                match (en.value.kind) {
+                    .PATH(p) => {
+                        for (k) in 0..nf {
+                            if (p.is_single() && p.segs.at(0).name == (try this.struct_fields(sid, span)).at(k).name) {
+                                positional = false;
+                            }
+                        }
+                    },
+                    default => {},
+                }
+            }
             var out: std::vec<cfield> = {};
             for (k) in 0..nf {
                 val f = *(try this.struct_fields(sid, span)).at(k);
                 var given: expr* = null;
+                if (positional) {
+                    given = &entries.at(k).value;
+                }
                 for (en&) in entries.items() {
+                    if (positional) {
+                        break;
+                    }
                     if (en.name != null && (en.name ?? "") == f.name) {
                         given = &en.value;
                     } else if (en.name == null) {
@@ -1751,6 +1775,10 @@ attach fn ct_let_stmt(this: checker&, l: let_stmt&) -> compile_error!void {
         if (t) {
             v = try this.ct_coerce(move v, t, l.init.span);
         }
+    } else if (val ty = t) {
+        // a var without an initializer starts at zero, as at run time (a type with no zero at
+        // compile time stays unset: reading it says so)
+        v = this.ct_zero(ty, l.span) catch cval::VOID;
     }
     match (l.pat.kind) {
         .BIND(n) => { this.ct_scope().put(n, { value: copy v, mutable: l.mutable }); },
@@ -2122,10 +2150,6 @@ attach fn ct_call_expr(this: checker&, callee: expr&, args: std::vec<expr>&, wan
         }
         return fail(span, fmt("no function '{}' to call at compile time", S(p.last())));
     }
-    var vals: std::vec<cval> = {};
-    for (a&) in args.items() {
-        put(&vals, try this.ct_expr(a, null));
-    }
     // overloads: arity, then return type
     var cands: std::vec<u32> = {};
     for (d&) in decls.items() {
@@ -2140,9 +2164,39 @@ attach fn ct_call_expr(this: checker&, callee: expr&, args: std::vec<expr>&, wan
                 has_default = true;
             }
         }
-        if (n == vals.len || has_default) {
+        if (n == args.len || has_default) {
             put(&cands, *d);
         }
+    }
+    // the arguments, each typed from its parameter when one fn takes as many (a literal's type comes
+    // from it); a generic parameter gives none
+    var wants: std::vec<u32> = {};
+    if (cands.len == 1) {
+        val fd = this.fn_decl_of(*cands.at(0)) ?? return fails(span, "not a function");
+        val penv = this.new_env({ ns: this.dl(*cands.at(0)).ns });
+        for (q&) in fd.params.items() {
+            if (q.name != "this") {
+                var w = NO_TY;
+                if (q.ty) {
+                    w = this.resolve_type(&q.ty, penv) catch |x| NO_TY;
+                }
+                put(&wants, w);
+            }
+        }
+    }
+    var vals: std::vec<cval> = {};
+    for (i) in 0..args.len {
+        // (a struct or an array: what a { } literal makes from it; anything else is coerced after,
+        // as before)
+        var want_i: u32? = null;
+        if (i < wants.len && *wants.at(i) != NO_TY) {
+            match (*this.t.get(*wants.at(i))) {
+                .STRUCT(sid) => { want_i = *wants.at(i); },
+                .ARRAY(et, n) => { want_i = *wants.at(i); },
+                default => {},
+            }
+        }
+        put(&vals, try this.ct_expr(args.at(i), want_i));
     }
     var pick: u32? = null;
     if (cands.len > 1) {
