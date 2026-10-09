@@ -17,6 +17,9 @@ tg = Mathlib.ml_tags_make
 head = "tags #{tg.from} #{tg.type} #{tg.self} #{tg.int}"
 tg.int = 5
 puts "#{head} #{Mathlib.ml_tags_sum(tg)}"
+bp, bq = [7], [2.5]
+Mathlib.ml_bump(bp, bq)
+puts "bump #{bp[0]} #{n(bq[0])}"
 puts "next #{Mathlib.ml_next(Mathlib::Color::GREEN)}"
 puts "sqrt #{n(Mathlib.ml_sqrt(9.0))} 1"
 begin

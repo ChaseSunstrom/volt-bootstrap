@@ -1,5 +1,7 @@
 # Python calls the Volt library through voltc bindings --lang python (ctypes): errors are raised,
 # owned text comes back as str, an export struct is a class (close() or a with block frees it)
+import ctypes
+
 import mathlib as m
 
 print("add", m.ml_add(2, 3))
@@ -13,6 +15,9 @@ tg = m.ml_tags_make()
 print("tags", tg.from_, tg.type, tg.self, tg.int, end=" ")
 tg.int = 5
 print(m.ml_tags_sum(tg))
+bp, bq = ctypes.c_int32(7), ctypes.c_double(2.5)
+m.ml_bump(ctypes.byref(bp), ctypes.byref(bq))
+print("bump %d %g" % (bp.value, bq.value))
 print("next", m.ml_next(m.color.GREEN))
 print("sqrt %g 1" % m.ml_sqrt(9))
 try:

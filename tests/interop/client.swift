@@ -18,6 +18,10 @@ var tg = ml_tags_make()
 let head = "tags \(tg.from) \(tg.type) \(tg.`self`) \(tg.int_)"
 tg.int_ = 5
 print(head, ml_tags_sum(tg))
+var bp: Int32 = 7
+var bq = 2.5
+ml_bump(&bp, &bq)
+print("bump", bp, n(bq))
 print("next", ml_next(.GREEN).rawValue)
 print("sqrt", n(try ml_sqrt(9)), 1)
 do {

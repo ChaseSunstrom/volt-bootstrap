@@ -8806,7 +8806,14 @@ attach fn go_arg_of(this: bind&, t: u32, name: str, a: go_arg&) -> void {
                         a.after.append(fmt("{}_c)\n}\n", copy n).as_str());
                         return;
                     },
-                    default => {},
+                    default => {
+                        if (this.node_simple(x)) {
+                            // a number by reference: Go's own (*int32), as cgo has it
+                            a.decl = fmt2("{} *{}", copy n, this.go_ty(x));
+                            a.pass = fmt2("(*C.{})(unsafe.Pointer({}))", this.c_prim(x, false), copy n);
+                            return;
+                        }
+                    },
                 }
             }
             a.decl = fmt("{} unsafe.Pointer", copy n);
@@ -9929,8 +9936,32 @@ attach fn node_arg_of(this: bind&, t: u32, js: str, c: str, a: node_arg&) -> com
             a.pass = S(c);
         },
         .PTR(x) => {
+            var number = x != VOID && this.node_simple(x);
+            match (this.shape_of(x) ?? shape::VOID) {
+                .STRUCT(s) => { number = false; },
+                default => {},
+            }
+            if (number) {
+                // a number by reference: an array of one (JS numbers can't be changed), its element
+                // copied in, and what Volt wrote put back
+                a.decl = fmt2("{} {}_val;", this.c_prim(x, false), S(c));
+                val got = fmt4("{{ uint32_t n_ = 0; napi_value e_ = NULL; if (!vn_array(env, {}, &n_)) {{ goto fail; }} if (n_ != 1) {{ vn_throw(env, \"expected an array of one number\"); goto fail; }} napi_get_element(env, {}, 0, &e_); {} }}", S(js), S(js), this.node_get_simple(x, "e_", fmt("{}_val", S(c)).as_str()), S(""));
+                val put = fmt3("{{ napi_value e_ = NULL; {} napi_set_element(env, {}, 0, e_); }}", try this.node_put(x, fmt("{}_val", S(c)).as_str(), "e_", 0), S(js), S(""));
+                if (this.nullable_ptr(t)) {
+                    a.decl.append(fmt(" bool {}_null = false;", S(c)).as_str());
+                    a.get = fmt3("{}_null = vn_is_nullish(env, {}); if (!{}_null) ", S(c), S(js), S(c));
+                    a.get.append(got.as_str());
+                    a.pass = fmt2("({}_null ? NULL : &{}_val)", S(c), S(c));
+                    a.after = fmt2("if (!{}_null) {}", S(c), copy put);
+                } else {
+                    a.get = copy got;
+                    a.pass = fmt("&{}_val", S(c));
+                    a.after = copy put;
+                }
+                return;
+            }
             if (x != VOID && (this.node_simple(x) || this.node_plain_struct(x))) {
-                // a struct (or number) by reference: a copy goes in, and what Volt changed comes back
+                // a struct by reference: a copy goes in, and what Volt changed comes back
                 a.decl = fmt2("{} {}_val;", this.c_prim(x, false), S(c));
                 var nullable = true;
                 match (*this.c.t.get(t)) {
@@ -10735,7 +10766,10 @@ attach fn ts_ty(this: bind&, t: u32, incoming: bool) -> std::string {
         .STRUCT(s) => { return this.node_sname(s); },
         .PTR(x) => {
             if (x != VOID && this.node_simple(x)) {
-                return this.ts_ty(x, incoming);
+                match (this.shape_of(x) ?? shape::VOID) {
+                    .STRUCT(s) => { return this.ts_ty(x, incoming); },
+                    default => { return fmt("[{}]", this.ts_ty(x, incoming)); },
+                }
             }
             return S("unknown");
         },
@@ -11258,22 +11292,27 @@ attach fn lua_in(this: bind&, t: u32, idx: str, c: str, what: str, kp: str, a: l
         },
         .PTR(x) => {
             if (x != VOID && this.node_simple(x)) {
-                // a struct (or number) by reference: a copy goes in, and what Volt changed comes back
-                // into the table (a number has nowhere to go back to)
+                // a struct by reference: a copy goes in, and what Volt changed comes back into the
+                // table; a number by reference is a table of one, { n }, whose n Volt can change
                 val v = fmt("{}_val", S(c));
                 a.decl = fmt2("{} {};", this.c_prim(x, false), copy v);
                 var back: std::string = {};
+                var get = this.lua_get(x, idx, v.as_str(), what);
                 match (this.shape_of(x) ?? shape::VOID) {
                     .STRUCT(s) => { back = fmt3("vl_set_{}(L, {}, &{});", this.node_sname(s), S(idx), copy v); },
-                    default => {},
+                    default => {
+                        get = fmt3("luaL_checktype(L, {}, LUA_TTABLE); lua_geti(L, {}, 1); {{ int at = lua_gettop(L); ", S(idx), S(idx), S(""));
+                        get.append(fmt("{} lua_pop(L, 1); }", this.lua_get(x, "at", v.as_str(), what)).as_str());
+                        back = fmt2("{} lua_seti(L, {}, 1);", this.lua_push(x, v.as_str()), S(idx));
+                    },
                 }
                 if (this.is_ref(t)) {
-                    a.get = this.lua_get(x, idx, v.as_str(), what);
+                    a.get = move get;
                     a.pass = fmt("&{}", copy v);
                     a.after = move back;
                 } else {
                     a.decl.append(fmt(" bool {}_null;", S(c)).as_str());
-                    a.get = fmt4("{}_null = lua_isnoneornil(L, {}); if (!{}_null) {{ {} }", S(c), S(idx), S(c), this.lua_get(x, idx, v.as_str(), what));
+                    a.get = fmt4("{}_null = lua_isnoneornil(L, {}); if (!{}_null) {{ {} }", S(c), S(idx), S(c), move get);
                     a.pass = fmt2("({}_null ? NULL : &{})", S(c), copy v);
                     if (back.len() > 0) {
                         a.after = fmt2("if (!{}_null) {{ {} }", S(c), move back);
@@ -16325,23 +16364,29 @@ attach fn rb_arg_of(this: bind&, t: u32, v: str, c: str, what: str, a: rb_arg&) 
         },
         .PTR(x) => {
             if (x != VOID && (this.node_simple(x) || this.node_plain_struct(x))) {
-                // a struct (or number) by reference: a copy goes in, and what Volt changed comes back
+                // a struct by reference: a copy goes in, and what Volt changed comes back; a number
+                // by reference is an Array of one, [n], whose n Volt can change
                 val vv = fmt("{}_val", S(c));
                 a.decl = fmt2("{} {};", this.c_prim(x, false), copy vv);
                 var back: std::string = {};
+                var get = this.rb_get(x, v, vv.as_str(), what);
                 match (this.shape_of(x) ?? shape::VOID) {
                     .STRUCT(s) => { back = fmt3("vr_set_{}({}, &{});", this.node_sname(s), S(v), copy vv); },
-                    default => {},
+                    default => {
+                        get = fmt4("if (!RB_TYPE_P({}, T_ARRAY) || RARRAY_LEN({}) != 1) {{ rb_raise(rb_eTypeError, \"%s: expected an Array of one number\", {}); }} {{ VALUE e_ = rb_ary_entry({}, 0); ", S(v), S(v), S(what), S(v));
+                        get.append(fmt("{} }", this.rb_get(x, "e_", vv.as_str(), what)).as_str());
+                        back = fmt2("{{ VALUE e_ = Qnil; {} rb_ary_store({}, 0, e_); }}", this.rb_put_to(x, vv.as_str(), "e_"), S(v));
+                    },
                 }
                 if (this.nullable_ptr(t)) {
                     a.decl.append(fmt(" bool {}_null;", S(c)).as_str());
-                    a.get = fmt4("{}_null = NIL_P({}); if (!{}_null) {{ {} }}", S(c), S(v), S(c), this.rb_get(x, v, vv.as_str(), what));
+                    a.get = fmt4("{}_null = NIL_P({}); if (!{}_null) {{ {} }}", S(c), S(v), S(c), move get);
                     a.pass = fmt2("({}_null ? NULL : &{})", S(c), copy vv);
                     if (back.len() > 0) {
                         a.after = fmt2("if (!{}_null) {{ {} }}", S(c), move back);
                     }
                 } else {
-                    a.get = this.rb_get(x, v, vv.as_str(), what);
+                    a.get = move get;
                     a.pass = fmt("&{}", copy vv);
                     a.after = move back;
                 }

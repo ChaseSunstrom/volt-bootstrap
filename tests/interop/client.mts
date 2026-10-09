@@ -16,6 +16,9 @@ const tg = m.ml_tags_make();
 const head = `tags ${tg.from} ${tg.type} ${tg.self} ${tg.int}`;
 tg.int = 5;
 console.log(head, m.ml_tags_sum(tg));
+const bp = [7], bq = [2.5];
+m.ml_bump(bp, bq);
+console.log("bump", bp[0], bq[0]);
 console.log("next", m.ml_next(m.color.GREEN));
 console.log("sqrt", m.ml_sqrt(9), 1);
 try {

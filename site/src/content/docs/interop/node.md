@@ -116,6 +116,8 @@ Here is how values convert:
 ### Every shape
 
 JavaScript takes [every shape](/volt-bootstrap/interop/other-languages/#every-shape):
+- **Numbers by reference.** A `n: i32*` or `x: f64&` parameter takes an array of one, `[7]`, and
+  what Volt writes comes back into it (`null` is a null `i32*`); TypeScript has it as `[number]`.
 - **Owned values as parameters.** A `std::string` parameter takes a string (Volt copies it). An
   export struct by value takes its instance, which gives its handle up (closing it after does
   nothing). A call checks every instance it's given first (open, owned, each once), so one that

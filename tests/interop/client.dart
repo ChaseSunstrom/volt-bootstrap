@@ -1,6 +1,8 @@
 // Dart calls the Volt library through voltc bindings --lang dart (dart:ffi): errors are thrown as
 // VoltError subclasses, owned text comes back as a String, an export struct is a class (close()
 // frees it now; otherwise a NativeFinalizer frees it once it's collected)
+import 'dart:ffi';
+
 import 'mathlib.dart';
 
 String n(num v) => v == v.truncate() ? v.truncate().toString() : v.toString();
@@ -17,6 +19,11 @@ void main() {
   final head = 'tags ${tg.from} ${tg.type} ${tg.self} ${tg.int_}';
   tg.int_ = 5;
   print('$head ${ml_tags_sum(tg)}');
+  final malloc = DynamicLibrary.process().lookupFunction<Pointer<Void> Function(Size), Pointer<Void> Function(int)>('malloc');
+  final bp = malloc(4).cast<Int32>()..value = 7;
+  final bq = malloc(8).cast<Double>()..value = 2.5;
+  ml_bump(bp, bq);
+  print('bump ${bp.value} ${n(bq.value)}');
   print('next ${ml_next(color.GREEN).value}');
   print('sqrt ${n(ml_sqrt(9))} 1');
   try {

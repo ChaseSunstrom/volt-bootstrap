@@ -16,6 +16,10 @@ int main() {
     std::printf("tags %d %d %d %d", tg.from, tg.type, tg.self, tg.int_);
     tg.int_ = 5;
     std::printf(" %d\n", mathlib::ml_tags_sum(tg));
+    int32_t bp = 7;
+    double bq = 2.5;
+    mathlib::ml_bump(&bp, bq);
+    std::printf("bump %d %g\n", bp, bq);
     std::printf("next %d\n", (int)mathlib::ml_next(mathlib::color::GREEN));
     std::printf("sqrt %g 1\n", mathlib::ml_sqrt(9));
     try {

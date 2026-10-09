@@ -121,7 +121,8 @@ end
 ```
 
 Structs are tables with their fields; what Volt changes in one passed by reference comes back
-into the table, and so do the elements of a slice (a sequence). An enum is a table of its values,
+into the table, and so do the elements of a slice (a sequence). A number by reference (`n: i32*`,
+`x: f64&`) is a table of one, `{ 7 }`, and what Volt writes comes back into it. An enum is a table of its values,
 an error set a table of its names, and an error is raised as a table with its `name` and `code`.
 Integers that don't fit the parameter's type raise an error, as do wrong types. A callback is any
 function (or anything with `__call`, such as a closure Volt gave back). An export struct is a

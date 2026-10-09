@@ -58,6 +58,15 @@ export fn ml_tags_sum(t: ml_tags) -> i32 {
     return t.from + 2 * t.type + 3 * t.self + 4 * t.int;
 }
 
+// numbers Volt writes through a pointer (which can be null) and through a reference: each language
+// sees what Volt wrote
+export fn ml_bump(p: i32*, q: f64&) -> void {
+    if (p != null) {
+        *p += 1;
+    }
+    *q *= 2.0;
+}
+
 export fn ml_next(c: color) -> color {
     match (c) {
         .RED => { return color::GREEN; },

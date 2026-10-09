@@ -22,6 +22,10 @@ int main(void) {
     printf("tags %d %d %d %d", tg.from, tg.type, tg.self, tg.int_);
     tg.int_ = 5;
     printf(" %d\n", ml_tags_sum(tg));
+    int32_t bp = 7;
+    double bq = 2.5;
+    ml_bump(&bp, &bq);
+    printf("bump %d %g\n", bp, bq);
     printf("next %d\n", (int)ml_next(MATHLIB_COLOR_GREEN));
     mathlib_math_error_or_f64 r = ml_sqrt(9);
     printf("sqrt %g %d\n", r.value, r.error == 0);

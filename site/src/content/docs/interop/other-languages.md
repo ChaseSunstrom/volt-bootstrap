@@ -559,7 +559,8 @@ The package is a module (its name capitalized), structs are `Struct` classes (a 
 fields works too; text in one is a `String`, an array an `Array` of exactly its length, a pointer a
 `Pointer` from another call or `nil`), enums are modules of constants, and error sets are
 `Mathlib::Error` subclasses holding their codes (`Mathlib::MathError.new(Mathlib::MathError::NEGATIVE)`
-makes one, and an `E!T` parameter takes it or the value). A callback
+makes one, and an `E!T` parameter takes it or the value). A number by reference (`n: i32*`,
+`x: f64&`) is an `Array` of one, `[7]`, and what Volt writes comes back into it. A callback
 is a block or a `Proc` (anything with `call`); an exception it raises comes out of the Volt call.
 Integers that don't fit the parameter, and wrong types, raise.
 

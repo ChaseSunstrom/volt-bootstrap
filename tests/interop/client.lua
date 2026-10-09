@@ -26,6 +26,9 @@ local tg = m.ml_tags_make()
 local from, ty, self, int = tg.from, tg.type, tg.self, tg.int
 tg.int = 5
 say("tags", from, ty, self, int, m.ml_tags_sum(tg))
+local bp, bq = { 7 }, { 2.5 }
+m.ml_bump(bp, bq)
+say("bump", bp[1], bq[1])
 say("next", m.ml_next(m.color.GREEN))
 say("sqrt", m.ml_sqrt(9), 1)
 local ok, err = pcall(m.ml_sqrt, -1)

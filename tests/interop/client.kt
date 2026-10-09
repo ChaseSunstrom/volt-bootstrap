@@ -1,6 +1,9 @@
 // Kotlin/Native calls the Volt library through voltc bindings --lang kotlin, over cinterop of the
 // C header: errors are thrown as VoltException subclasses, owned text comes back as a String, an
 // export struct is an AutoCloseable class (a Cleaner frees it too, once it's collected)
+@file:OptIn(kotlinx.cinterop.ExperimentalForeignApi::class)
+
+import kotlinx.cinterop.*
 import mathlib.*
 
 fun n(v: Double): String = if (v == v.toLong().toDouble()) v.toLong().toString() else v.toString()
@@ -18,6 +21,14 @@ fun main() {
     val head = "tags ${tg.from} ${tg.type} ${tg.self} ${tg.int}"
     tg.int = 5
     println("$head ${ml_tags_sum(tg)}")
+    memScoped {
+        val bp = alloc<IntVar>()
+        bp.value = 7
+        val bq = alloc<DoubleVar>()
+        bq.value = 2.5
+        ml_bump(bp.ptr, bq.ptr)
+        println("bump ${bp.value} ${n(bq.value)}")
+    }
     println("next ${ml_next(color.GREEN).value}")
     println("sqrt ${n(ml_sqrt(9.0))} 1")
     try {

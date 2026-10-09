@@ -16,6 +16,13 @@ var tg = Api.ml_tags_make();
 Console.Write($"tags {tg.from} {tg.type} {tg.self} {tg.@int}");
 tg.@int = 5;
 Console.WriteLine($" {Api.ml_tags_sum(tg)}");
+int bp = 7;
+double bq = 2.5;
+unsafe
+{
+    Api.ml_bump(&bp, &bq);
+}
+Console.WriteLine($"bump {bp} {bq}");
 Console.WriteLine($"next {(int)Api.ml_next(color.GREEN)}");
 Console.WriteLine($"sqrt {Api.ml_sqrt(9)} 1");
 try

@@ -23,6 +23,9 @@ func main() {
 	fmt.Printf("tags %d %d %d %d", tg.From, tg.Type, tg.Self, tg.Int)
 	tg.Int = 5
 	fmt.Printf(" %d\n", mathlib.MlTagsSum(tg))
+	bp, bq := int32(7), 2.5
+	mathlib.MlBump(&bp, &bq)
+	fmt.Println("bump", bp, bq)
 	fmt.Println("next", int(mathlib.MlNext(mathlib.ColorGreen)))
 	r, _ := mathlib.MlSqrt(9)
 	fmt.Println("sqrt", r, 1)

@@ -24,6 +24,10 @@ pub fn main() void {
     const head = .{ tg.from, tg.@"type", tg.self, tg.int };
     tg.int = 5;
     print("tags {d} {d} {d} {d} {d}\n", .{ head[0], head[1], head[2], head[3], m.ml_tags_sum(tg) });
+    var bp: i32 = 7;
+    var bq: f64 = 2.5;
+    m.ml_bump(&bp, &bq);
+    print("bump {d} {d}\n", .{ bp, bq });
     print("next {d}\n", .{@intFromEnum(m.ml_next(m.color.GREEN))});
     print("sqrt {d} 1\n", .{m.ml_sqrt(9) catch unreachable});
     if (m.ml_sqrt(-1)) |_| {} else |e| print("error {s}\n", .{if (e == error.NEGATIVE) "negative" else "?"});

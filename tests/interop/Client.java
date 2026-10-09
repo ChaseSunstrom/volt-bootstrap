@@ -18,6 +18,14 @@ public class Client {
         System.out.print("tags " + tg.from + " " + tg.type + " " + tg.self + " " + tg.int_);
         tg.int_ = 5;
         System.out.println(" " + mathlib.ml_tags_sum(tg));
+        try (var ar = java.lang.foreign.Arena.ofConfined()) {
+            var bp = ar.allocate(java.lang.foreign.ValueLayout.JAVA_INT);
+            bp.set(java.lang.foreign.ValueLayout.JAVA_INT, 0, 7);
+            var bq = ar.allocate(java.lang.foreign.ValueLayout.JAVA_DOUBLE);
+            bq.set(java.lang.foreign.ValueLayout.JAVA_DOUBLE, 0, 2.5);
+            mathlib.ml_bump(bp, bq);
+            System.out.println("bump " + bp.get(java.lang.foreign.ValueLayout.JAVA_INT, 0) + " " + fmt(bq.get(java.lang.foreign.ValueLayout.JAVA_DOUBLE, 0)));
+        }
         System.out.println("next " + mathlib.ml_next(mathlib.color.GREEN).value);
         System.out.println("sqrt " + fmt(mathlib.ml_sqrt(9)) + " 1");
         try {
