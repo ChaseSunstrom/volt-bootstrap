@@ -56,11 +56,11 @@ static void search(board *b) {
     uint16_t options = 0;
     for (int i = 0; i < 81; i++) {
         if (b->cell[i]) continue;
-        uint16_t free = ~(b->row[i / 9] | b->col[i % 9] | b->box[box_of(i)]) & 0x1FF;
-        if (BITS[free] < fewest) {
+        uint16_t avail = ~(b->row[i / 9] | b->col[i % 9] | b->box[box_of(i)]) & 0x1FF;
+        if (BITS[avail] < fewest) {
             best = i;
-            fewest = BITS[free];
-            options = free;
+            fewest = BITS[avail];
+            options = avail;
             if (fewest <= 1) break;
         }
     }

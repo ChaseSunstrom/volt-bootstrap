@@ -43,7 +43,7 @@ language's programmers would usually write it: Rust and Zig with their standard 
 | `knucleotide` | counting k-mers of a 25 million base DNA string with rolling 2-bit keys in hash tables (the Benchmarks Game) |
 | `lexer` | tokenizing 32 MiB of source text: a `match` on `str` keywords against C `memcmp` tables and C++ `string_view` compares |
 | `revcomp` | the reverse complement of 64 MiB of DNA in FASTA lines of 60, nine times between two byte buffers (the Benchmarks Game) |
-| `fasta` | generating 100 million bases of DNA from cumulative probability tables built at compile time: a `comptime fn` against C++ `constexpr`, a Rust `const fn` and Zig `comptime` (the Benchmarks Game) |
+| `fasta` | generating 100 million bases of DNA, a repeated sequence and two drawn at random from cumulative probability tables built at compile time: a `comptime fn` against C++ `constexpr`, a Rust `const fn` and Zig `comptime` (C builds its tables at startup; the Benchmarks Game) |
 | `huffman` | Huffman coding 32 MiB of text: the code tree from a priority queue (`std::heap` against a C heap, `std::priority_queue`, `BinaryHeap` and `std.PriorityQueue`) with optional children, the bits written and read back down the tree |
 | `levenshtein` | edit distances between 40,000 pairs of strings of 64 to 191 letters, a dynamic program over one row |
 | `life` | Conway's game of life on a 1024 by 1024 torus for 400 generations, a byte per cell |

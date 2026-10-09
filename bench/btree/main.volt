@@ -13,9 +13,9 @@ val HALF: usize = 15;
 struct bnode {
     n: usize = 0;
     leaf: bool = true;
-    keys: K[31] = {};
-    vals: V[31] = {};
-    kids: u32[32] = {};
+    keys: K[MAX] = {};
+    vals: V[MAX] = {};
+    kids: u32[MAX + 1] = {};
 }
 
 // the first key in x not below k

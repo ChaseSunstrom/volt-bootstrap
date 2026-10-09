@@ -24,6 +24,8 @@ comptime fn cumulative(t: acid[N]) -> acid[N] {
     return out;
 }
 
+// the probabilities are vals of their own: an array of struct literals passed straight to a comptime
+// fn isn't typed from its parameter yet (T-0364)
 val IUB_P: acid[15] = {
     { c: 'a', p: 0.27 }, { c: 'c', p: 0.12 }, { c: 'g', p: 0.12 }, { c: 't', p: 0.27 }, { c: 'B', p: 0.02 },
     { c: 'D', p: 0.02 }, { c: 'H', p: 0.02 }, { c: 'K', p: 0.02 }, { c: 'M', p: 0.02 }, { c: 'N', p: 0.02 },
