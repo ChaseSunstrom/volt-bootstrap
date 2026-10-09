@@ -42,6 +42,14 @@ language's programmers would usually write it: Rust and Zig with their standard 
 | `lz77` | compressing 64 MiB with hash chains, decompressing it and checking the round trip |
 | `knucleotide` | counting k-mers of a 25 million base DNA string with rolling 2-bit keys in hash tables (the Benchmarks Game) |
 | `lexer` | tokenizing 32 MiB of source text: a `match` on `str` keywords against C `memcmp` tables and C++ `string_view` compares |
+| `revcomp` | the reverse complement of 64 MiB of DNA in FASTA lines of 60, nine times between two byte buffers (the Benchmarks Game) |
+| `fasta` | generating 100 million bases of DNA from cumulative probability tables built at compile time: a `comptime fn` against C++ `constexpr`, a Rust `const fn` and Zig `comptime` (the Benchmarks Game) |
+| `huffman` | Huffman coding 32 MiB of text: the code tree from a priority queue (`std::heap` against a C heap, `std::priority_queue`, `BinaryHeap` and `std.PriorityQueue`) with optional children, the bits written and read back down the tree |
+| `levenshtein` | edit distances between 40,000 pairs of strings of 64 to 191 letters, a dynamic program over one row |
+| `life` | Conway's game of life on a 1024 by 1024 torus for 400 generations, a byte per cell |
+| `fft` | a radix-2 FFT over a million complex doubles, there and back sixteen times (`attach operator` on a complex struct against C functions, `std::complex`, Rust's `Add` and `Mul` and Zig's `std.math.Complex`) |
+| `btree` | an ordered map under 2 million inserts and lookups and 200,000 range scans: a B-tree generic over its key and value types, against `std::map` (a red-black tree) and Rust's `BTreeMap` |
+| `sudoku` | backtracking over 13 hard sudoku puzzles relabelled at random 25 times: bit masks per row, column and box, the cell with the fewest candidates first |
 
 The Rust and Zig programs use what those languages' standard libraries give, which isn't always the
 same work as the C. Worth knowing when reading their columns:
