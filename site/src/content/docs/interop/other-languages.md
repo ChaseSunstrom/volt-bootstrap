@@ -25,6 +25,8 @@ importing C, C++, Rust, Zig and Swift code. Each one is a `run.sh` with its exac
   is; `use cpp`, `use rust`, `use zig` or `use go { ... }` says it outright where it's ambiguous.
 - **Swift**: import the files, `use { "shapes.swift" } as x;`, and call their functions, structs,
   classes and enums, see [Swift](/volt-bootstrap/interop/swift/).
+- **Kotlin** (Kotlin/Native): import the files, `use { "shapes.kt" } as x;`, and call their
+  functions, classes, data classes, enum classes and objects, see [Kotlin](/volt-bootstrap/interop/kotlin/).
 - **Python**: import the module, `use { "geom.py" } as geom;` (or a package's directory), see
   [Python](/volt-bootstrap/interop/python/). Or embed it like any C library: `use { "Python.h" } as py;` with the flags from
   `python3-config --includes` and `--ldflags --embed` passed through `--cc`.

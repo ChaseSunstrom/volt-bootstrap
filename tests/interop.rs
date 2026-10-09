@@ -1437,6 +1437,93 @@ fn js_direct() {
     assert!(bolt_run("c").contains("42 2 QUIET!"), "the TypeScript change is in");
 }
 
+/// Volt calls ordinary Kotlin (Kotlin/Native) directly: `use { "geometry.kt", "things.kt" } as geo;`
+/// and nothing else, on both backends, from voltc run and from a bolt package, which rebuilds when a
+/// file changes
+#[test]
+fn volt_calls_kotlin() {
+    let Some(kotlinc) = local_tool("kotlinc-native", "-version") else {
+        eprintln!("kotlinc-native isn't installed: skipping use kotlin");
+        return;
+    };
+    let e = Env::new("kotlin_direct");
+    let dir = e.dir.join("kd");
+    copy_dir(&Path::new(ROOT).join("tests/interop/kotlin_direct"), &dir);
+    let src = std::fs::read_to_string(dir.join("main.volt")).unwrap();
+    let want: String = src.lines().filter_map(|l| l.strip_prefix("// expect: ")).map(|l| format!("{l}\n")).collect();
+    let tools = |c: &mut Command| {
+        c.env("VOLTC", &e.voltc).env("BOLT", env!("CARGO_BIN_EXE_bolt")).env("VOLT_CACHE", e.dir.join("cache")).env("BOLT_HOME", e.dir.join("bolthome")).env("KOTLINC_NATIVE", &kotlinc);
+    };
+    for backend in ["c", "llvm"] {
+        let mut c = Command::new(&e.voltc);
+        c.args(["run", "--backend", backend, "main.volt"]).current_dir(&dir).env("VOLT_STD", Path::new(ROOT).join("std"));
+        tools(&mut c);
+        assert_eq!(ok(c.output().unwrap(), "voltc run"), want, "voltc run ({backend})");
+    }
+    // the same program in a bolt package
+    let app = dir.join("app");
+    std::fs::create_dir_all(app.join("src")).unwrap();
+    std::fs::write(app.join("bolt.toml"), format!("[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[std]\npath = \"{}\"\n", Path::new(ROOT).join("std").display())).unwrap();
+    std::fs::write(app.join("src/main.volt"), src.replace("use { \"geometry.kt\", \"things.kt\" }", "use { \"../../geometry.kt\", \"../../things.kt\" }")).unwrap();
+    let bolt_run = |backend: &str| {
+        let mut c = Command::new(env!("CARGO_BIN_EXE_bolt"));
+        c.args(["run", "-q", "--backend", backend]).current_dir(&app);
+        tools(&mut c);
+        ok(c.output().unwrap(), "bolt run")
+    };
+    assert_eq!(bolt_run("llvm"), want, "bolt run");
+    // a change to a Kotlin file reaches the program
+    let f = dir.join("things.kt");
+    std::fs::write(&f, std::fs::read_to_string(&f).unwrap().replace("count += k", "count += 10 * k")).unwrap();
+    assert!(bolt_run("c").contains("clicks 50 50"), "the Kotlin change is in");
+}
+
+/// use kotlin's cache: a second build doesn't run kotlinc-native again (the archive it made is the
+/// same file), and a change to a .kt file does
+#[test]
+fn volt_calls_kotlin_cache() {
+    let Some(kotlinc) = local_tool("kotlinc-native", "-version") else {
+        eprintln!("kotlinc-native isn't installed: skipping use kotlin");
+        return;
+    };
+    let e = Env::new("kotlin_cache");
+    let dir = e.dir.join("kc");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("calc.kt"), "package calc\n\nfun twice(x: Int): Int = x * 2\n").unwrap();
+    std::fs::write(dir.join("main.volt"), "use std::io;\nuse { \"calc.kt\" } as calc;\n\nfn main() -> void {\n    std::println(\"{}\", calc::twice(21));\n}\n").unwrap();
+    let cache = e.dir.join("cache");
+    let run = || {
+        let mut c = Command::new(&e.voltc);
+        c.args(["run", "main.volt"]).current_dir(&dir).env("VOLT_STD", Path::new(ROOT).join("std"));
+        c.env("BOLT", env!("CARGO_BIN_EXE_bolt")).env("VOLT_CACHE", &cache).env("KOTLINC_NATIVE", &kotlinc);
+        ok(c.output().unwrap(), "voltc run")
+    };
+    // the archive bolt import kotlin made, and when
+    let archive = || {
+        let mut found = Vec::new();
+        let mut todo = vec![cache.clone()];
+        while let Some(d) = todo.pop() {
+            for x in std::fs::read_dir(&d).into_iter().flatten().flatten() {
+                let p = x.path();
+                if p.is_dir() {
+                    todo.push(p);
+                } else if p.file_name().is_some_and(|n| n == "libvolt_import_calc.a") {
+                    found.push((p.clone(), std::fs::metadata(&p).unwrap().modified().unwrap()));
+                }
+            }
+        }
+        assert_eq!(found.len(), 1, "one archive for the import: {found:?}");
+        found.remove(0)
+    };
+    assert_eq!(run(), "42\n");
+    let (a, made) = archive();
+    assert_eq!(run(), "42\n");
+    assert_eq!(archive(), (a.clone(), made), "a second run builds nothing");
+    std::fs::write(dir.join("calc.kt"), "package calc\n\nfun twice(x: Int): Int = x * 2 + 1\n").unwrap();
+    assert_eq!(run(), "43\n", "the change is in");
+    assert_ne!(archive().1, made, "a changed file rebuilds the archive");
+}
+
 /// Volt calls ordinary Swift directly: `use { "geometry.swift", "things.swift" } as geo;` and nothing
 /// else, on both backends, from voltc run and from a bolt package, which rebuilds when a file changes
 #[test]
