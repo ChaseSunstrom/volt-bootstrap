@@ -210,8 +210,8 @@ fn main() -> !void {
 | `chan T`, `<-chan T`, `chan<- T` | one `chan<T>` handle whichever way it goes: `chan<T>::new(capacity)`, `send(v)`, `recv()` (a `T?`: null once it's closed and empty), `close()`, `len()`, `cap()`; a call taking a `<-chan T` takes it |
 | a slice of other elements (`[][]int`: `slice<std::vec<isize>>`), a pointer to another type (`ptr<T>`), an array of other elements, a named slice, array, map, channel or pointer type, `any`, another package's struct | a handle: a slice's `get(i)`, `put(i, v)`, `push(v)`, `len()`, `items()`; a pointer's `get()`, `put(v)`; with a named type's own methods |
 | `func(...) ...`, a named func type (`type Op = fn(...) -> ...;` in Volt too) | a Volt fn value in (Go keeps it until its collector is done with it, then deletes it); a value called with `f.call(...)` out. It takes and gives numbers, `bool`s, text, slices, the package's types and funcs, several results (a tuple), `(T, bool)` (`T?`) and an `error` last (`go_error!T`); a `*int` parameter is an `isize&` |
-| an interface | a Volt trait: the Go types with its methods attach it, a Volt type attaching it passes where Go takes one, and Go's values of it are `dyn_I` handles (`t.as_I()` of a Go type, `dyn_I::new(v)` of a Volt value). A Volt type's methods have the fn values' types |
-| a generic `func` or type (`Max[T cmp.Ordered]`, `Stack[T]`) | a generic `fn` or `struct`: each instance a program uses is built for it, and go checks its constraints (one they reject is an error at the call, with go's reason). Maps, sets, channels, pointers and slices of slices of its type parameters are `map<K, V>`, `set<K>`, `chan<T>`, `ptr<T>` and `slice<std::vec<T>>` |
+| an interface | a Volt trait: the Go types with its methods attach it, a Volt type attaching it passes where Go takes one, and Go's values of it are `dyn_I` handles (`t.as_I()` of a Go type, `dyn_I::new(v)` of a Volt value). A Volt type's methods have the fn values' types; a method taking an array takes a `T[..]`, one giving an array gives a `std::vec<T>` (its length is checked), and one giving a `*T` of a plain struct gives the struct (Go gets a pointer to a copy) |
+| a generic `func` or type (`Max[T cmp.Ordered]`, `Stack[T]`) | a generic `fn` or `struct`: each instance a program uses is built for it, and go checks its constraints (one they reject is an error at the call, with go's reason). Maps, sets, channels, pointers, slices of slices and arrays of slices of its type parameters are `map<K, V>`, `set<K>`, `chan<T>`, `ptr<T>`, `slice<std::vec<T>>` and `array2<std::vec<T>>` (the length is in the name: `array3<...>` for `[3][]T`). A Volt list can be the type argument (`Len<std::vec<isize>>(lists.items())` where Go takes `[]T`): Go reads each list in place |
 | an exported constant of any type | a `val` of its value |
 | an exported variable `V` | `V()` and `set_V(v)` |
 | `type A = B` | `type A = B;` |
@@ -256,7 +256,8 @@ A `main` package works too (its `main` isn't run). The program links every `use 
 one library, so it has one Go runtime, started when the program starts. A panic stops the program
 with Go's message, as it does in Go; each function's `try_` form (and a Go func value's
 `try_call`) returns it as `go_error::PANIC` instead. The shim recovers it, so it never unwinds
-through C. Errors cross as their text: an error a Volt function gives Go is a new Go error with that
+through C, and the same goes for a panic while a Volt closure's slice result is handed to Go (it
+stops the program with Go's message). Errors cross as their text: an error a Volt function gives Go is a new Go error with that
 text. Calls are safe from any Volt thread, and Go may call a Volt closure from any goroutine, as C
 code could. bolt reads `$GO` for the go command, else `go` on the PATH; cgo needs a C compiler.
 

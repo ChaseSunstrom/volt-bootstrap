@@ -1209,6 +1209,14 @@ fn go_direct() {
     let o = c.output().unwrap();
     let err = String::from_utf8_lossy(&o.stderr);
     assert!(o.status.code() == Some(101) && err.contains("index out of range [3] with length 2"), "a Go panic: {:?} {err}", o.status);
+    // a Go panic while a Volt callback's slice result goes to Go is Volt's panic too (recovered in the
+    // push, so it never unwinds through the callback's Volt frames)
+    let mut c = Command::new(&e.voltc);
+    c.args(["run", "push_panic.volt"]).current_dir(&dir).env("VOLT_STD", Path::new(ROOT).join("std"));
+    tools(&mut c);
+    let o = c.output().unwrap();
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(o.status.code() == Some(101) && err.contains("invalid Handle"), "a Go panic in a push: {:?} {err}", o.status);
     // an instance Go's constraint rejects is an error at the call, with go's reason
     let mut c = Command::new(&e.voltc);
     c.args(["run", "generics_bad.volt"]).current_dir(&dir).env("VOLT_STD", Path::new(ROOT).join("std"));

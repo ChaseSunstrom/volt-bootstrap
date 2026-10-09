@@ -313,7 +313,8 @@ pub trait Lang {
     }
     /// the function a Volt closure's slice result goes through, an element at a time:
     /// push(o, the element as a parameter of type e is passed) appends it to the slice o (a
-    /// handle of the shim's) says
+    /// handle of the shim's) says; for a catching shim it also takes e and e_n (out) and gives
+    /// status 2 and the text there when it panics
     fn push_glue(&self, _g: &Gen, _sym: &str, _e: &Ty) -> Option<String> {
         None
     }
@@ -663,6 +664,16 @@ impl<'a> Gen<'a> {
                     p.param = format!("{vn}: str[..]");
                     p.ext.extend([format!("{a}: void*"), format!("{a}_n: usize")]);
                     p.args.extend([format!("@cast<void*>({vn}.ptr)"), format!("{vn}.len")]);
+                }
+                // lists of numbers (a generic's T = std::vec<isize>): each as a str, its pointer and
+                // length, which the other side reads as a slice of Volt's list
+                Ty::Vec(ref x) if self.lang.cb_types() && matches!(**x, Ty::Prim(_)) => {
+                    let Ty::Prim(x) = **x else { return None };
+                    p.param = format!("{vn}: std::vec<{x}>[..]");
+                    p.pre.push(format!("var {a}_l: std::vec<str> = {{}};"));
+                    p.pre.push(format!("for (x&) in {vn} {{\n        {a}_l.push(@cast<str>(@slice(@cast<u8*>(x.items().ptr), x.len))) catch @panic(\"out of memory\");\n    }}"));
+                    p.ext.extend([format!("{a}: void*"), format!("{a}_n: usize")]);
+                    p.args.extend([format!("@cast<void*>({a}_l.items().ptr)"), format!("{a}_l.len")]);
                 }
                 _ => return None,
             },
@@ -1414,8 +1425,8 @@ impl<'a> Gen<'a> {
                 (format!("fn({}) -> {rt}", vts.join(", ")), vec![format!("{a}: void*")], vec![format!("var {a}_f: {ns}::fn_{k} = {{ h: {a} }};"), format!("val {a}_c = |move {a}_f| ({}) -> {rt} {{ {body} }};", params.join(", "))], format!("{a}_c"))
             }
             // the shim's elements, lent for the call: numbers, text, the import's types (plain
-            // structs' mirrors, handles Volt doesn't free, enums)
-            Ty::Slice(e, _) | Ty::Vec(e) => match &**e {
+            // structs' mirrors, handles Volt doesn't free, enums); an array is a copy, as a slice
+            Ty::Slice(e, _) | Ty::Vec(e) | Ty::Array(e, _) => match &**e {
                 Ty::Prim(x) => (format!("{x}[..]"), vec![format!("{a}: {x}*"), format!("{a}_n: usize")], Vec::new(), format!("@slice({a}, {a}_n)")),
                 Ty::Str | Ty::String => ("str[..]".into(), vec![format!("{a}: void*"), format!("{a}_n: usize")], Vec::new(), format!("@slice(@cast<str*>({a}), {a}_n)")),
                 Ty::Named(_) | Ty::Ref(..) => {
@@ -1463,7 +1474,7 @@ impl<'a> Gen<'a> {
                 let t = self.cb_out_ty(x)?;
                 format!("{}::{}_error!{t}", self.alias, self.lang.short())
             }
-            Ty::Vec(e) | Ty::Slice(e, _) => match &**e {
+            Ty::Vec(e) | Ty::Slice(e, _) | Ty::Array(e, _) => match &**e {
                 Ty::Prim(x) => format!("std::vec<{x}>"),
                 Ty::Str | Ty::String => "std::vec<std::string>".into(),
                 Ty::Named(_) | Ty::Ref(..) => format!("std::vec<{}>", self.volt_path(&self.elem_info(e)?.def)),
@@ -1486,8 +1497,8 @@ impl<'a> Gen<'a> {
                 };
                 let ti = self.info(named)?;
                 match ti.kind {
-                    Kind::Handle => self.volt_path(&ti.def),
-                    _ if by_ref => return None,
+                    // (a *T of a plain struct is its value: the shim returns a pointer to a copy)
+                    Kind::Enum if by_ref => return None,
                     _ => self.volt_path(&ti.def),
                 }
             }
@@ -1521,8 +1532,8 @@ impl<'a> Gen<'a> {
                 let body = if **x == Ty::Unit { format!("$c {fail};\n        return 0;") } else { format!("val v = $c {fail};\n        {}\n        return 0;", inner.replace("$c", "v")) };
                 (ext, "u8".into(), body)
             }
-            // a slice: each element pushed onto the shim's (o)
-            Ty::Vec(e) | Ty::Slice(e, _) => {
+            // a slice: each element pushed onto the shim's (o); an array comes the same way
+            Ty::Vec(e) | Ty::Slice(e, _) | Ty::Array(e, _) => {
                 let push = self.push_sym(e)?;
                 let args = match &**e {
                     Ty::Prim(_) => "*x".to_string(),
@@ -1541,7 +1552,13 @@ impl<'a> Gen<'a> {
                     Some(ti) if ti.kind == Kind::Handle => format!("{}\n            ", self.not_empty(&self.volt_path(&ti.def), "x.h")),
                     _ => String::new(),
                 };
-                (vec![format!("{o}: void*")], "void".into(), format!("val {o}_r = $c;\n        for (x&) in {o}_r.items() {{\n            {check}{ns}::{push}({o}, {args});\n        }}"))
+                // (a catching shim's push gives a panic's status 2 and text: Volt's panic)
+                let (decl, call) = if self.lang.catches() {
+                    (format!("var {o}_e: u8* = null;\n        var {o}_en: usize = 0;\n        "), format!("if ({ns}::{push}({o}, {args}, &{o}_e, &{o}_en) == 2) {{\n                {ns}::panicked({o}_e, {o}_en);\n            }}"))
+                } else {
+                    (String::new(), format!("{ns}::{push}({o}, {args});"))
+                };
+                (vec![format!("{o}: void*")], "void".into(), format!("val {o}_r = $c;\n        {decl}for (x&) in {o}_r.items() {{\n            {check}{call}\n        }}"))
             }
             // a Volt closure, moved to the heap for the shim to keep: its trampoline, its data and
             // the function freeing it
@@ -1608,9 +1625,13 @@ impl<'a> Gen<'a> {
                 });
             }
         }
+        let catches = self.lang.catches();
+        if catches {
+            ext.extend(["e: u8**".to_string(), "e_n: usize*".to_string()]);
+        }
         let glue = self.lang.push_glue(self, &sym, e)?;
         self.shim.push_str(&glue);
-        let decl = self.ext_fn(&sym, &ext, "void");
+        let decl = self.ext_fn(&sym, &ext, if catches { "u8" } else { "void" });
         self.ext.push_str(&decl);
         self.pushes.insert(key, sym.clone());
         Some(sym)

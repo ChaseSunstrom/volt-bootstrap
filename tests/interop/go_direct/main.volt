@@ -180,6 +180,20 @@ fn run() -> geom::go_error!void {
     std::println("chunks {} {} {} {}", chunks.len(), chunks.get(1).len, spread, sum);
     std::println("store {}", geom::Probe({ n: 7 } as store));
 
+    // an interface whose methods take and give arrays and pointers is a trait; a generic over an
+    // array of slices; a Volt list as the type argument where the generic takes []T
+    std::println("board {}", geom::Audit({ n: 2 } as board));
+    val tw = geom::Twice<isize>(zs[..]);
+    var l1: std::vec<isize> = {};
+    var l2: std::vec<isize> = {};
+    l1.push(1) catch @panic("out of memory");
+    l1.push(2) catch @panic("out of memory");
+    l2.push(3) catch @panic("out of memory");
+    var lists: std::vec<std::vec<isize>> = {};
+    lists.push(move l1) catch @panic("out of memory");
+    lists.push(move l2) catch @panic("out of memory");
+    std::println("twice {} {} len {}", tw.len(), tw.get(1).len, geom::Len<std::vec<isize>>(lists.items()));
+
     // a panic: the try_ form gives it as an error (the plain form stops the program)
     val oob = geom::try_At(zs[..], 5);
     if (oob.err) {
@@ -224,6 +238,34 @@ attach geom::Store -> store {
             seen += 1;
         }
         return seen;
+    }
+}
+
+// Go's interface with arrays and pointers in its methods
+struct board {
+    n: isize;
+}
+
+attach geom::Board -> board {
+    fn Total(this, row: isize[..]) -> isize {
+        var t: isize = 0;
+        for (x) in row {
+            t += x;
+        }
+        return t;
+    }
+    fn Row(this, i: isize) -> std::vec<isize> {
+        var out: std::vec<isize> = {};
+        for (k) in 0..3 {
+            out.push(i + k) catch @panic("out of memory");
+        }
+        return out;
+    }
+    fn Home(this) -> geom::Point { return { X: 1.5, Y: 2.0 }; }
+    fn Moves(this) -> geom::ptr<isize> {
+        var p = geom::ptr<isize>::new();
+        p.put(this.n + 5);
+        return p;
     }
 }
 
@@ -291,6 +333,8 @@ fn main() -> !void {
 // expect: variadic 3 a/b/c
 // expect: chunks 2 1 ababab 9
 // expect: store 7 true false 2
+// expect: board 9 3.5 7
+// expect: twice 2 1 len 10
 // expect: caught PANIC(runtime error: index out of range [5] with length 3)
 // expect: consts 212 68 0.25 [tab	here "quoted" é]
 // expect: threads 2800

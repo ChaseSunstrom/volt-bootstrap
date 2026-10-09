@@ -6,6 +6,7 @@ package geom
 import (
 	"cmp"
 	"errors"
+	"fmt"
 	"sort"
 	"strconv"
 	"strings"
@@ -313,3 +314,35 @@ const Boiling Celsius = 100
 const Small float32 = 0.25
 
 const Tabbed = "tab\there \"quoted\" é"
+
+// Board's methods take and give arrays, and give *T of a plain struct and of a number: a Volt trait
+type Board interface {
+	Total(row [3]int) int
+	Row(i int) [3]int
+	Home() *Point
+	Moves() *int
+}
+
+func Audit(b Board) string {
+	home := b.Home()
+	return strconv.Itoa(b.Total(b.Row(2))) + " " + strconv.FormatFloat(home.X+home.Y, 'f', -1, 64) + " " + strconv.Itoa(*b.Moves())
+}
+
+// Twice is generic over an array of slices of its type parameter: array2<std::vec<T>>
+func Twice[T any](xs []T) [2][]T { return [2][]T{xs, xs[:1]} }
+
+// Len takes a slice: Len<std::vec<isize>> passes a Volt list where it takes []T
+func Len[T any](xs []T) int {
+	n := len(xs)
+	for _, x := range xs {
+		n += len(fmt.Sprint(x))
+	}
+	return n
+}
+
+// Gather calls f from a goroutine, as its slice result goes: a panic there has to come back as a Volt one
+func Gather(f func() []Shape) int {
+	out := make(chan int)
+	go func() { out <- len(f()) }()
+	return <-out
+}
