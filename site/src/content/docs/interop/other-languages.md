@@ -247,8 +247,9 @@ Python's on
   Dart, `long[]` (and the like) in Java and C#, an array in JavaScript, Ruby and Swift, a
   `LongArray` (and the like) in Kotlin and a table in Lua: a callback `fn(i32[3]) -> i32[3]` takes
   and returns those. One of the wrong length is refused.
-- **Structs with text, arrays and pointers in them.** A struct whose fields are text, arrays of
-  numbers, pointers or such structs (`label { name: str; sizes: i32[3]; at: vec2; }`) crosses by
+- **Structs with text, arrays and pointers in them.** A struct whose fields are text, arrays (of
+  numbers, of text, of such structs), pointers or such structs (`label { name: str; sizes: i32[3];
+  at: vec2; }`, `pair { names: str[2]; }`, `shelf { labels: label[2]; }`) crosses by
   value too: in, out, in a slice and from a callback. C, C++, Rust and Zig have its C form (the
   text a pointer and a length); the other languages have a type of their own whose text is their
   string and whose array is their array: a class in Python (ctypes; it takes a `str` for the text),
@@ -256,8 +257,9 @@ Python's on
   Kotlin, an object in JavaScript and Ruby, and a table in Lua. Its text going in is lent for the
   call (a callback's is kept, as a `str` it gives back is), and coming back it's copied before the
   call returns, so one that points into a parameter's text is still whole. By reference (`T&`), a
-  copy goes in and what Volt changed comes back into yours. Python also takes a field that's an
-  array of text (`str[2]`) as a sequence of strings; the other languages don't yet.
+  copy goes in and what Volt changed comes back into yours. An array of text or of such structs is
+  the language's array of strings or of that type (a tuple in Swift). A slice of them that Volt
+  gives back (pointing into what the call was given) is copied too.
 - **`E!T` as a parameter.** It takes a value or an error, in the form the language's callbacks give
   one back: `Result<T, Error>` in Rust and Swift, `Result<T>` in Kotlin, `Error!T` in Zig, a
   `VoltResult<T>` in Java and Dart (`VoltResult.ok(v)` or `VoltResult.err(e)`) and in C# (a value

@@ -70,6 +70,10 @@ d = Mathlib.ml_deep(deep)
 puts "deep #{d} #{deep[0][0][1]} #{deep[1][0][0]} words #{Mathlib.ml_words([["ab", "c"], [], ["def"]])}"
 puts "text_given #{Mathlib.ml_text_given(proc { |k| ["ab", "cde"] })} #{Mathlib.ml_labels_given(proc { |k| [{ name: "abc", sizes: [k, k, k], at: { x: 3, y: 0 } }, { name: "de", sizes: [1, 1, 1], at: { x: 0, y: 0 } }] })}"
 puts "turn #{Mathlib.ml_turn(proc { |a| [a[2], a[1], a[0]] })}"
+po = Mathlib.ml_pair_of("ab", "cd")
+shelf = { labels: [{ name: "abc", sizes: [2, 2, 2], at: { x: 3, y: 0 } }, { name: "de", sizes: [1, 1, 1], at: { x: 0, y: 0 } }], k: 1 }
+bk = Mathlib.ml_labels_back(shelf[:labels])
+puts "pair #{Mathlib.ml_pair_len({ names: ["ab", "cde"], n: 1 })} #{po.names[0]} #{po.names[1]} shelf #{Mathlib.ml_shelf_len(shelf)} back #{bk.length} #{bk[0].name}"
 
 # what the extension rejects: numbers that don't fit, wrong types, a closed counter; and a
 # callback's exception comes out of the call (the later calls are skipped)

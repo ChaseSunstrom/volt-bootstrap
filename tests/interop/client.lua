@@ -75,6 +75,10 @@ local d = m.ml_deep(deep)
 say("deep", d, deep[1][1][2], deep[2][1][1], "words", m.ml_words({ { "ab", "c" }, {}, { "def" } }))
 say("text_given", m.ml_text_given(function(k) return { "ab", "cde" } end), m.ml_labels_given(function(k) return { { name = "abc", sizes = { k, k, k }, at = { x = 3, y = 0 } }, { name = "de", sizes = { 1, 1, 1 }, at = { x = 0, y = 0 } } } end))
 say("turn", m.ml_turn(function(a) return { a[3], a[2], a[1] } end))
+local po = m.ml_pair_of("ab", "cd")
+local shelf = { labels = { { name = "abc", sizes = { 2, 2, 2 }, at = { x = 3, y = 0 } }, { name = "de", sizes = { 1, 1, 1 }, at = { x = 0, y = 0 } } }, k = 1 }
+local bk = m.ml_labels_back(shelf.labels)
+say("pair", m.ml_pair_len({ names = { "ab", "cde" }, n = 1 }), po.names[1], po.names[2], "shelf", m.ml_shelf_len(shelf), "back", #bk, bk[1].name)
 
 -- what the module rejects: numbers that don't fit, wrong types, a closed counter; and a callback's
 -- error comes out of the call (the later calls are skipped)

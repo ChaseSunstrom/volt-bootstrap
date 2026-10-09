@@ -163,6 +163,36 @@ export fn ml_area_given(f: fn(i32) -> vec2[..]) -> f64 {
     return s;
 }
 
+// a struct whose text is in an array
+public struct ml_pair {
+    names: str[2];
+    n: i32;
+}
+
+// a struct holding structs with text, in an array
+public struct ml_shelf {
+    labels: ml_label[2];
+    k: i32;
+}
+
+export fn ml_pair_len(p: ml_pair) -> i64 {
+    return @cast<i64>(p.names[0].len + p.names[1].len) + @cast<i64>(p.n);
+}
+
+// a pair whose text is the parameters' (copied before the call is back)
+export fn ml_pair_of(a: str, b: str) -> ml_pair {
+    return { names: { a, b }, n: 1 };
+}
+
+export fn ml_shelf_len(s: ml_shelf) -> i64 {
+    return ml_label_len(s.labels[0]) + ml_label_len(s.labels[1]) + @cast<i64>(s.k);
+}
+
+// a slice of structs with text given back (its text the caller's, copied before the call is back)
+export fn ml_labels_back(ls: ml_label[..]) -> ml_label[..] {
+    return ls;
+}
+
 // arrays by value through a callback: Volt passes one and takes one back
 export fn ml_turn(f: fn(i32[3]) -> i32[3]) -> i64 {
     val r = f({ 1, 2, 3 });

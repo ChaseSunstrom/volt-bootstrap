@@ -82,6 +82,10 @@ pub fn main() void {
     print("deep {d} {d} {d} words {d}\n", .{ deep, d00[1], d10[0], m.ml_words(&ws) });
     print("text_given {d} {d}\n", .{ m.ml_text_given({}, give_texts), m.ml_labels_given({}, give_labels) });
     print("turn {d}\n", .{m.ml_turn({}, turn)});
+    const po = m.ml_pair_of("ab", "cd");
+    var shelf = m.ml_shelf{ .labels = .{ give_label({}, 2), .{ .name = m.VoltStr.from("de"), .sizes = .{ 1, 1, 1 }, .at = .{ .x = 0, .y = 0 } } }, .k = 1 };
+    const bk = m.ml_labels_back(&shelf.labels);
+    print("pair {d} {s} {s} shelf {d} back {d} {s}\n", .{ m.ml_pair_len(.{ .names = .{ m.VoltStr.from("ab"), m.VoltStr.from("cde") }, .n = 1 }), po.names[0].slice(), po.names[1].slice(), m.ml_shelf_len(shelf), bk.len, bk.ptr[0].name.slice() });
 }
 
 // callbacks giving a slice (in memory of the client's: Volt reads it before calling again)

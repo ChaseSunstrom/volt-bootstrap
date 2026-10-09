@@ -80,6 +80,10 @@ fun main() {
     println("deep $d ${deep[0][0][1]} ${deep[1][0][0]} words ${ml_words(listOf(listOf("ab", "c"), listOf(), listOf("def")))}")
     println("text_given ${ml_text_given { listOf("ab", "cde") }} ${ml_labels_given { k -> listOf(ml_label("abc", intArrayOf(k, k, k), vec2(3.0, 0.0)), ml_label("de", intArrayOf(1, 1, 1), vec2(0.0, 0.0))) }}")
     println("turn ${ml_turn { a -> intArrayOf(a[2], a[1], a[0]) }}")
+    val po = ml_pair_of("ab", "cd")
+    val shelf = ml_shelf(listOf(ml_label("abc", intArrayOf(2, 2, 2), vec2(3.0, 0.0)), ml_label("de", intArrayOf(1, 1, 1), vec2(0.0, 0.0))), 1)
+    val bk = ml_labels_back(shelf.labels)
+    println("pair ${ml_pair_len(ml_pair(listOf("ab", "cde"), 1))} ${po.names[0]} ${po.names[1]} shelf ${ml_shelf_len(shelf)} back ${bk.size} ${bk[0].name}")
 
     // a callback's exception comes out of the call (the later calls are skipped), and a closed
     // counter throws

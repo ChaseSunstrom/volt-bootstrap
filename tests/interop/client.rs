@@ -84,4 +84,10 @@ fn main() {
     });
     println!("text_given {} {}", text_n, labels_n);
     println!("turn {}", ml_turn(|a| [a[2], a[1], a[0]]));
+    let po = ml_pair_of("ab", "cd");
+    let mut shelf = ml_shelf { labels: [ml_label { name: VoltStr::from("abc"), sizes: [2, 2, 2], at: vec2 { x: 3.0, y: 0.0 } }, ml_label { name: VoltStr::from("de"), sizes: [1, 1, 1], at: vec2 { x: 0.0, y: 0.0 } }], k: 1 };
+    let shelf_n = ml_shelf_len(shelf);
+    let bk = ml_labels_back(&mut shelf.labels);
+    let pair_n = ml_pair_len(ml_pair { names: [VoltStr::from("ab"), VoltStr::from("cde")], n: 1 });
+    println!("pair {} {} {} shelf {} back {} {}", pair_n, unsafe { po.names[0].as_str() }, unsafe { po.names[1].as_str() }, shelf_n, bk.len, unsafe { (*bk.ptr).name.as_str() });
 }

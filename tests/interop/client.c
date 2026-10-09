@@ -134,5 +134,10 @@ int main(void) {
     printf("deep %lld %lld %lld words %lld\n", deep, (long long)d00[1], (long long)d10[0], (long long)ml_words((mathlib_slice_slice_str){ws, 3}));
     printf("text_given %lld %lld\n", (long long)ml_text_given(give_texts, NULL), (long long)ml_labels_given(give_labels, NULL));
     printf("turn %lld\n", (long long)ml_turn(turn, NULL));
+    mathlib_ml_pair pa = {{{(const uint8_t *)"ab", 2}, {(const uint8_t *)"cde", 3}}, 1};
+    mathlib_ml_pair po = ml_pair_of((volt_str){(const uint8_t *)"ab", 2}, (volt_str){(const uint8_t *)"cd", 2});
+    mathlib_ml_shelf sh = {{give_label(NULL, 2), {{(const uint8_t *)"de", 2}, {1, 1, 1}, {0, 0}}}, 1};
+    mathlib_slice_ml_label bk = ml_labels_back((mathlib_slice_ml_label){sh.labels, 2});
+    printf("pair %lld %.*s %.*s shelf %lld back %zu %.*s\n", (long long)ml_pair_len(pa), (int)po.names[0].len, (const char *)po.names[0].ptr, (int)po.names[1].len, (const char *)po.names[1].ptr, (long long)ml_shelf_len(sh), bk.len, (int)bk.ptr[0].name.len, (const char *)bk.ptr[0].name.ptr);
     return 0;
 }

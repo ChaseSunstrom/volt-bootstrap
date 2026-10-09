@@ -5273,6 +5273,21 @@ attach fn py_value(this: bind&, t: u32, r: str) -> std::string {
         .TRAIT(i) => { return fmt2("_volt_{}({})", this.short(this.trait_of(t)), S(r)); },
         .CLOSURE(i) => { return fmt2("VoltFn({}, _call{})", S(r), unum(@cast<u64>(i))); },
         .ARRAY(e, n) => { return fmt("list({}.v)", S(r)); },
+        .SLICE(x) => {
+            // a slice Volt gives back (into what the call was given): copied into a list
+            var c = S("_x");
+            match (this.shape_of(this.slice_elem(t)) ?? shape::VOID) {
+                .STR => { c = S("str(_x)"); },
+                .STRUCT(st) => {
+                    c = S("type(_x).from_buffer_copy(_x)");
+                    if (this.holds_str(this.slice_elem(t))) {
+                        c = S("_own(type(_x).from_buffer_copy(_x))");
+                    }
+                },
+                default => {},
+            }
+            return fmt3("[{} for _x in {}.ptr[:{}.len]]", move c, S(r), S(r));
+        },
         .STRUCT(s) => {
             if (this.holds_str(t)) {
                 return fmt("_own({})", S(r));
@@ -5340,6 +5355,8 @@ attach fn py_call(this: bind&, t: u32, f: str, args: std::string, gift: bool, af
     var keep = this.holds_str(t);
     match (this.shape_of(t) ?? shape::VOID) {
         .RESULT(e, x) => { keep = this.holds_str(x); },
+        // (a slice given back points into the arguments)
+        .SLICE(x) => { keep = true; },
         default => {},
     }
     var out = this.py_invoke(f, move args, gift, keep);
@@ -6627,6 +6644,7 @@ attach fn cs_ret(this: bind&, t: u32) -> std::string {
         .CLOSURE(i) => { return fmt("closure{}", unum(@cast<u64>(i))); },
         .TRAIT(i) => { return fmt("volt_{}", this.short(this.trait_of(t))); },
         .LIST(x) => { return fmt("List<{}>", this.cs_elem(this.list_elem(t))); },
+        .SLICE(x) => { return this.cs_arr(t); },
         .RESULT(e, x) => { return this.cs_ret(x); },
         default => { return this.cs_ty(t); },
     }
@@ -6639,6 +6657,16 @@ struct cs_arg {
     pass: std::string = {};
     open: std::string = {};
     close: std::string = {};
+}
+
+// can a C# fixed buffer hold elements of this shape (numbers and bools)?
+fn cs_fixed(s: shape) -> bool {
+    match (s) {
+        .INT(k) => { return true; },
+        .FLOAT(b) => { return true; },
+        .BOOL => { return true; },
+        default => { return false; },
+    }
 }
 
 // the C# type of a slice of slices (an array of arrays, down to numbers, structs or strings) or of
@@ -7040,6 +7068,8 @@ attach fn cs_value(this: bind&, t: u32, r: str) -> std::string {
         .CLOSURE(i) => { return fmt2("new closure{}({})", unum(@cast<u64>(i)), S(r)); },
         .TRAIT(i) => { return fmt2("new volt_{}({})", this.short(this.trait_of(t)), S(r)); },
         .ARRAY(e, n) => { return fmt("{}.ToArray()", S(r)); },
+        // copied into an array (text copied)
+        .SLICE(x) => { return fmt3("VoltSlice.Copy({}.ptr, {}.len, x => {})", S(r), S(r), this.cs_value(this.slice_elem(t), "x")); },
         .STRUCT(s) => {
             if (this.holds_str(t)) {
                 return fmt2("{}.FromC({})", this.local(this.c.si(s).name), S(r));
@@ -7398,17 +7428,28 @@ attach fn cs_text_struct(this: bind&, s: u32, fs: std::vec<std::string>&, out: s
         val fname = cs_ident(fs.at(k).as_str());
         match (*this.c.t.get(f.ty)) {
             .ARRAY(elem, n) => {
-                decls.append(fmt2("    public {}[] {};\n", this.cs_raw(elem), copy fname).as_str());
+                // (text a string, a struct with text its own type: each converted as a field is)
+                decls.append(fmt2("    public {}[] {};\n", this.cs_arr(elem), copy fname).as_str());
                 var xs: std::string = {};
                 for (i) in 0..n {
                     if (i > 0) {
                         xs.append(", ");
                     }
-                    xs.append(fmt2("volt_c.{}[{}]", copy fname, unum(i)).as_str());
+                    xs.append(this.cs_value(elem, fmt2("volt_c.{}[{}]", copy fname, unum(i)).as_str()).as_str());
                 }
                 from.append(fmt2("        {} = new[] {{ {} }},\n", copy fname, move xs).as_str());
+                var v = fmt("this.{}[i]", copy fname);
+                match (this.shape_of(elem) ?? shape::VOID) {
+                    .STR => { v = fmt("volt_k.Str(this.{}[i])", copy fname); },
+                    .STRUCT(x) => {
+                        if (this.holds_str(elem)) {
+                            v = fmt("this.{}[i].ToC(volt_k)", copy fname);
+                        }
+                    },
+                    default => {},
+                }
                 to.append(fmt4("        if (this.{}.Length != {})\n        {{\n            throw new ArgumentException(\"{}: expected {} elements, not \" + ", copy fname, unum(n), copy fname, unum(n)).as_str());
-                to.append(fmt4("this.{}.Length);\n        }}\n        for (var i = 0; i < {}; i++)\n        {{\n            volt_c.{}[i] = this.{}[i];\n        }}\n", copy fname, unum(n), copy fname, copy fname).as_str());
+                to.append(fmt4("this.{}.Length);\n        }}\n        for (var i = 0; i < {}; i++)\n        {{\n            volt_c.{}[i] = {};\n        }}\n", copy fname, unum(n), copy fname, move v).as_str());
             },
             default => {
                 decls.append(fmt2("    public {} {};\n", this.cs_ty(f.ty), copy fname).as_str());
@@ -7485,6 +7526,8 @@ attach fn cs_text(this: bind&) -> std::string {
         }
         out.append("}\n");
     }
+    var inl: std::string = {};
+    var inlines: std::vec<std::string> = {};
     for (s&) in this.structs.items() {
         val info = this.c.si(*s);
         val own = this.local(info.name);
@@ -7501,7 +7544,23 @@ attach fn cs_text(this: bind&) -> std::string {
             val f = info.fields.at(k);
             val fname = cs_ident(fs.at(k).as_str());
             match (*this.c.t.get(f.ty)) {
-                .ARRAY(elem, n) => { out.append(fmt3("    public fixed {} {}[{}];\n", this.cs_raw(elem), copy fname, unum(n)).as_str()); },
+                .ARRAY(elem, n) => {
+                    if (cs_fixed(this.shape_of(elem) ?? shape::VOID)) {
+                        out.append(fmt3("    public fixed {} {}[{}];\n", this.cs_raw(elem), copy fname, unum(n)).as_str());
+                    } else {
+                        // text or structs: an inline array of them (a fixed buffer takes numbers only)
+                        val iname = fmt2("volt_{}_{}", this.cs_raw(elem), unum(n));
+                        var seen = false;
+                        for (x&) in inlines.items() {
+                            seen = seen || x.as_str() == iname.as_str();
+                        }
+                        if (!seen) {
+                            inl.append(fmt4("\n[System.Runtime.CompilerServices.InlineArray({})]\npublic struct {}\n{{\n    {} e0;\n}}\n", unum(n), copy iname, this.cs_raw(elem), S("")).as_str());
+                            put(&inlines, copy iname);
+                        }
+                        out.append(fmt2("    public {} {};\n", copy iname, copy fname).as_str());
+                    }
+                },
                 default => { out.append(fmt2("    public {} {};\n", this.cs_raw(f.ty), copy fname).as_str()); },
             }
         }
@@ -7510,6 +7569,7 @@ attach fn cs_text(this: bind&) -> std::string {
             this.cs_text_struct(*s, &fs, &out);
         }
     }
+    out.append(inl.as_str());
     var arrays_done: std::vec<u32> = {};
     for (x&) in this.arrays.items() {
         this.cs_array(*x, &arrays_done, &out);
@@ -7658,6 +7718,9 @@ attach fn cs_text(this: bind&) -> std::string {
     // the helpers the body uses
     if (this.closures.len > 0 || this.traits.len > 0) {
         out.append("\n// a delegate or an object Volt calls, and what it threw (rethrown after the call)\ninternal sealed class Callback\n{\n    public readonly object F;\n    public Exception? Error;\n    // the memory of the slice F gave Volt last: kept until its next one (Volt reads it before then),\n    // freed by Rethrow once the call is back\n    unsafe void* kept;\n\n    public Callback(object f) => F = f;\n\n    public unsafe T* Keep<T>(Span<T> s) where T : unmanaged\n    {\n        NativeMemory.Free(kept);\n        var p = (T*)NativeMemory.Alloc((nuint)Math.Max(1, s.Length), (nuint)sizeof(T));\n        s.CopyTo(new Span<T>(p, s.Length));\n        kept = p;\n        return p;\n    }\n\n    public unsafe void Rethrow()\n    {\n        NativeMemory.Free(kept);\n        kept = null;\n        if (Error != null)\n        {\n            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(Error).Throw();\n        }\n    }\n}\n");
+    }
+    if (contains(out.as_str(), "VoltSlice.Copy(")) {
+        out.append("\n// copies a slice a Volt function gave back\ninternal static unsafe class VoltSlice\n{\n    public static U[] Copy<T, U>(T* ptr, nuint len, Func<T, U> f) where T : unmanaged\n    {\n        var v = new U[(int)len];\n        for (var i = 0; i < v.Length; i++)\n        {\n            v[i] = f(ptr[i]);\n        }\n        return v;\n    }\n}\n");
     }
     if (contains(out.as_str(), "VoltList.Take(")) {
         out.append("\n// copies a list a Volt function gave out, and frees it\ninternal static unsafe class VoltList\n{\n    public static List<U> Take<T, U>(T* ptr, nuint len, IntPtr owner, delegate* unmanaged<IntPtr, void> drop, Func<T, U> f) where T : unmanaged\n    {\n        var v = new List<U>((int)len);\n        for (nuint i = 0; i < len; i++)\n        {\n            v.Add(f(ptr[i]));\n        }\n        if (drop != null)\n        {\n            drop(owner);\n        }\n        return v;\n    }\n}\n");
@@ -7965,6 +8028,18 @@ attach fn java_read(this: bind&, t: u32, seg: str, off: u64) -> std::string {
             if (this.java_num(e)) {
                 return fmt4("{}.asSlice({}, {}).toArray({})", S(seg), unum(off), unum(n * this.csize(e).size), this.java_vl(e));
             }
+            if (this.java_field(t)) {
+                // text or structs: each read where it is
+                var r = fmt("new {}[] {{", this.java_ty(e, false));
+                for (i) in 0..n {
+                    if (i > 0) {
+                        r.append(", ");
+                    }
+                    r.append(this.java_read(e, seg, off + i * this.csize(e).size).as_str());
+                }
+                r.push('}');
+                return r;
+            }
             return fmt3("{}.get({}, {})", S(seg), this.java_vl(t), unum(off));
         },
         .STRUCT(s) => { return fmt3("{}.read({}.asSlice({}))", this.local(this.c.si(s).name), S(seg), unum(off)); },
@@ -7993,6 +8068,15 @@ attach fn java_write(this: bind&, t: u32, seg: str, off: u64, v: str) -> std::st
                 var w = fmt4("if ({}.length != {}) {{\n    throw new IllegalArgumentException(\"expected {} elements, not \" + {}.length);\n}}\n", S(v), unum(n), unum(n), S(v));
                 w.append(fmt5("MemorySegment.copy({}, 0, {}, {}, {}, {}", S(v), S(seg), this.java_vl(e), unum(off), unum(n)).as_str());
                 w.append(");");
+                return w;
+            }
+            if (this.java_field(t)) {
+                // text or structs: each written where it goes
+                var w = fmt4("if ({}.length != {}) {{\n    throw new IllegalArgumentException(\"expected {} elements, not \" + {}.length);\n}}", S(v), unum(n), unum(n), S(v));
+                for (i) in 0..n {
+                    w.append("\n");
+                    w.append(this.java_write(e, seg, off + i * this.csize(e).size, fmt2("{}[{}]", S(v), unum(i)).as_str()).as_str());
+                }
                 return w;
             }
             return fmt4("{}.set({}, {}, {});", S(seg), this.java_vl(t), unum(off), S(v));
@@ -8048,7 +8132,16 @@ attach fn java_mirror(this: bind&, t: u32) -> bool {
 attach fn java_field(this: bind&, t: u32) -> bool {
     match (this.shape_of(t) ?? shape::VOID) {
         .STR => { return true; },
-        .ARRAY(e, n) => { return this.java_num(e); },
+        // an array of numbers, of text or of such structs (element by element, see java_read)
+        .ARRAY(e, n) => {
+            if (this.java_num(e) || this.in_ty(e) == STR) {
+                return true;
+            }
+            match (this.shape_of(e) ?? shape::VOID) {
+                .STRUCT(st) => { return this.java_mirror(e); },
+                default => { return false; },
+            }
+        },
         .PTR(x) => {
             if (x == VOID) {
                 return true;
@@ -9019,7 +9112,7 @@ attach fn java_text(this: bind&) -> std::string {
     for (x&) in this.slices.items() {
         val et = this.java_ty(*x, false);
         val sh = this.short(*x);
-        if (!this.java_simple(*x)) {
+        if (!this.java_simple(*x) && !this.java_mirror(*x)) {
             continue;
         }
         out.append(fmt4("\n    interface Read_{} {{\n        {} get(MemorySegment e, long i);\n    }}\n\n    static {}[] slice_", copy sh, copy et, copy et, S("")).as_str());
@@ -9281,8 +9374,22 @@ attach fn go_field_to_c(this: bind&, t: u32, v: str) -> std::string {
                 return fmt("{}.cWith(str)", S(v));
             }
         },
-        // (a field's array is never the struct wrapping one, see add_array)
-        .ARRAY(e, n) => { return fmt3("*(*[{}]{})(unsafe.Pointer(&{}))", unum(n), this.go_cty(e), S(v)); },
+        // (a field's array is never the struct wrapping one, see add_array; its numbers are its
+        // bytes, other elements are converted one by one)
+        .ARRAY(e, n) => {
+            if (this.go_same_layout(e)) {
+                return fmt3("*(*[{}]{})(unsafe.Pointer(&{}))", unum(n), this.go_cty(e), S(v));
+            }
+            var out = fmt2("[{}]{}{{", unum(n), this.go_cty(e));
+            for (i) in 0..n {
+                if (i > 0) {
+                    out.append(", ");
+                }
+                out.append(this.go_field_to_c(e, fmt2("{}[{}]", S(v), unum(i)).as_str()).as_str());
+            }
+            out.push('}');
+            return out;
+        },
         default => {},
     }
     return this.go_to_c(t, v);
@@ -9291,7 +9398,20 @@ attach fn go_field_to_c(this: bind&, t: u32, v: str) -> std::string {
 // the Go expression converting a plain struct's C field v (of type t) to Go
 attach fn go_field_from_c(this: bind&, t: u32, v: str) -> std::string {
     match (this.shape_of(t) ?? shape::VOID) {
-        .ARRAY(e, n) => { return fmt3("*(*[{}]{})(unsafe.Pointer(&{}))", unum(n), this.go_ty(e), S(v)); },
+        .ARRAY(e, n) => {
+            if (this.go_same_layout(e)) {
+                return fmt3("*(*[{}]{})(unsafe.Pointer(&{}))", unum(n), this.go_ty(e), S(v));
+            }
+            var out = fmt2("[{}]{}{{", unum(n), this.go_ty(e));
+            for (i) in 0..n {
+                if (i > 0) {
+                    out.append(", ");
+                }
+                out.append(this.go_field_from_c(e, fmt2("{}[{}]", S(v), unum(i)).as_str()).as_str());
+            }
+            out.push('}');
+            return out;
+        },
         default => {},
     }
     return this.go_from_c(t, v);
@@ -9458,7 +9578,17 @@ attach fn go_plain(this: bind&, t: u32) -> bool {
 attach fn go_plain_field(this: bind&, t: u32) -> bool {
     match (this.shape_of(t) ?? shape::VOID) {
         .STR => { return true; },
-        .ARRAY(e, n) => { return this.go_same_layout(e); },
+        // an array of numbers, of text or of plain structs (each element converted, see
+        // go_field_to_c)
+        .ARRAY(e, n) => {
+            if (this.go_same_layout(e) || this.in_ty(e) == STR) {
+                return true;
+            }
+            match (this.shape_of(e) ?? shape::VOID) {
+                .STRUCT(s) => { return this.go_plain(e); },
+                default => { return false; },
+            }
+        },
         .PTR(x) => {
             if (x == VOID) {
                 return true;
@@ -9867,7 +9997,9 @@ attach fn go_value(this: bind&, t: u32, r: str) -> std::string {
             if (this.go_same_layout(x)) {
                 return fmt4("append([]{}(nil), unsafe.Slice((*{})(unsafe.Pointer({}.ptr)), int({}.len))...)", this.go_ty(x), this.go_ty(x), S(r), S(r));
             }
-            return fmt("nil /* {} */", this.c.ty_name(t));
+            // copied element by element (text copied)
+            val f = fmt3("func(x {}) {} {{ return {} }}", this.go_cty(x), this.go_ty(x), this.go_from_c(x, "x"));
+            return fmt3("copyEach({}.ptr, {}.len, {})", S(r), S(r), move f);
         },
         default => { return S(r); },
     }
@@ -10427,6 +10559,9 @@ attach fn go_text(this: bind&) -> std::string {
         g.append("}\n");
     }
     g.append(this.go_slice_fns().as_str());
+    if (contains(g.as_str(), "copyEach(")) {
+        g.append("\n// copyEach copies a slice Volt gives back into a Go slice, each element through f\nfunc copyEach[E, G any](ptr *E, n C.size_t, f func(E) G) []G {\n    out := make([]G, int(n))\n    if n > 0 {\n        for i, x := range unsafe.Slice(ptr, int(n)) {\n            out[i] = f(x)\n        }\n    }\n    return out\n}\n");
+    }
     if (contains(g.as_str(), "keepEach(")) {
         g.append("\n// the elements of a slice for Volt (an argument's, or a callback's result), each converted by c, in\n// C memory added to k, which is freed when the call is back\nfunc keepEach[T, E any](k *[]unsafe.Pointer, v []T, c func(T) E) unsafe.Pointer {\n    var e E\n    p := C.calloc(C.size_t(len(v)+1), C.size_t(unsafe.Sizeof(e)))\n    *k = append(*k, p)\n    out := unsafe.Slice((*E)(p), len(v))\n    for i, x := range v {\n        out[i] = c(x)\n    }\n    return p\n}\n");
     }
@@ -14317,6 +14452,12 @@ attach fn dart_copy(this: bind&, t: u32, to: str, from: str, ind: str) -> std::s
     }
     match (this.shape_of(t) ?? shape::VOID) {
         .STRUCT(s) => { return fmt3("{}{}.copyFrom({});\n", S(ind), S(to), S(from)); },
+        // (field by field: a str in an Array has no []=)
+        .STR => {
+            var out = fmt5("{}{}.ptr = {}.ptr;\n{}{}.len = ", S(ind), S(to), S(from), S(ind), S(to));
+            out.append(fmt("{}.len;\n", S(from)).as_str());
+            return out;
+        },
         default => { return fmt3("{}{} = {};\n", S(ind), S(to), S(from)); },
     }
 }
@@ -14416,7 +14557,20 @@ attach fn dart_text_struct(this: bind&, s: u32, fs: std::vec<std::string>&, out:
                 from.append(fmt2("      {}: {},\n", copy fname, copy r).as_str());
                 load.append(fmt2("    this.{} = {};\n", copy fname, copy r).as_str());
                 to.append(fmt4("    if (this.{}.length != {}) {{\n      throw ArgumentError.value(this.{}, '{}', ", copy fname, unum(m), copy fname, copy fname).as_str());
-                to.append(fmt4("'expected {} elements');\n    }}\n    for (var i = 0; i < {}; i++) {{\n      c$.{}[i] = {};\n    }}\n", unum(m), unum(m), copy fname, this.dart_in(e, fmt("this.{}[i]", copy fname).as_str())).as_str());
+                // (an element of an Array of structs is set field by field: it has no []=)
+                var set = fmt2("c$.{}[i] = {};", copy fname, this.dart_in(e, fmt("this.{}[i]", copy fname).as_str()));
+                match (this.shape_of(e) ?? shape::VOID) {
+                    .STR => { set = fmt3("final s$ = str$(this.{}[i]);\n      c$.{}[i]\n        ..ptr = s$.ptr\n        ..len = s$.len;", copy fname, copy fname, S("")); },
+                    .STRUCT(x) => {
+                        if (this.holds_str(e)) {
+                            set = fmt2("c$.{}[i].copyFrom(this.{}[i]._c(str$));", copy fname, copy fname);
+                        } else {
+                            set = fmt2("c$.{}[i].copyFrom(this.{}[i]);", copy fname, copy fname);
+                        }
+                    },
+                    default => {},
+                }
+                to.append(fmt4("'expected {} elements');\n    }}\n    for (var i = 0; i < {}; i++) {{\n      {}\n    }}\n", unum(m), unum(m), move set, S("")).as_str());
             },
             default => {
                 val r = this.dart_read(f.ty, fmt("c$.{}", copy fname).as_str());
@@ -15952,6 +16106,55 @@ attach fn swift_text_struct(this: bind&, s: u32, out: std::string&) -> void {
                     }
                     strs.append(fmt("self.{}.voltStrs", copy fname).as_str());
                     lets.append(fmt2("        let volt_{}_c = self.{}.voltC(voltStrOf)\n", copy c, copy fname).as_str());
+                    arg = fmt("volt_{}_c", copy c);
+                }
+            },
+            .ARRAY(e, m) => {
+                // a tuple of text or of structs with text: each element converted as a field is, in
+                // order (voltStrs gives their text as voltC takes it)
+                var text = false;
+                var from_one = S("volt_x");
+                var to_one = S("volt_x");
+                match (this.shape_of(e) ?? shape::VOID) {
+                    .STR => {
+                        text = true;
+                        from_one = S("voltString(volt_x)");
+                        to_one = S("voltStrOf(volt_x)");
+                    },
+                    .STRUCT(x) => {
+                        if (this.holds_str(e)) {
+                            text = true;
+                            from_one = fmt("{}(volt: volt_x)", this.local(this.c.si(x).name));
+                            to_one = S("volt_x.voltC(voltStrOf)");
+                        }
+                    },
+                    default => {},
+                }
+                if (text) {
+                    var vs = S("(");
+                    var cs2 = S("(");
+                    for (i) in 0..m {
+                        if (i > 0) {
+                            vs.append(", ");
+                            cs2.append(", ");
+                            strs.append(" + ");
+                        } else if (strs.len() > 0) {
+                            strs.append(" + ");
+                        }
+                        val ci = fmt2("volt_c.{}.{}", copy c, unum(i));
+                        val si = fmt2("self.{}.{}", copy fname, unum(i));
+                        vs.append(replace_all(from_one.as_str(), "volt_x", ci.as_str()).as_str());
+                        cs2.append(replace_all(to_one.as_str(), "volt_x", si.as_str()).as_str());
+                        if (this.in_ty(e) == STR) {
+                            strs.append(fmt("[{}]", copy si).as_str());
+                        } else {
+                            strs.append(fmt("{}.voltStrs", copy si).as_str());
+                        }
+                    }
+                    vs.push(')');
+                    cs2.push(')');
+                    value = move vs;
+                    lets.append(fmt2("        let volt_{}_c = {}\n", copy c, move cs2).as_str());
                     arg = fmt("volt_{}_c", copy c);
                 }
             },

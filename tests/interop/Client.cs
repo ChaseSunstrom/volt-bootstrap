@@ -86,6 +86,10 @@ var d = Api.ml_deep(deep);
 Console.WriteLine($"deep {d} {deep[0][0][1]} {deep[1][0][0]} words {Api.ml_words([["ab", "c"], [], ["def"]])}");
 Console.WriteLine($"text_given {Api.ml_text_given(k => new[] { "ab", "cde" })} {Api.ml_labels_given(k => new ml_label[] { new ml_label { name = "abc", sizes = new[] { k, k, k }, at = new vec2 { x = 3, y = 0 } }, new ml_label { name = "de", sizes = new[] { 1, 1, 1 }, at = new vec2 { x = 0, y = 0 } } })}");
 Console.WriteLine($"turn {Api.ml_turn(a => new[] { a[2], a[1], a[0] })}");
+var po = Api.ml_pair_of("ab", "cd");
+var shelf = new ml_shelf { labels = new[] { new ml_label { name = "abc", sizes = new[] { 2, 2, 2 }, at = new vec2 { x = 3, y = 0 } }, new ml_label { name = "de", sizes = new[] { 1, 1, 1 }, at = new vec2 { x = 0, y = 0 } } }, k = 1 };
+var bk = Api.ml_labels_back(shelf.labels);
+Console.WriteLine($"pair {Api.ml_pair_len(new ml_pair { names = new[] { "ab", "cde" }, n = 1 })} {po.names[0]} {po.names[1]} shelf {Api.ml_shelf_len(shelf)} back {bk.Length} {bk[0].name}");
 
 static class Ext
 {

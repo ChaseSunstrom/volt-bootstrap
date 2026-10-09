@@ -102,4 +102,8 @@ int main() {
     });
     std::printf("text_given %lld %lld\n", text_n, labels_n);
     std::printf("turn %lld\n", (long long)mathlib::ml_turn([](std::array<int32_t, 3> a) { return std::array<int32_t, 3>{a[2], a[1], a[0]}; }));
+    auto po = mathlib::ml_pair_of("ab", "cd");
+    mathlib::ml_shelf shelf{{mathlib::ml_label{"abc", {2, 2, 2}, {3, 0}}, mathlib::ml_label{"de", {1, 1, 1}, {0, 0}}}, 1};
+    auto bk = mathlib::ml_labels_back(shelf.labels);
+    std::printf("pair %lld %.*s %.*s shelf %lld back %zu %.*s\n", (long long)mathlib::ml_pair_len({{"ab", "cde"}, 1}), (int)po.names[0].len, (const char *)po.names[0].ptr, (int)po.names[1].len, (const char *)po.names[1].ptr, (long long)mathlib::ml_shelf_len(shelf), bk.len, (int)bk.ptr[0].name.len, (const char *)bk.ptr[0].name.ptr);
 }
