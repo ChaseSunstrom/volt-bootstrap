@@ -41,6 +41,23 @@ export fn ml_clash(r: i32, result: i32, arena: i32, e: i32, self: i32, vec2: i32
     return r + 2 * result + 3 * arena + 4 * e + 5 * self + 6 * vec2 + 7 * ctx + 8 * None + 9 * from + 10 * type + 11 * a0 + 12 * @cast<i32>(name.len) + 13 * name_s + 14 * typeof;
 }
 
+// fields named like words the bindings' languages keep (Python's from, Rust's type and self, C's
+// int): each language still reads and writes them
+public struct ml_tags {
+    from: i32;
+    type: i32;
+    self: i32;
+    int: i32;
+}
+
+export fn ml_tags_make() -> ml_tags {
+    return { from: 1, type: 2, self: 3, int: 4 };
+}
+
+export fn ml_tags_sum(t: ml_tags) -> i32 {
+    return t.from + 2 * t.type + 3 * t.self + 4 * t.int;
+}
+
 export fn ml_next(c: color) -> color {
     match (c) {
         .RED => { return color::GREEN; },

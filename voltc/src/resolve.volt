@@ -743,6 +743,10 @@ attach fn export_c_name(this: checker&, d: u32, name: str, is_attach: bool, para
         n.push('_');
         n.append(ident_of(strip_pkg(g.as_str(), pkg)).as_str());
     }
+    // a name C or C++ can't declare (int, typeof, delete) is exported with a _, so a header can name it
+    if (c_word(n.as_str())) {
+        n.push('_');
+    }
     return this.intern(move n);
 }
 

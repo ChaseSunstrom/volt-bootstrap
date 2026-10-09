@@ -12,6 +12,10 @@ fn main() {
     println!("scale {} {}", a.x, a.y);
     println!("len {}", ml_len("hello"));
     println!("clash {}", ml_clash(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, "ab", 13, 14));
+    let mut tg = ml_tags_make();
+    print!("tags {} {} {} {}", tg.from, tg.r#type, tg.self_, tg.int);
+    tg.int = 5;
+    println!(" {}", ml_tags_sum(tg));
     println!("next {}", ml_next(color::GREEN) as i32);
     println!("sqrt {} 1", ml_sqrt(9.0).unwrap());
     let e = ml_sqrt(-1.0).unwrap_err();

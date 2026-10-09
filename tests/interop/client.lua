@@ -22,6 +22,10 @@ m.ml_scale(a, 2)
 say("scale", a.x, a.y)
 say("len", m.ml_len("hello"))
 say("clash", m.ml_clash(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, "ab", 13, 14))
+local tg = m.ml_tags_make()
+local from, ty, self, int = tg.from, tg.type, tg.self, tg.int
+tg.int = 5
+say("tags", from, ty, self, int, m.ml_tags_sum(tg))
 say("next", m.ml_next(m.color.GREEN))
 say("sqrt", m.ml_sqrt(9), 1)
 local ok, err = pcall(m.ml_sqrt, -1)

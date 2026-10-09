@@ -20,6 +20,10 @@ pub fn main() void {
     print("scale {d} {d}\n", .{ a.x, a.y });
     print("len {d}\n", .{m.ml_len("hello")});
     print("clash {d}\n", .{m.ml_clash(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, "ab", 13, 14)});
+    var tg = m.ml_tags_make();
+    const head = .{ tg.from, tg.@"type", tg.self, tg.int };
+    tg.int = 5;
+    print("tags {d} {d} {d} {d} {d}\n", .{ head[0], head[1], head[2], head[3], m.ml_tags_sum(tg) });
     print("next {d}\n", .{@intFromEnum(m.ml_next(m.color.GREEN))});
     print("sqrt {d} 1\n", .{m.ml_sqrt(9) catch unreachable});
     if (m.ml_sqrt(-1)) |_| {} else |e| print("error {s}\n", .{if (e == error.NEGATIVE) "negative" else "?"});

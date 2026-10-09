@@ -653,6 +653,12 @@ fn has_word(words: str[..], s: str) -> bool {
 // is name a type the package's bindings declare (a struct, enum, error set or trait, or one made for
 // a slice, optional, array, list, E!T or callback), as most languages spell it?
 attach fn declares(this: bind&, name: str) -> bool {
+    return this.declares_of(name, true);
+}
+
+// declares, and when made is false leaving out the types made for slices, optionals, arrays and
+// lists (Zig spells those as generics)
+attach fn declares_of(this: bind&, name: str, made: bool) -> bool {
     var ns: std::vec<std::string> = {};
     for (s&) in this.structs.items() {
         put(&ns, this.local(this.c.si(*s).name));
@@ -669,17 +675,19 @@ attach fn declares(this: bind&, name: str) -> bool {
     for (r&) in this.results.items() {
         put(&ns, this.result_name(*r));
     }
-    for (x&) in this.opts.items() {
-        put(&ns, this.made_name("opt", *x, true));
-    }
-    for (x&) in this.slices.items() {
-        put(&ns, this.made_name("slice", *x, true));
-    }
-    for (x&) in this.lists.items() {
-        put(&ns, this.made_name("list", *x, true));
-    }
-    for (x&) in this.arrays.items() {
-        put(&ns, this.made_name("array", *x, true));
+    if (made) {
+        for (x&) in this.opts.items() {
+            put(&ns, this.made_name("opt", *x, true));
+        }
+        for (x&) in this.slices.items() {
+            put(&ns, this.made_name("slice", *x, true));
+        }
+        for (x&) in this.lists.items() {
+            put(&ns, this.made_name("list", *x, true));
+        }
+        for (x&) in this.arrays.items() {
+            put(&ns, this.made_name("array", *x, true));
+        }
     }
     for (i) in 0..this.closures.len {
         put(&ns, this.cb_name(@cast<u32>(i), true));
@@ -1896,19 +1904,30 @@ fn c_ident(name: str, cpp: bool) -> std::string {
     return S(name);
 }
 
-// a name C keeps for itself: reserved (__x, _X), a C keyword (C23's too), or a macro the
-// standard headers define as a value (errno, NULL, the ..._MAX limits; unix and linux in GNU C)
+// a name C or C++ can't declare: reserved (__x, _X), a keyword of either (C23's too), or a macro
+// the standard headers define as a value by a lowercase or one-word name (errno, NULL; unix and
+// linux in GNU C)
 // ponytail: the standard headers' value macros, by name; a header a binding's own code includes
 // (ruby.h, lua.h) can define more, but those are capitalised or prefixed
+fn c_taken(s: str) -> bool {
+    return starts_with(s, "__") || (s.len > 1 && s[0] == '_' && s[1] >= 'A' && s[1] <= 'Z') || c_word(s);
+}
+
+// a keyword of C or C++, or a value macro by name (c_taken without the reserved names, which a
+// symbol can have: the runtime's own __adddf3)
+fn c_word(s: str) -> bool {
+    val words: str[] = { "typeof", "typeof_unqual", "errno", "unix", "linux", "i386", "NULL", "EOF", "BUFSIZ", "WEOF" };
+    // (final, override, import and module are names C++ only reads specially in some places)
+    val ctx: str[] = { "final", "override", "import", "module" };
+    return is_c_keyword(s) || (cpp_keyword(s) && !has_word(ctx, s)) || has_word(words, s);
+}
+
+// a name C keeps for itself (c_taken), or one like the limits' macros (INT32_MAX, SIZE_MAX,
+// INT64_C: capitals, digits and an _), which a parameter or field can't have
 fn c_kept(s: str) -> bool {
-    if (starts_with(s, "__") || (s.len > 1 && s[0] == '_' && s[1] >= 'A' && s[1] <= 'Z')) {
+    if (c_taken(s)) {
         return true;
     }
-    val words: str[] = { "typeof", "typeof_unqual", "errno", "unix", "linux", "i386", "NULL", "EOF", "BUFSIZ", "CHAR_BIT", "MB_LEN_MAX", "RAND_MAX", "EXIT_SUCCESS", "EXIT_FAILURE", "WEOF" };
-    if (is_c_keyword(s) || has_word(words, s)) {
-        return true;
-    }
-    // INT32_MAX, SIZE_MAX, INT64_C...: capitals, digits and an _
     var caps = false;
     for (c) in s {
         if (c >= 'a' && c <= 'z') {
@@ -1917,6 +1936,67 @@ fn c_kept(s: str) -> bool {
         caps = caps || c == '_';
     }
     return caps && s.len > 2;
+}
+
+// the export fns as C glue calls them (Node, Ruby, Lua): each through a pointer of its own, prefix
+// and its name, since a local of the glue's (self, info, len...) can have an export fn's name
+attach fn c_callees(this: bind&, prefix: str) -> std::string {
+    var out = S("\n// the export fns, by names none of the glue's locals has\n");
+    for (e&) in this.entries().items() {
+        if (e.free_of != null) {
+            continue;
+        }
+        out.append(fmt4("static {}(*const {}{})({}) = ", spaced(this.c_ret(e, false)), S(prefix), copy e.name, this.c_params(e, false)).as_str());
+        out.append(fmt("{};\n", copy e.name).as_str());
+    }
+    return out;
+}
+
+// export struct s's field names in C (cpp: in C++): one C or C++ keeps gets a _, and so does one
+// that's then another field's (private and private_). Everything that reads or writes the fields of
+// the C struct names them so
+attach fn c_fields(this: bind&, s: u32, cpp: bool) -> std::vec<std::string> {
+    var ns: std::vec<std::string> = {};
+    for (f&) in this.c.si(s).fields.items() {
+        var n = c_ident(f.name, cpp);
+        if (c_kept(n.as_str())) {
+            n.push('_');
+        }
+        put(&ns, move n);
+    }
+    unique_names(&ns);
+    return ns;
+}
+
+// export struct s's field names in a language: each one the language keeps (keep) gets a _, and so
+// does one that's then another field's
+attach fn field_names(this: bind&, s: u32, keep: str[..]) -> std::vec<std::string> {
+    var ns: std::vec<std::string> = {};
+    for (f&) in this.c.si(s).fields.items() {
+        var n = S(f.name);
+        if (has_word(keep, n.as_str())) {
+            n.push('_');
+        }
+        put(&ns, move n);
+    }
+    unique_names(&ns);
+    return ns;
+}
+
+// each of ns gets a _ (or more) while an earlier one has its name
+fn unique_names(ns: std::vec<std::string>&) -> void {
+    for (i) in 0..ns.len {
+        loop {
+            var dup = false;
+            for (j) in 0..i {
+                dup = dup || ns.at(j).as_str() == ns.at(i).as_str();
+            }
+            if (!dup) {
+                break;
+            }
+            ns.at(i).push('_');
+        }
+    }
 }
 
 // "T name" (with [N] after the name for arrays)
@@ -2168,8 +2248,16 @@ attach fn c_types(this: bind&, cpp: bool, out: std::string&) -> void {
             .STRUCT(s) => {
                 val info = this.c.si(s);
                 out.append(fmt("\nstruct {} {{\n", this.c_named(info.name, cpp)).as_str());
-                for (f&) in info.fields.items() {
-                    out.append(fmt("    {};\n", this.c_decl(f.ty, f.name, cpp)).as_str());
+                val fs = this.c_fields(s, cpp);
+                for (k) in 0..info.fields.len {
+                    val ft = info.fields.at(k).ty;
+                    var d = this.c_decl(ft, fs.at(k).as_str(), cpp);
+                    if (cpp && this.declares(this.c_prim(ft, true).as_str())) {
+                        // the package's own type, by its full name: a field named like it (color color)
+                        // would otherwise change what the name means in the struct
+                        d = fmt2("::{}::{}", S(this.pkg), move d);
+                    }
+                    out.append(fmt("    {};\n", move d).as_str());
                 }
                 out.append("};\n");
             },
@@ -2866,15 +2954,26 @@ fn cpp_member(m: str) -> std::string {
 attach fn cpp_fn_name(this: bind&, f: u32) -> std::string {
     val info = this.c.fi(f);
     if (this.c.fn_generics(info.decl).len == 0) {
-        return cpp_ident(info.c_name);
+        return this.cpp_free_name(info.c_name);
     }
     val mine = this.cpp_params_of(f);
     for (g&) in this.exports().items() {
         if (*g != f && this.c.fi(*g).decl == info.decl && this.cpp_params_of(*g).as_str() == mine.as_str()) {
-            return cpp_ident(info.c_name);
+            return this.cpp_free_name(info.c_name);
         }
     }
-    return cpp_ident(this.c.fn_decl_of(info.decl)->name);
+    return this.cpp_free_name(this.c.fn_decl_of(info.decl)->name);
+}
+
+// a wrapper's name in the C++ namespace: one the header declares itself (raw, str, hold, a type of
+// the package's) gets a _
+attach fn cpp_free_name(this: bind&, name: str) -> std::string {
+    var n = cpp_ident(name);
+    val words: str[] = { "raw", "str", "text", "error", "error_name", "hold", "take_text", "give_text", "take_list", "volt_bits" };
+    while (has_word(words, n.as_str()) || this.declares(n.as_str())) {
+        n.push('_');
+    }
+    return n;
 }
 
 attach fn cpp_params_of(this: bind&, f: u32) -> std::string {
@@ -3500,7 +3599,7 @@ attach fn rust_value(this: bind&, t: u32, r: str) -> std::string {
 attach fn rust_body(this: bind&, f: u32, args: std::string, pre: std::string) -> std::string {
     val info = this.c.fi(f);
     var out = move pre;
-    out.append(fmt3("    let r = unsafe {{ raw::{}({}) }};\n", S(info.c_name), move args, S("")).as_str());
+    out.append(fmt3("    let r = unsafe {{ raw::{}({}) }};\n", rust_ident(info.c_name), move args, S("")).as_str());
     match (this.shape_of(info.ret) ?? shape::VOID) {
         .RESULT(e, x) => {
             out.append("    if r.error != 0 {\n        return Err(Error { code: r.error });\n    }\n");
@@ -3630,8 +3729,10 @@ attach fn rust_text(this: bind&) -> std::string {
     for (s&) in this.structs.items() {
         val info = this.c.si(*s);
         out.append(fmt("\n#[repr(C)]\n#[derive(Clone, Copy, Debug)]\npub struct {} {{\n", this.local(info.name)).as_str());
-        for (f&) in info.fields.items() {
-            out.append(fmt2("    pub {}: {},\n", rust_ident(f.name), this.rust_ty(f.ty)).as_str());
+        val keep: str[] = { "self", "Self", "super", "crate" };
+        val fs = this.field_names(*s, keep);
+        for (k) in 0..fs.len {
+            out.append(fmt2("    pub {}: {},\n", rust_ident(fs.at(k).as_str()), this.rust_ty(info.fields.at(k).ty)).as_str());
         }
         out.append("}\n");
     }
@@ -3708,7 +3809,12 @@ attach fn rust_text(this: bind&) -> std::string {
         if (f.ret != VOID) {
             ret = fmt(" -> {}", this.rust_out(f.ret));
         }
-        out.append(fmt3("        pub fn {}({}){};\n", copy e.name, move args, move ret).as_str());
+        val rn = rust_ident(e.name.as_str());
+        if (rn.as_str() != e.name.as_str() && !starts_with(rn.as_str(), "r#")) {
+            // (self, Self, super and crate can't even be raw: the symbol's name, linked)
+            out.append(fmt("        #[link_name = \"{}\"]\n", copy e.name).as_str());
+        }
+        out.append(fmt3("        pub fn {}({}){};\n", move rn, move args, move ret).as_str());
     }
     out.append("    }\n}\n");
     for (k) in 0..this.traits.len {
@@ -3917,6 +4023,28 @@ fn zig_keyword(s: str) -> bool {
         }
     }
     return true;
+}
+
+// a field's name in Zig: one Zig keeps is @"name", which is still name
+fn zig_field(name: str) -> std::string {
+    if (zig_keyword(name)) {
+        return fmt("@\"{}\"", S(name));
+    }
+    return S(name);
+}
+
+// an export fn's name in Zig: a keyword is @"name"; one the file declares itself (raw, std,
+// VoltStr, a type of the package's) gets a _
+attach fn zig_fn_name(this: bind&, name: str) -> std::string {
+    if (zig_keyword(name)) {
+        return zig_field(name);
+    }
+    var n = S(name);
+    val words: str[] = { "std", "raw", "Error", "err_of", "code_of", "print", "VoltStr", "VoltText", "VoltSlice", "VoltOpt", "VoltArray" };
+    while (has_word(words, n.as_str()) || this.declares_of(n.as_str(), false)) {
+        n.push('_');
+    }
+    return n;
 }
 
 // Zig doesn't let a parameter shadow a declaration: a name the file declares gets a _
@@ -4285,10 +4413,10 @@ attach fn zig_body(this: bind&, f: u32, args: std::string, pre: std::string) -> 
     val info = this.c.fi(f);
     var out = move pre;
     if (info.ret == VOID) {
-        out.append(fmt2("    raw.{}({});\n", S(info.c_name), move args).as_str());
+        out.append(fmt2("    raw.{}({});\n", zig_field(info.c_name), move args).as_str());
         return out;
     }
-    out.append(fmt2("    const r = raw.{}({});\n", S(info.c_name), move args).as_str());
+    out.append(fmt2("    const r = raw.{}({});\n", zig_field(info.c_name), move args).as_str());
     match (this.shape_of(info.ret) ?? shape::VOID) {
         .RESULT(e, x) => {
             out.append("    if (r.@\"error\" != 0) return err_of(r.@\"error\");\n");
@@ -4408,7 +4536,7 @@ attach fn zig_text(this: bind&) -> std::string {
         val info = this.c.si(*s);
         out.append(fmt("\npub const {} = extern struct {{\n", this.local(info.name)).as_str());
         for (f&) in info.fields.items() {
-            out.append(fmt2("    {}: {},\n", S(f.name), this.zig_ty(f.ty)).as_str());
+            out.append(fmt2("    {}: {},\n", zig_field(f.name), this.zig_ty(f.ty)).as_str());
         }
         out.append("};\n");
     }
@@ -4488,7 +4616,7 @@ attach fn zig_text(this: bind&) -> std::string {
                 default => {},
             }
         }
-        out.append(fmt3("    pub extern fn {}({}) {};\n", copy e.name, move args, this.zig_out(f.ret)).as_str());
+        out.append(fmt3("    pub extern fn {}({}) {};\n", zig_field(e.name.as_str()), move args, this.zig_out(f.ret)).as_str());
     }
     out.append("};\n");
     for (s&) in this.handles.items() {
@@ -4543,7 +4671,7 @@ attach fn zig_text(this: bind&) -> std::string {
             }
             this.zig_param(info.params.at(k).ty, ns.at(k).as_str(), &ps, &args, &pre);
         }
-        out.append(fmt3("\npub fn {}({}) {} {{\n", S(info.c_name), move ps, this.zig_ret(info.ret)).as_str());
+        out.append(fmt3("\npub fn {}({}) {} {{\n", this.zig_fn_name(info.c_name), move ps, this.zig_ret(info.ret)).as_str());
         out.append(this.zig_body(e.f, move args, move pre).as_str());
         out.append("}\n");
     }
@@ -5039,7 +5167,7 @@ attach fn py_body(this: bind&, f: u32, conv: std::string, pre: std::string) -> s
     var out = py_gift(pre.as_str(), conv.as_str());
     val gift = out.len() > 0;
     out.append(pre.as_str());
-    out.append(this.py_call(info.ret, fmt("_lib.{}", S(info.c_name)).as_str(), move conv, gift).as_str());
+    out.append(this.py_call(info.ret, py_lib(info.c_name).as_str(), move conv, gift).as_str());
     return out;
 }
 
@@ -5201,7 +5329,7 @@ attach fn py_text(this: bind&) -> std::string {
                 default => {},
             }
         }
-        body.append(fmt3("\n_lib.{}.argtypes = [{}]\n_lib.{}.restype = ", copy e.name, move types, copy e.name).as_str());
+        body.append(fmt3("\n{}.argtypes = [{}]\n{}.restype = ", py_lib(e.name.as_str()), move types, py_lib(e.name.as_str())).as_str());
         body.append(this.py_out_ty(f.ret).as_str());
     }
     body.append("\n");
@@ -5271,7 +5399,7 @@ attach fn py_text(this: bind&) -> std::string {
                 var b = py_gift(pre.as_str(), conv.as_str());
                 val gift = b.len() > 0;
                 b.append(pre.as_str());
-                b.append(this.py_invoke(fmt("_lib.{}", S(info.c_name)).as_str(), move conv, gift).as_str());
+                b.append(this.py_invoke(py_lib(info.c_name).as_str(), move conv, gift).as_str());
                 var back: std::string = {};
                 if (this.py_calls_back()) {
                     back = S("_reraise()\n");
@@ -5317,7 +5445,7 @@ attach fn py_text(this: bind&) -> std::string {
             names.append(ns.at(k).as_str());
             this.py_arg(info.params.at(k).ty, ns.at(k).as_str(), &conv, &pre);
         }
-        body.append(fmt2("\n\ndef {}({}):\n", S(info.c_name), move names).as_str());
+        body.append(fmt2("\n\ndef {}({}):\n", this.py_fn_name(info.c_name), move names).as_str());
         body.append(this.py_body(e.f, move conv, move pre).as_str());
     }
     if (this.uses_str) {
@@ -5437,8 +5565,9 @@ attach fn py_text(this: bind&) -> std::string {
     for (s&) in this.structs.items() {
         val info = this.c.si(*s);
         var fields: std::string = {};
-        for (f&) in info.fields.items() {
-            fields.append(fmt2("(\"{}\", {}), ", S(f.name), this.py_ty(f.ty)).as_str());
+        val fs = this.py_fields(*s);
+        for (k) in 0..fs.len {
+            fields.append(fmt2("(\"{}\", {}), ", copy *fs.at(k), this.py_ty(info.fields.at(k).ty)).as_str());
         }
         out.append(fmt2("\n{}._fields_ = [{}]", this.local(info.name), move fields).as_str());
     }
@@ -5834,6 +5963,31 @@ attach fn pyi_params(this: bind&, f: u32, first: usize) -> std::string {
     return ps;
 }
 
+// export struct s's field names in Python: a keyword gets a _ (r.from_)
+attach fn py_fields(this: bind&, s: u32) -> std::vec<std::string> {
+    val keep: str[] = { "False", "None", "True", "and", "as", "assert", "async", "await", "break", "class", "continue", "def", "del", "elif", "else", "except", "finally", "for", "from", "global", "if", "import", "in", "is", "lambda", "nonlocal", "not", "or", "pass", "raise", "return", "try", "while", "with", "yield" };
+    return this.field_names(s, keep);
+}
+
+// an export fn's name in Python: a keyword, a name the module itself uses (its imports, the builtins
+// its code calls, its own _ helpers, its classes) gets a _ (from_, int_)
+attach fn py_fn_name(this: bind&, name: str) -> std::string {
+    var n = S(name);
+    val words: str[] = { "abc", "ctypes", "os", "sys", "threading", "traceback", "int", "float", "bool", "str", "bytes", "len", "list", "range", "type", "isinstance", "getattr", "any", "super", "open", "object", "Exception", "ValueError", "TypeError", "OverflowError", "_*" };
+    while (py_keyword(n.as_str()) || has_word(words, n.as_str()) || (has_prefix(words, n.as_str()) && n.as_str() == name) || this.declares(n.as_str())) {
+        n.push('_');
+    }
+    return n;
+}
+
+// the library's C function name as Python reaches it: _lib.f, or getattr(_lib, "from") for a keyword
+fn py_lib(name: str) -> std::string {
+    if (py_keyword(name)) {
+        return fmt("getattr(_lib, \"{}\")", S(name));
+    }
+    return fmt("_lib.{}", S(name));
+}
+
 fn py_keyword(s: str) -> bool {
     val words: str[] = { "False", "None", "True", "and", "as", "assert", "async", "await", "break", "class", "continue", "def", "del", "elif", "else", "except", "finally", "for", "from", "global", "if", "import", "in", "is", "lambda", "nonlocal", "not", "or", "pass", "raise", "return", "try", "while", "with", "yield" };
     return has_word(words, s);
@@ -5887,9 +6041,11 @@ attach fn pyi_text(this: bind&) -> std::string {
         val info = this.c.si(*s);
         out.append(fmt("\n\nclass {}:\n", this.local(info.name)).as_str());
         var ps: std::string = {};
-        for (f&) in info.fields.items() {
-            out.append(fmt2("    {}: {}\n", S(f.name), this.pyi_ty(f.ty, false)).as_str());
-            ps.append(fmt2(", {}: {} = ...", S(f.name), this.pyi_ty(f.ty, true)).as_str());
+        val fs = this.py_fields(*s);
+        for (k) in 0..fs.len {
+            val f = info.fields.at(k);
+            out.append(fmt2("    {}: {}\n", copy *fs.at(k), this.pyi_ty(f.ty, false)).as_str());
+            ps.append(fmt2(", {}: {} = ...", copy *fs.at(k), this.pyi_ty(f.ty, true)).as_str());
         }
         out.append(fmt("\n    def __init__(self{}) -> None: ...\n", move ps).as_str());
     }
@@ -5962,7 +6118,7 @@ attach fn pyi_text(this: bind&) -> std::string {
             continue;
         }
         val info = this.c.fi(e.f);
-        out.append(fmt4("\ndef {}({}) -> {}: {}\n", S(info.c_name), this.pyi_params(e.f, 0), this.pyi_ty(info.ret, false), this.pyi_body(e.f)).as_str());
+        out.append(fmt4("\ndef {}({}) -> {}: {}\n", this.py_fn_name(info.c_name), this.pyi_params(e.f, 0), this.pyi_ty(info.ret, false), this.pyi_body(e.f)).as_str());
     }
     return out;
 }
@@ -6816,10 +6972,15 @@ attach fn cs_text(this: bind&) -> std::string {
     for (s&) in this.structs.items() {
         val info = this.c.si(*s);
         out.append(fmt("\n[StructLayout(LayoutKind.Sequential)]\npublic unsafe struct {}\n{{\n", this.local(info.name)).as_str());
-        for (f&) in info.fields.items() {
+        val own = this.local(info.name);
+        val keep: str[] = { own.as_str() };
+        val fs = this.field_names(*s, keep);
+        for (k) in 0..fs.len {
+            val f = info.fields.at(k);
+            val fname = cs_ident(fs.at(k).as_str());
             match (*this.c.t.get(f.ty)) {
-                .ARRAY(elem, n) => { out.append(fmt3("    public fixed {} {}[{}];\n", this.cs_raw(elem), cs_ident(f.name), unum(n)).as_str()); },
-                default => { out.append(fmt2("    public {} {};\n", this.cs_raw(f.ty), cs_ident(f.name)).as_str()); },
+                .ARRAY(elem, n) => { out.append(fmt3("    public fixed {} {}[{}];\n", this.cs_raw(elem), copy fname, unum(n)).as_str()); },
+                default => { out.append(fmt2("    public {} {};\n", this.cs_raw(f.ty), copy fname).as_str()); },
             }
         }
         out.append("}\n");
@@ -8080,7 +8241,13 @@ attach fn java_text(this: bind&) -> std::string {
         var reads: std::string = {};
         var writes: std::string = {};
         var first = true;
+        var fs: std::vec<std::string> = {};
         for (f&) in info.fields.items() {
+            put(&fs, java_ident(f.name));
+        }
+        unique_names(&fs);
+        for (k) in 0..fs.len {
+            val f = info.fields.at(k);
             val z = this.csize(f.ty);
             val at = align_to(off, z.align);
             if (!first) {
@@ -8092,7 +8259,7 @@ attach fn java_text(this: bind&) -> std::string {
                 layout.append(fmt("MemoryLayout.paddingLayout({}), ", unum(at - off)).as_str());
             }
             layout.append(fmt2("{}.withName(\"{}\")", this.java_layout(f.ty), S(f.name)).as_str());
-            val fname = java_ident(f.name);
+            val fname = copy *fs.at(k);
             fields.append(fmt2("        public {} {};\n", this.java_ty(f.ty, false), copy fname).as_str());
             ctor_ps.append(fmt2("{} {}", this.java_ty(f.ty, false), copy fname).as_str());
             ctor_body.append(fmt2("            this.{} = {};\n", copy fname, copy fname).as_str());
@@ -8891,7 +9058,13 @@ attach fn go_call(this: bind&, call: std::string, self_pass: str?, args: std::ve
 
 attach fn go_body(this: bind&, f: u32, args: std::vec<go_arg>&, self_pass: str?) -> std::string {
     val info = this.c.fi(f);
-    return this.go_call(fmt("C.{}", S(info.c_name)), self_pass, args, info.ret);
+    // (an export fn named like a Go keyword is reached through volt_go_NAME, see go_text)
+    var callee = S("C.");
+    if (go_reserved(info.c_name)) {
+        callee.append("volt_go_");
+    }
+    callee.append(info.c_name);
+    return this.go_call(move callee, self_pass, args, info.ret);
 }
 
 fn go_keyword(s: str) -> bool {
@@ -8902,6 +9075,12 @@ fn go_keyword(s: str) -> bool {
         }
     }
     return false;
+}
+
+// Go's keywords (cgo puts an _ before a C name that's one)
+fn go_reserved(s: str) -> bool {
+    val words: str[] = { "break", "case", "chan", "const", "continue", "default", "defer", "else", "fallthrough", "for", "func", "go", "goto", "if", "import", "interface", "map", "package", "range", "return", "select", "struct", "switch", "type", "var" };
+    return has_word(words, s);
 }
 
 fn go_param(s: str) -> std::string {
@@ -9143,6 +9322,13 @@ attach fn go_text(this: bind&) -> std::string {
         out.append(fmt4("extern {}{}cb{}({});\n", spaced(this.c_prim(r, false)), S(p), unum(@cast<u64>(i)), move params).as_str());
     }
     out.append(this.go_c_helpers().as_str());
+    // an export fn named like a Go keyword: cgo reaches it by another name
+    for (f&) in this.exports().items() {
+        val cn = this.c.fi(*f).c_name;
+        if (go_reserved(cn)) {
+            out.append(fmt2("#define volt_go_{} {}\n", S(cn), S(cn)).as_str());
+        }
+    }
     out.append("*/\nimport \"C\"\n");
     // the Go part
     var g = S("\nimport (\n    \"errors\"\n    \"fmt\"\n    \"os\"\n    \"runtime\"\n    \"runtime/cgo\"\n    \"unsafe\"\n)\n");
@@ -9203,23 +9389,39 @@ attach fn go_text(this: bind&) -> std::string {
         // gofmt's columns: the fields' names, and the keys of the conversions' literals
         var w: usize = 0;
         var cw: usize = 0;
+        var gs: std::vec<std::string> = {};
         for (f&) in info.fields.items() {
-            if (go_name(f.name).len() > w) {
-                w = go_name(f.name).len();
+            put(&gs, go_name(f.name));
+        }
+        unique_names(&gs);
+        var cs: std::vec<std::string> = {};
+        for (c&) in this.c_fields(*s, false).items() {
+            // cgo names a C field that's a Go keyword with an _ in front
+            var x = S("");
+            if (go_reserved(c.as_str())) {
+                x.push('_');
             }
-            if (f.name.len > cw) {
-                cw = f.name.len;
+            x.append(c.as_str());
+            put(&cs, move x);
+        }
+        for (k) in 0..gs.len {
+            if (gs.at(k).len() > w) {
+                w = gs.at(k).len();
+            }
+            if (cs.at(k).len() > cw) {
+                cw = cs.at(k).len();
             }
         }
         g.append(fmt2("\n// {} is Volt struct {}.\ntype ", copy n, S(info.name)).as_str());
         g.append(fmt("{} struct {{\n", copy n).as_str());
         var toc: std::string = {};
         var fromc: std::string = {};
-        for (f&) in info.fields.items() {
-            val gn = go_name(f.name);
+        for (k) in 0..gs.len {
+            val f = info.fields.at(k);
+            val gn = copy *gs.at(k);
             g.append(fmt2("    {} {}\n", pad_to(gn.as_str(), w), this.go_ty(f.ty)).as_str());
-            toc.append(fmt2("        {} {},\n", pad_to(fmt("{}:", S(f.name)).as_str(), cw + 1), this.go_to_c(f.ty, fmt("v.{}", copy gn).as_str())).as_str());
-            fromc.append(fmt2("        {} {},\n", pad_to(fmt("{}:", copy gn).as_str(), w + 1), this.go_from_c(f.ty, fmt("c.{}", S(f.name)).as_str())).as_str());
+            toc.append(fmt2("        {} {},\n", pad_to(fmt("{}:", copy *cs.at(k)).as_str(), cw + 1), this.go_to_c(f.ty, fmt("v.{}", copy gn).as_str())).as_str());
+            fromc.append(fmt2("        {} {},\n", pad_to(fmt("{}:", copy gn).as_str(), w + 1), this.go_from_c(f.ty, fmt("c.{}", copy *cs.at(k)).as_str())).as_str());
         }
         g.append(fmt3("}}\n\nfunc (v {}) c() C.{} {{\n    return C.{}{{\n", copy n, copy cn, copy cn).as_str());
         g.append(toc.as_str());
@@ -10009,7 +10211,7 @@ attach fn node_fn(this: bind&, f: u32, wname: str, self_class: u32?, out: std::s
     for (k) in first..info.params.len {
         put(&ps, info.params.at(k).ty);
     }
-    try this.node_call(wname, info.c_name, &ps, &names, self_decl.as_str(), self_get.as_str(), info.c_name, pass.as_str(), info.ret, out);
+    try this.node_call(wname, info.c_name, &ps, &names, self_decl.as_str(), self_get.as_str(), fmt("vn_fn_{}", S(info.c_name)).as_str(), pass.as_str(), info.ret, out);
     return;
 }
 
@@ -10192,6 +10394,7 @@ attach fn node_text(this: bind&) -> compile_error!std::string {
     out.append(fmt3("// {}. Build it against the library and node's headers:\n//   cc -shared -fPIC -I<node's include/node> {}_node.c -L. -l{} -o ", S(this.pkg), S(this.pkg), S(this.pkg)).as_str());
     out.append(fmt("{}.node\n// then require it (or the loader voltc bindings --lang js writes).\n#include <node_api.h>\n#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\n\n", S(this.pkg)).as_str());
     out.append(this.c_text().as_str());
+    out.append(this.c_callees("vn_fn_").as_str());
     out.append("\n// ---------- conversions ----------\n\n");
     out.append("// throw a TypeError, unless something already threw; always 0\nstatic inline int vn_throw(napi_env env, const char *what) {\n    bool pending = false;\n    napi_is_exception_pending(env, &pending);\n    if (!pending) {\n        napi_throw_type_error(env, NULL, what);\n    }\n    return 0;\n}\n\n");
     out.append("static inline void vn_throw_range(napi_env env) {\n    napi_throw_range_error(env, NULL, \"the number doesn't fit the parameter's type\");\n}\n\n");
@@ -10257,13 +10460,16 @@ attach fn node_text(this: bind&) -> compile_error!std::string {
         val sn = this.node_sname(*s);
         val cn = this.c_named(this.c.si(*s).name, false);
         out.append(fmt3("\nstatic inline int vn_get_{}(napi_env env, napi_value v, {} *out) {{\n    napi_valuetype t = napi_undefined;\n    napi_typeof(env, v, &t);\n    if (t != napi_object) {{\n        return vn_throw(env, \"expected a {} object\");\n    }}\n", copy sn, copy cn, copy sn).as_str());
-        for (f&) in this.c.si(*s).fields.items() {
-            out.append(fmt2("    {{\n        napi_value f;\n        napi_get_named_property(env, v, \"{}\", &f);\n        {}\n    }}\n", S(f.name), try this.node_get(f.ty, "f", fmt("out->{}", S(f.name)).as_str())).as_str());
+        val cf = this.c_fields(*s, false);
+        for (k) in 0..cf.len {
+            val f = this.c.si(*s).fields.at(k);
+            out.append(fmt2("    {{\n        napi_value f;\n        napi_get_named_property(env, v, \"{}\", &f);\n        {}\n    }}\n", S(f.name), try this.node_get(f.ty, "f", fmt("out->{}", copy *cf.at(k)).as_str())).as_str());
         }
         out.append("    return 1;\nfail:\n    return 0;\n}\n");
         out.append(fmt2("\nstatic inline void vn_set_{}(napi_env env, napi_value v, const {} *in) {{\n", copy sn, copy cn).as_str());
-        for (f&) in this.c.si(*s).fields.items() {
-            out.append(fmt2("    {{\n        napi_value f = NULL;\n        {}\n        napi_set_named_property(env, v, \"{}\", f);\n    }}\n", try this.node_put(f.ty, fmt("in->{}", S(f.name)).as_str(), "f", 0), S(f.name)).as_str());
+        for (k) in 0..cf.len {
+            val f = this.c.si(*s).fields.at(k);
+            out.append(fmt2("    {{\n        napi_value f = NULL;\n        {}\n        napi_set_named_property(env, v, \"{}\", f);\n    }}\n", try this.node_put(f.ty, fmt("in->{}", copy *cf.at(k)).as_str(), "f", 0), S(f.name)).as_str());
         }
         out.append("}\n");
         out.append(fmt3("\nstatic inline napi_value vn_new_{}(napi_env env, const {} *in) {{\n    napi_value v = NULL;\n    napi_create_object(env, &v);\n    vn_set_{}(env, v, in);\n    return v;\n}}\n", copy sn, copy cn, copy sn).as_str());
@@ -11442,6 +11648,7 @@ attach fn lua_text(this: bind&) -> compile_error!std::string {
     out.append(fmt3("// Build it against the library and Lua's headers:\n//   cc -shared -fPIC {}_lua.c -L. -l{} -o {}.so\n", S(p), S(p), S(p)).as_str());
     out.append(fmt("// then require \"{}\". An error is raised as a table with its name and code.\n#include <lua.h>\n#include <lauxlib.h>\n#include <limits.h>\n#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\n\n", S(p)).as_str());
     out.append(this.c_text().as_str());
+    out.append(this.c_callees("vl_fn_").as_str());
     out.append(fmt3("\n// the error metatable; where the registry keeps the error a Lua function raised while Volt called\n// it, and what the last one gave Volt\n#define VL_ERROR \"{}.error\"\n#define VL_RAISED \"{}.raised\"\n#define VL_KEPT \"{}.kept\"\n", S(p), S(p), S(p)).as_str());
     out.append(r"""
 
@@ -11894,14 +12101,17 @@ attach fn lua_text(this: bind&) -> compile_error!std::string {
         val cn = this.c_named(this.c.si(*s).name, false);
         out.append(fmt2("\nstatic inline void vl_get_{}(lua_State *L, int idx, {} *out, const char *what) {{\n    idx = lua_absindex(L, idx);\n    if (!lua_istable(L, idx)) {{\n", copy sn, copy cn).as_str());
         out.append("        luaL_error(L, \"%s: expected a table, got %s\", what, luaL_typename(L, idx));\n    }\n");
-        for (f&) in this.c.si(*s).fields.items() {
+        val cf = this.c_fields(*s, false);
+        for (k) in 0..cf.len {
+            val f = this.c.si(*s).fields.at(k);
             val fw = fmt2("\"field {} of {}\"", S(f.name), copy sn);
-            out.append(fmt2("    {{\n        lua_getfield(L, idx, \"{}\");\n        int at = lua_gettop(L);\n        {}\n        lua_remove(L, at);\n    }}\n", S(f.name), this.lua_get(f.ty, "at", fmt("out->{}", S(f.name)).as_str(), fw.as_str())).as_str());
+            out.append(fmt2("    {{\n        lua_getfield(L, idx, \"{}\");\n        int at = lua_gettop(L);\n        {}\n        lua_remove(L, at);\n    }}\n", S(f.name), this.lua_get(f.ty, "at", fmt("out->{}", copy *cf.at(k)).as_str(), fw.as_str())).as_str());
         }
         out.append("}\n");
         out.append(fmt2("\nstatic inline void vl_set_{}(lua_State *L, int idx, const {} *in) {{\n    idx = lua_absindex(L, idx);\n", copy sn, copy cn).as_str());
-        for (f&) in this.c.si(*s).fields.items() {
-            out.append(fmt2("    {}\n    lua_setfield(L, idx, \"{}\");\n", this.lua_push(f.ty, fmt("in->{}", S(f.name)).as_str()), S(f.name)).as_str());
+        for (k) in 0..cf.len {
+            val f = this.c.si(*s).fields.at(k);
+            out.append(fmt2("    {}\n    lua_setfield(L, idx, \"{}\");\n", this.lua_push(f.ty, fmt("in->{}", copy *cf.at(k)).as_str()), S(f.name)).as_str());
         }
         out.append("}\n");
         out.append(fmt3("\nstatic inline void vl_new_{}(lua_State *L, const {} *in) {{\n    lua_newtable(L);\n    vl_set_{}(L, -1, in);\n}}\n", copy sn, copy cn, copy sn).as_str());
@@ -11958,7 +12168,7 @@ attach fn lua_text(this: bind&) -> compile_error!std::string {
             for (q&) in info.params.items() {
                 put(&ps, q.ty);
             }
-            this.lua_wrapper(fmt("f_{}", S(info.c_name)).as_str(), info.c_name, &ps, &pnames, 1, "", info.c_name, "", info.ret, &out);
+            this.lua_wrapper(fmt("f_{}", S(info.c_name)).as_str(), info.c_name, &ps, &pnames, 1, "", fmt("vl_fn_{}", S(info.c_name)).as_str(), "", info.ret, &out);
         }
     }
     // the module: its functions, enums (tables of numbers), error sets (tables of names) and classes
@@ -12448,6 +12658,24 @@ struct dart_arg {
     gives: bool = false;
 }
 
+// the names a Dart binding uses itself: dart:core's and dart:ffi's types and helpers, its own
+// Volt... classes and _ helpers
+val DART_TAKEN: str[] = { "Native", "Pointer", "Void", "Function", "String", "List", "Struct", "Union", "Array", "Opaque", "Handle", "NativeCallable", "NativeFunction", "NativeType", "StateError", "ArgumentError", "RangeError", "Error", "Exception", "StackTrace", "Object", "Never", "Set", "Map", "int", "double", "bool", "num", "dynamic", "print", "Int8", "Int16", "Int32", "Int64", "Uint8", "Uint16", "Uint32", "Uint64", "Float", "Double", "Bool", "Char", "Size", "IntPtr", "utf8", "sizeOf", "nullptr", "identity", "stderr", "exit", "calloc", "malloc", "Volt*", "_*" };
+
+// a name a Dart binding gives what it declares (Native's fields, the wrappers, struct fields): a
+// keyword or one the file uses itself (int, Int32, _lib) gets a _, and so does one of the
+// package's types when types is set
+attach fn dart_name(this: bind&, name: str, types: bool) -> std::string {
+    var n = dart_ident(name);
+    if (has_prefix(DART_TAKEN, n.as_str())) {
+        n.push('_');
+    }
+    while (has_word(DART_TAKEN, n.as_str()) || (types && this.declares(n.as_str()))) {
+        n.push('_');
+    }
+    return n;
+}
+
 // export fn f's parameter names (from first) in its Dart wrapper, before dart_ident (see
 // escape_params): the types and helpers its body names (its own locals have a $ no Volt name has)
 attach fn dart_pnames(this: bind&, f: u32, first: usize) -> std::vec<std::string> {
@@ -12456,9 +12684,8 @@ attach fn dart_pnames(this: bind&, f: u32, first: usize) -> std::vec<std::string
     for (k) in first..info.params.len {
         put(&ns, S(info.params.at(k).name));
     }
-    val words: str[] = { "Native", "Pointer", "Void", "Function", "String", "List", "Struct", "Union", "Array", "Opaque", "Handle", "NativeCallable", "NativeFunction", "NativeType", "StateError", "ArgumentError", "RangeError", "Error", "Exception", "StackTrace", "Object", "Never", "Set", "Map", "Int8", "Int16", "Int32", "Int64", "Uint8", "Uint16", "Uint32", "Uint64", "Float", "Double", "Bool", "Char", "Size", "IntPtr", "utf8", "sizeOf", "nullptr", "identity", "stderr", "exit", "calloc", "malloc", "Volt*", "_*" };
     val none: str[] = {};
-    this.escape_params(&ns, words, none);
+    this.escape_params(&ns, DART_TAKEN, none);
     return ns;
 }
 
@@ -12832,7 +13059,7 @@ attach fn dart_fn(this: bind&, f: u32, first: usize, head: str, ind: str) -> com
         decls.append(a.decl.as_str());
         put(&args, move a);
     }
-    val body = try this.dart_call(fmt("Native.{}", S(info.c_name)).as_str(), first == 1, &args, info.ret);
+    val body = try this.dart_call(fmt("Native.{}", this.dart_name(info.c_name, false)).as_str(), first == 1, &args, info.ret);
     var out = this.dart_doc(f, ind);
     out.append(fmt3("{}{}({}) {{\n", S(ind), S(head), move decls).as_str());
     out.append(indent_n(body.as_str(), ind.len + 2).as_str());
@@ -13052,10 +13279,24 @@ attach fn dart_text(this: bind&) -> compile_error!std::string {
         var named: std::string = {};
         var sets: std::string = {};
         var copies: std::string = {};
+        var fs: std::vec<std::string> = {};
         for (f&) in info.fields.items() {
-            val fname = dart_ident(f.name);
+            var d = this.dart_name(f.name, false);
+            if (d.as_str() == "hashCode" || d.as_str() == "runtimeType" || d.as_str() == "toString" || d.as_str() == "noSuchMethod") {
+                d.push('_');
+            }
+            if (starts_with(d.as_str(), "_")) {
+                // of() takes the fields as named parameters, which can't start with _
+                d = fmt("f{}", move d);
+            }
+            put(&fs, move d);
+        }
+        unique_names(&fs);
+        for (k) in 0..fs.len {
+            val f = info.fields.at(k);
+            val fname = copy *fs.at(k);
             out.append(this.dart_field(f.ty, fname.as_str()).as_str());
-            copies.append(this.dart_copy(f.ty, fname.as_str(), fmt("from.{}", copy fname).as_str(), "    ").as_str());
+            copies.append(this.dart_copy(f.ty, fname.as_str(), fmt("from$.{}", copy fname).as_str(), "    ").as_str());
             match (*this.c.t.get(f.ty)) {
                 .ARRAY(e, k) => {},
                 default => {
@@ -13073,7 +13314,8 @@ attach fn dart_text(this: bind&) -> compile_error!std::string {
         }
         out.append(fmt3("\n  factory {}.of({}) => Struct.create<{}>()", copy n, move named, copy n).as_str());
         out.append(fmt("{};\n", move sets).as_str());
-        out.append(fmt2("\n  void copyFrom({} from) {{\n{}  }}\n}}\n", copy n, move copies).as_str());
+        // (from$: no field can have the name)
+        out.append(fmt2("\n  void copyFrom({} from$) {{\n{}  }}\n}}\n", copy n, move copies).as_str());
     }
     for (x&) in this.arrays.items() {
         out.append(fmt3("\n/// {} by value, as C passes it: a struct wrapping it\nfinal class {} extends Struct {{\n{}}}\n", this.c.ty_name(*x), this.made_name("array", *x, true), this.dart_field(*x, "v")).as_str());
@@ -13145,7 +13387,7 @@ attach fn dart_text(this: bind&) -> compile_error!std::string {
                 }
             }
         }
-        out.append(fmt4("  static final {} = _lib.lookupFunction<{} Function({}), {} Function(", copy e.name, move nret, move nps, move dret).as_str());
+        out.append(fmt4("  static final {} = _lib.lookupFunction<{} Function({}), {} Function(", this.dart_name(e.name.as_str(), false), move nret, move nps, move dret).as_str());
         out.append(fmt2("{})>('{}');\n", move dps, copy e.name).as_str());
     }
     out.append("}\n");
@@ -13181,7 +13423,7 @@ attach fn dart_text(this: bind&) -> compile_error!std::string {
         }
         val info = this.c.fi(e.f);
         out.append("\n");
-        val head = fmt2("{} {}", this.dart_ret(info.ret), dart_ident(info.c_name));
+        val head = fmt2("{} {}", this.dart_ret(info.ret), this.dart_name(info.c_name, true));
         out.append((try this.dart_fn(e.f, 0, head.as_str(), "")).as_str());
     }
     // what the wrappers share: what Volt gives out, and what a call holds
@@ -13247,6 +13489,20 @@ fn swift_ident(s: str) -> std::string {
         return fmt("`{}`", S(s));
     }
     return S(s);
+}
+
+// an export fn's name in Swift: a keyword in backticks, and one the module's own code uses (its
+// voltX helpers, its types, print) with a _
+attach fn swift_fn_name(this: bind&, name: str) -> std::string {
+    var n = S(name);
+    val helper = name.len > 4 && starts_with(name, "volt") && name[4] >= 'A' && name[4] <= 'Z';
+    if (helper || n.as_str() == "print" || n.as_str() == "fatalError" || n.as_str() == "precondition") {
+        n.push('_');
+    }
+    while (this.swift_type(n.as_str())) {
+        n.push('_');
+    }
+    return swift_ident(n.as_str());
 }
 
 // a method's name in Swift: as swift_ident, but close is close_ (close() frees the object)
@@ -13646,6 +13902,15 @@ attach fn swift_pnames(this: bind&, f: u32, first: usize) -> std::vec<std::strin
 }
 
 attach fn swift_param(this: bind&, name: str) -> std::string {
+    if (this.swift_type(name)) {
+        return fmt("{}_", S(name));
+    }
+    return swift_ident(name);
+}
+
+// is name a type the Swift module declares (an export struct's class, a struct, an enum, an error
+// set, a trait)?
+attach fn swift_type(this: bind&, name: str) -> bool {
     var types: std::vec<std::string> = {};
     for (s&) in this.handles.items() {
         put(&types, this.local(this.c.si(*s).name));
@@ -13664,10 +13929,10 @@ attach fn swift_param(this: bind&, name: str) -> std::string {
     }
     for (x&) in types.items() {
         if (x.as_str() == name) {
-            return fmt("{}_", S(name));
+            return true;
         }
     }
-    return swift_ident(name);
+    return false;
 }
 
 // text lent to the call as a str (Volt copies owned text)
@@ -14113,7 +14378,7 @@ attach fn swift_fn(this: bind&, f: u32, method: bool, head: str, raw: bool, ind:
     }
     var decls: std::string = {};
     var throws = false;
-    val body = this.swift_call(&ps, &names, false, fmt2("{}.{}", this.swift_cmod(), S(info.c_name)).as_str(), self_pass.as_str(), info.ret, raw, &decls, &throws);
+    val body = this.swift_call(&ps, &names, false, fmt2("{}.{}", this.swift_cmod(), swift_ident(info.c_name)).as_str(), self_pass.as_str(), info.ret, raw, &decls, &throws);
     var spec = S("");
     if (throws) {
         spec = S(" throws");
@@ -14353,7 +14618,7 @@ attach fn swift_text(this: bind&) -> std::string {
         }
         val info = this.c.fi(e.f);
         out.append("\n");
-        val head = fmt2("public func {}({{}}) THROWS{} {{", swift_ident(info.c_name), this.swift_ret(info.ret));
+        val head = fmt2("public func {}({{}}) THROWS{} {{", this.swift_fn_name(info.c_name), this.swift_ret(info.ret));
         out.append(this.swift_fn(e.f, false, head.as_str(), false, "").as_str());
     }
     return out;
@@ -14822,11 +15087,11 @@ attach fn kt_arg_of(this: bind&, t: u32, name0: str, a: kt_arg&) -> void {
                 val cn = this.c_named(this.c.si(s).name, false);
                 if (this.nullable_ptr(t)) {
                     a.pre = fmt4("val {} = if ({} == null) null else volt_m.alloc<{}>().also {{ {}.write(it, volt_m) }}\n", copy c, S(n), copy cn, S(n));
-                    a.pass = fmt("{}?.ptr", copy c);
+                    a.pass = fmt("{}?.voltPtr()", copy c);
                     a.after = fmt3("if ({} != null) {{\n    {}.readFrom({}!!)\n}}\n", S(n), S(n), copy c);
                 } else {
                     a.pre = fmt3("val {} = volt_m.alloc<{}>().also {{ {}.write(it, volt_m) }}\n", copy c, copy cn, S(n));
-                    a.pass = fmt("{}.ptr", copy c);
+                    a.pass = fmt("{}.voltPtr()", copy c);
                     a.after = fmt2("{}.readFrom({})\n", S(n), copy c);
                 }
                 return;
@@ -15197,7 +15462,7 @@ attach fn kt_fn(this: bind&, f: u32, first: usize, head: str, raw: bool, ind: st
     val args = this.kt_args(f, first);
     var out = this.kt_doc(f, ind);
     out.append(fmt2("{}{}\n", S(ind), replace_all(head, "{}", kt_decls(&args).as_str())).as_str());
-    val callee = fmt2("{}.{}", this.kt_cpkg(), S(info.c_name));
+    val callee = fmt2("{}.{}", this.kt_cpkg(), kt_ident(info.c_name));
     out.append(indent_n(this.kt_body(info.ret, callee.as_str(), self_of, true, &args, raw).as_str(), ind.len + 4).as_str());
     out.append(fmt("{}}\n", S(ind)).as_str());
     return out;
@@ -15323,6 +15588,9 @@ attach fn kt_text(this: bind&) -> std::string {
     out.append("\n// what Volt only borrows from a callback (a str, a slice): kept until the next one on this thread\n// ponytail: Volt reads it before the callback runs again; hold more if a fn keeps two\n@ThreadLocal\nprivate var voltKeptMem: Arena? = null\n\ninternal fun voltKept(): Arena {\n    voltKeptMem?.clear()\n    return Arena().also { voltKeptMem = it }\n}\n");
     out.append("\n// Volt drops a Kotlin object it was given: let go, and closed when it's AutoCloseable\nprivate val voltDropObj = staticCFunction { self: COpaquePointer? ->\n    val r = self!!.asStableRef<Any>()\n    val o = r.get()\n    r.dispose()\n    if (o is AutoCloseable) {\n        try {\n            o.close()\n        } catch (e: Throwable) {\n            voltKeep(e)\n        }\n    }\n}\n");
     out.append("\n// a String? as a C string in m's memory\ninternal fun voltCstr(m: AutofreeScope, s: String?): CPointer<ByteVar>? = s?.cstr?.getPointer(m)\n");
+    if (this.structs.len > 0) {
+        out.append("\n// a C struct's address (.ptr would be a field of its called ptr)\ninternal fun <T : CStructVar> T.voltPtr(): CPointer<T> = interpretCPointer<T>(rawPtr)!!\n");
+    }
     if (this.uses_str) {
         out.append("\ninternal fun voltStringVar(s: volt_str): String = if (s.len == 0UL) \"\" else s.ptr!!.readBytes(s.len.toInt()).decodeToString()\n\ninternal fun voltString(s: CValue<volt_str>): String = s.useContents { voltStringVar(this) }\n");
         out.append("\n// a String's UTF-8 bytes as a str, in m's memory\ninternal fun voltStrTo(m: AutofreeScope, s: String, v: volt_str) {\n    val c = s.utf8\n    v.ptr = c.getPointer(m).reinterpret()\n    v.len = (c.size - 1).convert()\n}\n");
@@ -15354,16 +15622,24 @@ attach fn kt_text(this: bind&) -> std::string {
         var writes: std::string = {};
         var reads: std::string = {};
         var news: std::string = {};
+        var fs: std::vec<std::string> = {};
         for (f&) in info.fields.items() {
-            val fname = kt_ident(f.name);
+            put(&fs, kt_ident(f.name));
+        }
+        unique_names(&fs);
+        val cf = this.c_fields(*s, false);
+        for (k) in 0..fs.len {
+            val f = info.fields.at(k);
+            val fname = copy *fs.at(k);
+            val cname = kt_ident(cf.at(k).as_str());
             if (fields.len() > 0) {
                 fields.append(", ");
                 news.append(", ");
             }
             fields.append(fmt2("var {}: {}", copy fname, this.kt_fty(f.ty)).as_str());
-            writes.append(indent(this.kt_fput(f.ty, fname.as_str(), fmt("volt_c.{}", copy fname).as_str(), f.name).as_str()).as_str());
-            reads.append(fmt2("    {} = {}\n", copy fname, this.kt_ffrom(f.ty, fmt("volt_c.{}", copy fname).as_str())).as_str());
-            news.append(this.kt_ffrom(f.ty, fmt("this.{}", copy fname).as_str()).as_str());
+            writes.append(indent(this.kt_fput(f.ty, fname.as_str(), fmt("volt_c.{}", copy cname).as_str(), f.name).as_str()).as_str());
+            reads.append(fmt2("    {} = {}\n", copy fname, this.kt_ffrom(f.ty, fmt("volt_c.{}", copy cname).as_str())).as_str());
+            news.append(this.kt_ffrom(f.ty, fmt("this.{}", copy cname).as_str()).as_str());
         }
         out.append(fmt2("\ndata class {}({})\n", copy n, move fields).as_str());
         out.append(fmt3("\ninternal fun {}.write(volt_c: {}, volt_m: AutofreeScope) {{\n{}}}\n", copy n, copy cn, move writes).as_str());
@@ -16389,7 +16665,7 @@ attach fn rb_fn(this: bind&, f: u32, self_first: bool, out: std::string&) -> com
         out.append(fmt2("        for (int i = 0; i < argc; i++) {{\n            args[i] = argv[i];\n        }}\n        args[{}] = rb_block_proc();\n        argc = {};\n        argv = args;\n    }}\n", unum(@cast<u64>(n - 1)), unum(@cast<u64>(n))).as_str());
     }
     out.append(fmt2("    rb_check_arity(argc, {}, {});\n", unum(@cast<u64>(n)), unum(@cast<u64>(n))).as_str());
-    try this.rb_call(&args, info.ret, info.c_name, "", out);
+    try this.rb_call(&args, info.ret, fmt("vr_fn_{}", S(info.c_name)).as_str(), "", out);
     out.append("}\n");
     return;
 }
@@ -16486,6 +16762,7 @@ attach fn rb_text(this: bind&) -> compile_error!std::string {
     out.append(fmt3("// against the library and Ruby's headers:\n//   cc -shared -fPIC -I<rubyhdrdir> -I<rubyarchhdrdir> {}_ruby.c -L. -l{} -o {}.so\n", S(p), S(p), S(p)).as_str());
     out.append(fmt3("// then require \"{}\": module {}. Errors are raised as {}::Error, one subclass per error set.\n#include <ruby.h>\n#include <stdint.h>\n#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\n#include <unistd.h>\n\n", S(p), copy mod, copy mod).as_str());
     out.append(this.c_text().as_str());
+    out.append(this.c_callees("vr_fn_").as_str());
     out.append("\nstatic VALUE vr_module, vr_error;\n");
     out.append("\n// ---------- conversions: each raises naming what didn't fit ----------\n\n");
     out.append("static inline long long vr_int(VALUE v, long long lo, long long hi, const char *what) {\n    if (!RB_INTEGER_TYPE_P(v)) {\n        rb_raise(rb_eTypeError, \"%s: expected an Integer, got %\" PRIsVALUE, what, rb_obj_class(v));\n    }\n    long long x = NUM2LL(v);\n    if (x < lo || x > hi) {\n        rb_raise(rb_eRangeError, \"%s: %lld doesn't fit\", what, x);\n    }\n    return x;\n}\n\n");
@@ -16532,24 +16809,26 @@ attach fn rb_text(this: bind&) -> compile_error!std::string {
         val cn = this.c_named(this.c.si(*s).name, false);
         out.append(fmt2("\nstatic VALUE vr_class_{};\n\n// (text in it is kept in *vr_keep_p, an Array the call holds; NULL: as long as the program)\nstatic inline void vr_get_{}(VALUE v, ", copy sn, copy sn).as_str());
         out.append(fmt("{} *out, const char *what, VALUE *vr_keep_p) {{\n    (void)what;\n    (void)vr_keep_p;\n", copy cn).as_str());
-        for (f&) in this.c.si(*s).fields.items() {
+        val cf = this.c_fields(*s, false);
+        for (k) in 0..cf.len {
+            val f = this.c.si(*s).fields.at(k);
             val fw = fmt2("\"field {} of {}\"", S(f.name), copy sn);
-            out.append(fmt2("    {{\n        VALUE f = vr_field(v, \"{}\");\n        {}\n    }}\n", S(f.name), this.rb_get(f.ty, "f", fmt("out->{}", S(f.name)).as_str(), fw.as_str())).as_str());
+            out.append(fmt2("    {{\n        VALUE f = vr_field(v, \"{}\");\n        {}\n    }}\n", S(f.name), this.rb_get(f.ty, "f", fmt("out->{}", copy *cf.at(k)).as_str(), fw.as_str())).as_str());
         }
         out.append("}\n");
         out.append(fmt2("\nstatic inline void vr_set_{}(VALUE v, const {} *in) {{\n", copy sn, copy cn).as_str());
-        for (f&) in this.c.si(*s).fields.items() {
-            out.append(fmt2("    {{\n        VALUE f = Qnil;\n        {}\n        vr_set_field(v, \"{}\", f);\n    }}\n", this.rb_put_to(f.ty, fmt("in->{}", S(f.name)).as_str(), "f"), S(f.name)).as_str());
+        for (k) in 0..cf.len {
+            val f = this.c.si(*s).fields.at(k);
+            out.append(fmt2("    {{\n        VALUE f = Qnil;\n        {}\n        vr_set_field(v, \"{}\", f);\n    }}\n", this.rb_put_to(f.ty, fmt("in->{}", copy *cf.at(k)).as_str(), "f"), S(f.name)).as_str());
         }
         out.append("}\n");
         out.append(fmt2("\nstatic inline VALUE vr_new_{}(const {} *in) {{\n", copy sn, copy cn).as_str());
         out.append(fmt("    VALUE args[{}];\n", unum(@cast<u64>(this.c.si(*s).fields.len))).as_str());
-        var k: usize = 0;
-        for (f&) in this.c.si(*s).fields.items() {
-            out.append(fmt("    {}\n", this.rb_put_to(f.ty, fmt("in->{}", S(f.name)).as_str(), fmt("args[{}]", unum(@cast<u64>(k))).as_str())).as_str());
-            k += 1;
+        for (k) in 0..cf.len {
+            val f = this.c.si(*s).fields.at(k);
+            out.append(fmt("    {}\n", this.rb_put_to(f.ty, fmt("in->{}", copy *cf.at(k)).as_str(), fmt("args[{}]", unum(@cast<u64>(k))).as_str())).as_str());
         }
-        out.append(fmt2("    return rb_class_new_instance({}, args, vr_class_{});\n}\n", unum(@cast<u64>(k)), copy sn).as_str());
+        out.append(fmt2("    return rb_class_new_instance({}, args, vr_class_{});\n}\n", unum(@cast<u64>(cf.len)), copy sn).as_str());
     }
     // the classes, the C functions Volt calls in Ruby, and the functions, after the helpers they use
     var taken_cbs: std::vec<u32> = {};

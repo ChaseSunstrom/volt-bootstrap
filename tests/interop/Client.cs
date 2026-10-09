@@ -12,6 +12,10 @@ Api.ml_scale(ref a, 2);
 Console.WriteLine($"scale {a.x} {a.y}");
 Console.WriteLine($"len {Api.ml_len("hello")}");
 Console.WriteLine($"clash {Api.ml_clash(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, "ab", 13, 14)}");
+var tg = Api.ml_tags_make();
+Console.Write($"tags {tg.from} {tg.type} {tg.self} {tg.@int}");
+tg.@int = 5;
+Console.WriteLine($" {Api.ml_tags_sum(tg)}");
 Console.WriteLine($"next {(int)Api.ml_next(color.GREEN)}");
 Console.WriteLine($"sqrt {Api.ml_sqrt(9)} 1");
 try

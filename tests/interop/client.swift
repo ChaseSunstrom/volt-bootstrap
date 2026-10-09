@@ -14,6 +14,10 @@ ml_scale(&a, 2)
 print("scale", n(a.x), n(a.y))
 print("len", ml_len("hello"))
 print("clash", ml_clash(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, "ab", 13, 14))
+var tg = ml_tags_make()
+let head = "tags \(tg.from) \(tg.type) \(tg.`self`) \(tg.int_)"
+tg.int_ = 5
+print(head, ml_tags_sum(tg))
 print("next", ml_next(.GREEN).rawValue)
 print("sqrt", n(try ml_sqrt(9)), 1)
 do {

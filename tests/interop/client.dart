@@ -13,6 +13,10 @@ void main() {
   print('scale ${n(a.x)} ${n(a.y)}');
   print('len ${ml_len('hello')}');
   print('clash ${ml_clash(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 'ab', 13, 14)}');
+  final tg = ml_tags_make();
+  final head = 'tags ${tg.from} ${tg.type} ${tg.self} ${tg.int_}';
+  tg.int_ = 5;
+  print('$head ${ml_tags_sum(tg)}');
   print('next ${ml_next(color.GREEN).value}');
   print('sqrt ${n(ml_sqrt(9))} 1');
   try {

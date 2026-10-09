@@ -12,6 +12,10 @@ int main() {
     std::printf("scale %g %g\n", a.x, a.y);
     std::printf("len %zu\n", mathlib::ml_len("hello"));
     std::printf("clash %d\n", mathlib::ml_clash(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, "ab", 13, 14));
+    auto tg = mathlib::ml_tags_make();
+    std::printf("tags %d %d %d %d", tg.from, tg.type, tg.self, tg.int_);
+    tg.int_ = 5;
+    std::printf(" %d\n", mathlib::ml_tags_sum(tg));
     std::printf("next %d\n", (int)mathlib::ml_next(mathlib::color::GREEN));
     std::printf("sqrt %g 1\n", mathlib::ml_sqrt(9));
     try {

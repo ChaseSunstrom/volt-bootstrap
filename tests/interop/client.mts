@@ -12,6 +12,10 @@ m.ml_scale(a, 2);
 console.log("scale", a.x, a.y);
 console.log("len", m.ml_len("hello"));
 console.log("clash", m.ml_clash(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, "ab", 13, 14));
+const tg = m.ml_tags_make();
+const head = `tags ${tg.from} ${tg.type} ${tg.self} ${tg.int}`;
+tg.int = 5;
+console.log(head, m.ml_tags_sum(tg));
 console.log("next", m.ml_next(m.color.GREEN));
 console.log("sqrt", m.ml_sqrt(9), 1);
 try {

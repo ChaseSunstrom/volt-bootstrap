@@ -18,6 +18,10 @@ int main(void) {
     printf("len %zu\n", ml_len(s));
     volt_str ab = {(const uint8_t *)"ab", 2};
     printf("clash %d\n", ml_clash(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, ab, 13, 14));
+    mathlib_ml_tags tg = ml_tags_make();
+    printf("tags %d %d %d %d", tg.from, tg.type, tg.self, tg.int_);
+    tg.int_ = 5;
+    printf(" %d\n", ml_tags_sum(tg));
     printf("next %d\n", (int)ml_next(MATHLIB_COLOR_GREEN));
     mathlib_math_error_or_f64 r = ml_sqrt(9);
     printf("sqrt %g %d\n", r.value, r.error == 0);
