@@ -46,6 +46,7 @@ struct eightbyte {
     cls: u32 = 0; // 0 none, 1 INTEGER, 2 SSE, 3 SSE+SSEUP (an fp128: both eightbytes of one register)
     // the half, float and double scalars in it (pick the SSE piece's type)
     halves: u32 = 0;
+    far: u32 = 0; // a half or float at the eightbyte's offset 4 or 6
     floats: u32 = 0;
     doubles: u32 = 0;
 }
@@ -409,6 +410,9 @@ attach fn classify(this: lg&, t: u32, off: u64, ebs: eightbyte[2]&) -> void {
             ebs[j].cls = 2;
         }
         ebs[j].halves += hf;
+        if ((hf > 0 || fl > 0) && off % 8 >= 4) {
+            ebs[j].far = 1;
+        }
         ebs[j].floats += fl;
         ebs[j].doubles += db;
         at += 1;
@@ -486,16 +490,14 @@ attach fn part(this: lg&, t: u32, ret: bool) -> abi_part {
             if (e.doubles > 0) {
                 put(&r.pieces, llvm::LLVMDoubleTypeInContext(this.ctx));
             } else if (e.halves > 0) {
-                // as clang has it: a lone half, two halves, or four halves (a float among them too)
+                // as clang has it: a lone half, two halves with nothing at offset 4, else four lanes
                 val h = llvm::LLVMHalfTypeInContext(this.ctx);
-                if (bytes <= 2) {
-                    put(&r.pieces, h);
+                if (e.far > 0) {
+                    put(&r.pieces, llvm::LLVMVectorType(h, 4));
+                } else if (e.halves >= 2) {
+                    put(&r.pieces, llvm::LLVMVectorType(h, 2));
                 } else {
-                    var lanes: u32 = 4;
-                    if (bytes <= 4) {
-                        lanes = 2;
-                    }
-                    put(&r.pieces, llvm::LLVMVectorType(h, lanes));
+                    put(&r.pieces, h);
                 }
             } else if (e.floats >= 2) {
                 put(&r.pieces, llvm::LLVMVectorType(llvm::LLVMFloatTypeInContext(this.ctx), 2));

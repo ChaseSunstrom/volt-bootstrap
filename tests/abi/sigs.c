@@ -27,6 +27,16 @@ typedef struct { _Float16 a; float b; } hhf;
 typedef struct { _Float16 a, b, c; } hh3;
 typedef struct { _Float16 a; int b; } hhi;
 typedef struct { __float128 x; } hq1;
+typedef struct { double a; _Float16 b; } hdh;
+typedef struct { _Float16 a; double b; } hhd;
+typedef struct { long long a; _Float16 b; } hih;
+typedef struct { _Float16 a, b; double c; } hhd2;
+typedef struct { double a; _Float16 b, c; } hdh2;
+hdh fhdh(hdh x) { return x; }
+hhd fhhd(hhd x) { return x; }
+hih fhih(hih x) { return x; }
+hhd2 fhhd2(hhd2 x) { return x; }
+hdh2 fhdh2(hdh2 x) { return x; }
 hhf fhhf(hhf x) { return x; }
 hh3 fhh3(hh3 x) { return x; }
 hhi fhhi(hhi x) { return x; }
