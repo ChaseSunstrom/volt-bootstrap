@@ -52,7 +52,7 @@ fn load_theme(site: str) -> !theme {
 
 fn read_template(site: str, name: str) -> !std::html::template {
     val t = std::html::template::read(std::format("{}/theme/{}", site, name).as_str()) catch |e| {
-        std::eprintln("site/theme/{}: {}", name, e);
+        std::eprintln("site/theme/{}: {}: {}", name, e, std::html::why());
         return e;
     };
     return t;
@@ -62,6 +62,7 @@ fn read_template(site: str, name: str) -> !std::html::template {
 // give it, a bug in one or the other
 fn fill(t: std::html::template&, d: std::json::value&, out: std::string&) -> void {
     t.render(d, out) catch |e| {
+        std::eprintln("site/theme: {}", std::html::why());
         @panic("a site/theme template names a value site/gen doesn't give it");
     };
 }

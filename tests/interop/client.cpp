@@ -4,6 +4,16 @@
 #include <vector>
 #include "mathlib.hpp"
 
+struct turner : mathlib::ml_turner {
+    std::array<int32_t, 3> turn(std::array<int32_t, 3> a) override { return {a[2], a[1], a[0]}; }
+};
+
+// an extern "C" fn Volt calls: it calls the one Volt gave out
+static mathlib::fn0 volt_flip;
+static mathlib::array_i32_3 flip(mathlib::array_i32_3 a) {
+    return volt_flip(a);
+}
+
 int main() {
     std::printf("add %d\n", mathlib::ml_add(2, 3));
     mathlib::vec2 a{1, 2}, b{3, 4};
@@ -102,6 +112,9 @@ int main() {
     });
     std::printf("text_given %lld %lld\n", text_n, labels_n);
     std::printf("turn %lld\n", (long long)mathlib::ml_turn([](std::array<int32_t, 3> a) { return std::array<int32_t, 3>{a[2], a[1], a[0]}; }));
+    turner tr;
+    volt_flip = mathlib::ml_flipper();
+    std::printf("turner %lld flipped %lld\n", (long long)mathlib::ml_turned(tr), (long long)mathlib::ml_flipped(flip));
     auto po = mathlib::ml_pair_of("ab", "cd");
     mathlib::ml_shelf shelf{{mathlib::ml_label{"abc", {2, 2, 2}, {3, 0}}, mathlib::ml_label{"de", {1, 1, 1}, {0, 0}}}, 1};
     auto bk = mathlib::ml_labels_back(shelf.labels);

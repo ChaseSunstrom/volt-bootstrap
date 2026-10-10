@@ -106,7 +106,8 @@ A path is names joined by dots (`p.name`); its first name is a loop's variable o
 value. A template's text can't hold a `{{` of its own (a script's, say): give it as a value. `render` fails with `template_error::MISSING` for a slot or a loop the value doesn't have,
 `parse` with `template_error::SYNTAX` for a tag it can't read (an unclosed `{{for}}`, an `{{end}}`
 with nothing open, a path that isn't one) and `read` with `template_error::READ` for a file it can't
-read. The site's pages are templates like this (`site/theme`).
+read. `std::html::why()` then says which line and tag it came from (`line 3: {{p.title}}: no
+value`). The site's pages are templates like this (`site/theme`).
 
 ```volt
 use std::io;
@@ -121,4 +122,41 @@ fn main() -> !void {
     std::println("{}", out.as_str());
 }
 // expect: <h1>Fish &amp; chips</h1><ul><li class="new">&lt;menu&gt;</li><li>prices</li></ul>
+```
+
+### Checked while compiling
+
+`std::html::render(src, &data, &out)` takes the template as text known while compiling, usually
+`@embed("page.html")`, and the data as a Volt value whose type derives json
+(`@attributes([@derive(json)])`, as do the structs in it). The template is checked against that type
+as the program compiles: a slot or loop that names a field the type doesn't have, a loop over
+something that isn't a `std::vec`, a slot that isn't text, a number or a bool, or an optional used
+outside an `{{if}}` on it is a compile error that names the line and the tag (`line 2: {{titel}}:
+page has no field titel`). Rendering then can't fail.
+
+```volt
+use std::io;
+use std::html;
+
+@attributes([@derive(json)])
+struct dish {
+    name: str;
+    hot: bool;
+}
+
+@attributes([@derive(json)])
+struct menu {
+    title: str;
+    dishes: std::vec<dish>;
+}
+
+fn main() -> void {
+    var m: menu = { title: "Fish & chips", dishes: {} };
+    m.dishes.push({ name: "<chips>", hot: true });
+    m.dishes.push({ name: "peas", hot: false });
+    var out: std::string = {};
+    std::html::render("<h1>{{title}}</h1>{{for d in dishes}}<p>{{d.name}}{{if d.hot}} (hot){{end}}</p>{{end}}", &m, &out);
+    std::println("{}", out.as_str());
+}
+// expect: <h1>Fish &amp; chips</h1><p>&lt;chips&gt; (hot)</p><p>peas</p>
 ```

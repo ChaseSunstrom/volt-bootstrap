@@ -72,6 +72,7 @@ const d = m.ml_deep(deep);
 console.log("deep", d, deep[0][0][1], deep[1][0][0], "words", m.ml_words([["ab", "c"], [], ["def"]]));
 console.log("text_given", m.ml_text_given((k: number) => ["ab", "cde"]), m.ml_labels_given((k: number) => [{ name: "abc", sizes: [k, k, k], at: { x: 3, y: 0 } }, { name: "de", sizes: [1, 1, 1], at: { x: 0, y: 0 } }]));
 console.log("turn", m.ml_turn((a: number[]) => [a[2], a[1], a[0]]));
+console.log("turner", m.ml_turned({ turn: (a: number[]) => [a[2], a[1], a[0]] }), "flipped", m.ml_flipped(m.ml_flipper()));
 const po = m.ml_pair_of("ab", "cd");
 const shelf = { labels: [{ name: "abc", sizes: [2, 2, 2], at: { x: 3, y: 0 } }, { name: "de", sizes: [1, 1, 1], at: { x: 0, y: 0 } }], k: 1 };
 const bk = m.ml_labels_back(shelf.labels);

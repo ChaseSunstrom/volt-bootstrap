@@ -74,6 +74,10 @@ let d = ml_deep(&deep)
 print("deep", d, deep[0][0][1], deep[1][0][0], "words", ml_words([["ab", "c"], [], ["def"]]))
 print("text_given", ml_text_given { _ in ["ab", "cde"] }, ml_labels_given { k in [ml_label(name: "abc", sizes: (k, k, k), at: vec2(x: 3, y: 0)), ml_label(name: "de", sizes: (1, 1, 1), at: vec2(x: 0, y: 0))] })
 print("turn", ml_turn { a in [a[2], a[1], a[0]] })
+final class Turner: ml_turner {
+    func turn(_ a: [Int32]) -> [Int32] { [a[2], a[1], a[0]] }
+}
+print("turner", ml_turned(Turner()), "flipped", ml_flipped(ml_flipper()))
 let po = ml_pair_of("ab", "cd")
 let shelf = ml_shelf(labels: (ml_label(name: "abc", sizes: (2, 2, 2), at: vec2(x: 3, y: 0)), ml_label(name: "de", sizes: (1, 1, 1), at: vec2(x: 0, y: 0))), k: 1)
 var backs = [shelf.labels.0, shelf.labels.1]

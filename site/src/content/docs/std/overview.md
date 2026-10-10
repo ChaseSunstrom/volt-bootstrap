@@ -39,7 +39,7 @@ Linux, macOS, FreeBSD and Windows, 64-bit, on x86-64 and ARM64, picked with
 | [`std::net`](/volt-bootstrap/std/net/) | TCP (`listen`, `connect`, streams), UDP, `resolve`, timeouts; the same on Linux, macOS, FreeBSD and Windows ([Networking](/volt-bootstrap/std/networking/)) |
 | [`std::thread`](/volt-bootstrap/std/thread/) | threads (`spawn`, `join`), `mutex<T>` and its guard, `cond`, `atomic_i64`/`atomic_bool`, `shared<T>`, `channel<T>` ([Threads](/volt-bootstrap/std/threads/)) |
 | [`std::json`](/volt-bootstrap/std/json/) | JSON values: parse, build and print ([JSON](/volt-bootstrap/std/json-data/)) |
-| [`std::html`](/volt-bootstrap/std/html/) | text escaped for HTML, and templates (slots, loops, conditions) rendered from JSON values ([HTML templates](/volt-bootstrap/std/json-data/#html-templates)) |
+| [`std::html`](/volt-bootstrap/std/html/) | text escaped for HTML, and templates (slots, loops, conditions) rendered from JSON values or checked against a type while compiling ([HTML templates](/volt-bootstrap/std/json-data/#html-templates)) |
 | [`std::base64`, `std::hex`](/volt-bootstrap/std/encoding/) | bytes as base64 (standard and URL-safe) or hex text, and back ([Encoding and hashing](/volt-bootstrap/std/encoding-hashing/)) |
 | [`std::digest`](/volt-bootstrap/std/digest/) | CRC-32, 64-bit FNV-1a and SHA-256 (in one call, or fed in pieces) |
 | [`std::softfloat`](/volt-bootstrap/std/softfloat/) | IEEE 754 arithmetic, comparison and conversion on the bits of `f32`s and `f64`s with integer instructions only: what [bare metal](/volt-bootstrap/voltc/bare-metal/) cores without a floating-point unit use |

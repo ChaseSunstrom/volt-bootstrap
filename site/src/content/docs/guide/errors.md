@@ -192,7 +192,9 @@ fn main() -> void {
 ## Optionals
 
 `T?` is a `T` or `null`. `x ?? fallback` gives the value or the fallback, and the fallback can leave
-instead: `x ?? return`, `x ?? break`, `x ?? @panic("...")`.
+instead: `x ?? return`, `x ?? break`, `x ?? @panic("...")`. A `{` after `??` starts a struct or
+array literal (`p ?? { x: 0, y: 0 }`), not a block: a fallback that needs statements goes in
+`if (x) { ... } else { ... }`, where `x` is the value inside the first block.
 
 ```volt
 use std::io;

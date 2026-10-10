@@ -9739,6 +9739,7 @@ attach fn go_arg_of(this: bind&, t: u32, name: str, a: go_arg&) -> void {
             a.pass = fmt3("C.{}(C.{}cb{}), unsafe.Pointer(&", this.cb_name(i, false), S(this.pkg), unum(@cast<u64>(i)));
             a.pass.append(fmt("{}_h)", copy n).as_str());
         },
+        .FN(i) => { a.pass = fmt("(*[0]byte)({})", copy n); },
         default => { a.pass = copy n; },
     }
 }
@@ -9982,6 +9983,7 @@ attach fn go_value(this: bind&, t: u32, r: str) -> std::string {
         .HANDLE(s) => { return fmt2("wrap{}({})", this.go_tname(this.c.si(s).name), S(r)); },
         .TRAIT(i) => { return fmt2("wrapVolt{}({})", go_name(this.short(this.trait_of(t)).as_str()), S(r)); },
         .CLOSURE(i) => { return fmt2("wrapClosure{}({})", unum(@cast<u64>(i)), S(r)); },
+        .FN(i) => { return fmt("unsafe.Pointer({})", S(r)); },
         .LIST(x) => {
             // copied into a slice (text copied, each handle the slice's), and the list freed
             val e = this.list_elem(t);
@@ -11014,6 +11016,12 @@ attach fn node_arg_of(this: bind&, t: u32, js: str, c: str, a: node_arg&) -> com
             a.get = fmt2("if (!vn_external(env, {}, (void **)&{})) { goto fail; }", S(js), S(c));
             a.pass = S(c);
         },
+        .FN(i) => {
+            // an External from another call (a C function JS can't write)
+            a.decl = fmt2("{} {} = NULL;", this.c_prim(t, false), S(c));
+            a.get = try this.node_get(t, js, c);
+            a.pass = S(c);
+        },
         .OPT(x) => {
             val oh = this.handle_of(x);
             if (oh) {
@@ -11574,7 +11582,7 @@ attach fn node_text(this: bind&) -> compile_error!std::string {
     for (s&) in this.handles.items() {
         val sn = this.node_sname(*s);
         val cn = this.handle_c(*s, false);
-        out.append(fmt4("\n// export struct {}\nstatic napi_ref vn_class_{};\nstatic const napi_type_tag vn_tags_{}[2] = {};\n", S(this.c.si(*s).name), copy sn, copy sn, this.node_tags(sn.as_str())).as_str());
+        out.append(fmt4("\n// export struct {} (its class: one per thread, as each worker_threads env runs on its own)\nstatic _Thread_local napi_ref vn_class_{};\nstatic const napi_type_tag vn_tags_{}[2] = {};\n", S(this.c.si(*s).name), copy sn, copy sn, this.node_tags(sn.as_str())).as_str());
         out.append(fmt2("\nstatic void vn_finalize_{}(napi_env env, void *data, void *hint) {{\n    (void)env;\n    (void)hint;\n    {}((void *)data);\n}}\n", copy sn, this.free_name(*s)).as_str());
         out.append(fmt3("\n// an instance owning handle h\nstatic napi_value vn_wrap_{}(napi_env env, {}h) {{\n    napi_value cls = NULL, ext = NULL, obj = NULL;\n    napi_get_reference_value(env, vn_class_{}, &cls);\n    napi_create_external(env, h, NULL, NULL, &ext);\n    napi_new_instance(env, cls, 1, &ext, &obj);\n    return obj;\n}}\n", copy sn, spaced(copy cn), copy sn).as_str());
         out.append(fmt3("\n// an instance Volt lends handle h to (for a callback): it never frees it, and lets go of it when\n// the callback returns\nstatic inline napi_value vn_lend_{}(napi_env env, {}h) {{\n    napi_value cls = NULL, args[2], obj = NULL;\n    napi_get_reference_value(env, vn_class_{}, &cls);\n    napi_create_external(env, h, NULL, NULL, &args[0]);\n    napi_get_boolean(env, true, &args[1]);\n    napi_new_instance(env, cls, 2, args, &obj);\n    return obj;\n}}\n", copy sn, spaced(copy cn), copy sn).as_str());
@@ -11603,7 +11611,7 @@ attach fn node_text(this: bind&) -> compile_error!std::string {
         val t = *this.traits.at(k);
         val tr = this.short(t);
         val fns = this.fns_of(t);
-        out.append(fmt4("\n// trait {}: any JS object with its methods, or volt_{}, Volt's own value\nstatic napi_ref vn_class_volt_{};\nstatic const napi_type_tag vn_tags_volt_{}[2] = ", this.c.ty_name(t), copy tr, copy tr, copy tr).as_str());
+        out.append(fmt4("\n// trait {}: any JS object with its methods, or volt_{}, Volt's own value (its class: one per thread)\nstatic _Thread_local napi_ref vn_class_volt_{};\nstatic const napi_type_tag vn_tags_volt_{}[2] = ", this.c.ty_name(t), copy tr, copy tr, copy tr).as_str());
         out.append(fmt2("{};\nstatic const char *const vn_fns_{}[] = {{", this.node_tags(fmt("volt_{}", copy tr).as_str()), copy tr).as_str());
         for (f&) in fns.items() {
             out.append(fmt("\"{}\", ", this.trait_member(t, f.name, S, JS_MEMBERS, false)).as_str());
@@ -15782,6 +15790,13 @@ attach fn swift_result(this: bind&, t: u32, r: str, raw: bool, cb: bool) -> std:
     }
     match (this.shape_of(t) ?? shape::VOID) {
         .VOID => { return {}; },
+        .FN(i) => {
+            if (!cb) {
+                // (C gives a fn pointer back as an optional: Volt's is never null)
+                return fmt("return {}!\n", S(r));
+            }
+            return fmt("return {}\n", this.swift_out(t, r));
+        },
         .CSTR => { return fmt("return {}.map {{ String(cString: $0) }}\n", S(r)); },
         .TEXT(x) => { return fmt("return voltTake({})\n", S(r)); },
         .HANDLE(s) => {

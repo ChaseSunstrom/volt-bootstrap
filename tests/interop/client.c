@@ -56,6 +56,14 @@ static mathlib_array_i32_3 turn(void *user, mathlib_array_i32_3 a) {
     return (mathlib_array_i32_3){{a.v[2], a.v[1], a.v[0]}};
 }
 
+// turn is a ml_turner's fn too (self first); flip, an extern "C" fn Volt calls, calls the one Volt
+// gave out
+static const mathlib_ml_turner_vt turner_vt = {turn};
+static mathlib_fn0 volt_flip;
+static mathlib_array_i32_3 flip(mathlib_array_i32_3 a) {
+    return volt_flip(a);
+}
+
 int main(void) {
     printf("add %d\n", ml_add(2, 3));
     mathlib_vec2 a = {1, 2}, b = {3, 4};
@@ -134,6 +142,8 @@ int main(void) {
     printf("deep %lld %lld %lld words %lld\n", deep, (long long)d00[1], (long long)d10[0], (long long)ml_words((mathlib_slice_slice_str){ws, 3}));
     printf("text_given %lld %lld\n", (long long)ml_text_given(give_texts, NULL), (long long)ml_labels_given(give_labels, NULL));
     printf("turn %lld\n", (long long)ml_turn(turn, NULL));
+    volt_flip = ml_flipper();
+    printf("turner %lld flipped %lld\n", (long long)ml_turned((mathlib_ml_turner){&turner_vt, NULL, NULL}), (long long)ml_flipped(flip));
     mathlib_ml_pair pa = {{{(const uint8_t *)"ab", 2}, {(const uint8_t *)"cde", 3}}, 1};
     mathlib_ml_pair po = ml_pair_of((volt_str){(const uint8_t *)"ab", 2}, (volt_str){(const uint8_t *)"cd", 2});
     mathlib_ml_shelf sh = {{give_label(NULL, 2), {{(const uint8_t *)"de", 2}, {1, 1, 1}, {0, 0}}}, 1};

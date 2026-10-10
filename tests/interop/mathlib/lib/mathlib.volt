@@ -337,3 +337,39 @@ export fn counter_take(c: counter&, by: i64) -> math_error!i64 {
 export fn counter_name(c: counter&) -> str {
     return c.name.as_str();
 }
+
+// arrays by value through a trait other languages implement: Volt passes one and takes one back
+public trait ml_turner {
+    fn turn(this, a: i32[3]) -> i32[3];
+}
+
+// (Volt's own turner: a trait needs a type)
+public struct ml_spin {
+    k: i32;
+}
+
+attach ml_turner -> ml_spin {
+    fn turn(this, a: i32[3]) -> i32[3] {
+        return { a[1], a[2], a[0] };
+    }
+}
+
+export fn ml_turned(t: ml_turner&) -> i64 {
+    val r = t.turn({ 1, 2, 3 });
+    return @cast<i64>(r[0]) * 100 + @cast<i64>(r[1]) * 10 + @cast<i64>(r[2]);
+}
+
+// and through an extern "C" fn type, which Volt calls with no glue between: Volt gives one out
+// (ml_flipper) and calls the one it's given
+extern "C" fn ml_flip(a: i32[3]) -> i32[3] {
+    return { a[2], a[1], a[0] };
+}
+
+export fn ml_flipper() -> extern "C" fn(i32[3]) -> i32[3] {
+    return ml_flip;
+}
+
+export fn ml_flipped(f: extern "C" fn(i32[3]) -> i32[3]) -> i64 {
+    val r = f({ 4, 5, 6 });
+    return @cast<i64>(r[0]) * 100 + @cast<i64>(r[1]) * 10 + @cast<i64>(r[2]);
+}

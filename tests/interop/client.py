@@ -64,6 +64,14 @@ d = m.ml_deep(deep)
 print("deep", d, deep[0][0][1], deep[1][0][0], "words", m.ml_words([["ab", "c"], [], ["def"]]))
 print("text_given", m.ml_text_given(lambda k: ["ab", "cde"]), m.ml_labels_given(lambda k: [m.ml_label("abc", (k, k, k), m.vec2(3, 0)), m.ml_label("de", (1, 1, 1), m.vec2(0, 0))]))
 print("turn", m.ml_turn(lambda a: [a[2], a[1], a[0]]))
+
+
+class Turner(m.ml_turner):
+    def turn(self, a):
+        return [a[2], a[1], a[0]]
+
+
+print("turner", m.ml_turned(Turner()), "flipped", m.ml_flipped(m.ml_flipper()))
 po = m.ml_pair_of("ab", "cd")
 shelf = m.ml_shelf((m.ml_label("abc", (2, 2, 2), m.vec2(3, 0)), m.ml_label("de", (1, 1, 1), m.vec2(0, 0))), 1)
 bk = m.ml_labels_back([m.ml_label("abc", (2, 2, 2), m.vec2(3, 0)), m.ml_label("de", (1, 1, 1), m.vec2(0, 0))])

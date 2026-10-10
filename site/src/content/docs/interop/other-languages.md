@@ -247,6 +247,10 @@ Python's on
   Dart, `long[]` (and the like) in Java and C#, an array in JavaScript, Ruby and Swift, a
   `LongArray` (and the like) in Kotlin and a table in Lua: a callback `fn(i32[3]) -> i32[3]` takes
   and returns those. One of the wrong length is refused.
+- **`extern "C"` fn types.** A parameter or result of one is the C function pointer. C, C++, Rust
+  and Zig write their own (an array in it crosses as above); every language passes one Volt gave
+  out back to Volt, as its function type where it has one (Python, Swift, Kotlin) and as an opaque
+  pointer elsewhere (`unsafe.Pointer` in Go, `IntPtr` in C#, an External in JavaScript).
 - **Structs with text, arrays and pointers in them.** A struct whose fields are text, arrays (of
   numbers, of text, of such structs), pointers or such structs (`label { name: str; sizes: i32[3];
   at: vec2; }`, `pair { names: str[2]; }`, `shelf { labels: label[2]; }`) crosses by

@@ -86,6 +86,7 @@ void main() {
       ])}');
   print('text_given ${ml_text_given((k) => ['ab', 'cde'])} ${ml_labels_given((k) => [ml_label(name: 'abc', sizes: [k, k, k], at: vec2.of(x: 3, y: 0)), ml_label(name: 'de', sizes: [1, 1, 1], at: vec2.of(x: 0, y: 0))])}');
   print('turn ${ml_turn((a) => [a[2], a[1], a[0]])}');
+  print('turner ${ml_turned(Turner())} flipped ${ml_flipped(ml_flipper())}');
   final po = ml_pair_of('ab', 'cd');
   final shelf = ml_shelf(labels: [ml_label(name: 'abc', sizes: [2, 2, 2], at: vec2.of(x: 3, y: 0)), ml_label(name: 'de', sizes: [1, 1, 1], at: vec2.of(x: 0, y: 0))], k: 1);
   final bk = ml_labels_back(shelf.labels);
@@ -110,4 +111,9 @@ void main() {
   } on StateError {
     // expected
   }
+}
+
+class Turner implements ml_turner {
+  @override
+  List<int> turn(List<int> a) => [a[2], a[1], a[0]];
 }

@@ -2117,7 +2117,16 @@ attach fn c_files(this: checker&) -> std::vec<c_file> {
             val part = parts.at(at);
             part.append("// ");
             if (f.about.len > 0) {
-                part.append(f.about);
+                // (a comptime string in an instance's name can hold line breaks: written as \n)
+                for (c) in f.about {
+                    if (c == '\n') {
+                        part.append("\\n");
+                    } else if (c == '\r') {
+                        part.append("\\r");
+                    } else {
+                        part.push(c);
+                    }
+                }
                 part.append(" (");
             }
             part.append(this.files.at(@cast<usize>(o.file)).name);

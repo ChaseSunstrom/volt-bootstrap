@@ -135,6 +135,9 @@ JavaScript takes [every shape](/volt-bootstrap/interop/other-languages/#every-sh
   program, as a Volt panic does. Callbacks run on the thread that made the call.
 - **Closures given back** are functions with `close()` and `Symbol.dispose`. One that isn't closed
   is freed when it's collected.
+- **Worker threads.** Each `worker_threads` Worker that loads the addon gets its own classes, so
+  the main thread and the workers all make and take instances; an instance stays in the thread
+  that made it.
 - **Lists, and arrays of text and handles.** A `std::vec<T>` comes back as an array: strings, or
   instances the caller owns. Arrays go in for lists, for `std::string[..]` and for slices of
   handles. An optional text or handle is the value or `null`.

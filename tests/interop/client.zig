@@ -82,6 +82,9 @@ pub fn main() void {
     print("deep {d} {d} {d} words {d}\n", .{ deep, d00[1], d10[0], m.ml_words(&ws) });
     print("text_given {d} {d}\n", .{ m.ml_text_given({}, give_texts), m.ml_labels_given({}, give_labels) });
     print("turn {d}\n", .{m.ml_turn({}, turn)});
+    volt_flip = m.ml_flipper();
+    var tr = Turner{};
+    print("turner {d} flipped {d}\n", .{ m.ml_turned(&tr), m.ml_flipped(flip) });
     const po = m.ml_pair_of("ab", "cd");
     var shelf = m.ml_shelf{ .labels = .{ give_label({}, 2), .{ .name = m.VoltStr.from("de"), .sizes = .{ 1, 1, 1 }, .at = .{ .x = 0, .y = 0 } } }, .k = 1 };
     const bk = m.ml_labels_back(&shelf.labels);
@@ -123,4 +126,18 @@ fn give_labels(_: void, k: i32) m.VoltSlice(m.ml_label) {
 
 fn give_label(_: void, k: i32) m.ml_label {
     return .{ .name = m.VoltStr.from("abc"), .sizes = .{ k, k, k }, .at = .{ .x = 3, .y = 0 } };
+}
+
+const Turner = struct {
+    pub fn turn(self: *@This(), a: [3]i32) [3]i32 {
+        _ = self;
+        return .{ a[2], a[1], a[0] };
+    }
+};
+
+// an extern "C" fn Volt calls: it calls the one Volt gave out
+var volt_flip: ?*const fn (m.VoltArray(i32, 3)) callconv(.c) m.VoltArray(i32, 3) = null;
+
+fn flip(a: m.VoltArray(i32, 3)) callconv(.c) m.VoltArray(i32, 3) {
+    return volt_flip.?(a);
 }

@@ -11,7 +11,7 @@ const ROOT: &str = env!("CARGO_MANIFEST_DIR");
 
 /// what every language's mathlib client prints: plain C types, then owned text, slices, optionals, a
 /// callback with the caller's data and an export struct (shims voltc lib adds)
-const MATHLIB_OUT: &str = "add 5\ndot 11\nscale 2 4\nlen 5\nclash 895\ntags 1 2 3 4 34\nbump 8 5\nnext 2\nsqrt 3 1\nerror negative\ngreet hello, volt\nrepeat abab\nrepeat negative\nsum 6.5\nfind 2 none\neach 4 5 6 = 15\ncounter clicks 5\ntake negative\nlabel 15\nlabel_of ab 3 6 9 1.5\nlabels 36\nholder 3\nor 4.5 9.5\nask 18\nrelabel ab 7 6 9\ncount 40\nnote 7\nor_label 15 -1\ngiven 66 9.5\ndeep 10 4 8 words 6\ntext_given 10 17\nturn 321\npair 6 ab cd shelf 18 back 2 abc\n";
+const MATHLIB_OUT: &str = "add 5\ndot 11\nscale 2 4\nlen 5\nclash 895\ntags 1 2 3 4 34\nbump 8 5\nnext 2\nsqrt 3 1\nerror negative\ngreet hello, volt\nrepeat abab\nrepeat negative\nsum 6.5\nfind 2 none\neach 4 5 6 = 15\ncounter clicks 5\ntake negative\nlabel 15\nlabel_of ab 3 6 9 1.5\nlabels 36\nholder 3\nor 4.5 9.5\nask 18\nrelabel ab 7 6 9\ncount 40\nnote 7\nor_label 15 -1\ngiven 66 9.5\ndeep 10 4 8 words 6\ntext_given 10 17\nturn 321\nturner 321 flipped 654\npair 6 ab cd shelf 18 back 2 abc\n";
 
 /// stage 1 (common::voltc), and a scratch directory, removed when dropped
 struct Env {
@@ -199,7 +199,7 @@ fn bindings_round_trip() {
                 // what it rejects, and how
                 std::fs::copy(Path::new(ROOT).join("tests/interop/client_edges.js"), e.dir.join("client_edges.js")).unwrap();
                 let n = Command::new("node").arg("client_edges.js").current_dir(&e.dir).output().unwrap();
-                let want = "too big for i32 RangeError\nNaN TypeError\nInfinity TypeError\nfraction for i32 TypeError\nstring for a number TypeError\nnot a counter TypeError\nclosed counter TypeError\nbigint 2\n";
+                let want = "too big for i32 RangeError\nNaN TypeError\nInfinity TypeError\nfraction for i32 TypeError\nstring for a number TypeError\nnot a counter TypeError\nclosed counter TypeError\nbigint 2\nworker 2 3\n";
                 assert_eq!(ok(n, "node client_edges.js"), want, "node client_edges.js ({backend})");
                 if Command::new("tsc").arg("--version").output().is_ok_and(|o| o.status.success()) {
                     ok(Command::new("tsc").args(["--noEmit", "--strict", "--module", "nodenext", "--moduleResolution", "nodenext", "--target", "es2022", "--types", "node", "client.mts"]).current_dir(&e.dir).output().unwrap(), "tsc client.mts");

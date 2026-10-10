@@ -91,8 +91,13 @@ func main() {
 		return []mathlib.MlLabel{{Name: "abc", Sizes: [3]int32{k, k, k}, At: mathlib.Vec2{X: 3}}, {Name: "de", Sizes: [3]int32{1, 1, 1}}}
 	}))
 	fmt.Println("turn", mathlib.MlTurn(func(a [3]int32) [3]int32 { return [3]int32{a[2], a[1], a[0]} }))
+	fmt.Println("turner", mathlib.MlTurned(turner{}), "flipped", mathlib.MlFlipped(mathlib.MlFlipper()))
 	po := mathlib.MlPairOf("ab", "cd")
 	shelf := mathlib.MlShelf{Labels: [2]mathlib.MlLabel{{Name: "abc", Sizes: [3]int32{2, 2, 2}, At: mathlib.Vec2{X: 3}}, {Name: "de", Sizes: [3]int32{1, 1, 1}}}, K: 1}
 	bk := mathlib.MlLabelsBack(shelf.Labels[:])
 	fmt.Println("pair", mathlib.MlPairLen(mathlib.MlPair{Names: [2]string{"ab", "cde"}, N: 1}), po.Names[0], po.Names[1], "shelf", mathlib.MlShelfLen(shelf), "back", len(bk), bk[0].Name)
 }
+
+type turner struct{}
+
+func (turner) Turn(a [3]int32) [3]int32 { return [3]int32{a[2], a[1], a[0]} }

@@ -3,6 +3,22 @@
 mod mathlib;
 use mathlib::*;
 
+struct Turner;
+
+impl ml_turner for Turner {
+    fn turn(&mut self, a: [i32; 3]) -> [i32; 3] {
+        [a[2], a[1], a[0]]
+    }
+}
+
+// an extern "C" fn Volt calls: it calls the one Volt gave out
+static VOLT_FLIP: std::sync::OnceLock<extern "C" fn([i32; 3]) -> [i32; 3]> = std::sync::OnceLock::new();
+
+#[allow(improper_ctypes_definitions)]
+extern "C" fn flip(a: [i32; 3]) -> [i32; 3] {
+    VOLT_FLIP.get().unwrap()(a)
+}
+
 fn main() {
     println!("add {}", ml_add(2, 3));
     let mut a = vec2 { x: 1.0, y: 2.0 };
@@ -84,6 +100,8 @@ fn main() {
     });
     println!("text_given {} {}", text_n, labels_n);
     println!("turn {}", ml_turn(|a| [a[2], a[1], a[0]]));
+    VOLT_FLIP.set(ml_flipper()).unwrap();
+    println!("turner {} flipped {}", ml_turned(&mut Turner), ml_flipped(flip));
     let po = ml_pair_of("ab", "cd");
     let mut shelf = ml_shelf { labels: [ml_label { name: VoltStr::from("abc"), sizes: [2, 2, 2], at: vec2 { x: 3.0, y: 0.0 } }, ml_label { name: VoltStr::from("de"), sizes: [1, 1, 1], at: vec2 { x: 0.0, y: 0.0 } }], k: 1 };
     let shelf_n = ml_shelf_len(shelf);

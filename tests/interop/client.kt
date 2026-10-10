@@ -80,6 +80,10 @@ fun main() {
     println("deep $d ${deep[0][0][1]} ${deep[1][0][0]} words ${ml_words(listOf(listOf("ab", "c"), listOf(), listOf("def")))}")
     println("text_given ${ml_text_given { listOf("ab", "cde") }} ${ml_labels_given { k -> listOf(ml_label("abc", intArrayOf(k, k, k), vec2(3.0, 0.0)), ml_label("de", intArrayOf(1, 1, 1), vec2(0.0, 0.0))) }}")
     println("turn ${ml_turn { a -> intArrayOf(a[2], a[1], a[0]) }}")
+    val turner = object : ml_turner {
+        override fun turn(a: IntArray) = intArrayOf(a[2], a[1], a[0])
+    }
+    println("turner ${ml_turned(turner)} flipped ${ml_flipped(ml_flipper())}")
     val po = ml_pair_of("ab", "cd")
     val shelf = ml_shelf(listOf(ml_label("abc", intArrayOf(2, 2, 2), vec2(3.0, 0.0)), ml_label("de", intArrayOf(1, 1, 1), vec2(0.0, 0.0))), 1)
     val bk = ml_labels_back(shelf.labels)

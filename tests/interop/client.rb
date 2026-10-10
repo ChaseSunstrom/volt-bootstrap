@@ -70,6 +70,9 @@ d = Mathlib.ml_deep(deep)
 puts "deep #{d} #{deep[0][0][1]} #{deep[1][0][0]} words #{Mathlib.ml_words([["ab", "c"], [], ["def"]])}"
 puts "text_given #{Mathlib.ml_text_given(proc { |k| ["ab", "cde"] })} #{Mathlib.ml_labels_given(proc { |k| [{ name: "abc", sizes: [k, k, k], at: { x: 3, y: 0 } }, { name: "de", sizes: [1, 1, 1], at: { x: 0, y: 0 } }] })}"
 puts "turn #{Mathlib.ml_turn(proc { |a| [a[2], a[1], a[0]] })}"
+turner = Object.new
+def turner.turn(a) = [a[2], a[1], a[0]]
+puts "turner #{Mathlib.ml_turned(turner)} flipped #{Mathlib.ml_flipped(Mathlib.ml_flipper)}"
 po = Mathlib.ml_pair_of("ab", "cd")
 shelf = { labels: [{ name: "abc", sizes: [2, 2, 2], at: { x: 3, y: 0 } }, { name: "de", sizes: [1, 1, 1], at: { x: 0, y: 0 } }], k: 1 }
 bk = Mathlib.ml_labels_back(shelf[:labels])
