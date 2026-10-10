@@ -1290,6 +1290,13 @@ attach fn put_ty(this: checker&, s: std::string&, id: u32) -> void {
             s.append_uint(n);
             s.push(']');
         },
+        .VECTOR(t, n) => {
+            s.append("@vector(");
+            this.put_ty(s, t);
+            s.append(", ");
+            s.append_uint(n);
+            s.push(')');
+        },
         .SLICE(t) => {
             this.put_ty(s, t);
             s.append("[..]");

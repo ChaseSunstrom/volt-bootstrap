@@ -114,7 +114,7 @@ attach fn ct_eval_in(this: checker&, env: u32, e: expr&, want: u32?) -> compile_
 // is this expression only meaningful at compile time (so it gets evaluated, not emitted)?
 attach fn is_ct_expr(this: checker&, e: expr&) -> bool {
     match (e.kind) {
-        .BUILTIN(n, g, a) => { return n == "typeinfo" || n == "typeof" || n == "compile_error" || n == "cfg" || n == "attaches" || n == "has_method" || n == "has_field" || n == "embed"; },
+        .BUILTIN(n, g, a) => { return n == "typeinfo" || n == "typeof" || n == "compile_error" || n == "cfg" || n == "attaches" || n == "has_method" || n == "has_field" || n == "embed" || n == "vector"; },
         .CALL(c, args) => {
             match (c.kind) {
                 .PATH(p&) => {
@@ -3121,6 +3121,19 @@ attach fn ct_builtin(this: checker&, name: str, gargs: std::vec<garg>&, args: st
             .TYPE(b&) => { return fails(b.span, "@has_method(T, \"name\"): the name is a string"); },
         }
     }
+    if (name == "vector") {
+        // @vector(T, n): the SIMD vector of n Ts (std::simd names them)
+        if (args.len != 2) {
+            return fails(span, "@vector(T, n) takes a number type and how many lanes");
+        }
+        val t = try this.ct_ty_arg(args.at(0), env);
+        var n: u64 = 0;
+        match (try this.ct_expr(try this.garg_value(args.at(1)), USIZE)) {
+            .INT(v, k) => { n = @cast<u64>(v); },
+            default => { return fails(span, "@vector(T, n): n is a number known at compile time"); },
+        }
+        return cval::TYPE(try this.vector_of(t, n, span));
+    }
     if (name == "has_field") {
         // @has_field(T, "name"): is T a struct with a field of that name?
         if (args.len != 2) {
@@ -3273,6 +3286,7 @@ attach fn typeinfo(this: checker&, t: u32, span: span) -> compile_error!cval {
         .REF(c) => { kind = kind_of("REFERENCE", cval::TYPE(c)); },
         .PTR(c) => { kind = kind_of("POINTER", cval::TYPE(c)); },
         .ARRAY(c, n) => { kind = kind_of("ARRAY", tuple2(cval::TYPE(c), cval::INT(@cast<i128>(n), USIZE))); },
+        .VECTOR(c, n) => { kind = kind_of("VECTOR", tuple2(cval::TYPE(c), cval::INT(@cast<i128>(n), USIZE))); },
         .SLICE(c) => { kind = kind_of("SLICE", cval::TYPE(c)); },
         .STR => { kind = kind_of("SLICE", cval::TYPE(U8)); },
         .OPT(c) => { kind = kind_of("OPTIONAL", cval::TYPE(c)); },
@@ -3611,6 +3625,25 @@ attach fn layout_rec(this: checker&, ts: std::vec<u32>&, span: span) -> compile_
 
 // size and alignment as the C compiler lays things out (x86_64 SysV)
 // ponytail: one target's rules; add a target table when voltc cross-compiles
+// the vector of n lanes of t (@vector): ints of up to 64 bits or f32/f64, a power of two lanes
+// from 2 to 64, at most 64 bytes in all (what C's vector_size and every LLVM target take)
+attach fn vector_of(this: checker&, t: u32, n: u64, span: span) -> compile_error!u32 {
+    var number = false;
+    match (*this.t.get(t)) {
+        .INT(k) => { number = k.bits() <= 64; },
+        .FLOAT(b) => { number = b == 32 || b == 64; },
+        default => {},
+    }
+    if (!number) {
+        return fail(span, fmt("a vector's lanes are numbers, not {}", this.ty_name(t)));
+    }
+    val size = (try this.layout(t, span)).size;
+    if (n < 2 || n > 64 || (n & (n - 1)) != 0 || size * n > 64) {
+        return fail(span, fmt2("a vector has 2, 4, 8, 16, 32 or 64 lanes of at most 64 bytes in all, not {} {}s", unum(n), this.ty_name(t)));
+    }
+    return this.t.intern(tyk::VECTOR(t, n));
+}
+
 attach fn layout(this: checker&, t: u32, span: span) -> compile_error!lay {
     match (*this.t.get(t)) {
         .STRUCT(s) => {
@@ -3658,6 +3691,11 @@ attach fn layout(this: checker&, t: u32, span: span) -> compile_error!lay {
         .ARRAY(e, n) => {
             val l = try this.layout(e, span);
             return { size: l.size * n, align: l.align };
+        },
+        .VECTOR(e, n) => {
+            // aligned to its whole size, as C's vector_size and LLVM's vectors are
+            val l = try this.layout(e, span);
+            return { size: l.size * n, align: l.size * n };
         },
         .TUPLE(ts, names) => {
             val xs = copy ts;
@@ -3991,6 +4029,7 @@ fn builtin_defs() -> std::vec<attr_def> {
     put(&v, { name: "typeid", args: 1, sig: "@typeid(T) -> u64", doc: "a type's id, the same in every build; for a trait value, the id of the type it holds" });
     put(&v, { name: "expand", args: 1, sig: "@expand(expr)", doc: "expr, noting at compile time what it became: a comptime value, or the generic instance a call runs" });
     put(&v, { name: "embed", args: 1, sig: "@embed(\"path\") -> str", doc: "a file's bytes, read at compile time (the path is relative to the source file)" });
+    put(&v, { name: "vector", args: 2, sig: "@vector(T, n) -> type", doc: "the SIMD vector of n numbers of type T (comptime; std::simd names them)" });
     put(&v, { name: "discriminant", args: 1, sig: "@discriminant(v) -> i64", doc: "which variant an enum value holds" });
     put(&v, { name: "field", args: 2, sig: "@field(v, \"name\")", doc: "v.name, the name a comptime string (or a tuple index): read, assigned, borrowed, or called as a method" });
     put(&v, { name: "has_field", args: 2, sig: "@has_field(T, \"name\") -> bool", doc: "is T a struct with that field (comptime)" });

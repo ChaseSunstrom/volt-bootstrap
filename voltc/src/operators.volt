@@ -34,6 +34,12 @@ attach fn unary(this: checker&, op: unop, x: expr&, want: u32?, span: span) -> c
                     r.pure = v.pure;
                     return r;
                 },
+                .VECTOR(e, n) => {
+                    // every lane (int lanes wrap)
+                    var r = vnew(v.ty, this.ir.unary(unop_ir::NEG, v.c, v.ty));
+                    r.pure = v.pure;
+                    return r;
+                },
                 .INT(k) => {
                     if (k.signed()) {
                         if (this.opts.release) {
@@ -328,6 +334,9 @@ attach fn binary(this: checker&, op: binop, ae: expr&, be: expr&, want: u32?, sp
         b_want = operand_want;
     }
     val b = this.c_enum_view(try this.expr(be, b_want));
+    if (this.is_vector(a.ty) || this.is_vector(b.ty)) {
+        return this.vector_binary(op, a, b, span);
+    }
     if (!is_cmp) {
         val pa = try this.pointer_arith(op, a, b, span);
         if (pa) {
@@ -439,6 +448,66 @@ attach fn binary(this: checker&, op: binop, ae: expr&, be: expr&, want: u32?, sp
     }
     var r = vnew(t, this.wrap_pre(move pre, c, t));
     r.pure = av.pure && bv.pure && this.opts.release;
+    return r;
+}
+
+attach fn is_vector(this: checker&, t: u32) -> bool {
+    match (*this.t.get(t)) {
+        .VECTOR(e, n) => { return true; },
+        default => { return false; },
+    }
+}
+
+// a op b lane by lane, for two vectors of one type: + - * / on float lanes; + - * (wrapping, as SIMD
+// does) and & | ^ on int lanes. Int / and % and shifts are left out: a 0 lane or a count past the
+// lane's bits would be undefined in both backends. Comparisons aren't lane by lane yet.
+attach fn vector_binary(this: checker&, op: binop, a: tval, b: tval, span: span) -> compile_error!tval {
+    if (a.ty != b.ty) {
+        return fail(span, fmt3("{} needs two values of one vector type: {} and {}", S(binop_text(op)), this.ty_name(a.ty), this.ty_name(b.ty)));
+    }
+    var float = false;
+    match (*this.t.get(a.ty)) {
+        .VECTOR(e, n) => { float = this.t.is_float(e); },
+        default => {},
+    }
+    var o: binop_ir? = null;
+    match (op) {
+        .ADD => { o = binop_ir::ADD; },
+        .WADD => { o = binop_ir::ADD; },
+        .SUB => { o = binop_ir::SUB; },
+        .WSUB => { o = binop_ir::SUB; },
+        .MUL => { o = binop_ir::MUL; },
+        .WMUL => { o = binop_ir::MUL; },
+        .DIV => {
+            if (float) {
+                o = binop_ir::DIV;
+            }
+        },
+        .BITAND => {
+            if (!float) {
+                o = binop_ir::BITAND;
+            }
+        },
+        .BITOR => {
+            if (!float) {
+                o = binop_ir::BITOR;
+            }
+        },
+        .BITXOR => {
+            if (!float) {
+                o = binop_ir::BITXOR;
+            }
+        },
+        default => {},
+    }
+    val oo = o ?? return fail(span, fmt2("{} doesn't work on a {}", S(binop_text(op)), this.ty_name(a.ty)));
+    var pair: std::vec<tval> = {};
+    put(&pair, a);
+    put(&pair, b);
+    val pre = this.seq_vals(&pair);
+    val t = a.ty;
+    var r = vnew(t, this.wrap_pre(move pre, this.ir.binary(oo, pair.at(0).c, pair.at(1).c, t), t));
+    r.pure = pair.at(0).pure && pair.at(1).pure;
     return r;
 }
 
@@ -871,6 +940,9 @@ attach fn assign(this: checker&, op: binop?, le: expr&, re: expr&, span: span) -
             o = binop_ir::SUB;
         }
         v = vnew(lty, this.ir.binary(o, cur.c, rr.c, lty));
+    } else if (this.is_vector(lty)) {
+        // v += w: lane by lane, as v + w
+        v = try this.vector_binary(bop, cur, try this.coerce(r, lty, re.span), span);
     } else if (bop == binop::SHL || bop == binop::SHR) {
         v = try this.shift(bop, cur, r, span);
     } else {

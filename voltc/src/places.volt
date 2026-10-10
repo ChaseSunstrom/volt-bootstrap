@@ -397,7 +397,13 @@ attach fn index(this: checker&, be: expr&, ie: expr&, span: span) -> compile_err
     var elem: u32 = 0;
     var c: u32 = 0;
     var lv = false;
-    match (*this.t.get(b.ty)) {
+    // a vector's lane is a place as an array's element is (the backends index the vector itself)
+    var bk = copy *this.t.get(b.ty);
+    match (bk) {
+        .VECTOR(t, n) => { bk = tyk::ARRAY(t, n); },
+        default => {},
+    }
+    match (bk) {
         .ARRAY(t, n) => {
             elem = t;
             val pt = this.t.intern(tyk::PTR(t));
@@ -728,7 +734,13 @@ fn field_named(fs: std::vec<field_info>&, n: str) -> bool {
 // their defaults), an array, a tuple, or one of those inside an optional or error union.
 attach fn literal(this: checker&, entries: std::vec<lit_entry>&, want: u32?, span: span) -> compile_error!tval {
     val w = want ?? return fails(span, "can't tell what type this literal is; give the variable a type");
-    match (*this.t.get(w)) {
+    // a vector lists its lanes as an array lists its elements (an ARRAY_LIT of the vector type)
+    var wk = copy *this.t.get(w);
+    match (wk) {
+        .VECTOR(t, n) => { wk = tyk::ARRAY(t, n); },
+        default => {},
+    }
+    match (wk) {
         .OPT(inner) => {
             val v = try this.literal(entries, inner, span);
             return this.some(v, w);

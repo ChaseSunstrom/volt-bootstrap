@@ -190,6 +190,7 @@ attach fn make_lt(this: lg&, t: u32) -> llvm::LLVMOpaqueType* {
             }
         },
         .ARRAY(x, n) => { return llvm::LLVMArrayType2(this.lt(x), n); },
+        .VECTOR(x, n) => { return llvm::LLVMVectorType(this.lt(x), @cast<u32>(n)); },
         .STRUCT(s) => {
             // ponytail: ask the C compiler for such a struct's layout instead of refusing it
             if (this.c.partial_struct(s) && this.err.len() == 0) {
@@ -369,9 +370,16 @@ attach fn classify(this: lg&, t: u32, off: u64, ebs: eightbyte[2]&) -> void {
         }
         return;
     }
-    if (k == llvm::LLVMArrayTypeKind) {
+    if (k == llvm::LLVMArrayTypeKind || k == llvm::LLVMVectorTypeKind) {
+        // (a vector in a struct: its lanes, as C classifies them)
         match (*this.c.t.get(t)) {
             .ARRAY(x, n) => {
+                val es = this.size_of(this.lt(x));
+                for (j) in 0..n {
+                    this.classify(x, off + @cast<u64>(j) * es, ebs);
+                }
+            },
+            .VECTOR(x, n) => {
                 val es = this.size_of(this.lt(x));
                 for (j) in 0..n {
                     this.classify(x, off + @cast<u64>(j) * es, ebs);
@@ -1129,6 +1137,7 @@ attach fn cval(this: lg&, n: u32, t: u32) -> llvm::LLVMOpaqueValue* {
             var et = VOID;
             match (*this.c.t.get(t)) {
                 .ARRAY(x, k) => { et = x; },
+                .VECTOR(x, k) => { et = x; },
                 default => { return null; },
             }
             val es = this.size_of(this.lt(et));
@@ -1361,6 +1370,21 @@ attach fn kind(this: lg&, t: u32) -> i32 {
     return llvm::LLVMGetTypeKind(this.lt(t));
 }
 
+attach fn is_vector(this: lg&, t: u32) -> bool {
+    match (*this.c.t.get(t)) {
+        .VECTOR(x, n) => { return true; },
+        default => { return false; },
+    }
+}
+
+// is t a vector of floats
+attach fn fp_lanes(this: lg&, t: u32) -> bool {
+    match (*this.c.t.get(t)) {
+        .VECTOR(x, n) => { return this.is_fp(this.kind(x)); },
+        default => { return false; },
+    }
+}
+
 // is t a single LLVM value (not a struct or array)?
 attach fn scalar(this: lg&, t: u32) -> bool {
     if (this.is_void(t)) {
@@ -1500,6 +1524,11 @@ attach fn addr(this: lg&, n: u32) -> llvm::LLVMOpaqueValue* {
                     put(&idx, ix);
                     return this.inbounds_gep(this.i8t(), this.rv(b), &idx);
                 },
+                .VECTOR(x, k) => {
+                    // a lane: the vector's address stepped by lanes (its lanes are laid out in order)
+                    put(&idx, ix);
+                    return this.inbounds_gep(this.lt(x), this.addr(b), &idx);
+                },
                 default => {
                     put(&idx, ix);
                     return this.inbounds_gep(this.lt(t), this.rv(b), &idx);
@@ -1579,7 +1608,7 @@ attach fn rv(this: lg&, n: u32) -> llvm::LLVMOpaqueValue* {
                 .NOT => { return llvm::LLVMBuildXor(this.b, v, llvm::LLVMConstInt(this.i8t(), 1, 0), ""); },
                 .BITNOT => { return llvm::LLVMBuildNot(this.b, v, ""); },
                 .NEG => {
-                    if (this.is_fp(this.kind(t))) {
+                    if (this.is_fp(this.kind(t)) || this.fp_lanes(t)) {
                         return llvm::LLVMBuildFNeg(this.b, v, "");
                     }
                     return llvm::LLVMBuildNeg(this.b, this.coerce(v, this.c.ir.ty_of(x), t), "");
@@ -1607,11 +1636,25 @@ attach fn rv(this: lg&, n: u32) -> llvm::LLVMOpaqueValue* {
         .AGG(inits&) => { return this.agg(inits, t); },
         .ARRAY_LIT(xs&) => {
             var et = VOID;
+            var lanes = false;
             match (*this.c.t.get(t)) {
                 .ARRAY(x, k) => { et = x; },
+                .VECTOR(x, k) => {
+                    et = x;
+                    lanes = true;
+                },
                 default => {},
             }
             var r = llvm::LLVMConstNull(this.lt(t));
+            if (lanes) {
+                for (i) in 0..xs.len {
+                    val v = this.rv_as(*xs.at(i), et);
+                    if (v != null) {
+                        r = llvm::LLVMBuildInsertElement(this.b, r, v, this.i64c(@cast<u64>(i)), "");
+                    }
+                }
+                return r;
+            }
             for (i) in 0..xs.len {
                 val v = this.rv_as(*xs.at(i), et);
                 if (v != null) {
@@ -1751,6 +1794,25 @@ attach fn binary(this: lg&, op: binop_ir, a: u32, b: u32, t: u32) -> llvm::LLVMO
         return null;
     }
     val cmp = op == binop_ir::EQ || op == binop_ir::NE || op == binop_ir::LT || op == binop_ir::GT || op == binop_ir::LE || op == binop_ir::GE;
+    if (this.is_vector(at)) {
+        // lane by lane: + - * / on float lanes, + - * & | ^ on int lanes (the checker allows no more)
+        if (this.fp_lanes(at)) {
+            match (op) {
+                .ADD => { return llvm::LLVMBuildFAdd(this.b, av, bv, ""); },
+                .SUB => { return llvm::LLVMBuildFSub(this.b, av, bv, ""); },
+                .MUL => { return llvm::LLVMBuildFMul(this.b, av, bv, ""); },
+                default => { return llvm::LLVMBuildFDiv(this.b, av, bv, ""); },
+            }
+        }
+        match (op) {
+            .ADD => { return llvm::LLVMBuildAdd(this.b, av, bv, ""); },
+            .SUB => { return llvm::LLVMBuildSub(this.b, av, bv, ""); },
+            .MUL => { return llvm::LLVMBuildMul(this.b, av, bv, ""); },
+            .BITAND => { return llvm::LLVMBuildAnd(this.b, av, bv, ""); },
+            .BITOR => { return llvm::LLVMBuildOr(this.b, av, bv, ""); },
+            default => { return llvm::LLVMBuildXor(this.b, av, bv, ""); },
+        }
+    }
     // pointers: p + n and p - n step by elements, p - q counts them, comparisons are unsigned
     if (this.is_ptr_ty(at)) {
         if (cmp) {
@@ -2467,6 +2529,10 @@ attach fn make_di_type(this: lg&, t: u32) -> llvm::LLVMOpaqueMetadata* {
         .ARRAY(x, n) => {
             var sub = llvm::LLVMDIBuilderGetOrCreateSubrange(d, 0, @cast<i64>(n));
             return llvm::LLVMDIBuilderCreateArrayType(d, bits, this.align_of(lty) * 8, this.di_type(x), &sub, 1);
+        },
+        .VECTOR(x, n) => {
+            var sub = llvm::LLVMDIBuilderGetOrCreateSubrange(d, 0, @cast<i64>(n));
+            return llvm::LLVMDIBuilderCreateVectorType(d, bits, this.align_of(lty) * 8, this.di_type(x), &sub, 1);
         },
         default => {},
     }

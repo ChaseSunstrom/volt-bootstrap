@@ -83,6 +83,51 @@ fn main() -> void {
 - `gcd` and `lcm` are never negative; `gcd(0, 0)` and `lcm(0, x)` are 0. Like `abs`, they overflow
   when the answer doesn't fit in the type: `gcd(i32::min_value(), 0)` is 2147483648.
 
+## SIMD vectors
+
+`std::simd` has vectors of numbers that one instruction works on lane by lane: `f32x4`, `f32x8`,
+`f64x2`, `f64x4`, `i32x4`, `i32x8`, `i64x2` and `u8x16`, or `vec(T, n)` for any other (ints of up to
+64 bits or `f32`/`f64`, a power of two lanes, 64 bytes at most). Two vectors of one type add,
+subtract and multiply (int lanes wrap), float lanes divide too and int lanes take `&`, `|` and `^`;
+`-v` negates every lane and `v[i]` reads or writes one (checked, as an array's index is). A `{ }`
+literal lists the lanes, `splat<V>(x)` puts `x` in every lane, `sum(v)` adds them up, and
+`load<V>(xs)` and `store(v, xs)` move a slice's first lanes in and out. The LLVM backend makes them
+LLVM vectors, the C backend GNU C's `vector_size` types, and both keep them in SIMD registers: the
+dot product below takes about a quarter of the plain loop's time (an `f64` sum can't be split into
+lanes by the optimizer, since it changes the rounding; here the program chooses to). A vector wider
+than the CPU's registers (`f64x4` without AVX) is split in two; gcc does that slowly, so through the
+C backend prefer the 16-byte ones there.
+
+```volt
+use std::io;
+use std::simd;
+
+fn dot(a: f64[..], b: f64[..]) -> f64 {
+    var s = std::simd::splat<std::simd::f64x4>(0.0);
+    var i: usize = 0;
+    while (i + 4 <= a.len) {
+        s += std::simd::load<std::simd::f64x4>(a[i..]) * std::simd::load<std::simd::f64x4>(b[i..]);
+        i += 4;
+    }
+    var r = std::simd::sum(s);
+    while (i < a.len) {
+        r += a[i] * b[i];
+        i += 1;
+    }
+    return r;
+}
+
+fn main() -> void {
+    val a: f64[6] = { 1.0, 2.0, 3.0, 4.0, 5.0, 6.0 };
+    val b: f64[6] = { 0.5, 0.5, 0.5, 0.5, 2.0, 2.0 };
+    std::println("{}", dot(a[..], b[..]));
+}
+// expect: 27
+```
+
+Vectors stay inside Volt for now: an export fn doesn't take one, a comptime function can't hold
+one, they don't compare with `==` and `println` doesn't print one (print its lanes).
+
 ## Random numbers
 
 `std::random::seeded(n)` makes a generator that gives the same numbers every run (for tests and

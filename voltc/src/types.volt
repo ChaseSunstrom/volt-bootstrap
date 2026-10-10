@@ -126,6 +126,8 @@ enum tyk {
     PTR: u32, // T*: raw, may be null
     OPT: u32,
     ARRAY: (u32, u64),
+    // a SIMD vector: its element (a number) and how many lanes (a power of two)
+    VECTOR: (u32, u64),
     SLICE: u32,
     // element types, and a name per element (null when unnamed)
     TUPLE: (std::vec<u32>, std::vec<str?>),
@@ -207,6 +209,11 @@ fn ty_key(t: tyk&) -> std::string {
         .OPT(x) => { key_one(&k, "O", x); },
         .ARRAY(x, n) => {
             key_one(&k, "A", x);
+            k.push(':');
+            k.append_uint(n);
+        },
+        .VECTOR(x, n) => {
+            key_one(&k, "V", x);
             k.push(':');
             k.append_uint(n);
         },

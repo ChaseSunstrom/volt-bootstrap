@@ -19,6 +19,7 @@ Builtins start with `@`. They're part of the language, not a library.
 | `@typeid(T)`, `@typeid(x)` | `u64` | a type's id, the same in every build; for a trait value, the id of the type it holds. See [Comptime](/volt-bootstrap/guide/comptime/#type-ids-typeid) |
 | `@expand(expr)` | `expr`'s | `expr`, noting at compile time what it became: a comptime value, or the generic instance a call runs. See [Comptime](/volt-bootstrap/guide/comptime/#what-comptime-code-became-expand-and-voltc-expand) |
 | `@embed("path")` | `str` | a file's bytes, read at compile time; the path is relative to the source file. See [Reading files](/volt-bootstrap/guide/comptime/#reading-files-embed) |
+| `@vector(T, n)` | `type` | the SIMD vector of `n` numbers of type `T` (comptime); `std::simd` names them. See [SIMD vectors](/volt-bootstrap/std/math-functions/#simd-vectors) |
 | `@discriminant(v)` | `i64` | which variant an enum value (or a reference to one) holds: its discriminant, as `@typeinfo` lists it |
 | `@field(v, "name")` | the field | `v.name`, the name a comptime string (or a tuple element's index, a comptime integer): read, assigned, borrowed; called, `@field(v, "name")(args)` is the method `v.name(args)` (and `@field(T, "name")(args)` is `T::name(args)`). See [Comptime](/volt-bootstrap/guide/comptime/#reflection-typeinfo-and-typeof) |
 | `@has_field(T, "name")` | `bool` | is `T` a struct with that field (comptime) |

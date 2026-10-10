@@ -30,6 +30,7 @@ Linux, macOS, FreeBSD and Windows, 64-bit, on x86-64 and ARM64, picked with
 | [`std::compare`](/volt-bootstrap/std/compare/) | `eq` and `cmp`, which collections and algorithms compare values with |
 | [`std::derive`](/volt-bootstrap/std/derive/) | what `@derive(eq, hash, fmt, json)` attaches ([Derive](/volt-bootstrap/guide/comptime/#derive)) |
 | [`std::math`](/volt-bootstrap/std/math/) | constants, `sqrt`, `pow`, trig and the rest of libm (f64 and f32; in Volt as `std::math::portable`), `min`/`max`/`clamp`, integer limits, checked and saturating arithmetic, `gcd`/`lcm` |
+| [`std::simd`](/volt-bootstrap/std/simd/) | SIMD vectors (`f64x2`, `f32x4`, `i32x4`, ..., or `vec(T, n)`): arithmetic lane by lane, lanes by index, `splat`, `sum`, `load`, `store` ([SIMD vectors](/volt-bootstrap/std/math-functions/#simd-vectors)) |
 | [`std::random`](/volt-bootstrap/std/random/) | random numbers (xoshiro256**), seeded or from the OS; ranges, floats, shuffle, choose; secure OS bytes |
 | [`std::mem`](/volt-bootstrap/std/mem/) | the allocator trait and allocators (`arena`, `fixed_buffer`, `failing`), `box<T>` (an owning pointer), `T::new`, `mem_error` ([Allocators](/volt-bootstrap/std/allocators/)) |
 | [`std::fs`](/volt-bootstrap/std/fs/) | files and directories: whole files, file streams (`open`, `read_line`, `seek`), listing, walking, creating, removing ([Files](/volt-bootstrap/std/files/)) |

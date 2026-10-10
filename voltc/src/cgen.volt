@@ -192,6 +192,7 @@ attach fn needs_def(this: cgen&, t: u32) -> bool {
         .STRUCT(s) => { return !this.c.header_struct(s); },
         .ENUM(e) => { return this.c.ei(e).has_payload; },
         .ARRAY(x, n) => { return true; },
+        .VECTOR(x, n) => { return true; },
         .SLICE(x) => { return true; },
         .TUPLE(ts, names) => { return true; },
         .RANGE(x) => { return true; },
@@ -336,6 +337,18 @@ attach fn define(this: cgen&, t: u32) -> void {
     val name = this.ty(t);
     var body: std::string = {};
     match (*this.c.t.get(t)) {
+        .VECTOR(x, n) => {
+            // GNU C's vector type (gcc and clang): its lanes' type and its size in bytes
+            var d = S("typedef ");
+            d.append(this.ty(x));
+            d.push(' ');
+            d.append(name);
+            d.append(" __attribute__((vector_size(");
+            d.append_uint(@cast<u64>(this.lane_bits(x)) / 8 * n);
+            d.append(")));\n");
+            this.defs.append(d.as_str());
+            return;
+        },
         .FN_PTR(ps, r, va) => {
             val xs = copy ps;
             var d = S("typedef ");
@@ -1002,6 +1015,17 @@ attach fn expr(this: cgen&, out: std::string&, n: u32) -> void {
                     this.expr(out, i);
                     out.push(']');
                 },
+                .VECTOR(x, n2) => {
+                    // a lane through a pointer to the lanes' type: an lvalue whose address can be
+                    // taken (&v[i] on a GNU vector can't)
+                    out.append("((");
+                    out.append(this.ty(x));
+                    out.append("*)&");
+                    this.operand(out, b);
+                    out.append(")[");
+                    this.full(out, i);
+                    out.push(']');
+                },
                 default => {
                     this.operand(out, b);
                     out.push('[');
@@ -1026,7 +1050,16 @@ attach fn expr(this: cgen&, out: std::string&, n: u32) -> void {
                 },
                 .NEG => {
                     val k = this.c.t.int_of(t);
-                    if (k) {
+                    if (this.signed_lanes(t)) {
+                        // wrapping, as an int's: negate the unsigned lanes
+                        out.append("((");
+                        out.append(this.ty(t));
+                        out.append(")(-(");
+                        out.append(this.ty(this.unsigned_vector(t)));
+                        out.append(")(");
+                        this.expr(out, x);
+                        out.append(")))");
+                    } else if (k) {
                         // wrapping: negate the unsigned form
                         out.append("((");
                         out.append(this.ty(t));
@@ -1144,6 +1177,18 @@ attach fn expr(this: cgen&, out: std::string&, n: u32) -> void {
             val et = this.elem_of(t);
             out.append("((");
             out.append(this.ty(t));
+            if (this.is_vector(t)) {
+                // a vector's lanes, without an array wrapper's member braces
+                out.append("){ ");
+                for (i) in 0..xs.len {
+                    if (i > 0) {
+                        out.append(", ");
+                    }
+                    this.full_as(out, *xs.at(i), et);
+                }
+                out.append(" })");
+                return;
+            }
             out.append("){ { ");
             for (i) in 0..xs.len {
                 if (i > 0) {
@@ -1220,7 +1265,55 @@ attach fn is_fn_slot(this: cgen&, t: u32, i: u32) -> bool {
 attach fn elem_of(this: cgen&, t: u32) -> u32 {
     match (*this.c.t.get(t)) {
         .ARRAY(x, n) => { return x; },
+        .VECTOR(x, n) => { return x; },
         default => { return VOID; },
+    }
+}
+
+attach fn is_vector(this: cgen&, t: u32) -> bool {
+    match (*this.c.t.get(t)) {
+        .VECTOR(x, n) => { return true; },
+        default => { return false; },
+    }
+}
+
+// the bits in a vector lane of type x (an int or a float)
+attach fn lane_bits(this: cgen&, x: u32) -> u32 {
+    match (*this.c.t.get(x)) {
+        .INT(k) => { return k.bits(); },
+        .FLOAT(b) => { return @cast<u32>(b); },
+        default => { return 0; },
+    }
+}
+
+// the vector of t's lane count with unsigned int lanes of the same width (t has int lanes): signed
+// lanes compute in it so they wrap, as C's signed overflow is undefined
+attach fn unsigned_vector(this: cgen&, t: u32) -> u32 {
+    match (*this.c.t.get(t)) {
+        .VECTOR(x, n) => {
+            val b = this.lane_bits(x);
+            var k = int_ty::U64;
+            if (b == 8) {
+                k = int_ty::U8;
+            } else if (b == 16) {
+                k = int_ty::U16;
+            } else if (b == 32) {
+                k = int_ty::U32;
+            }
+            return this.c.t.intern(tyk::VECTOR(int_id(k), n));
+        },
+        default => { return t; },
+    }
+}
+
+// does vector type t have signed int lanes
+attach fn signed_lanes(this: cgen&, t: u32) -> bool {
+    match (*this.c.t.get(t)) {
+        .VECTOR(x, n) => {
+            val k = this.c.t.int_of(x);
+            return k != null && (k ?? int_ty::U8).signed();
+        },
+        default => { return false; },
     }
 }
 
@@ -1234,6 +1327,35 @@ attach fn binary(this: cgen&, out: std::string&, op: binop_ir, a: u32, b: u32, t
         .PTR(x) => { ptr_arith = true; },
         .REF(x) => { ptr_arith = true; },
         default => {},
+    }
+    if (this.is_vector(t)) {
+        // lane by lane: GNU C's operators on vectors; signed int lanes wrap through the unsigned
+        // vector (+ - *), the rest can't overflow
+        if (this.signed_lanes(t) && wraps) {
+            val ut = this.ty(this.unsigned_vector(t));
+            out.append("((");
+            out.append(this.ty(t));
+            out.append(")((");
+            out.append(ut);
+            out.push(')');
+            this.operand(out, a);
+            out.push(' ');
+            out.append(this.binop_sym(op));
+            out.append(" (");
+            out.append(ut);
+            out.push(')');
+            this.operand(out, b);
+            out.append("))");
+            return;
+        }
+        out.push('(');
+        this.operand(out, a);
+        out.push(' ');
+        out.append(this.binop_sym(op));
+        out.push(' ');
+        this.operand(out, b);
+        out.push(')');
+        return;
     }
     if (ptr_arith) {
         out.append("((");
