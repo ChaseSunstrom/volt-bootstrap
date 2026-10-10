@@ -34,7 +34,10 @@ attach fn step(this: grid&, out: grid&) -> void {
             val l: usize = if (i == 0) n - 1 else i - 1;
             val r: usize = if (i == n - 1) 0 else i + 1;
             val around = up[l] + up[i] + up[r] + mid[l] + mid[r] + down[l] + down[i] + down[r];
-            dst[i] = if (around == 3 || (around == 2 && mid[i] == 1)) 1 else 0;
+            // (mid[i] read first: inside the || its bounds check is a trap that can't run early, which
+            // keeps a branch clang mispredicts on random cells; read here, the condition is a select)
+            val alive = mid[i];
+            dst[i] = if (around == 3 || (around == 2 && alive == 1)) 1 else 0;
         }
     }
 }

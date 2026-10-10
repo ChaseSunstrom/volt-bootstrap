@@ -94,7 +94,7 @@ faster); "—" marks a compiler that wasn't installed. Times move a few percent 
 differences that small are noise.
 
 <!-- bench:start -->
-Measured 2026-10-06 on:
+Measured 2026-10-09 on:
 
 - **CPU**: AMD Ryzen 7 9800X3D 8-Core Processor (8 cores, 16 threads, `powersave` frequency governor)
 - **Memory**: 60 GiB
@@ -103,51 +103,59 @@ Measured 2026-10-06 on:
 - **Rust**: rustc 1.99.0 (b940084d7 2026-09-28)
 - **Zig**: zig 0.17.0
 - **Volt**: voltc --release; its LLVM backend on LLVM 23.1.1
-- **Timing**: best of 1 runs, wall clock
+- **Timing**: best of 3 runs, wall clock
 
 | Program | C (clang) | C (gcc) | C++ (clang++) | Rust (rustc) | Zig (ReleaseFast) | Volt (C, clang) | Volt (C, gcc) | Volt (LLVM) |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| bigint | 0.537 s | 0.455 s (0.85x) | 0.558 s (1.04x) | 0.630 s (1.17x) | 0.631 s (1.18x) | 0.544 s (1.01x) | 1.866 s (3.47x) | 0.559 s (1.04x) |
-| binary_trees | 0.710 s | 0.675 s (0.95x) | 0.959 s (1.35x) | 1.134 s (1.60x) | 0.817 s (1.15x) | 0.352 s (0.49x) | 0.368 s (0.52x) | 0.285 s (0.40x) |
-| closures | 0.493 s | 0.746 s (1.51x) | 0.536 s (1.09x) | 0.580 s (1.18x) | 0.534 s (1.08x) | 0.539 s (1.09x) | 0.658 s (1.33x) | 0.480 s (0.97x) |
-| crc32 | 0.719 s | 0.723 s (1.01x) | 0.713 s (0.99x) | 0.707 s (0.98x) | 0.711 s (0.99x) | 0.708 s (0.98x) | 0.771 s (1.07x) | 0.712 s (0.99x) |
-| csv | 0.660 s | 0.668 s (1.01x) | 0.587 s (0.89x) | 0.418 s (0.63x) | 0.273 s (0.41x) | 0.305 s (0.46x) | 0.395 s (0.60x) | 0.387 s (0.59x) |
-| dijkstra | 0.439 s | 0.521 s (1.18x) | 0.478 s (1.09x) | 0.314 s (0.72x) | 0.718 s (1.63x) | 0.409 s (0.93x) | 0.439 s (1.00x) | 0.404 s (0.92x) |
-| errors | 0.705 s | 0.723 s (1.02x) | 1.347 s (1.91x) | 0.668 s (0.95x) | 0.781 s (1.11x) | 0.650 s (0.92x) | 0.743 s (1.05x) | 0.690 s (0.98x) |
-| fannkuch | 1.848 s | 1.934 s (1.05x) | 1.975 s (1.07x) | 1.882 s (1.02x) | 2.035 s (1.10x) | 1.990 s (1.08x) | 1.689 s (0.91x) | 1.995 s (1.08x) |
-| fib | 0.451 s | 0.177 s (0.39x) | 0.450 s (1.00x) | 0.449 s (1.00x) | 0.458 s (1.02x) | 0.450 s (1.00x) | 0.165 s (0.37x) | 0.441 s (0.98x) |
-| hashmap | 0.578 s | 0.572 s (0.99x) | 1.352 s (2.34x) | 0.635 s (1.10x) | 0.443 s (0.77x) | 0.490 s (0.85x) | 0.553 s (0.96x) | 0.497 s (0.86x) |
-| heap | 0.612 s | 1.330 s (2.17x) | 0.606 s (0.99x) | 0.504 s (0.82x) | 0.782 s (1.28x) | 0.531 s (0.87x) | 0.592 s (0.97x) | 0.554 s (0.90x) |
-| json | 0.640 s | 0.669 s (1.05x) | 0.590 s (0.92x) | 0.657 s (1.03x) | 0.596 s (0.93x) | 0.474 s (0.74x) | 0.706 s (1.10x) | 0.442 s (0.69x) |
-| knucleotide | 0.761 s | 0.912 s (1.20x) | 0.751 s (0.99x) | 1.291 s (1.70x) | 0.792 s (1.04x) | 0.714 s (0.94x) | 1.085 s (1.43x) | 0.717 s (0.94x) |
-| lexer | 0.561 s | 0.666 s (1.19x) | 0.744 s (1.33x) | 0.500 s (0.89x) | 0.478 s (0.85x) | 0.470 s (0.84x) | 0.556 s (0.99x) | 0.464 s (0.83x) |
-| lru_cache | 0.578 s | 0.579 s (1.00x) | 1.319 s (2.28x) | 0.993 s (1.72x) | 1.027 s (1.78x) | 0.531 s (0.92x) | 0.765 s (1.32x) | 0.546 s (0.95x) |
-| lz77 | 0.612 s | 0.595 s (0.97x) | 0.658 s (1.07x) | 0.648 s (1.06x) | 0.644 s (1.05x) | 0.699 s (1.14x) | 0.798 s (1.30x) | 0.696 s (1.14x) |
-| mandelbrot | 0.651 s | 0.615 s (0.95x) | 0.639 s (0.98x) | 0.639 s (0.98x) | 0.635 s (0.98x) | 0.640 s (0.98x) | 0.621 s (0.95x) | 0.639 s (0.98x) |
-| matmul | 0.511 s | 0.483 s (0.94x) | 0.505 s (0.99x) | 0.551 s (1.08x) | 0.848 s (1.66x) | 0.520 s (1.02x) | 1.044 s (2.04x) | 0.521 s (1.02x) |
-| nbody | 0.702 s | 0.720 s (1.02x) | 0.694 s (0.99x) | 0.559 s (0.80x) | 0.455 s (0.65x) | 0.713 s (1.02x) | 0.770 s (1.10x) | 0.731 s (1.04x) |
-| nqueens | 0.849 s | 0.823 s (0.97x) | 0.879 s (1.03x) | 0.838 s (0.99x) | 0.784 s (0.92x) | 0.849 s (1.00x) | 1.429 s (1.68x) | 0.851 s (1.00x) |
-| print | 1.034 s | 1.029 s (1.00x) | 0.050 s (0.05x) | 0.047 s (0.05x) | 0.026 s (0.03x) | 0.046 s (0.04x) | 0.048 s (0.05x) | 0.046 s (0.04x) |
-| raytrace | 0.758 s | 0.863 s (1.14x) | 0.725 s (0.96x) | 0.655 s (0.86x) | 0.599 s (0.79x) | 0.758 s (1.00x) | 0.877 s (1.16x) | 0.670 s (0.88x) |
-| sha256 | 1.001 s | 1.055 s (1.05x) | 1.022 s (1.02x) | 1.036 s (1.03x) | 1.203 s (1.20x) | 1.052 s (1.05x) | 1.130 s (1.13x) | 1.007 s (1.01x) |
-| shapes | 0.882 s | 0.899 s (1.02x) | 0.889 s (1.01x) | 0.817 s (0.93x) | 0.870 s (0.99x) | 0.625 s (0.71x) | 0.562 s (0.64x) | 0.673 s (0.76x) |
-| sieve | 0.614 s | 0.589 s (0.96x) | 0.609 s (0.99x) | 0.551 s (0.90x) | 0.566 s (0.92x) | 0.605 s (0.99x) | 0.676 s (1.10x) | 0.630 s (1.03x) |
-| sort | 0.567 s | 0.556 s (0.98x) | 0.195 s (0.34x) | 0.107 s (0.19x) | 0.402 s (0.71x) | 0.059 s (0.10x) | 0.060 s (0.11x) | 0.059 s (0.10x) |
-| spectral_norm | 0.983 s | 0.665 s (0.68x) | 0.941 s (0.96x) | 0.940 s (0.96x) | 0.950 s (0.97x) | 0.965 s (0.98x) | 0.953 s (0.97x) | 0.967 s (0.98x) |
-| strings | 0.297 s | 0.295 s (0.99x) | 0.386 s (1.30x) | 0.263 s (0.89x) | 0.165 s (0.55x) | 0.260 s (0.88x) | 0.364 s (1.23x) | 0.254 s (0.86x) |
-| vec_grow | 0.577 s | 0.564 s (0.98x) | 1.415 s (2.45x) | 0.575 s (1.00x) | 0.610 s (1.06x) | 0.606 s (1.05x) | 0.634 s (1.10x) | 0.587 s (1.02x) |
-| vm_interp | 0.784 s | 0.847 s (1.08x) | 0.581 s (0.74x) | 0.998 s (1.27x) | 1.016 s (1.29x) | 0.714 s (0.91x) | 1.110 s (1.42x) | 0.832 s (1.06x) |
-| wordfreq | 0.569 s | 0.570 s (1.00x) | 1.046 s (1.84x) | 0.836 s (1.47x) | 0.477 s (0.84x) | 0.612 s (1.08x) | 0.619 s (1.09x) | 0.593 s (1.04x) |
+| bigint | 0.536 s | 0.444 s (0.83x) | 0.545 s (1.02x) | 0.624 s (1.16x) | 0.614 s (1.15x) | 0.453 s (0.85x) | 0.634 s (1.18x) | 0.451 s (0.84x) |
+| binary_trees | 0.710 s | 0.649 s (0.91x) | 0.909 s (1.28x) | 1.130 s (1.59x) | 0.810 s (1.14x) | 0.336 s (0.47x) | 0.363 s (0.51x) | 0.287 s (0.40x) |
+| btree | 0.448 s | 0.437 s (0.97x) | 1.681 s (3.75x) | 0.564 s (1.26x) | 0.473 s (1.05x) | 0.434 s (0.97x) | 0.436 s (0.97x) | 0.430 s (0.96x) |
+| closures | 0.480 s | 0.739 s (1.54x) | 0.532 s (1.11x) | 0.568 s (1.18x) | 0.527 s (1.10x) | 0.536 s (1.12x) | 0.650 s (1.35x) | 0.471 s (0.98x) |
+| crc32 | 0.708 s | 0.711 s (1.01x) | 0.716 s (1.01x) | 0.710 s (1.00x) | 0.708 s (1.00x) | 0.716 s (1.01x) | 0.770 s (1.09x) | 0.713 s (1.01x) |
+| csv | 0.646 s | 0.650 s (1.01x) | 0.572 s (0.89x) | 0.409 s (0.63x) | 0.265 s (0.41x) | 0.306 s (0.47x) | 0.388 s (0.60x) | 0.367 s (0.57x) |
+| dijkstra | 0.403 s | 0.503 s (1.25x) | 0.432 s (1.07x) | 0.296 s (0.74x) | 0.688 s (1.71x) | 0.387 s (0.96x) | 0.411 s (1.02x) | 0.381 s (0.95x) |
+| errors | 0.670 s | 0.700 s (1.05x) | 1.311 s (1.96x) | 0.644 s (0.96x) | 0.779 s (1.16x) | 0.648 s (0.97x) | 0.728 s (1.09x) | 0.662 s (0.99x) |
+| fannkuch | 1.846 s | 1.899 s (1.03x) | 1.911 s (1.04x) | 1.873 s (1.01x) | 2.051 s (1.11x) | 1.978 s (1.07x) | 1.688 s (0.91x) | 1.983 s (1.07x) |
+| fasta | 0.860 s | 0.948 s (1.10x) | 0.850 s (0.99x) | 0.872 s (1.01x) | 0.865 s (1.01x) | 0.867 s (1.01x) | 0.856 s (1.00x) | 0.866 s (1.01x) |
+| fft | 0.617 s | 0.648 s (1.05x) | 0.741 s (1.20x) | 0.654 s (1.06x) | 0.640 s (1.04x) | 0.624 s (1.01x) | 0.616 s (1.00x) | 0.693 s (1.12x) |
+| fib | 0.449 s | 0.176 s (0.39x) | 0.451 s (1.00x) | 0.450 s (1.00x) | 0.447 s (1.00x) | 0.450 s (1.00x) | 0.165 s (0.37x) | 0.436 s (0.97x) |
+| hashmap | 0.544 s | 0.547 s (1.00x) | 1.255 s (2.30x) | 0.602 s (1.11x) | 0.433 s (0.80x) | 0.469 s (0.86x) | 0.536 s (0.98x) | 0.463 s (0.85x) |
+| heap | 0.594 s | 1.303 s (2.19x) | 0.594 s (1.00x) | 0.486 s (0.82x) | 0.776 s (1.31x) | 0.522 s (0.88x) | 0.574 s (0.97x) | 0.524 s (0.88x) |
+| huffman | 0.767 s | 0.735 s (0.96x) | 0.606 s (0.79x) | 0.592 s (0.77x) | 1.039 s (1.35x) | 0.584 s (0.76x) | 0.803 s (1.05x) | 0.579 s (0.75x) |
+| json | 0.650 s | 0.683 s (1.05x) | 0.592 s (0.91x) | 0.661 s (1.02x) | 0.597 s (0.92x) | 0.482 s (0.74x) | 0.647 s (0.99x) | 0.441 s (0.68x) |
+| knucleotide | 0.744 s | 0.906 s (1.22x) | 0.737 s (0.99x) | 1.251 s (1.68x) | 0.801 s (1.08x) | 0.704 s (0.95x) | 1.064 s (1.43x) | 0.706 s (0.95x) |
+| levenshtein | 0.582 s | 0.949 s (1.63x) | 0.447 s (0.77x) | 0.589 s (1.01x) | 0.476 s (0.82x) | 0.458 s (0.79x) | 0.973 s (1.67x) | 0.464 s (0.80x) |
+| lexer | 0.553 s | 0.647 s (1.17x) | 0.750 s (1.36x) | 0.492 s (0.89x) | 0.464 s (0.84x) | 0.471 s (0.85x) | 0.557 s (1.01x) | 0.454 s (0.82x) |
+| life | 0.809 s | 0.822 s (1.02x) | 0.785 s (0.97x) | 1.042 s (1.29x) | 0.768 s (0.95x) | 0.818 s (1.01x) | 0.674 s (0.83x) | 0.902 s (1.11x) |
+| lru_cache | 0.569 s | 0.565 s (0.99x) | 1.292 s (2.27x) | 0.966 s (1.70x) | 1.006 s (1.77x) | 0.525 s (0.92x) | 0.758 s (1.33x) | 0.535 s (0.94x) |
+| lz77 | 0.603 s | 0.581 s (0.96x) | 0.643 s (1.07x) | 0.642 s (1.06x) | 0.638 s (1.06x) | 0.692 s (1.15x) | 0.781 s (1.29x) | 0.684 s (1.13x) |
+| mandelbrot | 0.638 s | 0.615 s (0.97x) | 0.639 s (1.00x) | 0.637 s (1.00x) | 0.629 s (0.99x) | 0.639 s (1.00x) | 0.618 s (0.97x) | 0.638 s (1.00x) |
+| matmul | 0.508 s | 0.477 s (0.94x) | 0.505 s (0.99x) | 0.540 s (1.06x) | 0.844 s (1.66x) | 0.522 s (1.03x) | 1.028 s (2.02x) | 0.530 s (1.04x) |
+| nbody | 0.701 s | 0.719 s (1.03x) | 0.681 s (0.97x) | 0.558 s (0.80x) | 0.454 s (0.65x) | 0.704 s (1.00x) | 0.768 s (1.10x) | 0.716 s (1.02x) |
+| nqueens | 0.827 s | 0.815 s (0.99x) | 0.870 s (1.05x) | 0.817 s (0.99x) | 0.781 s (0.94x) | 0.840 s (1.02x) | 1.422 s (1.72x) | 0.831 s (1.01x) |
+| print | 0.999 s | 1.008 s (1.01x) | 0.049 s (0.05x) | 0.044 s (0.04x) | 0.025 s (0.02x) | 0.046 s (0.05x) | 0.046 s (0.05x) | 0.046 s (0.05x) |
+| raytrace | 0.757 s | 0.842 s (1.11x) | 0.720 s (0.95x) | 0.645 s (0.85x) | 0.598 s (0.79x) | 0.750 s (0.99x) | 0.856 s (1.13x) | 0.667 s (0.88x) |
+| revcomp | 0.350 s | 0.338 s (0.97x) | 0.353 s (1.01x) | 0.592 s (1.69x) | 0.368 s (1.05x) | 0.374 s (1.07x) | 0.445 s (1.27x) | 0.424 s (1.21x) |
+| sha256 | 1.005 s | 1.049 s (1.04x) | 0.998 s (0.99x) | 1.033 s (1.03x) | 1.190 s (1.18x) | 1.041 s (1.04x) | 1.141 s (1.14x) | 1.010 s (1.00x) |
+| shapes | 0.874 s | 0.893 s (1.02x) | 0.869 s (1.00x) | 0.812 s (0.93x) | 0.848 s (0.97x) | 0.629 s (0.72x) | 0.545 s (0.62x) | 0.655 s (0.75x) |
+| sieve | 0.597 s | 0.581 s (0.97x) | 0.591 s (0.99x) | 0.550 s (0.92x) | 0.551 s (0.92x) | 0.601 s (1.01x) | 0.628 s (1.05x) | 0.595 s (1.00x) |
+| sort | 0.567 s | 0.553 s (0.97x) | 0.191 s (0.34x) | 0.106 s (0.19x) | 0.394 s (0.69x) | 0.052 s (0.09x) | 0.063 s (0.11x) | 0.064 s (0.11x) |
+| spectral_norm | 0.980 s | 0.647 s (0.66x) | 0.936 s (0.96x) | 0.934 s (0.95x) | 0.949 s (0.97x) | 0.952 s (0.97x) | 0.950 s (0.97x) | 0.957 s (0.98x) |
+| strings | 0.296 s | 0.291 s (0.98x) | 0.385 s (1.30x) | 0.264 s (0.89x) | 0.163 s (0.55x) | 0.259 s (0.88x) | 0.364 s (1.23x) | 0.252 s (0.85x) |
+| sudoku | 0.744 s | 0.598 s (0.80x) | 0.764 s (1.03x) | 0.632 s (0.85x) | 0.710 s (0.96x) | 0.789 s (1.06x) | 0.629 s (0.85x) | 0.756 s (1.02x) |
+| vec_grow | 0.592 s | 0.580 s (0.98x) | 1.395 s (2.36x) | 0.598 s (1.01x) | 0.605 s (1.02x) | 0.618 s (1.05x) | 0.651 s (1.10x) | 0.576 s (0.97x) |
+| vm_interp | 0.781 s | 0.845 s (1.08x) | 0.581 s (0.74x) | 1.005 s (1.29x) | 0.994 s (1.27x) | 0.679 s (0.87x) | 1.096 s (1.40x) | 0.819 s (1.05x) |
+| wordfreq | 0.540 s | 0.547 s (1.01x) | 1.033 s (1.91x) | 0.810 s (1.50x) | 0.471 s (0.87x) | 0.586 s (1.08x) | 0.644 s (1.19x) | 0.589 s (1.09x) |
 <!-- bench:end -->
 
 ## Reading the results
 
-- **Against Rust and Zig**: over the 31 programs Volt's LLVM build takes 0.87x Rust's time and 0.87x
-  Zig's (geometric means; against C: Volt 0.77x, Rust 0.88x, Zig 0.88x). It's ahead on 17 programs
-  against each, mostly from its allocator (`binary_trees`, `lru_cache`), its library (`sort`'s
-  radix sort, `json`) and its hash maps against Rust's SipHash (`knucleotide`, `wordfreq`). Zig is
-  ahead on `nbody`, `strings`, `csv` and `print` (it also builds for this CPU, see above), and Rust
-  on `dijkstra` and `sieve`.
+- **Against Rust and Zig**: over the 39 programs Volt's LLVM build takes 0.88x Rust's time and 0.89x
+  Zig's (geometric means; against C: Volt 0.81x, Rust 0.92x, Zig 0.91x). It's ahead on 24 programs
+  against Rust and 21 against Zig, mostly from its allocator (`binary_trees`, `lru_cache`), its
+  library (`sort`'s radix sort, `json`) and its hash maps against Rust's SipHash (`knucleotide`,
+  `wordfreq`). Zig is ahead on `nbody`, `strings`, `csv`, `print`, `life` and `revcomp` (it also
+  builds for this CPU, see above), and Rust on `dijkstra`, `nbody` and `sudoku`.
 
 - **Most rows are a tie.** Volt compiles to the same machine code as C for the same loops: the C
   backend hands clang C that does what the C program does, and the LLVM backend emits the same IR
@@ -156,10 +164,10 @@ Measured 2026-10-06 on:
   compare and a trap instruction ([safety](/volt-bootstrap/guide/safety/#release-builds)). Most
   rows don't notice: the compiler drops a check it can prove, and a loop over `0..xs.len` proves
   its own. The rows that index with values only known at run time pay: `vm_interp` (its stack
-  pointer, local slots and program counter) is 1.03x where it was 0.62x unchecked, and `lz77`
-  1.12x. `@attributes([@unchecked])` on `vm_interp`'s `run` gives the unchecked time back
+  pointer, local slots and program counter) is 1.05x where it was 0.62x unchecked, and `lz77`
+  1.13x. `@attributes([@unchecked])` on `vm_interp`'s `run` gives the unchecked time back
   (0.49 s). `dijkstra` paid 1.16x until std's heap stopped checking the indices its sift loops
-  can't get wrong; it's 0.90x now. The gcc column paid more on `bigint` (3.46x): an if value
+  can't get wrong; it's 0.95x now. The gcc column paid more on `bigint` (3.46x): an if value
   was a branch per arm storing its result, and gcc's jump threading copied the checked store in
   `rs[i] = if (over) x - BASE else x` into both arms of the branch on the carry, so the branch
   stayed and mispredicted where clang made it a conditional move. An if value whose arms are
@@ -175,7 +183,7 @@ Measured 2026-10-06 on:
   it needs no default: LLVM copies the dispatch into the end of each arm, so each instruction jumps
   straight to the next one's code. C's `switch` keeps a range check and one shared dispatch;
   `std::visit` gets the same copied dispatch. Unchecked, Volt's is 0.62x and ahead of it; with the
-  bounds checks above it's 1.03x.
+  bounds checks above it's 1.05x.
 - **`vec_grow`: Volt values move by copying bytes**, so `std::vec` grows with `realloc`, which can
   extend a buffer in place, as the hand-written C does. `std::vector` can't: it allocates a new
   buffer and moves each element across.
