@@ -1,7 +1,6 @@
 // voltc: the command line. A port of bootstrap/main.rs.
 // It adds emit-llvm and --backend llvm (lgen.volt); `parse` only prints the canonical --sexp form.
 use std::io;
-use { "dirent.h", "poll.h", "unistd.h" } as sys;
 
 // a --pkg or --link argument: NAME=PATH
 struct pkg_arg {
@@ -248,24 +247,9 @@ fn parse_cli() -> cli {
 
 // the names in a directory, or none when it isn't one
 fn list_dir(path: str) -> std::vec<std::string>? {
-    var p = S(path);
-    val d = sys::opendir(p.c_str()) ?? return null;
-    var out: std::vec<std::string> = {};
-    loop {
-        val e = sys::readdir(d) ?? break;
-        var name: std::string = {};
-        for (b) in e.d_name {
-            if (b == 0) {
-                break;
-            }
-            name.push(@cast<u8>(b));
-        }
-        if (name.as_str() != "." && name.as_str() != "..") {
-            put(&out, move name);
-        }
-    }
-    sys::closedir(d);
-    return out;
+    return std::fs::list_dir(path) catch |e| {
+        return null;
+    };
 }
 
 // sorts by bytes (an insertion sort: a package has few files)
@@ -339,7 +323,7 @@ fn find_std(c: cli&) -> std::string? {
     if (path) {
         val exe = path.as_str();
         var dir_end = exe.len;
-        while (dir_end > 0 && exe[dir_end - 1] != '/') {
+        while (dir_end > 0 && !is_path_sep(exe[dir_end - 1])) {
             dir_end -= 1;
         }
         val dir = exe[0..dir_end];
@@ -349,12 +333,7 @@ fn find_std(c: cli&) -> std::string? {
             p.append(cand);
             if (list_dir(p.as_str()) != null) {
                 // without the ../ steps: file names in messages and panics read plainly
-                var real: u8[4096];
-                val r = realpath(p.c_str(), &real[0]);
-                if (r) {
-                    return S(@cast<str>(@slice(@cast<u8*>(r), strlen(r))));
-                }
-                return p;
+                return real_file(p.as_str()) ?? p;
             }
         }
     }
@@ -400,7 +379,7 @@ fn report_diags(c: cli&, files: std::vec<source_file>&, diags: std::vec<diag>&) 
     var color = c.color == "always";
     if (c.color == "auto") {
         val term = std::process::env("TERM");
-        color = sys::isatty(2) != 0 && std::process::env("NO_COLOR") == null && (term == null || (term ?? "") != "dumb");
+        color = stderr_is_terminal() && std::process::env("NO_COLOR") == null && (term == null || (term ?? "") != "dumb");
     }
     std::eprint("{}", report(files, diags, c.format, color, c.error_limit));
 }
@@ -729,8 +708,7 @@ fn main() -> i32 {
         val dir = c.out;
         if (dir) {
             // -o DIR: the files, ready to build with cc DIR/program.c
-            var d = S(dir);
-            mkdir(d.c_str(), 493); // 0755; an existing directory is fine
+            std::fs::create_dir(dir) catch |e| {}; // an existing directory is fine
             for (f&) in files.items() {
                 var p = S(dir);
                 p.push('/');
@@ -933,7 +911,8 @@ fn main() -> i32 {
         val chk = compile_cli(&c, &s);
         var dir = fresh_dir();
         var exe = copy dir;
-        exe.append("/prog");
+        exe.push('/');
+        exe.append(exe_name("prog").as_str()); // prog.exe on Windows, so it's that file that's removed
         var lc = copy c;
         val cpp_os = cpp_objects(&*chk, &c, dir.as_str());
         for (o&) in cpp_os.items() {
@@ -1028,19 +1007,14 @@ fn without_ext(p: str) -> str {
     return p;
 }
 
-extern "C" fn mkdtemp(template: u8*) -> cstr?;
 extern "C" fn unlink(path: cstr) -> i32;
 extern "C" fn rmdir(path: cstr) -> i32;
-extern "C" fn mkdir(path: cstr, mode: u32) -> i32;
-extern "C" fn realpath(path: cstr, resolved: u8*) -> cstr?;
 
-// a new private build directory (mkdtemp makes it 0700, under a fresh name)
+// a new private build directory (new_temp_dir's: only this user can read it)
 fn fresh_dir() -> std::string {
-    var t = S("/tmp/voltc-XXXXXX");
-    t.push(0);
-    val made = mkdtemp(@cast<u8*>(t.as_str().ptr)) ?? die(S("can't make a build directory in /tmp"));
-    put(&build_dirs, S(t.as_str()[0..t.len() - 1]));
-    return S(t.as_str()[0..t.len() - 1]);
+    val dir = new_temp_dir("voltc") ?? die(S("can't make a build directory for the C and objects in the temporary directory"));
+    put(&build_dirs, copy dir);
+    return dir;
 }
 
 // OUT.deps: the files other than the Volt sources that out was made from (what use rust and the
@@ -1378,7 +1352,7 @@ fn runtime_object(text: str, c: cli&, dir: str) -> std::string {
     cc(text, tmp.as_str(), c, true);
     // into the cache by rename, so a build running alongside never sees half a file
     std::fs::create_dir_all(cdir.as_str()) catch |e| { return tmp; };
-    var part = std::fmt::format("{}.{}.part", path.as_str(), sys::getpid());
+    var part = std::fmt::format("{}.{}.part", path.as_str(), process_id());
     std::fs::copy_file(tmp.as_str(), part.as_str()) catch |e| { return tmp; };
     std::fs::rename(part.as_str(), path.as_str()) catch |e| {
         std::fs::remove_file(part.as_str()) catch |x| {};

@@ -53,6 +53,7 @@ source ─▶ lexer ─▶ parser ─▶ checker ─▶ typed IR ─┬─▶ cg
 | `bindings.volt`, `doc.volt`, `lsp.volt`, `lsp_inline.volt` | bindings for other languages, `voltc doc`, the language server |
 | `vm.volt` | Volt embedded in another program (`voltc/embed`), run by LLVM's JIT |
 | `main.volt` | the command line |
+| `sys.volt` | what voltc asks of the system where std has no call for it (build directories, canonical paths, the language server's streams), on Unix and Windows |
 | `runtime_c.volt` | the C runtime's text, generated from `runtime/` |
 
 ## The rest of the repository
