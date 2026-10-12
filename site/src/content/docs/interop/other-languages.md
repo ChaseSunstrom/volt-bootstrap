@@ -7,8 +7,8 @@ sidebar:
 
 Everything meets at the C ABI.
 
-Each language has a small runnable example in both directions in
-[examples/interop](https://github.com/ChaseSunstrom/volt-bootstrap/tree/main/examples/interop): a Volt library that every language calls, and Volt
+Small runnable examples in
+[examples/interop](https://github.com/ChaseSunstrom/volt-bootstrap/tree/main/examples/interop) go both ways: a Volt library that every language calls, and Volt
 importing C, C++, Rust, Zig and Swift code. Each one is a `run.sh` with its exact commands.
 
 ## Volt calls them
@@ -146,7 +146,7 @@ Each language gets these in its own style:
 | --- | --- | --- | --- | --- | --- |
 | C | a struct of the code and the value | `volt_text`, freed with `volt_text_free` | structs | a pointer, and `NAME_free` | a function and a `void *` |
 | C++ | throws `error` | `std::string` | from vectors and arrays; `std::optional` | a class that frees itself | `std::function` |
-| Rust | `Result<T, Error>` | `String` | `&mut [T]`, `Option` | a type that frees itself when dropped | `&mut dyn FnMut` |
+| Rust | `Result<T, Error>` | `String` | `&mut [T]`, `Option` | a type that frees itself when dropped | any closure (`impl FnMut`) |
 | Python | raises a class per error set, all deriving from `Error` | `str` | lists, `None` | a class with `close()` and `with` | any callable |
 | Zig | `Error!T` | `VoltText`, with `bytes()` and `deinit()` | `[]T`, `?T` | a type with `deinit()` | a context and a function |
 | JavaScript | throws an `Error` whose `code` is the name | a string | arrays (written back), `null` | a class with `close()` and `Symbol.dispose` | any function (one throws `voltError(name)` to give Volt an error) |
@@ -217,9 +217,9 @@ Python's on
   the result from Python through a pointer. A callback can give back a slice of numbers, structs, text or
   structs with text (`fn(i32) -> i64[..]`, `-> str[..]`): C, C++, Rust and Zig give memory of
   their own, which Volt reads before it calls the callback again; every other language returns a
-  list (an array in Swift, Java and C#), which is copied for Volt with its text (Python, Dart,
-  Ruby, Lua, Kotlin, Swift and C# keep the copy until the callback's next result, Node and Go
-  until the call into Volt returns).
+  list (an array in Swift, Java and C#, and for numbers a `LongArray` and the like in Kotlin), which
+  is copied for Volt with its text (Python, Dart, Ruby, Lua, Java, Kotlin, Swift and C# keep the
+  copy until the callback's next result, Node and Go until the call into Volt returns).
 - **Lists, and text and handles in slices and optionals.** An export fn can return a
   `std::vec<T>`: in C the caller gets its elements, how many, and what frees them
   (`volt_list_free`); text in it is lent as a `str` until then, and each handle in it is the
@@ -235,11 +235,11 @@ Python's on
   from any sequence in Python. Optional text and handles are `std::optional`, `Option`, `?T` and
   `None` or the value.
 - **Slices of slices, at any depth.** A `T[..][..]` (or `T[..][..][..]`, and so on; of numbers,
-  structs or text) takes an array of arrays: `long[][]` and `string[][]` in Java and C#, `[[T]]`
-  in Swift, `[][]T` in Go, a `List` of arrays (`LongArray`) in Kotlin, a list of lists in Python,
-  Dart, JavaScript and Ruby, a table of tables in Lua, and a slice of slices (of their own memory)
-  in C, C++, Rust and Zig. The others copy each inner array (text too) into memory the call holds,
-  and what Volt writes into the numbers and structs comes back.
+  structs or text) takes an array of arrays: `long[][]` and `String[][]` in Java (`string[][]` in
+  C#), `[[T]]` in Swift, `[][]T` in Go, a `List` of arrays (`LongArray`) in Kotlin, a list of
+  lists in Python, Dart, JavaScript and Ruby, a table of tables in Lua, and a slice of slices (of
+  their own memory) in C, C++, Rust and Zig. The others copy each inner array (text too) into
+  memory the call holds, and what Volt writes into the numbers and structs comes back.
 - **Arrays by value.** An export fn, a callback or a trait fn taking or giving a `T[N]` (numbers,
   bools, enums, or structs of those) passes it whole, as C passes a struct wrapping it (an
   `extern "C"` fn type too): `PKG_array_T_N` (its elements in `v`)
@@ -256,21 +256,21 @@ Python's on
   at: vec2; }`, `pair { names: str[2]; }`, `shelf { labels: label[2]; }`) crosses by
   value too: in, out, in a slice and from a callback. C, C++, Rust and Zig have its C form (the
   text a pointer and a length); the other languages have a type of their own whose text is their
-  string and whose array is their array: a class in Python (ctypes; it takes a `str` for the text),
-  Java, C#, Dart and Swift (C's form is `NAME_c` in C# and Dart), a struct in Go, a data class in
-  Kotlin, an object in JavaScript and Ruby, and a table in Lua. Its text going in is lent for the
-  call (a callback's is kept, as a `str` it gives back is), and coming back it's copied before the
-  call returns, so one that points into a parameter's text is still whole. By reference (`T&`), a
-  copy goes in and what Volt changed comes back into yours. An array of text or of such structs is
-  the language's array of strings or of that type (a tuple in Swift). A slice of them that Volt
-  gives back (pointing into what the call was given) is copied too.
-- **`E!T` as a parameter.** It takes a value or an error, in the form the language's callbacks give
-  one back: `Result<T, Error>` in Rust and Swift, `Result<T>` in Kotlin, `Error!T` in Zig, a
-  `VoltResult<T>` in Java and Dart (`VoltResult.ok(v)` or `VoltResult.err(e)`) and in C# (a value
-  or a `VoltException` converts to one), the value or the error in Python, JavaScript, Ruby and Lua,
-  the value and an `error` in Go (`f(v, nil)`, or `f(zero, err)`), and the struct of the code and
-  the value in C and C++. In C#, Dart, Python and Go an `E!void` parameter is the error, or none
-  (`null`, `None`, `nil`).
+  string and whose array is their array (a tuple in Swift): a class in Python (ctypes; it takes a
+  `str` for the text), Java and Dart, a struct in C#, Swift and Go (C's form is `NAME_c` in C# and
+  Dart), a data class in Kotlin, an object in JavaScript and Ruby, and a table in Lua. Its text
+  going in is lent for the call (a callback's is kept, as a `str` it gives back is), and coming
+  back it's copied before the call returns, so one that points into a parameter's text is still
+  whole. By reference (`T&`), a copy goes in and what Volt changed comes back into yours. An array
+  of text or of such structs is the language's array of strings or of that type (a tuple in
+  Swift). A slice of them that Volt gives back (pointing into what the call was given) is copied
+  too.
+- **`E!T` as a parameter.** It takes a value or an error: `Result<T, Error>` in Rust and Swift,
+  `Result<T>` in Kotlin, `Error!T` in Zig, a `VoltResult<T>` in Java and Dart (`VoltResult.ok(v)`
+  or `VoltResult.err(e)`) and in C# (a value or a `VoltException` converts to one), the value or
+  the error in Python, JavaScript, Ruby and Lua, the value and an `error` in Go (`f(v, nil)`, or
+  `f(zero, err)`), and the struct of the code and the value in C and C++. In C#, Dart, Python and
+  Go an `E!void` parameter is the error, or none (`null`, `None`, `nil`).
 - **Any name.** A parameter named like a word the language keeps (`from` in Python, `type` in
   Zig, `self` in Rust, `typeof` in C), like one of the package's types, or like a name the wrapper
   uses itself gets a `_` after it in that language (`from_`), so it still gets its own value. A
@@ -744,8 +744,9 @@ Each parameter and return type is `{"kind": ...}`:
 | `struct`, `enum` (`name`) | a type from `types` |
 | `error` (`set`) | a `uint32_t` code, 0 for none |
 | `result` (`error`, `value`, `c_name`) | a struct of `uint32_t error` and `value` |
-| `array` (`of`, `len`) | a C array |
+| `array` (`of`, `len`) | a C array; a parameter or result is the struct wrapping it (`PKG_array_T_N`) |
 | `slice` (`of`), `optional` (`of`) | `{ T *ptr; size_t len }`, `{ T value; bool has }` |
+| `list` (`of`, `c_name`) | a `std::vec<T>`: a result is the struct `c_name` of its elements, how many, and what frees them (`owner`, `drop`); a parameter takes a slice of them |
 | `handle` (`class`, `owned`, `nullable`) | a pointer to the class; owned ones are freed with its `free` |
 | `function` (`params`, `returns`) | an `extern "C"` function pointer |
 | `callback` (`params`, `returns`, `c_name`) | two parameters: a C function that gets the data first, and the data (`void *`); one a function returns is the struct `c_name` of the function, the data and its `drop` |
