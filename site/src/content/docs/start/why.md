@@ -11,16 +11,17 @@ what it looks like it does, the compiler catches what it can, and debug builds c
 ## What you get
 
 **C's speed, with nothing running behind you.** There's no garbage collector, scheduler, exception
-unwinder or vtable. Every call is resolved when compiling, and every allocation is one you wrote.
-On the [benchmarks](/volt-bootstrap/internals/benchmarks/) Volt runs within a few percent of
-clang-compiled C, and beats it where templates inline what C does through function pointers (`sort`
-takes less than half C's time).
+unwinder or vtable. Every method and trait call is resolved when compiling, and every allocation is
+one you wrote. On the [benchmarks](/volt-bootstrap/internals/benchmarks/) Volt ties clang-compiled
+C on most programs, and beats it where std does more than libc: `sort` sorts integers by radix (a
+tenth of C's time with `qsort`), and the allocator takes small blocks from free lists
+(`binary_trees`).
 
-**Mistakes stop, loudly, until you ship.** Debug builds check what C leaves undefined: integer
-overflow, out-of-bounds indexing, null unwraps and double frees stop the program and name the line.
-`--release` drops the checks. The compiler rejects use after move, a `match` that misses a case,
-an ignored error and a format string that doesn't fit its arguments. See
-[Safety checks](/volt-bootstrap/guide/safety/).
+**Mistakes stop, loudly.** Debug builds check what C leaves undefined: integer overflow,
+out-of-bounds indexing, null unwraps and double frees stop the program and name the line.
+`--release` drops the overflow and double-free checks and keeps the rest as a bare trap. The
+compiler rejects use after move, a `match` that misses a case, an ignored error and a format string
+that doesn't fit its arguments. See [Safety checks](/volt-bootstrap/guide/safety/).
 
 **Ownership without a fight.** Every value has one owner and is deleted when that owner's scope
 ends. Moves are tracked and copies are explicit, so resources clean up like C++'s RAII, without
@@ -34,9 +35,9 @@ specialization, packs and constant parameters. Code can run in the compiler (`co
 are values there.
 
 **Every other language is one step away.** Volt reads C headers and C++ headers (classes,
-templates, the standard library) and ordinary Rust crates and Zig files (`use { "geom.rs" } as
-geom;`, like a header) directly, builds Go modules listed in `bolt.toml`, and calls Python, Java, .NET and Lua
-through packages that embed them. The other way round, `voltc bindings` (or a `bindings` list in `bolt.toml`) makes a
+templates, the standard library) directly, and imports ordinary Rust crates and Zig, Swift, Kotlin,
+Go, Java, C#, Python and TypeScript code the same way (`use { "geom.rs" } as geom;`, like a
+header); Lua it embeds through a package. The other way round, `voltc bindings` (or a `bindings` list in `bolt.toml`) makes a
 Volt library usable from C, C++, Rust, Zig, Python, JavaScript and TypeScript, C#, Java, Go, Lua,
 Dart, Swift, Kotlin and Ruby. See [Interop](/volt-bootstrap/interop/c/).
 

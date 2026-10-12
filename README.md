@@ -15,25 +15,26 @@
 </p>
 
 Volt is a compiled language with no garbage collector, no vtables, no exceptions and no scheduler:
-every call is resolved at compile time. Values are owned and deleted when their scope ends, errors
-are values, generics are templates, and code can run in the compiler. It compiles to readable C or,
-through LLVM, to native code; it reads C and C++ headers directly; and its compiler, `voltc`, is
-written in Volt and builds itself.
+every method and trait call is resolved at compile time. Values are owned and deleted when their
+scope ends, errors are values, generics are templates, and code can run in the compiler. It compiles
+to readable C or, through LLVM, to native code; it reads C and C++ headers directly; and its
+compiler, `voltc`, is written in Volt and builds itself.
 
 ## Why Volt
 
 - **C's speed, nothing behind your back.** No GC, scheduler, exceptions or vtables; every
   allocation is one you wrote. On the [benchmarks](https://chasesunstrom.github.io/volt-bootstrap/internals/benchmarks/)
-  Volt runs within a few percent of clang-compiled C.
-- **Mistakes stop loudly until you ship.** Debug builds trap overflow, out-of-bounds indexing, null
-  unwraps and double frees; the compiler rejects use after move, missed `match` cases and ignored
-  errors. `--release` drops the run-time checks.
+  Volt ties clang-compiled C on most programs and takes less time overall.
+- **Mistakes stop loudly.** Debug builds trap overflow, out-of-bounds indexing, null unwraps and
+  double frees; the compiler rejects use after move, missed `match` cases and ignored errors.
+  `--release` drops the overflow and double-free checks and keeps the rest, each as one compare and
+  a trap.
 - **Ownership without lifetimes.** Values are deleted at scope end, moves are tracked and copies are
   explicit: RAII with nothing to annotate.
 - **Every language is one step away.** It reads C and C++ headers (templates and the standard
-  library too) and calls ordinary Rust crates, Zig files and Swift files directly, imported like a header
-  (`use { "geom.rs" } as geom;`), builds Go code, and embeds Python, Java, .NET and Lua; one `bindings` line in
-  `bolt.toml` makes a Volt library usable from 15 languages.
+  library too), and imports Rust crates and Zig, Swift, Kotlin, Go, Java, C#, Python and TypeScript
+  code the same way, like a header (`use { "geom.rs" } as geom;`); Lua embeds through a package. One
+  `bindings` line in `bolt.toml` makes a Volt library usable from 15 languages.
 - **One toolchain.** bolt, a language server, and diagnostics that point at the problem.
 
 It's young (no 1.0, no package registry) and has no borrow checker: if you need proven memory
@@ -80,8 +81,8 @@ fn main() -> !void {
 - **Comptime**: functions, `if`, `match` and `for` that run in the compiler, types as values,
   `@typeinfo`.
 - **Async** as stackless frames of known size, driven by hand.
-- **Two backends**: readable C, or native code through LLVM (the default on x86-64), with DWARF
-  debug info for gdb in debug builds.
+- **Two backends**: readable C, or native code through LLVM (the default on x86-64 and aarch64,
+  except on Windows), with DWARF debug info for gdb in debug builds.
 - **Embeddable, like Lua**: `libvoltvm` compiles Volt source in memory and runs it through LLVM's
   JIT, with host functions, sandboxes, and C, C++, Rust and Python bindings.
 - **Bare metal with no C at all**: `--target riscv32-none`, `riscv64-none`, `thumbv6m-none`,
@@ -89,9 +90,10 @@ fn main() -> !void {
 - **A standard library** with collections, text, JSON, files, processes, networking, threads,
   allocators you choose per container, hashing and encodings.
 - **Interop**: real C headers (unions and bitfields too), C++ classes, templates and the standard
-  library, Rust crates, Zig files and Swift files imported by name (`use { "fm.zig" } as fm;`), Go modules through bolt,
-  Python, Java, .NET and Lua through packages, and libraries with bindings for C, C++, Rust, Zig,
-  Python, JavaScript and TypeScript, C#, Java, Go, Lua, Dart, Swift, Kotlin and Ruby.
+  library; Rust crates, Go packages, and Zig, Swift, Kotlin, Java, C#, Python and TypeScript files
+  imported by name (`use { "fm.zig" } as fm;`); Lua through a package; and libraries with bindings
+  for C, C++, Rust, Zig, Python, JavaScript and TypeScript, C#, Java, Go, Lua, Dart, Swift, Kotlin
+  and Ruby.
 - **Tooling**: diagnostics that point at the problem, the **bolt** build tool, a language server,
   and a VS Code extension.
 
@@ -120,7 +122,7 @@ Then `bolt new hello && cd hello && bolt run`. The
 | [`runtime/`](runtime) | the small C prelude and runtime every program includes |
 | [`bolt/`](bolt) | the build tool, and the API its build files use |
 | [`editors/vscode/`](editors/vscode) | the VS Code extension |
-| [`interop/`](interop) | `volt-build` (Cargo build scripts) and `volt.zig` (`build.zig`): Rust and Zig projects that use Volt; `python`, `java`, `dotnet` and `lua`: Volt programs that call Python, Java, .NET and Lua; `node`: Node.js addons written in Volt |
+| [`interop/`](interop) | `volt-build` (Cargo build scripts) and `volt.zig` (`build.zig`): Rust and Zig projects that use Volt; `npm` and `pip`: install scripts that build a Volt library for an npm or pip package; `python`, `java`, `dotnet` and `lua`: packages for Volt programs that call Python, Java, .NET and Lua; `node`: Node.js addons written in Volt |
 | [`site/`](site) | the website and documentation: Markdown pages, and `site/gen`, the generator (in Volt) that builds them |
 | [`examples/`](examples), [`tests/`](tests) | the tour and example programs; the test suites |
 | [`assets/logo/`](assets/logo) | the logo, drawn by `logo.ts` |
@@ -139,10 +141,10 @@ then through LLVM, and runs the golden suite on both backends. See
 
 ## Status
 
-Volt is young. The LLVM backend (the default on x86-64) has the System V calling convention only
-for now, so Windows and aarch64 build through C; there's no package registry (bolt uses paths and
-git). std's OS code has branches for macOS, FreeBSD and Windows, which the tests compile for each of
-them, but they run on Linux only.
+Volt is young. The LLVM backend is the default on x86-64 and aarch64; Windows builds through C until
+voltc can be tested there. There's no package registry (bolt uses paths and git). std's OS code has
+branches for macOS, FreeBSD and Windows, which the tests compile for each of them, but they run on
+Linux only.
 
 ## License
 
