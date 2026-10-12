@@ -388,6 +388,9 @@ fn cc(c_src: &str, out: &PathBuf, release: bool, libs: &[(String, PathBuf)], ext
         // links --as-needed, which drops a library named before anything uses it)
         let (needed, rest): (Vec<&String>, Vec<&String>) = extra.iter().partition(|a| a.starts_with("-l"));
         cmd.args(rest).args(libs.iter().map(|l| &l.1)).args(needed).args(["-lm", "-lpthread"]); // the runtime has threads (libpthread before glibc 2.34)
+        if cfg!(windows) {
+            cmd.arg("-lws2_32"); // std::net's sockets are Winsock's
+        }
     }
     if release {
         cmd.args(["-O2", "-fwrapv"]);

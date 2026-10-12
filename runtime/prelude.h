@@ -15,6 +15,13 @@ typedef unsigned _BitInt(128) volt_u128;
 #else
 #error "Volt's i128 needs __int128 or _BitInt(128); for this target, use clang 16 or gcc 14 or later"
 #endif
+/* f128, IEEE binary128: where long double is it (aarch64 and riscv64 Linux and FreeBSD, which have no
+   __float128), long double; elsewhere the C compiler's __float128 (x86-64) */
+#if defined(__LDBL_MANT_DIG__) && __LDBL_MANT_DIG__ == 113
+#define volt_f128 long double
+#else
+#define volt_f128 __float128
+#endif
 #define VOLT_S2(x) #x
 #define VOLT_S(x) VOLT_S2(x)
 #define VOLT_SYM(n) __asm__(VOLT_S(__USER_LABEL_PREFIX__) n)
@@ -27,8 +34,10 @@ typedef unsigned _BitInt(128) volt_u128;
 #define VOLT_TAKEN 0xFFFFFFFFu
 int volt_printf(const char *, ...) VOLT_SYM("printf");
 int volt_vprintf(const char *, va_list) VOLT_SYM("vprintf");
+#if !defined(_WIN32)
 int volt_vdprintf(int, const char *, va_list) VOLT_SYM("vdprintf");
 int volt_dprintf(int, const char *, ...) VOLT_SYM("dprintf");
+#endif
 int volt_snprintf(char *, size_t, const char *, ...) VOLT_SYM("snprintf");
 int volt_vsnprintf(char *, size_t, const char *, va_list) VOLT_SYM("vsnprintf");
 double volt_strtod(const char *, char **) VOLT_SYM("strtod");
@@ -40,6 +49,39 @@ int volt_memcmp(const void *, const void *, size_t) VOLT_SYM("memcmp");
 void *volt_memcpy(void *, const void *, size_t) VOLT_SYM("memcpy");
 void *volt_memset(void *, int, size_t) VOLT_SYM("memset");
 size_t volt_strlen(const char *) VOLT_SYM("strlen");
+#if defined(_WIN32)
+/* Windows' C library has no dprintf: the text is formatted into a buffer (with MinGW, by its own
+   vsnprintf, which knows C99's formats; past 1 KiB on the heap) and written with _write */
+#ifdef __MINGW32__
+int volt_win_vsnprintf(char *, size_t, const char *, va_list) VOLT_SYM("__mingw_vsnprintf");
+#else
+#define volt_win_vsnprintf volt_vsnprintf
+#endif
+int volt_win_write(int, const void *, unsigned) VOLT_SYM("_write");
+VOLT_RT_LINKAGE int volt_vdprintf(int fd, const char *fmt, va_list ap) {
+    char small[1024];
+    va_list again;
+    va_copy(again, ap);
+    int n = volt_win_vsnprintf(small, sizeof small, fmt, ap);
+    char *buf = small;
+    if (n >= (int)sizeof small) {
+        buf = volt_malloc((size_t)n + 1);
+        if (buf) volt_win_vsnprintf(buf, (size_t)n + 1, fmt, again);
+    }
+    va_end(again);
+    if (n < 0 || !buf) return -1;
+    int w = volt_win_write(fd, buf, (unsigned)n);
+    if (buf != small) volt_free(buf);
+    return w;
+}
+VOLT_RT_LINKAGE int volt_dprintf(int fd, const char *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    int n = volt_vdprintf(fd, fmt, ap);
+    va_end(ap);
+    return n;
+}
+#endif
 
 typedef struct { const uint8_t *ptr; size_t len; } volt_str;
 

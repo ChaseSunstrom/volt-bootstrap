@@ -3993,9 +3993,9 @@ fn attr_defs() -> std::vec<attr_def> {
     put(&v, { name: "unchecked", args: 0, sig: "@unchecked", doc: "no bounds checks in this fn's body (for code that proves its own indices)" });
     put(&v, { name: "invalidates", args: 0, sig: "@invalidates", doc: "a method that may move or free its receiver's storage: borrows into it end at the call" });
     put(&v, { name: "opt", args: 1, sig: "@opt(level)", doc: "this fn's optimization level" });
-    put(&v, { name: "section", args: 1, sig: "@section(\"name\")", doc: "put this fn or global in a linker section" });
-    put(&v, { name: "align", args: 1, sig: "@align(n)", doc: "this global's or struct's alignment, in bytes" });
-    put(&v, { name: "deprecated", args: 1, sig: "@deprecated(\"why\")", doc: "using it warns with this message" });
+    put(&v, { name: "section", args: 1, sig: "@section(\"name\")", doc: "put this fn in a linker section" });
+    put(&v, { name: "align", args: 1, sig: "@align(n)", doc: "this fn's code alignment, in bytes" });
+    put(&v, { name: "deprecated", args: 1, sig: "@deprecated(\"why\")", doc: "calling this fn warns with this message" });
     put(&v, { name: "owns", args: 1, sig: "@owns(\"field\")", doc: "the struct owns what this pointer field points to (for borrow checking)" });
     put(&v, { name: "cpp_type", args: 1, sig: "@cpp_type(\"ns::Class\")", doc: "this struct is that C++ class (use cpp writes it)" });
     put(&v, { name: "cpp_handle", args: 1, sig: "@cpp_handle(\"ns::Class\")", doc: "this struct holds that C++ class by handle (use cpp writes it); a method it doesn't have is worked out by clang per use" });
@@ -4005,8 +4005,8 @@ fn attr_defs() -> std::vec<attr_def> {
     put(&v, { name: "thread_local", args: 0, sig: "@thread_local", doc: "each thread has its own copy of this global var" });
     put(&v, { name: "cfg", args: 2, sig: "@cfg(\"key\", \"value\") -> bool", doc: "whether a --cfg setting or the target's os, arch or pointer_bits is so (comptime, 1 or 2 arguments); on an item, the item is only in builds where it is" });
     put(&v, { name: "optional", args: 0, sig: "@optional", doc: "a trait fn an attach block may leave out" });
-    put(&v, { name: "closed", args: 0, sig: "@closed", doc: "a trait whose attach blocks hold its fns only: its values are a closed set, and calls on them switches" });
-    put(&v, { name: "attach_as", args: 1, sig: "@attach_as(\"Struct\")", doc: "the struct attach blocks name for this trait (a C++ class's virtuals)" });
+    put(&v, { name: "closed", args: 0, sig: "@closed", doc: "a trait whose attach blocks hold its fns only, taking its parameters' types: a misspelt one is an error" });
+    put(&v, { name: "attach_as", args: 1, sig: "@attach_as(\"trait\")", doc: "this struct stands for that trait: attach S -> T and <T: S> mean the trait (a C++ class's virtuals)" });
     put(&v, { name: "instance", args: 1, sig: "@instance(T, ...)", doc: "an instance of a generic export fn to export, one type per generic parameter (sum_i32 for sum<i32>; voltc bindings)" });
     put(&v, { name: "rust_generic", args: 1, sig: "@rust_generic(\"mod::f\")", doc: "a generic Rust, Zig or Go fn or type, made per instance a program uses (use rust, use zig and use go write it)" });
     put(&v, { name: "derive", args: 1, sig: "@derive(trait, ...)", doc: "attach these traits (std::derive's when not in scope) to the struct or enum" });

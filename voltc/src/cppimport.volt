@@ -371,7 +371,9 @@ attach fn vtype(this: cpp_gen&, t: clang::CXType, tparams: std::vec<str>&) -> st
             pt = clang::clang_getPointeeType(ct);
         }
         val pk = clang::clang_getCanonicalType(pt).kind;
-        if (pk == clang::CXType_Char_S || pk == clang::CXType_SChar) {
+        // a plain char's signedness is the target's (unsigned on aarch64): its text either way, as
+        // a C header's char* is
+        if (pk == clang::CXType_Char_S || pk == clang::CXType_Char_U || pk == clang::CXType_SChar) {
             return S("cstr?");
         }
         if (pk == clang::CXType_Void) {
@@ -1146,15 +1148,24 @@ fn pointee(t: clang::CXType) -> clang::CXType {
 // class template tc's declaration that has the defaults (a redeclaration doesn't repeat them): the
 // fewest parameters Volt passes
 fn defaults_decl(tc: clang::CXCursor) -> clang::CXCursor {
+    // a declaration whose parameters have no names (a forward declaration, template <class, class>
+    // class vector;) can't be read: the definition says the same with its names
     var dc = tc;
-    var n = (template_params(tc) ?? return tc).len;
+    var have = false;
+    var n: usize = 0;
+    val own = template_params(tc);
+    if (own) {
+        have = true;
+        n = own.len;
+    }
     val others: clang::CXCursor[2] = { clang::clang_getCanonicalCursor(tc), clang::clang_getCursorDefinition(tc) };
     for (o) in others {
         if (clang::clang_Cursor_isNull(o) != 0) {
             continue;
         }
         val ot = template_params(o) ?? continue;
-        if (ot.len < n) {
+        if (!have || ot.len < n) {
+            have = true;
             n = ot.len;
             dc = o;
         }

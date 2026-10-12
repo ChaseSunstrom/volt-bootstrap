@@ -33,7 +33,7 @@ pub fn new_package(o: &Opts, init: bool) {
     }
     let mut files = vec![("bolt.toml".to_string(), format!("[package]\nname = \"{name}\"\nversion = \"0.1.0\"\n"))];
     if o.lib {
-        files.push((format!("lib/{name}.volt"), "// a function other packages can call as NAME::add\nfn add(a: i32, b: i32) -> i32 {\n    return a + b;\n}\n".replace("NAME", &name)));
+        files.push((format!("lib/{name}.volt"), "// a function other packages can call as NAME::add\npublic fn add(a: i32, b: i32) -> i32 {\n    return a + b;\n}\n".replace("NAME", &name)));
     } else {
         files.push(("src/main.volt".into(), format!("use std::io;\n\nfn main() -> void {{\n    std::println(\"hello from {name}\");\n}}\n")));
     }

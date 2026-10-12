@@ -1,11 +1,10 @@
-# Builds and tests Volt on every push to main and every pull request.
+# Builds and tests Volt on every push to main and every pull request. A job that fails fails the run:
+# nothing here is allowed to fail quietly.
 #
 # Linux (x86-64 and arm64) runs the whole suite: both compilers, std, bolt, the language server, the
-# docs and site, interop, and bare metal under qemu. arm64 reports without failing the run until the
-# LLVM backend runs on aarch64 hosts (it refuses them today, and voltc's own build uses it). The suite itself is Linux-only for now (it
-# leans on .so files, sh scripts and GNU ld), so macOS and Windows build the compilers, check every
-# test program with the front end, and try running programs; those jobs are experimental: they
-# report without failing the run.
+# docs and site, interop, and bare metal under qemu. The suite itself is Linux-only for now (it leans
+# on .so files, sh scripts and GNU ld), so macOS and Windows build the compilers and build and run a
+# few programs through the C backend.
 name: CI
 
 on:
@@ -33,20 +32,21 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { arch: x86-64, os: ubuntu-24.04, experimental: false }
-          - { arch: arm64, os: ubuntu-24.04-arm, experimental: true }
+          - { arch: x86-64, os: ubuntu-24.04 }
+          - { arch: arm64, os: ubuntu-24.04-arm }
     runs-on: ${{ matrix.os }}
-    continue-on-error: ${{ matrix.experimental }}
     timeout-minutes: 180
     steps:
       - uses: actions/checkout@v5
       # LLVM and libclang for voltc's LLVM backend and C imports; clang, llvm-nm and ld.lld for the
-      # cross-compile and bare-metal tests; qemu runs the bare-metal boards
+      # cross-compile and bare-metal tests; qemu runs the bare-metal boards; g++ 14 for the C++
+      # imports' wrappers (the runner's g++ 13 has no C++23 explicit object parameters)
       - name: Install LLVM, qemu and test tools
         run: |
           wget -q https://apt.llvm.org/llvm.sh
           sudo bash llvm.sh "$LLVM_VERSION" all
-          sudo apt-get install -y qemu-system-arm qemu-system-misc
+          sudo apt-get install -y qemu-system-arm qemu-system-misc g++-14
+          echo "CXX=g++-14" >> "$GITHUB_ENV"
           echo "/usr/lib/llvm-$LLVM_VERSION/bin" >> "$GITHUB_PATH"
           echo "LLVM_CONFIG=/usr/lib/llvm-$LLVM_VERSION/bin/llvm-config" >> "$GITHUB_ENV"
           # voltc's own sources import LLVM's C headers, which apt.llvm.org keeps beside its libraries
@@ -99,8 +99,7 @@ jobs:
       - run: npm test
 
   portability:
-    name: build (${{ matrix.name }}, experimental)
-    continue-on-error: true
+    name: build (${{ matrix.name }})
     strategy:
       fail-fast: false
       matrix:
@@ -118,9 +117,7 @@ jobs:
       - uses: actions/checkout@v5
       - name: Build the compilers
         run: cargo build --release --bins
-      # compiling through C and running: not supported off Linux yet, so this step may fail
       - name: Build and run programs (C backend)
-        continue-on-error: true
         run: |
           for f in tests/run/operators.volt tests/run/struct_update.volt tests/run/match_slices.volt; do
             echo "== $f"
