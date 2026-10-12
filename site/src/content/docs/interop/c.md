@@ -21,6 +21,7 @@ typedef struct { double x, y; } vec2;
 enum axis { AXIS_X, AXIS_Y };
 static inline vec2 vec2_add(vec2 a, vec2 b) { vec2 r = {a.x + b.x, a.y + b.y}; return r; }
 static inline double vec2_dot(const vec2 *a, const vec2 *b) { return a->x * b->x + a->y * b->y; }
+static inline void vec2_each(vec2 v, void (*f)(double)) { f(v.x); f(v.y); }
 ```
 
 ```volt
@@ -212,7 +213,8 @@ and `short` as `int`, `float` as `double`).
 ## Declaring C functions
 
 `extern "C" fn` declares any function with a C ABI, from a C library, or a Rust `extern "C"`, Zig
-`export`, or anything else linked in with `--cc`. C varargs (`...`) are allowed only here.
+`export`, or anything else linked in with `--cc`. C varargs (`...`) are for these declarations and
+for `extern "C" fn` types.
 
 ```volt
 use std::io;

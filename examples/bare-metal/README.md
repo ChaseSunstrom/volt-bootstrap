@@ -16,7 +16,8 @@ emulates:
 | `microbit` | the BBC micro:bit, an nRF51822 (UART0, the top-left LED of the 5x5 matrix) | `thumbv6m-none` (a Cortex-M0) |
 | `cortex-m3` | the LM3S6965 evaluation board (UART0, the user LED on port F) | `thumbv7m-none`, or `thumbv7em-none` (run as a Cortex-M4) with `TARGET=thumbv7em-none` |
 
-Each has its `board.volt` (the hardware: the console hook, the LED, the exit), a linker script, and
+Each has its `board.volt` (the hardware: the console hook, the LED and, on `riscv-virt`, the exit;
+the Cortex-M boards leave the exit to voltc's semihosting default), a linker script, and
 `run.sh`, which builds blinky and runs it under qemu:
 
 ```sh

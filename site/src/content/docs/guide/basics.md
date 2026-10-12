@@ -140,9 +140,11 @@ The arithmetic, comparison, logical and bitwise operators are C's. What's differ
   signedness (`u32` to `u64`, `i8` to `i32`), an unsigned one to a wider signed one (`u32` to
   `i64`), `usize` and `u64` either way (and `isize` and `i64`: the same 64 bits on every target),
   an integer to a float that holds all its values (`i32` or `u32` to `f64`, `u16` to `f32`), and
-  `f32` to `f64`. So `xs.len` passes as a `u64`, and `n * 1.5` with an `i32` `n` is an `f64`.
-- `x as T` converts only when nothing can be lost (widening an integer, integer to float, `T&` to
-  `T*`; any integer to a float, rounding when it must); anything else is a compile error.
+  a float to a wider one (`f32` to `f64`). So `xs.len` passes as a `u64`, and `n * 1.5` with an
+  `i32` `n` is an `f64`.
+- `x as T` converts only when nothing can be lost (widening an integer or a float, a `bool` to an
+  integer, `T&` to `T*`; any integer to a float, rounding when it must, and a plain enum to an
+  integer); anything else is a compile error.
   `@cast<T>(x)` converts anything to anything, unchecked: narrowing (`u64` to `u32`) and changing
   sign take it.
 - `a ?? b` is the value of optional `a`, or `b` when it's null.
@@ -166,7 +168,7 @@ fn main() -> void {
     val small: u8 = 200;
     val wide = small as i32;                  // fine: every u8 fits in an i32
     val back = @cast<u8>(wide + 100);         // unchecked: 300 becomes 44
-    val hash = 4000000000 *% 3;               // wraps on purpose
+    val hash: u32 = 4000000000 *% 3;          // wraps on purpose
     std::println("{} {} {}", wide, back, hash > 0);
 }
 // expect: 200 44 true
@@ -339,7 +341,8 @@ fn main() -> void {
 ## Arrays, slices and ranges
 
 An array's length is part of its type. Slicing an array (`a[1..3]`, or `a[..]` for all of it) gives a
-`T[..]` that points into it without copying. Indexing is bounds-checked in debug builds.
+`T[..]` that points into it without copying. Indexing is bounds-checked, in `--release` builds too
+(as a trap).
 
 ```volt
 use std::io;
