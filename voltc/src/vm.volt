@@ -187,15 +187,18 @@ export fn volt_vm_load(v: volt_vm&, name: str, source: str) -> vm_error!void {
         llvm::LLVMOrcJITDylibAddGenerator(v.jd, gen);
         v.searching = true;
         // and the runtime from this library's own file: a host that loaded it without
-        // RTLD_GLOBAL (Python's ctypes, dlopen's default) keeps its symbols out of the process's
-        var info: dl_info = {};
-        if (dladdr(@cast<void*>(vm_allows), &info) != 0 && info.fname != null) {
-            var lib_gen: llvm::LLVMOrcOpaqueDefinitionGenerator* = null;
-            val le = llvm::LLVMOrcCreateDynamicLibrarySearchGeneratorForPath(&lib_gen, info.fname ?? "", llvm::LLVMOrcLLJITGetGlobalPrefix(j), vm_runtime_only, @cast<void*>(&*v));
-            if (le == null) {
-                llvm::LLVMOrcJITDylibAddGenerator(v.jd, lib_gen);
-            } else {
-                llvm::LLVMConsumeError(le);
+        // RTLD_GLOBAL (Python's ctypes, dlopen's default) keeps its symbols out of the process's.
+        // Windows has no dladdr (nor RTLD_GLOBAL: a DLL's exports are found by its name)
+        comptime if (!@cfg("os", "windows")) {
+            var info: dl_info = {};
+            if (dladdr(@cast<void*>(vm_allows), &info) != 0 && info.fname != null) {
+                var lib_gen: llvm::LLVMOrcOpaqueDefinitionGenerator* = null;
+                val le = llvm::LLVMOrcCreateDynamicLibrarySearchGeneratorForPath(&lib_gen, info.fname ?? "", llvm::LLVMOrcLLJITGetGlobalPrefix(j), vm_runtime_only, @cast<void*>(&*v));
+                if (le == null) {
+                    llvm::LLVMOrcJITDylibAddGenerator(v.jd, lib_gen);
+                } else {
+                    llvm::LLVMConsumeError(le);
+                }
             }
         }
     }
@@ -234,15 +237,14 @@ export fn volt_vm_load(v: volt_vm&, name: str, source: str) -> vm_error!void {
 
 // a script's native code (its imports' C: their headers' functions' pointers, a C unit of another
 // standard; C++ wrappers and modules; the libraries --cc links), built by $CC and $CXX into a shared
-// library under /tmp: its path, or why not in err
+// library in the temporary directory: its path, or why not in err
 fn vm_native(chk: checker&, hdr: std::vec<str>&, n: u64, err: std::string&) -> std::string? {
-    var t = S("/tmp/voltvm-XXXXXX");
-    t.push(0);
-    if (mkdtemp(@cast<u8*>(t.as_str().ptr)) == null) {
-        *err = S("can't make a build directory in /tmp for the script's C");
+    val made = new_temp_dir("voltvm");
+    if (made == null) {
+        *err = S("can't make a build directory in the temporary directory for the script's C");
         return null;
     }
-    val dir = S(t.as_str()[0..t.len() - 1]);
+    val dir = made ?? S("");
     val so = vm_build(chk, hdr, dir.as_str(), n, err);
     if (so == null) {
         vm_clean(dir.as_str());

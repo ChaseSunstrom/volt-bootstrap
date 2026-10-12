@@ -230,11 +230,11 @@ fn find_bolt() -> std::string {
     if (path) {
         val exe = path.as_str();
         var dir_end = exe.len;
-        while (dir_end > 0 && exe[dir_end - 1] != '/') {
+        while (dir_end > 0 && !is_path_sep(exe[dir_end - 1])) {
             dir_end -= 1;
         }
         var p = S(exe[0..dir_end]);
-        p.append("bolt");
+        p.append(exe_name("bolt").as_str());
         if (std::fs::exists(p.as_str())) {
             return p;
         }
@@ -242,7 +242,8 @@ fn find_bolt() -> std::string {
     return S("bolt");
 }
 
-// Volt's cache: $VOLT_CACHE, else $XDG_CACHE_HOME/volt, else ~/.cache/volt
+// Volt's cache: $VOLT_CACHE, else $XDG_CACHE_HOME/volt, else ~/.cache/volt (on Windows, where
+// there's usually no $HOME, %LOCALAPPDATA%/volt)
 fn cache_base() -> std::string {
     val vc = std::process::env("VOLT_CACHE");
     val xdg = std::process::env("XDG_CACHE_HOME");
@@ -253,6 +254,12 @@ fn cache_base() -> std::string {
         return fmt("{}/volt", S(xdg));
     } else if (home) {
         return fmt("{}/.cache/volt", S(home));
+    }
+    comptime if (@cfg("os", "windows")) {
+        val local = std::process::env("LOCALAPPDATA");
+        if (local) {
+            return fmt("{}/volt", forward_slashes(local));
+        }
     }
     return S("/tmp/volt-cache");
 }

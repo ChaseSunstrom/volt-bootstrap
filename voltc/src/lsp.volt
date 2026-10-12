@@ -732,7 +732,7 @@ fn package_root(path: str) -> std::string? {
         if (path[i] == '/') {
             var toml = S(path[0..i]);
             toml.append("/bolt.toml");
-            if (sys::access(toml.c_str(), 0) == 0) {
+            if (std::fs::exists(toml.as_str())) {
                 return S(path[0..i]);
             }
         }
@@ -763,9 +763,9 @@ attach fn next(this: lsp_reader&) -> std::string? {
             }
         }
         var chunk: u8[65536];
-        var n = sys::read(0, @cast<void*>(&chunk[0]), 65536);
+        var n = read_stdin(&chunk[0], 65536);
         while (n < 0 && std::process::interrupted()) {
-            n = sys::read(0, @cast<void*>(&chunk[0]), 65536);
+            n = read_stdin(&chunk[0], 65536);
         }
         if (n <= 0) {
             return null;
@@ -779,8 +779,7 @@ attach fn pending(this: lsp_reader&) -> bool {
     if (this.buf.len() > 0) {
         return true;
     }
-    var p: sys::pollfd = { fd: 0, events: 1, revents: 0 }; // POLLIN
-    return sys::poll(&p, 1, 0) > 0;
+    return stdin_ready();
 }
 
 // the Content-Length in a message's headers
@@ -814,7 +813,7 @@ fn lsp_send(msg: std::json::value&) -> void {
     val s = out.as_str();
     var done: usize = 0;
     while (done < s.len) {
-        val n = sys::write(1, @cast<void*>(s[done..s.len].ptr), s.len - done);
+        val n = write_stdout(@cast<u8*>(s[done..s.len].ptr), s.len - done);
         if (n < 0 && std::process::interrupted()) {
             continue;
         }
@@ -1357,7 +1356,7 @@ fn package_files(path: str) -> std::vec<std::string> {
         if (path[i] == '/' && path[i - 4..i] == "/src") {
             var toml = S(path[0..i - 4]);
             toml.append("/bolt.toml");
-            if (sys::access(toml.c_str(), 0) == 0) {
+            if (std::fs::exists(toml.as_str())) {
                 return volt_files(path[0..i]);
             }
         }

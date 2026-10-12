@@ -126,6 +126,20 @@ pub fn relocated_llvm_config(dir: &std::path::Path) -> Option<std::path::PathBuf
 /// does for bolt: llvm-config says where ($LLVM_CONFIG, else llvm-config-23, else llvm-config on
 /// PATH); without one, the default paths
 pub fn llvm_cc_args() -> Vec<String> {
+    // Windows: LLVM's release has no libLLVM to link whole; voltc takes LLVM's C API from LLVM-C.dll
+    // and libclang.dll, through their import libraries (which MinGW's linker reads)
+    if cfg!(windows) {
+        let tool = std::env::var("LLVM_CONFIG").unwrap_or("llvm-config".into());
+        let ask = |what: &str| {
+            let out = Command::new(&tool).arg(what).output().ok()?;
+            out.status.success().then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
+        };
+        let (Some(inc), Some(lib)) = (ask("--includedir"), ask("--libdir")) else {
+            panic!("{tool} didn't answer --includedir and --libdir: set $LLVM_CONFIG to LLVM's llvm-config.exe");
+        };
+        let flags = [format!("-I{inc}"), format!("-L{lib}"), "-l:LLVM-C.lib".into(), "-l:libclang.lib".into()];
+        return flags.into_iter().flat_map(|f| ["--cc".to_string(), f]).collect();
+    }
     let ask = |tool: &str, what: &str| {
         let out = Command::new(tool).args(["--link-shared", what]).output().ok()?;
         out.status.success().then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
@@ -190,7 +204,7 @@ fn build_stage1() -> Result<std::path::PathBuf, String> {
     let meta = std::fs::metadata(stage0).unwrap();
     (meta.len(), meta.modified().unwrap(), &cc).hash(&mut h);
     let tmp = Path::new(env!("CARGO_TARGET_TMPDIR"));
-    let exe = tmp.join(format!("voltc-stage1-{:016x}", h.finish()));
+    let exe = tmp.join(format!("voltc-stage1-{:016x}{}", h.finish(), std::env::consts::EXE_SUFFIX));
     let lock = std::fs::File::create(tmp.join("voltc-stage1.lock")).unwrap();
     lock.lock().unwrap();
     if exe.exists() {
