@@ -26,7 +26,8 @@ compiler, `voltc`, is written in Volt and builds itself.
   allocation is one you wrote. On the [benchmarks](https://chasesunstrom.github.io/volt-bootstrap/internals/benchmarks/)
   Volt ties clang-compiled C on most programs and takes less time overall.
 - **Mistakes stop loudly.** Debug builds trap overflow, out-of-bounds indexing, null unwraps and
-  double frees; the compiler rejects use after move, missed `match` cases and ignored errors.
+  double frees; the compiler rejects use after move, missed `match` cases and format strings that
+  don't fit their arguments.
   `--release` drops the overflow and double-free checks and keeps the rest, each as one compare and
   a trap.
 - **Ownership without lifetimes.** Values are deleted at scope end, moves are tracked and copies are

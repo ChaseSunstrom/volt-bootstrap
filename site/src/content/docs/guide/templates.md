@@ -170,5 +170,5 @@ fn main() -> void {
 ## Return-type overloads
 
 Overloads that differ only in the return type (see [Functions](/volt-bootstrap/guide/functions/))
-work for templates too. std's `T::new` has one returning a `T` and one returning a box, and the
-context picks.
+work for templates too: `<T: type> attach fn make(static this: T) -> T` and a `make` returning
+`T?` can both exist, and the context picks.

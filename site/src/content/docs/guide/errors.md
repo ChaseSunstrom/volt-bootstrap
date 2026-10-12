@@ -41,7 +41,7 @@ fn main() -> void {
 
 `try x` gives `x`'s value, or returns its error from the current function (which must be able to
 return it). `x catch v` gives `v` instead of an error; `x catch |e| { ... }` runs a block that
-either leaves (`return`, `break`) or gives a value.
+either leaves (`return`, `break`) or, labelled, gives a value (`|e| :h { ... break :h v; }`).
 
 ```volt
 use std::io;
@@ -162,8 +162,8 @@ fn main() -> void {
 ## Looking inside
 
 On a variable, `.err` is the error as an optional (`E?`: null when it holds a value), so `if (r.err)`
-narrows to the error. `.value` is the value; reading it when there's an error stops the program in
-debug builds.
+narrows to the error. `.value` is the value; reading it when there's an error stops the program,
+in release builds too.
 
 ```volt
 use std::io;
@@ -249,7 +249,7 @@ fn main() -> void {
 
 `x.value` and `x.none` read an optional directly; when `x` is a variable or a field, `x.value` is
 its value in place (`&x.value` is a reference to it). A condition is always a `bool`, except that
-an optional is allowed (it means "has a value").
+an optional is allowed (it means "has a value"), and so is a pointer ("isn't null").
 
 Pointers (`T*`) may be null too; `if (p)` and `p ?? x` turn one into a reference. See
 [References and pointers](/volt-bootstrap/guide/references/).

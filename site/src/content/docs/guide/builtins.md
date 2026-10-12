@@ -66,16 +66,16 @@ above, after `@`, with what each does.
 | `@opt(level)` | a fn | its optimization level |
 | `@unchecked` | a fn | no bounds checks in its body, for code that proves its own indices |
 | `@invalidates` | a method | it may move or free its receiver's storage: borrows into it end at the call |
-| `@section("name")` | a fn, a global | put it in a linker section |
+| `@section("name")` | a fn | put it in a linker section |
 | `@align(n)` | a global, a struct | its alignment, in bytes |
-| `@deprecated("why")` | anything | using it warns with this message |
+| `@deprecated("why")` | a fn | using it warns with this message |
 | `@owns("field")` | a struct | it owns what this pointer field points to (for borrow checking) |
 | `@thread_local` | a global `var` | each thread has its own copy |
 | `@cfg("key", "value")` | any item | the item is only in builds where this holds (as the builtin above) |
 | `@derive(trait, ...)` | a struct, an enum | attach these traits (std's derive when they aren't in scope) |
 | `@optional` | a trait fn | an attach block may leave it out |
-| `@closed` | a trait | its attach blocks hold its fns only: its values are a closed set, and calls on them switches |
-| `@attach_as("Struct")` | a trait | the struct attach blocks name for it (a C++ class's virtuals) |
+| `@closed` | a trait | its attach blocks hold its fns only, taking its parameters' types: a misspelt one is an error |
+| `@attach_as("trait")` | a struct | it stands for that trait: `attach S -> T` and `<T: S>` mean the trait (a C++ class's virtuals) |
 | `@export_text("method")` | a struct | it's text to other languages, as the method gives it (`voltc bindings`) |
 | `@instance(T, ...)` | a generic export fn | export this instance, a type per generic parameter (`sum_i32`; `voltc bindings`) |
 | `@rust_generic("mod::f")` | a generic fn or struct `use rust`, `use zig` or `use go` declares | built per instance a program uses (bolt writes it) |

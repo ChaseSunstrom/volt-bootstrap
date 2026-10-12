@@ -20,15 +20,15 @@ tenth of C's time with `qsort`), and the allocator takes small blocks from free 
 **Mistakes stop, loudly.** Debug builds check what C leaves undefined: integer overflow,
 out-of-bounds indexing, null unwraps and double frees stop the program and name the line.
 `--release` drops the overflow and double-free checks and keeps the rest as a bare trap. The
-compiler rejects use after move, a `match` that misses a case, an ignored error and a format string
-that doesn't fit its arguments. See [Safety checks](/volt-bootstrap/guide/safety/).
+compiler rejects use after move, a `match` that misses a case and a format string that doesn't fit
+its arguments. See [Safety checks](/volt-bootstrap/guide/safety/).
 
 **Ownership without a fight.** Every value has one owner and is deleted when that owner's scope
 ends. Moves are tracked and copies are explicit, so resources clean up like C++'s RAII, without
 lifetimes to annotate.
 
 **Errors you can see.** A function that can fail returns `E!T`, and the caller has to `try`,
-`catch` or keep it. Optionals (`T?`) mark what may be missing. Nothing is thrown.
+`catch` or check it to get the value. Optionals (`T?`) mark what may be missing. Nothing is thrown.
 
 **Generic code that costs nothing.** Templates make one copy per set of arguments, with
 specialization, packs and constant parameters. Code can run in the compiler (`comptime`), and types

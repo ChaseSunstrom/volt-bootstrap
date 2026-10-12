@@ -11,6 +11,7 @@ message and exit code 101:
 | Check | Example |
 | --- | --- |
 | integer overflow | `i32` max `+ 1` |
+| shifting too far | `x << n` on an `i32` with `n` 32 or more |
 | out-of-bounds indexing | `xs[10]` on a 3-element array |
 | unwrapping null | `*p` on a null pointer, `.value` on an empty optional |
 | unwrapping an error | `.value` on an error union holding an error |
@@ -32,7 +33,7 @@ fn main() -> void {
 }
 ```
 
-The message names the place: `app.volt:7:22: panic: index 3 out of bounds (len 3)`.
+The message names the place: `app.volt:8:22: panic: index 3 out of bounds (len 3)`.
 
 ## Release builds
 
@@ -51,8 +52,9 @@ The optimizer removes a check it can prove passes, such as `xs[i]` in `for (i) i
 slice or array (that loop then vectorizes as it would in C), so most loops pay nothing. Over the
 [benchmarks](/volt-bootstrap/internals/benchmarks/), the checks release keeps cost under 3%
 (geomean, LLVM backend), paid by code that indexes with values it computes: a bytecode interpreter's
-stack pointer costs it the most, 1.6x its unchecked time. std skips the check in a few internals
-where the index is in range by construction: sifting a heap, and writing a number's digits.
+stack pointer costs it the most, 1.7x its unchecked time. std skips the check in a few internals
+where the index is in range by construction: sifting a heap, filling a `vec` in `resize`, and
+writing a number's digits.
 
 ## Leaks
 
@@ -63,8 +65,7 @@ it exits with code 102.
 
 Some mistakes never compile: using a moved value, moving inside a loop without a new value before
 the next pass, copying a type with a `delete` hook but no `copy` hook, a `match` that misses a case,
-a null `T&`, an unhandled `E!T` (it has to be `try`'d, `catch`'d or kept as a value), and format
-strings that don't match their arguments.
+a null `T&`, and format strings that don't match their arguments.
 
 ## What the compiler warns about
 
