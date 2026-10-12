@@ -74,7 +74,7 @@ cargo test --release --test bench -- --ignored --nocapture
 ```
 
 The harness builds each program eight ways. C is built with clang `-O2` and with gcc `-O2`, C++
-with clang++ `-O2`, Rust with `rustc --edition 2024 -C opt-level=3`, and Zig with
+with clang++ `-O2 -std=c++20`, Rust with `rustc --edition 2024 -C opt-level=3`, and Zig with
 `zig build-exe -O ReleaseFast` (which builds for the host CPU, Zig's default). Zig is found on
 `PATH` or in `~/.local/bin`; without it the Zig column shows "—". Volt is built with `--release`
 through both of voltc's backends: C, compiled by clang and by gcc, and LLVM. Each build runs best of
@@ -154,10 +154,11 @@ Measured 2026-10-09 on:
   Zig's (geometric means; against C: Volt 0.81x, Rust 0.92x, Zig 0.91x). It's ahead on 24 programs
   against Rust and 21 against Zig, mostly from its allocator (`binary_trees`, `lru_cache`), its
   library (`sort`'s radix sort, `json`) and its hash maps against Rust's SipHash (`knucleotide`,
-  `wordfreq`). Zig is ahead on `nbody`, `strings`, `csv`, `print`, `life` and `revcomp` (it also
-  builds for this CPU, see above), and Rust on `dijkstra`, `nbody` and `sudoku`.
+  `wordfreq`). Zig is ahead by more than 10% on `nbody`, `strings`, `csv`, `print`, `wordfreq`,
+  `life`, `revcomp` and `raytrace` (it also builds for this CPU, see above), and Rust on `dijkstra`,
+  `nbody` and `sudoku`; their other leads are smaller.
 
-- **Most rows are a tie.** Volt compiles to the same machine code as C for the same loops: the C
+- **Many rows are a tie.** Volt compiles to the same machine code as C for the same loops: the C
   backend hands clang C that does what the C program does, and the LLVM backend emits the same IR
   clang would.
 - **Release builds check bounds.** Indexing and slicing stay checked in `--release`, as one
@@ -172,7 +173,7 @@ Measured 2026-10-09 on:
   `rs[i] = if (over) x - BASE else x` into both arms of the branch on the carry, so the branch
   stayed and mispredicted where clang made it a conditional move. An if value whose arms are
   plain values is C's `?:` now, and `if (c) 1 else 0` is `c` as a number, so gcc makes the
-  conditional move too: 0.82 s, then 0.64 s (1.43x of gcc's C, 0.45 s) once the program adds its
+  conditional move too: 0.82 s, then 0.63 s (1.43x of gcc's C, 0.44 s) once the program adds its
   limbs in the C's order and `resize`'s fill became a `memset`.
 - **`sort`: a radix sort for integers.** `slice.sort` sorts integers of 256 or more elements by
   their bytes (it's stable, and integers have no order but their bits), in a few passes over the
@@ -211,12 +212,13 @@ Measured 2026-10-09 on:
   Volt's C output gets. `fib`: gcc turns much of the recursion into loops, for Volt's C as for the
   C program. `spectral_norm`: gcc vectorizes the inner loops at `-O2`, doing the divisions two at
   a time while keeping the sum in order (clang only vectorizes a float sum it may reorder); Volt's C
-  gets most of that, since its `a(i, j)` does its math in `i32` as the C does (in `usize`, the
-  unsigned 64-bit to `f64` conversion has no SSE2 vector form). `bigint`'s gcc win isn't Volt's
-  yet: Volt's C through clang matches gcc's C, so what's left is gcc on Volt's loops (the range
-  loops' exit test hides from gcc that the index is in bounds), and the zeros `resize` writes that
-  the C's `realloc` doesn't.
+  doesn't get that yet (0.97x, where gcc's C is 0.66x), though its `a(i, j)` does its math in `i32`
+  as the C does (in `usize`, the unsigned 64-bit to `f64` conversion has no SSE2 vector form).
+  `bigint`'s gcc win isn't Volt's yet: Volt's C through clang matches gcc's C, so what's left is
+  gcc on Volt's loops (the range loops' exit test hides from gcc that the index is in bounds), and
+  the zeros `resize` writes that the C's `realloc` doesn't.
 - **Where Volt still trails**: `vm_interp` and `lz77` pay for their bounds checks
   (above). `lz77` and `wordfreq` also append to a `std::string` with a capacity check per call,
   where the C checks once per word and then writes without checks, and `wordfreq`'s `sort_by` (a
-  stable merge sort) is a little slower than `qsort` on its 24-byte rows.
+  stable merge sort) is a little slower than `qsort` on its 24-byte rows. Through LLVM, `revcomp`
+  (1.21x), `fft` (1.12x) and `life` (1.11x) trail too.

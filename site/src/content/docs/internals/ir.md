@@ -22,15 +22,16 @@ runtime function by name).
 **Operations:** `UNARY`, `BINARY` (integers wrap, division truncates), `CHECKED` (add, subtract or
 multiply that panics on overflow, with its source location), `CONV` and `BITCAST`, `CALL`, `AGG` (a
 struct or other aggregate, fields by number), `ARRAY_LIT`, `COND`, `SEQ` (statements, then a value),
-`SIZEOF`, `ALIGNOF`, `OFFSETOF`.
+`SIZEOF`, `ALIGNOF`, `OFFSETOF`, `VLOAD` (a volatile load).
 
-**Statements:** `DECL`, `ASSIGN`, `IF`, `LOOP`, `LABEL` and `GOTO`, `SWITCH` (no fallthrough),
-`RETURN`, `BLOCK`, `UNREACHABLE`.
+**Statements:** `DECL`, `ASSIGN`, `VSTORE` (a volatile store), `IF`, `LOOP`, `LABEL` and `GOTO`,
+`SWITCH` (no fallthrough), `RETURN`, `BLOCK`, `UNREACHABLE`, `TRAP` (one trap instruction), `AT`
+(the next statement's source line, for `--profiler`).
 
 ## Aggregates
 
-Everything that isn't a scalar is an aggregate with numbered fields, so the backends need one
-lowering for all of them:
+Everything that isn't a scalar, an array or a SIMD vector (both reached by `INDEX`) is an aggregate
+with numbered fields, so the backends need one lowering for all of them:
 
 | Type | Fields |
 | --- | --- |

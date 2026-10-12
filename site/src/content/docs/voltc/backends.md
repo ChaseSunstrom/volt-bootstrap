@@ -18,7 +18,7 @@ per function saying where it was declared. `voltc emit-c app.volt -o out/` write
 | --- | --- |
 | `volt.h` | the prelude, and every type and function declaration |
 | `NAME.c` | one per Volt source file: its functions |
-| `glue.c` | generated helpers (deletes, copies, trait dispatch) |
+| `glue.c` | generated helpers (deleting and copying values, error names), when there are any |
 | `runtime.c` | the small runtime: the allocator wrapper and argv |
 | `program.c` | includes them all, so `cc out/program.c` builds the program |
 

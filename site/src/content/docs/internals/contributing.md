@@ -11,8 +11,9 @@ sidebar:
   compiles ([Bootstrapping](/volt-bootstrap/internals/bootstrap/)).
 - **Both backends.** A change to code generation keeps the C and LLVM backends in agreement: run the
   bootstrap check.
-- **std stays a library.** Nothing in the compiler may know std's names; what std needs from the
-  compiler goes through `@intrinsic` and `@owns`, which any library can use.
+- **std stays a library.** The compiler knows as few of std's names as it can (`@derive`'s fallback
+  to `std::derive`; `std::vec` and `std::string` in bindings and C++ imports); what std needs from
+  the compiler goes through attributes any library can use, such as `@intrinsic` and `@owns`.
 - **Tests first.** A fix starts with a failing golden test (`tests/run`, `tests/fail`) or suite test.
 - **Fuzzing.** `cargo test --test fuzz` checks 1500 broken variants of the test programs (`voltc
   check` must answer with diagnostics, never crash or hang) and runs 37 generated programs through
@@ -34,7 +35,7 @@ CI (`.github/workflows/ci.yml`) runs on every push to main and every pull reques
 
 - **Linux x86-64 and arm64:** the whole `cargo test`, with LLVM 23, lld, qemu and Node's types (for
   the TypeScript checks) installed. A build that warns fails. Failing tests are listed on the run's
-  summary page. arm64 reports without failing the run until the LLVM backend runs on aarch64.
+  summary page. arm64 is experimental: it reports without failing the run.
 - **The editor extension:** its grammar and extension tests.
 - **macOS (arm64, x86-64) and Windows (x86-64, arm64):** build the compilers and try running a few
   programs. These jobs are experimental and report without failing the run, since the test suite

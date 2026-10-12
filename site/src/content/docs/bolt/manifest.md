@@ -67,7 +67,7 @@ members = ["crates/*"]
 | Key | |
 | --- | --- |
 | `name` | required. The package's name and its library's namespace |
-| `version` | required. `MAJOR.MINOR.PATCH` |
+| `version` | `MAJOR.MINOR.PATCH` (default `0.0.0`) |
 | `description`, `authors`, `license`, `repository` | optional metadata |
 | `default-run` | the executable `bolt run` picks when there are several |
 
@@ -106,15 +106,15 @@ See [Other languages](/volt-bootstrap/interop/other-languages/).
 
 Each feature lists what it turns on: other features, `dep:NAME` (an optional dependency) and
 `NAME/FEATURE` (a dependency's feature). `default` is on unless `--no-default-features` is given.
-An optional dependency is also a feature of the same name. Code reads features with
-`@cfg("feature", "NAME")`.
+An optional dependency that no feature names with `dep:` is also a feature of the same name. Code
+reads features with `@cfg("feature", "NAME")`.
 
 ## [profile.NAME]
 
 | Key | |
 | --- | --- |
 | `inherits` | the profile it starts from (required for a new profile) |
-| `optimize` | `--release`: optimized, without debug checks |
+| `optimize` | `--release`: optimized, without the overflow and double-free checks (the rest trap) |
 | `leak-check` | `--leak-check` |
 | `backend` | `"c"` or `"llvm"`; left out, voltc's default: LLVM on x86-64 and aarch64 (but Windows), C elsewhere ([backends](/volt-bootstrap/voltc/backends/)) |
 | `cc-flags` | extra flags for the C compiler |

@@ -24,7 +24,7 @@ compiler, `voltc`, is written in Volt and builds itself.
 
 - **C's speed, nothing behind your back.** No GC, scheduler, exceptions or vtables; every
   allocation is one you wrote. On the [benchmarks](https://chasesunstrom.github.io/volt-bootstrap/internals/benchmarks/)
-  Volt ties clang-compiled C on most programs and takes less time overall.
+  Volt matches or beats clang-compiled C on most programs.
 - **Mistakes stop loudly.** Debug builds trap overflow, out-of-bounds indexing, null unwraps and
   double frees; the compiler rejects use after move, missed `match` cases and format strings that
   don't fit their arguments.

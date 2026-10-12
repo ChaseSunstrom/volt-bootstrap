@@ -12,10 +12,10 @@ what it looks like it does, the compiler catches what it can, and debug builds c
 
 **C's speed, with nothing running behind you.** There's no garbage collector, scheduler, exception
 unwinder or vtable. Every method and trait call is resolved when compiling, and every allocation is
-one you wrote. On the [benchmarks](/volt-bootstrap/internals/benchmarks/) Volt ties clang-compiled
-C on most programs, and beats it where std does more than libc: `sort` sorts integers by radix (a
-tenth of C's time with `qsort`), and the allocator takes small blocks from free lists
-(`binary_trees`).
+one you wrote. On the [benchmarks](/volt-bootstrap/internals/benchmarks/) Volt matches or beats
+clang-compiled C on most programs, and wins by most where std does more than libc: `sort` sorts
+integers by radix (a tenth of C's time with `qsort`), and the allocator takes small blocks from
+free lists (`binary_trees`).
 
 **Mistakes stop, loudly.** Debug builds check what C leaves undefined: integer overflow,
 out-of-bounds indexing, null unwraps and double frees stop the program and name the line.

@@ -7,9 +7,9 @@ sidebar:
 
 ## cgen: C
 
-`cgen.volt` writes the IR as C11. Types come first (every struct, union, tagged enum and slice
+`cgen.volt` writes the IR as GNU C11. Types come first (every struct, union, tagged enum and slice
 type, in dependency order), then declarations, then the functions. Names are readable: a Volt
-function `geo::area` becomes `v_geo_area`, locals keep their names (renamed only when they'd clash
+function `geo::area` becomes `v_geo__area`, locals keep their names (renamed only when they'd clash
 with a C keyword, a macro from the C library, or another name), and each function starts with a
 comment naming its Volt declaration.
 
