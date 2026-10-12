@@ -37,9 +37,9 @@ fn golden() {
         let want_codes: Vec<i32> = directives(&src, "exit").first().map(|s| s.split('|').map(|c| c.trim().parse().unwrap()).collect()).unwrap_or(vec![0]);
         let flags: Vec<String> = directives(&src, "flags").iter().flat_map(|l| l.split_whitespace().map(String::from).collect::<Vec<_>>()).collect();
         // a program that hangs (a release build reading out of bounds can) fails instead of stopping the run
-        let out = Command::new("timeout").arg("120").arg(&bin).arg("run").arg(&f).args(&flags).output().unwrap();
+        let out = common::run_for(Command::new(&bin).arg("run").arg(&f).args(&flags), 120);
         let got = String::from_utf8_lossy(&out.stdout);
-        let code = out.status.code().unwrap_or(-1);
+        let code = if out.timed_out { 124 } else { out.code.unwrap_or(-1) };
         let err = String::from_utf8_lossy(&out.stderr);
         let err_missing = directives(&src, "expect-stderr").iter().any(|w| !err.contains(w.as_str()));
         if got.trim_end() != want.trim_end() || !want_codes.contains(&code) || err_missing {

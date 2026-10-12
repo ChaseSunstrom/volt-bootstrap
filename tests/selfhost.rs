@@ -123,9 +123,8 @@ fn release_voltc_works() {
             continue;
         }
         let flags: Vec<&str> = text.lines().find_map(|l| l.strip_prefix("// flags:")).map(|f| f.split_whitespace().collect()).unwrap_or_default();
-        // a miscompile can loop forever (std_math did): `timeout` ends the run and the program it started
-        let mut cmd = Command::new("timeout");
-        cmd.arg("300").arg(&second);
+        // a miscompile can loop forever (std_math did): run_for ends the run and the program it started
+        let mut cmd = Command::new(&second);
         if clang && *backend == "c" {
             cmd.env("CC", "clang");
         }
@@ -133,7 +132,7 @@ fn release_voltc_works() {
         if *release {
             cmd.arg("--release");
         }
-        let o = cmd.current_dir(root).output().unwrap();
+        let o = common::run_for(cmd.current_dir(root), 300);
         let out = String::from_utf8_lossy(&o.stdout);
         if out.lines().map(|l| l.trim_end()).collect::<Vec<_>>() != want {
             let how = if *release { " --release" } else { "" };
@@ -246,7 +245,10 @@ fn toolchain_layout_and_link_errors() {
     let tmp = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("layout-{}", std::process::id()));
     let bin_dir = tmp.join("voltc/target/release");
     std::fs::create_dir_all(&bin_dir).unwrap();
+    #[cfg(unix)]
     std::os::unix::fs::symlink(root.join("std"), tmp.join("std")).unwrap();
+    #[cfg(windows)]
+    std::os::windows::fs::symlink_dir(root.join("std"), tmp.join("std")).unwrap();
     let tiny = tmp.join("tiny.volt");
     std::fs::write(&tiny, "fn main() -> void {}\n").unwrap();
     let stage1 = common::voltc();
