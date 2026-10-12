@@ -44,13 +44,15 @@ bolt run
 
 ```
 hello/
+├── .gitignore         /target (bolt new starts a git repository, unless it's inside one)
 ├── bolt.toml          the manifest: name, version, dependencies, features
 └── src/
     └── main.volt      the program (every .volt file under src/ is part of it)
 ```
 
-`bolt build --release` builds optimized, `bolt test` runs each program in `tests/`, and `bolt add`
-adds dependencies. The [bolt section](/volt-bootstrap/bolt/overview/) covers all of it.
+`bolt build --release` builds optimized, `bolt test` runs the package's `test` blocks and each
+program in `tests/`, and `bolt add` adds dependencies. The
+[bolt section](/volt-bootstrap/bolt/overview/) covers all of it.
 
 ## What main returns
 

@@ -6,9 +6,9 @@ sidebar:
 ---
 
 An `async fn` can pause itself with `suspend` and be continued later. Its state lives in a
-**frame**: a plain value whose size is known at compile time, stored wherever you put it (a local,
-a field). There is no heap allocation, no scheduler and no runtime: you drive frames yourself, and
-an event loop can be a library on top.
+**frame**: a plain value whose size is known at compile time, built in place in the local that
+`val f = async g(args)` declares. There is no heap allocation, no scheduler and no runtime: you
+drive frames yourself, and an event loop can be a library on top.
 
 | | |
 | --- | --- |
@@ -95,4 +95,4 @@ fn main() -> void {
 // expect: end
 ```
 
-`main` can't be async, and a frame can't be copied (it may point into itself).
+`main` can't be async, and a frame can't be copied or moved (it may point into itself).

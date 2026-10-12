@@ -6,8 +6,9 @@ sidebar:
 ---
 
 `std` is an ordinary package: a directory of `.volt` files that voltc compiles along with your
-program (`--std DIR`, `$VOLT_STD`, or the `std/` next to voltc). Nothing in the compiler knows its
-names, so you can replace it with your own.
+program (`--std DIR`, `$VOLT_STD`, or the `std/` next to voltc). The compiler knows only a few of
+its names (`@derive` falls back to `std::derive`'s traits; bindings and C++ imports use `std::vec`
+and `std::string`), so a std of your own can replace it as long as it keeps those.
 
 Each file is wrapped in `namespace std`, and most declare a namespace of their own inside it. The
 parts that need an OS (files, processes, time, random bytes, networking and threads) have code for

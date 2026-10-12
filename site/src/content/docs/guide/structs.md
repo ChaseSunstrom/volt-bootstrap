@@ -7,8 +7,9 @@ sidebar:
 
 ## Structs
 
-A struct has named fields. A field can have a default, which a literal may leave out; pointer
-fields default to `null`. A struct literal is `{ field: value, ... }`, typed by where it goes.
+A struct has named fields. A field can have a default, which a literal may leave out; pointer and
+optional fields default to `null`. A struct literal is `{ field: value, ... }`, typed by where it
+goes.
 
 ```volt
 use std::io;

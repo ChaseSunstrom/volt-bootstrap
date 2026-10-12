@@ -89,4 +89,4 @@ deliberate grammar change, `npx vscode-tmgrammar-snap -u 'tests/snap/*.volt'` up
 `.vscode-test/` the first time; under `xvfb-run` without a display). voltc is only in a checkout
 inside the test's workspace, not on `PATH` (the editor gets a `HOME` of its own, so no shell profile
 adds one), and the test waits for an error in a broken file, completion after `std::`, a hover,
-semantic tokens, an inlay hint and the code lenses.
+semantic tokens, an inlay hint, the code lenses and **Volt: Expand Comptime** on a generic call.

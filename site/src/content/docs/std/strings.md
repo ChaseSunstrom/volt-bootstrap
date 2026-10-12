@@ -66,8 +66,7 @@ fn main() -> void {
 // expect: a/b/c ababab VOLT
 ```
 
-A `std::string` is a writer, so anything that writes text (`std::write`, a type's own `write`
-hook) can write into one.
+A `std::string` is a writer (it attaches `write_str`), so `std::write` can write text into one.
 
 ## Numbers and booleans from text
 

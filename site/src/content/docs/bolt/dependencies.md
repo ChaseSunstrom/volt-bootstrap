@@ -14,13 +14,15 @@ json = { git = "https://github.com/someone/json.git", tag = "v1.2" }
 ```
 
 A dependency's library is reached by its name: `geo::distance(a, b)`. Dependencies are libraries
-only; their programs, tests and build files never run for you.
+only; their programs and tests never run for you, and their build files only add C compiler
+arguments (see [Build files](/volt-bootstrap/bolt/build-files/)).
 
 bolt has no registry. Dependencies come from paths and git repositories:
 
 - **path**: a directory with a bolt.toml.
 - **git**: a repository, at a `rev`, a `branch` or a `tag` (default: its default branch). Git
-  dependencies are cloned into `~/.cache/bolt` (`$BOLT_HOME`) and shared between projects.
+  dependencies are cloned into `$BOLT_HOME` (default `$XDG_CACHE_HOME/bolt`, else `~/.cache/bolt`)
+  and shared between projects.
 
 `version = "..."` adds a check: the dependency's `[package] version` must meet the requirement.
 `0.2` means `^0.2` (anything compatible), and `~`, `=`, `>`, `>=`, `<`, `<=`, `*` and lists like

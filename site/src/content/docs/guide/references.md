@@ -196,8 +196,8 @@ fn main() -> void {
 
 ## What references can't do
 
-A reference can't be null, so it can't be optional either, and it can't be a struct field's default.
-Store a `T*` when "none" has to be possible:
+A reference can't be null, so it can't be optional either, and a reference field doesn't default to
+`null` as a pointer field does. Store a `T*` when "none" has to be possible:
 
 ```volt fail
 fn main() -> void {

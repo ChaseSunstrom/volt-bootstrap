@@ -27,7 +27,8 @@ fn main() -> void {
 }
 ```
 
-Only the selected packages' build files run, never a dependency's.
+Steps, extra executables and `bolt::source` files come only from the selected packages' build files;
+a dependency's build file runs too, but only for its C arguments (see below).
 
 ## The API
 

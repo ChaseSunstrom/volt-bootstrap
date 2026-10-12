@@ -35,19 +35,23 @@ source ─▶ lexer ─▶ parser ─▶ checker ─▶ typed IR ─┬─▶ cg
 | --- | --- |
 | `lexer.volt`, `parser.volt`, `parser_expr.volt`, `ast.volt` | source to syntax tree |
 | `sexp.volt` | the canonical tree text (`parse --sexp`) |
-| `check.volt`, `program.volt` | the checker's state, collecting, and the whole-program walk |
+| `check.volt`, `program.volt`, `util.volt` | the checker's state, collecting, the whole-program walk, and its helpers |
 | `types.volt`, `resolve.volt` | interned types; types, instances and constants from syntax |
 | `expr.volt`, `stmt.volt`, `places.volt`, `operators.volt`, `calls.volt` | checking and lowering code |
 | `generics.volt` | templates: inference and overload resolution |
 | `ownership.volt` | what needs deleting, drop and copy glue, moves |
+| `lends.volt`, `borrows.volt` | what can't change through references; the borrow warnings |
 | `errors.volt`, `enums.volt`, `matching.volt` | error unions and optionals, enums, match |
 | `closures.volt`, `asyncs.volt`, `comptime.volt` | closures, async frames, the comptime interpreter |
 | `print.volt` | checked format strings |
-| `cimport.volt`, `cppimport.volt`, `clang.volt` | C and C++ headers (libclang for layouts and C++) |
+| `cimport.volt`, `cuse.volt`, `cppimport.volt`, `clang.volt` | C and C++ headers (libclang for layouts, C++, and C macros and varargs calls per use) |
+| `langimport.volt`, `rustgen.volt` | `use` of code in other languages (bolt imports it), and instances of its generics |
 | `ir.volt` | the typed IR |
 | `cgen.volt`, `lgen.volt` | the C and LLVM backends |
+| `target.volt` | bare metal (`--target`): the targets and voltc's start code |
 | `diag.volt`, `suggest.volt` | diagnostics and "did you mean" |
-| `bindings.volt`, `doc.volt`, `lsp.volt` | bindings for other languages, `voltc doc`, the language server |
+| `bindings.volt`, `doc.volt`, `lsp.volt`, `lsp_inline.volt` | bindings for other languages, `voltc doc`, the language server |
+| `vm.volt` | Volt embedded in another program (`voltc/embed`), run by LLVM's JIT |
 | `main.volt` | the command line |
 | `runtime_c.volt` | the C runtime's text, generated from `runtime/` |
 
@@ -55,7 +59,7 @@ source ─▶ lexer ─▶ parser ─▶ checker ─▶ typed IR ─┬─▶ cg
 
 | Path | |
 | --- | --- |
-| `runtime/` | the C prelude and runtime every program includes |
+| `runtime/` | the C prelude and runtime every hosted program includes |
 | `std/` | the standard library package |
 | `bolt/` | the build tool (Rust) and its build-file API package (`bolt/api`) |
 | `editors/vscode/` | the VS Code extension |

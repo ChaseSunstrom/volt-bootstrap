@@ -27,8 +27,9 @@ Collections and algorithms don't use `==` and `<` directly. They call methods:
   `binary_search`, `min`, `max`, `heap`, `sorted_map`);
 - `hash(this: T&) -> u64` to place keys in `map` and `set`.
 
-std gives every type with `==` and `<` its `eq` and `cmp` (numbers, `bool`, `str`, pointers), and
-`std::string` has all three. A type of your own attaches the ones it needs, and they're used instead:
+std gives every type with `==` its `eq` and every type with `<` its `cmp` (numbers, `str` and
+pointers have both; `bool` has no `<`, so only `eq`), and `std::string` has all three. A type of
+your own attaches the ones it needs, and they're used instead:
 
 ```volt
 use std::io;

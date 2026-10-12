@@ -40,9 +40,10 @@ language it is.
 | C++ | [volt-calls/cpp](volt-calls/cpp) | `use { "counter.hpp" } as cpp;`: classes, templates, destructors |
 | Rust | [volt-calls/rust](volt-calls/rust) | `use { "stats.rs" } as stats;` (or a crate's directory) |
 | Zig | [volt-calls/zig](volt-calls/zig) | `use { "stats.zig" } as stats;` |
+| Swift | [volt-calls/swift](volt-calls/swift) | `use { "shapes.swift" } as shapes;`: a struct by value, a class as a handle |
 | C and C++ | [volt-calls/attach-foreign](volt-calls/attach-foreign) | Volt fns attached to a C struct and C++ classes from the imports, and comptime code reading the C struct's fields |
 
-Go, Python, JavaScript, Java and .NET are next, imported the same way: `use { "gomath/" }`, `use {
-"stats.py" }`, `use { "stats.js" }`, `use { "Stats.java" }`, `use { "Stats.dll" }`. Until then, the
-[interop docs](https://chasesunstrom.github.io/volt-bootstrap/interop/other-languages/) show the
-packages that reach them.
+Go, Kotlin/Native, Python, JavaScript, Java and .NET are imported the same way, with no example
+here yet: `use { "gomath/" }`, `use { "shapes.kt" }`, `use { "stats.py" }`, `use { "stats.js" }`,
+`use { "Stats.java" }`, `use { "Stats.dll" }`. The
+[interop docs](https://chasesunstrom.github.io/volt-bootstrap/interop/other-languages/) show each.

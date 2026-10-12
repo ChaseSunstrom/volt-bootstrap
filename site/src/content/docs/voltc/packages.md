@@ -21,8 +21,9 @@ digits, `_`), and each package is given once.
 ## std
 
 std is a package too, given as `--std DIR` (or found through `$VOLT_STD`, or as a `std/` next to
-voltc). Nothing in the compiler knows its names; a different std only has to provide what the
-programs using it call. `--no-std` builds without one.
+voltc). The compiler knows only a few of its names (`@derive` falls back to `std::derive`'s traits;
+bindings and C++ imports use `std::vec` and `std::string`); past those, a different std only has to
+provide what the programs using it call. `--no-std` builds without one.
 
 Two attributes connect a library to the compiler, and any package can use them:
 

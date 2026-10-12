@@ -54,18 +54,20 @@ The program samples itself (about a thousand times a second of CPU time), so thi
 
 | Command | |
 | --- | --- |
-| `bolt new PATH [--lib]` | a new package in a new directory (a git repository too, unless `--vcs none`) |
+| `bolt new PATH [--lib]` | a new package in a new directory (a git repository too, unless `--vcs none` or it's inside one) |
 | `bolt init [PATH] [--lib]` | a package in an existing directory |
-| `bolt add NAME --path DIR` | add a dependency; or `--git URL [--rev R \| --branch B \| --tag T]`; `NAME@REQ` adds a version requirement |
-| `bolt remove NAME...` | remove dependencies |
+| `bolt add [NAME] --path DIR` | add a dependency; or `--git URL [--rev R \| --branch B \| --tag T]`; `NAME@REQ` adds a version requirement |
+| `bolt remove NAME...` | remove dependencies (`--dev`: from `[dev-dependencies]`) |
 | `bolt update [NAME...]` | move git dependencies to their newest commits |
 | `bolt fetch` | download every git dependency, for `--offline` builds later |
 | `bolt tree` | print the dependency tree |
 | `bolt metadata` | the workspace as JSON: packages, targets, dependencies, features |
-| `bolt install --path DIR` | build with the release profile and copy the executables to `~/.local/bin` (or `--git URL`; `--root DIR`, `$BOLT_INSTALL_ROOT`) |
+| `bolt install [--path DIR]` | build with the release profile and copy the executables to `~/.local/bin` (or `--git URL`; `--root DIR`, `$BOLT_INSTALL_ROOT`; `--bin NAME` picks some, `--force` replaces ones already there) |
 | `bolt uninstall NAME...` | remove what `install` put there |
 
-`bolt add` also takes `--dev`, `--optional`, `--features A,B` and `--no-default-features`.
+`bolt add` also takes `--dev`, `--optional`, `--features A,B` and `--no-default-features`. `bolt new`
+and `bolt init` name the package after its directory (lowercased, `-` as `_`) unless `--name NAME`
+says otherwise.
 
 ## Options
 
@@ -85,11 +87,12 @@ The program samples itself (about a thousand times a second of CPU time), so thi
 | `--backend c\|llvm` | override the profile's backend |
 | `--message-format F`, `--color WHEN`, `--error-limit N` | passed to voltc |
 | `-q, --quiet`, `-v, --verbose` | fewer or more lines (verbose prints each command). On a terminal, a live `Building` line under the others shows what's compiling and for how long |
+| `-V, --version`, `-h, --help` | print bolt's version, or its usage |
 
 ## Environment
 
 | Variable | |
 | --- | --- |
 | `VOLTC` | the compiler bolt runs |
-| `BOLT_HOME` | where git dependencies are cloned (default `~/.cache/bolt`) |
+| `BOLT_HOME` | where git dependencies are cloned (default `$XDG_CACHE_HOME/bolt`, else `~/.cache/bolt`) |
 | `BOLT_INSTALL_ROOT` | where `install` puts executables (`ROOT/bin`) |
