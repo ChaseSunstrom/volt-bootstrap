@@ -5,10 +5,11 @@ sidebar:
   order: 5
 ---
 
-`std::thread` works the same way on Linux, macOS and Windows. It contains no OS code itself. The
-runtime starts and joins the system's threads, and it sleeps and wakes on a memory word, which is
-a futex on Linux, ulock on macOS and `WaitOnAddress` on Windows. The locks are built on that word,
-so a `mutex` allocates nothing.
+`std::thread` works the same way on Linux, macOS, FreeBSD and Windows. It contains no OS code
+itself. The runtime starts and joins the system's threads, and it sleeps and wakes on a memory
+word, which is a futex on Linux, ulock on macOS and `WaitOnAddress` on Windows (on FreeBSD a
+waiting thread yields instead of sleeping). The locks are built on that word, so a `mutex`
+allocates nothing.
 
 ## Spawning and joining
 

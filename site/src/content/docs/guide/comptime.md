@@ -195,8 +195,9 @@ fn main() -> void {
 // expect: 202
 ```
 
-- The functions live in the comptime function's namespace. Their bodies are checked when they're
-  first used, like a generic instance's.
+- The functions live in the comptime function's namespace. Those a top-level `comptime f(args);`
+  declares are checked like any other fn; the rest when they're first used, like a generic
+  instance's.
 - A declaration made again with the same values is the one already made, so `soa(particle)` written
   twice has one `push`.
 - A `var` the body sees is its value at the time of the declaration.
@@ -512,7 +513,7 @@ fn main() -> void {
 
 ```
 warning: expands to 16 (usize)
-   ┌─ main.volt:9:13
+  ┌─ main.volt:9:13
 warning: expands to a call of twice<i32>(v: i32) -> i32
    ┌─ main.volt:10:13
 ```
@@ -656,10 +657,10 @@ fn main() -> void {
 // expect: fast
 ```
 
-The keys describe the host. Passing one with `--cfg`, such as `--cfg os=windows`, replaces the host's
-value for every package. `voltc check --cfg os=windows` then checks another platform's branches on
-this machine. Only checking makes sense this way: a build still runs on the host, and
-`std::process::os()` still reports the host.
+Without `--target`, the keys describe the host. Passing one with `--cfg`, such as
+`--cfg os=windows`, replaces the host's value for every package. `voltc check --cfg os=windows`
+then checks another platform's branches on this machine. Only checking makes sense this way: a
+build still runs on the host, and `std::process::os()` still reports the host.
 
 ```volt
 use std::io;
