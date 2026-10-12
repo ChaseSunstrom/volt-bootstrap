@@ -23,7 +23,7 @@ compiles for).
 | --- | --- |
 | `volt_vm_new(std_dir)` | a VM whose scripts see the std package in `std_dir` (`""`: no std at all) |
 | `volt_vm_load(vm, name, source)` | compiles `source` and adds it; errors name the file `name` |
-| `volt_vm_find(vm, name)` | the address of an `export fn` (0 when there's none) |
+| `volt_vm_find(vm, name)` | the address of an `export fn`, or of a host function (0 when there's none) |
 | `volt_vm_define(vm, name, address)` | a host function the scripts can call |
 | `volt_vm_allow(vm, symbol)` | makes the VM a sandbox that reaches `symbol` (and only what it's given); before its first load |
 | `volt_vm_release(vm, on)` | optimize scripts, with overflow wrapping as in `--release` |

@@ -43,7 +43,10 @@ bolt package.
 
 The import names a directory with a `Cargo.toml`, or a single `.rs` file: `use { "stats.rs" } as
 stats;` makes that file a crate of its own (the files its `mod x;` lines name sit next to it), for
-code that has no Cargo project around it.
+code that has no Cargo project around it. `use rust { "geom" } as geom;` says the language outright
+(`use zig` and `use go` too). bolt reads `$CARGO` for cargo, else `cargo` on the PATH. Each Volt
+fn has the declaration it calls in a comment above it (`// Rust: pub fn mean(xs: &[f64]) -> f64`),
+which an editor's hover shows; Zig's and Go's do too.
 
 | Rust | Volt |
 | --- | --- |
@@ -55,7 +58,7 @@ code that has no Cargo project around it.
 | `Option<T>` | `T?` |
 | `Result<T, E>` with `E` one of the crate's enums (directly or through an alias like `type Result<T> = ...`) | `E!T`: a Volt error set of `E`'s variants, each with its fields (numbers, `char` as `u32`, text as `std::string`; a variant holding anything else carries the error's text), matched like an enum; named `E_error` when `E` is a value elsewhere too |
 | any other `Result<T, E>` | `rust_error!T`; the `Err`'s text (`Display`, else `Debug`) is in `rust_error::ERROR` |
-| a struct whose fields are all `pub` numbers, `bool`s, `char`s, fieldless enums or such structs | a Volt struct with those fields, passed by value |
+| a struct whose fields are all `pub` numbers, `bool`s, `char`s, fieldless enums or such structs (and not `#[non_exhaustive]`) | a Volt struct with those fields, passed by value |
 | any other struct, or an enum with data | an owned handle: deleting it drops the Rust value, `copy` clones it (when it's `Clone`); a method taking `self` (or `self: Box<Self>`, `Rc<Self>`, `Arc<Self>`) empties it, one taking `&Rc<Self>`, `&Arc<Self>`, `Pin<&mut Self>` or `Pin<&Self>` borrows it |
 | a `&mut T`, or a `&T` of a type that isn't `Clone` (an `Option` of one too), as a result | a lent handle: a reference into Rust's value, which deleting doesn't free; giving it away (a by-value call) stops the program. A `Clone` type's `&T` is a clone |
 | `&[T]`, `Vec<T>` of the crate's types, as a result | `std::vec<T>`: of lent handles from a slice, of owned ones from a `Vec`; plain structs and enums copied |
@@ -107,7 +110,8 @@ fn main() -> void {
 
 A trait with an associated type or const, generic parameters, or a supertrait beyond `Send`, `Sync`
 and `Sized` is left out, listed in a comment of the generated declarations (`VOLT_SHOW_IMPORT=1
-voltc check main.volt` prints them).
+voltc check main.volt` prints them). So is a function with a type the table doesn't have (a tuple,
+an array, `u128`), and a type generic over a const (`Buf<const N: usize>`).
 
 A panic through a function stops the program with Rust's message, as it would in Rust. Every
 function and method also has a `try_` form (`geom::try_at(xs, 9)`, and a closure's `try_call`)
@@ -145,9 +149,10 @@ fn main() -> !void {
 | a `pub fn` in a struct whose first parameter is the struct (`T`, `*T`, `*const T`) | a method; otherwise `T::f(...)` |
 | `pub const x = struct { ... }` without fields, `pub const x = @import("x.zig")` | `namespace x` |
 | integers, `f32`, `f64`, `bool`, `c_int` and the like | the same |
-| `[]const u8` | `str` in, `std::string` out |
+| `[]const u8` (`[]u8` too, as a result) | `str` in, `std::string` out |
 | `[]const T`, `[]T`, `[]const []const u8` | `T[..]`, `str[..]` in; `std::vec<T>` out |
 | `?T` | `T?` |
+| `*T`, `*const T` of a struct | `T&` |
 | `E!T`, `!T` | `zig_error!T`; the error's name is in `zig_error::ERROR` |
 | `std.mem.Allocator` parameter | none: the shim passes Volt's allocator (the program's `std::mem::default_allocator`, as a `std.mem.Allocator`), so what Zig allocates is Volt's memory (not the C library's `malloc`), and `--leak-check` counts it |
 | `comptime T: type`, `x: anytype` (and `@TypeOf(x)`), `comptime n: usize` | a generic fn: `<T: type>`, `<T_x: type>`, `<n: usize>` |
@@ -161,7 +166,9 @@ Generic functions and types get an instance per one a program uses: a call to
 `fm::largest(xs[..])`, `fm::times<3>(7)` or a use of `fm::Stack<u8>` has bolt add that instance and
 zig build it, as with Rust's generics above. One zig rejects is an error at the call,
 with zig's reason (`fm::biggerOf("a", "b")`: operator > not allowed for type '[]const u8'). bolt
-reads `$ZIG` for the compiler, else `zig` on the PATH.
+reads `$ZIG` for the compiler, else `zig` on the PATH. A `packed struct`, a union, an opaque type,
+a declaration without a body (an `extern fn`), and a function with a type the table doesn't have
+are left out, listed in a comment of the generated declarations.
 
 ## Volt calls Go
 
@@ -201,6 +208,7 @@ fn main() -> !void {
 | several results; with an `error` last | a tuple, its elements named as Go names them (`(lo: isize, hi: isize)`); `go_error!(A, B)` |
 | a struct whose fields are all exported numbers, `bool`s, enums or such structs | a Volt struct with those fields, passed by value |
 | any other struct | an owned handle (a cgo `Handle`): Go's collector keeps the value until Volt deletes it. `T::new()` is Go's zero value, `copy` copies it as Go's assignment does, an exported field `F` is `F()` and `set_F(v)`. A `*T` result is a handle to that same value, a `T` one to a copy |
+| `*T` of one of the package's structs, as a parameter | `T&` (Go's change to a plain struct comes back) |
 | `*int` and other pointers to numbers | `isize&` in (Go's change comes back); out, a `ptr<isize>` handle with `get()` and `put(v)` |
 | `type T int` with constants of type `T` | a Volt enum with the same values |
 | any other named number or `bool` (`time.Duration` too) | a Volt struct `{ value: T }`; a named `string` is a handle with `value()` and `T::new(s)` |
@@ -283,9 +291,10 @@ gomath = { go = "../gomath" }      # a Go module's directory
 bolt builds each one into a static library in `target/<profile>/foreign/`: a crate with
 `cargo rustc --crate-type staticlib` (so any library crate works, with `--release` in an optimized
 profile), a Zig file with `zig build-lib` (`ReleaseSafe` or `Debug`), a Go module with
-`go build -buildmode=c-archive`. It also writes `NAME.h`, the library's C API: read from the source
-for Rust and Zig, and the header cgo writes for Go ([below](#go)). It links them, and the system libraries rustc says a Rust
-library needs, into the package's programs. The code imports the header like any C header:
+`go build -buildmode=c-archive`. It also writes `NAME.h` (in `foreign/include/`), the library's C
+API: read from the source for Rust and Zig, and the header cgo writes for Go ([below](#go)). It links them, and the system libraries rustc says a Rust
+library needs, into the package's programs. The code imports the header like any C header, by its
+name (`foreign/include/` is on the include path):
 
 ```rust
 // ../geom/src/lib.rs
@@ -406,7 +415,8 @@ fn main() {
 ```
 
 `build` runs `voltc lib NAME --static` and `voltc bindings NAME --lang rust` into `OUT_DIR` and
-tells Cargo what to link. A Zig project does the same with `interop/zig/volt.zig`:
+tells Cargo what to link; a failure stops the build script with voltc's message (`try_build()`
+returns it as an `Err` instead). A Zig project does the same with `interop/zig/volt.zig`:
 
 ```zig
 // build.zig
@@ -420,7 +430,8 @@ volt.addPackage(b, exe, "mathlib", "volt/mathlib");
 const mathlib = @import("mathlib");
 ```
 
-Both take voltc from `$VOLTC`, else the PATH, and std from `$VOLT_STD`, else voltc's own. Python
+Both take voltc from `$VOLTC`, else the PATH, and std from `$VOLT_STD`, else voltc's own
+(`volt_build::Package::new(...).std(dir)` names it in Rust). Python
 and Node projects get the same from pip and npm: see
 [pip install and npm install](/volt-bootstrap/interop/other-languages/#pip-install-and-npm-install). The
 bindings' types are in [They call Volt](/volt-bootstrap/interop/other-languages/#they-call-volt):

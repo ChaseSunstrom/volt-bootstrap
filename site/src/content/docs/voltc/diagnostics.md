@@ -28,13 +28,16 @@ error: point has no field 'z'
   = help: did you mean 'x'?
 ```
 
-A misspelled name gets the closest real one as a suggestion. Checking doesn't stop at the first
-error: an error ends the function it's in, and the other functions are still checked. Parsing works
-the same way: a syntax error ends the item it's in (a function, a struct), and the parser picks up
-again at the next item, using the indentation to find it. So one run finds every independent error;
-it shows the first 20 in source order, and the summary line says how many there were.
-`--error-limit N` shows N instead (`0`: all of them). Warnings (like using a `@deprecated`
-function) print the same way and don't fail the build.
+A misspelled name gets the closest real one as a suggestion, and an error inside a generic
+function's instance labels the call that made it (`twice<bool> is instantiated here`). Checking
+doesn't stop at the first error: an error ends the function it's in, and the other functions are
+still checked. Parsing works the same way: a syntax error ends the item it's in (a function, a
+struct), and the parser picks up again at the next item, using the indentation to find it. So one
+run finds every independent error; it shows the first 20 in source order, and the summary line says
+how many there were. `--error-limit N` shows N instead (`0`: all of them). Warnings (using a
+`@deprecated` function, a `var` on a parameter the function never changes, the
+[reference warnings](/volt-bootstrap/guide/safety/#what-the-compiler-warns-about)) print the same
+way and don't fail the build.
 
 ## Formats
 

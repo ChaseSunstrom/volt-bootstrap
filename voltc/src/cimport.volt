@@ -2726,6 +2726,39 @@ fn c_gnu(s: str) -> str {
     return s;
 }
 
+// C23 was C2x until GCC 14 and clang 18, which still take the old name: once the C compiler is
+// found to refuse -std=c23, a C23 standard is spelled c2x (gnu2x) for it, and for libclang
+var c23_refused: i32 = -1; // not asked yet
+
+fn c_spelled(s: str) -> str {
+    var old: str? = null;
+    if (s == "c23" || s == "iso9899:2024") {
+        old = "c2x";
+    } else if (s == "gnu23") {
+        old = "gnu2x";
+    }
+    val o = old ?? return s;
+    if (c23_refused < 0) {
+        c23_refused = 0;
+        var argv: std::vec<str> = {};
+        c_command(&argv);
+        val rest: str[5] = { "-std=c23", "-x", "c", "-fsyntax-only", "-" };
+        for (a) in rest {
+            put(&argv, a);
+        }
+        val r = std::process::capture(argv.items(), "") catch |e| {
+            return s; // no C compiler (an editor): libclang takes c23
+        };
+        if (r.code != 0) {
+            c23_refused = 1;
+        }
+    }
+    if (c23_refused == 1) {
+        return o;
+    }
+    return s;
+}
+
 // the C unit for standard s (one per standard other than Volt's own C's)
 attach fn c_unit_for(this: checker&, s: str) -> u32 {
     for (i) in 0..this.c_units.len {
@@ -2807,7 +2840,7 @@ attach fn import_c(this: checker&, headers: std::vec<std::string>&, alias: str, 
     }
     // read under its standard; one other than Volt's own C's is kept out of Volt's C, in a unit
     // of its own standard that Volt calls through pointers
-    var std_name = standard;
+    var std_name = c_spelled(standard);
     if (std_name.len == 0) {
         std_name = this.c_newest();
         if (dir == null) {

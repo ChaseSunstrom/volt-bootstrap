@@ -46,10 +46,10 @@ fn main() -> void {
 
 An exception stops the program with its type and message, as a Volt panic does (Python declares
 none to make an error of). A parameter without an annotation, `*args`, `**kwargs`, callables, dicts
-and tuples are left out, listed in a comment of the generated declarations. Calls hold the GIL, so
-any thread can make them. bolt runs `python3` (or `$PYTHON`) to read the module and
-`python3-config` (or `$PYTHON_CONFIG`) for `Python.h` and the library; it needs Python 3.13 or
-later.
+and tuples are left out, listed in a comment of the generated declarations (`VOLT_SHOW_IMPORT=1
+voltc check main.volt` prints them). Calls hold the GIL, so any thread can make them. bolt runs
+`python3` (or `$PYTHON`) to read the module and `python3-config` (or `$PYTHON_CONFIG`) for
+`Python.h` and the library; it needs Python 3.12 or later.
 
 ## The interop/python package
 
@@ -97,7 +97,7 @@ fn main() -> !void {
 | `o.get(name)`, `o.item(key)` | `o.name`, `o[key]` |
 | `o.call(args...)`, `o.call_method(name, args...)` | calls, each argument converted with `value`; an object argument moves into the call, so pass `copy x` to keep `x` |
 | `o.to_i64()`, `to_f64()`, `to_bool()`, `to_string()`, `repr()` | back to Volt |
-| `o.is_none()` | whether it's `None` |
+| `o.is_none()`, `python::none()` | whether it's `None`; `None` |
 
 A `python::object` holds one reference: copying it adds one and deleting it drops it. Every call
 that can fail returns `python_error!T`, and a Python exception becomes
@@ -160,11 +160,20 @@ PYTHONPATH=target/debug/bindings VOLT_GREET_LIB=target/debug/libgreet.so python3
 
 The module loads `libNAME.so` from `$VOLT_NAME_LIB` (the package's name in capitals), else from
 next to itself. An error set becomes an exception class deriving from the module's `Error`, raised
-with the error's name; slices are lists, optionals are the value or `None`, and a callback is any
-callable. The module takes [every shape](/volt-bootstrap/interop/other-languages/#every-shape):
+with the error's name (its `code` and `name` say which, and the class has the codes: for `error
+math_error { NEGATIVE }`, `greet.math_error.NEGATIVE`). Structs are `ctypes` structures made from
+their fields (`greet.vec2(1, 2)`), and what Volt changes in one it takes by reference comes back;
+an enum is a class of its values; slices are lists, optionals are the value or `None`, and a
+callback is any callable. A number by reference (`n: i32*`, `x: f64&`) takes a `ctypes` number,
+`ctypes.c_int32(7)`, whose `value` gets what Volt writes (`None` is a null `i32*`). The module
+takes [every shape](/volt-bootstrap/interop/other-languages/#every-shape):
 owned text and objects go in (an object given to Volt is Python's no longer; a closed or lent one
-is refused with `ValueError` before anything is given), a Volt trait is a class to subclass (any
+is refused with `ValueError` before anything is given, and so is closing or giving away one that a
+call that hasn't returned holds, as its callback might), a Volt trait is a class to subclass (any
 object with its fns passes), a callback can take and give text and objects and raise an error
 set's class for `E!T` (any other exception comes out of the call once Volt returns), a closure Volt
 gives back is a callable (`close()` or a `with` block frees it, else the garbage collector), and a
 `std::vec` comes back as a `list`.
+
+A Python project can install a Volt library with `pip install`, which runs bolt: see
+[pip install and npm install](/volt-bootstrap/interop/other-languages/#pip-install-and-npm-install).

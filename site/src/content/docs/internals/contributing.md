@@ -31,12 +31,12 @@ cargo build && cargo test
 cd voltc && VOLTC=../target/debug/voltc-bootstrap ../target/debug/bolt build bootstrap
 ```
 
-CI (`.github/workflows/ci.yml`) runs on every push to main and every pull request:
+CI (`.github/workflows/ci.yml`) runs on every push to main and every pull request, and any job
+that fails fails the run:
 
-- **Linux x86-64 and arm64:** the whole `cargo test`, with LLVM 23, lld, qemu and Node's types (for
-  the TypeScript checks) installed. A build that warns fails. Failing tests are listed on the run's
-  summary page. arm64 is experimental: it reports without failing the run.
+- **Linux x86-64 and arm64:** the whole `cargo test`, with LLVM 23, lld, qemu, g++ 14 (as `$CXX`,
+  for C++23 headers) and Node's types (for the TypeScript checks) installed. A build that warns
+  fails. Failing tests are listed on the run's summary page.
 - **The editor extension:** its grammar and extension tests.
-- **macOS (arm64, x86-64) and Windows (x86-64, arm64):** build the compilers and try running a few
-  programs. These jobs are experimental and report without failing the run, since the test suite
-  itself runs on Linux only for now.
+- **macOS (arm64, x86-64) and Windows (x86-64, arm64):** build the compilers, and build and run a
+  few programs through the C backend; the test suite itself runs on Linux only for now.

@@ -37,6 +37,9 @@ fn main() -> void {
 // expect: 123 error.EMPTY error.BAD_DIGIT
 ```
 
+Suffixes after `E!T` apply to the whole error union: `E!T&` is a reference to one and `E!T?` an
+optional one. The payload takes a suffix only in parentheses: `E!(T*)`.
+
 ## try and catch
 
 `try x` gives `x`'s value, or returns its error from the current function (which must be able to
@@ -70,9 +73,14 @@ fn main() -> void {
 // expect: -1 10
 ```
 
-### Inferred error sets
+An error that reaches the end of `main` (`fn main() -> !void`) prints `error: NAME` and exits with 1
+(see [main](/volt-bootstrap/guide/functions/#main)).
 
-`!T` without a set means "whatever errors the body can return": the compiler works the set out.
+### Any error
+
+`!T` without a set is `error!T`, and `error` holds an error from any set. Every variant of every
+error set has a code of its own in the program, so any error converts to `error`, keeping its code
+(its name prints) but not a payload.
 
 ```volt
 use std::io;
@@ -100,6 +108,10 @@ fn main() -> void {
 }
 // expect: 1 error.TIMEOUT error.FULL
 ```
+
+A `match` on an `error` tests variants of any set and needs a `default` arm. An `error` doesn't go
+back into a named set: a function returning `net_error!i32` can't `try` an `!i32`. Plain `error`
+is an error of its own, for a function with nothing more to say: `return error;`.
 
 ### Errors with data
 
@@ -162,8 +174,9 @@ fn main() -> void {
 ## Looking inside
 
 On a variable, `.err` is the error as an optional (`E?`: null when it holds a value), so `if (r.err)`
-narrows to the error. `.value` is the value; reading it when there's an error stops the program,
-in release builds too.
+asks whether there's one and `if (val e = r.err)` binds it. `.value` is the value; reading it when
+there's an error stops the program, in release builds too. Both see through a reference, as fields
+do.
 
 ```volt
 use std::io;
@@ -192,9 +205,9 @@ fn main() -> void {
 ## Optionals
 
 `T?` is a `T` or `null`. `x ?? fallback` gives the value or the fallback, and the fallback can leave
-instead: `x ?? return`, `x ?? break`, `x ?? @panic("...")`. A `{` after `??` starts a struct or
-array literal (`p ?? { x: 0, y: 0 }`), not a block: a fallback that needs statements goes in
-`if (x) { ... } else { ... }`, where `x` is the value inside the first block.
+instead: `x ?? return`, `x ?? break`, `x ?? continue`, `x ?? @panic("...")`. A `{` after `??`
+starts a struct or array literal (`p ?? { x: 0, y: 0 }`), not a block: a fallback that needs
+statements goes in `if (x) { ... } else { ... }`, where `x` is the value inside the first block.
 
 ```volt
 use std::io;

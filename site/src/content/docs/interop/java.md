@@ -41,7 +41,8 @@ fn main() -> !void {
 
 An exception a method doesn't declare stops the program with its text, as a Volt panic does. A
 method whose types aren't in the table (generic ones, collections, other libraries' classes) is
-left out, listed in a comment of the generated declarations. Each import loads its classes through
+left out, listed in a comment of the generated declarations (`VOLT_SHOW_IMPORT=1 voltc check
+main.volt` prints them). Each import loads its classes through
 a class loader of its own, so a program can import several, and they share the process's JVM.
 
 bolt needs a JDK: `$JAVA_HOME`, else the one whose `javac` is on the PATH (for `javac` and its
@@ -143,16 +144,19 @@ LD_LIBRARY_PATH=target/debug java --enable-native-access=ALL-UNNAMED -cp classes
 ```
 
 The class loads `libNAME.so` (or the library `-Dvolt.NAME.lib` names). An error set becomes a
-`VoltException` subclass, thrown with the error's name. Structs are mutable classes: what Volt
-changes through a `T&` comes back to the object. Unsigned integers use the Java type of the same
-size, as `int` for `u32`; slices and lists (`std::vec`) are arrays, optionals the value or `null`,
-and a callback is a functional interface. An export struct a program doesn't close is freed by a
-`Cleaner`.
+`VoltException` subclass, thrown with the error's name (its `code` and `name` say which, and the
+class has the codes as constants). Structs are mutable classes: what Volt changes through a `T&`
+comes back to the object. Enums are Java enums, each with its `value`. Unsigned integers use the
+Java type of the same size, as `int` for `u32`; slices and lists (`std::vec`) are arrays,
+optionals the value or `null`, and a callback is a functional interface. A pointer to anything
+but a struct, a number by reference (`n: i32*`) too, is a `MemorySegment`. An export struct a
+program doesn't close is freed by a `Cleaner`.
 
 Java takes [every shape](/volt-bootstrap/interop/other-languages/#every-shape):
 - **Owned values as parameters.** A `std::string` parameter takes a `String` (Volt copies it); an
   export struct by value takes its object, which gives its handle up (closing it after does
-  nothing).
+  nothing). One lent to a call that hasn't returned can't be closed or given away until it does
+  (a callback trying throws `IllegalStateException`), nor lent and given in one call.
 - **Traits.** A Volt trait is a Java interface: any object implementing it can be lent (`s:
   shape&`) or given (`s: shape`; Volt closes it when it's done, when it's `AutoCloseable`). A Volt
   value of the trait comes back as `volt_shape`, which implements the interface and is

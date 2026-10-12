@@ -37,10 +37,42 @@ fn main() -> void {
 
 More in [Basics](/volt-bootstrap/guide/basics/).
 
+## Arrays, slices and tuples
+
+An array's length is part of its type. A slice, `T[..]`, points into an array (or a vec) without
+copying, and indexing either is checked. A tuple groups values without a struct.
+
+```volt
+use std::io;
+
+fn stats(xs: i32[..]) -> (i32, i32) {   // a slice in, a tuple out
+    var lo = xs[0];
+    var sum = 0;
+    for (x) in xs {
+        sum += x;
+        if (x < lo) {
+            lo = x;
+        }
+    }
+    return (lo, sum);
+}
+
+fn main() -> void {
+    val xs: i32[] = { 3, 1, 4, 1, 5 };   // the length comes from the literal
+    val (lo, sum) = stats(xs[..]);       // xs[..] is a slice of all of it
+    val mid = xs[1..4];                  // a slice of part of it
+    std::println("{} {} {} {}", xs.len, lo, sum, mid.len);
+}
+// expect: 5 1 14 3
+```
+
+More in [Basics](/volt-bootstrap/guide/basics/#arrays-slices-and-ranges).
+
 ## Functions, structs and methods
 
 Functions can be overloaded. Methods are functions attached to a type, declared outside it with
-`attach fn`; `this` is the value they're called on.
+`attach fn`; `this` is the value they're called on. `attach operator +` gives a struct or an enum an
+operator the same way.
 
 ```volt
 use std::io;
@@ -128,8 +160,9 @@ More in [Errors and optionals](/volt-bootstrap/guide/errors/).
 
 ## Ownership
 
-A value is deleted when its owner's scope ends. Using a value hands it over (a move); `copy` makes
-a second one. `box<T>` owns memory on the heap.
+A value is deleted when its owner's scope ends. Using a value that owns something hands it over (a
+move); `copy` makes a second one. Numbers and plain structs are just copied. `box<T>` owns memory
+on the heap.
 
 ```volt
 use std::io;
@@ -248,4 +281,5 @@ fn main() -> void {
 // expect: 5
 ```
 
-More in [Interop](/volt-bootstrap/interop/c/).
+C++ headers, Rust crates and Zig, Go, Swift, Kotlin, Java, C#, Python, TypeScript and JavaScript
+code import the same way. More in [Interop](/volt-bootstrap/interop/c/).

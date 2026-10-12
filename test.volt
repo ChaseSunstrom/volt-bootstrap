@@ -5,10 +5,10 @@ use std::io;
 
 // import C headers into a C namespace
 use { "test.h", "test2.h" } as c;
-// use { "test.hpp", "test2.hpp" } as cpp; // later: needs a C++ frontend (clang), not in the bootstrap
+// use { "test.hpp", "test2.hpp" } as cpp; // C++ headers too (read with libclang; the self-hosted voltc, not the bootstrap one)
 
 // c::some_fn();
-// cpp::some_temlpate<i32>(1);
+// cpp::some_template<i32>(1);
 //
 
 /*
@@ -38,68 +38,64 @@ use { "test.h", "test2.h" } as c;
  *    T?    // Optional
  *    box<T>   // owned heap pointer (std::mem::box), used like a T&. Deleted (and freed) automatically
  *    some_trait  // a trait used as a type: tagged union of every type that attaches it (see shape below)
- *    E!T   // Error union: an error from set E, or a T.  !T = error set inferred from the fn body
+ *    E!T   // Error union: an error from set E, or a T.  !T = error!T: an error from any set
  *    (T, ...) // tuple
  *    fn(T, ...) -> R          // function type, can hold a closure (fat: fn ptr + captures). each closure
  *                             // literal also has its own unique type, so generics can call it directly
  *    extern "C" fn(T) -> R    // thin C function pointer, for C callbacks (no captures)
+ *    std::simd::f32x4         // SIMD vector (i32x8, ..., vec(T, n) for any other; over the comptime @vector(T, n)), math lane by lane
  *
  * Literals:
- *    1_000_000, 0xFF, 0b1010, 0o17, 1.5e3, 'a' (u8), "text" (str), true, false, null
+ *    1_000_000, 0xFF, 0b1010, 0o17, 1.5e3, 'a' (u8), "text" (str), r"raw" (no escapes), """ (multi-line), true, false, null
  *
  * Operators (the non-C ones):
  *    a ?? b      // value of optional a, or b if a is null. b can also be return/break/@panic(...)
- *    x as T      // safe conversion (int widening, int -> float, T& -> T*, T& -> void*), compile error if lossy
+ *    x as T      // safe conversion (widening, int -> float, bool/enum -> int, T& -> T*, T& -> void*), compile error otherwise
  *    a..b a..=b  // ranges, exclusive / inclusive
- *    arr[a..b]   // slicing, gives T[..] without copying. arr[..] = whole thing
- *    &x, *p      // address of (gives T&), deref (a null T* traps in debug builds)
+ *    arr[a..b]   // slicing, gives T[..] without copying. arr[..] = whole thing, arr[a..] / arr[..b] too
+ *    &x, *p      // address of (gives T&), deref (a null T* panics in debug builds)
  *    p->x        // field or method through a pointer: (*p).x
  *    x++, x--    // statements only, not expressions (no C style i = i++ puzzles)
- *    +% -% *%    // wrapping arithmetic. plain + - * trap on overflow in debug builds, wrap in release
+ *    +% -% *%    // wrapping arithmetic. plain + - * panic on overflow in debug builds, wrap in release
+ *    x & 1 == 1  // & | ^ bind tighter than comparisons: (x & 1) == 1, unlike C
+ *    a == b      // on a struct: its eq (attached or @derive(eq)). attach operator gives a struct or enum
+ *                // + - * / % & | ^ << >> - ~ < == [] (see the guide's structs page)
  *
-    // comptime-only typeinfo schema, returned by @typeinfo(T)
+    // comptime-only typeinfo record, returned by @typeinfo(T). a sketch: typeinfo and the types below
+    // have no names in code, but their fields read as shown (comptime val ti = @typeinfo(T); works,
+    // a runtime val doesn't). payloads hold types, not typeinfos: @typeinfo(t) on one gives more.
     // kind is a tagged enum: per-kind data lives in its payload, instead of is_* flags
     // and nullable fields that all have to agree with each other
     comptime struct typeinfo {
-        // stable identifier (hash or interned)
-        id: u128;
+        id: u128;               // the type's number in this build (@typeid(T) is the same in every build)
 
-        // canonical names and source locations
-        canonical_name: str;    // e.g. "module::Type<T>"
-        short_name: str;        // e.g. "Type"
-        module_path: str;       // e.g. "module::submodule"
-        source_file: str?;      // optional source file path
-        source_line: u32?;      // optional line number in source
+        // names
+        canonical_name: str;    // e.g. "std::mem::box<i32, std::mem::default_allocator>"
+        short_name: str;        // e.g. "box"
+        module_path: str;       // e.g. "std::mem" ("" at the top level)
 
         // kind + everything specific to that kind (fields, variants, elem type, ...)
         kind: type_kind;
+        fields: field_info[..];     // a struct's fields (as in kind's STRUCT), empty for other kinds
+        variants: variant_info[..]; // an enum's or error set's variants (as in kind's), empty for other kinds
 
         // layout / ABI info (useful even at comptime)
-        size: usize?;           // @sizeof(T) in bytes, null if unsized
+        size: usize?;           // @sizeof(T) in bytes, null if it has no layout
         align: usize?;          // @alignof(T)
-        stride: usize?;         // stride when used in arrays
-        is_pod: bool;           // plain-old-data (no delete / trivial copy)
-        is_comptime_only: bool; // true for type, typeinfo, comptime structs, ...
+        stride: usize?;         // stride when used in arrays (its size)
+        is_pod: bool;           // plain-old-data: nothing to delete
+        borrows: bool;          // a value points into what it doesn't own (a reference or slice in it,
+                                // a closure's capture by reference)
+        is_comptime_only: bool; // true for type
 
-        // generics and constraints (comptime only)
-        generics: generic_param[..];  // declared params, names, defaults, constraints (empty if not generic)
-        generic_args: typeinfo[..];   // concrete generic args if this is an instantiated generic
+        generic_args: type[..]; // an instance's generic args (a const arg is its value, a pack a tuple of types)
 
-        // everything attached to this type: inherent fns and trait impls.
-        // the hooks (delete, copy, eq, hash) are just entries in here, found by name
+        // the fns attached to this type with a this (not static ones), inherent and trait ones, in
+        // declaration order, any type's (i32's too). the hooks (delete, copy, eq, hash) are entries in here
         methods: method_info[..];
-        traits: str[..];              // implemented trait names, for quick listing
 
-        // reflection and doc metadata
-        attributes: (...);     // a library's attribute values, a tuple: (json::rename("id"),). The builtins aren't listed
-        doc: str?;               // documentation comment
-        visibility: visibility;
-
-        // relationships for analysis tools
-        parent_type: typeinfo?;  // for nested types, the owner
-
-        // free-form extension: key/value metadata for future use
-        metadata: (str, str)[..];
+        attributes: (...);     // a library's attribute values, a tuple: (ser::rename("id"),). The builtins aren't listed
+        visibility: visibility;  // PUBLIC for now
     }
 
     enum type_kind {
@@ -107,94 +103,97 @@ use { "test.h", "test2.h" } as c;
         NEVER,
         BOOL,
         TYPE,
-        INT: (signed: bool, bits: u16),
-        FLOAT: (bits: u16),
-        REFERENCE: (child: typeinfo),                   // T&
-        POINTER: (child: typeinfo),                     // T*
-        ARRAY: (child: typeinfo, len: usize),           // T[N]
-        SLICE: (child: typeinfo),                       // T[..]
-        OPTIONAL: (child: typeinfo),                    // T?
-        ERROR_UNION: (errors: typeinfo, payload: typeinfo), // E!T
-        ERROR_SET: (variants: variant_info[..]),
-        RANGE: (child: typeinfo, inclusive: bool),
-        TUPLE: (elems: typeinfo[..]),
-        STRUCT: (fields: field_info[..], layout: struct_layout),
-        ENUM: (tag: typeinfo, variants: variant_info[..]),
-        FUNCTION: (args: typeinfo[..], ret: typeinfo, varargs: bool, is_async: bool, calling_convention: str),
-        CLOSURE: (signature: typeinfo, captures: field_info[..]),
-        TRAIT_UNION: (trait_name: str, members: typeinfo[..]), // some_trait used as a type
+        INT: (bool, u16),                       // signed, bits
+        FLOAT: u16,                             // bits
+        REFERENCE: type,                        // T&
+        POINTER: type,                          // T*
+        ARRAY: (type, usize),                   // T[N]
+        VECTOR: (type, usize),                  // @vector(T, n): lane type, lanes
+        SLICE: type,                            // T[..] (str is SLICE(u8))
+        OPTIONAL: type,                         // T?
+        ERROR_UNION: (type, type),              // E!T: E (error for !T), T
+        ERROR_SET: variant_info[..],
+        RANGE: type,                            // a..b, a..=b: the element type
+        TUPLE: type[..],
+        STRUCT: (field_info[..], struct_layout),
+        ENUM: (type, variant_info[..]),         // tag type, variants
+        FUNCTION: (type[..], type, bool, bool, str), // params, ret, varargs, is_async, calling convention:
+                                                // false, false, "C" for now (fn(...) and extern "C" fn)
+        CLOSURE: type[..],                      // its captures' types
+        TRAIT_UNION: (str, type[..]),           // some_trait used as a type: its name, the types that attach it
+        UNKNOWN,                                // the rest: cstr, void*, error, an async frame
     }
 
     enum struct_layout {
-        AUTO,   // compiler may reorder fields to cut padding
-        C,      // extern struct: declaration order, C padding rules
+        C,      // every struct: declaration order, C padding rules (extern struct only marks one for C)
     }
 
     // helper sub-structures
-    comptime struct field_info { // comptime on a struct means it can only be created/used at comptime
+    comptime struct field_info { // comptime struct: a compile-time-only record here (on a real struct voltc ignores comptime)
         name: str;
-        field_type: typeinfo;    // full nested typeinfo (comptime only). size/align come from here
-        offset: usize?;          // offset in bytes if known/applicable
-        default_expr: str?;      // textual default expression (comptime string)
-        visibility: visibility;
+        field_type: type;        // size/align come from its typeinfo
+        offset: usize?;          // offset in bytes
+        default_expr: str?;      // null for now
+        visibility: visibility;  // PUBLIC for now
         attributes: (...);       // a library's attribute values, a tuple (as on the type)
     }
 
     comptime struct variant_info {
         name: str;
-        discriminant: i64?;      // explicit discriminant if present
-        payload: typeinfo?;      // payload type (a tuple for multi-value variants), null for unit variants
-        attributes: attribute[..];
+        discriminant: i64?;      // its value: explicit, or the one before + 1 (an error's: its code in the program)
+        payload: type?;          // payload type (a tuple for multi-value variants), null for unit variants
+        attributes: (...)[..];   // empty for now
     }
 
-    comptime struct generic_param {
+    comptime struct method_info { // @field(v, m.name)(args) calls one
         name: str;
-        param_kind: generic_param_kind;
-        default: str?;           // textual default if any
-        constraints: str[..];    // textual constraints (e.g. "T: trait1 + trait2")
-    }
-
-    comptime struct method_info {
-        name: str;
-        signature: typeinfo;     // a typeinfo describing the function/closure signature
-        is_static: bool;         // declared with "static this"
-        from_trait: str?;        // trait this came from, null if attached directly
-        attributes: attribute[..];
-        visibility: visibility;
+        trait: str;              // the trait it's attached for, "" when attached directly
+        params: str[..];         // its parameters' names, after this
     }
 
     enum visibility {
         PUBLIC,
-        INTERNAL // internal to this project
+        INTERNAL // its package's own
     }
 
-    enum generic_param_kind {
-        TYPE,
-        CONST,
-        PACK    // <Args: type...>
-    }
-
-    // what @attributes([...]) holds. only these exist, so an unknown @name is a compile error.
-    // @inline is attribute::INLINE, @opt(3) is attribute::OPT(3)
+    // the builtin attributes @attributes([...]) takes. only these exist, so an unknown @name is a compile error.
+    // @inline is attribute::INLINE, @opt(3) is attribute::OPT(3). a library's own attributes are plain
+    // structs, written without @: @attributes([ser::rename("id")])
     enum attribute {
         INLINE,
         NOINLINE,
+        UNCHECKED,        // no bounds checks in the fn's body
+        INVALIDATES,      // a method that may move or free its receiver's storage
         OPT: u8,          // @opt(0..3)
         SECTION: str,     // @section(".text")
         ALIGN: usize,     // @align(16)
         DEPRECATED: str,  // @deprecated("use x instead")
+        OWNS: str,        // @owns("ptr"): the struct owns what that field points at, like box
+        THREAD_LOCAL,     // a global var each thread has its own copy of
+        CFG: (str, str),  // @cfg("os", "linux") or @cfg("key"): only in builds where it holds
+        DERIVE: (...),    // @derive(eq, hash, fmt, json): attach those traits
+        OPTIONAL,         // a trait fn an attach block may leave out
+        CLOSED,           // a trait whose attach blocks hold its fns only
+        ATTACH_AS: str,   // @attach_as("trait"): the struct stands for that trait (a C++ class's virtuals)
+        EXPORT_TEXT: str, // @export_text("method"): the struct is text to other languages
+        INSTANCE: (...),  // @instance(i32): a generic export fn's instance to export
+        STANDARD: str,    // @standard("c++17") on a use { "x.h" }
+        CPP_TYPE: str, CPP_HANDLE: str, CPP_CALL: str, // what use cpp writes
+        RUST_GENERIC: str,              // what use rust, use zig and use go write
+        INTRINSIC: str, RUNTIME: str,   // std's and libraries' own files only
     }
 
  *
  *
  *
- * Keywords:
- *    Above types +
+ * Keywords (never a name; the type names above aren't keywords: val i32 = 5; compiles):
  *    var, val, static, (val is immutable)
  *    // ownership: a value is deleted automatically when its owner leaves scope (reverse declaration order).
  *    // move hands ownership to someone else (no delete at the old place), copy makes a second owner.
  *    // heap memory is owned through box<T>, never through a plain T&
- *    public, internal, // visibility, default is public. internal = only this project (cant be used on struct/enum/error members)
+ *    public, internal, // visibility: a package's declarations are its own unless public; a program's files
+ *                      // need no public (internal keeps one to the program). struct fields go with their
+ *                      // struct (internal on one hides nothing yet), enum/error variants take neither
  *    attach, struct, enum, fn, error, trait,
  *    comptime, async, await, suspend, resume,
  *    extern, export,
@@ -202,6 +201,8 @@ use { "test.h", "test2.h" } as c;
  *    if, else, for, in, while, loop, break, continue, return, match, default,
  *    try, catch, defer, errdefer,
  *    true, false, null
+ *    // not reserved, only special where they start something: type (type x = T; an alias),
+ *    // operator (attach operator +), test (test "name" { }), _ (a match arm, like default)
  */
 
 // C varargs use ... (only allowed on extern "C" fns)
@@ -209,6 +210,7 @@ extern "C" fn printf(fmt: cstr, ...) -> i32;
 
 // Volt varargs are variadic templates: Args is a pack of types, args the matching values.
 // comptime params must be known at compile time, so println can check fmt against Args
+// (std's real println is a compiler intrinsic that does this check)
 namespace std::io {
     <Args: type...>
     fn println(comptime fmt: str, args: Args...) -> void {
@@ -339,9 +341,9 @@ struct example {
     member: i32;
     member2: f64;
     member3: box<u8>; // owned, so it's deleted with the example
-} // 24 bytes (4 + 4 padding + 8 + 8). Auto layout, the compiler may reorder fields
+} // 24 bytes (4 + 4 padding + 8 + 8). Every struct is laid out as C would: declaration order, C padding
 
-extern struct c_example { // C layout: declaration order, C padding, safe to pass to C
+extern struct c_example { // the same layout; extern only marks a struct that crosses into C
     member: i32;
     member2: f64;
 }
@@ -441,7 +443,7 @@ fn type_name<bool>(v: bool) -> str { return "a bool"; }
 // Gets ran when a generic uses it and requires all constraints to be true, or an error will occur (compile time).
 // That gives a clear error at the call site, but doesnt limit what the body is allowed to use
 trait allocator {
-    // count = number of T's. traits need a named error set, there is no body to infer ! from
+    // count = number of T's. (std/mem.volt's real one hands out T*, and realloc and free are told the block's size)
     <T: type> fn malloc(this, count: usize = 1) -> std::mem::mem_error!(T&);
     <T: type> fn realloc(this, ptr: T&, count: usize) -> std::mem::mem_error!(T&);
     <T: type> fn free(this, ptr: T&) -> void;
@@ -534,8 +536,8 @@ namespace std::mem {
     }
 }
 
-// NOTE THESE METHODS WILL BE ATTACHED IN THE STANDARD LIBRARY LIKE THIS:
-//
+// NOTE THE STANDARD LIBRARY (std/mem.volt) ATTACHES THESE, CLOSE TO THIS: there box's ptr is a T*
+// marked @owns("ptr"), and T::new(value) needs the value
 namespace std::mem {
     // the owned pointer. keeps its allocator, so delete frees with the one that allocated.
     // default_allocator is an empty struct, so box<T> is just a pointer (8 bytes)
@@ -557,19 +559,20 @@ attach fn new(static this: T, value: T? = null, allocator: Allocator = {}) -> st
 } // because this is a template function, it will be auto attached to any type that calls it, such as:
 
 // And corresponding delete, which runs automatically when a box goes out of scope.
-// box is the one type that deletes through a pointer: the compiler deletes *ptr first (T's delete),
-// then this frees it
+// box deletes through a pointer (std marks it @owns("ptr"); any struct can be): the compiler deletes
+// *ptr first (T's delete), then this frees it
 <T: type, Allocator: allocator>
 attach fn delete(this: std::mem::box<T, Allocator>&) -> void {
     this.allocator.free<T>(this.ptr);
 }
 
-// u8::new() or new<u8>()
+// u8::new()
 // With a custom allocator:
-// u8::new<my::allocator>() or new<u8, my::allocator>()
+// u8::new<my::allocator>()
 // or by value, which infers Allocator: u8::new(5, my_alloc)
 //
-// This second one works by checking u8 for attached functions and implicitly passing it in as T (as it is the first one used)
+// u8::new<...> works by checking u8 for attached functions and implicitly passing it in as T (as it is the first one used),
+// so <my::allocator> is the next one. An attached fn is only reached through a type or value: new<u8>() is an unknown name
 // f<T>(...) is only parsed as a generic call when f names a generic, otherwise < is less-than
 //
 
@@ -654,7 +657,7 @@ error some_error2 {
 
 // Error function:
 fn some_error_thrower() -> some_error!void {
-    if (true) { // This will get evaluated at comptime, as its a constexpr. conditions must be bool (optionals are the one exception)
+    if (true) { // This will get evaluated at comptime, as its a constexpr. conditions must be bool (an optional or a pointer is a null check)
        return some_error::BLAH;
     } else {
        return;
@@ -721,7 +724,7 @@ fn comp() -> i32 {
         determined_type = i32;
     } else {
         determined_type = i8;
-    } // this forces all cases to be covered, otherwise error
+    } // an instance that leaves it unassigned is an error where it's used
     // a better option would be to match:
     comptime match (C) {
         c if c > 0 => determined_type = i32,
@@ -730,23 +733,23 @@ fn comp() -> i32 {
 
     var result: determined_type = 0;
     for (i) in 0..100 {
-        result += i; // NOTE: overflows when determined_type is i8 (sum is 4950): traps in debug, wraps in release. use +%= to wrap on purpose
+        result += i; // NOTE: overflows when determined_type is i8 (sum is 4950): panics in debug, wraps in release. use +%= to wrap on purpose
     }
     return result;
 }
 
 // params are immutable (val) by default, "var" makes a mutable copy
 fn optional(var some_op: i32?) -> void {
-    if (some_op) { // same as calling some_op.value or !some_op.none. always a presence check, even for bool? (warns there)
+    if (some_op) { // same as !some_op.none. always a presence check, even for a bool? holding false
         some_op += 1; // no need to do some_op.value (as we know it has one from the above if)
     } else {
 
     }
 }
 
-internal fn some_internal() -> void { } // internal to only this project, (default is public)
+internal fn some_internal() -> void { } // only this program's files can name it (a package's fns are its own unless public)
 
-@attributes([@inline, @opt(3), @section(".text")]) // attributes are builtins (see enum attribute), so typos are compile errors
+@attributes([@inline, @opt(3), @section(".text")]) // @ attributes are builtins (see enum attribute), so typos are compile errors
 public comptime fn sum_range(n: i32) -> i32 {
     var sum: i32 = 0;
     var i: i32 = 0;
@@ -768,10 +771,20 @@ public comptime fn sum_range(n: i32) -> i32 {
 /*
 @typeinfo(T) -> typeinfo
 @typeof(expr) -> type
+@typeid(T) -> u64           // the same in every build; for a trait value, the id of the type it holds
 @cast<new_type>(variable)   // unchecked, any -> any. prefer "as"
+@bitcast<T>(x) -> T         // the same bits as another type of the same size
 @sizeof(T) -> usize
 @alignof(T) -> usize
 @offsetof(T, field) -> usize
+@field(v, "name"), @has_field(T, "name"), @has_method(T, "name"), @attaches(T, trait) // comptime reflection
+@discriminant(v) -> i64     // which variant an enum value holds
+@vector(T, n) -> type       // SIMD vector type
+@embed("path") -> str       // a file's bytes, read at compile time
+@expand(expr)               // expr, noting at compile time what it became
+@cfg("key", "value") -> bool // --cfg settings and the target (os, arch, ...)
+@slice(ptr, len), @read(ptr), @write(ptr, v), @volatile_read(ptr), @volatile_write(ptr, v) // raw memory
+@cpp<R>("expr", args...)    // call C++ code, in a file that imports C++ headers
 @compile_error(msg)         // fail compilation, for custom generic constraint errors
 @panic(msg) -> never
 @inline, @opt(n), ...        // attributes, only valid inside @attributes([...]). full list: enum attribute

@@ -11,12 +11,15 @@ message and exit code 101:
 | Check | Example |
 | --- | --- |
 | integer overflow | `i32` max `+ 1` |
+| division by zero | `x / y` or `x % y` with `y` 0 |
 | shifting too far | `x << n` on an `i32` with `n` 32 or more |
 | out-of-bounds indexing | `xs[10]` on a 3-element array |
 | unwrapping null | `*p` on a null pointer, `.value` on an empty optional |
 | unwrapping an error | `.value` on an error union holding an error |
 | reading another variant's payload | `s.CIRCLE` when `s` holds a `SQUARE` |
-| double free | deleting the same memory twice through a bad `@read` or C code |
+| double free | deleting the same memory twice through a bad `@cast`, `@read` or C code |
+| freeing with the wrong size | `a.free<T>(p, n)` with another `n` than the block was allocated with |
+| resuming a finished frame | `resume f` after the [async](/volt-bootstrap/guide/async/) fn returned, or `await f` twice |
 | `@panic` | always |
 
 ```volt
@@ -38,15 +41,16 @@ The message names the place: `app.volt:8:22: panic: index 3 out of bounds (len 3
 ## Release builds
 
 `--release` (bolt: `--release` or a profile with `optimize = true`) builds with optimization and
-without most of these checks: integer arithmetic wraps, and a shift by at least the type's width
-shifts by the amount modulo the width. What would read memory as the wrong thing stays checked:
-indexing and slicing, reading a payload of the variant a value doesn't hold, and `.value` on a null
-optional or an error union holding an error. Each is one compare and a trap instruction: no call and
-no message, so a bare-metal build still makes no hidden calls. A failed check stops the program with
-a signal (SIGILL on x86-64), and output still buffered is lost, as with C's `abort`; run the debug
-build to see where. A function with `@attributes([@unchecked])` has no bounds checks in its body,
-for a hot loop known to stay in range. Code that wants wrapping in every mode uses `+%`, `-%` and
-`*%`.
+without most of these checks: integer arithmetic wraps, a division by zero isn't caught, and a
+shift by at least the type's width shifts by the amount modulo the width. What would read memory as
+the wrong thing stays checked: indexing and slicing, reading a payload of the variant a value
+doesn't hold, and `.value` on a null optional or an error union holding an error. Each is one
+compare and a trap instruction: no call and no message, so a bare-metal build still makes no hidden
+calls. A failed check stops the program with a signal (SIGILL on x86-64, SIGTRAP on arm64), and
+output still buffered is lost, as with C's `abort`; run the debug build to see where. A finished
+frame resumed or awaited again, and `@panic`, still stop with their message. A function with
+`@attributes([@unchecked])` has no bounds checks in its body, for a hot loop known to stay in range.
+Code that wants wrapping in every mode uses `+%`, `-%` and `*%`.
 
 The optimizer removes a check it can prove passes, such as `xs[i]` in `for (i) in 0..xs.len` over a
 slice or array (that loop then vectorizes as it would in C), so most loops pay nothing. Over the
@@ -65,7 +69,10 @@ it exits with code 102.
 
 Some mistakes never compile: using a moved value, moving inside a loop without a new value before
 the next pass, copying a type with a `delete` hook but no `copy` hook, a `match` that misses a case,
-a null `T&`, and format strings that don't match their arguments.
+a null `T&`, writing through a reference to a
+[`val`](/volt-bootstrap/guide/references/#references-to-a-val), a statement that computes a value
+and drops it (`x == 1;`; a call's result may be dropped), and format strings that don't match their
+arguments.
 
 ## What the compiler warns about
 

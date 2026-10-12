@@ -10,7 +10,7 @@ sidebar:
 | Command | |
 | --- | --- |
 | `bolt build [STEP] [-Dname=value]` | build the package; with STEP, run that build-file step. `-D` sets build-file options |
-| `bolt check` | type-check everything without building |
+| `bolt check` | type-check the library and executables without building (`--all-targets`: tests, examples and benchmarks too) |
 | `bolt run [-- ARGS]` | build and run an executable (`--bin NAME`, `--example NAME`) |
 | `bolt test [FILTER]` | build and run the tests (`--no-run` builds only) |
 | `bolt bench [FILTER]` | build the benchmarks with the bench profile and time them |
@@ -26,6 +26,8 @@ it's written, and time spent in a shared library (libc's `malloc`, say) is named
 
 ```
 $ bolt hot bench/closures/main.volt -- 300
+bolt hot: 200 samples of /tmp/bolt-hot-4242/main
+
   self   total  function
  45.5%   99.0%  pipeline<closure(i64) -> i64, closure(i64) -> bool> (bench/closures/main.volt:6), inlined
  40.5%   40.5%  a closure (bench/closures/main.volt:30:92), inlined
@@ -46,9 +48,10 @@ hottest paths
 at its lines there, not in calls to it. A C compiler's copies of a function
 (`work.constprop.0`, made for a constant argument) are reported as that function.
 
-The program samples itself (about a thousand times a second of CPU time), so this needs no
-`perf`, debugger or root; it runs on Linux, and names the samples with `llvm-symbolizer` or
-`addr2line`. Run the program long enough to get a few hundred samples.
+The program samples itself (on each tick of the kernel's timer, usually 250 to 1000 times a second
+of CPU time), so this needs no `perf`, debugger or root; it runs on Linux (x86-64 and aarch64), and
+names the samples with `llvm-symbolizer` or `addr2line`. Run the program long enough to get a few
+hundred samples.
 
 ## Packages
 
@@ -62,19 +65,19 @@ The program samples itself (about a thousand times a second of CPU time), so thi
 | `bolt fetch` | download every git dependency, for `--offline` builds later |
 | `bolt tree` | print the dependency tree |
 | `bolt metadata` | the workspace as JSON: packages, targets, dependencies, features |
-| `bolt install [--path DIR]` | build with the release profile and copy the executables to `~/.local/bin` (or `--git URL`; `--root DIR`, `$BOLT_INSTALL_ROOT`; `--bin NAME` picks some, `--force` replaces ones already there) |
+| `bolt install [--path DIR]` | build with the release profile and copy the executables to `~/.local/bin` (or `--git URL`, at a `--rev`, `--branch` or `--tag`; `--root DIR`, `$BOLT_INSTALL_ROOT`; `--bin NAME` picks some, `--force` replaces ones already there) |
 | `bolt uninstall NAME...` | remove what `install` put there |
 
-`bolt add` also takes `--dev`, `--optional`, `--features A,B` and `--no-default-features`. `bolt new`
-and `bolt init` name the package after its directory (lowercased, `-` as `_`) unless `--name NAME`
-says otherwise.
+`bolt add` also takes `--dev`, `--optional`, `--features A,B` and `--no-default-features`. `add`
+and `remove` edit bolt.toml in place, keeping its comments and layout. `bolt new` and `bolt init`
+name the package after its directory (lowercased, `-` as `_`) unless `--name NAME` says otherwise.
 
 ## Options
 
 | Option | |
 | --- | --- |
 | `-p, --package NAME` | work on this package (default: the one here, or the workspace's default members) |
-| `--workspace` | every package in the workspace |
+| `--workspace`, `--all` | every package in the workspace |
 | `-r, --release` | the release profile |
 | `--profile NAME` | any profile |
 | `-F, --features LIST` | turn on features: `NAME`, `PACKAGE/NAME`, `DEPENDENCY/NAME` |
@@ -89,6 +92,9 @@ says otherwise.
 | `-q, --quiet`, `-v, --verbose` | fewer or more lines (verbose prints each command). On a terminal, a live `Building` line under the others shows what's compiling and for how long |
 | `-V, --version`, `-h, --help` | print bolt's version, or its usage |
 
+Options go before or after the command, and `--option=value` works too. `b`, `c`, `r`, `t` and `rm`
+are short for `build`, `check`, `run`, `test` and `remove`.
+
 ## Environment
 
 | Variable | |
@@ -96,3 +102,5 @@ says otherwise.
 | `VOLTC` | the compiler bolt runs |
 | `BOLT_HOME` | where git dependencies are cloned (default `$XDG_CACHE_HOME/bolt`, else `~/.cache/bolt`) |
 | `BOLT_INSTALL_ROOT` | where `install` puts executables (`ROOT/bin`) |
+| `BOLT_API` | the `bolt` package build files use (default: `api/` next to bolt, the checkout's `bolt/api`, or `lib/volt/bolt` beside its `bin/`) |
+| `CARGO`, `ZIG`, `GO`, `CC` | what builds `[foreign]` libraries and the Node, Lua and Ruby modules (defaults `cargo`, `zig`, `go`, `cc`) |

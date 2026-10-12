@@ -70,7 +70,9 @@ function.
 
 `val` and `var` work at the top level and in namespaces. A global's value must be known at compile
 time: arithmetic and bit operations over constants and other `val` globals work (`1 << 13`,
-`FLAG | 0x10`), and so do calls to `comptime` functions. The result must fit the global's type.
+`FLAG | 0x10`), and so do calls to `comptime` functions. The result must fit the global's type. A
+literal of constants works too (an array, a struct, an enum variant with its payload, an
+optional), and so does another global's address (`val at: i32* = &hits;`).
 
 ```volt
 use std::io;
@@ -91,6 +93,8 @@ fn main() -> void {
 ```
 
 A `static` local keeps its value between calls: `static var calls: i32 = 0;` inside a function.
+`@attributes([@thread_local])` on a global `var` gives each thread its own copy (see
+[Attributes](/volt-bootstrap/guide/comptime/#attributes)).
 
 ## Visibility
 
@@ -113,7 +117,8 @@ program instantiates it.
 
 ## Packages
 
-A package is a directory of `.volt` files, and each of its files is wrapped in `namespace NAME`.
-That's all std is: every std file is inside `namespace std`. You give voltc packages with
-`--pkg NAME=DIR` (bolt does it for dependencies), and the program reaches them as `NAME::...`.
-See [Packages and std](/volt-bootstrap/voltc/packages/).
+A program's own files (every file on the command line) share one top level, so each sees what the
+others declare. A package is a directory of `.volt` files, and each of its files is wrapped in
+`namespace NAME`. That's all std is: every std file is inside `namespace std`. You give voltc
+packages with `--pkg NAME=DIR` (bolt does it for dependencies), and the program reaches them as
+`NAME::...`. See [Packages and std](/volt-bootstrap/voltc/packages/).

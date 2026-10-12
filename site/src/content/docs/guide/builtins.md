@@ -19,14 +19,14 @@ Builtins start with `@`. They're part of the language, not a library.
 | `@typeid(T)`, `@typeid(x)` | `u64` | a type's id, the same in every build; for a trait value, the id of the type it holds. See [Comptime](/volt-bootstrap/guide/comptime/#type-ids-typeid) |
 | `@expand(expr)` | `expr`'s | `expr`, noting at compile time what it became: a comptime value, or the generic instance a call runs. See [Comptime](/volt-bootstrap/guide/comptime/#what-comptime-code-became-expand-and-voltc-expand) |
 | `@embed("path")` | `str` | a file's bytes, read at compile time; the path is relative to the source file. See [Reading files](/volt-bootstrap/guide/comptime/#reading-files-embed) |
-| `@vector(T, n)` | `type` | the SIMD vector of `n` numbers of type `T` (comptime); `std::simd` names them. See [SIMD vectors](/volt-bootstrap/std/math-functions/#simd-vectors) |
+| `@vector(T, n)` | `type` | the SIMD vector of `n` numbers of type `T` (comptime): 2, 4, 8, 16, 32 or 64 lanes, 64 bytes at most; `std::simd` names them. See [SIMD vectors](/volt-bootstrap/std/math-functions/#simd-vectors) |
 | `@discriminant(v)` | `i64` | which variant an enum value (or a reference to one) holds: its discriminant, as `@typeinfo` lists it |
 | `@field(v, "name")` | the field | `v.name`, the name a comptime string (or a tuple element's index, a comptime integer): read, assigned, borrowed; called, `@field(v, "name")(args)` is the method `v.name(args)` (and `@field(T, "name")(args)` is `T::name(args)`). See [Comptime](/volt-bootstrap/guide/comptime/#reflection-typeinfo-and-typeof) |
 | `@has_field(T, "name")` | `bool` | is `T` a struct with that field (comptime) |
 | `@has_method(T, "name", A...)` | `bool` | does `T` have a method of that name, taking `A...` first (comptime). See [Comptime](/volt-bootstrap/guide/comptime/#does-a-type-attach-a-trait-attaches) |
 | `@attaches(T, some_trait)` | `bool` | does `T` attach the trait, as a `<T: some_trait>` bound asks (comptime). See [Comptime](/volt-bootstrap/guide/comptime/#does-a-type-attach-a-trait-attaches) |
 | `@panic("msg")` | `never` | stops the program with a message (exit code 101) |
-| `@compile_error("msg")` | `never` | fails compilation where it's reached |
+| `@compile_error("msg")` | `never` | fails compilation where it's reached; as a struct field's default (`port: u16 = @compile_error("give a port")`), a literal that leaves the field out fails with the message |
 | `@cfg("key")`, `@cfg("key", "value")` | `bool` | a `--cfg` setting, the target's `os`, `arch` or `pointer_bits`, `target` (the `--target` name, on bare metal), `"hosted"` (an OS at all), `"unix"` (Linux, macOS or FreeBSD), or `"release"` for a `--release` build (comptime) |
 | `@slice(ptr, len)` | `T[..]` | a slice over `len` values starting at `ptr`, unchecked |
 | `@write(ptr, value)` | `void` | store into memory without deleting what was there |
@@ -67,7 +67,7 @@ above, after `@`, with what each does.
 | `@unchecked` | a fn | no bounds checks in its body, for code that proves its own indices |
 | `@invalidates` | a method | it may move or free its receiver's storage: borrows into it end at the call |
 | `@section("name")` | a fn | put it in a linker section |
-| `@align(n)` | a global, a struct | its alignment, in bytes |
+| `@align(n)` | a fn | its code's alignment, in bytes |
 | `@deprecated("why")` | a fn | using it warns with this message |
 | `@owns("field")` | a struct | it owns what this pointer field points to (for borrow checking) |
 | `@thread_local` | a global `var` | each thread has its own copy |

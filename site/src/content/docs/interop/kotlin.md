@@ -58,7 +58,8 @@ result and redoes it when a file (or the compiler) changes. It works the same wi
 Generic, `suspend` and extension functions, `vararg` parameters, interfaces, nested types,
 typealiases, a function whose result type isn't written (`fun f() = ...`) and a second function of
 the same name (an overload) aren't callable from Volt; they're left out, listed in a comment of the
-generated declarations (`VOLT_SHOW_IMPORT=1 voltc check main.volt` prints them). A Kotlin name
-that is a Volt keyword gets a `_` after it (`move` is `move_`). The program links the archive from
-bolt's cache with `-lpthread -ldl -lm -lstdc++`; two Kotlin imports in one program share one
+generated declarations (`VOLT_SHOW_IMPORT=1 voltc check main.volt` prints them). Each Volt fn has
+the Kotlin declaration it calls in a comment above it (`// Kotlin: fun scaled(k: Double): Point`),
+which an editor's hover shows. A Kotlin name that is a Volt keyword gets a `_` after it (`move` is
+`move_`). The program links the archive from bolt's cache with `-lpthread -ldl -lm -lstdc++`; two Kotlin imports in one program share one
 runtime.

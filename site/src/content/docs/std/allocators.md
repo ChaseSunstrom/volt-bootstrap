@@ -9,11 +9,12 @@ std never allocates behind your back. Like in Zig, the memory std uses comes fro
 can choose:
 
 - every type that owns memory takes an allocator type parameter: `string`, `vec`, `map`, `set`,
-  `deque`, `heap`, `sorted_map`, `box`, `thread::shared` and `thread::channel`;
+  `deque`, `heap`, `sorted_map`, `box`, `thread::shared`, `thread::channel` and `json::value`;
 - almost every function that returns such a value takes an allocator argument: `text`'s `split`,
   `replace` and `join`, `path::join`, `fs::read_file` and `list_dir`, `json::parse`,
   `time::utc_iso8601`, `process::cwd`, `string::from`, and the rest; `std::format`,
-  `html::escaped`, `html::template` and `@derive`'s `to_string` and `to_json` use the default one.
+  `html::escaped`, `html::template`, `process::windows_args` and `@derive`'s `to_string` and
+  `to_json` use the default one.
 
 Both default to `std::mem::default_allocator` (C's `malloc` underneath, and it takes no space), so
 `std::string` and `"a,b".split(",")` work as they always have.

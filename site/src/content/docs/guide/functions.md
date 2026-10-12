@@ -5,7 +5,8 @@ sidebar:
   order: 2
 ---
 
-A function names its parameters' types and its return type. `-> void` returns nothing.
+A function names its parameters' types and its return type. `-> void` returns nothing, as does a
+function written without `->`.
 
 ```volt
 use std::io;
@@ -59,9 +60,12 @@ argument: the caller's value moves in. Take a reference, `T&`, to borrow it inst
 ## Overloading
 
 Several functions can share a name when their parameters differ. The call picks the one whose
-parameter types fit the arguments best, and an ambiguous call is an error. Between generic
-versions that fit equally well, the more specific one wins: `<A> cmp(this: string<A>&, ...)` beats
-the blanket `<T> cmp(this: T&, ...)`.
+parameter types fit the arguments best, and an ambiguous call is an error. An exact type beats a
+conversion, and an integer parameter beats a float one (`kind(i64)` over `kind(f64)` for an `i32`).
+Between generic versions that fit equally well, the more specific one wins:
+`<A> cmp(this: string<A>&, ...)` beats the blanket `<T> cmp(this: T&, ...)`, a bounded
+`<T: marked>` beats `<T: type>`, and a pack of bare generics (`rest: T...`) is as blanket as a
+bare `T`.
 
 ```volt
 use std::io;
@@ -147,6 +151,9 @@ fn main() -> i32 {
 
 - Functions attached to a type are methods: [Structs and methods](/volt-bootstrap/guide/structs/).
 - `<T: type>` functions are templates: [Templates](/volt-bootstrap/guide/templates/).
-- Function values and closures: [Closures](/volt-bootstrap/guide/closures/).
+- Function values and closures (a `fn` isn't declared inside another; a closure is):
+  [Closures](/volt-bootstrap/guide/closures/).
 - `comptime fn` runs while compiling: [Comptime](/volt-bootstrap/guide/comptime/).
+- `async fn` runs as a frame that can suspend: [Async](/volt-bootstrap/guide/async/).
+- `test "name" { ... }` blocks run under `--test`: [Tests](/volt-bootstrap/bolt/testing/#test-blocks).
 - `extern "C" fn` and `export fn` meet C: [C interop](/volt-bootstrap/interop/c/).

@@ -84,7 +84,8 @@ bytes are valid. On a `u8`, `is_digit`, `is_alpha`, `is_space` and friends class
 
 `std::println(format, args...)` prints a line; `std::print` leaves out the newline; `eprintln` and
 `eprint` go to stderr. Each `{}` in the format takes the next argument; `{{` and `}}` print braces.
-The format is checked while compiling: the count of `{}`s has to match the arguments.
+The format is a string literal, checked while compiling: the count of `{}`s has to match the
+arguments. A call prints all its text at once, so lines from different threads don't mix.
 
 ```volt
 use std::io;
@@ -108,9 +109,13 @@ fn main() -> void {
 
 Everything prints: numbers, booleans, text, arrays and slices, tuples, structs (their fields),
 enums (the variant and its payload), optionals, and error unions (`error.NAME` for an error). A
-float prints as the shortest text that reads back as the same value (`0.1`, not
-`0.10000000000000001`); infinities print as `inf` and `-inf`, and NaN as `nan`. A reference or
-pointer prints the address it holds; print `*r` for the value.
+struct that attaches `as_str(this: T&) -> str` prints as that text, as `std::string` does; a box
+prints the value it holds, and a `fn` value `<fn>`. Other structs print their fields, a `std::vec`
+too: print `v.items()` for its elements. A float prints as the shortest text that reads back as
+the same value (`0.1`, not `0.10000000000000001`, and `2` for `2.0`), with an exponent when it's
+very large or small (`1e+21`, `1e-05`); infinities print as `inf` and `-inf`, and NaN as `nan`. A
+reference or pointer prints the address it holds (a null pointer `null`); print `*r` for the
+value.
 
 ```volt fail
 use std::io;
@@ -157,7 +162,7 @@ A `{}` can carry a spec after a colon, as in Rust: `{:[[fill]align][sign][#][0][
 | `#` | with `x`, `b` or `o`: the `0x`, `0b` or `0o` prefix |
 | `0` | pad a number with zeros after its sign: `{:05}` makes `-0042` |
 | width | at least this many characters |
-| `.precision` | digits after the point for a float; at most this many characters of text |
+| `.precision` | digits after the point for a float, rounded exactly, ties to even (`{:.1}` of `1.25` is `1.2`); at most this many characters of text |
 | type | `x` `X` hex, `b` binary, `o` octal, `c` an integer as a character; `e` `E` a float with an exponent |
 
 ```volt

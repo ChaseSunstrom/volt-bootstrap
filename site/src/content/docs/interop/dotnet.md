@@ -44,7 +44,9 @@ fn main() -> void {
 
 An exception stops the program with its type and message, as a Volt panic does (.NET declares no
 exceptions to make an error of). Generic types and methods, delegates, `ref` and `out` parameters
-are left out, listed in a comment of the generated declarations. bolt needs the .NET SDK:
+are left out, listed in a comment of the generated declarations (`VOLT_SHOW_IMPORT=1 voltc check
+main.volt` prints them). There each Volt fn has the declaration it calls above it, in C#'s
+spelling (`// .NET: public double Norm()`), which an editor's hover shows. bolt needs the .NET SDK:
 `$DOTNET`, else `$DOTNET_ROOT/dotnet`, else `dotnet` on the PATH; the program links its `libhostfxr`
 with an rpath, and an assembly's own dependencies are found next to it.
 
@@ -179,7 +181,10 @@ LD_LIBRARY_PATH=/path/to/greet/target/debug dotnet run   # DYLD_LIBRARY_PATH on 
 ```
 
 An error set becomes a `VoltException` subclass whose `Code` and `Name` say which error it was;
-slices are `Span<T>`, optionals `T?`, and a callback an `Action` or a `Func`.
+slices are `Span<T>`, optionals `T?`, and a callback an `Action` or a `Func`. Structs are C#
+structs, and one Volt takes by reference (`v: vec2&`) is passed `ref`, so what Volt changes comes
+back; enums are C# enums. A number by reference (`n: i32*`, `x: f64&`) is a pointer (`int*`,
+`double*`), passed from `unsafe` code.
 
 ### Every shape
 
@@ -187,7 +192,9 @@ C# takes [every shape](/volt-bootstrap/interop/other-languages/#every-shape) C d
 
 - **Owned values as parameters.** Text (`std::string`) is a `string`, which Volt copies. A handle
   by value is given to the fn: the class lets its handle go (`Release()` does that by hand), and
-  Volt deletes it.
+  Volt deletes it. One lent to a call that hasn't returned can't be disposed of or given away
+  until it does (a callback trying throws `InvalidOperationException`), nor lent and given in one
+  call.
 - **Traits.** A Volt trait is an interface to implement. A fn taking `s: shape&` lends Volt the
   object for the call; one taking `s: shape` gives it, and Volt calls `Dispose()` on it (when it's
   `IDisposable`) once it's done. A Volt value of the trait comes back as a `volt_shape`, which

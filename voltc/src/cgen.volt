@@ -142,7 +142,7 @@ attach fn ty(this: cgen&, t: u32) -> str {
             } else if (b == 64) {
                 name.append("double");
             } else {
-                name.append("__float128");
+                name.append("volt_f128"); // the prelude's: __float128, or a binary128 long double
             }
         },
         .INT(k) => { name.append(int_c(k)); },

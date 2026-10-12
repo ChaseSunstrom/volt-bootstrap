@@ -48,6 +48,7 @@ Function parameters are `val`s too; `fn f(var x: i32)` gives the function its ow
 | `E!T` | an [error union](/volt-bootstrap/guide/errors/) |
 | `T&`, `T*` | a [reference and a pointer](/volt-bootstrap/guide/references/) |
 | `fn(A) -> R` | a [function value](/volt-bootstrap/guide/closures/) |
+| `type` | a type, as a value at [compile time](/volt-bootstrap/guide/comptime/#types-as-values) |
 
 ### Type aliases
 
@@ -96,6 +97,10 @@ fn main() -> void {
 // expect: tab	here
 ```
 
+A literal takes the type its place wants. On its own, an integer is an `i32` (an `i64`, then an
+`i128`, when it doesn't fit), a float an `f64`, and a character its code point: a `u8` up to 255, a
+`u32` past it.
+
 ### Multi-line and raw strings
 
 `"""` starts a string on the next line, and a `"""` on a line of its own ends it. The closing
@@ -130,12 +135,16 @@ fn main() -> void {
 
 The arithmetic, comparison, logical and bitwise operators are C's. What's different:
 
-- Integer overflow **traps** in debug builds and wraps in `--release` builds. `+%`, `-%` and `*%`
+- Integer overflow **panics** in debug builds and wraps in `--release` builds (dividing by zero
+  panics in debug builds too: see [Safety](/volt-bootstrap/guide/safety/)). `+%`, `-%` and `*%`
   always wrap, for hashes and checksums; on two literals they wrap in the type the value gets
   (`val b: u8 = 134 *% 115;` is 50).
-- A shift by at least the type's width (`x >> 64` on a `u64`) traps in debug builds; `--release`
+- A shift by at least the type's width (`x >> 64` on a `u64`) panics in debug builds; `--release`
   builds shift by the amount modulo the width.
 - `x++` and `x--` are statements, not expressions.
+- `&`, `|` and `^` bind tighter than comparisons: `x & 1 == 1` is `(x & 1) == 1`, not C's
+  `x & (1 == 1)`. `as` binds tighter than arithmetic: `n as i64 * 2` converts `n`, then
+  multiplies.
 - A value converts by itself where nothing can be lost: an integer to a wider one of the same
   signedness (`u32` to `u64`, `i8` to `i32`), an unsigned one to a wider signed one (`u32` to
   `i64`), `usize` and `u64` either way (and `isize` and `i64`: the same 64 bits on every target),
@@ -143,8 +152,8 @@ The arithmetic, comparison, logical and bitwise operators are C's. What's differ
   a float to a wider one (`f32` to `f64`). So `xs.len` passes as a `u64`, and `n * 1.5` with an
   `i32` `n` is an `f64`.
 - `x as T` converts only when nothing can be lost (widening an integer or a float, a `bool` to an
-  integer, `T&` to `T*`; any integer to a float, rounding when it must, and a plain enum to an
-  integer); anything else is a compile error.
+  integer, `T&` to `T*` or `void*`; any integer to a float, rounding when it must, and a plain enum
+  to an integer); anything else is a compile error.
   `@cast<T>(x)` converts anything to anything, unchecked: narrowing (`u64` to `u32`) and changing
   sign take it.
 - `a ?? b` is the value of optional `a`, or `b` when it's null.
@@ -153,7 +162,8 @@ The arithmetic, comparison, logical and bitwise operators are C's. What's differ
   [derived](/volt-bootstrap/guide/comptime/#derive) one. A type without one can't be compared.
   Structs and enums get the other operators the same way: see
   [Operators](/volt-bootstrap/guide/structs/#operators). `eq` takes one side by reference, so both sides can't be temporaries
-  (`make() == make()`: store one in a variable first).
+  (`make() == make()`: store one in a variable first). Arrays, tuples and slices don't take `==`;
+  a slice's `eq(&other)` compares it element by element.
 - `a..b` and `a..=b` are ranges (exclusive and inclusive).
 - Operands and arguments are evaluated left to right. `place = value` evaluates the value first,
   then the place; `place += value` evaluates the place first, since it reads it.
@@ -176,8 +186,9 @@ fn main() -> void {
 
 ## Control flow
 
-`if` and `while` take a `bool` in parentheses, and their bodies always have braces (an `if` without
-them is a value, below).
+`if` and `while` take a `bool` in parentheses (or an optional or a pointer, which they check for
+null and [narrow](/volt-bootstrap/guide/errors/#narrowing)), and their bodies always have braces (an
+`if` without them is a value, below).
 
 ```volt
 use std::io;
@@ -231,8 +242,8 @@ condition is hard to predict.
 
 ### for
 
-`for` walks a range, an array or a slice. A second name gets the index. `for (x&)` binds each
-element by reference instead of copying it, so the loop can change it.
+`for` walks a range, an array, a slice or a `str` (its bytes). A second name gets the index.
+`for (x&)` binds each element by reference instead of copying it, so the loop can change it.
 
 ```volt
 use std::io;
@@ -338,11 +349,28 @@ fn main() -> void {
 // expect: 55
 ```
 
+`=> expr` after the iterable (before any accumulator) replaces each element with a value worked
+out from it and the index, before the body runs:
+
+```volt
+use std::io;
+
+fn main() -> void {
+    val words: str[] = { "volt", "is", "fast" };
+    val letters = for (w) in words => w.len [ var n: usize = 0 ] {
+        n += w;
+    };
+    std::println("{}", letters);
+}
+// expect: 10
+```
+
 ## Arrays, slices and ranges
 
-An array's length is part of its type. Slicing an array (`a[1..3]`, or `a[..]` for all of it) gives a
-`T[..]` that points into it without copying. Indexing is bounds-checked, in `--release` builds too
-(as a trap).
+An array's length is part of its type, and an array type reads left to right: `u8[2][3]` is three
+`u8[2]`s. Slicing an array (`a[1..3]`, `a[1..]` and `a[..3]` to an end, or `a[..]` for all of it)
+gives a `T[..]` that points into it without copying. Indexing is bounds-checked, in `--release`
+builds too (as a trap).
 
 ```volt
 use std::io;

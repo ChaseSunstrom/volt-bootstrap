@@ -77,7 +77,7 @@ members = ["crates/*"]
 
 | Key | |
 | --- | --- |
-| `name` | the executable's name (letters, digits, `_`, `-`) |
+| `name` | the executable's name (letters, digits, `_`, `-`); a `[[bin]]`'s defaults to the package's |
 | `path` | a `.volt` file or a directory of them; default `src` for a bin, `DIR/NAME` or `DIR/NAME.volt` for the others |
 | `required-features` | features that must be on for it to be built |
 
@@ -104,8 +104,9 @@ See [Other languages](/volt-bootstrap/interop/other-languages/).
 
 ## [features]
 
-Each feature lists what it turns on: other features, `dep:NAME` (an optional dependency) and
-`NAME/FEATURE` (a dependency's feature). `default` is on unless `--no-default-features` is given.
+Each feature lists what it turns on: other features, `dep:NAME` (an optional dependency),
+`NAME/FEATURE` (a dependency's feature) and `NAME?/FEATURE` (that feature, once something else turns
+the optional dependency on). `default` is on unless `--no-default-features` is given.
 An optional dependency that no feature names with `dep:` is also a feature of the same name. Code
 reads features with `@cfg("feature", "NAME")`.
 
@@ -148,6 +149,6 @@ programs, and the code imports it with `use { "NAME.h" } as NAME;`. See
 | --- | --- |
 | `members` | member directories; globs like `crates/*` |
 | `exclude` | directories the globs shouldn't pick up |
-| `default-members` | what bolt works on when neither `-p` nor `--workspace` is given |
+| `default-members` | what bolt works on at the root when neither `-p` nor `--workspace` is given (without it: the root's own package, else every member) |
 
 See [Workspaces](/volt-bootstrap/bolt/workspaces/).

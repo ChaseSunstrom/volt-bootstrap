@@ -8,7 +8,7 @@ sidebar:
 ## Tests
 
 Each `.volt` file (or subdirectory) in `tests/` is a program; `bolt test` builds them all with the
-test profile and runs each one. A test passes when it exits with 0.
+test profile and runs each one in the package's directory. A test passes when it exits with 0.
 
 `std::testing` has assertions that say what went wrong. One that fails prints to stderr why, with
 the values it compared, and returns `FAILED`, so `try` ends the test there:

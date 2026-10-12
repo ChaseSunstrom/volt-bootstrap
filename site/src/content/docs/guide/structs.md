@@ -73,7 +73,8 @@ A literal can start from another value: `{ ..base, field: value }` is `base` wit
 replaced, and its type is base's when nothing else gives one. It takes base the way
 `var t = base;` would: a plain struct is copied, one that owns memory moves (`..copy base` keeps
 it), and a replaced field's old value is deleted. Through a reference (`this` in a method) base is
-the value it reaches, so an update never writes through it. The new values are worked out after
+the value it reaches, so an update never writes through it; one that owns memory can't move out
+from behind the reference, so it takes `..copy this`. The new values are worked out after
 base is taken, so they can read a copied base, not a moved one.
 
 ```volt
@@ -110,7 +111,8 @@ An empty struct (`struct marker {}` or `struct marker;`) takes no space.
 
 Methods are declared outside the struct with `attach fn`. The first parameter, `this`, says what
 they attach to: `this: T&` works on the caller's value (and can change it when it's a `var`),
-`this: T` gets a copy.
+`this: T` gets a copy (a type that owns something moves in instead, as into any parameter, so the
+caller's value is gone after the call).
 
 ```volt
 use std::io;
@@ -304,8 +306,9 @@ More in [Templates](/volt-bootstrap/guide/templates/).
 
 ## Layout
 
-The compiler may reorder a struct's fields to save padding. `extern struct` keeps C's layout
-(declaration order, C alignment), for structs that cross into C:
+A struct is laid out as C lays out the same struct: fields in declaration order, with C's alignment
+and padding, on both backends. So `{ a: u8; b: i64; c: u8; }` takes 24 bytes, and 16 with `b`
+first. `extern struct` marks a struct that crosses into C; its layout is the same:
 
 ```volt
 extern struct c_point {

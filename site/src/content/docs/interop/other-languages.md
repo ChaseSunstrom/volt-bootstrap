@@ -107,9 +107,11 @@ More need converting at the edge. `voltc lib` adds that code when it builds the 
   does, like a `std::string`) or has a field without a C form. An export fn that returns one by
   value makes one, and the caller owns it. Its methods are the `export attach fn`s on it, and
   export fns named `NAME_method` that take it as `NAME&` first. voltc adds `NAME_free`, which runs
-  its `delete`.
+  its `delete` (an export fn of that name is an error).
 - **Callbacks.** A closure parameter `fn(A) -> R` takes a function from the other language. In C,
   that's a function pointer that gets the caller's data first, and then the data itself.
+
+A type with no C form at all, a tuple say, is an error naming the fn and the type.
 
 ```volt
 use std::string;
@@ -191,6 +193,12 @@ Python's on
 [its page](/volt-bootstrap/interop/lua/#every-shape), Ruby's [below](#every-shape-in-ruby), Swift's on
 [its page](/volt-bootstrap/interop/swift/#every-shape):
 
+- **Numbers by reference.** A `n: i32*` or `x: f64&` parameter is a pointer in C, C++, Rust, Zig,
+  Go (`*int32`), C# (`int*`), Swift (`&n` passes one), Kotlin (`CPointer<IntVar>`) and Dart
+  (`Pointer<Int32>`), with C++ and Rust taking a `T&` as their own reference (`double &`, `&mut
+  f64`); it's a `MemorySegment` in Java and a `ctypes` number in Python (`ctypes.c_int32(7)`), and
+  JavaScript and Ruby take an array of one, `[7]`, and Lua a table of one, which get what Volt
+  writes.
 - **Owned values as parameters.** Text (`std::string`) comes in as a `str` that Volt copies (a
   `&str` in Rust, a `[]const u8` in Zig); a handle by value is given to the fn, which deletes it
   (C++'s class gives it up, Rust's type is moved in, Zig's and Python's are given up).
@@ -226,8 +234,10 @@ Python's on
   caller's. As a parameter, a `std::vec<T>` takes a slice of those, which Volt copies (handles in
   it are given up). A `std::string[..]` or a slice of an export struct takes a slice of `str`s or
   of handles (each once), made into Volt's for the call (a handle's value is with the call until it
-  returns, so a callback reaching it through the handle sees it as it was). A `std::string?` comes back as an
-  optional owned text and goes in as a `str?`; an optional handle is its pointer, null for none.
+  returns, so a callback reaching it through the handle sees it as it was); as a result, such a
+  slice is refused, since nothing would own it (return a `std::vec`). A `std::string?` comes back
+  as an optional owned text and goes in as a `str?`; an optional handle is its pointer, null for
+  none.
   A `std::vec<T>` comes back as a `std::vector` in C++ (of `std::string`s, or of the classes), a
   `Vec` in Rust, a `VoltList(T)` with `items()` and `deinit()` in Zig, and a `list` in Python.
   Containers of text and handles go in from a `std::vector`, from `&[impl AsRef<str>]` and
@@ -498,7 +508,8 @@ _ = c.add(2)
 c.close()                                     // or leave it to deinit
 ```
 
-Structs are the C structs; slices are `inout` arrays, so what Volt writes comes back. Enums and
+Plain structs are the C structs, and a struct with text is a Swift struct of its own with `String`
+fields (its arrays tuples); slices are `inout` arrays, so what Volt writes comes back. Enums and
 error sets are Swift enums (an error set's raw values are its codes); a function that can fail
 `throws`. Callbacks are closures. Swift takes [every shape](#every-shape): a trait is a protocol,
 a closure given back is a class called like a function, and lists are arrays (see
@@ -679,9 +690,11 @@ has one, when it's done with it), and one Volt gives back is a `*VoltT` with the
 it) and `(T, error)`; a closure given back is a `*ClosureN` with `Call` and `Close`. A
 `std::vec<T>` comes back as a `[]T` and goes in from one (handles in it are given up), slices of
 text and handles go in from `[]string` and `[]*T`, an optional text is a `*string` in and
-`(string, bool)` out, and an optional handle is `nil` for none. A panic in a Go function Volt
-calls doesn't unwind through Volt: it comes out of the call the function was passed to (when the
-function had to give Volt a handle, there's none to give, and the program ends).
+`(string, bool)` out, and an optional handle is `nil` for none. A handle lent to a call that
+hasn't returned can't be closed or given away until it does (a callback trying panics). A panic in
+a Go function Volt calls doesn't unwind through Volt: it comes out of the call the function was
+passed to (when the function had to give Volt a handle, there's none to give, and the program
+ends).
 
 ```go
 type circle struct{ r float64 }
@@ -697,15 +710,18 @@ defer d.Close()
 fmt.Println(sq.Area(), d.Call(21))            // 4 42
 ```
 
-A library that returns owned text also exports `NAME_text_free`, which frees it the way
-`volt_text_free` does, for languages that can't call a C function pointer.
+A library with owned text in its fns also exports `NAME_text_free`, which frees it the way
+`volt_text_free` does, and one with lists `NAME_list_free(owner, drop)`, for languages that can't
+call a C function pointer.
 
 Every binding also has the plain C functions: in C++ they're in namespace `raw`, in Rust in module
 `raw`, in Zig in struct `raw`, in C# and Dart in class `Native`, and in Java as the `H_NAME` method
 handles.
 `--lang` is one of `c`, `cpp`, `rust`, `zig`, `python`, `pyi`, `csharp`, `java`, `go`, `lua`,
 `dart`, `swift`, `kotlin`, `ruby`, `node`, `js`, `ts` or `json`. The Python bindings use `ctypes` and load the shared library.
-`--lang pyi` writes their type stubs, for editors and type checkers such as mypy.
+`--lang pyi` writes their type stubs, for editors and type checkers such as mypy. The comment above
+an export fn is its doc comment in the C#, Java, Go, Dart, Swift, Kotlin and TypeScript bindings
+and in the stubs.
 
 ### The model, for generators of your own
 

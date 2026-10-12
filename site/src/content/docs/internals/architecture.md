@@ -62,6 +62,9 @@ source ─▶ lexer ─▶ parser ─▶ checker ─▶ typed IR ─┬─▶ cg
 | `runtime/` | the C prelude and runtime every hosted program includes |
 | `std/` | the standard library package |
 | `bolt/` | the build tool (Rust) and its build-file API package (`bolt/api`) |
+| `interop/` | packages for using Python, Lua, Java and .NET from Volt and writing Node addons in it, and the helpers that build a Volt package from Cargo, Zig, npm and pip |
+| `examples/` | example programs (the golden tests run them), bare metal and interop examples |
+| `bench/` | the [benchmark](/volt-bootstrap/internals/benchmarks/) programs, in Volt, C, C++, Rust and Zig |
 | `editors/vscode/` | the VS Code extension |
 | `site/` | this website |
 | `assets/logo/` | the logo generator |

@@ -67,7 +67,7 @@ print("turn", m.ml_turn(lambda a: [a[2], a[1], a[0]]))
 
 
 class Turner(m.ml_turner):
-    def turn(self, a):
+    def turn(self, a: list[int]) -> list[int]:
         return [a[2], a[1], a[0]]
 
 

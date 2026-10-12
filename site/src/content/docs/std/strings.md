@@ -39,8 +39,10 @@ half is still bytes, so split on what you searched for.
 
 ## Building text
 
-A `std::string` grows with `append`, `push` (a byte), `push_char` (a character, as UTF-8) and
-`append_int`; `s[i]` is its byte `i` (a `u8`, not a character), a place like a vec's element.
+A `std::string` grows with `append`, `push` (a byte), `push_char` (a character, as UTF-8),
+`append_int`, `append_uint` and `insert`, and shrinks with `pop`, `truncate` and `clear`; `s[i]` is
+its byte `i` (a `u8`, not a character), a place like a vec's element. `c_str()` views it as a
+NUL-terminated `cstr` for C, until it changes.
 `std::format` builds one from a format string, with the same `{}` and specifiers as
 [printing](/volt-bootstrap/guide/printing/); `std::write` adds to one that exists. `replace`,
 `repeat`, `to_upper` and `to_lower` make a new one from a `str`, and `std::join` puts parts
@@ -72,7 +74,8 @@ A `std::string` is a writer (it attaches `write_str`), so `std::write` can write
 
 `parse_int`, `parse_uint`, `parse_float` and `parse_bool` read the whole `str` and fail with a
 `std::text::parse_error`: `EMPTY`, `INVALID` (a character that doesn't belong, spaces included) or
-`OVERFLOW`:
+`OVERFLOW`. `parse_float` gives the nearest `f64`, bit for bit what C's `strtod` gives, reads `inf`
+and `nan` too, and makes a number too big for an `f64` an infinity rather than failing:
 
 ```volt
 use std::io;

@@ -52,6 +52,7 @@ fn main() -> void {
 
 | C++ | Volt |
 | --- | --- |
+| numbers, pointers, `const char*` | as from [C](/volt-bootstrap/interop/c/): `i32`, `T*`, `cstr?`; an `int&` is an `i32&` |
 | namespace | namespace |
 | a trivially copyable class or struct | a struct with C++'s size and layout: public fields by name, the rest as padding |
 | a class with virtual methods | a handle, as below, and a Volt type can subclass it (see [Subclassing](#subclassing-a-c-class-in-volt)) |
@@ -66,8 +67,13 @@ fn main() -> void {
 | copy constructor | a `copy` hook (a handle's copies the object with it) |
 | methods, static methods | attached functions, overloads kept |
 | functions, function templates | functions, generic functions: `ns::biggest<i32>(a, b)` |
-| class templates | generic structs: `ns::Box<f64>` |
-| enum, enum class | enums with the same values and tag type |
+| class templates | generic structs: `ns::Box<f64>`; one with private fields, bases or virtual methods is a generic handle (`ns::box<i32>`), its members worked out per use |
+| enum, enum class | enums with the same values and tag type (an unscoped enum's names are also constants beside it: `ns::ONE`) |
+
+A Volt fn can be attached to an imported class, held by value or by handle, as to any type:
+`attach fn dollars(this: cpp::bank::money&) -> f64 { ... }`
+([attach-foreign](https://github.com/ChaseSunstrom/volt-bootstrap/tree/main/examples/interop/volt-calls/attach-foreign)
+does it for a C struct and two C++ classes).
 
 ## How it works
 
@@ -91,11 +97,12 @@ fn main() -> void {
 // expect: 7.5
 ```
 
-Two more holes fill what C++ wants at compile time, and aren't passed: `{&i}` is argument `i`, a
+More holes fill what C++ wants at compile time, and aren't passed: `{&i}` is argument `i`, a
 Volt function, by its symbol (declared `extern "C"` for the call), and `{=i}` is argument `i`, a
-comptime value, as a C++ literal. So a template with non-type parameters gets them, and a call
+comptime value, as a C++ literal; `{t0}`, `{t1}`... are the types written after the result's
+(`@cpp<R, T>`), as C++ names them. So a template with non-type parameters gets them, and a call
 inside a generic function gets that instance's: `@cpp<i32>("apply<{&0}, {=1}>({2})", step<T>,
-@sizeof(T) > 4, x)`.
+@sizeof(T) > 4, x)`, `@cpp<T, T>("std::numeric_limits<{t0}>::max()")`.
 
 `VOLT_SHOW_CPP=1` prints the Volt declarations voltc generated from the headers.
 
@@ -124,7 +131,7 @@ Subclassing a C++ class (`derive`, below) needs its import under C++17 or newer.
 A named module's interface (`.cppm`, `.ixx`, `.mpp`, `.cxxm`, `.ccm`) imports as a header does, on
 its own in its `use`, with what it exports: an `export namespace geo { ... }`, an `export` function
 or class. What it doesn't export isn't there, as for C++ code that imports it. A header (or the
-module) may `import std;`:
+module) may `import std;` (or `import std.compat;`):
 
 ```cpp
 // geo.cppm
@@ -255,12 +262,12 @@ fn main() -> void {
 | a `const` or `constexpr` constant (a number, `bool`, enum or text) in a namespace | a `val` of its value |
 | a static data member `m` | `T::m()` (a copy) and `T::set_m(v)` when it can be assigned |
 | a class or enum inside a class (`Outer::Inner`) | `Outer_Inner`, beside `Outer` (an unscoped enum's names stay in it: `Outer_Mode::Low`) |
-| `operator T()` (explicit or not) | `to_T()`: `to_bool()`, `to_i32()`, `to_string()` |
+| `operator T()` (explicit or not; not in a class template) | `to_T()`: `to_bool()`, `to_i32()`, `to_string()` |
 | `operator=` | `assign(v)` |
 | a method template | a generic method: `c.cast_to<f64>()` |
 | a `std::function<R(A...)>` parameter | `fn(A...) -> R`: a closure or function; C++ calls it while the call lasts (it mustn't keep it) |
 | a `std::function` result | `stdcxx::function`: `call(...)` runs it, and it's deleted with the Volt value |
-| a `std::function` field | a getter, and `set_f(closure)`: the closure moves into the field, which keeps it (and deletes it once C++ is done with every copy) |
+| a `std::function` field | a getter, and `set_f(closure)`: the closure moves into the field, which keeps it (and deletes it once C++ is done with every copy); one capturing by reference (`\|x&\|`) is a compile error |
 | a bit-field | `f()` and `set_f(v)`, on a class held by value or by handle (C++ does the bit work) |
 | a namespace variable | `name()`: a reference into it (`*cpp::ns::count() = 3`), a borrowed handle for a class held by handle, or for others (a `std::string`) a copy, with `set_name(v)` |
 | a constant clang can't work out (`const std::string`, `const int x = f()`) | `name()`, read through a wrapper |
@@ -332,7 +339,8 @@ lay out is a generic handle, `cs::stdcxx::map<K, V>`, made by `{}` (or a compile
 literal, for an instance with no default constructor) and with its members worked out per use.
 
 A function that can throw (it isn't `noexcept`) also gets a `try_` form that returns the exception
-as a `cpp_error` instead of stopping the program. Its variant says which exception it was:
+as a `cpp_error` instead of stopping the program (a method's is `x.try_m(...)`, a constructor's
+`T::try_new(...)`). Its variant says which exception it was:
 `OUT_OF_RANGE`, `INVALID_ARGUMENT`, `LENGTH_ERROR`, `DOMAIN_ERROR`, `LOGIC_ERROR`, `RANGE_ERROR`,
 `OVERFLOW_ERROR`, `UNDERFLOW_ERROR`, `RUNTIME_ERROR`, `BAD_ALLOC` and `BAD_CAST` for the standard
 ones, one named after each class of the headers that derives from `std::exception` (the most
@@ -421,19 +429,24 @@ object `derive` didn't make; without RTTI, either stops the program saying so.
 
 ## Limits
 
-- What doesn't map is left out, with a comment in the generated source: a non-const reference to a
-  standard library string (a vector's is a `stdcxx::vector<T>&` handle, changed in place), a
-  `std::function` whose signature has a class in it (other than text). A function whose parameters
-  or result only a call settles is [called per use](#calls-worked-out-per-use) instead.
+- What doesn't map gets a comment in the generated source. A function whose parameters or result
+  only a call settles is [called per use](#calls-worked-out-per-use) instead, and so is one with a
+  parameter Volt has no form for, where a call is an error (C++ can't be handed a Volt value for
+  it): a non-const reference to a standard library string (a vector's is a `stdcxx::vector<T>&`
+  handle, changed in place), a `std::function` whose signature has a class in it (other than
+  text), a function pointer, a reference to an array. For a function pointer or a `std::function`,
+  `@cpp`'s `{&i}` passes a Volt function: `@cpp<i32>("ns::apply({&0}, {1})", inc, 4)`.
+- Overloads Volt can't tell apart (`long` and `long long` are both `i64`) come through once: the
+  first one declared.
 - A loop over a C++ range holds its iterators in Volt's own words, so they must be trivially copyable
   and destructible (the standard library's and the views' are); C++ reads ranges under C++11 or
   newer.
-- A type Volt can't lay out (a class template's instance with private fields, bases or virtual
-  methods, like `basic_json`; a lambda's own type; a coroutine's task type) is held by handle,
-  named after the type (`basic_json_0`, `lambda_3`) or by the header's `using` alias for it, and its
-  members are worked out per use: methods (`d.get("a")`), static functions
-  (`json::parse(text)`), constructors (`T::new(...)`) and operators by their Volt names (`op_add`,
-  `op_eq`, `op_index`, a lambda's `f.op_call(5)`). A name the class doesn't have is an error in
+- A type Volt can't lay out and has no generic for (an instance of a class template that takes a
+  number or a template, like `vec<3, float>` or `basic_json<>`; a lambda's own type; a coroutine's
+  task type) is held by handle, named after the type (`basic_json_0`, `lambda_3`) or by the header's
+  `using` alias for it (`vec3`), and its members are worked out per use: methods (`d.get("a")`),
+  static functions (`json::parse(text)`), constructors (`T::new(...)`) and operators by their Volt
+  names (`op_add`, `op_eq`, `op_index`, a lambda's `f.op_call(5)`). A name the class doesn't have is an error in
   clang's words. The import declares one for its own types; another library's (the standard
   library's) come through a call made per use.
   A constant whose value clang can't work out, and a variable C++ may change, are functions

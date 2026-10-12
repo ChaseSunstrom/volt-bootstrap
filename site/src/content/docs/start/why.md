@@ -34,20 +34,23 @@ lifetimes to annotate.
 specialization, packs and constant parameters. Code can run in the compiler (`comptime`), and types
 are values there.
 
-**Every other language is one step away.** Volt reads C headers and C++ headers (classes,
-templates, the standard library) directly, and imports ordinary Rust crates and Zig, Swift, Kotlin,
-Go, Java, C#, Python and TypeScript code the same way (`use { "geom.rs" } as geom;`, like a
-header); Lua it embeds through a package. The other way round, `voltc bindings` (or a `bindings` list in `bolt.toml`) makes a
+**Every other language is one step away.** Volt reads C headers and C++ headers and modules
+(classes, templates, the standard library) directly, and imports ordinary Rust crates and Zig,
+Swift, Kotlin, Go, Java, C#, Python, TypeScript and JavaScript code the same way
+(`use { "geom.rs" } as geom;`, like a header); Lua it embeds through a package. The other way
+round, `voltc bindings` (or a `bindings` list in `bolt.toml`) makes a
 Volt library usable from C, C++, Rust, Zig, Python, JavaScript and TypeScript, C#, Java, Go, Lua,
-Dart, Swift, Kotlin and Ruby. See [Interop](/volt-bootstrap/interop/c/).
+Dart, Swift, Kotlin and Ruby, and [libvoltvm](/volt-bootstrap/interop/embedding/) runs Volt source
+inside another program, as Lua is embedded. See [Interop](/volt-bootstrap/interop/c/).
 
 **One toolchain.** bolt builds packages and workspaces, fetches git dependencies, runs tests and
 benches, and runs build files written in Volt. Diagnostics show the code they're about and suggest
 fixes; a language server and a VS Code extension come with it.
 
 **It compiles to C.** The C backend writes readable C, so Volt runs wherever a C compiler does. The
-LLVM backend makes native code directly. The compiler is written in Volt and builds itself through
-both.
+LLVM backend makes native code directly, for [bare metal](/volt-bootstrap/voltc/bare-metal/)
+microcontrollers too, with no C compiler or C library at all. The compiler is written in Volt and
+builds itself through both.
 
 ## Next to the others
 
@@ -66,8 +69,9 @@ copies, and Zig's error values and comptime.
 ## When to pick something else
 
 - **You need proven memory safety.** Volt tracks ownership and moves but has no borrow checker,
-  so a reference can outlive what it points to. Debug builds poison freed memory, which catches
-  some of that, not all. Rust proves it at compile time.
+  so a reference can outlive what it points to. The compiler warns about common cases (a view kept
+  across a change to its container, a reference to a local returned) and debug builds poison freed
+  memory, which catches some of that, not all. Rust proves it at compile time.
 - **You need a large package ecosystem.** bolt has path and git dependencies, but no registry.
 - **You need a stable language today.** Volt is young: the language, std and tools still change,
   and there's no 1.0 yet.

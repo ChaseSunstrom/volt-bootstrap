@@ -35,12 +35,12 @@ newer language features need voltc.
 | `--release` | optimize (`-O2`); drop the overflow and double-free checks, so integer overflow wraps; indexing, slicing, another variant's payload and `.value` stay checked, and a failed check traps (SIGILL on x86-64) instead of panicking; C compiled along gets `-fno-math-errno` (Volt never reads `errno`, so `sqrt` and friends become instructions); `@cfg("release")` is true |
 | `--leak-check` | debug builds: exit with 102 if any allocation was never freed |
 | `--test` | build the program's test blocks (`test "name" { ... }`) instead of its `main`: they run one by one through `std::testing`, and the program's argument picks them by name (see [Tests](/volt-bootstrap/bolt/testing/#test-blocks)) |
-| `--test-pkg NAME` | with `--test`, package `NAME`'s test blocks too (no program files needed) |
-| `--profiler` | build for [`bolt hot`](/volt-bootstrap/bolt/commands/#finding-the-hot-spots): line information, frame pointers, and a sampler that writes `$VOLT_PROFILE_OUT` when the program exits (Linux). Through the C backend it's compiled with clang when that's installed and `$CC` isn't set: gcc leaves frame pointers out of leaf functions, which loses a leaf's caller |
+| `--test-pkg NAME` | with `--test`, package `NAME`'s test blocks too (it implies `--test`; no program files needed) |
+| `--profiler` | build for [`bolt hot`](/volt-bootstrap/bolt/commands/#finding-the-hot-spots): line information, frame pointers, and a sampler that writes `$VOLT_PROFILE_OUT` when the program exits (Linux on x86-64 and aarch64). Through the C backend it's compiled with clang when that's installed and `$CC` isn't set: gcc leaves frame pointers out of leaf functions, which loses a leaf's caller |
 | `--std DIR`, `--no-std` | the std package (default: `$VOLT_STD`, then a `std/` next to voltc) |
 | `--pkg NAME=DIR` | a package: DIR's `.volt` files, in `namespace NAME` |
 | `--link NAME=LIB.a` | take package NAME's non-generic code from a `voltc lib` build |
-| `--cfg [PKG:]KEY[=VALUE]` | set KEY for `@cfg` in the program's files, or in package PKG's |
+| `--cfg [PKG:]KEY[=VALUE]` | set KEY for `@cfg` in the program's files, or in package PKG's; `os`, `arch` and `pointer_bits` replace the host's in every package, for checking another platform's code ([the target](/volt-bootstrap/guide/comptime/#the-target)) |
 | `--lib NAME` | with `check`: check package NAME alone, as a library (no `main`) |
 | `--shared`, `--static` | with `lib`: a self-contained `.so` or `.a` for other languages |
 | `--lang L` | with `bindings`: `c`, `cpp`, `rust`, `zig`, `python`, `pyi`, `csharp`, `java`, `go`, `lua`, `dart`, `swift`, `kotlin`, `ruby`, `node`, `js`, `ts` or `json` |
@@ -68,10 +68,11 @@ newer language features need voltc.
 | `VOLT_SHOW_IMPORT` | `1`: print the Volt declarations generated for those imports |
 | `VOLT_SHOW_SHIMS` | `1`: print the shims `voltc lib` adds in front of a package's export fns (their C forms) |
 | `ZIG` | the zig that builds imported Zig code (default `zig`) |
+| `VOLT_TRIPLE` | with `emit-llvm`: the LLVM triple to lower for instead of the host's (`aarch64-unknown-linux-gnu`, say) |
 
 ## Exit codes
 
 `0` on success, `1` for compile errors (and an unknown option or a bad option value), `2` when it
-prints the usage (no command, an unknown one, or no files). A program built by voltc exits
-with what `main` returns, `1` when `main` returns an error, `101` on a panic and `102` for a leak
-under `--leak-check`.
+prints the usage (no command, an unknown one, no files, or an option without its value). A program
+built by voltc exits with what `main` returns, `1` when `main` returns an error, `101` on a panic
+and `102` for a leak under `--leak-check`.

@@ -50,7 +50,8 @@ fastmath = { path = "../fastmath", optional = true }
 ```
 
 - A feature turns on other features, `dep:NAME` (an optional dependency) and `NAME/FEATURE` (a
-  dependency's feature).
+  dependency's feature). `NAME?/FEATURE` turns the feature on only when something else turns the
+  optional dependency on.
 - `default` is on unless `--no-default-features`.
 - `-F simd`, `--features app/simd`, `--all-features` on the command line.
 - A dependency's features are the union of what everyone asks for.

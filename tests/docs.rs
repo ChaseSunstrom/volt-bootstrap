@@ -131,10 +131,11 @@ fn code_blocks() {
         checked += 1;
     }
     // the landing page's excerpts of what voltc writes for hero.volt: each paragraph is in the output
+    // (x86-64's LLVM IR, which the page shows, whatever the host: aarch64 passes structs its own way)
     let samples = root.join("site/src/samples");
     std::fs::copy(samples.join("hero.volt"), dir.join("main.volt")).unwrap();
     for (cmd, excerpt) in [("emit-c", "hero.c.txt"), ("emit-llvm", "hero.ll.txt")] {
-        let o = Command::new(&voltc).arg(cmd).arg("main.volt").arg("--std").arg(root.join("std")).current_dir(&dir).output().unwrap();
+        let o = Command::new(&voltc).arg(cmd).arg("main.volt").arg("--std").arg(root.join("std")).env("VOLT_TRIPLE", "x86_64-unknown-linux-gnu").current_dir(&dir).output().unwrap();
         let out = String::from_utf8_lossy(&o.stdout);
         for part in std::fs::read_to_string(samples.join(excerpt)).unwrap().split("\n\n") {
             if !out.contains(part.trim_end()) {

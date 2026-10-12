@@ -48,15 +48,18 @@ when a file changes. It works the same with `voltc run main.volt` and in a bolt 
 | any other struct, or an enum with associated values | an owned handle; `copy` copies the value |
 | an enum without associated values | a Volt enum; an `Int` enum keeps its raw values when they're literals |
 | `init(...)`, and the memberwise and empty inits Swift writes itself | `T::new(...)`; a second `T::new_<its first label>(...)` |
-| a method, `mutating` or not, a `static func` | a method; `T::f(...)` |
+| a method, `mutating` or not, a `static func` (an `extension`'s too) | a method; `T::f(...)` |
 | a computed property, or a class's stored one | a method without arguments: `p.length()` |
 | a top-level `let` of a number, `Bool` or string | a `val` |
 
 Generic and `async` functions, protocols, actors, nested types, closures, a second function of the
-same name (an overload), what's under `#if` (swiftc decides which branch is in), and declarations
-marked `@MainActor` (or another global actor) or `@available(*, unavailable)` aren't callable from
-Volt; they're left out, listed in a comment of the generated declarations (`VOLT_SHOW_IMPORT=1 voltc check main.volt` prints them). A Swift name that is
-a Volt keyword gets a `_` after it (`move` is `move_`). The program links the module as a shared
+same name (an overload), a computed property whose getter `throws` or is `async`, what's under
+`#if` (swiftc decides which branch is in), and declarations marked `@MainActor` (or another global
+actor) or `@available(*, unavailable)` aren't callable from Volt; they're left out, listed in a
+comment of the generated declarations (`VOLT_SHOW_IMPORT=1 voltc check main.volt` prints them).
+Each Volt fn has the Swift declaration it calls in a comment above it
+(`// Swift: func scaled(by k: Double) -> Point`), which an editor's hover shows. A Swift name that
+is a Volt keyword gets a `_` after it (`move` is `move_`). The program links the module as a shared
 library from bolt's cache, and the Swift runtime from the toolchain.
 
 ## Swift calls Volt
@@ -86,7 +89,12 @@ Swift takes [every shape](/volt-bootstrap/interop/other-languages/#every-shape):
 - **Lists, and text and handles in slices and optionals.** A `std::vec<T>` comes back as a `[T]`
   (`String`s, or classes the caller owns) and goes in from one (giving its handles up); `[String]`
   and arrays of a class (lent) go in for `std::string[..]` and a slice of an export struct. An
-  optional text or handle is a `String?` or a `T?`, and a slice of optionals an `inout [T?]`.
+  optional text or handle is a `String?` or a `T?`, and a slice of optionals an `inout [T?]`. A
+  slice of slices is a nested array (`inout [[[Int64]]]`, `[[String]]`).
+- **Structs with text, and errors as values.** A struct with text in it is a Swift struct of its
+  own with `String` fields (an array field is a tuple: `(Int32, Int32, Int32)`, `(String, String)`),
+  in and out, in arrays and through callbacks. An `E!T` parameter takes a `Result`:
+  `ml_or(.success(4.5), 9.5)`, `ml_or(.failure(math_error.NEGATIVE), 9.5)`.
 
 For a library `shapes` with a trait `shape` (`area`, `name`, `grow`), `describe(s: shape&) ->
 std::string`, `make_square(side: f64) -> shape`, `doubler() -> fn(i32) -> i32` and

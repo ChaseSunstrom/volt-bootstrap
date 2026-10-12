@@ -127,6 +127,10 @@ fn main() -> void {
 // error: can't return a reference to 'best'
 ```
 
+Returning a local that holds a reference to one of the function's own locals (a struct built with
+`{ x: &n }`, a pointer) builds, with a [warning](/volt-bootstrap/guide/safety/#what-the-compiler-warns-about);
+so does reading a view into a container (`xs.items()`) after a call that may move its storage.
+
 A reference keeps where it points when it's stored in a struct, tuple or array, passed or returned
 inside one (or inside an error union), or assigned to a variable later:
 
@@ -155,9 +159,9 @@ array can still change the array's elements; a slice of a `val` array can't.
 
 ## Pointers
 
-Pointers are for C interop and low-level code: they can be null, do arithmetic, and index without
-bounds checks. `->` reaches a field through one. Dereferencing a null pointer stops the program in
-debug builds.
+Pointers are for C interop and low-level code: they can be null, do arithmetic (`p + n`, `p - q`,
+`p++`), and index without bounds checks. `->` reaches a field through one. Dereferencing a null
+pointer stops the program in debug builds.
 
 ```volt
 use std::io;

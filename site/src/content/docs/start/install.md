@@ -24,7 +24,9 @@ Volt is built from source. The first compiler, `voltc-bootstrap`, is written in 
   voltc's build asks `llvm-config` where LLVM is (`$LLVM_CONFIG`, else `llvm-config-23`, else
   `llvm-config` on your `PATH`), so it can live off the default paths, like Ubuntu's
   `/usr/lib/llvm-23`.
-- Optional, for the interop tests: `c++`, `rustc`, `python3` and `zig`.
+- Optional, for the interop tests: `c++` (g++ 14 or newer, or clang++, for the C++23 headers; or
+  set `$CXX`), `rustc` and `python3`; and `zig`, `go`, `node`, a JDK 22 or later, `dotnet`, `lua`
+  5.4, `dart`, `swiftc`, `kotlinc-native` and `ruby`, whose tests are skipped when they're missing.
 
 ## Build
 

@@ -16,7 +16,9 @@ surrounding scope, and how:
 | `\|x&\|` | a reference to `x`: the closure sees and changes the variable |
 | `\|move x\|` | takes ownership of `x` |
 
-Parameter types and the return type can be left out when they're clear from the context.
+The body sees its captures, globals and functions, not the other locals around it: a local it
+doesn't capture is an unknown name there. Parameter types and the return type can be left out when
+they're clear from the context.
 
 ```volt
 use std::io;
@@ -72,7 +74,7 @@ can't be called.
 ## Function types
 
 `fn(A, B) -> R` is the type of any function or closure with that signature: a function pointer plus
-its captures. Use it to store different functions in one place. Parentheses group a type, so an
+a pointer to its captures. Use it to store different functions in one place. Parentheses group a type, so an
 array of them is `(fn(i32) -> i32)[]`.
 
 A `fn` value borrows its closure. A closure literal written where a `fn` value is wanted is a

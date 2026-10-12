@@ -38,5 +38,8 @@ fn main() -> i32 {
 // exit: 3
 ```
 
+Each `// expect-stderr:` line has to appear in what the program prints to stderr, and `// exit: N|M`
+takes either code (a trap is SIGILL on x86-64, SIGTRAP on arm64).
+
 `editors/vscode` has its own tests (`npm test`: the grammar, and where the extension looks for
 voltc and bolt).
