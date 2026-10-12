@@ -1,9 +1,10 @@
 # Builds and tests Volt on every push to main and every pull request. A job that fails fails the run:
 # nothing here is allowed to fail quietly.
 #
-# Linux and macOS (x86-64 and arm64) run the whole suite: both compilers, std, bolt, the language
-# server, the docs and site, and interop; Linux bare metal under qemu too. voltc, the self-hosted
-# compiler, doesn't run on Windows yet, so Windows (x86-64 and arm64) runs what goes through the
+# Linux (x86-64 and arm64) and macOS arm64 run the whole suite: both compilers, std, bolt, the
+# language server, the docs and site, and interop; Linux bare metal under qemu too. voltc, the
+# self-hosted compiler, doesn't run on Windows yet, and LLVM 23 has no build for Intel macs (neither
+# Homebrew's nor LLVM's), so Windows (x86-64 and arm64) and macOS x86-64 run what goes through the
 # bootstrap compiler: bolt's and its unit tests, programs through the C backend, and the site
 # generator building every page.
 name: CI
@@ -106,7 +107,6 @@ jobs:
       matrix:
         include:
           - { arch: arm64, os: macos-latest }
-          - { arch: x86-64, os: macos-15-intel }
     runs-on: ${{ matrix.os }}
     timeout-minutes: 180
     steps:
@@ -138,7 +138,7 @@ jobs:
           [ -n "$tests" ] && echo "::error title=failed tests::$tests"
           exit 0
 
-  windows:
+  bootstrap:
     name: test (${{ matrix.name }})
     strategy:
       fail-fast: false
@@ -146,6 +146,7 @@ jobs:
         include:
           - { name: windows x86-64, os: windows-latest }
           - { name: windows arm64, os: windows-11-arm }
+          - { name: macos x86-64, os: macos-15-intel }
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     defaults:
@@ -163,10 +164,12 @@ jobs:
           done
       # what doesn't need voltc: bolt's and the bootstrap compiler's unit tests, every source file's
       # header, the site generator (built by the bootstrap compiler) making every page, and the docs
-      # and runtime checks that read files
+      # and runtime checks that read files. Each runs whatever the others do; any failure fails the step
       - name: Test
         run: |
-          cargo test --bins
-          cargo test --test headers --test site
-          cargo test --test docs -- readme_links shown_schema_is_the_sample builtins_page_is_complete
-          cargo test --test selfhost -- runtime_text_in_sync runtime_compiles_for_every_target
+          status=0
+          cargo test --bins || status=1
+          cargo test --test headers --test site || status=1
+          cargo test --test docs -- readme_links shown_schema_is_the_sample builtins_page_is_complete || status=1
+          cargo test --test selfhost -- runtime_text_in_sync || status=1
+          exit $status
