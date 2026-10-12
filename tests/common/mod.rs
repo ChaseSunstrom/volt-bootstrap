@@ -3,9 +3,91 @@
 
 use std::process::Command;
 
+/// How a command run with a time limit ended: its exit code (None when a signal stopped it), what it
+/// printed, and whether the limit stopped it
+#[allow(dead_code)]
+pub struct Run {
+    pub code: Option<i32>,
+    pub stdout: Vec<u8>,
+    pub stderr: Vec<u8>,
+    pub timed_out: bool,
+}
+
+#[allow(dead_code)]
+impl Run {
+    pub fn success(&self) -> bool {
+        self.code == Some(0) && !self.timed_out
+    }
+}
+
+/// cmd run for at most `secs` seconds (what GNU timeout did, on every system). A command still
+/// running then is stopped with whatever it started: `voltc run`'s program is in its process group
+/// (Unix) or its process tree (Windows)
+#[allow(dead_code)]
+pub fn run_for(cmd: &mut Command, secs: u64) -> Run {
+    use std::io::Read;
+    use std::process::Stdio;
+    cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    #[cfg(unix)]
+    std::os::unix::process::CommandExt::process_group(cmd, 0);
+    let mut child = cmd.spawn().unwrap_or_else(|e| panic!("can't run {:?}: {e}", cmd.get_program()));
+    let id = child.id();
+    let drain = |r: Option<Box<dyn Read + Send>>| {
+        std::thread::spawn(move || {
+            let mut v = Vec::new();
+            if let Some(mut r) = r {
+                let _ = r.read_to_end(&mut v);
+            }
+            v
+        })
+    };
+    let out = drain(child.stdout.take().map(|r| Box::new(r) as Box<dyn Read + Send>));
+    let err = drain(child.stderr.take().map(|r| Box::new(r) as Box<dyn Read + Send>));
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(child.wait());
+    });
+    let mut timed_out = false;
+    let status = match rx.recv_timeout(std::time::Duration::from_secs(secs)) {
+        Ok(s) => s.unwrap(),
+        Err(_) => {
+            timed_out = true;
+            stop_tree(id);
+            rx.recv().unwrap().unwrap()
+        }
+    };
+    Run { code: status.code(), stdout: out.join().unwrap(), stderr: err.join().unwrap(), timed_out }
+}
+
+/// SIGKILL to process group `id` (run_for made the command its leader)
+#[cfg(unix)]
+#[allow(dead_code)]
+fn stop_tree(id: u32) {
+    unsafe extern "C" {
+        fn kill(pid: i32, sig: i32) -> i32;
+    }
+    unsafe {
+        kill(-(id as i32), 9);
+    }
+}
+
+#[cfg(not(unix))]
+#[allow(dead_code)]
+fn stop_tree(id: u32) {
+    let _ = Command::new("taskkill").args(["/F", "/T", "/PID", &id.to_string()]).output();
+}
+
 /// An llvm-config for a copy of this system's LLVM moved into `dir` (headers and libraries symlinked),
 /// its library renamed so a link only succeeds through the flags it reports: how LLVM looks on Debian
-/// and Ubuntu (/usr/lib/llvm-N), wherever it really is. None without an llvm-config.
+/// and Ubuntu (/usr/lib/llvm-N), wherever it really is. None without an llvm-config, and on systems
+/// without .so libraries and symlinks
+#[cfg(not(unix))]
+#[allow(dead_code)]
+pub fn relocated_llvm_config(_dir: &std::path::Path) -> Option<std::path::PathBuf> {
+    None
+}
+
+#[cfg(unix)]
 #[allow(dead_code)]
 pub fn relocated_llvm_config(dir: &std::path::Path) -> Option<std::path::PathBuf> {
     let ask = |what: &str| {
