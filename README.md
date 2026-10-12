@@ -25,16 +25,17 @@ compiler, `voltc`, is written in Volt and builds itself.
 - **C's speed, nothing behind your back.** No GC, scheduler, exceptions or vtables; every
   allocation is one you wrote. On the [benchmarks](https://chasesunstrom.github.io/volt-bootstrap/internals/benchmarks/)
   Volt matches or beats clang-compiled C on most programs.
-- **Mistakes stop loudly.** Debug builds trap overflow, out-of-bounds indexing, null unwraps and
+- **Mistakes stop loudly.** Debug builds catch overflow, out-of-bounds indexing, null unwraps and
   double frees; the compiler rejects use after move, missed `match` cases and format strings that
   don't fit their arguments. `--release` drops the overflow and double-free checks and keeps the
   rest, each as one compare and a trap.
 - **Ownership without lifetimes.** Values are deleted at scope end, moves are tracked and copies are
   explicit: RAII with nothing to annotate.
 - **Every language is one step away.** It reads C and C++ headers (templates and the standard
-  library too), and imports Rust crates and Zig, Swift, Kotlin, Go, Java, C#, Python and TypeScript
-  code the same way, like a header (`use { "geom.rs" } as geom;`); Lua embeds through a package. One
-  `bindings` line in `bolt.toml` makes a Volt library usable from 15 languages.
+  library too), and imports Rust crates and Zig, Swift, Kotlin, Go, Java, C#, Python, TypeScript
+  and JavaScript code the same way, like a header (`use { "geom.rs" } as geom;`); Lua embeds
+  through a package. One `bindings` line in `bolt.toml` makes a Volt library usable from 15
+  languages.
 - **One toolchain.** bolt, a language server, and diagnostics that point at the problem.
 
 It's young (no 1.0, no package registry) and has no borrow checker: if you need proven memory
@@ -90,10 +91,10 @@ fn main() -> !void {
 - **A standard library** with collections, text, JSON, files, processes, networking, threads,
   allocators you choose per container, hashing and encodings.
 - **Interop**: real C headers (unions and bitfields too), C++ classes, templates and the standard
-  library; Rust crates, Go packages, and Zig, Swift, Kotlin, Java, C#, Python and TypeScript files
-  imported by name (`use { "fm.zig" } as fm;`); Lua through a package; and libraries with bindings
-  for C, C++, Rust, Zig, Python, JavaScript and TypeScript, C#, Java, Go, Lua, Dart, Swift, Kotlin
-  and Ruby.
+  library; Rust crates, Go packages, and Zig, Swift, Kotlin, Java, C#, Python, TypeScript and
+  JavaScript files imported by name (`use { "fm.zig" } as fm;`); Lua through a package; and
+  libraries with bindings for C, C++, Rust, Zig, Python, JavaScript and TypeScript, C#, Java, Go,
+  Lua, Dart, Swift, Kotlin and Ruby.
 - **Tooling**: diagnostics that point at the problem, the **bolt** build tool, a language server,
   and a VS Code extension.
 

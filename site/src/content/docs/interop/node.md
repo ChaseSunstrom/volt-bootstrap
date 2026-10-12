@@ -46,9 +46,10 @@ A thrown exception stops the program with its text, as a Volt panic does. A func
 parameter types written, and its return type when it returns something. Generics, `async`
 functions, callbacks, object types, imports between modules (bundle them into one file first) and
 TypeScript that needs more than stripping (parameter properties, namespaces) are left out or
-refused, and what's left out is listed in a comment of the generated declarations. bolt needs node
-23.2 or later (`$NODE`) to strip TypeScript, and JavaScriptCore from WebKitGTK
-(`javascriptcoregtk-4.1`, or `$JSC_PKG`): the program links it, nothing of Node.js.
+refused, and what's left out is listed in a comment of the generated declarations
+(`VOLT_SHOW_IMPORT=1 voltc check main.volt` prints them). bolt needs node 23.2 or later (`$NODE`)
+to strip TypeScript, and JavaScriptCore from WebKitGTK (`javascriptcoregtk-4.1`, or `$JSC_PKG`):
+the program links it, nothing of Node.js.
 
 ## JavaScript calls Volt
 
@@ -97,27 +98,38 @@ const greet: typeof Greet = createRequire(import.meta.url)("./target/debug/bindi
 const c: Greet.tally = new greet.tally("clicks");
 ```
 
+A Node project can also install a Volt library with `npm install`, which runs bolt: see
+[pip install and npm install](/volt-bootstrap/interop/other-languages/#pip-install-and-npm-install).
+
 Here is how values convert:
 - Numbers and `bool` convert directly. A number that doesn't fit the parameter's type throws a
   `RangeError`, and a fraction, NaN or infinity given for an integer throws a `TypeError`.
   64-bit integers also take a `BigInt`. They come back as numbers, which are exact up to 2^53.
-- A struct is a plain object. Passed as `T&`, what Volt changes in it comes back to the object.
-  Its fields can be text (a string, kept until the call is back), arrays (an array of exactly
-  their length), structs, and pointers (an object from another call, or `null`).
+- A struct is a plain object. Passed as `T&` or `T*` (`null` for a null `T*`), what Volt changes
+  in it comes back to the object. Its fields can be text (a string, kept until the call is back),
+  arrays (an array of exactly their length), structs, and pointers (an External from another
+  call, or `null`).
+- A pointer a function returns is an External too, or `null`; TypeScript types both `unknown`.
+- An enum is its number, and the module has an object of its values (for `enum color { RED,
+  GREEN }`, `greet.color.GREEN` is `1`).
 - An `E!T` parameter takes the value, or the `Error` `voltError(name)` makes for one of its errors.
 - A slice is an array, and what Volt writes into its elements comes back too.
 - An optional is the value or `null`.
-- A callback is any function. It's called during the call it was passed to.
+- A callback is any function. It's called during the call it was passed to. A struct Volt lends
+  it by pointer is an object (`null` for a null `T*`), and what the callback changes in it goes
+  back to Volt.
 - `str` and owned text are strings.
-- An error is thrown as an `Error` whose `code` is the error's name, and an error set is an object
-  of its names (for `error math_error { NEGATIVE }`, `greet.math_error.NEGATIVE` is `"NEGATIVE"`).
+- An error is thrown as an `Error` whose `code` is the error's name (and `errno` its number), and
+  an error set is an object of its names (for `error math_error { NEGATIVE }`,
+  `greet.math_error.NEGATIVE` is `"NEGATIVE"`).
 - Each class checks that its methods get an instance of it.
 
 ### Every shape
 
 JavaScript takes [every shape](/volt-bootstrap/interop/other-languages/#every-shape):
 - **Numbers by reference.** A `n: i32*` or `x: f64&` parameter takes an array of one, `[7]`, and
-  what Volt writes comes back into it (`null` is a null `i32*`); TypeScript has it as `[number]`.
+  what Volt writes comes back into it (`null` is a null `i32*`); TypeScript has it as `[number]`
+  (`[number] | null | undefined` for a `T*`).
 - **Owned values as parameters.** A `std::string` parameter takes a string (Volt copies it). An
   export struct by value takes its instance, which gives its handle up (closing it after does
   nothing). A call checks every instance it's given first (open, owned, each once), so one that
@@ -133,8 +145,8 @@ JavaScript takes [every shape](/volt-bootstrap/interop/other-languages/#every-sh
   call once Volt is back, and Volt gets a stand-in meanwhile: the error set's first error, empty
   text, or zero. A callback that has to give a handle has no stand-in, so a throw there stops the
   program, as a Volt panic does. Callbacks run on the thread that made the call.
-- **Closures given back** are functions with `close()` and `Symbol.dispose`. One that isn't closed
-  is freed when it's collected.
+- **Closures given back** are functions with `close()` and `Symbol.dispose` (TypeScript's
+  `VoltFunction<F>`). One that isn't closed is freed when it's collected.
 - **Worker threads.** Each `worker_threads` Worker that loads the addon gets its own classes, so
   the main thread and the workers all make and take instances; an instance stays in the thread
   that made it.
@@ -203,7 +215,7 @@ export fn napi_register_module_v1(env: void*, exports: void*) -> void* {
 
 `bolt build` makes `target/debug/libaddon.so`; Node loads an addon from a `.node` file, so copy it
 to `addon.node` and `require("./addon.node")`. The package's build file finds Node's headers next to
-the `node` on your `PATH` (or in `/usr/include/node`).
+the `node` on your `PATH` (or in `/usr/include/node` or `/usr/local/include/node`).
 
 | | |
 | --- | --- |

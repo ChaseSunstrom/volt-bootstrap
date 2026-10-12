@@ -59,7 +59,7 @@ yourself when results must match across machines, for a simulation's replay or a
 `T::max_value()` and `T::min_value()` are an integer type's limits (`i8::min_value()` is -128,
 `u64::max_value()` is 18446744073709551615).
 
-Plain `+`, `-` and `*` trap on overflow in debug builds and wrap in `--release`; `+%`, `-%` and `*%`
+Plain `+`, `-` and `*` panic on overflow in debug builds and wrap in `--release`; `+%`, `-%` and `*%`
 always wrap. When overflow is an expected case rather than a bug, say what should happen:
 
 ```volt
@@ -81,7 +81,8 @@ fn main() -> void {
   fit (or on division by zero).
 - `saturating_add`, `saturating_sub`, `saturating_mul` stop at the type's largest or smallest value.
 - `gcd` and `lcm` are never negative; `gcd(0, 0)` and `lcm(0, x)` are 0. Like `abs`, they overflow
-  when the answer doesn't fit in the type: `gcd(i32::min_value(), 0)` is 2147483648.
+  when the answer doesn't fit in the type: `gcd(i32::min_value(), 0)` would be 2147483648, so it
+  panics in a debug build.
 
 ## SIMD vectors
 
@@ -90,11 +91,13 @@ fn main() -> void {
 64 bits or `f32`/`f64`, a power of two lanes, 64 bytes at most). Two vectors of one type add,
 subtract and multiply (int lanes wrap), float lanes divide too and int lanes take `&`, `|` and `^`;
 `-v` negates every lane and `v[i]` reads or writes one (checked, as an array's index is). A `{ }`
-literal lists the lanes, `splat<V>(x)` puts `x` in every lane, `sum(v)` adds them up, and
-`load<V>(xs)` and `store(v, xs)` move a slice's first lanes in and out. The LLVM backend makes them
-LLVM vectors, the C backend GNU C's `vector_size` types, and both keep them in SIMD registers: the
-dot product below takes about a quarter of the plain loop's time (an `f64` sum can't be split into
-lanes by the optimizer, since it changes the rounding; here the program chooses to). A vector wider
+literal lists the lanes (`{}` is every lane 0), `splat<V>(x)` puts `x` in every lane, `sum(v)` adds
+them up, and `load<V>(xs)` and `store(v, xs)` move a slice's first lanes in and out; `lanes(V)` and
+`lane(V)` are a vector type's lane count and lane type. A vector can be a struct's field (aligned
+to its size, as C aligns one). The LLVM backend makes them LLVM vectors, the C backend GNU C's
+`vector_size` types, and both keep them in SIMD registers: the dot product below takes about a
+quarter of the plain loop's time (an `f64` sum can't be split into lanes by the optimizer, since it
+changes the rounding; here the program chooses to). A vector wider
 than the CPU's registers (`f64x4` without AVX) is split in two; gcc does that slowly, so through the
 C backend prefer the 16-byte ones there.
 
@@ -125,15 +128,16 @@ fn main() -> void {
 // expect: 27
 ```
 
-Vectors stay inside Volt for now: an export fn doesn't take one, a comptime function can't hold
-one, they don't compare with `==` and `println` doesn't print one (print its lanes).
+Vectors stay inside Volt for now: bindings refuse an export fn that takes one (it has no C form), a
+comptime function can't make one, they don't compare with `==` or shift, and `println` doesn't print
+one (print its lanes).
 
 ## Random numbers
 
 `std::random::seeded(n)` makes a generator that gives the same numbers every run (for tests and
-simulations); `os_seeded()` seeds one from the operating system. Each draws with `below(n)` (in
-`0..n`, without modulo bias), `range(lo, hi)`, `float()` (in `[0, 1)`), `chance(p)`, and
-`shuffle` and `choose` on slices.
+simulations); `os_seeded()` seeds one from the operating system. Each draws with `next_u64()` (64
+random bits), `below(n)` (in `0..n`, without modulo bias), `range(lo, hi)` (`hi` left out),
+`float()` (in `[0, 1)`), `chance(p)`, and `shuffle` and `choose` on slices.
 
 ```volt
 use std::io;
@@ -154,4 +158,4 @@ fn main() -> void {
 
 The generator is xoshiro256**: fast and good for statistics, but predictable from its output, so
 never for passwords, keys or tokens. `std::random::os_bytes(buf)` fills a buffer from the operating
-system's secure source for those.
+system's secure source for those (false when it can't).

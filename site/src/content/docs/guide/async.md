@@ -18,7 +18,9 @@ drive frames yourself, and an event loop can be a library on top.
 | `await f` | run `f` to the end and give its result |
 | `await g(args)` | call and wait in one step |
 
-A plain call of an async fn (without `async`) just runs it to the end.
+A plain call of an async fn (without `async`) just runs it to the end. Resuming a frame that has
+finished, or awaiting one twice, stops the program (`panic: resumed a frame that already
+finished`), in release builds too.
 
 ```volt
 use std::io;
@@ -95,4 +97,10 @@ fn main() -> void {
 // expect: end
 ```
 
-`main` can't be async, and a frame can't be copied or moved (it may point into itself).
+`main`, `extern` and `export` fns can't be async, and a frame can't be copied or moved (it may
+point into itself). `suspend` can't go in a `defer`, or in a `match`, loop or block used as a value.
+An async fn can't start itself with `async` (its frame would hold itself), but it can call or
+`await` itself.
+
+A Rust crate's `async fn` comes in as a Volt async fn: see
+[Volt calls Rust](/volt-bootstrap/interop/rust-and-zig/#volt-calls-rust).

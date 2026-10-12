@@ -7,7 +7,8 @@ sidebar:
 
 Volt has no garbage collector. Every value has one owner (a variable, a field, an element), and
 when the owner's scope ends the value is **deleted**: the compiler inserts the call. Deletes run in
-reverse order of declaration, and a struct's fields are deleted after the struct's own hook.
+reverse order of declaration, and a struct's fields are deleted after the struct's own hook, last
+field first. Assigning a new value deletes the one it replaces.
 
 ## The delete hook
 
@@ -104,6 +105,10 @@ A variable moved inside a loop needs a new value before the loop goes around, or
 would find nothing there: `val c = move a; a = move b; b = c;` is fine in a loop, `eat(move a);` on its
 own is an error. Values that own nothing, like numbers and plain structs, are copied instead of moved.
 
+Only a whole variable moves. An owned field, element, or value behind a reference can't move out
+of its place (the error says to `copy` it); a container hands an element out through a method,
+such as a `vec`'s `pop` or `remove`.
+
 To lend a value without giving it up, pass a reference:
 
 ```volt
@@ -158,7 +163,8 @@ fn main() -> void {
 // expect: revoke 1
 ```
 
-std's containers attach `copy`, so `copy v` on a `vec` copies its elements.
+A `copy` hook can only read `this`. std's containers attach `copy`, so `copy v` on a `vec` copies
+its elements, and `copy b` on a `box` (below) is a new box holding a copy of the value.
 
 ## box: owning heap memory
 

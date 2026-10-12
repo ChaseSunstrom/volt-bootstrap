@@ -24,8 +24,9 @@ bytes:
 - `write(data)` sends all of it.
 - `shutdown_write()` tells the other side that you've finished sending.
 
-Port 0 picks any free port, and `local()` tells you which one. Deleting a stream or a listener
-closes it.
+Port 0 picks any free port, and `local()` tells you which one; a stream's `peer()` is the other
+end's address. `connect_to(address)` connects to one address you already have, as `resolve` gives
+them. Deleting a stream or a listener closes it.
 
 ```volt
 use std::io;
@@ -58,8 +59,8 @@ your own size with `read`, and set a timeout.
 ## Timeouts
 
 `connect` takes an optional timeout as a `std::time::duration`. `set_timeout(read, write)` limits
-how long each read or write waits; `null` means no limit. When the time runs out, the call fails
-with `TIMED_OUT`.
+how long each read or write waits; `null` means no limit. A `udp_socket`'s `set_timeout(read)` does
+the same for `recv_from`. When the time runs out, the call fails with `TIMED_OUT`.
 
 ```volt
 use std::io;

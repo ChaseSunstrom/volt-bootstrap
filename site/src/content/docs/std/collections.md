@@ -28,8 +28,9 @@ Collections and algorithms don't use `==` and `<` directly. They call methods:
 - `hash(this: T&) -> u64` to place keys in `map` and `set`.
 
 std gives every type with `==` its `eq` and every type with `<` its `cmp` (numbers, `str` and
-pointers have both; `bool` has no `<`, so only `eq`), and `std::string` has all three. A type of
-your own attaches the ones it needs, and they're used instead:
+pointers have both; `bool` has no `<`, so only `eq`), and `std::string` has all three. Optionals,
+slices and vecs have `eq` too, element by element. A type of your own attaches the ones it needs,
+and they're used instead:
 
 ```volt
 use std::io;
@@ -61,7 +62,9 @@ can define them differently.
 ## Slices: sorting and searching
 
 The algorithms work on any `T[..]`, so on arrays (`a[..]`) and vecs (`v.items()`) alike. `sort` is
-stable: equal elements keep their order. `sort_by` takes a comparison instead of `cmp`.
+stable: equal elements keep their order. `sort_by` takes a comparison instead of `cmp`. Past 16
+elements both take scratch room for the elements from an optional allocator argument, and `sort`
+puts 256 integers or more in order by radix, with no compares at all.
 
 ```volt
 use std::io;
@@ -138,7 +141,9 @@ fn main() -> void {
 
 `iter()` gives each entry as `e.key` and `e.value`, references into the map (so `*e.value += 1`
 changes it). A map walks in no particular order; a `sorted_map` walks in key order. Don't add or
-remove entries while walking, and don't change a key through `e.key`.
+remove entries while walking, and don't change a key through `e.key`. `contains(key)` asks whether
+a key is there, and `remove(key)` takes its entry out, giving its value (null when there was none).
+A set has `contains` and `remove` too, and its `iter()` gives each value.
 
 ## sorted_map, deque and heap
 
@@ -175,6 +180,7 @@ fn main() -> void {
 // expect: 1 2 1 3
 ```
 
-A `heap` pops its smallest element by `cmp`; for largest first, store a type whose `cmp` is
+A deque also has `pop_back`, `front`, `back` and `at(i)` (checked), and `iter()` walks it front to
+back. A `heap` pops its smallest element by `cmp`; for largest first, store a type whose `cmp` is
 reversed. `sorted_map` keeps its keys in a sorted array, so lookups are a binary search but `put` and
 `remove` move the keys after them.

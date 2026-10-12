@@ -62,4 +62,5 @@ declarations another language needs. See [Other languages](/volt-bootstrap/inter
 
 `--cfg KEY=VALUE` sets a key for the program's own files; `--cfg PKG:KEY=VALUE` for package PKG's.
 `@cfg` in a file reads the settings for that file's package, which is how bolt gives each package
-its own features.
+its own features. The target's keys (`os`, `arch`, `pointer_bits`) are the exception: one given
+with `--cfg` applies to every package.

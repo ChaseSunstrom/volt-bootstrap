@@ -122,7 +122,8 @@ end
 
 Structs are tables with their fields; what Volt changes in one passed by reference comes back
 into the table, and so do the elements of a slice (a sequence). A number by reference (`n: i32*`,
-`x: f64&`) is a table of one, `{ 7 }`, and what Volt writes comes back into it. An enum is a table of its values,
+`x: f64&`) is a table of one, `{ 7 }`, and what Volt writes comes back into it; any other pointer
+is a light userdata from another call, or `nil`. An enum is a table of its values,
 an error set a table of its names, and an error is raised as a table with its `name` and `code`.
 Integers that don't fit the parameter's type raise an error, as do wrong types. A callback is any
 function (or anything with `__call`, such as a closure Volt gave back). An export struct is a
@@ -133,7 +134,8 @@ userdata with `close()`, `<close>` and `__gc`.
 Lua takes [every shape](/volt-bootstrap/interop/other-languages/#every-shape):
 - **Owned values as parameters.** A `std::string` parameter takes a string (Volt copies it); an
   export struct by value takes its userdata, which is closed once Volt has it. A call can't give
-  one handle twice (or lend and give it), nor give one Volt only lent to Lua.
+  one handle twice (or lend and give it), nor give one Volt only lent to Lua, and one lent to a
+  call that hasn't returned can't be closed or given away (by its callback) until it does.
 - **Traits.** Any table or userdata with the trait's methods can be lent (`s: shape&`) or given
   (`s: shape`: Volt calls its `close` method, when it has one, once it's done with it). A Volt
   value of the trait is a userdata with the methods, `close()`, `<close>` and `__gc`.

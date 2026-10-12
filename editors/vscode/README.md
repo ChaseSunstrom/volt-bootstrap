@@ -16,7 +16,8 @@ Language support for [Volt](https://github.com/ChaseSunstrom/volt-bootstrap):
   `var` that isn't needed, misspelled names)
 - **Go to definition** and **find references**
 - **Outline** of a file's declarations
-- **Completion**: fields and methods after `x.`, a namespace's names after `std::`, locals and keywords
+- **Completion**: fields and methods after `x.`, a namespace's names after `std::`, the builtins after
+  `@`, locals and keywords
 - **Signature help** inside a call's parentheses
 - **Snippets** for common declarations (`main`, `fn`, `struct`, `match`, ...)
 - **bolt tasks** (check, build, run, test, clean) in folders with a `bolt.toml`, with voltc's errors
@@ -52,10 +53,11 @@ In a bolt package, a file under `src/` is checked together with the other files 
 | `volt.inlayHints.parameters` | `true` | which parameter each call argument is for |
 | `volt.inlayHints.closingBraces` | `true` | what a block of 25 lines or more closes, after its `}` |
 
-**Volt: Restart Language Server** restarts it (after rebuilding voltc, say). **Volt: Run This
-Program** runs the open file, as the **Run** lens above `main` does. **Volt: Expand Comptime** shows
-what the comptime code on the cursor's line (or in the file) became, beside it: values, `comptime
-if` branches, generic instances, built types, the fns comptime fns declared and `@derive` output.
+Changing a setting restarts the server. **Volt: Restart Language Server** restarts it (after
+rebuilding voltc, say). **Volt: Run This Program** runs the open file, as the **Run** lens above
+`main` does. **Volt: Expand Comptime** shows what the comptime code on the cursor's line (or in the
+file) became, beside it: values, `comptime if` branches, generic instances, built types, the fns
+comptime fns declared and `@derive` output.
 
 ## Other editors
 

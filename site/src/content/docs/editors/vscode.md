@@ -53,7 +53,8 @@ overrides that.
 | `volt.inlayHints.parameters` | `true` | which parameter each call argument is for |
 | `volt.inlayHints.closingBraces` | `true` | what a block of 25 lines or more closes, after its `}` |
 
-VS Code's own `editor.inlayHints.enabled` turns every inlay hint on or off.
+VS Code's own `editor.inlayHints.enabled` turns every inlay hint on or off. Changing one of these
+settings restarts the server.
 
 **Volt: Restart Language Server** restarts the server, after rebuilding voltc for example.
 **Volt: Run This Program** runs the open file (`bolt run` in a bolt package, else `voltc run`), as

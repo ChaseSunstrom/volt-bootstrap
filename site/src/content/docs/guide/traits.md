@@ -18,6 +18,7 @@ some template that calls it.
 
 `<T: shape>` says the template only accepts types that attach `shape`. A call with any other
 type is an error at the call, naming the trait, instead of an error somewhere inside the body.
+`+` joins bounds: `<T: shape + named>` takes the types that attach both.
 
 ```volt
 use std::io;
@@ -161,6 +162,7 @@ Things to keep in mind:
 - The member list is closed when the program is compiled: a precompiled library can't add members to
   a trait union later.
 - Static functions (`static this`) can't be called through a union.
+- A trait that nothing attaches can't be used as a type.
 - `@typeid(v)` of a trait value is the id of the type it holds, the same id `@typeid(circle)` gives;
   see [type ids](/volt-bootstrap/guide/comptime/#type-ids-typeid).
 
@@ -199,5 +201,10 @@ fn main() -> void {
 // expect: 3 2 1
 ```
 
-std's allocator is a trait: `std::mem::allocator` has `malloc`, `realloc` and `free`, and
+A generic type attaches a generic trait for all its instances at once,
+`<T: type> attach source<T> -> stream<T> { ... }`, and a bound gives the trait's arguments:
+`<S: source<i32>>`.
+
+std's allocator is a trait whose functions are templates: `std::mem::allocator` has
+`<T: type> fn malloc(this, count: usize = 1) -> mem_error!(T*)`, `realloc` and `free`, and
 `box<T, Allocator>` and `vec<T, Allocator>` work with any type that attaches it.

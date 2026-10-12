@@ -45,8 +45,10 @@ fn main() -> !void {
 `open`'s mode is C's: `"r"` (the default) reads, `"w"` creates or empties the file, `"a"` appends,
 and `"r+"`, `"w+"`, `"a+"` both read and write. Files are always binary: on Windows too, what's
 written is what's read, with no `"\r\n"` added. `read_line` gives the next line without its line
-ending, or `null` at the end; `lines()` loops over them. `seek` counts from `std::fs::seek_from::START`
-(the default), `CURRENT` or `END`.
+ending, or `null` at the end; `lines()` loops over them. A line can be any length and hold NUL
+bytes. `read(buf)` reads up to a buffer's worth of bytes (0 at the end). `seek` counts from
+`std::fs::seek_from::START` (the default), `CURRENT` or `END`, and `position()` says where the file
+is.
 
 ## Directories
 
@@ -78,7 +80,10 @@ fn main() -> !void {
 ```
 
 `list_dir` gives the names in a directory, sorted; `walk` every file below it as a path. Neither
-follows links to directories, and `remove_all` removes a link rather than what it points at. Errors
+follows links to directories, and `remove_all` removes a link rather than what it points at.
+`create_dir` makes one directory, whose parent has to exist. `exists`, `is_dir` and `is_file` ask
+what's at a path and `size` gives a file's length; `rename` moves a file, and `copy_file` copies
+one, each replacing a file already at the destination. Errors
 are `std::fs::fs_error`: `NOT_FOUND`, `EXISTS`, `NOT_EMPTY`, `PERMISSION`, `NOT_A_DIR`, `IS_A_DIR`,
 `IO`, `BAD_PATH`, the same on every system.
 
@@ -89,7 +94,9 @@ works only where that code page is UTF-8.
 
 ## Paths
 
-`std::path` works on the text of a path and never touches the disk.
+`std::path` works on the text of a path and never touches the disk. `join(a, b)` puts `b` inside
+`a` (an absolute `b` replaces it); `normalize` drops `.` parts, repeated separators and `x/..` pairs
+by the text alone, without following links; `is_absolute` asks whether a path starts at the root.
 
 ```volt
 use std::io;
@@ -111,7 +118,10 @@ as an absolute path, for finding what's installed beside it.
 ## Time
 
 `std::time::now()` reads the monotonic clock, which only goes forward, for measuring;
-`unix_nanos()` reads the wall clock. Durations are made with `nanos`, `micros`, `millis` and `secs`.
+`unix_nanos()` reads the wall clock. Durations are made with `nanos`, `micros`, `millis` and `secs`,
+and read back with `as_nanos`, `as_micros`, `as_millis`, `as_secs` (whole units) or `as_secs_f64`.
+An instant's `elapsed()` is the time since it, and `since(earlier)` the time between two.
+`utc_iso8601` writes a wall-clock time as a UTC date, with milliseconds when there are any.
 
 ```volt
 use std::io;

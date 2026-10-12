@@ -12,7 +12,8 @@ Volt speaks C's ABI in both directions, and reads real C headers. Runnable examp
 
 `use { "header.h", ... } as ns;` runs the C preprocessor over the headers and imports what they
 declare into namespace `ns`: functions, structs and unions, enums and their constants, `typedef`s,
-numeric `#define`s, and global variables.
+numeric `#define`s, and global variables. A header is looked for next to the importing file first,
+then where `#include <...>` looks (the system's directories and `-I`'s).
 
 ```c
 /* vec2.h */
@@ -44,22 +45,24 @@ How C's types come in:
 
 | C | Volt |
 | --- | --- |
-| `int`, `long`, `size_t`, `uint8_t`... | the integer type of the same size and sign |
+| `int`, `long`, `size_t`, `uint8_t`... | the integer type of the same size and sign (`char` is `i8`) |
 | `double`, `float` | `f64`, `f32` |
 | `long double` | `f64`, through a C wrapper (below) |
 | `float _Complex`, `double _Complex` | the struct `ns::cf32` or `ns::cf64`, `{ re, im }`, through a C wrapper |
 | `T *` | `T*`, which may be null |
 | `char *`, `const char *` | `cstr?` (string literals convert to `cstr`) |
 | `void *` | `void*` |
-| a function pointer | `extern "C" fn(...) -> R` |
+| a function pointer | `extern "C" fn(...) -> R`, optional (it may be null) |
+| `T[N]` | `T[N]` (a parameter's is a `T*`, as in C) |
 | `struct`, `union` | the same, with C's layout |
 | a named `enum` | a Volt enum of the same values and integer type, which converts to and from integers |
 | an anonymous `enum` | a constant per enumerator, of its integer type |
 | `static inline` functions | callable: voltc compiles a small C unit that exports them |
 
-Flags for the preprocessor (`-I`, `-D`, `-U`) come from `--cc`: `voltc run app.volt --cc -Iinclude
---cc -DDEBUG`. A struct Volt can only partly read (a type it can't parse) still works: voltc asks
-libclang for its size, alignment and field offsets, and skips what it can't name.
+Flags for the preprocessor (`-I`, `-D`, `-U`, `-isystem`, `-iquote`, `-idirafter`, `-include`)
+come from `--cc`: `voltc run app.volt --cc -Iinclude --cc -DDEBUG`. A struct Volt can only partly
+read (a type it can't parse) still works: voltc asks libclang for its size, alignment and field
+offsets, and skips what it can't name.
 
 ### Unions, bitfields and anonymous members
 
@@ -185,7 +188,10 @@ parameter before the `va_list` (C's `va_start` does, before C23).
 
 Every `typedef` is a type name you can write: `c::size_t`, `c::pthread_t`, a pointer typedef like
 Node-API's `napi_env`, a function-pointer typedef (a callback type), or a struct's second name. A
-function-pointer typedef is an optional function, as C's can be null.
+function-pointer typedef is an optional function, as C's can be null. A struct with a `typedef` is
+named by its first one, not by its tag: after `typedef struct counter tally;` it is `c::tally`. A
+struct and a function of one name (`struct stat` and `stat()`) both come in: `c::stat` is the type
+where a type goes and the function where a call does.
 
 Importing the same header in two places gives the same types: a `FILE*` from one import is the
 same type as from another.
@@ -203,18 +209,21 @@ use { "modern.h" } as c;     // constexpr, nullptr, [[attributes]]: C23
 ```
 
 Volt's own C (the C backend's output, the LLVM backend's runtime) is compiled under the GNU form of
-the program's standard, and includes the headers imported under it (or its GNU or ISO twin: `c11`
-and `gnu11` share it). A header imported under another one is compiled in a unit of its own
+the program's standard (`gnu99` at the least), and includes the headers imported under it (or its
+GNU or ISO twin: `c11` and `gnu11` share it). A header imported under another one is compiled in a unit of its own
 standard instead, and Volt calls its functions through pointers that unit defines (calling one the
-header declares and nothing defines panics, naming it); its structs are laid out by Volt, so one
-with a union or bitfield member has to come in under the program's standard. A K&R definition's parameters take the types a caller without a prototype passes (`char`
+header declares and nothing defines panics, naming it); its structs are laid out by Volt (with
+padding where a bitfield sits), so a union, or a struct with a union member, has to come in under
+the program's standard. A K&R definition's parameters take the types a caller without a prototype passes (`char`
 and `short` as `int`, `float` as `double`).
 
 ## Declaring C functions
 
 `extern "C" fn` declares any function with a C ABI, from a C library, or a Rust `extern "C"`, Zig
 `export`, or anything else linked in with `--cc`. C varargs (`...`) are for these declarations and
-for `extern "C" fn` types.
+for `extern "C" fn` types. A declaration of your own may see a function another way than a header
+or std does (`void*` where the header says `const void*`): the two never meet. Declaring one
+function twice yourself, with two signatures, is an error.
 
 ```volt
 use std::io;
@@ -231,9 +240,10 @@ fn main() -> void {
 
 ## Callbacks and exports
 
-A Volt function passes as a C function pointer where one is expected, and `extern "C" fn` with a
-body defines a function with the C calling convention. `export fn` also gives it an unmangled
-symbol name, so C code linked with the program (or a library) can call it. A library C programs call gets its header
+A Volt function passes as a C function pointer where one is expected (for a `void*` callback,
+`@cast<void*>(f)` is its address; see [C function pointers](/volt-bootstrap/guide/closures/#c-function-pointers)),
+and `extern "C" fn` with a body defines a function with the C calling convention. `export fn` also
+gives it an unmangled symbol name, so C code linked with the program (or a library) can call it. A library C programs call gets its header
 from `voltc bindings NAME --lang c`, which takes every shape: generics' instances, structs held by
 handles with their methods, owned values, traits and closures both ways
 ([They call Volt](/volt-bootstrap/interop/other-languages/#they-call-volt)).
@@ -260,9 +270,14 @@ fn main() -> void {
 
 ## Layout
 
-Structs imported from C have C's layout. For your own structs that cross into C, use `extern
-struct`: fields in declaration order with C's padding (a plain `struct`'s layout is the compiler's
-choice).
+Structs imported from C have C's layout. C works out their size, so `@sizeof` and `@alignof` of one
+are known at run time (and in a global's initializer), not in comptime code or an array's length.
+Otherwise an imported struct is a type like any other: fns and traits attach to it
+([Attaching to any type](/volt-bootstrap/guide/structs/#attaching-to-any-type)), and `@typeinfo`
+reads its fields.
+
+Every Volt struct is laid out as C lays out the same struct (fields in declaration order, C's
+padding), so one can cross into C as it is; `extern struct` marks one that's meant to:
 
 ```volt
 extern struct packet {

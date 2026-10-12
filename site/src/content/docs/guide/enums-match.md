@@ -143,8 +143,8 @@ fn next(l: light) -> light {
 
 ### Other patterns
 
-Integers, ranges, strings, booleans and tuples match too; `_` matches anything, and a name binds
-the value (often with a guard).
+Integers, ranges, strings, booleans and tuples match too, and `null` matches an empty optional; `_`
+matches anything, and a name binds the value (often with a guard).
 
 ```volt
 use std::io;

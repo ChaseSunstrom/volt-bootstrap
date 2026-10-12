@@ -45,6 +45,11 @@ fn main() -> void {
 
 A comptime error (overflow, an out-of-bounds index, a runaway loop) is a compile error.
 
+Code in the compiler is ordinary Volt and calls plain functions too. As at run time, a `var`
+without a value starts at zero, and a `{ }` literal passed to a comptime function takes the
+parameter's type. std's heap types (`std::vec`, `std::string`) don't run there: comptime code
+keeps its data in arrays, and `str + str` joins strings.
+
 ## Types as values
 
 `type` is a type, so a comptime function can compute one, and a variable can hold one.
@@ -245,13 +250,53 @@ fn main() -> void {
 // expect: 012
 ```
 
+## Compile-time values and parameters
+
+`comptime val` and `comptime var` in a function declare a local that lives in the compiler: code
+after it reads it as a constant, and it can hold what a run-time value can't, such as a type or a
+`@typeinfo` record. A parameter marked `comptime`, among a function's ordinary ones, takes an
+argument known at compile time (anything else is an error), and each value it's called with gets
+its own copy of the function, as a [constant generic
+parameter](/volt-bootstrap/guide/templates/#constant-parameters) does.
+
+```volt
+use std::io;
+
+struct point {
+    x: i32;
+    y: i32;
+}
+
+fn repeat(comptime n: i32, c: str) -> void {
+    comptime for (i) in 0..n {
+        std::print(c);
+    }
+    std::println("");
+}
+
+fn main() -> void {
+    comptime val info = @typeinfo(point);
+    comptime var count = 0;
+    comptime for (f) in info.fields {
+        count += 1;
+    }
+    repeat(3, "ab");
+    std::println("{} {}", info.short_name, count);
+}
+// expect: ababab
+// expect: point 2
+```
+
 ## Reflection: @typeinfo and @typeof
 
-`@typeof(expr)` is an expression's type. `@typeinfo(T)` describes a type at compile time: its name,
-size, alignment, kind (with fields, variants, element types) and more. Its `fields` and `variants`
-are a struct's fields and an enum's variants (empty for other types), ready for a `comptime for`,
-and its `methods` are the fns attached to the type (any type: `i32`'s too), in the order they're
-declared: each one's `name`, the `trait` it's attached for (`""` when none) and its `params` (their
+`@typeof(expr)` is an expression's type. `@typeinfo(T)` describes a type at compile time: its
+`canonical_name`, `short_name` and `module_path`; its `kind`, a variant per kind of type with what
+it's made of (`.STRUCT`, `.ENUM`, `.POINTER(T)`, `.ARRAY(T, n)`, `.TRAIT_UNION`...); its `size`,
+`align` and `stride` (`usize?`: null for a type with no layout); `is_pod` (nothing to delete) and
+`generic_args`. Its `fields` and `variants` are a struct's fields (`name`, `field_type`, `offset`)
+and an enum's variants (`name`, `discriminant`, `payload`), empty for other types, ready for a
+`comptime for`, and its `methods` are the fns attached to the type (any type: `i32`'s too), in the
+order they're declared: each one's `name`, the `trait` it's attached for (`""` when none) and its `params` (their
 names, after `this`). `@field(v, m.name)(args)` calls one ([Code that writes
 code](/volt-bootstrap/guide/metaprogramming/#code-from-the-fns-attached-to-any-type)). `borrows` says
 whether a value of it points into something it doesn't own (a reference or slice in it, a closure's
@@ -487,8 +532,9 @@ fn main() -> void {
 
 Comptime code can read it too, and so build types and functions from data: [a struct from a
 schema file](/volt-bootstrap/guide/metaprogramming/#a-struct-from-a-schema-file) does it for this
-file. A package's compile-time code is trusted like its `build.volt`: `@embed` reads any path it's
-given.
+file, and `std::html::render(@embed("page.html"), &data, &out)` checks a template against `data`'s
+type while compiling ([HTML templates](/volt-bootstrap/std/json-data/#checked-while-compiling)).
+A package's compile-time code is trusted like its `build.volt`: `@embed` reads any path it's given.
 
 ## What comptime code became: @expand and voltc expand
 
@@ -627,6 +673,8 @@ Three keys describe the platform being built for. Every package sees them withou
 | `arch` | `x86_64`, `aarch64`, `riscv64`, `riscv32`, `x86`, `arm` |
 | `pointer_bits` | `64` or `32` |
 
+On bare metal a fourth key, `target`, is the `--target` name (`thumbv7em-none`, ...).
+
 A library uses them to pick per-platform code, and the branches for other platforms aren't checked.
 At run time, `std::process::os()` and `std::process::arch()` give the same names.
 `@cfg("hosted")` is true when there's an OS at all (`os` isn't `none`), for code that needs files,
@@ -680,9 +728,10 @@ fn main() -> void {
 
 ## Attributes
 
-`@attributes([...])` before a declaration attaches compile-time attributes: the builtins below
-(only known ones are accepted, so a typo is an error), and a library's own (see
-[Your own attributes](#your-own-attributes)).
+`@attributes([...])` before a declaration (before or after its `<...>` generic parameters)
+attaches compile-time attributes: the builtins below (only known ones are accepted, so a typo is
+an error; [Builtins](/volt-bootstrap/guide/builtins/#attributes) lists every one), and a library's
+own (see [Your own attributes](#your-own-attributes)).
 
 | Attribute | Meaning |
 | --- | --- |
@@ -691,7 +740,7 @@ fn main() -> void {
 | `@invalidates` | a method that may move or free its receiver's storage (`push`, `clear`...): a view into the receiver used after it warns ([safety](/volt-bootstrap/guide/safety/#what-the-compiler-warns-about)) |
 | `@opt(n)` | optimization level for this function (0 to 3) |
 | `@section(".name")` | put the function in a section |
-| `@align(n)` | alignment |
+| `@align(n)` | the function's alignment, in bytes |
 | `@deprecated("use x")` | warn where it's used |
 | `@intrinsic("name")` | a compiler builtin or runtime function (for std-like libraries) |
 | `@owns("field")` | this struct owns what the field points at, like `box` |

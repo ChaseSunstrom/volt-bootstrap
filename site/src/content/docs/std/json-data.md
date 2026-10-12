@@ -65,8 +65,9 @@ fn main() -> !void {
 
 `std::json::object()` and `array()` start empty; `set(key, v)` adds a member (or replaces the one
 with that key) and `add(v)` appends an element. `string`, `number`, `boolean` and `null_value` make
-the rest. `text()` prints a value as compact JSON, escaping what JSON needs escaped, and `write`
-appends it to a `std::string` that exists:
+the rest. `text()` prints a value as compact JSON, escaping what JSON needs escaped (a NaN or an
+infinity, which JSON has no way to write, prints as `null`), and `write` appends it to a
+`std::string` that exists:
 
 ```volt
 use std::io;
@@ -85,6 +86,10 @@ fn main() -> void {
 }
 // expect: {"name":"volt","stars":5,"tags":["fast","say \"hi\""],"draft":false}
 ```
+
+A struct or enum that derives json (`@attributes([@derive(json)])`) builds its own value with
+`to_json()`: a struct is an object with a member for each field (see
+[Derive](/volt-bootstrap/guide/comptime/#derive)).
 
 A value made from a `std::mem::arena` (`parse(text, arena.allocator())`) puts all of its strings and
 arrays in the arena, which frees them together; see [Allocators](/volt-bootstrap/std/allocators/).
@@ -150,10 +155,10 @@ struct menu {
     dishes: std::vec<dish>;
 }
 
-fn main() -> void {
+fn main() -> !void {
     var m: menu = { title: "Fish & chips", dishes: {} };
-    m.dishes.push({ name: "<chips>", hot: true });
-    m.dishes.push({ name: "peas", hot: false });
+    try m.dishes.push({ name: "<chips>", hot: true });
+    try m.dishes.push({ name: "peas", hot: false });
     var out: std::string = {};
     std::html::render("<h1>{{title}}</h1>{{for d in dishes}}<p>{{d.name}}{{if d.hot}} (hot){{end}}</p>{{end}}", &m, &out);
     std::println("{}", out.as_str());

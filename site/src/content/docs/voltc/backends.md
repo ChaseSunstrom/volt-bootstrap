@@ -22,7 +22,8 @@ per function saying where it was declared. `voltc emit-c app.volt -o out/` write
 | `runtime.c` | the small runtime: the allocator wrapper and argv |
 | `program.c` | includes them all, so `cc out/program.c` builds the program |
 
-Only functions the program can reach are emitted. Here is a function and what it becomes:
+Only functions the program can reach, and `export fn`s, are emitted. Here is a function and what it
+becomes:
 
 ```volt
 struct point { x: i32; y: i32; }

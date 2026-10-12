@@ -40,7 +40,8 @@ your `sort` call. To state the requirements up front, bound the parameter with a
 
 ## Generic types
 
-Structs, enums and error sets take generic parameters the same way, with defaults.
+Structs, enums, error sets and [type aliases](/volt-bootstrap/guide/basics/#type-aliases) take
+generic parameters the same way, with defaults.
 
 ```volt
 use std::io;
@@ -74,7 +75,9 @@ fn main() -> void {
 ## Constant parameters
 
 A generic parameter can be a value known at compile time instead of a type: `N: usize`,
-`C: i32 = 3`. Array lengths are the usual use.
+`C: i32 = 3`, `S: str`. Array lengths are the usual use. A parameter marked `comptime` among a
+function's ordinary ones, `fn repeat(comptime n: i32, c: str)`, works the same way (see
+[Comptime](/volt-bootstrap/guide/comptime/#compile-time-values-and-parameters)).
 
 ```volt
 use std::io;
@@ -121,6 +124,11 @@ fn main() -> void {
 }
 // expect: a value a bool true
 ```
+
+Overloaded templates are picked as [functions](/volt-bootstrap/guide/functions/#overloading) are:
+between versions that fit equally well, the more specific one wins (one for `boxed<T>` over one for
+any `T`, one whose parameter has a trait bound over one without), and two just as specific are an
+ambiguous call.
 
 ## Packs
 

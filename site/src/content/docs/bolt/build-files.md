@@ -37,7 +37,7 @@ a dependency's build file runs too, but only for its C arguments (see below).
 | `bolt::option(name, fallback) -> str` | a `-Dname=value` from the command line, or the fallback |
 | `bolt::feature(name) -> bool` | whether this package's feature is on |
 | `bolt::profile() -> str` | the profile being built: `dev`, `release`, `test`, `bench` or a custom one |
-| `bolt::exe(name, paths...)` | another executable, from `.volt` files and directories |
+| `bolt::exe(name, paths...)` | another executable, from `.volt` files and directories: `bolt build` builds it, `bolt run --bin NAME` runs it |
 | `bolt::source(path)` | one more `.volt` file in every executable |
 | `bolt::c_source(path)` | a C file compiled into every executable |
 | `bolt::link_c(name)` | link a C library (`-lNAME`) into every executable |
@@ -48,9 +48,11 @@ a dependency's build file runs too, but only for its C arguments (see below).
 | `bolt::depends(step, on)` | `step` runs after `on` (`"install"` builds every executable) |
 
 Each call prints one `@bolt` line that bolt reads after the build file finishes; anything else a
-build file prints is shown as it is. A step's program sees the C arguments the executables were
-linked with (from `c_source`, `link_c` and `cc_arg`) in `$BOLT_CC_ARGS`, one per line, so a step
-that builds more can use the same ones.
+build file prints is shown as it is. The line's arguments are separated by tabs, so an argument
+can't hold a tab or a line break: the build file panics. Paths are relative to the package's
+directory, where build files and steps run. A step's program sees the C arguments the executables
+were linked with (from `c_source`, `link_c` and `cc_arg`) in `$BOLT_CC_ARGS`, one per line, so a
+step that builds more can use the same ones.
 
 A dependency's build file counts too, like a Cargo build script's link lines: what its `c_source`,
 `link_c` and `cc_arg` add goes into every program built on it, and its `-I`, `-D` and `-U` into the

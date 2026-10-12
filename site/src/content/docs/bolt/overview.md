@@ -35,8 +35,8 @@ app/
 ├── src/          the program: every .volt file here is one executable, `app`
 ├── lib/          the library: other packages call it as app::name
 ├── examples/     one program per .volt file or subdirectory (bolt run --example NAME)
-├── tests/        one program per file; each must exit 0 (bolt test)
-├── benches/      one program per file, built with the bench profile (bolt bench)
+├── tests/        one program per file or subdirectory; each must exit 0 (bolt test)
+├── benches/      one program per file or subdirectory, built with the bench profile (bolt bench)
 └── target/       build output: target/debug/, target/release/, ...
 ```
 
@@ -51,7 +51,8 @@ package's own `lib/`) is compiled once per profile into `target/<profile>/deps/l
 parallel when they don't depend on each other, and rebuilt only when its sources, its settings or
 voltc change. Executables are cached the same way.
 
-bolt runs `$VOLTC` when set, otherwise a `voltc` next to itself or on `PATH`.
+bolt runs `$VOLTC` when set, otherwise a `voltc` next to itself or on `PATH`, then a
+`voltc-bootstrap` next to itself.
 
 ## Other languages
 
