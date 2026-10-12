@@ -719,7 +719,9 @@ mod tests {
             ForeignKind::Rust(d) => format!("{} rust {}", f.name, d.display()),
             ForeignKind::Zig(d) => format!("{} zig {}", f.name, d.display()),
         }).collect();
-        assert_eq!(kinds, ["g go /p/gomath", "r rust /p/geom", "z zig /p/z.zig"]);
+        // each directory is the package's, joined the system's way (/p\gomath on Windows)
+        let at = |d: &str| Path::new("/p").join(d).display().to_string();
+        assert_eq!(kinds, [format!("g go {}", at("gomath")), format!("r rust {}", at("geom")), format!("z zig {}", at("z.zig"))]);
         let both = m("x = { go = \"a\", rust = \"b\" }").err().unwrap();
         assert!(both.contains("needs one of rust = \"crate dir\", zig = \"file.zig\" or go = \"module dir\""), "{both}");
         assert!(m("x = { python = \"a\" }").is_err());
