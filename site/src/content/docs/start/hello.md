@@ -51,7 +51,8 @@ hello/
 ```
 
 `bolt build --release` builds optimized, `bolt test` runs the package's `test` blocks and each
-program in `tests/`, and `bolt add` adds dependencies. The [bolt section](/volt-bootstrap/bolt/overview/) covers all of it.
+program in `tests/`, and `bolt add` adds dependencies. The
+[bolt section](/volt-bootstrap/bolt/overview/) covers all of it.
 
 ## What main returns
 

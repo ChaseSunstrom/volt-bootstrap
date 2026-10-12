@@ -138,7 +138,9 @@ any number of assemblies.
 ## C# calls Volt
 
 A Volt library that lists `csharp` among its bindings gets one C# file from `bolt build`
-(`target/debug/bindings/NAME.cs`), for .NET 7 or later. It has the structs and enums, a `Native`
+(`target/debug/bindings/NAME.cs`), for .NET 7 or later (.NET 8 when a struct holds an array of
+text or of structs, which C# gets as an inline array, and .NET 9 when a callback gives back a
+slice, a `Func` returning a `Span`). It has the structs and enums, a `Native`
 class of `[LibraryImport]` declarations, and on top of those the package's functions in a static
 class `Api` and a class per export struct.
 

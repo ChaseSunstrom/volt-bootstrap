@@ -27,9 +27,8 @@ compiler, `voltc`, is written in Volt and builds itself.
   Volt matches or beats clang-compiled C on most programs.
 - **Mistakes stop loudly.** Debug builds trap overflow, out-of-bounds indexing, null unwraps and
   double frees; the compiler rejects use after move, missed `match` cases and format strings that
-  don't fit their arguments.
-  `--release` drops the overflow and double-free checks and keeps the rest, each as one compare and
-  a trap.
+  don't fit their arguments. `--release` drops the overflow and double-free checks and keeps the
+  rest, each as one compare and a trap.
 - **Ownership without lifetimes.** Values are deleted at scope end, moves are tracked and copies are
   explicit: RAII with nothing to annotate.
 - **Every language is one step away.** It reads C and C++ headers (templates and the standard
