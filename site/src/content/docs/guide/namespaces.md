@@ -110,7 +110,7 @@ fn helper() -> i32 { return 1; }                // its own
 
 A program's own files never need `public`: everything they declare is visible, to std's templates
 too (`internal` still keeps a declaration to the program). A struct's fields and an enum's variants
-go with their type (`internal` on a field is accepted but hides nothing yet), an `export fn` is
+go with their type (`internal` on a field hides it outside its package), an `export fn` is
 public, and so are the functions in an `attach some_trait -> T { }` block, which are the trait's.
 Templates are fine: a std template that calls one of std's own helpers still works when your
 program instantiates it.

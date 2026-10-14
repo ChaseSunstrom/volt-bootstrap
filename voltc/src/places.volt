@@ -146,6 +146,7 @@ attach fn field(this: checker&, b0: tval, name: str, span: span) -> compile_erro
             for (i) in 0..fs.len {
                 val f = fs.at(i);
                 if (f.name == name) {
+                    try this.field_visible(sid, f, span);
                     if (this.opts.lsp) {
                         this.lsp_field_use(sid, name, f.ty, span);
                     }
@@ -801,6 +802,7 @@ attach fn literal(this: checker&, entries: std::vec<lit_entry>&, want: u32?, spa
                     return this.no_field(e.span, w, n, &names);
                 }
                 val i = idx ?? 0;
+                try this.field_visible(sid, fs.at(i), e.span);
                 if (this.opts.lsp && en.name != null) {
                     // the name is the last time it's written before the value (`{ x: x }`)
                     this.lsp_field_use(sid, n, fs.at(i).ty, { file: e.span.file, lo: span.lo, hi: e.span.lo });

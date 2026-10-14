@@ -52,6 +52,7 @@ struct field_info {
     name: str;
     ty: u32;
     fallback: expr*;
+    vis: vis = vis::DEFAULT;
 }
 
 // one struct instance (a struct decl with one set of generic args); its fields resolve on first use
@@ -1598,6 +1599,22 @@ attach fn visible(this: checker&, d: u32, span: span) -> compile_error!void {
         return fail(span, fmt2("'{}' is internal to {}", S(this.decl_name(d)), fmt("package {}", S(owner))));
     }
     return fail(span, fmt2("'{}' is internal to {}", S(this.decl_name(d)), S("the program")));
+}
+
+// An internal field belongs to its struct's package (the program's files, for the program's);
+// an unmarked one follows its struct.
+attach fn field_visible(this: checker&, sid: u32, f: field_info&, span: span) -> compile_error!void {
+    if (f.vis != vis::INTERNAL) {
+        return;
+    }
+    val owner = this.pkg_of(this.si(sid).decl);
+    if (same_pkg(owner, this.pkg_of_file(span.file))) {
+        return;
+    }
+    if (owner) {
+        return fail(span, fmt2("field '{}' is internal to {}", S(f.name), fmt("package {}", S(owner))));
+    }
+    return fail(span, fmt2("field '{}' is internal to {}", S(f.name), S("the program")));
 }
 
 attach fn pkg_of_file(this: checker&, file: u32) -> str? {

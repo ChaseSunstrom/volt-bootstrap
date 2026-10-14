@@ -588,7 +588,7 @@ attach fn struct_fields(this: checker&, sid: u32, span: span) -> compile_error!(
                 if (f.fallback) {
                     fb = &f.fallback;
                 }
-                put(&out, { name: f.name, ty: t, fallback: fb });
+                put(&out, { name: f.name, ty: t, fallback: fb, vis: f.vis });
             }
         },
         default => {},
