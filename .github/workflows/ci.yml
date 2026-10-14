@@ -39,14 +39,16 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       # LLVM and libclang for voltc's LLVM backend and C imports; clang, llvm-nm and ld.lld for the
-      # cross-compile and bare-metal tests; qemu runs the bare-metal boards; g++ 14 for the C++
-      # imports' wrappers (the runner's g++ 13 has no C++23 explicit object parameters)
+      # cross-compile and bare-metal tests; qemu runs the bare-metal boards; g++ 15 (the toolchain
+      # PPA's) for the C++ imports' wrappers: the runner's g++ 13 has no C++23 explicit object
+      # parameters, and libstdc++ before 15 no std module for import std; (clang finds it there too)
       - name: Install LLVM, qemu and test tools
         run: |
           wget -q https://apt.llvm.org/llvm.sh
           sudo bash llvm.sh "$LLVM_VERSION" all
-          sudo apt-get install -y qemu-system-arm qemu-system-misc g++-14
-          echo "CXX=g++-14" >> "$GITHUB_ENV"
+          sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test
+          sudo apt-get install -y qemu-system-arm qemu-system-misc g++-15
+          echo "CXX=g++-15" >> "$GITHUB_ENV"
           echo "/usr/lib/llvm-$LLVM_VERSION/bin" >> "$GITHUB_PATH"
           echo "LLVM_CONFIG=/usr/lib/llvm-$LLVM_VERSION/bin/llvm-config" >> "$GITHUB_ENV"
           # voltc's own sources import LLVM's C headers, which apt.llvm.org keeps beside its libraries

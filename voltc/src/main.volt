@@ -1212,7 +1212,7 @@ fn cpp_module_flags(chk: checker&, pp: std::vec<str>&, dir: str, u: u32, std_fla
         if (x == u && names.len == 0) {
             val src = std_module_source(&cmd, "std");
             if (src == null) {
-                *err = fmt("import std; needs the C++ library's std module, and the C++ compiler '{}' finds no modules manifest (libstdc++.modules.json, libc++.modules.json)", S(cxx));
+                *err = fmt("import std; needs the C++ library's std module, and the C++ compiler '{}' finds no modules manifest naming one that's there (libstdc++.modules.json, libc++.modules.json)", S(cxx));
                 return flags;
             }
             put(&names, S("std"));

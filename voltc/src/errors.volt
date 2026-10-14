@@ -296,7 +296,9 @@ attach fn orelse(this: checker&, a: expr&, b: expr&, span: span) -> compile_erro
         val missing = this.ir.unary(unop_ir::NOT, p.has, BOOL);
         return with_prov(vnew(inner, this.ir.seq(nodes2(first, this.ir.if_(missing, bv.c, null)), p.value, inner)), &av);
     }
-    val bc = try this.coerce(bv, inner, span);
+    // an owned local fallback moves, its live flag cleared inside the fallback's arm: only when the
+    // optional is empty (otherwise its scope still deletes it)
+    val bc = try this.take_into(bv, inner, b.span);
     var r = vnew(inner, this.ir.seq(nodes(first), this.ir.node(ir_kind::COND(p.has, p.value, bc.c), inner), inner));
     merge_prov(&r, &av);
     merge_prov(&r, &bc);

@@ -1777,6 +1777,32 @@ fn cpp_module() {
     let o = e.voltc(&["check", &e.path("cpp_module_hidden.volt")]);
     let err = String::from_utf8_lossy(&o.stderr);
     assert!(!o.status.success() && err.contains("unknown name 'hidden_helper'"), "an unexported name: {err}");
+    // Ubuntu's libc++.modules.json sits where its relative source path names nothing (GitHub's
+    // runner): with a clang++ that finds only a manifest like that, import std; is an error, not a crash
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let bin = e.dir.join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::write(e.dir.join("libc++.modules.json"), r#"{"version":1,"revision":1,"modules":[{"logical-name":"std","source-path":"../share/libc++/v1/std.cppm","is-std-library":true}]}"#).unwrap();
+        let path = std::env::var("PATH").unwrap_or_default();
+        let wrapper = format!(
+            "#!/bin/sh\nfor a in \"$@\"; do case \"$a\" in\n  -print-file-name=libstdc++.modules.json) echo libstdc++.modules.json; exit 0;;\n  -print-file-name=libc++.modules.json) echo '{}'; exit 0;;\nesac; done\nPATH='{path}' exec clang++ \"$@\"\n",
+            e.path("libc++.modules.json")
+        );
+        std::fs::write(bin.join("clang++"), wrapper).unwrap();
+        std::fs::set_permissions(bin.join("clang++"), std::fs::Permissions::from_mode(0o755)).unwrap();
+        let o = Command::new(&e.voltc)
+            .args(["check", "cpp_module.volt", "--std"])
+            .arg(Path::new(ROOT).join("std"))
+            .current_dir(Path::new(ROOT).join("tests/interop"))
+            .env("PATH", format!("{}:{path}", bin.display()))
+            .env("VOLT_CACHE", e.dir.join("cache"))
+            .output()
+            .unwrap();
+        let err = String::from_utf8_lossy(&o.stderr);
+        assert!(!o.status.success() && err.contains("import std; needs") && !err.contains("panic"), "a modules manifest naming a missing source: {err}");
+    }
 }
 
 #[test]

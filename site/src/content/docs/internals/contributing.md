@@ -8,7 +8,8 @@ sidebar:
 - **One compiler.** A change to the language (syntax, checking, diagnostics) goes into `voltc/src`
   alone; the tests run stage1, voltc built by `bootstrap/`. The bootstrap is stage 0 and frozen: it
   only builds voltc, so `voltc/src`, the parts of std it uses and `site/gen` stay within what it
-  compiles ([Bootstrapping](/volt-bootstrap/internals/bootstrap/)).
+  compiles ([Bootstrapping](/volt-bootstrap/internals/bootstrap/)), and clear of what it compiles
+  wrong: an owned local as a `??` fallback (`x ?? name`) is still deleted twice there.
 - **Both backends.** A change to code generation keeps the C and LLVM backends in agreement: run the
   bootstrap check.
 - **std stays a library.** The compiler knows as few of std's names as it can (`@derive`'s fallback
@@ -34,9 +35,10 @@ cd voltc && VOLTC=../target/debug/voltc-bootstrap ../target/debug/bolt build boo
 CI (`.github/workflows/ci.yml`) runs on every push to main and every pull request, and any job
 that fails fails the run:
 
-- **Linux x86-64 and arm64:** the whole `cargo test`, with LLVM 23, lld, qemu, g++ 14 (as `$CXX`,
-  for C++23 headers) and Node's types (for the TypeScript checks) installed. A build that warns
-  fails. Failing tests are listed on the run's summary page.
+- **Linux x86-64 and arm64:** the whole `cargo test`, with LLVM 23, lld, qemu, g++ 15 from the
+  toolchain PPA (as `$CXX`, for C++23 headers and the std module `import std;` needs) and Node's
+  types (for the TypeScript checks) installed. A build that warns fails. Failing tests are listed on
+  the run's summary page.
 - **The editor extension:** its grammar and extension tests.
 - **macOS (arm64, x86-64) and Windows (x86-64, arm64):** build the compilers, and build and run a
   few programs through the C backend; the test suite itself runs on Linux only for now.

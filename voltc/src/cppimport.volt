@@ -5302,8 +5302,10 @@ fn std_module_source(cmd: std::vec<str>&, logical: str) -> std::string? {
                 continue;
             }
             val sp = mods.at(i).get("source-path").as_str() ?? continue;
+            // a source that isn't there is passed over: Ubuntu copies libc++'s manifest beside its
+            // libraries, where the relative path names nothing
             if (sp.len > 0 && sp[0] == '/') {
-                return S(sp);
+                return real_file(sp) ?? continue;
             }
             var at = path.len();
             while (at > 0 && path.as_str()[at - 1] != '/') {
@@ -5311,7 +5313,7 @@ fn std_module_source(cmd: std::vec<str>&, logical: str) -> std::string? {
             }
             var full = S(path.as_str()[0..at]);
             full.append(sp);
-            return real_file(full.as_str()) ?? full;
+            return real_file(full.as_str()) ?? continue;
         }
     }
     return null;
@@ -5371,7 +5373,7 @@ attach fn module_pcm(this: checker&, name: str, path: str, args: std::vec<str>&,
 attach fn std_modules(this: checker&, args: std::vec<str>&, s: str, u: u32, compat: bool, force: bool, span: span) -> compile_error!void {
     var cmd: std::vec<str> = {};
     put(&cmd, "clang++");
-    val src = std_module_source(&cmd, "std") ?? return fails(span, "import std; needs the C++ library's std module, and clang++ finds no modules manifest (libstdc++.modules.json, libc++.modules.json)");
+    val src = std_module_source(&cmd, "std") ?? return fails(span, "import std; needs the C++ library's std module, and clang++ finds no modules manifest naming one that's there (libstdc++.modules.json, libc++.modules.json)");
     var sargs = this.cpp_args(s);
     val pcm = try this.module_pcm("std", src.as_str(), &sargs, s, force, span);
     val flag = this.intern(fmt("-fmodule-file=std={}", copy pcm));

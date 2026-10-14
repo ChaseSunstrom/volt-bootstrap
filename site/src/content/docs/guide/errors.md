@@ -208,6 +208,10 @@ fn main() -> void {
 instead: `x ?? return`, `x ?? break`, `x ?? continue`, `x ?? @panic("...")`. A `{` after `??`
 starts a struct or array literal (`p ?? { x: 0, y: 0 }`), not a block: a fallback that needs
 statements goes in `if (x) { ... } else { ... }`, where `x` is the value inside the first block.
+A fallback that owns something (`x ?? name`, a local `std::string`) moves only when `x` is empty;
+otherwise it stays where it is and its scope deletes it. Either way `name` counts as moved after
+it, as after an `if` that moves it in one branch. A field or element as the fallback is copied with
+`copy`, as for any value taken from inside another.
 
 ```volt
 use std::io;
