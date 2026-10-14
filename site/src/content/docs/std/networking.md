@@ -11,8 +11,8 @@ builds unchanged on Linux, macOS, FreeBSD and Windows. Failures are `net_error`s
 `REFUSED`, `TIMED_OUT`, `IN_USE`, `RESET`, `UNREACHABLE` and `IO`. A call that a signal interrupts
 is made again, so it doesn't fail.
 
-On Windows, a program that uses `std::net` has to be linked with `ws2_32`
-(`--cc -lws2_32`). voltc doesn't add it on its own yet.
+On Windows, voltc links Winsock (`ws2_32`) itself, so a program that uses `std::net` needs no
+extra flag.
 
 ## TCP
 
