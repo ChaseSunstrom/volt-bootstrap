@@ -1925,6 +1925,41 @@ fn cpp_refs() {
 }
 
 #[test]
+fn cpp_params() {
+    // parameters with a Volt form of their own, declared and per use: a reference to an array (const
+    // or not, one through an alias with a default), a function pointer, a std::string& (a throw
+    // leaves the Volt string as it was, under a callback too), a std::function over a class held by
+    // handle, one laid out and one move-only
+    let e = Env::new("cpp-params");
+    let want = "sum 6\nfill 4 4 4\ntotal 12\ntwice 8 24\nfirst 7 8\napply 5 6 10\n@cpp 42\nshout hi!!\ngrow 2: 7 hi!!~++\ngrow -1: INVALID_ARGUMENT hi!!~++\n@cpp hi!!~++!\nrelay INVALID_ARGUMENT hi!!~++!\nshapes 2 7\npoints 202 45\nspend 15\n";
+    for backend in ["c", "llvm"] {
+        assert_eq!(ok(e.voltc(&["run", "cpp_params.volt", "--backend", backend]), "voltc run cpp_params.volt"), want, "C++ parameters ({backend})");
+    }
+}
+
+#[test]
+fn cpp_params_refused() {
+    // what those parameters don't take: another array size, a closure for a function pointer; and a
+    // result that would point into a std::string&'s copy, left out of the declarations and an error
+    // per use
+    let e = Env::new("cpp-params-refused");
+    let check = |file: &str| {
+        let o = e.voltc(&["check", file]);
+        assert!(!o.status.success(), "{file} checks");
+        String::from_utf8_lossy(&o.stderr).to_string()
+    };
+    let err = check("cpp_params_size.volt");
+    assert!(err.contains("argument 1 is a i32[4]&, but 'fill' wants a i32[3]&"), "another array size: {err}");
+    let err = check("cpp_params_closure.volt");
+    assert!(err.contains("argument 1 is a closure(i32) -> i32, but 'apply' wants a extern \"C\" fn(i32) -> i32"), "a closure for a function pointer: {err}");
+    let err = check("cpp_params_view.volt");
+    assert!(err.contains("its result would point into a copy of the string that's gone once the call returns") && err.contains("cpp_params_view.volt:7"), "a view into the copy, per use: {err}");
+    let shown = Command::new(&e.voltc).args(["check", "cpp_params.volt", "--std"]).arg(Path::new(ROOT).join("std")).current_dir(Path::new(ROOT).join("tests/interop")).env("VOLT_SHOW_CPP", "1").output().unwrap();
+    let src = String::from_utf8_lossy(&shown.stderr);
+    assert!(src.contains("its result would point into a copy of the string that's gone once the call returns") && !src.contains("fn first_word("), "a view into the copy, declared: {src}");
+}
+
+#[test]
 fn cpp_errors() {
     // try_ forms whatever the result (a handle, a reference, an optional, a vector), and an
     // exception from C++ Volt called in a callback reaching the C++ that called the callback

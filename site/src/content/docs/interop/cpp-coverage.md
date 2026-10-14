@@ -32,7 +32,8 @@ doesn't map, with the way around each.
 | public bases (one reached by two paths, by its path), `dynamic_cast`, `typeid` | `as_Base()`, `as_B1_A()`, `as_Derived()`, `cpp_type_name()` |
 | `T*`, `T&`, `T&&`, `const T&`, `std::unique_ptr<T>`, `std::shared_ptr<T>` of a class held by handle | borrowed handles (`T?` for a pointer), owning ones for a `unique_ptr`; a `shared_ptr` is a handle whose `get()` borrows |
 | exceptions | `try_` forms (for every function that can throw) returning a `cpp_error` naming the exception; one thrown under a Volt callback rethrown to the C++ that called it, with its own type |
-| `std::string`, `std::string_view`, `std::vector`, `std::unique_ptr`, `std::shared_ptr`, `std::function` | `str`/`std::string`, `T[..]`/`std::vec<T>`, `stdcxx::` handles, `fn(...)` values |
+| `std::string`, `std::string_view`, `std::vector`, `std::unique_ptr`, `std::shared_ptr`, `std::function` | `str`/`std::string`, `T[..]`/`std::vec<T>`, `stdcxx::` handles, `fn(...)` values (a class in a `std::function`'s signature a borrowed handle or a copy) |
+| `std::string&`, `T(&)[N]`, function pointer parameters | `std::string&` (C++'s changes copied back, unless it threw), `T[N]&` (`T[N]` for a `const` one), `extern "C" fn(...)` |
 | a type by what it can do: optional-like, tuple-like, contiguous, variant-like (`std::optional`, `std::pair`, `std::tuple`, `std::array`, `std::span`, `std::variant`, any library's own) | `T?`, tuples, `T[N]`, `T[..]`/`std::vec<T>`, an enum to `match` on |
 | a range (`begin(r)`, `end(r)`: containers, views) | `for (x) in r` |
 | the standard library's own headers (`use cpp { "map" }`) | their declarations under `stdcxx`, class templates as generic handles (`stdcxx::map<K, V>`) |
@@ -72,7 +73,7 @@ comment in the generated source (`VOLT_SHOW_CPP=1` prints it), and the rest stil
 | C++ | Why | The way around it |
 | --- | --- | --- |
 | class templates with non-type or template template parameters (glm's `vec<3, float>`), as generics | Volt's generic structs take types (functions with them are [called per use](/volt-bootstrap/interop/cpp/#calls-worked-out-per-use)) | an instance: the header's alias for one (`using vec3 = vec<3, float>;`), or one a function gives back, is a handle, made by `{}` or `vec3::new(...)`, its members worked out per use |
-| a parameter of a function pointer (`int (*)(int)`), or of a `std::function` whose signature has a class | a call per use can't be handed a Volt fn for it | `@cpp`'s `{&i}` passes a Volt function by its symbol: `@cpp<i32>("ns::apply({&0}, {1})", inc, 4)` |
+| a parameter of a function pointer whose signature has a class, enum or reference (`int (*)(const Shape &)`), or of a `std::function` with a non-const reference in its signature or a class held by handle as its result | Volt has no form for it (a function pointer over numbers and pointers is an `extern "C" fn`; a `std::function` over classes takes a closure) | `@cpp`'s `{&i}` passes a Volt function by its symbol: `@cpp<i32>("ns::apply({&0}, {1})", inc, 4)` |
 
 Explicit specializations (`template <> struct S<void>`) and what a library adds to namespace `std`
 (`std::hash<T>` specializations, `swap` overloads) are left out on purpose: the template, and Volt's
