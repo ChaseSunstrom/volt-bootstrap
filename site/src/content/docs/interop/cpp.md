@@ -251,7 +251,7 @@ fn main() -> void {
 | C++ | Volt |
 | --- | --- |
 | `std::string`, `std::string_view` parameters (by value, `const&`, `&&`) | `str` |
-| a `std::string&` parameter | `std::string&`: C++ changes a copy, which the Volt string gets once the call returns (not when it throws: a `try_` form leaves the string as it was) |
+| a `std::string&` parameter | `std::string&`: C++ changes a copy, which the Volt string gets once the call returns (not when it throws: a `try_` form leaves the string as it was). A function whose result could point into that copy (a view, a pointer, a reference) isn't declared, and a call of it per use is an error |
 | a `std::string` result | `std::string` (a copy) |
 | a `std::string_view` result | `str` (the same bytes, alive as long as C++ keeps them) |
 | `std::vector<T>` parameters (by value, `const&`) | `T[..]` |
@@ -268,7 +268,7 @@ fn main() -> void {
 | `operator T()` (explicit or not; not in a class template) | `to_T()`: `to_bool()`, `to_i32()`, `to_string()` |
 | `operator=` | `assign(v)` |
 | a method template | a generic method: `c.cast_to<f64>()` |
-| a `std::function<R(A...)>` parameter | `fn(A...) -> R`: a closure or function; C++ calls it while the call lasts (it mustn't keep it). A class in `A...` (by value or `const&`) arrives as a borrowed handle of C++'s object, good while the callback runs, or, for one Volt lays out, a copy of its struct; `R` may be a class Volt lays out |
+| a `std::function<R(A...)>` parameter | `fn(A...) -> R`: a closure or function; C++ calls it while the call lasts (it mustn't keep it). A class in `A...` (by value or `const&`) arrives as a borrowed handle of C++'s object (a move-only one too), good while the callback runs, or, for one Volt lays out, a copy of its struct; `R` may be a class Volt lays out |
 | a `std::function` result | `stdcxx::function`: `call(...)` runs it, and it's deleted with the Volt value |
 | a `std::function` field | a getter, and `set_f(closure)`: the closure moves into the field, which keeps it (and deletes it once C++ is done with every copy); one capturing by reference (`\|x&\|`) is a compile error |
 | a bit-field | `f()` and `set_f(v)`, on a class held by value or by handle (C++ does the bit work) |
@@ -466,7 +466,8 @@ object `derive` didn't make; without RTTI, either stops the program saying so.
   panic; its `try_` form returns it as an error. In Volt code C++ called (a closure passed as a
   `std::function`, an override of a virtual method), it goes back to that C++ instead, rethrown with
   its own type, so a `catch` there gets it; the Volt frames between are left without running their
-  deletes. A Volt panic ends the program, in a callback too.
+  deletes (the C++ copy of a `std::string&` made for a call in such a frame among them, which
+  leaks; the Volt string stays as it was). A Volt panic ends the program, in a callback too.
 - A borrowed handle (from `as_`, a `T*` or a `T&`) doesn't keep the object alive: it's good while
   what it came from is.
   Passed by value, it gives C++ a copy of the object (an owned handle is moved from), and `copy` of
