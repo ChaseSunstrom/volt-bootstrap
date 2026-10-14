@@ -43,3 +43,20 @@ attach shape -> square {
 export fn vis_seven() -> i32 {
     return 7;
 }
+
+// an internal field is the package's own, though its struct is public
+@attributes([@derive(eq)])
+public struct account {
+    id: i32;
+    internal secret: i32 = 5;
+}
+
+public fn make_account(id: i32) -> account {
+    var a: account = { id: id, secret: 9 };
+    a.secret = a.secret + 1;
+    return a;
+}
+
+public fn reveal(a: account&) -> i32 {
+    return a.secret;
+}

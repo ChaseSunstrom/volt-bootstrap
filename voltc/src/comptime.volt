@@ -1408,6 +1408,7 @@ attach fn ct_write(this: checker&, whole: cval&, place: expr&, v: cval, span: sp
             var set = false;
             match (parent) {
                 .STRUCT(t, fields) => {
+                    try this.ct_field_visible(t, name, span);
                     for (f&) in fields.items() {
                         if (f.name == name) {
                             f.v = copy v;
@@ -1607,6 +1608,7 @@ attach fn ct_literal(this: checker&, entries: std::vec<lit_entry>&, want: u32?, 
                 }
                 var v = cval::VOID;
                 if (given) {
+                    try this.field_visible(sid, &f, span);
                     v = try this.ct_expr(given, f.ty);
                 } else if (f.fallback) {
                     v = try this.ct_eval_in(this.si(sid).env, f.fallback, f.ty);
@@ -1672,9 +1674,24 @@ attach fn ct_methods(this: checker&, t: u32) -> cval {
     return cval::ARRAY(move ms, VOID);
 }
 
+// a struct value's field named in source: an internal one is its package's
+attach fn ct_field_visible(this: checker&, t: u32, name: str, span: span) -> compile_error!void {
+    match (*this.t.get(t)) {
+        .STRUCT(sid) => {
+            for (f&) in (try this.struct_fields(sid, span)).items() {
+                if (f.name == name) {
+                    try this.field_visible(sid, f, span);
+                }
+            }
+        },
+        default => {},
+    }
+}
+
 attach fn ct_field(this: checker&, v: cval, name: str, span: span) -> compile_error!cval {
     match (v) {
         .STRUCT(t, fields) => {
+            try this.ct_field_visible(t, name, span);
             for (f&) in fields.items() {
                 if (f.name == name) {
                     return copy f.v;

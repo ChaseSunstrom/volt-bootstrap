@@ -20,6 +20,10 @@ fn main() -> void {
     val c: circle = { r: 1 };
     std::println("{} {} {} {}", vis::answer(), vis::LIMIT, p.sum(), p.x);
     std::println("{} {} {}", area_of(sq), area_of(c), vis::vis_seven());
+    var acct = vis::make_account(4);
+    val plain: vis::account = { id: 6 };
+    std::println("{} {} {}", acct.id, vis::reveal(&acct), vis::reveal(&plain));
 }
 // expect: 42 3 3 1
 // expect: 16 3 7
+// expect: 4 10 5
