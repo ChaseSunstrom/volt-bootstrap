@@ -209,15 +209,22 @@ val IFV_LABEL: str = "@ifv";
 val ERR_TMP: str = "@err";
 
 // the operators `attach operator` can give a type: the fn each makes, and the word a C name spells
-// it as (in step with bootstrap/ast.rs OPERATORS; 8 below is "operator".len)
-val OPERATOR_FNS: str[13] = { "operator+", "operator-", "operator*", "operator/", "operator%", "operator&", "operator|", "operator^", "operator<<", "operator>>", "operator~", "operator<", "operator[]" };
-val OPERATOR_WORDS: str[13] = { "op_add", "op_sub", "op_mul", "op_div", "op_rem", "op_and", "op_or", "op_xor", "op_shl", "op_shr", "op_not", "op_lt", "op_index" };
+// it as (bootstrap/ast.rs OPERATORS has the first 13; 8 below is "operator".len)
+val OPERATOR_FNS: str[16] = { "operator+", "operator-", "operator*", "operator/", "operator%", "operator&", "operator|", "operator^", "operator<<", "operator>>", "operator~", "operator<", "operator[]", "operator+%", "operator-%", "operator*%" };
+val OPERATOR_WORDS: str[16] = { "op_add", "op_sub", "op_mul", "op_div", "op_rem", "op_and", "op_or", "op_xor", "op_shl", "op_shr", "op_not", "op_lt", "op_index", "op_wadd", "op_wsub", "op_wmul" };
+// a right-hand operator (`this` second: 2.0 * v) is made with this moved first, under a name of its
+// own so `v * 2.0` doesn't find it (~ and [] have none)
+val RIGHT_FNS: str[16] = { "operator+@r", "operator-@r", "operator*@r", "operator/@r", "operator%@r", "operator&@r", "operator|@r", "operator^@r", "operator<<@r", "operator>>@r", "operator~@r", "operator<@r", "operator[]@r", "operator+%@r", "operator-%@r", "operator*%@r" };
+val RIGHT_WORDS: str[16] = { "op_radd", "op_rsub", "op_rmul", "op_rdiv", "op_rrem", "op_rand", "op_ror", "op_rxor", "op_rshl", "op_rshr", "op_rnot", "op_rlt", "op_rindex", "op_rwadd", "op_rwsub", "op_rwmul" };
 
 // a fn's name as C can spell it: an operator's is a word (operator+ is op_add)
 fn c_word(name: str) -> str {
-    for (i) in 0..13 {
+    for (i) in 0..16 {
         if (name == OPERATOR_FNS[i]) {
             return OPERATOR_WORDS[i];
+        }
+        if (name == RIGHT_FNS[i]) {
+            return RIGHT_WORDS[i];
         }
     }
     return name;
@@ -225,9 +232,29 @@ fn c_word(name: str) -> str {
 
 // the fn `attach operator <sym>` makes, if sym can be attached
 fn operator_fn(sym: str) -> str? {
-    for (i) in 0..13 {
+    for (i) in 0..16 {
         if (OPERATOR_FNS[i][8..OPERATOR_FNS[i].len] == sym) {
             return OPERATOR_FNS[i];
+        }
+    }
+    return null;
+}
+
+// is name a fn `attach operator` made (either hand)?
+fn is_operator_fn(name: str) -> bool {
+    for (i) in 0..16 {
+        if (name == OPERATOR_FNS[i] || name == RIGHT_FNS[i]) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// the right-hand version of operator fn name (operator* gives operator*@r)
+fn right_fn(name: str) -> str? {
+    for (i) in 0..16 {
+        if (name == OPERATOR_FNS[i]) {
+            return RIGHT_FNS[i];
         }
     }
     return null;

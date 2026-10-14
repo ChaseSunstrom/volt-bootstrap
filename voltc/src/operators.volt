@@ -334,6 +334,10 @@ attach fn binary(this: checker&, op: binop, ae: expr&, be: expr&, want: u32?, sp
         b_want = operand_want;
     }
     val b = this.c_enum_view(try this.expr(be, b_want));
+    val by_right = try this.op_right_side(op, a, b, ae, be, want, span);
+    if (by_right) {
+        return by_right;
+    }
     if (this.is_vector(a.ty) || this.is_vector(b.ty)) {
         return this.vector_binary(op, a, b, span);
     }
@@ -1086,7 +1090,7 @@ attach fn has_ops(this: checker&, ty: u32) -> bool {
 
 // "; attach operator - to give it one" after an error about a struct or an enum
 attach fn op_hint(this: checker&, ty: u32, sym: str) -> std::string {
-    if (!this.has_ops(ty) || sym == "+%" || sym == "-%" || sym == "*%") {
+    if (!this.has_ops(ty)) {
         return {};
     }
     return fmt("; attach operator {} to give it one", S(sym));
@@ -1132,17 +1136,46 @@ attach fn op_call(this: checker&, sym: str, recv: tval, args: std::vec<expr>&, w
     return r;
 }
 
-// a op b on a struct or enum: its operator<op>, called with a as this. a > b is b < a and a <= b is
-// !(b < a), the operands still evaluated left to right; a >= b is !(a < b)
-attach fn op_binary(this: checker&, op: binop, a: tval, ae: expr&, be: expr&, want: u32?, span: span) -> compile_error!tval {
-    val swap = op == binop::GT || op == binop::LE;
-    val negate = op == binop::LE || op == binop::GE;
-    var sym = binop_text(op);
-    if (swap || negate) {
-        sym = "<";
+// the operator a op b calls: > <= >= come from <
+fn op_sym(op: binop) -> str {
+    if (op == binop::GT || op == binop::LE || op == binop::GE) {
+        return "<";
     }
-    val name = this.intern(fmt("operator{}", S(sym)));
+    return binop_text(op);
+}
+
+// a op b with a struct or enum on the right only (2.0 * v): b's right-hand operator, when one takes
+// a; a > b and a <= b always, as they call b's operator <
+attach fn op_right_side(this: checker&, op: binop, a: tval, b: tval, ae: expr&, be: expr&, want: u32?, span: span) -> compile_error!(tval?) {
+    if (op == binop::EQ || op == binop::NE || !this.has_ops(b.ty)) {
+        return null;
+    }
+    if (op != binop::GT && op != binop::LE) {
+        val rname = right_fn(this.intern(fmt("operator{}", S(op_sym(op))))) ?? return null;
+        var probe: std::vec<tval?> = {};
+        put(&probe, a);
+        val rcands = try this.op_cands(rname, &b, &probe);
+        if (rcands.len == 0) {
+            return null;
+        }
+    }
+    return try this.op_pair(op, a, b, ae, be, want, span);
+}
+
+// a op b on a struct or enum: a's operator<op> (this first) when one takes b, else b's right-hand
+// one (this second, made as operator<op>@r with this first) when one takes a. a > b is b < a and
+// a <= b is !(b < a), the operands still evaluated left to right; a >= b is !(a < b)
+attach fn op_binary(this: checker&, op: binop, a: tval, ae: expr&, be: expr&, want: u32?, span: span) -> compile_error!tval {
     val b = try this.expr(be, this.t.ref_inner(a.ty) ?? a.ty);
+    return this.op_pair(op, a, b, ae, be, want, span);
+}
+
+// op_binary with both operands checked
+attach fn op_pair(this: checker&, op: binop, a: tval, b: tval, ae: expr&, be: expr&, want: u32?, span: span) -> compile_error!tval {
+    val swap = op == binop::GT || op == binop::LE;
+    val sym = op_sym(op);
+    val name = this.intern(fmt("operator{}", S(sym)));
+    val rname = right_fn(name) ?? ""; // "": none (no fn has that name)
     val left = a.ty;
     var pair: std::vec<tval> = {};
     put(&pair, a);
@@ -1151,28 +1184,67 @@ attach fn op_binary(this: checker&, op: binop, a: tval, ae: expr&, be: expr&, wa
     var recv = *pair.at(0);
     var arg = *pair.at(1);
     var args: std::vec<expr> = {};
+    var rargs: std::vec<expr> = {};
     if (swap) {
         recv = *pair.at(1);
         arg = *pair.at(0);
         put(&args, copy *ae);
+        put(&rargs, copy *be);
     } else {
         put(&args, copy *be);
+        put(&rargs, copy *ae);
     }
     var probe: std::vec<tval?> = {};
     put(&probe, arg);
     val cands = try this.op_cands(name, &recv, &probe);
-    if (cands.len == 0) {
+    var rprobe: std::vec<tval?> = {};
+    put(&rprobe, recv);
+    val rcands = try this.op_cands(rname, &arg, &rprobe);
+    var w = want;
+    if (is_cmp_op(op)) {
+        w = BOOL;
+    }
+    if (cands.len == 0 && rcands.len == 0) {
         if (swap && recv.ty != arg.ty) {
             return fail(span, fmt3("a {} b calls b's operator <, and {} has none taking a {}", S(binop_text(op)), this.ty_name(recv.ty), this.ty_name(arg.ty)));
         }
         return fail(span, fmt3("can't use {} on {}{}", S(binop_text(op)), this.ty_name(left), this.op_hint(left, sym)));
     }
-    var post: u32? = null;
-    var w = want;
-    if (is_cmp_op(op)) {
-        w = BOOL;
+    if (cands.len == 0) {
+        return this.op_right(op, name, &rcands, recv, arg, &rargs, w, span, move pre, !swap);
     }
-    var r = try this.op_pick(name, &cands, recv, arg, &args, w, span, &pre, &post);
+    // the left operand's operator wins; the right one's is tried when none of its versions fit
+    var lpre = copy pre;
+    var post: u32? = null;
+    val r = this.op_pick(name, &cands, recv, arg, &args, w, span, &lpre, &post) catch |e| {
+        if (rcands.len == 0) {
+            return copy e;
+        }
+        return this.op_right(op, name, &rcands, recv, arg, &rargs, w, span, copy pre, !swap);
+    };
+    return this.op_done(op, r, move lpre, post, span);
+}
+
+// l op r through r's right-hand operator: called with r as this, then l. When that's not source
+// order (flipped) and l has effects, l is evaluated into a temporary first
+attach fn op_right(this: checker&, op: binop, name: str, cands: std::vec<u32>&, l: tval, r: tval, args: std::vec<expr>&, want: u32?, span: span, pre: std::vec<u32>, flipped: bool) -> compile_error!tval {
+    var stmts = move pre;
+    var lv = l;
+    if (flipped && !lv.pure && lv.ty != VOID && lv.ty != NEVER) {
+        val t = this.tmp_local("s", lv.ty);
+        put(&stmts, this.ir.decl(t.id, lv.c));
+        lv.c = t.c;
+        lv.pure = true;
+    }
+    var post: u32? = null;
+    val v = try this.op_pick(name, cands, r, lv, args, want, span, &stmts, &post);
+    return this.op_done(op, v, move stmts, post, span);
+}
+
+// an operator's result: <= and >= negate a bool <, and a lent temporary goes after the call
+attach fn op_done(this: checker&, op: binop, v: tval, pre: std::vec<u32>, post: u32?, span: span) -> compile_error!tval {
+    val negate = op == binop::LE || op == binop::GE;
+    var r = v;
     if (negate && r.ty != BOOL) {
         return fail(span, fmt2("{} needs operator < to give a bool, but it gives {}", S(binop_text(op)), this.ty_name(r.ty)));
     }

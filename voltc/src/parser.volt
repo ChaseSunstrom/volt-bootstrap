@@ -889,15 +889,29 @@ attach fn fn_decl(this: parser&, op: bool) -> compile_error!fn_decl {
     var ps: std::vec<param> = {};
     val c_varargs = try this.params(&ps);
     if (op) {
-        // a binary operator takes this and the right operand; == (eq) takes both by reference
+        // a binary operator takes this and the right operand, or the left operand and this (the
+        // right operand's operator); == (eq) takes both by reference
         var sym = "==";
         if (name != "eq") {
             sym = name[8..name.len];
         }
-        if (ps.len == 0 || ps.at(0).name != "this" || ps.at(0).is_static) {
-            return fail(at, fmt("operator {} takes this as its first parameter", S(sym)));
-        }
         val n = ps.len;
+        var second = false;
+        if (n == 0 || ps.at(0).name != "this" || ps.at(0).is_static) {
+            if (n < 2 || ps.at(1).name != "this" || ps.at(1).is_static) {
+                return fail(at, S("an operator takes this as its first or second parameter"));
+            }
+            if (sym == "==") {
+                return fail(at, S("operator == takes this first, both T&: (this: T&, other: T&)"));
+            }
+            if (sym == "~" || sym == "[]") {
+                return fail(at, fmt("operator {} takes this first: only a binary operator takes it second", S(sym)));
+            }
+            if (n != 2) {
+                return fail(at, fmt("operator {} takes two parameters: the left operand and this", S(sym)));
+            }
+            second = true;
+        }
         var want: str? = null;
         if (sym == "-") {
             if (n != 1 && n != 2) {
@@ -931,6 +945,12 @@ attach fn fn_decl(this: parser&, op: bool) -> compile_error!fn_decl {
         }
         if (want) {
             return fail(at, fmt2("operator {} takes {}", S(sym), S(want)));
+        }
+        if (second) {
+            // made with this first, under the right-hand name (operator*@r)
+            val left = ps.remove(0);
+            put(&ps, left);
+            name = right_fn(name) ?? name;
         }
     }
     var ret: ty? = null;
@@ -993,7 +1013,7 @@ attach fn operator_name(this: parser&) -> compile_error!str {
     if (base) {
         return fail(at, fmt2("{} can't be attached: it comes from operator {}", S(sym), S(base)));
     }
-    return fail(at, fmt("{} can't be attached; these can: + - * / % & | ^ << >> ~ < == []", S(sym)));
+    return fail(at, fmt("{} can't be attached; these can: + - * / % +% -% *% & | ^ << >> ~ < == []", S(sym)));
 }
 
 // `(var x: T = d, static this, ...)`: the params go into out; returns whether they end in C varargs `...`
