@@ -577,9 +577,24 @@ attach fn highlights(this: lsp_server&, params: std::json::value&) -> std::json:
     return out;
 }
 
-// whether a name can be renamed: it's declared in this program (not std, not made up: a namespace
-// or a generic parameter's use is its own declaration)
-attach fn renamable(this: lsp_server&, doc: lsp_doc&, c: checker&, at: usize) -> span? {
+// the word at a byte offset
+fn word_at(text: str, file: u32, at: usize) -> span {
+    var lo = at;
+    while (lo > 0 && is_word_byte(text[lo - 1])) {
+        lo -= 1;
+    }
+    var hi = at;
+    while (hi < text.len && is_word_byte(text[hi])) {
+        hi += 1;
+    }
+    return { file: file, lo: @cast<u32>(lo), hi: @cast<u32>(hi) };
+}
+
+// whether a name can be renamed: it's declared in this program, or in std when the document is
+// itself a std file (not made up: a namespace or a generic parameter's use is its own
+// declaration). When not, why holds the reason.
+attach fn renamable(this: lsp_server&, doc: lsp_doc&, c: checker&, at: usize, why: std::string&) -> span? {
+    *why = S("this can't be renamed here");
     val def = def_at(c, doc.file, at) ?? return null;
     val r = ref_at(c, doc.file, at);
     if (r) {
@@ -587,9 +602,13 @@ attach fn renamable(this: lsp_server&, doc: lsp_doc&, c: checker&, at: usize) ->
             return null;
         }
     }
-    for (u&) in doc.src.value.units.items() {
-        if (u.file == def.file && u.pkg != null && (u.pkg ?? "") == "std") {
-            return null;
+    if (!this.in_std(uri_path(doc.uri.as_str()).as_str())) {
+        for (u&) in doc.src.value.units.items() {
+            if (u.file == def.file && u.pkg != null && (u.pkg ?? "") == "std") {
+                val w = word_at(c.files.at(@cast<usize>(doc.file)).text, doc.file, at);
+                *why = fmt("'{}' is declared in std, which a program's rename doesn't edit", S(c.files.at(@cast<usize>(doc.file)).text[@cast<usize>(w.lo)..@cast<usize>(w.hi)]));
+                return null;
+            }
         }
     }
     return def;
@@ -600,20 +619,13 @@ attach fn prepare_rename(this: lsp_server&, params: std::json::value&) -> std::j
     val doc = this.fresh_doc(params) ?? return std::json::value::NULL;
     val c = &*doc.chk.value;
     val at = doc_offset(doc, params);
-    this.renamable(doc, c, at) ?? return std::json::value::NULL;
-    // the word at the cursor
+    var why = S("");
+    this.renamable(doc, c, at, &why) ?? return lsp_error(-32602.0, move why);
     val text = c.files.at(@cast<usize>(doc.file)).text;
-    var lo = at;
-    while (lo > 0 && is_word_byte(text[lo - 1])) {
-        lo -= 1;
-    }
-    var hi = at;
-    while (hi < text.len && is_word_byte(text[hi])) {
-        hi += 1;
-    }
+    val w = word_at(text, doc.file, at);
     var r = std::json::object();
-    r.set("range", lsp_range(text, { file: doc.file, lo: @cast<u32>(lo), hi: @cast<u32>(hi) }));
-    r.set("placeholder", std::json::string(text[lo..hi]));
+    r.set("range", lsp_range(text, w));
+    r.set("placeholder", std::json::string(text[@cast<usize>(w.lo)..@cast<usize>(w.hi)]));
     return r;
 }
 
@@ -630,7 +642,8 @@ attach fn rename(this: lsp_server&, params: std::json::value&) -> std::json::val
     if (!ok) {
         return lsp_error(-32602.0, fmt("'{}' isn't a name", S(name)));
     }
-    val def = this.renamable(doc, c, doc_offset(doc, params)) ?? return lsp_error(-32602.0, S("this can't be renamed here"));
+    var why = S("");
+    val def = this.renamable(doc, c, doc_offset(doc, params), &why) ?? return lsp_error(-32602.0, move why);
     var spans = uses_of(c, def);
     put(&spans, def);
     // per file: its URI and edits
@@ -1383,7 +1396,7 @@ attach fn inline_request(this: lsp_server&, method: str, id: std::json::value&, 
     }
     if (method == "textDocument/prepareRename") {
         this.flush();
-        lsp_reply(id, this.prepare_rename(params));
+        inline_reply(id, this.prepare_rename(params));
         return true;
     }
     if (method == "textDocument/rename") {
