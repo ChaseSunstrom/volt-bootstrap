@@ -45,6 +45,7 @@ export fn vis_seven() -> i32 {
 }
 
 // an internal field is the package's own, though its struct is public
+@attributes([@derive(eq)])
 public struct account {
     id: i32;
     internal secret: i32 = 5;

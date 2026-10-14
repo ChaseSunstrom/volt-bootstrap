@@ -297,6 +297,7 @@ attach fn field_form(this: checker&, base: garg&, name: garg&, span: span) -> co
         },
         default => {},
     }
+    put(&this.reflect_spans, span);
     return { kind: expr_kind::FIELD(bx(copy *b), this.intern(move fname), null), span: span };
 }
 

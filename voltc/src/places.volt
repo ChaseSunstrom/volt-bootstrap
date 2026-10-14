@@ -83,7 +83,7 @@ attach fn field(this: checker&, b0: tval, name: str, span: span) -> compile_erro
         }
         var has_own = false;
         for (f&) in (try this.struct_fields(sid, span)).items() {
-            if (f.name == name) {
+            if (f.name == name && this.field_seen(sid, f, span)) {
                 has_own = true;
             }
         }
@@ -268,7 +268,9 @@ attach fn field(this: checker&, b0: tval, name: str, span: span) -> compile_erro
     match (*this.t.get(t)) {
         .STRUCT(sid) => {
             for (f&) in (try this.struct_fields(sid, span)).items() {
-                put(&names, f.name);
+                if (this.field_seen(sid, f, span)) {
+                    put(&names, f.name);
+                }
             }
         },
         .TUPLE(ts, tnames) => {
@@ -797,7 +799,9 @@ attach fn literal(this: checker&, entries: std::vec<lit_entry>&, want: u32?, spa
                 if (idx == null) {
                     var names: std::vec<str> = {};
                     for (f&) in fs.items() {
-                        put(&names, f.name);
+                        if (this.field_seen(sid, f, e.span)) {
+                            put(&names, f.name);
+                        }
                     }
                     return this.no_field(e.span, w, n, &names);
                 }
