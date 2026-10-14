@@ -1226,11 +1226,12 @@ attach fn op_pair(this: checker&, op: binop, a: tval, b: tval, ae: expr&, be: ex
 }
 
 // l op r through r's right-hand operator: called with r as this, then l. When that's not source
-// order (flipped) and l has effects, l is evaluated into a temporary first
+// order (flipped) and either operand has effects, l (but a literal) is read into a temporary first,
+// so n * bump(&n) reads n before bump runs
 attach fn op_right(this: checker&, op: binop, name: str, cands: std::vec<u32>&, l: tval, r: tval, args: std::vec<expr>&, want: u32?, span: span, pre: std::vec<u32>, flipped: bool) -> compile_error!tval {
     var stmts = move pre;
     var lv = l;
-    if (flipped && !lv.pure && lv.ty != VOID && lv.ty != NEVER) {
+    if (flipped && (!lv.pure || !r.pure) && lv.lit == null && lv.ty != VOID && lv.ty != NEVER) {
         val t = this.tmp_local("s", lv.ty);
         put(&stmts, this.ir.decl(t.id, lv.c));
         lv.c = t.c;

@@ -254,7 +254,8 @@ These can be attached:
   `v`'s operator.
 - A right operand taken by reference (`o: T&`) lends its address; a temporary one lives until the
   call is done, so `a + (b + c)` works.
-- `a += b` evaluates the place `a` once; the old value is deleted like on `a = a + b`.
+- `a += b` evaluates the place `a` once; the old value is deleted like on `a = a + b`. `a op= b`
+  uses `a`'s own operator (`this` first); a right-hand operator doesn't serve `op=`.
 - Built-in types keep their own operators, and `&& || ?? = .` can't be attached. Neither can
   `> <= >= != +=`: they come from `<`, `==` and `+`.
 

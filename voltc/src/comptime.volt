@@ -1659,6 +1659,11 @@ attach fn ct_methods(this: checker&, t: u32) -> cval {
     });
     for (a&) in all.items() {
         val fd = this.fn_decl_of(a.decl) ?? continue;
+        // a right-hand operator (this second, kept as operator*@r) isn't a method: @field(v, name)
+        // couldn't call it, so it's left out
+        if (left_of(fd.name) != null) {
+            continue;
+        }
         var ps: std::vec<cval> = {};
         for (p&) in fd.params.items() {
             if (p.name != "this") {

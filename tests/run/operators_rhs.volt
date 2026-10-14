@@ -26,6 +26,11 @@ attach operator *(k: i32, this: dir) -> dir {
     return { dx: k * this.dx, dy: k * this.dy };
 }
 
+// right-hand overloads pick by the left operand, as call overloads do
+attach operator *(s: str, this: dir) -> str {
+    return s;
+}
+
 // 3 < m, and m > 3 (that's 3 < m), by reference: a temporary lives until the call is done
 struct money {
     cents: i64;
@@ -54,6 +59,43 @@ attach operator *(this: meters, s: scale) -> str {
 
 attach operator *(m: meters, this: scale) -> str {
     return "scale's";
+}
+
+// meters' * doesn't take a ratio, so ratio's right-hand one is called
+struct ratio {
+    r: i32;
+}
+
+attach operator *(m: meters, this: ratio) -> i32 {
+    return m.m * this.r;
+}
+
+// a right-hand wrapping operator
+struct fix {
+    raw: u8;
+}
+
+attach operator +%(k: u8, this: fix) -> fix {
+    return { raw: k +% this.raw };
+}
+
+// an enum as the right operand
+enum level {
+    LOW,
+    HIGH,
+}
+
+attach operator *(k: i32, this: level) -> i32 {
+    match (this) {
+        .LOW => { return k; },
+        .HIGH => { return k * 10; },
+    }
+}
+
+// a left operand the right one changes: it's read first, as the operands go left to right
+fn bump(n: f64&) -> vec2 {
+    *n += 1.0;
+    return { x: 1.0, y: 1.0 };
 }
 
 // an owned result, and an owned operand lent by reference
@@ -110,6 +152,22 @@ fn main() -> void {
     // a temporary this lives until the call is done, then it's deleted
     val bye = "bye " + words_of("you");
     std::println("{}", bye.s);
+    val r: ratio = { r: 5 };
+    std::println("{}", len * r);
+    val fx: fix = { raw: 100 };
+    std::println("{}", (200 +% fx).raw);
+    std::println("{} {}", 3 * level::LOW, 3 * level::HIGH);
+    std::println("{}", "picked by str" * d);
+    // a >= b is !(a < b): b's right-hand < serves 3 >= m; a <= b is !(b < a): m <= 3 is !(3 < m)
+    std::println("{} {}", 3 >= m, 7 >= m);
+    std::println("{} {}", m <= 3, m <= 7);
+    var n = 2.0;
+    val h = n * bump(&n);
+    std::println("{} {}", h.x, n);
+    // a right-hand operator is no method: @typeinfo(T).methods leaves it out
+    comptime for (meth) in @typeinfo(vec2).methods {
+        std::println("method {}", meth.name);
+    }
 }
 // expect: 2 4
 // expect: 102 104
@@ -123,4 +181,12 @@ fn main() -> void {
 // expect: meters'
 // expect: hello world
 // expect: bye you
+// expect: 10
+// expect: 44
+// expect: 3 30
+// expect: picked by str
+// expect: false true
+// expect: false true
+// expect: 102 3
+// expect: method operator*
 // flags: --leak-check
