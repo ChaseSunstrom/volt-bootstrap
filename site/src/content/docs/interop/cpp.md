@@ -251,10 +251,13 @@ fn main() -> void {
 | C++ | Volt |
 | --- | --- |
 | `std::string`, `std::string_view` parameters (by value, `const&`, `&&`) | `str` |
+| a `std::string&` parameter | `std::string&`: C++ changes a copy, which the Volt string gets once the call returns (not when it throws: a `try_` form leaves the string as it was) |
 | a `std::string` result | `std::string` (a copy) |
 | a `std::string_view` result | `str` (the same bytes, alive as long as C++ keeps them) |
 | `std::vector<T>` parameters (by value, `const&`) | `T[..]` |
 | a `std::vector<T>` result (`T` a plain value) | `std::vec<T>` (a copy) |
+| a `T(&)[N]` parameter, and `const T(&)[N]` | `T[N]&` (C++ writes into the Volt array), and `T[N]`; `T` a number, `bool`, pointer or a class Volt lays out |
+| a function pointer parameter, `R(*)(A...)` | `extern "C" fn(A...) -> R` (a fn's name), its types numbers, `bool` and pointers: C++ calls the Volt fn through a cast to its own pointer type (C and C++ function types differ in the standard, but every compiler Volt builds with gives them one calling convention) |
 | `std::unique_ptr<T>`, `std::shared_ptr<T>` | `stdcxx::unique_ptr<T>`, `stdcxx::shared_ptr<T>`: `get()`, and `use_count()` for the shared one; deleting one is C++'s destructor, copying a shared one adds an owner |
 | operators | methods and functions named after them: `op_add` (`+`), `op_sub`, `op_mul`, `op_div`, `op_rem`, `op_eq`, `op_ne`, `op_lt`, `op_le`, `op_gt`, `op_ge`, `op_index` (`[]`), `op_call` (`()`), `op_neg` (unary `-`), `op_not`, `op_add_assign` (`+=`)... |
 | `T&&` parameters | `T`: Volt hands the value over and C++ moves from it |
@@ -265,7 +268,7 @@ fn main() -> void {
 | `operator T()` (explicit or not; not in a class template) | `to_T()`: `to_bool()`, `to_i32()`, `to_string()` |
 | `operator=` | `assign(v)` |
 | a method template | a generic method: `c.cast_to<f64>()` |
-| a `std::function<R(A...)>` parameter | `fn(A...) -> R`: a closure or function; C++ calls it while the call lasts (it mustn't keep it) |
+| a `std::function<R(A...)>` parameter | `fn(A...) -> R`: a closure or function; C++ calls it while the call lasts (it mustn't keep it). A class in `A...` (by value or `const&`) arrives as a borrowed handle of C++'s object, good while the callback runs, or, for one Volt lays out, a copy of its struct; `R` may be a class Volt lays out |
 | a `std::function` result | `stdcxx::function`: `call(...)` runs it, and it's deleted with the Volt value |
 | a `std::function` field | a getter, and `set_f(closure)`: the closure moves into the field, which keeps it (and deletes it once C++ is done with every copy); one capturing by reference (`\|x&\|`) is a compile error |
 | a bit-field | `f()` and `set_f(v)`, on a class held by value or by handle (C++ does the bit work) |
@@ -432,10 +435,14 @@ object `derive` didn't make; without RTTI, either stops the program saying so.
 - What doesn't map gets a comment in the generated source. A function whose parameters or result
   only a call settles is [called per use](#calls-worked-out-per-use) instead, and so is one with a
   parameter Volt has no form for, where a call is an error (C++ can't be handed a Volt value for
-  it): a non-const reference to a standard library string (a vector's is a `stdcxx::vector<T>&`
-  handle, changed in place), a `std::function` whose signature has a class in it (other than
-  text), a function pointer, a reference to an array. For a function pointer or a `std::function`,
-  `@cpp`'s `{&i}` passes a Volt function: `@cpp<i32>("ns::apply({&0}, {1})", inc, 4)`.
+  it): a `std::function` whose signature has a non-const reference in it or gives back a class
+  Volt holds by handle (a `std::function` field: one taking such a class), a function pointer
+  whose signature has a class, enum or reference in it (or `...`), a reference to an array of
+  enums or of a class Volt holds by handle. For a function pointer or a `std::function`, `@cpp`'s
+  `{&i}` passes a Volt function: `@cpp<i32>("ns::apply({&0}, {1})", inc, 4)`.
+- A `std::string&` parameter is a copy C++ changes and Volt copies back once the call returns:
+  given the same string twice in one call (which Volt warns of, two mutable borrows), each copy
+  comes back in turn, the first parameter's last.
 - Overloads Volt can't tell apart (`long` and `long long` are both `i64`) come through once: the
   first one declared.
 - A loop over a C++ range holds its iterators in Volt's own words, so they must be trivially copyable

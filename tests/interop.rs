@@ -1925,6 +1925,18 @@ fn cpp_refs() {
 }
 
 #[test]
+fn cpp_params() {
+    // parameters with a Volt form of their own, declared and per use: a reference to an array (const
+    // or not), a function pointer, a std::string& (a throw leaves the Volt string as it was), a
+    // std::function over a class held by handle and one laid out
+    let e = Env::new("cpp-params");
+    let want = "sum 6\nfill 4 4 4\ntotal 12\ntwice 8 24\napply 5 6 10\n@cpp 42\nshout hi!!\ngrow 2: 7 hi!!~++\ngrow -1: INVALID_ARGUMENT hi!!~++\n@cpp hi!!~++!\nshapes 2 7\npoints 202 45\n";
+    for backend in ["c", "llvm"] {
+        assert_eq!(ok(e.voltc(&["run", "cpp_params.volt", "--backend", backend]), "voltc run cpp_params.volt"), want, "C++ parameters ({backend})");
+    }
+}
+
+#[test]
 fn cpp_errors() {
     // try_ forms whatever the result (a handle, a reference, an optional, a vector), and an
     // exception from C++ Volt called in a callback reaching the C++ that called the callback
