@@ -25,7 +25,7 @@ is exactly what `voltc check` would.
 | Inlay hints | the type of a `val`/`var`, a `for`/`match` binding or a closure parameter that doesn't write one; the parameter each call argument is for (not for one-letter parameters, nor where the argument already says it); what a block of 25 lines or more closes (`fn main`), after its `}` |
 | Code lenses | references above a function; above a type, how many fns are attached to it and for which traits; above a trait, the types that attach it; Run above `main` |
 | Highlights | the name under the cursor, where it's declared and used |
-| Rename | a function, type, field, local, parameter or global, in every file of the program (not std's names) |
+| Rename | a function, type, field, local, parameter or global, in every file of the program; std's names only from std's own files (working on std itself, where it edits the std files that use them), and from a program prepareRename and rename refuse with the reason |
 | Quick fixes | `declare 'x' with var` (a `val` or a parameter that's assigned, or lent to a function that changes it), `change + to +=` (or `==` to `=`) for a statement whose value is never used, `drop the var` a parameter doesn't need, and `change to 'name'` for a misspelled name or field |
 | Folding | blocks, runs of comments and of `use` lines |
 

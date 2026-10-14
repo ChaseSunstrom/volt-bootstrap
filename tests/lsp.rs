@@ -380,7 +380,10 @@ fn inline_features(s: &mut Server) {
     let r = s.request("textDocument/rename", &format!("{{\"textDocument\":{doc},\"position\":{{\"line\":21,\"character\":11}},\"newName\":\"enlarge\"}}"));
     assert!(r.contains("\"newText\":\"enlarge\"") && r.contains("\"line\":21,") && r.contains("\"line\":34,"), "rename grow: {r}");
     let r = s.request("textDocument/prepareRename", &at(35, 10));
-    assert!(r.contains("\"result\":null"), "prepareRename println: {r}");
+    let why = "'println' is declared in std, which a program's rename doesn't edit";
+    assert!(r.contains("\"error\"") && r.contains(why), "prepareRename println: {r}");
+    let r = s.request("textDocument/rename", &format!("{{\"textDocument\":{doc},\"position\":{{\"line\":35,\"character\":10}},\"newName\":\"shout\"}}"));
+    assert!(r.contains("\"error\"") && r.contains(why), "rename println: {r}");
     let r = s.request("textDocument/rename", &format!("{{\"textDocument\":{doc},\"position\":{{\"line\":21,\"character\":11}},\"newName\":\"fn\"}}"));
     assert!(r.contains("\"error\"") && r.contains("isn't a name"), "rename to a keyword: {r}");
 
@@ -483,6 +486,25 @@ fn builtins_and_std_files() {
     s.notify("textDocument/didOpen", &format!("{{\"textDocument\":{{\"uri\":\"{muri}\",\"languageId\":\"volt\",\"version\":1,\"text\":{}}}}}", js(&text)));
     let d = s.diagnostics_for(&muri);
     assert!(d.contains("\"diagnostics\":[]"), "std/mem.volt in the editor: {d}");
+
+    // renaming from std's own file: a helper of std/path.volt, at its declaration and each use there
+    // (and only those: a std doc's check doesn't load programs)
+    let path = Path::new(ROOT).join("std/path.volt");
+    let puri = format!("file://{}", path.display());
+    let ptext = std::fs::read_to_string(&path).unwrap();
+    s.notify("textDocument/didOpen", &format!("{{\"textDocument\":{{\"uri\":\"{puri}\",\"languageId\":\"volt\",\"version\":1,\"text\":{}}}}}", js(&ptext)));
+    let _ = s.diagnostics_for(&puri);
+    let decl = ptext.lines().position(|l| l.contains("fn last_sep(")).unwrap();
+    let pos = format!("{{\"textDocument\":{{\"uri\":\"{puri}\"}},\"position\":{{\"line\":{decl},\"character\":12}}");
+    let r = s.request("textDocument/prepareRename", &format!("{pos}}}"));
+    assert!(r.contains("\"placeholder\":\"last_sep\""), "prepareRename last_sep in std: {r}");
+    let r = s.request("textDocument/rename", &format!("{pos},\"newName\":\"last_slash\"}}"));
+    let want: Vec<usize> = ptext.lines().enumerate().flat_map(|(i, l)| l.matches("last_sep").map(move |_| i)).collect();
+    assert_eq!(r.matches("\"newText\":\"last_slash\"").count(), want.len(), "rename last_sep in std: {r}");
+    for i in want {
+        assert!(r.contains(&format!("\"line\":{i},")), "rename last_sep lacks line {i}: {r}");
+    }
+    assert_eq!(r.matches("file://").count(), 1, "rename last_sep edits another file: {r}");
 
     let uri = format!("file://{}/b.volt", s.dir.display());
     let doc = format!("{{\"uri\":\"{uri}\"}}");
