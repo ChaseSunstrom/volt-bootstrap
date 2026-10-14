@@ -113,6 +113,4 @@ The test suite runs each, in debug and release builds, with the C compiler set t
 
 - `usize` is 64 bits even on 32-bit targets (pointers are 32). Code that hands a `usize` to the
   hardware should use `u32`.
-- Printing a pointer or a reference itself (its address) uses the C runtime, so on bare metal it fails
-  to link; everything else prints, format specs (`{:>8}`, `{:x}`, `{:.3}`) included.
 - Interrupt handlers past the reset and fault entries, and other CPUs (AArch64, x86-64).

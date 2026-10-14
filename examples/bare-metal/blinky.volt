@@ -22,6 +22,9 @@ fn main() -> i32 {
     std::println("{} blinks on {}", *count, board::NAME);
     // floating point: in hardware where the core has it, in std::softfloat where it doesn't
     std::println("on {:.1}% of the time, {} of {}", @cast<f64>(*count) / 6.0 * 100.0, @cast<f32>(*count) / 6.0, 1.0);
+    // a pointer or reference prints as its address (0x and hex) with no C runtime to do it; a
+    // fixed address keeps the output the same on every board and build
+    std::println("pointer: {} {}", @cast<u8*>(4096), @cast<u8*>(0));
     // 0 when the vec and the box agree
     return @cast<i32>(blinks.len) - @cast<i32>(*count);
 }
