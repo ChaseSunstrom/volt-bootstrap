@@ -1,4 +1,4 @@
-// && || ?? = . and the wrapping operators keep their meaning on every type
+// && || ?? = . keep their meaning on every type
 struct flag {
     on: bool;
 }
@@ -8,4 +8,4 @@ attach operator &&(this: flag, o: flag) -> bool {
 }
 
 fn main() -> void {}
-// error: && can't be attached; these can: + - * / % & | ^ << >> ~ < == []
+// error: && can't be attached; these can: + - * / % +% -% *% & | ^ << >> ~ < == []

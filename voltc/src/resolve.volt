@@ -809,6 +809,10 @@ attach fn fn_inst(this: checker&, d: u32, args: std::vec<gval>, span: span) -> c
                 default => {},
             }
             val t = try this.resolve_type(pat ?? return fails(p.span, "this needs a type here: this: T or this: T&"), env);
+            // an operator nothing could call: operators are looked up on structs and enums only
+            if (is_operator_fn(f.name) && !this.has_ops(t)) {
+                return fail(p.span, fmt("an operator's this is a struct or an enum (or a reference to one), not {}", this.ty_name(t)));
+            }
             put(&params, { name: "this", ty: t, mutable: p.mutable, fallback: null, is_comptime: false });
             continue;
         }

@@ -70,7 +70,7 @@ namespace fs {
  *    +% -% *%    // wrapping arithmetic. plain + - * panic on overflow in debug builds, wrap in release
  *    x & 1 == 1  // & | ^ bind tighter than comparisons: (x & 1) == 1, unlike C
  *    a == b      // on a struct: its eq (attached or @derive(eq)). attach operator gives a struct or enum
- *                // + - * / % & | ^ << >> - ~ < == [] (see the guide's structs page)
+ *                // + - * / % +% -% *% & | ^ << >> - ~ < == [] (see the guide's structs page)
  *
     // comptime-only typeinfo record, returned by @typeinfo(T). a sketch: typeinfo and the types below
     // have no names in code, but their fields read as shown (comptime val ti = @typeinfo(T); works,

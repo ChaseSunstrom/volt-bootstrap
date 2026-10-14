@@ -75,7 +75,13 @@ attach fn walk(this: doc_writer&, items: std::vec<item>&, ns: std::vec<str>&) ->
         match (it.kind) {
             .FN(f&) => {
                 if (f.is_attach) {
-                    var o = this.entry("method", f.name, ns, it.span);
+                    // a right-hand operator (this second, kept as operator*@r) goes by its
+                    // operator's name, marked "right_hand"; its text shows the parameters as written
+                    val left = left_of(f.name);
+                    var o = this.entry("method", left ?? f.name, ns, it.span);
+                    if (left != null) {
+                        o.set("right_hand", std::json::boolean(true));
+                    }
                     o.set("receiver", std::json::string(this.receiver(f)));
                     this.finish(move o, this.fn_text(it, f), it.span);
                 } else {
