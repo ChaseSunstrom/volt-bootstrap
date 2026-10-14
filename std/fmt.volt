@@ -83,6 +83,28 @@ namespace fmt {
         rt_put(sink, @cast<cstr>(&buf[n]), 20 - n);
     }
 
+    // a pointer's address: 0x and lowercase hex
+    @attributes([@runtime("volt_print_ptr")])
+    fn print_ptr(sink: void*, p: usize) -> void {
+        var buf: u8[18];
+        var n: usize = 18;
+        var x = p;
+        loop {
+            n -= 1;
+            val d = @cast<u8>(x & 15);
+            buf[n] = if (d < 10) d + '0' else d - 10 + 'a';
+            x >>= 4;
+            if (x == 0) {
+                break;
+            }
+        }
+        n -= 1;
+        buf[n] = 'x';
+        n -= 1;
+        buf[n] = '0';
+        rt_put(sink, @cast<cstr>(&buf[n]), 18 - n);
+    }
+
     // ---------- {:spec}: fill, align, sign, #, 0, width, precision, type ----------
     //
     // fill is a code point; align '<', '>', '^' or 0 (numbers go right, text left); flags: 1 '+',

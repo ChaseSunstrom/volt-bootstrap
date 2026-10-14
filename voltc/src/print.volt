@@ -578,8 +578,8 @@ attach fn print_code(this: checker&, code: std::vec<u32>&, sink: u32, c: u32, t:
         .STR => { put(code, this.out_rt(sink, "volt_print_str", c)); },
         .CSTR => { put(code, (try this.rt_print("volt_print_cstr", sink, c)) ?? this.out(sink, "%s", nodes(c))); },
         .NULL => { put(code, this.out_s(sink, "null")); },
-        .REF(x) => { put(code, this.out(sink, "%p", nodes(this.ir.conv(c, VOIDPTR)))); },
-        .FN_PTR(ps, r, va) => { put(code, this.out(sink, "%p", nodes(this.ir.conv(c, VOIDPTR)))); },
+        .REF(x) => { put(code, try this.out_addr(sink, c)); },
+        .FN_PTR(ps, r, va) => { put(code, try this.out_addr(sink, c)); },
         .PTR(x) => { try this.print_ptr(code, sink, c); },
         .VOIDPTR => { try this.print_ptr(code, sink, c); },
         .FN_VAL(ps, r) => { put(code, this.out_s(sink, "<fn>")); },
@@ -683,7 +683,12 @@ attach fn print_ptr(this: checker&, code: std::vec<u32>&, sink: u32, c: u32) -> 
     val p = this.tmp_local("pp", VOIDPTR);
     put(code, this.ir.decl(p.id, this.ir.conv(c, VOIDPTR)));
     val is_null = this.ir.binary(binop_ir::EQ, p.c, this.ir.node(ir_kind::NULLPTR, VOIDPTR), BOOL);
-    put(code, this.ir.if_(is_null, this.out_s(sink, "null"), this.out(sink, "%p", nodes(p.c))));
+    put(code, this.ir.if_(is_null, this.out_s(sink, "null"), try this.out_addr(sink, p.c)));
+}
+
+// the address of pointer c as 0x and hex: std's Volt helper, else the C runtime's %p
+attach fn out_addr(this: checker&, sink: u32, c: u32) -> compile_error!u32 {
+    return (try this.rt_print("volt_print_ptr", sink, this.ir.conv(c, USIZE))) ?? this.out(sink, "%p", nodes(this.ir.conv(c, VOIDPTR)));
 }
 
 // { a, b, c } for an array (c is the array) or a slice
