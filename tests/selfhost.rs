@@ -329,7 +329,7 @@ fn runtime_compiles_for_every_target() {
     ];
     for t in targets {
         for debug in [true, false] {
-            let mut cc = Command::new("clang");
+            let mut cc = Command::new(common::llvm_tool("clang"));
             cc.args([&format!("--target={t}"), "-ffreestanding", "-std=c11", "-Werror", "-Wall", "-Wno-unused-function", "-c"]);
             if debug {
                 cc.arg("-DVOLT_DEBUG_ALLOC");
@@ -383,9 +383,9 @@ fn std_compiles_for_other_systems() {
             assert!(o.status.success(), "emit-c {prog} for {os}: {}", String::from_utf8_lossy(&o.stderr));
             std::fs::write(&c, &o.stdout).unwrap();
             let obj = dir.join(format!("{name}.o"));
-            let cc = Command::new("clang").arg(format!("--target={target}")).args(["-ffreestanding", "-w", "-c", "-femit-all-decls"]).arg(&c).arg("-o").arg(&obj).output().unwrap();
+            let cc = Command::new(common::llvm_tool("clang")).arg(format!("--target={target}")).args(["-ffreestanding", "-w", "-c", "-femit-all-decls"]).arg(&c).arg("-o").arg(&obj).output().unwrap();
             assert!(cc.status.success(), "std's {os} code in {prog} doesn't compile for {target}:\n{}", String::from_utf8_lossy(&cc.stderr));
-            let nm = Command::new("llvm-nm").args(["-u", "-j"]).arg(&obj).output().unwrap();
+            let nm = Command::new(common::llvm_tool("llvm-nm")).args(["-u", "-j"]).arg(&obj).output().unwrap();
             // Mach-O puts an underscore before every C name
             let undefined: Vec<String> = String::from_utf8_lossy(&nm.stdout).lines().map(|l| if os == "macos" { l.strip_prefix('_').unwrap_or(l) } else { l }.to_string()).collect();
             let wrong: Vec<&String> = undefined
@@ -405,8 +405,11 @@ fn windows_paths_run() {
     let file = "tests/cross/windows_paths.volt";
     let src = std::fs::read_to_string(root.join(file)).unwrap();
     let want: Vec<&str> = src.lines().filter_map(|l| l.strip_prefix("// expect: ")).collect();
+    // (macOS's linker: names left for load time, which these never reach)
+    let unresolved: &[&str] = if cfg!(target_os = "macos") { &["--cc", "-Wl,-undefined,dynamic_lookup"] } else { &["--cc", "-no-pie", "--cc", "-Wl,--unresolved-symbols=ignore-all"] };
     let o = Command::new(common::voltc())
-        .args(["run", file, "--cfg", "os=windows", "--cc", "-no-pie", "--cc", "-Wl,--unresolved-symbols=ignore-all"])
+        .args(["run", file, "--cfg", "os=windows"])
+        .args(unresolved)
         .current_dir(root)
         .output()
         .unwrap();

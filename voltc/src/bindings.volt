@@ -2963,11 +2963,14 @@ attach fn cpp_text(this: bind&) -> std::string {
     this.c_types(true, &out);
     // the C functions, as they are
     out.append("\n// the C functions (the wrappers below are easier to use)\nnamespace raw {\n");
+    // str has constructors, so clang calls returning it from a C function incompatible with C; its
+    // layout and passing are a C struct's (two fields, trivially copyable)
+    out.append("#if defined(__clang__)\n#pragma clang diagnostic push\n#pragma clang diagnostic ignored \"-Wreturn-type-c-linkage\"\n#endif\n");
     out.append("extern \"C\" {\n");
     for (e&) in ents.items() {
         out.append(fmt3("{}{}({});\n", spaced(this.c_ret(e, true)), copy e.name, this.c_params(e, true)).as_str());
     }
-    out.append("}\n}  // namespace raw\n");
+    out.append("}\n#if defined(__clang__)\n#pragma clang diagnostic pop\n#endif\n}  // namespace raw\n");
     // the traits' classes, declared for the handles' methods
     for (t&) in this.traits.items() {
         out.append(fmt("class {};\n", this.short(*t)).as_str());

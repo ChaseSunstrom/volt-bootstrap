@@ -5944,6 +5944,30 @@ attach fn std_modules(this: checker&, args: std::vec<str>&, s: str, u: u32, comp
     put(&cmd, clangxx.as_str());
     val src = std_module_source(&cmd, "std") ?? return fail(span, fmt("import std; needs the C++ library's std module, and {} finds no modules manifest naming one that's there (libstdc++.modules.json, libc++.modules.json)", copy clangxx));
     var sargs = this.cpp_args(s);
+    // macOS: the module is libc++'s of the LLVM whose clang++ found it (Homebrew's), not the SDK's
+    // whose headers libclang reads by default: the module and the C++ importing it read that LLVM's
+    // headers (LLVM/share/libc++/v1/std.cppm → LLVM/include/c++/v1), or their declarations clash
+    comptime if (@cfg("os", "macos")) {
+        val tail = "/share/libc++/v1/std.cppm";
+        if (ends_with(src.as_str(), tail)) {
+            var inc = S(src.as_str()[0..src.len() - tail.len]);
+            inc.append("/include/c++/v1");
+            if (std::fs::exists(inc.as_str())) {
+                val dir = this.intern(move inc);
+                val own: str[3] = { "-nostdinc++", "-isystem", dir };
+                var had = false;
+                for (a) in args.items() {
+                    had = had || a == "-nostdinc++";
+                }
+                for (f) in own {
+                    put(&sargs, f);
+                    if (!had) {
+                        put(args, f);
+                    }
+                }
+            }
+        }
+    }
     val pcm = try this.module_pcm("std", src.as_str(), &sargs, s, force, span);
     val flag = this.intern(fmt("-fmodule-file=std={}", copy pcm));
     var have = false;

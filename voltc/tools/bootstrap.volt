@@ -63,12 +63,8 @@ fn less(a: str, b: str) -> bool {
 
 // the directory this program is in
 fn self_dir() -> std::string {
-    var buf: u8[4096];
-    val n = sys::readlink("/proc/self/exe", @cast<cstr>(&buf[0]), 4095);
-    if (n <= 0) {
-        die(std::string::from("can't find this program's path"));
-    }
-    val exe = @cast<str>(@slice(&buf[0], @cast<usize>(n)));
+    val path = std::process::exe_path() ?? die(std::string::from("can't find this program's path"));
+    val exe = path.as_str();
     var end = exe.len;
     while (end > 0 && exe[end - 1] != 47) {
         end -= 1;

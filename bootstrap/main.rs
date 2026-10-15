@@ -407,7 +407,8 @@ fn cc(c_src: &str, out: &PathBuf, release: bool, libs: &[(String, PathBuf)], ext
         }
         eprint!("{msg}");
         // the linker's errors aren't the generated C's: a library it can't find, or an undefined name
-        if msg.contains("cannot find -l") || msg.contains("unable to find library") {
+        // (GNU ld and lld; macOS's ld: "library 'x' not found", older "library not found for -lx")
+        if msg.contains("cannot find -l") || msg.contains("unable to find library") || msg.contains("ld: library ") && msg.contains("not found") {
             fail(format!("linking {target} failed: a library above wasn't found (install it, or pass --cc -L/DIR where it is)"));
         }
         if msg.contains("ld returned") || msg.contains("linker command failed") {

@@ -1566,7 +1566,8 @@ fn cc_run(inputs: std::vec<str>&, out: str, c: cli&, object: bool) -> void {
         }
         std::eprint("{}", r.err);
         // the linker's errors aren't the generated C's: a library it can't find, or an undefined name
-        if (msg.contains("cannot find -l") || msg.contains("unable to find library")) {
+        // (GNU ld and lld; macOS's ld: "library 'x' not found", older "library not found for -lx")
+        if (msg.contains("cannot find -l") || msg.contains("unable to find library") || (msg.contains("ld: library ") && msg.contains("not found"))) {
             die(fmt("linking {} failed: a library above wasn't found (install it, or pass --cc -L/DIR where it is)", S(out)));
         }
         if (msg.contains("ld returned") || msg.contains("linker command failed")) {

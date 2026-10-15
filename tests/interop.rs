@@ -2141,12 +2141,15 @@ fn interop_examples() {
 /// libraries nothing has asked for yet (--as-needed, Ubuntu's gcc default): both compilers put
 /// --cc's -l libraries after the archives that use them (stage 0 too: it links stage 1 against LLVM
 /// with --cc -lLLVM)
+/// the linker flag dropping libraries nothing uses (macOS's linker calls it -dead_strip_dylibs)
+const AS_NEEDED: &str = if cfg!(target_os = "macos") { "-Wl,-dead_strip_dylibs" } else { "-Wl,--as-needed" };
+
 #[test]
 fn libraries_link_after_archives() {
     let e = Env::new("linkorder");
     let d = &e.dir;
     std::fs::write(d.join("answer.c"), "int c_answer(void) { return 42; }\n").unwrap();
-    ok(Command::new("cc").args(["-shared", "-fPIC", "-o"]).arg(d.join("libanswer.so")).arg(d.join("answer.c")).output().unwrap(), "cc -shared");
+    ok(Command::new("cc").args(["-shared", "-fPIC", "-o"]).arg(d.join(format!("libanswer.{}", std::env::consts::DLL_EXTENSION))).arg(d.join("answer.c")).output().unwrap(), "cc -shared");
     std::fs::create_dir_all(d.join("ans")).unwrap();
     std::fs::write(d.join("ans/ans.volt"), "extern \"C\" fn c_answer() -> i32;\npublic fn answer() -> i32 { return c_answer(); }\n").unwrap();
     std::fs::write(d.join("main.volt"), "use std::io;\nfn main() -> void { std::println(ans::answer()); }\n").unwrap();
@@ -2164,7 +2167,7 @@ fn libraries_link_after_archives() {
             .args(["--pkg", &pkg, "--link"])
             .arg(format!("ans={}", lib.display()))
             .args(backend)
-            .args(["--cc", "-Wl,--as-needed", "--cc"])
+            .args(["--cc", AS_NEEDED, "--cc"])
             .arg(format!("-L{}", d.display()))
             .args(["--cc", "-lanswer", "--cc"])
             .arg(format!("-Wl,-rpath,{}", d.display()))

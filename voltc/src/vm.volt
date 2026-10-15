@@ -517,7 +517,7 @@ attach fn lookup(this: volt_vm&, name: str) -> u64? {
         // LLVM's own report says which symbol; the lookup's error only which module failed
         this.message = copy r.message;
         if (this.session.len() > 0) {
-            this.message = copy this.session;
+            this.message = unprefixed(this.session.as_str(), this.prefix);
             if (this.sandbox && this.session.as_str().contains("Symbols not found")) {
                 this.message.append(" (this VM is a sandbox: it reaches only the symbols volt_vm_allow gave it)");
             }
@@ -567,6 +567,23 @@ extern "C" fn dladdr(addr: void*, info: dl_info*) -> i32;
 // the filter on this library's own symbols: its runtime's (dlsym on a library also searches what it
 // links, the C library among them, which a sandbox mustn't reach this way; and in a sandbox, only the
 // runtime's names, not the rest of what this library exports)
+// LLVM's report naming symbols ("Symbols not found: [ _a, _b ]") with their C names: without the
+// system's global prefix (Mach-O's _, none elsewhere)
+fn unprefixed(msg: str, prefix: u8) -> std::string {
+    var out: std::string = {};
+    var i: usize = 0;
+    while (i < msg.len) {
+        out.push(msg[i]);
+        if (prefix != 0 && (msg[i] == '[' || msg[i] == ',') && i + 2 < msg.len && msg[i + 1] == ' ' && msg[i + 2] == prefix) {
+            out.push(' ');
+            i += 3;
+            continue;
+        }
+        i += 1;
+    }
+    return out;
+}
+
 // a symbol the JIT asks for, as C names it: without the system's global prefix (Mach-O's _)
 fn vm_c_name(v: volt_vm*, sym: llvm::LLVMOrcOpaqueSymbolStringPoolEntry*) -> str {
     val name = c_text(llvm::LLVMOrcSymbolStringPoolEntryStr(sym));
