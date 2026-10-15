@@ -2026,7 +2026,7 @@ fn cpp_overloads() {
     // types and calling exactly their own overload, for free functions, methods and constructors; a
     // real declaration keeps a name an alias would take, and the alias is a left-out comment
     let e = Env::new("cpp-overloads");
-    let want = "which 1 2\nletter 1 2 3\nf 4 42 40 42\nh 1 2 2\nnew 5 long 10 long long\nget 5 -5\nadd 6 16\nscaled 6 -6\ncall 4 2 peek 1 2\nopen lref 7 rref 8 8\nopen rref 7\nsize 1 2\ntaken 1 3\n";
+    let want = "which 1 2\nletter 1 2 3\nf 4 42 40 42\nh 1 2 2\nnew 5 long 10 long long\nget 5 -5\nadd 6 16\nscaled 6 -6\ncall 4 2 peek 1 2\nopen lref 7 rref 8 8\nopen rref 7\nsize 1 2\ntaken 1 3\nholder 5 5\nholder 5 6\n";
     for backend in ["c", "llvm"] {
         assert_eq!(ok(e.voltc(&["run", "cpp_overloads.volt", "--backend", backend]), "voltc run cpp_overloads.volt"), want, "C++ overloads ({backend})");
     }
@@ -2035,10 +2035,10 @@ fn cpp_overloads() {
     assert!(src.contains("// left out: int taken::which(long long) (Volt can't tell it from an overload declared before it)"), "the alias a real declaration took: {src}");
     assert!(src.contains("// left out: int again::which_long_long(long long) (an alias for an overload Volt can't tell apart has its name)"), "a real declaration in a later block: {src}");
     assert!(src.contains("// C++: int ov::h(long long x, int a, int b)\n    fn h(x: i64, a: i32) -> i32"), "a form after its alias keeps the C++ comment: {src}");
-    // an && method of a template's instance, worked out per use: C++'s error, not a move
+    // an && method of a template's instance, worked out per use, consumes the handle too
     let o = e.voltc(&["check", "cpp_overloads_holder.volt"]);
     let err = String::from_utf8_lossy(&o.stderr);
-    assert!(!o.status.success() && err.contains("rvalue ref-qualifier") && err.contains("cpp_overloads_holder.volt:7"), "an && method per use: {err}");
+    assert!(!o.status.success() && err.contains("cpp_overloads_holder.volt:8") && err.contains("moved") && !err.contains("ref-qualifier"), "a handle used after an && method per use: {err}");
     // an && method consumes the handle
     let o = e.voltc(&["check", "cpp_overloads_moved.volt"]);
     let err = String::from_utf8_lossy(&o.stderr);

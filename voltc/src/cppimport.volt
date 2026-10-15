@@ -6598,12 +6598,17 @@ attach fn cpp_use_call(this: checker&, k: usize, callee: str, macro: bool, name:
     var holes: usize = 0;
     var rp: tval* = null;
     var rcopy = rv ?? vnew(0, 0);
+    var by_value: u32? = null;
     if (rv) {
         // {0}.f(...): the receiver as a reference
         rp = &rcopy;
         var rt = rcopy.ty;
         match (*this.t.get(rt)) {
             .REF(x) => { rt = x; },
+            default => {},
+        }
+        match (*this.t.get(rt)) {
+            .STRUCT(s) => { by_value = rt; },
             default => {},
         }
         put(&types, this.t.intern(tyk::REF(rt)));
@@ -6645,7 +6650,7 @@ attach fn cpp_use_call(this: checker&, k: usize, callee: str, macro: bool, name:
         expr.append(fmt("{{{}}}", unum(@cast<u64>(holes + j))).as_str());
     }
     expr.push(')');
-    val made = try this.cpp_instance(k, expr.as_str(), &types, rv != null, macro, span);
+    val made = try this.cpp_instance_on(k, expr.as_str(), &types, rv != null, macro, by_value, span);
     var cands: std::vec<u32> = {};
     put(&cands, made);
     var none: std::vec<garg> = {};
@@ -6655,6 +6660,20 @@ attach fn cpp_use_call(this: checker&, k: usize, callee: str, macro: bool, name:
         this.lsp_fn_use_as(made, null, span, name);
     }
     return r;
+}
+
+// cpp_instance for a call on a receiver of struct type by_value (null: none): a method only an
+// rvalue can call (qualified &&, const && too) takes the receiver by value instead, as a declared
+// && method does (member_list): the handle is consumed and C++ moves from the object, or from a copy
+// when the handle only borrows it. When neither works, the error is the lvalue call's
+attach fn cpp_instance_on(this: checker&, k: usize, expr: str, types: std::vec<u32>&, recv: bool, value: bool, by_value: u32?, span: span) -> compile_error!u32 {
+    // (a failed probe isn't cached: such a call probes clang twice, each time it's checked)
+    val made = this.cpp_instance(k, expr, types, recv, value, span) catch |e| {
+        val bv = by_value ?? return e;
+        *types.at(0) = bv;
+        return this.cpp_instance(k, expr, types, recv, value, span) catch |e2| { return e; };
+    };
+    return made;
 }
 
 // @cpp("C++ expression", args...) with no result type: clang works it out, as for a call made per
