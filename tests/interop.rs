@@ -1957,11 +1957,16 @@ fn cpp_params() {
     // or not, one through an alias with a default), a function pointer, a std::string& (a throw
     // leaves the Volt string as it was, under a callback too), a std::function over a class held by
     // handle, one laid out and one move-only; a C++ std::function Volt keeps, called with a
-    // std::string&; parameters written as arrays (T a[N], const T a[], one with a default) a Volt T*
+    // std::string&; parameters written as arrays (T a[N], const T a[], one with a default) a Volt T*;
+    // a Volt std::string for a template parameter S (S&, const S&, S) a C++ std::string, a throw
+    // through the plain form a stop
     let e = Env::new("cpp-params");
-    let want = "sum 6\nfill 4 4 4\ntotal 12\ntwice 8 24\nfirst 7 8\napply 5 6 10\n@cpp 42\nshout hi!!\ngrow 2: 7 hi!!~++\ngrow -1: INVALID_ARGUMENT hi!!~++\n@cpp hi!!~++!\nrelay INVALID_ARGUMENT hi!!~++!\nshapes 2 7\npoints 202 45\nspend 15\nasked why??\ncounted 3 7 ab+\narrays 7 4 7 9 4\n@cpp 8 5 1\nalias 8 cells 14\n";
+    let want = "sum 6\nfill 4 4 4\ntotal 12\ntwice 8 24\nfirst 7 8\napply 5 6 10\n@cpp 42\nshout hi!!\ngrow 2: 7 hi!!~++\ngrow -1: INVALID_ARGUMENT hi!!~++\n@cpp hi!!~++!\nrelay INVALID_ARGUMENT hi!!~++!\nshapes 2 7\npoints 202 45\nspend 15\nasked why??\ncounted 3 7 ab+\narrays 7 4 7 9 4\n@cpp 8 5 1\nalias 8 cells 14\nwrap hey! 4 6\ngauge 40 70 hey!\npad 6 hey!##\ntgrow 1: 8 hey!##~+\ntgrow -1: INVALID_ARGUMENT hey!##~+\n";
     for backend in ["c", "llvm"] {
         assert_eq!(ok(e.voltc(&["run", "cpp_params.volt", "--backend", backend]), "voltc run cpp_params.volt"), want, "C++ parameters ({backend})");
+        let o = e.voltc(&["run", "cpp_params_gthrow.volt", "--backend", backend]);
+        let err = String::from_utf8_lossy(&o.stderr);
+        assert!(o.status.code() == Some(101) && err.contains("C++ exception") && err.contains("negative") && o.stdout.is_empty(), "a template's throw through the plain form ({backend}): {err}");
     }
     // parameters written as arrays are declared as pointers (through an alias, of chars, of pointers,
     // of a laid-out struct), not left to per use; an array of arrays is
@@ -2017,6 +2022,14 @@ fn cpp_params_refused() {
     assert!(!src.contains("fn first_at(") && !src.contains("fn name_of(") && src.contains("fn count_up("), "structs holding a pointer or a view into the copy, declared: {src}");
     let err = check("cpp_params_struct_view.volt");
     assert!(err.contains("its result would point into a copy of the string that's gone once the call returns") && err.contains("cpp_params_struct_view.volt:7"), "a struct holding a pointer into the copy, per use: {err}");
+    // a Volt std::string for a template parameter nested in another type (S*, std::vector<S>) or
+    // the result, each call
+    let err = check("cpp_params_gnest.volt");
+    let why = "Volt's std::string crosses a C++ template only as S, S& or const S&";
+    for line in ["cpp_params_gnest.volt:8", "cpp_params_gnest.volt:9", "cpp_params_gnest.volt:11"] {
+        assert!(err.contains(line), "{line}: {err}");
+    }
+    assert_eq!(err.matches(why).count(), 3, "S nested or the result: {err}");
 }
 
 #[test]

@@ -6188,6 +6188,9 @@ attach fn cpp_instance(this: checker&, k: usize, expr: str, types: std::vec<u32>
     // value comes back
     var by_value = value || !recv;
     for (t&) in types.items() {
+        if (this.cpp_probe_type(*t) == null && this.text_in(*t)) {
+            return fail(span, fmt2("C++ can't be handed {}: {}", this.ty_name(*t), S(TEXT_NESTED)));
+        }
         put(&ptys, this.cpp_probe_type(*t) ?? return fail(span, fmt("C++ can't be handed {}", this.ty_name(*t))));
         match (*this.t.get(*t)) {
             .REF(x) => { by_value = value; },
@@ -6824,6 +6827,11 @@ attach fn cpp_call(this: checker&, gargs: std::vec<garg>&, args: std::vec<garg>&
     val r = try this.garg_type(gargs.at(0));
     var types: std::vec<std::string> = {};
     for (i) in 1..gargs.len {
+        if (this.text_in(try this.garg_type(gargs.at(i)))) {
+            return this.cpp_text_template(gargs, args, span);
+        }
+    }
+    for (i) in 1..gargs.len {
         val t = try this.garg_type(gargs.at(i));
         val sp = this.cpp_type_text(t) ?? return fail(span, fmt("@cpp: {} has no C++ spelling", this.ty_name(t)));
         put(&types, move sp);
@@ -7065,6 +7073,146 @@ attach fn cpp_call(this: checker&, gargs: std::vec<garg>&, args: std::vec<garg>&
         return this.vstmt(this.call_fn(f, move vals, VOID));
     }
     return vnew(r, this.call_fn(f, move vals, r));
+}
+
+val TEXT_NESTED: str = "Volt's std::string crosses a C++ template only as S, S& or const S&";
+
+// Volt's std::string, or a reference to it: what a C++ template's S takes as a C++ std::string
+attach fn text_bound(this: checker&, t: u32) -> bool {
+    match (*this.t.get(t)) {
+        .REF(x) => { return this.text_bound(x); },
+        .STRUCT(s) => {
+            val n = this.ty_name(t);
+            return n.as_str() == "std::string" || n.as_str() == "std::string<std::mem::default_allocator>";
+        },
+        default => { return false; },
+    }
+}
+
+// whether Volt's std::string is in type t, itself or nested
+attach fn text_in(this: checker&, t: u32) -> bool {
+    if (this.text_bound(t)) {
+        return true;
+    }
+    match (*this.t.get(t)) {
+        .PTR(x) => { return this.text_in(x); },
+        .SLICE(x) => { return this.text_in(x); },
+        .OPT(x) => { return this.text_in(x); },
+        .ARRAY(x, n) => { return this.text_in(x); },
+        .STRUCT(s) => {
+            for (a&) in this.si(s).args.items() {
+                match (*a) {
+                    .TY(x) => {
+                        if (this.text_in(x)) {
+                            return true;
+                        }
+                    },
+                    default => {},
+                }
+            }
+            return false;
+        },
+        default => { return false; },
+    }
+}
+
+// @cpp<R, T...> from a C++ template's Volt generic with a T bound to Volt's std::string, as S, S&
+// or const S&: {tN} is std::string, and the call is worked out as one made per use (cpp_instance),
+// so the string crosses as a std::string parameter does: made from its text when clang takes it as
+// const std::string& (const S&, S by value), else a copy written back once the call returns (S&).
+// A std::string nested in a type argument, an argument's type or the result is an error
+attach fn cpp_text_template(this: checker&, gargs: std::vec<garg>&, args: std::vec<garg>&, span: span) -> compile_error!tval {
+    val r = try this.garg_type(gargs.at(0));
+    if (this.text_in(r)) {
+        return fails(span, TEXT_NESTED);
+    }
+    var types: std::vec<std::string> = {};
+    for (i) in 1..gargs.len {
+        val t = try this.garg_type(gargs.at(i));
+        if (this.text_bound(t)) {
+            put(&types, S("std::string"));
+            continue;
+        }
+        if (this.text_in(t)) {
+            return fails(span, TEXT_NESTED);
+        }
+        put(&types, this.cpp_type_text(t) ?? return fail(span, fmt("@cpp: {} has no C++ spelling", this.ty_name(t))));
+    }
+    val fe = try this.garg_value(args.at(0));
+    var text: std::string = {};
+    match (fe.kind) {
+        .STR(s) => { text = copy s; },
+        default => { return fails(span, "@cpp's first argument is the C++ expression, as a string literal"); },
+    }
+    if (contains(text.as_str(), "{&") || contains(text.as_str(), "{=")) {
+        return fails(span, "@cpp with a Volt std::string for a template parameter takes {i} and {tN} holes only");
+    }
+    for (n) in 0..types.len {
+        text = replace_all(text.as_str(), fmt("{{t{}}}", unum(@cast<u64>(n))).as_str(), types.at(n).as_str());
+    }
+    // the arguments: a std::string as a reference to it (mutable), or its text (const)
+    var mtys: std::vec<u32> = {};
+    var ctys: std::vec<u32> = {};
+    var mpre: std::vec<tval?> = {};
+    var cpre: std::vec<tval?> = {};
+    var es: std::vec<expr> = {};
+    for (i) in 1..args.len {
+        val e = try this.garg_value(args.at(i));
+        val v = try this.cpp_arg_value(e);
+        put(&es, copy *e);
+        if (this.text_bound(v.ty)) {
+            // (&s of a generic's s: S, S a std::string&, is a reference to the reference)
+            var st = v.ty;
+            var c = v.c;
+            var refs = true;
+            while (refs) {
+                refs = false;
+                match (*this.t.get(st)) {
+                    .REF(x) => {
+                        if (this.t.ref_inner(x) != null) {
+                            c = this.ir.deref(c, x);
+                        }
+                        st = x;
+                        refs = true;
+                    },
+                    default => {},
+                }
+            }
+            if (v.ty == st) {
+                c = this.ir.addr(v.c, this.t.ref_to(st));
+            }
+            val hf = (try this.hook(st, "as_str")) ?? return fails(span, "Volt's std::string has no as_str");
+            this.use_fn(hf);
+            val rt = this.t.ref_to(st);
+            put(&mtys, rt);
+            put(&mpre, vnew(rt, c));
+            put(&ctys, STR);
+            put(&cpre, vnew(STR, this.call_fn(this.fi(hf).ir, nodes(c), STR)));
+            continue;
+        }
+        if (this.text_in(v.ty)) {
+            return fails(span, TEXT_NESTED);
+        }
+        put(&mtys, v.ty);
+        put(&ctys, v.ty);
+        put(&mpre, v);
+        put(&cpre, v);
+    }
+    val k = this.cpp_ctx_of(this.env_at(this.cx.env).ns) ?? 0;
+    var value = true;
+    match (*this.t.get(r)) {
+        .REF(x) => { value = false; },
+        default => {},
+    }
+    var none: std::vec<garg> = {};
+    var cands: std::vec<u32> = {};
+    // (a template taking S& fails the const probe: it's probed again, each time it's checked)
+    val made = this.cpp_instance(k, text.as_str(), &ctys, false, value, span) catch |e| {
+        put(&cands, try this.cpp_instance(k, text.as_str(), &mtys, false, value, span));
+        return this.pick_call("@cpp", &cands, null, null, &none, &mpre, &es, null, span);
+    };
+    put(&cands, made);
+    return this.pick_call("@cpp", &cands, null, null, &none, &cpre, &es, null, span);
 }
 
 fn hole_index(s: str) -> usize? {

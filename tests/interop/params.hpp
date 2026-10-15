@@ -7,6 +7,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <vector>
 namespace pr {
 inline int sum(const int (&a)[3]) { return a[0] + a[1] + a[2]; }
 inline void fill(int (&a)[3], int v) { for (int &x : a) x = v; }
@@ -75,5 +76,26 @@ inline int argc_of(char *argv[]) { int n = 0; while (argv[n]) n++; return n; }
 inline int grid(int a[2][3]) { return a[1][2]; }
 struct cell { int x; int y; };
 inline int cells(const cell a[], int n) { int s = 0; for (int i = 0; i < n; i++) s += a[i].x * a[i].y; return s; }
+}
+// templates written against a C++ string, which a Volt std::string crosses as one (a copy, written
+// back for S&); one also called with an int, one with a second parameter, one that throws; S nested
+// in another type or the result isn't taken
+namespace gs {
+template <class S> void wrap(S &s) { s.append("!"); }
+template <class S> std::size_t len(const S &s) { return s.size(); }
+template <class S> int bump(S s) { s += "??"; return (int)s.size(); }
+inline int measure(const std::string &s) { return (int)s.size(); }
+inline int measure(int v) { return v; }
+template <class S> int gauge(const S &s) { return measure(s) * 10; }
+template <class S, class T> int pad(S &s, T n) { s.append(n, '#'); return (int)s.size(); }
+template <class S> int grow(S &s, int n) {
+    s += "~";
+    if (n < 0) throw std::invalid_argument("negative");
+    s.append(n, '+');
+    return (int)s.size();
+}
+template <class S> int count_all(const std::vector<S> &v) { return (int)v.size(); }
+template <class S> int deref(S *p) { return (int)p->size(); }
+template <class S> S echo(const S &s) { return s; }
 }
 }
