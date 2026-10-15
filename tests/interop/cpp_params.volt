@@ -48,6 +48,24 @@ fn main() -> void {
     std::println("@cpp {} {} {}", c3, @cpp<i32>("pr::ap::tail({0})", p), cpp::pr::ap::head(p));
     var cs: cpp::pr::ap::cell[2] = { { x: 1, y: 2 }, { x: 3, y: 4 } };
     std::println("alias {} cells {}", cpp::pr::ap::sum_alias(&ys[0]), cpp::pr::ap::cells(&cs[0], 2));
+    // a template written against a C++ string takes a Volt std::string as one: S& changes it, const
+    // S& and S read it; one instantiated with it and with an i32, one with a second parameter
+    var w = std::string::from("hey");
+    cpp::pr::gs::wrap(&w);
+    std::println("wrap {} {} {}", w, cpp::pr::gs::len(&w), cpp::pr::gs::bump(&w));
+    std::println("gauge {} {} {}", cpp::pr::gs::gauge(&w), cpp::pr::gs::gauge(7), w);
+    val padded = cpp::pr::gs::pad(&w, 2);
+    std::println("pad {} {}", padded, w);
+    grown_t(&w, 1);
+    grown_t(&w, -1);
+}
+// a throwing template leaves the Volt string as it was
+fn grown_t(t: std::string&, k: i32) -> void {
+    val n = cpp::pr::gs::try_grow(t, k) catch |e| {
+        std::println("tgrow {}: {} {}", k, e, t.as_str());
+        return;
+    };
+    std::println("tgrow {}: {} {}", k, n, t.as_str());
 }
 // a throw leaves the Volt string as it was (C++ changed its copy first)
 fn grown(t: std::string&, k: i32) -> void {
