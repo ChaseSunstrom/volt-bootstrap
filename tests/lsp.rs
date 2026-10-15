@@ -171,7 +171,9 @@ fn scripted_session() {
     assert!(d.contains("unknown name 'missing'") && d.contains("\"start\":{\"line\":18,\"character\":31}") && d.contains("\"severity\":1"), "{d}");
 
     // fixed: no diagnostics
-    let fixed = PROGRAM.replace("total + missing", "total");
+    // (with operators attached after main, which completion after `p.` leaves out: they're used as
+    // operators, not called by name)
+    let fixed = PROGRAM.replace("total + missing", "total") + "\nattach operator +(this: point, o: point) -> point {\n    return o;\n}\n\nattach operator *(k: i32, this: point) -> point {\n    return this;\n}\n";
     s.notify("textDocument/didChange", &format!("{{\"textDocument\":{{\"uri\":\"{uri}\",\"version\":2}},\"contentChanges\":[{{\"text\":{}}}]}}", js(&fixed)));
     let d = s.diagnostics();
     assert!(d.contains("\"diagnostics\":[]"), "{d}");
@@ -220,6 +222,7 @@ fn scripted_session() {
     for item in ["\"label\":\"x\"", "\"label\":\"y\"", "\"label\":\"sum\""] {
         assert!(c.contains(item), "completion after p. lacks {item}: {c}");
     }
+    assert!(!c.contains("operator"), "completion after p. lists operator fns: {c}");
     let c = s.request("textDocument/completion", &at(19, 11));
     assert!(c.contains("\"label\":\"println\""), "completion after std:: lacks println: {c}");
     let c = s.request("textDocument/completion", &at(20, 6));

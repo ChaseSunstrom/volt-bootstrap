@@ -281,6 +281,9 @@ attach fn lsp_members(this: checker&, t0: u32, out: std::json::value&) -> void {
     var names: std::vec<str> = {};
     map_keys(&this.attached, &names);
     for (n) in names.items() {
+        if (is_operator_fn(n)) {
+            continue; // used as an operator, never called by name
+        }
         for (d) in this.named(&this.attached, n).items() {
             if (this.takes_this(d, t)) {
                 out.add(lsp_item(n, 2.0, this.lsp_decl_text(d).as_str()));
