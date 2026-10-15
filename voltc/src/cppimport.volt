@@ -1502,7 +1502,7 @@ struct cpp_arg {
 // why a call can't be written when an argument is a std::string&'s copy (args: the first count)
 // and the result may point into it: a view, a pointer, a reference (not to a class Volt holds by
 // handle, which a string doesn't hold)
-fn into_copy(r: cpp_ret&, args: std::vec<cpp_arg>&, count: usize) -> bool {
+fn into_copy(r: cpp_ret&, rt: clang::CXType, args: std::vec<cpp_arg>&, count: usize) -> bool {
     var any = false;
     for (i) in 0..count {
         any = any || args.at(i).text_ref;
@@ -1517,7 +1517,52 @@ fn into_copy(r: cpp_ret&, args: std::vec<cpp_arg>&, count: usize) -> bool {
         default => {},
     }
     val v = r.vty.as_str();
-    return contains(v, "*") || contains(v, "&") || contains(v, "cstr") || contains(v, "[..]") || v == "str";
+    return contains(v, "*") || contains(v, "&") || contains(v, "cstr") || contains(v, "[..]") || v == "str" || holds_pointer(rt, 0);
+}
+
+// does a C++ value of type t hold a pointer, reference or view, as itself, an array element, a field
+// (a struct's, a base's) or a std template's argument? std::string and std::vector own what they point
+// to (their element still counts); a std::function's captures can't be seen
+fn holds_pointer(t: clang::CXType, depth: u32) -> bool {
+    val ct = clang::clang_getCanonicalType(t);
+    val k = ct.kind;
+    if (k == clang::CXType_Pointer || k == clang::CXType_LValueReference || k == clang::CXType_RValueReference || k == clang::CXType_MemberPointer || k == clang::CXType_BlockPointer) {
+        return true;
+    }
+    if (k == clang::CXType_ConstantArray || k == clang::CXType_IncompleteArray) {
+        return holds_pointer(clang::clang_getArrayElementType(ct), depth);
+    }
+    if (k != clang::CXType_Record || depth > 4) {
+        return false;
+    }
+    val st = std_template(ct);
+    if (st) {
+        val name = st.as_str();
+        if (name == "basic_string_view" || name == "span") {
+            return true;
+        }
+        if (name == "basic_string" || name == "function") {
+            return false;
+        }
+        // a std container or wrapper: its type arguments (vector<const char*>, pair<int, std::string_view>)
+        val n = clang::clang_Type_getNumTemplateArguments(ct);
+        var i: i32 = 0;
+        while (i < n) {
+            val a = clang::clang_Type_getTemplateArgumentAsType(ct, @cast<u32>(i));
+            if (a.kind != clang::CXType_Invalid && holds_pointer(a, depth + 1)) {
+                return true;
+            }
+            i += 1;
+        }
+        return false;
+    }
+    for (f&) in children(clang::clang_getTypeDeclaration(ct)).items() {
+        val fk = clang::clang_getCursorKind(*f);
+        if ((fk == clang::CXCursor_FieldDecl || fk == clang::CXCursor_CXXBaseSpecifier) && holds_pointer(clang::clang_getCursorType(*f), depth + 1)) {
+            return true;
+        }
+    }
+    return false;
 }
 
 val INTO_COPY: str = "its result would point into a copy of the string that's gone once the call returns";
@@ -2384,7 +2429,7 @@ attach fn callable_of(this: cpp_gen&, generics: str, head: str, has_params: bool
         put(&args, move a);
         put(&names, move name);
     }
-    if (into_copy(&r, &args, args.len)) {
+    if (into_copy(&r, clang::clang_getCursorResultType(fn_cursor), &args, args.len)) {
         this.put_note();
         this.line(fmt("// (not declared: {})", S(INTO_COPY)).as_str());
         return;
@@ -6273,7 +6318,7 @@ attach fn cpp_instance(this: checker&, k: usize, expr: str, types: std::vec<u32>
     if (r) {
         rr = copy r;
     }
-    if (into_copy(&rr, &args, args.len)) {
+    if (into_copy(&rr, rt, &args, args.len)) {
         g.inst_any = false;
         return fail(span, fmt("Volt can't take this C++ call: {}", S(INTO_COPY)));
     }

@@ -35,6 +35,9 @@ fn main() -> void {
     var asked = std::string::from("why");
     cpp::pr::exclaimer(2).call(&asked);
     std::println("asked {}", asked);
+    var c = std::string::from("ab");
+    val k = cpp::pr::count_up(&c);
+    std::println("counted {} {} {}", k.n, k.total, c);
 }
 // a throw leaves the Volt string as it was (C++ changed its copy first)
 fn grown(t: std::string&, k: i32) -> void {

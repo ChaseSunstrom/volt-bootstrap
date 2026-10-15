@@ -1959,7 +1959,7 @@ fn cpp_params() {
     // handle, one laid out and one move-only; a C++ std::function Volt keeps, called with a
     // std::string&
     let e = Env::new("cpp-params");
-    let want = "sum 6\nfill 4 4 4\ntotal 12\ntwice 8 24\nfirst 7 8\napply 5 6 10\n@cpp 42\nshout hi!!\ngrow 2: 7 hi!!~++\ngrow -1: INVALID_ARGUMENT hi!!~++\n@cpp hi!!~++!\nrelay INVALID_ARGUMENT hi!!~++!\nshapes 2 7\npoints 202 45\nspend 15\nasked why??\n";
+    let want = "sum 6\nfill 4 4 4\ntotal 12\ntwice 8 24\nfirst 7 8\napply 5 6 10\n@cpp 42\nshout hi!!\ngrow 2: 7 hi!!~++\ngrow -1: INVALID_ARGUMENT hi!!~++\n@cpp hi!!~++!\nrelay INVALID_ARGUMENT hi!!~++!\nshapes 2 7\npoints 202 45\nspend 15\nasked why??\ncounted 3 7 ab+\n";
     for backend in ["c", "llvm"] {
         assert_eq!(ok(e.voltc(&["run", "cpp_params.volt", "--backend", backend]), "voltc run cpp_params.volt"), want, "C++ parameters ({backend})");
     }
@@ -2007,6 +2007,9 @@ fn cpp_params_refused() {
     let shown = Command::new(&e.voltc).args(["check", "cpp_params.volt", "--std"]).arg(Path::new(ROOT).join("std")).current_dir(Path::new(ROOT).join("tests/interop")).env("VOLT_SHOW_CPP", "1").output().unwrap();
     let src = String::from_utf8_lossy(&shown.stderr);
     assert!(src.contains("its result would point into a copy of the string that's gone once the call returns") && !src.contains("fn first_word("), "a view into the copy, declared: {src}");
+    assert!(!src.contains("fn first_at(") && !src.contains("fn name_of(") && src.contains("fn count_up("), "structs holding a pointer or a view into the copy, declared: {src}");
+    let err = check("cpp_params_struct_view.volt");
+    assert!(err.contains("its result would point into a copy of the string that's gone once the call returns") && err.contains("cpp_params_struct_view.volt:7"), "a struct holding a pointer into the copy, per use: {err}");
 }
 
 #[test]
