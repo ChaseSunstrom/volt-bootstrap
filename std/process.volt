@@ -177,25 +177,33 @@ namespace process {
         }
         close(fds[0]);
         if (n > 0) {
-            wait_for(pid) catch |e| 0;
+            wait_for(pid) catch |e| { return true; };
             return true;
         }
         return false;
     }
 
-    // wait for a child; its exit code, or 128 + the signal that killed it
+    // wait for a child: how it ended
     @attributes([@cfg("unix")])
-    fn wait_for(pid: i32) -> process_error!i32 {
+    fn wait_for(pid: i32) -> process_error!exit_status {
         var status: i32 = 0;
         while (waitpid(pid, &status, 0) < 0) {
             if (!interrupted()) {
                 return process_error::SPAWN_FAILED;
             }
         }
-        if ((status & 127) == 0) {
-            return (status >> 8) & 255;
+        val sig = status & 127;
+        if (sig == 0) {
+            return { code: (status >> 8) & 255, signal: 0 };
         }
-        return 128 + (status & 127);
+        return { code: 128 + sig, signal: sig };
+    }
+
+    // how a program ended (run_status)
+    public struct exit_status {
+        code: i32;   // its exit code, or 128 + signal as run gives it; on Windows a crash's is an
+                     // NTSTATUS such as 0xC0000005 (access violation)
+        signal: i32; // the signal that ended it (SIGABRT is 6, SIGSEGV 11), or 0 if it exited
     }
 
     // why a program couldn't be run
@@ -308,6 +316,13 @@ namespace process {
 
     // run a program (found on PATH) and wait for it; its exit code, or 128 + signal
     public fn run(argv: str[..]) -> process_error!i32 {
+        val s = try run_status(argv);
+        return s.code;
+    }
+
+    // run a program (found on PATH) and wait for it: its exit code and the signal that ended it,
+    // which run folds into one code (a crash can't be told from a program exiting 139 there)
+    public fn run_status(argv: str[..]) -> process_error!exit_status {
         if (argv.len == 0) {
             return process_error::SPAWN_FAILED;
         }
@@ -322,7 +337,7 @@ namespace process {
 
     // run, through fork and exec
     @attributes([@cfg("unix")])
-    fn run_posix(argv: str[..]) -> process_error!i32 {
+    fn run_posix(argv: str[..]) -> process_error!exit_status {
         var owned: std::vec<std::string> = {};
         for (a) in argv {
             owned.push(std::string::from(a)) catch @panic("out of memory");
@@ -426,7 +441,8 @@ namespace process {
         }
         var r: output<A> = { code: 0, out: std::string::new_in(copy allocator), err: std::string::new_in(move allocator) };
         pump(inp[1], outp[0], errp[0], input, &r);
-        r.code = try wait_for(pid);
+        val s = try wait_for(pid);
+        r.code = s.code;
         return r;
     }
 
@@ -624,7 +640,7 @@ namespace process {
 
     // run, through CreateProcessA: the child gets this program's stdin, stdout and stderr
     @attributes([@cfg("os", "windows")])
-    fn run_windows(argv: str[..]) -> process_error!i32 {
+    fn run_windows(argv: str[..]) -> process_error!exit_status {
         std::thread::lock_word(&spawn_lock);
         val i = win_inheritable(0xfffffff6); // STD_INPUT_HANDLE
         val o = win_inheritable(0xfffffff5); // STD_OUTPUT_HANDLE
@@ -637,7 +653,7 @@ namespace process {
         if (h == 0) {
             return process_error::SPAWN_FAILED;
         }
-        return win_wait(h);
+        return { code: win_wait(h), signal: 0 };
     }
 
     // write input to the child's stdin, then close it (on a thread of its own)

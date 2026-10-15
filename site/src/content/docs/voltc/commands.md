@@ -15,7 +15,7 @@ newer language features need voltc.
 
 | Command | What it does |
 | --- | --- |
-| `voltc run FILES... [-- ARGS]` | build and run; everything after `--` goes to the program |
+| `voltc run FILES... [-- ARGS]` | build and run; everything after `--` goes to the program. voltc exits with the program's code; when a signal ended it, voltc says which on stderr (`voltc: the program was ended by SIGSEGV (signal 11)`) and exits 128 + its number, as a shell does (on Windows it names a crash's status, such as `0xc0000005`, an access violation) |
 | `voltc build FILES... [-o OUT]` | build an executable |
 | `voltc check FILES...` | type check only |
 | `voltc expand FILE[:LINE] [FILES...]` | what the comptime code in FILE (on LINE) became: values, `comptime if`/`match` branches, `comptime for` copies, generic instances, built types, the fns comptime fns declared and `@derive` output (self-hosted voltc) (see [Comptime](/volt-bootstrap/guide/comptime/#what-comptime-code-became-expand-and-voltc-expand)) |

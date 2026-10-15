@@ -1,6 +1,6 @@
 // Golden tests. tests/run/*.volt and examples/*.volt: compiled and run, stdout must equal the `// expect: ` lines
 // (and exit code the `// exit: N` line, default 0, or one of `// exit: N|M`; `// flags: --release` passes flags; each `// expect-stderr: ` line must be
-// in stderr). tests/fail/*.volt: `voltc check` must fail with every `// error: ` substring in its stderr.
+// in stderr, each `// reject-stderr: ` line must not). tests/fail/*.volt: `voltc check` must fail with every `// error: ` substring in its stderr.
 // voltc is stage 1: voltc/src built by the bootstrap compiler.
 mod common;
 use std::path::Path;
@@ -41,7 +41,8 @@ fn golden() {
         let got = String::from_utf8_lossy(&out.stdout);
         let code = out.status.code().unwrap_or(-1);
         let err = String::from_utf8_lossy(&out.stderr);
-        let err_missing = directives(&src, "expect-stderr").iter().any(|w| !err.contains(w.as_str()));
+        let err_missing = directives(&src, "expect-stderr").iter().any(|w| !err.contains(w.as_str()))
+            || directives(&src, "reject-stderr").iter().any(|w| err.contains(w.as_str()));
         if got.trim_end() != want.trim_end() || !want_codes.contains(&code) || err_missing {
             failures.push(format!(
                 "{}: exit {code} (want {want_codes:?})\n--- want\n{want}\n--- got\n{got}\n--- stderr\n{}",
