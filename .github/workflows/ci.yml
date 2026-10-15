@@ -1,10 +1,12 @@
 # Builds and tests Volt on every push to main and every pull request. A job that fails fails the run:
 # nothing here is allowed to fail quietly.
 #
-# Linux (x86-64 and arm64) runs the whole suite: both compilers, std, bolt, the language server, the
-# docs and site, interop, and bare metal under qemu. The suite itself is Linux-only for now (it leans
-# on .so files, sh scripts and GNU ld), so macOS and Windows build the compilers and build and run a
-# few programs through the C backend.
+# Linux (x86-64 and arm64) and macOS arm64 run the whole suite: both compilers, std, bolt, the
+# language server, the docs and site, and interop; Linux bare metal under qemu too. voltc, the
+# self-hosted compiler, doesn't run on Windows yet, and LLVM 23 has no build for Intel macs (neither
+# Homebrew's nor LLVM's), so Windows (x86-64 and arm64) and macOS x86-64 run what goes through the
+# bootstrap compiler: bolt's and its unit tests, programs through the C backend, and the site
+# generator building every page.
 name: CI
 
 on:
@@ -100,16 +102,53 @@ jobs:
       - run: npm ci
       - run: npm test
 
-  portability:
-    name: build (${{ matrix.name }})
+  macos:
+    name: test (macos ${{ matrix.arch }})
     strategy:
       fail-fast: false
       matrix:
         include:
-          - { name: macos arm64, os: macos-latest }
-          - { name: macos x86-64, os: macos-15-intel }
+          - { arch: arm64, os: macos-latest }
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v5
+      # Homebrew's llvm (keg-only: off PATH, so cc stays Apple's clang): LLVM and libclang for voltc
+      - name: Install LLVM
+        run: |
+          brew install llvm
+          prefix=$(brew --prefix llvm)
+          version=$("$prefix/bin/llvm-config" --version)
+          [ "${version%%.*}" = "$LLVM_VERSION" ] || { echo "::error::Homebrew's llvm is $version, not LLVM $LLVM_VERSION"; exit 1; }
+          echo "LLVM_CONFIG=$prefix/bin/llvm-config" >> "$GITHUB_ENV"
+          echo "C_INCLUDE_PATH=$prefix/include" >> "$GITHUB_ENV"
+      - name: Install Node's types
+        run: npm install --no-save --no-package-lock --no-audit --no-fund @types/node
+      - name: Build (no warnings)
+        run: |
+          cargo build 2>&1 | tee build.log
+          ! grep -q '^warning' build.log
+      - name: Test
+        run: |
+          set -o pipefail
+          cargo test --no-fail-fast 2>&1 | tee test.log
+      - name: Report failures
+        if: failure()
+        run: |
+          [ -f test.log ] || exit 0
+          tests=$(grep -E '^test .* \.\.\. FAILED$' test.log | sed 's/^test //; s/ \.\.\. FAILED$//' | head -40 | paste -sd ' ' -)
+          [ -n "$tests" ] && echo "::error title=failed tests::$tests"
+          exit 0
+
+  bootstrap:
+    name: test (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
           - { name: windows x86-64, os: windows-latest }
           - { name: windows arm64, os: windows-11-arm }
+          - { name: macos x86-64, os: macos-15-intel }
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     defaults:
@@ -125,3 +164,14 @@ jobs:
             echo "== $f"
             ./target/release/voltc-bootstrap run "$f"
           done
+      # what doesn't need voltc: bolt's and the bootstrap compiler's unit tests, every source file's
+      # header, the site generator (built by the bootstrap compiler) making every page, and the docs
+      # and runtime checks that read files. Each runs whatever the others do; any failure fails the step
+      - name: Test
+        run: |
+          status=0
+          cargo test --bins || status=1
+          cargo test --test headers --test site || status=1
+          cargo test --test docs -- readme_links shown_schema_is_the_sample builtins_page_is_complete || status=1
+          cargo test --test selfhost -- runtime_text_in_sync || status=1
+          exit $status

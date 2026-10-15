@@ -245,6 +245,7 @@ fn scripted_session() {
     // an unreadable file in a library is left out; it doesn't take the server down
     let locked = geo.join("lib/locked.volt");
     std::fs::write(&locked, "fn locked() -> void {}\n").unwrap();
+    #[cfg(unix)]
     std::fs::set_permissions(&locked, std::os::unix::fs::PermissionsExt::from_mode(0o000)).unwrap();
     std::fs::write(app.join("bolt.toml"), "[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies]\ngeo = { path = \"../geo\" }\n").unwrap();
     let main = "use std::io;\n\nfn main() -> void {\n    std::println(\"{}\", geo::area(2, 3));\n}\n";

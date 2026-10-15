@@ -1974,18 +1974,8 @@ fn trim(s: str) -> str {
     return s[a..b];
 }
 
-extern "C" fn realpath(path: cstr, resolved: void*) -> cstr?;
 extern "C" fn free(p: void*) -> void;
 extern "C" fn strlen(s: cstr) -> usize;
-
-// the canonical path of an existing file, or none
-fn real_file(path: str) -> std::string? {
-    var p = S(path);
-    val r = realpath(p.c_str(), null) ?? return null;
-    val out = S(@cast<str>(@slice(@cast<u8*>(r), strlen(r))));
-    free(@cast<void*>(r));
-    return out;
-}
 
 // the --cc arguments the preprocessor needs too, to find and read headers: -I, -D, -U (joined to
 // their value or before it) and -isystem, -iquote, -idirafter, -include (and the argument after them)
