@@ -3,6 +3,7 @@
 // so it uses std's printing, allocation and floating point too. board.volt (one per board
 // directory) has the hardware.
 use std::io;
+use std::fmt;
 
 fn main() -> i32 {
     var blinks: std::vec<u32> = {};
@@ -25,6 +26,10 @@ fn main() -> i32 {
     // a pointer or reference prints as its address (0x and hex) with no C runtime to do it; a
     // fixed address keeps the output the same on every board and build
     std::println("pointer: {} {}", @cast<u8*>(4096), @cast<u8*>(0));
+    // formatting into a string, and comparing strings: std's memcpy and memcmp, called with C's size_t
+    val at = std::format("{}", &blinks);
+    val said = std::format("{} blinks", *count);
+    std::println("format: {} {} {}", at.as_str().starts_with("0x"), said, said.as_str() == "3 blinks");
     // 0 when the vec and the box agree
     return @cast<i32>(blinks.len) - @cast<i32>(*count);
 }

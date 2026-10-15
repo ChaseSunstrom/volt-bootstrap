@@ -794,13 +794,25 @@ attach fn fn_abi(this: lg&, i: u32) -> abi_fn {
         return copy *have;
     }
     val f = this.c.ir.fn_at(i);
+    // every libc function the prelude binds takes and gives size_t where Volt says usize, and size_t
+    // is the pointer's width, as the C backend's prelude declares it: on a 32-bit target a usize
+    // crosses as a u32 (which std/bare.volt's memcpy, memcmp and memset take)
+    val narrow = f.prelude && this.aliases.get(f.name) != null && llvm::LLVMPointerSize(this.td) == 4;
     var ps: std::vec<u32> = {};
     for (p) in f.params.items() {
-        put(&ps, f.locals.at(@cast<usize>(p)).ty);
+        put(&ps, size_t_as(f.locals.at(@cast<usize>(p)).ty, narrow));
     }
-    val a = this.sig(&ps, f.ret, f.c_varargs);
+    val a = this.sig(&ps, size_t_as(f.ret, narrow), f.c_varargs);
     this.abis.put(i, copy a);
     return a;
+}
+
+// type t as a libc size_t crosses: u32 for a usize when narrow (a 32-bit target)
+fn size_t_as(t: u32, narrow: bool) -> u32 {
+    if (narrow && t == USIZE) {
+        return U32;
+    }
+    return t;
 }
 
 // a C header's function, as a pointer: the runtime's C unit includes the headers and exports
@@ -833,6 +845,11 @@ attach fn decl_fn(this: lg&, i: u32) -> llvm::LLVMOpaqueValue* {
     val name = this.z(this.symbol(f));
     var fv = llvm::LLVMGetNamedFunction(this.m, name);
     val fresh = fv == null;
+    if (!fresh && (f.body != null || llvm::LLVMIsDeclaration(fv) == 0) && llvm::LLVMGlobalGetValueType(fv) != a.ty) {
+        // two Volt fns bound to one C name with different signatures, one of them defined: the body
+        // would read its params as the other's types, or calls would pass them so (T-0423's memcpy)
+        @panic("voltc: a function's definition and another declaration of its C name disagree on its signature");
+    }
     if (fresh) {
         fv = llvm::LLVMAddFunction(this.m, name, a.ty);
         if (f.link == linkage::STATIC && f.body != null && !f.prelude) {
@@ -2013,9 +2030,8 @@ attach fn call(this: lg&, f: u32, args: std::vec<u32>&, t: u32) -> llvm::LLVMOpa
                 target = this.decl_fn(i);
             }
             a = this.fn_abi(i);
-            val fl = this.c.ir.fn_at(i);
-            for (p) in fl.params.items() {
-                put(&ptys, fl.locals.at(@cast<usize>(p)).ty);
+            for (p&) in a.params.items() {
+                put(&ptys, p.ty); // the ABI's: a libc size_t can be narrower than usize
             }
         },
         .RT(name) => {
@@ -2109,7 +2125,7 @@ attach fn call(this: lg&, f: u32, args: std::vec<u32>&, t: u32) -> llvm::LLVMOpa
     if (a.ret.how == pass::NONE) {
         return null;
     }
-    return c;
+    return this.coerce(c, a.ret.ty, t); // (a libc size_t result widens to usize)
 }
 
 // one argument, the ABI's way
