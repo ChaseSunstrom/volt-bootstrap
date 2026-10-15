@@ -46,7 +46,10 @@ voltc run main.volt --pkg geo=../geo --link geo=libgeo.a
 The program still reads the package's sources, since templates are instantiated per program, but
 takes its non-generic functions from the library. bolt builds every dependency this way, once per
 profile. The exception is a package with a global whose type holds a trait union: its layout depends
-on the types the program attaches, so voltc builds that package from source and warns why.
+on the types the program attaches, so voltc builds that package from source and warns why, and the
+same for every linked package that uses it (a path starting with its name), since their libraries
+refer to its symbols. `voltc lib` never does this: a library built with `--link` keeps its
+references to the packages it links, and the program linking it decides.
 
 Symbol names and error codes are stable across builds, and the runtime lives in the program, not in
 libraries. Each library carries a **guard symbol** made from a hash of its exact sources, its

@@ -10,6 +10,10 @@ public struct holder {
     n: i32;
 }
 
+// untyped and before held: working out its type reaches held first, before hold is known to be built
+// from source
+public var spare = held;
+
 public var held: holder = { h: null, n: 1 };
 
 // no trait union in its signature, but its body reads held

@@ -1149,64 +1149,150 @@ attach fn global(this: checker&, d: u32, span: span) -> compile_error!global_ref
 // union's layout comes from the types the program attaches, and the library's code that touches the
 // global was built with the members the library saw. A warning names the global.
 // ponytail: the whole package loses its library; define just the global (and rebuild the fns whose
-// bodies touch it) when a real package needs both
+// bodies touch it) when a real package needs both.
+// So is a linked package that uses one built from source (transitively): its library refers to the
+// other's symbols, which the program now defines privately. A library build unlinks nothing: its
+// references to the packages it links stay, and the program linking it decides.
 attach fn unlink_union_globals(this: checker&) -> void {
-    var i: usize = 0;
-    while (i < this.opts.linked.len) {
-        val pkg = *this.opts.linked.at(i);
-        var why: global_why? = null;
-        for (di) in 0..this.decls.len {
-            val d = @cast<u32>(di);
-            if (why != null || (this.pkg_of(d) ?? "") != pkg) {
-                continue;
-            }
-            match (this.item_of(d).kind) {
-                .GLOBAL(l&) => {
-                    if (l.c_name != null) {
-                        continue;
-                    }
-                    var name = "";
-                    match (l.pat.kind) {
-                        .BIND(n) => { name = n; },
-                        default => {},
-                    }
-                    // its declared type, else its initializer's, in the empty context global() uses
-                    // (an error is reported there). ponytail: an untyped initializer naming another
-                    // global of this package fixes that one's linkage first; type it if that bites
-                    var saved = new_cx(VOID, this.new_env({ ns: this.dl(d).ns }), 0);
-                    swap(&this.cx, &saved);
-                    var ty: u32 = 0;
-                    if (l.ty) {
-                        ty = this.decl_type(&l.ty, ptr_of(&l.init)) catch |e| {
-                            swap(&this.cx, &saved);
-                            continue;
-                        };
-                    } else {
-                        val gv = this.global_init(l, this.item_of(d).span) catch |e| {
-                            swap(&this.cx, &saved);
-                            continue;
-                        };
-                        ty = gv.ty;
-                    }
-                    swap(&this.cx, &saved);
-                    var seen: idset = {};
-                    if (this.has_union(ty, &seen)) {
-                        why = { name: name, span: this.item_of(d).span };
-                    }
-                },
-                default => {},
-            }
+    if (this.opts.lib != null) {
+        return;
+    }
+    // the scan's global() calls are undone after it: a global it reaches (an untyped initializer
+    // naming another) gets its linkage when it's really used, after the packages are settled
+    val n0 = this.ir.globals.len;
+    var gc0 = copy this.global_c;
+    var gone: std::vec<str> = {};
+    for (p&) in this.opts.linked.items() {
+        val pkg = *p;
+        if (has_name(&gone, pkg)) {
+            continue; // linked twice
         }
-        if (why == null) {
-            i += 1;
-            continue;
-        }
-        val w = why ?? { name: "", span: NO_SPAN };
+        val w = this.union_global(pkg) ?? continue;
         var d: diag = { span: w.span, msg: fmt2("{}'s library isn't used: its global '{}' holds a trait union", S(pkg), S(w.name)), warning: true };
         put(&d.notes, S("the union's layout depends on the types this program attaches, so the package is built from source"));
         put(&this.warnings, move d);
-        this.opts.linked.remove(i);
+        put(&gone, pkg);
     }
+    while (this.ir.globals.len > n0) {
+        this.ir.globals.pop();
+    }
+    this.global_c = move gc0;
+    // the packages that use one built from source. ponytail: "uses" is a path starting with its name
+    // in the package's text (names_pkg; a string holding one counts too): a false match only costs
+    // that package its library
+    var more = gone.len > 0;
+    while (more) {
+        more = false;
+        for (p&) in this.opts.linked.items() {
+            val pkg = *p;
+            if (has_name(&gone, pkg)) {
+                continue;
+            }
+            for (g&) in gone.items() {
+                if (this.pkg_names(pkg, *g)) {
+                    put(&this.warnings, { span: NO_SPAN, msg: fmt2("{}'s library isn't used: it uses {}, which is built from source", S(pkg), S(*g)), warning: true });
+                    put(&gone, pkg);
+                    more = true;
+                    break;
+                }
+            }
+        }
+    }
+    var i: usize = 0;
+    while (i < this.opts.linked.len) {
+        if (has_name(&gone, *this.opts.linked.at(i))) {
+            this.opts.linked.remove(i);
+        } else {
+            i += 1;
+        }
+    }
+}
+
+// does one of package pkg's files name package other?
+attach fn pkg_names(this: checker&, pkg: str, other: str) -> bool {
+    for (fi) in 0..this.files.len {
+        if ((this.pkg_of_file(@cast<u32>(fi)) ?? "") == pkg && names_pkg(this.files.at(fi).text, other)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// does code (outside // comments) start a path with package pkg: pkg::x, use pkg::{...}?
+fn names_pkg(text: str, pkg: str) -> bool {
+    var i: usize = 0;
+    while (i < text.len) {
+        val c = text[i];
+        if (c == '/' && i + 1 < text.len && text[i + 1] == '/') {
+            while (i < text.len && text[i] != '\n') {
+                i += 1;
+            }
+        } else if (ident_char(c)) {
+            var j = i;
+            while (j < text.len && ident_char(text[j])) {
+                j += 1;
+            }
+            if (text[i..j] == pkg) {
+                var k = j;
+                while (k < text.len && (text[k] == ' ' || text[k] == '\t')) {
+                    k += 1;
+                }
+                if (k + 1 < text.len && text[k] == ':' && text[k + 1] == ':') {
+                    return true;
+                }
+            }
+            i = j;
+        } else {
+            i += 1;
+        }
+    }
+    return false;
+}
+
+// the first global of package pkg whose type holds a trait union
+attach fn union_global(this: checker&, pkg: str) -> global_why? {
+    for (di) in 0..this.decls.len {
+        val d = @cast<u32>(di);
+        if ((this.pkg_of(d) ?? "") != pkg) {
+            continue;
+        }
+        match (this.item_of(d).kind) {
+            .GLOBAL(l&) => {
+                if (l.c_name != null) {
+                    continue;
+                }
+                var name = "";
+                match (l.pat.kind) {
+                    .BIND(n) => { name = n; },
+                    default => {},
+                }
+                // its declared type, else its initializer's, in the empty context global() uses (an
+                // error is reported there)
+                var saved = new_cx(VOID, this.new_env({ ns: this.dl(d).ns }), 0);
+                swap(&this.cx, &saved);
+                var ty: u32 = 0;
+                if (l.ty) {
+                    ty = this.decl_type(&l.ty, ptr_of(&l.init)) catch |e| {
+                        swap(&this.cx, &saved);
+                        continue;
+                    };
+                } else {
+                    val gv = this.global_init(l, this.item_of(d).span) catch |e| {
+                        swap(&this.cx, &saved);
+                        continue;
+                    };
+                    ty = gv.ty;
+                }
+                swap(&this.cx, &saved);
+                var seen: idset = {};
+                if (this.has_union(ty, &seen)) {
+                    return { name: name, span: this.item_of(d).span };
+                }
+            },
+            default => {},
+        }
+    }
+    return null;
 }
 
 struct global_why {

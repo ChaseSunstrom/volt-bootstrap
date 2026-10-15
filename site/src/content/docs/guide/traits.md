@@ -173,8 +173,8 @@ Things to keep in mind:
   function with a trait union in its parameters or result is never taken from the library: each
   program builds it with that program's member list, so a type the program attaches reaches it.
   A package with a global whose type holds a trait union isn't taken from its library at all: the
-  program builds it from source, with a warning naming the global, since the library's code that
-  touches the global was built with the library's member list. A local inside a function compiled
+  program builds it from source (and the linked packages that use it), with a warning naming the
+  global, since the library's code that touches the global was built with the library's member list. A local inside a function compiled
   without the trait in its signature still sees the library's member list, none here: keep trait
   values in signatures.
 - `@typeid(v)` of a trait value is the id of the type it holds, the same id `@typeid(circle)` gives;

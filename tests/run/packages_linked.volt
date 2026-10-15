@@ -1,6 +1,7 @@
-// flags: --pkg geo=tests/pkgs/geo --pkg hold=tests/pkgs/hold --leak-check
-// also run against prebuilt libstd.a + libgeo.a + libhold.a by the std_linked test in tests/golden.rs
-// (hold has a global holding a trait union, so voltc builds it from source instead)
+// flags: --pkg geo=tests/pkgs/geo --pkg hold=tests/pkgs/hold --pkg geo2=tests/pkgs/geo2 --leak-check
+// also run against prebuilt libstd.a, libgeo.a, libhold.a and libgeo2.a (built against libhold.a) by the
+// std_linked test in tests/golden.rs: hold has a global holding a trait union, so voltc builds it
+// from source instead, and geo2, which uses hold
 use std::io;
 
 // geo's plugin trait has no attacher in geo itself (its library is built without one)
@@ -37,7 +38,7 @@ fn main() -> void {
     std::println("held {}", hold::fire_held());
     val t: tripler = { k: 3 };
     hold::held = { h: t, n: 7 };
-    std::println("held {} {}", hold::fire_held(), hold::held.n);
+    std::println("held {} {} {} {}", hold::fire_held(), hold::held.n, geo2::held_plus(1), hold::spare.n);
 }
 
 struct tripler { k: i32; }
@@ -53,4 +54,4 @@ attach hold::hook -> tripler {
 // expect: plugin 41
 // expect: slots 8 9
 // expect: held 1
-// expect: held 21 7
+// expect: held 21 7 22 1
