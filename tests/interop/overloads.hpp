@@ -44,6 +44,9 @@ class Box {
     std::string open() & { return "lref " + s_; }
     std::string open() && { std::string r = "rref " + s_; s_ = "gone"; return r; }
     std::string peek() const { return s_; }
+    // && and const && (size, size_const_rref)
+    int size() && { return 1; }
+    int size() const && { return 2; }
   private:
     std::string s_;
 };

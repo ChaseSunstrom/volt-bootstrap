@@ -20,5 +20,6 @@ fn main() -> void {
     val c = cpp::ov::Crate::new(8);
     std::println("open {} {} {}", bx.open(), c.as_Box().open_rref(), c.peek());
     std::println("open {}", bx.open_rref());
+    std::println("size {} {}", cpp::ov::Box::new(1).size(), cpp::ov::Box::new(1).size_const_rref());
     std::println("taken {} {}", cpp::taken::which(3), cpp::taken::which_long_long(3));
 }
