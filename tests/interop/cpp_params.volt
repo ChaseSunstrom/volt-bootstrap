@@ -2,7 +2,7 @@
 // reference to an array (const or not, through an alias with a default) takes a Volt array, a
 // function pointer a Volt fn, a std::string& a Volt std::string& (C++ changes a copy, which a throw
 // leaves out), and a std::function over classes a Volt closure (one held by handle borrowed, a
-// move-only one too, one laid out a copy)
+// move-only one too, one laid out a copy), and a parameter written as an array a Volt pointer
 use std::io;
 use { "params.hpp" } as cpp;
 fn inc(x: i32) -> i32 { return x + 1; }
@@ -38,6 +38,16 @@ fn main() -> void {
     var c = std::string::from("ab");
     val k = cpp::pr::count_up(&c);
     std::println("counted {} {} {}", k.n, k.total, c);
+    // parameters written as arrays take a Volt pointer, declared and per use
+    var ys: i32[3] = { 1, 2, 3 };
+    val s3 = cpp::pr::ap::sum3(&ys[0]);
+    std::println("arrays {} {} {} {} {}", s3, ys[2], cpp::pr::ap::total(&ys[0], 3), cpp::pr::ap::tail(), cpp::pr::ap::tail(&ys[0]));
+    // per use a Volt i32* is C++'s int * (&ys[0] alone would be an int &)
+    val p: i32* = &ys[0];
+    val c3 = @cpp<i32>("pr::ap::sum3({0})", p);
+    std::println("@cpp {} {} {}", c3, @cpp<i32>("pr::ap::tail({0})", p), cpp::pr::ap::head(p));
+    var cs: cpp::pr::ap::cell[2] = { { x: 1, y: 2 }, { x: 3, y: 4 } };
+    std::println("alias {} cells {}", cpp::pr::ap::sum_alias(&ys[0]), cpp::pr::ap::cells(&cs[0], 2));
 }
 // a throw leaves the Volt string as it was (C++ changed its copy first)
 fn grown(t: std::string&, k: i32) -> void {
