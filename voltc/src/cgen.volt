@@ -604,6 +604,100 @@ attach fn scalar(this: cgen&, t: u32) -> bool {
     }
 }
 
+attach fn is_f128(this: cgen&, t: u32) -> bool {
+    match (*this.c.t.get(t)) {
+        .FLOAT(b) => { return b == 128; },
+        default => { return false; },
+    }
+}
+
+// the prelude's volt_q_from/volt_q_to name for a scalar of type t: the narrower floats by width, ints
+// by sign and width (the narrow ones and bool as 32-bit ones)
+attach fn q_kind(this: cgen&, t: u32) -> str {
+    var k = int_ty::U32;
+    match (*this.c.t.get(t)) {
+        .FLOAT(b) => {
+            if (b == 16) {
+                return "f16";
+            } else if (b == 32) {
+                return "f32";
+            }
+            return "f64";
+        },
+        .INT(x) => { k = x; },
+        .ENUM(e) => { k = this.c.ei(e).tag; },
+        default => {},
+    }
+    val names: str[6] = { "i32", "u32", "i64", "u64", "i128", "u128" };
+    var i: usize = 0;
+    if (k.bits() > 64) {
+        i = 4;
+    } else if (k.bits() > 32) {
+        i = 2;
+    }
+    if (!k.signed()) {
+        i += 1;
+    }
+    return names[i];
+}
+
+// the prelude's name for an f128 binop (none for the bool ones)
+fn q_op(op: binop_ir) -> str? {
+    match (op) {
+        .ADD => { return "volt_q_add("; },
+        .SUB => { return "volt_q_sub("; },
+        .MUL => { return "volt_q_mul("; },
+        .DIV => { return "volt_q_div("; },
+        .REM => { return "volt_q_rem("; },
+        .EQ => { return "volt_q_eq("; },
+        .NE => { return "volt_q_ne("; },
+        .LT => { return "volt_q_lt("; },
+        .GT => { return "volt_q_gt("; },
+        .LE => { return "volt_q_le("; },
+        .GE => { return "volt_q_ge("; },
+        default => { return null; },
+    }
+}
+
+// an f128 literal for the prelude: the double text a native quad type converts, and the binary128
+// bits of the same value, which the soft path's vector holds
+attach fn q_lit(this: cgen&, out: std::string&, text: str, v: f64) -> void {
+    val bits = std::softfloat::f64_to_f128(@bitcast<u64>(v));
+    out.append("volt_q_lit(");
+    out.append(text);
+    out.append(", ");
+    out.append_uint(@cast<u64>(bits >> 64));
+    out.append("ULL, ");
+    out.append_uint(@cast<u64>(bits & 18446744073709551615));
+    out.append("ULL)");
+}
+
+// x converted to t, one of them f128 and the other another scalar: the prelude's volt_q_from and
+// volt_q_to (calls to the quad routines where C has no quad type, else casts)
+attach fn q_conv(this: cgen&, out: std::string&, x: u32, t: u32) -> void {
+    if (this.is_f128(t)) {
+        out.append("volt_q_from(");
+        out.append(this.q_kind(this.c.ir.ty_of(x)));
+        out.append(", ");
+        this.expr(out, x);
+        out.push(')');
+    } else if (t == BOOL) {
+        out.append("(!volt_q_eq(");
+        this.expr(out, x);
+        out.append(", ");
+        this.q_lit(out, "0.0", 0.0);
+        out.append("))");
+    } else {
+        out.append("((");
+        out.append(this.ty(t));
+        out.append(")volt_q_to(");
+        out.append(this.q_kind(t));
+        out.append(", ");
+        this.expr(out, x);
+        out.append("))");
+    }
+}
+
 // ---------- expressions ----------
 
 // an integer literal cast to t; 128-bit values are built from two 64-bit halves and INT64_MIN is
@@ -631,17 +725,23 @@ attach fn int_lit(this: cgen&, out: std::string&, v: i128, t: u32) -> void {
     }
     if (!is_int) {
         // a float (or bool) holding an integer value
+        var num: std::string = {};
+        if (v < 0) {
+            num.append("(-");
+            num.append_uint(@cast<u64>(-v));
+            num.append(".0)");
+        } else {
+            num.append_uint(@cast<u64>(v));
+            num.append(".0");
+        }
+        if (this.is_f128(t)) {
+            this.q_lit(out, num.as_str(), @cast<f64>(v));
+            return;
+        }
         out.append("((");
         out.append(this.ty(t));
         out.append(")");
-        if (v < 0) {
-            out.append("(-");
-            out.append_uint(@cast<u64>(-v));
-            out.append(".0)");
-        } else {
-            out.append_uint(@cast<u64>(v));
-            out.append(".0");
-        }
+        out.append(num.as_str());
         out.push(')');
         return;
     }
@@ -711,10 +811,9 @@ attach fn int_lit(this: cgen&, out: std::string&, v: i128, t: u32) -> void {
 extern "C" fn snprintf(buf: u8*, n: usize, f: cstr, ...) -> i32;
 
 // a float literal cast to t; NaN and infinities come from builtins since C has no literal for them
-attach fn float_lit(this: cgen&, out: std::string&, v: f64, t: u32) -> void {
-    out.append("((");
-    out.append(this.ty(t));
-    out.append(")(");
+attach fn float_lit(this: cgen&, out0: std::string&, v: f64, t: u32) -> void {
+    var num: std::string = {};
+    val out = &num;
     if (v != v) {
         out.append("__builtin_nan(\"\")");
     } else if (v > 1.7976931348623157e308 || v < -1.7976931348623157e308) {
@@ -744,7 +843,15 @@ attach fn float_lit(this: cgen&, out: std::string&, v: f64, t: u32) -> void {
             out.append(".0");
         }
     }
-    out.append("))");
+    if (this.is_f128(t)) {
+        this.q_lit(out0, num.as_str(), v);
+        return;
+    }
+    out0.append("((");
+    out0.append(this.ty(t));
+    out0.append(")(");
+    out0.append(num.as_str());
+    out0.append("))");
 }
 
 attach fn local_name(this: cgen&, id: u32) -> str {
@@ -828,6 +935,10 @@ fn matching_close(s: str) -> usize {
 attach fn value_as(this: cgen&, out: std::string&, n: u32, t: u32) -> void {
     val nt = this.c.ir.ty_of(n);
     if (nt != t && t != VOID && this.scalar(t) && nt != NEVER) {
+        if (this.is_f128(t) != this.is_f128(nt) && this.scalar(nt)) {
+            this.q_conv(out, n, t);
+            return;
+        }
         out.append("((");
         out.append(this.ty(t));
         out.push(')');
@@ -901,6 +1012,8 @@ attach fn expr(this: cgen&, out: std::string&, n: u32) -> void {
         .ZERO => {
             if (t == VOID || t == NEVER) {
                 out.append("((void)0)");
+            } else if (this.is_f128(t)) {
+                this.q_lit(out, "0.0", 0.0);
             } else if (this.scalar(t)) {
                 out.append("((");
                 out.append(this.ty(t));
@@ -1061,7 +1174,11 @@ attach fn expr(this: cgen&, out: std::string&, n: u32) -> void {
                 },
                 .NEG => {
                     val k = this.c.t.int_of(t);
-                    if (this.signed_lanes(t)) {
+                    if (this.is_f128(t)) {
+                        out.append("volt_q_neg(");
+                        this.expr(out, x);
+                        out.push(')');
+                    } else if (this.signed_lanes(t)) {
                         // wrapping, as an int's: negate the unsigned lanes
                         out.append("((");
                         out.append(this.ty(t));
@@ -1108,7 +1225,10 @@ attach fn expr(this: cgen&, out: std::string&, n: u32) -> void {
         },
         .CONV(x) => {
             // to bool compares with zero instead of truncating
-            if (t == BOOL && this.c.ir.ty_of(x) != BOOL) {
+            val xt = this.c.ir.ty_of(x);
+            if (this.is_f128(t) != this.is_f128(xt)) {
+                this.q_conv(out, x, t);
+            } else if (t == BOOL && xt != BOOL) {
                 out.append("((");
                 this.expr(out, x);
                 out.append(") != 0)");
@@ -1333,6 +1453,16 @@ attach fn binary(this: cgen&, out: std::string&, op: binop_ir, a: u32, b: u32, t
     val at = this.c.ir.ty_of(a);
     val k = this.c.t.int_of(t);
     val wraps = op == binop_ir::ADD || op == binop_ir::SUB || op == binop_ir::MUL || op == binop_ir::SHL;
+    val qn = q_op(op);
+    if (this.is_f128(at) && qn != null) {
+        // the prelude's operators: calls to the quad routines where C has no quad type
+        out.append(qn ?? "");
+        this.expr(out, a);
+        out.append(", ");
+        this.value_as(out, b, at);
+        out.push(')');
+        return;
+    }
     var ptr_arith = false; // p - q counts elements, p + n steps by them: C's own pointer arithmetic
     match (*this.c.t.get(at)) {
         .PTR(x) => { ptr_arith = true; },

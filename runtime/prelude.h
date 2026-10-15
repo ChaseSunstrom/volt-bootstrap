@@ -17,15 +17,104 @@ typedef unsigned _BitInt(128) volt_u128;
 #endif
 /* f128, IEEE binary128: where long double is it (aarch64 and riscv64 Linux and FreeBSD, which have no
    __float128), long double; elsewhere the C compiler's __float128 (x86-64); with neither (arm64
-   macOS, whose long double is a double) its 16 bytes of bits, which C code only copies and
-   reinterprets (std::softfloat's quad routines work on the bits) */
-#if defined(__LDBL_MANT_DIG__) && __LDBL_MANT_DIG__ == 113
+   macOS, whose long double is a double), or with -DVOLT_SOFT_F128, VOLT_SOFT_F128: its 16 bytes of
+   bits as a vector, which both ABIs pass as they pass a binary128 (in one SIMD register), and each
+   operation a call to compiler-rt's quad routines (std::softfloat's quad_rt on arm64 macOS). The C
+   code spells every f128 operation volt_q_*: plain operators and casts where the type is native */
+#if defined(VOLT_SOFT_F128)
+#elif defined(__LDBL_MANT_DIG__) && __LDBL_MANT_DIG__ == 113
 #define volt_f128 long double
 #elif defined(__SIZEOF_FLOAT128__)
 #define volt_f128 __float128
 #else
-typedef struct { uint64_t volt_bits[2]; } __attribute__((aligned(16))) volt_f128_bits;
+#define VOLT_SOFT_F128 1
+#endif
+#ifdef VOLT_SOFT_F128
+typedef uint64_t volt_f128_bits __attribute__((vector_size(16)));
 #define volt_f128 volt_f128_bits
+#if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+#define volt_q_lit(d, hi, lo) ((volt_f128){ hi, lo })
+#else
+#define volt_q_lit(d, hi, lo) ((volt_f128){ lo, hi })
+#endif
+volt_f128 __addtf3(volt_f128, volt_f128);
+volt_f128 __subtf3(volt_f128, volt_f128);
+volt_f128 __multf3(volt_f128, volt_f128);
+volt_f128 __divtf3(volt_f128, volt_f128);
+int32_t __eqtf2(volt_f128, volt_f128);
+int32_t __netf2(volt_f128, volt_f128);
+int32_t __lttf2(volt_f128, volt_f128);
+int32_t __letf2(volt_f128, volt_f128);
+int32_t __gttf2(volt_f128, volt_f128);
+int32_t __getf2(volt_f128, volt_f128);
+volt_f128 __floatsitf(int32_t);
+volt_f128 __floatditf(int64_t);
+volt_f128 __floattitf(volt_i128);
+volt_f128 __floatunsitf(uint32_t);
+volt_f128 __floatunditf(uint64_t);
+volt_f128 __floatuntitf(volt_u128);
+volt_f128 __extendhftf2(_Float16);
+volt_f128 __extendsftf2(float);
+volt_f128 __extenddftf2(double);
+int32_t __fixtfsi(volt_f128);
+int64_t __fixtfdi(volt_f128);
+volt_i128 __fixtfti(volt_f128);
+uint32_t __fixunstfsi(volt_f128);
+uint64_t __fixunstfdi(volt_f128);
+volt_u128 __fixunstfti(volt_f128);
+_Float16 __trunctfhf2(volt_f128);
+float __trunctfsf2(volt_f128);
+double __trunctfdf2(volt_f128);
+#define volt_q_add(a, b) __addtf3(a, b)
+#define volt_q_sub(a, b) __subtf3(a, b)
+#define volt_q_mul(a, b) __multf3(a, b)
+#define volt_q_div(a, b) __divtf3(a, b)
+/* ponytail: % through a double, as the native path's __builtin_fmod; a soft fmodl if precision matters */
+#define volt_q_rem(a, b) __extenddftf2(__builtin_fmod(__trunctfdf2(a), __trunctfdf2(b)))
+#define volt_q_neg(a) ((a) ^ volt_q_lit(0, 0x8000000000000000ULL, 0ULL))
+/* compiler-rt's compares give <0, 0 or >0 like a - b, and a NaN the answer that makes the test false */
+#define volt_q_eq(a, b) (__eqtf2(a, b) == 0)
+#define volt_q_ne(a, b) (__netf2(a, b) != 0)
+#define volt_q_lt(a, b) (__lttf2(a, b) < 0)
+#define volt_q_le(a, b) (__letf2(a, b) <= 0)
+#define volt_q_gt(a, b) (__gttf2(a, b) > 0)
+#define volt_q_ge(a, b) (__getf2(a, b) >= 0)
+#define volt_q_from(k, x) volt_q_from_##k(x)
+#define volt_q_from_i32 __floatsitf
+#define volt_q_from_i64 __floatditf
+#define volt_q_from_i128 __floattitf
+#define volt_q_from_u32 __floatunsitf
+#define volt_q_from_u64 __floatunditf
+#define volt_q_from_u128 __floatuntitf
+#define volt_q_from_f16 __extendhftf2
+#define volt_q_from_f32 __extendsftf2
+#define volt_q_from_f64 __extenddftf2
+#define volt_q_to(k, x) volt_q_to_##k(x)
+#define volt_q_to_i32 __fixtfsi
+#define volt_q_to_i64 __fixtfdi
+#define volt_q_to_i128 __fixtfti
+#define volt_q_to_u32 __fixunstfsi
+#define volt_q_to_u64 __fixunstfdi
+#define volt_q_to_u128 __fixunstfti
+#define volt_q_to_f16 __trunctfhf2
+#define volt_q_to_f32 __trunctfsf2
+#define volt_q_to_f64 __trunctfdf2
+#else
+#define volt_q_lit(d, hi, lo) ((volt_f128)(d))
+#define volt_q_add(a, b) ((a) + (b))
+#define volt_q_sub(a, b) ((a) - (b))
+#define volt_q_mul(a, b) ((a) * (b))
+#define volt_q_div(a, b) ((a) / (b))
+#define volt_q_rem(a, b) __builtin_fmod(a, b)
+#define volt_q_neg(a) (-(a))
+#define volt_q_eq(a, b) ((a) == (b))
+#define volt_q_ne(a, b) ((a) != (b))
+#define volt_q_lt(a, b) ((a) < (b))
+#define volt_q_le(a, b) ((a) <= (b))
+#define volt_q_gt(a, b) ((a) > (b))
+#define volt_q_ge(a, b) ((a) >= (b))
+#define volt_q_from(k, x) ((volt_f128)(x))
+#define volt_q_to(k, x) (x)
 #endif
 #define VOLT_S2(x) #x
 #define VOLT_S(x) VOLT_S2(x)
