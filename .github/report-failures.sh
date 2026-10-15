@@ -15,11 +15,18 @@ tests=$(grep -aE '^test .* \.\.\. FAILED$' "$log" | sed 's/^test //; s/ \.\.\. F
 [ -n "$tests" ] && echo "::error title=failed tests::$tests"
 golden=$(grep -aE '^[A-Za-z]?:?[/\\].*\.volt: (exit|want errors)' "$log" | head -40 | oneline)
 [ -n "$golden" ] && echo "::error title=failed programs::$golden"
-# each panic up to the next test's output (golden lists every failed program with its want and
-# got), at most 300 lines and 60000 bytes (an annotation holds 64 KB)
-grep -an 'panicked at' "$log" | head -7 | while IFS=: read -r n _; do
-    body=$(sed -n "${n},$((n + 300))p" "$log" | awk 'NR > 1 && (/^---- .* stdout ----$/ || /^failures:$/) { exit } { print }' | cut -c1-400 | head -c 60000)
+# each panic up to the next test's output, cut to the 4 KB an annotation holds (GitHub keeps 10
+# errors and 10 warnings a step: these take 6 of the errors)
+grep -an 'panicked at' "$log" | head -6 | while IFS=: read -r n _; do
+    body=$(sed -n "${n},$((n + 300))p" "$log" | awk 'NR > 1 && (/^---- .* stdout ----$/ || /^failures:$/) { exit } { print }' | cut -c1-300 | head -c 3800)
     echo "::error title=panic::$(printf '%s\n' "$body" | oneline)"
+done
+# each failed golden program on its own (its want, got and stderr), as warnings
+awk '/^[A-Za-z]?:?[\/\\].*\.volt: (exit|want errors)/ { if (n++ < 10) { f = "golden." n } else { f = "" } } /^thread / { f = "" } f { print > f }' "$log" 2>/dev/null
+for g in golden.*; do
+    [ -f "$g" ] || continue
+    echo "::warning title=$(head -1 "$g" | sed 's|.*/||; s/:.*//')::$(cut -c1-300 "$g" | head -c 3800 | oneline)"
+    rm -f "$g"
 done
 # a build or harness error with no test line (a crate that didn't compile, a missing tool)
 if [ -z "$tests" ]; then

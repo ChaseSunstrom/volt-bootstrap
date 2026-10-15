@@ -589,6 +589,7 @@ struct cdecls {
     anon_in: std::map<str, anon_field> = {}; // anonymous tag -> the named field it types
     fn_macros: std::vec<str> = {};     // function-like #defines (MAX(a, b)): called per use
     var_aliases: std::vec<cdefine> = {}; // #define NAME other_name (macOS's stderr is __stderrp)
+    hidden_vars: std::vec<cvar> = {};    // variables with reserved names, which only an alias reaches
 }
 
 // a made-up tag for an anonymous struct or enum: prefix and a number
@@ -1395,7 +1396,17 @@ attach fn top(this: cparser&) -> void {
                 put(&this.d.typedef_order, name);
             }
             this.d.typedefs.put(name, copy dc.ty);
-        } else if (!starts_with(name, "__")) {
+        } else if (starts_with(name, "__")) {
+            // a reserved name isn't imported, but a #define may name it (macOS's stderr is __stderrp)
+            match (dc.ty) {
+                .FUNC(ps, ret, variadic) => {},
+                default => {
+                    if (!stat) {
+                        put(&this.d.hidden_vars, { name: name, ty: copy dc.ty });
+                    }
+                },
+            }
+        } else {
             match (dc.ty) {
                 .FUNC(ps, ret, variadic) => {
                     var names: std::vec<str?> = {};
@@ -2593,6 +2604,11 @@ attach fn c_items(this: checker&, d: cdecls&, res: c_imported&, span: span) -> v
         var of: cvar* = null;
         for (v&) in d.vars.items() {
             own = own || v.name == a.name;
+            if (v.name == target) {
+                of = &*v;
+            }
+        }
+        for (v&) in d.hidden_vars.items() {
             if (v.name == target) {
                 of = &*v;
             }
