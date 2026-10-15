@@ -14,7 +14,7 @@ sidebar:
 | `bolt run [-- ARGS]` | build and run an executable (`--bin NAME`, `--example NAME`) |
 | `bolt test [FILTER]` | build and run the tests (`--no-run` builds only) |
 | `bolt bench [FILTER]` | build the benchmarks with the bench profile and time them |
-| `bolt hot [FILES] [-- ARGS]` | run the executable (or `.volt` FILES) sampled, and show where it spends its time (`--html FILE`: as a page with a call-tree graph too) |
+| `bolt hot [FILES] [-- ARGS]` | run the executable (or `.volt` FILES) sampled, and show where it spends its time (`--html FILE`: as a page with a call-tree graph too; `--folded FILE`: as folded stacks) |
 | `bolt clean` | remove `target/` (with `--release` or `--profile`, only that profile's) |
 
 ### Finding the hot spots
@@ -49,13 +49,18 @@ at its lines there, not in calls to it. A C compiler's copies of a function
 (`work.constprop.0`, made for a constant argument) are reported as that function.
 
 `bolt hot --html FILE` writes the same profile as a web page too, one file that loads nothing from
-the network: the call tree as an icicle graph (`main` on top, each function in a box beneath the one
-that called it, as wide as its share of the samples; hover a box for its self and total time, click
-it to zoom in), a table of every function's self and total time that sorts by any column, and the
-hottest lines.
+the network: the call tree as an icicle graph, a table of every function's self and total time
+(click a column to sort by it, again to reverse), and the ten hottest lines. In the graph, the top
+box is all the samples; beneath it is `main` (and, when a stack was too deep to sample whole, the
+outermost function the sample reached), and beneath each function the ones it called, each box as
+wide as its share of the samples. Hover a box for its self and total time; click it to zoom in.
+Callees with under 0.1% of the samples are folded into one `other` box. `bolt hot --folded FILE`
+writes the call paths as folded stacks (`main;work;mix 812`, one line per path) for
+`flamegraph.pl`, speedscope or inferno.
 
-The program samples itself (on each tick of the kernel's timer, usually 250 to 1000 times a second
-of CPU time), so this needs no `perf`, debugger or root; it runs on Linux (x86-64 and aarch64), and
+The program samples itself (it asks for a sample every 100 µs of CPU time, and the kernel delivers
+them on its timer tick, usually 250 to 1000 times a second), so this needs no `perf`, debugger or
+root; it runs on Linux (x86-64 and aarch64), and
 names the samples with `llvm-symbolizer` or `addr2line`. Run the program long enough to get a few
 hundred samples.
 

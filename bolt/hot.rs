@@ -329,7 +329,7 @@ pub fn report(exe: &Path, s: &Stats, top: usize) -> String {
 }
 
 fn esc(s: &str) -> String {
-    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
+    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;").replace('\'', "&#39;")
 }
 
 /// the call tree of the paths: a node's samples (total), those that stopped there (own), its callees
@@ -341,7 +341,9 @@ struct Node {
 }
 
 /// one icicle box and those under it: as wide as its share of its caller's samples, its callees in a
-/// row beneath it, widest first. Its title (on hover) says the path, total and self time
+/// row beneath it, widest first. Its title (on hover) says the path, total and self time. Callees
+/// under 0.1% of all samples fold into one "other" box, which keeps the page small: boxes at one depth
+/// have disjoint samples, so there are at most about a thousand at each
 fn icicle(name: &str, node: &Node, parent: usize, path: &str, n: usize, out: &mut String) {
     // a warm colour, the same for a function wherever it shows
     let hue = name.bytes().fold(0u32, |h, b| h.wrapping_mul(31).wrapping_add(b as u32)) % 50;
@@ -356,9 +358,21 @@ fn icicle(name: &str, node: &Node, parent: usize, path: &str, n: usize, out: &mu
     );
     let mut kids: Vec<(&String, &Node)> = node.kids.iter().collect();
     kids.sort_by(|a, b| b.1.total.cmp(&a.1.total).then(a.0.cmp(b.0)));
+    let (mut other, mut folded) = (Node::default(), 0);
     for (k, kid) in kids {
+        if kid.total * 1000 < n {
+            other.total += kid.total;
+            other.own += kid.total;
+            folded += 1;
+            continue;
+        }
         let p = if path.is_empty() { k.clone() } else { format!("{path} → {k}") };
         icicle(k, kid, node.total, &p, n, out);
+    }
+    if folded > 0 {
+        let k = format!("other ({folded})");
+        let p = if path.is_empty() { k.clone() } else { format!("{path} → {k}") };
+        icicle(&k, &other, node.total, &p, n, out);
     }
     *out += "</div></div>";
 }
@@ -383,15 +397,15 @@ const PAGE_SCRIPT: &str = r#"<script>
 function reset(){document.querySelectorAll('#ice .n').forEach(n=>{n.style.display='';n.style.width=n.dataset.w})}
 function zoom(n){reset();for(let c=n;c.parentElement.classList.contains('c');c=c.parentElement.parentElement){for(const s of c.parentElement.children)if(s!==c)s.style.display='none';c.style.width='100%'}}
 document.querySelectorAll('#ice .l').forEach(l=>l.onclick=()=>zoom(l.parentElement));
-// click a column to sort by it
-document.querySelectorAll('table.s th').forEach((h,i)=>h.onclick=()=>{const b=h.closest('table').tBodies[0];[...b.rows].sort((x,y)=>{const p=x.cells[i],q=y.cells[i];return p.dataset.v?q.dataset.v-p.dataset.v:p.textContent.localeCompare(q.textContent)}).forEach(r=>b.appendChild(r))});
+// click a column to sort by it (numbers most first, names A to Z); click it again to reverse
+document.querySelectorAll('table.s th').forEach((h,i)=>h.onclick=()=>{const d=h.dataset.d=h.dataset.d==='1'?'-1':'1';const b=h.closest('table').tBodies[0];[...b.rows].sort((x,y)=>{const p=x.cells[i],q=y.cells[i];return d*(p.dataset.v?q.dataset.v-p.dataset.v:p.textContent.localeCompare(q.textContent))}).forEach(r=>b.appendChild(r))});
 </script></body></html>
 "#;
 
 /// the HTML report for a profile of exe: one page that loads nothing from elsewhere. An icicle of
 /// the call tree (a callee beneath its caller, as wide as its share of the samples), each function's
-/// self and total time, and the hottest lines
-pub fn html(exe: &Path, s: &Stats) -> String {
+/// self and total time, and the `top` hottest lines
+pub fn html(exe: &Path, s: &Stats, top: usize) -> String {
     let n = s.n;
     let mut out = PAGE_HEAD.to_string();
     out += &format!("<h1>bolt hot: {n} samples of {}</h1>\n", esc(&exe.display().to_string()));
@@ -419,10 +433,16 @@ pub fn html(exe: &Path, s: &Stats) -> String {
     }
     out += "</tbody></table>\n<h2>hottest lines</h2>\n<table class=\"s\"><thead><tr><th>line</th><th>samples</th><th>source</th></tr></thead><tbody>\n";
     let mut cache = HashMap::new();
-    for ((file, line), k) in sorted(&s.lines).into_iter().take(30) {
+    for ((file, line), k) in sorted(&s.lines).into_iter().take(top) {
         out += &format!("<tr><td>{}:{line}</td><td class=\"p\" data-v=\"{k}\">{:.1}%</td><td><code>{}</code></td></tr>\n", esc(&shown(&file)), pct(k, n), esc(&source_line(&file, line, &mut cache)));
     }
     out + "</tbody></table>\n" + PAGE_SCRIPT
+}
+
+/// the call paths as folded stacks (flamegraph.pl, speedscope, inferno): one line per path,
+/// `main;work;mix 812`
+pub fn folded(s: &Stats) -> String {
+    sorted(&s.paths).into_iter().map(|(p, k)| format!("{} {k}\n", p.join(";"))).collect()
 }
 
 #[cfg(test)]
@@ -437,7 +457,7 @@ mod tests {
         s.self_n.extend([("work (w.volt:3)".to_string(), 8), ("a<b> & c (w.volt:9)".to_string(), 2)]);
         s.total_n.extend([("work (w.volt:3)".to_string(), 8), ("a<b> & c (w.volt:9)".to_string(), 2), ("main (w.volt:1)".to_string(), 10)]);
         s.outlined.insert("work (w.volt:3)".into());
-        let h = html(Path::new("/x/w"), &s);
+        let h = html(Path::new("/x/w"), &s, 10);
         assert!(!h.contains("http://") && !h.contains("https://"), "{h}");
         assert!(h.contains("title=\"main → work&#10;total 80.0% (8 samples), self 80.0%\">work</div>"), "{h}");
         assert!(h.contains("title=\"main&#10;total 100.0% (10 samples), self 0.0%\">main</div>"), "{h}");
@@ -446,6 +466,29 @@ mod tests {
         assert!(h.contains("<th>self</th><th>total</th>") && h.contains("<td>work (w.volt:3)</td><td class=\"p\" data-v=\"8\">80.0%</td><td class=\"p\" data-v=\"8\">80.0%</td></tr>"), "{h}");
         assert!(h.contains("<td>a&lt;b&gt; &amp; c (w.volt:9) <i>inlined</i></td><td class=\"p\" data-v=\"2\">20.0%</td>"), "{h}");
         assert!(h.contains("<td>main (w.volt:1)</td><td class=\"p\" data-v=\"0\">0.0%</td>"), "{h}");
-        assert!(html(Path::new("/x/w"), &Stats::default()).contains("No samples"));
+        assert!(html(Path::new("/x/w"), &Stats::default(), 10).contains("No samples"));
+        assert_eq!(esc("it's"), "it&#39;s");
+    }
+
+    #[test]
+    fn html_folds_tiny_paths() {
+        // 5000 samples: one hot path, and 3000 callees of main with one sample each (0.02%)
+        let mut s = Stats { n: 5000, ..Default::default() };
+        s.paths.insert(vec!["main".into(), "hot".into()], 2000);
+        for i in 0..3000 {
+            s.paths.insert(vec!["main".into(), format!("f{i}")], 1);
+        }
+        let h = html(Path::new("/x/w"), &s, 10);
+        assert!(h.contains(">hot</div>") && !h.contains(">f17</div>"), "{h}");
+        assert!(h.contains("title=\"main → other (3000)&#10;total 60.0% (3000 samples), self 60.0%\">other (3000)</div>"), "{h}");
+        assert!(h.len() < 10_000, "{} bytes", h.len());
+    }
+
+    #[test]
+    fn folded_stacks() {
+        let mut s = Stats { n: 10, ..Default::default() };
+        s.paths.insert(vec!["main".into(), "work".into(), "mix".into()], 7);
+        s.paths.insert(vec!["main".into(), "a closure@m.volt:3:4".into()], 3);
+        assert_eq!(folded(&s), "main;work;mix 7\nmain;a closure@m.volt:3:4 3\n");
     }
 }
