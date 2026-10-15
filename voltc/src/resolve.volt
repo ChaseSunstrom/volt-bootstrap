@@ -1157,11 +1157,13 @@ attach fn unlink_union_globals(this: checker&) -> void {
     if (this.opts.lib != null) {
         return;
     }
-    // the scan's global() calls are undone after it: a global it reaches (an untyped initializer
-    // naming another) gets its linkage when it's really used, after the packages are settled
+    // the scan's global() calls are undone after it, and use_fn does nothing during it: a global or
+    // fn it reaches (an untyped initializer naming another, or a fn value) gets its linkage when it's
+    // really used, after the packages are settled
     val n0 = this.ir.globals.len;
     var gc0 = copy this.global_c;
     var gone: std::vec<str> = {};
+    this.scanning = true;
     for (p&) in this.opts.linked.items() {
         val pkg = *p;
         if (has_name(&gone, pkg)) {
@@ -1173,13 +1175,15 @@ attach fn unlink_union_globals(this: checker&) -> void {
         put(&this.warnings, move d);
         put(&gone, pkg);
     }
+    this.scanning = false;
     while (this.ir.globals.len > n0) {
         this.ir.globals.pop();
     }
     this.global_c = move gc0;
     // the packages that use one built from source. ponytail: "uses" is a path starting with its name
-    // in the package's text (names_pkg; a string holding one counts too): a false match only costs
-    // that package its library
+    // in the package's code (names_pkg), not resolved: a package named like another's module (fmt,
+    // json) matches std's fmt::x too. A false match only costs that package its library (built from
+    // source); resolve the paths if that bites
     var more = gone.len > 0;
     while (more) {
         more = false;
@@ -1218,32 +1222,25 @@ attach fn pkg_names(this: checker&, pkg: str, other: str) -> bool {
     return false;
 }
 
-// does code (outside // comments) start a path with package pkg: pkg::x, use pkg::{...}?
+// does the code start a path with package pkg (pkg::x, use pkg::{...})? Lexed, so comments and
+// strings don't count; a file that doesn't lex (already reported) counts as naming it
 fn names_pkg(text: str, pkg: str) -> bool {
-    var i: usize = 0;
-    while (i < text.len) {
-        val c = text[i];
-        if (c == '/' && i + 1 < text.len && text[i + 1] == '/') {
-            while (i < text.len && text[i] != '\n') {
-                i += 1;
+    val toks = lex(text, 0) catch |e| { return true; };
+    for (i) in 1..toks.len {
+        var sep = false;
+        match (toks.at(i).tok) {
+            .PUNCT(p) => { sep = p == "::"; },
+            default => {},
+        }
+        if (sep) {
+            match (toks.at(i - 1).tok) {
+                .IDENT(n) => {
+                    if (n == pkg) {
+                        return true;
+                    }
+                },
+                default => {},
             }
-        } else if (ident_char(c)) {
-            var j = i;
-            while (j < text.len && ident_char(text[j])) {
-                j += 1;
-            }
-            if (text[i..j] == pkg) {
-                var k = j;
-                while (k < text.len && (text[k] == ' ' || text[k] == '\t')) {
-                    k += 1;
-                }
-                if (k + 1 < text.len && text[k] == ':' && text[k + 1] == ':') {
-                    return true;
-                }
-            }
-            i = j;
-        } else {
-            i += 1;
         }
     }
     return false;

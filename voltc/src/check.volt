@@ -447,6 +447,7 @@ struct checker {
     // per fn instance: used yet (use_fn)? queue: used ones whose bodies haven't been checked (gen_fn)
     used: std::vec<bool> = {};
     queue: std::vec<u32> = {};
+    scanning: bool = false; // unlink_union_globals is typing globals: use_fn marks nothing
     cx: fn_cx;
     global_c: std::map<u32, global_ref> = {};
     used_c_names: std::map<str, u32> = {};

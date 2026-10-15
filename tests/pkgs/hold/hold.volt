@@ -10,6 +10,13 @@ public struct holder {
     n: i32;
 }
 
+public fn twice(x: i32) -> i32 {
+    return x * 2;
+}
+
+// an untyped fn value before held: working out its type reaches twice while hold is still linked
+public val cb = twice;
+
 // untyped and before held: working out its type reaches held first, before hold is known to be built
 // from source
 public var spare = held;
