@@ -9,7 +9,8 @@ log=${1:-test.log}
 total() { grep -aoE "[0-9]+ $1" "$log" | awk '{ n += $1 } END { print n + 0 }'; }
 echo "::notice title=tests::$(total passed) passed, $(total failed) failed, $(total ignored) ignored"
 [ "${2:-failure}" = success ] && exit 0
-oneline() { sed ':a;N;$!ba;s/%/%25/g;s/\r//g;s/\n/%0A/g'; }
+# lines joined as one annotation (awk: macOS's sed has no GNU :a;N loop)
+oneline() { awk 'BEGIN { ORS = "%0A" } { gsub(/%/, "%25"); gsub(/\r/, ""); print }'; }
 tests=$(grep -aE '^test .* \.\.\. FAILED$' "$log" | sed 's/^test //; s/ \.\.\. FAILED$//' | head -40 | paste -sd ' ' -)
 [ -n "$tests" ] && echo "::error title=failed tests::$tests"
 golden=$(grep -aE '^[A-Za-z]?:?[/\\].*\.volt: (exit|want errors)' "$log" | head -40 | oneline)
