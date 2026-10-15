@@ -255,6 +255,51 @@ fn cursor_offset(c: clang::CXCursor) -> u32 {
     return off;
 }
 
+// whether a parameter has a default argument: a = outside every ( ) [ ] { } and template < > of its
+// own tokens (a template's own = is outside its extent). A < opens a template list only at the top
+// or inside another; in parentheses it is a comparison (decltype(1 < 2)).
+fn cursor_has_default(c: clang::CXCursor) -> bool {
+    val tu = clang::clang_Cursor_getTranslationUnit(c);
+    var toks: clang::CXToken* = null;
+    var n: u32 = 0;
+    clang::clang_tokenize(tu, clang::clang_getCursorExtent(c), &toks, &n);
+    var open: std::string = {}; // the brackets still open, one char each
+    var found = false;
+    for (i) in 0..@cast<usize>(n) {
+        if (found) {
+            continue;
+        }
+        val t = cx_str(clang::clang_getTokenSpelling(tu, toks[i]));
+        val s = t.as_str();
+        var top: u8 = 0;
+        if (open.len() > 0) {
+            top = open.as_str()[open.len() - 1];
+        }
+        if (s == "(" || s == "[" || s == "{" || (s == "<" && (open.len() == 0 || top == '<'))) {
+            open.push(s[0]);
+        } else if (s == ")" || s == "]" || s == "}") {
+            // a close drops any unclosed < above its opener, then the opener
+            while (open.len() > 0 && open.as_str()[open.len() - 1] == '<') {
+                open.pop();
+            }
+            if (open.len() > 0) {
+                open.pop();
+            }
+        } else if ((s == ">" || s == ">>") && top == '<') {
+            open.pop();
+            if (s == ">>" && open.len() > 0 && open.as_str()[open.len() - 1] == '<') {
+                open.pop();
+            }
+        } else if (s == "=" && open.len() == 0) {
+            found = true;
+        }
+    }
+    if (toks != null) {
+        clang::clang_disposeTokens(tu, toks, n);
+    }
+    return found;
+}
+
 // the direct children of c
 fn children(c: clang::CXCursor) -> std::vec<clang::CXCursor> {
     var out: std::vec<clang::CXCursor> = {};

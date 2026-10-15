@@ -2352,22 +2352,8 @@ attach fn callable_of(this: cpp_gen&, generics: str, head: str, has_params: bool
             this.per_use(head, call, self_arg != null);
             return;
         }
-        // a default argument shows up as an expression under the parameter, after its name (one in
-        // its type, std::array<int, 3>'s 3, comes before; an array reference's size, int (&a)[3]'s 3,
-        // after it, first: not one an alias names, Arr &a, whose size is in the alias)
-        var has_default = false;
-        val written = clang::clang_getPointeeType(clang::clang_getCursorType(p)).kind;
-        var size_first = clang::clang_getCanonicalType(clang::clang_getPointeeType(clang::clang_getCursorType(p))).kind == clang::CXType_ConstantArray && written != clang::CXType_Typedef && written != clang::CXType_Elaborated;
-        for (ch&) in children(p).items() {
-            if (clang::clang_isExpression(clang::clang_getCursorKind(*ch)) != 0 && cursor_offset(*ch) > cursor_offset(p)) {
-                if (size_first) {
-                    size_first = false;
-                } else {
-                    has_default = true;
-                }
-            }
-        }
-        if (has_default) {
+        // a default argument is a top-level = in the parameter's tokens
+        if (cursor_has_default(p)) {
             optional += 1;
         } else {
             optional = 0;

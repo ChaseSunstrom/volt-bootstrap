@@ -1942,6 +1942,23 @@ fn cpp_params() {
 }
 
 #[test]
+fn cpp_defaults() {
+    // a default argument is a top-level = in the parameter's tokens: an array reference's bound, a
+    // std::array's size and a decltype's expression are not one, a template's = is outside the parameter
+    let e = Env::new("cpp-defaults");
+    let want = "ref 1 2\nalias 8\nexpr 3 5\ndt 10 11\ncmp 1 0\nplain 4\ntp 9\ntail 8\n";
+    for backend in ["c", "llvm"] {
+        assert_eq!(ok(e.voltc(&["run", "cpp_defaults.volt", "--backend", backend]), "voltc run cpp_defaults.volt"), want, "C++ default arguments ({backend})");
+    }
+    let shown = Command::new(&e.voltc).args(["check", "cpp_defaults.volt", "--std"]).arg(Path::new(ROOT).join("std")).current_dir(Path::new(ROOT).join("tests/interop")).env("VOLT_SHOW_CPP", "1").output().unwrap();
+    let src = String::from_utf8_lossy(&shown.stderr);
+    for none in ["fn ref_plain()", "fn arr()", "fn dt_plain()"] {
+        assert!(!src.contains(none), "{none} has no default: {src}");
+    }
+    assert!(src.contains("fn ref_alias()") && src.contains("fn expr()") && src.contains("fn dt()") && src.contains("fn cmp()"), "the defaulted forms: {src}");
+}
+
+#[test]
 fn cpp_params_refused() {
     // what those parameters don't take: another array size, a closure for a function pointer; and a
     // result that would point into a std::string&'s copy, left out of the declarations and an error
