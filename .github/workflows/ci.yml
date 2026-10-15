@@ -27,6 +27,8 @@ env:
   LLVM_VERSION: 23
   # the release Intel macOS builds and Windows downloads
   LLVM_RELEASE: 23.1.3
+  # llvm-mingw's release for Windows on arm64's C compiler
+  LLVM_MINGW: "20260922"
 
 jobs:
   linux:
@@ -65,6 +67,7 @@ jobs:
         run: npm install --no-save --no-package-lock --no-audit --no-fund @types/node
       - name: Build (no warnings)
         run: |
+          set -o pipefail
           cargo build 2>&1 | tee build.log
           ! grep -q '^warning' build.log
       - name: Test
@@ -113,6 +116,7 @@ jobs:
         run: npm install --no-save --no-package-lock --no-audit --no-fund @types/node
       - name: Build (no warnings)
         run: |
+          set -o pipefail
           cargo build 2>&1 | tee build.log
           ! grep -q '^warning' build.log
       - name: Test
@@ -158,17 +162,18 @@ jobs:
         with:
           path: ~/llvm
           key: llvm-${{ env.LLVM_RELEASE }}-macos-x86-64
+      # (no DYLD_LIBRARY_PATH: rustc would load this libLLVM for its own; voltc finds it by rpath)
       - name: Use LLVM
         run: |
           echo "LLVM_CONFIG=$HOME/llvm/bin/llvm-config" >> "$GITHUB_ENV"
           echo "C_INCLUDE_PATH=$HOME/llvm/include" >> "$GITHUB_ENV"
-          echo "DYLD_LIBRARY_PATH=$HOME/llvm/lib" >> "$GITHUB_ENV"
           mkdir -p "$HOME/lld-bin" && ln -sf "$HOME/llvm/bin/ld.lld" "$HOME/llvm/bin/llvm-nm" "$HOME/lld-bin/"
           echo "$HOME/lld-bin" >> "$GITHUB_PATH"
       - name: Install Node's types
         run: npm install --no-save --no-package-lock --no-audit --no-fund @types/node
       - name: Build (no warnings)
         run: |
+          set -o pipefail
           cargo build 2>&1 | tee build.log
           ! grep -q '^warning' build.log
       - name: Test
@@ -197,6 +202,16 @@ jobs:
       # the files as they are in the repo (the runner's git would turn LF into CRLF)
       - run: git config --global core.autocrlf false
       - uses: actions/checkout@v5
+      # arm64: the runner's MinGW is x86-64 (its linker can't read arm64 import libraries), so the C
+      # compiler is llvm-mingw's arm64 one (before LLVM: PATH's clang stays LLVM's own)
+      - name: Install an arm64 MinGW
+        if: matrix.arch == 'arm64'
+        run: |
+          curl -sSfL -o mingw.zip "https://github.com/mstorsjo/llvm-mingw/releases/download/$LLVM_MINGW/llvm-mingw-$LLVM_MINGW-ucrt-aarch64.zip"
+          unzip -q mingw.zip -d /c && rm mingw.zip
+          echo "C:/llvm-mingw-$LLVM_MINGW-ucrt-aarch64/bin" >> "$GITHUB_PATH"
+          echo "CC=aarch64-w64-mingw32-clang" >> "$GITHUB_ENV"
+          echo "CXX=aarch64-w64-mingw32-clang++" >> "$GITHUB_ENV"
       - name: Install LLVM
         run: |
           curl -sSfL -o llvm.tar.xz "https://github.com/llvm/llvm-project/releases/download/llvmorg-$LLVM_RELEASE/clang+llvm-$LLVM_RELEASE-${{ matrix.triple }}.tar.xz"
@@ -211,6 +226,7 @@ jobs:
         run: npm install --no-save --no-package-lock --no-audit --no-fund @types/node
       - name: Build (no warnings)
         run: |
+          set -o pipefail
           cargo build 2>&1 | tee build.log
           ! grep -q '^warning' build.log
       - name: Test
