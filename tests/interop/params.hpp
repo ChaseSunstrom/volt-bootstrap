@@ -98,7 +98,8 @@ template <class S> int count_all(const std::vector<S> &v) { return (int)v.size()
 template <class S> int deref(S *p) { return (int)p->size(); }
 template <class S> S echo(const S &s) { return s; }
 }
-// nested std::vectors, by value and const& (a Volt slice of slices, each level copied), written back
+// nested std::vectors, by value, const& and && (a Volt slice of slices, each level copied; of ints,
+// doubles and signed chars, whose Volt form is the same on every target), written back
 // as text so a wrong split or order shows; a mutable one, one of bools and one of a class stay per
 // use
 namespace nv {
@@ -107,6 +108,9 @@ inline std::string rows(const std::vector<std::vector<int>> &v) { std::string s 
 inline std::string shape(std::vector<std::vector<int>> v) { return rows(v); }
 inline std::string shape_ref(const std::vector<std::vector<int>> &v) { return rows(v); }
 inline std::string shape3(const std::vector<std::vector<std::vector<int>>> &v) { std::string s = "["; for (std::size_t i = 0; i < v.size(); i++) s += (i ? "," : "") + rows(v[i]); return s + "]"; }
+inline std::string shape_rv(std::vector<std::vector<int>> &&v) { std::vector<std::vector<int>> mine(std::move(v)); return rows(mine); }
+inline double weigh(const std::vector<std::vector<double>> &v) { double s = 0; for (std::size_t i = 0; i < v.size(); i++) for (std::size_t j = 0; j < v[i].size(); j++) s += v[i][j] * (double)(i + 1); return s; }
+inline std::string spell(std::vector<std::vector<signed char>> v) { std::string s; for (std::size_t i = 0; i < v.size(); i++) { if (i) s += '/'; s.append(v[i].begin(), v[i].end()); } return s; }
 inline int widen(std::vector<std::vector<int>> &v) { v.push_back(std::vector<int>()); return (int)v.size(); }
 inline int flags(const std::vector<std::vector<bool>> &v) { return (int)v.size(); }
 inline int boxes(const std::vector<std::vector<Shape>> &v) { return (int)v.size(); }
