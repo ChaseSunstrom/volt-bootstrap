@@ -1918,7 +1918,7 @@ attach fn union_static(this: checker&, u: u32, name: str) -> bool {
 
 // x.name() on a trait union with no members: no value reaches it, so the call is checked against
 // the trait's declaration of name and lowers to unreachable (after the receiver, for its effects)
-attach fn empty_union_call(this: checker&, r: tval, u: u32, name: str, args: std::vec<expr>&, span: span) -> compile_error!tval {
+attach fn empty_union_call(this: checker&, r: tval, u: u32, name: str, gargs: std::vec<garg>&, args: std::vec<expr>&, span: span) -> compile_error!tval {
     val td = this.ui(u).trait_decl;
     val e = this.new_env({ ns: this.dl(td).ns });
     var stmts: std::vec<u32> = {};
@@ -1926,14 +1926,21 @@ attach fn empty_union_call(this: checker&, r: tval, u: u32, name: str, args: std
         put(&stmts, r.c);
     }
     var found = false;
+    var named: u64? = null; // the argument count of a fn of that name, when none takes args.len
     var rt = VOID;
     match (this.item_of(td).kind) {
         .TRAIT(n, fs&) => {
             for (f&) in fs.items() {
                 match (f.kind) {
                     .FN(g&) => {
+                        if (!found && g.name == name && arg_count(g) != @cast<u64>(args.len)) {
+                            named = arg_count(g);
+                        }
                         if (!found && g.name == name && arg_count(g) == @cast<u64>(args.len)) {
                             found = true;
+                            if (gargs.len > f.generics.len) {
+                                return fail(span, fmt("too many generic arguments for '{}'", S(name)));
+                            }
                             if (g.ret) {
                                 rt = try this.resolve_type(&g.ret, e);
                             }
@@ -1957,6 +1964,9 @@ attach fn empty_union_call(this: checker&, r: tval, u: u32, name: str, args: std
         },
         default => {},
     }
+    if (!found && named != null) {
+        return fail(span, fmt3("'{}' takes {} arguments, found {}", S(name), unum(named ?? 0), unum(@cast<u64>(args.len))));
+    }
     if (!found) {
         return fail(span, fmt2("{} has no method '{}'", S(this.ui(u).name), S(name)));
     }
@@ -1972,7 +1982,7 @@ attach fn empty_union_call(this: checker&, r: tval, u: u32, name: str, args: std
 // coerce to the first member's result type
 attach fn union_call(this: checker&, r: tval, u: u32, name: str, gargs: std::vec<garg>&, args: std::vec<expr>&, want: u32?, span: span) -> compile_error!tval {
     if (this.ui(u).members.len == 0) {
-        return this.empty_union_call(r, u, name, args, span);
+        return this.empty_union_call(r, u, name, gargs, args, span);
     }
     val stat = this.union_static(u, name);
     val uty = this.t.intern(tyk::TRAIT_UNION(u));
