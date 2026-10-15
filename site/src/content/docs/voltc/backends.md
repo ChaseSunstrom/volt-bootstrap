@@ -50,6 +50,13 @@ static v_point v_add(v_point a, v_point b) {
 statement expressions, `__int128` and zero-length arrays, which gcc and clang (Apple's, and clang on
 Windows) take and MSVC's `cl` doesn't, so `cl` isn't a C compiler voltc supports.
 
+An `f128` is the C compiler's `__float128`, or `long double` where that is binary128 (aarch64
+Linux). Where C has neither (arm64 macOS, whose `long double` is a `double`), it's 16 bytes of bits
+and each operation on it a call to the soft quad routines LLVM calls there too (`std::softfloat`'s,
+under compiler-rt's names): the C writes every `f128` operation as a `volt_q_*` macro, a plain
+operator or cast where the type is native. `--cc -DVOLT_SOFT_F128` takes the soft path anywhere.
+`%` on an `f128` goes through a `double` in C.
+
 ## LLVM
 
 The LLVM backend generates native code through LLVM's C API, with no C compiler in between (`cc`

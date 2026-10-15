@@ -448,7 +448,10 @@ fn runtime_names(out: std::map<str, bool>&) -> void {
                 while (e < t.len && (is_alpha(t[e]) || is_digit(t[e]) || t[e] == '_')) {
                     e += 1;
                 }
-                out.put(t[i..e], true);
+                // a macro's name (volt_q_add, volt_f128) is no symbol
+                if (i < 8 || t[i - 8..i] != "#define ") {
+                    out.put(t[i..e], true);
+                }
                 i = e;
             } else {
                 i += 1;
