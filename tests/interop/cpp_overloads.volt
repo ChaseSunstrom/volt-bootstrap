@@ -12,7 +12,13 @@ fn main() -> void {
     std::println("new {} {} {} {}", a.get(), a.name(), b.get(), b.name());
     std::println("get {} {}", a.get(), a.get_const());
     std::println("add {} {}", a.add(1), a.add_long_long(1));
-    val p: cpp::ov::Point = { x: 3 };
+    var p: cpp::ov::Point = { x: 3 };
     std::println("scaled {} {}", p.scaled(2), p.scaled_long_long(2));
+    std::println("call {} {} peek {} {}", p.op_call(1), p.op_call_const(1), p.peek(), p.peek_nonconst());
+    // an && method takes the handle by value: a borrowed one's object is copied, not emptied
+    val bx = cpp::ov::Box::new(7);
+    val c = cpp::ov::Crate::new(8);
+    std::println("open {} {} {}", bx.open(), c.as_Box().open_rref(), c.peek());
+    std::println("open {}", bx.open_rref());
     std::println("taken {} {}", cpp::taken::which(3), cpp::taken::which_long_long(3));
 }

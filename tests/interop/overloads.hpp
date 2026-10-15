@@ -30,11 +30,40 @@ struct Point {
     int x;
     int scaled(long k) const { return x * (int)k; }
     int scaled(long long k) const { return -x * (int)k; }
+    int operator()(int k) { return x + k; }
+    int operator()(int k) const { return x - k; }
+    // the const one first: the other is get_nonconst
+    int peek() const { return 1; }
+    int peek() { return 2; }
+};
+// an && method consumes the object (C++ moves from it); on a borrowed handle, from a copy
+class Box {
+  public:
+    explicit Box(int n) : s_(std::to_string(n)) {}
+    virtual ~Box() {}
+    std::string open() & { return "lref " + s_; }
+    std::string open() && { std::string r = "rref " + s_; s_ = "gone"; return r; }
+    std::string peek() const { return s_; }
+  private:
+    std::string s_;
+};
+class Crate : public Box {
+  public:
+    explicit Crate(int n) : Box(n) {}
 };
 }
 // a real function with the name the alias would take keeps it, though declared after
 namespace taken {
 inline int which(long) { return 1; }
 inline int which(long long) { return 2; }
+inline int which_long_long(long long) { return 3; }
+}
+// ...but not one in a block of the namespace opened again after the alias was written: that one is
+// a left-out comment
+namespace again {
+inline int which(long) { return 1; }
+inline int which(long long) { return 2; }
+}
+namespace again {
 inline int which_long_long(long long) { return 3; }
 }

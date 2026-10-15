@@ -1719,7 +1719,7 @@ fn cpp_derive() {
     // override reaches the base implementation and protected members, the Volt value goes with the
     // C++ object; and none of it needs RTTI
     let e = Env::new("cpp-derive");
-    let want = "[ok 5 boxy] clicks 202 shown true\n[lbl 5] 10 true\n[x 5 boxy] area 10 poke 41 id 7\nmine 5 log:xlbl true\npress 11 [knob] ring 60\nboxy 5 gone\n";
+    let want = "[ok 5 boxy] clicks 202 shown true\n[lbl 5] 10 true\n[x 5 boxy] area 10 poke 41 id 7\nmine 5 log:xlbl true\npress 11 [knob] ring 60\ncount 1 2\nboxy 5 gone\n";
     for backend in ["c", "llvm"] {
         assert_eq!(ok(e.voltc(&["run", "cpp_derive.volt", "--backend", backend]), "voltc run cpp_derive.volt"), want, "C++ derive ({backend})");
     }
@@ -1861,7 +1861,7 @@ fn cpp_versions() {
     // headers for C++98 (what C++17 removed: auto_ptr, throw(), register), 11, 17, 20 and 23 in one
     // program, each read and compiled under its own standard
     let e = Env::new("cpp-versions");
-    let want = "5 42\n0 v98::Shape\n49 3 2\n4 1 107\n4 11\n5 15 5\n";
+    let want = "5 42\n0 v98::Shape\n1 2 1 2\n49 3 2\n4 1 107\n4 11\n5 15 5\n";
     for backend in ["c", "llvm"] {
         assert_eq!(ok(e.voltc(&["run", "cpp_versions.volt", "--backend", backend]), "voltc run cpp_versions.volt"), want, "C++ versions ({backend})");
     }
@@ -1966,13 +1966,18 @@ fn cpp_overloads() {
     // types and calling exactly their own overload, for free functions, methods and constructors; a
     // real declaration keeps a name an alias would take, and the alias is a left-out comment
     let e = Env::new("cpp-overloads");
-    let want = "which 1 2\nletter 1 2 3\nf 4 42 40 42\nnew 5 long 10 long long\nget 5 -5\nadd 6 16\nscaled 6 -6\ntaken 1 3\n";
+    let want = "which 1 2\nletter 1 2 3\nf 4 42 40 42\nnew 5 long 10 long long\nget 5 -5\nadd 6 16\nscaled 6 -6\ncall 4 2 peek 1 2\nopen lref 7 rref 8 8\nopen rref 7\ntaken 1 3\n";
     for backend in ["c", "llvm"] {
         assert_eq!(ok(e.voltc(&["run", "cpp_overloads.volt", "--backend", backend]), "voltc run cpp_overloads.volt"), want, "C++ overloads ({backend})");
     }
     let shown = Command::new(&e.voltc).args(["check", "cpp_overloads.volt", "--std"]).arg(Path::new(ROOT).join("std")).current_dir(Path::new(ROOT).join("tests/interop")).env("VOLT_SHOW_CPP", "1").output().unwrap();
     let src = String::from_utf8_lossy(&shown.stderr);
     assert!(src.contains("// left out: int taken::which(long long) (Volt can't tell it from an overload declared before it)"), "the alias a real declaration took: {src}");
+    assert!(src.contains("// left out: int again::which_long_long(long long) (an alias for an overload Volt can't tell apart has its name)"), "a real declaration in a later block: {src}");
+    // an && method consumes the handle
+    let o = e.voltc(&["check", "cpp_overloads_moved.volt"]);
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(!o.status.success() && err.contains("cpp_overloads_moved.volt:7") && err.contains("moved"), "a handle used after an && method: {err}");
 }
 
 #[test]

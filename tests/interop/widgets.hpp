@@ -39,6 +39,9 @@ public:
 protected:
     Widget() : name_("unnamed") {}
     void bump(int n) { clicks_ += n * 100; }
+    // a protected const method and its non-const twin (count, count_nonconst)
+    int count() const { return 1; }
+    int count() { return 2; }
     std::string name_;
 
 private:

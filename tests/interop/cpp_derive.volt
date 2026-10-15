@@ -79,4 +79,5 @@ fn main() -> void {
     val k: knob = { n: 10 };
     var kb = cpp::gui::Button::derive(move k, "k");
     std::println("press {} {} ring {}", cpp::gui::press_it(&kb), cpp::gui::button_text(&kb), kb.ring());
+    std::println("count {} {}", w.count(), w.count_nonconst());
 }

@@ -2397,10 +2397,14 @@ attach fn callable_of(this: cpp_gen&, generics: str, head: str, has_params: bool
             dot = i;
         }
     }
+    if (self_arg != null && dot == call.len && starts_with(call, "{0}(")) {
+        // a call operator on the object itself: {0}(...)
+        dot = 3;
+    }
     if (self_arg != null && dot < call.len) {
         if (clang::clang_CXXMethod_isConst(fn_cursor) != 0) {
             my_call = fmt2("volt_cpp_const({}){}", S(call[0..dot]), S(call[dot..call.len]));
-        } else if (clang::clang_Type_getCXXRefQualifier(clang::clang_getCursorType(fn_cursor)) == clang::CXRefQualifier_RValue) {
+        } else if (clang::clang_Type_getCXXRefQualifier(clang::clang_getCursorType(fn_cursor)) == clang::CXRefQualifier_RValue && !starts_with(call, "volt_cpp_take<")) {
             my_call = fmt2("VOLT_MOVE({}){}", S(call[0..dot]), S(call[dot..call.len]));
         }
     }
@@ -2429,7 +2433,7 @@ attach fn callable_of(this: cpp_gen&, generics: str, head: str, has_params: bool
             // (Volt's i8 is C++'s signed char, not char); in an alias every argument
             val pt = clang::clang_getCursorType(*parms.at(i));
             val pc = canon(pt);
-            if ((suffix != null || is_number(pt)) && !contains(pc.as_str(), "type-parameter")) {
+            if ((suffix != null || is_number(pt)) && !dependent(pt)) {
                 call_args.append(fmt2("static_cast<{} >({})", copy pc, copy args.at(i).cpp).as_str());
             } else {
                 call_args.append(args.at(i).cpp.as_str());
@@ -2456,7 +2460,11 @@ attach fn callable_of(this: cpp_gen&, generics: str, head: str, has_params: bool
             // long long), which makes this one an alias; else (a declaration again, or C++ can't
             // tell them apart either) left out
             val prev = this.sigs.get(key.as_str());
-            if (!aliased && prev != null) {
+            if (!aliased && prev != null && *prev == "#alias") {
+                // an alias an earlier block of this namespace wrote has the name
+                aliased = true;
+                this.line(fmt("// left out: {} (an alias for an overload Volt can't tell apart has its name)", cpp_decl_text(fn_cursor)).as_str());
+            } else if (!aliased && prev != null) {
                 if (*prev != sig.as_str()) {
                     aliased = true;
                     var sfx: std::string = {};
@@ -2467,13 +2475,19 @@ attach fn callable_of(this: cpp_gen&, generics: str, head: str, has_params: bool
                         sfx.append(name_words(canon(clang::clang_getCursorType(*parms.at(i))).as_str()).as_str());
                     }
                     val bar = last_bar(*prev);
-                    if (quals.len() > 0 && (*prev)[bar + 1..prev->len] != quals.as_str()) {
-                        if (sfx.len() > 0) {
-                            sfx.push('_');
+                    if ((*prev)[0..bar] == sig.as_str()[0..last_bar(sig.as_str())]) {
+                        // only its qualifiers differ: get_const, or get_nonconst after a const get
+                        sfx = {};
+                        if (quals.len() > 0) {
+                            sfx.append(quals.as_str());
+                        } else {
+                            sfx.append("nonconst");
                         }
-                        sfx.append(quals.as_str());
                     }
+                    // (the alias takes the C++ declaration's comment: the forms after it keep it)
+                    val keep = copy this.note;
                     this.callable_of(generics, head, has_params, fn_cursor, copy r, call, self_arg, extra, tparams, what, sfx.as_str());
+                    this.note = keep;
                 }
             }
             drop += 1;
@@ -2599,6 +2613,16 @@ fn last_bar(s: str) -> usize {
     return at;
 }
 
+// does a type depend on a template's parameters (a type one, T, or a number one, std::array<int, N>)?
+// Its spelling means nothing where the wrapper is
+fn dependent(t: clang::CXType) -> bool {
+    var b = clang::clang_getCanonicalType(t);
+    if (b.kind == clang::CXType_LValueReference || b.kind == clang::CXType_RValueReference) {
+        b = clang::clang_getPointeeType(b);
+    }
+    return contains(canon(t).as_str(), "type-parameter") || clang::clang_Type_getSizeOf(b) == @cast<i64>(clang::CXTypeLayoutError_Dependent);
+}
+
 // a C++ number type (bool, a char, an integer or a floating type), through typedefs
 fn is_number(t: clang::CXType) -> bool {
     val k = @cast<i64>(clang::clang_getCanonicalType(t).kind);
@@ -2614,6 +2638,7 @@ attach fn flush_aliases(this: cpp_gen&, from: usize) -> void {
         val a = this.aliases.at(i);
         if (this.written.get(a.key.as_str()) == null) {
             this.written.put(this.c.intern(copy a.key), true);
+            this.sigs.put(this.c.intern(copy a.key), "#alias");
             this.out.append(a.text.as_str());
         } else if (left.as_str() != a.decl.as_str()) {
             left = copy a.decl;
@@ -2629,7 +2654,12 @@ attach fn flush_aliases(this: cpp_gen&, from: usize) -> void {
 attach fn fn_key(this: cpp_gen&, head: str, types: str) -> std::string {
     var key = copy this.scope;
     key.push('|');
-    key.append(head);
+    // (this: T& and an && method's this: T are one receiver to Volt)
+    if (ends_with(head, "&")) {
+        key.append(head[0..head.len - 1]);
+    } else {
+        key.append(head);
+    }
     key.append(types);
     return key;
 }
@@ -3751,8 +3781,21 @@ attach fn member_list(this: cpp_gen&, c: clang::CXCursor, self_ty: str, cpp_self
             val head = fmt2("attach fn {}(static this: {}", copy vn_m, S(self_ty));
             this.callable(my_gen.as_str(), head.as_str(), true, *ch, ret, fmt2("{}::{}(", S(cpp_self), copy callee).as_str(), null, my_extra.as_str(), &my_tp, what.as_str());
         } else {
-            val head = fmt2("attach fn {}(this: {}&", copy vn_m, S(self_ty));
-            this.callable(my_gen.as_str(), head.as_str(), true, *ch, ret, fmt2("{}.{}(", S(obj), copy callee).as_str(), self_arg, my_extra.as_str(), &my_tp, what.as_str());
+            var head = fmt2("attach fn {}(this: {}&", copy vn_m, S(self_ty));
+            var me = S(self_arg);
+            var on = S(obj);
+            if (self_arg == "this.cpp" && gen.len == 0 && clang::clang_Type_getCXXRefQualifier(clang::clang_getCursorType(*ch)) == clang::CXRefQualifier_RValue) {
+                // an && method on a class held by handle consumes the object, as a by-value this
+                // does the handle: C++ moves from it (a copy, when the handle only borrows it)
+                this.ensure_traits(q);
+                val tr = this.traits.get(q);
+                if (tr == null || tr->movable || tr->copyable) {
+                    head = fmt2("attach fn {}(this: {}", copy vn_m, S(self_ty));
+                    me = S("@cast<void*>(&this)");
+                    on = fmt2("volt_cpp_take<{}, {}>({{0}})", S(q), S(cpp_bool(tr == null || tr->copyable)));
+                }
+            }
+            this.callable(my_gen.as_str(), head.as_str(), true, *ch, ret, fmt2("{}.{}(", copy on, copy callee).as_str(), me.as_str(), my_extra.as_str(), &my_tp, what.as_str());
         }
     }
 }
@@ -4579,6 +4622,7 @@ attach fn director(this: cpp_gen&, c: clang::CXCursor, vn: str, q: str, maps: st
     var cpp = S("");
     val obj = fmt("volt_cpp_obj< ::{}>({{0}})", S(q));
     val dir = fmt2("volt_dir_of<{}, ::{}>({{0}}, {{1}})", copy bn, S(q));
+    var bnames: std::map<str, bool> = {};
     for (v&) in vs.items() {
         val mn = cursor_name(v.m);
         val acc = clang::clang_getCXXAccessSpecifier(v.m);
@@ -4591,8 +4635,15 @@ attach fn director(this: cpp_gen&, c: clang::CXCursor, vn: str, q: str, maps: st
             this.callable("", h.as_str(), true, v.m, ret, fmt3("{}.{}::{}(", copy obj, S(q), copy mn).as_str(), "this.cpp", "", &none, fmt2("{}::{}", S(q), copy mn).as_str());
         } else {
             this.callable("", h.as_str(), true, v.m, ret, fmt2("{}.volt_base_{}(", copy dir, copy mn).as_str(), "this.cpp, this.volt", "", &none, fmt2("{}::{}", S(q), copy mn).as_str());
-            cpp.append(fmt2("    template <class... A>\n    decltype(auto) volt_base_{}(A &&...a) {{ return ::{}::", copy mn, S(q)).as_str());
-            cpp.append(fmt("{}(std::forward<A>(a)...); }\n", copy mn).as_str());
+            // and a const twin, so a const method's call (on volt_cpp_const) picks C++'s const one
+            if (bnames.get(mn.as_str()) == null) {
+                bnames.put(this.c.intern(copy mn), true);
+                val cqs: str[2] = { "", " const" };
+                for (cq) in cqs {
+                    cpp.append(fmt3("    template <class... A>\n    decltype(auto) volt_base_{}(A &&...a){} {{ return ::{}::", copy mn, S(cq), S(q)).as_str());
+                    cpp.append(fmt("{}(std::forward<A>(a)...); }\n", copy mn).as_str());
+                }
+            }
         }
     }
     // a protected field is reached through a pointer to it as a member (which the subclass can
@@ -4609,7 +4660,10 @@ attach fn director(this: cpp_gen&, c: clang::CXCursor, vn: str, q: str, maps: st
             this.callable("", fmt2("attach fn {}(this: {}&", vname(mn.as_str()), S(vn)).as_str(), true, *ch, ret, fmt2("{}.volt_p_{}(", copy dir, copy mn).as_str(), "this.cpp, this.volt", "", &none, fmt2("{}::{}", S(q), copy mn).as_str());
             if (pnames.get(mn.as_str()) == null) {
                 pnames.put(this.c.intern(copy mn), true);
-                cpp.append(fmt2("    template <class... A>\n    decltype(auto) volt_p_{}(A &&...a) {{ return this->{}(std::forward<A>(a)...); }}\n", copy mn, copy mn).as_str());
+                val cqs: str[2] = { "", " const" };
+                for (cq) in cqs {
+                    cpp.append(fmt3("    template <class... A>\n    decltype(auto) volt_p_{}(A &&...a){} {{ return this->{}(std::forward<A>(a)...); }}\n", copy mn, S(cq), copy mn).as_str());
+                }
             }
         } else if (k == clang::CXCursor_FieldDecl && clang::clang_Cursor_isBitField(*ch) == 0) {
             this.field_accessors(*ch, vn, fmt3("({}.*{}::volt_pf_{}())", copy obj, copy bn, copy mn).as_str(), "this.cpp", "", "");
