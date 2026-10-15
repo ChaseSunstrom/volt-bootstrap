@@ -1,9 +1,14 @@
 #!/bin/sh
-# report-failures.sh LOG: what failed in a test run's log, as annotations on the run's summary page
+# report-failures.sh LOG STATUS: a test run's totals, and what failed, as annotations on the run's summary page
 # (readable through the public API, unlike the job's log): the failed tests, the golden programs
 # that failed, and the first panics with what they printed
 log=${1:-test.log}
 [ -f "$log" ] || exit 0
+# every run: how many tests passed, failed and were ignored in all, to compare systems (a system
+# that skips more than Linux does shows it here)
+total() { grep -aoE "[0-9]+ $1" "$log" | awk '{ n += $1 } END { print n + 0 }'; }
+echo "::notice title=tests::$(total passed) passed, $(total failed) failed, $(total ignored) ignored"
+[ "${2:-failure}" = success ] && exit 0
 oneline() { sed ':a;N;$!ba;s/%/%25/g;s/\r//g;s/\n/%0A/g'; }
 tests=$(grep -aE '^test .* \.\.\. FAILED$' "$log" | sed 's/^test //; s/ \.\.\. FAILED$//' | head -40 | paste -sd ' ' -)
 [ -n "$tests" ] && echo "::error title=failed tests::$tests"

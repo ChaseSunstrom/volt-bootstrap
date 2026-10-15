@@ -72,9 +72,9 @@ jobs:
           set -o pipefail
           cargo test --no-fail-fast 2>&1 | tee test.log
       # what failed, as annotations on the run's summary page
-      - name: Report failures
-        if: failure()
-        run: sh .github/report-failures.sh test.log
+      - name: Report
+        if: always()
+        run: sh .github/report-failures.sh test.log ${{ job.status }}
 
   editor:
     name: editor (grammar and extension)
@@ -119,9 +119,9 @@ jobs:
         run: |
           set -o pipefail
           cargo test --no-fail-fast 2>&1 | tee test.log
-      - name: Report failures
-        if: failure()
-        run: sh .github/report-failures.sh test.log
+      - name: Report
+        if: always()
+        run: sh .github/report-failures.sh test.log ${{ job.status }}
 
   # Intel macOS: nothing ships LLVM 23 for it (Homebrew bottles llvm only for arm64, and LLVM's
   # release has no x86-64 macOS asset), so the job builds LLVM, clang (for libclang) and lld itself,
@@ -175,9 +175,9 @@ jobs:
         run: |
           set -o pipefail
           cargo test --no-fail-fast 2>&1 | tee test.log
-      - name: Report failures
-        if: failure()
-        run: sh .github/report-failures.sh test.log
+      - name: Report
+        if: always()
+        run: sh .github/report-failures.sh test.log ${{ job.status }}
 
   # Windows: LLVM's release (MSVC ABI), whose LLVM-C.dll and libclang.dll voltc calls into
   windows:
@@ -217,6 +217,6 @@ jobs:
         run: |
           set -o pipefail
           cargo test --no-fail-fast 2>&1 | tee test.log
-      - name: Report failures
-        if: failure()
-        run: sh .github/report-failures.sh test.log
+      - name: Report
+        if: always()
+        run: sh .github/report-failures.sh test.log ${{ job.status }}
