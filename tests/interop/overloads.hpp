@@ -7,9 +7,11 @@
 namespace ov {
 inline int which(long) { return 1; }
 inline int which(long long) { return 2; }
-inline int letter(char) { return 1; }
+// char last: it's signed char's or unsigned char's twin depending on the target, so it's the one
+// that collides on every target
 inline int letter(signed char) { return 2; }
 inline int letter(unsigned char) { return 3; }
+inline int letter(char) { return 1; }
 inline int f(long x) { return (int)x; }
 inline int f(long long x, int n = 0) { return (int)x * 10 + n; }
 // the full form collides (h_long_long_int_int), the shorter one doesn't (h, with its C++ comment)

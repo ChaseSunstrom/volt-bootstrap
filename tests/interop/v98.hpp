@@ -25,6 +25,8 @@ class Shape {
     std::string name_;
 };
 inline int count_sides(const Shape &s) { return s.sides(); }
-inline int pick(char) { return 1; }
+// char last, so it collides whatever char's signedness (signed on x86-64, unsigned on arm64 Linux)
 inline int pick(signed char) { return 2; }
+inline int pick(unsigned char) { return 3; }
+inline int pick(char) { return 1; }
 }
