@@ -48,7 +48,7 @@ pub fn import(r: &Req) -> Result<(), String> {
     crate::build::write_if_changed(&shim_file, &shim)?;
     // a shared library: swiftc links the Swift runtime it needs (and its runpath) itself
     // ponytail: the program loads it from bolt's cache; a static build if programs move elsewhere
-    let lib = r.out.join(format!("libvolt_import_{}.so", r.alias));
+    let lib = r.out.join(crate::build::shared_lib(&format!("volt_import_{}", r.alias)));
     let mut c = Command::new(&swiftc);
     c.args(["-emit-library", "-parse-as-library", "-suppress-warnings", "-module-name"]).arg(format!("volt_swift_{}", r.alias));
     c.arg(if r.release { "-O" } else { "-Onone" });
