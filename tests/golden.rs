@@ -80,22 +80,29 @@ fn std_linked() {
     let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("linked-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let voltc = |args: &[&str]| Command::new(&bin).args(args).current_dir(root).output().unwrap();
-    let (std_a, geo_a) = (dir.join("libstd.a"), dir.join("libgeo.a"));
-    let (std_a, geo_a) = (std_a.to_str().unwrap(), geo_a.to_str().unwrap());
-    for (pkg, out) in [("std", std_a), ("geo", geo_a)] {
-        let o = voltc(&["lib", pkg, "--pkg", "geo=tests/pkgs/geo", "-o", out]);
+    let (std_a, geo_a, hold_a) = (dir.join("libstd.a"), dir.join("libgeo.a"), dir.join("libhold.a"));
+    let (std_a, geo_a, hold_a) = (std_a.to_str().unwrap(), geo_a.to_str().unwrap(), hold_a.to_str().unwrap());
+    let pkgs = ["--pkg", "geo=tests/pkgs/geo", "--pkg", "hold=tests/pkgs/hold"];
+    for (pkg, out) in [("std", std_a), ("geo", geo_a), ("hold", hold_a)] {
+        let o = voltc(&[&["lib", pkg, "-o", out][..], &pkgs].concat());
         assert!(o.status.success(), "voltc lib {pkg}: {}", String::from_utf8_lossy(&o.stderr));
     }
     let prog = "tests/run/packages_linked.volt";
     let want = directives(&std::fs::read_to_string(root.join(prog)).unwrap(), "expect").join("\n");
     let std_link = format!("std={std_a}");
     let geo_link = format!("geo={geo_a}");
-    let o = voltc(&["run", prog, "--pkg", "geo=tests/pkgs/geo", "--leak-check", "--link", &std_link, "--link", &geo_link]);
+    let hold_link = format!("hold={hold_a}");
+    let o = voltc(&[&["run", prog, "--leak-check", "--link", &std_link, "--link", &geo_link, "--link", &hold_link][..], &pkgs].concat());
     let got = String::from_utf8_lossy(&o.stdout);
-    assert_eq!(got.trim_end(), want.trim_end(), "stderr: {}", String::from_utf8_lossy(&o.stderr));
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert_eq!(got.trim_end(), want.trim_end(), "stderr: {err}");
     assert!(o.status.success());
+    // hold's global holds a trait union, so hold is built from source, and voltc says why; std and
+    // geo still come from their libraries
+    assert!(err.contains("hold's library isn't used: its global 'held' holds a trait union"), "stderr: {err}");
+    assert!(!err.contains("std's library") && !err.contains("geo's library"), "stderr: {err}");
     // a debug library can't go into a release program
-    let o = voltc(&["run", prog, "--pkg", "geo=tests/pkgs/geo", "--release", "--link", &std_link]);
+    let o = voltc(&[&["run", prog, "--release", "--link", &std_link][..], &pkgs].concat());
     assert!(!o.status.success() && String::from_utf8_lossy(&o.stderr).contains("rebuild it with voltc lib std"));
     let _ = std::fs::remove_dir_all(&dir);
 }

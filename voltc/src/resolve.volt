@@ -1145,6 +1145,75 @@ attach fn global(this: checker&, d: u32, span: span) -> compile_error!global_ref
     return g;
 }
 
+// A linked package with a global whose type holds a trait union is built from source instead: the
+// union's layout comes from the types the program attaches, and the library's code that touches the
+// global was built with the members the library saw. A warning names the global.
+// ponytail: the whole package loses its library; define just the global (and rebuild the fns whose
+// bodies touch it) when a real package needs both
+attach fn unlink_union_globals(this: checker&) -> void {
+    var i: usize = 0;
+    while (i < this.opts.linked.len) {
+        val pkg = *this.opts.linked.at(i);
+        var why: global_why? = null;
+        for (di) in 0..this.decls.len {
+            val d = @cast<u32>(di);
+            if (why != null || (this.pkg_of(d) ?? "") != pkg) {
+                continue;
+            }
+            match (this.item_of(d).kind) {
+                .GLOBAL(l&) => {
+                    if (l.c_name != null) {
+                        continue;
+                    }
+                    var name = "";
+                    match (l.pat.kind) {
+                        .BIND(n) => { name = n; },
+                        default => {},
+                    }
+                    // its declared type, else its initializer's, in the empty context global() uses
+                    // (an error is reported there). ponytail: an untyped initializer naming another
+                    // global of this package fixes that one's linkage first; type it if that bites
+                    var saved = new_cx(VOID, this.new_env({ ns: this.dl(d).ns }), 0);
+                    swap(&this.cx, &saved);
+                    var ty: u32 = 0;
+                    if (l.ty) {
+                        ty = this.decl_type(&l.ty, ptr_of(&l.init)) catch |e| {
+                            swap(&this.cx, &saved);
+                            continue;
+                        };
+                    } else {
+                        val gv = this.global_init(l, this.item_of(d).span) catch |e| {
+                            swap(&this.cx, &saved);
+                            continue;
+                        };
+                        ty = gv.ty;
+                    }
+                    swap(&this.cx, &saved);
+                    var seen: idset = {};
+                    if (this.has_union(ty, &seen)) {
+                        why = { name: name, span: this.item_of(d).span };
+                    }
+                },
+                default => {},
+            }
+        }
+        if (why == null) {
+            i += 1;
+            continue;
+        }
+        val w = why ?? { name: "", span: NO_SPAN };
+        var d: diag = { span: w.span, msg: fmt2("{}'s library isn't used: its global '{}' holds a trait union", S(pkg), S(w.name)), warning: true };
+        put(&d.notes, S("the union's layout depends on the types this program attaches, so the package is built from source"));
+        put(&this.warnings, move d);
+        this.opts.linked.remove(i);
+    }
+}
+
+struct global_why {
+    name: str;
+    span: span;
+}
+
 // literals, names and operators over them, with no calls: a global's initializer that's worked out at
 // compile time even when it isn't a { } literal
 fn foldable(e: expr&) -> bool {

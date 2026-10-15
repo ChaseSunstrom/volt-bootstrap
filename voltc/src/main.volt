@@ -627,6 +627,19 @@ fn compile_with(c: cli&, s: sources&, shim: shim_src*) -> std::box<checker> {
         put(&o.linked, l.name);
     }
     var chk = compile_rounds(&s.files, &s.asts, move o);
+    // a package the check built from source instead (unlink_union_globals) leaves the link line
+    var i: usize = 0;
+    while (i < c.links.len) {
+        var kept = false;
+        for (x&) in chk.opts.linked.items() {
+            kept = kept || *x == c.links.at(i).name;
+        }
+        if (kept) {
+            i += 1;
+        } else {
+            c.links.remove(i);
+        }
+    }
     val diags = all_diags(&*chk);
     report_diags(c, &s.files, &diags);
     if (chk.errors.len > 0) {
