@@ -5825,6 +5825,23 @@ fn module_name(text: str) -> std::string? {
     return null;
 }
 
+// LLVM/lib/c++/NAME, from the compiler cmd's resource directory (LLVM/lib/clang/N): where Homebrew's
+// LLVM keeps libc++ and its modules manifest, which -print-file-name doesn't search
+fn libcxx_dir_file(cmd: std::vec<str>&, name: str) -> std::string? {
+    var argv = copy *cmd;
+    put(&argv, "-print-resource-dir");
+    val r = std::process::capture(argv.items(), "") catch |e| {
+        return null;
+    };
+    if (r.code != 0) {
+        return null;
+    }
+    var p = S(r.out.as_str().trim());
+    p.append("/../../c++/");
+    p.append(name);
+    return real_file(p.as_str());
+}
+
 // the C++ library's module `logical`'s source (std, std.compat), as the compiler cmd finds it: its
 // modules manifest (libstdc++.modules.json, libc++.modules.json) names it
 fn std_module_source(cmd: std::vec<str>&, logical: str) -> std::string? {
@@ -5836,9 +5853,9 @@ fn std_module_source(cmd: std::vec<str>&, logical: str) -> std::string? {
         val r = std::process::capture(argv.items(), "") catch |e| {
             continue;
         };
-        val path = S(r.out.as_str().trim());
+        var path = S(r.out.as_str().trim());
         if (r.code != 0 || path.as_str() == lib) {
-            continue;
+            path = libcxx_dir_file(cmd, lib) ?? continue;
         }
         val text = std::fs::read_file(path.as_str()) catch |e| {
             continue;
@@ -5896,7 +5913,8 @@ attach fn module_pcm(this: checker&, name: str, path: str, args: std::vec<str>&,
         return out;
     }
     var argv: std::vec<str> = {};
-    put(&argv, "clang++");
+    val clangxx = libclang_tool("clang++");
+    put(&argv, clangxx.as_str());
     for (a) in args.items() {
         if (a != "-x" && a != "c++") {
             put(&argv, a);
@@ -5922,8 +5940,9 @@ attach fn module_pcm(this: checker&, name: str, path: str, args: std::vec<str>&,
 // cache)
 attach fn std_modules(this: checker&, args: std::vec<str>&, s: str, u: u32, compat: bool, force: bool, span: span) -> compile_error!void {
     var cmd: std::vec<str> = {};
-    put(&cmd, "clang++");
-    val src = std_module_source(&cmd, "std") ?? return fails(span, "import std; needs the C++ library's std module, and clang++ finds no modules manifest naming one that's there (libstdc++.modules.json, libc++.modules.json)");
+    val clangxx = libclang_tool("clang++");
+    put(&cmd, clangxx.as_str());
+    val src = std_module_source(&cmd, "std") ?? return fail(span, fmt("import std; needs the C++ library's std module, and {} finds no modules manifest naming one that's there (libstdc++.modules.json, libc++.modules.json)", copy clangxx));
     var sargs = this.cpp_args(s);
     val pcm = try this.module_pcm("std", src.as_str(), &sargs, s, force, span);
     val flag = this.intern(fmt("-fmodule-file=std={}", copy pcm));

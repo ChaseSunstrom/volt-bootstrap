@@ -122,6 +122,18 @@ pub fn relocated_llvm_config(dir: &std::path::Path) -> Option<std::path::PathBuf
     Some(script)
 }
 
+/// a program of the LLVM voltc is built with (clang, clang++): NAME from PATH, except on macOS, where
+/// PATH's is Apple's clang (another LLVM, older): llvm-config's bindir ($LLVM_CONFIG, Homebrew's)
+#[allow(dead_code)]
+pub fn llvm_tool(name: &str) -> String {
+    if !cfg!(target_os = "macos") {
+        return name.into();
+    }
+    let tool = std::env::var("LLVM_CONFIG").unwrap_or("llvm-config".into());
+    let out = Command::new(&tool).arg("--bindir").output().unwrap_or_else(|e| panic!("{tool} --bindir: {e}"));
+    format!("{}/{name}", String::from_utf8_lossy(&out.stdout).trim())
+}
+
 /// `--cc` args linking libLLVM and libclang wherever this system keeps them, as voltc/build.volt
 /// does for bolt: llvm-config says where ($LLVM_CONFIG, else llvm-config-23, else llvm-config on
 /// PATH); without one, the default paths

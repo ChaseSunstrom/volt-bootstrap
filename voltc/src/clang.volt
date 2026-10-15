@@ -17,14 +17,39 @@ attach fn delete(this: clang_tu&) -> void {
     clang::clang_disposeIndex(this.index);
 }
 
+// a clang program (clang, clang++) for libclang's headers and precompiled modules: NAME from PATH,
+// except on macOS, where PATH's is Apple's clang and voltc's libclang is another LLVM's (Homebrew's):
+// that LLVM's, beside the library's real file (LLVM/lib/libclang.dylib → LLVM/bin/NAME)
+fn libclang_tool(name: str) -> std::string {
+    comptime if (@cfg("os", "macos")) {
+        var info: dl_info = {};
+        if (dladdr(@cast<void*>(clang::clang_getClangVersion), &info) != 0 && info.fname != null) {
+            val lib = real_file(c_text(info.fname)) ?? return S(name);
+            var at = lib.len();
+            while (at > 0 && lib.as_str()[at - 1] != '/') {
+                at -= 1;
+            }
+            var tool = S(lib.as_str()[0..at]);
+            tool.append("../bin/");
+            tool.append(name);
+            if (std::fs::exists(tool.as_str())) {
+                return tool;
+            }
+        }
+    }
+    return S(name);
+}
+
 // where libclang's own headers (stddef.h, stdarg.h...) are: $VOLT_CLANG_RESOURCE_DIR, else what
-// `clang -print-resource-dir` says (libclang doesn't always find them from where it's installed)
+// libclang's clang says with -print-resource-dir (libclang doesn't always find them from where it's
+// installed)
 fn clang_resource_dir() -> std::string? {
     val env = std::process::env("VOLT_CLANG_RESOURCE_DIR");
     if (env) {
         return S(env);
     }
-    val argv: str[2] = { "clang", "-print-resource-dir" };
+    val clang = libclang_tool("clang");
+    val argv: str[2] = { clang.as_str(), "-print-resource-dir" };
     val r = std::process::capture(argv[0..2], "") catch |e| {
         return null;
     };

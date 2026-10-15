@@ -4272,6 +4272,17 @@ attach fn attr_arg(this: checker&, a: expr&) -> str? {
     }
 }
 
+// @section's name for the target: a Mach-O (macOS) section is in a segment too, so a name without
+// one goes in __TEXT, with the code
+attach fn section_name(this: checker&, name: str) -> str {
+    if ((this.cfg_given("os") ?? std::process::os()) != "macos" || name.contains(",")) {
+        return name;
+    }
+    var s = S("__TEXT,");
+    s.append(name);
+    return this.intern(move s);
+}
+
 // a function's attributes, for the backends
 attach fn fn_attrs_of(this: checker&, attrs: std::vec<expr>&) -> fn_attrs {
     var r: fn_attrs = {};
@@ -4286,7 +4297,7 @@ attach fn fn_attrs_of(this: checker&, attrs: std::vec<expr>&) -> fn_attrs {
                 } else if (n == "opt") {
                     r.opt = arg ?? "";
                 } else if (n == "section") {
-                    r.section = arg ?? "";
+                    r.section = this.section_name(arg ?? "");
                 } else if (n == "align") {
                     r.align = arg ?? "";
                 } else if (n == "deprecated") {

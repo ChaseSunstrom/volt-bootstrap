@@ -128,7 +128,9 @@ fn signatures(ir: &str) -> HashMap<String, Vec<String>> {
 
 #[test]
 fn signatures_match_clang() {
-    if !have("clang") {
+    // the clang of voltc's LLVM: lowerings change between versions (i128 on x86-64 since LLVM 20)
+    let clang = common::llvm_tool("clang");
+    if !have(&clang) {
         eprintln!("abi: skipped (no clang)");
         return;
     }
@@ -136,7 +138,7 @@ fn signatures_match_clang() {
     let voltc = common::voltc();
     let mut bad = Vec::new();
     for host in HOSTS {
-        let c_ir = run(Command::new("clang").arg(format!("--target={host}")).args(["-ffreestanding", "-O0", "-S", "-emit-llvm", "-o", "-"]).arg(root.join("tests/abi/sigs.c")), "clang");
+        let c_ir = run(Command::new(&clang).arg(format!("--target={host}")).args(["-ffreestanding", "-O0", "-S", "-emit-llvm", "-o", "-"]).arg(root.join("tests/abi/sigs.c")), "clang");
         let volt_ir = run(Command::new(&voltc).arg("emit-llvm").arg(root.join("tests/abi/sigs.volt")).arg("--std").arg(root.join("std")).env("VOLT_TRIPLE", host), "voltc emit-llvm");
         let want = signatures(&c_ir);
         let got = signatures(&volt_ir);

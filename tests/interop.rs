@@ -118,13 +118,17 @@ fn ruby_headers() -> Option<(PathBuf, Vec<String>)> {
 /// (it prints the library's live allocations at exit, once Ruby has freed its objects); -o next
 fn ruby_ext(hdrs: &[String], src: &Path, lib_dir: &str, lib: &str) -> Command {
     let mut cc = Command::new("cc");
-    cc.args(["-shared", "-fPIC", "-Wall", "-Wextra", "-Wno-unused-parameter", "-Werror"]);
+    cc.args(["-shared", "-fPIC", "-Wall", "-Wextra", "-Wno-unused-parameter", "-Werror"]).args(MODULE_FLAGS);
     for h in hdrs {
         cc.arg("-I").arg(h);
     }
     cc.arg(src).args(["leak_report.c", "-L", lib_dir, &format!("-l{lib}"), &format!("-Wl,-rpath,{lib_dir}"), "-o"]);
     cc
 }
+
+/// a loadable module's link flags (Node's, Lua's, Ruby's): macOS's linker leaves the names the host
+/// program defines to be found when the module loads only under -undefined dynamic_lookup
+const MODULE_FLAGS: &[&str] = if cfg!(target_os = "macos") { &["-undefined", "dynamic_lookup"] } else { &[] };
 
 fn run(cmd: &mut Command) -> Output {
     cmd.current_dir(Path::new(ROOT).join("tests/interop")).output().unwrap()
@@ -186,7 +190,7 @@ fn bindings_round_trip() {
         // clients (TypeScript by stripping its types; tsc checks them when it's installed)
         match node_include() {
             Some(inc) => {
-                ok(run(Command::new("cc").args(["-shared", "-fPIC", "-Wall", "-Werror", "-I", &inc]).arg(e.dir.join("mathlib_node.c")).args(["-L", &lib_dir, "-lmathlib", &rpath, "-o"]).arg(e.dir.join("mathlib.node"))), "cc mathlib_node.c");
+                ok(run(Command::new("cc").args(["-shared", "-fPIC", "-Wall", "-Werror", "-I", &inc]).args(MODULE_FLAGS).arg(e.dir.join("mathlib_node.c")).args(["-L", &lib_dir, "-lmathlib", &rpath, "-o"]).arg(e.dir.join("mathlib.node"))), "cc mathlib_node.c");
                 for client in ["client.js", "client.mts"] {
                     std::fs::copy(Path::new(ROOT).join("tests/interop").join(client), e.dir.join(client)).unwrap();
                     let n = Command::new("node").arg(client).current_dir(&e.dir).output().unwrap();
@@ -255,7 +259,7 @@ fn bindings_round_trip() {
         if let Some(inc) = lua_include() {
             let ldir = e.dir.join(format!("lua-{backend}"));
             std::fs::create_dir_all(&ldir).unwrap();
-            ok(run(Command::new("cc").args(["-shared", "-fPIC", "-Wall", "-Wextra", "-Werror", "-I", inc]).arg(e.dir.join("mathlib_lua.c")).args(["-I", &e.path(""), "-L", &lib_dir, "-lmathlib", &rpath, "-o"]).arg(ldir.join("mathlib.so"))), "cc mathlib_lua.c");
+            ok(run(Command::new("cc").args(["-shared", "-fPIC", "-Wall", "-Wextra", "-Werror", "-I", inc]).args(MODULE_FLAGS).arg(e.dir.join("mathlib_lua.c")).args(["-I", &e.path(""), "-L", &lib_dir, "-lmathlib", &rpath, "-o"]).arg(ldir.join("mathlib.so"))), "cc mathlib_lua.c");
             let l = Command::new("lua").arg(Path::new(ROOT).join("tests/interop/client.lua")).env("LUA_CPATH", ldir.join("?.so")).output().unwrap();
             assert_eq!(ok(l, "lua client.lua"), MATHLIB_OUT, "Lua ({backend})");
         } else {
@@ -312,7 +316,7 @@ fn bindings_round_trip() {
                 let rdir = e.dir.join(format!("ruby-{backend}"));
                 std::fs::create_dir_all(&rdir).unwrap();
                 let mut cc = Command::new("cc");
-                cc.args(["-shared", "-fPIC", "-Wall", "-Wextra", "-Wno-unused-parameter", "-Werror"]);
+                cc.args(["-shared", "-fPIC", "-Wall", "-Wextra", "-Wno-unused-parameter", "-Werror"]).args(MODULE_FLAGS);
                 for h in &hdrs {
                     cc.arg("-I").arg(h);
                 }
@@ -432,7 +436,8 @@ fn bindings_shapes() {
         let rpath = format!("-Wl,-rpath,{lib}");
         for (cc, std, client) in [("cc", "-std=c11", "client_shapes.c"), ("c++", "-std=c++17", "client_shapes.cpp")] {
             let bin = e.dir.join(format!("{backend}_{cc}"));
-            ok(run(Command::new(cc).args([std, "-Wall", "-Werror", client, "leak_report.c", "-I", &e.path(""), "-L", &lib, "-lshapelib", &rpath, "-o"]).arg(&bin)), &format!("{cc} {client}"));
+            // the leak report as its object: clang++ refuses C source in C++ mode (-Wdeprecated)
+            ok(run(Command::new(cc).args([std, "-Wall", "-Werror", client, &e.path("leak_report.o"), "-I", &e.path(""), "-L", &lib, "-lshapelib", &rpath, "-o"]).arg(&bin)), &format!("{cc} {client}"));
             let o = Command::new(&bin).output().unwrap();
             assert_eq!(String::from_utf8_lossy(&o.stderr), "volt live: 0\n", "{client} ({backend}): the library's allocations at exit");
             assert_eq!(ok(o, client), SHAPES_OUT, "{client} ({backend})");
@@ -524,7 +529,7 @@ fn bindings_shapes() {
                 std::fs::create_dir_all(&ndir).unwrap();
                 std::fs::copy(e.dir.join("shapelib.js"), ndir.join("shapelib.js")).unwrap();
                 std::fs::copy(Path::new(ROOT).join("tests/interop/client_shapes.js"), ndir.join("client_shapes.js")).unwrap();
-                ok(run(Command::new("cc").args(["-shared", "-fPIC", "-I", &inc]).arg(e.dir.join("shapelib_node.c")).args(["leak_report.c", "-L", &lib, "-lshapelib", &rpath, "-o"]).arg(ndir.join("shapelib.node"))), "cc shapelib_node.c");
+                ok(run(Command::new("cc").args(["-shared", "-fPIC", "-I", &inc]).args(MODULE_FLAGS).arg(e.dir.join("shapelib_node.c")).args(["leak_report.c", "-L", &lib, "-lshapelib", &rpath, "-o"]).arg(ndir.join("shapelib.node"))), "cc shapelib_node.c");
                 let o = Command::new("node").arg("client_shapes.js").current_dir(&ndir).output().unwrap();
                 assert_eq!(String::from_utf8_lossy(&o.stderr), "volt live: 0\n", "client_shapes.js ({backend}): the library's allocations at exit");
                 assert_eq!(ok(o, "node client_shapes.js"), format!("checked true OVERDRAWN\nlimit true OVERDRAWN\nsign positive not positive\n{SHAPES_OUT}"), "client_shapes.js ({backend})");
@@ -542,7 +547,7 @@ fn bindings_shapes() {
         if let Some(inc) = lua_include() {
             let ldir = e.dir.join(format!("lua-{backend}"));
             std::fs::create_dir_all(&ldir).unwrap();
-            ok(run(Command::new("cc").args(["-shared", "-fPIC", "-Wall", "-Wextra", "-Werror", "-I", inc]).arg(e.dir.join("shapelib_lua.c")).args(["leak_report.c", "-I", &e.path(""), "-L", &lib, "-lshapelib", &rpath, "-o"]).arg(ldir.join("shapelib.so"))), "cc shapelib_lua.c");
+            ok(run(Command::new("cc").args(["-shared", "-fPIC", "-Wall", "-Wextra", "-Werror", "-I", inc]).args(MODULE_FLAGS).arg(e.dir.join("shapelib_lua.c")).args(["leak_report.c", "-I", &e.path(""), "-L", &lib, "-lshapelib", &rpath, "-o"]).arg(ldir.join("shapelib.so"))), "cc shapelib_lua.c");
             let o = Command::new("lua").arg(Path::new(ROOT).join("tests/interop/client_shapes.lua")).env("LUA_CPATH", ldir.join("?.so")).output().unwrap();
             assert_eq!(String::from_utf8_lossy(&o.stderr), "volt live: 0\n", "client_shapes.lua ({backend}): the library's allocations at exit");
             assert_eq!(ok(o, "lua client_shapes.lua"), format!("checked true OVERDRAWN\nlimit true OVERDRAWN\nsign positive not positive\n{SHAPES_OUT}"), "client_shapes.lua ({backend})");
@@ -1772,10 +1777,13 @@ fn cpp_module() {
     // clang's -fmodule-file); what the module doesn't export isn't there
     let e = Env::new("cpp-module");
     let want = "42 n=7 12 6\n6 hi volt 8\n";
+    // Apple's clang++ has no std module (no libc++ modules manifest): on macOS, the clang++ of the
+    // LLVM voltc is built with (Homebrew's, whose libc++ has one) builds the program's C++
+    let llvm_cxx = cfg!(target_os = "macos").then(|| common::llvm_tool("clang++"));
     for backend in ["c", "llvm"] {
-        assert_eq!(ok(e.voltc(&["run", "cpp_module.volt", "--backend", backend]), "voltc run cpp_module.volt"), want, "C++ modules ({backend})");
+        assert_eq!(ok(e.voltc_cxx(&["run", "cpp_module.volt", "--backend", backend], llvm_cxx.as_deref()), "voltc run cpp_module.volt"), want, "C++ modules ({backend})");
     }
-    assert_eq!(ok(e.voltc_cxx(&["run", "cpp_module.volt"], Some("clang++")), "voltc run cpp_module.volt (clang++)"), want, "C++ modules built by clang++");
+    assert_eq!(ok(e.voltc_cxx(&["run", "cpp_module.volt"], Some(llvm_cxx.as_deref().unwrap_or("clang++"))), "voltc run cpp_module.volt (clang++)"), want, "C++ modules built by clang++");
     let src = format!("use {{ \"{}\" }} as gm;\nfn main() -> void {{\n    val x = gm::hidden_helper(1);\n}}\n", Path::new(ROOT).join("tests/interop/geomod.cppm").display());
     std::fs::write(e.dir.join("cpp_module_hidden.volt"), src).unwrap();
     let o = e.voltc(&["check", &e.path("cpp_module_hidden.volt")]);
@@ -1783,7 +1791,8 @@ fn cpp_module() {
     assert!(!o.status.success() && err.contains("unknown name 'hidden_helper'"), "an unexported name: {err}");
     // Ubuntu's libc++.modules.json sits where its relative source path names nothing (GitHub's
     // runner): with a clang++ that finds only a manifest like that, import std; is an error, not a crash
-    #[cfg(unix)]
+    // (macOS: voltc takes libclang's own clang++, not PATH's)
+    #[cfg(all(unix, not(target_os = "macos")))]
     {
         use std::os::unix::fs::PermissionsExt;
         let bin = e.dir.join("bin");

@@ -117,15 +117,17 @@ fn main() -> void {
 
     // the environment and the working directory
     std::process::set_env("VOLT_STD_OS_TEST", "on");
-    val set = std::process::env("VOLT_STD_OS_TEST") ?? "-";
+    // env's str is only valid until the environment changes (macOS frees it on unset): copy it
+    val set = std::string::from(std::process::env("VOLT_STD_OS_TEST") ?? "-");
     std::process::unset_env("VOLT_STD_OS_TEST");
-    std::println("{} {}", set, std::process::env("VOLT_STD_OS_TEST") ?? "unset");
+    std::println("{} {}", set.as_str(), std::process::env("VOLT_STD_OS_TEST") ?? "unset");
     val before = std::process::cwd();
     show("cd", std::process::set_cwd(r));
     val inside = std::process::cwd();
     show("cd back", std::process::set_cwd(before.as_str()));
     show("cd missing", std::process::set_cwd("/nonexistent-volt-dir"));
-    std::println("{} {}", inside.as_str() == r, std::process::cwd().as_str() == before.as_str());
+    // ends_with: macOS's /tmp is a link to /private/tmp, and cwd() names the real directory
+    std::println("{} {}", inside.as_str().ends_with(r), std::process::cwd().as_str() == before.as_str());
 
     show("remove_all", std::fs::remove_all(r));
     std::println("{}", std::fs::exists(r));

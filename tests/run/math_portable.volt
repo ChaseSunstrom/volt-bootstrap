@@ -168,7 +168,14 @@ fn run(f: usize, x: f64, y: f64) -> void {
     if (d > worst[f]) {
         worst[f] = d;
     }
-    if (d > ALLOW[f]) {
+    var allow = ALLOW[f];
+    // Apple's libm tan is up to 2 ulps from the true value (Volt's is within 1 of glibc's there)
+    comptime if (@cfg("os", "macos")) {
+        if (f == 11) {
+            allow = 3;
+        }
+    }
+    if (d > allow) {
         bad[f] += 1;
         if (bad[f] <= 3) {
             std::println("BAD {}({:e}, {:e}): libm {:e} volt {:e}, {} ulps", NAMES[f], x, y, want, got, d);
