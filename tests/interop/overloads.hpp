@@ -17,15 +17,23 @@ inline int f(long long x, int n = 0) { return (int)x * 10 + n; }
 // the full form collides (h_long_long_int_int), the shorter one doesn't (h, with its C++ comment)
 inline int h(long x, int a, int b) { return 1; }
 inline int h(long long x, int a, int b = 0) { return 2; }
-// a class template held by handle: its members are worked out per use, where an && method is
-// C++'s error (the object is an lvalue), never a move out of it
+// a class template held by handle: its members are worked out per use, where an && method (const
+// && too) consumes the handle as a declared one does: C++ moves from the object (take empties it),
+// or from a copy when the handle only borrows it
 template <class T>
 class Holder {
     T v_;
   public:
     Holder(T v) : v_(v) {}
-    T take() && { return std::move(v_); }
+    T take() && { T r = v_; v_ = T(); return r; }
+    T look() const && { return v_; }
+    T peek() const & { return v_; }
 };
+// a borrowed handle (a reference result)
+inline Holder<int> &shelf() {
+    static Holder<int> h(5);
+    return h;
+}
 // held by handle (a std::string field)
 class Tally {
   public:
