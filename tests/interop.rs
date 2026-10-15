@@ -1921,7 +1921,7 @@ fn cpp_ranges2() {
     // 8): looped fully and left by break, return and try, each freeing them; std::vector and
     // std::map from a header read under C++98
     let e = Env::new("cpp-ranges2");
-    let want = "shared 30 live 0 inside 2\nbreak live 0\nreturn 10 live 0\ntry -1 live 0\nmove 10 live 0\nwide 14\nc++98 6 2\n";
+    let want = "shared 30 live 0 inside 2\nbreak live 0\nreturn 10 live 0\ntry -1 live 0\nlabeled break live 0\ncontinue 20 live 0\nnested 180 live 0\nmove 10 live 0\nwide 14\nc++98 6 2\n";
     for backend in ["c", "llvm"] {
         assert_eq!(ok(e.voltc(&["run", "cpp_ranges2.volt", "--backend", backend]), "voltc run cpp_ranges2.volt"), want, "C++ ranges C++ holds the iterators of ({backend})");
     }

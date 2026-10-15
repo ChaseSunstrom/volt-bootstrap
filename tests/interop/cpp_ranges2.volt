@@ -53,6 +53,29 @@ fn main() -> void {
     std::println("return {} live {}", first_over(&sr, 5), *cpp::r2::live());
     val t = sum_small(&sr) catch |e| -1;
     std::println("try {} live {}", t, *cpp::r2::live());
+    :outer for (a) in sr {
+        for (b) in sr {
+            if (b == 10) {
+                break :outer;
+            }
+        }
+    }
+    std::println("labeled break live {}", *cpp::r2::live());
+    var odd = 0;
+    for (x) in sr {
+        if (x == 10) {
+            continue;
+        }
+        odd += x;
+    }
+    std::println("continue {} live {}", odd, *cpp::r2::live());
+    var pairs = 0;
+    for (a) in sr {
+        for (b) in sr {
+            pairs += a + b;
+        }
+    }
+    std::println("nested {} live {}", pairs, *cpp::r2::live());
 
     val mr = cpp::r2::move_range::new(4);
     var m = 0;
