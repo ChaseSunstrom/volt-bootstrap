@@ -88,6 +88,9 @@ VOLT_RT_LINKAGE void volt_rt_binary_stdio(void) {
     volt_win_setmode(1, 0x8000);
     volt_win_setmode(2, 0x8000);
 }
+#else
+/* nothing to change elsewhere (a program checked with --cfg os=windows still calls it) */
+VOLT_RT_LINKAGE void volt_rt_binary_stdio(void) {}
 #endif
 
 typedef struct { const uint8_t *ptr; size_t len; } volt_str;
