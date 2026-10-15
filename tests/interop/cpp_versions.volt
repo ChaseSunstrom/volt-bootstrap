@@ -16,7 +16,7 @@ fn main() -> void {
     val shape = old::v98::Shape::new();
     var shape2 = copy shape;
     std::println("{} {}", old::v98::count_sides(&shape2), shape2.cpp_type_name());
-    std::println("{} {} {} {}", old::v98::pick(@cast<i8>(1)), old::v98::pick_signed_char(1), shape2.tag(), shape2.tag_nonconst());
+    std::println("{} {} {} {}", old::v98::pick_char(1), old::v98::pick(@cast<i8>(1)), shape2.tag(), shape2.tag_nonconst());
     std::println("{} {} {}", v11::v11::sq(7), v11::v11::add(1, 2), v11::v11::code(v11::v11::color::green));
     std::println("{} {} {}", v17::v17::len("volt"), v17::v17::pick<i64>(1, 2), v17::v17::pair_sum());
     std::println("{} {}", v20::v20::half(@cast<i32>(9)), v20::v20::made());

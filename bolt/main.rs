@@ -34,7 +34,9 @@ commands:
   check                   type-check without building anything
   run [-- ARGS]           build and run an executable (--bin NAME, --example NAME)
   hot [FILES] [-- ARGS]   run it (or .volt FILES) sampled, and show where it spends its time: the
-                          hottest functions, .volt lines and call paths (voltc --profiler; Linux)
+                          hottest functions, .volt lines and call paths (voltc --profiler; Linux);
+                          --html FILE: a page with the call tree as an icicle graph too;
+                          --folded FILE: the call paths as folded stacks (flamegraph.pl, speedscope)
   test [FILTER]           build and run tests/ (each program there must exit 0); --no-run builds only
   bench [FILTER]          build and time benches/ (with the bench profile)
   clean                   remove target/ (with --release or --profile: just that profile's)
@@ -176,6 +178,10 @@ pub struct Opts {
     pub root: Option<PathBuf>,
     pub name: Option<String>,
     pub vcs: Option<String>,
+    /// hot --html FILE: the report as a web page too
+    pub html: Option<PathBuf>,
+    /// hot --folded FILE: the call paths as folded stacks (for flame graph tools)
+    pub folded: Option<PathBuf>,
 }
 
 /// options in any order, before or after the command; --opt=value works too
@@ -231,6 +237,8 @@ fn parse(args: Vec<String>) -> Opts {
             "--root" => o.root = Some(val().into()),
             "--name" => o.name = Some(val()),
             "--vcs" => o.vcs = Some(val()),
+            "--html" => o.html = Some(val().into()),
+            "--folded" => o.folded = Some(val().into()),
             "--dev" => o.dev = true,
             "--optional" => o.optional = true,
             "--force" | "-f" => o.force = true,
@@ -401,11 +409,23 @@ fn hot_cmd(o: &Opts) {
     if !st.success() {
         status("Note", format!("the program exited with {}", st.code().map_or("a signal".to_string(), |c| c.to_string())));
     }
-    let text = hot::read_profile(&prof).and_then(|p| hot::report(&exe, &p, 10));
+    let stats = hot::read_profile(&prof).and_then(|p| hot::analyze(&exe, &p));
     if let Some(d) = temp {
         let _ = std::fs::remove_dir_all(d);
     }
-    print!("\n{}", text.unwrap_or_else(|e| fail(e)));
+    let stats = stats.unwrap_or_else(|e| fail(e));
+    // the text report first: a page that can't be written doesn't lose it
+    print!("\n{}", hot::report(&exe, &stats, 10));
+    let write = |f: &PathBuf, text: String| {
+        std::fs::write(f, text).unwrap_or_else(|e| fail(format!("can't write {}: {e}", f.display())));
+        status("Wrote", f.display());
+    };
+    if let Some(f) = &o.html {
+        write(f, hot::html(&exe, &stats, 10));
+    }
+    if let Some(f) = &o.folded {
+        write(f, hot::folded(&stats));
+    }
 }
 
 /// the executable `run` (and `hot`) means, built: --bin/--example, else the package's own

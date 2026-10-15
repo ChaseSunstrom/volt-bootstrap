@@ -36,6 +36,8 @@ struct Server {
     input: ChildStdin,
     output: BufReader<ChildStdout>,
     next_id: u64,
+    /// the messages the last request skipped on its way to its response
+    skipped: Vec<String>,
     dir: PathBuf,
 }
 
@@ -59,7 +61,7 @@ impl Server {
             .unwrap();
         let input = child.stdin.take().unwrap();
         let output = BufReader::new(child.stdout.take().unwrap());
-        Server { child, input, output, next_id: 1, dir }
+        Server { child, input, output, next_id: 1, skipped: Vec::new(), dir }
     }
 
     fn send(&mut self, msg: &str) {
@@ -91,6 +93,7 @@ impl Server {
         let id = self.next_id;
         self.next_id += 1;
         self.send(&format!("{{\"jsonrpc\":\"2.0\",\"id\":{id},\"method\":\"{method}\",\"params\":{params}}}"));
+        self.skipped.clear();
         loop {
             let m = self.recv();
             // a response has a result or an error; a request or notification has a method (which a
@@ -98,6 +101,7 @@ impl Server {
             if m.contains(&format!("\"id\":{id}")) && (m.contains("\"result\"") || m.contains("\"error\"")) {
                 return m;
             }
+            self.skipped.push(m);
         }
     }
 
@@ -171,7 +175,9 @@ fn scripted_session() {
     assert!(d.contains("unknown name 'missing'") && d.contains("\"start\":{\"line\":18,\"character\":31}") && d.contains("\"severity\":1"), "{d}");
 
     // fixed: no diagnostics
-    let fixed = PROGRAM.replace("total + missing", "total");
+    // (with operators attached after main, which completion after `p.` leaves out: they're used as
+    // operators, not called by name)
+    let fixed = PROGRAM.replace("total + missing", "total") + "\nattach operator +(this: point, o: point) -> point {\n    return o;\n}\n\nattach operator *(k: i32, this: point) -> point {\n    return this;\n}\n";
     s.notify("textDocument/didChange", &format!("{{\"textDocument\":{{\"uri\":\"{uri}\",\"version\":2}},\"contentChanges\":[{{\"text\":{}}}]}}", js(&fixed)));
     let d = s.diagnostics();
     assert!(d.contains("\"diagnostics\":[]"), "{d}");
@@ -220,6 +226,7 @@ fn scripted_session() {
     for item in ["\"label\":\"x\"", "\"label\":\"y\"", "\"label\":\"sum\""] {
         assert!(c.contains(item), "completion after p. lacks {item}: {c}");
     }
+    assert!(!c.contains("operator"), "completion after p. lists operator fns: {c}");
     let c = s.request("textDocument/completion", &at(19, 11));
     assert!(c.contains("\"label\":\"println\""), "completion after std:: lacks println: {c}");
     let c = s.request("textDocument/completion", &at(20, 6));
@@ -587,5 +594,183 @@ fn other() -> i32 {
     assert!(h.contains("fn sum(a0: i32, a1: f64) -> f64") && h.contains("C++: geo::sum(int32_t, double) -> double, as clang resolves it"), "hover sum: {h}");
     let h = s.request("textDocument/hover", &at(30, 18));
     assert!(h.contains("abs") && !h.contains("not abs's doc"), "a C fn's hover has no doc of the use's: {h}");
+    let _ = std::fs::remove_dir_all(&s.dir);
+}
+
+/// the program of generic_bodies_nothing_instantiates: a line's `[name]` marks a use of the global
+/// `name` the index should have (in the generic bodies nothing instantiates too); the body's own
+/// names (params, locals so far, generic params) named like globals aren't uses of them
+const GENERICS: &str = "use std::io;
+
+val LIMIT: i32 = 10;
+var count: i32 = 0;
+
+fn helper(x: i32) -> i32 {
+    return x + 1;
+}
+
+struct cell {
+    v: i32;
+}
+
+enum color {
+    RED,
+    BLUE,
+}
+
+namespace util {
+    fn twice(x: i32) -> i32 {
+        return x * 2;
+    }
+}
+
+<T: type>
+fn uses(a: T, b: cell) -> i32 { // [cell]
+    val c: cell = b; // [cell]
+    val k = color::RED; // [color] [RED]
+    count += LIMIT; // [count] [LIMIT]
+    return helper(util::twice(c.v)); // [helper] [twice]
+}
+
+<T: type>
+fn shadows(helper: T, cell: i32) -> i32 {
+    val before = LIMIT; // [LIMIT]
+    val LIMIT = 3;
+    val x = LIMIT + cell;
+    {
+        val count = 1;
+        val y = count;
+    }
+    val z = count + x; // [count]
+    return helper;
+}
+
+<count: type>
+fn generic_named(x: count) -> i32 {
+    return helper(1); // [helper]
+}
+
+<T: type>
+fn binders(xs: i32[], r: i32!i32, o: i32?) -> i32 {
+    for (helper) in xs {
+        val a = helper;
+    }
+    match (o) {
+        .VALUE(count) => { return count; },
+        default => {},
+    }
+    val e = r catch |LIMIT| LIMIT;
+    val g = || (cell: i32) -> i32 { return cell; };
+    val off = @offsetof(cell, color); // [cell]
+    val (helper, count) = (1, 2);
+    return helper + count;
+}
+
+<T: type>
+fn typed(cell: cell, other: cell) -> i32 { // [cell] [cell]
+    return cell.v + other.v;
+}
+
+struct circle {
+    r: f64;
+}
+
+enum shape {
+    circle: circle,
+    other,
+}
+
+<T: type>
+fn area(s: shape) -> f64 {
+    match (s) {
+        circle(c) => { return c.r; },
+        default => { return 0.0; },
+    }
+}
+
+<T: type>
+fn instanced(x: T) -> i32 {
+    return helper(2); // [helper]
+}
+
+fn main() -> void {
+    val c: cell = { v: 1 }; // [cell]
+    val round: circle = { r: 1.0 };
+    val n = instanced(c.v) + helper(0) + LIMIT + count; // [helper] [LIMIT] [count]
+    val k = color::BLUE; // [color]
+    std::println(\"{} {}\", n, util::twice(n)); // [twice]
+}
+";
+
+/// the lines a response's locations start on, sorted
+fn start_lines(r: &str) -> Vec<usize> {
+    let key = "\"start\":{\"line\":";
+    let mut out: Vec<usize> = r.match_indices(key).map(|(i, _)| r[i + key.len()..].split(|c: char| !c.is_ascii_digit()).next().unwrap().parse().unwrap()).collect();
+    out.sort();
+    out
+}
+
+#[test]
+fn generic_bodies_nothing_instantiates() {
+    // a generic fn's body is checked per instance: the uses in one nothing instantiates are indexed
+    // from its syntax, so references, rename and go to definition reach them
+    let mut s = Server::start();
+    s.request("initialize", &format!("{{\"processId\":null,\"rootUri\":\"file://{}\",\"capabilities\":{{}}}}", s.dir.display()));
+    s.notify("initialized", "{}");
+    let uri = format!("file://{}/generics.volt", s.dir.display());
+    s.notify("textDocument/didOpen", &format!("{{\"textDocument\":{{\"uri\":\"{uri}\",\"languageId\":\"volt\",\"version\":1,\"text\":{}}}}}", js(GENERICS)));
+    let d = s.diagnostics_for(&uri);
+    assert!(!d.contains("\"severity\":1"), "{d}");
+    let lines: Vec<&str> = GENERICS.lines().collect();
+    let pos = |pat: &str, name: &str| {
+        let l = lines.iter().position(|l| l.contains(pat)).unwrap_or_else(|| panic!("no {pat}"));
+        format!("{{\"textDocument\":{{\"uri\":\"{uri}\"}},\"position\":{{\"line\":{l},\"character\":{}}}", lines[l].find(name).unwrap())
+    };
+    for (pat, name) in [("val LIMIT: i32", "LIMIT"), ("var count", "count"), ("fn helper(", "helper"), ("struct cell", "cell"), ("enum color", "color"), ("    RED,", "RED"), ("fn twice(", "twice")] {
+        let marker = format!("[{name}]");
+        let want: Vec<usize> = lines.iter().enumerate().flat_map(|(i, l)| std::iter::repeat_n(i, l.matches(marker.as_str()).count())).collect();
+        let r = s.request("textDocument/references", &format!("{},\"context\":{{\"includeDeclaration\":false}}}}", pos(pat, name)));
+        assert_eq!(start_lines(&r), want, "references of {name}: {r}");
+    }
+    // go to definition from a use in a body nothing instantiates
+    let r = s.request("textDocument/definition", &format!("{}}}", pos("return helper(util", "helper")));
+    let helper_line = lines.iter().position(|l| l.contains("fn helper(")).unwrap();
+    assert!(r.contains(&format!("\"start\":{{\"line\":{helper_line},\"character\":3}}")), "definition of helper: {r}");
+    // rename: the declaration and each use, once (the instantiated body's too)
+    let r = s.request("textDocument/rename", &format!("{},\"newName\":\"assist\"}}", pos("fn helper(", "helper")));
+    let mut want: Vec<usize> = lines.iter().enumerate().filter(|(_, l)| l.contains("[helper]")).map(|(i, _)| i).collect();
+    want.push(helper_line);
+    want.sort();
+    assert_eq!(start_lines(&r), want, "rename helper: {r}");
+    assert!(!s.skipped.iter().any(|m| m.contains("window/showMessage")), "rename helper warns: {:?}", s.skipped);
+    // a field also named as a member in such a body (c.v): its uses there need types, and rename says so
+    let _ = s.request("textDocument/rename", &format!("{},\"newName\":\"w\"}}", pos("    v: i32;", "v")));
+    assert!(s.skipped.iter().any(|m| m.contains("window/showMessage") && m.contains("'v' is also used as a member")), "rename v doesn't warn: {:?}", s.skipped);
+    // a one-name variant pattern (circle(c)) is the scrutinee enum's variant, not the struct circle
+    let r = s.request("textDocument/rename", &format!("{},\"newName\":\"ring\"}}", pos("struct circle", "circle")));
+    let edits = start_lines(&r);
+    let decl = lines.iter().position(|l| l.contains("struct circle")).unwrap();
+    let arm = lines.iter().position(|l| l.contains("circle(c) =>")).unwrap();
+    assert!(edits.contains(&decl) && !edits.contains(&arm), "rename circle: {r}");
+
+    // from std's own file: a helper used only in generic bodies std doesn't instantiate itself
+    let map = Path::new(ROOT).join("std/map.volt");
+    let muri = format!("file://{}", map.display());
+    let text = std::fs::read_to_string(&map).unwrap();
+    let started = std::time::Instant::now();
+    s.notify("textDocument/didOpen", &format!("{{\"textDocument\":{{\"uri\":\"{muri}\",\"languageId\":\"volt\",\"version\":1,\"text\":{}}}}}", js(&text)));
+    let _ = s.diagnostics_for(&muri);
+    eprintln!("checking std/map.volt: {:?}", started.elapsed());
+    let mlines: Vec<&str> = text.lines().collect();
+    let decl = mlines.iter().position(|l| l.contains("fn map_tag(")).expect("std/map.volt no longer has map_tag");
+    let want: Vec<usize> = mlines.iter().enumerate().filter(|(_, l)| l.contains("std::map_tag(")).map(|(i, _)| i).collect();
+    assert!(!want.is_empty(), "std/map.volt no longer calls map_tag");
+    let at = format!("{{\"textDocument\":{{\"uri\":\"{muri}\"}},\"position\":{{\"line\":{decl},\"character\":5}}");
+    let started = std::time::Instant::now();
+    let r = s.request("textDocument/references", &format!("{at},\"context\":{{\"includeDeclaration\":false}}}}"));
+    eprintln!("references of std::map_tag from std/map.volt: {:?}", started.elapsed());
+    assert_eq!(start_lines(&r), want, "references of map_tag in std: {r}");
+    let r = s.request("textDocument/definition", &format!("{{\"textDocument\":{{\"uri\":\"{muri}\"}},\"position\":{{\"line\":{},\"character\":{}}}}}", want[0], mlines[want[0]].find("map_tag").unwrap()));
+    assert!(r.contains(&format!("\"start\":{{\"line\":{decl},")), "definition of map_tag from its use: {r}");
     let _ = std::fs::remove_dir_all(&s.dir);
 }

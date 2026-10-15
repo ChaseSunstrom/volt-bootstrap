@@ -19,6 +19,8 @@ inline int apply(int (*f)(int), int x) { return f(x); }
 inline double fold(double (*f)(double, double), double a, double b) { return f(a, b); }
 template <class T> T apply_t(T (*f)(T), T x) { return f(x); }
 inline void shout(std::string &s, int n) { s.append(n, '!'); }
+// a C++ callable taking a std::string&, which Volt keeps and calls
+inline std::function<void(std::string &)> exclaimer(int n) { return [n](std::string &s) { s.append(n, '?'); }; }
 inline int grow(std::string &s, int n) {
     s += "~";
     if (n < 0) throw std::invalid_argument("negative");
@@ -27,6 +29,14 @@ inline int grow(std::string &s, int n) {
 }
 // a view into the string: Volt's copy of it is gone once the call returns, so this isn't declared
 inline std::string_view first_word(std::string &s) { return std::string_view(s).substr(0, s.find(' ')); }
+// structs a std::string& call returns: one holding a pointer into the string, one a view (both left
+// out: they'd point into the copy), and plain values (fine, the string written back)
+struct word_at { const char *p; int n; };
+inline word_at first_at(std::string &s) { word_at w = {s.data(), 1}; return w; }
+struct named { int k; std::string_view v; };
+inline named name_of(std::string &s) { named n = {2, s}; return n; }
+struct counted { int n; long total; };
+inline counted count_up(std::string &s) { s += "+"; counted c = {(int)s.size(), 7}; return c; }
 inline int relay(const std::function<int(int)> &f) { return f(-1); }
 // a class Volt holds by handle (it isn't trivially copyable) and one it lays out, in a std::function
 class Shape {

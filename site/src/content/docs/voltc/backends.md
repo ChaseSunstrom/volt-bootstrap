@@ -46,7 +46,9 @@ static v_point v_add(v_point a, v_point b) {
 ```
 
 `volt_add_i32` is the overflow check (a plain `+` in `--release` builds). The C compiler is
-`$CC` (`cc` by default), with `-O2` for release builds.
+`$CC` (`cc` by default), with `-O2` for release builds. The C is GNU C, not ISO C: it uses
+statement expressions, `__int128` and zero-length arrays, which gcc and clang (Apple's, and clang on
+Windows) take and MSVC's `cl` doesn't, so `cl` isn't a C compiler voltc supports.
 
 ## LLVM
 

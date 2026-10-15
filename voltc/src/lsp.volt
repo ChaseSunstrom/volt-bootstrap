@@ -251,6 +251,542 @@ attach fn lsp_decl_text(this: checker&, d: u32) -> std::string {
     return out;
 }
 
+// ---------- generic bodies nothing instantiates ----------
+// A generic fn's body is checked per instance, so one nothing instantiates records no uses. The
+// names in it that resolve without types (fns, types, globals and constants, namespaces, enum
+// members by path) are indexed from its syntax: each path whose first name isn't one of the body's
+// own (a generic param, a param, a local declared so far in an enclosing block) is looked up in the
+// body's namespace. Members (x.name, .NAME, { name: }) need types: their names are only kept, for
+// rename to say those uses aren't covered.
+
+// a walked body: its namespace and the body's own names in scope (innermost last), each with whether
+// it shadows a type too (a generic param or a comptime local does; a runtime local or param only
+// shadows a bare name used as a value, as resolve_type_path and path_expr look them up)
+struct lsp_walk {
+    ns: u32;
+    names: std::vec<str> = {};
+    types: std::vec<bool> = {};
+}
+
+fn walk_add(w: lsp_walk&, name: str, types: bool) -> void {
+    put(&w.names, name);
+    put(&w.types, types);
+}
+
+fn walk_shadows(w: lsp_walk&, name: str, types_only: bool) -> bool {
+    for (i) in 0..w.names.len {
+        if (*w.names.at(i) == name && (!types_only || *w.types.at(i))) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// leave a block: the names declared in it go out of scope
+fn walk_leave(w: lsp_walk&, mark: usize) -> void {
+    while (w.names.len > mark) {
+        w.names.pop();
+        w.types.pop();
+    }
+}
+
+fn ptr_box_ty(o: std::box<ty>?&) -> ty* {
+    if ((*o).none) {
+        return null;
+    }
+    return (*o).value.ptr;
+}
+
+// index the uses in every generic fn body no checked instance covers (call after checking)
+attach fn lsp_generic_bodies(this: checker&) -> void {
+    var checked: std::map<u32, bool> = {};
+    for (i) in 0..this.fns.len {
+        if (i < this.used.len && *this.used.at(i)) {
+            checked.put(this.fi(@cast<u32>(i)).decl, true);
+        }
+    }
+    for (di) in 0..this.decls.len {
+        val d = @cast<u32>(di);
+        val f = this.fn_decl_of(d) ?? continue;
+        if (f.body == null || f.spec != null || f.is_comptime || checked.get(d) != null) {
+            continue;
+        }
+        var in_trait = false;
+        val parent = this.dl(d).parent;
+        if (parent) {
+            match (this.item_of(parent).kind) {
+                .TRAIT(n, fs) => { in_trait = true; },
+                default => {},
+            }
+        }
+        if (in_trait || this.fn_generics(d).len == 0) {
+            continue;
+        }
+        var w: lsp_walk = { ns: this.dl(d).ns };
+        for (g&) in this.fn_generics(d).items() {
+            walk_add(&w, g.name, true);
+        }
+        for (g&) in this.item_of(d).generics.items() {
+            for (b&) in g.bounds.items() {
+                this.lsp_walk_ty(&w, b);
+            }
+        }
+        for (p&) in f.params.items() {
+            if (p.ty) {
+                this.lsp_walk_ty(&w, &p.ty);
+            }
+            walk_add(&w, p.name, p.is_comptime);
+        }
+        if (f.ret) {
+            this.lsp_walk_ty(&w, &f.ret);
+        }
+        if (f.body) {
+            this.lsp_walk_block(&w, &f.body);
+        }
+    }
+}
+
+attach fn lsp_walk_block(this: checker&, w: lsp_walk&, b: block&) -> void {
+    val mark = w.names.len;
+    for (s&) in b.stmts.items() {
+        match (s.kind) {
+            .LET(l&) => { this.lsp_walk_let(w, l); },
+            .EXPR(e&) => { this.lsp_walk_expr(w, e); },
+            .DEFER(e&) => { this.lsp_walk_expr(w, e); },
+            .ERR_DEFER(e&) => { this.lsp_walk_expr(w, e); },
+            .RESUME(e&) => { this.lsp_walk_expr(w, e); },
+            .SUSPEND => {},
+            .ITEM(it) => {}, // declared when its comptime fn runs
+        }
+    }
+    walk_leave(w, mark);
+}
+
+attach fn lsp_walk_opt(this: checker&, w: lsp_walk&, e: expr*) -> void {
+    if (e) {
+        val x = e;
+        this.lsp_walk_expr(w, x);
+    }
+}
+
+attach fn lsp_walk_let(this: checker&, w: lsp_walk&, l: let_stmt&) -> void {
+    if (l.ty) {
+        this.lsp_walk_ty(w, &l.ty);
+    }
+    if (l.init) {
+        this.lsp_walk_expr(w, &l.init);
+    }
+    val mark = w.names.len;
+    this.lsp_walk_pat(w, &l.pat); // its names shadow from the next statement on
+    if (l.is_comptime) {
+        for (i) in mark..w.names.len {
+            *w.types.at(i) = true; // a comptime local can name a type
+        }
+    }
+}
+
+attach fn lsp_walk_garg(this: checker&, w: lsp_walk&, g: garg&) -> void {
+    match (*g) {
+        .TYPE(t&) => { this.lsp_walk_ty(w, t); },
+        .EXPR(x&) => { this.lsp_walk_expr(w, x); },
+    }
+}
+
+attach fn lsp_walk_gargs(this: checker&, w: lsp_walk&, gs: std::vec<garg>&) -> void {
+    for (g&) in gs.items() {
+        this.lsp_walk_garg(w, g);
+    }
+}
+
+attach fn lsp_walk_expr(this: checker&, w: lsp_walk&, e: expr&) -> void {
+    match (e.kind) {
+        .PATH(p&) => { this.lsp_walk_path(w, p, false); },
+        .DOT_VARIANT(n) => { this.lsp_member_names.put(n, true); },
+        .UNARY(op, x) => { this.lsp_walk_expr(w, x); },
+        .BINARY(op, a, b) => {
+            this.lsp_walk_expr(w, a);
+            this.lsp_walk_expr(w, b);
+        },
+        .ASSIGN(op, a, b) => {
+            this.lsp_walk_expr(w, a);
+            this.lsp_walk_expr(w, b);
+        },
+        .INC_DEC(x, inc) => { this.lsp_walk_expr(w, x); },
+        .CAST(x, t&) => {
+            this.lsp_walk_expr(w, x);
+            this.lsp_walk_ty(w, t);
+        },
+        .RANGE(a&, b&, incl) => {
+            this.lsp_walk_opt(w, ptr_box(a));
+            this.lsp_walk_opt(w, ptr_box(b));
+        },
+        .CALL(f, args&) => {
+            this.lsp_walk_expr(w, f);
+            for (a&) in args.items() {
+                this.lsp_walk_expr(w, a);
+            }
+        },
+        .FIELD(x, n, g&) => {
+            this.lsp_walk_expr(w, x);
+            this.lsp_member_names.put(n, true);
+            val gp = ptr_of(g);
+            if (gp) {
+                val ga = gp;
+                this.lsp_walk_gargs(w, ga);
+            }
+        },
+        .INDEX(a, b) => {
+            this.lsp_walk_expr(w, a);
+            this.lsp_walk_expr(w, b);
+        },
+        .BUILTIN(n, g&, xs&) => {
+            this.lsp_walk_gargs(w, g);
+            val ap = ptr_of(xs);
+            if (ap) {
+                val xa = ap;
+                if ((n == "offsetof" || n == "field") && xa.len == 2) {
+                    // @offsetof(T, field), @field(x, name): the second is a member's name
+                    this.lsp_walk_garg(w, xa.at(0));
+                    val fname = garg_name(xa.at(1));
+                    if (fname) {
+                        this.lsp_member_names.put(fname, true);
+                    }
+                } else {
+                    this.lsp_walk_gargs(w, xa);
+                }
+            }
+        },
+        .TUPLE(xs&) => {
+            for (x&) in xs.items() {
+                this.lsp_walk_expr(w, x);
+            }
+        },
+        .LITERAL(fs&) => {
+            for (f&) in fs.items() {
+                val fname = f.name;
+                if (fname) {
+                    this.lsp_member_names.put(fname, true);
+                }
+                this.lsp_walk_expr(w, &f.value);
+            }
+        },
+        .REPEAT(a, b) => {
+            this.lsp_walk_expr(w, a);
+            this.lsp_walk_expr(w, b);
+        },
+        .CLOSURE(cl&) => {
+            val mark = w.names.len;
+            for (g&) in cl.generics.items() {
+                walk_add(w, g.name, true);
+            }
+            for (p&) in cl.params.items() {
+                if (p.ty) {
+                    this.lsp_walk_ty(w, &p.ty);
+                }
+                walk_add(w, p.name, p.is_comptime);
+            }
+            if (cl.ret) {
+                this.lsp_walk_ty(w, &cl.ret);
+            }
+            this.lsp_walk_block(w, &cl.body);
+            walk_leave(w, mark);
+        },
+        .TRY(x) => { this.lsp_walk_expr(w, x); },
+        .AWAIT(x) => { this.lsp_walk_expr(w, x); },
+        .ASYNC(x) => { this.lsp_walk_expr(w, x); },
+        .MOVE(x) => { this.lsp_walk_expr(w, x); },
+        .COPY(x) => { this.lsp_walk_expr(w, x); },
+        .CATCH(x, cap&, h) => {
+            this.lsp_walk_expr(w, x);
+            val mark = w.names.len;
+            val cp = ptr_of(cap);
+            if (cp) {
+                walk_add(w, cp->name, false);
+            }
+            this.lsp_walk_expr(w, h);
+            walk_leave(w, mark);
+        },
+        .OR_ELSE(a, b) => {
+            this.lsp_walk_expr(w, a);
+            this.lsp_walk_expr(w, b);
+        },
+        .RETURN(x&) => { this.lsp_walk_opt(w, ptr_box(x)); },
+        .BREAK(l, x&) => { this.lsp_walk_opt(w, ptr_box(x)); },
+        .BLOCK(l, b&) => { this.lsp_walk_block(w, b); },
+        .LOOP(l, b&) => { this.lsp_walk_block(w, b); },
+        .WHILE(l, c, b&) => {
+            this.lsp_walk_expr(w, c);
+            this.lsp_walk_block(w, b);
+        },
+        .FOR(fl) => {
+            this.lsp_walk_expr(w, &fl.iter);
+            val mark = w.names.len;
+            if (fl.acc) {
+                val acc = &fl.acc;
+                this.lsp_walk_let(w, acc);
+            }
+            for (b&) in fl.bindings.items() {
+                walk_add(w, b.name, false);
+            }
+            if (fl.map) {
+                this.lsp_walk_expr(w, &fl.map);
+            }
+            this.lsp_walk_block(w, &fl.body);
+            walk_leave(w, mark);
+        },
+        .IF(n&) => {
+            this.lsp_walk_expr(w, n.cond);
+            this.lsp_walk_block(w, &n.then);
+            this.lsp_walk_opt(w, ptr_box(&n.els));
+        },
+        .MATCH(m&) => {
+            this.lsp_walk_expr(w, m.scrut);
+            for (a&) in m.arms.items() {
+                val mark = w.names.len;
+                this.lsp_walk_pat(w, &a.pat);
+                if (a.guard) {
+                    this.lsp_walk_expr(w, &a.guard);
+                }
+                this.lsp_walk_expr(w, &a.body);
+                walk_leave(w, mark);
+            }
+        },
+        // no names in these (a new kind that binds or names one is a compile error here)
+        .INT(x) => {},
+        .FLOAT(x) => {},
+        .CHAR(x) => {},
+        .STR(x&) => {},
+        .BOOL(x) => {},
+        .NULL => {},
+        .THIS => {},
+        .ERROR_ANY => {},
+        .CONTINUE(l) => {},
+        .TYPE_BODY(b) => {}, // a type built at compile time: its members are its own
+    }
+}
+
+// a pattern: the enum members it names by path, its literals; the names it binds come into scope
+attach fn lsp_walk_pat(this: checker&, w: lsp_walk&, p: pat&) -> void {
+    match (p.kind) {
+        .WILD => {},
+        .BIND(n) => { walk_add(w, n, false); },
+        .BIND_REF(n) => { walk_add(w, n, false); },
+        .LIT(x&) => { this.lsp_walk_expr(w, x); },
+        .RANGE(a&, b&, incl) => {
+            this.lsp_walk_expr(w, a);
+            this.lsp_walk_expr(w, b);
+        },
+        .CTOR(c&, subs&) => {
+            match (*c) {
+                .PATH(cp&) => {
+                    if (cp.segs.len == 1) {
+                        // circle(c): a variant of the scrutinee's enum (ctor_pat), whatever else is named so
+                        this.lsp_member_names.put(cp.segs.at(0).name, true);
+                    } else {
+                        this.lsp_walk_path(w, cp, false);
+                    }
+                },
+                .DOT(n) => { this.lsp_member_names.put(n, true); },
+            }
+            val sp = ptr_of(subs);
+            if (sp) {
+                for (s&) in sp->items() {
+                    this.lsp_walk_pat(w, s);
+                }
+            }
+        },
+        .TUPLE(subs&) => {
+            for (s&) in subs.items() {
+                this.lsp_walk_pat(w, s);
+            }
+        },
+        .SLICE(subs&, rest&) => {
+            for (s&) in subs.items() {
+                this.lsp_walk_pat(w, s);
+            }
+            val rp = ptr_of(rest);
+            if (rp) {
+                val rn = rp->name;
+                if (rn) {
+                    walk_add(w, rn, false);
+                }
+            }
+        },
+    }
+}
+
+attach fn lsp_walk_ty(this: checker&, w: lsp_walk&, t: ty&) -> void {
+    match (t.kind) {
+        .PATH(p&) => { this.lsp_walk_path(w, p, true); },
+        .REF(x) => { this.lsp_walk_ty(w, x); },
+        .PTR(x) => { this.lsp_walk_ty(w, x); },
+        .OPTIONAL(x) => { this.lsp_walk_ty(w, x); },
+        .SLICE(x) => { this.lsp_walk_ty(w, x); },
+        .PACK(x) => { this.lsp_walk_ty(w, x); },
+        .ARRAY(x, n&) => {
+            this.lsp_walk_ty(w, x);
+            this.lsp_walk_opt(w, ptr_box(n));
+        },
+        .TUPLE(es&) => {
+            for (el&) in es.items() {
+                this.lsp_walk_ty(w, &el.ty);
+            }
+        },
+        .ERROR_UNION(a&, b) => {
+            val ap = ptr_box_ty(a);
+            if (ap) {
+                val at = ap;
+                this.lsp_walk_ty(w, at);
+            }
+            this.lsp_walk_ty(w, b);
+        },
+        .FN(ft&) => {
+            for (x&) in ft.params.items() {
+                this.lsp_walk_ty(w, x);
+            }
+            this.lsp_walk_ty(w, ft.ret);
+        },
+        .EXPR(x) => { this.lsp_walk_expr(w, x); },
+        .RESOLVED(id) => {},
+    }
+}
+
+// a path in a walked body: recorded as a checked use of what it names would be
+attach fn lsp_walk_path(this: checker&, w: lsp_walk&, p: path&, is_type: bool) -> void {
+    for (s&) in p.segs.items() {
+        if (s.args) {
+            this.lsp_walk_gargs(w, &s.args);
+        }
+    }
+    val head = p.segs.at(0).name;
+    // the body's own name: a local or param only as a bare value (path_expr), a generic param or
+    // comptime local anywhere (resolve_type_path; T::member needs a type)
+    if (walk_shadows(w, head, is_type || !p.is_single())) {
+        return;
+    }
+    var f: found? = null;
+    val refs = this.lsp_refs.len;
+    if (p.segs.len == 1) {
+        f = this.lookup(w.ns, head);
+    } else {
+        f = this.lookup_path_ns(w.ns, p);
+    }
+    if (f == null) {
+        if (p.segs.len > 1) {
+            // the prefix's lookup records its namespaces again
+            while (this.lsp_refs.len > refs) {
+                this.lsp_refs.pop();
+            }
+            this.lsp_walk_member_path(w, p);
+        }
+        return;
+    }
+    val last = p.last();
+    match (f ?? found::NS(0)) {
+        .DECLS(l) => {
+            // a call by name reaches a fn without a receiver: one is recorded, overloads need types
+            var only: u32? = null;
+            var fns = 0;
+            for (d&) in this.list(l).items() {
+                val fd = this.fn_decl_of(*d);
+                if (fd) {
+                    if (fd.params.len == 0 || fd.params.at(0).name != "this") {
+                        only = *d;
+                        fns += 1;
+                    }
+                }
+            }
+            val d0 = *this.list(l).at(0);
+            match (this.item_of(d0).kind) {
+                .GLOBAL(x) => {
+                    if (!is_type) {
+                        this.lsp_decl_use(d0, last, p.span, this.lsp_global_label(d0, last));
+                    }
+                    return;
+                },
+                default => {},
+            }
+            if (!is_type && fns == 1 && only != null) {
+                this.lsp_fn_use(only ?? 0, null, p.span);
+                return;
+            }
+            this.lsp_walk_type_decl(l, last, p.span);
+        },
+        .NS(n) => { this.lsp_ns_use(last, p.span); },
+    }
+}
+
+// the type among decls l, recorded as named at the end of span; the type's decl when there is one
+attach fn lsp_walk_type_decl(this: checker&, l: u32, name: str, span: span) -> u32? {
+    for (d&) in this.list(l).items() {
+        var is_type = false;
+        match (this.item_of(*d).kind) {
+            .STRUCT(s) => { is_type = s.spec == null; },
+            .ENUM(x) => { is_type = true; },
+            .TRAIT(n, fs) => { is_type = true; },
+            .ALIAS(n, t) => { is_type = true; },
+            default => {},
+        }
+        if (is_type) {
+            this.lsp_decl_use(*d, name, span, this.lsp_type_label(*d, name));
+            return *d;
+        }
+    }
+    return null;
+}
+
+// Type::member: the type, and the member when it's an enum's variant (others need the type's
+// members worked out)
+attach fn lsp_walk_member_path(this: checker&, w: lsp_walk&, p: path&) -> void {
+    var segs: std::vec<path_seg> = {};
+    for (i) in 0..(p.segs.len - 1) {
+        put(&segs, copy *p.segs.at(i));
+    }
+    val prefix: path = { segs: move segs, span: p.span };
+    var f: found? = null;
+    if (prefix.segs.len == 1) {
+        f = this.lookup_in(w.ns, prefix.segs.at(0).name, true);
+    } else {
+        f = this.lookup_path_ns(w.ns, &prefix);
+    }
+    match (f ?? return) {
+        .DECLS(l) => {
+            val d = this.lsp_walk_type_decl(l, prefix.last(), p.span) ?? return;
+            val name = p.last();
+            match (this.item_of(d).kind) {
+                .ENUM(e&) => {
+                    for (v&) in e.variants.items() {
+                        if (v.name == name) {
+                            val at = this.lsp_word(p.span, name, true) ?? return;
+                            put(&this.lsp_refs, { at: at, def: this.name_span(v.span, name), label: fmt2("{}::{}", S(e.name), S(name)), kind: LK_ENUM_MEMBER });
+                        }
+                    }
+                },
+                default => {},
+            }
+        },
+        default => {},
+    }
+}
+
+// what hover says about global d, named `name`, without checking it: its type once checked, else
+// as declared
+attach fn lsp_global_label(this: checker&, d: u32, name: str) -> std::string {
+    val g = this.global_c.get(d);
+    if (g) {
+        return fmt2("{}: {}", S(name), this.ty_name(g.ty));
+    }
+    match (this.item_of(d).kind) {
+        .GLOBAL(l&) => {
+            if (l.ty) {
+                return fmt2("{}: {}", S(name), this.span_text(l.ty.span));
+            }
+        },
+        default => {},
+    }
+    return S(name);
+}
+
 // the local named `name` declared in file last before offset at (else the first declared)
 attach fn lsp_local_named(this: checker&, file: u32, name: str, at: usize) -> lsp_local* {
     var best: lsp_local* = null;
@@ -281,6 +817,9 @@ attach fn lsp_members(this: checker&, t0: u32, out: std::json::value&) -> void {
     var names: std::vec<str> = {};
     map_keys(&this.attached, &names);
     for (n) in names.items() {
+        if (is_operator_fn(n)) {
+            continue; // used as an operator, never called by name
+        }
         for (d) in this.named(&this.attached, n).items() {
             if (this.takes_this(d, t)) {
                 out.add(lsp_item(n, 2.0, this.lsp_decl_text(d).as_str()));
@@ -1128,7 +1667,8 @@ attach fn check_doc(this: lsp_server&, doc: lsp_doc&) -> std::vec<diag> {
             put(&o.pkg_files, { file: u.file, pkg: u.pkg });
         }
     }
-    val chk = compile_rounds(&s.files, &s.asts, move o);
+    var chk = compile_rounds(&s.files, &s.asts, move o);
+    chk.lsp_generic_bodies();
     for (d&) in all_diags(&*chk).items() {
         if (d.span.file == file) {
             put(&diags, copy *d);

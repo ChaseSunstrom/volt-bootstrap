@@ -546,6 +546,7 @@ struct checker {
     lsp_locals: std::vec<lsp_local> = {};
     lsp_args: std::vec<lsp_arg> = {}; // call arguments and the parameters they're for (inlay hints)
     lsp_local_idx: std::map<u32, usize> = {}; // place -> its lsp_locals entry
+    lsp_member_names: std::map<str, bool> = {}; // names used as members in generic bodies nothing instantiates (not indexed: lsp_generic_bodies)
 }
 
 fn new_checker(files: std::vec<source_file>&, o: opts) -> checker {

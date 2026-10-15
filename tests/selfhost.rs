@@ -214,9 +214,17 @@ fn hot_profiles(voltc: &Path, tmp: &Path) {
     if !cfg!(target_os = "linux") || ["llvm-symbolizer", "addr2line"].iter().all(|t| Command::new(t).arg("--version").output().is_err()) {
         return; // the sampler is Linux-only, and naming samples needs one of those
     }
-    let o = Command::new(env!("CARGO_BIN_EXE_bolt")).args(["hot", "tests/hot/spin.volt"]).current_dir(root).env("VOLTC", voltc).env("VOLT_STD", root.join("std")).output().unwrap();
+    let page = tmp.join("spin.html");
+    let o = Command::new(env!("CARGO_BIN_EXE_bolt")).args(["hot", "tests/hot/spin.volt", "--html"]).arg(&page).current_dir(root).env("VOLTC", voltc).env("VOLT_STD", root.join("std")).output().unwrap();
     let out = String::from_utf8_lossy(&o.stdout);
     assert!(o.status.success(), "bolt hot failed:\n{out}{}", String::from_utf8_lossy(&o.stderr));
+    // --html: one page that needs no network, an icicle with work under main and its share, a table
+    let html = std::fs::read_to_string(&page).expect("bolt hot --html wrote no page");
+    assert!(!html.contains("http://") && !html.contains("https://"), "the page loads something from the network:\n{html}");
+    let at = html.find("title=\"main → work&#10;total ").map(|i| i + "title=\"main → work&#10;total ".len()).unwrap_or_else(|| panic!("no work under main in the icicle:\n{html}"));
+    let share = &html[at..at + html[at..].find('%').unwrap()];
+    assert!(share.parse::<f64>().is_ok_and(|p| p > 50.0), "work's share isn't a percentage over 50: {share}");
+    assert!(html.contains("<th>self</th>") && html.contains("<th>total</th>") && html.contains(">work (tests/hot/spin.volt:11)</td>"), "the page has no self/total table naming work:\n{html}");
     // work by its Volt name though gcc copies it (work.constprop.0); mix, only ever inlined, says so
     assert!(out.contains("  work (tests/hot/spin.volt:11)\n"), "bolt hot didn't name work:\n{out}");
     assert!(out.contains("  mix (tests/hot/spin.volt:6), inlined\n"), "bolt hot didn't mark mix inlined:\n{out}");

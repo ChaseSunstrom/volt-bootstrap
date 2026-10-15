@@ -1925,6 +1925,29 @@ fn cpp_stdlib() {
 }
 
 #[test]
+fn cpp_ranges2() {
+    // for over C++ ranges whose iterators C++ holds (a shared_ptr in them, move-only, aligned past
+    // 8): looped fully and left by break, return and try, each freeing them; std::vector and
+    // std::map from a header read under C++98
+    let e = Env::new("cpp-ranges2");
+    let want = "shared 30 live 0 inside 2\nbreak live 0\nreturn 10 live 0\ntry -1 live 0\nlabeled break live 0\ncontinue 20 live 0\nnested 180 live 0\nmove 10 live 0\nwide 14\nc++98 6 2\n";
+    for backend in ["c", "llvm"] {
+        assert_eq!(ok(e.voltc(&["run", "cpp_ranges2.volt", "--backend", backend]), "voltc run cpp_ranges2.volt"), want, "C++ ranges C++ holds the iterators of ({backend})");
+    }
+    // trivially copyable iterators stay in Volt's words; the others go through C++'s heap
+    let shown = Command::new(&e.voltc).args(["check", "cpp_ranges2.volt", "--std"]).arg(Path::new(ROOT).join("std")).current_dir(Path::new(ROOT).join("tests/interop")).env("VOLT_SHOW_CPP", "1").output().unwrap();
+    let src = String::from_utf8_lossy(&shown.stderr);
+    let range = |q: &str| src.split("// C++'s ").find(|s| s.starts_with(q)).unwrap_or_else(|| panic!("no range for {q}: {src}")).to_string();
+    let (vector, shared) = (range("std::vector<int32_t > looped over"), range("r2::shared_range looped over"));
+    assert!(vector.contains("volt_range_start") && !vector.contains("volt_range_open"), "std::vector inline: {vector}");
+    assert!(shared.contains("volt_range_open") && !shared.contains("volt_range_start"), "shared_ptr range on C++'s heap: {shared}");
+    // an over-aligned iterator below C++17
+    let o = e.voltc(&["check", "cpp_ranges2_wide14.volt"]);
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(!o.status.success() && err.contains("can't loop over C++'s r2::wide_range: its iterators are aligned past 8, which needs C++17 or newer") && err.contains("cpp_ranges2_wide14.volt:7"), "an over-aligned iterator under C++14: {err}");
+}
+
+#[test]
 fn cpp_refs() {
     // T*, T&, const T& of an uncopyable class, unique_ptr and shared_ptr over handle classes, a
     // class whose copy doesn't compile, a diamond's bases by path
@@ -1942,11 +1965,34 @@ fn cpp_params() {
     // parameters with a Volt form of their own, declared and per use: a reference to an array (const
     // or not, one through an alias with a default), a function pointer, a std::string& (a throw
     // leaves the Volt string as it was, under a callback too), a std::function over a class held by
-    // handle, one laid out and one move-only
+    // handle, one laid out and one move-only; a C++ std::function Volt keeps, called with a
+    // std::string&
     let e = Env::new("cpp-params");
-    let want = "sum 6\nfill 4 4 4\ntotal 12\ntwice 8 24\nfirst 7 8\napply 5 6 10\n@cpp 42\nshout hi!!\ngrow 2: 7 hi!!~++\ngrow -1: INVALID_ARGUMENT hi!!~++\n@cpp hi!!~++!\nrelay INVALID_ARGUMENT hi!!~++!\nshapes 2 7\npoints 202 45\nspend 15\n";
+    let want = "sum 6\nfill 4 4 4\ntotal 12\ntwice 8 24\nfirst 7 8\napply 5 6 10\n@cpp 42\nshout hi!!\ngrow 2: 7 hi!!~++\ngrow -1: INVALID_ARGUMENT hi!!~++\n@cpp hi!!~++!\nrelay INVALID_ARGUMENT hi!!~++!\nshapes 2 7\npoints 202 45\nspend 15\nasked why??\ncounted 3 7 ab+\n";
     for backend in ["c", "llvm"] {
         assert_eq!(ok(e.voltc(&["run", "cpp_params.volt", "--backend", backend]), "voltc run cpp_params.volt"), want, "C++ parameters ({backend})");
+    }
+}
+
+#[test]
+fn cpp_defaults() {
+    // a default argument is a top-level = in the parameter's tokens: an array reference's bound, a
+    // std::array's size and a decltype's expression are not one, a template's = is outside the parameter
+    let e = Env::new("cpp-defaults");
+    let want = "ref 1 2\nalias 8\nexpr 3 5\ndt 10 11\ncmp 1 0\nplain 4\ntp 9\ntail 8\n";
+    for backend in ["c", "llvm"] {
+        assert_eq!(ok(e.voltc(&["run", "cpp_defaults.volt", "--backend", backend]), "voltc run cpp_defaults.volt"), want, "C++ default arguments ({backend})");
+    }
+    let shown = Command::new(&e.voltc).args(["check", "cpp_defaults.volt", "--std"]).arg(Path::new(ROOT).join("std")).current_dir(Path::new(ROOT).join("tests/interop")).env("VOLT_SHOW_CPP", "1").output().unwrap();
+    let src = String::from_utf8_lossy(&shown.stderr);
+    for none in ["fn ref_plain()", "fn arr()", "fn dt_plain()"] {
+        assert!(!src.contains(none), "{none} has no default: {src}");
+    }
+    assert!(src.contains("fn ref_alias()") && src.contains("fn expr()") && src.contains("fn dt()") && src.contains("fn cmp()"), "the defaulted forms: {src}");
+    // each of these has both forms: with its argument and without
+    for name in ["g", "h", "p", "a"] {
+        assert!(src.contains(&format!("    fn {name}() -> i32")) && src.contains(&format!("    fn {name}(")), "{name} without its default: {src}");
+        assert!(src.matches(&format!("    fn {name}(")).count() >= 2, "{name} with and without its argument: {src}");
     }
 }
 
@@ -1970,6 +2016,9 @@ fn cpp_params_refused() {
     let shown = Command::new(&e.voltc).args(["check", "cpp_params.volt", "--std"]).arg(Path::new(ROOT).join("std")).current_dir(Path::new(ROOT).join("tests/interop")).env("VOLT_SHOW_CPP", "1").output().unwrap();
     let src = String::from_utf8_lossy(&shown.stderr);
     assert!(src.contains("its result would point into a copy of the string that's gone once the call returns") && !src.contains("fn first_word("), "a view into the copy, declared: {src}");
+    assert!(!src.contains("fn first_at(") && !src.contains("fn name_of(") && src.contains("fn count_up("), "structs holding a pointer or a view into the copy, declared: {src}");
+    let err = check("cpp_params_struct_view.volt");
+    assert!(err.contains("its result would point into a copy of the string that's gone once the call returns") && err.contains("cpp_params_struct_view.volt:7"), "a struct holding a pointer into the copy, per use: {err}");
 }
 
 #[test]

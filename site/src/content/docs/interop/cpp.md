@@ -66,7 +66,7 @@ fn main() -> void {
 | destructor | a `delete` hook (only when the class needs one) |
 | copy constructor | a `copy` hook (a handle's copies the object with it) |
 | methods, static methods | attached functions, overloads kept |
-| overloads Volt can't tell apart (`long` and `long long` are both `i64`, `char` and `signed char` both `i8`, a `const` method's `this` is a non-`const` one's) | the first declared keeps the name; each other one is named for its parameters' C++ types, after the namespace's own names: `which_long_long(x)`, `letter_signed_char(c)`, `T::new_long_long(n)`, `get_const()` (words joined by `_`, `*` as `ptr`, `&` as `ref`, `&&` as `rref`; when only its qualifiers differ, `const`, `lref`, `rref` or `nonconst` instead: `get_nonconst()` after a `get() const`), its default-argument forms too, and calls exactly that overload. A name a real declaration (or another such name) has is a `// left out:` comment instead, and so is a real declaration in a later block of the namespace whose name an alias has |
+| overloads Volt can't tell apart (`long` and `long long` are both `i64`, `char` is `signed char`'s or `unsigned char`'s twin depending on the target (signed on x86-64, unsigned on arm64 Linux), so which overload collides depends on the target, a `const` method's `this` is a non-`const` one's) | the first declared keeps the name; each other one is named for its parameters' C++ types, after the namespace's own names: `which_long_long(x)`, `letter_char(c)` (when `char` comes after the other two), `T::new_long_long(n)`, `get_const()` (words joined by `_`, `*` as `ptr`, `&` as `ref`, `&&` as `rref`; when only its qualifiers differ, `const`, `lref`, `rref` or `nonconst` instead: `get_nonconst()` after a `get() const`), its default-argument forms too, and calls exactly that overload. A name a real declaration (or another such name) has is a `// left out:` comment instead, and so is a real declaration in a later block of the namespace whose name an alias has |
 | a method qualified `&&` on a class held by handle | an attached function taking `this` by value: the handle is consumed (using it afterwards is a use after move), and C++ moves from the object, or from a copy of it when the handle only borrows it (`as_Base()`). On a class template's instance (worked out per use) it's C++'s error, and `derive`'s `base_m()` and protected forms leave it out with a comment: their object is the Volt subclass's |
 | functions, function templates | functions, generic functions: `ns::biggest<i32>(a, b)` |
 | class templates | generic structs: `ns::Box<f64>`; one with private fields, bases or virtual methods is a generic handle (`ns::box<i32>`), its members worked out per use |
@@ -271,7 +271,7 @@ fn main() -> void {
 | `operator=` | `assign(v)` |
 | a method template | a generic method: `c.cast_to<f64>()` |
 | a `std::function<R(A...)>` parameter | `fn(A...) -> R`: a closure or function; C++ calls it while the call lasts (it mustn't keep it). A class in `A...` (by value or `const&`) arrives as a borrowed handle of C++'s object (a move-only one too), good while the callback runs, or, for one Volt lays out, a copy of its struct; `R` may be a class Volt lays out |
-| a `std::function` result | `stdcxx::function`: `call(...)` runs it, and it's deleted with the Volt value |
+| a `std::function` result | `stdcxx::function`: `call(...)` runs it, taking its arguments as any call's parameters (a `std::string&` too), and it's deleted with the Volt value |
 | a `std::function` field | a getter, and `set_f(closure)`: the closure moves into the field, which keeps it (and deletes it once C++ is done with every copy); one capturing by reference (`\|x&\|`) is a compile error |
 | a bit-field | `f()` and `set_f(v)`, on a class held by value or by handle (C++ does the bit work) |
 | a namespace variable | `name()`: a reference into it (`*cpp::ns::count() = 3`), a borrowed handle for a class held by handle, or for others (a `std::string`) a copy, with `set_name(v)` |
@@ -445,9 +445,15 @@ object `derive` didn't make; without RTTI, either stops the program saying so.
 - A `std::string&` parameter is a copy C++ changes and Volt copies back once the call returns:
   given the same string twice in one call (which Volt warns of, two mutable borrows), each copy
   comes back in turn, the first parameter's last.
-- A loop over a C++ range holds its iterators in Volt's own words, so they must be trivially copyable
-  and destructible (the standard library's and the views' are); C++ reads ranges under C++11 or
-  newer.
+- A loop over a C++ range whose iterators are aligned past 8 needs its import under C++17 or newer
+  (C++ holds them, with an aligned `new`). Iterators that are trivially copyable and destructible
+  (the standard library's and the views' are) live in the loop's own words; the others (one holding
+  a `std::shared_ptr`, a move-only one) on C++'s heap, freed however the loop ends (a `break`,
+  `return` or `try` too). Under C++98/03 a range is what has `R::iterator` (`R::const_iterator`
+  for a const one), `r.begin()` and `r.end()`, as the standard containers do. An exception thrown
+  from `begin`, `end`, `++` or `*` stops the program, except inside a Volt function C++ called,
+  where it goes back to that C++ and the heap-held iterators leak (Volt's frames are left without
+  their deletes).
 - A type Volt can't lay out and has no generic for (an instance of a class template that takes a
   number or a template, like `vec<3, float>` or `basic_json<>`; a lambda's own type; a coroutine's
   task type) is held by handle, named after the type (`basic_json_0`, `lambda_3`) or by the header's
