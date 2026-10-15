@@ -1067,6 +1067,7 @@ attach fn cast(this: checker&, x: expr&, to: u32, span: span) -> compile_error!t
         ok = this.coercible(&v, to);
     }
     if (!ok) {
+        try this.no_values(to, span);
         return fail(span, fmt2("can't convert {} to {} with 'as' (it could lose data; @cast<T>(x) converts unchecked)", this.ty_name(v.ty), this.ty_name(to)));
     }
     if (this.t.int_of(to) != null || this.t.is_float(to)) {

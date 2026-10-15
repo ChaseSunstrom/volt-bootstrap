@@ -565,6 +565,7 @@ attach fn coerce(this: checker&, v: tval, to: u32, span: span) -> compile_error!
     if (this.error_coercible(&v, to)) {
         return this.error_coerce(v, to, span);
     }
+    try this.no_values(to, span);
     return type_diff(fail(span, fmt2("expected {}, found {}", this.ty_name(to), this.ty_name(v.ty))));
 }
 
