@@ -204,7 +204,10 @@ attach fn make_lt(this: lg&, t: u32) -> llvm::LLVMOpaqueType* {
     val n = this.member_count(t);
     if (this.is_union(t)) {
         put(&elems, this.lt(this.member_ty(t, 0)));
-        put(&elems, this.union_lt(t, 1));
+        // a trait union with no members is just its tag, as in C
+        if (n > 1) {
+            put(&elems, this.union_lt(t, 1));
+        }
     } else if (this.c_union(t)) {
         return this.union_lt(t, 0);
     } else if (this.overlay(t).0 > 0) {
