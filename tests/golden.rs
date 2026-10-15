@@ -80,22 +80,36 @@ fn std_linked() {
     let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("linked-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let voltc = |args: &[&str]| Command::new(&bin).args(args).current_dir(root).output().unwrap();
-    let (std_a, geo_a) = (dir.join("libstd.a"), dir.join("libgeo.a"));
-    let (std_a, geo_a) = (std_a.to_str().unwrap(), geo_a.to_str().unwrap());
-    for (pkg, out) in [("std", std_a), ("geo", geo_a)] {
-        let o = voltc(&["lib", pkg, "--pkg", "geo=tests/pkgs/geo", "-o", out]);
-        assert!(o.status.success(), "voltc lib {pkg}: {}", String::from_utf8_lossy(&o.stderr));
+    let lib = |name: &str| dir.join(format!("lib{name}.a")).to_str().unwrap().to_string();
+    let (std_a, geo_a, hold_a, geo2_a) = (lib("std"), lib("geo"), lib("hold"), lib("geo2"));
+    let pkgs = ["--pkg", "geo=tests/pkgs/geo", "--pkg", "hold=tests/pkgs/hold", "--pkg", "geo2=tests/pkgs/geo2"];
+    let hold_link = format!("hold={hold_a}");
+    // geo2 uses hold: built against libhold.a, as bolt builds a dependent (a library build keeps
+    // its references to hold, whatever hold's globals hold)
+    for (pkg, out, more) in [("std", &std_a, &[][..]), ("geo", &geo_a, &[]), ("hold", &hold_a, &[]), ("geo2", &geo2_a, &["--link", hold_link.as_str()])] {
+        let o = voltc(&[&["lib", pkg, "-o", out][..], &pkgs, more].concat());
+        let err = String::from_utf8_lossy(&o.stderr);
+        assert!(o.status.success() && !err.contains("isn't used"), "voltc lib {pkg}: {err}");
     }
     let prog = "tests/run/packages_linked.volt";
     let want = directives(&std::fs::read_to_string(root.join(prog)).unwrap(), "expect").join("\n");
     let std_link = format!("std={std_a}");
     let geo_link = format!("geo={geo_a}");
-    let o = voltc(&["run", prog, "--pkg", "geo=tests/pkgs/geo", "--leak-check", "--link", &std_link, "--link", &geo_link]);
+    let geo2_link = format!("geo2={geo2_a}");
+    // hold twice: one warning
+    let links = ["--link", &std_link, "--link", &geo_link, "--link", &hold_link, "--link", &hold_link, "--link", &geo2_link];
+    let o = voltc(&[&["run", prog, "--leak-check"][..], &links, &pkgs].concat());
     let got = String::from_utf8_lossy(&o.stdout);
-    assert_eq!(got.trim_end(), want.trim_end(), "stderr: {}", String::from_utf8_lossy(&o.stderr));
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert_eq!(got.trim_end(), want.trim_end(), "stderr: {err}");
     assert!(o.status.success());
+    // hold's globals hold a trait union, so hold is built from source, and so is geo2, which uses
+    // it; voltc says why. std and geo still come from their libraries
+    assert_eq!(err.matches("hold's library isn't used: its global 'spare' holds a trait union").count(), 1, "stderr: {err}");
+    assert!(err.contains("geo2's library isn't used: it uses hold, which is built from source"), "stderr: {err}");
+    assert!(!err.contains("std's library") && !err.contains("geo's library"), "stderr: {err}");
     // a debug library can't go into a release program
-    let o = voltc(&["run", prog, "--pkg", "geo=tests/pkgs/geo", "--release", "--link", &std_link]);
+    let o = voltc(&[&["run", prog, "--release", "--link", &std_link][..], &pkgs].concat());
     assert!(!o.status.success() && String::from_utf8_lossy(&o.stderr).contains("rebuild it with voltc lib std"));
     let _ = std::fs::remove_dir_all(&dir);
 }

@@ -7,7 +7,7 @@ use std::mem;
 // Mark a fn instance used. The first time, its ir fn gets its linkage and a place in the output
 // order, and its body is queued for gen_fn (not for an intrinsic, or a fn a linked library defines).
 attach fn use_fn(this: checker&, idx: u32) -> void {
-    if (*this.used.at(@cast<usize>(idx))) {
+    if (this.scanning || *this.used.at(@cast<usize>(idx))) {
         return;
     }
     *this.used.at(@cast<usize>(idx)) = true;

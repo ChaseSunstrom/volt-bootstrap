@@ -55,6 +55,7 @@ attach fn program(this: checker&) -> compile_error!void {
             return with_help(fails(NO_SPAN, "no main function"), S("a program starts at fn main() -> void { ... }"));
         }
     }
+    this.unlink_union_globals(); // before any fn or global picks its linkage
     var mi: u32? = null;
     if (main) {
         val m = main;
