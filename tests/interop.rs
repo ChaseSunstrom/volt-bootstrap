@@ -2025,7 +2025,7 @@ fn cpp_params_refused() {
     // a Volt std::string for a template parameter nested in another type (S*, std::vector<S>) or
     // the result, each call
     let err = check("cpp_params_gnest.volt");
-    let why = "Volt's std::string crosses a C++ template only as S, S& or const S&";
+    let why = "a Volt std::string crosses to C++ only as itself (a template's S, S& or const S&), not inside another type or as a result";
     for line in ["cpp_params_gnest.volt:8", "cpp_params_gnest.volt:9", "cpp_params_gnest.volt:11"] {
         assert!(err.contains(line), "{line}: {err}");
     }

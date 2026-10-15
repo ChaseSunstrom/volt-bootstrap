@@ -6141,8 +6141,7 @@ attach fn cpp_probe_type(this: checker&, t: u32) -> std::string? {
                 default => {},
             }
             // a Volt std::string& as C++'s (the importer copies it back after the call)
-            val xn = this.ty_name(x);
-            if (xn.as_str() == "std::string" || xn.as_str() == "std::string<std::mem::default_allocator>") {
+            if (this.text_bound(x)) {
                 return S("std::string &");
             }
             var s = this.cpp_probe_type(x) ?? return null;
@@ -7075,7 +7074,7 @@ attach fn cpp_call(this: checker&, gargs: std::vec<garg>&, args: std::vec<garg>&
     return vnew(r, this.call_fn(f, move vals, r));
 }
 
-val TEXT_NESTED: str = "Volt's std::string crosses a C++ template only as S, S& or const S&";
+val TEXT_NESTED: str = "a Volt std::string crosses to C++ only as itself (a template's S, S& or const S&), not inside another type or as a result";
 
 // Volt's std::string, or a reference to it: what a C++ template's S takes as a C++ std::string
 attach fn text_bound(this: checker&, t: u32) -> bool {
@@ -7206,7 +7205,8 @@ attach fn cpp_text_template(this: checker&, gargs: std::vec<garg>&, args: std::v
     }
     var none: std::vec<garg> = {};
     var cands: std::vec<u32> = {};
-    // (a template taking S& fails the const probe: it's probed again, each time it's checked)
+    // ponytail: a template taking S& fails the const probe and is probed again, two clang parses
+    // each time it's checked; cache the failed probe if checking such calls gets slow
     val made = this.cpp_instance(k, text.as_str(), &ctys, false, value, span) catch |e| {
         put(&cands, try this.cpp_instance(k, text.as_str(), &mtys, false, value, span));
         return this.pick_call("@cpp", &cands, null, null, &none, &mpre, &es, null, span);
