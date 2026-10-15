@@ -1477,6 +1477,10 @@ attach fn assignable(this: cpp_gen&, t: clang::CXType) -> bool {
         return false;
     }
     val ct = clang::clang_getCanonicalType(t);
+    // an array field isn't (param would take it as the pointer a parameter written so is)
+    if (ct.kind == clang::CXType_ConstantArray || ct.kind == clang::CXType_IncompleteArray) {
+        return false;
+    }
     if (ct.kind != clang::CXType_Record) {
         return true;
     }
@@ -1580,6 +1584,22 @@ attach fn param(this: cpp_gen&, t: clang::CXType, name: str, i: usize, tparams: 
         }
     }
     val k = t.kind;
+    // a parameter written as an array, T a[N] or T a[]: a T* (C++ decays it; libclang gives the type
+    // as written), so a Volt T* as a pointer parameter takes (const or not, as C's); a char one a
+    // cstr?. Not a template's T, which only the template can spell
+    if (k == clang::CXType_ConstantArray || k == clang::CXType_IncompleteArray) {
+        val et = clang::clang_getArrayElementType(t);
+        val ek = clang::clang_getCanonicalType(et).kind;
+        if (this.handle_of(et) != null || contains(canon(et).as_str(), "type-parameter")) {
+            return null;
+        }
+        var v = S("cstr?");
+        if (ek != clang::CXType_Char_S && ek != clang::CXType_Char_U && ek != clang::CXType_SChar) {
+            v = this.vtype(et, tparams) ?? return null;
+            v.push('*');
+        }
+        return { vty: move v, pass: S(name), cpp: fmt2("(VOLT_ID({}) *)({})", canon(et), move slot) };
+    }
     // std::string and std::string_view from a str, a std::vector<T> from a T[..] (by value, const& or
     // &&: a C++ object the wrapper makes)
     var base = t;

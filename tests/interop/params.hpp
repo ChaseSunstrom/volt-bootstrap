@@ -60,4 +60,12 @@ class Token {
     std::unique_ptr<int> v_;
 };
 inline int spend(const std::function<int(Token)> &f) { return f(Token(7)) + f(Token(8)); }
+// parameters written as arrays are pointers (a size or none, const, with a default)
+namespace ap {
+inline int g3[3] = {7, 8, 9};
+inline int sum3(int a[3]) { a[2] += 1; return a[0] + a[1] + a[2]; }
+inline int total(const int a[], int n) { int s = 0; for (int i = 0; i < n; i++) s += a[i]; return s; }
+inline int tail(int a[3] = g3) { return a[2]; }
+template <class T> T head(const T a[]) { return a[0]; }
+}
 }
