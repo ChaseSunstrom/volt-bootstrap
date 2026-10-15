@@ -16,11 +16,16 @@ typedef unsigned _BitInt(128) volt_u128;
 #error "Volt's i128 needs __int128 or _BitInt(128); for this target, use clang 16 or gcc 14 or later"
 #endif
 /* f128, IEEE binary128: where long double is it (aarch64 and riscv64 Linux and FreeBSD, which have no
-   __float128), long double; elsewhere the C compiler's __float128 (x86-64) */
+   __float128), long double; elsewhere the C compiler's __float128 (x86-64); with neither (arm64
+   macOS, whose long double is a double) its 16 bytes of bits, which C code only copies and
+   reinterprets (std::softfloat's quad routines work on the bits) */
 #if defined(__LDBL_MANT_DIG__) && __LDBL_MANT_DIG__ == 113
 #define volt_f128 long double
-#else
+#elif defined(__SIZEOF_FLOAT128__)
 #define volt_f128 __float128
+#else
+typedef struct { uint64_t volt_bits[2]; } __attribute__((aligned(16))) volt_f128_bits;
+#define volt_f128 volt_f128_bits
 #endif
 #define VOLT_S2(x) #x
 #define VOLT_S(x) VOLT_S2(x)
