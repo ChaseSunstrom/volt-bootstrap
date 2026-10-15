@@ -98,4 +98,17 @@ template <class S> int count_all(const std::vector<S> &v) { return (int)v.size()
 template <class S> int deref(S *p) { return (int)p->size(); }
 template <class S> S echo(const S &s) { return s; }
 }
+// nested std::vectors, by value and const& (a Volt slice of slices, each level copied), written back
+// as text so a wrong split or order shows; a mutable one, one of bools and one of a class stay per
+// use
+namespace nv {
+inline std::string row(const std::vector<int> &r) { std::string s = "["; for (std::size_t i = 0; i < r.size(); i++) s += (i ? "," : "") + std::to_string(r[i]); return s + "]"; }
+inline std::string rows(const std::vector<std::vector<int>> &v) { std::string s = "["; for (std::size_t i = 0; i < v.size(); i++) s += (i ? "," : "") + row(v[i]); return s + "]"; }
+inline std::string shape(std::vector<std::vector<int>> v) { return rows(v); }
+inline std::string shape_ref(const std::vector<std::vector<int>> &v) { return rows(v); }
+inline std::string shape3(const std::vector<std::vector<std::vector<int>>> &v) { std::string s = "["; for (std::size_t i = 0; i < v.size(); i++) s += (i ? "," : "") + rows(v[i]); return s + "]"; }
+inline int widen(std::vector<std::vector<int>> &v) { v.push_back(std::vector<int>()); return (int)v.size(); }
+inline int flags(const std::vector<std::vector<bool>> &v) { return (int)v.size(); }
+inline int boxes(const std::vector<std::vector<Shape>> &v) { return (int)v.size(); }
+}
 }

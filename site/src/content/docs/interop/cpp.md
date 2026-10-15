@@ -258,6 +258,7 @@ fn main() -> void {
 | a `std::string` result | `std::string` (a copy) |
 | a `std::string_view` result | `str` (the same bytes, alive as long as C++ keeps them) |
 | `std::vector<T>` parameters (by value, `const&`) | `T[..]` |
+| nested `std::vector` parameters (by value, `const&`), `std::vector<std::vector<int>>` | `i32[..][..]`, to any depth, each level copied; the innermost element a number or a `char` (one of `bool`s or of a class is [per use](#calls-worked-out-per-use)) |
 | a `std::vector<T>` result (`T` a plain value) | `std::vec<T>` (a copy) |
 | a `T(&)[N]` parameter, and `const T(&)[N]` | `T[N]&` (C++ writes into the Volt array), and `T[N]`; `T` a number, `bool`, pointer or a class Volt lays out |
 | a parameter written as an array, `T a[N]`, `const T a[]` (a default too) | `T*`, as C++ decays it (`&arr[0]`), through an alias too; the pointer carries no length, so `N` isn't checked. A `char` one is `cstr?`, read-only even when C++'s array isn't (as a `char*` is). An array of arrays has no form yet (per use). Per use, a Volt `T*` is C++'s `T *` (`&x` alone is a `T &`) |
@@ -442,8 +443,11 @@ object `derive` didn't make; without RTTI, either stops the program saying so.
   it): a `std::function` whose signature has a non-const reference in it or gives back a class
   Volt holds by handle (a `std::function` field: one taking such a class), a function pointer
   whose signature has a class, enum or reference in it (or `...`), a reference to an array of
-  enums or of a class Volt holds by handle. For a function pointer or a `std::function`, `@cpp`'s
-  `{&i}` passes a Volt function: `@cpp<i32>("ns::apply({&0}, {1})", inc, 4)`.
+  enums or of a class Volt holds by handle, a nested `std::vector` of `bool`s or of a class. For a
+  function pointer or a `std::function`, `@cpp`'s `{&i}` passes a Volt function:
+  `@cpp<i32>("ns::apply({&0}, {1})", inc, 4)`. The stub declared for such a function says why in
+  its comment: `// C++: int ns::flags(const std::vector<std::vector<bool>> & v) (worked out per use:
+  const std::vector<std::vector<bool>> & has no Volt form)`.
 - A `std::string&` parameter is a copy C++ changes and Volt copies back once the call returns:
   given the same string twice in one call (which Volt warns of, two mutable borrows), each copy
   comes back in turn, the first parameter's last.

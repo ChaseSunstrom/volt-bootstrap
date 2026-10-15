@@ -58,6 +58,12 @@ fn main() -> void {
     std::println("pad {} {}", padded, w);
     grown_t(&w, 1);
     grown_t(&w, -1);
+    // nested std::vectors take nested Volt slices, each level copied (an empty inner one, three deep)
+    var r0: i32[2] = { 1, 2 };
+    var r1: i32[1] = { 3 };
+    var rs: i32[..][3] = { r0[0..2], r1[0..1], r1[0..0] };
+    var deep: i32[..][..][2] = { rs[0..3], rs[0..1] };
+    std::println("nested {} {} {} {}", cpp::pr::nv::shape(rs[0..3]), cpp::pr::nv::shape_ref(rs[0..2]), cpp::pr::nv::shape3(deep[0..2]), cpp::pr::nv::shape3(deep[0..0]));
 }
 // a throwing template leaves the Volt string as it was
 fn grown_t(t: std::string&, k: i32) -> void {
