@@ -445,9 +445,13 @@ object `derive` didn't make; without RTTI, either stops the program saying so.
 - A `std::string&` parameter is a copy C++ changes and Volt copies back once the call returns:
   given the same string twice in one call (which Volt warns of, two mutable borrows), each copy
   comes back in turn, the first parameter's last.
-- A loop over a C++ range holds its iterators in Volt's own words, so they must be trivially copyable
-  and destructible (the standard library's and the views' are); C++ reads ranges under C++11 or
-  newer.
+- A loop over a C++ range whose iterators are aligned past 8 needs its import under C++17 or newer
+  (C++ holds them, with an aligned `new`). Iterators that are trivially copyable and destructible
+  (the standard library's and the views' are) live in the loop's own words; the others (one holding
+  a `std::shared_ptr`, a move-only one) on C++'s heap, freed however the loop ends (a `break`,
+  `return` or `try` too). Under C++98/03 a range is what has `R::iterator` (`R::const_iterator`
+  for a const one), `r.begin()` and `r.end()`, as the standard containers do. An exception thrown
+  from `begin`, `end`, `++` or `*` stops the program.
 - A type Volt can't lay out and has no generic for (an instance of a class template that takes a
   number or a template, like `vec<3, float>` or `basic_json<>`; a lambda's own type; a coroutine's
   task type) is held by handle, named after the type (`basic_json_0`, `lambda_3`) or by the header's

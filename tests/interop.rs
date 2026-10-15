@@ -1916,6 +1916,29 @@ fn cpp_stdlib() {
 }
 
 #[test]
+fn cpp_ranges2() {
+    // for over C++ ranges whose iterators C++ holds (a shared_ptr in them, move-only, aligned past
+    // 8): looped fully and left by break, return and try, each freeing them; std::vector and
+    // std::map from a header read under C++98
+    let e = Env::new("cpp-ranges2");
+    let want = "shared 30 live 0 inside 2\nbreak live 0\nreturn 10 live 0\ntry -1 live 0\nmove 10 live 0\nwide 14\nc++98 6 2\n";
+    for backend in ["c", "llvm"] {
+        assert_eq!(ok(e.voltc(&["run", "cpp_ranges2.volt", "--backend", backend]), "voltc run cpp_ranges2.volt"), want, "C++ ranges C++ holds the iterators of ({backend})");
+    }
+    // trivially copyable iterators stay in Volt's words; the others go through C++'s heap
+    let shown = Command::new(&e.voltc).args(["check", "cpp_ranges2.volt", "--std"]).arg(Path::new(ROOT).join("std")).current_dir(Path::new(ROOT).join("tests/interop")).env("VOLT_SHOW_CPP", "1").output().unwrap();
+    let src = String::from_utf8_lossy(&shown.stderr);
+    let range = |q: &str| src.split("// C++'s ").find(|s| s.starts_with(q)).unwrap_or_else(|| panic!("no range for {q}: {src}")).to_string();
+    let (vector, shared) = (range("std::vector<int32_t > looped over"), range("r2::shared_range looped over"));
+    assert!(vector.contains("volt_range_start") && !vector.contains("volt_range_open"), "std::vector inline: {vector}");
+    assert!(shared.contains("volt_range_open") && !shared.contains("volt_range_start"), "shared_ptr range on C++'s heap: {shared}");
+    // an over-aligned iterator below C++17
+    let o = e.voltc(&["check", "cpp_ranges2_wide14.volt"]);
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(!o.status.success() && err.contains("can't loop over C++'s r2::wide_range: its iterators are aligned past 8, which needs C++17 or newer") && err.contains("cpp_ranges2_wide14.volt:7"), "an over-aligned iterator under C++14: {err}");
+}
+
+#[test]
 fn cpp_refs() {
     // T*, T&, const T& of an uncopyable class, unique_ptr and shared_ptr over handle classes, a
     // class whose copy doesn't compile, a diamond's bases by path
