@@ -53,7 +53,6 @@ volt_f128 __floattitf(volt_i128);
 volt_f128 __floatunsitf(uint32_t);
 volt_f128 __floatunditf(uint64_t);
 volt_f128 __floatuntitf(volt_u128);
-volt_f128 __extendhftf2(_Float16);
 volt_f128 __extendsftf2(float);
 volt_f128 __extenddftf2(double);
 int32_t __fixtfsi(volt_f128);
@@ -62,7 +61,6 @@ volt_i128 __fixtfti(volt_f128);
 uint32_t __fixunstfsi(volt_f128);
 uint64_t __fixunstfdi(volt_f128);
 volt_u128 __fixunstfti(volt_f128);
-_Float16 __trunctfhf2(volt_f128);
 float __trunctfsf2(volt_f128);
 double __trunctfdf2(volt_f128);
 #define volt_q_add(a, b) __addtf3(a, b)
@@ -86,7 +84,6 @@ double __trunctfdf2(volt_f128);
 #define volt_q_from_u32 __floatunsitf
 #define volt_q_from_u64 __floatunditf
 #define volt_q_from_u128 __floatuntitf
-#define volt_q_from_f16 __extendhftf2
 #define volt_q_from_f32 __extendsftf2
 #define volt_q_from_f64 __extenddftf2
 #define volt_q_to(k, x) volt_q_to_##k(x)
@@ -96,7 +93,13 @@ double __trunctfdf2(volt_f128);
 #define volt_q_to_u32 __fixunstfsi
 #define volt_q_to_u64 __fixunstfdi
 #define volt_q_to_u128 __fixunstfti
+/* f16's, only where the C compiler has _Float16 (a program using f16 needs it anyway) */
+#ifdef __FLT16_MAX__
+volt_f128 __extendhftf2(_Float16);
+_Float16 __trunctfhf2(volt_f128);
+#define volt_q_from_f16 __extendhftf2
 #define volt_q_to_f16 __trunctfhf2
+#endif
 #define volt_q_to_f32 __trunctfsf2
 #define volt_q_to_f64 __trunctfdf2
 #else

@@ -21,6 +21,7 @@ struct cgen {
     // writing a global's initializer: another constant global read there is its initializer
     in_init: bool = false;
     in_addr: bool = false; // emitting an address-of operand (a global there is its name, not its value)
+    q_folding: bool = false; // writing the native text inside an f128 initializer's volt_q_lit
     // statements go one per line at depth (4 spaces each), except inside a statement expression
     // (inline > 0), which stays on one line
     depth: usize = 0;
@@ -662,7 +663,10 @@ fn q_op(op: binop_ir) -> str? {
 // an f128 literal for the prelude: the double text a native quad type converts, and the binary128
 // bits of the same value, which the soft path's vector holds
 attach fn q_lit(this: cgen&, out: std::string&, text: str, v: f64) -> void {
-    val bits = std::softfloat::f64_to_f128(@bitcast<u64>(v));
+    q_lit_bits(out, text, std::softfloat::f64_to_f128(@bitcast<u64>(v)));
+}
+
+fn q_lit_bits(out: std::string&, text: str, bits: u128) -> void {
     out.append("volt_q_lit(");
     out.append(text);
     out.append(", ");
@@ -676,6 +680,9 @@ attach fn q_lit(this: cgen&, out: std::string&, text: str, v: f64) -> void {
 // volt_q_to (calls to the quad routines where C has no quad type, else casts)
 attach fn q_conv(this: cgen&, out: std::string&, x: u32, t: u32) -> void {
     if (this.is_f128(t)) {
+        if (this.q_init_lit(out, x, t, true)) {
+            return;
+        }
         out.append("volt_q_from(");
         out.append(this.q_kind(this.c.ir.ty_of(x)));
         out.append(", ");
@@ -696,6 +703,78 @@ attach fn q_conv(this: cgen&, out: std::string&, x: u32, t: u32) -> void {
         this.expr(out, x);
         out.append("))");
     }
+}
+
+attach fn float_bits(this: cgen&, t: u32) -> u32 {
+    match (*this.c.t.get(t)) {
+        .FLOAT(b) => { return @cast<u32>(b); },
+        default => { return 0; },
+    }
+}
+
+// node n's value as binary128 bits, when it's literals all the way down and exact: f64 and f128
+// literals, ints a double holds exactly, negation, conversions among those and constant globals
+// read in an initializer (the checker folds arithmetic on literals before cgen sees it)
+attach fn q_fold(this: cgen&, n: u32) -> u128? {
+    val t = this.c.ir.ty_of(n);
+    val fb = this.float_bits(t);
+    match (this.c.ir.at(n).kind) {
+        .FLOAT(f) => {
+            if (fb >= 64) {
+                return std::softfloat::f64_to_f128(@bitcast<u64>(f));
+            }
+        },
+        .INT(v) => {
+            if (v >= -9007199254740992 && v <= 9007199254740992 && (fb >= 64 || this.c.t.int_of(t) != null)) {
+                return std::softfloat::f64_to_f128(@bitcast<u64>(@cast<f64>(v)));
+            }
+        },
+        .CONV(x) => {
+            // to f128 from anything exact, or to f64 from something that isn't an f128
+            if (fb == 128 || (fb == 64 && this.float_bits(this.c.ir.ty_of(x)) != 128)) {
+                return this.q_fold(x);
+            }
+        },
+        .UNARY(op, x) => {
+            match (op) {
+                .NEG => {
+                    if (fb >= 64) {
+                        val b = this.q_fold(x) ?? return null;
+                        return b ^ (@cast<u128>(1) << 127);
+                    }
+                },
+                default => {},
+            }
+        },
+        .GLOBAL(g) => {
+            val gl = this.c.ir.globals.at(@cast<usize>(g));
+            if (this.in_init && !this.in_addr && gl.init != null && gl.link != linkage::EXTERNAL) {
+                return this.q_fold(gl.init ?? 0);
+            }
+        },
+        default => {},
+    }
+    return null;
+}
+
+// in a global's initializer, f128 value n (converted from its own type when conv) as a volt_q_lit
+// of the bits q_fold finds, since the soft path's calls aren't constants C takes there; the native
+// text is what n is anyway. False when it isn't an initializer or n doesn't fold
+attach fn q_init_lit(this: cgen&, out: std::string&, n: u32, t: u32, conv: bool) -> bool {
+    if (!this.in_init || this.q_folding) {
+        return false;
+    }
+    val bits = this.q_fold(n) ?? return false;
+    var text: std::string = {};
+    this.q_folding = true;
+    if (conv) {
+        this.q_conv(&text, n, t);
+    } else {
+        this.expr(&text, n);
+    }
+    this.q_folding = false;
+    q_lit_bits(out, text.as_str(), bits);
+    return true;
 }
 
 // ---------- expressions ----------
@@ -986,6 +1065,19 @@ attach fn is_place(this: cgen&, n: u32) -> bool {
 // node n as a C expression; statements in value position become GNU statement expressions ({ ... })
 attach fn expr(this: cgen&, out: std::string&, n: u32) -> void {
     val t = this.c.ir.ty_of(n);
+    if (this.in_init && this.is_f128(t)) {
+        // a negated or converted literal in a global's initializer: the bits, folded (a literal
+        // already is one)
+        var op_node = true;
+        match (this.c.ir.at(n).kind) {
+            .FLOAT(f) => { op_node = false; },
+            .INT(v) => { op_node = false; },
+            default => {},
+        }
+        if (op_node && this.q_init_lit(out, n, t, false)) {
+            return;
+        }
+    }
     match (this.c.ir.at(n).kind) {
         .INT(v) => { this.int_lit(out, v, t); },
         .FLOAT(f) => { this.float_lit(out, f, t); },

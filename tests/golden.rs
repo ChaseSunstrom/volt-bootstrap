@@ -142,7 +142,8 @@ fn quad_exports_only_on_arm64_macos() {
 #[test]
 fn f128_soft_c() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let voltc = |args: &[&str]| Command::new(common::voltc()).args(args).current_dir(root).output().unwrap();
+    let voltc_cc = |args: &[&str], cc: &str| Command::new(common::voltc()).args(args).env("CC", cc).current_dir(root).output().unwrap();
+    let voltc = |args: &[&str]| voltc_cc(args, "cc");
     let c = voltc(&["emit-c", "tests/run/floats_wide.volt"]);
     assert!(c.status.success(), "{}", String::from_utf8_lossy(&c.stderr));
     let text = String::from_utf8_lossy(&c.stdout);
@@ -150,24 +151,28 @@ fn f128_soft_c() {
     for op in ["volt_q_mul(", "volt_q_div(", "volt_q_gt(", "volt_q_lit(", "volt_q_from(f16, ", "volt_q_to(f64, ", "volt_q_to(i64, "] {
         assert!(text.matches(op).count() > prelude.matches(op).count(), "floats_wide's C has no {op}");
     }
-    for prog in ["floats_wide", "softquad"] {
+    // f128_ops through both C compilers, natively and soft (golden runs them all through LLVM)
+    let runs = [("floats_wide", "cc", true), ("softquad", "cc", true), ("f128_ops", "gcc", true), ("f128_ops", "clang", true), ("f128_ops", "gcc", false), ("f128_ops", "clang", false)];
+    for (prog, cc, soft) in runs {
         let file = format!("tests/run/{prog}.volt");
         let want: Vec<String> = directives(&std::fs::read_to_string(root.join(&file)).unwrap(), "expect");
-        let o = voltc(&["run", &file, "--backend", "c", "--cc", "-DVOLT_SOFT_F128"]);
+        let o = voltc_cc(&["run", &file, "--backend", "c", "--cc", if soft { "-DVOLT_SOFT_F128" } else { "-DVOLT_NATIVE" }], cc);
         let got = String::from_utf8_lossy(&o.stdout);
-        assert!(o.status.success() && got.lines().collect::<Vec<_>>() == want, "{prog} with soft f128 in C printed:\n{got}{}", String::from_utf8_lossy(&o.stderr));
+        assert!(o.status.success() && got.lines().collect::<Vec<_>>() == want, "{prog} in C ({cc}, soft {soft}) printed:\n{got}{}", String::from_utf8_lossy(&o.stderr));
     }
     let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("f128-soft-c");
     std::fs::create_dir_all(&dir).unwrap();
-    let mac = voltc(&["emit-c", "tests/run/floats_wide.volt", "--cfg", "os=macos", "--cfg", "arch=aarch64"]);
-    assert!(mac.status.success(), "{}", String::from_utf8_lossy(&mac.stderr));
-    let (src, obj) = (dir.join("floats_wide.c"), dir.join("floats_wide.o"));
-    std::fs::write(&src, &mac.stdout).unwrap();
-    let cc = Command::new("clang").args(["--target=arm64-apple-macos11", "-ffreestanding", "-w", "-c"]).arg(&src).arg("-o").arg(&obj).output().unwrap();
-    assert!(cc.status.success(), "floats_wide's C doesn't compile for arm64 macOS:\n{}", String::from_utf8_lossy(&cc.stderr));
-    let nm = Command::new("llvm-nm").args(["-U", "-j"]).arg(&obj).output().unwrap();
-    let defined = String::from_utf8_lossy(&nm.stdout);
-    assert!(["___addtf3", "___multf3", "___lttf2", "___extendhftf2"].iter().all(|n| defined.lines().any(|l| l == *n)), "arm64 macOS's C defines no quad routines:\n{defined}");
+    for prog in ["floats_wide", "f128_ops"] {
+        let mac = voltc(&["emit-c", &format!("tests/run/{prog}.volt"), "--cfg", "os=macos", "--cfg", "arch=aarch64"]);
+        assert!(mac.status.success(), "{}", String::from_utf8_lossy(&mac.stderr));
+        let (src, obj) = (dir.join(format!("{prog}.c")), dir.join(format!("{prog}.o")));
+        std::fs::write(&src, &mac.stdout).unwrap();
+        let cc = Command::new("clang").args(["--target=arm64-apple-macos11", "-ffreestanding", "-w", "-c"]).arg(&src).arg("-o").arg(&obj).output().unwrap();
+        assert!(cc.status.success(), "{prog}'s C doesn't compile for arm64 macOS:\n{}", String::from_utf8_lossy(&cc.stderr));
+        let nm = Command::new("llvm-nm").args(["-U", "-j"]).arg(&obj).output().unwrap();
+        let defined = String::from_utf8_lossy(&nm.stdout);
+        assert!(["___addtf3", "___multf3", "___lttf2", "___extendhftf2"].iter().all(|n| defined.lines().any(|l| l == *n)), "arm64 macOS's C defines no quad routines:\n{defined}");
+    }
     let _ = std::fs::remove_dir_all(&dir);
 }
 
