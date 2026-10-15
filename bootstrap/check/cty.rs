@@ -18,7 +18,7 @@ impl Checker {
             Ty::Float(16) => "_Float16".into(),
             Ty::Float(32) => "float".into(),
             Ty::Float(64) => "double".into(),
-            Ty::Float(_) => "__float128".into(),
+            Ty::Float(_) => "volt_f128".into(), // the prelude's: __float128, long double or its bits
             Ty::Int(k) => k.c().into(),
             Ty::Ref(t) | Ty::Ptr(t) => format!("{}*", self.cty(t)),
             Ty::Opt(t) if self.niche(t) => self.cty(t),
