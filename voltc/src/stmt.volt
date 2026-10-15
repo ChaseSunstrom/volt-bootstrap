@@ -1292,6 +1292,17 @@ attach fn for_inner(this: checker&, f: for_loop&, want: u32?, span: span) -> com
                     it_c = this.call_fn(this.fi(sh).ir, nodes(ra), it_t);
                     it_ref = false;
                     it_var = false;
+                    if (try this.needs_drop(it_t)) {
+                        // its iterators are on C++'s heap: kept as the iterable's temporaries are,
+                        // so the loop's end, break, return and try each delete them
+                        val m = this.keep_begin(this.cx.scopes.len - 1);
+                        var rv = vnew(it_t, it_c);
+                        val kr = this.keep_temp(&rv, &pre);
+                        val ke = this.keep_end(m, &init_flags, &after);
+                        it_c = try kr;
+                        try ke;
+                        it_var = true;
+                    }
                     h0 = try this.hook(it_t, "next");
                 }
                 val h = h0 ?? return fail(f.iter.span, fmt2("can't loop over a {} (a type loops when it attaches next(this: {}&) -> T? or -> T*)", this.ty_name(v.ty), this.ty_name(t)));
