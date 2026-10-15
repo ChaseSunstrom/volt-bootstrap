@@ -925,10 +925,11 @@ namespace softfloat {
         return s >> @cast<u128>(112 - e);
     }
 
-    // to a signed integer of `bits` bits (32, 64 or 128), saturating; NaN gives the largest
+    // to a signed integer of `bits` bits (32, 64 or 128), saturating by the sign bit as
+    // compiler-rt does: a NaN gives the largest, or the smallest when its sign bit is set
     public fn f128_to_signed(a: u128, bits: i32) -> i128 {
         val m = f128_to_magnitude(a, bits - 1);
-        if ((a & ~Q_ABS) != 0 && !is_nan128(a)) {
+        if ((a & ~Q_ABS) != 0) {
             if (@cast<i32>((a >> 112) & 32767) - 16383 >= bits - 1) {
                 return 0 - @cast<i128>(m) - 1; // the smallest: -2^(bits-1)
             }

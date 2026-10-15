@@ -1874,7 +1874,7 @@ fn cpp_versions() {
     // headers for C++98 (what C++17 removed: auto_ptr, throw(), register), 11, 17, 20 and 23 in one
     // program, each read and compiled under its own standard
     let e = Env::new("cpp-versions");
-    let want = "5 42\n0 v98::Shape\n1 2 1 2\n49 3 2\n4 1 107\n4 11\n5 15 5\n";
+    let want = "5 42\n0 v98::Shape\n1 2 1 2\ngrid 204\n49 3 2\n4 1 107\n4 11\n5 15 5\n";
     for backend in ["c", "llvm"] {
         assert_eq!(ok(e.voltc(&["run", "cpp_versions.volt", "--backend", backend]), "voltc run cpp_versions.volt"), want, "C++ versions ({backend})");
     }
@@ -1966,11 +1966,31 @@ fn cpp_params() {
     // or not, one through an alias with a default), a function pointer, a std::string& (a throw
     // leaves the Volt string as it was, under a callback too), a std::function over a class held by
     // handle, one laid out and one move-only; a C++ std::function Volt keeps, called with a
-    // std::string&
+    // std::string&; parameters written as arrays (T a[N], const T a[], one with a default) a Volt T*;
+    // a Volt std::string for a template parameter S (S&, const S&, S) a C++ std::string, a throw
+    // through the plain form a stop
     let e = Env::new("cpp-params");
-    let want = "sum 6\nfill 4 4 4\ntotal 12\ntwice 8 24\nfirst 7 8\napply 5 6 10\n@cpp 42\nshout hi!!\ngrow 2: 7 hi!!~++\ngrow -1: INVALID_ARGUMENT hi!!~++\n@cpp hi!!~++!\nrelay INVALID_ARGUMENT hi!!~++!\nshapes 2 7\npoints 202 45\nspend 15\nasked why??\ncounted 3 7 ab+\n";
+    let want = "sum 6\nfill 4 4 4\ntotal 12\ntwice 8 24\nfirst 7 8\napply 5 6 10\n@cpp 42\nshout hi!!\ngrow 2: 7 hi!!~++\ngrow -1: INVALID_ARGUMENT hi!!~++\n@cpp hi!!~++!\nrelay INVALID_ARGUMENT hi!!~++!\nshapes 2 7\npoints 202 45\nspend 15\nasked why??\ncounted 3 7 ab+\narrays 7 4 7 9 4\n@cpp 8 5 1\nalias 8 cells 14\nwrap hey! 4 6\ngauge 40 70 hey!\npad 6 hey!##\ntgrow 1: 8 hey!##~+\ntgrow -1: INVALID_ARGUMENT hey!##~+\nnested [[1,2],[3],[]] [[1,2],[3]] [[[1,2],[3],[]],[],[[1,2]]] []\nnested [[3],[]] 4.75 hi//you\n";
     for backend in ["c", "llvm"] {
         assert_eq!(ok(e.voltc(&["run", "cpp_params.volt", "--backend", backend]), "voltc run cpp_params.volt"), want, "C++ parameters ({backend})");
+        let o = e.voltc(&["run", "cpp_params_gthrow.volt", "--backend", backend]);
+        let err = String::from_utf8_lossy(&o.stderr);
+        assert!(o.status.code() == Some(101) && err.contains("C++ exception") && err.contains("negative") && o.stdout.is_empty(), "a template's throw through the plain form ({backend}): {err}");
+    }
+    // parameters written as arrays are declared as pointers (through an alias, of chars, of pointers,
+    // of a laid-out struct), not left to per use; an array of arrays is
+    let shown = Command::new(&e.voltc).args(["check", "cpp_params.volt", "--std"]).arg(Path::new(ROOT).join("std")).current_dir(Path::new(ROOT).join("tests/interop")).env("VOLT_SHOW_CPP", "1").output().unwrap();
+    let src = String::from_utf8_lossy(&shown.stderr);
+    for decl in ["fn sum3(a: i32*) -> i32", "fn total(a: i32*, n: i32) -> i32", "fn tail(a: i32*) -> i32", "fn tail() -> i32", "fn sum_alias(a: i32*) -> i32", "fn first_char(s: cstr?) -> i32", "fn byte0(buf: u8*) -> i32", "fn argc_of(argv: cstr?*) -> i32", "fn cells(a: pr::ap::cell*, n: i32) -> i32", "fn grid() -> void {}"] {
+        assert!(src.contains(decl), "{decl}: {src}");
+    }
+    // nested std::vectors by value or const& are nested slices; a mutable one, of bools and of a
+    // class stay per use, each stub's comment saying why
+    for decl in ["fn shape(v: i32[..][..])", "fn shape_ref(v: i32[..][..])", "fn shape3(v: i32[..][..][..])", "fn shape_rv(v: i32[..][..])", "fn weigh(v: f64[..][..])", "fn spell(v: i8[..][..])","fn widen() -> void {}", "fn flags() -> void {}", "fn boxes() -> void {}"] {
+        assert!(src.contains(decl), "{decl}: {src}");
+    }
+    for why in ["std::vector<std::vector<int>> & v) (worked out per use: std::vector<std::vector<int>> & has no Volt form)", "(worked out per use: const std::vector<std::vector<bool>> & has no Volt form)", "(worked out per use: const std::vector<std::vector<Shape>> & has no Volt form)", "(worked out per use: const std::vector<S> & depends on the template's parameters)"] {
+        assert!(src.contains(why), "{why}: {src}");
     }
 }
 
@@ -2019,6 +2039,19 @@ fn cpp_params_refused() {
     assert!(!src.contains("fn first_at(") && !src.contains("fn name_of(") && src.contains("fn count_up("), "structs holding a pointer or a view into the copy, declared: {src}");
     let err = check("cpp_params_struct_view.volt");
     assert!(err.contains("its result would point into a copy of the string that's gone once the call returns") && err.contains("cpp_params_struct_view.volt:7"), "a struct holding a pointer into the copy, per use: {err}");
+    // a Volt std::string for a template parameter nested in another type (S*, std::vector<S>) or
+    // the result, each call
+    let err = check("cpp_params_gnest.volt");
+    let why = "a Volt std::string crosses to C++ only as itself (a template's S, S& or const S&), not inside another type or as a result";
+    for line in ["cpp_params_gnest.volt:8", "cpp_params_gnest.volt:9", "cpp_params_gnest.volt:11"] {
+        assert!(err.contains(line), "{line}: {err}");
+    }
+    assert_eq!(err.matches(why).count(), 3, "S nested or the result: {err}");
+    // a parameter with no Volt form: a per-use stub whose comment shows the C++ declaration and
+    // names the type; a call with a slice names it too
+    assert!(src.contains("// C++: int pr::nv::flags(const std::vector<std::vector<bool>> & v) (worked out per use: const std::vector<std::vector<bool>> & has no Volt form)") && src.contains("fn flags() -> void {}"), "the stub says why: {src}");
+    let err = check("cpp_params_unmapped.volt");
+    assert!(err.contains("std::vector<std::vector<bool>>") && err.contains("cpp_params_unmapped.volt:6"), "a wrong argument per use: {err}");
 }
 
 #[test]
@@ -2028,7 +2061,7 @@ fn cpp_overloads() {
     // types and calling exactly their own overload, for free functions, methods and constructors; a
     // real declaration keeps a name an alias would take, and the alias is a left-out comment
     let e = Env::new("cpp-overloads");
-    let want = "which 1 2\nletter 1 2 3\nf 4 42 40 42\nh 1 2 2\nnew 5 long 10 long long\nget 5 -5\nadd 6 16\nscaled 6 -6\ncall 4 2 peek 1 2\nopen lref 7 rref 8 8\nopen rref 7\nsize 1 2\ntaken 1 3\n";
+    let want = "which 1 2\nletter 1 2 3\nf 4 42 40 42\nh 1 2 2\nnew 5 long 10 long long\nget 5 -5\nadd 6 16\nscaled 6 -6\ncall 4 2 peek 1 2\nopen lref 7 rref 8 8\nopen rref 7\nsize 1 2\ntaken 1 3\nholder 5 5\nholder 5 6\n";
     for backend in ["c", "llvm"] {
         assert_eq!(ok(e.voltc(&["run", "cpp_overloads.volt", "--backend", backend]), "voltc run cpp_overloads.volt"), want, "C++ overloads ({backend})");
     }
@@ -2037,10 +2070,10 @@ fn cpp_overloads() {
     assert!(src.contains("// left out: int taken::which(long long) (Volt can't tell it from an overload declared before it)"), "the alias a real declaration took: {src}");
     assert!(src.contains("// left out: int again::which_long_long(long long) (an alias for an overload Volt can't tell apart has its name)"), "a real declaration in a later block: {src}");
     assert!(src.contains("// C++: int ov::h(long long x, int a, int b)\n    fn h(x: i64, a: i32) -> i32"), "a form after its alias keeps the C++ comment: {src}");
-    // an && method of a template's instance, worked out per use: C++'s error, not a move
+    // an && method of a template's instance, worked out per use, consumes the handle too
     let o = e.voltc(&["check", "cpp_overloads_holder.volt"]);
     let err = String::from_utf8_lossy(&o.stderr);
-    assert!(!o.status.success() && err.contains("rvalue ref-qualifier") && err.contains("cpp_overloads_holder.volt:7"), "an && method per use: {err}");
+    assert!(!o.status.success() && err.contains("cpp_overloads_holder.volt:8") && err.contains("moved") && !err.contains("ref-qualifier"), "a handle used after an && method per use: {err}");
     // an && method consumes the handle
     let o = e.voltc(&["check", "cpp_overloads_moved.volt"]);
     let err = String::from_utf8_lossy(&o.stderr);

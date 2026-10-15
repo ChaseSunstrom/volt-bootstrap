@@ -1,6 +1,6 @@
 // Golden tests. tests/run/*.volt and examples/*.volt: compiled and run, stdout must equal the `// expect: ` lines
 // (and exit code the `// exit: N` line, default 0, or one of `// exit: N|M`; `// flags: --release` passes flags; each `// expect-stderr: ` line must be
-// in stderr). tests/fail/*.volt: `voltc check` must fail with every `// error: ` substring in its stderr.
+// in stderr, each `// reject-stderr: ` line must not). tests/fail/*.volt: `voltc check` must fail with every `// error: ` substring in its stderr.
 // voltc is stage 1: voltc/src built by the bootstrap compiler.
 mod common;
 use std::path::Path;
@@ -41,7 +41,8 @@ fn golden() {
         let got = String::from_utf8_lossy(&out.stdout);
         let code = if out.timed_out { 124 } else { out.code.unwrap_or(-1) };
         let err = String::from_utf8_lossy(&out.stderr);
-        let err_missing = directives(&src, "expect-stderr").iter().any(|w| !err.contains(w.as_str()));
+        let err_missing = directives(&src, "expect-stderr").iter().any(|w| !err.contains(w.as_str()))
+            || directives(&src, "reject-stderr").iter().any(|w| err.contains(w.as_str()));
         if got.trim_end() != want.trim_end() || !want_codes.contains(&code) || err_missing {
             failures.push(format!(
                 "{}: exit {code} (want {want_codes:?})\n--- want\n{want}\n--- got\n{got}\n--- stderr\n{}",
@@ -80,28 +81,60 @@ fn std_linked() {
     let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("linked-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let voltc = |args: &[&str]| Command::new(&bin).args(args).current_dir(root).output().unwrap();
-    let (std_a, geo_a) = (dir.join("libstd.a"), dir.join("libgeo.a"));
-    let (std_a, geo_a) = (std_a.to_str().unwrap(), geo_a.to_str().unwrap());
-    for (pkg, out) in [("std", std_a), ("geo", geo_a)] {
-        let o = voltc(&["lib", pkg, "--pkg", "geo=tests/pkgs/geo", "-o", out]);
-        assert!(o.status.success(), "voltc lib {pkg}: {}", String::from_utf8_lossy(&o.stderr));
+    let lib = |name: &str| dir.join(format!("lib{name}.a")).to_str().unwrap().to_string();
+    let (std_a, geo_a, hold_a, geo2_a) = (lib("std"), lib("geo"), lib("hold"), lib("geo2"));
+    let pkgs = ["--pkg", "geo=tests/pkgs/geo", "--pkg", "hold=tests/pkgs/hold", "--pkg", "geo2=tests/pkgs/geo2"];
+    let hold_link = format!("hold={hold_a}");
+    // geo2 uses hold: built against libhold.a, as bolt builds a dependent (a library build keeps
+    // its references to hold, whatever hold's globals hold)
+    for (pkg, out, more) in [("std", &std_a, &[][..]), ("geo", &geo_a, &[]), ("hold", &hold_a, &[]), ("geo2", &geo2_a, &["--link", hold_link.as_str()])] {
+        let o = voltc(&[&["lib", pkg, "-o", out][..], &pkgs, more].concat());
+        let err = String::from_utf8_lossy(&o.stderr);
+        assert!(o.status.success() && !err.contains("isn't used"), "voltc lib {pkg}: {err}");
     }
     let prog = "tests/run/packages_linked.volt";
     let want = directives(&std::fs::read_to_string(root.join(prog)).unwrap(), "expect").join("\n");
     let std_link = format!("std={std_a}");
     let geo_link = format!("geo={geo_a}");
-    let o = voltc(&["run", prog, "--pkg", "geo=tests/pkgs/geo", "--leak-check", "--link", &std_link, "--link", &geo_link]);
+    let geo2_link = format!("geo2={geo2_a}");
+    // hold twice: one warning
+    let links = ["--link", &std_link, "--link", &geo_link, "--link", &hold_link, "--link", &hold_link, "--link", &geo2_link];
+    let o = voltc(&[&["run", prog, "--leak-check"][..], &links, &pkgs].concat());
     let got = String::from_utf8_lossy(&o.stdout);
-    assert_eq!(got.trim_end(), want.trim_end(), "stderr: {}", String::from_utf8_lossy(&o.stderr));
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert_eq!(got.trim_end(), want.trim_end(), "stderr: {err}");
     assert!(o.status.success());
+    // hold's globals hold a trait union, so hold is built from source, and so is geo2, which uses
+    // it; voltc says why. std and geo still come from their libraries
+    assert_eq!(err.matches("hold's library isn't used: its global 'spare' holds a trait union").count(), 1, "stderr: {err}");
+    assert!(err.contains("geo2's library isn't used: it uses hold, which is built from source"), "stderr: {err}");
+    assert!(!err.contains("std's library") && !err.contains("geo's library"), "stderr: {err}");
     // a debug library can't go into a release program
-    let o = voltc(&["run", prog, "--pkg", "geo=tests/pkgs/geo", "--release", "--link", &std_link]);
+    let o = voltc(&[&["run", prog, "--release", "--link", &std_link][..], &pkgs].concat());
     assert!(!o.status.success() && String::from_utf8_lossy(&o.stderr).contains("rebuild it with voltc lib std"));
     let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// tests/run/strings_multiline.volt saved with Windows line endings prints the same: a \r\n in a
 /// multi-line string is a \n
+/// std::softfloat's quad routines under compiler-rt's names (what LLVM calls for f128): defined for
+/// arm64 macOS, whose C runtime has none, and nowhere else (they'd clash with libgcc's)
+#[test]
+fn quad_exports_only_on_arm64_macos() {
+    const NAMES: [&str; 30] = ["__addtf3", "__subtf3", "__multf3", "__divtf3", "__negtf2", "__eqtf2", "__netf2", "__lttf2", "__letf2", "__getf2", "__gttf2", "__unordtf2", "__extendhftf2", "__extendsftf2", "__extenddftf2", "__trunctfhf2", "__trunctfsf2", "__trunctfdf2", "__fixtfsi", "__fixtfdi", "__fixtfti", "__fixunstfsi", "__fixunstfdi", "__fixunstfti", "__floatsitf", "__floatditf", "__floattitf", "__floatunsitf", "__floatunditf", "__floatuntitf"];
+    let ir = |cfg: &[&str]| {
+        let out = Command::new(common::voltc()).args(["emit-llvm", "tests/run/floats_wide.volt", "--std", "std"]).args(cfg).current_dir(env!("CARGO_MANIFEST_DIR")).output().unwrap();
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+    let mac = ir(&["--cfg", "os=macos", "--cfg", "arch=aarch64"]);
+    let missing: Vec<_> = NAMES.iter().filter(|n| !mac.lines().any(|l| l.starts_with("define") && l.contains(&format!("@{n}(")))).collect();
+    assert!(missing.is_empty(), "arm64 macOS doesn't define {missing:?}");
+    let host = ir(&[]);
+    let there: Vec<_> = NAMES.iter().filter(|n| host.lines().any(|l| l.starts_with("define") && l.contains(&format!("@{n}(")))).collect();
+    assert!(there.is_empty(), "the host defines {there:?}");
+}
+
 #[test]
 fn multiline_strings_crlf() {
     let src = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/run/strings_multiline.volt")).unwrap();

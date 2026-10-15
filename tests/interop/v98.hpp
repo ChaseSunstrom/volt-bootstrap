@@ -3,6 +3,7 @@
 #pragma once
 #include <memory>
 #include <string>
+#include <vector>
 namespace v98 {
 inline int old_sum(int a, int b) throw() {
     register int s = a + b;
@@ -29,4 +30,11 @@ inline int count_sides(const Shape &s) { return s.sides(); }
 inline int pick(signed char) { return 2; }
 inline int pick(unsigned char) { return 3; }
 inline int pick(char) { return 1; }
+// a nested std::vector (a Volt slice of slices), its closers apart as C++98 needs: rows * 100 + sum
+inline int grid_sum(const std::vector<std::vector<int> > &v) {
+    int s = 0;
+    for (std::size_t i = 0; i < v.size(); i++)
+        for (std::size_t j = 0; j < v[i].size(); j++) s += v[i][j];
+    return (int)v.size() * 100 + s;
+}
 }

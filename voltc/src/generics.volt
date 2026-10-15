@@ -1541,6 +1541,11 @@ attach fn emit_call(this: checker&, inst: u32, a: adj, rv: tval?, pre: std::vec<
             },
             .DEREF => {
                 val d = this.t.ref_inner(r.ty) ?? r.ty;
+                // this by value through a reference: a copy of a plain value, but moving out what the
+                // reference's owner still frees is the error moving out of any reference is
+                if (try this.needs_drop(d)) {
+                    return fail(span, fmt("can't move a {} out of a field, element or reference; copy it instead: copy x", this.ty_name(d)));
+                }
                 var v = r;
                 v.ty = d;
                 v.c = this.ir.deref(r.c, d);

@@ -216,6 +216,19 @@ fn main() -> void {
             b = near(a);
         }
         arith(a, b);
+        // products and quotients landing among the subnormals, rounding there (the random
+        // exponents above reach them rarely): b's exponent set so the result's is near 0
+        val ea = @cast<i64>((a >> 112) & 32767);
+        val d = @cast<i64>(rnd() % 118) - 3;
+        val keep = ~(@cast<u128>(32767) << 112);
+        val em = 16383 - ea - d;
+        if (ea >= 1 && em >= 1 && em <= 32766) {
+            arith(a, (b & keep) | (@cast<u128>(em) << 112));
+        }
+        val ed = ea + 16383 + d;
+        if (ea >= 1 && ed >= 1 && ed <= 32766) {
+            arith(a, (b & keep) | (@cast<u128>(ed) << 112));
+        }
         convert(a);
         convert(near_exp(a, 16383, 40));
         convert(near_exp(a, 16383, 160));
@@ -244,6 +257,8 @@ fn main() -> void {
     same_i("inf to i128", inf, @cast<u128>(std::softfloat::f128_to_signed(inf, 128)), ones >> 1);
     same_i("-2^127 to i128", two127, @cast<u128>(std::softfloat::f128_to_signed(two127 | (@cast<u128>(1) << 127), 128)), @cast<u128>(1) << 127);
     same_i("NaN to i64", nan, @cast<u128>(std::softfloat::f128_to_signed(nan, 64)), 0x7FFFFFFFFFFFFFFF);
+    same_i("-NaN to i64", nan, @cast<u128>(std::softfloat::f128_to_signed(nan | (@cast<u128>(1) << 127), 64)), ones << 63);
+    same_i("-NaN to u32", nan, std::softfloat::f128_to_unsigned(nan | (@cast<u128>(1) << 127), 32), 0);
     same_i("2^127 to u128", two127, std::softfloat::f128_to_unsigned(two127, 128), @cast<u128>(1) << 127);
     same_i("inf to u128", inf, std::softfloat::f128_to_unsigned(inf, 128), ones);
     same_i("2^64 to u64", 0, std::softfloat::f128_to_unsigned(mk(0, 16383 + 64, 0), 64), 0xFFFFFFFFFFFFFFFF);

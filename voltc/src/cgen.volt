@@ -20,6 +20,7 @@ struct cgen {
     tmp: u32 = 0;
     // writing a global's initializer: another constant global read there is its initializer
     in_init: bool = false;
+    in_addr: bool = false; // emitting an address-of operand (a global there is its name, not its value)
     // statements go one per line at depth (4 spaces each), except inside a statement expression
     // (inline > 0), which stays on one line
     depth: usize = 0;
@@ -929,7 +930,9 @@ attach fn expr(this: cgen&, out: std::string&, n: u32) -> void {
         },
         .GLOBAL(g) => {
             val gl = this.c.ir.globals.at(@cast<usize>(g));
-            if (this.in_init && !gl.mutable && gl.init != null && gl.link != linkage::EXTERNAL) {
+            // in another global's initializer, its initial value: C wants a constant there (clang
+            // refuses a global's name), and before main runs a var still holds its initializer
+            if (this.in_init && !this.in_addr && gl.init != null && gl.link != linkage::EXTERNAL) {
                 this.value_as(out, gl.init ?? 0, gl.ty);
             } else {
                 out.append(gl.name);
@@ -999,7 +1002,11 @@ attach fn expr(this: cgen&, out: std::string&, n: u32) -> void {
         },
         .ADDR(p) => {
             out.append("(&");
+            // a global's own address, though an initializer reads other globals by their values
+            val was = this.in_addr;
+            this.in_addr = true;
             this.expr(out, p);
+            this.in_addr = was;
             out.push(')');
         },
         .INDEX(b, i) => {

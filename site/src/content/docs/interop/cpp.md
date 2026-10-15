@@ -67,8 +67,9 @@ fn main() -> void {
 | copy constructor | a `copy` hook (a handle's copies the object with it) |
 | methods, static methods | attached functions, overloads kept |
 | overloads Volt can't tell apart (`long` and `long long` are both `i64`, `char` is `signed char`'s or `unsigned char`'s twin depending on the target (signed on x86-64, unsigned on arm64 Linux), so which overload collides depends on the target, a `const` method's `this` is a non-`const` one's) | the first declared keeps the name; each other one is named for its parameters' C++ types, after the namespace's own names: `which_long_long(x)`, `letter_char(c)` (when `char` comes after the other two), `T::new_long_long(n)`, `get_const()` (words joined by `_`, `*` as `ptr`, `&` as `ref`, `&&` as `rref`; when only its qualifiers differ, `const`, `lref`, `rref` or `nonconst` instead: `get_nonconst()` after a `get() const`), its default-argument forms too, and calls exactly that overload. A name a real declaration (or another such name) has is a `// left out:` comment instead, and so is a real declaration in a later block of the namespace whose name an alias has |
-| a method qualified `&&` on a class held by handle | an attached function taking `this` by value: the handle is consumed (using it afterwards is a use after move), and C++ moves from the object, or from a copy of it when the handle only borrows it (`as_Base()`). On a class template's instance (worked out per use) it's C++'s error, and `derive`'s `base_m()` and protected forms leave it out with a comment: their object is the Volt subclass's |
+| a method qualified `&&` on a class held by handle | an attached function taking `this` by value: the handle is consumed (using it afterwards is a use after move), and C++ moves from the object, or from a copy of it when the handle only borrows it (`as_Base()`). On a class template's instance (worked out per use) the same, for a method only an rvalue can call (when `&` and `&&` overloads share the name, the call is the `&` one's), and `derive`'s `base_m()` and protected forms leave it out with a comment: their object is the Volt subclass's |
 | functions, function templates | functions, generic functions: `ns::biggest<i32>(a, b)` |
+| a Volt `std::string` for a function template's parameter (`template <class S> void wrap(S&)`) | a C++ `std::string`: `ns::wrap(&text)` instantiates `wrap<std::string>`. For `S&` C++ changes a copy, which the Volt string gets once the call returns (not when it throws: a `try_` form leaves it as it was); for `const S&` and `S` the copy is made from the text and nothing comes back. Only `S` itself takes one: `S` in another type (`S*`, `std::vector<S>&`) or as the result is an error |
 | class templates | generic structs: `ns::Box<f64>`; one with private fields, bases or virtual methods is a generic handle (`ns::box<i32>`), its members worked out per use |
 | enum, enum class | enums with the same values and tag type (an unscoped enum's names are also constants beside it: `ns::ONE`) |
 
@@ -257,8 +258,10 @@ fn main() -> void {
 | a `std::string` result | `std::string` (a copy) |
 | a `std::string_view` result | `str` (the same bytes, alive as long as C++ keeps them) |
 | `std::vector<T>` parameters (by value, `const&`) | `T[..]` |
+| nested `std::vector` parameters (by value, `const&`), `std::vector<std::vector<int>>` | `i32[..][..]`, to any depth, each level copied; the innermost element a number or a `char` (one of `bool`s or of a class is [per use](#calls-worked-out-per-use)) |
 | a `std::vector<T>` result (`T` a plain value) | `std::vec<T>` (a copy) |
 | a `T(&)[N]` parameter, and `const T(&)[N]` | `T[N]&` (C++ writes into the Volt array), and `T[N]`; `T` a number, `bool`, pointer or a class Volt lays out |
+| a parameter written as an array, `T a[N]`, `const T a[]` (a default too) | `T*`, as C++ decays it (`&arr[0]`), through an alias too; the pointer carries no length, so `N` isn't checked. A `char` one is `cstr?`, read-only even when C++'s array isn't (as a `char*` is). An array of arrays has no form yet (per use). Per use, a Volt `T*` is C++'s `T *` (`&x` alone is a `T &`) |
 | a function pointer parameter, `R(*)(A...)` | `extern "C" fn(A...) -> R` (a fn's name), its types numbers, `bool` and pointers: C++ calls the Volt fn through a cast to its own pointer type (C and C++ function types differ in the standard, but every compiler Volt builds with gives them one calling convention) |
 | `std::unique_ptr<T>`, `std::shared_ptr<T>` | `stdcxx::unique_ptr<T>`, `stdcxx::shared_ptr<T>`: `get()`, and `use_count()` for the shared one; deleting one is C++'s destructor, copying a shared one adds an owner |
 | operators | methods and functions named after them: `op_add` (`+`), `op_sub`, `op_mul`, `op_div`, `op_rem`, `op_eq`, `op_ne`, `op_lt`, `op_le`, `op_gt`, `op_ge`, `op_index` (`[]`), `op_call` (`()`), `op_neg` (unary `-`), `op_not`, `op_add_assign` (`+=`)... |
@@ -440,8 +443,11 @@ object `derive` didn't make; without RTTI, either stops the program saying so.
   it): a `std::function` whose signature has a non-const reference in it or gives back a class
   Volt holds by handle (a `std::function` field: one taking such a class), a function pointer
   whose signature has a class, enum or reference in it (or `...`), a reference to an array of
-  enums or of a class Volt holds by handle. For a function pointer or a `std::function`, `@cpp`'s
-  `{&i}` passes a Volt function: `@cpp<i32>("ns::apply({&0}, {1})", inc, 4)`.
+  enums or of a class Volt holds by handle, a nested `std::vector` of `bool`s or of a class. For a
+  function pointer or a `std::function`, `@cpp`'s `{&i}` passes a Volt function:
+  `@cpp<i32>("ns::apply({&0}, {1})", inc, 4)`. The stub declared for such a function says why in
+  its comment: `// C++: int ns::flags(const std::vector<std::vector<bool>> & v) (worked out per use:
+  const std::vector<std::vector<bool>> & has no Volt form)`.
 - A `std::string&` parameter is a copy C++ changes and Volt copies back once the call returns:
   given the same string twice in one call (which Volt warns of, two mutable borrows), each copy
   comes back in turn, the first parameter's last.

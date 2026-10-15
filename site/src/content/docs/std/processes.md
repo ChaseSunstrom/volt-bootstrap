@@ -58,6 +58,9 @@ fn main() -> void {
 
 `run(argv)` starts a program, found on the `PATH` when `argv[0]` has no `/`, with the arguments
 after it, and waits for it. It gives the exit code, or 128 plus the signal that stopped it.
+`run_status(argv)` gives the two apart, an `exit_status` with its `code` (what `run` gives) and
+its `signal` (0 when it exited), so a program a `SIGSEGV` ended (`code` 139, `signal` 11) can be
+told from one that called `exit(139)` (`signal` 0).
 `capture(argv, input)` also feeds it `input` as its standard input and collects what it prints:
 an `output` with its `code`, `out` and `err`. Both fail with `SPAWN_FAILED` when the program can't
 be started, as when it doesn't exist. Arguments go to the program as they are, with no shell in

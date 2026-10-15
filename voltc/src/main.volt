@@ -606,6 +606,19 @@ fn compile_with(c: cli&, s: sources&, shim: shim_src*) -> std::box<checker> {
         put(&o.linked, l.name);
     }
     var chk = compile_rounds(&s.files, &s.asts, move o);
+    // a package the check built from source instead (unlink_union_globals) leaves the link line
+    var i: usize = 0;
+    while (i < c.links.len) {
+        var kept = false;
+        for (x&) in chk.opts.linked.items() {
+            kept = kept || *x == c.links.at(i).name;
+        }
+        if (kept) {
+            i += 1;
+        } else {
+            c.links.remove(i);
+        }
+    }
     val diags = all_diags(&*chk);
     report_diags(c, &s.files, &diags);
     if (chk.errors.len > 0) {
@@ -935,7 +948,7 @@ fn main() -> i32 {
         for (a&) in c.prog_args.items() {
             put(&argv, *a);
         }
-        val code = std::process::run(argv.items()) catch |e| 1;
+        val code = run_program(argv.items());
         var cf = copy exe;
         cf.append(".c");
         unlink_path(exe.as_str());
@@ -944,6 +957,65 @@ fn main() -> i32 {
         return code;
     }
     usage();
+}
+
+// voltc run: run the program it built; its exit code (128 + signal when a signal ended it, as a
+// shell gives it), saying on stderr which signal or Windows crash ended it, as a panic would
+fn run_program(argv: str[..]) -> i32 {
+    val st = std::process::run_status(argv) catch |e| {
+        return 1;
+    };
+    if (st.signal != 0) {
+        val name = signal_name(st.signal);
+        if (name.len > 0) {
+            std::eprintln("voltc: the program was ended by {} (signal {})", name, st.signal);
+        } else {
+            std::eprintln("voltc: the program was ended by signal {}", st.signal);
+        }
+    }
+    comptime if (@cfg("os", "windows")) {
+        val code = @cast<u32>(st.code);
+        val what = crash_name(code);
+        if (what.len > 0) {
+            std::eprintln("voltc: the program was ended by {} (0x{:x})", what, code);
+        }
+    }
+    return st.code;
+}
+
+// a signal's name (SIGSEGV), or "" for one without a common name
+fn signal_name(sig: i32) -> str {
+    if (sig == 1) { return "SIGHUP"; }
+    if (sig == 2) { return "SIGINT"; }
+    if (sig == 3) { return "SIGQUIT"; }
+    if (sig == 4) { return "SIGILL"; }
+    if (sig == 5) { return "SIGTRAP"; }
+    if (sig == 6) { return "SIGABRT"; }
+    if (sig == 8) { return "SIGFPE"; }
+    if (sig == 9) { return "SIGKILL"; }
+    if (sig == 11) { return "SIGSEGV"; }
+    if (sig == 13) { return "SIGPIPE"; }
+    if (sig == 14) { return "SIGALRM"; }
+    if (sig == 15) { return "SIGTERM"; }
+    comptime if (@cfg("os", "linux")) {
+        if (sig == 7) { return "SIGBUS"; }
+        if (sig == 31) { return "SIGSYS"; } // a seccomp kill
+    } else {
+        if (sig == 10) { return "SIGBUS"; } // macOS and the BSDs
+        if (sig == 12) { return "SIGSYS"; }
+    }
+    return "";
+}
+
+// what a Windows exit code that is a crash's NTSTATUS means, or "" for any other code
+fn crash_name(code: u32) -> str {
+    if (code == 0xC0000005) { return "an access violation"; }
+    if (code == 0xC00000FD) { return "a stack overflow"; }
+    if (code == 0xC000001D) { return "an illegal instruction"; }
+    if (code == 0xC0000094) { return "an integer division by zero"; }
+    if (code == 0x80000003) { return "a breakpoint"; }
+    if (code == 0xC0000409) { return "a fail-fast exit"; } // __fastfail, or a stack buffer overrun
+    return "";
 }
 
 // --profiler: OUT.voltmap, each function's symbol and what it is in Volt, a line each (bolt hot names

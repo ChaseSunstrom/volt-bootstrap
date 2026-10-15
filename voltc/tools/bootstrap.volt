@@ -202,7 +202,8 @@ fn linked(stage: str, std_dir: str, dir: str, lib_backend: str, prog_backend: st
     var geo_link = std::string::from("geo=");
     geo_link.append(geo_a.as_str());
     val prog = "tests/run/packages_linked.volt";
-    val run: str[14] = { stage, "run", prog, "--std", std_dir, "--pkg", "geo=tests/pkgs/geo", "--backend", prog_backend, "--leak-check", "--link", std_link.as_str(), "--link", geo_link.as_str() };
+    // hold and geo2 from source (hold's global holds a trait union: its library wouldn't be used)
+    val run: str[18] = { stage, "run", prog, "--std", std_dir, "--pkg", "geo=tests/pkgs/geo", "--pkg", "hold=tests/pkgs/hold", "--pkg", "geo2=tests/pkgs/geo2", "--backend", prog_backend, "--leak-check", "--link", std_link.as_str(), "--link", geo_link.as_str() };
     val r = must(run, "a program linked against stage2's libraries");
     val src = std::fs::read_file(prog) catch |e| die(std::string::from("can't read a test"));
     val want = expected(src.as_str());
