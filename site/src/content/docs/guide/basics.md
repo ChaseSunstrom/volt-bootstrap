@@ -50,6 +50,10 @@ Function parameters are `val`s too; `fn f(var x: i32)` gives the function its ow
 | `fn(A) -> R` | a [function value](/volt-bootstrap/guide/closures/) |
 | `type` | a type, as a value at [compile time](/volt-bootstrap/guide/comptime/#types-as-values) |
 
+`f128` is IEEE binary128. Most CPUs have no instructions for it, so its arithmetic is calls to
+soft-float routines: the C runtime's (libgcc's or compiler-rt's), and on aarch64 macOS, whose C
+runtime has none, Volt's own `std::softfloat`, exported under the same names.
+
 ### Type aliases
 
 `type name = T;` gives a type another name. It's the same type, not a new one: a `meters` is an

@@ -3,6 +3,8 @@
 // (std/bare.volt hands these to LLVM under the names it calls, __adddf3 and the rest). The f64 code
 // follows compiler-rt's generic soft-float; the f32 operations go through f64 and round once more,
 // which gives the exact f32 result for +, -, * and / (53 bits is more than twice 24, plus two).
+// The f128 operations are the f64 ones on u128 bits; on aarch64 macOS, whose C runtime has no quad
+// routines, they're exported under compiler-rt's names (namespace quad_rt, at the end).
 // (Part of package std: the package loader wraps every file in `namespace std`.)
 
 namespace softfloat {
@@ -515,5 +517,492 @@ namespace softfloat {
 
     public fn cmp32(a: u32, b: u32) -> i32 {
         return cmp64(f32_to_f64(a), f32_to_f64(b));
+    }
+
+    // ---- f128 (IEEE binary128: sign, 15-bit exponent, 112-bit fraction), on its u128 bits ----
+
+    public val Q_ABS: u128 = 0x7FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF; // all but the sign: the sign is ~Q_ABS
+    public val Q_INF: u128 = 0x7FFF0000000000000000000000000000;
+    public val Q_FRAC: u128 = 0x0000FFFFFFFFFFFFFFFFFFFFFFFFFFFF;
+    public val Q_IMPLICIT: u128 = 0x00010000000000000000000000000000;
+    public val Q_QUIET: u128 = 0x00008000000000000000000000000000;
+    public val Q_NAN: u128 = 0x7FFF8000000000000000000000000000;
+
+    public fn clz128(x: u128) -> i32 {
+        val hi = @cast<u64>(x >> 64);
+        if (hi != 0) {
+            return clz64(hi);
+        }
+        return 64 + clz64(@cast<u64>(x));
+    }
+
+    public fn shift_sticky128(x: u128, by: i32) -> u128 {
+        if (by <= 0) {
+            return x;
+        }
+        if (by >= 128) {
+            if (x != 0) {
+                return 1;
+            }
+            return 0;
+        }
+        var r = x >> @cast<u128>(by);
+        if ((x << @cast<u128>(128 - by)) != 0) {
+            r |= 1;
+        }
+        return r;
+    }
+
+    // pack64's f128 twin: the significand's leading 1 at bit 115, three rounding bits below it
+    public fn pack128(sign: u128, exp0: i32, sig0: u128) -> u128 {
+        var exp = exp0;
+        var sig = sig0;
+        if (exp >= 32767) {
+            return sign | Q_INF;
+        }
+        if (exp <= 0) {
+            sig = shift_sticky128(sig, 1 - exp);
+            exp = 0;
+        }
+        val rest = sig & 7;
+        var r = ((sig >> 3) & Q_FRAC) | (@cast<u128>(exp) << 112) | sign;
+        if (rest > 4 || (rest == 4 && (r & 1) == 1)) {
+            r += 1;
+        }
+        return r;
+    }
+
+    public fn is_nan128(a: u128) -> bool {
+        return (a & Q_ABS) > Q_INF;
+    }
+
+    // a finite nonzero |a|'s significand (leading 1 at bit 112) and exponent, subnormals normalized
+    public fn unpack128(a: u128, sig: u128&, exp: i32&) -> void {
+        val e = @cast<i32>((a >> 112) & 32767);
+        val f = a & Q_FRAC;
+        if (e == 0) {
+            val shift = clz128(f) - 15;
+            *sig = f << @cast<u128>(shift);
+            *exp = 1 - shift;
+        } else {
+            *sig = f | Q_IMPLICIT;
+            *exp = e;
+        }
+    }
+
+    public fn add128(a: u128, b: u128) -> u128 {
+        val a_abs = a & Q_ABS;
+        val b_abs = b & Q_ABS;
+        if (a_abs == 0 || a_abs >= Q_INF || b_abs == 0 || b_abs >= Q_INF) {
+            if (a_abs > Q_INF) {
+                return a | Q_QUIET;
+            }
+            if (b_abs > Q_INF) {
+                return b | Q_QUIET;
+            }
+            if (a_abs == Q_INF) {
+                if ((a ^ b) == ~Q_ABS) {
+                    return Q_NAN; // inf - inf
+                }
+                return a;
+            }
+            if (b_abs == Q_INF) {
+                return b;
+            }
+            if (a_abs == 0) {
+                if (b_abs == 0) {
+                    return a & b;
+                }
+                return b;
+            }
+            return a;
+        }
+        var x = a;
+        var y = b;
+        if (b_abs > a_abs) {
+            x = b;
+            y = a;
+        }
+        var xs: u128 = 0;
+        var xe: i32 = 0;
+        var ys: u128 = 0;
+        var ye: i32 = 0;
+        unpack128(x, &xs, &xe);
+        unpack128(y, &ys, &ye);
+        val sign = x & ~Q_ABS;
+        xs <<= 3;
+        ys = shift_sticky128(ys << 3, xe - ye);
+        if (((x ^ y) & ~Q_ABS) != 0) {
+            xs -= ys;
+            if (xs == 0) {
+                return 0;
+            }
+            val shift = clz128(xs) - 12;
+            if (shift > 0) {
+                xs <<= @cast<u128>(shift);
+                xe -= shift;
+            }
+        } else {
+            xs += ys;
+            if ((xs >> 116) != 0) {
+                xs = shift_sticky128(xs, 1);
+                xe += 1;
+            }
+        }
+        return pack128(sign, xe, xs);
+    }
+
+    public fn sub128(a: u128, b: u128) -> u128 {
+        return add128(a, b ^ ~Q_ABS);
+    }
+
+    // the 64-bit halves' product as a u128 (from mul_wide: no 128-bit multiply needed)
+    public fn mul_wide64(a: u64, b: u64) -> u128 {
+        var hi: u64 = 0;
+        var lo: u64 = 0;
+        mul_wide(a, b, &hi, &lo);
+        return (@cast<u128>(hi) << 64) | @cast<u128>(lo);
+    }
+
+    public fn mul128(a: u128, b: u128) -> u128 {
+        val a_abs = a & Q_ABS;
+        val b_abs = b & Q_ABS;
+        val sign = (a ^ b) & ~Q_ABS;
+        if (a_abs == 0 || a_abs >= Q_INF || b_abs == 0 || b_abs >= Q_INF) {
+            if (a_abs > Q_INF) {
+                return a | Q_QUIET;
+            }
+            if (b_abs > Q_INF) {
+                return b | Q_QUIET;
+            }
+            if (a_abs == Q_INF) {
+                if (b_abs == 0) {
+                    return Q_NAN; // inf * 0
+                }
+                return Q_INF | sign;
+            }
+            if (b_abs == Q_INF) {
+                if (a_abs == 0) {
+                    return Q_NAN;
+                }
+                return Q_INF | sign;
+            }
+            return sign;
+        }
+        var xs: u128 = 0;
+        var xe: i32 = 0;
+        var ys: u128 = 0;
+        var ye: i32 = 0;
+        unpack128(a, &xs, &xe);
+        unpack128(b, &ys, &ye);
+        // the 225- or 226-bit product of two 113-bit significands, from 64-bit pieces
+        val x0 = @cast<u64>(xs);
+        val x1 = @cast<u64>(xs >> 64);
+        val y0 = @cast<u64>(ys);
+        val y1 = @cast<u64>(ys >> 64);
+        val m: u128 = 0xFFFFFFFFFFFFFFFF;
+        val p00 = mul_wide64(x0, y0);
+        val p01 = mul_wide64(x0, y1);
+        val p10 = mul_wide64(x1, y0);
+        val p11 = mul_wide64(x1, y1);
+        val mid = (p00 >> 64) + (p01 & m) + (p10 & m);
+        val lo = (p00 & m) | (mid << 64);
+        val hi = p11 + (p01 >> 64) + (p10 >> 64) + (mid >> 64);
+        // keep the top 116 bits (leading 1 at 115), the rest sticky
+        var e = xe + ye - 16383;
+        var shift: u128 = 109;
+        if ((hi >> 97) != 0) {
+            shift = 110;
+            e += 1;
+        }
+        var top = (hi << (128 - shift)) | (lo >> shift);
+        if ((lo << (128 - shift)) != 0) {
+            top |= 1;
+        }
+        return pack128(sign, e, top);
+    }
+
+    public fn div128(a: u128, b: u128) -> u128 {
+        val a_abs = a & Q_ABS;
+        val b_abs = b & Q_ABS;
+        val sign = (a ^ b) & ~Q_ABS;
+        if (a_abs == 0 || a_abs >= Q_INF || b_abs == 0 || b_abs >= Q_INF) {
+            if (a_abs > Q_INF) {
+                return a | Q_QUIET;
+            }
+            if (b_abs > Q_INF) {
+                return b | Q_QUIET;
+            }
+            if (a_abs == Q_INF) {
+                if (b_abs == Q_INF) {
+                    return Q_NAN; // inf / inf
+                }
+                return Q_INF | sign;
+            }
+            if (b_abs == Q_INF) {
+                return sign;
+            }
+            if (a_abs == 0) {
+                if (b_abs == 0) {
+                    return Q_NAN; // 0 / 0
+                }
+                return sign;
+            }
+            return Q_INF | sign; // x / 0
+        }
+        var xs: u128 = 0;
+        var xe: i32 = 0;
+        var ys: u128 = 0;
+        var ye: i32 = 0;
+        unpack128(a, &xs, &xe);
+        unpack128(b, &ys, &ye);
+        var e = xe - ye + 16383;
+        if (xs < ys) {
+            xs <<= 1;
+            e -= 1;
+        }
+        // 116 quotient bits by long division, the remainder sticky
+        var q: u128 = 0;
+        var r = xs;
+        for (i) in 0..116 {
+            q <<= 1;
+            if (r >= ys) {
+                r -= ys;
+                q |= 1;
+            }
+            r <<= 1;
+        }
+        if (r != 0) {
+            q |= 1;
+        }
+        return pack128(sign, e, q);
+    }
+
+    // -1, 0 or 1 as a is less than, equal to or greater than b; 2 when either is NaN
+    public fn cmp128(a: u128, b: u128) -> i32 {
+        if (is_nan128(a) || is_nan128(b)) {
+            return 2;
+        }
+        if (((a | b) & Q_ABS) == 0) {
+            return 0;
+        }
+        val x = @cast<i128>(a);
+        val y = @cast<i128>(b);
+        if ((x & y) >= 0) {
+            if (x < y) {
+                return -1;
+            }
+            if (x == y) {
+                return 0;
+            }
+            return 1;
+        }
+        if (x > y) {
+            return -1;
+        }
+        if (x == y) {
+            return 0;
+        }
+        return 1;
+    }
+
+    // a narrower float's bits (f16, f32 or f64: `fbits` fraction bits under `ebits` exponent bits)
+    // as an f128, exactly; a NaN keeps its payload, quieted
+    public fn widen128(a: u64, fbits: i32, ebits: i32) -> u128 {
+        val emax = (1 << ebits) - 1;
+        val bias = emax >> 1;
+        val sign = @cast<u128>((a >> @cast<u64>(fbits + ebits)) & 1) << 127;
+        val e = @cast<i32>((a >> @cast<u64>(fbits)) & @cast<u64>(emax));
+        val f = a & ((@cast<u64>(1) << @cast<u64>(fbits)) - 1);
+        val up = @cast<u128>(112 - fbits);
+        if (e == emax) {
+            if (f != 0) {
+                return sign | Q_NAN | (@cast<u128>(f) << up);
+            }
+            return sign | Q_INF;
+        }
+        if (e == 0) {
+            if (f == 0) {
+                return sign;
+            }
+            // a subnormal is a normal f128
+            val lead = 63 - clz64(f);
+            val frac = (@cast<u128>(f) << @cast<u128>(112 - lead)) & Q_FRAC;
+            return sign | (@cast<u128>(lead - fbits + 1 - bias + 16383) << 112) | frac;
+        }
+        return sign | (@cast<u128>(e - bias + 16383) << 112) | (@cast<u128>(f) << up);
+    }
+
+    // an f128 rounded to a narrower float (widen128's parameters), its bits in the low end of a u64
+    public fn narrow128(a: u128, fbits: i32, ebits: i32) -> u64 {
+        val emax = (1 << ebits) - 1;
+        val bias = emax >> 1;
+        val sign = @cast<u64>(a >> 127) << @cast<u64>(fbits + ebits);
+        val inf = @cast<u64>(emax) << @cast<u64>(fbits);
+        val fmask = (@cast<u64>(1) << @cast<u64>(fbits)) - 1;
+        val a_abs = a & Q_ABS;
+        if (a_abs > Q_INF) {
+            val quiet = @cast<u64>(1) << @cast<u64>(fbits - 1);
+            return sign | inf | quiet | @cast<u64>((a & Q_FRAC) >> @cast<u128>(112 - fbits));
+        }
+        if (a_abs == Q_INF) {
+            return sign | inf;
+        }
+        if (a_abs == 0) {
+            return sign;
+        }
+        var s: u128 = 0;
+        var e: i32 = 0;
+        unpack128(a, &s, &e);
+        // to fbits + 1 significand bits and three rounding bits, then pack64's rounding
+        var sig = @cast<u64>(shift_sticky128(s, 112 - fbits - 3));
+        var exp = e - 16383 + bias;
+        if (exp >= emax) {
+            return sign | inf;
+        }
+        if (exp <= 0) {
+            sig = shift_sticky(sig, 1 - exp);
+            exp = 0;
+        }
+        val rest = sig & 7;
+        var r = ((sig >> 3) & fmask) | (@cast<u64>(exp) << @cast<u64>(fbits)) | sign;
+        if (rest > 4 || (rest == 4 && (r & 1) == 1)) {
+            r += 1;
+        }
+        return r;
+    }
+
+    public fn f16_to_f128(a: u16) -> u128 { return widen128(@cast<u64>(a), 10, 5); }
+    public fn f32_to_f128(a: u32) -> u128 { return widen128(@cast<u64>(a), 23, 8); }
+    public fn f64_to_f128(a: u64) -> u128 { return widen128(a, 52, 11); }
+    public fn f128_to_f16(a: u128) -> u16 { return @cast<u16>(narrow128(a, 10, 5)); }
+    public fn f128_to_f32(a: u128) -> u32 { return @cast<u32>(narrow128(a, 23, 8)); }
+    public fn f128_to_f64(a: u128) -> u64 { return narrow128(a, 52, 11); }
+
+    // an integer's magnitude, and whether it's negative, as an f128 (exact up to 113 bits)
+    public fn u128_to_f128(neg: bool, v: u128) -> u128 {
+        var sign: u128 = 0;
+        if (neg) {
+            sign = ~Q_ABS;
+        }
+        if (v == 0) {
+            return sign;
+        }
+        val lead = 127 - clz128(v);
+        var sig = v;
+        if (lead > 115) {
+            sig = shift_sticky128(v, lead - 115);
+        } else {
+            sig = v << @cast<u128>(115 - lead);
+        }
+        return pack128(sign, lead + 16383, sig);
+    }
+
+    public fn i128_to_f128(v: i128) -> u128 {
+        if (v < 0) {
+            return u128_to_f128(true, 0 -% @cast<u128>(v));
+        }
+        return u128_to_f128(false, @cast<u128>(v));
+    }
+
+    // a's integer part (toward zero) as an unsigned magnitude no wider than `bits`, saturating
+    // past it; NaN gives the largest
+    public fn f128_to_magnitude(a: u128, bits: i32) -> u128 {
+        val e = @cast<i32>((a >> 112) & 32767) - 16383;
+        if (e < 0) {
+            return 0;
+        }
+        if (e >= bits || is_nan128(a)) {
+            if (bits >= 128) {
+                return ~@cast<u128>(0);
+            }
+            return (@cast<u128>(1) << @cast<u128>(bits)) - 1;
+        }
+        val s = (a & Q_FRAC) | Q_IMPLICIT;
+        if (e >= 112) {
+            return s << @cast<u128>(e - 112);
+        }
+        return s >> @cast<u128>(112 - e);
+    }
+
+    // to a signed integer of `bits` bits (32, 64 or 128), saturating; NaN gives the largest
+    public fn f128_to_signed(a: u128, bits: i32) -> i128 {
+        val m = f128_to_magnitude(a, bits - 1);
+        if ((a & ~Q_ABS) != 0 && !is_nan128(a)) {
+            if (@cast<i32>((a >> 112) & 32767) - 16383 >= bits - 1) {
+                return 0 - @cast<i128>(m) - 1; // the smallest: -2^(bits-1)
+            }
+            return 0 - @cast<i128>(m);
+        }
+        return @cast<i128>(m);
+    }
+
+    public fn f128_to_unsigned(a: u128, bits: i32) -> u128 {
+        if ((a & ~Q_ABS) != 0) {
+            return 0;
+        }
+        return f128_to_magnitude(a, bits);
+    }
+
+    // compiler-rt's quad routines on targets whose C runtime has none (Apple's arm64 one: its long
+    // double is an f64), so LLVM's calls for f128 arithmetic link there. Elsewhere libgcc or
+    // compiler-rt has them
+    @attributes([@cfg("os", "macos"), @cfg("arch", "aarch64")])
+    namespace quad_rt {
+        public fn b(v: f128) -> u128 { return @bitcast<u128>(v); }
+        public fn q(v: u128) -> f128 { return @bitcast<f128>(v); }
+
+        export fn __addtf3(x: f128, y: f128) -> f128 { return q(add128(b(x), b(y))); }
+        export fn __subtf3(x: f128, y: f128) -> f128 { return q(sub128(b(x), b(y))); }
+        export fn __multf3(x: f128, y: f128) -> f128 { return q(mul128(b(x), b(y))); }
+        export fn __divtf3(x: f128, y: f128) -> f128 { return q(div128(b(x), b(y))); }
+        export fn __negtf2(x: f128) -> f128 { return q(b(x) ^ ~Q_ABS); }
+
+        // as libgcc's: <0, 0 or >0 like x - y; a NaN gives 1 to eq/ne/lt/le, -1 to ge/gt
+        public fn le(x: f128, y: f128) -> i32 {
+            val c = cmp128(b(x), b(y));
+            if (c == 2) {
+                return 1;
+            }
+            return c;
+        }
+        public fn ge(x: f128, y: f128) -> i32 {
+            val c = cmp128(b(x), b(y));
+            if (c == 2) {
+                return -1;
+            }
+            return c;
+        }
+        export fn __eqtf2(x: f128, y: f128) -> i32 { return le(x, y); }
+        export fn __netf2(x: f128, y: f128) -> i32 { return le(x, y); }
+        export fn __lttf2(x: f128, y: f128) -> i32 { return le(x, y); }
+        export fn __letf2(x: f128, y: f128) -> i32 { return le(x, y); }
+        export fn __getf2(x: f128, y: f128) -> i32 { return ge(x, y); }
+        export fn __gttf2(x: f128, y: f128) -> i32 { return ge(x, y); }
+        export fn __unordtf2(x: f128, y: f128) -> i32 {
+            if (is_nan128(b(x)) || is_nan128(b(y))) {
+                return 1;
+            }
+            return 0;
+        }
+
+        export fn __extendhftf2(x: f16) -> f128 { return q(f16_to_f128(@bitcast<u16>(x))); }
+        export fn __extendsftf2(x: f32) -> f128 { return q(f32_to_f128(@bitcast<u32>(x))); }
+        export fn __extenddftf2(x: f64) -> f128 { return q(f64_to_f128(@bitcast<u64>(x))); }
+        export fn __trunctfhf2(x: f128) -> f16 { return @bitcast<f16>(f128_to_f16(b(x))); }
+        export fn __trunctfsf2(x: f128) -> f32 { return @bitcast<f32>(f128_to_f32(b(x))); }
+        export fn __trunctfdf2(x: f128) -> f64 { return @bitcast<f64>(f128_to_f64(b(x))); }
+        export fn __fixtfsi(x: f128) -> i32 { return @cast<i32>(f128_to_signed(b(x), 32)); }
+        export fn __fixtfdi(x: f128) -> i64 { return @cast<i64>(f128_to_signed(b(x), 64)); }
+        export fn __fixtfti(x: f128) -> i128 { return f128_to_signed(b(x), 128); }
+        export fn __fixunstfsi(x: f128) -> u32 { return @cast<u32>(f128_to_unsigned(b(x), 32)); }
+        export fn __fixunstfdi(x: f128) -> u64 { return @cast<u64>(f128_to_unsigned(b(x), 64)); }
+        export fn __fixunstfti(x: f128) -> u128 { return f128_to_unsigned(b(x), 128); }
+        export fn __floatsitf(i: i32) -> f128 { return q(i128_to_f128(@cast<i128>(i))); }
+        export fn __floatditf(i: i64) -> f128 { return q(i128_to_f128(@cast<i128>(i))); }
+        export fn __floattitf(i: i128) -> f128 { return q(i128_to_f128(i)); }
+        export fn __floatunsitf(i: u32) -> f128 { return q(u128_to_f128(false, @cast<u128>(i))); }
+        export fn __floatunditf(i: u64) -> f128 { return q(u128_to_f128(false, @cast<u128>(i))); }
+        export fn __floatuntitf(i: u128) -> f128 { return q(u128_to_f128(false, i)); }
     }
 }
