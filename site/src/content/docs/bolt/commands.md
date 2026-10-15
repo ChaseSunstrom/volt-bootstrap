@@ -14,7 +14,7 @@ sidebar:
 | `bolt run [-- ARGS]` | build and run an executable (`--bin NAME`, `--example NAME`) |
 | `bolt test [FILTER]` | build and run the tests (`--no-run` builds only) |
 | `bolt bench [FILTER]` | build the benchmarks with the bench profile and time them |
-| `bolt hot [FILES] [-- ARGS]` | run the executable (or `.volt` FILES) sampled, and show where it spends its time |
+| `bolt hot [FILES] [-- ARGS]` | run the executable (or `.volt` FILES) sampled, and show where it spends its time (`--html FILE`: as a page with a call-tree graph too) |
 | `bolt clean` | remove `target/` (with `--release` or `--profile`, only that profile's) |
 
 ### Finding the hot spots
@@ -47,6 +47,12 @@ hottest paths
 `inlined` marks a function that every sample found inlined into its callers: its self time is spent
 at its lines there, not in calls to it. A C compiler's copies of a function
 (`work.constprop.0`, made for a constant argument) are reported as that function.
+
+`bolt hot --html FILE` writes the same profile as a web page too, one file that loads nothing from
+the network: the call tree as an icicle graph (`main` on top, each function in a box beneath the one
+that called it, as wide as its share of the samples; hover a box for its self and total time, click
+it to zoom in), a table of every function's self and total time that sorts by any column, and the
+hottest lines.
 
 The program samples itself (on each tick of the kernel's timer, usually 250 to 1000 times a second
 of CPU time), so this needs no `perf`, debugger or root; it runs on Linux (x86-64 and aarch64), and

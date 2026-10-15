@@ -215,11 +215,23 @@ fn source_line(file: &str, line: u32, cache: &mut HashMap<String, Vec<String>>) 
     if t.chars().count() > 70 { format!("{}...", t.chars().take(67).collect::<String>()) } else { t.to_string() }
 }
 
-/// the report for a profile of exe
-pub fn report(exe: &Path, prof: &Profile, top: usize) -> Result<String, String> {
+/// a profile by Volt name: samples per function (self: innermost; total: anywhere in the stack), per
+/// .volt line, and per call path from main down; `outlined`: functions some sample found out of line
+#[derive(Default)]
+pub struct Stats {
+    n: usize,
+    outlined: HashSet<String>,
+    self_n: HashMap<String, usize>,
+    total_n: HashMap<String, usize>,
+    lines: HashMap<(String, u32), usize>,
+    paths: HashMap<Vec<String>, usize>,
+}
+
+/// name a profile of exe's samples (stats for the text and HTML reports)
+pub fn analyze(exe: &Path, prof: &Profile) -> Result<Stats, String> {
     let samples = &prof.samples;
     if samples.is_empty() {
-        return Ok("bolt hot: no samples (the program ran for less than about a millisecond of CPU time)\n".into());
+        return Ok(Stats::default());
     }
     // a return address is just past its call: the call's own line is one byte back
     let mut addrs: Vec<u64> = samples.iter().flat_map(|s| s.iter().enumerate().map(|(i, a)| if i == 0 { *a } else { a - 1 })).collect();
@@ -272,36 +284,168 @@ pub fn report(exe: &Path, prof: &Profile, top: usize) -> Result<String, String> 
         }
         *paths.entry(path).or_default() += 1;
     }
-    let n = samples.len();
-    let sorted = |m: HashMap<String, usize>| {
-        let mut v: Vec<(String, usize)> = m.into_iter().collect();
-        v.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
-        v
-    };
+    Ok(Stats { n: samples.len(), outlined, self_n, total_n, lines, paths })
+}
+
+/// a count map, most first (ties by key)
+fn sorted<K: Clone + Ord>(m: &HashMap<K, usize>) -> Vec<(K, usize)> {
+    let mut v: Vec<(K, usize)> = m.iter().map(|(k, n)| (k.clone(), *n)).collect();
+    v.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+    v
+}
+
+/// a .volt file as the reports show it: relative to here when it's under here
+fn shown(file: &str) -> String {
+    Path::new(file).strip_prefix(std::env::current_dir().unwrap_or_default()).map_or(file.to_string(), |p| p.display().to_string())
+}
+
+/// the text report for a profile of exe
+pub fn report(exe: &Path, s: &Stats, top: usize) -> String {
+    let n = s.n;
+    if n == 0 {
+        return "bolt hot: no samples (the program ran for less than about a millisecond of CPU time)\n".into();
+    }
     let mut out = format!("bolt hot: {n} samples of {}\n\n", exe.display());
     out += "  self   total  function\n";
-    for (l, k) in sorted(self_n.clone()).into_iter().take(top) {
-        let inlined = if outlined.contains(&l) { "" } else { ", inlined" };
-        out += &format!("{:5.1}%  {:5.1}%  {l}{inlined}\n", pct(k, n), pct(total_n[&l], n));
+    for (l, k) in sorted(&s.self_n).into_iter().take(top) {
+        let inlined = if s.outlined.contains(&l) { "" } else { ", inlined" };
+        out += &format!("{:5.1}%  {:5.1}%  {l}{inlined}\n", pct(k, n), pct(s.total_n[&l], n));
     }
     // functions that are only ever callers (main, a pipeline whose closures got inlined into it)
-    let callers: Vec<(String, usize)> = sorted(total_n).into_iter().filter(|(l, _)| !self_n.contains_key(l)).take(3).collect();
+    let callers: Vec<(String, usize)> = sorted(&s.total_n).into_iter().filter(|(l, _)| !s.self_n.contains_key(l)).take(3).collect();
     for (l, k) in callers {
         out += &format!("{:5.1}%  {:5.1}%  {l}\n", 0.0, pct(k, n));
     }
     out += "\nhottest lines\n";
-    let mut lv: Vec<((String, u32), usize)> = lines.into_iter().collect();
-    lv.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
     let mut cache = HashMap::new();
-    for ((file, line), k) in lv.into_iter().take(top) {
-        let shown = Path::new(&file).strip_prefix(std::env::current_dir().unwrap_or_default()).map_or(file.clone(), |p| p.display().to_string());
-        out += &format!("{:5.1}%  {shown}:{line}  {}\n", pct(k, n), source_line(&file, line, &mut cache));
+    for ((file, line), k) in sorted(&s.lines).into_iter().take(top) {
+        out += &format!("{:5.1}%  {}:{line}  {}\n", pct(k, n), shown(&file), source_line(&file, line, &mut cache));
     }
     out += "\nhottest paths\n";
-    let mut pv: Vec<(Vec<String>, usize)> = paths.into_iter().collect();
-    pv.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
-    for (p, k) in pv.into_iter().take(top.min(5)) {
+    for (p, k) in sorted(&s.paths).into_iter().take(top.min(5)) {
         out += &format!("{:5.1}%  {}\n", pct(k, n), p.join(" -> "));
     }
-    Ok(out)
+    out
+}
+
+fn esc(s: &str) -> String {
+    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
+}
+
+/// the call tree of the paths: a node's samples (total), those that stopped there (own), its callees
+#[derive(Default)]
+struct Node {
+    total: usize,
+    own: usize,
+    kids: HashMap<String, Node>,
+}
+
+/// one icicle box and those under it: as wide as its share of its caller's samples, its callees in a
+/// row beneath it, widest first. Its title (on hover) says the path, total and self time
+fn icicle(name: &str, node: &Node, parent: usize, path: &str, n: usize, out: &mut String) {
+    // a warm colour, the same for a function wherever it shows
+    let hue = name.bytes().fold(0u32, |h, b| h.wrapping_mul(31).wrapping_add(b as u32)) % 50;
+    *out += &format!(
+        "<div class=\"n\" data-w=\"{w:.4}%\" style=\"width:{w:.4}%\"><div class=\"l\" style=\"background:hsl({hue},85%,62%)\" title=\"{t}&#10;total {:.1}% ({} samples), self {:.1}%\">{}</div><div class=\"c\">",
+        pct(node.total, n),
+        node.total,
+        pct(node.own, n),
+        esc(name),
+        w = pct(node.total, parent),
+        t = esc(if path.is_empty() { name } else { path }),
+    );
+    let mut kids: Vec<(&String, &Node)> = node.kids.iter().collect();
+    kids.sort_by(|a, b| b.1.total.cmp(&a.1.total).then(a.0.cmp(b.0)));
+    for (k, kid) in kids {
+        let p = if path.is_empty() { k.clone() } else { format!("{path} → {k}") };
+        icicle(k, kid, node.total, &p, n, out);
+    }
+    *out += "</div></div>";
+}
+
+const PAGE_HEAD: &str = r#"<!doctype html>
+<html><head><meta charset="utf-8"><title>bolt hot</title>
+<style>
+body{font:14px system-ui,sans-serif;margin:1.5em;color:#222}
+h1{font-size:1.2em}h2{font-size:1.05em;margin-top:1.8em}
+#ice{border:1px solid #ccc;overflow:hidden}
+.n{box-sizing:border-box;min-width:0;overflow:hidden}
+.l{font:12px monospace;height:18px;line-height:18px;padding:0 3px;border:1px solid #fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer}
+.c{display:flex}
+table{border-collapse:collapse}td,th{padding:2px 10px;text-align:left}th{cursor:pointer;background:#eee}
+td.p{text-align:right;font-variant-numeric:tabular-nums}tr:nth-child(even){background:#f7f7f7}
+code{white-space:pre}
+</style></head><body>
+"#;
+
+const PAGE_SCRIPT: &str = r#"<script>
+// click a box: it fills the width, its callers above it, its callees beneath; click the top to go back
+function reset(){document.querySelectorAll('#ice .n').forEach(n=>{n.style.display='';n.style.width=n.dataset.w})}
+function zoom(n){reset();for(let c=n;c.parentElement.classList.contains('c');c=c.parentElement.parentElement){for(const s of c.parentElement.children)if(s!==c)s.style.display='none';c.style.width='100%'}}
+document.querySelectorAll('#ice .l').forEach(l=>l.onclick=()=>zoom(l.parentElement));
+// click a column to sort by it
+document.querySelectorAll('table.s th').forEach((h,i)=>h.onclick=()=>{const b=h.closest('table').tBodies[0];[...b.rows].sort((x,y)=>{const p=x.cells[i],q=y.cells[i];return p.dataset.v?q.dataset.v-p.dataset.v:p.textContent.localeCompare(q.textContent)}).forEach(r=>b.appendChild(r))});
+</script></body></html>
+"#;
+
+/// the HTML report for a profile of exe: one page that loads nothing from elsewhere. An icicle of
+/// the call tree (a callee beneath its caller, as wide as its share of the samples), each function's
+/// self and total time, and the hottest lines
+pub fn html(exe: &Path, s: &Stats) -> String {
+    let n = s.n;
+    let mut out = PAGE_HEAD.to_string();
+    out += &format!("<h1>bolt hot: {n} samples of {}</h1>\n", esc(&exe.display().to_string()));
+    if n == 0 {
+        return out + "<p>No samples (the program ran for less than about a millisecond of CPU time).</p></body></html>\n";
+    }
+    let mut root = Node::default();
+    for (p, k) in &s.paths {
+        root.total += k;
+        let mut at = &mut root;
+        for f in p {
+            at = at.kids.entry(f.clone()).or_default();
+            at.total += k;
+        }
+        at.own += k;
+    }
+    out += "<h2>call tree</h2>\n<p>Each box is a function beneath the one that called it, as wide as its share of the samples. Hover for its time; click to zoom in, click the top to zoom out.</p>\n<div id=\"ice\">";
+    icicle("all", &root, n, "", n, &mut out);
+    out += "</div>\n<h2>functions</h2>\n<p><b>self</b>: samples in the function itself (with what's inlined into it); <b>total</b>: with what it calls too. Click a column to sort.</p>\n";
+    out += "<table class=\"s\"><thead><tr><th>function</th><th>self</th><th>total</th></tr></thead><tbody>\n";
+    for (l, k) in sorted(&s.total_n) {
+        let own = s.self_n.get(&l).copied().unwrap_or(0);
+        let inlined = if own > 0 && !s.outlined.contains(&l) { " <i>inlined</i>" } else { "" };
+        out += &format!("<tr><td>{}{inlined}</td><td class=\"p\" data-v=\"{own}\">{:.1}%</td><td class=\"p\" data-v=\"{k}\">{:.1}%</td></tr>\n", esc(&l), pct(own, n), pct(k, n));
+    }
+    out += "</tbody></table>\n<h2>hottest lines</h2>\n<table class=\"s\"><thead><tr><th>line</th><th>samples</th><th>source</th></tr></thead><tbody>\n";
+    let mut cache = HashMap::new();
+    for ((file, line), k) in sorted(&s.lines).into_iter().take(30) {
+        out += &format!("<tr><td>{}:{line}</td><td class=\"p\" data-v=\"{k}\">{:.1}%</td><td><code>{}</code></td></tr>\n", esc(&shown(&file)), pct(k, n), esc(&source_line(&file, line, &mut cache)));
+    }
+    out + "</tbody></table>\n" + PAGE_SCRIPT
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn html_report() {
+        let mut s = Stats { n: 10, ..Default::default() };
+        s.paths.insert(vec!["main".into(), "work".into()], 8);
+        s.paths.insert(vec!["main".into(), "a<b> & c".into()], 2);
+        s.self_n.extend([("work (w.volt:3)".to_string(), 8), ("a<b> & c (w.volt:9)".to_string(), 2)]);
+        s.total_n.extend([("work (w.volt:3)".to_string(), 8), ("a<b> & c (w.volt:9)".to_string(), 2), ("main (w.volt:1)".to_string(), 10)]);
+        s.outlined.insert("work (w.volt:3)".into());
+        let h = html(Path::new("/x/w"), &s);
+        assert!(!h.contains("http://") && !h.contains("https://"), "{h}");
+        assert!(h.contains("title=\"main → work&#10;total 80.0% (8 samples), self 80.0%\">work</div>"), "{h}");
+        assert!(h.contains("title=\"main&#10;total 100.0% (10 samples), self 0.0%\">main</div>"), "{h}");
+        // a callee is as wide as its share of its caller
+        assert!(h.contains("style=\"width:80.0000%\"><div class=\"l\"") && h.contains(">a&lt;b&gt; &amp; c</div>"), "{h}");
+        assert!(h.contains("<th>self</th><th>total</th>") && h.contains("<td>work (w.volt:3)</td><td class=\"p\" data-v=\"8\">80.0%</td><td class=\"p\" data-v=\"8\">80.0%</td></tr>"), "{h}");
+        assert!(h.contains("<td>a&lt;b&gt; &amp; c (w.volt:9) <i>inlined</i></td><td class=\"p\" data-v=\"2\">20.0%</td>"), "{h}");
+        assert!(h.contains("<td>main (w.volt:1)</td><td class=\"p\" data-v=\"0\">0.0%</td>"), "{h}");
+        assert!(html(Path::new("/x/w"), &Stats::default()).contains("No samples"));
+    }
 }
