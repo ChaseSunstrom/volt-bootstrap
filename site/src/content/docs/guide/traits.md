@@ -161,8 +161,19 @@ Things to keep in mind:
 - The union is as big as its largest member. Box a member that's much bigger than the rest.
 - The member list is closed when the program is compiled: a precompiled library can't add members to
   a trait union later.
-- Static functions (`static this`) can't be called through a union.
-- A trait that nothing attaches can't be used as a type.
+- A static function (`static this`) of the trait is called through a value: `v.kind_name()` calls
+  `circle::kind_name()` when `v` holds a circle. `v` is evaluated once and only its tag is read.
+  `shape::kind_name()` is an error, since no value says which member's to call.
+- A trait that nothing attaches is still a type, one with no values: code taking a `plugin&`, a
+  `plugin?` field or a `plugin[..]` compiles (calls through it check against the trait's functions;
+  a `match` on it needs no arms), and runs with values once a type in the program attaches it.
+  Nothing can make one before that: a literal, `x as plugin` or a coercion is an error. It's the
+  size of the tag, 2 bytes.
+- A precompiled library (`voltc lib`) can declare such a trait and take it as a parameter. A
+  function with a trait union in its parameters or result is never taken from the library: each
+  program builds it with that program's member list, so a type the program attaches reaches it.
+  The library's own code compiled without the trait in its signature (a global, or a local inside
+  a function) sees the library's member list, none here: keep trait values in signatures.
 - `@typeid(v)` of a trait value is the id of the type it holds, the same id `@typeid(circle)` gives;
   see [type ids](/volt-bootstrap/guide/comptime/#type-ids-typeid).
 

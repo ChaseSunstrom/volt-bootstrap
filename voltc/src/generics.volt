@@ -1750,6 +1750,20 @@ attach fn method_call(this: checker&, r: tval, name: str, gargs: std::vec<garg>&
 
 // Type::name(args) for static attached fns
 attach fn static_call(this: checker&, t: u32, name: str, gargs: std::vec<garg>&, args: std::vec<expr>&, want: u32?, span: span) -> compile_error!tval {
+    // a trait's static fn on the trait type itself: no value says which member's to call
+    match (*this.t.get(t)) {
+        .TRAIT_UNION(u) => {
+            if (this.union_static(u, name)) {
+                var msg = fmt2("a static fn through {} needs a value to pick the type: v.{}()", S(this.ui(u).name), S(name));
+                if (this.ui(u).members.len > 0) {
+                    val alt = fmt2(", or {}::{}()", this.ty_name(*this.ui(u).members.at(0)), S(name));
+                    msg.append(alt.as_str());
+                }
+                return fail(span, move msg);
+            }
+        },
+        default => {},
+    }
     var cands: std::vec<u32> = {};
     for (d&) in this.named(&this.attached, name).items() {
         match (this.recv_of(*d)) {
@@ -1809,7 +1823,7 @@ fn intrinsic_of(it: item&) -> str? {
 // ---------- trait unions ----------
 
 // The trait union for a trait, made once: every type a non-generic attach block attaches the
-// trait to is a member. Fails if no type attaches it.
+// trait to is a member. With none it's a type with no values (no_values refuses making one).
 attach fn trait_union(this: checker&, trait_decl: u32, span: span) -> compile_error!u32 {
     val have = this.union_ids.get(trait_decl);
     if (have) {
@@ -1850,11 +1864,20 @@ attach fn trait_union(this: checker&, trait_decl: u32, span: span) -> compile_er
             default => {},
         }
     }
-    if (members.len == 0) {
-        return fail(span, fmt("no type attaches {}, so it can't be used as a type", S(name)));
-    }
     this.ui(id).members = move members;
     return this.t.intern(tyk::TRAIT_UNION(id));
+}
+
+// "no type attaches X, so it has no values" when t is a trait union with no members
+attach fn no_values(this: checker&, t: u32, span: span) -> compile_error!void {
+    match (*this.t.get(t)) {
+        .TRAIT_UNION(u) => {
+            if (this.ui(u).members.len == 0) {
+                return fail(span, fmt("no type attaches {}, so it has no values", S(this.ui(u).name)));
+            }
+        },
+        default => {},
+    }
 }
 
 // m's index (its tag) in trait union t, if it's one of its members
@@ -1873,9 +1896,95 @@ attach fn union_member(this: checker&, t: u32, m: u32) -> usize? {
     }
 }
 
-// x.name() on a trait union: a switch on the tag that calls the method on each member type; the
-// results coerce to the first member's result type
+// whether trait union u's trait declares fn name with a static this
+attach fn union_static(this: checker&, u: u32, name: str) -> bool {
+    match (this.item_of(this.ui(u).trait_decl).kind) {
+        .TRAIT(n, fs&) => {
+            for (f&) in fs.items() {
+                match (f.kind) {
+                    .FN(g&) => {
+                        if (g.name == name && g.params.len > 0 && g.params.at(0).name == "this" && g.params.at(0).is_static) {
+                            return true;
+                        }
+                    },
+                    default => {},
+                }
+            }
+        },
+        default => {},
+    }
+    return false;
+}
+
+// x.name() on a trait union with no members: no value reaches it, so the call is checked against
+// the trait's declaration of name and lowers to unreachable (after the receiver, for its effects)
+attach fn empty_union_call(this: checker&, r: tval, u: u32, name: str, gargs: std::vec<garg>&, args: std::vec<expr>&, span: span) -> compile_error!tval {
+    val td = this.ui(u).trait_decl;
+    val e = this.new_env({ ns: this.dl(td).ns });
+    var stmts: std::vec<u32> = {};
+    if (!r.pure) {
+        put(&stmts, r.c);
+    }
+    var found = false;
+    var named: u64? = null; // the argument count of a fn of that name, when none takes args.len
+    var rt = VOID;
+    match (this.item_of(td).kind) {
+        .TRAIT(n, fs&) => {
+            for (f&) in fs.items() {
+                match (f.kind) {
+                    .FN(g&) => {
+                        if (!found && g.name == name && arg_count(g) != @cast<u64>(args.len)) {
+                            named = arg_count(g);
+                        }
+                        if (!found && g.name == name && arg_count(g) == @cast<u64>(args.len)) {
+                            found = true;
+                            if (gargs.len > f.generics.len) {
+                                return fail(span, fmt("too many generic arguments for '{}'", S(name)));
+                            }
+                            if (g.ret) {
+                                rt = try this.resolve_type(&g.ret, e);
+                            }
+                            var i: usize = 0;
+                            for (p&) in g.params.items() {
+                                if (p.name == "this" || p.ty == null) {
+                                    continue;
+                                }
+                                val pt = try this.resolve_type(&p.ty.value, e);
+                                val v = try this.expr_as(args.at(i), pt);
+                                if (!v.pure) {
+                                    put(&stmts, v.c);
+                                }
+                                i += 1;
+                            }
+                        }
+                    },
+                    default => {},
+                }
+            }
+        },
+        default => {},
+    }
+    if (!found && named != null) {
+        return fail(span, fmt3("'{}' takes {} arguments, found {}", S(name), unum(named ?? 0), unum(@cast<u64>(args.len))));
+    }
+    if (!found) {
+        return fail(span, fmt2("{} has no method '{}'", S(this.ui(u).name), S(name)));
+    }
+    put(&stmts, this.ir.node(ir_kind::UNREACHABLE, NEVER));
+    if (rt == VOID) {
+        return vnew(VOID, this.ir.seq(move stmts, null, VOID));
+    }
+    return vnew(rt, this.ir.seq(move stmts, this.ir.zero(rt), rt));
+}
+
+// x.name() on a trait union: a switch on the tag that calls the method on each member type (or,
+// for a static fn of the trait, that member type's static fn: only the tag is read); the results
+// coerce to the first member's result type
 attach fn union_call(this: checker&, r: tval, u: u32, name: str, gargs: std::vec<garg>&, args: std::vec<expr>&, want: u32?, span: span) -> compile_error!tval {
+    if (this.ui(u).members.len == 0) {
+        return this.empty_union_call(r, u, name, gargs, args, span);
+    }
+    val stat = this.union_static(u, name);
     val uty = this.t.intern(tyk::TRAIT_UNION(u));
     val upt = this.t.ref_to(uty);
     val up = this.tmp_local("u", upt);
@@ -1913,7 +2022,12 @@ attach fn union_call(this: checker&, r: tval, u: u32, name: str, gargs: std::vec
         if (rty) {
             w = rty;
         }
-        var v = try this.method_call(mv, name, gargs, args, w, span);
+        var v = vnew(VOID, 0);
+        if (stat) {
+            v = try this.static_call(m, name, gargs, args, w, span);
+        } else {
+            v = try this.method_call(mv, name, gargs, args, w, span);
+        }
         after.add_all(&this.cx.moved);
         if (rty == null) {
             rty = v.ty;

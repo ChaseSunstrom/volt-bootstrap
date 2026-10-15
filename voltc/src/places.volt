@@ -895,6 +895,7 @@ attach fn literal(this: checker&, entries: std::vec<lit_entry>&, want: u32?, spa
         },
         default => {},
     }
+    try this.no_values(w, span);
     return fail(span, fmt("a { } literal can't make a {}", this.ty_name(w)));
 }
 

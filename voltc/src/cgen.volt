@@ -434,13 +434,17 @@ attach fn define(this: cgen&, t: u32) -> void {
         },
         .TRAIT_UNION(u) => {
             val ms = copy this.c.ui(u).members;
-            body.append("\n    uint16_t tag;\n    union {");
-            this.mdepth = 2;
-            for (i) in 0..ms.len {
-                this.member_n(&body, *ms.at(i), "m", i);
+            body.append("\n    uint16_t tag;");
+            // no members, no values: just the tag (an empty union isn't C)
+            if (ms.len > 0) {
+                body.append("\n    union {");
+                this.mdepth = 2;
+                for (i) in 0..ms.len {
+                    this.member_n(&body, *ms.at(i), "m", i);
+                }
+                this.mdepth = 1;
+                body.append("\n    } u;");
             }
-            this.mdepth = 1;
-            body.append("\n    } u;");
         },
         default => { return; },
     }
