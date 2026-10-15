@@ -46,6 +46,15 @@ arrive while the editor is still typing are batched, so a large program is check
 not once per key. A file without `main` (a library file, or one being written) is checked all the
 same, and so are test blocks.
 
+A generic function's body is checked once per instance, so one that nothing instantiates (most of
+std's generic helpers, seen from a std file) isn't checked at all. Go to definition, references and
+rename still reach the names used in it that don't need types to tell: functions called by name,
+types, globals and constants, namespaces and enum variants written with their type (`color::RED`),
+leaving out the body's own parameters, locals and generic parameters that share a name with them.
+Members do need types (`x.name`, `.RED`, a literal's `{ name: ... }`), so those uses aren't covered,
+nor are calls to an overloaded function; renaming a field, method or variant that such a body names
+as a member says so.
+
 The server runs in one process. If it ever crashes, VS Code starts it again (up to four times in
 three minutes); other editors have their own setting for that.
 
