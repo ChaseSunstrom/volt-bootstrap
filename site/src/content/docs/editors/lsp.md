@@ -51,7 +51,8 @@ std's generic helpers, seen from a std file) isn't checked at all. Go to definit
 rename still reach the names used in it that don't need types to tell: functions called by name,
 types, globals and constants, namespaces and enum variants written with their type (`color::RED`),
 leaving out the body's own parameters, locals and generic parameters that share a name with them.
-Members do need types (`x.name`, `.RED`, a literal's `{ name: ... }`), so those uses aren't covered,
+Members do need types (`x.name`, `.RED`, a pattern's `circle(c)`, a literal's `{ name: ... }`, the
+field `@offsetof` names), so those uses aren't covered,
 nor are calls to an overloaded function; renaming a field, method or variant that such a body names
 as a member says so.
 

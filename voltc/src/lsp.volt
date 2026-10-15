@@ -259,15 +259,23 @@ attach fn lsp_decl_text(this: checker&, d: u32) -> std::string {
 // body's namespace. Members (x.name, .NAME, { name: }) need types: their names are only kept, for
 // rename to say those uses aren't covered.
 
-// a walked body: its namespace and the body's own names in scope (innermost last)
+// a walked body: its namespace and the body's own names in scope (innermost last), each with whether
+// it shadows a type too (a generic param or a comptime local does; a runtime local or param only
+// shadows a bare name used as a value, as resolve_type_path and path_expr look them up)
 struct lsp_walk {
     ns: u32;
     names: std::vec<str> = {};
+    types: std::vec<bool> = {};
 }
 
-fn walk_shadows(w: lsp_walk&, name: str) -> bool {
-    for (n&) in w.names.items() {
-        if (*n == name) {
+fn walk_add(w: lsp_walk&, name: str, types: bool) -> void {
+    put(&w.names, name);
+    put(&w.types, types);
+}
+
+fn walk_shadows(w: lsp_walk&, name: str, types_only: bool) -> bool {
+    for (i) in 0..w.names.len {
+        if (*w.names.at(i) == name && (!types_only || *w.types.at(i))) {
             return true;
         }
     }
@@ -278,6 +286,7 @@ fn walk_shadows(w: lsp_walk&, name: str) -> bool {
 fn walk_leave(w: lsp_walk&, mark: usize) -> void {
     while (w.names.len > mark) {
         w.names.pop();
+        w.types.pop();
     }
 }
 
@@ -315,7 +324,7 @@ attach fn lsp_generic_bodies(this: checker&) -> void {
         }
         var w: lsp_walk = { ns: this.dl(d).ns };
         for (g&) in this.fn_generics(d).items() {
-            put(&w.names, g.name);
+            walk_add(&w, g.name, true);
         }
         for (g&) in this.item_of(d).generics.items() {
             for (b&) in g.bounds.items() {
@@ -326,7 +335,7 @@ attach fn lsp_generic_bodies(this: checker&) -> void {
             if (p.ty) {
                 this.lsp_walk_ty(&w, &p.ty);
             }
-            put(&w.names, p.name);
+            walk_add(&w, p.name, p.is_comptime);
         }
         if (f.ret) {
             this.lsp_walk_ty(&w, &f.ret);
@@ -346,7 +355,8 @@ attach fn lsp_walk_block(this: checker&, w: lsp_walk&, b: block&) -> void {
             .DEFER(e&) => { this.lsp_walk_expr(w, e); },
             .ERR_DEFER(e&) => { this.lsp_walk_expr(w, e); },
             .RESUME(e&) => { this.lsp_walk_expr(w, e); },
-            default => {},
+            .SUSPEND => {},
+            .ITEM(it) => {}, // declared when its comptime fn runs
         }
     }
     walk_leave(w, mark);
@@ -366,15 +376,25 @@ attach fn lsp_walk_let(this: checker&, w: lsp_walk&, l: let_stmt&) -> void {
     if (l.init) {
         this.lsp_walk_expr(w, &l.init);
     }
+    val mark = w.names.len;
     this.lsp_walk_pat(w, &l.pat); // its names shadow from the next statement on
+    if (l.is_comptime) {
+        for (i) in mark..w.names.len {
+            *w.types.at(i) = true; // a comptime local can name a type
+        }
+    }
+}
+
+attach fn lsp_walk_garg(this: checker&, w: lsp_walk&, g: garg&) -> void {
+    match (*g) {
+        .TYPE(t&) => { this.lsp_walk_ty(w, t); },
+        .EXPR(x&) => { this.lsp_walk_expr(w, x); },
+    }
 }
 
 attach fn lsp_walk_gargs(this: checker&, w: lsp_walk&, gs: std::vec<garg>&) -> void {
     for (g&) in gs.items() {
-        match (*g) {
-            .TYPE(t&) => { this.lsp_walk_ty(w, t); },
-            .EXPR(x&) => { this.lsp_walk_expr(w, x); },
-        }
+        this.lsp_walk_garg(w, g);
     }
 }
 
@@ -424,7 +444,16 @@ attach fn lsp_walk_expr(this: checker&, w: lsp_walk&, e: expr&) -> void {
             val ap = ptr_of(xs);
             if (ap) {
                 val xa = ap;
-                this.lsp_walk_gargs(w, xa);
+                if ((n == "offsetof" || n == "field") && xa.len == 2) {
+                    // @offsetof(T, field), @field(x, name): the second is a member's name
+                    this.lsp_walk_garg(w, xa.at(0));
+                    val fname = garg_name(xa.at(1));
+                    if (fname) {
+                        this.lsp_member_names.put(fname, true);
+                    }
+                } else {
+                    this.lsp_walk_gargs(w, xa);
+                }
             }
         },
         .TUPLE(xs&) => {
@@ -448,13 +477,13 @@ attach fn lsp_walk_expr(this: checker&, w: lsp_walk&, e: expr&) -> void {
         .CLOSURE(cl&) => {
             val mark = w.names.len;
             for (g&) in cl.generics.items() {
-                put(&w.names, g.name);
+                walk_add(w, g.name, true);
             }
             for (p&) in cl.params.items() {
                 if (p.ty) {
                     this.lsp_walk_ty(w, &p.ty);
                 }
-                put(&w.names, p.name);
+                walk_add(w, p.name, p.is_comptime);
             }
             if (cl.ret) {
                 this.lsp_walk_ty(w, &cl.ret);
@@ -472,7 +501,7 @@ attach fn lsp_walk_expr(this: checker&, w: lsp_walk&, e: expr&) -> void {
             val mark = w.names.len;
             val cp = ptr_of(cap);
             if (cp) {
-                put(&w.names, cp->name);
+                walk_add(w, cp->name, false);
             }
             this.lsp_walk_expr(w, h);
             walk_leave(w, mark);
@@ -497,7 +526,7 @@ attach fn lsp_walk_expr(this: checker&, w: lsp_walk&, e: expr&) -> void {
                 this.lsp_walk_let(w, acc);
             }
             for (b&) in fl.bindings.items() {
-                put(&w.names, b.name);
+                walk_add(w, b.name, false);
             }
             if (fl.map) {
                 this.lsp_walk_expr(w, &fl.map);
@@ -522,15 +551,26 @@ attach fn lsp_walk_expr(this: checker&, w: lsp_walk&, e: expr&) -> void {
                 walk_leave(w, mark);
             }
         },
-        default => {},
+        // no names in these (a new kind that binds or names one is a compile error here)
+        .INT(x) => {},
+        .FLOAT(x) => {},
+        .CHAR(x) => {},
+        .STR(x&) => {},
+        .BOOL(x) => {},
+        .NULL => {},
+        .THIS => {},
+        .ERROR_ANY => {},
+        .CONTINUE(l) => {},
+        .TYPE_BODY(b) => {}, // a type built at compile time: its members are its own
     }
 }
 
 // a pattern: the enum members it names by path, its literals; the names it binds come into scope
 attach fn lsp_walk_pat(this: checker&, w: lsp_walk&, p: pat&) -> void {
     match (p.kind) {
-        .BIND(n) => { put(&w.names, n); },
-        .BIND_REF(n) => { put(&w.names, n); },
+        .WILD => {},
+        .BIND(n) => { walk_add(w, n, false); },
+        .BIND_REF(n) => { walk_add(w, n, false); },
         .LIT(x&) => { this.lsp_walk_expr(w, x); },
         .RANGE(a&, b&, incl) => {
             this.lsp_walk_expr(w, a);
@@ -538,7 +578,14 @@ attach fn lsp_walk_pat(this: checker&, w: lsp_walk&, p: pat&) -> void {
         },
         .CTOR(c&, subs&) => {
             match (*c) {
-                .PATH(cp&) => { this.lsp_walk_path(w, cp, false); },
+                .PATH(cp&) => {
+                    if (cp.segs.len == 1) {
+                        // circle(c): a variant of the scrutinee's enum (ctor_pat), whatever else is named so
+                        this.lsp_member_names.put(cp.segs.at(0).name, true);
+                    } else {
+                        this.lsp_walk_path(w, cp, false);
+                    }
+                },
                 .DOT(n) => { this.lsp_member_names.put(n, true); },
             }
             val sp = ptr_of(subs);
@@ -561,11 +608,10 @@ attach fn lsp_walk_pat(this: checker&, w: lsp_walk&, p: pat&) -> void {
             if (rp) {
                 val rn = rp->name;
                 if (rn) {
-                    put(&w.names, rn);
+                    walk_add(w, rn, false);
                 }
             }
         },
-        default => {},
     }
 }
 
@@ -601,7 +647,7 @@ attach fn lsp_walk_ty(this: checker&, w: lsp_walk&, t: ty&) -> void {
             this.lsp_walk_ty(w, ft.ret);
         },
         .EXPR(x) => { this.lsp_walk_expr(w, x); },
-        default => {},
+        .RESOLVED(id) => {},
     }
 }
 
@@ -613,10 +659,13 @@ attach fn lsp_walk_path(this: checker&, w: lsp_walk&, p: path&, is_type: bool) -
         }
     }
     val head = p.segs.at(0).name;
-    if (walk_shadows(w, head)) {
-        return; // the body's own name (a generic param's path needs a type: Type::member)
+    // the body's own name: a local or param only as a bare value (path_expr), a generic param or
+    // comptime local anywhere (resolve_type_path; T::member needs a type)
+    if (walk_shadows(w, head, is_type || !p.is_single())) {
+        return;
     }
     var f: found? = null;
+    val refs = this.lsp_refs.len;
     if (p.segs.len == 1) {
         f = this.lookup(w.ns, head);
     } else {
@@ -624,6 +673,10 @@ attach fn lsp_walk_path(this: checker&, w: lsp_walk&, p: path&, is_type: bool) -
     }
     if (f == null) {
         if (p.segs.len > 1) {
+            // the prefix's lookup records its namespaces again
+            while (this.lsp_refs.len > refs) {
+                this.lsp_refs.pop();
+            }
             this.lsp_walk_member_path(w, p);
         }
         return;

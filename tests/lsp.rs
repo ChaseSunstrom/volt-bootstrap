@@ -650,12 +650,51 @@ fn generic_named(x: count) -> i32 {
 }
 
 <T: type>
+fn binders(xs: i32[], r: i32!i32, o: i32?) -> i32 {
+    for (helper) in xs {
+        val a = helper;
+    }
+    match (o) {
+        .VALUE(count) => { return count; },
+        default => {},
+    }
+    val e = r catch |LIMIT| LIMIT;
+    val g = || (cell: i32) -> i32 { return cell; };
+    val off = @offsetof(cell, color); // [cell]
+    val (helper, count) = (1, 2);
+    return helper + count;
+}
+
+<T: type>
+fn typed(cell: cell, other: cell) -> i32 { // [cell] [cell]
+    return cell.v + other.v;
+}
+
+struct circle {
+    r: f64;
+}
+
+enum shape {
+    circle: circle,
+    other,
+}
+
+<T: type>
+fn area(s: shape) -> f64 {
+    match (s) {
+        circle(c) => { return c.r; },
+        default => { return 0.0; },
+    }
+}
+
+<T: type>
 fn instanced(x: T) -> i32 {
     return helper(2); // [helper]
 }
 
 fn main() -> void {
     val c: cell = { v: 1 }; // [cell]
+    val round: circle = { r: 1.0 };
     val n = instanced(c.v) + helper(0) + LIMIT + count; // [helper] [LIMIT] [count]
     val k = color::BLUE; // [color]
     std::println(\"{} {}\", n, util::twice(n)); // [twice]
@@ -687,7 +726,8 @@ fn generic_bodies_nothing_instantiates() {
         format!("{{\"textDocument\":{{\"uri\":\"{uri}\"}},\"position\":{{\"line\":{l},\"character\":{}}}", lines[l].find(name).unwrap())
     };
     for (pat, name) in [("val LIMIT: i32", "LIMIT"), ("var count", "count"), ("fn helper(", "helper"), ("struct cell", "cell"), ("enum color", "color"), ("    RED,", "RED"), ("fn twice(", "twice")] {
-        let want: Vec<usize> = lines.iter().enumerate().filter(|(_, l)| l.contains(&format!("[{name}]"))).map(|(i, _)| i).collect();
+        let marker = format!("[{name}]");
+        let want: Vec<usize> = lines.iter().enumerate().flat_map(|(i, l)| std::iter::repeat_n(i, l.matches(marker.as_str()).count())).collect();
         let r = s.request("textDocument/references", &format!("{},\"context\":{{\"includeDeclaration\":false}}}}", pos(pat, name)));
         assert_eq!(start_lines(&r), want, "references of {name}: {r}");
     }
@@ -705,6 +745,12 @@ fn generic_bodies_nothing_instantiates() {
     // a field also named as a member in such a body (c.v): its uses there need types, and rename says so
     let _ = s.request("textDocument/rename", &format!("{},\"newName\":\"w\"}}", pos("    v: i32;", "v")));
     assert!(s.skipped.iter().any(|m| m.contains("window/showMessage") && m.contains("'v' is also used as a member")), "rename v doesn't warn: {:?}", s.skipped);
+    // a one-name variant pattern (circle(c)) is the scrutinee enum's variant, not the struct circle
+    let r = s.request("textDocument/rename", &format!("{},\"newName\":\"ring\"}}", pos("struct circle", "circle")));
+    let edits = start_lines(&r);
+    let decl = lines.iter().position(|l| l.contains("struct circle")).unwrap();
+    let arm = lines.iter().position(|l| l.contains("circle(c) =>")).unwrap();
+    assert!(edits.contains(&decl) && !edits.contains(&arm), "rename circle: {r}");
 
     // from std's own file: a helper used only in generic bodies std doesn't instantiate itself
     let map = Path::new(ROOT).join("std/map.volt");
