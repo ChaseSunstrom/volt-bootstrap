@@ -644,6 +644,17 @@ attach fn rename(this: lsp_server&, params: std::json::value&) -> std::json::val
     }
     var why = S("");
     val def = this.renamable(doc, c, doc_offset(doc, params), &why) ?? return lsp_error(-32602.0, move why);
+    // a member's uses in generic bodies nothing instantiates aren't indexed (lsp_generic_bodies)
+    val r = ref_at(c, doc.file, doc_offset(doc, params));
+    if (r) {
+        val old = c.files.at(@cast<usize>(def.file)).text[@cast<usize>(def.lo)..@cast<usize>(def.hi)];
+        if ((r->kind == LK_PROPERTY || r->kind == LK_METHOD || r->kind == LK_ENUM_MEMBER) && c.lsp_member_names.get(old) != null) {
+            var m = std::json::object();
+            m.set("type", std::json::number(2.0));
+            m.set("message", std::json::string(fmt("'{}' is also used as a member in generic bodies nothing instantiates: those uses need types to tell, so they aren't renamed", S(old)).as_str()));
+            lsp_notify("window/showMessage", move m);
+        }
+    }
     var spans = uses_of(c, def);
     put(&spans, def);
     // per file: its URI and edits
