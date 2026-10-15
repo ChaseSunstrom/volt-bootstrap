@@ -3,6 +3,7 @@
 // name; the rest come through named for their parameter types, called exactly
 #pragma once
 #include <string>
+#include <utility>
 namespace ov {
 inline int which(long) { return 1; }
 inline int which(long long) { return 2; }
@@ -11,6 +12,18 @@ inline int letter(signed char) { return 2; }
 inline int letter(unsigned char) { return 3; }
 inline int f(long x) { return (int)x; }
 inline int f(long long x, int n = 0) { return (int)x * 10 + n; }
+// the full form collides (h_long_long_int_int), the shorter one doesn't (h, with its C++ comment)
+inline int h(long x, int a, int b) { return 1; }
+inline int h(long long x, int a, int b = 0) { return 2; }
+// a class template held by handle: its members are worked out per use, where an && method is
+// C++'s error (the object is an lvalue), never a move out of it
+template <class T>
+class Holder {
+    T v_;
+  public:
+    Holder(T v) : v_(v) {}
+    T take() && { return std::move(v_); }
+};
 // held by handle (a std::string field)
 class Tally {
   public:

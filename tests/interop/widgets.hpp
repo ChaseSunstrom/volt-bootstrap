@@ -42,6 +42,10 @@ protected:
     // a protected const method and its non-const twin (count, count_nonconst)
     int count() const { return 1; }
     int count() { return 2; }
+    // a protected virtual const method (base_level, through volt_base_level's const twin)
+    virtual int level() const { return 4; }
+    // an && method: left out (the object is the Volt type's)
+    int take() && { return 3; }
     std::string name_;
 
 private:

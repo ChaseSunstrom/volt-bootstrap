@@ -2397,12 +2397,8 @@ attach fn callable_of(this: cpp_gen&, generics: str, head: str, has_params: bool
             dot = i;
         }
     }
-    if (self_arg != null && dot == call.len && starts_with(call, "{0}(")) {
-        // a call operator on the object itself: {0}(...)
-        dot = 3;
-    }
     if (self_arg != null && dot < call.len) {
-        val rvalue = clang::clang_Type_getCXXRefQualifier(clang::clang_getCursorType(fn_cursor)) == clang::CXRefQualifier_RValue;
+        val rvalue = rvalue_method(fn_cursor);
         if (clang::clang_CXXMethod_isConst(fn_cursor) != 0 && rvalue) {
             // const &&: a const rvalue (volt_cpp_const's lvalue wouldn't bind to it)
             my_call = fmt2("volt_cpp_const_rv({}){}", S(call[0..dot]), S(call[dot..call.len]));
@@ -2550,6 +2546,14 @@ fn renamed(head: str, suffix: str) -> std::string {
     out.append(head[paren..head.len]);
     return out;
 }
+
+// is c a method qualified && (const && too)?
+fn rvalue_method(c: clang::CXCursor) -> bool {
+    return clang::clang_Type_getCXXRefQualifier(clang::clang_getCursorType(c)) == clang::CXRefQualifier_RValue;
+}
+
+// why derive's base_ and protected forms leave an && method out
+val DERIVE_RVALUE: str = "(an && method: its object is the one a Volt type subclasses, which C++ can't move from while Volt holds it)";
 
 // a method's qualifiers as words in a name: const, lref (&), rref (&&), joined by _
 fn qual_words(c: clang::CXCursor) -> std::string {
@@ -4633,6 +4637,10 @@ attach fn director(this: cpp_gen&, c: clang::CXCursor, vn: str, q: str, maps: st
         if (v.pure || v.private_ || starts_with(mn.as_str(), "operator")) {
             continue;
         }
+        if (rvalue_method(v.m)) {
+            this.line(fmt2("// left out: {} {}", cpp_decl_text(v.m), S(DERIVE_RVALUE)).as_str());
+            continue;
+        }
         val ret = this.result(clang::clang_getCursorResultType(v.m), &none);
         val h = fmt2("attach fn base_{}(this: {}&", vname(mn.as_str()), S(vn));
         if (acc == clang::CX_CXXPublic) {
@@ -4659,7 +4667,9 @@ attach fn director(this: cpp_gen&, c: clang::CXCursor, vn: str, q: str, maps: st
             continue;
         }
         val mn = cursor_name(*ch);
-        if (k == clang::CXCursor_CXXMethod && clang::clang_CXXMethod_isStatic(*ch) == 0 && clang::clang_CXXMethod_isDeleted(*ch) == 0 && !starts_with(mn.as_str(), "operator")) {
+        if (k == clang::CXCursor_CXXMethod && clang::clang_CXXMethod_isStatic(*ch) == 0 && clang::clang_CXXMethod_isDeleted(*ch) == 0 && !starts_with(mn.as_str(), "operator") && rvalue_method(*ch)) {
+            this.line(fmt2("// left out: {} {}", cpp_decl_text(*ch), S(DERIVE_RVALUE)).as_str());
+        } else if (k == clang::CXCursor_CXXMethod && clang::clang_CXXMethod_isStatic(*ch) == 0 && clang::clang_CXXMethod_isDeleted(*ch) == 0 && !starts_with(mn.as_str(), "operator")) {
             val ret = this.result(clang::clang_getCursorResultType(*ch), &none);
             this.callable("", fmt2("attach fn {}(this: {}&", vname(mn.as_str()), S(vn)).as_str(), true, *ch, ret, fmt2("{}.volt_p_{}(", copy dir, copy mn).as_str(), "this.cpp, this.volt", "", &none, fmt2("{}::{}", S(q), copy mn).as_str());
             if (pnames.get(mn.as_str()) == null) {

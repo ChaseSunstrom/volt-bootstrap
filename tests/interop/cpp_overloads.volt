@@ -7,6 +7,7 @@ fn main() -> void {
     std::println("which {} {}", cpp::ov::which(3), cpp::ov::which_long_long(3));
     std::println("letter {} {} {}", cpp::ov::letter(@cast<i8>(65)), cpp::ov::letter_signed_char(65), cpp::ov::letter(@cast<u8>(65)));
     std::println("f {} {} {} {}", cpp::ov::f(4), cpp::ov::f(4, 2), cpp::ov::f_long_long(4), cpp::ov::f_long_long(4, 2));
+    std::println("h {} {} {}", cpp::ov::h(1, 2, 3), cpp::ov::h(1, 2), cpp::ov::h_long_long_int_int(1, 2, 3));
     var a = cpp::ov::Tally::new(5);
     val b = cpp::ov::Tally::new_long_long(5);
     std::println("new {} {} {} {}", a.get(), a.name(), b.get(), b.name());
