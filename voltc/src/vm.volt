@@ -29,6 +29,7 @@ export struct volt_vm {
     loads: u32 = 0;
     searching: bool = false;          // the process's symbols are reachable (set at the first load)
     runtime: std::map<str, bool> = {}; // the runtime's names, for a sandbox (runtime_names)
+    prefix: u8 = 0;                   // the JIT's global prefix on C names (Mach-O's _), for the filters
 }
 
 // a VM whose scripts see the std package in std_dir ("" for none: scripts see only the host's
@@ -175,6 +176,7 @@ export fn volt_vm_load(v: volt_vm&, name: str, source: str) -> vm_error!void {
         }
         var gen: llvm::LLVMOrcOpaqueDefinitionGenerator* = null;
         var ge: llvm::LLVMOpaqueError* = null;
+        v.prefix = @cast<u8>(llvm::LLVMOrcLLJITGetGlobalPrefix(j));
         if (v.sandbox) {
             ge = llvm::LLVMOrcCreateDynamicLibrarySearchGeneratorForProcess(&gen, llvm::LLVMOrcLLJITGetGlobalPrefix(j), vm_allows, @cast<void*>(&*v));
         } else {
@@ -565,9 +567,18 @@ extern "C" fn dladdr(addr: void*, info: dl_info*) -> i32;
 // the filter on this library's own symbols: its runtime's (dlsym on a library also searches what it
 // links, the C library among them, which a sandbox mustn't reach this way; and in a sandbox, only the
 // runtime's names, not the rest of what this library exports)
+// a symbol the JIT asks for, as C names it: without the system's global prefix (Mach-O's _)
+fn vm_c_name(v: volt_vm*, sym: llvm::LLVMOrcOpaqueSymbolStringPoolEntry*) -> str {
+    val name = c_text(llvm::LLVMOrcSymbolStringPoolEntryStr(sym));
+    if (v->prefix != 0 && name.len > 0 && name[0] == v->prefix) {
+        return name[1..name.len];
+    }
+    return name;
+}
+
 fn vm_runtime_only(ctx: void*, sym: llvm::LLVMOrcOpaqueSymbolStringPoolEntry*) -> i32 {
     val v = @cast<volt_vm*>(ctx);
-    val name = c_text(llvm::LLVMOrcSymbolStringPoolEntryStr(sym));
+    val name = vm_c_name(v, sym);
     if (v->sandbox) {
         return @cast<i32>(v->runtime_name(name));
     }
@@ -578,7 +589,7 @@ fn vm_runtime_only(ctx: void*, sym: llvm::LLVMOrcOpaqueSymbolStringPoolEntry*) -
 // on its own, the C functions the runtime's helpers are bound to, and what the host allowed
 fn vm_allows(ctx: void*, sym: llvm::LLVMOrcOpaqueSymbolStringPoolEntry*) -> i32 {
     val v = @cast<volt_vm*>(ctx);
-    val name = c_text(llvm::LLVMOrcSymbolStringPoolEntryStr(sym));
+    val name = vm_c_name(v, sym);
     if (v->runtime_name(name)) {
         return 1;
     }

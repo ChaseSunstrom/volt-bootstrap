@@ -588,6 +588,7 @@ struct cdecls {
     names: std::vec<std::string> = {}; // made-up names (anonymous tags) the others point into
     anon_in: std::map<str, anon_field> = {}; // anonymous tag -> the named field it types
     fn_macros: std::vec<str> = {};     // function-like #defines (MAX(a, b)): called per use
+    var_aliases: std::vec<cdefine> = {}; // #define NAME other_name (macOS's stderr is __stderrp)
 }
 
 // a made-up tag for an anonymous struct or enum: prefix and a number
@@ -2225,7 +2226,18 @@ attach fn c_macros(this: checker&, d: cdecls&, macros: str) -> compile_error!voi
             }
             continue;
         }
-        put(&defs, { name: rest[0..n], body: c_lex(body) });
+        val toks = c_lex(body);
+        if (toks.len == 1 && n > 0 && rest[0] != '_') {
+            match (*toks.at(0)) {
+                .ID(x) => {
+                    if (x != rest[0..n]) {
+                        put(&d.var_aliases, { name: rest[0..n], body: copy toks });
+                    }
+                },
+                default => {},
+            }
+        }
+        put(&defs, { name: rest[0..n], body: move toks });
     }
     var known: std::map<str, bool> = {};
     loop {
@@ -2568,6 +2580,29 @@ attach fn c_items(this: checker&, d: cdecls&, res: c_imported&, span: span) -> v
         val t = m.ty_of(&v.ty) ?? continue;
         val pt: pat = { kind: pat_kind::BIND(v.name), span: span };
         put(&res.items, m.citem(item_kind::GLOBAL({ mutable: true, is_comptime: false, is_static: false, pat: pt, ty: move t, init: null, span: span, c_name: v.name })));
+    }
+    // a #define naming one of them under another name: that variable by the macro's name (macOS's
+    // stdio.h has #define stderr __stderrp), unless a real variable has the name
+    for (a&) in d.var_aliases.items() {
+        var target: str = "";
+        match (*a.body.at(0)) {
+            .ID(x) => { target = x; },
+            default => { continue; },
+        }
+        var own = false;
+        var of: cvar* = null;
+        for (v&) in d.vars.items() {
+            own = own || v.name == a.name;
+            if (v.name == target) {
+                of = &*v;
+            }
+        }
+        if (own || of == null) {
+            continue;
+        }
+        val t = m.ty_of(&of->ty) ?? continue;
+        val pt: pat = { kind: pat_kind::BIND(a.name), span: span };
+        put(&res.items, m.citem(item_kind::GLOBAL({ mutable: true, is_comptime: false, is_static: false, pat: pt, ty: move t, init: null, span: span, c_name: target })));
     }
     // constants: an int gets the first of i32, u32, i64, u64 that its suffixes allow and its value fits,
     // a float f64; a negative value is `-literal`

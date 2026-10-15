@@ -38,6 +38,30 @@ fn clang_resource_dir() -> std::string? {
     return out;
 }
 
+// macOS: the SDK the system's C and C++ headers are in ($SDKROOT, else what `xcrun --show-sdk-path`
+// says): a libclang that isn't Xcode's own (Homebrew's) doesn't find them by itself
+fn clang_sysroot() -> std::string? {
+    if (std::process::os() != "macos") {
+        return null;
+    }
+    val env = std::process::env("SDKROOT");
+    if (env) {
+        return S(env);
+    }
+    val argv: str[2] = { "xcrun", "--show-sdk-path" };
+    val r = std::process::capture(argv[0..2], "") catch |e| {
+        return null;
+    };
+    if (r.code != 0) {
+        return null;
+    }
+    var out = copy r.out;
+    while (out.len() > 0 && (*out.bytes.at(out.len() - 1) == '\n' || *out.bytes.at(out.len() - 1) == ' ')) {
+        out.bytes.pop();
+    }
+    return out;
+}
+
 // `text` parsed as the file `name`, with args (-x c++, -std=..., -I...); declarations only
 fn clang_parse(name: str, text: str, args: std::vec<str>&) -> clang_tu {
     // CXTranslationUnit_SkipFunctionBodies: the declarations are all that's read
@@ -51,6 +75,11 @@ fn clang_parse_opts(name: str, text: str, args: std::vec<str>&, opts: u32) -> cl
     if (res) {
         put(&owned, S("-resource-dir"));
         put(&owned, copy res);
+    }
+    val sdk = clang_sysroot();
+    if (sdk) {
+        put(&owned, S("-isysroot"));
+        put(&owned, copy sdk);
     }
     for (a&) in args.items() {
         put(&owned, S(*a));

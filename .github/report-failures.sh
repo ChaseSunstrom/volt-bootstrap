@@ -15,8 +15,11 @@ tests=$(grep -aE '^test .* \.\.\. FAILED$' "$log" | sed 's/^test //; s/ \.\.\. F
 [ -n "$tests" ] && echo "::error title=failed tests::$tests"
 golden=$(grep -aE '^[A-Za-z]?:?[/\\].*\.volt: (exit|want errors)' "$log" | head -40 | oneline)
 [ -n "$golden" ] && echo "::error title=failed programs::$golden"
+# each panic up to the next test's output (golden lists every failed program with its want and
+# got), at most 300 lines and 60000 bytes (an annotation holds 64 KB)
 grep -an 'panicked at' "$log" | head -7 | while IFS=: read -r n _; do
-    echo "::error title=panic::$(sed -n "${n},$((n + 24))p" "$log" | cut -c1-400 | oneline)"
+    body=$(sed -n "${n},$((n + 300))p" "$log" | awk 'NR > 1 && (/^---- .* stdout ----$/ || /^failures:$/) { exit } { print }' | cut -c1-400 | head -c 60000)
+    echo "::error title=panic::$(printf '%s\n' "$body" | oneline)"
 done
 # a build or harness error with no test line (a crate that didn't compile, a missing tool)
 if [ -z "$tests" ]; then
