@@ -1959,14 +1959,15 @@ fn cpp_params() {
     // handle, one laid out and one move-only; a C++ std::function Volt keeps, called with a
     // std::string&; parameters written as arrays (T a[N], const T a[], one with a default) a Volt T*
     let e = Env::new("cpp-params");
-    let want = "sum 6\nfill 4 4 4\ntotal 12\ntwice 8 24\nfirst 7 8\napply 5 6 10\n@cpp 42\nshout hi!!\ngrow 2: 7 hi!!~++\ngrow -1: INVALID_ARGUMENT hi!!~++\n@cpp hi!!~++!\nrelay INVALID_ARGUMENT hi!!~++!\nshapes 2 7\npoints 202 45\nspend 15\nasked why??\ncounted 3 7 ab+\narrays 7 4 7 9 4\n@cpp 8 5 1\n";
+    let want = "sum 6\nfill 4 4 4\ntotal 12\ntwice 8 24\nfirst 7 8\napply 5 6 10\n@cpp 42\nshout hi!!\ngrow 2: 7 hi!!~++\ngrow -1: INVALID_ARGUMENT hi!!~++\n@cpp hi!!~++!\nrelay INVALID_ARGUMENT hi!!~++!\nshapes 2 7\npoints 202 45\nspend 15\nasked why??\ncounted 3 7 ab+\narrays 7 4 7 9 4\n@cpp 8 5 1\nalias 8 cells 14\n";
     for backend in ["c", "llvm"] {
         assert_eq!(ok(e.voltc(&["run", "cpp_params.volt", "--backend", backend]), "voltc run cpp_params.volt"), want, "C++ parameters ({backend})");
     }
-    // parameters written as arrays are declared as pointers, not left to per use
+    // parameters written as arrays are declared as pointers (through an alias, of chars, of pointers,
+    // of a laid-out struct), not left to per use; an array of arrays is
     let shown = Command::new(&e.voltc).args(["check", "cpp_params.volt", "--std"]).arg(Path::new(ROOT).join("std")).current_dir(Path::new(ROOT).join("tests/interop")).env("VOLT_SHOW_CPP", "1").output().unwrap();
     let src = String::from_utf8_lossy(&shown.stderr);
-    for decl in ["fn sum3(a: i32*) -> i32", "fn total(a: i32*, n: i32) -> i32", "fn tail(a: i32*) -> i32", "fn tail() -> i32"] {
+    for decl in ["fn sum3(a: i32*) -> i32", "fn total(a: i32*, n: i32) -> i32", "fn tail(a: i32*) -> i32", "fn tail() -> i32", "fn sum_alias(a: i32*) -> i32", "fn first_char(s: cstr?) -> i32", "fn byte0(buf: u8*) -> i32", "fn argc_of(argv: cstr?*) -> i32", "fn cells(a: pr::ap::cell*, n: i32) -> i32", "fn grid() -> void {}"] {
         assert!(src.contains(decl), "{decl}: {src}");
     }
 }

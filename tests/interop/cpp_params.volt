@@ -46,6 +46,8 @@ fn main() -> void {
     val p: i32* = &ys[0];
     val c3 = @cpp<i32>("pr::ap::sum3({0})", p);
     std::println("@cpp {} {} {}", c3, @cpp<i32>("pr::ap::tail({0})", p), cpp::pr::ap::head(p));
+    var cs: cpp::pr::ap::cell[2] = { { x: 1, y: 2 }, { x: 3, y: 4 } };
+    std::println("alias {} cells {}", cpp::pr::ap::sum_alias(&ys[0]), cpp::pr::ap::cells(&cs[0], 2));
 }
 // a throw leaves the Volt string as it was (C++ changed its copy first)
 fn grown(t: std::string&, k: i32) -> void {

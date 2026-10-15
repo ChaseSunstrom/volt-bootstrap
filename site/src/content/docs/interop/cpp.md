@@ -259,7 +259,7 @@ fn main() -> void {
 | `std::vector<T>` parameters (by value, `const&`) | `T[..]` |
 | a `std::vector<T>` result (`T` a plain value) | `std::vec<T>` (a copy) |
 | a `T(&)[N]` parameter, and `const T(&)[N]` | `T[N]&` (C++ writes into the Volt array), and `T[N]`; `T` a number, `bool`, pointer or a class Volt lays out |
-| a parameter written as an array, `T a[N]`, `const T a[]` (a default too) | `T*`, as C++ decays it (`&arr[0]`); a `char` one `cstr?`. Per use, a Volt `T*` is C++'s `T *` (`&x` alone is a `T &`) |
+| a parameter written as an array, `T a[N]`, `const T a[]` (a default too) | `T*`, as C++ decays it (`&arr[0]`), through an alias too; the pointer carries no length, so `N` isn't checked. A `char` one is `cstr?`, read-only even when C++'s array isn't (as a `char*` is). An array of arrays has no form yet (per use). Per use, a Volt `T*` is C++'s `T *` (`&x` alone is a `T &`) |
 | a function pointer parameter, `R(*)(A...)` | `extern "C" fn(A...) -> R` (a fn's name), its types numbers, `bool` and pointers: C++ calls the Volt fn through a cast to its own pointer type (C and C++ function types differ in the standard, but every compiler Volt builds with gives them one calling convention) |
 | `std::unique_ptr<T>`, `std::shared_ptr<T>` | `stdcxx::unique_ptr<T>`, `stdcxx::shared_ptr<T>`: `get()`, and `use_count()` for the shared one; deleting one is C++'s destructor, copying a shared one adds an owner |
 | operators | methods and functions named after them: `op_add` (`+`), `op_sub`, `op_mul`, `op_div`, `op_rem`, `op_eq`, `op_ne`, `op_lt`, `op_le`, `op_gt`, `op_ge`, `op_index` (`[]`), `op_call` (`()`), `op_neg` (unary `-`), `op_not`, `op_add_assign` (`+=`)... |

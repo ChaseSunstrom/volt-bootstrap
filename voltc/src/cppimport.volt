@@ -1586,9 +1586,10 @@ attach fn param(this: cpp_gen&, t: clang::CXType, name: str, i: usize, tparams: 
     val k = t.kind;
     // a parameter written as an array, T a[N] or T a[]: a T* (C++ decays it; libclang gives the type
     // as written), so a Volt T* as a pointer parameter takes (const or not, as C's); a char one a
-    // cstr?. Not a template's T, which only the template can spell
-    if (k == clang::CXType_ConstantArray || k == clang::CXType_IncompleteArray) {
-        val et = clang::clang_getArrayElementType(t);
+    // cstr?; through an alias too. Not a template's T, which only the template can spell
+    val tc = clang::clang_getCanonicalType(t);
+    if (tc.kind == clang::CXType_ConstantArray || tc.kind == clang::CXType_IncompleteArray) {
+        val et = clang::clang_getArrayElementType(tc);
         val ek = clang::clang_getCanonicalType(et).kind;
         if (this.handle_of(et) != null || contains(canon(et).as_str(), "type-parameter")) {
             return null;
