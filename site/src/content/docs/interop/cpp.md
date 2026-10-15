@@ -66,6 +66,7 @@ fn main() -> void {
 | destructor | a `delete` hook (only when the class needs one) |
 | copy constructor | a `copy` hook (a handle's copies the object with it) |
 | methods, static methods | attached functions, overloads kept |
+| overloads Volt can't tell apart (`long` and `long long` are both `i64`, `char` and `signed char` both `i8`, a `const` method's `this` is a non-`const` one's) | the first declared keeps the name; each other one is named for its parameters' C++ types, after the namespace's own names: `which_long_long(x)`, `letter_signed_char(c)`, `T::new_long_long(n)`, `get_const()` (words joined by `_`, `*` as `ptr`, `&` as `ref`, `&&` as `rref`, then `const`, `lref` or `rref` when only its qualifiers differ), its default-argument forms too, and calls exactly that overload. A name a real declaration (or another such name) has is a `// left out:` comment instead |
 | functions, function templates | functions, generic functions: `ns::biggest<i32>(a, b)` |
 | class templates | generic structs: `ns::Box<f64>`; one with private fields, bases or virtual methods is a generic handle (`ns::box<i32>`), its members worked out per use |
 | enum, enum class | enums with the same values and tag type (an unscoped enum's names are also constants beside it: `ns::ONE`) |
@@ -443,8 +444,6 @@ object `derive` didn't make; without RTTI, either stops the program saying so.
 - A `std::string&` parameter is a copy C++ changes and Volt copies back once the call returns:
   given the same string twice in one call (which Volt warns of, two mutable borrows), each copy
   comes back in turn, the first parameter's last.
-- Overloads Volt can't tell apart (`long` and `long long` are both `i64`) come through once: the
-  first one declared.
 - A loop over a C++ range holds its iterators in Volt's own words, so they must be trivially copyable
   and destructible (the standard library's and the views' are); C++ reads ranges under C++11 or
   newer.

@@ -1960,6 +1960,22 @@ fn cpp_params_refused() {
 }
 
 #[test]
+fn cpp_overloads() {
+    // overloads Volt can't tell apart (long / long long, char / signed char / unsigned char, a const
+    // method and its non-const twin): every one callable, the later ones named for their parameter
+    // types and calling exactly their own overload, for free functions, methods and constructors; a
+    // real declaration keeps a name an alias would take, and the alias is a left-out comment
+    let e = Env::new("cpp-overloads");
+    let want = "which 1 2\nletter 1 2 3\nf 4 42 40 42\nnew 5 long 10 long long\nget 5 -5\nadd 6 16\nscaled 6 -6\ntaken 1 3\n";
+    for backend in ["c", "llvm"] {
+        assert_eq!(ok(e.voltc(&["run", "cpp_overloads.volt", "--backend", backend]), "voltc run cpp_overloads.volt"), want, "C++ overloads ({backend})");
+    }
+    let shown = Command::new(&e.voltc).args(["check", "cpp_overloads.volt", "--std"]).arg(Path::new(ROOT).join("std")).current_dir(Path::new(ROOT).join("tests/interop")).env("VOLT_SHOW_CPP", "1").output().unwrap();
+    let src = String::from_utf8_lossy(&shown.stderr);
+    assert!(src.contains("// left out: int taken::which(long long) (Volt can't tell it from an overload declared before it)"), "the alias a real declaration took: {src}");
+}
+
+#[test]
 fn cpp_errors() {
     // try_ forms whatever the result (a handle, a reference, an optional, a vector), and an
     // exception from C++ Volt called in a callback reaching the C++ that called the callback
