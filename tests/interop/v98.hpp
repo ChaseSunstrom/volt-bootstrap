@@ -17,9 +17,14 @@ class Shape {
     Shape() : name_("shape") {}
     virtual ~Shape() {}
     virtual int sides() const { return 0; }
+    // overloads Volt can't tell apart, called exactly under C++98 too
+    int tag() const { return 1; }
+    int tag() { return 2; }
 
   private:
     std::string name_;
 };
 inline int count_sides(const Shape &s) { return s.sides(); }
+inline int pick(char) { return 1; }
+inline int pick(signed char) { return 2; }
 }

@@ -15,6 +15,7 @@ doesn't map, with the way around each.
 | --- | --- |
 | namespaces (an inline one, a library's ABI version, is its parent's) | namespaces |
 | functions, overloads, default arguments | functions, overloads, one overload per default left out |
+| overloads Volt can't tell apart (`long` / `long long`, `char` / `signed char`, `get()` / `get() const`) | the first declared by its name, the others named for their parameter types (`which_long_long`, `get_const`) |
 | function templates (type parameters; the defaulted ones C++ fills in) | generic functions |
 | a trivially copyable class | a struct with C++'s layout |
 | any other class | a handle to the object C++ allocates |
