@@ -17,6 +17,9 @@ fn main() -> void {
     var shape2 = copy shape;
     std::println("{} {}", old::v98::count_sides(&shape2), shape2.cpp_type_name());
     std::println("{} {} {} {}", old::v98::pick_char(1), old::v98::pick(@cast<i8>(1)), shape2.tag(), shape2.tag_nonconst());
+    var r0: i32[2] = { 1, 2 };
+    var rs: i32[..][2] = { r0[0..2], r0[0..1] };
+    std::println("grid {}", old::v98::grid_sum(rs[0..2]));
     std::println("{} {} {}", v11::v11::sq(7), v11::v11::add(1, 2), v11::v11::code(v11::v11::color::green));
     std::println("{} {} {}", v17::v17::len("volt"), v17::v17::pick<i64>(1, 2), v17::v17::pair_sum());
     std::println("{} {}", v20::v20::half(@cast<i32>(9)), v20::v20::made());
