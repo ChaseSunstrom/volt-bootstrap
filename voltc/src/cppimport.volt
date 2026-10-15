@@ -5158,7 +5158,9 @@ attach fn per_use(this: cpp_gen&, head: str, call: str, method: bool) -> void {
     this.line(fmt("{}) -> void {{}}", S(head)).as_str());
 }
 
-// is this c's first declaration the import sees (by USR)? it's noted as seen
+// is this c's first declaration the import sees (by USR)? it's noted as seen. ponytail: the first
+// one's parameters decide the defaults, so `void f(int); void f(int x = 3);` misses the later default
+// (a redeclaration scan would find it)
 attach fn first_decl(this: cpp_gen&, c: clang::CXCursor) -> bool {
     val usr = cx_str(clang::clang_getCursorUSR(c));
     if (usr.len() == 0) {

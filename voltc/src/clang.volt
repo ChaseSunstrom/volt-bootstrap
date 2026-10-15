@@ -256,7 +256,10 @@ fn cursor_offset(c: clang::CXCursor) -> u32 {
 }
 
 // whether a parameter has a default argument: a = outside every ( ) [ ] { } and template < > of its
-// own tokens (a template's own = is outside its extent). A < opens a template list only at the top
+// own tokens (a template's own = is outside its extent). ponytail: raw tokens, so a default a macro
+// supplies (f(int x DEF), #define DEF = 3) is invisible, and a comparison < directly in a template
+// list (Foo<1 < 2> x = {}) counts as an opener and hides the default; a real parser would fix both.
+// A < opens a template list only at the top
 // or inside another; in parentheses it is a comparison (decltype(1 < 2)).
 fn cursor_has_default(c: clang::CXCursor) -> bool {
     val tu = clang::clang_Cursor_getTranslationUnit(c);
@@ -285,10 +288,14 @@ fn cursor_has_default(c: clang::CXCursor) -> bool {
             if (open.len() > 0) {
                 open.pop();
             }
-        } else if ((s == ">" || s == ">>") && top == '<') {
+        } else if ((s == ">" || s == ">>" || s == ">=" || s == ">>=") && top == '<') {
             open.pop();
-            if (s == ">>" && open.len() > 0 && open.as_str()[open.len() - 1] == '<') {
+            if (s.len > 1 && s[1] == '>' && open.len() > 0 && open.as_str()[open.len() - 1] == '<') {
                 open.pop();
+            }
+            // the lexer joins a closing > with the = after it (vector<int>= {}): that = counts
+            if (s[s.len - 1] == '=' && open.len() == 0) {
+                found = true;
             }
         } else if (s == "=" && open.len() == 0) {
             found = true;

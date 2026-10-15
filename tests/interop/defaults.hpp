@@ -4,6 +4,8 @@
 // parenthesized expression and a decltype followed by = 0 have one; a template's = is not a parameter's
 #pragma once
 #include <array>
+#include <map>
+#include <vector>
 namespace df {
 inline int g3[3] = {7, 8, 9};
 using Arr = int[3];
@@ -16,5 +18,10 @@ inline int dt_plain(decltype(1 + 2) x) { return x; }
 inline int cmp(decltype(1 < 2) x = true) { return x; }
 inline int tail(int a[3]) { return a[0]; }
 inline int tail_def(int a[3] = g3) { return a[1]; }
+inline int g(std::vector<int> v = {}) { return (int)v.size(); }
+inline int h(int = 3) { return 3; }
+inline int fb(int x) { return x + 1; }
+inline int p(int (*f)(int) = nullptr) { return f ? f(1) : 0; }
+inline int a([[maybe_unused]] int x = 1) { return 1; }
 template <int N = 4> int tp(int x) { return x + N; }
 }

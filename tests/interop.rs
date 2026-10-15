@@ -1956,6 +1956,11 @@ fn cpp_defaults() {
         assert!(!src.contains(none), "{none} has no default: {src}");
     }
     assert!(src.contains("fn ref_alias()") && src.contains("fn expr()") && src.contains("fn dt()") && src.contains("fn cmp()"), "the defaulted forms: {src}");
+    // each of these has both forms: with its argument and without
+    for name in ["g", "h", "p", "a"] {
+        assert!(src.contains(&format!("    fn {name}() -> i32")) && src.contains(&format!("    fn {name}(")), "{name} without its default: {src}");
+        assert!(src.matches(&format!("    fn {name}(")).count() >= 2, "{name} with and without its argument: {src}");
+    }
 }
 
 #[test]
