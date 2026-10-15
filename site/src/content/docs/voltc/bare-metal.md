@@ -48,7 +48,8 @@ under qemu.
   Floating point without hardware is `std::softfloat`: integer code that rounds exactly as IEEE 754
   hardware does (a test compares it with the CPU, bit for bit, on millions of values). It covers `f32`
   and `f64` on `riscv32-none`, `thumbv6m-none` and `thumbv7m-none`, and `f64` on `thumbv7em-none`,
-  whose FPU does `f32` only.
+  whose FPU does `f32` only. It has `f128` too, which hosted aarch64 macOS uses (its C runtime has
+  no quad routines).
 
 That's all an image holds: no C library, no C runtime, no compiler support library and no unwinder.
 The test suite checks it for every board, debug and release: the linked image refers to no symbol it
