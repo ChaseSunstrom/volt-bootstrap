@@ -11,7 +11,7 @@ itself and compiles in memory, through LLVM's ORC JIT, so nothing runs a C compi
 file. Its interface is a C one, and `bolt build` also writes it for C++, Rust and Python.
 
 ```sh
-cd voltc/embed && bolt build      # target/debug/libvoltvm.so, and bindings/voltvm.{h,hpp,rs,py,pyi}
+cd voltc/embed && bolt build      # target/debug/libvoltvm.so (.dylib on macOS, voltvm.dll on Windows), and bindings/voltvm.{h,hpp,rs,py,pyi}
 ```
 
 It needs LLVM 23, as voltc does, and runs on x86-64 and aarch64 (the hosts voltc's LLVM backend
@@ -106,7 +106,7 @@ callable, and a Python function into a host function:
 
 ```python
 import ctypes
-import voltvm   # target/debug/bindings, with VOLT_VOLTVM_LIB=target/debug/libvoltvm.so
+import voltvm   # from target/debug/bindings; it finds target/debug's library itself
 
 @ctypes.CFUNCTYPE(ctypes.c_int64, ctypes.c_int64)
 def square(x):

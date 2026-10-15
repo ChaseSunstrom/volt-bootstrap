@@ -91,7 +91,7 @@ fn source_files(dir: &Path, exts: &[&str], out: &mut Vec<PathBuf>) {
 
 /// a shared library's file name as the platform's loaders look for it: libNAME.so, libNAME.dylib
 /// on macOS, NAME.dll on Windows
-fn shared_lib(name: &str) -> String {
+pub fn shared_lib(name: &str) -> String {
     format!("{}{name}.{}", std::env::consts::DLL_PREFIX, std::env::consts::DLL_EXTENSION)
 }
 

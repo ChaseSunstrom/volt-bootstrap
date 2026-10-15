@@ -1,4 +1,4 @@
-// Embedded Volt: voltc/embed builds the compiler into libvoltvm.so (bolt, with its bindings), and a C
+// Embedded Volt: voltc/embed builds the compiler into libvoltvm (bolt, with its bindings), and a C
 // program, a Python one and a Rust one run Volt through it: tests/embed/host.c, host.py and host.rs.
 // The C host runs with no C compiler on PATH, since nothing at run time should need one.
 mod common;
@@ -43,7 +43,7 @@ fn embedded_volt() {
     assert_eq!(out, "run 53\nbox: a sandbox's script can't import C or C++ (their code would reach past the sandbox)\n");
     // Python, through the generated module (which loads the library without RTLD_GLOBAL)
     if Command::new("python3").arg("--version").output().is_ok_and(|o| o.status.success()) {
-        let out = ok(Command::new("python3").arg(Path::new(ROOT).join("tests/embed/host.py")).arg(&std_dir).env("PYTHONPATH", &bindings).env("VOLT_VOLTVM_LIB", lib_dir.join("libvoltvm.so")).output().unwrap(), "host.py");
+        let out = ok(Command::new("python3").arg(Path::new(ROOT).join("tests/embed/host.py")).arg(&std_dir).env("PYTHONPATH", &bindings).env("VOLT_VOLTVM_LIB", lib_dir.join(format!("{}voltvm.{}", std::env::consts::DLL_PREFIX, std::env::consts::DLL_EXTENSION))).output().unwrap(), "host.py");
         assert_eq!(out, PY_OUT);
     }
     // Rust, through the generated module, compiled with rustc next to it

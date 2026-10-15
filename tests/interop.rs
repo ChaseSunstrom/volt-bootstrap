@@ -366,6 +366,9 @@ fn bindings_round_trip() {
     let check = "import ctypes, os, sys\nseen = []\ndef cdll(p, *a, **k):\n    seen.append(os.path.basename(p))\n    raise OSError\nctypes.CDLL = cdll\nfor sys.platform in ['darwin', 'win32', 'linux']:\n    sys.modules.pop('twice', None)\n    try:\n        import twice\n    except OSError:\n        pass\nprint(*seen)\n";
     let o = Command::new("python3").args(["-c", check]).current_dir(&bindings).env_remove("VOLT_TWICE_LIB").output().unwrap();
     assert_eq!(ok(o, "python3 (twice.py's library name)"), "libtwice.dylib twice.dll libtwice.so\n", "twice.py's default library");
+    // and it finds bolt's library one directory up, with no $VOLT_TWICE_LIB
+    let o = Command::new("python3").args(["-c", "import twice; print(twice.twice(21))"]).current_dir(&bindings).env_remove("VOLT_TWICE_LIB").output().unwrap();
+    assert_eq!(ok(o, "python3 (bolt's twice.py)"), "42\n", "twice.py loads target/debug's library");
     if node_include().is_some() {
         let o = Command::new("node").args(["-e", "console.log(require('./twice.js').twice(21))"]).current_dir(&bindings).output().unwrap();
         assert_eq!(ok(o, "node (bolt's addon)"), "42\n", "bolt's Node addon");
