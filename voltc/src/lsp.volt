@@ -1977,15 +1977,22 @@ attach fn hover(this: lsp_server&, params: std::json::value&) -> std::json::valu
     var about: std::string = {}; // the declaration's doc comment, under the code
     val r = ref_at(c, doc.file, at);
     if (r) {
+        // r points into the checker's references, which type_hover can add to (moving them): what's
+        // needed from it, read first
         label = copy r->label;
-        if (r->decl != null && (r->kind == LK_STRUCT || r->kind == LK_ENUM || r->kind == LK_INTERFACE)) {
-            label = c.type_hover(r->decl ?? 0);
+        val decl = r->decl;
+        val ty = r->ty;
+        val kind = r->kind;
+        if (decl) {
+            if (kind == LK_STRUCT || kind == LK_ENUM || kind == LK_INTERFACE) {
+                label = c.type_hover(decl);
+            }
         }
-        if (r->ty) {
-            label = fmt2("{}{}", c.size_note(r->ty ?? 0), move label);
+        if (ty) {
+            label = fmt2("{}{}", c.size_note(ty), move label);
         }
-        if (r->decl) {
-            about = c.decl_doc(r->decl ?? 0);
+        if (decl) {
+            about = c.decl_doc(decl);
         }
     } else {
         // a local declared here and never used
