@@ -5529,7 +5529,9 @@ attach fn py_text(this: bind&) -> std::string {
     // next to the module, else one directory up (bolt's target/<profile>, above bindings/)
     out.append(fmt3("_lib_name = \"lib{}.dylib\" if sys.platform == \"darwin\" else \"{}.dll\" if sys.platform == \"win32\" else \"lib{}.so\"\n", S(this.pkg), S(this.pkg), S(this.pkg)).as_str());
     out.append("_lib_dir = os.path.dirname(os.path.abspath(__file__))\n_lib_path = os.path.join(_lib_dir, _lib_name)\n");
-    out.append("if not os.path.exists(_lib_path) and os.path.exists(os.path.join(_lib_dir, \"..\", _lib_name)):\n    _lib_path = os.path.join(_lib_dir, \"..\", _lib_name)\n");
+    // one up only from bolt's bindings/ directory (target/<profile>/bindings), never from an installed
+    // module's site-packages
+    out.append("if not os.path.exists(_lib_path) and os.path.basename(_lib_dir) == \"bindings\" and os.path.exists(os.path.join(_lib_dir, \"..\", _lib_name)):\n    _lib_path = os.path.join(_lib_dir, \"..\", _lib_name)\n");
     out.append(fmt("_lib = ctypes.CDLL(os.environ.get(\"VOLT_{}_LIB\") or _lib_path)\n", upper(this.pkg)).as_str());
     // the functions and classes first: the helpers they use come before them
     var body: std::string = {};
