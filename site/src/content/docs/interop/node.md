@@ -213,7 +213,8 @@ export fn napi_register_module_v1(env: void*, exports: void*) -> void* {
 }
 ```
 
-`bolt build` makes `target/debug/libaddon.so`; Node loads an addon from a `.node` file, so copy it
+`bolt build` makes `target/debug/libaddon.so` (`libaddon.dylib` on macOS, `addon.dll` on
+Windows); Node loads an addon from a `.node` file, so copy it
 to `addon.node` and `require("./addon.node")`. The package's build file finds Node's headers next to
 the `node` on your `PATH` (or in `/usr/include/node` or `/usr/local/include/node`).
 

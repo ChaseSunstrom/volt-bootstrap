@@ -1,4 +1,4 @@
-# Ruby calls the Volt library greet through its C extension (bindings/ruby/greet.so): owned text
+# Ruby calls the Volt library greet through its C extension (bindings/ruby/greet.so, greet.bundle on macOS): owned text
 # comes back as a String, an export struct is a class (close frees it now; otherwise the GC does)
 require "greet"
 

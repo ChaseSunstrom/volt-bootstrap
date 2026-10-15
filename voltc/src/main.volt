@@ -811,10 +811,21 @@ fn main() -> i32 {
         var s: sources = {};
         val chk = compile_lib(&c, &first, &s);
         var out = S(c.out ?? "");
+        // named as the platform's loaders look for it: libNAME.so, libNAME.dylib, NAME.dll
         if (c.out == null) {
-            out = S("lib");
+            val os = std::process::os();
+            out = S("");
+            if (os != "windows") {
+                out.append("lib");
+            }
             out.append(*c.files.at(0));
-            out.append(".so");
+            if (os == "windows") {
+                out.append(".dll");
+            } else if (os == "macos") {
+                out.append(".dylib");
+            } else {
+                out.append(".so");
+            }
         }
         var lc = copy c;
         val cdir = fresh_dir();

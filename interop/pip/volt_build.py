@@ -14,7 +14,7 @@ the project and name it in pyproject.toml,
 next to a bolt.toml whose [lib] has kind "shared" and bindings "python" (and "pyi" for types).
 It needs Python 3.11 or later (tomllib).
 The wheel holds package NAME (the Volt package's name): the bindings as its __init__.py, the
-library they load (libNAME.so) beside them. bolt comes from $BOLT, else the PATH; it finds voltc
+library they load (libNAME.so, libNAME.dylib, NAME.dll) beside them. bolt comes from $BOLT, else the PATH; it finds voltc
 as it always does ($VOLTC, next to bolt, the PATH).
 """
 
@@ -110,12 +110,14 @@ def prepare_metadata_for_build_wheel(metadata_directory, config_settings=None):
 def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
     project, volt = _project()
     target = _bolt_build()
-    lib = os.path.join(target, f"lib{volt}.so")
+    # the library as bolt names it here, the name the module looks for next to itself
+    so = f"lib{volt}.dylib" if sys.platform == "darwin" else f"{volt}.dll" if sys.platform == "win32" else f"lib{volt}.so"
+    lib = os.path.join(target, so)
     py = os.path.join(target, "bindings", f"{volt}.py")
     for f in (lib, py):
         if not os.path.isfile(f):
             raise RuntimeError(f"volt_build: bolt build made no {f}")
-    files = [(f"{volt}/__init__.py", py), (f"{volt}/lib{volt}.so", lib)]
+    files = [(f"{volt}/__init__.py", py), (f"{volt}/{so}", lib)]
     pyi = os.path.join(target, "bindings", f"{volt}.pyi")
     if os.path.isfile(pyi):
         files += [(f"{volt}/__init__.pyi", pyi), (f"{volt}/py.typed", None)]

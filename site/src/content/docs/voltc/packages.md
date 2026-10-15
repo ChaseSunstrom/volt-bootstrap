@@ -59,7 +59,8 @@ built in the other mode, fails to link instead of misbehaving.
 ## Libraries for other languages
 
 `voltc lib NAME --shared` builds a self-contained shared library (the package, what it uses from
-std, and the runtime), and `--static` the same as a `.a`. `voltc bindings NAME --lang L` writes the
+std, and the runtime; without `-o`, `libNAME.so`, `libNAME.dylib` on macOS or `NAME.dll` on
+Windows), and `--static` the same as a `.a`. `voltc bindings NAME --lang L` writes the
 declarations another language needs. See [Other languages](/volt-bootstrap/interop/other-languages/).
 
 ## Per-package configuration

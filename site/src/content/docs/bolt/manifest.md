@@ -86,8 +86,8 @@ members = ["crates/*"]
 | Key | |
 | --- | --- |
 | `path` | the library's directory (default `lib`) |
-| `kind` | `"volt"` (the default: a `.a` for Volt programs), `"shared"`, `"static"` |
-| `bindings` | languages to write bindings for: `c`, `cpp`, `rust`, `zig`, `python`, `pyi` (its type stubs), `csharp`, `java`, `go`, `lua`, `dart`, `swift`, `kotlin`, `ruby`, `node` (a Node-API addon's C, `NAME_node.c`), `js` (its loader), `ts` (its types, `NAME.d.ts`), `json` (the model). With a `shared` kind, bolt also compiles the Node addon (`NAME.node`) and the Lua and Ruby modules (`lua/NAME.so`, `ruby/NAME.so`) when their headers are installed, and writes Swift's module map (`CNAME/module.modulemap`) and Kotlin/Native's cinterop definition (`NAME.def`) |
+| `kind` | `"volt"` (the default: a `.a` for Volt programs), `"shared"` (`libNAME.so`, `libNAME.dylib` on macOS, `NAME.dll` on Windows), `"static"` (`libNAME.a`) |
+| `bindings` | languages to write bindings for: `c`, `cpp`, `rust`, `zig`, `python`, `pyi` (its type stubs), `csharp`, `java`, `go`, `lua`, `dart`, `swift`, `kotlin`, `ruby`, `node` (a Node-API addon's C, `NAME_node.c`), `js` (its loader), `ts` (its types, `NAME.d.ts`), `json` (the model). With a `shared` kind, bolt also compiles the Node addon (`NAME.node`) and the Lua and Ruby modules (`lua/NAME.so`, `ruby/NAME.so`; `ruby/NAME.bundle` on macOS) when their headers are installed, and writes Swift's module map (`CNAME/module.modulemap`) and Kotlin/Native's cinterop definition (`NAME.def`) |
 
 See [Other languages](/volt-bootstrap/interop/other-languages/).
 
