@@ -150,16 +150,16 @@ with greet.tally("clicks") as c:    # an export struct is a class; with (or clos
     print(c.name(), c.add(2))       # clicks 3
 ```
 
-`bolt build` writes the library to `target/debug/libgreet.so` and the module to
-`target/debug/bindings/greet.py`, so point Python at both:
+`bolt build` writes the library to `target/debug/libgreet.so` (`libgreet.dylib` on macOS,
+`greet.dll` on Windows) and the module to `target/debug/bindings/greet.py`, so point Python at both:
 
 ```sh
 bolt build
 PYTHONPATH=target/debug/bindings VOLT_GREET_LIB=target/debug/libgreet.so python3 main.py
 ```
 
-The module loads `libNAME.so` from `$VOLT_NAME_LIB` (the package's name in capitals), else from
-next to itself. An error set becomes an exception class deriving from the module's `Error`, raised
+The module loads the library from `$VOLT_NAME_LIB` (the package's name in capitals), else
+`libNAME.so` (`libNAME.dylib`, `NAME.dll`) from next to itself. An error set becomes an exception class deriving from the module's `Error`, raised
 with the error's name (its `code` and `name` say which, and the class has the codes: for `error
 math_error { NEGATIVE }`, `greet.math_error.NEGATIVE`). Structs are `ctypes` structures made from
 their fields (`greet.vec2(1, 2)`), and what Volt changes in one it takes by reference comes back;

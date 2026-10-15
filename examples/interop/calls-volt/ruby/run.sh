@@ -4,5 +4,8 @@ set -e
 cd "$(dirname "$0")"
 command -v ruby >/dev/null || exit 77
 (cd ../greet && "${BOLT:-bolt}" build -q)
-[ -f ../greet/target/debug/bindings/ruby/greet.so ] || exit 77
+# Ruby's extensions are .bundle on macOS
+EXT=so
+[ "$(uname)" = Darwin ] && EXT=bundle
+[ -f "../greet/target/debug/bindings/ruby/greet.$EXT" ] || exit 77
 ruby -I ../greet/target/debug/bindings/ruby main.rb

@@ -130,12 +130,22 @@ fn run(cmd: &mut Command) -> Output {
     cmd.current_dir(Path::new(ROOT).join("tests/interop")).output().unwrap()
 }
 
+/// a shared library's file name as the platform names it (libNAME.so, libNAME.dylib, NAME.dll)
+fn dylib(name: &str) -> String {
+    format!("{}{name}.{}", std::env::consts::DLL_PREFIX, std::env::consts::DLL_EXTENSION)
+}
+
+/// a Ruby extension's file name (Ruby's DLEXT: .bundle on macOS, .so elsewhere)
+fn ruby_module(name: &str) -> String {
+    format!("{name}.{}", if cfg!(target_os = "macos") { "bundle" } else { "so" })
+}
+
 #[test]
 fn bindings_round_trip() {
     let e = Env::new("bindings");
     let pkg = "mathlib=mathlib/lib";
     for backend in ["c", "llvm"] {
-        let so = e.path(&format!("{backend}/libmathlib.so"));
+        let so = e.path(&format!("{backend}/{}", dylib("mathlib")));
         std::fs::create_dir_all(e.dir.join(backend)).unwrap();
         ok(e.voltc(&["lib", "mathlib", "--pkg", pkg, "--shared", "--backend", backend, "-o", &so]), "voltc lib --shared");
         ok(e.voltc(&["lib", "mathlib", "--pkg", pkg, "--static", "--backend", backend, "-o", &e.path(&format!("{backend}/libmathlib_static.a"))]), "voltc lib --static");
@@ -172,8 +182,8 @@ fn bindings_round_trip() {
         std::fs::copy(Path::new(ROOT).join("tests/interop/client.rs"), e.dir.join("client.rs")).unwrap();
         ok(run(Command::new("rustc").arg(e.dir.join("client.rs")).args(["--edition", "2021", "-L", &lib_dir, "-l", "mathlib", "-C", &format!("link-arg={rpath}"), "-o"]).arg(bin("rs"))), "rustc client.rs");
         assert_eq!(ok(Command::new(bin("rs")).output().unwrap(), "Rust program"), MATHLIB_OUT, "Rust ({backend})");
-        // Python: the module loads libmathlib.so from $VOLT_MATHLIB_LIB, else next to itself
-        let py = run(Command::new("python3").arg("client.py").env("PYTHONPATH", e.path("")).env("VOLT_MATHLIB_LIB", format!("{lib_dir}/libmathlib.so")));
+        // Python: the module loads the library from $VOLT_MATHLIB_LIB, else next to itself
+        let py = run(Command::new("python3").arg("client.py").env("PYTHONPATH", e.path("")).env("VOLT_MATHLIB_LIB", format!("{lib_dir}/{}", dylib("mathlib"))));
         assert_eq!(ok(py, "python3 client.py"), MATHLIB_OUT, "Python ({backend})");
         // the stubs parse, and mypy (when it's installed) checks the client against them
         let parse = format!("import ast; ast.parse(open({:?}).read())", e.path("mathlib.pyi"));
@@ -217,7 +227,7 @@ fn bindings_round_trip() {
                 std::fs::copy(e.dir.join("mathlib.cs"), proj.join("mathlib.cs")).unwrap();
                 std::fs::copy(Path::new(ROOT).join("tests/interop/Client.cs"), proj.join("Client.cs")).unwrap();
                 std::fs::write(proj.join("Client.csproj"), format!("<Project Sdk=\"Microsoft.NET.Sdk\">\n  <PropertyGroup>\n    <OutputType>Exe</OutputType>\n    <TargetFramework>net{major}.0</TargetFramework>\n    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>\n    <Nullable>enable</Nullable>\n    <InvariantGlobalization>true</InvariantGlobalization>\n    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>\n  </PropertyGroup>\n</Project>\n")).unwrap();
-                let o = Command::new(&dotnet).args(["run", "--nologo"]).current_dir(&proj).env("LD_LIBRARY_PATH", &lib_dir).env("DOTNET_CLI_TELEMETRY_OPTOUT", "1").env("DOTNET_NOLOGO", "1").env("DOTNET_SKIP_FIRST_TIME_EXPERIENCE", "1").output().unwrap();
+                let o = Command::new(&dotnet).args(["run", "--nologo"]).current_dir(&proj).env("LD_LIBRARY_PATH", &lib_dir).env("DYLD_LIBRARY_PATH", &lib_dir).env("DOTNET_CLI_TELEMETRY_OPTOUT", "1").env("DOTNET_NOLOGO", "1").env("DOTNET_SKIP_FIRST_TIME_EXPERIENCE", "1").output().unwrap();
                 assert_eq!(ok(o, "dotnet run"), MATHLIB_OUT, "C# ({backend})");
             }
             None => eprintln!("dotnet isn't installed: skipping the C# client"),
@@ -230,7 +240,7 @@ fn bindings_round_trip() {
                 std::fs::copy(e.dir.join("mathlib.java"), jdir.join("mathlib.java")).unwrap();
                 std::fs::copy(Path::new(ROOT).join("tests/interop/Client.java"), jdir.join("Client.java")).unwrap();
                 ok(Command::new(bin.join("javac")).args(["-Xlint:all", "-Werror", "-d", "classes", "mathlib.java", "Client.java"]).current_dir(&jdir).output().unwrap(), "javac");
-                let o = Command::new(bin.join("java")).args(["--enable-native-access=ALL-UNNAMED", "-cp", "classes", "Client"]).current_dir(&jdir).env("LD_LIBRARY_PATH", &lib_dir).output().unwrap();
+                let o = Command::new(bin.join("java")).args(["--enable-native-access=ALL-UNNAMED", "-cp", "classes", "Client"]).current_dir(&jdir).env("LD_LIBRARY_PATH", &lib_dir).env("DYLD_LIBRARY_PATH", &lib_dir).output().unwrap();
                 assert_eq!(ok(o, "java Client"), MATHLIB_OUT, "Java ({backend})");
             }
             None => eprintln!("no JDK 22 or later (javac): skipping the Java client"),
@@ -268,7 +278,7 @@ fn bindings_round_trip() {
             std::fs::copy(e.dir.join("mathlib.dart"), ddir.join("mathlib.dart")).unwrap();
             std::fs::copy(Path::new(ROOT).join("tests/interop/client.dart"), ddir.join("client.dart")).unwrap();
             ok(Command::new(&dart).args(["analyze", "--fatal-infos", "mathlib.dart", "client.dart"]).current_dir(&ddir).output().unwrap(), "dart analyze");
-            let o = Command::new(&dart).args(["run", "client.dart"]).current_dir(&ddir).env("VOLT_MATHLIB_LIB", format!("{lib_dir}/libmathlib.so")).output().unwrap();
+            let o = Command::new(&dart).args(["run", "client.dart"]).current_dir(&ddir).env("VOLT_MATHLIB_LIB", format!("{lib_dir}/{}", dylib("mathlib"))).output().unwrap();
             assert_eq!(ok(o, "dart run client.dart"), MATHLIB_OUT, "Dart ({backend})");
         } else {
             eprintln!("dart isn't installed: skipping the Dart client");
@@ -316,7 +326,7 @@ fn bindings_round_trip() {
                 for h in &hdrs {
                     cc.arg("-I").arg(h);
                 }
-                ok(run(cc.arg(e.dir.join("mathlib_ruby.c")).args(["-I", &e.path(""), "-L", &lib_dir, "-lmathlib", &rpath, "-o"]).arg(rdir.join("mathlib.so"))), "cc mathlib_ruby.c");
+                ok(run(cc.arg(e.dir.join("mathlib_ruby.c")).args(["-I", &e.path(""), "-L", &lib_dir, "-lmathlib", &rpath, "-o"]).arg(rdir.join(ruby_module("mathlib")))), "cc mathlib_ruby.c");
                 let o = Command::new(&ruby).arg("-I").arg(&rdir).arg(Path::new(ROOT).join("tests/interop/client.rb")).output().unwrap();
                 assert_eq!(ok(o, "ruby client.rb"), MATHLIB_OUT, "Ruby ({backend})");
             }
@@ -330,7 +340,7 @@ fn bindings_round_trip() {
             if cfg!(target_os = "linux") {
                 target = vec!["-target".to_string(), format!("{}-linux-gnu", std::env::consts::ARCH)];
             }
-            let z = Command::new(zig).args(["run", "client.zig"]).args(&target).args(["-lc", "-L", &lib_dir, "-lmathlib"]).current_dir(&e.dir).env("LD_LIBRARY_PATH", &lib_dir).output().unwrap();
+            let z = Command::new(zig).args(["run", "client.zig"]).args(&target).args(["-lc", "-L", &lib_dir, "-lmathlib"]).current_dir(&e.dir).env("LD_LIBRARY_PATH", &lib_dir).env("DYLD_LIBRARY_PATH", &lib_dir).output().unwrap();
             assert!(z.status.success(), "zig run: {}", String::from_utf8_lossy(&z.stderr));
             assert_eq!(String::from_utf8_lossy(&z.stderr), MATHLIB_OUT, "Zig ({backend})");
         } else {
@@ -347,11 +357,15 @@ fn bindings_round_trip() {
     let path = std::env::var("HOME").map(|h| format!("{h}/.local/bin:{path}")).unwrap_or(path);
     let b = Command::new(env!("CARGO_BIN_EXE_bolt")).arg("build").current_dir(&pkg_dir).env("VOLTC", &e.voltc).env("BOLT_HOME", e.dir.join("cache")).env("PATH", &path).output().unwrap();
     assert!(b.status.success(), "bolt build: {}", String::from_utf8_lossy(&b.stderr));
-    for f in ["libtwice.so", "libtwice.a", "deps/libtwice.a", "bindings/twice.h", "bindings/twice.py", "bindings/twice_node.c", "bindings/twice.js", "bindings/twice.d.ts", "bindings/twice_lua.c", "bindings/twice_ruby.c", "bindings/twice.swift", "bindings/Ctwice/module.modulemap", "bindings/twice.kt", "bindings/twice.def"] {
+    for f in [dylib("twice").as_str(), "libtwice.a", "deps/libtwice.a", "bindings/twice.h", "bindings/twice.py", "bindings/twice_node.c", "bindings/twice.js", "bindings/twice.d.ts", "bindings/twice_lua.c", "bindings/twice_ruby.c", "bindings/twice.swift", "bindings/Ctwice/module.modulemap", "bindings/twice.kt", "bindings/twice.def"] {
         assert!(pkg_dir.join("target/debug").join(f).is_file(), "bolt didn't make target/debug/{f}");
     }
     // the native modules it compiled load as they are, from target/
     let bindings = pkg_dir.join("target/debug/bindings");
+    // Python's default library name follows the platform (the loader records it instead of loading)
+    let check = "import ctypes, os, sys\nseen = []\ndef cdll(p, *a, **k):\n    seen.append(os.path.basename(p))\n    raise OSError\nctypes.CDLL = cdll\nfor sys.platform in ['darwin', 'win32', 'linux']:\n    sys.modules.pop('twice', None)\n    try:\n        import twice\n    except OSError:\n        pass\nprint(*seen)\n";
+    let o = Command::new("python3").args(["-c", check]).current_dir(&bindings).env_remove("VOLT_TWICE_LIB").output().unwrap();
+    assert_eq!(ok(o, "python3 (twice.py's library name)"), "libtwice.dylib twice.dll libtwice.so\n", "twice.py's default library");
     if node_include().is_some() {
         let o = Command::new("node").args(["-e", "console.log(require('./twice.js').twice(21))"]).current_dir(&bindings).output().unwrap();
         assert_eq!(ok(o, "node (bolt's addon)"), "42\n", "bolt's Node addon");
@@ -397,7 +411,7 @@ fn bindings_nested_slices() {
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("nested.volt"), "export fn total(rows: i64[..][..]) -> i64 {\n    var t: i64 = 0;\n    for (r) in rows {\n        for (x) in r {\n            t += x;\n        }\n    }\n    return t;\n}\n\nexport struct thing {\n    n: i64;\n}\n\nexport fn thing_new(n: i64) -> thing {\n    return { n: n };\n}\n\nexport fn sum_lent(xs: thing&[..]) -> i64 {\n    var t: i64 = 0;\n    for (x) in xs {\n        t += x.n;\n    }\n    return t;\n}\n\nexport fn sum_maybe(xs: thing*[..]) -> i64 {\n    var t: i64 = 0;\n    for (x) in xs {\n        if (x != null) {\n            t += x->n;\n        }\n    }\n    return t;\n}\n").unwrap();
     let pkg = format!("nested={}", dir.display());
-    ok(e.voltc(&["lib", "nested", "--pkg", &pkg, "--shared", "-o", &e.path("libnested.so")]), "voltc lib nested --shared");
+    ok(e.voltc(&["lib", "nested", "--pkg", &pkg, "--shared", "-o", &e.path(&dylib("nested"))]), "voltc lib nested --shared");
     ok(e.voltc(&["bindings", "nested", "--pkg", &pkg, "--lang", "c", "-o", &e.path("nested.h")]), "voltc bindings nested --lang c");
     std::fs::write(e.dir.join("main.c"), "#include \"nested.h\"\n#include <stdio.h>\n\nint main(void) {\n    int64_t a[] = {1, 2}, b[] = {3};\n    nested_slice_i64 rows[] = {{a, 2}, {b, 1}};\n    printf(\"%lld\\n\", (long long)total((nested_slice_slice_i64){rows, 2}));\n    nested_thing *ts[] = {thing_new(2), thing_new(5)};\n    nested_thing *ms[] = {ts[0], NULL, ts[1]};\n    printf(\"%lld %lld\\n\", (long long)sum_lent((nested_slice_nested_thing){ts, 2}), (long long)sum_maybe((nested_slice_nested_thing){ms, 3}));\n    thing_free(ts[0]);\n    thing_free(ts[1]);\n    return 0;\n}\n").unwrap();
     let rpath = format!("-Wl,-rpath,{}", e.path(""));
@@ -428,7 +442,7 @@ fn bindings_shapes() {
     for backend in ["c", "llvm"] {
         let lib = e.path(backend);
         std::fs::create_dir_all(e.dir.join(backend)).unwrap();
-        ok(e.voltc(&["lib", "shapelib", "--pkg", pkg, "--shared", "--leak-check", "--backend", backend, "-o", &format!("{lib}/libshapelib.so")]), "voltc lib --shared");
+        ok(e.voltc(&["lib", "shapelib", "--pkg", pkg, "--shared", "--leak-check", "--backend", backend, "-o", &format!("{lib}/{}", dylib("shapelib"))]), "voltc lib --shared");
         let rpath = format!("-Wl,-rpath,{lib}");
         for (cc, std, client) in [("cc", "-std=c11", "client_shapes.c"), ("c++", "-std=c++17", "client_shapes.cpp")] {
             let bin = e.dir.join(format!("{backend}_{cc}"));
@@ -451,7 +465,7 @@ fn bindings_shapes() {
             if cfg!(target_os = "linux") {
                 target = vec!["-target".to_string(), format!("{}-linux-gnu", std::env::consts::ARCH)];
             }
-            let z = Command::new(zig).args(["run", "client_shapes.zig", "leak_report.c"]).args(&target).args(["-lc", "-L", &lib, "-lshapelib"]).current_dir(&e.dir).env("LD_LIBRARY_PATH", &lib).output().unwrap();
+            let z = Command::new(zig).args(["run", "client_shapes.zig", "leak_report.c"]).args(&target).args(["-lc", "-L", &lib, "-lshapelib"]).current_dir(&e.dir).env("LD_LIBRARY_PATH", &lib).env("DYLD_LIBRARY_PATH", &lib).output().unwrap();
             assert!(z.status.success(), "zig run client_shapes.zig: {}", String::from_utf8_lossy(&z.stderr));
             assert_eq!(String::from_utf8_lossy(&z.stderr), format!("checked true OVERDRAWN\nlimit true OVERDRAWN\nsign positive not positive\n{SHAPES_OUT}volt live: 0\n"), "client_shapes.zig ({backend})");
         } else {
@@ -466,7 +480,7 @@ fn bindings_shapes() {
                 std::fs::copy(e.dir.join("shapelib.java"), jdir.join("shapelib.java")).unwrap();
                 std::fs::copy(Path::new(ROOT).join("tests/interop/ClientShapes.java"), jdir.join("ClientShapes.java")).unwrap();
                 ok(Command::new(bin.join("javac")).args(["-Xlint:all", "-Werror", "-d", "classes", "shapelib.java", "ClientShapes.java"]).current_dir(&jdir).output().unwrap(), "javac ClientShapes.java");
-                let o = Command::new(bin.join("java")).args(["--enable-native-access=ALL-UNNAMED", "-cp", "classes", "ClientShapes"]).current_dir(&jdir).env("LD_LIBRARY_PATH", &lib).output().unwrap();
+                let o = Command::new(bin.join("java")).args(["--enable-native-access=ALL-UNNAMED", "-cp", "classes", "ClientShapes"]).current_dir(&jdir).env("LD_LIBRARY_PATH", &lib).env("DYLD_LIBRARY_PATH", &lib).output().unwrap();
                 assert_eq!(String::from_utf8_lossy(&o.stderr), "volt live: 0\n", "ClientShapes.java ({backend}): the library's allocations at exit");
                 assert_eq!(ok(o, "java ClientShapes"), format!("checked true OVERDRAWN\nlimit true OVERDRAWN\nsign positive not positive\n{SHAPES_OUT}"), "ClientShapes.java ({backend})");
             }
@@ -482,7 +496,7 @@ fn bindings_shapes() {
             std::fs::copy(e.dir.join("shapelib.cs"), proj.join("shapelib.cs")).unwrap();
             std::fs::copy(Path::new(ROOT).join("tests/interop/client_shapes.cs"), proj.join("client_shapes.cs")).unwrap();
             std::fs::write(proj.join("Client.csproj"), format!("<Project Sdk=\"Microsoft.NET.Sdk\">\n  <PropertyGroup>\n    <OutputType>Exe</OutputType>\n    <TargetFramework>net{major}.0</TargetFramework>\n    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>\n    <Nullable>enable</Nullable>\n    <InvariantGlobalization>true</InvariantGlobalization>\n    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>\n  </PropertyGroup>\n</Project>\n")).unwrap();
-            let o = Command::new(&dotnet).args(["run", "--nologo"]).current_dir(&proj).env("LD_LIBRARY_PATH", &lib).env("DOTNET_CLI_TELEMETRY_OPTOUT", "1").env("DOTNET_NOLOGO", "1").env("DOTNET_SKIP_FIRST_TIME_EXPERIENCE", "1").output().unwrap();
+            let o = Command::new(&dotnet).args(["run", "--nologo"]).current_dir(&proj).env("LD_LIBRARY_PATH", &lib).env("DYLD_LIBRARY_PATH", &lib).env("DOTNET_CLI_TELEMETRY_OPTOUT", "1").env("DOTNET_NOLOGO", "1").env("DOTNET_SKIP_FIRST_TIME_EXPERIENCE", "1").output().unwrap();
             let err = String::from_utf8_lossy(&o.stderr).to_string();
             let out = ok(o, "dotnet run client_shapes.cs");
             assert_eq!(err, "volt live: 0\n", "client_shapes.cs ({backend}): the library's allocations at exit");
@@ -492,7 +506,7 @@ fn bindings_shapes() {
         }
         // Python: client_shapes.py with shapelib.py, printing the library's leak report itself (and
         // after the rest, what only Python checks: callbacks' exceptions, what Volt can't take)
-        let py = Command::new("python3").arg(Path::new(ROOT).join("tests/interop/client_shapes.py")).env("PYTHONPATH", e.path("")).env("VOLT_SHAPELIB_LIB", format!("{lib}/libshapelib.so")).output().unwrap();
+        let py = Command::new("python3").arg(Path::new(ROOT).join("tests/interop/client_shapes.py")).env("PYTHONPATH", e.path("")).env("VOLT_SHAPELIB_LIB", format!("{lib}/{}", dylib("shapelib"))).output().unwrap();
         assert_eq!(String::from_utf8_lossy(&py.stderr), "volt live: 0\n", "client_shapes.py ({backend}): the library's allocations at exit");
         let tail = "raised ValueError ValueError ValueError ValueError\nwrong type TypeError\nwrong length ValueError ValueError\nrefused ValueError ValueError ValueError\nkept ValueError ann 5\nfatal 101 True\n";
         assert_eq!(ok(py, "python3 client_shapes.py"), format!("checked true OVERDRAWN\nlimit true OVERDRAWN\nsign positive not positive\n{SHAPES_OUT}{tail}"), "client_shapes.py ({backend})");
@@ -555,7 +569,7 @@ fn bindings_shapes() {
             Some((ruby, hdrs)) => {
                 let rdir = e.dir.join(format!("ruby-{backend}"));
                 std::fs::create_dir_all(&rdir).unwrap();
-                ok(run(ruby_ext(&hdrs, &e.dir.join("shapelib_ruby.c"), &lib, "shapelib").arg(rdir.join("shapelib.so"))), "cc shapelib_ruby.c");
+                ok(run(ruby_ext(&hdrs, &e.dir.join("shapelib_ruby.c"), &lib, "shapelib").arg(rdir.join(ruby_module("shapelib")))), "cc shapelib_ruby.c");
                 let o = Command::new(&ruby).arg("-I").arg(&rdir).arg(Path::new(ROOT).join("tests/interop/client_shapes.rb")).output().unwrap();
                 assert_eq!(String::from_utf8_lossy(&o.stderr), "volt live: 0\n", "client_shapes.rb ({backend}): the library's allocations at exit");
                 let tail = "raised ArgumentError ArgumentError ArgumentError ArgumentError\nwrong type TypeError TypeError\nrefused RuntimeError ArgumentError ArgumentError\nin use RuntimeError RuntimeError\nkept RuntimeError ann 5\nlent after RuntimeError\nshrinking closed\nclosed anyway ArgumentError\nbreak 7\nfatal 101 true\n";
@@ -574,7 +588,7 @@ fn bindings_shapes() {
             if backend == "c" {
                 ok(Command::new(&dart).args(["analyze", "--fatal-infos", "shapelib.dart", "client_shapes.dart"]).current_dir(&ddir).output().unwrap(), "dart analyze (shapes)");
             }
-            let o = Command::new(&dart).args(["run", "client_shapes.dart"]).current_dir(&ddir).env("VOLT_SHAPELIB_LIB", format!("{lib}/libshapelib.so")).output().unwrap();
+            let o = Command::new(&dart).args(["run", "client_shapes.dart"]).current_dir(&ddir).env("VOLT_SHAPELIB_LIB", format!("{lib}/{}", dylib("shapelib"))).output().unwrap();
             assert_eq!(String::from_utf8_lossy(&o.stderr), "volt live: 0\n", "client_shapes.dart ({backend}): the library's allocations at exit");
             let tail = "raised StateError StateError StateError StateError\nrefused StateError StateError StateError StateError StateError StateError StateError\nkept StateError ann 5\nfatal 101 true\n";
             assert_eq!(ok(o, "dart run client_shapes.dart"), format!("checked true OVERDRAWN\nlimit true OVERDRAWN\nsign positive not positive\n{SHAPES_OUT}{tail}"), "client_shapes.dart ({backend})");
@@ -609,7 +623,7 @@ fn bindings_shapes() {
                 ok(e.voltc(&["bindings", "swiftedge", "--pkg", epkg, "--lang", lang, "-o", &edir.join(file).display().to_string()]), &format!("voltc bindings swiftedge --lang {lang}"));
             }
             let elib = edir.display().to_string();
-            ok(e.voltc(&["lib", "swiftedge", "--pkg", epkg, "--shared", "--leak-check", "--backend", backend, "-o", &format!("{elib}/libswiftedge.so")]), "voltc lib swiftedge");
+            ok(e.voltc(&["lib", "swiftedge", "--pkg", epkg, "--shared", "--leak-check", "--backend", backend, "-o", &format!("{elib}/{}", dylib("swiftedge"))]), "voltc lib swiftedge");
             std::fs::write(edir.join("Cswiftedge/module.modulemap"), "module Cswiftedge {\n    header \"swiftedge.h\"\n    export *\n}\n").unwrap();
             std::fs::copy(Path::new(ROOT).join("tests/interop/client_swiftedge.swift"), edir.join("main.swift")).unwrap();
             let o = Command::new(&swiftc).args(["-warnings-as-errors", "-I", "Cswiftedge", "swiftedge.swift", "main.swift"]).arg(e.dir.join("leak_report.o")).args(["-L", &elib, "-lswiftedge", "-Xlinker", "-rpath", "-Xlinker", &elib, "-o", "client"]).current_dir(&edir).output().unwrap();
@@ -640,7 +654,7 @@ fn bindings_shapes() {
                 assert!(!String::from_utf8_lossy(&o.stderr).contains("warning:"), "kotlinc-native warns: {}", String::from_utf8_lossy(&o.stderr));
                 ok(o, "kotlinc-native client_shapes.kt");
             }
-            let o = Command::new(kdir.join("client.kexe")).env("LD_LIBRARY_PATH", &lib).output().unwrap();
+            let o = Command::new(kdir.join("client.kexe")).env("LD_LIBRARY_PATH", &lib).env("DYLD_LIBRARY_PATH", &lib).output().unwrap();
             assert_eq!(String::from_utf8_lossy(&o.stderr), "volt live: 0\n", "client_shapes.kt ({backend}): the library's allocations at exit");
             let tail = "raised shout twice name\nrefused this account is in use by a running call; this account is given twice; this account is closed\nkept ann 5\nclosed this account is closed\n";
             assert_eq!(ok(o, "client_shapes.kt"), format!("checked true OVERDRAWN\nlimit true OVERDRAWN\nsign positive not positive\n{SHAPES_OUT}{tail}"), "client_shapes.kt ({backend})");
@@ -662,16 +676,16 @@ fn bindings_shapes() {
     std::fs::write(opt.join("pyopt.volt"), "export struct thing {\n    n: i64;\n}\n\nexport fn thing_new(n: i64) -> thing {\n    return { n: n };\n}\n\nexport fn count_text(xs: str?[..]) -> i64 {\n    var t: i64 = 0;\n    for (x) in xs {\n        val s = x ?? continue;\n        t += @cast<i64>(s.len);\n    }\n    return t;\n}\n\nexport fn sum_things(xs: thing*[..]) -> i64 {\n    var t: i64 = 0;\n    for (x) in xs {\n        if (x != null) {\n            t += x->n;\n        }\n    }\n    return t;\n}\n").unwrap();
     let opkg = format!("pyopt={}", opt.display());
     ok(e.voltc(&["bindings", "pyopt", "--pkg", &opkg, "--lang", "python", "-o", &e.path("pyopt.py")]), "voltc bindings pyopt --lang python");
-    ok(e.voltc(&["lib", "pyopt", "--pkg", &opkg, "--shared", "--leak-check", "-o", &e.path("libpyopt.so")]), "voltc lib pyopt --shared");
+    ok(e.voltc(&["lib", "pyopt", "--pkg", &opkg, "--shared", "--leak-check", "-o", &e.path(&dylib("pyopt"))]), "voltc lib pyopt --shared");
     let check = "import ctypes, pyopt as p\nprint(p.count_text(['ab', None, 'c']), p.sum_things([p.thing(2), None, p.thing(5)]))\nprint(ctypes.c_size_t.in_dll(p._lib, 'volt_live_allocs').value)\n";
-    let o = Command::new("python3").args(["-c", check]).env("PYTHONPATH", e.path("")).env("VOLT_PYOPT_LIB", e.path("libpyopt.so")).output().unwrap();
+    let o = Command::new("python3").args(["-c", check]).env("PYTHONPATH", e.path("")).env("VOLT_PYOPT_LIB", e.path(&dylib("pyopt"))).output().unwrap();
     assert_eq!(ok(o, "python3 (pyopt)"), "3 7\n0\n", "Python: optionals of text and handles in slices");
     // Ruby: the same, nil for none (the leak report linked into the extension)
     if let Some((ruby, hdrs)) = ruby_headers() {
         ok(e.voltc(&["bindings", "pyopt", "--pkg", &opkg, "--lang", "ruby", "-o", &e.path("pyopt_ruby.c")]), "voltc bindings pyopt --lang ruby");
         let rdir = e.dir.join("ruby-pyopt");
         std::fs::create_dir_all(&rdir).unwrap();
-        ok(run(ruby_ext(&hdrs, &e.dir.join("pyopt_ruby.c"), &e.path(""), "pyopt").arg(rdir.join("pyopt.so"))), "cc pyopt_ruby.c");
+        ok(run(ruby_ext(&hdrs, &e.dir.join("pyopt_ruby.c"), &e.path(""), "pyopt").arg(rdir.join(ruby_module("pyopt")))), "cc pyopt_ruby.c");
         let o = Command::new(&ruby).arg("-I").arg(&rdir).args(["-e", "require 'pyopt'; puts \"#{Pyopt.count_text(['ab', nil, 'c'])} #{Pyopt.sum_things([Pyopt::Thing.new(2), nil, Pyopt::Thing.new(5)])}\""]).output().unwrap();
         assert_eq!(String::from_utf8_lossy(&o.stderr), "volt live: 0\n", "Ruby (pyopt): the library's allocations at exit");
         assert_eq!(ok(o, "ruby (pyopt)"), "3 7\n", "Ruby: optionals of text and handles in slices");
@@ -679,8 +693,8 @@ fn bindings_shapes() {
         // past the call, handles given to a callback, a str a callback gives, ...)
         let mpkg = "moreshapes=moreshapes/lib";
         ok(e.voltc(&["bindings", "moreshapes", "--pkg", mpkg, "--lang", "ruby", "-o", &e.path("moreshapes_ruby.c")]), "voltc bindings moreshapes --lang ruby");
-        ok(e.voltc(&["lib", "moreshapes", "--pkg", mpkg, "--shared", "--leak-check", "-o", &e.path("libmoreshapes.so")]), "voltc lib moreshapes --shared");
-        ok(run(ruby_ext(&hdrs, &e.dir.join("moreshapes_ruby.c"), &e.path(""), "moreshapes").arg(rdir.join("moreshapes.so"))), "cc moreshapes_ruby.c");
+        ok(e.voltc(&["lib", "moreshapes", "--pkg", mpkg, "--shared", "--leak-check", "-o", &e.path(&dylib("moreshapes"))]), "voltc lib moreshapes --shared");
+        ok(run(ruby_ext(&hdrs, &e.dir.join("moreshapes_ruby.c"), &e.path(""), "moreshapes").arg(rdir.join(ruby_module("moreshapes")))), "cc moreshapes_ruby.c");
         let o = Command::new(&ruby).arg("-I").arg(&rdir).arg(Path::new(ROOT).join("tests/interop/client_moreshapes.rb")).output().unwrap();
         assert_eq!(String::from_utf8_lossy(&o.stderr), "volt live: 0\n", "client_moreshapes.rb: the library's allocations at exit");
         let want = "measure 70 tag sizer\nsizer closed\neach 0,1,2 gone 4\nstopped stop gone 7\nlabel pos neg\nslice 6\nresult 5 -1\nmaybe yes nil cstr 5\nlist [1, nil]\ngetter 9 [9]\nbig [5, 7]\nfixed 1020 RuntimeError\nbad ArgumentError TypeError\nclosed meanwhile RuntimeError RuntimeError gone 14\n";
@@ -742,11 +756,11 @@ export fn run(call: fn(i64) -> i64) -> i64 {
         let mpkg = format!("dartmore={}", more.display());
         let at = |f: &str| more.join(f).display().to_string();
         ok(e.voltc(&["bindings", "dartmore", "--pkg", &mpkg, "--lang", "dart", "-o", &at("dartmore.dart")]), "voltc bindings dartmore --lang dart");
-        ok(e.voltc(&["lib", "dartmore", "--pkg", &mpkg, "--shared", "--leak-check", "-o", &at("libdartmore.so")]), "voltc lib dartmore --shared");
+        ok(e.voltc(&["lib", "dartmore", "--pkg", &mpkg, "--shared", "--leak-check", "-o", &at(&dylib("dartmore"))]), "voltc lib dartmore --shared");
         let client = "import 'dart:ffi';\nimport 'dart:io';\n\nimport 'dartmore.dart';\n\nvoid main() {\n  final a = thing(2), b = thing(5);\n  print('${count_text(['ab', null, 'c'])} ${sum_things([a, null, b])} ${label((x) => 'n$x', 42)} ${pick(a, (t) => t)} ${total((xs) => xs.reduce((x, y) => x + y), 'ab', 'c')} ${run((x) => x + 1)}');\n  a.close();\n  b.close();\n  print(DynamicLibrary.open(Platform.environment['VOLT_DARTMORE_LIB']!).lookup<Size>('volt_live_allocs').value);\n}\n";
         std::fs::write(more.join("more.dart"), client).unwrap();
         ok(Command::new(&dart).args(["analyze", "--fatal-infos", "dartmore.dart", "more.dart"]).current_dir(&more).output().unwrap(), "dart analyze (dartmore)");
-        let o = Command::new(&dart).args(["run", "more.dart"]).current_dir(&more).env("VOLT_DARTMORE_LIB", at("libdartmore.so")).output().unwrap();
+        let o = Command::new(&dart).args(["run", "more.dart"]).current_dir(&more).env("VOLT_DARTMORE_LIB", at(&dylib("dartmore"))).output().unwrap();
         assert_eq!(ok(o, "dart run more.dart"), "3 7 3 2 9 5\n0\n", "Dart: optionals in slices, callbacks giving a str and a reference or taking a slice");
     }
     // the model has the trait, and how a fn takes its object
@@ -777,14 +791,14 @@ fn bindings_kotlin_shapes() {
     for backend in ["c", "llvm"] {
         let lib = e.path(backend);
         std::fs::create_dir_all(e.dir.join(backend)).unwrap();
-        ok(e.voltc(&["lib", "ktshapes", "--pkg", pkg, "--shared", "--leak-check", "--backend", backend, "-o", &format!("{lib}/libktshapes.so")]), "voltc lib ktshapes --shared");
+        ok(e.voltc(&["lib", "ktshapes", "--pkg", pkg, "--shared", "--leak-check", "--backend", backend, "-o", &format!("{lib}/{}", dylib("ktshapes"))]), "voltc lib ktshapes --shared");
         if backend == "c" {
             let link = format!("{} -L{lib} -lktshapes --allow-shlib-undefined", e.path("leak_report.o"));
             let o = k(&konanc, &["ktshapes.kt", "client_ktshapes.kt", "-l", "ktshapes_c.klib", "-linker-options", &link, "-o", "client"]);
             assert!(!String::from_utf8_lossy(&o.stderr).contains("warning:"), "kotlinc-native warns: {}", String::from_utf8_lossy(&o.stderr));
             ok(o, "kotlinc-native client_ktshapes.kt");
         }
-        let o = Command::new(e.dir.join("client.kexe")).env("LD_LIBRARY_PATH", &lib).output().unwrap();
+        let o = Command::new(e.dir.join("client.kexe")).env("LD_LIBRARY_PATH", &lib).env("DYLD_LIBRARY_PATH", &lib).output().unwrap();
         assert_eq!(String::from_utf8_lossy(&o.stderr), "volt live: 0\n", "client_ktshapes.kt ({backend}): the library's allocations at exit");
         assert_eq!(ok(o, "client_ktshapes.kt"), "measure 50 kotlin\nsizer gone\nfixed 50 fixed\neach [0, 1, 2]\nfailed each 8\nclose_ 700 7\nshut\nlabel n7\nslice 6\nresult 5 9\nmaybe yes null\ncstr 5\nsome [1, null]\ngetter 8\nbig [5, 9]\nlend 8\ngive 7\nrec 14\nbumped 2 9 ab tag BLUE 1\nmade 6\ntotal2 6\ntext 3\nblues 2\nfirst_two [4, 5]\nmaybe_get 5 -1\nslice_back 3\nstr_result 4 -1 -1\ntext_in 4\nlist_or [a] BAD\nsizer_or fixed\ngone 18\n", "client_ktshapes.kt ({backend})");
     }
@@ -1611,7 +1625,7 @@ fn node_addon() {
         let o = Command::new(env!("CARGO_BIN_EXE_bolt")).args(["build", "-q", "--backend", backend]).current_dir(&pkg).env("VOLTC", &e.voltc).env("BOLT_HOME", e.dir.join("cache")).output().unwrap();
         assert!(o.status.success(), "bolt build ({backend}): {}", String::from_utf8_lossy(&o.stderr));
         let node_file = e.dir.join(format!("addon-{backend}.node"));
-        std::fs::copy(pkg.join("target/debug/libaddon.so"), &node_file).unwrap();
+        std::fs::copy(pkg.join("target/debug").join(dylib("addon")), &node_file).unwrap();
         let o = Command::new("node").arg(Path::new(ROOT).join("tests/interop/node_addon/test.js")).arg(&node_file).output().unwrap();
         assert_eq!(ok(o, "node test.js"), want, "a Volt addon ({backend})");
     }

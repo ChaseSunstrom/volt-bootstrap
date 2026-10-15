@@ -89,6 +89,12 @@ fn source_files(dir: &Path, exts: &[&str], out: &mut Vec<PathBuf>) {
     }
 }
 
+/// a shared library's file name as the platform's loaders look for it: libNAME.so, libNAME.dylib
+/// on macOS, NAME.dll on Windows
+fn shared_lib(name: &str) -> String {
+    format!("{}{name}.{}", std::env::consts::DLL_PREFIX, std::env::consts::DLL_EXTENSION)
+}
+
 /// the C compiler native modules are built with: $CC, else cc
 fn c_compiler() -> String {
     std::env::var("CC").ok().filter(|c| !c.trim().is_empty()).unwrap_or_else(|| "cc".into())
@@ -693,7 +699,7 @@ impl Build {
     }
 
     /// the libraries for other languages package p asks for ([lib] kind = shared, static) and their
-    /// bindings: target/<profile>/libNAME.so, libNAME.a and bindings/NAME.{h,hpp,rs,zig,py,...},
+    /// bindings: target/<profile>/libNAME.so (libNAME.dylib, NAME.dll), libNAME.a and bindings/NAME.{h,hpp,rs,zig,py,...},
     /// then what makes the bindings usable as they are (binding_extras)
     pub fn foreign(&self, p: usize) -> Result<(), String> {
         let m = &self.g.pkgs[p].m;
@@ -707,7 +713,7 @@ impl Build {
         }
         let mut jobs = Vec::new();
         for kind in m.lib_kinds.iter().filter(|k| *k != "volt") {
-            let out = self.target.join(format!("lib{}.{}", m.name, if kind == "shared" { "so" } else { "a" }));
+            let out = self.target.join(if kind == "shared" { shared_lib(&m.name) } else { format!("lib{}.a", m.name) });
             let mut args = self.args("lib");
             if let Some(b) = &self.backend {
                 args.extend(["--backend".into(), b.clone()]);
@@ -765,7 +771,7 @@ impl Build {
 
     /// what makes package p's bindings usable as they are: the Node, Lua and Ruby modules, compiled
     /// against the shared library (bindings/NAME.node, which NAME.js loads; bindings/lua/NAME.so;
-    /// bindings/ruby/NAME.so), the module map Swift imports the C header through
+    /// bindings/ruby/NAME.so, NAME.bundle on macOS), the module map Swift imports the C header through
     /// (bindings/CNAME/module.modulemap) and Kotlin/Native's cinterop definition (bindings/NAME.def).
     /// A module whose headers aren't installed is a warning: its C file is there to build later
     fn binding_extras(&self, p: usize) -> Result<(), String> {
@@ -786,8 +792,15 @@ impl Build {
                         crate::warn(format!("{name}: {lang}'s headers aren't installed: {name}_{lang}.c isn't built"));
                         continue;
                     };
-                    // the module, and the way back from it to libNAME.so in target/<profile>
-                    let (out, up) = if lang == "node" { (dir.join(format!("{name}.node")), "..") } else { (dir.join(lang).join(format!("{name}.so")), "../..") };
+                    // the module, named as its host looks for it (Node: .node; Ruby: .bundle on macOS;
+                    // Lua: .so on every Unix, .dll on Windows), and the way back from it to the
+                    // shared library in target/<profile>
+                    let ext = match lang.as_str() {
+                        "ruby" if cfg!(target_os = "macos") => "bundle",
+                        "lua" if cfg!(windows) => "dll",
+                        _ => "so",
+                    };
+                    let (out, up) = if lang == "node" { (dir.join(format!("{name}.node")), "..") } else { (dir.join(lang).join(format!("{name}.{ext}")), "../..") };
                     let src = dir.join(format!("{name}_{lang}.c"));
                     let mut args = vec!["-shared".to_string(), "-fPIC".into()];
                     for i in includes {
@@ -800,7 +813,7 @@ impl Build {
                         args.push(format!("-Wl,-rpath,$ORIGIN/{up}"));
                     }
                     args.extend(["-o".into(), out.display().to_string()]);
-                    let lib = self.target.join(format!("lib{name}.so"));
+                    let lib = self.target.join(shared_lib(name));
                     jobs.push(Job { out, inputs: vec![src, lib], args, what: format!("{} v{} ({lang} module)", m.name, m.version.text), program: Some(c_compiler().into()) });
                 }
                 _ => {}

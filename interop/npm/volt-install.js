@@ -7,7 +7,7 @@
 //     "scripts": { "install": "node volt-install.js" }
 //
 // bolt build --release writes NAME.js, its types and NAME.node (the addon, compiled against Node's
-// headers, which finds libNAME.so through its rpath). bolt comes from $BOLT, else the PATH; it finds
+// headers, which finds libNAME.so or libNAME.dylib through its rpath). bolt comes from $BOLT, else the PATH; it finds
 // voltc as it always does.
 "use strict";
 const { spawnSync } = require("child_process");

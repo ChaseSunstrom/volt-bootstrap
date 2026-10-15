@@ -143,7 +143,8 @@ javac -d classes target/debug/bindings/greet.java Main.java
 LD_LIBRARY_PATH=target/debug java --enable-native-access=ALL-UNNAMED -cp classes Main
 ```
 
-The class loads `libNAME.so` (or the library `-Dvolt.NAME.lib` names). An error set becomes a
+The class loads `libNAME.so` (`libNAME.dylib` on macOS, `NAME.dll` on Windows: Java's
+`System.mapLibraryName`), or the library `-Dvolt.NAME.lib` names. An error set becomes a
 `VoltException` subclass, thrown with the error's name (its `code` and `name` say which, and the
 class has the codes as constants). Structs are mutable classes: what Volt changes through a `T&`
 comes back to the object. Enums are Java enums, each with its `value`. Unsigned integers use the

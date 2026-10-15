@@ -6,4 +6,6 @@ D="${DART:-dart}"
 command -v "$D" >/dev/null || exit 77
 GREET="$PWD/../greet/target/debug"
 (cd ../greet && "${BOLT:-bolt}" build -q)
-VOLT_GREET_LIB="$GREET/libgreet.so" "$D" run main.dart
+# the library as bolt names it on this system
+case "$(uname)" in Darwin) LIB=libgreet.dylib ;; MINGW*|MSYS*|CYGWIN*) LIB=greet.dll ;; *) LIB=libgreet.so ;; esac
+VOLT_GREET_LIB="$GREET/$LIB" "$D" run main.dart

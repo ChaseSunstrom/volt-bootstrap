@@ -56,7 +56,7 @@ Mark the functions other languages call with `export fn`: a C calling convention
 name. Then build a library and its declarations:
 
 ```sh
-voltc lib mathlib --pkg mathlib=lib --shared -o libmathlib.so   # or --static: libmathlib.a
+voltc lib mathlib --pkg mathlib=lib --shared -o libmathlib.so   # libmathlib.dylib on macOS, mathlib.dll on Windows; or --static: libmathlib.a
 voltc bindings mathlib --pkg mathlib=lib --lang c      > mathlib.h
 voltc bindings mathlib --pkg mathlib=lib --lang cpp    > mathlib.hpp
 voltc bindings mathlib --pkg mathlib=lib --lang rust   > mathlib.rs
@@ -405,7 +405,8 @@ and [Lua](/volt-bootstrap/interop/lua/#lua-calls-volt). C, C++, Rust and Zig are
 ### Dart
 
 `--lang dart` writes a Dart library over `dart:ffi` (Dart 3.4 or later; no packages). It loads
-`libNAME.so` (or the library `$VOLT_NAME_LIB` names, with the package's name in capitals):
+`libNAME.so`, `libNAME.dylib` or `NAME.dll` as the platform names it (or the library
+`$VOLT_NAME_LIB` names, with the package's name in capitals):
 
 ```dart
 import 'mathlib.dart';
@@ -587,7 +588,7 @@ account.open("ann").use { println(owners(listOf(it))) } // [ann]
 ```sh
 voltc bindings mathlib --pkg mathlib=lib --lang ruby > mathlib_ruby.c
 cc -shared -fPIC -I"$(ruby -e 'print RbConfig::CONFIG["rubyhdrdir"]')" \
-   -I"$(ruby -e 'print RbConfig::CONFIG["rubyarchhdrdir"]')" mathlib_ruby.c -L. -lmathlib -o mathlib.so
+   -I"$(ruby -e 'print RbConfig::CONFIG["rubyarchhdrdir"]')" mathlib_ruby.c -L. -lmathlib -o mathlib.so   # mathlib.bundle on macOS
 ```
 
 ```ruby
@@ -774,14 +775,16 @@ Each parameter and return type is `{"kind": ...}`:
 
 ```toml
 [lib]
-kind = ["volt", "shared", "static"]   # the usual Volt library, plus libNAME.so and libNAME.a
+kind = ["volt", "shared", "static"]   # the usual Volt library, plus libNAME.so (.dylib, NAME.dll) and libNAME.a
 bindings = ["c", "python"]            # mathlib.h and mathlib.py next to them
 ```
 
 `bolt build` puts them in `target/<profile>/`, the bindings in `bindings/`. What needs compiling
 against the shared library is compiled there too, so it loads as it is: the Node addon
 (`bindings/NAME.node`, which `NAME.js` loads), the Lua module (`bindings/lua/NAME.so`, for
-`package.cpath`) and the Ruby extension (`bindings/ruby/NAME.so`, for `ruby -I`). bolt warns and
+`package.cpath`) and the Ruby extension (`bindings/ruby/NAME.so`, `NAME.bundle` on macOS, for
+`ruby -I`). The shared library is named as the platform's loaders look for it: `libNAME.so`,
+`libNAME.dylib` on macOS, `NAME.dll` on Windows. bolt warns and
 leaves the C file when a language's headers aren't installed. Swift gets a module map
 (`bindings/CNAME/module.modulemap`, `import CNAME`) and Kotlin/Native a cinterop definition
 (`bindings/NAME.def`). The rest are source files their own toolchains build. `tests/interop` in the
@@ -810,7 +813,7 @@ version = "0.1.0"
 
 `pip install .` (or `pip install` of the sdist) runs `bolt build --release` and installs package
 `mathlib`, named after the Volt package: the bindings as its `__init__.py`, with their types, and
-`libmathlib.so` beside them.
+`libmathlib.so` (`libmathlib.dylib`, `mathlib.dll`) beside them.
 
 For npm, copy `interop/npm/volt-install.js` into the package and make it the install script:
 
