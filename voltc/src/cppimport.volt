@@ -1801,10 +1801,11 @@ attach fn result(this: cpp_gen&, t: clang::CXType, tparams: std::vec<str>&) -> c
             return { vty: fmt("std::vec<{}>", copy elem), way: ret_way::VECTOR, elem: move elem };
         }
         if (st.as_str() == "function") {
-            // a C++ callable Volt keeps (stdcxx::function, whose call(...) runs it)
-            val sig = this.fn_sig(base) ?? return null;
-            this.fn_sigs.put(this.c.intern(copy sig.cpp), clang::clang_Type_getTemplateArgumentAsType(clang::clang_getCanonicalType(base), 0));
-            return { vty: S("stdcxx::function"), way: ret_way::HANDLE, cls: fmt("volt_fn_holder<{}>", copy sig.cpp), up: S("volt_fn_box") };
+            // a C++ callable Volt keeps (stdcxx::function, whose call(...) runs it, converting its
+            // arguments as any call's: only the C++ signature matters here)
+            val sig = cpp_fn_sig(base) ?? return null;
+            this.fn_sigs.put(this.c.intern(copy sig), clang::clang_Type_getTemplateArgumentAsType(clang::clang_getCanonicalType(base), 0));
+            return { vty: S("stdcxx::function"), way: ret_way::HANDLE, cls: fmt("volt_fn_holder<{}>", move sig), up: S("volt_fn_box") };
         }
         val fr = this.form_result(base, tparams);
         if (fr) {
@@ -1953,6 +1954,25 @@ attach fn fn_sig(this: cpp_gen&, t: clang::CXType) -> fn_sig? {
     return { vty: fmt2("fn({}) -> {}", move vps, copy vr), args: move args, cpp: fmt2("{}({})", canon(rt), move cps), vargs: move vargs, handles: move handles, vret: move vr, any_handle: any_handle };
 }
 
+// a std::function's signature as C++ spells it (R(A, B), as fn_sig's cpp), whatever its types
+fn cpp_fn_sig(t: clang::CXType) -> std::string? {
+    val f = clang::clang_Type_getTemplateArgumentAsType(clang::clang_getCanonicalType(t), 0);
+    val n = clang::clang_getNumArgTypes(f);
+    if (f.kind != clang::CXType_FunctionProto || n < 0) {
+        return null;
+    }
+    var s = canon(clang::clang_getResultType(f));
+    s.push('(');
+    for (i) in 0..@cast<u32>(n) {
+        if (i > 0) {
+            s.append(", ");
+        }
+        s.append(canon(clang::clang_getArgType(f, i)).as_str());
+    }
+    s.push(')');
+    return s;
+}
+
 // a Volt fn value taking a class C++ passes by address (fn_sig's any_handle): an adapter, a fn
 // value of the C++ signature (a void* for each such class) making each a borrowed handle and
 // calling the Volt fn (name) with them; at is the local the statement declares
@@ -2008,6 +2028,7 @@ attach fn fn_type(this: cpp_gen&) -> void {
         var params: std::string = {};
         var passed = S(", this.cpp");
         var args: std::string = {};
+        var conv: std::vec<cpp_arg> = {};
         var ok = true;
         for (i) in 0..@cast<u32>(n) {
             val pn = fmt("a{}", unum(@cast<u64>(i)));
@@ -2019,6 +2040,7 @@ attach fn fn_type(this: cpp_gen&) -> void {
                     args.append(", ");
                 }
                 args.append(a.cpp.as_str());
+                put(&conv, copy a);
             } else {
                 ok = false;
             }
@@ -2032,7 +2054,8 @@ attach fn fn_type(this: cpp_gen&) -> void {
             continue;
         }
         val expr = fmt2("volt_cpp_holder<{}>({{0}})({})", S(*e.key), move args);
-        this.fn_text("", fmt2("attach fn call(this: function&{}) -> {}", move params, copy r.vty).as_str(), &r, expr.as_str(), passed.as_str(), "");
+        val rp = with_pres(&r, &conv, conv.len); // (a std::string&'s C++ copy)
+        this.fn_text("", fmt2("attach fn call(this: function&{}) -> {}", move params, copy r.vty).as_str(), &rp, expr.as_str(), passed.as_str(), "");
     }
 }
 
@@ -4328,6 +4351,9 @@ attach fn virt_result(this: cpp_gen&, t: clang::CXType) -> virt_ret? {
     }
     if (is_class(t)) {
         val a = this.param(t, "r", 1, &none) ?? return null;
+        if (a.pre.len() > 0) {
+            return null; // an out-param's writer has no statements before it
+        }
         return { vty: copy a.vty, cpp_ty: S("void"), out: 3, write: fmt2("new ((void *){{0}}) {}({})", canon(t), copy a.cpp), pass: copy a.pass };
     }
     val vt = this.vtype(t, &none) ?? return null;

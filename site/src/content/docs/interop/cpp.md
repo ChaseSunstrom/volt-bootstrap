@@ -271,7 +271,7 @@ fn main() -> void {
 | `operator=` | `assign(v)` |
 | a method template | a generic method: `c.cast_to<f64>()` |
 | a `std::function<R(A...)>` parameter | `fn(A...) -> R`: a closure or function; C++ calls it while the call lasts (it mustn't keep it). A class in `A...` (by value or `const&`) arrives as a borrowed handle of C++'s object (a move-only one too), good while the callback runs, or, for one Volt lays out, a copy of its struct; `R` may be a class Volt lays out |
-| a `std::function` result | `stdcxx::function`: `call(...)` runs it, and it's deleted with the Volt value |
+| a `std::function` result | `stdcxx::function`: `call(...)` runs it, taking its arguments as any call's parameters (a `std::string&` too), and it's deleted with the Volt value |
 | a `std::function` field | a getter, and `set_f(closure)`: the closure moves into the field, which keeps it (and deletes it once C++ is done with every copy); one capturing by reference (`\|x&\|`) is a compile error |
 | a bit-field | `f()` and `set_f(v)`, on a class held by value or by handle (C++ does the bit work) |
 | a namespace variable | `name()`: a reference into it (`*cpp::ns::count() = 3`), a borrowed handle for a class held by handle, or for others (a `std::string`) a copy, with `set_name(v)` |

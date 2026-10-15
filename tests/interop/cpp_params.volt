@@ -32,6 +32,9 @@ fn main() -> void {
     val far = cpp::pr::far(|| (k: i32) -> cpp::pr::point { return { x: k * 10, y: k }; });
     std::println("points {} {}", cpp::pr::sum_points(|| (p: cpp::pr::point) -> i32 { return p.x * p.y; }), far);
     std::println("spend {}", cpp::pr::spend(|| (k: cpp::pr::Token) -> i32 { return k.value(); }));
+    var asked = std::string::from("why");
+    cpp::pr::exclaimer(2).call(&asked);
+    std::println("asked {}", asked);
 }
 // a throw leaves the Volt string as it was (C++ changed its copy first)
 fn grown(t: std::string&, k: i32) -> void {

@@ -19,6 +19,8 @@ inline int apply(int (*f)(int), int x) { return f(x); }
 inline double fold(double (*f)(double, double), double a, double b) { return f(a, b); }
 template <class T> T apply_t(T (*f)(T), T x) { return f(x); }
 inline void shout(std::string &s, int n) { s.append(n, '!'); }
+// a C++ callable taking a std::string&, which Volt keeps and calls
+inline std::function<void(std::string &)> exclaimer(int n) { return [n](std::string &s) { s.append(n, '?'); }; }
 inline int grow(std::string &s, int n) {
     s += "~";
     if (n < 0) throw std::invalid_argument("negative");

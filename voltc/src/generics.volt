@@ -1941,15 +1941,32 @@ attach fn empty_union_call(this: checker&, r: tval, u: u32, name: str, gargs: st
                             if (gargs.len > f.generics.len) {
                                 return fail(span, fmt("too many generic arguments for '{}'", S(name)));
                             }
+                            // the generic arguments given bind; a type naming one that isn't given
+                            // doesn't resolve: its argument checks as given, and a result that
+                            // doesn't is never (the call can't run: no value of the trait exists)
+                            var ge: env = { ns: this.dl(td).ns };
+                            for (k) in 0..gargs.len {
+                                val gp = gparam_of(f.generics.at(k));
+                                val kind = try this.param_kind(&gp, e);
+                                put(&ge.generics, { name: gp.name, g: try this.garg_gval(gargs.at(k), kind, e) });
+                            }
+                            val fe = this.new_env(move ge);
                             if (g.ret) {
-                                rt = try this.resolve_type(&g.ret, e);
+                                rt = this.resolve_type(&g.ret, fe) catch NEVER;
                             }
                             var i: usize = 0;
                             for (p&) in g.params.items() {
                                 if (p.name == "this" || p.ty == null) {
                                     continue;
                                 }
-                                val pt = try this.resolve_type(&p.ty.value, e);
+                                val pt = this.resolve_type(&p.ty.value, fe) catch {
+                                    val v = try this.expr(args.at(i), null);
+                                    if (!v.pure) {
+                                        put(&stmts, v.c);
+                                    }
+                                    i += 1;
+                                    continue;
+                                };
                                 val v = try this.expr_as(args.at(i), pt);
                                 if (!v.pure) {
                                     put(&stmts, v.c);
