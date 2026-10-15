@@ -194,6 +194,8 @@ jobs:
       run:
         shell: bash
     steps:
+      # the files as they are in the repo (the runner's git would turn LF into CRLF)
+      - run: git config --global core.autocrlf false
       - uses: actions/checkout@v5
       - name: Install LLVM
         run: |
