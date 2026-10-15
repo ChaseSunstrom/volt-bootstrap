@@ -228,6 +228,10 @@ attach fn main_wrapper(this: checker&, main: u32, mi: u32) -> compile_error!void
     val argv_g = this.runtime_global("volt_argv", argv_t);
     put(&all, this.ir.assign(argc_g, this.ir.node(ir_kind::LOCAL(0), I32)));
     put(&all, this.ir.assign(argv_g, this.ir.node(ir_kind::LOCAL(1), argv_t)));
+    // Windows: stdout and stderr in binary mode before anything prints, so "\n" is written as is
+    if ((this.cfg_given("os") ?? std::process::os()) == "windows") {
+        put(&all, this.ir.rt_call("volt_rt_binary_stdio", {}, VOID));
+    }
     for (s&) in body.items() {
         put(&all, *s);
     }

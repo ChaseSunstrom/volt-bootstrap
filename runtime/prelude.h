@@ -81,6 +81,13 @@ VOLT_RT_LINKAGE int volt_dprintf(int fd, const char *fmt, ...) {
     va_end(ap);
     return n;
 }
+/* stdout and stderr in binary mode, as main starts: "\n" goes out as written, as on every other
+   system (the C runtime's text mode would write "\r\n") */
+int volt_win_setmode(int, int) VOLT_SYM("_setmode");
+VOLT_RT_LINKAGE void volt_rt_binary_stdio(void) {
+    volt_win_setmode(1, 0x8000);
+    volt_win_setmode(2, 0x8000);
+}
 #endif
 
 typedef struct { const uint8_t *ptr; size_t len; } volt_str;

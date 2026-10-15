@@ -250,7 +250,7 @@ impl Build {
         // one std for the whole build: the selected packages have to agree on it
         let std_key = |p: usize| match &g.pkgs[p].m.std {
             StdChoice::Default => String::new(),
-            StdChoice::Path(d) => d.canonicalize().unwrap_or(d.clone()).display().to_string(),
+            StdChoice::Path(d) => crate::manifest::real_path(&d).unwrap_or(d.clone()).display().to_string(),
             StdChoice::None => "none".into(),
         };
         if let Some(&r) = roots.iter().find(|r| std_key(**r) != std_key(roots[0])) {

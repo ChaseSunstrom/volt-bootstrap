@@ -202,7 +202,7 @@ pub fn resolve(ws: Workspace, lock: &mut Lock) -> Result<Graph, String> {
         for d in g.pkgs[i].m.deps.iter().filter(|d| member || !d.dev) {
             let (dir, source, lock_key) = match &d.source {
                 Source::Path(p) => {
-                    let dir = p.canonicalize().map_err(|e| format!("dependency {}: {}: {e}", d.name, p.display()))?;
+                    let dir = crate::manifest::real_path(&p).map_err(|e| format!("dependency {}: {}: {e}", d.name, p.display()))?;
                     let s = format!("path+{}", dir.display());
                     (dir, s, None)
                 }
@@ -215,7 +215,7 @@ pub fn resolve(ws: Workspace, lock: &mut Lock) -> Result<Graph, String> {
         }
         for (name, dir, source, lock_key) in found {
             if let Some(&j) = g.by_name.get(&name) {
-                if g.pkgs[j].m.dir.canonicalize().ok() != Some(dir.clone()) {
+                if crate::manifest::real_path(&g.pkgs[j].m.dir).ok() != Some(dir.clone()) {
                     return Err(format!("two different packages are both called '{name}' ({} and {})", g.pkgs[j].m.dir.display(), dir.display()));
                 }
                 continue;

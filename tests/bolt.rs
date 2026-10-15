@@ -44,7 +44,7 @@ fn bolt() {
     write(&tmp.join("mathx/lib/ops.volt"), &format!("public fn triple(x: i32) -> i32 {{ return x * 3; }}\n{meters}"));
     // a git dependency, which itself depends on mathx by path
     let greet = tmp.join("greet");
-    write(&greet.join("bolt.toml"), &format!("[package]\nname = \"greet\"\nversion = \"1.0.0\"\n\n[dependencies]\nmathx = {{ path = \"{}\" }}\n", tmp.join("mathx").display()));
+    write(&greet.join("bolt.toml"), &format!("[package]\nname = \"greet\"\nversion = \"1.0.0\"\n\n[dependencies]\nmathx = {{ path = '{}' }}\n", tmp.join("mathx").display()));
     write(&greet.join("lib/greet.volt"), "use std::io;\npublic fn hello(who: str) -> void { std::println(\"hello {} x{}\", who, mathx::triple(2)); }\n");
     git(&greet, &["init", "-q"]);
     git(&greet, &["add", "."]);
@@ -113,7 +113,7 @@ fn bolt() {
     // a package can bring its own std
     let alt = tmp.join("alt");
     let alt_std = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/std_alt");
-    write(&alt.join("bolt.toml"), &format!("[package]\nname = \"alt\"\nversion = \"0.1.0\"\n\n[std]\npath = \"{}\"\n", alt_std.display()));
+    write(&alt.join("bolt.toml"), &format!("[package]\nname = \"alt\"\nversion = \"0.1.0\"\n\n[std]\npath = '{}'\n", alt_std.display()));
     write(&alt.join("src/main.volt"), "use std::out;\nfn main() -> void { std::say(\"custom std {}\", 1); }\n");
     let out = ok(bolt(&alt, &["run"]), "bolt run (custom std)");
     assert!(out.contains("custom std 1"), "{out}");
@@ -123,7 +123,7 @@ fn bolt() {
     write(&sw.join("bolt.toml"), "[package]\nname = \"sw\"\nversion = \"0.1.0\"\n");
     write(&sw.join("src/main.volt"), "use std::io;\nfn main() -> void { std::println(\"default std\"); }\n");
     assert!(ok(bolt(&sw, &["run"]), "bolt run (default std)").contains("default std"));
-    write(&sw.join("bolt.toml"), &format!("[package]\nname = \"sw\"\nversion = \"0.1.0\"\n\n[std]\npath = \"{}\"\n", alt_std.display()));
+    write(&sw.join("bolt.toml"), &format!("[package]\nname = \"sw\"\nversion = \"0.1.0\"\n\n[std]\npath = '{}'\n", alt_std.display()));
     write(&sw.join("src/main.volt"), "use std::out;\nfn main() -> void { std::say(\"switched\"); }\n");
     assert!(ok(bolt(&sw, &["run"]), "bolt run (switched std)").contains("switched"));
 
@@ -140,7 +140,7 @@ fn bolt() {
     // isn't a directory is named as the problem
     let pinned = tmp.join("pinned");
     let real_std = Path::new(env!("CARGO_MANIFEST_DIR")).join("std");
-    write(&pinned.join("bolt.toml"), &format!("[package]\nname = \"pinned\"\nversion = \"0.1.0\"\n\n[std]\npath = \"{}\"\n\n[build]\nfiles = [\"build.volt\"]\n", real_std.display()));
+    write(&pinned.join("bolt.toml"), &format!("[package]\nname = \"pinned\"\nversion = \"0.1.0\"\n\n[std]\npath = '{}'\n\n[build]\nfiles = [\"build.volt\"]\n", real_std.display()));
     write(&pinned.join("src/main.volt"), "fn main() -> void {}\n");
     write(&pinned.join("build.volt"), "fn main() -> void {}\n");
     let stale = tmp.join("no-such-std");
@@ -158,7 +158,7 @@ fn bolt() {
     write(&cdep.join("build.volt"), &format!("fn main() -> void {{\n    bolt::cc_arg(\"-I{}\");\n    bolt::cc_arg(\"-DCDEP_SCALE=7\");\n}}\n", cdep.join("include").display()));
     write(&cdep.join("lib/cdep.volt"), "use {{ \"cdep.h\" }} as c;\npublic fn scaled(x: i32) -> i32 {{ return c::cdep_scale(x); }}\n".replace("{{", "{").replace("}}", "}").as_str());
     let uses_cdep = tmp.join("uses_cdep");
-    write(&uses_cdep.join("bolt.toml"), &format!("[package]\nname = \"uses_cdep\"\nversion = \"0.1.0\"\n\n[dependencies]\ncdep = {{ path = \"{}\" }}\n", cdep.display()));
+    write(&uses_cdep.join("bolt.toml"), &format!("[package]\nname = \"uses_cdep\"\nversion = \"0.1.0\"\n\n[dependencies]\ncdep = {{ path = '{}' }}\n", cdep.display()));
     write(&uses_cdep.join("src/main.volt"), "use std::io;\nfn main() -> void { std::println(\"scaled {}\", cdep::scaled(6)); }\n");
     let out = ok(bolt(&uses_cdep, &["run"]), "bolt run (a dependency's build-file flags)");
     assert!(out.contains("scaled 42"), "{out}");

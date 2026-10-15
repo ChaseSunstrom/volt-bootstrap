@@ -829,7 +829,7 @@ fn python_package() {
     let e = Env::new("python");
     let app = e.dir.join("py_app");
     copy_dir(&Path::new(ROOT).join("tests/interop/py_app/src"), &app.join("src"));
-    std::fs::write(app.join("bolt.toml"), format!("[package]\nname = \"py_app\"\nversion = \"0.1.0\"\n\n[dependencies]\npython = {{ path = \"{}\" }}\n\n[std]\npath = \"{}\"\n", Path::new(ROOT).join("interop/python").display(), Path::new(ROOT).join("std").display())).unwrap();
+    std::fs::write(app.join("bolt.toml"), format!("[package]\nname = \"py_app\"\nversion = \"0.1.0\"\n\n[dependencies]\npython = {{ path = '{}' }}\n\n[std]\npath = '{}'\n", Path::new(ROOT).join("interop/python").display(), Path::new(ROOT).join("std").display())).unwrap();
     let want = "sqrt 1.4142 factorial 3628800\njson \"volt\" and false\nhi volt, hi volt\nlist [0, 1, 4, 9, 16] len 5\nitem 9\nobjects 5 true 4\ncaught EXCEPTION(ZeroDivisionError: division by zero)\nnone true\nthread 5050\n";
     for backend in ["c", "llvm"] {
         let o = Command::new(env!("CARGO_BIN_EXE_bolt")).args(["run", "-q", "--backend", backend]).current_dir(&app).env("VOLTC", &e.voltc).env("BOLT_HOME", e.dir.join("cache")).output().unwrap();
@@ -850,7 +850,7 @@ fn java_package() {
     let app = e.dir.join("java_app");
     let fx = Path::new(ROOT).join("tests/interop/java_app");
     copy_dir(&fx.join("src"), &app.join("src"));
-    std::fs::write(app.join("bolt.toml"), format!("[package]\nname = \"java_app\"\nversion = \"0.1.0\"\n\n[dependencies]\njava = {{ path = \"{}\" }}\n\n[std]\npath = \"{}\"\n", Path::new(ROOT).join("interop/java").display(), Path::new(ROOT).join("std").display())).unwrap();
+    std::fs::write(app.join("bolt.toml"), format!("[package]\nname = \"java_app\"\nversion = \"0.1.0\"\n\n[dependencies]\njava = {{ path = '{}' }}\n\n[std]\npath = '{}'\n", Path::new(ROOT).join("interop/java").display(), Path::new(ROOT).join("std").display())).unwrap();
     let classes = e.dir.join("classes");
     ok(run(Command::new(bin.join("javac")).arg("-d").arg(&classes).arg(fx.join("java/Counter.java"))), "javac");
     let want = "add 42\nHELLO, VOLT\nbump 15 half 7.5\nobject volt=15 equal true\nlist true [x]\nnanos true\nmax 9 sqrt 1.5\nbuilt 42\ncaught THROWN(java.lang.ArithmeticException: / by zero)\nmissing true\nnull false true THROWN(java.lang.NullPointerException: length on null)\n";
@@ -880,7 +880,7 @@ fn dotnet_package() {
     let fx = Path::new(ROOT).join("tests/interop/dotnet_app");
     copy_dir(&fx.join("src"), &app.join("src"));
     copy_dir(&fx.join("lib"), &e.dir.join("cs"));
-    std::fs::write(app.join("bolt.toml"), format!("[package]\nname = \"dotnet_app\"\nversion = \"0.1.0\"\n\n[dependencies]\ndotnet = {{ path = \"{}\" }}\n\n[std]\npath = \"{}\"\n", Path::new(ROOT).join("interop/dotnet").display(), Path::new(ROOT).join("std").display())).unwrap();
+    std::fs::write(app.join("bolt.toml"), format!("[package]\nname = \"dotnet_app\"\nversion = \"0.1.0\"\n\n[dependencies]\ndotnet = {{ path = '{}' }}\n\n[std]\npath = '{}'\n", Path::new(ROOT).join("interop/dotnet").display(), Path::new(ROOT).join("std").display())).unwrap();
     // the C# library, for the installed .NET
     let v = String::from_utf8_lossy(&Command::new(&dotnet).arg("--version").output().unwrap().stdout).trim().to_string();
     let framework = format!("-p:TargetFramework=net{}.0", v.split('.').next().unwrap_or("10"));
@@ -912,7 +912,7 @@ fn go_foreign() {
     let e = Env::new("go");
     let app = e.dir.join("go_app");
     copy_dir(&Path::new(ROOT).join("tests/interop/go_app"), &app);
-    let toml = std::fs::read_to_string(app.join("bolt.toml")).unwrap() + &format!("\n[std]\npath = \"{}\"\n", Path::new(ROOT).join("std").display());
+    let toml = std::fs::read_to_string(app.join("bolt.toml")).unwrap() + &format!("\n[std]\npath = '{}'\n", Path::new(ROOT).join("std").display());
     std::fs::write(app.join("bolt.toml"), toml).unwrap();
     for backend in ["c", "llvm"] {
         let o = Command::new(env!("CARGO_BIN_EXE_bolt")).args(["run", "-q", "--backend", backend]).current_dir(&app).env("VOLTC", &e.voltc).env("BOLT_HOME", e.dir.join("cache")).env("GOTOOLCHAIN", "local").output().unwrap();
@@ -934,7 +934,7 @@ fn lua_package() {
     let e = Env::new("lua");
     let app = e.dir.join("lua_app");
     copy_dir(&Path::new(ROOT).join("tests/interop/lua_app/src"), &app.join("src"));
-    std::fs::write(app.join("bolt.toml"), format!("[package]\nname = \"lua_app\"\nversion = \"0.1.0\"\n\n[dependencies]\nlua = {{ path = \"{}\" }}\n\n[std]\npath = \"{}\"\n", Path::new(ROOT).join("interop/lua").display(), Path::new(ROOT).join("std").display())).unwrap();
+    std::fs::write(app.join("bolt.toml"), format!("[package]\nname = \"lua_app\"\nversion = \"0.1.0\"\n\n[dependencies]\nlua = {{ path = '{}' }}\n\n[std]\npath = '{}'\n", Path::new(ROOT).join("interop/lua").display(), Path::new(ROOT).join("std").display())).unwrap();
     let want = "hi volt hi volt \nlen 3 second 9 best volt\neval 42\nmath 314\nhypot 5.0\nhypot bad hypot wants two numbers\ntype table b nil true\ncaught ERROR(run:1: boom)\nsyntax true\nERROR(a string isn't an integer)\n";
     for backend in ["c", "llvm"] {
         let o = Command::new(env!("CARGO_BIN_EXE_bolt")).args(["run", "-q", "--backend", backend]).current_dir(&app).env("VOLTC", &e.voltc).env("BOLT_HOME", e.dir.join("cache")).output().unwrap();
@@ -1035,7 +1035,7 @@ fn rust_direct() {
     // the same program in a bolt package: the path is from the file, as a header's is
     let app = dir.join("app");
     std::fs::create_dir_all(app.join("src")).unwrap();
-    std::fs::write(app.join("bolt.toml"), format!("[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[std]\npath = \"{}\"\n", Path::new(ROOT).join("std").display())).unwrap();
+    std::fs::write(app.join("bolt.toml"), format!("[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[std]\npath = '{}'\n", Path::new(ROOT).join("std").display())).unwrap();
     std::fs::write(app.join("src/main.volt"), std::fs::read_to_string(dir.join("main.volt")).unwrap().replace("use { \"geom\" }", "use { \"../../geom\" }")).unwrap();
     let bolt_run = |backend: &str| {
         let mut c = Command::new(env!("CARGO_BIN_EXE_bolt"));
@@ -1116,7 +1116,7 @@ fn zig_direct() {
     // the same program in a bolt package
     let app = dir.join("app");
     std::fs::create_dir_all(app.join("src")).unwrap();
-    std::fs::write(app.join("bolt.toml"), format!("[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[std]\npath = \"{}\"\n", Path::new(ROOT).join("std").display())).unwrap();
+    std::fs::write(app.join("bolt.toml"), format!("[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[std]\npath = '{}'\n", Path::new(ROOT).join("std").display())).unwrap();
     std::fs::write(app.join("src/main.volt"), std::fs::read_to_string(dir.join("main.volt")).unwrap().replace("use { \"fastmath.zig\" }", "use { \"../../fastmath.zig\" }")).unwrap();
     let bolt_run = |backend: &str| {
         let mut c = Command::new(env!("CARGO_BIN_EXE_bolt"));
@@ -1190,7 +1190,7 @@ fn go_direct() {
     // the same program in a bolt package
     let app = dir.join("app");
     std::fs::create_dir_all(app.join("src")).unwrap();
-    std::fs::write(app.join("bolt.toml"), format!("[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[std]\npath = \"{}\"\n", Path::new(ROOT).join("std").display())).unwrap();
+    std::fs::write(app.join("bolt.toml"), format!("[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[std]\npath = '{}'\n", Path::new(ROOT).join("std").display())).unwrap();
     let in_app = src.replace("use { \"geom.go\" }", "use { \"../../geom.go\" }").replace("use { \"shapes\" }", "use { \"../../shapes\" }").replace("use { \"tool/tool.go\" }", "use { \"../../tool/tool.go\" }");
     std::fs::write(app.join("src/main.volt"), in_app).unwrap();
     let bolt_run = |backend: &str| {
@@ -1246,7 +1246,7 @@ fn java_direct() {
     // the same program in a bolt package
     let app = dir.join("app");
     std::fs::create_dir_all(app.join("src")).unwrap();
-    std::fs::write(app.join("bolt.toml"), format!("[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[std]\npath = \"{}\"\n", Path::new(ROOT).join("std").display())).unwrap();
+    std::fs::write(app.join("bolt.toml"), format!("[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[std]\npath = '{}'\n", Path::new(ROOT).join("std").display())).unwrap();
     std::fs::write(app.join("src/main.volt"), src.replace("\"geo/", "\"../../geo/")).unwrap();
     let bolt_run = |backend: &str| {
         let mut c = Command::new(env!("CARGO_BIN_EXE_bolt"));
@@ -1293,7 +1293,7 @@ fn dotnet_direct() {
     // the same program in a bolt package
     let app = dir.join("app");
     std::fs::create_dir_all(app.join("src")).unwrap();
-    std::fs::write(app.join("bolt.toml"), format!("[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[std]\npath = \"{}\"\n", Path::new(ROOT).join("std").display())).unwrap();
+    std::fs::write(app.join("bolt.toml"), format!("[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[std]\npath = '{}'\n", Path::new(ROOT).join("std").display())).unwrap();
     std::fs::write(app.join("src/main.volt"), src.replace("\"Geo.cs\"", "\"../../Geo.cs\"")).unwrap();
     let bolt_run = |backend: &str| {
         let mut c = Command::new(env!("CARGO_BIN_EXE_bolt"));
@@ -1343,7 +1343,7 @@ fn python_direct() {
     // the same program in a bolt package
     let app = dir.join("app");
     std::fs::create_dir_all(app.join("src")).unwrap();
-    std::fs::write(app.join("bolt.toml"), format!("[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[std]\npath = \"{}\"\n", Path::new(ROOT).join("std").display())).unwrap();
+    std::fs::write(app.join("bolt.toml"), format!("[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[std]\npath = '{}'\n", Path::new(ROOT).join("std").display())).unwrap();
     std::fs::write(app.join("src/main.volt"), src.replace("\"geom.py\"", "\"../../geom.py\"")).unwrap();
     let bolt_run = |backend: &str| {
         let mut c = Command::new(env!("CARGO_BIN_EXE_bolt"));
@@ -1393,7 +1393,7 @@ fn js_direct() {
     // the same program in a bolt package
     let app = dir.join("app");
     std::fs::create_dir_all(app.join("src")).unwrap();
-    std::fs::write(app.join("bolt.toml"), format!("[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[std]\npath = \"{}\"\n", Path::new(ROOT).join("std").display())).unwrap();
+    std::fs::write(app.join("bolt.toml"), format!("[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[std]\npath = '{}'\n", Path::new(ROOT).join("std").display())).unwrap();
     std::fs::write(app.join("src/main.volt"), src.replace("\"geom.ts\"", "\"../../geom.ts\"").replace("\"util.js\"", "\"../../util.js\"")).unwrap();
     let bolt_run = |backend: &str| {
         let mut c = Command::new(env!("CARGO_BIN_EXE_bolt"));
@@ -1434,7 +1434,7 @@ fn volt_calls_kotlin() {
     // the same program in a bolt package
     let app = dir.join("app");
     std::fs::create_dir_all(app.join("src")).unwrap();
-    std::fs::write(app.join("bolt.toml"), format!("[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[std]\npath = \"{}\"\n", Path::new(ROOT).join("std").display())).unwrap();
+    std::fs::write(app.join("bolt.toml"), format!("[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[std]\npath = '{}'\n", Path::new(ROOT).join("std").display())).unwrap();
     std::fs::write(app.join("src/main.volt"), src.replace("use { \"geometry.kt\", \"things.kt\" }", "use { \"../../geometry.kt\", \"../../things.kt\" }")).unwrap();
     let bolt_run = |backend: &str| {
         let mut c = Command::new(env!("CARGO_BIN_EXE_bolt"));
@@ -1520,7 +1520,7 @@ fn volt_calls_swift() {
     // the same program in a bolt package
     let app = dir.join("app");
     std::fs::create_dir_all(app.join("src")).unwrap();
-    std::fs::write(app.join("bolt.toml"), format!("[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[std]\npath = \"{}\"\n", Path::new(ROOT).join("std").display())).unwrap();
+    std::fs::write(app.join("bolt.toml"), format!("[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[std]\npath = '{}'\n", Path::new(ROOT).join("std").display())).unwrap();
     std::fs::write(app.join("src/main.volt"), src.replace("use { \"geometry.swift\", \"things.swift\" }", "use { \"../../geometry.swift\", \"../../things.swift\" }")).unwrap();
     let bolt_run = |backend: &str| {
         let mut c = Command::new(env!("CARGO_BIN_EXE_bolt"));
@@ -1544,7 +1544,7 @@ fn pip_and_npm_install() {
     let pkg = e.dir.join("geo");
     std::fs::create_dir_all(pkg.join("lib")).unwrap();
     std::fs::write(pkg.join("lib/geo.volt"), "export fn area(w: f64, h: f64) -> f64 { return w * h; }\nexport fn twice(x: i32) -> i32 { return x * 2; }\n").unwrap();
-    std::fs::write(pkg.join("bolt.toml"), format!("[package]\nname = \"geo\"\nversion = \"0.1.0\"\n\n[lib]\nkind = [\"volt\", \"shared\"]\nbindings = [\"python\", \"pyi\", \"node\", \"js\", \"ts\"]\n\n[std]\npath = \"{}\"\n", Path::new(ROOT).join("std").display())).unwrap();
+    std::fs::write(pkg.join("bolt.toml"), format!("[package]\nname = \"geo\"\nversion = \"0.1.0\"\n\n[lib]\nkind = [\"volt\", \"shared\"]\nbindings = [\"python\", \"pyi\", \"node\", \"js\", \"ts\"]\n\n[std]\npath = '{}'\n", Path::new(ROOT).join("std").display())).unwrap();
     let tools = |c: &mut Command| {
         c.env("VOLTC", &e.voltc).env("BOLT", env!("CARGO_BIN_EXE_bolt")).env("BOLT_HOME", e.dir.join("bolthome")).env("npm_config_cache", e.dir.join("npm-cache"));
     };
@@ -1610,7 +1610,7 @@ fn node_addon() {
     let e = Env::new("node_addon");
     let pkg = e.dir.join("addon");
     copy_dir(&Path::new(ROOT).join("tests/interop/node_addon/lib"), &pkg.join("lib"));
-    std::fs::write(pkg.join("bolt.toml"), format!("[package]\nname = \"addon\"\nversion = \"0.1.0\"\n\n[lib]\nkind = [\"shared\"]\n\n[dependencies]\nnode = {{ path = \"{}\" }}\n\n[std]\npath = \"{}\"\n", Path::new(ROOT).join("interop/node").display(), Path::new(ROOT).join("std").display())).unwrap();
+    std::fs::write(pkg.join("bolt.toml"), format!("[package]\nname = \"addon\"\nversion = \"0.1.0\"\n\n[lib]\nkind = [\"shared\"]\n\n[dependencies]\nnode = {{ path = '{}' }}\n\n[std]\npath = '{}'\n", Path::new(ROOT).join("interop/node").display(), Path::new(ROOT).join("std").display())).unwrap();
     let want = "add 5.5\nhello, volt hello, 42\nsum 6.5\npoint {\"x\":3,\"y\":4,\"label\":\"point\",\"pair\":[3,4]}\napply 42 from volt\nthrown true volt says no\ncaught THROWN(js says no)\nkinds number string boolean null undefined object object function\n";
     for backend in ["c", "llvm"] {
         let o = Command::new(env!("CARGO_BIN_EXE_bolt")).args(["build", "-q", "--backend", backend]).current_dir(&pkg).env("VOLTC", &e.voltc).env("BOLT_HOME", e.dir.join("cache")).output().unwrap();
@@ -1681,7 +1681,7 @@ fn foreign_libraries() {
     copy_dir(&fx.join("rs_geom"), &e.dir.join("rs_geom"));
     copy_dir(&fx.join("app"), &e.dir.join("app"));
     let app = e.dir.join("app");
-    let toml = std::fs::read_to_string(app.join("bolt.toml")).unwrap() + &format!("\n[std]\npath = \"{}\"\n", Path::new(ROOT).join("std").display());
+    let toml = std::fs::read_to_string(app.join("bolt.toml")).unwrap() + &format!("\n[std]\npath = '{}'\n", Path::new(ROOT).join("std").display());
     std::fs::write(app.join("bolt.toml"), toml).unwrap();
     let want = "dist 5 quadrant 4\nscaled 6 -8\nchars 5 apply 42\nclamp 10 0\nsum 10\nwidened -5 15\n";
     for backend in ["c", "llvm"] {
@@ -1695,7 +1695,7 @@ fn foreign_libraries() {
     // Rust uses Volt: a build script with volt-build, the bindings included as module mathlib
     let rs = e.dir.join("rsapp");
     std::fs::create_dir_all(rs.join("src")).unwrap();
-    std::fs::write(rs.join("Cargo.toml"), format!("[package]\nname = \"rsapp\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[build-dependencies]\nvolt-build = {{ path = \"{}\" }}\n", Path::new(ROOT).join("interop/rust/volt-build").display())).unwrap();
+    std::fs::write(rs.join("Cargo.toml"), format!("[package]\nname = \"rsapp\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[build-dependencies]\nvolt-build = {{ path = '{}' }}\n", Path::new(ROOT).join("interop/rust/volt-build").display())).unwrap();
     std::fs::write(rs.join("build.rs"), format!("fn main() {{\n    volt_build::Package::new(\"mathlib\", \"{}\").build();\n}}\n", Path::new(ROOT).join("tests/interop/mathlib/lib").display())).unwrap();
     std::fs::write(rs.join("src/main.rs"), "include!(concat!(env!(\"OUT_DIR\"), \"/mathlib.rs\"));\nuse mathlib::*;\n\nfn main() {\n    println!(\"add {}\", ml_add(2, 3));\n    println!(\"greet {}\", ml_greet(\"volt\"));\n    println!(\"sqrt {}\", ml_sqrt(-1.0).is_err());\n}\n").unwrap();
     let o = Command::new(&cargo).args(["run", "-q", "--offline"]).current_dir(&rs).env("VOLTC", &e.voltc).env("VOLT_STD", Path::new(ROOT).join("std")).env("CARGO_TARGET_DIR", rs.join("target")).env("RUSTUP_TOOLCHAIN", rust_toolchain()).output().unwrap();

@@ -26,7 +26,7 @@ pub fn new_package(o: &Opts, init: bool) {
     if dir.join("bolt.toml").exists() {
         fail(format!("{} already has a bolt.toml", dir.display()));
     }
-    let base = dir.canonicalize().unwrap_or(dir.clone()).file_name().map(|n| n.to_string_lossy().to_lowercase().replace('-', "_")).unwrap_or_default();
+    let base = crate::manifest::real_path(&dir).unwrap_or(dir.clone()).file_name().map(|n| n.to_string_lossy().to_lowercase().replace('-', "_")).unwrap_or_default();
     let name = o.name.clone().unwrap_or(base);
     if !manifest::ident(&name) {
         fail(format!("'{name}' can't be a package name: use lowercase letters, digits and _ (it becomes a namespace); pick one with --name NAME"));
@@ -147,7 +147,7 @@ pub fn add(o: &Opts) {
         let here = std::env::current_dir().or_fail();
         let target = here.join(p);
         // as typed when bolt runs in the package's directory, else absolute
-        let stored = if here.canonicalize().ok() == dir.canonicalize().ok() { p.clone() } else { target.canonicalize().unwrap_or(target.clone()).display().to_string() };
+        let stored = if crate::manifest::real_path(&here).ok() == crate::manifest::real_path(&dir).ok() { p.clone() } else { crate::manifest::real_path(&target).unwrap_or(target.clone()).display().to_string() };
         parts.push(format!("path = {}", toml::quote(&stored)));
         (target, format!("path {stored}"))
     } else if let Some(url) = &o.git {
@@ -367,7 +367,7 @@ pub fn metadata(o: &Opts) {
             .iter()
             .map(|d| {
                 let src = match &d.source {
-                    manifest::Source::Path(x) => format!("path+{}", x.canonicalize().unwrap_or(x.clone()).display()),
+                    manifest::Source::Path(x) => format!("path+{}", crate::manifest::real_path(&x).unwrap_or(x.clone()).display()),
                     manifest::Source::Git { url, at } => format!("git+{url}{}", if at.spec().is_empty() { String::new() } else { format!("?{}", at.spec()) }),
                 };
                 format!(

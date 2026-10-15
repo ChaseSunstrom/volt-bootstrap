@@ -593,7 +593,16 @@ pub fn workspace(start: Option<&Path>) -> Result<Workspace, String> {
 }
 
 fn canon(p: &Path) -> Result<PathBuf, String> {
-    p.canonicalize().map_err(|e| format!("{}: {e}", p.display()))
+    real_path(p).map_err(|e| format!("{}: {e}", p.display()))
+}
+
+/// p's canonical path, on Windows without the \\?\ prefix canonicalize gives a drive path: voltc,
+/// the C compiler and a path with a / added after it all take the plain form (a verbatim path
+/// doesn't let / separate its parts)
+pub fn real_path(p: &Path) -> std::io::Result<PathBuf> {
+    let r = p.canonicalize()?;
+    let plain = r.to_str().and_then(|s| s.strip_prefix(r"\\?\")).filter(|rest| rest.as_bytes().get(1) == Some(&b':')).map(PathBuf::from);
+    Ok(plain.unwrap_or(r))
 }
 
 /// the member directories [workspace] lists, minus the excluded ones
