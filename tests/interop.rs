@@ -2223,7 +2223,7 @@ fn cpp_overloads() {
     // types and calling exactly their own overload, for free functions, methods and constructors; a
     // real declaration keeps a name an alias would take, and the alias is a left-out comment
     let e = Env::new("cpp-overloads");
-    let want = "which 1 2\nletter 1 2 3\nf 4 42 40 42\nh 1 2 2\nnew 5 long 10 long long\nget 5 -5\nadd 6 16\nscaled 6 -6\ncall 4 2 peek 1 2\nopen lref 7 rref 8 8\nopen rref 7\nsize 1 2\npinned 3 103\ntaken 1 3\nholder 5 5\nholder 5 6\n";
+    let want = "which 1 2\nletter 1 2 3\nf 4 42 40 42\nh 1 2 2\nnew 5 long 10 long long\nget 5 -5\nadd 6 16\nscaled 6 -6\ncall 4 2 peek 1 2\nopen lref 7 rref 8 8\nopen rref 7\nsize 1 2\npinned 3\npinned 103 141\ndropped 2\nspend 40\ntaken 1 3\nholder 5 5\nholder 5 6\n";
     for backend in ["c", "llvm"] {
         assert_eq!(ok(e.voltc(&["run", "cpp_overloads.volt", "--backend", backend]), "voltc run cpp_overloads.volt"), want, "C++ overloads ({backend})");
     }
@@ -2246,7 +2246,7 @@ fn cpp_overloads() {
     let err = String::from_utf8_lossy(&o.stderr);
     assert!(!o.status.success() && err.contains("cpp_overloads_pinned_moved.volt:8") && err.contains("moved"), "a pinned handle used after an && method: {err}");
     for backend in ["c", "llvm"] {
-        for (prog, before, says) in [("cpp_overloads_pinned_base.volt", "before 8\n", "can't call ov::Pinned::take (an && method) through a borrowed handle: ov::Pinned can't be copied"), ("cpp_overloads_pinned_ref.volt", "before 41\n", "can't call ov::Pinned::take_const_rref (an && method) through a borrowed handle: ov::Pinned can't be copied")] {
+        for (prog, before, says) in [("cpp_overloads_pinned_base.volt", "before 8\n", "can't call ov::Pinned::take (an && method) through a borrowed handle: ov::Pinned can't be copied"), ("cpp_overloads_pinned_ref.volt", "before 41\n", "can't call ov::Pinned::take (an && method) through a borrowed handle: ov::Pinned can't be copied")] {
             let o = e.voltc(&["run", prog, "--backend", backend]);
             let (out, err) = (String::from_utf8_lossy(&o.stdout), String::from_utf8_lossy(&o.stderr));
             assert!(o.status.code() == Some(101) && out == before && err.contains(says), "{prog} ({backend}): {:?} {out} {err}", o.status);
