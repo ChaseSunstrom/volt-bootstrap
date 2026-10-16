@@ -14,6 +14,8 @@ namespace bare {
     public extern "C" fn volt_hook_exit(code: i32) -> never;
     public extern "C" fn volt_heap_start() -> u8*;
     public extern "C" fn volt_heap_end() -> u8*;
+    // WebAssembly's memory grows: at least `more` bytes past the end, the new end returned
+    public extern "C" fn volt_heap_grow(more: usize) -> u8*;
 
     public fn put(s: str) -> void {
         volt_hook_console_write(@cast<u8*>(s.ptr), s.len);
@@ -144,7 +146,12 @@ namespace bare {
             heap_limit = @cast<usize>(volt_heap_end());
         }
         if (need > heap_limit - heap_top) {
-            return null;
+            comptime if (@cfg("arch", "wasm32")) {
+                heap_limit = @cast<usize>(volt_heap_grow(need - (heap_limit - heap_top)));
+            }
+            if (need > heap_limit - heap_top) {
+                return null;
+            }
         }
         val at = heap_top;
         heap_top += need;
@@ -230,6 +237,115 @@ namespace bare {
         export fn __lshrdi3(a: u64, s: i32) -> u64 { return std::softint::lshr64(a, @cast<u32>(s)); }
         export fn __ashrdi3(a: i64, s: i32) -> i64 { return std::softint::ashr64(a, @cast<u32>(s)); }
         export fn __muldi3(a: u64, b: u64) -> u64 { return std::softint::mul64(a, b); }
+    }
+
+    // what LLVM calls for 128-bit multiplies, divisions and shifts by a variable on WebAssembly
+    // (compiler-rt's names), in 64-bit halves: an i128 operation here would call itself
+    @attributes([@cfg("arch", "wasm32")])
+    namespace wide128 {
+        // (by its bytes, little-endian: even a constant shift is a call in a debug build)
+        fn halves(x: u128) -> (u64, u64) {
+            val w = @bitcast<u64[2]>(x);
+            return (w[1], w[0]);
+        }
+        fn joined(hi: u64, lo: u64) -> u128 {
+            val w: u64[2] = { lo, hi };
+            return @bitcast<u128>(w);
+        }
+        // a * b in full, through 32-bit halves (wrapping: a checked u64 multiply calls __multi3)
+        fn mul64(a: u64, b: u64) -> u128 {
+            val (a0, a1, b0, b1) = (a & 0xFFFFFFFF, a >> 32, b & 0xFFFFFFFF, b >> 32);
+            val (p00, p01, p10, p11) = (a0 *% b0, a0 *% b1, a1 *% b0, a1 *% b1);
+            val mid = (p00 >> 32) +% (p01 & 0xFFFFFFFF) +% (p10 & 0xFFFFFFFF);
+            return joined(p11 +% (p01 >> 32) +% (p10 >> 32) +% (mid >> 32), (p00 & 0xFFFFFFFF) | (mid << 32));
+        }
+        export fn __multi3(a: i128, b: i128) -> i128 {
+            val (ah, al) = halves(@cast<u128>(a));
+            val (bh, bl) = halves(@cast<u128>(b));
+            val (rh, rl) = halves(mul64(al, bl));
+            return @cast<i128>(joined(rh +% ah *% bl +% al *% bh, rl));
+        }
+        export fn __ashlti3(a: i128, s: i32) -> i128 {
+            val (hi, lo) = halves(@cast<u128>(a));
+            if (s == 0) {
+                return a;
+            }
+            if (s >= 64) {
+                return @cast<i128>(joined(lo << @cast<u32>(s - 64), 0));
+            }
+            return @cast<i128>(joined((hi << @cast<u32>(s)) | (lo >> @cast<u32>(64 - s)), lo << @cast<u32>(s)));
+        }
+        export fn __lshrti3(a: i128, s: i32) -> i128 {
+            val (hi, lo) = halves(@cast<u128>(a));
+            if (s == 0) {
+                return a;
+            }
+            if (s >= 64) {
+                return @cast<i128>(joined(0, hi >> @cast<u32>(s - 64)));
+            }
+            return @cast<i128>(joined(hi >> @cast<u32>(s), (lo >> @cast<u32>(s)) | (hi << @cast<u32>(64 - s))));
+        }
+        export fn __ashrti3(a: i128, s: i32) -> i128 {
+            val (hi, lo) = halves(@cast<u128>(a));
+            if (s == 0) {
+                return a;
+            }
+            val sh = @cast<i64>(hi);
+            if (s >= 64) {
+                return @cast<i128>(joined(@cast<u64>(sh >> 63), @cast<u64>(sh >> @cast<u32>(s - 64))));
+            }
+            return @cast<i128>(joined(@cast<u64>(sh >> @cast<u32>(s)), (lo >> @cast<u32>(s)) | (hi << @cast<u32>(64 - s))));
+        }
+        // n / d and n % d by shifting and subtracting, a bit at a time (d isn't 0: the caller checked)
+        fn udivmod(n0: u128, d: u128, rem: u128*) -> u128 {
+            var (n, q, r) = (n0, @cast<u128>(0), @cast<u128>(0));
+            for (i) in 0..128 {
+                val (top, rest) = halves(n);
+                r = twice(r) | joined(0, top >> 63);
+                n = twice(n);
+                q = twice(q);
+                if (r >= d) {
+                    r = r -% d;
+                    q = q | 1;
+                }
+            }
+            if (rem != null) {
+                *rem = r;
+            }
+            return q;
+        }
+        // x << 1 (wrapping), by halves
+        fn twice(x: u128) -> u128 {
+            val (hi, lo) = halves(x);
+            return joined((hi << 1) | (lo >> 63), lo << 1);
+        }
+        fn magnitude(x: i128) -> u128 {
+            if (x < 0) {
+                return 0 -% @cast<u128>(x);
+            }
+            return @cast<u128>(x);
+        }
+        export fn __udivti3(a: u128, b: u128) -> u128 { return udivmod(a, b, null); }
+        export fn __umodti3(a: u128, b: u128) -> u128 {
+            var r: u128 = 0;
+            udivmod(a, b, &r);
+            return r;
+        }
+        export fn __divti3(a: i128, b: i128) -> i128 {
+            val q = udivmod(magnitude(a), magnitude(b), null);
+            if ((a < 0) != (b < 0)) {
+                return @cast<i128>(0 -% q);
+            }
+            return @cast<i128>(q);
+        }
+        export fn __modti3(a: i128, b: i128) -> i128 {
+            var r: u128 = 0;
+            udivmod(magnitude(a), magnitude(b), &r);
+            if (a < 0) {
+                return @cast<i128>(0 -% r);
+            }
+            return @cast<i128>(r);
+        }
     }
 
     // ---- the C library's memory functions, which LLVM calls for copies and fills (size_t is the

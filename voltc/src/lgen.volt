@@ -12,6 +12,7 @@ enum callconv {
     AAPCS64,  // aarch64 Linux and the like
     DARWIN64, // Apple's arm64: AAPCS64, with small ints extended by the caller
     WIN64,    // Windows x64
+    WASM,     // WebAssembly: an aggregate of one scalar as that scalar, any other by a pointer to a copy
 }
 
 // how a value crosses a call
@@ -450,7 +451,7 @@ attach fn part(this: lg&, t: u32, ret: bool) -> abi_part {
         // a small int is extended by the caller on SysV and Apple's arm64 (to 32 bits); AAPCS64
         // leaves it to the callee, and Windows extends only a bool
         var ext: u32 = 0;
-        if (bits > 0 && bits < 32 && (this.cc == callconv::SYSV || this.cc == callconv::DARWIN64 || (this.cc == callconv::WIN64 && t == BOOL))) {
+        if (bits > 0 && bits < 32 && (this.cc == callconv::SYSV || this.cc == callconv::DARWIN64 || this.cc == callconv::WASM || (this.cc == callconv::WIN64 && t == BOOL))) {
             ext = 1;
             if (this.int_signed(t)) {
                 ext = 2;
@@ -466,6 +467,16 @@ attach fn part(this: lg&, t: u32, ret: bool) -> abi_part {
         // Windows: 1, 2, 4 or 8 bytes as an integer that size; anything else by a pointer to a copy
         if (size == 1 || size == 2 || size == 4 || size == 8) {
             return { how: pass::COERCE, ty: t, cty: llvm::LLVMIntTypeInContext(this.ctx, @cast<u32>(size * 8)) };
+        }
+        return { how: pass::MEMORY, ty: t };
+    }
+    if (this.cc == callconv::WASM) {
+        // WebAssembly (as clang has it): an aggregate of one scalar crosses as that scalar; any other
+        // by a pointer to a copy (byval), or returned through a pointer the caller gives (sret)
+        var leaves: std::vec<llvm::LLVMOpaqueType*> = {};
+        scalar_leaves(l, &leaves);
+        if (leaves.len == 1) {
+            return { how: pass::COERCE, ty: t, cty: *leaves.at(0) };
         }
         return { how: pass::MEMORY, ty: t };
     }
@@ -753,8 +764,8 @@ attach fn abi_attrs(this: lg&, a: abi_fn&, f: llvm::LLVMOpaqueValue*, call: bool
             }
             idx += 1;
         } else if (x.how == pass::MEMORY) {
-            // SysV copies it onto the stack (byval); elsewhere the pointer is to the caller's copy
-            if (this.cc == callconv::SYSV) {
+            // SysV and WebAssembly copy it (byval); elsewhere the pointer is to the caller's copy
+            if (this.cc == callconv::SYSV || this.cc == callconv::WASM) {
                 add_attr(f, call, idx, this.type_attr("byval", this.lt(x.ty)));
                 val al = llvm::LLVMCreateEnumAttribute(this.ctx, llvm::LLVMGetEnumAttributeKindForName("align", 5), @cast<u64>(this.align_of(this.lt(x.ty))));
                 add_attr(f, call, idx, al);
@@ -1183,7 +1194,7 @@ attach fn caddr(this: lg&, p: u32) -> llvm::LLVMOpaqueValue* {
             val base = this.caddr(b) ?? return null;
             val off = this.offset_of(this.c.ir.ty_of(b), i);
             var idx: std::vec<llvm::LLVMOpaqueValue*> = {};
-            put(&idx, this.i64c(off));
+            put(&idx, this.usizec(off));
             return llvm::LLVMConstGEP2(this.i8t(), base, idx.ptr, 1);
         },
         .INDEX(b, i) => {
@@ -1195,7 +1206,7 @@ attach fn caddr(this: lg&, p: u32) -> llvm::LLVMOpaqueValue* {
             }
             val es = this.size_of(this.lt(this.c.ir.ty_of(p)));
             var idx: std::vec<llvm::LLVMOpaqueValue*> = {};
-            put(&idx, this.i64c(@cast<u64>(at) * es));
+            put(&idx, this.usizec(@cast<u64>(at) * es));
             return llvm::LLVMConstGEP2(this.i8t(), base, idx.ptr, 1);
         },
         default => { return null; },
@@ -1304,7 +1315,7 @@ attach fn byte_gep(this: lg&, p: llvm::LLVMOpaqueValue*, off: u64) -> llvm::LLVM
         return p;
     }
     var idx: std::vec<llvm::LLVMOpaqueValue*> = {};
-    put(&idx, this.i64c(off));
+    put(&idx, this.usizec(off));
     return this.inbounds_gep(this.i8t(), p, &idx);
 }
 
@@ -1537,7 +1548,7 @@ attach fn addr(this: lg&, n: u32) -> llvm::LLVMOpaqueValue* {
             var idx: std::vec<llvm::LLVMOpaqueValue*> = {};
             match (*this.c.t.get(bt)) {
                 .ARRAY(x, k) => {
-                    put(&idx, this.i64c(0));
+                    put(&idx, this.usizec(0));
                     put(&idx, ix);
                     return this.inbounds_gep(this.lt(bt), this.addr(b), &idx);
                 },
@@ -1566,9 +1577,9 @@ attach fn addr(this: lg&, n: u32) -> llvm::LLVMOpaqueValue* {
     }
 }
 
-// an index as an i64
+// an index as a pointer-wide integer (what LLVM's address arithmetic is on the target)
 attach fn index_val(this: lg&, i: u32) -> llvm::LLVMOpaqueValue* {
-    return this.coerce(this.rv(i), this.c.ir.ty_of(i), I64);
+    return this.coerce(this.rv(i), this.c.ir.ty_of(i), ISIZE);
 }
 
 // ---------- values ----------
@@ -1844,11 +1855,12 @@ attach fn binary(this: lg&, op: binop_ir, a: u32, b: u32, t: u32) -> llvm::LLVMO
         }
         val el = this.pointee(at);
         if (this.is_ptr_ty(bt)) {
-            val d = llvm::LLVMBuildSub(this.b, llvm::LLVMBuildPtrToInt(this.b, av, this.i64t(), ""), llvm::LLVMBuildPtrToInt(this.b, bv, this.i64t(), ""), "");
-            val q = llvm::LLVMBuildExactSDiv(this.b, d, this.i64c(this.size_of(el)), "");
-            return this.convert(q, I64, t);
+            val wide = this.int_lt(int_ty::ISIZE);
+            val d = llvm::LLVMBuildSub(this.b, llvm::LLVMBuildPtrToInt(this.b, av, wide, ""), llvm::LLVMBuildPtrToInt(this.b, bv, wide, ""), "");
+            val q = llvm::LLVMBuildExactSDiv(this.b, d, this.usizec(this.size_of(el)), "");
+            return this.convert(q, ISIZE, t);
         }
-        var n = this.coerce(bv, bt, I64);
+        var n = this.coerce(bv, bt, ISIZE);
         if (op == binop_ir::SUB) {
             n = llvm::LLVMBuildNeg(this.b, n, "");
         }
@@ -2707,7 +2719,13 @@ attach fn llvm_build(this: checker&, g: lg&) -> std::string {
     }
     var triple = S("");
     if (bare) {
-        if (bare.arch == "arm") {
+        if (bare.arch == "wasm32") {
+            llvm::LLVMInitializeWebAssemblyTargetInfo();
+            llvm::LLVMInitializeWebAssemblyTarget();
+            llvm::LLVMInitializeWebAssemblyTargetMC();
+            llvm::LLVMInitializeWebAssemblyAsmPrinter();
+            g.cc = callconv::WASM;
+        } else if (bare.arch == "arm") {
             llvm::LLVMInitializeARMTargetInfo();
             llvm::LLVMInitializeARMTarget();
             llvm::LLVMInitializeARMTargetMC();
@@ -2803,7 +2821,16 @@ attach fn llvm_build(this: checker&, g: lg&) -> std::string {
     }
     g.ctor();
     g.keep_used();
+    var wasm = false;
+    var wasi = false;
     if (bare) {
+        wasm = bare.arch == "wasm32";
+        wasi = bare.name == "wasm32-wasi";
+    }
+    if (wasm) {
+        // WebAssembly has no start code to assemble: its start and hooks are functions
+        g.wasm_runtime(wasi);
+    } else if (bare) {
         // the start code, and the hooks the program leaves to the defaults
         var start = start_asm(bare);
         start.append(hook_defaults_asm(bare, !defines(g.m, "volt_exit"), !defines(g.m, "volt_console_write")).as_str());
@@ -2834,6 +2861,148 @@ attach fn llvm_build(this: checker&, g: lg&) -> std::string {
         llvm::LLVMDisposePassBuilderOptions(po);
     }
     return S("");
+}
+
+// the function named `name` of type fty, declared if the module has none
+attach fn fn_named(this: lg&, name: str, fty: llvm::LLVMOpaqueType*) -> llvm::LLVMOpaqueValue* {
+    val have = llvm::LLVMGetNamedFunction(this.m, this.z(name));
+    if (have) {
+        return have;
+    }
+    return llvm::LLVMAddFunction(this.m, this.z(name), fty);
+}
+
+// a function the WebAssembly host gives: imported from module `from` under `name`
+attach fn wasm_import(this: lg&, sym: str, from: str, name: str, fty: llvm::LLVMOpaqueType*) -> llvm::LLVMOpaqueValue* {
+    val f = this.fn_named(sym, fty);
+    llvm::LLVMAddAttributeAtIndex(f, 4294967295, llvm::LLVMCreateStringAttribute(this.ctx, "wasm-import-module", 18, this.z(from), @cast<u32>(from.len)));
+    llvm::LLVMAddAttributeAtIndex(f, 4294967295, llvm::LLVMCreateStringAttribute(this.ctx, "wasm-import-name", 16, this.z(name), @cast<u32>(name.len)));
+    return f;
+}
+
+// a body for function f (which has none yet), the builder in it
+attach fn body_of(this: lg&, f: llvm::LLVMOpaqueValue*) -> void {
+    llvm::LLVMSetLinkage(f, llvm::LLVMExternalLinkage);
+    llvm::LLVMPositionBuilderAtEnd(this.b, llvm::LLVMAppendBasicBlockInContext(this.ctx, f, ""));
+}
+
+// WebAssembly's start and hooks, as functions where a board's are start code: _start runs the
+// constructors and main, then exits with main's result; the heap starts at wasm-ld's __heap_base and
+// ends where the memory does, growing it a 64 KiB page at a time when it needs more; the console and
+// exit are the host's (a page's env.volt_console_write and env.volt_exit, or WASI's fd_write and
+// proc_exit), unless the program defines volt_console_write or volt_exit itself
+attach fn wasm_runtime(this: lg&, wasi: bool) -> void {
+    val (i32, ptr, vt) = (this.i32t(), this.ptrt(), this.voidt());
+    var pn: llvm::LLVMOpaqueType*[2] = { ptr, i32 };
+    var one: llvm::LLVMOpaqueType*[1] = { i32 };
+    val write_ty = llvm::LLVMFunctionType(vt, &pn[0], 2, 0);
+    val exit_ty = llvm::LLVMFunctionType(vt, &one[0], 1, 0);
+    var write = this.fn_named("volt_console_write", write_ty);
+    var exit = this.fn_named("volt_exit", exit_ty);
+    if (llvm::LLVMIsDeclaration(write) != 0) {
+        if (wasi) {
+            // fd_write(stdout, one iovec { p, n }, 1, &written)
+            var fp: llvm::LLVMOpaqueType*[4] = { i32, ptr, i32, ptr };
+            val fd_write = this.wasm_import("volt_wasi_fd_write", "wasi_snapshot_preview1", "fd_write", llvm::LLVMFunctionType(i32, &fp[0], 4, 0));
+            this.body_of(write);
+            var parts: llvm::LLVMOpaqueType*[2] = { ptr, i32 };
+            val iov_ty = llvm::LLVMStructTypeInContext(this.ctx, &parts[0], 2, 0);
+            val iov = llvm::LLVMBuildAlloca(this.b, iov_ty, "");
+            val written = llvm::LLVMBuildAlloca(this.b, i32, "");
+            llvm::LLVMBuildStore(this.b, llvm::LLVMGetParam(write, 0), llvm::LLVMBuildStructGEP2(this.b, iov_ty, iov, 0, ""));
+            llvm::LLVMBuildStore(this.b, llvm::LLVMGetParam(write, 1), llvm::LLVMBuildStructGEP2(this.b, iov_ty, iov, 1, ""));
+            var args: llvm::LLVMOpaqueValue*[4] = { llvm::LLVMConstInt(i32, 1, 0), iov, llvm::LLVMConstInt(i32, 1, 0), written };
+            llvm::LLVMBuildCall2(this.b, llvm::LLVMGlobalGetValueType(fd_write), fd_write, &args[0], 4, "");
+            llvm::LLVMBuildRetVoid(this.b);
+        } else {
+            write = this.wasm_import("volt_console_write", "env", "volt_console_write", write_ty);
+        }
+    }
+    if (llvm::LLVMIsDeclaration(exit) != 0) {
+        if (wasi) {
+            val proc_exit = this.wasm_import("volt_wasi_proc_exit", "wasi_snapshot_preview1", "proc_exit", exit_ty);
+            this.body_of(exit);
+            var args: llvm::LLVMOpaqueValue*[1] = { llvm::LLVMGetParam(exit, 0) };
+            llvm::LLVMBuildCall2(this.b, exit_ty, proc_exit, &args[0], 1, "");
+            llvm::LLVMBuildUnreachable(this.b);
+        } else {
+            exit = this.wasm_import("volt_exit", "env", "volt_exit", exit_ty);
+        }
+    }
+    // the hooks std/bare.volt calls
+    val hook_write = this.fn_named("volt_hook_console_write", write_ty);
+    if (llvm::LLVMIsDeclaration(hook_write) != 0) {
+        this.body_of(hook_write);
+        var args: llvm::LLVMOpaqueValue*[2] = { llvm::LLVMGetParam(hook_write, 0), llvm::LLVMGetParam(hook_write, 1) };
+        llvm::LLVMBuildCall2(this.b, write_ty, write, &args[0], 2, "");
+        llvm::LLVMBuildRetVoid(this.b);
+    }
+    val hook_exit = this.fn_named("volt_hook_exit", exit_ty);
+    if (llvm::LLVMIsDeclaration(hook_exit) != 0) {
+        this.body_of(hook_exit);
+        var args: llvm::LLVMOpaqueValue*[1] = { llvm::LLVMGetParam(hook_exit, 0) };
+        llvm::LLVMBuildCall2(this.b, exit_ty, exit, &args[0], 1, "");
+        llvm::LLVMBuildUnreachable(this.b);
+    }
+    // the heap: from __heap_base to the memory's end, which grows
+    var heap_base = llvm::LLVMGetNamedGlobal(this.m, "__heap_base");
+    if (heap_base == null) {
+        heap_base = llvm::LLVMAddGlobal(this.m, this.i8t(), "__heap_base");
+    }
+    val noargs = llvm::LLVMFunctionType(ptr, null, 0, 0);
+    val start = this.fn_named("volt_heap_start", noargs);
+    if (llvm::LLVMIsDeclaration(start) != 0) {
+        this.body_of(start);
+        llvm::LLVMBuildRet(this.b, heap_base ?? @panic("__heap_base"));
+    }
+    val size = this.fn_named("llvm.wasm.memory.size.i32", llvm::LLVMFunctionType(i32, &one[0], 1, 0));
+    var two: llvm::LLVMOpaqueType*[2] = { i32, i32 };
+    val grow = this.fn_named("llvm.wasm.memory.grow.i32", llvm::LLVMFunctionType(i32, &two[0], 2, 0));
+    val end = this.fn_named("volt_heap_end", noargs);
+    if (llvm::LLVMIsDeclaration(end) != 0) {
+        this.body_of(end);
+        var args: llvm::LLVMOpaqueValue*[1] = { llvm::LLVMConstInt(i32, 0, 0) };
+        val pages = llvm::LLVMBuildCall2(this.b, llvm::LLVMGlobalGetValueType(size), size, &args[0], 1, "");
+        val bytes = llvm::LLVMBuildShl(this.b, pages, llvm::LLVMConstInt(i32, 16, 0), "");
+        llvm::LLVMBuildRet(this.b, llvm::LLVMBuildIntToPtr(this.b, bytes, ptr, ""));
+    }
+    val more = this.fn_named("volt_heap_grow", llvm::LLVMFunctionType(ptr, &one[0], 1, 0));
+    if (llvm::LLVMIsDeclaration(more) != 0) {
+        this.body_of(more);
+        // the pages that hold `more` bytes past the end; the end after (unchanged when it can't grow)
+        val n = llvm::LLVMBuildLShr(this.b, llvm::LLVMBuildAdd(this.b, llvm::LLVMGetParam(more, 0), llvm::LLVMConstInt(i32, 65535, 0), ""), llvm::LLVMConstInt(i32, 16, 0), "");
+        var gargs: llvm::LLVMOpaqueValue*[2] = { llvm::LLVMConstInt(i32, 0, 0), n };
+        llvm::LLVMBuildCall2(this.b, llvm::LLVMGlobalGetValueType(grow), grow, &gargs[0], 2, "");
+        val r = llvm::LLVMBuildCall2(this.b, noargs, end, null, 0, "");
+        llvm::LLVMBuildRet(this.b, r);
+    }
+    // the arguments a board's start code would keep: none
+    val arg_names: str[2] = { "volt_argc", "volt_argv" };
+    for (name) in arg_names {
+        val gv = llvm::LLVMGetNamedGlobal(this.m, this.z(name));
+        if (gv) {
+            if (llvm::LLVMGetInitializer(gv) == null) {
+                llvm::LLVMSetInitializer(gv, llvm::LLVMConstNull(llvm::LLVMGlobalGetValueType(gv)));
+            }
+        }
+    }
+    // _start: the constructors (wasm-ld makes __wasm_call_ctors), main, then its result as the exit
+    val vfn = llvm::LLVMFunctionType(vt, null, 0, 0);
+    val ctors = this.fn_named("__wasm_call_ctors", vfn);
+    val main = this.fn_named("main", llvm::LLVMFunctionType(i32, null, 0, 0));
+    val st = this.fn_named("_start", vfn);
+    this.body_of(st);
+    llvm::LLVMBuildCall2(this.b, vfn, ctors, null, 0, "");
+    // (main takes argc and argv where a C runtime gives them: none here)
+    val main_ty = llvm::LLVMGlobalGetValueType(main);
+    var margs: std::vec<llvm::LLVMOpaqueValue*> = {};
+    for (k) in 0..llvm::LLVMCountParams(main) {
+        put(&margs, llvm::LLVMConstNull(llvm::LLVMTypeOf(llvm::LLVMGetParam(main, k))));
+    }
+    val code = llvm::LLVMBuildCall2(this.b, main_ty, main, margs.ptr, @cast<u32>(margs.len), "");
+    var eargs: llvm::LLVMOpaqueValue*[1] = { code };
+    llvm::LLVMBuildCall2(this.b, exit_ty, exit, &eargs[0], 1, "");
+    llvm::LLVMBuildUnreachable(this.b);
 }
 
 // does module m define the function named `name` (not just declare it)?

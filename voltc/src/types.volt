@@ -177,6 +177,7 @@ val ANYERR: u32 = 12;
 val INT_BASE: u32 = 13;
 val I32: u32 = 15;
 val I64: u32 = 16;
+val ISIZE: u32 = 18;
 val U8: u32 = 19;
 val U32: u32 = 21;
 val USIZE: u32 = 24;
