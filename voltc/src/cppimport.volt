@@ -39,6 +39,9 @@ struct cpp_traits {
     assignable: bool = false;   // it can be assigned from an rvalue (a field of it gets a set_)
     base_copy: bool = false;    // a subclass's copy can copy it (its copy constructor, public or
                                 // protected; an abstract class's too): a derived object copies
+    newable: bool = false;      // C++'s new aligns it (past 8 that's C++17's aligned new): a layout
+                                // Volt can't copy (alignas members) is held by handle instead
+    aligned: bool = false;      // held by handle for that (prune), though trivially copyable
 }
 
 // what a class type with no Volt form of its own can do, as clang says (form_of), by the protocols
@@ -1350,6 +1353,16 @@ attach fn template_handle(this: cpp_gen&, c: clang::CXCursor) -> void {
     this.line("    }");
     this.line(fmt3("    return {{ cpp: @cpp<void*{}>(\"new {}(*({} *){{0}})\", this.cpp) }};", copy extra, copy inst, copy inst).as_str());
     this.line("}");
+    // its own public fields (of a type Volt has: a T, a number): getters and set_ methods
+    if (!this.own_type(c)) {
+        return;
+    }
+    val tp = str_views(&tps);
+    for (f&) in children(c).items() {
+        if (clang::clang_getCursorKind(*f) == clang::CXCursor_FieldDecl && is_public(*f)) {
+            this.field_accessors(*f, self_ty.as_str(), fmt2("volt_cpp_obj<{} >({{0}}).{}", copy inst, cursor_name(*f)).as_str(), "this.cpp", gen.as_str(), extra.as_str(), &tp);
+        }
+    }
 }
 
 // an instance's traits: destructible, copyable, made from nothing (held by handle, so not trivial)
@@ -3551,7 +3564,8 @@ attach fn class_struct(this: cpp_gen&, c: clang::CXCursor, vname_: str, q: str) 
             continue;
         }
         val ft = clang::clang_getCursorType(*f);
-        if (ft.kind == clang::CXType_LValueReference || ft.kind == clang::CXType_RValueReference) {
+        // (a class held by handle isn't laid out as C++ lays it out: its bytes are padding)
+        if (ft.kind == clang::CXType_LValueReference || ft.kind == clang::CXType_RValueReference || this.handle_of(ft) != null) {
             continue;
         }
         val vt = this.vtype(ft, &none) ?? continue;
@@ -3574,7 +3588,8 @@ attach fn class_struct(this: cpp_gen&, c: clang::CXCursor, vname_: str, q: str) 
     if (got != @cast<u64>(align)) {
         // take the struct back out
         this.out.bytes.len = start;
-        this.line(fmt2("// left out: class {} (its alignment, {}, comes from members Volt can't show)", S(q), num(@cast<i128>(align))).as_str());
+        // (one C++'s new aligns is held by handle instead: prune)
+        this.line(fmt2("// left out: class {} (its alignment, {}, comes from members Volt can't show, and holding it by handle needs C++17's aligned new)", S(q), num(@cast<i128>(align))).as_str());
         return false;
     }
     return true;
@@ -3701,7 +3716,7 @@ attach fn class(this: cpp_gen&, c: clang::CXCursor, tps: std::vec<std::string>?)
     // a public bit-field isn't one of its Volt fields (they're whole bytes): f() and set_f(v)
     for (f&) in children(c).items() {
         if (clang::clang_getCursorKind(*f) == clang::CXCursor_FieldDecl && is_public(*f) && clang::clang_Cursor_isBitField(*f) != 0) {
-            this.field_accessors(*f, self_ty.as_str(), fmt("{0}.{}", cursor_name(*f)).as_str(), "this", gen.as_str(), extra.as_str());
+            this.field_accessors(*f, self_ty.as_str(), fmt("{0}.{}", cursor_name(*f)).as_str(), "this", gen.as_str(), extra.as_str(), &tp);
         }
     }
 }
@@ -3718,7 +3733,11 @@ attach fn handle_class(this: cpp_gen&, c: clang::CXCursor, vn: str, q: str) -> v
     if (tr.polymorphic && !tr.final_) {
         maps = this.virt_maps(c, q, &vs);
     }
-    this.line(fmt("// C++'s {}: it isn't trivially copyable, so Volt holds it by handle (C++ allocates it)", S(q)).as_str());
+    if (tr.aligned) {
+        this.line(fmt("// C++'s {}: its alignment comes from members Volt can't show, so Volt holds it by handle (C++'s new aligns it)", S(q)).as_str());
+    } else {
+        this.line(fmt("// C++'s {}: it isn't trivially copyable, so Volt holds it by handle (C++ allocates it)", S(q)).as_str());
+    }
     if (maps) {
         this.line(fmt2("@attributes([@attach_as(\"{}_virtuals\"), @cpp_handle(\"{}\")])", S(vn), S(q)).as_str());
     } else {
@@ -3729,6 +3748,8 @@ attach fn handle_class(this: cpp_gen&, c: clang::CXCursor, vn: str, q: str) -> v
     val abstract0 = clang::clang_CXXRecord_isAbstract(c) != 0;
     if (tr.defaults && tr.destructible && !abstract0) {
         this.line(fmt("    cpp: void* = @cpp<void*>(\"new {}()\"); // the C++ object ({} makes one)", S(q)).as_str());
+    } else if (!tr.destructible) {
+        this.line(fmt("    cpp: void* = @compile_error(\"C++'s {} can't be made by Volt (its destructor isn't public): get one from a function that gives it out\"); // the C++ object", S(q)).as_str());
     } else {
         this.line(fmt2("    cpp: void* = @compile_error(\"C++'s {} can't be made from nothing: make one with {}::new(...)\"); // the C++ object", S(q), S(vn)).as_str());
     }
@@ -3755,48 +3776,51 @@ attach fn handle_class(this: cpp_gen&, c: clang::CXCursor, vn: str, q: str) -> v
         this.callable("", fmt("attach fn new(static this: {}", S(vn)).as_str(), true, *ch, made, fmt("{}(", S(q)).as_str(), null, "", &none, fmt("{}'s constructor", S(q)).as_str());
     }
     if (!tr.destructible) {
-        this.line(fmt("// (its destructor isn't public: Volt has no {}::new)", S(q)).as_str());
-        this.class_methods(c, vn, q, obj.as_str());
-        return;
-    }
-    if (!any_ctor && tr.defaults) {
-        this.line(fmt2("attach fn new(static this: {}) -> {} {{", S(vn), S(vn)).as_str());
-        this.line(fmt("    return {{ cpp: @cpp<void*>(\"new {}()\") }};", S(q)).as_str());
-        this.line("}");
-    }
-    // (an object derive made is deleted and copied as what it is: the Volt side too)
-    this.line(fmt("attach fn delete(this: {}&) -> void {{", S(vn)).as_str());
-    this.line("    if (this.cpp != null && !this.borrowed) {");
-    if (maps) {
-        this.line(fmt("        @cpp<void>(\"volt_dir_delete< ::{}>({{0}}, {{1}})\", this.cpp, this.volt);", S(q)).as_str());
+        // one C++ hands out (a T* or T& result, as a factory's) is a borrowed handle, freed C++'s way
+        this.line(fmt("// (its destructor isn't public: Volt has no {}::new and never deletes one)", S(q)).as_str());
     } else {
-        this.line(fmt("        @cpp<void>(\"delete ({} *){{0}}\", this.cpp);", S(q)).as_str());
-    }
-    this.line("    }");
-    this.line("}");
-    if (tr.copyable || (maps != null && tr.base_copy)) {
-        this.line(fmt2("attach fn copy(this: {}&) -> {} {{", S(vn), S(vn)).as_str());
-        this.line("    if (this.cpp == null) {");
-        this.line("        return { cpp: null };");
-        this.line("    }");
-        if (maps) {
-            this.line("    var v: void* = null;");
-            this.line(fmt2("    val p = @cpp<void*>(\"volt_dir_copy< ::{}, {}>({{0}}, {{1}}, (void **){{2}})\", this.cpp, this.volt, @cast<void*>(&v));", S(q), S(cpp_bool(tr.copyable))).as_str());
-            this.line("    return { cpp: p, volt: v };");
-        } else {
-            this.line(fmt2("    return {{ cpp: @cpp<void*>(\"new {}(*({} *){{0}})\", this.cpp) }};", S(q), S(q)).as_str());
+        if (!any_ctor && tr.defaults) {
+            this.line(fmt2("attach fn new(static this: {}) -> {} {{", S(vn), S(vn)).as_str());
+            this.line(fmt("    return {{ cpp: @cpp<void*>(\"new {}()\") }};", S(q)).as_str());
+            this.line("}");
         }
+        // (an object derive made is deleted and copied as what it is: the Volt side too)
+        this.line(fmt("attach fn delete(this: {}&) -> void {{", S(vn)).as_str());
+        this.line("    if (this.cpp != null && !this.borrowed) {");
+        if (maps) {
+            this.line(fmt("        @cpp<void>(\"volt_dir_delete< ::{}>({{0}}, {{1}})\", this.cpp, this.volt);", S(q)).as_str());
+        } else {
+            this.line(fmt("        @cpp<void>(\"delete ({} *){{0}}\", this.cpp);", S(q)).as_str());
+        }
+        this.line("    }");
         this.line("}");
+        if (tr.copyable || (maps != null && tr.base_copy)) {
+            this.line(fmt2("attach fn copy(this: {}&) -> {} {{", S(vn), S(vn)).as_str());
+            this.line("    if (this.cpp == null) {");
+            this.line("        return { cpp: null };");
+            this.line("    }");
+            if (maps) {
+                this.line("    var v: void* = null;");
+                this.line(fmt2("    val p = @cpp<void*>(\"volt_dir_copy< ::{}, {}>({{0}}, {{1}}, (void **){{2}})\", this.cpp, this.volt, @cast<void*>(&v));", S(q), S(cpp_bool(tr.copyable))).as_str());
+                this.line("    return { cpp: p, volt: v };");
+            } else {
+                this.line(fmt2("    return {{ cpp: @cpp<void*>(\"new {}(*({} *){{0}})\", this.cpp) }};", S(q), S(q)).as_str());
+            }
+            this.line("}");
+        }
     }
     // the methods before the fields' getters and set_ methods, so a method of the same signature
     // (a set_x of its own) is the one Volt calls
     this.class_methods(c, vn, q, obj.as_str());
     for (f&) in children(c).items() {
         if (clang::clang_getCursorKind(*f) == clang::CXCursor_FieldDecl && is_public(*f)) {
-            this.field_accessors(*f, vn, fmt2("{}.{}", copy obj, cursor_name(*f)).as_str(), "this.cpp", "", "");
+            this.field_accessors(*f, vn, fmt2("{}.{}", copy obj, cursor_name(*f)).as_str(), "this.cpp", "", "", &none);
         }
     }
     this.casts(c, vn, q);
+    if (!tr.destructible) {
+        return;
+    }
     // the object's type, as C++ names it (its dynamic type, for a class with virtual methods)
     if (this.first_time(fmt("attach fn cpp_type_name(this: {}&", S(vn)).as_str(), "")) {
         val r: cpp_ret = { vty: S("std::string"), way: ret_way::STRING };
@@ -3935,15 +3959,14 @@ attach fn casts(this: cpp_gen&, c: clang::CXCursor, vn: str, q: str) -> void {
 // a field's getter (of the same name) and set_ method (a bit-field's too: C++ does the bit work);
 // at: the field, in a C++ expression ({0}: the object), self what the Volt method passes for it
 // (this.cpp for a handle, this for a class held by value), gen and extra a class template's generics
-attach fn field_accessors(this: cpp_gen&, f: clang::CXCursor, vn: str, at: str, self: str, gen: str, extra: str) -> void {
-    val none: std::vec<str> = {};
+attach fn field_accessors(this: cpp_gen&, f: clang::CXCursor, vn: str, at: str, self: str, gen: str, extra: str, tp: std::vec<str>&) -> void {
     val ft = clang::clang_getCursorType(f);
     // (an unnamed bit-field is padding)
     if (ft.kind == clang::CXType_LValueReference || ft.kind == clang::CXType_RValueReference || cursor_name(f).len() == 0) {
         return;
     }
     val fv = vname(cursor_name(f).as_str());
-    var r = this.result(ft, &none) ?? return;
+    var r = this.result(ft, tp) ?? return;
     // the getter gives a copy of it
     if (this.copies_out(ft) && this.first_time(fmt2("attach fn {}(this: {}&", copy fv, S(vn)).as_str(), "")) {
         this.fn_text(gen, fmt3("attach fn {}(this: {}&) -> {}", copy fv, S(vn), copy r.vty).as_str(), &r, at, fmt(", {}", S(self)).as_str(), extra);
@@ -3957,7 +3980,7 @@ attach fn field_accessors(this: cpp_gen&, f: clang::CXCursor, vn: str, at: str, 
     if (!this.assignable(ft)) {
         return;
     }
-    val a = this.param(ft, "v", 1, &none) ?? return;
+    val a = this.param(ft, "v", 1, tp) ?? return;
     if (a.pre.len() > 0) {
         return; // a setter has no statements before its call
     }
@@ -4216,6 +4239,7 @@ attach fn prune(this: cpp_gen&) -> void {
             this.templates.remove(*q);
         }
         var gone_classes: std::vec<str> = {};
+        var held: std::vec<str> = {};
         for (e) in this.classes.iter() {
             val tr = this.traits.get(*e.key) ?? continue;
             if (!tr->trivial) {
@@ -4226,14 +4250,22 @@ attach fn prune(this: cpp_gen&) -> void {
             val start = this.out.len();
             val ok = this.class_struct(c, last_part(*e.value, "").as_str(), *e.key);
             this.out.bytes.len = start;
-            if (!ok) {
+            if (ok) {
+                continue;
+            }
+            if (tr->newable && clang::clang_Type_getSizeOf(clang::clang_getCursorType(c)) > 0) {
+                // held by handle instead: C++'s new and delete, in the wrappers, align it
+                tr->trivial = false;
+                tr->aligned = true;
+                put(&held, *e.key);
+            } else {
                 put(&gone_classes, *e.key);
             }
         }
         for (q&) in gone_classes.items() {
             this.classes.remove(*q);
         }
-        if (gone.len == 0 && gone_classes.len == 0) {
+        if (gone.len == 0 && gone_classes.len == 0 && held.len == 0) {
             break;
         }
     }
@@ -4281,7 +4313,7 @@ attach fn library_roots(this: cpp_gen&, headers: std::vec<std::string>&, tu: cla
 
 // what clang says of each class, from the import's parse reparsed with these appended (its
 // precompiled preamble the headers: they aren't read again):
-//     static const bool t0 = __is_trivially_copyable(::geo::Shape); (d0, c0, a0, n0, p0, f0, v0, e0, m0 likewise)
+//     static const bool t0 = __is_trivially_copyable(::geo::Shape); (d0, c0, a0, n0, p0, f0, v0, e0, m0, w0 likewise)
 // (static const, not constexpr: a header read under C++98 is probed the same way)
 // A class it can't answer for is held by handle, and Volt neither makes, copies nor assigns one.
 // Whether the reparse worked (the parse is gone when it didn't)
@@ -4303,6 +4335,7 @@ attach fn probe(this: cpp_gen&, tu: clang_tu&, main: str, base: str, args: std::
         text.append(fmt2("static const bool v{} = __has_virtual_destructor(::{});\n", copy i, copy q).as_str());
         text.append(fmt2("static const bool e{} = __is_convertible_to(::{} *, const std::exception *);\n", copy i, copy q).as_str());
         text.append(fmt3("static const bool m{} = __is_constructible(::{}, ::{} &&);\n", copy i, copy q, copy q).as_str());
+        text.append(fmt2("static const bool w{} = __cplusplus >= 201703L || __alignof(::{}) <= 8;\n", copy i, copy q).as_str());
         put(&names, *e.key);
         this.traits.put(*e.key, {});
     }
@@ -4354,6 +4387,8 @@ attach fn probe(this: cpp_gen&, tu: clang_tu&, main: str, base: str, args: std::
                 tr->vdtor = yes;
             } else if (which == "m") {
                 tr->movable = yes;
+            } else if (which == "w") {
+                tr->newable = yes;
             } else {
                 tr->exception = yes;
             }
@@ -5018,7 +5053,7 @@ attach fn director(this: cpp_gen&, c: clang::CXCursor, vn: str, q: str, maps: st
                 }
             }
         } else if (k == clang::CXCursor_FieldDecl && clang::clang_Cursor_isBitField(*ch) == 0) {
-            this.field_accessors(*ch, vn, fmt3("({}.*{}::volt_pf_{}())", copy obj, copy bn, copy mn).as_str(), "this.cpp", "", "");
+            this.field_accessors(*ch, vn, fmt3("({}.*{}::volt_pf_{}())", copy obj, copy bn, copy mn).as_str(), "this.cpp", "", "", &none);
             cpp.append(fmt2("    static auto volt_pf_{}() {{ return &{}::", copy mn, copy bn).as_str());
             cpp.append(fmt("{}; }\n", copy mn).as_str());
         }
