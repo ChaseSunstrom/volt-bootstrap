@@ -1917,7 +1917,7 @@ fn cpp_templates() {
     // what Volt's generics can't declare (variadic and non-type templates, auto results, constrained
     // templates, function-like macros, method templates), called per use: clang types each call
     let e = Env::new("cpp-templates");
-    let want = "6.5 4\n12\n42 2.5\n3 6\n40\n25 2\n6 18\n6\n";
+    let want = "6.5 4\n12\n42 2.5\n3 6\n40\n25 2\n6 18\n9 12\n10 8\n-4 3 -6\n9\n6\n";
     for backend in ["c", "llvm"] {
         assert_eq!(ok(e.voltc(&["run", "cpp_templates.volt", "--backend", backend]), "voltc run cpp_templates.volt"), want, "C++ templates ({backend})");
     }
@@ -2331,7 +2331,7 @@ fn cpp_libs() {
     let libs = [
         ("re2/re2.h", "libs/re2.volt", &["--cc", "-lre2"][..], "true a(b+)c 1\nfalse\n"),
         ("nlohmann/json.hpp", "libs/json.volt", &[][..], "true 3\ntrue 2 {\"a\":3,\"b\":[1,2]}\n"),
-        ("glm/glm.hpp", "libs/glm.volt", &[][..], "2.5 3 1\n"),
+        ("glm/glm.hpp", "libs/glm.volt", &[][..], "2.5 3 1\nlength 3\n"),
     ];
     for (header, file, flags, want) in libs {
         if !installed(header) {

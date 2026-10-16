@@ -19,6 +19,20 @@ fn main() -> void {
     // method templates: two explicit arguments, and variadic
     val c: cpp::tpl::Conv = { k: 3 };
     std::println("{} {}", c.convert<i32, f64>(2), c.all(1, 2, 3));
+    // class templates with a value parameter: one laid out, one held by handle, and an @cpp type
+    // argument that's a value
+    var f: cpp::tpl::fixed<i32, 3> = { data: { 1, 2, 3 } };
+    f.add(1);
+    std::println("{} {}", f.sum(), @sizeof(cpp::tpl::fixed<i32, 3>));
+    var k = cpp::tpl::counter<5>::new();
+    k.bump();
+    std::println("{} {}", k.bump(), @cpp<i32, i32, 4>("tpl::times<{t1}>({0})", 2));
+    // a bool value parameter, value type arguments that are true or negative, and an instance with a
+    // value argument in functions' signatures (a handle)
+    val s: cpp::tpl::sign<i32, true> = { v: 4 };
+    std::println("{} {} {}", s.get(), @cpp<i32, i32, true>("tpl::pick_if<{t1}>({0}, 7)", 3), @cpp<i32, i32, -2>("tpl::times<{t1}>({0})", 3));
+    val t = cpp::tpl::threes();
+    std::println("{}", cpp::tpl::total(&t));
     // @cpp with its result type worked out by clang
     std::println("{}", @cpp("{0} * {1}", 4, 1.5));
 }
@@ -29,4 +43,8 @@ fn main() -> void {
 // expect: 40
 // expect: 25 2
 // expect: 6 18
+// expect: 9 12
+// expect: 10 8
+// expect: -4 3 -6
+// expect: 9
 // expect: 6
