@@ -46,6 +46,49 @@ class Labeled : public Named {
   public:
     int mark() const { return 9; }
 };
+// a move emulated as std::auto_ptr does: made and assigned from an Owner& (taking its value) or
+// through OwnerRef, never from a const Owner&; passed by value, and a field of it set
+struct OwnerRef {
+    int v;
+    explicit OwnerRef(int x) : v(x) {}
+};
+class Owner {
+  public:
+    Owner() : v_(0) {}
+    Owner(Owner &o) : v_(o.release()) {}
+    Owner(OwnerRef r) : v_(r.v) {}
+    Owner &operator=(Owner &o) {
+        v_ = o.release();
+        return *this;
+    }
+    Owner &operator=(OwnerRef r) {
+        v_ = r.v;
+        return *this;
+    }
+    operator OwnerRef() { return OwnerRef(release()); }
+    int get() const { return v_; }
+    void set(int v) { v_ = v; }
+    int release() {
+        int v = v_;
+        v_ = -1;
+        return v;
+    }
+
+  private:
+    int v_;
+};
+inline int take_owner(Owner o) { return o.get(); }
+struct Holder {
+    Owner owner;
+    int read() const { return owner.get(); }
+};
+// a std::map keyed by std::string: its entries are handles, under C++98 as under C++11
+inline std::map<std::string, int> names() {
+    std::map<std::string, int> m;
+    m["b"] = 2;
+    m["a"] = 1;
+    return m;
+}
 inline IntBox boxed(int v) {
     IntBox b;
     b.set(v);
