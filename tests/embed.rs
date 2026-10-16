@@ -8,6 +8,8 @@ use std::process::{Command, Output};
 const ROOT: &str = env!("CARGO_MANIFEST_DIR");
 
 const C_OUT: &str = "add 42\ncount 2\nhello from volt 2\nsecond\nmissing 0\nbad: error: expected i32, found str\nnext -2147483648\nsandboxed 4\nescape: Symbols not found: [ getpid ] (this VM is a sandbox: it reaches only the symbols volt_vm_allow gave it)\ninner: Symbols not found: [ volt_vm_new ] (this VM is a sandbox: it reaches only the symbols volt_vm_allow gave it)\nallow: a sandbox's allowances are fixed at its first load\n";
+const PACKAGES_OUT: &str = "vm run 393\nreload util: can't load util.volt again: main_script uses it\nvm run 395\nvm leaf 1\nvm leaf 2\nbox run 393\nreload util: can't load util.volt again: main_script uses it\nbox run 395\nbox leaf 1\nbox leaf 2\nbroken: error: expected i32, found str\nuser: error: unknown name 'broken'\nmissing: Symbols not found: [ not_a_function_anywhere ]\nm 5\nmy-util.volt: can't load my-util.volt: a script is the package its file names, and my-util can't name a package\nstd.volt: can't load std.volt: a script is the package its file names, and std is std's\ndir/fn.volt: can't load dir/fn.volt: a script is the package its file names, and fn can't name a package\nh 7\n";
+const IMPORTS_OUT: &str = "run 53\nbox run 53\nbox strlen 4\nbox_pid: Symbols not found: [ getpid ] (this VM is a sandbox: it reaches only the symbols volt_vm_allow gave it)\nbox_gxx: a sandbox's script imports C++ through clang++ (LLVM bitcode, run by the JIT under the sandbox), and $CXX is g++\n";
 const PY_OUT: &str = "sum_squares 385\nerror COMPILE error: unknown name 'nope'\n";
 const RS_OUT: &str = "cubes 100\nerror COMPILE error: expected an expression, found ';'\n";
 
@@ -39,8 +41,14 @@ fn embedded_volt() {
     // compiled for it as it loads
     let imports = dir.join("host_imports");
     ok(Command::new("cc").arg("-o").arg(&imports).arg(Path::new(ROOT).join("tests/embed/host_imports.c")).arg("-I").arg(&bindings).arg("-L").arg(&lib_dir).arg("-lvoltvm").arg(format!("-Wl,-rpath,{}", lib_dir.display())).output().unwrap(), "compiling host_imports.c");
-    let out = ok(Command::new(&imports).arg(&std_dir).arg(Path::new(ROOT).join("tests/embed")).output().unwrap(), "host_imports");
-    assert_eq!(out, "run 53\nbox: a sandbox's script can't import C or C++ (their code would reach past the sandbox)\n");
+    let out = ok(Command::new(&imports).arg(&std_dir).arg(Path::new(ROOT).join("tests/embed")).env_remove("CC").env_remove("CXX").output().unwrap(), "host_imports");
+    if cfg!(target_os = "linux") {
+        assert_eq!(out, IMPORTS_OUT);
+    }
+    // scripts using earlier scripts as packages
+    let packages = dir.join("host_packages");
+    ok(Command::new("cc").arg("-o").arg(&packages).arg(Path::new(ROOT).join("tests/embed/host_packages.c")).arg("-I").arg(&bindings).arg("-L").arg(&lib_dir).arg("-lvoltvm").arg(format!("-Wl,-rpath,{}", lib_dir.display())).output().unwrap(), "compiling host_packages.c");
+    assert_eq!(ok(Command::new(&packages).arg(&std_dir).output().unwrap(), "host_packages"), PACKAGES_OUT);
     // Python, through the generated module (which loads the library without RTLD_GLOBAL)
     if Command::new("python3").arg("--version").output().is_ok_and(|o| o.status.success()) {
         let out = ok(Command::new("python3").arg(Path::new(ROOT).join("tests/embed/host.py")).arg(&std_dir).env("PYTHONPATH", &bindings).env("VOLT_VOLTVM_LIB", lib_dir.join(format!("{}voltvm.{}", std::env::consts::DLL_PREFIX, std::env::consts::DLL_EXTENSION))).output().unwrap(), "host.py");

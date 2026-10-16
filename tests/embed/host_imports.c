@@ -1,11 +1,20 @@
 // A C program running a Volt script that imports a C header and a C++ one (tests/embed.rs runs it
-// with the compilers on PATH): their C and C++ is compiled for the script as it loads. A sandbox's
-// script can't import them.
+// with the compilers on PATH): their C and C++ is compiled for the script as it loads. In a sandbox
+// clang compiles it to LLVM bitcode the JIT runs, so it reaches only what the host allows; a C++
+// compiler that isn't clang is refused there.
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include "voltvm.h"
 
 static volt_str S(const char *s) { return (volt_str){ (const uint8_t *)s, strlen(s) }; }
+
+// the C++ library's symbols the header's code uses, as this platform names them
+#if defined(__linux__)
+#define ALLOW_CXX "_Znwm", "_ZdlPvm", "_ZSt20__throw_length_errorPKc", "_ZSt28__throw_bad_array_new_lengthv", "_ZSt17__throw_bad_allocv", "__gxx_personality_v0", "__cxa_begin_catch", "__cxa_end_catch", "__cxa_rethrow", "_Unwind_Resume", "_ZSt9terminatev", "__cxa_call_terminate", "vsnprintf", "memchr", "strlen",
+#else
+#define ALLOW_CXX
+#endif
 
 static void say_error(voltvm_volt_vm *vm, const char *what) {
     volt_str e = volt_vm_error(vm);
@@ -34,15 +43,40 @@ int main(int argc, char **argv) {
     }
     printf("run %lld\n", ((long long (*)(void))volt_vm_find(vm, S("run")))());
     volt_vm_free(vm);
+    // the sandbox: strlen and what the C++ needs (its library's allocation and errors), no more
     voltvm_volt_vm *box = volt_vm_new(std_dir);
-    if (volt_vm_allow(box, S("strlen")).error) {
-        say_error(box, "allow");
-        return 1;
+    const char *allow[] = { "strlen", ALLOW_CXX NULL };
+    for (int i = 0; allow[i]; i++) {
+        if (volt_vm_allow(box, S(allow[i])).error) {
+            say_error(box, "allow");
+            return 1;
+        }
     }
     if (volt_vm_load(box, S("imports.volt"), S(script)).error) {
         say_error(box, "box");
+        return 1;
+    }
+    printf("box run %lld\n", ((long long (*)(void))volt_vm_find(box, S("run")))());
+    const char *c = "use { \"string.h\" } as c;\nexport fn n() -> usize { return c::strlen(\"four\"); }\n";
+    if (volt_vm_load(box, S("box_c.volt"), S(c)).error) {
+        say_error(box, "box_c");
+        return 1;
+    }
+    printf("box strlen %zu\n", ((size_t (*)(void))volt_vm_find(box, S("n")))());
+    const char *pid = "use { \"unistd.h\" } as u;\nexport fn pid() -> i32 { return u::getpid(); }\n";
+    if (volt_vm_load(box, S("box_pid.volt"), S(pid)).error) {
+        say_error(box, "box_pid");
     } else {
-        printf("box: loaded\n");
+        printf("box_pid: loaded\n");
+    }
+    // gcc can't write LLVM bitcode
+    setenv("CXX", "g++", 1);
+    char cpp[512];
+    snprintf(cpp, sizeof cpp, "use { \"%s/vmhost.hpp\" } as hp;\nexport fn three() -> i32 { val v: i32[2] = { 1, 2 }; return hp::vm::total(v[0..2]); }\n", argv[2]);
+    if (volt_vm_load(box, S("box_gxx.volt"), S(cpp)).error) {
+        say_error(box, "box_gxx");
+    } else {
+        printf("box_gxx: loaded\n");
     }
     volt_vm_free(box);
     return 0;

@@ -5,7 +5,8 @@
 // process's C library; in a sandbox only the symbols the host allows, and what the runtime needs (not
 // the rest of what this library exports: its header pointers, the compiler's helpers, volt_vm). The
 // host looks up a script's export fns by name and calls them through the C ABI, and gives scripts
-// functions of its own, which they declare `extern "C"`.
+// functions of its own, which they declare `extern "C"`. Each script is the package its file names:
+// a later one reaches an earlier one's public names as util::f.
 use std::io;
 
 // why a VM call failed; volt_vm_error says what happened
@@ -29,6 +30,16 @@ export struct volt_vm {
     loads: u32 = 0;
     searching: bool = false;          // the process's symbols are reachable (set at the first load)
     runtime: std::map<str, bool> = {}; // the runtime's names, for a sandbox (runtime_names)
+    scripts: std::vec<vm_script> = {}; // what's loaded, each a package to the scripts after it
+}
+
+// a loaded script: the package its file names, its source (a later script is checked with it, and
+// compiled against what the JIT has of it) and the JIT's tracker of its code
+struct vm_script {
+    pkg: std::string = {};
+    name: std::string = {};
+    source: std::string = {};
+    rt: llvm::LLVMOrcOpaqueResourceTracker* = null;
 }
 
 // a VM whose scripts see the std package in std_dir ("" for none: scripts see only the host's
@@ -102,13 +113,44 @@ export fn volt_vm_define(v: volt_vm&, name: str, address: usize) -> vm_error!voi
 }
 
 // compile `source` (its errors name it `name`) and add it to the VM: its export fns can be found,
-// and its globals are set up. Scripts loaded later can't redefine an export fn
+// and its globals are set up. It's the package its file names (util.volt is util: a later script
+// calls util::f); loading that name again replaces it, unless a script loaded since uses it. Scripts
+// loaded later can't redefine an export fn
 export fn volt_vm_load(v: volt_vm&, name: str, source: str) -> vm_error!void {
     val j = v.jit ?? return v.no_jit();
+    val pkg = S(script_pkg(name));
+    if (pkg.as_str() == "std") {
+        return v.fail(vm_error::COMPILE, fmt2("can't load {}: a script is the package its file names, and {} is std's", S(name), copy pkg).as_str());
+    }
+    if (!can_name_pkg(pkg.as_str())) {
+        return v.fail(vm_error::COMPILE, fmt2("can't load {}: a script is the package its file names, and {} can't name a package", S(name), copy pkg).as_str());
+    }
+    // the script it replaces, which nothing loaded since may use
+    var old = v.scripts.len;
+    var users = S("");
+    var n_users: usize = 0;
+    for (i) in 0..v.scripts.len {
+        val sc = v.scripts.at(i);
+        if (sc.pkg.as_str() == pkg.as_str()) {
+            old = i;
+        } else if (names_pkg(sc.source.as_str(), pkg.as_str())) {
+            if (n_users > 0) {
+                users.append(", ");
+            }
+            users.append(sc.pkg.as_str());
+            n_users += 1;
+        }
+    }
+    if (old < v.scripts.len && n_users > 0) {
+        var msg = fmt2("can't load {} again: {} ", S(name), move users);
+        if (n_users == 1) {
+            msg.append("uses it");
+        } else {
+            msg.append("use it");
+        }
+        return v.fail(vm_error::COMPILE, msg.as_str());
+    }
     v.loads += 1;
-    // each script is a package of its own, so its non-export names never meet another script's
-    var pkg = S("script_");
-    pkg.append_uint(@cast<u64>(v.loads));
     var s: sources = {};
     var o: opts = { release: v.release, runtime: false, lib: null, line_info: false };
     if (v.std_dir.len() > 0) {
@@ -119,6 +161,17 @@ export fn volt_vm_load(v: volt_vm&, name: str, source: str) -> vm_error!void {
             put(&s.names, copy *f);
             put(&s.texts, move text);
             put(&s.units, { file: @cast<u32>(s.names.len - 1), pkg: "std" });
+        }
+    }
+    // the scripts before it, as packages: their declarations and generic code from their source,
+    // their other code and globals the JIT's (defined once, by their own load)
+    for (i) in 0..v.scripts.len {
+        if (i != old) {
+            val sc = v.scripts.at(i);
+            put(&s.names, copy sc.name);
+            put(&s.texts, copy sc.source);
+            put(&s.units, { file: @cast<u32>(s.names.len - 1), pkg: sc.pkg.as_str() });
+            put(&o.linked, sc.pkg.as_str());
         }
     }
     put(&s.names, S(name));
@@ -217,19 +270,78 @@ export fn volt_vm_load(v: volt_vm&, name: str, source: str) -> vm_error!void {
     val tsc = llvm::LLVMOrcCreateNewThreadSafeContextFromLLVMContext(g.ctx);
     val tsm = llvm::LLVMOrcCreateNewThreadSafeModule(g.m, tsc);
     llvm::LLVMOrcDisposeThreadSafeContext(tsc);
-    val ae = llvm::LLVMOrcLLJITAddLLVMIRModule(j, v.jd, tsm);
+    // its own tracker: a load that fails from here, or a script loaded again, takes its code out
+    val rt = llvm::LLVMOrcJITDylibCreateResourceTracker(v.jd);
+    if (old < v.scripts.len) {
+        drop_tracker(v.scripts.at(old).rt);
+        v.scripts.remove(old);
+    }
+    val ae = llvm::LLVMOrcLLJITAddLLVMIRModuleWithRT(j, rt, tsm);
     if (ae != null) {
+        drop_tracker(rt);
         return v.fail(vm_error::JIT, jit_error(ae).as_str());
     }
     // compile it now (looking up any of its symbols compiles the module), so a symbol that isn't
     // there or isn't allowed is this load's error; then set up its globals, when it has any
-    if (!has_init) {
-        return v.link_check(&*chk);
+    var probe = S(first_export(&*chk));
+    if (has_init) {
+        probe = copy init;
     }
-    val addr = v.lookup(init.as_str()) ?? return vm_error::JIT;
-    val run = @cast<extern "C" fn() -> void>(@cast<void*>(@cast<usize>(addr)));
-    run();
+    if (probe.len() > 0) {
+        val addr = v.lookup(probe.as_str());
+        if (addr == null) {
+            drop_tracker(rt);
+            return vm_error::JIT;
+        }
+        if (has_init) {
+            val run = @cast<extern "C" fn() -> void>(@cast<void*>(@cast<usize>(addr ?? 0)));
+            run();
+        }
+    }
+    put(&v.scripts, { pkg: copy pkg, name: S(name), source: S(source), rt: rt });
     return;
+}
+
+// the package a load's name makes: its file's name without directories or extension
+fn script_pkg(name: str) -> str {
+    var start: usize = 0;
+    for (i) in 0..name.len {
+        if (name[i] == '/' || name[i] == '\\') {
+            start = i + 1;
+        }
+    }
+    var end = name.len;
+    var i = name.len;
+    while (i > start) {
+        i -= 1;
+        if (name[i] == '.') {
+            end = i;
+            break;
+        }
+    }
+    return name[start..end];
+}
+
+// can n be a package's name (a Volt identifier, not a keyword)?
+fn can_name_pkg(n: str) -> bool {
+    if (n.len == 0 || is_digit(n[0]) || is_keyword(n)) {
+        return false;
+    }
+    for (i) in 0..n.len {
+        if (!(is_alpha(n[i]) || is_digit(n[i]) || n[i] == '_')) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// a load's code and symbols, out of the JIT
+fn drop_tracker(rt: llvm::LLVMOrcOpaqueResourceTracker*) -> void {
+    val e = llvm::LLVMOrcResourceTrackerRemove(rt);
+    if (e != null) {
+        llvm::LLVMConsumeError(e);
+    }
+    llvm::LLVMOrcReleaseResourceTracker(rt);
 }
 
 // a script's native code (its imports' C: their headers' functions' pointers, a C unit of another
@@ -399,6 +511,9 @@ export fn volt_vm_error(v: volt_vm&) -> str {
 
 attach fn delete(this: volt_vm&) -> void {
     val j = this.jit ?? return;
+    for (sc&) in this.scripts.items() {
+        llvm::LLVMOrcReleaseResourceTracker(sc.rt);
+    }
     llvm::LLVMConsumeError(llvm::LLVMOrcDisposeLLJIT(j));
     this.jit = null;
 }
@@ -478,16 +593,15 @@ attach fn fail(this: volt_vm&, e: vm_error, msg: str) -> vm_error!void {
     return e;
 }
 
-// compile every export fn of a load that set up no globals, so a symbol that isn't there (or isn't
-// allowed) is reported by the load, not by the first call
-attach fn link_check(this: volt_vm&, chk: checker&) -> vm_error!void {
+// a symbol of a load's own ("" when it has none), whose lookup compiles its module: a symbol that
+// isn't there (or isn't allowed) is reported by the load, not by the first call
+fn first_export(chk: checker&) -> str {
     for (f&) in chk.ir.fns.items() {
         if (f.body != null && f.used && f.link == linkage::EXPORTED && f.name != "main") {
-            this.lookup(f.name) ?? return vm_error::JIT;
-            return; // one symbol compiles the whole module
+            return f.name;
         }
     }
-    return;
+    return "";
 }
 
 // what a lookup gives its callback's context
