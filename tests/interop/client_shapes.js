@@ -126,6 +126,17 @@ function lists() {
     for (const x of opened) {
         x.close();
     }
+    // slices Volt keeps, given back as lists of copies: freed here, Volt's still there to scribble on
+    const r = m.roster.open("ann", "bo");
+    const rn = r.names();
+    const rb = r.badges();
+    const seen = [rn[0], rn[1], rb[0].name(), rb[1].name()];
+    for (const x of rb) {
+        x.close();
+    }
+    r.scribble();
+    console.log("roster", ...seen, ...r.names());
+    r.close();
     const sq = m.squares_upto(4);
     console.log("squares", sq.length, sq[3], "sum", m.sum_all(sq));
     const parts = ["a", "b", "c"];

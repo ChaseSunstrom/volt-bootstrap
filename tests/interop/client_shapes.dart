@@ -103,6 +103,18 @@ void lists() {
   for (final x in opened) {
     x.close();
   }
+  // slices Volt keeps, given back as lists of copies: freed here, Volt's still there to scribble on
+  final r = roster.open('ann', 'bo');
+  final rn = r.names();
+  final rb = r.badges();
+  final seen = '${rn[0]} ${rn[1]} ${rb[0].name()} ${rb[1].name()}';
+  for (final x in rb) {
+    x.close();
+  }
+  r.scribble();
+  final rn2 = r.names();
+  print('roster $seen ${rn2[0]} ${rn2[1]}');
+  r.close();
   final sq = squares_upto(4);
   print('squares ${sq.length} ${sq[3]} sum ${sum_all(sq)}');
   final parts = ['a', 'b', 'c'];

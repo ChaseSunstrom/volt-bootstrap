@@ -98,6 +98,18 @@ public class ClientShapes {
         for (var x : opened) {
             x.close();
         }
+        // slices Volt keeps, given back as lists of copies: freed here, Volt's still there to scribble on
+        try (var r = shapelib.roster.open("ann", "bo")) {
+            String[] rn = r.names();
+            var rb = r.badges();
+            System.out.print("roster " + rn[0] + " " + rn[1] + " " + rb[0].name() + " " + rb[1].name());
+            for (var x : rb) {
+                x.close();
+            }
+            r.scribble();
+            rn = r.names();
+            System.out.println(" " + rn[0] + " " + rn[1]);
+        }
         long[] sq = shapelib.squares_upto(4);
         System.out.println("squares " + sq.length + " " + sq[3] + " sum " + shapelib.sum_all(sq));
         String[] parts = {"a", "b", "c"};

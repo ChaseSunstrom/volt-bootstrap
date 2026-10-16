@@ -125,6 +125,22 @@ static void lists(void) {
         account_free(opened.ptr[i]);
     }
     volt_list_free(opened);
+    // slices Volt keeps, given back as lists of copies: freed here, Volt's still there to scribble on
+    shapelib_roster *r = roster_open(S("ann"), S("bo"));
+    shapelib_list_text rn = roster_names(r);
+    printf("roster %.*s %.*s", TEXT(rn.ptr[0]), TEXT(rn.ptr[1]));
+    volt_list_free(rn);
+    shapelib_list_badge rb = roster_badges(r);
+    printf(" %.*s %.*s", TEXT(badge_name(rb.ptr[0])), TEXT(badge_name(rb.ptr[1])));
+    for (size_t i = 0; i < rb.len; i++) {
+        badge_free(rb.ptr[i]);
+    }
+    volt_list_free(rb);
+    roster_scribble(r);
+    rn = roster_names(r);
+    printf(" %.*s %.*s\n", TEXT(rn.ptr[0]), TEXT(rn.ptr[1]));
+    volt_list_free(rn);
+    roster_free(r);
     shapelib_list_i64 sq = squares_upto(4);
     shapelib_slice_i64 sqs = {sq.ptr, sq.len};
     printf("squares %zu %lld sum %lld\n", sq.len, (long long)sq.ptr[3], (long long)sum_all(sqs));

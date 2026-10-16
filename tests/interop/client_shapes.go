@@ -79,6 +79,17 @@ func lists() {
 	for _, x := range opened {
 		x.Close()
 	}
+	// slices Volt keeps, given back as lists of copies: freed here, Volt's still there to scribble on
+	r := shapelib.RosterOpen("ann", "bo")
+	rn, rb := r.Names(), r.Badges()
+	fmt.Print("roster ", rn[0], " ", rn[1], " ", rb[0].Name(), " ", rb[1].Name())
+	for _, x := range rb {
+		x.Close()
+	}
+	r.Scribble()
+	rn = r.Names()
+	fmt.Println("", rn[0], rn[1])
+	r.Close()
 	sq := shapelib.SquaresUpto(4)
 	fmt.Println("squares", len(sq), sq[3], "sum", shapelib.SumAll(sq))
 	parts := []string{"a", "b", "c"}
