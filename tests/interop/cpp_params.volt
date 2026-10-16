@@ -117,6 +117,17 @@ fn main() -> void {
     checked_at(&rx);
     rx = -1;
     checked_at(&rx);
+    // a declared template's S& with S an i32& (its a0: S, so &a0 a reference to the reference): C++
+    // changes the Volt variable
+    var rt: i32 = 21;
+    cpp::pr::rp::twice_ref(&rt);
+    // a method's pointer argument beside its receiver: an & method, an operator, an && one
+    var tz: i32 = 1;
+    val ty = cpp::pr::rp::Tally<i32>::new(3);
+    val t1 = ty.add(&tz);
+    val t2 = ty.op_add(&tz);
+    val t3 = ty.spend(&tz);
+    std::println("twice {} tally {} {} {} {}", rt, t1, t2, t3, tz);
 }
 // a Volt reference parameter read as its address, in a try_ form
 fn checked_at(r: i32&) -> void {

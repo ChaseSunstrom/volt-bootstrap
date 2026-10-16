@@ -218,6 +218,17 @@ template <class T, class... A> T checked(T *p, A...) {
 }
 template <class S> int size_of(S &) { return (int)sizeof(S); }
 template <class S> int size_by(S) { return (int)sizeof(S); }
+template <class S> void twice_ref(S &s) { s *= 2; }
 struct pt { int x; int y; };
+// a class template held by handle, its members worked out per use: a pointer argument beside the
+// receiver, of an & method, an && one (which consumes the handle) and an operator
+template <class T> class Tally {
+    T v_;
+  public:
+    Tally(T v) : v_(v) {}
+    T add(T *p) { *p += v_; return *p; }
+    T spend(T *p) && { *p += 2 * v_; return *p; }
+    T operator+(T *p) const { return v_ + *p; }
+};
 }
 }
