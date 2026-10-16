@@ -504,6 +504,7 @@ void *volt_rt_malloc(size_t n);
 void volt_rt_free(void *p);
 void *volt_rt_realloc(void *p, size_t n);
 extern size_t volt_live_allocs;
+void volt_rt_quarantine_check(void);
 extern int volt_argc;
 extern char **volt_argv;
 int volt_rt_argc(void);

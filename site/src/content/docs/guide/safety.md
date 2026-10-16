@@ -65,6 +65,15 @@ writing a number's digits.
 `--leak-check` makes a debug build count allocations: if any is still live when the program ends,
 it exits with code 102.
 
+## Freed memory
+
+A debug build's allocator fills a freed block with `0xDD` bytes and keeps it from being reused
+while it is among the last 65536 blocks or 64 MiB freed, so a view into storage that moved or was
+freed reads `0xDD` bytes, not some newer value's. When a block leaves that quarantine its bytes are
+checked: one written through a stale view panics with `write after free` (exit 101), and
+`--leak-check` checks the blocks still held when the program ends. A block bigger than the whole
+quarantine is freed at once. Release builds free memory straight away and check none of this.
+
 ## What the compiler checks
 
 Some mistakes never compile: using a moved value, moving inside a loop without a new value before
