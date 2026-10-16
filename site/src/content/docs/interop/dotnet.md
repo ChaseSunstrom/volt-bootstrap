@@ -41,11 +41,17 @@ fn main() -> void {
 | `string` | `str` in, `std::string` out (`null` is `""`) |
 | `T[]` of those and of `string` | `T[..]` in (what .NET changes in it comes back), `std::vec<T>` out |
 | `int?` and the like | `i32?` |
+| a `ref` parameter of a number, `bool`, struct or class | `T&`: what .NET writes comes back (a class's handle holds the object .NET pointed it at) |
+| `out` parameters | results: `bool TryParse(string s, out int v)` is `(bool, v: i32)`, a `void` method's one `out` its value |
+| a delegate parameter (`Func<>`, `Action<>`, a named one) of numbers, `bool`s, `char`s and `string`s | a Volt fn value (`\|\| (x: i32) -> i32 { ... }`), which .NET may keep, call later or call on another thread; it's freed when .NET collects the delegate (one still alive when the program ends is never freed: .NET runs no finalizers at exit) |
+| a delegate result | a value with `call(...)` |
+| a generic method (`T Max<T>(T a, T b)`) or class (`Box<T>`) | a Volt generic: `Gen::Max<i32>(3, 9)`, `geo::Box<i32>::new(3)`; each instance the program uses is built, and one the C# compiler rejects (a type that doesn't meet a constraint) is an error at the call with its reason. A type argument is a number, `std::string` or one of the import's types |
 
 An exception stops the program with its type and message, as a Volt panic does (.NET declares no
-exceptions to make an error of). Generic types and methods, delegates, `ref` and `out` parameters
-are left out, listed in a comment of the generated declarations (`VOLT_SHOW_IMPORT=1 voltc check
-main.volt` prints them). There each Volt fn has the declaration it calls above it, in C#'s
+exceptions to make an error of). What the table doesn't cover is left out — a `ref` of text or of
+an enum, a generic method in a generic class, a delegate with `ref` or `out` parameters, a
+multi-dimensional array — listed in a comment of the generated declarations (`VOLT_SHOW_IMPORT=1
+voltc check main.volt` prints them). There each Volt fn has the declaration it calls above it, in C#'s
 spelling (`// .NET: public double Norm()`), which an editor's hover shows. bolt needs the .NET SDK:
 `$DOTNET`, else `$DOTNET_ROOT/dotnet`, else `dotnet` on the PATH; the program links its `libhostfxr`
 with an rpath, and an assembly's own dependencies are found next to it.

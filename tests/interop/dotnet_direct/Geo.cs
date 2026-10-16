@@ -78,10 +78,5 @@ namespace Geo {
         public static char First(string s) => s[0];
         public static bool Even(int x) => x % 2 == 0;
         public static int Divide(int a, int b) => a / b;
-
-        // Volt can't call these: they're listed in a comment of what bolt writes
-        public static T Ident<T>(T x) => x;
-        public static void Apply(Func<int, int> f) { }
-        public static bool TryParse(string s, out int v) => int.TryParse(s, out v);
     }
 }

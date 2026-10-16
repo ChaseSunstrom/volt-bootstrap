@@ -88,10 +88,11 @@ attach fn rust_made(this: checker&, d: u32, base: str, path: str, args: std::vec
     }
     val out = this.import_outs.get(this.dl(d).item.span.file) ?? return null;
     if (this.opts.rust_again) {
-        // bolt was asked: rustc's, zig's or go's reason, when it rejected the instance
+        // bolt was asked: rustc's, zig's, go's or the C# compiler's reason, when it rejected the instance
         // (OUT/instances.failed)
         val zig = starts_with(this.files.at(@cast<usize>(this.dl(d).item.span.file)).name, "<use zig ");
         val go = starts_with(this.files.at(@cast<usize>(this.dl(d).item.span.file)).name, "<use go ");
+        val dotnet = starts_with(this.files.at(@cast<usize>(this.dl(d).item.span.file)).name, "<use dotnet ");
         var what = S(path);
         what.push('<');
         what.append(line.as_str()[path.len + 1..line.len()].replace("\t", ", ").as_str());
@@ -108,6 +109,9 @@ attach fn rust_made(this: checker&, d: u32, base: str, path: str, args: std::vec
                 }
                 if (go) {
                     return with_help(fail(span, fmt2("{}: Go doesn't take these types: {}", move what, S(l[prefix.len()..l.len]))), S("each instance a program calls is built by go, which checks the fn's constraints for its types"));
+                }
+                if (dotnet) {
+                    return with_help(fail(span, fmt2("{}: .NET doesn't take these types: {}", move what, S(l[prefix.len()..l.len]))), S("each instance a program calls is built by the C# compiler, which checks the method's constraints for its types"));
                 }
                 return with_help(fail(span, fmt2("{}: Rust doesn't take these types: {}", move what, S(l[prefix.len()..l.len]))), S("each instance a program calls is built by rustc, which checks the fn's bounds for its types"));
             }
