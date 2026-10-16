@@ -34,8 +34,13 @@ fn bump() -> i32 {
 // not) leaves it so
 fn inc(x: i32) -> i32 { return x + 1; }
 fn seven() -> i32 { return 7; }
-// (in C++'s words, as a call worked out per use reads the pointer's type back: size_t, const char *)
-extern "C" fn snprintf(buf: u8*, n: u64, fmt: cstr?, ...) -> i32;
+extern "C" fn snprintf(buf: u8*, n: usize, fmt: cstr, ...) -> i32;
+extern "C" fn strlen(s: cstr) -> usize;
+fn text_len(s: cstr) -> i32 { return @cast<i32>(strlen(s)); }
+fn opt_len(s: cstr?) -> i32 {
+    val t = s ?? return -1;
+    return @cast<i32>(strlen(t)) * 10;
+}
 fn then_ok(k: i32) -> i32 {
     val z = cpp::pr::pu::nonneg(k);
     val n = @cpp<cpp::cpp_error!i32>("pr::pu::nonneg(1)") catch |e| { return 98; };
@@ -90,6 +95,11 @@ fn main() -> void {
     // calls worked out per use
     std::println("fns {} {} {} {} {}", @cpp<i32>("{0}()", seven), @cpp<i32>("{&0}()", seven), cpp::pr::call0(seven), @cpp<i32>("pr::callv({0})", snprintf), cpp::pr::callv(snprintf));
     show("fns caught", @cpp<cpp::cpp_error!i32>("pr::callv({0})", snprintf));
-    // a declared function's variadic function pointer parameter
+    // a declared function's variadic function pointer parameter (size_t, const char *: snprintf's
+    // usize and cstr)
     std::println("fmt {}", cpp::pr::apply_fmt(snprintf, 345));
+    // per use, a fn's cstr and cstr? both cross as const char *; an operator's operand is a function
+    // pointer too
+    val tally = cpp::pr::rp::Tally<i32>::new(3);
+    std::println("text {} op {}", cpp::pr::callc(text_len, opt_len), tally.op_bitor(inc));
 }

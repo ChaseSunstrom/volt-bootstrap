@@ -1425,6 +1425,12 @@ attach fn put_ty(this: checker&, s: std::string&, id: u32) -> void {
         .FN_PTR(ps&, r, va) => {
             s.append("extern \"C\" fn(");
             this.put_tys(s, ps);
+            if (va) {
+                if (ps.len > 0) {
+                    s.append(", ");
+                }
+                s.append("...");
+            }
             s.append(") -> ");
             this.put_ty(s, r);
         },

@@ -1852,7 +1852,7 @@ attach fn param(this: cpp_gen&, t: clang::CXType, name: str, i: usize, tparams: 
     if (pk.kind == clang::CXType_Pointer) {
         val pt = clang::clang_getPointeeType(pk);
         if (pt.kind == clang::CXType_FunctionProto) {
-            return this.fn_ptr_param(pt, name, slot.as_str(), canon(t));
+            return this.fn_ptr_param(written_pointee(t) ?? pt, name, slot.as_str(), canon(t));
         }
         val phc = this.handle_of(pt);
         if (phc) {
@@ -1924,9 +1924,10 @@ attach fn param(this: cpp_gen&, t: clang::CXType, name: str, i: usize, tparams: 
 // fn through a cast to its own pointer type (C and C++ function types differ in the standard, but
 // every compiler Volt builds with gives them one calling convention). A, R: numbers, bool, void or
 // pointers, which C and C++ lay out alike; R(*)(A..., ...): a Volt extern "C" fn(A..., ...) -> R
+// (not R(*)(...), which C before C23 has no type for). f as written, so its size_t is a usize
 attach fn fn_ptr_param(this: cpp_gen&, f: clang::CXType, name: str, slot: str, cty: std::string) -> cpp_arg? {
     val n = clang::clang_getNumArgTypes(f);
-    if (n < 0) {
+    if (n < 0 || (n == 0 && clang::clang_isFunctionTypeVariadic(f) != 0)) {
         return null;
     }
     var ps: std::string = {};
@@ -1947,14 +1948,65 @@ attach fn fn_ptr_param(this: cpp_gen&, f: clang::CXType, name: str, slot: str, c
     return { vty: fmt2("extern \"C\" fn({}) -> {}", move ps, copy r), pass: fmt("@cast<void*>({})", S(name)), cpp: fmt2("(VOLT_ID({}))({})", move cty, S(slot)) };
 }
 
-// the Volt type of a type in a function pointer's signature (none for a class, enum or reference)
+// the Volt type of a type in a function pointer's signature (none for a class, enum or reference),
+// as a Volt extern "C" fn declares it: a size_t a usize (ptrdiff_t, ssize_t an isize), a const
+// char * a cstr (a cstr? as volt_cstr_opt, a call worked out per use's spelling of a Volt cstr?:
+// libclang shows no _Nullable)
 attach fn c_abi_type(this: cpp_gen&, t: clang::CXType) -> std::string? {
     val none: std::vec<str> = {};
-    val k = clang::clang_getCanonicalType(t).kind;
+    val ct = clang::clang_getCanonicalType(t);
+    val k = ct.kind;
     if (k == clang::CXType_Record || k == clang::CXType_Enum || k == clang::CXType_LValueReference || k == clang::CXType_RValueReference) {
         return null;
     }
+    var x = t;
+    for (i) in 0..16 {
+        if (x.kind == clang::CXType_Elaborated) {
+            x = clang::clang_Type_getNamedType(x);
+            continue;
+        }
+        if (x.kind != clang::CXType_Typedef) {
+            break;
+        }
+        val d = clang::clang_getTypeDeclaration(x);
+        val n = cursor_name(d);
+        if (n.as_str() == "size_t") {
+            return S("usize");
+        }
+        if (n.as_str() == "ptrdiff_t" || n.as_str() == "ssize_t") {
+            return S("isize");
+        }
+        if (n.as_str() == "volt_cstr_opt") {
+            return S("cstr?");
+        }
+        x = clang::clang_getTypedefDeclUnderlyingType(d);
+    }
+    if (k == clang::CXType_Pointer) {
+        val pt = clang::clang_getPointeeType(ct);
+        if ((pt.kind == clang::CXType_Char_S || pt.kind == clang::CXType_Char_U || pt.kind == clang::CXType_SChar) && clang::clang_isConstQualifiedType(pt) != 0) {
+            return S("cstr");
+        }
+    }
     return this.vtype(t, &none);
+}
+
+// the function type a function pointer type t points to as written (its parameters' typedefs kept),
+// through aliases; none when libclang shows no pointer
+fn written_pointee(t: clang::CXType) -> clang::CXType? {
+    var x = t;
+    for (i) in 0..16 {
+        if (x.kind == clang::CXType_Pointer) {
+            return clang::clang_getPointeeType(x);
+        }
+        if (x.kind == clang::CXType_Elaborated) {
+            x = clang::clang_Type_getNamedType(x);
+        } else if (x.kind == clang::CXType_Typedef) {
+            x = clang::clang_getTypedefDeclUnderlyingType(clang::clang_getTypeDeclaration(x));
+        } else {
+            return null;
+        }
+    }
+    return null;
 }
 
 // how a C++ result comes back: as @cpp's value, or as a std::string (std::vector) the wrapper
@@ -6425,7 +6477,7 @@ struct cpp_import_ctx {
 
 // what a call per use declares in C++ besides the headers: the types an argument may come as, and
 // stand-ins for the arguments (an lvalue, or an rvalue for a class moved in) in any standard
-val CPP_PROBE_HEAD: str = "\n#include <cstddef>\n#include <functional>\n#include <stdint.h>\n#include <string>\n#include <utility>\n#include <vector>\n#if __cplusplus >= 201103L\n#include <cstdint>\n#endif\n#if __cplusplus >= 201703L\n#include <string_view>\n#endif\ntemplate <class T> T &volt_lv();\ntemplate <class T> T volt_rv();\n#if __cplusplus >= 201103L\n#define VOLT_MOVE(...) std::move(__VA_ARGS__)\n#else\n#define VOLT_MOVE(...) (__VA_ARGS__)\n#endif\n#include <iterator>\n#include <new>\n#if __cplusplus >= 201103L\n#include <type_traits>\n#endif\n\n#if __cplusplus >= 201103L\n// a range Volt loops over (for (x) in r): what begin(r) and end(r) give (end's may be a sentinel), and\n// *it++ by value\nnamespace volt_rng {\nusing std::begin;\nusing std::end;\ntemplate <class R>\nauto b(R &r) -> decltype(begin(r)) {\n    return begin(r);\n}\ntemplate <class R>\nauto e(R &r) -> decltype(end(r)) {\n    return end(r);\n}\n}\ntemplate <class R>\nstruct volt_range_of {\n    typedef decltype(volt_rng::b(std::declval<R &>())) it;\n    typedef decltype(volt_rng::e(std::declval<R &>())) end;\n    typedef typename std::decay<decltype(*std::declval<it &>())>::type elem;\n};\n#else\n// before C++11 (no decltype or std::begin): R::iterator, or R::const_iterator for a const R, from\n// r.begin() and r.end(), and the element its value_type\ntemplate <class R>\nstruct volt_range_of {\n    typedef typename R::iterator it;\n    typedef typename R::iterator end;\n    typedef typename std::iterator_traits<it>::value_type elem;\n};\ntemplate <class R>\nstruct volt_range_of<const R> {\n    typedef typename R::const_iterator it;\n    typedef typename R::const_iterator end;\n    typedef typename std::iterator_traits<it>::value_type elem;\n};\nnamespace volt_rng {\ntemplate <class R>\ntypename volt_range_of<R>::it b(R &r) {\n    return r.begin();\n}\ntemplate <class R>\ntypename volt_range_of<R>::end e(R &r) {\n    return r.end();\n}\n}\n#endif\ntemplate <class R>\nstatic void volt_range_start(R &r, void *it, void *end) {\n    new (it) typename volt_range_of<R>::it(volt_rng::b(r));\n    new (end) typename volt_range_of<R>::end(volt_rng::e(r));\n}\ntemplate <class R>\nstatic bool volt_range_done(void *it, void *end) {\n    return *(typename volt_range_of<R>::it *)it == *(typename volt_range_of<R>::end *)end;\n}\ntemplate <class R>\nstatic typename volt_range_of<R>::elem volt_range_take(void *it) {\n    typename volt_range_of<R>::it &i = *(typename volt_range_of<R>::it *)it;\n    typename volt_range_of<R>::elem v = *i;\n    ++i;\n    return v;\n}\n// the same with the iterators on C++'s heap, for those Volt can't hold in its own words (not\n// trivially copyable or destructible, or aligned past 8): made by volt_range_open, freed by\n// volt_range_close\ntemplate <class R>\nstruct volt_range_box {\n    typename volt_range_of<R>::it i;\n    typename volt_range_of<R>::end e;\n    volt_range_box(R &r) : i(volt_rng::b(r)), e(volt_rng::e(r)) {}\n};\ntemplate <class R>\nstatic void *volt_range_open(R &r) {\n    return new volt_range_box<R>(r);\n}\ntemplate <class R>\nstatic bool volt_range_done_box(void *b) {\n    return ((volt_range_box<R> *)b)->i == ((volt_range_box<R> *)b)->e;\n}\ntemplate <class R>\nstatic typename volt_range_of<R>::elem volt_range_take_box(void *b) {\n    return volt_range_take<R>(&((volt_range_box<R> *)b)->i);\n}\ntemplate <class R>\nstatic void volt_range_close(void *b) {\n    delete (volt_range_box<R> *)b;\n}\n";
+val CPP_PROBE_HEAD: str = "\n#include <cstddef>\n#include <functional>\n#include <stdint.h>\n#include <string>\n#include <utility>\n#include <vector>\n#if __cplusplus >= 201103L\n#include <cstdint>\n#endif\n#if __cplusplus >= 201703L\n#include <string_view>\n#endif\ntemplate <class T> T &volt_lv();\ntemplate <class T> T volt_rv();\ntypedef const char *volt_cstr_opt;\n#if __cplusplus >= 201103L\n#define VOLT_MOVE(...) std::move(__VA_ARGS__)\n#else\n#define VOLT_MOVE(...) (__VA_ARGS__)\n#endif\n#include <iterator>\n#include <new>\n#if __cplusplus >= 201103L\n#include <type_traits>\n#endif\n\n#if __cplusplus >= 201103L\n// a range Volt loops over (for (x) in r): what begin(r) and end(r) give (end's may be a sentinel), and\n// *it++ by value\nnamespace volt_rng {\nusing std::begin;\nusing std::end;\ntemplate <class R>\nauto b(R &r) -> decltype(begin(r)) {\n    return begin(r);\n}\ntemplate <class R>\nauto e(R &r) -> decltype(end(r)) {\n    return end(r);\n}\n}\ntemplate <class R>\nstruct volt_range_of {\n    typedef decltype(volt_rng::b(std::declval<R &>())) it;\n    typedef decltype(volt_rng::e(std::declval<R &>())) end;\n    typedef typename std::decay<decltype(*std::declval<it &>())>::type elem;\n};\n#else\n// before C++11 (no decltype or std::begin): R::iterator, or R::const_iterator for a const R, from\n// r.begin() and r.end(), and the element its value_type\ntemplate <class R>\nstruct volt_range_of {\n    typedef typename R::iterator it;\n    typedef typename R::iterator end;\n    typedef typename std::iterator_traits<it>::value_type elem;\n};\ntemplate <class R>\nstruct volt_range_of<const R> {\n    typedef typename R::const_iterator it;\n    typedef typename R::const_iterator end;\n    typedef typename std::iterator_traits<it>::value_type elem;\n};\nnamespace volt_rng {\ntemplate <class R>\ntypename volt_range_of<R>::it b(R &r) {\n    return r.begin();\n}\ntemplate <class R>\ntypename volt_range_of<R>::end e(R &r) {\n    return r.end();\n}\n}\n#endif\ntemplate <class R>\nstatic void volt_range_start(R &r, void *it, void *end) {\n    new (it) typename volt_range_of<R>::it(volt_rng::b(r));\n    new (end) typename volt_range_of<R>::end(volt_rng::e(r));\n}\ntemplate <class R>\nstatic bool volt_range_done(void *it, void *end) {\n    return *(typename volt_range_of<R>::it *)it == *(typename volt_range_of<R>::end *)end;\n}\ntemplate <class R>\nstatic typename volt_range_of<R>::elem volt_range_take(void *it) {\n    typename volt_range_of<R>::it &i = *(typename volt_range_of<R>::it *)it;\n    typename volt_range_of<R>::elem v = *i;\n    ++i;\n    return v;\n}\n// the same with the iterators on C++'s heap, for those Volt can't hold in its own words (not\n// trivially copyable or destructible, or aligned past 8): made by volt_range_open, freed by\n// volt_range_close\ntemplate <class R>\nstruct volt_range_box {\n    typename volt_range_of<R>::it i;\n    typename volt_range_of<R>::end e;\n    volt_range_box(R &r) : i(volt_rng::b(r)), e(volt_rng::e(r)) {}\n};\ntemplate <class R>\nstatic void *volt_range_open(R &r) {\n    return new volt_range_box<R>(r);\n}\ntemplate <class R>\nstatic bool volt_range_done_box(void *b) {\n    return ((volt_range_box<R> *)b)->i == ((volt_range_box<R> *)b)->e;\n}\ntemplate <class R>\nstatic typename volt_range_of<R>::elem volt_range_take_box(void *b) {\n    return volt_range_take<R>(&((volt_range_box<R> *)b)->i);\n}\ntemplate <class R>\nstatic void volt_range_close(void *b) {\n    delete (volt_range_box<R> *)b;\n}\n";
 // form_of's probe: a tuple-like's and a variant-like's size and elements, by the traits C++'s own
 // library declares for them (void when a type has none)
 val CPP_FORM_HEAD: str = "\n#if __cplusplus >= 201703L && defined(__has_include)\n#if __has_include(<variant>)\n#include <variant>\n#define VOLT_FORM_VARIANT 1\n#endif\n#endif\nnamespace volt_form {\ntemplate <bool B> struct when {};\ntemplate <> struct when<true> { typedef void type; };\ntemplate <class U, class = void> struct tsize { enum { v = 0 }; };\ntemplate <__SIZE_TYPE__ I, class U, class = void> struct telem { typedef void type; };\ntemplate <class U, class = void> struct vsize { enum { v = 0 }; };\ntemplate <__SIZE_TYPE__ I, class U, class = void> struct valt { typedef void type; };\n#if __cplusplus >= 201103L\ntemplate <class U> struct tsize<U, typename when<(std::tuple_size<U>::value > 0)>::type> { enum { v = std::tuple_size<U>::value }; };\ntemplate <__SIZE_TYPE__ I, class U> struct telem<I, U, typename when<(std::tuple_size<U>::value > I)>::type> { typedef typename std::tuple_element<I, U>::type type; };\n#endif\n#ifdef VOLT_FORM_VARIANT\ntemplate <class U> struct vsize<U, typename when<(std::variant_size<U>::value > 0)>::type> { enum { v = std::variant_size<U>::value }; };\ntemplate <__SIZE_TYPE__ I, class U> struct valt<I, U, typename when<(std::variant_size<U>::value > I)>::type> { typedef typename std::variant_alternative<I, U>::type type; };\n#endif\n}\n";
@@ -6610,8 +6662,10 @@ attach fn cpp_instance_as(this: checker&, k: usize, expr: str, types: std::vec<u
     if (tried) {
         key.append("try|");
     }
-    for (p&) in ptys.items() {
-        key.append(p.as_str());
+    for (j) in 0..ptys.len {
+        key.append(ptys.at(j).as_str());
+        // (a fn's cstr and cstr? spell alike there: the probe's declarator tells them apart)
+        key.append((this.cpp_fn_spell(*types.at(j), "", true) ?? S("")).as_str());
         key.push(',');
     }
     val have = this.cpp_dyn.get(key.as_str());
@@ -6626,7 +6680,13 @@ attach fn cpp_instance_as(this: checker&, k: usize, expr: str, types: std::vec<u
         if (i > 0) {
             params.append(", ");
         }
-        params.append(fmt2("{} a{}", copy *ptys.at(i), unum(@cast<u64>(i))).as_str());
+        // a function pointer as a declarator, so its parameters keep their typedefs (size_t)
+        val fd = this.cpp_fn_spell(*types.at(i), fmt("(*a{})", unum(@cast<u64>(i))).as_str(), true);
+        if (fd) {
+            params.append(fd.as_str());
+        } else {
+            params.append(fmt2("{} a{}", copy *ptys.at(i), unum(@cast<u64>(i))).as_str());
+        }
     }
     var probe_expr: std::string = {};
     var unit_expr: std::string = {}; // the same in the wrappers' unit (a lambda's type is decltype of it)
@@ -7120,7 +7180,7 @@ attach fn cpp_use_call(this: checker&, k: usize, callee: str, macro: bool, tried
             if (!ends_with(expr.as_str(), "(")) {
                 // a whole expression: its operands are the holes already
                 for (j) in 0..args.len {
-                    val v = try this.expr(args.at(j), null);
+                    val v = try this.cpp_arg_value(args.at(j));
                     put(&types, v.ty);
                     put(&pre, v);
                 }
@@ -7295,20 +7355,21 @@ attach fn no_c_fn_form(this: checker&, t: u32) -> bool {
 }
 
 // a Volt function pointer type t as a C++ declaration of name: `R name(P...)` (name "(*)": the
-// pointer type itself; none for one fn_ptr_unformed refuses)
-attach fn cpp_fn_spell(this: checker&, t: u32, name: str) -> std::string? {
+// pointer type itself; none for one fn_ptr_unformed refuses). probe: for libclang's probe alone, a
+// cstr? as CPP_PROBE_HEAD's volt_cstr_opt (c_abi_type reads it back as one)
+attach fn cpp_fn_spell(this: checker&, t: u32, name: str, probe: bool) -> std::string? {
     if (this.fn_ptr_unformed(t) != null) {
         return null;
     }
     match (*this.t.get(t)) {
         .FN_PTR(ps&, ret, va) => {
-            var s = this.cpp_spell(ret) ?? return null;
+            var s = this.fn_part_spell(ret, probe) ?? return null;
             s.append(fmt(" {}(", S(name)).as_str());
             for (i) in 0..ps.len {
                 if (i > 0) {
                     s.append(", ");
                 }
-                s.append((this.cpp_spell(*ps.at(i)) ?? return null).as_str());
+                s.append((this.fn_part_spell(*ps.at(i), probe) ?? return null).as_str());
             }
             if (va) {
                 if (ps.len > 0) {
@@ -7323,6 +7384,14 @@ attach fn cpp_fn_spell(this: checker&, t: u32, name: str) -> std::string? {
         },
         default => { return null; },
     }
+}
+
+// a type in cpp_fn_spell's signature
+attach fn fn_part_spell(this: checker&, t: u32, probe: bool) -> std::string? {
+    if (probe && (this.t.opt_inner(t) ?? VOID) == CSTR) {
+        return S("volt_cstr_opt");
+    }
+    return this.cpp_spell(t);
 }
 
 // the C++ name of a struct imported from C++ (@cpp_type), with a template instance's arguments
@@ -7528,7 +7597,7 @@ attach fn cpp_call_as(this: checker&, r: u32, gargs: std::vec<garg>&, args: std:
             }
             match (*this.t.get(fv.ty)) {
                 .FN_PTR(ps&, ret, va) => {
-                    val fd = this.cpp_fn_spell(fv.ty, sym.as_str()) ?? return fail(span, fmt("@cpp: {} has no C++ form", this.ty_name(fv.ty)));
+                    val fd = this.cpp_fn_spell(fv.ty, sym.as_str(), false) ?? return fail(span, fmt("@cpp: {} has no C++ form", this.ty_name(fv.ty)));
                     decls.append(fmt("extern \"C\" {};\n", move fd).as_str());
                 },
                 default => {},
@@ -7567,7 +7636,7 @@ attach fn cpp_call_as(this: checker&, r: u32, gargs: std::vec<garg>&, args: std:
         var sp = S("void *");
         var fp: std::string? = null;
         match (*this.t.get(v.ty)) {
-            .FN_PTR(ps&, ret, va) => { fp = this.cpp_fn_spell(v.ty, "(*)"); },
+            .FN_PTR(ps&, ret, va) => { fp = this.cpp_fn_spell(v.ty, "(*)", false); },
             default => {},
         }
         if (fp == null) {

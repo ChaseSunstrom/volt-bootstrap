@@ -1016,12 +1016,19 @@ attach fn operator_name(this: parser&) -> compile_error!str {
     return fail(at, fmt("{} can't be attached; these can: + - * / % +% -% *% & | ^ << >> ~ < == []", S(sym)));
 }
 
+// C before C23 has no variadic function without a fixed parameter (int f(...)), a declaration or a
+// function pointer type
+val C_VARIADIC_FIXED: str = "a C variadic function needs a fixed parameter before its ...";
+
 // `(var x: T = d, static this, ...)`: the params go into out; returns whether they end in C varargs `...`
 attach fn params(this: parser&, out: std::vec<param>&) -> compile_error!bool {
     try this.expect("(");
     var c_varargs = false;
     while (!this.eat(")")) {
         if (this.eat("...")) {
+            if (out.len == 0) {
+                return fails(this.prev_span(), C_VARIADIC_FIXED);
+            }
             c_varargs = true;
             try this.expect(")");
             break;
@@ -1147,6 +1154,9 @@ attach fn type_atom(this: parser&) -> compile_error!ty {
         var c_varargs = false;
         while (!this.eat(")")) {
             if (this.eat("...")) {
+                if (params.len == 0) {
+                    return fails(this.prev_span(), C_VARIADIC_FIXED);
+                }
                 c_varargs = true;
                 continue;
             }
