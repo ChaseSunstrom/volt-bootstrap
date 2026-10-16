@@ -453,6 +453,10 @@ attach fn builtin(this: checker&, name: str, gargs: std::vec<garg>&, args_opt: s
             },
             default => {},
         }
+        // a literal past i128's maximum is a u128 cast to one
+        if (past_i128_lit(e) && to == int_id(int_ty::U128)) {
+            want = to;
+        }
         val v = try this.expr(e, want);
         if (this.cast_scalar(v.ty) && this.cast_scalar(to)) {
             var r = vnew(to, this.ir.conv(v.c, to));
