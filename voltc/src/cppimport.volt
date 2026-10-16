@@ -791,7 +791,7 @@ attach fn pre_type(this: cpp_gen&, t: clang::CXType, found: std::vec<std::string
     if (this.record_form(ct, &none) != null) {
         return;
     }
-    put(found, move sp);
+    put(found, type_spelling(clang::clang_getUnqualifiedType(ct))); // (instance()'s key: const X is X)
 }
 
 // a handle class's traits by its C++ spelling, asked of clang the first time (a generic handle's
@@ -2545,16 +2545,26 @@ attach fn cpp_handle_of(this: checker&, sid: u32) -> str? {
 }
 
 // a @cpp type argument's C++ text for {tN}: a type's, or a value known at compile time (4, a
-// generic value parameter) as its literal, as cpp_handle_of spells an instance's value arguments
+// generic value parameter, true) as its literal, as cpp_handle_of spells an instance's value
+// arguments (a negative one here in parentheses, so x-{t1} stays x-(-2)). A plain name that is
+// neither reports the type's error, any other expression the value's
 attach fn cpp_targ_text(this: checker&, g: garg&, span: span) -> compile_error!std::string {
     val t = this.garg_type(g) catch |te| {
         val x = this.garg_value(g) catch |xe| {
             return te;
         };
+        var name = false;
+        match (x.kind) {
+            .PATH(p) => { name = true; },
+            default => {},
+        }
         val v = this.const_int(x, this.cx.env) catch |ve| {
             // a bool (a generic bool parameter is a number already: 1 or 0, which C++ takes)
             val b = this.ct_eval_in(this.cx.env, x, null) catch |be| {
-                return te;
+                if (name) {
+                    return te;
+                }
+                return ve;
             };
             match (b) {
                 .BOOL(y) => {
@@ -2563,7 +2573,12 @@ attach fn cpp_targ_text(this: checker&, g: garg&, span: span) -> compile_error!s
                     }
                     return S("false");
                 },
-                default => { return te; },
+                default => {
+                    if (name) {
+                        return te;
+                    }
+                    return ve;
+                },
             }
         };
         if (v < 0) {
