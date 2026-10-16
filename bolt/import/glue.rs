@@ -272,6 +272,11 @@ pub trait Lang {
     fn catches(&self) -> bool {
         false
     }
+    /// a free function that's an extension of a builtin type (Kotlin's String.f()): Volt's is an
+    /// attach fn on that type, its first parameter its this
+    fn attach_first(&self, _s: &Sig) -> bool {
+        false
+    }
     /// its shim hands the Volt functions it calls (closures, a Volt type's trait methods) the
     /// import's types too (a plain struct's copy, a handle the function owns, an enum) and slices
     /// of numbers, and takes them back as results; else numbers, bools, chars and text alone
@@ -1017,7 +1022,8 @@ impl<'a> Gen<'a> {
         // two overloads Volt can't tell apart (their parameters are the same Volt types)
         let types: Vec<&str> = params.iter().filter_map(|p| p.1.as_ref()).map(|v| v.param.split_once(": ").map_or(v.param.as_str(), |x| x.1)).collect();
         // (in its module: two modules' fns of one name are different fns)
-        let key = format!("{}::{what} {} ({})", module.join("::"), self_ty.is_some() && s.recv == Recv::None, types.join(", "));
+        // (an attach fn and a free fn of the same types are both Volt's: x.f() and f(x))
+        let key = format!("{}::{what} {} {} ({})", module.join("::"), self_ty.is_some() && s.recv == Recv::None, self_ty.is_none() && self.lang.attach_first(s), types.join(", "));
         if self.sigs.contains(&key) {
             return Err(format!("{what} (an overload Volt sees as the same as another)"));
         }
@@ -1129,6 +1135,13 @@ impl<'a> Gen<'a> {
         }
         let ext_call = format!("{ns}::{sym}({})", vargs.join(", "));
         // the try_ form's lines, until they part
+        // (an extension of a builtin type: its first parameter is this, the body's this_)
+        let ext = self_ty.is_none() && !vps.is_empty() && self.lang.attach_first(s);
+        let mut vps = vps;
+        if ext {
+            vps[0] = vps[0].replacen("this_:", "this:", 1);
+            lines.insert(0, "val this_ = this;".into());
+        }
         let mut try_lines = lines.clone();
         let give = |o: &VoltOut| -> Vec<String> {
             if o.ty.ends_with('?') {
@@ -1211,7 +1224,7 @@ impl<'a> Gen<'a> {
                 format!("attach fn {}({}) -> {ret_ty}", volt_name(&s.name), ps.join(", "))
             }
             (Some(_), _) => format!("attach fn {}({}) -> {ret_ty}", volt_name(&s.name), vps.join(", ")),
-            (None, _) => format!("fn {}({}) -> {ret_ty}", volt_name(&s.name), vps.join(", ")),
+            (None, _) => format!("{}fn {}({}) -> {ret_ty}", if ext { "attach " } else { "" }, volt_name(&s.name), vps.join(", ")),
         };
         let mut f = String::new();
         let tps: Vec<String> = volts.iter().filter_map(|p| p.generic.clone()).collect();
