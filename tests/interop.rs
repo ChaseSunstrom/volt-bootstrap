@@ -407,19 +407,35 @@ fn bindings_round_trip() {
         let err = String::from_utf8_lossy(&o.stderr);
         assert!(!o.status.success() && err.contains(want), "{err}");
     }
+    // a slice of E! over text or handles: Volt holds the value itself, C would read { error, its
+    // C form }, so voltc lib refuses it as a parameter and as a result
+    for (src, want) in [
+        ("use std::string;\npublic error oops { BAD, }\nexport fn f(xs: oops!std::string[..]) -> usize { return xs.len; }\n", "oops!std::string"),
+        ("export struct badge { n: i32; }\npublic error oops { BAD, }\npublic struct box { xs: std::vec<oops!badge>; }\nexport fn box_new() -> box { return { xs: {} }; }\nexport attach fn all(this: box&) -> oops!badge[..] { return this.xs.items(); }\n", "oops!badge"),
+    ] {
+        std::fs::write(bad.join("bad.volt"), src).unwrap();
+        let o = e.voltc(&["lib", "bad", "--pkg", &format!("bad={}", bad.display()), "--static", "-o", &e.path("libbad.a")]);
+        let err = String::from_utf8_lossy(&o.stderr);
+        assert!(!o.status.success() && err.contains("has no C form") && err.contains(want), "{err}");
+    }
+    // over numbers or str it keeps its form
+    std::fs::write(bad.join("bad.volt"), "public error oops { BAD, }\nexport fn f(xs: oops!i32[..], ys: oops!str[..]) -> usize { return xs.len + ys.len; }\n").unwrap();
+    ok(e.voltc(&["lib", "bad", "--pkg", &format!("bad={}", bad.display()), "--static", "-o", &e.path("libbad.a")]), "voltc lib of a slice of E!i32 and of E!str");
 
     // the shims' temporaries never take a parameter's name: viewed_ and item_ are what a slice given
-    // back as a list of copies (bare or in an E!) is copied with
+    // back as a list of copies (bare or in an E!) is copied with; x_v, x_f, cb_user and this_ what
+    // a slice of text, a trait, a closure and an attached fn's this are taken with, and a0 the
+    // closure's relay's own parameter
     let names = e.dir.join("names");
     std::fs::create_dir_all(&names).unwrap();
-    std::fs::write(names.join("names.volt"), "use std::string;\n\npublic error oops {\n    BACKWARDS,\n}\n\npublic struct shelf {\n    xs: std::vec<std::string>;\n}\n\nexport fn shelf_new() -> shelf {\n    var s: shelf = { xs: {} };\n    s.xs.push(std::string::from(\"a\")) catch @panic(\"out of memory\");\n    s.xs.push(std::string::from(\"b\")) catch @panic(\"out of memory\");\n    s.xs.push(std::string::from(\"c\")) catch @panic(\"out of memory\");\n    return s;\n}\n\nexport attach fn between(this: shelf&, viewed_: usize, item_: usize) -> std::string[..] {\n    return this.xs.items()[viewed_..item_];\n}\n\nexport attach fn between_or(this: shelf&, viewed_: usize, item_: usize) -> oops!(std::string[..]) {\n    if (viewed_ > item_) {\n        return oops::BACKWARDS;\n    }\n    return this.xs.items()[viewed_..item_];\n}\n").unwrap();
+    std::fs::write(names.join("names.volt"), "use std::string;\n\npublic error oops {\n    BACKWARDS,\n}\n\npublic struct shelf {\n    xs: std::vec<std::string>;\n}\n\nexport fn shelf_new() -> shelf {\n    var s: shelf = { xs: {} };\n    s.xs.push(std::string::from(\"a\")) catch @panic(\"out of memory\");\n    s.xs.push(std::string::from(\"b\")) catch @panic(\"out of memory\");\n    s.xs.push(std::string::from(\"c\")) catch @panic(\"out of memory\");\n    return s;\n}\n\nexport attach fn between(this: shelf&, viewed_: usize, item_: usize) -> std::string[..] {\n    return this.xs.items()[viewed_..item_];\n}\n\nexport attach fn between_or(this: shelf&, viewed_: usize, item_: usize) -> oops!(std::string[..]) {\n    if (viewed_ > item_) {\n        return oops::BACKWARDS;\n    }\n    return this.xs.items()[viewed_..item_];\n}\n\nexport attach fn plus(this: shelf&, this_: usize) -> usize {\n    return this.xs.len + this_;\n}\n\npublic trait counter {\n    fn count(this) -> i32;\n}\n\nexport fn counted(x: counter&, x_f: i32, x_v: i32) -> i32 {\n    return x.count() + x_f + x_v;\n}\n\nexport fn summed(x: std::string[..], x_v: usize) -> usize {\n    var t = x_v;\n    for (s&) in x {\n        t += s.len();\n    }\n    return t;\n}\n\nexport fn applied(cb: fn(i32) -> i32, cb_user: i32) -> i32 {\n    return cb(cb_user);\n}\n\nexport fn first(a0: fn(i32) -> i32, n: i32) -> i32 {\n    return a0(n);\n}\n").unwrap();
     let npkg = format!("names={}", names.display());
     ok(e.voltc(&["lib", "names", "--pkg", &npkg, "--shared", "--leak-check", "-o", &e.path(&dylib("names"))]), "voltc lib names --shared");
     ok(e.voltc(&["bindings", "names", "--pkg", &npkg, "--lang", "c", "-o", &e.path("names.h")]), "voltc bindings names --lang c");
-    std::fs::write(e.dir.join("names_main.c"), "#include \"names.h\"\n#include <stdio.h>\n\nextern size_t volt_live_allocs;\n\n#define TEXT(t) (int)(t).len, (const char *)(t).ptr\n\nint main(void) {\n    names_shelf *s = shelf_new();\n    names_list_text l = shelf_between(s, 1, 3);\n    printf(\"%zu %.*s %.*s\", l.len, TEXT(l.ptr[0]), TEXT(l.ptr[1]));\n    volt_list_free(l);\n    names_oops_or_list_text r = shelf_between_or(s, 0, 1);\n    printf(\" %zu %.*s\", r.value.len, TEXT(r.value.ptr[0]));\n    volt_list_free(r.value);\n    r = shelf_between_or(s, 2, 1);\n    printf(\" %s\", r.error == NAMES_OOPS_BACKWARDS ? \"BACKWARDS\" : \"?\");\n    shelf_free(s);\n    printf(\" live %zu\\n\", volt_live_allocs);\n    return 0;\n}\n").unwrap();
+    std::fs::write(e.dir.join("names_main.c"), "#include \"names.h\"\n#include <stdio.h>\n\nextern size_t volt_live_allocs;\n\n#define TEXT(t) (int)(t).len, (const char *)(t).ptr\n\nstatic int32_t count_it(void *self) {\n    return *(int32_t *)self;\n}\n\nstatic const names_counter_vt counter_vt = {count_it};\n\nstatic int32_t add_to(void *user, int32_t x) {\n    return x + *(int32_t *)user;\n}\n\nint main(void) {\n    names_shelf *s = shelf_new();\n    names_list_text l = shelf_between(s, 1, 3);\n    printf(\"%zu %.*s %.*s\", l.len, TEXT(l.ptr[0]), TEXT(l.ptr[1]));\n    volt_list_free(l);\n    names_oops_or_list_text r = shelf_between_or(s, 0, 1);\n    printf(\" %zu %.*s\", r.value.len, TEXT(r.value.ptr[0]));\n    volt_list_free(r.value);\n    r = shelf_between_or(s, 2, 1);\n    printf(\" %s\", r.error == NAMES_OOPS_BACKWARDS ? \"BACKWARDS\" : \"?\");\n    printf(\" %zu\", shelf_plus(s, 7));\n    int32_t four = 4, ten = 10;\n    names_counter c = {&counter_vt, &four, NULL};\n    printf(\" %d\", counted(c, 20, 300));\n    volt_str ws[] = {{(const uint8_t *)\"ab\", 2}, {(const uint8_t *)\"cde\", 3}};\n    names_slice_str wl = {ws, 2};\n    printf(\" %zu %d %d\", summed(wl, 100), applied(add_to, &ten, 5), first(add_to, &ten, 1));\n    shelf_free(s);\n    printf(\" live %zu\\n\", volt_live_allocs);\n    return 0;\n}\n").unwrap();
     let rpath = format!("-Wl,-rpath,{}", e.path(""));
     ok(Command::new("cc").args(["-Wall", "-Werror", "names_main.c", "-I", &e.path(""), "-L", &e.path(""), "-lnames", &rpath, "-o", "names_main"]).current_dir(&e.dir).output().unwrap(), "cc names_main.c");
-    assert_eq!(ok(Command::new(e.dir.join("names_main")).output().unwrap(), "names_main"), "2 b c 1 a BACKWARDS live 0\n", "a shim's temporaries and its parameters' names");
+    assert_eq!(ok(Command::new(e.dir.join("names_main")).output().unwrap(), "names_main"), "2 b c 1 a BACKWARDS 10 324 105 15 11 live 0\n", "a shim's temporaries and its parameters' names");
 }
 
 // a slice of slices has a C type of its own (slice_slice_i64), not its elements' name again; slices
