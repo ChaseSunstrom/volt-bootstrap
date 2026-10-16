@@ -279,7 +279,11 @@ fn main() -> !i32 { // !i32 so try/return e below can propagate errors (non-zero
 
     // delete is automatic, so defer is for other cleanup (close, unlock, ...).
     // defer runs at scope exit (in reverse order), errdefer only if the scope exits with an error
-    val file = try fs::open("/dev/null", "w");
+    var null_dev: cstr = "/dev/null";
+    comptime if (@cfg("os", "windows")) {
+        null_dev = "NUL";
+    }
+    val file = try fs::open(null_dev, "w");
     defer file.close();
     errdefer std::println("main failed");
 

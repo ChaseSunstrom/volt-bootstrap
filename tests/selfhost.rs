@@ -112,7 +112,7 @@ fn release_voltc_works() {
         let text = std::fs::read_to_string(&p).unwrap_or_default();
         // (and those marked `// debug-only`: what they check is the debug allocator's, which an optimized
         // build doesn't have)
-        if p.extension().is_some_and(|x| x == "volt") && !text.contains("// exit:") && !text.contains(".h\"") && !text.contains("// debug-only") {
+        if p.extension().is_some_and(|x| x == "volt") && !text.contains("// exit:") && !text.contains(".h\"") && !text.contains("// debug-only") && !(cfg!(windows) && text.lines().any(|l| l.starts_with("// unix-only"))) {
             runs.push((p, "llvm", true));
         }
     }

@@ -1,4 +1,5 @@
 use std::io;
+// unix-only (siginterrupt and ualarm: Windows has no signals that interrupt a call)
 // a signal during a blocking read, set not to restart system calls (so the call returns EINTR),
 // doesn't fail the read: std::net makes the call again, and it times out as asked
 

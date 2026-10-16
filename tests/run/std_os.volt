@@ -23,6 +23,19 @@ fn if_sep(i: usize) -> str {
     return " ";
 }
 
+// a path with / for each \\ (std::path joins with \\ on Windows)
+fn fwd(s: str) -> std::string {
+    var out: std::string = {};
+    for (i) in 0..s.len {
+        if (s[i] == '\\') {
+            out.push('/');
+        } else {
+            out.push(s[i]);
+        }
+    }
+    return out;
+}
+
 fn list_status(p: str) -> void {
     val names = std::fs::list_dir(p) catch |e| {
         std::println("list missing: {}", e);
@@ -34,12 +47,12 @@ fn list_status(p: str) -> void {
 fn main() -> void {
     // paths: pure string work
     val (j1, j2, j3, j4) = (std::path::join("a", "b"), std::path::join("a/", "b"), std::path::join("a", "/b"), std::path::join("", "b"));
-    std::println("{} {} {} {}", j1.as_str(), j2.as_str(), j3.as_str(), j4.as_str());
+    std::println("{} {} {} {}", fwd(j1.as_str()), fwd(j2.as_str()), fwd(j3.as_str()), fwd(j4.as_str()));
     std::println("[{}] [{}] [{}] [{}] [{}]", std::path::parent("a/b/c"), std::path::parent("/a"), std::path::parent("a"), std::path::parent("/"), std::path::parent("a/b/"));
     std::println("[{}] [{}] [{}]", std::path::file_name("a/b.txt"), std::path::file_name("a/b/"), std::path::file_name("/"));
     std::println("{} {} {} [{}] {} {}", std::path::extension("b.tar.gz"), std::path::extension(".bashrc"), std::path::extension("a/b"), std::path::extension("x."), std::path::stem("a/b.tar.gz"), std::path::stem(".bashrc"));
     val (n1, n2, n3, n4, n5, n6) = (std::path::normalize("a/./b/../c//d/"), std::path::normalize("/../x"), std::path::normalize("../a/.."), std::path::normalize(""), std::path::normalize("./"), std::path::normalize("/"));
-    std::println("{} {} {} {} {} {} {} {}", n1.as_str(), n2.as_str(), n3.as_str(), n4.as_str(), n5.as_str(), n6.as_str(), std::path::is_absolute("/x"), std::path::is_absolute("x"));
+    std::println("{} {} {} {} {} {} {} {}", fwd(n1.as_str()), fwd(n2.as_str()), fwd(n3.as_str()), fwd(n4.as_str()), fwd(n5.as_str()), fwd(n6.as_str()), std::path::is_absolute("/x"), std::path::is_absolute("x"));
 
     // a directory tree in /tmp
     var root = std::string::from("/tmp/volt-std-os-");
@@ -87,11 +100,14 @@ fn main() -> void {
         }
         body.append("\nlast");
         std::fs::write_file(odd.as_str(), body.as_str()) catch @panic("write");
-        var f = std::fs::open(odd.as_str()) catch @panic("open");
-        for (line, i) in f.lines() {
-            std::print("{}{}", if_sep(i), line.len());
+        {
+            // (closed at this block's end: Windows can't remove an open file)
+            var f = std::fs::open(odd.as_str()) catch @panic("open");
+            for (line, i) in f.lines() {
+                std::print("{}{}", if_sep(i), line.len());
+            }
+            std::println("");
         }
-        std::println("");
         std::fs::remove_file(odd.as_str()) catch @panic("remove");
     }
 
@@ -100,7 +116,7 @@ fn main() -> void {
     std::println("{}", std::text::join(names.items(), ","));
     val files = std::fs::walk(r) catch @panic("walk");
     for (p, i) in files.items() {
-        std::print("{}{}", if_sep(i), p.as_str()[r.len + 1..p.len()]);
+        std::print("{}{}", if_sep(i), fwd(p.as_str()[r.len + 1..p.len()]));
     }
     std::println("");
 

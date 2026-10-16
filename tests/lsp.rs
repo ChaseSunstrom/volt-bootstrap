@@ -3,8 +3,10 @@
 // symbols, completion (after `.`, after `::`, and plain) and signature help, then shutdown.
 mod common;
 use std::io::{BufRead, BufReader, Read, Write};
+use std::sync::mpsc::{channel, Receiver};
+use std::time::Duration;
 use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
+use std::process::{Child, ChildStdin, Command, Stdio};
 
 const ROOT: &str = env!("CARGO_MANIFEST_DIR");
 
@@ -34,7 +36,8 @@ fn main() -> void {
 struct Server {
     child: Child,
     input: ChildStdin,
-    output: BufReader<ChildStdout>,
+    /// the server's messages, read on their own thread so its output never fills the pipe
+    output: Receiver<String>,
     next_id: u64,
     /// the messages the last request skipped on its way to its response
     skipped: Vec<String>,
@@ -60,7 +63,28 @@ impl Server {
             .spawn()
             .unwrap();
         let input = child.stdin.take().unwrap();
-        let output = BufReader::new(child.stdout.take().unwrap());
+        let mut out = BufReader::new(child.stdout.take().unwrap());
+        let (tx, output) = channel();
+        std::thread::spawn(move || loop {
+            let mut len = 0;
+            loop {
+                let mut line = String::new();
+                if out.read_line(&mut line).unwrap_or(0) == 0 {
+                    return; // the server closed its output: recv says so
+                }
+                let line = line.trim_end();
+                if line.is_empty() {
+                    break;
+                }
+                if let Some(n) = line.strip_prefix("Content-Length: ") {
+                    len = n.parse().unwrap();
+                }
+            }
+            let mut body = vec![0; len];
+            if out.read_exact(&mut body).is_err() || tx.send(String::from_utf8(body).unwrap()).is_err() {
+                return;
+            }
+        });
         Server { child, input, output, next_id: 1, skipped: Vec::new(), dir }
     }
 
@@ -69,23 +93,13 @@ impl Server {
         self.input.flush().unwrap();
     }
 
-    /// the next message the server sends
+    /// the next message the server sends (a server that goes quiet fails the test, not the run)
     fn recv(&mut self) -> String {
-        let mut len = 0;
-        loop {
-            let mut line = String::new();
-            assert!(self.output.read_line(&mut line).unwrap() > 0, "the server closed its output");
-            let line = line.trim_end();
-            if line.is_empty() {
-                break;
-            }
-            if let Some(n) = line.strip_prefix("Content-Length: ") {
-                len = n.parse().unwrap();
-            }
+        match self.output.recv_timeout(Duration::from_secs(180)) {
+            Ok(m) => m,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => panic!("the server sent nothing for 180 s (skipped so far: {:?})", self.skipped),
+            Err(_) => panic!("the server closed its output"),
         }
-        let mut body = vec![0; len];
-        self.output.read_exact(&mut body).unwrap();
-        String::from_utf8(body).unwrap()
     }
 
     /// a request's response (notifications in between are skipped)

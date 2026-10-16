@@ -1,4 +1,5 @@
 use std::io;
+// unix-only (kill -9 and its signal number, sh's)
 
 // std::process::capture: run a program with some stdin, get its stdout, stderr and exit code
 fn main() -> i32 {

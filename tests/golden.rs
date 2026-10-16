@@ -33,7 +33,7 @@ fn golden() {
         count += 1;
         let src = std::fs::read_to_string(&f).unwrap();
         // `// unix-only`: its oracle is Unix's (glibc's or Apple's libm, sh's kill)
-        if cfg!(windows) && src.lines().any(|l| l == "// unix-only") {
+        if cfg!(windows) && src.lines().any(|l| l.starts_with("// unix-only")) {
             continue;
         }
         let want = directives(&src, "expect").join("\n");
