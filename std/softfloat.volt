@@ -998,6 +998,209 @@ namespace softfloat {
         return @bitcast<f128>(rem128(@bitcast<u128>(x), @bitcast<u128>(y)));
     }
 
+    // ---- an f128 literal's value: decimal text to the nearest binary128 ----
+
+    // big unsigned integers for it, 32 bits a limb, the least significant first, no zero limbs on top
+    fn big_mul_add(x: std::vec<u32>&, m: u32, a: u32) -> void {
+        var carry = @cast<u64>(a);
+        for (i) in 0..x.len {
+            val t = @cast<u64>(*x.at(i)) * @cast<u64>(m) + carry;
+            *x.at(i) = @cast<u32>(t & 0xFFFFFFFF);
+            carry = t >> 32;
+        }
+        if (carry != 0) {
+            x.push(@cast<u32>(carry)) catch @panic("out of memory");
+        }
+    }
+
+    fn big_bits(x: std::vec<u32>&) -> i32 {
+        if (x.len == 0) {
+            return 0;
+        }
+        return @cast<i32>(x.len) * 32 - (clz64(@cast<u64>(*x.at(x.len - 1))) - 32);
+    }
+
+    fn big_shl(x: std::vec<u32>&, s: i32) -> std::vec<u32> {
+        var out: std::vec<u32> = {};
+        for (i) in 0..s / 32 {
+            out.push(0) catch @panic("out of memory");
+        }
+        val bits = @cast<u32>(s % 32);
+        var carry: u32 = 0;
+        for (i) in 0..x.len {
+            val v = *x.at(i);
+            if (bits == 0) {
+                out.push(v) catch @panic("out of memory");
+            } else {
+                out.push((v << bits) | carry) catch @panic("out of memory");
+                carry = v >> (32 - bits);
+            }
+        }
+        if (carry != 0) {
+            out.push(carry) catch @panic("out of memory");
+        }
+        return out;
+    }
+
+    fn big_shr1(x: std::vec<u32>&) -> void {
+        var i = x.len;
+        var carry: u32 = 0;
+        while (i > 0) {
+            i -= 1;
+            val v = *x.at(i);
+            *x.at(i) = (v >> 1) | carry;
+            carry = v << 31;
+        }
+        while (x.len > 0 && *x.at(x.len - 1) == 0) {
+            x.truncate(x.len - 1);
+        }
+    }
+
+    fn big_cmp(a: std::vec<u32>&, b: std::vec<u32>&) -> i32 {
+        if (a.len != b.len) {
+            if (a.len < b.len) {
+                return -1;
+            }
+            return 1;
+        }
+        var i = a.len;
+        while (i > 0) {
+            i -= 1;
+            if (*a.at(i) != *b.at(i)) {
+                if (*a.at(i) < *b.at(i)) {
+                    return -1;
+                }
+                return 1;
+            }
+        }
+        return 0;
+    }
+
+    // a -= b, a >= b
+    fn big_sub(a: std::vec<u32>&, b: std::vec<u32>&) -> void {
+        var borrow: u64 = 0;
+        for (i) in 0..a.len {
+            var bv: u64 = 0;
+            if (i < b.len) {
+                bv = @cast<u64>(*b.at(i));
+            }
+            val av = @cast<u64>(*a.at(i));
+            if (av >= bv + borrow) {
+                *a.at(i) = @cast<u32>(av - bv - borrow);
+                borrow = 0;
+            } else {
+                *a.at(i) = @cast<u32>(av + 0x100000000 - bv - borrow);
+                borrow = 1;
+            }
+        }
+        while (a.len > 0 && *a.at(a.len - 1) == 0) {
+            a.truncate(a.len - 1);
+        }
+    }
+
+    // the binary128 nearest the unsigned decimal number text spells (digits, _ between them, an
+    // optional fraction and e/E exponent), ties to even: num / den exactly, its quotient taken to 116
+    // or 117 bits by long division, the remainder sticky, and pack128 rounding (subnormals, inf)
+    public fn parse128(text: str) -> u128 {
+        var num: std::vec<u32> = {};
+        var exp10: i64 = 0;
+        var digits: i64 = 0;
+        var frac = false;
+        var i: usize = 0;
+        while (i < text.len) {
+            val c = text[i];
+            if (c == '.') {
+                frac = true;
+            } else if (c >= '0' && c <= '9') {
+                big_mul_add(&num, 10, @cast<u32>(c - '0'));
+                if (num.len > 0) {
+                    digits += 1;
+                }
+                if (frac) {
+                    exp10 -= 1;
+                }
+            } else if (c != '_') {
+                break;
+            }
+            i += 1;
+        }
+        if (i < text.len && (text[i] == 'e' || text[i] == 'E')) {
+            i += 1;
+            var neg = false;
+            if (i < text.len && (text[i] == '+' || text[i] == '-')) {
+                neg = text[i] == '-';
+                i += 1;
+            }
+            var e: i64 = 0;
+            while (i < text.len && text[i] >= '0' && text[i] <= '9') {
+                if (e < 1000000) {
+                    e = e * 10 + @cast<i64>(text[i] - '0');
+                }
+                i += 1;
+            }
+            if (neg) {
+                e = -e;
+            }
+            exp10 += e;
+        }
+        while (num.len > 0 && *num.at(num.len - 1) == 0) {
+            num.truncate(num.len - 1);
+        }
+        if (num.len == 0) {
+            return 0;
+        }
+        // past either end, without the arithmetic: 10^4933 is over the largest binary128, and
+        // 10^-4967 under half the smallest
+        if (exp10 + digits > 4933) {
+            return Q_INF;
+        }
+        if (exp10 + digits < -4967) {
+            return 0;
+        }
+        var den: std::vec<u32> = {};
+        den.push(1) catch @panic("out of memory");
+        var k: i64 = 0;
+        while (k < exp10) {
+            big_mul_add(&num, 10, 0);
+            k += 1;
+        }
+        while (k > exp10) {
+            big_mul_add(&den, 10, 0);
+            k -= 1;
+        }
+        // num * 2^s / den in [2^115, 2^117)
+        val s = 116 - (big_bits(&num) - big_bits(&den));
+        var n = copy num;
+        var d = copy den;
+        if (s >= 0) {
+            n = big_shl(&num, s);
+        } else {
+            d = big_shl(&den, -s);
+        }
+        var q: u128 = 0;
+        var dd = big_shl(&d, 116);
+        for (b) in 0..117 {
+            q <<= 1;
+            if (big_cmp(&n, &dd) >= 0) {
+                big_sub(&n, &dd);
+                q |= 1;
+            }
+            big_shr1(&dd);
+        }
+        var e2 = -s;
+        var sticky = n.len > 0;
+        if (q >= (@cast<u128>(1) << 116)) {
+            sticky = sticky || (q & 1) != 0;
+            q >>= 1;
+            e2 += 1;
+        }
+        if (sticky) {
+            q |= 1;
+        }
+        // q * 2^e2, its leading 1 at bit 115: pack128's sig * 2^(exp - 16383 - 115)
+        return pack128(0, e2 + 115 + 16383, q);
+    }
+
     // compiler-rt's quad routines (what LLVM calls for f128 arithmetic, compares and conversions) on
     // targets with no C runtime that has them: Apple's arm64 one (its long double is an f64) and
     // os=none (bare metal and WebAssembly: no C runtime at all). Elsewhere libgcc or compiler-rt has

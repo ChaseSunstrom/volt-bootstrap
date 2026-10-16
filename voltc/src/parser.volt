@@ -276,7 +276,7 @@ attach fn unexpected(this: parser&, what: str) -> compile_error {
             msg.append("number ");
             append_u128(&msg, v);
         },
-        .FLOAT(v) => {
+        .FLOAT(v, q) => {
             // ponytail: shows the source text; Rust prints the parsed value (differs for 1e3, 1.50)
             msg.append("number ");
             msg.append(this.source_of(this.span()));

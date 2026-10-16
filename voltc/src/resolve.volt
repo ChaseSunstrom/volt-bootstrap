@@ -1333,7 +1333,7 @@ fn arith_error(e: compile_error&) -> bool {
 fn foldable(e: expr&) -> bool {
     match (e.kind) {
         .INT(v) => { return true; },
-        .FLOAT(v) => { return true; },
+        .FLOAT(v, q) => { return true; },
         .CHAR(v) => { return true; },
         .STR(s&) => { return true; },
         .BOOL(b) => { return true; },

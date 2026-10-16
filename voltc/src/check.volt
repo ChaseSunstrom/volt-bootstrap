@@ -341,10 +341,11 @@ struct tval {
     wraps: bool = false; // a literal a wrapping operator (+% -% *%) gave: it wraps in the type it gets
 }
 
-// a literal's value, kept on a tval so the literal can still adapt to the type it ends up as
+// a literal's value, kept on a tval so the literal can still adapt to the type it ends up as (a
+// float's nearest f64 and nearest binary128: an f128 takes the second, the narrower floats the first)
 enum lit {
     INT: i128,
-    FLOAT: f64,
+    FLOAT: (f64, u128),
     STR: str,
 }
 

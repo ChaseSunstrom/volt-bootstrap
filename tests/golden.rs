@@ -168,11 +168,12 @@ fn f128_soft_c() {
     assert!(c.status.success(), "{}", String::from_utf8_lossy(&c.stderr));
     let text = String::from_utf8_lossy(&c.stdout);
     let prelude = include_str!("../runtime/prelude.h");
-    for op in ["volt_q_mul(", "volt_q_div(", "volt_q_gt(", "volt_q_lit(", "volt_q_from(f16, ", "volt_q_to(f64, ", "volt_q_to(i64, "] {
+    for op in ["volt_q_mul(", "volt_q_div(", "volt_q_gt(", "volt_q_hex(", "volt_q_from(f16, ", "volt_q_to(f64, ", "volt_q_to(i64, "] {
         assert!(text.matches(op).count() > prelude.matches(op).count(), "floats_wide's C has no {op}");
     }
-    // f128_ops through both C compilers, natively and soft (golden runs them all through LLVM)
-    let runs = [("floats_wide", "cc", true), ("softquad", "cc", true), ("f128_ops", "gcc", true), ("f128_ops", "clang", true), ("f128_ops", "gcc", false), ("f128_ops", "clang", false), ("f128_rem", "gcc", true), ("f128_rem", "clang", false)];
+    // f128_ops through both C compilers, natively and soft (golden runs them all through LLVM), and
+    // f128_exact's constants (T-0477): a native quad type reads volt_q_hex's text, the soft path its bits
+    let runs = [("floats_wide", "cc", true), ("softquad", "cc", true), ("f128_ops", "gcc", true), ("f128_ops", "clang", true), ("f128_ops", "gcc", false), ("f128_ops", "clang", false), ("f128_rem", "gcc", true), ("f128_rem", "clang", false), ("f128_exact", "gcc", false), ("f128_exact", "clang", false), ("f128_exact", "clang", true)];
     for (prog, cc, soft) in runs {
         let file = format!("tests/run/{prog}.volt");
         let want: Vec<String> = directives(&std::fs::read_to_string(root.join(&file)).unwrap(), "expect");

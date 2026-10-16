@@ -553,7 +553,7 @@ attach fn lsp_walk_expr(this: checker&, w: lsp_walk&, e: expr&) -> void {
         },
         // no names in these (a new kind that binds or names one is a compile error here)
         .INT(x) => {},
-        .FLOAT(x) => {},
+        .FLOAT(x, q) => {},
         .CHAR(x) => {},
         .STR(x&) => {},
         .BOOL(x) => {},

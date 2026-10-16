@@ -2621,9 +2621,9 @@ attach fn c_items(this: checker&, d: cdecls&, res: c_imported&, span: span) -> v
             tn = "f64";
             neg = v.f < 0.0 || (v.f == 0.0 && 1.0 / v.f < 0.0);
             if (neg) {
-                lit = expr_kind::FLOAT(-v.f);
+                lit = expr_kind::FLOAT(-v.f, std::softfloat::f64_to_f128(@bitcast<u64>(-v.f)));
             } else {
-                lit = expr_kind::FLOAT(v.f);
+                lit = expr_kind::FLOAT(v.f, std::softfloat::f64_to_f128(@bitcast<u64>(v.f)));
             }
         }
         var init: expr = { kind: move lit, span: span };

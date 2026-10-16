@@ -905,7 +905,7 @@ attach fn bind_cand(this: checker&, d: u32, rv: tval*, static_ty: u32?, explicit
             var got: gval? = null;
             if (av) {
                 val v = av;
-                match (v.lit ?? lit::FLOAT(0.0)) {
+                match (v.lit ?? lit::FLOAT(0.0, 0)) {
                     .INT(n) => {
                         if (v.lit != null) {
                             got = gval::INT(n);

@@ -19,7 +19,7 @@ attach fn unary(this: checker&, op: unop, x: expr&, want: u32?, span: span) -> c
                         }
                         return this.int_lit(0 -% n, w);
                     },
-                    .FLOAT(f) => { return this.float_lit(-f, v.ty); },
+                    .FLOAT(f, q) => { return this.float_lit(-f, q ^ (@cast<u128>(1) << 127), v.ty); },
                     default => {},
                 }
             }

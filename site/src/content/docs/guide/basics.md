@@ -56,6 +56,10 @@ soft-float routines: the C runtime's (libgcc's or compiler-rt's), and where ther
 names. `%` is always
 `std::softfloat`'s: the exact remainder, as C's `fmod` gives it, on every target.
 
+An `f128` constant has all of binary128's precision. A literal like `0.1` is read straight to the
+nearest binary128, not through an `f64`, and `val THIRD: f128 = 1.0 / 3.0;` is folded at compile
+time in binary128, rounding each step as the same operation at run time would.
+
 ### Type aliases
 
 `type name = T;` gives a type another name. It's the same type, not a new one: a `meters` is an

@@ -179,14 +179,19 @@ fn past_i128(v: u128) -> std::string {
     return s;
 }
 
-// a float literal: the wanted float type, else f64
-attach fn float_lit(this: checker&, v: f64, want: u32?) -> tval {
+// a float literal of the wanted float type, else f64, given its nearest f64 v and binary128 q: an
+// f128 is a QUAD of q's bits, so it keeps all of its precision (T-0477)
+attach fn float_lit(this: checker&, v: f64, q: u128, want: u32?) -> tval {
     var t = F64;
     if (want != null && this.t.is_float(want ?? 0)) {
         t = want ?? F64;
     }
-    var r = vpure(t, this.ir.node(ir_kind::FLOAT(v), t));
-    r.lit = lit::FLOAT(v);
+    var n = ir_kind::FLOAT(v);
+    if (t == F128) {
+        n = ir_kind::QUAD(q);
+    }
+    var r = vpure(t, this.ir.node(n, t));
+    r.lit = lit::FLOAT(v, q);
     return r;
 }
 
@@ -276,7 +281,7 @@ attach fn coercible(this: checker&, v: tval&, to: u32) -> bool {
                     return (this.t.int_of(ct) ?? int_ty::I32).fits(n);
                 }
             },
-            .FLOAT(f) => {
+            .FLOAT(f, q) => {
                 match (*tt) {
                     .FLOAT(b) => { return true; },
                     default => {},
@@ -404,7 +409,7 @@ attach fn coerce(this: checker&, v: tval, to: u32, span: span) -> compile_error!
                         }
                         return this.int_lit(n, to);
                     },
-                    .FLOAT(b) => { return this.float_lit(@cast<f64>(n), to); },
+                    .FLOAT(b) => { return this.float_lit(@cast<f64>(n), std::softfloat::i128_to_f128(n), to); },
                     default => {},
                 }
                 // a C enum takes a number its integer type holds
@@ -416,9 +421,9 @@ attach fn coerce(this: checker&, v: tval, to: u32, span: span) -> compile_error!
                     return vpure(to, this.ir.conv(this.int_lit(n, ct).c, to));
                 }
             },
-            .FLOAT(f) => {
+            .FLOAT(f, q) => {
                 match (*this.t.get(to)) {
-                    .FLOAT(b) => { return this.float_lit(f, to); },
+                    .FLOAT(b) => { return this.float_lit(f, q, to); },
                     default => {},
                 }
             },
@@ -657,7 +662,7 @@ attach fn expr(this: checker&, e: expr&, want: u32?) -> compile_error!tval {
             }
             return this.int_lit(@cast<i128>(v), w);
         },
-        .FLOAT(v) => { return this.float_lit(v, want); },
+        .FLOAT(v, q) => { return this.float_lit(v, q, want); },
         .STR(s) => {
             val v = this.str_val(s.as_str());
             if (want != null && (want ?? 0) == CSTR) {
