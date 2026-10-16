@@ -97,6 +97,19 @@ fn main() -> void {
     v.put(1, {});
     std::println("map {} {} {}", cpp::pr::mp::dump_s(&s), cpp::pr::mp::dump_ss(&ss), cpp::pr::mp::dump_v(&v));
     std::println("map {} {} {} {} {}", cpp::pr::mp::dump(&m), cpp::pr::mp::dump_v(&v), s.len, ss.len, v.len);
+    // the handle forms beside them: a stdcxx::map C++ changes (put_in) and reads (dump)
+    var hm: cpp::stdcxx::map<i32, i32> = {};
+    std::println("map {} {} {}", cpp::pr::mp::put_in(&hm), cpp::pr::mp::dump(&hm), cpp::pr::mp::both(&m));
+    picked(&m, 2);
+    picked(&m, 9);
+}
+// a try_ form taking a Volt std::map: C++'s throw an error
+fn picked(m: std::map<i32, i32>&, k: i32) -> void {
+    val n = cpp::pr::mp::try_pick_k(m, k) catch |e| {
+        std::println("pick {}: {}", k, e);
+        return;
+    };
+    std::println("pick {}: {}", k, n);
 }
 // a throwing template leaves the Volt string as it was
 fn grown_t(t: std::string&, k: i32) -> void {

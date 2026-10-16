@@ -134,6 +134,15 @@ inline std::size_t dump_a(const imap &m) { return m.size(); }
 inline int put_in(std::map<int, int> &m) { m[7] = 7; return (int)m.size(); }
 inline int put_s(std::map<std::string, int> &m) { m["z"] = 7; return (int)m.size(); }
 inline int bits(const std::map<int, std::vector<bool>> &m) { return (int)m.size(); }
+inline int pick_k(const std::map<int, int> &m, int k) { auto i = m.find(k); if (i == m.end()) throw std::out_of_range("no key"); return i->second; }
+// const& beside &&: one Volt std::map& form for the two
+inline int both(const std::map<int, int> &) { return 1; }
+inline int both(std::map<int, int> &&) { return 2; }
+// results that would point into the map's copy: not declared with a Volt std::map& (the handle
+// forms stay)
+inline const int *find(const std::map<int, int> &m, int k) { return &m.find(k)->second; }
+inline std::string_view key0(const std::map<std::string, int> &m) { return m.begin()->first; }
+inline const std::vector<int> &row0(const std::map<int, std::vector<int>> &m) { return m.begin()->second; }
 }
 // calls worked out per use that throw (cpp_params_try.volt): their try_ forms catch, a std::string&
 // left as it was; a try_ name the header declares itself keeps it
