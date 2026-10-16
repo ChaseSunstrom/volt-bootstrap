@@ -207,6 +207,8 @@ pub struct Model {
     /// each enum's variants, and whether more may come (#[non_exhaustive], hidden ones)
     pub enums: BTreeMap<String, (Vec<Variant>, bool)>,
     pub left_out: Vec<String>,
+    /// C functions the file declares (module, Volt's extern "C" declaration): no shim between
+    pub externs: Vec<(Vec<String>, String)>,
     /// type aliases (module, name, the type it names): Volt's `type name = T;`
     pub aliases: Vec<(Vec<String>, String, Ty)>,
 }
@@ -2036,6 +2038,9 @@ impl<'a> Gen<'a> {
             if let Some(d) = self.err_decl(&e) {
                 self.modules.entry(module).or_default().push_str(&format!("\n{d}"));
             }
+        }
+        for (module, d) in self.m.externs.clone() {
+            self.modules.entry(module).or_default().push_str(&format!("\n{d}"));
         }
         for (module, name, ty, lit) in self.m.consts.clone() {
             self.modules.entry(module).or_default().push_str(&format!("\nval {}: {ty} = {lit};\n", volt_name(&name)));

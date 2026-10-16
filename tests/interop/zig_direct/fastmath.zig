@@ -121,7 +121,8 @@ pub const util = struct {
     }
 };
 
-// not callable from Volt: a packed struct, a declaration without a body
+// a packed struct (a Volt struct) and a C function from elsewhere (Volt's extern "C" fn: unused,
+// so nothing has to provide it)
 pub const Flags = packed struct {
     a: bool = false,
     b: bool = false,
