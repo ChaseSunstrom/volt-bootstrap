@@ -39,6 +39,7 @@ enum ir_kind {
     // ---- values ----
     INT: i128,       // an integer or float type holding exactly this value
     FLOAT: f64,
+    QUAD: u128,      // an f128 constant: its binary128 bits
     BOOL: bool,
     STR: str,        // a str value over these bytes
     CSTR: str,       // pointer to a NUL-terminated copy of these bytes

@@ -1111,7 +1111,15 @@ attach fn int_const(this: lg&, v: i128, t: u32) -> llvm::LLVMOpaqueValue* {
         }
         return llvm::LLVMConstIntToPtr(llvm::LLVMConstInt(this.i64t(), @cast<u64>(v), 0), l);
     }
+    if (k == llvm::LLVMFP128TypeKind) {
+        return this.quad_const(std::softfloat::i128_to_f128(v), t); // exactly, past a double's 53 bits
+    }
     return llvm::LLVMConstReal(l, @cast<f64>(v));
+}
+
+// an f128 constant of type t from its binary128 bits: an i128 constant bitcast, which LLVM folds
+attach fn quad_const(this: lg&, q: u128, t: u32) -> llvm::LLVMOpaqueValue* {
+    return llvm::LLVMConstBitCast(this.int_const(@cast<i128>(q), int_id(int_ty::U128)), this.lt(t));
 }
 
 // n as a constant of type t, when it is one (global initializers); null otherwise. Aggregates are
@@ -1121,6 +1129,7 @@ attach fn cval(this: lg&, n: u32, t: u32) -> llvm::LLVMOpaqueValue* {
     match (this.c.ir.at(n).kind) {
         .INT(v) => { return this.int_const(v, t); },
         .FLOAT(x) => { return llvm::LLVMConstReal(this.lt(t), x); },
+        .QUAD(q) => { return this.quad_const(q, t); },
         .BOOL(b) => {
             var v: u64 = 0;
             if (b) {
@@ -1590,6 +1599,7 @@ attach fn rv(this: lg&, n: u32) -> llvm::LLVMOpaqueValue* {
     match (this.c.ir.at(n).kind) {
         .INT(v) => { return this.int_const(v, t); },
         .FLOAT(x) => { return llvm::LLVMConstReal(this.lt(t), x); },
+        .QUAD(q) => { return this.quad_const(q, t); },
         .BOOL(x) => {
             var v: u64 = 0;
             if (x) {

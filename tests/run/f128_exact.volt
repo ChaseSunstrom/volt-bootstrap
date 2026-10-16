@@ -9,6 +9,10 @@ val SEVENTH: f128 = @cast<f128>(1) / 7.0;
 val ONE: f128 = @cast<f128>(1);
 val H: f128 = G * 2.0;
 val SUM: f128 = 0.1 + 0.2;
+val A: f64 = 0.1;
+val WIDE: f128 = A; // an f64's value widened, not the literal
+val UNTYPED = 0.1 * G; // the untyped 0.1 read as binary128 beside an f128
+val BIG: f128 = 12345678901234567890123; // past a double's 53 bits
 
 fn b(x: f128) -> u128 {
     return @bitcast<u128>(x);
@@ -32,6 +36,11 @@ fn main() -> void {
     std::println("{}", b(SUM));
     var one: f128 = 1.0;
     std::println("{} {}", b(one / 3.0) == b(THIRD), b(one / 7.0) == b(SEVENTH));
+    std::println("{}", b(WIDE));
+    std::println("{}", b(UNTYPED));
+    std::println("{}", b(-0.1));
+    std::println("{}", b(BIG));
+    std::println("{}", b(0.1 * one));
 }
 // expect: 85047745624057062624278117674093484442
 // expect: 85052937920915597451906648170422704538
@@ -48,3 +57,8 @@ fn main() -> void {
 // expect: 85052937920915597451906648170422704538
 // expect: 85056053299030718348483766468220236596
 // expect: true true
+// expect: 85047745624057062624739286275936223232
+// expect: 85030507198486726996551396426280473724
+// expect: 255188929084526294355965421389977590170
+// expect: 85446031915942936746907751658138107904
+// expect: 85047745624057062624278117674093484442

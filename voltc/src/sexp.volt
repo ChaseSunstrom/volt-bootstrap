@@ -687,7 +687,7 @@ attach fn expr(this: sexp_writer&, e: expr&) -> void {
             this.s("(int ");
             append_u128(&this.out, v);
         },
-        .FLOAT(v) => {
+        .FLOAT(v, q) => {
             var f = v;
             val bits = *@cast<u64&>(&f);
             this.s("(float ");

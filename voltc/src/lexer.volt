@@ -58,11 +58,12 @@ fn fail(lo: usize, hi: usize, file: u32, msg: str) -> compile_error {
 }
 
 // a token's kind and value. INT holds the digits' value only (`-` is a separate PUNCT), STR the bytes after
-// escapes, CHAR a code point, PUNCT one of PUNCTS; IDENT and BUILTIN point into the source text
+// escapes, CHAR a code point, PUNCT one of PUNCTS; IDENT and BUILTIN point into the source text. FLOAT
+// holds the decimal's nearest f64 and its nearest binary128 (an f128 constant's bits), each read from the text
 enum tok {
     IDENT: str,
     INT: u128,
-    FLOAT: f64,
+    FLOAT: (f64, u128),
     CHAR: u32,
     STR: std::string,
     BUILTIN: str, // @name
@@ -316,7 +317,7 @@ fn lex_number(src: str, ip: usize&, int_only: bool, start: usize, file: u32) -> 
                 full.push(c);
             }
         }
-        return tok::FLOAT(strtod(full.c_str(), null));
+        return tok::FLOAT(strtod(full.c_str(), null), std::softfloat::parse128(full.as_str()));
     }
     var v: u128 = 0;
     var ok = text.len() > 0;

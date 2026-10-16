@@ -1569,7 +1569,7 @@ attach fn warn_var_params(this: checker&) -> void {
 fn no_effects(e: expr&) -> bool {
     match (e.kind) {
         .INT(x) => { return true; },
-        .FLOAT(x) => { return true; },
+        .FLOAT(x, q) => { return true; },
         .CHAR(x) => { return true; },
         .STR(x&) => { return true; },
         .BOOL(x) => { return true; },
