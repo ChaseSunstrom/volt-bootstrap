@@ -97,10 +97,11 @@ attach fn no_form(this: bind&, t: u32) -> shape? {
     return null;
 }
 
-// an inner type's form, which has to be plain (see plain)
+// an inner type's form, which has to be plain (see plain): never an E! whose value Volt holds as
+// other than its C form (text, a handle by value)
 attach fn inner(this: bind&, t: u32) -> shape? {
     val s = this.shape_of(t) ?? return null;
-    if (!plain(s) || this.converted(t)) {
+    if (!plain(s) || this.converted(t) || this.owned_result(s)) {
         return this.no_form(t);
     }
     return s;
@@ -145,7 +146,8 @@ attach fn elem(this: bind&, t: u32) -> shape? {
         },
         default => {},
     }
-    if (!plain(s) || this.converted(t)) {
+    // an E! of text or a handle: Volt holds the value, C would read its C form
+    if (!plain(s) || this.converted(t) || this.owned_result(s)) {
         return this.no_form(t);
     }
     return s;
@@ -1281,7 +1283,9 @@ attach fn fn_parts(this: bind&, t: u32, ps: std::vec<u32>&) -> u32 {
     }
 }
 
-// a shim temporary's name: base, with _ added until none of export fn f's parameters has it
+// a shim temporary's name: base, with _ added until none of export fn f's parameters has it (two
+// temporaries never meet: before their _s, a parameter's name and _f, _v or _user, this, viewed and
+// item end in different letters, or are different parameters' names)
 attach fn temp_name(this: bind&, f: u32, base: str) -> std::string {
     var n = S(base);
     var taken = true;
@@ -1323,16 +1327,21 @@ attach fn shim_fn(this: bind&, f: u32, out: std::string&) -> void {
         }
         var pn = S(p.name);
         if (p.name == "this") {
-            pn = S("this_");
+            pn = this.temp_name(f, "this_");
         }
         match (this.shape_of(p.ty) ?? shape::VOID) {
             .CLOSURE(c) => {
                 // the caller's C function, which takes the caller's data first, and that data
                 var ps: std::vec<u32> = {};
                 val r = this.fn_parts(p.ty, &ps);
-                params.append(fmt3("{}: {}, {}_user: void*", copy pn, this.c_fn_src(&ps, r), copy pn).as_str());
-                var user = copy pn;
-                user.append("_user");
+                // the lambda's own parameters are a0..
+                for (k) in 0..ps.len {
+                    if (pn.as_str() == fmt("a{}", unum(@cast<u64>(k))).as_str()) {
+                        pn = this.temp_name(f, fmt("{}_", copy pn).as_str());
+                    }
+                }
+                val user = this.temp_name(f, fmt("{}_user", copy pn).as_str());
+                params.append(fmt3("{}: {}, {}: void*", copy pn, this.c_fn_src(&ps, r), copy user).as_str());
                 var lam = fmt4("|{}, {}| ({}) -> {} {{ ", copy pn, copy user, this.param_list(&ps, false), this.src(r));
                 lam.append(this.call_out(pn.as_str(), user.as_str(), &ps, r).as_str());
                 lam.append(" }");
@@ -1347,12 +1356,14 @@ attach fn shim_fn(this: bind&, f: u32, out: std::string&) -> void {
                 if (this.is_ref(p.ty)) {
                     drop = S("null");
                 }
-                pre.append(fmt4("        val {}_f: foreign_{} = {{ vt: {}.vt, self_: {}.self_, drop: ", copy pn, copy ik, copy pn, copy pn).as_str());
-                pre.append(fmt4("{} }};\n        var {}_v: {} = move {}_f;\n", move drop, copy pn, this.src(this.trait_of(p.ty)), copy pn).as_str());
+                val fv = this.temp_name(f, fmt("{}_f", copy pn).as_str());
+                val vv = this.temp_name(f, fmt("{}_v", copy pn).as_str());
+                pre.append(fmt4("        val {}: foreign_{} = {{ vt: {}.vt, self_: {}.self_, drop: ", copy fv, copy ik, copy pn, copy pn).as_str());
+                pre.append(fmt4("{} }};\n        var {}: {} = move {};\n", move drop, copy vv, this.src(this.trait_of(p.ty)), copy fv).as_str());
                 if (this.is_ref(p.ty)) {
-                    put(&args, fmt("&{}_v", copy pn));
+                    put(&args, fmt("&{}", copy vv));
                 } else {
-                    put(&args, fmt("move {}_v", copy pn));
+                    put(&args, fmt("move {}", copy vv));
                 }
             },
             default => {
@@ -1368,9 +1379,10 @@ attach fn shim_fn(this: bind&, f: u32, out: std::string&) -> void {
                         helper = S("handles");
                         k = index_of(&this.handles, h);
                     }
-                    pre.append(fmt4("        val {}_v = {}_in_{}({});\n", copy pn, copy helper, copy k, copy pn).as_str());
-                    pre.append(fmt4("        defer {}_done_{}({}_v, {});\n", copy helper, copy k, copy pn, copy pn).as_str());
-                    put(&args, fmt2("@slice({}_v, {}.len)", copy pn, copy pn));
+                    val vv = this.temp_name(f, fmt("{}_v", copy pn).as_str());
+                    pre.append(fmt4("        val {} = {}_in_{}({});\n", copy vv, copy helper, copy k, copy pn).as_str());
+                    pre.append(fmt4("        defer {}_done_{}({}, {});\n", copy helper, copy k, copy vv, copy pn).as_str());
+                    put(&args, fmt2("@slice({}, {}.len)", copy vv, copy pn));
                 } else {
                     put(&args, this.unwrap_in(p.ty, copy pn, false));
                 }

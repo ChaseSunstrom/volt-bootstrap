@@ -239,6 +239,7 @@ Python's on
   would, each element copied (text duplicated, a handle's value by its copy), so what Volt
   changes later isn't in it (an element
   type that can't be copied is refused: give it a copy fn, or return a `std::vec` you build). A
+  slice of `E!T`s over text or handles (`oops!std::string[..]`) has no C form. A
   `std::string?` comes back as an optional owned text and goes in as a `str?`; an optional handle
   is its pointer, null for none.
   A `std::vec<T>` comes back as a `std::vector` in C++ (of `std::string`s, or of the classes), a
