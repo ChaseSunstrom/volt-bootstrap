@@ -67,6 +67,10 @@ fn main() -> void {
     std::println("apply {} fold {}", geom::apply(|| (x: i64) -> i64 { return x * 3; }, 5), geom::fold(ns[..], || (a: i64, b: i64) -> i64 { return a + b * b; }));
     geom::keep(|| (s: str) -> std::string { return std::fmt::format("[{}]", s); });
     std::println("kept {} {}", geom::call_kept("a"), geom::call_kept("b"));
+    var ids: std::map<i64, std::string> = {};
+    ids.put(2, std::string::from("b"));
+    ids.put(1, std::string::from("a"));
+    std::println("more {} {} {} {} {} {} {}", geom::names(&ids), geom::count(ns[..]), geom::label(1), geom::label("x", "-"), geom::pick(1, ns[..]), s.tag(7), geom::show(&q));
 }
 // expect: norm 5 x 3
 // expect: scaled 6 1.5 dist 6.18465843842649
@@ -87,3 +91,4 @@ fn main() -> void {
 // expect: untyped <3> <s> <1.5> bump 2 5
 // expect: apply 15 fold 14
 // expect: kept [a] [b]
+// expect: more a,b 3 1: x- 2 tri:7 <Point(x=1.0, y=2.0)>

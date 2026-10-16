@@ -30,8 +30,8 @@ fn main() -> void {
 | Python | Volt |
 | --- | --- |
 | a function | `fn f(...)`; simple defaults stay defaults, keyword-only parameters are ordinary ones |
-| a parameter with no annotation | its default's type (`n=1` is an `i64`), or with no default a type parameter: `show(3)`, `show("s")`, `show(&shape)` each convert as their type does (a type with no conversion is an error at the call) |
-| `*args: T`, `**kwargs: T` | a trailing `T[..]`, and a trailing `std::map<std::string, T>&` passed as keyword arguments |
+| a parameter with no annotation | its default's type (`n=1` is an `i64`), or with no default a type parameter: `show(3)`, `show("s")`, `show(&shape)` each convert as their type does (a type with no conversion is an error at the call); one whose default is `None` is left out |
+| `*args: T`, `**kwargs: T` | a trailing `T[..]`, and a trailing `std::map<std::string, T>&` passed as keyword arguments (a key that's also a keyword parameter stops the program); unannotated, of a type parameter |
 | a class | a handle: a reference to the object (a copy refers to the same one); `is_null()` for `None` |
 | `__init__` | `T::new(...)` |
 | methods, `@staticmethod`, `@classmethod` | methods, and `T::f(...)` |
@@ -43,9 +43,9 @@ fn main() -> void {
 | `bytes` | `u8[..]` in, `std::vec<u8>` out |
 | `list[int]`, `list[float]`, `list[bool]`, `list[str]` | `T[..]` in (what Python changes in the list comes back, but for `str`), `std::vec<T>` out |
 | `X \| None`, `Optional[X]` | `X?`; for a class, an empty handle is `None` |
-| `dict[str, V]`, `dict[int, V]` (V a number, `bool` or `str`) | `std::map<K, V>&` in, `std::map<K, V>` out: copies |
+| `dict[str, V]`, `dict[int, V]` (V a number, `bool` or `str`) | `std::map<K, V>&` in, `std::map<K, V>` out: copies (what Python changes in a dict it's given doesn't come back) |
 | `tuple[int, str, float]` and the like | a Volt tuple `(i64, str, f64)` in, `(i64, std::string, f64)` out |
-| `Callable[[int], int]` and the like (numbers, `bool`s, `str`s) | a Volt fn value (`\|\| (x: i64) -> i64 { ... }`), which Python may keep and call later; it's freed with the callable |
+| `Callable[[int], int]` and the like (numbers, `bool`s, `str`s) | a Volt fn value (`\|\| (x: i64) -> i64 { ... }`), which Python may keep and call later; it's freed with the callable. A parameter only: as a result or an attribute it's left out, and a call with the wrong arguments stops the program |
 | no return annotation, `-> None` | `void` |
 | an `UPPER_CASE` constant (a number, `bool` or string) | a `val` |
 

@@ -61,6 +61,9 @@ class Shape:
     def describe(self, prefix: str = "a") -> str:
         return f"{prefix} {self.name} with {self.count} sides"
 
+    def tag(self, x) -> str:
+        return f"{self.name}:{x}"
+
 
 class Square(Shape):
     def __init__(self, side: float):
@@ -186,6 +189,41 @@ def call_kept(s: str) -> str:
     return kept(s)
 
 
+def names(d: dict[int, str]) -> str:
+    return ",".join(d[k] for k in sorted(d))
+
+
+def count(*xs) -> int:
+    return len(xs)
+
+
+def label(x, *, sep: str = ":") -> str:
+    return f"{x}{sep}"
+
+
+def pick(i: int, *xs: int) -> int:
+    return xs[i]
+
+
 # Volt can't call these: they're listed in a comment of what bolt writes
 def nested(d: dict[str, list[int]]) -> int:
     return len(d)
+
+
+def make_adder(n: int) -> Callable[[int], int]:
+    return lambda x: x + n
+
+
+def opt(x=None) -> str:
+    return str(x)
+
+
+def single(t: tuple[int]) -> int:
+    return t[0]
+
+
+class Holder:
+    cb: Callable[[int], int]
+
+    def __init__(self):
+        self.cb = lambda x: x

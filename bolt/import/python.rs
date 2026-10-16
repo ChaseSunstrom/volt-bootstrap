@@ -91,7 +91,7 @@ fn py_files(p: &Path, out: &mut Vec<PathBuf>) {
 /// TYPE: int, float, bool, str, bytes, void, cls:NAME, T[] (of the first four), T?, dict:K:V (K str
 /// or int, V one of the first four), tup:A,B (each one of the first four or cls:NAME), fn:A,B:R (a
 /// Callable of the first four, R void too) or other; none when a parameter has no annotation.
-/// DEFAULT: a Volt literal, or - (none, or one Volt can't write)
+/// DEFAULT: a Volt literal, - (none) or ? (one Volt can't write)
 const DESCRIBE: &str = r#"import collections.abc, enum, importlib, inspect, sys, types, typing
 
 sys.path.insert(0, sys.argv[1])
@@ -143,6 +143,10 @@ def T(t):
 def lit(v):
     if v is empty:
         return "-"
+    return lit_of(v)
+
+
+def lit_of(v):
     if v is None:
         return "null"
     if isinstance(v, bool):
@@ -154,7 +158,7 @@ def lit(v):
         return r if "." in r and "e" not in r and "n" not in r else "-"
     if isinstance(v, str) and all(32 <= ord(c) < 127 and c not in '"\\{}' for c in v):
         return '"' + v + '"'
-    return "-"
+    return "?"
 
 
 def func(name, kind, f, skip_first):
@@ -168,7 +172,7 @@ def func(name, kind, f, skip_first):
     for p in list(sig.parameters.values())[1 if skip_first else 0:]:
         if p.kind in (p.VAR_POSITIONAL, p.VAR_KEYWORD):
             t = T(hints.get(p.name, empty))
-            ok = t in ("int", "float", "bool", "str")
+            ok = t in ("int", "float", "bool", "str", "none")
             print(f"param\t{p.name}\t{t if ok else 'other'}\t{'args' if p.kind == p.VAR_POSITIONAL else 'kwargs'}\t-")
             continue
         k = "kw" if p.kind == p.KEYWORD_ONLY else "pos"
@@ -228,7 +232,7 @@ for n, f in sorted(vars(M).items()):
         continue
     if inspect.isfunction(f) and f.__module__ == M.__name__:
         func(n, "fn", f, False)
-    elif n.isupper() and type(f) in (int, float, bool, str) and lit(f) != "-":
+    elif n.isupper() and type(f) in (int, float, bool, str) and lit(f) not in ("-", "?"):
         print(f"const\t{n}\t{prims[type(f)]}\t{lit(f)}")
 "#;
 
@@ -238,6 +242,8 @@ struct Param {
     /// pos, kw, args (*xs) or kwargs (**kws)
     kind: String,
     default: Option<String>,
+    /// it has a default Volt can't write (a list, 1e-3)
+    odd_default: bool,
 }
 
 struct Func {
@@ -287,7 +293,7 @@ fn read(desc: &str) -> (Items, Vec<String>) {
                 while i < rows.len() && rows[i][0] != "end" {
                     let r = &rows[i];
                     match (r[0], r.len()) {
-                        ("param", 5) => func.params.push(Param { name: r[1].to_string(), ty: r[2].to_string(), kind: r[3].to_string(), default: (r[4] != "-").then(|| r[4].to_string()) }),
+                        ("param", 5) => func.params.push(Param { name: r[1].to_string(), ty: r[2].to_string(), kind: r[3].to_string(), default: (r[4] != "-" && r[4] != "?").then(|| r[4].to_string()), odd_default: r[4] == "?" }),
                         ("result", 2) => func.ret = r[1].to_string(),
                         _ => {}
                     }
@@ -364,12 +370,9 @@ impl Gen<'_> {
             return Some(PT::Dict(val(k).filter(|k| *k == "int" || *k == "str")?, val(v)?));
         }
         if let Some(r) = s.strip_prefix("tup:") {
-            return Some(PT::Tuple(r.split(',').map(val).collect::<Option<Vec<_>>>()?));
-        }
-        if let Some(r) = s.strip_prefix("fn:") {
-            let (ps, ret) = r.rsplit_once(':')?;
-            let ps = if ps.is_empty() { Vec::new() } else { ps.split(',').map(val).collect::<Option<Vec<_>>>()? };
-            return Some(PT::Fn(ps, if ret == "void" { "void" } else { val(ret)? }));
+            // (two or more: Volt has no one-element tuple)
+            let es = r.split(',').map(val).collect::<Option<Vec<_>>>()?;
+            return (es.len() > 1).then_some(PT::Tuple(es));
         }
         if let Some(e) = s.strip_suffix("[]") {
             return Some(PT::List(prim(e).filter(|p| *p != "bytes")?));
@@ -387,6 +390,16 @@ impl Gen<'_> {
             return self.objs.contains(c).then(|| PT::Obj(c.to_string()));
         }
         Some(PT::Prim(prim(s)?))
+    }
+
+    /// a parameter's type: pt's, or a Callable (a Volt fn value Python calls back; as a result or
+    /// an attribute there's no Volt fn to call it with)
+    fn pt_param(&self, s: &str) -> Option<PT> {
+        let Some(r) = s.strip_prefix("fn:") else { return self.pt(s) };
+        let val = |x: &str| prim(x).filter(|p| *p != "bytes");
+        let (ps, ret) = r.rsplit_once(':')?;
+        let ps = if ps.is_empty() { Vec::new() } else { ps.split(',').map(val).collect::<Option<Vec<_>>>()? };
+        Some(PT::Fn(ps, if ret == "void" { "void" } else { val(ret)? }))
     }
 
     fn ty_in(t: &PT) -> String {
@@ -445,12 +458,12 @@ impl Gen<'_> {
             PT::Dict(..) => (vec![], format!("py_rt::of_dict({v})"), vec![]),
             // a tuple of its elements, each converted
             PT::Tuple(es) => {
-                let names: Vec<String> = (0..es.len()).map(|i| format!("{v}_{i}")).collect();
-                let mut pre = vec![format!("val ({}) = {v};", names.join(", ")), format!("val {v}_t = py_rt::tuple({});", es.len())];
+                let names: Vec<String> = (0..es.len()).map(|i| format!("p_{v}_{i}")).collect();
+                let mut pre = vec![format!("val ({}) = {v};", names.join(", ")), format!("val p_{v}_t = py_rt::tuple({});", es.len())];
                 for (i, (e, n)) in es.iter().zip(&names).enumerate() {
-                    pre.push(format!("py_rt::put({v}_t, {i}, py_rt::of_{e}({n}));"));
+                    pre.push(format!("py_rt::put(p_{v}_t, {i}, py_rt::of_{e}({n}));"));
                 }
-                (pre, format!("{v}_t"), vec![])
+                (pre, format!("p_{v}_t"), vec![])
             }
             // the closure, moved into a Python callable that holds it
             PT::Fn(ps, r) => (vec![], format!("py_rt::{}(move {v})", Self::fn_helper(ps, r)), vec![]),
@@ -502,18 +515,30 @@ impl Gen<'_> {
         for p in &f.params {
             let vn = Self::param_name(&p.name);
             // *args: a trailing slice; **kwargs: a trailing map of keyword arguments
+            // (unannotated: of a type parameter, each value converted by its type)
             if p.kind == "args" || p.kind == "kwargs" {
-                let e = prim(&p.ty).filter(|e| *e != "bytes").ok_or(format!("{what} (parameter {}'s type)", p.name))?;
-                if p.kind == "args" {
-                    params.push(format!("{vn}: {}[..]", volt_prim(e)));
-                    rest = Some((vn, e));
+                let (vt, conv) = if p.ty == "none" {
+                    let g = format!("T{}", generics.len());
+                    generics.push(format!("{g}: type"));
+                    (g.clone(), (g, "any".to_string()))
                 } else {
-                    params.push(format!("{vn}: std::map<std::string, {}>&", Self::one(e)));
+                    let e = prim(&p.ty).filter(|e| *e != "bytes").ok_or(format!("{what} (parameter {}'s type)", p.name))?;
+                    (if p.kind == "args" { volt_prim(e).to_string() } else { Self::one(e) }, (String::new(), e.to_string()))
+                };
+                if p.kind == "args" {
+                    params.push(format!("{vn}: {vt}[..]"));
+                    rest = Some((vn, conv.1));
+                } else {
+                    params.push(format!("{vn}: std::map<std::string, {vt}>&"));
                     kws = Some(vn);
                 }
                 continue;
             }
-            // no annotation: its default's type, else a type parameter converted per type
+            // no annotation: its default's type, else a type parameter converted per type (a default
+            // of None, or one Volt can't write, has no type to give it)
+            if p.ty == "none" && (p.odd_default || p.default.as_deref() == Some("null")) {
+                return Err(format!("{what} (parameter {} has no annotation, and a default Volt can't type)", p.name));
+            }
             let (ty, any) = match (p.ty.as_str(), p.default.as_deref()) {
                 ("none", Some(d)) if d == "true" || d == "false" => ("bool".to_string(), false),
                 ("none", Some(d)) if d.starts_with('"') => ("str".to_string(), false),
@@ -526,7 +551,7 @@ impl Gen<'_> {
                 }
                 (t, _) => (t.to_string(), false),
             };
-            let t = if any { PT::Any(ty) } else { self.pt(&ty).ok_or(format!("{what} (parameter {}'s type)", p.name))? };
+            let t = if any { PT::Any(ty) } else { self.pt_param(&ty).ok_or(format!("{what} (parameter {}'s type)", p.name))? };
             if let PT::Fn(ps, r) = &t {
                 self.fns.borrow_mut().insert((ps.clone(), r));
             }
@@ -585,7 +610,7 @@ impl Gen<'_> {
             l.push(format!("py_rt::put(p_a.p, {i}, {e});"));
         }
         if let Some((r, e)) = &rest {
-            l.push(format!("for (i) in 0..{r}.len {{\n        py_rt::put(p_a.p, {} + i, py_rt::of_{e}({r}[i]));\n    }}", pos.len()));
+            l.push(format!("for (p_i) in 0..{r}.len {{\n        py_rt::put(p_a.p, {} + p_i, py_rt::of_{e}({r}[p_i]));\n    }}", pos.len()));
         }
         let kws = if kw.is_empty() && kws.is_none() {
             "null".to_string()
@@ -988,8 +1013,10 @@ mod tests {
         assert_eq!(g.pt("dict:str:int"), Some(PT::Dict("str", "int")));
         assert_eq!(g.pt("dict:float:int"), None);
         assert_eq!(g.pt("tup:int,str,float"), Some(PT::Tuple(vec!["int", "str", "float"])));
-        assert_eq!(g.pt("fn:int,int:int"), Some(PT::Fn(vec!["int", "int"], "int")));
-        assert_eq!(g.pt("fn::void"), Some(PT::Fn(vec![], "void")));
+        // a Callable as a parameter only (as a result there's no Volt fn to call it with); no one-element tuple
+        assert_eq!(g.pt_param("fn:int,int:int"), Some(PT::Fn(vec!["int", "int"], "int")));
+        assert_eq!(g.pt_param("fn::void"), Some(PT::Fn(vec![], "void")));
+        assert_eq!((g.pt("fn:int:int"), g.pt("tup:int")), (None, None));
         let mut seen = BTreeSet::new();
         let f: Vec<String> = items.funcs.iter().map(|f| g.func(None, f, &mut seen).unwrap()).collect();
         // *args a trailing slice, **kwargs a trailing map, an unannotated one generic or its default's type
@@ -1055,7 +1082,7 @@ fn extras(g: &Gen) -> String {
         let n = ps.len();
         let _ = write!(
             s,
-            "\n    // a Volt {ft} as a Python callable: a function over a capsule holding it (freed with it)\n    var def_{b}: py::PyMethodDef = {{}};\n    extern \"C\" fn call_{b}(s: py::PyObject*, args: py::PyObject*) -> py::PyObject* {{\n        val f = @cast<({ft})*>(py::PyCapsule_GetPointer(s, \"volt.fn\"));\n        if (py::PyTuple_Size(args) != {n}) {{\n            @panic(\"Python called a Volt {ft} with another number of arguments\");\n        }}\n{take}        {give}\n    }}\n    extern \"C\" fn drop_{b}(cap: py::PyObject*) -> void {{\n        val p = @cast<({ft})*>(py::PyCapsule_GetPointer(cap, \"volt.fn\"));\n        val f = @read(p);\n        val a: std::mem::default_allocator = {{}};\n        a.free<({ft})>(p);\n    }}\n    fn {name}(f: {ft}) -> py::PyObject* {{\n        val a: std::mem::default_allocator = {{}};\n        val p: ({ft})* = a.malloc<({ft})>() catch @panic(\"out of memory\");\n        @write(p, move f);\n        def_{b} = {{ ml_name: \"volt_fn\", ml_meth: call_{b}, ml_flags: 1, ml_doc: null }};\n        val cap = tmp_of(py::PyCapsule_New(@cast<void*>(p), \"volt.fn\", drop_{b}));\n        return py::PyCFunction_NewEx(&def_{b}, cap.p, null);\n    }}\n"
+            "\n    // a Volt {ft} as a Python callable: a function over a capsule holding it (freed with it)\n    var def_{b}: py::PyMethodDef = {{}};\n    var def_{b}_set = false;\n    extern \"C\" fn call_{b}(s: py::PyObject*, args: py::PyObject*) -> py::PyObject* {{\n        val f = @cast<({ft})*>(py::PyCapsule_GetPointer(s, \"volt.fn\"));\n        if (py::PyTuple_Size(args) != {n}) {{\n            @panic(\"Python called a Volt {ft} with another number of arguments\");\n        }}\n{take}        {give}\n    }}\n    extern \"C\" fn drop_{b}(cap: py::PyObject*) -> void {{\n        val p = @cast<({ft})*>(py::PyCapsule_GetPointer(cap, \"volt.fn\"));\n        val f = @read(p);\n        val a: std::mem::default_allocator = {{}};\n        a.free<({ft})>(p);\n    }}\n    fn {name}(f: {ft}) -> py::PyObject* {{\n        val a: std::mem::default_allocator = {{}};\n        val p: ({ft})* = a.malloc<({ft})>() catch @panic(\"out of memory\");\n        @write(p, move f);\n        if (!def_{b}_set) {{\n            def_{b} = {{ ml_name: \"volt_fn\", ml_meth: call_{b}, ml_flags: 1, ml_doc: null }};\n            def_{b}_set = true;\n        }}\n        val cap = tmp_of(py::PyCapsule_New(@cast<void*>(p), \"volt.fn\", drop_{b}));\n        return py::PyCFunction_NewEx(&def_{b}, cap.p, null);\n    }}\n"
         );
     }
     s
@@ -1077,10 +1104,16 @@ const EXTRAS: &str = r#"
     <K: type, V: type>
     fn to_map(o: py::PyObject*) -> std::map<K, V> {
         var out: std::map<K, V> = {};
+        val c = py::PyDict_Copy(o);
+        if (c == null) {
+            py::PyErr_Clear();
+            @panic("Python gave back something other than a dict");
+        }
+        val d = tmp_of(c);
         var pos: isize = 0;
         var k: py::PyObject* = null;
         var v: py::PyObject* = null;
-        while (py::PyDict_Next(o, &pos, &k, &v) != 0) {
+        while (py::PyDict_Next(d.p, &pos, &k, &v) != 0) {
             val kk: K = from_py(k);
             val vv: V = from_py(v);
             out.put(kk, vv);
@@ -1116,6 +1149,9 @@ const EXTRAS: &str = r#"
     <V: type>
     fn kws(d: py::PyObject*, m: std::map<std::string, V>&) -> void {
         for (en) in m.iter() {
+            if (py::PyDict_GetItemString(d, en.key.c_str()) != null) {
+                @panic(std::fmt::format("the keyword argument {} is given twice", en.key.as_str()).as_str());
+            }
             kw(d, en.key.as_str(), of_ref(en.value));
         }
     }
@@ -1134,6 +1170,9 @@ const EXTRAS: &str = r#"
     }
 
     // an unannotated parameter's value, converted by its type
+    fn of_any(x: i32) -> py::PyObject* {
+        return of_int(@cast<i64>(x));
+    }
     fn of_any(x: i64) -> py::PyObject* {
         return of_int(x);
     }
