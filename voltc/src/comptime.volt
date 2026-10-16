@@ -37,6 +37,7 @@ enum flow {
 struct ct_frame {
     scopes: std::vec<std::map<str, const_entry>>;
     env: u32;
+    ret: u32 = VOID; // a comptime fn's return type: what a return's value is wanted as
 }
 
 // a type's size and alignment in bytes
@@ -801,7 +802,9 @@ attach fn ct_expr(this: checker&, e: expr&, want: u32?) -> compile_error!cval {
             // its maximum, not -1); a comparison's expected type is bool, nothing for its operands
             var aw: u32? = null;
             val compares = op == binop::EQ || op == binop::NE || op == binop::LT || op == binop::GT || op == binop::LE || op == binop::GE;
-            if (!compares) {
+            val shifts = op == binop::SHL || op == binop::SHR;
+            // (a shift's left literal takes the wanted type only beside a typed amount: below)
+            if (!compares && !shifts) {
                 aw = want;
             }
             if (past_i128_lit(a)) {
@@ -809,6 +812,31 @@ attach fn ct_expr(this: checker&, e: expr&, want: u32?) -> compile_error!cval {
             }
             var av = try this.ct_expr(a, aw);
             this.c_enum_ct(&av);
+            if (shifts) {
+                // a shift is its left side's type (an untyped literal shifted by a typed amount: the
+                // wanted integer type, else i32, as at run time), its amount any integer type; two
+                // literals stay an exact number, fit to the wanted type after (1 << 9 for a u8: 512)
+                val amount = try this.ct_expr(b, null);
+                var typed_amount = true;
+                match (amount) {
+                    .INT(y, ty) => { typed_amount = ty != VOID; },
+                    default => {},
+                }
+                match (av) {
+                    .INT(x, t) => {
+                        if (t == VOID && typed_amount) {
+                            var lt = I32;
+                            val wt = want ?? VOID;
+                            if (this.t.int_of(wt) != null) {
+                                lt = wt;
+                            }
+                            av = try this.ct_coerce(move av, lt, span);
+                        }
+                    },
+                    default => {},
+                }
+                return this.ct_binop(op, move av, move amount, span);
+            }
             var at: u32? = null;
             match (av) {
                 .INT(x, t) => {
@@ -932,7 +960,13 @@ attach fn ct_expr(this: checker&, e: expr&, want: u32?) -> compile_error!cval {
         .RETURN(x) => {
             var v = cval::VOID;
             if (x) {
-                v = try this.ct_expr(x, null);
+                // wanted as the fn's return type, as at run time (return 1 << k in a fn returning u64)
+                var w: u32? = null;
+                val rt = this.ct_top().ret;
+                if (rt != VOID && rt != TYPE) {
+                    w = rt;
+                }
+                v = try this.ct_expr(x, w);
             }
             return this.ct_leave(flow::RET(move v), span);
         },
@@ -1159,7 +1193,21 @@ attach fn ct_int_op(this: checker&, op: binop, x: i128, ta: u32, y: i128, tb: u3
     if (t == VOID) {
         t = tb;
     }
-    if (ta != VOID && tb != VOID && ta != tb) {
+    if (op == binop::SHL || op == binop::SHR) {
+        // the left side's type, the amount any integer below its width (run time's debug check); an
+        // untyped left stays an exact number
+        t = ta;
+        val sk = this.t.int_of(t);
+        if (sk) {
+            val skk = sk;
+            val width = skk.bits();
+            if (y < 0 || y >= @cast<i128>(width)) {
+                return fail(span, fmt3("shift by {} overflows {} ({} bits)", num(y), this.ty_name(t), unum(@cast<u64>(width))));
+            }
+        } else if (y < 0) {
+            return fail(span, fmt("shift by {}", num(y)));
+        }
+    } else if (ta != VOID && tb != VOID && ta != tb) {
         return type_diff(fail(span, fmt2("mismatched types {} and {}", this.ty_name(ta), this.ty_name(tb))));
     }
     val k = this.t.int_of(t);
@@ -2348,13 +2396,15 @@ attach fn ct_call_expr(this: checker&, callee: expr&, args: std::vec<expr>&, wan
     }
     var vals: std::vec<cval> = {};
     for (i) in 0..args.len {
-        // (a struct or an array: what a { } literal makes from it; anything else is coerced after,
-        // as before)
+        // (a struct or an array: what a { } literal makes from it; an integer: what an untyped
+        // literal inside takes, as at run time (take(1 << k) for a u64); anything else is coerced
+        // after, as before)
         var want_i: u32? = null;
         if (i < wants.len && *wants.at(i) != NO_TY) {
             match (*this.t.get(*wants.at(i))) {
                 .STRUCT(sid) => { want_i = *wants.at(i); },
                 .ARRAY(et, n) => { want_i = *wants.at(i); },
+                .INT(ik) => { want_i = *wants.at(i); },
                 default => {},
             }
         }
@@ -2477,7 +2527,7 @@ attach fn ct_call(this: checker&, decl: u32, explicit: std::vec<garg>&, args: st
     if (f.ret) {
         ret = try this.resolve_type(&f.ret, env);
     }
-    var fr: ct_frame = { scopes: {}, env: env };
+    var fr: ct_frame = { scopes: {}, env: env, ret: ret };
     put(&fr.scopes, move sc);
     put(&this.ct, move fr);
     val r = this.ct_block(&f.body.value);
