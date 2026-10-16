@@ -1923,11 +1923,8 @@ attach fn param(this: cpp_gen&, t: clang::CXType, name: str, i: usize, tparams: 
 // a function pointer parameter, R(*)(A...): a Volt extern "C" fn(A...) -> R, C++ calling the Volt
 // fn through a cast to its own pointer type (C and C++ function types differ in the standard, but
 // every compiler Volt builds with gives them one calling convention). A, R: numbers, bool, void or
-// pointers, which C and C++ lay out alike
+// pointers, which C and C++ lay out alike; R(*)(A..., ...): a Volt extern "C" fn(A..., ...) -> R
 attach fn fn_ptr_param(this: cpp_gen&, f: clang::CXType, name: str, slot: str, cty: std::string) -> cpp_arg? {
-    if (clang::clang_isFunctionTypeVariadic(f) != 0) {
-        return null;
-    }
     val n = clang::clang_getNumArgTypes(f);
     if (n < 0) {
         return null;
@@ -1939,6 +1936,12 @@ attach fn fn_ptr_param(this: cpp_gen&, f: clang::CXType, name: str, slot: str, c
         }
         val p = this.c_abi_type(clang::clang_getArgType(f, i)) ?? return null;
         ps.append(p.as_str());
+    }
+    if (clang::clang_isFunctionTypeVariadic(f) != 0) {
+        if (n > 0) {
+            ps.append(", ");
+        }
+        ps.append("...");
     }
     val r = this.c_abi_type(clang::clang_getResultType(f)) ?? return null;
     return { vty: fmt2("extern \"C\" fn({}) -> {}", move ps, copy r), pass: fmt("@cast<void*>({})", S(name)), cpp: fmt2("(VOLT_ID({}))({})", move cty, S(slot)) };
@@ -6503,6 +6506,9 @@ attach fn cpp_probe_type(this: checker&, t: u32) -> std::string? {
         },
         .FN_PTR(ps&, r, va) => {
             // a C function: C++'s pointer to one
+            if (this.fn_ptr_unformed(t) != null) {
+                return null;
+            }
             var s = this.cpp_spell(r) ?? return null;
             s.append(" (*)(");
             for (i) in 0..ps.len {
@@ -6513,7 +6519,10 @@ attach fn cpp_probe_type(this: checker&, t: u32) -> std::string? {
                 s.append(p.as_str());
             }
             if (va) {
-                s.append(", ...");
+                if (ps.len > 0) {
+                    s.append(", ");
+                }
+                s.append("...");
             }
             s.push(')');
             return fmt("__typeof__({})", move s);
@@ -6985,17 +6994,67 @@ attach fn cpp_dyn_call(this: checker&, d: u32, name: str, rv: tval?, explicit: s
 // an argument of a call clang works out: a fn's name is its C function (a function pointer, which
 // C++ makes a callable from too); a fn value or closure stays one
 attach fn cpp_arg_value(this: checker&, e: expr&) -> compile_error!tval {
+    var want: u32? = null;
     match (e.kind) {
         .PATH(p&) => {
-            val v = try this.expr(e, null);
-            match (*this.t.get(v.ty)) {
-                .FN_VAL(a, b) => { return this.expr(e, VOIDPTR); },
+            if (this.names_fn(p)) {
+                want = VOIDPTR;
+            }
+        },
+        default => {},
+    }
+    val v = try this.expr(e, want);
+    try this.fn_ptr_form(v.ty, e);
+    return v;
+}
+
+// whether p names a fn (a local, or a generic's value, of that name hides it), as path_expr reads it
+attach fn names_fn(this: checker&, p: path&) -> bool {
+    if (p.is_single()) {
+        val name = p.segs.at(0).name;
+        if (this.lookup_local(name) != null) {
+            return false;
+        }
+        val g = this.env_generic(this.cx.env, name);
+        if (g) {
+            match (g) {
+                .INT(v) => { return false; },
+                .VAL(i) => { return false; },
+                .STR(s) => { return false; },
                 default => {},
             }
-            return v;
-        },
-        default => { return this.expr(e, null); },
+        }
     }
+    val ns = this.env_at(this.cx.env).ns;
+    var f: found? = null;
+    if (p.segs.len == 1) {
+        f = this.lookup(ns, p.segs.at(0).name);
+    } else {
+        f = this.lookup_path_ns(ns, p);
+    }
+    val fd = f ?? return false;
+    match (fd) {
+        .DECLS(l) => {
+            match (this.item_of(*this.list(l).at(0)).kind) {
+                .FN(x) => { return true; },
+                default => {},
+            }
+        },
+        default => {},
+    }
+    return false;
+}
+
+// a function pointer argument e of type t (a fn's name, or another value) whose signature has no C
+// function-pointer form (fn_ptr_unformed): the error naming the fn and the type
+attach fn fn_ptr_form(this: checker&, t: u32, e: expr&) -> compile_error!void {
+    val why = this.fn_ptr_unformed(t) ?? return;
+    var who = S("this function pointer");
+    match (e.kind) {
+        .PATH(p&) => { who = fmt("'{}'", S(p.last())); },
+        default => {},
+    }
+    return fail(e.span, fmt2("{} {}, which has no C function-pointer form", move who, copy why));
 }
 
 // a call of callee (ns::f, or .m on rv) worked out per use in import k's headers (tried: its try_
@@ -7206,9 +7265,41 @@ attach fn cpp_spell(this: checker&, t: u32) -> std::string? {
     }
 }
 
+// how function pointer type t's signature has no C function-pointer form ("takes a i32&", "returns
+// a C++ class"): a reference or a C++ class, which a C++ signature would spell otherwise (the
+// importer's c_abi_type refuses them in a declared function pointer parameter too); none when it
+// has one, or t is no function pointer
+attach fn fn_ptr_unformed(this: checker&, t: u32) -> std::string? {
+    match (*this.t.get(t)) {
+        .FN_PTR(ps&, ret, va) => {
+            for (p&) in ps.items() {
+                if (this.no_c_fn_form(*p)) {
+                    return fmt("takes a {}", this.ty_name(*p));
+                }
+            }
+            if (this.no_c_fn_form(ret)) {
+                return fmt("returns a {}", this.ty_name(ret));
+            }
+        },
+        default => {},
+    }
+    return null;
+}
+
+attach fn no_c_fn_form(this: checker&, t: u32) -> bool {
+    val x = this.t.opt_inner(t) ?? t;
+    match (*this.t.get(x)) {
+        .REF(r) => { return true; },
+        default => { return this.cpp_is_class(x); },
+    }
+}
+
 // a Volt function pointer type t as a C++ declaration of name: `R name(P...)` (name "(*)": the
-// pointer type itself)
+// pointer type itself; none for one fn_ptr_unformed refuses)
 attach fn cpp_fn_spell(this: checker&, t: u32, name: str) -> std::string? {
+    if (this.fn_ptr_unformed(t) != null) {
+        return null;
+    }
     match (*this.t.get(t)) {
         .FN_PTR(ps&, ret, va) => {
             var s = this.cpp_spell(ret) ?? return null;
@@ -7421,7 +7512,9 @@ attach fn cpp_call_as(this: checker&, r: u32, gargs: std::vec<garg>&, args: std:
     }
     for (i) in 1..args.len {
         if (*how.at(i - 1) == '&') {
-            val fv = try this.garg_expr(args.at(i), VOIDPTR);
+            val fe = try this.garg_value(args.at(i));
+            val fv = try this.expr(fe, VOIDPTR);
+            try this.fn_ptr_form(fv.ty, fe);
             var sym = S("");
             match (this.ir.at(fv.c).kind) {
                 .FN(f) => {

@@ -21,6 +21,10 @@ inline int first_of(Arr &a = defaults) { return a[0]; }
 inline int apply(int (*f)(int), int x) { return f(x); }
 inline double fold(double (*f)(double, double), double a, double b) { return f(a, b); }
 template <class T> T apply_t(T (*f)(T), T x) { return f(x); }
+// callables, worked out per use (a pack has no Volt generic form): fns of no parameters, and C
+// variadic ones (snprintf)
+template <class... F> int call0(F... f) { return (0 + ... + f()); }
+template <class... F> int callv(F... f) { unsigned char b[16]; return (0 + ... + f(b, sizeof b, "%d-%d", 12, 345)); }
 inline void shout(std::string &s, int n) { s.append(n, '!'); }
 // a C++ callable taking a std::string&, which Volt keeps and calls
 inline std::function<void(std::string &)> exclaimer(int n) { return [n](std::string &s) { s.append(n, '?'); }; }

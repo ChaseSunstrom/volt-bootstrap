@@ -33,6 +33,9 @@ fn bump() -> i32 {
 // the outer call's error, and a catching call it makes after that (a scope of its own, failing or
 // not) leaves it so
 fn inc(x: i32) -> i32 { return x + 1; }
+fn seven() -> i32 { return 7; }
+// (in C++'s words, as a call worked out per use reads the pointer's type back: size_t, const char *)
+extern "C" fn snprintf(buf: u8*, n: u64, fmt: cstr?, ...) -> i32;
 fn then_ok(k: i32) -> i32 {
     val z = cpp::pr::pu::nonneg(k);
     val n = @cpp<cpp::cpp_error!i32>("pr::pu::nonneg(1)") catch |e| { return 98; };
@@ -83,4 +86,8 @@ fn main() -> void {
     show("slice 1", @cpp<cpp::cpp_error!i32>("pr::pu::nonneg({0}.ptr[1])", ys[..]));
     q = 5;
     std::println("plain {} {} {} {}", @cpp<i32>("pr::pu::nonneg({0})", 3), @cpp<i32>("pr::apply({0}, {1})", inc, 41), @cpp<i32>("pr::pu::nonneg({0})", &q), @cpp<i32>("{0}.ptr[0]", ys[..]));
+    // a fn of no parameters and a C variadic one as function pointers: @cpp<R>'s {i} and {&i}, and
+    // calls worked out per use
+    std::println("fns {} {} {} {} {}", @cpp<i32>("{0}()", seven), @cpp<i32>("{&0}()", seven), cpp::pr::call0(seven), @cpp<i32>("pr::callv({0})", snprintf), cpp::pr::callv(snprintf));
+    show("fns caught", @cpp<cpp::cpp_error!i32>("pr::callv({0})", snprintf));
 }
