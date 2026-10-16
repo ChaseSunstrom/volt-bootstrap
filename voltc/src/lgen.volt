@@ -4,7 +4,7 @@
 // Apple's arm64 or Windows x64), so LLVM-built code shares memory and calls with C-backend libraries,
 // C headers and the runtime (compiled by cc).
 use std::mem;
-use { "llvm-c/Core.h", "llvm-c/Target.h", "llvm-c/TargetMachine.h", "llvm-c/Analysis.h", "llvm-c/Transforms/PassBuilder.h", "llvm-c/DebugInfo.h", "llvm-c/LLJIT.h", "llvm-c/Orc.h" } as llvm;
+use { "llvm-c/Core.h", "llvm-c/Target.h", "llvm-c/TargetMachine.h", "llvm-c/Analysis.h", "llvm-c/Transforms/PassBuilder.h", "llvm-c/DebugInfo.h", "llvm-c/LLJIT.h", "llvm-c/Orc.h", "llvm-c/BitReader.h", "llvm-c/Linker.h", "llvm-c/Comdat.h" } as llvm;
 
 // the C calling convention, from the triple
 enum callconv {

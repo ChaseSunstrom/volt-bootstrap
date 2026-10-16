@@ -1,6 +1,7 @@
 // Volt embedded in another program, as Lua is: voltc/embed builds the compiler into libvoltvm.so,
 // whose interface is volt_vm. A VM compiles Volt source text in memory with this compiler and runs
-// it through LLVM's ORC JIT, so no C compiler runs. A script's code calls the runtime the library
+// it through LLVM's ORC JIT, so no C compiler runs (but for a script's C and C++ imports). A
+// script's code calls the runtime the library
 // itself exports (an LLVM-built shared library's runtime functions are weak and visible) and the
 // process's C library; in a sandbox only the symbols the host allows, and what the runtime needs (not
 // the rest of what this library exports: its header pointers, the compiler's helpers, volt_vm). The
@@ -204,24 +205,49 @@ export fn volt_vm_load(v: volt_vm&, name: str, source: str) -> vm_error!void {
         return v.fail(vm_error::COMPILE, e.as_str());
     }
     // what its C and C++ imports need, built by the C and C++ compilers into a library the JIT
-    // finds their symbols in (a sandbox's script can't: that code would reach past it)
+    // finds their symbols in; in a sandbox, by clang into LLVM bitcode linked into the script's own
+    // module, so the JIT runs it and what it reaches goes through the sandbox's filter (a library's
+    // code would reach past it)
     var native: std::string? = null;
+    var ctors: std::vec<std::string> = {};
     if (g.hdr.len > 0 || chk.c_includes.len > 0 || chk.c_units.len > 0 || chk.cpp_units.len > 0 || chk.link_flags.len > 0) {
-        if (v.sandbox) {
-            drop_backend(&g, true);
-            return v.fail(vm_error::COMPILE, "a sandbox's script can't import C or C++ (their code would reach past the sandbox)");
-        }
         var err = S("");
-        native = vm_native(&*chk, &g.hdr, v.loads, &err);
-        if (native == null) {
-            drop_backend(&g, true);
-            return v.fail(vm_error::COMPILE, err.as_str());
+        var bcs: std::vec<std::string> = {};
+        if (v.sandbox) {
+            if (v.runtime.len == 0) {
+                runtime_names(&v.runtime);
+            }
+            val triple = S(c_text(llvm::LLVMOrcLLJITGetTripleString(j)));
+            if (sandbox_compilers(&*chk, &err)) {
+                val dir = vm_native(&*chk, &g.hdr, v.loads, triple.as_str(), &bcs, &err);
+                if (dir) {
+                    for (bc&) in bcs.items() {
+                        if (err.len() == 0) {
+                            err = v.link_bitcode(&g, bc.as_str());
+                        }
+                    }
+                    vm_clean(dir.as_str());
+                }
+            }
+            if (err.len() > 0) {
+                drop_backend(&g, true);
+                return v.fail(vm_error::COMPILE, err.as_str());
+            }
+            ctors = glue_ctors(&g, v.loads);
+        } else {
+            native = vm_native(&*chk, &g.hdr, v.loads, null, &bcs, &err);
+            if (native == null) {
+                drop_backend(&g, true);
+                return v.fail(vm_error::COMPILE, err.as_str());
+            }
         }
     }
     if (!v.searching) {
         // the process's symbols (libc, the runtime this library exports), filtered in a sandbox
         if (v.sandbox) {
-            runtime_names(&v.runtime);
+            if (v.runtime.len == 0) {
+                runtime_names(&v.runtime);
+            }
             for (a) in g.aliases.iter() {
                 put(&v.allowed, S(*a.value)); // the C functions the runtime's helpers are bound to
             }
@@ -280,6 +306,17 @@ export fn volt_vm_load(v: volt_vm&, name: str, source: str) -> vm_error!void {
     if (ae != null) {
         drop_tracker(rt);
         return v.fail(vm_error::JIT, jit_error(ae).as_str());
+    }
+    // its imports' constructors (a C import's stubs for the functions nothing defines), as loading
+    // a library runs them; looking one up compiles the module
+    for (c&) in ctors.items() {
+        val at = v.lookup(c.as_str());
+        if (at == null) {
+            drop_tracker(rt);
+            return vm_error::JIT;
+        }
+        val ctor = @cast<extern "C" fn() -> void>(@cast<void*>(@cast<usize>(at ?? 0)));
+        ctor();
     }
     // compile it now (looking up any of its symbols compiles the module), so a symbol that isn't
     // there or isn't allowed is this load's error; then set up its globals, when it has any
@@ -346,8 +383,10 @@ fn drop_tracker(rt: llvm::LLVMOrcOpaqueResourceTracker*) -> void {
 
 // a script's native code (its imports' C: their headers' functions' pointers, a C unit of another
 // standard; C++ wrappers and modules; the libraries --cc links), built by $CC and $CXX into a shared
-// library under /tmp: its path, or why not in err
-fn vm_native(chk: checker&, hdr: std::vec<str>&, n: u64, err: std::string&) -> std::string? {
+// library under /tmp: its path, or why not in err. With a triple (a sandbox's), clang and clang++
+// compile it to LLVM bitcode for that target instead, each file's path into bcs: the result is the
+// directory they're in
+fn vm_native(chk: checker&, hdr: std::vec<str>&, n: u64, triple: str?, bcs: std::vec<std::string>&, err: std::string&) -> std::string? {
     var t = S("/tmp/voltvm-XXXXXX");
     t.push(0);
     if (mkdtemp(@cast<u8*>(t.as_str().ptr)) == null) {
@@ -355,7 +394,7 @@ fn vm_native(chk: checker&, hdr: std::vec<str>&, n: u64, err: std::string&) -> s
         return null;
     }
     val dir = S(t.as_str()[0..t.len() - 1]);
-    val so = vm_build(chk, hdr, dir.as_str(), n, err);
+    val so = vm_build(chk, hdr, dir.as_str(), n, triple, bcs, err);
     if (so == null) {
         vm_clean(dir.as_str());
     }
@@ -363,7 +402,16 @@ fn vm_native(chk: checker&, hdr: std::vec<str>&, n: u64, err: std::string&) -> s
 }
 
 // vm_native's work in dir
-fn vm_build(chk: checker&, hdr: std::vec<str>&, dir: str, n: u64, err: std::string&) -> std::string? {
+fn vm_build(chk: checker&, hdr: std::vec<str>&, dir: str, n: u64, triple: str?, bcs: std::vec<std::string>&, err: std::string&) -> std::string? {
+    // bitcode: what the compilers are given, and what they write
+    var bc_flags: std::vec<std::string> = {};
+    var ext = ".o";
+    if (triple) {
+        put(&bc_flags, S("-fno-stack-protector"));
+        put(&bc_flags, S("-emit-llvm"));
+        put(&bc_flags, fmt("--target={}", S(triple)));
+        ext = ".bc";
+    }
     var objs: std::vec<std::string> = {};
     // C: Volt's own (the headers, the functions' pointers), and each kept unit
     var cs: std::vec<std::string> = {};
@@ -382,13 +430,22 @@ fn vm_build(chk: checker&, hdr: std::vec<str>&, dir: str, n: u64, err: std::stri
     }
     for (i) in 0..cs.len {
         val src = fmt2("{}/c{}.c", S(dir), unum(@cast<u64>(i)));
-        val obj = fmt2("{}/c{}.o", S(dir), unum(@cast<u64>(i)));
+        var obj = fmt2("{}/c{}", S(dir), unum(@cast<u64>(i)));
+        obj.append(ext);
         std::fs::write_file(src.as_str(), cs.at(i).as_str()) catch |e| {
             *err = fmt("can't write {}", copy src);
             return null;
         };
         var argv: std::vec<str> = {};
-        val cc = c_command(&argv);
+        var cc = "";
+        if (triple) {
+            cc = command_from(&argv, "CC", "clang");
+        } else {
+            cc = c_command(&argv);
+        }
+        for (f&) in bc_flags.items() {
+            put(&argv, f.as_str());
+        }
         val std_flag = fmt("-std={}", S(*stds.at(i)));
         val fixed: str[6] = { std_flag.as_str(), "-fPIC", "-w", "-c", "-o", obj.as_str() };
         for (f) in fixed {
@@ -415,7 +472,8 @@ fn vm_build(chk: checker&, hdr: std::vec<str>&, dir: str, n: u64, err: std::stri
             }
             any_cpp = true;
             val src = fmt2("{}/cpp{}.cpp", S(dir), unum(@cast<u64>(u)));
-            val obj = fmt2("{}/cpp{}.o", S(dir), unum(@cast<u64>(u)));
+            var obj = fmt2("{}/cpp{}", S(dir), unum(@cast<u64>(u)));
+            obj.append(ext);
             std::fs::write_file(src.as_str(), text.as_str()) catch |e| {
                 *err = fmt("can't write {}", copy src);
                 return null;
@@ -425,8 +483,21 @@ fn vm_build(chk: checker&, hdr: std::vec<str>&, dir: str, n: u64, err: std::stri
             if (err.len() > 0) {
                 return null;
             }
+            // (a module's interface is compiled natively)
+            if (triple != null && mflags.len > 0) {
+                *err = S("a sandbox's script can't import C++ modules: clang++ compiles its C++ to LLVM bitcode, and a module's interface is native code");
+                return null;
+            }
             var argv: std::vec<str> = {};
-            val cxx = cxx_command(&argv);
+            var cxx = "";
+            if (triple) {
+                cxx = command_from(&argv, "CXX", "clang++");
+            } else {
+                cxx = cxx_command(&argv);
+            }
+            for (f&) in bc_flags.items() {
+                put(&argv, f.as_str());
+            }
             val fixed: str[6] = { std_flag.as_str(), "-fPIC", "-w", "-c", "-o", obj.as_str() };
             for (f) in fixed {
                 put(&argv, f);
@@ -443,6 +514,11 @@ fn vm_build(chk: checker&, hdr: std::vec<str>&, dir: str, n: u64, err: std::stri
             }
             put(&objs, obj);
         }
+    }
+    // bitcode: the JIT links it (and a sandbox loads no library: its code would run natively)
+    if (triple) {
+        *bcs = move objs;
+        return S(dir);
     }
     // linked as a shared library (by the C++ compiler when there's C++: its runtime)
     val so = std::fmt::format("{}/script{}.so", dir, n);
@@ -466,6 +542,158 @@ fn vm_build(chk: checker&, hdr: std::vec<str>&, dir: str, n: u64, err: std::stri
         return null;
     }
     return so;
+}
+
+// a sandbox's compilers are clang's, of the LLVM this VM runs (gcc writes no LLVM bitcode, and the
+// JIT reads only its own LLVM's): whether they are, else why not in err
+fn sandbox_compilers(chk: checker&, err: std::string&) -> bool {
+    var major: u32 = 0;
+    var minor: u32 = 0;
+    var patch: u32 = 0;
+    llvm::LLVMGetVersion(&major, &minor, &patch);
+    if (!clang_of(major, "CC", "clang", "C", err)) {
+        return false;
+    }
+    return chk.cpp_units.len == 0 || clang_of(major, "CXX", "clang++", "C++", err);
+}
+
+// is $var_name (else dflt) a clang of LLVM major? else why not in err
+fn clang_of(major: u32, var_name: str, dflt: str, lang: str, err: std::string&) -> bool {
+    var argv: std::vec<str> = {};
+    val tool = command_from(&argv, var_name, dflt);
+    put(&argv, "--version");
+    var says = S("");
+    val r = std::process::capture(argv.items(), "") catch |e| {
+        *err = fmt2("can't run '{}': a sandbox's script importing {} needs clang", S(tool), S(lang));
+        return false;
+    };
+    says = copy r.out;
+    var wanted = S(dflt);
+    wanted.push(' ');
+    wanted.append_uint(@cast<u64>(major));
+    var how = fmt2("a sandbox's script imports {} through {} (LLVM bitcode, run by the JIT under the sandbox), and $", S(lang), copy wanted);
+    how.append(var_name);
+    how.append(" is ");
+    how.append(tool);
+    val at = says.as_str().find("clang version ");
+    if (r.code != 0 || at == null) {
+        // (the LLVM this VM runs only matters once it's clang)
+        *err = fmt2("a sandbox's script imports {} through {} (LLVM bitcode, run by the JIT under the sandbox), and $", S(lang), S(dflt));
+        err.append(var_name);
+        err.append(" is ");
+        err.append(tool);
+        return false;
+    }
+    val rest = says.as_str()[(at ?? 0) + 14..says.len()];
+    var e: usize = 0;
+    while (e < rest.len && is_digit(rest[e])) {
+        e += 1;
+    }
+    var mine = S("");
+    mine.append_uint(@cast<u64>(major));
+    if (rest[0..e] != mine.as_str()) {
+        how.append(" ");
+        how.append(rest[0..e]);
+        *err = move how;
+        return false;
+    }
+    return true;
+}
+
+// the bitcode at path, linked into the script's module, its definitions private to that module (two
+// scripts' glue for one header never meet), but the runtime's that Volt's prelude defines for C
+// (the library's are the ones the script calls): "", else why not
+attach fn link_bitcode(this: volt_vm&, g: lg&, path: str) -> std::string {
+    var p = S(path);
+    var buf: llvm::LLVMOpaqueMemoryBuffer* = null;
+    var msg: cstr? = null;
+    if (llvm::LLVMCreateMemoryBufferWithContentsOfFile(p.c_str(), &buf, &msg) != 0) {
+        return fmt2("can't read {}: {}", copy p, S(c_text(msg)));
+    }
+    var m: llvm::LLVMOpaqueModule* = null;
+    if (llvm::LLVMParseBitcodeInContext2(g.ctx, buf, &m) != 0) {
+        llvm::LLVMDisposeMemoryBuffer(buf);
+        return fmt("clang wrote bitcode this VM's LLVM can't read ({})", copy p);
+    }
+    llvm::LLVMDisposeMemoryBuffer(buf);
+    var names: std::vec<std::string> = {};
+    var f = llvm::LLVMGetFirstFunction(m);
+    while (f != null) {
+        if (llvm::LLVMIsDeclaration(f) == 0) {
+            this.glue_def(f, &names);
+        }
+        f = llvm::LLVMGetNextFunction(f);
+    }
+    var gv = llvm::LLVMGetFirstGlobal(m);
+    while (gv != null) {
+        if (llvm::LLVMIsDeclaration(gv) == 0 && !starts_with(value_name(gv), "llvm.")) {
+            this.glue_def(gv, &names);
+        }
+        gv = llvm::LLVMGetNextGlobal(gv);
+    }
+    llvm::LLVMSetTarget(m, llvm::LLVMGetTarget(g.m));
+    llvm::LLVMSetDataLayout(m, llvm::LLVMGetDataLayoutStr(g.m));
+    if (llvm::LLVMLinkModules2(g.m, m) != 0) {
+        return fmt("can't link the script's imports' code ({}) into it", copy p);
+    }
+    for (n&) in names.items() {
+        var x = llvm::LLVMGetNamedFunction(g.m, n.c_str());
+        if (x == null) {
+            x = llvm::LLVMGetNamedGlobal(g.m, n.c_str());
+        }
+        if (x != null) {
+            llvm::LLVMSetComdat(x, null);
+            llvm::LLVMSetLinkage(x, llvm::LLVMInternalLinkage);
+            llvm::LLVMSetVisibility(x, llvm::LLVMDefaultVisibility);
+        }
+    }
+    return S("");
+}
+
+// a definition of the glue's: the runtime's is only there to be inlined (the library's is the one
+// called), any other becomes the script module's own (its name into names)
+attach fn glue_def(this: volt_vm&, x: llvm::LLVMOpaqueValue*, names: std::vec<std::string>&) -> void {
+    val name = value_name(x);
+    if (this.runtime_name(name)) {
+        llvm::LLVMSetLinkage(x, llvm::LLVMAvailableExternallyLinkage);
+    } else {
+        put(names, S(name));
+    }
+}
+
+// a value's name
+fn value_name(v: llvm::LLVMOpaqueValue*) -> str {
+    var n: usize = 0;
+    val p = llvm::LLVMGetValueName2(v, &n);
+    return @cast<str>(@slice(@cast<u8*>(p ?? ""), n));
+}
+
+// the constructors the linked bitcode brought (llvm.global_ctors), named to be looked up and run,
+// in order, once the JIT has the module: their names
+fn glue_ctors(g: lg&, load: u64) -> std::vec<std::string> {
+    var out: std::vec<std::string> = {};
+    val list = llvm::LLVMGetNamedGlobal(g.m, "llvm.global_ctors");
+    if (list == null) {
+        return out;
+    }
+    val init = llvm::LLVMGetInitializer(list);
+    if (init != null) {
+        for (i) in 0..@cast<u32>(llvm::LLVMGetNumOperands(init)) {
+            val f = llvm::LLVMGetOperand(llvm::LLVMGetOperand(init, i), 1);
+            if (f != null && llvm::LLVMIsAFunction(f) != null) {
+                var name = S("volt_vm_ctor_");
+                name.append_uint(load);
+                name.push('_');
+                name.append_uint(@cast<u64>(i));
+                var cn = copy name;
+                llvm::LLVMSetValueName2(f, cn.c_str(), name.len());
+                llvm::LLVMSetLinkage(f, llvm::LLVMExternalLinkage);
+                put(&out, move name);
+            }
+        }
+    }
+    llvm::LLVMDeleteGlobal(list);
+    return out;
 }
 
 // argv run: whether it did, else its compiler's error in err
@@ -697,7 +925,8 @@ fn vm_allows(ctx: void*, sym: llvm::LLVMOrcOpaqueSymbolStringPoolEntry*) -> i32 
     if (v->runtime_name(name)) {
         return 1;
     }
-    val builtin: str[4] = { "memcpy", "memmove", "memset", "memcmp" };
+    // (and the helpers clang's code calls for 128-bit arithmetic and thread locals)
+    val builtin: str[11] = { "memcpy", "memmove", "memset", "memcmp", "__udivti3", "__umodti3", "__divti3", "__modti3", "__multi3", "__muloti4", "__emutls_get_address" };
     for (b) in builtin {
         if (name == b) {
             return 1;
