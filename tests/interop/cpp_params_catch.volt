@@ -45,19 +45,12 @@ fn then_fail(k: i32) -> i32 {
     };
     return z;
 }
-fn shown_kind(what: str, r: cpp::cpp_error!i32) -> void {
-    val n = r catch |e| {
-        std::println("{}: {}", what, e);
-        return;
-    };
-    std::println("{}: {}", what, n);
-}
 fn only_fail(k: i32) -> i32 {
     return @cpp<cpp::cpp_error!i32>("pr::pu::nonneg({0})", k) catch |e| { return 96; };
 }
 fn main() -> void {
     show("nested ok", cpp::pr::try_apply(then_ok, -1));
-    shown_kind("nested fail", cpp::pr::try_apply(then_fail, -1));
+    show("nested fail", cpp::pr::try_apply(then_fail, -1));
     show("inner only", cpp::pr::try_apply(only_fail, -1));
     show("bumped", @cpp<cpp::cpp_error!i32>("pr::pu::nonneg({0})", bump()));
     var b = std::string::from("b");
