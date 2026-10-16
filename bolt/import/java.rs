@@ -181,20 +181,48 @@ public class Describe {
     }
 
     // the generic types as Java spells them (java.util.Map<java.lang.String, java.lang.Integer>, T)
-    static String gnames(Type[] ts) {
-        StringJoiner j = new StringJoiner("|");
-        for (Type t : ts) {
-            j.add(t.getTypeName());
+    // (none when they can't be read, a class they name missing, or when they don't line up with the
+    // parameters, as an inner class constructor's leave out its outer instance)
+    static String gnames(Executable x) {
+        try {
+            Type[] ts = x.getGenericParameterTypes();
+            if (ts.length != x.getParameterCount()) {
+                return "";
+            }
+            StringJoiner j = new StringJoiner("|");
+            for (Type t : ts) {
+                j.add(t.getTypeName());
+            }
+            return j.toString();
+        } catch (Throwable t) {
+            return "";
         }
-        return j.toString();
     }
 
-    static String tvars(TypeVariable<?>[] vs) {
-        StringJoiner j = new StringJoiner(",");
-        for (TypeVariable<?> v : vs) {
-            j.add(v.getName());
+    static String gret(Method m) {
+        try {
+            return m.getGenericReturnType().getTypeName();
+        } catch (Throwable t) {
+            return "";
         }
-        return j.toString();
+    }
+
+    static String tvars(Method m) {
+        try {
+            StringJoiner j = new StringJoiner(",");
+            for (TypeVariable<?> v : m.getTypeParameters()) {
+                j.add(v.getName());
+            }
+            return j.toString();
+        } catch (Throwable t) {
+            return "";
+        }
+    }
+
+    // members in descriptor order, arrays first: an overload Volt sees as another's keeps the array
+    // (int[] over List<Integer>, both an i32[..])
+    static String order(Class<?>[] ps, Class<?> r) {
+        return sig(ps, r).replace('[', '!');
     }
 
     static String names(Parameter[] ps) {
@@ -272,13 +300,13 @@ public class Describe {
                 }
                 if (kind.equals("class")) {
                     Constructor<?>[] ks = c.getConstructors();
-                    Arrays.sort(ks, Comparator.comparing((Constructor<?> k) -> sig(k.getParameterTypes(), void.class)));
+                    Arrays.sort(ks, Comparator.comparing((Constructor<?> k) -> order(k.getParameterTypes(), void.class)));
                     for (Constructor<?> k : ks) {
-                        System.out.println("ctor\t" + (k.getExceptionTypes().length > 0 ? 1 : 0) + "\t" + sig(k.getParameterTypes(), void.class) + "\t" + names(k.getParameters()) + "\t" + gnames(k.getGenericParameterTypes()));
+                        System.out.println("ctor\t" + (k.getExceptionTypes().length > 0 ? 1 : 0) + "\t" + sig(k.getParameterTypes(), void.class) + "\t" + names(k.getParameters()) + "\t" + gnames(k));
                     }
                 }
                 Method[] ms = c.getMethods();
-                Arrays.sort(ms, Comparator.comparing((Method m) -> m.getName()).thenComparing(m -> sig(m.getParameterTypes(), m.getReturnType())));
+                Arrays.sort(ms, Comparator.comparing((Method m) -> m.getName()).thenComparing(m -> order(m.getParameterTypes(), m.getReturnType())));
                 for (Method m : ms) {
                     Class<?> dc = m.getDeclaringClass();
                     boolean st = Modifier.isStatic(m.getModifiers());
@@ -288,7 +316,7 @@ public class Describe {
                     if (c.isEnum() && st && (m.getName().equals("values") || m.getName().equals("valueOf"))) {
                         continue;
                     }
-                    System.out.println("method\t" + m.getName() + "\t" + (st ? "static" : "inst") + "\t" + (m.getExceptionTypes().length > 0 ? 1 : 0) + "\t" + sig(m.getParameterTypes(), m.getReturnType()) + "\t" + names(m.getParameters()) + "\t" + gnames(m.getGenericParameterTypes()) + "\t" + m.getGenericReturnType().getTypeName() + "\t" + tvars(m.getTypeParameters()));
+                    System.out.println("method\t" + m.getName() + "\t" + (st ? "static" : "inst") + "\t" + (m.getExceptionTypes().length > 0 ? 1 : 0) + "\t" + sig(m.getParameterTypes(), m.getReturnType()) + "\t" + names(m.getParameters()) + "\t" + gnames(m) + "\t" + gret(m) + "\t" + tvars(m));
                 }
                 Field[] fs = c.getFields();
                 Arrays.sort(fs, Comparator.comparing(Field::getName));
@@ -421,6 +449,19 @@ enum JT {
 /// the boxes of the primitives: descriptor letter, Java's class, its unboxing method
 const BOXES: [(char, &str, &str); 8] = [('Z', "java/lang/Boolean", "booleanValue"), ('B', "java/lang/Byte", "byteValue"), ('C', "java/lang/Character", "charValue"), ('S', "java/lang/Short", "shortValue"), ('I', "java/lang/Integer", "intValue"), ('J', "java/lang/Long", "longValue"), ('F', "java/lang/Float", "floatValue"), ('D', "java/lang/Double", "doubleValue")];
 
+/// a type as a left-out reason names it: its generic type, or its descriptor's
+fn java_type(d: &str, g: &str) -> String {
+    if !g.is_empty() {
+        return g.to_string();
+    }
+    let t = d.trim_start_matches('[');
+    let base = match t.strip_prefix('L').and_then(|t| t.strip_suffix(';')) {
+        Some(n) => n.replace('/', "."),
+        None => t.to_string(),
+    };
+    format!("{base}{}", "[]".repeat(d.len() - t.len()))
+}
+
 /// does Volt type text k name type variable t (T in T, T[..], std::vec<T>, but not in Tag)
 fn mentions(k: &str, t: &str) -> bool {
     k.split(|c: char| !(c.is_alphanumeric() || c == '_')).any(|w| w == t)
@@ -515,7 +556,9 @@ impl Gen<'_> {
                 _ => None,
             };
             if let (Some(c), [k, v]) = (map, args.as_slice()) {
-                return Some(JT::Map(c, Box::new(self.elem(k, tvars)?), Box::new(self.elem(v, tvars)?)));
+                // keys std::map can hash: a String, an integer, or the caller's type variable
+                let k = self.elem(k, tvars).filter(|k| matches!(k, JT::Str | JT::Prim('B' | 'S' | 'I' | 'J') | JT::Var(_)))?;
+                return Some(JT::Map(c, Box::new(k), Box::new(self.elem(v, tvars)?)));
             }
         }
         self.jt(d)
@@ -656,11 +699,14 @@ impl Gen<'_> {
         let ctor = m.name == "<init>";
         let what = if ctor { format!("{cv}::new") } else { format!("{cv}::{}", m.name) };
         let (ps, ret) = split_desc(&m.sig).ok_or(format!("{what} (its descriptor)"))?;
-        let ret = if ctor { JT::Obj(cv.to_string()) } else { self.jt_g(&ret, &m.gret, &m.tvars).ok_or(format!("{what} (its return type)"))? };
+        // an Iterable result has no toArray to copy it through: it's the erased type
+        let gret = if m.gret.starts_with("java.lang.Iterable<") { "" } else { m.gret.as_str() };
+        let ret = if ctor { JT::Obj(cv.to_string()) } else { self.jt_g(&ret, gret, &m.tvars).ok_or(format!("{what} (its return type, {})", java_type(&ret, gret)))? };
         let (mut params, mut pre, mut args, mut post, mut key) = (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new());
         for (i, d) in ps.iter().enumerate() {
             let pn = Self::param_name(m.params.get(i).map_or("", String::as_str), i);
-            let t = self.jt_g(d, m.gparams.get(i).map_or("", String::as_str), &m.tvars).ok_or(format!("{what} (parameter {pn}'s type)"))?;
+            let g = m.gparams.get(i).map_or("", String::as_str);
+            let t = self.jt_g(d, g, &m.tvars).ok_or(format!("{what} (parameter {pn}'s type, {})", java_type(d, g)))?;
             params.push(format!("{pn}: {}", Self::ty_in(&t)));
             key.push(Self::ty_in(&t));
             let (p0, raw, p1) = Self::raw(&t, &pn);
@@ -825,7 +871,7 @@ fn generate(alias: &str, classes: &[Class], mut left: Vec<String>, cp: &[String]
             let _ = write!(of, "        return {alias}::{cv}::{first};\n    }}\n");
             helpers.push_str(&to);
             helpers.push_str(&of);
-            let _ = write!(helpers, "    fn box(e: jni::JNIEnv*, x: {alias}::{cv}&) -> jni::jobject {{\n        return to_{cv}(e, *x);\n    }}\n    fn unbox(e: jni::JNIEnv*, o: jni::jobject) -> {alias}::{cv} {{\n        return of_{cv}(ordinal(e, o));\n    }}\n");
+            let _ = write!(helpers, "    fn box(e: jni::JNIEnv*, x: {alias}::{cv}&) -> jni::jobject {{\n        return to_{cv}(e, *x);\n    }}\n    fn unbox(e: jni::JNIEnv*, o: jni::jobject) -> {alias}::{cv} {{\n        is_a(e, o, class_{cv}(e), false, \"Java gave back a null or a value that isn't a {dotted}\");\n        return of_{cv}(ordinal(e, o));\n    }}\n");
             let _ = write!(decls, "\n// the Java enum {dotted}\nenum {cv}: i32 {{\n{body}}}\n");
         } else {
             let what = match c.kind.as_str() {
@@ -836,7 +882,7 @@ fn generate(alias: &str, classes: &[Class], mut left: Vec<String>, cp: &[String]
             let _ = write!(decls, "\n// the Java {what} {dotted}: a reference to an object (a copy refers to the same one)\nstruct {cv} {{\n    o: java_rt::ref = {{}};\n}}\n\n");
             let _ = write!(decls, "attach fn is_null(this: {cv}&) -> bool {{\n    return this.o.r == null;\n}}\n");
             // in a collection or as a generic's value: a local reference to the object, and back
-            let _ = write!(helpers, "    fn box(e: jni::JNIEnv*, x: {alias}::{cv}&) -> jni::jobject {{\n        return (fns(e)->NewLocalRef ?? @panic(\"JNI\"))(e, x.o.r);\n    }}\n    fn unbox(e: jni::JNIEnv*, o: jni::jobject) -> {alias}::{cv} {{\n        val v: {alias}::{cv} = {{ o: own(e, o) }};\n        return v;\n    }}\n");
+            let _ = write!(helpers, "    fn box(e: jni::JNIEnv*, x: {alias}::{cv}&) -> jni::jobject {{\n        return (fns(e)->NewLocalRef ?? @panic(\"JNI\"))(e, x.o.r);\n    }}\n    fn unbox(e: jni::JNIEnv*, o: jni::jobject) -> {alias}::{cv} {{\n        is_a(e, o, class_{cv}(e), true, \"Java gave back an object that isn't a {dotted}\");\n        val v: {alias}::{cv} = {{ o: own(e, o) }};\n        return v;\n    }}\n");
             for s in &c.supers {
                 if let Some((sv, false)) = g.names.get(s).cloned() {
                     let _ = write!(decls, "\n// as a {}: the same object\nattach fn as_{sv}(this: {cv}&) -> {sv} {{\n    return {{ o: copy this.o }};\n}}\n", s.replace('/', "."));
@@ -918,9 +964,10 @@ fn boxes() -> String {
     let mut s = String::new();
     for (k, vt, _, _, _) in KINDS {
         let (_, bin, get) = BOXES.iter().find(|b| b.0 == k).copied().unwrap_or(('I', "java/lang/Integer", "intValue"));
+        let dotted = bin.replace('/', ".");
         let _ = write!(
             s,
-            "    var box_c_{k}: jni::jclass = null;\n    var box_new_{k}: jni::jmethodID = null;\n    var box_get_{k}: jni::jmethodID = null;\n    fn box_class_{k}(e: jni::JNIEnv*) -> jni::jclass {{\n        if (box_c_{k} == null) {{\n            val t = fns(e);\n            box_c_{k} = (t->NewGlobalRef ?? @panic(\"JNI\"))(e, (t->FindClass ?? @panic(\"JNI\"))(e, \"{bin}\"));\n        }}\n        return box_c_{k};\n    }}\n    fn box(e: jni::JNIEnv*, x: {vt}&) -> jni::jobject {{\n        val c = box_class_{k}(e);\n        val m = mid(&box_new_{k}, e, c, true, \"valueOf\", \"({k})L{bin};\");\n        val a: jni::jvalue[1] = {{ jv_{k}(*x) }};\n        return scall_L(e, c, m, &a[0]);\n    }}\n    fn unbox(e: jni::JNIEnv*, o: jni::jobject) -> {vt} {{\n        val m = mid(&box_get_{k}, e, box_class_{k}(e), false, \"{get}\", \"(){k}\");\n        return call_{k}(e, o, m, null);\n    }}\n"
+            "    var box_c_{k}: jni::jclass = null;\n    var box_new_{k}: jni::jmethodID = null;\n    var box_get_{k}: jni::jmethodID = null;\n    fn box_class_{k}(e: jni::JNIEnv*) -> jni::jclass {{\n        if (box_c_{k} == null) {{\n            val t = fns(e);\n            box_c_{k} = (t->NewGlobalRef ?? @panic(\"JNI\"))(e, (t->FindClass ?? @panic(\"JNI\"))(e, \"{bin}\"));\n        }}\n        return box_c_{k};\n    }}\n    fn box(e: jni::JNIEnv*, x: {vt}&) -> jni::jobject {{\n        val c = box_class_{k}(e);\n        val m = mid(&box_new_{k}, e, c, true, \"valueOf\", \"({k})L{bin};\");\n        val a: jni::jvalue[1] = {{ jv_{k}(*x) }};\n        return scall_L(e, c, m, &a[0]);\n    }}\n    fn unbox(e: jni::JNIEnv*, o: jni::jobject) -> {vt} {{\n        is_a(e, o, box_class_{k}(e), false, \"Java gave back a null or a value that isn't a {dotted} where a Volt {vt} was expected\");\n        val m = mid(&box_get_{k}, e, box_class_{k}(e), false, \"{get}\", \"(){k}\");\n        return call_{k}(e, o, m, null);\n    }}\n"
         );
     }
     s
@@ -933,8 +980,27 @@ const COPIES: &str = r#"    fn box(e: jni::JNIEnv*, x: str&) -> jni::jobject {
     fn box(e: jni::JNIEnv*, x: std::string&) -> jni::jobject {
         return jstr(e, x.as_str());
     }
+    var str_c: jni::jclass = null;
     fn unbox(e: jni::JNIEnv*, o: jni::jobject) -> std::string {
+        if (str_c == null) {
+            val t = fns(e);
+            str_c = (t->NewGlobalRef ?? @panic("JNI"))(e, (t->FindClass ?? @panic("JNI"))(e, "java/lang/String"));
+        }
+        is_a(e, o, str_c, true, "Java gave back a value that isn't a java.lang.String where a Volt std::string was expected");
         return take_str(e, o);
+    }
+    // o as an element or a generic's value: an object of class c (or a null, where nulls may be), or
+    // the program stops
+    fn is_a(e: jni::JNIEnv*, o: jni::jobject, c: jni::jclass, nulls: bool, what: str) -> void {
+        if (o == null) {
+            if (!nulls) {
+                @panic(what);
+            }
+            return;
+        }
+        if ((fns(e)->IsInstanceOf ?? @panic("JNI"))(e, o, c) == 0) {
+            @panic(what);
+        }
     }
     // a new object of a JDK class (java/util/ArrayList) made with no arguments
     fn new_jdk(e: jni::JNIEnv*, bin: cstr) -> jni::jobject {
@@ -947,7 +1013,11 @@ const COPIES: &str = r#"    fn box(e: jni::JNIEnv*, x: str&) -> jni::jobject {
     }
     fn method(e: jni::JNIEnv*, o: jni::jobject, name: cstr, sig: cstr) -> jni::jmethodID {
         val t = fns(e);
-        return (t->GetMethodID ?? @panic("JNI"))(e, (t->GetObjectClass ?? @panic("JNI"))(e, o), name, sig);
+        val c = (t->GetObjectClass ?? @panic("JNI"))(e, o);
+        val m = (t->GetMethodID ?? @panic("JNI"))(e, c, name, sig);
+        (t->DeleteLocalRef ?? @panic("JNI"))(e, c);
+        thrown(e);
+        return m;
     }
     // a collection of class bin (a List or Set) holding copies of xs' values, boxed
     <T: type>
@@ -1014,11 +1084,15 @@ const COPIES: &str = r#"    fn box(e: jni::JNIEnv*, x: str&) -> jni::jobject {
         val es = call_L(e, o, method(e, o, "entrySet", "()Ljava/util/Set;"), null);
         thrown(e);
         val a = elements(e, es);
+        val ec = (t->FindClass ?? @panic("JNI"))(e, "java/util/Map$Entry");
+        val gk = (t->GetMethodID ?? @panic("JNI"))(e, ec, "getKey", "()Ljava/lang/Object;");
+        val gv = (t->GetMethodID ?? @panic("JNI"))(e, ec, "getValue", "()Ljava/lang/Object;");
+        thrown(e);
         val n = (t->GetArrayLength ?? @panic("JNI"))(e, a);
         for (i) in 0..n {
             val en = (t->GetObjectArrayElement ?? @panic("JNI"))(e, a, i);
-            val kj = call_L(e, en, method(e, en, "getKey", "()Ljava/lang/Object;"), null);
-            val vj = call_L(e, en, method(e, en, "getValue", "()Ljava/lang/Object;"), null);
+            val kj = call_L(e, en, gk, null);
+            val vj = call_L(e, en, gv, null);
             thrown(e);
             val k: K = unbox(e, kj);
             val v: V = unbox(e, vj);
@@ -1328,6 +1402,11 @@ mod tests {
         assert_eq!(g.jt_g("Ljava/lang/Object;", "T", &tv), Some(JT::Var("T".into())));
         // an element that doesn't cross (another library's class) leaves the method out
         assert_eq!(g.jt_g("Ljava/util/List;", "java.util.List<java.time.Duration>", &[]), None);
+        // a map keyed by what std::map can't hash leaves the method out
+        assert_eq!(g.jt_g("Ljava/util/Map;", "java.util.Map<java.lang.Double, java.lang.Integer>", &[]), None);
+        assert_eq!(g.jt_g("Ljava/util/Map;", "java.util.Map<geo.Point, java.lang.Integer>", &[]), None);
+        assert_eq!(g.jt_g("Ljava/util/Map;", "java.util.Map<java.lang.Long, geo.Color>", &[]), Some(JT::Map("java/util/LinkedHashMap", Box::new(JT::Prim('J')), Box::new(JT::Enum("Color".into())))));
+        assert_eq!((java_type("[Ljava/time/Duration;", ""), java_type("Ljava/util/List;", "java.util.List<?>")), ("java.time.Duration[]".to_string(), "java.util.List<?>".to_string()));
         assert_eq!(generic_args("java.util.Map<java.lang.String, java.util.List<T>>"), Some(("java.util.Map", vec!["java.lang.String", "java.util.List<T>"])));
         assert_eq!(g.jt("[[I"), None);
         assert_eq!(g.jt("[Lgeo/Point;"), None);

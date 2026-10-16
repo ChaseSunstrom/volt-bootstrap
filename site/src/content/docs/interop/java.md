@@ -43,9 +43,11 @@ fn main() -> !void {
 | a class the import doesn't have (`java.time.Duration`, `Object`), and a generic class's own type variable (`Box<T>`'s `T`, which Java erases to `Object`) | a `java_object`: `toString()`, `equals(&o)` and `is_null()` |
 | a method that declares exceptions (`throws`) | `java_error!T`; `java_error::THROWN` holds the exception's `toString()` |
 
-An exception a method doesn't declare stops the program with its text, as a Volt panic does. A
+An exception a method doesn't declare stops the program with its text, as a Volt panic does. So
+does a `null` in a collection of numbers, or a value of another class where a generic's type was given. A
 method whose types aren't in the table (an array of an imported class, a collection of another
-library's classes) is left out, listed in a comment of the generated
+library's classes, a collection of collections, a wildcard such as `List<? extends Shape>`, a
+`Map` keyed by anything but a `String` or an integer) is left out, listed in a comment of the generated
 declarations (`VOLT_SHOW_IMPORT=1 voltc check main.volt` prints them). Each import loads its classes through
 a class loader of its own, so a program can import several, and they share the process's JVM.
 

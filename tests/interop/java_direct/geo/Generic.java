@@ -58,6 +58,14 @@ public final class Generic {
         return best;
     }
 
+    public static List<Color> cycle(List<Color> cs) {
+        List<Color> out = new ArrayList<>();
+        for (Color c : cs) {
+            out.add(c.next());
+        }
+        return out;
+    }
+
     public static <T> T first(List<T> xs) {
         return xs.get(0);
     }

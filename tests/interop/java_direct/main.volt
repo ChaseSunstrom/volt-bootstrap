@@ -60,6 +60,9 @@ fn run() -> geo::java_error!void {
     std::println("farthest {}", geo::Generic::farthest(pts[..]));
     // generic methods are Volt generics, their values boxed through Java
     std::println("first {} {} max {} {}", geo::Generic::first(nums[..]), geo::Generic::first(ws.items()).as_str(), geo::Generic::max(3, 9), geo::Generic::max(std::string::from("pear"), std::string::from("apple")).as_str());
+    val cs: geo::Color[2] = { geo::Color::RED, geo::Color::BLUE };
+    val nx = geo::Generic::cycle(cs[..]);
+    std::println("cycle {} {} first point {}", nx.at(0).lower(), nx.at(1).lower(), geo::Generic::first(pts[..]).x());
     // a class the import doesn't have is a java_object: toString(), equals() and is_null()
     val d = geo::Generic::minutes(2);
     val b = geo::Generic::boxed(7);
@@ -88,4 +91,5 @@ fn main() -> !void {
 // expect: unique 2 a lengths 2 3
 // expect: farthest 10
 // expect: first 1 b max 9 pear
+// expect: cycle green red first point 3
 // expect: PT2M 120 7 true false
