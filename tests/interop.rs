@@ -2460,8 +2460,9 @@ fn interop_examples() {
             let err = String::from_utf8_lossy(&o.stderr);
             let tail: String = err.chars().rev().take(700).collect::<Vec<_>>().into_iter().rev().collect();
             assert!(o.status.success(), "{name}: run.sh failed ({}): ...{tail}\n--- stdout\n{}", o.status, String::from_utf8_lossy(&o.stdout));
-            let want = std::fs::read_to_string(ex.join("expected.txt")).unwrap();
-            assert_eq!(String::from_utf8_lossy(&o.stdout), want, "{name} prints something else");
+            // (a C program's text-mode stdout ends its lines with \r\n on Windows)
+            let want = std::fs::read_to_string(ex.join("expected.txt")).unwrap().replace("\r\n", "\n");
+            assert_eq!(String::from_utf8_lossy(&o.stdout).replace("\r\n", "\n"), want, "{name} prints something else");
             ran.push(name);
         }
     }

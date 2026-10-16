@@ -7,6 +7,17 @@ log=${1:-test.log}
 # an annotation, through printf: macOS's sh is bash in POSIX mode, whose echo reads \n and \c in
 # a panic's text as escapes and cuts the command short
 note() { printf '::%s title=%s::%s\n' "$1" "$2" "$3"; }
+# lines joined as one annotation (awk: macOS's sed has no GNU :a;N loop)
+oneline() { awk 'BEGIN { ORS = "%0A" } { gsub(/%/, "%25"); gsub(/\r/, ""); print }'; }
+# report-failures.sh LOG failure detail K: panics 10K-9 to 10K whole (to 3.8 KB, lines to 400
+# bytes), each an error of its own titled with its test: a step keeps 10, so each K is a step
+if [ "$3" = detail ]; then
+    grep -an 'panicked at' "$log" | sed -n "$((($4 - 1) * 10 + 1)),$(($4 * 10))p" | while IFS=: read -r n _; do
+        body=$(sed -n "${n},$((n + 400))p" "$log" | awk 'NR > 1 && (/^---- .* stdout ----$/ || /^failures:$/ || /^thread .* panicked at/) { exit } { print }' | cut -c1-400 | head -c 3800)
+        note error "$(printf '%s' "$body" | head -1 | sed "s/^thread '\([^']*\)'.*/\1/")" "$(printf '%s' "$body" | oneline)"
+    done
+    exit 0
+fi
 # every run: how many tests passed, failed and were ignored in all, to compare systems (a system
 # that skips more than Linux does shows it here)
 total() { grep -aoE "[0-9]+ $1" "$log" | awk '{ n += $1 } END { print n + 0 }'; }
@@ -18,8 +29,6 @@ hung=$(grep -aoE '^test [^ ]+ has been running for over 60 seconds' "$log" | awk
     grep -aqE "^test $t \.\.\. (ok|FAILED|ignored)" "$log" || printf '%s\n' "$t"
 done | paste -sd ' ' -)
 [ -n "$hung" ] && note error "still running" "$hung"
-# lines joined as one annotation (awk: macOS's sed has no GNU :a;N loop)
-oneline() { awk 'BEGIN { ORS = "%0A" } { gsub(/%/, "%25"); gsub(/\r/, ""); print }'; }
 tests=$(grep -aE '^test .* \.\.\. FAILED$' "$log" | sed 's/^test //; s/ \.\.\. FAILED$//' | head -40 | paste -sd ' ' -)
 [ -n "$tests" ] && note error "failed tests" "$tests"
 golden=$(grep -aE '^[A-Za-z]?:?[/\\].*\.volt: (exit|want errors)' "$log" | head -40 | oneline)

@@ -206,7 +206,7 @@ fn clang_parse_opts(name: str, text: str, args: std::vec<str>&, opts: u32) -> cl
     }
     var n = S(name);
     var t = S(text);
-    var file: clang::CXUnsavedFile = { Filename: n.c_str(), Contents: t.c_str(), Length: @cast<u64>(t.len()) };
+    var file: clang::CXUnsavedFile = { Filename: n.c_str(), Contents: t.c_str(), Length: @cast<u32>(t.len()) };
     val index = clang::clang_createIndex(0, 0);
     val tu = clang::clang_parseTranslationUnit(index, n.c_str(), argv.ptr, @cast<i32>(argv.len), &file, 1, opts);
     return { index: index, tu: tu };
@@ -218,7 +218,7 @@ fn clang_parse_opts(name: str, text: str, args: std::vec<str>&, opts: u32) -> cl
 attach fn reparse(this: clang_tu&, name: str, text: str) -> bool {
     var n = S(name);
     var t = S(text);
-    var file: clang::CXUnsavedFile = { Filename: n.c_str(), Contents: t.c_str(), Length: @cast<u64>(t.len()) };
+    var file: clang::CXUnsavedFile = { Filename: n.c_str(), Contents: t.c_str(), Length: @cast<u32>(t.len()) };
     return clang::clang_reparseTranslationUnit(this.tu, 1, &file, clang::clang_defaultReparseOptions(this.tu)) == 0;
 }
 

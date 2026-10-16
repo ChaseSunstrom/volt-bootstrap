@@ -66,7 +66,7 @@ fn main() -> void {
 | destructor | a `delete` hook (only when the class needs one) |
 | copy constructor | a `copy` hook (a handle's copies the object with it) |
 | methods, static methods | attached functions, overloads kept |
-| overloads Volt can't tell apart (`long` and `long long` are both `i64`, `char` is `signed char`'s or `unsigned char`'s twin depending on the target (signed on x86-64, unsigned on arm64 Linux), so which overload collides depends on the target, a `const` method's `this` is a non-`const` one's) | the first declared keeps the name; each other one is named for its parameters' C++ types, after the namespace's own names: `which_long_long(x)`, `letter_char(c)` (when `char` comes after the other two), `T::new_long_long(n)`, `get_const()` (words joined by `_`, `*` as `ptr`, `&` as `ref`, `&&` as `rref`; when only its qualifiers differ, `const`, `lref`, `rref` or `nonconst` instead: `get_nonconst()` after a `get() const`), its default-argument forms too, and calls exactly that overload. A name a real declaration (or another such name) has is a `// left out:` comment instead, and so is a real declaration in a later block of the namespace whose name an alias has |
+| overloads Volt can't tell apart (`long` and `long long` are both `i64` where `long` is 64 bits (not on Windows), `char` is `signed char`'s or `unsigned char`'s twin depending on the target (signed on x86-64, unsigned on arm64 Linux), so which overload collides depends on the target, a `const` method's `this` is a non-`const` one's) | the first declared keeps the name; each other one is named for its parameters' C++ types, after the namespace's own names: `which_long_long(x)`, `letter_char(c)` (when `char` comes after the other two), `T::new_long_long(n)`, `get_const()` (words joined by `_`, `*` as `ptr`, `&` as `ref`, `&&` as `rref`; when only its qualifiers differ, `const`, `lref`, `rref` or `nonconst` instead: `get_nonconst()` after a `get() const`), its default-argument forms too, and calls exactly that overload. A name a real declaration (or another such name) has is a `// left out:` comment instead, and so is a real declaration in a later block of the namespace whose name an alias has |
 | a method qualified `&&` on a class held by handle | an attached function taking `this` by value: the handle is consumed (using it afterwards is a use after move), and C++ moves from the object, or from a copy of it when the handle only borrows it (`as_Base()`). A class that can be neither copied nor moved has no copy to make: an owned handle's object runs the method, and a borrowed handle stops the program with `can't call Q::m (an && method) through a borrowed handle: Q can't be copied` (worked out per use, as an inherited `&&` method is, such a class's call is an error); its `const &&` methods, and an abstract class's `&&` ones, run in place on the object, borrowed or not, the handle kept. On a class template's instance (worked out per use) the same, for a method only an rvalue can call (when `&` and `&&` overloads share the name, the call is the `&` one's), and `derive`'s `base_m()` and protected forms leave it out with a comment: their object is the Volt subclass's |
 | functions, function templates | functions, generic functions: `ns::biggest<i32>(a, b)` |
 | a Volt `std::string` for a function template's parameter (`template <class S> void wrap(S&)`) | a C++ `std::string`: `ns::wrap(&text)` instantiates `wrap<std::string>`. For `S&` C++ changes a copy, which the Volt string gets once the call returns (not when it throws: a `try_` form leaves it as it was); for `const S&` and `S` the copy is made from the text and nothing comes back. Overloads resolve as C++'s for `f(s)`: a string Volt may change (a `var`, or a reference to one) runs `S&` over `const S&`, and a forwarding `S&&` changes it; a `val` or a `str` runs `const S&`, in `@cpp` and through the template's Volt generic alike. C++ never writes into a string Volt can't change: a `val` (or a temporary) for a template that takes only `S&` is an error, as C++ refuses it (`'k' is a val, and wrap changes it`). Only `S` itself takes one: `S` in another type (`S*`, `std::vector<S>&`) or as the result is an error |
@@ -225,14 +225,14 @@ Signatures that use the standard library's strings, vectors and smart pointers m
 // ledger.hpp
 namespace ledger {
 struct Money {
-    long cents;
+    long long cents;
     Money operator+(const Money& o) const;
     bool operator<(const Money& o) const;
 };
-long cents(std::string_view s);               // throws std::invalid_argument
+long long cents(std::string_view s);          // throws std::invalid_argument
 Money parse(std::string_view s);
 std::string format(Money m);
-std::vector<long> running(const std::vector<long>& xs);
+std::vector<long long> running(const std::vector<long long>& xs);
 class Book { public: explicit Book(int id); int id; };
 std::unique_ptr<Book> open_book(int id);
 }

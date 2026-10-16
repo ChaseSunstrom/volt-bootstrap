@@ -78,6 +78,13 @@ jobs:
       - name: Report
         if: always()
         run: sh .github/report-failures.sh test.log ${{ job.status }}
+      # the first twenty panics whole, ten a step
+      - name: Report panics 1-10
+        if: failure()
+        run: sh .github/report-failures.sh test.log failure detail 1
+      - name: Report panics 11-20
+        if: failure()
+        run: sh .github/report-failures.sh test.log failure detail 2
 
   editor:
     name: editor (grammar and extension)
@@ -126,6 +133,13 @@ jobs:
       - name: Report
         if: always()
         run: sh .github/report-failures.sh test.log ${{ job.status }}
+      # the first twenty panics whole, ten a step
+      - name: Report panics 1-10
+        if: failure()
+        run: sh .github/report-failures.sh test.log failure detail 1
+      - name: Report panics 11-20
+        if: failure()
+        run: sh .github/report-failures.sh test.log failure detail 2
 
   # Intel macOS: nothing ships LLVM 23 for it (Homebrew bottles llvm only for arm64, and LLVM's
   # release has no x86-64 macOS asset), so the job builds LLVM, clang (for libclang) and lld itself,
@@ -183,6 +197,13 @@ jobs:
       - name: Report
         if: always()
         run: sh .github/report-failures.sh test.log ${{ job.status }}
+      # the first twenty panics whole, ten a step
+      - name: Report panics 1-10
+        if: failure()
+        run: sh .github/report-failures.sh test.log failure detail 1
+      - name: Report panics 11-20
+        if: failure()
+        run: sh .github/report-failures.sh test.log failure detail 2
 
   # Windows: LLVM's release (MSVC ABI), whose LLVM-C.dll and libclang.dll voltc calls into
   windows:
@@ -240,3 +261,10 @@ jobs:
       - name: Report
         if: always()
         run: sh .github/report-failures.sh test.log ${{ job.status }}
+      # the first twenty panics whole, ten a step
+      - name: Report panics 1-10
+        if: failure()
+        run: sh .github/report-failures.sh test.log failure detail 1
+      - name: Report panics 11-20
+        if: failure()
+        run: sh .github/report-failures.sh test.log failure detail 2

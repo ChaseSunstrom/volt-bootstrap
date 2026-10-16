@@ -769,15 +769,62 @@ const LOADER: &str = r#"    extern "C" fn hostfxr_initialize_for_runtime_config(
     extern "C" fn hostfxr_close(handle: void*) -> i32;
     var load_fp: void* = null;
 
+    fn unit(out: std::vec<u8>&, u: u32) -> void {
+        out.push(@cast<u8>(u & 0xFF)) catch @panic("out of memory");
+        out.push(@cast<u8>(u >> 8)) catch @panic("out of memory");
+    }
+
+    // s as hostfxr's char_t, ending in a zero: UTF-16 on Windows (wchar_t), UTF-8 elsewhere
+    fn char_t(s: str) -> std::vec<u8> {
+        var out: std::vec<u8> = {};
+        comptime if (@cfg("os", "windows")) {
+            var i: usize = 0;
+            while (i < s.len) {
+                val b = @cast<u32>(s[i]);
+                var c = b;
+                var n: usize = 1;
+                if (b >= 0xF0) {
+                    c = b & 0x07;
+                    n = 4;
+                } else if (b >= 0xE0) {
+                    c = b & 0x0F;
+                    n = 3;
+                } else if (b >= 0xC0) {
+                    c = b & 0x1F;
+                    n = 2;
+                }
+                for (k) in 1..n {
+                    if (i + k < s.len) {
+                        c = (c << 6) | (@cast<u32>(s[i + k]) & 0x3F);
+                    }
+                }
+                i += n;
+                if (c >= 0x10000) {
+                    unit(&out, 0xD800 | ((c - 0x10000) >> 10));
+                    unit(&out, 0xDC00 | ((c - 0x10000) & 0x3FF));
+                } else {
+                    unit(&out, c);
+                }
+            }
+            unit(&out, 0);
+        } else {
+            for (i) in 0..s.len {
+                out.push(s[i]) catch @panic("out of memory");
+            }
+            out.push(0) catch @panic("out of memory");
+        }
+        return out;
+    }
+
     // the address of the glue's method name; .NET starts the first time
     fn load(slot: void**, name: str) -> void* {
         if (*slot != null) {
             return *slot;
         }
         if (load_fp == null) {
-            var config = std::string::from("{CONFIG}");
+            val config = char_t("{CONFIG}");
             var h: void* = null;
-            val rc = hostfxr_initialize_for_runtime_config(config.c_str(), null, &h);
+            val rc = hostfxr_initialize_for_runtime_config(@cast<cstr>(config.items().ptr), null, &h);
             if (rc < 0 || rc > 2) {
                 @panic(std::fmt::format(".NET didn't start (hostfxr: 0x{:x})", @cast<u32>(rc)).as_str());
             }
@@ -789,11 +836,11 @@ const LOADER: &str = r#"    extern "C" fn hostfxr_initialize_for_runtime_config(
             }
         }
         val f = @cast<extern "C" fn(cstr, cstr, cstr, void*, void*, void**) -> i32>(load_fp);
-        var a = std::string::from("{ASM}");
-        var t = std::string::from("VoltShim, {NAME}");
-        var m = std::string::from(name);
+        val a = char_t("{ASM}");
+        val t = char_t("VoltShim, {NAME}");
+        val m = char_t(name);
         // UNMANAGEDCALLERSONLY_METHOD: (const char_t*)-1
-        val rc = f(a.c_str(), t.c_str(), m.c_str(), @cast<void*>(~@cast<usize>(0)), null, slot);
+        val rc = f(@cast<cstr>(a.items().ptr), @cast<cstr>(t.items().ptr), @cast<cstr>(m.items().ptr), @cast<void*>(~@cast<usize>(0)), null, slot);
         if (rc != 0) {
             @panic(std::fmt::format("{} isn't in the .NET glue (0x{:x})", name, @cast<u32>(rc)).as_str());
         }

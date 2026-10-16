@@ -2,6 +2,7 @@
    tests/run/c_wrappers.volt */
 
 /* long is long long by width, a const char * a char * */
+typedef long cw_long; /* i64, or i32 where long is 32 bits (Windows) */
 static inline long double ld_add(long *n, const char *digit) { return *n + (digit[0] - '0'); }
 static inline long *ld_store(long *n, long double x) { *n = (long)x; return n; }
 static inline long double ld_first(const char **words) { return words[0][0] - '0'; }
