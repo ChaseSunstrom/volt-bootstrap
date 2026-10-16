@@ -153,6 +153,24 @@ attach fn int_lit(this: checker&, v: i128, want: u32?) -> tval {
     return r;
 }
 
+// a u128 constant from its bits (an i128 below 0 is one past i128's maximum); only one in i128's
+// range is a literal, since literal folding is signed
+attach fn u128_val(this: checker&, bits: i128) -> tval {
+    val t = int_id(int_ty::U128);
+    if (bits >= 0) {
+        return this.int_lit(bits, t);
+    }
+    return vpure(t, this.ir.int(bits, t));
+}
+
+// the error for a literal past i128's maximum where no u128 is wanted
+fn past_i128(v: u128) -> std::string {
+    var s: std::string = {};
+    append_u128(&s, v);
+    s.append(" is past i128's maximum: it needs a u128 (annotate it or use @cast<u128>)");
+    return s;
+}
+
 // a float literal: the wanted float type, else f64
 attach fn float_lit(this: checker&, v: f64, want: u32?) -> tval {
     var t = F64;
@@ -613,7 +631,10 @@ attach fn expr(this: checker&, e: expr&, want: u32?) -> compile_error!tval {
     match (e.kind) {
         .INT(v) => {
             if (v > 170141183460469231731687303715884105727) {
-                return fails(span, "number too large");
+                if (want != null && (want ?? 0) == int_id(int_ty::U128)) {
+                    return this.u128_val(@cast<i128>(v));
+                }
+                return fail(span, past_i128(v));
             }
             return this.int_lit(@cast<i128>(v), want);
         },

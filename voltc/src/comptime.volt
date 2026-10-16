@@ -275,6 +275,9 @@ attach fn ct_to_val(this: checker&, v: cval, want: u32?, span: span) -> compile_
             if (t == VOID) {
                 return this.int_lit(x, want);
             }
+            if (t == int_id(int_ty::U128)) {
+                return this.u128_val(x);
+            }
             return this.int_lit(x, t);
         },
         .FLOAT(x, t) => {
@@ -720,6 +723,10 @@ attach fn ct_expr(this: checker&, e: expr&, want: u32?) -> compile_error!cval {
             if (want != null && this.t.int_of(want ?? 0) != null) {
                 t = want ?? VOID;
             }
+            // past i128's maximum only a u128 holds it (its bits, as u128 values are)
+            if (v > 170141183460469231731687303715884105727 && t != int_id(int_ty::U128)) {
+                return fail(span, past_i128(v));
+            }
             return cval::INT(@cast<i128>(v), t);
         },
         .CHAR(v) => { return cval::INT(@cast<i128>(v), VOID); },
@@ -745,6 +752,10 @@ attach fn ct_expr(this: checker&, e: expr&, want: u32?) -> compile_error!cval {
             match (v) {
                 .INT(n, t) => {
                     if (op == unop::NEG) {
+                        // a u128's value is its bits: any but 0 negated is out of range
+                        if (t == int_id(int_ty::U128) && n != 0) {
+                            return fails(span, "integer overflow at compile time: a negative number doesn't fit in u128");
+                        }
                         return cval::INT(-n, t);
                     }
                     if (op == unop::BITNOT) {
@@ -1141,6 +1152,10 @@ attach fn ct_int_op(this: checker&, op: binop, x: i128, ta: u32, y: i128, tb: u3
         return type_diff(fail(span, fmt2("mismatched types {} and {}", this.ty_name(ta), this.ty_name(tb))));
     }
     val k = this.t.int_of(t);
+    if (t == int_id(int_ty::U128)) {
+        val u = ct_u128_op(op, @cast<u128>(x), @cast<u128>(y)) ?? return fails(span, "integer overflow or division by zero at compile time");
+        return u;
+    }
     var r: i128? = null;
     if (op == binop::ADD) {
         r = add_i128(x, y);
@@ -1200,6 +1215,75 @@ attach fn ct_int_op(this: checker&, op: binop, x: i128, ta: u32, y: i128, tb: u3
         }
     }
     return cval::INT(v, t);
+}
+
+// ct_int_op on u128s, unsigned: + - * checked against u128's range, wrapping ops wrap at 128 bits;
+// none on overflow, a zero divisor or a shift of 128 or more
+fn ct_u128_op(op: binop, x: u128, y: u128) -> cval? {
+    val t = int_id(int_ty::U128);
+    var r: u128 = 0;
+    if (op == binop::ADD) {
+        r = x +% y;
+        if (r < x) {
+            return null;
+        }
+    } else if (op == binop::SUB) {
+        if (y > x) {
+            return null;
+        }
+        r = x - y;
+    } else if (op == binop::MUL) {
+        r = x *% y;
+        if (x != 0 && r / x != y) {
+            return null;
+        }
+    } else if (op == binop::DIV || op == binop::REM) {
+        if (y == 0) {
+            return null;
+        }
+        r = x % y;
+        if (op == binop::DIV) {
+            r = x / y;
+        }
+    } else if (op == binop::WADD) {
+        r = x +% y;
+    } else if (op == binop::WSUB) {
+        r = x -% y;
+    } else if (op == binop::WMUL) {
+        r = x *% y;
+    } else if (op == binop::BITAND) {
+        r = x & y;
+    } else if (op == binop::BITOR) {
+        r = x | y;
+    } else if (op == binop::BITXOR) {
+        r = x ^ y;
+    } else if (op == binop::SHL || op == binop::SHR) {
+        if (y >= 128) {
+            return null;
+        }
+        r = x >> y;
+        if (op == binop::SHL) {
+            r = x << y;
+            if (r >> y != x) {
+                return null;
+            }
+        }
+    } else if (op == binop::EQ) {
+        return cval::BOOL(x == y);
+    } else if (op == binop::NE) {
+        return cval::BOOL(x != y);
+    } else if (op == binop::LT) {
+        return cval::BOOL(x < y);
+    } else if (op == binop::GT) {
+        return cval::BOOL(x > y);
+    } else if (op == binop::LE) {
+        return cval::BOOL(x <= y);
+    } else if (op == binop::GE) {
+        return cval::BOOL(x >= y);
+    } else {
+        return null;
+    }
+    return cval::INT(@cast<i128>(r), t);
 }
 
 // structural equality of two compile-time values

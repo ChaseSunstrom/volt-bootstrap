@@ -1304,25 +1304,6 @@ struct global_why {
     span: span;
 }
 
-// does a foldable expression hold a unary operator (~x, !x, -x) somewhere?
-fn unary_in(e: expr&) -> bool {
-    if (!foldable(e)) {
-        return false;
-    }
-    match (e.kind) {
-        .UNARY(op, x) => { return true; },
-        .CAST(x, t&) => { return unary_in(x); },
-        .BINARY(op, a, b) => { return unary_in(a) || unary_in(b); },
-        .BUILTIN(n, g, a&) => {
-            match (*ptr_of(a)->at(0)) {
-                .EXPR(x&) => { return unary_in(x); },
-                default => { return false; },
-            }
-        },
-        default => { return false; },
-    }
-}
-
 // a constant expression worked out now, or none when it can't be (it stays as it is)
 attach fn fold_global(this: checker&, e: expr&, want: u32?) -> tval? {
     val cv = this.ct_eval_in(this.cx.env, e, want) catch |err| {
@@ -1388,10 +1369,11 @@ attach fn global_init(this: checker&, l: let_stmt&, span: span) -> compile_error
         if (want) {
             v = try this.coerce(v, want, l.init.span);
         }
-        // ~x and !x over constants are pure but not literals: folded too, so the global is a
-        // constant (the LLVM backend would set it in a constructor, and code running before that,
-        // another constructor or a host calling into a library, would read zero)
-        if (v.pure && v.lit == null && unary_in(&l.init)) {
+        // ~x and !x over constants, and operators over u128s past i128's maximum, are pure but not
+        // literals: folded too, so the global is a constant (the LLVM backend would set it in a
+        // constructor, and code running before that, another constructor or a host calling into a
+        // library, would read zero; the C backend can't write a checked - in a global at all)
+        if (v.pure && v.lit == null && foldable(&l.init)) {
             val folded = this.fold_global(&l.init, want);
             if (folded) {
                 if (want) {
