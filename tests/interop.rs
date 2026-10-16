@@ -1920,7 +1920,7 @@ fn cpp_surface() {
 fn cpp_special_class() {
     let e = Env::new("cpp-special-class");
     for backend in ["c", "llvm"] {
-        assert_eq!(ok(e.voltc(&["run", "cpp_special_class.volt", "--backend", backend]), "voltc run cpp_special_class.volt"), "4 7 true\n6 3\n42 42\n", "C++ class specializations ({backend})");
+        assert_eq!(ok(e.voltc(&["run", "cpp_special_class.volt", "--backend", backend]), "voltc run cpp_special_class.volt"), "4 7 true\n6 3 1.5\n42 42 2\n42 3\n5 1\n", "C++ class specializations ({backend})");
     }
     let hpp = Path::new(ROOT).join("tests/interop/special.hpp").display().to_string().replace('\\', "/");
     std::fs::write(e.dir.join("special_field.volt"), format!("use {{ \"{hpp}\" }} as cpp;\nfn main() -> void {{\n    val s: cpp::sp::box<void> = {{ v: 1, tag: 2 }};\n}}\n")).unwrap();

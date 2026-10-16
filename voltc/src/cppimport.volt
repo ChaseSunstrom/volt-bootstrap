@@ -108,6 +108,8 @@ struct cpp_gen {
     // instance clang says is a specialization's is (special_instance: the instance -> its answer)
     specialized: std::map<str, bool> = {};
     specials: std::map<str, bool> = {};
+    spec_tu: clang_tu = { index: null, tu: null }; // where they're asked: its own parse, so asking
+                                                    // never reparses one another probe walks
     // a use naming the C++ library's own headers (<map>, <optional>): their names, by which the
     // files implementing them are the import's own (bits/stl_map.h for map)
     std_stems: std::vec<std::string> = {};
@@ -563,12 +565,15 @@ attach fn handle_of(this: cpp_gen&, t: clang::CXType) -> std::string? {
     val q = cpp_qual(clang::clang_getTypeDeclaration(ct));
     val tr = this.traits.get(q.as_str());
     val tc = clang::clang_getSpecializedCursorTemplate(clang::clang_getTypeDeclaration(ct));
-    if (clang::clang_Cursor_isNull(tc) == 0) {
+    if (this.specialized.len > 0 && clang::clang_Cursor_isNull(tc) == 0) {
         // an instance clang made from a specialization of a template Volt lays out: the twin's
-        // handle (special_twin), as struct_inst makes Volt's
+        // handle (special_twin), as struct_inst makes Volt's. One a signature only names isn't
+        // complete there, so clang hasn't picked: the probe asks
         val pq = cpp_qual(primary_of(tc));
-        if (this.specialized.get(pq.as_str()) != null && this.templates.get(pq.as_str()) != null && is_specialization(clang::clang_getTypeDeclaration(ct))) {
-            return type_spelling(ct);
+        if (this.specialized.get(pq.as_str()) != null && this.templates.get(pq.as_str()) != null) {
+            if (is_specialization(clang::clang_getTypeDeclaration(ct)) || this.special_instance(type_spelling(clang::clang_getUnqualifiedType(ct)).as_str())) {
+                return type_spelling(ct);
+            }
         }
     }
     if (tr == null && clang::clang_Cursor_isNull(tc) == 0 && this.foreign_instance(t) && this.tmpl_handles.get(cpp_qual(tc).as_str()) != null) {
@@ -1428,8 +1433,10 @@ fn primary_of(t: clang::CXCursor) -> clang::CXCursor {
 }
 
 // is class declaration d (an instance) one of its template's specializations, as clang picked it: a
-// partial specialization's instance, or an explicit specialization (declared where it's written; an
-// instance made from the primary is at the primary's place)
+// partial specialization's instance (libclang names the partial one once the instance is complete),
+// or an explicit specialization (declared where it's written, as template <>; an instance made from
+// the primary is at the primary's place, and an explicit instantiation, template struct S<int>;,
+// where it's written but made from the primary)
 fn is_specialization(d: clang::CXCursor) -> bool {
     val t = clang::clang_getSpecializedCursorTemplate(d);
     if (clang::clang_Cursor_isNull(t) != 0) {
@@ -1438,7 +1445,24 @@ fn is_specialization(d: clang::CXCursor) -> bool {
     if (clang::clang_getCursorKind(t) == clang::CXCursor_ClassTemplatePartialSpecialization) {
         return true;
     }
-    return clang::clang_equalLocations(clang::clang_getCursorLocation(d), clang::clang_getCursorLocation(t)) == 0;
+    return clang::clang_equalLocations(clang::clang_getCursorLocation(d), clang::clang_getCursorLocation(t)) == 0 && written_special(d);
+}
+
+// is class declaration d written as an explicit specialization: its tokens start template < >
+fn written_special(d: clang::CXCursor) -> bool {
+    val tu = clang::clang_Cursor_getTranslationUnit(d);
+    var toks: clang::CXToken* = null;
+    var n: u32 = 0;
+    clang::clang_tokenize(tu, clang::clang_getCursorExtent(d), &toks, &n);
+    var yes = false;
+    if (n >= 3) {
+        val a = cx_str(clang::clang_getTokenSpelling(tu, toks[0]));
+        val b = cx_str(clang::clang_getTokenSpelling(tu, toks[1]));
+        val c = cx_str(clang::clang_getTokenSpelling(tu, toks[2]));
+        yes = a.as_str() == "template" && b.as_str() == "<" && c.as_str() == ">";
+    }
+    clang::clang_disposeTokens(tu, toks, n);
+    return yes;
 }
 
 // is the C++ class spelled sp (an instance of a template the headers specialize) a specialization's,
@@ -1453,13 +1477,13 @@ attach fn special_instance(this: cpp_gen&, sp: str) -> bool {
     text.append("\nnamespace volt_spec {\ntypedef ");
     text.append(sp);
     text.append(" t;\nenum { n = sizeof(t) };\n}\n");
-    val main = "volt_cpp_inst.cpp";
-    if (this.inst_tu.tu == null || !this.inst_tu.reparse(main, text.as_str())) {
-        this.inst_tu = clang_parse_opts(main, text.as_str(), &this.inst_args, 260);
+    val main = "volt_cpp_spec.cpp";
+    if (this.spec_tu.tu == null || !this.spec_tu.reparse(main, text.as_str())) {
+        this.spec_tu = clang_parse_opts(main, text.as_str(), &this.inst_args, 260);
     }
     var yes = false;
-    if (this.inst_tu.tu != null) {
-        for (ns&) in children(this.inst_tu.root()).items() {
+    if (this.spec_tu.tu != null) {
+        for (ns&) in children(this.spec_tu.root()).items() {
             if (clang::clang_getCursorKind(*ns) != clang::CXCursor_Namespace || cursor_name(*ns).as_str() != "volt_spec") {
                 continue;
             }
@@ -2739,6 +2763,34 @@ attach fn cpp_handle_method(this: checker&, sid: u32, r: tval, name: str, gargs:
         return this.cpp_member_error(e, sid, name);
     };
     return v;
+}
+
+// a field a C++ class held by handle has that Volt didn't declare (a specialization's, through
+// struct_inst's twin), read per use: clang types obj.name as it does a call worked out per use.
+// None when C++ can't read it (no such field: the caller's error is Volt's)
+attach fn cpp_handle_field(this: checker&, sid: u32, b: tval, name: str, span: span) -> tval? {
+    val k = this.cpp_ctx_of(this.decls.at(@cast<usize>(this.si(sid).decl)).ns) ?? return null;
+    var rt = b.ty;
+    match (*this.t.get(rt)) {
+        .REF(x) => { rt = x; },
+        default => {},
+    }
+    var types: std::vec<u32> = {};
+    put(&types, this.t.intern(tyk::REF(rt)));
+    val expr = this.intern(fmt("{{0}}.{}", S(name)));
+    val made = this.cpp_instance_addr(k, expr, &types, true, false, false, span) catch |e| {
+        return null;
+    };
+    var cands: std::vec<u32> = {};
+    put(&cands, made);
+    var rcopy = b;
+    var none: std::vec<garg> = {};
+    var pre: std::vec<tval?> = {};
+    var noargs: std::vec<expr> = {};
+    val r = this.pick_call(name, &cands, &rcopy, null, &none, &pre, &noargs, null, span) catch |e| {
+        return null;
+    };
+    return r;
 }
 
 // ...a static one: Q::name(...)
@@ -5670,7 +5722,7 @@ attach fn scan(this: cpp_gen&, c: clang::CXCursor, vpath: str) -> void {
         // gets a twin held by handle (special_twin)
         val sk = clang::clang_getCursorKind(*ch);
         val spec_of = clang::clang_getSpecializedCursorTemplate(*ch);
-        if (clang::clang_Cursor_isNull(spec_of) == 0 && clang::clang_isCursorDefinition(*ch) != 0 && (sk == clang::CXCursor_ClassTemplatePartialSpecialization || sk == clang::CXCursor_StructDecl || sk == clang::CXCursor_ClassDecl)) {
+        if (clang::clang_Cursor_isNull(spec_of) == 0 && clang::clang_isCursorDefinition(*ch) != 0 && (sk == clang::CXCursor_ClassTemplatePartialSpecialization || ((sk == clang::CXCursor_StructDecl || sk == clang::CXCursor_ClassDecl) && written_special(*ch)))) {
             this.specialized.put(this.c.intern(cpp_qual(spec_of)), true);
         }
         if (this.skip(*ch)) {

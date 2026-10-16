@@ -33,8 +33,14 @@ struct box<T*> {
 };
 
 inline int box_int_size() { return int(sizeof(box<int>)); }
-// a specialization in a signature: the import's handle, as Volt's box<void> is
+// a specialization in a signature: the import's handle, as Volt's box<void> is; and a partial
+// specialization's instance only signatures name (the import reads no bodies, so nothing makes it
+// complete there: clang hasn't picked its declaration)
 inline double void_twice(const box<void>& b) { return b.scaled(2.0); }
+inline int peek(box<int*>& b) { return b.deref(); }
+
+// an explicit instantiation is the primary's (laid out by Volt), though it's written where it is
+template struct box<long>;
 
 // function templates with explicit specializations: C++ picks the specialization (the primary's
 // result tells them apart)
