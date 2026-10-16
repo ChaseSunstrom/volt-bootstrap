@@ -1396,11 +1396,18 @@ fn dotnet_direct() {
     let o = c.output().unwrap();
     assert_eq!(o.status.code(), Some(101), "an exception stops the program: {}", String::from_utf8_lossy(&o.stderr));
     assert!(String::from_utf8_lossy(&o.stderr).contains("System.DivideByZeroException"), "{}", String::from_utf8_lossy(&o.stderr));
+    // a generic instance C# rejects is an error at the call, with the C# compiler's reason
+    let mut c = Command::new(&e.voltc);
+    c.args(["run", "generics_bad.volt"]).current_dir(&dir).env("VOLT_STD", Path::new(ROOT).join("std"));
+    tools(&mut c);
+    let o = c.output().unwrap();
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(!o.status.success() && err.contains("Max<geo::Shape>: .NET doesn't take these types") && err.contains("IComparable"), "a rejected instance: {err}");
     // the same program in a bolt package
     let app = dir.join("app");
     std::fs::create_dir_all(app.join("src")).unwrap();
     std::fs::write(app.join("bolt.toml"), format!("[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[std]\npath = '{}'\n", Path::new(ROOT).join("std").display())).unwrap();
-    std::fs::write(app.join("src/main.volt"), src.replace("\"Geo.cs\"", "\"../../Geo.cs\"")).unwrap();
+    std::fs::write(app.join("src/main.volt"), src.replace("\"Geo.cs\"", "\"../../Geo.cs\"").replace("\"Generic.cs\"", "\"../../Generic.cs\"")).unwrap();
     let bolt_run = |backend: &str| {
         let mut c = Command::new(env!("CARGO_BIN_EXE_bolt"));
         c.args(["run", "-q", "--backend", backend]).current_dir(&app);

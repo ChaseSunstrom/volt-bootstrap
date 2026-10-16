@@ -13,7 +13,7 @@
 //   constructors -> T::new(...); properties and public fields -> X() and set_X(v); as_B() for each
 //   imported base class or interface B; an enum -> a Volt enum with the same values
 //   an exception -> the program stops with its text (.NET declares none to make an error of)
-use super::glue::{Gen, Kind, Lang, Model, Recv, ShimOut, ShimParam, Sig, Ty, TypeDef, TypeInfo};
+use super::glue::{FnPass, Gen, Kind, Lang, Model, Recv, ShimOut, ShimParam, Sig, Ty, TypeDef, TypeInfo};
 use super::{arg_path, fresh, save, stamp, Made, Req};
 use std::collections::BTreeMap;
 use std::fmt::Write;
@@ -38,6 +38,13 @@ pub fn import(r: &Req) -> Result<(), String> {
     let dotnet = dotnet()?;
     let mut files = sources.clone();
     files.extend(dll.clone());
+    // the sources' own inputs (the instances the C# compiler rejected stay rejected until these
+    // change)
+    let own_st = stamp(&files, "dotnet sources");
+    // the instances of its generics a program asked for (voltc writes them)
+    if r.out.join("instances").is_file() {
+        files.push(r.out.join("instances"));
+    }
     let st = stamp(&files, &format!("dotnet {} {} release={}", r.alias, dotnet.display(), r.release));
     if fresh(r, &st) {
         return Ok(());
@@ -72,17 +79,32 @@ pub fn import(r: &Req) -> Result<(), String> {
     if !o.status.success() {
         return Err(format!("use dotnet: can't read {}:\n{}", user.display(), String::from_utf8_lossy(&o.stderr)));
     }
-    let (model, lang) = read(&String::from_utf8_lossy(&o.stdout));
+    let desc = String::from_utf8_lossy(&o.stdout).into_owned();
 
-    // the shim, beside the library it calls
+    // the shim, beside the library it calls, with the instances of generics asked for (the C#
+    // compiler checks each one's constraints)
     let shim_name = format!("volt_shim_{id}");
     let dir = out.join("shim");
-    let lang = Dotnet { asm: dir.join("bin").join(format!("{shim_name}.dll")), asm_name: shim_name.clone(), ..lang };
-    let (shim, volt) = Gen::new(&model, &r.alias, &lang).write("the assembly");
-    crate::build::write_if_changed(&dir.join("Shim.cs"), &(shim + "}\n"))?;
     let user_name = user.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
     let proj = format!("<Project Sdk=\"Microsoft.NET.Sdk\">\n  <PropertyGroup>\n    <TargetFramework>{tfm}</TargetFramework>\n    <AssemblyName>{shim_name}</AssemblyName>\n    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>\n    <EnableDynamicLoading>true</EnableDynamicLoading>\n    <Nullable>disable</Nullable>\n  </PropertyGroup>\n  <ItemGroup>\n    <Reference Include=\"{}\">\n      <HintPath>{}</HintPath>\n    </Reference>\n  </ItemGroup>\n</Project>\n", xml(&user_name), xml(&user.display().to_string()));
-    build(&dotnet, &dir, "Shim.csproj", &proj, "the glue")?;
+    let model_with = |lines: &[String], skip: &BTreeMap<String, String>| {
+        let (mut model, lang) = read(&desc);
+        let mut lang = Dotnet { asm: dir.join("bin").join(format!("{shim_name}.dll")), asm_name: shim_name.clone(), ..lang };
+        let made = instances(&mut model, &mut lang, lines, &r.alias, skip);
+        (model, lang, made)
+    };
+    let build_with = |lines: &[String], skip: &BTreeMap<String, String>| -> Result<(String, String), String> {
+        let (model, lang, _) = model_with(lines, skip);
+        let (shim, volt) = Gen::new(&model, &r.alias, &lang).write("the assembly");
+        crate::build::write_if_changed(&dir.join("Shim.cs"), &(shim + "}\n"))?;
+        build(&dotnet, &dir, "Shim.csproj", &proj, "the glue").map_err(|e| cs_errors(&e))?;
+        Ok((volt, String::new()))
+    };
+    let methods = |l: &str, skip: &BTreeMap<String, String>| -> Vec<String> {
+        let (model, _, made) = model_with(std::slice::from_ref(&l.to_string()), skip);
+        made.first().cloned().flatten().and_then(|t| model.methods.get(&t).cloned()).unwrap_or_default().into_iter().map(|s| s.name).collect()
+    };
+    let (volt, _) = super::with_instances(r, &own_st, build_with, methods, |e| e)?;
 
     let fxr = fxr_dir(&root, &version)?;
     let flags = vec![format!("-L{}", fxr.display()), format!("-Wl,-rpath,{}", fxr.display()), "-lhostfxr".to_string()];
@@ -146,18 +168,136 @@ fn build(dotnet: &Path, dir: &Path, proj_file: &str, proj: &str, what: &str) -> 
     Ok(())
 }
 
+/// the C# compiler's errors (file(line,col): error CS0311: what [project]) marked the way
+/// with_instances finds an instance's reason (file(line,col): error: CS0311: what)
+fn cs_errors(e: &str) -> String {
+    e.lines()
+        .map(|l| match l.split_once(": error CS") {
+            Some((at, what)) => format!("{at}: error: CS{}", what.rsplit_once(" [").map_or(what, |x| x.0)),
+            None => l.to_string(),
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// The instances voltc asked for (OUT/instances: a line per instance, `Type` or `Type::Method`,
+/// then each type argument as Volt names it, tab-separated): a generic class's instance is a type
+/// of its own (Box__i32, global::Geo.Box<int> to C#) with its members, a generic method's a
+/// method calling Max<int>; made of each line: the type instance's name, for a type's
+fn instances(m: &mut Model, lang: &mut Dotnet, lines: &[String], alias: &str, skip: &BTreeMap<String, String>) -> Vec<Option<String>> {
+    let types: BTreeMap<String, Vec<String>> = m.types.iter().map(|t| (t.name.clone(), t.module.clone())).collect();
+    let mut made = Vec::new();
+    for line in lines {
+        made.push(None);
+        let mut parts = line.split('\t');
+        let Some(path) = parts.next().filter(|p| !p.is_empty()) else { continue };
+        let args: Vec<&str> = parts.collect();
+        let what = format!("{path}<{}>", args.join(", "));
+        let inst_of = |name: &str| format!("{name}__{}", args.iter().map(|a| super::glue::ident(a)).collect::<Vec<_>>().join("_"));
+        // each type argument as the import has it, and as C# spells it
+        let mut subst = BTreeMap::new();
+        let mut cs_args = Vec::new();
+        let bind = |params: &[String], subst: &mut BTreeMap<String, Ty>, cs_args: &mut Vec<String>, m: &Model| -> bool {
+            for (gp, a) in params.iter().zip(&args) {
+                let Some(t) = super::glue::volt_ty(a, alias, &types) else { return false };
+                let Some(c) = cs_arg(&t, m, lang) else { return false };
+                subst.insert(gp.clone(), t);
+                cs_args.push(c);
+            }
+            params.len() == args.len()
+        };
+        match path.split_once("::") {
+            // a generic class's instance: the class with its arguments in place, and its members
+            None => {
+                let Some(gt) = m.types.iter().find(|t| t.name == path && t.generic).cloned() else { continue };
+                let inst = inst_of(path);
+                if types.contains_key(&inst) || m.types.iter().any(|t| t.name == inst) {
+                    continue;
+                }
+                if !bind(&gt.params, &mut subst, &mut cs_args, m) {
+                    m.left_out.push(format!("{what} (it takes {} types: numbers, std::string or the import's own non-generic types)", gt.params.len()));
+                    continue;
+                }
+                let full = lang.full.get(path).cloned().unwrap_or_else(|| path.to_string());
+                let mut d = gt.clone();
+                d.name = inst.clone();
+                d.generic = false;
+                d.params.clear();
+                d.rust_name = Some(format!("{}<{}>", full.split('`').next().unwrap_or(&full).replace('+', "."), cs_args.join(", ")));
+                d.fields = d.fields.map(|fs| fs.into_iter().map(|(n, p, t)| (n, p, t.map(|t| super::glue::substitute(&t, &subst)))).collect());
+                let mut ms = Vec::new();
+                for mut s in m.methods.get(path).cloned().unwrap_or_default() {
+                    if let Some(w) = skip.get(&format!("{line}::{}", s.name)) {
+                        m.left_out.push(format!("{inst}::{} (the C# compiler: {w})", s.name));
+                        continue;
+                    }
+                    s.params = s.params.iter().map(|(n, t)| (n.clone(), t.as_ref().map(|t| super::glue::substitute(t, &subst)))).collect();
+                    s.ret = s.ret.as_ref().map(|t| super::glue::substitute(t, &subst));
+                    ms.push(s);
+                }
+                // its properties, fields and casts are the class's
+                for map in [&mut lang.props, &mut lang.casts] {
+                    let own: Vec<((String, String), String)> = map.iter().filter(|((t, _), _)| t == path).map(|((_, f), v)| ((inst.clone(), f.clone()), v.clone())).collect();
+                    map.extend(own);
+                }
+                m.methods.insert(inst.clone(), ms);
+                m.types.push(d);
+                *made.last_mut().unwrap() = Some(inst);
+            }
+            // a generic method's instance: a method of the type calling Name<args>
+            Some((ty, method)) => {
+                let Some(g) = m.methods.get(ty).and_then(|ms| ms.iter().find(|s| s.name == method && !s.generics.is_empty())).cloned() else { continue };
+                let inst = inst_of(method);
+                if m.methods.get(ty).is_some_and(|ms| ms.iter().any(|s| s.name == inst)) {
+                    continue;
+                }
+                if !bind(&g.generics, &mut subst, &mut cs_args, m) {
+                    m.left_out.push(format!("{what} (it takes {} types: numbers, std::string or the import's own non-generic types)", g.generics.len()));
+                    continue;
+                }
+                let mut s = g.clone();
+                s.params = s.params.iter().map(|(n, t)| (n.clone(), t.as_ref().map(|t| super::glue::substitute(t, &subst)))).collect();
+                s.ret = s.ret.as_ref().map(|t| super::glue::substitute(t, &subst));
+                s.generics.clear();
+                s.call = Some(format!("{method}<{}>", cs_args.join(", ")));
+                s.src = format!("{} [{}]", s.src, g.generics.iter().zip(&args).map(|(p, a)| format!("{p} = {a}")).collect::<Vec<_>>().join(", "));
+                s.name = inst;
+                m.methods.entry(ty.to_string()).or_default().push(s);
+            }
+        }
+    }
+    made
+}
+
+/// a type argument as C# spells it: a number, string, or one of the import's (non-generic) types; a
+/// Volt type of the program's own, or another generic's instance, has none
+fn cs_arg(t: &Ty, m: &Model, lang: &Dotnet) -> Option<String> {
+    Some(match t {
+        Ty::Prim(x) => cs(x).to_string(),
+        Ty::Str | Ty::String => "string".into(),
+        Ty::Named(n) => {
+            let d = m.types.iter().find(|d| d.name == *n && !d.generic)?;
+            format!("global::{}", d.rust_name.clone().unwrap_or_else(|| lang.full.get(n).cloned().unwrap_or_default()).replace('+', "."))
+        }
+        _ => return None,
+    })
+}
+
 fn xml(s: &str) -> String {
     s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
 }
 
 /// a C# program printing what an assembly's public types have, a declaration a line (tab-separated):
-///   type FULLNAME class|abstract|static|interface|struct|enum, then super FULLNAME (an imported
-///   base or interface), value NAME N (an enum's), field NAME settable TYPE (a struct's instance
-///   fields, in order), func NAME KIND (KIND: ctor, inst, static, get, sget, set, sset, cast; then the
-///   method's C# declaration, when it has one) with
-///   param NAME TYPE and result TYPE lines and end; end
+///   type FULLNAME class|abstract|static|interface|struct|enum, then tparam NAME (a generic one's
+///   type parameters), super FULLNAME (an imported base or interface), value NAME N (an enum's),
+///   field NAME settable TYPE (a struct's instance fields, in order), func NAME KIND (KIND: ctor,
+///   inst, static, get, sget, set, sset, cast; then the method's C# declaration, when it has one)
+///   with tparam NAME (a generic method's), param NAME TYPE (ref:TYPE, out:TYPE for ref and out
+///   parameters) and result TYPE lines and end; end
 ///   other NAME WHY
-/// TYPE: void, bool, char, string, i8...f64, an imported type's full name, T[], T?, or other
+/// TYPE: void, bool, char, string, i8...f64, an imported type's full name, T[], T?, $T (a type
+/// parameter), an imported generic type's instance (Geo.Box`1<$T>), fn(TYPE,...)TYPE (a delegate:
+/// its Invoke's types), or other
 const DESCRIBE: &str = r#"using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -165,13 +305,23 @@ using System.Reflection;
 
 static class Describe {
     static HashSet<Type> mine = new HashSet<Type>();
+    static HashSet<Type> inside = new HashSet<Type>();
 
     static string T(Type t) {
         if (t == typeof(void)) return "void";
-        if (t.IsByRef || t.IsPointer || t.IsGenericParameter) return "other";
+        if (t.IsGenericParameter) return "$" + t.Name;
+        if (t.IsByRef || t.IsPointer) return "other";
+        if (t.IsGenericType && mine.Contains(t.GetGenericTypeDefinition())) return t.GetGenericTypeDefinition().FullName + "<" + string.Join(",", t.GetGenericArguments().Select(T)) + ">";
+        if (typeof(Delegate).IsAssignableFrom(t) && t != typeof(Delegate) && t != typeof(MulticastDelegate)) {
+            var inv = t.GetMethod("Invoke");
+            if (inv == null || inv.ReturnType.IsByRef || inv.GetParameters().Any(p => p.ParameterType.IsByRef) || !inside.Add(t)) return "other";
+            var fn = "fn(" + string.Join(",", inv.GetParameters().Select(p => T(p.ParameterType))) + ")" + T(inv.ReturnType);
+            inside.Remove(t);
+            return fn;
+        }
         var u = Nullable.GetUnderlyingType(t);
         if (u != null) return T(u) + "?";
-        if (t.IsArray) return t.GetArrayRank() == 1 ? T(t.GetElementType()) + "[]" : "other";
+        if (t.IsArray) return t.GetArrayRank() == 1 && !T(t.GetElementType()).StartsWith("fn(") ? T(t.GetElementType()) + "[]" : "other";
         if (mine.Contains(t)) return t.FullName;
         if (t == typeof(string)) return "string";
         if (t == typeof(bool)) return "bool";
@@ -196,6 +346,17 @@ static class Describe {
         { typeof(float), "float" }, { typeof(double), "double" }, { typeof(object), "object" },
     };
 
+    // a parameter's type, ref and out ones marked (an in one is its value)
+    static string P(ParameterInfo p) {
+        var t = p.ParameterType;
+        if (!t.IsByRef) return T(t);
+        if (p.IsOut && !p.IsIn) return "out:" + T(t.GetElementType());
+        return In(p) ? T(t.GetElementType()) : "ref:" + T(t.GetElementType());
+    }
+
+    // an in parameter (not [In] ref): its modreq says so
+    static bool In(ParameterInfo p) => p.GetRequiredCustomModifiers().Contains(typeof(System.Runtime.InteropServices.InAttribute));
+
     // a type as C# spells it
     static string Cs(Type t) {
         var u = Nullable.GetUnderlyingType(t);
@@ -207,20 +368,23 @@ static class Describe {
 
     // a method or constructor as C# declares it: public static int Add(int a, int b)
     static string Decl(MethodBase m) {
-        var ps = string.Join(", ", m.GetParameters().Select(p => Cs(p.ParameterType) + " " + p.Name));
+        var ps = string.Join(", ", m.GetParameters().Select(p => (!p.ParameterType.IsByRef ? "" : p.IsOut && !p.IsIn ? "out " : In(p) ? "in " : "ref ") + Cs(p.ParameterType) + " " + p.Name));
         var head = "public " + (m.IsStatic ? "static " : "");
-        return m is MethodInfo mi ? $"{head}{Cs(mi.ReturnType)} {m.Name}({ps})" : $"{head}{m.DeclaringType.Name}({ps})";
+        var tps = m.IsGenericMethodDefinition ? "<" + string.Join(", ", m.GetGenericArguments().Select(a => a.Name)) + ">" : "";
+        return m is MethodInfo mi ? $"{head}{Cs(mi.ReturnType)} {m.Name}{tps}({ps})" : $"{head}{m.DeclaringType.Name.Split('`')[0]}({ps})";
     }
 
-    static void Func(string name, string kind, IEnumerable<(string, Type)> ps, Type ret, string decl = "") {
+    static void Func(string name, string kind, IEnumerable<(string, string)> ps, Type ret, string decl = "", Type[] tps = null) {
         Console.WriteLine($"func\t{name}\t{kind}\t{decl}");
-        foreach (var (n, t) in ps) Console.WriteLine($"param\t{n}\t{T(t)}");
+        foreach (var a in tps ?? new Type[0]) Console.WriteLine($"tparam\t{a.Name}");
+        foreach (var (n, t) in ps) Console.WriteLine($"param\t{n}\t{t}");
         Console.WriteLine($"result\t{T(ret)}");
         Console.WriteLine("end");
     }
 
-    static IEnumerable<(string, Type)> Params(MethodBase m) =>
-        m.GetParameters().Select(p => (p.Name ?? "", p.IsOut || p.ParameterType.IsByRef ? typeof(void*) : p.ParameterType));
+    static IEnumerable<(string, string)> Params(MethodBase m) => m.GetParameters().Select(p => (p.Name ?? "", P(p)));
+
+    static IEnumerable<(string, string)> One(string n, Type t) => new[] { (n, T(t)) };
 
     static void Main(string[] a) {
         var asm = Assembly.LoadFrom(a[0]);
@@ -230,14 +394,16 @@ static class Describe {
         } catch (ReflectionTypeLoadException e) {
             all = e.Types.Where(t => t != null && t.IsVisible).ToArray();
         }
+        // (a delegate type is the fn type of its Invoke, not a type of its own)
         foreach (var t in all.OrderBy(t => t.FullName)) {
-            if (t.ContainsGenericParameters) Console.WriteLine($"other\t{t.FullName}\tit's generic");
-            else if (typeof(Delegate).IsAssignableFrom(t)) Console.WriteLine($"other\t{t.FullName}\ta delegate");
+            if (typeof(Delegate).IsAssignableFrom(t)) continue;
+            if (t.ContainsGenericParameters && (!t.IsGenericTypeDefinition || (t.IsNested && t.DeclaringType.IsGenericTypeDefinition))) Console.WriteLine($"other\t{t.FullName}\tit's inside a generic type");
             else mine.Add(t);
         }
         foreach (var t in mine.OrderBy(t => t.FullName)) {
             string kind = t.IsEnum ? "enum" : t.IsInterface ? "interface" : t.IsValueType ? "struct" : t.IsAbstract && t.IsSealed ? "static" : t.IsAbstract ? "abstract" : "class";
             Console.WriteLine($"type\t{t.FullName}\t{kind}");
+            if (t.IsGenericTypeDefinition) foreach (var tp in t.GetGenericArguments()) Console.WriteLine($"tparam\t{tp.Name}");
             var supers = new List<Type>();
             for (var b = t.BaseType; b != null; b = b.BaseType) if (mine.Contains(b)) supers.Add(b);
             supers.AddRange(t.GetInterfaces().Where(mine.Contains));
@@ -257,42 +423,100 @@ static class Describe {
             }
             foreach (var m in t.GetMethods(inst).Concat(t.GetMethods(stat)).OrderBy(m => m.Name).ThenBy(m => m.ToString())) {
                 if (m.IsSpecialName || m.DeclaringType == typeof(object) || m.DeclaringType == typeof(ValueType)) continue;
-                if (m.IsGenericMethodDefinition) {
-                    Console.WriteLine($"other\t{t.Name}.{m.Name}\tit's generic");
+                if (m.IsGenericMethodDefinition && t.IsGenericTypeDefinition) {
+                    Console.WriteLine($"other\t{t.Name.Split('`')[0]}.{m.Name}\tit's generic in a generic type");
                     continue;
                 }
-                Func(m.Name, m.IsStatic ? "static" : "inst", Params(m), m.ReturnType, Decl(m));
+                Func(m.Name, m.IsStatic ? "static" : "inst", Params(m), m.ReturnType, Decl(m), m.IsGenericMethodDefinition ? m.GetGenericArguments() : null);
             }
             foreach (var p in t.GetProperties(inst).Concat(t.GetProperties(stat)).OrderBy(p => p.Name)) {
                 if (p.GetIndexParameters().Length > 0) continue;
                 var g = p.GetGetMethod();
                 var s = p.GetSetMethod();
                 var st = (g ?? s).IsStatic;
-                if (g != null) Func(p.Name, st ? "sget" : "get", new (string, Type)[0], p.PropertyType);
-                if (s != null) Func(p.Name, st ? "sset" : "set", new[] { ("value", p.PropertyType) }, typeof(void));
+                if (g != null) Func(p.Name, st ? "sget" : "get", new (string, string)[0], p.PropertyType);
+                if (s != null) Func(p.Name, st ? "sset" : "set", One("value", p.PropertyType), typeof(void));
             }
             foreach (var f in t.GetFields(inst).Concat(t.GetFields(stat)).OrderBy(f => f.Name)) {
-                Func(f.Name, f.IsStatic ? "sget" : "get", new (string, Type)[0], f.FieldType);
-                if (!f.IsInitOnly && !f.IsLiteral) Func(f.Name, f.IsStatic ? "sset" : "set", new[] { ("value", f.FieldType) }, typeof(void));
+                Func(f.Name, f.IsStatic ? "sget" : "get", new (string, string)[0], f.FieldType);
+                if (!f.IsInitOnly && !f.IsLiteral) Func(f.Name, f.IsStatic ? "sset" : "set", One("value", f.FieldType), typeof(void));
             }
-            foreach (var s in supers) Func(s.FullName, "cast", new (string, Type)[0], s);
+            foreach (var s in supers) Func(s.FullName, "cast", new (string, string)[0], s);
             Console.WriteLine("end");
         }
     }
 }
 "#;
 
-/// a type's Volt name: Geo.Point is Point, Geo.Outer+Inner Outer_Inner
+/// a type's Volt name: Geo.Point is Point, Geo.Outer+Inner Outer_Inner, Geo.Box`1 Box
 fn volt_type(full: &str) -> String {
-    full.rsplit('.').next().unwrap_or(full).replace('+', "_")
+    let mut out = String::new();
+    let mut arity = false;
+    for c in full.rsplit('.').next().unwrap_or(full).chars() {
+        arity = c == '`' || (arity && c.is_ascii_digit());
+        if !arity {
+            out.push(if c == '+' { '_' } else { c });
+        }
+    }
+    out
+}
+
+/// where the ')' closing s's first '(' is (s starts after it), and s's parts split at its top-level
+/// commas
+fn closing(s: &str) -> Option<usize> {
+    let mut depth = 0;
+    for (i, c) in s.char_indices() {
+        match c {
+            '(' | '<' => depth += 1,
+            '>' => depth -= 1,
+            ')' if depth == 0 => return Some(i),
+            ')' => depth -= 1,
+            _ => {}
+        }
+    }
+    None
+}
+
+fn top_parts(s: &str) -> Vec<&str> {
+    if s.is_empty() {
+        return Vec::new();
+    }
+    let (mut out, mut depth, mut start) = (Vec::new(), 0, 0);
+    for (i, c) in s.char_indices() {
+        match c {
+            '(' | '<' => depth += 1,
+            ')' | '>' => depth -= 1,
+            ',' if depth == 0 => {
+                out.push(&s[start..i]);
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    out.push(&s[start..]);
+    out
 }
 
 fn ty(s: &str, names: &BTreeMap<String, String>) -> Option<Ty> {
+    // a delegate: a closure of its Invoke's types (its text result a String, as a closure gives one),
+    // which .NET may keep
+    if let Some(rest) = s.strip_prefix("fn(") {
+        let close = closing(rest)?;
+        let ps = top_parts(&rest[..close]).into_iter().map(|p| ty(p, names)).collect::<Option<Vec<_>>>()?;
+        let r = match ty(&rest[close + 1..], names)? {
+            Ty::Str => Ty::String,
+            r => r,
+        };
+        return Some(Ty::Fn(ps, Box::new(r), FnPass::Boxed, false));
+    }
     if let Some(e) = s.strip_suffix("[]") {
         return Some(Ty::Slice(Box::new(ty(e, names)?), true));
     }
     if let Some(e) = s.strip_suffix('?') {
         return Some(Ty::Opt(Box::new(ty(e, names)?)));
+    }
+    if let Some(g) = s.strip_prefix('$') {
+        return Some(Ty::Generic(g.to_string()));
     }
     Some(match s {
         "void" => Ty::Unit,
@@ -312,14 +536,17 @@ fn read(desc: &str) -> (Model, Dotnet) {
     let mut lang = Dotnet::default();
     // the types, by full name; two with one Volt name: neither
     let fulls: Vec<&str> = rows.iter().filter(|f| f.len() == 3 && f[0] == "type").map(|f| f[1]).collect();
-    let mut count: BTreeMap<String, usize> = BTreeMap::new();
+    // (a generic one's arity, Box`1, isn't in its Volt name: a plain type of that name keeps it)
+    let generic = |f: &str| f.contains('`');
+    let mut count: BTreeMap<(String, bool), usize> = BTreeMap::new();
     for f in &fulls {
-        *count.entry(volt_type(f)).or_default() += 1;
+        *count.entry((volt_type(f), generic(f))).or_default() += 1;
     }
     let mut names = BTreeMap::new();
     for f in &fulls {
         let v = volt_type(f);
-        if count[&v] > 1 || v == "dotnet_shim" {
+        let plain_too = generic(f) && count.contains_key(&(v.clone(), false));
+        if count[&(v.clone(), generic(f))] > 1 || plain_too || v == "dotnet_shim" {
             m.left_out.push(format!("{f} (another type is called {v})"));
         } else {
             lang.full.insert(v.clone(), f.to_string());
@@ -329,11 +556,13 @@ fn read(desc: &str) -> (Model, Dotnet) {
     let mut i = 0;
     let mut cur: Option<(String, String)> = None; // the type's Volt name and kind
     let mut def: Option<TypeDef> = None;
+    let mut cur_full = String::new();
     while i < rows.len() {
         let f = &rows[i];
         i += 1;
         match f[0] {
             "type" if f.len() == 3 => {
+                cur_full = f[1].to_string();
                 cur = names.get(f[1]).map(|v| (v.clone(), f[2].to_string()));
                 def = cur.as_ref().map(|(v, k)| TypeDef {
                     module: vec![],
@@ -348,6 +577,13 @@ fn read(desc: &str) -> (Model, Dotnet) {
                     rust_name: None,
                 });
             }
+            // a generic type's type parameter: a type per instance a program names
+            "tparam" if f.len() == 2 => {
+                if let Some(d) = def.as_mut() {
+                    d.generic = true;
+                    d.params.push(f[1].to_string());
+                }
+            }
             "value" if f.len() == 3 => {
                 if let (Some(d), Ok(n)) = (def.as_mut(), f[2].parse::<i128>()) {
                     d.variants.get_or_insert_with(Vec::new).push((f[1].to_string(), n));
@@ -359,17 +595,45 @@ fn read(desc: &str) -> (Model, Dotnet) {
                 }
             }
             "func" if f.len() == 3 || f.len() == 4 => {
-                let (mut params, mut ret) = (Vec::new(), None);
+                let (mut params, mut ret, mut generics, mut outs) = (Vec::new(), None, Vec::new(), Vec::new());
+                // the type itself, as its members spell it (Geo.Box`1<$T>)
+                let own = def.as_ref().filter(|d| d.generic).map(|d| format!("{cur_full}<{}>", d.params.iter().map(|p| format!("${p}")).collect::<Vec<_>>().join(",")));
+                let ty_of = |t: &str| if own.as_deref() == Some(t) { Some(Ty::SelfTy) } else { ty(t, &names) };
                 while i < rows.len() && rows[i][0] != "end" {
                     let r = &rows[i];
                     match (r[0], r.len()) {
-                        ("param", 3) => params.push((if r[1].is_empty() { format!("p{}", params.len()) } else { r[1].to_string() }, ty(r[2], &names))),
-                        ("result", 2) => ret = ty(r[1], &names),
+                        ("tparam", 2) => generics.push(r[1].to_string()),
+                        ("param", 3) => {
+                            let n = if r[1].is_empty() { format!("p{}", params.len()) } else { r[1].to_string() };
+                            // ref: a Volt reference; out: one of the results
+                            let t = if let Some(x) = r[2].strip_prefix("ref:") {
+                                ty_of(x).map(|t| Ty::Ref(Box::new(t), true))
+                            } else if let Some(x) = r[2].strip_prefix("out:") {
+                                let t = ty_of(x).map(|t| if t == Ty::Str { Ty::String } else { t });
+                                outs.push((n.clone(), t.clone()));
+                                t.map(|t| Ty::Out(Box::new(t), n.clone()))
+                            } else {
+                                ty_of(r[2])
+                            };
+                            params.push((n, t));
+                        }
+                        ("result", 2) => ret = ty_of(r[1]),
                         _ => {}
                     }
                     i += 1;
                 }
                 i += 1;
+                // out parameters are results: the one of a void method is its value, else a tuple
+                // (the method's own value first, unnamed)
+                if !outs.is_empty() {
+                    let named: Option<Vec<(String, Ty)>> = outs.into_iter().map(|(n, t)| t.map(|t| (n, t))).collect();
+                    ret = match (ret, named) {
+                        (Some(Ty::Unit), Some(mut os)) if os.len() == 1 => os.pop().map(|x| x.1),
+                        (Some(Ty::Unit), Some(os)) => Some(Ty::Tuple(os)),
+                        (Some(r), Some(os)) => Some(Ty::Tuple(std::iter::once((String::new(), r)).chain(os).collect())),
+                        _ => None,
+                    };
+                }
                 let Some((tv, _)) = cur.clone() else { continue };
                 let (name, recv) = match f[2] {
                     "ctor" => ("new".to_string(), Recv::None),
@@ -392,7 +656,7 @@ fn read(desc: &str) -> (Model, Dotnet) {
                     }
                     _ => {}
                 }
-                m.methods.entry(tv).or_default().push(Sig { name, recv, params, ret, skip: None, src: f.get(3).unwrap_or(&"").to_string(), generics: Vec::new(), call: None });
+                m.methods.entry(tv).or_default().push(Sig { name, recv, params, ret, skip: None, src: f.get(3).unwrap_or(&"").to_string(), generics, call: None });
             }
             "end" => {
                 m.types.extend(def.take());
@@ -401,6 +665,11 @@ fn read(desc: &str) -> (Model, Dotnet) {
             "other" if f.len() >= 3 => m.left_out.push(format!("{} ({})", f[1], f[2])),
             _ => {}
         }
+    }
+    // an overload with out parameters after its plain twin (both are Parse(s) to Volt: the first
+    // keeps the name)
+    for ms in m.methods.values_mut() {
+        ms.sort_by_key(|s| s.params.iter().any(|(_, t)| matches!(t, Some(Ty::Out(..)))));
     }
     (m, lang)
 }
@@ -418,8 +687,84 @@ struct Dotnet {
     asm_name: String,
 }
 
+/// between call() and function(): a void method whose out parameters are its results is a
+/// statement, then v is VOID-separated (the one out's local, or nothing the tuple's store reads)
+const VOID: &str = "\u{1}";
+
 impl Dotnet {
+    /// a type as C# spells it (an out parameter's local, a delegate's result)
+    fn cs_ty(&self, g: &Gen, t: &Ty) -> Option<String> {
+        Some(match t {
+            Ty::Prim(x) => cs(x).to_string(),
+            Ty::Char => "char".into(),
+            Ty::Str | Ty::String => "string".into(),
+            Ty::Slice(e, _) => format!("{}[]", self.cs_ty(g, e)?),
+            Ty::Opt(e) => format!("{}?", self.cs_ty(g, e)?),
+            Ty::Named(_) => self.path(&g.info(t)?.def),
+            _ => return None,
+        })
+    }
+
+    /// a C# lambda calling Volt closure a's trampoline (its data in a_k, which holds it until .NET
+    /// collects the lambda): typed parameters, so C# picks the overload and makes it the
+    /// parameter's delegate type (Func, Action or a named one)
+    fn lambda(&self, ps: &[Ty], r: &Ty, a: &str) -> Option<String> {
+        let (mut lps, mut fps, mut args, mut pins) = (Vec::new(), vec!["IntPtr".to_string()], vec![format!("{a}_k.Env")], Vec::new());
+        for (i, p) in ps.iter().enumerate() {
+            let x = format!("{a}_x{i}");
+            match p {
+                Ty::Prim("bool") => {
+                    lps.push(format!("bool {x}"));
+                    fps.push("byte".into());
+                    args.push(format!("(byte)({x} ? 1 : 0)"));
+                }
+                Ty::Prim(n) => {
+                    lps.push(format!("{} {x}", cs(n)));
+                    fps.push(cs(n).into());
+                    args.push(x);
+                }
+                Ty::Char => {
+                    lps.push(format!("char {x}"));
+                    fps.push("uint".into());
+                    args.push(format!("(uint){x}"));
+                }
+                // text: its UTF-8 bytes, pinned for the call
+                Ty::Str | Ty::String => {
+                    lps.push(format!("string {x}"));
+                    fps.extend(["byte*".to_string(), "nuint".to_string()]);
+                    pins.push(x.clone());
+                    args.extend([format!("{x}_p"), format!("(nuint){x}_b.Length")]);
+                }
+                _ => return None,
+            }
+        }
+        let (ret, body) = match r {
+            Ty::Unit => ("void", "$f;\n        GC.KeepAlive($k);".to_string()),
+            Ty::Prim("bool") => ("byte", "var $r = $f != 0;\n        GC.KeepAlive($k);\n        return $r;".to_string()),
+            Ty::Prim(n) => (cs(n), "var $r = $f;\n        GC.KeepAlive($k);\n        return $r;".to_string()),
+            Ty::Char => ("uint", "var $r = (char)$f;\n        GC.KeepAlive($k);\n        return $r;".to_string()),
+            // text: Volt puts its copy in a box the trampoline is given (put_glue)
+            Ty::String => {
+                fps.push("IntPtr".into());
+                args.push(format!("GCHandle.ToIntPtr({a}_h)"));
+                ("void", "var $r = new string[1];\n        var $h = GCHandle.Alloc($r);\n        try {\n            $f;\n        } finally {\n            $h.Free();\n        }\n        GC.KeepAlive($k);\n        return $r[0];".to_string())
+            }
+            _ => return None,
+        };
+        fps.push(ret.to_string());
+        let f = format!("((delegate* unmanaged<{}>)(void*){a})({})", fps.join(", "), args.join(", "));
+        // (its locals named for a: a lambda's can't be the enclosing function's)
+        let mut body = body.replace("$k", &format!("{a}_k")).replace("$r", &format!("{a}_r")).replace("$h", &format!("{a}_h")).replace("$f", &f);
+        for x in pins.iter().rev() {
+            body = format!("var {x}_b = Encoding.UTF8.GetBytes({x} ?? \"\");\n        fixed (byte* {x}_p = {x}_b) {{\n        {}\n        }}", body.replace('\n', "\n    "));
+        }
+        Some(format!("({}) => {{\n        {body}\n    }}", lps.join(", ")))
+    }
+
     fn path(&self, def: &TypeDef) -> String {
+        if let Some(n) = &def.rust_name {
+            return format!("global::{n}");
+        }
         format!("global::{}", self.full.get(&def.name).map_or(def.name.as_str(), String::as_str).replace('+', "."))
     }
 }
@@ -471,9 +816,55 @@ impl Lang for Dotnet {
                 p.params.push(format!("uint {a}"));
                 p.arg = format!("(char){a}");
             }
-            Ty::Str => {
+            Ty::Str | Ty::String => {
                 p.params.extend([format!("byte* {a}"), format!("nuint {a}_n")]);
                 p.arg = format!("S({a}, {a}_n)");
+            }
+            // ref: Volt's memory (or the shim's copy of it) passed by ref; what .NET writes goes back
+            Ty::Ref(x, true) => match &**x {
+                Ty::Prim("bool") => {
+                    p.params.push(format!("byte* {a}"));
+                    p.pre.push(format!("var {a}_r = *{a} != 0;"));
+                    p.arg = format!("ref {a}_r");
+                    p.post.push(format!("*{a} = (byte)({a}_r ? 1 : 0);"));
+                }
+                Ty::Prim(n) => {
+                    p.params.push(format!("{}* {a}", cs(n)));
+                    p.arg = format!("ref *{a}");
+                }
+                Ty::Named(_) => {
+                    let ti = g.info(x)?;
+                    let (path, mg) = (self.path(&ti.def), Gen::mangle(&ti.def));
+                    match ti.kind {
+                        Kind::Plain => {
+                            p.params.push(format!("V_{mg}* {a}"));
+                            p.pre.push(format!("var {a}_r = From_{mg}(*{a});"));
+                            p.arg = format!("ref {a}_r");
+                            p.post.push(format!("*{a} = To_{mg}({a}_r);"));
+                        }
+                        // the object Volt's handle holds: one .NET points it at instead is the
+                        // handle's now
+                        Kind::Handle => {
+                            p.params.push(format!("IntPtr {a}"));
+                            p.pre.push(format!("var {a}_r = H<{path}>({a});"));
+                            p.arg = format!("ref {a}_r");
+                            p.post.extend([format!("var {a}_g = GCHandle.FromIntPtr({a});"), format!("{a}_g.Target = {a}_r;")]);
+                        }
+                        Kind::Enum => return None,
+                    }
+                }
+                _ => return None,
+            },
+            // out: a local of the shim's, which the result reads
+            Ty::Out(x, n) => {
+                p.pre.push(format!("{} out_{n} = default;", self.cs_ty(g, x)?));
+                p.arg = format!("out out_{n}");
+            }
+            // a Volt fn value: a lambda over its trampoline, holding it until .NET collects it
+            Ty::Fn(ps, r, _, _) => {
+                p.params.extend([format!("IntPtr {a}"), format!("IntPtr {a}_env"), format!("IntPtr {a}_drop")]);
+                p.pre.push(format!("var {a}_k = new VoltFn({a}_env, {a}_drop);"));
+                p.arg = self.lambda(ps, r, a)?;
             }
             Ty::Slice(e, _) => match &**e {
                 Ty::Prim(x) => {
@@ -547,7 +938,20 @@ impl Lang for Dotnet {
             Ty::Prim("bool") => ShimOut { params: vec![format!("byte* {o}")], store: format!("*{o} = (byte)($v ? 1 : 0);") },
             Ty::Prim(x) => ShimOut { params: vec![format!("{}* {o}", cs(x))], store: format!("*{o} = $v;") },
             Ty::Char => ShimOut { params: vec![format!("uint* {o}")], store: format!("*{o} = (uint)$v;") },
-            Ty::Str => ShimOut { params: vec![format!("byte** {o}"), format!("nuint* {o}_n")], store: format!("PutStr($v, {o}, {o}_n);") },
+            Ty::Str | Ty::String => ShimOut { params: vec![format!("byte** {o}"), format!("nuint* {o}_n")], store: format!("PutStr($v, {o}, {o}_n);") },
+            // several results (out parameters): each element's outs (o0, o1...); an out
+            // parameter's value is its local, the method's own (unnamed) the call's
+            Ty::Tuple(es) => {
+                let (mut params, mut stores) = (Vec::new(), Vec::new());
+                for (i, (n, t)) in es.iter().enumerate() {
+                    let x = self.out(g, t, &format!("{o}{i}"), false)?;
+                    params.extend(x.params);
+                    stores.push(if n.is_empty() { x.store } else { x.store.replace("$v", &format!("out_{n}")) });
+                }
+                ShimOut { params, store: stores.join("\n            ") }
+            }
+            // a delegate: a handle to it (fn_glue calls it)
+            Ty::Fn(..) => ShimOut { params: vec![format!("IntPtr* {o}")], store: format!("*{o} = NewH($v);") },
             Ty::Slice(e, _) => match &**e {
                 Ty::Prim(x) => ShimOut { params: vec![format!("{}** {o}", cs(x)), format!("nuint* {o}_n")], store: format!("PutArr<{}>($v, {o}, {o}_n);", cs(x)) },
                 Ty::Str => ShimOut { params: vec![format!("VoltStr** {o}"), format!("nuint* {o}_n")], store: format!("PutStrs($v, {o}, {o}_n);") },
@@ -588,7 +992,16 @@ impl Lang for Dotnet {
         if s.name == "new" && recv.is_none() {
             return format!("new {target}({})", args.join(", "));
         }
-        format!("{target}.{}({})", s.name, args.join(", "))
+        let call = format!("{target}.{}({})", s.call.as_deref().unwrap_or(&s.name), args.join(", "));
+        // a void method whose out parameters are its results: the call is a statement, and v the
+        // one out's local (several: the tuple's store reads each)
+        let outs: Vec<&str> = s.params.iter().filter_map(|(_, t)| if let Some(Ty::Out(_, n)) = t { Some(n.as_str()) } else { None }).collect();
+        let own_value = matches!(&s.ret, Some(Ty::Tuple(es)) if es.first().is_some_and(|e| e.0.is_empty()));
+        if !outs.is_empty() && !own_value {
+            let v = if outs.len() == 1 { format!("out_{}", outs[0]) } else { "0".into() };
+            return format!("{VOID}{call}{VOID}{v}");
+        }
+        call
     }
 
     fn function(&self, sym: &str, params: &[String], pre: &[String], call: &str, post: &[String], store: Option<&str>, _res: bool) -> String {
@@ -596,9 +1009,21 @@ impl Lang for Dotnet {
         for l in pre {
             let _ = writeln!(body, "            {l}");
         }
+        // (a void method's out parameters: the call, then v; see call)
+        let (call, value) = match call.strip_prefix(VOID).and_then(|c| c.split_once(VOID)) {
+            Some((c, v)) => (c, Some(v)),
+            None => (call, None),
+        };
         match store {
             Some(st) => {
-                let _ = writeln!(body, "            var v = {call};");
+                match value {
+                    Some(v) => {
+                        let _ = writeln!(body, "            {call};\n            var v = {v};");
+                    }
+                    None => {
+                        let _ = writeln!(body, "            var v = {call};");
+                    }
+                }
                 for l in post {
                     let _ = writeln!(body, "            {l}");
                 }
@@ -677,6 +1102,35 @@ impl Lang for Dotnet {
         s
     }
 
+    // a delegate .NET gave: called through its handle (DynamicInvoke, whatever its delegate type)
+    fn fn_glue(&self, g: &Gen, sym: &str, ps: &[Ty], r: &Ty, _once: bool) -> Option<String> {
+        let (mut params, mut pre, mut args, mut post) = (vec!["IntPtr h".to_string()], Vec::new(), Vec::new(), Vec::new());
+        for (i, p) in ps.iter().enumerate() {
+            let x = self.param(g, p, &format!("a{i}"))?;
+            params.extend(x.params);
+            pre.extend(x.pre);
+            args.push(x.arg);
+            post.extend(x.post);
+        }
+        let mut call = format!("H<Delegate>(h).DynamicInvoke({})", args.join(", "));
+        let store = if *r == Ty::Unit {
+            None
+        } else {
+            let o = self.out(g, r, "o", false)?;
+            params.extend(o.params);
+            call = format!("({})({call})", self.cs_ty(g, r)?);
+            Some(o.store)
+        };
+        let mut f = self.function(&format!("{sym}_call"), &params, &pre, &call, &post, store.as_deref(), false);
+        let _ = write!(f, "    [UnmanagedCallersOnly]\n    public static void {sym}_drop(IntPtr h) => GCHandle.FromIntPtr(h).Free();\n\n");
+        Some(f)
+    }
+
+    // a Volt closure's text result: into the box the lambda gave
+    fn put_glue(&self, sym: &str) -> Option<String> {
+        Some(format!("    [UnmanagedCallersOnly]\n    public static void {sym}(IntPtr o, byte* p, nuint n) => ((string[])GCHandle.FromIntPtr(o).Target)[0] = S(p, n);\n\n"))
+    }
+
     fn loader(&self, _g: &Gen) -> Option<String> {
         let q = |p: &Path| p.display().to_string().replace('\\', "\\\\").replace('"', "\\\"");
         Some(LOADER.replace("{CONFIG}", &q(&self.asm.with_extension("runtimeconfig.json"))).replace("{ASM}", &q(&self.asm)).replace("{NAME}", &self.asm_name))
@@ -753,8 +1207,23 @@ public static unsafe class VoltShim {
         *o_n = (nuint)v.Length;
     }
 
-    // an exception: the program stops with its text, as a Volt panic does
+    // a Volt closure a delegate calls: freed (its drop) when .NET collects the delegate
+    sealed class VoltFn {
+        public readonly IntPtr Env;
+        readonly IntPtr drop;
+
+        public VoltFn(IntPtr env, IntPtr drop) {
+            Env = env;
+            this.drop = drop;
+        }
+
+        ~VoltFn() => ((delegate* unmanaged<IntPtr, void>)(void*)drop)(Env);
+    }
+
+    // an exception: the program stops with its text, as a Volt panic does (a delegate's, not the
+    // DynamicInvoke wrapping it)
     static void Fail(Exception e) {
+        if (e is System.Reflection.TargetInvocationException t && t.InnerException != null) e = t.InnerException;
         Console.Out.Flush();
         Console.Error.WriteLine($"panic: {e.GetType().FullName}: {e.Message}");
         Environment.Exit(101);
@@ -854,7 +1323,7 @@ mod tests {
 
     #[test]
     fn import_dotnet_read() {
-        let desc = "type\tGeo.Point\tstruct\nfield\tX\ttrue\tf64\nfield\tY\ttrue\tf64\nfunc\tnew\tctor\nparam\tx\tf64\nparam\ty\tf64\nresult\tGeo.Point\nend\nfunc\tDist\tinst\nparam\to\tGeo.Point\nresult\tf64\nend\nend\ntype\tGeo.Shape\tclass\nsuper\tGeo.IArea\nfunc\tName\tget\nresult\tstring\nend\nfunc\tName\tset\nparam\tvalue\tstring\nresult\tvoid\nend\nfunc\tGeo.IArea\tcast\nresult\tGeo.IArea\nend\nfunc\tFind\tstatic\nparam\txs\ti32[]\nparam\tx\ti32?\nresult\ti32?\nend\nend\ntype\tGeo.IArea\tinterface\nend\nother\tGeo.Box`1\tit's generic\n";
+        let desc = "type\tGeo.Point\tstruct\nfield\tX\ttrue\tf64\nfield\tY\ttrue\tf64\nfunc\tnew\tctor\nparam\tx\tf64\nparam\ty\tf64\nresult\tGeo.Point\nend\nfunc\tDist\tinst\nparam\to\tGeo.Point\nresult\tf64\nend\nend\ntype\tGeo.Shape\tclass\nsuper\tGeo.IArea\nfunc\tName\tget\nresult\tstring\nend\nfunc\tName\tset\nparam\tvalue\tstring\nresult\tvoid\nend\nfunc\tGeo.IArea\tcast\nresult\tGeo.IArea\nend\nfunc\tFind\tstatic\nparam\txs\ti32[]\nparam\tx\ti32?\nresult\ti32?\nend\nend\ntype\tGeo.IArea\tinterface\nend\nother\tGeo.Odd\tit's inside a generic type\n";
         let (m, lang) = read(desc);
         assert_eq!(m.types.iter().map(|t| (t.name.as_str(), t.opaque)).collect::<Vec<_>>(), [("Point", false), ("Shape", true), ("IArea", true)]);
         assert_eq!(m.types[0].fields.as_ref().unwrap().len(), 2);
@@ -865,6 +1334,47 @@ mod tests {
         assert_eq!(m.methods["Point"][0].name, "new");
         assert_eq!(lang.props[&("Shape".to_string(), "set_Name".to_string())], "Name");
         assert_eq!(lang.casts[&("Shape".to_string(), "as_IArea".to_string())], "Geo.IArea");
-        assert_eq!(m.left_out, ["Geo.Box`1 (it's generic)"]);
+        assert_eq!(m.left_out, ["Geo.Odd (it's inside a generic type)"]);
+    }
+
+    #[test]
+    fn import_dotnet_generics_refs_delegates() {
+        let desc = "type\tGeo.Box`1\tclass\ntparam\tT\nfunc\tnew\tctor\nparam\tv\t$T\nresult\tGeo.Box`1<$T>\nend\nfunc\tGet\tinst\nresult\t$T\nend\nfunc\tValue\tget\nresult\t$T\nend\nend\n\
+            type\tGeo.Gen\tstatic\nfunc\tTryParse\tstatic\nparam\ts\tstring\nparam\tv\tout:i32\nresult\tbool\nend\nfunc\tBump\tstatic\nparam\tx\tref:i32\nresult\tvoid\nend\n\
+            func\tHalf\tstatic\nparam\tx\ti32\nparam\th\tout:i32\nresult\tvoid\nend\nfunc\tSplit\tstatic\nparam\tw\tout:i32\nparam\tf\tout:string\nresult\tvoid\nend\n\
+            func\tApply\tstatic\nparam\tf\tfn(i32,string)string\nresult\ti32\nend\nfunc\tMax\tstatic\ntparam\tT\nparam\ta\t$T\nparam\tb\t$T\nresult\t$T\nend\n\
+            func\tPick\tstatic\ntparam\tT\nparam\txs\t$T[]\nresult\t$T?\nend\nend\n";
+        let (mut m, mut lang) = read(desc);
+        let bx = m.types.iter().find(|t| t.name == "Box").unwrap();
+        assert!(bx.generic && bx.opaque && bx.params == ["T"]);
+        assert_eq!(m.methods["Box"][0].ret, Some(Ty::SelfTy));
+        assert_eq!(m.methods["Box"][1].ret, Some(Ty::Generic("T".into())));
+        let gs = |n: &str| m.methods["Gen"].iter().find(|s| s.name == n).unwrap().clone();
+        // out: results (a void method's one out is its value); ref: a reference; a delegate: a closure .NET may keep
+        assert_eq!(gs("TryParse").params[1].1, Some(Ty::Out(Box::new(Ty::Prim("i32")), "v".into())));
+        assert_eq!(gs("TryParse").ret, Some(Ty::Tuple(vec![(String::new(), Ty::Prim("bool")), ("v".into(), Ty::Prim("i32"))])));
+        assert_eq!(gs("Bump").params[0].1, Some(Ty::Ref(Box::new(Ty::Prim("i32")), true)));
+        assert_eq!(gs("Half").ret, Some(Ty::Prim("i32")));
+        assert_eq!(gs("Split").ret, Some(Ty::Tuple(vec![("w".into(), Ty::Prim("i32")), ("f".into(), Ty::String)])));
+        assert_eq!(gs("Apply").params[0].1, Some(Ty::Fn(vec![Ty::Prim("i32"), Ty::Str], Box::new(Ty::String), FnPass::Boxed, false)));
+        assert_eq!(gs("Max").generics, ["T"]);
+        assert_eq!((&gs("Pick").params[0].1, &gs("Pick").ret), (&Some(Ty::Slice(Box::new(Ty::Generic("T".into())), true)), &Some(Ty::Opt(Box::new(Ty::Generic("T".into()))))));
+        // the instances a program asked for: Max<int> and Box<int>, its members and properties too
+        let made = instances(&mut m, &mut lang, &["Gen::Max\ti32".to_string(), "Box\ti32".to_string()], "geo", &BTreeMap::new());
+        assert_eq!(made, [None, Some("Box__i32".to_string())]);
+        let max = m.methods["Gen"].iter().find(|s| s.name == "Max__i32").unwrap();
+        assert_eq!((max.call.as_deref(), &max.params[0].1), (Some("Max<int>"), &Some(Ty::Prim("i32"))));
+        assert_eq!(m.types.iter().find(|t| t.name == "Box__i32").and_then(|t| t.rust_name.as_deref()), Some("Geo.Box<int>"));
+        assert_eq!(m.methods["Box__i32"][1].ret, Some(Ty::Prim("i32")));
+        assert_eq!(lang.props.get(&("Box__i32".to_string(), "Value".to_string())).map(String::as_str), Some("Value"));
+        // a Volt type of the program's own isn't a type argument .NET has
+        let _ = instances(&mut m, &mut lang, &["Gen::Max\tmine".to_string()], "geo", &BTreeMap::new());
+        assert!(m.left_out.iter().any(|l| l.starts_with("Gen::Max<mine>")));
+        assert_eq!(volt_type("Geo.Outer`1+Inner`2"), "Outer_Inner");
+        // a plain type keeps a name a generic one shares; an out overload comes after its plain twin
+        let (m2, _) = read("type\tGeo.Tag`1\tclass\ntparam\tT\nend\ntype\tGeo.Tag\tclass\nfunc\tParse\tstatic\nparam\ts\tstring\nparam\tv\tout:i32\nresult\tbool\nend\nfunc\tParse\tstatic\nparam\ts\tstring\nresult\ti32\nend\nend\n");
+        assert_eq!((m2.types.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(), m2.left_out.clone()), (vec!["Tag"], vec!["Geo.Tag`1 (another type is called Tag)".to_string()]));
+        assert_eq!(m2.methods["Tag"][0].params.len(), 1);
+        assert_eq!(cs_errors("/x/Shim.cs(3,9): error CS0311: The type 'Geo.Shape' can't be used [/x/Shim.csproj]"), "/x/Shim.cs(3,9): error: CS0311: The type 'Geo.Shape' can't be used");
     }
 }
