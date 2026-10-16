@@ -387,6 +387,13 @@ attach fn vtype(this: cpp_gen&, t: clang::CXType, tparams: std::vec<str>&) -> st
     if (k == clang::CXType_UInt) {
         return S("u32");
     }
+    // (long is 32 bits on Windows: LLP64)
+    if (k == clang::CXType_Long && clang::clang_Type_getSizeOf(clang::clang_getCanonicalType(t)) == 4) {
+        return S("i32");
+    }
+    if (k == clang::CXType_ULong && clang::clang_Type_getSizeOf(clang::clang_getCanonicalType(t)) == 4) {
+        return S("u32");
+    }
     if (k == clang::CXType_Long || k == clang::CXType_LongLong) {
         return S("i64");
     }
@@ -3573,10 +3580,12 @@ fn value_param_type(t: clang::CXType) -> str? {
         return "usize";
     }
     val k = clang::clang_getCanonicalType(t).kind;
-    if (k == clang::CXType_Int) {
+    // (long is 32 bits on Windows: LLP64)
+    val long32 = clang::clang_Type_getSizeOf(clang::clang_getCanonicalType(t)) == 4;
+    if (k == clang::CXType_Int || (k == clang::CXType_Long && long32)) {
         return "i32";
     }
-    if (k == clang::CXType_UInt) {
+    if (k == clang::CXType_UInt || (k == clang::CXType_ULong && long32)) {
         return "u32";
     }
     if (k == clang::CXType_Long || k == clang::CXType_LongLong) {

@@ -813,6 +813,17 @@ impl Build {
                         args.extend(["-I".into(), i]);
                     }
                     args.extend([src.display().to_string(), "-L".into(), self.target.display().to_string(), format!("-l{name}")]);
+                    // Windows: a DLL resolves every name when it's linked, so Ruby's own come from its
+                    // import library (libdir, RUBY_SO_NAME: x64-ucrt-ruby340)
+                    if cfg!(windows) && lang == "ruby" {
+                        let ask = Command::new("ruby").args(["-e", "print RbConfig::CONFIG['libdir'], ' ', RbConfig::CONFIG['RUBY_SO_NAME']"]).output().ok().filter(|o| o.status.success());
+                        if let Some(l) = ask.map(|o| String::from_utf8_lossy(&o.stdout).to_string()) {
+                            let mut it = l.split_whitespace();
+                            if let (Some(d), Some(n)) = (it.next(), it.next()) {
+                                args.extend([format!("-L{d}"), format!("-l{n}")]);
+                            }
+                        }
+                    }
                     if cfg!(target_os = "macos") {
                         args.extend(["-undefined".into(), "dynamic_lookup".into(), format!("-Wl,-rpath,@loader_path/{up}")]);
                     } else {

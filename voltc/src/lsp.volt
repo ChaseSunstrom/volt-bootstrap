@@ -1119,15 +1119,25 @@ fn uri_path(uri: str) -> std::string {
         out.push(s[i]);
         i += 1;
     }
+    // Windows: file:///C:/dir (VS Code's file:///c%3A/dir) is the path C:/dir
+    val o = out.as_str();
+    if (o.len >= 3 && o[0] == '/' && o[2] == ':' && ((o[1] >= 'a' && o[1] <= 'z') || (o[1] >= 'A' && o[1] <= 'Z'))) {
+        return S(o[1..o.len]);
+    }
     return out;
 }
 
-// the file:// URI of a path
+// the file:// URI of a path (Windows' C:\dir is file:///C:/dir)
 fn path_uri(path: str) -> std::string {
     var out = S("file://");
+    if (path.len >= 2 && path[1] == ':') {
+        out.push('/');
+    }
     val hex = "0123456789ABCDEF";
     for (b) in path {
-        if (is_alnum(b) || b == '/' || b == '-' || b == '.' || b == '_' || b == '~') {
+        if (b == '\\') {
+            out.push('/');
+        } else if (is_alnum(b) || b == '/' || b == '-' || b == '.' || b == '_' || b == '~' || b == ':') {
             out.push(b);
         } else {
             out.push('%');

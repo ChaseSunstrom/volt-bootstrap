@@ -50,7 +50,9 @@ fn checks_itself_and_emits_readable_c() {
             std::fs::write(snap.join(n), &text).unwrap();
         } else {
             let want = std::fs::read_to_string(snap.join(n)).unwrap_or_default();
-            assert!(want == text, "tests/cgen/point/{n} differs from emit-c's:\n{text}");
+            // (the first line that differs first: a long file's report is cut)
+            let first = want.split('\n').zip(text.split('\n')).enumerate().find(|(_, (a, b))| a != b).map(|(i, (a, b))| format!("line {}: snapshot {a:?}, emit-c {b:?}", i + 1)).unwrap_or_else(|| format!("{} lines vs {}", want.lines().count(), text.lines().count()));
+            assert!(want == text, "tests/cgen/point/{n} differs from emit-c's ({first}):\n{text}");
         }
     }
     let prog = dir.join("prog");
@@ -415,8 +417,8 @@ fn windows_paths_run() {
     let file = "tests/cross/windows_paths.volt";
     let src = std::fs::read_to_string(root.join(file)).unwrap();
     let want: Vec<&str> = src.lines().filter_map(|l| l.strip_prefix("// expect: ")).collect();
-    // (macOS's linker: names left for load time, which these never reach)
-    let unresolved: &[&str] = if cfg!(target_os = "macos") { &["--cc", "-Wl,-undefined,dynamic_lookup"] } else { &["--cc", "-no-pie", "--cc", "-Wl,--unresolved-symbols=ignore-all"] };
+    // (macOS's linker: names left for load time, which these never reach; on Windows they're there)
+    let unresolved: &[&str] = if cfg!(windows) { &[] } else if cfg!(target_os = "macos") { &["--cc", "-Wl,-undefined,dynamic_lookup"] } else { &["--cc", "-no-pie", "--cc", "-Wl,--unresolved-symbols=ignore-all"] };
     let o = Command::new(common::voltc())
         .args(["run", file, "--cfg", "os=windows"])
         .args(unresolved)

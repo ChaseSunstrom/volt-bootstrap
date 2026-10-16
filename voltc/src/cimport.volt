@@ -585,6 +585,7 @@ struct cdecls {
     anon: u32 = 0;
     last_params: std::vec<str?> = {}; // names in the param list read last (the declared fn's own)
     kr: bool = false;                    // ...which was a K&R identifier list
+    long32: bool = false;                // long is 32 bits (Windows' LLP64: __SIZEOF_LONG__ 4)
     label: str? = null;                  // the asm label read last (the declared fn's)
     names: std::vec<std::string> = {}; // made-up names (anonymous tags) the others point into
     anon_in: std::map<str, anon_field> = {}; // anonymous tag -> the named field it types
@@ -900,7 +901,7 @@ attach fn specs(this: cparser&, stat: bool&) -> ctype? {
     var bits = 32;
     if (short) {
         bits = 16;
-    } else if (longs > 0) {
+    } else if (longs > 1 || (longs == 1 && !this.d.long32)) {
         bits = 64;
     }
     if (bits == 16) {
@@ -2353,6 +2354,7 @@ attach fn import_headers(this: checker&, headers: std::vec<std::string>&, dir: s
     put(&this.c_texts, move macros);
     val mtext = this.c_texts.at(this.c_texts.len - 1).as_str();
     var d: cdecls = {};
+    d.long32 = contains(mtext, "#define __SIZEOF_LONG__ 4\n");
     parse_decls(dtext, &d);
     try this.c_macros(&d, mtext);
     this.c_items(&d, &res, span);

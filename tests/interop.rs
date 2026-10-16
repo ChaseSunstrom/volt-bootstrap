@@ -502,13 +502,13 @@ fn bindings_shapes() {
             // the leak report as its object: clang++ refuses C source in C++ mode (-Wdeprecated)
             ok(run(Command::new(cc).args([std, "-Wall", "-Werror", client, &e.path("leak_report.o"), "-I", &e.path(""), "-L", &lib, "-lshapelib", &rpath, "-o"]).arg(&bin)), &format!("{cc} {client}"));
             let o = with_lib(Command::new(&bin), &lib).output().unwrap();
-            assert_eq!(String::from_utf8_lossy(&o.stderr), "volt live: 0\n", "{client} ({backend}): the library's allocations at exit ({}, {} bytes out)", o.status, o.stdout.len());
+            assert_eq!(String::from_utf8_lossy(&o.stderr).replace("\r\n", "\n"), "volt live: 0\n", "{client} ({backend}): the library's allocations at exit ({}, {} bytes out)", o.status, o.stdout.len());
             assert_eq!(ok(o, client), SHAPES_OUT, "{client} ({backend})");
         }
         let bin = e.dir.join(format!("{backend}_rs"));
         ok(run(Command::new("rustc").arg(e.dir.join("client_shapes.rs")).args(["--edition", "2021", "-L", &lib, "-l", "shapelib", "-C"]).arg(format!("link-arg={}", e.path("leak_report.o"))).args(["-C", &format!("link-arg={rpath}"), "-o"]).arg(&bin)), "rustc client_shapes.rs");
         let o = with_lib(Command::new(&bin), &lib).output().unwrap();
-        assert_eq!(String::from_utf8_lossy(&o.stderr), "volt live: 0\n", "client_shapes.rs ({backend}): the library's allocations at exit");
+        assert_eq!(String::from_utf8_lossy(&o.stderr).replace("\r\n", "\n"), "volt live: 0\n", "client_shapes.rs ({backend}): the library's allocations at exit");
         assert_eq!(ok(o, "client_shapes.rs"), format!("checked true OVERDRAWN\nlimit true OVERDRAWN\nsign positive not positive\n{SHAPES_OUT}"), "client_shapes.rs ({backend})");
         // Zig: client_shapes.zig next to its shapelib.zig, printing to stderr (the leak report last)
         if let Some(zig) = zig() {
@@ -535,7 +535,7 @@ fn bindings_shapes() {
                 std::fs::copy(Path::new(ROOT).join("tests/interop/ClientShapes.java"), jdir.join("ClientShapes.java")).unwrap();
                 ok(Command::new(bin.join("javac")).args(["-Xlint:all", "-Werror", "-d", "classes", "shapelib.java", "ClientShapes.java"]).current_dir(&jdir).output().unwrap(), "javac ClientShapes.java");
                 let o = Command::new(bin.join("java")).args(["--enable-native-access=ALL-UNNAMED", "-cp", "classes", "ClientShapes"]).current_dir(&jdir).env("LD_LIBRARY_PATH", &lib).env("DYLD_LIBRARY_PATH", &lib).output().unwrap();
-                assert_eq!(String::from_utf8_lossy(&o.stderr), "volt live: 0\n", "ClientShapes.java ({backend}): the library's allocations at exit");
+                assert_eq!(String::from_utf8_lossy(&o.stderr).replace("\r\n", "\n"), "volt live: 0\n", "ClientShapes.java ({backend}): the library's allocations at exit");
                 assert_eq!(ok(o, "java ClientShapes"), format!("checked true OVERDRAWN\nlimit true OVERDRAWN\nsign positive not positive\n{SHAPES_OUT}"), "ClientShapes.java ({backend})");
             }
             None => eprintln!("no JDK 22 or later (javac): skipping the Java shapes client"),
@@ -579,7 +579,7 @@ fn bindings_shapes() {
             ok(go(&["vet", "./..."]), "go vet (shapes)");
             ok(go(&["build", "-o", "client", "."]), "go build (shapes)");
             let o = Command::new(gdir.join("client")).output().unwrap();
-            assert_eq!(String::from_utf8_lossy(&o.stderr), "volt live: 0\n", "client_shapes.go ({backend}): the library's allocations at exit");
+            assert_eq!(String::from_utf8_lossy(&o.stderr).replace("\r\n", "\n"), "volt live: 0\n", "client_shapes.go ({backend}): the library's allocations at exit");
             assert_eq!(ok(o, "client_shapes.go"), format!("checked true OVERDRAWN\nlimit true OVERDRAWN\nsign positive not positive\n{SHAPES_OUT}"), "client_shapes.go ({backend})");
         } else {
             eprintln!("go isn't installed: skipping the Go shapes client");
@@ -594,7 +594,7 @@ fn bindings_shapes() {
                 std::fs::copy(Path::new(ROOT).join("tests/interop/client_shapes.js"), ndir.join("client_shapes.js")).unwrap();
                 ok(run(Command::new("cc").args(["-shared", "-fPIC", "-I", &inc]).args(MODULE_FLAGS).arg(e.dir.join("shapelib_node.c")).args(["leak_report.c", "-L", &lib, "-lshapelib", &rpath, "-o"]).arg(ndir.join("shapelib.node"))), "cc shapelib_node.c");
                 let o = Command::new("node").arg("client_shapes.js").current_dir(&ndir).output().unwrap();
-                assert_eq!(String::from_utf8_lossy(&o.stderr), "volt live: 0\n", "client_shapes.js ({backend}): the library's allocations at exit");
+                assert_eq!(String::from_utf8_lossy(&o.stderr).replace("\r\n", "\n"), "volt live: 0\n", "client_shapes.js ({backend}): the library's allocations at exit");
                 assert_eq!(ok(o, "node client_shapes.js"), format!("checked true OVERDRAWN\nlimit true OVERDRAWN\nsign positive not positive\n{SHAPES_OUT}"), "client_shapes.js ({backend})");
                 // Bun runs the same addon (it exits without running the library's destructors, so
                 // without the leak report)
@@ -612,7 +612,7 @@ fn bindings_shapes() {
             std::fs::create_dir_all(&ldir).unwrap();
             ok(run(Command::new("cc").args(["-shared", "-fPIC", "-Wall", "-Wextra", "-Werror", "-I", inc]).args(MODULE_FLAGS).arg(e.dir.join("shapelib_lua.c")).args(["leak_report.c", "-I", &e.path(""), "-L", &lib, "-lshapelib", &rpath, "-o"]).arg(ldir.join("shapelib.so"))), "cc shapelib_lua.c");
             let o = Command::new("lua").arg(Path::new(ROOT).join("tests/interop/client_shapes.lua")).env("LUA_CPATH", ldir.join("?.so")).output().unwrap();
-            assert_eq!(String::from_utf8_lossy(&o.stderr), "volt live: 0\n", "client_shapes.lua ({backend}): the library's allocations at exit");
+            assert_eq!(String::from_utf8_lossy(&o.stderr).replace("\r\n", "\n"), "volt live: 0\n", "client_shapes.lua ({backend}): the library's allocations at exit");
             assert_eq!(ok(o, "lua client_shapes.lua"), format!("checked true OVERDRAWN\nlimit true OVERDRAWN\nsign positive not positive\n{SHAPES_OUT}"), "client_shapes.lua ({backend})");
         } else {
             eprintln!("lua (5.4 or later, with its headers) isn't installed: skipping the Lua shapes client");
@@ -625,7 +625,7 @@ fn bindings_shapes() {
                 std::fs::create_dir_all(&rdir).unwrap();
                 ok(run(ruby_ext(&hdrs, &e.dir.join("shapelib_ruby.c"), &lib, "shapelib").arg(rdir.join(ruby_module("shapelib")))), "cc shapelib_ruby.c");
                 let o = Command::new(&ruby).arg("-I").arg(&rdir).arg(Path::new(ROOT).join("tests/interop/client_shapes.rb")).output().unwrap();
-                assert_eq!(String::from_utf8_lossy(&o.stderr), "volt live: 0\n", "client_shapes.rb ({backend}): the library's allocations at exit");
+                assert_eq!(String::from_utf8_lossy(&o.stderr).replace("\r\n", "\n"), "volt live: 0\n", "client_shapes.rb ({backend}): the library's allocations at exit");
                 let tail = "raised ArgumentError ArgumentError ArgumentError ArgumentError\nwrong type TypeError TypeError\nrefused RuntimeError ArgumentError ArgumentError\nin use RuntimeError RuntimeError\nkept RuntimeError ann 5\nlent after RuntimeError\nshrinking closed\nclosed anyway ArgumentError\nbreak 7\nfatal 101 true\n";
                 assert_eq!(ok(o, "ruby client_shapes.rb"), format!("checked true OVERDRAWN\nlimit true OVERDRAWN\nsign positive not positive\n{SHAPES_OUT}{tail}"), "client_shapes.rb ({backend})");
             }
@@ -643,7 +643,7 @@ fn bindings_shapes() {
                 ok(Command::new(&dart).args(["analyze", "--fatal-infos", "shapelib.dart", "client_shapes.dart"]).current_dir(&ddir).output().unwrap(), "dart analyze (shapes)");
             }
             let o = Command::new(&dart).args(["run", "client_shapes.dart"]).current_dir(&ddir).env("VOLT_SHAPELIB_LIB", format!("{lib}/{}", dylib("shapelib"))).output().unwrap();
-            assert_eq!(String::from_utf8_lossy(&o.stderr), "volt live: 0\n", "client_shapes.dart ({backend}): the library's allocations at exit");
+            assert_eq!(String::from_utf8_lossy(&o.stderr).replace("\r\n", "\n"), "volt live: 0\n", "client_shapes.dart ({backend}): the library's allocations at exit");
             let tail = "raised StateError StateError StateError StateError\nrefused StateError StateError StateError StateError StateError StateError StateError\nkept StateError ann 5\nfatal 101 true\n";
             assert_eq!(ok(o, "dart run client_shapes.dart"), format!("checked true OVERDRAWN\nlimit true OVERDRAWN\nsign positive not positive\n{SHAPES_OUT}{tail}"), "client_shapes.dart ({backend})");
         } else {
@@ -661,7 +661,7 @@ fn bindings_shapes() {
             let o = Command::new(&swiftc).args(["-warnings-as-errors", "-I", "Cshapelib", "shapelib.swift", "main.swift"]).arg(e.dir.join("leak_report.o")).args(["-L", &lib, "-lshapelib", "-Xlinker", "-rpath", "-Xlinker", &lib, "-o", "client"]).current_dir(&sdir).output().unwrap();
             ok(o, "swiftc client_shapes.swift");
             let o = Command::new(sdir.join("client")).output().unwrap();
-            assert_eq!(String::from_utf8_lossy(&o.stderr), "volt live: 0\n", "client_shapes.swift ({backend}): the library's allocations at exit");
+            assert_eq!(String::from_utf8_lossy(&o.stderr).replace("\r\n", "\n"), "volt live: 0\n", "client_shapes.swift ({backend}): the library's allocations at exit");
             assert_eq!(ok(o, "client_shapes.swift"), format!("checked true OVERDRAWN\nlimit true OVERDRAWN\nsign positive not positive\n{SHAPES_OUT}thrown Odd()\n"), "client_shapes.swift ({backend})");
             for (what, msg) in [("busy", "account can't be closed: a running Volt call holds it"), ("held", "account can't be given away: a running Volt call holds it"), ("twice", "account is given twice"), ("lent", "account is lent by Volt: it isn't Swift's to give")] {
                 let o = Command::new(sdir.join("client")).arg(what).output().unwrap();
@@ -683,7 +683,7 @@ fn bindings_shapes() {
             let o = Command::new(&swiftc).args(["-warnings-as-errors", "-I", "Cswiftedge", "swiftedge.swift", "main.swift"]).arg(e.dir.join("leak_report.o")).args(["-L", &elib, "-lswiftedge", "-Xlinker", "-rpath", "-Xlinker", &elib, "-o", "client"]).current_dir(&edir).output().unwrap();
             ok(o, "swiftc client_swiftedge.swift");
             let o = Command::new(edir.join("client")).output().unwrap();
-            assert_eq!(String::from_utf8_lossy(&o.stderr), "volt live: 0\n", "client_swiftedge.swift ({backend}): the library's allocations at exit");
+            assert_eq!(String::from_utf8_lossy(&o.stderr).replace("\r\n", "\n"), "volt live: 0\n", "client_swiftedge.swift ({backend}): the library's allocations at exit");
             let want = "names 40 6\ncount_text 3 sum_things 9\nslice_cb 3 [9, 2, 3]\ncstr_cb 1 -1\nstr_cb 3\nenum_cb BLUE\npoint_cb 12.0\nstr_result_cb 4 -1 Odd()\nany_cb 2 WORSE Odd()\nswallow got 1 Odd() caught\nlent_ptr_cb 4 -1\nrun_counter 1010 2\ngive_counter 5\nvolts 3 t4 volt WORSE\nrun volts 7 give volts 10\nnamer n4 8 3 4\ncolors [\"BLUE\", \"RED\"] 11\nmaybes [\"5\", \"nil\"] 101\nopt_point 2.0 1.0 true\nopt_color GREEN nil\nmaybe_str yes nil\nenum_slice 2\nlisty [\"a\"] NOPE\nmk_thing 9 WORSE\nmk_counter 101 NOPE\ntexts_in 2 maybe_thing 4 -1\n";
             assert_eq!(ok(o, "client_swiftedge.swift"), want, "client_swiftedge.swift ({backend})");
         } else {
@@ -709,7 +709,7 @@ fn bindings_shapes() {
                 ok(o, "kotlinc-native client_shapes.kt");
             }
             let o = Command::new(kdir.join("client.kexe")).env("LD_LIBRARY_PATH", &lib).env("DYLD_LIBRARY_PATH", &lib).output().unwrap();
-            assert_eq!(String::from_utf8_lossy(&o.stderr), "volt live: 0\n", "client_shapes.kt ({backend}): the library's allocations at exit");
+            assert_eq!(String::from_utf8_lossy(&o.stderr).replace("\r\n", "\n"), "volt live: 0\n", "client_shapes.kt ({backend}): the library's allocations at exit");
             let tail = "raised shout twice name\nrefused this account is in use by a running call; this account is given twice; this account is closed\nkept ann 5\nclosed this account is closed\n";
             assert_eq!(ok(o, "client_shapes.kt"), format!("checked true OVERDRAWN\nlimit true OVERDRAWN\nsign positive not positive\n{SHAPES_OUT}{tail}"), "client_shapes.kt ({backend})");
         }
@@ -741,7 +741,7 @@ fn bindings_shapes() {
         std::fs::create_dir_all(&rdir).unwrap();
         ok(run(ruby_ext(&hdrs, &e.dir.join("pyopt_ruby.c"), &e.path(""), "pyopt").arg(rdir.join(ruby_module("pyopt")))), "cc pyopt_ruby.c");
         let o = Command::new(&ruby).arg("-I").arg(&rdir).args(["-e", "require 'pyopt'; puts \"#{Pyopt.count_text(['ab', nil, 'c'])} #{Pyopt.sum_things([Pyopt::Thing.new(2), nil, Pyopt::Thing.new(5)])}\""]).output().unwrap();
-        assert_eq!(String::from_utf8_lossy(&o.stderr), "volt live: 0\n", "Ruby (pyopt): the library's allocations at exit");
+        assert_eq!(String::from_utf8_lossy(&o.stderr).replace("\r\n", "\n"), "volt live: 0\n", "Ruby (pyopt): the library's allocations at exit");
         assert_eq!(ok(o, "ruby (pyopt)"), "3 7\n", "Ruby: optionals of text and handles in slices");
         // what shapelib doesn't have: client_moreshapes.rb with moreshapes (a trait object Volt keeps
         // past the call, handles given to a callback, a str a callback gives, ...)
@@ -750,7 +750,7 @@ fn bindings_shapes() {
         ok(e.voltc(&["lib", "moreshapes", "--pkg", mpkg, "--shared", "--leak-check", "-o", &e.path(&dylib("moreshapes"))]), "voltc lib moreshapes --shared");
         ok(run(ruby_ext(&hdrs, &e.dir.join("moreshapes_ruby.c"), &e.path(""), "moreshapes").arg(rdir.join(ruby_module("moreshapes")))), "cc moreshapes_ruby.c");
         let o = Command::new(&ruby).arg("-I").arg(&rdir).arg(Path::new(ROOT).join("tests/interop/client_moreshapes.rb")).output().unwrap();
-        assert_eq!(String::from_utf8_lossy(&o.stderr), "volt live: 0\n", "client_moreshapes.rb: the library's allocations at exit");
+        assert_eq!(String::from_utf8_lossy(&o.stderr).replace("\r\n", "\n"), "volt live: 0\n", "client_moreshapes.rb: the library's allocations at exit");
         let want = "measure 70 tag sizer\nsizer closed\neach 0,1,2 gone 4\nstopped stop gone 7\nlabel pos neg\nslice 6\nresult 5 -1\nmaybe yes nil cstr 5\nlist [1, nil]\ngetter 9 [9]\nbig [5, 7]\nfixed 1020 RuntimeError\nbad ArgumentError TypeError\nclosed meanwhile RuntimeError RuntimeError gone 14\n";
         assert_eq!(ok(o, "ruby client_moreshapes.rb"), want, "client_moreshapes.rb");
     }
@@ -853,7 +853,7 @@ fn bindings_kotlin_shapes() {
             ok(o, "kotlinc-native client_ktshapes.kt");
         }
         let o = Command::new(e.dir.join("client.kexe")).env("LD_LIBRARY_PATH", &lib).env("DYLD_LIBRARY_PATH", &lib).output().unwrap();
-        assert_eq!(String::from_utf8_lossy(&o.stderr), "volt live: 0\n", "client_ktshapes.kt ({backend}): the library's allocations at exit");
+        assert_eq!(String::from_utf8_lossy(&o.stderr).replace("\r\n", "\n"), "volt live: 0\n", "client_ktshapes.kt ({backend}): the library's allocations at exit");
         assert_eq!(ok(o, "client_ktshapes.kt"), "measure 50 kotlin\nsizer gone\nfixed 50 fixed\neach [0, 1, 2]\nfailed each 8\nclose_ 700 7\nshut\nlabel n7\nslice 6\nresult 5 9\nmaybe yes null\ncstr 5\nsome [1, null]\ngetter 8\nbig [5, 9]\nlend 8\ngive 7\nrec 14\nbumped 2 9 ab tag BLUE 1\nmade 6\ntotal2 6\ntext 3\nblues 2\nfirst_two [4, 5]\nmaybe_get 5 -1\nslice_back 3\nstr_result 4 -1 -1\ntext_in 4\nlist_or [a] BAD\nsizer_or fixed\ngone 18\n", "client_ktshapes.kt ({backend})");
     }
 }

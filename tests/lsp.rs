@@ -34,6 +34,13 @@ fn main() -> void {
 }
 ";
 
+/// a path's file:// URI as an editor sends it (Windows: file:///C:/dir/f.volt, forward slashes: a
+/// backslash in the JSON would be an escape)
+fn file_uri(p: impl AsRef<Path>) -> String {
+    let s = p.as_ref().display().to_string().replace('\\', "/");
+    if s.starts_with('/') { format!("file://{s}") } else { format!("file:///{s}") }
+}
+
 struct Server {
     child: Child,
     input: ChildStdin,
@@ -184,23 +191,23 @@ fn js(s: &str) -> String {
 #[test]
 fn scripted_session() {
     let mut s = Server::start();
-    let uri = format!("file://{}/main.volt", s.dir.display());
+    let uri = file_uri(s.dir.join("main.volt"));
     let doc = format!("{{\"uri\":\"{uri}\"}}");
     let at = |line: u32, ch: u32| format!("{{\"textDocument\":{doc},\"position\":{{\"line\":{line},\"character\":{ch}}}}}");
 
-    let init = s.request("initialize", &format!("{{\"processId\":null,\"rootUri\":\"file://{}\",\"capabilities\":{{}}}}", s.dir.display()));
+    let init = s.request("initialize", &format!("{{\"processId\":null,\"rootUri\":\"{}\",\"capabilities\":{{}}}}", file_uri(&s.dir)));
     for cap in ["\"hoverProvider\":true", "\"definitionProvider\":true", "\"referencesProvider\":true", "\"documentSymbolProvider\":true", "\"completionProvider\"", "\"signatureHelpProvider\"", "\"textDocumentSync\""] {
         assert!(init.contains(cap), "initialize lacks {cap}: {init}");
     }
     s.notify("initialized", "{}");
 
     // a URI ending in a cut-off %-escape is read as it is
-    s.notify("textDocument/didOpen", &format!("{{\"textDocument\":{{\"uri\":\"file://{}/odd%1\",\"languageId\":\"volt\",\"version\":1,\"text\":\"fn main() -> void {{}}\\n\"}}}}", s.dir.display()));
+    s.notify("textDocument/didOpen", &format!("{{\"textDocument\":{{\"uri\":\"{}/odd%1\",\"languageId\":\"volt\",\"version\":1,\"text\":\"fn main() -> void {{}}\\n\"}}}}", file_uri(&s.dir)));
     let d = s.diagnostics();
     assert!(d.contains("odd%1") && d.contains("\"diagnostics\":[]"), "{d}");
 
     // test blocks are checked like the rest (kept as plain fns, each its own)
-    let turi = format!("file://{}/tests.volt", s.dir.display());
+    let turi = file_uri(s.dir.join("tests.volt"));
     s.notify("textDocument/didOpen", &format!("{{\"textDocument\":{{\"uri\":\"{turi}\",\"languageId\":\"volt\",\"version\":1,\"text\":{}}}}}", js("fn main() -> void {}\ntest \"one\" {\n    val x = nope;\n}\ntest \"two\" {\n}\n")));
     let d = s.diagnostics_for(&turi);
     assert!(d.contains("unknown name 'nope'") && !d.contains("defined"), "{d}");
@@ -293,13 +300,13 @@ fn scripted_session() {
     std::fs::write(app.join("bolt.toml"), "[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies]\ngeo = { path = \"../geo\" }\n").unwrap();
     let main = "use std::io;\n\nfn main() -> void {\n    std::println(\"{}\", geo::area(2, 3));\n}\n";
     std::fs::write(app.join("src/main.volt"), main).unwrap();
-    let app_uri = format!("file://{}", app.join("src/main.volt").display());
+    let app_uri = file_uri(app.join("src/main.volt"));
     s.notify("textDocument/didOpen", &format!("{{\"textDocument\":{{\"uri\":\"{app_uri}\",\"languageId\":\"volt\",\"version\":1,\"text\":{}}}}}", js(main)));
     let d = s.diagnostics_for(&app_uri);
     assert!(d.contains("\"diagnostics\":[]"), "app using geo: {d}");
     let h = s.request("textDocument/hover", &format!("{{\"textDocument\":{{\"uri\":\"{app_uri}\"}},\"position\":{{\"line\":3,\"character\":29}}}}"));
     assert!(h.contains("fn area(w: i32, h: i32) -> i32"), "hover geo::area: {h}");
-    let geo_uri = format!("file://{}", geo.join("lib/shapes.volt").display());
+    let geo_uri = file_uri(geo.join("lib/shapes.volt"));
     s.notify("textDocument/didOpen", &format!("{{\"textDocument\":{{\"uri\":\"{geo_uri}\",\"languageId\":\"volt\",\"version\":1,\"text\":{}}}}}", js(shapes)));
     let d = s.diagnostics_for(&geo_uri);
     assert!(d.contains("\"diagnostics\":[]"), "geo's own file: {d}");
@@ -372,7 +379,7 @@ fn joined(c: circle, wide: circle) -> f64 {
 ";
 
 fn inline_features(s: &mut Server) {
-    let uri = format!("file://{}/inline.volt", s.dir.display());
+    let uri = file_uri(s.dir.join("inline.volt"));
     let doc = format!("{{\"uri\":\"{uri}\"}}");
     s.notify("textDocument/didOpen", &format!("{{\"textDocument\":{{\"uri\":\"{uri}\",\"languageId\":\"volt\",\"version\":1,\"text\":{}}}}}", js(INLINE)));
     let d = s.diagnostics_for(&uri);
@@ -469,7 +476,7 @@ fn inline_features(s: &mut Server) {
     }
 
     // quick fixes: diagnostics carry their fixes as data, and codeAction turns them into edits
-    let fix_uri = format!("file://{}/fixes.volt", s.dir.display());
+    let fix_uri = file_uri(s.dir.join("fixes.volt"));
     let fix_src = "fn bump(r: i32&) -> void {\n    *r += 1;\n}\n\nfn main() -> void {\n    val x = 0;\n    bump(&x);\n    var y = 0;\n    y + 1;\n}\n";
     s.notify("textDocument/didOpen", &format!("{{\"textDocument\":{{\"uri\":\"{fix_uri}\",\"languageId\":\"volt\",\"version\":1,\"text\":{}}}}}", js(fix_src)));
     let d = s.diagnostics_for(&fix_uri);
@@ -481,7 +488,7 @@ fn inline_features(s: &mut Server) {
 
     // a closure parameter's type, the end of a long block; and nothing from an older check: when the
     // text no longer parses, tokens and hints say ContentModified and rename refuses
-    let long_uri = format!("file://{}/long.volt", s.dir.display());
+    let long_uri = file_uri(s.dir.join("long.volt"));
     let mut long_src = String::from("fn apply(f: fn(i32) -> i32, x: i32) -> i32 {\n    return f(x);\n}\n\nfn main() -> void {\n    val r0 = apply(|| (n) -> i32 { return n * 2; }, 3);\n");
     for i in 0..25 {
         long_src.push_str(&format!("    val v{i} = r0 + {i};\n"));
@@ -520,11 +527,11 @@ fn builtins_and_std_files() {
     // a std file opened in the editor is checked as std's own (its @intrinsic attributes are fine);
     // every builtin and attribute shows up after `@` with its signature, and on hover
     let mut s = Server::start();
-    let init = s.request("initialize", &format!("{{\"processId\":null,\"rootUri\":\"file://{}\",\"capabilities\":{{}}}}", s.dir.display()));
+    let init = s.request("initialize", &format!("{{\"processId\":null,\"rootUri\":\"{}\",\"capabilities\":{{}}}}", file_uri(&s.dir)));
     assert!(init.contains("\"@\""), "@ isn't a completion trigger: {init}");
     s.notify("initialized", "{}");
     let mem = Path::new(ROOT).join("std/mem.volt");
-    let muri = format!("file://{}", mem.display());
+    let muri = file_uri(&mem);
     let text = std::fs::read_to_string(&mem).unwrap();
     assert!(text.contains("@intrinsic("), "std/mem.volt no longer has an @intrinsic to check");
     s.notify("textDocument/didOpen", &format!("{{\"textDocument\":{{\"uri\":\"{muri}\",\"languageId\":\"volt\",\"version\":1,\"text\":{}}}}}", js(&text)));
@@ -534,7 +541,7 @@ fn builtins_and_std_files() {
     // renaming from std's own file: a helper of std/path.volt, at its declaration and each use there
     // (and only those: a std doc's check doesn't load programs)
     let path = Path::new(ROOT).join("std/path.volt");
-    let puri = format!("file://{}", path.display());
+    let puri = file_uri(&path);
     let ptext = std::fs::read_to_string(&path).unwrap();
     s.notify("textDocument/didOpen", &format!("{{\"textDocument\":{{\"uri\":\"{puri}\",\"languageId\":\"volt\",\"version\":1,\"text\":{}}}}}", js(&ptext)));
     let _ = s.diagnostics_for(&puri);
@@ -550,7 +557,7 @@ fn builtins_and_std_files() {
     }
     assert_eq!(r.matches("file://").count(), 1, "rename last_sep edits another file: {r}");
 
-    let uri = format!("file://{}/b.volt", s.dir.display());
+    let uri = file_uri(s.dir.join("b.volt"));
     let doc = format!("{{\"uri\":\"{uri}\"}}");
     let at = |line: u32, ch: u32| format!("{{\"textDocument\":{doc},\"position\":{{\"line\":{line},\"character\":{ch}}}}}");
     s.notify("textDocument/didOpen", &format!("{{\"textDocument\":{{\"uri\":\"{uri}\",\"languageId\":\"volt\",\"version\":1,\"text\":{}}}}}", js("fn main() -> void {\n    val n = @sizeof(i32);\n}\n")));
@@ -574,7 +581,7 @@ fn builtins_and_std_files() {
 #[test]
 fn hovers_show_layout_and_foreign_declarations() {
     let mut s = Server::start();
-    s.request("initialize", &format!("{{\"processId\":null,\"rootUri\":\"file://{}\",\"capabilities\":{{}}}}", s.dir.display()));
+    s.request("initialize", &format!("{{\"processId\":null,\"rootUri\":\"{}\",\"capabilities\":{{}}}}", file_uri(&s.dir)));
     s.notify("initialized", "{}");
     std::fs::write(s.dir.join("geo.hpp"), "#pragma once\nnamespace geo {\ninline double scale(double x, int k) { return x * k; }\ntemplate <class... A>\nauto sum(A... a) { return (a + ... + 0); }\n}\n").unwrap();
     let src = "use std::io;
@@ -610,7 +617,7 @@ fn other() -> i32 {
     return libc::abs(-3);
 }
 ";
-    let uri = format!("file://{}/hover.volt", s.dir.display());
+    let uri = file_uri(s.dir.join("hover.volt"));
     let doc = format!("{{\"uri\":\"{uri}\"}}");
     let at = |line: u32, ch: u32| format!("{{\"textDocument\":{doc},\"position\":{{\"line\":{line},\"character\":{ch}}}}}");
     s.notify("textDocument/didOpen", &format!("{{\"textDocument\":{{\"uri\":\"{uri}\",\"languageId\":\"volt\",\"version\":1,\"text\":{}}}}}", js(src)));
@@ -751,9 +758,9 @@ fn generic_bodies_nothing_instantiates() {
     // a generic fn's body is checked per instance: the uses in one nothing instantiates are indexed
     // from its syntax, so references, rename and go to definition reach them
     let mut s = Server::start();
-    s.request("initialize", &format!("{{\"processId\":null,\"rootUri\":\"file://{}\",\"capabilities\":{{}}}}", s.dir.display()));
+    s.request("initialize", &format!("{{\"processId\":null,\"rootUri\":\"{}\",\"capabilities\":{{}}}}", file_uri(&s.dir)));
     s.notify("initialized", "{}");
-    let uri = format!("file://{}/generics.volt", s.dir.display());
+    let uri = file_uri(s.dir.join("generics.volt"));
     s.notify("textDocument/didOpen", &format!("{{\"textDocument\":{{\"uri\":\"{uri}\",\"languageId\":\"volt\",\"version\":1,\"text\":{}}}}}", js(GENERICS)));
     let d = s.diagnostics_for(&uri);
     assert!(!d.contains("\"severity\":1"), "{d}");
@@ -791,7 +798,7 @@ fn generic_bodies_nothing_instantiates() {
 
     // from std's own file: a helper used only in generic bodies std doesn't instantiate itself
     let map = Path::new(ROOT).join("std/map.volt");
-    let muri = format!("file://{}", map.display());
+    let muri = file_uri(&map);
     let text = std::fs::read_to_string(&map).unwrap();
     let started = std::time::Instant::now();
     s.notify("textDocument/didOpen", &format!("{{\"textDocument\":{{\"uri\":\"{muri}\",\"languageId\":\"volt\",\"version\":1,\"text\":{}}}}}", js(&text)));

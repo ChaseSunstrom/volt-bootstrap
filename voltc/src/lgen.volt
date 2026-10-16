@@ -1033,10 +1033,16 @@ fn lg_uint(s: str) -> u64 {
     return v;
 }
 
-// the prelude's C declarations bound to libc symbols: `int volt_printf(...) VOLT_SYM("printf");`
+// the prelude's C declarations bound to libc symbols: `int volt_printf(...) VOLT_SYM("printf");`.
+// Those under #if !defined(_WIN32) (or #if defined(_WIN32)) bind only where that holds: Windows has
+// no dprintf, its runtime unit defines volt_dprintf itself
 attach fn read_aliases(this: lg&) -> void {
+    val win = this.cc == callconv::WIN64 || this.cc == callconv::WINARM64;
     val p = PRELUDE_H;
     var i: usize = 0;
+    // each open #if: whether it's a _WIN32 one, and whether its lines are left out here
+    var win_if: std::vec<bool> = {};
+    var out: std::vec<bool> = {};
     while (i < p.len) {
         var e = i;
         while (e < p.len && p[e] != '\n') {
@@ -1044,6 +1050,31 @@ attach fn read_aliases(this: lg&) -> void {
         }
         val line = p[i..e];
         i = e + 1;
+        if (starts_with(line, "#if")) {
+            val not_win = line == "#if !defined(_WIN32)";
+            val is_win = line == "#if defined(_WIN32)";
+            put(&win_if, not_win || is_win);
+            put(&out, (not_win && win) || (is_win && !win));
+            continue;
+        }
+        if (starts_with(line, "#else") && win_if.len > 0) {
+            if (*win_if.at(win_if.len - 1)) {
+                *out.at(out.len - 1) = !*out.at(out.len - 1);
+            }
+            continue;
+        }
+        if (starts_with(line, "#endif") && win_if.len > 0) {
+            win_if.pop();
+            out.pop();
+            continue;
+        }
+        var skip = false;
+        for (o&) in out.items() {
+            skip = skip || *o;
+        }
+        if (skip) {
+            continue;
+        }
         val at = lg_find(line, "VOLT_SYM(\"") ?? continue;
         val v = lg_find(line, "volt_") ?? continue;
         var ne = v;
@@ -2945,6 +2976,12 @@ attach fn llvm_build(this: checker&, g: lg&) -> std::string {
             val host = llvm::LLVMGetDefaultTargetTriple();
             triple.append(c_text(host));
             llvm::LLVMDisposeMessage(host);
+            // Windows: LLVM's release names MSVC's ABI, but $CC (MinGW's gcc or llvm-mingw's clang)
+            // links the program with the GNU runtime: the object is built for that (an MSVC one
+            // wants MSVC's _fltused and the like)
+            if (triple.as_str().ends_with("-pc-windows-msvc")) {
+                triple = replace_all(triple.as_str(), "-pc-windows-msvc", "-w64-windows-gnu");
+            }
         }
         val ts = triple.as_str();
         if (ts.starts_with("x86_64")) {

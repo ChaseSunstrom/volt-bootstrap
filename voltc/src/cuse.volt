@@ -42,6 +42,11 @@ attach fn c_per_use(this: checker&, imp: c_imported&, n: u32, keep: bool, kept: 
     x.keep = keep;
     x.kept = kept;
     for (name) in imp.per_use.items() {
+        // the same header used twice in one namespace (voltc's clang.volt and cppimport.volt):
+        // one stub (two would be two C definitions of it in a package)
+        if (this.named(&this.ns(n).names, name).len > 0) {
+            continue;
+        }
         var args: std::vec<garg> = {};
         put(&args, garg::EXPR({ kind: expr_kind::STR(fmt("c:{}", S(name))), span: span }));
         var attrs: std::vec<expr> = {};
