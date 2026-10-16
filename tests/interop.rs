@@ -1045,11 +1045,31 @@ fn rust_direct() {
         let err = String::from_utf8_lossy(&o.stderr);
         assert!(o.status.code() == Some(101) && err.contains(says), "{prog}: {:?} {err}", o.status);
     }
+    // tuples, arrays, 128-bit integers; a trait with an associated type (Source<i32>), a generic
+    // trait, a supertrait's methods, an associated const; a fn a macro makes
+    let expect = |prog: &str| -> String { std::fs::read_to_string(dir.join(prog)).unwrap().lines().filter_map(|l| l.strip_prefix("// expect: ")).map(|l| format!("{l}\n")).collect() };
+    for backend in ["c", "llvm"] {
+        let mut c = Command::new(&e.voltc);
+        c.args(["run", "--backend", backend, "more.volt"]).current_dir(&dir).env("VOLT_STD", Path::new(ROOT).join("std"));
+        tools(&mut c);
+        assert_eq!(ok(c.output().unwrap(), "voltc run more.volt"), expect("more.volt"), "more ({backend})");
+    }
     let mut c = Command::new(&e.voltc);
-    c.args(["check", "traits.volt"]).current_dir(&dir).env("VOLT_STD", Path::new(ROOT).join("std")).env("VOLT_SHOW_IMPORT", "1");
+    c.args(["check", "more.volt"]).current_dir(&dir).env("VOLT_STD", Path::new(ROOT).join("std")).env("VOLT_SHOW_IMPORT", "1");
     tools(&mut c);
     let shown = String::from_utf8_lossy(&c.output().unwrap().stderr).to_string();
-    assert!(shown.contains("trait Source (its associated type Item)"), "a trait Volt can't declare is left out, with why: {shown}");
+    for what in ["Anchored::START (a const of a type Volt can't name)", "Countdown's Convert (its type arguments)", "Pairs's Source (its type arguments)", "pairs ("] {
+        assert!(shown.contains(what), "left out, with why: {what}\n{shown}");
+    }
+    // rustdoc unable to write its JSON: the crate is read from rustc's expanded source, so what a
+    // macro makes is still there (a cache of its own: the import isn't the one rustdoc read)
+    let mut c = Command::new(&e.voltc);
+    c.args(["run", "macro.volt"]).current_dir(&dir).env("VOLT_STD", Path::new(ROOT).join("std"));
+    tools(&mut c);
+    c.env("RUSTDOC", "false").env("VOLT_CACHE", e.dir.join("cache-nodoc"));
+    let o = c.output().unwrap();
+    assert!(String::from_utf8_lossy(&o.stderr).contains("rustc's expanded source"), "{}", String::from_utf8_lossy(&o.stderr));
+    assert_eq!(ok(o, "voltc run macro.volt"), expect("macro.volt"), "without rustdoc");
     let mut c = Command::new(&e.voltc);
     c.args(["run", "generics_bad.volt"]).current_dir(&dir).env("VOLT_STD", Path::new(ROOT).join("std"));
     tools(&mut c);

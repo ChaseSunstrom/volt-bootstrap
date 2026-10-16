@@ -37,7 +37,9 @@ and each `const`'s value as rustc works it out. An item under `#[cfg(doc)]`, whi
 documentation sees, is kept when the build has one of its name (rustc's expanded source of the
 crate says), so a documented stand-in brings in the item it documents. rustdoc writes this as
 JSON, which stable's rustdoc does with `RUSTC_BOOTSTRAP=1` (bolt sets it); with a toolchain whose
-rustdoc can't, bolt reads the source instead, which sees none of those, and says so. It caches the
+rustdoc can't, bolt reads rustc's expanded source of the crate instead, which has what macros make
+and the side of each `#[cfg]` that holds but not what `pub use` re-exports (and, when rustc can't
+write that either, the source as written, which has none of those), and says so. It caches the
 result and redoes it when the crate changes. It works the same with `voltc run main.volt` and in a
 bolt package.
 
@@ -71,6 +73,12 @@ which an editor's hover shows; Zig's and Go's do too.
 | `pub trait T` | a Volt trait `T` (a method with a body in Rust is `@optional`); the crate's types implementing it attach it |
 | a parameter of `&dyn T`, `&mut dyn T`, `&impl T`, `impl T`, `S: T`, `Box<dyn T>` | a value of any type attaching `T`, Volt's own or the crate's: lent for the call when Rust borrows it, otherwise moved to Rust, which drops it when it's done with it |
 | a result of `Box<dyn T>` or `impl T` | a `dyn_T`, which attaches `T`; deleting it drops the Rust value |
+| a trait with type parameters or associated types (`trait Source { type Item; fn next(&mut self) -> Option<Self::Item>; }`, `trait Convert<T>`) | a generic Volt trait taking them in order (`geom::Source<i32>`, a bound `<S: geom::Source<i32>>`): each crate type attaches the instances it implements (`Convert<f64>` and `Convert<std::string>` both: the result's type picks; a method that doesn't name the parameter is in both, so a call of it is ambiguous), and a result of `Box<dyn Source<Item = i32>>` is a `dyn_Source_i32` attaching `Source<i32>`. Its type arguments are numbers, `String`, the crate's types, and `Vec` and `Option` of those |
+| a supertrait of the crate's (`trait Greeter: Named`) | the trait, with the supertrait's methods through the supertrait's own attach (Volt has no supertraits: a bound names both, `<T: geom::Greeter + geom::Named>`) |
+| an associated const (`const CAP: u32;`) | `T::CAP()` on each type implementing the trait (unless the type has a `CAP` of its own, another of its traits' consts has the name, or its module has an item of it) |
+| a tuple of numbers, text, plain structs and fieldless enums | a Volt tuple (`(i32, f64)`); a result's elements may be anything a result can be |
+| `[T; N]` of numbers | `T[..]` in (it must hold `N`: a panic, else), `std::vec<T>` out |
+| `u128`, `i128` | `u128`, `i128` |
 
 A generic is built per instance: when a check calls `geom::largest` with `i32` and `f64`, voltc asks
 bolt for those two, which it builds into the shim as `largest::<i32>` and `largest::<f64>`, and
@@ -108,10 +116,13 @@ fn main() -> void {
 }
 ```
 
-A trait with an associated type or const, generic parameters, or a supertrait beyond `Send`, `Sync`
-and `Sized` is left out, listed in a comment of the generated declarations (`VOLT_SHOW_IMPORT=1
-voltc check main.volt` prints them). So is a function with a type the table doesn't have (a tuple,
-an array, `u128`), and a type generic over a const (`Buf<const N: usize>`).
+Volt's own types attach a trait that's generic, has associated types or consts, or has a
+supertrait of the crate's only once Volt can give Rust a value of one; until then such a trait is
+the crate's types' alone (its parameters a Rust function takes aren't Volt's to pass). A generic
+trait whose methods take a value of one of its type parameters, one with a generic supertrait or
+a supertrait from another crate (beyond `Send`, `Sync` and `Sized`), a function with a type the
+table doesn't have, and a type generic over a const (`Buf<const N: usize>`) are left out, listed in
+a comment of the generated declarations (`VOLT_SHOW_IMPORT=1 voltc check main.volt` prints them).
 
 A panic through a function stops the program with Rust's message, as it would in Rust. Every
 function and method also has a `try_` form (`geom::try_at(xs, 9)`, and a closure's `try_call`)

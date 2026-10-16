@@ -1176,7 +1176,7 @@ impl Reader<'_> {
             }
         }
         if self.traits.contains(n) {
-            self.m.traits.push(TraitDef { module: d.module.clone(), name: d.vname.clone(), methods: ok.into_iter().map(|s| (s, false)).collect(), skip: None });
+            self.m.traits.push(TraitDef { module: d.module.clone(), name: d.vname.clone(), methods: ok.into_iter().map(|s| (s, false)).collect(), skip: None, params: Vec::new(), foreign: false });
         } else {
             let why = match d.decl {
                 Decl::Iface("sealed") => Some("it has unexported methods, so in Go only its own package's types have it"),
