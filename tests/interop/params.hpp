@@ -115,4 +115,41 @@ inline int widen(std::vector<std::vector<int>> &v) { v.push_back(std::vector<int
 inline int flags(const std::vector<std::vector<bool>> &v) { return (int)v.size(); }
 inline int boxes(const std::vector<std::vector<Shape>> &v) { return (int)v.size(); }
 }
+// calls worked out per use that throw (cpp_params_try.volt): their try_ forms catch, a std::string&
+// left as it was; a try_ name the header declares itself keeps it
+namespace pu {
+template <class... A> int checked(A... a) {
+    int s = (0 + ... + a);
+    if (s < 0) throw std::invalid_argument("negative sum");
+    return s;
+}
+template <class... A> int stretch(std::string &s, A... n) {
+    s += "~";
+    int k = (0 + ... + n);
+    if (k < 0) throw std::out_of_range("short");
+    s.append(k, '+');
+    return (int)s.size();
+}
+template <class... A> void boom(A... a) {
+    if (sizeof...(a) > 1) throw std::length_error("too many");
+}
+template <class... A> int twin(A... a) { return (0 + ... + a); }
+inline int try_twin(int x) { return -x; }
+inline int nonneg(int x) {
+    if (x < 0) throw std::invalid_argument("negative");
+    return x;
+}
+// held by handle, its members worked out per use: x.try_m(...) and T::try_new(...) catch too
+template <class T> class Keep {
+    T v_;
+  public:
+    explicit Keep(T v) : v_(v) {
+        if (v < 0) throw std::domain_error("negative keep");
+    }
+    T take(int k) const {
+        if (k < 0) throw std::out_of_range("no take");
+        return v_ + k;
+    }
+};
+}
 }

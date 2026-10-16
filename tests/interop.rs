@@ -1984,6 +1984,11 @@ fn cpp_params() {
         let o = e.voltc(&["run", "cpp_params_gthrow.volt", "--backend", backend]);
         let err = String::from_utf8_lossy(&o.stderr);
         assert!(o.status.code() == Some(101) && err.contains("C++ exception") && err.contains("negative") && o.stdout.is_empty(), "a template's throw through the plain form ({backend}): {err}");
+        // @cpp<cpp_error!R> and the try_ forms of calls worked out per use catch as declared try_ forms do
+        let caught = "nonneg 4: 4\nnonneg -4: INVALID_ARGUMENT negative\nboom 1: done\nboom 2: LENGTH_ERROR too many\nthrow 42: UNKNOWN an exception that isn't a std::exception\nbad_alloc: BAD_ALLOC std::bad_alloc\ngrow 2: 5 hi~++\ngrow -1: INVALID_ARGUMENT hi~++\nrelay 99\nnonneg -5: INVALID_ARGUMENT negative\nplain 3\n";
+        assert_eq!(ok(e.voltc(&["run", "cpp_params_catch.volt", "--backend", backend]), "voltc run cpp_params_catch.volt"), caught, "@cpp<cpp_error!R> ({backend})");
+        let tried = "checked 2 3: 5\nchecked 2 -5: INVALID_ARGUMENT negative sum\nstretch 2: 5 hi~++\nstretch -1: OUT_OF_RANGE hi~++\nboom 2: LENGTH_ERROR\ntwin 5 -5\nkeep 3: 3\nkeep -2: DOMAIN_ERROR\ntake -1: OUT_OF_RANGE 5\n";
+        assert_eq!(ok(e.voltc(&["run", "cpp_params_try.volt", "--backend", backend]), "voltc run cpp_params_try.volt"), tried, "try_ forms per use ({backend})");
     }
     // parameters written as arrays are declared as pointers (through an alias, of chars, of pointers,
     // of a laid-out struct), not left to per use; an array of arrays is
@@ -2000,6 +2005,10 @@ fn cpp_params() {
     for why in ["std::vector<std::vector<int>> & v) (worked out per use: std::vector<std::vector<int>> & has no Volt form)", "(worked out per use: const std::vector<std::vector<bool>> & has no Volt form)", "(worked out per use: const std::vector<std::vector<Shape>> & has no Volt form)", "(worked out per use: const std::vector<S> & depends on the template's parameters)"] {
         assert!(src.contains(why), "{why}: {src}");
     }
+    // a per-use name's try_ stub beside its own, unless the header declares that name (then a
+    // left-out comment)
+    assert!(src.contains("@attributes([@cpp_call(\"try:pr::pu::checked\")])") && src.contains("fn try_checked() -> void {}"), "a per-use try_ stub: {src}");
+    assert!(src.contains("// left out: try_twin, worked out per use (the header declares try_twin)") && src.matches("fn try_twin(").count() == 1, "a real try_twin keeps its name: {src}");
 }
 
 #[test]
