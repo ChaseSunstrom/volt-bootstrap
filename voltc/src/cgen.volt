@@ -772,9 +772,31 @@ attach fn q_fold(this: cgen&, n: u32) -> u128? {
             }
         },
         .CONV(x) => {
-            // to f128 from anything exact, or to f64 from something that isn't an f128
-            if (fb == 128 || (fb == 64 && this.float_bits(this.c.ir.ty_of(x)) != 128)) {
+            // to f128 from anything exact, or to f64 from something that isn't an f128 (an int
+            // rounded to the f64 it converts to, which only a double's 53 bits hold exactly)
+            val xt = this.c.ir.ty_of(x);
+            if (fb == 128) {
                 return this.q_fold(x);
+            }
+            if (fb == 64 && this.float_bits(xt) != 128) {
+                match (this.c.ir.at(x).kind) {
+                    .INT(v) => {
+                        if (this.c.t.int_of(xt) != null) {
+                            var d = @cast<f64>(v);
+                            if (v < 0 && xt == int_id(int_ty::U128)) {
+                                d = @cast<f64>(@cast<u128>(v));
+                            }
+                            return std::softfloat::f64_to_f128(@bitcast<u64>(d));
+                        }
+                    },
+                    default => {},
+                }
+                val b = this.q_fold(x) ?? return null;
+                if (this.c.t.int_of(xt) != null) {
+                    // an int reached through a global: its binary128 (exact below 2^113) rounded
+                    return std::softfloat::f64_to_f128(std::softfloat::f128_to_f64(b));
+                }
+                return b;
             }
         },
         .UNARY(op, x) => {

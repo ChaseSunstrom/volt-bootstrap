@@ -13,6 +13,12 @@ val A: f64 = 0.1;
 val WIDE: f128 = A; // an f64's value widened, not the literal
 val UNTYPED = 0.1 * G; // the untyped 0.1 read as binary128 beside an f128
 val BIG: f128 = 12345678901234567890123; // past a double's 53 bits
+val ASF64: f128 = 0.1 as f64; // made an f64 by as: widened
+val CAST: f128 = @cast<f128>(0.1);
+val I53: i64 = 9007199254740993;
+val VIA: f128 = @cast<f64>(I53); // the int rounded to an f64 first
+val P127: f128 = 170141183460469231731687303715884105728.0;
+val U: u128 = @cast<u128>(P127); // an unsigned conversion, past i128's maximum
 
 fn b(x: f128) -> u128 {
     return @bitcast<u128>(x);
@@ -41,6 +47,12 @@ fn main() -> void {
     std::println("{}", b(-0.1));
     std::println("{}", b(BIG));
     std::println("{}", b(0.1 * one));
+    std::println("{}", b(ASF64));
+    std::println("{}", b(0.1 as f64));
+    std::println("{}", b(CAST));
+    std::println("{}", b(@cast<f128>(0.1)));
+    std::println("{}", b(VIA));
+    std::println("{}", U);
 }
 // expect: 85047745624057062624278117674093484442
 // expect: 85052937920915597451906648170422704538
@@ -62,3 +74,9 @@ fn main() -> void {
 // expect: 255188929084526294355965421389977590170
 // expect: 85446031915942936746907751658138107904
 // expect: 85047745624057062624278117674093484442
+// expect: 85047745624057062624739286275936223232
+// expect: 85047745624057062624739286275936223232
+// expect: 85047745624057062624278117674093484442
+// expect: 85047745624057062624278117674093484442
+// expect: 85340591166878426902527237667061497856
+// expect: 170141183460469231731687303715884105728

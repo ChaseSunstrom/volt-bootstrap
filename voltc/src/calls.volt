@@ -453,8 +453,9 @@ attach fn builtin(this: checker&, name: str, gargs: std::vec<garg>&, args_opt: s
             },
             default => {},
         }
-        // a literal past i128's maximum is a u128 cast to one
-        if (past_i128_lit(e) && to == int_id(int_ty::U128)) {
+        // a literal past i128's maximum is a u128 cast to one; one cast to f128 is read as one, as
+        // `as f128` and the compile-time @cast read it (T-0477)
+        if ((past_i128_lit(e) && to == int_id(int_ty::U128)) || to == F128) {
             want = to;
         }
         val v = try this.expr(e, want);
