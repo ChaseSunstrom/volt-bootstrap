@@ -1946,6 +1946,13 @@ fn cpp_versions() {
     let err = String::from_utf8_lossy(&o.stderr);
     assert!(!o.status.success() && err.contains("dynamic exception specifications"), "the newest standard by default: {err}");
     assert_eq!(ok(e.voltc(&["run", "cpp_old_only.volt"]), "voltc run cpp_old_only.volt"), "42\n");
+    // a std::map and std::pair read as tuples under C++98 as under C++11 (no std::tuple_size there),
+    // and class template instances' handles and a base's as_ under C++98 (no >> after a template name)
+    for std in ["-std=c++98", "-std=c++11"] {
+        for backend in ["c", "llvm"] {
+            assert_eq!(ok(e.voltc(&["run", "cpp_pairs98.volt", "--cc", std, "--backend", backend]), "voltc run cpp_pairs98.volt"), "map 3 1.75\npair 3 2 42\nbox 5 3 9 7\n", "pairs under {std} ({backend})");
+        }
+    }
 }
 
 #[test]
