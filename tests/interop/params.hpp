@@ -116,6 +116,11 @@ inline std::string spell(std::vector<std::vector<signed char>> v) { std::string 
 inline int widen(std::vector<std::vector<int>> &v) { v.push_back(std::vector<int>()); return (int)v.size(); }
 inline int flags(const std::vector<std::vector<bool>> &v) { return (int)v.size(); }
 inline int boxes(const std::vector<std::vector<Shape>> &v) { return (int)v.size(); }
+// an auto result: the probe instantiates the body (given text, it doesn't compile: cpp_params_bad_call.volt)
+template <class... A> auto fold_t(A... a) { return (0 + ... + a); }
+// templates: made per use, a nested Volt slice spelled as nested std::vectors for the probe
+template <class T> std::string rows_t(const std::vector<std::vector<T> > &v) { return rows(v); }
+template <class T> T deep_t(std::vector<std::vector<std::vector<T> > > v) { T s = 0; for (std::size_t i = 0; i < v.size(); i++) for (std::size_t j = 0; j < v[i].size(); j++) for (std::size_t k = 0; k < v[i][j].size(); k++) s += v[i][j][k] * (T)(i + 1); return s; }
 }
 // std::map / std::unordered_map parameters take a Volt std::map&: each prints C++'s own order (the
 // unordered one copied into a std::map first), beside a stdcxx handle form when there is one; a
@@ -170,6 +175,10 @@ inline int sole(int x) {
     return x;
 }
 inline int try_sole(int x) { return -x; }
+inline int lone(int x) {
+    if (x < 0) throw std::invalid_argument("negative lone");
+    return x;
+}
 struct Gauge {
     int v = 1;
     int read(int k) {
@@ -245,4 +254,21 @@ template <class T> class Tally {
     T operator+(T *p) const { return v_ + *p; }
 };
 }
+}
+// pr::pu opened again: a try_ name declared in a later block of the namespace is still beside lone
+namespace pr {
+namespace pu {
+inline int try_lone(int x) { return -x - 1; }
+}
+}
+// results that may point into a temporary made for a parameter (a Volt slice's std::vector, a str's
+// std::string): not declared, an error per use; the rest are (back_ref's int is copied out in the call)
+namespace tc {
+inline const int *data_of(const std::vector<int> &v) { return v.data(); }
+inline const int &back_ref(const std::vector<int> &v) { return v.back(); }
+inline const char *cstr_of(const std::string &s) { return s.c_str(); }
+inline int sum_of(const std::vector<int> &v) { int s = 0; for (std::size_t i = 0; i < v.size(); i++) s += v[i]; return s; }
+inline std::vector<int> twice_of(const std::vector<int> &v) { std::vector<int> r(v); for (std::size_t i = 0; i < r.size(); i++) r[i] *= 2; return r; }
+inline std::size_t len_of(const std::string &s) { return s.size(); }
+template <class T> const T *ptr_t(const std::vector<T> &v) { return v.data(); }
 }

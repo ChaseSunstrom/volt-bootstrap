@@ -82,6 +82,9 @@ struct cpp_gen {
     // try_ form made for f): which scope, and their names
     sib_of: clang::CXCursor? = null;
     sib_names: std::map<str, bool> = {};
+    // the functions each namespace declares, all its blocks together, as "USR name" (read once)
+    ns_read: bool = false;
+    ns_names: std::map<str, bool> = {};
     note: std::string = {}; // the C++ declaration the next fn wraps, as a comment above it (hover shows it)
     // instance handles: a class type with no other Volt form (a class template's instance with
     // private state, a lambda's type, what an auto result is) held by handle, by its canonical C++
@@ -1510,13 +1513,16 @@ struct cpp_arg {
     pass: std::string;
     cpp: std::string;
     pre: std::string = {}; // statements the Volt fn starts with (a std::string&'s C++ copy)
-    text_ref: bool = false; // a std::string& or a std::map: C++ gets a copy, gone once the call returns
-    map_copy: bool = false; // a std::map's copy, which (unlike a string) can hold a class
+    // C++ gets a copy, gone once the call returns: a std::string&'s or a std::map's, or a temporary
+    // made from a str (a std::string) or a slice (a std::vector)
+    text_ref: bool = false;
+    map_copy: bool = false; // a copy that (unlike a string) can hold a class: a map's, a vector's
 }
 
-// why a call can't be written when an argument is a std::string&'s or a std::map's copy (args:
-// the first count) and the result may point into it: a view, a pointer, a reference (to a class
-// Volt holds by handle only into a map, as a string doesn't hold one)
+// why a call can't be written when an argument is a copy made for it (a std::string&'s, a
+// std::map's, a str's std::string, a slice's std::vector; args: the first count) and the result may
+// point into it: a view, a pointer, a reference (to a class Volt holds by handle only into a map or
+// a vector, as a string doesn't hold one)
 fn into_copy(r: cpp_ret&, rt: clang::CXType, args: std::vec<cpp_arg>&, count: usize) -> bool {
     var any = false;
     var maps = false;
@@ -1588,7 +1594,7 @@ fn holds_pointer(t: clang::CXType, depth: u32) -> bool {
     return false;
 }
 
-val INTO_COPY: str = "its result would point into a copy (of a string or a map) that's gone once the call returns";
+val INTO_COPY: str = "its result would point into a copy (of a string, a vector or a map) that's gone once the call returns";
 
 // the Volt slice a std::vector (of std::vectors, to any depth) is copied from (i32[..] for a
 // std::vector<int>), or none: the innermost element must be a number or a char, laid out as Volt's
@@ -1772,7 +1778,7 @@ attach fn param(this: cpp_gen&, t: clang::CXType, name: str, i: usize, tparams: 
     }
     if (!mutable_ref) {
         if (char_text(base, "basic_string")) {
-            return { vty: S("str"), pass: S(name), cpp: fmt2("std::string((const char *){}.ptr, {}.len)", copy slot, copy slot) };
+            return { vty: S("str"), pass: S(name), cpp: fmt2("std::string((const char *){}.ptr, {}.len)", copy slot, copy slot), text_ref: true };
         }
         if (char_text(base, "basic_string_view")) {
             return { vty: S("str"), pass: S(name), cpp: fmt2("std::string_view((const char *){}.ptr, {}.len)", copy slot, copy slot) };
@@ -1788,10 +1794,10 @@ attach fn param(this: cpp_gen&, t: clang::CXType, name: str, i: usize, tparams: 
             if ((std_template(et) ?? S("")).as_str() == "vector") {
                 // a std::vector of std::vectors: a Volt slice of slices, each level copied
                 val inner = this.nested_vec(et, tparams) ?? return null;
-                return { vty: fmt("{}[..]", move inner), pass: S(name), cpp: fmt2("volt_cpp_vec<{} >({})", move vec, copy slot) };
+                return { vty: fmt("{}[..]", move inner), pass: S(name), cpp: fmt2("volt_cpp_vec<{} >({})", move vec, copy slot), text_ref: true, map_copy: true };
             }
             val elem = this.vtype(et, tparams) ?? return null;
-            return { vty: fmt("{}[..]", move elem), pass: S(name), cpp: fmt4("{}({}.ptr, {}.ptr + {}.len)", move vec, copy slot, copy slot, copy slot) };
+            return { vty: fmt("{}[..]", move elem), pass: S(name), cpp: fmt4("{}({}.ptr, {}.ptr + {}.len)", move vec, copy slot, copy slot, copy slot), text_ref: true, map_copy: true };
         }
         // a std::map: a Volt std::map&, unless it has a stdcxx handle form (then that, and
         // callable_of's second overload this)
@@ -3150,12 +3156,18 @@ attach fn text_out(this: cpp_gen&, r: str) -> void {
     this.line("return try_text;");
 }
 
-// the try_ form of a call: the plain form called in catch mode (volt_cpp_catch_begin), returning
-// a cpp_error naming what it threw (last_exception() says what it said); its value, made of zeroes
-// then, is dropped
 // does the scope c is declared in (its namespace or class) declare a function or method named name?
+// (each block of a namespace C++ opens again is a cursor of its own: a namespace is asked about all
+// of them, by its USR)
 attach fn declares_beside(this: cpp_gen&, c: clang::CXCursor, name: str) -> bool {
     val parent = clang::clang_getCursorSemanticParent(c);
+    if (clang::clang_getCursorKind(parent) == clang::CXCursor_Namespace) {
+        if (!this.ns_read) {
+            this.ns_read = true;
+            this.read_ns(clang::clang_getTranslationUnitCursor(clang::clang_Cursor_getTranslationUnit(c)), "");
+        }
+        return this.ns_names.get(fmt2("{} {}", cursor_usr(parent), S(name)).as_str()) != null;
+    }
     var same = false;
     val had = this.sib_of;
     if (had) {
@@ -3173,6 +3185,24 @@ attach fn declares_beside(this: cpp_gen&, c: clang::CXCursor, name: str) -> bool
     }
     return this.sib_names.get(name) != null;
 }
+
+// the functions declared in the namespaces under c (usr: c's, when it's one), into ns_names
+attach fn read_ns(this: cpp_gen&, c: clang::CXCursor, usr: str) -> void {
+    for (ch&) in children(c).items() {
+        val k = clang::clang_getCursorKind(*ch);
+        if (k == clang::CXCursor_Namespace) {
+            this.read_ns(*ch, this.c.intern(cursor_usr(*ch)));
+        } else if (k == clang::CXCursor_LinkageSpec) {
+            this.read_ns(*ch, usr);
+        } else if (usr.len > 0 && (k == clang::CXCursor_FunctionDecl || k == clang::CXCursor_FunctionTemplate)) {
+            this.ns_names.put(this.c.intern(fmt2("{} {}", S(usr), cursor_name(*ch))), true);
+        }
+    }
+}
+
+// the try_ form of a call: the plain form called in catch mode (volt_cpp_catch_begin), returning
+// a cpp_error naming what it threw (last_exception() says what it said); its value, made of zeroes
+// then, is dropped
 
 attach fn try_text(this: cpp_gen&, generics: str, head: str, params: str, r: cpp_ret&, args: str) -> void {
     // `attach fn area(this: Shape&` gives `attach fn try_area(this: Shape&`, calling this.area(...)
@@ -6432,8 +6462,8 @@ attach fn cpp_probe_type(this: checker&, t: u32) -> std::string? {
             return s;
         },
         .SLICE(x) => {
-            val e = this.cpp_probe_type(x) ?? return null;
-            return fmt("const std::vector<{}> &", move e);
+            val e = this.probe_elem(x) ?? return null;
+            return fmt("const std::vector<{} > &", move e);
         },
         .FN_PTR(ps&, r, va) => {
             // a C function: C++'s pointer to one
@@ -6453,6 +6483,18 @@ attach fn cpp_probe_type(this: checker&, t: u32) -> std::string? {
             return fmt("__typeof__({})", move s);
         },
         default => { return this.cpp_spell(t); },
+    }
+}
+
+// the C++ type a Volt slice's element comes as in a probe: a nested slice as a std::vector of its own
+// (closers apart: C++98 reads >> as a shift), which the wrapper copies level by level (volt_cpp_vec)
+attach fn probe_elem(this: checker&, x: u32) -> std::string? {
+    match (*this.t.get(x)) {
+        .SLICE(y) => {
+            val e = this.probe_elem(y) ?? return null;
+            return fmt("std::vector<{} >", move e);
+        },
+        default => { return this.cpp_probe_type(x); },
     }
 }
 

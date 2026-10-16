@@ -1996,7 +1996,7 @@ fn cpp_params() {
     // a Volt std::string for a template parameter S (S&, const S&, S) a C++ std::string, a throw
     // through the plain form a stop
     let e = Env::new("cpp-params");
-    let want = "sum 6\nfill 4 4 4\ntotal 12\ntwice 8 24\nfirst 7 8\napply 5 6 10\n@cpp 42\nshout hi!!\ngrow 2: 7 hi!!~++\ngrow -1: INVALID_ARGUMENT hi!!~++\n@cpp hi!!~++!\nrelay INVALID_ARGUMENT hi!!~++!\nshapes 2 7\npoints 202 45\nspend 15\nasked why??\ncounted 3 7 ab+\narrays 7 4 7 9 4\n@cpp 8 5 1\nalias 8 cells 14\nwrap hey! 4 6\ngauge 40 70 hey!\npad 6 hey!##\ntgrow 1: 8 hey!##~+\ntgrow -1: INVALID_ARGUMENT hey!##~+\nnested [[1,2],[3],[]] [[1,2],[3]] [[[1,2],[3],[]],[],[[1,2]]] []\nnested [[3],[]] 4.75 hi//you\nmap {1:10,2:20,3:30} {} {4:125,5:50} 140 3 3\nmap {a:1,b:2} {:'',k:'v w'} {1:[],2:[4,5]}\nmap {1:10,2:20,3:30} {1:[],2:[4,5]} 2 2 2\nmap 1 {7:7} 1\npick 2: 20\npick 9: OUT_OF_RANGE\nderef 5 5 3 3 7 7\nsum_ptr 7 size 4 4 8 which 1 2\nchecked 5: 5\nchecked -1: INVALID_ARGUMENT\ntwice 42 tally 4 7 10 10\n";
+    let want = "sum 6\nfill 4 4 4\ntotal 12\ntwice 8 24\nfirst 7 8\napply 5 6 10\n@cpp 42\nshout hi!!\ngrow 2: 7 hi!!~++\ngrow -1: INVALID_ARGUMENT hi!!~++\n@cpp hi!!~++!\nrelay INVALID_ARGUMENT hi!!~++!\nshapes 2 7\npoints 202 45\nspend 15\nasked why??\ncounted 3 7 ab+\narrays 7 4 7 9 4\n@cpp 8 5 1\nalias 8 cells 14\nwrap hey! 4 6\ngauge 40 70 hey!\npad 6 hey!##\ntgrow 1: 8 hey!##~+\ntgrow -1: INVALID_ARGUMENT hey!##~+\nnested [[1,2],[3],[]] [[1,2],[3]] [[[1,2],[3],[]],[],[[1,2]]] []\nnested per use [[1,2],[3],[]] 15\nnested [[3],[]] 4.75 hi//you\nmap {1:10,2:20,3:30} {} {4:125,5:50} 140 3 3\nmap {a:1,b:2} {:'',k:'v w'} {1:[],2:[4,5]}\nmap {1:10,2:20,3:30} {1:[],2:[4,5]} 2 2 2\nmap 1 {7:7} 1\npick 2: 20\npick 9: OUT_OF_RANGE\nderef 5 5 3 3 7 7\nsum_ptr 7 size 4 4 8 which 1 2\nchecked 5: 5\nchecked -1: INVALID_ARGUMENT\ntwice 42 tally 4 7 10 10\n";
     for backend in ["c", "llvm"] {
         assert_eq!(ok(e.voltc(&["run", "cpp_params.volt", "--backend", backend]), "voltc run cpp_params.volt"), want, "C++ parameters ({backend})");
         let o = e.voltc(&["run", "cpp_params_gthrow.volt", "--backend", backend]);
@@ -2005,7 +2005,7 @@ fn cpp_params() {
         // @cpp<cpp_error!R> and the try_ forms of calls worked out per use catch as declared try_ forms do
         let caught = "bump\nbumped: INVALID_ARGUMENT negative\nbump\ntbumped: INVALID_ARGUMENT negative\nb b\nnonneg 4: 4\nnonneg -4: INVALID_ARGUMENT negative\nboom 1: done\nboom 2: LENGTH_ERROR too many\nthrow 42: UNKNOWN an exception that isn't a std::exception\nbad_alloc: BAD_ALLOC std::bad_alloc\ngrow 2: 5 hi~++\ngrow -1: INVALID_ARGUMENT hi~++\nrelay 99\nnonneg -5: INVALID_ARGUMENT negative\nplain 3\n";
         assert_eq!(ok(e.voltc(&["run", "cpp_params_catch.volt", "--backend", backend]), "voltc run cpp_params_catch.volt"), caught, "@cpp<cpp_error!R> ({backend})");
-        let tried = "checked 2 3: 5\nchecked 2 -5: INVALID_ARGUMENT negative sum\nstretch 2: 5 hi~++\nstretch -1: OUT_OF_RANGE hi~++\nboom 2: LENGTH_ERROR\ntwin 5 -5\nsole 2 -5 read 3 -4\npick -1: INVALID_ARGUMENT negative pick\npick 4: 4\npick 1 -5: RANGE_ERROR negative picks\npick 1 2: 3\nkeep 3: 3\nkeep -2: DOMAIN_ERROR\nmade 1: 1 ab~\nmade -1: DOMAIN_ERROR ab~\ngrow 2: 6 ab~~++\ngrow -1: OUT_OF_RANGE ab~~++\ntake -1: OUT_OF_RANGE 5\n";
+        let tried = "checked 2 3: 5\nchecked 2 -5: INVALID_ARGUMENT negative sum\nstretch 2: 5 hi~++\nstretch -1: OUT_OF_RANGE hi~++\nboom 2: LENGTH_ERROR\ntwin 5 -5\nsole 2 -5 read 3 -4\nlone 3 -6\npick -1: INVALID_ARGUMENT negative pick\npick 4: 4\npick 1 -5: RANGE_ERROR negative picks\npick 1 2: 3\nkeep 3: 3\nkeep -2: DOMAIN_ERROR\nmade 1: 1 ab~\nmade -1: DOMAIN_ERROR ab~\ngrow 2: 6 ab~~++\ngrow -1: OUT_OF_RANGE ab~~++\ntake -1: OUT_OF_RANGE 5\n";
         assert_eq!(ok(e.voltc(&["run", "cpp_params_try.volt", "--backend", backend]), "voltc run cpp_params_try.volt"), tried, "try_ forms per use ({backend})");
         // its arguments are worked out before catch mode: a throw in one stops the program, and an
         // early exit in one leaves catch mode off (a later plain throw stops it)
@@ -2052,11 +2052,21 @@ fn cpp_params() {
     assert!(src.contains("@attributes([@cpp_call(\"try:pr::pu::checked\")])") && src.contains("fn try_checked() -> void {}"), "a per-use try_ stub: {src}");
     assert!(src.contains("// left out: try_twin, worked out per use (the header declares try_twin)") && src.matches("fn try_twin(").count() == 1, "a real try_twin keeps its name: {src}");
     // and beside a declared function or method: one try_sole, one try_read, the header's
-    assert!(src.matches("fn try_sole(").count() == 1 && src.matches("fn try_read(").count() == 1, "a declared try_ name the header has keeps it: {src}");
+    assert!(src.matches("fn try_sole(").count() == 1 && src.matches("fn try_read(").count() == 1 && src.matches("fn try_lone(").count() == 1, "a declared try_ name the header has keeps it: {src}");
     // x.try_m(...) with neither try_m nor m on the class: m's error
     let o = e.voltc(&["check", "cpp_params_no_member.volt"]);
     let err = String::from_utf8_lossy(&o.stderr);
     assert!(!o.status.success() && err.contains("no member named 'nothing'") && err.contains("cpp_params_no_member.volt:5"), "neither m nor try_m: {err}");
+}
+
+#[test]
+fn cpp_peruse_errors() {
+    // a per-use call C++ can't make: clang's error, at the call, without the probe declaration's own
+    // follow-on ('a type specifier is required for all declarations')
+    let e = Env::new("cpp-peruse-errors");
+    let o = e.voltc(&["check", "cpp_params_bad_call.volt"]);
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(!o.status.success() && err.contains("invalid operands") && err.contains("cpp_params_bad_call.volt:6") && !err.contains("type specifier"), "a per-use call's errors: {err}");
 }
 
 #[test]
@@ -2097,13 +2107,23 @@ fn cpp_params_refused() {
     let err = check("cpp_params_closure.volt");
     assert!(err.contains("argument 1 is a closure(i32) -> i32, but 'apply' wants a extern \"C\" fn(i32) -> i32"), "a closure for a function pointer: {err}");
     let err = check("cpp_params_view.volt");
-    assert!(err.contains("its result would point into a copy (of a string or a map) that's gone once the call returns") && err.contains("cpp_params_view.volt:7"), "a view into the copy, per use: {err}");
+    assert!(err.contains("its result would point into a copy (of a string, a vector or a map) that's gone once the call returns") && err.contains("cpp_params_view.volt:7"), "a view into the copy, per use: {err}");
     let shown = Command::new(&e.voltc).args(["check", "cpp_params.volt", "--std"]).arg(Path::new(ROOT).join("std")).current_dir(Path::new(ROOT).join("tests/interop")).env("VOLT_SHOW_CPP", "1").output().unwrap();
     let src = String::from_utf8_lossy(&shown.stderr);
-    assert!(src.contains("its result would point into a copy (of a string or a map) that's gone once the call returns") && !src.contains("fn first_word("), "a view into the copy, declared: {src}");
+    assert!(src.contains("its result would point into a copy (of a string, a vector or a map) that's gone once the call returns") && !src.contains("fn first_word("), "a view into the copy, declared: {src}");
     assert!(!src.contains("fn first_at(") && !src.contains("fn name_of(") && src.contains("fn count_up("), "structs holding a pointer or a view into the copy, declared: {src}");
+    // into a parameter's temporary (a slice's std::vector, a str's std::string): left out declared,
+    // an error per use; a reference to a number is copied out in the call, so it stays
+    for none in ["fn data_of(", "fn cstr_of("] {
+        assert!(!src.contains(none), "{none}: {src}");
+    }
+    for decl in ["fn sum_of(", "fn twice_of(", "fn len_of(", "fn back_ref(v: i32[..]) -> i32"] {
+        assert!(src.contains(decl), "{decl}: {src}");
+    }
+    let err = check("cpp_params_temp.volt");
+    assert!(err.contains("its result would point into a copy (of a string, a vector or a map) that's gone once the call returns") && err.contains("cpp_params_temp.volt:7"), "a pointer into a slice's vector, per use: {err}");
     let err = check("cpp_params_struct_view.volt");
-    assert!(err.contains("its result would point into a copy (of a string or a map) that's gone once the call returns") && err.contains("cpp_params_struct_view.volt:7"), "a struct holding a pointer into the copy, per use: {err}");
+    assert!(err.contains("its result would point into a copy (of a string, a vector or a map) that's gone once the call returns") && err.contains("cpp_params_struct_view.volt:7"), "a struct holding a pointer into the copy, per use: {err}");
     // a Volt std::string for a template parameter nested in another type (S*, std::vector<S>) or
     // the result, each call
     let err = check("cpp_params_gnest.volt");
