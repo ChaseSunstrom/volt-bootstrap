@@ -59,12 +59,12 @@ result and redoes it when a file (or the compiler) changes. It works the same wi
 | `typealias Meters = Double` | its type, and a Volt alias: `geo::Meters` |
 | `fun Point.shifted(...)`, an extension of one of the files' types | a method of it |
 | `fun String.exclaim()`, `fun Int.squared()` | an attach fn on `str`, `i32`: `"hey".exclaim()` |
-| a nested class, `enum class` or `object` (`Garage.Car`) | `Garage_Car`, as nested C++ types are named; an `inner class` is left out |
+| a nested class, `enum class` or `object` (`Garage.Car`, a companion object's too) | `Garage_Car`, as nested C++ types are named; an `inner class` is left out |
 | a `suspend fun` | what it gives, when it finishes without suspending; one that suspends throws (nothing would resume it): the plain form stops the program, `try_f` gives `PANIC` |
 
 Generic functions, interfaces, a function whose result type isn't written (`fun f() = ...`), an
-extension of a type Volt can't attach to (a nullable or generic one) and a `vararg` that isn't last
-aren't callable from Volt; they're left out, listed in a comment of the generated declarations
+extension of a type Volt can't attach to (a nullable or generic one), an extension property and a
+`vararg` that isn't last aren't callable from Volt; they're left out, listed in a comment of the generated declarations
 (`VOLT_SHOW_IMPORT=1 voltc check main.volt` prints them). Each Volt fn has
 the Kotlin declaration it calls in a comment above it (`// Kotlin: fun scaled(k: Double): Point`),
 which an editor's hover shows. A Kotlin name that is a Volt keyword gets a `_` after it (`move` is

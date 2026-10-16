@@ -49,9 +49,7 @@ pub fn import(r: &Req) -> Result<(), String> {
     }
     let mut p = Parser::default();
     // the typealiases first: a declaration may name one written after it
-    for t in &toks {
-        p.aliases.extend(aliases(t));
-    }
+    p.read_aliases(&toks);
     for t in &toks {
         p.decls(t, None, false);
     }
@@ -126,6 +124,11 @@ struct Parser {
     fixed: BTreeSet<(String, String)>,
     /// typealiases: each name's type
     aliases: BTreeMap<String, Vec<Tok>>,
+    /// typealiases named like a type the files declare (a nested one): which one a name means
+    /// depends on where it's written, settled in resolve_nested
+    shadowed: BTreeMap<String, Vec<Tok>>,
+    /// the companion object being read (its name): a type in it is Outer.Companion.Inner
+    companion: Option<String>,
     /// extension funs of the files' types (the receiver type, the fun), made its methods once
     /// every type is read
     exts: Vec<(String, Sig, CallInfo)>,
@@ -154,9 +157,28 @@ struct Mods {
 }
 
 impl Parser {
+    /// the files' typealiases (read first: a declaration may name one written after it)
+    fn read_aliases(&mut self, files: &[Vec<Tok>]) {
+        let mut types = BTreeSet::new();
+        for t in files {
+            self.aliases.extend(aliases(t));
+            types.extend(t.windows(2).filter_map(|w| match w {
+                [Tok::Id(k), Tok::Id(n)] if k == "class" || k == "object" || k == "interface" => Some(n.clone()),
+                _ => None,
+            }));
+        }
+        for n in types {
+            if let Some(a) = self.aliases.remove(&n) {
+                self.shadowed.insert(n, a);
+            }
+        }
+    }
+
     fn finish(mut self) -> (Model, Kotlin) {
-        // an extension of one of the files' types is its method
+        // an extension of one of the files' types is its method (a nested one by its short name)
+        let names: BTreeSet<String> = self.m.types.iter().map(|t| t.name.clone()).collect();
         for (t, s, info) in std::mem::take(&mut self.exts) {
+            let t = if names.contains(&t) { t } else { only_nested(&t, &names).unwrap_or(t) };
             if self.at.contains_key(&t) {
                 self.add(Some(&t), s, info);
             } else {
@@ -212,34 +234,27 @@ impl Parser {
         (self.m, kotlin)
     }
 
-    /// each Named(Inner) a declaration names that isn't a type here: the nested type it means
-    /// (its own scope's, then its outer types', else the only one of that name)
+    /// each Named(X) a declaration names: the type it means, as Kotlin looks it up (a nested type
+    /// of its own scope's, then its outer types'; a typealias or type of the files; else the only
+    /// nested type of that name, imported by it)
     fn resolve_nested(&mut self) {
         let names: BTreeSet<String> = self.m.types.iter().map(|t| t.name.clone()).collect();
+        let (shadowed, aliases) = (&self.shadowed, &self.aliases);
         let fix = |t: &Ty, owner: Option<&str>| -> Ty {
-            fn go(t: &Ty, owner: Option<&str>, names: &BTreeSet<String>) -> Ty {
+            fn go(t: &Ty, owner: Option<&str>, names: &BTreeSet<String>, shadowed: &BTreeMap<String, Vec<Tok>>, aliases: &BTreeMap<String, Vec<Tok>>) -> Ty {
                 match t {
-                    Ty::Named(x) if !names.contains(x) => {
-                        let mut scope = owner.map(String::from);
-                        while let Some(o) = scope {
-                            let n = format!("{o}_{x}");
-                            if names.contains(&n) {
-                                return Ty::Named(n);
-                            }
-                            scope = o.rsplit_once('_').map(|(a, _)| a.to_string()).filter(|a| names.contains(a));
-                        }
-                        let all: Vec<&String> = names.iter().filter(|n| n.ends_with(&format!("_{x}"))).collect();
-                        match all.as_slice() {
-                            [one] => Ty::Named((*one).clone()),
-                            _ => t.clone(),
-                        }
-                    }
-                    Ty::Opt(e) => Ty::Opt(Box::new(go(e, owner, names))),
-                    Ty::Vec(e) => Ty::Vec(Box::new(go(e, owner, names))),
+                    Ty::Named(x) => match (scoped(x, owner, names), shadowed.get(x)) {
+                        (Some(n), _) => Ty::Named(n),
+                        (None, Some(a)) => parse_ty(a, None, aliases).unwrap_or_else(|| t.clone()),
+                        _ if names.contains(x) => t.clone(),
+                        _ => only_nested(x, names).map_or_else(|| t.clone(), Ty::Named),
+                    },
+                    Ty::Opt(e) => Ty::Opt(Box::new(go(e, owner, names, shadowed, aliases))),
+                    Ty::Vec(e) => Ty::Vec(Box::new(go(e, owner, names, shadowed, aliases))),
                     _ => t.clone(),
                 }
             }
-            go(t, owner, &names)
+            go(t, owner, &names, shadowed, aliases)
         };
         let fix_sig = |s: &mut Sig, owner: Option<&str>| {
             for p in &mut s.params {
@@ -414,7 +429,7 @@ impl Parser {
                     if m.companion && !statics {
                         // companion object [Name] [: ...] { body }: the owner's statics
                         c.i += 1;
-                        c.id();
+                        let cname = c.id().unwrap_or_else(|| "Companion".into());
                         while c.i < t.len() && !c.is("{") && !Self::at_decl(&c) {
                             c.i += 1;
                         }
@@ -422,7 +437,9 @@ impl Parser {
                             let open = c.i;
                             c.skip_group();
                             if let (Some(o), false) = (owner, m.private) {
+                                let saved = self.companion.replace(cname);
                                 self.decls(&t[open + 1..c.i - 1], Some(o), true);
+                                self.companion = saved;
                             }
                         }
                     } else {
@@ -444,7 +461,7 @@ impl Parser {
                     };
                     // its type (read before the declarations): a Volt alias too
                     if owner.is_none() && !m.private && spellable(&name) {
-                        match self.aliases.get(&name).and_then(|t| parse_ty(t, None, &self.aliases)) {
+                        match self.aliases.get(&name).or(self.shadowed.get(&name)).and_then(|t| parse_ty(t, None, &self.aliases)) {
                             Some(t) => self.m.aliases.push((Vec::new(), name, t)),
                             None => self.m.left_out.push(format!("{name} (a typealias of a type Volt can't name)")),
                         }
@@ -545,7 +562,8 @@ impl Parser {
                 }
             }
             if is_prop {
-                props.push((name.clone(), t.clone(), is_val, m.private));
+                // (a vararg's is an array: not the list Volt passes)
+                props.push((name.clone(), if m.vararg { None } else { t.clone() }, is_val, m.private));
             }
             let pname = if spellable(&name) { name } else { format!("a{n}") };
             s.params.push((pname, t));
@@ -679,6 +697,13 @@ impl Parser {
 
     /// class, interface or object NAME [<...>] [mods constructor](params) [: supers] { body }
     fn type_decl(&mut self, c: &mut Cur, owner: Option<&str>, kw: &str, m: Mods) {
+        // (a companion's: its own body isn't the companion's)
+        let comp = self.companion.take();
+        self.type_decl_in(c, owner, kw, m, comp.as_deref());
+        self.companion = comp;
+    }
+
+    fn type_decl_in(&mut self, c: &mut Cur, owner: Option<&str>, kw: &str, m: Mods, companion: Option<&str>) {
         c.i += 1;
         let Some(name) = c.id().filter(|n| !KEYWORDS.contains(&n.as_str()) && !MODIFIERS.contains(&n.as_str())) else {
             Self::skip(c);
@@ -716,8 +741,8 @@ impl Parser {
         if m.private {
             return;
         }
-        // a nested class, enum or object: Outer_Inner (Kotlin's Outer.Inner)
-        let kt = owner.map(|o| format!("{}.{name}", self.at.get(o).and_then(|&i| self.m.types[i].rust_name.clone()).unwrap_or_else(|| o.to_string())));
+        // a nested class, enum or object: Outer_Inner (Kotlin's Outer.Inner, Outer.Companion.Inner)
+        let kt = owner.map(|o| format!("{}.{}{name}", self.at.get(o).and_then(|&i| self.m.types[i].rust_name.clone()).unwrap_or_else(|| o.to_string()), companion.map_or(String::new(), |c| format!("{c}."))));
         let shown = name.clone();
         let name = match owner {
             Some(o) => format!("{o}_{name}"),
@@ -844,8 +869,20 @@ impl Parser {
             Self::skip(c);
             return;
         };
-        // an extension property: val Recv.name
-        if c.is(".") || c.is("<") {
+        // an extension property (val Recv.name, val Recv?.name): left out
+        if c.is(".") || c.is("<") || c.is("?") {
+            if c.is("<") {
+                c.skip_group();
+            }
+            let mut prop = name;
+            while c.eat("?") || c.eat(".") {
+                if let Some(n) = c.id() {
+                    prop = n;
+                }
+            }
+            if !m.private {
+                self.m.left_out.push(format!("{prop} (an extension property)"));
+            }
             Self::skip(c);
             return;
         }
@@ -864,7 +901,7 @@ impl Parser {
         let getter = c.t[s..c.i].windows(2).any(|w| w[0] == Tok::Id("get".into()) && w[1] == Tok::P("(".into())) || value.windows(2).any(|w| w[0] == Tok::Id("get".into()) && w[1] == Tok::P("(".into()));
         let Some(o) = owner else {
             if !m.private && !is_var && spellable(&name) {
-                if let Some((t, text)) = literal(&tt, &value) {
+                if let Some((t, text)) = literal(&tt, &value, &self.aliases) {
                     let vt = match t {
                         Ty::Prim(p) => p.to_string(),
                         _ => "str".to_string(),
@@ -880,7 +917,7 @@ impl Parser {
         if m.private {
             return;
         }
-        let ty = if tt.is_empty() { literal(&[], &value).map(|l| l.0) } else { parse_ty(&tt, Some(o), &self.aliases) };
+        let ty = if tt.is_empty() { literal(&[], &value, &self.aliases).map(|l| l.0) } else { parse_ty(&tt, Some(o), &self.aliases) };
         self.property_method(o, name, ty, statics);
     }
 }
@@ -1012,8 +1049,8 @@ fn template_end(b: &[u8], mut i: usize) -> usize {
 
 /// a literal value and its type: an integer (10, 10L, 10u), a float (1.5, 1.5f), a bool or a
 /// string without templates
-fn literal(tt: &[Tok], value: &[Tok]) -> Option<(Ty, String)> {
-    let t = if tt.is_empty() { None } else { parse_ty(tt, None, &BTreeMap::new()) };
+fn literal(tt: &[Tok], value: &[Tok], aliases: &BTreeMap<String, Vec<Tok>>) -> Option<(Ty, String)> {
+    let t = if tt.is_empty() { None } else { parse_ty(tt, None, aliases) };
     // a suffix on the last number: L, u, uL, f
     let (neg, rest) = match value {
         [Tok::P(m), rest @ ..] if m == "-" => ("-", rest),
@@ -1142,6 +1179,28 @@ fn parse_ty_at(t: &[Tok], owner: Option<&str>, aliases: &BTreeMap<String, Vec<To
 pub struct Kotlin {
     calls: Vec<CallInfo>,
     packages: BTreeSet<String>,
+}
+
+/// the nested type x names in owner's scope: its own, then its outer types'
+fn scoped(x: &str, owner: Option<&str>, names: &BTreeSet<String>) -> Option<String> {
+    let mut scope = owner.map(String::from);
+    while let Some(o) = scope {
+        let n = format!("{o}_{x}");
+        if names.contains(&n) {
+            return Some(n);
+        }
+        scope = o.rsplit_once('_').map(|(a, _)| a.to_string()).filter(|a| names.contains(a));
+    }
+    None
+}
+
+/// the only nested type named x (one a file imports by its short name)
+fn only_nested(x: &str, names: &BTreeSet<String>) -> Option<String> {
+    let all: Vec<&String> = names.iter().filter(|n| n.ends_with(&format!("_{x}"))).collect();
+    match all.as_slice() {
+        [one] => Some((*one).clone()),
+        _ => None,
+    }
 }
 
 /// the typealiases (non-generic) in a file's tokens: each name's type
@@ -1463,12 +1522,12 @@ impl Lang for Kotlin {
         let free = |what: &str| format!("volt_kotlin_{}_free_{what}", g.alias);
         let mut s = String::from("// the glue between a Volt program and this Kotlin, written by bolt import (use kotlin)\n");
         s.push_str("@file:OptIn(kotlinx.cinterop.ExperimentalForeignApi::class, kotlin.experimental.ExperimentalNativeApi::class, kotlin.ExperimentalUnsignedTypes::class)\n\n");
-        s.push_str("import kotlinx.cinterop.*\nimport kotlin.native.CName\nimport kotlin.coroutines.*\n");
+        s.push_str("import kotlinx.cinterop.*\nimport kotlin.native.CName\nimport kotlin.coroutines.startCoroutine\n");
         for p in &self.packages {
             let _ = writeln!(s, "import {p}.*");
         }
         s.push_str("\n// the byte at offset at of p\nfun __voltAt(p: COpaquePointer, at: Int): COpaquePointer = interpretCPointer<ByteVar>(p.rawValue + at.toLong())!!\n\n");
-        s.push_str("// a suspend fun run to its end: it mustn't suspend (nothing here would resume it)\nfun <T> __voltRun(what: String, f: suspend () -> T): T {\n    var done = false\n    var r: Result<T>? = null\n    f.startCoroutine(Continuation(EmptyCoroutineContext) { x -> done = true; r = x })\n    if (!done) throw IllegalStateException(\"$what suspended: Volt runs a suspend fun only to where it suspends, and nothing resumes it\")\n    return r!!.getOrThrow()\n}\n\n");
+        s.push_str("// a suspend fun run to its end: it mustn't suspend (nothing here would resume it)\nfun <T> __voltRun(what: String, f: suspend () -> T): T {\n    var done = false\n    var r: Result<T>? = null\n    f.startCoroutine(kotlin.coroutines.Continuation(kotlin.coroutines.EmptyCoroutineContext) { x -> done = true; r = x })\n    if (!done) throw IllegalStateException(\"$what suspended: Volt runs a suspend fun only to where it suspends, and nothing resumes it\")\n    return r!!.getOrThrow()\n}\n\n");
         s.push_str("fun __voltS(p: CPointer<ByteVar>?, n: ULong): String = if (p == null || n == 0uL) \"\" else p.readBytes(n.toInt()).decodeToString()\n\n");
         s.push_str("// Volt's str[..]: a pointer and a length each\nfun __voltStrs(p: COpaquePointer?, n: ULong): List<String> {\n    if (p == null) return emptyList()\n    val w = p.reinterpret<LongVar>()\n    return List(n.toInt()) { i -> __voltS(w[2 * i].toCPointer<ByteVar>(), w[2 * i + 1].toULong()) }\n}\n\n");
         s.push_str("// a copy for Volt, which gives it back to the free functions below\nfun __voltPutS(s: String, o: CPointer<CPointerVar<ByteVar>>?, n: CPointer<ULongVar>?) {\n    val b = s.encodeToByteArray()\n    n!!.pointed.value = b.size.toULong()\n    if (b.isEmpty()) {\n        o!!.pointed.value = null\n        return\n    }\n    val m = nativeHeap.allocArray<ByteVar>(b.size)\n    for (i in b.indices) m[i] = b[i]\n    o!!.pointed.value = m\n}\n\n");
@@ -1632,7 +1691,7 @@ suspend fun quick(n: Int): Int = n + 1
 "#;
         let mut p = Parser::default();
         let toks = lex(&plain_strings(src));
-        p.aliases = aliases(&toks);
+        p.read_aliases(std::slice::from_ref(&toks));
         p.decls(&toks, None, false);
         let (m, k) = p.finish();
         let fns: Vec<(&str, Option<&str>)> = m.fns.iter().map(|(_, s)| (s.name.as_str(), s.skip)).collect();
@@ -1654,5 +1713,49 @@ suspend fun quick(n: Int): Int = n + 1
         assert_eq!(m.methods["Garage_Car"].iter().find(|s| s.name == "next").and_then(|s| s.ret.clone()), Some(Ty::Named("Garage_Car".into())));
         assert_eq!(methods("Garage_Rules"), ["limit"]);
         assert!(info(&m, &k, "", "quick").suspend);
+    }
+
+    #[test]
+    fn import_kotlin_scopes() {
+        let src = r#"
+class Car(val doors: Int)
+typealias Size = Int
+typealias Meters = Double
+val LIMIT: Meters = 1.5
+class Garage {
+    class Car(val wheels: Int)
+    class Size(val n: Int)
+    fun park(c: Car): Int = 1
+    fun fit(s: Size): Int = 1
+    companion object Lot { class Spot(val n: Int) }
+}
+class Shed { class Tool(val n: Int) }
+fun Tool.grab(): Int = 1
+fun take(n: Size): Int = n
+class Bag(vararg val xs: Int)
+val Garage.label: String get() = "g"
+val String?.shout: String get() = ""
+fun Int.describe(): String = "a"
+fun describe(x: Int): String = "b"
+"#;
+        let mut p = Parser::default();
+        p.read_aliases(&[lex(&plain_strings(src))]);
+        p.decls(&lex(&plain_strings(src)), None, false);
+        let (m, k) = p.finish();
+        let param = |t: &str, f: &str| m.methods[t].iter().find(|s| s.name == f).map(|s| s.params[0].1.clone());
+        assert_eq!(param("Garage", "park"), Some(Some(Ty::Named("Garage_Car".into()))), "Car in Garage is Garage.Car, not the top-level Car");
+        assert_eq!(param("Garage", "fit"), Some(Some(Ty::Named("Garage_Size".into()))), "Size in Garage is Garage.Size, not the typealias");
+        assert_eq!(m.fns.iter().find(|f| f.1.name == "take").map(|f| f.1.params[0].1.clone()), Some(Some(Ty::Prim("i32"))), "Size at the top level is the typealias");
+        assert!(m.aliases.iter().any(|a| a.1 == "Size" && a.2 == Ty::Prim("i32")), "{:?}", m.aliases);
+        assert_eq!(m.types.iter().find(|t| t.name == "Garage_Spot").and_then(|t| t.rust_name.clone()), Some("Garage.Lot.Spot".to_string()), "a companion's nested type");
+        assert!(m.methods["Shed_Tool"].iter().any(|s| s.name == "grab"), "an extension of a nested type by its short name");
+        assert!(m.consts.iter().any(|c| c.1 == "LIMIT" && c.2 == "f64"), "a const of a typealias: {:?}", m.consts);
+        assert!(m.methods["Bag"].iter().find(|s| s.name == "xs").is_some_and(|s| s.ret.is_none()), "a vararg property is an array, not the list Volt passes");
+        for gone in ["label (an extension property)", "shout (an extension property)"] {
+            assert!(m.left_out.iter().any(|l| l.starts_with(gone)), "{gone}: {:?}", m.left_out);
+        }
+        let (shim, volt) = Gen::new(&m, "x", &k).write("the file");
+        assert!(!volt.contains("describe (an overload"), "an attach fn and a free fn of the same types are both Volt's: {volt}");
+        assert!(!shim.contains("import kotlin.coroutines.*") && shim.contains("kotlin.coroutines.Continuation("), "the prelude names what it uses");
     }
 }

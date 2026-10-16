@@ -972,7 +972,8 @@ impl<'a> Gen<'a> {
         // two overloads Volt can't tell apart (their parameters are the same Volt types)
         let types: Vec<&str> = params.iter().filter_map(|p| p.1.as_ref()).map(|v| v.param.split_once(": ").map_or(v.param.as_str(), |x| x.1)).collect();
         // (in its module: two modules' fns of one name are different fns)
-        let key = format!("{}::{what} {} ({})", module.join("::"), self_ty.is_some() && s.recv == Recv::None, types.join(", "));
+        // (an attach fn and a free fn of the same types are both Volt's: x.f() and f(x))
+        let key = format!("{}::{what} {} {} ({})", module.join("::"), self_ty.is_some() && s.recv == Recv::None, self_ty.is_none() && self.lang.attach_first(s), types.join(", "));
         if self.sigs.contains(&key) {
             return Err(format!("{what} (an overload Volt sees as the same as another)"));
         }
