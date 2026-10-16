@@ -1228,7 +1228,8 @@ fn read_bolt(out: bolt_libs&) -> void {
         val name = p.get("name").as_str() ?? "";
         // a library directory must be inside its package (next to its bolt.toml): a crafted
         // manifest can't send the server walking the disk, or stand in for std
-        val manifest = p.get("manifest_path").as_str() ?? "";
+        val manifest_s = slashes(p.get("manifest_path").as_str() ?? "");
+        val manifest = manifest_s.as_str();
         var home = manifest.len;
         while (home > 0 && manifest[home - 1] != '/') {
             home -= 1;
@@ -1239,12 +1240,23 @@ fn read_bolt(out: bolt_libs&) -> void {
         val ts = p.get("targets");
         for (j) in 0..ts.len() {
             val t = ts.at(j);
-            val dir = t.get("src_path").as_str() ?? "";
+            val dir_s = slashes(t.get("src_path").as_str() ?? "");
+            val dir = dir_s.as_str();
             if ((t.get("kind").as_str() ?? "") == "lib" && starts_with(dir, manifest[0..home]) && !has_dotdot(dir)) {
                 put(&out.names, S(name));
                 put(&out.dirs, S(dir));
             }
         }
+    }
+}
+
+// a path as the server compares them: / between its parts (Windows' C:\dir\f is C:/dir/f, as a
+// document's URI gives it)
+fn slashes(p: str) -> std::string {
+    comptime if (@cfg("os", "windows")) {
+        return p.replace("\\", "/");
+    } else {
+        return S(p);
     }
 }
 
@@ -1429,7 +1441,10 @@ fn lsp_capabilities() -> std::json::value {
 
 // `voltc lsp`: serve until exit (or the end of the input)
 fn lsp_main(std_dir: std::string?) -> i32 {
-    var srv: lsp_server = { std_dir: move std_dir };
+    var srv: lsp_server = {};
+    if (std_dir) {
+        srv.std_dir = slashes(std_dir.value.as_str());
+    }
     var r: lsp_reader = {};
     loop {
         val body = r.next() ?? break;

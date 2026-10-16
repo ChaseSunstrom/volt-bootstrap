@@ -138,6 +138,22 @@ pub fn import(r: &Req) -> Result<(), String> {
     };
     let (volt, err) = super::with_instances(r, &crate_st, build, methods, |e| format!("use rust: cargo couldn't build the glue for {}:\n{e}", dir.display()))?;
     let lib_file = r.out.join("target").join(crate::foreign::rust_target().unwrap_or_default()).join(if r.release { "release" } else { "debug" }).join(format!("libvolt_import_{}.a", r.alias));
+    // (cargo built it: a library somewhere else is named in the error)
+    if !lib_file.is_file() {
+        let mut found = Vec::new();
+        let mut dirs = vec![r.out.join("target")];
+        while let Some(d) = dirs.pop() {
+            for e in std::fs::read_dir(&d).into_iter().flatten().flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    dirs.push(p);
+                } else if p.file_name().is_some_and(|n| n.to_string_lossy().contains("volt_import")) && p.extension().is_some_and(|x| x == "a" || x == "lib") {
+                    found.push(p.display().to_string());
+                }
+            }
+        }
+        return Err(format!("use rust: cargo built the glue, but not {} (it built: {})", lib_file.display(), if found.is_empty() { "no library".into() } else { found.join(", ") }));
+    }
     let mut flags = vec![lib_file.display().to_string()];
     for line in err.lines() {
         if let Some(libs) = line.split("native-static-libs:").nth(1) {

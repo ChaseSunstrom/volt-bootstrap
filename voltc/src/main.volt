@@ -1647,12 +1647,14 @@ fn cc_run(inputs: std::vec<str>&, out: str, c: cli&, object: bool) -> void {
         for (a&) in needed.items() {
             put(&argv, *a);
         }
-        put(&argv, "-lm");
-        put(&argv, "-lpthread"); // the runtime has threads (libpthread before glibc 2.34)
         // std::net's sockets are Winsock's on Windows (the host's: --cfg os=... only checks
-        // another system's code, and a build still runs here)
+        // another system's code, and a build still runs here); its C library has the math, and the
+        // runtime's threads are Windows' own
         if (std::process::os() == "windows") {
             put(&argv, "-lws2_32");
+        } else {
+            put(&argv, "-lm");
+            put(&argv, "-lpthread"); // the runtime has threads (libpthread before glibc 2.34)
         }
         if (c.shared) {
             put(&argv, "-shared");

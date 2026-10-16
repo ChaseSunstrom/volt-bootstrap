@@ -35,7 +35,8 @@ fn checks_itself_and_emits_readable_c() {
     // VOLT_BLESS=1 rewrites them
     let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("cgen-{}", std::process::id()));
     let _ = std::fs::create_dir_all(&dir);
-    let e = Command::new(&exe).args(["emit-c", "tests/cgen/point.volt", "--no-std", "-o"]).arg(&dir).current_dir(root).output().unwrap();
+    // (as Linux's: on Windows main also puts stdio in binary mode)
+    let e = Command::new(&exe).args(["emit-c", "tests/cgen/point.volt", "--no-std", "--cfg", "os=linux", "-o"]).arg(&dir).current_dir(root).output().unwrap();
     assert!(e.status.success(), "emit-c -o: {}", String::from_utf8_lossy(&e.stderr));
     let snap = root.join("tests/cgen/point");
     let mut names: Vec<String> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().to_string()).collect();
@@ -269,7 +270,8 @@ fn toolchain_layout_and_link_errors() {
         std::fs::copy(from, &exe).unwrap();
         let o = Command::new(&exe).arg("std-dir").env_remove("VOLT_STD").output().unwrap();
         let found = String::from_utf8_lossy(&o.stdout).trim().to_string();
-        assert!(o.status.success() && Path::new(&found) == root.join("std").canonicalize().unwrap(), "{name} std-dir: {found} {}", String::from_utf8_lossy(&o.stderr));
+        // (both canonical: the symlink resolved, and Windows' \\?\ form on both sides)
+        assert!(o.status.success() && Path::new(&found).canonicalize().ok() == root.join("std").canonicalize().ok(), "{name} std-dir: {found} {}", String::from_utf8_lossy(&o.stderr));
         let o = Command::new(&exe).arg("build").arg(&tiny).args(["--cc", "-lvolt_no_such_lib", "-o"]).arg(tmp.join("tiny")).output().unwrap();
         let err = String::from_utf8_lossy(&o.stderr);
         assert!(!o.status.success() && err.contains("failed: a library above wasn't found") && !err.contains("voltc bug"), "{name}: {err}");
@@ -443,7 +445,7 @@ fn stage0_links_export_fns() {
     let o = Command::new(stage0).args(["lib", "pk", "-o"]).arg(&lib).arg("--std").arg(&std_dir).args(["--pkg", &pkg]).output().unwrap();
     assert!(o.status.success(), "voltc-bootstrap lib pk: {}", String::from_utf8_lossy(&o.stderr));
     let o = Command::new(stage0).arg("run").arg(dir.join("main.volt")).arg("--std").arg(&std_dir).args(["--pkg", &pkg, "--link"]).arg(format!("pk={}", lib.display())).output().unwrap();
-    assert!(o.status.success() && String::from_utf8_lossy(&o.stdout) == "42\n", "linked against libpk.a: {}", String::from_utf8_lossy(&o.stderr));
+    assert!(o.status.success() && String::from_utf8_lossy(&o.stdout).replace("\r\n", "\n") == "42\n", "linked against libpk.a ({}): {:?} {}", o.status, String::from_utf8_lossy(&o.stdout), String::from_utf8_lossy(&o.stderr));
     let _ = std::fs::remove_dir_all(&dir);
 }
 

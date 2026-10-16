@@ -3,18 +3,77 @@
 // exactly its own C++ overload; a default argument's forms take the name too
 use std::io;
 use { "overloads.hpp" } as cpp;
+
+// the long long overloads: where long is 64 bits too they collide with the long ones and are named
+// for their types; on Windows (a 32-bit long) they keep the name, told apart by an i64
+fn which_ll(n: i64) -> i32 {
+    comptime if (@cfg("os", "windows")) {
+        return cpp::ov::which(n);
+    } else {
+        return cpp::ov::which_long_long(n);
+    }
+}
+
+fn f_ll(n: i64) -> i32 {
+    comptime if (@cfg("os", "windows")) {
+        return cpp::ov::f(n);
+    } else {
+        return cpp::ov::f_long_long(n);
+    }
+}
+
+fn f_ll2(n: i64, k: i32) -> i32 {
+    comptime if (@cfg("os", "windows")) {
+        return cpp::ov::f(n, k);
+    } else {
+        return cpp::ov::f_long_long(n, k);
+    }
+}
+
+fn h_ll(x: i64, a: i32, b: i32) -> i32 {
+    comptime if (@cfg("os", "windows")) {
+        return cpp::ov::h(x, a, b);
+    } else {
+        return cpp::ov::h_long_long_int_int(x, a, b);
+    }
+}
+
+fn tally_ll(n: i64) -> cpp::ov::Tally {
+    comptime if (@cfg("os", "windows")) {
+        return cpp::ov::Tally::new(n);
+    } else {
+        return cpp::ov::Tally::new_long_long(n);
+    }
+}
+
+fn add_ll(t: cpp::ov::Tally&, k: i64) -> i32 {
+    comptime if (@cfg("os", "windows")) {
+        return t.add(k);
+    } else {
+        return t.add_long_long(k);
+    }
+}
+
+fn scaled_ll(p: cpp::ov::Point&, k: i64) -> i32 {
+    comptime if (@cfg("os", "windows")) {
+        return p.scaled(k);
+    } else {
+        return p.scaled_long_long(k);
+    }
+}
+
 fn main() -> void {
-    std::println("which {} {}", cpp::ov::which(3), cpp::ov::which_long_long(3));
+    std::println("which {} {}", cpp::ov::which(3), which_ll(3));
     std::println("letter {} {} {}", cpp::ov::letter_char(65), cpp::ov::letter(@cast<i8>(65)), cpp::ov::letter(@cast<u8>(65)));
-    std::println("f {} {} {} {}", cpp::ov::f(4), cpp::ov::f(4, 2), cpp::ov::f_long_long(4), cpp::ov::f_long_long(4, 2));
-    std::println("h {} {} {}", cpp::ov::h(1, 2, 3), cpp::ov::h(1, 2), cpp::ov::h_long_long_int_int(1, 2, 3));
+    std::println("f {} {} {} {}", cpp::ov::f(4), cpp::ov::f(4, 2), f_ll(4), f_ll2(4, 2));
+    std::println("h {} {} {}", cpp::ov::h(1, 2, 3), cpp::ov::h(1, 2), h_ll(1, 2, 3));
     var a = cpp::ov::Tally::new(5);
-    val b = cpp::ov::Tally::new_long_long(5);
+    val b = tally_ll(5);
     std::println("new {} {} {} {}", a.get(), a.name(), b.get(), b.name());
     std::println("get {} {}", a.get(), a.get_const());
-    std::println("add {} {}", a.add(1), a.add_long_long(1));
+    std::println("add {} {}", a.add(1), add_ll(&a, 1));
     var p: cpp::ov::Point = { x: 3 };
-    std::println("scaled {} {}", p.scaled(2), p.scaled_long_long(2));
+    std::println("scaled {} {}", p.scaled(2), scaled_ll(&p, 2));
     std::println("call {} {} peek {} {}", p.op_call(1), p.op_call_const(1), p.peek(), p.peek_nonconst());
     // an && method takes the handle by value: a borrowed one's object is copied, not emptied
     val bx = cpp::ov::Box::new(7);

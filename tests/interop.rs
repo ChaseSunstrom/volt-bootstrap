@@ -146,6 +146,20 @@ fn run(cmd: &mut Command) -> Output {
 }
 
 /// a shared library's file name as the platform names it (libNAME.so, libNAME.dylib, NAME.dll)
+/// rustc's --target on Windows: the MinGW one the C compiler builds for (rustc's default there is
+/// MSVC's, whose linker wants a .lib), as bolt's rust_target picks (llvm-mingw's clang says
+/// x86_64-w64-windows-gnu, MinGW's gcc ...-mingw32); nothing elsewhere
+fn rust_client_target() -> Vec<String> {
+    if !cfg!(windows) {
+        return Vec::new();
+    }
+    let cc = std::env::var("CC").unwrap_or_else(|_| "cc".into());
+    let Ok(o) = Command::new(cc).arg("-dumpmachine").output() else { return Vec::new() };
+    let m = String::from_utf8_lossy(&o.stdout).trim().to_string();
+    let arch = m.split('-').next().unwrap_or("x86_64").to_string();
+    vec!["--target".into(), format!("{arch}-pc-windows-{}", if m.ends_with("mingw32") { "gnu" } else { "gnullvm" })]
+}
+
 fn dylib(name: &str) -> String {
     format!("{}{name}.{}", std::env::consts::DLL_PREFIX, std::env::consts::DLL_EXTENSION)
 }
@@ -195,7 +209,7 @@ fn bindings_round_trip() {
         assert_eq!(ok(with_lib(Command::new(bin("cpp")), &lib_dir).output().unwrap(), "C++ program"), MATHLIB_OUT, "C++ ({backend})");
         // Rust: client.rs next to its mathlib.rs module
         std::fs::copy(Path::new(ROOT).join("tests/interop/client.rs"), e.dir.join("client.rs")).unwrap();
-        ok(run(Command::new("rustc").arg(e.dir.join("client.rs")).args(["--edition", "2021", "-L", &lib_dir, "-l", "mathlib", "-C", &format!("link-arg={rpath}"), "-o"]).arg(bin("rs"))), "rustc client.rs");
+        ok(run(Command::new("rustc").args(rust_client_target()).arg(e.dir.join("client.rs")).args(["--edition", "2021", "-L", &lib_dir, "-l", "mathlib", "-C", &format!("link-arg={rpath}"), "-o"]).arg(bin("rs"))), "rustc client.rs");
         assert_eq!(ok(with_lib(Command::new(bin("rs")), &lib_dir).output().unwrap(), "Rust program"), MATHLIB_OUT, "Rust ({backend})");
         // Python: the module loads the library from $VOLT_MATHLIB_LIB, else next to itself
         let py = run(Command::new("python3").arg("client.py").env("PYTHONPATH", e.path("")).env("VOLT_MATHLIB_LIB", format!("{lib_dir}/{}", dylib("mathlib"))));
@@ -506,7 +520,7 @@ fn bindings_shapes() {
             assert_eq!(ok(o, client), SHAPES_OUT, "{client} ({backend})");
         }
         let bin = e.dir.join(format!("{backend}_rs"));
-        ok(run(Command::new("rustc").arg(e.dir.join("client_shapes.rs")).args(["--edition", "2021", "-L", &lib, "-l", "shapelib", "-C"]).arg(format!("link-arg={}", e.path("leak_report.o"))).args(["-C", &format!("link-arg={rpath}"), "-o"]).arg(&bin)), "rustc client_shapes.rs");
+        ok(run(Command::new("rustc").args(rust_client_target()).arg(e.dir.join("client_shapes.rs")).args(["--edition", "2021", "-L", &lib, "-l", "shapelib", "-C"]).arg(format!("link-arg={}", e.path("leak_report.o"))).args(["-C", &format!("link-arg={rpath}"), "-o"]).arg(&bin)), "rustc client_shapes.rs");
         let o = with_lib(Command::new(&bin), &lib).output().unwrap();
         assert_eq!(String::from_utf8_lossy(&o.stderr).replace("\r\n", "\n"), "volt live: 0\n", "client_shapes.rs ({backend}): the library's allocations at exit");
         assert_eq!(ok(o, "client_shapes.rs"), format!("checked true OVERDRAWN\nlimit true OVERDRAWN\nsign positive not positive\n{SHAPES_OUT}"), "client_shapes.rs ({backend})");
@@ -864,13 +878,7 @@ fn volt_calls_rust_and_python() {
     // Windows: the GNU target $CC links (rustc's host there is MSVC's), with the libraries rustc names
     let mut rustc = Command::new("rustc");
     rustc.args(["--crate-type", "staticlib", "--edition", "2021", "-C", "panic=abort", "rust_lib.rs", "--print", "native-static-libs", "-o"]).arg(e.dir.join("librs.a"));
-    if cfg!(windows) {
-        // (as bolt's rust_target: llvm-mingw's clang says x86_64-w64-windows-gnu, MinGW's gcc ...-mingw32)
-        let m = Command::new(std::env::var("CC").unwrap_or_else(|_| "cc".into())).arg("-dumpmachine").output().unwrap();
-        let m = String::from_utf8_lossy(&m.stdout).trim().to_string();
-        let arch = m.split('-').next().unwrap_or("x86_64");
-        rustc.arg("--target").arg(format!("{arch}-pc-windows-{}", if m.ends_with("mingw32") { "gnu" } else { "gnullvm" }));
-    }
+    rustc.args(rust_client_target());
     let made = run(&mut rustc);
     let libs: Vec<String> = String::from_utf8_lossy(&made.stderr).lines().filter_map(|l| l.split("native-static-libs:").nth(1)).flat_map(|l| l.split_whitespace().map(String::from).collect::<Vec<_>>()).collect();
     ok(made, "rustc --crate-type staticlib");
@@ -2284,9 +2292,12 @@ fn cpp_overloads() {
     }
     let shown = Command::new(&e.voltc).args(["check", "cpp_overloads.volt", "--std"]).arg(Path::new(ROOT).join("std")).current_dir(Path::new(ROOT).join("tests/interop")).env("VOLT_SHOW_CPP", "1").output().unwrap();
     let src = String::from_utf8_lossy(&shown.stderr);
-    assert!(src.contains("// left out: int taken::which(long long) (Volt can't tell it from an overload declared before it)"), "the alias a real declaration took: {src}");
-    assert!(src.contains("// left out: int again::which_long_long(long long) (an alias for an overload Volt can't tell apart has its name)"), "a real declaration in a later block: {src}");
-    assert!(src.contains("// C++: int ov::h(long long x, int a, int b)\n    fn h(x: i64, a: i32) -> i32"), "a form after its alias keeps the C++ comment: {src}");
+    // (where long is 64 bits: on Windows long and long long don't collide)
+    if !cfg!(windows) {
+        assert!(src.contains("// left out: int taken::which(long long) (Volt can't tell it from an overload declared before it)"), "the alias a real declaration took: {src}");
+        assert!(src.contains("// left out: int again::which_long_long(long long) (an alias for an overload Volt can't tell apart has its name)"), "a real declaration in a later block: {src}");
+        assert!(src.contains("// C++: int ov::h(long long x, int a, int b)\n    fn h(x: i64, a: i32) -> i32"), "a form after its alias keeps the C++ comment: {src}");
+    }
     // an && method of a template's instance, worked out per use, consumes the handle too
     let o = e.voltc(&["check", "cpp_overloads_holder.volt"]);
     let err = String::from_utf8_lossy(&o.stderr);

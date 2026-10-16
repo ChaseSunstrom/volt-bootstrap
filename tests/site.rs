@@ -39,7 +39,8 @@ fn docs(base: &Path, dir: &Path, out: &mut Vec<String>) {
         if p.is_dir() {
             docs(base, &p, out);
         } else if p.extension().is_some_and(|x| x == "md") {
-            out.push(p.strip_prefix(base).unwrap().with_extension("").to_string_lossy().into_owned());
+            // (/ between its parts, as the site's paths have them, on Windows too)
+            out.push(p.strip_prefix(base).unwrap().with_extension("").to_string_lossy().replace('\\', "/"));
         }
     }
 }

@@ -14,7 +14,7 @@ const RS_OUT: &str = "cubes 100\nerror COMPILE error: expected an expression, fo
 /// stdout of a command that must succeed
 fn ok(o: Output, what: &str) -> String {
     let out = String::from_utf8_lossy(&o.stdout).to_string();
-    assert!(o.status.success(), "{what} failed\n--- stdout\n{out}\n--- stderr\n{}", String::from_utf8_lossy(&o.stderr));
+    assert!(o.status.success(), "{what} failed ({})\n--- stdout\n{out}\n--- stderr\n{}", o.status, String::from_utf8_lossy(&o.stderr));
     out
 }
 

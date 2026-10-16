@@ -1,4 +1,5 @@
-// Overloads Volt can't tell apart (cpp_overloads.volt): long and long long are both i64, char and
+// Overloads Volt can't tell apart (cpp_overloads.volt): long and long long are both i64 (where long is
+// 64 bits: on Windows they're i32 and i64, and don't collide), char and
 // signed char both i8, a const method's this is a non-const one's. The first declared keeps the
 // name; the rest come through named for their parameter types, called exactly
 #pragma once
