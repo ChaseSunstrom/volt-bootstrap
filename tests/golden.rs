@@ -115,8 +115,6 @@ fn std_linked() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// tests/run/strings_multiline.volt saved with Windows line endings prints the same: a \r\n in a
-/// multi-line string is a \n
 /// std::softfloat's quad routines under compiler-rt's names (what LLVM calls for f128): defined for
 /// arm64 macOS, whose C runtime has none, and nowhere else (they'd clash with libgcc's)
 #[test]
@@ -202,6 +200,8 @@ fn u128_literals_c() {
     assert!(o.status.success() && got.trim_end() == want, "u128_literals in C printed:\n{got}{}", String::from_utf8_lossy(&o.stderr));
 }
 
+/// tests/run/strings_multiline.volt saved with Windows line endings prints the same: a \r\n in a
+/// multi-line string is a \n
 #[test]
 fn multiline_strings_crlf() {
     let src = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/run/strings_multiline.volt")).unwrap();
