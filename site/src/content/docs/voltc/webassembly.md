@@ -60,12 +60,12 @@ memory = instance.exports.memory;
 instance.exports._start();
 ```
 
-`examples/wasm/run.mjs` runs either kind under node. The test suite builds `examples/wasm/hello.volt`
-for both targets, in debug and release builds, and runs it there.
+`examples/wasm/run.mjs` runs either kind under node. The test suite builds `examples/wasm/hello.volt`,
+128-bit integer arithmetic and every `f128` operation (`std::softfloat`'s quad routines: the module
+has no compiler-rt) for both targets, in debug and release builds, and runs them there.
 
 ## Not yet
 
 - WASI's files, arguments, environment and clock: std's `fs`, `process` and `time` are bare metal's
   there, so `std::process::args()` is empty and opening a file fails.
-- `f128` arithmetic: LLVM calls compiler-rt's quad routines for it, which the module doesn't have.
 - Threads, and calling JavaScript functions other than the console and exit from Volt.
