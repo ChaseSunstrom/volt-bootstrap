@@ -157,18 +157,27 @@ fn main() -> !void {
 | `std.mem.Allocator` parameter | none: the shim passes Volt's allocator (the program's `std::mem::default_allocator`, as a `std.mem.Allocator`), so what Zig allocates is Volt's memory (not the C library's `malloc`), and `--leak-check` counts it |
 | `comptime T: type`, `x: anytype` (and `@TypeOf(x)`), `comptime n: usize` | a generic fn: `<T: type>`, `<T_x: type>`, `<n: usize>` |
 | `pub fn Name(comptime T: type) type { return struct { ... }; }` | a generic struct, `Name<T>`, with its fields and methods |
-| a struct whose fields are all numbers, `bool`s, enums or such structs | a Volt struct with those fields, passed by value |
+| a struct whose fields are all numbers, `bool`s, enums or such structs (a `packed struct` too) | a Volt struct with those fields, passed by value; a field of a width Volt lacks (`u3`, `i7`, `u24`) is the next Volt integer up, and a value that doesn't fit stops the program when it's passed to Zig |
 | any other struct, or one with a `deinit` | an owned handle: deleting it calls `deinit` (with the allocator when it takes one) and frees it; `copy` copies it when it has no `deinit` |
+| `union(enum)` | an owned handle (as a struct is), made per variant (`Shape::circle(2.0)`, `Shape::none()`), with `tag()` (a Volt enum of its tags, `Shape_tag`, or the union's own tag enum) and `as_circle()` giving the payload or `null`; deleting it deinits its active payload. A variant whose payload is text, a slice or a pointer has no maker (the union would keep what Volt only lends for the call), and one whose payload has a `deinit` has no `as_` read (it would copy what that frees) |
+| a bare, `extern` or `packed` union | an owned handle made per field (`Bits::i(7)`), with `i()` reading a field and `set_f(1.5)` making `f` the active field; reading one that isn't active is Zig's safety check (it stops the program in a debug or `ReleaseSafe` build). A field whose payload Volt would only lend has no maker or setter, and one whose payload has a `deinit` has none at all (a bare union never knows to free it) |
+| `opaque {}` | a handle Volt borrows: `*T`, `*const T` and `?*T` results give one and `*T` parameters take one, and Volt never frees it (Zig's functions do; using it after that is the same mistake as in C) |
 | an `enum` | a Volt enum with the same values |
+| `pub extern fn` (`extern "c"`, `callconv(.c)`) of numbers and `bool`s | an `extern "C" fn` of the same C symbol, with no shim between: the program links whatever provides it (another imported `.zig` file's `export fn`, a C library) |
+| `pub extern fn` taking or giving pointers to opaque types or `extern struct`s | a `fn`, through the shim |
 | `pub const` of a number, `bool` or string | a `val` |
 
 Generic functions and types get an instance per one a program uses: a call to
 `fm::largest(xs[..])`, `fm::times<3>(7)` or a use of `fm::Stack<u8>` has bolt add that instance and
 zig build it, as with Rust's generics above. One zig rejects is an error at the call,
 with zig's reason (`fm::biggerOf("a", "b")`: operator > not allowed for type '[]const u8'). bolt
-reads `$ZIG` for the compiler, else `zig` on the PATH. A `packed struct`, a union, an opaque type,
-a declaration without a body (an `extern fn`), and a function with a type the table doesn't have
-are left out, listed in a comment of the generated declarations.
+reads `$ZIG` for the compiler, else `zig` on the PATH. An `extern fn` with a calling convention
+other than C's or a type C doesn't have (a slice, an error union), a pointer to a pointer, a slice
+of an opaque type's pointers, and a function with a type the table doesn't have are left out,
+listed with the reason in a comment of the generated declarations (a variadic `extern fn` too).
+`c_long` and `c_ulong` are 64 bits, or 32 on Windows, as C's are; bolt builds the shim for the
+system it runs on. A file with `export fn`s is best imported under one name: two `use` lines naming
+it, both used, are two libraries that each define its C symbols, and the link fails.
 
 ## Volt calls Go
 
