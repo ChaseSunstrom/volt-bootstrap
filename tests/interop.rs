@@ -1998,7 +1998,7 @@ fn cpp_params() {
     // a Volt std::string for a template parameter S (S&, const S&, S) a C++ std::string, a throw
     // through the plain form a stop
     let e = Env::new("cpp-params");
-    let want = "sum 6\nfill 4 4 4\ntotal 12\ntwice 8 24\nfirst 7 8\napply 5 6 10\n@cpp 42\nshout hi!!\ngrow 2: 7 hi!!~++\ngrow -1: INVALID_ARGUMENT hi!!~++\n@cpp hi!!~++!\nrelay INVALID_ARGUMENT hi!!~++!\nshapes 2 7\npoints 202 45\nspend 15\nasked why??\ncounted 3 7 ab+\narrays 7 4 7 9 4\n@cpp 8 5 1\nalias 8 cells 14\nwrap hey! 4 6\ngauge 40 70 hey!\npad 6 hey!##\ntgrow 1: 8 hey!##~+\ntgrow -1: INVALID_ARGUMENT hey!##~+\nwhich 1 2 2 1 ab&& cd\nfwd 6 ab&&&& len 2 6\nnested [[1,2],[3],[]] [[1,2],[3]] [[[1,2],[3],[]],[],[[1,2]]] []\nnested per use [[1,2],[3],[]] 15\nnested [[3],[]] 4.75 hi//you\nmap {1:10,2:20,3:30} {} {4:125,5:50} 140 3 3\nmap {a:1,b:2} {:'',k:'v w'} {1:[],2:[4,5]}\nmap {1:10,2:20,3:30} {1:[],2:[4,5]} 2 2 2\nmap 1 {7:7} 1\npick 2: 20\npick 9: OUT_OF_RANGE\nderef 5 5 3 3 7 7\nsum_ptr 7 size 4 4 8 which 1 2\nchecked 5: 5\nchecked -1: INVALID_ARGUMENT\ntwice 42 tally 4 7 10 10\n";
+    let want = "sum 6\nfill 4 4 4\ntotal 12\ntwice 8 24\nfirst 7 8\napply 5 6 10\n@cpp 42\nshout hi!!\ngrow 2: 7 hi!!~++\ngrow -1: INVALID_ARGUMENT hi!!~++\n@cpp hi!!~++!\nrelay INVALID_ARGUMENT hi!!~++!\nshapes 2 7\npoints 202 45\nspend 15\nasked why??\ncounted 3 7 ab+\narrays 7 4 7 9 4\n@cpp 8 5 1\nalias 8 cells 14\nwrap hey! 4 6\ngauge 40 70 hey!\npad 6 hey!##\ntgrow 1: 8 hey!##~+\ntgrow -1: INVALID_ARGUMENT hey!##~+\nwhich 1 2 2 1 2 ab&& cd\nfwd 6 ab&&&& len 2 6\nnested [[1,2],[3],[]] [[1,2],[3]] [[[1,2],[3],[]],[],[[1,2]]] []\nnested per use [[1,2],[3],[]] 15\nnested [[3],[]] 4.75 hi//you\nmap {1:10,2:20,3:30} {} {4:125,5:50} 140 3 3\nmap {a:1,b:2} {:'',k:'v w'} {1:[],2:[4,5]}\nmap {1:10,2:20,3:30} {1:[],2:[4,5]} 2 2 2\nmap 1 {7:7} 1\npick 2: 20\npick 9: OUT_OF_RANGE\nderef 5 5 3 3 7 7\nsum_ptr 7 size 4 4 8 which 1 2\nchecked 5: 5\nchecked -1: INVALID_ARGUMENT\ntwice 42 tally 4 7 10 10\n";
     for backend in ["c", "llvm"] {
         assert_eq!(ok(e.voltc(&["run", "cpp_params.volt", "--backend", backend]), "voltc run cpp_params.volt"), want, "C++ parameters ({backend})");
         let o = e.voltc(&["run", "cpp_params_gthrow.volt", "--backend", backend]);
@@ -2146,6 +2146,12 @@ fn cpp_params_refused() {
         assert!(err.contains(line), "{line}: {err}");
     }
     assert_eq!(err.matches(why).count(), 3, "S nested or the result: {err}");
+    // C++ writing into a val or a temporary for an S&-only template, through its Volt generic and
+    // in @cpp: an error each call
+    let err = check("cpp_params_gval.volt");
+    assert!(err.contains("'k' is a val, and wrap changes it (through s): declare it with var") && err.contains("cpp_params_gval.volt:7"), "a val through the generic: {err}");
+    assert!(err.contains("'k' is a val, and C++ would change it: declare it with var") && err.contains("cpp_params_gval.volt:8"), "a val in @cpp: {err}");
+    assert!(err.contains("C++ would change a temporary std::string here (the template takes it as S&)") && err.contains("cpp_params_gval.volt:12"), "a temporary in @cpp: {err}");
     // a parameter with no Volt form: a per-use stub whose comment shows the C++ declaration and
     // names the type; a call with a slice names it too
     assert!(src.contains("// C++: int pr::nv::flags(const std::vector<std::vector<bool>> & v) (worked out per use: const std::vector<std::vector<bool>> & has no Volt form)") && src.contains("fn flags() -> void {}"), "the stub says why: {src}");

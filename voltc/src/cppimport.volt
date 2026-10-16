@@ -7727,6 +7727,7 @@ attach fn cpp_text_template(this: checker&, r: u32, gargs: std::vec<garg>&, args
     var xpre: std::vec<tval?> = {};
     var places = false;
     var texts = false;
+    var fixed: std::vec<tval> = {}; // each string Volt can't change: where it is (text_written)
     var es: std::vec<expr> = {};
     for (i) in 1..args.len {
         val e = try this.garg_value(args.at(i));
@@ -7737,6 +7738,7 @@ attach fn cpp_text_template(this: checker&, r: u32, gargs: std::vec<garg>&, args
             var st = v.ty;
             var c = v.c;
             var ro = v.ro;
+            var via = v.via;
             var refs = true;
             while (refs) {
                 refs = false;
@@ -7745,6 +7747,7 @@ attach fn cpp_text_template(this: checker&, r: u32, gargs: std::vec<garg>&, args
                         if (this.t.ref_inner(x) != null) {
                             c = this.ir.deref(c, x);
                             ro = ro >> 1;
+                            via = deeper(via, 1);
                         }
                         st = x;
                         refs = true;
@@ -7756,6 +7759,7 @@ attach fn cpp_text_template(this: checker&, r: u32, gargs: std::vec<garg>&, args
             if (v.ty == st) {
                 c = this.ir.addr(v.c, this.t.ref_to(st));
                 place = v.lv && v.mutable;
+                via = v.pvia;
             }
             val hf = (try this.hook(st, "as_str")) ?? return fails(span, "Volt's std::string has no as_str");
             this.use_fn(hf);
@@ -7775,6 +7779,10 @@ attach fn cpp_text_template(this: checker&, r: u32, gargs: std::vec<garg>&, args
                 put(&xpre, vnew(rt, c));
             } else {
                 texts = true;
+                var w = vnew(rt, c);
+                w.via = via;
+                w.root = v.root;
+                put(&fixed, w);
                 put(&xtys, STR);
                 put(&xpre, vnew(STR, this.call_fn(this.fi(hf).ir, nodes(c), STR)));
             }
@@ -7806,7 +7814,7 @@ attach fn cpp_text_template(this: checker&, r: u32, gargs: std::vec<garg>&, args
     var cands: std::vec<u32> = {};
     // a place Volt may change probed first as an lvalue, as C++ reads f(s): of S& and const S& it
     // runs S&, and a forwarding S&& deduces S&; then every string as text (const S&, S), then every
-    // one as a reference (S&: a val's copy is written back too)
+    // one as a reference (S&), which C++ would refuse for one that can't change (text_written)
     // ponytail: each failed probe is another clang parse, and with another reference argument each
     // is probed with it as an address too (cpp_instance_addr): up to six each time a failing call
     // is checked; cache failed probes if that gets slow
@@ -7817,6 +7825,7 @@ attach fn cpp_text_template(this: checker&, r: u32, gargs: std::vec<garg>&, args
                     return e;
                 }
                 put(&cands, this.cpp_instance(k, text.as_str(), &mtys, false, value, span) catch |e3| { return e; });
+                try this.text_written(&fixed, span);
                 return this.pick_call("@cpp", &cands, null, null, &none, &mpre, &es, null, span);
             };
             put(&cands, made);
@@ -7827,10 +7836,38 @@ attach fn cpp_text_template(this: checker&, r: u32, gargs: std::vec<garg>&, args
     }
     val made = this.cpp_instance(k, text.as_str(), &ctys, false, value, span) catch |e| {
         put(&cands, try this.cpp_instance(k, text.as_str(), &mtys, false, value, span));
+        try this.text_written(&fixed, span);
         return this.pick_call("@cpp", &cands, null, null, &none, &mpre, &es, null, span);
     };
     put(&cands, made);
     return this.pick_call("@cpp", &cands, null, null, &none, &cpre, &es, null, span);
+}
+
+// C++ takes the strings Volt can't change (fixed) as S& too: one a parameter reaches is a write
+// through that parameter, which the caller's lend check refuses for a val (a C++ template's Volt
+// generic called with one: ro_text_inst); a local val's or a temporary's is an error, as C++ would
+// refuse binding S& to it
+// ponytail: each such string counts as written, though C++ may take only one of several as S&
+attach fn text_written(this: checker&, fixed: std::vec<tval>&, span: span) -> compile_error!void {
+    for (w&) in fixed.items() {
+        val wv = w.via;
+        if (wv) {
+            val b = this.via_body(wv.k);
+            if (b != null && wv.off >= 0 && wv.off < 64) {
+                this.mark(b ?? 0, via_param(wv.k), @cast<u64>(1) << @cast<u32>(wv.off));
+                continue;
+            }
+        }
+        val root = w.root ?? return fails(span, "C++ would change a temporary std::string here (the template takes it as S&): make it a var first");
+        var what = "a val";
+        val l = this.lookup_local(root);
+        if (l) {
+            if (l.param) {
+                what = "a parameter without var";
+            }
+        }
+        return this.var_fix(fail(span, fmt2("'{}' is {}, and C++ would change it: declare it with var", S(root), S(what))), root, span);
+    }
 }
 
 fn hole_index(s: str) -> usize? {

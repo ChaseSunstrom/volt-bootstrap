@@ -336,6 +336,9 @@ attach fn gen_fn(this: checker&, idx: u32) -> compile_error!void {
             k += 1;
         }
         var l: local = { c: c, ty: p.ty, mutable: p.mutable, root: p.name, param: true, own: c };
+        if (i < 64 && ((inst.ro_texts >> @cast<u32>(i)) & 1) != 0) {
+            l.ro = 1; // a std::string a val lent (ro_text_inst)
+        }
         // var this takes the receiver by value (it consumes it): that's what its var is for
         if (p.mutable && p.name != "this") {
             put(&this.cx.var_params, { c: c, name: p.name });

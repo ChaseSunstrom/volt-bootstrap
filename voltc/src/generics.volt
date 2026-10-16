@@ -1500,8 +1500,14 @@ attach fn pick_call(this: checker&, name: str, cands: std::vec<u32>&, rp: tval*,
 
 // Emit a call of fn instance inst: adjust the receiver, convert the arguments (a pack's become one
 // tuple, C varargs are promoted), and fill in defaults, checked in the callee's env. A temporary
-// made to pass a receiver by reference is deleted after the call.
-attach fn emit_call(this: checker&, inst: u32, a: adj, rv: tval?, pre: std::vec<tval?>&, args: std::vec<expr>&, span: span) -> compile_error!tval {
+// made to pass a receiver by reference is deleted after the call. A C++ template's Volt generic
+// lent a val's std::string calls the instance made for that (ro_text_inst).
+attach fn emit_call(this: checker&, made: u32, a: adj, rv: tval?, pre: std::vec<tval?>&, args: std::vec<expr>&, span: span) -> compile_error!tval {
+    var off: usize = 0;
+    if (rv != null) {
+        off = 1;
+    }
+    val inst = this.ro_text_inst(made, off, pre);
     if (this.expand_span != null && same_span(this.expand_span ?? span, span)) {
         this.last_call = inst;
     }
