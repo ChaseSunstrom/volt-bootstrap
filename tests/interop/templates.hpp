@@ -41,4 +41,29 @@ struct Conv {
     int all(A... a) const { return (int(a) + ... + 0) * k; }
 };
 
+// class templates with a value parameter: Volt generics with one (<T: type, N: i32>), laid out when
+// Volt can (fixed: T data[N]) and held by handle otherwise (counter's private state)
+template <class T, int N> struct fixed {
+    T data[N];
+    T sum() const {
+        T s = 0;
+        for (int i = 0; i < N; i++) s += data[i];
+        return s;
+    }
+    void add(int k) {
+        for (int i = 0; i < N; i++) data[i] += k;
+    }
+    void add(double k) {
+        for (int i = 0; i < N; i++) data[i] += (T)k;
+    }
+};
+template <int N> class counter {
+    int n_ = 0;
+  public:
+    int bump() {
+        n_ += N;
+        return n_;
+    }
+};
+
 } // namespace tpl
