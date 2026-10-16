@@ -146,10 +146,30 @@ template <class T> class Keep {
     explicit Keep(T v) : v_(v) {
         if (v < 0) throw std::domain_error("negative keep");
     }
+    Keep(std::string &s, T v) : v_(v) {
+        s += "~";
+        if (v < 0) throw std::domain_error("negative keep");
+    }
     T take(int k) const {
         if (k < 0) throw std::out_of_range("no take");
         return v_ + k;
     }
+    T grow(std::string &s, int k) const {
+        s += "~";
+        if (k < 0) throw std::out_of_range("no grow");
+        s.append(k, '+');
+        return v_ + k;
+    }
 };
+// one name declared (pick(int)) and worked out per use (the template): try_pick catches either
+inline int pick(int x) {
+    if (x < 0) throw std::invalid_argument("negative pick");
+    return x;
+}
+template <class... A> int pick(A... a) {
+    int s = (0 + ... + a);
+    if (s < 0) throw std::range_error("negative picks");
+    return s;
+}
 }
 }

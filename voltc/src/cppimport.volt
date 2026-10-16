@@ -2335,10 +2335,11 @@ attach fn cpp_handle_method(this: checker&, sid: u32, r: tval, name: str, gargs:
     val k = this.cpp_ctx_of(this.decls.at(@cast<usize>(this.si(sid).decl)).ns) ?? return fails(span, "this C++ class's import is gone");
     val callee = fmt(".{}", S(name));
     val v = this.cpp_use_call(k, this.intern(copy callee), false, false, name, r, gargs, args, want, span) catch |e| {
-        // x.try_m(...): m's call in catch mode, when the class has no try_m of its own
+        // x.try_m(...): m's call in catch mode, when the class has no try_m of its own (an error is
+        // m's: why C++ can't make its call)
         if (starts_with(name, "try_")) {
             return this.cpp_use_call(k, this.intern(fmt(".{}", S(name[4..name.len]))), false, true, name, r, gargs, args, want, span) catch |e2| {
-                return this.cpp_member_error(e, sid, name);
+                return this.cpp_member_error(e2, sid, name[4..name.len]);
             };
         }
         return this.cpp_member_error(e, sid, name);
@@ -2362,7 +2363,7 @@ attach fn cpp_handle_static(this: checker&, sid: u32, name: str, gargs: std::vec
                 plain = S(q);
             }
             return this.cpp_use_call(k, this.intern(move plain), false, true, name, null, gargs, args, want, span) catch |e2| {
-                return this.cpp_member_error(e, sid, name);
+                return this.cpp_member_error(e2, sid, name[4..name.len]);
             };
         }
         return this.cpp_member_error(e, sid, name);
@@ -7056,13 +7057,13 @@ attach fn cpp_caught_call(this: checker&, ns: u32, pre: std::vec<u32>, v: tval, 
 }
 
 // @cpp<R, ...>(...) with R its result type; catching: its arguments are bound first, the statements
-// in pre, and the call reads them, so they're worked out before catch mode is on (ponytail: not for
-// a Volt std::string template argument's call, whose arguments pick_call reads in catch mode)
+// in pre, and the call reads them, so they're worked out before catch mode is on (an early exit or
+// a throw in one is outside it)
 attach fn cpp_call_as(this: checker&, r: u32, gargs: std::vec<garg>&, args: std::vec<garg>&, catching: bool, pre: std::vec<u32>&, span: span) -> compile_error!tval {
     var types: std::vec<std::string> = {};
     for (i) in 1..gargs.len {
         if (this.text_in(try this.garg_type(gargs.at(i)))) {
-            return this.cpp_text_template(r, gargs, args, span);
+            return this.cpp_text_template(r, gargs, args, catching, pre, span);
         }
     }
     for (i) in 1..gargs.len {
@@ -7360,8 +7361,9 @@ attach fn text_in(this: checker&, t: u32) -> bool {
 // or const S&: {tN} is std::string, and the call is worked out as one made per use (cpp_instance),
 // so the string crosses as a std::string parameter does: made from its text when clang takes it as
 // const std::string& (const S&, S by value), else a copy written back once the call returns (S&).
-// A std::string nested in a type argument, an argument's type or the result is an error
-attach fn cpp_text_template(this: checker&, r: u32, gargs: std::vec<garg>&, args: std::vec<garg>&, span: span) -> compile_error!tval {
+// A std::string nested in a type argument, an argument's type or the result is an error. catching:
+// each argument bound first, in pre (cpp_call_as)
+attach fn cpp_text_template(this: checker&, r: u32, gargs: std::vec<garg>&, args: std::vec<garg>&, catching: bool, pre: std::vec<u32>&, span: span) -> compile_error!tval {
     if (this.text_in(r)) {
         return fails(span, TEXT_NESTED);
     }
@@ -7423,6 +7425,11 @@ attach fn cpp_text_template(this: checker&, r: u32, gargs: std::vec<garg>&, args
             val hf = (try this.hook(st, "as_str")) ?? return fails(span, "Volt's std::string has no as_str");
             this.use_fn(hf);
             val rt = this.t.ref_to(st);
+            if (catching) {
+                val held = this.tmp_local("cpp_a", rt);
+                put(pre, this.ir.decl(held.id, c));
+                c = held.c;
+            }
             put(&mtys, rt);
             put(&mpre, vnew(rt, c));
             put(&ctys, STR);
@@ -7434,8 +7441,14 @@ attach fn cpp_text_template(this: checker&, r: u32, gargs: std::vec<garg>&, args
         }
         put(&mtys, v.ty);
         put(&ctys, v.ty);
-        put(&mpre, v);
-        put(&cpre, v);
+        var held_v = v;
+        if (catching) {
+            val held = this.tmp_local("cpp_a", v.ty);
+            put(pre, this.ir.decl(held.id, v.c));
+            held_v = retyped(&v, v.ty, held.c);
+        }
+        put(&mpre, held_v);
+        put(&cpre, held_v);
     }
     val k = this.cpp_ctx_of(this.env_at(this.cx.env).ns) ?? 0;
     var value = true;

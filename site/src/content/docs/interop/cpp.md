@@ -362,8 +362,8 @@ that's what `ns::try_f` calls (the generated source says so in a comment). `@cpp
 is the import's error union catches too, mapped the same way:
 `@cpp<cpp::cpp_error!i32>("ns::parse({0})", n)` gives the error or the value, and
 `@cpp<cpp::cpp_error!void>(...)` an error or nothing. Its arguments are worked out before catch mode
-starts (except for a template taking a Volt `std::string`, whose arguments are worked out inside
-it), and a `std::string&` argument is left as it was when the call throws.
+starts, so a C++ call in one that throws stops the program as it would anywhere else, and a
+`std::string&` argument is left as it was when the call throws.
 
 ## Subclassing a C++ class in Volt
 

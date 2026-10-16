@@ -30,13 +30,23 @@ fn main() -> void {
         std::println("boom 2: {}", e);
     };
     std::println("twin {} {}", cpp::pr::pu::twin(2, 3), cpp::pr::pu::try_twin(5));
-    // a class held by handle, its members worked out per use
+    // one name both declared and worked out per use: try_pick catches either
+    picked(-1);
+    picked(4);
+    picked2(1, -5);
+    picked2(1, 2);
+    // a class held by handle, its members worked out per use (a std::string& left as it was)
     kept(3);
     kept(-2);
-    val held = cpp::pr::pu::Keep<i32>::try_new(4) catch |e| {
+    var w = std::string::from("ab");
+    made(&w, 1);
+    made(&w, -1);
+    var held = cpp::pr::pu::Keep<i32>::try_new(4) catch |e| {
         std::println("keep 4: {}", e);
         return;
     };
+    grown(&held, &w, 2);
+    grown(&held, &w, -1);
     val got = held.try_take(-1) catch |e| {
         std::println("take -1: {} {}", e, held.take(1));
         return;
@@ -49,4 +59,32 @@ fn kept(x: i32) -> void {
         return;
     };
     std::println("keep {}: {}", x, k.take(0));
+}
+fn made(t: std::string&, v: i32) -> void {
+    val k = cpp::pr::pu::Keep<i32>::try_new(t, v) catch |e| {
+        std::println("made {}: {} {}", v, e, t.as_str());
+        return;
+    };
+    std::println("made {}: {} {}", v, k.take(0), t.as_str());
+}
+fn grown(k: cpp::pr::pu::Keep<i32>&, t: std::string&, n: i32) -> void {
+    val g = k.try_grow(t, n) catch |e| {
+        std::println("grow {}: {} {}", n, e, t.as_str());
+        return;
+    };
+    std::println("grow {}: {} {}", n, g, t.as_str());
+}
+fn picked(a: i32) -> void {
+    val n = cpp::pr::pu::try_pick(a) catch |e| {
+        std::println("pick {}: {} {}", a, e, cpp::last_exception());
+        return;
+    };
+    std::println("pick {}: {}", a, n);
+}
+fn picked2(a: i32, b: i32) -> void {
+    val n = cpp::pr::pu::try_pick(a, b) catch |e| {
+        std::println("pick {} {}: {} {}", a, b, e, cpp::last_exception());
+        return;
+    };
+    std::println("pick {} {}: {}", a, b, n);
 }

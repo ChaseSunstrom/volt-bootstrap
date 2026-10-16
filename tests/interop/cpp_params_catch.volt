@@ -24,7 +24,16 @@ fn grown(t: std::string&, k: i32) -> void {
     };
     std::println("grow {}: {} {}", k, n, t.as_str());
 }
+// an argument with a side of its own: worked out once, before catch mode
+fn bump() -> i32 {
+    std::println("bump");
+    return -2;
+}
 fn main() -> void {
+    show("bumped", @cpp<cpp::cpp_error!i32>("pr::pu::nonneg({0})", bump()));
+    var b = std::string::from("b");
+    show("tbumped", @cpp<cpp::cpp_error!i32, std::string>("pr::gs::grow<{t0}>({0}, {1})", &b, bump()));
+    std::println("b {}", b);
     show("nonneg 4", @cpp<cpp::cpp_error!i32>("pr::pu::nonneg({0})", 4));
     show("nonneg -4", @cpp<cpp::cpp_error!i32>("pr::pu::nonneg({0})", -4));
     shown("boom 1", @cpp<cpp::cpp_error!void>("pr::pu::boom({0})", 1));
