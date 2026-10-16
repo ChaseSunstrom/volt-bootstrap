@@ -1442,10 +1442,11 @@ fn cval_eq(a: cval&, b: cval&) -> bool {
         .FLOAT(x, t, qx) => {
             match (*b) {
                 .FLOAT(y, u, qy) => {
+                    // an f128 by its binary128, an untyped one by both readings
                     if (t == F128) {
                         return u == F128 && std::softfloat::cmp128(qx, qy) == 0;
                     }
-                    return x == y && t == u;
+                    return x == y && t == u && (t != VOID || std::softfloat::cmp128(qx, qy) == 0);
                 },
                 default => { return false; },
             }
@@ -1551,6 +1552,9 @@ attach fn ct_convert(this: checker&, v: cval, to: u32, unchecked: bool, span: sp
                 .FLOAT(b) => { return ct_float(x, to, q); },
                 .INT(k) => {
                     if (unchecked && from == F128) {
+                        if (!k.signed()) {
+                            return cval::INT(@cast<i128>(std::softfloat::f128_to_unsigned(q, 128)), to);
+                        }
                         return cval::INT(std::softfloat::f128_to_signed(q, 128), to);
                     }
                     if (unchecked) {

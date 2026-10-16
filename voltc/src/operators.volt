@@ -1016,7 +1016,15 @@ attach fn store(this: checker&, l: tval, r: tval, span: span) -> compile_error!t
 // `x as T`: lossless numeric conversions, int to float, bool or a plain enum to int, and the
 // implicit conversions; anything that could lose data needs @cast
 attach fn cast(this: checker&, x: expr&, to: u32, span: span) -> compile_error!tval {
-    val v = try this.expr(x, to);
+    var v = try this.expr(x, to);
+    // a literal made an f64 (or narrower) by `as` is that value from here on: an f128 reads it widened,
+    // not the literal's own binary128 (T-0477)
+    if (to != F128 && this.t.is_float(to)) {
+        match (v.lit ?? lit::INT(0)) {
+            .FLOAT(f, q) => { v.lit = lit::FLOAT(f, std::softfloat::f64_to_f128(@bitcast<u64>(f))); },
+            default => {},
+        }
+    }
     if (v.ty == to) {
         return v;
     }
