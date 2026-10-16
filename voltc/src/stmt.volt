@@ -1185,9 +1185,6 @@ attach fn for_inner(this: checker&, f: for_loop&, want: u32?, span: span) -> com
         val v = try vr;
         try ke;
         iterates = v.loan;
-        if (v.own != null && v.c == (v.own ?? 0) && !this.is_view(v.ty)) {
-            iterates = { root: v.own ?? 0, path: "", name: this.local_at(v.own ?? 0) };
-        }
         if (!v.lv && (try this.needs_drop(v.ty))) {
             return fails(f.iter.span, "store this in a variable before looping over it (its elements own memory)");
         }
@@ -1284,6 +1281,12 @@ attach fn for_inner(this: checker&, f: for_loop&, want: u32?, span: span) -> com
                     // a C++ range: the loop goes over an iterator started from it (volt_range)
                     val sh = (try this.hook(t, "volt_range")) ?? return fails(f.iter.span, "the C++ range's iterator wasn't declared");
                     this.use_fn(sh);
+                    if (iterates == null && !through_ref) {
+                        // over the storage of the container it names (`for (y) in this.v`, a local
+                        // or a field chain); over an array or an iterator, the loop reads through
+                        // the place each round, so a new value there is what it goes on over
+                        iterates = this.place_at_of(&f.iter);
+                    }
                     var ra = v.c;
                     if (!through_ref) {
                         ra = this.ir.addr(v.c, this.t.ref_to(t));

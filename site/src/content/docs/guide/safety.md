@@ -102,7 +102,10 @@ change. Volt has no lifetimes to write and no borrow errors; it looks at each fu
   ```
 
   A read on any path after the change warns, a loop's next pass included. Changing a container
-  inside a `for` loop over its items warns at the change: the loop goes on over the old items.
+  inside a `for` loop over its items (`for (y) in xs.items()`, `this.a.b.items()`, or straight
+  over a C++ container, `for (y) in this.v`) warns at the change, a new value for it or for a
+  container it's a field of (`this.a = ...`) included: the loop goes on over the old items. A
+  loop over a copy, a range or an array (read through its place each round) doesn't.
   The container may be a local, a parameter or a field of one (`this.items.items()`): a change to
   `this.items`, or to `this` as a whole, reaches the views into it, and one to `this.b` leaves a
   view of `this.a` alone. Giving the container a new value (`xs = ys`, `this.items = ...`,
