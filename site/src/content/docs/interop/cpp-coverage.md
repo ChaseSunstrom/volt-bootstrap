@@ -18,12 +18,12 @@ doesn't map, with the way around each.
 | overloads Volt can't tell apart (`long` / `long long`, `char` / `signed char`, `get()` / `get() const`) | the first declared by its name, the others named for their parameter types (`which_long_long`, `get_const`) |
 | function templates (type parameters; the defaulted ones C++ fills in) | generic functions |
 | a trivially copyable class | a struct with C++'s layout |
-| any other class | a handle to the object C++ allocates |
+| any other class (an over-aligned one too, under C++17 or newer) | a handle to the object C++ allocates |
 | class templates Volt can lay out (public fields, no bases) | generic structs |
-| other class templates (private fields, bases or virtual methods) | generic handles (`ns::box<i32>`), made by `{}` or `T::new(...)`, their members worked out per use |
+| other class templates (private fields, bases, virtual methods, or a field of a type with no Volt form such as `std::mutex`) | generic handles (`ns::box<i32>`), made by `{}` or `T::new(...)`, their public fields getters and `set_` methods, their other members worked out per use |
 | an instance of a class template that takes a number or a template (glm's `vec<3, float>`, `basic_json<>`); a lambda's own type; a coroutine-style task; and the `using` alias naming one | a handle to the object (`{}` makes one with its default constructor), its members worked out per use: methods, static functions, `T::new(...)`, operators by their Volt names (`op_call` is `()`) |
 | a class or enum inside a class | `Outer_Inner` |
-| constructors, destructors, copy constructors | `T::new(...)`, the `delete` and `copy` hooks |
+| constructors, destructors, copy constructors | `T::new(...)`, the `delete` and `copy` hooks; a class whose destructor isn't public has none, its objects borrowed from a factory and freed by the class's own `destroy` |
 | methods, static methods, method templates, operators | methods, `T::f(...)`, generic methods, `op_add`, `to_T()`, `assign(v)` |
 | public fields (bit-fields too), static data members | fields, in a class held by value; getters and `set_` methods for bit-fields, static members and a handle's fields (a `std::function` field's takes a closure and keeps it) |
 | namespace variables, constants clang can't work out | `name()`: a reference into a variable (or a copy and `set_name(v)`), a constant read through a wrapper |

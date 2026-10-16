@@ -2222,6 +2222,24 @@ fn cpp_handles_are_never_empty() {
     assert!(!o.status.success() && err.contains("C++'s h::only can't be made from nothing") && err.contains("cpp_handle_no_default.volt:5"), "{{}} of a class with no default constructor: {err}");
 }
 
+#[test]
+fn cpp_leftout() {
+    // classes once left out: an over-aligned one held by handle (C++'s aligned new and delete), a
+    // class template with a std::mutex field as a generic handle, a class with a protected
+    // destructor used through its factory's borrowed handle and freed by its own destroy
+    let e = Env::new("cpp-leftout");
+    for backend in ["c", "llvm"] {
+        assert_eq!(ok(e.voltc(&["run", "cpp_leftout.volt", "--backend", backend]), "voltc run cpp_leftout.volt"), "vec8 36 7 true true\nempty 28\nguarded 42 41\nsession 42 21\ndeleted 1\n", "left-out C++ classes ({backend})");
+    }
+    let shown = Command::new(&e.voltc).args(["check", "cpp_leftout.volt", "--std"]).arg(Path::new(ROOT).join("std")).current_dir(Path::new(ROOT).join("tests/interop")).env("VOLT_SHOW_CPP", "1").output().unwrap();
+    let src = String::from_utf8_lossy(&shown.stderr);
+    assert!(src.contains("@cpp_handle(\"lo::vec8\")") && src.contains("@cpp_handle(\"lo::guarded\")") && !src.contains("a field's type isn't one Volt can use") && !src.contains("attach fn delete(this: session&"), "vec8 and guarded handles (no partial struct), session never deleted by Volt: {src}");
+    // below C++17 there's no aligned new: left out, saying so
+    let shown = Command::new(&e.voltc).args(["check", "cpp_leftout14.volt", "--std"]).arg(Path::new(ROOT).join("std")).current_dir(Path::new(ROOT).join("tests/interop")).env("VOLT_SHOW_CPP", "1").output().unwrap();
+    let err = String::from_utf8_lossy(&shown.stderr);
+    assert!(!shown.status.success() && err.contains("left out: class lo::vec8") && err.contains("needs C++17"), "an over-aligned class under C++14: {err}");
+}
+
 /// is a C++ library's header on the usual include paths?
 fn installed(header: &str) -> bool {
     ["/usr/include", "/usr/local/include", "/opt/homebrew/include"].iter().any(|d| Path::new(d).join(header).is_file())
