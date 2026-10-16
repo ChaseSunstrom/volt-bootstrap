@@ -19,9 +19,9 @@ doesn't map, with the way around each.
 | function templates (type parameters; the defaulted ones C++ fills in) | generic functions |
 | a trivially copyable class | a struct with C++'s layout |
 | any other class | a handle to the object C++ allocates |
-| class templates Volt can lay out (public fields, no bases) | generic structs |
-| other class templates (private fields, bases or virtual methods) | generic handles (`ns::box<i32>`), made by `{}` or `T::new(...)`, their members worked out per use |
-| an instance of a class template that takes a number or a template (glm's `vec<3, float>`, `basic_json<>`); a lambda's own type; a coroutine-style task; and the `using` alias naming one | a handle to the object (`{}` makes one with its default constructor), its members worked out per use: methods, static functions, `T::new(...)`, operators by their Volt names (`op_call` is `()`) |
+| class templates Volt can lay out (public fields, no bases), their number parameters too (`fixed<class T, int N>`) | generic structs (`fixed<T, N: i32>`, its `T data[N]` a `T[N]`) |
+| other class templates (private fields, bases or virtual methods; one only declared, its partial specializations the definitions, like glm's `vec`) | generic handles (`ns::box<i32>`, `glm::vec<3, f32>`), made by `{}` or `T::new(...)`, their members worked out per use |
+| an instance of a class template that takes a template (`basic_json<>`), or a number when a function's signature names it (glm's `vec<3, float>`); a lambda's own type; a coroutine-style task; and the `using` alias naming one | a handle to the object (`{}` makes one with its default constructor), its members worked out per use: methods, static functions, `T::new(...)`, operators by their Volt names (`op_call` is `()`) |
 | a class or enum inside a class | `Outer_Inner` |
 | constructors, destructors, copy constructors | `T::new(...)`, the `delete` and `copy` hooks |
 | methods, static methods, method templates, operators | methods, `T::f(...)`, generic methods, `op_add`, `to_T()`, `assign(v)` |
@@ -59,7 +59,8 @@ The interop tests import these and run what maps, on both backends:
   names, looped over with `for`; `optional`, `pair`, `tuple`, `array`, `span`, `string_view` and
   `variant` in a header's signatures, both ways; a C++20 view (`iota | transform`) looped over.
 - **glm** (`glm/glm.hpp`): its generic functions over numbers (`glm::abs`, `glm::min`,
-  `glm::clamp`).
+  `glm::clamp`), and its vectors by their template (`glm::vec<3, f32>::new(1.0, 2.0, 2.0)`,
+  `glm::length(&v)`).
 - **A framework sample** with pure virtual interfaces, an event bus calling its listeners by
   priority and a plugin registry: the listeners and plugins are Volt types, made with `derive`.
 
@@ -73,7 +74,7 @@ comment in the generated source (`VOLT_SHOW_CPP=1` prints it), and the rest stil
 
 | C++ | Why | The way around it |
 | --- | --- | --- |
-| class templates with non-type or template template parameters (glm's `vec<3, float>`), as generics | Volt's generic structs take types (functions with them are [called per use](/volt-bootstrap/interop/cpp/#calls-worked-out-per-use)) | an instance: the header's alias for one (`using vec3 = vec<3, float>;`), or one a function gives back, is a handle, made by `{}` or `vec3::new(...)`, its members worked out per use |
+| class templates with template template parameters (`basic_json`'s), or with a number parameter of a type other than an integer or `bool` (an enum, a pointer), as generics | Volt's generic structs take types and integer or `bool` values, not templates (functions with them are [called per use](/volt-bootstrap/interop/cpp/#calls-worked-out-per-use)) | an instance: the header's alias for one (`using json = basic_json<>;`), or one a function gives back, is a handle, made by `{}` or `json::new(...)`, its members worked out per use |
 | a parameter of a function pointer whose signature has a class, enum or reference (`int (*)(const Shape &)`), or of a `std::function` with a non-const reference in its signature or a class held by handle as its result | Volt has no form for it (a function pointer over numbers and pointers is an `extern "C" fn`; a `std::function` over classes takes a closure) | `@cpp`'s `{&i}` passes a Volt function by its symbol: `@cpp<i32>("ns::apply({&0}, {1})", inc, 4)` |
 
 Explicit specializations (`template <> struct S<void>`) and what a library adds to namespace `std`

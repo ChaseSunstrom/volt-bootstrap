@@ -1,5 +1,5 @@
-// glm, as installed: its generic functions over plain numbers, and its vectors (vec<3, float>: a
-// length as a template value), held by handle
+// glm, as installed: its generic functions over plain numbers, and its vectors by their template
+// (vec<L, T, Q>, declared only: a generic handle <L: i32, T>, Q left to C++'s default)
 use std::io;
 use { "glm/glm.hpp" } as cpp;
 

@@ -418,6 +418,19 @@ attach fn vtype(this: cpp_gen&, t: clang::CXType, tparams: std::vec<str>&) -> st
     if (k == clang::CXType_Record) {
         return this.record(t, tparams);
     }
+    if (k == clang::CXType_DependentSizedArray) {
+        // a class template's T data[N], N its value parameter: T[N] (libclang has no size
+        // expression, so it's the spelling's)
+        val et = this.vtype(clang::clang_getArrayElementType(t), tparams) ?? return null;
+        val open = sp.as_str().rfind("[") ?? return null;
+        val size = sp.as_str()[open + 1..sp.len() - 1].trim();
+        for (p&) in tparams.items() {
+            if (size == *p) {
+                return fmt2("{}[{}]", move et, S(size));
+            }
+        }
+        return null;
+    }
     if (k == clang::CXType_Enum) {
         val q = cpp_qual(clang::clang_getTypeDeclaration(ct));
         val e = this.enums.get(q.as_str()) ?? return null;
@@ -479,7 +492,7 @@ attach fn record_form(this: cpp_gen&, t: clang::CXType, tparams: std::vec<str>&)
     // (tcur is this parse's: cursors may hold an earlier one's)
     var count = @cast<u32>(n);
     if (this.cursors.get(tq.as_str()) != null) {
-        val tps = template_params(defaults_decl(tcur)) ?? return null;
+        val tps = template_params(defaults_decl(tcur), false) ?? return null;
         if (@cast<u32>(tps.len) < count) {
             count = @cast<u32>(tps.len);
         }
@@ -1138,7 +1151,7 @@ attach fn foreign_instance(this: cpp_gen&, t: clang::CXType) -> bool {
     }
     // the arguments Volt passes (the defaulted rest are C++'s; tc is this parse's, cursors may have
     // an earlier one's)
-    val tps = template_params(defaults_decl(tc)) ?? return false;
+    val tps = template_params(defaults_decl(tc), false) ?? return false;
     var n = clang::clang_Type_getNumTemplateArguments(ct);
     if (@cast<i32>(tps.len) < n) {
         n = @cast<i32>(tps.len);
@@ -1181,7 +1194,7 @@ fn defaults_decl(tc: clang::CXCursor) -> clang::CXCursor {
     var dc = tc;
     var have = false;
     var n: usize = 0;
-    val own = template_params(tc);
+    val own = template_params(tc, false);
     if (own) {
         have = true;
         n = own.len;
@@ -1191,7 +1204,7 @@ fn defaults_decl(tc: clang::CXCursor) -> clang::CXCursor {
         if (clang::clang_Cursor_isNull(o) != 0) {
             continue;
         }
-        val ot = template_params(o) ?? continue;
+        val ot = template_params(o, false) ?? continue;
         if (!have || ot.len < n) {
             have = true;
             n = ot.len;
@@ -1234,7 +1247,7 @@ attach fn foreign_template(this: cpp_gen&, tc: clang::CXCursor) -> bool {
         return false;
     }
     val dc = defaults_decl(tc);
-    val tps = template_params(dc) ?? return false;
+    val tps = template_params(dc, false) ?? return false;
     if (tps.len == 0) {
         return false;
     }
@@ -1311,19 +1324,20 @@ attach fn foreign_template(this: cpp_gen&, tc: clang::CXCursor) -> bool {
 // constructor) or T::new(...), deleted and copied by C++, its members worked out per use
 attach fn template_handle(this: cpp_gen&, c: clang::CXCursor) -> void {
     val q = cpp_qual(c);
-    val tps = template_params(c) ?? return;
+    val tps = template_params(c, true) ?? return;
+    val names = pnames(&tps);
     val path = *(this.tmpl_handles.get(q.as_str()) ?? return);
     val vn = last_part(path, "");
     val gen = generics_text(&tps);
-    val extra = extra_types(&tps);
+    val extra = extra_types(&names);
     val inst = cpp_template_ref(q.as_str(), tps.len);
     var self_ty = copy vn;
     self_ty.push('<');
-    for (i) in 0..tps.len {
+    for (i) in 0..names.len {
         if (i > 0) {
             self_ty.append(", ");
         }
-        self_ty.append(tps.at(i).as_str());
+        self_ty.append(names.at(i).as_str());
     }
     self_ty.push('>');
     if (!this.first_time(fmt("struct {}", copy vn).as_str(), "")) {
@@ -2433,6 +2447,20 @@ attach fn cpp_handle_of(this: checker&, sid: u32) -> str? {
     return null;
 }
 
+// a @cpp type argument's C++ text for {tN}: a type's, or a value known at compile time (4, a
+// generic value parameter) as its literal, as cpp_handle_of spells an instance's value arguments
+attach fn cpp_targ_text(this: checker&, g: garg&, span: span) -> compile_error!std::string {
+    val t = this.garg_type(g) catch |te| {
+        val x = try this.garg_value(g);
+        val v = this.const_int(x, this.cx.env) catch |ve| {
+            return te;
+        };
+        return num(v);
+    };
+    val sp = this.cpp_type_text(t) ?? return fail(span, fmt("@cpp: {} has no C++ spelling", this.ty_name(t)));
+    return sp;
+}
+
 // a Volt type's C++ type as text (a handle struct's: its class), for {tN} and template arguments (a
 // reference's: what it names, the type C++ deduces from the object it names)
 attach fn cpp_type_text(this: checker&, t: u32) -> std::string? {
@@ -3335,11 +3363,12 @@ fn ident_char(c: u8) -> bool {
     return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_';
 }
 
-// the type parameters of a template cursor (none if it has a non-type or template parameter)
-// a template's type parameters, the ones Volt passes: up to the first with a default, which C++
-// fills in (typename = std::enable_if_t<...>); none when one Volt can't pass comes first (a value
-// or template parameter, an unnamed one without a default)
-fn template_params(c: clang::CXCursor) -> std::vec<std::string>? {
+// a template's parameters, the ones Volt passes: up to the first with a default, which C++ fills
+// in (typename = std::enable_if_t<...>); none when one Volt can't pass comes first (a template
+// parameter, an unnamed one without a default, a value one unless `values`). With `values` (a class
+// template's: function templates stay per use) a value parameter is its name and Volt type,
+// "N: i32", as generics_text writes it (pnames has the names)
+fn template_params(c: clang::CXCursor, values: bool) -> std::vec<std::string>? {
     var out: std::vec<std::string> = {};
     for (ch&) in children(c).items() {
         val k = clang::clang_getCursorKind(*ch);
@@ -3362,7 +3391,55 @@ fn template_params(c: clang::CXCursor) -> std::vec<std::string>? {
                     return out;
                 }
             }
-            return null;
+            if (!values || k != clang::CXCursor_NonTypeTemplateParameter) {
+                return null;
+            }
+            val name = cursor_name(*ch);
+            val vt = value_param_type(clang::clang_getCursorType(*ch)) ?? return null;
+            if (name.len() == 0) {
+                return null;
+            }
+            put(&out, fmt2("{}: {}", move name, S(vt)));
+        }
+    }
+    return out;
+}
+
+// a value template parameter's Volt type: int (glm's length_t), unsigned, long, std::size_t and
+// bool; none for the rest (an enum, a pointer, a char, a float)
+fn value_param_type(t: clang::CXType) -> str? {
+    val sp = type_spelling(t);
+    if (strip_const(sp.as_str()) == "size_t" || strip_const(sp.as_str()) == "std::size_t") {
+        return "usize";
+    }
+    val k = clang::clang_getCanonicalType(t).kind;
+    if (k == clang::CXType_Int) {
+        return "i32";
+    }
+    if (k == clang::CXType_UInt) {
+        return "u32";
+    }
+    if (k == clang::CXType_Long || k == clang::CXType_LongLong) {
+        return "i64";
+    }
+    if (k == clang::CXType_ULong || k == clang::CXType_ULongLong) {
+        return "u64";
+    }
+    if (k == clang::CXType_Bool) {
+        return "bool";
+    }
+    return null;
+}
+
+// a template's parameter names (template_params gives a value one as "N: i32")
+fn pnames(ps: std::vec<std::string>&) -> std::vec<std::string> {
+    var out: std::vec<std::string> = {};
+    for (p&) in ps.items() {
+        val colon = p.as_str().find(":");
+        if (colon) {
+            put(&out, S(p.as_str()[0..colon]));
+        } else {
+            put(&out, copy *p);
         }
     }
     return out;
@@ -3378,7 +3455,9 @@ fn generics_text(ps: std::vec<std::string>&) -> std::string {
             s.append(", ");
         }
         s.append(ps.at(i).as_str());
-        s.append(": type");
+        if (ps.at(i).as_str().find(":") == null) {
+            s.append(": type"); // (a value parameter has its type: "N: i32")
+        }
     }
     s.push('>');
     return s;
@@ -3598,6 +3677,7 @@ attach fn class(this: cpp_gen&, c: clang::CXCursor, tps: std::vec<std::string>?)
     var gen: std::string = {};
     var self_ty = copy vn;
     var cpp_self = copy q;
+    var names: std::vec<std::string> = {}; // (tp's views are of these: they live as long)
     var tp: std::vec<str> = {};
     var extra: std::string = {};
     if (tps) {
@@ -3609,18 +3689,19 @@ attach fn class(this: cpp_gen&, c: clang::CXCursor, tps: std::vec<std::string>?)
                 return;
             }
         }
-        tp = str_views(&tps);
+        names = pnames(&tps);
+        tp = str_views(&names);
         gen = generics_text(&tps);
         self_ty.push('<');
-        for (i) in 0..tps.len {
+        for (i) in 0..names.len {
             if (i > 0) {
                 self_ty.append(", ");
             }
-            self_ty.append(tps.at(i).as_str());
+            self_ty.append(names.at(i).as_str());
         }
         self_ty.push('>');
         cpp_self = cpp_template_ref(q.as_str(), tps.len);
-        extra = extra_types(&tps);
+        extra = extra_types(&names);
         this.line(gen.as_str());
         this.line(fmt("@attributes([@cpp_type(\"{}\")])", copy q).as_str());
         this.line(fmt("struct {} {{", copy vn).as_str());
@@ -4061,7 +4142,7 @@ attach fn member_list(this: cpp_gen&, c: clang::CXCursor, self_ty: str, cpp_self
             if (gen.len > 0 || clang::clang_getTemplateCursorKind(*ch) != clang::CXCursor_CXXMethod) {
                 continue;
             }
-            val got = template_params(*ch);
+            val got = template_params(*ch, false);
             if (got == null || constrained(*ch)) {
                 // the Volt name as for any method (operators by their op_ names)
                 val cn = cursor_name(*ch);
@@ -4171,8 +4252,12 @@ attach fn static_member(this: cpp_gen&, v: clang::CXCursor, self_ty: str, cpp_se
 // can Volt lay out class template c (as class() does): public fields only, of types it can use (a
 // class held by handle isn't laid out as C++ lays it out), no bases, no virtual methods
 attach fn template_ok(this: cpp_gen&, c: clang::CXCursor) -> bool {
-    val tps = template_params(c) ?? return false;
-    val tp = str_views(&tps);
+    if (clang::clang_isCursorDefinition(c) == 0) {
+        return false; // a primary declared only (scan): held by handle
+    }
+    val tps = template_params(c, true) ?? return false;
+    val names = pnames(&tps);
+    val tp = str_views(&names);
     for (ch&) in children(c).items() {
         val k = clang::clang_getCursorKind(*ch);
         if (k == clang::CXCursor_CXXBaseSpecifier || (k == clang::CXCursor_CXXMethod && clang::clang_CXXMethod_isVirtual(*ch) != 0)) {
@@ -4204,7 +4289,7 @@ attach fn prune(this: cpp_gen&) -> void {
             // held by handle instead, as a generic struct (its parameters all types, the defaulted
             // rest C++'s); std's smart pointers and std::function keep their own forms
             val c = *(this.cursors.get(*q) ?? continue);
-            val tps = template_params(c);
+            val tps = template_params(c, true);
             val path = *(this.templates.get(*q) ?? continue);
             val vn = last_part(path, "");
             val special = vn.as_str() == "unique_ptr" || vn.as_str() == "shared_ptr" || vn.as_str() == "function";
@@ -5324,6 +5409,11 @@ attach fn scan(this: cpp_gen&, c: clang::CXCursor, vpath: str) -> void {
             // its definition (a forward declaration has no fields or bases to tell by)
             this.templates.put(q, this.c.intern(move p));
             this.cursors.put(q, *ch);
+        } else if (k == clang::CXCursor_ClassTemplate && clang::clang_Cursor_isNull(clang::clang_getCursorDefinition(*ch)) != 0 && this.templates.get(q) == null && template_params(*ch, false) == null && template_params(*ch, true) != null) {
+            // a primary with a value parameter that's only declared (glm's vec<L, T, Q>: each
+            // partial specialization is a definition): held by handle, members per use (prune)
+            this.templates.put(q, this.c.intern(move p));
+            this.cursors.put(q, *ch);
         } else if (k == clang::CXCursor_EnumDecl) {
             this.enums.put(q, this.c.intern(move p));
         }
@@ -5377,12 +5467,12 @@ attach fn emit(this: cpp_gen&, c: clang::CXCursor) -> void {
                     this.line(fmt2("type {} = {};", copy name, copy v).as_str());
                 }
             }
-        } else if (k == clang::CXCursor_ClassTemplate && clang::clang_isCursorDefinition(*ch) != 0 && this.tmpl_handles.get(cpp_qual(*ch).as_str()) != null) {
+        } else if (k == clang::CXCursor_ClassTemplate && (clang::clang_isCursorDefinition(*ch) != 0 || clang::clang_Cursor_isNull(clang::clang_getCursorDefinition(*ch)) != 0) && this.tmpl_handles.get(cpp_qual(*ch).as_str()) != null) {
             this.template_handle(*ch);
         } else if (k == clang::CXCursor_ClassTemplate && clang::clang_isCursorDefinition(*ch) != 0 && this.templates.get(cpp_qual(*ch).as_str()) != null) {
             // one whose parameters all have defaults has nothing for Volt's generics (and one
             // prune left out isn't declared)
-            val tps = template_params(*ch);
+            val tps = template_params(*ch, true);
             var n: usize = 0;
             if (tps) {
                 n = tps.len;
@@ -5397,7 +5487,7 @@ attach fn emit(this: cpp_gen&, c: clang::CXCursor) -> void {
                 val none: std::vec<std::string> = {};
                 this.free_fn(*ch, &none);
             } else {
-                val tps = template_params(*ch);
+                val tps = template_params(*ch, false);
                 var typed = false;
                 if (tps) {
                     if (!constrained(*ch)) {
@@ -7306,14 +7396,16 @@ attach fn cpp_caught_call(this: checker&, ns: u32, pre: std::vec<u32>, v: tval, 
 attach fn cpp_call_as(this: checker&, r: u32, gargs: std::vec<garg>&, args: std::vec<garg>&, catching: bool, pre: std::vec<u32>&, span: span) -> compile_error!tval {
     var types: std::vec<std::string> = {};
     for (i) in 1..gargs.len {
-        if (this.text_in(try this.garg_type(gargs.at(i)))) {
+        // (a value has no text in it; a type that doesn't resolve is cpp_targ_text's error)
+        val t = this.garg_type(gargs.at(i)) catch |e| {
+            continue;
+        };
+        if (this.text_in(t)) {
             return this.cpp_text_template(r, gargs, args, catching, pre, span);
         }
     }
     for (i) in 1..gargs.len {
-        val t = try this.garg_type(gargs.at(i));
-        val sp = this.cpp_type_text(t) ?? return fail(span, fmt("@cpp: {} has no C++ spelling", this.ty_name(t)));
-        put(&types, move sp);
+        put(&types, try this.cpp_targ_text(gargs.at(i), span));
     }
     val fe = try this.garg_value(args.at(0));
     var text: std::string = {};
@@ -7631,7 +7723,10 @@ attach fn cpp_text_template(this: checker&, r: u32, gargs: std::vec<garg>&, args
     }
     var types: std::vec<std::string> = {};
     for (i) in 1..gargs.len {
-        val t = try this.garg_type(gargs.at(i));
+        val t = this.garg_type(gargs.at(i)) catch |e| {
+            put(&types, try this.cpp_targ_text(gargs.at(i), span));
+            continue;
+        };
         if (this.text_bound(t)) {
             put(&types, S("std::string"));
             continue;
