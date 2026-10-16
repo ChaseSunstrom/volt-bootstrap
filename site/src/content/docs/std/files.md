@@ -15,12 +15,8 @@ writer, so `std::write` formats straight into it.
 use std::io;
 use std::fmt;
 
-extern "C" fn getpid() -> i32;
-
 fn main() -> !void {
-    var name = std::string::from("/tmp/volt-files-doc-");
-    name.append_int(getpid());
-    val path = name.as_str();
+    val path = "volt-files-doc.txt";
     {
         var log = try std::fs::open(path, "w");
         try log.write("start\n");
@@ -109,6 +105,8 @@ fn main() -> void {
 }
 // expect: lib/parser.tar.gz src/../lib/. parser.tar.gz gz
 // expect: notes /home/volt
+// expect-windows: lib\parser.tar.gz src/../lib/. parser.tar.gz gz
+// expect-windows: notes /home\volt
 ```
 
 The working directory and the environment are in `std::process`: `cwd()`, `set_cwd(path)`,

@@ -102,7 +102,11 @@ fn code_blocks() {
             std::fs::write(&f, &code).unwrap();
             f
         };
-        let expect = directives(&code, "expect");
+        // what Windows prints instead, where it differs (its paths use \\)
+        let mut expect = directives(&code, "expect");
+        if cfg!(windows) && code.contains("// expect-windows: ") {
+            expect = directives(&code, "expect-windows");
+        }
         let exit: Option<i32> = directives(&code, "exit").first().map(|e| e.parse().unwrap());
         let mut cmd = Command::new(&voltc);
         let run = (!expect.is_empty() || exit.is_some()) && !flags.contains(&"fail");

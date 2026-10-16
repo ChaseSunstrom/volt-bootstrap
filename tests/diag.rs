@@ -17,10 +17,11 @@ fn diagnostics_match_snapshots() {
     for f in &files {
         let src = std::fs::read_to_string(f).unwrap();
         let flags: Vec<&str> = src.lines().filter_map(|l| l.strip_prefix("// flags: ")).flat_map(|l| l.split_whitespace()).collect();
-        let rel = f.strip_prefix(root).unwrap();
+        // named with / on every system, as the snapshots show it
+        let rel = format!("tests/diag/{}", f.file_name().unwrap().to_string_lossy());
         let out = Command::new(common::voltc())
             .arg("check")
-            .arg(rel)
+            .arg(&rel)
             .args(&flags)
             .current_dir(root)
             .env_remove("NO_COLOR")
@@ -36,7 +37,7 @@ fn diagnostics_match_snapshots() {
         // the check fails when the snapshot has an error, and succeeds when it only warns
         let errs = want.contains("error:") || want.contains("error\u{1b}");
         if out.status.success() == errs || got != want {
-            bad.push(format!("{}:\n--- want\n{want}--- got (exit {:?})\n{got}", rel.display(), out.status.code()));
+            bad.push(format!("{rel}:\n--- want\n{want}--- got (exit {:?})\n{got}", out.status.code()));
         }
     }
     assert!(bad.is_empty(), "{}", bad.join("\n"));

@@ -721,9 +721,10 @@ fn line_end() -> str {
 }
 
 fn main() -> void {
-    std::print("{} on {}{}", std::process::os() == "windows", @cfg("pointer_bits", "64"), line_end());
+    // a build's keys are the host's, so they agree with what the program finds when it runs
+    std::print("{} on {}{}", @cfg("os", "windows") == (std::process::os() == "windows"), @cfg("pointer_bits", "64"), line_end());
 }
-// expect: false on true
+// expect: true on true
 ```
 
 ## Attributes
