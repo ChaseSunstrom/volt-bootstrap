@@ -72,6 +72,31 @@ fn main() -> void {
     var w1: i8[3] = { 121, 111, 117 };
     var ws: i8[..][3] = { w0[0..2], w1[0..0], w1[0..3] };
     std::println("nested {} {} {}", cpp::pr::nv::shape_rv(rs[1..3]), cpp::pr::nv::weigh(ds[0..2]), cpp::pr::nv::spell(ws[0..3]));
+    // std::map / std::unordered_map take a Volt std::map&: C++ gets a copy (by value, const&, &&,
+    // through an alias), the Volt map unchanged; C++ prints in its own order
+    var m: std::map<i32, i32> = {};
+    m.put(3, 30);
+    m.put(1, 10);
+    m.put(2, 20);
+    val none: std::map<i32, i32> = {};
+    var u: std::map<i32, f64> = {};
+    u.put(5, 0.5);
+    u.put(4, 1.25);
+    std::println("map {} {} {} {} {} {}", cpp::pr::mp::dump(&m), cpp::pr::mp::dump(&none), cpp::pr::mp::dump_u(&u), cpp::pr::mp::dump_rv(&m), cpp::pr::mp::dump_a(&m), m.len);
+    var s: std::map<std::string, i32> = {};
+    s.put(std::string::from("b"), 2);
+    s.put(std::string::from("a"), 1);
+    var ss: std::map<std::string, std::string> = {};
+    ss.put(std::string::from("k"), std::string::from("v w"));
+    ss.put(std::string::from(""), std::string::from(""));
+    var v: std::map<i32, std::vec<i32>> = {};
+    var v1: std::vec<i32> = {};
+    v1.push(4) catch |e| { return; };
+    v1.push(5) catch |e| { return; };
+    v.put(2, move v1);
+    v.put(1, {});
+    std::println("map {} {} {}", cpp::pr::mp::dump_s(&s), cpp::pr::mp::dump_ss(&ss), cpp::pr::mp::dump_v(&v));
+    std::println("map {} {} {} {} {}", cpp::pr::mp::dump(&m), cpp::pr::mp::dump_v(&v), s.len, ss.len, v.len);
 }
 // a throwing template leaves the Volt string as it was
 fn grown_t(t: std::string&, k: i32) -> void {

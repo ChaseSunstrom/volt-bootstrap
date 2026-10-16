@@ -127,6 +127,9 @@ struct cpp_gen {
     // a std::string& parameter was written (so volt_cpp_text_back is needed), and it was
     text_refs: bool = false;
     text_back: bool = false;
+    // param gives a std::map parameter that has a stdcxx handle form its Volt std::map& form
+    // instead (callable_of's second overload)
+    volt_maps: bool = false;
     // the Volt fns reading an override's argument (virt_reader), by its C++ type
     readers: std::map<str, str> = {};
     // a C++20 module's interface, read as its importers see it (kids): its file, and where its
@@ -1597,6 +1600,85 @@ attach fn nested_vec(this: cpp_gen&, t: clang::CXType, tparams: std::vec<str>&) 
     return v;
 }
 
+// a std::map / std::unordered_map key or value type t as a Volt std::map's: its Volt type, what
+// passes it from an entry's x (a reference into the map) and its C++ value from @cpp's slot. A
+// number, bool or char as itself; a std::string from a Volt std::string's str, a std::vector of
+// numbers or chars from a std::vec's items() (views into the map, borrowed through the call)
+attach fn map_part(this: cpp_gen&, t: clang::CXType, x: str, slot: str, tparams: std::vec<str>&) -> cpp_arg? {
+    val ct = clang::clang_getCanonicalType(t);
+    if (contains(canon(ct).as_str(), "type-parameter")) {
+        return null;
+    }
+    if (char_text(ct, "basic_string")) {
+        return { vty: S("std::string"), pass: fmt("{}.as_str()", S(x)), cpp: fmt2("std::string((const char *){}.ptr, {}.len)", S(slot), S(slot)) };
+    }
+    if ((std_template(ct) ?? S("")).as_str() == "vector") {
+        val et = clang::clang_getCanonicalType(clang::clang_Type_getTemplateArgumentAsType(ct, 0));
+        val ek = et.kind;
+        if (ek == clang::CXType_Record || ek == clang::CXType_Bool || ek == clang::CXType_Pointer || ek == clang::CXType_Enum) {
+            return null;
+        }
+        val e = this.vtype(et, tparams) ?? return null;
+        return { vty: fmt("std::vec<{}>", move e), pass: fmt("{}.items()", S(x)), cpp: fmt4("{}({}.ptr, {}.ptr + {}.len)", canon(ct), S(slot), S(slot), S(slot)) };
+    }
+    val k = ct.kind;
+    if (k == clang::CXType_Record || k == clang::CXType_Pointer || k == clang::CXType_Enum || k == clang::CXType_LValueReference || k == clang::CXType_RValueReference) {
+        return null;
+    }
+    val v = this.vtype(ct, tparams) ?? return null;
+    return { vty: move v, pass: fmt("*{}", S(x)), cpp: S(slot) };
+}
+
+// a std::map or std::unordered_map (any comparator, hash or allocator) by value, const& or &&: a
+// Volt std::map<K, V>&, borrowed for the call. The Volt fn copies its entries into a C++ map it
+// makes, which C++ gets (moved from) and the Volt fn deletes once the call returns; the Volt map
+// is unchanged. K and V: as map_part says
+attach fn map_arg(this: cpp_gen&, base: clang::CXType, name: str, i: usize, tparams: std::vec<str>&) -> cpp_arg? {
+    val ct = clang::clang_getCanonicalType(base);
+    val st = std_template(ct) ?? return null;
+    if (st.as_str() != "map" && st.as_str() != "unordered_map") {
+        return null;
+    }
+    // the default comparator (hash, equality) and allocator only, written out or not: another
+    // order keeps its own form (a handle a call worked out per use)
+    val n = clang::clang_Type_getNumTemplateArguments(ct);
+    var a: i32 = 2;
+    while (a < n) {
+        val an = std_template(clang::clang_Type_getTemplateArgumentAsType(ct, @cast<u32>(a))) ?? return null;
+        val w = an.as_str();
+        if (w != "less" && w != "hash" && w != "equal_to" && w != "allocator") {
+            return null;
+        }
+        a += 1;
+    }
+    val kp =this.map_part(clang::clang_Type_getTemplateArgumentAsType(ct, 0), "try_e.key", "{1}", tparams) ?? return null;
+    val vp = this.map_part(clang::clang_Type_getTemplateArgumentAsType(ct, 1), "try_e.value", "{2}", tparams) ?? return null;
+    var ty = canon(ct);
+    if (starts_with(ty.as_str(), "const ")) {
+        ty = S(ty.as_str()[6..ty.len()]);
+    }
+    var slot = S("{");
+    slot.append_uint(@cast<u64>(i));
+    slot.push('}');
+    val h = fmt("try_m{}", unum(@cast<u64>(i)));
+    var pre = fmt2("val {} = @cpp<void*>(\"new VOLT_ID({})()\");\n", copy h, copy ty);
+    // (null when the allocation threw in a try_ form's call: its catch gives a zero)
+    pre.append(fmt("if ({} == null) {{ @panic(\"out of memory\"); }}\n", copy h).as_str());
+    pre.append(fmt2("defer @cpp<void>(\"delete (VOLT_ID({}) *){{0}}\", {});\n", copy ty, copy h).as_str());
+    pre.append(fmt("for (try_e) in {}.iter() {{\n", S(name)).as_str());
+    pre.append(fmt3("    @cpp<void>(\"((VOLT_ID({}) *){{0}})->emplace({}, {})\", ", copy ty, copy kp.cpp, copy vp.cpp).as_str());
+    pre.append(fmt3("{}, {}, {});\n}", copy h, copy kp.pass, copy vp.pass).as_str());
+    return { vty: fmt2("std::map<{}, {}>&", copy kp.vty, copy vp.vty), pass: copy h, cpp: fmt2("VOLT_MOVE(*(VOLT_ID({}) *)({}))", move ty, move slot), pre: move pre };
+}
+
+// does a std::map type have a stdcxx handle form (a handle whose Volt type can be written)?
+attach fn map_handle(this: cpp_gen&, t: clang::CXType, tparams: std::vec<str>&) -> bool {
+    if (this.handle_of(t) == null) {
+        return false;
+    }
+    return this.vtype(t, tparams) != null;
+}
+
 attach fn param(this: cpp_gen&, t: clang::CXType, name: str, i: usize, tparams: std::vec<str>&) -> cpp_arg? {
     var slot = S("{");
     slot.append_uint(@cast<u64>(i));
@@ -1688,6 +1770,16 @@ attach fn param(this: cpp_gen&, t: clang::CXType, name: str, i: usize, tparams: 
             }
             val elem = this.vtype(et, tparams) ?? return null;
             return { vty: fmt("{}[..]", move elem), pass: S(name), cpp: fmt4("{}({}.ptr, {}.ptr + {}.len)", move vec, copy slot, copy slot, copy slot) };
+        }
+        // a std::map: a Volt std::map&, unless it has a stdcxx handle form (then that, and
+        // callable_of's second overload this)
+        if (st.as_str() == "map" || st.as_str() == "unordered_map") {
+            if (this.volt_maps || !this.map_handle(base, tparams)) {
+                val ma = this.map_arg(base, name, i, tparams);
+                if (ma) {
+                    return copy ma;
+                }
+            }
         }
         if (st.as_str() == "function") {
             // a Volt fn value: C++ gets a std::function calling its fn with its env (good while the
@@ -2665,6 +2757,28 @@ attach fn callable_of(this: cpp_gen&, generics: str, head: str, has_params: bool
             this.out = move saved;
         }
         drop += 1;
+    }
+    // a std::map parameter written as its stdcxx handle: an overload taking a Volt std::map& too
+    if (!this.volt_maps && suffix == null) {
+        var twin = false;
+        for (p&) in parms.items() {
+            val pt = clang::clang_getCursorType(*p);
+            var b = pt;
+            if (pt.kind == clang::CXType_LValueReference || pt.kind == clang::CXType_RValueReference) {
+                b = clang::clang_getPointeeType(pt);
+            }
+            if (pt.kind == clang::CXType_LValueReference && clang::clang_isConstQualifiedType(b) == 0) {
+                continue;
+            }
+            if (this.map_arg(b, "m", 0, tparams) != null && this.map_handle(b, tparams)) {
+                twin = true;
+            }
+        }
+        if (twin) {
+            this.volt_maps = true;
+            this.callable_of(generics, head, has_params, fn_cursor, copy r, call, self_arg, extra, tparams, what, null);
+            this.volt_maps = false;
+        }
     }
 }
 
