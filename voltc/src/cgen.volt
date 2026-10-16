@@ -649,7 +649,7 @@ fn q_op(op: binop_ir) -> str? {
         .SUB => { return "volt_q_sub("; },
         .MUL => { return "volt_q_mul("; },
         .DIV => { return "volt_q_div("; },
-        .REM => { return "volt_q_rem("; },
+        .REM => { return "volt_f128_rem("; }, // (ir.binary makes f128 % this call already)
         .EQ => { return "volt_q_eq("; },
         .NE => { return "volt_q_ne("; },
         .LT => { return "volt_q_lt("; },

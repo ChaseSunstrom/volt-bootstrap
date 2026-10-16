@@ -52,7 +52,8 @@ Function parameters are `val`s too; `fn f(var x: i32)` gives the function its ow
 
 `f128` is IEEE binary128. Most CPUs have no instructions for it, so its arithmetic is calls to
 soft-float routines: the C runtime's (libgcc's or compiler-rt's), and on aarch64 macOS, whose C
-runtime has none, Volt's own `std::softfloat`, exported under the same names.
+runtime has none, Volt's own `std::softfloat`, exported under the same names. `%` is always
+`std::softfloat`'s: the exact remainder, as C's `fmod` gives it, on every target.
 
 ### Type aliases
 

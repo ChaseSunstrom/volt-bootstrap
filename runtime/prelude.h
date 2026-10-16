@@ -67,8 +67,6 @@ double __trunctfdf2(volt_f128);
 #define volt_q_sub(a, b) __subtf3(a, b)
 #define volt_q_mul(a, b) __multf3(a, b)
 #define volt_q_div(a, b) __divtf3(a, b)
-/* ponytail: % through a double, as the native path's __builtin_fmod; a soft fmodl if precision matters */
-#define volt_q_rem(a, b) __extenddftf2(__builtin_fmod(__trunctfdf2(a), __trunctfdf2(b)))
 #define volt_q_neg(a) ((a) ^ volt_q_lit(0, 0x8000000000000000ULL, 0ULL))
 /* compiler-rt's compares give <0, 0 or >0 like a - b, and a NaN the answer that makes the test false */
 #define volt_q_eq(a, b) (__eqtf2(a, b) == 0)
@@ -108,7 +106,6 @@ _Float16 __trunctfhf2(volt_f128);
 #define volt_q_sub(a, b) ((a) - (b))
 #define volt_q_mul(a, b) ((a) * (b))
 #define volt_q_div(a, b) ((a) / (b))
-#define volt_q_rem(a, b) __builtin_fmod(a, b)
 #define volt_q_neg(a) (-(a))
 #define volt_q_eq(a, b) ((a) == (b))
 #define volt_q_ne(a, b) ((a) != (b))
@@ -119,6 +116,8 @@ _Float16 __trunctfhf2(volt_f128);
 #define volt_q_from(k, x) ((volt_f128)(x))
 #define volt_q_to(k, x) (x)
 #endif
+/* f128 %: std::softfloat's exact fmod on both paths (voltc calls it for every f128 remainder) */
+volt_f128 volt_f128_rem(volt_f128, volt_f128);
 #define VOLT_S2(x) #x
 #define VOLT_S(x) VOLT_S2(x)
 #define VOLT_SYM(n) __asm__(VOLT_S(__USER_LABEL_PREFIX__) n)
