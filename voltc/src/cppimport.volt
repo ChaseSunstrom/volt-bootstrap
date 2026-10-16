@@ -2429,7 +2429,8 @@ attach fn cpp_handle_of(this: checker&, sid: u32) -> str? {
     return null;
 }
 
-// a Volt type's C++ type as text (a handle struct's: its class), for {tN} and template arguments
+// a Volt type's C++ type as text (a handle struct's: its class), for {tN} and template arguments (a
+// reference's: what it names, the type C++ deduces from the object it names)
 attach fn cpp_type_text(this: checker&, t: u32) -> std::string? {
     match (*this.t.get(t)) {
         .STRUCT(sid) => {
@@ -2438,6 +2439,7 @@ attach fn cpp_type_text(this: checker&, t: u32) -> std::string? {
                 return S(q);
             }
         },
+        .REF(x) => { return this.cpp_type_text(x); },
         default => {},
     }
     return this.cpp_spell(t);
@@ -6459,7 +6461,42 @@ attach fn cpp_probe_type(this: checker&, t: u32) -> std::string? {
 // (an error is its words, at span), and the importer writes the fn as it would for a C++ function of
 // that signature. recv: {0} is the receiver, so it's an attach fn on it. The fn's declaration
 attach fn cpp_instance(this: checker&, k: usize, expr: str, types: std::vec<u32>&, recv: bool, value: bool, span: span) -> compile_error!u32 {
-    return this.cpp_instance_as(k, expr, types, recv, value, false, span);
+    return this.cpp_instance_addr(k, expr, types, recv, value, false, span);
+}
+
+// cpp_instance_as reading each Volt reference argument as C++ would read the object it names: an
+// lvalue first (f(x): T& binds it, a template's T deduces its type), and only when clang finds no
+// call that way, every one as its address (f(&x): a T* parameter, a template's T* deducing T), which
+// is what the reference holds already; one argument read each way isn't tried, and when neither
+// works the error is the lvalue call's. So of f(T&) and f(T*), f(&x) calls f(T&). A Volt
+// std::string& stays one (it crosses as a copy), and the receiver an lvalue. Read as addresses, the
+// arguments aren't references any more, so a reference result (int& get(T*)) comes back as a copy,
+// not an alias of the object, unless it's into the receiver
+// ponytail: copying it is safe but loses the alias; keep a reference when the result is into a pointee
+attach fn cpp_instance_addr(this: checker&, k: usize, expr: str, types: std::vec<u32>&, recv: bool, value: bool, tried: bool, span: span) -> compile_error!u32 {
+    val made = this.cpp_instance_as(k, expr, types, recv, value, tried, span) catch |e| {
+        var ptrs = copy *types;
+        var any = false;
+        for (j) in 0..ptrs.len {
+            if (recv && j == 0) {
+                continue;
+            }
+            match (*this.t.get(*ptrs.at(j))) {
+                .REF(x) => {
+                    if (!this.text_bound(x)) {
+                        *ptrs.at(j) = this.t.intern(tyk::PTR(x));
+                        any = true;
+                    }
+                },
+                default => {},
+            }
+        }
+        if (!any) {
+            return e;
+        }
+        return this.cpp_instance_as(k, expr, &ptrs, recv, value, tried, span) catch |e2| { return e; };
+    };
+    return made;
 }
 
 // cpp_instance; tried: the fn's try_ form instead (try_text), which makes the call in catch mode
@@ -6950,7 +6987,7 @@ attach fn cpp_use_call(this: checker&, k: usize, callee: str, macro: bool, tried
                     put(&types, v.ty);
                     put(&pre, v);
                 }
-                val made = try this.cpp_instance_as(k, expr.as_str(), &types, true, macro, tried, span);
+                val made = try this.cpp_instance_addr(k, expr.as_str(), &types, true, macro, tried, span);
                 var cands: std::vec<u32> = {};
                 put(&cands, made);
                 var none: std::vec<garg> = {};
@@ -6989,13 +7026,14 @@ attach fn cpp_use_call(this: checker&, k: usize, callee: str, macro: bool, tried
 // cpp_instance for a call on a receiver of struct type by_value (null: none): a method only an
 // rvalue can call (qualified &&, const && too) takes the receiver by value instead, as a declared
 // && method does (member_list): the handle is consumed and C++ moves from the object, or from a copy
-// when the handle only borrows it. When neither works, the error is the lvalue call's
+// when the handle only borrows it. When neither works, the error is the lvalue call's. Each reading
+// of the receiver reads the reference arguments as cpp_instance_addr does
 attach fn cpp_instance_on(this: checker&, k: usize, expr: str, types: std::vec<u32>&, recv: bool, value: bool, tried: bool, by_value: u32?, span: span) -> compile_error!u32 {
-    // (a failed probe isn't cached: such a call probes clang twice, each time it's checked)
-    val made = this.cpp_instance_as(k, expr, types, recv, value, tried, span) catch |e| {
+    // (a failed probe isn't cached: such a call probes clang up to four times, each time it's checked)
+    val made = this.cpp_instance_addr(k, expr, types, recv, value, tried, span) catch |e| {
         val bv = by_value ?? return e;
         *types.at(0) = bv;
-        return this.cpp_instance_as(k, expr, types, recv, value, tried, span) catch |e2| { return e; };
+        return this.cpp_instance_addr(k, expr, types, recv, value, tried, span) catch |e2| { return e; };
     };
     return made;
 }
@@ -7339,9 +7377,26 @@ attach fn cpp_call_as(this: checker&, r: u32, gargs: std::vec<garg>&, args: std:
         var an = S("a");
         an.append_uint(@cast<u64>(i - 1));
         params.append(fmt2("{} {}", move sp, copy an).as_str());
-        match (*this.t.get(v.ty)) {
-            .REF(x) => { put(&subst, fmt("(*{})", copy an)); },
-            default => { put(&subst, copy an); },
+        // a reference is what it names (a reference to one, &s of a generic's s: S with S a reference,
+        // too: the type {tN} spells)
+        var stars = S("");
+        var rt = v.ty;
+        var refs = true;
+        while (refs) {
+            refs = false;
+            match (*this.t.get(rt)) {
+                .REF(x) => {
+                    stars.push('*');
+                    rt = x;
+                    refs = true;
+                },
+                default => {},
+            }
+        }
+        if (stars.len() > 0) {
+            put(&subst, fmt2("({}{})", move stars, copy an));
+        } else {
+            put(&subst, copy an);
         }
         put(&ptys, v.ty);
         if (catching) {
@@ -7617,8 +7672,9 @@ attach fn cpp_text_template(this: checker&, r: u32, gargs: std::vec<garg>&, args
     }
     var none: std::vec<garg> = {};
     var cands: std::vec<u32> = {};
-    // ponytail: a template taking S& fails the const probe and is probed again, two clang parses
-    // each time it's checked; cache the failed probe if checking such calls gets slow
+    // ponytail: a template taking S& fails the const probe and is probed again, and with another
+    // reference argument each is probed with it as an address too (cpp_instance_addr): up to four
+    // clang parses each time a failing call is checked; cache failed probes if that gets slow
     val made = this.cpp_instance(k, text.as_str(), &ctys, false, value, span) catch |e| {
         put(&cands, try this.cpp_instance(k, text.as_str(), &mtys, false, value, span));
         return this.pick_call("@cpp", &cands, null, null, &none, &mpre, &es, null, span);
