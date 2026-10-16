@@ -52,6 +52,24 @@ fn run() -> geo::swift_error!void {
     if (bad.err) {
         std::println("bad {}", bad.err);
     }
+
+    // overloads: by type, and by label alone (move_by, move_to)
+    val i: isize = 3;
+    std::println("ovl: {} / {} / {} / {} {}", geo::describe(i), geo::describe(2.5), geo::describe("x"), geo::move_by(1), geo::move_to(1));
+    // a getter that throws or is async, and async funcs: their values
+    var g: geo::Gauge = { level: 3 };
+    std::println("throws: {} async: {} {} {}", try g.checked(), g.slow(), geo::later(21), try geo::laterOrFail(5));
+    val lf = geo::laterOrFail(-1);
+    if (lf.err) {
+        std::println("async: {}", lf.err);
+    }
+    // an actor's members, and the main actor's (this is the main thread)
+    val t = geo::Tally::new();
+    t.add(2);
+    std::println("actor: {} {} {}", t.add(3), t.n(), t.name());
+    std::println("main: {} {}", geo::onMain(), geo::onMainLater());
+    // #if: the branch that holds
+    std::println("if: {}", geo::platformKnown());
 }
 
 fn main() -> void {
@@ -75,3 +93,9 @@ fn main() -> void {
 // expect: or_default 5 -1
 // expect: parse 42
 // expect: bad ERROR(notANumber("x"))
+// expect: ovl: int 3 / double 2.5 / text x / 2 10
+// expect: throws: 6 async: 103 42 5
+// expect: async: ERROR(notANumber("negative"))
+// expect: actor: 5 5 tally
+// expect: main: 7 9
+// expect: if: true

@@ -12,13 +12,17 @@
 //   references); any other struct, or an enum with associated values -> a handle whose copy copies
 //   the value; an enum without them -> a Volt enum (raw Int values kept)
 //   init(...) -> T::new(...), a second init T::new_<its first label>(...); a computed property,
-//   or a class's stored one -> a method without arguments
+//   or a class's stored one -> a method without arguments (a getter that throws: swift_error!T)
+//   overloads -> Volt overloads (ones Volt can't tell apart: f_<labels>); async, and an actor's
+//   members -> what they settle to (the shim waits); @MainActor -> called on the main thread;
+//   #if -> the branch that holds, as swiftc says
 use super::glue::{number, prim, Gen, Kind, Lang, Model, Recv, ShimOut, ShimParam, Sig, Ty, TypeDef, TypeInfo};
 use super::{arg_path, fresh, save, stamp, Made, Req};
 use crate::foreign::{int_value, lex, toks_line, Cur, Tok};
+use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 pub fn import(r: &Req) -> Result<(), String> {
@@ -36,10 +40,18 @@ pub fn import(r: &Req) -> Result<(), String> {
         return Ok(());
     }
 
-    let mut p = Parser::default();
+    let mut texts = Vec::new();
     for f in &files {
         let text = std::fs::read_to_string(f).map_err(|e| format!("use swift: can't read {}: {e}", f.display()))?;
-        p.decls(&lex(&plain_strings(&text)), None, false);
+        texts.push(plain_strings(&text));
+    }
+    // each #if's branch that holds, as this swiftc says (the build's target and flags)
+    std::fs::create_dir_all(&r.out).map_err(|e| format!("can't make {}: {e}", r.out.display()))?;
+    let conds: BTreeSet<String> = texts.iter().flat_map(|t| if_conditions(t)).collect();
+    let holds = probe_ifs(&swiftc, &conds, &r.out);
+    let mut p = Parser::default();
+    for t in &texts {
+        p.decls(&lex(&resolve_ifs(t, &holds)), None, false);
     }
     let (model, swift) = p.finish();
     let (shim, volt) = Gen::new(&model, &r.alias, &swift).write(if files.len() == 1 { "the file" } else { "the files" });
@@ -74,17 +86,36 @@ const KEYWORDS: &[&str] = &[
     "macro",
 ];
 
+/// how the shim calls a declaration (its Sig's call is the index of this)
+#[derive(Clone, Default, Debug, PartialEq)]
+struct CallInfo {
+    /// its Swift name (a renamed overload's Volt one isn't: move_by is move(by:))
+    swift: String,
+    /// its argument labels: "_" when there's none
+    labels: Vec<String>,
+    /// a property (read, no arguments), an initializer (T(...))
+    prop: bool,
+    init: bool,
+    /// reached through await: it's async, or an actor isolates it
+    awaits: bool,
+    /// isolated to the main actor
+    main: bool,
+}
+
 #[derive(Default)]
 struct Parser {
     m: Model,
     /// a type's declaration index in m.types
     at: BTreeMap<String, usize>,
-    /// the argument labels of each function, by (type or "", name): "_" when there's none
-    labels: BTreeMap<(String, String), Vec<String>>,
-    /// properties read as methods, and initializers (T::new...), by (type, name)
-    props: BTreeSet<(String, String)>,
-    inits: BTreeSet<(String, String)>,
+    /// how each declaration is called
+    calls: Vec<CallInfo>,
+    /// the names properties and initializers take, by (type, name): no overload shares one
+    fixed: BTreeSet<(String, String)>,
     classes: BTreeSet<String>,
+    /// actors (classes whose members are reached through await), and types isolated to the main
+    /// actor
+    actors: BTreeSet<String>,
+    main_types: BTreeSet<String>,
     /// enums with Int raw values (enum E: Int), whose cases keep them
     raw: BTreeSet<String>,
     /// structs Volt can't build by value: an init of their own, or a let with a value
@@ -108,6 +139,9 @@ struct Mods {
     is_static: bool,
     mutating: bool,
     lazy: bool,
+    /// @MainActor, and nonisolated (not its type's actor's)
+    main: bool,
+    nonisolated: bool,
     /// why Volt can't call it: an attribute says it's isolated to an actor, or unavailable
     barred: Option<&'static str>,
 }
@@ -115,6 +149,14 @@ struct Mods {
 impl Parser {
     fn finish(mut self) -> (Model, Swift) {
         self.implicit_inits();
+        let mut fns: Vec<Sig> = std::mem::take(&mut self.m.fns).into_iter().map(|(_, s)| s).collect();
+        self.name_overloads(&mut fns, "");
+        self.m.fns = fns.into_iter().map(|s| (Vec::new(), s)).collect();
+        for t in self.m.methods.keys().cloned().collect::<Vec<_>>() {
+            let mut ms = self.m.methods.remove(&t).unwrap_or_default();
+            self.name_overloads(&mut ms, &t);
+            self.m.methods.insert(t, ms);
+        }
         for t in &mut self.m.types {
             if self.raw_lost.contains(&t.name) {
                 if let Some(vs) = &mut t.variants {
@@ -127,8 +169,57 @@ impl Parser {
             t.clone = true;
             t.opaque = self.classes.contains(&t.name) || self.not_plain.contains(&t.name);
         }
-        let swift = Swift { labels: self.labels, props: self.props, inits: self.inits, classes: self.classes };
+        let swift = Swift { calls: self.calls, classes: self.classes, uses: Cell::new(0) };
         (self.m, swift)
+    }
+
+    /// the call info of a Sig
+    fn info(&self, s: &Sig) -> Option<&CallInfo> {
+        s.call.as_ref().and_then(|c| c.parse::<usize>().ok()).and_then(|i| self.calls.get(i))
+    }
+
+    /// overloads Volt can't tell apart (the same Volt parameter types: Swift's labels alone differ,
+    /// or two Swift types Volt names alike) are each named f_<labels> (_ for one without), so a
+    /// name depends on its declaration alone; one whose labels are the same too (Swift tells them
+    /// apart by result alone) is left out
+    fn name_overloads(&mut self, sigs: &mut Vec<Sig>, owner: &str) {
+        let (mut rename, mut drop) = (BTreeSet::new(), BTreeSet::new());
+        for i in 0..sigs.len() {
+            for j in i + 1..sigs.len() {
+                let (Some(a), Some(b)) = (self.info(&sigs[i]), self.info(&sigs[j])) else { continue };
+                if a.prop || a.init || b.prop || b.init || a.swift != b.swift || drop.contains(&i) {
+                    continue;
+                }
+                let types = |s: &Sig| s.params.iter().map(|p| p.1.clone()).collect::<Vec<_>>();
+                if types(&sigs[i]) != types(&sigs[j]) {
+                    continue;
+                }
+                if a.labels == b.labels {
+                    drop.insert(j);
+                } else {
+                    rename.insert(i);
+                    rename.insert(j);
+                }
+            }
+        }
+        let mut out = Vec::new();
+        for (i, mut s) in std::mem::take(sigs).into_iter().enumerate() {
+            let who = if owner.is_empty() { s.name.clone() } else { format!("{owner}.{}", s.name) };
+            if drop.contains(&i) {
+                self.m.left_out.push(format!("{who} (an overload Swift tells apart by its result alone)"));
+                continue;
+            }
+            if rename.contains(&i) {
+                let n = self.info(&s).map(|c| format!("{}_{}", c.swift, c.labels.join("_"))).unwrap_or_default();
+                if !spellable(&n) || !self.taken.insert((owner.to_string(), n.clone())) {
+                    self.m.left_out.push(format!("{who} (an overload whose labels make a name already taken)"));
+                    continue;
+                }
+                s.name = n;
+            }
+            out.push(s);
+        }
+        *sigs = out;
     }
 
     /// the inits Swift writes itself for a type without its own: T() when every stored property
@@ -151,9 +242,9 @@ impl Parser {
             }
             for (params, labels) in sigs {
                 let name = if self.taken.contains(&(t.clone(), "new".to_string())) { format!("new_{}", labels.first().cloned().unwrap_or_default()) } else { "new".into() };
-                let s = Sig { name: name.clone(), recv: Recv::None, params, ret: Some(Ty::SelfTy), skip: None, src: String::new(), generics: Vec::new(), call: None };
-                self.inits.insert((t.clone(), name));
-                self.add(Some(&t), s, labels);
+                let s = Sig { name, recv: Recv::None, params, ret: Some(Ty::SelfTy), skip: None, src: String::new(), generics: Vec::new(), call: None };
+                let main = self.main_types.contains(&t);
+                self.add(Some(&t), s, CallInfo { labels, init: true, main, ..CallInfo::default() });
             }
         }
     }
@@ -169,9 +260,12 @@ impl Parser {
         loop {
             match c.peek() {
                 Some(Tok::Id(w)) if w.starts_with('@') => {
-                    // @MainActor and other global actors: the shim's calls aren't on that actor
-                    if w.ends_with("Actor") {
-                        m.barred = Some("it's isolated to an actor");
+                    // @MainActor: called on the main thread; another global actor's calls can't
+                    // be put on it
+                    if w == "@MainActor" {
+                        m.main = true;
+                    } else if w.ends_with("Actor") && w != "@globalActor" {
+                        m.barred = Some("it's isolated to a global actor other than the main one");
                     }
                     let available = w == "@available";
                     c.i += 1;
@@ -196,6 +290,7 @@ impl Parser {
                         "static" | "class" => m.is_static = true,
                         "mutating" => m.mutating = true,
                         "lazy" => m.lazy = true,
+                        "nonisolated" => m.nonisolated = true,
                         _ => {}
                     }
                 }
@@ -239,10 +334,17 @@ impl Parser {
         let mut c = Cur { t, i: 0 };
         while c.i < t.len() {
             let start = c.i;
-            // #if ... #endif: swiftc picks the branch, so what's under it is left out
+            // #if ... #endif still here: swiftc couldn't answer its condition, so what's under it is
+            // left out
             if c.is("#") {
                 c.i += 1;
                 if c.is_id("if") {
+                    let cs = c.i + 1;
+                    let mut ce = cs;
+                    while ce < t.len() && !matches!(&t[ce], Tok::P(x) if x == "#") && !Self::at_decl(&Cur { t, i: ce }) {
+                        ce += 1;
+                    }
+                    let cond = toks_line(&t[cs..ce]);
                     let mut depth = 1; // this #if
                     while c.i < t.len() {
                         if c.is("#") && matches!(t.get(c.i + 1), Some(Tok::Id(w)) if w == "if" || w == "endif") {
@@ -258,7 +360,7 @@ impl Parser {
                             c.i += 1;
                         }
                     }
-                    self.m.left_out.push(format!("what's under #if in {} (swiftc decides which branch is in)", owner.unwrap_or("the file")));
+                    self.m.left_out.push(format!("what's under #if {cond} in {} (swiftc couldn't say whether it holds)", owner.unwrap_or("the file")));
                 } else {
                     // #warning("..."), #sourceLocation(...)
                     c.id();
@@ -319,7 +421,7 @@ impl Parser {
         self.taken.insert((owner.unwrap_or_default().to_string(), name.to_string()))
     }
 
-    fn add(&mut self, owner: Option<&str>, s: Sig, labels: Vec<String>) {
+    fn add(&mut self, owner: Option<&str>, mut s: Sig, mut info: CallInfo) {
         let who = match owner {
             Some(o) => format!("{o}.{}", s.name),
             None => s.name.clone(),
@@ -332,11 +434,26 @@ impl Parser {
             self.m.left_out.push(format!("{who} (the glue's own name for the handle)"));
             return;
         }
-        if !self.take(owner, &s.name) {
-            self.m.left_out.push(format!("{who} (an overload: Volt has the first one of that name)"));
+        // a property or an initializer has its name to itself; funcs may share one (overloads,
+        // named in finish)
+        let key = (owner.unwrap_or_default().to_string(), s.name.clone());
+        if info.prop || info.init {
+            if !self.take(owner, &s.name) {
+                self.m.left_out.push(format!("{who} (another declaration has its name)"));
+                return;
+            }
+            self.fixed.insert(key);
+        } else if self.fixed.contains(&key) {
+            self.m.left_out.push(format!("{who} (a property or initializer has its name)"));
             return;
+        } else {
+            self.taken.insert(key);
         }
-        self.labels.insert((owner.unwrap_or_default().to_string(), s.name.clone()), labels);
+        if info.swift.is_empty() {
+            info.swift = s.name.clone();
+        }
+        s.call = Some(self.calls.len().to_string());
+        self.calls.push(info);
         match owner {
             Some(o) => self.m.methods.entry(o.to_string()).or_default().push(s),
             None => self.m.fns.push((Vec::new(), s)),
@@ -403,12 +520,15 @@ impl Parser {
         let labels = Self::params(&items, owner, &mut s);
         if generic {
             s.skip = Some("it's generic");
-        } else if asyn {
-            s.skip = Some("it's async");
+        } else if asyn && m.mutating {
+            s.skip = Some("it's async and mutating");
         } else if m.barred.is_some() {
             s.skip = m.barred;
         }
-        self.add(owner, s, labels);
+        // an actor's (not a static or nonisolated one) is reached through await too
+        let actor = owner.is_some_and(|o| self.actors.contains(o)) && !m.is_static && !m.nonisolated;
+        let main = m.main || (owner.is_some_and(|o| self.main_types.contains(o)) && !m.nonisolated);
+        self.add(owner, s, CallInfo { labels, awaits: asyn || actor, main, ..CallInfo::default() });
     }
 
     /// async and throws, in either order (throws(E) too)
@@ -473,13 +593,11 @@ impl Parser {
         s.name = if self.taken.contains(&(o.to_string(), "new".to_string())) { format!("new_{}", labels.first().filter(|l| *l != "_").cloned().unwrap_or_default()) } else { "new".into() };
         if generic {
             s.skip = Some("it's generic");
-        } else if asyn {
-            s.skip = Some("it's async");
         } else if m.barred.is_some() {
             s.skip = m.barred;
         }
-        self.inits.insert((o.to_string(), s.name.clone()));
-        self.add(owner, s, labels);
+        let main = m.main || (self.main_types.contains(o) && !m.nonisolated);
+        self.add(owner, s, CallInfo { labels, init: true, awaits: asyn, main, ..CallInfo::default() });
     }
 
     /// struct, class, enum, extension, protocol or actor NAME [<...>] [: ...] { body }
@@ -531,7 +649,6 @@ impl Parser {
         }
         match kw {
             "protocol" => self.m.left_out.push(format!("{name} (a protocol)")),
-            "actor" => self.m.left_out.push(format!("{name} (an actor: what it does is async)")),
             "extension" => self.decls(body, Some(&name), true),
             _ => {
                 if !self.at.contains_key(&name) {
@@ -549,7 +666,13 @@ impl Parser {
                         params: Vec::new(),
                         rust_name: None,
                     });
-                    if kw == "class" {
+                    if kw == "actor" {
+                        self.actors.insert(name.clone());
+                    }
+                    if m.main {
+                        self.main_types.insert(name.clone());
+                    }
+                    if kw == "class" || kw == "actor" {
                         self.classes.insert(name.clone());
                         // a subclass inherits its superclass's inits rather than having init()
                         if inherits {
@@ -592,15 +715,22 @@ impl Parser {
                 }
                 value = c.t[s..c.i].to_vec();
             }
-            // { get ... } or a getter's body: computed; { willSet / didSet }: stored, observed
-            let (mut computed, mut getter) = (false, None);
+            // { get ... } or a getter's body: computed; { willSet / didSet }: stored, observed; a
+            // getter may be async and throw (get async throws)
+            let (mut computed, mut getter) = (false, (false, false));
             if c.is("{") {
                 computed = !observers(c);
                 let s = c.i;
                 c.skip_group();
                 let block = &c.t[s..c.i];
-                if computed && block.windows(2).any(|w| w[0] == Tok::Id("get".into()) && matches!(&w[1], Tok::Id(x) if x == "throws" || x == "async")) {
-                    getter = Some("its getter throws or is async");
+                if let Some(g) = block.iter().position(|w| *w == Tok::Id("get".into())).filter(|_| computed) {
+                    for w in &block[g + 1..] {
+                        match w {
+                            Tok::Id(x) if x == "async" => getter.0 = true,
+                            Tok::Id(x) if x == "throws" => getter.1 = true,
+                            _ => break,
+                        }
+                    }
                 }
             }
             self.binding(owner, m, ext, is_let, name, &tt, &value, computed, getter);
@@ -612,7 +742,7 @@ impl Parser {
 
     /// one binding of a let or var (see property)
     #[allow(clippy::too_many_arguments)]
-    fn binding(&mut self, owner: Option<&str>, m: Mods, ext: bool, is_let: bool, name: String, tt: &[Tok], value: &[Tok], computed: bool, getter: Option<&'static str>) {
+    fn binding(&mut self, owner: Option<&str>, m: Mods, ext: bool, is_let: bool, name: String, tt: &[Tok], value: &[Tok], computed: bool, (get_async, get_throws): (bool, bool)) {
         let lit = literal(tt, value);
         let ty = if tt.is_empty() { lit.as_ref().map(|l| l.0.clone()) } else { parse_ty(tt, owner) };
         let Some(o) = owner else {
@@ -656,9 +786,10 @@ impl Parser {
         if m.private {
             return;
         }
-        let s = Sig { name: name.clone(), recv: Recv::Ref, params: Vec::new(), ret: ty, skip: getter.or(m.barred), src: String::new(), generics: Vec::new(), call: None };
-        self.props.insert((o.to_string(), name));
-        self.add(owner, s, Vec::new());
+        let s = Sig { name, recv: Recv::Ref, params: Vec::new(), ret: if get_throws { ty.map(|t| Ty::Res(Box::new(t))) } else { ty }, skip: m.barred, src: String::new(), generics: Vec::new(), call: None };
+        let actor = self.actors.contains(o) && !m.nonisolated;
+        let main = m.main || (self.main_types.contains(o) && !m.nonisolated);
+        self.add(owner, s, CallInfo { prop: true, awaits: get_async || actor, main, ..CallInfo::default() });
     }
 
     /// case a, b = 2, c(Int): an enum's cases (one with associated values makes it a handle)
@@ -700,6 +831,140 @@ impl Parser {
             }
             if !c.eat(",") {
                 break;
+            }
+        }
+    }
+}
+
+/// a line's #if, #elseif, #else or #endif, and what follows it (a condition, its comment cut)
+fn directive(line: &str) -> Option<(&'static str, String)> {
+    let t = line.trim_start();
+    for d in ["#elseif", "#else", "#endif", "#if"] {
+        if let Some(rest) = t.strip_prefix(d).filter(|r| r.is_empty() || r.starts_with(char::is_whitespace)) {
+            let rest = rest.split("//").next().unwrap_or("").trim();
+            return Some((d, rest.to_string()));
+        }
+    }
+    None
+}
+
+/// the conditions of a file's #if and #elseif lines, as written
+fn if_conditions(text: &str) -> Vec<String> {
+    text.lines().filter_map(directive).filter(|(d, _)| *d == "#if" || *d == "#elseif").map(|(_, c)| c).collect()
+}
+
+/// which of these #if conditions hold for swiftc (the build's target and flags): a file of
+/// `#if C #warning("volt_if_K") #endif` per condition, typechecked, its warnings the ones that
+/// hold; when the file fails, each is asked alone, and one swiftc can't compile has no answer
+fn probe_ifs(swiftc: &str, conds: &BTreeSet<String>, dir: &Path) -> BTreeMap<String, bool> {
+    let list: Vec<&String> = conds.iter().collect();
+    let ask = |ks: &[usize]| -> Option<BTreeSet<usize>> {
+        let mut src = String::new();
+        for &k in ks {
+            let _ = write!(src, "#if {}\n#warning(\"volt_if_{k}\")\n#endif\n", list[k]);
+        }
+        let f = dir.join("if_probe.swift");
+        std::fs::write(&f, &src).ok()?;
+        let o = Command::new(swiftc).args(["-typecheck", "-parse-as-library"]).arg(&f).output().ok()?;
+        let err = String::from_utf8_lossy(&o.stderr);
+        o.status.success().then(|| ks.iter().copied().filter(|k| err.lines().any(|l| l.trim_end().ends_with(&format!("warning: volt_if_{k}")))).collect())
+    };
+    let mut out = BTreeMap::new();
+    if list.is_empty() {
+        return out;
+    }
+    let all: Vec<usize> = (0..list.len()).collect();
+    match ask(&all) {
+        Some(yes) => {
+            for k in all {
+                out.insert(list[k].clone(), yes.contains(&k));
+            }
+        }
+        None => {
+            for k in all {
+                if let Some(yes) = ask(&[k]) {
+                    out.insert(list[k].clone(), yes.contains(&k));
+                }
+            }
+        }
+    }
+    out
+}
+
+/// the source with each #if settled: the lines of the branch that holds kept, the others and the
+/// directives blanked; a block with a condition swiftc didn't answer is kept as written (the
+/// parser leaves it out)
+fn resolve_ifs(text: &str, holds: &BTreeMap<String, bool>) -> String {
+    let lines: Vec<&str> = text.split_inclusive('\n').collect();
+    let (mut out, mut i) = (String::with_capacity(text.len()), 0);
+    while i < lines.len() {
+        resolve_lines(&lines, &mut i, holds, true, &mut out);
+        // (a stray #elseif, #else or #endif: kept)
+        if i < lines.len() {
+            out.push_str(lines[i]);
+            i += 1;
+        }
+    }
+    out
+}
+
+/// a line blanked (its line break kept)
+fn blank(l: &str) -> &'static str {
+    if l.ends_with('\n') {
+        "\n"
+    } else {
+        ""
+    }
+}
+
+/// lines from *i up to the #elseif, #else or #endif ending their branch (left at it), kept when
+/// live, else blanked; each #if in them settled
+fn resolve_lines(lines: &[&str], i: &mut usize, holds: &BTreeMap<String, bool>, live: bool, out: &mut String) {
+    while *i < lines.len() {
+        let l = lines[*i];
+        match directive(l) {
+            Some(("#elseif" | "#else" | "#endif", _)) => return,
+            Some(("#if", c)) => {
+                // the block's branches (a condition, or none for #else, and its directive's line)
+                // and its #endif
+                let start = *i;
+                let mut branches = vec![(Some(c), start)];
+                let (mut depth, mut end) = (0, None);
+                for (k, x) in lines.iter().enumerate().skip(start + 1) {
+                    match directive(x) {
+                        Some(("#if", _)) => depth += 1,
+                        Some(("#endif", _)) if depth > 0 => depth -= 1,
+                        Some(("#endif", _)) => {
+                            end = Some(k);
+                            break;
+                        }
+                        Some(("#elseif", c)) if depth == 0 => branches.push((Some(c), k)),
+                        Some(("#else", _)) if depth == 0 => branches.push((None, k)),
+                        _ => {}
+                    }
+                }
+                let answers: Option<Vec<bool>> = branches.iter().map(|(c, _)| c.as_ref().map_or(Some(true), |c| holds.get(c).copied())).collect();
+                let Some(end) = end.filter(|_| answers.is_some() || !live) else {
+                    // unanswered (or unterminated): kept as written
+                    let to = end.unwrap_or(lines.len() - 1);
+                    for x in &lines[start..=to] {
+                        out.push_str(if live { x } else { blank(x) });
+                    }
+                    *i = to + 1;
+                    continue;
+                };
+                let pick = answers.and_then(|a| a.iter().position(|x| *x));
+                for (b, (_, at)) in branches.iter().enumerate() {
+                    out.push_str(blank(lines[*at]));
+                    *i = at + 1;
+                    resolve_lines(lines, i, holds, live && pick == Some(b), out);
+                }
+                out.push_str(blank(lines[end]));
+                *i = end + 1;
+            }
+            _ => {
+                out.push_str(if live { l } else { blank(l) });
+                *i += 1;
             }
         }
     }
@@ -914,10 +1179,10 @@ fn parse_ty(t: &[Tok], owner: Option<&str>) -> Option<Ty> {
 // ---------- the shim, in Swift ----------
 
 pub struct Swift {
-    labels: BTreeMap<(String, String), Vec<String>>,
-    props: BTreeSet<(String, String)>,
-    inits: BTreeSet<(String, String)>,
+    calls: Vec<CallInfo>,
     classes: BTreeSet<String>,
+    /// the bridges the calls use (1: async, 2: the main actor's), for the prelude
+    uses: Cell<u8>,
 }
 
 /// a Volt number type's Swift name
@@ -1148,27 +1413,45 @@ impl Lang for Swift {
 
     fn call(&self, _g: &Gen, _module: &[String], s: &Sig, self_ty: Option<&TypeInfo>, recv: Option<&str>, args: &[String]) -> String {
         let owner = self_ty.map(|t| t.def.name.clone()).unwrap_or_default();
-        let key = (owner.clone(), s.name.clone());
-        if let (true, Some(r)) = (self.props.contains(&key), recv) {
-            return format!("{r}.{}", s.name);
-        }
-        let labels = self.labels.get(&key);
-        let args: Vec<String> = args
-            .iter()
-            .enumerate()
-            .map(|(i, a)| match labels.and_then(|l| l.get(i)) {
-                Some(l) if l != "_" => format!("{l}: {a}"),
-                _ => a.clone(),
-            })
-            .collect();
-        let args = args.join(", ");
-        if self.inits.contains(&key) {
-            return format!("{owner}({args})");
-        }
-        match (recv, self_ty) {
-            (Some(r), _) => format!("{r}.{}({args})", s.name),
-            (None, Some(_)) => format!("{owner}.{}({args})", s.name),
-            (None, None) => format!("{}({args})", s.name),
+        let c = s.call.as_ref().and_then(|c| c.parse::<usize>().ok()).and_then(|i| self.calls.get(i)).cloned().unwrap_or_else(|| CallInfo { swift: s.name.clone(), ..CallInfo::default() });
+        let expr = match (c.prop, recv) {
+            (true, Some(r)) => format!("{r}.{}", c.swift),
+            _ => {
+                let args: Vec<String> = args
+                    .iter()
+                    .enumerate()
+                    .map(|(i, a)| match c.labels.get(i) {
+                        Some(l) if l != "_" => format!("{l}: {a}"),
+                        _ => a.clone(),
+                    })
+                    .collect();
+                let args = args.join(", ");
+                match (c.init, recv, self_ty) {
+                    (true, ..) => format!("{owner}({args})"),
+                    (_, Some(r), _) => format!("{r}.{}({args})", c.swift),
+                    (_, None, Some(_)) => format!("{owner}.{}({args})", c.swift),
+                    (_, None, None) => format!("{}({args})", c.swift),
+                }
+            }
+        };
+        // async (or an actor's): the shim waits for it; the main actor's: on the main thread
+        let throws = matches!(s.ret, Some(Ty::Res(_)));
+        let (t, th) = if throws { ("try ", "Throws") } else { ("", "") };
+        let what = if owner.is_empty() { c.swift.clone() } else { format!("{owner}.{}", c.swift) };
+        match (c.awaits, c.main) {
+            (false, false) => expr,
+            (true, false) => {
+                self.uses.set(self.uses.get() | 1);
+                format!("__voltAsync{th} {{ {t}await {expr} }}")
+            }
+            (false, true) => {
+                self.uses.set(self.uses.get() | 2);
+                format!("__voltMain{th}(\"{what}\") {{ {t}{expr} }}")
+            }
+            (true, true) => {
+                self.uses.set(self.uses.get() | 3);
+                format!("__voltMainAsync{th}(\"{what}\") {{ {t}await {expr} }}")
+            }
         }
     }
 
@@ -1265,6 +1548,14 @@ impl Lang for Swift {
     fn prelude(&self, g: &Gen) -> String {
         let free = |what: &str| format!("volt_swift_{}_free_{what}", g.alias);
         let mut s = String::from("// the glue between a Volt program and this Swift, written by bolt import (use swift)\n\n");
+        let uses = self.uses.get();
+        if uses != 0 {
+            s.push_str(if uses & 2 != 0 { "import Dispatch\nimport Foundation\n\n" } else { "import Dispatch\n\n" });
+            s.push_str(BRIDGES);
+        }
+        if uses & 2 != 0 {
+            s.push_str(MAIN_BRIDGES);
+        }
         s.push_str("// a value Volt holds by handle\nfinal class __VoltBox<T> {\n    var v: T\n    init(_ v: T) { self.v = v }\n}\n\n");
         s.push_str("func __voltS(_ p: UnsafePointer<UInt8>?, _ n: Int) -> String {\n    guard let p = p else { return \"\" }\n    return String(decoding: UnsafeBufferPointer(start: p, count: n), as: UTF8.self)\n}\n\n");
         s.push_str("func __voltSl<T>(_ p: UnsafePointer<T>?, _ n: Int) -> [T] {\n    guard let p = p else { return [] }\n    return Array(UnsafeBufferPointer(start: p, count: n))\n}\n\n");
@@ -1286,9 +1577,91 @@ impl Lang for Swift {
     }
 }
 
+/// async calls, run to their end: a detached task runs one (it needs no executor the caller
+/// holds) while the calling thread waits
+const BRIDGES: &str = r#"final class __VoltDone<T>: @unchecked Sendable {
+    var r: Result<T, Error>? = nil
+}
+
+func __voltAsync<T>(_ f: @escaping () async -> T) -> T {
+    let d = __VoltDone<T>()
+    let s = DispatchSemaphore(value: 0)
+    Task.detached {
+        d.r = .success(await f())
+        s.signal()
+    }
+    s.wait()
+    return try! d.r!.get()
+}
+
+func __voltAsyncThrows<T>(_ f: @escaping () async throws -> T) throws -> T {
+    let d = __VoltDone<T>()
+    let s = DispatchSemaphore(value: 0)
+    Task.detached {
+        do { d.r = .success(try await f()) } catch { d.r = .failure(error) }
+        s.signal()
+    }
+    s.wait()
+    return try d.r!.get()
+}
+
+"#;
+
+/// the main actor's calls: on the main thread (where it runs here), an async one by running the
+/// main run loop until it's done
+const MAIN_BRIDGES: &str = r#"func __voltOnMain(_ what: String) {
+    if !Thread.isMainThread {
+        fatalError("\(what) is isolated to the main actor: call it from the main thread")
+    }
+}
+
+func __voltMain<T>(_ what: String, _ f: @MainActor () -> T) -> T {
+    __voltOnMain(what)
+    var v: T? = nil
+    MainActor.assumeIsolated { v = f() }
+    return v!
+}
+
+func __voltMainThrows<T>(_ what: String, _ f: @MainActor () throws -> T) throws -> T {
+    __voltOnMain(what)
+    var v: Result<T, Error>? = nil
+    MainActor.assumeIsolated { v = Result { try f() } }
+    return try v!.get()
+}
+
+func __voltMainAsync<T>(_ what: String, _ f: @escaping @MainActor () async -> T) -> T {
+    __voltOnMain(what)
+    let d = __VoltDone<T>()
+    Task { @MainActor in d.r = .success(await f()) }
+    while d.r == nil {
+        _ = RunLoop.main.run(mode: .default, before: Date(timeIntervalSinceNow: 0.01))
+    }
+    return try! d.r!.get()
+}
+
+func __voltMainAsyncThrows<T>(_ what: String, _ f: @escaping @MainActor () async throws -> T) throws -> T {
+    __voltOnMain(what)
+    let d = __VoltDone<T>()
+    Task { @MainActor in
+        do { d.r = .success(try await f()) } catch { d.r = .failure(error) }
+    }
+    while d.r == nil {
+        _ = RunLoop.main.run(mode: .default, before: Date(timeIntervalSinceNow: 0.01))
+    }
+    return try d.r!.get()
+}
+
+"#;
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// the call info of TYPE.NAME ("" for a top-level fn)
+    fn info(m: &Model, sw: &Swift, owner: &str, name: &str) -> CallInfo {
+        let s = if owner.is_empty() { m.fns.iter().map(|x| &x.1).find(|s| s.name == name) } else { m.methods[owner].iter().find(|s| s.name == name) };
+        sw.calls[s.and_then(|s| s.call.as_ref()).and_then(|c| c.parse::<usize>().ok()).unwrap()].clone()
+    }
 
     fn ty(s: &str) -> Option<Ty> {
         parse_ty(&lex(s), Some("Shape"))
@@ -1367,18 +1740,19 @@ extension Point { func dot(_ o: Point) -> Double { x * o.x + y * o.y } }
         assert_eq!(m.types[3].variants, None, "cases with values: a handle");
         let methods = |t: &str| m.methods[t].iter().map(|s| (s.name.as_str(), s.recv)).collect::<Vec<_>>();
         assert_eq!(methods("Point"), [("norm", Recv::Ref), ("scaled", Recv::Ref), ("move", Recv::Mut), ("origin", Recv::None), ("dot", Recv::Ref), ("new", Recv::None)]);
-        assert_eq!(sw.labels[&("Point".to_string(), "new".to_string())], ["x", "y"], "the memberwise init");
+        assert_eq!(info(&m, &sw, "Point", "new").labels, ["x", "y"], "the memberwise init");
         assert_eq!(methods("Counter"), [("count", Recv::Ref), ("name", Recv::Ref), ("new", Recv::None), ("new_start", Recv::None), ("bump", Recv::Ref), ("wait", Recv::Ref)]);
-        assert_eq!(m.methods["Counter"][5].skip, Some("it's async"));
-        assert_eq!(sw.labels[&("Point".to_string(), "move".to_string())], ["dx", "_"]);
-        assert_eq!(sw.labels[&("Counter".to_string(), "bump".to_string())], ["by"]);
-        assert!(sw.inits.contains(&("Counter".to_string(), "new_start".to_string())));
-        assert!(sw.props.contains(&("Point".to_string(), "norm".to_string())));
+        assert_eq!(m.methods["Counter"][5].skip, None);
+        assert!(info(&m, &sw, "Counter", "wait").awaits, "an async method: the shim waits for it");
+        assert_eq!(info(&m, &sw, "Point", "move").labels, ["dx", "_"]);
+        assert_eq!(info(&m, &sw, "Counter", "bump").labels, ["by"]);
+        assert!(info(&m, &sw, "Counter", "new_start").init);
+        assert!(info(&m, &sw, "Point", "norm").prop);
         let fns: Vec<(&str, Option<Ty>)> = m.fns.iter().map(|(_, s)| (s.name.as_str(), s.ret.clone())).collect();
-        assert_eq!(fns, [("parse", Some(Ty::Res(Box::new(Ty::Prim("isize"))))), ("add", Some(Ty::Prim("isize"))), ("pick", Some(Ty::Named("T".into())))]);
-        assert_eq!(m.fns[2].1.skip, Some("it's generic"));
+        assert_eq!(fns, [("parse", Some(Ty::Res(Box::new(Ty::Prim("isize"))))), ("add", Some(Ty::Prim("isize"))), ("add", Some(Ty::Prim("f64"))), ("pick", Some(Ty::Named("T".into())))], "add's overloads, both");
+        assert_eq!(m.fns[3].1.skip, Some("it's generic"));
         assert_eq!(m.consts, [(vec![], "LIMIT".to_string(), "isize".to_string(), "10".to_string()), (vec![], "NAME".to_string(), "str".to_string(), "\"geom\"".to_string())]);
-        assert_eq!(m.left_out, ["add (an overload: Volt has the first one of that name)", "Drawable (a protocol)"]);
+        assert_eq!(m.left_out, ["Drawable (a protocol)"]);
     }
 
     #[test]
@@ -1419,13 +1793,51 @@ func after() {}
         let methods = |t: &str| m.methods.get(t).map(|v| v.iter().map(|s| (s.name.clone(), s.skip)).collect::<Vec<_>>()).unwrap_or_default();
         assert_eq!(methods("Outer"), [("new".to_string(), None)], "Outer.Inner's f isn't Outer's");
         assert_eq!(methods("Dog"), [("tricks".to_string(), None)], "a subclass has its superclass's inits, not init()");
-        assert_eq!(methods("Pair")[0], ("z".to_string(), Some("its getter throws or is async")));
+        assert_eq!(methods("Pair")[0], ("z".to_string(), None));
+        assert_eq!(m.methods["Pair"][0].ret, Some(Ty::Res(Box::new(Ty::Prim("isize")))), "a getter that throws");
         assert!(methods("Lazy").iter().all(|x| x.0 != "new_cache"), "no memberwise init with a lazy var");
         assert!(m.types.iter().find(|x| x.name == "Lazy").is_some_and(|x| x.opaque));
         let fns: Vec<(String, Option<&str>)> = m.fns.iter().map(|(_, s)| (s.name.clone(), s.skip)).collect();
-        assert_eq!(fns, [("onMain".to_string(), Some("it's isolated to an actor")), ("gone".to_string(), Some("it's marked unavailable")), ("after".to_string(), None)], "left out {:?}, types {:?}", m.left_out, m.types.iter().map(|t| &t.name).collect::<Vec<_>>());
+        assert_eq!(fns, [("onMain".to_string(), None), ("gone".to_string(), Some("it's marked unavailable")), ("after".to_string(), None)], "left out {:?}, types {:?}", m.left_out, m.types.iter().map(|t| &t.name).collect::<Vec<_>>());
         assert_eq!(m.types.iter().find(|x| x.name == "Flags").and_then(|x| x.variants.clone()), Some(vec![("a".into(), 0), ("b".into(), 1)]));
         assert!(m.left_out.iter().any(|l| l.contains("Pair.clone")), "{:?}", m.left_out);
-        assert!(m.left_out.iter().any(|l| l.contains("#if")), "{:?}", m.left_out);
+        assert!(m.left_out.iter().any(|l| l.contains("#if DEBUG")), "{:?}", m.left_out);
+    }
+
+    #[test]
+    fn import_swift_overloads_actors() {
+        let src = "func move(by k: Int) -> Int { k }\nfunc move(to k: Int) -> Int { k }\nfunc move(_ x: Double) -> Double { x }\nfunc f() -> Int { 1 }\nfunc f() -> String { \"\" }\nactor Tally {\n    var n = 0\n    func add(_ k: Int) -> Int { n += k; return n }\n    nonisolated func name() -> String { \"t\" }\n    static func make() -> Int { 1 }\n}\n@MainActor final class Screen {\n    func draw() -> Int { 1 }\n    nonisolated func id() -> Int { 2 }\n}\n@MainActor func later() async throws -> Int { 1 }\nstruct G {\n    var x = 1\n    var slow: Int { get async throws { 1 } }\n    mutating func bump() async {}\n}\n@globalActor actor BackgroundActor { static let shared = BackgroundActor() }\n@BackgroundActor func elsewhere() {}\n";
+        let mut p = Parser::default();
+        p.decls(&lex(src), None, false);
+        let (m, sw) = p.finish();
+        let fns: Vec<&str> = m.fns.iter().map(|(_, s)| s.name.as_str()).collect();
+        assert_eq!(fns, ["move_by", "move_to", "move", "f", "later", "elsewhere"], "labels name the overloads Volt can't tell apart");
+        assert_eq!(info(&m, &sw, "", "move_to").swift, "move");
+        assert!(m.left_out.iter().any(|l| l.starts_with("f (an overload Swift tells apart by its result alone)")), "{:?}", m.left_out);
+        let (add, name, make) = (info(&m, &sw, "Tally", "add"), info(&m, &sw, "Tally", "name"), info(&m, &sw, "Tally", "make"));
+        assert!(add.awaits && !name.awaits && !make.awaits, "an actor's members await, but nonisolated and static ones");
+        assert!(info(&m, &sw, "Tally", "n").awaits && info(&m, &sw, "Tally", "new").init);
+        assert!(info(&m, &sw, "Screen", "draw").main && !info(&m, &sw, "Screen", "id").main, "a @MainActor type's members");
+        let later = info(&m, &sw, "", "later");
+        assert!(later.main && later.awaits);
+        let slow = info(&m, &sw, "G", "slow");
+        assert!(slow.prop && slow.awaits);
+        assert_eq!(m.methods["G"].iter().find(|s| s.name == "bump").and_then(|s| s.skip), Some("it's async and mutating"));
+        assert_eq!(m.fns[5].1.skip, Some("it's isolated to a global actor other than the main one"));
+    }
+
+    #[test]
+    fn import_swift_if() {
+        let src = "#if os(Linux) || os(macOS) // the usual\nfunc a() {}\n  #if arch(x86_64)\n  func a64() {}\n  #else\n  func aother() {}\n  #endif\n#elseif os(Windows)\nfunc w() {}\n#else\nfunc none() {}\n#endif\n#if FANCY\nfunc fancy() {}\n#endif\n#if swift(>=5.9)\nfunc modern() {}\n#endif\nstruct S {\n#if !os(Linux)\n    var x: Int { 1 }\n#endif\n}\n";
+        assert_eq!(if_conditions(src), ["os(Linux) || os(macOS)", "arch(x86_64)", "os(Windows)", "FANCY", "swift(>=5.9)", "!os(Linux)"]);
+        // the answers swiftc gives (FANCY: none, as when the probe can't compile it)
+        let holds: BTreeMap<String, bool> = [("os(Linux) || os(macOS)", true), ("arch(x86_64)", false), ("os(Windows)", false), ("swift(>=5.9)", true), ("!os(Linux)", false)].map(|(c, h)| (c.to_string(), h)).into();
+        let mut p = Parser::default();
+        p.decls(&lex(&resolve_ifs(src, &holds)), None, false);
+        let (m, _) = p.finish();
+        let fns: Vec<&str> = m.fns.iter().map(|(_, s)| s.name.as_str()).collect();
+        assert_eq!(fns, ["a", "aother", "modern"]);
+        assert!(!m.methods.get("S").is_some_and(|ms| ms.iter().any(|s| s.name == "x")));
+        assert_eq!(m.left_out, ["what's under #if FANCY in the file (swiftc couldn't say whether it holds)"]);
     }
 }
