@@ -1987,7 +1987,7 @@ fn cpp_params() {
         // @cpp<cpp_error!R> and the try_ forms of calls worked out per use catch as declared try_ forms do
         let caught = "bump\nbumped: INVALID_ARGUMENT negative\nbump\ntbumped: INVALID_ARGUMENT negative\nb b\nnonneg 4: 4\nnonneg -4: INVALID_ARGUMENT negative\nboom 1: done\nboom 2: LENGTH_ERROR too many\nthrow 42: UNKNOWN an exception that isn't a std::exception\nbad_alloc: BAD_ALLOC std::bad_alloc\ngrow 2: 5 hi~++\ngrow -1: INVALID_ARGUMENT hi~++\nrelay 99\nnonneg -5: INVALID_ARGUMENT negative\nplain 3\n";
         assert_eq!(ok(e.voltc(&["run", "cpp_params_catch.volt", "--backend", backend]), "voltc run cpp_params_catch.volt"), caught, "@cpp<cpp_error!R> ({backend})");
-        let tried = "checked 2 3: 5\nchecked 2 -5: INVALID_ARGUMENT negative sum\nstretch 2: 5 hi~++\nstretch -1: OUT_OF_RANGE hi~++\nboom 2: LENGTH_ERROR\ntwin 5 -5\npick -1: INVALID_ARGUMENT negative pick\npick 4: 4\npick 1 -5: RANGE_ERROR negative picks\npick 1 2: 3\nkeep 3: 3\nkeep -2: DOMAIN_ERROR\nmade 1: 1 ab~\nmade -1: DOMAIN_ERROR ab~\ngrow 2: 6 ab~~++\ngrow -1: OUT_OF_RANGE ab~~++\ntake -1: OUT_OF_RANGE 5\n";
+        let tried = "checked 2 3: 5\nchecked 2 -5: INVALID_ARGUMENT negative sum\nstretch 2: 5 hi~++\nstretch -1: OUT_OF_RANGE hi~++\nboom 2: LENGTH_ERROR\ntwin 5 -5\nsole 2 -5 read 3 -4\npick -1: INVALID_ARGUMENT negative pick\npick 4: 4\npick 1 -5: RANGE_ERROR negative picks\npick 1 2: 3\nkeep 3: 3\nkeep -2: DOMAIN_ERROR\nmade 1: 1 ab~\nmade -1: DOMAIN_ERROR ab~\ngrow 2: 6 ab~~++\ngrow -1: OUT_OF_RANGE ab~~++\ntake -1: OUT_OF_RANGE 5\n";
         assert_eq!(ok(e.voltc(&["run", "cpp_params_try.volt", "--backend", backend]), "voltc run cpp_params_try.volt"), tried, "try_ forms per use ({backend})");
         // its arguments are worked out before catch mode: a throw in one stops the program, and an
         // early exit in one leaves catch mode off (a later plain throw stops it)
@@ -2029,6 +2029,8 @@ fn cpp_params() {
     // left-out comment)
     assert!(src.contains("@attributes([@cpp_call(\"try:pr::pu::checked\")])") && src.contains("fn try_checked() -> void {}"), "a per-use try_ stub: {src}");
     assert!(src.contains("// left out: try_twin, worked out per use (the header declares try_twin)") && src.matches("fn try_twin(").count() == 1, "a real try_twin keeps its name: {src}");
+    // and beside a declared function or method: one try_sole, one try_read, the header's
+    assert!(src.matches("fn try_sole(").count() == 1 && src.matches("fn try_read(").count() == 1, "a declared try_ name the header has keeps it: {src}");
     // x.try_m(...) with neither try_m nor m on the class: m's error
     let o = e.voltc(&["check", "cpp_params_no_member.volt"]);
     let err = String::from_utf8_lossy(&o.stderr);
