@@ -1376,10 +1376,17 @@ attach fn global_init(this: checker&, l: let_stmt&, span: span) -> compile_error
         if (v.pure && v.lit == null && foldable(&l.init)) {
             val folded = this.fold_global(&l.init, want);
             if (folded) {
+                // only when the constant is the same type (an array global named by a slice global
+                // folds to a temporary array, which no slice can point at)
+                var f = folded;
                 if (want) {
-                    return try this.coerce(folded, want, l.init.span);
+                    f = this.coerce(f, want, l.init.span) catch |err| {
+                        return v;
+                    };
                 }
-                return folded;
+                if (f.ty == v.ty) {
+                    return f;
+                }
             }
         }
         if (!v.pure && v.lit == null) {

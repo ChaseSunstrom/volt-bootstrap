@@ -452,12 +452,12 @@ attach fn ct_coerce(this: checker&, v: cval, t: u32, span: span) -> compile_erro
         .INT(x, from) => {
             match (tt) {
                 .INT(k) => {
-                    if (!k.fits(x)) {
-                        return fail(span, fmt2("{} doesn't fit in {}", num(x), S(k.name())));
+                    if (!ct_fits(k, x, from)) {
+                        return fail(span, fmt2("{} doesn't fit in {}", ct_num(x, from), S(k.name())));
                     }
                     return cval::INT(x, t);
                 },
-                .FLOAT(b) => { return cval::FLOAT(@cast<f64>(x), t); },
+                .FLOAT(b) => { return cval::FLOAT(ct_int_f64(x, from), t); },
                 default => {},
             }
         },
@@ -796,7 +796,12 @@ attach fn ct_expr(this: checker&, e: expr&, want: u32?) -> compile_error!cval {
                 }
                 return cval::BOOL(try this.ct_bool(b));
             }
-            var av = try this.ct_expr(a, null);
+            // a literal past i128's maximum on the left is a u128, the one type that holds it
+            var aw: u32? = null;
+            if (past_i128_lit(a)) {
+                aw = int_id(int_ty::U128);
+            }
+            var av = try this.ct_expr(a, aw);
             this.c_enum_ct(&av);
             var at: u32? = null;
             match (av) {
@@ -1075,7 +1080,7 @@ attach fn ct_binop(this: checker&, op: binop, var a: cval, var b: cval, span: sp
         .INT(x, ta) => {
             match (b) {
                 .INT(y, tb) => { return this.ct_int_op(op, x, ta, y, tb, span); },
-                .FLOAT(f, tb) => { return this.ct_binop(op, cval::FLOAT(@cast<f64>(x), VOID), copy b, span); },
+                .FLOAT(f, tb) => { return this.ct_binop(op, cval::FLOAT(ct_int_f64(x, ta), VOID), copy b, span); },
                 default => {},
             }
         },
@@ -1153,6 +1158,13 @@ attach fn ct_int_op(this: checker&, op: binop, x: i128, ta: u32, y: i128, tb: u3
     }
     val k = this.t.int_of(t);
     if (t == int_id(int_ty::U128)) {
+        // an untyped operand is a number, not bits: a negative one isn't a u128
+        if (ta == VOID && x < 0) {
+            return fail(span, fmt("{} doesn't fit in u128", num(x)));
+        }
+        if (tb == VOID && y < 0) {
+            return fail(span, fmt("{} doesn't fit in u128", num(y)));
+        }
         val u = ct_u128_op(op, @cast<u128>(x), @cast<u128>(y)) ?? return fails(span, "integer overflow or division by zero at compile time");
         return u;
     }
@@ -1215,6 +1227,32 @@ attach fn ct_int_op(this: checker&, op: binop, x: i128, ta: u32, y: i128, tb: u3
         }
     }
     return cval::INT(v, t);
+}
+
+// does a compile-time integer of type `from` fit in k? (a u128's bits past i128's maximum fit only a u128)
+fn ct_fits(k: int_ty, x: i128, from: u32) -> bool {
+    if (from == int_id(int_ty::U128) && x < 0) {
+        return k == int_ty::U128;
+    }
+    return k.fits(x);
+}
+
+// a compile-time integer of type t as text (a u128's bits read unsigned)
+fn ct_num(x: i128, t: u32) -> std::string {
+    if (t == int_id(int_ty::U128) && x < 0) {
+        var s: std::string = {};
+        append_u128(&s, @cast<u128>(x));
+        return s;
+    }
+    return num(x);
+}
+
+// a compile-time integer of type t as an f64 (a u128's bits read unsigned)
+fn ct_int_f64(x: i128, t: u32) -> f64 {
+    if (t == int_id(int_ty::U128) && x < 0) {
+        return @cast<f64>(@cast<u128>(x));
+    }
+    return @cast<f64>(x);
 }
 
 // ct_int_op on u128s, unsigned: + - * checked against u128's range, wrapping ops wrap at 128 bits;
@@ -1403,15 +1441,15 @@ attach fn ct_convert(this: checker&, v: cval, to: u32, unchecked: bool, span: sp
         .INT(x, from) => {
             match (tt) {
                 .INT(k) => {
-                    if (!k.fits(x)) {
+                    if (!ct_fits(k, x, from)) {
                         if (!unchecked) {
-                            return fail(span, fmt2("{} doesn't fit in {}", num(x), S(k.name())));
+                            return fail(span, fmt2("{} doesn't fit in {}", ct_num(x, from), S(k.name())));
                         }
                         return cval::INT(wrap_bits(x, k.bits(), k.signed()), to);
                     }
                     return cval::INT(x, to);
                 },
-                .FLOAT(b) => { return cval::FLOAT(@cast<f64>(x), to); },
+                .FLOAT(b) => { return cval::FLOAT(ct_int_f64(x, from), to); },
                 default => {},
             }
         },
@@ -2901,7 +2939,7 @@ attach fn ct_lit(this: checker&, e: expr&, want: u32?) -> expr? {
 fn cval_expr(v: cval&, span: span) -> expr? {
     match (*v) {
         .INT(n, k) => {
-            if (n < 0) {
+            if (n < 0 && k != int_id(int_ty::U128)) {
                 return { kind: expr_kind::UNARY(unop::NEG, bx<expr>({ kind: expr_kind::INT(@cast<u128>(0 - n)), span: span })), span: span };
             }
             return { kind: expr_kind::INT(@cast<u128>(n)), span: span };
@@ -3298,7 +3336,14 @@ attach fn ct_builtin(this: checker&, name: str, gargs: std::vec<garg>&, args: st
         val to = try this.garg_type_env(gargs.at(0), env);
         var v = cval::VOID;
         match (*args.at(0)) {
-            .EXPR(x&) => { v = try this.ct_expr(x, null); },
+            .EXPR(x&) => {
+                // a literal past i128's maximum is a u128 cast to one
+                var w: u32? = null;
+                if (to == int_id(int_ty::U128)) {
+                    w = to;
+                }
+                v = try this.ct_expr(x, w);
+            },
             .TYPE(t) => {
                 match (t.kind) {
                     .PATH(p&) => { v = try this.ct_path(p, null, t.span); },

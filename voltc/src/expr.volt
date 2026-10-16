@@ -163,6 +163,14 @@ attach fn u128_val(this: checker&, bits: i128) -> tval {
     return vpure(t, this.ir.int(bits, t));
 }
 
+// is e an integer literal past i128's maximum (which only a u128 holds)?
+fn past_i128_lit(e: expr&) -> bool {
+    match (e.kind) {
+        .INT(v) => { return v > 170141183460469231731687303715884105727; },
+        default => { return false; },
+    }
+}
+
 // the error for a literal past i128's maximum where no u128 is wanted
 fn past_i128(v: u128) -> std::string {
     var s: std::string = {};

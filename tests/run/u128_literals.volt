@@ -11,6 +11,10 @@ val TOP: u128 = MAX >> 100;
 val ABOVE: bool = SIGN > 1;
 val HALVES: bool = MAX - SIGN == SIGN - 1;
 val SUM: u128 = SIGN + 0x7FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF;
+// a literal on the left, a cast of one, and a u128 as a float
+val LEFT: u128 = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF / 3;
+val CAST: u128 = @cast<u128>(340282366920938463463374607431768211455);
+val F: f64 = @cast<f64>(MAX);
 
 struct holder {
     v: u128;
@@ -18,6 +22,14 @@ struct holder {
 
 fn with_default(x: u128 = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF) -> u128 {
     return x;
+}
+
+comptime fn ct_max() -> u128 {
+    val m: u128 = 340282366920938463463374607431768211455;
+    if (340282366920938463463374607431768211455 == m) {
+        return m;
+    }
+    return 0;
 }
 
 comptime fn ct_ops() -> u128 {
@@ -40,6 +52,9 @@ fn main() -> i32 {
     std::println("{} {} {}", MAX == 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF, SIGN != 340282366920938463463374607431768211455, SIGN < 340282366920938463463374607431768211455);
     comptime val c = ct_ops();
     std::println("{}", c);
+    comptime val cm = ct_max();
+    std::println("{} {} {} {}", cm, LEFT, CAST, F > 3.4e38);
+    std::println("{} {}", 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF == local, @cast<u128>(340282366920938463463374607431768211455) == MAX);
     // the same at run time, from values the compiler can't see through
     var m = local;
     var s = h.v;
@@ -56,5 +71,7 @@ fn main() -> i32 {
 // expect: 340282366920938463463374607431768211455 170141183460469231731687303715884105729
 // expect: true true true
 // expect: 68056473384187692692674921486353642297
+// expect: 340282366920938463463374607431768211455 113427455640312821154458202477256070485 340282366920938463463374607431768211455 true
+// expect: true true
 // expect: 113427455640312821154458202477256070485 3 268435455 true true
 // expect: 68056473384187692692674921486353642297
