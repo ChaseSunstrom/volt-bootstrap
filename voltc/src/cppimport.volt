@@ -420,7 +420,11 @@ attach fn vtype(this: cpp_gen&, t: clang::CXType, tparams: std::vec<str>&) -> st
     }
     if (k == clang::CXType_DependentSizedArray) {
         // a class template's T data[N], N its value parameter: T[N] (libclang has no size
-        // expression, so it's the spelling's)
+        // expression, so it's the spelling's; T data[N][M] has two, so it's left to a handle)
+        val ek = clang::clang_getCanonicalType(clang::clang_getArrayElementType(t)).kind;
+        if (ek == clang::CXType_DependentSizedArray || ek == clang::CXType_ConstantArray || ek == clang::CXType_IncompleteArray) {
+            return null;
+        }
         val et = this.vtype(clang::clang_getArrayElementType(t), tparams) ?? return null;
         val open = sp.as_str().rfind("[") ?? return null;
         val size = sp.as_str()[open + 1..sp.len() - 1].trim();
@@ -561,7 +565,7 @@ attach fn handle_of(this: cpp_gen&, t: clang::CXType) -> std::string? {
             return null;
         }
         val vn = this.instance(ct) ?? return null;
-        return S(*(this.inst_cpp.get(type_spelling(ct).as_str()) ?? return null));
+        return S(*(this.inst_cpp.get(type_spelling(clang::clang_getUnqualifiedType(ct)).as_str()) ?? return null));
     }
     if (tr->trivial) {
         return null;
@@ -591,7 +595,8 @@ attach fn own_type(this: cpp_gen&, c: clang::CXCursor) -> bool {
 
 // the Volt struct holding class type ct by handle, made the first time (written by
 // flush_instances): for a type the import's declarations give no other form
-attach fn instance(this: cpp_gen&, ct: clang::CXType) -> str? {
+attach fn instance(this: cpp_gen&, qt: clang::CXType) -> str? {
+    val ct = clang::clang_getUnqualifiedType(qt); // (const T is T's handle: a reference says const)
     if (!this.instancing || ct.kind != clang::CXType_Record) {
         return null;
     }
@@ -609,9 +614,10 @@ attach fn instance(this: cpp_gen&, ct: clang::CXType) -> str? {
             return null;
         }
         // a template Volt declares a generic for isn't one: an instance of it that has no Volt form
-        // is for its own reason (a non-type argument, a type of no form)
+        // is for its own reason (a type of no form). One with a value parameter (fixed<int, 3>) is:
+        // record_form spells type arguments only
         val tc = clang::clang_getSpecializedCursorTemplate(decl);
-        if (clang::clang_Cursor_isNull(tc) == 0 && this.templates.get(cpp_qual(tc).as_str()) != null) {
+        if (clang::clang_Cursor_isNull(tc) == 0 && this.templates.get(cpp_qual(tc).as_str()) != null && template_params(defaults_decl(tc), false) != null) {
             return null;
         }
     }
@@ -2451,10 +2457,27 @@ attach fn cpp_handle_of(this: checker&, sid: u32) -> str? {
 // generic value parameter) as its literal, as cpp_handle_of spells an instance's value arguments
 attach fn cpp_targ_text(this: checker&, g: garg&, span: span) -> compile_error!std::string {
     val t = this.garg_type(g) catch |te| {
-        val x = try this.garg_value(g);
-        val v = this.const_int(x, this.cx.env) catch |ve| {
+        val x = this.garg_value(g) catch |xe| {
             return te;
         };
+        val v = this.const_int(x, this.cx.env) catch |ve| {
+            // a bool (a generic bool parameter is a number already: 1 or 0, which C++ takes)
+            val b = this.ct_eval_in(this.cx.env, x, null) catch |be| {
+                return te;
+            };
+            match (b) {
+                .BOOL(y) => {
+                    if (y) {
+                        return S("true");
+                    }
+                    return S("false");
+                },
+                default => { return te; },
+            }
+        };
+        if (v < 0) {
+            return fmt("({})", num(v)); // (x-{t1} is x-(-2))
+        }
         return num(v);
     };
     val sp = this.cpp_type_text(t) ?? return fail(span, fmt("@cpp: {} has no C++ spelling", this.ty_name(t)));

@@ -65,5 +65,13 @@ template <int N> class counter {
         return n_;
     }
 };
+// a bool value parameter; functions with an instance that has a value argument (held by handle)
+template <class T, bool Neg> struct sign {
+    T v;
+    T get() const { return Neg ? -v : v; }
+};
+template <bool B> int pick_if(int a, int b) { return B ? a : b; }
+inline int total(const fixed<int, 3> &f) { return f.sum(); }
+inline fixed<int, 3> threes() { return fixed<int, 3>{{3, 3, 3}}; }
 
 } // namespace tpl
