@@ -301,6 +301,24 @@ attach fn struct_inst(this: checker&, d: u32, args: std::vec<gval>, span: span) 
         }
     }
     val dns = this.dl(d).ns;
+    // a C++ class template's instance clang says one of its specializations makes (an explicit
+    // template <> struct S<void>, a partial S<T*>'s): the template's twin held by handle
+    // (cppimport's special_twin), under the name written
+    if (args.len > 0) {
+        val tw = this.cpp_special_twin(d, &args);
+        if (tw) {
+            val t = try this.struct_inst(tw, copy args, span);
+            val tid = *(this.struct_ids.get(this.inst_key(tw, &args).as_str()) ?? return t);
+            var written = this.ns_path(dns, "::");
+            if (written.len() > 0) {
+                written.append("::");
+            }
+            written.append(this.decl_name(d));
+            this.si(tid).name = this.inst_name(written.as_str(), &args);
+            this.struct_ids.put(this.intern(move key), tid);
+            return t;
+        }
+    }
     var sd: struct_decl* = null;
     match (this.item_of(d).kind) {
         .STRUCT(s&) => { sd = s; },

@@ -1912,6 +1912,43 @@ fn cpp_surface() {
     assert!(!o.status.success() && err.contains("{&0} is a function's symbol: pass a function"), "{{&0}} of a number: {err}");
 }
 
+/// a class template's specializations (special.hpp): box<i32> is the primary's, laid out by Volt at
+/// C++'s size; box<void> (an explicit specialization) and box<i32*> (a partial one's instance) are
+/// what clang picks, held by handle with their members worked out per use, in Volt and in a header's
+/// signature alike, on both backends; and the primary's fields aren't a specialization's
+#[test]
+fn cpp_special_class() {
+    let e = Env::new("cpp-special-class");
+    for backend in ["c", "llvm"] {
+        assert_eq!(ok(e.voltc(&["run", "cpp_special_class.volt", "--backend", backend]), "voltc run cpp_special_class.volt"), "4 7 true\n6 3 1.5\n42 42 2\n42 3\n5 1\n", "C++ class specializations ({backend})");
+    }
+    let hpp = Path::new(ROOT).join("tests/interop/special.hpp").display().to_string().replace('\\', "/");
+    std::fs::write(e.dir.join("special_field.volt"), format!("use {{ \"{hpp}\" }} as cpp;\nfn main() -> void {{\n    val s: cpp::sp::box<void> = {{ v: 1, tag: 2 }};\n}}\n")).unwrap();
+    let o = e.voltc(&["check", &e.path("special_field.volt")]);
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(!o.status.success() && err.contains("special_field.volt:3") && err.contains("'v'"), "box<void> has none of the primary's fields: {err}");
+}
+
+/// function template specializations (special.hpp): C++ picks pick<int> and Meter::unit<double>
+/// over their primaries, called per use
+#[test]
+fn cpp_special_fn() {
+    let e = Env::new("cpp-special-fn");
+    for backend in ["c", "llvm"] {
+        assert_eq!(ok(e.voltc(&["run", "cpp_special_fn.volt", "--backend", backend]), "voltc run cpp_special_fn.volt"), "2 1 2\n25 15\n", "C++ function specializations ({backend})");
+    }
+}
+
+/// what a library adds to namespace std (special.hpp): its std::hash<Key> keys a
+/// std::unordered_map<Key, int>, and its swap runs through argument-dependent lookup
+#[test]
+fn cpp_special_std() {
+    let e = Env::new("cpp-special-std");
+    for backend in ["c", "llvm"] {
+        assert_eq!(ok(e.voltc(&["run", "cpp_special_std.volt", "--backend", backend]), "voltc run cpp_special_std.volt"), "2 30\n102 101\n", "a library's std additions ({backend})");
+    }
+}
+
 #[test]
 fn cpp_templates() {
     // what Volt's generics can't declare (variadic and non-type templates, auto results, constrained
