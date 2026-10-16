@@ -946,8 +946,9 @@ namespace softfloat {
     }
 
     // the remainder of a / b with a's sign, exact (C's fmod, which can't round: the remainder is a
-    // binary128 itself): the significands reduced 15 bits of the exponent gap at a time (one is below
-    // 2^113, so shifted by 15 it still fits a u128), at most about 2200 steps for the widest gap
+    // binary128 itself): the significands reduced a bit of the exponent gap at a time by shifting and
+    // subtracting (no 128-bit division, which bare metal doesn't have), stopping early at a zero
+    // remainder; at most about 32900 steps for the widest gap
     public fn rem128(a: u128, b: u128) -> u128 {
         val a_abs = a & Q_ABS;
         val b_abs = b & Q_ABS;
@@ -969,15 +970,18 @@ namespace softfloat {
         var ye: i32 = 0;
         unpack128(a, &xs, &xe);
         unpack128(b, &ys, &ye);
-        var r = xs % ys;
+        // both have their leading 1 at bit 112, so xs < 2 * ys: one subtraction, then one a bit
+        var r = xs;
+        if (r >= ys) {
+            r -= ys;
+        }
         var gap = xe - ye;
         while (gap > 0 && r != 0) {
-            var k = 15;
-            if (gap < k) {
-                k = gap;
+            r <<= 1;
+            if (r >= ys) {
+                r -= ys;
             }
-            r = (r << @cast<u128>(k)) % ys;
-            gap -= k;
+            gap -= 1;
         }
         val sign = a & ~Q_ABS;
         if (r == 0) {

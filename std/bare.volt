@@ -241,6 +241,35 @@ namespace bare {
         export fn __lshrdi3(a: u64, s: i32) -> u64 { return std::softint::lshr64(a, @cast<u32>(s)); }
         export fn __ashrdi3(a: i64, s: i32) -> i64 { return std::softint::ashr64(a, @cast<u32>(s)); }
         export fn __muldi3(a: u64, b: u64) -> u64 { return std::softint::mul64(a, b); }
+        // leading zeros, which LLVM calls for @clz (the Cortex-M0 has no CLZ; softfloat's rem128
+        // uses it): halving, no @clz here, which would call this
+        export fn __clzsi2(a: u32) -> i32 {
+            if (a == 0) {
+                return 32;
+            }
+            var x = a;
+            var n: i32 = 0;
+            if ((x & 0xFFFF0000) == 0) {
+                n += 16;
+                x <<= 16;
+            }
+            if ((x & 0xFF000000) == 0) {
+                n += 8;
+                x <<= 8;
+            }
+            if ((x & 0xF0000000) == 0) {
+                n += 4;
+                x <<= 4;
+            }
+            if ((x & 0xC0000000) == 0) {
+                n += 2;
+                x <<= 2;
+            }
+            if ((x & 0x80000000) == 0) {
+                n += 1;
+            }
+            return n;
+        }
     }
 
     // what LLVM calls for 128-bit multiplies, divisions and shifts by a variable on WebAssembly
