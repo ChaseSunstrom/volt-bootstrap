@@ -236,8 +236,8 @@ Python's on
   of handles (each once), made into Volt's for the call (a handle's value is with the call until it
   returns, so a callback reaching it through the handle sees it as it was); as a result, such a
   slice (bare or as an `E!T`'s value) comes back as a list the caller owns, as a `std::vec<T>`
-  would, each element copied (text
-  duplicated, a handle's value by its copy), so what Volt changes later isn't in it (an element
+  would, each element copied (text duplicated, a handle's value by its copy), so what Volt
+  changes later isn't in it (an element
   type that can't be copied is refused: give it a copy fn, or return a `std::vec` you build). A
   `std::string?` comes back as an optional owned text and goes in as a `str?`; an optional handle
   is its pointer, null for none.

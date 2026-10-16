@@ -1054,7 +1054,8 @@ attach fn needs_shim(this: bind&, f: u32) -> bool {
 // What voltc lib compiles in front of a package's export fns whose C form differs from Volt's (owned
 // text, handles by value, closures, traits): Volt source for export fns of the same names in their C
 // forms, in namespace PKG::__export, which call the package's own fns (no longer exported); and an
-// X_free per handle. It uses only the language and the runtime's allocator, never std.
+// X_free per handle. It uses only the language and the runtime's allocator, and std::vec for a list
+// of copies a slice result gives out (copied).
 struct shim_plan {
     text: std::string = {};
     unexport: std::vec<std::string> = {}; // the package's export fns a shim stands in for (full::name@offset)
