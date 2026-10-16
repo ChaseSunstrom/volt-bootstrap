@@ -2076,7 +2076,7 @@ fn cpp_params() {
     // a Volt std::string for a template parameter S (S&, const S&, S, S&&) a C++ std::string, a
     // throw through the plain form a stop
     let e = Env::new("cpp-params");
-    let want = "sum 6\nfill 4 4 4\ntotal 12\ntwice 8 24\nfirst 7 8\napply 5 6 10\n@cpp 42\nshout hi!!\ngrow 2: 7 hi!!~++\ngrow -1: INVALID_ARGUMENT hi!!~++\n@cpp hi!!~++!\nrelay INVALID_ARGUMENT hi!!~++!\nshapes 2 7\npoints 202 45\nspend 15\nasked why??\ncounted 3 7 ab+\narrays 7 4 7 9 4\n@cpp 8 5 1\nalias 8 cells 14\nwrap hey! 4 6\ngauge 40 70 hey!\ntake 5 xyz\ntook 4\npad 6 hey!##\ntgrow 1: 8 hey!##~+\ntgrow -1: INVALID_ARGUMENT hey!##~+\nwhich 1 2 2 1 2 ab&& cd\nfwd 6 ab&&&& len 2 6\nnested [[1,2],[3],[]] [[1,2],[3]] [[[1,2],[3],[]],[],[[1,2]]] []\nnested per use [[1,2],[3],[]] 15\nnested [[3],[]] 4.75 hi//you\nmap {1:10,2:20,3:30} {} {4:125,5:50} 140 3 3\nmap {a:1,b:2} {:'',k:'v w'} {1:[],2:[4,5]}\nmap {1:10,2:20,3:30} {1:[],2:[4,5]} 2 2 2\nmap 1 {7:7} 1\npick 2: 20\npick 9: OUT_OF_RANGE\nderef 5 5 3 3 7 7\nsum_ptr 7 size 4 4 8 which 1 2\nchecked 5: 5\nchecked -1: INVALID_ARGUMENT\ntwice 42 tally 4 7 10 10\n";
+    let want = "sum 6\nfill 4 4 4\ntotal 12\ntwice 8 24\nfirst 7 8\napply 5 6 10\n@cpp 42\nshout hi!!\ngrow 2: 7 hi!!~++\ngrow -1: INVALID_ARGUMENT hi!!~++\n@cpp hi!!~++!\nrelay INVALID_ARGUMENT hi!!~++!\nshapes 2 7\npoints 202 45\nspend 15\nasked why??\ncounted 3 7 ab+\narrays 7 4 7 9 4\n@cpp 8 5 1\nalias 8 cells 14\nwrap hey! 4 6\ngauge 40 70 hey!\ntake 5 xyz\ntook 4\nlend 1 1 1 1\nlend moved 2 2\npad 6 hey!##\ntgrow 1: 8 hey!##~+\ntgrow -1: INVALID_ARGUMENT hey!##~+\nwhich 1 2 2 1 2 ab&& cd\nfwd 6 ab&&&& len 2 6\nnested [[1,2],[3],[]] [[1,2],[3]] [[[1,2],[3],[]],[],[[1,2]]] []\nnested per use [[1,2],[3],[]] 15\nnested [[3],[]] 4.75 hi//you\nmap {1:10,2:20,3:30} {} {4:125,5:50} 140 3 3\nmap {a:1,b:2} {:'',k:'v w'} {1:[],2:[4,5]}\nmap {1:10,2:20,3:30} {1:[],2:[4,5]} 2 2 2\nmap 1 {7:7} 1\npick 2: 20\npick 9: OUT_OF_RANGE\nderef 5 5 3 3 7 7\nsum_ptr 7 size 4 4 8 which 1 2\nchecked 5: 5\nchecked -1: INVALID_ARGUMENT\ntwice 42 tally 4 7 10 10\n";
     for backend in ["c", "llvm"] {
         assert_eq!(ok(e.voltc(&["run", "cpp_params.volt", "--backend", backend]), "voltc run cpp_params.volt"), want, "C++ parameters ({backend})");
         let o = e.voltc(&["run", "cpp_params_gthrow.volt", "--backend", backend]);
@@ -2106,8 +2106,9 @@ fn cpp_params() {
         assert!(src.contains(&format!("// C++: {call}, as clang resolves it")), "{call}: {src}");
     }
     // a function template's S& and const S& a Volt S& (S what the reference names), S and S&& a
-    // value (S&&'s a var, which C++ moves from); S* stays a pointer
-    for decl in ["fn wrap(s: S&) -> void", "fn len(s: S&) -> u64", "fn gauge(s: S&) -> i32", "fn pad(s: S&, n: T) -> i32", "fn grow(s: S&, n: i32) -> i32", "fn which(s: S&) -> i32", "fn size_of(a0: S&) -> i32", "fn bump(s: S) -> i32", "fn take(var s: S) -> i32", "fn fwd(var s: S) -> i32", "fn size_by(a0: S) -> i32", "fn deref(p: S*) -> i32"] {
+    // value (S&&'s a var, which C++ moves from); S* stays a pointer; beside an S& or const S&
+    // overload, the S or S&& one has a suffixed name (both would take a Volt reference)
+    for decl in ["fn wrap(s: S&) -> void", "fn len(s: S&) -> u64", "fn gauge(s: S&) -> i32", "fn pad(s: S&, n: T) -> i32", "fn grow(s: S&, n: i32) -> i32", "fn which(s: S&) -> i32", "fn size_of(a0: S&) -> i32", "fn bump(s: S) -> i32", "fn take(var s: S) -> i32", "fn fwd(var s: S) -> i32", "fn size_by(a0: S) -> i32", "fn deref(p: S*) -> i32", "fn lend(a0: S&) -> i32", "fn give(a0: S&) -> i32", "fn lend_type_parameter_0_0_rref(var a0: S) -> i32", "fn give_type_parameter_0_0_rref(var a0: S) -> i32"] {
         assert!(src.contains(decl), "{decl}: {src}");
     }
     for call in ["pr::gs::wrap<std::string>(std::string &) -> void", "pr::gs::take<std::string>(VOLT_MOVE(std::string &)) -> int"] {
@@ -2251,7 +2252,7 @@ fn cpp_params_refused() {
     // a std::string without & for a template's S& or const S&: an error naming the parameter
     let err = check("cpp_params_gbare.volt");
     for (line, f) in [(7, "wrap"), (11, "len")] {
-        assert!(err.contains(&format!("cpp_params_gbare.volt:{line}")) && err.contains(&format!("'{f}' wants a S& for s, so pass a reference")), "{f} without &: {err}");
+        assert!(err.contains(&format!("cpp_params_gbare.volt:{line}")) && err.contains(&format!("argument 1 has type std::string<std::mem::default_allocator>, but '{f}' wants a reference (S&) for s: pass one (&arg)")), "{f} without &: {err}");
     }
     // C++ writing into a val or a temporary for an S&-only template, through its Volt generic and
     // in @cpp: an error each call

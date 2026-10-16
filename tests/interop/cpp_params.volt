@@ -60,6 +60,12 @@ fn main() -> void {
     var tk = std::string::from("xyz");
     std::println("take {} {}", cpp::pr::gs::bump(copy tk), tk);
     std::println("took {}", cpp::pr::gs::take(move tk));
+    // a const S& beside an S&&: &x calls the const S& one (an i32, a string), the S&& one has its
+    // suffixed name
+    var ln: i32 = 5;
+    var ls = std::string::from("q");
+    std::println("lend {} {} {} {}", cpp::pr::gs::lend(&ln), cpp::pr::gs::give(&ln), cpp::pr::gs::lend(&ls), cpp::pr::gs::give(&ls));
+    std::println("lend moved {} {}", cpp::pr::gs::lend_type_parameter_0_0_rref(copy ln), cpp::pr::gs::give_type_parameter_0_0_rref(move ls));
     val padded = cpp::pr::gs::pad(&w, 2);
     std::println("pad {} {}", padded, w);
     grown_t(&w, 1);

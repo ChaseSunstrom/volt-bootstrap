@@ -1873,6 +1873,69 @@ fn tparam_ref(t: clang::CXType, name: str, i: usize, tparams: std::vec<str>&, ow
     return null;
 }
 
+// how a parameter takes a template type parameter, by its canonical spelling: 2 by reference (S&,
+// const S&), 1 by value (S, const S, S&&), 0 neither (S*, a pack, another type)
+fn tparam_form(t: clang::CXType) -> i32 {
+    val c = canon(t);
+    var v = c.as_str();
+    var form = 1;
+    if (ends_with(v, " &&")) {
+        v = v[0..v.len - 3];
+    } else if (ends_with(v, " &")) {
+        v = v[0..v.len - 2];
+        form = 2;
+    }
+    v = strip_const(v);
+    if (!starts_with(v, "type-parameter-") || contains(v, " ") || contains(v, ".")) {
+        return 0;
+    }
+    return form;
+}
+
+// does a function template overload of c's (same name and parameter count, the others' types the
+// same) take S& or const S& where c takes S or S&&? Both would take a Volt reference (S deduced as
+// one for c), so c is the one with a suffixed name
+fn ref_sibling(c: clang::CXCursor) -> bool {
+    val mine = params_of(c);
+    val name = cursor_name(c);
+    for (o&) in children(clang::clang_getCursorSemanticParent(c)).items() {
+        if (clang::clang_getCursorKind(*o) != clang::CXCursor_FunctionTemplate || clang::clang_equalCursors(*o, c) != 0 || cursor_name(*o).as_str() != name.as_str()) {
+            continue;
+        }
+        val theirs = params_of(*o);
+        if (theirs.len != mine.len) {
+            continue;
+        }
+        var lent = false;
+        var same = true;
+        for (i) in 0..mine.len {
+            val a = clang::clang_getCursorType(*mine.at(i));
+            val b = clang::clang_getCursorType(*theirs.at(i));
+            if (tparam_form(a) == 1 && tparam_form(b) == 2) {
+                lent = true;
+            } else if (canon(a).as_str() != canon(b).as_str()) {
+                same = false;
+            }
+        }
+        if (lent && same) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// an alias's suffix: its parameters' C++ types as words (long_long)
+fn param_words(parms: std::vec<clang::CXCursor>&, count: usize) -> std::string {
+    var sfx: std::string = {};
+    for (i) in 0..count {
+        if (i > 0) {
+            sfx.push('_');
+        }
+        sfx.append(name_words(canon(clang::clang_getCursorType(*parms.at(i))).as_str()).as_str());
+    }
+    return sfx;
+}
+
 attach fn param(this: cpp_gen&, t: clang::CXType, name: str, i: usize, tparams: std::vec<str>&) -> cpp_arg? {
     var slot = S("{");
     slot.append_uint(@cast<u64>(i));
@@ -2936,6 +2999,14 @@ attach fn callable_of(this: cpp_gen&, generics: str, head: str, has_params: bool
         return;
     }
     val parms = params_of(fn_cursor);
+    if (suffix == null && clang::clang_getCursorKind(fn_cursor) == clang::CXCursor_FunctionTemplate && ref_sibling(fn_cursor)) {
+        // beside an S& / const S& overload an S or S&& one is the alias, so f(&x) calls the
+        // reference one (the alias takes the C++ declaration's comment)
+        val keep = copy this.note;
+        this.callable_of(generics, head, has_params, fn_cursor, copy r, call, self_arg, extra, tparams, what, param_words(&parms, parms.len).as_str());
+        this.note = keep;
+        return;
+    }
     var args: std::vec<cpp_arg> = {};
     var names: std::vec<std::string> = {};
     var optional: usize = 0;
@@ -3089,13 +3160,7 @@ attach fn callable_of(this: cpp_gen&, generics: str, head: str, has_params: bool
             } else if (!aliased && prev != null) {
                 if (*prev != sig.as_str()) {
                     aliased = true;
-                    var sfx: std::string = {};
-                    for (i) in 0..count {
-                        if (i > 0) {
-                            sfx.push('_');
-                        }
-                        sfx.append(name_words(canon(clang::clang_getCursorType(*parms.at(i))).as_str()).as_str());
-                    }
+                    var sfx = param_words(&parms, count);
                     val bar = last_bar(*prev);
                     if ((*prev)[0..bar] == sig.as_str()[0..last_bar(sig.as_str())]) {
                         // only its qualifiers differ: get_const, or get_nonconst after a const get

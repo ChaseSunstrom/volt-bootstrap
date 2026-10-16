@@ -1009,7 +1009,7 @@ attach fn bind_cand(this: checker&, d: u32, rv: tval*, static_ty: u32?, explicit
                 val av = *args.at(m) ?? continue;
                 match (*this.t.get(av.ty)) {
                     .REF(x) => {},
-                    default => { return no(fmt5("argument {} is a {}, but '{}' wants a {}& for {}, so pass a reference: &x", unum(@cast<u64>(m + 1)), this.ty_name(av.ty), S(fname), S(gp.name), S(p.name))); },
+                    default => { return no(fmt5("argument {} has type {}, but '{}' wants a reference ({}&) for {}: pass one (&arg)", unum(@cast<u64>(m + 1)), this.ty_name(av.ty), S(fname), S(gp.name), S(p.name))); },
                 }
             }
             return no(fmt3("can't infer '{}' for '{}'; pass it: {}<...>(...)", S(gp.name), S(fname), S(fname)));

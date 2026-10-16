@@ -128,6 +128,11 @@ template <class S> int which(const S &) { return 2; }
 template <class S> int fwd(S &&s) { s += "&&"; return (int)s.size(); }
 // an S&& that keeps what it's given: a Volt value moved in
 template <class S> int take(S &&s) { S kept(static_cast<S &&>(s)); kept += "<"; return (int)kept.size(); }
+// a const S& beside an S&& (in either order): f(&x) takes the reference, the S&& one its own name
+template <class S> int lend(const S &) { return 1; }
+template <class S> int lend(S &&) { return 2; }
+template <class S> int give(S &&) { return 2; }
+template <class S> int give(const S &) { return 1; }
 }
 // nested std::vectors, by value, const& and && (a Volt slice of slices, each level copied; of ints,
 // doubles and signed chars, whose Volt form is the same on every target), written back
