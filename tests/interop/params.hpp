@@ -20,6 +20,11 @@ inline int defaults[3] = {7, 8, 9};
 inline int first_of(Arr &a = defaults) { return a[0]; }
 inline int apply(int (*f)(int), int x) { return f(x); }
 inline double fold(double (*f)(double, double), double a, double b) { return f(a, b); }
+// a C variadic function pointer parameter (snprintf's shape)
+inline int apply_fmt(int (*f)(unsigned char *, unsigned long long, const char *, ...), int x) {
+    unsigned char b[16];
+    return f(b, sizeof b, "%d", x);
+}
 template <class T> T apply_t(T (*f)(T), T x) { return f(x); }
 // callables, worked out per use (a pack has no Volt generic form): fns of no parameters, and C
 // variadic ones (snprintf)

@@ -90,4 +90,6 @@ fn main() -> void {
     // calls worked out per use
     std::println("fns {} {} {} {} {}", @cpp<i32>("{0}()", seven), @cpp<i32>("{&0}()", seven), cpp::pr::call0(seven), @cpp<i32>("pr::callv({0})", snprintf), cpp::pr::callv(snprintf));
     show("fns caught", @cpp<cpp::cpp_error!i32>("pr::callv({0})", snprintf));
+    // a declared function's variadic function pointer parameter
+    std::println("fmt {}", cpp::pr::apply_fmt(snprintf, 345));
 }
