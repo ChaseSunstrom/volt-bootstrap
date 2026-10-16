@@ -2748,6 +2748,24 @@ attach fn callable_of(this: cpp_gen&, generics: str, head: str, has_params: bool
             my_call = fmt2("VOLT_MOVE({}){}", S(call[0..dot]), S(call[dot..call.len]));
         }
     }
+    // an && method of a class that can be neither copied nor moved (member_list: a by-value this
+    // on the object itself): a borrowed handle has no object to hand C++, so it stops the program
+    // before anything reads the object; the message names the class and this form's Volt name
+    var pin: std::string = {};
+    if ((self_arg ?? "") == "this.cpp" && rvalue_method(fn_cursor) && !ends_with(head, "&")) {
+        var cls = what.len;
+        for (i) in 1..what.len {
+            if (what[i - 1] == ':' && what[i] == ':') {
+                cls = i - 1;
+            }
+        }
+        var paren: usize = 0;
+        while (paren < my_head.len() && my_head.as_str()[paren] != '(') {
+            paren += 1;
+        }
+        val vn = my_head.as_str()[10..paren];
+        pin = fmt3("if (this.borrowed) {{ @panic(\"can't call {}::{} (an && method) through a borrowed handle: {} can't be copied\"); }}", S(what[0..cls]), S(vn), S(what[0..cls]));
+    }
     var aliased = false;
     // every count of trailing default arguments, most first
     var drop: usize = 0;
@@ -2853,7 +2871,12 @@ attach fn callable_of(this: cpp_gen&, generics: str, head: str, has_params: bool
             this.out = {};
             this.note = cpp_decl_text(fn_cursor);
         }
-        val rp = with_pres(&r, &args, count);
+        var rp = with_pres(&r, &args, count);
+        if (pin.len() > 0 && rp.pre.len() > 0) {
+            rp.pre = fmt2("{}\n{}", copy pin, copy rp.pre);
+        } else if (pin.len() > 0) {
+            rp.pre = copy pin;
+        }
         this.fn_text(generics, fmt3("{}{}) -> {}", copy my_head, copy params, copy r.vty).as_str(), &rp, cpp.as_str(), tail.as_str(), extra);
         if (can_try) {
             var call_names = S("");
@@ -4224,11 +4247,13 @@ attach fn member_list(this: cpp_gen&, c: clang::CXCursor, self_ty: str, cpp_self
             var on = S(obj);
             if (self_arg == "this.cpp" && gen.len == 0 && clang::clang_Type_getCXXRefQualifier(clang::clang_getCursorType(*ch)) == clang::CXRefQualifier_RValue) {
                 // an && method on a class held by handle consumes the object, as a by-value this
-                // does the handle: C++ moves from it (a copy, when the handle only borrows it)
+                // does the handle: C++ moves from it (a copy, when the handle only borrows it). A
+                // class that can be neither has no copy for a borrowed handle: its object itself,
+                // the call stopping the program on a borrowed one (callable_of)
                 this.ensure_traits(q);
                 val tr = this.traits.get(q);
+                head = fmt2("attach fn {}(this: {}", copy vn_m, S(self_ty));
                 if (tr == null || tr->movable || tr->copyable) {
-                    head = fmt2("attach fn {}(this: {}", copy vn_m, S(self_ty));
                     me = S("@cast<void*>(&this)");
                     on = fmt2("volt_cpp_take<{}, {}>({{0}})", S(q), S(cpp_bool(tr == null || tr->copyable)));
                 }

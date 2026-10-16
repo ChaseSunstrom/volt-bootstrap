@@ -22,7 +22,9 @@ fn main() -> void {
     std::println("open {} {} {}", bx.open(), c.as_Box().open_rref(), c.peek());
     std::println("open {}", bx.open_rref());
     std::println("size {} {}", cpp::ov::Box::new(1).size(), cpp::ov::Box::new(1).size_const_rref());
-    std::println("taken {} {}", cpp::taken::which(3), cpp::taken::which_long_long(3));
+    // ...and on a class that can be neither copied nor moved, its own object (the handle consumed)
+    std::println("pinned {} {}", cpp::ov::Pinned::new(3).take(), cpp::ov::Pinned::new(3).take_const_rref());
+    std::println("taken {} {}",cpp::taken::which(3), cpp::taken::which_long_long(3));
     // ...on a class template's instance too (worked out per use): take empties the object, so a
     // borrowed handle's (shelf's reference) object keeps its value
     std::println("holder {} {}", cpp::ov::shelf().take(), cpp::ov::shelf().peek());
