@@ -100,7 +100,9 @@ fn main() -> void {
 ```
 
 Both backends build all of these: the LLVM backend lays out unions, bitfields' neighbours and
-anonymous members where libclang says C puts them.
+anonymous members where libclang says C puts them, and passes a struct C classifies by members
+Volt can't see (a `_Complex`, a bitfield beside a `float`) by value through a small C shim (see
+[backends](/volt-bootstrap/voltc/backends/)).
 
 ### Enums, long double and complex numbers
 

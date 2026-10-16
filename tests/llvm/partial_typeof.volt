@@ -1,5 +1,6 @@
-// a C struct with a field of a type Volt can't read (__typeof__): like partial_struct.volt, the C
-// backend compiles it and the LLVM backend refuses it (tests/selfhost.rs checks both)
+// a C struct with a field of a type Volt can't read (__typeof__): like partial_struct.volt, libclang
+// gives its layout, and passing it by value takes a C shim (C knows the field's type), so both
+// backends build it (tests/selfhost.rs checks both)
 use std::io;
 use { "partial_struct.h" } as c;
 

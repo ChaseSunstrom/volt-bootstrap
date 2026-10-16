@@ -520,6 +520,7 @@ struct cfield_decl {
     // accessors
     bit_name: str = "";
     bits: str? = null;
+    placeholder: bool = false; // a bitfield's, or an anonymous member's (its fields come before it)
 }
 
 struct cstruct {
@@ -959,7 +960,7 @@ attach fn fields(this: cparser&, tag: str) -> std::vec<cfield_decl>? {
                     default => {},
                 }
                 if (bitfield) {
-                    var f: cfield_decl = { name: "", ty: ctype::BAD };
+                    var f: cfield_decl = { name: "", ty: ctype::BAD, placeholder: true };
                     if (dc.name != null) {
                         f.bit_name = dc.name ?? "";
                         f.bits = this.d.text_of(sub.t[0..spec_end]);
@@ -973,11 +974,11 @@ attach fn fields(this: cparser&, tag: str) -> std::vec<cfield_decl>? {
                         }
                         if (s.fields) {
                             for (f&) in s.fields.items() {
-                                put(&out, { name: f.name, ty: copy f.ty, bit_name: f.bit_name, bits: f.bits });
+                                put(&out, { name: f.name, ty: copy f.ty, bit_name: f.bit_name, bits: f.bits, placeholder: f.placeholder });
                             }
                         }
                     }
-                    put(&out, { name: "", ty: ctype::BAD });
+                    put(&out, { name: "", ty: ctype::BAD, placeholder: true });
                 } else if (dc.name != null) {
                     if (anon) {
                         this.d.anon_in.put(anon, { outer: tag, field: dc.name ?? "" });
@@ -1508,6 +1509,8 @@ struct cmapper {
     enum_names: std::map<str, str> = {}; // enum tag -> Volt name (a named one's)
     enum_ints: std::map<str, str> = {};  // enum tag -> the integer type its values take
     in_fn: bool = false;                 // mapping a function pointer's type
+    classes: std::map<str, u8> = {};     // struct tag -> its struct_class
+    overlays: std::map<str, bool> = {};  // tags of the structs placed by offsets (c_offsets)
     complex: std::vec<str> = {};         // the complex structs wrappers use: cf32, cf64
     cf32: str = "cf32";                  // their Volt names (with _ added past a header's own)
     cf64: str = "cf64";
@@ -1624,6 +1627,86 @@ attach fn needs_wrap(this: cmapper&, t: ctype&) -> bool {
     match (*r) {
         .LDOUBLE => { return true; },
         .COMPLEX(e) => { return true; },
+        default => { return false; },
+    }
+}
+
+// how C passes a member of type t by value, as far as Volt can tell: 0 as integers, 1 with
+// floating-point bytes too, 2 in a way only C knows (a long double, a _Complex, a vector, a type
+// Volt can't name, or a struct holding one)
+attach fn c_class(this: cmapper&, t: ctype&, depth: u32) -> u8 {
+    val r = this.resolve(t, 0) ?? return 2;
+    match (*r) {
+        .PRIM(p) => {
+            if (p == "f32" || p == "f64" || p == "f128") {
+                return 1;
+            }
+            return 0;
+        },
+        .ARRAY(e, n) => { return this.c_class(e, depth); },
+        .STRUCT(tag) => { return this.struct_class(tag, depth + 1); },
+        .LDOUBLE => { return 2; },
+        .COMPLEX(e) => { return 2; },
+        .BAD => { return 2; },
+        .VA_LIST => { return 2; },
+        default => { return 0; },
+    }
+}
+
+// c_class of struct `tag`: a member that is 2 makes it 2, and so does a bitfield beside a
+// floating-point member (C classifies their bytes together, and Volt never sees the bitfield's),
+// or a floating-point member of a struct placed by offsets (overlays: asked once lay_out_partial
+// has run); a flexible array member is past its size, so never passed
+attach fn struct_class(this: cmapper&, tag: str, depth: u32) -> u8 {
+    val have = this.classes.get(tag);
+    if (have) {
+        return *have;
+    }
+    if (depth > 16) {
+        return 2;
+    }
+    var out: u8 = 0;
+    for (s&) in this.d.structs.items() {
+        if (s.tag != tag) {
+            continue;
+        }
+        if (s.fields) {
+            var bits = false;
+            for (f&) in s.fields.items() {
+                if (f.bits != null) {
+                    bits = true;
+                    continue;
+                }
+                if (f.placeholder || flexible(&f.ty)) {
+                    continue;
+                }
+                // a nameless member that isn't a placeholder (one the parser couldn't read), or one
+                // Volt skips (a type it can't name: c_items lays it out as padding, so Volt passes
+                // its bytes as integers whatever C's type is) is 2
+                var k: u8 = 2;
+                if (f.name.len > 0 && this.ty_of(&f.ty) != null) {
+                    k = this.c_class(&f.ty, depth);
+                }
+                if (k > out) {
+                    out = k;
+                }
+            }
+            // a bitfield beside a float, or a float in a struct placed by offsets (an anonymous
+            // union member: the LLVM backend's block of bytes is no HFA on AAPCS64)
+            if (out == 1 && (bits || this.overlays.get(tag) != null)) {
+                out = 2;
+            }
+            break;
+        }
+    }
+    this.classes.put(tag, out);
+    return out;
+}
+
+// is t a flexible array member's type (no length)?
+fn flexible(t: ctype&) -> bool {
+    match (*t) {
+        .ARRAY(e, n) => { return n == null; },
         default => { return false; },
     }
 }
@@ -1806,6 +1889,86 @@ attach fn wrapper(this: cmapper&, f: cfn&, c_names: std::map<str, str>&) -> std:
     }
     out.append(fmt4("static __inline__ {} volt_cw_{}({}) {{ {} }}", move ret, S(f.name), move params, move body).as_str());
     return out;
+}
+
+// is t a struct or union by value?
+attach fn by_value_struct(this: cmapper&, t: ctype&) -> bool {
+    match (*(this.resolve(t, 0) ?? return false)) {
+        .STRUCT(tag) => { return true; },
+        default => { return false; },
+    }
+}
+
+// does fn f take or give a struct by value that only C knows how to pass (struct_class 2)?
+attach fn needs_shim(this: cmapper&, f: cfn&) -> bool {
+    if (this.by_value_struct(&f.ret) && this.c_class(&f.ret, 0) == 2) {
+        return true;
+    }
+    for (p&) in f.params.items() {
+        if (this.by_value_struct(&p.ty) && this.c_class(&p.ty, 0) == 2) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// a static C function `volt_cs_NAME` calling fn f with each struct argument, and its struct result,
+// through a pointer (the result's first): C passes them by value its own way, and the LLVM backend
+// calls this (lgen's call) for a fn needs_shim says it must. None if a type can't be written
+attach fn shim(this: cmapper&, f: cfn&, c_names: std::map<str, str>&) -> std::string? {
+    var params = S("");
+    var args = S("");
+    val rt = this.c_text(&f.ret, c_names) ?? return null;
+    val by_ptr = this.by_value_struct(&f.ret);
+    if (by_ptr) {
+        params.append(rt.as_str());
+        params.append(" *volt_r");
+    }
+    for (i) in 0..f.params.len {
+        val p = f.params.at(i);
+        var t = this.c_text(&p.ty, c_names) ?? S("");
+        if (t.len() == 0) {
+            if (!spelled_ptr(&p.ty)) {
+                return null;
+            }
+            t = S("void *"); // a function pointer: a void * C converts to it
+        }
+        if (params.len() > 0) {
+            params.append(", ");
+        }
+        if (i > 0) {
+            args.append(", ");
+        }
+        var a = S("volt_a");
+        a.append_uint(@cast<u64>(i));
+        params.append(t.as_str());
+        if (this.by_value_struct(&p.ty)) {
+            params.append(" *");
+            args.push('*');
+        } else {
+            params.push(' ');
+            if (spelled_ptr(&p.ty)) {
+                args.append("(void *)");
+            }
+        }
+        params.append(a.as_str());
+        args.append(a.as_str());
+    }
+    if (params.len() == 0) {
+        params.append("void");
+    }
+    var call = fmt2("{}({})", S(f.name), move args);
+    var ret = copy rt;
+    var body = fmt("return {};", copy call);
+    if (by_ptr) {
+        ret = S("void");
+        body = fmt("*volt_r = {};", move call);
+    } else if (rt.as_str() == "void") {
+        body = fmt("{};", move call);
+    } else if (spelled_ptr(&f.ret)) {
+        body = fmt("return (void *){};", move call);
+    }
+    return fmt4("static __inline__ {} volt_cs_{}({}) {{ {} }}", move ret, S(f.name), move params, move body);
 }
 
 // a static C function `volt_cv_NAME` taking fn f's parameters but its last, a va_list, then C's
@@ -2018,9 +2181,11 @@ fn preprocessor_flags(cc_args: std::vec<str>&) -> std::vec<str> {
 }
 
 // the structs with members Volt can't read (a bitfield, a type it can't parse): libclang says where
-// the readable fields are and how big the struct is, and padding fields fill the rest, so Volt's
-// own layout is C's and both backends can use them. One it can't place stays partial (only C
-// knows its layout: the LLVM backend refuses it)
+// the readable fields are and how big and aligned the struct is, and padding fields fill the rest,
+// so Volt's own layout is C's and both backends can use them (or, when Volt's layout of those
+// fields can't be C's, the LLVM backend places them in a block of C's size). One libclang can't
+// lay out, or aligned to more than 16 bytes, stays partial (only C knows its layout: the LLVM
+// backend refuses it)
 attach fn lay_out_partial(this: checker&, res: c_imported&, items: std::vec<usize>&, src: str, span: span) -> void {
     if (items.len == 0) {
         return;
@@ -2056,21 +2221,34 @@ attach fn lay_out_partial(this: checker&, res: c_imported&, items: std::vec<usiz
                     sd.c_partial = false;
                     continue;
                 }
+                val align = clang::clang_Type_getAlignOf(rt);
+                if (align <= 0) {
+                    continue;
+                }
                 var offs: std::vec<u64> = {};
                 var sizes: std::vec<u64> = {};
                 var known = true;
                 var overlap = false;
+                // Volt's own layout of the fields and padding is C's: each field where its alignment
+                // puts it, and the struct as aligned as its most aligned field (no member Volt can't
+                // read, a long double, or an aligned attribute aligns it more)
+                var natural = true;
+                var most: i64 = 1;
                 var end: u64 = 0;
                 for (f&) in sd.fields.items() {
                     var n = S(f.name);
                     val bits = clang::clang_Type_getOffsetOf(rt, n.c_str());
-                    val fsize = field_size(rt, f.name);
-                    if (bits < 0 || bits % 8 != 0 || fsize <= 0) {
+                    val (fsize, falign) = field_layout(rt, f.name);
+                    if (bits < 0 || bits % 8 != 0 || fsize <= 0 || falign <= 0) {
                         known = false;
                         break;
                     }
                     val off = @cast<u64>(bits / 8);
                     overlap = overlap || off < end;
+                    natural = natural && off % @cast<u64>(falign) == 0;
+                    if (falign > most) {
+                        most = falign;
+                    }
                     end = off + @cast<u64>(fsize);
                     put(&offs, off);
                     put(&sizes, @cast<u64>(fsize));
@@ -2078,11 +2256,12 @@ attach fn lay_out_partial(this: checker&, res: c_imported&, items: std::vec<usiz
                 if (!known) {
                     continue;
                 }
-                if (overlap) {
-                    // fields that share bytes (an anonymous union member): the LLVM backend places
-                    // each at its offset in a block of C's size and alignment
-                    val align = clang::clang_Type_getAlignOf(rt);
-                    if (align <= 0) {
+                if (overlap || !natural || most != align) {
+                    // fields that share bytes (an anonymous union member), or a layout Volt's own
+                    // wouldn't give them: the LLVM backend places each at its offset in a block of
+                    // C's size and alignment (an integer as wide as that alignment leads it, so up
+                    // to 16 bytes)
+                    if (align > 16) {
                         continue;
                     }
                     sd.c_offsets = move offs;
@@ -2096,11 +2275,11 @@ attach fn lay_out_partial(this: checker&, res: c_imported&, items: std::vec<usiz
                 var at: u64 = 0;
                 var pads: u32 = 0;
                 for (i) in 0..sd.fields.len {
-                    this.pad_fields(at, *offs.at(i), &pads, span, &fields);
+                    this.pad_fields(at, *offs.at(i), @cast<u64>(align), &pads, span, &fields);
                     put(&fields, copy *sd.fields.at(i));
                     at = *offs.at(i) + *sizes.at(i);
                 }
-                this.pad_fields(at, @cast<u64>(size), &pads, span, &fields);
+                this.pad_fields(at, @cast<u64>(size), @cast<u64>(align), &pads, span, &fields);
                 sd.fields = move fields;
                 sd.c_partial = false;
             },
@@ -2454,6 +2633,8 @@ attach fn c_items(this: checker&, d: cdecls&, res: c_imported&, span: span) -> v
         parse_decls(this.c_texts.at(this.c_texts.len - 1).as_str(), d);
     }
     var partial_items: std::vec<usize> = {};
+    var struct_items: std::vec<usize> = {}; // every struct's item, and its tag
+    var struct_tags: std::vec<str> = {};
     for (s&) in d.structs.items() {
         val name = m.names.get(s.tag) ?? continue;
         val c = c_names.get(s.tag) ?? continue;
@@ -2470,6 +2651,8 @@ attach fn c_items(this: checker&, d: cdecls&, res: c_imported&, span: span) -> v
             }
         }
         put(&res.items, m.citem(item_kind::STRUCT({ name: *name, spec: null, fields: move fields, is_extern: true, is_comptime: false, c_name: *c, c_partial: partial, c_union: s.is_union })));
+        put(&struct_items, res.items.len - 1);
+        put(&struct_tags, s.tag);
         if (partial && s.fields != null) {
             put(&partial_items, res.items.len - 1);
         }
@@ -2481,6 +2664,28 @@ attach fn c_items(this: checker&, d: cdecls&, res: c_imported&, span: span) -> v
         all_c.push('\n');
     }
     this.lay_out_partial(res, &partial_items, all_c.as_str(), span);
+    // which structs only C can pass by value, now that their layouts are known
+    for (k) in 0..struct_items.len {
+        match (res.items.at(*struct_items.at(k)).kind) {
+            .STRUCT(sd&) => {
+                if (sd.c_offsets != null) {
+                    m.overlays.put(*struct_tags.at(k), true);
+                }
+            },
+            default => {},
+        }
+    }
+    for (k) in 0..struct_items.len {
+        match (res.items.at(*struct_items.at(k)).kind) {
+            .STRUCT(sd&) => {
+                sd.c_opaque = m.struct_class(*struct_tags.at(k), 0) == 2;
+                if (sd.c_opaque) {
+                    this.c_opaque_any = true;
+                }
+            },
+            default => {},
+        }
+    }
     // every other typedef is a type name too: pointers, integers, function pointers, a struct's
     // second name (one Volt can't map, or whose name is taken, is skipped)
     for (n) in d.typedef_order.items() {
@@ -2563,6 +2768,14 @@ attach fn c_items(this: checker&, d: cdecls&, res: c_imported&, span: span) -> v
             val cn = this.intern(fmt("volt_cw_{}", S(f.name)));
             put(&res.statics, cn);
             c_name = cn;
+        }
+        if (!wrap && !va && !f.variadic && m.needs_shim(f)) {
+            // its structs by pointer, for the LLVM backend (the C backend calls f itself)
+            var s = m.shim(f, &c_names) ?? S("");
+            if (s.len() > 0) {
+                put(&wraps, move s);
+                this.c_shims.put(f.name, true);
+            }
         }
         put(&res.items, m.citem(item_kind::FN({ name: f.name, spec: null, params: move params, c_varargs: f.variadic || va, ret: move ret, body: null, is_async: false, is_comptime: false, extern_abi: C_HEADER, is_export: false, is_attach: false, c_name: c_name })));
     }

@@ -403,6 +403,9 @@ struct struct_decl {
     is_comptime: bool;
     c_name: str?; // defined by an imported C header under this C type name
     c_partial: bool = false; // ...with members Volt can't read (bitfields, unions): layout only C knows
+    // ...that C passes by value in a way its fields Volt reads can't tell (a _Complex or long double
+    // member, a bitfield beside a float): by value to C only through a C shim (cimport's shim)
+    c_opaque: bool = false;
     c_union: bool = false; // ...a C union: its fields share offset 0
     // ...whose fields share bytes (an anonymous union member): each field's byte offset, and C's size
     // and alignment, for the LLVM backend to place them

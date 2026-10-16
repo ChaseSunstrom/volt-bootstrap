@@ -353,34 +353,36 @@ attach fn record_type(this: clang_tu&, c_name: str) -> clang::CXType? {
     return null;
 }
 
-// the size of record type rt's field `name` (0 when it has none)
-fn field_size(rt: clang::CXType, name: str) -> i64 {
+// the size and alignment of record type rt's field `name` (0s when it has none)
+fn field_layout(rt: clang::CXType, name: str) -> (i64, i64) {
     for (c&) in children(clang::clang_getTypeDeclaration(rt)).items() {
         val k = clang::clang_getCursorKind(*c);
         if (k == clang::CXCursor_FieldDecl && cursor_name(*c).as_str() == name) {
-            return clang::clang_Type_getSizeOf(clang::clang_getCursorType(*c));
+            val t = clang::clang_getCursorType(*c);
+            return (clang::clang_Type_getSizeOf(t), clang::clang_Type_getAlignOf(t));
         }
         // an anonymous struct or union member: its fields are the outer one's
         if ((k == clang::CXCursor_StructDecl || k == clang::CXCursor_UnionDecl) && clang::clang_Cursor_isAnonymousRecordDecl(*c) != 0) {
-            val size = field_size(clang::clang_getCursorType(*c), name);
-            if (size > 0) {
-                return size;
+            val got = field_layout(clang::clang_getCursorType(*c), name);
+            if (got.0 > 0) {
+                return got;
             }
         }
     }
-    return 0;
+    return (0, 0);
 }
 
-// padding fields for bytes [from, to): the widest naturally aligned unsigned ints that fit (a run of
-// u64s as one array), named @pad0, @pad1... A field can't be named that in Volt, and C never sees
-// them: struct literals leave them out (zero), and C's own struct has its members there
-attach fn pad_fields(this: checker&, from: u64, to: u64, n: u32&, span: span, out: std::vec<field>&) -> void {
+// padding fields for bytes [from, to): the widest naturally aligned unsigned ints that fit, none wider
+// than the struct's alignment `most` (a run of u64s as one array), named @pad0, @pad1... A field
+// can't be named that in Volt, and C never sees them: struct literals leave them out (zero), and C's
+// own struct has its members there
+attach fn pad_fields(this: checker&, from: u64, to: u64, most: u64, n: u32&, span: span, out: std::vec<field>&) -> void {
     val sizes: u64[3] = { 8, 4, 2 };
     var at = from;
     while (at < to) {
         var size: u64 = 1;
         for (s) in sizes {
-            if (size == 1 && at % s == 0 && at + s <= to) {
+            if (size == 1 && s <= most && at % s == 0 && at + s <= to) {
                 size = s;
             }
         }
