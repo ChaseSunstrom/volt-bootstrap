@@ -1510,6 +1510,7 @@ struct cmapper {
     enum_ints: std::map<str, str> = {};  // enum tag -> the integer type its values take
     in_fn: bool = false;                 // mapping a function pointer's type
     classes: std::map<str, u8> = {};     // struct tag -> its struct_class
+    overlays: std::map<str, bool> = {};  // tags of the structs placed by offsets (c_offsets)
     complex: std::vec<str> = {};         // the complex structs wrappers use: cf32, cf64
     cf32: str = "cf32";                  // their Volt names (with _ added past a header's own)
     cf64: str = "cf64";
@@ -1653,8 +1654,9 @@ attach fn c_class(this: cmapper&, t: ctype&, depth: u32) -> u8 {
 }
 
 // c_class of struct `tag`: a member that is 2 makes it 2, and so does a bitfield beside a
-// floating-point member (C classifies their bytes together, and Volt never sees the bitfield's);
-// a flexible array member is past its size, so never passed
+// floating-point member (C classifies their bytes together, and Volt never sees the bitfield's),
+// or a floating-point member of a struct placed by offsets (overlays: asked once lay_out_partial
+// has run); a flexible array member is past its size, so never passed
 attach fn struct_class(this: cmapper&, tag: str, depth: u32) -> u8 {
     val have = this.classes.get(tag);
     if (have) {
@@ -1678,16 +1680,20 @@ attach fn struct_class(this: cmapper&, tag: str, depth: u32) -> u8 {
                 if (f.placeholder || flexible(&f.ty)) {
                     continue;
                 }
-                // (a nameless member that isn't a placeholder: one the parser couldn't read)
+                // a nameless member that isn't a placeholder (one the parser couldn't read), or one
+                // Volt skips (a type it can't name: c_items lays it out as padding, so Volt passes
+                // its bytes as integers whatever C's type is) is 2
                 var k: u8 = 2;
-                if (f.name.len > 0) {
+                if (f.name.len > 0 && this.ty_of(&f.ty) != null) {
                     k = this.c_class(&f.ty, depth);
                 }
                 if (k > out) {
                     out = k;
                 }
             }
-            if (bits && out == 1) {
+            // a bitfield beside a float, or a float in a struct placed by offsets (an anonymous
+            // union member: the LLVM backend's block of bytes is no HFA on AAPCS64)
+            if (out == 1 && (bits || this.overlays.get(tag) != null)) {
                 out = 2;
             }
             break;
@@ -2627,6 +2633,8 @@ attach fn c_items(this: checker&, d: cdecls&, res: c_imported&, span: span) -> v
         parse_decls(this.c_texts.at(this.c_texts.len - 1).as_str(), d);
     }
     var partial_items: std::vec<usize> = {};
+    var struct_items: std::vec<usize> = {}; // every struct's item, and its tag
+    var struct_tags: std::vec<str> = {};
     for (s&) in d.structs.items() {
         val name = m.names.get(s.tag) ?? continue;
         val c = c_names.get(s.tag) ?? continue;
@@ -2642,11 +2650,9 @@ attach fn c_items(this: checker&, d: cdecls&, res: c_imported&, span: span) -> v
                 put(&fields, { name: f.name, ty: t ?? @panic("ty"), fallback: null, vis: vis::PUBLIC, span: span });
             }
         }
-        val opaque = m.struct_class(s.tag, 0) == 2;
-        if (opaque) {
-            this.c_opaque_any = true;
-        }
-        put(&res.items, m.citem(item_kind::STRUCT({ name: *name, spec: null, fields: move fields, is_extern: true, is_comptime: false, c_name: *c, c_partial: partial, c_opaque: opaque, c_union: s.is_union })));
+        put(&res.items, m.citem(item_kind::STRUCT({ name: *name, spec: null, fields: move fields, is_extern: true, is_comptime: false, c_name: *c, c_partial: partial, c_union: s.is_union })));
+        put(&struct_items, res.items.len - 1);
+        put(&struct_tags, s.tag);
         if (partial && s.fields != null) {
             put(&partial_items, res.items.len - 1);
         }
@@ -2658,6 +2664,28 @@ attach fn c_items(this: checker&, d: cdecls&, res: c_imported&, span: span) -> v
         all_c.push('\n');
     }
     this.lay_out_partial(res, &partial_items, all_c.as_str(), span);
+    // which structs only C can pass by value, now that their layouts are known
+    for (k) in 0..struct_items.len {
+        match (res.items.at(*struct_items.at(k)).kind) {
+            .STRUCT(sd&) => {
+                if (sd.c_offsets != null) {
+                    m.overlays.put(*struct_tags.at(k), true);
+                }
+            },
+            default => {},
+        }
+    }
+    for (k) in 0..struct_items.len {
+        match (res.items.at(*struct_items.at(k)).kind) {
+            .STRUCT(sd&) => {
+                sd.c_opaque = m.struct_class(*struct_tags.at(k), 0) == 2;
+                if (sd.c_opaque) {
+                    this.c_opaque_any = true;
+                }
+            },
+            default => {},
+        }
+    }
     // every other typedef is a type name too: pointers, integers, function pointers, a struct's
     // second name (one Volt can't map, or whose name is taken, is skipped)
     for (n) in d.typedef_order.items() {

@@ -39,6 +39,15 @@ fn main() -> void {
     std::println("{} {}", c::five_sum(&fs[0], 3), fs[2].a);
     val w = c::wide_make(4);
     std::println("{} {}", w.a, c::wide_get(w));
+    // a member Volt skips, and fields placed by offset (an anonymous union): given by C, and
+    // given to C
+    val sg = c::seg_make(1.5, 2.0);
+    var s2: c::seg = {};
+    c::seg_set(&s2, 1.0, 4.0);
+    std::println("{} {} {}", c::seg_y(&sg), c::seg_len(s2), @sizeof(c::seg));
+    val v = c::v3_make(1.0);
+    val u: c::v3 = { x: 2.0, y: 3.0, z: 4.0 };
+    std::println("{} {} {}", v.y, v.v[2], c::v3_sum(u));
 }
 
 // expect: true true true true
@@ -51,3 +60,5 @@ fn main() -> void {
 // expect: 11 24.5 9
 // expect: 54 3
 // expect: 4 10
+// expect: 2 5 8
+// expect: 2 3 9

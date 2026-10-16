@@ -93,6 +93,35 @@ static inline struct wide wide_make(int a) {
 }
 static inline double wide_get(struct wide w) { return w.a + (double)w.x; }
 
+/* a member Volt skips (its type's name starts with __): Volt pads its bytes, C passes its floats
+   in SSE registers */
+struct __v2 { float x, y; };
+struct seg { struct __v2 a; };
+static inline struct seg seg_make(float x, float y) {
+    struct seg s;
+    s.a.x = x;
+    s.a.y = y;
+    return s;
+}
+static inline float seg_len(struct seg s) { return s.a.x + s.a.y; }
+static inline float seg_y(const struct seg *s) { return s->a.y; }
+static inline void seg_set(struct seg *s, float x, float y) {
+    s->a.x = x;
+    s->a.y = y;
+}
+
+/* an anonymous union member: Volt places its fields by offset, and AAPCS64 passes the struct in
+   s registers (an HFA) */
+struct v3 { union { struct { float x, y, z; }; float v[3]; }; };
+static inline struct v3 v3_make(float x) {
+    struct v3 a;
+    a.x = x;
+    a.y = 2 * x;
+    a.z = 3 * x;
+    return a;
+}
+static inline float v3_sum(struct v3 a) { return a.x + a.y + a.z; }
+
 /* a call through a C function pointer, and a Volt fn C calls by one */
 typedef float (*pair_fn)(struct pair);
 static inline pair_fn pair_summer(void) { return pair_sum; }

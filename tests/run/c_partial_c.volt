@@ -10,3 +10,5 @@
 // expect: 11 24.5 9
 // expect: 54 3
 // expect: 4 10
+// expect: 2 5 8
+// expect: 2 3 9
