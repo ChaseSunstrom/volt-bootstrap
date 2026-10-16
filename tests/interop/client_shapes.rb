@@ -170,7 +170,7 @@ def ruby_extras
   # an object Volt was given is closed when Volt drops it, even after one of its methods raised
   puts "closed anyway #{raised { S.grow_twice(Shrinking.new) }}"
   puts "break #{S.visit(a) { break 7 }}"
-  dir = File.dirname($LOADED_FEATURES.grep(/shapelib\.so\z/).first)
+  dir = File.dirname($LOADED_FEATURES.grep(/shapelib\.#{RbConfig::CONFIG["DLEXT"]}\z/).first)
   _, err, st = Open3.capture3(RbConfig.ruby, "-I", dir, "-e", "require 'shapelib'; Shapelib.opened_by { 1 / 0 }")
   puts "fatal #{st.exitstatus} #{err.include?("ZeroDivisionError")}"
 end
