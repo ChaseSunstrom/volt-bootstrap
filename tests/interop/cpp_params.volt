@@ -49,11 +49,17 @@ fn main() -> void {
     var cs: cpp::pr::ap::cell[2] = { { x: 1, y: 2 }, { x: 3, y: 4 } };
     std::println("alias {} cells {}", cpp::pr::ap::sum_alias(&ys[0]), cpp::pr::ap::cells(&cs[0], 2));
     // a template written against a C++ string takes a Volt std::string as one: S& changes it, const
-    // S& and S read it; one instantiated with it and with an i32, one with a second parameter
+    // S& and S read it (S& and const S& a Volt reference, lent to the call); one instantiated with
+    // it and with an i32, one with a second parameter
     var w = std::string::from("hey");
     cpp::pr::gs::wrap(&w);
     std::println("wrap {} {} {}", w, cpp::pr::gs::len(&w), cpp::pr::gs::bump(&w));
-    std::println("gauge {} {} {}", cpp::pr::gs::gauge(&w), cpp::pr::gs::gauge(7), w);
+    val seven: i32 = 7;
+    std::println("gauge {} {} {}", cpp::pr::gs::gauge(&w), cpp::pr::gs::gauge(&seven), w);
+    // S by value takes a copy, S&& a value moved in (tk gone after)
+    var tk = std::string::from("xyz");
+    std::println("take {} {}", cpp::pr::gs::bump(copy tk), tk);
+    std::println("took {}", cpp::pr::gs::take(move tk));
     val padded = cpp::pr::gs::pad(&w, 2);
     std::println("pad {} {}", padded, w);
     grown_t(&w, 1);
@@ -131,8 +137,7 @@ fn main() -> void {
     checked_at(&rx);
     rx = -1;
     checked_at(&rx);
-    // a declared template's S& with S an i32& (its a0: S, so &a0 a reference to the reference): C++
-    // changes the Volt variable
+    // a declared template's S& a Volt S& (S an i32, what &rt names): C++ changes the Volt variable
     var rt: i32 = 21;
     cpp::pr::rp::twice_ref(&rt);
     // a method's pointer argument beside its receiver: an & method, an operator, an && one

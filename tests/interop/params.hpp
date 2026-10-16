@@ -126,6 +126,8 @@ template <class S> S echo(const S &s) { return s; }
 template <class S> int which(S &s) { s += "&"; return 1; }
 template <class S> int which(const S &) { return 2; }
 template <class S> int fwd(S &&s) { s += "&&"; return (int)s.size(); }
+// an S&& that keeps what it's given: a Volt value moved in
+template <class S> int take(S &&s) { S kept(static_cast<S &&>(s)); kept += "<"; return (int)kept.size(); }
 }
 // nested std::vectors, by value, const& and && (a Volt slice of slices, each level copied; of ints,
 // doubles and signed chars, whose Volt form is the same on every target), written back

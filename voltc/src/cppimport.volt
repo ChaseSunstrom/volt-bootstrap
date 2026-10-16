@@ -1662,6 +1662,7 @@ struct cpp_arg {
     // made from a str (a std::string) or a slice (a std::vector)
     text_ref: bool = false;
     map_copy: bool = false; // a copy that (unlike a string) can hold a class: a map's, a vector's
+    var_param: bool = false; // the Volt fn's parameter is a var (a template's S&&, which C++ moves from)
 }
 
 // why a call can't be written when an argument is a copy made for it (a std::string&'s, a
@@ -1852,6 +1853,26 @@ attach fn map_handle(this: cpp_gen&, t: clang::CXType, tparams: std::vec<str>&) 
     return this.vtype(t, tparams) != null;
 }
 
+// a function template's S& or const S& (S its own type parameter, own): a Volt S&, so a call lends
+// what it passes (C++'s change written back) and S is what the reference names; S and S&& stay by
+// value (param). Not a class template's T&: its members take T as param has them
+fn tparam_ref(t: clang::CXType, name: str, i: usize, tparams: std::vec<str>&, own: bool) -> cpp_arg? {
+    if (!own || t.kind != clang::CXType_LValueReference) {
+        return null;
+    }
+    val pointee = type_spelling(clang::clang_getPointeeType(t));
+    val bare = strip_const(pointee.as_str());
+    for (p&) in tparams.items() {
+        if (bare == *p) {
+            var slot = S("{");
+            slot.append_uint(@cast<u64>(i));
+            slot.push('}');
+            return { vty: fmt("{}&", S(*p)), pass: S(name), cpp: move slot };
+        }
+    }
+    return null;
+}
+
 attach fn param(this: cpp_gen&, t: clang::CXType, name: str, i: usize, tparams: std::vec<str>&) -> cpp_arg? {
     var slot = S("{");
     slot.append_uint(@cast<u64>(i));
@@ -2021,7 +2042,8 @@ attach fn param(this: cpp_gen&, t: clang::CXType, name: str, i: usize, tparams: 
         val pt = clang::clang_getPointeeType(t);
         for (p&) in tparams.items() {
             if (strip_const(type_spelling(pt).as_str()) == *p) {
-                return { vty: S(*p), pass: fmt("&{}", S(name)), cpp: fmt("VOLT_MOVE({})", move slot) };
+                // a var: C++ moves from it (a std::string's copy written back into it)
+                return { vty: S(*p), pass: fmt("&{}", S(name)), cpp: fmt("VOLT_MOVE({})", move slot), var_param: true };
             }
         }
         val inner = this.vtype(pt, tparams) ?? return null;
@@ -2928,7 +2950,11 @@ attach fn callable_of(this: cpp_gen&, generics: str, head: str, has_params: bool
         }
         val name = vname(pn.as_str());
         var a: cpp_arg = { vty: {}, pass: {}, cpp: {} };
-        val ao = this.param(clang::clang_getCursorType(p), name.as_str(), first + @cast<usize>(i), tparams);
+        val ptype = clang::clang_getCursorType(p);
+        var ao = tparam_ref(ptype, name.as_str(), first + @cast<usize>(i), tparams, clang::clang_getCursorKind(fn_cursor) == clang::CXCursor_FunctionTemplate);
+        if (ao == null) {
+            ao = this.param(ptype, name.as_str(), first + @cast<usize>(i), tparams);
+        }
         if (ao) {
             a = copy ao;
         } else {
@@ -3017,6 +3043,9 @@ attach fn callable_of(this: cpp_gen&, generics: str, head: str, has_params: bool
         for (i) in 0..count {
             if (i > 0 || has_params) {
                 params.append(", ");
+            }
+            if (args.at(i).var_param) {
+                params.append("var ");
             }
             params.append(fmt2("{}: {}", copy *names.at(i), copy args.at(i).vty).as_str());
             if (i > 0) {

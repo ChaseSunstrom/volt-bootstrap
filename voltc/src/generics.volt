@@ -821,6 +821,20 @@ fn no(m: std::string) -> bound {
     return bound::NO(move m);
 }
 
+// is pat T& with T the generic param named n
+fn ref_to_param(pat: ty&, n: str) -> bool {
+    match (pat.kind) {
+        .REF(i) => {
+            match (i.kind) {
+                .PATH(p&) => { return p.is_single() && p.segs.at(0).name == n; },
+                default => {},
+            }
+        },
+        default => {},
+    }
+    return false;
+}
+
 fn is_pack_param(p: param&) -> bool {
     if (p.ty == null) {
         return false;
@@ -986,6 +1000,18 @@ attach fn bind_cand(this: checker&, d: u32, rv: tval*, static_ty: u32?, explicit
         } else if (gp.pack) {
             *binds.at(i) = gval::PACK(this.new_list({}));
         } else {
+            // a T& parameter given a value, which T can't come from: say which
+            for (m) in 0..fixed {
+                val p = *vparams.at(m) ?? continue;
+                if (m >= args.len || p.ty == null || !ref_to_param(&p.ty.value, gp.name)) {
+                    continue;
+                }
+                val av = *args.at(m) ?? continue;
+                match (*this.t.get(av.ty)) {
+                    .REF(x) => {},
+                    default => { return no(fmt5("argument {} is a {}, but '{}' wants a {}& for {}, so pass a reference: &x", unum(@cast<u64>(m + 1)), this.ty_name(av.ty), S(fname), S(gp.name), S(p.name))); },
+                }
+            }
             return no(fmt3("can't infer '{}' for '{}'; pass it: {}<...>(...)", S(gp.name), S(fname), S(fname)));
         }
     }
