@@ -45,7 +45,7 @@ hq1 fhq1(hq1 x) { return x; }
 #if defined(__aarch64__)
 /* quad floats make HFAs too (long double is a quad only on aarch64 Linux; elsewhere these
    shapes lower another way, through rules this test doesn't cover yet) */
-#if !defined(__APPLE__)
+#if !defined(__APPLE__) && !defined(_WIN32)
 typedef struct { long double a, b; } hq2;
 hq2 fhq2(hq2 x) { return x; }
 #endif

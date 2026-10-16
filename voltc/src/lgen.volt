@@ -12,6 +12,8 @@ enum callconv {
     AAPCS64,  // aarch64 Linux and the like
     DARWIN64, // Apple's arm64: AAPCS64, with small ints extended by the caller
     WIN64,    // Windows x64
+    WINARM64, // Windows on arm64: AAPCS64, but a variadic argument goes in integer registers (LLVM
+              // places them) and an aggregate among them is never an HFA
 }
 
 // how a value crosses a call
@@ -469,7 +471,7 @@ attach fn part(this: lg&, t: u32, ret: bool) -> abi_part {
         return { how: pass::MEMORY, ty: t };
     }
     if (this.cc != callconv::SYSV) {
-        return this.aapcs_part(t, size, ret);
+        return this.aapcs_part(t, size, ret, true);
     }
     if (size > 16) {
         return { how: pass::MEMORY, ty: t };
@@ -532,12 +534,13 @@ fn int_bits(l: llvm::LLVMOpaqueType*) -> u32 {
 
 // AAPCS64's aggregates: an HFA (one to four of the same float type, nested or not) in FP registers;
 // up to 16 bytes in one or two x registers (a pair as an i128 when it's 16-byte aligned); anything
-// bigger by a pointer to a copy, or returned through x8
-attach fn aapcs_part(this: lg&, t: u32, size: u64, ret: bool) -> abi_part {
+// bigger by a pointer to a copy, or returned through x8. hfa: whether HFAs are (not for Windows on
+// arm64's variadic arguments)
+attach fn aapcs_part(this: lg&, t: u32, size: u64, ret: bool, hfa: bool) -> abi_part {
     val l = this.lt(t);
     var leaves: std::vec<llvm::LLVMOpaqueType*> = {};
     scalar_leaves(l, &leaves);
-    if (leaves.len >= 1 && leaves.len <= 4) {
+    if (hfa && leaves.len >= 1 && leaves.len <= 4) {
         val e = *leaves.at(0);
         val ek = llvm::LLVMGetTypeKind(e);
         var same = ek == llvm::LLVMHalfTypeKind || ek == llvm::LLVMFloatTypeKind || ek == llvm::LLVMDoubleTypeKind || ek == llvm::LLVMFP128TypeKind;
@@ -2103,7 +2106,11 @@ attach fn call(this: lg&, f: u32, args: std::vec<u32>&, t: u32) -> llvm::LLVMOpa
                 }
                 at = I32;
             }
-            val p = this.part(at, false);
+            var p = this.part(at, false);
+            if (p.hfa && this.cc == callconv::WINARM64) {
+                // Windows on arm64: a variadic HFA crosses as any other aggregate
+                p = this.aapcs_part(at, this.size_of(this.lt(at)), false, false);
+            }
             this.pass_arg(&p, v, &vals);
             put(&extra, move p);
         }
@@ -2748,7 +2755,7 @@ attach fn llvm_build(this: checker&, g: lg&) -> std::string {
             if (ts.contains("windows") || ts.contains("mingw") || ts.contains("cygwin") || ts.contains("win32")) {
                 g.cc = callconv::WIN64;
             }
-        } else if ((ts.starts_with("aarch64") || ts.starts_with("arm64")) && !ts.contains("windows")) {
+        } else if (ts.starts_with("aarch64") || ts.starts_with("arm64")) {
             llvm::LLVMInitializeAArch64TargetInfo();
             llvm::LLVMInitializeAArch64Target();
             llvm::LLVMInitializeAArch64TargetMC();
@@ -2756,9 +2763,11 @@ attach fn llvm_build(this: checker&, g: lg&) -> std::string {
             g.cc = callconv::AAPCS64;
             if (ts.contains("apple") || ts.contains("darwin")) {
                 g.cc = callconv::DARWIN64;
+            } else if (ts.contains("windows") || ts.contains("mingw")) {
+                g.cc = callconv::WINARM64;
             }
         } else {
-            return fmt("the LLVM backend builds for x86-64 and aarch64 hosts but Windows on ARM (for now), not {}; use --backend c", copy triple);
+            return fmt("the LLVM backend builds for x86-64 and aarch64 hosts, not {}; use --backend c", copy triple);
         }
     }
     var target: llvm::LLVMTarget* = null;
@@ -2780,7 +2789,7 @@ attach fn llvm_build(this: checker&, g: lg&) -> std::string {
         var cpu = S("x86-64");
         if (g.cc == callconv::DARWIN64) {
             cpu = S("apple-m1");
-        } else if (g.cc == callconv::AAPCS64) {
+        } else if (g.cc == callconv::AAPCS64 || g.cc == callconv::WINARM64) {
             cpu = S("generic");
         }
         g.tm = llvm::LLVMCreateTargetMachine(target, triple.c_str(), cpu.c_str(), "", level, llvm::LLVMRelocPIC, llvm::LLVMCodeModelDefault);
