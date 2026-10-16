@@ -185,6 +185,17 @@ fn f128_soft_c() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// u128 literals past i128's maximum through the C backend too (golden runs them through LLVM)
+#[test]
+fn u128_literals_c() {
+    let file = "tests/run/u128_literals.volt";
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let o = Command::new(common::voltc()).args(["run", file, "--backend", "c"]).current_dir(root).output().unwrap();
+    let got = String::from_utf8_lossy(&o.stdout);
+    let want = directives(&std::fs::read_to_string(root.join(file)).unwrap(), "expect").join("\n");
+    assert!(o.status.success() && got.trim_end() == want, "u128_literals in C printed:\n{got}{}", String::from_utf8_lossy(&o.stderr));
+}
+
 #[test]
 fn multiline_strings_crlf() {
     let src = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/run/strings_multiline.volt")).unwrap();

@@ -103,7 +103,8 @@ fn main() -> void {
 
 A literal takes the type its place wants. On its own, an integer is an `i32` (an `i64`, then an
 `i128`, when it doesn't fit), a float an `f64`, and a character its code point: a `u8` up to 255, a
-`u32` past it.
+`u32` past it. Integer literals go up to `u128`'s maximum (2^128 - 1); one past `i128`'s maximum
+needs a `u128` place (`val all: u128 = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF;` or `@cast<u128>(...)`).
 
 ### Multi-line and raw strings
 

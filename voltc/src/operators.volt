@@ -313,6 +313,10 @@ attach fn binary(this: checker&, op: binop, ae: expr&, be: expr&, want: u32?, sp
             operand_want = w;
         }
     }
+    // a literal past i128's maximum on the left is a u128, the one type that holds it
+    if (operand_want == null && past_i128_lit(ae)) {
+        operand_want = int_id(int_ty::U128);
+    }
     // a C enum's value is its number to operators, as in C
     val a = this.c_enum_view(try this.expr(ae, operand_want));
     if (op != binop::EQ && op != binop::NE && this.has_ops(a.ty)) {
