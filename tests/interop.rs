@@ -1081,7 +1081,7 @@ fn zig_direct() {
     let e = Env::new("zig_direct");
     let dir = e.dir.join("zd");
     copy_dir(&Path::new(ROOT).join("tests/interop/zig_direct"), &dir);
-    let want = "dist 5 norm 5\nscaled 6 8\n42 fastmath 10 1.5\nfirst QUIET\nsum 7\ndoubled 2 4 6\nsquares 4 last 16\njoin a-b-c\nfind 2 true\nor_default 5 -1\nparse 42\nbad ERROR(InvalidCharacter)\ndiv 3\nzero ERROR(DivisionByZero)\ncolor blue green\npixel 2 green\ntwice 42\nperimeter 7 10 name tri\nside 4\nmissing ERROR(NoSuchSide)\nlongest quad\nconsumed 2\nticks 2 3\nlargest 9 2.5\nbigger 8 2.5 times 21 scaled 20 -10\npair 7\nstack true true false total 3 pop 2 1 true\nflags true true\n";
+    let want = "dist 5 norm 5\nscaled 6 8\n42 fastmath 10 1.5\nfirst QUIET\nsum 7\ndoubled 2 4 6\nsquares 4 last 16\njoin a-b-c\nfind 2 true\nor_default 5 -1\nparse 42\nbad ERROR(InvalidCharacter)\ndiv 3\nzero ERROR(DivisionByZero)\ncolor blue green\npixel 2 green\ntwice 42\nperimeter 7 10 name tri\nside 4\nmissing ERROR(NoSuchSide)\nlongest quad\nconsumed 2\nticks 2 3\nlargest 9 2.5\nbigger 8 2.5 times 21 scaled 20 -10\npair 7\nstack true true false total 3 pop 2 1 true\nflags true true\npacked 5 -60 -54 7 -2\nunion true 4 true 3 true\nheld 3 0\narea 48 6 round true false\nbits 7\nbits 1.5 2.5\nctx 5 true 50\nmaybe 100\nextern 5\n";
     let tools = |c: &mut Command| {
         c.env("VOLTC", &e.voltc).env("BOLT", env!("CARGO_BIN_EXE_bolt")).env("VOLT_CACHE", e.dir.join("cache")).env("BOLT_HOME", e.dir.join("bolthome")).env("ZIG", &zig);
     };
@@ -1091,7 +1091,20 @@ fn zig_direct() {
         c.args(["run", "--leak-check", "--backend", backend, "main.volt"]).current_dir(&dir).env("VOLT_STD", Path::new(ROOT).join("std"));
         tools(&mut c);
         assert_eq!(ok(c.output().unwrap(), "voltc run"), want, "voltc run ({backend})");
+        // an import's library that only a later one's needs is still found (GNU ld reads each
+        // archive once, in the order given)
+        let mut c = Command::new(&e.voltc);
+        c.args(["run", "--leak-check", "--backend", backend, "order.volt"]).current_dir(&dir).env("VOLT_STD", Path::new(ROOT).join("std"));
+        tools(&mut c);
+        assert_eq!(ok(c.output().unwrap(), "voltc run order.volt"), "order 20\n", "voltc run order.volt ({backend})");
     }
+    // the limit: a file with export fns, imported under two names and used through both, gives the
+    // linker each of its C symbols twice
+    let mut c = Command::new(&e.voltc);
+    c.args(["run", "dup.volt"]).current_dir(&dir).env("VOLT_STD", Path::new(ROOT).join("std"));
+    tools(&mut c);
+    let o = c.output().unwrap();
+    assert!(!o.status.success() && String::from_utf8_lossy(&o.stderr).contains("zig_ext_add"), "two names, one file: {}", String::from_utf8_lossy(&o.stderr));
     // an instance zig rejects: zig's reason, at the call
     std::fs::write(dir.join("bad.volt"), "use std::io;\nuse { \"fastmath.zig\" } as fm;\nfn main() -> void {\n    std::println(\"{}\", fm::biggerOf(\"a\", \"b\"));\n}\n").unwrap();
     let mut c = Command::new(&e.voltc);
@@ -1117,7 +1130,12 @@ fn zig_direct() {
     c.args(["check", "main.volt"]).current_dir(&dir).env("VOLT_STD", Path::new(ROOT).join("std")).env("VOLT_SHOW_IMPORT", "1");
     tools(&mut c);
     let o = c.output().unwrap();
-    assert!(String::from_utf8_lossy(&o.stderr).contains("// Zig: pub fn scale(self: *Point, k: f64) void\nattach fn scale("), "the Zig signature above its Volt fn: {}", String::from_utf8_lossy(&o.stderr));
+    let shown = String::from_utf8_lossy(&o.stderr);
+    assert!(shown.contains("// Zig: pub fn scale(self: *Point, k: f64) void\nattach fn scale("), "the Zig signature above its Volt fn: {shown}");
+    // an extern fn Volt can't declare as C's: left out, with why
+    for why in ["zig_ext_len (an extern fn with a parameter of a type C doesn't have)", "zig_ext_naked (an extern fn with a calling convention other than C's)"] {
+        assert!(shown.contains(why), "left out: {why}: {shown}");
+    }
     // a handle Zig never made stops the program
     let mut c = Command::new(&e.voltc);
     c.args(["run", "empty.volt"]).current_dir(&dir).env("VOLT_STD", Path::new(ROOT).join("std"));
@@ -1129,7 +1147,7 @@ fn zig_direct() {
     let app = dir.join("app");
     std::fs::create_dir_all(app.join("src")).unwrap();
     std::fs::write(app.join("bolt.toml"), format!("[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[std]\npath = \"{}\"\n", Path::new(ROOT).join("std").display())).unwrap();
-    std::fs::write(app.join("src/main.volt"), std::fs::read_to_string(dir.join("main.volt")).unwrap().replace("use { \"fastmath.zig\" }", "use { \"../../fastmath.zig\" }")).unwrap();
+    std::fs::write(app.join("src/main.volt"), std::fs::read_to_string(dir.join("main.volt")).unwrap().replace("use { \"", "use { \"../../")).unwrap();
     let bolt_run = |backend: &str| {
         let mut c = Command::new(env!("CARGO_BIN_EXE_bolt"));
         c.args(["run", "-q", "--backend", backend]).current_dir(&app);

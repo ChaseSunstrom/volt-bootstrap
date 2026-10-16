@@ -2,6 +2,47 @@ use std::io;
 // Volt calling an ordinary Zig file (fastmath.zig, nothing in it is written for Volt): the use
 // line is all it takes, with voltc run main.volt or in a bolt package
 use { "fastmath.zig" } as fm;
+// Zig's other kinds of types, and an extern fn whose symbol impl.zig exports
+use { "kinds.zig" } as kd;
+use { "impl.zig" } as im;
+
+fn kinds() -> void {
+    // a packed struct: a Volt struct, its odd-width fields in the next Volt integer up
+    var f: kd::Flags = { a: true, b: 5, c: -3 };
+    f.c = -60;
+    val g = kd::makeFlags(-2);
+    std::println("packed {} {} {} {} {}", f.b, f.c, kd::flagsSum(f), g.b, g.c);
+
+    // a tagged union: a handle, made per variant, read by its tag and as_ reads
+    var s = kd::Shape::circle(2.0);
+    val r = kd::Shape::rect({ w: 2.0, h: 3.0 });
+    val n = kd::Shape::none();
+    s.grow(2.0);
+    std::println("union {} {} {} {} {}", s.tag() == kd::Shape_tag::circle, s.as_circle() ?? 0.0, r.as_circle() == null, (r.as_rect() ?? {}).h, n.tag() == kd::Shape_tag::none);
+    val held = kd::Held::buf(kd::Buf::init(3));
+    val empty = kd::Held::empty();
+    std::println("held {} {}", kd::heldLen(&held), kd::heldLen(&empty));
+    std::println("area {} {} round {} {}", kd::shapeArea(&s), kd::shapeArea(&r), s.isRound(), r.isRound());
+
+    // a bare union: a handle with a reader and a setter per field
+    var b = kd::Bits::i(7);
+    std::println("bits {}", b.i());
+    b.set_f(1.5);
+    std::println("bits {} {}", b.f(), kd::bitsOf(2.5).f());
+
+    // an opaque type: Zig's pointers, borrowed (Zig makes and frees them)
+    val c = kd::ctxCreate(1);
+    kd::ctxAdd(&c, 4);
+    std::println("ctx {} {} {}", kd::ctxTotal(&c), kd::ctxMaybe(false) == null, kd::zig_ext_total(&c));
+    kd::ctxDestroy(&c);
+    if (val m = kd::ctxMaybe(true)) {
+        std::println("maybe {}", kd::ctxTotal(&m));
+        kd::ctxDestroy(&m);
+    }
+
+    // an extern fn: the C symbol, linked from impl.zig
+    std::println("extern {}", kd::zig_ext_add(2, 3));
+}
 
 fn run() -> fm::zig_error!void {
     // plain structs by value, and their methods
@@ -91,4 +132,5 @@ fn run() -> fm::zig_error!void {
 
 fn main() -> !void {
     try run();
+    kinds();
 }

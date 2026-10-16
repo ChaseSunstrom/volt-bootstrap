@@ -1621,12 +1621,28 @@ fn cc_run(inputs: std::vec<str>&, out: str, c: cli&, object: bool) -> void {
         // the order GNU ld needs: objects and flags, the archives, then the -l libraries they use
         // (Ubuntu's gcc links --as-needed, which drops a library named before anything uses it)
         var needed: std::vec<str> = {};
+        var archives: std::vec<str> = {};
         for (a&) in c.cc_args.items() {
             if (a.starts_with("-l")) {
                 put(&needed, *a);
+            } else if (ends_with(*a, ".a")) {
+                put(&archives, *a);
             } else {
                 put(&argv, *a);
             }
+        }
+        // the archives (imports' libraries) as one group: one may need another's member, in
+        // whatever order the use lines named them (GNU ld reads each archive once; macOS's and
+        // Windows' linkers look again by themselves)
+        val group = archives.len > 1 && std::process::os() != "macos" && std::process::os() != "windows";
+        if (group) {
+            put(&argv, "-Wl,--start-group");
+        }
+        for (a&) in archives.items() {
+            put(&argv, *a);
+        }
+        if (group) {
+            put(&argv, "-Wl,--end-group");
         }
         for (l&) in c.links.items() {
             put(&argv, l.path);

@@ -15,7 +15,12 @@
 //   generic Volt struct. Zig builds an instance per one a program uses (voltc asks for them)
 //   a struct whose fields are all plain -> a Volt struct, by value; any other struct -> an owned
 //   handle (made with Volt's allocator; delete calls its deinit, when it has one, and frees it)
-//   an enum -> a Volt enum with the same values
+//   an enum -> a Volt enum with the same values; a packed struct as any struct (u3 fields in a u8)
+//   a union -> an owned handle with a maker per field (U::f(v)); union(enum)'s tag() and as_f()
+//   reads, a bare union's f() reads and set_f(v)
+//   an opaque type -> a handle Volt borrows from pointers to it (never freed by Volt)
+//   an extern fn of C's calling convention -> Volt's extern "C" fn when its types are numbers, else
+//   through the shim when they're pointers to opaque types or extern structs
 use super::glue::{ident, number, prim, substitute, volt_ty, Gen, Kind, Lang, Model, Recv, ShimOut, ShimParam, Sig, Ty, TypeDef, TypeInfo};
 use super::{arg_path, fresh, save, stamp, Made, Req};
 use crate::foreign::{int_value, lex, toks_line, Cur, Tok};
@@ -60,7 +65,9 @@ pub fn import(r: &Req) -> Result<(), String> {
         let mut m = model.clone();
         let mut deinit = w.deinit.clone();
         instances(&mut m, &mut deinit, lines, &r.alias, skip);
-        let lang = Zig { deinit };
+        // a tagged union's payloads with a deinit: its drop calls the active one's
+        let unions = w.unions.iter().filter(|u| u.1 .0).map(|(u, (_, fs))| (u.clone(), (fs.len(), fs.iter().filter_map(|(f, t)| if let Some(Ty::Named(n)) = t { deinit.get(n).map(|a| (f.clone(), *a)) } else { None }).collect()))).collect();
+        let lang = Zig { deinit, opaques: w.opaques.clone(), unions };
         let (shim, volt) = Gen::new(&m, &r.alias, &lang).write("the file");
         crate::build::write_if_changed(&shim_file, &shim)?;
         let mut c = Command::new(&zig);
@@ -101,16 +108,83 @@ struct Walker {
     /// types with a deinit method, and whether it takes an allocator
     deinit: std::collections::BTreeMap<String, bool>,
     seen: BTreeSet<PathBuf>,
+    /// opaque types and extern structs, by name
+    opaques: BTreeSet<String>,
+    extern_structs: BTreeSet<String>,
+    /// extern fns with C's calling convention: module, the type they're declared in, signature
+    externs: Vec<(Vec<String>, Option<String>, Sig)>,
+    /// unions: whether each is tagged, and its fields (payloads)
+    unions: BTreeMap<String, (bool, Vec<(String, Option<Ty>)>)>,
 }
 
 impl Walker {
     fn model(&self) -> Model {
         let mut m = Model { fns: self.m.fns.clone(), types: self.m.types.clone(), consts: self.m.consts.clone(), methods: self.m.methods.clone(), left_out: self.m.left_out.clone(), ..Model::default() };
         for t in &mut m.types {
-            // a type that frees what it holds can't be copied (or held by value) safely
+            // a type that frees what it holds can't be copied (or held by value) safely, nor can
+            // an opaque one (Volt only ever borrows those)
             let has_deinit = self.deinit.contains_key(&t.name);
-            t.clone = !has_deinit && !t.is_enum;
-            t.opaque = has_deinit;
+            let opaque = self.opaques.contains(&t.name);
+            t.clone = !has_deinit && !t.is_enum && !opaque;
+            t.opaque = has_deinit || opaque;
+        }
+        let frees = |t: &Option<Ty>| match t {
+            Some(Ty::Opt(x)) => matches!(&**x, Ty::Named(n) if self.deinit.contains_key(n)),
+            Some(Ty::Named(n)) => self.deinit.contains_key(n),
+            _ => false,
+        };
+        // a tagged union holding a payload that frees what it holds: its drop frees that too, so it
+        // can't be copied (and moves when passed by value)
+        for t in &mut m.types {
+            if self.unions.get(&t.name).is_some_and(|(tagged, ps)| *tagged && ps.iter().any(|p| frees(&p.1))) {
+                t.clone = false;
+                t.opaque = true;
+            }
+        }
+        // a union's reads copy its payload out: not one that frees what it holds (twice, then); a
+        // bare union never knows which field to free, so it isn't given one
+        for (u, ms) in &mut m.methods {
+            let Some((tagged, _)) = self.unions.get(u) else { continue };
+            ms.retain(|s| {
+                let ours = s.call.as_ref().is_some_and(|c| c.starts_with('='));
+                let why = if ours && frees(&s.ret) {
+                    "it would copy a value that frees what it holds"
+                } else if ours && !tagged && s.params.first().is_some_and(|p| frees(&p.1)) {
+                    "a bare union never frees its payload"
+                } else {
+                    return true;
+                };
+                m.left_out.push(format!("{u}::{} ({why})", s.name));
+                false
+            });
+        }
+        // extern fns: of numbers alone, declared as the C functions they are; with pointers to
+        // opaque types or extern structs, through the shim
+        let c_ty = |t: &Option<Ty>, ret: bool| match t {
+            Some(Ty::Prim(_)) => true,
+            Some(Ty::Unit) => ret,
+            Some(Ty::Named(n)) => self.extern_structs.contains(n),
+            Some(Ty::Ref(x, _)) => matches!(&**x, Ty::Named(n) if self.opaques.contains(n) || self.extern_structs.contains(n)),
+            Some(Ty::Opt(x)) => matches!(&**x, Ty::Ref(x, _) if matches!(&**x, Ty::Named(n) if self.opaques.contains(n) || self.extern_structs.contains(n))),
+            _ => false,
+        };
+        for (module, owner, s) in &self.externs {
+            if let Some(why) = s.skip {
+                m.left_out.push(format!("{} (an extern fn with {why})", s.name));
+            } else if !s.params.iter().all(|p| c_ty(&p.1, false)) {
+                m.left_out.push(format!("{} (an extern fn with a parameter of a type C doesn't have)", s.name));
+            } else if !c_ty(&s.ret, true) {
+                m.left_out.push(format!("{} (an extern fn with a result of a type C doesn't have)", s.name));
+            } else if owner.is_none() && super::volt_name(&s.name) == s.name && s.params.iter().all(|p| matches!(p.1, Some(Ty::Prim(_)))) {
+                let ps: Vec<String> = s.params.iter().map(|(n, t)| format!("{}: {}", super::volt_name(n), if let Some(Ty::Prim(x)) = t { x } else { "" })).collect();
+                let ret = if let Some(Ty::Prim(x)) = s.ret { x } else { "void" };
+                m.externs.push((module.clone(), format!("// Zig: {}\nextern \"C\" fn {}({}) -> {ret};\n", s.src, s.name, ps.join(", "))));
+            } else {
+                match owner {
+                    Some(o) => m.methods.entry(o.clone()).or_default().push(s.clone()),
+                    None => m.fns.push((module.clone(), s.clone())),
+                }
+            }
         }
         m
     }
@@ -163,7 +237,18 @@ impl Walker {
                         Some(Tok::Id(n)) => n.clone(),
                         _ => String::new(),
                     };
-                    self.m.left_out.push(format!("{name} (a declaration without a body{})", if qualified { ", defined elsewhere" } else { "" }));
+                    // an extern fn: C's calling convention unless it says another
+                    let cc = head.iter().position(|x| *x == Tok::Id("callconv".into())).map(|i| &head[(i + 2).min(head.len())..]);
+                    let c_cc = cc.is_none_or(|r| matches!(r, [Tok::P(d), Tok::Id(c), Tok::P(e), ..] if d == "." && (c == "C" || c == "c") && e == ")"));
+                    if !t[start..s].contains(&Tok::Id("extern".into())) {
+                        self.m.left_out.push(format!("{name} (a declaration without a body{})", if qualified { ", defined elsewhere" } else { "" }));
+                    } else if !c_cc {
+                        self.m.left_out.push(format!("{name} (an extern fn with a calling convention other than C's)"));
+                    } else {
+                        let mut sig = sig_in(head, owner, gens);
+                        sig.src = format!("pub extern {}", toks_line(head));
+                        self.externs.push((module.to_vec(), owner.map(String::from), sig));
+                    }
                 } else if public && owner.is_none() && matches!(head.last(), Some(Tok::Id(x)) if x == "type") {
                     // fn Name(comptime T: type) type { ... return struct { ... }; }: a generic type
                     self.type_fn(head, &t[body_at + 1..c.i - 1], module, dir);
@@ -234,16 +319,31 @@ impl Walker {
             c.skip_group();
             Some(&value[o + 1..c.i - 1])
         };
-        for (what, why) in [("packed", "a packed struct"), ("union", "a union"), ("opaque", "an opaque type")] {
-            if words.contains(&what) {
-                self.m.left_out.push(format!("{name} ({why})"));
-                return;
+        // the words before its body: [extern|packed] struct, union(enum), opaque
+        let head = &value[..open.unwrap_or(value.len())];
+        let kw = |w: &str| head.iter().any(|x| *x == Tok::Id(w.into()));
+        if kw("opaque") {
+            // known only by pointer: a borrowed handle, never freed by Volt
+            self.opaques.insert(name.to_string());
+            self.m.types.push(TypeDef { module: module.to_vec(), name: name.to_string(), generic: false, fields: None, variants: None, is_enum: false, clone: false, opaque: true, params: Vec::new(), rust_name: None });
+            if let Some(b) = body() {
+                self.container(b, module, Some(name), dir, &[]);
             }
+            return;
+        }
+        if kw("union") {
+            if let Some(b) = body() {
+                self.union(name, head, b, module, dir);
+            }
+            return;
         }
         match words.first().copied() {
-            Some("struct") | Some("extern") if words.contains(&"struct") => {
+            Some("struct") | Some("extern") | Some("packed") if kw("struct") => {
                 let Some(b) = body() else { return };
-                let fields = fields_in(b, &[]);
+                let fields = fields_in(b, &[], false);
+                if words[0] == "extern" {
+                    self.extern_structs.insert(name.to_string());
+                }
                 if fields.is_empty() {
                     // a struct without fields is a namespace
                     let mut sub = module.to_vec();
@@ -308,6 +408,73 @@ impl Walker {
         }
     }
 
+    /// pub const NAME = union [(enum)] { .. }: an owned handle with a maker per field
+    /// (NAME::f(v)); a tagged one's tag() (an enum of its tags) and as_f() -> payload? reads, a bare
+    /// one's f() reads and set_f(v) (which makes f the active field)
+    fn union(&mut self, name: &str, head: &[Tok], b: &[Tok], module: &[String], dir: &Path) {
+        let u = head.iter().position(|x| *x == Tok::Id("union".into())).unwrap_or(0);
+        let fields = fields_in(b, &[], true);
+        let mut zp = vec!["m".to_string()];
+        zp.extend(module.iter().cloned());
+        zp.push(name.to_string());
+        let tag = match &head[u + 1..] {
+            [] => None,
+            // union(enum), union(enum(u8)): an enum of its fields' names, Zig's std.meta.Tag(NAME)
+            [Tok::P(o), Tok::Id(e), .., Tok::P(c)] if o == "(" && e == "enum" && c == ")" => {
+                let vs = fields.iter().enumerate().map(|(i, f)| (f.0.clone(), i as i128)).collect();
+                let t = format!("{name}_tag");
+                self.m.types.push(TypeDef { module: module.to_vec(), name: t.clone(), generic: false, fields: None, variants: Some(vs), is_enum: true, clone: true, opaque: false, params: Vec::new(), rust_name: Some(format!("std.meta.Tag({})", zp.join("."))) });
+                Some(Ty::Named(t))
+            }
+            // union(Tag): the file's enum
+            [Tok::P(o), t @ .., Tok::P(c)] if o == "(" && c == ")" => match parse_ty(t, None) {
+                Some(t @ Ty::Named(_)) => Some(t),
+                _ => {
+                    self.m.left_out.push(format!("{name} (a union whose tag type Volt can't name)"));
+                    return;
+                }
+            },
+            _ => {
+                self.m.left_out.push(format!("{name} (a union bolt can't read)"));
+                return;
+            }
+        };
+        self.m.types.push(TypeDef { module: module.to_vec(), name: name.to_string(), generic: false, fields: None, variants: None, is_enum: false, clone: false, opaque: false, params: Vec::new(), rust_name: None });
+        self.unions.insert(name.to_string(), (tag.is_some(), fields.iter().map(|f| (f.0.clone(), f.2.clone())).collect()));
+        // text, a slice or a pointer Volt passes is only lent for the call: the union would keep it
+        let borrows = |t: &Ty| matches!(t, Ty::Str | Ty::Slice(..) | Ty::Ref(..));
+        let borrows = |t: &Option<Ty>| matches!(t, Some(Ty::Opt(x)) if borrows(x)) || t.as_ref().is_some_and(borrows);
+        let sig = |n: String, recv: Recv, params: Vec<(String, Option<Ty>)>, ret: Option<Ty>, call: String, src: String| Sig { name: n, recv, params, ret, skip: None, src, generics: Vec::new(), call: Some(call) };
+        let ms = self.m.methods.entry(name.to_string()).or_default();
+        for (f, _, t) in &fields {
+            let unit = *t == Some(Ty::Unit);
+            let (arg, params) = if unit { ("{}", Vec::new()) } else { ("$0", vec![("v".to_string(), t.clone())]) };
+            let lent = borrows(t);
+            if lent {
+                self.m.left_out.push(format!("{name}::{f} (its payload would borrow what Volt passes)"));
+            } else {
+                ms.push(sig(f.clone(), Recv::None, params.clone(), Some(Ty::SelfTy), format!("=@unionInit($T, \"{f}\", {arg})"), format!("{name}{{ .{f} = v }}")));
+            }
+            if unit {
+                continue;
+            }
+            if tag.is_some() {
+                ms.push(sig(format!("as_{f}"), Recv::Ref, Vec::new(), t.clone().map(|t| Ty::Opt(Box::new(t))), format!("=if ($r.* == .{f}) $r.{f} else null"), format!("{name}.{f}, when it's the active field")));
+            } else {
+                ms.push(sig(f.clone(), Recv::Ref, Vec::new(), t.clone(), format!("=$r.{f}"), format!("{name}.{f} (reading a field that isn't the active one is a Zig safety check)")));
+                if lent {
+                    self.m.left_out.push(format!("{name}::set_{f} (its payload would borrow what Volt passes)"));
+                    continue;
+                }
+                ms.push(sig(format!("set_{f}"), Recv::Mut, params, Some(Ty::Unit), format!("=$r.* = @unionInit($T, \"{f}\", {arg})"), format!("{name}{{ .{f} = v }}, the active field from now on")));
+            }
+        }
+        if let Some(t) = tag {
+            ms.push(sig("tag".into(), Recv::Ref, Vec::new(), Some(t), "=std.meta.activeTag($r.*)".into(), format!("std.meta.activeTag({name})")));
+        }
+        self.container(b, module, Some(name), dir, &[]);
+    }
+
     /// pub fn Name(comptime T: type, ..) type { .. return struct { .. }; }: a generic type (its
     /// parameters all comptime), Zig's Name(args) per instance
     fn type_fn(&mut self, head: &[Tok], body: &[Tok], module: &[String], dir: &Path) {
@@ -342,7 +509,7 @@ impl Walker {
             return;
         };
         let gens: Vec<String> = s.generics.iter().filter(|g| !g.contains(':')).cloned().collect();
-        self.m.types.push(TypeDef { module: module.to_vec(), name: s.name.clone(), generic: true, fields: Some(fields_in(b, &gens)), variants: None, is_enum: false, clone: false, opaque: false, params: s.generics.clone(), rust_name: None });
+        self.m.types.push(TypeDef { module: module.to_vec(), name: s.name.clone(), generic: true, fields: Some(fields_in(b, &gens, false)), variants: None, is_enum: false, clone: false, opaque: false, params: s.generics.clone(), rust_name: None });
         self.container(b, module, Some(&s.name), dir, &gens);
     }
 }
@@ -499,9 +666,21 @@ fn skip_decl(c: &mut Cur) {
     }
 }
 
+/// an integer of a width Volt doesn't have (u3, i7, u24): the next Volt integer up, signedness kept
+fn odd_int(n: &str) -> Option<&'static str> {
+    let bits: u32 = n.get(1..)?.parse().ok()?;
+    let at = [8, 16, 32, 64].iter().position(|w| bits <= *w).filter(|_| bits > 0)?;
+    match n.as_bytes()[0] {
+        b'u' => Some(["u8", "u16", "u32", "u64"][at]),
+        b'i' => Some(["i8", "i16", "i32", "i64"][at]),
+        _ => None,
+    }
+}
+
 /// a struct body's fields: name: Type [= default], (every Zig field is visible outside); `gens`
-/// are the type parameters in scope
-fn fields_in(b: &[Tok], gens: &[String]) -> Vec<(String, bool, Option<Ty>)> {
+/// are the type parameters in scope; `units`: a bare name is a field of type void (a tagged
+/// union's variant without a payload)
+fn fields_in(b: &[Tok], gens: &[String], units: bool) -> Vec<(String, bool, Option<Ty>)> {
     let mut out = Vec::new();
     let mut c = Cur { t: b, i: 0 };
     while c.i < b.len() {
@@ -514,6 +693,9 @@ fn fields_in(b: &[Tok], gens: &[String]) -> Vec<(String, bool, Option<Ty>)> {
             continue;
         };
         if !c.eat(":") {
+            if units && (c.i >= b.len() || c.eat(",")) {
+                out.push((name, true, Some(Ty::Unit)));
+            }
             continue;
         }
         let s = c.i;
@@ -524,7 +706,11 @@ fn fields_in(b: &[Tok], gens: &[String]) -> Vec<(String, bool, Option<Ty>)> {
             }
             c.i += 1;
         }
-        let ty = parse_ty_in(&b[s..c.i], None, gens);
+        // (a field's u3 holds its value in a u8: the shim's @intCast checks it fits)
+        let ty = match parse_ty_in(&b[s..c.i], None, gens) {
+            Some(Ty::Named(n)) => Some(odd_int(&n).map_or(Ty::Named(n), Ty::Prim)),
+            t => t,
+        };
         while c.i < b.len() && !c.is(",") {
             if c.is("(") || c.is("{") || c.is("[") {
                 c.skip_group();
@@ -556,7 +742,7 @@ fn sig_in(head: &[Tok], owner: Option<&str>, outer: &[String]) -> Sig {
         let comptime = matches!(p.first(), Some(Tok::Id(w)) if w == "comptime");
         let p: Vec<Tok> = p.into_iter().filter(|x| *x != Tok::Id("noalias".into()) && *x != Tok::Id("comptime".into())).collect();
         let Some(colon) = p.iter().position(|x| *x == Tok::P(":".into())) else {
-            s.skip = Some("a parameter");
+            s.skip = Some(if !p.is_empty() && p.iter().all(|x| *x == Tok::P(".".into())) { "a variadic parameter (...)" } else { "a parameter" });
             continue;
         };
         let pname = match p.first() {
@@ -677,6 +863,9 @@ fn parse_ty_in(t: &[Tok], owner: Option<&str>, gens: &[String]) -> Option<Ty> {
                 "Self" => Ty::SelfTy,
                 "c_int" => Ty::Prim("i32"),
                 "c_uint" => Ty::Prim("u32"),
+                // (C's long is 32 bits on Windows; bolt builds for the system it runs on)
+                "c_long" if cfg!(windows) => Ty::Prim("i32"),
+                "c_ulong" if cfg!(windows) => Ty::Prim("u32"),
                 "c_long" | "c_longlong" => Ty::Prim("i64"),
                 "c_ulong" | "c_ulonglong" => Ty::Prim("u64"),
                 "c_short" => Ty::Prim("i16"),
@@ -698,11 +887,20 @@ fn parse_ty_in(t: &[Tok], owner: Option<&str>, gens: &[String]) -> Option<Ty> {
 struct Zig {
     /// types with a deinit, and whether it takes an allocator
     deinit: std::collections::BTreeMap<String, bool>,
+    /// opaque types (Volt borrows them, never frees them)
+    opaques: BTreeSet<String>,
+    /// tagged unions: how many fields, and those whose payload has a deinit (whether it takes the
+    /// allocator): dropping one deinits its active payload
+    unions: BTreeMap<String, (usize, Vec<(String, bool)>)>,
 }
 
 impl Zig {
     /// the Zig path of a named type, from the shim (m is the user's file)
     fn path(def: &TypeDef) -> String {
+        // a union(enum)'s tag type: std.meta.Tag(m.U)
+        if let Some(r) = def.rust_name.as_ref().filter(|r| r.starts_with("std.")) {
+            return r.clone();
+        }
         let mut p = vec!["m".to_string()];
         p.extend(def.module.iter().cloned());
         // a generic type's instance: Name(args)
@@ -873,6 +1071,18 @@ impl Lang for Zig {
                     Kind::Enum => ShimOut { params: vec![format!("{o}: *i64")], store: format!("{o}.* = @as(i64, @intFromEnum($v));") },
                 }
             }
+            // a pointer: a handle borrowing what it points at (a mutable one, or one to a type
+            // that can't be copied), else a copy, as Volt's side takes it
+            Ty::Ref(x, mutable) => {
+                let ti = g.info(x)?;
+                let (zp, mg) = (Self::path(&ti.def), Gen::mangle(&ti.def));
+                match ti.kind {
+                    Kind::Plain => ShimOut { params: vec![format!("{o}: *V_{mg}")], store: format!("{o}.* = to_{mg}($v.*);") },
+                    Kind::Handle if *mutable || !ti.def.clone => ShimOut { params: vec![format!("{o}: *?*anyopaque")], store: format!("{o}.* = @constCast($v);") },
+                    Kind::Handle => ShimOut { params: vec![format!("{o}: *?*anyopaque")], store: format!("{{ const {o}_p = alloc.create({zp}) catch @panic(\"out of memory\"); {o}_p.* = $v.*; {o}.* = {o}_p; }}") },
+                    Kind::Enum => ShimOut { params: vec![format!("{o}: *i64")], store: format!("{o}.* = @as(i64, @intFromEnum($v.*));") },
+                }
+            }
             Ty::Opt(inner) => {
                 let x = self.out(g, inner, o, owned)?;
                 let mut params = vec![format!("{o}_has: *bool")];
@@ -884,6 +1094,11 @@ impl Lang for Zig {
     }
 
     fn call(&self, _g: &Gen, module: &[String], s: &Sig, self_ty: Option<&TypeInfo>, recv: Option<&str>, args: &[String]) -> String {
+        // an expression of its own (a union's maker or read): $r the receiver, $T the type, $0 the
+        // argument
+        if let Some(e) = s.call.as_ref().and_then(|c| c.strip_prefix('=')) {
+            return e.replace("$r", recv.unwrap_or("")).replace("$T", &self_ty.map(|ti| Self::path(&ti.def)).unwrap_or_default()).replace("$0", args.first().map_or("", String::as_str));
+        }
         let args = args.join(", ");
         // an instance calls its generic
         let name = s.call.as_ref().unwrap_or(&s.name);
@@ -951,7 +1166,8 @@ impl Lang for Zig {
                     match t {
                         Some(Ty::Prim(x)) => {
                             let _ = writeln!(fields, "    {f}: {x},");
-                            let _ = write!(from, ".{f} = v.{f}, ");
+                            // (an integer into the field's own width: a u3's checked)
+                            let _ = write!(from, "{}", if matches!(x, "bool" | "f32" | "f64") { format!(".{f} = v.{f}, ") } else { format!(".{f} = @intCast(v.{f}), ") });
                             let _ = write!(to, ".{f} = v.{f}, ");
                         }
                         Some(Ty::Named(n)) => {
@@ -972,12 +1188,20 @@ impl Lang for Zig {
                 }
                 let _ = write!(out, "const V_{mg} = extern struct {{\n{fields}}};\nfn from_{mg}(v: V_{mg}) {zp} {{\n    return .{{ {from}}};\n}}\nfn to_{mg}(v: {zp}) V_{mg} {{\n    return .{{ {to}}};\n}}\n\n");
             }
+            Kind::Handle if self.opaques.contains(&ti.def.name) => {
+                // Volt only borrows these: freeing is Zig's
+                let _ = writeln!(out, "export fn {}(h: *anyopaque) void {{\n    _ = h;\n}}\n", g.sym(&[&mg, "drop"]));
+            }
             Kind::Handle => {
                 let drop = g.sym(&[&mg, "drop"]);
-                let deinit = match self.deinit.get(&ti.def.name) {
-                    Some(true) => "p.deinit(alloc);\n    ",
-                    Some(false) => "p.deinit();\n    ",
-                    None => "",
+                let deinit = match (self.deinit.get(&ti.def.name), self.unions.get(&ti.def.name)) {
+                    (Some(true), _) => "p.deinit(alloc);\n    ".to_string(),
+                    (Some(false), _) => "p.deinit();\n    ".to_string(),
+                    (None, Some((n, fs))) if !fs.is_empty() => {
+                        let arms: String = fs.iter().map(|(f, a)| format!(".{f} => |*x| x.deinit({}), ", if *a { "alloc" } else { "" })).collect();
+                        format!("switch (p.*) {{ {arms}{}}}\n    ", if fs.len() < *n { "else => {}, " } else { "" })
+                    }
+                    _ => String::new(),
                 };
                 let _ = writeln!(out, "export fn {drop}(h: *anyopaque) void {{\n    const p: *{zp} = @ptrCast(@alignCast(h));\n    {deinit}alloc.destroy(p);\n}}\n");
                 if ti.def.clone {
@@ -996,7 +1220,7 @@ impl Lang for Zig {
 
     fn prelude(&self, g: &Gen) -> String {
         let free = |what: &str| format!("volt_zig_{}_free_{what}", g.alias);
-        let mut s = String::from("// the glue between a Volt program and this file, written by bolt import (use zig)\nconst std = @import(\"std\");\nconst m = @import(\"user\");\n\n");
+        let mut s = String::from("// the glue between a Volt program and this file, written by bolt import (use zig)\nconst std = @import(\"std\");\nconst m = @import(\"user\");\n// (the file's export fns are in the library too: C symbols an extern fn may name)\ncomptime {\n    _ = m;\n}\n\n");
         // Volt's allocator, as Zig's: the program's default_allocator (volt_glue), for blocks aligned
         // to at most 16 bytes, which it gives; resized in place only to the same size (its free
         // checks the size, so a block's size changes only through remap, which may move it)
@@ -1069,7 +1293,7 @@ mod tests {
 
     #[test]
     fn import_zig_left_out() {
-        let src = "pub const Flags = packed struct { a: bool = false };\npub const U = union { a: i32, b: f32 };\npub extern fn c_side(x: i32) i32;\npub fn ok() void {}\n";
+        let src = "pub const Flags = packed struct(u8) { a: bool = false, b: u3, c: i7 };\npub const U = union { a: i32, b: f32 };\npub const S = union(enum) { a: i32, none, pub fn f(self: S) i32 { return 0; } };\npub const Ctx = opaque {};\npub extern fn c_side(x: i32) i32;\npub extern \"c\" fn c_ctx(c: ?*Ctx) *const Ctx;\npub extern \"c\" fn c_len(s: []const u8) usize;\npub extern fn c_naked() callconv(.naked) void;\npub fn ok() void {}\n";
         let dir = std::env::temp_dir().join(format!("volt-zig-left-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let f = dir.join("m.zig");
@@ -1077,8 +1301,47 @@ mod tests {
         let mut w = Walker::default();
         w.file(&f, &[]);
         let _ = std::fs::remove_dir_all(&dir);
-        assert!(w.m.types.is_empty());
-        assert_eq!(w.m.fns.len(), 1);
-        assert_eq!(w.m.left_out, ["Flags (a packed struct)", "U (a union)", "c_side (a declaration without a body, defined elsewhere)"]);
+        let m = w.model();
+        assert_eq!(m.types.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(), ["Flags", "U", "S_tag", "S", "Ctx"]);
+        assert_eq!(m.types[0].fields.as_ref().unwrap().iter().map(|f| f.2.clone()).collect::<Vec<_>>(), [Some(Ty::Prim("bool")), Some(Ty::Prim("u8")), Some(Ty::Prim("i8"))]);
+        assert_eq!(m.types[2].variants, Some(vec![("a".into(), 0), ("none".into(), 1)]));
+        assert!(!m.types[4].clone && m.types[4].opaque);
+        let names = |t: &str| m.methods[t].iter().map(|s| s.name.clone()).collect::<Vec<_>>();
+        assert_eq!(names("U"), ["a", "a", "set_a", "b", "b", "set_b"]);
+        assert_eq!(names("S"), ["a", "as_a", "none", "tag", "f"]);
+        assert_eq!(m.fns.iter().map(|f| f.1.name.as_str()).collect::<Vec<_>>(), ["ok", "c_ctx"]);
+        assert_eq!(m.externs, [(vec![], "// Zig: pub extern fn c_side(x: i32) i32\nextern \"C\" fn c_side(x: i32) -> i32;\n".to_string())]);
+        assert_eq!(m.left_out, ["c_naked (an extern fn with a calling convention other than C's)", "c_len (an extern fn with a parameter of a type C doesn't have)"]);
+        assert_eq!(odd_int("u24"), Some("u32"));
+        assert_eq!(odd_int("u0"), None);
+        assert_eq!(ty("c_longlong"), Some(Ty::Prim("i64")));
+        assert_eq!(ty("c_long"), Some(Ty::Prim(if cfg!(windows) { "i32" } else { "i64" })));
+        assert_eq!(odd_int("i1"), Some("i8"));
+        assert_eq!(odd_int("u65"), None);
+    }
+
+    #[test]
+    fn import_zig_union_payloads() {
+        // a payload Volt would only lend (text, a slice, a pointer): no maker or setter; one that
+        // frees what it holds: no reads (they'd copy it), no bare union's maker or setter (it never
+        // frees it), and a tagged union holding one can't be copied; a variadic extern is left out
+        let src = "pub const Ctx = opaque {};\npub const Holder = struct { x: i32, pub fn deinit(self: *Holder) void { _ = self; } };\npub const N = union(enum) { name: []const u8, p: *Ctx, n: i32 };\npub const B = union { s: []const u8, h: Holder };\npub const T = union(enum) { h: Holder, none };\npub extern \"c\" fn c_var(a: i32, ...) i32;\n";
+        let dir = std::env::temp_dir().join(format!("volt-zig-union-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("m.zig");
+        std::fs::write(&f, src).unwrap();
+        let mut w = Walker::default();
+        w.file(&f, &[]);
+        let _ = std::fs::remove_dir_all(&dir);
+        let m = w.model();
+        let names = |t: &str| m.methods[t].iter().map(|s| s.name.clone()).collect::<Vec<_>>();
+        assert_eq!(names("N"), ["as_name", "as_p", "n", "as_n", "tag"]);
+        assert_eq!(names("B"), ["s"]);
+        assert_eq!(names("T"), ["h", "none", "tag"]);
+        let t = m.types.iter().find(|t| t.name == "T").unwrap();
+        assert!(!t.clone && t.opaque);
+        for why in ["N::name (its payload would borrow what Volt passes)", "N::p (its payload would borrow what Volt passes)", "B::set_s (its payload would borrow what Volt passes)", "B::h (it would copy a value that frees what it holds)", "B::set_h (a bare union never frees its payload)", "T::as_h (it would copy a value that frees what it holds)", "c_var (an extern fn with a variadic parameter (...))"] {
+            assert!(m.left_out.iter().any(|l| l == why), "{why}: {:?}", m.left_out);
+        }
     }
 }

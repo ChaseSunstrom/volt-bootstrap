@@ -1,0 +1,123 @@
+// Zig's other kinds of types, called from Volt: a packed struct, a tagged union, a bare union, an
+// opaque type and extern fns (one provided by impl.zig's export fn)
+const std = @import("std");
+
+pub const Flags = packed struct {
+    a: bool,
+    b: u3,
+    c: i7,
+};
+
+pub fn flagsSum(f: Flags) i32 {
+    return @as(i32, f.b) + @as(i32, f.c) + @as(i32, @intFromBool(f.a));
+}
+
+pub fn makeFlags(c: i8) Flags {
+    return .{ .a = false, .b = 7, .c = @intCast(c) };
+}
+
+pub const Rect = struct { w: f32, h: f32 };
+
+pub const Shape = union(enum) {
+    circle: f32,
+    rect: Rect,
+    none,
+
+    pub fn isRound(self: Shape) bool {
+        return self == .circle;
+    }
+
+    pub fn grow(self: *Shape, k: f32) void {
+        switch (self.*) {
+            .circle => |*r| r.* *= k,
+            .rect => |*r| {
+                r.w *= k;
+                r.h *= k;
+            },
+            .none => {},
+        }
+    }
+};
+
+pub fn shapeArea(s: Shape) f32 {
+    return switch (s) {
+        .circle => |r| 3.0 * r * r,
+        .rect => |r| r.w * r.h,
+        .none => 0,
+    };
+}
+
+// a payload that frees what it holds: the union's drop frees it (the leak check sees it)
+pub const Buf = struct {
+    data: []u8,
+
+    pub fn init(allocator: std.mem.Allocator, n: usize) Buf {
+        return .{ .data = allocator.alloc(u8, n) catch @panic("out of memory") };
+    }
+
+    pub fn deinit(self: *Buf, allocator: std.mem.Allocator) void {
+        allocator.free(self.data);
+    }
+};
+
+pub const Held = union(enum) {
+    buf: Buf,
+    empty,
+};
+
+pub fn heldLen(h: *const Held) usize {
+    return switch (h.*) {
+        .buf => |b| b.data.len,
+        .empty => 0,
+    };
+}
+
+pub const Bits = union {
+    i: u32,
+    f: f32,
+};
+
+pub fn bitsOf(x: f32) Bits {
+    return .{ .f = x };
+}
+
+pub const Ctx = opaque {};
+
+const CtxImpl = struct { total: i32 };
+
+pub fn ctxCreate(start: i32) *Ctx {
+    const p = std.heap.page_allocator.create(CtxImpl) catch @panic("out of memory");
+    p.* = .{ .total = start };
+    return @ptrCast(p);
+}
+
+pub fn ctxMaybe(make: bool) ?*Ctx {
+    return if (make) ctxCreate(100) else null;
+}
+
+pub fn ctxAdd(c: *Ctx, n: i32) void {
+    const p: *CtxImpl = @ptrCast(@alignCast(c));
+    p.total += n;
+}
+
+pub fn ctxTotal(c: *const Ctx) i32 {
+    const p: *const CtxImpl = @ptrCast(@alignCast(c));
+    return p.total;
+}
+
+pub fn ctxDestroy(c: *Ctx) void {
+    const p: *CtxImpl = @ptrCast(@alignCast(c));
+    std.heap.page_allocator.destroy(p);
+}
+
+pub fn ctxList(cs: []*Ctx) usize {
+    return cs.len;
+}
+
+// a C symbol from elsewhere (impl.zig exports it)
+pub extern "c" fn zig_ext_add(a: i32, b: i32) i32;
+// (with a pointer to an opaque type: called through the shim)
+pub extern "c" fn zig_ext_total(c: *const Ctx) i32;
+// left out: a slice isn't C's, and neither is the naked calling convention
+pub extern "c" fn zig_ext_len(s: []const u8) usize;
+pub extern fn zig_ext_naked() callconv(.naked) void;
