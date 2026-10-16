@@ -135,6 +135,15 @@ fn quad_exports_only_on_arm64_macos() {
     assert!(there.is_empty(), "the host defines {there:?}");
 }
 
+/// a global set from ~ or ! over constants is a constant in the IR, with no constructor to set it
+#[test]
+fn global_fold_has_no_constructor() {
+    let o = Command::new(common::voltc()).args(["emit-llvm", "tests/run/global_fold.volt"]).current_dir(env!("CARGO_MANIFEST_DIR")).output().unwrap();
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let ir = String::from_utf8_lossy(&o.stdout);
+    assert!(!ir.contains("llvm.global_ctors"), "global_fold's globals are set by a constructor:\n{ir}");
+}
+
 /// f128 in C where the compiler has no quad type (arm64 macOS): the C spells every f128 operation
 /// volt_q_*, which -DVOLT_SOFT_F128 turns into calls to the quad routines (here libgcc's), so the
 /// programs print what they print natively; and arm64 macOS's C compiles, std's quad_rt defining
