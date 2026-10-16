@@ -58,6 +58,10 @@ fn main() -> void {
     val named: geom::Size = { w: 1.0, h: 2.0, tag: null, label: std::string::from("s") };
     val sq = geom::squareSizes(3.0);
     std::println("label {} {} squares {} total {}", geom::labelOf(geom::grow(named, 1.0)), geom::labelOf(sz), sq.len, geom::totalArea(sq.items()));
+    val bp = geom::Box<geom::Point>::new(geom::Point::new(1.0, 2.0));
+    val gp = bp.get();
+    geom::tick();
+    std::println("more {} {} {} {} {}", geom::first<geom::Size>(sq.items()).w, gp.x(), bx.settled(), geom::soon(1.0), geom::ticked());
 
     // JavaScript with a .d.ts
     var c = util::Counter::new(1.0);
@@ -82,4 +86,5 @@ fn main() -> void {
 // expect: kept <a> <b>
 // expect: area 6 6 grown 4 6 true span 2.5
 // expect: label s! none squares 3 total 14
+// expect: more 1 1 3 2 1
 // expect: hello, volt 3 3

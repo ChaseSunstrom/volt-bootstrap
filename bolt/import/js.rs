@@ -859,7 +859,7 @@ enum JT {
     Prim(&'static str),
     List(&'static str),
     Opt(&'static str),
-    /// a class (Box<T> in a generic class's own methods)
+    /// a class (a generic one's own type, Box<T>, only as its constructor's result)
     Obj(String),
     Enum(String),
     /// an interface or object type: a struct
@@ -1005,6 +1005,10 @@ impl Gen<'_> {
         }
         // an alias: its type (with null, when this adds it)
         if let Some(a) = self.aliases.get(one).filter(|_| depth < 16) {
+            // (a callback's can't be: Cb | null would read as one giving number | null)
+            if nullable && a.trim_start().starts_with('(') {
+                return None;
+            }
             return self.jt_at(&if nullable { format!("{a} | null") } else { a.clone() }, tps, depth + 1);
         }
         if self.enums.contains(one) && !nullable {
@@ -1278,6 +1282,9 @@ impl Gen<'_> {
             None => f.name.clone(),
         };
         let mut tps: Vec<String> = cls.map_or(Vec::new(), |(_, t)| t.to_vec());
+        if let Some(t) = f.tparams.iter().find(|t| tps.contains(t)) {
+            return Err(format!("{what} (its type parameter {t} is the class's too)"));
+        }
         tps.extend(f.tparams.iter().cloned());
         // a Promise<T>: the call gives what it settles to
         let (written, settles) = match f.ret.as_deref().map(str::trim) {
@@ -1306,6 +1313,9 @@ impl Gen<'_> {
             // x?: T is T? (absent: undefined)
             if let (true, JT::Prim(pr)) = (p.optional, &t) {
                 t = JT::Opt(pr);
+            }
+            if p.optional && matches!(t, JT::Fn(..) | JT::Struct(_) | JT::Gen(_) | JT::Many(_)) {
+                return Err(format!("{what} (parameter {} is optional: a callback, object type or type parameter can't be absent)", p.name));
             }
             let vn = Self::param_name(&p.name, i);
             let default = match (&p.default, &t) {
@@ -1456,6 +1466,11 @@ fn generate(alias: &str, m: &Module, header: &Path, script: &Path) -> String {
                 let mut c = own.clone();
                 let mut b = own.base.clone();
                 while let Some(base) = b.and_then(|s| m.items.iter().find_map(|i| if let Item::Class(x) = i { (x.name == s).then_some(x) } else { None })) {
+                    // (its type parameters aren't the subclass's)
+                    if !base.tparams.is_empty() {
+                        left.push(format!("{} (what it inherits from {}, a generic class)", own.name, base.name));
+                        break;
+                    }
                     for f in &base.methods {
                         if !c.methods.iter().any(|x| x.name == f.name) {
                             c.methods.push(f.clone());
@@ -1884,7 +1899,7 @@ mod tests {
 
     #[test]
     fn import_js_types() {
-        let src = "export function first<T extends object = {}>(xs: T[]): T { return xs[0]; }\nexport class Box<T> {\n  value: T;\n  constructor(v: T) { this.value = v; }\n  map<U>(f: (x: T) => U): U { return f(this.value); }\n}\nexport interface Size extends Base {\n  w: number\n  readonly h?: number;\n  tags: string[], name: string\n}\ninterface Base { id: number }\ninterface Odd { [k: string]: number }\nexport type Range = { lo: number; hi: number };\ntype Id = number\nexport async function later(n: Id): Promise<number> { return n; }\nexport function apply(f: (x: number) => number, g: (s?: string) => void): number { return f(1); }\nexport function each(f: (s: string, r: Range) => Size): void {}\ninterface Loop { next: Loop }\n";
+        let src = "export function first<T extends object = {}>(xs: T[]): T { return xs[0]; }\nexport class Box<T> {\n  value: T;\n  constructor(v: T) { this.value = v; }\n  map<U>(f: (x: T) => U): U { return f(this.value); }\n}\nexport interface Size extends Base {\n  w: number\n  readonly h?: number;\n  tags: string[], name: string\n}\ninterface Base { id: number }\ninterface Odd { [k: string]: number }\nexport type Range = { lo: number; hi: number };\ntype Id = number\nexport async function later(n: Id): Promise<number> { return n; }\nexport function apply(f: (x: number) => number, g: (s?: string) => void): number { return f(1); }\nexport function each(f: (s: string, r: Range) => Size): void {}\ninterface Loop { next: Loop }\nexport class Wrap<T> {\n  static of<T>(x: T): number { return 1; }\n  size(): number { return 0; }\n}\nexport function onDone(f?: (x: number) => void, s?: Size): void {}\ntype Cb = (x: number) => number;\nexport function maybeCb(f: Cb | null): void {}\nexport class Sub<T> extends Box<string> {\n  own(): number { return 1; }\n}\n";
         let m = parse(src);
         let Item::Func(first) = &m.items[0] else { panic!() };
         assert_eq!(first.tparams, ["T"]);
@@ -1897,7 +1912,7 @@ mod tests {
         let Item::Struct(odd) = &m.items[4] else { panic!() };
         assert_eq!(odd.why.as_deref(), Some("an index signature"));
         assert_eq!(m.items[6], Item::Alias("Id".into(), "number".into()));
-        assert!(m.items.iter().filter(|i| i.is_value()).map(|i| i.name()).eq(["first", "Box", "later", "apply", "each"]));
+        assert!(m.items.iter().filter(|i| i.is_value()).map(|i| i.name()).eq(["first", "Box", "later", "apply", "each", "Wrap", "onDone", "maybeCb", "Sub"]));
         let out = generate("geo", &m, Path::new("JavaScript.h"), Path::new("module.js"));
         for want in [
             "<T: type>\nfn first(xs: T[..]) -> T {",
@@ -1918,6 +1933,12 @@ mod tests {
             "//   Odd (an index signature)",
             "//   apply (parameter g's type)",
             "//   Loop (it holds itself)",
+            "//   Wrap.of (its type parameter T is the class's too)",
+            "attach fn size(this: Wrap<T>&) -> f64 {",
+            "//   onDone (parameter f is optional: a callback, object type or type parameter can't be absent)",
+            "//   maybeCb (parameter f's type)",
+            "//   Sub (what it inherits from Box, a generic class)",
+            "attach fn own(this: Sub<T>&) -> f64 {",
         ] {
             assert!(out.contains(want), "{want}\n---\n{out}");
         }

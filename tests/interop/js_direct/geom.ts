@@ -155,6 +155,11 @@ export class Box<T> {
   set(v: T): void {
     this.value = v;
   }
+
+  async settled(): Promise<T> {
+    await null;
+    return this.value;
+  }
 }
 
 // async: a call gives the settled value; a rejection stops the program, as a throw does
@@ -166,6 +171,21 @@ export async function later(n: number): Promise<number> {
 export async function greetLater(s: string): Promise<string> {
   await Promise.resolve();
   return `later ${s}`;
+}
+
+export function soon(n: number): Promise<number> {
+  return Promise.resolve(n + 1);
+}
+
+export let ticks = 0;
+
+export async function tick(): Promise<void> {
+  await null;
+  ticks++;
+}
+
+export function ticked(): number {
+  return ticks;
 }
 
 export async function rejectLater(msg: string): Promise<number> {

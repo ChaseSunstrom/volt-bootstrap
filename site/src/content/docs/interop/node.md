@@ -42,8 +42,8 @@ fn main() -> void {
 | `T \| null`, `T \| undefined` | `T?`; for a class, an empty handle is `null` |
 | an `interface`, or a `type` of an object type | a struct, copied to and from a JavaScript object: `x?: T` is `x: T? = null` (absent on the way back is `null`), `extends` brings the base's fields; one with methods or an index signature is left out |
 | `type X = T` | `T` |
-| a generic function or class (`first<T>(xs: T[]): T`, `class Box<T>`) | a Volt generic (`geom::first<f64>(xs)`, `geom::Box<f64>::new(2.0)`): each value converted by its type, which must be a number, `bool`, `str` or `std::string`, or one of the module's classes, enums or object types |
-| an array of classes, enums, object types or a type parameter | `T[..]` in, `std::vec<T>` out |
+| a generic function or class (`first<T>(xs: T[]): T`, `class Box<T>`) | a Volt generic (`geom::first<f64>(xs)`, `geom::Box<f64>::new(2.0)`): each value converted by its type, which must be a number, `bool`, `std::string` (`str` too, in only), or one of the module's classes, enums or object types |
+| an array of classes, enums, object types or a type parameter | `T[..]` in (what JavaScript changes doesn't come back), `std::vec<T>` out |
 | a callback parameter, `(x: number) => number` | a Volt fn value, `fn(f64) -> f64`, that JavaScript calls, and may keep and call later (its parameters and result are one value each, not arrays) |
 | an `async` function, or one giving a `Promise<T>` | `T`: the call gives what the promise settles to, and a rejection stops the program with its text |
 | an exported constant of a number, `boolean` or string | a `val` |
