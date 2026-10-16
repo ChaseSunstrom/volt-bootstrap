@@ -3013,8 +3013,8 @@ attach fn ct_builtin(this: checker&, name: str, gargs: std::vec<garg>&, args: st
             val from = this.files.at(@cast<usize>(span.file)).name;
             var slash: usize? = null;
             for (k) in 0..from.len {
-                if (from[k] == '/') {
-                    slash = k;
+                if (from[k] == '/' || from[k] == '\\') {
+                    slash = k; // (Windows names the file with \ too)
                 }
             }
             if (slash) {

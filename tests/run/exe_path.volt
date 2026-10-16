@@ -2,9 +2,10 @@
 use std::io;
 use std::fs;
 use std::text;
+use std::path;
 
 fn main() -> void {
     val p = std::process::exe_path() ?? @panic("exe_path: the system didn't say");
-    std::println("{} {}", p.as_str().starts_with("/"), std::fs::exists(p.as_str()));
+    std::println("{} {}", std::path::is_absolute(p.as_str()), std::fs::exists(p.as_str()));
 }
 // expect: true true

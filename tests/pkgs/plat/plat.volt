@@ -24,7 +24,9 @@ public fn built_for() -> str {
     return "other";
 }
 
-// under --cfg os=windows (tests/diag/cfg_target_override), the package sees it too
+// under --cfg os=windows (tests/diag/cfg_target_override), the package sees it too (generic, so
+// it's checked only where it's called: cfg_target, on a Windows host, doesn't)
+<T: type>
 public fn windows_check() -> void {
     comptime if (@cfg("os", "windows")) {
         @compile_error("the package sees windows");
