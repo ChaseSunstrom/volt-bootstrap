@@ -10,6 +10,7 @@ fn cpp_class() -> i32 { return @cpp<i32>("pr::call0({0})", by_point); }
 fn cpp_symbol() -> i32 { return @cpp<i32>("pr::call0({&0})", first); }
 fn plain_result() -> i32 { return cpp::pr::call0(first); }
 fn cpp_ref() -> i32 { return @cpp<i32>("pr::call0({0})", by_ref); }
+fn op_ref() -> i32 { return cpp::pr::rp::Tally<i32>::new(3).op_bitor(by_ref); }
 fn main() -> void {
     std::println("{} {} {} {} {}", plain_ref(), cpp_class(), cpp_symbol(), plain_result(), cpp_ref());
 }

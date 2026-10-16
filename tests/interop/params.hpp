@@ -20,16 +20,29 @@ inline int defaults[3] = {7, 8, 9};
 inline int first_of(Arr &a = defaults) { return a[0]; }
 inline int apply(int (*f)(int), int x) { return f(x); }
 inline double fold(double (*f)(double, double), double a, double b) { return f(a, b); }
-// a C variadic function pointer parameter (snprintf's shape)
-inline int apply_fmt(int (*f)(unsigned char *, unsigned long long, const char *, ...), int x) {
+// a C variadic function pointer parameter (snprintf's shape: a size_t is a Volt usize, a const char *
+// a cstr)
+inline int apply_fmt(int (*f)(unsigned char *, std::size_t, const char *, ...), int x) {
     unsigned char b[16];
     return f(b, sizeof b, "%d", x);
 }
+// a const char * result may be null (a Volt cstr?), a size_t * parameter is a Volt usize*
+inline int name_len(const char *(*f)(int), int x) {
+    const char *s = f(x);
+    if (!s) return -1;
+    int n = 0;
+    while (s[n]) n++;
+    return n;
+}
+inline int fill_len(void (*f)(std::size_t *)) { std::size_t n = 0; f(&n); return (int)n; }
 template <class T> T apply_t(T (*f)(T), T x) { return f(x); }
+// a variadic function pointer with no fixed parameter, which C before C23 has no type for: no Volt form
+inline int callz(int (*f)(...)) { return f ? 1 : 0; }
 // callables, worked out per use (a pack has no Volt generic form): fns of no parameters, and C
 // variadic ones (snprintf)
 template <class... F> int call0(F... f) { return (0 + ... + f()); }
 template <class... F> int callv(F... f) { unsigned char b[16]; return (0 + ... + f(b, sizeof b, "%d-%d", 12, 345)); }
+template <class... F> int callc(F... f) { return (0 + ... + f("abc")); }
 inline void shout(std::string &s, int n) { s.append(n, '!'); }
 // a C++ callable taking a std::string&, which Volt keeps and calls
 inline std::function<void(std::string &)> exclaimer(int n) { return [n](std::string &s) { s.append(n, '?'); }; }
@@ -258,7 +271,8 @@ template <class S> int size_by(S) { return (int)sizeof(S); }
 template <class S> void twice_ref(S &s) { s *= 2; }
 struct pt { int x; int y; };
 // a class template held by handle, its members worked out per use: a pointer argument beside the
-// receiver, of an & method, an && one (which consumes the handle) and an operator
+// receiver, of an & method, an && one (which consumes the handle) and an operator (one taking a
+// function pointer)
 template <class T> class Tally {
     T v_;
   public:
@@ -266,6 +280,7 @@ template <class T> class Tally {
     T add(T *p) { *p += v_; return *p; }
     T spend(T *p) && { *p += 2 * v_; return *p; }
     T operator+(T *p) const { return v_ + *p; }
+    T operator|(T (*f)(T)) const { return f(v_); }
 };
 }
 }
