@@ -100,6 +100,13 @@ struct CallInfo {
     awaits: bool,
     /// isolated to the main actor
     main: bool,
+    /// what decides those, settled in finish (an extension may come before its type): its type,
+    /// whether it's async, marked @MainActor (or in a @MainActor extension), nonisolated, static
+    owner: String,
+    asyn: bool,
+    own_main: bool,
+    nonisolated: bool,
+    is_static: bool,
 }
 
 #[derive(Default)]
@@ -116,6 +123,11 @@ struct Parser {
     /// actor
     actors: BTreeSet<String>,
     main_types: BTreeSet<String>,
+    /// each class's superclass (the first name it inherits): a @MainActor class's subclass is too
+    supers: BTreeMap<String, String>,
+    /// the extension being read is @MainActor, or nonisolated
+    scope_main: bool,
+    scope_nonisolated: bool,
     /// enums with Int raw values (enum E: Int), whose cases keep them
     raw: BTreeSet<String>,
     /// structs Volt can't build by value: an init of their own, or a let with a value
@@ -149,6 +161,18 @@ struct Mods {
 impl Parser {
     fn finish(mut self) -> (Model, Swift) {
         self.implicit_inits();
+        // a @MainActor class's subclasses are the main actor's too; then each call's isolation
+        loop {
+            let more: Vec<String> = self.supers.iter().filter(|(t, s)| self.main_types.contains(*s) && !self.main_types.contains(*t)).map(|(t, _)| t.clone()).collect();
+            if more.is_empty() {
+                break;
+            }
+            self.main_types.extend(more);
+        }
+        for c in &mut self.calls {
+            c.awaits = c.asyn || (self.actors.contains(&c.owner) && !c.is_static && !c.nonisolated);
+            c.main = c.own_main || (self.main_types.contains(&c.owner) && !c.nonisolated);
+        }
         let mut fns: Vec<Sig> = std::mem::take(&mut self.m.fns).into_iter().map(|(_, s)| s).collect();
         self.name_overloads(&mut fns, "");
         self.m.fns = fns.into_iter().map(|s| (Vec::new(), s)).collect();
@@ -243,8 +267,7 @@ impl Parser {
             for (params, labels) in sigs {
                 let name = if self.taken.contains(&(t.clone(), "new".to_string())) { format!("new_{}", labels.first().cloned().unwrap_or_default()) } else { "new".into() };
                 let s = Sig { name, recv: Recv::None, params, ret: Some(Ty::SelfTy), skip: None, src: String::new(), generics: Vec::new(), call: None };
-                let main = self.main_types.contains(&t);
-                self.add(Some(&t), s, CallInfo { labels, init: true, main, ..CallInfo::default() });
+                self.add(Some(&t), s, CallInfo { labels, init: true, owner: t.clone(), is_static: true, ..CallInfo::default() });
             }
         }
     }
@@ -525,10 +548,9 @@ impl Parser {
         } else if m.barred.is_some() {
             s.skip = m.barred;
         }
-        // an actor's (not a static or nonisolated one) is reached through await too
-        let actor = owner.is_some_and(|o| self.actors.contains(o)) && !m.is_static && !m.nonisolated;
-        let main = m.main || (owner.is_some_and(|o| self.main_types.contains(o)) && !m.nonisolated);
-        self.add(owner, s, CallInfo { labels, awaits: asyn || actor, main, ..CallInfo::default() });
+        // (an actor's, not a static or nonisolated one, is reached through await too: finish)
+        let info = CallInfo { labels, owner: owner.unwrap_or_default().to_string(), asyn, own_main: m.main || self.scope_main, nonisolated: m.nonisolated || self.scope_nonisolated, is_static: m.is_static, ..CallInfo::default() };
+        self.add(owner, s, info);
     }
 
     /// async and throws, in either order (throws(E) too)
@@ -596,8 +618,9 @@ impl Parser {
         } else if m.barred.is_some() {
             s.skip = m.barred;
         }
-        let main = m.main || (self.main_types.contains(o) && !m.nonisolated);
-        self.add(owner, s, CallInfo { labels, init: true, awaits: asyn, main, ..CallInfo::default() });
+        // (an actor's init isn't its isolation's; a @MainActor type's is)
+        let info = CallInfo { labels, init: true, owner: o.to_string(), asyn, own_main: m.main || self.scope_main, nonisolated: m.nonisolated || self.scope_nonisolated, is_static: true, ..CallInfo::default() };
+        self.add(owner, s, info);
     }
 
     /// struct, class, enum, extension, protocol or actor NAME [<...>] [: ...] { body }
@@ -620,6 +643,10 @@ impl Parser {
         // the raw value type an enum names first (enum E: Int)
         let mut raw_int = false;
         let inherits = c.is(":");
+        let first_super = match c.t.get(c.i + 1) {
+            Some(Tok::Id(w)) if inherits => Some(w.clone()),
+            _ => None,
+        };
         if c.eat(":") {
             raw_int = matches!(c.peek(), Some(Tok::Id(w)) if parse_ty(&[Tok::Id(w.clone())], None).is_some_and(|t| matches!(t, Ty::Prim(p) if p != "bool" && !p.starts_with('f'))));
         }
@@ -649,7 +676,13 @@ impl Parser {
         }
         match kw {
             "protocol" => self.m.left_out.push(format!("{name} (a protocol)")),
-            "extension" => self.decls(body, Some(&name), true),
+            "extension" => {
+                // a @MainActor (or nonisolated) extension's members are
+                let saved = (self.scope_main, self.scope_nonisolated);
+                (self.scope_main, self.scope_nonisolated) = (m.main, m.nonisolated);
+                self.decls(body, Some(&name), true);
+                (self.scope_main, self.scope_nonisolated) = saved;
+            }
             _ => {
                 if !self.at.contains_key(&name) {
                     self.at.insert(name.clone(), self.m.types.len());
@@ -671,11 +704,19 @@ impl Parser {
                     }
                     if m.main {
                         self.main_types.insert(name.clone());
+                        // (its fields are the main actor's: the glue reading them can't be)
+                        if kw == "struct" {
+                            self.not_plain.insert(name.clone());
+                        }
+                    }
+                    if let (Some(sup), "class") = (&first_super, kw) {
+                        self.supers.insert(name.clone(), sup.clone());
                     }
                     if kw == "class" || kw == "actor" {
                         self.classes.insert(name.clone());
-                        // a subclass inherits its superclass's inits rather than having init()
-                        if inherits {
+                        // a subclass inherits its superclass's inits rather than having init() (an
+                        // actor's : is a conformance: actors don't inherit)
+                        if inherits && kw == "class" {
                             self.has_init.insert(name.clone());
                         }
                     }
@@ -787,9 +828,8 @@ impl Parser {
             return;
         }
         let s = Sig { name, recv: Recv::Ref, params: Vec::new(), ret: if get_throws { ty.map(|t| Ty::Res(Box::new(t))) } else { ty }, skip: m.barred, src: String::new(), generics: Vec::new(), call: None };
-        let actor = self.actors.contains(o) && !m.nonisolated;
-        let main = m.main || (self.main_types.contains(o) && !m.nonisolated);
-        self.add(owner, s, CallInfo { prop: true, awaits: get_async || actor, main, ..CallInfo::default() });
+        let info = CallInfo { prop: true, owner: o.to_string(), asyn: get_async, own_main: m.main || self.scope_main, nonisolated: m.nonisolated || self.scope_nonisolated, ..CallInfo::default() };
+        self.add(owner, s, info);
     }
 
     /// case a, b = 2, c(Int): an enum's cases (one with associated values makes it a handle)
@@ -840,7 +880,8 @@ impl Parser {
 fn directive(line: &str) -> Option<(&'static str, String)> {
     let t = line.trim_start();
     for d in ["#elseif", "#else", "#endif", "#if"] {
-        if let Some(rest) = t.strip_prefix(d).filter(|r| r.is_empty() || r.starts_with(char::is_whitespace)) {
+        let cond = d == "#if" || d == "#elseif";
+        if let Some(rest) = t.strip_prefix(d).filter(|r| r.is_empty() || r.starts_with(char::is_whitespace) || (cond && (r.starts_with('(') || r.starts_with('!')))) {
             let rest = rest.split("//").next().unwrap_or("").trim();
             return Some((d, rest.to_string()));
         }
@@ -1806,7 +1847,7 @@ func after() {}
 
     #[test]
     fn import_swift_overloads_actors() {
-        let src = "func move(by k: Int) -> Int { k }\nfunc move(to k: Int) -> Int { k }\nfunc move(_ x: Double) -> Double { x }\nfunc f() -> Int { 1 }\nfunc f() -> String { \"\" }\nactor Tally {\n    var n = 0\n    func add(_ k: Int) -> Int { n += k; return n }\n    nonisolated func name() -> String { \"t\" }\n    static func make() -> Int { 1 }\n}\n@MainActor final class Screen {\n    func draw() -> Int { 1 }\n    nonisolated func id() -> Int { 2 }\n}\n@MainActor func later() async throws -> Int { 1 }\nstruct G {\n    var x = 1\n    var slow: Int { get async throws { 1 } }\n    mutating func bump() async {}\n}\n@globalActor actor BackgroundActor { static let shared = BackgroundActor() }\n@BackgroundActor func elsewhere() {}\n";
+        let src = "func move(by k: Int) -> Int { k }\nfunc move(to k: Int) -> Int { k }\nfunc move(_ x: Double) -> Double { x }\nfunc f() -> Int { 1 }\nfunc f() -> String { \"\" }\nactor Tally {\n    var n = 0\n    func add(_ k: Int) -> Int { n += k; return n }\n    nonisolated func name() -> String { \"t\" }\n    static func make() -> Int { 1 }\n}\n@MainActor final class Screen {\n    func draw() -> Int { 1 }\n    nonisolated func id() -> Int { 2 }\n}\n@MainActor func later() async throws -> Int { 1 }\nstruct G {\n    var x = 1\n    var slow: Int { get async throws { 1 } }\n    mutating func bump() async {}\n}\n@globalActor actor BackgroundActor { static let shared = BackgroundActor() }\n@BackgroundActor func elsewhere() {}\nstruct Pt2 {\n    var x = 1\n    func f(_ v: Int) -> Int { v }\n    func f(_ v: Double) -> Double { v }\n    func g(a: Int) -> Int { a }\n    func g(b: Int) -> Int { b }\n}\nextension Late { func hi() -> Int { 1 } }\nactor Late {}\n@MainActor extension Plain { func m() -> Int { 1 } }\nstruct Plain { var y = 2 }\n@MainActor class Base {}\nclass Sub: Base { func s() -> Int { 1 } }\n@MainActor struct MP { var x: Double }\nactor Cache: Sendable { var n = 0 }\n";
         let mut p = Parser::default();
         p.decls(&lex(src), None, false);
         let (m, sw) = p.finish();
@@ -1824,10 +1865,20 @@ func after() {}
         assert!(slow.prop && slow.awaits);
         assert_eq!(m.methods["G"].iter().find(|s| s.name == "bump").and_then(|s| s.skip), Some("it's async and mutating"));
         assert_eq!(m.fns[5].1.skip, Some("it's isolated to a global actor other than the main one"));
+        let names = |t: &str| m.methods[t].iter().map(|s| s.name.as_str()).collect::<Vec<_>>();
+        assert_eq!(names("Pt2"), ["f", "f", "g_a", "g_b", "new", "new_x"], "a method's overloads");
+        assert!(info(&m, &sw, "Late", "hi").awaits, "an extension before its actor");
+        assert!(info(&m, &sw, "Plain", "m").main && !info(&m, &sw, "Plain", "new").main, "a @MainActor extension's members");
+        assert!(info(&m, &sw, "Sub", "s").main, "a @MainActor class's subclass");
+        assert!(m.types.iter().find(|t| t.name == "MP").is_some_and(|t| t.opaque), "a @MainActor struct: a handle");
+        assert!(names("Cache").contains(&"new"), "an actor's conformance isn't a superclass");
     }
 
     #[test]
     fn import_swift_if() {
+        assert_eq!(directive("#if(os(Linux))"), Some(("#if", "(os(Linux))".to_string())));
+        assert_eq!(directive("#elseif!DEBUG"), Some(("#elseif", "!DEBUG".to_string())));
+        assert_eq!(directive("#endifx"), None);
         let src = "#if os(Linux) || os(macOS) // the usual\nfunc a() {}\n  #if arch(x86_64)\n  func a64() {}\n  #else\n  func aother() {}\n  #endif\n#elseif os(Windows)\nfunc w() {}\n#else\nfunc none() {}\n#endif\n#if FANCY\nfunc fancy() {}\n#endif\n#if swift(>=5.9)\nfunc modern() {}\n#endif\nstruct S {\n#if !os(Linux)\n    var x: Int { 1 }\n#endif\n}\n";
         assert_eq!(if_conditions(src), ["os(Linux) || os(macOS)", "arch(x86_64)", "os(Windows)", "FANCY", "swift(>=5.9)", "!os(Linux)"]);
         // the answers swiftc gives (FANCY: none, as when the probe can't compile it)

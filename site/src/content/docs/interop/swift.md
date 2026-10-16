@@ -54,7 +54,7 @@ when a file changes. It works the same with `voltc run main.volt` and in a bolt 
 | overloads (`describe(_: Int)`, `describe(_: Double)`) | Volt overloads; ones whose Volt types are the same (Swift's labels alone differ: `move(by:)`, `move(to:)`) are each named for their labels, `move_by` and `move_to` |
 | an `async` func, init or getter | what it gives: the shim runs it in a detached task and waits for it |
 | an `actor` | a class: its members (but `nonisolated` and `static` ones) are reached through `await` the same way |
-| `@MainActor`, on a declaration or a type | called on the main thread (the one `main` runs on), an `async` one by running the main run loop until it's done; called from another thread, the program stops |
+| `@MainActor`, on a declaration, a type (and its subclasses) or an extension | called on the main thread (the one `main` runs on), an `async` one by running the main run loop until it's done; called from another thread, the program stops. A `@MainActor` struct is a handle (its fields are the actor's) |
 | `#if ... #elseif ... #else ... #endif` | the branch that holds: bolt asks swiftc about each condition (`os()`, `arch()`, `canImport()`, `swift(>=)`, `compiler(>=)`, `targetEnvironment()`, flags), with the target and flags the build uses |
 
 Generic functions, protocols, nested types, closures, an overload Swift tells apart by its result

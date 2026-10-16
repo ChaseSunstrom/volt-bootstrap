@@ -68,8 +68,10 @@ fn run() -> geo::swift_error!void {
     t.add(2);
     std::println("actor: {} {} {}", t.add(3), t.n(), t.name());
     std::println("main: {} {}", geo::onMain(), geo::onMainLater());
+    val badge = geo::Badge::new(3);
+    std::println("main types: {} {} {}", badge.doubled(), g.onMainLevel(), geo::makePanel().size());
     // #if: the branch that holds
-    std::println("if: {}", geo::platformKnown());
+    std::println("if: {} {}", geo::platformKnown(), geo::chain());
 }
 
 fn main() -> void {
@@ -98,4 +100,5 @@ fn main() -> void {
 // expect: async: ERROR(notANumber("negative"))
 // expect: actor: 5 5 tally
 // expect: main: 7 9
-// expect: if: true
+// expect: main types: 6 30 4
+// expect: if: true 2

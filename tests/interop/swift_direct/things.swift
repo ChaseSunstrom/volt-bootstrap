@@ -113,11 +113,41 @@ actor Tally {
     return 9
 }
 
+// the main actor's types: a struct (a handle: its fields are the actor's), an extension's
+// members, a subclass of such a class
+@MainActor struct Badge {
+    var n: Int
+
+    func doubled() -> Int { n * 2 }
+}
+
+@MainActor extension Gauge {
+    func onMainLevel() -> Int { level * 10 }
+}
+
+@MainActor class Screen {
+    func draw() -> Int { 1 }
+}
+
+final class Panel: Screen {
+    func size() -> Int { 4 }
+}
+
+@MainActor func makePanel() -> Panel { Panel() }
+
 // #if: the branch that holds for this swiftc
 #if os(Linux) || os(macOS) || os(Windows)
 func platformKnown() -> Bool { true }
 #else
 func platformKnown() -> Bool { false }
+#endif
+
+#if os(Windows) && !os(Windows)
+func chain() -> Int { 1 }
+#elseif compiler(>=5.0) && (arch(x86_64) || arch(arm64))
+func chain() -> Int { 2 }
+#else
+func chain() -> Int { 3 }
 #endif
 
 #if canImport(NoSuchModuleHere)
