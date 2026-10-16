@@ -31,3 +31,8 @@ public fn tally(x: T) -> i64 {
     tallies += @cast<i64>(x);
     return tallies;
 }
+
+// an export fn: its library defines it, so a program linking libgeo.a declares it (fn_linkage)
+export fn geo_doubled(x: i32) -> i32 {
+    return x * 2;
+}

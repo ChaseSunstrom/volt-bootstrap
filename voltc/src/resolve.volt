@@ -981,16 +981,23 @@ attach fn is_header_fn(this: checker&, d: u32) -> bool {
 attach fn fn_linkage(this: checker&, idx: u32) -> linkage {
     val d = this.fi(idx).decl;
     val f = this.fn_decl_of(d) ?? return linkage::STATIC;
-    if (f.extern_abi != null || f.is_export) {
-        return linkage::EXPORTED;
-    }
-    val pkg = this.pkg_of(d) ?? return linkage::STATIC;
-    val lib = this.opts.lib != null && (this.opts.lib ?? "") == pkg;
+    val pkg = this.pkg_of(d);
+    val lib = pkg != null && this.opts.lib != null && (this.opts.lib ?? "") == (pkg ?? "");
     var linked = false;
     for (l&) in this.opts.linked.items() {
-        if (*l == pkg) {
+        if (pkg != null && *l == (pkg ?? "")) {
             linked = true;
         }
+    }
+    if (f.extern_abi != null || f.is_export) {
+        // a linked package's export fn is its library's: defined there, declared here
+        if (f.is_export && f.body != null && linked && !lib) {
+            return linkage::EXTERNAL;
+        }
+        return linkage::EXPORTED;
+    }
+    if (pkg == null) {
+        return linkage::STATIC;
     }
     // a specialization (fn f<i64>) is built where it's used, like the template it specializes: a
     // library has nothing calling it

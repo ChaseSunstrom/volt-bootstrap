@@ -40,6 +40,7 @@ fn main() -> void {
     hold::held = { h: t, n: 7 };
     std::println("held {} {} {} {}", hold::fire_held(), hold::held.n, geo2::held_plus(1), hold::spare.n);
     std::println("twice {} {}", hold::cb(5), hold::twice(6));
+    std::println("export {}", geo::geo_doubled(21));
 }
 
 struct tripler { k: i32; }
@@ -57,3 +58,4 @@ attach hold::hook -> tripler {
 // expect: held 1
 // expect: held 21 7 22 1
 // expect: twice 10 12
+// expect: export 42
