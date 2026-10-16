@@ -112,4 +112,8 @@ fn main() -> void {
         entries += 1;
     }
     std::println("c++98 {} {}", o, entries);
+    var vm: std::map<i32, i32> = {};
+    vm.put(3, 30);
+    vm.put(1, 10);
+    std::println("c++98 total {} {}", old::r98::total(&vm), old::r98::total(&om));
 }
