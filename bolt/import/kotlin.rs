@@ -13,6 +13,9 @@
 //   references); an enum class -> a Volt enum (its ordinals)
 //   the primary constructor -> T::new(...), another T::new_<its first parameter>(...); a property
 //   -> a method without arguments; an object's or a companion object's funs -> T::f(...)
+//   overloads -> Volt overloads; vararg xs: T (last) -> xs: T[..]; a typealias -> its type (a Volt
+//   type alias too); fun T.f() -> a method of an imported T, an attach fn on str, i32...; a nested
+//   class, enum or object -> Outer_Inner; a suspend fun -> its value (one that suspends throws)
 use super::glue::{number, prim, Gen, Kind, Lang, Model, Recv, ShimOut, ShimParam, Sig, Ty, TypeDef, TypeInfo};
 use super::{arg_path, fresh, save, stamp, Made, Req};
 use crate::foreign::{int_value, lex, toks_line, Cur, Tok};
@@ -39,10 +42,18 @@ pub fn import(r: &Req) -> Result<(), String> {
         return Ok(());
     }
 
-    let mut p = Parser::default();
+    let mut toks = Vec::new();
     for f in &files {
         let text = std::fs::read_to_string(f).map_err(|e| format!("use kotlin: can't read {}: {e}", f.display()))?;
-        p.decls(&lex(&plain_strings(&text)), None, false);
+        toks.push(lex(&plain_strings(&text)));
+    }
+    let mut p = Parser::default();
+    // the typealiases first: a declaration may name one written after it
+    for t in &toks {
+        p.aliases.extend(aliases(t));
+    }
+    for t in &toks {
+        p.decls(t, None, false);
     }
     let (model, kotlin) = p.finish();
     let (shim, volt) = Gen::new(&model, &r.alias, &kotlin).write(if files.len() == 1 { "the file" } else { "the files" });
@@ -87,6 +98,21 @@ const MODIFIERS: &[&str] = &[
 /// what a declaration starts with (past its annotations and modifiers)
 const KEYWORDS: &[&str] = &["fun", "class", "interface", "object", "val", "var", "typealias", "constructor", "init", "import", "package"];
 
+/// how the shim calls a declaration (its Sig's call is the index of this)
+#[derive(Clone, Default, Debug, PartialEq)]
+struct CallInfo {
+    /// a property (read without parentheses), a constructor (T(...))
+    prop: bool,
+    init: bool,
+    /// a suspend fun: run to its end (it mustn't suspend)
+    suspend: bool,
+    /// its last parameter is a vararg's: the list spread into the call through this
+    /// (toIntArray(), toTypedArray()...)
+    spread: Option<&'static str>,
+    /// an extension of a builtin type: its first argument is the receiver
+    ext: bool,
+}
+
 #[derive(Default)]
 struct Parser {
     m: Model,
@@ -94,9 +120,15 @@ struct Parser {
     at: BTreeMap<String, usize>,
     /// the packages the files are in (the shim imports each)
     packages: BTreeSet<String>,
-    /// properties read without parentheses, and constructors (T::new...), by (type, name)
-    props: BTreeSet<(String, String)>,
-    inits: BTreeSet<(String, String)>,
+    /// how each declaration is called, and the names properties and constructors take (by
+    /// (type, name): no overload shares one)
+    calls: Vec<CallInfo>,
+    fixed: BTreeSet<(String, String)>,
+    /// typealiases: each name's type
+    aliases: BTreeMap<String, Vec<Tok>>,
+    /// extension funs of the files' types (the receiver type, the fun), made its methods once
+    /// every type is read
+    exts: Vec<(String, Sig, CallInfo)>,
     /// data classes whose primary constructor's parameters are all vals (fields, in order)
     data: BTreeSet<String>,
     /// types with a stored property of their own (not a data class's plain value), types with a
@@ -118,10 +150,21 @@ struct Mods {
     companion: bool,
     suspend: bool,
     vararg: bool,
+    inner: bool,
 }
 
 impl Parser {
     fn finish(mut self) -> (Model, Kotlin) {
+        // an extension of one of the files' types is its method
+        for (t, s, info) in std::mem::take(&mut self.exts) {
+            if self.at.contains_key(&t) {
+                self.add(Some(&t), s, info);
+            } else {
+                self.m.left_out.push(format!("{} (an extension of {t}, which isn't a type here)", s.name));
+            }
+        }
+        // a nested type's short name (Car in Garage) is its Outer_Inner
+        self.resolve_nested();
         let types: Vec<String> = self.m.types.iter().filter(|t| !t.is_enum).map(|t| t.name.clone()).collect();
         for t in types {
             // a class without a constructor written has Kotlin's T()
@@ -165,8 +208,59 @@ impl Parser {
             t.clone = true;
             t.opaque = !by_value && !t.is_enum;
         }
-        let kotlin = Kotlin { props: self.props, inits: self.inits, packages: self.packages };
+        let kotlin = Kotlin { calls: self.calls, packages: self.packages };
         (self.m, kotlin)
+    }
+
+    /// each Named(Inner) a declaration names that isn't a type here: the nested type it means
+    /// (its own scope's, then its outer types', else the only one of that name)
+    fn resolve_nested(&mut self) {
+        let names: BTreeSet<String> = self.m.types.iter().map(|t| t.name.clone()).collect();
+        let fix = |t: &Ty, owner: Option<&str>| -> Ty {
+            fn go(t: &Ty, owner: Option<&str>, names: &BTreeSet<String>) -> Ty {
+                match t {
+                    Ty::Named(x) if !names.contains(x) => {
+                        let mut scope = owner.map(String::from);
+                        while let Some(o) = scope {
+                            let n = format!("{o}_{x}");
+                            if names.contains(&n) {
+                                return Ty::Named(n);
+                            }
+                            scope = o.rsplit_once('_').map(|(a, _)| a.to_string()).filter(|a| names.contains(a));
+                        }
+                        let all: Vec<&String> = names.iter().filter(|n| n.ends_with(&format!("_{x}"))).collect();
+                        match all.as_slice() {
+                            [one] => Ty::Named((*one).clone()),
+                            _ => t.clone(),
+                        }
+                    }
+                    Ty::Opt(e) => Ty::Opt(Box::new(go(e, owner, names))),
+                    Ty::Vec(e) => Ty::Vec(Box::new(go(e, owner, names))),
+                    _ => t.clone(),
+                }
+            }
+            go(t, owner, &names)
+        };
+        let fix_sig = |s: &mut Sig, owner: Option<&str>| {
+            for p in &mut s.params {
+                p.1 = p.1.as_ref().map(|t| fix(t, owner));
+            }
+            s.ret = s.ret.as_ref().map(|t| fix(t, owner));
+        };
+        for (_, s) in &mut self.m.fns {
+            fix_sig(s, None);
+        }
+        for (o, ms) in &mut self.m.methods {
+            for s in ms {
+                fix_sig(s, Some(o));
+            }
+        }
+        for t in &mut self.m.types {
+            let o = t.name.clone();
+            for f in t.fields.iter_mut().flatten() {
+                f.2 = f.2.as_ref().map(|x| fix(x, Some(&o)));
+            }
+        }
     }
 
     /// the annotations and modifiers before a declaration (or a parameter)
@@ -196,6 +290,7 @@ impl Parser {
                         "companion" => m.companion = true,
                         "suspend" => m.suspend = true,
                         "vararg" => m.vararg = true,
+                        "inner" => m.inner = true,
                         _ => {}
                     }
                     c.i += 1;
@@ -343,12 +438,16 @@ impl Parser {
                     }
                 }
                 "typealias" => {
-                    if !m.private {
-                        let name = match c.t.get(c.i + 1) {
-                            Some(Tok::Id(n)) => n.clone(),
-                            _ => String::new(),
-                        };
-                        self.m.left_out.push(format!("{name} (a typealias)"));
+                    let name = match c.t.get(c.i + 1) {
+                        Some(Tok::Id(n)) => n.clone(),
+                        _ => String::new(),
+                    };
+                    // its type (read before the declarations): a Volt alias too
+                    if owner.is_none() && !m.private && spellable(&name) {
+                        match self.aliases.get(&name).and_then(|t| parse_ty(t, None, &self.aliases)) {
+                            Some(t) => self.m.aliases.push((Vec::new(), name, t)),
+                            None => self.m.left_out.push(format!("{name} (a typealias of a type Volt can't name)")),
+                        }
                     }
                     Self::skip(&mut c);
                 }
@@ -365,7 +464,7 @@ impl Parser {
         self.taken.insert((owner.unwrap_or_default().to_string(), name.to_string()))
     }
 
-    fn add(&mut self, owner: Option<&str>, s: Sig) -> bool {
+    fn add(&mut self, owner: Option<&str>, mut s: Sig, info: CallInfo) -> bool {
         let who = match owner {
             Some(o) => format!("{o}.{}", s.name),
             None => s.name.clone(),
@@ -378,10 +477,23 @@ impl Parser {
             self.m.left_out.push(format!("{who} (the glue's own name for the handle)"));
             return false;
         }
-        if !self.take(owner, &s.name) {
-            self.m.left_out.push(format!("{who} (an overload: Volt has the first one of that name)"));
+        // a property or a constructor has its name to itself; funs may share one (overloads:
+        // Volt tells them apart by their types)
+        let key = (owner.unwrap_or_default().to_string(), s.name.clone());
+        if info.prop || info.init {
+            if !self.take(owner, &s.name) {
+                self.m.left_out.push(format!("{who} (another declaration has its name)"));
+                return false;
+            }
+            self.fixed.insert(key);
+        } else if self.fixed.contains(&key) {
+            self.m.left_out.push(format!("{who} (a property or constructor has its name)"));
             return false;
+        } else {
+            self.taken.insert(key);
         }
+        s.call = Some(self.calls.len().to_string());
+        self.calls.push(info);
         match owner {
             Some(o) => self.m.methods.entry(o.to_string()).or_default().push(s),
             None => self.m.fns.push((Vec::new(), s)),
@@ -390,8 +502,9 @@ impl Parser {
     }
 
     /// a parameter list: Volt's (name, type); `ctor`: a primary constructor's, whose val and var
-    /// parameters are properties (name, type, a val, private)
-    fn params(items: &[Vec<Tok>], owner: Option<&str>, s: &mut Sig, props: &mut Vec<(String, Option<Ty>, bool, bool)>) {
+    /// parameters are properties (name, type, a val, private); what spreads a last vararg's list
+    fn params(&self, items: &[Vec<Tok>], owner: Option<&str>, s: &mut Sig, props: &mut Vec<(String, Option<Ty>, bool, bool)>) -> Option<&'static str> {
+        let mut spread = None;
         for (n, p) in items.iter().enumerate() {
             let mut c = Cur { t: p, i: 0 };
             let m = Self::mods(&mut c);
@@ -403,9 +516,33 @@ impl Parser {
                 continue;
             }
             // its type, up to a default value
-            let t = parse_ty(&Self::ty_tokens(&mut c), owner);
+            let mut t = parse_ty(&Self::ty_tokens(&mut c), owner, &self.aliases);
+            // vararg xs: T, the last parameter: Volt's T[..], spread into the call as an array
             if m.vararg {
-                s.skip = Some("a vararg parameter");
+                let how = match &t {
+                    Some(Ty::Prim(x)) => Some(match *x {
+                        "i8" => "toByteArray()",
+                        "i16" => "toShortArray()",
+                        "i32" => "toIntArray()",
+                        "i64" => "toLongArray()",
+                        "u8" => "toUByteArray()",
+                        "u16" => "toUShortArray()",
+                        "u32" => "toUIntArray()",
+                        "u64" => "toULongArray()",
+                        "f32" => "toFloatArray()",
+                        "f64" => "toDoubleArray()",
+                        _ => "toBooleanArray()",
+                    }),
+                    Some(Ty::Str) => Some("toTypedArray()"),
+                    _ => None,
+                };
+                match how {
+                    Some(h) if n + 1 == items.len() => {
+                        spread = Some(h);
+                        t = t.map(|e| Ty::Vec(Box::new(e)));
+                    }
+                    _ => s.skip = Some("a vararg parameter (not the last, or of a type Volt can't pass)"),
+                }
             }
             if is_prop {
                 props.push((name.clone(), t.clone(), is_val, m.private));
@@ -413,15 +550,14 @@ impl Parser {
             let pname = if spellable(&name) { name } else { format!("a{n}") };
             s.params.push((pname, t));
         }
+        spread
     }
 
     /// T::new for a constructor of owner's with these parameters (T::new_<first> when there's one)
     fn ctor(&mut self, owner: &str, params: Vec<(String, Option<Ty>)>, skip: Option<&'static str>) {
         let name = if self.taken.contains(&(owner.to_string(), "new".to_string())) { format!("new_{}", params.first().map_or("", |p| p.0.as_str())) } else { "new".into() };
-        let s = Sig { name: name.clone(), recv: Recv::None, params, ret: Some(Ty::SelfTy), skip, src: String::new(), generics: Vec::new(), call: None };
-        if self.add(Some(owner), s) {
-            self.inits.insert((owner.to_string(), name));
-        }
+        let s = Sig { name, recv: Recv::None, params, ret: Some(Ty::SelfTy), skip, src: String::new(), generics: Vec::new(), call: None };
+        self.add(Some(owner), s, CallInfo { init: true, ..CallInfo::default() });
     }
 
     /// fun [<T>] [Recv.]NAME(params)[: T] [where ...] (= expr | { ... })
@@ -432,20 +568,25 @@ impl Parser {
         if generic {
             c.skip_group();
         }
+        let rs = c.i;
         let Some(mut name) = c.id() else {
             Self::skip(c);
             return;
         };
-        // an extension: fun Recv.name(), fun List<Int>.name()
+        // an extension: fun Recv.name(), fun List<Int>.name() (its receiver's tokens)
         let mut extension = false;
+        let mut recv_end = c.i;
         if c.is("<") {
             c.skip_group();
         }
         c.eat("?");
-        while c.eat(".") {
+        while c.is(".") {
+            recv_end = c.i;
+            c.i += 1;
             extension = true;
             name = c.id().unwrap_or_default();
         }
+        let recv_toks = c.t[rs..recv_end].to_vec();
         if !c.is("(") {
             Self::skip(c);
             return;
@@ -454,7 +595,7 @@ impl Parser {
         let mut ret = Some(Ty::Unit);
         let mut untyped = false;
         if c.eat(":") {
-            ret = parse_ty(&Self::ty_tokens(c), owner);
+            ret = parse_ty(&Self::ty_tokens(c), owner, &self.aliases);
         } else if c.is("=") {
             untyped = true;
         }
@@ -472,21 +613,32 @@ impl Parser {
         if m.private {
             return;
         }
-        if extension {
-            self.m.left_out.push(format!("{name} (an extension function)"));
-            return;
-        }
         let recv = if owner.is_none() || statics { Recv::None } else { Recv::Ref };
         let mut s = Sig { name, recv, params: Vec::new(), ret, skip: None, src, generics: Vec::new(), call: None };
-        Self::params(&items, owner, &mut s, &mut Vec::new());
+        let spread = self.params(&items, owner, &mut s, &mut Vec::new());
         if generic {
             s.skip = Some("it's generic");
-        } else if m.suspend {
-            s.skip = Some("it's a suspend fun");
         } else if untyped {
             s.skip = Some("its result type isn't written");
         }
-        self.add(owner, s);
+        let info = CallInfo { suspend: m.suspend, spread, ..CallInfo::default() };
+        if extension {
+            // of one of the files' types: its method; of a builtin one: an attach fn on it
+            let rt = if owner.is_some() || recv_toks.last() == Some(&Tok::P("?".into())) { None } else { parse_ty(&recv_toks, None, &self.aliases) };
+            match rt {
+                Some(Ty::Named(t)) => {
+                    s.recv = Recv::Ref;
+                    self.exts.push((t, s, info));
+                }
+                Some(t @ (Ty::Prim(_) | Ty::Str)) => {
+                    s.params.insert(0, ("this".into(), Some(t)));
+                    self.add(None, s, CallInfo { ext: true, ..info });
+                }
+                _ => self.m.left_out.push(format!("{} (an extension of a type Volt can't attach to)", s.name)),
+            }
+            return;
+        }
+        self.add(owner, s, info);
     }
 
     /// past an expression (a fun's body or a property's value): to the next declaration
@@ -519,7 +671,9 @@ impl Parser {
             return;
         }
         let mut s = Sig { name: String::new(), recv: Recv::None, params: Vec::new(), ret: None, skip: None, src: String::new(), generics: Vec::new(), call: None };
-        Self::params(&items, Some(o), &mut s, &mut Vec::new());
+        if self.params(&items, Some(o), &mut s, &mut Vec::new()).is_some() {
+            s.skip = Some("a vararg constructor");
+        }
         self.ctor(o, s.params, s.skip);
     }
 
@@ -562,8 +716,15 @@ impl Parser {
         if m.private {
             return;
         }
-        if let Some(o) = owner {
-            self.m.left_out.push(format!("{o}.{name} (a nested type)"));
+        // a nested class, enum or object: Outer_Inner (Kotlin's Outer.Inner)
+        let kt = owner.map(|o| format!("{}.{name}", self.at.get(o).and_then(|&i| self.m.types[i].rust_name.clone()).unwrap_or_else(|| o.to_string())));
+        let shown = name.clone();
+        let name = match owner {
+            Some(o) => format!("{o}_{name}"),
+            None => name,
+        };
+        if m.inner {
+            self.m.left_out.push(format!("{} (an inner class: one is made by an object of its outer class)", kt.unwrap_or(shown)));
             return;
         }
         if !spellable(&name) {
@@ -593,7 +754,7 @@ impl Parser {
             clone: true,
             opaque: false,
             params: Vec::new(),
-            rust_name: None,
+            rust_name: kt,
         });
         if kw == "object" || m.abstract_ || m.is_enum {
             self.no_ctor.insert(name.clone());
@@ -603,7 +764,9 @@ impl Parser {
             self.has_ctor.insert(name.clone());
             let mut s = Sig { name: String::new(), recv: Recv::None, params: Vec::new(), ret: None, skip: None, src: String::new(), generics: Vec::new(), call: None };
             let mut props = Vec::new();
-            Self::params(&items, Some(&name), &mut s, &mut props);
+            if self.params(&items, Some(&name), &mut s, &mut props).is_some() {
+                s.skip = Some("a vararg constructor");
+            }
             let all_vals = !props.is_empty() && props.len() == s.params.len() && props.iter().all(|p| p.2 && !p.3);
             // a data class of vals may be a Volt struct, whose fields are its properties (finish
             // gives it methods for them when it isn't one)
@@ -665,10 +828,8 @@ impl Parser {
     /// a property read as a method without arguments (statics: an object's or a companion's)
     fn property_method(&mut self, owner: &str, name: String, t: Option<Ty>, statics: bool) {
         let recv = if statics { Recv::None } else { Recv::Ref };
-        let s = Sig { name: name.clone(), recv, params: Vec::new(), ret: t, skip: None, src: String::new(), generics: Vec::new(), call: None };
-        if self.add(Some(owner), s) {
-            self.props.insert((owner.to_string(), name));
-        }
+        let s = Sig { name, recv, params: Vec::new(), ret: t, skip: None, src: String::new(), generics: Vec::new(), call: None };
+        self.add(Some(owner), s, CallInfo { prop: true, ..CallInfo::default() });
     }
 
     /// val/var NAME[: T] [= value | by delegate] [get()...] [set...]: a constant at the top level;
@@ -719,7 +880,7 @@ impl Parser {
         if m.private {
             return;
         }
-        let ty = if tt.is_empty() { literal(&[], &value).map(|l| l.0) } else { parse_ty(&tt, Some(o)) };
+        let ty = if tt.is_empty() { literal(&[], &value).map(|l| l.0) } else { parse_ty(&tt, Some(o), &self.aliases) };
         self.property_method(o, name, ty, statics);
     }
 }
@@ -852,7 +1013,7 @@ fn template_end(b: &[u8], mut i: usize) -> usize {
 /// a literal value and its type: an integer (10, 10L, 10u), a float (1.5, 1.5f), a bool or a
 /// string without templates
 fn literal(tt: &[Tok], value: &[Tok]) -> Option<(Ty, String)> {
-    let t = if tt.is_empty() { None } else { parse_ty(tt, None) };
+    let t = if tt.is_empty() { None } else { parse_ty(tt, None, &BTreeMap::new()) };
     // a suffix on the last number: L, u, uL, f
     let (neg, rest) = match value {
         [Tok::P(m), rest @ ..] if m == "-" => ("-", rest),
@@ -907,17 +1068,21 @@ fn literal(tt: &[Tok], value: &[Tok]) -> Option<(Ty, String)> {
 }
 
 /// a Kotlin type from its tokens, when it's one Volt can name; `owner`'s name is Self
-fn parse_ty(t: &[Tok], owner: Option<&str>) -> Option<Ty> {
+fn parse_ty(t: &[Tok], owner: Option<&str>, aliases: &BTreeMap<String, Vec<Tok>>) -> Option<Ty> {
+    parse_ty_at(t, owner, aliases, 0)
+}
+
+fn parse_ty_at(t: &[Tok], owner: Option<&str>, aliases: &BTreeMap<String, Vec<Tok>>, depth: usize) -> Option<Ty> {
     let is = |i: usize, p: &str| matches!(t.get(i), Some(Tok::P(q)) if q == p);
     // annotations on it
     if let [Tok::Id(w), rest @ ..] = t {
         if w.starts_with('@') {
-            return parse_ty(rest, owner);
+            return parse_ty_at(rest, owner, aliases, depth);
         }
     }
     let n = t.len();
     if n > 1 && is(n - 1, "?") {
-        return match parse_ty(&t[..n - 1], owner)? {
+        return match parse_ty_at(&t[..n - 1], owner, aliases, depth)? {
             Ty::Opt(_) | Ty::Unit => None,
             x => Some(Ty::Opt(Box::new(x))),
         };
@@ -932,9 +1097,18 @@ fn parse_ty(t: &[Tok], owner: Option<&str>) -> Option<Ty> {
         return None;
     }
     let Some(Tok::Id(name)) = path.last() else { return None };
+    // a typealias: its type
+    if let (None, Some(a)) = (args, aliases.get(name.as_str()).filter(|_| path.len() == 1 && depth < 16)) {
+        return parse_ty_at(a, owner, aliases, depth + 1);
+    }
+    // Outer.Inner: a nested type, Outer_Inner (a package's lowercase parts aside)
+    let upper: Vec<&str> = path.iter().filter_map(|x| if let Tok::Id(w) = x { Some(w.as_str()) } else { None }).filter(|w| w.starts_with(|c: char| c.is_ascii_uppercase())).collect();
+    if args.is_none() && upper.len() > 1 {
+        return Some(Ty::Named(upper.join("_")));
+    }
     if let Some(args) = args {
         return match name.as_str() {
-            "List" | "Collection" | "Iterable" => match parse_ty(args, owner)? {
+            "List" | "Collection" | "Iterable" => match parse_ty_at(args, owner, aliases, depth)? {
                 e @ (Ty::Prim(_) | Ty::Str) => Some(Ty::Vec(Box::new(e))),
                 _ => None,
             },
@@ -966,9 +1140,30 @@ fn parse_ty(t: &[Tok], owner: Option<&str>) -> Option<Ty> {
 // ---------- the shim, in Kotlin ----------
 
 pub struct Kotlin {
-    props: BTreeSet<(String, String)>,
-    inits: BTreeSet<(String, String)>,
+    calls: Vec<CallInfo>,
     packages: BTreeSet<String>,
+}
+
+/// the typealiases (non-generic) in a file's tokens: each name's type
+fn aliases(t: &[Tok]) -> BTreeMap<String, Vec<Tok>> {
+    let mut out = BTreeMap::new();
+    let mut c = Cur { t, i: 0 };
+    while c.i < t.len() {
+        if c.is_id("typealias") {
+            c.i += 1;
+            if let (Some(name), true) = (c.id(), c.eat("=")) {
+                out.insert(name, Parser::ty_tokens(&mut c));
+            }
+        } else {
+            c.i += 1;
+        }
+    }
+    out
+}
+
+/// a type's Kotlin name (a nested one's is Outer.Inner)
+fn kt_name(def: &TypeDef) -> String {
+    def.rust_name.clone().unwrap_or_else(|| def.name.clone())
 }
 
 /// a Volt number type's Kotlin name
@@ -1036,6 +1231,10 @@ impl Lang for Kotlin {
         "kotlin"
     }
 
+    fn attach_first(&self, s: &Sig) -> bool {
+        s.call.as_ref().and_then(|c| c.parse::<usize>().ok()).and_then(|i| self.calls.get(i)).is_some_and(|c| c.ext)
+    }
+
     fn name(&self) -> &'static str {
         "Kotlin"
     }
@@ -1088,7 +1287,7 @@ impl Lang for Kotlin {
                     }
                     Kind::Handle => {
                         p.params.push(format!("{a}: COpaquePointer?"));
-                        p.arg = format!("{a}!!.asStableRef<{n}>().get()");
+                        p.arg = format!("{a}!!.asStableRef<{}>().get()", kt_name(&ti.def));
                     }
                     Kind::Enum => {
                         p.params.push(format!("{a}: Long"));
@@ -1115,7 +1314,7 @@ impl Lang for Kotlin {
             }
             Kind::Handle => {
                 p.params.push("self: COpaquePointer?".into());
-                p.arg = format!("self!!.asStableRef<{n}>().get()");
+                p.arg = format!("self!!.asStableRef<{}>().get()", kt_name(&ti.def));
             }
             Kind::Enum => {
                 p.params.push("self: Long".into());
@@ -1158,23 +1357,33 @@ impl Lang for Kotlin {
     }
 
     fn call(&self, _g: &Gen, _module: &[String], s: &Sig, self_ty: Option<&TypeInfo>, recv: Option<&str>, args: &[String]) -> String {
-        let owner = self_ty.map(|t| t.def.name.clone()).unwrap_or_default();
-        let key = (owner.clone(), s.name.clone());
-        if self.props.contains(&key) {
+        let owner = self_ty.map(|t| kt_name(&t.def)).unwrap_or_default();
+        let c = s.call.as_ref().and_then(|c| c.parse::<usize>().ok()).and_then(|i| self.calls.get(i)).cloned().unwrap_or_default();
+        if c.prop {
             return match recv {
                 Some(r) => format!("{r}.{}", s.name),
                 None => format!("{owner}.{}", s.name),
             };
         }
+        let mut args = args.to_vec();
+        // a vararg's list, spread
+        if let (Some(how), Some(last)) = (c.spread, args.last_mut()) {
+            *last = format!("*({last}).{how}");
+        }
+        // an extension of a builtin type: its first argument is the receiver
+        let recv = if c.ext && !args.is_empty() { Some(args.remove(0)) } else { recv.map(String::from) };
         let args = args.join(", ");
-        if self.inits.contains(&key) {
-            return format!("{owner}({args})");
+        let expr = match (c.init, recv, self_ty) {
+            (true, ..) => format!("{owner}({args})"),
+            (_, Some(r), _) => format!("{r}.{}({args})", s.name),
+            (_, None, Some(_)) => format!("{owner}.{}({args})", s.name),
+            (_, None, None) => format!("{}({args})", s.name),
+        };
+        if c.suspend {
+            let what = if owner.is_empty() { s.name.clone() } else { format!("{owner}.{}", s.name) };
+            return format!("__voltRun(\"{what}\") {{ {expr} }}");
         }
-        match (recv, self_ty) {
-            (Some(r), _) => format!("{r}.{}({args})", s.name),
-            (None, Some(_)) => format!("{owner}.{}({args})", s.name),
-            (None, None) => format!("{}({args})", s.name),
-        }
+        expr
     }
 
     fn function(&self, sym: &str, params: &[String], pre: &[String], call: &str, post: &[String], store: Option<&str>, _res: bool) -> String {
@@ -1230,7 +1439,8 @@ impl Lang for Kotlin {
                         _ => {}
                     }
                 }
-                let _ = write!(out, "fun __volt_from_{n}(p: COpaquePointer): {n} = {n}({})\n\nfun __volt_to_{n}(v: {n}, p: COpaquePointer) {{\n{to}}}\n\n", from.join(", "));
+                let k = kt_name(&ti.def);
+                let _ = write!(out, "fun __volt_from_{n}(p: COpaquePointer): {k} = {k}({})\n\nfun __volt_to_{n}(v: {k}, p: COpaquePointer) {{\n{to}}}\n\n", from.join(", "));
             }
             Kind::Handle => {
                 // the object behind a StableRef: dropping disposes it, a copy is another ref to it
@@ -1242,7 +1452,8 @@ impl Lang for Kotlin {
                 }
             }
             Kind::Enum => {
-                let _ = write!(out, "fun __volt_from_{n}(x: Long): {n} = {n}.entries[x.toInt()]\n\nfun __volt_to_{n}(v: {n}): Long = v.ordinal.toLong()\n\n");
+                let k = kt_name(&ti.def);
+                let _ = write!(out, "fun __volt_from_{n}(x: Long): {k} = {k}.entries[x.toInt()]\n\nfun __volt_to_{n}(v: {k}): Long = v.ordinal.toLong()\n\n");
             }
         }
         out
@@ -1251,12 +1462,13 @@ impl Lang for Kotlin {
     fn prelude(&self, g: &Gen) -> String {
         let free = |what: &str| format!("volt_kotlin_{}_free_{what}", g.alias);
         let mut s = String::from("// the glue between a Volt program and this Kotlin, written by bolt import (use kotlin)\n");
-        s.push_str("@file:OptIn(kotlinx.cinterop.ExperimentalForeignApi::class, kotlin.experimental.ExperimentalNativeApi::class)\n\n");
-        s.push_str("import kotlinx.cinterop.*\nimport kotlin.native.CName\n");
+        s.push_str("@file:OptIn(kotlinx.cinterop.ExperimentalForeignApi::class, kotlin.experimental.ExperimentalNativeApi::class, kotlin.ExperimentalUnsignedTypes::class)\n\n");
+        s.push_str("import kotlinx.cinterop.*\nimport kotlin.native.CName\nimport kotlin.coroutines.*\n");
         for p in &self.packages {
             let _ = writeln!(s, "import {p}.*");
         }
         s.push_str("\n// the byte at offset at of p\nfun __voltAt(p: COpaquePointer, at: Int): COpaquePointer = interpretCPointer<ByteVar>(p.rawValue + at.toLong())!!\n\n");
+        s.push_str("// a suspend fun run to its end: it mustn't suspend (nothing here would resume it)\nfun <T> __voltRun(what: String, f: suspend () -> T): T {\n    var done = false\n    var r: Result<T>? = null\n    f.startCoroutine(Continuation(EmptyCoroutineContext) { x -> done = true; r = x })\n    if (!done) throw IllegalStateException(\"$what suspended: Volt runs a suspend fun only to where it suspends, and nothing resumes it\")\n    return r!!.getOrThrow()\n}\n\n");
         s.push_str("fun __voltS(p: CPointer<ByteVar>?, n: ULong): String = if (p == null || n == 0uL) \"\" else p.readBytes(n.toInt()).decodeToString()\n\n");
         s.push_str("// Volt's str[..]: a pointer and a length each\nfun __voltStrs(p: COpaquePointer?, n: ULong): List<String> {\n    if (p == null) return emptyList()\n    val w = p.reinterpret<LongVar>()\n    return List(n.toInt()) { i -> __voltS(w[2 * i].toCPointer<ByteVar>(), w[2 * i + 1].toULong()) }\n}\n\n");
         s.push_str("// a copy for Volt, which gives it back to the free functions below\nfun __voltPutS(s: String, o: CPointer<CPointerVar<ByteVar>>?, n: CPointer<ULongVar>?) {\n    val b = s.encodeToByteArray()\n    n!!.pointed.value = b.size.toULong()\n    if (b.isEmpty()) {\n        o!!.pointed.value = null\n        return\n    }\n    val m = nativeHeap.allocArray<ByteVar>(b.size)\n    for (i in b.indices) m[i] = b[i]\n    o!!.pointed.value = m\n}\n\n");
@@ -1286,7 +1498,13 @@ mod tests {
     use super::*;
 
     fn ty(s: &str) -> Option<Ty> {
-        parse_ty(&lex(s), Some("Shape"))
+        parse_ty(&lex(s), Some("Shape"), &BTreeMap::new())
+    }
+
+    /// the call info of TYPE.NAME ("" for a top-level fun)
+    fn info(m: &Model, k: &Kotlin, owner: &str, name: &str) -> CallInfo {
+        let s = if owner.is_empty() { m.fns.iter().map(|x| &x.1).find(|s| s.name == name) } else { m.methods[owner].iter().find(|s| s.name == name) };
+        k.calls[s.and_then(|s| s.call.as_ref()).and_then(|c| c.parse::<usize>().ok()).unwrap()].clone()
     }
 
     #[test]
@@ -1341,9 +1559,9 @@ fun noType(value: Int) = value + 1
         assert!(ty("Counter").opaque && ty("Registry").opaque);
         assert_eq!(ty("Color").variants.clone().unwrap(), [("RED".to_string(), 0), ("GREEN".to_string(), 1)]);
         let fns: Vec<(String, Option<&str>)> = m.fns.iter().map(|f| (f.1.name.clone(), f.1.skip)).collect();
-        assert_eq!(fns, [("pick".into(), Some("it's generic")), ("noType".into(), Some("its result type isn't written"))]);
-        assert!(m.left_out.iter().any(|l| l.starts_with("shout")));
-        assert!(k.inits.contains(&("Counter".into(), "new_label".into())) && k.props.contains(&("Counter".into(), "count".into())));
+        assert_eq!(fns, [("pick".into(), Some("it's generic")), ("shout".into(), None), ("noType".into(), Some("its result type isn't written"))]);
+        assert!(info(&m, &k, "", "shout").ext, "an extension of String: an attach fn on str");
+        assert!(info(&m, &k, "Counter", "new_label").init && info(&m, &k, "Counter", "count").prop);
         assert_eq!(k.packages.iter().collect::<Vec<_>>(), ["geo"]);
     }
 
@@ -1384,8 +1602,57 @@ class Twice { fun n(): Int = 2
         assert_eq!(methods("Money"), ["cents", "of"]);
         assert_eq!(methods("User"), ["new", "name", "age"]);
         assert_eq!(methods("Twice"), ["n", "new"]);
-        assert!(!k.props.contains(&("Twice".into(), "n".into())), "n is the fun, called with ()");
+        assert!(!info(&m, &k, "Twice", "n").prop, "n is the fun, called with ()");
         let consts: Vec<String> = m.consts.iter().map(|c| format!("{} {} {}", c.1, c.2, c.3)).collect();
         assert_eq!(consts, ["BIG i64 3000000000", "SMALL i32 -5"]);
+    }
+
+    #[test]
+    fn import_kotlin_more() {
+        let src = r#"
+fun describe(x: Int): String = "i"
+fun describe(x: Double): String = "d"
+fun sum(label: String, vararg xs: Int): Int = xs.sum()
+fun bad(vararg xs: Int, label: String): Int = 0
+typealias Meters = Double
+typealias Pred<T> = (T) -> Boolean
+fun walk(d: Meters): Meters = d
+fun Garage.honk(times: Int): Int = times
+fun Int.squared(): Int = this * this
+fun String?.orEmpty2(): String = this ?: ""
+fun List<Int>.total(): Int = sum()
+class Garage(val name: String) {
+    class Car(val wheels: Int) { fun next(): Car = Car(wheels + 1) }
+    enum class Size { SMALL, LARGE }
+    object Rules { fun limit(): Int = 3 }
+    inner class Door(val n: Int)
+    fun park(c: Car, s: Garage.Size): Int = 1
+}
+suspend fun quick(n: Int): Int = n + 1
+"#;
+        let mut p = Parser::default();
+        let toks = lex(&plain_strings(src));
+        p.aliases = aliases(&toks);
+        p.decls(&toks, None, false);
+        let (m, k) = p.finish();
+        let fns: Vec<(&str, Option<&str>)> = m.fns.iter().map(|(_, s)| (s.name.as_str(), s.skip)).collect();
+        assert_eq!(fns, [("describe", None), ("describe", None), ("sum", None), ("bad", Some("a vararg parameter (not the last, or of a type Volt can't pass)")), ("walk", None), ("squared", None), ("quick", None)], "overloads, both");
+        assert_eq!(m.fns[2].1.params[1].1, Some(Ty::Vec(Box::new(Ty::Prim("i32")))));
+        assert_eq!(info(&m, &k, "", "sum").spread, Some("toIntArray()"));
+        assert_eq!(m.fns[4].1.ret, Some(Ty::Prim("f64")), "Meters is Double");
+        assert_eq!(m.aliases, [(vec![], "Meters".to_string(), Ty::Prim("f64"))]);
+        assert!(m.left_out.iter().any(|l| l.starts_with("Pred (a typealias of a type Volt can't name)")), "{:?}", m.left_out);
+        assert!(info(&m, &k, "", "squared").ext && m.fns[5].1.params[0] == ("this".to_string(), Some(Ty::Prim("i32"))));
+        for gone in ["orEmpty2 (an extension of a type Volt can't attach to)", "total (an extension of a type Volt can't attach to)", "Garage.Door (an inner class"] {
+            assert!(m.left_out.iter().any(|l| l.starts_with(gone)), "{gone}: {:?}", m.left_out);
+        }
+        let types: Vec<(&str, Option<&str>)> = m.types.iter().map(|t| (t.name.as_str(), t.rust_name.as_deref())).collect();
+        assert_eq!(types, [("Garage", None), ("Garage_Car", Some("Garage.Car")), ("Garage_Size", Some("Garage.Size")), ("Garage_Rules", Some("Garage.Rules"))]);
+        let methods = |t: &str| m.methods.get(t).map(|ms| ms.iter().map(|s| s.name.clone()).collect::<Vec<_>>()).unwrap_or_default();
+        assert_eq!(methods("Garage"), ["name", "new", "park", "honk"], "honk, an extension, is Garage's");
+        assert_eq!(m.methods["Garage"][2].params, [("c".to_string(), Some(Ty::Named("Garage_Car".into()))), ("s".to_string(), Some(Ty::Named("Garage_Size".into())))], "Car and Garage.Size are the nested types");
+        assert_eq!(m.methods["Garage_Car"].iter().find(|s| s.name == "next").and_then(|s| s.ret.clone()), Some(Ty::Named("Garage_Car".into())));
+        assert_eq!(methods("Garage_Rules"), ["limit"]);
+        assert!(info(&m, &k, "", "quick").suspend);
     }
 }
