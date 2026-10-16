@@ -87,6 +87,74 @@ fn clang_sysroot() -> std::string? {
     return out;
 }
 
+// Windows: libclang's own target is MSVC's, with MSVC's headers, but the program's C and C++ are
+// compiled by MinGW's gcc or llvm-mingw's clang (libstdc++ or libc++, the GNU ABI), so libclang
+// parses for that compiler's target, with its include directories; found once a process each
+var c_view: std::vec<std::string> = {};
+var cxx_view: std::vec<std::string> = {};
+
+// what libclang adds to see what $CC (or, cxx, $CXX) sees: --target=its triple, its C++ library's
+// directories ahead of libclang's own headers and its C library's after them (its own builtin
+// headers are libclang's to give), the defaults off. Empty when the compiler doesn't answer
+fn compiler_view(cxx: bool) -> std::vec<std::string> {
+    var view: std::vec<std::string> = {};
+    var argv: std::vec<str> = {};
+    var lang = "c";
+    if (cxx) {
+        cxx_command(&argv);
+        lang = "c++";
+    } else {
+        c_command(&argv);
+    }
+    var ask = copy argv;
+    put(&ask, "-dumpmachine");
+    val m = std::process::capture(ask.items(), "") catch |e| {
+        return view;
+    };
+    if (m.code != 0) {
+        return view;
+    }
+    put(&view, fmt("--target={}", S(m.out.as_str().trim())));
+    put(&view, S("-nostdlibinc"));
+    put(&view, S("-nostdinc++"));
+    // `cc -E -v -x c -` on no input lists the directories between these lines, one a line
+    var list = copy argv;
+    put(&list, "-E");
+    put(&list, "-v");
+    put(&list, "-x");
+    put(&list, lang);
+    put(&list, "-");
+    val r = std::process::capture(list.items(), "") catch |e| {
+        return view;
+    };
+    var inside = false;
+    val lines = r.err.as_str().lines();
+    for (line) in lines.items() {
+        val l = line.trim();
+        if (starts_with(l, "#include <...> search starts here")) {
+            inside = true;
+        } else if (starts_with(l, "End of search list")) {
+            inside = false;
+        } else if (inside) {
+            var dir = S(l);
+            for (k) in 0..dir.len() {
+                if (*dir.bytes.at(k) == '\\') {
+                    *dir.bytes.at(k) = '/';
+                }
+            }
+            val d = dir.as_str();
+            if (contains(d, "/c++")) {
+                put(&view, S("-isystem"));
+                put(&view, copy dir);
+            } else if (!contains(d, "/lib/gcc/") && !contains(d, "/lib/clang/")) {
+                put(&view, S("-idirafter"));
+                put(&view, copy dir);
+            }
+        }
+    }
+    return view;
+}
+
 // `text` parsed as the file `name`, with args (-x c++, -std=..., -I...); declarations only
 fn clang_parse(name: str, text: str, args: std::vec<str>&) -> clang_tu {
     // CXTranslationUnit_SkipFunctionBodies: the declarations are all that's read
@@ -105,6 +173,27 @@ fn clang_parse_opts(name: str, text: str, args: std::vec<str>&, opts: u32) -> cl
     if (sdk) {
         put(&owned, S("-isysroot"));
         put(&owned, copy sdk);
+    }
+    comptime if (@cfg("os", "windows")) {
+        var cxx = false;
+        for (a&) in args.items() {
+            cxx = cxx || *a == "c++";
+        }
+        if (cxx) {
+            if (cxx_view.len == 0) {
+                cxx_view = compiler_view(true);
+            }
+            for (v&) in cxx_view.items() {
+                put(&owned, copy *v);
+            }
+        } else {
+            if (c_view.len == 0) {
+                c_view = compiler_view(false);
+            }
+            for (v&) in c_view.items() {
+                put(&owned, copy *v);
+            }
+        }
     }
     for (a&) in args.items() {
         put(&owned, S(*a));

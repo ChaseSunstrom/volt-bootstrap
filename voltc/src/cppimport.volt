@@ -5672,8 +5672,8 @@ attach fn header_dir(this: checker&, span: span) -> str? {
     }
     var slash: usize? = null;
     for (i) in 0..file.len {
-        if (file[i] == '/') {
-            slash = i;
+        if (file[i] == '/' || file[i] == '\\') {
+            slash = i; // (Windows names the file with \ too)
         }
     }
     val at = slash ?? return ".";
