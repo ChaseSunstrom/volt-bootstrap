@@ -115,24 +115,29 @@ fn std_linked() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// tests/run/strings_multiline.volt saved with Windows line endings prints the same: a \r\n in a
-/// multi-line string is a \n
 /// std::softfloat's quad routines under compiler-rt's names (what LLVM calls for f128): defined for
-/// arm64 macOS, whose C runtime has none, and nowhere else (they'd clash with libgcc's)
+/// arm64 macOS, whose C runtime has none, and os=none (bare metal, WebAssembly: no C runtime at all),
+/// the same set for both, and nowhere else (they'd clash with libgcc's)
 #[test]
-fn quad_exports_only_on_arm64_macos() {
+fn quad_exports() {
     const NAMES: [&str; 30] = ["__addtf3", "__subtf3", "__multf3", "__divtf3", "__negtf2", "__eqtf2", "__netf2", "__lttf2", "__letf2", "__getf2", "__gttf2", "__unordtf2", "__extendhftf2", "__extendsftf2", "__extenddftf2", "__trunctfhf2", "__trunctfsf2", "__trunctfdf2", "__fixtfsi", "__fixtfdi", "__fixtfti", "__fixunstfsi", "__fixunstfdi", "__fixunstfti", "__floatsitf", "__floatditf", "__floattitf", "__floatunsitf", "__floatunditf", "__floatuntitf"];
     let ir = |cfg: &[&str]| {
         let out = Command::new(common::voltc()).args(["emit-llvm", "tests/run/floats_wide.volt", "--std", "std"]).args(cfg).current_dir(env!("CARGO_MANIFEST_DIR")).output().unwrap();
         assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
         String::from_utf8_lossy(&out.stdout).into_owned()
     };
-    let mac = ir(&["--cfg", "os=macos", "--cfg", "arch=aarch64"]);
-    let missing: Vec<_> = NAMES.iter().filter(|n| !mac.lines().any(|l| l.starts_with("define") && l.contains(&format!("@{n}(")))).collect();
-    assert!(missing.is_empty(), "arm64 macOS doesn't define {missing:?}");
-    let host = ir(&[]);
-    let there: Vec<_> = NAMES.iter().filter(|n| host.lines().any(|l| l.starts_with("define") && l.contains(&format!("@{n}(")))).collect();
-    assert!(there.is_empty(), "the host defines {there:?}");
+    // the quad routines an IR defines: every compiler-rt name with "tf" in it (wasm32's 128-bit
+    // integer ones, __multi3 and the like, have none)
+    let quad = |ir: &str| -> std::collections::BTreeSet<String> {
+        ir.lines().filter(|l| l.starts_with("define")).filter_map(|l| l.split_once("@__")).map(|(_, r)| format!("__{}", r.split('(').next().unwrap())).filter(|n| n.contains("tf")).collect()
+    };
+    let mac = quad(&ir(&["--cfg", "os=macos", "--cfg", "arch=aarch64"]));
+    let want: std::collections::BTreeSet<String> = NAMES.iter().map(|n| n.to_string()).collect();
+    assert_eq!(mac, want, "arm64 macOS's quad routines");
+    let none = quad(&ir(&["--cfg", "os=none", "--cfg", "arch=wasm32"]));
+    assert_eq!(none, mac, "os=none's quad routines differ from arm64 macOS's");
+    let host = quad(&ir(&[]));
+    assert!(host.is_empty(), "the host defines {host:?}");
 }
 
 /// a global set from ~ or ! over constants is a constant in the IR, with no constructor to set it
@@ -202,6 +207,8 @@ fn u128_literals_c() {
     assert!(o.status.success() && got.trim_end() == want, "u128_literals in C printed:\n{got}{}", String::from_utf8_lossy(&o.stderr));
 }
 
+/// tests/run/strings_multiline.volt saved with Windows line endings prints the same: a \r\n in a
+/// multi-line string is a \n
 #[test]
 fn multiline_strings_crlf() {
     let src = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/run/strings_multiline.volt")).unwrap();

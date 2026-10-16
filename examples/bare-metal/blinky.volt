@@ -45,6 +45,9 @@ fn main() -> i32 {
         sum += *v;
     }
     std::println("usize: {} {} map {} {}", @sizeof(usize) == @sizeof(u8*), (~@cast<usize>(0)) +% 1 == 0, squares.len, sum);
+    // f128: no core has it in hardware, std::softfloat's quad routines do it
+    val q = @cast<f128>(*count) / 3.0 + 0.5;
+    std::println("f128: {} {} {}", @cast<f64>(q * q), q > 1.0, @cast<i32>(q * 4.0));
     // 0 when the vec and the box agree
     return @cast<i32>(blinks.len) - @cast<i32>(*count);
 }

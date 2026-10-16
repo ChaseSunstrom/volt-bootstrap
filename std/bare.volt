@@ -618,4 +618,15 @@ namespace bare {
         export fn __floatunsisf(i: u32) -> f32 { return f32_of(std::softfloat::u64_to_f32(false, @cast<u64>(i))); }
         export fn __floatundisf(i: u64) -> f32 { return f32_of(std::softfloat::u64_to_f32(false, i)); }
     }
+
+    // f16 to and from the wider floats, which LLVM calls on every target here (no core has f16
+    // conversions it uses): through f128's exact widening and its one rounding
+    namespace half {
+        public fn of(v: u128) -> f16 { return @bitcast<f16>(std::softfloat::f128_to_f16(v)); }
+        public fn wide(v: f16) -> u128 { return std::softfloat::f16_to_f128(@bitcast<u16>(v)); }
+        export fn __extendhfsf2(x: f16) -> f32 { return @bitcast<f32>(std::softfloat::f128_to_f32(wide(x))); }
+        export fn __extendhfdf2(x: f16) -> f64 { return @bitcast<f64>(std::softfloat::f128_to_f64(wide(x))); }
+        export fn __truncsfhf2(x: f32) -> f16 { return of(std::softfloat::f32_to_f128(@bitcast<u32>(x))); }
+        export fn __truncdfhf2(x: f64) -> f16 { return of(std::softfloat::f64_to_f128(@bitcast<u64>(x))); }
+    }
 }

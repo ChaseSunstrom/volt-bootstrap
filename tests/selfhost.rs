@@ -463,7 +463,7 @@ fn bootstrap_reproduces_itself() {
 
 /// WebAssembly with no C: voltc build --target wasm32-wasi and --target wasm32-none, run under node
 /// (through its WASI, and with the console and exit a page would give), each importing only its
-/// host's functions
+/// host's functions, f128 included
 #[test]
 fn wasm() {
     let have = |t: &str| Command::new(t).arg("--version").output().is_ok_and(|o| o.status.success());
@@ -475,14 +475,16 @@ fn wasm() {
     let dir = root.join("examples/wasm");
     let tmp = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("wasm-{}", std::process::id()));
     std::fs::create_dir_all(&tmp).unwrap();
-    // hello exits with 3; wide checks the 128-bit routines against what it prints natively
-    for (prog, code) in [("hello", 3), ("wide", 0)] {
-        let src = std::fs::read_to_string(dir.join(format!("{prog}.volt"))).unwrap();
+    // hello exits with 3; wide checks the 128-bit routines against what it prints natively, and
+    // f128_ops every f128 operation (std::softfloat's quad routines: no compiler-rt here)
+    for (file, code) in [(dir.join("hello.volt"), 3), (dir.join("wide.volt"), 0), (root.join("tests/run/f128_ops.volt"), 0)] {
+        let prog = file.file_stem().unwrap().to_string_lossy();
+        let src = std::fs::read_to_string(&file).unwrap();
         let want: Vec<&str> = src.lines().filter_map(|l| l.strip_prefix("// expect: ")).collect();
         for (target, kind, imports) in [("wasm32-wasi", "wasi", "wasi_snapshot_preview1."), ("wasm32-none", "none", "env.")] {
             for release in [false, true] {
                 let out = tmp.join(format!("{prog}-{kind}-{release}.wasm"));
-                let b = Command::new(common::voltc()).arg("build").arg(dir.join(format!("{prog}.volt"))).arg("--std").arg(root.join("std")).args(["--target", target, "-o"]).arg(&out).args(release.then_some("--release")).output().unwrap();
+                let b = Command::new(common::voltc()).arg("build").arg(&file).arg("--std").arg(root.join("std")).args(["--target", target, "-o"]).arg(&out).args(release.then_some("--release")).output().unwrap();
                 assert!(b.status.success(), "voltc build --target {target}: {}", String::from_utf8_lossy(&b.stderr));
                 let o = Command::new("node").arg(dir.join("run.mjs")).arg(&out).arg(kind).output().unwrap();
                 let got = String::from_utf8_lossy(&o.stdout);
