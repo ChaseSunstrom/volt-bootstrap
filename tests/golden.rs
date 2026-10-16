@@ -145,15 +145,6 @@ fn global_fold_has_no_constructor() {
     assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
     let ir = String::from_utf8_lossy(&o.stdout);
     assert!(!ir.contains("llvm.global_ctors"), "global_fold's globals are set by a constructor:\n{ir}");
-}
-
-/// a global set from ~ or ! over constants is a constant in the IR, with no constructor to set it
-#[test]
-fn global_fold_has_no_constructor() {
-    let o = Command::new(common::voltc()).args(["emit-llvm", "tests/run/global_fold.volt"]).current_dir(env!("CARGO_MANIFEST_DIR")).output().unwrap();
-    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
-    let ir = String::from_utf8_lossy(&o.stdout);
-    assert!(!ir.contains("llvm.global_ctors"), "global_fold's globals are set by a constructor:\n{ir}");
     // and the C backend writes them (the golden runs use LLVM)
     let src = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/run/global_fold.volt")).unwrap();
     let want = directives(&src, "expect");
