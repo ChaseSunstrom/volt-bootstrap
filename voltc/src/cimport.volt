@@ -1116,10 +1116,19 @@ fn is_param_word(n: str) -> bool {
 
 // does the `(` here start a parameter list (rather than a nested declarator)?
 attach fn starts_params(this: cparser&) -> bool {
-    if (this.i + 1 >= this.t.len) {
+    // an attribute first says nothing: what follows it does (MinGW's qsort takes an
+    // int (__attribute__((__cdecl__)) *cmp)(...), a nested declarator)
+    var at: cparser = { t: this.t, i: this.i + 1, d: this.d };
+    while ((at.peek_id() ?? "") == "__attribute__" || (at.peek_id() ?? "") == "__attribute") {
+        at.i += 1;
+        if (!at.is("(") || !at.skip_group()) {
+            return false;
+        }
+    }
+    if (at.i >= this.t.len || (at.i > this.i + 1 && at.is("*"))) {
         return false;
     }
-    match (this.t[this.i + 1]) {
+    match (this.t[at.i]) {
         .P(p) => { return p == ")" || p == "..."; },
         .ID(n) => { return this.d.typedefs.get(n) != null || known_typedef(n) != null || is_param_word(n); },
         default => { return false; },

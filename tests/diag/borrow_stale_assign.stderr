@@ -1,0 +1,31 @@
+warning: 's' looks into 'this.items', which was given a new value since: get 's' again after it
+   ┌─ tests/diag/borrow_stale_assign.volt:11:12
+   │
+10 │     this.items = {};
+   │     --------------- given a new value here
+11 │     return s.len;
+   │            ^
+
+warning: 's' looks into 'this.items', which was given a new value since: get 's' again after it
+   ┌─ tests/diag/borrow_stale_assign.volt:16:12
+   │
+15 │     *this = other;
+   │     ------------- given a new value here
+16 │     return s.len;
+   │            ^
+
+warning: 's' looks into 'xs', which was given a new value since: get 's' again after it
+   ┌─ tests/diag/borrow_stale_assign.volt:29:18
+   │
+28 │     xs = ys;
+   │     ------- given a new value here
+29 │     std::println(s.len);
+   │                  ^
+
+warning: 'first' looks into 'zs', which was given a new value since (on the loop's next pass): get 'first' again after it
+   ┌─ tests/diag/borrow_stale_assign.volt:33:22
+   │
+33 │         std::println(first.len);
+   │                      ^^^^^
+34 │         zs = {};
+   │         ------- given a new value here

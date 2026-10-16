@@ -313,6 +313,10 @@ attach fn binary(this: checker&, op: binop, ae: expr&, be: expr&, want: u32?, sp
             operand_want = w;
         }
     }
+    // a literal past i128's maximum on the left is a u128, the one type that holds it
+    if (operand_want == null && past_i128_lit(ae)) {
+        operand_want = int_id(int_ty::U128);
+    }
     // a C enum's value is its number to operators, as in C
     val a = this.c_enum_view(try this.expr(ae, operand_want));
     if (op != binop::EQ && op != binop::NE && this.has_ops(a.ty)) {
@@ -868,6 +872,7 @@ attach fn assign(this: checker&, op: binop?, le: expr&, re: expr&, span: span) -
                 val loc = lo ?? { c: 0, ty: 0, mutable: false };
                 val r = try this.expr(re, l.ty);
                 this.note_store(&l, &r);
+                this.assigned(le, l.ty, span);
                 if (fresh) {
                     this.note_loan(fresh, fresh_name, &r);
                 }
@@ -882,6 +887,8 @@ attach fn assign(this: checker&, op: binop?, le: expr&, re: expr&, span: span) -
         }
         val rr = try this.expr(re, l.ty);
         this.note_store(&l, &rr);
+        // the old value's views first: a view made from it (v = v.next()) is the new value's
+        this.assigned(le, l.ty, span);
         if (fresh) {
             this.note_loan(fresh, fresh_name, &rr);
             this.note_held(fresh, l.ty, re, true);

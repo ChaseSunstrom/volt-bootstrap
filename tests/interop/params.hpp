@@ -3,10 +3,12 @@
 // a result would point into), std::functions over classes (one move-only)
 #pragma once
 #include <functional>
+#include <map>
 #include <memory>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <vector>
 namespace pr {
 inline int sum(const int (&a)[3]) { return a[0] + a[1] + a[2]; }
@@ -114,5 +116,133 @@ inline std::string spell(std::vector<std::vector<signed char>> v) { std::string 
 inline int widen(std::vector<std::vector<int>> &v) { v.push_back(std::vector<int>()); return (int)v.size(); }
 inline int flags(const std::vector<std::vector<bool>> &v) { return (int)v.size(); }
 inline int boxes(const std::vector<std::vector<Shape>> &v) { return (int)v.size(); }
+}
+// std::map / std::unordered_map parameters take a Volt std::map&: each prints C++'s own order (the
+// unordered one copied into a std::map first), beside a stdcxx handle form when there is one; a
+// mutable one keeps its handle form (or stays per use), and one of bools stays per use
+namespace mp {
+template <class M, class F> std::string show(const M &m, F val) { std::string s = "{"; for (auto &kv : m) s += (s.size() > 1 ? "," : "") + kv.first + ":" + val(kv.second); return s + "}"; }
+inline std::string num(int x) { return std::to_string(x); }
+inline std::string dump(const std::map<int, int> &m) { std::string s = "{"; for (auto &kv : m) s += (s.size() > 1 ? "," : "") + num(kv.first) + ":" + num(kv.second); return s + "}"; }
+inline std::string dump_u(std::unordered_map<int, double> m) { std::map<int, double> o(m.begin(), m.end()); std::string s = "{"; for (auto &kv : o) s += (s.size() > 1 ? "," : "") + num(kv.first) + ":" + num((int)(kv.second * 100)); return s + "}"; }
+inline std::string dump_s(const std::map<std::string, int> &m) { return show(m, num); }
+inline std::string dump_ss(const std::map<std::string, std::string> &m) { return show(m, [](const std::string &v) { return "'" + v + "'"; }); }
+inline std::string dump_v(const std::map<int, std::vector<int>> &m) { std::string s = "{"; for (auto &kv : m) { s += (s.size() > 1 ? "," : "") + num(kv.first) + ":["; for (std::size_t i = 0; i < kv.second.size(); i++) s += (i ? "," : "") + num(kv.second[i]); s += "]"; } return s + "}"; }
+inline int dump_rv(std::map<int, int> &&m) { std::map<int, int> mine(std::move(m)); int t = 0; for (auto &kv : mine) t += kv.first * kv.second; return t; }
+using imap = std::map<int, int, std::less<int>>;
+inline std::size_t dump_a(const imap &m) { return m.size(); }
+inline int put_in(std::map<int, int> &m) { m[7] = 7; return (int)m.size(); }
+inline int put_s(std::map<std::string, int> &m) { m["z"] = 7; return (int)m.size(); }
+inline int bits(const std::map<int, std::vector<bool>> &m) { return (int)m.size(); }
+inline int pick_k(const std::map<int, int> &m, int k) { auto i = m.find(k); if (i == m.end()) throw std::out_of_range("no key"); return i->second; }
+// const& beside &&: one Volt std::map& form for the two
+inline int both(const std::map<int, int> &) { return 1; }
+inline int both(std::map<int, int> &&) { return 2; }
+// results that would point into the map's copy: not declared with a Volt std::map& (the handle
+// forms stay)
+inline const int *find(const std::map<int, int> &m, int k) { return &m.find(k)->second; }
+inline std::string_view key0(const std::map<std::string, int> &m) { return m.begin()->first; }
+inline const std::vector<int> &row0(const std::map<int, std::vector<int>> &m) { return m.begin()->second; }
+}
+// calls worked out per use that throw (cpp_params_try.volt): their try_ forms catch, a std::string&
+// left as it was; a try_ name the header declares itself keeps it
+namespace pu {
+template <class... A> int checked(A... a) {
+    int s = (0 + ... + a);
+    if (s < 0) throw std::invalid_argument("negative sum");
+    return s;
+}
+template <class... A> int stretch(std::string &s, A... n) {
+    s += "~";
+    int k = (0 + ... + n);
+    if (k < 0) throw std::out_of_range("short");
+    s.append(k, '+');
+    return (int)s.size();
+}
+template <class... A> void boom(A... a) {
+    if (sizeof...(a) > 1) throw std::length_error("too many");
+}
+template <class... A> int twin(A... a) { return (0 + ... + a); }
+inline int try_twin(int x) { return -x; }
+// declared, not per use: a try_ name the header declares beside a throwing function keeps it too
+inline int sole(int x) {
+    if (x < 0) throw std::invalid_argument("negative sole");
+    return x;
+}
+inline int try_sole(int x) { return -x; }
+struct Gauge {
+    int v = 1;
+    int read(int k) {
+        if (k < 0) throw std::domain_error("negative read");
+        return v + k;
+    }
+    int try_read(int k) { return -k; }
+};
+inline int nonneg(int x) {
+    if (x < 0) throw std::invalid_argument("negative");
+    return x;
+}
+// held by handle, its members worked out per use: x.try_m(...) and T::try_new(...) catch too
+template <class T> class Keep {
+    T v_;
+  public:
+    explicit Keep(T v) : v_(v) {
+        if (v < 0) throw std::domain_error("negative keep");
+    }
+    Keep(std::string &s, T v) : v_(v) {
+        s += "~";
+        if (v < 0) throw std::domain_error("negative keep");
+    }
+    T take(int k) const {
+        if (k < 0) throw std::out_of_range("no take");
+        return v_ + k;
+    }
+    T grow(std::string &s, int k) const {
+        s += "~";
+        if (k < 0) throw std::out_of_range("no grow");
+        s.append(k, '+');
+        return v_ + k;
+    }
+};
+// one name declared (pick(int)) and worked out per use (the template): try_pick catches either
+inline int pick(int x) {
+    if (x < 0) throw std::invalid_argument("negative pick");
+    return x;
+}
+template <class... A> int pick(A... a) {
+    int s = (0 + ... + a);
+    if (s < 0) throw std::range_error("negative picks");
+    return s;
+}
+}
+// a Volt reference reaches a call worked out per use (a variadic template, a function beside a
+// parameter with no Volt form) as an lvalue of what it names (f(x)), and as its address (f(&x)) only
+// when no call takes the lvalue: T*, a template's T* deducing T; a declared template's S deduced
+// from a reference is what it names
+namespace rp {
+typedef std::vector<std::vector<bool>> skips;
+template <class T, class... A> T deref(T *p, A...) { *p += 1; return *p; }
+inline int sum_ptr(int *p, int n, const skips &s = skips()) { int t = 0; for (int i = 0; i < n; i++) t += p[i]; return t + (int)s.size(); }
+inline int which(int &, const skips & = skips()) { return 1; }
+inline int which(int *, const skips & = skips()) { return 2; }
+inline int mixed(int &a, int *b, const skips & = skips()) { return a + *b; }
+template <class T, class... A> T checked(T *p, A...) {
+    if (*p < 0) throw std::invalid_argument("negative pointee");
+    return *p;
+}
+template <class S> int size_of(S &) { return (int)sizeof(S); }
+template <class S> int size_by(S) { return (int)sizeof(S); }
+template <class S> void twice_ref(S &s) { s *= 2; }
+struct pt { int x; int y; };
+// a class template held by handle, its members worked out per use: a pointer argument beside the
+// receiver, of an & method, an && one (which consumes the handle) and an operator
+template <class T> class Tally {
+    T v_;
+  public:
+    Tally(T v) : v_(v) {}
+    T add(T *p) { *p += v_; return *p; }
+    T spend(T *p) && { *p += 2 * v_; return *p; }
+    T operator+(T *p) const { return v_ + *p; }
+};
 }
 }

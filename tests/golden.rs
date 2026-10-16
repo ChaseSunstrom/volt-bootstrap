@@ -147,6 +147,21 @@ fn global_fold_has_no_constructor() {
     assert!(!ir.contains("llvm.global_ctors"), "global_fold's globals are set by a constructor:\n{ir}");
 }
 
+/// a global set from ~ or ! over constants is a constant in the IR, with no constructor to set it
+#[test]
+fn global_fold_has_no_constructor() {
+    let o = Command::new(common::voltc()).args(["emit-llvm", "tests/run/global_fold.volt"]).current_dir(env!("CARGO_MANIFEST_DIR")).output().unwrap();
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let ir = String::from_utf8_lossy(&o.stdout);
+    assert!(!ir.contains("llvm.global_ctors"), "global_fold's globals are set by a constructor:\n{ir}");
+    // and the C backend writes them (the golden runs use LLVM)
+    let src = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/run/global_fold.volt")).unwrap();
+    let want = directives(&src, "expect");
+    let o = Command::new(common::voltc()).args(["run", "tests/run/global_fold.volt", "--backend", "c"]).current_dir(env!("CARGO_MANIFEST_DIR")).output().unwrap();
+    let got = String::from_utf8_lossy(&o.stdout);
+    assert!(o.status.success() && got.lines().collect::<Vec<_>>() == want, "global_fold in C printed:\n{got}{}", String::from_utf8_lossy(&o.stderr));
+}
+
 /// f128 in C where the compiler has no quad type (arm64 macOS): the C spells every f128 operation
 /// volt_q_*, which -DVOLT_SOFT_F128 turns into calls to the quad routines (here libgcc's), so the
 /// programs print what they print natively; and arm64 macOS's C compiles, std's quad_rt defining
@@ -186,6 +201,17 @@ fn f128_soft_c() {
         assert!(["___addtf3", "___multf3", "___lttf2", "___extendhftf2"].iter().all(|n| defined.lines().any(|l| l == *n)), "arm64 macOS's C defines no quad routines:\n{defined}");
     }
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// u128 literals past i128's maximum through the C backend too (golden runs them through LLVM)
+#[test]
+fn u128_literals_c() {
+    let file = "tests/run/u128_literals.volt";
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let o = Command::new(common::voltc()).args(["run", file, "--backend", "c"]).current_dir(root).output().unwrap();
+    let got = String::from_utf8_lossy(&o.stdout);
+    let want = directives(&std::fs::read_to_string(root.join(file)).unwrap(), "expect").join("\n");
+    assert!(o.status.success() && got.trim_end() == want, "u128_literals in C printed:\n{got}{}", String::from_utf8_lossy(&o.stderr));
 }
 
 #[test]

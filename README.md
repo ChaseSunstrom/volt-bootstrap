@@ -88,6 +88,8 @@ fn main() -> !void {
   JIT, with host functions, sandboxes, and C, C++, Rust and Python bindings.
 - **Bare metal with no C at all**: `--target riscv32-none`, `riscv64-none`, `thumbv6m-none`,
   `thumbv7m-none` or `thumbv7em-none` builds through LLVM and ld.lld with no C compiler, libc or C runtime.
+- **WebAssembly, no C either**: `--target wasm32-wasi` for WASI hosts (node, wasmtime) and
+  `wasm32-none` for web pages, linked by wasm-ld.
 - **A standard library** with collections, text, JSON, files, processes, networking, threads,
   allocators you choose per container, hashing and encodings.
 - **Interop**: real C headers (unions and bitfields too), C++ classes, templates and the standard

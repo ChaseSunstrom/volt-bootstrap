@@ -1,0 +1,31 @@
+warning: 'f' uses 's', which looks into 'xs', changed since by push
+   ┌─ tests/diag/borrow_stale_closure.volt:13:18
+   │
+12 │     xs.push(2) catch @panic("out of memory");
+   │     ---------- xs.push may move or free them here
+13 │     std::println(f());
+   │                  ^
+
+warning: 't' looks into 'ys', whose items may have moved or been freed since: get 't' again after the change
+   ┌─ tests/diag/borrow_stale_closure.volt:18:18
+   │
+17 │     grow();
+   │     ------ grow() calls ys.push here, which may move or free them
+18 │     std::println(t.len);
+   │                  ^
+
+warning: 'g' uses 'w', which looks into 'ws', changed since by push (on the loop's next pass)
+   ┌─ tests/diag/borrow_stale_closure.volt:28:22
+   │
+28 │         std::println(g());
+   │                      ^
+29 │         ws.push(k) catch @panic("out of memory");
+   │         ---------- ws.push may move or free them here
+
+warning: 'v' looks into 'vs', which was given a new value since (on the loop's next pass): get 'v' again after it
+   ┌─ tests/diag/borrow_stale_closure.volt:35:22
+   │
+35 │         std::println(v.len);
+   │                      ^
+36 │         more();
+   │         ------ more() gives vs a new value here

@@ -1,10 +1,14 @@
 // The borrow warnings, which never stop a build. A view is a local holding a slice, str, reference,
-// pointer or iterator that a method gave out of a local container it took by reference
-// (`val s = xs.items()`): the view has a loan on the container. A call to a method std marks
-// @invalidates (push, insert, reserve, clear...) on the container may move or free its storage, so
-// the views into it go stale; using a stale view warns. A view is stale on the paths where such a
-// call came after it: its id with STALE set rides in cx.moved, so every merge the move checker does
-// (ifs, matches, loops, breaks) applies to stale views too.
+// pointer or iterator that a method gave out of a container it took by reference, a local or a
+// chain of its fields (`val s = xs.items()`, `this.items.items()`): the view has a loan on that
+// place. A change at a place reaches the views into it and its fields: a call to a method std marks
+// @invalidates (push, insert, reserve, clear...), which may move or free the storage, or a new value
+// (`xs = ys`) when the old value had something to delete. The views it reaches go stale; using a
+// stale view warns. A view is stale on the paths where such a change came after it: its id with
+// STALE set rides in cx.moved, so every merge the move checker does (ifs, matches, loops, breaks)
+// applies to stale views too. A closure held in a
+// local is followed where it's called by that name: one that captured a view has the view's loan,
+// and one whose body changes a captured container makes that change at each call.
 
 val STALE: u32 = 2147483648;
 
@@ -33,59 +37,232 @@ attach fn invalidates(this: checker&, inst: u32) -> bool {
     return false;
 }
 
-// inst is called on the container at place owner (named name): when it may move or free the
-// container's storage, the views into it go stale, and a for loop going over its items is warned
-// about here
-attach fn invalidate(this: checker&, inst: u32, owner: u32, span: span) -> void {
+// the place e names when it's a local or a chain of its fields (`xs`, `this.items`; `*this` is
+// this), else null
+attach fn place_at_of(this: checker&, e: expr&) -> place_at? {
+    match (e.kind) {
+        .UNARY(op, x) => {
+            if (op == unop::DEREF) {
+                return this.place_at_of(x);
+            }
+        },
+        .PATH(p&) => {
+            if (p.is_single()) {
+                val name = p.segs.at(0).name;
+                val l = this.lookup_local(name) ?? return null;
+                return { root: l.own ?? l.c, path: "", name: name };
+            }
+        },
+        .THIS => {
+            val l = this.lookup_local("this") ?? return null;
+            return { root: l.own ?? l.c, path: "", name: "this" };
+        },
+        .FIELD(b, n, gargs) => {
+            if (gargs != null) {
+                return null;
+            }
+            val pb = this.place_at_of(b) ?? return null;
+            var path = S(pb.path);
+            path.push('.');
+            path.append(n);
+            var name = S(pb.name);
+            name.push('.');
+            name.append(n);
+            return { root: pb.root, path: this.place_name(move path), name: this.place_name(move name) };
+        },
+        default => {},
+    }
+    return null;
+}
+
+// s, kept once however often it's named (place_at_of runs for each method call and assignment)
+attach fn place_name(this: checker&, s: std::string) -> str {
+    val got = this.place_names.get(s.as_str());
+    if (got) {
+        return *got;
+    }
+    val k = this.intern(move s);
+    this.place_names.put(k, k);
+    return k;
+}
+
+// does a change at place p reach what's at place q: q is p or a field of it (a change at this.b
+// leaves this.a alone, and a field written leaves the views its container's methods gave)
+fn covers(p: place_at&, q: place_at&) -> bool {
+    if (p.root != q.root || !q.path.starts_with(p.path)) {
+        return false;
+    }
+    return q.path.len == p.path.len || q.path[p.path.len] == '.';
+}
+
+// a change at place p, at span: a call of the method what that may move or free its storage, or a
+// new value when what is "" (via: the closure whose call makes it). The views into p or a field of
+// it go stale, closures using one too; in a closure's body, a change at a captured container is kept
+// for the closure's calls
+attach fn changed(this: checker&, p: place_at&, what: str, via: str?, span: span) -> void {
+    if (this.cx.dead > 0) {
+        return;
+    }
+    for (e) in this.cx.loans.iter() {
+        if (covers(p, &e.value->owner)) {
+            this.cx.moved.add(*e.key | STALE);
+            this.cx.stale_notes.put(*e.key, { span: span, at: p.name, what: what, via: via });
+        }
+    }
+    val outer = this.cx.cap_roots.get(p.root);
+    if (outer) {
+        put(&this.cx.cap_changes, { at: { root: *outer, path: p.path, name: p.name }, what: what });
+    }
+}
+
+// the place e names (of type t) was given a new value at span: when the old one had something to
+// delete, the views into it look at what's gone. Plain data or a view given another (a reference
+// pointed elsewhere) frees nothing: the views made through it look into what it held, which it no
+// longer names, so they're no longer its
+attach fn assigned(this: checker&, e: expr&, t: u32, span: span) -> void {
+    val p = this.place_at_of(e) ?? return;
+    if (this.needs_drop(t) catch false) {
+        this.changed(&p, "", null, span);
+        return;
+    }
+    var gone: std::vec<u32> = {};
+    for (en) in this.cx.loans.iter() {
+        if (covers(&p, &en.value->owner)) {
+            put(&gone, *en.key);
+        }
+    }
+    for (k&) in gone.items() {
+        this.cx.loans.remove(*k);
+        this.cx.moved.remove(*k | STALE);
+    }
+}
+
+// inst is called on the container at place owner: when it may move or free the container's storage,
+// the views into it go stale, and a for loop going over its items is warned about here
+attach fn invalidate(this: checker&, inst: u32, owner: place_at&, span: span) -> void {
     if (this.cx.dead > 0 || !this.invalidates(inst)) {
         return;
     }
-    val name = this.local_at(owner);
     // the method's own name (the instance's has its generic arguments)
     var what = this.fi(inst).name;
     val fd = this.fn_decl_of(this.fi(inst).decl);
     if (fd) {
         what = fd->name;
     }
-    for (e) in this.cx.loans.iter() {
-        if (e.value->owner == owner) {
-            this.cx.moved.add(*e.key | STALE);
-            this.cx.stale_notes.put(*e.key, { span: span, what: what });
-        }
-    }
+    this.changed(owner, what, null, span);
     for (it&) in this.cx.iterating.items() {
-        if (it.owner == owner) {
-            var msg = S(name);
+        if (covers(owner, &it.owner)) {
+            var msg = S(owner.name);
             msg.push('.');
             msg.append(what);
             msg.append(" inside a loop over ");
-            msg.append(name);
+            msg.append(it.owner.name);
             msg.append("'s items: the loop goes on over the old ones, which this may move or free; collect the changes and make them after the loop");
             var d: diag = { span: span, msg: move msg, warning: true };
-            put(&d.labels, { span: it.span, msg: fmt("the loop over {}", S(name)) });
+            put(&d.labels, { span: it.span, msg: fmt("the loop over {}", S(it.owner.name)) });
             put(&this.warnings, move d);
         }
     }
 }
 
+// f(...) at span, where callee names a closure held in a local: a view it uses that's stale warns,
+// and the changes its body makes at captured containers are made here. (A closure passed away, or
+// reached another way, isn't followed.)
+attach fn called_closure(this: checker&, callee: expr&, span: span) -> void {
+    var name = "";
+    match (callee.kind) {
+        .PATH(p&) => {
+            if (!p.is_single()) {
+                return;
+            }
+            name = p.segs.at(0).name;
+        },
+        default => { return; },
+    }
+    val l = this.lookup_local(name) ?? return;
+    val ln = this.cx.loans.get(l.c);
+    if (ln != null && ln->uses != null) {
+        this.read_loan(&l, callee.span);
+    }
+    match (*this.t.get(l.ty)) {
+        .CLOSURE(id) => {
+            val n = this.ci(id).changes.len;
+            for (i) in 0..n {
+                val ch = *this.ci(id).changes.at(i);
+                this.changed(&ch.at, ch.what, name, span);
+            }
+        },
+        default => {},
+    }
+}
+
+// v, a closure capturing caps: when one is a view, the closure has its loan
+attach fn closure_loan(this: checker&, v: tval&, caps: std::vec<capture>&) -> void {
+    for (c&) in caps.items() {
+        val l = this.lookup_local(c.name);
+        if (l) {
+            val ln = this.cx.loans.get(l.c);
+            if (ln != null && ln->uses == null) {
+                // ponytail: one loan per closure; one using views of two containers is followed for the first
+                v.loan = ln->owner;
+                v.loan_uses = c.name;
+                if (c.mode == cap_mode::REF) {
+                    v.loan_uses_at = l.c;
+                }
+                return;
+            }
+        }
+    }
+}
+
 // the local at place c (named name) was just given v: when v looks into a container, the local is a
-// fresh view of it (not stale); otherwise it's no view
+// fresh view of it (not stale); otherwise it's no view. A closure that captured it by reference sees
+// the new value too
 attach fn note_loan(this: checker&, c: u32, name: str, v: tval&) -> void {
+    this.fresh_loan(c, v.loan);
+    var gone: std::vec<u32> = {};
+    for (e) in this.cx.loans.iter() {
+        if (e.value->uses_at != null && (e.value->uses_at ?? 0) == c) {
+            put(&gone, *e.key);
+        }
+    }
+    for (k&) in gone.items() {
+        this.fresh_loan(*k, v.loan);
+    }
+    if (v.loan == null) {
+        return;
+    }
+    this.cx.loans.put(c, { owner: v.loan ?? { root: 0, path: "", name: "" }, view_name: name, uses: v.loan_uses, uses_at: v.loan_uses_at });
+}
+
+// the view (or closure using one) at place c is fresh: not stale, on the loop's next pass either;
+// it looks into owner now, or is no view when that's null
+attach fn fresh_loan(this: checker&, c: u32, owner: place_at?) -> void {
     this.cx.moved.remove(c | STALE);
-    // a view given a new value in a loop isn't read stale on the loop's next pass
     for (i) in 0..this.cx.loops.len {
         this.cx.loops.at(i).fresh_views.add(c);
     }
-    if (v.loan == null) {
+    if (owner == null) {
         this.cx.loans.remove(c);
         return;
     }
-    this.cx.loans.put(c, { owner: v.loan ?? 0, owner_name: v.loan_name ?? "it", view_name: name });
+    val ln = this.cx.loans.get(c);
+    if (ln) {
+        ln->owner = owner ?? { root: 0, path: "", name: "" };
+    }
 }
 
 // a read of the local l at span: when it's a view, warn if it may be stale, and keep the read for the
-// back edges of the loops around it that it was made before
+// back edges of the loops around it that it was made before. (A closure using a view is checked
+// where it's called, by called_closure.)
 attach fn read_view(this: checker&, l: local&, span: span) -> void {
+    val ln = this.cx.loans.get(l.c) ?? return;
+    if (ln->uses == null) {
+        this.read_loan(l, span);
+    }
+}
+
+attach fn read_loan(this: checker&, l: local&, span: span) -> void {
     if (this.cx.loans.get(l.c) == null) {
         return;
     }
@@ -120,17 +297,66 @@ attach fn warn_stale(this: checker&, c: u32, span: span, next_pass: bool) -> voi
     if (!this.warned_views.add(c)) {
         return;
     }
-    var msg = fmt2("'{}' looks into '{}', whose items may have moved or been freed since", S(ln->view_name), S(ln->owner_name));
-    if (next_pass) {
-        msg.append(" (on the loop's next pass)");
-    }
-    msg.append(": get '");
-    msg.append(ln->view_name);
-    msg.append("' again after the change");
-    var d: diag = { span: span, msg: move msg, warning: true };
     val note = this.cx.stale_notes.get(c);
+    var what = "";
     if (note) {
-        put(&d.labels, { span: note->span, msg: fmt2("{}.{} may move or free them here", S(ln->owner_name), S(note->what)) });
+        what = note->what;
+    }
+    val renewed = note != null && what == "";
+    var msg: std::string = {};
+    if (ln->uses) {
+        // a closure using the view
+        msg = fmt2("'{}' uses '{}', which looks into '", S(ln->view_name), S(ln->uses ?? ""));
+        msg.append(ln->owner.name);
+        if (renewed) {
+            msg.append("', given a new value since");
+        } else {
+            msg.append("', changed since by ");
+            msg.append(what);
+        }
+        if (next_pass) {
+            msg.append(" (on the loop's next pass)");
+        }
+    } else {
+        msg = fmt2("'{}' looks into '{}', ", S(ln->view_name), S(ln->owner.name));
+        if (renewed) {
+            msg.append("which was given a new value since");
+        } else {
+            msg.append("whose items may have moved or been freed since");
+        }
+        if (next_pass) {
+            msg.append(" (on the loop's next pass)");
+        }
+        msg.append(": get '");
+        msg.append(ln->view_name);
+        if (renewed) {
+            msg.append("' again after it");
+        } else {
+            msg.append("' again after the change");
+        }
+    }
+    var d: diag = { span: span, msg: move msg, warning: true };
+    if (note) {
+        var lm: std::string = {};
+        if (note->via) {
+            lm = fmt("{}() ", S(note->via ?? ""));
+            if (renewed) {
+                lm.append("gives ");
+                lm.append(note->at);
+                lm.append(" a new value here");
+            } else {
+                lm.append("calls ");
+                lm.append(note->at);
+                lm.push('.');
+                lm.append(what);
+                lm.append(" here, which may move or free them");
+            }
+        } else if (renewed) {
+            lm = S("given a new value here");
+        } else {
+            lm = fmt2("{}.{} may move or free them here", S(note->at), S(what));
+        }
+        put(&d.labels, { span: note->span, msg: move lm });
     }
     put(&this.warnings, move d);
 }
@@ -138,7 +364,7 @@ attach fn warn_stale(this: checker&, c: u32, span: span, next_pass: bool) -> voi
 // v, what a call of inst on the container at place owner gave: a view of it when the method gives
 // out a view in its own right (a reference, pointer, slice, str or iterator; not one of its generic
 // parameters, such as pop's T, which is a value whatever it holds)
-attach fn lent_by(this: checker&, v: tval, inst: u32, owner: u32?) -> tval {
+attach fn lent_by(this: checker&, v: tval, inst: u32, owner: place_at?) -> tval {
     if (owner == null || !this.is_view(v.ty)) {
         return v;
     }
@@ -156,7 +382,6 @@ attach fn lent_by(this: checker&, v: tval, inst: u32, owner: u32?) -> tval {
     }
     var r = v;
     r.loan = owner;
-    r.loan_name = this.local_at(owner ?? 0);
     return r;
 }
 

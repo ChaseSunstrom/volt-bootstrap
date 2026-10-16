@@ -725,7 +725,8 @@ attach fn q_fold(this: cgen&, n: u32) -> u128? {
             }
         },
         .INT(v) => {
-            if (v >= -9007199254740992 && v <= 9007199254740992 && (fb >= 64 || this.c.t.int_of(t) != null)) {
+            // a u128's bits past i128's maximum are a value no f64 holds exactly
+            if (v >= -9007199254740992 && v <= 9007199254740992 && !(v < 0 && t == int_id(int_ty::U128)) && (fb >= 64 || this.c.t.int_of(t) != null)) {
                 return std::softfloat::f64_to_f128(@bitcast<u64>(@cast<f64>(v)));
             }
         },

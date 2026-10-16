@@ -72,6 +72,78 @@ fn main() -> void {
     var w1: i8[3] = { 121, 111, 117 };
     var ws: i8[..][3] = { w0[0..2], w1[0..0], w1[0..3] };
     std::println("nested {} {} {}", cpp::pr::nv::shape_rv(rs[1..3]), cpp::pr::nv::weigh(ds[0..2]), cpp::pr::nv::spell(ws[0..3]));
+    // std::map / std::unordered_map take a Volt std::map&: C++ gets a copy (by value, const&, &&,
+    // through an alias), the Volt map unchanged; C++ prints in its own order
+    var m: std::map<i32, i32> = {};
+    m.put(3, 30);
+    m.put(1, 10);
+    m.put(2, 20);
+    val none: std::map<i32, i32> = {};
+    var u: std::map<i32, f64> = {};
+    u.put(5, 0.5);
+    u.put(4, 1.25);
+    std::println("map {} {} {} {} {} {}", cpp::pr::mp::dump(&m), cpp::pr::mp::dump(&none), cpp::pr::mp::dump_u(&u), cpp::pr::mp::dump_rv(&m), cpp::pr::mp::dump_a(&m), m.len);
+    var s: std::map<std::string, i32> = {};
+    s.put(std::string::from("b"), 2);
+    s.put(std::string::from("a"), 1);
+    var ss: std::map<std::string, std::string> = {};
+    ss.put(std::string::from("k"), std::string::from("v w"));
+    ss.put(std::string::from(""), std::string::from(""));
+    var v: std::map<i32, std::vec<i32>> = {};
+    var v1: std::vec<i32> = {};
+    v1.push(4) catch |e| { return; };
+    v1.push(5) catch |e| { return; };
+    v.put(2, move v1);
+    v.put(1, {});
+    std::println("map {} {} {}", cpp::pr::mp::dump_s(&s), cpp::pr::mp::dump_ss(&ss), cpp::pr::mp::dump_v(&v));
+    std::println("map {} {} {} {} {}", cpp::pr::mp::dump(&m), cpp::pr::mp::dump_v(&v), s.len, ss.len, v.len);
+    // the handle forms beside them: a stdcxx::map C++ changes (put_in) and reads (dump)
+    var hm: cpp::stdcxx::map<i32, i32> = {};
+    std::println("map {} {} {}", cpp::pr::mp::put_in(&hm), cpp::pr::mp::dump(&hm), cpp::pr::mp::both(&m));
+    picked(&m, 2);
+    picked(&m, 9);
+    // a Volt reference per use: an lvalue of what it names first, its address when no call takes
+    // that (T*: of a variable, an element, a field, written through), a template's S what it names
+    var rx: i32 = 4;
+    var ra: i32[3] = { 1, 2, 3 };
+    var rq: cpp::pr::rp::pt = { x: 5, y: 6 };
+    val d1 = cpp::pr::rp::deref(&rx);
+    val d2 = cpp::pr::rp::deref(&ra[1]);
+    val d3 = cpp::pr::rp::deref(&rq.y);
+    std::println("deref {} {} {} {} {} {}", d1, rx, d2, ra[1], d3, rq.y);
+    // of f(int&) and f(int*), &x calls f(int&) and a Volt i32* f(int*)
+    val rp: i32* = &rx;
+    std::println("sum_ptr {} size {} {} {} which {} {}", cpp::pr::rp::sum_ptr(&ra[0], 3), cpp::pr::rp::size_of(&rx), cpp::pr::rp::size_by(&rx), cpp::pr::rp::size_of(&rq), cpp::pr::rp::which(&rx), cpp::pr::rp::which(rp));
+    checked_at(&rx);
+    rx = -1;
+    checked_at(&rx);
+    // a declared template's S& with S an i32& (its a0: S, so &a0 a reference to the reference): C++
+    // changes the Volt variable
+    var rt: i32 = 21;
+    cpp::pr::rp::twice_ref(&rt);
+    // a method's pointer argument beside its receiver: an & method, an operator, an && one
+    var tz: i32 = 1;
+    val ty = cpp::pr::rp::Tally<i32>::new(3);
+    val t1 = ty.add(&tz);
+    val t2 = ty.op_add(&tz);
+    val t3 = ty.spend(&tz);
+    std::println("twice {} tally {} {} {} {}", rt, t1, t2, t3, tz);
+}
+// a Volt reference parameter read as its address, in a try_ form
+fn checked_at(r: i32&) -> void {
+    val n = cpp::pr::rp::try_checked(r) catch |e| {
+        std::println("checked {}: {}", *r, e);
+        return;
+    };
+    std::println("checked {}: {}", *r, n);
+}
+// a try_ form taking a Volt std::map: C++'s throw an error
+fn picked(m: std::map<i32, i32>&, k: i32) -> void {
+    val n = cpp::pr::mp::try_pick_k(m, k) catch |e| {
+        std::println("pick {}: {}", k, e);
+        return;
+    };
+    std::println("pick {}: {}", k, n);
 }
 // a throwing template leaves the Volt string as it was
 fn grown_t(t: std::string&, k: i32) -> void {

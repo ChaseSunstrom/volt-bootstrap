@@ -205,6 +205,15 @@ A call C++ rejects is an error at the Volt call, in clang's words: `cpp::algo::h
 (`@cpp("{0} * {1}", 4, 1.5)`) is worked out the same way. A macro's result comes back by value; a
 function's reference result stays a reference, as it does for a declared function.
 
+A Volt reference (`&x`, `&arr[0]`, `&s.f`, a `T&` parameter) reaches clang as the object it names,
+as C++'s `f(x)` would: an `int&` parameter binds it, and a template's `S` (`S&` or `S`) deduces
+`int`, not `int *`. Only when no call takes it that way is it read as its address, as `f(&x)`:
+an `int*` parameter, or `template <class T> T deref(T* p)` deducing `T = int`, gets the address the
+reference holds, so C++ writes through to the Volt object. A call reads all its reference arguments
+one way: one wanting an `int&` beside another wanting an `int*` isn't taken, and the error is the
+first reading's. So when a name has both `f(T&)` and `f(T*)`, `f(&x)` calls `f(T&)`; pass a Volt
+`T*` (`val p: i32* = &x;`) to call `f(T*)`.
+
 ## The standard library, operators and exceptions
 
 Signatures that use the standard library's strings, vectors and smart pointers map to Volt's:
@@ -260,8 +269,9 @@ fn main() -> void {
 | `std::vector<T>` parameters (by value, `const&`) | `T[..]` |
 | nested `std::vector` parameters (by value, `const&`), `std::vector<std::vector<int>>` | `i32[..][..]`, to any depth, each level copied; the innermost element a number or a `char` (one of `bool`s or of a class is [per use](#calls-worked-out-per-use)) |
 | a `std::vector<T>` result (`T` a plain value) | `std::vec<T>` (a copy) |
+| `std::map<K, V>`, `std::unordered_map<K, V>` parameters (by value, `const&`, `&&`; the default comparator, hash and allocator, written out or not, through an alias too) | `std::map<K, V>&`: C++ gets a copy of the Volt map's entries, the Volt map unchanged; a function whose result could point into that copy (a view, a pointer, a reference) has no such form. `K` and `V` a number, `bool` or `char`, a `std::string` (from a Volt `std::string`) or a `std::vector` of numbers or `char`s (from a `std::vec`). A map C++ can also hold by handle (`std::map<int, int>`) keeps that form beside it, an overload taking a `stdcxx::map<i32, i32>`. A mutable `std::map&`, or one with another order (`std::greater<int>`), keeps its handle form, or is [per use](#calls-worked-out-per-use) when there's none |
 | a `T(&)[N]` parameter, and `const T(&)[N]` | `T[N]&` (C++ writes into the Volt array), and `T[N]`; `T` a number, `bool`, pointer or a class Volt lays out |
-| a parameter written as an array, `T a[N]`, `const T a[]` (a default too) | `T*`, as C++ decays it (`&arr[0]`), through an alias too; the pointer carries no length, so `N` isn't checked. A `char` one is `cstr?`, read-only even when C++'s array isn't (as a `char*` is). An array of arrays has no form yet (per use). Per use, a Volt `T*` is C++'s `T *` (`&x` alone is a `T &`) |
+| a parameter written as an array, `T a[N]`, `const T a[]` (a default too) | `T*`, as C++ decays it (`&arr[0]`), through an alias too; the pointer carries no length, so `N` isn't checked. A `char` one is `cstr?`, read-only even when C++'s array isn't (as a `char*` is). An array of arrays has no form yet (per use). Per use, a Volt `T*` is C++'s `T *`, and `&x` too when no call takes it as a `T &` ([per use](#calls-worked-out-per-use)) |
 | a function pointer parameter, `R(*)(A...)` | `extern "C" fn(A...) -> R` (a fn's name), its types numbers, `bool` and pointers: C++ calls the Volt fn through a cast to its own pointer type (C and C++ function types differ in the standard, but every compiler Volt builds with gives them one calling convention) |
 | `std::unique_ptr<T>`, `std::shared_ptr<T>` | `stdcxx::unique_ptr<T>`, `stdcxx::shared_ptr<T>`: `get()`, and `use_count()` for the shared one; deleting one is C++'s destructor, copying a shared one adds an owner |
 | operators | methods and functions named after them: `op_add` (`+`), `op_sub`, `op_mul`, `op_div`, `op_rem`, `op_eq`, `op_ne`, `op_lt`, `op_le`, `op_gt`, `op_ge`, `op_index` (`[]`), `op_call` (`()`), `op_neg` (unary `-`), `op_not`, `op_add_assign` (`+=`)... |
@@ -354,6 +364,16 @@ as a `cpp_error` instead of stopping the program (a method's is `x.try_m(...)`, 
 ones, one named after each class of the headers that derives from `std::exception` (the most
 derived one that matches), `EXCEPTION` for any other `std::exception` and `UNKNOWN` for a thrown
 value that isn't one. `last_exception()`, in the import's namespace, is what the exception said.
+
+Calls [worked out per use](#calls-worked-out-per-use) catch the same way: `ns::try_f(...)` is
+`ns::f(...)` in catch mode, as are `x.try_m(...)` and `T::try_new(...)` on a class whose members
+are worked out per use. A name the header declares itself wins: when it has a `try_f` of its own,
+that's what `ns::try_f` calls (the generated source says so in a comment). `@cpp` whose result type
+is the import's error union catches too, mapped the same way:
+`@cpp<cpp::cpp_error!i32>("ns::parse({0})", n)` gives the error or the value, and
+`@cpp<cpp::cpp_error!void>(...)` an error or nothing. Its arguments are worked out before catch mode
+starts, so a C++ call in one that throws stops the program as it would anywhere else, and a
+`std::string&` argument is left as it was when the call throws.
 
 ## Subclassing a C++ class in Volt
 
@@ -474,8 +494,9 @@ object `derive` didn't make; without RTTI, either stops the program saying so.
   call passes nothing, or when each can only be a type (`x.get<i32>()`, `x.pair<i32, f64>()`,
   `c.convert<i32, f64>(2)`, `m.find<ns::Key, std::string>(k)`): `f(a.x < b, c > (d))` stays two
   comparisons. Otherwise they come from the call's arguments, as a generic function's can.
-- A C++ exception that reaches Volt through a function's plain form stops the program, like a
-  panic; its `try_` form returns it as an error. In Volt code C++ called (a closure passed as a
+- A C++ exception that reaches Volt through a function's plain form (or an `@cpp` whose result
+  isn't a `cpp_error` union) stops the program, like a panic; its `try_` form returns it as an
+  error. In Volt code C++ called (a closure passed as a
   `std::function`, an override of a virtual method), it goes back to that C++ instead, rethrown with
   its own type, so a `catch` there gets it; the Volt frames between are left without running their
   deletes (the C++ copy of a `std::string&` made for a call in such a frame among them, which

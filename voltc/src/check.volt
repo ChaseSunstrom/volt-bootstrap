@@ -108,6 +108,7 @@ struct closure_info {
     ret: u32;
     names: std::vec<str> = {}; // its params' names, then its captures' (lends.volt)
     gen: u32? = null;          // a generic closure's (gclosures): its body is checked per instance
+    changes: std::vec<cap_change> = {}; // what its body (any instance's) changes outside (borrows.volt)
 }
 
 struct cap_field {
@@ -237,25 +238,49 @@ struct fn_cx {
     loans: std::map<u32, loan> = {};
     stale_notes: std::map<u32, stale_note> = {};
     iterating: std::vec<iter_loan> = {};
+    // in a closure's body: each capture reaching a container outside (its place here -> the
+    // container's place outside), and the changes the body makes at them
+    cap_roots: std::map<u32, u32> = {};
+    cap_changes: std::vec<cap_change> = {};
     ref_holders: std::map<u32, str> = {}; // a local holding a reference to one of the fn's own: that one's name
 }
 
-// a view local's loan: the container it looks into (its place and name), and its own name
-struct loan {
-    owner: u32;
-    owner_name: str;
-    view_name: str;
+// a local, or a chain of its fields: the local's place, the field path below it (".items"; "" for
+// the local itself) and its name for messages ("this.items")
+struct place_at {
+    root: u32;
+    path: str;
+    name: str;
 }
 
-// the call after which a view may be stale
+// a view local's loan: the container it looks into, and its own name; a closure using a view has
+// that view's loan, and uses names the view
+struct loan {
+    owner: place_at;
+    view_name: str;
+    uses: str? = null;
+    uses_at: u32? = null; // the view's place, when the closure captured it by reference
+}
+
+// the change after which a view may be stale: at the place named at, a call of the method what, or
+// a new value when what is ""; via: the closure whose call made it
 struct stale_note {
     span: span;
-    what: str; // the method
+    at: str;
+    what: str;
+    via: str? = null;
+}
+
+// a change a closure's body makes at a container it captured (its place outside the closure), made
+// again at each call of the closure by its local's name
+struct cap_change {
+    at: place_at;
+    what: str; // as stale_note's
 }
 
 // a for loop going over a container's items
 struct iter_loan {
-    owner: u32;
+    owner: place_at;
     span: span;
 }
 
@@ -307,10 +332,12 @@ struct tval {
     pvia: reach? = null;
     root: str? = null;
     own: u32? = null; // a place in a local's own storage (the local's place): changing it needs its var
-    // a view a method gave out of a local container it took by reference: the container's place and
-    // name (borrows.volt)
-    loan: u32? = null;
-    loan_name: str? = null;
+    // a view a method gave out of a local container (or a field of one) it took by reference: the
+    // container; a closure using a view: that view's loan, and the view's name (borrows.volt)
+    loan: place_at? = null;
+    loan_uses: str? = null;
+    loan_uses_at: u32? = null;
+    at: place_at? = null; // a method call's receiver: the local or field chain it names (borrows.volt)
     wraps: bool = false; // a literal a wrapping operator (+% -% *%) gave: it wraps in the type it gets
 }
 
@@ -466,6 +493,7 @@ struct checker {
     // deprecated decls already warned about (once each)
     warned: idset = {};
     warned_views: idset = {}; // views already warned about as stale
+    place_names: std::map<str, str> = {}; // the borrow warnings' place paths and names, each kept once
     ct_consts: std::vec<cval> = {};    // the compile-time values gval::VAL names
     ct_declared: std::map<str, u32> = {}; // fns comptime fns declared, by where and what they saw
     frames: std::vec<fn_frame> = {}; // async fn instance -> frame fields
@@ -552,6 +580,15 @@ struct checker {
 
 fn new_checker(files: std::vec<source_file>&, o: opts) -> checker {
     var c: checker = { files: files, opts: move o, t: new_types(), cx: new_cx(VOID, 0, 0) };
+    // usize and isize are the target's pointer width: --target's (or --cfg pointer_bits=N's), else
+    // the host's
+    usize_bits = @cast<u32>(@sizeof(usize) * 8);
+    val pb = c.cfg_given("pointer_bits") ?? "";
+    if (pb == "32") {
+        usize_bits = 32;
+    } else if (pb == "64") {
+        usize_bits = 64;
+    }
     put(&c.nss, bx<ns_info>({}));
     put(&c.envs, bx<env>({ ns: 0 }));
     put(&c.error_names, { code: 1, name: "error", qual: "error" });

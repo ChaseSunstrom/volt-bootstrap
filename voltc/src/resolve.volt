@@ -1307,28 +1307,13 @@ struct global_why {
     span: span;
 }
 
-// does a foldable expression hold a unary operator (~x, !x, -x) somewhere?
-fn unary_in(e: expr&) -> bool {
-    if (!foldable(e)) {
-        return false;
-    }
-    match (e.kind) {
-        .UNARY(op, x) => { return true; },
-        .CAST(x, t&) => { return unary_in(x); },
-        .BINARY(op, a, b) => { return unary_in(a) || unary_in(b); },
-        .BUILTIN(n, g, a&) => {
-            match (*ptr_of(a)->at(0)) {
-                .EXPR(x&) => { return unary_in(x); },
-                default => { return false; },
-            }
-        },
-        default => { return false; },
-    }
-}
-
-// a constant expression worked out now, or none when it can't be (it stays as it is)
-attach fn fold_global(this: checker&, e: expr&, want: u32?) -> tval? {
+// a constant expression worked out now, or none when it can't be (it stays as it is); arithmetic
+// that fails at compile time (an overflow, a division by zero) is the global's error
+attach fn fold_global(this: checker&, e: expr&, want: u32?) -> compile_error!(tval?) {
     val cv = this.ct_eval_in(this.cx.env, e, want) catch |err| {
+        if (arith_error(&err)) {
+            return copy err;
+        }
         return null;
     };
     val c = this.ct_to_val(cv, want, e.span) catch |err| {
@@ -1342,6 +1327,12 @@ attach fn fold_global(this: checker&, e: expr&, want: u32?) -> tval? {
 
 // literals, names and operators over them, with no calls: a global's initializer that's worked out at
 // compile time even when it isn't a { } literal
+// is this compile-time error one of arithmetic (what running the expression would panic on too)?
+fn arith_error(e: compile_error&) -> bool {
+    val m = err_msg(e);
+    return contains(m, "overflow") || contains(m, "division by zero") || contains(m, "doesn't fit in");
+}
+
 fn foldable(e: expr&) -> bool {
     match (e.kind) {
         .INT(v) => { return true; },
@@ -1391,16 +1382,24 @@ attach fn global_init(this: checker&, l: let_stmt&, span: span) -> compile_error
         if (want) {
             v = try this.coerce(v, want, l.init.span);
         }
-        // ~x and !x over constants are pure but not literals: folded too, so the global is a
-        // constant (the LLVM backend would set it in a constructor, and code running before that,
-        // another constructor or a host calling into a library, would read zero)
-        if (v.pure && v.lit == null && unary_in(&l.init)) {
-            val folded = this.fold_global(&l.init, want);
+        // ~x and !x over constants, and operators over u128s past i128's maximum, are pure but not
+        // literals: folded too, so the global is a constant (the LLVM backend would set it in a
+        // constructor, and code running before that, another constructor or a host calling into a
+        // library, would read zero; the C backend can't write a checked - in a global at all)
+        if (v.pure && v.lit == null && foldable(&l.init)) {
+            val folded = try this.fold_global(&l.init, want);
             if (folded) {
+                // only when the constant is the same type (an array global named by a slice global
+                // folds to a temporary array, which no slice can point at)
+                var f = folded;
                 if (want) {
-                    return try this.coerce(folded, want, l.init.span);
+                    f = this.coerce(f, want, l.init.span) catch |err| {
+                        return v;
+                    };
                 }
-                return folded;
+                if (f.ty == v.ty) {
+                    return f;
+                }
             }
         }
         if (!v.pure && v.lit == null) {
@@ -1421,6 +1420,9 @@ attach fn global_init(this: checker&, l: let_stmt&, span: span) -> compile_error
                 return fails(l.init.span, "global initializers must be constants");
             }
             val cv = this.ct_eval_in(this.cx.env, &l.init, want) catch |e| {
+                if (arith_error(&e)) {
+                    return copy e;
+                }
                 return fails(l.init.span, "global initializers must be constants");
             };
             val c = this.ct_to_val(cv, want, l.init.span) catch |e| {

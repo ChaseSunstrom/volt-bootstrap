@@ -1029,7 +1029,7 @@ attach fn check_bounds(this: checker&, gps: std::vec<gparam>&, binds: std::vec<g
                         if (k) {
                             val kk = k;
                             if (!kk.fits(v)) {
-                                return fmt3("{} = {} doesn't fit in {}", S(gp.name), num(v), S(kk.name()));
+                                return fmt3("{} = {} doesn't fit in {}", S(gp.name), num(v), kk.fit_name());
                             }
                         }
                     },
@@ -1638,10 +1638,9 @@ attach fn emit_call(this: checker&, inst: u32, a: adj, rv: tval?, pre: std::vec<
     }
     this.use_fn(inst);
     this.warn_deprecated(inst, span);
-    // the borrow warnings: the container a by-reference receiver is, when it's a whole local (a
-    // container, or a reference to one); a field's isn't told apart from its struct's other fields,
-    // so it's left out
-    var lent: u32? = null;
+    // the borrow warnings: the container a by-reference receiver is, when it's a local or a chain of
+    // its fields (a container, or a reference to one)
+    var lent: place_at? = null;
     if (rv) {
         val r = rv;
         var by_ref = false;
@@ -1650,9 +1649,14 @@ attach fn emit_call(this: checker&, inst: u32, a: adj, rv: tval?, pre: std::vec<
             .NONE => { by_ref = this.t.ref_inner(r.ty) != null; },
             default => {},
         }
-        if (by_ref && r.own != null && r.c == (r.own ?? 0)) {
-            lent = r.own;
-            this.invalidate(inst, r.own ?? 0, span);
+        if (by_ref) {
+            lent = r.at;
+            if (lent == null && r.own != null && r.c == (r.own ?? 0)) {
+                lent = { root: r.own ?? 0, path: "", name: this.local_at(r.own ?? 0) };
+            }
+            if (lent) {
+                this.invalidate(inst, &lent, span);
+            }
         }
     }
     var seq = this.seq_vals(&vals);
