@@ -72,6 +72,9 @@ pub enum Ty {
     Array(Box<Ty>, usize),
     /// a generic type's instance in a generic declaration (Stack<T>), by the generic type's name
     Inst(String, Vec<Ty>),
+    /// an out parameter (C#'s), by its name: the shim passes a local of its own, and the Volt
+    /// function has no parameter for it (the result names it: a tuple's element, or the value)
+    Out(Box<Ty>, String),
 }
 
 /// an enum's variant, with its fields' names (a tuple variant's are 0, 1..) and types
@@ -543,6 +546,7 @@ impl<'a> Gen<'a> {
             Ty::Slice(x, m) => Ty::Slice(Box::new(self.resolve(*x, self_ty)), m),
             Ty::Array(x, n) => Ty::Array(Box::new(self.resolve(*x, self_ty)), n),
             Ty::Tuple(es) => Ty::Tuple(es.into_iter().map(|(n, t)| (n, self.resolve(t, self_ty))).collect()),
+            Ty::Out(x, n) => Ty::Out(Box::new(self.resolve(*x, self_ty)), n),
             t => t,
         }
     }
@@ -952,7 +956,7 @@ impl<'a> Gen<'a> {
             let t = t.clone().map(|t| self.resolve(t, self_ty)).ok_or(format!("{what} (parameter {n}'s type)"))?;
             let a = format!("a{i}");
             let shim = lang.param(self, &t, &a).ok_or(format!("{what} (parameter {n}'s type)"))?;
-            if matches!(t, Ty::Alloc | Ty::Comptime(_)) {
+            if matches!(t, Ty::Alloc | Ty::Comptime(_) | Ty::Out(..)) {
                 owned |= t == Ty::Alloc;
                 params.push((shim, None));
                 continue;
@@ -1904,7 +1908,7 @@ impl<'a> Gen<'a> {
         }
         for (n, t) in &s.params {
             let t = t.clone().map(|t| self.resolve(t, self_ty)).ok_or_else(unnamed)?;
-            if matches!(t, Ty::Alloc | Ty::Comptime(_)) {
+            if matches!(t, Ty::Alloc | Ty::Comptime(_) | Ty::Out(..)) {
                 continue;
             }
             ps.push(format!("{}: {}", Self::param_name(n), self.generic_ty(&t, false).ok_or_else(unnamed)?));
@@ -2223,6 +2227,7 @@ pub fn substitute(t: &Ty, s: &BTreeMap<String, Ty>) -> Ty {
         Ty::Array(e, n) => Ty::Array(Box::new(substitute(e, s)), *n),
         Ty::Inst(n, args) => Ty::Inst(n.clone(), args.iter().map(|x| substitute(x, s)).collect()),
         Ty::Tuple(es) => Ty::Tuple(es.iter().map(|(n, t)| (n.clone(), substitute(t, s))).collect()),
+        Ty::Out(e, n) => Ty::Out(Box::new(substitute(e, s)), n.clone()),
         // a closure parameter's type stands for the closure itself
         Ty::Fn(ps, r, p, once) => Ty::Fn(ps.iter().map(|x| substitute(x, s)).collect(), Box::new(substitute(r, s)), *p, *once),
         // &T of text is str and of a Vec a slice, as the reader maps them; of a number it stays a
