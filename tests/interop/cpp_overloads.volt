@@ -22,7 +22,14 @@ fn main() -> void {
     std::println("open {} {} {}", bx.open(), c.as_Box().open_rref(), c.peek());
     std::println("open {}", bx.open_rref());
     std::println("size {} {}", cpp::ov::Box::new(1).size(), cpp::ov::Box::new(1).size_const_rref());
-    std::println("taken {} {}", cpp::taken::which(3), cpp::taken::which_long_long(3));
+    // ...and on a class that can be neither copied nor moved, its own object (the handle consumed,
+    // the object deleted once); a const && method in place, a borrowed handle's too
+    std::println("pinned {}", cpp::ov::Pinned::new(3).take());
+    std::println("pinned {} {}", cpp::ov::Pinned::new(3).take_const_rref(), cpp::ov::pinned_shelf().take_const_rref());
+    std::println("dropped {}", cpp::ov::Pinned::dropped());
+    // an abstract class's && method runs in place, through as_Base() too
+    std::println("spend {}", cpp::ov::Square::new(4).as_Shape().spend());
+    std::println("taken {} {}",cpp::taken::which(3), cpp::taken::which_long_long(3));
     // ...on a class template's instance too (worked out per use): take empties the object, so a
     // borrowed handle's (shelf's reference) object keeps its value
     std::println("holder {} {}", cpp::ov::shelf().take(), cpp::ov::shelf().peek());
