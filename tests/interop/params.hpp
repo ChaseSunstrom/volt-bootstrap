@@ -201,4 +201,23 @@ template <class... A> int pick(A... a) {
     return s;
 }
 }
+// a Volt reference reaches a call worked out per use (a variadic template, a function beside a
+// parameter with no Volt form) as an lvalue of what it names (f(x)), and as its address (f(&x)) only
+// when no call takes the lvalue: T*, a template's T* deducing T; a declared template's S deduced
+// from a reference is what it names
+namespace rp {
+typedef std::vector<std::vector<bool>> skips;
+template <class T, class... A> T deref(T *p, A...) { *p += 1; return *p; }
+inline int sum_ptr(int *p, int n, const skips &s = skips()) { int t = 0; for (int i = 0; i < n; i++) t += p[i]; return t + (int)s.size(); }
+inline int which(int &, const skips & = skips()) { return 1; }
+inline int which(int *, const skips & = skips()) { return 2; }
+inline int mixed(int &a, int *b, const skips & = skips()) { return a + *b; }
+template <class T, class... A> T checked(T *p, A...) {
+    if (*p < 0) throw std::invalid_argument("negative pointee");
+    return *p;
+}
+template <class S> int size_of(S &) { return (int)sizeof(S); }
+template <class S> int size_by(S) { return (int)sizeof(S); }
+struct pt { int x; int y; };
+}
 }

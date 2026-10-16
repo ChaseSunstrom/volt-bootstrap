@@ -2425,7 +2425,8 @@ attach fn cpp_handle_of(this: checker&, sid: u32) -> str? {
     return null;
 }
 
-// a Volt type's C++ type as text (a handle struct's: its class), for {tN} and template arguments
+// a Volt type's C++ type as text (a handle struct's: its class), for {tN} and template arguments (a
+// reference's: what it names, the type C++ deduces from the object it names)
 attach fn cpp_type_text(this: checker&, t: u32) -> std::string? {
     match (*this.t.get(t)) {
         .STRUCT(sid) => {
@@ -2434,6 +2435,7 @@ attach fn cpp_type_text(this: checker&, t: u32) -> std::string? {
                 return S(q);
             }
         },
+        .REF(x) => { return this.cpp_type_text(x); },
         default => {},
     }
     return this.cpp_spell(t);
@@ -6434,7 +6436,39 @@ attach fn cpp_probe_type(this: checker&, t: u32) -> std::string? {
 // (an error is its words, at span), and the importer writes the fn as it would for a C++ function of
 // that signature. recv: {0} is the receiver, so it's an attach fn on it. The fn's declaration
 attach fn cpp_instance(this: checker&, k: usize, expr: str, types: std::vec<u32>&, recv: bool, value: bool, span: span) -> compile_error!u32 {
-    return this.cpp_instance_as(k, expr, types, recv, value, false, span);
+    return this.cpp_instance_addr(k, expr, types, recv, value, false, span);
+}
+
+// cpp_instance_as reading each Volt reference argument as C++ would read the object it names: an
+// lvalue first (f(x): T& binds it, a template's T deduces its type), and only when clang finds no
+// call that way, every one as its address (f(&x): a T* parameter, a template's T* deducing T), which
+// is what the reference holds already; one argument read each way isn't tried, and when neither
+// works the error is the lvalue call's. So of f(T&) and f(T*), f(&x) calls f(T&). A Volt
+// std::string& stays one (it crosses as a copy), and the receiver an lvalue
+attach fn cpp_instance_addr(this: checker&, k: usize, expr: str, types: std::vec<u32>&, recv: bool, value: bool, tried: bool, span: span) -> compile_error!u32 {
+    val made = this.cpp_instance_as(k, expr, types, recv, value, tried, span) catch |e| {
+        var ptrs = copy *types;
+        var any = false;
+        for (j) in 0..ptrs.len {
+            if (recv && j == 0) {
+                continue;
+            }
+            match (*this.t.get(*ptrs.at(j))) {
+                .REF(x) => {
+                    if (!this.text_bound(x)) {
+                        *ptrs.at(j) = this.t.intern(tyk::PTR(x));
+                        any = true;
+                    }
+                },
+                default => {},
+            }
+        }
+        if (!any) {
+            return e;
+        }
+        return this.cpp_instance_as(k, expr, &ptrs, recv, value, tried, span) catch |e2| { return e; };
+    };
+    return made;
 }
 
 // cpp_instance; tried: the fn's try_ form instead (try_text), which makes the call in catch mode
@@ -6967,7 +7001,7 @@ attach fn cpp_use_call(this: checker&, k: usize, callee: str, macro: bool, tried
 // when the handle only borrows it. When neither works, the error is the lvalue call's
 attach fn cpp_instance_on(this: checker&, k: usize, expr: str, types: std::vec<u32>&, recv: bool, value: bool, tried: bool, by_value: u32?, span: span) -> compile_error!u32 {
     // (a failed probe isn't cached: such a call probes clang twice, each time it's checked)
-    val made = this.cpp_instance_as(k, expr, types, recv, value, tried, span) catch |e| {
+    val made = this.cpp_instance_addr(k, expr, types, recv, value, tried, span) catch |e| {
         val bv = by_value ?? return e;
         *types.at(0) = bv;
         return this.cpp_instance_as(k, expr, types, recv, value, tried, span) catch |e2| { return e; };
@@ -7314,9 +7348,26 @@ attach fn cpp_call_as(this: checker&, r: u32, gargs: std::vec<garg>&, args: std:
         var an = S("a");
         an.append_uint(@cast<u64>(i - 1));
         params.append(fmt2("{} {}", move sp, copy an).as_str());
-        match (*this.t.get(v.ty)) {
-            .REF(x) => { put(&subst, fmt("(*{})", copy an)); },
-            default => { put(&subst, copy an); },
+        // a reference is what it names (a reference to one, &s of a generic's s: S with S a reference,
+        // too: the type {tN} spells)
+        var stars = S("");
+        var rt = v.ty;
+        var refs = true;
+        while (refs) {
+            refs = false;
+            match (*this.t.get(rt)) {
+                .REF(x) => {
+                    stars.push('*');
+                    rt = x;
+                    refs = true;
+                },
+                default => {},
+            }
+        }
+        if (stars.len() > 0) {
+            put(&subst, fmt2("({}{})", move stars, copy an));
+        } else {
+            put(&subst, copy an);
         }
         put(&ptys, v.ty);
         if (catching) {
