@@ -1272,6 +1272,12 @@ impl Checker {
         let d = self.fns[idx].decl;
         let ItemKind::Fn(f) = &self.decls[d].item.kind else { return Linkage::Static };
         if f.extern_abi.is_some() || f.is_export {
+            // a linked package's export fn is its library's: defined there, declared here
+            if let (true, true, Some(pkg)) = (f.is_export, f.body.is_some(), self.pkg_of(d)) {
+                if self.opts.linked.iter().any(|l| l == pkg) && self.opts.lib.as_deref() != Some(pkg) {
+                    return Linkage::External;
+                }
+            }
             return Linkage::Exported;
         }
         let Some(pkg) = self.pkg_of(d).map(String::from) else { return Linkage::Static };

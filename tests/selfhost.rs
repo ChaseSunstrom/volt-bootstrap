@@ -425,6 +425,24 @@ fn windows_paths_run() {
     assert!(o.status.success() && out.lines().collect::<Vec<_>>() == want, "std::path with Windows' rules printed:\n{out}{}", String::from_utf8_lossy(&o.stderr));
 }
 
+/// a program the bootstrap compiler builds against a package's library declares the package's export
+/// fns, which the library defines (bolt build bootstrap links std's quad exports on macOS so)
+#[test]
+fn stage0_links_export_fns() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("stage0-export-{}", std::process::id()));
+    std::fs::create_dir_all(dir.join("pk")).unwrap();
+    std::fs::write(dir.join("pk/pk.volt"), "export fn pk_twice(x: i32) -> i32 { return x * 2; }\n").unwrap();
+    std::fs::write(dir.join("main.volt"), "use std::io;\nfn main() -> void {\n    std::println(\"{}\", pk::pk_twice(21));\n}\n").unwrap();
+    let stage0 = env!("CARGO_BIN_EXE_voltc-bootstrap");
+    let (std_dir, pkg, lib) = (root.join("std"), format!("pk={}", dir.join("pk").display()), dir.join("libpk.a"));
+    let o = Command::new(stage0).args(["lib", "pk", "-o"]).arg(&lib).arg("--std").arg(&std_dir).args(["--pkg", &pkg]).output().unwrap();
+    assert!(o.status.success(), "voltc-bootstrap lib pk: {}", String::from_utf8_lossy(&o.stderr));
+    let o = Command::new(stage0).arg("run").arg(dir.join("main.volt")).arg("--std").arg(&std_dir).args(["--pkg", &pkg, "--link"]).arg(format!("pk={}", lib.display())).output().unwrap();
+    assert!(o.status.success() && String::from_utf8_lossy(&o.stdout) == "42\n", "linked against libpk.a: {}", String::from_utf8_lossy(&o.stderr));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// the self-hosted compiler reproduces itself (stage2 == stage3) and stage2 passes the golden suite.
 /// LLVM is found through an llvm-config for a relocated copy of it, as on Debian and Ubuntu, so the
 /// build file's flags and the bootstrap tool's $BOLT_CC_ARGS are what make it link
