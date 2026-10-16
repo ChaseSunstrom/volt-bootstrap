@@ -178,10 +178,12 @@ VOLT_RT_LINKAGE int volt_dprintf(int fd, const char *fmt, ...) {
     va_end(ap);
     return n;
 }
-/* stdout and stderr in binary mode, as main starts: "\n" goes out as written, as on every other
-   system (the C runtime's text mode would write "\r\n") */
+/* stdin, stdout and stderr in binary mode, as main starts: "\n" goes out as written and "\r\n"
+   comes in as read, as on every other system (the C runtime's text mode would write "\r\n" and
+   read it as "\n", so a message framed by its byte count, the language server's, came up short) */
 int volt_win_setmode(int, int) VOLT_SYM("_setmode");
 VOLT_RT_LINKAGE void volt_rt_binary_stdio(void) {
+    volt_win_setmode(0, 0x8000);
     volt_win_setmode(1, 0x8000);
     volt_win_setmode(2, 0x8000);
 }
