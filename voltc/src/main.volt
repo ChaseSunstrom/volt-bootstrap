@@ -678,7 +678,18 @@ fn parse_sexp(file: str) -> i32 {
     return 0;
 }
 
+// the C runtime's _setmode (Windows)
+extern "C" fn _setmode(fd: i32, mode: i32) -> i32;
+
 fn main() -> i32 {
+    comptime if (@cfg("os", "windows")) {
+        // stdin, stdout and stderr in binary mode (_O_BINARY), as every program voltc builds starts
+        // (program.volt): a voltc built by stage 0 starts in text mode, which writes "\n" as "\r\n"
+        // (diagnostics, emit-c) and reads the language server's "\r\n" headers as "\n"
+        _setmode(0, 0x8000);
+        _setmode(1, 0x8000);
+        _setmode(2, 0x8000);
+    }
     var c = parse_cli();
     if (c.cmd == "parse") {
         if (!c.sexp) {

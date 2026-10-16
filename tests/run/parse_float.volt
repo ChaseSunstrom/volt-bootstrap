@@ -3,6 +3,7 @@ use std::io;
 // renderings of random doubles, random digit strings with big and small exponents, and the exact
 // midpoints between neighbouring doubles, on them and a hair either side (ties go to even), with
 // over a thousand digits
+// unix-only (the Windows C runtime's strtod isn't correctly rounded on long inputs)
 
 extern "C" fn snprintf(buf: u8*, n: usize, fmt: cstr, ...) -> i32;
 extern "C" fn strtod(s: cstr, end: void*) -> f64;

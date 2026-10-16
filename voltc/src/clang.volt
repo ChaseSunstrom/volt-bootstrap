@@ -136,7 +136,9 @@ fn compiler_view(cxx: bool) -> std::vec<std::string> {
         } else if (starts_with(l, "End of search list")) {
             inside = false;
         } else if (inside) {
-            var dir = S(l);
+            // MinGW's gcc names its C library's directories through its own
+            // (.../lib/gcc/T/V/../../../../include): ".." taken out first, so only gcc's own are left out
+            var dir = std::path::normalize(l);
             for (k) in 0..dir.len() {
                 if (*dir.bytes.at(k) == '\\') {
                     *dir.bytes.at(k) = '/';

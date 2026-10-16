@@ -24,13 +24,15 @@ fn main() -> !void {
         try log.flush();
     }
     try std::fs::append_file(path, "done\n");
-    var f = try std::fs::open(path);
-    for (line, i) in f.lines() {
-        std::println("{}: {}", i, line.as_str());
+    {
+        var f = try std::fs::open(path);
+        for (line, i) in f.lines() {
+            std::println("{}: {}", i, line.as_str());
+        }
+        try f.seek(-5, std::fs::seek_from::END);
+        std::println("{} {}", (try f.read_all()).as_str().trim(), try std::fs::size(path));
     }
-    try f.seek(-5, std::fs::seek_from::END);
-    std::println("{} {}", (try f.read_all()).as_str().trim(), try std::fs::size(path));
-    try std::fs::remove_file(path);
+    try std::fs::remove_file(path); // once it's closed: Windows can't remove an open file
 }
 // expect: 0: start
 // expect: 1: 3 items

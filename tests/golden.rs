@@ -32,6 +32,10 @@ fn golden() {
     for f in files("tests/run").into_iter().chain(files("examples")) {
         count += 1;
         let src = std::fs::read_to_string(&f).unwrap();
+        // `// unix-only`: its oracle is Unix's (glibc's or Apple's libm, sh's kill)
+        if cfg!(windows) && src.lines().any(|l| l == "// unix-only") {
+            continue;
+        }
         let want = directives(&src, "expect").join("\n");
         // `// exit: 132|133`: any of them (a trap is SIGILL on x86-64, SIGTRAP on arm64)
         let want_codes: Vec<i32> = directives(&src, "exit").first().map(|s| s.split('|').map(|c| c.trim().parse().unwrap()).collect()).unwrap_or(vec![0]);
@@ -40,6 +44,14 @@ fn golden() {
         let out = common::run_for(Command::new(&bin).arg("run").arg(&f).args(&flags), 120);
         let got = String::from_utf8_lossy(&out.stdout);
         let code = if out.timed_out { 124 } else { out.code.unwrap_or(-1) };
+        // Windows ends a crashed program with an NTSTATUS: the code a signal gives elsewhere
+        let code = match code as u32 {
+            0xC000001D => 132, // an illegal instruction (a trap): SIGILL
+            0x80000003 => 133, // a breakpoint: SIGTRAP
+            0xC0000409 => 134, // __fastfail, which abort is: SIGABRT
+            0xC0000005 => 139, // an access violation: SIGSEGV
+            _ => code,
+        };
         let err = String::from_utf8_lossy(&out.stderr);
         let err_missing = directives(&src, "expect-stderr").iter().any(|w| !err.contains(w.as_str()))
             || directives(&src, "reject-stderr").iter().any(|w| err.contains(w.as_str()));
@@ -137,6 +149,11 @@ fn quad_exports() {
     }
     let none = quad(&ir(&["--cfg", "os=none", "--cfg", "arch=wasm32"]));
     assert_eq!(none, want, "os=none's quad routines differ from macOS's");
+    let win_arm = quad(&ir(&["--cfg", "os=windows", "--cfg", "arch=aarch64"]));
+    assert_eq!(win_arm, want, "arm64 Windows' quad routines differ from macOS's");
+    // x86-64 Windows has libgcc's (which pass a __float128 as that ABI does, not as LLVM's fp128)
+    let win_x64 = quad(&ir(&["--cfg", "os=windows", "--cfg", "arch=x86_64"]));
+    assert!(win_x64.is_empty(), "x86-64 Windows defines {win_x64:?}");
     // (Linux named, not the host: on macOS the host is a target that has them)
     let linux = quad(&ir(&["--cfg", "os=linux", "--cfg", "arch=x86_64"]));
     assert!(linux.is_empty(), "Linux defines {linux:?}");

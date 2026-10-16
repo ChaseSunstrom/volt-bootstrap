@@ -194,7 +194,7 @@ impl Walker {
     }
 
     fn file(&mut self, path: &Path, module: &[String]) {
-        let path = std::fs::canonicalize(path).unwrap_or(path.to_path_buf());
+        let path = super::canonicalize(path).unwrap_or(path.to_path_buf());
         if !self.seen.insert(path.clone()) {
             return;
         }

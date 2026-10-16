@@ -1766,19 +1766,19 @@ fn cpp_derive() {
     assert_eq!(ok(e.voltc_cxx(&["run", "cpp_derive.volt"], Some("c++ -fno-rtti")), "voltc run cpp_derive.volt (-fno-rtti)"), want, "C++ derive without RTTI");
     // a pure virtual method the Volt type doesn't override is a compile error naming it
     let hpp = Path::new(ROOT).join("tests/interop/widgets.hpp");
-    let src = format!("use {{ \"{}\" }} as cpp;\nstruct nothing {{ n: i32; }}\nfn main() -> void {{\n    val x: nothing = {{ n: 1 }};\n    val w = cpp::gui::Widget::derive(move x, \"a\");\n}}\n", hpp.display());
+    let src = format!("use {{ \"{}\" }} as cpp;\nstruct nothing {{ n: i32; }}\nfn main() -> void {{\n    val x: nothing = {{ n: 1 }};\n    val w = cpp::gui::Widget::derive(move x, \"a\");\n}}\n", hpp.display().to_string().replace('\\', "/"));
     std::fs::write(e.dir.join("cpp_derive_pure.volt"), src).unwrap();
     let o = e.voltc(&["check", &e.path("cpp_derive_pure.volt")]);
     let err = String::from_utf8_lossy(&o.stderr);
     assert!(!o.status.success() && err.contains("has to override width, which is pure virtual"), "pure virtual: {err}");
     // so is one the class doesn't have, in the attach block
-    let src = format!("use {{ \"{}\" }} as cpp;\nstruct nothing {{ n: i32; }}\nattach cpp::gui::Widget -> nothing {{\n    fn width(this, self: cpp::gui::Widget&) -> i32 {{ return 1; }}\n    fn widht(this, self: cpp::gui::Widget&) -> i32 {{ return 2; }}\n}}\nfn main() -> void {{}}\n", hpp.display());
+    let src = format!("use {{ \"{}\" }} as cpp;\nstruct nothing {{ n: i32; }}\nattach cpp::gui::Widget -> nothing {{\n    fn width(this, self: cpp::gui::Widget&) -> i32 {{ return 1; }}\n    fn widht(this, self: cpp::gui::Widget&) -> i32 {{ return 2; }}\n}}\nfn main() -> void {{}}\n", hpp.display().to_string().replace('\\', "/"));
     std::fs::write(e.dir.join("cpp_derive_extra.volt"), src).unwrap();
     let o = e.voltc(&["check", &e.path("cpp_derive_extra.volt")]);
     let err = String::from_utf8_lossy(&o.stderr);
     assert!(!o.status.success() && err.contains("'widht' isn't one of Widget's functions"), "not a virtual method: {err}");
     // and one whose self is another class (it would override nothing)
-    let src = format!("use {{ \"{}\" }} as cpp;\nstruct nothing {{ n: i32; }}\nattach cpp::gui::Button -> nothing {{\n    fn sound(this, self: cpp::gui::Button&) -> i32 {{ return 1; }}\n    fn press(this, self: cpp::gui::Widget&) -> i32 {{ return 2; }}\n}}\nfn main() -> void {{}}\n", hpp.display());
+    let src = format!("use {{ \"{}\" }} as cpp;\nstruct nothing {{ n: i32; }}\nattach cpp::gui::Button -> nothing {{\n    fn sound(this, self: cpp::gui::Button&) -> i32 {{ return 1; }}\n    fn press(this, self: cpp::gui::Widget&) -> i32 {{ return 2; }}\n}}\nfn main() -> void {{}}\n", hpp.display().to_string().replace('\\', "/"));
     std::fs::write(e.dir.join("cpp_derive_self.volt"), src).unwrap();
     let o = e.voltc(&["check", &e.path("cpp_derive_self.volt")]);
     let err = String::from_utf8_lossy(&o.stderr);
@@ -1819,7 +1819,7 @@ fn cpp_module() {
         assert_eq!(ok(e.voltc_cxx(&["run", "cpp_module.volt", "--backend", backend], llvm_cxx.as_deref()), "voltc run cpp_module.volt"), want, "C++ modules ({backend})");
     }
     assert_eq!(ok(e.voltc_cxx(&["run", "cpp_module.volt"], Some(llvm_cxx.as_deref().unwrap_or("clang++"))), "voltc run cpp_module.volt (clang++)"), want, "C++ modules built by clang++");
-    let src = format!("use {{ \"{}\" }} as gm;\nfn main() -> void {{\n    val x = gm::hidden_helper(1);\n}}\n", Path::new(ROOT).join("tests/interop/geomod.cppm").display());
+    let src = format!("use {{ \"{}\" }} as gm;\nfn main() -> void {{\n    val x = gm::hidden_helper(1);\n}}\n", Path::new(ROOT).join("tests/interop/geomod.cppm").display().to_string().replace('\\', "/"));
     std::fs::write(e.dir.join("cpp_module_hidden.volt"), src).unwrap();
     let o = e.voltc(&["check", &e.path("cpp_module_hidden.volt")]);
     let err = String::from_utf8_lossy(&o.stderr);
@@ -1879,7 +1879,7 @@ fn cpp_surface() {
     }
     // {&i} takes a function
     let hpp = Path::new(ROOT).join("tests/interop/surface.hpp");
-    let src = format!("use {{ \"{}\" }} as cpp;\nfn main() -> void {{\n    val x = @cpp<i32>(\"kit::apply_fn<{{&0}}, true>(1)\", 5);\n}}\n", hpp.display());
+    let src = format!("use {{ \"{}\" }} as cpp;\nfn main() -> void {{\n    val x = @cpp<i32>(\"kit::apply_fn<{{&0}}, true>(1)\", 5);\n}}\n", hpp.display().to_string().replace('\\', "/"));
     std::fs::write(e.dir.join("cpp_hole.volt"), src).unwrap();
     let o = e.voltc(&["check", &e.path("cpp_hole.volt")]);
     let err = String::from_utf8_lossy(&o.stderr);
@@ -1897,7 +1897,7 @@ fn cpp_templates() {
     }
     // a call C++ rejects is an error at the Volt call, in C++'s words: here the concept
     let hpp = Path::new(ROOT).join("tests/interop/templates.hpp");
-    let src = format!("use {{ \"{}\" }} as cpp;\nfn main() -> void {{\n    val x = cpp::tpl::twice(1.5);\n}}\n", hpp.display());
+    let src = format!("use {{ \"{}\" }} as cpp;\nfn main() -> void {{\n    val x = cpp::tpl::twice(1.5);\n}}\n", hpp.display().to_string().replace('\\', "/"));
     std::fs::write(e.dir.join("cpp_concept.volt"), src).unwrap();
     let o = e.voltc(&["check", &e.path("cpp_concept.volt")]);
     let err = String::from_utf8_lossy(&o.stderr);

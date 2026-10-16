@@ -3090,9 +3090,16 @@ attach fn llvm_jit_module(this: checker&, g: lg&, init: str) -> std::string {
 }
 
 // the runtime as a C unit for an LLVM-built program (or, with `runtime` off, a library): the
-// prelude's helpers as weak definitions, so any mix of LLVM and C-backend units links
+// prelude's helpers as weak definitions, so any mix of LLVM and C-backend units links. A program's
+// own runtime is strong on Windows: GNU ld for PE leaves the program object's references to another
+// object's weak definitions undefined (lld resolves them)
 fn llvm_runtime_c(chk: checker&, hdr: std::vec<str>&, runtime: bool) -> std::string {
-    var out = S("#define VOLT_RT_LINKAGE __attribute__((weak))\n");
+    var out = S("");
+    if (runtime) {
+        out.append("#ifdef _WIN32\n#define VOLT_RT_LINKAGE\n#else\n#define VOLT_RT_LINKAGE __attribute__((weak))\n#endif\n");
+    } else {
+        out.append("#define VOLT_RT_LINKAGE __attribute__((weak))\n");
+    }
     if (!chk.opts.release) {
         out.append("#define VOLT_DEBUG_ALLOC 1\n");
     }
@@ -3105,7 +3112,7 @@ fn llvm_runtime_c(chk: checker&, hdr: std::vec<str>&, runtime: bool) -> std::str
         out.push('\n');
     }
     for (h) in hdr.items() {
-        out.append("__attribute__((weak)) void *volt_c_");
+        out.append("VOLT_RT_LINKAGE void *volt_c_");
         out.append(h);
         out.append(" = (void *)");
         out.append(h);

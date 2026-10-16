@@ -42,7 +42,7 @@ pub fn import(r: &Req) -> Result<(), String> {
         return Ok(());
     }
     std::fs::create_dir_all(&r.out).map_err(|e| format!("can't make {}: {e}", r.out.display()))?;
-    let out = std::fs::canonicalize(&r.out).unwrap_or_else(|_| r.out.clone());
+    let out = super::canonicalize(&r.out).unwrap_or_else(|_| r.out.clone());
 
     // the declarations, and the module as a script returning what it exports
     let tsrc = std::fs::read_to_string(&types).map_err(|e| format!("use js: can't read {}: {e}", types.display()))?;

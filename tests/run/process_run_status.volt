@@ -1,4 +1,5 @@
 // std::process::run_status: how a program ended, its exit code and the signal that ended it (0 if none)
+// unix-only (Windows has no signals: MSYS's sh -c 'kill -ABRT $$' exits 6 << 8)
 use std::io;
 
 fn show(script: str) -> void {

@@ -2,6 +2,7 @@ use std::io;
 // std::math::portable (std/math_portable.volt, in Volt) against the C library's libm, in ulps, on
 // edge cases (zeros, subnormals, infinities, NaN, the largest double, near pi/2 and overflow) and
 // random doubles of every size; then the f32 overloads
+// unix-only (MinGW's expm1 is 2 ulps off where glibc's and Apple's are within 1)
 
 extern "C" fn sqrt(x: f64) -> f64;
 extern "C" fn cbrt(x: f64) -> f64;

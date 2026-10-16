@@ -18,6 +18,12 @@ fn ok(o: Output, what: &str) -> String {
     out + "\n" + &err
 }
 
+/// a directory as a file:// URL's path: forward slashes, and a drive letter after a slash (file:///C:/x)
+fn file_url_path(p: &std::path::Path) -> String {
+    let s = p.display().to_string().replace('\\', "/");
+    if s.starts_with('/') { s } else { format!("/{s}") }
+}
+
 #[test]
 fn bolt() {
     let tmp = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("bolt-{}", std::process::id()));
@@ -56,7 +62,7 @@ fn bolt() {
         &app.join("bolt.toml"),
         &format!(
             "[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies]\nmathx = {{ path = \"../mathx\" }}\ngreet = {{ git = \"file://{}\" }}\n\n[build]\nfiles = [\"build.volt\"]\n",
-            greet.display()
+            file_url_path(&greet)
         ),
     );
     write(
@@ -263,7 +269,7 @@ fn workspace_features_profiles() {
     // the root builds every member into one target/
     let out = e.ok(&ws, &["build"]);
     assert!(out.contains("Compiling core v0.1.0") && out.contains("Finished `dev` profile"), "{out}");
-    assert!(ws.join("target/debug/app").is_file() && ws.join("target/debug/quiet").is_file() && !c.join("app/target").exists());
+    assert!(ws.join(format!("target/debug/app{}", std::env::consts::EXE_SUFFIX)).is_file() && ws.join(format!("target/debug/quiet{}", std::env::consts::EXE_SUFFIX)).is_file() && !c.join("app/target").exists());
 
     // each package's features: defaults, a dependency's features, --no-default-features off the dependency
     assert!(e.ok(&ws, &["run", "-p", "app"]).contains("app LOUD helper"));
@@ -279,7 +285,7 @@ fn workspace_features_profiles() {
 
     // profiles: release and a custom one, each in its own directory
     let out = e.ok(&ws, &["build", "-p", "app", "--profile", "fast", "-v"]);
-    assert!(ws.join("target/fast/app").is_file() && out.contains("-DFAST=1") && out.contains("--release"), "{out}");
+    assert!(ws.join(format!("target/fast/app{}", std::env::consts::EXE_SUFFIX)).is_file() && out.contains("-DFAST=1") && out.contains("--release"), "{out}");
     assert!(e.ok(&ws, &["build", "-p", "app", "--release"]).contains("Finished `release` profile [optimized]"));
     let err = e.fails(&ws, &["build", "--profile", "nope"]);
     assert!(err.contains("no profile 'nope'"), "{err}");
@@ -365,9 +371,9 @@ fn targets_and_commands() {
     e.ok(&app, &["test", "--no-run"]);
     // a dev-dependency's features, for the builds that use it
     e.ok(&app, &["test", "--no-run", "--features", "testutil/strict"]);
-    assert!(app.join("target/debug/tests/unit").is_file());
+    assert!(app.join(format!("target/debug/tests/unit{}", std::env::consts::EXE_SUFFIX)).is_file());
     let out = e.ok(&app, &["bench"]);
-    assert!(out.contains("bench speed ... ") && app.join("target/release/benches/speed").is_file(), "{out}");
+    assert!(out.contains("bench speed ... ") && app.join(format!("target/release/benches/speed{}", std::env::consts::EXE_SUFFIX)).is_file(), "{out}");
     write(&app.join("tests/broken.volt"), "fn main() -> i32 { return 3; }\n");
     let o = e.run(&app, &["test"]);
     let out = String::from_utf8_lossy(&o.stdout).to_string();

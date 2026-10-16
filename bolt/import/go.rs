@@ -84,7 +84,7 @@ pub fn import(r: &Req) -> Result<(), String> {
     // among a program's imports
     let shim_dir = r.out.join("shim");
     std::fs::create_dir_all(&shim_dir).map_err(|e| format!("can't make {}: {e}", shim_dir.display()))?;
-    let out = std::fs::canonicalize(&r.out).unwrap_or_else(|_| r.out.clone());
+    let out = super::canonicalize(&r.out).unwrap_or_else(|_| r.out.clone());
     let id: String = out.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default().chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '_' }).collect();
     let shim_pkg = format!("volt_{id}");
     let user_mod = format!("volt_user_{id}");
@@ -217,7 +217,7 @@ pub fn link(r: &Req) -> Result<(), String> {
     crate::build::write_if_changed(&main.join("go.mod"), &gomod)?;
     crate::build::write_if_changed(&main.join("go.sum"), &sums.into_iter().map(|l| l + "\n").collect::<String>())?;
     crate::build::write_if_changed(&main.join("main.go"), &format!("// a Volt program's use go imports, with one Go runtime (written by bolt import go-link)\npackage main\n\nimport (\n{imports})\n\nfunc main() {{}}\n"))?;
-    let lib_file = std::fs::canonicalize(&r.out).unwrap_or_else(|_| r.out.clone()).join("libvolt_go.a");
+    let lib_file = super::canonicalize(&r.out).unwrap_or_else(|_| r.out.clone()).join("libvolt_go.a");
     let go = std::env::var("GO").unwrap_or_else(|_| "go".into());
     let mut args = vec!["build", "-buildmode=c-archive", "-o"];
     let lib = lib_file.display().to_string();

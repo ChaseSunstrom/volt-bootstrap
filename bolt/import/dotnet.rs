@@ -44,7 +44,7 @@ pub fn import(r: &Req) -> Result<(), String> {
     }
     let out = {
         std::fs::create_dir_all(&r.out).map_err(|e| format!("can't make {}: {e}", r.out.display()))?;
-        std::fs::canonicalize(&r.out).unwrap_or_else(|_| r.out.clone())
+        super::canonicalize(&r.out).unwrap_or_else(|_| r.out.clone())
     };
     let id: String = out.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default().chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '_' }).collect();
     let (version, root) = runtime(&dotnet)?;
