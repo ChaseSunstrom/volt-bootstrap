@@ -1063,13 +1063,18 @@ fn rust_direct() {
     }
     // rustdoc unable to write its JSON: the crate is read from rustc's expanded source, so what a
     // macro makes is still there (a cache of its own: the import isn't the one rustdoc read)
+    // (the generated declarations say where they came from: voltc keeps bolt's stderr to itself)
+    let mut c = Command::new(&e.voltc);
+    c.args(["check", "macro.volt"]).current_dir(&dir).env("VOLT_STD", Path::new(ROOT).join("std")).env("VOLT_SHOW_IMPORT", "1");
+    tools(&mut c);
+    c.env("RUSTDOC", "false").env("VOLT_CACHE", e.dir.join("cache-nodoc"));
+    let shown = String::from_utf8_lossy(&c.output().unwrap().stderr).to_string();
+    assert!(shown.contains("was read from rustc's expanded source"), "{shown}");
     let mut c = Command::new(&e.voltc);
     c.args(["run", "macro.volt"]).current_dir(&dir).env("VOLT_STD", Path::new(ROOT).join("std"));
     tools(&mut c);
     c.env("RUSTDOC", "false").env("VOLT_CACHE", e.dir.join("cache-nodoc"));
-    let o = c.output().unwrap();
-    assert!(String::from_utf8_lossy(&o.stderr).contains("rustc's expanded source"), "{}", String::from_utf8_lossy(&o.stderr));
-    assert_eq!(ok(o, "voltc run macro.volt"), expect("macro.volt"), "without rustdoc");
+    assert_eq!(ok(c.output().unwrap(), "voltc run macro.volt"), expect("macro.volt"), "without rustdoc");
     let mut c = Command::new(&e.voltc);
     c.args(["run", "generics_bad.volt"]).current_dir(&dir).env("VOLT_STD", Path::new(ROOT).join("std"));
     tools(&mut c);
