@@ -1443,7 +1443,7 @@ fn lsp_capabilities() -> std::json::value {
 fn lsp_main(std_dir: std::string?) -> i32 {
     var srv: lsp_server = {};
     if (std_dir) {
-        srv.std_dir = slashes(std_dir.value.as_str());
+        srv.std_dir = slashes(std_dir.as_str());
     }
     var r: lsp_reader = {};
     loop {

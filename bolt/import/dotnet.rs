@@ -89,7 +89,7 @@ pub fn import(r: &Req) -> Result<(), String> {
     let proj = format!("<Project Sdk=\"Microsoft.NET.Sdk\">\n  <PropertyGroup>\n    <TargetFramework>{tfm}</TargetFramework>\n    <AssemblyName>{shim_name}</AssemblyName>\n    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>\n    <EnableDynamicLoading>true</EnableDynamicLoading>\n    <Nullable>disable</Nullable>\n  </PropertyGroup>\n  <ItemGroup>\n    <Reference Include=\"{}\">\n      <HintPath>{}</HintPath>\n    </Reference>\n  </ItemGroup>\n</Project>\n", xml(&user_name), xml(&user.display().to_string()));
     let model_with = |lines: &[String], skip: &BTreeMap<String, String>| {
         let (mut model, lang) = read(&desc);
-        let mut lang = Dotnet { asm: dir.join("bin").join(format!("{shim_name}.dll")), asm_name: shim_name.clone(), ..lang };
+        let mut lang = Dotnet { asm: dir.join("bin").join(format!("{shim_name}.dll")), asm_name: shim_name.clone(), root: root.clone(), ..lang };
         let made = instances(&mut model, &mut lang, lines, &r.alias, skip);
         (model, lang, made)
     };
@@ -685,6 +685,8 @@ struct Dotnet {
     /// the shim's assembly, and its name
     asm: PathBuf,
     asm_name: String,
+    /// the .NET install bolt found, which the program's hostfxr is told
+    root: PathBuf,
 }
 
 /// between call() and function(): a void method whose out parameters are its results is a
@@ -1133,7 +1135,7 @@ impl Lang for Dotnet {
 
     fn loader(&self, _g: &Gen) -> Option<String> {
         let q = |p: &Path| p.display().to_string().replace('\\', "\\\\").replace('"', "\\\"");
-        Some(LOADER.replace("{CONFIG}", &q(&self.asm.with_extension("runtimeconfig.json"))).replace("{ASM}", &q(&self.asm)).replace("{NAME}", &self.asm_name))
+        Some(LOADER.replace("{CONFIG}", &q(&self.asm.with_extension("runtimeconfig.json"))).replace("{ASM}", &q(&self.asm)).replace("{NAME}", &self.asm_name).replace("{ROOT}", &q(&self.root)))
     }
 }
 
@@ -1238,6 +1240,14 @@ const LOADER: &str = r#"    extern "C" fn hostfxr_initialize_for_runtime_config(
     extern "C" fn hostfxr_close(handle: void*) -> i32;
     var load_fp: void* = null;
 
+    // hostfxr_initialize_parameters: its size, the host's path (none) and .NET's root (the install
+    // bolt found: a hostfxr the system finds first, PowerShell's on Windows, would guess another)
+    struct fxr_params {
+        size: usize;
+        host_path: void* = null;
+        dotnet_root: void* = null;
+    }
+
     fn unit(out: std::vec<u8>&, u: u32) -> void {
         out.push(@cast<u8>(u & 0xFF)) catch @panic("out of memory");
         out.push(@cast<u8>(u >> 8)) catch @panic("out of memory");
@@ -1292,8 +1302,10 @@ const LOADER: &str = r#"    extern "C" fn hostfxr_initialize_for_runtime_config(
         }
         if (load_fp == null) {
             val config = char_t("{CONFIG}");
+            val root = char_t("{ROOT}");
+            var params: fxr_params = { size: @sizeof(fxr_params), dotnet_root: @cast<void*>(root.items().ptr) };
             var h: void* = null;
-            val rc = hostfxr_initialize_for_runtime_config(@cast<cstr>(config.items().ptr), null, &h);
+            val rc = hostfxr_initialize_for_runtime_config(@cast<cstr>(config.items().ptr), @cast<void*>(&params), &h);
             if (rc < 0 || rc > 2) {
                 @panic(std::fmt::format(".NET didn't start (hostfxr: 0x{:x})", @cast<u32>(rc)).as_str());
             }

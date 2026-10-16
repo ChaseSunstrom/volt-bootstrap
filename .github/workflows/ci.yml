@@ -216,6 +216,9 @@ jobs:
           - { arch: arm64, os: windows-11-arm, triple: aarch64-pc-windows-msvc, mingw: aarch64 }
     runs-on: ${{ matrix.os }}
     timeout-minutes: 350
+    # the runner's .NET (PATH has PowerShell's own bundled hostfxr before it)
+    env:
+      DOTNET_ROOT: C:\Program Files\dotnet
     defaults:
       run:
         shell: bash
