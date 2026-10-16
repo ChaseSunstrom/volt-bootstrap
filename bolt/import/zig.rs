@@ -65,7 +65,9 @@ pub fn import(r: &Req) -> Result<(), String> {
         let mut m = model.clone();
         let mut deinit = w.deinit.clone();
         instances(&mut m, &mut deinit, lines, &r.alias, skip);
-        let lang = Zig { deinit, opaques: w.opaques.clone() };
+        // a tagged union's payloads with a deinit: its drop calls the active one's
+        let unions = w.unions.iter().filter(|u| u.1 .0).map(|(u, (_, fs))| (u.clone(), (fs.len(), fs.iter().filter_map(|(f, t)| if let Some(Ty::Named(n)) = t { deinit.get(n).map(|a| (f.clone(), *a)) } else { None }).collect()))).collect();
+        let lang = Zig { deinit, opaques: w.opaques.clone(), unions };
         let (shim, volt) = Gen::new(&m, &r.alias, &lang).write("the file");
         crate::build::write_if_changed(&shim_file, &shim)?;
         let mut c = Command::new(&zig);
@@ -111,6 +113,8 @@ struct Walker {
     extern_structs: BTreeSet<String>,
     /// extern fns with C's calling convention: module, the type they're declared in, signature
     externs: Vec<(Vec<String>, Option<String>, Sig)>,
+    /// unions: whether each is tagged, and its fields (payloads)
+    unions: BTreeMap<String, (bool, Vec<(String, Option<Ty>)>)>,
 }
 
 impl Walker {
@@ -124,19 +128,34 @@ impl Walker {
             t.clone = !has_deinit && !t.is_enum && !opaque;
             t.opaque = has_deinit || opaque;
         }
-        // a union's reads copy its payload out: not one that frees what it holds (twice, then)
         let frees = |t: &Option<Ty>| match t {
             Some(Ty::Opt(x)) => matches!(&**x, Ty::Named(n) if self.deinit.contains_key(n)),
             Some(Ty::Named(n)) => self.deinit.contains_key(n),
             _ => false,
         };
+        // a tagged union holding a payload that frees what it holds: its drop frees that too, so it
+        // can't be copied (and moves when passed by value)
+        for t in &mut m.types {
+            if self.unions.get(&t.name).is_some_and(|(tagged, ps)| *tagged && ps.iter().any(|p| frees(&p.1))) {
+                t.clone = false;
+                t.opaque = true;
+            }
+        }
+        // a union's reads copy its payload out: not one that frees what it holds (twice, then); a
+        // bare union never knows which field to free, so it isn't given one
         for (u, ms) in &mut m.methods {
+            let Some((tagged, _)) = self.unions.get(u) else { continue };
             ms.retain(|s| {
-                let bad = s.call.as_ref().is_some_and(|c| c.starts_with('=')) && frees(&s.ret);
-                if bad {
-                    m.left_out.push(format!("{u}::{} (it would copy a value that frees what it holds)", s.name));
-                }
-                !bad
+                let ours = s.call.as_ref().is_some_and(|c| c.starts_with('='));
+                let why = if ours && frees(&s.ret) {
+                    "it would copy a value that frees what it holds"
+                } else if ours && !tagged && s.params.first().is_some_and(|p| frees(&p.1)) {
+                    "a bare union never frees its payload"
+                } else {
+                    return true;
+                };
+                m.left_out.push(format!("{u}::{} ({why})", s.name));
+                false
             });
         }
         // extern fns: of numbers alone, declared as the C functions they are; with pointers to
@@ -150,7 +169,9 @@ impl Walker {
             _ => false,
         };
         for (module, owner, s) in &self.externs {
-            if !s.params.iter().all(|p| c_ty(&p.1, false)) {
+            if let Some(why) = s.skip {
+                m.left_out.push(format!("{} (an extern fn with {why})", s.name));
+            } else if !s.params.iter().all(|p| c_ty(&p.1, false)) {
                 m.left_out.push(format!("{} (an extern fn with a parameter of a type C doesn't have)", s.name));
             } else if !c_ty(&s.ret, true) {
                 m.left_out.push(format!("{} (an extern fn with a result of a type C doesn't have)", s.name));
@@ -419,12 +440,21 @@ impl Walker {
             }
         };
         self.m.types.push(TypeDef { module: module.to_vec(), name: name.to_string(), generic: false, fields: None, variants: None, is_enum: false, clone: false, opaque: false, params: Vec::new(), rust_name: None });
+        self.unions.insert(name.to_string(), (tag.is_some(), fields.iter().map(|f| (f.0.clone(), f.2.clone())).collect()));
+        // text, a slice or a pointer Volt passes is only lent for the call: the union would keep it
+        let borrows = |t: &Ty| matches!(t, Ty::Str | Ty::Slice(..) | Ty::Ref(..));
+        let borrows = |t: &Option<Ty>| matches!(t, Some(Ty::Opt(x)) if borrows(x)) || t.as_ref().is_some_and(borrows);
         let sig = |n: String, recv: Recv, params: Vec<(String, Option<Ty>)>, ret: Option<Ty>, call: String, src: String| Sig { name: n, recv, params, ret, skip: None, src, generics: Vec::new(), call: Some(call) };
         let ms = self.m.methods.entry(name.to_string()).or_default();
         for (f, _, t) in &fields {
             let unit = *t == Some(Ty::Unit);
             let (arg, params) = if unit { ("{}", Vec::new()) } else { ("$0", vec![("v".to_string(), t.clone())]) };
-            ms.push(sig(f.clone(), Recv::None, params.clone(), Some(Ty::SelfTy), format!("=@unionInit($T, \"{f}\", {arg})"), format!("{name}{{ .{f} = v }}")));
+            let lent = borrows(t);
+            if lent {
+                self.m.left_out.push(format!("{name}::{f} (its payload would borrow what Volt passes)"));
+            } else {
+                ms.push(sig(f.clone(), Recv::None, params.clone(), Some(Ty::SelfTy), format!("=@unionInit($T, \"{f}\", {arg})"), format!("{name}{{ .{f} = v }}")));
+            }
             if unit {
                 continue;
             }
@@ -432,6 +462,10 @@ impl Walker {
                 ms.push(sig(format!("as_{f}"), Recv::Ref, Vec::new(), t.clone().map(|t| Ty::Opt(Box::new(t))), format!("=if ($r.* == .{f}) $r.{f} else null"), format!("{name}.{f}, when it's the active field")));
             } else {
                 ms.push(sig(f.clone(), Recv::Ref, Vec::new(), t.clone(), format!("=$r.{f}"), format!("{name}.{f} (reading a field that isn't the active one is a Zig safety check)")));
+                if lent {
+                    self.m.left_out.push(format!("{name}::set_{f} (its payload would borrow what Volt passes)"));
+                    continue;
+                }
                 ms.push(sig(format!("set_{f}"), Recv::Mut, params, Some(Ty::Unit), format!("=$r.* = @unionInit($T, \"{f}\", {arg})"), format!("{name}{{ .{f} = v }}, the active field from now on")));
             }
         }
@@ -708,7 +742,7 @@ fn sig_in(head: &[Tok], owner: Option<&str>, outer: &[String]) -> Sig {
         let comptime = matches!(p.first(), Some(Tok::Id(w)) if w == "comptime");
         let p: Vec<Tok> = p.into_iter().filter(|x| *x != Tok::Id("noalias".into()) && *x != Tok::Id("comptime".into())).collect();
         let Some(colon) = p.iter().position(|x| *x == Tok::P(":".into())) else {
-            s.skip = Some("a parameter");
+            s.skip = Some(if !p.is_empty() && p.iter().all(|x| *x == Tok::P(".".into())) { "a variadic parameter (...)" } else { "a parameter" });
             continue;
         };
         let pname = match p.first() {
@@ -829,6 +863,9 @@ fn parse_ty_in(t: &[Tok], owner: Option<&str>, gens: &[String]) -> Option<Ty> {
                 "Self" => Ty::SelfTy,
                 "c_int" => Ty::Prim("i32"),
                 "c_uint" => Ty::Prim("u32"),
+                // (C's long is 32 bits on Windows; bolt builds for the system it runs on)
+                "c_long" if cfg!(windows) => Ty::Prim("i32"),
+                "c_ulong" if cfg!(windows) => Ty::Prim("u32"),
                 "c_long" | "c_longlong" => Ty::Prim("i64"),
                 "c_ulong" | "c_ulonglong" => Ty::Prim("u64"),
                 "c_short" => Ty::Prim("i16"),
@@ -852,6 +889,9 @@ struct Zig {
     deinit: std::collections::BTreeMap<String, bool>,
     /// opaque types (Volt borrows them, never frees them)
     opaques: BTreeSet<String>,
+    /// tagged unions: how many fields, and those whose payload has a deinit (whether it takes the
+    /// allocator): dropping one deinits its active payload
+    unions: BTreeMap<String, (usize, Vec<(String, bool)>)>,
 }
 
 impl Zig {
@@ -1154,10 +1194,14 @@ impl Lang for Zig {
             }
             Kind::Handle => {
                 let drop = g.sym(&[&mg, "drop"]);
-                let deinit = match self.deinit.get(&ti.def.name) {
-                    Some(true) => "p.deinit(alloc);\n    ",
-                    Some(false) => "p.deinit();\n    ",
-                    None => "",
+                let deinit = match (self.deinit.get(&ti.def.name), self.unions.get(&ti.def.name)) {
+                    (Some(true), _) => "p.deinit(alloc);\n    ".to_string(),
+                    (Some(false), _) => "p.deinit();\n    ".to_string(),
+                    (None, Some((n, fs))) if !fs.is_empty() => {
+                        let arms: String = fs.iter().map(|(f, a)| format!(".{f} => |*x| x.deinit({}), ", if *a { "alloc" } else { "" })).collect();
+                        format!("switch (p.*) {{ {arms}{}}}\n    ", if fs.len() < *n { "else => {}, " } else { "" })
+                    }
+                    _ => String::new(),
                 };
                 let _ = writeln!(out, "export fn {drop}(h: *anyopaque) void {{\n    const p: *{zp} = @ptrCast(@alignCast(h));\n    {deinit}alloc.destroy(p);\n}}\n");
                 if ti.def.clone {
@@ -1269,7 +1313,35 @@ mod tests {
         assert_eq!(m.externs, [(vec![], "// Zig: pub extern fn c_side(x: i32) i32\nextern \"C\" fn c_side(x: i32) -> i32;\n".to_string())]);
         assert_eq!(m.left_out, ["c_naked (an extern fn with a calling convention other than C's)", "c_len (an extern fn with a parameter of a type C doesn't have)"]);
         assert_eq!(odd_int("u24"), Some("u32"));
+        assert_eq!(odd_int("u0"), None);
+        assert_eq!(ty("c_longlong"), Some(Ty::Prim("i64")));
+        assert_eq!(ty("c_long"), Some(Ty::Prim(if cfg!(windows) { "i32" } else { "i64" })));
         assert_eq!(odd_int("i1"), Some("i8"));
         assert_eq!(odd_int("u65"), None);
+    }
+
+    #[test]
+    fn import_zig_union_payloads() {
+        // a payload Volt would only lend (text, a slice, a pointer): no maker or setter; one that
+        // frees what it holds: no reads (they'd copy it), no bare union's maker or setter (it never
+        // frees it), and a tagged union holding one can't be copied; a variadic extern is left out
+        let src = "pub const Ctx = opaque {};\npub const Holder = struct { x: i32, pub fn deinit(self: *Holder) void { _ = self; } };\npub const N = union(enum) { name: []const u8, p: *Ctx, n: i32 };\npub const B = union { s: []const u8, h: Holder };\npub const T = union(enum) { h: Holder, none };\npub extern \"c\" fn c_var(a: i32, ...) i32;\n";
+        let dir = std::env::temp_dir().join(format!("volt-zig-union-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("m.zig");
+        std::fs::write(&f, src).unwrap();
+        let mut w = Walker::default();
+        w.file(&f, &[]);
+        let _ = std::fs::remove_dir_all(&dir);
+        let m = w.model();
+        let names = |t: &str| m.methods[t].iter().map(|s| s.name.clone()).collect::<Vec<_>>();
+        assert_eq!(names("N"), ["as_name", "as_p", "n", "as_n", "tag"]);
+        assert_eq!(names("B"), ["s"]);
+        assert_eq!(names("T"), ["h", "none", "tag"]);
+        let t = m.types.iter().find(|t| t.name == "T").unwrap();
+        assert!(!t.clone && t.opaque);
+        for why in ["N::name (its payload would borrow what Volt passes)", "N::p (its payload would borrow what Volt passes)", "B::set_s (its payload would borrow what Volt passes)", "B::h (it would copy a value that frees what it holds)", "B::set_h (a bare union never frees its payload)", "T::as_h (it would copy a value that frees what it holds)", "c_var (an extern fn with a variadic parameter (...))"] {
+            assert!(m.left_out.iter().any(|l| l == why), "{why}: {:?}", m.left_out);
+        }
     }
 }

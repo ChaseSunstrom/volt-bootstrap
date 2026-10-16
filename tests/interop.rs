@@ -1081,7 +1081,7 @@ fn zig_direct() {
     let e = Env::new("zig_direct");
     let dir = e.dir.join("zd");
     copy_dir(&Path::new(ROOT).join("tests/interop/zig_direct"), &dir);
-    let want = "dist 5 norm 5\nscaled 6 8\n42 fastmath 10 1.5\nfirst QUIET\nsum 7\ndoubled 2 4 6\nsquares 4 last 16\njoin a-b-c\nfind 2 true\nor_default 5 -1\nparse 42\nbad ERROR(InvalidCharacter)\ndiv 3\nzero ERROR(DivisionByZero)\ncolor blue green\npixel 2 green\ntwice 42\nperimeter 7 10 name tri\nside 4\nmissing ERROR(NoSuchSide)\nlongest quad\nconsumed 2\nticks 2 3\nlargest 9 2.5\nbigger 8 2.5 times 21 scaled 20 -10\npair 7\nstack true true false total 3 pop 2 1 true\nflags true true\npacked 5 -60 -54 7 -2\nunion true 4 true 3 true\narea 48 6 round true false\nbits 7\nbits 1.5 2.5\nctx 5 true 50\nmaybe 100\nextern 5\n";
+    let want = "dist 5 norm 5\nscaled 6 8\n42 fastmath 10 1.5\nfirst QUIET\nsum 7\ndoubled 2 4 6\nsquares 4 last 16\njoin a-b-c\nfind 2 true\nor_default 5 -1\nparse 42\nbad ERROR(InvalidCharacter)\ndiv 3\nzero ERROR(DivisionByZero)\ncolor blue green\npixel 2 green\ntwice 42\nperimeter 7 10 name tri\nside 4\nmissing ERROR(NoSuchSide)\nlongest quad\nconsumed 2\nticks 2 3\nlargest 9 2.5\nbigger 8 2.5 times 21 scaled 20 -10\npair 7\nstack true true false total 3 pop 2 1 true\nflags true true\npacked 5 -60 -54 7 -2\nunion true 4 true 3 true\nheld 3 0\narea 48 6 round true false\nbits 7\nbits 1.5 2.5\nctx 5 true 50\nmaybe 100\nextern 5\n";
     let tools = |c: &mut Command| {
         c.env("VOLTC", &e.voltc).env("BOLT", env!("CARGO_BIN_EXE_bolt")).env("VOLT_CACHE", e.dir.join("cache")).env("BOLT_HOME", e.dir.join("bolthome")).env("ZIG", &zig);
     };
@@ -1091,7 +1091,20 @@ fn zig_direct() {
         c.args(["run", "--leak-check", "--backend", backend, "main.volt"]).current_dir(&dir).env("VOLT_STD", Path::new(ROOT).join("std"));
         tools(&mut c);
         assert_eq!(ok(c.output().unwrap(), "voltc run"), want, "voltc run ({backend})");
+        // an import's library that only a later one's needs is still found (GNU ld reads each
+        // archive once, in the order given)
+        let mut c = Command::new(&e.voltc);
+        c.args(["run", "--leak-check", "--backend", backend, "order.volt"]).current_dir(&dir).env("VOLT_STD", Path::new(ROOT).join("std"));
+        tools(&mut c);
+        assert_eq!(ok(c.output().unwrap(), "voltc run order.volt"), "order 20\n", "voltc run order.volt ({backend})");
     }
+    // the limit: a file with export fns, imported under two names and used through both, gives the
+    // linker each of its C symbols twice
+    let mut c = Command::new(&e.voltc);
+    c.args(["run", "dup.volt"]).current_dir(&dir).env("VOLT_STD", Path::new(ROOT).join("std"));
+    tools(&mut c);
+    let o = c.output().unwrap();
+    assert!(!o.status.success() && String::from_utf8_lossy(&o.stderr).contains("zig_ext_add"), "two names, one file: {}", String::from_utf8_lossy(&o.stderr));
     // an instance zig rejects: zig's reason, at the call
     std::fs::write(dir.join("bad.volt"), "use std::io;\nuse { \"fastmath.zig\" } as fm;\nfn main() -> void {\n    std::println(\"{}\", fm::biggerOf(\"a\", \"b\"));\n}\n").unwrap();
     let mut c = Command::new(&e.voltc);

@@ -47,6 +47,31 @@ pub fn shapeArea(s: Shape) f32 {
     };
 }
 
+// a payload that frees what it holds: the union's drop frees it (the leak check sees it)
+pub const Buf = struct {
+    data: []u8,
+
+    pub fn init(allocator: std.mem.Allocator, n: usize) Buf {
+        return .{ .data = allocator.alloc(u8, n) catch @panic("out of memory") };
+    }
+
+    pub fn deinit(self: *Buf, allocator: std.mem.Allocator) void {
+        allocator.free(self.data);
+    }
+};
+
+pub const Held = union(enum) {
+    buf: Buf,
+    empty,
+};
+
+pub fn heldLen(h: *const Held) usize {
+    return switch (h.*) {
+        .buf => |b| b.data.len,
+        .empty => 0,
+    };
+}
+
 pub const Bits = union {
     i: u32,
     f: f32,

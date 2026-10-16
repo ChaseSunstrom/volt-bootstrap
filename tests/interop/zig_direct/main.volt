@@ -19,6 +19,9 @@ fn kinds() -> void {
     val n = kd::Shape::none();
     s.grow(2.0);
     std::println("union {} {} {} {} {}", s.tag() == kd::Shape_tag::circle, s.as_circle() ?? 0.0, r.as_circle() == null, (r.as_rect() ?? {}).h, n.tag() == kd::Shape_tag::none);
+    val held = kd::Held::buf(kd::Buf::init(3));
+    val empty = kd::Held::empty();
+    std::println("held {} {}", kd::heldLen(&held), kd::heldLen(&empty));
     std::println("area {} {} round {} {}", kd::shapeArea(&s), kd::shapeArea(&r), s.isRound(), r.isRound());
 
     // a bare union: a handle with a reader and a setter per field
