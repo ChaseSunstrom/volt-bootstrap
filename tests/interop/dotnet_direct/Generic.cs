@@ -1,5 +1,6 @@
 // Ordinary C# too: ref and out parameters, delegates, generic methods and a generic class
 using System;
+using System.Runtime.InteropServices;
 using System.Threading.Tasks;
 
 namespace Geo {
@@ -47,6 +48,17 @@ namespace Geo {
             return xs.Length > 0;
         }
 
+        // an overload with an out parameter beside one without: the plain one keeps the name
+        public static int Parse(string s) => int.Parse(s);
+        public static bool Parse(string s, out int v) => int.TryParse(s, out v);
+
+        // [In, Out] ref is a ref
+        public static void Fill([In, Out] ref int x) => x = 99;
+
+        // a delegate that returns its own type: left out, the rest still imported
+        public delegate Step Step(int x);
+        public static Step Start() => null;
+
         // Volt can't call these: they're listed in a comment of what bolt writes
         public static void Grow(ref string s) => s += "!";
         public static int Corner(int[,] m) => m[0, 0];
@@ -58,6 +70,22 @@ namespace Geo {
         public bool Next(int limit, out int v) {
             v = n++;
             return v < limit;
+        }
+    }
+
+    // a class and a generic class of one name: the plain one is imported
+    public class Tagged {
+        public string Name => "tagged";
+    }
+
+    public class Tagged<T> {
+        public T Value;
+    }
+
+    // a class nested in a generic class: left out
+    public class Outer<T> {
+        public class Inner {
+            public int N => 1;
         }
     }
 

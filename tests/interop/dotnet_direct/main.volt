@@ -69,6 +69,9 @@ fn main() -> void {
     var bx = geo::Box<i32>::new(3);
     bx.Set(bx.Get() + 4);
     val (has, f0) = geo::Gen::TryFirst<i32>(zs[..]);
+    var m = 0;
+    geo::Gen::Fill(&m);
+    std::println("parse {} fill {} {}", geo::Gen::Parse("5"), m, geo::Tagged::new().Name());
     std::println("max {} {} pick {} first {} {} box {} {} {}", geo::Gen::Max<i32>(3, 9), geo::Gen::Max<std::string>("pear", "apple"), geo::Gen::Pick<f64>(xs[..], 1), has, f0, bx.Value(), bx.Show(), geo::Box<std::string>::new("hi").Get());
 }
 // expect: norm 5 x 3
@@ -88,4 +91,5 @@ fn main() -> void {
 // expect: out true 12 false 0 4 2 0.25 true 0 false 1
 // expect: [0][1][2]apply 15 count 3 fold 14 adder 42 43
 // expect: kept 40 50 thread 7
+// expect: parse 5 fill 99 tagged
 // expect: max 9 pear pick 2 first true 5 box 7 Box(7) hi

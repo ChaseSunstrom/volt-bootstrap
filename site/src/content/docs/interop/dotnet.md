@@ -43,7 +43,7 @@ fn main() -> void {
 | `int?` and the like | `i32?` |
 | a `ref` parameter of a number, `bool`, struct or class | `T&`: what .NET writes comes back (a class's handle holds the object .NET pointed it at) |
 | `out` parameters | results: `bool TryParse(string s, out int v)` is `(bool, v: i32)`, a `void` method's one `out` its value |
-| a delegate parameter (`Func<>`, `Action<>`, a named one) of numbers, `bool`s, `char`s and `string`s | a Volt fn value (`\|\| (x: i32) -> i32 { ... }`), which .NET may keep, call later or call on another thread; it's freed when .NET collects the delegate |
+| a delegate parameter (`Func<>`, `Action<>`, a named one) of numbers, `bool`s, `char`s and `string`s | a Volt fn value (`\|\| (x: i32) -> i32 { ... }`), which .NET may keep, call later or call on another thread; it's freed when .NET collects the delegate (one still alive when the program ends is never freed: .NET runs no finalizers at exit) |
 | a delegate result | a value with `call(...)` |
 | a generic method (`T Max<T>(T a, T b)`) or class (`Box<T>`) | a Volt generic: `Gen::Max<i32>(3, 9)`, `geo::Box<i32>::new(3)`; each instance the program uses is built, and one the C# compiler rejects (a type that doesn't meet a constraint) is an error at the call with its reason. A type argument is a number, `std::string` or one of the import's types |
 

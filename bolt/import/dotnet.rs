@@ -214,7 +214,7 @@ fn instances(m: &mut Model, lang: &mut Dotnet, lines: &[String], alias: &str, sk
                     continue;
                 }
                 if !bind(&gt.params, &mut subst, &mut cs_args, m) {
-                    m.left_out.push(format!("{what} (it takes {} types, each one .NET has)", gt.params.len()));
+                    m.left_out.push(format!("{what} (it takes {} types: numbers, std::string or the import's own non-generic types)", gt.params.len()));
                     continue;
                 }
                 let full = lang.full.get(path).cloned().unwrap_or_else(|| path.to_string());
@@ -251,7 +251,7 @@ fn instances(m: &mut Model, lang: &mut Dotnet, lines: &[String], alias: &str, sk
                     continue;
                 }
                 if !bind(&g.generics, &mut subst, &mut cs_args, m) {
-                    m.left_out.push(format!("{what} (it takes {} types, each one .NET has)", g.generics.len()));
+                    m.left_out.push(format!("{what} (it takes {} types: numbers, std::string or the import's own non-generic types)", g.generics.len()));
                     continue;
                 }
                 let mut s = g.clone();
@@ -268,8 +268,8 @@ fn instances(m: &mut Model, lang: &mut Dotnet, lines: &[String], alias: &str, sk
     made
 }
 
-/// a type argument as C# spells it: a number, string, or one of the import's types (an instance
-/// made already too); a Volt type of the program's own has none
+/// a type argument as C# spells it: a number, string, or one of the import's (non-generic) types; a
+/// Volt type of the program's own, or another generic's instance, has none
 fn cs_arg(t: &Ty, m: &Model, lang: &Dotnet) -> Option<String> {
     Some(match t {
         Ty::Prim(x) => cs(x).to_string(),
@@ -304,6 +304,7 @@ using System.Reflection;
 
 static class Describe {
     static HashSet<Type> mine = new HashSet<Type>();
+    static HashSet<Type> inside = new HashSet<Type>();
 
     static string T(Type t) {
         if (t == typeof(void)) return "void";
@@ -312,8 +313,10 @@ static class Describe {
         if (t.IsGenericType && mine.Contains(t.GetGenericTypeDefinition())) return t.GetGenericTypeDefinition().FullName + "<" + string.Join(",", t.GetGenericArguments().Select(T)) + ">";
         if (typeof(Delegate).IsAssignableFrom(t) && t != typeof(Delegate) && t != typeof(MulticastDelegate)) {
             var inv = t.GetMethod("Invoke");
-            if (inv == null || inv.ReturnType.IsByRef || inv.GetParameters().Any(p => p.ParameterType.IsByRef)) return "other";
-            return "fn(" + string.Join(",", inv.GetParameters().Select(p => T(p.ParameterType))) + ")" + T(inv.ReturnType);
+            if (inv == null || inv.ReturnType.IsByRef || inv.GetParameters().Any(p => p.ParameterType.IsByRef) || !inside.Add(t)) return "other";
+            var fn = "fn(" + string.Join(",", inv.GetParameters().Select(p => T(p.ParameterType))) + ")" + T(inv.ReturnType);
+            inside.Remove(t);
+            return fn;
         }
         var u = Nullable.GetUnderlyingType(t);
         if (u != null) return T(u) + "?";
@@ -346,9 +349,12 @@ static class Describe {
     static string P(ParameterInfo p) {
         var t = p.ParameterType;
         if (!t.IsByRef) return T(t);
-        if (p.IsOut) return "out:" + T(t.GetElementType());
-        return p.IsIn ? T(t.GetElementType()) : "ref:" + T(t.GetElementType());
+        if (p.IsOut && !p.IsIn) return "out:" + T(t.GetElementType());
+        return In(p) ? T(t.GetElementType()) : "ref:" + T(t.GetElementType());
     }
+
+    // an in parameter (not [In] ref): its modreq says so
+    static bool In(ParameterInfo p) => p.GetRequiredCustomModifiers().Contains(typeof(System.Runtime.InteropServices.InAttribute));
 
     // a type as C# spells it
     static string Cs(Type t) {
@@ -361,7 +367,7 @@ static class Describe {
 
     // a method or constructor as C# declares it: public static int Add(int a, int b)
     static string Decl(MethodBase m) {
-        var ps = string.Join(", ", m.GetParameters().Select(p => Cs(p.ParameterType) + " " + p.Name));
+        var ps = string.Join(", ", m.GetParameters().Select(p => (!p.ParameterType.IsByRef ? "" : p.IsOut && !p.IsIn ? "out " : In(p) ? "in " : "ref ") + Cs(p.ParameterType) + " " + p.Name));
         var head = "public " + (m.IsStatic ? "static " : "");
         var tps = m.IsGenericMethodDefinition ? "<" + string.Join(", ", m.GetGenericArguments().Select(a => a.Name)) + ">" : "";
         return m is MethodInfo mi ? $"{head}{Cs(mi.ReturnType)} {m.Name}{tps}({ps})" : $"{head}{m.DeclaringType.Name.Split('`')[0]}({ps})";
@@ -390,7 +396,7 @@ static class Describe {
         // (a delegate type is the fn type of its Invoke, not a type of its own)
         foreach (var t in all.OrderBy(t => t.FullName)) {
             if (typeof(Delegate).IsAssignableFrom(t)) continue;
-            if (t.ContainsGenericParameters && !t.IsGenericTypeDefinition) Console.WriteLine($"other\t{t.FullName}\tit's inside a generic type");
+            if (t.ContainsGenericParameters && (!t.IsGenericTypeDefinition || (t.IsNested && t.DeclaringType.IsGenericTypeDefinition))) Console.WriteLine($"other\t{t.FullName}\tit's inside a generic type");
             else mine.Add(t);
         }
         foreach (var t in mine.OrderBy(t => t.FullName)) {
@@ -529,14 +535,17 @@ fn read(desc: &str) -> (Model, Dotnet) {
     let mut lang = Dotnet::default();
     // the types, by full name; two with one Volt name: neither
     let fulls: Vec<&str> = rows.iter().filter(|f| f.len() == 3 && f[0] == "type").map(|f| f[1]).collect();
-    let mut count: BTreeMap<String, usize> = BTreeMap::new();
+    // (a generic one's arity, Box`1, isn't in its Volt name: a plain type of that name keeps it)
+    let generic = |f: &str| f.contains('`');
+    let mut count: BTreeMap<(String, bool), usize> = BTreeMap::new();
     for f in &fulls {
-        *count.entry(volt_type(f)).or_default() += 1;
+        *count.entry((volt_type(f), generic(f))).or_default() += 1;
     }
     let mut names = BTreeMap::new();
     for f in &fulls {
         let v = volt_type(f);
-        if count[&v] > 1 || v == "dotnet_shim" {
+        let plain_too = generic(f) && count.contains_key(&(v.clone(), false));
+        if count[&(v.clone(), generic(f))] > 1 || plain_too || v == "dotnet_shim" {
             m.left_out.push(format!("{f} (another type is called {v})"));
         } else {
             lang.full.insert(v.clone(), f.to_string());
@@ -655,6 +664,11 @@ fn read(desc: &str) -> (Model, Dotnet) {
             "other" if f.len() >= 3 => m.left_out.push(format!("{} ({})", f[1], f[2])),
             _ => {}
         }
+    }
+    // an overload with out parameters after its plain twin (both are Parse(s) to Volt: the first
+    // keeps the name)
+    for ms in m.methods.values_mut() {
+        ms.sort_by_key(|s| s.params.iter().any(|(_, t)| matches!(t, Some(Ty::Out(..)))));
     }
     (m, lang)
 }
@@ -1287,16 +1301,16 @@ mod tests {
         assert!(bx.generic && bx.opaque && bx.params == ["T"]);
         assert_eq!(m.methods["Box"][0].ret, Some(Ty::SelfTy));
         assert_eq!(m.methods["Box"][1].ret, Some(Ty::Generic("T".into())));
-        let gs = &m.methods["Gen"];
+        let gs = |n: &str| m.methods["Gen"].iter().find(|s| s.name == n).unwrap().clone();
         // out: results (a void method's one out is its value); ref: a reference; a delegate: a closure .NET may keep
-        assert_eq!(gs[0].params[1].1, Some(Ty::Out(Box::new(Ty::Prim("i32")), "v".into())));
-        assert_eq!(gs[0].ret, Some(Ty::Tuple(vec![(String::new(), Ty::Prim("bool")), ("v".into(), Ty::Prim("i32"))])));
-        assert_eq!(gs[1].params[0].1, Some(Ty::Ref(Box::new(Ty::Prim("i32")), true)));
-        assert_eq!(gs[2].ret, Some(Ty::Prim("i32")));
-        assert_eq!(gs[3].ret, Some(Ty::Tuple(vec![("w".into(), Ty::Prim("i32")), ("f".into(), Ty::String)])));
-        assert_eq!(gs[4].params[0].1, Some(Ty::Fn(vec![Ty::Prim("i32"), Ty::Str], Box::new(Ty::String), FnPass::Boxed, false)));
-        assert_eq!(gs[5].generics, ["T"]);
-        assert_eq!((&gs[6].params[0].1, &gs[6].ret), (&Some(Ty::Slice(Box::new(Ty::Generic("T".into())), true)), &Some(Ty::Opt(Box::new(Ty::Generic("T".into()))))));
+        assert_eq!(gs("TryParse").params[1].1, Some(Ty::Out(Box::new(Ty::Prim("i32")), "v".into())));
+        assert_eq!(gs("TryParse").ret, Some(Ty::Tuple(vec![(String::new(), Ty::Prim("bool")), ("v".into(), Ty::Prim("i32"))])));
+        assert_eq!(gs("Bump").params[0].1, Some(Ty::Ref(Box::new(Ty::Prim("i32")), true)));
+        assert_eq!(gs("Half").ret, Some(Ty::Prim("i32")));
+        assert_eq!(gs("Split").ret, Some(Ty::Tuple(vec![("w".into(), Ty::Prim("i32")), ("f".into(), Ty::String)])));
+        assert_eq!(gs("Apply").params[0].1, Some(Ty::Fn(vec![Ty::Prim("i32"), Ty::Str], Box::new(Ty::String), FnPass::Boxed, false)));
+        assert_eq!(gs("Max").generics, ["T"]);
+        assert_eq!((&gs("Pick").params[0].1, &gs("Pick").ret), (&Some(Ty::Slice(Box::new(Ty::Generic("T".into())), true)), &Some(Ty::Opt(Box::new(Ty::Generic("T".into()))))));
         // the instances a program asked for: Max<int> and Box<int>, its members and properties too
         let made = instances(&mut m, &mut lang, &["Gen::Max\ti32".to_string(), "Box\ti32".to_string()], "geo", &BTreeMap::new());
         assert_eq!(made, [None, Some("Box__i32".to_string())]);
@@ -1309,6 +1323,10 @@ mod tests {
         let _ = instances(&mut m, &mut lang, &["Gen::Max\tmine".to_string()], "geo", &BTreeMap::new());
         assert!(m.left_out.iter().any(|l| l.starts_with("Gen::Max<mine>")));
         assert_eq!(volt_type("Geo.Outer`1+Inner`2"), "Outer_Inner");
+        // a plain type keeps a name a generic one shares; an out overload comes after its plain twin
+        let (m2, _) = read("type\tGeo.Tag`1\tclass\ntparam\tT\nend\ntype\tGeo.Tag\tclass\nfunc\tParse\tstatic\nparam\ts\tstring\nparam\tv\tout:i32\nresult\tbool\nend\nfunc\tParse\tstatic\nparam\ts\tstring\nresult\ti32\nend\nend\n");
+        assert_eq!((m2.types.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(), m2.left_out.clone()), (vec!["Tag"], vec!["Geo.Tag`1 (another type is called Tag)".to_string()]));
+        assert_eq!(m2.methods["Tag"][0].params.len(), 1);
         assert_eq!(cs_errors("/x/Shim.cs(3,9): error CS0311: The type 'Geo.Shape' can't be used [/x/Shim.csproj]"), "/x/Shim.cs(3,9): error: CS0311: The type 'Geo.Shape' can't be used");
     }
 }
