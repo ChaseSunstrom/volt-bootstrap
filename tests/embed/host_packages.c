@@ -99,6 +99,11 @@ int main(int argc, char **argv) {
         return 1;
     }
     printf("m %d\n", ((int (*)(void))volt_vm_find(vm, S("m")))());
+    // loaded again, it doesn't link: the old one made way for it, so neither is there
+    if (volt_vm_load(vm, S("missing.volt"), S("extern \"C\" fn still_not_anywhere() -> i32;\nexport fn m() -> i32 { return still_not_anywhere(); }\n")).error) {
+        say_error(vm, "missing replaced");
+    }
+    printf("m found %d\n", volt_vm_find(vm, S("m")) != 0);
     const char *names[] = { "my-util.volt", "std.volt", "dir/fn.volt" };
     for (int i = 0; i < 3; i++) {
         if (volt_vm_load(vm, S(names[i]), S("export fn z() -> i32 { return 0; }\n")).error) {

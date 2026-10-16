@@ -91,8 +91,9 @@ to allow: scripts' code meets inside the VM.
 
 Loading a name again replaces that script, when no script loaded since uses it; when one does, the
 load is refused naming it (`can't load util.volt again: main_script uses it`), and the earlier
-script stays. A load that fails, to compile or to link (a symbol that isn't there), leaves nothing
-behind: no package, no code. A file whose name can't be a package's (`my-util.volt`, a keyword, or
+script stays. A load that fails to compile changes nothing; one that fails to link (a symbol that
+isn't there) leaves nothing of itself behind, no package and no code, and a script it was replacing
+is gone too (its code makes way before the new code is added). A file whose name can't be a package's (`my-util.volt`, a keyword, or
 `std`) is refused.
 
 ## Host functions

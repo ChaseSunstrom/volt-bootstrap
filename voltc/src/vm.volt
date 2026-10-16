@@ -650,11 +650,12 @@ attach fn link_bitcode(this: volt_vm&, g: lg&, path: str) -> std::string {
     return S("");
 }
 
-// a definition of the glue's: the runtime's is only there to be inlined (the library's is the one
-// called), any other becomes the script module's own (its name into names)
+// a definition of the glue's: the runtime's (the prelude's weak one) is only there to be inlined,
+// the library's being the one called; any other becomes the script module's own (its name into names)
 attach fn glue_def(this: volt_vm&, x: llvm::LLVMOpaqueValue*, names: std::vec<std::string>&) -> void {
     val name = value_name(x);
-    if (this.runtime_name(name)) {
+    val link = llvm::LLVMGetLinkage(x);
+    if (link != llvm::LLVMInternalLinkage && link != llvm::LLVMPrivateLinkage && this.runtime_name(name)) {
         llvm::LLVMSetLinkage(x, llvm::LLVMAvailableExternallyLinkage);
     } else {
         put(names, S(name));
