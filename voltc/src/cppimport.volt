@@ -3111,15 +3111,16 @@ fn with_pres(r: cpp_ret&, args: std::vec<cpp_arg>&, count: usize) -> cpp_ret {
 }
 
 // volt_cpp_text_back (once an import): a std::string& parameter's C++ copy back into the Volt
-// string, unless the call threw (in a try_ form's call: catch mode keeps which exception)
+// string, unless the call threw (in a try_ form's call: catch mode keeps which exception) or left
+// it as it was (a view of the string stays good: a template's string is probed as S& first)
 attach fn text_back_fn(this: cpp_gen&) -> void {
     if (this.text_back) {
         return;
     }
     this.text_back = true;
-    this.line("// a std::string& parameter's C++ copy, back into the Volt string unless the call threw");
+    this.line("// a std::string& parameter's C++ copy, back into the Volt string unless the call threw or left it as it was");
     this.line("fn volt_cpp_text_back(s: std::string&, t: str) -> void {");
-    this.line("    if (@cpp<i32>(\"volt_cpp_st.kind\") == 0) {");
+    this.line("    if (@cpp<i32>(\"volt_cpp_st.kind\") == 0 && s.as_str() != t) {");
     this.line("        *s = std::string::from(t);");
     this.line("    }");
     this.line("}");
@@ -6386,7 +6387,7 @@ struct cpp_import_ctx {
 
 // what a call per use declares in C++ besides the headers: the types an argument may come as, and
 // stand-ins for the arguments (an lvalue, or an rvalue for a class moved in) in any standard
-val CPP_PROBE_HEAD: str = "\n#include <cstddef>\n#include <functional>\n#include <stdint.h>\n#include <string>\n#include <utility>\n#include <vector>\n#if __cplusplus >= 201103L\n#include <cstdint>\n#endif\n#if __cplusplus >= 201703L\n#include <string_view>\n#endif\ntemplate <class T> T &volt_lv();\ntemplate <class T> T volt_rv();\n#include <iterator>\n#include <new>\n#if __cplusplus >= 201103L\n#include <type_traits>\n#endif\n\n#if __cplusplus >= 201103L\n// a range Volt loops over (for (x) in r): what begin(r) and end(r) give (end's may be a sentinel), and\n// *it++ by value\nnamespace volt_rng {\nusing std::begin;\nusing std::end;\ntemplate <class R>\nauto b(R &r) -> decltype(begin(r)) {\n    return begin(r);\n}\ntemplate <class R>\nauto e(R &r) -> decltype(end(r)) {\n    return end(r);\n}\n}\ntemplate <class R>\nstruct volt_range_of {\n    typedef decltype(volt_rng::b(std::declval<R &>())) it;\n    typedef decltype(volt_rng::e(std::declval<R &>())) end;\n    typedef typename std::decay<decltype(*std::declval<it &>())>::type elem;\n};\n#else\n// before C++11 (no decltype or std::begin): R::iterator, or R::const_iterator for a const R, from\n// r.begin() and r.end(), and the element its value_type\ntemplate <class R>\nstruct volt_range_of {\n    typedef typename R::iterator it;\n    typedef typename R::iterator end;\n    typedef typename std::iterator_traits<it>::value_type elem;\n};\ntemplate <class R>\nstruct volt_range_of<const R> {\n    typedef typename R::const_iterator it;\n    typedef typename R::const_iterator end;\n    typedef typename std::iterator_traits<it>::value_type elem;\n};\nnamespace volt_rng {\ntemplate <class R>\ntypename volt_range_of<R>::it b(R &r) {\n    return r.begin();\n}\ntemplate <class R>\ntypename volt_range_of<R>::end e(R &r) {\n    return r.end();\n}\n}\n#endif\ntemplate <class R>\nstatic void volt_range_start(R &r, void *it, void *end) {\n    new (it) typename volt_range_of<R>::it(volt_rng::b(r));\n    new (end) typename volt_range_of<R>::end(volt_rng::e(r));\n}\ntemplate <class R>\nstatic bool volt_range_done(void *it, void *end) {\n    return *(typename volt_range_of<R>::it *)it == *(typename volt_range_of<R>::end *)end;\n}\ntemplate <class R>\nstatic typename volt_range_of<R>::elem volt_range_take(void *it) {\n    typename volt_range_of<R>::it &i = *(typename volt_range_of<R>::it *)it;\n    typename volt_range_of<R>::elem v = *i;\n    ++i;\n    return v;\n}\n// the same with the iterators on C++'s heap, for those Volt can't hold in its own words (not\n// trivially copyable or destructible, or aligned past 8): made by volt_range_open, freed by\n// volt_range_close\ntemplate <class R>\nstruct volt_range_box {\n    typename volt_range_of<R>::it i;\n    typename volt_range_of<R>::end e;\n    volt_range_box(R &r) : i(volt_rng::b(r)), e(volt_rng::e(r)) {}\n};\ntemplate <class R>\nstatic void *volt_range_open(R &r) {\n    return new volt_range_box<R>(r);\n}\ntemplate <class R>\nstatic bool volt_range_done_box(void *b) {\n    return ((volt_range_box<R> *)b)->i == ((volt_range_box<R> *)b)->e;\n}\ntemplate <class R>\nstatic typename volt_range_of<R>::elem volt_range_take_box(void *b) {\n    return volt_range_take<R>(&((volt_range_box<R> *)b)->i);\n}\ntemplate <class R>\nstatic void volt_range_close(void *b) {\n    delete (volt_range_box<R> *)b;\n}\n";
+val CPP_PROBE_HEAD: str = "\n#include <cstddef>\n#include <functional>\n#include <stdint.h>\n#include <string>\n#include <utility>\n#include <vector>\n#if __cplusplus >= 201103L\n#include <cstdint>\n#endif\n#if __cplusplus >= 201703L\n#include <string_view>\n#endif\ntemplate <class T> T &volt_lv();\ntemplate <class T> T volt_rv();\n#if __cplusplus >= 201103L\n#define VOLT_MOVE(...) std::move(__VA_ARGS__)\n#else\n#define VOLT_MOVE(...) (__VA_ARGS__)\n#endif\n#include <iterator>\n#include <new>\n#if __cplusplus >= 201103L\n#include <type_traits>\n#endif\n\n#if __cplusplus >= 201103L\n// a range Volt loops over (for (x) in r): what begin(r) and end(r) give (end's may be a sentinel), and\n// *it++ by value\nnamespace volt_rng {\nusing std::begin;\nusing std::end;\ntemplate <class R>\nauto b(R &r) -> decltype(begin(r)) {\n    return begin(r);\n}\ntemplate <class R>\nauto e(R &r) -> decltype(end(r)) {\n    return end(r);\n}\n}\ntemplate <class R>\nstruct volt_range_of {\n    typedef decltype(volt_rng::b(std::declval<R &>())) it;\n    typedef decltype(volt_rng::e(std::declval<R &>())) end;\n    typedef typename std::decay<decltype(*std::declval<it &>())>::type elem;\n};\n#else\n// before C++11 (no decltype or std::begin): R::iterator, or R::const_iterator for a const R, from\n// r.begin() and r.end(), and the element its value_type\ntemplate <class R>\nstruct volt_range_of {\n    typedef typename R::iterator it;\n    typedef typename R::iterator end;\n    typedef typename std::iterator_traits<it>::value_type elem;\n};\ntemplate <class R>\nstruct volt_range_of<const R> {\n    typedef typename R::const_iterator it;\n    typedef typename R::const_iterator end;\n    typedef typename std::iterator_traits<it>::value_type elem;\n};\nnamespace volt_rng {\ntemplate <class R>\ntypename volt_range_of<R>::it b(R &r) {\n    return r.begin();\n}\ntemplate <class R>\ntypename volt_range_of<R>::end e(R &r) {\n    return r.end();\n}\n}\n#endif\ntemplate <class R>\nstatic void volt_range_start(R &r, void *it, void *end) {\n    new (it) typename volt_range_of<R>::it(volt_rng::b(r));\n    new (end) typename volt_range_of<R>::end(volt_rng::e(r));\n}\ntemplate <class R>\nstatic bool volt_range_done(void *it, void *end) {\n    return *(typename volt_range_of<R>::it *)it == *(typename volt_range_of<R>::end *)end;\n}\ntemplate <class R>\nstatic typename volt_range_of<R>::elem volt_range_take(void *it) {\n    typename volt_range_of<R>::it &i = *(typename volt_range_of<R>::it *)it;\n    typename volt_range_of<R>::elem v = *i;\n    ++i;\n    return v;\n}\n// the same with the iterators on C++'s heap, for those Volt can't hold in its own words (not\n// trivially copyable or destructible, or aligned past 8): made by volt_range_open, freed by\n// volt_range_close\ntemplate <class R>\nstruct volt_range_box {\n    typename volt_range_of<R>::it i;\n    typename volt_range_of<R>::end e;\n    volt_range_box(R &r) : i(volt_rng::b(r)), e(volt_rng::e(r)) {}\n};\ntemplate <class R>\nstatic void *volt_range_open(R &r) {\n    return new volt_range_box<R>(r);\n}\ntemplate <class R>\nstatic bool volt_range_done_box(void *b) {\n    return ((volt_range_box<R> *)b)->i == ((volt_range_box<R> *)b)->e;\n}\ntemplate <class R>\nstatic typename volt_range_of<R>::elem volt_range_take_box(void *b) {\n    return volt_range_take<R>(&((volt_range_box<R> *)b)->i);\n}\ntemplate <class R>\nstatic void volt_range_close(void *b) {\n    delete (volt_range_box<R> *)b;\n}\n";
 // form_of's probe: a tuple-like's and a variant-like's size and elements, by the traits C++'s own
 // library declares for them (void when a type has none)
 val CPP_FORM_HEAD: str = "\n#if __cplusplus >= 201703L && defined(__has_include)\n#if __has_include(<variant>)\n#include <variant>\n#define VOLT_FORM_VARIANT 1\n#endif\n#endif\nnamespace volt_form {\ntemplate <bool B> struct when {};\ntemplate <> struct when<true> { typedef void type; };\ntemplate <class U, class = void> struct tsize { enum { v = 0 }; };\ntemplate <__SIZE_TYPE__ I, class U, class = void> struct telem { typedef void type; };\ntemplate <class U, class = void> struct vsize { enum { v = 0 }; };\ntemplate <__SIZE_TYPE__ I, class U, class = void> struct valt { typedef void type; };\n#if __cplusplus >= 201103L\ntemplate <class U> struct tsize<U, typename when<(std::tuple_size<U>::value > 0)>::type> { enum { v = std::tuple_size<U>::value }; };\ntemplate <__SIZE_TYPE__ I, class U> struct telem<I, U, typename when<(std::tuple_size<U>::value > I)>::type> { typedef typename std::tuple_element<I, U>::type type; };\n#endif\n#ifdef VOLT_FORM_VARIANT\ntemplate <class U> struct vsize<U, typename when<(std::variant_size<U>::value > 0)>::type> { enum { v = std::variant_size<U>::value }; };\ntemplate <__SIZE_TYPE__ I, class U> struct valt<I, U, typename when<(std::variant_size<U>::value > I)>::type> { typedef typename std::variant_alternative<I, U>::type type; };\n#endif\n}\n";
@@ -7619,8 +7620,9 @@ attach fn text_in(this: checker&, t: u32) -> bool {
 
 // @cpp<R, T...> from a C++ template's Volt generic with a T bound to Volt's std::string, as S, S&
 // or const S&: {tN} is std::string, and the call is worked out as one made per use (cpp_instance),
-// so the string crosses as a std::string parameter does: made from its text when clang takes it as
-// const std::string& (const S&, S by value), else a copy written back once the call returns (S&).
+// so the string crosses as a std::string parameter does: a copy written back once the call returns
+// when clang takes it as std::string& (S&, and first for one Volt may change: overloads resolve as
+// C++'s for an lvalue), else made from its text (const S&, S by value).
 // A std::string nested in a type argument, an argument's type or the result is an error. catching:
 // each argument bound first, in pre (cpp_call_as)
 attach fn cpp_text_template(this: checker&, r: u32, gargs: std::vec<garg>&, args: std::vec<garg>&, catching: bool, pre: std::vec<u32>&, span: span) -> compile_error!tval {
@@ -7651,11 +7653,16 @@ attach fn cpp_text_template(this: checker&, r: u32, gargs: std::vec<garg>&, args
     for (n) in 0..types.len {
         text = replace_all(text.as_str(), fmt("{{t{}}}", unum(@cast<u64>(n))).as_str(), types.at(n).as_str());
     }
-    // the arguments: a std::string as a reference to it (mutable), or its text (const)
+    // the arguments: a std::string as a reference to it (mutable), or its text (const); x: a place
+    // Volt may change (a var, or a reference to one) as a reference, the rest as text
     var mtys: std::vec<u32> = {};
     var ctys: std::vec<u32> = {};
+    var xtys: std::vec<u32> = {};
     var mpre: std::vec<tval?> = {};
     var cpre: std::vec<tval?> = {};
+    var xpre: std::vec<tval?> = {};
+    var places = false;
+    var texts = false;
     var es: std::vec<expr> = {};
     for (i) in 1..args.len {
         val e = try this.garg_value(args.at(i));
@@ -7665,6 +7672,7 @@ attach fn cpp_text_template(this: checker&, r: u32, gargs: std::vec<garg>&, args
             // (&s of a generic's s: S, S a std::string&, is a reference to the reference)
             var st = v.ty;
             var c = v.c;
+            var ro = v.ro;
             var refs = true;
             while (refs) {
                 refs = false;
@@ -7672,6 +7680,7 @@ attach fn cpp_text_template(this: checker&, r: u32, gargs: std::vec<garg>&, args
                     .REF(x) => {
                         if (this.t.ref_inner(x) != null) {
                             c = this.ir.deref(c, x);
+                            ro = ro >> 1;
                         }
                         st = x;
                         refs = true;
@@ -7679,8 +7688,10 @@ attach fn cpp_text_template(this: checker&, r: u32, gargs: std::vec<garg>&, args
                     default => {},
                 }
             }
+            var place = (ro & 1) == 0;
             if (v.ty == st) {
                 c = this.ir.addr(v.c, this.t.ref_to(st));
+                place = v.lv && v.mutable;
             }
             val hf = (try this.hook(st, "as_str")) ?? return fails(span, "Volt's std::string has no as_str");
             this.use_fn(hf);
@@ -7694,6 +7705,15 @@ attach fn cpp_text_template(this: checker&, r: u32, gargs: std::vec<garg>&, args
             put(&mpre, vnew(rt, c));
             put(&ctys, STR);
             put(&cpre, vnew(STR, this.call_fn(this.fi(hf).ir, nodes(c), STR)));
+            if (place) {
+                places = true;
+                put(&xtys, rt);
+                put(&xpre, vnew(rt, c));
+            } else {
+                texts = true;
+                put(&xtys, STR);
+                put(&xpre, vnew(STR, this.call_fn(this.fi(hf).ir, nodes(c), STR)));
+            }
             continue;
         }
         if (this.text_in(v.ty)) {
@@ -7707,8 +7727,10 @@ attach fn cpp_text_template(this: checker&, r: u32, gargs: std::vec<garg>&, args
             put(pre, this.ir.decl(held.id, v.c));
             held_v = retyped(&v, v.ty, held.c);
         }
+        put(&xtys, v.ty);
         put(&mpre, held_v);
         put(&cpre, held_v);
+        put(&xpre, held_v);
     }
     val k = this.cpp_ctx_of(this.env_at(this.cx.env).ns) ?? 0;
     var value = true;
@@ -7718,9 +7740,27 @@ attach fn cpp_text_template(this: checker&, r: u32, gargs: std::vec<garg>&, args
     }
     var none: std::vec<garg> = {};
     var cands: std::vec<u32> = {};
-    // ponytail: a template taking S& fails the const probe and is probed again, and with another
-    // reference argument each is probed with it as an address too (cpp_instance_addr): up to four
-    // clang parses each time a failing call is checked; cache failed probes if that gets slow
+    // a place Volt may change probed first as an lvalue, as C++ reads f(s): of S& and const S& it
+    // runs S&, and a forwarding S&& deduces S&; then every string as text (const S&, S), then every
+    // one as a reference (S&: a val's copy is written back too)
+    // ponytail: each failed probe is another clang parse, and with another reference argument each
+    // is probed with it as an address too (cpp_instance_addr): up to six each time a failing call
+    // is checked; cache failed probes if that gets slow
+    if (places) {
+        val first = this.cpp_instance(k, text.as_str(), &xtys, false, value, span) catch |e| {
+            val made = this.cpp_instance(k, text.as_str(), &ctys, false, value, span) catch |e2| {
+                if (!texts) {
+                    return e;
+                }
+                put(&cands, this.cpp_instance(k, text.as_str(), &mtys, false, value, span) catch |e3| { return e; });
+                return this.pick_call("@cpp", &cands, null, null, &none, &mpre, &es, null, span);
+            };
+            put(&cands, made);
+            return this.pick_call("@cpp", &cands, null, null, &none, &cpre, &es, null, span);
+        };
+        put(&cands, first);
+        return this.pick_call("@cpp", &cands, null, null, &none, &xpre, &es, null, span);
+    }
     val made = this.cpp_instance(k, text.as_str(), &ctys, false, value, span) catch |e| {
         put(&cands, try this.cpp_instance(k, text.as_str(), &mtys, false, value, span));
         return this.pick_call("@cpp", &cands, null, null, &none, &mpre, &es, null, span);

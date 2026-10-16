@@ -58,6 +58,17 @@ fn main() -> void {
     std::println("pad {} {}", padded, w);
     grown_t(&w, 1);
     grown_t(&w, -1);
+    // of an S& / const S& pair, a var runs S& (and is changed), a val and a str const S&, as C++
+    // picks; a forwarding S&& changes a var; a const S&-only one takes both
+    var m = std::string::from("ab");
+    val k = std::string::from("cd");
+    val w1 = cpp::pr::gs::which(&m);
+    val w2 = @cpp<i32, std::string>("pr::gs::which<{t0}>({0})", &k);
+    val w3 = @cpp<i32, std::string>("pr::gs::which<{t0}>({0})", "ef");
+    val w4 = @cpp<i32, std::string>("pr::gs::which<{t0}>({0})", &m);
+    std::println("which {} {} {} {} {} {}", w1, w2, w3, w4, m, k);
+    val f1 = cpp::pr::gs::fwd(&m);
+    std::println("fwd {} {} len {} {}", f1, m, cpp::pr::gs::len(&k), cpp::pr::gs::len(&m));
     // nested std::vectors take nested Volt slices, each level copied (an empty inner one, three deep)
     var r0: i32[2] = { 1, 2 };
     var r1: i32[1] = { 3 };
