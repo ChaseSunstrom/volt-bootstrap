@@ -1954,8 +1954,9 @@ fn cpp_ranges2() {
     // trivially copyable iterators stay in Volt's words; the others go through C++'s heap
     let shown = Command::new(&e.voltc).args(["check", "cpp_ranges2.volt", "--std"]).arg(Path::new(ROOT).join("std")).current_dir(Path::new(ROOT).join("tests/interop")).env("VOLT_SHOW_CPP", "1").output().unwrap();
     let src = String::from_utf8_lossy(&shown.stderr);
-    let range = |q: &str| src.split("// C++'s ").find(|s| s.starts_with(q)).unwrap_or_else(|| panic!("no range for {q}: {src}")).to_string();
-    let (vector, shared) = (range("std::vector<int32_t > looped over"), range("r2::shared_range looped over"));
+    // (the vector's element as the system's headers spell it: int32_t, int)
+    let range = |q: &str, rest: &str| src.split("// C++'s ").find(|s| s.starts_with(q) && s.contains(rest)).unwrap_or_else(|| panic!("no range for {q}...{rest}: {src}")).to_string();
+    let (vector, shared) = (range("std::vector<", "> looped over"), range("r2::shared_range looped over", ""));
     assert!(vector.contains("volt_range_start") && !vector.contains("volt_range_open"), "std::vector inline: {vector}");
     assert!(shared.contains("volt_range_open") && !shared.contains("volt_range_start"), "shared_ptr range on C++'s heap: {shared}");
     // an over-aligned iterator below C++17

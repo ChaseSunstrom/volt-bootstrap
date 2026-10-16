@@ -945,10 +945,10 @@ namespace softfloat {
         return f128_to_magnitude(a, bits);
     }
 
-    // compiler-rt's quad routines on targets whose C runtime has none (Apple's arm64 one: its long
-    // double is an f64), so LLVM's calls for f128 arithmetic link there. Elsewhere libgcc or
-    // compiler-rt has them
-    @attributes([@cfg("os", "macos"), @cfg("arch", "aarch64")])
+    // compiler-rt's quad routines on targets whose C runtime has none (Apple's, arm64 and x86-64:
+    // its long double is an f64 or an x87 one), so LLVM's calls for f128 arithmetic link there.
+    // Elsewhere libgcc or compiler-rt has them
+    @attributes([@cfg("os", "macos")])
     namespace quad_rt {
         public fn b(v: f128) -> u128 { return @bitcast<u128>(v); }
         public fn q(v: u128) -> f128 { return @bitcast<f128>(v); }

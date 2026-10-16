@@ -169,9 +169,10 @@ fn run(f: usize, x: f64, y: f64) -> void {
         worst[f] = d;
     }
     var allow = ALLOW[f];
-    // Apple's libm tan is up to 2 ulps from the true value (Volt's is within 1 of glibc's there)
+    // Apple's libm sin, cos and tan are up to 2 ulps from the true value (Volt's are within 1 of
+    // glibc's there): tan on arm64, sin on x86-64
     comptime if (@cfg("os", "macos")) {
-        if (f == 11) {
+        if (f == 9 || f == 10 || f == 11) {
             allow = 3;
         }
     }

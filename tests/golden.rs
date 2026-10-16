@@ -118,18 +118,20 @@ fn std_linked() {
 /// tests/run/strings_multiline.volt saved with Windows line endings prints the same: a \r\n in a
 /// multi-line string is a \n
 /// std::softfloat's quad routines under compiler-rt's names (what LLVM calls for f128): defined for
-/// arm64 macOS, whose C runtime has none, and nowhere else (they'd clash with libgcc's)
+/// macOS (arm64 and x86-64), whose C runtime has none, and nowhere else (they'd clash with libgcc's)
 #[test]
-fn quad_exports_only_on_arm64_macos() {
+fn quad_exports_only_on_macos() {
     const NAMES: [&str; 30] = ["__addtf3", "__subtf3", "__multf3", "__divtf3", "__negtf2", "__eqtf2", "__netf2", "__lttf2", "__letf2", "__getf2", "__gttf2", "__unordtf2", "__extendhftf2", "__extendsftf2", "__extenddftf2", "__trunctfhf2", "__trunctfsf2", "__trunctfdf2", "__fixtfsi", "__fixtfdi", "__fixtfti", "__fixunstfsi", "__fixunstfdi", "__fixunstfti", "__floatsitf", "__floatditf", "__floattitf", "__floatunsitf", "__floatunditf", "__floatuntitf"];
     let ir = |cfg: &[&str]| {
         let out = Command::new(common::voltc()).args(["emit-llvm", "tests/run/floats_wide.volt", "--std", "std"]).args(cfg).current_dir(env!("CARGO_MANIFEST_DIR")).output().unwrap();
         assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
         String::from_utf8_lossy(&out.stdout).into_owned()
     };
-    let mac = ir(&["--cfg", "os=macos", "--cfg", "arch=aarch64"]);
-    let missing: Vec<_> = NAMES.iter().filter(|n| !mac.lines().any(|l| l.starts_with("define") && l.contains(&format!("@{n}(")))).collect();
-    assert!(missing.is_empty(), "arm64 macOS doesn't define {missing:?}");
+    for arch in ["aarch64", "x86_64"] {
+        let mac = ir(&["--cfg", "os=macos", "--cfg", &format!("arch={arch}")]);
+        let missing: Vec<_> = NAMES.iter().filter(|n| !mac.lines().any(|l| l.starts_with("define") && l.contains(&format!("@{n}(")))).collect();
+        assert!(missing.is_empty(), "{arch} macOS doesn't define {missing:?}");
+    }
     let host = ir(&[]);
     let there: Vec<_> = NAMES.iter().filter(|n| host.lines().any(|l| l.starts_with("define") && l.contains(&format!("@{n}(")))).collect();
     assert!(there.is_empty(), "the host defines {there:?}");
