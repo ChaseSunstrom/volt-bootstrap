@@ -501,9 +501,11 @@ impl Build {
 
     /// where an executable goes: target/<profile>/NAME, or examples/, tests/, benches/ under it
     pub fn exe_path(&self, kind: Kind, name: &str) -> PathBuf {
+        // Windows' C compilers write app.exe for -o app (and app.exe is what's there to copy or stamp)
+        let file = format!("{name}{}", std::env::consts::EXE_SUFFIX);
         match kind {
-            Kind::Bin => self.target.join(name),
-            k => self.target.join(k.dir()).join(name),
+            Kind::Bin => self.target.join(file),
+            k => self.target.join(k.dir()).join(file),
         }
     }
 
@@ -638,6 +640,10 @@ impl Build {
                         if self.profile.optimize {
                             c.arg("--release");
                         }
+                        let target = crate::foreign::rust_target();
+                        if let Some(t) = &target {
+                            c.args(["--target", t]);
+                        }
                         c.args(["--", "--print", "native-static-libs"]);
                         crate::verbose(&c);
                         let o = c.output().map_err(|e| format!("can't run cargo for {}: {e}", f.name))?;
@@ -655,7 +661,7 @@ impl Build {
                                 }
                             }
                         }
-                        let lib = base.join("cargo").join(if self.profile.optimize { "release" } else { "debug" }).join(format!("lib{}.a", crate_lib_name(dir)?));
+                        let lib = base.join("cargo").join(target.unwrap_or_default()).join(if self.profile.optimize { "release" } else { "debug" }).join(format!("lib{}.a", crate_lib_name(dir)?));
                         flags.push(lib.display().to_string());
                     }
                     ForeignKind::Zig(file) => {

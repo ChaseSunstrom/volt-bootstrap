@@ -123,6 +123,9 @@ pub fn import(r: &Req) -> Result<(), String> {
         if r.release {
             c.arg("--release");
         }
+        if let Some(t) = crate::foreign::rust_target() {
+            c.args(["--target", &t]);
+        }
         c.args(["--", "--print", "native-static-libs"]);
         let o = c.output().map_err(|e| format!("can't run cargo: {e}"))?;
         let err = String::from_utf8_lossy(&o.stderr).into_owned();
@@ -134,7 +137,7 @@ pub fn import(r: &Req) -> Result<(), String> {
         made.first().cloned().flatten().and_then(|t| probe.methods.get(&t).cloned()).unwrap_or_default().into_iter().map(|s| s.name).collect()
     };
     let (volt, err) = super::with_instances(r, &crate_st, build, methods, |e| format!("use rust: cargo couldn't build the glue for {}:\n{e}", dir.display()))?;
-    let lib_file = r.out.join("target").join(if r.release { "release" } else { "debug" }).join(format!("libvolt_import_{}.a", r.alias));
+    let lib_file = r.out.join("target").join(crate::foreign::rust_target().unwrap_or_default()).join(if r.release { "release" } else { "debug" }).join(format!("libvolt_import_{}.a", r.alias));
     let mut flags = vec![lib_file.display().to_string()];
     for line in err.lines() {
         if let Some(libs) = line.split("native-static-libs:").nth(1) {

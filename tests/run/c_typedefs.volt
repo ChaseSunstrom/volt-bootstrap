@@ -15,9 +15,10 @@ fn main() -> void {
     val f: c::binop = mul;
     val k: c::calc = { op: c::pick(1), scale: 3 };
     val s: c::size_t = 5;
+    val w: c::ext_big = 7;
     std::println("{} {} {}", n, t.n, (f ?? return)(6, 7));
-    std::println("{} {}", (k.op ?? return)(2, 3) * @cast<i32>(k.scale), s);
+    std::println("{} {} {}", (k.op ?? return)(2, 3) * @cast<i32>(k.scale), s, w);
 }
 
 // expect: 1099511627776 3 42
-// expect: 15 5
+// expect: 15 5 7

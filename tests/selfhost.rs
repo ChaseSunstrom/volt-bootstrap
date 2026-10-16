@@ -29,7 +29,7 @@ fn checks_itself_and_emits_readable_c() {
     let mut srcs = Vec::new();
     volt_files(&root.join("voltc/src"), &mut srcs);
     let own = Command::new(&exe).arg("check").args(&srcs).arg("--std").arg(&std_dir).output().unwrap();
-    assert!(own.status.success(), "the self-hosted checker rejects its own sources:\n{}", String::from_utf8_lossy(&own.stderr));
+    assert!(own.status.success(), "the self-hosted checker rejects its own sources ({}):\n{}", own.status, String::from_utf8_lossy(&own.stderr));
     // the readable C: emit-c -o DIR of tests/cgen/point.volt matches the reviewed files in tests/cgen/point
     // (volt.h from its types on: the prelude before them has its own tests), and builds and runs.
     // VOLT_BLESS=1 rewrites them

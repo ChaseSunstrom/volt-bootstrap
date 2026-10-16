@@ -149,7 +149,9 @@ pub fn llvm_cc_args() -> Vec<String> {
         let (Some(inc), Some(lib)) = (ask("--includedir"), ask("--libdir")) else {
             panic!("{tool} didn't answer --includedir and --libdir: set $LLVM_CONFIG to LLVM's llvm-config.exe");
         };
-        let flags = [format!("-I{inc}"), format!("-L{lib}"), "-l:LLVM-C.lib".into(), "-l:libclang.lib".into()];
+        // and the 8 MB stack Linux's main thread has (Windows gives 1 MB; voltc checking its own
+        // sources goes deeper)
+        let flags = [format!("-I{inc}"), format!("-L{lib}"), "-l:LLVM-C.lib".into(), "-l:libclang.lib".into(), "-Wl,--stack,8388608".into()];
         return flags.into_iter().flat_map(|f| ["--cc".to_string(), f]).collect();
     }
     let ask = |tool: &str, what: &str| {

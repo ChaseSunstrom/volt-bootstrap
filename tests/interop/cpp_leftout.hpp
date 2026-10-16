@@ -2,6 +2,7 @@
 // form, a class whose destructor isn't public
 #pragma once
 #include <mutex>
+#include <cstdint>
 
 namespace lo {
 // aligned past what Volt's words show: held by handle, made and freed by C++'s aligned new/delete
@@ -20,7 +21,7 @@ struct alignas(32) vec8 {
         }
         return s;
     }
-    bool aligned() const { return ((unsigned long)this % 32) == 0; }
+    bool aligned() const { return ((std::uintptr_t)this % 32) == 0; } // (long is 32 bits on Windows)
 };
 
 // a field Volt has no form for (std::mutex): a generic handle

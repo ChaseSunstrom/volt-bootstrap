@@ -193,7 +193,15 @@ fn f128_soft_c() {
     // f128_ops through both C compilers, natively and soft (golden runs them all through LLVM), and
     // f128_exact's constants (T-0477): a native quad type reads volt_q_hex's text, the soft path its bits
     let runs = [("floats_wide", "cc", true), ("softquad", "cc", true), ("f128_ops", "gcc", true), ("f128_ops", "clang", true), ("f128_ops", "gcc", false), ("f128_ops", "clang", false), ("f128_rem", "gcc", true), ("f128_rem", "clang", false), ("f128_exact", "gcc", false), ("f128_exact", "clang", false), ("f128_exact", "clang", true)];
+    // Windows: PATH's clang is LLVM's own (MSVC's ABI and libraries) and its gcc another MinGW's, so
+    // each runs through $CC, the program's compiler, the way a program builds there: natively on
+    // x86-64 (MinGW's __float128), soft on arm64 (no quad type)
+    let win_cc = std::env::var("CC").unwrap_or_else(|_| "cc".into());
     for (prog, cc, soft) in runs {
+        if cfg!(windows) && cc != "cc" {
+            continue;
+        }
+        let (cc, soft) = if cfg!(windows) { (win_cc.as_str(), cfg!(target_arch = "aarch64")) } else { (cc, soft) };
         let file = format!("tests/run/{prog}.volt");
         let want: Vec<String> = directives(&std::fs::read_to_string(root.join(&file)).unwrap(), "expect");
         let o = voltc_cc(&["run", &file, "--backend", "c", "--cc", if soft { "-DVOLT_SOFT_F128" } else { "-DVOLT_NATIVE" }], cc);

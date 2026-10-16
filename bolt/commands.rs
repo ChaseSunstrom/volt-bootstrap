@@ -495,7 +495,7 @@ pub fn install(o: &Opts) {
     let (file, mut records) = installs(&root);
     let bin_dir = root.join("bin");
     for e in &exes {
-        let dest = bin_dir.join(&e.name);
+        let dest = bin_dir.join(format!("{}{}", e.name, std::env::consts::EXE_SUFFIX));
         if dest.exists() && !o.force {
             let owner = records.iter().find(|r| r.2.contains(&e.name)).map(|r| r.0.clone());
             fail(match owner {
@@ -508,7 +508,7 @@ pub fn install(o: &Opts) {
     b.finished(start);
     std::fs::create_dir_all(&bin_dir).or_fail();
     for e in &exes {
-        let dest = bin_dir.join(&e.name);
+        let dest = bin_dir.join(format!("{}{}", e.name, std::env::consts::EXE_SUFFIX));
         // copy next to it, then rename: a running copy of the old one keeps working
         let tmp = bin_dir.join(format!(".{}.bolt-tmp", e.name));
         std::fs::copy(&e.out, &tmp).unwrap_or_else(|err| fail(format!("can't copy {} to {}: {err}", e.out.display(), tmp.display())));

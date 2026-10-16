@@ -116,7 +116,8 @@ fn runtime(dotnet: &Path) -> Result<(String, PathBuf), String> {
         .filter_map(|l| {
             let rest = l.trim().strip_prefix("Microsoft.NETCore.App ")?;
             let (v, p) = rest.split_once(" [")?;
-            let root = p.strip_suffix(']')?.strip_suffix("/shared/Microsoft.NETCore.App")?;
+            let p = p.strip_suffix(']')?;
+            let root = p.strip_suffix("/shared/Microsoft.NETCore.App").or_else(|| p.strip_suffix("\\shared\\Microsoft.NETCore.App"))?;
             Some((v.to_string(), PathBuf::from(root)))
         })
         .last()

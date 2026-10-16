@@ -52,9 +52,10 @@ impl Drop for Env {
     }
 }
 
-/// stdout of a command that must succeed
+/// stdout of a command that must succeed (a C program's text-mode stdout on Windows ends lines
+/// in \r\n: read as \n)
 fn ok(o: Output, what: &str) -> String {
-    let out = String::from_utf8_lossy(&o.stdout).to_string();
+    let out = String::from_utf8_lossy(&o.stdout).replace("\r\n", "\n");
     assert!(o.status.success(), "{what} failed\n--- stdout\n{out}\n--- stderr\n{}", String::from_utf8_lossy(&o.stderr));
     out
 }
@@ -126,6 +127,16 @@ fn ruby_ext(hdrs: &[String], src: &Path, lib_dir: &str, lib: &str) -> Command {
     cc
 }
 
+/// a program linked against a shared library in dir (found through -rpath elsewhere): Windows looks
+/// for the DLL on PATH
+fn with_lib(mut c: Command, dir: &str) -> Command {
+    if cfg!(windows) {
+        let path = std::env::var_os("PATH").unwrap_or_default();
+        c.env("PATH", std::env::join_paths(std::iter::once(PathBuf::from(dir)).chain(std::env::split_paths(&path))).unwrap());
+    }
+    c
+}
+
 /// a loadable module's link flags (Node's, Lua's, Ruby's): macOS's linker leaves the names the host
 /// program defines to be found when the module loads only under -undefined dynamic_lookup
 const MODULE_FLAGS: &[&str] = if cfg!(target_os = "macos") { &["-undefined", "dynamic_lookup"] } else { &[] };
@@ -176,16 +187,16 @@ fn bindings_round_trip() {
         let rpath = format!("-Wl,-rpath,{lib_dir}");
         // C, against the shared and the static library
         ok(run(Command::new("cc").args(["client.c", "-I", &e.path(""), "-L", &lib_dir, "-lmathlib", &rpath, "-o"]).arg(bin("c_shared"))), "cc client.c");
-        assert_eq!(ok(Command::new(bin("c_shared")).output().unwrap(), "C program"), MATHLIB_OUT, "C, shared ({backend})");
+        assert_eq!(ok(with_lib(Command::new(bin("c_shared")), &lib_dir).output().unwrap(), "C program"), MATHLIB_OUT, "C, shared ({backend})");
         ok(run(Command::new("cc").args(["client.c", "-I", &e.path("")]).arg(format!("{lib_dir}/libmathlib_static.a")).arg("-o").arg(bin("c_static"))), "cc client.c (static)");
         assert_eq!(ok(Command::new(bin("c_static")).output().unwrap(), "C program (static)"), MATHLIB_OUT, "C, static ({backend})");
         // C++
         ok(run(Command::new("c++").args(["-std=c++17", "client.cpp", "-I", &e.path(""), "-L", &lib_dir, "-lmathlib", &rpath, "-o"]).arg(bin("cpp"))), "c++ client.cpp");
-        assert_eq!(ok(Command::new(bin("cpp")).output().unwrap(), "C++ program"), MATHLIB_OUT, "C++ ({backend})");
+        assert_eq!(ok(with_lib(Command::new(bin("cpp")), &lib_dir).output().unwrap(), "C++ program"), MATHLIB_OUT, "C++ ({backend})");
         // Rust: client.rs next to its mathlib.rs module
         std::fs::copy(Path::new(ROOT).join("tests/interop/client.rs"), e.dir.join("client.rs")).unwrap();
         ok(run(Command::new("rustc").arg(e.dir.join("client.rs")).args(["--edition", "2021", "-L", &lib_dir, "-l", "mathlib", "-C", &format!("link-arg={rpath}"), "-o"]).arg(bin("rs"))), "rustc client.rs");
-        assert_eq!(ok(Command::new(bin("rs")).output().unwrap(), "Rust program"), MATHLIB_OUT, "Rust ({backend})");
+        assert_eq!(ok(with_lib(Command::new(bin("rs")), &lib_dir).output().unwrap(), "Rust program"), MATHLIB_OUT, "Rust ({backend})");
         // Python: the module loads the library from $VOLT_MATHLIB_LIB, else next to itself
         let py = run(Command::new("python3").arg("client.py").env("PYTHONPATH", e.path("")).env("VOLT_MATHLIB_LIB", format!("{lib_dir}/{}", dylib("mathlib"))));
         assert_eq!(ok(py, "python3 client.py"), MATHLIB_OUT, "Python ({backend})");
@@ -490,13 +501,13 @@ fn bindings_shapes() {
             let bin = e.dir.join(format!("{backend}_{cc}"));
             // the leak report as its object: clang++ refuses C source in C++ mode (-Wdeprecated)
             ok(run(Command::new(cc).args([std, "-Wall", "-Werror", client, &e.path("leak_report.o"), "-I", &e.path(""), "-L", &lib, "-lshapelib", &rpath, "-o"]).arg(&bin)), &format!("{cc} {client}"));
-            let o = Command::new(&bin).output().unwrap();
-            assert_eq!(String::from_utf8_lossy(&o.stderr), "volt live: 0\n", "{client} ({backend}): the library's allocations at exit");
+            let o = with_lib(Command::new(&bin), &lib).output().unwrap();
+            assert_eq!(String::from_utf8_lossy(&o.stderr), "volt live: 0\n", "{client} ({backend}): the library's allocations at exit ({}, {} bytes out)", o.status, o.stdout.len());
             assert_eq!(ok(o, client), SHAPES_OUT, "{client} ({backend})");
         }
         let bin = e.dir.join(format!("{backend}_rs"));
         ok(run(Command::new("rustc").arg(e.dir.join("client_shapes.rs")).args(["--edition", "2021", "-L", &lib, "-l", "shapelib", "-C"]).arg(format!("link-arg={}", e.path("leak_report.o"))).args(["-C", &format!("link-arg={rpath}"), "-o"]).arg(&bin)), "rustc client_shapes.rs");
-        let o = Command::new(&bin).output().unwrap();
+        let o = with_lib(Command::new(&bin), &lib).output().unwrap();
         assert_eq!(String::from_utf8_lossy(&o.stderr), "volt live: 0\n", "client_shapes.rs ({backend}): the library's allocations at exit");
         assert_eq!(ok(o, "client_shapes.rs"), format!("checked true OVERDRAWN\nlimit true OVERDRAWN\nsign positive not positive\n{SHAPES_OUT}"), "client_shapes.rs ({backend})");
         // Zig: client_shapes.zig next to its shapelib.zig, printing to stderr (the leak report last)
@@ -850,10 +861,26 @@ fn bindings_kotlin_shapes() {
 #[test]
 fn volt_calls_rust_and_python() {
     let e = Env::new("out");
-    ok(run(Command::new("rustc").args(["--crate-type", "staticlib", "--edition", "2021", "-C", "panic=abort", "rust_lib.rs", "-o"]).arg(e.dir.join("librs.a"))), "rustc --crate-type staticlib");
+    // Windows: the GNU target $CC links (rustc's host there is MSVC's), with the libraries rustc names
+    let mut rustc = Command::new("rustc");
+    rustc.args(["--crate-type", "staticlib", "--edition", "2021", "-C", "panic=abort", "rust_lib.rs", "--print", "native-static-libs", "-o"]).arg(e.dir.join("librs.a"));
+    if cfg!(windows) {
+        // (as bolt's rust_target: llvm-mingw's clang says x86_64-w64-windows-gnu, MinGW's gcc ...-mingw32)
+        let m = Command::new(std::env::var("CC").unwrap_or_else(|_| "cc".into())).arg("-dumpmachine").output().unwrap();
+        let m = String::from_utf8_lossy(&m.stdout).trim().to_string();
+        let arch = m.split('-').next().unwrap_or("x86_64");
+        rustc.arg("--target").arg(format!("{arch}-pc-windows-{}", if m.ends_with("mingw32") { "gnu" } else { "gnullvm" }));
+    }
+    let made = run(&mut rustc);
+    let libs: Vec<String> = String::from_utf8_lossy(&made.stderr).lines().filter_map(|l| l.split("native-static-libs:").nth(1)).flat_map(|l| l.split_whitespace().map(String::from).collect::<Vec<_>>()).collect();
+    ok(made, "rustc --crate-type staticlib");
     let rs = e.path("librs.a");
     for backend in ["c", "llvm"] {
-        let out = ok(e.voltc(&["run", "uses_rust.volt", "--backend", backend, "--cc", &rs, "--cc", "-lpthread", "--cc", "-ldl"]), "voltc run uses_rust.volt");
+        let mut args = vec!["run", "uses_rust.volt", "--backend", backend, "--cc", &rs];
+        for l in &libs {
+            args.extend(["--cc", l.as_str()]);
+        }
+        let out = ok(e.voltc(&args), "voltc run uses_rust.volt");
         assert_eq!(out, "rust 9 8\n", "Volt calls Rust ({backend})");
     }
     let flags = |args: &[&str]| Command::new("python3-config").args(args).output().ok().filter(|o| o.status.success()).map(|o| String::from_utf8_lossy(&o.stdout).split_whitespace().map(String::from).collect::<Vec<_>>());
@@ -972,7 +999,8 @@ fn go_foreign() {
         assert_eq!(String::from_utf8_lossy(&o.stdout), "add 42\nsum 6.5\nupper VOLT\nwords 3\n", "Volt uses Go ({backend})");
     }
     let header = std::fs::read_to_string(app.join("target/debug/foreign/include/gomath.h")).unwrap();
-    assert!(header.contains("extern int gm_add(int a, int b);"), "{header}");
+    // (Windows' cgo writes extern __declspec(dllexport) int gm_add(...))
+    assert!(header.contains("extern ") && header.contains("int gm_add(int a, int b);"), "{header}");
 }
 
 /// Volt embeds Lua through the interop/lua package: scripts, calls, tables, a Volt function Lua
@@ -1626,20 +1654,22 @@ fn pip_and_npm_install() {
     std::fs::write(pkg.join("pyproject.toml"), "[build-system]\nrequires = []\nbuild-backend = \"volt_build\"\nbackend-path = [\".\"]\n\n[project]\nname = \"volt-geo\"\nversion = \"0.1.0\"\n").unwrap();
     let venv = e.dir.join("venv");
     if Command::new("python3").args(["-m", "venv"]).arg(&venv).output().is_ok_and(|o| o.status.success()) {
-        let mut c = Command::new(venv.join("bin/pip"));
+        // a venv's programs are in Scripts on Windows
+        let vbin = venv.join(if cfg!(windows) { "Scripts" } else { "bin" });
+        let mut c = Command::new(vbin.join("pip"));
         c.args(["install", "--no-index", "--disable-pip-version-check", "-q"]).arg(&pkg);
         tools(&mut c);
         ok(c.output().unwrap(), "pip install");
-        let o = Command::new(venv.join("bin/python")).args(["-c", "import geo; print(geo.area(2.0, 3.5), geo.twice(21))"]).current_dir(&elsewhere).output().unwrap();
+        let o = Command::new(vbin.join("python")).args(["-c", "import geo; print(geo.area(2.0, 3.5), geo.twice(21))"]).current_dir(&elsewhere).output().unwrap();
         assert_eq!(ok(o, "python (pip installed)"), "7.0 42\n", "Python calls the package pip installed");
         // from its sdist too, built somewhere else
-        let o = Command::new(venv.join("bin/python")).args(["-c", "import sys, volt_build; print(volt_build.build_sdist(sys.argv[1]))"]).arg(&e.dir).current_dir(&pkg).output().unwrap();
+        let o = Command::new(vbin.join("python")).args(["-c", "import sys, volt_build; print(volt_build.build_sdist(sys.argv[1]))"]).arg(&e.dir).current_dir(&pkg).output().unwrap();
         let sdist = e.dir.join(ok(o, "build_sdist").trim());
-        let mut c = Command::new(venv.join("bin/pip"));
+        let mut c = Command::new(vbin.join("pip"));
         c.args(["install", "--no-index", "--disable-pip-version-check", "-q", "--force-reinstall"]).arg(&sdist);
         tools(&mut c);
         ok(c.output().unwrap(), "pip install (sdist)");
-        let o = Command::new(venv.join("bin/python")).args(["-c", "import geo; print(geo.twice(4))"]).current_dir(&elsewhere).output().unwrap();
+        let o = Command::new(vbin.join("python")).args(["-c", "import geo; print(geo.twice(4))"]).current_dir(&elsewhere).output().unwrap();
         assert_eq!(ok(o, "python (pip installed from the sdist)"), "8\n");
     } else {
         eprintln!("python3 -m venv doesn't work: skipping pip install");
@@ -1850,6 +1880,13 @@ fn cpp_module() {
     // Apple's clang++ has no std module (no libc++ modules manifest): on macOS, the clang++ of the
     // LLVM voltc is built with (Homebrew's, whose libc++ has one) builds the program's C++
     let llvm_cxx = cfg!(target_os = "macos").then(|| common::llvm_tool("clang++"));
+    // no std module where libclang's clang++ looks (an LLVM built without libc++, as the Intel macOS
+    // job's; Windows', whose C++ library is llvm-mingw's, T-0548): skipped, as a missing toolchain is
+    let first = e.voltc_cxx(&["check", "cpp_module.volt"], llvm_cxx.as_deref());
+    if String::from_utf8_lossy(&first.stderr).contains("finds no modules manifest") {
+        eprintln!("skipped cpp_module: {}", String::from_utf8_lossy(&first.stderr).lines().next().unwrap_or(""));
+        return;
+    }
     for backend in ["c", "llvm"] {
         assert_eq!(ok(e.voltc_cxx(&["run", "cpp_module.volt", "--backend", backend], llvm_cxx.as_deref()), "voltc run cpp_module.volt"), want, "C++ modules ({backend})");
     }
@@ -2399,7 +2436,10 @@ fn interop_examples() {
                 skipped.push(name);
                 continue;
             }
-            assert!(o.status.success(), "{name}: run.sh failed:\n{}{}", String::from_utf8_lossy(&o.stdout), String::from_utf8_lossy(&o.stderr));
+            // its stderr's end first: a compiler's warnings come before the error that stopped it
+            let err = String::from_utf8_lossy(&o.stderr);
+            let tail: String = err.chars().rev().take(700).collect::<Vec<_>>().into_iter().rev().collect();
+            assert!(o.status.success(), "{name}: run.sh failed ({}): ...{tail}\n--- stdout\n{}", o.status, String::from_utf8_lossy(&o.stdout));
             let want = std::fs::read_to_string(ex.join("expected.txt")).unwrap();
             assert_eq!(String::from_utf8_lossy(&o.stdout), want, "{name} prints something else");
             ran.push(name);

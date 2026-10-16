@@ -55,7 +55,7 @@ fn main() -> !void {
         val t = std::time::utc_iso8601(0, a);
         val doc = try std::json::parse("{\"k\": [1, 2]}", a);
         val back = doc.text(a);
-        std::println("{} {} {} {} {}", joined.as_str(), up.as_str(), p.as_str(), t.as_str(), back.as_str());
+        std::println("{} {} {} {} {}", joined.as_str(), up.as_str(), p.as_str().replace("\\", "/"), t.as_str(), back.as_str());
 
         // a file and a directory listing, read into the arena
         var dir = std::string::from("/tmp/volt-alloc-");

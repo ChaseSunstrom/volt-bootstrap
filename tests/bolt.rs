@@ -161,7 +161,7 @@ fn bolt() {
     let cdep = tmp.join("cdep");
     write(&cdep.join("include/cdep.h"), "static inline int cdep_scale(int x) { return x * CDEP_SCALE; }\n");
     write(&cdep.join("bolt.toml"), "[package]\nname = \"cdep\"\nversion = \"0.1.0\"\n\n[build]\nfiles = [\"build.volt\"]\n");
-    write(&cdep.join("build.volt"), &format!("fn main() -> void {{\n    bolt::cc_arg(\"-I{}\");\n    bolt::cc_arg(\"-DCDEP_SCALE=7\");\n}}\n", cdep.join("include").display()));
+    write(&cdep.join("build.volt"), &format!("fn main() -> void {{\n    bolt::cc_arg(\"-I{}\");\n    bolt::cc_arg(\"-DCDEP_SCALE=7\");\n}}\n", cdep.join("include").display().to_string().replace('\\', "/")));
     write(&cdep.join("lib/cdep.volt"), "use {{ \"cdep.h\" }} as c;\npublic fn scaled(x: i32) -> i32 {{ return c::cdep_scale(x); }}\n".replace("{{", "{").replace("}}", "}").as_str());
     let uses_cdep = tmp.join("uses_cdep");
     write(&uses_cdep.join("bolt.toml"), &format!("[package]\nname = \"uses_cdep\"\nversion = \"0.1.0\"\n\n[dependencies]\ncdep = {{ path = '{}' }}\n", cdep.display()));

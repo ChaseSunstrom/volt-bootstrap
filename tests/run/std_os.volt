@@ -143,7 +143,8 @@ fn main() -> void {
     show("cd back", std::process::set_cwd(before.as_str()));
     show("cd missing", std::process::set_cwd("/nonexistent-volt-dir"));
     // ends_with: macOS's /tmp is a link to /private/tmp, and cwd() names the real directory
-    std::println("{} {}", inside.as_str().ends_with(r), std::process::cwd().as_str() == before.as_str());
+    // (Windows' names /tmp/x D:\tmp\x)
+    std::println("{} {}", fwd(inside.as_str()).as_str().ends_with(r), std::process::cwd().as_str() == before.as_str());
 
     show("remove_all", std::fs::remove_all(r));
     std::println("{}", std::fs::exists(r));

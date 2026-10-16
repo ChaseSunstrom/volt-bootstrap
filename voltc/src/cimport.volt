@@ -790,6 +790,8 @@ attach fn specs(this: cparser&, stat: bool&) -> ctype? {
             short = true;
         } else if (n == "long") {
             longs += 1;
+        } else if (n == "__int64") {
+            longs = 2; // MSVC's spelling (MinGW defines it as long long, clang -fms-extensions keeps it)
         } else if (n == "int") {
             int = true;
         } else if (n == "char") {
@@ -1358,6 +1360,10 @@ attach fn top(this: cparser&) -> void {
             },
             default => {},
         }
+    }
+    // __extension__ typedef ... (MinGW's size_t, glibc's 32-bit __int64_t) is a typedef too
+    while ((this.peek_id() ?? "") == "__extension__") {
+        this.i += 1;
     }
     val is_typedef = (this.peek_id() ?? "") == "typedef";
     if (is_typedef) {

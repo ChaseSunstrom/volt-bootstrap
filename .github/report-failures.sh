@@ -42,6 +42,13 @@ grep -an 'panicked at' "$log" | head -30 | {
     done
     flush
 }
+# each assert_eq's first differing line (its left and right are one Debug string each, lines as \n:
+# a long output's panic is cut before the difference), as one notice
+diffs=$(grep -an '^  left: ' "$log" | head -12 | while IFS=: read -r n _; do
+    sed -n "$((n - 2)),$((n + 1))p" "$log" | awk '/panicked at/ { t = $2 } /^  left: / { sub(/^  left: /, ""); l = $0 } /^ right: / { sub(/^ right: /, ""); r = $0 }
+        END { nl = split(l, a, /\\n/); nr = split(r, b, /\\n/); for (i = 1; i <= nl || i <= nr; i++) if (a[i] != b[i]) { print t " line " i ": got " substr(a[i], 1, 150) " | want " substr(b[i], 1, 150); exit } }'
+done | oneline)
+[ -n "$diffs" ] && note notice "first differences" "$diffs"
 # each failed golden program on its own (its want, got and stderr), as warnings
 awk '/^[A-Za-z]?:?[\/\\].*\.volt: (exit|want errors)/ { if (n++ < 10) { f = "golden." n } else { f = "" } } /^thread / { f = "" } f { print > f }' "$log" 2>/dev/null
 for g in golden.*; do

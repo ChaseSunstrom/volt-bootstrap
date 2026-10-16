@@ -4,6 +4,7 @@
 mod common;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::sync::mpsc::{channel, Receiver};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
@@ -41,6 +42,10 @@ struct Server {
     next_id: u64,
     /// the messages the last request skipped on its way to its response
     skipped: Vec<String>,
+    /// what the last message sent was (a quiet server's panic names it)
+    last_sent: String,
+    /// the server's stderr so far (read on its own thread; a quiet server's panic shows its end)
+    errors: Arc<Mutex<String>>,
     dir: PathBuf,
 }
 
@@ -59,10 +64,22 @@ impl Server {
             .env("PATH", path)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::inherit())
+            .stderr(Stdio::piped())
             .spawn()
             .unwrap();
         let input = child.stdin.take().unwrap();
+        let errors = Arc::new(Mutex::new(String::new()));
+        let (mut err, sink) = (child.stderr.take().unwrap(), errors.clone());
+        std::thread::spawn(move || {
+            let mut buf = [0u8; 4096];
+            while let Ok(n) = err.read(&mut buf) {
+                if n == 0 {
+                    return;
+                }
+                eprint!("{}", String::from_utf8_lossy(&buf[..n]));
+                sink.lock().unwrap().push_str(&String::from_utf8_lossy(&buf[..n]));
+            }
+        });
         let mut out = BufReader::new(child.stdout.take().unwrap());
         let (tx, output) = channel();
         std::thread::spawn(move || loop {
@@ -85,11 +102,12 @@ impl Server {
                 return;
             }
         });
-        Server { child, input, output, next_id: 1, skipped: Vec::new(), dir }
+        Server { child, input, output, next_id: 1, skipped: Vec::new(), last_sent: String::new(), errors, dir }
     }
 
     fn send(&mut self, msg: &str) {
         write!(self.input, "Content-Length: {}\r\n\r\n{msg}", msg.len()).unwrap();
+        self.last_sent = msg.chars().take(160).collect();
         self.input.flush().unwrap();
     }
 
@@ -97,7 +115,11 @@ impl Server {
     fn recv(&mut self) -> String {
         match self.output.recv_timeout(Duration::from_secs(180)) {
             Ok(m) => m,
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => panic!("the server sent nothing for 180 s (skipped so far: {:?})", self.skipped),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                let errors = self.errors.lock().unwrap().clone();
+                let tail: String = errors.chars().rev().take(1500).collect::<Vec<_>>().into_iter().rev().collect();
+                panic!("the server sent nothing for 180 s (skipped so far: {:?}; last sent: {}; its stderr ends: {tail})", self.skipped, self.last_sent)
+            }
             Err(_) => panic!("the server closed its output"),
         }
     }

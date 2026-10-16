@@ -2274,11 +2274,13 @@ attach fn fn_header(this: cgen&, out: std::string&, i: u32, named: bool) -> void
             out.append(*this.locals.at(@cast<usize>(*p)));
         }
     }
-    if (f.c_varargs) {
+    if (f.c_varargs && !first) {
         out.append(", ...");
-    } else if (first) {
+    } else if (first && !f.c_varargs) {
         out.append("void");
     }
+    // (a function-like macro taken as fn(...) with nothing before the ... is declared f(): C
+    // before C23 has no (...))
     out.push(')');
     // the symbol goes on the prototype: C allows no asm label on a definition
     val real = f.real_name;

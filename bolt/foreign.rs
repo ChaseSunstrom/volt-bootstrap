@@ -927,3 +927,17 @@ fn private(x: i32) i32 { return x; }
         assert!(!h.contains("private"), "{h}");
     }
 }
+
+/// Windows: the Rust target whose static libraries link into what $CC builds (rustc's own host
+/// there is MSVC's): llvm-mingw's clang (x86_64-w64-windows-gnu) takes gnullvm's, MinGW's gcc
+/// (x86_64-w64-mingw32) gnu's. None elsewhere
+pub(crate) fn rust_target() -> Option<String> {
+    if !cfg!(windows) {
+        return None;
+    }
+    let cc = std::env::var("CC").unwrap_or_else(|_| "cc".into());
+    let o = std::process::Command::new(cc).arg("-dumpmachine").output().ok()?;
+    let m = String::from_utf8_lossy(&o.stdout).trim().to_string();
+    let arch = m.split('-').next()?;
+    Some(format!("{arch}-pc-windows-{}", if m.ends_with("mingw32") { "gnu" } else { "gnullvm" }))
+}

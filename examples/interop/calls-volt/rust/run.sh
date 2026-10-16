@@ -6,4 +6,4 @@ command -v rustc >/dev/null || exit 77
 GREET=../greet/target/debug
 (cd ../greet && "${BOLT:-bolt}" build -q)
 rustc main.rs --edition 2021 -L "$GREET" -l greet -C link-arg=-Wl,-rpath,"$PWD/$GREET" -o main
-./main
+PATH="$PWD/$GREET:$PATH" ./main # (Windows finds greet.dll on PATH; elsewhere the rpath finds it)
