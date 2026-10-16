@@ -82,7 +82,9 @@ does it for a C struct and two C++ classes).
 
 Every imported function becomes a Volt function whose body is one `@cpp<R>("C++ expression",
 args)`: `{0}`, `{1}`... are the arguments. voltc writes an `extern "C"` wrapper for each call into a
-C++ file, compiles it with `$CXX` (`c++` by default) and links it with `-lstdc++`. You can write
+C++ file, compiles it with `$CXX` (`c++` by default) and links it with `-lstdc++`. A reference
+argument arrives as the object it names, and a Volt function's name as a pointer to it
+(`@cpp<i32>("ns::apply({0}, {1})", inc, 4)`). You can write
 `@cpp` calls yourself for anything the importer leaves out:
 
 ```volt

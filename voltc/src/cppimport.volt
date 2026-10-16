@@ -7171,6 +7171,34 @@ attach fn cpp_spell(this: checker&, t: u32) -> std::string? {
     }
 }
 
+// a Volt function pointer type t as a C++ declaration of name: `R name(P...)` (name "(*)": the
+// pointer type itself)
+attach fn cpp_fn_spell(this: checker&, t: u32, name: str) -> std::string? {
+    match (*this.t.get(t)) {
+        .FN_PTR(ps&, ret, va) => {
+            var s = this.cpp_spell(ret) ?? return null;
+            s.append(fmt(" {}(", S(name)).as_str());
+            for (i) in 0..ps.len {
+                if (i > 0) {
+                    s.append(", ");
+                }
+                s.append((this.cpp_spell(*ps.at(i)) ?? return null).as_str());
+            }
+            if (va) {
+                if (ps.len > 0) {
+                    s.append(", ");
+                }
+                s.append("...");
+            } else if (ps.len == 0) {
+                s.append("void");
+            }
+            s.push(')');
+            return s;
+        },
+        default => { return null; },
+    }
+}
+
 // the C++ name of a struct imported from C++ (@cpp_type), with a template instance's arguments
 attach fn cpp_class(this: checker&, s: u32) -> std::string? {
     val info = this.si(s);
@@ -7214,7 +7242,8 @@ attach fn cpp_is_class(this: checker&, t: u32) -> bool {
 }
 
 // @cpp<R, T...>("C++ expression", args...): a call into C++ (cppimport.volt writes these). In the
-// expression {i} is argument i (a reference arrives as the object it refers to) and {tN} the C++
+// expression {i} is argument i (a reference arrives as the object it refers to, a fn's name as its
+// C function's pointer, catching or not) and {tN} the C++
 // spelling of the Nth type after R; {&i} is argument i, a function, by its C symbol (declared
 // extern "C" for the expression), and {=i} argument i, a comptime value, as a C++ literal: those two
 // aren't passed. Each distinct call becomes an extern "C" wrapper function in the
@@ -7371,21 +7400,8 @@ attach fn cpp_call_as(this: checker&, r: u32, gargs: std::vec<garg>&, args: std:
             }
             match (*this.t.get(fv.ty)) {
                 .FN_PTR(ps&, ret, va) => {
-                    var rs = S("void");
-                    if (ret != VOID) {
-                        rs = this.cpp_spell(ret) ?? return fail(span, fmt("@cpp: {} has no C++ form", this.ty_name(ret)));
-                    }
-                    var pl: std::string = {};
-                    for (pt&) in ps.items() {
-                        if (pl.len() > 0) {
-                            pl.append(", ");
-                        }
-                        pl.append((this.cpp_spell(*pt) ?? return fail(span, fmt("@cpp: {} has no C++ form", this.ty_name(*pt)))).as_str());
-                    }
-                    if (pl.len() == 0) {
-                        pl.append("void");
-                    }
-                    decls.append(fmt3("extern \"C\" {} {}({});\n", move rs, copy sym, move pl).as_str());
+                    val fd = this.cpp_fn_spell(fv.ty, sym.as_str()) ?? return fail(span, fmt("@cpp: {} has no C++ form", this.ty_name(fv.ty)));
+                    decls.append(fmt("extern \"C\" {};\n", move fd).as_str());
                 },
                 default => {},
             }
@@ -7412,12 +7428,23 @@ attach fn cpp_call_as(this: checker&, r: u32, gargs: std::vec<garg>&, args: std:
             put(&subst, move lit);
             continue;
         }
-        var v = try this.garg_expr(args.at(i), null);
+        // read as a call clang works out reads it: a fn's name is its C function
+        var v = try this.cpp_arg_value(try this.garg_value(args.at(i)));
         v = try this.take(v, span);
         if (this.cpp_is_class(v.ty)) {
             return fail(span, fmt("@cpp: pass the C++ object {} by reference (&x)", this.ty_name(v.ty)));
         }
-        val sp = this.cpp_spell(v.ty) ?? return fail(span, fmt2("@cpp: argument {} is {}, which has no C++ form", unum(@cast<u64>(i - 1)), this.ty_name(v.ty)));
+        // a function pointer crosses as void * and is cast back to its C++ type in the expression
+        // (fn_ptr_param's way: a C++ parameter's declarator can't be spelled as `type name`)
+        var sp = S("void *");
+        var fp: std::string? = null;
+        match (*this.t.get(v.ty)) {
+            .FN_PTR(ps&, ret, va) => { fp = this.cpp_fn_spell(v.ty, "(*)"); },
+            default => {},
+        }
+        if (fp == null) {
+            sp = this.cpp_spell(v.ty) ?? return fail(span, fmt2("@cpp: argument {} is {}, which has no C++ form", unum(@cast<u64>(i - 1)), this.ty_name(v.ty)));
+        }
         if (params.len() > 0) {
             params.append(", ");
         }
@@ -7440,7 +7467,9 @@ attach fn cpp_call_as(this: checker&, r: u32, gargs: std::vec<garg>&, args: std:
                 default => {},
             }
         }
-        if (stars.len() > 0) {
+        if (fp) {
+            put(&subst, fmt2("(({}){})", copy fp, copy an));
+        } else if (stars.len() > 0) {
             put(&subst, fmt2("({}{})", move stars, copy an));
         } else {
             put(&subst, copy an);
