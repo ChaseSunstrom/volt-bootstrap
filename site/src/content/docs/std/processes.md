@@ -62,7 +62,7 @@ after it, and waits for it. It gives the exit code, or 128 plus the signal that 
 its `signal` (0 when it exited), so a program a `SIGSEGV` ended (`code` 139, `signal` 11) can be
 told from one that called `exit(139)` (`signal` 0).
 `capture(argv, input)` also feeds it `input` as its standard input and collects what it prints:
-an `output` with its `code`, `out` and `err`. Both fail with `SPAWN_FAILED` when the program can't
+an `output` with its `code` and `signal` (as `run_status` gives them), `out` and `err`. Both fail with `SPAWN_FAILED` when the program can't
 be started, as when it doesn't exist. Arguments go to the program as they are, with no shell in
 between, so nothing in them needs quoting.
 
