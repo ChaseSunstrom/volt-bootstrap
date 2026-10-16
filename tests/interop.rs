@@ -2072,6 +2072,16 @@ fn cpp_peruse_errors() {
 }
 
 #[test]
+fn cpp_try_inst() {
+    // a try_ form that appears only while checking (a class template instance held by handle, its
+    // methods worked out per use) in an import with no throwing declared function: cpp_error is there
+    let e = Env::new("cpp-try-inst");
+    for backend in ["c", "llvm"] {
+        assert_eq!(ok(e.voltc(&["run", "cpp_try_inst.volt", "--backend", backend]), "voltc run cpp_try_inst.volt"), "get 7 plain 2\ntry_get RANGE_ERROR neg\n", "a template instance's try_ form ({backend})");
+    }
+}
+
+#[test]
 fn cpp_defaults() {
     // a default argument is a top-level = in the parameter's tokens: an array reference's bound, a
     // std::array's size and a decltype's expression are not one, a template's = is outside the parameter

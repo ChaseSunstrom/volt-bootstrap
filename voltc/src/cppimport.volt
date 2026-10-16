@@ -127,8 +127,6 @@ struct cpp_gen {
     // the std class templates a signature used, which stdcxx declares
     unique: bool = false;
     shared: bool = false;
-    // a try_ form was written (so cpp_error and last_exception are needed)
-    tries: bool = false;
     // a std::function field's set_ was written (so volt_cpp_closure_drop is needed)
     closures: bool = false;
     // a std::string& parameter was written (so volt_cpp_text_back is needed), and it was
@@ -3257,7 +3255,6 @@ attach fn try_text(this: cpp_gen&, generics: str, head: str, params: str, r: cpp
     if (generics.len > 0) {
         this.line(generics);
     }
-    this.tries = true;
     // (the result in parentheses: cpp_error!T? is an optional error union, cpp_error!T[3] an array)
     var rv = copy r.vty;
     if (!starts_with(rv.as_str(), "(")) {
@@ -5531,7 +5528,6 @@ attach fn per_use(this: cpp_gen&, head: str, call: str, method: bool) -> void {
     }
     put(&this.aliases, { key: this.fn_key(ts, "#per-use"), text: copy this.out, decl: S(ts[from..at]), taken: this.fn_key(ts, "#name") });
     this.out = move saved;
-    this.tries = true;
 }
 
 // a fn head's try_ form (`fn f(` gives `fn try_f(`; a keyword's underscore goes: `fn try_as(`)
@@ -5809,16 +5805,16 @@ attach fn std_extras(this: cpp_gen&) -> void {
         this.line("    a.free<C>(c);");
         this.line("}");
     }
-    if (this.tries) {
-        this.exceptions();
-        this.line("// what the exception a try_ form caught last (on this thread) said");
-        this.line("fn last_exception() -> std::string {");
-        this.depth += 1;
-        this.line("val r = @cpp<str>(\"volt_cpp_dup(volt_cpp_last)\");");
-        this.text_out("r");
-        this.depth -= 1;
-        this.line("}");
-    }
+    // cpp_error and last_exception() in every import: a try_ form can appear while checking too (a
+    // class template instance's per-use stubs), after this text is written
+    this.exceptions();
+    this.line("// what the exception a try_ form caught last (on this thread) said");
+    this.line("fn last_exception() -> std::string {");
+    this.depth += 1;
+    this.line("val r = @cpp<str>(\"volt_cpp_dup(volt_cpp_last)\");");
+    this.text_out("r");
+    this.depth -= 1;
+    this.line("}");
 }
 
 // how many classes deep c is (a class with no bases is 1)
