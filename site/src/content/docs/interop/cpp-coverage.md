@@ -21,6 +21,8 @@ doesn't map, with the way around each.
 | any other class (an over-aligned one too, under C++17 or newer) | a handle to the object C++ allocates |
 | class templates Volt can lay out (public fields, no bases), their number parameters too (`fixed<class T, int N>`) | generic structs (`fixed<T, N: i32>`, its `T data[N]` a `T[N]`) |
 | other class templates (private fields, bases, virtual methods, or a field of a type with no Volt form such as `std::mutex`; one only declared, its partial specializations the definitions, like glm's `vec`) | generic handles (`ns::box<i32>`, `glm::vec<3, f32>`), made by `{}` or `T::new(...)`, their public fields getters and `set_` methods, their other members worked out per use |
+| a class template's specializations (an explicit `template <> struct S<void>`, a partial `S<T*>`) | the instances clang makes from one (`ns::box<void>`, `ns::box<i32*>`) are handles, made by `T::new(...)`, their members worked out per use; the primary's instances keep their generic struct's layout. Clang picks, as in C++ (partial ordering, `const`, which `int64_t` a type is) |
+| function template specializations (`template <> int f<int>(int)`, a member's), and what a library adds to namespace `std` (`std::hash<Key>`, a `swap` found by argument-dependent lookup) | C++ picks them at each call. A `std` container of the library's type comes from a `use` naming both headers (`use cpp { "unordered_map", "lib.hpp" } as cpp;`): an instance sees its own `use`'s headers, as a C++ file sees what it includes |
 | an instance of a class template that takes a template (`basic_json<>`), or a number when a function's signature names it (glm's `vec<3, float>`); a lambda's own type; a coroutine-style task; and the `using` alias naming one | a handle to the object (`{}` makes one with its default constructor), its members worked out per use: methods, static functions, `T::new(...)`, operators by their Volt names (`op_call` is `()`) |
 | a class or enum inside a class | `Outer_Inner` |
 | constructors, destructors, copy constructors | `T::new(...)`, the `delete` and `copy` hooks; a class whose destructor isn't public has none, its objects borrowed from a factory and freed by the class's own `destroy` |
@@ -77,6 +79,6 @@ comment in the generated source (`VOLT_SHOW_CPP=1` prints it), and the rest stil
 | class templates with template template parameters (`basic_json`'s), or with a number parameter of a type other than an integer or `bool` (an enum, a pointer), as generics | Volt's generic structs take types and integer or `bool` values, not templates (functions with them are [called per use](/volt-bootstrap/interop/cpp/#calls-worked-out-per-use)) | an instance: the header's alias for one (`using json = basic_json<>;`), or one a function gives back, is a handle, made by `{}` or `json::new(...)`, its members worked out per use |
 | a parameter of a function pointer whose signature has a class, enum or reference (`int (*)(const Shape &)`), or of a `std::function` with a non-const reference in its signature or a class held by handle as its result | Volt has no form for it (a function pointer over numbers and pointers is an `extern "C" fn`; a `std::function` over classes takes a closure) | `@cpp`'s `{&i}` passes a Volt function by its symbol: `@cpp<i32>("ns::apply({&0}, {1})", inc, 4)` |
 
-Explicit specializations (`template <> struct S<void>`) and what a library adds to namespace `std`
-(`std::hash<T>` specializations, `swap` overloads) are left out on purpose: the template, and Volt's
-own `std`, are what Volt sees.
+A library's own declarations in namespace `std` (its `std::hash<T>` specializations, `swap`
+overloads) aren't Volt names: Volt's own `std` stays what `std::` means, and C++ finds them at
+each call.
