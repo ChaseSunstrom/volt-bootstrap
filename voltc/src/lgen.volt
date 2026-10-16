@@ -1869,7 +1869,18 @@ attach fn binary(this: lg&, op: binop_ir, a: u32, b: u32, t: u32) -> llvm::LLVMO
             .SUB => { r = llvm::LLVMBuildFSub(this.b, av, bv, ""); },
             .MUL => { r = llvm::LLVMBuildFMul(this.b, av, bv, ""); },
             .DIV => { r = llvm::LLVMBuildFDiv(this.b, av, bv, ""); },
-            default => { r = llvm::LLVMBuildFRem(this.b, av, bv, ""); },
+            default => {
+                if (ak == llvm::LLVMFP128TypeKind) {
+                    // f128 % through f64, as the C backend's: LLVM calls fmodl for it, which is
+                    // binary128 only where long double is (macOS's fmodl takes an f64 or x87 one)
+                    // ponytail: double precision; a binary128 fmod in std::softfloat is T-0474
+                    val d = llvm::LLVMDoubleTypeInContext(this.ctx);
+                    val q = llvm::LLVMBuildFRem(this.b, llvm::LLVMBuildFPTrunc(this.b, av, d, ""), llvm::LLVMBuildFPTrunc(this.b, bv, d, ""), "");
+                    r = llvm::LLVMBuildFPExt(this.b, q, llvm::LLVMTypeOf(av), "");
+                } else {
+                    r = llvm::LLVMBuildFRem(this.b, av, bv, "");
+                }
+            },
         }
         return this.coerce(r, at, t);
     }

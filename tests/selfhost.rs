@@ -347,7 +347,7 @@ fn runtime_compiles_for_every_target() {
             // every print takes a lock that can wait, so what the runtime imports, every program links:
             // on Windows that's kernel32 only (WaitOnAddress is looked up; MinGW won't link it by default)
             if t.contains("windows") {
-                let nm = Command::new("llvm-nm").arg("-u").arg(dir.join(format!("{t}.o"))).output().unwrap();
+                let nm = Command::new(common::llvm_tool("llvm-nm")).arg("-u").arg(dir.join(format!("{t}.o"))).output().unwrap();
                 let undefined = String::from_utf8_lossy(&nm.stdout);
                 assert!(!undefined.contains("WaitOnAddress") && !undefined.contains("WakeByAddress"), "{t}: the runtime links WaitOnAddress:\n{undefined}");
             }

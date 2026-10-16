@@ -132,9 +132,10 @@ fn quad_exports_only_on_macos() {
         let missing: Vec<_> = NAMES.iter().filter(|n| !mac.lines().any(|l| l.starts_with("define") && l.contains(&format!("@{n}(")))).collect();
         assert!(missing.is_empty(), "{arch} macOS doesn't define {missing:?}");
     }
-    let host = ir(&[]);
-    let there: Vec<_> = NAMES.iter().filter(|n| host.lines().any(|l| l.starts_with("define") && l.contains(&format!("@{n}(")))).collect();
-    assert!(there.is_empty(), "the host defines {there:?}");
+    // (Linux named, not the host: on macOS the host is the target that has them)
+    let linux = ir(&["--cfg", "os=linux", "--cfg", "arch=x86_64"]);
+    let there: Vec<_> = NAMES.iter().filter(|n| linux.lines().any(|l| l.starts_with("define") && l.contains(&format!("@{n}(")))).collect();
+    assert!(there.is_empty(), "Linux defines {there:?}");
 }
 
 /// f128 in C where the compiler has no quad type (arm64 macOS): the C spells every f128 operation
@@ -169,9 +170,9 @@ fn f128_soft_c() {
         assert!(mac.status.success(), "{}", String::from_utf8_lossy(&mac.stderr));
         let (src, obj) = (dir.join(format!("{prog}.c")), dir.join(format!("{prog}.o")));
         std::fs::write(&src, &mac.stdout).unwrap();
-        let cc = Command::new("clang").args(["--target=arm64-apple-macos11", "-ffreestanding", "-w", "-c"]).arg(&src).arg("-o").arg(&obj).output().unwrap();
+        let cc = Command::new(common::llvm_tool("clang")).args(["--target=arm64-apple-macos11", "-ffreestanding", "-w", "-c"]).arg(&src).arg("-o").arg(&obj).output().unwrap();
         assert!(cc.status.success(), "{prog}'s C doesn't compile for arm64 macOS:\n{}", String::from_utf8_lossy(&cc.stderr));
-        let nm = Command::new("llvm-nm").args(["-U", "-j"]).arg(&obj).output().unwrap();
+        let nm = Command::new(common::llvm_tool("llvm-nm")).args(["-U", "-j"]).arg(&obj).output().unwrap();
         let defined = String::from_utf8_lossy(&nm.stdout);
         assert!(["___addtf3", "___multf3", "___lttf2", "___extendhftf2"].iter().all(|n| defined.lines().any(|l| l == *n)), "arm64 macOS's C defines no quad routines:\n{defined}");
     }

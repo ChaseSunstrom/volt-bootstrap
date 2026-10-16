@@ -12,6 +12,12 @@ note() { printf '::%s title=%s::%s\n' "$1" "$2" "$3"; }
 total() { grep -aoE "[0-9]+ $1" "$log" | awk '{ n += $1 } END { print n + 0 }'; }
 note notice tests "$(total passed) passed, $(total failed) failed, $(total ignored) ignored"
 [ "${2:-failure}" = success ] && exit 0
+# tests cargo said had been running for over 60 seconds and that never reported: where a job killed at
+# its time limit was stuck (listed whatever the status, since a cancelled job's status isn't failure)
+hung=$(grep -aoE '^test [^ ]+ has been running for over 60 seconds' "$log" | awk '{ print $2 }' | sort -u | while read -r t; do
+    grep -aqE "^test $t \.\.\. (ok|FAILED|ignored)" "$log" || printf '%s\n' "$t"
+done | paste -sd ' ' -)
+[ -n "$hung" ] && note error "still running" "$hung"
 # lines joined as one annotation (awk: macOS's sed has no GNU :a;N loop)
 oneline() { awk 'BEGIN { ORS = "%0A" } { gsub(/%/, "%25"); gsub(/\r/, ""); print }'; }
 tests=$(grep -aE '^test .* \.\.\. FAILED$' "$log" | sed 's/^test //; s/ \.\.\. FAILED$//' | head -40 | paste -sd ' ' -)
