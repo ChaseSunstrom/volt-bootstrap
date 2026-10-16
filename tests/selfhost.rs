@@ -453,21 +453,24 @@ fn wasm() {
     }
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let dir = root.join("examples/wasm");
-    let src = std::fs::read_to_string(dir.join("hello.volt")).unwrap();
-    let want: Vec<&str> = src.lines().filter_map(|l| l.strip_prefix("// expect: ")).collect();
     let tmp = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("wasm-{}", std::process::id()));
     std::fs::create_dir_all(&tmp).unwrap();
-    for (target, kind, imports) in [("wasm32-wasi", "wasi", "wasi_snapshot_preview1."), ("wasm32-none", "none", "env.")] {
-        for release in [false, true] {
-            let out = tmp.join(format!("{kind}-{release}.wasm"));
-            let b = Command::new(common::voltc()).arg("build").arg(dir.join("hello.volt")).arg("--std").arg(root.join("std")).args(["--target", target, "-o"]).arg(&out).args(release.then_some("--release")).output().unwrap();
-            assert!(b.status.success(), "voltc build --target {target}: {}", String::from_utf8_lossy(&b.stderr));
-            let o = Command::new("node").arg(dir.join("run.mjs")).arg(&out).arg(kind).output().unwrap();
-            let got = String::from_utf8_lossy(&o.stdout);
-            assert!(o.status.code() == Some(3) && got.lines().collect::<Vec<_>>() == want, "{target} (release {release}) exited {:?}, printed:\n{got}{}", o.status.code(), String::from_utf8_lossy(&o.stderr));
-            let o = Command::new("node").arg(dir.join("run.mjs")).arg(&out).arg("imports").output().unwrap();
-            let names = String::from_utf8_lossy(&o.stdout);
-            assert!(o.status.success() && names.lines().all(|l| l.starts_with(imports)), "{target} imports more than its host's functions:\n{names}");
+    // hello exits with 3; wide checks the 128-bit routines against what it prints natively
+    for (prog, code) in [("hello", 3), ("wide", 0)] {
+        let src = std::fs::read_to_string(dir.join(format!("{prog}.volt"))).unwrap();
+        let want: Vec<&str> = src.lines().filter_map(|l| l.strip_prefix("// expect: ")).collect();
+        for (target, kind, imports) in [("wasm32-wasi", "wasi", "wasi_snapshot_preview1."), ("wasm32-none", "none", "env.")] {
+            for release in [false, true] {
+                let out = tmp.join(format!("{prog}-{kind}-{release}.wasm"));
+                let b = Command::new(common::voltc()).arg("build").arg(dir.join(format!("{prog}.volt"))).arg("--std").arg(root.join("std")).args(["--target", target, "-o"]).arg(&out).args(release.then_some("--release")).output().unwrap();
+                assert!(b.status.success(), "voltc build --target {target}: {}", String::from_utf8_lossy(&b.stderr));
+                let o = Command::new("node").arg(dir.join("run.mjs")).arg(&out).arg(kind).output().unwrap();
+                let got = String::from_utf8_lossy(&o.stdout);
+                assert!(o.status.code() == Some(code) && got.lines().collect::<Vec<_>>() == want, "{prog} for {target} (release {release}) exited {:?}, printed:\n{got}{}", o.status.code(), String::from_utf8_lossy(&o.stderr));
+                let o = Command::new("node").arg(dir.join("run.mjs")).arg(&out).arg("imports").output().unwrap();
+                let names = String::from_utf8_lossy(&o.stdout);
+                assert!(o.status.success() && names.lines().all(|l| l.starts_with(imports)), "{target} imports more than its host's functions:\n{names}");
+            }
         }
     }
     let _ = std::fs::remove_dir_all(&tmp);

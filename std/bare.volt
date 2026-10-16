@@ -126,6 +126,10 @@ namespace bare {
     public var free_blocks: block* = null;
 
     export fn volt_rt_malloc(n: usize) -> void* {
+        // (a size past what the heap could ever hold is no block: the rounding below would wrap)
+        if (n > ~@cast<usize>(0) - HEADER - 15) {
+            return null;
+        }
         val need = (n + HEADER + 15) / 16 * 16;
         var prev: block* = null;
         var b = free_blocks;
@@ -325,6 +329,85 @@ namespace bare {
             }
             return @cast<u128>(x);
         }
+        // a * b with *overflow set when it doesn't fit in an i128 (checked multiplies in debug builds)
+        export fn __muloti4(a: i128, b: i128, overflow: i32*) -> i128 {
+            val (ma, mb) = (magnitude(a), magnitude(b));
+            val p = @cast<u128>(__multi3(@cast<i128>(ma), @cast<i128>(mb)));
+            val negative = (a < 0) != (b < 0);
+            var past = ma != 0 && udivmod(p, ma, null) != mb;
+            val limit = joined(0x8000000000000000, 0); // 2^127: an i128's magnitude when negative
+            if (negative) {
+                past = past || p > limit;
+            } else {
+                past = past || p >= limit;
+            }
+            *overflow = 0;
+            if (past) {
+                *overflow = 1;
+            }
+            if (negative) {
+                return @cast<i128>(0 -% p);
+            }
+            return @cast<i128>(p);
+        }
+        // a u128 as the nearest f64: its top 64 bits (any bit below them kept as a sticky low bit,
+        // so the u64 conversion rounds as the whole would) times 2 to the bits shifted off
+        fn u128_f64(x: u128) -> f64 {
+            val (hi, lo) = halves(x);
+            if (hi == 0) {
+                return @cast<f64>(lo);
+            }
+            var shift: u32 = 0;
+            var top = hi;
+            while (top != 0) {
+                top = top >> 1;
+                shift += 1;
+            }
+            var keep = hi;
+            var dropped = lo;
+            if (shift < 64) {
+                keep = (hi << (64 - shift)) | (lo >> shift);
+                dropped = lo << (64 - shift);
+            }
+            if (dropped != 0) {
+                keep = keep | 1;
+            }
+            // times 2^shift, exactly
+            return @cast<f64>(keep) * @bitcast<f64>(@cast<u64>(1023 + shift) << 52);
+        }
+        export fn __floatuntidf(x: u128) -> f64 { return u128_f64(x); }
+        export fn __floattidf(x: i128) -> f64 {
+            if (x < 0) {
+                return -u128_f64(magnitude(x));
+            }
+            return u128_f64(@cast<u128>(x));
+        }
+        export fn __floatuntisf(x: u128) -> f32 { return @cast<f32>(u128_f64(x)); }
+        export fn __floattisf(x: i128) -> f32 { return @cast<f32>(__floattidf(x)); }
+        // an f64 truncated toward zero to a u128 (0 below zero or for NaN, the largest past it)
+        export fn __fixunsdfti(x: f64) -> u128 {
+            if (!(x >= 1.0)) {
+                return 0;
+            }
+            val bits = @bitcast<u64>(x);
+            val exp = @cast<i32>((bits >> 52) & 0x7FF) - 1075;
+            val mant = (bits & 0xFFFFFFFFFFFFF) | 0x10000000000000;
+            if (exp > 75) { // past 2^128 (53 bits of mantissa shifted by more than 75)
+                return ~@cast<u128>(0);
+            }
+            if (exp <= 0) {
+                return @cast<u128>(mant >> @cast<u32>(0 - exp));
+            }
+            return @cast<u128>(__ashlti3(@cast<i128>(joined(0, mant)), exp));
+        }
+        export fn __fixdfti(x: f64) -> i128 {
+            if (x < 0.0) {
+                return @cast<i128>(0 -% __fixunsdfti(-x));
+            }
+            return @cast<i128>(__fixunsdfti(x));
+        }
+        export fn __fixunssfti(x: f32) -> u128 { return __fixunsdfti(@cast<f64>(x)); }
+        export fn __fixsfti(x: f32) -> i128 { return __fixdfti(@cast<f64>(x)); }
         export fn __udivti3(a: u128, b: u128) -> u128 { return udivmod(a, b, null); }
         export fn __umodti3(a: u128, b: u128) -> u128 {
             var r: u128 = 0;

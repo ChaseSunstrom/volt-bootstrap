@@ -475,7 +475,7 @@ attach fn part(this: lg&, t: u32, ret: bool) -> abi_part {
         // by a pointer to a copy (byval), or returned through a pointer the caller gives (sret)
         var leaves: std::vec<llvm::LLVMOpaqueType*> = {};
         scalar_leaves(l, &leaves);
-        if (leaves.len == 1) {
+        if (leaves.len == 1 && this.size_of(*leaves.at(0)) == size) {
             return { how: pass::COERCE, ty: t, cty: *leaves.at(0) };
         }
         return { how: pass::MEMORY, ty: t };
