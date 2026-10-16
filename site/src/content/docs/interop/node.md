@@ -40,13 +40,30 @@ fn main() -> void {
 | `string` | `str` in, `std::string` out |
 | `T[]` of those | `T[..]` in (what JavaScript changes in an array of numbers or booleans comes back), `std::vec<T>` out |
 | `T \| null`, `T \| undefined` | `T?`; for a class, an empty handle is `null` |
+| an `interface`, or a `type` of an object type | a struct, copied to and from a JavaScript object: `x?: T` is `x: T? = null` (absent on the way back is `null`), `extends` brings the base's fields; one with methods or an index signature is left out |
+| `type X = T` | `T` |
+| a generic function or class (`first<T>(xs: T[]): T`, `class Box<T>`) | a Volt generic (`geom::first<f64>(xs)`, `geom::Box<f64>::new(2.0)`): each value converted by its type, which must be a number, `bool`, `str` or `std::string`, or one of the module's classes, enums or object types |
+| an array of classes, enums, object types or a type parameter | `T[..]` in, `std::vec<T>` out |
+| a callback parameter, `(x: number) => number` | a Volt fn value, `fn(f64) -> f64`, that JavaScript calls, and may keep and call later (its parameters and result are one value each, not arrays) |
+| an `async` function, or one giving a `Promise<T>` | `T`: the call gives what the promise settles to, and a rejection stops the program with its text |
 | an exported constant of a number, `boolean` or string | a `val` |
 
+```volt ignore
+val b = geom::Box<f64>::new(2.0);
+val n = geom::each(3.0, || (i: f64) -> void { std::print("[{}]", i); });    // [0][1][2]
+val size: geom::Size = { w: 2.0, h: 3.0, tag: null };
+std::println("{} {} {}", b.get(), geom::later(21.0), geom::area(size));        // 2 42 6
+```
+
 A thrown exception stops the program with its text, as a Volt panic does. A function needs its
-parameter types written, and its return type when it returns something. Generics, `async`
-functions, callbacks, object types, imports between modules (bundle them into one file first) and
-TypeScript that needs more than stripping (parameter properties, namespaces) are left out or
-refused, and what's left out is listed in a comment of the generated declarations
+parameter types written, and its return type when it returns something. There's no event loop:
+an async function's promise must settle as the call returns (what it awaits already done, or a
+promise of its own), and one still pending stops the program (`never settled`); an async call from
+inside a callback JavaScript is running can't settle either. A struct passed in is moved like any
+value (`copy s` keeps it). A callback is freed when JavaScript collects the function holding it, so
+one it keeps until the program ends is never freed. Imports between modules (bundle them into one
+file first) and TypeScript that needs more than stripping (parameter properties, namespaces) are
+left out or refused, and what's left out is listed in a comment of the generated declarations
 (`VOLT_SHOW_IMPORT=1 voltc check main.volt` prints them). bolt needs node 23.2 or later (`$NODE`)
 to strip TypeScript, and JavaScriptCore from WebKitGTK (`javascriptcoregtk-4.1`, or `$JSC_PKG`):
 the program links it, nothing of Node.js.

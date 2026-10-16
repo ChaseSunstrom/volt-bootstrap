@@ -1462,6 +1462,15 @@ fn js_direct() {
     let o = c.output().unwrap();
     assert_eq!(o.status.code(), Some(101), "an exception stops the program: {}", String::from_utf8_lossy(&o.stderr));
     assert!(String::from_utf8_lossy(&o.stderr).contains("Error: boom"), "{}", String::from_utf8_lossy(&o.stderr));
+    // an async function's rejection stops it too, and so does a promise that never settles
+    for (prog, says) in [("rejects.volt", "Error: no"), ("never.volt", "never settled")] {
+        let mut c = Command::new(&e.voltc);
+        c.args(["run", prog]).current_dir(&dir).env("VOLT_STD", Path::new(ROOT).join("std"));
+        tools(&mut c);
+        let o = c.output().unwrap();
+        let err = String::from_utf8_lossy(&o.stderr);
+        assert!(o.status.code() == Some(101) && err.contains(says), "{prog}: {:?} {err}", o.status);
+    }
     // the same program in a bolt package
     let app = dir.join("app");
     std::fs::create_dir_all(app.join("src")).unwrap();
