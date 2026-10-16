@@ -78,6 +78,10 @@ struct cpp_alias {
 struct cpp_gen {
     c: checker&;
     out: std::string = {};
+    // the functions declared in the scope last asked about (a header's own try_f wins over the
+    // try_ form made for f): which scope, and their names
+    sib_of: clang::CXCursor? = null;
+    sib_names: std::map<str, bool> = {};
     note: std::string = {}; // the C++ declaration the next fn wraps, as a comment above it (hover shows it)
     // instance handles: a class type with no other Volt form (a class template's instance with
     // private state, a lambda's type, what an auto result is) held by handle, by its canonical C++
@@ -2625,8 +2629,8 @@ attach fn callable_of(this: cpp_gen&, generics: str, head: str, has_params: bool
         this.line(fmt("// (not declared: {})", S(INTO_COPY)).as_str());
         return;
     }
-    // a try_ form, when it can throw
-    val can_try = may_throw(fn_cursor);
+    // a try_ form, when it can throw and the header has no function of that name beside it
+    val can_try = may_throw(fn_cursor) && !this.declares_beside(fn_cursor, fmt("try_{}", cursor_name(fn_cursor)).as_str());
     // the call picks exactly this overload: the object is const for a const method (so not a
     // non-const twin's), moved for an && one, and its arguments are cast to their parameters' types
     // (below); an alias (see sigs) has the suffix on its name
@@ -3147,6 +3151,27 @@ attach fn text_out(this: cpp_gen&, r: str) -> void {
 // the try_ form of a call: the plain form called in catch mode (volt_cpp_catch_begin), returning
 // a cpp_error naming what it threw (last_exception() says what it said); its value, made of zeroes
 // then, is dropped
+// does the scope c is declared in (its namespace or class) declare a function or method named name?
+attach fn declares_beside(this: cpp_gen&, c: clang::CXCursor, name: str) -> bool {
+    val parent = clang::clang_getCursorSemanticParent(c);
+    var same = false;
+    val had = this.sib_of;
+    if (had) {
+        same = clang::clang_equalCursors(had, parent) != 0;
+    }
+    if (!same) {
+        this.sib_names = {};
+        for (ch&) in children(parent).items() {
+            val k = clang::clang_getCursorKind(*ch);
+            if (k == clang::CXCursor_FunctionDecl || k == clang::CXCursor_CXXMethod || k == clang::CXCursor_FunctionTemplate) {
+                this.sib_names.put(this.c.intern(cursor_name(*ch)), true);
+            }
+        }
+        this.sib_of = parent;
+    }
+    return this.sib_names.get(name) != null;
+}
+
 attach fn try_text(this: cpp_gen&, generics: str, head: str, params: str, r: cpp_ret&, args: str) -> void {
     // `attach fn area(this: Shape&` gives `attach fn try_area(this: Shape&`, calling this.area(...)
     var at: usize = 0;

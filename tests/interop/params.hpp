@@ -164,6 +164,20 @@ template <class... A> void boom(A... a) {
 }
 template <class... A> int twin(A... a) { return (0 + ... + a); }
 inline int try_twin(int x) { return -x; }
+// declared, not per use: a try_ name the header declares beside a throwing function keeps it too
+inline int sole(int x) {
+    if (x < 0) throw std::invalid_argument("negative sole");
+    return x;
+}
+inline int try_sole(int x) { return -x; }
+struct Gauge {
+    int v = 1;
+    int read(int k) {
+        if (k < 0) throw std::domain_error("negative read");
+        return v + k;
+    }
+    int try_read(int k) { return -k; }
+};
 inline int nonneg(int x) {
     if (x < 0) throw std::invalid_argument("negative");
     return x;
