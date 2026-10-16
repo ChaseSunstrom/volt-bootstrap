@@ -69,6 +69,16 @@ fun lists() {
     val opened = open_all(listOf("cy", "dee"))
     println("opened ${opened.size} ${opened[1].owner()}")
     opened.forEach { it.close() }
+    // slices Volt keeps, given back as lists of copies: freed here, Volt's still there to scribble on
+    val r = roster.open("ann", "bo")
+    val rn = r.names()
+    val rb = r.badges()
+    print("roster ${rn[0]} ${rn[1]} ${rb[0].name()} ${rb[1].name()}")
+    rb.forEach { it.close() }
+    r.scribble()
+    val rn2 = r.names()
+    println(" ${rn2[0]} ${rn2[1]}")
+    r.close()
     val sq = squares_upto(4)
     println("squares ${sq.size} ${sq[3]} sum ${sum_all(sq)}")
     val parts = listOf("a", "b", "c")

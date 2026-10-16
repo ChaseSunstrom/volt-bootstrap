@@ -67,6 +67,16 @@ func lists() {
     let opened = open_all(["cy", "dee"])
     print("opened", opened.count, opened[1].owner())
     opened.forEach { $0.close() }
+    // slices Volt keeps, given back as lists of copies: freed here, Volt's still there to scribble on
+    let r = roster.open("ann", "bo")
+    let rn = r.names()
+    let rb = r.badges()
+    print("roster", rn[0], rn[1], rb[0].name(), rb[1].name(), terminator: "")
+    rb.forEach { $0.close() }
+    r.scribble()
+    let rn2 = r.names()
+    print("", rn2[0], rn2[1])
+    r.close()
     let sq = squares_upto(4)
     print("squares", sq.count, sq[3], "sum", sum_all(sq))
     print("joined", joined(["a", "b", "c"], "-"), "total", total_len(["a", "b", "c"]))

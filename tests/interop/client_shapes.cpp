@@ -31,6 +31,18 @@ static void lists() {
     auto opened = shapelib::open_all(names);
     std::printf("opened %zu %s\n", opened.size(), opened[1].owner().c_str());
     opened.clear();
+    // slices Volt keeps, given back as lists of copies: freed here, Volt's still there to scribble on
+    {
+        auto r = shapelib::roster::open("ann", "bo");
+        auto rn = r.names();
+        auto rb = r.badges();
+        std::printf("roster %s %s %s %s", rn[0].c_str(), rn[1].c_str(), rb[0].name().c_str(), rb[1].name().c_str());
+        rn.clear();
+        rb.clear();
+        r.scribble();
+        rn = r.names();
+        std::printf(" %s %s\n", rn[0].c_str(), rn[1].c_str());
+    }
     auto sq = shapelib::squares_upto(4);
     std::printf("squares %zu %lld sum %lld\n", sq.size(), (long long)sq[3], (long long)shapelib::sum_all(sq));
     std::vector<std::string> parts{"a", "b", "c"};

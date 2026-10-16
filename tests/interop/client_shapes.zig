@@ -75,6 +75,19 @@ fn lists() void {
     print("opened {d} {s}\n", .{ opened.items().len, opened.items()[1].owner() });
     for (opened.items()) |x| x.deinit();
     opened.deinit();
+    // slices Volt keeps, given back as lists of copies: freed here, Volt's still there to scribble on
+    const r = s.roster.open("ann", "bo");
+    const rn = r.names();
+    const rb = r.badges();
+    print("roster {s} {s} {s} {s}", .{ rn.items()[0].slice(), rn.items()[1].slice(), rb.items()[0].name(), rb.items()[1].name() });
+    rn.deinit();
+    for (rb.items()) |x| x.deinit();
+    rb.deinit();
+    r.scribble();
+    const rn2 = r.names();
+    print(" {s} {s}\n", .{ rn2.items()[0].slice(), rn2.items()[1].slice() });
+    rn2.deinit();
+    r.deinit();
     const sq = s.squares_upto(4);
     print("squares {d} {d} sum {d}\n", .{ sq.items().len, sq.items()[3], s.sum_all(sq.items()) });
     sq.deinit();

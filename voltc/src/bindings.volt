@@ -14,7 +14,8 @@
 // - owned elements (std::vec<T>), returned as a list: the elements as C sees them (text as a lent
 //   str, a handle as a pointer the caller owns), how many, and what frees them (the list, not the
 //   handles); as a parameter, a slice of those (Volt copies them; handles are given up);
-// - a slice of text or handles, as a slice of str or of the handles' pointers (lent); an optional
+// - a slice of text or handles, as a slice of str or of the handles' pointers (lent), and as a
+//   result, as the list of its elements' copies (see view_as_list); an optional
 //   text or handle: as a parameter a str? or a pointer (null: none), as a result an optional of
 //   volt_text or a pointer the caller owns;
 // - a closure parameter fn(A) -> R: a C function taking the caller's data first, and that data.
@@ -79,6 +80,7 @@ struct bind {
     traits: std::vec<u32> = {};   // trait union types
     closures_out: std::vec<u32> = {}; // the closures (indexes in closures) export fns give out
     lists: std::vec<u32> = {};    // owned element types (std::vec<T>)
+    viewed: std::vec<u32> = {};   // export fns whose slice result comes back as a list (see view_as_list)
     arrays: std::vec<u32> = {};   // arrays an export fn takes or gives (see add_array)
     // the struct, optional and E!T types C holds by value, each after what it holds (the order C
     // declares them in)
@@ -903,6 +905,43 @@ attach fn owned_result(this: bind&, s: shape) -> bool {
     }
 }
 
+// export fn f returns a slice of what crosses converted (text, handles), which Volt still owns: it
+// comes back as a list the caller owns, each element copied (the shim copies them into a
+// std::vec<T>), so f's result is that list from here on
+attach fn view_as_list(this: bind&, f: u32, at: span) -> compile_error!void {
+    val name = S(this.c.fi(f).name);
+    val st = this.c.fi(f).ret;
+    val e = this.slice_elem(st);
+    this.c.copy_fn(e, at) catch |x| {
+        return with_help(fail(at, fmt3("export fn {}: it returns {}, which comes back as a list of copies, but {} can't be copied", copy name, this.c.ty_name(st), this.c.ty_name(e))), fmt("attach a copy fn to {} (attach fn copy(this: T&) -> T), or return a std::vec you build", this.c.ty_name(e)));
+    };
+    var vec_decl: u32? = null;
+    val std_ns = this.c.ns(0).children.get("std");
+    if (std_ns != null) {
+        val l = this.c.ns(*std_ns).names.get("vec");
+        if (l != null) {
+            for (d&) in this.c.list(*l).items() {
+                match (this.c.item_of(*d).kind) {
+                    .STRUCT(s) => {
+                        if (s.spec == null) {
+                            vec_decl = *d;
+                        }
+                    },
+                    default => {},
+                }
+            }
+        }
+    }
+    val d = vec_decl ?? return fail(at, fmt2("export fn {}: it returns {}, which comes back as a list (a std::vec), but std isn't there", copy name, this.c.ty_name(st)));
+    var given: std::vec<garg> = {};
+    put(&given, garg::TYPE({ kind: type_kind::RESOLVED(e), span: at }));
+    val args = try this.c.gargs_for(d, &given, 0, at);
+    val list = try this.c.struct_inst(d, move args, at);
+    this.c.fi(f).ret = list;
+    put(&this.viewed, f);
+    return;
+}
+
 // every export fn's types have to cross, each where it's allowed
 attach fn check_all(this: bind&) -> compile_error!void {
     for (i&) in this.exports().items() {
@@ -920,11 +959,12 @@ attach fn check_all(this: bind&) -> compile_error!void {
                 default => {},
             }
         }
-        val r = this.shape_of(f.ret) ?? return this.no_c_form(at, fmt("export fn {}: its return type", S(f.name)), f.ret);
-        this.add_array(f.ret);
         if (this.converted(f.ret)) {
-            return with_help(fail(at, fmt2("export fn {}: it returns {}, a slice of what crosses converted, which nothing would own", S(f.name), this.c.ty_name(f.ret))), S("return a std::vec of them: it crosses as a list the caller frees"));
+            try this.view_as_list(*i, at);
         }
+        val ret = this.c.fi(*i).ret;
+        val r = this.shape_of(ret) ?? return this.no_c_form(at, fmt("export fn {}: its return type", S(f.name)), ret);
+        this.add_array(ret);
         var given = r;
         match (r) {
             .RESULT(e, x) => { given = this.shape_of(x) ?? shape::VOID; },
@@ -1315,7 +1355,14 @@ attach fn shim_fn(this: bind&, f: u32, out: std::string&) -> void {
             }
         },
         .VOID => { body = fmt("{};", move call); },
-        default => { body = fmt("return {};", this.wrap_owned(info.ret, move call)); },
+        default => {
+            if (has_u32(&this.viewed, f)) {
+                // the slice Volt keeps, copied into the list given out (see view_as_list)
+                body = fmt3("var viewed_: {} = {{}};\n        for (item_&) in {} {{\n            viewed_.push(copy *item_) catch @panic(\"out of memory\");\n        }}\n        return {};", this.src(info.ret), move call, this.wrap_owned(info.ret, S("move viewed_")));
+            } else {
+                body = fmt("return {};", this.wrap_owned(info.ret, move call));
+            }
+        },
     }
     out.append(fmt4("\n    export fn {}({}) -> {} {{\n{}", S(info.c_name), move params, move ret, move pre).as_str());
     out.append(fmt("        {}\n    }\n", move body).as_str());
@@ -2968,9 +3015,13 @@ attach fn cpp_text(this: bind&) -> std::string {
         out.append(fmt3("{}{}({});\n", spaced(this.c_ret(e, true)), copy e.name, this.c_params(e, true)).as_str());
     }
     out.append("}\n}  // namespace raw\n");
-    // the traits' classes, declared for the handles' methods
+    // the traits' and the handles' classes, declared for the handles' methods (one can give a list
+    // of a class defined after it)
     for (t&) in this.traits.items() {
         out.append(fmt("class {};\n", this.short(*t)).as_str());
+    }
+    for (s&) in this.handles.items() {
+        out.append(fmt("class {};\n", this.local(this.c.si(*s).name)).as_str());
     }
     // a class per handle: it owns its handle (or only borrows one Volt lends)
     for (s&) in this.handles.items() {

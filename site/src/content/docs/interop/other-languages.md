@@ -235,9 +235,11 @@ Python's on
   it are given up). A `std::string[..]` or a slice of an export struct takes a slice of `str`s or
   of handles (each once), made into Volt's for the call (a handle's value is with the call until it
   returns, so a callback reaching it through the handle sees it as it was); as a result, such a
-  slice is refused, since nothing would own it (return a `std::vec`). A `std::string?` comes back
-  as an optional owned text and goes in as a `str?`; an optional handle is its pointer, null for
-  none.
+  slice comes back as a list the caller owns, as a `std::vec<T>` would, each element copied (text
+  duplicated, a handle's value by its copy), so what Volt changes later isn't in it (an element
+  type that can't be copied is refused: give it a copy fn, or return a `std::vec` you build). A
+  `std::string?` comes back as an optional owned text and goes in as a `str?`; an optional handle
+  is its pointer, null for none.
   A `std::vec<T>` comes back as a `std::vector` in C++ (of `std::string`s, or of the classes), a
   `Vec` in Rust, a `VoltList(T)` with `items()` and `deinit()` in Zig, and a `list` in Python.
   Containers of text and handles go in from a `std::vector`, from `&[impl AsRef<str>]` and

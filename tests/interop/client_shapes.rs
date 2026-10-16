@@ -48,6 +48,15 @@ fn lists() {
     let opened = open_all(&["cy", "dee"][..]);
     println!("opened {} {}", opened.len(), opened[1].owner());
     drop(opened);
+    // slices Volt keeps, given back as lists of copies: freed here, Volt's still there to scribble on
+    let r = roster::open("ann", "bo");
+    let (rn, rb) = (r.names(), r.badges());
+    print!("roster {} {} {} {}", rn[0], rn[1], rb[0].name(), rb[1].name());
+    drop((rn, rb));
+    r.scribble();
+    let rn = r.names();
+    println!(" {} {}", rn[0], rn[1]);
+    drop(r);
     let sq = squares_upto(4);
     println!("squares {} {} sum {}", sq.len(), sq[3], sum_all(sq.clone()));
     let parts = ["a", "b", "c"];

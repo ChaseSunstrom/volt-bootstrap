@@ -393,8 +393,8 @@ fn bindings_round_trip() {
         // the names voltc lib adds itself
         ("export struct thing { n: i32; }\nexport fn thing_new() -> thing { return { n: 1 }; }\nexport fn thing_free(t: thing&) -> void {}\n", "c", "makes thing_free itself"),
         ("namespace __export { fn x() -> void {} }\nexport fn one() -> i32 { return 1; }\n", "c", "namespace __export"),
-        // a slice of what crosses converted has no owner as a result
-        ("use std::string;\nexport fn bad_view(xs: std::string[..]) -> std::string[..] { return xs; }\n", "c", "which nothing would own"),
+        // a slice of handles comes back as a list of copies: refused when they can't be copied
+        ("export struct gadget { n: i32; }\nattach fn delete(this: gadget&) -> void {}\nexport fn bad_view(xs: gadget[..]) -> gadget[..] { return xs; }\n", "c", "gadget can't be copied"),
         // handles in a slice a Python function gives back: nothing would lend them
         ("export struct gadget { n: i32; }\nexport fn bad_cb(f: fn(i32) -> gadget*[..]) -> usize { return f(1).len; }\n", "python", "nothing would lend the handles"),
     ] {
@@ -422,14 +422,16 @@ fn bindings_nested_slices() {
     assert_eq!(ok(Command::new(e.dir.join("main")).output().unwrap(), "main"), "6\n7 7\n");
 }
 
-const SHAPES_OUT: &str = "biggest 9 1.5\naccount bea 300\nvisit 301 get 301\nclosed 301 1\ncircle of area 3\ncircle gone\ngrown 27\nsquare 9 square of area 9\nhey!\ntry 4 OVERDRAWN\nopened 25\nclosed 2\n42 hello, volt\nowners 2 ann bobby\nrichest 9 after 6 10\nopened 2 dee\nsquares 4 16 sum 30\njoined a-b-c total 3\nhello, ann; hello, nobody\nnick 1 ann 0\nopen_if 1 1\nclose_if 0 -1\nclose_all 2\nsome 2\nrows 6\narrays 12 13 11 2.5 1.5 2 3 4\ntagged 41 5 20 7 8 127\nlists closed 7\ncircle gone\n";
+const SHAPES_OUT: &str = "biggest 9 1.5\naccount bea 300\nvisit 301 get 301\nclosed 301 1\ncircle of area 3\ncircle gone\ngrown 27\nsquare 9 square of area 9\nhey!\ntry 4 OVERDRAWN\nopened 25\nclosed 2\n42 hello, volt\nowners 2 ann bobby\nrichest 9 after 6 10\nopened 2 dee\nroster ann bo ann bo ann! bo!\nsquares 4 16 sum 30\njoined a-b-c total 3\nhello, ann; hello, nobody\nnick 1 ann 0\nopen_if 1 1\nclose_if 0 -1\nclose_all 2\nsome 2\nrows 6\narrays 12 13 11 2.5 1.5 2 3 4\ntagged 41 5 20 7 8 127\nlists closed 7\ncircle gone\n";
 
 #[test]
 fn bindings_shapes() {
     // what every language calls beyond the plain shapes: a generic's instances, a struct that owns text
     // held by a handle with its methods, owned values passed in, a trait implemented on either side,
-    // closures taking and giving text and handles, closures given back. The library is a leak-checked
-    // build, and leak_report.c (or the client) prints how many of its allocations are live when the client is done
+    // closures taking and giving text and handles, closures given back, slices of text and handles
+    // given back (as lists of copies, freed before Volt changes its own). The library is a
+    // leak-checked build, and leak_report.c (or the client) prints how many of its allocations are
+    // live when the client is done
     let e = Env::new("shapes");
     let pkg = "shapelib=shapelib/lib";
     for (lang, file) in [("c", "shapelib.h"), ("cpp", "shapelib.hpp"), ("rust", "shapelib.rs"), ("zig", "shapelib.zig"), ("go", "shapelib.go"), ("python", "shapelib.py"), ("pyi", "shapelib.pyi"), ("java", "shapelib.java"), ("node", "shapelib_node.c"), ("js", "shapelib.js"), ("ts", "shapelib.d.ts"), ("lua", "shapelib_lua.c"), ("ruby", "shapelib_ruby.c"), ("dart", "shapelib.dart"), ("swift", "shapelib.swift"), ("kotlin", "shapelib.kt")] {
