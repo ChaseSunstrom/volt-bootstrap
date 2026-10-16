@@ -142,6 +142,12 @@ fn global_fold_has_no_constructor() {
     assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
     let ir = String::from_utf8_lossy(&o.stdout);
     assert!(!ir.contains("llvm.global_ctors"), "global_fold's globals are set by a constructor:\n{ir}");
+    // and the C backend writes them (the golden runs use LLVM)
+    let src = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/run/global_fold.volt")).unwrap();
+    let want = directives(&src, "expect");
+    let o = Command::new(common::voltc()).args(["run", "tests/run/global_fold.volt", "--backend", "c"]).current_dir(env!("CARGO_MANIFEST_DIR")).output().unwrap();
+    let got = String::from_utf8_lossy(&o.stdout);
+    assert!(o.status.success() && got.lines().collect::<Vec<_>>() == want, "global_fold in C printed:\n{got}{}", String::from_utf8_lossy(&o.stderr));
 }
 
 /// f128 in C where the compiler has no quad type (arm64 macOS): the C spells every f128 operation

@@ -797,7 +797,13 @@ attach fn ct_expr(this: checker&, e: expr&, want: u32?) -> compile_error!cval {
                 return cval::BOOL(try this.ct_bool(b));
             }
             // a literal past i128's maximum on the left is a u128, the one type that holds it
+            // arithmetic's left literal takes the expected type, as at run time (0 -% 1 as a u128 is
+            // its maximum, not -1); a comparison's expected type is bool, nothing for its operands
             var aw: u32? = null;
+            val compares = op == binop::EQ || op == binop::NE || op == binop::LT || op == binop::GT || op == binop::LE || op == binop::GE;
+            if (!compares) {
+                aw = want;
+            }
             if (past_i128_lit(a)) {
                 aw = int_id(int_ty::U128);
             }

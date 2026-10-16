@@ -1304,9 +1304,13 @@ struct global_why {
     span: span;
 }
 
-// a constant expression worked out now, or none when it can't be (it stays as it is)
-attach fn fold_global(this: checker&, e: expr&, want: u32?) -> tval? {
+// a constant expression worked out now, or none when it can't be (it stays as it is); arithmetic
+// that fails at compile time (an overflow, a division by zero) is the global's error
+attach fn fold_global(this: checker&, e: expr&, want: u32?) -> compile_error!(tval?) {
     val cv = this.ct_eval_in(this.cx.env, e, want) catch |err| {
+        if (arith_error(&err)) {
+            return copy err;
+        }
         return null;
     };
     val c = this.ct_to_val(cv, want, e.span) catch |err| {
@@ -1320,6 +1324,12 @@ attach fn fold_global(this: checker&, e: expr&, want: u32?) -> tval? {
 
 // literals, names and operators over them, with no calls: a global's initializer that's worked out at
 // compile time even when it isn't a { } literal
+// is this compile-time error one of arithmetic (what running the expression would panic on too)?
+fn arith_error(e: compile_error&) -> bool {
+    val m = err_msg(e);
+    return contains(m, "overflow") || contains(m, "division by zero") || contains(m, "doesn't fit in");
+}
+
 fn foldable(e: expr&) -> bool {
     match (e.kind) {
         .INT(v) => { return true; },
@@ -1374,7 +1384,7 @@ attach fn global_init(this: checker&, l: let_stmt&, span: span) -> compile_error
         // constructor, and code running before that, another constructor or a host calling into a
         // library, would read zero; the C backend can't write a checked - in a global at all)
         if (v.pure && v.lit == null && foldable(&l.init)) {
-            val folded = this.fold_global(&l.init, want);
+            val folded = try this.fold_global(&l.init, want);
             if (folded) {
                 // only when the constant is the same type (an array global named by a slice global
                 // folds to a temporary array, which no slice can point at)
@@ -1407,6 +1417,9 @@ attach fn global_init(this: checker&, l: let_stmt&, span: span) -> compile_error
                 return fails(l.init.span, "global initializers must be constants");
             }
             val cv = this.ct_eval_in(this.cx.env, &l.init, want) catch |e| {
+                if (arith_error(&e)) {
+                    return copy e;
+                }
                 return fails(l.init.span, "global initializers must be constants");
             };
             val c = this.ct_to_val(cv, want, l.init.span) catch |e| {
