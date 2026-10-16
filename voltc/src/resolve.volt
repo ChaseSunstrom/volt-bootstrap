@@ -958,6 +958,61 @@ attach fn fn_inst(this: checker&, d: u32, args: std::vec<gval>, span: span) -> c
     return idx;
 }
 
+// A C++ template's Volt generic is made once per type, so a val's &k would share the var's body,
+// which C++ may write through. Called with a std::string that can't change for a std::string&
+// parameter (bit i of mask), it gets an instance of its own, whose body reads those strings as
+// read-only: of S& / const S& it runs const S&, and an S&-only one writes through the parameter,
+// which the caller's lend check refuses (cpp_text_template)
+attach fn ro_text_inst(this: checker&, inst: u32, off: usize, pre: std::vec<tval?>&) -> u32 {
+    val f = this.fi(inst);
+    if (f.env == 0 || this.env_at(f.env).generics.len == 0 || this.cpp_ctx_of(this.dl(f.decl).ns) == null) {
+        return inst;
+    }
+    var mask: u64 = 0;
+    for (i) in 0..pre.len {
+        val p = i + off;
+        if (p >= f.params.len || p >= 64) {
+            break;
+        }
+        val v = *pre.at(i);
+        if (v) {
+            val pt = f.params.at(p).ty;
+            if ((v.ro & 1) != 0 && this.t.ref_inner(pt) != null && this.text_bound(pt)) {
+                mask = mask | (@cast<u64>(1) << @cast<u32>(p));
+            }
+        }
+    }
+    if (mask == 0) {
+        return inst;
+    }
+    val key = fmt2("ro{}|{}", unum(@cast<u64>(inst)), unum(mask));
+    val have = this.fn_ids.get(key.as_str());
+    if (have) {
+        return *have;
+    }
+    val src = this.ir.fn_at(f.ir);
+    var irf: ir_fn = { name: this.fresh_c_name(f.c_name), params: {}, ret: src.ret, link: linkage::STATIC, c_varargs: src.c_varargs, noreturn: src.noreturn };
+    irf.from_header = src.from_header;
+    irf.origin = src.origin;
+    irf.about = src.about;
+    irf.attrs = copy src.attrs;
+    for (i) in 0..f.params.len {
+        val p = f.params.at(i);
+        if (p.is_comptime || p.ty == VOID) {
+            continue;
+        }
+        put(&irf.locals, { name: p.name, ty: p.ty });
+        put(&irf.params, @cast<u32>(irf.locals.len - 1));
+    }
+    put(&this.ir.fns, bx(move irf));
+    val ir_idx = @cast<u32>(this.ir.fns.len - 1);
+    val idx = @cast<u32>(this.fns.len);
+    put(&this.fns, bx<fn_inst>({ decl: f.decl, name: f.name, pack: f.pack, env: f.env, c_name: this.ir.fn_at(ir_idx).name, params: copy f.params, ret: f.ret, c_varargs: f.c_varargs, intrinsic: f.intrinsic, ir: ir_idx, used_at: f.used_at, used_in: f.used_in, ro_texts: mask }));
+    put(&this.used, false);
+    this.fn_ids.put(this.intern(move key), idx);
+    return idx;
+}
+
 fn same_list(a: std::vec<u32>&, b: std::vec<u32>&) -> bool {
     if (a.len != b.len) {
         return false;

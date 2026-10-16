@@ -140,6 +140,9 @@ struct fn_inst {
     ir: u32; // its ir_fn
     used_at: span; // where the instance was first asked for (errors in a template's body point back to it)
     used_in: u32? = null; // the fn instance whose body asked
+    // a C++ template's Volt generic made for std::strings that can't change: the parameters (bit i)
+    // whose string its body reads as read-only (ro_text_inst)
+    ro_texts: u64 = 0;
 }
 
 // a receiver temporary kept alive (see fn_cx.kept): its slot, type and live flag
