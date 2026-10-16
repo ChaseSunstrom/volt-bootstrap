@@ -37,6 +37,13 @@ fn seven() -> i32 { return 7; }
 extern "C" fn snprintf(buf: u8*, n: usize, fmt: cstr, ...) -> i32;
 extern "C" fn strlen(s: cstr) -> usize;
 fn text_len(s: cstr) -> i32 { return @cast<i32>(strlen(s)); }
+fn maybe_name(x: i32) -> cstr? {
+    if (x > 0) {
+        return "abc";
+    }
+    return null;
+}
+fn set_len(n: usize*) -> void { *n = 5; }
 fn opt_len(s: cstr?) -> i32 {
     val t = s ?? return -1;
     return @cast<i32>(strlen(t)) * 10;
@@ -102,4 +109,6 @@ fn main() -> void {
     // pointer too
     val tally = cpp::pr::rp::Tally<i32>::new(3);
     std::println("text {} op {}", cpp::pr::callc(text_len, opt_len), tally.op_bitor(inc));
+    // declared: a const char * result is a cstr? (null too), a size_t * parameter a usize*
+    std::println("names {} {} len {}", cpp::pr::name_len(maybe_name, 1), cpp::pr::name_len(maybe_name, 0), cpp::pr::fill_len(set_len));
 }

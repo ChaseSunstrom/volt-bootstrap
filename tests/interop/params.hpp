@@ -26,6 +26,15 @@ inline int apply_fmt(int (*f)(unsigned char *, std::size_t, const char *, ...), 
     unsigned char b[16];
     return f(b, sizeof b, "%d", x);
 }
+// a const char * result may be null (a Volt cstr?), a size_t * parameter is a Volt usize*
+inline int name_len(const char *(*f)(int), int x) {
+    const char *s = f(x);
+    if (!s) return -1;
+    int n = 0;
+    while (s[n]) n++;
+    return n;
+}
+inline int fill_len(void (*f)(std::size_t *)) { std::size_t n = 0; f(&n); return (int)n; }
 template <class T> T apply_t(T (*f)(T), T x) { return f(x); }
 // a variadic function pointer with no fixed parameter, which C before C23 has no type for: no Volt form
 inline int callz(int (*f)(...)) { return f ? 1 : 0; }

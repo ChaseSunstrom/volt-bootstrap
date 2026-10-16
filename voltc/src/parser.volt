@@ -1,6 +1,7 @@
-// Recursive descent + precedence climbing: a port of bootstrap/parser.rs, kept
-// in step with it (same trees, spans and messages). `f<T>(...)` in an expression is a generic call
-// only when f names a generic (found by a token scan of every file first).
+// Recursive descent + precedence climbing: a port of bootstrap/parser.rs, with the same trees, spans
+// and messages, but stricter where stage 0 (frozen) isn't: a C `...` needs a fixed parameter before
+// it and a `)` right after. `f<T>(...)` in an expression is a generic call only when f names a
+// generic (found by a token scan of every file first).
 use std::mem;
 
 // words that are never a name (`ident` rejects them); `error` still starts a path (`error::X`)
@@ -1158,7 +1159,8 @@ attach fn type_atom(this: parser&) -> compile_error!ty {
                     return fails(this.prev_span(), C_VARIADIC_FIXED);
                 }
                 c_varargs = true;
-                continue;
+                try this.expect(")");
+                break;
             }
             put(&params, try this.parse_type());
             if (!this.eat(",") && !this.is(")")) {
