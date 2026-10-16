@@ -7,7 +7,14 @@ fn main() -> i32 {
         std::println("spawn failed");
         return 1;
     };
-    std::println("out={} err={} code={}", r.out, r.err, r.code);
+    std::println("out={} err={} code={} signal={}", r.out, r.err, r.code, r.signal);
+    // one a signal ends: 128 + the signal as its code, and the signal
+    val kill: str[3] = { "sh", "-c", "kill -9 $$" };
+    val k = std::process::capture(kill, "") catch |e| {
+        std::println("spawn failed");
+        return 1;
+    };
+    std::println("killed code={} signal={}", k.code, k.signal);
     // more than a pipe buffer each way, stderr first: nothing waits on anything else
     var big: std::string = {};
     for (i) in 0..100000 {
@@ -37,7 +44,8 @@ fn main() -> i32 {
     std::println("capture missing code={}", m.code);
     return 0;
 }
-// expect: out=HELLO err=oops code=3
+// expect: out=HELLO err=oops code=3 signal=0
+// expect: killed code=137 signal=9
 // expect: flood out=100000 err=100000 same=true
 // expect: deaf code=5
 // expect: run missing -1
