@@ -395,6 +395,10 @@ fn bindings_round_trip() {
         ("namespace __export { fn x() -> void {} }\nexport fn one() -> i32 { return 1; }\n", "c", "namespace __export"),
         // a slice of handles comes back as a list of copies: refused when they can't be copied
         ("export struct gadget { n: i32; }\nattach fn delete(this: gadget&) -> void {}\nexport fn bad_view(xs: gadget[..]) -> gadget[..] { return xs; }\n", "c", "gadget can't be copied"),
+        // and as E!T's value
+        ("export struct gadget { n: i32; }\nattach fn delete(this: gadget&) -> void {}\npublic error oops { BAD, }\nexport fn bad_view(xs: gadget[..]) -> oops!(gadget[..]) { return xs; }\n", "c", "gadget can't be copied"),
+        // a callback's E! of a slice of text: nothing would own the copies
+        ("use std::string;\npublic error oops { BAD, }\nexport fn bad_cb(f: fn(i32) -> oops!(std::string[..])) -> usize {\n    val xs = f(1) catch return 0;\n    return xs.len;\n}\n", "c", "has no C form"),
         // handles in a slice a Python function gives back: nothing would lend them
         ("export struct gadget { n: i32; }\nexport fn bad_cb(f: fn(i32) -> gadget*[..]) -> usize { return f(1).len; }\n", "python", "nothing would lend the handles"),
     ] {
@@ -403,6 +407,19 @@ fn bindings_round_trip() {
         let err = String::from_utf8_lossy(&o.stderr);
         assert!(!o.status.success() && err.contains(want), "{err}");
     }
+
+    // the shims' temporaries never take a parameter's name: viewed_ and item_ are what a slice given
+    // back as a list of copies (bare or in an E!) is copied with
+    let names = e.dir.join("names");
+    std::fs::create_dir_all(&names).unwrap();
+    std::fs::write(names.join("names.volt"), "use std::string;\n\npublic error oops {\n    BACKWARDS,\n}\n\npublic struct shelf {\n    xs: std::vec<std::string>;\n}\n\nexport fn shelf_new() -> shelf {\n    var s: shelf = { xs: {} };\n    s.xs.push(std::string::from(\"a\")) catch @panic(\"out of memory\");\n    s.xs.push(std::string::from(\"b\")) catch @panic(\"out of memory\");\n    s.xs.push(std::string::from(\"c\")) catch @panic(\"out of memory\");\n    return s;\n}\n\nexport attach fn between(this: shelf&, viewed_: usize, item_: usize) -> std::string[..] {\n    return this.xs.items()[viewed_..item_];\n}\n\nexport attach fn between_or(this: shelf&, viewed_: usize, item_: usize) -> oops!(std::string[..]) {\n    if (viewed_ > item_) {\n        return oops::BACKWARDS;\n    }\n    return this.xs.items()[viewed_..item_];\n}\n").unwrap();
+    let npkg = format!("names={}", names.display());
+    ok(e.voltc(&["lib", "names", "--pkg", &npkg, "--shared", "--leak-check", "-o", &e.path(&dylib("names"))]), "voltc lib names --shared");
+    ok(e.voltc(&["bindings", "names", "--pkg", &npkg, "--lang", "c", "-o", &e.path("names.h")]), "voltc bindings names --lang c");
+    std::fs::write(e.dir.join("names_main.c"), "#include \"names.h\"\n#include <stdio.h>\n\nextern size_t volt_live_allocs;\n\n#define TEXT(t) (int)(t).len, (const char *)(t).ptr\n\nint main(void) {\n    names_shelf *s = shelf_new();\n    names_list_text l = shelf_between(s, 1, 3);\n    printf(\"%zu %.*s %.*s\", l.len, TEXT(l.ptr[0]), TEXT(l.ptr[1]));\n    volt_list_free(l);\n    names_oops_or_list_text r = shelf_between_or(s, 0, 1);\n    printf(\" %zu %.*s\", r.value.len, TEXT(r.value.ptr[0]));\n    volt_list_free(r.value);\n    r = shelf_between_or(s, 2, 1);\n    printf(\" %s\", r.error == NAMES_OOPS_BACKWARDS ? \"BACKWARDS\" : \"?\");\n    shelf_free(s);\n    printf(\" live %zu\\n\", volt_live_allocs);\n    return 0;\n}\n").unwrap();
+    let rpath = format!("-Wl,-rpath,{}", e.path(""));
+    ok(Command::new("cc").args(["-Wall", "-Werror", "names_main.c", "-I", &e.path(""), "-L", &e.path(""), "-lnames", &rpath, "-o", "names_main"]).current_dir(&e.dir).output().unwrap(), "cc names_main.c");
+    assert_eq!(ok(Command::new(e.dir.join("names_main")).output().unwrap(), "names_main"), "2 b c 1 a BACKWARDS live 0\n", "a shim's temporaries and its parameters' names");
 }
 
 // a slice of slices has a C type of its own (slice_slice_i64), not its elements' name again; slices
@@ -422,7 +439,7 @@ fn bindings_nested_slices() {
     assert_eq!(ok(Command::new(e.dir.join("main")).output().unwrap(), "main"), "6\n7 7\n");
 }
 
-const SHAPES_OUT: &str = "biggest 9 1.5\naccount bea 300\nvisit 301 get 301\nclosed 301 1\ncircle of area 3\ncircle gone\ngrown 27\nsquare 9 square of area 9\nhey!\ntry 4 OVERDRAWN\nopened 25\nclosed 2\n42 hello, volt\nowners 2 ann bobby\nrichest 9 after 6 10\nopened 2 dee\nroster ann bo ann bo ann! bo!\nsquares 4 16 sum 30\njoined a-b-c total 3\nhello, ann; hello, nobody\nnick 1 ann 0\nopen_if 1 1\nclose_if 0 -1\nclose_all 2\nsome 2\nrows 6\narrays 12 13 11 2.5 1.5 2 3 4\ntagged 41 5 20 7 8 127\nlists closed 7\ncircle gone\n";
+const SHAPES_OUT: &str = "biggest 9 1.5\naccount bea 300\nvisit 301 get 301\nclosed 301 1\ncircle of area 3\ncircle gone\ngrown 27\nsquare 9 square of area 9\nhey!\ntry 4 OVERDRAWN\nopened 25\nclosed 2\n42 hello, volt\nowners 2 ann bobby\nrichest 9 after 6 10\nopened 2 dee\nroster ann bo ann bo ann! bo!\nor ann! bo! ann! bo! OVERDRAWN OVERDRAWN\nsquares 4 16 sum 30\njoined a-b-c total 3\nhello, ann; hello, nobody\nnick 1 ann 0\nopen_if 1 1\nclose_if 0 -1\nclose_all 2\nsome 2\nrows 6\narrays 12 13 11 2.5 1.5 2 3 4\ntagged 41 5 20 7 8 127\nlists closed 7\ncircle gone\n";
 
 #[test]
 fn bindings_shapes() {

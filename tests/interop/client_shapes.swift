@@ -76,6 +76,11 @@ func lists() {
     r.scribble()
     let rn2 = r.names()
     print("", rn2[0], rn2[1])
+    // the same in an E!: the error, or the list of copies
+    let rno = try! r.names_or(true)
+    let rbo = try! r.badges_or(true)
+    print("or", rno[0], rno[1], rbo[0].name(), rbo[1].name(), failure { _ = try r.names_or(false) }, failure { _ = try r.badges_or(false) })
+    rbo.forEach { $0.close() }
     r.close()
     let sq = squares_upto(4)
     print("squares", sq.count, sq[3], "sum", sum_all(sq))

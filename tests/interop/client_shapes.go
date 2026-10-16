@@ -89,6 +89,16 @@ func lists() {
 	r.Scribble()
 	rn = r.Names()
 	fmt.Println("", rn[0], rn[1])
+	// the same in an E!: the error, or the list of copies
+	rn, _ = r.NamesOr(true)
+	rb, _ = r.BadgesOr(true)
+	fmt.Print("or ", rn[0], " ", rn[1], " ", rb[0].Name(), " ", rb[1].Name())
+	for _, x := range rb {
+		x.Close()
+	}
+	_, err1 := r.NamesOr(false)
+	_, err2 := r.BadgesOr(false)
+	fmt.Println("", errName(err1), errName(err2))
 	r.Close()
 	sq := shapelib.SquaresUpto(4)
 	fmt.Println("squares", len(sq), sq[3], "sum", shapelib.SumAll(sq))

@@ -136,6 +136,21 @@ function lists() {
     }
     r.scribble();
     console.log("roster", ...seen, ...r.names());
+    // the same in an E!: the error, or the list of copies
+    const rno = r.names_or(true);
+    const rbo = r.badges_or(true);
+    const or = ["or", rno[0], rno[1], rbo[0].name(), rbo[1].name()];
+    for (const x of rbo) {
+        x.close();
+    }
+    for (const f of [() => r.names_or(false), () => r.badges_or(false)]) {
+        try {
+            f();
+        } catch (e) {
+            or.push(e.code);
+        }
+    }
+    console.log(...or);
     r.close();
     const sq = m.squares_upto(4);
     console.log("squares", sq.length, sq[3], "sum", m.sum_all(sq));

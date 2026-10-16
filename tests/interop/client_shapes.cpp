@@ -42,6 +42,20 @@ static void lists() {
         r.scribble();
         rn = r.names();
         std::printf(" %s %s\n", rn[0].c_str(), rn[1].c_str());
+        // the same in an E!: the error, or the list of copies
+        rn = r.names_or(true);
+        rb = r.badges_or(true);
+        std::printf("or %s %s %s %s", rn[0].c_str(), rn[1].c_str(), rb[0].name().c_str(), rb[1].name().c_str());
+        try {
+            r.names_or(false);
+        } catch (const shapelib::error &e) {
+            std::printf(" %s", e.what());
+        }
+        try {
+            r.badges_or(false);
+        } catch (const shapelib::error &e) {
+            std::printf(" %s\n", e.what());
+        }
     }
     auto sq = shapelib::squares_upto(4);
     std::printf("squares %zu %lld sum %lld\n", sq.size(), (long long)sq[3], (long long)shapelib::sum_all(sq));

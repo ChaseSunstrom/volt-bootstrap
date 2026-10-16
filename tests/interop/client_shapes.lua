@@ -77,6 +77,15 @@ local function lists()
     ro:scribble()
     rn = ro:names()
     say("roster", seen[1], seen[2], seen[3], seen[4], rn[1], rn[2])
+    -- the same in an E!: the error, or the list of copies
+    rn, rb = ro:names_or(true), ro:badges_or(true)
+    seen = { rn[1], rn[2], rb[1]:name(), rb[2]:name() }
+    for _, x in ipairs(rb) do
+        x:close()
+    end
+    local _, e1 = pcall(ro.names_or, ro, false)
+    local _, e2 = pcall(ro.badges_or, ro, false)
+    say("or", seen[1], seen[2], seen[3], seen[4], e1.name, e2.name)
     ro:close()
     local sq = m.squares_upto(4)
     say("squares", #sq, sq[4], "sum", m.sum_all(sq))

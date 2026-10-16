@@ -87,6 +87,15 @@ fn lists() void {
     const rn2 = r.names();
     print(" {s} {s}\n", .{ rn2.items()[0].slice(), rn2.items()[1].slice() });
     rn2.deinit();
+    // the same in an E!: the error, or the list of copies
+    const rno = r.names_or(true) catch unreachable;
+    const rbo = r.badges_or(true) catch unreachable;
+    print("or {s} {s} {s} {s}", .{ rno.items()[0].slice(), rno.items()[1].slice(), rbo.items()[0].name(), rbo.items()[1].name() });
+    rno.deinit();
+    for (rbo.items()) |x| x.deinit();
+    rbo.deinit();
+    if (r.names_or(false)) |_| {} else |e| print(" {s}", .{@errorName(e)});
+    if (r.badges_or(false)) |_| {} else |e| print(" {s}\n", .{@errorName(e)});
     r.deinit();
     const sq = s.squares_upto(4);
     print("squares {d} {d} sum {d}\n", .{ sq.items().len, sq.items()[3], s.sum_all(sq.items()) });
