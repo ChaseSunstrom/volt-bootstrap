@@ -1,4 +1,5 @@
 // flags: --leak-check
+// debug-only
 use std::io;
 use std::string;
 use std::vec;

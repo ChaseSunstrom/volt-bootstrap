@@ -110,7 +110,9 @@ fn release_voltc_works() {
     let optimized: Vec<PathBuf> = runs.iter().filter(|r| r.1 == "c").map(|r| r.0.clone()).collect();
     for p in optimized {
         let text = std::fs::read_to_string(&p).unwrap_or_default();
-        if p.extension().is_some_and(|x| x == "volt") && !text.contains("// exit:") && !text.contains(".h\"") {
+        // (and those marked `// debug-only`: what they check is the debug allocator's, which an optimized
+        // build doesn't have)
+        if p.extension().is_some_and(|x| x == "volt") && !text.contains("// exit:") && !text.contains(".h\"") && !text.contains("// debug-only") {
             runs.push((p, "llvm", true));
         }
     }
