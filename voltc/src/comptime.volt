@@ -4060,6 +4060,15 @@ attach fn partial_struct(this: checker&, sid: u32) -> bool {
     }
 }
 
+// a header struct C passes by value in a way its fields Volt reads can't tell (struct_decl's
+// c_opaque)
+attach fn opaque_struct(this: checker&, sid: u32) -> bool {
+    match (this.item_of(this.si(sid).decl).kind) {
+        .STRUCT(d) => { return d.c_opaque; },
+        default => { return false; },
+    }
+}
+
 // a header struct whose fields share bytes (an anonymous union member): field i's byte offset
 attach fn overlay_offset(this: checker&, sid: u32, i: u32) -> u64? {
     match (this.item_of(this.si(sid).decl).kind) {

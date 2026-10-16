@@ -1480,8 +1480,8 @@ fn link_args_only(args: std::vec<str>&) -> bool {
     return true;
 }
 
-// when LLVM was only the default and it can't lower this program (a C struct only C can lay
-// out; not a voltc bug), the build goes through C: say so, and why
+// when LLVM was only the default and it can't lower this program (a C struct only C can lay out
+// or pass by value there; not a voltc bug), the build goes through C: say so, and why
 fn llvm_falls_back(chk: checker&, c: cli&, e: str) -> bool {
     if (c.backend_set || !chk.llvm_cant_lower) {
         return false;
