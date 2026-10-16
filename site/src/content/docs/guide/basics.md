@@ -151,7 +151,8 @@ The arithmetic, comparison, logical and bitwise operators are C's. What's differ
   multiplies.
 - A value converts by itself where nothing can be lost: an integer to a wider one of the same
   signedness (`u32` to `u64`, `i8` to `i32`), an unsigned one to a wider signed one (`u32` to
-  `i64`), `usize` and `u64` either way (and `isize` and `i64`: the same 64 bits on every target),
+  `i64`), `usize` and `u64` either way on a 64-bit target (and `isize` and `i64`), `u32` and
+  `usize` either way on a 32-bit one (`usize` is as wide as a pointer),
   an integer to a float that holds all its values (`i32` or `u32` to `f64`, `u16` to `f32`), and
   a float to a wider one (`f32` to `f64`). So `xs.len` passes as a `u64`, and `n * 1.5` with an
   `i32` `n` is an `f64`.

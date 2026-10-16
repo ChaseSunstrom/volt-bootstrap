@@ -30,6 +30,21 @@ fn main() -> i32 {
     val at = std::format("{}", &blinks);
     val said = std::format("{} blinks", *count);
     std::println("format: {} {} {}", at.as_str().starts_with("0x"), said, said.as_str() == "3 blinks");
+    // usize is a pointer's width (4 bytes on a 32-bit board) and wraps there; a hash map's buckets
+    // (hashes taken down to usize) find every key
+    var squares: std::map<u32, u32> = {};
+    for (k) in 0..50 {
+        squares.put(@cast<u32>(k), @cast<u32>(k * k));
+    }
+    var sum: u32 = 0;
+    for (k) in 0..50 {
+        val v = squares.get(@cast<u32>(k));
+        if (v == null) {
+            return 2;
+        }
+        sum += *v;
+    }
+    std::println("usize: {} {} map {} {}", @sizeof(usize) == @sizeof(u8*), (~@cast<usize>(0)) +% 1 == 0, squares.len, sum);
     // 0 when the vec and the box agree
     return @cast<i32>(blinks.len) - @cast<i32>(*count);
 }

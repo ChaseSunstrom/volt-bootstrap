@@ -109,6 +109,11 @@ attach fn i64c(this: lg&, v: u64) -> llvm::LLVMOpaqueValue* {
     return llvm::LLVMConstInt(this.i64t(), v, 0);
 }
 
+// a usize constant (32 bits on a 32-bit target)
+attach fn usizec(this: lg&, v: u64) -> llvm::LLVMOpaqueValue* {
+    return llvm::LLVMConstInt(this.int_lt(int_ty::USIZE), v, 0);
+}
+
 attach fn size_of(this: lg&, t: llvm::LLVMOpaqueType*) -> u64 {
     return llvm::LLVMABISizeOfType(this.td, t);
 }
@@ -144,11 +149,7 @@ attach fn lt(this: lg&, t: u32) -> llvm::LLVMOpaqueType* {
 }
 
 attach fn int_lt(this: lg&, k: int_ty) -> llvm::LLVMOpaqueType* {
-    var bits = k.bits();
-    if (k == int_ty::ISIZE || k == int_ty::USIZE) {
-        bits = 64;
-    }
-    return llvm::LLVMIntTypeInContext(this.ctx, bits);
+    return llvm::LLVMIntTypeInContext(this.ctx, k.bits());
 }
 
 // lt without the cache: scalars map directly; an optional, enum or struct that isn't one falls
@@ -1068,7 +1069,7 @@ attach fn lit_bytes(this: lg&, s: str) -> llvm::LLVMOpaqueValue* {
 attach fn str_const(this: lg&, s: str) -> llvm::LLVMOpaqueValue* {
     var vals: std::vec<llvm::LLVMOpaqueValue*> = {};
     put(&vals, this.lit_bytes(s));
-    put(&vals, this.i64c(@cast<u64>(s.len)));
+    put(&vals, this.usizec(@cast<u64>(s.len)));
     return llvm::LLVMConstNamedStruct(this.lt(STR), vals.ptr, 2);
 }
 
@@ -1720,9 +1721,9 @@ attach fn rv(this: lg&, n: u32) -> llvm::LLVMOpaqueValue* {
             }
             return this.load(t, slot);
         },
-        .SIZEOF(x) => { return this.i64c(this.size_of(this.lt(x))); },
-        .ALIGNOF(x) => { return this.i64c(@cast<u64>(this.align_of(this.lt(x)))); },
-        .OFFSETOF(x, i) => { return this.i64c(this.offset_of(x, i)); },
+        .SIZEOF(x) => { return this.usizec(this.size_of(this.lt(x))); },
+        .ALIGNOF(x) => { return this.usizec(@cast<u64>(this.align_of(this.lt(x)))); },
+        .OFFSETOF(x, i) => { return this.usizec(this.offset_of(x, i)); },
         default => {
             this.stmt(n);
             return null;

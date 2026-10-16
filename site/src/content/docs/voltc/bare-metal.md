@@ -27,7 +27,9 @@ voltc build blinky.volt board.volt --target thumbv7m-none --link-script lm3s6965
 | `thumbv7em-none` | Cortex-M4 | `arm` | `32` |
 
 In every one `@cfg("os")` is `none`, `@cfg("target")` is the `--target` name and `@cfg("hosted")` is
-false, so a library can tell. `voltc run`
+false, so a library can tell. `usize` and `isize` are as wide as a pointer: 32 bits where
+`pointer_bits` is 32, so `@sizeof(usize)` is 4, a `usize` wraps (or, in a debug build, stops the
+program) past 4294967295, and a `usize` literal past that is an error. `voltc run`
 and `voltc lib` don't take `--target`: build the program, then load it onto the board, or run it
 under qemu.
 
@@ -112,7 +114,4 @@ The test suite runs each, in debug and release builds, with the C compiler set t
 
 ## Not yet
 
-- `usize` is 64 bits even on 32-bit targets (pointers are 32). Code that hands a `usize` to the
-  hardware, or to a C function that takes a `size_t`, should use `u32` (std's own calls to `memcpy`
-  and `memcmp` already pass a 32-bit `size_t`).
 - Interrupt handlers past the reset and fault entries, and other CPUs (AArch64, x86-64).

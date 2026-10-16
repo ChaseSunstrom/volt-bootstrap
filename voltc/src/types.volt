@@ -25,8 +25,13 @@ attach fn signed(this: int_ty&) -> bool {
     }
 }
 
+// usize's and isize's width: the target's pointer bits, set once a compilation (new_checker)
+var usize_bits: u32 = 64;
+
 attach fn bits(this: int_ty&) -> u32 {
     match (*this) {
+        .ISIZE => { return usize_bits; },
+        .USIZE => { return usize_bits; },
         .I8 => { return 8; },
         .U8 => { return 8; },
         .I16 => { return 16; },
@@ -54,6 +59,17 @@ attach fn name(this: int_ty&) -> str {
         .U128 => { return "u128"; },
         .USIZE => { return "usize"; },
     }
+}
+
+// the type's name for a range error: usize and isize with their width where it isn't 64 bits
+attach fn fit_name(this: int_ty&) -> std::string {
+    var n = S(this.name());
+    if ((*this == int_ty::USIZE || *this == int_ty::ISIZE) && usize_bits != 64) {
+        n.append(" (");
+        n.append_uint(@cast<u64>(usize_bits));
+        n.append(" bits on this target)");
+    }
+    return n;
 }
 
 // whether the constant v is representable in this type
@@ -100,7 +116,7 @@ attach fn widens_to(this: int_ty&, other: int_ty) -> bool {
     val (sa, sb) = (this.signed(), other.signed());
     val (ba, bb) = (this.bits(), other.bits());
     if (sa == sb) {
-        // usize and u64 (isize and i64) are the same 64 bits on every target, so each is the other
+        // by width: usize is u64's on a 64-bit target (each is the other) and u32's on a 32-bit one
         return ba <= bb;
     }
     if (!sa && sb) {
