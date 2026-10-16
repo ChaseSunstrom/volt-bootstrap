@@ -32,6 +32,7 @@ fn bump() -> i32 {
 // a fn C++ calls through a pointer runs in the outer call's catch mode: its plain call's throw is
 // the outer call's error, and a catching call it makes after that (a scope of its own, failing or
 // not) leaves it so
+fn inc(x: i32) -> i32 { return x + 1; }
 fn then_ok(k: i32) -> i32 {
     val z = cpp::pr::pu::nonneg(k);
     val n = @cpp<cpp::cpp_error!i32>("pr::pu::nonneg(1)") catch |e| { return 98; };
@@ -69,5 +70,17 @@ fn main() -> void {
     // in a callback C++ called, the catch is the callback's own, and catch mode ends with it
     std::println("relay {}", cpp::pr::relay(|| (k: i32) -> i32 { return @cpp<cpp::cpp_error!i32>("pr::pu::nonneg({0})", k) catch |e| { return 99; }; }));
     show("nonneg -5", @cpp<cpp::cpp_error!i32>("pr::pu::nonneg({0})", -5));
-    std::println("plain {}", @cpp<i32>("pr::pu::nonneg({0})", 3));
+    // its arguments are plain @cpp<R>'s: a fn name a function pointer (a throw in the C++ after it
+    // calls the fn, or in the fn itself, is the error), a reference the object it names, a slice a
+    // volt_slice; the plain twins after
+    show("apply 41", @cpp<cpp::cpp_error!i32>("pr::apply({0}, {1})", inc, 41));
+    show("apply -5", @cpp<cpp::cpp_error!i32>("pr::pu::nonneg(pr::apply({0}, {1}))", inc, -5));
+    show("apply nested", @cpp<cpp::cpp_error!i32>("pr::apply({0}, {1})", then_ok, -1));
+    var q = -2;
+    show("ref -2", @cpp<cpp::cpp_error!i32>("pr::pu::nonneg({0})", &q));
+    val ys: i32[2] = { 3, -4 };
+    show("slice 0", @cpp<cpp::cpp_error!i32>("pr::pu::nonneg({0}.ptr[0])", ys[..]));
+    show("slice 1", @cpp<cpp::cpp_error!i32>("pr::pu::nonneg({0}.ptr[1])", ys[..]));
+    q = 5;
+    std::println("plain {} {} {} {}", @cpp<i32>("pr::pu::nonneg({0})", 3), @cpp<i32>("pr::apply({0}, {1})", inc, 41), @cpp<i32>("pr::pu::nonneg({0})", &q), @cpp<i32>("{0}.ptr[0]", ys[..]));
 }
