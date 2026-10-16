@@ -1087,6 +1087,9 @@ attach fn global(this: checker&, d: u32, span: span) -> compile_error!global_ref
         default => {},
     }
     val l = gl ?? return fails(span, "not a global");
+    if (l.c_get != null) {
+        return fails(span, "a C macro is read through a call: it has no place");
+    }
     var name = "";
     match (l.pat.kind) {
         .BIND(n) => { name = n; },

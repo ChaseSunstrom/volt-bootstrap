@@ -867,6 +867,10 @@ attach fn path_expr(this: checker&, p: path&, want: u32?, span: span) -> compile
             val many = ds.len > 1;
             match (this.item_of(d).kind) {
                 .GLOBAL(x) => {
+                    val cg = x.c_get;
+                    if (cg) {
+                        return this.c_macro_read(d, cg, span);
+                    }
                     val g = try this.global(d, span);
                     if (this.opts.lsp) {
                         this.lsp_decl_use(d, p.last(), span, fmt2("{}: {}", S(p.last()), this.ty_name(g.ty)));

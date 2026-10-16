@@ -590,6 +590,8 @@ struct cdecls {
     fn_macros: std::vec<str> = {};     // function-like #defines (MAX(a, b)): called per use
     var_aliases: std::vec<cdefine> = {}; // #define NAME other_name (macOS's stderr is __stderrp)
     hidden_vars: std::vec<cvar> = {};    // variables with reserved names, which only an alias reaches
+    hidden_fns: std::vec<cvar> = {};     // functions with reserved names and their result types
+    call_macros: std::vec<cdefine> = {}; // #define NAME (f(args)) (UCRT's stdout): read through C
 }
 
 // a made-up tag for an anonymous struct or enum: prefix and a number
@@ -1399,7 +1401,7 @@ attach fn top(this: cparser&) -> void {
         } else if (starts_with(name, "__")) {
             // a reserved name isn't imported, but a #define may name it (macOS's stderr is __stderrp)
             match (dc.ty) {
-                .FUNC(ps, ret, variadic) => {},
+                .FUNC(ps, ret, variadic) => { put(&this.d.hidden_fns, { name: name, ty: copy *ret.ptr }); },
                 default => {
                     if (!stat) {
                         put(&this.d.hidden_vars, { name: name, ty: copy dc.ty });
@@ -2271,6 +2273,42 @@ attach fn c_macros(this: checker&, d: cdecls&, macros: str) -> compile_error!voi
             break;
         }
     }
+    // the others that are a call of a function (UCRT's #define stdout (__acrt_iob_func(1))): read
+    // through a C function each (c_items)
+    for (df&) in defs.items() {
+        if (known.get(df.name) == null && !starts_with(df.name, "_") && called_in(df.body.items()) != null) {
+            put(&d.call_macros, copy *df);
+        }
+    }
+}
+
+// the function a macro body calls when the body is that call, maybe parenthesized: f(...) or (f(...))
+fn called_in(t: ctok[..]) -> str? {
+    var a: usize = 0;
+    var b = t.len;
+    if (b >= 2 && is_p(&t[0], "(") && is_p(&t[b - 1], ")")) {
+        a = 1;
+        b -= 1;
+    }
+    if (b < a + 3 || !is_p(&t[a + 1], "(") || !is_p(&t[b - 1], ")")) {
+        return null;
+    }
+    // the call's parentheses close only at its end (not f(x) + g(y))
+    var depth: u32 = 0;
+    for (k) in a + 1..b {
+        if (is_p(&t[k], "(")) {
+            depth += 1;
+        } else if (is_p(&t[k], ")")) {
+            depth -= 1;
+            if (depth == 0 && k != b - 1) {
+                return null;
+            }
+        }
+    }
+    match (t[a]) {
+        .ID(x) => { return x; },
+        default => { return null; },
+    }
 }
 
 // one Volt item per C struct, fn, variable and constant
@@ -2619,6 +2657,46 @@ attach fn c_items(this: checker&, d: cdecls&, res: c_imported&, span: span) -> v
         val t = m.ty_of(&of->ty) ?? continue;
         val pt: pat = { kind: pat_kind::BIND(a.name), span: span };
         put(&res.items, m.citem(item_kind::GLOBAL({ mutable: true, is_comptime: false, is_static: false, pat: pt, ty: move t, init: null, span: span, c_name: target })));
+    }
+    // a #define that's a call of a function (UCRT's stdout is (__acrt_iob_func(1))): a global of the
+    // function's result type, read by a static C function returning the macro (C expands it there),
+    // unless the header has something by the macro's name
+    for (cm&) in d.call_macros.items() {
+        val callee = called_in(cm.body.items()) ?? continue;
+        var ret: ctype* = null;
+        for (f&) in d.fns.items() {
+            if (f.name == callee) {
+                ret = &f.ret;
+            }
+        }
+        for (f&) in d.hidden_fns.items() {
+            if (f.name == callee) {
+                ret = &f.ty;
+            }
+        }
+        val rt = ret ?? continue;
+        if (seen_fns.get(cm.name) != null || taken.get(cm.name) != null || m.needs_wrap(rt)) {
+            continue;
+        }
+        var own = false;
+        for (v&) in d.vars.items() {
+            own = own || v.name == cm.name;
+        }
+        if (own) {
+            continue;
+        }
+        val t = m.ty_of(rt) ?? continue;
+        val text = m.c_text(rt, &c_names) ?? continue;
+        var read = S(cm.name);
+        if (spelled_ptr(rt)) {
+            read = fmt("(void *)({})", S(cm.name));
+        }
+        val getter = this.intern(fmt("volt_cm_{}", S(cm.name)));
+        put(&res.includes, fmt3("static __inline__ {} {}(void) {{ return {}; }}", copy text, S(getter), move read));
+        put(&res.statics, getter);
+        put(&res.items, m.citem(item_kind::FN({ name: getter, spec: null, params: {}, c_varargs: false, ret: copy t, body: null, is_async: false, is_comptime: false, extern_abi: C_HEADER, is_export: false, is_attach: false, c_name: getter })));
+        val pt: pat = { kind: pat_kind::BIND(cm.name), span: span };
+        put(&res.items, m.citem(item_kind::GLOBAL({ mutable: false, is_comptime: false, is_static: false, pat: pt, ty: move t, init: null, span: span, c_name: null, c_get: getter })));
     }
     // constants: an int gets the first of i32, u32, i64, u64 that its suffixes allow and its value fits,
     // a float f64; a negative value is `-literal`

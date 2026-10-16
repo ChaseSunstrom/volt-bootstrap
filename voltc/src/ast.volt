@@ -320,6 +320,7 @@ struct let_stmt {
     init: expr?;
     span: span;
     c_name: str?; // a global defined by an imported C header (extern FILE* stderr)
+    c_get: str? = null; // a C macro read as one (UCRT's stdout): the header fn made to read it
 }
 
 // SUSPEND/RESUME are the `suspend;` and `resume frame;` statements of async fns

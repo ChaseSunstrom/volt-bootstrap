@@ -524,3 +524,18 @@ attach fn c_declare(this: checker&, k: usize, it: item, span: span) -> compile_e
     this.importing_c = false;
     try r;
 }
+
+// a C macro read as a global (UCRT's #define stdout (__acrt_iob_func(1))): a call of the C function
+// cimport made for it, getter, which reads the macro; a value, with no place to assign or point at
+attach fn c_macro_read(this: checker&, d: u32, getter: str, span: span) -> compile_error!tval {
+    val f = this.lookup(this.dl(d).ns, getter) ?? return fails(span, "this C macro's import is gone");
+    match (f) {
+        .DECLS(l) => {
+            val i = try this.fn_inst(*this.list(l).at(0), {}, span);
+            this.use_fn(i);
+            val ret = this.fi(i).ret;
+            return vnew(ret, this.call_fn(this.fi(i).ir, {}, ret));
+        },
+        default => { return fails(span, "this C macro's import is gone"); },
+    }
+}

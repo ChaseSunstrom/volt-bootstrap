@@ -111,7 +111,7 @@ attach fn program(this: checker&) -> compile_error!void {
             val d = @cast<u32>(di);
             var is_global = false;
             match (this.item_of(d).kind) {
-                .GLOBAL(l) => { is_global = true; },
+                .GLOBAL(l) => { is_global = l.c_get == null; }, // (a C macro read has no storage)
                 default => {},
             }
             val pkg = this.pkg_of(d);
