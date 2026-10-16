@@ -262,11 +262,11 @@ fn main() -> void {
 
 | C++ | Volt |
 | --- | --- |
-| `std::string`, `std::string_view` parameters (by value, `const&`, `&&`) | `str` |
+| `std::string`, `std::string_view` parameters (by value, `const&`, `&&`) | `str`: a `std::string` is a temporary made from it, so a function whose result could point into that (`const char *c_str_of(const std::string &)`) isn't declared, and a call of it per use is an error |
 | a `std::string&` parameter | `std::string&`: C++ changes a copy, which the Volt string gets once the call returns (not when it throws: a `try_` form leaves the string as it was). A function whose result could point into that copy (a view, a pointer, a reference) isn't declared, and a call of it per use is an error |
 | a `std::string` result | `std::string` (a copy) |
 | a `std::string_view` result | `str` (the same bytes, alive as long as C++ keeps them) |
-| `std::vector<T>` parameters (by value, `const&`) | `T[..]` |
+| `std::vector<T>` parameters (by value, `const&`) | `T[..]`: C++ gets a temporary vector copied from the slice, so a function whose result could point into it (`const int *data_of(const std::vector<int> &)`, a reference to an element) isn't declared, and a call of it per use is an error |
 | nested `std::vector` parameters (by value, `const&`), `std::vector<std::vector<int>>` | `i32[..][..]`, to any depth, each level copied; the innermost element a number or a `char` (one of `bool`s or of a class is [per use](#calls-worked-out-per-use)) |
 | a `std::vector<T>` result (`T` a plain value) | `std::vec<T>` (a copy) |
 | `std::map<K, V>`, `std::unordered_map<K, V>` parameters (by value, `const&`, `&&`; the default comparator, hash and allocator, written out or not, through an alias too) | `std::map<K, V>&`: C++ gets a copy of the Volt map's entries, the Volt map unchanged; a function whose result could point into that copy (a view, a pointer, a reference) has no such form. `K` and `V` a number, `bool` or `char`, a `std::string` (from a Volt `std::string`) or a `std::vector` of numbers or `char`s (from a `std::vec`). A map C++ can also hold by handle (`std::map<int, int>`) keeps that form beside it, an overload taking a `stdcxx::map<i32, i32>`. A mutable `std::map&`, or one with another order (`std::greater<int>`), keeps its handle form, or is [per use](#calls-worked-out-per-use) when there's none |

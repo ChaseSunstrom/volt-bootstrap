@@ -78,7 +78,9 @@ attach fn reparse(this: clang_tu&, name: str, text: str) -> bool {
 }
 
 // every error clang reported, each with its notes, one a line: in clang's words, with the place
-// when it's in a header (not in main, the generated file)
+// when it's in a header (not in main, the generated file). A declaration in main whose type is an
+// expression that failed (a probe's __decltype(call)) has an error of its own after the call's,
+// saying it has no type: not the user's, so left out
 attach fn errors_text(this: clang_tu&, main: str) -> std::string? {
     if (this.tu == null) {
         return S("libclang couldn't parse it");
@@ -87,7 +89,7 @@ attach fn errors_text(this: clang_tu&, main: str) -> std::string? {
     val n = clang::clang_getNumDiagnostics(this.tu);
     for (i) in 0..n {
         val d = clang::clang_getDiagnostic(this.tu, i);
-        if (clang::clang_getDiagnosticSeverity(d) >= 3) {
+        if (clang::clang_getDiagnosticSeverity(d) >= 3 && !(out.len() > 0 && no_type_after(d, main))) {
             put_diag_line(&out, d, main);
             val notes = clang::clang_getChildDiagnostics(d);
             for (j) in 0..clang::clang_getNumDiagnosticsInSet(notes) {
@@ -137,6 +139,16 @@ fn put_main_line(out: std::vec<u32>&, d: clang::CXDiagnostic, main: str) -> void
 }
 
 // one diagnostic as a line of out: "file:line:col: note: what", or "what" in the main file
+// is d clang saying a declaration in main has no type (what follows an error in its type)?
+fn no_type_after(d: clang::CXDiagnostic, main: str) -> bool {
+    val what = cx_str(clang::clang_getDiagnosticSpelling(d));
+    if (what.as_str() != "a type specifier is required for all declarations") {
+        return false;
+    }
+    val place = cx_str(clang::clang_formatDiagnostic(d, clang::clang_defaultDiagnosticDisplayOptions()));
+    return starts_with(place.as_str(), main);
+}
+
 fn put_diag_line(out: std::string&, d: clang::CXDiagnostic, main: str) -> void {
     var line = cx_str(clang::clang_formatDiagnostic(d, clang::clang_defaultDiagnosticDisplayOptions()));
     val text = line.as_str();
