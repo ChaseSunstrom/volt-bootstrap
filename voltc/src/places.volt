@@ -263,6 +263,19 @@ attach fn field(this: checker&, b0: tval, name: str, span: span) -> compile_erro
         },
         default => {},
     }
+    // a C++ class held by handle: a field Volt didn't declare (a specialization's) is read per use,
+    // as clang types it
+    match (*this.t.get(t)) {
+        .STRUCT(sid) => {
+            if (this.cpp_handle_of(sid) != null) {
+                val r = this.cpp_handle_field(sid, b, name, span);
+                if (r) {
+                    return r;
+                }
+            }
+        },
+        default => {},
+    }
     // the fields (or tuple element names) it could have meant
     var names: std::vec<str> = {};
     match (*this.t.get(t)) {

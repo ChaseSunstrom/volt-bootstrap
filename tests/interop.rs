@@ -1966,6 +1966,43 @@ fn cpp_surface() {
     assert!(!o.status.success() && err.contains("{&0} is a function's symbol: pass a function"), "{{&0}} of a number: {err}");
 }
 
+/// a class template's specializations (special.hpp): box<i32> is the primary's, laid out by Volt at
+/// C++'s size; box<void> (an explicit specialization) and box<i32*> (a partial one's instance) are
+/// what clang picks, held by handle with their members worked out per use, in Volt and in a header's
+/// signature alike, on both backends; and the primary's fields aren't a specialization's
+#[test]
+fn cpp_special_class() {
+    let e = Env::new("cpp-special-class");
+    for backend in ["c", "llvm"] {
+        assert_eq!(ok(e.voltc(&["run", "cpp_special_class.volt", "--backend", backend]), "voltc run cpp_special_class.volt"), "4 7 true\n6 3 1.5\n42 42 2\n42 3\n5 1\n", "C++ class specializations ({backend})");
+    }
+    let hpp = Path::new(ROOT).join("tests/interop/special.hpp").display().to_string().replace('\\', "/");
+    std::fs::write(e.dir.join("special_field.volt"), format!("use {{ \"{hpp}\" }} as cpp;\nfn main() -> void {{\n    val s: cpp::sp::box<void> = {{ v: 1, tag: 2 }};\n}}\n")).unwrap();
+    let o = e.voltc(&["check", &e.path("special_field.volt")]);
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(!o.status.success() && err.contains("special_field.volt:3") && err.contains("'v'"), "box<void> has none of the primary's fields: {err}");
+}
+
+/// function template specializations (special.hpp): C++ picks pick<int> and Meter::unit<double>
+/// over their primaries, called per use
+#[test]
+fn cpp_special_fn() {
+    let e = Env::new("cpp-special-fn");
+    for backend in ["c", "llvm"] {
+        assert_eq!(ok(e.voltc(&["run", "cpp_special_fn.volt", "--backend", backend]), "voltc run cpp_special_fn.volt"), "2 1 2\n25 15\n", "C++ function specializations ({backend})");
+    }
+}
+
+/// what a library adds to namespace std (special.hpp): its std::hash<Key> keys a
+/// std::unordered_map<Key, int>, and its swap runs through argument-dependent lookup
+#[test]
+fn cpp_special_std() {
+    let e = Env::new("cpp-special-std");
+    for backend in ["c", "llvm"] {
+        assert_eq!(ok(e.voltc(&["run", "cpp_special_std.volt", "--backend", backend]), "voltc run cpp_special_std.volt"), "2 30\n102 101\n", "a library's std additions ({backend})");
+    }
+}
+
 #[test]
 fn cpp_templates() {
     // what Volt's generics can't declare (variadic and non-type templates, auto results, constrained
@@ -2091,10 +2128,10 @@ fn cpp_params() {
     // leaves the Volt string as it was, under a callback too), a std::function over a class held by
     // handle, one laid out and one move-only; a C++ std::function Volt keeps, called with a
     // std::string&; parameters written as arrays (T a[N], const T a[], one with a default) a Volt T*;
-    // a Volt std::string for a template parameter S (S&, const S&, S) a C++ std::string, a throw
-    // through the plain form a stop
+    // a Volt std::string for a template parameter S (S&, const S&, S, S&&) a C++ std::string, a
+    // throw through the plain form a stop
     let e = Env::new("cpp-params");
-    let want = "sum 6\nfill 4 4 4\ntotal 12\ntwice 8 24\nfirst 7 8\napply 5 6 10\n@cpp 42\nshout hi!!\ngrow 2: 7 hi!!~++\ngrow -1: INVALID_ARGUMENT hi!!~++\n@cpp hi!!~++!\nrelay INVALID_ARGUMENT hi!!~++!\nshapes 2 7\npoints 202 45\nspend 15\nasked why??\ncounted 3 7 ab+\narrays 7 4 7 9 4\n@cpp 8 5 1\nalias 8 cells 14\nwrap hey! 4 6\ngauge 40 70 hey!\npad 6 hey!##\ntgrow 1: 8 hey!##~+\ntgrow -1: INVALID_ARGUMENT hey!##~+\nwhich 1 2 2 1 2 ab&& cd\nfwd 6 ab&&&& len 2 6\nnested [[1,2],[3],[]] [[1,2],[3]] [[[1,2],[3],[]],[],[[1,2]]] []\nnested per use [[1,2],[3],[]] 15\nnested [[3],[]] 4.75 hi//you\nmap {1:10,2:20,3:30} {} {4:125,5:50} 140 3 3\nmap {a:1,b:2} {:'',k:'v w'} {1:[],2:[4,5]}\nmap {1:10,2:20,3:30} {1:[],2:[4,5]} 2 2 2\nmap 1 {7:7} 1\npick 2: 20\npick 9: OUT_OF_RANGE\nderef 5 5 3 3 7 7\nsum_ptr 7 size 4 4 8 which 1 2\nchecked 5: 5\nchecked -1: INVALID_ARGUMENT\ntwice 42 tally 4 7 10 10\n";
+    let want = "sum 6\nfill 4 4 4\ntotal 12\ntwice 8 24\nfirst 7 8\napply 5 6 10\n@cpp 42\nshout hi!!\ngrow 2: 7 hi!!~++\ngrow -1: INVALID_ARGUMENT hi!!~++\n@cpp hi!!~++!\nrelay INVALID_ARGUMENT hi!!~++!\nshapes 2 7\npoints 202 45\nspend 15\nasked why??\ncounted 3 7 ab+\narrays 7 4 7 9 4\n@cpp 8 5 1\nalias 8 cells 14\nwrap hey! 4 6\ngauge 40 70 hey!\ntake 5 xyz\ntook 4\nlend 1 1 1 1\nlend moved 2 2\npad 6 hey!##\ntgrow 1: 8 hey!##~+\ntgrow -1: INVALID_ARGUMENT hey!##~+\nwhich 1 2 2 1 2 ab&& cd\nfwd 6 ab&&&& len 2 6\nnested [[1,2],[3],[]] [[1,2],[3]] [[[1,2],[3],[]],[],[[1,2]]] []\nnested per use [[1,2],[3],[]] 15\nnested [[3],[]] 4.75 hi//you\nmap {1:10,2:20,3:30} {} {4:125,5:50} 140 3 3\nmap {a:1,b:2} {:'',k:'v w'} {1:[],2:[4,5]}\nmap {1:10,2:20,3:30} {1:[],2:[4,5]} 2 2 2\nmap 1 {7:7} 1\npick 2: 20\npick 9: OUT_OF_RANGE\nderef 5 5 3 3 7 7\nsum_ptr 7 size 4 4 8 which 1 2\nchecked 5: 5\nchecked -1: INVALID_ARGUMENT\ntwice 42 tally 4 7 10 10\n";
     for backend in ["c", "llvm"] {
         assert_eq!(ok(e.voltc(&["run", "cpp_params.volt", "--backend", backend]), "voltc run cpp_params.volt"), want, "C++ parameters ({backend})");
         let o = e.voltc(&["run", "cpp_params_gthrow.volt", "--backend", backend]);
@@ -2121,6 +2158,15 @@ fn cpp_params() {
     let src = String::from_utf8_lossy(&shown.stderr);
     // a Volt reference per use: read as an int& first, as its address only when that's no call
     for call in ["pr::rp::deref(int32_t *) -> int", "pr::rp::sum_ptr(int32_t *, int32_t) -> int", "pr::rp::which(int32_t &) -> int", "pr::rp::checked(int32_t *) -> int"] {
+        assert!(src.contains(&format!("// C++: {call}, as clang resolves it")), "{call}: {src}");
+    }
+    // a function template's S& and const S& a Volt S& (S what the reference names), S and S&& a
+    // value (S&&'s a var, which C++ moves from); S* stays a pointer; beside an S& or const S&
+    // overload, the S or S&& one has a suffixed name (both would take a Volt reference)
+    for decl in ["fn wrap(s: S&) -> void", "fn len(s: S&) -> u64", "fn gauge(s: S&) -> i32", "fn pad(s: S&, n: T) -> i32", "fn grow(s: S&, n: i32) -> i32", "fn which(s: S&) -> i32", "fn size_of(a0: S&) -> i32", "fn bump(s: S) -> i32", "fn take(var s: S) -> i32", "fn fwd(var s: S) -> i32", "fn size_by(a0: S) -> i32", "fn deref(p: S*) -> i32", "fn lend(a0: S&) -> i32", "fn give(a0: S&) -> i32", "fn lend_type_parameter_0_0_rref(var a0: S) -> i32", "fn give_type_parameter_0_0_rref(var a0: S) -> i32"] {
+        assert!(src.contains(decl), "{decl}: {src}");
+    }
+    for call in ["pr::gs::wrap<std::string>(std::string &) -> void", "pr::gs::take<std::string>(VOLT_MOVE(std::string &)) -> int"] {
         assert!(src.contains(&format!("// C++: {call}, as clang resolves it")), "{call}: {src}");
     }
     for decl in ["fn sum3(a: i32*) -> i32", "fn total(a: i32*, n: i32) -> i32", "fn tail(a: i32*) -> i32", "fn tail() -> i32", "fn sum_alias(a: i32*) -> i32", "fn first_char(s: cstr?) -> i32", "fn byte0(buf: u8*) -> i32", "fn argc_of(argv: cstr?*) -> i32", "fn cells(a: pr::ap::cell*, n: i32) -> i32", "fn grid() -> void {}"] {
@@ -2258,6 +2304,11 @@ fn cpp_params_refused() {
         assert!(err.contains(line), "{line}: {err}");
     }
     assert_eq!(err.matches(why).count(), 3, "S nested or the result: {err}");
+    // a std::string without & for a template's S& or const S&: an error naming the parameter
+    let err = check("cpp_params_gbare.volt");
+    for (line, f) in [(7, "wrap"), (11, "len")] {
+        assert!(err.contains(&format!("cpp_params_gbare.volt:{line}")) && err.contains(&format!("argument 1 has type std::string<std::mem::default_allocator>, but '{f}' wants a reference (S&) for s: pass one (&arg)")), "{f} without &: {err}");
+    }
     // C++ writing into a val or a temporary for an S&-only template, through its Volt generic and
     // in @cpp: an error each call
     let err = check("cpp_params_gval.volt");
