@@ -68,6 +68,9 @@ struct cpp_alias {
     key: std::string;
     text: std::string;
     decl: std::string;
+    // a per-use name's try_ stub (per_use): the name's key in written (any parameters), which the
+    // header taking leaves the stub out
+    taken: std::string = {};
 }
 
 // the Volt source being written for one import: the classes, enums and class templates it declares
@@ -2331,7 +2334,14 @@ attach fn cpp_type_text(this: checker&, t: u32) -> std::string? {
 attach fn cpp_handle_method(this: checker&, sid: u32, r: tval, name: str, gargs: std::vec<garg>&, args: std::vec<expr>&, want: u32?, span: span) -> compile_error!tval {
     val k = this.cpp_ctx_of(this.decls.at(@cast<usize>(this.si(sid).decl)).ns) ?? return fails(span, "this C++ class's import is gone");
     val callee = fmt(".{}", S(name));
-    val v = this.cpp_use_call(k, this.intern(copy callee), false, name, r, gargs, args, want, span) catch |e| {
+    val v = this.cpp_use_call(k, this.intern(copy callee), false, false, name, r, gargs, args, want, span) catch |e| {
+        // x.try_m(...): m's call in catch mode, when the class has no try_m of its own (an error is
+        // m's: why C++ can't make its call)
+        if (starts_with(name, "try_")) {
+            return this.cpp_use_call(k, this.intern(fmt(".{}", S(name[4..name.len]))), false, true, name, r, gargs, args, want, span) catch |e2| {
+                return this.cpp_member_error(e2, sid, name[4..name.len]);
+            };
+        }
         return this.cpp_member_error(e, sid, name);
     };
     return v;
@@ -2345,7 +2355,17 @@ attach fn cpp_handle_static(this: checker&, sid: u32, name: str, gargs: std::vec
     if (name == "new") {
         callee = S(q); // T::new(...) is a constructor's call: T(...)
     }
-    val v = this.cpp_use_call(k, this.intern(copy callee), false, name, null, gargs, args, want, span) catch |e| {
+    val v = this.cpp_use_call(k, this.intern(copy callee), false, false, name, null, gargs, args, want, span) catch |e| {
+        // Q::try_f(...), Q::try_new(...): in catch mode, when the class has no try_f of its own
+        if (starts_with(name, "try_")) {
+            var plain = fmt2("{}::{}", S(q), S(name[4..name.len]));
+            if (name == "try_new") {
+                plain = S(q);
+            }
+            return this.cpp_use_call(k, this.intern(move plain), false, true, name, null, gargs, args, want, span) catch |e2| {
+                return this.cpp_member_error(e2, sid, name[4..name.len]);
+            };
+        }
         return this.cpp_member_error(e, sid, name);
     };
     return v;
@@ -2610,6 +2630,7 @@ attach fn callable_of(this: cpp_gen&, generics: str, head: str, has_params: bool
         }
         if (suffix == null) {
             this.written.put(this.c.intern(copy key), true);
+            this.written.put(this.c.intern(this.fn_key(my_head.as_str(), "#name")), true);
             this.sigs.put(this.c.intern(copy key), this.c.intern(move sig));
         }
         // the C++ call, and what @cpp passes it
@@ -2759,6 +2780,16 @@ attach fn flush_aliases(this: cpp_gen&, from: usize) -> void {
     var left: std::string = {};
     for (i) in from..this.aliases.len {
         val a = this.aliases.at(i);
+        if (a.taken.len() > 0) {
+            // a per-use name's try_ stub, unless the header declares that name
+            if (this.written.get(a.taken.as_str()) == null) {
+                this.written.put(this.c.intern(copy a.taken), true);
+                this.out.append(a.text.as_str());
+            } else {
+                this.line(fmt2("// left out: {}, worked out per use (the header declares {})", copy a.decl, copy a.decl).as_str());
+            }
+            continue;
+        }
         if (this.written.get(a.key.as_str()) == null) {
             this.written.put(this.c.intern(copy a.key), true);
             this.sigs.put(this.c.intern(copy a.key), "#alias");
@@ -2795,6 +2826,7 @@ attach fn first_time(this: cpp_gen&, head: str, types: str) -> bool {
         return false;
     }
     this.written.put(this.c.intern(copy key), true);
+    this.written.put(this.c.intern(this.fn_key(head, "#name")), true);
     return true;
 }
 
@@ -5286,8 +5318,49 @@ attach fn per_use(this: cpp_gen&, head: str, call: str, method: bool) -> void {
     if (method && this.class_gen.len() > 0) {
         this.line(this.class_gen.as_str());
     }
-    this.line(fmt("@attributes([@cpp_call(\"{}\")])", move callee).as_str());
+    this.line(fmt("@attributes([@cpp_call(\"{}\")])", copy callee).as_str());
     this.line(fmt("{}) -> void {{}}", S(head)).as_str());
+    // its try_ form, the call made in catch mode (cpp_dyn_call): written aside, for flush_aliases to
+    // leave out when the header declares the name itself
+    val th = try_named(head);
+    var saved = copy this.out;
+    this.out = {};
+    if (method && this.class_gen.len() > 0) {
+        this.line(this.class_gen.as_str());
+    }
+    this.line(fmt("@attributes([@cpp_call(\"try:{}\")])", move callee).as_str());
+    this.line(fmt("{}) -> void {{}}", copy th).as_str());
+    val ts = th.as_str();
+    var at: usize = 0;
+    while (at < ts.len && ts[at] != '(') {
+        at += 1;
+    }
+    var from = at;
+    while (from > 0 && ts[from - 1] != ' ') {
+        from -= 1;
+    }
+    put(&this.aliases, { key: this.fn_key(ts, "#per-use"), text: copy this.out, decl: S(ts[from..at]), taken: this.fn_key(ts, "#name") });
+    this.out = move saved;
+    this.tries = true;
+}
+
+// a fn head's try_ form (`fn f(` gives `fn try_f(`; a keyword's underscore goes: `fn try_as(`)
+fn try_named(head: str) -> std::string {
+    var at: usize = 0;
+    if (starts_with(head, "attach fn ")) {
+        at = 10;
+    } else if (starts_with(head, "fn ")) {
+        at = 3;
+    }
+    var paren = at;
+    while (paren < head.len && head[paren] != '(') {
+        paren += 1;
+    }
+    var name = S(head[at..paren]);
+    if (paren > at + 1 && head[paren - 1] == '_' && is_keyword(head[at..paren - 1])) {
+        name = S(head[at..paren - 1]);
+    }
+    return fmt3("{}try_{}{}", S(head[0..at]), move name, S(head[paren..head.len]));
 }
 
 // is this c's first declaration the import sees (by USR)? it's noted as seen. ponytail: the first
@@ -5634,6 +5707,14 @@ attach fn exceptions(this: cpp_gen&) -> void {
         this.line(fmt2("    if (k == {}) {{ return cpp_error::{}; }}", unum(@cast<u64>(i + 14)), vname(cursor_name(*(this.cursors.get(*own.at(i)) ?? continue)).as_str())).as_str());
     }
     this.line("    return cpp_error::UNKNOWN;");
+    this.line("}");
+    // what @cpp<cpp_error!R>(...) is made with (cpp_caught_call), as a try_ form is
+    this.line("// @cpp<cpp_error!R>(...): catch mode on around its call, then which exception it threw (0: none)");
+    this.line("fn volt_cpp_catching() -> void* {");
+    this.line(fmt("    return @cpp<void*>(\"volt_cpp_catch_begin({})\");", copy this.kinds).as_str());
+    this.line("}");
+    this.line("fn volt_cpp_caught(m: void*) -> i32 {");
+    this.line("    return @cpp<i32>(\"volt_cpp_catch_end({0})\", m);");
     this.line("}");
     // the C++ side: rethrow what's being handled, and catch it most derived first
     var text = fmt("// which exception is being handled, as cpp_error numbers its variants (a try_ form's error)\nstatic int {}() {{\n    try {{\n        throw;\n", copy this.kinds);
@@ -6221,6 +6302,11 @@ attach fn cpp_probe_type(this: checker&, t: u32) -> std::string? {
 // (an error is its words, at span), and the importer writes the fn as it would for a C++ function of
 // that signature. recv: {0} is the receiver, so it's an attach fn on it. The fn's declaration
 attach fn cpp_instance(this: checker&, k: usize, expr: str, types: std::vec<u32>&, recv: bool, value: bool, span: span) -> compile_error!u32 {
+    return this.cpp_instance_as(k, expr, types, recv, value, false, span);
+}
+
+// cpp_instance; tried: the fn's try_ form instead (try_text), which makes the call in catch mode
+attach fn cpp_instance_as(this: checker&, k: usize, expr: str, types: std::vec<u32>&, recv: bool, value: bool, tried: bool, span: span) -> compile_error!u32 {
     var ptys: std::vec<std::string> = {};
     // a reference result can only be into the receiver, a reference argument or something that
     // outlives the call: with none of the first two, it's into the wrapper's own copies, so the
@@ -6239,6 +6325,9 @@ attach fn cpp_instance(this: checker&, k: usize, expr: str, types: std::vec<u32>
     var key = fmt2("{}|{}|", unum(@cast<u64>(k)), S(expr));
     if (by_value) {
         key.append("value|");
+    }
+    if (tried) {
+        key.append("try|");
     }
     for (p&) in ptys.items() {
         key.append(p.as_str());
@@ -6349,6 +6438,10 @@ attach fn cpp_instance(this: checker&, k: usize, expr: str, types: std::vec<u32>
     }
     sig.append(fname.as_str());
     sig.push('(');
+    // for its try_ form: the head (with the receiver), the other parameters, and their names
+    var try_head = S("");
+    var try_params = S("");
+    var try_args = S("");
     var body = S("");
     var tail = S("");
     val parms = params_of(fc);
@@ -6368,6 +6461,18 @@ attach fn cpp_instance(this: checker&, k: usize, expr: str, types: std::vec<u32>
                 sig.append(", ");
             }
             sig.append(fmt2("{}: {}", copy an, copy a.vty).as_str());
+            if (recv && j == 0) {
+                try_head = copy sig;
+            } else {
+                if (try_params.len() > 0 || recv) {
+                    try_params.append(", ");
+                }
+                try_params.append(fmt2("{}: {}", copy an, copy a.vty).as_str());
+                if (try_args.len() > 0) {
+                    try_args.append(", ");
+                }
+                try_args.append(an.as_str());
+            }
             tail.append(", ");
             tail.append(a.pass.as_str());
             put(&args, copy a);
@@ -6412,6 +6517,12 @@ attach fn cpp_instance(this: checker&, k: usize, expr: str, types: std::vec<u32>
     g.note = fmt2("{} -> {}, as clang resolves it", move inst, type_spelling(rt));
     val rp = with_pres(&rr, &args, args.len);
     g.fn_text("", sig.as_str(), &rp, body.as_str(), tail.as_str(), "");
+    if (tried) {
+        if (!recv) {
+            try_head = fmt("fn {}(", copy fname);
+        }
+        g.try_text("", try_head.as_str(), try_params.as_str(), &rr, try_args.as_str());
+    }
     if (g.text_refs) {
         g.text_back_fn();
     }
@@ -6427,10 +6538,16 @@ attach fn cpp_instance(this: checker&, k: usize, expr: str, types: std::vec<u32>
     fl.push('>');
     val first = try this.cpp_declare(k, move out, move fl);
     var d: u32? = null;
+    var want_name = copy fname;
+    if (tried) {
+        want_name = fmt("try_{}", move want_name);
+    }
     for (j) in first..this.decls.len {
         val fd = this.fn_decl_of(@cast<u32>(j));
-        if (fd != null && d == null) {
-            d = @cast<u32>(j);
+        if (fd) {
+            if (d == null && fd.name == want_name.as_str()) {
+                d = @cast<u32>(j);
+            }
         }
     }
     val made = d ?? return fails(span, "the C++ call's Volt fn wasn't declared");
@@ -6577,13 +6694,18 @@ attach fn cpp_dyn_call(this: checker&, d: u32, name: str, rv: tval?, explicit: s
     if (starts_with(callee, "c:")) {
         return this.c_dyn_call(d, callee[2..callee.len], name, explicit, args, want, span);
     }
+    // "try:NAME" is NAME's try_ form (per_use): its call made in catch mode
+    val tried = starts_with(callee, "try:");
+    if (tried) {
+        callee = callee[4..callee.len];
+    }
     // "#NAME" is a function-like macro: what it expands to comes back by value
     val macro = starts_with(callee, "#");
     if (macro) {
         callee = callee[1..callee.len];
     }
     val k = this.cpp_ctx_of(this.decls.at(@cast<usize>(d)).ns) ?? return fails(span, "this C++ name's import is gone");
-    return this.cpp_use_call(k, callee, macro, name, rv, explicit, args, want, span);
+    return this.cpp_use_call(k, callee, macro, tried, name, rv, explicit, args, want, span);
 }
 
 // an argument of a call clang works out: a fn's name is its C function (a function pointer, which
@@ -6602,8 +6724,9 @@ attach fn cpp_arg_value(this: checker&, e: expr&) -> compile_error!tval {
     }
 }
 
-// a call of callee (ns::f, or .m on rv) worked out per use in import k's headers
-attach fn cpp_use_call(this: checker&, k: usize, callee: str, macro: bool, name: str, rv: tval?, explicit: std::vec<garg>&, args: std::vec<expr>&, want: u32?, span: span) -> compile_error!tval {
+// a call of callee (ns::f, or .m on rv) worked out per use in import k's headers (tried: its try_
+// form, the call made in catch mode)
+attach fn cpp_use_call(this: checker&, k: usize, callee: str, macro: bool, tried: bool, name: str, rv: tval?, explicit: std::vec<garg>&, args: std::vec<expr>&, want: u32?, span: span) -> compile_error!tval {
     var targs = S("");
     if (explicit.len > 0) {
         targs.push('<');
@@ -6668,7 +6791,7 @@ attach fn cpp_use_call(this: checker&, k: usize, callee: str, macro: bool, name:
                     put(&types, v.ty);
                     put(&pre, v);
                 }
-                val made = try this.cpp_instance(k, expr.as_str(), &types, true, macro, span);
+                val made = try this.cpp_instance_as(k, expr.as_str(), &types, true, macro, tried, span);
                 var cands: std::vec<u32> = {};
                 put(&cands, made);
                 var none: std::vec<garg> = {};
@@ -6692,7 +6815,7 @@ attach fn cpp_use_call(this: checker&, k: usize, callee: str, macro: bool, name:
         expr.append(fmt("{{{}}}", unum(@cast<u64>(holes + j))).as_str());
     }
     expr.push(')');
-    val made = try this.cpp_instance_on(k, expr.as_str(), &types, rv != null, macro, by_value, span);
+    val made = try this.cpp_instance_on(k, expr.as_str(), &types, rv != null, macro, tried, by_value, span);
     var cands: std::vec<u32> = {};
     put(&cands, made);
     var none: std::vec<garg> = {};
@@ -6708,12 +6831,12 @@ attach fn cpp_use_call(this: checker&, k: usize, callee: str, macro: bool, name:
 // rvalue can call (qualified &&, const && too) takes the receiver by value instead, as a declared
 // && method does (member_list): the handle is consumed and C++ moves from the object, or from a copy
 // when the handle only borrows it. When neither works, the error is the lvalue call's
-attach fn cpp_instance_on(this: checker&, k: usize, expr: str, types: std::vec<u32>&, recv: bool, value: bool, by_value: u32?, span: span) -> compile_error!u32 {
+attach fn cpp_instance_on(this: checker&, k: usize, expr: str, types: std::vec<u32>&, recv: bool, value: bool, tried: bool, by_value: u32?, span: span) -> compile_error!u32 {
     // (a failed probe isn't cached: such a call probes clang twice, each time it's checked)
-    val made = this.cpp_instance(k, expr, types, recv, value, span) catch |e| {
+    val made = this.cpp_instance_as(k, expr, types, recv, value, tried, span) catch |e| {
         val bv = by_value ?? return e;
         *types.at(0) = bv;
-        return this.cpp_instance(k, expr, types, recv, value, span) catch |e2| { return e; };
+        return this.cpp_instance_as(k, expr, types, recv, value, tried, span) catch |e2| { return e; };
     };
     return made;
 }
@@ -6864,11 +6987,83 @@ attach fn cpp_call(this: checker&, gargs: std::vec<garg>&, args: std::vec<garg>&
     if (gargs.len == 0) {
         return this.cpp_typed_by_clang(args, span);
     }
-    val r = try this.garg_type(gargs.at(0));
+    val r0 = try this.garg_type(gargs.at(0));
+    // @cpp<cpp_error!R>: the call made in catch mode, as a try_ form's is, its arguments before
+    match (*this.t.get(r0)) {
+        .ERR_UNION(e, p) => {
+            val ns = this.cpp_error_ns(e) ?? return fail(span, fmt("@cpp<E!R>: E is a C++ import's cpp_error, not {}", this.ty_name(e)));
+            var pre: std::vec<u32> = {};
+            val v = try this.cpp_call_as(p, gargs, args, true, &pre, span);
+            return this.cpp_caught_call(ns, move pre, v, r0, span);
+        },
+        default => {},
+    }
+    var none: std::vec<u32> = {};
+    return this.cpp_call_as(r0, gargs, args, false, &none, span);
+}
+
+// the namespace of import's cpp_error, when e is one (what a try_ form returns)
+attach fn cpp_error_ns(this: checker&, e: u32) -> u32? {
+    val eid = this.enum_of(e) ?? return null;
+    val info = this.ei(eid);
+    val ns = this.decls.at(@cast<usize>(info.decl)).ns;
+    if (!info.is_error || !(info.name == "cpp_error" || ends_with(info.name, "::cpp_error")) || this.cpp_ctx_of(ns) == null) {
+        return null;
+    }
+    return ns;
+}
+
+// a call of fn name, which import namespace ns declares (cpp_error's helpers), with these arguments
+attach fn cpp_helper_call(this: checker&, ns: u32, name: str, args: std::vec<u32>, span: span) -> compile_error!tval {
+    val f = this.ns_member(ns, name, false) ?? return fail(span, fmt("the C++ import has no {}", S(name)));
+    var d: u32 = 0;
+    match (f) {
+        .DECLS(l) => { d = *this.list(l).at(0); },
+        .NS(n) => { return fail(span, fmt("the C++ import has no {}", S(name))); },
+    }
+    var binds: std::vec<gval> = {};
+    val inst = try this.fn_inst(d, move binds, span);
+    this.use_fn(inst);
+    val ret = this.fi(inst).ret;
+    return vnew(ret, this.call_fn(this.fi(inst).ir, move args, ret));
+}
+
+// v (an @cpp call's value) made in catch mode: catch mode on (volt_cpp_catching) after pre (the
+// arguments), then off, and the exception it threw (volt_cpp_error_of: a try_ form's mapping) or its
+// value, as `to` (cpp_error!R)
+attach fn cpp_caught_call(this: checker&, ns: u32, pre: std::vec<u32>, v: tval, to: u32, span: span) -> compile_error!tval {
+    var stmts = move pre;
+    val m = this.tmp_local("cpp_m", VOIDPTR);
+    var no_args: std::vec<u32> = {};
+    put(&stmts, this.ir.decl(m.id, (try this.cpp_helper_call(ns, "volt_cpp_catching", move no_args, span)).c));
+    var r: local_ref? = null;
+    if (v.ty == VOID) {
+        put(&stmts, v.c);
+    } else {
+        val rl = this.tmp_local("cpp_r", v.ty);
+        put(&stmts, this.ir.decl(rl.id, v.c));
+        r = rl;
+    }
+    val k = this.tmp_local("cpp_k", I32);
+    put(&stmts, this.ir.decl(k.id, (try this.cpp_helper_call(ns, "volt_cpp_caught", nodes(m.c), span)).c));
+    val err = try this.error_coerce(try this.cpp_helper_call(ns, "volt_cpp_error_of", nodes(k.c), span), to, span);
+    var no_fields: std::vec<field_init> = {};
+    var ok = vpure(to, this.ir.node(ir_kind::AGG(move no_fields), to));
+    if (r) {
+        ok = try this.error_coerce(vnew(v.ty, r.c), to, span);
+    }
+    val pick = this.ir.node(ir_kind::COND(this.nonzero(k.c), err.c, ok.c), to);
+    return vnew(to, this.ir.seq(move stmts, pick, to));
+}
+
+// @cpp<R, ...>(...) with R its result type; catching: its arguments are bound first, the statements
+// in pre, and the call reads them, so they're worked out before catch mode is on (an early exit or
+// a throw in one is outside it)
+attach fn cpp_call_as(this: checker&, r: u32, gargs: std::vec<garg>&, args: std::vec<garg>&, catching: bool, pre: std::vec<u32>&, span: span) -> compile_error!tval {
     var types: std::vec<std::string> = {};
     for (i) in 1..gargs.len {
         if (this.text_in(try this.garg_type(gargs.at(i)))) {
-            return this.cpp_text_template(gargs, args, span);
+            return this.cpp_text_template(r, gargs, args, catching, pre, span);
         }
     }
     for (i) in 1..gargs.len {
@@ -6990,7 +7185,13 @@ attach fn cpp_call(this: checker&, gargs: std::vec<garg>&, args: std::vec<garg>&
             default => { put(&subst, copy an); },
         }
         put(&ptys, v.ty);
-        put(&vals, v.c);
+        if (catching) {
+            val held = this.tmp_local("cpp_a", v.ty);
+            put(pre, this.ir.decl(held.id, v.c));
+            put(&vals, held.c);
+        } else {
+            put(&vals, v.c);
+        }
     }
     if (params.len() == 0) {
         params.append("void");
@@ -7160,9 +7361,9 @@ attach fn text_in(this: checker&, t: u32) -> bool {
 // or const S&: {tN} is std::string, and the call is worked out as one made per use (cpp_instance),
 // so the string crosses as a std::string parameter does: made from its text when clang takes it as
 // const std::string& (const S&, S by value), else a copy written back once the call returns (S&).
-// A std::string nested in a type argument, an argument's type or the result is an error
-attach fn cpp_text_template(this: checker&, gargs: std::vec<garg>&, args: std::vec<garg>&, span: span) -> compile_error!tval {
-    val r = try this.garg_type(gargs.at(0));
+// A std::string nested in a type argument, an argument's type or the result is an error. catching:
+// each argument bound first, in pre (cpp_call_as)
+attach fn cpp_text_template(this: checker&, r: u32, gargs: std::vec<garg>&, args: std::vec<garg>&, catching: bool, pre: std::vec<u32>&, span: span) -> compile_error!tval {
     if (this.text_in(r)) {
         return fails(span, TEXT_NESTED);
     }
@@ -7224,6 +7425,11 @@ attach fn cpp_text_template(this: checker&, gargs: std::vec<garg>&, args: std::v
             val hf = (try this.hook(st, "as_str")) ?? return fails(span, "Volt's std::string has no as_str");
             this.use_fn(hf);
             val rt = this.t.ref_to(st);
+            if (catching) {
+                val held = this.tmp_local("cpp_a", rt);
+                put(pre, this.ir.decl(held.id, c));
+                c = held.c;
+            }
             put(&mtys, rt);
             put(&mpre, vnew(rt, c));
             put(&ctys, STR);
@@ -7235,8 +7441,14 @@ attach fn cpp_text_template(this: checker&, gargs: std::vec<garg>&, args: std::v
         }
         put(&mtys, v.ty);
         put(&ctys, v.ty);
-        put(&mpre, v);
-        put(&cpre, v);
+        var held_v = v;
+        if (catching) {
+            val held = this.tmp_local("cpp_a", v.ty);
+            put(pre, this.ir.decl(held.id, v.c));
+            held_v = retyped(&v, v.ty, held.c);
+        }
+        put(&mpre, held_v);
+        put(&cpre, held_v);
     }
     val k = this.cpp_ctx_of(this.env_at(this.cx.env).ns) ?? 0;
     var value = true;

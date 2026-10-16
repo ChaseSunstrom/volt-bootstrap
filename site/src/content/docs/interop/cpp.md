@@ -355,6 +355,16 @@ ones, one named after each class of the headers that derives from `std::exceptio
 derived one that matches), `EXCEPTION` for any other `std::exception` and `UNKNOWN` for a thrown
 value that isn't one. `last_exception()`, in the import's namespace, is what the exception said.
 
+Calls [worked out per use](#calls-worked-out-per-use) catch the same way: `ns::try_f(...)` is
+`ns::f(...)` in catch mode, as are `x.try_m(...)` and `T::try_new(...)` on a class whose members
+are worked out per use. A name the header declares itself wins: when it has a `try_f` of its own,
+that's what `ns::try_f` calls (the generated source says so in a comment). `@cpp` whose result type
+is the import's error union catches too, mapped the same way:
+`@cpp<cpp::cpp_error!i32>("ns::parse({0})", n)` gives the error or the value, and
+`@cpp<cpp::cpp_error!void>(...)` an error or nothing. Its arguments are worked out before catch mode
+starts, so a C++ call in one that throws stops the program as it would anywhere else, and a
+`std::string&` argument is left as it was when the call throws.
+
 ## Subclassing a C++ class in Volt
 
 A C++ framework that calls back through virtual methods takes a Volt type in their place. The Volt
@@ -474,8 +484,9 @@ object `derive` didn't make; without RTTI, either stops the program saying so.
   call passes nothing, or when each can only be a type (`x.get<i32>()`, `x.pair<i32, f64>()`,
   `c.convert<i32, f64>(2)`, `m.find<ns::Key, std::string>(k)`): `f(a.x < b, c > (d))` stays two
   comparisons. Otherwise they come from the call's arguments, as a generic function's can.
-- A C++ exception that reaches Volt through a function's plain form stops the program, like a
-  panic; its `try_` form returns it as an error. In Volt code C++ called (a closure passed as a
+- A C++ exception that reaches Volt through a function's plain form (or an `@cpp` whose result
+  isn't a `cpp_error` union) stops the program, like a panic; its `try_` form returns it as an
+  error. In Volt code C++ called (a closure passed as a
   `std::function`, an override of a virtual method), it goes back to that C++ instead, rethrown with
   its own type, so a `catch` there gets it; the Volt frames between are left without running their
   deletes (the C++ copy of a `std::string&` made for a call in such a frame among them, which
