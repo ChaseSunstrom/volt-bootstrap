@@ -817,6 +817,7 @@ attach fn path_expr(this: checker&, p: path&, want: u32?, span: span) -> compile
             if (ln) {
                 v.loan = ln->owner;
                 v.loan_uses = ln->uses;
+                v.loan_uses_at = ln->uses_at;
             }
             if (l.flag != null) {
                 v.owner = name;

@@ -259,6 +259,7 @@ struct loan {
     owner: place_at;
     view_name: str;
     uses: str? = null;
+    uses_at: u32? = null; // the view's place, when the closure captured it by reference
 }
 
 // the change after which a view may be stale: at the place named at, a call of the method what, or
@@ -335,6 +336,7 @@ struct tval {
     // container; a closure using a view: that view's loan, and the view's name (borrows.volt)
     loan: place_at? = null;
     loan_uses: str? = null;
+    loan_uses_at: u32? = null;
     at: place_at? = null; // a method call's receiver: the local or field chain it names (borrows.volt)
     wraps: bool = false; // a literal a wrapping operator (+% -% *%) gave: it wraps in the type it gets
 }
@@ -491,6 +493,7 @@ struct checker {
     // deprecated decls already warned about (once each)
     warned: idset = {};
     warned_views: idset = {}; // views already warned about as stale
+    place_names: std::map<str, str> = {}; // the borrow warnings' place paths and names, each kept once
     ct_consts: std::vec<cval> = {};    // the compile-time values gval::VAL names
     ct_declared: std::map<str, u32> = {}; // fns comptime fns declared, by where and what they saw
     frames: std::vec<fn_frame> = {}; // async fn instance -> frame fields

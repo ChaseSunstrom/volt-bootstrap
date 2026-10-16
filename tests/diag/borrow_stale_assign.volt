@@ -37,4 +37,26 @@ fn main() -> void {
     std::println(g.reset());
     std::println(g.replace({}));
     std::println(g.count());
+    // plain data given a new value frees nothing: a view a method gave out of it stays good
+    var tk: tok = { text: "ab" };
+    val n = tk.name();
+    tk = { text: "cd" };
+    std::println(n.len);
+    // nor does a reference pointed elsewhere: the views made through it are the old node's
+    var na: node = {};
+    var nb: node = {};
+    var r = &na;
+    val ns = r.items.items();
+    r = &nb;
+    r.items.push(1) catch @panic("out of memory");
+    std::println(ns.len);
+}
+struct tok {
+    text: str;
+}
+attach fn name(this: tok&) -> str {
+    return this.text;
+}
+struct node {
+    items: std::vec<i32> = {};
 }

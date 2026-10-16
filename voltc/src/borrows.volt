@@ -3,9 +3,10 @@
 // chain of its fields (`val s = xs.items()`, `this.items.items()`): the view has a loan on that
 // place. A change at a place reaches the views into it and its fields: a call to a method std marks
 // @invalidates (push, insert, reserve, clear...), which may move or free the storage, or a new value
-// (`xs = ys`). The views it reaches go stale; using a stale view warns. A view is stale on the paths
-// where such a change came after it: its id with STALE set rides in cx.moved, so every merge the
-// move checker does (ifs, matches, loops, breaks) applies to stale views too. A closure held in a
+// (`xs = ys`) when the old value had something to delete. The views it reaches go stale; using a
+// stale view warns. A view is stale on the paths where such a change came after it: its id with
+// STALE set rides in cx.moved, so every merge the move checker does (ifs, matches, loops, breaks)
+// applies to stale views too. A closure held in a
 // local is followed where it's called by that name: one that captured a view has the view's loan,
 // and one whose body changes a captured container makes that change at each call.
 
@@ -67,11 +68,22 @@ attach fn place_at_of(this: checker&, e: expr&) -> place_at? {
             var name = S(pb.name);
             name.push('.');
             name.append(n);
-            return { root: pb.root, path: this.intern(move path), name: this.intern(move name) };
+            return { root: pb.root, path: this.place_name(move path), name: this.place_name(move name) };
         },
         default => {},
     }
     return null;
+}
+
+// s, kept once however often it's named (place_at_of runs for each method call and assignment)
+attach fn place_name(this: checker&, s: std::string) -> str {
+    val got = this.place_names.get(s.as_str());
+    if (got) {
+        return *got;
+    }
+    val k = this.intern(move s);
+    this.place_names.put(k, k);
+    return k;
 }
 
 // does a change at place p reach what's at place q: q is p or a field of it (a change at this.b
@@ -103,14 +115,26 @@ attach fn changed(this: checker&, p: place_at&, what: str, via: str?, span: span
     }
 }
 
-// the place e names (of type t) was given a new value at span; a view given another (a reference
-// pointed elsewhere) frees nothing
+// the place e names (of type t) was given a new value at span: when the old one had something to
+// delete, the views into it look at what's gone. Plain data or a view given another (a reference
+// pointed elsewhere) frees nothing: the views made through it look into what it held, which it no
+// longer names, so they're no longer its
 attach fn assigned(this: checker&, e: expr&, t: u32, span: span) -> void {
-    if (this.is_view(t)) {
+    val p = this.place_at_of(e) ?? return;
+    if (this.needs_drop(t) catch false) {
+        this.changed(&p, "", null, span);
         return;
     }
-    val p = this.place_at_of(e) ?? return;
-    this.changed(&p, "", null, span);
+    var gone: std::vec<u32> = {};
+    for (en) in this.cx.loans.iter() {
+        if (covers(&p, &en.value->owner)) {
+            put(&gone, *en.key);
+        }
+    }
+    for (k&) in gone.items() {
+        this.cx.loans.remove(*k);
+        this.cx.moved.remove(*k | STALE);
+    }
 }
 
 // inst is called on the container at place owner: when it may move or free the container's storage,
@@ -182,6 +206,9 @@ attach fn closure_loan(this: checker&, v: tval&, caps: std::vec<capture>&) -> vo
                 // ponytail: one loan per closure; one using views of two containers is followed for the first
                 v.loan = ln->owner;
                 v.loan_uses = c.name;
+                if (c.mode == cap_mode::REF) {
+                    v.loan_uses_at = l.c;
+                }
                 return;
             }
         }
@@ -189,18 +216,40 @@ attach fn closure_loan(this: checker&, v: tval&, caps: std::vec<capture>&) -> vo
 }
 
 // the local at place c (named name) was just given v: when v looks into a container, the local is a
-// fresh view of it (not stale); otherwise it's no view
+// fresh view of it (not stale); otherwise it's no view. A closure that captured it by reference sees
+// the new value too
 attach fn note_loan(this: checker&, c: u32, name: str, v: tval&) -> void {
+    this.fresh_loan(c, v.loan);
+    var gone: std::vec<u32> = {};
+    for (e) in this.cx.loans.iter() {
+        if (e.value->uses_at != null && (e.value->uses_at ?? 0) == c) {
+            put(&gone, *e.key);
+        }
+    }
+    for (k&) in gone.items() {
+        this.fresh_loan(*k, v.loan);
+    }
+    if (v.loan == null) {
+        return;
+    }
+    this.cx.loans.put(c, { owner: v.loan ?? { root: 0, path: "", name: "" }, view_name: name, uses: v.loan_uses, uses_at: v.loan_uses_at });
+}
+
+// the view (or closure using one) at place c is fresh: not stale, on the loop's next pass either;
+// it looks into owner now, or is no view when that's null
+attach fn fresh_loan(this: checker&, c: u32, owner: place_at?) -> void {
     this.cx.moved.remove(c | STALE);
-    // a view given a new value in a loop isn't read stale on the loop's next pass
     for (i) in 0..this.cx.loops.len {
         this.cx.loops.at(i).fresh_views.add(c);
     }
-    if (v.loan == null) {
+    if (owner == null) {
         this.cx.loans.remove(c);
         return;
     }
-    this.cx.loans.put(c, { owner: v.loan ?? { root: 0, path: "", name: "" }, view_name: name, uses: v.loan_uses });
+    val ln = this.cx.loans.get(c);
+    if (ln) {
+        ln->owner = owner ?? { root: 0, path: "", name: "" };
+    }
 }
 
 // a read of the local l at span: when it's a view, warn if it may be stale, and keep the read for the

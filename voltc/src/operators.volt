@@ -868,10 +868,10 @@ attach fn assign(this: checker&, op: binop?, le: expr&, re: expr&, span: span) -
                 val loc = lo ?? { c: 0, ty: 0, mutable: false };
                 val r = try this.expr(re, l.ty);
                 this.note_store(&l, &r);
+                this.assigned(le, l.ty, span);
                 if (fresh) {
                     this.note_loan(fresh, fresh_name, &r);
                 }
-                this.assigned(le, l.ty, span);
                 if (!this.coercible(&r, l.ty) || this.narrow_recheck(&loc)) {
                     var whole = vpure(loc.orig_ty, loc.orig_c ?? 0);
                     whole.lv = true;
@@ -883,6 +883,8 @@ attach fn assign(this: checker&, op: binop?, le: expr&, re: expr&, span: span) -
         }
         val rr = try this.expr(re, l.ty);
         this.note_store(&l, &rr);
+        // the old value's views first: a view made from it (v = v.next()) is the new value's
+        this.assigned(le, l.ty, span);
         if (fresh) {
             this.note_loan(fresh, fresh_name, &rr);
             this.note_held(fresh, l.ty, re, true);
@@ -901,7 +903,6 @@ attach fn assign(this: checker&, op: binop?, le: expr&, re: expr&, span: span) -
                 default => {},
             }
         }
-        this.assigned(le, l.ty, span);
         return this.store(l, rr, re.span);
     }
     val bop = op ?? binop::ADD;

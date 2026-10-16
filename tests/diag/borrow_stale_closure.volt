@@ -35,4 +35,25 @@ fn main() -> void {
         std::println(v.len);
         more();
     }
+    // a closure that captured a view by reference sees the view got again
+    var qs: std::vec<i32> = {};
+    var q = qs.items();
+    val h = |q&| () -> usize { return q.len; };
+    qs.push(1) catch @panic("out of memory");
+    q = qs.items();
+    std::println(h());
+    var b: holder = {};
+    std::println(b.peek());
+}
+// a closure capturing this (through a local) changes this.items, not this.a
+struct holder {
+    a: std::vec<i32> = {};
+    items: std::vec<i32> = {};
+}
+attach fn peek(this: holder&) -> usize {
+    val s = this.a.items();
+    val me = this;
+    val add = |me| () { me.items.push(1) catch @panic("out of memory"); };
+    add();
+    return s.len;
 }
