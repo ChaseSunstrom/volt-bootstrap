@@ -400,7 +400,7 @@ attach fn coerce(this: checker&, v: tval, to: u32, span: span) -> compile_error!
                                 // a u128 past i128's range: the same bits, as a typed value
                                 return vpure(to, this.ir.int(w, to));
                             }
-                            return fail(span, fmt2("{} doesn't fit in {}", num(n), S(k.name())));
+                            return fail(span, fmt2("{} doesn't fit in {}", num(n), k.fit_name()));
                         }
                         return this.int_lit(n, to);
                     },

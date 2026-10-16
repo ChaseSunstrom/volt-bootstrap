@@ -24,6 +24,10 @@ fn targets() -> std::vec<target_info> {
     put(&v, { name: "thumbv6m-none", triple: "thumbv6m-none-eabi", cpu: "cortex-m0", features: "", arch: "arm", bits: "32", cfg: { "os=none", "arch=arm", "target=thumbv6m-none", "pointer_bits=32" } });
     put(&v, { name: "thumbv7m-none", triple: "thumbv7m-none-eabi", cpu: "cortex-m3", features: "", arch: "arm", bits: "32", cfg: { "os=none", "arch=arm", "target=thumbv7m-none", "pointer_bits=32" } });
     put(&v, { name: "thumbv7em-none", triple: "thumbv7em-none-eabi", cpu: "cortex-m4", features: "", arch: "arm", bits: "32", cfg: { "os=none", "arch=arm", "target=thumbv7em-none", "pointer_bits=32" } });
+    // WebAssembly, linked by wasm-ld: a page's module (its console and exit imported from env) and a
+    // WASI one (fd_write and proc_exit); std's runtime is bare metal's on both (os=none)
+    put(&v, { name: "wasm32-none", triple: "wasm32-unknown-unknown", cpu: "generic", features: "", arch: "wasm32", bits: "32", cfg: { "os=none", "arch=wasm32", "target=wasm32-none", "pointer_bits=32" } });
+    put(&v, { name: "wasm32-wasi", triple: "wasm32-unknown-wasip1", cpu: "generic", features: "", arch: "wasm32", bits: "32", cfg: { "os=none", "arch=wasm32", "target=wasm32-wasi", "pointer_bits=32" } });
     return v;
 }
 

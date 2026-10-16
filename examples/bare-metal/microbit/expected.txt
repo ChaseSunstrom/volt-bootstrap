@@ -8,3 +8,4 @@ led off
 on 50.0% of the time, 0.5 of 1
 pointer: 0x1000 null
 format: true 3 blinks true
+usize: true true map 50 40425

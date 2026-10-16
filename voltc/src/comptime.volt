@@ -453,7 +453,7 @@ attach fn ct_coerce(this: checker&, v: cval, t: u32, span: span) -> compile_erro
             match (tt) {
                 .INT(k) => {
                     if (!ct_fits(k, x, from)) {
-                        return fail(span, fmt2("{} doesn't fit in {}", ct_num(x, from), S(k.name())));
+                        return fail(span, fmt2("{} doesn't fit in {}", ct_num(x, from), k.fit_name()));
                     }
                     return cval::INT(x, t);
                 },
@@ -1223,7 +1223,7 @@ attach fn ct_int_op(this: checker&, op: binop, x: i128, ta: u32, y: i128, tb: u3
     if (k) {
         val kk = k;
         if (!kk.fits(v)) {
-            return fail(span, fmt2("integer overflow at compile time: {} doesn't fit in {}", num(v), S(kk.name())));
+            return fail(span, fmt2("integer overflow at compile time: {} doesn't fit in {}", num(v), kk.fit_name()));
         }
     }
     return cval::INT(v, t);
@@ -1443,7 +1443,7 @@ attach fn ct_convert(this: checker&, v: cval, to: u32, unchecked: bool, span: sp
                 .INT(k) => {
                     if (!ct_fits(k, x, from)) {
                         if (!unchecked) {
-                            return fail(span, fmt2("{} doesn't fit in {}", ct_num(x, from), S(k.name())));
+                            return fail(span, fmt2("{} doesn't fit in {}", ct_num(x, from), k.fit_name()));
                         }
                         return cval::INT(wrap_bits(x, k.bits(), k.signed()), to);
                     }
@@ -3807,6 +3807,12 @@ attach fn vector_of(this: checker&, t: u32, n: u64, span: span) -> compile_error
     return this.t.intern(tyk::VECTOR(t, n));
 }
 
+// n pointers' (or usizes') layout on the target
+fn ptr_lay(n: u64) -> lay {
+    val p = @cast<u64>(usize_bits / 8);
+    return { size: p * n, align: p };
+}
+
 attach fn layout(this: checker&, t: u32, span: span) -> compile_error!lay {
     match (*this.t.get(t)) {
         .STRUCT(s) => {
@@ -3831,19 +3837,20 @@ attach fn layout(this: checker&, t: u32, span: span) -> compile_error!lay {
             val n = @cast<u64>(b / 8);
             return { size: n, align: n };
         },
-        .REF(x) => { return { size: 8, align: 8 }; },
-        .PTR(x) => { return { size: 8, align: 8 }; },
-        .VOIDPTR => { return { size: 8, align: 8 }; },
-        .CSTR => { return { size: 8, align: 8 }; },
-        .NULL => { return { size: 8, align: 8 }; },
-        .FN_PTR(ps, r, va) => { return { size: 8, align: 8 }; },
+        // a pointer is as wide as usize: 4 bytes on a 32-bit target
+        .REF(x) => { return ptr_lay(1); },
+        .PTR(x) => { return ptr_lay(1); },
+        .VOIDPTR => { return ptr_lay(1); },
+        .CSTR => { return ptr_lay(1); },
+        .NULL => { return ptr_lay(1); },
+        .FN_PTR(ps, r, va) => { return ptr_lay(1); },
         .ANYERR => { return { size: 4, align: 4 }; }, // a uint32_t code
-        .STR => { return { size: 16, align: 8 }; },
-        .SLICE(x) => { return { size: 16, align: 8 }; },
-        .FN_VAL(ps, r) => { return { size: 16, align: 8 }; },
+        .STR => { return ptr_lay(2); },
+        .SLICE(x) => { return ptr_lay(2); },
+        .FN_VAL(ps, r) => { return ptr_lay(2); },
         .OPT(i) => {
             if (this.t.is_niche(i)) {
-                return { size: 8, align: 8 };
+                return ptr_lay(1);
             }
             if (this.niche_field(i) != null) {
                 return this.layout(i, span);

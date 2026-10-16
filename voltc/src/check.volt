@@ -580,6 +580,15 @@ struct checker {
 
 fn new_checker(files: std::vec<source_file>&, o: opts) -> checker {
     var c: checker = { files: files, opts: move o, t: new_types(), cx: new_cx(VOID, 0, 0) };
+    // usize and isize are the target's pointer width: --target's (or --cfg pointer_bits=N's), else
+    // the host's
+    usize_bits = @cast<u32>(@sizeof(usize) * 8);
+    val pb = c.cfg_given("pointer_bits") ?? "";
+    if (pb == "32") {
+        usize_bits = 32;
+    } else if (pb == "64") {
+        usize_bits = 64;
+    }
     put(&c.nss, bx<ns_info>({}));
     put(&c.envs, bx<env>({ ns: 0 }));
     put(&c.error_names, { code: 1, name: "error", qual: "error" });

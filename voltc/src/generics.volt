@@ -1029,7 +1029,7 @@ attach fn check_bounds(this: checker&, gps: std::vec<gparam>&, binds: std::vec<g
                         if (k) {
                             val kk = k;
                             if (!kk.fits(v)) {
-                                return fmt3("{} = {} doesn't fit in {}", S(gp.name), num(v), S(kk.name()));
+                                return fmt3("{} = {} doesn't fit in {}", S(gp.name), num(v), kk.fit_name());
                             }
                         }
                     },
