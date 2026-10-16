@@ -116,13 +116,14 @@ attach fn changed(this: checker&, p: place_at&, what: str, via: str?, span: span
 }
 
 // the place e names (of type t) was given a new value at span: when the old one had something to
-// delete, the views into it look at what's gone. Plain data or a view given another (a reference
-// pointed elsewhere) frees nothing: the views made through it look into what it held, which it no
-// longer names, so they're no longer its
+// delete, the views into it look at what's gone, and a loop over its items (or a field's) warns.
+// Plain data or a view given another (a reference pointed elsewhere) frees nothing: the views made
+// through it look into what it held, which it no longer names, so they're no longer its
 attach fn assigned(this: checker&, e: expr&, t: u32, span: span) -> void {
     val p = this.place_at_of(e) ?? return;
     if (this.needs_drop(t) catch false) {
         this.changed(&p, "", null, span);
+        this.changed_in_loop(&p, "", span);
         return;
     }
     var gone: std::vec<u32> = {};
@@ -150,14 +151,31 @@ attach fn invalidate(this: checker&, inst: u32, owner: place_at&, span: span) ->
         what = fd->name;
     }
     this.changed(owner, what, null, span);
+    this.changed_in_loop(owner, what, span);
+}
+
+// a change at place p at span (a call of the method what, or a new value when what is ""): a for
+// loop going over the items at p or a field of it is warned about
+attach fn changed_in_loop(this: checker&, p: place_at&, what: str, span: span) -> void {
+    if (this.cx.dead > 0) {
+        return;
+    }
     for (it&) in this.cx.iterating.items() {
-        if (covers(owner, &it.owner)) {
-            var msg = S(owner.name);
-            msg.push('.');
-            msg.append(what);
+        if (covers(p, &it.owner)) {
+            var msg = S(p.name);
+            var does = "may move or free";
+            if (what.len == 0) {
+                msg.append(" given a new value");
+                does = "frees";
+            } else {
+                msg.push('.');
+                msg.append(what);
+            }
             msg.append(" inside a loop over ");
             msg.append(it.owner.name);
-            msg.append("'s items: the loop goes on over the old ones, which this may move or free; collect the changes and make them after the loop");
+            msg.append("'s items: the loop goes on over the old ones, which this ");
+            msg.append(does);
+            msg.append("; collect the changes and make them after the loop");
             var d: diag = { span: span, msg: move msg, warning: true };
             put(&d.labels, { span: it.span, msg: fmt("the loop over {}", S(it.owner.name)) });
             put(&this.warnings, move d);
