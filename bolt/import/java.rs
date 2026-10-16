@@ -138,8 +138,10 @@ fn class_files(p: &Path, out: &mut Vec<PathBuf>) {
 /// a Java program printing what classes export, a declaration a line (tab-separated). Its
 /// arguments: the class path, then the directories and jars whose classes it reads.
 ///   class BINARY_NAME class|abstract|interface|enum, then super BINARY_NAME (every imported-or-not
-///   supertype but Object), value NAME (an enum's), ctor THROWS DESCRIPTOR NAMES,
-///   method NAME static|inst THROWS DESCRIPTOR NAMES, field NAME static|inst final|mut DESCRIPTOR; end
+///   supertype but Object), value NAME (an enum's), ctor THROWS DESCRIPTOR NAMES GENERIC_PARAMS,
+///   method NAME static|inst THROWS DESCRIPTOR NAMES GENERIC_PARAMS GENERIC_RESULT TYPE_VARS,
+///   field NAME static|inst final|mut DESCRIPTOR; end (GENERIC_PARAMS: the parameters' generic types,
+///   java.util.List<java.lang.Integer>, split by |; TYPE_VARS: the method's own, by ,)
 ///   other NAME WHY
 const DESCRIBE: &str = r#"import java.io.File;
 import java.lang.reflect.*;
@@ -176,6 +178,23 @@ public class Describe {
             b.append(d(p));
         }
         return b.append(")").append(d(r)).toString();
+    }
+
+    // the generic types as Java spells them (java.util.Map<java.lang.String, java.lang.Integer>, T)
+    static String gnames(Type[] ts) {
+        StringJoiner j = new StringJoiner("|");
+        for (Type t : ts) {
+            j.add(t.getTypeName());
+        }
+        return j.toString();
+    }
+
+    static String tvars(TypeVariable<?>[] vs) {
+        StringJoiner j = new StringJoiner(",");
+        for (TypeVariable<?> v : vs) {
+            j.add(v.getName());
+        }
+        return j.toString();
     }
 
     static String names(Parameter[] ps) {
@@ -255,7 +274,7 @@ public class Describe {
                     Constructor<?>[] ks = c.getConstructors();
                     Arrays.sort(ks, Comparator.comparing((Constructor<?> k) -> sig(k.getParameterTypes(), void.class)));
                     for (Constructor<?> k : ks) {
-                        System.out.println("ctor\t" + (k.getExceptionTypes().length > 0 ? 1 : 0) + "\t" + sig(k.getParameterTypes(), void.class) + "\t" + names(k.getParameters()));
+                        System.out.println("ctor\t" + (k.getExceptionTypes().length > 0 ? 1 : 0) + "\t" + sig(k.getParameterTypes(), void.class) + "\t" + names(k.getParameters()) + "\t" + gnames(k.getGenericParameterTypes()));
                     }
                 }
                 Method[] ms = c.getMethods();
@@ -269,7 +288,7 @@ public class Describe {
                     if (c.isEnum() && st && (m.getName().equals("values") || m.getName().equals("valueOf"))) {
                         continue;
                     }
-                    System.out.println("method\t" + m.getName() + "\t" + (st ? "static" : "inst") + "\t" + (m.getExceptionTypes().length > 0 ? 1 : 0) + "\t" + sig(m.getParameterTypes(), m.getReturnType()) + "\t" + names(m.getParameters()));
+                    System.out.println("method\t" + m.getName() + "\t" + (st ? "static" : "inst") + "\t" + (m.getExceptionTypes().length > 0 ? 1 : 0) + "\t" + sig(m.getParameterTypes(), m.getReturnType()) + "\t" + names(m.getParameters()) + "\t" + gnames(m.getGenericParameterTypes()) + "\t" + m.getGenericReturnType().getTypeName() + "\t" + tvars(m.getTypeParameters()));
                 }
                 Field[] fs = c.getFields();
                 Arrays.sort(fs, Comparator.comparing(Field::getName));
@@ -295,6 +314,11 @@ struct Member {
     throws: bool,
     sig: String,
     params: Vec<String>,
+    /// the parameters' and result's generic types as Java spells them (empty: none read)
+    gparams: Vec<String>,
+    gret: String,
+    /// the method's own type variables
+    tvars: Vec<String>,
 }
 
 struct Field {
@@ -324,6 +348,9 @@ fn read(desc: &str) -> (Vec<Class>, Vec<String>) {
         throws: f.get(k) == Some(&"1"),
         sig: f.get(k + 1).unwrap_or(&"").to_string(),
         params: f.get(k + 2).filter(|s| !s.is_empty()).map(|s| s.split(',').map(str::to_string).collect()).unwrap_or_default(),
+        gparams: f.get(k + 3).filter(|s| !s.is_empty()).map(|s| s.split('|').map(str::to_string).collect()).unwrap_or_default(),
+        gret: f.get(k + 4).unwrap_or(&"").to_string(),
+        tvars: f.get(k + 5).filter(|s| !s.is_empty()).map(|s| s.split(',').map(str::to_string).collect()).unwrap_or_default(),
     };
     for line in desc.lines() {
         let f: Vec<&str> = line.split('\t').collect();
@@ -380,6 +407,44 @@ enum JT {
     /// an imported class or interface, by its Volt name
     Obj(String),
     Enum(String),
+    /// a List, Set or other Collection (the class a copy going in is made as: java.util.ArrayList),
+    /// copied: a slice going in, a std::vec coming out
+    Coll(&'static str, Box<JT>),
+    /// a Map (the class a copy going in is made as), copied as a std::map
+    Map(&'static str, Box<JT>, Box<JT>),
+    /// a type variable of the method's own: a Volt generic, its values boxed through Java
+    Var(String),
+    /// a class the import doesn't have (java.time.Duration, Object): a java_object
+    Other,
+}
+
+/// the boxes of the primitives: descriptor letter, Java's class, its unboxing method
+const BOXES: [(char, &str, &str); 8] = [('Z', "java/lang/Boolean", "booleanValue"), ('B', "java/lang/Byte", "byteValue"), ('C', "java/lang/Character", "charValue"), ('S', "java/lang/Short", "shortValue"), ('I', "java/lang/Integer", "intValue"), ('J', "java/lang/Long", "longValue"), ('F', "java/lang/Float", "floatValue"), ('D', "java/lang/Double", "doubleValue")];
+
+/// does Volt type text k name type variable t (T in T, T[..], std::vec<T>, but not in Tag)
+fn mentions(k: &str, t: &str) -> bool {
+    k.split(|c: char| !(c.is_alphanumeric() || c == '_')).any(|w| w == t)
+}
+
+/// a generic type's base and its arguments: java.util.Map<java.lang.String, java.util.List<T>> is
+/// (java.util.Map, [java.lang.String, java.util.List<T>])
+fn generic_args(g: &str) -> Option<(&str, Vec<&str>)> {
+    let open = g.find('<')?;
+    let inner = g[open + 1..].strip_suffix('>')?;
+    let (mut args, mut depth, mut start) = (Vec::new(), 0, 0);
+    for (i, ch) in inner.char_indices() {
+        match ch {
+            '<' => depth += 1,
+            '>' => depth -= 1,
+            ',' if depth == 0 => {
+                args.push(inner[start..i].trim());
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    args.push(inner[start..].trim());
+    Some((&g[..open], args))
 }
 
 /// the primitives: descriptor letter, Volt type, JNI's name for it, jvalue's member, JNI's C type
@@ -416,15 +481,64 @@ impl Gen<'_> {
                     prim(k)?;
                     JT::Prim(k)
                 } else {
-                    let (v, is_enum) = self.names.get(d.strip_prefix('L')?.strip_suffix(';')?)?;
-                    if *is_enum {
-                        JT::Enum(v.clone())
-                    } else {
-                        JT::Obj(v.clone())
+                    let bin = d.strip_prefix('L')?.strip_suffix(';')?;
+                    match self.names.get(bin) {
+                        Some((v, true)) => JT::Enum(v.clone()),
+                        Some((v, false)) => JT::Obj(v.clone()),
+                        None => JT::Other,
                     }
                 }
             }
         })
+    }
+
+    /// a type from its descriptor d and its generic type g as Java spells it (empty: none read): a
+    /// collection of what crosses as an element, a map, or a type variable in tvars
+    fn jt_g(&self, d: &str, g: &str, tvars: &[String]) -> Option<JT> {
+        if tvars.iter().any(|t| t == g) {
+            return Some(JT::Var(g.to_string()));
+        }
+        if let Some((base, args)) = generic_args(g) {
+            let made = match base {
+                "java.util.List" | "java.util.Collection" | "java.lang.Iterable" | "java.util.ArrayList" => Some("java/util/ArrayList"),
+                "java.util.LinkedList" => Some("java/util/LinkedList"),
+                "java.util.Set" | "java.util.HashSet" | "java.util.LinkedHashSet" => Some("java/util/LinkedHashSet"),
+                "java.util.SortedSet" | "java.util.NavigableSet" | "java.util.TreeSet" => Some("java/util/TreeSet"),
+                _ => None,
+            };
+            if let (Some(c), [a]) = (made, args.as_slice()) {
+                return Some(JT::Coll(c, Box::new(self.elem(a, tvars)?)));
+            }
+            let map = match base {
+                "java.util.Map" | "java.util.HashMap" | "java.util.LinkedHashMap" => Some("java/util/LinkedHashMap"),
+                "java.util.SortedMap" | "java.util.NavigableMap" | "java.util.TreeMap" => Some("java/util/TreeMap"),
+                _ => None,
+            };
+            if let (Some(c), [k, v]) = (map, args.as_slice()) {
+                return Some(JT::Map(c, Box::new(self.elem(k, tvars)?), Box::new(self.elem(v, tvars)?)));
+            }
+        }
+        self.jt(d)
+    }
+
+    /// an element of a collection or map, as Java spells its type: a boxed primitive, a String, an
+    /// imported class or enum, or a type variable
+    fn elem(&self, g: &str, tvars: &[String]) -> Option<JT> {
+        if tvars.iter().any(|t| t == g) {
+            return Some(JT::Var(g.to_string()));
+        }
+        let bin = g.replace('.', "/");
+        if let Some(b) = BOXES.iter().find(|b| b.1 == bin) {
+            return Some(JT::Prim(b.0));
+        }
+        if bin == "java/lang/String" {
+            return Some(JT::Str);
+        }
+        match self.names.get(&bin) {
+            Some((v, true)) => Some(JT::Enum(v.clone())),
+            Some((v, false)) => Some(JT::Obj(v.clone())),
+            None => None,
+        }
     }
 
     /// the Volt type of a parameter (or field value) of this type
@@ -437,6 +551,18 @@ impl Gen<'_> {
             JT::Obj(n) => format!("{n}&"),
             JT::Enum(n) => n.clone(),
             JT::Void => "void".into(),
+            JT::Coll(_, e) => format!("{}[..]", Self::elem_in(e)),
+            JT::Map(_, k, v) => format!("std::map<{}, {}>&", Self::ty_out(k), Self::ty_out(v)),
+            JT::Var(t) => t.clone(),
+            JT::Other => "java_object&".into(),
+        }
+    }
+
+    /// a collection element's Volt type going in (in a slice)
+    fn elem_in(t: &JT) -> String {
+        match t {
+            JT::Obj(n) => n.clone(),
+            t => Self::ty_in(t),
         }
     }
 
@@ -447,6 +573,9 @@ impl Gen<'_> {
             JT::Arr('T') => "std::vec<std::string>".into(),
             JT::Arr(k) => format!("std::vec<{}>", prim(*k).unwrap_or("void")),
             JT::Obj(n) => n.clone(),
+            JT::Coll(_, e) => format!("std::vec<{}>", Self::ty_out(e)),
+            JT::Map(_, k, v) => format!("std::map<{}, {}>", Self::ty_out(k), Self::ty_out(v)),
+            JT::Other => "java_object".into(),
             t => Self::ty_in(t),
         }
     }
@@ -467,8 +596,11 @@ impl Gen<'_> {
             JT::Arr('T') => (vec![], format!("java_rt::arr_T(j_e, {v})"), vec![]),
             // Java's changes to the array come back
             JT::Arr(k) => (vec![format!("val {v}_j = java_rt::arr_{k}(j_e, {v});")], format!("{v}_j"), vec![format!("java_rt::back_{k}(j_e, {v}_j, {v});")]),
-            JT::Obj(_) => (vec![], format!("{v}.o.r"), vec![]),
+            JT::Obj(_) | JT::Other => (vec![], format!("{v}.o.r"), vec![]),
             JT::Enum(n) => (vec![], format!("java_rt::to_{n}(j_e, {v})"), vec![]),
+            JT::Coll(c, _) => (vec![], format!("java_rt::coll_of(j_e, \"{c}\", {v})"), vec![]),
+            JT::Map(c, _, _) => (vec![], format!("java_rt::map_of(j_e, \"{c}\", {v})"), vec![]),
+            JT::Var(_) => (vec![], format!("java_rt::box(j_e, &{v})"), vec![]),
             _ => (vec![], v.to_string(), vec![]),
         }
     }
@@ -482,6 +614,12 @@ impl Gen<'_> {
             JT::Arr(k) => vec![format!("return java_rt::take_{k}(j_e, j_r);")],
             JT::Obj(n) => vec![format!("val j_v: {n} = {{ o: java_rt::own(j_e, j_r) }};"), "return j_v;".into()],
             JT::Enum(n) => vec![format!("return java_rt::of_{n}(java_rt::ordinal(j_e, j_r));")],
+            JT::Other => vec!["val j_v: java_object = { o: java_rt::own(j_e, j_r) };".into(), "return j_v;".into()],
+            // copies (their element types given: they're only in the result), and a type variable's
+            // value unboxed as the instance's type
+            JT::Coll(_, e) => vec![format!("return java_rt::vec_of<{}>(j_e, j_r);", Self::ty_out(e))],
+            JT::Map(_, k, v) => vec![format!("return java_rt::map_out<{}, {}>(j_e, j_r);", Self::ty_out(k), Self::ty_out(v))],
+            JT::Var(t) => vec![format!("val j_v: {t} = java_rt::unbox(j_e, j_r);"), "return j_v;".into()],
         }
     }
 
@@ -518,11 +656,11 @@ impl Gen<'_> {
         let ctor = m.name == "<init>";
         let what = if ctor { format!("{cv}::new") } else { format!("{cv}::{}", m.name) };
         let (ps, ret) = split_desc(&m.sig).ok_or(format!("{what} (its descriptor)"))?;
-        let ret = if ctor { JT::Obj(cv.to_string()) } else { self.jt(&ret).ok_or(format!("{what} (its return type)"))? };
+        let ret = if ctor { JT::Obj(cv.to_string()) } else { self.jt_g(&ret, &m.gret, &m.tvars).ok_or(format!("{what} (its return type)"))? };
         let (mut params, mut pre, mut args, mut post, mut key) = (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new());
         for (i, d) in ps.iter().enumerate() {
             let pn = Self::param_name(m.params.get(i).map_or("", String::as_str), i);
-            let t = self.jt(d).ok_or(format!("{what} (parameter {pn}'s type)"))?;
+            let t = self.jt_g(d, m.gparams.get(i).map_or("", String::as_str), &m.tvars).ok_or(format!("{what} (parameter {pn}'s type)"))?;
             params.push(format!("{pn}: {}", Self::ty_in(&t)));
             key.push(Self::ty_in(&t));
             let (p0, raw, p1) = Self::raw(&t, &pn);
@@ -576,7 +714,10 @@ impl Gen<'_> {
         l.extend(Self::check(m.throws));
         l.extend(post);
         l.extend(Self::result(&ret));
-        Ok(Self::func(&format!("attach fn {vn}({}) -> {rt}", head_params.join(", ")), &l))
+        // its type variables a Volt generic's (Java erases them: one function, the values boxed)
+        let used: Vec<&String> = m.tvars.iter().filter(|t| key.iter().chain([&rt]).any(|k| mentions(k, t))).collect();
+        let generics = if used.is_empty() { String::new() } else { format!("<{}>\n", used.iter().map(|t| format!("{t}: type")).collect::<Vec<_>>().join(", ")) };
+        Ok(format!("{generics}{}", Self::func(&format!("attach fn {vn}({}) -> {rt}", head_params.join(", ")), &l)))
     }
 
     /// a declared exception is the caller's to handle; any other stops the program
@@ -646,7 +787,7 @@ fn generate(alias: &str, classes: &[Class], mut left: Vec<String>, cp: &[String]
     let mut names = BTreeMap::new();
     for c in classes {
         let v = volt_class(&c.bin);
-        if count[&v] > 1 || v == "java_rt" || v == "java_error" {
+        if count[&v] > 1 || v == "java_rt" || v == "java_error" || v == "java_object" {
             left.push(format!("{} (another class is called {v})", c.bin.replace('/', ".")));
         } else {
             names.insert(c.bin.clone(), (v, c.kind == "enum"));
@@ -655,6 +796,14 @@ fn generate(alias: &str, classes: &[Class], mut left: Vec<String>, cp: &[String]
     let mut g = Gen { alias, names, slots: String::new(), n: 0, left: Vec::new() };
     let mut decls = String::new();
     let mut helpers = String::new();
+    // an object of a class the import doesn't have (java.time.Duration, Object): Object's
+    // toString() and equals()
+    let (oc, ots, oeq) = (g.slot("jclass"), g.slot("jmethodID"), g.slot("jmethodID"));
+    let _ = write!(
+        decls,
+        "\n// an object of a class the import doesn't have (java.time.Duration, Object): a reference (a copy refers\n// to the same one), its toString() and equals()\nstruct java_object {{\n    o: java_rt::ref = {{}};\n}}\n\nattach fn is_null(this: java_object&) -> bool {{\n    return this.o.r == null;\n}}\n\nattach fn toString(this: java_object&) -> std::string {{\n    val j_e = java_rt::env();\n    val j_f = java_rt::frame(j_e);\n    java_rt::live(this.o.r, \"{alias}::java_object\");\n    val j_c = java_rt::cls(&java_rt::{oc}, j_e, \"java.lang.Object\");\n    val j_m = java_rt::mid(&java_rt::{ots}, j_e, j_c, false, \"toString\", \"()Ljava/lang/String;\");\n    val j_r = java_rt::call_L(j_e, this.o.r, j_m, null);\n    java_rt::thrown(j_e);\n    return java_rt::take_str(j_e, j_r);\n}}\n\nattach fn equals(this: java_object&, other: java_object&) -> bool {{\n    val j_e = java_rt::env();\n    val j_f = java_rt::frame(j_e);\n    java_rt::live(this.o.r, \"{alias}::java_object\");\n    val j_c = java_rt::cls(&java_rt::{oc}, j_e, \"java.lang.Object\");\n    val j_m = java_rt::mid(&java_rt::{oeq}, j_e, j_c, false, \"equals\", \"(Ljava/lang/Object;)Z\");\n    val j_a: java_rt::jni::jvalue[1] = {{ java_rt::jv_L(other.o.r) }};\n    val j_r = java_rt::call_Z(j_e, this.o.r, j_m, &j_a[0]);\n    java_rt::thrown(j_e);\n    return j_r;\n}}\n"
+    );
+    let _ = write!(helpers, "    fn box(e: jni::JNIEnv*, x: {alias}::java_object&) -> jni::jobject {{\n        return (fns(e)->NewLocalRef ?? @panic(\"JNI\"))(e, x.o.r);\n    }}\n    fn unbox(e: jni::JNIEnv*, o: jni::jobject) -> {alias}::java_object {{\n        val v: {alias}::java_object = {{ o: own(e, o) }};\n        return v;\n    }}\n");
     for c in classes {
         let Some((cv, is_enum)) = g.names.get(&c.bin).cloned() else { continue };
         let dotted = c.bin.replace('/', ".");
@@ -676,6 +825,7 @@ fn generate(alias: &str, classes: &[Class], mut left: Vec<String>, cp: &[String]
             let _ = write!(of, "        return {alias}::{cv}::{first};\n    }}\n");
             helpers.push_str(&to);
             helpers.push_str(&of);
+            let _ = write!(helpers, "    fn box(e: jni::JNIEnv*, x: {alias}::{cv}&) -> jni::jobject {{\n        return to_{cv}(e, *x);\n    }}\n    fn unbox(e: jni::JNIEnv*, o: jni::jobject) -> {alias}::{cv} {{\n        return of_{cv}(ordinal(e, o));\n    }}\n");
             let _ = write!(decls, "\n// the Java enum {dotted}\nenum {cv}: i32 {{\n{body}}}\n");
         } else {
             let what = match c.kind.as_str() {
@@ -685,6 +835,8 @@ fn generate(alias: &str, classes: &[Class], mut left: Vec<String>, cp: &[String]
             };
             let _ = write!(decls, "\n// the Java {what} {dotted}: a reference to an object (a copy refers to the same one)\nstruct {cv} {{\n    o: java_rt::ref = {{}};\n}}\n\n");
             let _ = write!(decls, "attach fn is_null(this: {cv}&) -> bool {{\n    return this.o.r == null;\n}}\n");
+            // in a collection or as a generic's value: a local reference to the object, and back
+            let _ = write!(helpers, "    fn box(e: jni::JNIEnv*, x: {alias}::{cv}&) -> jni::jobject {{\n        return (fns(e)->NewLocalRef ?? @panic(\"JNI\"))(e, x.o.r);\n    }}\n    fn unbox(e: jni::JNIEnv*, o: jni::jobject) -> {alias}::{cv} {{\n        val v: {alias}::{cv} = {{ o: own(e, o) }};\n        return v;\n    }}\n");
             for s in &c.supers {
                 if let Some((sv, false)) = g.names.get(s).cloned() {
                     let _ = write!(decls, "\n// as a {}: the same object\nattach fn as_{sv}(this: {cv}&) -> {sv} {{\n    return {{ o: copy this.o }};\n}}\n", s.replace('/', "."));
@@ -716,6 +868,8 @@ fn generate(alias: &str, classes: &[Class], mut left: Vec<String>, cp: &[String]
     let cps = cp.iter().map(|p| format!("\"{}\"", p.replace('\\', "\\\\").replace('"', "\\\""))).collect::<Vec<_>>();
     let mut rt = RUNTIME.replace("{JNI}", &jni_h.display().to_string().replace('\\', "\\\\")).replace("{N}", &cps.len().to_string()).replace("{CP}", &cps.join(", "));
     rt.push_str(&kinds());
+    rt.push_str(&boxes());
+    rt.push_str(COPIES);
     let mut volt = format!("// use java {{ ... }} as {alias}: the classes' public API, called through JNI (written by bolt import)\n\nnamespace java_rt {{\n{rt}\n{}\n{helpers}}}\n", g.slots);
     volt.push_str("\n// an exception a Java method declares (its throws), as its toString()\nerror java_error {\n    THROWN: std::string,\n}\n");
     volt.push_str(&decls);
@@ -757,6 +911,125 @@ fn kinds() -> String {
     }
     s
 }
+
+/// java_rt's boxes: a value of each primitive as its Java box and back (Integer.valueOf, intValue),
+/// by reference as a generic's values are passed (box's overloads by type, unbox's by result)
+fn boxes() -> String {
+    let mut s = String::new();
+    for (k, vt, _, _, _) in KINDS {
+        let (_, bin, get) = BOXES.iter().find(|b| b.0 == k).copied().unwrap_or(('I', "java/lang/Integer", "intValue"));
+        let _ = write!(
+            s,
+            "    var box_c_{k}: jni::jclass = null;\n    var box_new_{k}: jni::jmethodID = null;\n    var box_get_{k}: jni::jmethodID = null;\n    fn box_class_{k}(e: jni::JNIEnv*) -> jni::jclass {{\n        if (box_c_{k} == null) {{\n            val t = fns(e);\n            box_c_{k} = (t->NewGlobalRef ?? @panic(\"JNI\"))(e, (t->FindClass ?? @panic(\"JNI\"))(e, \"{bin}\"));\n        }}\n        return box_c_{k};\n    }}\n    fn box(e: jni::JNIEnv*, x: {vt}&) -> jni::jobject {{\n        val c = box_class_{k}(e);\n        val m = mid(&box_new_{k}, e, c, true, \"valueOf\", \"({k})L{bin};\");\n        val a: jni::jvalue[1] = {{ jv_{k}(*x) }};\n        return scall_L(e, c, m, &a[0]);\n    }}\n    fn unbox(e: jni::JNIEnv*, o: jni::jobject) -> {vt} {{\n        val m = mid(&box_get_{k}, e, box_class_{k}(e), false, \"{get}\", \"(){k}\");\n        return call_{k}(e, o, m, null);\n    }}\n"
+        );
+    }
+    s
+}
+
+/// java_rt's copies of collections and maps (both ways), and strings as a generic's values
+const COPIES: &str = r#"    fn box(e: jni::JNIEnv*, x: str&) -> jni::jobject {
+        return jstr(e, *x);
+    }
+    fn box(e: jni::JNIEnv*, x: std::string&) -> jni::jobject {
+        return jstr(e, x.as_str());
+    }
+    fn unbox(e: jni::JNIEnv*, o: jni::jobject) -> std::string {
+        return take_str(e, o);
+    }
+    // a new object of a JDK class (java/util/ArrayList) made with no arguments
+    fn new_jdk(e: jni::JNIEnv*, bin: cstr) -> jni::jobject {
+        val t = fns(e);
+        val c = (t->FindClass ?? @panic("JNI"))(e, bin);
+        val k = (t->GetMethodID ?? @panic("JNI"))(e, c, "<init>", "()V");
+        val o = (t->NewObjectA ?? @panic("JNI"))(e, c, k, null);
+        thrown(e);
+        return o;
+    }
+    fn method(e: jni::JNIEnv*, o: jni::jobject, name: cstr, sig: cstr) -> jni::jmethodID {
+        val t = fns(e);
+        return (t->GetMethodID ?? @panic("JNI"))(e, (t->GetObjectClass ?? @panic("JNI"))(e, o), name, sig);
+    }
+    // a collection of class bin (a List or Set) holding copies of xs' values, boxed
+    <T: type>
+    fn coll_of(e: jni::JNIEnv*, bin: cstr, xs: T[..]) -> jni::jobject {
+        val o = new_jdk(e, bin);
+        val add = method(e, o, "add", "(Ljava/lang/Object;)Z");
+        for (x&) in xs {
+            val b = box(e, x);
+            val a: jni::jvalue[1] = { jv_L(b) };
+            call_Z(e, o, add, &a[0]);
+            thrown(e);
+            (fns(e)->DeleteLocalRef ?? @panic("JNI"))(e, b);
+        }
+        return o;
+    }
+    // a map of class bin holding copies of m's entries, boxed
+    <K: type, V: type>
+    fn map_of(e: jni::JNIEnv*, bin: cstr, m: std::map<K, V>&) -> jni::jobject {
+        val o = new_jdk(e, bin);
+        val put = method(e, o, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;");
+        for (en) in m.iter() {
+            val k = box(e, en.key);
+            val v = box(e, en.value);
+            val a: jni::jvalue[2] = { jv_L(k), jv_L(v) };
+            val old = call_L(e, o, put, &a[0]);
+            thrown(e);
+            (fns(e)->DeleteLocalRef ?? @panic("JNI"))(e, old);
+            (fns(e)->DeleteLocalRef ?? @panic("JNI"))(e, k);
+            (fns(e)->DeleteLocalRef ?? @panic("JNI"))(e, v);
+        }
+        return o;
+    }
+    // a collection's values, unboxed, through its toArray()
+    fn elements(e: jni::JNIEnv*, o: jni::jobject) -> jni::jobject {
+        val r = call_L(e, o, method(e, o, "toArray", "()[Ljava/lang/Object;"), null);
+        thrown(e);
+        return r;
+    }
+    <T: type>
+    fn vec_of(e: jni::JNIEnv*, o: jni::jobject) -> std::vec<T> {
+        var out: std::vec<T> = {};
+        if (o == null) {
+            return out;
+        }
+        val t = fns(e);
+        val a = elements(e, o);
+        val n = (t->GetArrayLength ?? @panic("JNI"))(e, a);
+        for (i) in 0..n {
+            val x = (t->GetObjectArrayElement ?? @panic("JNI"))(e, a, i);
+            val v: T = unbox(e, x);
+            out.push(v) catch @panic("out of memory");
+            (t->DeleteLocalRef ?? @panic("JNI"))(e, x);
+        }
+        return out;
+    }
+    // a map's entries, unboxed, through entrySet().toArray()
+    <K: type, V: type>
+    fn map_out(e: jni::JNIEnv*, o: jni::jobject) -> std::map<K, V> {
+        var out: std::map<K, V> = {};
+        if (o == null) {
+            return out;
+        }
+        val t = fns(e);
+        val es = call_L(e, o, method(e, o, "entrySet", "()Ljava/util/Set;"), null);
+        thrown(e);
+        val a = elements(e, es);
+        val n = (t->GetArrayLength ?? @panic("JNI"))(e, a);
+        for (i) in 0..n {
+            val en = (t->GetObjectArrayElement ?? @panic("JNI"))(e, a, i);
+            val kj = call_L(e, en, method(e, en, "getKey", "()Ljava/lang/Object;"), null);
+            val vj = call_L(e, en, method(e, en, "getValue", "()Ljava/lang/Object;"), null);
+            thrown(e);
+            val k: K = unbox(e, kj);
+            val v: V = unbox(e, vj);
+            out.put(k, v);
+            (t->DeleteLocalRef ?? @panic("JNI"))(e, kj);
+            (t->DeleteLocalRef ?? @panic("JNI"))(e, vj);
+            (t->DeleteLocalRef ?? @panic("JNI"))(e, en);
+        }
+        return out;
+    }
+"#;
 
 /// java_rt's fixed part: the JVM, references, exceptions, strings, the class loader
 const RUNTIME: &str = r#"    use { "{JNI}" } as jni;
@@ -1045,7 +1318,17 @@ mod tests {
         assert_eq!(g.jt("[Ljava/lang/String;"), Some(JT::Arr('T')));
         assert_eq!(g.jt("Lgeo/Point;"), Some(JT::Obj("Point".into())));
         assert_eq!(g.jt("Lgeo/Color;"), Some(JT::Enum("Color".into())));
-        assert_eq!(g.jt("Ljava/util/List;"), None);
+        // a class the import doesn't have is an object; a collection or map read from its generic type
+        assert_eq!(g.jt("Ljava/util/List;"), Some(JT::Other));
+        let tv = vec!["T".to_string()];
+        assert_eq!(g.jt_g("Ljava/util/List;", "java.util.List<java.lang.Integer>", &[]), Some(JT::Coll("java/util/ArrayList", Box::new(JT::Prim('I')))));
+        assert_eq!(g.jt_g("Ljava/util/Set;", "java.util.Set<java.lang.String>", &[]), Some(JT::Coll("java/util/LinkedHashSet", Box::new(JT::Str))));
+        assert_eq!(g.jt_g("Ljava/util/Map;", "java.util.Map<java.lang.String, geo.Point>", &[]), Some(JT::Map("java/util/LinkedHashMap", Box::new(JT::Str), Box::new(JT::Obj("Point".into())))));
+        assert_eq!(g.jt_g("Ljava/util/List;", "java.util.List<T>", &tv), Some(JT::Coll("java/util/ArrayList", Box::new(JT::Var("T".into())))));
+        assert_eq!(g.jt_g("Ljava/lang/Object;", "T", &tv), Some(JT::Var("T".into())));
+        // an element that doesn't cross (another library's class) leaves the method out
+        assert_eq!(g.jt_g("Ljava/util/List;", "java.util.List<java.time.Duration>", &[]), None);
+        assert_eq!(generic_args("java.util.Map<java.lang.String, java.util.List<T>>"), Some(("java.util.Map", vec!["java.lang.String", "java.util.List<T>"])));
         assert_eq!(g.jt("[[I"), None);
         assert_eq!(g.jt("[Lgeo/Point;"), None);
         assert_eq!(volt_class("geo/Outer$Inner"), "Outer_Inner");

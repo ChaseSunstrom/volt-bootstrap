@@ -37,12 +37,16 @@ fn main() -> !void {
 | `boolean`, `byte`, `char`, `short`, `int`, `long`, `float`, `double` | `bool`, `i8`, `u16`, `i16`, `i32`, `i64`, `f32`, `f64` |
 | `String` | `str` in, `std::string` out (`null` is `""`) |
 | arrays of those and of `String` | `T[..]` in (what Java changes in it comes back), `std::vec<T>` out |
+| a `List`, `Set` or other `Collection` of boxed numbers (`Integer`), `String`, an imported class or enum | a copy: `T[..]` in (Java gets a new `ArrayList`, `LinkedHashSet` or `TreeSet`, as its parameter's type asks), `std::vec<T>` out |
+| a `Map` of those | a copy: `std::map<K, V>&` in (a new `LinkedHashMap` or `TreeMap`), `std::map<K, V>` out |
+| a generic method (`<T> T first(List<T>)`) | a Volt generic: `first(xs[..])` with numbers, strings or imported classes, boxed through Java (one function: Java erases the types). A type variable only in the result is given: `make<i32>()` |
+| a class the import doesn't have (`java.time.Duration`, `Object`), and a generic class's own type variable (`Box<T>`'s `T`, which Java erases to `Object`) | a `java_object`: `toString()`, `equals(&o)` and `is_null()` |
 | a method that declares exceptions (`throws`) | `java_error!T`; `java_error::THROWN` holds the exception's `toString()` |
 
 An exception a method doesn't declare stops the program with its text, as a Volt panic does. A
-method whose types aren't in the table (generic ones, collections, other libraries' classes) is
-left out, listed in a comment of the generated declarations (`VOLT_SHOW_IMPORT=1 voltc check
-main.volt` prints them). Each import loads its classes through
+method whose types aren't in the table (an array of an imported class, a collection of another
+library's classes) is left out, listed in a comment of the generated
+declarations (`VOLT_SHOW_IMPORT=1 voltc check main.volt` prints them). Each import loads its classes through
 a class loader of its own, so a program can import several, and they share the process's JVM.
 
 bolt needs a JDK: `$JAVA_HOME`, else the one whose `javac` is on the PATH (for `javac` and its

@@ -1,7 +1,7 @@
 use std::io;
 // Volt calling ordinary Java (nothing in it is written for Volt): the use line is all it takes,
 // with voltc run main.volt or in a bolt package. The JVM starts on first use
-use { "geo/Point.java", "geo/Shape.java", "geo/Circle.java", "geo/Color.java", "geo/Geom.java" } as geo;
+use { "geo/Point.java", "geo/Shape.java", "geo/Circle.java", "geo/Color.java", "geo/Geom.java", "geo/Generic.java" } as geo;
 
 fn run() -> geo::java_error!void {
     // constructors (overloaded), fields and methods; a static field
@@ -46,6 +46,24 @@ fn run() -> geo::java_error!void {
     std::println("{} words {} {}", geo::Geom::join(parts[..], "-"), w.len, *w.at(2));
     std::println("first {} even {} count {}", geo::Geom::first("volt"), geo::Geom::even(4), geo::Geom::count(ys[..]));
     std::println("parse {} origin {}", try geo::Geom::parseInt(" 42 "), geo::Geom::origin().is_null());
+
+    // collections cross as copies: a List or Set is a slice going in and a std::vec coming out, a Map
+    // a std::map
+    val nums: i32[3] = { 1, 2, 4 };
+    val ws = geo::Generic::words(" b a b ");
+    std::println("total {} words {} {}", geo::Generic::total(nums[..]), ws.len, ws.at(2).as_str());
+    val names: str[3] = { "bb", "a", "bb" };
+    val un = geo::Generic::unique(names[..]);
+    val lens = geo::Generic::lengths(names[..]);
+    std::println("unique {} {} lengths {} {}", un.len, un.at(0).as_str(), lens.len, geo::Generic::sumValues(&lens));
+    val pts: geo::Point[2] = { geo::Point::new(3.0, 4.0), geo::Point::new(6.0, 8.0) };
+    std::println("farthest {}", geo::Generic::farthest(pts[..]));
+    // generic methods are Volt generics, their values boxed through Java
+    std::println("first {} {} max {} {}", geo::Generic::first(nums[..]), geo::Generic::first(ws.items()).as_str(), geo::Generic::max(3, 9), geo::Generic::max(std::string::from("pear"), std::string::from("apple")).as_str());
+    // a class the import doesn't have is a java_object: toString(), equals() and is_null()
+    val d = geo::Generic::minutes(2);
+    val b = geo::Generic::boxed(7);
+    std::println("{} {} {} {} {}", d.toString().as_str(), geo::Generic::seconds(&d), b.toString().as_str(), b.equals(&b), d.is_null());
 }
 
 fn main() -> !void {
@@ -66,3 +84,8 @@ fn main() -> !void {
 // expect: a-b-c words 3 zzz
 // expect: first 118 even true count 3
 // expect: parse 42 origin true
+// expect: total 7 words 3 b
+// expect: unique 2 a lengths 2 3
+// expect: farthest 10
+// expect: first 1 b max 9 pear
+// expect: PT2M 120 7 true false
