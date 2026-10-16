@@ -2007,7 +2007,7 @@ fn cpp_params() {
         // @cpp<cpp_error!R> and the try_ forms of calls worked out per use catch as declared try_ forms do
         // (a fn C++ calls through a pointer: its plain throw is the outer call's, kept past a
         // catching call of its own, which reports its own)
-        let caught = "nested ok: INVALID_ARGUMENT negative\ninner: LENGTH_ERROR\nnested fail: INVALID_ARGUMENT negative\ninner only: 96\nbump\nbumped: INVALID_ARGUMENT negative\nbump\ntbumped: INVALID_ARGUMENT negative\nb b\nnonneg 4: 4\nnonneg -4: INVALID_ARGUMENT negative\nboom 1: done\nboom 2: LENGTH_ERROR too many\nthrow 42: UNKNOWN an exception that isn't a std::exception\nbad_alloc: BAD_ALLOC std::bad_alloc\ngrow 2: 5 hi~++\ngrow -1: INVALID_ARGUMENT hi~++\nrelay 99\nnonneg -5: INVALID_ARGUMENT negative\napply 41: 42\napply -5: INVALID_ARGUMENT negative\napply nested: INVALID_ARGUMENT negative\nref -2: INVALID_ARGUMENT negative\nslice 0: 3\nslice 1: INVALID_ARGUMENT negative\nplain 3 42 5 3\n";
+        let caught = "nested ok: INVALID_ARGUMENT negative\ninner: LENGTH_ERROR\nnested fail: INVALID_ARGUMENT negative\ninner only: 96\nbump\nbumped: INVALID_ARGUMENT negative\nbump\ntbumped: INVALID_ARGUMENT negative\nb b\nnonneg 4: 4\nnonneg -4: INVALID_ARGUMENT negative\nboom 1: done\nboom 2: LENGTH_ERROR too many\nthrow 42: UNKNOWN an exception that isn't a std::exception\nbad_alloc: BAD_ALLOC std::bad_alloc\ngrow 2: 5 hi~++\ngrow -1: INVALID_ARGUMENT hi~++\nrelay 99\nnonneg -5: INVALID_ARGUMENT negative\napply 41: 42\napply -5: INVALID_ARGUMENT negative\napply nested: INVALID_ARGUMENT negative\nref -2: INVALID_ARGUMENT negative\nslice 0: 3\nslice 1: INVALID_ARGUMENT negative\nplain 3 42 5 3\nfns 7 7 7 6 6\nfns caught: 6\n";
         assert_eq!(ok(e.voltc(&["run", "cpp_params_catch.volt", "--backend", backend]), "voltc run cpp_params_catch.volt"), caught, "@cpp<cpp_error!R> ({backend})");
         let tried = "checked 2 3: 5\nchecked 2 -5: INVALID_ARGUMENT negative sum\nstretch 2: 5 hi~++\nstretch -1: OUT_OF_RANGE hi~++\nboom 2: LENGTH_ERROR\ntwin 5 -5\nsole 2 -5 read 3 -4\nlone 3 -6\npick -1: INVALID_ARGUMENT negative pick\npick 4: 4\npick 1 -5: RANGE_ERROR negative picks\npick 1 2: 3\nkeep 3: 3\nkeep -2: DOMAIN_ERROR\nmade 1: 1 ab~\nmade -1: DOMAIN_ERROR ab~\ngrow 2: 6 ab~~++\ngrow -1: OUT_OF_RANGE ab~~++\ntake -1: OUT_OF_RANGE 5\n";
         assert_eq!(ok(e.voltc(&["run", "cpp_params_try.volt", "--backend", backend]), "voltc run cpp_params_try.volt"), tried, "try_ forms per use ({backend})");
@@ -2120,6 +2120,18 @@ fn cpp_params_refused() {
     assert!(err.contains("argument 1 is a i32[4]&, but 'fill' wants a i32[3]&"), "another array size: {err}");
     let err = check("cpp_params_closure.volt");
     assert!(err.contains("argument 1 is a closure(i32) -> i32, but 'apply' wants a extern \"C\" fn(i32) -> i32"), "a closure for a function pointer: {err}");
+    // a fn with a reference or a C++ class in its signature, as a function pointer to a call worked
+    // out per use (plain, @cpp<R>'s {i} and {&i}): no T* or by-name spelling, an error naming both
+    let err = check("cpp_params_fnref.volt");
+    for (line, why) in [
+        (8, "'by_ref' takes a i32&, which has no C function-pointer form"),
+        (9, "'by_point' takes a cpp::pr::point, which has no C function-pointer form"),
+        (10, "'first' returns a i32&, which has no C function-pointer form"),
+        (11, "'first' returns a i32&, which has no C function-pointer form"),
+        (12, "'by_ref' takes a i32&, which has no C function-pointer form"),
+    ] {
+        assert!(err.contains(&format!("cpp_params_fnref.volt:{line}")) && err.contains(why), "line {line}, {why}: {err}");
+    }
     let err = check("cpp_params_view.volt");
     assert!(err.contains("its result would point into a copy (of a string, a vector or a map) that's gone once the call returns") && err.contains("cpp_params_view.volt:7"), "a view into the copy, per use: {err}");
     let shown = Command::new(&e.voltc).args(["check", "cpp_params.volt", "--std"]).arg(Path::new(ROOT).join("std")).current_dir(Path::new(ROOT).join("tests/interop")).env("VOLT_SHOW_CPP", "1").output().unwrap();
