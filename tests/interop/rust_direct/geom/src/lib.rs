@@ -466,11 +466,115 @@ impl Canvas {
     }
 }
 
-// a trait Volt can't declare (its associated type): left out, with the reason
+// a trait with an associated type: Volt's Source<i32>, which Countdown attaches and
+// Box<dyn Source<Item = i32>> is a handle of
 pub trait Source {
     type Item;
     fn next_item(&mut self) -> Option<Self::Item>;
 }
+
+pub struct Countdown {
+    n: i32,
+}
+
+impl Countdown {
+    pub fn new(n: i32) -> Countdown {
+        Countdown { n }
+    }
+}
+
+impl Source for Countdown {
+    type Item = i32;
+    fn next_item(&mut self) -> Option<i32> {
+        if self.n == 0 {
+            return None;
+        }
+        self.n -= 1;
+        Some(self.n + 1)
+    }
+}
+
+pub fn countdown(n: i32) -> Box<dyn Source<Item = i32>> {
+    Box::new(Countdown { n })
+}
+
+// a generic trait: Convert<f64> and Convert<String>, both attached
+pub trait Convert<T> {
+    fn convert(&self) -> T;
+}
+
+impl Convert<f64> for Countdown {
+    fn convert(&self) -> f64 {
+        self.n as f64 / 2.0
+    }
+}
+
+impl Convert<String> for Countdown {
+    fn convert(&self) -> String {
+        format!("n={}", self.n)
+    }
+}
+
+// a supertrait the crate declares: its methods come with the trait
+pub trait Named {
+    fn name(&self) -> String;
+}
+
+pub trait Greeter: Named {
+    fn greet(&self) -> String {
+        format!("hello from {}", self.name())
+    }
+}
+
+impl Named for Countdown {
+    fn name(&self) -> String {
+        "countdown".into()
+    }
+}
+
+impl Greeter for Countdown {}
+
+// an associated const: Countdown::CAP() (one named like an item of its module is left out)
+pub trait Limited {
+    const CAP: u32;
+    const LIMIT: u32;
+    fn used(&self) -> u32;
+}
+
+impl Limited for Countdown {
+    const CAP: u32 = 10;
+    const LIMIT: u32 = 3;
+    fn used(&self) -> u32 {
+        self.n as u32
+    }
+}
+
+// tuples, fixed-size arrays and 128-bit integers
+pub fn swap_pair(p: (i32, f64)) -> (f64, i32) {
+    (p.1, p.0)
+}
+
+pub fn min_max(xs: &[i64]) -> (i64, i64) {
+    (*xs.iter().min().unwrap_or(&0), *xs.iter().max().unwrap_or(&0))
+}
+
+pub fn label_of(n: u8) -> (String, u8) {
+    (format!("#{n}"), n + 1)
+}
+
+pub fn reversed(a: [i32; 3]) -> [i32; 3] {
+    [a[2], a[1], a[0]]
+}
+
+pub fn big_mul(a: u128, b: u128) -> u128 {
+    a * b
+}
+
+pub fn negate(x: i128) -> i128 {
+    -x
+}
+
+constant_fn!(made_by_macro, 7);
 
 // bounds a Volt value doesn't meet (Clone besides Shape, Clone besides Fn): generics rustc builds
 // per instance, never a Volt trait value or closure the shim can't pass
