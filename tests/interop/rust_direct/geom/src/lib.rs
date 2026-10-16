@@ -576,6 +576,39 @@ pub fn negate(x: i128) -> i128 {
 
 constant_fn!(made_by_macro, 7);
 
+// left out without failing the import: a const of a struct type (Volt's types can't attach the
+// trait), an instance whose type argument the shim can't spell, a dyn of one
+pub trait Anchored {
+    const START: Pair;
+    fn anchor(&self) -> i32;
+}
+
+impl Anchored for Countdown {
+    const START: Pair = Pair { a: 0, b: 0 };
+    fn anchor(&self) -> i32 {
+        self.n
+    }
+}
+
+impl Convert<(i32, i32)> for Countdown {
+    fn convert(&self) -> (i32, i32) {
+        (self.n, -self.n)
+    }
+}
+
+pub struct Pairs;
+
+impl Source for Pairs {
+    type Item = (i32, i32);
+    fn next_item(&mut self) -> Option<(i32, i32)> {
+        None
+    }
+}
+
+pub fn pairs() -> Box<dyn Source<Item = (i32, i32)>> {
+    Box::new(Pairs)
+}
+
 // bounds a Volt value doesn't meet (Clone besides Shape, Clone besides Fn): generics rustc builds
 // per instance, never a Volt trait value or closure the shim can't pass
 pub fn clone_area<S: Shape>(s: &S) -> f64

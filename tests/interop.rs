@@ -1054,6 +1054,13 @@ fn rust_direct() {
         tools(&mut c);
         assert_eq!(ok(c.output().unwrap(), "voltc run more.volt"), expect("more.volt"), "more ({backend})");
     }
+    let mut c = Command::new(&e.voltc);
+    c.args(["check", "more.volt"]).current_dir(&dir).env("VOLT_STD", Path::new(ROOT).join("std")).env("VOLT_SHOW_IMPORT", "1");
+    tools(&mut c);
+    let shown = String::from_utf8_lossy(&c.output().unwrap().stderr).to_string();
+    for what in ["Anchored::START (a const of a type Volt can't name)", "Countdown's Convert (its type arguments)", "Pairs's Source (its type arguments)", "pairs ("] {
+        assert!(shown.contains(what), "left out, with why: {what}\n{shown}");
+    }
     // rustdoc unable to write its JSON: the crate is read from rustc's expanded source, so what a
     // macro makes is still there (a cache of its own: the import isn't the one rustdoc read)
     let mut c = Command::new(&e.voltc);

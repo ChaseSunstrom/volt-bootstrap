@@ -536,6 +536,10 @@ impl<'a> Doc<'a> {
     fn finish_traits(&mut self) {
         let types: BTreeMap<String, Vec<String>> = self.m.types.iter().map(|t| (t.name.clone(), t.module.clone())).collect();
         for (ty, tr, args) in std::mem::take(&mut self.pending) {
+            if !args.iter().all(arg_ok) {
+                self.m.left_out.push(format!("{ty}'s {tr} (its type arguments)"));
+                continue;
+            }
             let recv = rust_ty(&Ty::Named(ty.clone()), &self.lib, &types);
             self.inst(&ty, &tr, args, &recv, &types);
         }
@@ -632,8 +636,16 @@ impl<'a> Doc<'a> {
             let c = cons.iter().find(|c| c.get("name").and_then(Json::str) == Some(an.as_str()))?;
             args.push(self.ty(c.get("binding")?.get("equality")?.get("type")?)?);
         }
+        if !args.iter().all(arg_ok) {
+            return None;
+        }
         let handle = format!("dyn_{name}_{}", args.iter().map(mangle_ty).collect::<Vec<_>>().join("_"));
-        self.dyn_insts.borrow_mut().insert(handle.clone(), (name, args));
+        // (one name, one instance)
+        let mut insts = self.dyn_insts.borrow_mut();
+        if insts.get(&handle).is_some_and(|x| x.1 != args) {
+            return None;
+        }
+        insts.insert(handle.clone(), (name, args));
         Some(Ty::Named(handle))
     }
 
@@ -879,7 +891,7 @@ impl<'a> Doc<'a> {
                 _ => td.skip = Some(format!("it extends {sup}")),
             }
         }
-        let mut consts = Vec::new();
+        let (mut consts, mut odd_const) = (Vec::new(), false);
         for iid in t.get("items").map_or(&[][..], Json::arr) {
             let Some(it) = iid.key().and_then(|k| self.idx.get(&k)) else { continue };
             let Some(inner) = it.get("inner") else { continue };
@@ -893,13 +905,25 @@ impl<'a> Doc<'a> {
             } else if let Some(c) = inner.get("assoc_const") {
                 match c.get("type").and_then(|t| self.ty(t)) {
                     Some(ct @ (Ty::Prim(_) | Ty::Char | Ty::Str | Ty::String)) => consts.push((mname.to_string(), ct)),
-                    _ => self.m.left_out.push(format!("{name}::{mname} (a const of a type Volt can't name)")),
+                    _ => {
+                        odd_const = true;
+                        self.m.left_out.push(format!("{name}::{mname} (a const of a type Volt can't name)"));
+                    }
                 }
+            }
+        }
+        for (s, _) in &td.methods {
+            let mut g = BTreeSet::new();
+            for t in s.params.iter().filter_map(|p| p.1.as_ref()).chain(s.ret.as_ref()) {
+                generic_names(t, &mut g);
+            }
+            if let Some(x) = g.iter().find(|x| !td.params.contains(x) && !s.generics.contains(x)) {
+                td.skip = Some(format!("its method {} names {x}, which it doesn't declare", s.name));
             }
         }
         // (a Volt type can't attach one that's generic, has consts or has supertraits: only the
         // crate's types do)
-        let plain = td.params.is_empty() && consts.is_empty();
+        let plain = td.params.is_empty() && consts.is_empty() && !odd_const;
         td.foreign = !plain || !supers.is_empty();
         if !td.params.is_empty() && !consts.is_empty() {
             td.skip = Some("a generic trait's associated consts".into());
@@ -1174,12 +1198,40 @@ fn has_args(a: Option<&Json>) -> bool {
     a.is_some_and(|a| !a.is_null() && (a.get("parenthesized").is_some() || a.get("angle_bracketed").is_some_and(|b| !b.get("args").map_or(&[][..], Json::arr).is_empty() || !b.get("constraints").map_or(&[][..], Json::arr).is_empty())))
 }
 
+/// whether the shim can spell a type argument in a type (a dyn handle's, an impl's): numbers,
+/// String, the crate's types, and Vec and Option of those (&str needs a lifetime there; Rust's
+/// name of a tuple, an array or a type parameter isn't written)
+fn arg_ok(t: &Ty) -> bool {
+    match t {
+        Ty::Prim(_) | Ty::Char | Ty::String | Ty::Named(_) => true,
+        Ty::Vec(e) | Ty::Opt(e) => arg_ok(e),
+        _ => false,
+    }
+}
+
+/// the type parameters a type names
+fn generic_names(t: &Ty, out: &mut BTreeSet<String>) {
+    match t {
+        Ty::Generic(g) => {
+            out.insert(g.clone());
+        }
+        Ty::Opt(x) | Ty::Res(x) | Ty::Vec(x) | Ty::Slice(x, _) | Ty::Ref(x, _) | Ty::Array(x, _) | Ty::Fails(x, _) | Ty::Future(x) => generic_names(x, out),
+        Ty::Tuple(es) => es.iter().for_each(|(_, t)| generic_names(t, out)),
+        Ty::Fn(ps, r, _, _) => {
+            ps.iter().for_each(|p| generic_names(p, out));
+            generic_names(r, out);
+        }
+        _ => {}
+    }
+}
+
 /// a type as part of an identifier (a dyn handle's name: dyn_Source_i32)
 fn mangle_ty(t: &Ty) -> String {
     match t {
         Ty::Prim(p) => p.to_string(),
         Ty::Char => "char".into(),
-        Ty::Str | Ty::String => "string".into(),
+        Ty::Str => "str".into(),
+        Ty::String => "string".into(),
         Ty::Named(n) => n.clone(),
         Ty::Vec(e) => format!("vec_{}", mangle_ty(e)),
         Ty::Opt(e) => format!("opt_{}", mangle_ty(e)),
@@ -1241,11 +1293,12 @@ fn volt_number(v: &str, x: &str) -> Option<String> {
         }
         return Some(if n.contains(['.', 'e', 'E']) { n } else { format!("{n}.0") });
     }
+    // (a u128 past i128's maximum too)
     let parsed = match n.strip_prefix("0x") {
-        Some(h) => i128::from_str_radix(h, 16).ok(),
-        None => n.parse::<i128>().ok(),
+        Some(h) => i128::from_str_radix(h, 16).is_ok() || (x == "u128" && u128::from_str_radix(h, 16).is_ok()),
+        None => n.parse::<i128>().is_ok() || (x == "u128" && n.parse::<u128>().is_ok()),
     };
-    parsed.map(|_| n)
+    parsed.then_some(n)
 }
 
 // ---------- the crate's public API, read from its source (when rustdoc's JSON isn't there) ----------
