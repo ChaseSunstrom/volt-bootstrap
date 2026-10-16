@@ -1963,7 +1963,7 @@ fn cpp_templates() {
     // what Volt's generics can't declare (variadic and non-type templates, auto results, constrained
     // templates, function-like macros, method templates), called per use: clang types each call
     let e = Env::new("cpp-templates");
-    let want = "6.5 4\n12\n42 2.5\n3 6\n40\n25 2\n6 18\n6\n";
+    let want = "6.5 4\n12\n42 2.5\n3 6\n40\n25 2\n6 18\n9 12\n10 8\n-4 3 -6\n9\n6\n";
     for backend in ["c", "llvm"] {
         assert_eq!(ok(e.voltc(&["run", "cpp_templates.volt", "--backend", backend]), "voltc run cpp_templates.volt"), want, "C++ templates ({backend})");
     }
@@ -1992,6 +1992,14 @@ fn cpp_versions() {
     let err = String::from_utf8_lossy(&o.stderr);
     assert!(!o.status.success() && err.contains("dynamic exception specifications"), "the newest standard by default: {err}");
     assert_eq!(ok(e.voltc(&["run", "cpp_old_only.volt"]), "voltc run cpp_old_only.volt"), "42\n");
+    // a std::map and std::pair read as tuples under C++98 as under C++11 (no std::tuple_size there),
+    // and class template instances' handles and a base's as_ under C++98 (no >> after a template name);
+    // a class moved as std::auto_ptr is (T(T&)) passed by value and set into a field under C++98 too
+    for std in ["-std=c++98", "-std=c++11"] {
+        for backend in ["c", "llvm"] {
+            assert_eq!(ok(e.voltc(&["run", "cpp_pairs98.volt", "--cc", std, "--backend", backend]), "voltc run cpp_pairs98.volt"), "map 3 1.75\npair 3 2 42\nbox 5 3 9 7\nnames 2 owner 6 8\n", "pairs under {std} ({backend})");
+        }
+    }
 }
 
 #[test]
@@ -2270,7 +2278,7 @@ fn cpp_overloads() {
     // types and calling exactly their own overload, for free functions, methods and constructors; a
     // real declaration keeps a name an alias would take, and the alias is a left-out comment
     let e = Env::new("cpp-overloads");
-    let want = "which 1 2\nletter 1 2 3\nf 4 42 40 42\nh 1 2 2\nnew 5 long 10 long long\nget 5 -5\nadd 6 16\nscaled 6 -6\ncall 4 2 peek 1 2\nopen lref 7 rref 8 8\nopen rref 7\nsize 1 2\ntaken 1 3\nholder 5 5\nholder 5 6\n";
+    let want = "which 1 2\nletter 1 2 3\nf 4 42 40 42\nh 1 2 2\nnew 5 long 10 long long\nget 5 -5\nadd 6 16\nscaled 6 -6\ncall 4 2 peek 1 2\nopen lref 7 rref 8 8\nopen rref 7\nsize 1 2\npinned 3\npinned 103 141\ndropped 2\nspend 40\ntaken 1 3\nholder 5 5\nholder 5 6\n";
     for backend in ["c", "llvm"] {
         assert_eq!(ok(e.voltc(&["run", "cpp_overloads.volt", "--backend", backend]), "voltc run cpp_overloads.volt"), want, "C++ overloads ({backend})");
     }
@@ -2287,6 +2295,18 @@ fn cpp_overloads() {
     let o = e.voltc(&["check", "cpp_overloads_moved.volt"]);
     let err = String::from_utf8_lossy(&o.stderr);
     assert!(!o.status.success() && err.contains("cpp_overloads_moved.volt:7") && err.contains("moved"), "a handle used after an && method: {err}");
+    // ...on a class that can be neither copied nor moved too; through a borrowed handle (as_Base, a
+    // reference result) there's no object to hand C++, so the call stops the program before reading it
+    let o = e.voltc(&["check", "cpp_overloads_pinned_moved.volt"]);
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(!o.status.success() && err.contains("cpp_overloads_pinned_moved.volt:8") && err.contains("moved"), "a pinned handle used after an && method: {err}");
+    for backend in ["c", "llvm"] {
+        for (prog, before, says) in [("cpp_overloads_pinned_base.volt", "before 8\n", "can't call ov::Pinned::take (an && method) through a borrowed handle: ov::Pinned can't be copied"), ("cpp_overloads_pinned_ref.volt", "before 41\n", "can't call ov::Pinned::take (an && method) through a borrowed handle: ov::Pinned can't be copied")] {
+            let o = e.voltc(&["run", prog, "--backend", backend]);
+            let (out, err) = (String::from_utf8_lossy(&o.stdout), String::from_utf8_lossy(&o.stderr));
+            assert!(o.status.code() == Some(101) && out == before && err.contains(says), "{prog} ({backend}): {:?} {out} {err}", o.status);
+        }
+    }
 }
 
 #[test]
@@ -2358,7 +2378,7 @@ fn cpp_libs() {
     let libs = [
         ("re2/re2.h", "libs/re2.volt", &["--cc", "-lre2"][..], "true a(b+)c 1\nfalse\n"),
         ("nlohmann/json.hpp", "libs/json.volt", &[][..], "true 3\ntrue 2 {\"a\":3,\"b\":[1,2]}\n"),
-        ("glm/glm.hpp", "libs/glm.volt", &[][..], "2.5 3 1\n"),
+        ("glm/glm.hpp", "libs/glm.volt", &[][..], "2.5 3 1\nlength 3\n"),
     ];
     for (header, file, flags, want) in libs {
         if !installed(header) {

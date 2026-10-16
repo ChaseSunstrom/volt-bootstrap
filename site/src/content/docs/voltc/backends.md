@@ -64,10 +64,19 @@ still links the program and compiles the tiny C runtime). `voltc emit-llvm` prin
 
 It's the default on x86-64 and aarch64 (Linux, macOS, FreeBSD). It lowers Windows x64's calling
 convention too, but C stays the default there until voltc itself runs on Windows; `--backend c` or
-`--backend llvm` chooses either way. A program the LLVM backend can't lower (a C
-struct from a header that only the C compiler can lay out) is built through C instead, unless
-`--backend llvm` asked for LLVM. C's `static inline` functions from headers are reached through
+`--backend llvm` chooses either way. C's `static inline` functions from headers are reached through
 pointers that a small generated C unit exports.
+
+A header struct with members Volt can't read (a bitfield, a `_Complex`, a `long double`) gets its
+layout from libclang: each field Volt reads sits at C's offset, in a struct of C's size and
+alignment. C passes some of these by value in a way their readable fields can't tell (a `_Complex`
+goes in floating-point registers, a bitfield shares an eightbyte with a `float`), so a call of a
+header function taking or giving one by value goes through a C shim in that unit that takes the
+structs by pointer, and C passes them. What a shim can't cover builds the program through C
+instead, with a note naming the line: a call through a C function pointer, a Volt fn used as one
+(C may call it), an exported or `extern "C"` fn, a variadic argument or a function declared
+without a header taking or giving such a struct by value, and a struct libclang can't lay out or
+aligned to more than 16 bytes. `--backend llvm` makes those an error instead.
 
 Debug builds carry DWARF debug information: a breakpoint goes on a Volt line (`break main.volt:12`),
 stepping goes statement by statement, and a debugger shows parameters and locals by their Volt

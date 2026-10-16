@@ -83,6 +83,9 @@ struct lg {
     cc: callconv = callconv::SYSV;
     hdr: std::vec<str> = {}; // C header functions called through the runtime unit's pointers
     err: std::string = {};   // a program this backend can't lower (reported after the module)
+    at_file: u32 = 0;        // the source line being lowered (the IR's AT marks; else its fn's), for err
+    at_line: u32 = 0;
+    opaques: std::map<u32, bool> = {}; // c_opaque's answers by type
     // debug info (DWARF line tables, when the IR marks statements' lines): the builder, a file per
     // source file, and the current function's subprogram and file
     di: llvm::LLVMOpaqueDIBuilder* = null;
@@ -196,9 +199,9 @@ attach fn make_lt(this: lg&, t: u32) -> llvm::LLVMOpaqueType* {
         .ARRAY(x, n) => { return llvm::LLVMArrayType2(this.lt(x), n); },
         .VECTOR(x, n) => { return llvm::LLVMVectorType(this.lt(x), @cast<u32>(n)); },
         .STRUCT(s) => {
-            // ponytail: ask the C compiler for such a struct's layout instead of refusing it
-            if (this.c.partial_struct(s) && this.err.len() == 0) {
-                this.err = fmt("the LLVM backend can't lay out the C struct '{}': the header gives it members Volt can't read or place (a type it can't parse), so only C knows where its fields are; use --backend c", S(this.c.si(s).c_name));
+            // (cimport's lay_out_partial gives the rest libclang's layout)
+            if (this.c.partial_struct(s)) {
+                this.cant(fmt("the LLVM backend can't lay out the C struct '{}': it has members Volt can't read, and libclang couldn't place the ones it can (or the struct is aligned to more than 16 bytes), so only C knows where its fields are", S(this.c.si(s).c_name)));
             }
         },
         default => {},
@@ -830,10 +833,101 @@ fn size_t_as(t: u32, narrow: bool) -> u32 {
     return t;
 }
 
+// does a value of type t cross to C by value in a way only C knows: a header struct cimport marked
+// (c_opaque), or a struct or array holding one
+attach fn c_opaque(this: lg&, t: u32) -> bool {
+    if (!this.c.c_opaque_any) {
+        return false;
+    }
+    val have = this.opaques.get(t);
+    if (have) {
+        return *have;
+    }
+    var out = false;
+    match (*this.c.t.get(t)) {
+        .STRUCT(s) => {
+            out = this.c.opaque_struct(s);
+            if (!out && !this.c.header_struct(s)) {
+                for (i) in 0..this.member_count(t) {
+                    out = out || this.c_opaque(this.member_ty(t, @cast<u32>(i)));
+                }
+            }
+        },
+        .ARRAY(x, n) => { out = this.c_opaque(x); },
+        default => {},
+    }
+    this.opaques.put(t, out);
+    return out;
+}
+
+// is t a struct (a C shim takes one by pointer: cimport's by_value_struct)?
+attach fn is_struct(this: lg&, t: u32) -> bool {
+    match (*this.c.t.get(t)) {
+        .STRUCT(s) => { return true; },
+        default => { return false; },
+    }
+}
+
+// the first of a signature's param types and result that only C can pass by value (c_opaque)
+attach fn opaque_in(this: lg&, ps: std::vec<u32>&, r: u32) -> u32? {
+    if (!this.c.c_opaque_any) {
+        return null;
+    }
+    if (this.c_opaque(r)) {
+        return r;
+    }
+    for (p) in ps.items() {
+        if (this.c_opaque(p)) {
+            return p;
+        }
+    }
+    return null;
+}
+
+// ...of fn i's
+attach fn opaque_fn(this: lg&, i: u32) -> u32? {
+    if (!this.c.c_opaque_any) {
+        return null;
+    }
+    val f = this.c.ir.fn_at(i);
+    var ps: std::vec<u32> = {};
+    for (p) in f.params.items() {
+        put(&ps, f.locals.at(@cast<usize>(p)).ty);
+    }
+    return this.opaque_in(&ps, f.ret);
+}
+
+// the program can't go through this backend: why (the first reason found), and where in the source
+// (main.volt's llvm_falls_back builds it through C instead)
+attach fn cant(this: lg&, why: std::string) -> void {
+    if (this.err.len() > 0) {
+        return;
+    }
+    this.err = move why;
+    if (this.at_line > 0) {
+        this.err.append(fmt2(" ({}:{})", S(this.c.files.at(@cast<usize>(this.at_file)).name), unum(@cast<u64>(this.at_line))).as_str());
+    }
+}
+
 // a C header's function, as a pointer: the runtime's C unit includes the headers and exports
 // `void *volt_c_NAME = (void *)NAME;` (a static inline one has no symbol of its own)
 attach fn header_fn(this: lg&, i: u32) -> llvm::LLVMOpaqueValue* {
+    return this.header_ptr(this.symbol(this.c.ir.fn_at(i)));
+}
+
+// header fn i's C shim (cimport's shim: volt_cs_NAME, its structs by pointer), as header_fn's
+// pointer; none written (a type it can't spell), the program goes through C
+attach fn shim_fn(this: lg&, i: u32, bad: u32) -> llvm::LLVMOpaqueValue* {
     val sym = this.symbol(this.c.ir.fn_at(i));
+    if (this.c.c_kept.get(sym) != null) {
+        this.cant(fmt2("the C function '{}' takes or gives {} by value, which only C knows how to pass, and its header is kept out of Volt's C (another standard's), where no shim can reach it", S(sym), this.c.ty_name(bad)));
+    } else if (this.c.c_shims.get(sym) == null) {
+        this.cant(fmt2("the C function '{}' takes or gives {} by value, which only C knows how to pass, and voltc can't write the C shim that would pass it", S(sym), this.c.ty_name(bad)));
+    }
+    return this.header_ptr(this.c.intern(fmt("volt_cs_{}", S(sym))));
+}
+
+attach fn header_ptr(this: lg&, sym: str) -> llvm::LLVMOpaqueValue* {
     var n = S("volt_c_");
     n.append(sym);
     val name = this.z(n.as_str());
@@ -1637,6 +1731,15 @@ attach fn rv(this: lg&, n: u32) -> llvm::LLVMOpaqueValue* {
         },
         .INDEX(b, i) => { return this.load(t, this.addr(n)); },
         .FN(i) => {
+            val bad = this.opaque_fn(i);
+            if (bad) {
+                // C may call it through the pointer
+                var name = this.c.ir.fn_at(i).about;
+                if (name.len == 0) {
+                    name = this.c.ir.fn_at(i).name;
+                }
+                this.cant(fmt2("the fn '{}' takes or gives {} by value, which only C knows how to pass, and is used as a function pointer", S(name), this.c.ty_name(bad)));
+            }
             if (this.c.ir.fn_at(i).from_header) {
                 return this.header_fn(i);
             }
@@ -2059,16 +2162,48 @@ attach fn call(this: lg&, f: u32, args: std::vec<u32>&, t: u32) -> llvm::LLVMOpa
     for (x) in args.items() {
         put(&ats, this.c.ir.ty_of(x));
     }
+    // a call of a header fn's C shim: the struct result's slot, and the structs passed by pointer
+    var shim = false;
+    var shim_slot: llvm::LLVMOpaqueValue* = null;
     match (this.c.ir.at(f).kind) {
         .FN(i) => {
-            if (this.c.ir.fn_at(i).from_header) {
-                target = this.header_fn(i);
+            val fi = this.c.ir.fn_at(i);
+            val bad = this.opaque_fn(i);
+            if (bad != null && fi.from_header) {
+                // C passes a struct here its own way: its shim takes them all by pointer, the
+                // result's first (an sret pointer, as the ABI passes one)
+                shim = true;
+                target = this.shim_fn(i, bad ?? 0);
+                if (this.is_struct(fi.ret)) {
+                    shim_slot = this.alloca(this.lt(fi.ret));
+                    put(&ptys, VOIDPTR);
+                }
+                for (p) in fi.params.items() {
+                    val pt = fi.locals.at(@cast<usize>(p)).ty;
+                    if (this.is_struct(pt)) {
+                        put(&ptys, VOIDPTR);
+                    } else {
+                        put(&ptys, pt);
+                    }
+                }
+                var rt = fi.ret;
+                if (shim_slot != null) {
+                    rt = VOID;
+                }
+                a = this.sig(&ptys, rt, false);
             } else {
-                target = this.decl_fn(i);
-            }
-            a = this.fn_abi(i);
-            for (p&) in a.params.items() {
-                put(&ptys, p.ty); // the ABI's: a libc size_t can be narrower than usize
+                if (bad != null && fi.body == null && !fi.prelude) {
+                    this.cant(fmt2("the C function '{}' takes or gives {} by value, which only C knows how to pass, and isn't a header's (voltc writes a C shim for a header's function only)", S(this.symbol(fi)), this.c.ty_name(bad ?? 0)));
+                }
+                if (fi.from_header) {
+                    target = this.header_fn(i);
+                } else {
+                    target = this.decl_fn(i);
+                }
+                a = this.fn_abi(i);
+                for (p&) in a.params.items() {
+                    put(&ptys, p.ty); // the ABI's: a libc size_t can be narrower than usize
+                }
             }
         },
         .RT(name) => {
@@ -2084,6 +2219,10 @@ attach fn call(this: lg&, f: u32, args: std::vec<u32>&, t: u32) -> llvm::LLVMOpa
             match (*this.c.t.get(ft)) {
                 .FN_PTR(ps, r, va) => {
                     ptys = copy ps;
+                    val bad = this.opaque_in(&ptys, r);
+                    if (bad) {
+                        this.cant(fmt("a call through a C function pointer passes {} by value, which only C knows how to pass", this.c.ty_name(bad)));
+                    }
                     a = this.sig(&ptys, r, va);
                 },
                 default => {
@@ -2103,17 +2242,30 @@ attach fn call(this: lg&, f: u32, args: std::vec<u32>&, t: u32) -> llvm::LLVMOpa
         ret_slot = this.alloca(this.lt(a.ret.ty));
         put(&vals, ret_slot ?? @panic("sret"));
     }
+    var off: usize = 0;
+    if (shim_slot != null) {
+        put(&vals, shim_slot ?? @panic("shim"));
+        off = 1;
+    }
     for (k) in 0..args.len {
         val n = *args.at(k);
-        if (k < a.params.len) {
-            val p = a.params.at(k);
-            val v = this.rv_as(n, *ptys.at(k));
+        if (k + off < a.params.len) {
+            val p = a.params.at(k + off);
+            if (shim && this.is_struct(*ats.at(k))) {
+                // by a pointer to a copy
+                put(&vals, this.spill(this.rv(n), *ats.at(k)));
+                continue;
+            }
+            val v = this.rv_as(n, *ptys.at(k + off));
             this.pass_arg(p, v, &vals);
         } else {
             var at = *ats.at(k);
             if (this.is_void(at)) {
                 this.rv(n);
                 continue;
+            }
+            if (this.c_opaque(at)) {
+                this.cant(fmt("a variadic call passes {} by value, which only C knows how to pass", this.c.ty_name(at)));
             }
             var v = this.rv(n);
             // default argument promotions
@@ -2144,6 +2296,9 @@ attach fn call(this: lg&, f: u32, args: std::vec<u32>&, t: u32) -> llvm::LLVMOpa
         put(&all.params, copy *x); // a variadic struct in memory is a byval copy too
     }
     this.abi_attrs(&all, c, true);
+    if (shim_slot != null) {
+        return this.load(t, shim_slot ?? @panic("shim"));
+    }
     // a call that never returns ends the block
     if (t == NEVER) {
         llvm::LLVMBuildUnreachable(this.b);
@@ -2316,7 +2471,11 @@ attach fn stmt(this: lg&, n: u32) -> void {
             llvm::LLVMBuildUnreachable(this.b);
             this.dead();
         },
-        .AT(f, l) => { this.di_at(f, l); },
+        .AT(f, l) => {
+            this.at_file = f;
+            this.at_line = l;
+            this.di_at(f, l);
+        },
         default => { this.rv(n); },
     }
 }
@@ -2382,6 +2541,18 @@ attach fn fn_body(this: lg&, i: u32) -> void {
     llvm::LLVMPositionBuilderAtEnd(this.eb, allocas);
     this.at_block(start);
     this.di_fn(f);
+    this.at_line = 0;
+    if (f.origin) {
+        val o = f.origin;
+        this.at_file = o.file;
+        this.at_line = @cast<u32>(this.c.line_col(o).line);
+    }
+    if (f.link == linkage::EXPORTED) {
+        val bad = this.opaque_fn(i);
+        if (bad) {
+            this.cant(fmt2("the exported fn '{}' takes or gives {} by value, which only C knows how to pass", S(this.symbol(f)), this.c.ty_name(bad)));
+        }
+    }
     // one stack slot per local (a byte for void ones, so every local has an address)
     for (k) in 0..f.locals.len {
         val l = f.locals.at(k);

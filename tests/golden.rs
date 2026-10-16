@@ -85,6 +85,24 @@ fn spec_sketch_parses() {
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
 }
 
+/// programs the LLVM backend can't lower (tests/llvm/c_partial_*.volt: a C struct only C can pass by
+/// value, through a C function pointer or a Volt fn handed to C) build through C by default, with a
+/// note naming the line, and print what they expect. They live outside tests/run, which bolt's
+/// bootstrap step runs with --backend llvm
+#[test]
+fn llvm_falls_back_to_c() {
+    let progs: Vec<_> = files("tests/llvm").into_iter().filter(|f| f.file_name().is_some_and(|n| n.to_string_lossy().starts_with("c_partial_"))).collect();
+    assert_eq!(progs.len(), 2, "tests/llvm/c_partial_*.volt");
+    for f in progs {
+        let src = std::fs::read_to_string(&f).unwrap();
+        let out = Command::new(common::voltc()).arg("run").arg(&f).output().unwrap();
+        let (got, err) = (String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+        let want = directives(&src, "expect").join("\n");
+        let notes = directives(&src, "expect-stderr").iter().all(|w| err.contains(w.as_str()));
+        assert!(out.status.success() && got.trim_end() == want.trim_end() && notes, "{}:\n--- want\n{want}\n--- got\n{got}\n--- stderr\n{err}", f.display());
+    }
+}
+
 /// packages precompiled with `voltc lib` and linked: same output as compiling them from source
 #[test]
 fn std_linked() {

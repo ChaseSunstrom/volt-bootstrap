@@ -536,6 +536,10 @@ struct checker {
     c_unit_text: std::vec<std::string> = {};
     c_unit_weak: std::vec<std::string> = {}; // its constructor's lines: a stub for each function nothing defines
     c_kept: std::map<str, u32> = {};
+    // header fns with a C shim (cimport's shim: volt_cs_NAME) the LLVM backend calls, by C name, and
+    // whether any header struct only C can pass by value (struct_decl's c_opaque) was imported
+    c_shims: std::map<str, bool> = {};
+    c_opaque_any: bool = false;
     c_import_std: str = "";
     // the C++ imports, kept for the calls made per use, and those calls' Volt fns by what they call
     cpp_ctxs: std::vec<cpp_import_ctx> = {};

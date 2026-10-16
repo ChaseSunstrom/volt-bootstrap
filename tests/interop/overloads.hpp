@@ -77,6 +77,47 @@ class Crate : public Box {
   public:
     explicit Crate(int n) : Box(n) {}
 };
+// neither copied nor moved: an && method runs on an owned handle's object, the handle consumed
+// (its object deleted once, after the call: dropped counts them); a borrowed handle has no object
+// to hand C++ (no copy), so the call stops the program. A const && method runs in place
+class Pinned {
+  public:
+    explicit Pinned(int n) : n_(n) {}
+    Pinned(const Pinned &) = delete;
+    Pinned(Pinned &&) = delete;
+    ~Pinned() { ++drops(); }
+    int take() && { int r = n_; n_ = 0; return r; }
+    int take() const && { return n_ + 100; }
+    int peek() const { return n_; }
+    static int dropped() { return drops(); }
+  private:
+    static int &drops() { static int n = 0; return n; }
+    int n_;
+};
+class PinnedCrate : public Pinned {
+  public:
+    explicit PinnedCrate(int n) : Pinned(n) {}
+};
+// an abstract class (neither copied nor moved, by clang's account): its && method runs in place
+// on the object, a borrowed handle's (as_Shape()) too, as before
+class Shape {
+  public:
+    virtual ~Shape() {}
+    virtual int sides() const = 0;
+    int spend() && { return sides() * 10; }
+};
+class Square : public Shape {
+  public:
+    explicit Square(int n) : n_(n) {}
+    int sides() const { return n_; }
+  private:
+    int n_;
+};
+// a borrowed handle (a reference result)
+inline Pinned &pinned_shelf() {
+    static Pinned p(41);
+    return p;
+}
 }
 // a real function with the name the alias would take keeps it, though declared after
 namespace taken {

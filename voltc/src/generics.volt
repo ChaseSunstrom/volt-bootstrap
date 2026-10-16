@@ -313,12 +313,26 @@ attach fn garg_gval(this: checker&, g: garg&, kind: pkind, e: u32) -> compile_er
             }
             if (t == BOOL) {
                 val v = try this.ct_eval_in(e, x, t);
+                var generic = false;
+                match (x.kind) {
+                    .PATH(p) => { generic = p.is_single() && this.env_generic(e, p.segs.at(0).name) != null; },
+                    default => {},
+                }
                 match (v) {
                     .BOOL(b) => {
                         if (b) {
                             return gval::INT(1);
                         }
                         return gval::INT(0);
+                    },
+                    .INT(n, nt) => {
+                        // a bool generic parameter passed on by name (sg<T, B> in a method's this):
+                        // its binding is 1 or 0, as here (an int generic in a bool's place passes
+                        // too while bindings carry no type: T-0524)
+                        if (generic && (n == 0 || n == 1)) {
+                            return gval::INT(n);
+                        }
+                        return fails(x.span, "expected a bool known at compile time");
                     },
                     default => { return fails(x.span, "expected a bool known at compile time"); },
                 }
