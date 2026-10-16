@@ -816,7 +816,7 @@ attach fn path_expr(this: checker&, p: path&, want: u32?, span: span) -> compile
             val ln = this.cx.loans.get(l.c);
             if (ln) {
                 v.loan = ln->owner;
-                v.loan_name = ln->owner_name;
+                v.loan_uses = ln->uses;
             }
             if (l.flag != null) {
                 v.owner = name;

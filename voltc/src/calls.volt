@@ -47,7 +47,8 @@ attach fn call(this: checker&, callee: expr&, args: std::vec<expr>&, want: u32?,
             }
         },
         .FIELD(base, name, gargs) => {
-            val recv = try this.expr(base, null);
+            var recv = try this.expr(base, null);
+            recv.at = this.place_at_of(base);
             var none: std::vec<garg> = {};
             if (gargs) {
                 return this.method_call(recv, name, &gargs, args, want, span);
@@ -111,7 +112,9 @@ attach fn call(this: checker&, callee: expr&, args: std::vec<expr>&, want: u32?,
         default => {},
     }
     val fv = try this.expr(callee, null);
-    return this.call_value(fv, args, span);
+    val r = try this.call_value(fv, args, span);
+    this.called_closure(callee, span);
+    return r;
 }
 
 // call through a value: a C fn pointer, a fn(...) value (its fn and env) or a closure

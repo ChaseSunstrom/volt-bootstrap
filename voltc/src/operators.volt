@@ -871,6 +871,7 @@ attach fn assign(this: checker&, op: binop?, le: expr&, re: expr&, span: span) -
                 if (fresh) {
                     this.note_loan(fresh, fresh_name, &r);
                 }
+                this.assigned(le, l.ty, span);
                 if (!this.coercible(&r, l.ty) || this.narrow_recheck(&loc)) {
                     var whole = vpure(loc.orig_ty, loc.orig_c ?? 0);
                     whole.lv = true;
@@ -900,6 +901,7 @@ attach fn assign(this: checker&, op: binop?, le: expr&, re: expr&, span: span) -
                 default => {},
             }
         }
+        this.assigned(le, l.ty, span);
         return this.store(l, rr, re.span);
     }
     val bop = op ?? binop::ADD;
