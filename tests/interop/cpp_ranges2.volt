@@ -106,7 +106,7 @@ fn main() -> void {
     for (x) in ov {
         o += x;
     }
-    // (a std::pair is a handle under C++98: no std::tuple_size to read it as a tuple by)
+    // (a std::pair is a tuple under C++98 too: cpp_pairs98.volt reads them)
     var entries = 0;
     for (kv) in om {
         entries += 1;
