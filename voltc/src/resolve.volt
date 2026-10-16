@@ -1304,6 +1304,39 @@ struct global_why {
     span: span;
 }
 
+// does a foldable expression hold a unary operator (~x, !x, -x) somewhere?
+fn unary_in(e: expr&) -> bool {
+    if (!foldable(e)) {
+        return false;
+    }
+    match (e.kind) {
+        .UNARY(op, x) => { return true; },
+        .CAST(x, t&) => { return unary_in(x); },
+        .BINARY(op, a, b) => { return unary_in(a) || unary_in(b); },
+        .BUILTIN(n, g, a&) => {
+            match (*ptr_of(a)->at(0)) {
+                .EXPR(x&) => { return unary_in(x); },
+                default => { return false; },
+            }
+        },
+        default => { return false; },
+    }
+}
+
+// a constant expression worked out now, or none when it can't be (it stays as it is)
+attach fn fold_global(this: checker&, e: expr&, want: u32?) -> tval? {
+    val cv = this.ct_eval_in(this.cx.env, e, want) catch |err| {
+        return null;
+    };
+    val c = this.ct_to_val(cv, want, e.span) catch |err| {
+        return null;
+    };
+    if (!c.pure) {
+        return null;
+    }
+    return c;
+}
+
 // literals, names and operators over them, with no calls: a global's initializer that's worked out at
 // compile time even when it isn't a { } literal
 fn foldable(e: expr&) -> bool {
@@ -1321,6 +1354,17 @@ fn foldable(e: expr&) -> bool {
         .FIELD(x, name, g&) => { return foldable(x); },
         .BINARY(op, a, b) => { return foldable(a) && foldable(b); },
         .INDEX(a, b) => { return foldable(a) && foldable(b); },
+        .BUILTIN(n, g, a&) => {
+            // @cast<T>(x) over a constant
+            val ap = ptr_of(a);
+            if (n != "cast" || ap == null || ap->len != 1) {
+                return false;
+            }
+            match (*ap->at(0)) {
+                .EXPR(x&) => { return foldable(x); },
+                default => { return true; }, // a name, parsed as a type
+            }
+        },
         .TUPLE(xs&) => {
             for (x&) in xs.items() {
                 if (!foldable(x)) {
@@ -1343,6 +1387,18 @@ attach fn global_init(this: checker&, l: let_stmt&, span: span) -> compile_error
         var v = try this.expr(&l.init, want);
         if (want) {
             v = try this.coerce(v, want, l.init.span);
+        }
+        // ~x and !x over constants are pure but not literals: folded too, so the global is a
+        // constant (the LLVM backend would set it in a constructor, and code running before that,
+        // another constructor or a host calling into a library, would read zero)
+        if (v.pure && v.lit == null && unary_in(&l.init)) {
+            val folded = this.fold_global(&l.init, want);
+            if (folded) {
+                if (want) {
+                    return try this.coerce(folded, want, l.init.span);
+                }
+                return folded;
+            }
         }
         if (!v.pure && v.lit == null) {
             // a { x; n } (or a struct whose defaults hold one), or operators over constants

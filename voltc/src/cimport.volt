@@ -2865,8 +2865,8 @@ attach fn import_c(this: checker&, headers: std::vec<std::string>&, alias: str, 
     if (!(file.len > 0 && file[0] == '<')) {
         var slash: usize? = null;
         for (i) in 0..file.len {
-            if (file[i] == '/') {
-                slash = i;
+            if (file[i] == '/' || file[i] == '\\') {
+                slash = i; // (Windows names the file with \ too)
             }
         }
         if (slash) {

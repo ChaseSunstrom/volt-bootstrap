@@ -748,6 +748,18 @@ attach fn ct_expr(this: checker&, e: expr&, want: u32?) -> compile_error!cval {
                         return cval::INT(-n, t);
                     }
                     if (op == unop::BITNOT) {
+                        // in the type's width: ~0 as a u32 is 0xFFFFFFFF, not -1
+                        var ty = t;
+                        if (ty == VOID) {
+                            if (want) {
+                                ty = want;
+                            }
+                        }
+                        val k = this.t.int_of(ty);
+                        if (k) {
+                            val kk = k;
+                            return cval::INT(wrap_bits(~n, kk.bits(), kk.signed()), t);
+                        }
                         return cval::INT(~n, t);
                     }
                 },
