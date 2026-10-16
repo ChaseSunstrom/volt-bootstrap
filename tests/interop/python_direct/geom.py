@@ -4,6 +4,7 @@ from __future__ import annotations
 import enum
 import math
 from dataclasses import dataclass
+from typing import Callable
 
 VERSION = "1.2"
 LIMIT = 10
@@ -59,6 +60,9 @@ class Shape:
 
     def describe(self, prefix: str = "a") -> str:
         return f"{prefix} {self.name} with {self.count} sides"
+
+    def tag(self, x) -> str:
+        return f"{self.name}:{x}"
 
 
 class Square(Shape):
@@ -132,10 +136,94 @@ def maybe(name: str) -> Shape | None:
     return None if name == "" else Shape(name, [1.0])
 
 
-# Volt can't call these: they're listed in a comment of what bolt writes
-def apply(f, x: int) -> int:
-    return f(x)
+def lengths(words: list[str]) -> dict[str, int]:
+    return {w: len(w) for w in words}
+
+
+def total_of(d: dict[str, int]) -> int:
+    return sum(d.values())
+
+
+def stats(xs: list[float]) -> tuple[int, float, str]:
+    return (len(xs), sum(xs) / len(xs), "ok")
+
+
+def swap(p: tuple[int, str]) -> tuple[str, int]:
+    return (p[1], p[0])
 
 
 def many(*xs: int) -> int:
+    return sum(xs)
+
+
+def tagged(name: str, **tags: int) -> str:
+    return name + "".join(f" {k}={v}" for k, v in sorted(tags.items()))
+
+
+# unannotated: a parameter with a default takes its type, one without is converted per type
+def show(x) -> str:
+    return f"<{x}>"
+
+
+def bump(n=1) -> int:
+    return n + 1
+
+
+def apply(f: Callable[[int], int], x: int) -> int:
+    return f(x)
+
+
+def fold(xs: list[int], f: Callable[[int, int], int]) -> int:
+    acc = 0
+    for x in xs:
+        acc = f(acc, x)
+    return acc
+
+
+def keep(f: Callable[[str], str]) -> None:
+    global kept
+    kept = f
+
+
+def call_kept(s: str) -> str:
+    return kept(s)
+
+
+def names(d: dict[int, str]) -> str:
+    return ",".join(d[k] for k in sorted(d))
+
+
+def count(*xs) -> int:
     return len(xs)
+
+
+def label(x, *, sep: str = ":") -> str:
+    return f"{x}{sep}"
+
+
+def pick(i: int, *xs: int) -> int:
+    return xs[i]
+
+
+# Volt can't call these: they're listed in a comment of what bolt writes
+def nested(d: dict[str, list[int]]) -> int:
+    return len(d)
+
+
+def make_adder(n: int) -> Callable[[int], int]:
+    return lambda x: x + n
+
+
+def opt(x=None) -> str:
+    return str(x)
+
+
+def single(t: tuple[int]) -> int:
+    return t[0]
+
+
+class Holder:
+    cb: Callable[[int], int]
+
+    def __init__(self):
+        self.cb = lambda x: x

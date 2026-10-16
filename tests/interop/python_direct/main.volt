@@ -43,6 +43,34 @@ fn main() -> void {
     std::println("{} / {}", geom::greet("volt"), geom::greet("volt", true));
     val data: u8[3] = { 1, 2, 3 };
     std::println("checksum {} maybe {} {}", geom::checksum(data[..]), geom::maybe("").is_null(), geom::maybe("x").name());
+
+    // dicts and tuples cross as copies: std::map and Volt tuples
+    val ws: str[3] = { "a", "bb", "ccc" };
+    var lens = geom::lengths(ws[..]);
+    std::println("dict {} {} total {}", lens.len, lens.contains(std::string::from("bb")), geom::total_of(&lens));
+    val fs: f64[3] = { 1.0, 2.0, 3.0 };
+    val (n, mean, tag) = geom::stats(fs[..]);
+    val (word, num) = geom::swap((7, "seven"));
+    std::println("tuple {} {} {} swapped {} {}", n, mean, tag, word, num);
+
+    // *args: a trailing slice; **kwargs: a trailing map, passed as keywords
+    val ns: i64[3] = { 1, 2, 3 };
+    var tags: std::map<std::string, i64> = {};
+    tags.put(std::string::from("b"), 2);
+    tags.put(std::string::from("a"), 1);
+    std::println("args {} {} kwargs {}", geom::many(ns[..]), geom::many(ns[0..0]), geom::tagged("x", &tags));
+
+    // unannotated parameters: converted per type, or the default's type
+    std::println("untyped {} {} {} bump {} {}", geom::show(3), geom::show("s"), geom::show(1.5), geom::bump(), geom::bump(4));
+
+    // a Callable takes a Volt fn value, which Python calls back (and may keep)
+    std::println("apply {} fold {}", geom::apply(|| (x: i64) -> i64 { return x * 3; }, 5), geom::fold(ns[..], || (a: i64, b: i64) -> i64 { return a + b * b; }));
+    geom::keep(|| (s: str) -> std::string { return std::fmt::format("[{}]", s); });
+    std::println("kept {} {}", geom::call_kept("a"), geom::call_kept("b"));
+    var ids: std::map<i64, std::string> = {};
+    ids.put(2, std::string::from("b"));
+    ids.put(1, std::string::from("a"));
+    std::println("more {} {} {} {} {} {} {}", geom::names(&ids), geom::count(ns[..]), geom::label(1), geom::label("x", "-"), geom::pick(1, ns[..]), s.tag(7), geom::show(&q));
 }
 // expect: norm 5 x 3
 // expect: scaled 6 1.5 dist 6.18465843842649
@@ -57,3 +85,10 @@ fn main() -> void {
 // expect: find 2 true
 // expect: hello, volt / HELLO, VOLT
 // expect: checksum 6 maybe true x
+// expect: dict 3 true total 6
+// expect: tuple 3 2 ok swapped seven 7
+// expect: args 6 0 kwargs x a=1 b=2
+// expect: untyped <3> <s> <1.5> bump 2 5
+// expect: apply 15 fold 14
+// expect: kept [a] [b]
+// expect: more a,b 3 1: x- 2 tri:7 <Point(x=1.0, y=2.0)>
