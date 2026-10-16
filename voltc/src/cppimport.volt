@@ -5587,9 +5587,11 @@ attach fn scan(this: cpp_gen&, c: clang::CXCursor, vpath: str) -> void {
             // its definition (a forward declaration has no fields or bases to tell by)
             this.templates.put(q, this.c.intern(move p));
             this.cursors.put(q, *ch);
-        } else if (k == clang::CXCursor_ClassTemplate && clang::clang_Cursor_isNull(clang::clang_getCursorDefinition(*ch)) != 0 && this.templates.get(q) == null && template_params(*ch, false) == null && template_params(*ch, true) != null) {
+        } else if (k == clang::CXCursor_ClassTemplate && clang::clang_Cursor_isNull(clang::clang_getCursorDefinition(*ch)) != 0 && template_params(*ch, false) == null && template_params(*ch, true) != null) {
             // a primary with a value parameter that's only declared (glm's vec<L, T, Q>: each
-            // partial specialization is a definition): held by handle, members per use (prune)
+            // partial specialization is a definition): held by handle, members per use (prune).
+            // Each scan puts its cursor again: the scan after the probe's reparse must replace
+            // the first parse's, which prune would visit after it's gone
             this.templates.put(q, this.c.intern(move p));
             this.cursors.put(q, *ch);
         } else if (k == clang::CXCursor_EnumDecl) {
