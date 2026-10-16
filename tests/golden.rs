@@ -167,7 +167,7 @@ fn f128_soft_c() {
         assert!(text.matches(op).count() > prelude.matches(op).count(), "floats_wide's C has no {op}");
     }
     // f128_ops through both C compilers, natively and soft (golden runs them all through LLVM)
-    let runs = [("floats_wide", "cc", true), ("softquad", "cc", true), ("f128_ops", "gcc", true), ("f128_ops", "clang", true), ("f128_ops", "gcc", false), ("f128_ops", "clang", false)];
+    let runs = [("floats_wide", "cc", true), ("softquad", "cc", true), ("f128_ops", "gcc", true), ("f128_ops", "clang", true), ("f128_ops", "gcc", false), ("f128_ops", "clang", false), ("f128_rem", "gcc", true), ("f128_rem", "clang", false)];
     for (prog, cc, soft) in runs {
         let file = format!("tests/run/{prog}.volt");
         let want: Vec<String> = directives(&std::fs::read_to_string(root.join(&file)).unwrap(), "expect");

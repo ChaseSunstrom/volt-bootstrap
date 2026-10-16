@@ -945,6 +945,54 @@ namespace softfloat {
         return f128_to_magnitude(a, bits);
     }
 
+    // the remainder of a / b with a's sign, exact (C's fmod, which can't round: the remainder is a
+    // binary128 itself): the significands reduced 15 bits of the exponent gap at a time (one is below
+    // 2^113, so shifted by 15 it still fits a u128), at most about 2200 steps for the widest gap
+    public fn rem128(a: u128, b: u128) -> u128 {
+        val a_abs = a & Q_ABS;
+        val b_abs = b & Q_ABS;
+        if (a_abs > Q_INF) {
+            return a | Q_QUIET;
+        }
+        if (b_abs > Q_INF) {
+            return b | Q_QUIET;
+        }
+        if (a_abs == Q_INF || b_abs == 0) {
+            return Q_NAN;
+        }
+        if (b_abs == Q_INF || a_abs < b_abs) {
+            return a;
+        }
+        var xs: u128 = 0;
+        var xe: i32 = 0;
+        var ys: u128 = 0;
+        var ye: i32 = 0;
+        unpack128(a, &xs, &xe);
+        unpack128(b, &ys, &ye);
+        var r = xs % ys;
+        var gap = xe - ye;
+        while (gap > 0 && r != 0) {
+            var k = 15;
+            if (gap < k) {
+                k = gap;
+            }
+            r = (r << @cast<u128>(k)) % ys;
+            gap -= k;
+        }
+        val sign = a & ~Q_ABS;
+        if (r == 0) {
+            return sign;
+        }
+        // r * 2^(ye - 16383 - 112), its leading 1 moved to bit 115 for pack128 (no bits lost)
+        val s = clz128(r) - 12;
+        return pack128(sign, ye + 3 - s, r << @cast<u128>(s));
+    }
+
+    // f128 % for both backends (voltc calls it for every f128 remainder, on every target)
+    export fn volt_f128_rem(x: f128, y: f128) -> f128 {
+        return @bitcast<f128>(rem128(@bitcast<u128>(x), @bitcast<u128>(y)));
+    }
+
     // compiler-rt's quad routines on targets whose C runtime has none (Apple's arm64 one: its long
     // double is an f64), so LLVM's calls for f128 arithmetic link there. Elsewhere libgcc or
     // compiler-rt has them
