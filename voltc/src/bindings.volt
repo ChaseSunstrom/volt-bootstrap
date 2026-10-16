@@ -15,9 +15,9 @@
 //   str, a handle as a pointer the caller owns), how many, and what frees them (the list, not the
 //   handles); as a parameter, a slice of those (Volt copies them; handles are given up);
 // - a slice of text or handles, as a slice of str or of the handles' pointers (lent), and as a
-//   result, as the list of its elements' copies (see view_as_list); an optional
-//   text or handle: as a parameter a str? or a pointer (null: none), as a result an optional of
-//   volt_text or a pointer the caller owns;
+//   result (bare or E!T's value), as the list of its elements' copies (see view_as_list); an
+//   optional text or handle: as a parameter a str? or a pointer (null: none), as a result an
+//   optional of volt_text or a pointer the caller owns;
 // - a closure parameter fn(A) -> R: a C function taking the caller's data first, and that data.
 // The last five differ from how Volt passes them, so voltc lib adds shims (see shims below), and
 // relays for languages that can't make a C function giving a struct (Python's ctypes; see by_out).
@@ -446,6 +446,11 @@ attach fn shape_of(this: bind&, t: u32) -> shape? {
                 .CLOSURE(c) => { return this.no_form(x); },
                 .OPT(o) => { return this.no_form(x); },
                 default => {},
+            }
+            // a slice of text or handles: an export fn's result comes back as a list (see
+            // view_as_list), anywhere else nothing owns its elements' copies
+            if (this.converted(x)) {
+                return this.no_form(x);
             }
             add_u32(&this.results, t);
             add_u32(&this.layout, t);
@@ -905,12 +910,21 @@ attach fn owned_result(this: bind&, s: shape) -> bool {
     }
 }
 
-// export fn f returns a slice of what crosses converted (text, handles), which Volt still owns: it
-// comes back as a list the caller owns, each element copied (the shim copies them into a
-// std::vec<T>), so f's result is that list from here on
+// E!T's T (t itself when it isn't an E!T)
+attach fn ok_ty(this: bind&, t: u32) -> u32 {
+    match (*this.c.t.get(t)) {
+        .ERR_UNION(e, x) => { return x; },
+        default => { return t; },
+    }
+}
+
+// export fn f returns a slice of what crosses converted (text, handles), which Volt still owns, bare
+// or as E!T's value: it comes back as a list the caller owns, each element copied (the shim copies
+// them into a std::vec<T>), so f's result is that list (or E! of it) from here on
 attach fn view_as_list(this: bind&, f: u32, at: span) -> compile_error!void {
     val name = S(this.c.fi(f).name);
-    val st = this.c.fi(f).ret;
+    val rt = this.c.fi(f).ret;
+    val st = this.ok_ty(rt);
     val e = this.slice_elem(st);
     this.c.copy_fn(e, at) catch |x| {
         return with_help(fail(at, fmt3("export fn {}: it returns {}, which comes back as a list of copies, but {} can't be copied", copy name, this.c.ty_name(st), this.c.ty_name(e))), fmt("attach a copy fn to {} (attach fn copy(this: T&) -> T), or return a std::vec you build", this.c.ty_name(e)));
@@ -936,7 +950,11 @@ attach fn view_as_list(this: bind&, f: u32, at: span) -> compile_error!void {
     var given: std::vec<garg> = {};
     put(&given, garg::TYPE({ kind: type_kind::RESOLVED(e), span: at }));
     val args = try this.c.gargs_for(d, &given, 0, at);
-    val list = try this.c.struct_inst(d, move args, at);
+    var list = try this.c.struct_inst(d, move args, at);
+    match (*this.c.t.get(rt)) {
+        .ERR_UNION(er, x) => { list = this.c.t.intern(tyk::ERR_UNION(er, list)); },
+        default => {},
+    }
     this.c.fi(f).ret = list;
     put(&this.viewed, f);
     return;
@@ -959,7 +977,7 @@ attach fn check_all(this: bind&) -> compile_error!void {
                 default => {},
             }
         }
-        if (this.converted(f.ret)) {
+        if (this.converted(this.ok_ty(f.ret))) {
             try this.view_as_list(*i, at);
         }
         val ret = this.c.fi(*i).ret;
@@ -1262,6 +1280,36 @@ attach fn fn_parts(this: bind&, t: u32, ps: std::vec<u32>&) -> u32 {
     }
 }
 
+// a shim temporary's name: base, with _ added until none of export fn f's parameters has it
+attach fn temp_name(this: bind&, f: u32, base: str) -> std::string {
+    var n = S(base);
+    var taken = true;
+    while (taken) {
+        taken = false;
+        for (p&) in this.c.fi(f).params.items() {
+            if (p.name == n.as_str()) {
+                taken = true;
+            }
+        }
+        if (taken) {
+            n.push('_');
+        }
+    }
+    return n;
+}
+
+// a shim's body giving out the slice Volt keeps (what call gives) as a list of copies, of type
+// list (see view_as_list)
+attach fn copied(this: bind&, f: u32, list: u32, call: std::string) -> std::string {
+    val v = this.temp_name(f, "viewed_");
+    val item = this.temp_name(f, "item_");
+    var b = fmt2("var {}: {} = {{}};\n", copy v, this.src(list));
+    b.append(fmt2("        for ({}&) in {} {{\n", copy item, move call).as_str());
+    b.append(fmt2("            {}.push(copy *{}) catch @panic(\"out of memory\");\n        }\n", copy v, copy item).as_str());
+    b.append(fmt("        return {};", this.wrap_owned(list, fmt("move {}", copy v))).as_str());
+    return b;
+}
+
 attach fn shim_fn(this: bind&, f: u32, out: std::string&) -> void {
     val info = this.c.fi(f);
     val is_attach = this.c.fn_decl_of(info.decl)->is_attach;
@@ -1348,7 +1396,9 @@ attach fn shim_fn(this: bind&, f: u32, out: std::string&) -> void {
     var body: std::string = {};
     match (this.shape_of(info.ret) ?? shape::VOID) {
         .RESULT(e, x) => {
-            if (this.owned_result(shape::RESULT(e, x))) {
+            if (has_u32(&this.viewed, f)) {
+                body = this.copied(f, x, fmt("try {}", move call));
+            } else if (this.owned_result(shape::RESULT(e, x))) {
                 body = fmt("return {};", this.wrap_owned(x, fmt("try {}", move call)));
             } else {
                 body = fmt("return {};", move call);
@@ -1357,8 +1407,7 @@ attach fn shim_fn(this: bind&, f: u32, out: std::string&) -> void {
         .VOID => { body = fmt("{};", move call); },
         default => {
             if (has_u32(&this.viewed, f)) {
-                // the slice Volt keeps, copied into the list given out (see view_as_list)
-                body = fmt3("var viewed_: {} = {{}};\n        for (item_&) in {} {{\n            viewed_.push(copy *item_) catch @panic(\"out of memory\");\n        }}\n        return {};", this.src(info.ret), move call, this.wrap_owned(info.ret, S("move viewed_")));
+                body = this.copied(f, info.ret, move call);
             } else {
                 body = fmt("return {};", this.wrap_owned(info.ret, move call));
             }
@@ -1786,6 +1835,10 @@ attach fn short(this: bind&, t: u32) -> std::string {
         .STRUCT(s) => {
             if (this.text_method(s) != null) {
                 return S("text");
+            }
+            if (this.is_list(s) && !this.is_export_struct(s)) {
+                // its C name (E!std::vec<T> is E_or_list_T)
+                return fmt("list_{}", this.short(this.list_elem(t)));
             }
             return this.local(this.c.si(s).name);
         },

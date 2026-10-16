@@ -109,6 +109,24 @@ public class ClientShapes {
             r.scribble();
             rn = r.names();
             System.out.println(" " + rn[0] + " " + rn[1]);
+            // the same in an E!: the error, or the list of copies
+            rn = r.names_or(true);
+            rb = r.badges_or(true);
+            String seen = "or " + rn[0] + " " + rn[1] + " " + rb[0].name() + " " + rb[1].name();
+            for (var x : rb) {
+                x.close();
+            }
+            try {
+                r.names_or(false);
+            } catch (shapelib.bank_error e) {
+                seen += " " + e.name;
+            }
+            try {
+                r.badges_or(false);
+            } catch (shapelib.bank_error e) {
+                seen += " " + e.name;
+            }
+            System.out.println(seen);
         }
         long[] sq = shapelib.squares_upto(4);
         System.out.println("squares " + sq.length + " " + sq[3] + " sum " + shapelib.sum_all(sq));

@@ -114,6 +114,24 @@ void lists() {
   r.scribble();
   final rn2 = r.names();
   print('roster $seen ${rn2[0]} ${rn2[1]}');
+  // the same in an E!: the error, or the list of copies
+  final rno = r.names_or(true);
+  final rbo = r.badges_or(true);
+  var seenOr = 'or ${rno[0]} ${rno[1]} ${rbo[0].name()} ${rbo[1].name()}';
+  for (final x in rbo) {
+    x.close();
+  }
+  try {
+    r.names_or(false);
+  } on bank_error catch (e) {
+    seenOr += ' ${e.name}';
+  }
+  try {
+    r.badges_or(false);
+  } on bank_error catch (e) {
+    seenOr += ' ${e.name}';
+  }
+  print(seenOr);
   r.close();
   final sq = squares_upto(4);
   print('squares ${sq.length} ${sq[3]} sum ${sum_all(sq)}');

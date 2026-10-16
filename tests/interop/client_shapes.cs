@@ -182,6 +182,31 @@ static void Lists()
         r.scribble();
         rn = r.names();
         Console.WriteLine($" {rn[0]} {rn[1]}");
+        // the same in an E!: the error, or the list of copies
+        rn = r.names_or(true);
+        rb = r.badges_or(true);
+        var seen = $"or {rn[0]} {rn[1]} {rb[0].name()} {rb[1].name()}";
+        foreach (var x in rb)
+        {
+            x.Dispose();
+        }
+        try
+        {
+            r.names_or(false);
+        }
+        catch (bank_error e)
+        {
+            seen += $" {e.Name}";
+        }
+        try
+        {
+            r.badges_or(false);
+        }
+        catch (bank_error e)
+        {
+            seen += $" {e.Name}";
+        }
+        Console.WriteLine(seen);
     }
     var sq = Api.squares_upto(4);
     Console.WriteLine($"squares {sq.Count} {sq[3]} sum {Api.sum_all(sq)}");

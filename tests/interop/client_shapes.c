@@ -140,6 +140,20 @@ static void lists(void) {
     rn = roster_names(r);
     printf(" %.*s %.*s\n", TEXT(rn.ptr[0]), TEXT(rn.ptr[1]));
     volt_list_free(rn);
+    // the same in an E!: the error, or the list of copies
+    shapelib_bank_error_or_list_text rno = roster_names_or(r, true);
+    shapelib_bank_error_or_list_badge rbo = roster_badges_or(r, true);
+    printf("or %.*s %.*s", TEXT(rno.value.ptr[0]), TEXT(rno.value.ptr[1]));
+    printf(" %.*s %.*s", TEXT(badge_name(rbo.value.ptr[0])), TEXT(badge_name(rbo.value.ptr[1])));
+    volt_list_free(rno.value);
+    for (size_t i = 0; i < rbo.value.len; i++) {
+        badge_free(rbo.value.ptr[i]);
+    }
+    volt_list_free(rbo.value);
+    rno = roster_names_or(r, false);
+    rbo = roster_badges_or(r, false);
+    printf(" %s", rno.error == SHAPELIB_BANK_ERROR_OVERDRAWN ? "OVERDRAWN" : "?");
+    printf(" %s\n", rbo.error == SHAPELIB_BANK_ERROR_OVERDRAWN ? "OVERDRAWN" : "?");
     roster_free(r);
     shapelib_list_i64 sq = squares_upto(4);
     shapelib_slice_i64 sqs = {sq.ptr, sq.len};

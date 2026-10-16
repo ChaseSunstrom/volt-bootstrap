@@ -327,6 +327,21 @@ export attach fn scribble(this: roster&) -> void {
     }
 }
 
+// the same slices in an E!: the error, or a list of copies as a bare slice gives
+export attach fn names_or(this: roster&, ok: bool) -> bank_error!(std::string[..]) {
+    if (!ok) {
+        return bank_error::OVERDRAWN;
+    }
+    return this.people.items();
+}
+
+export attach fn badges_or(this: roster&, ok: bool) -> bank_error!(badge[..]) {
+    if (!ok) {
+        return bank_error::OVERDRAWN;
+    }
+    return this.cards.items();
+}
+
 export fn greeting(name: str?) -> std::string {
     val n = name ?? return std::string::from("hello, nobody");
     var out = std::string::from("hello, ");
