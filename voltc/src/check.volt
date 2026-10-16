@@ -140,6 +140,9 @@ struct fn_inst {
     ir: u32; // its ir_fn
     used_at: span; // where the instance was first asked for (errors in a template's body point back to it)
     used_in: u32? = null; // the fn instance whose body asked
+    // a C++ template's Volt generic made for std::strings that can't change: the parameters (bit i)
+    // whose string its body reads as read-only (ro_text_inst)
+    ro_texts: u64 = 0;
 }
 
 // a receiver temporary kept alive (see fn_cx.kept): its slot, type and live flag
@@ -341,10 +344,11 @@ struct tval {
     wraps: bool = false; // a literal a wrapping operator (+% -% *%) gave: it wraps in the type it gets
 }
 
-// a literal's value, kept on a tval so the literal can still adapt to the type it ends up as
+// a literal's value, kept on a tval so the literal can still adapt to the type it ends up as (a
+// float's nearest f64 and nearest binary128: an f128 takes the second, the narrower floats the first)
 enum lit {
     INT: i128,
-    FLOAT: f64,
+    FLOAT: (f64, u128),
     STR: str,
 }
 
@@ -1421,6 +1425,12 @@ attach fn put_ty(this: checker&, s: std::string&, id: u32) -> void {
         .FN_PTR(ps&, r, va) => {
             s.append("extern \"C\" fn(");
             this.put_tys(s, ps);
+            if (va) {
+                if (ps.len > 0) {
+                    s.append(", ");
+                }
+                s.append("...");
+            }
             s.append(") -> ");
             this.put_ty(s, r);
         },

@@ -224,7 +224,8 @@ and `short` as `int`, `float` as `double`).
 
 `extern "C" fn` declares any function with a C ABI, from a C library, or a Rust `extern "C"`, Zig
 `export`, or anything else linked in with `--cc`. C varargs (`...`) are for these declarations and
-for `extern "C" fn` types. A declaration of your own may see a function another way than a header
+for `extern "C" fn` types, after at least one fixed parameter (C before C23 has no `int f(...)`, so
+`extern "C" fn(...) -> i32` is an error). A declaration of your own may see a function another way than a header
 or std does (`void*` where the header says `const void*`): the two never meet. Declaring one
 function twice yourself, with two signatures, is an error.
 

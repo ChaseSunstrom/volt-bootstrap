@@ -1,6 +1,7 @@
-// Recursive descent + precedence climbing: a port of bootstrap/parser.rs, kept
-// in step with it (same trees, spans and messages). `f<T>(...)` in an expression is a generic call
-// only when f names a generic (found by a token scan of every file first).
+// Recursive descent + precedence climbing: a port of bootstrap/parser.rs, with the same trees, spans
+// and messages, but stricter where stage 0 (frozen) isn't: a C `...` needs a fixed parameter before
+// it and a `)` right after. `f<T>(...)` in an expression is a generic call only when f names a
+// generic (found by a token scan of every file first).
 use std::mem;
 
 // words that are never a name (`ident` rejects them); `error` still starts a path (`error::X`)
@@ -276,7 +277,7 @@ attach fn unexpected(this: parser&, what: str) -> compile_error {
             msg.append("number ");
             append_u128(&msg, v);
         },
-        .FLOAT(v) => {
+        .FLOAT(v, q) => {
             // ponytail: shows the source text; Rust prints the parsed value (differs for 1e3, 1.50)
             msg.append("number ");
             msg.append(this.source_of(this.span()));
@@ -1016,12 +1017,19 @@ attach fn operator_name(this: parser&) -> compile_error!str {
     return fail(at, fmt("{} can't be attached; these can: + - * / % +% -% *% & | ^ << >> ~ < == []", S(sym)));
 }
 
+// C before C23 has no variadic function without a fixed parameter (int f(...)), a declaration or a
+// function pointer type
+val C_VARIADIC_FIXED: str = "a C variadic function needs a fixed parameter before its ...";
+
 // `(var x: T = d, static this, ...)`: the params go into out; returns whether they end in C varargs `...`
 attach fn params(this: parser&, out: std::vec<param>&) -> compile_error!bool {
     try this.expect("(");
     var c_varargs = false;
     while (!this.eat(")")) {
         if (this.eat("...")) {
+            if (out.len == 0) {
+                return fails(this.prev_span(), C_VARIADIC_FIXED);
+            }
             c_varargs = true;
             try this.expect(")");
             break;
@@ -1147,8 +1155,12 @@ attach fn type_atom(this: parser&) -> compile_error!ty {
         var c_varargs = false;
         while (!this.eat(")")) {
             if (this.eat("...")) {
+                if (params.len == 0) {
+                    return fails(this.prev_span(), C_VARIADIC_FIXED);
+                }
                 c_varargs = true;
-                continue;
+                try this.expect(")");
+                break;
             }
             put(&params, try this.parse_type());
             if (!this.eat(",") && !this.is(")")) {

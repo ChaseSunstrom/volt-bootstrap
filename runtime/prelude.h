@@ -20,12 +20,16 @@ typedef unsigned _BitInt(128) volt_u128;
    macOS, whose long double is a double), or with -DVOLT_SOFT_F128, VOLT_SOFT_F128: its 16 bytes of
    bits as a vector, which both ABIs pass as they pass a binary128 (in one SIMD register), and each
    operation a call to compiler-rt's quad routines (std::softfloat's quad_rt on arm64 macOS). The C
-   code spells every f128 operation volt_q_*: plain operators and casts where the type is native */
+   code spells every f128 operation volt_q_*: plain operators and casts where the type is native. A
+   finite constant is volt_q_hex(hex float text, high bits, low bits): the native type reads the text,
+   exactly, with its suffix pasted on (L, or Q for __float128), and the soft path takes the bits */
 #if defined(VOLT_SOFT_F128)
 #elif defined(__LDBL_MANT_DIG__) && __LDBL_MANT_DIG__ == 113
 #define volt_f128 long double
+#define volt_q_hex(h, hi, lo) ((volt_f128)(h##L))
 #elif defined(__SIZEOF_FLOAT128__)
 #define volt_f128 __float128
+#define volt_q_hex(h, hi, lo) ((volt_f128)(h##Q))
 #else
 #define VOLT_SOFT_F128 1
 #endif
@@ -37,6 +41,7 @@ typedef uint64_t volt_f128_bits __attribute__((vector_size(16)));
 #else
 #define volt_q_lit(d, hi, lo) ((volt_f128){ lo, hi })
 #endif
+#define volt_q_hex(h, hi, lo) volt_q_lit(0, hi, lo)
 volt_f128 __addtf3(volt_f128, volt_f128);
 volt_f128 __subtf3(volt_f128, volt_f128);
 volt_f128 __multf3(volt_f128, volt_f128);

@@ -397,8 +397,12 @@ fn bindings_round_trip() {
         // the names voltc lib adds itself
         ("export struct thing { n: i32; }\nexport fn thing_new() -> thing { return { n: 1 }; }\nexport fn thing_free(t: thing&) -> void {}\n", "c", "makes thing_free itself"),
         ("namespace __export { fn x() -> void {} }\nexport fn one() -> i32 { return 1; }\n", "c", "namespace __export"),
-        // a slice of what crosses converted has no owner as a result
-        ("use std::string;\nexport fn bad_view(xs: std::string[..]) -> std::string[..] { return xs; }\n", "c", "which nothing would own"),
+        // a slice of handles comes back as a list of copies: refused when they can't be copied
+        ("export struct gadget { n: i32; }\nattach fn delete(this: gadget&) -> void {}\nexport fn bad_view(xs: gadget[..]) -> gadget[..] { return xs; }\n", "c", "gadget can't be copied"),
+        // and as E!T's value
+        ("export struct gadget { n: i32; }\nattach fn delete(this: gadget&) -> void {}\npublic error oops { BAD, }\nexport fn bad_view(xs: gadget[..]) -> oops!(gadget[..]) { return xs; }\n", "c", "gadget can't be copied"),
+        // a callback's E! of a slice of text: nothing would own the copies
+        ("use std::string;\npublic error oops { BAD, }\nexport fn bad_cb(f: fn(i32) -> oops!(std::string[..])) -> usize {\n    val xs = f(1) catch return 0;\n    return xs.len;\n}\n", "c", "has no C form"),
         // handles in a slice a Python function gives back: nothing would lend them
         ("export struct gadget { n: i32; }\nexport fn bad_cb(f: fn(i32) -> gadget*[..]) -> usize { return f(1).len; }\n", "python", "nothing would lend the handles"),
     ] {
@@ -407,6 +411,35 @@ fn bindings_round_trip() {
         let err = String::from_utf8_lossy(&o.stderr);
         assert!(!o.status.success() && err.contains(want), "{err}");
     }
+    // a slice of E! over text or handles: Volt holds the value itself, C would read { error, its
+    // C form }, so voltc lib refuses it as a parameter and as a result
+    for (src, want) in [
+        ("use std::string;\npublic error oops { BAD, }\nexport fn f(xs: oops!std::string[..]) -> usize { return xs.len; }\n", "oops!std::string"),
+        ("export struct badge { n: i32; }\npublic error oops { BAD, }\npublic struct box { xs: std::vec<oops!badge>; }\nexport fn box_new() -> box { return { xs: {} }; }\nexport attach fn all(this: box&) -> oops!badge[..] { return this.xs.items(); }\n", "oops!badge"),
+    ] {
+        std::fs::write(bad.join("bad.volt"), src).unwrap();
+        let o = e.voltc(&["lib", "bad", "--pkg", &format!("bad={}", bad.display()), "--static", "-o", &e.path("libbad.a")]);
+        let err = String::from_utf8_lossy(&o.stderr);
+        assert!(!o.status.success() && err.contains("has no C form") && err.contains(want), "{err}");
+    }
+    // over numbers or str it keeps its form
+    std::fs::write(bad.join("bad.volt"), "public error oops { BAD, }\nexport fn f(xs: oops!i32[..], ys: oops!str[..]) -> usize { return xs.len + ys.len; }\n").unwrap();
+    ok(e.voltc(&["lib", "bad", "--pkg", &format!("bad={}", bad.display()), "--static", "-o", &e.path("libbad.a")]), "voltc lib of a slice of E!i32 and of E!str");
+
+    // the shims' temporaries never take a parameter's name: viewed_ and item_ are what a slice given
+    // back as a list of copies (bare or in an E!) is copied with; x_v, x_f, cb_user and this_ what
+    // a slice of text, a trait, a closure and an attached fn's this are taken with, and a0 the
+    // closure's relay's own parameter
+    let names = e.dir.join("names");
+    std::fs::create_dir_all(&names).unwrap();
+    std::fs::write(names.join("names.volt"), "use std::string;\n\npublic error oops {\n    BACKWARDS,\n}\n\npublic struct shelf {\n    xs: std::vec<std::string>;\n}\n\nexport fn shelf_new() -> shelf {\n    var s: shelf = { xs: {} };\n    s.xs.push(std::string::from(\"a\")) catch @panic(\"out of memory\");\n    s.xs.push(std::string::from(\"b\")) catch @panic(\"out of memory\");\n    s.xs.push(std::string::from(\"c\")) catch @panic(\"out of memory\");\n    return s;\n}\n\nexport attach fn between(this: shelf&, viewed_: usize, item_: usize) -> std::string[..] {\n    return this.xs.items()[viewed_..item_];\n}\n\nexport attach fn between_or(this: shelf&, viewed_: usize, item_: usize) -> oops!(std::string[..]) {\n    if (viewed_ > item_) {\n        return oops::BACKWARDS;\n    }\n    return this.xs.items()[viewed_..item_];\n}\n\nexport attach fn plus(this: shelf&, this_: usize) -> usize {\n    return this.xs.len + this_;\n}\n\npublic trait counter {\n    fn count(this) -> i32;\n}\n\nexport fn counted(x: counter&, x_f: i32, x_v: i32) -> i32 {\n    return x.count() + x_f + x_v;\n}\n\nexport fn summed(x: std::string[..], x_v: usize) -> usize {\n    var t = x_v;\n    for (s&) in x {\n        t += s.len();\n    }\n    return t;\n}\n\nexport fn applied(cb: fn(i32) -> i32, cb_user: i32) -> i32 {\n    return cb(cb_user);\n}\n\nexport fn first(a0: fn(i32) -> i32, n: i32) -> i32 {\n    return a0(n);\n}\n").unwrap();
+    let npkg = format!("names={}", names.display());
+    ok(e.voltc(&["lib", "names", "--pkg", &npkg, "--shared", "--leak-check", "-o", &e.path(&dylib("names"))]), "voltc lib names --shared");
+    ok(e.voltc(&["bindings", "names", "--pkg", &npkg, "--lang", "c", "-o", &e.path("names.h")]), "voltc bindings names --lang c");
+    std::fs::write(e.dir.join("names_main.c"), "#include \"names.h\"\n#include <stdio.h>\n\nextern size_t volt_live_allocs;\n\n#define TEXT(t) (int)(t).len, (const char *)(t).ptr\n\nstatic int32_t count_it(void *self) {\n    return *(int32_t *)self;\n}\n\nstatic const names_counter_vt counter_vt = {count_it};\n\nstatic int32_t add_to(void *user, int32_t x) {\n    return x + *(int32_t *)user;\n}\n\nint main(void) {\n    names_shelf *s = shelf_new();\n    names_list_text l = shelf_between(s, 1, 3);\n    printf(\"%zu %.*s %.*s\", l.len, TEXT(l.ptr[0]), TEXT(l.ptr[1]));\n    volt_list_free(l);\n    names_oops_or_list_text r = shelf_between_or(s, 0, 1);\n    printf(\" %zu %.*s\", r.value.len, TEXT(r.value.ptr[0]));\n    volt_list_free(r.value);\n    r = shelf_between_or(s, 2, 1);\n    printf(\" %s\", r.error == NAMES_OOPS_BACKWARDS ? \"BACKWARDS\" : \"?\");\n    printf(\" %zu\", shelf_plus(s, 7));\n    int32_t four = 4, ten = 10;\n    names_counter c = {&counter_vt, &four, NULL};\n    printf(\" %d\", counted(c, 20, 300));\n    volt_str ws[] = {{(const uint8_t *)\"ab\", 2}, {(const uint8_t *)\"cde\", 3}};\n    names_slice_str wl = {ws, 2};\n    printf(\" %zu %d %d\", summed(wl, 100), applied(add_to, &ten, 5), first(add_to, &ten, 1));\n    shelf_free(s);\n    printf(\" live %zu\\n\", volt_live_allocs);\n    return 0;\n}\n").unwrap();
+    let rpath = format!("-Wl,-rpath,{}", e.path(""));
+    ok(Command::new("cc").args(["-Wall", "-Werror", "names_main.c", "-I", &e.path(""), "-L", &e.path(""), "-lnames", &rpath, "-o", "names_main"]).current_dir(&e.dir).output().unwrap(), "cc names_main.c");
+    assert_eq!(ok(Command::new(e.dir.join("names_main")).output().unwrap(), "names_main"), "2 b c 1 a BACKWARDS 10 324 105 15 11 live 0\n", "a shim's temporaries and its parameters' names");
 }
 
 // a slice of slices has a C type of its own (slice_slice_i64), not its elements' name again; slices
@@ -426,14 +459,16 @@ fn bindings_nested_slices() {
     assert_eq!(ok(Command::new(e.dir.join("main")).output().unwrap(), "main"), "6\n7 7\n");
 }
 
-const SHAPES_OUT: &str = "biggest 9 1.5\naccount bea 300\nvisit 301 get 301\nclosed 301 1\ncircle of area 3\ncircle gone\ngrown 27\nsquare 9 square of area 9\nhey!\ntry 4 OVERDRAWN\nopened 25\nclosed 2\n42 hello, volt\nowners 2 ann bobby\nrichest 9 after 6 10\nopened 2 dee\nsquares 4 16 sum 30\njoined a-b-c total 3\nhello, ann; hello, nobody\nnick 1 ann 0\nopen_if 1 1\nclose_if 0 -1\nclose_all 2\nsome 2\nrows 6\narrays 12 13 11 2.5 1.5 2 3 4\ntagged 41 5 20 7 8 127\nlists closed 7\ncircle gone\n";
+const SHAPES_OUT: &str = "biggest 9 1.5\naccount bea 300\nvisit 301 get 301\nclosed 301 1\ncircle of area 3\ncircle gone\ngrown 27\nsquare 9 square of area 9\nhey!\ntry 4 OVERDRAWN\nopened 25\nclosed 2\n42 hello, volt\nowners 2 ann bobby\nrichest 9 after 6 10\nopened 2 dee\nroster ann bo ann bo ann! bo!\nor ann! bo! ann! bo! OVERDRAWN OVERDRAWN\nsquares 4 16 sum 30\njoined a-b-c total 3\nhello, ann; hello, nobody\nnick 1 ann 0\nopen_if 1 1\nclose_if 0 -1\nclose_all 2\nsome 2\nrows 6\narrays 12 13 11 2.5 1.5 2 3 4\ntagged 41 5 20 7 8 127\nlists closed 7\ncircle gone\n";
 
 #[test]
 fn bindings_shapes() {
     // what every language calls beyond the plain shapes: a generic's instances, a struct that owns text
     // held by a handle with its methods, owned values passed in, a trait implemented on either side,
-    // closures taking and giving text and handles, closures given back. The library is a leak-checked
-    // build, and leak_report.c (or the client) prints how many of its allocations are live when the client is done
+    // closures taking and giving text and handles, closures given back, slices of text and handles
+    // given back (as lists of copies, freed before Volt changes its own). The library is a
+    // leak-checked build, and leak_report.c (or the client) prints how many of its allocations are
+    // live when the client is done
     let e = Env::new("shapes");
     let pkg = "shapelib=shapelib/lib";
     for (lang, file) in [("c", "shapelib.h"), ("cpp", "shapelib.hpp"), ("rust", "shapelib.rs"), ("zig", "shapelib.zig"), ("go", "shapelib.go"), ("python", "shapelib.py"), ("pyi", "shapelib.pyi"), ("java", "shapelib.java"), ("node", "shapelib_node.c"), ("js", "shapelib.js"), ("ts", "shapelib.d.ts"), ("lua", "shapelib_lua.c"), ("ruby", "shapelib_ruby.c"), ("dart", "shapelib.dart"), ("swift", "shapelib.swift"), ("kotlin", "shapelib.kt")] {
@@ -2006,7 +2041,7 @@ fn cpp_params() {
     // a Volt std::string for a template parameter S (S&, const S&, S) a C++ std::string, a throw
     // through the plain form a stop
     let e = Env::new("cpp-params");
-    let want = "sum 6\nfill 4 4 4\ntotal 12\ntwice 8 24\nfirst 7 8\napply 5 6 10\n@cpp 42\nshout hi!!\ngrow 2: 7 hi!!~++\ngrow -1: INVALID_ARGUMENT hi!!~++\n@cpp hi!!~++!\nrelay INVALID_ARGUMENT hi!!~++!\nshapes 2 7\npoints 202 45\nspend 15\nasked why??\ncounted 3 7 ab+\narrays 7 4 7 9 4\n@cpp 8 5 1\nalias 8 cells 14\nwrap hey! 4 6\ngauge 40 70 hey!\npad 6 hey!##\ntgrow 1: 8 hey!##~+\ntgrow -1: INVALID_ARGUMENT hey!##~+\nwhich 1 2 2 1 ab&& cd\nfwd 6 ab&&&& len 2 6\nnested [[1,2],[3],[]] [[1,2],[3]] [[[1,2],[3],[]],[],[[1,2]]] []\nnested per use [[1,2],[3],[]] 15\nnested [[3],[]] 4.75 hi//you\nmap {1:10,2:20,3:30} {} {4:125,5:50} 140 3 3\nmap {a:1,b:2} {:'',k:'v w'} {1:[],2:[4,5]}\nmap {1:10,2:20,3:30} {1:[],2:[4,5]} 2 2 2\nmap 1 {7:7} 1\npick 2: 20\npick 9: OUT_OF_RANGE\nderef 5 5 3 3 7 7\nsum_ptr 7 size 4 4 8 which 1 2\nchecked 5: 5\nchecked -1: INVALID_ARGUMENT\ntwice 42 tally 4 7 10 10\n";
+    let want = "sum 6\nfill 4 4 4\ntotal 12\ntwice 8 24\nfirst 7 8\napply 5 6 10\n@cpp 42\nshout hi!!\ngrow 2: 7 hi!!~++\ngrow -1: INVALID_ARGUMENT hi!!~++\n@cpp hi!!~++!\nrelay INVALID_ARGUMENT hi!!~++!\nshapes 2 7\npoints 202 45\nspend 15\nasked why??\ncounted 3 7 ab+\narrays 7 4 7 9 4\n@cpp 8 5 1\nalias 8 cells 14\nwrap hey! 4 6\ngauge 40 70 hey!\npad 6 hey!##\ntgrow 1: 8 hey!##~+\ntgrow -1: INVALID_ARGUMENT hey!##~+\nwhich 1 2 2 1 2 ab&& cd\nfwd 6 ab&&&& len 2 6\nnested [[1,2],[3],[]] [[1,2],[3]] [[[1,2],[3],[]],[],[[1,2]]] []\nnested per use [[1,2],[3],[]] 15\nnested [[3],[]] 4.75 hi//you\nmap {1:10,2:20,3:30} {} {4:125,5:50} 140 3 3\nmap {a:1,b:2} {:'',k:'v w'} {1:[],2:[4,5]}\nmap {1:10,2:20,3:30} {1:[],2:[4,5]} 2 2 2\nmap 1 {7:7} 1\npick 2: 20\npick 9: OUT_OF_RANGE\nderef 5 5 3 3 7 7\nsum_ptr 7 size 4 4 8 which 1 2\nchecked 5: 5\nchecked -1: INVALID_ARGUMENT\ntwice 42 tally 4 7 10 10\n";
     for backend in ["c", "llvm"] {
         assert_eq!(ok(e.voltc(&["run", "cpp_params.volt", "--backend", backend]), "voltc run cpp_params.volt"), want, "C++ parameters ({backend})");
         let o = e.voltc(&["run", "cpp_params_gthrow.volt", "--backend", backend]);
@@ -2015,7 +2050,7 @@ fn cpp_params() {
         // @cpp<cpp_error!R> and the try_ forms of calls worked out per use catch as declared try_ forms do
         // (a fn C++ calls through a pointer: its plain throw is the outer call's, kept past a
         // catching call of its own, which reports its own)
-        let caught = "nested ok: INVALID_ARGUMENT negative\ninner: LENGTH_ERROR\nnested fail: INVALID_ARGUMENT negative\ninner only: 96\nbump\nbumped: INVALID_ARGUMENT negative\nbump\ntbumped: INVALID_ARGUMENT negative\nb b\nnonneg 4: 4\nnonneg -4: INVALID_ARGUMENT negative\nboom 1: done\nboom 2: LENGTH_ERROR too many\nthrow 42: UNKNOWN an exception that isn't a std::exception\nbad_alloc: BAD_ALLOC std::bad_alloc\ngrow 2: 5 hi~++\ngrow -1: INVALID_ARGUMENT hi~++\nrelay 99\nnonneg -5: INVALID_ARGUMENT negative\nplain 3\n";
+        let caught = "nested ok: INVALID_ARGUMENT negative\ninner: LENGTH_ERROR\nnested fail: INVALID_ARGUMENT negative\ninner only: 96\nbump\nbumped: INVALID_ARGUMENT negative\nbump\ntbumped: INVALID_ARGUMENT negative\nb b\nnonneg 4: 4\nnonneg -4: INVALID_ARGUMENT negative\nboom 1: done\nboom 2: LENGTH_ERROR too many\nthrow 42: UNKNOWN an exception that isn't a std::exception\nbad_alloc: BAD_ALLOC std::bad_alloc\ngrow 2: 5 hi~++\ngrow -1: INVALID_ARGUMENT hi~++\nrelay 99\nnonneg -5: INVALID_ARGUMENT negative\napply 41: 42\napply -5: INVALID_ARGUMENT negative\napply nested: INVALID_ARGUMENT negative\nref -2: INVALID_ARGUMENT negative\nslice 0: 3\nslice 1: INVALID_ARGUMENT negative\nplain 3 42 5 3\nfns 7 7 7 6 6\nfns caught: 6\nfmt 3\ntext 33 op 4\nnames 3 -1 len 5\n";
         assert_eq!(ok(e.voltc(&["run", "cpp_params_catch.volt", "--backend", backend]), "voltc run cpp_params_catch.volt"), caught, "@cpp<cpp_error!R> ({backend})");
         let tried = "checked 2 3: 5\nchecked 2 -5: INVALID_ARGUMENT negative sum\nstretch 2: 5 hi~++\nstretch -1: OUT_OF_RANGE hi~++\nboom 2: LENGTH_ERROR\ntwin 5 -5\nsole 2 -5 read 3 -4\nlone 3 -6\npick -1: INVALID_ARGUMENT negative pick\npick 4: 4\npick 1 -5: RANGE_ERROR negative picks\npick 1 2: 3\nkeep 3: 3\nkeep -2: DOMAIN_ERROR\nmade 1: 1 ab~\nmade -1: DOMAIN_ERROR ab~\ngrow 2: 6 ab~~++\ngrow -1: OUT_OF_RANGE ab~~++\ntake -1: OUT_OF_RANGE 5\n";
         assert_eq!(ok(e.voltc(&["run", "cpp_params_try.volt", "--backend", backend]), "voltc run cpp_params_try.volt"), tried, "try_ forms per use ({backend})");
@@ -2059,6 +2094,8 @@ fn cpp_params() {
         assert!(src.contains(decl), "{decl}: {src}");
     }
     assert!(!src.contains("fn find(m: std::map<") && !src.contains("fn key0("), "results into the map's copy: {src}");
+    // a variadic function pointer with no fixed parameter has no Volt form (C before C23 has none)
+    assert!(src.contains("(worked out per use: int (*)(...) has no Volt form)") && !src.contains("fn(...)"), "R(*)(...): {src}");
     // a per-use name's try_ stub beside its own, unless the header declares that name (then a
     // left-out comment)
     assert!(src.contains("@attributes([@cpp_call(\"try:pr::pu::checked\")])") && src.contains("fn try_checked() -> void {}"), "a per-use try_ stub: {src}");
@@ -2128,6 +2165,20 @@ fn cpp_params_refused() {
     assert!(err.contains("argument 1 is a i32[4]&, but 'fill' wants a i32[3]&"), "another array size: {err}");
     let err = check("cpp_params_closure.volt");
     assert!(err.contains("argument 1 is a closure(i32) -> i32, but 'apply' wants a extern \"C\" fn(i32) -> i32"), "a closure for a function pointer: {err}");
+    // a fn with a reference or a C++ class in its signature, as a function pointer to a call worked
+    // out per use (plain, @cpp<R>'s {i} and {&i}, an operator's operand): no T* or by-name spelling,
+    // an error naming both
+    let err = check("cpp_params_fnref.volt");
+    for (line, why) in [
+        (8, "'by_ref' takes a i32&, which has no C function-pointer form"),
+        (9, "'by_point' takes a cpp::pr::point, which has no C function-pointer form"),
+        (10, "'first' returns a i32&, which has no C function-pointer form"),
+        (11, "'first' returns a i32&, which has no C function-pointer form"),
+        (12, "'by_ref' takes a i32&, which has no C function-pointer form"),
+        (13, "'by_ref' takes a i32&, which has no C function-pointer form"),
+    ] {
+        assert!(err.contains(&format!("cpp_params_fnref.volt:{line}")) && err.contains(why), "line {line}, {why}: {err}");
+    }
     let err = check("cpp_params_view.volt");
     assert!(err.contains("its result would point into a copy (of a string, a vector or a map) that's gone once the call returns") && err.contains("cpp_params_view.volt:7"), "a view into the copy, per use: {err}");
     let shown = Command::new(&e.voltc).args(["check", "cpp_params.volt", "--std"]).arg(Path::new(ROOT).join("std")).current_dir(Path::new(ROOT).join("tests/interop")).env("VOLT_SHOW_CPP", "1").output().unwrap();
@@ -2154,6 +2205,12 @@ fn cpp_params_refused() {
         assert!(err.contains(line), "{line}: {err}");
     }
     assert_eq!(err.matches(why).count(), 3, "S nested or the result: {err}");
+    // C++ writing into a val or a temporary for an S&-only template, through its Volt generic and
+    // in @cpp: an error each call
+    let err = check("cpp_params_gval.volt");
+    assert!(err.contains("'k' is a val, and wrap changes it (through s): declare it with var") && err.contains("cpp_params_gval.volt:7"), "a val through the generic: {err}");
+    assert!(err.contains("'k' is a val, and C++ would change it: declare it with var") && err.contains("cpp_params_gval.volt:8"), "a val in @cpp: {err}");
+    assert!(err.contains("C++ would change a temporary std::string here (the template takes it as S&)") && err.contains("cpp_params_gval.volt:12"), "a temporary in @cpp: {err}");
     // a parameter with no Volt form: a per-use stub whose comment shows the C++ declaration and
     // names the type; a call with a slice names it too
     assert!(src.contains("// C++: int pr::nv::flags(const std::vector<std::vector<bool>> & v) (worked out per use: const std::vector<std::vector<bool>> & has no Volt form)") && src.contains("fn flags() -> void {}"), "the stub says why: {src}");

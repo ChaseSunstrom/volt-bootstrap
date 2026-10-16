@@ -67,6 +67,18 @@ def lists():
     opened = s.open_all(["cy", "dee"])
     print("opened", len(opened), opened[1].owner())
     del opened
+    # slices Volt keeps, given back as lists of copies: freed here, Volt's still there to scribble on
+    r = s.roster.open("ann", "bo")
+    rn, rb = r.names(), r.badges()
+    print("roster", rn[0], rn[1], rb[0].name(), rb[1].name(), end="")
+    del rn, rb
+    r.scribble()
+    rn = r.names()
+    print("", rn[0], rn[1])
+    # the same in an E!: the error, or the list of copies
+    rn, rb = r.names_or(True), r.badges_or(True)
+    print("or", rn[0], rn[1], rb[0].name(), rb[1].name(), error_of(lambda: r.names_or(False)), error_of(lambda: r.badges_or(False)))
+    del r, rn, rb
     sq = s.squares_upto(4)
     print("squares", len(sq), sq[3], "sum", s.sum_all(sq))
     parts = ["a", "b", "c"]

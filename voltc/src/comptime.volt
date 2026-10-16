@@ -5,13 +5,13 @@
 use std::mem;
 
 // a compile-time value. INT and FLOAT carry their type (VOID while an untyped literal); OPT carries the
-// optional type (T?, not T)
+// optional type (T?, not T). FLOAT is read twice, as an f64 and as a binary128 (see ct_float)
 enum cval {
     VOID,
     NULL,
     BOOL: bool,
     INT: (i128, u32),   // VOID = an untyped literal
-    FLOAT: (f64, u32),
+    FLOAT: (f64, u32, u128),
     STR: std::string,
     TYPE: u32,
     TUPLE: std::vec<cval>,
@@ -281,7 +281,7 @@ attach fn ct_to_val(this: checker&, v: cval, want: u32?, span: span) -> compile_
             }
             return this.int_lit(x, t);
         },
-        .FLOAT(x, t) => {
+        .FLOAT(x, t, q) => {
             var ft = t;
             if (ft == VOID) {
                 ft = F64;
@@ -289,7 +289,7 @@ attach fn ct_to_val(this: checker&, v: cval, want: u32?, span: span) -> compile_
                     ft = want ?? F64;
                 }
             }
-            return this.float_lit(x, ft);
+            return this.float_lit(x, q, ft);
         },
         .STR(s) => {
             val sv = this.str_val(this.intern(copy s));
@@ -400,7 +400,7 @@ attach fn ct_type_of(this: checker&, v: cval&) -> u32 {
             }
             return t;
         },
-        .FLOAT(x, t) => {
+        .FLOAT(x, t, q) => {
             if (t == VOID) {
                 return F64;
             }
@@ -458,13 +458,13 @@ attach fn ct_coerce(this: checker&, v: cval, t: u32, span: span) -> compile_erro
                     }
                     return cval::INT(x, t);
                 },
-                .FLOAT(b) => { return cval::FLOAT(ct_int_f64(x, from), t); },
+                .FLOAT(b) => { return ct_int_float(x, from, t); },
                 default => {},
             }
         },
-        .FLOAT(x, from) => {
+        .FLOAT(x, from, q) => {
             match (tt) {
-                .FLOAT(b) => { return cval::FLOAT(x, t); },
+                .FLOAT(b) => { return ct_float(x, t, q); },
                 default => {},
             }
         },
@@ -731,12 +731,12 @@ attach fn ct_expr(this: checker&, e: expr&, want: u32?) -> compile_error!cval {
             return cval::INT(@cast<i128>(v), t);
         },
         .CHAR(v) => { return cval::INT(@cast<i128>(v), VOID); },
-        .FLOAT(v) => {
+        .FLOAT(v, q) => {
             var t = VOID;
             if (want != null && this.t.is_float(want ?? 0)) {
                 t = want ?? VOID;
             }
-            return cval::FLOAT(v, t);
+            return ct_float(v, t, q);
         },
         .STR(s) => { return cval::STR(copy s); },
         .TYPE_BODY(b) => { return this.ct_type_body(b, span); },
@@ -775,9 +775,9 @@ attach fn ct_expr(this: checker&, e: expr&, want: u32?) -> compile_error!cval {
                         return cval::INT(~n, t);
                     }
                 },
-                .FLOAT(f, t) => {
+                .FLOAT(f, t, q) => {
                     if (op == unop::NEG) {
-                        return cval::FLOAT(-f, t);
+                        return cval::FLOAT(-f, t, q ^ (@cast<u128>(1) << 127));
                     }
                 },
                 .BOOL(b) => {
@@ -1120,21 +1120,33 @@ attach fn ct_binop(this: checker&, op: binop, var a: cval, var b: cval, span: sp
         .INT(x, ta) => {
             match (b) {
                 .INT(y, tb) => { return this.ct_int_op(op, x, ta, y, tb, span); },
-                .FLOAT(f, tb) => { return this.ct_binop(op, cval::FLOAT(ct_int_f64(x, ta), VOID), copy b, span); },
+                .FLOAT(f, tb, q) => { return this.ct_binop(op, ct_int_float(x, ta, VOID), copy b, span); },
                 default => {},
             }
         },
-        .FLOAT(x, ta) => {
+        .FLOAT(x, ta, qx) => {
             match (b) {
-                .FLOAT(y, tb) => {
+                .FLOAT(y, tb, qy) => {
                     var t = ta;
                     if (t == VOID) {
                         t = tb;
                     }
-                    if (op == binop::ADD) { return cval::FLOAT(x + y, t); }
-                    if (op == binop::SUB) { return cval::FLOAT(x - y, t); }
-                    if (op == binop::MUL) { return cval::FLOAT(x * y, t); }
-                    if (op == binop::DIV) { return cval::FLOAT(x / y, t); }
+                    // both readings, each in its own precision (an f128's binary128 as run time
+                    // rounds it, std::softfloat); ct_float keeps the one t has
+                    if (op == binop::ADD) { return ct_float(x + y, t, std::softfloat::add128(qx, qy)); }
+                    if (op == binop::SUB) { return ct_float(x - y, t, std::softfloat::sub128(qx, qy)); }
+                    if (op == binop::MUL) { return ct_float(x * y, t, std::softfloat::mul128(qx, qy)); }
+                    if (op == binop::DIV) { return ct_float(x / y, t, std::softfloat::div128(qx, qy)); }
+                    if (t == F128) {
+                        // -1, 0, 1, or 2 for a NaN, which every test but != fails
+                        val c = std::softfloat::cmp128(qx, qy);
+                        if (op == binop::EQ) { return cval::BOOL(c == 0); }
+                        if (op == binop::NE) { return cval::BOOL(c != 0); }
+                        if (op == binop::LT) { return cval::BOOL(c == -1); }
+                        if (op == binop::GT) { return cval::BOOL(c == 1); }
+                        if (op == binop::LE) { return cval::BOOL(c == -1 || c == 0); }
+                        if (op == binop::GE) { return cval::BOOL(c == 0 || c == 1); }
+                    }
                     if (op == binop::EQ) { return cval::BOOL(x == y); }
                     if (op == binop::NE) { return cval::BOOL(x != y); }
                     if (op == binop::LT) { return cval::BOOL(x < y); }
@@ -1143,7 +1155,7 @@ attach fn ct_binop(this: checker&, op: binop, var a: cval, var b: cval, span: sp
                     if (op == binop::GE) { return cval::BOOL(x >= y); }
                     return fails(span, "this operator doesn't work on floats");
                 },
-                .INT(y, tb) => { return this.ct_binop(op, copy a, cval::FLOAT(@cast<f64>(y), VOID), span); },
+                .INT(y, tb) => { return this.ct_binop(op, copy a, ct_int_float(y, tb, VOID), span); },
                 default => {},
             }
         },
@@ -1309,6 +1321,28 @@ fn ct_int_f64(x: i128, t: u32) -> f64 {
     return @cast<f64>(x);
 }
 
+// integer x (of type from) as a float of type t, each reading rounded from x itself
+fn ct_int_float(x: i128, from: u32, t: u32) -> cval {
+    var q = std::softfloat::i128_to_f128(x);
+    if (from == int_id(int_ty::U128) && x < 0) {
+        q = std::softfloat::u128_to_f128(false, @cast<u128>(x));
+    }
+    return ct_float(ct_int_f64(x, from), t, q);
+}
+
+// a float value of type t from its f64 reading f and binary128 reading q: an untyped one (VOID) keeps
+// both, an f128 is q (f becomes q narrowed, as a conversion to f64 would give), and a narrower float
+// is f (q becomes f widened), so a conversion between types reads the right one (T-0477)
+fn ct_float(f: f64, t: u32, q: u128) -> cval {
+    if (t == F128) {
+        return cval::FLOAT(@bitcast<f64>(std::softfloat::f128_to_f64(q)), t, q);
+    }
+    if (t == VOID) {
+        return cval::FLOAT(f, t, q);
+    }
+    return cval::FLOAT(f, t, std::softfloat::f64_to_f128(@bitcast<u64>(f)));
+}
+
 // ct_int_op on u128s, unsigned: + - * checked against u128's range, wrapping ops wrap at 128 bits;
 // none on overflow, a zero divisor or a shift of 128 or more
 fn ct_u128_op(op: binop, x: u128, y: u128) -> cval? {
@@ -1405,9 +1439,15 @@ fn cval_eq(a: cval&, b: cval&) -> bool {
                 default => { return false; },
             }
         },
-        .FLOAT(x, t) => {
+        .FLOAT(x, t, qx) => {
             match (*b) {
-                .FLOAT(y, u) => { return x == y && t == u; },
+                .FLOAT(y, u, qy) => {
+                    // an f128 by its binary128, an untyped one by both readings
+                    if (t == F128) {
+                        return u == F128 && std::softfloat::cmp128(qx, qy) == 0;
+                    }
+                    return x == y && t == u && (t != VOID || std::softfloat::cmp128(qx, qy) == 0);
+                },
                 default => { return false; },
             }
         },
@@ -1503,14 +1543,20 @@ attach fn ct_convert(this: checker&, v: cval, to: u32, unchecked: bool, span: sp
                     }
                     return cval::INT(x, to);
                 },
-                .FLOAT(b) => { return cval::FLOAT(ct_int_f64(x, from), to); },
+                .FLOAT(b) => { return ct_int_float(x, from, to); },
                 default => {},
             }
         },
-        .FLOAT(x, from) => {
+        .FLOAT(x, from, q) => {
             match (tt) {
-                .FLOAT(b) => { return cval::FLOAT(x, to); },
+                .FLOAT(b) => { return ct_float(x, to, q); },
                 .INT(k) => {
+                    if (unchecked && from == F128) {
+                        if (!k.signed()) {
+                            return cval::INT(@cast<i128>(std::softfloat::f128_to_unsigned(q, 128)), to);
+                        }
+                        return cval::INT(std::softfloat::f128_to_signed(q, 128), to);
+                    }
                     if (unchecked) {
                         return cval::INT(@cast<i128>(x), to);
                     }
@@ -1696,7 +1742,7 @@ attach fn ct_repeat(this: checker&, x: expr&, n: expr&, want: u32?, span: span) 
 attach fn ct_zero(this: checker&, t: u32, span: span) -> compile_error!cval {
     match (*this.t.get(t)) {
         .INT(k) => { return cval::INT(0, t); },
-        .FLOAT(b) => { return cval::FLOAT(0.0, t); },
+        .FLOAT(b) => { return cval::FLOAT(0.0, t, 0); },
         .BOOL => { return cval::BOOL(false); },
         .OPT(x) => { return cval::OPT(t, null); },
         .ARRAY(et, n) => {
@@ -2684,7 +2730,7 @@ attach fn cval_key(this: checker&, v: cval&) -> std::string {
     match (*v) {
         .TYPE(t) => { return std::format("#{}", t); },
         .INT(n, t) => { return fmt2("{}#{}", num(n), std::format("{}", t)); },
-        .FLOAT(x, t) => { return std::format("{}#{}", x, t); },
+        .FLOAT(x, t, q) => { return std::format("{}#{}#{}", x, t, q); },
         .STR(s) => { return fmt2("{}:{}", std::format("{}", s.len()), copy s); },
         .TUPLE(vs&) => { return fmt("({})", this.cvals_key(vs)); },
         .ARRAY(vs&, t) => { return fmt2("[{}]#{}", this.cvals_key(vs), std::format("{}", t)); },
@@ -3000,7 +3046,7 @@ fn cval_expr(v: cval&, span: span) -> expr? {
             }
             return { kind: expr_kind::INT(@cast<u128>(n)), span: span };
         },
-        .FLOAT(f, k) => { return { kind: expr_kind::FLOAT(f), span: span }; },
+        .FLOAT(f, k, q) => { return { kind: expr_kind::FLOAT(f, q), span: span }; },
         .BOOL(b) => { return { kind: expr_kind::BOOL(b), span: span }; },
         .STR(s) => { return { kind: expr_kind::STR(copy s), span: span }; },
         default => { return null; },
@@ -3671,7 +3717,7 @@ attach fn cval_text(this: checker&, v: cval&) -> std::string {
             return S("false");
         },
         .INT(n, k) => { return num(n); },
-        .FLOAT(f, k) => { return std::format("{}", f); },
+        .FLOAT(f, k, q) => { return std::format("{}", f); },
         .STR(s) => { return fmt("\"{}\"", copy s); },
         .TYPE(t) => { return this.ty_name(t); },
         .TUPLE(vs) => { return fmt("({})", this.cvals_text(&vs)); },

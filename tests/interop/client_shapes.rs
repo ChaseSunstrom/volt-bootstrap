@@ -48,6 +48,20 @@ fn lists() {
     let opened = open_all(&["cy", "dee"][..]);
     println!("opened {} {}", opened.len(), opened[1].owner());
     drop(opened);
+    // slices Volt keeps, given back as lists of copies: freed here, Volt's still there to scribble on
+    let r = roster::open("ann", "bo");
+    let (rn, rb) = (r.names(), r.badges());
+    print!("roster {} {} {} {}", rn[0], rn[1], rb[0].name(), rb[1].name());
+    drop((rn, rb));
+    r.scribble();
+    let rn = r.names();
+    println!(" {} {}", rn[0], rn[1]);
+    // the same in an E!: the error, or the list of copies
+    let (rn, rb) = (r.names_or(true).ok().unwrap(), r.badges_or(true).ok().unwrap());
+    print!("or {} {} {} {}", rn[0], rn[1], rb[0].name(), rb[1].name());
+    drop((rn, rb));
+    println!(" {} {}", r.names_or(false).err().unwrap(), r.badges_or(false).err().unwrap());
+    drop(r);
     let sq = squares_upto(4);
     println!("squares {} {} sum {}", sq.len(), sq[3], sum_all(sq.clone()));
     let parts = ["a", "b", "c"];

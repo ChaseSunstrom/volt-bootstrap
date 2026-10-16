@@ -552,8 +552,8 @@ attach fn primary(this: parser&) -> compile_error!expr {
             kind = expr_kind::INT(v);
             done = true;
         },
-        .FLOAT(v) => {
-            kind = expr_kind::FLOAT(v);
+        .FLOAT(v, q) => {
+            kind = expr_kind::FLOAT(v, q);
             done = true;
         },
         .CHAR(v) => {
@@ -1027,7 +1027,7 @@ attach fn closure(this: parser&) -> compile_error!expr {
 attach fn is_lit_tok(this: parser&) -> bool {
     match (*this.tok()) {
         .INT(v) => { return true; },
-        .FLOAT(v) => { return true; },
+        .FLOAT(v, q) => { return true; },
         .CHAR(v) => { return true; },
         .STR(s) => { return true; },
         default => {},
@@ -1035,7 +1035,7 @@ attach fn is_lit_tok(this: parser&) -> bool {
     if (this.is("-")) {
         match (*this.tok_at(1)) {
             .INT(v) => { return true; },
-            .FLOAT(v) => { return true; },
+            .FLOAT(v, q) => { return true; },
             default => {},
         }
     }

@@ -148,11 +148,11 @@ struct match_node {
     is_comptime: bool;
 }
 
-// INT holds the literal's magnitude; a leading `-` is UNARY(NEG, ..). ASSIGN's op is set for `a op= b`,
+// INT holds the literal's magnitude; a leading `-` is UNARY(NEG, ..); FLOAT its nearest f64 and binary128. ASSIGN's op is set for `a op= b`,
 // CAST is `x as T`, and BUILTIN's second list is null when `@name` has no parentheses
 enum expr_kind {
     INT: u128,
-    FLOAT: f64,
+    FLOAT: (f64, u128),
     CHAR: u32,
     STR: std::string,
     BOOL: bool,

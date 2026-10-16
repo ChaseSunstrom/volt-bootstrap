@@ -282,6 +282,66 @@ export fn close_all(xs: std::vec<account>) -> i64 {
     return @cast<i64>(xs.items().len);
 }
 
+// slices of text and of handles given back: each comes back as a list the caller owns, its elements
+// copied (text duplicated, a badge by its copy), so the caller's free leaves the roster's alone and
+// what scribble writes later isn't in it
+public struct badge {
+    text: std::string;
+}
+
+export attach fn name(this: badge&) -> str {
+    return this.text.as_str();
+}
+
+public struct roster {
+    people: std::vec<std::string>;
+    cards: std::vec<badge>;
+}
+
+export fn roster_open(a: str, b: str) -> roster {
+    var r: roster = { people: {}, cards: {} };
+    r.people.push(std::string::from(a)) catch @panic("out of memory");
+    r.people.push(std::string::from(b)) catch @panic("out of memory");
+    r.cards.push({ text: std::string::from(a) }) catch @panic("out of memory");
+    r.cards.push({ text: std::string::from(b) }) catch @panic("out of memory");
+    return r;
+}
+
+export attach fn names(this: roster&) -> std::string[..] {
+    return this.people.items();
+}
+
+export attach fn badges(this: roster&) -> badge[..] {
+    return this.cards.items();
+}
+
+// every name and badge written over in place
+export attach fn scribble(this: roster&) -> void {
+    val ps = this.people.items();
+    for (i) in 0..ps.len {
+        ps[i].append("!");
+    }
+    val cs = this.cards.items();
+    for (i) in 0..cs.len {
+        cs[i].text.append("!");
+    }
+}
+
+// the same slices in an E!: the error, or a list of copies as a bare slice gives
+export attach fn names_or(this: roster&, ok: bool) -> bank_error!(std::string[..]) {
+    if (!ok) {
+        return bank_error::OVERDRAWN;
+    }
+    return this.people.items();
+}
+
+export attach fn badges_or(this: roster&, ok: bool) -> bank_error!(badge[..]) {
+    if (!ok) {
+        return bank_error::OVERDRAWN;
+    }
+    return this.cards.items();
+}
+
 export fn greeting(name: str?) -> std::string {
     val n = name ?? return std::string::from("hello, nobody");
     var out = std::string::from("hello, ");

@@ -14,9 +14,10 @@
 // - owned elements (std::vec<T>), returned as a list: the elements as C sees them (text as a lent
 //   str, a handle as a pointer the caller owns), how many, and what frees them (the list, not the
 //   handles); as a parameter, a slice of those (Volt copies them; handles are given up);
-// - a slice of text or handles, as a slice of str or of the handles' pointers (lent); an optional
-//   text or handle: as a parameter a str? or a pointer (null: none), as a result an optional of
-//   volt_text or a pointer the caller owns;
+// - a slice of text or handles, as a slice of str or of the handles' pointers (lent), and as a
+//   result (bare or E!T's value), as the list of its elements' copies (see view_as_list); an
+//   optional text or handle: as a parameter a str? or a pointer (null: none), as a result an
+//   optional of volt_text or a pointer the caller owns;
 // - a closure parameter fn(A) -> R: a C function taking the caller's data first, and that data.
 // The last five differ from how Volt passes them, so voltc lib adds shims (see shims below), and
 // relays for languages that can't make a C function giving a struct (Python's ctypes; see by_out).
@@ -79,6 +80,7 @@ struct bind {
     traits: std::vec<u32> = {};   // trait union types
     closures_out: std::vec<u32> = {}; // the closures (indexes in closures) export fns give out
     lists: std::vec<u32> = {};    // owned element types (std::vec<T>)
+    viewed: std::vec<u32> = {};   // export fns whose slice result comes back as a list (see view_as_list)
     arrays: std::vec<u32> = {};   // arrays an export fn takes or gives (see add_array)
     // the struct, optional and E!T types C holds by value, each after what it holds (the order C
     // declares them in)
@@ -95,10 +97,11 @@ attach fn no_form(this: bind&, t: u32) -> shape? {
     return null;
 }
 
-// an inner type's form, which has to be plain (see plain)
+// an inner type's form, which has to be plain (see plain): never an E! whose value Volt holds as
+// other than its C form (text, a handle by value)
 attach fn inner(this: bind&, t: u32) -> shape? {
     val s = this.shape_of(t) ?? return null;
-    if (!plain(s) || this.converted(t)) {
+    if (!plain(s) || this.converted(t) || this.owned_result(s)) {
         return this.no_form(t);
     }
     return s;
@@ -143,7 +146,8 @@ attach fn elem(this: bind&, t: u32) -> shape? {
         },
         default => {},
     }
-    if (!plain(s) || this.converted(t)) {
+    // an E! of text or a handle: Volt holds the value, C would read its C form
+    if (!plain(s) || this.converted(t) || this.owned_result(s)) {
         return this.no_form(t);
     }
     return s;
@@ -444,6 +448,11 @@ attach fn shape_of(this: bind&, t: u32) -> shape? {
                 .CLOSURE(c) => { return this.no_form(x); },
                 .OPT(o) => { return this.no_form(x); },
                 default => {},
+            }
+            // a slice of text or handles: an export fn's result comes back as a list (see
+            // view_as_list), anywhere else nothing owns its elements' copies
+            if (this.converted(x)) {
+                return this.no_form(x);
             }
             add_u32(&this.results, t);
             add_u32(&this.layout, t);
@@ -903,6 +912,56 @@ attach fn owned_result(this: bind&, s: shape) -> bool {
     }
 }
 
+// E!T's T (t itself when it isn't an E!T)
+attach fn ok_ty(this: bind&, t: u32) -> u32 {
+    match (*this.c.t.get(t)) {
+        .ERR_UNION(e, x) => { return x; },
+        default => { return t; },
+    }
+}
+
+// export fn f returns a slice of what crosses converted (text, handles), which Volt still owns, bare
+// or as E!T's value: it comes back as a list the caller owns, each element copied (the shim copies
+// them into a std::vec<T>), so f's result is that list (or E! of it) from here on
+attach fn view_as_list(this: bind&, f: u32, at: span) -> compile_error!void {
+    val name = S(this.c.fi(f).name);
+    val rt = this.c.fi(f).ret;
+    val st = this.ok_ty(rt);
+    val e = this.slice_elem(st);
+    this.c.copy_fn(e, at) catch |x| {
+        return with_help(fail(at, fmt3("export fn {}: it returns {}, which comes back as a list of copies, but {} can't be copied", copy name, this.c.ty_name(st), this.c.ty_name(e))), fmt("attach a copy fn to {} (attach fn copy(this: T&) -> T), or return a std::vec you build", this.c.ty_name(e)));
+    };
+    var vec_decl: u32? = null;
+    val std_ns = this.c.ns(0).children.get("std");
+    if (std_ns != null) {
+        val l = this.c.ns(*std_ns).names.get("vec");
+        if (l != null) {
+            for (d&) in this.c.list(*l).items() {
+                match (this.c.item_of(*d).kind) {
+                    .STRUCT(s) => {
+                        if (s.spec == null) {
+                            vec_decl = *d;
+                        }
+                    },
+                    default => {},
+                }
+            }
+        }
+    }
+    val d = vec_decl ?? return fail(at, fmt2("export fn {}: it returns {}, which comes back as a list (a std::vec), but std isn't there", copy name, this.c.ty_name(st)));
+    var given: std::vec<garg> = {};
+    put(&given, garg::TYPE({ kind: type_kind::RESOLVED(e), span: at }));
+    val args = try this.c.gargs_for(d, &given, 0, at);
+    var list = try this.c.struct_inst(d, move args, at);
+    match (*this.c.t.get(rt)) {
+        .ERR_UNION(er, x) => { list = this.c.t.intern(tyk::ERR_UNION(er, list)); },
+        default => {},
+    }
+    this.c.fi(f).ret = list;
+    put(&this.viewed, f);
+    return;
+}
+
 // every export fn's types have to cross, each where it's allowed
 attach fn check_all(this: bind&) -> compile_error!void {
     for (i&) in this.exports().items() {
@@ -920,11 +979,12 @@ attach fn check_all(this: bind&) -> compile_error!void {
                 default => {},
             }
         }
-        val r = this.shape_of(f.ret) ?? return this.no_c_form(at, fmt("export fn {}: its return type", S(f.name)), f.ret);
-        this.add_array(f.ret);
-        if (this.converted(f.ret)) {
-            return with_help(fail(at, fmt2("export fn {}: it returns {}, a slice of what crosses converted, which nothing would own", S(f.name), this.c.ty_name(f.ret))), S("return a std::vec of them: it crosses as a list the caller frees"));
+        if (this.converted(this.ok_ty(f.ret))) {
+            try this.view_as_list(*i, at);
         }
+        val ret = this.c.fi(*i).ret;
+        val r = this.shape_of(ret) ?? return this.no_c_form(at, fmt("export fn {}: its return type", S(f.name)), ret);
+        this.add_array(ret);
         var given = r;
         match (r) {
             .RESULT(e, x) => { given = this.shape_of(x) ?? shape::VOID; },
@@ -996,7 +1056,8 @@ attach fn needs_shim(this: bind&, f: u32) -> bool {
 // What voltc lib compiles in front of a package's export fns whose C form differs from Volt's (owned
 // text, handles by value, closures, traits): Volt source for export fns of the same names in their C
 // forms, in namespace PKG::__export, which call the package's own fns (no longer exported); and an
-// X_free per handle. It uses only the language and the runtime's allocator, never std.
+// X_free per handle. It uses only the language and the runtime's allocator, and std::vec for a list
+// of copies a slice result gives out (copied).
 struct shim_plan {
     text: std::string = {};
     unexport: std::vec<std::string> = {}; // the package's export fns a shim stands in for (full::name@offset)
@@ -1222,6 +1283,38 @@ attach fn fn_parts(this: bind&, t: u32, ps: std::vec<u32>&) -> u32 {
     }
 }
 
+// a shim temporary's name: base, with _ added until none of export fn f's parameters has it (two
+// temporaries never meet: before their _s, a parameter's name and _f, _v or _user, this, viewed and
+// item end in different letters, or are different parameters' names)
+attach fn temp_name(this: bind&, f: u32, base: str) -> std::string {
+    var n = S(base);
+    var taken = true;
+    while (taken) {
+        taken = false;
+        for (p&) in this.c.fi(f).params.items() {
+            if (p.name == n.as_str()) {
+                taken = true;
+            }
+        }
+        if (taken) {
+            n.push('_');
+        }
+    }
+    return n;
+}
+
+// a shim's body giving out the slice Volt keeps (what call gives) as a list of copies, of type
+// list (see view_as_list)
+attach fn copied(this: bind&, f: u32, list: u32, call: std::string) -> std::string {
+    val v = this.temp_name(f, "viewed_");
+    val item = this.temp_name(f, "item_");
+    var b = fmt2("var {}: {} = {{}};\n", copy v, this.src(list));
+    b.append(fmt2("        for ({}&) in {} {{\n", copy item, move call).as_str());
+    b.append(fmt2("            {}.push(copy *{}) catch @panic(\"out of memory\");\n        }\n", copy v, copy item).as_str());
+    b.append(fmt("        return {};", this.wrap_owned(list, fmt("move {}", copy v))).as_str());
+    return b;
+}
+
 attach fn shim_fn(this: bind&, f: u32, out: std::string&) -> void {
     val info = this.c.fi(f);
     val is_attach = this.c.fn_decl_of(info.decl)->is_attach;
@@ -1234,16 +1327,21 @@ attach fn shim_fn(this: bind&, f: u32, out: std::string&) -> void {
         }
         var pn = S(p.name);
         if (p.name == "this") {
-            pn = S("this_");
+            pn = this.temp_name(f, "this_");
         }
         match (this.shape_of(p.ty) ?? shape::VOID) {
             .CLOSURE(c) => {
                 // the caller's C function, which takes the caller's data first, and that data
                 var ps: std::vec<u32> = {};
                 val r = this.fn_parts(p.ty, &ps);
-                params.append(fmt3("{}: {}, {}_user: void*", copy pn, this.c_fn_src(&ps, r), copy pn).as_str());
-                var user = copy pn;
-                user.append("_user");
+                // the lambda's own parameters are a0..
+                for (k) in 0..ps.len {
+                    if (pn.as_str() == fmt("a{}", unum(@cast<u64>(k))).as_str()) {
+                        pn = this.temp_name(f, fmt("{}_", copy pn).as_str());
+                    }
+                }
+                val user = this.temp_name(f, fmt("{}_user", copy pn).as_str());
+                params.append(fmt3("{}: {}, {}: void*", copy pn, this.c_fn_src(&ps, r), copy user).as_str());
                 var lam = fmt4("|{}, {}| ({}) -> {} {{ ", copy pn, copy user, this.param_list(&ps, false), this.src(r));
                 lam.append(this.call_out(pn.as_str(), user.as_str(), &ps, r).as_str());
                 lam.append(" }");
@@ -1258,12 +1356,14 @@ attach fn shim_fn(this: bind&, f: u32, out: std::string&) -> void {
                 if (this.is_ref(p.ty)) {
                     drop = S("null");
                 }
-                pre.append(fmt4("        val {}_f: foreign_{} = {{ vt: {}.vt, self_: {}.self_, drop: ", copy pn, copy ik, copy pn, copy pn).as_str());
-                pre.append(fmt4("{} }};\n        var {}_v: {} = move {}_f;\n", move drop, copy pn, this.src(this.trait_of(p.ty)), copy pn).as_str());
+                val fv = this.temp_name(f, fmt("{}_f", copy pn).as_str());
+                val vv = this.temp_name(f, fmt("{}_v", copy pn).as_str());
+                pre.append(fmt4("        val {}: foreign_{} = {{ vt: {}.vt, self_: {}.self_, drop: ", copy fv, copy ik, copy pn, copy pn).as_str());
+                pre.append(fmt4("{} }};\n        var {}: {} = move {};\n", move drop, copy vv, this.src(this.trait_of(p.ty)), copy fv).as_str());
                 if (this.is_ref(p.ty)) {
-                    put(&args, fmt("&{}_v", copy pn));
+                    put(&args, fmt("&{}", copy vv));
                 } else {
-                    put(&args, fmt("move {}_v", copy pn));
+                    put(&args, fmt("move {}", copy vv));
                 }
             },
             default => {
@@ -1279,9 +1379,10 @@ attach fn shim_fn(this: bind&, f: u32, out: std::string&) -> void {
                         helper = S("handles");
                         k = index_of(&this.handles, h);
                     }
-                    pre.append(fmt4("        val {}_v = {}_in_{}({});\n", copy pn, copy helper, copy k, copy pn).as_str());
-                    pre.append(fmt4("        defer {}_done_{}({}_v, {});\n", copy helper, copy k, copy pn, copy pn).as_str());
-                    put(&args, fmt2("@slice({}_v, {}.len)", copy pn, copy pn));
+                    val vv = this.temp_name(f, fmt("{}_v", copy pn).as_str());
+                    pre.append(fmt4("        val {} = {}_in_{}({});\n", copy vv, copy helper, copy k, copy pn).as_str());
+                    pre.append(fmt4("        defer {}_done_{}({}, {});\n", copy helper, copy k, copy vv, copy pn).as_str());
+                    put(&args, fmt2("@slice({}, {}.len)", copy vv, copy pn));
                 } else {
                     put(&args, this.unwrap_in(p.ty, copy pn, false));
                 }
@@ -1308,14 +1409,22 @@ attach fn shim_fn(this: bind&, f: u32, out: std::string&) -> void {
     var body: std::string = {};
     match (this.shape_of(info.ret) ?? shape::VOID) {
         .RESULT(e, x) => {
-            if (this.owned_result(shape::RESULT(e, x))) {
+            if (has_u32(&this.viewed, f)) {
+                body = this.copied(f, x, fmt("try {}", move call));
+            } else if (this.owned_result(shape::RESULT(e, x))) {
                 body = fmt("return {};", this.wrap_owned(x, fmt("try {}", move call)));
             } else {
                 body = fmt("return {};", move call);
             }
         },
         .VOID => { body = fmt("{};", move call); },
-        default => { body = fmt("return {};", this.wrap_owned(info.ret, move call)); },
+        default => {
+            if (has_u32(&this.viewed, f)) {
+                body = this.copied(f, info.ret, move call);
+            } else {
+                body = fmt("return {};", this.wrap_owned(info.ret, move call));
+            }
+        },
     }
     out.append(fmt4("\n    export fn {}({}) -> {} {{\n{}", S(info.c_name), move params, move ret, move pre).as_str());
     out.append(fmt("        {}\n    }\n", move body).as_str());
@@ -1739,6 +1848,10 @@ attach fn short(this: bind&, t: u32) -> std::string {
         .STRUCT(s) => {
             if (this.text_method(s) != null) {
                 return S("text");
+            }
+            if (this.is_list(s) && !this.is_export_struct(s)) {
+                // its C name (E!std::vec<T> is E_or_list_T)
+                return fmt("list_{}", this.short(this.list_elem(t)));
             }
             return this.local(this.c.si(s).name);
         },
@@ -2971,9 +3084,13 @@ attach fn cpp_text(this: bind&) -> std::string {
         out.append(fmt3("{}{}({});\n", spaced(this.c_ret(e, true)), copy e.name, this.c_params(e, true)).as_str());
     }
     out.append("}\n#if defined(__clang__)\n#pragma clang diagnostic pop\n#endif\n}  // namespace raw\n");
-    // the traits' classes, declared for the handles' methods
+    // the traits' and the handles' classes, declared for the handles' methods (one can give a list
+    // of a class defined after it)
     for (t&) in this.traits.items() {
         out.append(fmt("class {};\n", this.short(*t)).as_str());
+    }
+    for (s&) in this.handles.items() {
+        out.append(fmt("class {};\n", this.local(this.c.si(*s).name)).as_str());
     }
     // a class per handle: it owns its handle (or only borrows one Volt lends)
     for (s&) in this.handles.items() {

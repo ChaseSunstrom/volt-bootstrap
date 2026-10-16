@@ -21,7 +21,6 @@ struct cgen {
     // writing a global's initializer: another constant global read there is its initializer
     in_init: bool = false;
     in_addr: bool = false; // emitting an address-of operand (a global there is its name, not its value)
-    q_folding: bool = false; // writing the native text inside an f128 initializer's volt_q_lit
     // statements go one per line at depth (4 spaces each), except inside a statement expression
     // (inline > 0), which stays on one line
     depth: usize = 0;
@@ -660,15 +659,49 @@ fn q_op(op: binop_ir) -> str? {
     }
 }
 
-// an f128 literal for the prelude: the double text a native quad type converts, and the binary128
-// bits of the same value, which the soft path's vector holds
-attach fn q_lit(this: cgen&, out: std::string&, text: str, v: f64) -> void {
-    q_lit_bits(out, text, std::softfloat::f64_to_f128(@bitcast<u64>(v)));
-}
-
-fn q_lit_bits(out: std::string&, text: str, bits: u128) -> void {
-    out.append("volt_q_lit(");
-    out.append(text);
+// an f128 constant of these bits for the prelude, exact on every path: volt_q_hex and the hex float
+// text (-0x1.8p+1) a native quad type reads when it's finite, else volt_q_lit and the double text
+// that is the same inf or NaN; the soft path's vector holds the bits (T-0477)
+fn quad_lit(out: std::string&, bits: u128) -> void {
+    val e = @cast<i64>((bits >> 112) & 32767);
+    var frac = bits & ((@cast<u128>(1) << 112) - 1);
+    if (e == 32767) {
+        out.append("volt_q_lit(");
+        if (frac != 0) {
+            out.append("__builtin_nan(\"\")");
+        } else if ((bits >> 127) != 0) {
+            out.append("-__builtin_inf()");
+        } else {
+            out.append("__builtin_inf()");
+        }
+    } else {
+        out.append("volt_q_hex(");
+        if ((bits >> 127) != 0) {
+            out.push('-');
+        }
+        // 1.frac times 2^(e - 16383); a subnormal's (and zero's) 0.frac times 2^-16382
+        var exp = e - 16383;
+        if (e == 0) {
+            out.append("0x0");
+            exp = -16382;
+        } else {
+            out.append("0x1");
+        }
+        var digits: u128 = 28;
+        while (digits > 0 && (frac & 15) == 0) {
+            frac >>= 4;
+            digits -= 1;
+        }
+        if (digits > 0) {
+            out.push('.');
+            while (digits > 0) {
+                digits -= 1;
+                out.push(hex_digit(@cast<u64>((frac >> (digits * 4)) & 15)));
+            }
+        }
+        out.push('p');
+        out.append_int(exp);
+    }
     out.append(", ");
     out.append_uint(@cast<u64>(bits >> 64));
     out.append("ULL, ");
@@ -680,7 +713,7 @@ fn q_lit_bits(out: std::string&, text: str, bits: u128) -> void {
 // volt_q_to (calls to the quad routines where C has no quad type, else casts)
 attach fn q_conv(this: cgen&, out: std::string&, x: u32, t: u32) -> void {
     if (this.is_f128(t)) {
-        if (this.q_init_lit(out, x, t, true)) {
+        if (this.q_init_lit(out, x)) {
             return;
         }
         out.append("volt_q_from(");
@@ -692,7 +725,7 @@ attach fn q_conv(this: cgen&, out: std::string&, x: u32, t: u32) -> void {
         out.append("(!volt_q_eq(");
         this.expr(out, x);
         out.append(", ");
-        this.q_lit(out, "0.0", 0.0);
+        quad_lit(out, 0);
         out.append("))");
     } else {
         out.append("((");
@@ -713,27 +746,57 @@ attach fn float_bits(this: cgen&, t: u32) -> u32 {
 }
 
 // node n's value as binary128 bits, when it's literals all the way down and exact: f64 and f128
-// literals, ints a double holds exactly, negation, conversions among those and constant globals
-// read in an initializer (the checker folds arithmetic on literals before cgen sees it)
+// literals, ints, negation, conversions among those and constant globals read in an initializer
+// (the checker folds arithmetic on literals before cgen sees it)
 attach fn q_fold(this: cgen&, n: u32) -> u128? {
     val t = this.c.ir.ty_of(n);
     val fb = this.float_bits(t);
     match (this.c.ir.at(n).kind) {
+        .QUAD(q) => { return q; },
         .FLOAT(f) => {
             if (fb >= 64) {
                 return std::softfloat::f64_to_f128(@bitcast<u64>(f));
             }
         },
         .INT(v) => {
-            // a u128's bits past i128's maximum are a value no f64 holds exactly
-            if (v >= -9007199254740992 && v <= 9007199254740992 && !(v < 0 && t == int_id(int_ty::U128)) && (fb >= 64 || this.c.t.int_of(t) != null)) {
+            if (this.c.t.int_of(t) != null) {
+                // a u128's bits past i128's maximum read as a negative i128
+                if (v < 0 && t == int_id(int_ty::U128)) {
+                    return std::softfloat::u128_to_f128(false, @cast<u128>(v));
+                }
+                return std::softfloat::i128_to_f128(v);
+            }
+            // a float type holding an integer: one a double holds exactly
+            if (fb >= 64 && v >= -9007199254740992 && v <= 9007199254740992) {
                 return std::softfloat::f64_to_f128(@bitcast<u64>(@cast<f64>(v)));
             }
         },
         .CONV(x) => {
-            // to f128 from anything exact, or to f64 from something that isn't an f128
-            if (fb == 128 || (fb == 64 && this.float_bits(this.c.ir.ty_of(x)) != 128)) {
+            // to f128 from anything exact, or to f64 from something that isn't an f128 (an int
+            // rounded to the f64 it converts to, which only a double's 53 bits hold exactly)
+            val xt = this.c.ir.ty_of(x);
+            if (fb == 128) {
                 return this.q_fold(x);
+            }
+            if (fb == 64 && this.float_bits(xt) != 128) {
+                match (this.c.ir.at(x).kind) {
+                    .INT(v) => {
+                        if (this.c.t.int_of(xt) != null) {
+                            var d = @cast<f64>(v);
+                            if (v < 0 && xt == int_id(int_ty::U128)) {
+                                d = @cast<f64>(@cast<u128>(v));
+                            }
+                            return std::softfloat::f64_to_f128(@bitcast<u64>(d));
+                        }
+                    },
+                    default => {},
+                }
+                val b = this.q_fold(x) ?? return null;
+                if (this.c.t.int_of(xt) != null) {
+                    // an int reached through a global: its binary128 (exact below 2^113) rounded
+                    return std::softfloat::f64_to_f128(std::softfloat::f128_to_f64(b));
+                }
+                return b;
             }
         },
         .UNARY(op, x) => {
@@ -758,23 +821,14 @@ attach fn q_fold(this: cgen&, n: u32) -> u128? {
     return null;
 }
 
-// in a global's initializer, f128 value n (converted from its own type when conv) as a volt_q_lit
-// of the bits q_fold finds, since the soft path's calls aren't constants C takes there; the native
-// text is what n is anyway. False when it isn't an initializer or n doesn't fold
-attach fn q_init_lit(this: cgen&, out: std::string&, n: u32, t: u32, conv: bool) -> bool {
-    if (!this.in_init || this.q_folding) {
+// in a global's initializer, f128 value n (or n converted to f128) as the constant of the bits q_fold
+// finds, since the soft path's calls aren't constants C takes there. False when it isn't an
+// initializer or n doesn't fold
+attach fn q_init_lit(this: cgen&, out: std::string&, n: u32) -> bool {
+    if (!this.in_init) {
         return false;
     }
-    val bits = this.q_fold(n) ?? return false;
-    var text: std::string = {};
-    this.q_folding = true;
-    if (conv) {
-        this.q_conv(&text, n, t);
-    } else {
-        this.expr(&text, n);
-    }
-    this.q_folding = false;
-    q_lit_bits(out, text.as_str(), bits);
+    quad_lit(out, this.q_fold(n) ?? return false);
     return true;
 }
 
@@ -815,7 +869,7 @@ attach fn int_lit(this: cgen&, out: std::string&, v: i128, t: u32) -> void {
             num.append(".0");
         }
         if (this.is_f128(t)) {
-            this.q_lit(out, num.as_str(), @cast<f64>(v));
+            quad_lit(out, std::softfloat::i128_to_f128(v));
             return;
         }
         out.append("((");
@@ -924,7 +978,7 @@ attach fn float_lit(this: cgen&, out0: std::string&, v: f64, t: u32) -> void {
         }
     }
     if (this.is_f128(t)) {
-        this.q_lit(out0, num.as_str(), v);
+        quad_lit(out0, std::softfloat::f64_to_f128(@bitcast<u64>(v)));
         return;
     }
     out0.append("((");
@@ -1072,16 +1126,18 @@ attach fn expr(this: cgen&, out: std::string&, n: u32) -> void {
         var op_node = true;
         match (this.c.ir.at(n).kind) {
             .FLOAT(f) => { op_node = false; },
+            .QUAD(q) => { op_node = false; },
             .INT(v) => { op_node = false; },
             default => {},
         }
-        if (op_node && this.q_init_lit(out, n, t, false)) {
+        if (op_node && this.q_init_lit(out, n)) {
             return;
         }
     }
     match (this.c.ir.at(n).kind) {
         .INT(v) => { this.int_lit(out, v, t); },
         .FLOAT(f) => { this.float_lit(out, f, t); },
+        .QUAD(q) => { quad_lit(out, q); },
         .BOOL(b) => {
             if (b) {
                 out.append("true");
@@ -1106,7 +1162,7 @@ attach fn expr(this: cgen&, out: std::string&, n: u32) -> void {
             if (t == VOID || t == NEVER) {
                 out.append("((void)0)");
             } else if (this.is_f128(t)) {
-                this.q_lit(out, "0.0", 0.0);
+                quad_lit(out, 0);
             } else if (this.scalar(t)) {
                 out.append("((");
                 out.append(this.ty(t));

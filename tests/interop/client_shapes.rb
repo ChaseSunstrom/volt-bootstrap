@@ -57,6 +57,19 @@ def lists
   opened = S.open_all(%w[cy dee])
   puts "opened #{opened.size} #{opened[1].owner}"
   opened.each(&:close)
+  # slices Volt keeps, given back as lists of copies: freed here, Volt's still there to scribble on
+  r = S::Roster.open("ann", "bo")
+  rn, rb = r.names, r.badges
+  print "roster #{rn[0]} #{rn[1]} #{rb[0].name} #{rb[1].name}"
+  rb.each(&:close)
+  r.scribble
+  rn = r.names
+  puts " #{rn[0]} #{rn[1]}"
+  # the same in an E!: the error, or the list of copies
+  rn, rb = r.names_or(true), r.badges_or(true)
+  puts "or #{rn[0]} #{rn[1]} #{rb[0].name} #{rb[1].name} #{error_of { r.names_or(false) }} #{error_of { r.badges_or(false) }}"
+  rb.each(&:close)
+  r.close
   sq = S.squares_upto(4)
   puts "squares #{sq.size} #{sq[3]} sum #{S.sum_all(sq)}"
   parts = %w[a b c]
