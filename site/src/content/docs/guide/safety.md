@@ -94,8 +94,16 @@ change. Volt has no lifetimes to write and no borrow errors; it looks at each fu
 
   A read on any path after the change warns, a loop's next pass included. Changing a container
   inside a `for` loop over its items warns at the change: the loop goes on over the old items.
-  What isn't followed yet: a field's container (`this.items.items()`), only a local's or a
-  parameter's; giving the container a new value (`xs = ys`); and views used inside closures.
+  The container may be a local, a parameter or a field of one (`this.items.items()`): a change to
+  `this.items`, or to `this` as a whole, reaches the views into it, and one to `this.b` leaves a
+  view of `this.a` alone. Giving the container a new value (`xs = ys`, `this.items = ...`,
+  `*this = other`) is a change too when the old value had something to delete; a field written
+  (`xs.n = 2`), plain data given a new value and a reference pointed elsewhere aren't. A closure held in a local
+  and called by its name is followed both ways: one that captured a view warns where it's called
+  after the view's container changed, and one whose body changes a container it captured
+  (`|xs&| () { xs.push(1) ... }`) makes that change at each call. What isn't followed: the same
+  container reached through another name (`val r = &this.items; r.push(1)`), and a closure
+  stored in a field, returned, passed to a function or captured by another closure that calls it.
 - **A reference to a local, returned in a value.** Returning `&n` itself, or a literal holding it,
   is an error. Returning a local that holds a reference to one of the function's own locals (a
   struct with `{ x: &n }`, a `v.x = &n`, a pointer `val r = &n`) warns: what it refers to is gone

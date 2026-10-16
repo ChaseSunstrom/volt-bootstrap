@@ -868,6 +868,7 @@ attach fn assign(this: checker&, op: binop?, le: expr&, re: expr&, span: span) -
                 val loc = lo ?? { c: 0, ty: 0, mutable: false };
                 val r = try this.expr(re, l.ty);
                 this.note_store(&l, &r);
+                this.assigned(le, l.ty, span);
                 if (fresh) {
                     this.note_loan(fresh, fresh_name, &r);
                 }
@@ -882,6 +883,8 @@ attach fn assign(this: checker&, op: binop?, le: expr&, re: expr&, span: span) -
         }
         val rr = try this.expr(re, l.ty);
         this.note_store(&l, &rr);
+        // the old value's views first: a view made from it (v = v.next()) is the new value's
+        this.assigned(le, l.ty, span);
         if (fresh) {
             this.note_loan(fresh, fresh_name, &rr);
             this.note_held(fresh, l.ty, re, true);

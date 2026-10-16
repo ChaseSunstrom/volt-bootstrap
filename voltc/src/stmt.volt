@@ -1108,7 +1108,7 @@ attach fn for_expr(this: checker&, f: for_loop&, want: u32?, span: span) -> comp
 attach fn for_inner(this: checker&, f: for_loop&, want: u32?, span: span) -> compile_error!tval {
     var pre: std::vec<u32> = {};
     var init_flags: std::vec<u32> = {}; // the kept temporaries' live flags, set before the iterable
-    var iterates: u32? = null; // the local container whose items the loop goes over (borrows.volt)
+    var iterates: place_at? = null; // the container (a local or a field chain) whose items the loop goes over (borrows.volt)
     var acc_decl: u32? = null;
     var acc: local? = null;
     var ep = vnew(0, 0); // what (x&) reaches: read-only, through a parameter, and its root (lends.volt)
@@ -1186,7 +1186,7 @@ attach fn for_inner(this: checker&, f: for_loop&, want: u32?, span: span) -> com
         try ke;
         iterates = v.loan;
         if (v.own != null && v.c == (v.own ?? 0) && !this.is_view(v.ty)) {
-            iterates = v.own;
+            iterates = { root: v.own ?? 0, path: "", name: this.local_at(v.own ?? 0) };
         }
         if (!v.lv && (try this.needs_drop(v.ty))) {
             return fails(f.iter.span, "store this in a variable before looping over it (its elements own memory)");

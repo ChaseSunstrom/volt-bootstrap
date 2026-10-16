@@ -148,7 +148,9 @@ attach fn closure_expr(this: checker&, cl: closure&, want: u32?, span: span) -> 
     } else {
         try this.closure_fns(id, ty, cl, &inner, env, this.cx.body, null, span);
     }
-    return vnew(ty, this.ir.node(ir_kind::AGG(move inits), ty));
+    var v = vnew(ty, this.ir.node(ir_kind::AGG(move inits), ty));
+    this.closure_loan(&v, &cl.caps);
+    return v;
 }
 
 // makes closure id's two functions (closure type ty, whose captures are inner): the body, checked in env,
@@ -213,6 +215,15 @@ attach fn closure_fns(this: checker&, id: u32, ty: u32, cl: closure&, inner: std
     val r = this.closure_body(cl, inner, &ptys, rty, ty);
     swap(&saved, &this.cx);
     val body = try r;
+    // what the body changes outside, made again where the closure is called (borrows.volt)
+    match (*this.t.get(ty)) {
+        .CLOSURE(base) => {
+            for (ch&) in saved.cap_changes.items() {
+                put(&this.ci(base).changes, *ch);
+            }
+        },
+        default => {},
+    }
     this.ir.fn_at(fi).body = body;
     put(&this.ir.bodies, fi);
 
@@ -354,6 +365,10 @@ attach fn closure_body(this: checker&, cl: closure&, inner: std::vec<cap_inner>&
             l.via = rv;
         }
         this.cx.scopes.at(0).vars.put(c.name, l);
+        // a capture reaching the container outside: changes at it are the outside one's
+        if (c.by_ref || this.t.ref_inner(c.ty) != null) {
+            this.cx.cap_roots.put(place, c.outer.own ?? c.outer.c);
+        }
     }
     var stmts: std::vec<u32> = {};
     for (i) in 0..cl.params.len {
