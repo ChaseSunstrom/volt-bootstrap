@@ -69,8 +69,8 @@ fn main() -> void {
 | overloads Volt can't tell apart (`long` and `long long` are both `i64`, `char` is `signed char`'s or `unsigned char`'s twin depending on the target (signed on x86-64, unsigned on arm64 Linux), so which overload collides depends on the target, a `const` method's `this` is a non-`const` one's) | the first declared keeps the name; each other one is named for its parameters' C++ types, after the namespace's own names: `which_long_long(x)`, `letter_char(c)` (when `char` comes after the other two), `T::new_long_long(n)`, `get_const()` (words joined by `_`, `*` as `ptr`, `&` as `ref`, `&&` as `rref`; when only its qualifiers differ, `const`, `lref`, `rref` or `nonconst` instead: `get_nonconst()` after a `get() const`), its default-argument forms too, and calls exactly that overload. A name a real declaration (or another such name) has is a `// left out:` comment instead, and so is a real declaration in a later block of the namespace whose name an alias has |
 | a method qualified `&&` on a class held by handle | an attached function taking `this` by value: the handle is consumed (using it afterwards is a use after move), and C++ moves from the object, or from a copy of it when the handle only borrows it (`as_Base()`). On a class template's instance (worked out per use) the same, for a method only an rvalue can call (when `&` and `&&` overloads share the name, the call is the `&` one's), and `derive`'s `base_m()` and protected forms leave it out with a comment: their object is the Volt subclass's |
 | functions, function templates | functions, generic functions: `ns::biggest<i32>(a, b)` |
-| a Volt `std::string` for a function template's parameter (`template <class S> void wrap(S&)`) | a C++ `std::string`: `ns::wrap(&text)` instantiates `wrap<std::string>`. For `S&` C++ changes a copy, which the Volt string gets once the call returns (not when it throws: a `try_` form leaves it as it was); for `const S&` and `S` the copy is made from the text and nothing comes back. Only `S` itself takes one: `S` in another type (`S*`, `std::vector<S>&`) or as the result is an error |
-| class templates | generic structs: `ns::Box<f64>`; one with private fields, bases or virtual methods is a generic handle (`ns::box<i32>`), its members worked out per use |
+| a Volt `std::string` for a function template's parameter (`template <class S> void wrap(S&)`) | a C++ `std::string`: `ns::wrap(&text)` instantiates `wrap<std::string>`. For `S&` C++ changes a copy, which the Volt string gets once the call returns (not when it throws: a `try_` form leaves it as it was); for `const S&` and `S` the copy is made from the text and nothing comes back. Overloads resolve as C++'s for `f(s)`: a string Volt may change (a `var`, or a reference to one) runs `S&` over `const S&`, and a forwarding `S&&` changes it; in `@cpp`, a `val` or a `str` runs `const S&` (through the template's Volt generic the string is its parameter, which it may change). Only `S` itself takes one: `S` in another type (`S*`, `std::vector<S>&`) or as the result is an error |
+| class templates | generic structs: `ns::Box<f64>`; one with private fields, bases, virtual methods or a field with no Volt form is a generic handle (`ns::box<i32>`), its public fields getters and `set_` methods, its other members worked out per use |
 | enum, enum class | enums with the same values and tag type (an unscoped enum's names are also constants beside it: `ns::ONE`) |
 
 A Volt fn can be attached to an imported class, held by value or by handle, as to any type:
@@ -262,11 +262,11 @@ fn main() -> void {
 
 | C++ | Volt |
 | --- | --- |
-| `std::string`, `std::string_view` parameters (by value, `const&`, `&&`) | `str` |
+| `std::string`, `std::string_view` parameters (by value, `const&`, `&&`) | `str`: a `std::string` is a temporary made from it, so a function whose result could point into that (`const char *c_str_of(const std::string &)`) isn't declared, and a call of it per use is an error |
 | a `std::string&` parameter | `std::string&`: C++ changes a copy, which the Volt string gets once the call returns (not when it throws: a `try_` form leaves the string as it was). A function whose result could point into that copy (a view, a pointer, a reference) isn't declared, and a call of it per use is an error |
 | a `std::string` result | `std::string` (a copy) |
 | a `std::string_view` result | `str` (the same bytes, alive as long as C++ keeps them) |
-| `std::vector<T>` parameters (by value, `const&`) | `T[..]` |
+| `std::vector<T>` parameters (by value, `const&`) | `T[..]`: C++ gets a temporary vector copied from the slice, so a function whose result could point into it (`const int *data_of(const std::vector<int> &)`, a reference to an element) isn't declared, and a call of it per use is an error |
 | nested `std::vector` parameters (by value, `const&`), `std::vector<std::vector<int>>` | `i32[..][..]`, to any depth, each level copied; the innermost element a number or a `char` (one of `bool`s or of a class is [per use](#calls-worked-out-per-use)) |
 | a `std::vector<T>` result (`T` a plain value) | `std::vec<T>` (a copy) |
 | `std::map<K, V>`, `std::unordered_map<K, V>` parameters (by value, `const&`, `&&`; the default comparator, hash and allocator, written out or not, through an alias too) | `std::map<K, V>&`: C++ gets a copy of the Volt map's entries, the Volt map unchanged; a function whose result could point into that copy (a view, a pointer, a reference) has no such form. `K` and `V` a number, `bool` or `char`, a `std::string` (from a Volt `std::string`) or a `std::vector` of numbers or `char`s (from a `std::vec`). A map C++ can also hold by handle (`std::map<int, int>`) keeps that form beside it, an overload taking a `stdcxx::map<i32, i32>`. A mutable `std::map&`, or one with another order (`std::greater<int>`), keeps its handle form, or is [per use](#calls-worked-out-per-use) when there's none |
@@ -514,8 +514,13 @@ object `derive` didn't make; without RTTI, either stops the program saying so.
 - A class clang says can be copied but whose copy doesn't compile (one holding a
   `std::vector<std::unique_ptr<T>>`: the vector's copy constructor is declared for any element)
   has no `copy`: the import tries each class's copy, and one that fails isn't copyable.
-- A class whose destructor isn't public can't be owned by Volt: it has no `T::new`, and only its
-  static methods are of use.
+- A class whose destructor isn't public can't be owned by Volt: it has no `T::new`, no `{}` and no
+  `delete`. One C++ hands out (a factory's `T*` or `T&` result) is a borrowed handle whose methods
+  and fields work as any handle's, and it's freed C++'s way (the class's own `destroy(&s)`), never
+  by Volt.
+- A class whose alignment comes from members Volt can't show (`alignas(32)`) is held by handle,
+  C++'s aligned `new` and `delete` making and freeing it. That needs its import under C++17 or
+  newer when it's aligned past 8; under an older standard it's left out, and its comment says so.
 
 [C++ coverage](/volt-bootstrap/interop/cpp-coverage/) sums up what comes through, the libraries
 it's tested against, and what can't map, with the way around each.

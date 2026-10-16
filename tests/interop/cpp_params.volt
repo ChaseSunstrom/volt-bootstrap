@@ -58,12 +58,24 @@ fn main() -> void {
     std::println("pad {} {}", padded, w);
     grown_t(&w, 1);
     grown_t(&w, -1);
+    // of an S& / const S& pair, a var runs S& (and is changed), a val and a str const S&, as C++
+    // picks; a forwarding S&& changes a var; a const S&-only one takes both
+    var m = std::string::from("ab");
+    val k = std::string::from("cd");
+    val w1 = cpp::pr::gs::which(&m);
+    val w2 = @cpp<i32, std::string>("pr::gs::which<{t0}>({0})", &k);
+    val w3 = @cpp<i32, std::string>("pr::gs::which<{t0}>({0})", "ef");
+    val w4 = @cpp<i32, std::string>("pr::gs::which<{t0}>({0})", &m);
+    std::println("which {} {} {} {} {} {}", w1, w2, w3, w4, m, k);
+    val f1 = cpp::pr::gs::fwd(&m);
+    std::println("fwd {} {} len {} {}", f1, m, cpp::pr::gs::len(&k), cpp::pr::gs::len(&m));
     // nested std::vectors take nested Volt slices, each level copied (an empty inner one, three deep)
     var r0: i32[2] = { 1, 2 };
     var r1: i32[1] = { 3 };
     var rs: i32[..][3] = { r0[0..2], r1[0..1], r1[0..0] };
     var deep: i32[..][..][3] = { rs[0..3], rs[0..0], rs[0..1] };
     std::println("nested {} {} {} {}", cpp::pr::nv::shape(rs[0..3]), cpp::pr::nv::shape_ref(rs[0..2]), cpp::pr::nv::shape3(deep[0..3]), cpp::pr::nv::shape3(deep[0..0]));
+    std::println("nested per use {} {}", cpp::pr::nv::rows_t(rs[0..3]), cpp::pr::nv::deep_t(deep[0..3]));
     // by &&, of doubles and of chars
     var d0: f64[2] = { 1.5, 2.25 };
     var d1: f64[1] = { 0.5 };

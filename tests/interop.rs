@@ -1086,7 +1086,7 @@ fn zig_direct() {
     let e = Env::new("zig_direct");
     let dir = e.dir.join("zd");
     copy_dir(&Path::new(ROOT).join("tests/interop/zig_direct"), &dir);
-    let want = "dist 5 norm 5\nscaled 6 8\n42 fastmath 10 1.5\nfirst QUIET\nsum 7\ndoubled 2 4 6\nsquares 4 last 16\njoin a-b-c\nfind 2 true\nor_default 5 -1\nparse 42\nbad ERROR(InvalidCharacter)\ndiv 3\nzero ERROR(DivisionByZero)\ncolor blue green\npixel 2 green\ntwice 42\nperimeter 7 10 name tri\nside 4\nmissing ERROR(NoSuchSide)\nlongest quad\nconsumed 2\nticks 2 3\nlargest 9 2.5\nbigger 8 2.5 times 21 scaled 20 -10\npair 7\nstack true true false total 3 pop 2 1 true\nflags true true\npacked 5 -60 -54 7 -2\nunion true 4 true 3 true\nheld 3 0\narea 48 6 round true false\nbits 7\nbits 1.5 2.5\nctx 5 true 50\nmaybe 100\nextern 5\n";
+    let want = "dist 5 norm 5\nscaled 6 8\n42 fastmath 10 1.5\nfirst QUIET\nsum 7\ndoubled 2 4 6\nsquares 4 last 16\njoin a-b-c\nfind 2 true\nor_default 5 -1\nparse 42\nbad ERROR(InvalidCharacter)\ndiv 3\nzero ERROR(DivisionByZero)\ncolor blue green\npixel 2 green\ntwice 42\nperimeter 7 10 name tri\nside 4\nmissing ERROR(NoSuchSide)\nlongest quad\nconsumed 2\nticks 2 3\nlargest 9 2.5\nbigger 8 2.5 times 21 scaled 20 -10\npair 7\nstack true true false total 3 pop 2 1 true\nflags true true\npacked 5 -60 -54 7 -2\nunion true 4 true 3 true\nheld 3 0\nkept 5 0\narea 48 6 round true false\nbits 7\nbits 1.5 2.5\nctx 5 true 50\nmaybe 100\nextern 5\n";
     let tools = |c: &mut Command| {
         c.env("VOLTC", &e.voltc).env("BOLT", env!("CARGO_BIN_EXE_bolt")).env("VOLT_CACHE", e.dir.join("cache")).env("BOLT_HOME", e.dir.join("bolthome")).env("ZIG", &zig);
     };
@@ -2006,16 +2006,18 @@ fn cpp_params() {
     // a Volt std::string for a template parameter S (S&, const S&, S) a C++ std::string, a throw
     // through the plain form a stop
     let e = Env::new("cpp-params");
-    let want = "sum 6\nfill 4 4 4\ntotal 12\ntwice 8 24\nfirst 7 8\napply 5 6 10\n@cpp 42\nshout hi!!\ngrow 2: 7 hi!!~++\ngrow -1: INVALID_ARGUMENT hi!!~++\n@cpp hi!!~++!\nrelay INVALID_ARGUMENT hi!!~++!\nshapes 2 7\npoints 202 45\nspend 15\nasked why??\ncounted 3 7 ab+\narrays 7 4 7 9 4\n@cpp 8 5 1\nalias 8 cells 14\nwrap hey! 4 6\ngauge 40 70 hey!\npad 6 hey!##\ntgrow 1: 8 hey!##~+\ntgrow -1: INVALID_ARGUMENT hey!##~+\nnested [[1,2],[3],[]] [[1,2],[3]] [[[1,2],[3],[]],[],[[1,2]]] []\nnested [[3],[]] 4.75 hi//you\nmap {1:10,2:20,3:30} {} {4:125,5:50} 140 3 3\nmap {a:1,b:2} {:'',k:'v w'} {1:[],2:[4,5]}\nmap {1:10,2:20,3:30} {1:[],2:[4,5]} 2 2 2\nmap 1 {7:7} 1\npick 2: 20\npick 9: OUT_OF_RANGE\nderef 5 5 3 3 7 7\nsum_ptr 7 size 4 4 8 which 1 2\nchecked 5: 5\nchecked -1: INVALID_ARGUMENT\ntwice 42 tally 4 7 10 10\n";
+    let want = "sum 6\nfill 4 4 4\ntotal 12\ntwice 8 24\nfirst 7 8\napply 5 6 10\n@cpp 42\nshout hi!!\ngrow 2: 7 hi!!~++\ngrow -1: INVALID_ARGUMENT hi!!~++\n@cpp hi!!~++!\nrelay INVALID_ARGUMENT hi!!~++!\nshapes 2 7\npoints 202 45\nspend 15\nasked why??\ncounted 3 7 ab+\narrays 7 4 7 9 4\n@cpp 8 5 1\nalias 8 cells 14\nwrap hey! 4 6\ngauge 40 70 hey!\npad 6 hey!##\ntgrow 1: 8 hey!##~+\ntgrow -1: INVALID_ARGUMENT hey!##~+\nwhich 1 2 2 1 ab&& cd\nfwd 6 ab&&&& len 2 6\nnested [[1,2],[3],[]] [[1,2],[3]] [[[1,2],[3],[]],[],[[1,2]]] []\nnested per use [[1,2],[3],[]] 15\nnested [[3],[]] 4.75 hi//you\nmap {1:10,2:20,3:30} {} {4:125,5:50} 140 3 3\nmap {a:1,b:2} {:'',k:'v w'} {1:[],2:[4,5]}\nmap {1:10,2:20,3:30} {1:[],2:[4,5]} 2 2 2\nmap 1 {7:7} 1\npick 2: 20\npick 9: OUT_OF_RANGE\nderef 5 5 3 3 7 7\nsum_ptr 7 size 4 4 8 which 1 2\nchecked 5: 5\nchecked -1: INVALID_ARGUMENT\ntwice 42 tally 4 7 10 10\n";
     for backend in ["c", "llvm"] {
         assert_eq!(ok(e.voltc(&["run", "cpp_params.volt", "--backend", backend]), "voltc run cpp_params.volt"), want, "C++ parameters ({backend})");
         let o = e.voltc(&["run", "cpp_params_gthrow.volt", "--backend", backend]);
         let err = String::from_utf8_lossy(&o.stderr);
         assert!(o.status.code() == Some(101) && err.contains("C++ exception") && err.contains("negative") && o.stdout.is_empty(), "a template's throw through the plain form ({backend}): {err}");
         // @cpp<cpp_error!R> and the try_ forms of calls worked out per use catch as declared try_ forms do
-        let caught = "bump\nbumped: INVALID_ARGUMENT negative\nbump\ntbumped: INVALID_ARGUMENT negative\nb b\nnonneg 4: 4\nnonneg -4: INVALID_ARGUMENT negative\nboom 1: done\nboom 2: LENGTH_ERROR too many\nthrow 42: UNKNOWN an exception that isn't a std::exception\nbad_alloc: BAD_ALLOC std::bad_alloc\ngrow 2: 5 hi~++\ngrow -1: INVALID_ARGUMENT hi~++\nrelay 99\nnonneg -5: INVALID_ARGUMENT negative\nplain 3\n";
+        // (a fn C++ calls through a pointer: its plain throw is the outer call's, kept past a
+        // catching call of its own, which reports its own)
+        let caught = "nested ok: INVALID_ARGUMENT negative\ninner: LENGTH_ERROR\nnested fail: INVALID_ARGUMENT negative\ninner only: 96\nbump\nbumped: INVALID_ARGUMENT negative\nbump\ntbumped: INVALID_ARGUMENT negative\nb b\nnonneg 4: 4\nnonneg -4: INVALID_ARGUMENT negative\nboom 1: done\nboom 2: LENGTH_ERROR too many\nthrow 42: UNKNOWN an exception that isn't a std::exception\nbad_alloc: BAD_ALLOC std::bad_alloc\ngrow 2: 5 hi~++\ngrow -1: INVALID_ARGUMENT hi~++\nrelay 99\nnonneg -5: INVALID_ARGUMENT negative\nplain 3\n";
         assert_eq!(ok(e.voltc(&["run", "cpp_params_catch.volt", "--backend", backend]), "voltc run cpp_params_catch.volt"), caught, "@cpp<cpp_error!R> ({backend})");
-        let tried = "checked 2 3: 5\nchecked 2 -5: INVALID_ARGUMENT negative sum\nstretch 2: 5 hi~++\nstretch -1: OUT_OF_RANGE hi~++\nboom 2: LENGTH_ERROR\ntwin 5 -5\nsole 2 -5 read 3 -4\npick -1: INVALID_ARGUMENT negative pick\npick 4: 4\npick 1 -5: RANGE_ERROR negative picks\npick 1 2: 3\nkeep 3: 3\nkeep -2: DOMAIN_ERROR\nmade 1: 1 ab~\nmade -1: DOMAIN_ERROR ab~\ngrow 2: 6 ab~~++\ngrow -1: OUT_OF_RANGE ab~~++\ntake -1: OUT_OF_RANGE 5\n";
+        let tried = "checked 2 3: 5\nchecked 2 -5: INVALID_ARGUMENT negative sum\nstretch 2: 5 hi~++\nstretch -1: OUT_OF_RANGE hi~++\nboom 2: LENGTH_ERROR\ntwin 5 -5\nsole 2 -5 read 3 -4\nlone 3 -6\npick -1: INVALID_ARGUMENT negative pick\npick 4: 4\npick 1 -5: RANGE_ERROR negative picks\npick 1 2: 3\nkeep 3: 3\nkeep -2: DOMAIN_ERROR\nmade 1: 1 ab~\nmade -1: DOMAIN_ERROR ab~\ngrow 2: 6 ab~~++\ngrow -1: OUT_OF_RANGE ab~~++\ntake -1: OUT_OF_RANGE 5\n";
         assert_eq!(ok(e.voltc(&["run", "cpp_params_try.volt", "--backend", backend]), "voltc run cpp_params_try.volt"), tried, "try_ forms per use ({backend})");
         // its arguments are worked out before catch mode: a throw in one stops the program, and an
         // early exit in one leaves catch mode off (a later plain throw stops it)
@@ -2062,11 +2064,31 @@ fn cpp_params() {
     assert!(src.contains("@attributes([@cpp_call(\"try:pr::pu::checked\")])") && src.contains("fn try_checked() -> void {}"), "a per-use try_ stub: {src}");
     assert!(src.contains("// left out: try_twin, worked out per use (the header declares try_twin)") && src.matches("fn try_twin(").count() == 1, "a real try_twin keeps its name: {src}");
     // and beside a declared function or method: one try_sole, one try_read, the header's
-    assert!(src.matches("fn try_sole(").count() == 1 && src.matches("fn try_read(").count() == 1, "a declared try_ name the header has keeps it: {src}");
+    assert!(src.matches("fn try_sole(").count() == 1 && src.matches("fn try_read(").count() == 1 && src.matches("fn try_lone(").count() == 1, "a declared try_ name the header has keeps it: {src}");
     // x.try_m(...) with neither try_m nor m on the class: m's error
     let o = e.voltc(&["check", "cpp_params_no_member.volt"]);
     let err = String::from_utf8_lossy(&o.stderr);
     assert!(!o.status.success() && err.contains("no member named 'nothing'") && err.contains("cpp_params_no_member.volt:5"), "neither m nor try_m: {err}");
+}
+
+#[test]
+fn cpp_peruse_errors() {
+    // a per-use call C++ can't make: clang's error, at the call, without the probe declaration's own
+    // follow-on ('a type specifier is required for all declarations')
+    let e = Env::new("cpp-peruse-errors");
+    let o = e.voltc(&["check", "cpp_params_bad_call.volt"]);
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(!o.status.success() && err.contains("invalid operands") && err.contains("cpp_params_bad_call.volt:6") && !err.contains("type specifier"), "a per-use call's errors: {err}");
+}
+
+#[test]
+fn cpp_try_inst() {
+    // a try_ form that appears only while checking (a class template instance held by handle, its
+    // methods worked out per use) in an import with no throwing declared function: cpp_error is there
+    let e = Env::new("cpp-try-inst");
+    for backend in ["c", "llvm"] {
+        assert_eq!(ok(e.voltc(&["run", "cpp_try_inst.volt", "--backend", backend]), "voltc run cpp_try_inst.volt"), "get 7 plain 2\ntry_get RANGE_ERROR neg\n", "a template instance's try_ form ({backend})");
+    }
 }
 
 #[test]
@@ -2107,13 +2129,23 @@ fn cpp_params_refused() {
     let err = check("cpp_params_closure.volt");
     assert!(err.contains("argument 1 is a closure(i32) -> i32, but 'apply' wants a extern \"C\" fn(i32) -> i32"), "a closure for a function pointer: {err}");
     let err = check("cpp_params_view.volt");
-    assert!(err.contains("its result would point into a copy (of a string or a map) that's gone once the call returns") && err.contains("cpp_params_view.volt:7"), "a view into the copy, per use: {err}");
+    assert!(err.contains("its result would point into a copy (of a string, a vector or a map) that's gone once the call returns") && err.contains("cpp_params_view.volt:7"), "a view into the copy, per use: {err}");
     let shown = Command::new(&e.voltc).args(["check", "cpp_params.volt", "--std"]).arg(Path::new(ROOT).join("std")).current_dir(Path::new(ROOT).join("tests/interop")).env("VOLT_SHOW_CPP", "1").output().unwrap();
     let src = String::from_utf8_lossy(&shown.stderr);
-    assert!(src.contains("its result would point into a copy (of a string or a map) that's gone once the call returns") && !src.contains("fn first_word("), "a view into the copy, declared: {src}");
+    assert!(src.contains("its result would point into a copy (of a string, a vector or a map) that's gone once the call returns") && !src.contains("fn first_word("), "a view into the copy, declared: {src}");
     assert!(!src.contains("fn first_at(") && !src.contains("fn name_of(") && src.contains("fn count_up("), "structs holding a pointer or a view into the copy, declared: {src}");
+    // into a parameter's temporary (a slice's std::vector, a str's std::string): left out declared,
+    // an error per use; a reference to a number is copied out in the call, so it stays
+    for none in ["fn data_of(", "fn cstr_of("] {
+        assert!(!src.contains(none), "{none}: {src}");
+    }
+    for decl in ["fn sum_of(", "fn twice_of(", "fn len_of(", "fn back_ref(v: i32[..]) -> i32"] {
+        assert!(src.contains(decl), "{decl}: {src}");
+    }
+    let err = check("cpp_params_temp.volt");
+    assert!(err.contains("its result would point into a copy (of a string, a vector or a map) that's gone once the call returns") && err.contains("cpp_params_temp.volt:7"), "a pointer into a slice's vector, per use: {err}");
     let err = check("cpp_params_struct_view.volt");
-    assert!(err.contains("its result would point into a copy (of a string or a map) that's gone once the call returns") && err.contains("cpp_params_struct_view.volt:7"), "a struct holding a pointer into the copy, per use: {err}");
+    assert!(err.contains("its result would point into a copy (of a string, a vector or a map) that's gone once the call returns") && err.contains("cpp_params_struct_view.volt:7"), "a struct holding a pointer into the copy, per use: {err}");
     // a Volt std::string for a template parameter nested in another type (S*, std::vector<S>) or
     // the result, each call
     let err = check("cpp_params_gnest.volt");
@@ -2198,6 +2230,24 @@ fn cpp_handles_are_never_empty() {
     let o = e.voltc(&["check", "cpp_handle_no_default.volt"]);
     let err = String::from_utf8_lossy(&o.stderr);
     assert!(!o.status.success() && err.contains("C++'s h::only can't be made from nothing") && err.contains("cpp_handle_no_default.volt:5"), "{{}} of a class with no default constructor: {err}");
+}
+
+#[test]
+fn cpp_leftout() {
+    // classes once left out: an over-aligned one held by handle (C++'s aligned new and delete), a
+    // class template with a std::mutex field as a generic handle, a class with a protected
+    // destructor used through its factory's borrowed handle and freed by its own destroy
+    let e = Env::new("cpp-leftout");
+    for backend in ["c", "llvm"] {
+        assert_eq!(ok(e.voltc(&["run", "cpp_leftout.volt", "--backend", backend]), "voltc run cpp_leftout.volt"), "vec8 36 7 true true\nempty 28\nguarded 42 41\nsession 42 21\ndeleted 1\n", "left-out C++ classes ({backend})");
+    }
+    let shown = Command::new(&e.voltc).args(["check", "cpp_leftout.volt", "--std"]).arg(Path::new(ROOT).join("std")).current_dir(Path::new(ROOT).join("tests/interop")).env("VOLT_SHOW_CPP", "1").output().unwrap();
+    let src = String::from_utf8_lossy(&shown.stderr);
+    assert!(src.contains("@cpp_handle(\"lo::vec8\")") && src.contains("@cpp_handle(\"lo::guarded\")") && !src.contains("a field's type isn't one Volt can use") && !src.contains("attach fn delete(this: session&"), "vec8 and guarded handles (no partial struct), session never deleted by Volt: {src}");
+    // below C++17 there's no aligned new: left out, saying so
+    let shown = Command::new(&e.voltc).args(["check", "cpp_leftout14.volt", "--std"]).arg(Path::new(ROOT).join("std")).current_dir(Path::new(ROOT).join("tests/interop")).env("VOLT_SHOW_CPP", "1").output().unwrap();
+    let err = String::from_utf8_lossy(&shown.stderr);
+    assert!(!shown.status.success() && err.contains("left out: class lo::vec8") && err.contains("needs C++17"), "an over-aligned class under C++14: {err}");
 }
 
 /// is a C++ library's header on the usual include paths?

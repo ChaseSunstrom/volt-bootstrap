@@ -4,7 +4,8 @@
 // follows compiler-rt's generic soft-float; the f32 operations go through f64 and round once more,
 // which gives the exact f32 result for +, -, * and / (53 bits is more than twice 24, plus two).
 // The f128 operations are the f64 ones on u128 bits; on aarch64 macOS, whose C runtime has no quad
-// routines, they're exported under compiler-rt's names (namespace quad_rt, at the end).
+// routines, and on os=none, which has no C runtime, they're exported under compiler-rt's names
+// (namespace quad_rt, at the end).
 // (Part of package std: the package loader wraps every file in `namespace std`.)
 
 namespace softfloat {
@@ -945,19 +946,66 @@ namespace softfloat {
         return f128_to_magnitude(a, bits);
     }
 
-    // compiler-rt's quad routines on targets whose C runtime has none (Apple's, arm64 and x86-64:
-    // its long double is an f64 or an x87 one), so LLVM's calls for f128 arithmetic link there.
-    // Elsewhere libgcc or compiler-rt has them
-    @attributes([@cfg("os", "macos")])
+    // the remainder of a / b with a's sign, exact (C's fmod, which can't round: the remainder is a
+    // binary128 itself): the significands reduced a bit of the exponent gap at a time by shifting and
+    // subtracting (no 128-bit division, which bare metal doesn't have), stopping early at a zero
+    // remainder; at most about 32900 steps for the widest gap
+    public fn rem128(a: u128, b: u128) -> u128 {
+        val a_abs = a & Q_ABS;
+        val b_abs = b & Q_ABS;
+        if (a_abs > Q_INF) {
+            return a | Q_QUIET;
+        }
+        if (b_abs > Q_INF) {
+            return b | Q_QUIET;
+        }
+        if (a_abs == Q_INF || b_abs == 0) {
+            return Q_NAN;
+        }
+        if (b_abs == Q_INF || a_abs < b_abs) {
+            return a;
+        }
+        var xs: u128 = 0;
+        var xe: i32 = 0;
+        var ys: u128 = 0;
+        var ye: i32 = 0;
+        unpack128(a, &xs, &xe);
+        unpack128(b, &ys, &ye);
+        // both have their leading 1 at bit 112, so xs < 2 * ys: one subtraction, then one a bit
+        var r = xs;
+        if (r >= ys) {
+            r -= ys;
+        }
+        var gap = xe - ye;
+        while (gap > 0 && r != 0) {
+            r <<= 1;
+            if (r >= ys) {
+                r -= ys;
+            }
+            gap -= 1;
+        }
+        val sign = a & ~Q_ABS;
+        if (r == 0) {
+            return sign;
+        }
+        // r * 2^(ye - 16383 - 112), its leading 1 moved to bit 115 for pack128 (no bits lost)
+        val s = clz128(r) - 12;
+        return pack128(sign, ye + 3 - s, r << @cast<u128>(s));
+    }
+
+    // f128 % for both backends (voltc calls it for every f128 remainder, on every target)
+    export fn volt_f128_rem(x: f128, y: f128) -> f128 {
+        return @bitcast<f128>(rem128(@bitcast<u128>(x), @bitcast<u128>(y)));
+    }
+
+    // compiler-rt's quad routines (what LLVM calls for f128 arithmetic, compares and conversions) on
+    // targets with no C runtime that has them: Apple's, arm64 and x86-64 (its long double is an f64 or
+    // an x87 one), and os=none (bare metal and WebAssembly: no C runtime at all). Elsewhere libgcc or compiler-rt has
+    // them. Item @cfg is AND-only, so each gets a namespace with the same list (tests/golden.rs
+    // quad_exports checks they match), the bodies these helpers
     namespace quad_rt {
         public fn b(v: f128) -> u128 { return @bitcast<u128>(v); }
         public fn q(v: u128) -> f128 { return @bitcast<f128>(v); }
-
-        export fn __addtf3(x: f128, y: f128) -> f128 { return q(add128(b(x), b(y))); }
-        export fn __subtf3(x: f128, y: f128) -> f128 { return q(sub128(b(x), b(y))); }
-        export fn __multf3(x: f128, y: f128) -> f128 { return q(mul128(b(x), b(y))); }
-        export fn __divtf3(x: f128, y: f128) -> f128 { return q(div128(b(x), b(y))); }
-        export fn __negtf2(x: f128) -> f128 { return q(b(x) ^ ~Q_ABS); }
 
         // as libgcc's: <0, 0 or >0 like x - y; a NaN gives 1 to eq/ne/lt/le, -1 to ge/gt
         public fn le(x: f128, y: f128) -> i32 {
@@ -974,36 +1022,80 @@ namespace softfloat {
             }
             return c;
         }
-        export fn __eqtf2(x: f128, y: f128) -> i32 { return le(x, y); }
-        export fn __netf2(x: f128, y: f128) -> i32 { return le(x, y); }
-        export fn __lttf2(x: f128, y: f128) -> i32 { return le(x, y); }
-        export fn __letf2(x: f128, y: f128) -> i32 { return le(x, y); }
-        export fn __getf2(x: f128, y: f128) -> i32 { return ge(x, y); }
-        export fn __gttf2(x: f128, y: f128) -> i32 { return ge(x, y); }
-        export fn __unordtf2(x: f128, y: f128) -> i32 {
+        public fn unord(x: f128, y: f128) -> i32 {
             if (is_nan128(b(x)) || is_nan128(b(y))) {
                 return 1;
             }
             return 0;
         }
 
-        export fn __extendhftf2(x: f16) -> f128 { return q(f16_to_f128(@bitcast<u16>(x))); }
-        export fn __extendsftf2(x: f32) -> f128 { return q(f32_to_f128(@bitcast<u32>(x))); }
-        export fn __extenddftf2(x: f64) -> f128 { return q(f64_to_f128(@bitcast<u64>(x))); }
-        export fn __trunctfhf2(x: f128) -> f16 { return @bitcast<f16>(f128_to_f16(b(x))); }
-        export fn __trunctfsf2(x: f128) -> f32 { return @bitcast<f32>(f128_to_f32(b(x))); }
-        export fn __trunctfdf2(x: f128) -> f64 { return @bitcast<f64>(f128_to_f64(b(x))); }
-        export fn __fixtfsi(x: f128) -> i32 { return @cast<i32>(f128_to_signed(b(x), 32)); }
-        export fn __fixtfdi(x: f128) -> i64 { return @cast<i64>(f128_to_signed(b(x), 64)); }
-        export fn __fixtfti(x: f128) -> i128 { return f128_to_signed(b(x), 128); }
-        export fn __fixunstfsi(x: f128) -> u32 { return @cast<u32>(f128_to_unsigned(b(x), 32)); }
-        export fn __fixunstfdi(x: f128) -> u64 { return @cast<u64>(f128_to_unsigned(b(x), 64)); }
-        export fn __fixunstfti(x: f128) -> u128 { return f128_to_unsigned(b(x), 128); }
-        export fn __floatsitf(i: i32) -> f128 { return q(i128_to_f128(@cast<i128>(i))); }
-        export fn __floatditf(i: i64) -> f128 { return q(i128_to_f128(@cast<i128>(i))); }
-        export fn __floattitf(i: i128) -> f128 { return q(i128_to_f128(i)); }
-        export fn __floatunsitf(i: u32) -> f128 { return q(u128_to_f128(false, @cast<u128>(i))); }
-        export fn __floatunditf(i: u64) -> f128 { return q(u128_to_f128(false, @cast<u128>(i))); }
-        export fn __floatuntitf(i: u128) -> f128 { return q(u128_to_f128(false, i)); }
+        @attributes([@cfg("os", "macos")])
+        namespace apple {
+            export fn __addtf3(x: f128, y: f128) -> f128 { return q(add128(b(x), b(y))); }
+            export fn __subtf3(x: f128, y: f128) -> f128 { return q(sub128(b(x), b(y))); }
+            export fn __multf3(x: f128, y: f128) -> f128 { return q(mul128(b(x), b(y))); }
+            export fn __divtf3(x: f128, y: f128) -> f128 { return q(div128(b(x), b(y))); }
+            export fn __negtf2(x: f128) -> f128 { return q(b(x) ^ ~Q_ABS); }
+            export fn __eqtf2(x: f128, y: f128) -> i32 { return le(x, y); }
+            export fn __netf2(x: f128, y: f128) -> i32 { return le(x, y); }
+            export fn __lttf2(x: f128, y: f128) -> i32 { return le(x, y); }
+            export fn __letf2(x: f128, y: f128) -> i32 { return le(x, y); }
+            export fn __getf2(x: f128, y: f128) -> i32 { return ge(x, y); }
+            export fn __gttf2(x: f128, y: f128) -> i32 { return ge(x, y); }
+            export fn __unordtf2(x: f128, y: f128) -> i32 { return unord(x, y); }
+            export fn __extendhftf2(x: f16) -> f128 { return q(f16_to_f128(@bitcast<u16>(x))); }
+            export fn __extendsftf2(x: f32) -> f128 { return q(f32_to_f128(@bitcast<u32>(x))); }
+            export fn __extenddftf2(x: f64) -> f128 { return q(f64_to_f128(@bitcast<u64>(x))); }
+            export fn __trunctfhf2(x: f128) -> f16 { return @bitcast<f16>(f128_to_f16(b(x))); }
+            export fn __trunctfsf2(x: f128) -> f32 { return @bitcast<f32>(f128_to_f32(b(x))); }
+            export fn __trunctfdf2(x: f128) -> f64 { return @bitcast<f64>(f128_to_f64(b(x))); }
+            export fn __fixtfsi(x: f128) -> i32 { return @cast<i32>(f128_to_signed(b(x), 32)); }
+            export fn __fixtfdi(x: f128) -> i64 { return @cast<i64>(f128_to_signed(b(x), 64)); }
+            export fn __fixtfti(x: f128) -> i128 { return f128_to_signed(b(x), 128); }
+            export fn __fixunstfsi(x: f128) -> u32 { return @cast<u32>(f128_to_unsigned(b(x), 32)); }
+            export fn __fixunstfdi(x: f128) -> u64 { return @cast<u64>(f128_to_unsigned(b(x), 64)); }
+            export fn __fixunstfti(x: f128) -> u128 { return f128_to_unsigned(b(x), 128); }
+            export fn __floatsitf(i: i32) -> f128 { return q(i128_to_f128(@cast<i128>(i))); }
+            export fn __floatditf(i: i64) -> f128 { return q(i128_to_f128(@cast<i128>(i))); }
+            export fn __floattitf(i: i128) -> f128 { return q(i128_to_f128(i)); }
+            export fn __floatunsitf(i: u32) -> f128 { return q(u128_to_f128(false, @cast<u128>(i))); }
+            export fn __floatunditf(i: u64) -> f128 { return q(u128_to_f128(false, @cast<u128>(i))); }
+            export fn __floatuntitf(i: u128) -> f128 { return q(u128_to_f128(false, i)); }
+        }
+
+        // the same list as apple's
+        @attributes([@cfg("os", "none")])
+        namespace bare {
+            export fn __addtf3(x: f128, y: f128) -> f128 { return q(add128(b(x), b(y))); }
+            export fn __subtf3(x: f128, y: f128) -> f128 { return q(sub128(b(x), b(y))); }
+            export fn __multf3(x: f128, y: f128) -> f128 { return q(mul128(b(x), b(y))); }
+            export fn __divtf3(x: f128, y: f128) -> f128 { return q(div128(b(x), b(y))); }
+            export fn __negtf2(x: f128) -> f128 { return q(b(x) ^ ~Q_ABS); }
+            export fn __eqtf2(x: f128, y: f128) -> i32 { return le(x, y); }
+            export fn __netf2(x: f128, y: f128) -> i32 { return le(x, y); }
+            export fn __lttf2(x: f128, y: f128) -> i32 { return le(x, y); }
+            export fn __letf2(x: f128, y: f128) -> i32 { return le(x, y); }
+            export fn __getf2(x: f128, y: f128) -> i32 { return ge(x, y); }
+            export fn __gttf2(x: f128, y: f128) -> i32 { return ge(x, y); }
+            export fn __unordtf2(x: f128, y: f128) -> i32 { return unord(x, y); }
+            export fn __extendhftf2(x: f16) -> f128 { return q(f16_to_f128(@bitcast<u16>(x))); }
+            export fn __extendsftf2(x: f32) -> f128 { return q(f32_to_f128(@bitcast<u32>(x))); }
+            export fn __extenddftf2(x: f64) -> f128 { return q(f64_to_f128(@bitcast<u64>(x))); }
+            export fn __trunctfhf2(x: f128) -> f16 { return @bitcast<f16>(f128_to_f16(b(x))); }
+            export fn __trunctfsf2(x: f128) -> f32 { return @bitcast<f32>(f128_to_f32(b(x))); }
+            export fn __trunctfdf2(x: f128) -> f64 { return @bitcast<f64>(f128_to_f64(b(x))); }
+            export fn __fixtfsi(x: f128) -> i32 { return @cast<i32>(f128_to_signed(b(x), 32)); }
+            export fn __fixtfdi(x: f128) -> i64 { return @cast<i64>(f128_to_signed(b(x), 64)); }
+            export fn __fixtfti(x: f128) -> i128 { return f128_to_signed(b(x), 128); }
+            export fn __fixunstfsi(x: f128) -> u32 { return @cast<u32>(f128_to_unsigned(b(x), 32)); }
+            export fn __fixunstfdi(x: f128) -> u64 { return @cast<u64>(f128_to_unsigned(b(x), 64)); }
+            export fn __fixunstfti(x: f128) -> u128 { return f128_to_unsigned(b(x), 128); }
+            export fn __floatsitf(i: i32) -> f128 { return q(i128_to_f128(@cast<i128>(i))); }
+            export fn __floatditf(i: i64) -> f128 { return q(i128_to_f128(@cast<i128>(i))); }
+            export fn __floattitf(i: i128) -> f128 { return q(i128_to_f128(i)); }
+            export fn __floatunsitf(i: u32) -> f128 { return q(u128_to_f128(false, @cast<u128>(i))); }
+            export fn __floatunditf(i: u64) -> f128 { return q(u128_to_f128(false, @cast<u128>(i))); }
+            export fn __floatuntitf(i: u128) -> f128 { return q(u128_to_f128(false, i)); }
+        }
     }
 }

@@ -141,17 +141,39 @@ void volt_unlock_out(void) {
     volt_unlock_word(&volt_out_word);
 }
 /* Allocation for libraries (std::mem binds it with @intrinsic). Debug builds add a header so double/invalid frees panic
-   (freed blocks are overwritten with 0xDD, so a use after free reads garbage, and sit in a small
-   quarantine before really being freed; realloc always moves, so the same goes for a pointer into a
-   block that grew) and count live allocations for --leak-check. */
+   (freed blocks are overwritten with 0xDD, so a use after free reads garbage, and sit in a
+   quarantine, the last VOLT_Q_CAP freed or VOLT_Q_BYTES of them, before really being freed; a block
+   leaving it is checked, and one whose poison changed panics 'write after free'; realloc always
+   moves, so the same goes for a pointer into a block that grew) and count live allocations for
+   --leak-check, which checks the blocks still in the quarantine at exit too. */
 #ifdef VOLT_DEBUG_ALLOC
 size_t volt_live_allocs;
 typedef struct { uint64_t magic, size; } volt_hdr;
 #define VOLT_LIVE 0x766f6c746c697665ULL
 #define VOLT_DEAD 0x766f6c7464656164ULL
-static volt_hdr *volt_quarantine[256];
-static size_t volt_q_next;
+#define VOLT_Q_CAP 65536u
+#define VOLT_Q_BYTES (64u << 20) /* the golden suite ran as fast with it as with 256 blocks (T-0476) */
+static volt_hdr *volt_quarantine[VOLT_Q_CAP]; /* a FIFO ring: volt_q_len blocks from volt_q_head */
+static size_t volt_q_head, volt_q_len, volt_q_bytes;
 static int32_t volt_q_word; /* guards the quarantine */
+/* whether a freed block still holds nothing but its 0xDD poison: its first byte is, and every byte
+   equals the next (one memcmp of the block against itself a byte on: libc's speed in an -O0 build) */
+static bool volt_q_intact(volt_hdr *h) {
+    const uint8_t *b = (const uint8_t *)(h + 1);
+    return h->size == 0 || (b[0] == 0xDD && volt_memcmp(b, b + 1, h->size - 1) == 0);
+}
+/* after the lock is released: a fixed message, nothing allocated */
+static void volt_q_release(volt_hdr *h) {
+    if (!volt_q_intact(h)) volt_panic("write after free", "<allocator>");
+    volt_free(h);
+}
+void volt_rt_quarantine_check(void) {
+    volt_lock_word(&volt_q_word);
+    bool ok = true;
+    for (size_t i = 0; i < volt_q_len && ok; i++) ok = volt_q_intact(volt_quarantine[(volt_q_head + i) % VOLT_Q_CAP]);
+    volt_unlock_word(&volt_q_word);
+    if (!ok) volt_panic("write after free", "<allocator>");
+}
 static volt_hdr *volt_hdr_of(void *p, const char *what) {
     volt_hdr *h = (volt_hdr *)p - 1;
     if (h->magic != VOLT_LIVE) volt_panic(h->magic == VOLT_DEAD ? "double free" : what, "<allocator>");
@@ -171,12 +193,28 @@ void volt_rt_free(void *p) {
     h->magic = VOLT_DEAD;
     volt_memset(h + 1, 0xDD, h->size); /* a read after free sees 0xDD bytes, not the old value */
     __atomic_fetch_sub(&volt_live_allocs, 1, __ATOMIC_RELAXED);
+    if (h->size > VOLT_Q_BYTES) { /* bigger than the whole quarantine: freed now */
+        volt_free(h);
+        return;
+    }
+    /* the oldest blocks leave, one at a time, until h fits */
     volt_lock_word(&volt_q_word);
-    volt_hdr *old = volt_quarantine[volt_q_next];
-    volt_quarantine[volt_q_next] = h;
-    volt_q_next = (volt_q_next + 1) % 256;
-    volt_unlock_word(&volt_q_word);
-    if (old) volt_free(old);
+    for (;;) {
+        volt_hdr *old = 0;
+        if (volt_q_len == VOLT_Q_CAP || volt_q_bytes + h->size > VOLT_Q_BYTES) {
+            old = volt_quarantine[volt_q_head];
+            volt_q_head = (volt_q_head + 1) % VOLT_Q_CAP;
+            volt_q_len--;
+            volt_q_bytes -= old->size;
+        } else {
+            volt_quarantine[(volt_q_head + volt_q_len++) % VOLT_Q_CAP] = h;
+            volt_q_bytes += h->size;
+        }
+        volt_unlock_word(&volt_q_word);
+        if (!old) return;
+        volt_q_release(old);
+        volt_lock_word(&volt_q_word);
+    }
 }
 void *volt_rt_realloc(void *p, size_t n) {
     if (!p) return volt_rt_malloc(n);
@@ -191,6 +229,7 @@ void *volt_rt_realloc(void *p, size_t n) {
 }
 #else
 size_t volt_live_allocs;
+void volt_rt_quarantine_check(void) {}
 void *volt_rt_malloc(size_t n) { return volt_malloc(n); }
 void volt_rt_free(void *p) { volt_free(p); }
 void *volt_rt_realloc(void *p, size_t n) { return volt_realloc(p, n); }

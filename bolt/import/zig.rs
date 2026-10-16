@@ -65,8 +65,12 @@ pub fn import(r: &Req) -> Result<(), String> {
         let mut m = model.clone();
         let mut deinit = w.deinit.clone();
         instances(&mut m, &mut deinit, lines, &r.alias, skip);
-        // a tagged union's payloads with a deinit: its drop calls the active one's
-        let unions = w.unions.iter().filter(|u| u.1 .0).map(|(u, (_, fs))| (u.clone(), (fs.len(), fs.iter().filter_map(|(f, t)| if let Some(Ty::Named(n)) = t { deinit.get(n).map(|a| (f.clone(), *a)) } else { None }).collect()))).collect();
+        // a tagged union's payloads with a deinit (or optionals of one): its drop calls the active one's
+        let unions = w.unions.iter().filter(|u| u.1 .0).map(|(u, (_, fs))| (u.clone(), (fs.len(), fs.iter().filter_map(|(f, t)| match t {
+            Some(Ty::Named(n)) => deinit.get(n).map(|a| (f.clone(), *a, false)),
+            Some(Ty::Opt(x)) => if let Ty::Named(n) = &**x { deinit.get(n).map(|a| (f.clone(), *a, true)) } else { None },
+            _ => None,
+        }).collect()))).collect();
         let lang = Zig { deinit, opaques: w.opaques.clone(), unions };
         let (shim, volt) = Gen::new(&m, &r.alias, &lang).write("the file");
         crate::build::write_if_changed(&shim_file, &shim)?;
@@ -863,9 +867,9 @@ fn parse_ty_in(t: &[Tok], owner: Option<&str>, gens: &[String]) -> Option<Ty> {
                 "Self" => Ty::SelfTy,
                 "c_int" => Ty::Prim("i32"),
                 "c_uint" => Ty::Prim("u32"),
-                // (C's long is 32 bits on Windows; bolt builds for the system it runs on)
-                "c_long" if cfg!(windows) => Ty::Prim("i32"),
-                "c_ulong" if cfg!(windows) => Ty::Prim("u32"),
+                // (C's long is 32 bits on Windows and 32-bit systems; bolt builds for the system it runs on)
+                "c_long" if std::mem::size_of::<std::ffi::c_long>() == 4 => Ty::Prim("i32"),
+                "c_ulong" if std::mem::size_of::<std::ffi::c_ulong>() == 4 => Ty::Prim("u32"),
                 "c_long" | "c_longlong" => Ty::Prim("i64"),
                 "c_ulong" | "c_ulonglong" => Ty::Prim("u64"),
                 "c_short" => Ty::Prim("i16"),
@@ -890,8 +894,8 @@ struct Zig {
     /// opaque types (Volt borrows them, never frees them)
     opaques: BTreeSet<String>,
     /// tagged unions: how many fields, and those whose payload has a deinit (whether it takes the
-    /// allocator): dropping one deinits its active payload
-    unions: BTreeMap<String, (usize, Vec<(String, bool)>)>,
+    /// allocator, whether the payload is an optional of it): dropping one deinits its active payload
+    unions: BTreeMap<String, (usize, Vec<(String, bool, bool)>)>,
 }
 
 impl Zig {
@@ -1198,7 +1202,10 @@ impl Lang for Zig {
                     (Some(true), _) => "p.deinit(alloc);\n    ".to_string(),
                     (Some(false), _) => "p.deinit();\n    ".to_string(),
                     (None, Some((n, fs))) if !fs.is_empty() => {
-                        let arms: String = fs.iter().map(|(f, a)| format!(".{f} => |*x| x.deinit({}), ", if *a { "alloc" } else { "" })).collect();
+                        let arms: String = fs.iter().map(|(f, a, opt)| {
+                            let call = format!("deinit({})", if *a { "alloc" } else { "" });
+                            if *opt { format!(".{f} => |*x| if (x.*) |*y| y.{call}, ") } else { format!(".{f} => |*x| x.{call}, ") }
+                        }).collect();
                         format!("switch (p.*) {{ {arms}{}}}\n    ", if fs.len() < *n { "else => {}, " } else { "" })
                     }
                     _ => String::new(),

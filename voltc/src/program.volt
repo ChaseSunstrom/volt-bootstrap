@@ -239,6 +239,8 @@ attach fn main_wrapper(this: checker&, main: u32, mi: u32) -> compile_error!void
     if (this.opts.leak_check && !this.opts.release) {
         val rc = this.new_ir_local("_rc", I32);
         put(&all, this.ir.decl(rc.id, code));
+        // a write after free into a block still in the debug allocator's quarantine panics
+        put(&all, this.ir.rt_call("volt_rt_quarantine_check", {}, VOID));
         val live = this.runtime_global("volt_live_allocs", USIZE);
         val leak = this.ir.rt_call("volt_dprintf", nodes3(this.ir.int(2, I32), this.ir.node(ir_kind::CSTR("leak: %zu allocation(s) never freed\n"), CSTR), live), I32);
         put(&all, this.ir.if_(this.nonzero(live), this.ir.block(nodes2(leak, this.ir.ret(this.ir.int(102, I32)))), null));

@@ -372,6 +372,7 @@ namespace process {
     <A: std::mem::allocator = std::mem::default_allocator>
     public struct output {
         code: i32;           // exit code, or 128 + signal
+        signal: i32 = 0;     // the signal that ended it, or 0 if it exited (always 0 on Windows)
         out: std::string<A>; // its stdout
         err: std::string<A>; // its stderr
     }
@@ -443,6 +444,7 @@ namespace process {
         pump(inp[1], outp[0], errp[0], input, &r);
         val s = try wait_for(pid);
         r.code = s.code;
+        r.signal = s.signal;
         return r;
     }
 

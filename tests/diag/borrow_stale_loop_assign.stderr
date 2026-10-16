@@ -1,0 +1,39 @@
+warning: this.items given a new value inside a loop over this.items's items: the loop goes on over the old ones, which this frees; collect the changes and make them after the loop
+   ┌─ tests/diag/borrow_stale_loop_assign.volt:18:9
+   │
+17 │     for (y) in this.items.items() {
+   │                ------------------ the loop over this.items
+18 │         this.items = {};
+   │         ^^^^^^^^^^^^^^^
+
+warning: this.a given a new value inside a loop over this.a.b's items: the loop goes on over the old ones, which this frees; collect the changes and make them after the loop
+   ┌─ tests/diag/borrow_stale_loop_assign.volt:21:9
+   │
+20 │     for (y) in this.a.b.items() {
+   │                ---------------- the loop over this.a.b
+21 │         this.a = {};
+   │         ^^^^^^^^^^^
+
+warning: this.a.b given a new value inside a loop over this.a.b's items: the loop goes on over the old ones, which this frees; collect the changes and make them after the loop
+   ┌─ tests/diag/borrow_stale_loop_assign.volt:24:9
+   │
+23 │     for (y) in this.a.b.items() {
+   │                ---------------- the loop over this.a.b
+24 │         this.a.b = {};
+   │         ^^^^^^^^^^^^^
+
+warning: xs given a new value inside a loop over xs's items: the loop goes on over the old ones, which this frees; collect the changes and make them after the loop
+   ┌─ tests/diag/borrow_stale_loop_assign.volt:48:9
+   │
+47 │     for (x) in xs.items() {
+   │                ---------- the loop over xs
+48 │         xs = {};
+   │         ^^^^^^^
+
+warning: s given a new value inside a loop over s's items: the loop goes on over the old ones, which this frees; collect the changes and make them after the loop
+   ┌─ tests/diag/borrow_stale_loop_assign.volt:52:9
+   │
+51 │     for (c) in s.as_str() {
+   │                ---------- the loop over s
+52 │         s = std::string::from("cd");
+   │         ^^^^^^^^^^^^^^^^^^^^^^^^^^^

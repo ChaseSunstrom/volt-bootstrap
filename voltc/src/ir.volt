@@ -308,7 +308,19 @@ attach fn unary(this: ir_prog&, op: unop_ir, x: u32, t: u32) -> u32 {
 }
 
 attach fn binary(this: ir_prog&, op: binop_ir, a: u32, b: u32, t: u32) -> u32 {
+    // f128 %: std::softfloat's exact fmod on every target (LLVM's frem calls the C library's
+    // fmodf128, which bare metal and WebAssembly don't have; C's fmod is a double's)
+    if (op == binop_ir::REM && t == F128) {
+        return this.rt_call("volt_f128_rem", nodes2(this.as_f128(a), this.as_f128(b)), F128);
+    }
     return this.node(ir_kind::BINARY(op, a, b), t);
+}
+
+attach fn as_f128(this: ir_prog&, x: u32) -> u32 {
+    if (this.ty_of(x) == F128) {
+        return x;
+    }
+    return this.conv(x, F128);
 }
 
 attach fn conv(this: ir_prog&, x: u32, t: u32) -> u32 {

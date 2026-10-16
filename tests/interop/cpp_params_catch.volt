@@ -29,7 +29,29 @@ fn bump() -> i32 {
     std::println("bump");
     return -2;
 }
+// a fn C++ calls through a pointer runs in the outer call's catch mode: its plain call's throw is
+// the outer call's error, and a catching call it makes after that (a scope of its own, failing or
+// not) leaves it so
+fn then_ok(k: i32) -> i32 {
+    val z = cpp::pr::pu::nonneg(k);
+    val n = @cpp<cpp::cpp_error!i32>("pr::pu::nonneg(1)") catch |e| { return 98; };
+    return z + n;
+}
+fn then_fail(k: i32) -> i32 {
+    val z = cpp::pr::pu::nonneg(k);
+    @cpp<cpp::cpp_error!void>("pr::pu::boom({0}, {1})", 1, 2) catch |e| {
+        std::println("inner: {}", e);
+        return 97;
+    };
+    return z;
+}
+fn only_fail(k: i32) -> i32 {
+    return @cpp<cpp::cpp_error!i32>("pr::pu::nonneg({0})", k) catch |e| { return 96; };
+}
 fn main() -> void {
+    show("nested ok", cpp::pr::try_apply(then_ok, -1));
+    show("nested fail", cpp::pr::try_apply(then_fail, -1));
+    show("inner only", cpp::pr::try_apply(only_fail, -1));
     show("bumped", @cpp<cpp::cpp_error!i32>("pr::pu::nonneg({0})", bump()));
     var b = std::string::from("b");
     show("tbumped", @cpp<cpp::cpp_error!i32, std::string>("pr::gs::grow<{t0}>({0}, {1})", &b, bump()));

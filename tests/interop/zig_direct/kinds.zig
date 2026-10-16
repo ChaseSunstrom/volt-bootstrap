@@ -72,6 +72,23 @@ pub fn heldLen(h: *const Held) usize {
     };
 }
 
+// an optional payload that frees what it holds: freed too when it's there
+pub const Kept = union(enum) {
+    buf: ?Buf,
+    empty,
+};
+
+pub fn keptOf(allocator: std.mem.Allocator, n: usize) Kept {
+    return .{ .buf = if (n == 0) null else Buf.init(allocator, n) };
+}
+
+pub fn keptLen(k: *const Kept) usize {
+    return switch (k.*) {
+        .buf => |b| if (b) |x| x.data.len else 0,
+        .empty => 0,
+    };
+}
+
 pub const Bits = union {
     i: u32,
     f: f32,

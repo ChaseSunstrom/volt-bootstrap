@@ -65,6 +65,15 @@ writing a number's digits.
 `--leak-check` makes a debug build count allocations: if any is still live when the program ends,
 it exits with code 102.
 
+## Freed memory
+
+A debug build's allocator fills a freed block with `0xDD` bytes and keeps it from being reused
+while it is among the last 65536 blocks or 64 MiB freed, so a view into storage that moved or was
+freed reads `0xDD` bytes, not some newer value's. When a block leaves that quarantine its bytes are
+checked: one written through a stale view panics with `write after free` (exit 101), and
+`--leak-check` checks the blocks still held when the program ends. A block bigger than the whole
+quarantine is freed at once. Release builds free memory straight away and check none of this.
+
 ## What the compiler checks
 
 Some mistakes never compile: using a moved value, moving inside a loop without a new value before
@@ -93,7 +102,10 @@ change. Volt has no lifetimes to write and no borrow errors; it looks at each fu
   ```
 
   A read on any path after the change warns, a loop's next pass included. Changing a container
-  inside a `for` loop over its items warns at the change: the loop goes on over the old items.
+  inside a `for` loop over its items (`for (y) in xs.items()`, `this.a.b.items()`, or straight
+  over a C++ container, `for (y) in this.v`) warns at the change, a new value for it or for a
+  container it's a field of (`this.a = ...`) included: the loop goes on over the old items. A
+  loop over a copy, a range or an array (read through its place each round) doesn't.
   The container may be a local, a parameter or a field of one (`this.items.items()`): a change to
   `this.items`, or to `this` as a whole, reaches the views into it, and one to `this.b` leaves a
   view of `this.a` alone. Giving the container a new value (`xs = ys`, `this.items = ...`,

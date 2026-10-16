@@ -115,27 +115,31 @@ fn std_linked() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// tests/run/strings_multiline.volt saved with Windows line endings prints the same: a \r\n in a
-/// multi-line string is a \n
 /// std::softfloat's quad routines under compiler-rt's names (what LLVM calls for f128): defined for
-/// macOS (arm64 and x86-64), whose C runtime has none, and nowhere else (they'd clash with libgcc's)
+/// macOS (arm64 and x86-64), whose C runtime has none, and os=none (bare metal, WebAssembly: no C
+/// runtime at all), the same set for each, and nowhere else (they'd clash with libgcc's)
 #[test]
-fn quad_exports_only_on_macos() {
+fn quad_exports() {
     const NAMES: [&str; 30] = ["__addtf3", "__subtf3", "__multf3", "__divtf3", "__negtf2", "__eqtf2", "__netf2", "__lttf2", "__letf2", "__getf2", "__gttf2", "__unordtf2", "__extendhftf2", "__extendsftf2", "__extenddftf2", "__trunctfhf2", "__trunctfsf2", "__trunctfdf2", "__fixtfsi", "__fixtfdi", "__fixtfti", "__fixunstfsi", "__fixunstfdi", "__fixunstfti", "__floatsitf", "__floatditf", "__floattitf", "__floatunsitf", "__floatunditf", "__floatuntitf"];
     let ir = |cfg: &[&str]| {
         let out = Command::new(common::voltc()).args(["emit-llvm", "tests/run/floats_wide.volt", "--std", "std"]).args(cfg).current_dir(env!("CARGO_MANIFEST_DIR")).output().unwrap();
         assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
         String::from_utf8_lossy(&out.stdout).into_owned()
     };
+    // the quad routines an IR defines: every compiler-rt name with "tf" in it (wasm32's 128-bit
+    // integer ones, __multi3 and the like, have none)
+    let quad = |ir: &str| -> std::collections::BTreeSet<String> {
+        ir.lines().filter(|l| l.starts_with("define")).filter_map(|l| l.split_once("@__")).map(|(_, r)| format!("__{}", r.split('(').next().unwrap())).filter(|n| n.contains("tf")).collect()
+    };
+    let want: std::collections::BTreeSet<String> = NAMES.iter().map(|n| n.to_string()).collect();
     for arch in ["aarch64", "x86_64"] {
-        let mac = ir(&["--cfg", "os=macos", "--cfg", &format!("arch={arch}")]);
-        let missing: Vec<_> = NAMES.iter().filter(|n| !mac.lines().any(|l| l.starts_with("define") && l.contains(&format!("@{n}(")))).collect();
-        assert!(missing.is_empty(), "{arch} macOS doesn't define {missing:?}");
+        assert_eq!(quad(&ir(&["--cfg", "os=macos", "--cfg", &format!("arch={arch}")])), want, "{arch} macOS's quad routines");
     }
-    // (Linux named, not the host: on macOS the host is the target that has them)
-    let linux = ir(&["--cfg", "os=linux", "--cfg", "arch=x86_64"]);
-    let there: Vec<_> = NAMES.iter().filter(|n| linux.lines().any(|l| l.starts_with("define") && l.contains(&format!("@{n}(")))).collect();
-    assert!(there.is_empty(), "Linux defines {there:?}");
+    let none = quad(&ir(&["--cfg", "os=none", "--cfg", "arch=wasm32"]));
+    assert_eq!(none, want, "os=none's quad routines differ from macOS's");
+    // (Linux named, not the host: on macOS the host is a target that has them)
+    let linux = quad(&ir(&["--cfg", "os=linux", "--cfg", "arch=x86_64"]));
+    assert!(linux.is_empty(), "Linux defines {linux:?}");
 }
 
 /// a global set from ~ or ! over constants is a constant in the IR, with no constructor to set it
@@ -170,7 +174,7 @@ fn f128_soft_c() {
         assert!(text.matches(op).count() > prelude.matches(op).count(), "floats_wide's C has no {op}");
     }
     // f128_ops through both C compilers, natively and soft (golden runs them all through LLVM)
-    let runs = [("floats_wide", "cc", true), ("softquad", "cc", true), ("f128_ops", "gcc", true), ("f128_ops", "clang", true), ("f128_ops", "gcc", false), ("f128_ops", "clang", false)];
+    let runs = [("floats_wide", "cc", true), ("softquad", "cc", true), ("f128_ops", "gcc", true), ("f128_ops", "clang", true), ("f128_ops", "gcc", false), ("f128_ops", "clang", false), ("f128_rem", "gcc", true), ("f128_rem", "clang", false)];
     for (prog, cc, soft) in runs {
         let file = format!("tests/run/{prog}.volt");
         let want: Vec<String> = directives(&std::fs::read_to_string(root.join(&file)).unwrap(), "expect");
@@ -205,6 +209,8 @@ fn u128_literals_c() {
     assert!(o.status.success() && got.trim_end() == want, "u128_literals in C printed:\n{got}{}", String::from_utf8_lossy(&o.stderr));
 }
 
+/// tests/run/strings_multiline.volt saved with Windows line endings prints the same: a \r\n in a
+/// multi-line string is a \n
 #[test]
 fn multiline_strings_crlf() {
     let src = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/run/strings_multiline.volt")).unwrap();

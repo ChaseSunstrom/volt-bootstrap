@@ -32,6 +32,7 @@ fn main() -> void {
     std::println("twin {} {}", cpp::pr::pu::twin(2, 3), cpp::pr::pu::try_twin(5));
     var g: cpp::pr::pu::Gauge = { v: 1 };
     std::println("sole {} {} read {} {}", cpp::pr::pu::sole(2), cpp::pr::pu::try_sole(5), g.read(2), g.try_read(4));
+    std::println("lone {} {}", cpp::pr::pu::lone(3), cpp::pr::pu::try_lone(5));
     // one name both declared and worked out per use: try_pick catches either
     picked(-1);
     picked(4);

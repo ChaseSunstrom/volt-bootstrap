@@ -241,6 +241,35 @@ namespace bare {
         export fn __lshrdi3(a: u64, s: i32) -> u64 { return std::softint::lshr64(a, @cast<u32>(s)); }
         export fn __ashrdi3(a: i64, s: i32) -> i64 { return std::softint::ashr64(a, @cast<u32>(s)); }
         export fn __muldi3(a: u64, b: u64) -> u64 { return std::softint::mul64(a, b); }
+        // leading zeros, which LLVM calls for @clz (the Cortex-M0 has no CLZ; softfloat's rem128
+        // uses it): halving, no @clz here, which would call this
+        export fn __clzsi2(a: u32) -> i32 {
+            if (a == 0) {
+                return 32;
+            }
+            var x = a;
+            var n: i32 = 0;
+            if ((x & 0xFFFF0000) == 0) {
+                n += 16;
+                x <<= 16;
+            }
+            if ((x & 0xFF000000) == 0) {
+                n += 8;
+                x <<= 8;
+            }
+            if ((x & 0xF0000000) == 0) {
+                n += 4;
+                x <<= 4;
+            }
+            if ((x & 0xC0000000) == 0) {
+                n += 2;
+                x <<= 2;
+            }
+            if ((x & 0x80000000) == 0) {
+                n += 1;
+            }
+            return n;
+        }
     }
 
     // what LLVM calls for 128-bit multiplies, divisions and shifts by a variable on WebAssembly
@@ -588,5 +617,16 @@ namespace bare {
         export fn __floatdisf(i: i64) -> f32 { return f32_of(std::softfloat::i64_to_f32(i)); }
         export fn __floatunsisf(i: u32) -> f32 { return f32_of(std::softfloat::u64_to_f32(false, @cast<u64>(i))); }
         export fn __floatundisf(i: u64) -> f32 { return f32_of(std::softfloat::u64_to_f32(false, i)); }
+    }
+
+    // f16 to and from the wider floats, which LLVM calls on every target here (no core has f16
+    // conversions it uses): through f128's exact widening and its one rounding
+    namespace half {
+        public fn of(v: u128) -> f16 { return @bitcast<f16>(std::softfloat::f128_to_f16(v)); }
+        public fn wide(v: f16) -> u128 { return std::softfloat::f16_to_f128(@bitcast<u16>(v)); }
+        export fn __extendhfsf2(x: f16) -> f32 { return @bitcast<f32>(std::softfloat::f128_to_f32(wide(x))); }
+        export fn __extendhfdf2(x: f16) -> f64 { return @bitcast<f64>(std::softfloat::f128_to_f64(wide(x))); }
+        export fn __truncsfhf2(x: f32) -> f16 { return of(std::softfloat::f32_to_f128(@bitcast<u32>(x))); }
+        export fn __truncdfhf2(x: f64) -> f16 { return of(std::softfloat::f64_to_f128(@bitcast<u64>(x))); }
     }
 }
