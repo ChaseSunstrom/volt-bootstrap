@@ -8,6 +8,8 @@ use std::process::{Command, Output};
 const ROOT: &str = env!("CARGO_MANIFEST_DIR");
 
 const C_OUT: &str = "add 42\ncount 2\nhello from volt 2\nsecond\nmissing 0\nbad: error: expected i32, found str\nnext -2147483648\nsandboxed 4\nescape: Symbols not found: [ getpid ] (this VM is a sandbox: it reaches only the symbols volt_vm_allow gave it)\ninner: Symbols not found: [ volt_vm_new ] (this VM is a sandbox: it reaches only the symbols volt_vm_allow gave it)\nallow: a sandbox's allowances are fixed at its first load\n";
+const PACKAGES_OUT: &str = "vm run 393\nreload util: can't load util.volt again: main_script uses it\nvm run 395\nvm leaf 1\nvm leaf 2\nbox run 393\nreload util: can't load util.volt again: main_script uses it\nbox run 395\nbox leaf 1\nbox leaf 2\nbroken: error: expected i32, found str\nuser: error: unknown name 'broken'\nmissing: Symbols not found: [ not_a_function_anywhere ]\nm 5\nmissing replaced: Symbols not found: [ still_not_anywhere ]\nm found 0\nb/init: can't load b/init.volt: its package, init, is a/init.volt's (load a/init.volt again to replace it, or give this one another name)\na_init 1\nmy-util.volt: can't load my-util.volt: a script is the package its file names, and my-util can't name a package\nstd.volt: can't load std.volt: a script is the package its file names, and std is std's\ndir/fn.volt: can't load dir/fn.volt: a script is the package its file names, and fn can't name a package\nh 7\n";
+const IMPORTS_OUT: &str = "run 53\nbox run 53\nbox strlen 4\nbox user 8\nbox_pid: Symbols not found: [ getpid ] (this VM is a sandbox: it reaches only the symbols volt_vm_allow gave it)\nbox_gxx: a sandbox's script imports C++ through clang++ (LLVM bitcode, run by the JIT under the sandbox), and $CXX is g++\n";
 const PY_OUT: &str = "sum_squares 385\nerror COMPILE error: unknown name 'nope'\n";
 const RS_OUT: &str = "cubes 100\nerror COMPILE error: expected an expression, found ';'\n";
 
@@ -39,8 +41,20 @@ fn embedded_volt() {
     // compiled for it as it loads
     let imports = dir.join("host_imports");
     ok(Command::new("cc").arg("-o").arg(&imports).arg(Path::new(ROOT).join("tests/embed/host_imports.c")).arg("-I").arg(&bindings).arg("-L").arg(&lib_dir).arg("-lvoltvm").arg(format!("-Wl,-rpath,{}", lib_dir.display())).output().unwrap(), "compiling host_imports.c");
-    let out = ok(Command::new(&imports).arg(&std_dir).arg(Path::new(ROOT).join("tests/embed")).output().unwrap(), "host_imports");
-    assert_eq!(out, "run 53\nbox: a sandbox's script can't import C or C++ (their code would reach past the sandbox)\n");
+    // and in a sandbox through clang of the VM's LLVM (llvm-config's), when it's there
+    let bindir = ["llvm-config-23", "llvm-config"].iter().find_map(|t| Command::new(std::env::var("LLVM_CONFIG").unwrap_or(t.to_string())).arg("--bindir").output().ok().filter(|o| o.status.success())).map(|o| Path::new(String::from_utf8_lossy(&o.stdout).trim()).to_path_buf());
+    let clang = bindir.filter(|b| cfg!(target_os = "linux") && b.join("clang").is_file() && b.join("clang++").is_file());
+    let mut c = Command::new(&imports);
+    c.arg(&std_dir).arg(Path::new(ROOT).join("tests/embed"));
+    if let Some(b) = &clang {
+        c.arg("box").env("CC", b.join("clang")).env("CXX", b.join("clang++"));
+    }
+    let out = ok(c.output().unwrap(), "host_imports");
+    assert_eq!(out, if clang.is_some() { IMPORTS_OUT } else { "run 53\n" });
+    // scripts using earlier scripts as packages
+    let packages = dir.join("host_packages");
+    ok(Command::new("cc").arg("-o").arg(&packages).arg(Path::new(ROOT).join("tests/embed/host_packages.c")).arg("-I").arg(&bindings).arg("-L").arg(&lib_dir).arg("-lvoltvm").arg(format!("-Wl,-rpath,{}", lib_dir.display())).output().unwrap(), "compiling host_packages.c");
+    assert_eq!(ok(Command::new(&packages).arg(&std_dir).output().unwrap(), "host_packages"), PACKAGES_OUT);
     // Python, through the generated module (which loads the library without RTLD_GLOBAL)
     if Command::new("python3").arg("--version").output().is_ok_and(|o| o.status.success()) {
         let out = ok(Command::new("python3").arg(Path::new(ROOT).join("tests/embed/host.py")).arg(&std_dir).env("PYTHONPATH", &bindings).env("VOLT_VOLTVM_LIB", lib_dir.join(format!("{}voltvm.{}", std::env::consts::DLL_PREFIX, std::env::consts::DLL_EXTENSION))).output().unwrap(), "host.py");

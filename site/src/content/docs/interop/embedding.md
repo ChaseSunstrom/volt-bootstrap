@@ -22,7 +22,7 @@ compiles for).
 | | |
 | --- | --- |
 | `volt_vm_new(std_dir)` | a VM whose scripts see the std package in `std_dir` (`""`: no std at all) |
-| `volt_vm_load(vm, name, source)` | compiles `source` and adds it; errors name the file `name` |
+| `volt_vm_load(vm, name, source)` | compiles `source` and adds it, as the package its file names (`util.volt` is `util`); errors name the file `name` |
 | `volt_vm_find(vm, name)` | the address of an `export fn`, or of a host function (0 when there's none) |
 | `volt_vm_define(vm, name, address)` | a host function the scripts can call |
 | `volt_vm_allow(vm, symbol)` | makes the VM a sandbox that reaches `symbol` (and only what it's given); before its first load |
@@ -32,9 +32,9 @@ compiles for).
 
 A script is an ordinary Volt file without a `main`. Its `export fn`s have the C calling convention
 and their own names, so the host casts what `volt_vm_find` gives it to a function pointer of the
-same C signature and calls it. Each load is compiled on its own, with the parts of std it uses, so
-two scripts can't see each other's names, and only an `export fn` name can clash. A script's
-globals are set up when it loads.
+same C signature and calls it. Each script is a package, named for its file, that the scripts
+loaded after it can use ([below](#scripts-as-packages)); only an `export fn` name can clash between
+scripts. A script's globals are set up when it loads.
 
 ```c
 #include <stdio.h>
@@ -69,6 +69,35 @@ int main(void) {
 cc host.c -I target/debug/bindings -L target/debug -lvoltvm -Wl,-rpath,$PWD/target/debug
 ```
 
+## Scripts as packages
+
+A script is the package its file names: the name `volt_vm_load` is given, without its directories
+and extension (`scripts/util.volt` is `util`). A script loaded later reaches its `public` types,
+functions, generics and globals as `util::...`, as a program reaches a package:
+
+```c
+volt_vm_load(vm, S("util.volt"),
+    "public struct point { x: i32; y: i32; }\n"
+    "public var made: i32 = 0;\n"
+    "public fn make(x: i32, y: i32) -> point { made += 1; return { x: x, y: y }; }\n");
+volt_vm_load(vm, S("main_script.volt"),
+    "export fn run() -> i32 { val p = util::make(3, 4); return p.x + p.y + util::made; }\n");
+```
+
+The later script is compiled against what the VM already has of the earlier one: `util::make` is
+the code util's load compiled, and `util::made` is util's own global, not a copy (a generic is
+made for the script that uses it, from util's source). In a sandbox that's no symbol the host has
+to allow: scripts' code meets inside the VM.
+
+Loading a name again replaces that script, when no script loaded since uses it; when one does, the
+load is refused naming it (`can't load util.volt again: main_script uses it`), and the earlier
+script stays. A load that fails to compile changes nothing; one that fails to link (a symbol that
+isn't there) leaves nothing of itself behind, no package and no code, and a script it was replacing
+is gone too (its code makes way before the new code is added). A file whose name can't be a package's (`my-util.volt`, a keyword, or
+`std`) is refused, and so is a second file of one name (`b/init.volt` after `a/init.volt`). A
+script whose C or C++ imports were built into a library (outside a sandbox) can't be loaded again:
+the library stays loaded, and the new code's symbols would come from it.
+
 ## Host functions
 
 A script declares a host function as it would a C one, `extern "C" fn name(...) -> R;`, and
@@ -90,6 +119,29 @@ and `exit`. A script that declares anything else fails to load:
 ```text
 Symbols not found: [ getpid ] (this VM is a sandbox: it reaches only the symbols volt_vm_allow gave it)
 ```
+
+A sandbox's script imports C and C++ headers too, but their code isn't a library the VM loads (a
+library's code would reach past the sandbox): clang compiles it to LLVM bitcode, and the JIT runs
+it with the script, so what it calls goes through the same allowances. `$CC` and `$CXX` (else
+`clang` and `clang++`) must be clang of the LLVM the VM runs (23): anything else is refused,
+naming clang:
+
+```text
+a sandbox's script imports C++ through clang++ (LLVM bitcode, run by the JIT under the sandbox), and $CXX is g++
+```
+
+The host allows the C functions a script's imports call (`strlen` for `use { "string.h" }`), and
+for C++ what the header's code needs from the C++ library: on Linux with libstdc++, a header with a
+`std::vector` member needs `_Znwm` and `_ZdlPvm` (new and delete), its errors
+(`_ZSt20__throw_length_errorPKc`, `_ZSt28__throw_bad_array_new_lengthv`,
+`_ZSt17__throw_bad_allocv`, and `_ZSt21__glibcxx_assert_failPKciS0_S0_` for an unoptimized
+build's checks) and exceptions (`__gxx_personality_v0`, `__cxa_begin_catch`, `__cxa_end_catch`,
+`__cxa_rethrow`, `_Unwind_Resume`, `_ZSt9terminatev`, `_ZSt17current_exceptionv`,
+`_ZTVN10__cxxabiv117__class_type_infoE`), and every C++ import's glue `fprintf`, `stderr` (a C++
+exception reaching Volt stops the program, printing it) and `longjmp` (one leaving a call C++ made
+into Volt). Clang's own helpers for 128-bit arithmetic and thread locals (`__udivti3`,
+`__emutls_get_address`, ...) are allowed with the memory functions. The libraries an import names
+aren't loaded (loading one runs its code); their symbols come from what the process already has.
 
 The std a script sees is the other half: a std directory with only some modules in it is a smaller
 std, and `""` is none, so a script has only its own code and the host's functions. A sandbox's
@@ -163,8 +215,9 @@ rustc --edition 2021 main.rs -L target/debug -l voltvm
 - A script imports C and C++ headers (and C++ modules) when the compilers are on `PATH` (`$CC`, and
   `$CXX` for C++): what the imports need (a header's functions, the calls made per use, C++'s
   wrappers) is compiled into a library the VM loads with the script, linked with the libraries the
-  imports name. A sandbox's script can't import them (their code would reach past it).
+  imports name. In a sandbox it's LLVM bitcode clang writes ([above](#sandboxes)), and C++ modules
+  can't be imported (a module's interface is native code).
 - A panic in a script (a failed bounds check, an overflow in a debug VM, `@panic`) ends the
   process, as it would in a Volt program.
-- A script's code stays until its VM is freed; loading again with the same `export fn` names is an
-  error, so a new version of a script goes in a new VM.
+- A script's code stays until it's loaded again or its VM is freed; a script that others use can't
+  be replaced, so a new version of it goes in a new VM. Two scripts' `export fn`s can't share a name.
