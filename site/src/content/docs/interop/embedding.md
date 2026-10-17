@@ -94,7 +94,9 @@ load is refused naming it (`can't load util.volt again: main_script uses it`), a
 script stays. A load that fails to compile changes nothing; one that fails to link (a symbol that
 isn't there) leaves nothing of itself behind, no package and no code, and a script it was replacing
 is gone too (its code makes way before the new code is added). A file whose name can't be a package's (`my-util.volt`, a keyword, or
-`std`) is refused.
+`std`) is refused, and so is a second file of one name (`b/init.volt` after `a/init.volt`). A
+script whose C or C++ imports were built into a library (outside a sandbox) can't be loaded again:
+the library stays loaded, and the new code's symbols would come from it.
 
 ## Host functions
 

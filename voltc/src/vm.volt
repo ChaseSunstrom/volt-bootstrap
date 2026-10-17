@@ -41,6 +41,7 @@ struct vm_script {
     name: std::string = {};
     source: std::string = {};
     rt: llvm::LLVMOrcOpaqueResourceTracker* = null;
+    native: bool = false; // its imports' code is a library the VM loaded (which stays)
 }
 
 // a VM whose scripts see the std package in std_dir ("" for none: scripts see only the host's
@@ -141,6 +142,16 @@ export fn volt_vm_load(v: volt_vm&, name: str, source: str) -> vm_error!void {
             users.append(sc.pkg.as_str());
             n_users += 1;
         }
+    }
+    if (old < v.scripts.len && v.scripts.at(old).name.as_str() != name) {
+        var msg = fmt3("can't load {}: its package, {}, is {}'s (load ", S(name), copy pkg, copy v.scripts.at(old).name);
+        msg.append(v.scripts.at(old).name.as_str());
+        msg.append(" again to replace it, or give this one another name)");
+        return v.fail(vm_error::COMPILE, msg.as_str());
+    }
+    // (a library stays loaded, and a new one's symbols of the same names would come from it)
+    if (old < v.scripts.len && v.scripts.at(old).native) {
+        return v.fail(vm_error::COMPILE, fmt("can't load {} again: its imports' code was loaded as a library, which stays (a new version goes in a new VM)", S(name)).as_str());
     }
     if (old < v.scripts.len && n_users > 0) {
         var msg = fmt2("can't load {} again: {} ", S(name), move users);
@@ -335,7 +346,7 @@ export fn volt_vm_load(v: volt_vm&, name: str, source: str) -> vm_error!void {
             run();
         }
     }
-    put(&v.scripts, { pkg: copy pkg, name: S(name), source: S(source), rt: rt });
+    put(&v.scripts, { pkg: copy pkg, name: S(name), source: S(source), rt: rt, native: native != null });
     return;
 }
 
@@ -479,13 +490,13 @@ fn vm_build(chk: checker&, hdr: std::vec<str>&, dir: str, n: u64, triple: str?, 
                 return null;
             };
             val std_flag = fmt("-std={}", S(*chk.cpp_units.at(u)));
-            val mflags = cpp_module_flags(chk, &chk.opts.pp_flags, dir, @cast<u32>(u), std_flag.as_str(), &objs, &linked, err);
-            if (err.len() > 0) {
+            // (a module's interface is compiled natively)
+            if (triple != null && imports_modules(chk, @cast<u32>(u))) {
+                *err = S("a sandbox's script can't import C++ modules: clang++ compiles its C++ to LLVM bitcode, and a module's interface is native code");
                 return null;
             }
-            // (a module's interface is compiled natively)
-            if (triple != null && mflags.len > 0) {
-                *err = S("a sandbox's script can't import C++ modules: clang++ compiles its C++ to LLVM bitcode, and a module's interface is native code");
+            val mflags = cpp_module_flags(chk, &chk.opts.pp_flags, dir, @cast<u32>(u), std_flag.as_str(), &objs, &linked, err);
+            if (err.len() > 0) {
                 return null;
             }
             var argv: std::vec<str> = {};
@@ -542,6 +553,26 @@ fn vm_build(chk: checker&, hdr: std::vec<str>&, dir: str, n: u64, triple: str?, 
         return null;
     }
     return so;
+}
+
+// does C++ unit u import a module (import std;, std.compat, or one of the script's)?
+fn imports_modules(chk: checker&, u: u32) -> bool {
+    for (x) in chk.cpp_std_units.items() {
+        if (x == u) {
+            return true;
+        }
+    }
+    for (x) in chk.cpp_compat_units.items() {
+        if (x == u) {
+            return true;
+        }
+    }
+    for (m&) in chk.cpp_modules.items() {
+        if (m.unit == u) {
+            return true;
+        }
+    }
+    return false;
 }
 
 // a sandbox's compilers are clang's, of the LLVM this VM runs (gcc writes no LLVM bitcode, and the
@@ -631,6 +662,12 @@ attach fn link_bitcode(this: volt_vm&, g: lg&, path: str) -> std::string {
         }
         gv = llvm::LLVMGetNextGlobal(gv);
     }
+    // (C++'s constructor and destructor aliases, C1 for C2)
+    var al = llvm::LLVMGetFirstGlobalAlias(m);
+    while (al != null) {
+        this.glue_def(al, &names);
+        al = llvm::LLVMGetNextGlobalAlias(al);
+    }
     llvm::LLVMSetTarget(m, llvm::LLVMGetTarget(g.m));
     llvm::LLVMSetDataLayout(m, llvm::LLVMGetDataLayoutStr(g.m));
     if (llvm::LLVMLinkModules2(g.m, m) != 0) {
@@ -640,6 +677,9 @@ attach fn link_bitcode(this: volt_vm&, g: lg&, path: str) -> std::string {
         var x = llvm::LLVMGetNamedFunction(g.m, n.c_str());
         if (x == null) {
             x = llvm::LLVMGetNamedGlobal(g.m, n.c_str());
+        }
+        if (x == null) {
+            x = llvm::LLVMGetNamedGlobalAlias(g.m, n.c_str(), n.len());
         }
         if (x != null) {
             llvm::LLVMSetComdat(x, null);
@@ -655,7 +695,12 @@ attach fn link_bitcode(this: volt_vm&, g: lg&, path: str) -> std::string {
 attach fn glue_def(this: volt_vm&, x: llvm::LLVMOpaqueValue*, names: std::vec<std::string>&) -> void {
     val name = value_name(x);
     val link = llvm::LLVMGetLinkage(x);
-    if (link != llvm::LLVMInternalLinkage && link != llvm::LLVMPrivateLinkage && this.runtime_name(name)) {
+    // (one private already: the linker renames it when the script has the name, which isn't the
+    // glue's to touch)
+    if (link == llvm::LLVMInternalLinkage || link == llvm::LLVMPrivateLinkage) {
+        return;
+    }
+    if (this.runtime_name(name) && llvm::LLVMIsAGlobalAlias(x) == null) {
         llvm::LLVMSetLinkage(x, llvm::LLVMAvailableExternallyLinkage);
     } else {
         put(names, S(name));
@@ -670,7 +715,7 @@ fn value_name(v: llvm::LLVMOpaqueValue*) -> str {
 }
 
 // the constructors the linked bitcode brought (llvm.global_ctors), named to be looked up and run,
-// in order, once the JIT has the module: their names
+// by priority (then as listed), once the JIT has the module: their names
 fn glue_ctors(g: lg&, load: u64) -> std::vec<std::string> {
     var out: std::vec<std::string> = {};
     val list = llvm::LLVMGetNamedGlobal(g.m, "llvm.global_ctors");
@@ -679,7 +724,17 @@ fn glue_ctors(g: lg&, load: u64) -> std::vec<std::string> {
     }
     val init = llvm::LLVMGetInitializer(list);
     if (init != null) {
-        for (i) in 0..@cast<u32>(llvm::LLVMGetNumOperands(init)) {
+        val n = @cast<u32>(llvm::LLVMGetNumOperands(init));
+        var order: std::vec<u32> = {};
+        for (i) in 0..n {
+            // (an insertion sort: a handful of entries)
+            var at = order.len;
+            while (at > 0 && ctor_priority(init, *order.at(at - 1)) > ctor_priority(init, i)) {
+                at -= 1;
+            }
+            order.insert(at, i) catch @panic("out of memory");
+        }
+        for (i) in order.items() {
             val f = llvm::LLVMGetOperand(llvm::LLVMGetOperand(init, i), 1);
             if (f != null && llvm::LLVMIsAFunction(f) != null) {
                 var name = S("volt_vm_ctor_");
@@ -695,6 +750,11 @@ fn glue_ctors(g: lg&, load: u64) -> std::vec<std::string> {
     }
     llvm::LLVMDeleteGlobal(list);
     return out;
+}
+
+// entry i of llvm.global_ctors's priority
+fn ctor_priority(init: llvm::LLVMOpaqueValue*, i: u32) -> u64 {
+    return llvm::LLVMConstIntGetZExtValue(llvm::LLVMGetOperand(llvm::LLVMGetOperand(init, i), 0));
 }
 
 // argv run: whether it did, else its compiler's error in err

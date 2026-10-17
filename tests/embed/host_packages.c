@@ -112,6 +112,15 @@ int main(int argc, char **argv) {
             printf("%s: loaded\n", names[i]);
         }
     }
+    // two files of one name: the second would be the first's package
+    if (volt_vm_load(vm, S("a/init.volt"), S("export fn a_init() -> i32 { return 1; }\n")).error) {
+        say_error(vm, "a/init");
+        return 1;
+    }
+    if (volt_vm_load(vm, S("b/init.volt"), S("export fn b_init() -> i32 { return 2; }\n")).error) {
+        say_error(vm, "b/init");
+    }
+    printf("a_init %d\n", ((int (*)(void))volt_vm_find(vm, S("a_init")))());
     // a path's directories aren't the package's name
     if (volt_vm_load(vm, S("scripts/helper.volt"), S("public fn seven() -> i32 { return 7; }\n")).error ||
         volt_vm_load(vm, S("scripts/use_helper.volt"), S("export fn h() -> i32 { return helper::seven(); }\n")).error) {

@@ -1,7 +1,8 @@
 // A C program running a Volt script that imports a C header and a C++ one (tests/embed.rs runs it
 // with the compilers on PATH): their C and C++ is compiled for the script as it loads. In a sandbox
 // clang compiles it to LLVM bitcode the JIT runs, so it reaches only what the host allows; a C++
-// compiler that isn't clang is refused there.
+// compiler that isn't clang is refused there (that half runs on Linux, given a third argument: the
+// test passes one when $CC and $CXX are clang of the VM's LLVM).
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -11,11 +12,7 @@ static volt_str S(const char *s) { return (volt_str){ (const uint8_t *)s, strlen
 
 // what the header's C++ needs (allocation, its library's errors, exceptions; the glue's panic prints
 // with fprintf and leaves a call C++ made through longjmp), as this platform names it
-#if defined(__linux__)
 #define ALLOW_CXX "_Znwm", "_ZdlPvm", "_ZSt20__throw_length_errorPKc", "_ZSt28__throw_bad_array_new_lengthv", "_ZSt17__throw_bad_allocv", "__gxx_personality_v0", "__cxa_begin_catch", "__cxa_end_catch", "__cxa_rethrow", "_Unwind_Resume", "_ZSt9terminatev", "_ZSt17current_exceptionv", "_ZTVN10__cxxabiv117__class_type_infoE", "_ZSt21__glibcxx_assert_failPKciS0_S0_", "fprintf", "stderr", "longjmp",
-#else
-#define ALLOW_CXX
-#endif
 
 static void say_error(voltvm_volt_vm *vm, const char *what) {
     volt_str e = volt_vm_error(vm);
@@ -44,6 +41,10 @@ int main(int argc, char **argv) {
     }
     printf("run %lld\n", ((long long (*)(void))volt_vm_find(vm, S("run")))());
     volt_vm_free(vm);
+#if defined(__linux__)
+    if (argc < 4) {
+        return 0;
+    }
     // the sandbox: strlen and what the C++ needs (its library's allocation and errors), no more
     voltvm_volt_vm *box = volt_vm_new(std_dir);
     const char *allow[] = { "strlen", ALLOW_CXX NULL };
@@ -86,5 +87,6 @@ int main(int argc, char **argv) {
         printf("box_gxx: loaded\n");
     }
     volt_vm_free(box);
+#endif
     return 0;
 }
