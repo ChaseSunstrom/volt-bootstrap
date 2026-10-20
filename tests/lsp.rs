@@ -58,7 +58,10 @@ struct Server {
 
 impl Server {
     fn start() -> Server {
-        let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("lsp-{}", std::process::id()));
+        // one directory per server: the tests run at once, and each clears its own at the start
+        static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("lsp-{}-{n}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         // bolt on PATH: the server asks it for a package's dependencies
@@ -790,9 +793,15 @@ fn generic_bodies_nothing_instantiates() {
     want.sort();
     assert_eq!(start_lines(&r), want, "rename helper: {r}");
     assert!(!s.skipped.iter().any(|m| m.contains("window/showMessage")), "rename helper warns: {:?}", s.skipped);
-    // a field also named as a member in such a body (c.v): its uses there need types, and rename says so
-    let _ = s.request("textDocument/rename", &format!("{},\"newName\":\"w\"}}", pos("    v: i32;", "v")));
-    assert!(s.skipped.iter().any(|m| m.contains("window/showMessage") && m.contains("'v' is also used as a member")), "rename v doesn't warn: {:?}", s.skipped);
+    // a field named as a member in such a body (c.v, cell.v) where the receiver's type is written:
+    // rename edits those uses too, and doesn't warn (generic_body_members has the rest)
+    let r = s.request("textDocument/rename", &format!("{},\"newName\":\"w\"}}", pos("    v: i32;", "v")));
+    let edits = start_lines(&r);
+    for pat in ["return helper(util::twice(c.v))", "return cell.v + other.v;"] {
+        let l = lines.iter().position(|l| l.contains(pat)).unwrap();
+        assert!(edits.contains(&l), "rename v misses {pat}: {r}");
+    }
+    assert!(!s.skipped.iter().any(|m| m.contains("window/showMessage")), "rename v warns: {:?}", s.skipped);
     // a one-name variant pattern (circle(c)) is the scrutinee enum's variant, not the struct circle
     let r = s.request("textDocument/rename", &format!("{},\"newName\":\"ring\"}}", pos("struct circle", "circle")));
     let edits = start_lines(&r);
@@ -819,5 +828,152 @@ fn generic_bodies_nothing_instantiates() {
     assert_eq!(start_lines(&r), want, "references of map_tag in std: {r}");
     let r = s.request("textDocument/definition", &format!("{{\"textDocument\":{{\"uri\":\"{muri}\"}},\"position\":{{\"line\":{},\"character\":{}}}}}", want[0], mlines[want[0]].find("map_tag").unwrap()));
     assert!(r.contains(&format!("\"start\":{{\"line\":{decl},")), "definition of map_tag from its use: {r}");
+    let _ = std::fs::remove_dir_all(&s.dir);
+}
+
+/// the program of generic_body_members: in generic bodies nothing instantiates, a line's `[name]`
+/// marks a member use the index should have, its receiver's type known from what's written (a
+/// param's or annotated local's type, `this` in an attach block, a struct literal's annotation, an
+/// enum compared or matched, a T with one bound naming the fn); the uses in `unsure` aren't certain
+/// (an inferred local, a T with two bounds both naming area), so they're left out
+const MEMBERS: &str = "use std::io;
+
+struct point {
+    x: i32;
+    y: i32;
+}
+
+attach fn norm(this: point&) -> i32 {
+    return this.x * 2; // [x]
+}
+
+attach fn origin(static this: point) -> point {
+    return { x: 0, y: 0 }; // [x] [y]
+}
+
+<T: type>
+struct pair {
+    a: T;
+    b: i32;
+}
+
+<T: type>
+attach fn first(this: pair<T>&) -> T {
+    return this.a; // [a]
+}
+
+enum shade {
+    LIGHT,
+    DARK,
+}
+
+enum mark {
+    tag: i32,
+    blank,
+}
+
+trait shape {
+    fn area(this) -> i32;
+}
+
+trait solid {
+    fn area(this) -> i32; // solid's
+}
+
+<T: type>
+attach shape -> pair<T> {
+    fn area(this) -> i32 {
+        return this.b; // [b]
+    }
+}
+
+fn pick(x: i32) -> i32 {
+    return x;
+}
+
+fn pick(x: str) -> i32 {
+    return 0;
+}
+
+<T: shape>
+fn members(p: point, q: pair<T>, s: shade, t: T, k: mark) -> i32 {
+    val r: point = { x: 1, y: 2 }; // [x] [y]
+    val o = point::origin(); // [origin]
+    var n = p.x + q.b + r.norm(); // [x] [b] [norm]
+    val f = q.a; // [a]
+    if (s == .LIGHT) { // [LIGHT]
+        n += pick(3); // [pick]
+    }
+    match (s) {
+        .DARK => { n += 1; }, // [DARK]
+        default => {},
+    }
+    match (k) {
+        .tag(tag) => { n += tag; }, // [tag]
+        default => {},
+    }
+    val norm: point = r;
+    n += norm.norm(); // [norm]
+    return n + t.area(); // [area]
+}
+
+<T: shape + solid>
+fn unsure(t: T, u: point) -> i32 {
+    val v = u;
+    return t.area() + v.y;
+}
+
+fn main() -> void {
+    val p: point = { x: 3, y: 4 }; // [x] [y]
+    std::println(\"{}\", p.norm()); // [norm]
+}
+";
+
+#[test]
+fn generic_body_members() {
+    let mut s = Server::start();
+    s.request("initialize", &format!("{{\"processId\":null,\"rootUri\":\"file://{}\",\"capabilities\":{{}}}}", s.dir.display()));
+    s.notify("initialized", "{}");
+    let uri = format!("file://{}/members.volt", s.dir.display());
+    s.notify("textDocument/didOpen", &format!("{{\"textDocument\":{{\"uri\":\"{uri}\",\"languageId\":\"volt\",\"version\":1,\"text\":{}}}}}", js(MEMBERS)));
+    let d = s.diagnostics_for(&uri);
+    assert!(!d.contains("\"severity\":1"), "{d}");
+    let lines: Vec<&str> = MEMBERS.lines().collect();
+    let pos = |pat: &str, name: &str| {
+        let l = lines.iter().position(|l| l.contains(pat)).unwrap_or_else(|| panic!("no {pat}"));
+        format!("{{\"textDocument\":{{\"uri\":\"{uri}\"}},\"position\":{{\"line\":{l},\"character\":{}}}", lines[l].find(name).unwrap())
+    };
+    for (pat, name) in [("    x: i32;", "x"), ("    y: i32;", "y"), ("    a: T;", "a"), ("    b: i32;", "b"), ("fn norm(", "norm"), ("fn origin(", "origin"), ("    LIGHT,", "LIGHT"), ("    DARK,", "DARK"), ("fn pick(x: i32)", "pick"), ("    fn area(this) -> i32;", "area"), ("    tag: i32,", "tag")] {
+        let marker = format!("[{name}]");
+        let want: Vec<usize> = lines.iter().enumerate().flat_map(|(i, l)| std::iter::repeat_n(i, l.matches(marker.as_str()).count())).collect();
+        let r = s.request("textDocument/references", &format!("{},\"context\":{{\"includeDeclaration\":false}}}}", pos(pat, name)));
+        assert_eq!(start_lines(&r), want, "references of {name}: {r}");
+    }
+    // where a name is also the receiver's or the payload's, the use is the member: norm.norm()'s
+    // second norm, .tag(tag)'s first tag
+    for (decl, name, at) in [("fn norm(", "norm", "norm.norm()"), ("    tag: i32,", "tag", ".tag(tag)")] {
+        let l = lines.iter().position(|l| l.contains(at)).unwrap();
+        let col = lines[l].find(at).unwrap() + at.find(&format!(".{name}")).unwrap() + 1;
+        let r = s.request("textDocument/references", &format!("{},\"context\":{{\"includeDeclaration\":false}}}}", pos(decl, name)));
+        assert!(r.contains(&format!("\"start\":{{\"line\":{l},\"character\":{col}}}")), "{name}'s use in {at} at {l}:{col}: {r}");
+    }
+    // definition from a member use in a body nothing instantiates
+    let r = s.request("textDocument/definition", &format!("{}}}", pos("var n = p.x + q.b", "b + r")));
+    let b_line = lines.iter().position(|l| l.contains("    b: i32;")).unwrap();
+    assert!(r.contains(&format!("\"start\":{{\"line\":{b_line},")), "definition of q.b: {r}");
+    // every use of x is certain: rename edits them all and doesn't warn
+    let r = s.request("textDocument/rename", &format!("{},\"newName\":\"left\"}}", pos("    x: i32;", "x")));
+    let mut want: Vec<usize> = lines.iter().enumerate().filter(|(_, l)| l.contains("[x]")).map(|(i, _)| i).collect();
+    want.push(lines.iter().position(|l| l.contains("    x: i32;")).unwrap());
+    want.sort();
+    let mut got = start_lines(&r);
+    got.dedup();
+    assert_eq!(got, want, "rename x: {r}");
+    assert!(!s.skipped.iter().any(|m| m.contains("window/showMessage")), "rename x warns: {:?}", s.skipped);
+    // v.y in unsure isn't certain, nor is t.area() there: renaming y or shape's area still warns
+    for (pat, name) in [("    y: i32;", "y"), ("return n + t.area()", "area")] {
+        let _ = s.request("textDocument/rename", &format!("{},\"newName\":\"other\"}}", pos(pat, name)));
+        assert!(s.skipped.iter().any(|m| m.contains("window/showMessage") && m.contains(&format!("'{name}' is also used as a member"))), "rename {name} doesn't warn: {:?}", s.skipped);
+    }
     let _ = std::fs::remove_dir_all(&s.dir);
 }

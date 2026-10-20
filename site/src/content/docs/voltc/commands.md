@@ -46,7 +46,7 @@ newer language features need voltc.
 | `--lang L` | with `bindings`: `c`, `cpp`, `rust`, `zig`, `python`, `pyi`, `csharp`, `java`, `go`, `lua`, `dart`, `swift`, `kotlin`, `ruby`, `node`, `js`, `ts` or `json` |
 | `--cc ARG` | pass ARG to the C compiler: a `.c` file, `-lNAME`, `-I`, `-D`... (repeatable); `-std=c11` or `-std=c++17` is the standard C or C++ imports are read and compiled under instead of the newest (Volt's own C, and `.c` files given here, under its GNU form) |
 | `--backend c\|llvm` | self-hosted voltc: generate C, or native code through LLVM (the default on x86-64 and aarch64 but for Windows) |
-| `--target T` | self-hosted voltc: build for bare metal (`riscv32-none`, `riscv64-none`, `thumbv6m-none`, `thumbv7m-none`, `thumbv7em-none`) through LLVM, linked by `ld.lld` with no C compiler or C library; see [Bare metal](/volt-bootstrap/voltc/bare-metal/) |
+| `--target T` | self-hosted voltc: build for bare metal (`riscv32-none`, `riscv64-none`, `thumbv6m-none`, `thumbv7m-none`, `thumbv7em-none`, `aarch64-none`) through LLVM, linked by `ld.lld` with no C compiler or C library; see [Bare metal](/volt-bootstrap/voltc/bare-metal/) |
 | `--link-script FILE` | the linker script for `--target`: the board's memory and the symbols the start code reads |
 | `--message-format F` | `human` (default), `short` or `json`: see [Diagnostics](/volt-bootstrap/voltc/diagnostics/) |
 | `--color WHEN` | `auto` (default), `always` or `never` |

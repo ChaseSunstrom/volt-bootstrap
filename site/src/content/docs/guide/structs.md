@@ -328,3 +328,25 @@ extern struct c_point {
 ```
 
 `@sizeof(T)`, `@alignof(T)` and `@offsetof(T, field)` give a type's layout at compile time.
+
+`@align(n)` raises a struct's alignment to `n` bytes (a constant power of two up to 4096, and no less
+than its fields need), as C's `__attribute__((aligned(n)))` does. Its size rounds up to a multiple of
+`n`, and every value of it starts at a multiple of `n`: a local, a global, an array element, a field
+of another struct (which takes that alignment too), an enum payload, a closure's capture, and a
+`box`, `vec` or `map` element (std's allocator takes such blocks from an aligned path):
+
+```volt
+use std::io;
+
+@attributes([@align(64)])
+struct counter {
+    hits: u64;
+}
+
+// each counter has a cache line of its own: two threads bumping neighbours don't share one
+fn main() -> void {
+    val counters: counter[4] = { { hits: 0 }, { hits: 0 }, { hits: 0 }, { hits: 0 } };
+    std::println("{} {}", @sizeof(counter), @cast<usize>(&counters[1]) - @cast<usize>(&counters[0]));
+}
+// expect: 64 64
+```

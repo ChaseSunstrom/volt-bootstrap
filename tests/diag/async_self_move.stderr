@@ -1,0 +1,23 @@
+warning: moving this frame of 'pointing' leaves it pointing into the old frame ('p' holds a reference to 'n' across a suspend): resume or await it where it is
+   ┌─ tests/diag/async_self_move.volt:45:13
+   │
+45 │     val b = a;
+   │             ^
+
+warning: moving this frame of 'sliced' leaves it pointing into the old frame ('s' holds a reference to 'xs' across a suspend): resume or await it where it is
+   ┌─ tests/diag/async_self_move.volt:47:13
+   │
+47 │     val d = c;
+   │             ^
+
+warning: moving this frame of 'outer' leaves it pointing into the old frame (it holds a frame of 'pointing', where 'p' holds a reference to 'n' across a suspend): resume or await it where it is
+   ┌─ tests/diag/async_self_move.volt:51:13
+   │
+51 │     val h = g;
+   │             ^
+
+warning: moving this frame of 'walking' leaves it pointing into the old frame ('x' holds a reference to 'xs' across a suspend): resume or await it where it is
+   ┌─ tests/diag/async_self_move.volt:53:14
+   │
+53 │     val w2 = w;
+   │              ^

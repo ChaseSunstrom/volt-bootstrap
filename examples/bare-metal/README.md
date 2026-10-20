@@ -13,18 +13,25 @@ emulates:
 | Directory | Board | `--target` |
 | --- | --- | --- |
 | `riscv-virt` | qemu's RISC-V `virt` (a UART, and a test device that stops qemu with an exit code) | `riscv32-none`, or `riscv64-none` with `TARGET=riscv64-none` |
+| `aarch64-virt` | qemu's AArch64 `virt`, a Cortex-A53 (the PL011 UART; no LED, so blinky prints its changes) | `aarch64-none` |
 | `microbit` | the BBC micro:bit, an nRF51822 (UART0, the top-left LED of the 5x5 matrix) | `thumbv6m-none` (a Cortex-M0) |
 | `cortex-m3` | the LM3S6965 evaluation board (UART0, the user LED on port F) | `thumbv7m-none`, or `thumbv7em-none` (run as a Cortex-M4) with `TARGET=thumbv7em-none` |
 
+`interrupts.volt`, for the Cortex-M boards, handles PendSV and SVCall with Volt functions named for
+them, SysTick (which has none) with its own `volt_fault`, and the board's IRQ 0 from a Volt table of
+handlers the linker puts after the system entries; it raises each from software and prints that it
+ran.
+
 Each has its `board.volt` (the hardware: the console hook, the LED and, on `riscv-virt`, the exit;
-the Cortex-M boards leave the exit to voltc's semihosting default), a linker script, and
-`run.sh`, which builds blinky and runs it under qemu:
+the Cortex-M and AArch64 boards leave the exit to voltc's semihosting default), a linker script, and
+`run.sh`, which builds blinky (or `PROGRAM=interrupts`) and runs it under qemu:
 
 ```sh
 VOLTC=voltc ./riscv-virt/run.sh
 RELEASE=1 VOLTC=voltc ./cortex-m3/run.sh
+PROGRAM=interrupts VOLTC=voltc ./microbit/run.sh
 ```
 
-It needs `qemu-system-riscv32` (or `-riscv64`) or `qemu-system-arm`, and `ld.lld`; without them it
+It needs `qemu-system-riscv32` (or `-riscv64`), `qemu-system-arm` or `qemu-system-aarch64`, and `ld.lld`; without them it
 exits 77. The test suite runs every board in debug and release builds with `CC=false`, so a C
 compiler can't sneak in.

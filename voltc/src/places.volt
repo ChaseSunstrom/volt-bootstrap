@@ -631,9 +631,10 @@ attach fn tuple_of(this: checker&, elems: std::vec<expr*>&, want0: u32?, span: s
         val e = *elems.at(i) ?? return fails(span, "");
         val w = *wants.at(i);
         var v = try this.expr(e, w);
-        v = try this.take(v, e.span);
         if (w) {
-            v = try this.coerce(v, w, e.span);
+            v = try this.take_into(v, w, e.span); // (what's only lent, as a std::func's fn, stays put)
+        } else {
+            v = try this.take(v, e.span);
         }
         put(&vals, v);
     }

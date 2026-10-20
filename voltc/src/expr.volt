@@ -267,6 +267,15 @@ attach fn coercible(this: checker&, v: tval&, to: u32) -> bool {
     if (v.ty == to || v.ty == NEVER) {
         return true;
     }
+    // a reference to a fn holder (std::func&) passes as the fn it holds
+    match (*this.t.get(v.ty)) {
+        .REF(x) => {
+            if ((this.fn_holder(x) ?? NO_TY) == to) {
+                return true;
+            }
+        },
+        default => {},
+    }
     val tt = this.t.get(to);
     if (v.lit) {
         match (v.lit) {
@@ -355,6 +364,7 @@ attach fn coercible(this: checker&, v: tval&, to: u32) -> bool {
             match (*tt) {
                 .REF(t) => { return (this.box_inner(v.ty) ?? NO_TY) == t && v.lv; },
                 .PTR(t) => { return (this.box_inner(v.ty) ?? NO_TY) == t && v.lv; },
+                .FN_VAL(ps, r) => { return (this.fn_holder(v.ty) ?? NO_TY) == to && v.lv; },
                 default => {},
             }
         },
@@ -387,6 +397,14 @@ fn retyped(v: tval&, to: u32, c: u32) -> tval {
 attach fn coerce(this: checker&, v: tval, to: u32, span: span) -> compile_error!tval {
     if (v.ty == to) {
         return v;
+    }
+    match (*this.t.get(v.ty)) {
+        .REF(x) => {
+            if ((this.fn_holder(x) ?? NO_TY) == to) {
+                return retyped(&v, to, this.held_fn(this.ir.deref(v.c, x), x));
+            }
+        },
+        default => {},
     }
     if (v.ty == NEVER) {
         return this.never_as(v, to);
@@ -579,6 +597,13 @@ attach fn coerce(this: checker&, v: tval, to: u32, span: span) -> compile_error!
                 }
                 val o = this.owner(v.ty) ?? return fails(span, "");
                 return retyped(&v, to, this.ir.field(v.c, o.index, to));
+            }
+            // one holding a fn value (std::func) passes as that fn, lent from it
+            if ((this.fn_holder(v.ty) ?? NO_TY) == to) {
+                if (!v.lv) {
+                    return fail(span, fmt("this {} would be deleted right away; store it in a variable first", this.ty_name(v.ty)));
+                }
+                return retyped(&v, to, this.held_fn(v.c, v.ty));
             }
         },
         default => {},
@@ -797,7 +822,15 @@ attach fn expr(this: checker&, e: expr&, want: u32?) -> compile_error!tval {
             }
             return this.match_expr(m.scrut, &m.arms, want, span);
         },
-        .CLOSURE(c&) => { return this.closure_expr(c, want, span); },
+        .CLOSURE(c&) => {
+            if (want) {
+                val via = this.from_closure_fn(want);
+                if (via) {
+                    return this.closure_into(c, want, via, span);
+                }
+            }
+            return this.closure_expr(c, want, span);
+        },
         .AWAIT(x) => { return this.await_expr(x, want); },
         .ASYNC(x) => { return fails(span, "async f() builds a frame in place, so it only works as `val fr = async f()`"); },
         .TYPE_BODY(b) => {
@@ -968,7 +1001,7 @@ attach fn path_expr(this: checker&, p: path&, want: u32?, span: span) -> compile
                         // pointer
                         val t = this.t.intern(tyk::FN_PTR(move ps, ret, va));
                         this.escape(body_key(BODY_FN, i), t);
-                        return vpure(t, this.ir.node(ir_kind::FN(this.fi(i).ir), t));
+                        return vpure(t, this.ir.node(ir_kind::FN(this.entry_ir(i)), t));
                     }
                     val t = this.t.intern(tyk::FN_VAL(move ps, ret));
                     this.escape(body_key(BODY_FN, i), t);

@@ -289,7 +289,8 @@ fn main() -> void {
 
 ## Reflection: @typeinfo and @typeof
 
-`@typeof(expr)` is an expression's type. `@typeinfo(T)` describes a type at compile time: its
+`@typeof(expr)` is an expression's type, and works wherever a type goes (`std::vec<@typeof(fr)>`, for a
+type with no name). `@typeinfo(T)` describes a type at compile time: its
 `canonical_name`, `short_name` and `module_path`; its `kind`, a variant per kind of type with what
 it's made of (`.STRUCT`, `.ENUM`, `.POINTER(T)`, `.ARRAY(T, n)`, `.TRAIT_UNION`...); its `size`,
 `align` and `stride` (`usize?`: null for a type with no layout); `is_pod` (nothing to delete) and
@@ -740,8 +741,8 @@ own (see [Your own attributes](#your-own-attributes)).
 | `@unchecked` | no bounds checks in this function's body (closures in it keep theirs): for a hot loop whose indexes are known to be in range |
 | `@invalidates` | a method that may move or free its receiver's storage (`push`, `clear`...): a view into the receiver used after it warns ([safety](/volt-bootstrap/guide/safety/#what-the-compiler-warns-about)) |
 | `@opt(n)` | optimization level for this function (0 to 3) |
-| `@section(".name")` | put the function in a section |
-| `@align(n)` | the function's alignment, in bytes |
+| `@section(".name")` | put the function or global in a section (a global's initializer must then be constant) |
+| `@align(n)` | the function's alignment, or a struct's (see [Layout](/volt-bootstrap/guide/structs/#layout)), in bytes |
 | `@deprecated("use x")` | warn where it's used |
 | `@intrinsic("name")` | a compiler builtin or runtime function (for std-like libraries) |
 | `@owns("field")` | this struct owns what the field points at, like `box` |

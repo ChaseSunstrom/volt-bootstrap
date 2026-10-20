@@ -337,6 +337,7 @@ attach fn define(this: cgen&, t: u32) -> void {
     }
     val name = this.ty(t);
     var body: std::string = {};
+    var align: u64 = 0; // a struct's @align
     match (*this.c.t.get(t)) {
         .VECTOR(x, n) => {
             // GNU C's vector type (gcc and clang): its lanes' type and its size in bytes
@@ -405,6 +406,7 @@ attach fn define(this: cgen&, t: u32) -> void {
             for (f&) in xs.items() {
                 this.member(&body, f.ty, f.name);
             }
+            align = this.c.si(s).align;
         },
         .ENUM(e) => {
             val ps = copy *(this.c.enum_payloads(e, {}) catch |x| { return; });
@@ -458,7 +460,13 @@ attach fn define(this: cgen&, t: u32) -> void {
     this.defs.append(name);
     this.defs.append(" {");
     this.defs.append(body.as_str());
-    this.defs.append("\n};\n");
+    this.defs.append("\n}");
+    if (align > 0) {
+        this.defs.append(" __attribute__((aligned(");
+        this.defs.append_uint(align);
+        this.defs.append(")))");
+    }
+    this.defs.append(";\n");
 }
 
 // definitions for every type named so far (naming one may name more)
@@ -2478,6 +2486,11 @@ attach fn global_decl(this: cgen&, out: std::string&, g: u32) -> void {
     } else {
         out.append("extern ");
     }
+    if (gl.section != null && gl.link == linkage::STATIC) {
+        out.append("__attribute__((section(");
+        put_c_str(out, gl.section ?? "");
+        out.append("))) ");
+    }
     if (gl.tls) {
         out.append("_Thread_local ");
     }
@@ -2507,6 +2520,11 @@ attach fn global_text(this: cgen&, out: std::string&, g: u32) -> void {
     }
     if (gl.keep) {
         out.append("__attribute__((used)) ");
+    }
+    if (gl.section != null && gl.link != linkage::EXTERNAL) {
+        out.append("__attribute__((section(");
+        put_c_str(out, gl.section ?? "");
+        out.append("))) ");
     }
     if (gl.tls) {
         out.append("_Thread_local ");

@@ -15,6 +15,14 @@ struct pair { a: f32; b: f32; }
 struct nest { p: pair; c: f32[2]; }
 struct mix { f: f32; i: i32; }
 struct al16 { a: i128; }
+// @align past the fields' own: padding C passes nothing for, no HFA, and the i128 pair going by the
+// fields' alignment (AAPCS64)
+@attributes([@align(16)])
+struct a16c { a: u8; }
+@attributes([@align(16)])
+struct a16f { x: f32; }
+@attributes([@align(32)])
+struct a32 { a: i64; b: i64; }
 struct fd { a: f32; b: f64; }
 struct hd1 { x: f64; }
 struct hh2 { a: f16; b: f16; }
@@ -55,6 +63,9 @@ export fn fh5(x: hd5) -> hd5 { return x; }
 export fn fnest(x: nest) -> nest { return x; }
 export fn fmix(x: mix) -> mix { return x; }
 export fn fal16(x: al16) -> al16 { return x; }
+export fn fa16c(x: a16c) -> a16c { return x; }
+export fn fa16f(x: a16f) -> a16f { return x; }
+export fn fa32(x: a32) -> a32 { return x; }
 export fn ffd(x: fd) -> fd { return x; }
 export fn ints(a: i8, b: u16, c: i32, d: i64) -> i8 { return a; }
 export fn wide(a: i128) -> i128 { return a; }

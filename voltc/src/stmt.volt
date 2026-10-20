@@ -87,6 +87,9 @@ attach fn block_scoped(this: checker&, b: block&) -> compile_error!code {
         for (x&) in (try this.scope_exit_code(sc, sc, false)).items() {
             put(&stmts, *x);
         }
+        if (b.span.hi > b.span.lo) {
+            this.scope_ended(sc, { file: b.span.file, lo: b.span.hi - 1, hi: b.span.hi });
+        }
     }
     return { c: this.ir.block(move stmts), div: div };
 }
@@ -451,14 +454,25 @@ attach fn zero_value(this: checker&, t: u32, span: span) -> compile_error!tval {
 
 // deferred code for scopes [to, from] (innermost first), each checked in its own scope
 attach fn scope_exit_code(this: checker&, from: usize, to: usize, is_err: bool) -> compile_error!std::vec<u32> {
-    this.cx.no_suspend += 1;
+    this.cx.in_exit += 1;
     // the exits' own statements keep their temporaries (each defer has a context of its own)
     val keeping = this.cx.keeping;
     this.cx.keeping = false;
     val r = this.scope_exit_inner(from, to, is_err);
     this.cx.keeping = keeping;
-    this.cx.no_suspend -= 1;
-    return r;
+    this.cx.in_exit -= 1;
+    var out = try r;
+    // an async fn cancelled while a defer here paused carries on after these exits: rather than go back
+    // into the body, it runs the exits of the scopes around them and finishes (exits inside exit code,
+    // a defer's own block, carry on with that exit code, which finishes)
+    if (this.cx.frame != null && to > 0 && this.cx.in_exit == 0 && this.has_suspend(&out)) {
+        var rest = try this.scope_exit_code(to - 1, 0, false);
+        val obj = this.frame_obj();
+        put(&rest, this.ir.assign(this.ir.field(obj, 0, U32), this.ir.int(VOLT_TAKEN, U32)));
+        put(&rest, this.ir.ret(this.ir.boolean(true)));
+        put(&out, this.ir.if_(this.ir.field(obj, 1, BOOL), this.ir.block(move rest), null));
+    }
+    return out;
 }
 
 attach fn scope_exit_inner(this: checker&, from: usize, to: usize, is_err: bool) -> compile_error!std::vec<u32> {
@@ -565,7 +579,7 @@ attach fn escapes(this: checker&, e: expr&, want: u32) -> compile_error!void {
         },
         .CLOSURE(c&) => {
             if (fn_val) {
-                return fails(e.span, CLOSURE_ESCAPES);
+                return fail(e.span, this.closure_escapes(want));
             }
         },
         .PATH(p&) => {
@@ -574,7 +588,7 @@ attach fn escapes(this: checker&, e: expr&, want: u32) -> compile_error!void {
                 if (l) {
                     if (l.own != null) {
                         match (*this.t.get(l.ty)) {
-                            .CLOSURE(id) => { return fails(e.span, CLOSURE_ESCAPES); },
+                            .CLOSURE(id) => { return fail(e.span, this.closure_escapes(want)); },
                             default => {},
                         }
                     }
@@ -585,7 +599,10 @@ attach fn escapes(this: checker&, e: expr&, want: u32) -> compile_error!void {
     }
 }
 
-val CLOSURE_ESCAPES: str = "can't return a closure as a fn value: a fn value borrows its closure, which is gone once this function returns (call it here, or keep the closure where the caller can)";
+// a closure returned as a fn value (want): what to return instead
+attach fn closure_escapes(this: checker&, want: u32) -> std::string {
+    return fmt("can't return a closure as a fn value: a fn value borrows its closure, which is gone once this function returns (return a std::func<{}> to keep it, call it here, or keep the closure where the caller can)", this.ty_name(want));
+}
 
 // the local of this call whose storage a place is in: a variable or a parameter taken by value (not a
 // reference, pointer or slice one, which point elsewhere, nor a closure's capture)
@@ -640,6 +657,10 @@ attach fn ret(this: checker&, v: expr*, span: span) -> compile_error!tval {
         try this.escapes(e, rt);
         this.warn_held_return(e);
         val x = try this.expr(e, rt);
+        // a std::func in this function's own memory lends its fn only while it lives
+        if ((this.fn_holder(x.ty) ?? NO_TY) == rt && x.via == null && x.root != null) {
+            return fail(e.span, fmt3("can't return '{}' as a {}: the fn value a {} lends is gone once it is, when this function returns (return the std::func itself)", S(x.root ?? ""), this.ty_name(rt), this.ty_name(x.ty)));
+        }
         val rv = try this.take_into(x, rt, e.span);
         this.note_return(&rv);
         value = rv;
@@ -653,9 +674,9 @@ attach fn ret(this: checker&, v: expr*, span: span) -> compile_error!tval {
     val top = this.cx.scopes.len - 1;
     var defers = try this.scope_exit_code(top, 0, false);
     val slot = this.ret_slot();
-    if (is_eu) {
+    if (is_eu && this.has_errdefer(top)) {
         val err_defers = try this.scope_exit_code(top, 0, true);
-        if (this.has_errdefer(top)) {
+        {
             val code = this.eu_code(rt, slot.c);
             val both = this.ir.if_(this.nonzero(code), this.ir.block(move err_defers), this.ir.block(copy defers));
             defers = nodes(both);
@@ -1450,6 +1471,13 @@ attach fn for_body(this: checker&, f: for_loop&, elem_ty: u32, elem: u32, index:
             x.ro = ep.ro;
             x.via = ep.via;
             x.root = ep.root;
+        }
+        if (this.local_array(&f.iter)) {
+            // (x&) over a local array points into the local
+            val n = this.frame_root(&f.iter);
+            if (n) {
+                this.cx.ref_holders.put(c, n);
+            }
         }
         put(&out, this.decl_at(c, this.ir.addr(elem, rt)));
     } else if (owns) {

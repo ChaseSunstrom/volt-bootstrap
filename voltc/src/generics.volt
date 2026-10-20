@@ -250,9 +250,19 @@ attach fn param_kind(this: checker&, gp: gparam&, e: u32) -> compile_error!pkind
 attach fn garg_type_env(this: checker&, g: garg&, e: u32) -> compile_error!u32 {
     match (*g) {
         .TYPE(t&) => { return this.resolve_type(t, e); },
-        .EXPR(x) => {
+        .EXPR(x&) => {
             match (x.kind) {
                 .PATH(p&) => { return this.resolve_type_path(p, e); },
+                .BUILTIN(n, g, a) => {
+                    // std::vec<@typeof(fr)>: the type of what it names here
+                    if (n == "typeof") {
+                        match (try this.ct_eval_in(e, x, TYPE)) {
+                            .TYPE(t) => { return t; },
+                            default => {},
+                        }
+                    }
+                    return fails(x.span, "expected a type");
+                },
                 default => { return fails(x.span, "expected a type"); },
             }
         },
@@ -1627,6 +1637,10 @@ attach fn emit_call(this: checker&, made: u32, a: adj, rv: tval?, pre: std::vec<
     if (pack) {
         fixed -= 1;
     }
+    // the borrow warnings: a free fn's first reference parameter lends its result, as a receiver does
+    // (only the first: when its argument isn't a local or field chain, no later one stands in)
+    var arg_lent: place_at? = null;
+    var ref_seen = false;
     var i: usize = 0;
     while (i < args.len && i < fixed) {
         val p = *this.fi(inst).params.at(i + offset);
@@ -1636,6 +1650,10 @@ attach fn emit_call(this: checker&, made: u32, a: adj, rv: tval?, pre: std::vec<
                 v = try this.expr(args.at(i), p.ty);
             }
             val tv = try this.take_into(v, p.ty, args.at(i).span);
+            if (rv == null && !ref_seen && this.reaches(p.ty)) {
+                ref_seen = true;
+                arg_lent = this.arg_place(args.at(i));
+            }
             this.note_arg(body_key(BODY_FN, inst), i + offset, &tv, args.at(i).span, site);
             if (this.opts.lsp) {
                 put(&this.lsp_args, { at: args.at(i).span, name: p.name });
@@ -1704,6 +1722,8 @@ attach fn emit_call(this: checker&, made: u32, a: adj, rv: tval?, pre: std::vec<
                 this.invalidate(inst, &lent, span);
             }
         }
+    } else {
+        lent = arg_lent;
     }
     var seq = this.seq_vals(&vals);
     var cs: std::vec<u32> = {};
@@ -1762,12 +1782,16 @@ attach fn method_call(this: checker&, r: tval, name: str, gargs: std::vec<garg>&
             val fs = try this.struct_fields(sid, span);
             for (f&) in fs.items() {
                 if (f.name == name) {
+                    // a field holding a fn (a C fn pointer, a fn value, a std::func) is called
+                    var callable = this.fn_holder(f.ty) != null;
                     match (*this.t.get(f.ty)) {
-                        .FN_PTR(ps, rt, va) => {
-                            val fv = try this.field(r, name, span);
-                            return this.call_value(fv, args, span);
-                        },
+                        .FN_PTR(ps, rt, va) => { callable = true; },
+                        .FN_VAL(ps, rt) => { callable = true; },
                         default => {},
+                    }
+                    if (callable) {
+                        val fv = try this.field(r, name, span);
+                        return this.call_value(fv, args, span);
                     }
                 }
             }

@@ -4068,7 +4068,13 @@ attach fn layout(this: checker&, t: u32, span: span) -> compile_error!lay {
             for (f&) in (try this.struct_fields(s, span)).items() {
                 put(&fs, f.ty);
             }
-            return this.layout_rec(&fs, span);
+            var l = try this.layout_rec(&fs, span);
+            val al = this.si(s).align;
+            if (al > l.align) {
+                l.align = al;
+                l.size = (l.size + al - 1) / al * al;
+            }
+            return l;
         },
         .VOID => { return { size: 0, align: 1 }; },
         .NEVER => { return { size: 0, align: 1 }; },
@@ -4416,8 +4422,8 @@ fn attr_defs() -> std::vec<attr_def> {
     put(&v, { name: "unchecked", args: 0, sig: "@unchecked", doc: "no bounds checks in this fn's body (for code that proves its own indices)" });
     put(&v, { name: "invalidates", args: 0, sig: "@invalidates", doc: "a method that may move or free its receiver's storage: borrows into it end at the call" });
     put(&v, { name: "opt", args: 1, sig: "@opt(level)", doc: "this fn's optimization level" });
-    put(&v, { name: "section", args: 1, sig: "@section(\"name\")", doc: "put this fn in a linker section" });
-    put(&v, { name: "align", args: 1, sig: "@align(n)", doc: "this fn's code alignment, in bytes" });
+    put(&v, { name: "section", args: 1, sig: "@section(\"name\")", doc: "put this fn or global in a linker section" });
+    put(&v, { name: "align", args: 1, sig: "@align(n)", doc: "a fn's code alignment, or a struct's (every value of it starts at a multiple of n), in bytes" });
     put(&v, { name: "deprecated", args: 1, sig: "@deprecated(\"why\")", doc: "calling this fn warns with this message" });
     put(&v, { name: "owns", args: 1, sig: "@owns(\"field\")", doc: "the struct owns what this pointer field points to (for borrow checking)" });
     put(&v, { name: "cpp_type", args: 1, sig: "@cpp_type(\"ns::Class\")", doc: "this struct is that C++ class (use cpp writes it)" });
@@ -4680,6 +4686,16 @@ attach fn section_name(this: checker&, name: str) -> str {
         return name;
     }
     var s = S("__TEXT,");
+    s.append(name);
+    return this.intern(move s);
+}
+
+// ...and a global's: in __DATA, with the data
+attach fn data_section_name(this: checker&, name: str) -> str {
+    if ((this.cfg_given("os") ?? std::process::os()) != "macos" || name.contains(",")) {
+        return name;
+    }
+    var s = S("__DATA,");
     s.append(name);
     return this.intern(move s);
 }

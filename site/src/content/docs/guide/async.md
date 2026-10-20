@@ -97,10 +97,59 @@ fn main() -> void {
 // expect: end
 ```
 
-`main`, `extern` and `export` fns can't be async, and a frame can't be copied or moved (it may
-point into itself). `suspend` can't go in a `defer`, or in a `match`, loop or block used as a value.
-An async fn can't start itself with `async` (its frame would hold itself), but it can call or
-`await` itself.
+A `defer` can `suspend` too: the frame pauses there on its way out (a `return`, a `try`'s early
+return, a `break`, the end of a block or of the fn). A frame deleted while paused in a defer, or
+before it reached one, finishes its defers without pausing, so a defer that waits in a loop
+(`while (!ready()) { suspend; }`) would never end there: give such a loop a way out that doesn't
+need resuming.
+
+## Moving frames
+
+A frame can't be copied, but it moves like any owned value: into another variable, or into a
+container of them (`@typeof(x)` is `x`'s type, wherever a type goes). It's resumed and awaited
+where it went, and deleted where it ends up.
+
+```volt
+use std::io;
+
+async fn job(name: str) -> void {
+    defer {
+        std::println("{} saving", name);
+        suspend;                       // pauses on the way out too
+        std::println("{} saved", name);
+    }
+    std::println("{} working", name);
+    suspend;
+}
+
+fn main() -> void {
+    val a = async job("a");
+    var queue: std::vec<@typeof(a)> = {};
+    queue.push(a);                     // a moves into the queue
+    for (f&) in queue.items() {
+        resume f;
+    }
+    for (f&) in queue.items() {
+        resume f;
+    }
+}
+// expect: a working
+// expect: a saving
+// expect: a saved
+```
+
+A move copies the frame's bytes. A frame where one local holds a reference to another
+(`val p = &n;`, or a slice of a local array) across a `suspend` would still point into the old
+frame after a move, so moving it warns (`moving this frame of 'f' leaves it pointing into the old
+frame ('p' holds a reference to 'n' across a suspend)`); resume or await such a frame where it is.
+A string's or vec's text is in memory of its own, so a view of it moves safely.
+
+`main`, an `export` fn and an `extern` fn with a body can be async: called from outside Volt (the
+start code, C, an `extern "C" fn` pointer), they run their frame to the end, as a plain call does.
+A bodiless `extern` fn can't be async, since a C function has no frame. `suspend` can't go in a
+`match`, loop or block used as a value, or in a defer that a `break` or `continue` from inside an
+expression runs (`x ?? break`). An async fn can't start itself with `async` (its frame
+would hold itself), but it can call or `await` itself.
 
 A Rust crate's `async fn` comes in as a Volt async fn: see
 [Volt calls Rust](/volt-bootstrap/interop/rust-and-zig/#volt-calls-rust).

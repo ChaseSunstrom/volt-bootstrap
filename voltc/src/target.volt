@@ -24,6 +24,9 @@ fn targets() -> std::vec<target_info> {
     put(&v, { name: "thumbv6m-none", triple: "thumbv6m-none-eabi", cpu: "cortex-m0", features: "", arch: "arm", bits: "32", cfg: { "os=none", "arch=arm", "target=thumbv6m-none", "pointer_bits=32" } });
     put(&v, { name: "thumbv7m-none", triple: "thumbv7m-none-eabi", cpu: "cortex-m3", features: "", arch: "arm", bits: "32", cfg: { "os=none", "arch=arm", "target=thumbv7m-none", "pointer_bits=32" } });
     put(&v, { name: "thumbv7em-none", triple: "thumbv7em-none-eabi", cpu: "cortex-m4", features: "", arch: "arm", bits: "32", cfg: { "os=none", "arch=arm", "target=thumbv7em-none", "pointer_bits=32" } });
+    // +strict-align: with the MMU off (no page tables set up) memory is Device memory, where an
+    // unaligned access faults
+    put(&v, { name: "aarch64-none", triple: "aarch64-unknown-none-elf", cpu: "cortex-a53", features: "+strict-align", arch: "aarch64", bits: "64", cfg: { "os=none", "arch=aarch64", "target=aarch64-none", "pointer_bits=64" } });
     // WebAssembly, linked by wasm-ld: a page's module (its console and exit imported from env) and a
     // WASI one (fd_write and proc_exit); std's runtime is bare metal's on both (os=none)
     put(&v, { name: "wasm32-none", triple: "wasm32-unknown-unknown", cpu: "generic", features: "", arch: "wasm32", bits: "32", cfg: { "os=none", "arch=wasm32", "target=wasm32-none", "pointer_bits=32" } });
@@ -66,6 +69,18 @@ fn hook_defaults_asm(t: target_info, exit: bool, console: bool) -> std::string {
         }
         return out;
     }
+    if (t.arch == "aarch64") {
+        out.append("    .section .text.volt_hooks,\"ax\",%progbits\n");
+        if (exit) {
+            // ARM semihosting's SYS_EXIT with {ADP_Stopped_ApplicationExit, code}: qemu -semihosting
+            // exits with the code
+            out.append("    .globl volt_exit\n    .type volt_exit,%function\nvolt_exit:\n    sub sp, sp, #16\n    ldr x1, =0x20026\n    str x1, [sp]\n    sxtw x0, w0\n    str x0, [sp, #8]\n    mov x1, sp\n    mov w0, #0x18\n    hlt #0xf000\n1:  b 1b\n    .ltorg\n");
+        }
+        if (console) {
+            out.append("    .globl volt_console_write\n    .type volt_console_write,%function\nvolt_console_write:\n    ret\n");
+        }
+        return out;
+    }
     out.append("    .section .text.volt_hooks,\"ax\",@progbits\n");
     if (exit) {
         out.append("    .globl volt_exit\n    .type volt_exit,@function\nvolt_exit:\n1:  wfi\n    j 1b\n");
@@ -76,12 +91,49 @@ fn hook_defaults_asm(t: target_info, exit: bool, console: bool) -> std::string {
     return out;
 }
 
-// the start code for t, as module-level assembly
-fn start_asm(t: target_info) -> std::string {
+// the Cortex-M system exceptions a program handles by an export fn of the name (the vector table's
+// entries 2 to 15 that aren't reserved)
+val CORTEX_HANDLERS: str[9] = { "volt_nmi", "volt_hard_fault", "volt_mem_manage", "volt_bus_fault", "volt_usage_fault", "volt_svcall", "volt_debug_mon", "volt_pendsv", "volt_systick" };
+// every name the start code defines weakly, for a program's export fn to replace
+val START_WEAK: str[11] = { "volt_nmi", "volt_hard_fault", "volt_mem_manage", "volt_bus_fault", "volt_usage_fault", "volt_svcall", "volt_debug_mon", "volt_pendsv", "volt_systick", "volt_fault", "volt_svc" };
+
+fn has(xs: std::vec<str>&, n: str) -> bool {
+    for (x) in xs.items() {
+        if (x == n) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// name's weak default (its lines after the label), unless the program defines it
+fn weak_default(out: std::string&, name: str, thumb: bool, body: str, taken: std::vec<str>&) -> void {
+    if (has(taken, name)) {
+        return;
+    }
+    if (thumb) {
+        out.append("    .thumb_func\n");
+    }
+    out.append("    .weak ");
+    out.append(name);
+    out.append("\n    .type ");
+    out.append(name);
+    out.append(",%function\n");
+    out.append(name);
+    out.append(":\n");
+    out.append(body);
+}
+
+// the start code for t, as module-level assembly; taken: the handlers the program defines (the
+// others get the default, which goes to volt_fault)
+fn start_asm(t: target_info, taken: std::vec<str>&) -> std::string {
     var out: std::string = {};
     if (t.arch == "arm") {
-        // Cortex-M: the vector table (the stack top, then the reset handler, then faults) starts the
-        // CPU
+        // Cortex-M: the vector table starts the CPU: the stack top, the reset handler, then the 14
+        // system exceptions, each a weak name a program's export fn of that name replaces (the core
+        // saves the registers a C function may change, so a plain fn is a handler), else volt_fault.
+        // The device interrupts come next, from the program's .vector_table.irq section, which the
+        // linker script keeps right after this one
         val lines: str[] = {
             "    .syntax unified",
             "    .section .vector_table,\"a\",%progbits",
@@ -90,9 +142,26 @@ fn start_asm(t: target_info) -> std::string {
             "__volt_vectors:",
             "    .word __stack_top",
             "    .word _start",
-            "    .rept 14",
-            "    .word volt_fault",
-            "    .endr",
+            "    .word volt_nmi",
+            "    .word volt_hard_fault",
+            "    .word volt_mem_manage",
+            "    .word volt_bus_fault",
+            "    .word volt_usage_fault",
+            "    .word 0, 0, 0, 0",
+            "    .word volt_svcall",
+            "    .word volt_debug_mon",
+            "    .word 0",
+            "    .word volt_pendsv",
+            "    .word volt_systick",
+            "",
+            "    .section .text.volt_handlers,\"ax\",%progbits",
+            "    .thumb",
+            "{WEAK}",
+            "    ldr r0, =volt_fault",
+            "    bx r0",
+            "    .ltorg",
+            "",
+            "{SVC}",
             "",
             "    .section .text.volt_start,\"ax\",%progbits",
             "    .thumb",
@@ -133,11 +202,7 @@ fn start_asm(t: target_info) -> std::string {
             "7:  b 7b",
             "    .ltorg",
             "",
-            "    .thumb_func",
-            "    .weak volt_fault",
-            "    .type volt_fault,%function",
-            "volt_fault:",
-            "    b volt_fault",
+            "{FAULT}",
             "",
             "    .thumb_func",
             "    .globl volt_heap_start",
@@ -176,6 +241,22 @@ fn start_asm(t: target_info) -> std::string {
             "    .zero 4",
         };
         for (l) in lines {
+            if (l == "{WEAK}") {
+                // every system handler the program leaves out: one stub, to volt_fault (which a program
+                // can define too)
+                for (n) in CORTEX_HANDLERS {
+                    weak_default(&out, n, true, "", taken);
+                }
+                continue;
+            }
+            if (l == "{SVC}") {
+                weak_default(&out, "volt_svc", true, "    svc #0\n    bx lr\n", taken);
+                continue;
+            }
+            if (l == "{FAULT}") {
+                weak_default(&out, "volt_fault", true, "    b volt_fault\n", taken);
+                continue;
+            }
             out.append(l);
             out.push('\n');
             if (l == "_start:" && t.name == "thumbv7em-none") {
@@ -184,6 +265,9 @@ fn start_asm(t: target_info) -> std::string {
             }
         }
         return out;
+    }
+    if (t.arch == "aarch64") {
+        return aarch64_start(taken);
     }
     // RISC-V: the init_array walk and argv take a pointer's size
     var ld = "lw";
@@ -268,6 +352,103 @@ fn start_asm(t: target_info) -> std::string {
             out.append(l);
             out.push('\n');
         }
+    }
+    return out;
+}
+
+// AArch64 (entered at EL1 with the MMU off, as qemu's virt board starts an ELF): the stack, FP and
+// SIMD on (CPACR_EL1, or the first float traps), the exception vectors (each to volt_fault for now),
+// .data, .bss, constructors, main, volt_exit
+fn aarch64_start(taken: std::vec<str>&) -> std::string {
+    val lines: str[] = {
+        "    .section .text.volt_start,\"ax\",%progbits",
+        "    .globl _start",
+        "    .type _start,%function",
+        "_start:",
+        "    ldr x0, =__stack_top",
+        "    mov sp, x0",
+        "    mov x0, #(3 << 20)",
+        "    msr cpacr_el1, x0",
+        "    ldr x0, =volt_vectors",
+        "    msr vbar_el1, x0",
+        "    isb",
+        "    ldr x0, =__data_load",
+        "    ldr x1, =__data_start",
+        "    ldr x2, =__data_end",
+        "1:  cmp x1, x2",
+        "    b.hs 2f",
+        "    ldr w3, [x0], #4",
+        "    str w3, [x1], #4",
+        "    b 1b",
+        "2:  ldr x1, =__bss_start",
+        "    ldr x2, =__bss_end",
+        "3:  cmp x1, x2",
+        "    b.hs 4f",
+        "    str wzr, [x1], #4",
+        "    b 3b",
+        "4:  ldr x19, =__init_array_start",
+        "    ldr x20, =__init_array_end",
+        "5:  cmp x19, x20",
+        "    b.hs 6f",
+        "    ldr x0, [x19], #8",
+        "    blr x0",
+        "    b 5b",
+        "6:  mov x0, #0",
+        "    mov x1, #0",
+        "    bl main",
+        "    bl volt_exit",
+        "7:  b 7b",
+        "    .ltorg",
+        "",
+        "{FAULT}",
+        "",
+        "    .globl volt_heap_start",
+        "    .type volt_heap_start,%function",
+        "volt_heap_start:",
+        "    ldr x0, =__heap_start",
+        "    ret",
+        "    .globl volt_heap_end",
+        "    .type volt_heap_end,%function",
+        "volt_heap_end:",
+        "    ldr x0, =__heap_end",
+        "    ret",
+        "    .ltorg",
+        "",
+        "    .globl volt_hook_console_write",
+        "    .type volt_hook_console_write,%function",
+        "volt_hook_console_write:",
+        "    b volt_console_write",
+        "    .globl volt_hook_exit",
+        "    .type volt_hook_exit,%function",
+        "volt_hook_exit:",
+        "    b volt_exit",
+        "",
+        "    // the exception vectors: 16 entries of 0x80 bytes, 2K aligned",
+        "    .section .text.volt_vectors,\"ax\",%progbits",
+        "    .p2align 11",
+        "volt_vectors:",
+        "    .rept 16",
+        "    b volt_fault",
+        "    .p2align 7",
+        "    .endr",
+        "",
+        "    .section .bss.volt_args,\"aw\",%nobits",
+        "    .globl volt_argc",
+        "    .globl volt_argv",
+        "    .p2align 3",
+        "volt_argc:",
+        "    .zero 8",
+        "volt_argv:",
+        "    .zero 8",
+    };
+    var out: std::string = {};
+    for (l) in lines {
+        if (l == "{FAULT}") {
+            weak_default(&out, "volt_fault", false, "    b volt_fault\n", taken);
+            continue;
+        }
+        out.append(l);
+        out.push('\n');
     }
     return out;
 }

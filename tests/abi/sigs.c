@@ -15,6 +15,9 @@ typedef struct { float a, b; } pair;
 typedef struct { pair p; float c[2]; } nest;
 typedef struct { float f; int i; } mix;
 typedef struct { __int128 a; } al16;
+typedef struct __attribute__((aligned(16))) { unsigned char a; } a16c;
+typedef struct __attribute__((aligned(16))) { float x; } a16f;
+typedef struct __attribute__((aligned(32))) { long long a, b; } a32;
 typedef struct { float a; double b; } fd;
 typedef struct { double x; } hd1;
 #if defined(__aarch64__) || (defined(__x86_64__) && defined(__linux__))
@@ -66,6 +69,9 @@ hd5 fh5(hd5 x) { return x; }
 nest fnest(nest x) { return x; }
 mix fmix(mix x) { return x; }
 al16 fal16(al16 x) { return x; }
+a16c fa16c(a16c x) { return x; }
+a16f fa16f(a16f x) { return x; }
+a32 fa32(a32 x) { return x; }
 fd ffd(fd x) { return x; }
 signed char ints(signed char a, unsigned short b, int c, long long d) { return a; }
 __int128 wide(__int128 a) { return a; }

@@ -5,6 +5,6 @@
 set -e
 cd "$(dirname "$0")"
 command -v qemu-system-arm >/dev/null && command -v ld.lld >/dev/null || exit 77
-"${VOLTC:-voltc}" build ../blinky.volt board.volt ${VOLT_STD:+--std "$VOLT_STD"} ${RELEASE:+--release} \
-    --target thumbv6m-none --link-script microbit.ld -o blinky.elf
-timeout 30 qemu-system-arm -M microbit -nographic -semihosting-config enable=on,target=native -kernel blinky.elf
+"${VOLTC:-voltc}" build "../${PROGRAM:-blinky}.volt" board.volt ${VOLT_STD:+--std "$VOLT_STD"} ${RELEASE:+--release} \
+    --target thumbv6m-none --link-script microbit.ld -o "${PROGRAM:-blinky}.elf"
+timeout 30 qemu-system-arm -M microbit -nographic -semihosting-config enable=on,target=native -kernel "${PROGRAM:-blinky}.elf"

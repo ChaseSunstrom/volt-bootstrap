@@ -307,13 +307,13 @@ attach fn drop_fn(this: checker&, t: u32) -> compile_error!u32 {
             val state = this.ir.field(obj, 0, U32);
             val live = this.ir.binary(binop_ir::LT, state, this.ir.int(VOLT_DONE, U32), BOOL);
             val cancel = this.ir.block(nodes2(this.ir.assign(this.ir.field(obj, 1, BOOL), this.ir.boolean(true)), this.call_fn(step, nodes(p), BOOL)));
-            var els: u32? = null;
+            put(&body, this.ir.if_(live, cancel, null));
+            // finished then too when a defer paused it after its return: the result is nobody's
             if (try this.needs_drop(rt)) {
                 val d = try this.drop_fn(rt);
                 val done = this.ir.binary(binop_ir::EQ, state, this.ir.int(VOLT_DONE, U32), BOOL);
-                els = this.ir.if_(done, this.call_fn(d, nodes(this.ir.addr(this.ir.field(obj, 2, rt), this.t.ref_to(rt))), VOID), null);
+                put(&body, this.ir.if_(done, this.call_fn(d, nodes(this.ir.addr(this.ir.field(obj, 2, rt), this.t.ref_to(rt))), VOID), null));
             }
-            put(&body, this.ir.if_(live, cancel, els));
         },
         default => {},
     }
@@ -465,7 +465,13 @@ attach fn take(this: checker&, v: tval, span: span) -> compile_error!tval {
         return v;
     }
     match (*this.t.get(v.ty)) {
-        .FRAME(x) => { return fails(span, "a frame can't move (it may point into itself); resume or await it where it is"); },
+        .FRAME(x) => {
+            if (v.owner == null) {
+                return fails(span, "can't move a frame out of a field, element or reference (a frame can't be copied): resume or await it there");
+            }
+            // its bytes move like any owned value's; one that may point into itself warns (warn_frame_moves)
+            put(&this.frame_moves, { span: span, idx: x });
+        },
         default => {},
     }
     val name = v.owner ?? return fail(span, fmt("can't move a {} out of a field, element or reference; copy it instead: copy x", this.ty_name(v.ty)));
@@ -497,6 +503,10 @@ attach fn take_into(this: checker&, v: tval, to: u32, span: span) -> compile_err
             match (*this.t.get(v.ty)) {
                 .CLOSURE(c) => { borrow = true; },
                 default => {},
+            }
+            // and one a fn holder lends (std::func): the holder stays put too
+            if ((this.fn_holder(v.ty) ?? NO_TY) == to) {
+                borrow = true;
             }
         },
         default => {},

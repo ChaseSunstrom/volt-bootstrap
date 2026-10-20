@@ -343,6 +343,36 @@ attach fn struct_inst(this: checker&, d: u32, args: std::vec<gval>, span: span) 
     val id = @cast<u32>(this.structs.len);
     put(&this.structs, bx<struct_info>({ decl: use_decl, family: d, args: move args, env: env, name: name, c_name: c_name }));
     this.struct_ids.put(this.intern(move key), id);
+    // @attributes([@align(n)]): every value of the struct starts at a multiple of n (struct_fields
+    // checks that n is at least what its fields need)
+    for (a&) in this.item_of(use_decl).attrs.items() {
+        match (a.kind) {
+            .BUILTIN(n, g, args) => {
+                if (n != "align" || args == null || args.value.len == 0) {
+                    continue;
+                }
+                val e = this.garg_value(args.value.at(0)) catch |x| {
+                    return fails(a.span, "@align on a struct takes a constant: @align(32)");
+                };
+                val v = this.const_int(e, env) catch |x| {
+                    return fails(a.span, "@align on a struct takes a constant: @align(32)");
+                };
+                if (v < 1 || v > 4096 || (v & (v - 1)) != 0) {
+                    var shown = S("@align(");
+                    if (v < 0) {
+                        shown.push('-');
+                        shown.append_uint(@cast<u64>(0 - v));
+                    } else {
+                        shown.append_uint(@cast<u64>(v));
+                    }
+                    shown.append("): a struct's alignment is a power of two from 1 to 4096");
+                    return fail(a.span, move shown);
+                }
+                this.si(id).align = @cast<u64>(v);
+            },
+            default => {},
+        }
+    }
     // @attributes([@owns("ptr")]): the struct owns what field `ptr: T*` points at (like std's box):
     // it's used like that T&, and deleting it deletes the T first. Nothing here knows std
     for (a&) in this.item_of(use_decl).attrs.items() {
@@ -615,7 +645,34 @@ attach fn struct_fields(this: checker&, sid: u32, span: span) -> compile_error!(
     again.fields = move out;
     again.has_fields = true;
     again.resolving = false;
-    return &again.fields;
+    if (again.align > 0) {
+        try this.check_align(sid);
+    }
+    return &this.si(sid).fields;
+}
+
+// @align(n) on struct sid can't be below what its fields need: C would ignore it, and the layout
+// would no longer be C's
+attach fn check_align(this: checker&, sid: u32) -> compile_error!void {
+    val want = this.si(sid).align;
+    var need: u64 = 1;
+    val fs = copy this.si(sid).fields;
+    for (f&) in fs.items() {
+        val l = this.layout_opt(f.ty, {}) ?? continue;
+        if (l.align > need) {
+            need = l.align;
+        }
+    }
+    if (want >= need) {
+        return;
+    }
+    var sp: span = {};
+    for (a&) in this.item_of(this.si(sid).decl).attrs.items() {
+        if (attr_named(a, "align")) {
+            sp = a.span;
+        }
+    }
+    return fail(sp, fmt2("@align({}) is below what this struct's fields need: they're aligned to {} bytes", unum(want), unum(need)));
 }
 
 // an env in ns with params bound to args, pairwise
@@ -922,6 +979,9 @@ attach fn fn_inst(this: checker&, d: u32, args: std::vec<gval>, span: span) -> c
     if (intrinsic == null && f.body == null && f.extern_abi == null) {
         return fail(it.span, fmt("function '{}' needs a body (only extern fns can leave it off)", S(f.name)));
     }
+    if (f.is_async && f.body == null) {
+        return fail(it.span, fmt("'{}' is async, so it needs a body: Volt runs an async fn's frame, and a C function has none", S(f.name)));
+    }
     if ((f.extern_abi != null && !(args.len > 0 && f.body != null)) || f.is_export) {
         // C has no overloading: one symbol, one signature
         var sig_ps: std::vec<u32> = {};
@@ -1219,13 +1279,74 @@ attach fn global(this: checker&, d: u32, span: span) -> compile_error!global_ref
         }
     }
     var tls = false;
+    var section: str? = null;
     for (a&) in this.item_of(d).attrs.items() {
         tls = tls || attr_named(a, "thread_local");
+        if (attr_named(a, "section")) {
+            section = this.data_section_name(attr_str(a) ?? return fails(a.span, "@section takes the section's name: @section(\".data.table\")"));
+        }
     }
-    put(&this.ir.globals, { name: c, ty: gv.ty, init: init, mutable: l.mutable, link: link, origin: span, tls: tls });
+    // a global in a section is data the image carries (a vector table read before anything runs):
+    // its initializer can't wait for a constructor (reported here once; the global still resolves,
+    // so each use doesn't report it again)
+    if (section != null && init != null && !this.const_data(init ?? 0)) {
+        var e = fail(span, fmt("'{}' is in a section, so it's data the image holds as it is: its initializer has to be constants (numbers, literals, fn names, addresses of globals), not something run at startup", S(name)));
+        put(&this.errors, err_diag(&e));
+    }
+    put(&this.ir.globals, { name: c, ty: gv.ty, init: init, mutable: l.mutable, link: link, origin: span, tls: tls, section: section, keep: section != null });
     val g: global_ref = { c: this.ir.node(ir_kind::GLOBAL(@cast<u32>(this.ir.globals.len - 1)), gv.ty), ty: gv.ty, mutable: l.mutable };
     this.global_c.put(d, g);
     return g;
+}
+
+// is IR node n a value the object file holds as it is: numbers, literals, a fn's address, and
+// aggregates and arrays of them
+attach fn const_data(this: checker&, n: u32) -> bool {
+    match (this.ir.at(n).kind) {
+        .INT(x) => { return true; },
+        .FLOAT(x) => { return true; },
+        .QUAD(x) => { return true; },
+        .BOOL(x) => { return true; },
+        .STR(x) => { return true; },
+        .CSTR(x) => { return true; },
+        .FN(f) => { return true; },
+        .ZERO => { return true; },
+        .NULLPTR => { return true; },
+        .ADDR(p) => { return this.const_place(p); },
+        .AGG(inits&) => {
+            for (fi&) in inits.items() {
+                if (!this.const_data(fi.value)) {
+                    return false;
+                }
+            }
+            return true;
+        },
+        .ARRAY_LIT(xs&) => {
+            for (x&) in xs.items() {
+                if (!this.const_data(*x)) {
+                    return false;
+                }
+            }
+            return true;
+        },
+        default => { return false; },
+    }
+}
+
+// is IR node p a place whose address the object file can hold: a global, or a field or constant
+// index of one
+attach fn const_place(this: checker&, p: u32) -> bool {
+    match (this.ir.at(p).kind) {
+        .GLOBAL(g) => { return true; },
+        .FIELD(b, i) => { return this.const_place(b); },
+        .INDEX(b, i) => {
+            match (this.ir.at(i).kind) {
+                .INT(v) => { return this.const_place(b); },
+                default => { return false; },
+            }
+        },
+        default => { return false; },
+    }
 }
 
 // A linked package with a global whose type holds a trait union is built from source instead: the

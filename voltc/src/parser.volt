@@ -845,6 +845,20 @@ attach fn type_garg(this: parser&, closer: str) -> garg? {
     val t = this.parse_type() catch |e| {
         return null;
     };
+    // a bare @typeof(x) is read as the expression, which sees the locals where it's used
+    match (t.kind) {
+        .EXPR(x) => {
+            match (x.kind) {
+                .BUILTIN(n, g, a) => {
+                    if (n == "typeof") {
+                        return null;
+                    }
+                },
+                default => {},
+            }
+        },
+        default => {},
+    }
     if (this.is(",") || this.is(closer)) {
         return garg::TYPE(move t);
     }
@@ -1180,6 +1194,9 @@ attach fn type_atom(this: parser&) -> compile_error!ty {
     } else if (this.is_ident() && this.is_at(1, ".") && ident_of(this.tok_at(2)) != null) {
         // a compile-time value's field that holds a type: f.field_type
         t = type_kind::EXPR(bx(try this.postfix()));
+    } else if (this.is_builtin("typeof")) {
+        // an expression's type: std::vec<@typeof(fr)>
+        t = type_kind::EXPR(bx(try this.primary()));
     } else if (this.is_type_name()) {
         val p = try this.path(true);
         if (this.is("(")) {

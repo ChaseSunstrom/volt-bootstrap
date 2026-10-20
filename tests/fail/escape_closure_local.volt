@@ -8,3 +8,4 @@ fn main() -> void {
     val f = make(2);
 }
 // error: can't return a closure as a fn value
+// error: return a std::func<fn(i32) -> i32>
