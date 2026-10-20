@@ -396,9 +396,10 @@ attach fn shape_of(this: bind&, t: u32) -> shape? {
             this.inner(elem) ?? return null;
             return shape::ARRAY(elem, n);
         },
-        // a vector crosses as the array of its lanes (C has no vector every language shares, and its
-        // alignment is the whole vector's): voltc lib's shim copies between them
-        .VECTOR(elem, n) => { return this.shape_of(this.lanes_array(t)); },
+        // a vector has no C form inside other types (a field, an optional, a callback's parameter):
+        // only an export fn's own parameter or result crosses, as the array of its lanes (see
+        // lanes_array), which voltc lib's shim copies to and from the vector
+        .VECTOR(elem, n) => { return this.no_form(t); },
         .SLICE(elem) => {
             // text and handles cross as their views (str, the handle's pointer), converted at the edge
             this.elem(elem) ?? return null;
@@ -979,7 +980,7 @@ attach fn check_all(this: bind&) -> compile_error!void {
         val f = this.c.fi(*i);
         val at = this.c.dl(f.decl).item.span;
         for (p&) in f.params.items() {
-            val s = this.shape_of(p.ty) ?? return this.no_c_form(at, fmt2("export fn {}: its parameter {}", S(f.name), S(p.name)), p.ty);
+            val s = this.shape_of(this.lanes_array(p.ty)) ?? return this.no_c_form(at, fmt2("export fn {}: its parameter {}", S(f.name), S(p.name)), p.ty);
             this.add_array(p.ty);
             match (s) {
                 .RESULT(e, x) => {
@@ -993,7 +994,7 @@ attach fn check_all(this: bind&) -> compile_error!void {
         if (this.converted(this.ok_ty(f.ret))) {
             try this.view_as_list(*i, at);
         }
-        val ret = this.c.fi(*i).ret;
+        val ret = this.lanes_array(this.c.fi(*i).ret);
         val r = this.shape_of(ret) ?? return this.no_c_form(at, fmt("export fn {}: its return type", S(f.name)), ret);
         this.add_array(ret);
         var given = r;
@@ -1447,6 +1448,19 @@ attach fn shim_fn(this: bind&, f: u32, out: std::string&) -> void {
     call.push(')');
     var ret = this.c_src(info.ret, true);
     var body: std::string = {};
+    var lanes: u64 = 0;
+    match (*this.c.t.get(info.ret)) {
+        .VECTOR(e, k) => { lanes = k; },
+        default => {},
+    }
+    if (lanes > 0) {
+        // the vector's lanes, as the array C takes
+        val r = this.temp_name(f, "lanes_");
+        body = fmt3("val {} = {};\n        return {};", copy r, move call, this.lanes_of(r.as_str(), lanes));
+        out.append(fmt4("\n    export fn {}({}) -> {} {{\n{}", S(info.c_name), move params, move ret, move pre).as_str());
+        out.append(fmt("        {}\n    }\n", move body).as_str());
+        return;
+    }
     match (this.shape_of(info.ret) ?? shape::VOID) {
         .RESULT(e, x) => {
             if (has_u32(&this.viewed, f)) {
@@ -1459,16 +1473,7 @@ attach fn shim_fn(this: bind&, f: u32, out: std::string&) -> void {
         },
         .VOID => { body = fmt("{};", move call); },
         default => {
-            if (this.lanes_array(info.ret) != info.ret) {
-                // the vector's lanes, as the array C takes
-                var n: u64 = 0;
-                match (*this.c.t.get(info.ret)) {
-                    .VECTOR(e, k) => { n = k; },
-                    default => {},
-                }
-                val r = this.temp_name(f, "lanes_");
-                body = fmt3("val {} = {};\n        return {};", copy r, move call, this.lanes_of(r.as_str(), n));
-            } else if (has_u32(&this.viewed, f)) {
+            if (has_u32(&this.viewed, f)) {
                 body = this.copied(f, info.ret, move call);
             } else {
                 body = fmt("return {};", this.wrap_owned(info.ret, move call));

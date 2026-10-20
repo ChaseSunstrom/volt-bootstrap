@@ -1054,6 +1054,9 @@ attach fn assign(this: checker&, op: binop?, le: expr&, re: expr&, span: span) -
             o = binop_ir::SUB;
         }
         v = vnew(lty, this.ir.binary(o, cur.c, rr.c, lty));
+    } else if (this.is_vector(lty) && (bop == binop::SHL || bop == binop::SHR)) {
+        // v <<= n: by a vector of amounts or one amount, as v << n
+        v = try this.vector_binary(bop, cur, r, span);
     } else if (this.is_vector(lty)) {
         // v += w: lane by lane, as v + w
         v = try this.vector_binary(bop, cur, try this.coerce(r, lty, re.span), span);

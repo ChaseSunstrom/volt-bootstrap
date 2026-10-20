@@ -48,6 +48,20 @@ fn main() -> void {
     comptime val same = ramp() == ramp();
     comptime val differ = sq != ramp();
     std::println("{} {} {}", sq, same, differ);
+    // narrow lanes, an f64 NaN lane, a compound shift, and a comptime shift wrapping as at run time
+    val bytes: std::simd::vec(i8, 16) = { -128, -1, 64, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1 };
+    val bl = bytes << 1;
+    val br = bytes >> 2;
+    std::println("{} {} {} {} {} {}", bl[0], bl[1], bl[2], br[0], br[1], br[15]);
+    val zd: f64 = 0.0;
+    val dn: std::simd::f64x2 = { zd / zd, 1.0 };
+    std::println("{} {}", dn == dn, dn != dn);
+    var acc = s;
+    acc <<= 3;
+    acc >>= by;
+    std::println("{} {} {} {}", acc[0], acc[1], acc[2], acc[3]);
+    comptime val cw = ramp() << 28;
+    std::println("{} {}", cw, cw == (ramp() << 28));
 }
 // expect: true false false true
 // expect: false true
@@ -63,3 +77,7 @@ fn main() -> void {
 // expect: { 0, 10, 20, 30 } true
 // expect: { true, true, false, true }
 // expect: { 0, 120, 440, 960 } true true
+// expect: 0 -2 -128 -32 -1 0
+// expect: false true
+// expect: 8 -32 128 -1
+// expect: { 0, -1610612736, 1073741824, -536870912 } true

@@ -399,6 +399,11 @@ fn bindings_round_trip() {
         ("export struct gadget { n: i32; }\nattach fn delete(this: gadget&) -> void {}\npublic error oops { BAD, }\nexport fn bad_view(xs: gadget[..]) -> oops!(gadget[..]) { return xs; }\n", "c", "gadget can't be copied"),
         // a callback's E! of a slice of text: nothing would own the copies
         ("use std::string;\npublic error oops { BAD, }\nexport fn bad_cb(f: fn(i32) -> oops!(std::string[..])) -> usize {\n    val xs = f(1) catch return 0;\n    return xs.len;\n}\n", "c", "has no C form"),
+        // a SIMD vector crosses only as an export fn's own parameter or result (the array of its
+        // lanes): in a field, an E! or a callback it has no C form
+        ("use std::simd;\npublic struct holder { v: std::simd::f32x4; }\nexport fn holder_first(h: holder) -> f32 { return h.v[0]; }\n", "c", "has no C form"),
+        ("use std::simd;\npublic error oops { BAD, }\nexport fn maybe(x: i32) -> oops!std::simd::f32x4 { return std::simd::splat<std::simd::f32x4>(1.0); }\n", "c", "has no C form"),
+        ("use std::simd;\nexport fn cb(f: fn(std::simd::i32x4) -> i32) -> i32 { return f({}); }\n", "c", "has no C form"),
         // handles in a slice a Python function gives back: nothing would lend them
         ("export struct gadget { n: i32; }\nexport fn bad_cb(f: fn(i32) -> gadget*[..]) -> usize { return f(1).len; }\n", "python", "nothing would lend the handles"),
     ] {

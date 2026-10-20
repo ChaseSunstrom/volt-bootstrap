@@ -1229,7 +1229,7 @@ attach fn ct_vector_op(this: checker&, op: binop, xs: std::vec<cval>, vt: u32, b
     match (b) {
         .VECTOR(bs, bt) => {
             if (bt != vt) {
-                return fail(span, fmt2("{} needs two vectors of one type: {} and {}", this.ty_name(vt), this.ty_name(bt)));
+                return fail(span, fmt3("{} needs two vectors of one type: {} and {}", S(binop_text(op)), this.ty_name(vt), this.ty_name(bt)));
             }
             ys = copy bs;
         },
@@ -1254,6 +1254,13 @@ attach fn ct_vector_op(this: checker&, op: binop, xs: std::vec<cval>, vt: u32, b
         return cval::BOOL(all == (op == binop::EQ));
     }
     val k = this.t.int_of(et);
+    // what run time takes: + - * on every lane, / on float lanes, & | ^ and shifts on int lanes
+    val float_ok = op == binop::DIV;
+    val int_ok = op == binop::BITAND || op == binop::BITOR || op == binop::BITXOR || shift;
+    val both_ok = op == binop::ADD || op == binop::SUB || op == binop::MUL || op == binop::WADD || op == binop::WSUB || op == binop::WMUL;
+    if (!(both_ok || (k == null && float_ok) || (k != null && int_ok))) {
+        return fail(span, fmt2("{} doesn't work on a {}", S(binop_text(op)), this.ty_name(vt)));
+    }
     var lane_op = op;
     if (k != null) {
         // (int lanes wrap, as SIMD does)
@@ -1277,6 +1284,20 @@ attach fn ct_vector_op(this: checker&, op: binop, xs: std::vec<cval>, vt: u32, b
             if (amt < 0 || amt >= @cast<i128>(kk.bits())) {
                 return fail(span, fmt("shift amount too large (lane {})", unum(@cast<u64>(i))));
             }
+            // the lane's bits shifted, wrapping as at run time (>> arithmetic on signed lanes)
+            var x: i128 = 0;
+            match (*xs.at(i)) {
+                .INT(v, t) => { x = v; },
+                default => {},
+            }
+            var r: i128 = 0;
+            if (op == binop::SHL) {
+                r = wrap_bits(@cast<i128>(@cast<u128>(x) << @cast<u32>(amt)), kk.bits(), kk.signed());
+            } else {
+                r = x >> @cast<u32>(amt);
+            }
+            put(&out, cval::INT(r, et));
+            continue;
         }
         val r = try this.ct_binop(lane_op, copy *xs.at(i), copy *ys.at(i), span);
         put(&out, try this.ct_coerce(move r, et, span));

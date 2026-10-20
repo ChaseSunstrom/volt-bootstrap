@@ -1512,7 +1512,6 @@ attach fn is_vector(this: lg&, t: u32) -> bool {
     }
 }
 
-// is t a vector of floats
 // does vector t have signed int lanes?
 attach fn signed_lanes(this: lg&, t: u32) -> bool {
     match (*this.c.t.get(t)) {
@@ -1521,6 +1520,7 @@ attach fn signed_lanes(this: lg&, t: u32) -> bool {
     }
 }
 
+// is t a vector of floats
 attach fn fp_lanes(this: lg&, t: u32) -> bool {
     match (*this.c.t.get(t)) {
         .VECTOR(x, n) => { return this.is_fp(this.kind(x)); },
