@@ -229,7 +229,8 @@ struct fn_cx {
     frame_ptr: u32 = 0;        // its frame pointer (a place)
     suspends: std::vec<span> = {};
     suspend_labels: std::vec<u32> = {};
-    no_suspend: u32 = 0;       // inside code where suspend can't go (defers)
+    in_exit: u32 = 0;          // inside exit code (defers): a suspend there doesn't pause a cancelled frame
+    exit_blocks: std::vec<u32> = {}; // exits whose defers suspend, out of line at the step fn's top level
     call_mode: bool = false;   // the call at call_span starts a frame (call_start) or is awaited
     call_span: span = {};
     call_start: bool = false;
@@ -437,6 +438,14 @@ struct frame_field {
 struct fn_frame {
     fn_idx: u32;
     fields: std::vec<frame_field> = {};
+    // why it may point into itself after a suspend ("'p' holds a reference to 'n'"); empty: it doesn't
+    self_ref: std::string = {};
+}
+
+// a frame moved at span (warned after every body is generated, when it may point into itself)
+struct frame_move {
+    span: span;
+    idx: u32;
 }
 
 // all compiler state: declarations, namespaces, instances, types, and the IR built so far
@@ -577,6 +586,8 @@ struct checker {
     fn_gparams: std::map<u32, u32> = {};   // fn decl -> all its generic params
     recv_refs: std::map<u32, ty&> = {};    // method decl -> its synthesized receiver type T&
     async_irs: std::map<u32, async_ir> = {}; // async fn instance -> its step/await/run fns
+    async_entries: std::map<u32, u32> = {};  // async fn instance -> the fn running it to its end
+    frame_moves: std::vec<frame_move> = {};
     // the language server's index (lsp.volt), filled while checking when opts.lsp: every name used
     // (where, its declaration, what hover shows) and every local declared
     lsp_at: span = {}; // the statement declaring the next local (its name is written in it)

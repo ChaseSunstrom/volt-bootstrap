@@ -289,7 +289,8 @@ fn main() -> void {
 
 ## Reflection: @typeinfo and @typeof
 
-`@typeof(expr)` is an expression's type. `@typeinfo(T)` describes a type at compile time: its
+`@typeof(expr)` is an expression's type, and works wherever a type goes (`std::vec<@typeof(fr)>`, for a
+type with no name). `@typeinfo(T)` describes a type at compile time: its
 `canonical_name`, `short_name` and `module_path`; its `kind`, a variant per kind of type with what
 it's made of (`.STRUCT`, `.ENUM`, `.POINTER(T)`, `.ARRAY(T, n)`, `.TRAIT_UNION`...); its `size`,
 `align` and `stride` (`usize?`: null for a type with no layout); `is_pod` (nothing to delete) and

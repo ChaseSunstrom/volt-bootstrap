@@ -922,6 +922,9 @@ attach fn fn_inst(this: checker&, d: u32, args: std::vec<gval>, span: span) -> c
     if (intrinsic == null && f.body == null && f.extern_abi == null) {
         return fail(it.span, fmt("function '{}' needs a body (only extern fns can leave it off)", S(f.name)));
     }
+    if (f.is_async && f.body == null) {
+        return fail(it.span, fmt("'{}' is async, so it needs a body: Volt runs an async fn's frame, and a C function has none", S(f.name)));
+    }
     if ((f.extern_abi != null && !(args.len > 0 && f.body != null)) || f.is_export) {
         // C has no overloading: one symbol, one signature
         var sig_ps: std::vec<u32> = {};

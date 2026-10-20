@@ -964,7 +964,7 @@ attach fn path_expr(this: checker&, p: path&, want: u32?, span: span) -> compile
                         // pointer
                         val t = this.t.intern(tyk::FN_PTR(move ps, ret, va));
                         this.escape(body_key(BODY_FN, i), t);
-                        return vpure(t, this.ir.node(ir_kind::FN(this.fi(i).ir), t));
+                        return vpure(t, this.ir.node(ir_kind::FN(this.entry_ir(i)), t));
                     }
                     val t = this.t.intern(tyk::FN_VAL(move ps, ret));
                     this.escape(body_key(BODY_FN, i), t);
