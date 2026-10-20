@@ -96,6 +96,8 @@ func main() {
 	shelf := mathlib.MlShelf{Labels: [2]mathlib.MlLabel{{Name: "abc", Sizes: [3]int32{2, 2, 2}, At: mathlib.Vec2{X: 3}}, {Name: "de", Sizes: [3]int32{1, 1, 1}}}, K: 1}
 	bk := mathlib.MlLabelsBack(shelf.Labels[:])
 	fmt.Println("pair", mathlib.MlPairLen(mathlib.MlPair{Names: [2]string{"ab", "cde"}, N: 1}), po.Names[0], po.Names[1], "shelf", mathlib.MlShelfLen(shelf), "back", len(bk), bk[0].Name)
+	vr := mathlib.MlVadd([4]float32{1, 2, 3, 4}, [4]float32{5, 6, 7, 8})
+	fmt.Println("vector", int(vr[0]), int(vr[1]), int(vr[2]), int(vr[3]), mathlib.MlVsum8([8]int32{1, 2, 3, 4, 5, 6, 7, 8}))
 }
 
 type turner struct{}

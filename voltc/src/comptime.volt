@@ -16,6 +16,7 @@ enum cval {
     TYPE: u32,
     TUPLE: std::vec<cval>,
     ARRAY: (std::vec<cval>, u32),             // element type
+    VECTOR: (std::vec<cval>, u32),            // a vector's lanes, and its type
     STRUCT: (u32, std::vec<cfield>),          // VOID = a comptime-only record (typeinfo)
     VARIANT: (u32, str, std::box<cval>?),     // enum value (VOID for typeinfo kinds)
     OPT: (u32, std::box<cval>?),
@@ -329,6 +330,15 @@ attach fn ct_to_val(this: checker&, v: cval, want: u32?, span: span) -> compile_
             }
             return vpure(ty, this.ir.node(ir_kind::ARRAY_LIT(move cs), ty));
         },
+        .VECTOR(es, vt) => {
+            val et = this.vector_lane(vt);
+            var cs: std::vec<u32> = {};
+            for (e&) in es.items() {
+                val ev = try this.ct_to_val(copy *e, et, span);
+                put(&cs, (try this.coerce(ev, et, span)).c);
+            }
+            return vpure(vt, this.ir.node(ir_kind::ARRAY_LIT(move cs), vt));
+        },
         .STRUCT(t, fields) => {
             if (t == VOID) {
                 return fails(span, "this compile-time record (like typeinfo) can't exist at runtime; read one of its fields");
@@ -427,6 +437,7 @@ attach fn ct_type_of(this: checker&, v: cval&) -> u32 {
             }
             return this.t.intern(tyk::ARRAY(t, @cast<u64>(es.len)));
         },
+        .VECTOR(es, vt) => { return vt; },
         .STRUCT(t, f) => { return t; },
         .VARIANT(t, n, p) => { return t; },
         .OPT(t, x) => { return t; },
@@ -934,6 +945,12 @@ attach fn ct_expr(this: checker&, e: expr&, want: u32?) -> compile_error!cval {
                     }
                     return copy *es.at(@cast<usize>(k));
                 },
+                .VECTOR(es, t) => {
+                    if (k < 0 || k >= @cast<i128>(es.len)) {
+                        return fail(span, fmt2("lane {} out of bounds ({} lanes)", num(k), unum(@cast<u64>(es.len))));
+                    }
+                    return copy *es.at(@cast<usize>(k));
+                },
                 .TUPLE(es) => {
                     if (k < 0 || k >= @cast<i128>(es.len)) {
                         return fail(span, fmt2("index {} out of bounds (len {})", num(k), unum(@cast<u64>(es.len))));
@@ -1117,6 +1134,10 @@ attach fn ct_binop(this: checker&, op: binop, var a: cval, var b: cval, span: sp
     this.c_enum_ct(&a);
     this.c_enum_ct(&b);
     match (a) {
+        .VECTOR(xs, vt) => { return this.ct_vector_op(op, copy xs, vt, b, span); },
+        default => {},
+    }
+    match (a) {
         .INT(x, ta) => {
             match (b) {
                 .INT(y, tb) => { return this.ct_int_op(op, x, ta, y, tb, span); },
@@ -1196,6 +1217,92 @@ attach fn ct_binop(this: checker&, op: binop, var a: cval, var b: cval, span: sp
         return cval::BOOL(same == (op == binop::EQ));
     }
     return fails(span, "can't use this operator on these values at compile time");
+}
+
+// a vector op at compile time, by run time's rules: lane by lane (int lanes wrap), == when every lane
+// is equal, != its negation, a shift by a vector of amounts or one amount, each under the lanes'
+// width (one that isn't is an error naming the lane, as a debug build's panic does)
+attach fn ct_vector_op(this: checker&, op: binop, xs: std::vec<cval>, vt: u32, b: cval, span: span) -> compile_error!cval {
+    val et = this.vector_lane(vt);
+    val shift = op == binop::SHL || op == binop::SHR;
+    var ys: std::vec<cval> = {};
+    match (b) {
+        .VECTOR(bs, bt) => {
+            if (bt != vt) {
+                return fail(span, fmt3("{} needs two vectors of one type: {} and {}", S(binop_text(op)), this.ty_name(vt), this.ty_name(bt)));
+            }
+            ys = copy bs;
+        },
+        .INT(n, t) => {
+            if (!shift) {
+                return fail(span, fmt("{} needs two vectors of one type", this.ty_name(vt)));
+            }
+            for (i) in 0..xs.len {
+                put(&ys, cval::INT(n, et));
+            }
+        },
+        default => { return fail(span, fmt("{} needs two vectors of one type", this.ty_name(vt))); },
+    }
+    if (op == binop::EQ || op == binop::NE) {
+        var all = true;
+        for (i) in 0..xs.len {
+            match (try this.ct_binop(binop::EQ, copy *xs.at(i), copy *ys.at(i), span)) {
+                .BOOL(e) => { all = all && e; },
+                default => {},
+            }
+        }
+        return cval::BOOL(all == (op == binop::EQ));
+    }
+    val k = this.t.int_of(et);
+    // what run time takes: + - * on every lane, / on float lanes, & | ^ and shifts on int lanes
+    val float_ok = op == binop::DIV;
+    val int_ok = op == binop::BITAND || op == binop::BITOR || op == binop::BITXOR || shift;
+    val both_ok = op == binop::ADD || op == binop::SUB || op == binop::MUL || op == binop::WADD || op == binop::WSUB || op == binop::WMUL;
+    if (!(both_ok || (k == null && float_ok) || (k != null && int_ok))) {
+        return fail(span, fmt2("{} doesn't work on a {}", S(binop_text(op)), this.ty_name(vt)));
+    }
+    var lane_op = op;
+    if (k != null) {
+        // (int lanes wrap, as SIMD does)
+        if (op == binop::ADD) {
+            lane_op = binop::WADD;
+        } else if (op == binop::SUB) {
+            lane_op = binop::WSUB;
+        } else if (op == binop::MUL) {
+            lane_op = binop::WMUL;
+        }
+    }
+    var out: std::vec<cval> = {};
+    for (i) in 0..xs.len {
+        if (shift) {
+            val kk = k ?? return fail(span, fmt("can't shift a {}", this.ty_name(vt)));
+            var amt: i128 = -1;
+            match (*ys.at(i)) {
+                .INT(n, t) => { amt = n; },
+                default => {},
+            }
+            if (amt < 0 || amt >= @cast<i128>(kk.bits())) {
+                return fail(span, fmt("shift amount too large (lane {})", unum(@cast<u64>(i))));
+            }
+            // the lane's bits shifted, wrapping as at run time (>> arithmetic on signed lanes)
+            var x: i128 = 0;
+            match (*xs.at(i)) {
+                .INT(v, t) => { x = v; },
+                default => {},
+            }
+            var r: i128 = 0;
+            if (op == binop::SHL) {
+                r = wrap_bits(@cast<i128>(@cast<u128>(x) << @cast<u32>(amt)), kk.bits(), kk.signed());
+            } else {
+                r = x >> @cast<u32>(amt);
+            }
+            put(&out, cval::INT(r, et));
+            continue;
+        }
+        val r = try this.ct_binop(lane_op, copy *xs.at(i), copy *ys.at(i), span);
+        put(&out, try this.ct_coerce(move r, et, span));
+    }
+    return cval::VECTOR(move out, vt);
 }
 
 // ints must share a type (an untyped literal takes the other's) and fit it; wrapping ops wrap to the
@@ -1475,6 +1582,12 @@ fn cval_eq(a: cval&, b: cval&) -> bool {
                 default => { return false; },
             }
         },
+        .VECTOR(xs&, t) => {
+            match (*b) {
+                .VECTOR(ys&, u) => { return t == u && cvals_eq(xs, ys); },
+                default => { return false; },
+            }
+        },
         .STRUCT(t, xs) => {
             match (*b) {
                 .STRUCT(u, ys) => {
@@ -1680,6 +1793,12 @@ attach fn ct_write(this: checker&, whole: cval&, place: expr&, v: cval, span: sp
                     }
                     *es.at(@cast<usize>(i)) = copy v;
                 },
+                .VECTOR(es, vt) => {
+                    if (i < 0 || i >= @cast<i128>(es.len)) {
+                        return fail(span, fmt2("lane {} out of bounds ({} lanes)", num(i), unum(@cast<u64>(es.len))));
+                    }
+                    *es.at(@cast<usize>(i)) = try this.ct_coerce(copy v, this.vector_lane(vt), span);
+                },
                 default => { return fails(span, "can't index this at compile time"); },
             }
             try this.ct_write(whole, b, move parent, span);
@@ -1754,6 +1873,13 @@ attach fn ct_zero(this: checker&, t: u32, span: span) -> compile_error!cval {
                 put(&es, try this.ct_zero(et, span));
             }
             return cval::ARRAY(move es, et);
+        },
+        .VECTOR(et, n) => {
+            var es: std::vec<cval> = {};
+            for (i) in 0..n {
+                put(&es, try this.ct_zero(et, span));
+            }
+            return cval::VECTOR(move es, t);
         },
         .TUPLE(ts, names) => {
             val xs = copy ts;
@@ -1868,6 +1994,20 @@ attach fn ct_literal(this: checker&, entries: std::vec<lit_entry>&, want: u32?, 
                 put(&es, try this.ct_coerce(move v, et, span));
             }
             return cval::ARRAY(move es, et);
+        },
+        .VECTOR(et, n) => {
+            if (entries.len == 0) {
+                return this.ct_zero(w, span); // {}: every lane 0
+            }
+            if (@cast<u64>(entries.len) != n) {
+                return fail(span, fmt2("expected {} lanes, found {}", unum(n), unum(@cast<u64>(entries.len))));
+            }
+            var es: std::vec<cval> = {};
+            for (en&) in entries.items() {
+                val v = try this.ct_expr(&en.value, et);
+                put(&es, try this.ct_coerce(move v, et, span));
+            }
+            return cval::VECTOR(move es, w);
         },
         default => { return fail(span, fmt("a {{ }} literal can't make a {} at compile time", this.ty_name(w))); },
     }
@@ -2734,6 +2874,7 @@ attach fn cval_key(this: checker&, v: cval&) -> std::string {
         .STR(s) => { return fmt2("{}:{}", std::format("{}", s.len()), copy s); },
         .TUPLE(vs&) => { return fmt("({})", this.cvals_key(vs)); },
         .ARRAY(vs&, t) => { return fmt2("[{}]#{}", this.cvals_key(vs), std::format("{}", t)); },
+        .VECTOR(vs&, t) => { return fmt2("<{}>#{}", this.cvals_key(vs), std::format("{}", t)); },
         .STRUCT(t, fs&) => {
             var body: std::string = {};
             for (i) in 0..fs.len {
@@ -3722,6 +3863,7 @@ attach fn cval_text(this: checker&, v: cval&) -> std::string {
         .TYPE(t) => { return this.ty_name(t); },
         .TUPLE(vs) => { return fmt("({})", this.cvals_text(&vs)); },
         .ARRAY(vs, t) => { return fmt("{{ {} }}", this.cvals_text(&vs)); },
+        .VECTOR(vs, t) => { return fmt("{{ {} }}", this.cvals_text(&vs)); },
         .STRUCT(t, fs) => {
             var body: std::string = {};
             for (i) in 0..fs.len {

@@ -77,6 +77,8 @@ po = Mathlib.ml_pair_of("ab", "cd")
 shelf = { labels: [{ name: "abc", sizes: [2, 2, 2], at: { x: 3, y: 0 } }, { name: "de", sizes: [1, 1, 1], at: { x: 0, y: 0 } }], k: 1 }
 bk = Mathlib.ml_labels_back(shelf[:labels])
 puts "pair #{Mathlib.ml_pair_len({ names: ["ab", "cde"], n: 1 })} #{po.names[0]} #{po.names[1]} shelf #{Mathlib.ml_shelf_len(shelf)} back #{bk.length} #{bk[0].name}"
+vr = Mathlib.ml_vadd([1, 2, 3, 4], [5, 6, 7, 8])
+puts "vector #{vr.map(&:to_i).join(" ")} #{Mathlib.ml_vsum8([1, 2, 3, 4, 5, 6, 7, 8])}"
 
 # what the extension rejects: numbers that don't fit, wrong types, a closed counter; and a
 # callback's exception comes out of the call (the later calls are skipped)

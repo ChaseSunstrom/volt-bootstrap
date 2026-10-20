@@ -92,6 +92,14 @@ struct bind {
     bad: u32 = 0;
 }
 
+// the array of vector t's lanes (t itself when it isn't a vector)
+attach fn lanes_array(this: bind&, t: u32) -> u32 {
+    match (*this.c.t.get(t)) {
+        .VECTOR(e, n) => { return this.c.t.intern(tyk::ARRAY(e, n)); },
+        default => { return t; },
+    }
+}
+
 attach fn no_form(this: bind&, t: u32) -> shape? {
     this.bad = t;
     return null;
@@ -388,6 +396,10 @@ attach fn shape_of(this: bind&, t: u32) -> shape? {
             this.inner(elem) ?? return null;
             return shape::ARRAY(elem, n);
         },
+        // a vector has no C form inside other types (a field, an optional, a callback's parameter):
+        // only an export fn's own parameter or result crosses, as the array of its lanes (see
+        // lanes_array), which voltc lib's shim copies to and from the vector
+        .VECTOR(elem, n) => { return this.no_form(t); },
         .SLICE(elem) => {
             // text and handles cross as their views (str, the handle's pointer), converted at the edge
             this.elem(elem) ?? return null;
@@ -968,7 +980,7 @@ attach fn check_all(this: bind&) -> compile_error!void {
         val f = this.c.fi(*i);
         val at = this.c.dl(f.decl).item.span;
         for (p&) in f.params.items() {
-            val s = this.shape_of(p.ty) ?? return this.no_c_form(at, fmt2("export fn {}: its parameter {}", S(f.name), S(p.name)), p.ty);
+            val s = this.shape_of(this.lanes_array(p.ty)) ?? return this.no_c_form(at, fmt2("export fn {}: its parameter {}", S(f.name), S(p.name)), p.ty);
             this.add_array(p.ty);
             match (s) {
                 .RESULT(e, x) => {
@@ -982,7 +994,7 @@ attach fn check_all(this: bind&) -> compile_error!void {
         if (this.converted(this.ok_ty(f.ret))) {
             try this.view_as_list(*i, at);
         }
-        val ret = this.c.fi(*i).ret;
+        val ret = this.lanes_array(this.c.fi(*i).ret);
         val r = this.shape_of(ret) ?? return this.no_c_form(at, fmt("export fn {}: its return type", S(f.name)), ret);
         this.add_array(ret);
         var given = r;
@@ -1027,8 +1039,13 @@ attach fn converts_slices(this: bind&) -> bool {
 // instance, which the shim names)?
 attach fn needs_shim(this: bind&, f: u32) -> bool {
     val info = this.c.fi(f);
-    if (this.c.fn_generics(info.decl).len > 0) {
+    if (this.c.fn_generics(info.decl).len > 0 || this.lanes_array(info.ret) != info.ret) {
         return true;
+    }
+    for (p&) in info.params.items() {
+        if (this.lanes_array(p.ty) != p.ty) {
+            return true;
+        }
     }
     for (p&) in info.params.items() {
         match (this.shape_of(p.ty) ?? shape::VOID) {
@@ -1061,6 +1078,23 @@ attach fn needs_shim(this: bind&, f: u32) -> bool {
 struct shim_plan {
     text: std::string = {};
     unexport: std::vec<std::string> = {}; // the package's export fns a shim stands in for (full::name@offset)
+}
+
+// { v[0], v[1], ... }: n lanes or elements of v, as a { } literal (an array's or a vector's, by what
+// it's wanted as)
+attach fn lanes_of(this: bind&, v: str, n: u64) -> std::string {
+    var out = S("{ ");
+    for (i) in 0..n {
+        if (i > 0) {
+            out.append(", ");
+        }
+        out.append(v);
+        out.push('[');
+        out.append_uint(i);
+        out.push(']');
+    }
+    out.append(" }");
+    return out;
 }
 
 // a type as Volt source (full names resolve from anywhere)
@@ -1121,6 +1155,10 @@ attach fn wrap_owned(this: bind&, t: u32, v: std::string) -> std::string {
 // the expression that turns v (type t's C form, coming into Volt) into a Volt value: a parameter
 // (text comes as str) or a callback's result (text comes as text, and is freed)
 attach fn unwrap_in(this: bind&, t: u32, v: std::string, result: bool) -> std::string {
+    match (*this.c.t.get(t)) {
+        .VECTOR(e, n) => { return this.lanes_of(v.as_str(), n); },
+        default => {},
+    }
     match (this.shape_of(t) ?? shape::VOID) {
         .TEXT(x) => {
             if (result) {
@@ -1160,6 +1198,9 @@ attach fn lend_out(this: bind&, t: u32, v: std::string) -> std::string {
 
 // type t's C form as Volt source: as a parameter (text as str) or a result (text as text)
 attach fn c_src(this: bind&, t: u32, result: bool) -> std::string {
+    if (this.lanes_array(t) != t) {
+        return this.src(this.lanes_array(t));
+    }
     match (this.shape_of(t) ?? shape::VOID) {
         .TEXT(x) => {
             if (result) {
@@ -1407,6 +1448,19 @@ attach fn shim_fn(this: bind&, f: u32, out: std::string&) -> void {
     call.push(')');
     var ret = this.c_src(info.ret, true);
     var body: std::string = {};
+    var lanes: u64 = 0;
+    match (*this.c.t.get(info.ret)) {
+        .VECTOR(e, k) => { lanes = k; },
+        default => {},
+    }
+    if (lanes > 0) {
+        // the vector's lanes, as the array C takes
+        val r = this.temp_name(f, "lanes_");
+        body = fmt3("val {} = {};\n        return {};", copy r, move call, this.lanes_of(r.as_str(), lanes));
+        out.append(fmt4("\n    export fn {}({}) -> {} {{\n{}", S(info.c_name), move params, move ret, move pre).as_str());
+        out.append(fmt("        {}\n    }\n", move body).as_str());
+        return;
+    }
     match (this.shape_of(info.ret) ?? shape::VOID) {
         .RESULT(e, x) => {
             if (has_u32(&this.viewed, f)) {
@@ -19098,6 +19152,13 @@ attach fn bindings(this: checker&, pkg: str, lang: str) -> compile_error!std::st
     val fns = b.exports();
     if (fns.len == 0) {
         return fail(NO_SPAN, fmt("package {} has no export fns to make bindings for", S(pkg)));
+    }
+    // a vector is the array of its lanes to every language: the C form voltc lib's shim takes
+    for (i&) in fns.items() {
+        for (p&) in this.fi(*i).params.items() {
+            p.ty = b.lanes_array(p.ty);
+        }
+        this.fi(*i).ret = b.lanes_array(this.fi(*i).ret);
     }
     try b.check_all();
     if (lang == "c") {

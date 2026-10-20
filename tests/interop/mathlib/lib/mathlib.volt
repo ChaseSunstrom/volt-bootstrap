@@ -1,6 +1,7 @@
 // mathlib: a Volt library other languages call through the C ABI (tests/interop.rs builds it with
 // voltc lib --shared/--static and writes its bindings with voltc bindings)
 use std::string;
+use std::simd;
 
 public struct vec2 {
     x: f64;
@@ -19,6 +20,15 @@ public error math_error {
 
 export fn ml_add(a: i32, b: i32) -> i32 {
     return a + b;
+}
+
+// SIMD vectors cross as the arrays of their lanes (voltc lib's shim copies between them)
+export fn ml_vadd(a: std::simd::f32x4, b: std::simd::f32x4) -> std::simd::f32x4 {
+    return a + b;
+}
+
+export fn ml_vsum8(v: std::simd::i32x8) -> i64 {
+    return @cast<i64>(std::simd::sum(v));
 }
 
 export fn ml_dot(a: vec2, b: vec2) -> f64 {

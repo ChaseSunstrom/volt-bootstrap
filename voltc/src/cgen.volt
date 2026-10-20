@@ -1618,6 +1618,35 @@ attach fn binary(this: cgen&, out: std::string&, op: binop_ir, a: u32, b: u32, t
         .REF(x) => { ptr_arith = true; },
         default => {},
     }
+    if (this.is_vector(at) && (op == binop_ir::EQ || op == binop_ir::NE)) {
+        // every lane equal, by C's scalar == (ordered on floats, so a NaN lane isn't); the operands
+        // are temporaries, so naming them per lane only reads them
+        var n: u64 = 0;
+        match (*this.c.t.get(at)) {
+            .VECTOR(x, k) => { n = @cast<u64>(k); },
+            default => {},
+        }
+        if (op == binop_ir::NE) {
+            out.push('!');
+        }
+        out.push('(');
+        for (i) in 0..n {
+            if (i > 0) {
+                out.append(" && ");
+            }
+            out.push('(');
+            this.operand(out, a);
+            out.append(")[");
+            out.append_uint(i);
+            out.append("] == (");
+            this.operand(out, b);
+            out.append(")[");
+            out.append_uint(i);
+            out.push(']');
+        }
+        out.push(')');
+        return;
+    }
     if (this.is_vector(t)) {
         // lane by lane: GNU C's operators on vectors; signed int lanes wrap through the unsigned
         // vector (+ - *), the rest can't overflow

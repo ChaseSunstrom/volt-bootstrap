@@ -1,9 +1,11 @@
 // std::simd: vectors of numbers kept in SIMD registers, so one operation works on every lane at once.
 // vec(T, n) is the vector of n Ts (ints of up to 64 bits or f32/f64; n a power of two, 64 bytes at
 // most); the usual ones have names. Two vectors of one type add, subtract and multiply lane by lane
-// (int lanes wrap, as SIMD does), float lanes divide too and int lanes take & | ^, - negates every
-// lane, v[i] reads or writes lane i (checked, as an array's index is), and a { } literal lists the
-// lanes ({} is every lane 0).
+// (int lanes wrap, as SIMD does), float lanes divide too and int lanes take & | ^ and shift (<< and
+// >> by a vector of amounts or one amount, as a scalar shift: an amount past the width stops a debug
+// build, --release takes it modulo the width), - negates every lane, v[i] reads or writes lane i
+// (checked, as an array's index is), and a { } literal lists the lanes ({} is every lane 0). a == b
+// is whether every lane is equal (lanes_eq has each lane's), and a vector prints as its lanes.
 // (Part of package std: the package loader wraps every file in `namespace std`.)
 
 namespace simd {
@@ -45,6 +47,16 @@ namespace simd {
             v[i] = x;
         }
         return v;
+    }
+
+    // each lane's a == b (a == b itself is whether every lane is)
+    <V: type>
+    public fn lanes_eq(a: V, b: V) -> bool[lanes(V)] {
+        var out: bool[lanes(V)] = {};
+        comptime for (i) in 0..lanes(V) {
+            out[i] = a[i] == b[i];
+        }
+        return out;
     }
 
     // v's lanes added up

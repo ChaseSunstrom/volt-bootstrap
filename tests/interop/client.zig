@@ -89,6 +89,8 @@ pub fn main() void {
     var shelf = m.ml_shelf{ .labels = .{ give_label({}, 2), .{ .name = m.VoltStr.from("de"), .sizes = .{ 1, 1, 1 }, .at = .{ .x = 0, .y = 0 } } }, .k = 1 };
     const bk = m.ml_labels_back(&shelf.labels);
     print("pair {d} {s} {s} shelf {d} back {d} {s}\n", .{ m.ml_pair_len(.{ .names = .{ m.VoltStr.from("ab"), m.VoltStr.from("cde") }, .n = 1 }), po.names[0].slice(), po.names[1].slice(), m.ml_shelf_len(shelf), bk.len, bk.ptr[0].name.slice() });
+    const vr = m.ml_vadd(.{ 1, 2, 3, 4 }, .{ 5, 6, 7, 8 });
+    print("vector {d} {d} {d} {d} {d}\n", .{ @as(i32, @intFromFloat(vr[0])), @as(i32, @intFromFloat(vr[1])), @as(i32, @intFromFloat(vr[2])), @as(i32, @intFromFloat(vr[3])), m.ml_vsum8(.{ 1, 2, 3, 4, 5, 6, 7, 8 }) });
 }
 
 // callbacks giving a slice (in memory of the client's: Volt reads it before calling again)

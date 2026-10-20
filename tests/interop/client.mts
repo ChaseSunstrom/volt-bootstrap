@@ -77,3 +77,5 @@ const po = m.ml_pair_of("ab", "cd");
 const shelf = { labels: [{ name: "abc", sizes: [2, 2, 2], at: { x: 3, y: 0 } }, { name: "de", sizes: [1, 1, 1], at: { x: 0, y: 0 } }], k: 1 };
 const bk = m.ml_labels_back(shelf.labels);
 console.log("pair", m.ml_pair_len({ names: ["ab", "cde"], n: 1 }), po.names[0], po.names[1], "shelf", m.ml_shelf_len(shelf), "back", bk.length, bk[0].name);
+const vr = m.ml_vadd([1, 2, 3, 4], [5, 6, 7, 8]);
+console.log("vector", ...vr.map((x) => Math.trunc(x)), m.ml_vsum8([1, 2, 3, 4, 5, 6, 7, 8]));

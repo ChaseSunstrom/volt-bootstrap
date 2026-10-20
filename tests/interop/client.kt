@@ -88,6 +88,8 @@ fun main() {
     val shelf = ml_shelf(listOf(ml_label("abc", intArrayOf(2, 2, 2), vec2(3.0, 0.0)), ml_label("de", intArrayOf(1, 1, 1), vec2(0.0, 0.0))), 1)
     val bk = ml_labels_back(shelf.labels)
     println("pair ${ml_pair_len(ml_pair(listOf("ab", "cde"), 1))} ${po.names[0]} ${po.names[1]} shelf ${ml_shelf_len(shelf)} back ${bk.size} ${bk[0].name}")
+    val vr = ml_vadd(floatArrayOf(1f, 2f, 3f, 4f), floatArrayOf(5f, 6f, 7f, 8f))
+    println("vector ${vr[0].toInt()} ${vr[1].toInt()} ${vr[2].toInt()} ${vr[3].toInt()} ${ml_vsum8(intArrayOf(1, 2, 3, 4, 5, 6, 7, 8))}")
 
     // a callback's exception comes out of the call (the later calls are skipped), and a closed
     // counter throws

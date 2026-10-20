@@ -91,6 +91,8 @@ var po = Api.ml_pair_of("ab", "cd");
 var shelf = new ml_shelf { labels = new[] { new ml_label { name = "abc", sizes = new[] { 2, 2, 2 }, at = new vec2 { x = 3, y = 0 } }, new ml_label { name = "de", sizes = new[] { 1, 1, 1 }, at = new vec2 { x = 0, y = 0 } } }, k = 1 };
 var bk = Api.ml_labels_back(shelf.labels);
 Console.WriteLine($"pair {Api.ml_pair_len(new ml_pair { names = new[] { "ab", "cde" }, n = 1 })} {po.names[0]} {po.names[1]} shelf {Api.ml_shelf_len(shelf)} back {bk.Length} {bk[0].name}");
+var vr = Api.ml_vadd(new float[] { 1, 2, 3, 4 }, new float[] { 5, 6, 7, 8 });
+Console.WriteLine($"vector {(int)vr[0]} {(int)vr[1]} {(int)vr[2]} {(int)vr[3]} {Api.ml_vsum8(new[] { 1, 2, 3, 4, 5, 6, 7, 8 })}");
 
 static class Ext
 {
