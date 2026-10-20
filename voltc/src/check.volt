@@ -70,6 +70,7 @@ struct struct_info {
     owns_field: str? = null; // @owns("field"): an owning pointer to owns_ty through that field
     owns_ty: u32 = 0;
     niche: u32? = null; // @owns and every other field takes no space: this field's null is an optional's none
+    align: u64 = 0;     // @align(n): its alignment is n (0: its fields')
 }
 
 // one enum or error set instance; payload types resolve on first use (enum_payloads)

@@ -741,7 +741,7 @@ own (see [Your own attributes](#your-own-attributes)).
 | `@invalidates` | a method that may move or free its receiver's storage (`push`, `clear`...): a view into the receiver used after it warns ([safety](/volt-bootstrap/guide/safety/#what-the-compiler-warns-about)) |
 | `@opt(n)` | optimization level for this function (0 to 3) |
 | `@section(".name")` | put the function or global in a section (a global's initializer must then be constant) |
-| `@align(n)` | the function's alignment, in bytes |
+| `@align(n)` | the function's alignment, or a struct's (see [Layout](/volt-bootstrap/guide/structs/#layout)), in bytes |
 | `@deprecated("use x")` | warn where it's used |
 | `@intrinsic("name")` | a compiler builtin or runtime function (for std-like libraries) |
 | `@owns("field")` | this struct owns what the field points at, like `box` |

@@ -343,6 +343,36 @@ attach fn struct_inst(this: checker&, d: u32, args: std::vec<gval>, span: span) 
     val id = @cast<u32>(this.structs.len);
     put(&this.structs, bx<struct_info>({ decl: use_decl, family: d, args: move args, env: env, name: name, c_name: c_name }));
     this.struct_ids.put(this.intern(move key), id);
+    // @attributes([@align(n)]): every value of the struct starts at a multiple of n (struct_fields
+    // checks that n is at least what its fields need)
+    for (a&) in this.item_of(use_decl).attrs.items() {
+        match (a.kind) {
+            .BUILTIN(n, g, args) => {
+                if (n != "align" || args == null || args.value.len == 0) {
+                    continue;
+                }
+                val e = this.garg_value(args.value.at(0)) catch |x| {
+                    return fails(a.span, "@align on a struct takes a constant: @align(32)");
+                };
+                val v = this.const_int(e, env) catch |x| {
+                    return fails(a.span, "@align on a struct takes a constant: @align(32)");
+                };
+                if (v < 1 || v > 4096 || (v & (v - 1)) != 0) {
+                    var shown = S("@align(");
+                    if (v < 0) {
+                        shown.push('-');
+                        shown.append_uint(@cast<u64>(0 - v));
+                    } else {
+                        shown.append_uint(@cast<u64>(v));
+                    }
+                    shown.append("): a struct's alignment is a power of two from 1 to 4096");
+                    return fail(a.span, move shown);
+                }
+                this.si(id).align = @cast<u64>(v);
+            },
+            default => {},
+        }
+    }
     // @attributes([@owns("ptr")]): the struct owns what field `ptr: T*` points at (like std's box):
     // it's used like that T&, and deleting it deletes the T first. Nothing here knows std
     for (a&) in this.item_of(use_decl).attrs.items() {
@@ -615,7 +645,34 @@ attach fn struct_fields(this: checker&, sid: u32, span: span) -> compile_error!(
     again.fields = move out;
     again.has_fields = true;
     again.resolving = false;
-    return &again.fields;
+    if (again.align > 0) {
+        try this.check_align(sid);
+    }
+    return &this.si(sid).fields;
+}
+
+// @align(n) on struct sid can't be below what its fields need: C would ignore it, and the layout
+// would no longer be C's
+attach fn check_align(this: checker&, sid: u32) -> compile_error!void {
+    val want = this.si(sid).align;
+    var need: u64 = 1;
+    val fs = copy this.si(sid).fields;
+    for (f&) in fs.items() {
+        val l = this.layout_opt(f.ty, {}) ?? continue;
+        if (l.align > need) {
+            need = l.align;
+        }
+    }
+    if (want >= need) {
+        return;
+    }
+    var sp: span = {};
+    for (a&) in this.item_of(this.si(sid).decl).attrs.items() {
+        if (attr_named(a, "align")) {
+            sp = a.span;
+        }
+    }
+    return fail(sp, fmt2("@align({}) is below what this struct's fields need: they're aligned to {} bytes", unum(want), unum(need)));
 }
 
 // an env in ns with params bound to args, pairwise

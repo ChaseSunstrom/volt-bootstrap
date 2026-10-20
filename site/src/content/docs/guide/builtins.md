@@ -67,7 +67,7 @@ above, after `@`, with what each does.
 | `@unchecked` | a fn | no bounds checks in its body, for code that proves its own indices |
 | `@invalidates` | a method | it may move or free its receiver's storage: borrows into it end at the call |
 | `@section("name")` | a fn or global | put it in a linker section |
-| `@align(n)` | a fn | its code's alignment, in bytes |
+| `@align(n)` | a fn or struct | a fn's code alignment; a struct's alignment (every value of it starts at a multiple of n), in bytes |
 | `@deprecated("why")` | a fn | using it warns with this message |
 | `@owns("field")` | a struct | it owns what this pointer field points to (for borrow checking) |
 | `@thread_local` | a global `var` | each thread has its own copy |

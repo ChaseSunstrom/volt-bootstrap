@@ -219,6 +219,12 @@ attach fn make_lt(this: lg&, t: u32) -> llvm::LLVMOpaqueType* {
         val ov = this.overlay(t);
         return this.blob_lt(ov.0, @cast<u32>(ov.1));
     } else {
+        val al = this.over_align(t);
+        if (al > 0) {
+            // a zero-length array of an n-byte vector: alignment n (LLVM aligns a vector to its
+            // size), no bytes. LLVM then rounds the size, and places the struct in what holds it
+            put(&elems, llvm::LLVMArrayType2(llvm::LLVMVectorType(this.i8t(), @cast<u32>(al)), 0));
+        }
         for (i) in 0..n {
             val mt = this.member_ty(t, @cast<u32>(i));
             if (!this.is_void(mt)) {
@@ -235,6 +241,14 @@ attach fn make_lt(this: lg&, t: u32) -> llvm::LLVMOpaqueType* {
         default => {},
     }
     return struct_ty(this.ctx, &elems, false);
+}
+
+// a struct's @align(n), when its type needs an element for it (0: none)
+attach fn over_align(this: lg&, t: u32) -> u64 {
+    match (*this.c.t.get(t)) {
+        .STRUCT(s) => { return this.c.si(s).align; },
+        default => { return 0; },
+    }
 }
 
 // a tagged union (an enum with payloads, a trait union): member 0 is the tag, 1 + i the payloads
@@ -300,9 +314,15 @@ attach fn blob_lt(this: lg&, size: u64, align: u32) -> llvm::LLVMOpaqueType* {
     if (size == 0) {
         return struct_ty(this.ctx, &elems, false);
     }
+    val full = (size + @cast<u64>(align) - 1) / @cast<u64>(align) * @cast<u64>(align);
+    if (align > 16) {
+        // (an @align struct's payload: LLVM aligns no integer past 16 bytes, but a vector to its size)
+        put(&elems, llvm::LLVMArrayType2(llvm::LLVMVectorType(this.i8t(), align), 0));
+        put(&elems, llvm::LLVMArrayType2(this.i8t(), full));
+        return struct_ty(this.ctx, &elems, false);
+    }
     val lead = llvm::LLVMIntTypeInContext(this.ctx, align * 8);
     put(&elems, lead);
-    val full = (size + @cast<u64>(align) - 1) / @cast<u64>(align) * @cast<u64>(align);
     if (full > @cast<u64>(align)) {
         put(&elems, llvm::LLVMArrayType2(this.i8t(), full - @cast<u64>(align)));
     }
@@ -331,6 +351,9 @@ attach fn elem(this: lg&, agg: u32, i: u32) -> u32 {
         return 1;
     }
     var k: u32 = 0;
+    if (this.over_align(agg) > 0) {
+        k = 1; // past the alignment element
+    }
     for (j) in 0..@cast<usize>(i) {
         if (!this.is_void(this.member_ty(agg, @cast<u32>(j)))) {
             k += 1;

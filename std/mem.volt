@@ -140,9 +140,53 @@ namespace mem {
         return @cast<void*>(h);
     }
 
+    // T's aligned past 16 bytes (an @align struct), more than malloc promises: the alignment and two
+    // words more, the block at the first multiple of the alignment past those words, malloc's
+    // pointer in the word before it and the size in the one before that (checked when it's given
+    // back). The same in every build, hosted or bare
+    <T: type>
+    fn over_malloc(n: usize) -> mem_error!(T*) {
+        val al = @alignof(T);
+        val w = @sizeof(usize);
+        if (n > (@cast<usize>(0) -% 1) - al - w) {
+            return mem_error::OUT_OF_MEMORY;
+        }
+        val raw = @cast<usize>(c_malloc(n + al + w) ?? return mem_error::OUT_OF_MEMORY);
+        // past raw + w, and a multiple of w (as raw is), so at least two words in
+        val p = raw + w + al - (raw + w + al) % al;
+        *@cast<usize*>(p - w) = raw;
+        *@cast<usize*>(p - 2 * w) = n;
+        return @cast<T*>(p);
+    }
+
+    <T: type>
+    fn over_free(ptr: T*, n: usize) -> void {
+        val w = @sizeof(usize);
+        val p = @cast<usize>(ptr);
+        if (*@cast<usize*>(p - 2 * w) != n) {
+            @panic("a block was given back with a different size than it was allocated with");
+        }
+        c_free(@cast<void*>(*@cast<usize*>(p - w)));
+    }
+
+    <T: type>
+    fn over_realloc(ptr: T*, was: usize, now: usize) -> mem_error!(T*) {
+        val p = try over_malloc<T>(now);
+        var keep = was;
+        if (now < keep) {
+            keep = now;
+        }
+        c_memcpy(p as void*, ptr as void*, keep);
+        over_free<T>(ptr, was);
+        return p;
+    }
+
     attach allocator -> default_allocator {
         <T: type> fn malloc(this, count: usize = 1) -> mem_error!(T*) {
             val n = try bytes<T>(count);
+            comptime if (@alignof(T) > 16) {
+                return try over_malloc<T>(n);
+            }
             comptime if (@cfg("release") && @cfg("hosted")) {
                 if (is_small<T>(n)) {
                     return @cast<T*>(try small_alloc(class_of(n)));
@@ -158,6 +202,9 @@ namespace mem {
         <T: type> fn realloc(this, ptr: T*, old: usize, count: usize) -> mem_error!(T*) {
             val was = old * @sizeof(T);
             val now = try bytes<T>(count);
+            comptime if (@alignof(T) > 16) {
+                return try over_realloc<T>(ptr, was, now);
+            }
             comptime if (@cfg("release") && @cfg("hosted")) {
                 if (is_small<T>(was) || is_small<T>(now)) {
                     return try small_realloc<T>(ptr, old, count);
@@ -176,6 +223,10 @@ namespace mem {
                 return;
             }
             val n = count * @sizeof(T);
+            comptime if (@alignof(T) > 16) {
+                over_free<T>(ptr, n);
+                return;
+            }
             comptime if (@cfg("release") && @cfg("hosted")) {
                 if (is_small<T>(n)) {
                     small_put(ptr as void*, class_of(n));
