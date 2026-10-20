@@ -152,23 +152,49 @@ fn release_voltc_works() {
 /// debug and release, built with no C compiler at all ($CC is false) and run under qemu, prints its
 /// expected.txt and exits 0. A board whose qemu (or ld.lld) isn't installed is skipped: its run.sh
 /// exits 77
+/// the bare-metal boards with the stage-1 voltc (release_voltc_works runs them with the stage-2 one)
+#[test]
+fn bare_metal_boards() {
+    let std_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("std");
+    bare_metal(&common::voltc(), &std_dir);
+}
+
 fn bare_metal(voltc: &Path, std_dir: &Path) {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/bare-metal");
-    for (board, target) in [("riscv-virt", "riscv32-none"), ("riscv-virt", "riscv64-none"), ("microbit", "thumbv6m-none"), ("cortex-m3", "thumbv7m-none"), ("cortex-m3", "thumbv7em-none")] {
+    let boards = [("riscv-virt", "riscv32-none"), ("riscv-virt", "riscv64-none"), ("aarch64-virt", "aarch64-none"), ("microbit", "thumbv6m-none"), ("cortex-m3", "thumbv7m-none"), ("cortex-m3", "thumbv7em-none")];
+    for (board, target) in boards {
         let dir = root.join(board);
-        for release in ["", "1"] {
-            let o = Command::new(dir.join("run.sh")).env("VOLTC", voltc).env("VOLT_STD", std_dir).env("RELEASE", release).env("TARGET", target).env("CC", "false").output().unwrap();
-            if o.status.code() == Some(77) {
-                eprintln!("bare metal: skipped {board} {target} (no qemu or ld.lld)");
-                break;
+        // blinky on every board; on a Cortex-M, interrupts too (its system exceptions and a device IRQ)
+        let programs: &[&str] = if target.starts_with("thumb") { &["blinky", "interrupts"] } else { &["blinky"] };
+        'program: for program in programs {
+            let expected = if *program == "blinky" { "expected.txt".to_string() } else { format!("expected-{program}.txt") };
+            for release in ["", "1"] {
+                let o = Command::new(dir.join("run.sh")).env("VOLTC", voltc).env("VOLT_STD", std_dir).env("RELEASE", release).env("TARGET", target).env("PROGRAM", program).env("CC", "false").output().unwrap();
+                if o.status.code() == Some(77) {
+                    eprintln!("bare metal: skipped {board} {target} (no qemu or ld.lld)");
+                    break 'program;
+                }
+                let want = std::fs::read_to_string(dir.join(&expected)).unwrap();
+                let out = String::from_utf8_lossy(&o.stdout);
+                assert!(o.status.success() && out == want, "bare metal {program} on {board} {target} (release: {}) exited {:?}, printed:\n{out}{}", release == "1", o.status.code(), String::from_utf8_lossy(&o.stderr));
+                let elf = dir.join(format!("{program}.elf"));
+                only_volt(&elf, &root, board, target, release == "1");
+                if *program == "interrupts" {
+                    irq_table_follows(&elf, board, target);
+                }
             }
-            let want = std::fs::read_to_string(dir.join("expected.txt")).unwrap();
-            let out = String::from_utf8_lossy(&o.stdout);
-            assert!(o.status.success() && out == want, "bare metal {board} {target} (release: {}) exited {:?}, printed:\n{out}{}", release == "1", o.status.code(), String::from_utf8_lossy(&o.stderr));
-            only_volt(&dir.join("blinky.elf"), &root, board, target, release == "1");
+            let _ = std::fs::remove_file(dir.join(format!("{program}.elf")));
         }
-        let _ = std::fs::remove_file(dir.join("blinky.elf"));
     }
+}
+
+/// the program's device interrupt table (IRQS, in .vector_table.irq) sits right after the 16 system
+/// entries, where the core looks for IRQ 0 (flash starts at 0 on both Cortex-M boards)
+fn irq_table_follows(elf: &Path, board: &str, target: &str) {
+    let Ok(o) = Command::new("llvm-nm").arg(elf).output() else { return }; // no llvm-nm: nothing to check with
+    let syms = String::from_utf8_lossy(&o.stdout);
+    let at = syms.lines().find_map(|l| l.strip_suffix(" IRQS").and_then(|a| a.split_whitespace().next()).map(String::from));
+    assert_eq!(at.as_deref(), Some("00000040"), "{board} {target}: IRQS isn't at 0x40, after the system entries:\n{syms}");
 }
 
 /// the image holds nothing but Volt: no undefined symbol (no libc, no C runtime, no unwinder), and

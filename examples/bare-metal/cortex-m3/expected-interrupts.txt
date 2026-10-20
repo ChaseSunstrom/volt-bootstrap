@@ -1,0 +1,4 @@
+pendsv ran 1
+svcall ran 1
+irq ran 1
+interrupts on lm3s6965 (Cortex-M3)

@@ -5,7 +5,7 @@ MEMORY {
   RAM (rwx) : ORIGIN = 0x20000000, LENGTH = 64K
 }
 SECTIONS {
-  .vector_table : { KEEP(*(.vector_table)) } > FLASH
+  .vector_table : { KEEP(*(.vector_table)) KEEP(*(.vector_table.irq)) } > FLASH
   .text : { *(.text .text.*) } > FLASH
   .rodata : { *(.rodata .rodata.*) } > FLASH
   .ARM.exidx : { *(.ARM.exidx .ARM.exidx.*) } > FLASH

@@ -1,0 +1,12 @@
+led on
+led off
+led on
+led off
+led on
+led off
+3 blinks on qemu aarch64 virt
+on 50.0% of the time, 0.5 of 1
+pointer: 0x1000 null
+format: true 3 blinks true
+usize: true true map 50 40425
+f128: 2.25 true 6

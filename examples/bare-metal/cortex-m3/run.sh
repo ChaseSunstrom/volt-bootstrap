@@ -8,6 +8,6 @@ TARGET=${TARGET:-thumbv7m-none}
 CPU=cortex-m3
 [ "$TARGET" = thumbv7em-none ] && CPU=cortex-m4
 command -v qemu-system-arm >/dev/null && command -v ld.lld >/dev/null || exit 77
-"${VOLTC:-voltc}" build ../blinky.volt board.volt ${VOLT_STD:+--std "$VOLT_STD"} ${RELEASE:+--release} \
-    --target "$TARGET" --link-script lm3s6965.ld -o blinky.elf
-timeout 30 qemu-system-arm -M lm3s6965evb -cpu "$CPU" -nographic -semihosting-config enable=on,target=native -kernel blinky.elf
+"${VOLTC:-voltc}" build "../${PROGRAM:-blinky}.volt" board.volt ${VOLT_STD:+--std "$VOLT_STD"} ${RELEASE:+--release} \
+    --target "$TARGET" --link-script lm3s6965.ld -o "${PROGRAM:-blinky}.elf"
+timeout 30 qemu-system-arm -M lm3s6965evb -cpu "$CPU" -nographic -semihosting-config enable=on,target=native -kernel "${PROGRAM:-blinky}.elf"
