@@ -359,7 +359,7 @@ attach fn partial_env(this: checker&, ns: u32, gps: std::vec<gparam>&, binds: st
     for (i) in 0..gps.len {
         val b = *binds.at(i);
         if (b) {
-            put(&e.generics, { name: gps.at(i).name, g: b});
+            put(&e.generics, { name: gps.at(i).name, g: b, ty: param_ty(gps.at(i)) });
         }
     }
     return this.new_env(move e);
@@ -1038,7 +1038,7 @@ attach fn check_bounds(this: checker&, gps: std::vec<gparam>&, binds: std::vec<g
     var e: env = { ns: ns };
     for (i) in 0..gps.len {
         if (i < binds.len) {
-            put(&e.generics, { name: gps.at(i).name, g: *binds.at(i) });
+            put(&e.generics, { name: gps.at(i).name, g: *binds.at(i), ty: param_ty(gps.at(i)) });
         }
     }
     val env = this.new_env(move e);
@@ -2027,7 +2027,7 @@ attach fn empty_union_call(this: checker&, r: tval, u: u32, name: str, gargs: st
                             for (k) in 0..gargs.len {
                                 val gp = gparam_of(f.generics.at(k));
                                 val kind = try this.param_kind(&gp, e);
-                                put(&ge.generics, { name: gp.name, g: try this.garg_gval(gargs.at(k), kind, e) });
+                                put(&ge.generics, { name: gp.name, g: try this.garg_gval(gargs.at(k), kind, e), ty: param_ty(&gp) });
                             }
                             val fe = this.new_env(move ge);
                             if (g.ret) {

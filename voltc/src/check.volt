@@ -38,6 +38,7 @@ enum gval {
 struct gbind {
     name: str;
     g: gval;
+    ty: ty* = null; // a value parameter's declared type (<N: usize>'s usize), for N as a value
 }
 
 // what a template body sees: its namespace and the generic params bound so far (searched from the end)

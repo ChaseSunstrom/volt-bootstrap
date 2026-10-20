@@ -105,6 +105,27 @@ fn is_type_body(t: ty&) -> bool {
 }
 
 // the generic bound to name in an env (innermost first)
+// a generic value parameter's declared type (<N: usize>'s usize): its one bound
+fn param_ty(gp: gparam&) -> ty* {
+    if (gp.bounds.len == 1) {
+        return *gp.bounds.at(0);
+    }
+    return null;
+}
+
+// the declared type of generic param `name` bound in env e (null: none, or not a value parameter)
+attach fn env_generic_ty(this: checker&, e: u32, name: str) -> ty* {
+    val gs = &this.env_at(e).generics;
+    var i = gs.len;
+    while (i > 0) {
+        i -= 1;
+        if (gs.at(i).name == name) {
+            return gs.at(i).ty;
+        }
+    }
+    return null;
+}
+
 attach fn env_generic(this: checker&, e: u32, name: str) -> gval? {
     val gs = &this.env_at(e).generics;
     var i = gs.len;
@@ -680,7 +701,7 @@ attach fn inst_env(this: checker&, ns: u32, params: std::vec<gparam>&, args: std
     var e: env = { ns: ns };
     for (i) in 0..params.len {
         if (i < args.len) {
-            put(&e.generics, { name: params.at(i).name, g: *args.at(i) });
+            put(&e.generics, { name: params.at(i).name, g: *args.at(i), ty: param_ty(params.at(i)) });
         }
     }
     return this.new_env(move e);
