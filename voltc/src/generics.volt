@@ -250,9 +250,19 @@ attach fn param_kind(this: checker&, gp: gparam&, e: u32) -> compile_error!pkind
 attach fn garg_type_env(this: checker&, g: garg&, e: u32) -> compile_error!u32 {
     match (*g) {
         .TYPE(t&) => { return this.resolve_type(t, e); },
-        .EXPR(x) => {
+        .EXPR(x&) => {
             match (x.kind) {
                 .PATH(p&) => { return this.resolve_type_path(p, e); },
+                .BUILTIN(n, g, a) => {
+                    // std::vec<@typeof(fr)>: the type of what it names here
+                    if (n == "typeof") {
+                        match (try this.ct_eval_in(e, x, TYPE)) {
+                            .TYPE(t) => { return t; },
+                            default => {},
+                        }
+                    }
+                    return fails(x.span, "expected a type");
+                },
                 default => { return fails(x.span, "expected a type"); },
             }
         },
