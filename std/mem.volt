@@ -184,7 +184,7 @@ namespace mem {
     attach allocator -> default_allocator {
         <T: type> fn malloc(this, count: usize = 1) -> mem_error!(T*) {
             val n = try bytes<T>(count);
-            comptime if (@alignof(T) > 16) {
+            if (@alignof(T) > 16) { // (at run time: a C struct has no compile-time layout)
                 return try over_malloc<T>(n);
             }
             comptime if (@cfg("release") && @cfg("hosted")) {
@@ -202,7 +202,7 @@ namespace mem {
         <T: type> fn realloc(this, ptr: T*, old: usize, count: usize) -> mem_error!(T*) {
             val was = old * @sizeof(T);
             val now = try bytes<T>(count);
-            comptime if (@alignof(T) > 16) {
+            if (@alignof(T) > 16) {
                 return try over_realloc<T>(ptr, was, now);
             }
             comptime if (@cfg("release") && @cfg("hosted")) {
@@ -223,7 +223,7 @@ namespace mem {
                 return;
             }
             val n = count * @sizeof(T);
-            comptime if (@alignof(T) > 16) {
+            if (@alignof(T) > 16) {
                 over_free<T>(ptr, n);
                 return;
             }

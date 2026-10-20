@@ -240,7 +240,50 @@ attach fn make_lt(this: lg&, t: u32) -> llvm::LLVMOpaqueType* {
         },
         default => {},
     }
-    return struct_ty(this.ctx, &elems, false);
+    val r = struct_ty(this.ctx, &elems, false);
+    this.check_align(r, this.over_align(t), t);
+    return r;
+}
+
+// an @align(n) type whose LLVM type isn't n-aligned: this target's data layout aligns no n-byte
+// vector to n (ARM's aligns a 16-byte one to 8), so the alignment can't be carried
+attach fn check_align(this: lg&, r: llvm::LLVMOpaqueType*, want: u64, t: u32) -> void {
+    if (want > 0 && @cast<u64>(this.align_of(r)) != want) {
+        this.cant(fmt2("the LLVM backend can't align '{}' to {} bytes on this target: its data layout aligns no type that way", this.c.ty_name(t), unum(want)));
+    }
+}
+
+// a type's alignment without its own @align (C's unadjusted alignment, which AAPCS64 goes by)
+attach fn natural_align(this: lg&, t: u32) -> u32 {
+    if (this.over_align(t) == 0) {
+        return this.align_of(this.lt(t));
+    }
+    var a: u32 = 1;
+    for (i) in 0..this.member_count(t) {
+        val mt = this.member_ty(t, @cast<u32>(i));
+        if (!this.is_void(mt)) {
+            val m = this.align_of(this.lt(mt));
+            if (m > a) {
+                a = m;
+            }
+        }
+    }
+    return a;
+}
+
+// a type's size without its own @align's padding: its fields' extent, as C's unadjusted size
+attach fn natural_size(this: lg&, t: u32) -> u64 {
+    if (this.over_align(t) == 0) {
+        return this.size_of(this.lt(t));
+    }
+    var elems: std::vec<llvm::LLVMOpaqueType*> = {};
+    for (i) in 0..this.member_count(t) {
+        val mt = this.member_ty(t, @cast<u32>(i));
+        if (!this.is_void(mt)) {
+            put(&elems, this.lt(mt));
+        }
+    }
+    return this.size_of(struct_ty(this.ctx, &elems, false));
 }
 
 // a struct's @align(n), when its type needs an element for it (0: none)
@@ -319,7 +362,11 @@ attach fn blob_lt(this: lg&, size: u64, align: u32) -> llvm::LLVMOpaqueType* {
         // (an @align struct's payload: LLVM aligns no integer past 16 bytes, but a vector to its size)
         put(&elems, llvm::LLVMArrayType2(llvm::LLVMVectorType(this.i8t(), align), 0));
         put(&elems, llvm::LLVMArrayType2(this.i8t(), full));
-        return struct_ty(this.ctx, &elems, false);
+        val r = struct_ty(this.ctx, &elems, false);
+        if (@cast<u64>(this.align_of(r)) != @cast<u64>(align)) {
+            this.cant(fmt("the LLVM backend can't align a union to {} bytes on this target: its data layout aligns no type that way", unum(@cast<u64>(align))));
+        }
+        return r;
     }
     val lead = llvm::LLVMIntTypeInContext(this.ctx, align * 8);
     put(&elems, lead);
@@ -524,10 +571,12 @@ attach fn part(this: lg&, t: u32, ret: bool) -> abi_part {
         put(&r.pieces, *leaves.at(0));
         return r;
     }
-    val n = (size + 7) / 8;
+    // the eightbytes the fields cover (an @align struct's padding past them is passed as nothing)
+    val data = this.natural_size(t);
+    val n = (data + 7) / 8;
     for (i) in 0..n {
         val e = ebs[@cast<usize>(i)];
-        var bytes = size - i * 8;
+        var bytes = data - i * 8;
         if (bytes > 8) {
             bytes = 8;
         }
@@ -584,6 +633,8 @@ attach fn aapcs_part(this: lg&, t: u32, size: u64, ret: bool) -> abi_part {
                 same = false;
             }
         }
+        // and no padding: an @align struct of one float is no HFA
+        same = same && this.size_of(e) * @cast<u64>(leaves.len) == size;
         if (same) {
             // as clang has it: a param is an array of them, a result the aggregate itself
             var cty = llvm::LLVMArrayType2(e, @cast<u64>(leaves.len));
@@ -596,8 +647,14 @@ attach fn aapcs_part(this: lg&, t: u32, size: u64, ret: bool) -> abi_part {
     if (size > 16) {
         return { how: pass::MEMORY, ty: t };
     }
+    // the i128 pair, as clang has it: a param goes by the alignment without the struct's own @align,
+    // a result by the one with it; Apple's arm64 by the one with it both ways
+    var al = this.natural_align(t);
+    if (ret || this.cc == callconv::DARWIN64) {
+        al = this.align_of(l);
+    }
     var cty = llvm::LLVMInt64TypeInContext(this.ctx);
-    if (this.align_of(l) == 16) {
+    if (al == 16) {
         cty = llvm::LLVMIntTypeInContext(this.ctx, 128);
     } else if (size > 8) {
         cty = llvm::LLVMArrayType2(cty, 2);
