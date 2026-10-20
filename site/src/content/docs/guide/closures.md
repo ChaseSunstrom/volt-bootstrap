@@ -84,7 +84,7 @@ leaves `f` pointing at a deleted closure after that statement. To keep a `fn` va
 field or variable assigned later), store the closure in a variable first. For the same reason a
 function can't return a closure (written in the `return`, or kept in a local) as a `fn` value: it's
 an error, since the closure is gone once the function returns. A plain function's name is a `fn`
-value it can return.
+value it can return; a closure goes back in a [`std::func`](#keeping-a-closure).
 
 ```volt
 use std::io;
@@ -109,6 +109,44 @@ fn main() -> void {
 }
 // expect: 14 107 49
 ```
+
+## Keeping a closure
+
+`std::func<F>` owns a closure, so it can outlive the scope that made it: a function returns one, a
+struct or a vec keeps one. A closure literal written where a `std::func<fn(A) -> R>` is wanted
+becomes one, its parameters typed by the `fn` type as for a `fn` value: the closure moves to memory
+of its own with what it captured, which is deleted once, when the func goes. A func calls as the
+`fn` it holds and passes where that `fn` is wanted (lent, as a closure lends its `fn` value). It
+moves, but has no copy: both copies would delete the closure.
+
+```volt
+use std::io;
+
+fn make_adder(n: i32) -> std::func<fn(i32) -> i32> {
+    return |n| (x) { return x + n; };
+}
+
+fn apply(f: fn(i32) -> i32, x: i32) -> i32 {
+    return f(x);
+}
+
+fn main() -> void {
+    val add5 = make_adder(5);
+    var fs: std::vec<std::func<fn(i32) -> i32>> = {};
+    fs.push(make_adder(1));
+    fs.push(make_adder(10));
+    var total = 0;
+    for (f&) in fs.items() {
+        total += f(1);
+    }
+    std::println("{} {} {}", add5(1), apply(add5, 2), total);
+}
+// expect: 6 7 13
+```
+
+`std::func<F>::from_closure(c)` makes one from a closure `c` already in a variable. A closure that
+captures by reference (`|n&|`) and is kept in a func warns: the func mustn't outlive what it points
+at.
 
 ## Owning captures
 

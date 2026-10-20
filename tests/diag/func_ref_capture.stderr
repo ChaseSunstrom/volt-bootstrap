@@ -1,0 +1,5 @@
+warning: 'n' is captured by reference, and the std::func<fn() -> i32> keeping this closure mustn't outlive it: capture it by copy or move
+  ┌─ tests/diag/func_ref_capture.volt:7:13
+  │
+7 │     return |n&| () { return n + 1; };
+  │             ^^

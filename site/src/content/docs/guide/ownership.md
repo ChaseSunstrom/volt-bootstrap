@@ -196,7 +196,10 @@ fn main() -> !void {
 ```
 
 `box` is an ordinary std type: `@attributes([@owns("ptr")])` is what makes a struct an owning
-pointer, and a library can make its own.
+pointer, and a library can make its own. One whose pointer points at a `fn` value (as
+[`std::func`](/volt-bootstrap/guide/closures/#keeping-a-closure)'s does) calls as that `fn` and
+passes where it's wanted, and a closure literal written where it's wanted goes to the
+`fn from_closure(static this: T, c: C) -> T` it attaches, if it has one.
 
 A `box<T>?` is as small as the box: a live box's pointer is never null, so null means none, and
 `node` above is 16 bytes, like the C struct with a `next` pointer. That holds for any `@owns`

@@ -579,7 +579,7 @@ attach fn escapes(this: checker&, e: expr&, want: u32) -> compile_error!void {
         },
         .CLOSURE(c&) => {
             if (fn_val) {
-                return fails(e.span, CLOSURE_ESCAPES);
+                return fail(e.span, this.closure_escapes(want));
             }
         },
         .PATH(p&) => {
@@ -588,7 +588,7 @@ attach fn escapes(this: checker&, e: expr&, want: u32) -> compile_error!void {
                 if (l) {
                     if (l.own != null) {
                         match (*this.t.get(l.ty)) {
-                            .CLOSURE(id) => { return fails(e.span, CLOSURE_ESCAPES); },
+                            .CLOSURE(id) => { return fail(e.span, this.closure_escapes(want)); },
                             default => {},
                         }
                     }
@@ -599,7 +599,10 @@ attach fn escapes(this: checker&, e: expr&, want: u32) -> compile_error!void {
     }
 }
 
-val CLOSURE_ESCAPES: str = "can't return a closure as a fn value: a fn value borrows its closure, which is gone once this function returns (call it here, or keep the closure where the caller can)";
+// a closure returned as a fn value (want): what to return instead
+attach fn closure_escapes(this: checker&, want: u32) -> std::string {
+    return fmt("can't return a closure as a fn value: a fn value borrows its closure, which is gone once this function returns (return a std::func<{}> to keep it, call it here, or keep the closure where the caller can)", this.ty_name(want));
+}
 
 // the local of this call whose storage a place is in: a variable or a parameter taken by value (not a
 // reference, pointer or slice one, which point elsewhere, nor a closure's capture)

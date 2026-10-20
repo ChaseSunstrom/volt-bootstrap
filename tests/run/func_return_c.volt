@@ -20,11 +20,18 @@ fn make_tagged(id: i32) -> std::func<fn(i32) -> i32> {
 
 fn named(text: str) -> std::func<fn() -> usize> {
     val s = std::string::from(text);
-    return std::func<fn() -> usize>::of(|move s| () -> usize { return s.len(); });
+    return std::func<fn() -> usize>::from_closure(|move s| () -> usize { return s.len(); });
 }
 
 fn apply(f: fn(i32) -> i32, x: i32) -> i32 {
     return f(x);
+}
+
+// a func as a struct's field: made from a closure literal there, replaced, called through a
+// reference and passed as the fn it holds
+struct holder {
+    f: std::func<fn(i32) -> i32>;
+    tag: i32;
 }
 
 fn main() -> void {
@@ -50,6 +57,12 @@ fn main() -> void {
     std::println("drops {}", drops);
     val n = named("hello");
     std::println("len {}", n());
+    var h: holder = { f: || (x) { return x + 1; }, tag: 2 };
+    val first = &h.f;
+    std::println("field {}", first(1));
+    h.f = make_adder(10);
+    val r = &h.f;
+    std::println("field {} {}", r(1), apply(h.f, 2));
 }
 // expect: 6 15
 // expect: 6 12 drops 0
@@ -57,3 +70,5 @@ fn main() -> void {
 // expect: total 113
 // expect: drops 2
 // expect: len 5
+// expect: field 2
+// expect: field 11 12

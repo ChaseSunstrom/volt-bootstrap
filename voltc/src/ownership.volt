@@ -504,6 +504,10 @@ attach fn take_into(this: checker&, v: tval, to: u32, span: span) -> compile_err
                 .CLOSURE(c) => { borrow = true; },
                 default => {},
             }
+            // and one a fn holder lends (std::func): the holder stays put too
+            if ((this.fn_holder(v.ty) ?? NO_TY) == to) {
+                borrow = true;
+            }
         },
         default => {},
     }

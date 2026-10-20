@@ -355,6 +355,7 @@ attach fn coercible(this: checker&, v: tval&, to: u32) -> bool {
             match (*tt) {
                 .REF(t) => { return (this.box_inner(v.ty) ?? NO_TY) == t && v.lv; },
                 .PTR(t) => { return (this.box_inner(v.ty) ?? NO_TY) == t && v.lv; },
+                .FN_VAL(ps, r) => { return (this.fn_holder(v.ty) ?? NO_TY) == to && v.lv; },
                 default => {},
             }
         },
@@ -580,6 +581,13 @@ attach fn coerce(this: checker&, v: tval, to: u32, span: span) -> compile_error!
                 val o = this.owner(v.ty) ?? return fails(span, "");
                 return retyped(&v, to, this.ir.field(v.c, o.index, to));
             }
+            // one holding a fn value (std::func) passes as that fn, lent from it
+            if ((this.fn_holder(v.ty) ?? NO_TY) == to) {
+                if (!v.lv) {
+                    return fail(span, fmt("this {} would be deleted right away; store it in a variable first", this.ty_name(v.ty)));
+                }
+                return retyped(&v, to, this.held_fn(v.c, v.ty));
+            }
         },
         default => {},
     }
@@ -797,7 +805,15 @@ attach fn expr(this: checker&, e: expr&, want: u32?) -> compile_error!tval {
             }
             return this.match_expr(m.scrut, &m.arms, want, span);
         },
-        .CLOSURE(c&) => { return this.closure_expr(c, want, span); },
+        .CLOSURE(c&) => {
+            if (want) {
+                val via = this.from_closure_fn(want);
+                if (via) {
+                    return this.closure_into(c, want, via, span);
+                }
+            }
+            return this.closure_expr(c, want, span);
+        },
         .AWAIT(x) => { return this.await_expr(x, want); },
         .ASYNC(x) => { return fails(span, "async f() builds a frame in place, so it only works as `val fr = async f()`"); },
         .TYPE_BODY(b) => {

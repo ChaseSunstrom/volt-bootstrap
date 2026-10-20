@@ -36,6 +36,87 @@ attach fn gc(this: checker&, i: u32) -> generic_closure& {
     return *this.gclosures.at(@cast<usize>(i));
 }
 
+// the fn type an @owns struct holds (std::func<F>'s F), when what it owns is a fn value
+attach fn fn_holder(this: checker&, t: u32) -> u32? {
+    val inner = this.box_inner(t) ?? return null;
+    match (*this.t.get(inner)) {
+        .FN_VAL(ps, r) => { return inner; },
+        default => { return null; },
+    }
+}
+
+// the fn value fn holder s (a place of type t) holds: *s.ptr
+attach fn held_fn(this: checker&, s: u32, t: u32) -> u32 {
+    val o = this.owner(t) ?? return s;
+    val p = this.ir.field(s, o.index, this.t.intern(tyk::PTR(o.inner)));
+    return this.ir.deref(p, o.inner);
+}
+
+// whether t, a fn holder, attaches the hook `fn from_closure(static this: T, c: C) -> T` (std::func
+// does): a closure literal written where a t is wanted is handed to it
+attach fn from_closure_fn(this: checker&, t: u32) -> str? {
+    if (this.fn_holder(t) == null) {
+        return null;
+    }
+    for (d) in this.named(&this.attached, "from_closure").items() {
+        if (this.static_fits(d, t)) {
+            return "from_closure";
+        }
+    }
+    return null;
+}
+
+// does static fn d attach to t (static this: T)?
+attach fn static_fits(this: checker&, d: u32, t: u32) -> bool {
+    match (this.recv_of(d)) {
+        .STATIC(pat) => {
+            val p = pat ?? return false;
+            val gps = this.fn_generics(d);
+            var binds = none_binds(gps.len);
+            return this.match_recv(p, t, gps, &binds, this.dl(d).ns) != null;
+        },
+        default => { return false; },
+    }
+}
+
+// a closure literal written where a fn holder with a from_closure hook is wanted (std::func<F>): its
+// untyped parameters and its result typed by the fn type F it holds, then handed to the hook
+// (std::func<F>::from_closure(closure))
+attach fn closure_into(this: checker&, cl: closure&, want: u32, via: str, span: span) -> compile_error!tval {
+    val f = this.fn_holder(want) ?? return fails(span, "");
+    var c = copy *cl;
+    match (*this.t.get(f)) {
+        .FN_VAL(ps&, r) => {
+            if (c.generics.len == 0) {
+                if (c.params.len != ps.len) {
+                    return fail(span, fmt2("expected a closure taking {} parameters, this one takes {}", unum(@cast<u64>(ps.len)), unum(@cast<u64>(c.params.len))));
+                }
+                for (i) in 0..c.params.len {
+                    if (c.params.at(i).ty == null) {
+                        c.params.at(i).ty = { kind: type_kind::RESOLVED(*ps.at(i)), span: c.params.at(i).span };
+                    }
+                }
+                if (c.ret == null) {
+                    c.ret = { kind: type_kind::RESOLVED(r), span: span };
+                }
+            }
+        },
+        default => {},
+    }
+    // it keeps the closure past this statement, so a capture by reference may be left pointing at a
+    // local that's gone (a warning, as the borrow findings are)
+    for (cp&) in cl.caps.items() {
+        if (cp.mode == cap_mode::REF) {
+            var msg = fmt2("'{}' is captured by reference, and the {} keeping this closure mustn't outlive it: capture it by copy or move", S(cp.name), this.ty_name(want));
+            put(&this.warnings, { span: cp.span, msg: move msg, warning: true });
+        }
+    }
+    var args: std::vec<expr> = {};
+    put(&args, { kind: expr_kind::CLOSURE(move c), span: span });
+    var none: std::vec<garg> = {};
+    return this.static_call(want, via, &none, &args, want, span);
+}
+
 // a closure literal: makes its body fn (env: closure&) and an erased twin (env: void*) that forwards to it,
 // and returns the capture struct's value. Untyped params and the return type come from `want` when it is a
 // fn(...) type

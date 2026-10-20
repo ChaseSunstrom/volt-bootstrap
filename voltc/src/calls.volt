@@ -124,7 +124,26 @@ attach fn call(this: checker&, callee: expr&, args: std::vec<expr>&, want: u32?,
 }
 
 // call through a value: a C fn pointer, a fn(...) value (its fn and env) or a closure
-attach fn call_value(this: checker&, f: tval, args: std::vec<expr>&, span: span) -> compile_error!tval {
+attach fn call_value(this: checker&, f0: tval, args: std::vec<expr>&, span: span) -> compile_error!tval {
+    // an @owns struct holding a fn value (std::func), or a reference to one: called as that fn
+    var f = f0;
+    var held = f.ty;
+    var place = f.c;
+    match (*this.t.get(f.ty)) {
+        .REF(x) => {
+            held = x;
+            place = this.ir.deref(f.c, x);
+        },
+        default => {},
+    }
+    val hf = this.fn_holder(held);
+    if (hf) {
+        if (held == f.ty && !f.lv) {
+            return fail(span, fmt("this {} would be deleted right away; store it in a variable first", this.ty_name(f.ty)));
+        }
+        f = vnew(hf, this.held_fn(place, held));
+        f.lv = true;
+    }
     var ps: std::vec<u32> = {};
     var ret: u32 = VOID;
     var va = false;
