@@ -2220,6 +2220,16 @@ fn written_c_type(t: clang::CXType) -> std::string? {
             }
             x = clang::clang_getTypedefDeclUnderlyingType(d);
         } else {
+            // libc++'s std::size_t is `using ::size_t`: clang's UsingType, which libclang shows as
+            // no kind it names, so by its spelling
+            val sp = type_spelling(x);
+            val n = sp.as_str();
+            if (n == "size_t" || n == "std::size_t") {
+                return S("usize");
+            }
+            if (n == "ptrdiff_t" || n == "std::ptrdiff_t" || n == "ssize_t") {
+                return S("isize");
+            }
             return null;
         }
     }
@@ -8214,6 +8224,12 @@ attach fn cpp_call_as(this: checker&, r: u32, gargs: std::vec<garg>&, args: std:
     var key = fmt3("{}({}){}", copy rsp, copy params, copy body);
     key.push('@');
     key.append_uint(@cast<u64>(unit));
+    // and the Volt types it's called with: the shim's IR params are its first caller's (a cstr and a
+    // cstr? spell one C++ type)
+    for (t) in ptys.items() {
+        key.push(';');
+        key.append(this.ty_name(t).as_str());
+    }
     var idx: u32 = 0;
     val have = this.cpp_shim_keys.get(key.as_str());
     if (have) {
