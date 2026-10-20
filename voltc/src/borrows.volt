@@ -4,7 +4,10 @@
 // place. A change at a place reaches the views into it and its fields: a call to a method std marks
 // @invalidates (push, insert, reserve, clear...), which may move or free the storage, or a new value
 // (`xs = ys`) when the old value had something to delete. The views it reaches go stale; using a
-// stale view warns. A view is stale on the paths where such a change came after it: its id with
+// stale view warns. A fn not attached to a container lends its result the same way out of its
+// first reference parameter (`str_views(&names)`), and a result holding views counts too when it's
+// an owned container of them (std::vec<str>). The end of a block is a change at each local it
+// deletes. A view is stale on the paths where such a change came after it: its id with
 // STALE set rides in cx.moved, so every merge the move checker does (ifs, matches, loops, breaks)
 // applies to stale views too. A closure held in a
 // local is followed where it's called by that name: one that captured a view has the view's loan,
@@ -112,6 +115,30 @@ attach fn changed(this: checker&, p: place_at&, what: str, via: str?, span: span
     val outer = this.cx.cap_roots.get(p.root);
     if (outer) {
         put(&this.cx.cap_changes, { at: { root: *outer, path: p.path, name: p.name }, what: what });
+    }
+}
+
+// the block of scope sc ended at span (its closing brace): each local it deletes, unless given away
+// on some path, is gone, so the views into it go stale
+attach fn scope_ended(this: checker&, sc: usize, span: span) -> void {
+    if (this.cx.dead > 0 || this.cx.loans.len == 0) {
+        return;
+    }
+    for (x&) in this.cx.scopes.at(sc).exits.items() {
+        match (*x) {
+            .DROP(c, d, flag) => {
+                if (!this.cx.moved.has(c)) {
+                    val p: place_at = { root: c, path: "", name: "" };
+                    for (e) in this.cx.loans.iter() {
+                        if (covers(&p, &e.value->owner)) {
+                            this.cx.moved.add(*e.key | STALE);
+                            this.cx.stale_notes.put(*e.key, { span: span, at: this.local_at(c), what: "", gone: true });
+                        }
+                    }
+                }
+            },
+            default => {},
+        }
     }
 }
 
@@ -320,13 +347,16 @@ attach fn warn_stale(this: checker&, c: u32, span: span, next_pass: bool) -> voi
     if (note) {
         what = note->what;
     }
-    val renewed = note != null && what == "";
+    val gone = note != null && note->gone;
+    val renewed = note != null && what == "" && !gone;
     var msg: std::string = {};
     if (ln->uses) {
         // a closure using the view
         msg = fmt2("'{}' uses '{}', which looks into '", S(ln->view_name), S(ln->uses ?? ""));
         msg.append(ln->owner.name);
-        if (renewed) {
+        if (gone) {
+            msg.append("', deleted since at the end of its block");
+        } else if (renewed) {
             msg.append("', given a new value since");
         } else {
             msg.append("', changed since by ");
@@ -335,6 +365,12 @@ attach fn warn_stale(this: checker&, c: u32, span: span, next_pass: bool) -> voi
         if (next_pass) {
             msg.append(" (on the loop's next pass)");
         }
+    } else if (gone) {
+        msg = fmt2("'{}' looks into '{}', which was deleted at the end of its block: keep '", S(ln->view_name), S(ln->owner.name));
+        msg.append(note->at);
+        msg.append("' as long as '");
+        msg.append(ln->view_name);
+        msg.append("' (declare it outside the block)");
     } else {
         msg = fmt2("'{}' looks into '{}', ", S(ln->view_name), S(ln->owner.name));
         if (renewed) {
@@ -356,7 +392,9 @@ attach fn warn_stale(this: checker&, c: u32, span: span, next_pass: bool) -> voi
     var d: diag = { span: span, msg: move msg, warning: true };
     if (note) {
         var lm: std::string = {};
-        if (note->via) {
+        if (gone) {
+            lm = fmt("{} is deleted here", S(note->at));
+        } else if (note->via) {
             lm = fmt("{}() ", S(note->via ?? ""));
             if (renewed) {
                 lm.append("gives ");
@@ -383,14 +421,14 @@ attach fn warn_stale(this: checker&, c: u32, span: span, next_pass: bool) -> voi
 // out a view in its own right (a reference, pointer, slice, str or iterator; not one of its generic
 // parameters, such as pop's T, which is a value whatever it holds)
 attach fn lent_by(this: checker&, v: tval, inst: u32, owner: place_at?) -> tval {
-    if (owner == null || !this.is_view(v.ty)) {
+    if (owner == null) {
         return v;
     }
     var declared = false;
     match (this.item_of(this.fi(inst).decl).kind) {
         .FN(f&) => {
             if (f.ret) {
-                declared = this.view_type_ast(&f.ret, this.fi(inst).env);
+                declared = this.gives_views(v.ty, &f.ret, this.fi(inst).env);
             }
         },
         default => {},
@@ -401,6 +439,67 @@ attach fn lent_by(this: checker&, v: tval, inst: u32, owner: place_at?) -> tval 
     var r = v;
     r.loan = owner;
     return r;
+}
+
+// whether a value of type t, declared as a, holds views it gives out: a view (view_type_ast), or an
+// owned generic container whose type arguments, declared outside the fn's generic parameters, are
+// such (std::vec<str>, not std::vec<T> with T = str, which holds values whatever they are)
+attach fn gives_views(this: checker&, t: u32, a: ty&, env: u32) -> bool {
+    if (this.is_view(t)) {
+        return this.view_type_ast(a, env);
+    }
+    var s: u32 = 0;
+    match (*this.t.get(t)) {
+        .STRUCT(x) => { s = x; },
+        default => { return false; },
+    }
+    match (a.kind) {
+        .PATH(p&) => {
+            val given = &p.segs.at(p.segs.len - 1).args;
+            if (*given == null) {
+                return false;
+            }
+            // (the arguments left out, last, take their defaults: std::vec<str>'s allocator)
+            val gas = &(*given).value;
+            if (gas.len > this.si(s).args.len) {
+                return false;
+            }
+            for (i) in 0..gas.len {
+                // (copied: gives_views may make new struct instances, moving si's storage)
+                val g = *this.si(s).args.at(i);
+                match (g) {
+                    .TY(x) => {
+                        match (*gas.at(i)) {
+                            .TYPE(ga&) => {
+                                if (this.gives_views(x, ga, env)) {
+                                    return true;
+                                }
+                            },
+                            default => {},
+                        }
+                    },
+                    default => {},
+                }
+            }
+        },
+        default => {},
+    }
+    return false;
+}
+
+// the place a reference argument points at: what `&e` takes, or the reference local (or field chain
+// of one) e passed on, else null
+attach fn arg_place(this: checker&, e: expr&) -> place_at? {
+    match (e.kind) {
+        .UNARY(op, x) => {
+            if (op == unop::ADDR) {
+                return this.place_at_of(x);
+            }
+            return null;
+        },
+        default => {},
+    }
+    return this.place_at_of(e);
 }
 
 // whether a declared type gives out a view in its own right: a reference, pointer or slice, an

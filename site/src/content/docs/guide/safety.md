@@ -116,6 +116,13 @@ change. Volt has no lifetimes to write and no borrow errors; it looks at each fu
   (`|xs&| () { xs.push(1) ... }`) makes that change at each call. What isn't followed: the same
   container reached through another name (`val r = &this.items; r.push(1)`), and a closure
   stored in a field, returned, passed to a function or captured by another closure that calls it.
+  A function that isn't a method lends its result out of its first reference parameter the same
+  way, and a result that's an owned container of views counts as one
+  (`fn str_views(xs: std::vec<std::string>&) -> std::vec<str>`: `tp = str_views(&names)` looks
+  into `names`; a generic `T` it gives back is a value, whatever it holds). The end of a block is
+  a change too, for each local it deletes: a view held outside the block warns when it's read
+  after it (`'tp' looks into 'names', which was deleted at the end of its block`), unless the
+  local was given away.
 - **A reference to a local, returned in a value.** Returning `&n` itself, or a literal holding it,
   is an error. Returning a local that holds a reference to one of the function's own locals (a
   struct with `{ x: &n }`, a `v.x = &n`, a pointer `val r = &n`) warns: what it refers to is gone

@@ -1,0 +1,15 @@
+warning: 'tp' looks into 'names', which was deleted at the end of its block: keep 'names' as long as 'tp' (declare it outside the block)
+   ┌─ tests/diag/borrow_fn_views.volt:42:18
+   │
+41 │     }
+   │     - names is deleted here
+42 │     std::println(tp.len);
+   │                  ^^
+
+warning: 'w' looks into 'grow', whose items may have moved or been freed since: get 'w' again after the change
+   ┌─ tests/diag/borrow_fn_views.volt:71:18
+   │
+70 │     grow.push(std::string::from("u")) catch @panic("out of memory");
+   │     --------------------------------- grow.push may move or free them here
+71 │     std::println(w.len);
+   │                  ^

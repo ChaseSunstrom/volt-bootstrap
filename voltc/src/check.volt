@@ -272,6 +272,7 @@ struct stale_note {
     at: str;
     what: str;
     via: str? = null;
+    gone: bool = false; // the local at was deleted where its block ended (span: the block's closing brace)
 }
 
 // a change a closure's body makes at a container it captured (its place outside the closure), made
