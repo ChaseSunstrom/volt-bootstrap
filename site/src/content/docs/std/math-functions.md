@@ -143,8 +143,9 @@ array of its lanes (`f32x4` is `mathlib_array_f32_4`, `float[4]` in C#, `[f32; 4
 because C has no vector type every language shares and a vector's alignment is its whole size.
 `voltc lib` (`--shared`, `--static` or `--standalone`) puts a shim in front of such an export fn,
 copying the lanes between the array and the vector; built any other way, it takes the vector as the
-platform passes one, which the bindings don't describe. A vector elsewhere in a signature (a field,
-an optional, a callback's parameter) has no C form.
+platform passes one, which the bindings don't describe. A vector elsewhere in a signature (an
+optional, an `E!`, a callback's parameter) has no C form, and a struct holding one crosses as a
+handle.
 
 ## Random numbers
 
