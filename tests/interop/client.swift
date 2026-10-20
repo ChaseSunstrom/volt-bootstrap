@@ -83,3 +83,5 @@ let shelf = ml_shelf(labels: (ml_label(name: "abc", sizes: (2, 2, 2), at: vec2(x
 var backs = [shelf.labels.0, shelf.labels.1]
 let bk = ml_labels_back(&backs)
 print("pair", ml_pair_len(ml_pair(names: ("ab", "cde"), n: 1)), po.names.0, po.names.1, "shelf", ml_shelf_len(shelf), "back", bk.count, bk[0].name)
+let vr = ml_vadd([1, 2, 3, 4], [5, 6, 7, 8])
+print("vector", Int(vr[0]), Int(vr[1]), Int(vr[2]), Int(vr[3]), ml_vsum8([1, 2, 3, 4, 5, 6, 7, 8]))

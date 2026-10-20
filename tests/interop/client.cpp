@@ -119,4 +119,6 @@ int main() {
     mathlib::ml_shelf shelf{{mathlib::ml_label{"abc", {2, 2, 2}, {3, 0}}, mathlib::ml_label{"de", {1, 1, 1}, {0, 0}}}, 1};
     auto bk = mathlib::ml_labels_back(shelf.labels);
     std::printf("pair %lld %.*s %.*s shelf %lld back %zu %.*s\n", (long long)mathlib::ml_pair_len({{"ab", "cde"}, 1}), (int)po.names[0].len, (const char *)po.names[0].ptr, (int)po.names[1].len, (const char *)po.names[1].ptr, (long long)mathlib::ml_shelf_len(shelf), bk.len, (int)bk.ptr[0].name.len, (const char *)bk.ptr[0].name.ptr);
+    auto vr = mathlib::ml_vadd({1, 2, 3, 4}, {5, 6, 7, 8});
+    std::printf("vector %d %d %d %d %lld\n", (int)vr[0], (int)vr[1], (int)vr[2], (int)vr[3], (long long)mathlib::ml_vsum8({1, 2, 3, 4, 5, 6, 7, 8}));
 }
