@@ -18,8 +18,9 @@ emulates:
 | `cortex-m3` | the LM3S6965 evaluation board (UART0, the user LED on port F) | `thumbv7m-none`, or `thumbv7em-none` (run as a Cortex-M4) with `TARGET=thumbv7em-none` |
 
 `interrupts.volt`, for the Cortex-M boards, handles PendSV and SVCall with Volt functions named for
-them, and the board's IRQ 0 from a Volt table of handlers the linker puts after the system entries;
-it raises each from software and prints that it ran.
+them, SysTick (which has none) with its own `volt_fault`, and the board's IRQ 0 from a Volt table of
+handlers the linker puts after the system entries; it raises each from software and prints that it
+ran.
 
 Each has its `board.volt` (the hardware: the console hook, the LED and, on `riscv-virt`, the exit;
 the Cortex-M and AArch64 boards leave the exit to voltc's semihosting default), a linker script, and

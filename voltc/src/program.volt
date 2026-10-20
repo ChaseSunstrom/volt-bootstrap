@@ -134,7 +134,7 @@ attach fn program(this: checker&) -> compile_error!void {
                     placed = placed || attr_named(a, "section");
                 }
                 val pkg = this.pkg_of(d);
-                val mine = (lib == null && pkg == null) || (lib != null && pkg != null && (pkg ?? "") == (lib ?? ""));
+                val mine = lib == null || (pkg != null && (pkg ?? "") == (lib ?? ""));
                 if (placed && mine) {
                     this.global(d, this.item_of(d).span) catch |e| {
                         put(&this.errors, err_diag(&e));

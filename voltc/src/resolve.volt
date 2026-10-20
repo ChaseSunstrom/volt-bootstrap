@@ -1223,7 +1223,7 @@ attach fn global(this: checker&, d: u32, span: span) -> compile_error!global_ref
     for (a&) in this.item_of(d).attrs.items() {
         tls = tls || attr_named(a, "thread_local");
         if (attr_named(a, "section")) {
-            section = attr_str(a);
+            section = attr_str(a) ?? return fails(a.span, "@section takes the section's name: @section(\".data.table\")");
         }
     }
     // a global in a section is data the image carries (a vector table read before anything runs):

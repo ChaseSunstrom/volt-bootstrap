@@ -3069,7 +3069,7 @@ attach fn llvm_build(this: checker&, g: lg&) -> std::string {
     } else if (bare) {
         // the start code, and the hooks the program leaves to the defaults
         var taken: std::vec<str> = {};
-        for (n) in CORTEX_HANDLERS {
+        for (n) in START_WEAK {
             if (defines(g.m, n)) {
                 put(&taken, n);
             }

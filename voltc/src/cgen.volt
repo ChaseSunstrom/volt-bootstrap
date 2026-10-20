@@ -2476,6 +2476,11 @@ attach fn global_decl(this: cgen&, out: std::string&, g: u32) -> void {
     } else {
         out.append("extern ");
     }
+    if (gl.section != null && gl.link == linkage::STATIC) {
+        out.append("__attribute__((section(");
+        put_c_str(out, gl.section ?? "");
+        out.append("))) ");
+    }
     if (gl.tls) {
         out.append("_Thread_local ");
     }

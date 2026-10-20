@@ -1,7 +1,8 @@
 // Interrupts, for bare metal on a Cortex-M: a system exception is handled by an export fn of its name
 // (volt_pendsv, volt_svcall, volt_systick...), each else going to volt_fault; device interrupts by a
 // Volt table of handlers the linker puts right after the system ones. Each is raised from software
-// here: PendSV through the ICSR, SVCall by the svc instruction (volt_svc, from the start code), and
+// here: PendSV through the ICSR, SVCall by the svc instruction (volt_svc, from the start code),
+// SysTick (which has no handler here, so it goes to the program's volt_fault) through the ICSR, and
 // the board's device interrupt by pending it in the NVIC. board.volt (one per board directory) has
 // the hardware.
 use std::io;
@@ -9,6 +10,7 @@ use std::io;
 var pendsv_runs: u32 = 0;
 var svcall_runs: u32 = 0;
 var irq_runs: u32 = 0;
+var faults: u32 = 0;
 
 export fn volt_pendsv() -> void {
     pendsv_runs += 1;
@@ -16,6 +18,12 @@ export fn volt_pendsv() -> void {
 
 export fn volt_svcall() -> void {
     svcall_runs += 1;
+}
+
+// every system exception without a handler of its own comes here (SysTick, in this program):
+// replacing voltc's default, which stops the CPU
+export fn volt_fault() -> void {
+    faults += 1;
 }
 
 export fn on_device_irq() -> void {
@@ -37,6 +45,10 @@ fn main() -> i32 {
     std::println("pendsv ran {}", pendsv_runs);
     volt_svc();
     std::println("svcall ran {}", svcall_runs);
+    // SysTick: no volt_systick here, so pending it (ICSR's PENDSTSET) runs volt_fault
+    @volatile_write(board::reg(0xE000ED04), 0x04000000);
+    while (@volatile_read(&faults) == 0) {}
+    std::println("systick went to volt_fault {}", faults);
     // IRQ 0: enabled (ISER) and pended (ISPR) in the NVIC
     @volatile_write(board::reg(0xE000E100), 1);
     @volatile_write(board::reg(0xE000E200), 1);

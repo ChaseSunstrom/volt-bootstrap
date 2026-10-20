@@ -1,4 +1,5 @@
 pendsv ran 1
 svcall ran 1
+systick went to volt_fault 1
 irq ran 1
 interrupts on micro:bit (Cortex-M0)

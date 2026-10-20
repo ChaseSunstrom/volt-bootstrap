@@ -94,6 +94,35 @@ fn hook_defaults_asm(t: target_info, exit: bool, console: bool) -> std::string {
 // the Cortex-M system exceptions a program handles by an export fn of the name (the vector table's
 // entries 2 to 15 that aren't reserved)
 val CORTEX_HANDLERS: str[9] = { "volt_nmi", "volt_hard_fault", "volt_mem_manage", "volt_bus_fault", "volt_usage_fault", "volt_svcall", "volt_debug_mon", "volt_pendsv", "volt_systick" };
+// every name the start code defines weakly, for a program's export fn to replace
+val START_WEAK: str[11] = { "volt_nmi", "volt_hard_fault", "volt_mem_manage", "volt_bus_fault", "volt_usage_fault", "volt_svcall", "volt_debug_mon", "volt_pendsv", "volt_systick", "volt_fault", "volt_svc" };
+
+fn has(xs: std::vec<str>&, n: str) -> bool {
+    for (x) in xs.items() {
+        if (x == n) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// name's weak default (its lines after the label), unless the program defines it
+fn weak_default(out: std::string&, name: str, thumb: bool, body: str, taken: std::vec<str>&) -> void {
+    if (has(taken, name)) {
+        return;
+    }
+    if (thumb) {
+        out.append("    .thumb_func\n");
+    }
+    out.append("    .weak ");
+    out.append(name);
+    out.append("\n    .type ");
+    out.append(name);
+    out.append(",%function\n");
+    out.append(name);
+    out.append(":\n");
+    out.append(body);
+}
 
 // the start code for t, as module-level assembly; taken: the handlers the program defines (the
 // others get the default, which goes to volt_fault)
@@ -132,12 +161,7 @@ fn start_asm(t: target_info, taken: std::vec<str>&) -> std::string {
             "    bx r0",
             "    .ltorg",
             "",
-            "    .thumb_func",
-            "    .weak volt_svc",
-            "    .type volt_svc,%function",
-            "volt_svc:",
-            "    svc #0",
-            "    bx lr",
+            "{SVC}",
             "",
             "    .section .text.volt_start,\"ax\",%progbits",
             "    .thumb",
@@ -178,11 +202,7 @@ fn start_asm(t: target_info, taken: std::vec<str>&) -> std::string {
             "7:  b 7b",
             "    .ltorg",
             "",
-            "    .thumb_func",
-            "    .weak volt_fault",
-            "    .type volt_fault,%function",
-            "volt_fault:",
-            "    b volt_fault",
+            "{FAULT}",
             "",
             "    .thumb_func",
             "    .globl volt_heap_start",
@@ -225,21 +245,16 @@ fn start_asm(t: target_info, taken: std::vec<str>&) -> std::string {
                 // every system handler the program leaves out: one stub, to volt_fault (which a program
                 // can define too)
                 for (n) in CORTEX_HANDLERS {
-                    var mine = false;
-                    for (x) in taken.items() {
-                        mine = mine || x == n;
-                    }
-                    if (mine) {
-                        continue;
-                    }
-                    out.append("    .thumb_func\n    .weak ");
-                    out.append(n);
-                    out.append("\n    .type ");
-                    out.append(n);
-                    out.append(",%function\n");
-                    out.append(n);
-                    out.append(":\n");
+                    weak_default(&out, n, true, "", taken);
                 }
+                continue;
+            }
+            if (l == "{SVC}") {
+                weak_default(&out, "volt_svc", true, "    svc #0\n    bx lr\n", taken);
+                continue;
+            }
+            if (l == "{FAULT}") {
+                weak_default(&out, "volt_fault", true, "    b volt_fault\n", taken);
                 continue;
             }
             out.append(l);
@@ -252,7 +267,7 @@ fn start_asm(t: target_info, taken: std::vec<str>&) -> std::string {
         return out;
     }
     if (t.arch == "aarch64") {
-        return aarch64_start();
+        return aarch64_start(taken);
     }
     // RISC-V: the init_array walk and argv take a pointer's size
     var ld = "lw";
@@ -344,7 +359,7 @@ fn start_asm(t: target_info, taken: std::vec<str>&) -> std::string {
 // AArch64 (entered at EL1 with the MMU off, as qemu's virt board starts an ELF): the stack, FP and
 // SIMD on (CPACR_EL1, or the first float traps), the exception vectors (each to volt_fault for now),
 // .data, .bss, constructors, main, volt_exit
-fn aarch64_start() -> std::string {
+fn aarch64_start(taken: std::vec<str>&) -> std::string {
     val lines: str[] = {
         "    .section .text.volt_start,\"ax\",%progbits",
         "    .globl _start",
@@ -385,10 +400,7 @@ fn aarch64_start() -> std::string {
         "7:  b 7b",
         "    .ltorg",
         "",
-        "    .weak volt_fault",
-        "    .type volt_fault,%function",
-        "volt_fault:",
-        "    b volt_fault",
+        "{FAULT}",
         "",
         "    .globl volt_heap_start",
         "    .type volt_heap_start,%function",
@@ -431,6 +443,10 @@ fn aarch64_start() -> std::string {
     };
     var out: std::string = {};
     for (l) in lines {
+        if (l == "{FAULT}") {
+            weak_default(&out, "volt_fault", false, "    b volt_fault\n", taken);
+            continue;
+        }
         out.append(l);
         out.push('\n');
     }

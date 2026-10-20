@@ -147,7 +147,7 @@ right after it: `KEEP(*(.vector_table)) KEEP(*(.vector_table.irq))`) and define 
 | Symbol | Is |
 | --- | --- |
 | `__stack_top` | the top of the stack (it grows down) |
-| `__data_start`, `__data_end` | where `.data` runs, in RAM |
+| `__data_start`, `__data_end` | where `.data` runs, in RAM (4-byte aligned, as the next two are: the start code copies and zeroes a word at a time) |
 | `__data_load` | where `.data` is loaded (in flash; the same place when everything is in RAM) |
 | `__bss_start`, `__bss_end` | `.bss`, zeroed at start |
 | `__init_array_start`, `__init_array_end` | the constructors to run before `main` |
@@ -158,7 +158,8 @@ right after it: `KEEP(*(.vector_table)) KEEP(*(.vector_table.irq))`) and define 
 [examples/bare-metal](https://github.com/ChaseSunstrom/volt-bootstrap/tree/main/examples/bare-metal)
 has blinky for four boards qemu emulates: its RISC-V `virt` board, its AArch64 `virt` board, the
 LM3S6965 (a Cortex-M3) and the BBC micro:bit (an nRF51822, a Cortex-M0 with 16 KB of RAM), and on
-the two Cortex-M boards an interrupts program that handles PendSV, SVCall and a device interrupt.
+the two Cortex-M boards an interrupts program that handles PendSV, SVCall, SysTick (through its own `volt_fault`) and a
+device interrupt.
 Each has its `board.volt`, its linker script and a `run.sh` that builds it and runs it under qemu.
 The test suite runs each, in debug and release builds, with the C compiler set to `false`.
 
