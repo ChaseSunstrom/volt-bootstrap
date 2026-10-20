@@ -288,3 +288,17 @@ jobs:
       - name: Report panics 11-20
         if: failure()
         run: sh .github/report-failures.sh test.log failure detail 2
+      # (T-0381: cpp_errors, an exception thrown in a Volt callback, ends in libunwind's "pc not in
+      # table": the functions at those addresses, from the program rebuilt at a fixed base)
+      - name: C++ unwind facts
+        if: failure()
+        run: |
+          set +e
+          V=$(ls -t target/tmp/voltc-stage1-*.exe 2>/dev/null | head -1)
+          [ -n "$V" ] || { echo "no stage-1 voltc under target/tmp"; exit 0; }
+          cd tests/interop
+          VOLT_STD=../../std "$V" build cpp_errors.volt --cc -Wl,--disable-dynamicbase -o ce.exe || exit 0
+          ./ce.exe > ce.out 2> ce.err; echo "exit $?"; tail -3 ce.out; head -8 ce.err
+          for pc in $(grep -o 'pc=0x[0-9A-Fa-f]*' ce.err | cut -d= -f2 | sort -u); do echo "::warning::unwind $pc: $(llvm-symbolizer --obj=ce.exe $pc | head -2 | tr '\n' ' ')"; done
+          llvm-readobj --sections ce.exe | grep -E "Name: \.(pdata|xdata|eh_frame)"
+          rm -f ce.exe ce.out ce.err
