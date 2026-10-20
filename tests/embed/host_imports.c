@@ -10,9 +10,10 @@
 
 static volt_str S(const char *s) { return (volt_str){ (const uint8_t *)s, strlen(s) }; }
 
-// what the header's C++ needs (allocation, its library's errors, exceptions; the glue's panic prints
-// with fprintf and leaves a call C++ made through longjmp), as this platform names it
-#define ALLOW_CXX "_Znwm", "_ZdlPvm", "_ZSt20__throw_length_errorPKc", "_ZSt28__throw_bad_array_new_lengthv", "_ZSt17__throw_bad_allocv", "__gxx_personality_v0", "__cxa_begin_catch", "__cxa_end_catch", "__cxa_rethrow", "_Unwind_Resume", "_ZSt9terminatev", "_ZSt17current_exceptionv", "_ZTVN10__cxxabiv117__class_type_infoE", "_ZSt21__glibcxx_assert_failPKciS0_S0_", "fprintf", "stderr", "longjmp",
+// what the header's C++ needs (allocation, its library's errors, exceptions and the typeinfo of
+// std::exception, which the glue catches by; the glue's panic prints with fprintf and leaves a call
+// C++ made through longjmp), as this platform names it
+#define ALLOW_CXX "_Znwm", "_ZdlPvm", "_ZSt20__throw_length_errorPKc", "_ZSt28__throw_bad_array_new_lengthv", "_ZSt17__throw_bad_allocv", "__gxx_personality_v0", "__cxa_begin_catch", "__cxa_end_catch", "__cxa_rethrow", "_Unwind_Resume", "_ZSt9terminatev", "_ZSt17current_exceptionv", "_ZTVN10__cxxabiv117__class_type_infoE", "_ZTISt9exception", "_ZSt21__glibcxx_assert_failPKciS0_S0_", "fprintf", "stderr", "longjmp",
 
 static void say_error(voltvm_volt_vm *vm, const char *what) {
     volt_str e = volt_vm_error(vm);
