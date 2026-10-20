@@ -845,6 +845,20 @@ attach fn type_garg(this: parser&, closer: str) -> garg? {
     val t = this.parse_type() catch |e| {
         return null;
     };
+    // a bare @typeof(x) is read as the expression, which sees the locals where it's used
+    match (t.kind) {
+        .EXPR(x) => {
+            match (x.kind) {
+                .BUILTIN(n, g, a) => {
+                    if (n == "typeof") {
+                        return null;
+                    }
+                },
+                default => {},
+            }
+        },
+        default => {},
+    }
     if (this.is(",") || this.is(closer)) {
         return garg::TYPE(move t);
     }
