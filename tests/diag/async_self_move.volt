@@ -17,6 +17,16 @@ async fn sliced() -> i32 {
     return s[0];
 }
 
+async fn walking() -> i32 {
+    var xs: i32[3] = { 1, 2, 3 };
+    var total = 0;
+    for (x&) in xs {
+        suspend;
+        total += *x;
+    }
+    return total;
+}
+
 async fn texts() -> usize {
     var s = std::string::from("hi");
     val v = s.as_str();
@@ -39,5 +49,7 @@ fn main() -> void {
     val f = e;
     val g = async outer();
     val h = g;
+    val w = async walking();
+    val w2 = w;
     std::println("{}", await f);
 }

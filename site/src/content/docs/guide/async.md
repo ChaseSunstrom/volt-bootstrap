@@ -99,7 +99,9 @@ fn main() -> void {
 
 A `defer` can `suspend` too: the frame pauses there on its way out (a `return`, a `try`'s early
 return, a `break`, the end of a block or of the fn). A frame deleted while paused in a defer, or
-before it reached one, finishes its defers without pausing.
+before it reached one, finishes its defers without pausing, so a defer that waits in a loop
+(`while (!ready()) { suspend; }`) would never end there: give such a loop a way out that doesn't
+need resuming.
 
 ## Moving frames
 

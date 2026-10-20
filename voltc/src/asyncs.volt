@@ -97,6 +97,7 @@ attach fn async_entry(this: checker&, idx: u32) -> u32 {
     var name = S(this.fi(idx).c_name);
     var link = linkage::STATIC;
     var real_name: str? = null;
+    var attrs: fn_attrs = {};
     if (this.is_async_entry(idx)) {
         link = this.fn_linkage(idx);
         var bn = S(this.fi(idx).c_name);
@@ -106,12 +107,15 @@ attach fn async_entry(this: checker&, idx: u32) -> u32 {
         b.link = linkage::STATIC;
         real_name = b.real_name;
         b.real_name = null;
+        attrs = b.attrs; // @section and the like belong to the C symbol
+        b.attrs = {};
     } else {
         name.append("_entry");
     }
     val origin = this.item_of(this.fi(idx).decl).span;
     var irf: ir_fn = { name: this.intern(move name), params: {}, ret: ret, link: link, used: true, origin: origin, about: this.fi(idx).name };
     irf.real_name = real_name;
+    irf.attrs = attrs;
     var args: std::vec<u32> = {};
     val bl = copy this.ir.fn_at(bf).locals;
     for (pid&) in this.ir.fn_at(bf).params.items() {
