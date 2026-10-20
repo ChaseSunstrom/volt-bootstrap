@@ -144,9 +144,11 @@ fn main() -> void {
 // expect: 6 7 13
 ```
 
-`std::func<F>::from_closure(c)` makes one from a closure `c` already in a variable. A closure that
-captures by reference (`|n&|`) and is kept in a func warns: the func mustn't outlive what it points
-at.
+`std::func<F>::from_closure(c)` makes one from a closure `c` already in a variable. A closure
+literal that captures by reference (`|n&|`) and becomes a func warns: the func mustn't outlive what
+it points at. A func calls from a struct's field (`h.f(1)`) and through a reference too; the `fn`
+value it lends lives only as long as it does, so a function returns the func itself, not that
+`fn`.
 
 ## Owning captures
 

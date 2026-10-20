@@ -1782,12 +1782,16 @@ attach fn method_call(this: checker&, r: tval, name: str, gargs: std::vec<garg>&
             val fs = try this.struct_fields(sid, span);
             for (f&) in fs.items() {
                 if (f.name == name) {
+                    // a field holding a fn (a C fn pointer, a fn value, a std::func) is called
+                    var callable = this.fn_holder(f.ty) != null;
                     match (*this.t.get(f.ty)) {
-                        .FN_PTR(ps, rt, va) => {
-                            val fv = try this.field(r, name, span);
-                            return this.call_value(fv, args, span);
-                        },
+                        .FN_PTR(ps, rt, va) => { callable = true; },
+                        .FN_VAL(ps, rt) => { callable = true; },
                         default => {},
+                    }
+                    if (callable) {
+                        val fv = try this.field(r, name, span);
+                        return this.call_value(fv, args, span);
                     }
                 }
             }

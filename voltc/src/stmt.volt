@@ -657,6 +657,10 @@ attach fn ret(this: checker&, v: expr*, span: span) -> compile_error!tval {
         try this.escapes(e, rt);
         this.warn_held_return(e);
         val x = try this.expr(e, rt);
+        // a std::func in this function's own memory lends its fn only while it lives
+        if ((this.fn_holder(x.ty) ?? NO_TY) == rt && x.via == null && x.root != null) {
+            return fail(e.span, fmt3("can't return '{}' as a {}: the fn value a {} lends is gone once it is, when this function returns (return the std::func itself)", S(x.root ?? ""), this.ty_name(rt), this.ty_name(x.ty)));
+        }
         val rv = try this.take_into(x, rt, e.span);
         this.note_return(&rv);
         value = rv;

@@ -87,18 +87,31 @@ attach fn closure_into(this: checker&, cl: closure&, want: u32, via: str, span: 
     var c = copy *cl;
     match (*this.t.get(f)) {
         .FN_VAL(ps&, r) => {
-            if (c.generics.len == 0) {
-                if (c.params.len != ps.len) {
-                    return fail(span, fmt2("expected a closure taking {} parameters, this one takes {}", unum(@cast<u64>(ps.len)), unum(@cast<u64>(c.params.len))));
-                }
-                for (i) in 0..c.params.len {
-                    if (c.params.at(i).ty == null) {
-                        c.params.at(i).ty = { kind: type_kind::RESOLVED(*ps.at(i)), span: c.params.at(i).span };
+            if (c.generics.len > 0) {
+                return fail(span, fmt("a generic closure can't be kept in a {}: give its parameters types, or leave them out to take the fn type's", this.ty_name(want)));
+            }
+            if (c.params.len != ps.len) {
+                return fail(span, fmt2("expected a closure taking {} parameters, this one takes {}", unum(@cast<u64>(ps.len)), unum(@cast<u64>(c.params.len))));
+            }
+            // the types written must be the fn type's, said here rather than inside the hook
+            for (i) in 0..c.params.len {
+                val p = c.params.at(i);
+                if (p.ty) {
+                    val pt = try this.resolve_type(&p.ty, this.cx.env);
+                    if (pt != *ps.at(i)) {
+                        return fail(p.span, fmt4("'{}' is a {} here, but the {} calls this closure with a {}", S(p.name), this.ty_name(pt), this.ty_name(want), this.ty_name(*ps.at(i))));
                     }
+                } else {
+                    p.ty = { kind: type_kind::RESOLVED(*ps.at(i)), span: p.span };
                 }
-                if (c.ret == null) {
-                    c.ret = { kind: type_kind::RESOLVED(r), span: span };
+            }
+            if (c.ret) {
+                val rt = try this.resolve_type(&c.ret, this.cx.env);
+                if (rt != r) {
+                    return fail(span, fmt3("this closure gives a {}, but the {} wants a {}", this.ty_name(rt), this.ty_name(want), this.ty_name(r)));
                 }
+            } else {
+                c.ret = { kind: type_kind::RESOLVED(r), span: span };
             }
         },
         default => {},

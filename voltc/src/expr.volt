@@ -267,6 +267,15 @@ attach fn coercible(this: checker&, v: tval&, to: u32) -> bool {
     if (v.ty == to || v.ty == NEVER) {
         return true;
     }
+    // a reference to a fn holder (std::func&) passes as the fn it holds
+    match (*this.t.get(v.ty)) {
+        .REF(x) => {
+            if ((this.fn_holder(x) ?? NO_TY) == to) {
+                return true;
+            }
+        },
+        default => {},
+    }
     val tt = this.t.get(to);
     if (v.lit) {
         match (v.lit) {
@@ -388,6 +397,14 @@ fn retyped(v: tval&, to: u32, c: u32) -> tval {
 attach fn coerce(this: checker&, v: tval, to: u32, span: span) -> compile_error!tval {
     if (v.ty == to) {
         return v;
+    }
+    match (*this.t.get(v.ty)) {
+        .REF(x) => {
+            if ((this.fn_holder(x) ?? NO_TY) == to) {
+                return retyped(&v, to, this.held_fn(this.ir.deref(v.c, x), x));
+            }
+        },
+        default => {},
     }
     if (v.ty == NEVER) {
         return this.never_as(v, to);
