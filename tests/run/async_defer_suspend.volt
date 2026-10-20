@@ -69,6 +69,21 @@ async fn early(name: str) -> void {
     std::println("{} never", name);
 }
 
+// cancelled while paused in a loop pass's defer: it finishes that defer and the ones around it,
+// and doesn't go back into the loop
+async fn loop_cancel() -> void {
+    defer { std::println("outer defer"); }
+    for (i) in 0..3 {
+        defer {
+            std::println("pass {} ending", i);
+            suspend;
+            std::println("pass {} ended", i);
+        }
+        std::println("pass {}", i);
+    }
+    std::println("after the loop");
+}
+
 fn main() -> void {
     val a = async by_return("ret");
     std::println("paused");
@@ -87,6 +102,9 @@ fn main() -> void {
     }
     {
         val f = async early("early");
+    }
+    {
+        val g = async loop_cancel();
     }
 }
 // expect: ret closing
@@ -111,4 +129,8 @@ fn main() -> void {
 // expect: drop 1
 // expect: early closing
 // expect: early closed
+// expect: pass 0
+// expect: pass 0 ending
+// expect: pass 0 ended
+// expect: outer defer
 // expect: drop 1

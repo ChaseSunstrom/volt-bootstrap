@@ -169,6 +169,7 @@ attach fn program(this: checker&) -> compile_error!void {
         try this.main_wrapper(main ?? 0, mi);
     }
     try this.check_frame_cycles();
+    this.warn_frame_moves();
     this.error_table();
 }
 
@@ -185,7 +186,7 @@ attach fn main_wrapper(this: checker&, main: u32, mi: u32) -> compile_error!void
     put(&this.ir.fns, bx(move irf));
     val f = @cast<u32>(this.ir.fns.len - 1);
     this.cx = new_cx(I32, 0, f);
-    val call = this.call_fn(this.fi(mi).ir, {}, ret);
+    val call = this.call_fn(this.entry_ir(mi), {}, ret);
     // main's result as an int
     var body: std::vec<u32> = {};
     var code: u32 = 0;
@@ -302,9 +303,6 @@ attach fn gen_fn(this: checker&, idx: u32) -> compile_error!void {
     this.cx = new_cx(ret, inst.env, irf);
     this.cx.body = body_key(BODY_FN, idx);
     if (f.is_async) {
-        if (f.extern_abi != null || f.is_export || inst.c_name == "v_main") {
-            return fails(it.span, "main, extern and export fns can't be async");
-        }
         if (ret == NEVER) {
             return fails(it.span, "an async fn can't return never");
         }

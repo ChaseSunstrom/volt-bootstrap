@@ -1,6 +1,6 @@
 // flags: --leak-check
 // a frame moves like any owned value: into another variable or a vec, resumed and awaited where it
-// went, and cancelled (its defers running once) where it ends up
+// went, and cancelled (its defers running once) where it ends up (a vec deletes its last first)
 use std::io;
 
 async fn ticker(name: str, n: i32) -> i32 {
@@ -47,5 +47,5 @@ fn main() -> void {
 // expect: c tick 1
 // expect: d tick 1
 // expect: 2 frames
-// expect: c cleaned up
 // expect: d cleaned up
+// expect: c cleaned up

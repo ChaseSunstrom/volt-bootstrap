@@ -14,6 +14,7 @@ async fn count(n: i32) -> i32 {
 
 export async fn twice(n: i32) -> i32 {
     val c = async count(n);
+    suspend;
     return 2 * await c;
 }
 

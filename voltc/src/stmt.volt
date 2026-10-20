@@ -451,14 +451,24 @@ attach fn zero_value(this: checker&, t: u32, span: span) -> compile_error!tval {
 
 // deferred code for scopes [to, from] (innermost first), each checked in its own scope
 attach fn scope_exit_code(this: checker&, from: usize, to: usize, is_err: bool) -> compile_error!std::vec<u32> {
-    this.cx.no_suspend += 1;
+    this.cx.in_exit += 1;
     // the exits' own statements keep their temporaries (each defer has a context of its own)
     val keeping = this.cx.keeping;
     this.cx.keeping = false;
     val r = this.scope_exit_inner(from, to, is_err);
     this.cx.keeping = keeping;
-    this.cx.no_suspend -= 1;
-    return r;
+    this.cx.in_exit -= 1;
+    var out = try r;
+    // an async fn cancelled while a defer here paused carries on after these exits: rather than go back
+    // into the body, it runs the exits of the scopes around them and finishes
+    if (this.cx.frame != null && to > 0 && this.has_suspend(&out)) {
+        var rest = try this.scope_exit_code(to - 1, 0, false);
+        val obj = this.frame_obj();
+        put(&rest, this.ir.assign(this.ir.field(obj, 0, U32), this.ir.int(VOLT_TAKEN, U32)));
+        put(&rest, this.ir.ret(this.ir.boolean(true)));
+        put(&out, this.ir.if_(this.ir.field(obj, 1, BOOL), this.ir.block(move rest), null));
+    }
+    return out;
 }
 
 attach fn scope_exit_inner(this: checker&, from: usize, to: usize, is_err: bool) -> compile_error!std::vec<u32> {
@@ -653,9 +663,9 @@ attach fn ret(this: checker&, v: expr*, span: span) -> compile_error!tval {
     val top = this.cx.scopes.len - 1;
     var defers = try this.scope_exit_code(top, 0, false);
     val slot = this.ret_slot();
-    if (is_eu) {
+    if (is_eu && this.has_errdefer(top)) {
         val err_defers = try this.scope_exit_code(top, 0, true);
-        if (this.has_errdefer(top)) {
+        {
             val code = this.eu_code(rt, slot.c);
             val both = this.ir.if_(this.nonzero(code), this.ir.block(move err_defers), this.ir.block(copy defers));
             defers = nodes(both);

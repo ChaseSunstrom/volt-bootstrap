@@ -418,6 +418,11 @@ attach fn view_type_ast(this: checker&, t: ty&, env: u32) -> bool {
 
 // the name of the local at place c (for messages)
 attach fn local_at(this: checker&, c: u32) -> str {
+    return this.local_in_scope(c) ?? "it";
+}
+
+// the name of the local at place c, when it's in scope
+attach fn local_in_scope(this: checker&, c: u32) -> str? {
     var i = this.cx.scopes.len;
     while (i > 0) {
         i -= 1;
@@ -427,7 +432,7 @@ attach fn local_at(this: checker&, c: u32) -> str {
             }
         }
     }
-    return "it";
+    return null;
 }
 
 // A local whose value holds a reference to one of this function's own locals (`val v = { x: &n }`,
@@ -445,6 +450,17 @@ attach fn held_ref(this: checker&, e: expr&) -> str? {
         },
         .CAST(x, t) => { return this.held_ref(x); },
         .MOVE(x) => { return this.held_ref(x); },
+        .INDEX(b, i) => {
+            // a slice of a local array (xs[..]) points into it
+            match (i.kind) {
+                .RANGE(lo, hi, incl) => {
+                    if (this.local_array(b)) {
+                        return this.frame_root(b);
+                    }
+                },
+                default => {},
+            }
+        },
         .LITERAL(items&) => {
             for (it&) in items.items() {
                 val n = this.held_ref(&it.value);
@@ -471,6 +487,23 @@ attach fn held_ref(this: checker&, e: expr&) -> str? {
         default => {},
     }
     return null;
+}
+
+// is e a local fixed-size array (whose elements are the local's own memory)?
+attach fn local_array(this: checker&, e: expr&) -> bool {
+    match (e.kind) {
+        .PATH(p&) => {
+            if (p.is_single()) {
+                val l = this.lookup_local(p.segs.at(0).name) ?? return false;
+                match (*this.t.get(l.ty)) {
+                    .ARRAY(x, n) => { return true; },
+                    default => {},
+                }
+            }
+        },
+        default => {},
+    }
+    return false;
 }
 
 // the local at place c (of type t) was given e (all of it when whole, else a part): remember the

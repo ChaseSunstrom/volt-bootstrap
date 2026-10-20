@@ -15,13 +15,19 @@ attach fn use_fn(this: checker&, idx: u32) -> void {
         return; // provided by the prelude
     }
     val irf = this.fi(idx).ir;
-    val link = this.fn_linkage(idx);
+    var link = this.fn_linkage(idx);
     val f = this.ir.fn_at(irf);
     f.link = link;
     f.used = true;
     put(&this.ir.order, irf);
     if (this.is_async_fn(idx)) {
         this.async_fns(idx); // its helpers are declared next to it
+        if (this.is_async_entry(idx)) {
+            // the C symbol runs the frame; the builder stays private, here
+            this.async_entry(idx);
+            link = linkage::STATIC;
+            this.ir.fn_at(irf).link = link;
+        }
     }
     val fd = this.fn_decl_of(this.fi(idx).decl);
     var has_body = false;

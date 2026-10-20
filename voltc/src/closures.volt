@@ -416,7 +416,6 @@ attach fn fn_value(this: checker&, inst: u32, fv: u32) -> u32 {
         tramp = *have;
     } else {
         val f = this.fi(inst);
-        val target = f.ir;
         val ret = f.ret;
         var name = S(f.c_name);
         name.append("_tramp");
@@ -441,7 +440,7 @@ attach fn fn_value(this: checker&, inst: u32, fv: u32) -> u32 {
         this.glue_names.put(this.intern(move k), tramp);
         put(&this.ir.order, tramp);
         this.use_fn(inst);
-        val call = this.call_fn(target, move args, ret);
+        val call = this.call_fn(this.entry_ir(inst), move args, ret);
         if (ret == VOID || ret == NEVER) {
             this.ir.fn_at(tramp).body = this.ir.block(nodes(call));
         } else {
