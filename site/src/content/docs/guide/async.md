@@ -145,7 +145,8 @@ A string's or vec's text is in memory of its own, so a view of it moves safely.
 `main`, an `export` fn and an `extern` fn with a body can be async: called from outside Volt (the
 start code, C, an `extern "C" fn` pointer), they run their frame to the end, as a plain call does.
 A bodiless `extern` fn can't be async, since a C function has no frame. `suspend` can't go in a
-`match`, loop or block used as a value. An async fn can't start itself with `async` (its frame
+`match`, loop or block used as a value, or in a defer that a `break` or `continue` from inside an
+expression runs (`x ?? break`). An async fn can't start itself with `async` (its frame
 would hold itself), but it can call or `await` itself.
 
 A Rust crate's `async fn` comes in as a Volt async fn: see

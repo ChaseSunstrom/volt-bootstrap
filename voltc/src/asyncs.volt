@@ -580,7 +580,7 @@ attach fn suspends_in(this: checker&, n: u32, in_value: bool) -> compile_error!v
             if (in_value) {
                 for (i) in 0..this.cx.suspend_labels.len {
                     if (*this.cx.suspend_labels.at(i) == l) {
-                        return fails(*this.cx.suspends.at(i), "suspend can't go inside something that gives a value (a match, loop or block used as a value)");
+                        return fails(*this.cx.suspends.at(i), "suspend can't go inside something that gives a value (a match, loop or block used as a value, or a defer run by a break or continue from inside an expression: x ?? break)");
                     }
                 }
             }
