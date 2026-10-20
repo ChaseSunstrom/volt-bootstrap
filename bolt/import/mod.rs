@@ -124,7 +124,7 @@ pub fn fresh(r: &Req, st: &str) -> bool {
     std::fs::read_to_string(r.out.join("stamp")).is_ok_and(|s| s == st)
         && ["import.volt", "import.flags", "import.deps"].iter().all(|f| r.out.join(f).is_file())
         // the library the flags start with: gone when its target directory was cleaned
-        && std::fs::read_to_string(r.out.join("import.flags")).is_ok_and(|f| f.lines().next().is_some_and(|l| !l.starts_with('/') || Path::new(l).is_file()))
+        && std::fs::read_to_string(r.out.join("import.flags")).is_ok_and(|f| f.lines().next().is_some_and(|l| !Path::new(l).is_absolute() || Path::new(l).is_file()))
 }
 
 /// writes the results, then the stamp that says they're current

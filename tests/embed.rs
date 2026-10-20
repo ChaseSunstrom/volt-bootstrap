@@ -32,17 +32,31 @@ fn embedded_volt() {
     let lib_dir = target.join("debug");
     let bindings = lib_dir.join("bindings");
     let std_dir = Path::new(ROOT).join("std");
+    let bindir = ["llvm-config-23", "llvm-config"].iter().find_map(|t| Command::new(std::env::var("LLVM_CONFIG").unwrap_or(t.to_string())).arg("--bindir").output().ok().filter(|o| o.status.success())).map(|o| Path::new(String::from_utf8_lossy(&o.stdout).trim()).to_path_buf());
+    // Windows has no rpath: a program finds its DLLs beside it, so the hosts are built next to
+    // voltvm.dll, with LLVM's DLLs it links copied there (the first host runs with no PATH at all)
+    let exe_dir = if cfg!(windows) { lib_dir.clone() } else { dir.clone() };
+    if cfg!(windows) {
+        let b = bindir.clone().expect("llvm-config --bindir (LLVM's DLLs)");
+        for dll in ["LLVM-C.dll", "libclang.dll"] {
+            std::fs::copy(b.join(dll), lib_dir.join(dll)).unwrap();
+        }
+    }
     // the C host: built here, run where no C compiler can be found
-    let host = dir.join("host");
+    let host = exe_dir.join("host");
     ok(Command::new("cc").arg("-o").arg(&host).arg(Path::new(ROOT).join("tests/embed/host.c")).arg("-I").arg(&bindings).arg("-L").arg(&lib_dir).arg("-lvoltvm").arg(format!("-Wl,-rpath,{}", lib_dir.display())).output().unwrap(), "compiling host.c");
-    let out = ok(Command::new(&host).arg(&std_dir).env_clear().env("PATH", "/nonexistent").output().unwrap(), "host");
+    let mut c = Command::new(&host);
+    c.arg(&std_dir).env_clear().env("PATH", "/nonexistent");
+    if let Some(root) = std::env::var_os("SYSTEMROOT") {
+        c.env("SYSTEMROOT", root); // (Windows' own DLLs need it)
+    }
+    let out = ok(c.output().unwrap(), "host");
     assert_eq!(out, C_OUT);
     // a script importing a C header and a C++ one, with the compilers on PATH: their code is
     // compiled for it as it loads
-    let imports = dir.join("host_imports");
+    let imports = exe_dir.join("host_imports");
     ok(Command::new("cc").arg("-o").arg(&imports).arg(Path::new(ROOT).join("tests/embed/host_imports.c")).arg("-I").arg(&bindings).arg("-L").arg(&lib_dir).arg("-lvoltvm").arg(format!("-Wl,-rpath,{}", lib_dir.display())).output().unwrap(), "compiling host_imports.c");
     // and in a sandbox through clang of the VM's LLVM (llvm-config's), when it's there
-    let bindir = ["llvm-config-23", "llvm-config"].iter().find_map(|t| Command::new(std::env::var("LLVM_CONFIG").unwrap_or(t.to_string())).arg("--bindir").output().ok().filter(|o| o.status.success())).map(|o| Path::new(String::from_utf8_lossy(&o.stdout).trim()).to_path_buf());
     let clang = bindir.filter(|b| cfg!(target_os = "linux") && b.join("clang").is_file() && b.join("clang++").is_file());
     let mut c = Command::new(&imports);
     c.arg(&std_dir).arg(Path::new(ROOT).join("tests/embed"));
@@ -52,7 +66,7 @@ fn embedded_volt() {
     let out = ok(c.output().unwrap(), "host_imports");
     assert_eq!(out, if clang.is_some() { IMPORTS_OUT } else { "run 53\n" });
     // scripts using earlier scripts as packages
-    let packages = dir.join("host_packages");
+    let packages = exe_dir.join("host_packages");
     ok(Command::new("cc").arg("-o").arg(&packages).arg(Path::new(ROOT).join("tests/embed/host_packages.c")).arg("-I").arg(&bindings).arg("-L").arg(&lib_dir).arg("-lvoltvm").arg(format!("-Wl,-rpath,{}", lib_dir.display())).output().unwrap(), "compiling host_packages.c");
     assert_eq!(ok(Command::new(&packages).arg(&std_dir).output().unwrap(), "host_packages"), PACKAGES_OUT);
     // Python, through the generated module (which loads the library without RTLD_GLOBAL)
@@ -69,7 +83,7 @@ fn embedded_volt() {
         std::fs::copy(bindings.join("voltvm.rs"), src.join("voltvm.rs")).unwrap();
         let exe = src.join("host");
         ok(Command::new("rustc").args(["--edition", "2021", "-o"]).arg(&exe).arg(src.join("main.rs")).arg("-L").arg(&lib_dir).args(["-l", "voltvm", "-C"]).arg(format!("link-args=-Wl,-rpath,{}", lib_dir.display())).env("RUSTUP_TOOLCHAIN", std::env::var("RUSTUP_TOOLCHAIN").unwrap_or_else(|_| "stable".into())).output().unwrap(), "rustc host.rs");
-        assert_eq!(ok(Command::new(&exe).arg(&std_dir).output().unwrap(), "host.rs"), RS_OUT);
+        assert_eq!(ok(Command::new(&exe).arg(&std_dir).env("PATH", common::path_with(&lib_dir)).output().unwrap(), "host.rs"), RS_OUT);
     }
     let _ = std::fs::remove_dir_all(&dir);
 }

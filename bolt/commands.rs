@@ -428,7 +428,7 @@ fn install_root(o: &Opts) -> PathBuf {
     if let Some(r) = std::env::var_os("BOLT_INSTALL_ROOT") {
         return r.into();
     }
-    PathBuf::from(std::env::var_os("HOME").unwrap_or_else(|| fail("HOME isn't set; pass --root DIR"))).join(".local")
+    crate::manifest::home_dir().unwrap_or_else(|| fail("HOME isn't set; pass --root DIR")).join(".local")
 }
 
 /// what install recorded: ROOT/share/bolt/installs.toml, package -> (source, executables)

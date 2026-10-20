@@ -28,8 +28,8 @@ pub fn cache_dir() -> PathBuf {
     if let Some(d) = std::env::var_os("XDG_CACHE_HOME") {
         return PathBuf::from(d).join("bolt");
     }
-    let home = std::env::var_os("HOME").unwrap_or_else(|| crate::fail("HOME isn't set; set BOLT_HOME for the git cache"));
-    PathBuf::from(home).join(".cache/bolt")
+    let home = crate::manifest::home_dir().unwrap_or_else(|| crate::fail("HOME isn't set; set BOLT_HOME for the git cache"));
+    home.join(".cache/bolt")
 }
 
 /// runs git; its trimmed stdout, or its stderr as the error

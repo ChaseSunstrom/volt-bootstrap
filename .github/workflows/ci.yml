@@ -246,6 +246,23 @@ jobs:
           echo "LLVM_CONFIG=C:/llvm/bin/llvm-config.exe" >> "$GITHUB_ENV"
           echo "C_INCLUDE_PATH=C:/llvm/include" >> "$GITHUB_ENV"
           ls /c/llvm/lib | grep -iE '^(LLVM-C|libclang)' || echo "::warning::no LLVM-C or libclang import library in LLVM's release"
+      # (T-0381: C++ programs end in libunwind's "pc not in table" and a fail-fast, or with a DLL entry
+      # point not found: which runtime DLLs PATH offers, and whether a C++ throw and catch survives
+      # each way of linking)
+      - name: C++ runtime facts
+        run: |
+          set +e
+          $CXX --version | head -1
+          for l in libstdc++.a libc++.a libc++.dll.a libunwind.a libunwind.dll.a; do echo "$l: $($CC -print-file-name=$l)"; done
+          for d in libc++.dll libunwind.dll libstdc++-6.dll libgcc_s_seh-1.dll; do echo "$d on PATH: $(which -a $d 2>/dev/null | tr '\n' ' ')"; done
+          printf '#include <stdexcept>\nextern "C" int f(int x) { try { if (x) throw std::runtime_error("x"); } catch (std::exception &e) { return 7; } return 0; }\n' > t.cpp
+          printf 'int f(int);\nint printf(const char *, ...);\nint main(void) { printf("caught %%d\\n", f(1)); return 0; }\n' > t.c
+          $CXX -c t.cpp -o t.o
+          $CC t.c t.o -lstdc++ -o t1.exe && ./t1.exe; echo "cc -lstdc++: exit $?"
+          $CXX -x c t.c -x none t.o -o t2.exe && ./t2.exe; echo "c++ driver: exit $?"
+          $CC t.c t.o -lstdc++ -o t3.exe && PATH="$(dirname "$(which $CC)"):$PATH" ./t3.exe; echo "cc -lstdc++, llvm-mingw first on PATH: exit $?"
+          $CXX -static -x c t.c -x none t.o -o t4.exe && ./t4.exe; echo "c++ -static: exit $?"
+          rm -f t.cpp t.c t.o t1.exe t2.exe t3.exe t4.exe
       - name: Install Node's types
         run: npm install --no-save --no-package-lock --no-audit --no-fund @types/node
       # Rust's static libraries for what MinGW links (rustc's host here is MSVC's): bolt's rust_target

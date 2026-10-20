@@ -28,6 +28,9 @@ fn use_llvm_config(tool: str) -> bool {
         bolt::cc_arg(std::fmt::format("-L{}", lib.as_str()).as_str());
         bolt::cc_arg("-l:LLVM-C.lib");
         bolt::cc_arg("-l:libclang.lib");
+        // the 8 MB stack Linux's main thread has (Windows gives 1 MB, and voltc compiling itself goes
+        // deeper: it would end without a word)
+        bolt::cc_arg("-Wl,--stack,8388608");
         return true;
     }
     val libs = ask(tool, "--libs") ?? return false;

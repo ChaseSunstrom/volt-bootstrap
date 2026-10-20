@@ -77,9 +77,8 @@ fn must(argv: str[..], what: str) -> std::process::output {
     val r = std::process::capture(argv, "") catch |e| die(std::string::from("can't run a compiler"));
     if (r.code != 0) {
         std::eprint("{}{}", r.out, r.err);
-        var m = std::string::from(what);
-        m.append(" failed");
-        die(move m);
+        // the exit code too: a crash (a stack overflow on Windows) prints nothing of its own
+        die(std::fmt::format("{} failed (exit {})", what, r.code));
     }
     return move r;
 }

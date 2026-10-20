@@ -60,7 +60,8 @@ fn checks_itself_and_emits_readable_c() {
     let cc = Command::new("cc").arg("-Wall").arg("-Werror").arg("-o").arg(&prog).arg(dir.join("program.c")).output().unwrap();
     assert!(cc.status.success(), "cc program.c: {}", String::from_utf8_lossy(&cc.stderr));
     let run = Command::new(&prog).output().unwrap();
-    assert_eq!(String::from_utf8_lossy(&run.stdout), "4 6 12 3\n");
+    // (emitted for os=linux, it leaves Windows' stdout in text mode, which writes \r\n)
+    assert_eq!(String::from_utf8_lossy(&run.stdout).replace("\r\n", "\n"), "4 6 12 3\n");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -130,7 +131,9 @@ fn release_voltc_works() {
         let flags: Vec<&str> = text.lines().find_map(|l| l.strip_prefix("// flags:")).map(|f| f.split_whitespace().collect()).unwrap_or_default();
         // a miscompile can loop forever (std_math did): run_for ends the run and the program it started
         let mut cmd = Command::new(&second);
-        if clang && *backend == "c" {
+        // (not on Windows, where `clang` may be LLVM's release, which targets MSVC's C runtime, and
+        // voltc's C goes through MinGW's cc)
+        if clang && *backend == "c" && !cfg!(windows) {
             cmd.env("CC", "clang");
         }
         cmd.arg("run").arg(file).arg("--std").arg(&std_dir).args(["--backend", backend]).args(&flags);

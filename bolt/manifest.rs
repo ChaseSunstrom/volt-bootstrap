@@ -599,6 +599,12 @@ fn canon(p: &Path) -> Result<PathBuf, String> {
 /// p's canonical path, on Windows without the \\?\ prefix canonicalize gives a drive path: voltc,
 /// the C compiler and a path with a / added after it all take the plain form (a verbatim path
 /// doesn't let / separate its parts)
+/// the user's home directory: $HOME, or on Windows (where a native program often has no HOME)
+/// %USERPROFILE%
+pub fn home_dir() -> Option<PathBuf> {
+    std::env::var_os("HOME").or_else(|| if cfg!(windows) { std::env::var_os("USERPROFILE") } else { None }).map(PathBuf::from)
+}
+
 pub fn real_path(p: &Path) -> std::io::Result<PathBuf> {
     let r = p.canonicalize()?;
     let plain = r.to_str().and_then(|s| s.strip_prefix(r"\\?\")).filter(|rest| rest.as_bytes().get(1) == Some(&b':')).map(PathBuf::from);

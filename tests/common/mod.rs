@@ -179,6 +179,15 @@ pub fn llvm_cc_args() -> Vec<String> {
     flags.into_iter().flat_map(|f| ["--cc".to_string(), f]).collect()
 }
 
+/// $PATH with dir in front: where Windows looks for a program's DLLs, having no rpath (elsewhere it's
+/// only searched for programs, so it changes nothing)
+#[allow(dead_code)]
+pub fn path_with(dir: &std::path::Path) -> std::ffi::OsString {
+    let mut dirs = vec![dir.to_path_buf()];
+    dirs.extend(std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()));
+    std::env::join_paths(dirs).unwrap()
+}
+
 /// voltc/src built by the bootstrap compiler (stage 0), debug: the compiler the tests run. Built once
 /// for a state of voltc/src, std and the bootstrap binary, whichever test binary gets there first (the
 /// others wait on a lock file), and kept in CARGO_TARGET_TMPDIR for the next run

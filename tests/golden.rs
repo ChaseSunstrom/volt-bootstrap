@@ -98,7 +98,8 @@ fn llvm_falls_back_to_c() {
         let out = Command::new(common::voltc()).arg("run").arg(&f).output().unwrap();
         let (got, err) = (String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
         let want = directives(&src, "expect").join("\n");
-        let notes = directives(&src, "expect-stderr").iter().all(|w| err.contains(w.as_str()));
+        // on Windows C is the default backend, so there's nothing to fall back from and no note
+        let notes = cfg!(windows) || directives(&src, "expect-stderr").iter().all(|w| err.contains(w.as_str()));
         assert!(out.status.success() && got.trim_end() == want.trim_end() && notes, "{}:\n--- want\n{want}\n--- got\n{got}\n--- stderr\n{err}", f.display());
     }
 }

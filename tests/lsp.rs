@@ -303,7 +303,11 @@ fn scripted_session() {
     let app_uri = file_uri(app.join("src/main.volt"));
     s.notify("textDocument/didOpen", &format!("{{\"textDocument\":{{\"uri\":\"{app_uri}\",\"languageId\":\"volt\",\"version\":1,\"text\":{}}}}}", js(main)));
     let d = s.diagnostics_for(&app_uri);
-    assert!(d.contains("\"diagnostics\":[]"), "app using geo: {d}");
+    if !d.contains("\"diagnostics\":[]") {
+        // what the server asked bolt (its dependencies come from there)
+        let m = Command::new(env!("CARGO_BIN_EXE_bolt")).args(["metadata", "--offline", "--quiet", "--manifest-path"]).arg(app.join("bolt.toml")).output().unwrap();
+        panic!("app using geo: {d}\n--- bolt metadata ({}):\n{}\n{}", m.status, String::from_utf8_lossy(&m.stdout), String::from_utf8_lossy(&m.stderr));
+    }
     let h = s.request("textDocument/hover", &format!("{{\"textDocument\":{{\"uri\":\"{app_uri}\"}},\"position\":{{\"line\":3,\"character\":29}}}}"));
     assert!(h.contains("fn area(w: i32, h: i32) -> i32"), "hover geo::area: {h}");
     let geo_uri = file_uri(geo.join("lib/shapes.volt"));

@@ -116,7 +116,8 @@ fn broken_links_fail_the_build() {
     std::fs::create_dir_all(dir.join("dist")).unwrap();
     std::fs::write(dir.join("dist/stale.css"), "").unwrap();
     let r = generate(&site, &dir.join("dist"));
-    let err = String::from_utf8_lossy(&r.stderr);
+    // (stage 0 builds the generator, whose stderr stays in the C runtime's text mode on Windows: \r\n)
+    let err = String::from_utf8_lossy(&r.stderr).replace("\r\n", "\n");
     assert!(!r.status.success(), "a broken link passed:\n{err}");
     for link in ["/volt-bootstrap/guide/nope/", "/volt-bootstrap/guide/basics/#nope", "#nope", "/elsewhere/", "/volt-bootstrap/stale.css"] {
         assert!(err.contains(&format!("/guide/basics: broken link {link}\n")), "{link} wasn't reported:\n{err}");
