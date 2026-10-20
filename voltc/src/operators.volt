@@ -459,6 +459,14 @@ attach fn binary(this: checker&, op: binop, ae: expr&, be: expr&, want: u32?, sp
     return r;
 }
 
+// what vector t's lanes hold (VOID when t isn't a vector)
+attach fn vector_lane(this: checker&, t: u32) -> u32 {
+    match (*this.t.get(t)) {
+        .VECTOR(e, n) => { return e; },
+        default => { return VOID; },
+    }
+}
+
 attach fn is_vector(this: checker&, t: u32) -> bool {
     match (*this.t.get(t)) {
         .VECTOR(e, n) => { return true; },

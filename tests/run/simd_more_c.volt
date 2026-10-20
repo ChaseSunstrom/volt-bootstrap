@@ -44,6 +44,10 @@ fn main() -> void {
     comptime val m = ramp();
     std::println("{} {}", m, m == ramp());
     std::println("{}", std::simd::lanes_eq(a, c));
+    comptime val sq = ramp() * ramp() + (ramp() << 1);
+    comptime val same = ramp() == ramp();
+    comptime val differ = sq != ramp();
+    std::println("{} {} {}", sq, same, differ);
 }
 // expect: true false false true
 // expect: false true
@@ -58,3 +62,4 @@ fn main() -> void {
 // expect: { 1, 2, 3, 4, 5, 6, 7, 8 }
 // expect: { 0, 10, 20, 30 } true
 // expect: { true, true, false, true }
+// expect: { 0, 120, 440, 960 } true true
