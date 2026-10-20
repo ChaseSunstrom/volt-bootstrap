@@ -11,7 +11,7 @@ const ROOT: &str = env!("CARGO_MANIFEST_DIR");
 
 /// what every language's mathlib client prints: plain C types, then owned text, slices, optionals, a
 /// callback with the caller's data and an export struct (shims voltc lib adds)
-const MATHLIB_OUT: &str = "add 5\ndot 11\nscale 2 4\nlen 5\nclash 895\ntags 1 2 3 4 34\nbump 8 5\nnext 2\nsqrt 3 1\nerror negative\ngreet hello, volt\nrepeat abab\nrepeat negative\nsum 6.5\nfind 2 none\neach 4 5 6 = 15\ncounter clicks 5\ntake negative\nlabel 15\nlabel_of ab 3 6 9 1.5\nlabels 36\nholder 3\nor 4.5 9.5\nask 18\nrelabel ab 7 6 9\ncount 40\nnote 7\nor_label 15 -1\ngiven 66 9.5\ndeep 10 4 8 words 6\ntext_given 10 17\nturn 321\nturner 321 flipped 654\npair 6 ab cd shelf 18 back 2 abc\n";
+const MATHLIB_OUT: &str = "add 5\ndot 11\nscale 2 4\nlen 5\nclash 895\ntags 1 2 3 4 34\nbump 8 5\nnext 2\nsqrt 3 1\nerror negative\ngreet hello, volt\nrepeat abab\nrepeat negative\nsum 6.5\nfind 2 none\neach 4 5 6 = 15\ncounter clicks 5\ntake negative\nlabel 15\nlabel_of ab 3 6 9 1.5\nlabels 36\nholder 3\nor 4.5 9.5\nask 18\nrelabel ab 7 6 9\ncount 40\nnote 7\nor_label 15 -1\ngiven 66 9.5\ndeep 10 4 8 words 6\ntext_given 10 17\nturn 321\nturner 321 flipped 654\npair 6 ab cd shelf 18 back 2 abc\nvector 6 8 10 12 36\n";
 
 /// stage 1 (common::voltc), and a scratch directory, removed when dropped
 struct Env {
@@ -428,6 +428,12 @@ fn bindings_round_trip() {
         ("export struct gadget { n: i32; }\nattach fn delete(this: gadget&) -> void {}\npublic error oops { BAD, }\nexport fn bad_view(xs: gadget[..]) -> oops!(gadget[..]) { return xs; }\n", "c", "gadget can't be copied"),
         // a callback's E! of a slice of text: nothing would own the copies
         ("use std::string;\npublic error oops { BAD, }\nexport fn bad_cb(f: fn(i32) -> oops!(std::string[..])) -> usize {\n    val xs = f(1) catch return 0;\n    return xs.len;\n}\n", "c", "has no C form"),
+        // a SIMD vector crosses only as an export fn's own parameter or result (the array of its
+        // lanes): in an optional, an E! or a callback it has no C form (a struct holding one is a
+        // handle)
+        ("use std::simd;\nexport fn opt(v: std::simd::f32x4?) -> i32 { return 1; }\n", "c", "has no C form"),
+        ("use std::simd;\npublic error oops { BAD, }\nexport fn maybe(x: i32) -> oops!std::simd::f32x4 { return std::simd::splat<std::simd::f32x4>(1.0); }\n", "c", "has no C form"),
+        ("use std::simd;\nexport fn cb(f: fn(std::simd::i32x4) -> i32) -> i32 { return f({}); }\n", "c", "has no C form"),
         // handles in a slice a Python function gives back: nothing would lend them
         ("export struct gadget { n: i32; }\nexport fn bad_cb(f: fn(i32) -> gadget*[..]) -> usize { return f(1).len; }\n", "python", "nothing would lend the handles"),
     ] {
@@ -1086,11 +1092,36 @@ fn rust_direct() {
         let err = String::from_utf8_lossy(&o.stderr);
         assert!(o.status.code() == Some(101) && err.contains(says), "{prog}: {:?} {err}", o.status);
     }
+    // tuples, arrays, 128-bit integers; a trait with an associated type (Source<i32>), a generic
+    // trait, a supertrait's methods, an associated const; a fn a macro makes
+    let expect = |prog: &str| -> String { std::fs::read_to_string(dir.join(prog)).unwrap().lines().filter_map(|l| l.strip_prefix("// expect: ")).map(|l| format!("{l}\n")).collect() };
+    for backend in ["c", "llvm"] {
+        let mut c = Command::new(&e.voltc);
+        c.args(["run", "--backend", backend, "more.volt"]).current_dir(&dir).env("VOLT_STD", Path::new(ROOT).join("std"));
+        tools(&mut c);
+        assert_eq!(ok(c.output().unwrap(), "voltc run more.volt"), expect("more.volt"), "more ({backend})");
+    }
     let mut c = Command::new(&e.voltc);
-    c.args(["check", "traits.volt"]).current_dir(&dir).env("VOLT_STD", Path::new(ROOT).join("std")).env("VOLT_SHOW_IMPORT", "1");
+    c.args(["check", "more.volt"]).current_dir(&dir).env("VOLT_STD", Path::new(ROOT).join("std")).env("VOLT_SHOW_IMPORT", "1");
     tools(&mut c);
     let shown = String::from_utf8_lossy(&c.output().unwrap().stderr).to_string();
-    assert!(shown.contains("trait Source (its associated type Item)"), "a trait Volt can't declare is left out, with why: {shown}");
+    for what in ["Anchored::START (a const of a type Volt can't name)", "Countdown's Convert (its type arguments)", "Pairs's Source (its type arguments)", "pairs ("] {
+        assert!(shown.contains(what), "left out, with why: {what}\n{shown}");
+    }
+    // rustdoc unable to write its JSON: the crate is read from rustc's expanded source, so what a
+    // macro makes is still there (a cache of its own: the import isn't the one rustdoc read)
+    // (the generated declarations say where they came from: voltc keeps bolt's stderr to itself)
+    let mut c = Command::new(&e.voltc);
+    c.args(["check", "macro.volt"]).current_dir(&dir).env("VOLT_STD", Path::new(ROOT).join("std")).env("VOLT_SHOW_IMPORT", "1");
+    tools(&mut c);
+    c.env("RUSTDOC", "false").env("VOLT_CACHE", e.dir.join("cache-nodoc"));
+    let shown = String::from_utf8_lossy(&c.output().unwrap().stderr).to_string();
+    assert!(shown.contains("was read from rustc's expanded source"), "{shown}");
+    let mut c = Command::new(&e.voltc);
+    c.args(["run", "macro.volt"]).current_dir(&dir).env("VOLT_STD", Path::new(ROOT).join("std"));
+    tools(&mut c);
+    c.env("RUSTDOC", "false").env("VOLT_CACHE", e.dir.join("cache-nodoc"));
+    assert_eq!(ok(c.output().unwrap(), "voltc run macro.volt"), expect("macro.volt"), "without rustdoc");
     let mut c = Command::new(&e.voltc);
     c.args(["run", "generics_bad.volt"]).current_dir(&dir).env("VOLT_STD", Path::new(ROOT).join("std"));
     tools(&mut c);
@@ -1503,6 +1534,15 @@ fn js_direct() {
     let o = c.output().unwrap();
     assert_eq!(o.status.code(), Some(101), "an exception stops the program: {}", String::from_utf8_lossy(&o.stderr));
     assert!(String::from_utf8_lossy(&o.stderr).contains("Error: boom"), "{}", String::from_utf8_lossy(&o.stderr));
+    // an async function's rejection stops it too, and so does a promise that never settles
+    for (prog, says) in [("rejects.volt", "Error: no"), ("never.volt", "never settled")] {
+        let mut c = Command::new(&e.voltc);
+        c.args(["run", prog]).current_dir(&dir).env("VOLT_STD", Path::new(ROOT).join("std"));
+        tools(&mut c);
+        let o = c.output().unwrap();
+        let err = String::from_utf8_lossy(&o.stderr);
+        assert!(o.status.code() == Some(101) && err.contains(says), "{prog}: {:?} {err}", o.status);
+    }
     // the same program in a bolt package
     let app = dir.join("app");
     std::fs::create_dir_all(app.join("src")).unwrap();
@@ -2274,7 +2314,10 @@ fn cpp_params_refused() {
     // a fn with a reference or a C++ class in its signature, as a function pointer to a call worked
     // out per use (plain, @cpp<R>'s {i} and {&i}, an operator's operand): no T* or by-name spelling,
     // an error naming both
-    let err = check("cpp_params_fnref.volt");
+    // (one line per diagnostic, its location first: each message is checked at its own line)
+    let o = e.voltc(&["check", "cpp_params_fnref.volt", "--message-format", "short"]);
+    assert!(!o.status.success(), "cpp_params_fnref.volt checks");
+    let err = String::from_utf8_lossy(&o.stderr).to_string();
     for (line, why) in [
         (8, "'by_ref' takes a i32&, which has no C function-pointer form"),
         (9, "'by_point' takes a cpp::pr::point, which has no C function-pointer form"),
@@ -2283,7 +2326,7 @@ fn cpp_params_refused() {
         (12, "'by_ref' takes a i32&, which has no C function-pointer form"),
         (13, "'by_ref' takes a i32&, which has no C function-pointer form"),
     ] {
-        assert!(err.contains(&format!("cpp_params_fnref.volt:{line}")) && err.contains(why), "line {line}, {why}: {err}");
+        assert!(err.lines().any(|l| l.contains(&format!("cpp_params_fnref.volt:{line}:")) && l.contains(why)), "line {line}, {why}: {err}");
     }
     let err = check("cpp_params_view.volt");
     assert!(err.contains("its result would point into a copy (of a string, a vector or a map) that's gone once the call returns") && err.contains("cpp_params_view.volt:7"), "a view into the copy, per use: {err}");

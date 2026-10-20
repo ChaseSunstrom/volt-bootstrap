@@ -1,6 +1,7 @@
 // std::softfloat::parse128: decimal text to the nearest binary128 (ties to even, subnormals, inf),
 // checked against Python Fractions (scratch t0477/oracle.py); f128 literals read through it (T-0477)
 use std::io;
+use std::time;
 fn main() -> void {
     std::println("{}", std::softfloat::parse128("0.1"));
     std::println("{}", std::softfloat::parse128("0.2"));
@@ -18,6 +19,21 @@ fn main() -> void {
     std::println("{}", std::softfloat::parse128("123456789012345678901234567890123456789012345678901234567890"));
     std::println("{}", std::softfloat::parse128("1.00000000000000000000000000000000009629649721936179265279889712924636592690508241076940976199693977832794189453125"));
     std::println("{}", std::softfloat::parse128("1.00000000000000000000000000000000028888949165808537795839669138773909778071524723230822928599081933498382568359375"));
+    // past 12000 significant digits only whether one isn't 0 matters: a halfway case a 1 far out
+    // decides, and 200000 digits read quickly
+    var far = std::string::from("1.00000000000000000000000000000000009629649721936179265279889712924636592690508241076940976199693977832794189453125");
+    for (i) in 0..20000 {
+        far.push('0');
+    }
+    far.push('1');
+    std::println("{}", std::softfloat::parse128(far.as_str()));
+    var long = std::string::from("1.");
+    for (i) in 0..200000 {
+        long.push('0');
+    }
+    val t0 = std::time::now();
+    val one = std::softfloat::parse128(long.as_str());
+    std::println("{} fast {}", one, t0.elapsed().ns < 500000000);
 }
 // expect: 85047745624057062624278117674093484442
 // expect: 85052937920915597451906648170422704538
@@ -35,3 +51,5 @@ fn main() -> void {
 // expect: 86084279887187813800478797289845127363
 // expect: 85065399433376081038215121361612832768
 // expect: 85065399433376081038215121361612832770
+// expect: 85065399433376081038215121361612832769
+// expect: 85065399433376081038215121361612832768 fast true

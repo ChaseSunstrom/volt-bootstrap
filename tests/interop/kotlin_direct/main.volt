@@ -47,6 +47,28 @@ fn main() -> void {
     if (bad.err) {
         std::println("caught {}", bad.err);
     }
+
+    // overloads, varargs and typealiases
+    val n: i32 = 3;
+    std::println("ovl {} / {} / {}", geo::describe(n), geo::describe(2.5), geo::describe("x"));
+    val nums: i32[3] = { 1, 2, 3 };
+    val strs: str[2] = { "a", "b" };
+    std::println("vararg {} {}", geo::sum("total", nums[..]), geo::joined(strs[..]));
+    val d: geo::Meters = 1.5;
+    std::println("alias {} {}", geo::walk(d), geo::count(strs[..]));
+    // extension funs
+    std::println("ext {} {} {}", k.doubled(), "hey".exclaim(), n.squared());
+    // nested types
+    val car = geo::Garage_Car::new(4);
+    val garage = geo::Garage::new("home");
+    std::println("nested {} / {} / {}", car.describe(), garage.park(&car, geo::Garage_Size::LARGE), geo::Garage_Rules::limit());
+    // a suspend fun that doesn't suspend gives its value; one that does stops the program (the
+    // try_ form says why)
+    std::println("suspend {}", geo::quick(41));
+    val sus = geo::try_parked();
+    if (sus.err) {
+        std::println("suspended {}", sus.err);
+    }
 }
 // expect: length 5 distance 25
 // expect: scaled 6 8
@@ -64,3 +86,10 @@ fn main() -> void {
 // expect: or_default 5 -1
 // expect: parse 42
 // expect: caught PANIC(kotlin.IllegalArgumentException: not a number: x)
+// expect: ovl int 3 / double 2.5 / text x
+// expect: vararg total 6 a+b
+// expect: alias 3 2
+// expect: ext 10 HEY! 9
+// expect: nested car with 4 wheels / home: 4 large / 3
+// expect: suspend 42
+// expect: suspended PANIC(kotlin.IllegalStateException: parked suspended: Volt runs a suspend fun only to where it suspends, and nothing resumes it)

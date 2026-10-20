@@ -91,6 +91,8 @@ void main() {
   final shelf = ml_shelf(labels: [ml_label(name: 'abc', sizes: [2, 2, 2], at: vec2.of(x: 3, y: 0)), ml_label(name: 'de', sizes: [1, 1, 1], at: vec2.of(x: 0, y: 0))], k: 1);
   final bk = ml_labels_back(shelf.labels);
   print('pair ${ml_pair_len(ml_pair(names: ['ab', 'cde'], n: 1))} ${po.names[0]} ${po.names[1]} shelf ${ml_shelf_len(shelf)} back ${bk.length} ${bk[0].name}');
+  final vr = ml_vadd([1, 2, 3, 4], [5, 6, 7, 8]);
+  print('vector ${vr[0].toInt()} ${vr[1].toInt()} ${vr[2].toInt()} ${vr[3].toInt()} ${ml_vsum8([1, 2, 3, 4, 5, 6, 7, 8])}');
 
   // a callback's exception comes out of the call (the later calls are skipped), and a closed
   // counter throws

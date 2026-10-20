@@ -16,10 +16,11 @@
 //   a fieldless enum -> a Volt enum; pub const of a number, bool or string -> val; pub mod -> namespace
 // Generics, traits, closures and references returned into Rust-owned data are left out, with a
 // comment in the Volt source (VOLT_SHOW_IMPORT=1 makes voltc print it).
-use super::glue::{ident, number, prim, substitute, volt_ty, FnPass, Gen, Kind, Lang, Model, Recv, ShimOut, ShimParam, Sig, Ty, TraitDef, TypeDef, TypeInfo, Variant};
+use super::glue::{ident, number, prim, substitute, volt_ty, FnPass, Gen, Kind, Lang, Model, Recv, ShimOut, ShimParam, Sig, TraitDef, TraitInst, Ty, TypeDef, TypeInfo, Variant};
 use super::{arg_path, fresh, save, stamp, Made, Req};
 use crate::foreign::{int_value, lex, tok_text, toks_line, Cur, Tok};
 use crate::json::Json;
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
 use std::path::{Path, PathBuf};
@@ -91,11 +92,15 @@ pub fn import(r: &Req) -> Result<(), String> {
     let (mut model, doc_only) = match rustdoc_model(&dir, &shim_dir.join("Cargo.toml"), &pkg, &r.out.join("target"), &lib) {
         Ok(read) => read,
         Err(why) => {
-            let text = std::fs::read_to_string(&root).map_err(|e| format!("use rust: can't read {}: {e}", root.display()))?;
+            // what rustc expands (the items macros make, #[cfg] settled), else the source as written
+            let (text, from) = match expanded(&dir, &shim_dir.join("Cargo.toml"), &pkg, &r.out.join("target")) {
+                Some(text) => (text, "rustc's expanded source: pub use re-exports are left out"),
+                None => (std::fs::read_to_string(&root).map_err(|e| format!("use rust: can't read {}: {e}", root.display()))?, "its source: what macros make, what's under #[cfg] and pub use re-exports are left out"),
+            };
             let mut w = Walker::default();
             w.walk(&lex(&text), &[], &src);
             let mut m = w.model();
-            let note = format!("rustdoc couldn't write JSON bolt reads ({why}), so {} was read from its source: what macros make, what's under #[cfg] and pub use re-exports are left out", path.display());
+            let note = format!("rustdoc couldn't write JSON bolt reads ({why}), so {} was read from {from}", path.display());
             eprintln!("bolt: {note}");
             m.left_out.push(format!("({note})"));
             (m, Vec::new())
@@ -210,18 +215,22 @@ fn rustdoc_model(dir: &Path, shim: &Path, pkg: &str, target: &Path, lib: &str) -
     Doc::read(&j, dir).ok_or_else(|| format!("its JSON (format {}) isn't one bolt reads", j.get("format_version").and_then(Json::key).unwrap_or_default()))
 }
 
-/// the names of the pub items the build of package pkg declares (fns, types, consts, in any module),
-/// from rustc's macro-expanded source of it; None when rustc can't write that
-fn build_names(dir: &Path, shim: &Path, pkg: &str, target: &Path) -> Option<BTreeSet<String>> {
+/// rustc's macro-expanded source of package pkg (one file: its modules inline); None when rustc
+/// can't write that
+fn expanded(dir: &Path, shim: &Path, pkg: &str, target: &Path) -> Option<String> {
     let mut c = Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()));
     c.current_dir(dir).env("RUSTC_BOOTSTRAP", "1").args(["rustc", "-q", "--lib", "-p", pkg, "--manifest-path"]).arg(shim).arg("--target-dir").arg(target);
     c.args(["--", "-Z", "unpretty=expanded"]);
     let o = c.output().ok()?;
-    if !o.status.success() {
-        return None;
-    }
+    o.status.success().then(|| String::from_utf8_lossy(&o.stdout).into_owned())
+}
+
+/// the names of the pub items the build of package pkg declares (fns, types, consts, in any module),
+/// from rustc's macro-expanded source of it; None when rustc can't write that
+fn build_names(dir: &Path, shim: &Path, pkg: &str, target: &Path) -> Option<BTreeSet<String>> {
+    let text = expanded(dir, shim, pkg, target)?;
     let mut w = Walker::default();
-    w.walk(&lex(&String::from_utf8_lossy(&o.stdout)), &[], dir);
+    w.walk(&lex(&text), &[], dir);
     let m = w.model();
     let mut out: BTreeSet<String> = m.fns.iter().map(|(_, s)| s.name.clone()).collect();
     out.extend(m.types.iter().map(|t| t.name.clone()));
@@ -466,6 +475,17 @@ struct Doc<'a> {
     /// the crate's name, and its public traits' names by id
     lib: String,
     traits: BTreeMap<String, String>,
+    /// each trait's type parameters and associated types, read before any type names one (a
+    /// Box<dyn Source<Item = i32>> names an instance)
+    trait_params: BTreeMap<String, (Vec<String>, Vec<String>)>,
+    /// each trait's supertraits of the crate's
+    supers: BTreeMap<String, Vec<String>>,
+    /// the impls of generic traits (type, trait, its arguments), and of traits with consts (type,
+    /// trait, the consts), made into instances and T::NAME() fns once the types are read
+    pending: Vec<(String, String, Vec<Ty>)>,
+    pending_consts: Vec<(String, String, Vec<(String, Ty)>)>,
+    /// the handles of generic traits' objects the signatures name: handle, (trait, arguments)
+    dyn_insts: RefCell<BTreeMap<String, (String, Vec<Ty>)>>,
 }
 
 impl<'a> Doc<'a> {
@@ -479,7 +499,7 @@ impl<'a> Doc<'a> {
         let root = j.get("root")?.key()?;
         let root_items = idx.get(&root)?.get("inner")?.get("module")?.get("items")?.arr().len();
         let lib = idx.get(&root)?.get("name").and_then(Json::str)?.to_string();
-        let mut d = Doc { idx, dir, m: Model::default(), names: BTreeMap::new(), doc_only: Vec::new(), lib, traits: BTreeMap::new() };
+        let mut d = Doc { idx, dir, m: Model::default(), names: BTreeMap::new(), doc_only: Vec::new(), lib, traits: BTreeMap::new(), trait_params: BTreeMap::new(), supers: BTreeMap::new(), pending: Vec::new(), pending_consts: Vec::new(), dyn_insts: RefCell::default() };
         let mut items = d.public(&root);
         // an item reached twice at one path (pub use a::X next to pub use a::*) is one item
         let mut once = BTreeSet::new();
@@ -495,6 +515,12 @@ impl<'a> Doc<'a> {
             if inner.is_some_and(|i| i.get("trait").is_some()) && !d.traits.contains_key(id) {
                 d.traits.insert(id.clone(), name.clone());
             }
+        }
+        for (id, name) in d.traits.clone() {
+            let Some(t) = d.idx.get(&id).and_then(|it| it.get("inner")).and_then(|i| i.get("trait")) else { continue };
+            let gps = t.get("generics").and_then(|g| g.get("params")).map_or(&[][..], Json::arr).iter().filter(|p| p.get("kind").is_some_and(|k| k.get("type").is_some())).filter_map(|p| p.get("name").and_then(Json::str)).map(String::from).collect();
+            let assoc = t.get("items").map_or(&[][..], Json::arr).iter().filter_map(|i| i.key().and_then(|k| d.idx.get(&k))).filter(|it| it.get("inner").is_some_and(|i| i.get("assoc_type").is_some())).filter_map(|it| it.get("name").and_then(Json::str)).map(String::from).collect();
+            d.trait_params.insert(name, (gps, assoc));
         }
         let mut made = BTreeSet::new();
         for (module, id, name) in items {
@@ -519,7 +545,127 @@ impl<'a> Doc<'a> {
                 }
             }
         }
+        d.finish_traits();
         Some((d.m, d.doc_only))
+    }
+
+    /// once the items are read: the generic traits' instances (a crate type's impl, a dyn handle's),
+    /// each method calling that impl, and the associated consts as each implementing type's
+    /// T::NAME()
+    fn finish_traits(&mut self) {
+        let types: BTreeMap<String, Vec<String>> = self.m.types.iter().map(|t| (t.name.clone(), t.module.clone())).collect();
+        for (ty, tr, args) in std::mem::take(&mut self.pending) {
+            if !args.iter().all(arg_ok) {
+                self.m.left_out.push(format!("{ty}'s {tr} (its type arguments)"));
+                continue;
+            }
+            let recv = rust_ty(&Ty::Named(ty.clone()), &self.lib, &types);
+            self.inst(&ty, &tr, args, &recv, &types);
+        }
+        for (h, (tr, args)) in self.dyn_insts.take() {
+            let (Some(td), Some((gps, assoc))) = (self.m.traits.iter().find(|t| t.name == tr).cloned(), self.trait_params.get(&tr).cloned()) else { continue };
+            let tpath = self.trait_rust_path(&td);
+            let mut spelled: Vec<String> = args[..gps.len()].iter().map(|a| rust_ty(a, &self.lib, &types)).collect();
+            spelled.extend(assoc.iter().zip(&args[gps.len()..]).map(|(n, a)| format!("{n} = {}", rust_ty(a, &self.lib, &types))));
+            let dyn_ty = format!("dyn {tpath}<{}>", spelled.join(", "));
+            self.m.types.push(TypeDef { module: td.module.clone(), name: h.clone(), generic: false, fields: None, variants: None, is_enum: false, clone: false, opaque: true, params: Vec::new(), rust_name: Some(format!("{DYN_BOX}{tpath}<{}>>", spelled.join(", "))) });
+            self.inst(&h, &tr, args, &dyn_ty, &types);
+            for sup in self.supers.get(&tr).cloned().unwrap_or_default() {
+                self.m.impls.push((h.clone(), sup));
+            }
+        }
+        // (a type's own method of that name wins; two traits' consts of one name are both left out)
+        let mut count: BTreeMap<(String, String), usize> = BTreeMap::new();
+        for (ty, _, cs) in &self.pending_consts {
+            for (c, _) in cs {
+                *count.entry((ty.clone(), c.clone())).or_default() += 1;
+            }
+        }
+        for (ty, tr, cs) in std::mem::take(&mut self.pending_consts) {
+            let Some(td) = self.m.traits.iter().find(|t| t.name == tr).cloned() else { continue };
+            let (tpath, recv) = (self.trait_rust_path(&td), rust_ty(&Ty::Named(ty.clone()), &self.lib, &types));
+            for (c, cty) in cs {
+                let module = types.get(&ty).cloned().unwrap_or_default();
+                if self.m.methods.get(&ty).is_some_and(|ms| ms.iter().any(|m| m.name == c && m.call.is_none())) {
+                    self.m.left_out.push(format!("{ty}'s {tr}::{c} ({ty} has a {c} of its own)"));
+                } else if self.m.consts.iter().any(|x| x.0 == module && x.1 == c) || self.m.fns.iter().any(|x| x.0 == module && x.1.name == c) {
+                    // (Volt's T::NAME() is a fn of the module's: it would overload the module's own)
+                    self.m.left_out.push(format!("{ty}'s {tr}::{c} (its module has a {c} of its own)"));
+                } else if count[&(ty.clone(), c.clone())] > 1 {
+                    self.m.left_out.push(format!("{ty}'s {tr}::{c} (another trait's const has its name)"));
+                } else {
+                    self.m.methods.entry(ty.clone()).or_default().push(Sig { name: c.clone(), recv: Recv::None, params: Vec::new(), ret: Some(cty), skip: None, src: format!("const {c} (of {tr})"), generics: Vec::new(), call: Some(format!("<{recv} as {tpath}>::{c}")) });
+                }
+            }
+        }
+    }
+
+    /// a generic trait's instance a type attaches: its methods with the arguments in place, each
+    /// calling <recv as Trait<..>>::method
+    fn inst(&mut self, ty: &str, tr: &str, args: Vec<Ty>, recv: &str, types: &BTreeMap<String, Vec<String>>) {
+        let (Some(td), Some((gps, _))) = (self.m.traits.iter().find(|t| t.name == tr).cloned(), self.trait_params.get(tr)) else { return };
+        let map: BTreeMap<String, Ty> = td.params.iter().cloned().zip(args.iter().cloned()).collect();
+        let gargs = if gps.is_empty() { String::new() } else { format!("<{}>", args[..gps.len()].iter().map(|a| rust_ty(a, &self.lib, types)).collect::<Vec<_>>().join(", ")) };
+        let tpath = self.trait_rust_path(&td);
+        let methods = td
+            .methods
+            .iter()
+            .map(|(s, provided)| {
+                let mut s = s.clone();
+                s.params = s.params.iter().map(|(n, t)| (n.clone(), t.as_ref().map(|t| substitute(t, &map)))).collect();
+                s.ret = s.ret.as_ref().map(|t| substitute(t, &map));
+                s.call = Some(format!("<{recv} as {tpath}{gargs}>::{}", s.name));
+                (s, *provided)
+            })
+            .collect();
+        self.m.trait_insts.push(TraitInst { ty: ty.to_string(), tr: tr.to_string(), args, methods });
+    }
+
+    fn trait_rust_path(&self, td: &TraitDef) -> String {
+        let mut p = vec![self.lib.clone()];
+        p.extend(td.module.iter().cloned());
+        p.push(td.name.clone());
+        format!("::{}", p.join("::"))
+    }
+
+    /// Box<dyn Trait<..>> of one of the crate's generic traits, its arguments all given (Send and
+    /// Sync aside): the handle of that instance (dyn_Source_i32), made once the items are read
+    fn dyn_inst(&self, traits: Option<&Json>) -> Option<Ty> {
+        let mut found = None;
+        for b in traits.map_or(&[][..], Json::arr) {
+            let tr = b.get("trait_bound").and_then(|x| x.get("trait")).or_else(|| b.get("trait"))?;
+            match tr.get("id").and_then(Json::key).and_then(|id| self.traits.get(&id)) {
+                Some(n) if found.is_none() => found = Some((n.clone(), tr)),
+                None if matches!(tr.get("path").and_then(Json::str).and_then(|p| p.rsplit("::").next()), Some("Send" | "Sync")) => {}
+                _ => return None,
+            }
+        }
+        let (name, tr) = found?;
+        let (gps, assoc) = self.trait_params.get(&name)?;
+        if gps.is_empty() && assoc.is_empty() {
+            return None;
+        }
+        let ab = tr.get("args").and_then(|a| a.get("angle_bracketed"));
+        let mut args: Vec<Ty> = ab.and_then(|a| a.get("args")).map_or(&[][..], Json::arr).iter().map(|x| x.get("type").and_then(|t| self.ty(t))).collect::<Option<_>>()?;
+        if args.len() != gps.len() {
+            return None;
+        }
+        let cons = ab.and_then(|a| a.get("constraints")).map_or(&[][..], Json::arr);
+        for an in assoc {
+            let c = cons.iter().find(|c| c.get("name").and_then(Json::str) == Some(an.as_str()))?;
+            args.push(self.ty(c.get("binding")?.get("equality")?.get("type")?)?);
+        }
+        if !args.iter().all(arg_ok) {
+            return None;
+        }
+        let handle = format!("dyn_{name}_{}", args.iter().map(mangle_ty).collect::<Vec<_>>().join("_"));
+        // (one name, one instance)
+        let mut insts = self.dyn_insts.borrow_mut();
+        if insts.get(&handle).is_some_and(|x| x.1 != args) {
+            return None;
+        }
+        insts.insert(handle.clone(), (name, args));
+        Some(Ty::Named(handle))
     }
 
     /// every public item reachable from module `root`, with the module path and name it's public
@@ -743,16 +889,28 @@ impl<'a> Doc<'a> {
         path.extend(module.iter().cloned());
         path.push(name.clone());
         let path = path.join("::");
-        let mut td = TraitDef { module: module.clone(), name: name.clone(), methods: Vec::new(), skip: None };
-        if generic(t.get("generics")) {
-            td.skip = Some("it's generic".into());
-        }
-        for b in t.get("bounds").map_or(&[][..], Json::arr) {
-            let sup = b.get("trait_bound").and_then(|x| x.get("trait")).and_then(|x| x.get("path")).and_then(Json::str).and_then(|p| p.rsplit("::").next()).unwrap_or("?");
-            if !matches!(sup, "Send" | "Sync" | "Sized") {
-                td.skip = Some(format!("it extends {sup}"));
+        let mut td = TraitDef { module: module.clone(), name: name.clone(), methods: Vec::new(), skip: None, params: Vec::new(), foreign: false };
+        // its type parameters, then its associated types: Volt's trait takes them all (Source<Item>)
+        for p in t.get("generics").and_then(|g| g.get("params")).map_or(&[][..], Json::arr) {
+            match p.get("kind") {
+                Some(k) if k.get("lifetime").is_some() => {}
+                Some(k) if k.get("type").is_some() => td.params.push(p.get("name").and_then(Json::str).unwrap_or("_").to_string()),
+                _ => td.skip = Some("it's generic over more than types".into()),
             }
         }
+        // its supertraits: Send, Sync and Sized, or the crate's own (not generic), which keep their
+        // own attach (Volt has no supertraits: a bound names both)
+        let mut supers = Vec::new();
+        for b in t.get("bounds").map_or(&[][..], Json::arr) {
+            let tr = b.get("trait_bound").and_then(|x| x.get("trait"));
+            let sup = tr.and_then(|x| x.get("path")).and_then(Json::str).and_then(|p| p.rsplit("::").next()).unwrap_or("?");
+            match tr.and_then(|x| x.get("id")).and_then(Json::key).and_then(|id| self.traits.get(&id)) {
+                Some(s) if !has_args(tr.and_then(|x| x.get("args"))) && self.trait_params.get(s).is_some_and(|(g, a)| g.is_empty() && a.is_empty()) => supers.push(s.clone()),
+                None if matches!(sup, "Send" | "Sync" | "Sized") => {}
+                _ => td.skip = Some(format!("it extends {sup}")),
+            }
+        }
+        let (mut consts, mut odd_const) = (Vec::new(), false);
         for iid in t.get("items").map_or(&[][..], Json::arr) {
             let Some(it) = iid.key().and_then(|k| self.idx.get(&k)) else { continue };
             let Some(inner) = it.get("inner") else { continue };
@@ -762,27 +920,71 @@ impl<'a> Doc<'a> {
                 s.call = Some(format!("{path}::{mname}"));
                 td.methods.push((s, f.get("has_body").and_then(Json::bool) == Some(true)));
             } else if inner.get("assoc_type").is_some() {
-                td.skip = Some(format!("its associated type {mname}"));
-            } else if inner.get("assoc_const").is_some() {
-                td.skip = Some(format!("its associated const {mname}"));
+                td.params.push(mname.to_string());
+            } else if let Some(c) = inner.get("assoc_const") {
+                match c.get("type").and_then(|t| self.ty(t)) {
+                    Some(ct @ (Ty::Prim(_) | Ty::Char | Ty::Str | Ty::String)) => consts.push((mname.to_string(), ct)),
+                    _ => {
+                        odd_const = true;
+                        self.m.left_out.push(format!("{name}::{mname} (a const of a type Volt can't name)"));
+                    }
+                }
             }
         }
-        // the crate's types implementing it (not a generic one's instances, or a blanket impl)
+        for (s, _) in &td.methods {
+            let mut g = BTreeSet::new();
+            for t in s.params.iter().filter_map(|p| p.1.as_ref()).chain(s.ret.as_ref()) {
+                generic_names(t, &mut g);
+            }
+            if let Some(x) = g.iter().find(|x| !td.params.contains(x) && !s.generics.contains(x)) {
+                td.skip = Some(format!("its method {} names {x}, which it doesn't declare", s.name));
+            }
+        }
+        // (a Volt type can't attach one that's generic, has consts or has supertraits: only the
+        // crate's types do)
+        let plain = td.params.is_empty() && consts.is_empty() && !odd_const;
+        td.foreign = !plain || !supers.is_empty();
+        if !td.params.is_empty() && !consts.is_empty() {
+            td.skip = Some("a generic trait's associated consts".into());
+        }
+        self.supers.insert(name.clone(), supers.clone());
+        // the crate's types implementing it (not a generic one's instances, or a blanket impl); a
+        // generic trait's instance, with its arguments: the trait's own, then the impl's associated
+        // types
+        let n_assoc = self.trait_params.get(&name).map_or(0, |(_, a)| a.len());
         for iid in t.get("implementations").map_or(&[][..], Json::arr) {
             let Some(im) = iid.key().and_then(|k| self.idx.get(&k)).and_then(|x| x.get("inner")).and_then(|i| i.get("impl")) else { continue };
             if im.get("blanket_impl").is_some_and(|b| !b.is_null()) || generic(im.get("generics")) {
                 continue;
             }
             let Some(rp) = im.get("for").and_then(|f| f.get("resolved_path")) else { continue };
-            if let Some(ty) = rp.get("id").and_then(Json::key).and_then(|id| self.names.get(&id)) {
-                self.m.impls.push((ty.clone(), name.clone()));
+            let Some(ty) = rp.get("id").and_then(Json::key).and_then(|id| self.names.get(&id)).cloned() else { continue };
+            if !consts.is_empty() {
+                self.pending_consts.push((ty.clone(), name.clone(), consts.clone()));
+            }
+            if td.params.is_empty() {
+                self.m.impls.push((ty, name.clone()));
+                continue;
+            }
+            let ab = im.get("trait").and_then(|t| t.get("args")).and_then(|a| a.get("angle_bracketed"));
+            let mut args: Vec<Option<Ty>> = ab.and_then(|a| a.get("args")).map_or(&[][..], Json::arr).iter().map(|x| x.get("type").and_then(|t| self.ty(t))).collect();
+            let items: Vec<&Json> = im.get("items").map_or(&[][..], Json::arr).iter().filter_map(|i| i.key().and_then(|k| self.idx.get(&k))).collect();
+            for an in &td.params[td.params.len().saturating_sub(n_assoc)..] {
+                args.push(items.iter().find(|it| it.get("name").and_then(Json::str) == Some(an.as_str())).and_then(|it| it.get("inner")).and_then(|i| i.get("assoc_type")).and_then(|a| a.get("type")).and_then(|t| self.ty(t)));
+            }
+            match args.into_iter().collect::<Option<Vec<Ty>>>().filter(|a| a.len() == td.params.len()) {
+                Some(args) => self.pending.push((ty, name.clone(), args)),
+                None => self.m.left_out.push(format!("{ty}'s {name} (its type arguments)")),
             }
         }
         let dyn_ok = t.get("is_dyn_compatible").or_else(|| t.get("is_object_safe")).and_then(Json::bool) == Some(true);
-        if dyn_ok && td.skip.is_none() {
+        if dyn_ok && td.skip.is_none() && plain {
             let h = format!("dyn_{name}");
             self.m.types.push(TypeDef { module, name: h.clone(), generic: false, fields: None, variants: None, is_enum: false, clone: false, opaque: true, params: Vec::new(), rust_name: Some(format!("{DYN_BOX}{path}>")) });
-            self.m.impls.push((h, name.clone()));
+            self.m.impls.push((h.clone(), name.clone()));
+            for sup in &supers {
+                self.m.impls.push((h.clone(), sup.clone()));
+            }
         }
         self.m.traits.push(td);
     }
@@ -914,7 +1116,15 @@ impl<'a> Doc<'a> {
             return if p == "char" { Some(Ty::Char) } else { prim(p).map(Ty::Prim) };
         }
         if let Some(tup) = t.get("tuple") {
-            return tup.arr().is_empty().then_some(Ty::Unit);
+            if tup.arr().is_empty() {
+                return Some(Ty::Unit);
+            }
+            return Some(Ty::Tuple(tup.arr().iter().map(|e| self.ty(e).map(|t| (String::new(), t))).collect::<Option<Vec<_>>>()?));
+        }
+        // [T; N], N a number (rustdoc writes it as text)
+        if let Some(a) = t.get("array") {
+            let n = a.get("len").and_then(Json::str).and_then(|l| int_text(l).parse::<usize>().ok())?;
+            return Some(Ty::Array(Box::new(self.ty(a.get("type")?)?), n));
         }
         if let Some(it) = t.get("impl_trait") {
             // impl Future<Output = T>: as an async fn's T
@@ -932,6 +1142,11 @@ impl<'a> Doc<'a> {
         }
         if let Some(g) = t.get("generic").and_then(Json::str) {
             return Some(if g == "Self" { Ty::SelfTy } else { Ty::Generic(g.to_string()) });
+        }
+        // Self::Item: an associated type, a parameter of Volt's trait
+        if let Some(q) = t.get("qualified_path") {
+            let own = q.get("self_type").and_then(|s| s.get("generic")).and_then(Json::str) == Some("Self");
+            return own.then(|| Ty::Generic(q.get("name").and_then(Json::str).unwrap_or("_").to_string()));
         }
         if let Some(r) = t.get("borrowed_ref") {
             let mutable = r.get("is_mutable").and_then(Json::bool) == Some(true);
@@ -964,7 +1179,7 @@ impl<'a> Doc<'a> {
         let one = || -> Option<Box<Ty>> { Some(Box::new(self.ty(args.first()?)?)) };
         if last == "Box" && args.len() == 1 {
             if let Some(d) = args[0].get("dyn_trait") {
-                return self.fn_bound(d.get("traits"), FnPass::Boxed).or_else(|| Some(Ty::Dyn(self.trait_bound(d.get("traits"))?, FnPass::Boxed)));
+                return self.fn_bound(d.get("traits"), FnPass::Boxed).or_else(|| Some(Ty::Dyn(self.trait_bound(d.get("traits"))?, FnPass::Boxed))).or_else(|| self.dyn_inst(d.get("traits")));
             }
         }
         // the crate's type alias (type Result<T> = std::result::Result<T, Error>): what it names
@@ -994,6 +1209,52 @@ impl<'a> Doc<'a> {
             (_, 0) if !shadowed && last.starts_with(|c: char| c.is_ascii_uppercase()) => Some(Ty::Named(last)),
             _ => None,
         }
+    }
+}
+
+/// whether a path's arguments give any (rustdoc writes none as null, or as empty angle brackets)
+fn has_args(a: Option<&Json>) -> bool {
+    a.is_some_and(|a| !a.is_null() && (a.get("parenthesized").is_some() || a.get("angle_bracketed").is_some_and(|b| !b.get("args").map_or(&[][..], Json::arr).is_empty() || !b.get("constraints").map_or(&[][..], Json::arr).is_empty())))
+}
+
+/// whether the shim can spell a type argument in a type (a dyn handle's, an impl's): numbers,
+/// String, the crate's types, and Vec and Option of those (&str needs a lifetime there; Rust's
+/// name of a tuple, an array or a type parameter isn't written)
+fn arg_ok(t: &Ty) -> bool {
+    match t {
+        Ty::Prim(_) | Ty::Char | Ty::String | Ty::Named(_) => true,
+        Ty::Vec(e) | Ty::Opt(e) => arg_ok(e),
+        _ => false,
+    }
+}
+
+/// the type parameters a type names
+fn generic_names(t: &Ty, out: &mut BTreeSet<String>) {
+    match t {
+        Ty::Generic(g) => {
+            out.insert(g.clone());
+        }
+        Ty::Opt(x) | Ty::Res(x) | Ty::Vec(x) | Ty::Slice(x, _) | Ty::Ref(x, _) | Ty::Array(x, _) | Ty::Fails(x, _) | Ty::Future(x) => generic_names(x, out),
+        Ty::Tuple(es) => es.iter().for_each(|(_, t)| generic_names(t, out)),
+        Ty::Fn(ps, r, _, _) => {
+            ps.iter().for_each(|p| generic_names(p, out));
+            generic_names(r, out);
+        }
+        _ => {}
+    }
+}
+
+/// a type as part of an identifier (a dyn handle's name: dyn_Source_i32)
+fn mangle_ty(t: &Ty) -> String {
+    match t {
+        Ty::Prim(p) => p.to_string(),
+        Ty::Char => "char".into(),
+        Ty::Str => "str".into(),
+        Ty::String => "string".into(),
+        Ty::Named(n) => n.clone(),
+        Ty::Vec(e) => format!("vec_{}", mangle_ty(e)),
+        Ty::Opt(e) => format!("opt_{}", mangle_ty(e)),
+        _ => "x".into(),
     }
 }
 
@@ -1051,11 +1312,12 @@ fn volt_number(v: &str, x: &str) -> Option<String> {
         }
         return Some(if n.contains(['.', 'e', 'E']) { n } else { format!("{n}.0") });
     }
+    // (a u128 past i128's maximum too)
     let parsed = match n.strip_prefix("0x") {
-        Some(h) => i128::from_str_radix(h, 16).ok(),
-        None => n.parse::<i128>().ok(),
+        Some(h) => i128::from_str_radix(h, 16).is_ok() || (x == "u128" && u128::from_str_radix(h, 16).is_ok()),
+        None => n.parse::<i128>().is_ok() || (x == "u128" && n.parse::<u128>().is_ok()),
     };
-    parsed.map(|_| n)
+    parsed.then_some(n)
 }
 
 // ---------- the crate's public API, read from its source (when rustdoc's JSON isn't there) ----------
@@ -1411,7 +1673,8 @@ fn parse_ty(t: &[Tok]) -> Option<Ty> {
             // a path, maybe with <args> at its end
             let lt = t.iter().position(|x| *x == Tok::P("<".into()));
             let path = &t[..lt.unwrap_or(t.len())];
-            if path.iter().any(|x| matches!(x, Tok::P(p) if p != "::")) {
+            // (dyn Trait and impl Trait aren't a type's path)
+            if path.iter().any(|x| matches!(x, Tok::P(p) if p != "::") || matches!(x, Tok::Id(w) if w == "dyn" || w == "impl")) {
                 return None;
             }
             let Some(Tok::Id(name)) = path.last() else { return None };
@@ -1610,6 +1873,24 @@ impl Lang for Rust {
                     p.arg = if matches!(t, Ty::Vec(_)) { format!("sl({a}, {a}_n).to_vec()") } else { format!("sl({a}, {a}_n)") };
                 }
             }
+            // [T; N]: Volt's T[..], which must hold N (a panic, else)
+            Ty::Array(e, n) if matches!(**e, Ty::Prim(_)) => {
+                let Ty::Prim(x) = **e else { return None };
+                p.params.extend([format!("{a}: *const {x}"), format!("{a}_n: usize")]);
+                p.arg = format!("<[{x}; {n}]>::try_from(sl({a}, {a}_n)).unwrap_or_else(|_| panic!(\"an array of {n} given {{}} elements\", {a}_n))");
+            }
+            // a tuple: its elements, each a parameter of its own
+            Ty::Tuple(es) => {
+                let mut args = Vec::new();
+                for (k, (_, et)) in es.iter().enumerate() {
+                    let sub = self.param(g, et, &format!("{a}_{k}"))?;
+                    p.params.extend(sub.params);
+                    p.pre.extend(sub.pre);
+                    p.post.extend(sub.post);
+                    args.push(sub.arg);
+                }
+                p.arg = format!("({},)", args.join(", "));
+            }
             Ty::Slice(e, false) | Ty::Vec(e) if matches!(**e, Ty::Str | Ty::String) => {
                 p.params.extend([format!("{a}: *const VoltStr"), format!("{a}_n: usize")]);
                 p.arg = match (t, &**e) {
@@ -1766,18 +2047,18 @@ impl Lang for Rust {
             // lent text: where it is (a Plain receiver's text can only be 'static)
             Ty::StrRef => ShimOut { params: vec![format!("{o}: *mut *mut u8"), format!("{o}_n: *mut usize")], store: format!("{{ let w: &str = $v; *{o} = w.as_ptr() as *mut u8; *{o}_n = w.len(); }}") },
             Ty::Str | Ty::String => ShimOut { params: vec![format!("{o}: *mut *mut u8"), format!("{o}_n: *mut usize")], store: format!("put_str($v.to_string(), {o}, {o}_n);") },
-            Ty::Slice(e, _) | Ty::Vec(e) if matches!(**e, Ty::Named(_)) => {
+            Ty::Slice(e, _) | Ty::Vec(e) | Ty::Array(e, _) if matches!(**e, Ty::Named(_)) => {
                 let ti = g.info(e)?;
                 let (rp, mg) = (self.path(&ti.def), Gen::mangle(&ti.def));
                 match ti.kind {
-                    // a Vec's handles own their values; a slice's are lent
-                    Kind::Handle if matches!(t, Ty::Vec(_)) => ShimOut { params: vec![format!("{o}: *mut *mut *mut c_void"), format!("{o}_n: *mut usize")], store: format!("put_vec($v.into_iter().map(|x| Box::into_raw(Box::new(x)) as *mut c_void).collect(), {o}, {o}_n);") },
+                    // a Vec's (or an array's) handles own their values; a slice's are lent
+                    Kind::Handle if matches!(t, Ty::Vec(_) | Ty::Array(..)) => ShimOut { params: vec![format!("{o}: *mut *mut *mut c_void"), format!("{o}_n: *mut usize")], store: format!("put_vec($v.into_iter().map(|x| Box::into_raw(Box::new(x)) as *mut c_void).collect(), {o}, {o}_n);") },
                     Kind::Handle => ShimOut { params: vec![format!("{o}: *mut *mut *mut c_void"), format!("{o}_n: *mut usize")], store: format!("put_vec($v.iter().map(|x| x as *const {rp} as *mut c_void).collect(), {o}, {o}_n);") },
                     Kind::Plain => ShimOut { params: vec![format!("{o}: *mut *mut V_{mg}"), format!("{o}_n: *mut usize")], store: format!("put_vec($v.iter().map(|x| to_{mg}(x)).collect(), {o}, {o}_n);") },
                     Kind::Enum => ShimOut { params: vec![format!("{o}: *mut *mut i64"), format!("{o}_n: *mut usize")], store: format!("put_vec($v.iter().map(|x| to_{mg}(x)).collect(), {o}, {o}_n);") },
                 }
             }
-            Ty::Slice(e, _) | Ty::Vec(e) => match **e {
+            Ty::Slice(e, _) | Ty::Vec(e) | Ty::Array(e, _) => match **e {
                 Ty::Prim(x) => ShimOut { params: vec![format!("{o}: *mut *mut {x}"), format!("{o}_n: *mut usize")], store: format!("put_vec($v.to_vec(), {o}, {o}_n);") },
                 Ty::Str | Ty::String => ShimOut { params: vec![format!("{o}: *mut *mut VoltOwnedStr"), format!("{o}_n: *mut usize")], store: format!("put_strs($v.iter().map(|x| x.to_string()).collect(), {o}, {o}_n);") },
                 _ => return None,
@@ -1798,6 +2079,17 @@ impl Lang for Rust {
                     Kind::Handle => ShimOut { params: vec![format!("{o}: *mut *mut c_void")], store: format!("*{o} = Box::into_raw(Box::new($v)) as *mut c_void;") },
                     Kind::Enum => ShimOut { params: vec![format!("{o}: *mut i64")], store: format!("*{o} = to_{mg}(&$v);") },
                 }
+            }
+            // a tuple: each element's outs (o0..., o1...)
+            Ty::Tuple(es) => {
+                let (mut params, mut stores) = (Vec::new(), Vec::new());
+                let ws: Vec<String> = (0..es.len()).map(|k| format!("{o}_w{k}")).collect();
+                for (k, (_, et)) in es.iter().enumerate() {
+                    let x = self.out(g, et, &format!("{o}{k}"), owned)?;
+                    params.extend(x.params);
+                    stores.push(x.store.replace("$v", &ws[k]));
+                }
+                ShimOut { params, store: format!("{{ let ({},) = $v; {} }}", ws.join(", "), stores.join(" ")) }
             }
             Ty::Opt(inner) => {
                 let x = self.out(g, inner, o, owned)?;
@@ -1953,7 +2245,9 @@ impl Lang for Rust {
         let args = args.join(", ");
         match (recv, self_ty) {
             // a trait's method: Trait::method(recv, ..), whichever other traits have one so named
-            (Some(r), _) if s.call.as_ref().is_some_and(|c| c.starts_with("::")) => format!("{}({r}{}{args})", s.call.as_ref().unwrap(), if args.is_empty() { "" } else { ", " }),
+            (Some(r), _) if s.call.as_ref().is_some_and(|c| c.starts_with("::") || c.starts_with('<')) => format!("{}({r}{}{args})", s.call.as_ref().unwrap(), if args.is_empty() { "" } else { ", " }),
+            // an associated const: <T as Trait>::NAME, its value
+            (None, Some(_)) if s.call.as_ref().is_some_and(|c| c.starts_with('<')) => s.call.clone().unwrap_or_default(),
             (Some(r), _) => format!("{r}.{}({args})", s.call.as_ref().unwrap_or(&s.name)),
             (None, Some(ti)) => format!("<{}>::{}({args})", self.path(&ti.def), s.call.as_ref().unwrap_or(&s.name)),
             (None, None) => {
@@ -2211,6 +2505,23 @@ mod tests {
         assert!(sig(&lex("pub fn into_name(self) -> String")).recv == Recv::Value);
         assert!(sig(&lex("pub fn area(&self) -> f64")).recv == Recv::Ref);
         assert_eq!(sig(&lex("pub fn fill(xs: &mut [u8])")).params[0].1, Some(Ty::Slice(Box::new(Ty::Prim("u8")), true)));
+    }
+
+    #[test]
+    fn import_walks_expanded_source() {
+        // rustc's expanded source (rustdoc unable to write its JSON): a derive is an impl of
+        // ::core::clone::Clone, a macro's fn is an ordinary one, &dyn Trait isn't a type's path
+        let src = "#[prelude_import]\nuse std::prelude::rust_2021::*;\n#[macro_use]\nextern crate std;\npub struct Tagged {\n    pub id: u32,\n}\n#[automatically_derived]\nimpl ::core::clone::Clone for Tagged {\n    #[inline]\n    fn clone(&self) -> Tagged { Tagged { id: ::core::clone::Clone::clone(&self.id) } }\n}\npub fn twice_i32(x: i32) -> i32 { x * 2 }\npub fn area_of(s: &dyn Shape) -> f64 { s.area() }\npub fn grown(s: impl Shape) -> f64 { 0.0 }\n";
+        let mut w = Walker::default();
+        w.walk(&lex(src), &[], Path::new("/none"));
+        let m = w.model();
+        assert!(m.types.iter().any(|t| t.name == "Tagged" && t.clone), "a derived Clone");
+        let fns: Vec<(&str, bool)> = m.fns.iter().map(|(_, s)| (s.name.as_str(), s.params[0].1.is_some())).collect();
+        assert_eq!(fns, [("twice_i32", true), ("area_of", false), ("grown", false)]);
+        // a dyn handle's name, and paths with and without arguments
+        assert_eq!(mangle_ty(&Ty::Vec(Box::new(Ty::String))), "vec_string");
+        assert!(!has_args(Some(&Json::Null)) && !has_args(crate::json::parse(r#"{"angle_bracketed": {"args": [], "constraints": []}}"#).ok().as_ref()));
+        assert!(has_args(crate::json::parse(r#"{"angle_bracketed": {"args": [], "constraints": [{"name": "Item"}]}}"#).ok().as_ref()));
     }
 
     #[test]

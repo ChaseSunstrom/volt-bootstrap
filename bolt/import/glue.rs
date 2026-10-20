@@ -96,7 +96,7 @@ pub enum FnPass {
     Boxed,
 }
 
-pub const PRIMS: &[&str] = &["i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "isize", "usize", "f32", "f64", "bool"];
+pub const PRIMS: &[&str] = &["i8", "i16", "i32", "i64", "i128", "u8", "u16", "u32", "u64", "u128", "isize", "usize", "f32", "f64", "bool"];
 
 pub fn prim(p: &str) -> Option<&'static str> {
     PRIMS.iter().find(|x| **x == p).copied()
@@ -193,6 +193,21 @@ pub struct TraitDef {
     pub methods: Vec<(Sig, bool)>,
     /// why Volt can't use it, when it can't
     pub skip: Option<String>,
+    /// its type parameters (a Rust trait's associated types among them: Source<Item>)
+    pub params: Vec<String>,
+    /// only the language's types attach it (it's generic, or has associated consts): no table of
+    /// a Volt value's methods is made for it
+    pub foreign: bool,
+}
+
+/// a generic trait's instance a type attaches (Countdown's Source<i32>): its methods with the
+/// instance's types in place, each calling that impl
+#[derive(Clone)]
+pub struct TraitInst {
+    pub ty: String,
+    pub tr: String,
+    pub args: Vec<Ty>,
+    pub methods: Vec<(Sig, bool)>,
 }
 
 /// a file's (or crate's) public API
@@ -207,6 +222,8 @@ pub struct Model {
     pub traits: Vec<TraitDef>,
     /// (type, trait): the types implementing the traits
     pub impls: Vec<(String, String)>,
+    /// the generic traits' instances the types attach
+    pub trait_insts: Vec<TraitInst>,
     /// each enum's variants, and whether more may come (#[non_exhaustive], hidden ones)
     pub enums: BTreeMap<String, (Vec<Variant>, bool)>,
     pub left_out: Vec<String>,
@@ -253,6 +270,11 @@ pub trait Lang {
     /// it returned, 2 a panic) and the error's or the panic's text in e, e_n; each Volt function
     /// then has a try_ form that returns the panic as an error (PANIC) instead of stopping
     fn catches(&self) -> bool {
+        false
+    }
+    /// a free function that's an extension of a builtin type (Kotlin's String.f()): Volt's is an
+    /// attach fn on that type, its first parameter its this
+    fn attach_first(&self, _s: &Sig) -> bool {
         false
     }
     /// its shim hands the Volt functions it calls (closures, a Volt type's trait methods) the
@@ -385,6 +407,8 @@ pub struct Gen<'a> {
     /// block function() is writing methods for
     pub traits: BTreeMap<String, TraitDef>,
     made_traits: BTreeSet<String>,
+    /// the traits only the language's types attach (declared, no table glue)
+    made_foreign: BTreeSet<String>,
     block: Option<String>,
     put_string: bool,
     /// the push functions made (by element type)
@@ -470,7 +494,7 @@ impl<'a> Gen<'a> {
                 err_sets.insert(e.clone(), e.clone());
             }
         }
-        Gen { m, alias: alias.to_string(), lang, types, vec_elems: BTreeSet::new(), elem_types: BTreeSet::new(), strs: false, errors: false, shim: String::new(), ext: String::new(), helpers: String::new(), modules: BTreeMap::new(), left_out: Vec::new(), syms: BTreeSet::new(), sigs: BTreeSet::new(), tramps: Vec::new(), fn_handles: Vec::new(), fn_tys: Vec::new(), traits, made_traits: BTreeSet::new(), block: None, put_string: false, pushes: BTreeMap::new(), err_sets }
+        Gen { m, alias: alias.to_string(), lang, types, vec_elems: BTreeSet::new(), elem_types: BTreeSet::new(), strs: false, errors: false, shim: String::new(), ext: String::new(), helpers: String::new(), modules: BTreeMap::new(), left_out: Vec::new(), syms: BTreeSet::new(), sigs: BTreeSet::new(), tramps: Vec::new(), fn_handles: Vec::new(), fn_tys: Vec::new(), traits, made_traits: BTreeSet::new(), made_foreign: BTreeSet::new(), block: None, put_string: false, pushes: BTreeMap::new(), err_sets }
     }
 
     /// the Volt declaration of shim function sym (params: "name: type"): an extern "C" fn, or for
@@ -487,7 +511,9 @@ impl<'a> Gen<'a> {
 
     /// the exported symbol for a path of names
     pub fn sym(&self, parts: &[&str]) -> String {
-        format!("volt_{}_{}_{}", self.lang.short(), self.alias, parts.join("_"))
+        // (a trait instance's part, Source<i32>, as an identifier)
+        let s = format!("volt_{}_{}_{}", self.lang.short(), self.alias, parts.join("_"));
+        s.chars().map(|c| if c.is_ascii_alphanumeric() || c == '_' { c } else { '_' }).collect()
     }
 
     /// the Volt namespace of the glue's declarations, from anywhere in the import
@@ -561,7 +587,13 @@ impl<'a> Gen<'a> {
 
     /// a parameter's Volt side (the i-th: its extern names are a{i}...)
     fn volt_param(&mut self, name: &str, t: &Ty, i: usize) -> Option<VoltParam> {
-        let a = format!("a{i}");
+        self.volt_param_at(name, t, &format!("a{i}"), i)
+    }
+
+    /// volt_param, its extern names a... (a tuple's elements are a{i}_0..., each passed as a
+    /// parameter of its own)
+    fn volt_param_at(&mut self, name: &str, t: &Ty, a: &str, i: usize) -> Option<VoltParam> {
+        let a = a.to_string();
         let vn = Self::param_name(name);
         let ns = self.shim_ns();
         let mut p = VoltParam::default();
@@ -647,6 +679,29 @@ impl<'a> Gen<'a> {
                 p.param = format!("{vn}: {x}&");
                 p.ext.push(format!("{a}: {x}*"));
                 p.args.push(vn);
+            }
+            // a tuple of numbers, text, plain structs and enums: its elements, each passed as a
+            // parameter of its own would be
+            Ty::Tuple(es) if es.len() > 1 => {
+                let names: Vec<String> = (0..es.len()).map(|k| format!("{a}_{k}v")).collect();
+                p.pre.push(format!("val ({}) = {vn};", names.join(", ")));
+                let mut tys = Vec::new();
+                for (k, (_, et)) in es.iter().enumerate() {
+                    let one = match et {
+                        Ty::Prim(_) | Ty::Char | Ty::Str | Ty::String => true,
+                        Ty::Named(_) => self.info(et).is_some_and(|ti| ti.kind != Kind::Handle),
+                        _ => false,
+                    };
+                    if !one {
+                        return None;
+                    }
+                    let sub = self.volt_param_at(&names[k], et, &format!("{a}_{k}"), i)?;
+                    tys.push(sub.param.split_once(": ")?.1.to_string());
+                    p.pre.extend(sub.pre);
+                    p.ext.extend(sub.ext);
+                    p.args.extend(sub.args);
+                }
+                p.param = format!("{vn}: ({})", tys.join(", "));
             }
             // the import's types, in Volt's memory: plain structs' mirrors, handles, enums
             Ty::Slice(e, _) | Ty::Vec(e) | Ty::Array(e, _) if self.elem_info(e).is_some() => {
@@ -967,7 +1022,8 @@ impl<'a> Gen<'a> {
         // two overloads Volt can't tell apart (their parameters are the same Volt types)
         let types: Vec<&str> = params.iter().filter_map(|p| p.1.as_ref()).map(|v| v.param.split_once(": ").map_or(v.param.as_str(), |x| x.1)).collect();
         // (in its module: two modules' fns of one name are different fns)
-        let key = format!("{}::{what} {} ({})", module.join("::"), self_ty.is_some() && s.recv == Recv::None, types.join(", "));
+        // (an attach fn and a free fn of the same types are both Volt's: x.f() and f(x))
+        let key = format!("{}::{what} {} {} ({})", module.join("::"), self_ty.is_some() && s.recv == Recv::None, self_ty.is_none() && self.lang.attach_first(s), types.join(", "));
         if self.sigs.contains(&key) {
             return Err(format!("{what} (an overload Volt sees as the same as another)"));
         }
@@ -1079,6 +1135,13 @@ impl<'a> Gen<'a> {
         }
         let ext_call = format!("{ns}::{sym}({})", vargs.join(", "));
         // the try_ form's lines, until they part
+        // (an extension of a builtin type: its first parameter is this, the body's this_)
+        let ext = self_ty.is_none() && !vps.is_empty() && self.lang.attach_first(s);
+        let mut vps = vps;
+        if ext {
+            vps[0] = vps[0].replacen("this_:", "this:", 1);
+            lines.insert(0, "val this_ = this;".into());
+        }
         let mut try_lines = lines.clone();
         let give = |o: &VoltOut| -> Vec<String> {
             if o.ty.ends_with('?') {
@@ -1161,7 +1224,7 @@ impl<'a> Gen<'a> {
                 format!("attach fn {}({}) -> {ret_ty}", volt_name(&s.name), ps.join(", "))
             }
             (Some(_), _) => format!("attach fn {}({}) -> {ret_ty}", volt_name(&s.name), vps.join(", ")),
-            (None, _) => format!("fn {}({}) -> {ret_ty}", volt_name(&s.name), vps.join(", ")),
+            (None, _) => format!("{}fn {}({}) -> {ret_ty}", if ext { "attach " } else { "" }, volt_name(&s.name), vps.join(", ")),
         };
         let mut f = String::new();
         let tps: Vec<String> = volts.iter().filter_map(|p| p.generic.clone()).collect();
@@ -1721,16 +1784,72 @@ impl<'a> Gen<'a> {
         Ok(decl)
     }
 
+    /// a trait only the language's types attach (generic, or with associated consts): its Volt
+    /// declaration, with its type parameters (Volt's own types can't attach it: no table glue)
+    fn trait_decl_foreign(&mut self, name: &str) -> Result<String, String> {
+        let td = self.traits[name].clone();
+        if let Some(why) = &td.skip {
+            return Err(format!("trait {name} ({why})"));
+        }
+        let tps = if td.params.is_empty() { String::new() } else { format!("<{}>\n", td.params.iter().map(|p| format!("{p}: type")).collect::<Vec<_>>().join(", ")) };
+        let mut decl = format!("// {} trait {}: the {}'s types attach it\n{tps}trait {name} {{\n", self.lang.name(), td.name, self.lang.name());
+        for (s, provided) in &td.methods {
+            let callable = s.skip.is_none() && s.generics.is_empty() && matches!(s.recv, Recv::Ref | Recv::Mut);
+            // (a parameter of a type parameter: text there is str, not the instance's std::string)
+            let generic_in = s.params.iter().any(|(_, t)| t.as_ref().is_some_and(|t| td.params.iter().any(|p| mentions(t, p))));
+            let mut ps = vec!["this".to_string()];
+            let mut ok = callable && !generic_in;
+            for (n, t) in &s.params {
+                match t.as_ref().and_then(|t| self.generic_ty(t, false)) {
+                    Some(v) if ok => ps.push(format!("{}: {v}", Self::param_name(n))),
+                    _ => ok = false,
+                }
+            }
+            let r = s.ret.as_ref().and_then(|t| self.generic_ty(t, true));
+            match (ok, r) {
+                (true, Some(r)) => {
+                    if *provided {
+                        decl.push_str("    @attributes([@optional])\n");
+                    }
+                    let _ = writeln!(decl, "    fn {}({}) -> {r};", volt_name(&s.name), ps.join(", "));
+                }
+                _ if *provided => {}
+                _ => return Err(format!("trait {name} (method {}'s types)", s.name)),
+            }
+        }
+        decl.push_str("}\n");
+        self.made_foreign.insert(name.to_string());
+        Ok(decl)
+    }
+
     /// type ty's attach block of trait tr: each method calls the other side's (a method with a
     /// body there that Volt's trait doesn't have is a helper of the block)
     fn attach_block(&mut self, ty: &str, tr: &str) -> Result<String, String> {
         let td = self.traits[tr].clone();
+        let vt = self.trait_path(&td);
+        self.attach_methods(ty, tr, &vt, &td.methods)
+    }
+
+    /// a type's attach block of a generic trait's instance (Countdown's Source<i32>)
+    fn attach_inst(&mut self, inst: &TraitInst) -> Result<String, String> {
+        let td = self.traits[&inst.tr].clone();
+        let mut args = Vec::new();
+        for a in &inst.args {
+            args.push(self.generic_ty(a, true).ok_or_else(|| format!("{}'s {} (its type arguments)", inst.ty, inst.tr))?);
+        }
+        let shown = format!("{}<{}>", inst.tr, args.join(", "));
+        let vt = format!("{}<{}>", self.trait_path(&td), args.join(", "));
+        self.attach_methods(&inst.ty, &shown, &vt, &inst.methods)
+    }
+
+    /// type ty's attach of trait vt (tr as messages name it): its methods
+    fn attach_methods(&mut self, ty: &str, tr: &str, vt: &str, methods: &[(Sig, bool)]) -> Result<String, String> {
         let ti = self.types.get(ty).ok_or_else(|| format!("{ty}'s {tr} (Volt can't name the type)"))?;
-        let (module, tvp, vt) = (ti.def.module.clone(), self.volt_path(&ti.def), self.trait_path(&td));
+        let (module, tvp) = (ti.def.module.clone(), self.volt_path(&ti.def));
         self.block = Some(tr.to_string());
         let mut body = String::new();
         let mut failed = None;
-        for (s, provided) in &td.methods {
+        for (s, provided) in methods {
             match self.function(&module, s, Some(ty)) {
                 Ok(f) => {
                     for l in f.lines() {
@@ -2005,13 +2124,14 @@ impl<'a> Gen<'a> {
         let tnames: Vec<String> = self.traits.keys().cloned().collect();
         for n in &tnames {
             let module = self.traits[n].module.clone();
-            match self.trait_decl(n) {
+            let d = if self.traits[n].foreign { self.trait_decl_foreign(n) } else { self.trait_decl(n) };
+            match d {
                 Ok(d) => self.modules.entry(module).or_default().push_str(&format!("\n{d}")),
                 Err(why) => self.left_out.push(why),
             }
         }
         for (ty, tr) in self.m.impls.clone() {
-            if !self.made_traits.contains(&tr) {
+            if !self.made_traits.contains(&tr) && !self.made_foreign.contains(&tr) {
                 continue;
             }
             match self.attach_block(&ty, &tr) {
@@ -2020,6 +2140,18 @@ impl<'a> Gen<'a> {
                     self.modules.entry(module).or_default().push_str(&format!("\n{b}"));
                 }
                 Err(why) => self.left_out.push(format!("{ty} attaching {tr}: {why}")),
+            }
+        }
+        for inst in self.m.trait_insts.clone() {
+            if !self.made_foreign.contains(&inst.tr) {
+                continue;
+            }
+            match self.attach_inst(&inst) {
+                Ok(b) => {
+                    let module = self.types[&inst.ty].def.module.clone();
+                    self.modules.entry(module).or_default().push_str(&format!("\n{b}"));
+                }
+                Err(why) => self.left_out.push(format!("{} attaching {}: {why}", inst.ty, inst.tr)),
             }
         }
         for n in &names {
@@ -2262,6 +2394,18 @@ fn fails_of(m: &Model) -> BTreeSet<String> {
         }
     }
     out
+}
+
+/// whether a type mentions type parameter g
+fn mentions(t: &Ty, g: &str) -> bool {
+    match t {
+        Ty::Generic(x) => x == g,
+        Ty::Opt(x) | Ty::Res(x) | Ty::Vec(x) | Ty::Slice(x, _) | Ty::Ref(x, _) | Ty::Array(x, _) | Ty::Fails(x, _) | Ty::Future(x) => mentions(x, g),
+        Ty::Tuple(es) => es.iter().any(|(_, t)| mentions(t, g)),
+        Ty::Fn(ps, r, _, _) => ps.iter().any(|p| mentions(p, g)) || mentions(r, g),
+        Ty::Inst(_, args) => args.iter().any(|a| mentions(a, g)),
+        _ => false,
+    }
 }
 
 /// whether a type is used as a value (a parameter, a result, a field, its own methods), not

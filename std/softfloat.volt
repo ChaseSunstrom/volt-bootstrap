@@ -1106,11 +1106,19 @@ namespace softfloat {
         var exp10: i64 = 0;
         var digits: i64 = 0;
         var frac = false;
+        // past 12000 significant digits (more than the ~11564 a binary128 halfway case can need)
+        // a digit only moves the point or says the tail isn't 0
+        var sticky = false;
         var i: usize = 0;
         while (i < text.len) {
             val c = text[i];
             if (c == '.') {
                 frac = true;
+            } else if (c >= '0' && c <= '9' && digits >= 12000) {
+                sticky = sticky || c != '0';
+                if (!frac) {
+                    exp10 += 1;
+                }
             } else if (c >= '0' && c <= '9') {
                 big_mul_add(&num, 10, @cast<u32>(c - '0'));
                 if (num.len > 0) {
@@ -1142,6 +1150,12 @@ namespace softfloat {
                 e = -e;
             }
             exp10 += e;
+        }
+        // a tail that isn't 0: one more digit 1 is as good for rounding
+        if (sticky) {
+            big_mul_add(&num, 10, 1);
+            digits += 1;
+            exp10 -= 1;
         }
         while (num.len > 0 && *num.at(num.len - 1) == 0) {
             num.truncate(num.len - 1);

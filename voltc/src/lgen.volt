@@ -4,7 +4,7 @@
 // Apple's arm64 or Windows x64), so LLVM-built code shares memory and calls with C-backend libraries,
 // C headers and the runtime (compiled by cc).
 use std::mem;
-use { "llvm-c/Core.h", "llvm-c/Target.h", "llvm-c/TargetMachine.h", "llvm-c/Analysis.h", "llvm-c/Transforms/PassBuilder.h", "llvm-c/DebugInfo.h", "llvm-c/LLJIT.h", "llvm-c/Orc.h" } as llvm;
+use { "llvm-c/Core.h", "llvm-c/Target.h", "llvm-c/TargetMachine.h", "llvm-c/Analysis.h", "llvm-c/Transforms/PassBuilder.h", "llvm-c/DebugInfo.h", "llvm-c/LLJIT.h", "llvm-c/Orc.h", "llvm-c/BitReader.h", "llvm-c/Linker.h", "llvm-c/Comdat.h" } as llvm;
 
 // the C calling convention, from the triple
 enum callconv {
@@ -1546,6 +1546,14 @@ attach fn is_vector(this: lg&, t: u32) -> bool {
     }
 }
 
+// does vector t have signed int lanes?
+attach fn signed_lanes(this: lg&, t: u32) -> bool {
+    match (*this.c.t.get(t)) {
+        .VECTOR(x, n) => { return this.int_signed(x); },
+        default => { return false; },
+    }
+}
+
 // is t a vector of floats
 attach fn fp_lanes(this: lg&, t: u32) -> bool {
     match (*this.c.t.get(t)) {
@@ -1974,7 +1982,37 @@ attach fn binary(this: lg&, op: binop_ir, a: u32, b: u32, t: u32) -> llvm::LLVMO
     }
     val cmp = op == binop_ir::EQ || op == binop_ir::NE || op == binop_ir::LT || op == binop_ir::GT || op == binop_ir::LE || op == binop_ir::GE;
     if (this.is_vector(at)) {
-        // lane by lane: + - * / on float lanes, + - * & | ^ on int lanes (the checker allows no more)
+        if (cmp) {
+            // == when every lane is equal, != when any isn't (a NaN lane: unordered, so not equal)
+            var m: llvm::LLVMOpaqueValue* = null;
+            if (this.fp_lanes(at)) {
+                var pred = llvm::LLVMRealOEQ;
+                if (op == binop_ir::NE) {
+                    pred = llvm::LLVMRealUNE;
+                }
+                m = llvm::LLVMBuildFCmp(this.b, pred, av, bv, "");
+            } else {
+                var pred = llvm::LLVMIntEQ;
+                if (op == binop_ir::NE) {
+                    pred = llvm::LLVMIntNE;
+                }
+                m = llvm::LLVMBuildICmp(this.b, pred, av, bv, "");
+            }
+            var name = "llvm.vector.reduce.and";
+            if (op == binop_ir::NE) {
+                name = "llvm.vector.reduce.or";
+            }
+            val id = llvm::LLVMLookupIntrinsicID(this.z(name), name.len);
+            var tys: std::vec<llvm::LLVMOpaqueType*> = {};
+            put(&tys, llvm::LLVMTypeOf(m));
+            val fv = llvm::LLVMGetIntrinsicDeclaration(this.m, id, tys.ptr, 1);
+            val fty = llvm::LLVMIntrinsicGetType(this.ctx, id, tys.ptr, 1);
+            var args: std::vec<llvm::LLVMOpaqueValue*> = {};
+            put(&args, m);
+            return this.from_i1(llvm::LLVMBuildCall2(this.b, fty, fv, args.ptr, 1, ""));
+        }
+        // lane by lane: + - * / on float lanes, + - * & | ^ << >> on int lanes (the checker allows no
+        // more, and keeps every shift amount under the width)
         if (this.fp_lanes(at)) {
             match (op) {
                 .ADD => { return llvm::LLVMBuildFAdd(this.b, av, bv, ""); },
@@ -1989,6 +2027,13 @@ attach fn binary(this: lg&, op: binop_ir, a: u32, b: u32, t: u32) -> llvm::LLVMO
             .MUL => { return llvm::LLVMBuildMul(this.b, av, bv, ""); },
             .BITAND => { return llvm::LLVMBuildAnd(this.b, av, bv, ""); },
             .BITOR => { return llvm::LLVMBuildOr(this.b, av, bv, ""); },
+            .SHL => { return llvm::LLVMBuildShl(this.b, av, bv, ""); },
+            .SHR => {
+                if (this.signed_lanes(at)) {
+                    return llvm::LLVMBuildAShr(this.b, av, bv, "");
+                }
+                return llvm::LLVMBuildLShr(this.b, av, bv, "");
+            },
             default => { return llvm::LLVMBuildXor(this.b, av, bv, ""); },
         }
     }

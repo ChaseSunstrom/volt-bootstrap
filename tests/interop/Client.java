@@ -88,6 +88,8 @@ public class Client {
         var shelf = new mathlib.ml_shelf(new mathlib.ml_label[] {new mathlib.ml_label("abc", new int[] {2, 2, 2}, new mathlib.vec2(3, 0)), new mathlib.ml_label("de", new int[] {1, 1, 1}, new mathlib.vec2(0, 0))}, 1);
         var bk = mathlib.ml_labels_back(shelf.labels);
         System.out.println("pair " + mathlib.ml_pair_len(new mathlib.ml_pair(new String[] {"ab", "cde"}, 1)) + " " + po.names[0] + " " + po.names[1] + " shelf " + mathlib.ml_shelf_len(shelf) + " back " + bk.length + " " + bk[0].name);
+        var vr = mathlib.ml_vadd(new float[] {1, 2, 3, 4}, new float[] {5, 6, 7, 8});
+        System.out.println("vector " + (int) vr[0] + " " + (int) vr[1] + " " + (int) vr[2] + " " + (int) vr[3] + " " + mathlib.ml_vsum8(new int[] {1, 2, 3, 4, 5, 6, 7, 8}));
     }
 
     // numbers as the other clients print them: 11, not 11.0

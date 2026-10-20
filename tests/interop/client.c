@@ -149,5 +149,8 @@ int main(void) {
     mathlib_ml_shelf sh = {{give_label(NULL, 2), {{(const uint8_t *)"de", 2}, {1, 1, 1}, {0, 0}}}, 1};
     mathlib_slice_ml_label bk = ml_labels_back((mathlib_slice_ml_label){sh.labels, 2});
     printf("pair %lld %.*s %.*s shelf %lld back %zu %.*s\n", (long long)ml_pair_len(pa), (int)po.names[0].len, (const char *)po.names[0].ptr, (int)po.names[1].len, (const char *)po.names[1].ptr, (long long)ml_shelf_len(sh), bk.len, (int)bk.ptr[0].name.len, (const char *)bk.ptr[0].name.ptr);
+    mathlib_array_f32_4 va = {{1, 2, 3, 4}}, vb = {{5, 6, 7, 8}};
+    mathlib_array_f32_4 vr = ml_vadd(va, vb);
+    printf("vector %d %d %d %d %lld\n", (int)vr.v[0], (int)vr.v[1], (int)vr.v[2], (int)vr.v[3], (long long)ml_vsum8((mathlib_array_i32_8){{1, 2, 3, 4, 5, 6, 7, 8}}));
     return 0;
 }

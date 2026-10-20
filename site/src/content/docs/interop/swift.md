@@ -49,14 +49,21 @@ when a file changes. It works the same with `voltc run main.volt` and in a bolt 
 | an enum without associated values | a Volt enum; an `Int` enum keeps its raw values when they're literals |
 | `init(...)`, and the memberwise and empty inits Swift writes itself | `T::new(...)`; a second `T::new_<its first label>(...)` |
 | a method, `mutating` or not, a `static func` (an `extension`'s too) | a method; `T::f(...)` |
-| a computed property, or a class's stored one | a method without arguments: `p.length()` |
+| a computed property, or a class's stored one | a method without arguments: `p.length()`; a getter that `throws` gives `swift_error!T` |
 | a top-level `let` of a number, `Bool` or string | a `val` |
+| overloads (`describe(_: Int)`, `describe(_: Double)`) | Volt overloads; ones whose Volt types are the same (Swift's labels alone differ: `move(by:)`, `move(to:)`) are each named for their labels, `move_by` and `move_to` |
+| an `async` func, init or getter | what it gives: the shim runs it in a detached task and waits for it |
+| an `actor` | a class: its members (but `nonisolated` and `static` ones) are reached through `await` the same way |
+| `@MainActor`, on a declaration, a type (and its subclasses) or an extension | called on the main thread (the one `main` runs on), an `async` one by running the main run loop until it's done; called from another thread, the program stops. A `@MainActor` struct is a handle (its fields are the actor's) |
+| `#if ... #elseif ... #else ... #endif` | the branch that holds: bolt asks swiftc about each condition (`os()`, `arch()`, `canImport()`, `swift(>=)`, `compiler(>=)`, `targetEnvironment()`, flags), with the target and flags the build uses |
 
-Generic and `async` functions, protocols, actors, nested types, closures, a second function of the
-same name (an overload), a computed property whose getter `throws` or is `async`, what's under
-`#if` (swiftc decides which branch is in), and declarations marked `@MainActor` (or another global
-actor) or `@available(*, unavailable)` aren't callable from Volt; they're left out, listed in a
-comment of the generated declarations (`VOLT_SHOW_IMPORT=1 voltc check main.volt` prints them).
+Generic functions, protocols, nested types, closures, an overload Swift tells apart by its result
+alone, a `mutating` method that's `async`, what's under an `#if` whose condition swiftc can't
+compile, and declarations marked with a global actor other than the main one or
+`@available(*, unavailable)` aren't callable from Volt; they're left out, listed in a comment of the
+generated declarations (`VOLT_SHOW_IMPORT=1 voltc check main.volt` prints them). An `async` call
+that waits for work the main actor has to do deadlocks, as it would blocking the main thread in
+Swift.
 Each Volt fn has the Swift declaration it calls in a comment above it
 (`// Swift: func scaled(by k: Double) -> Point`), which an editor's hover shows. A Swift name that
 is a Volt keyword gets a `_` after it (`move` is `move_`). The program links the module as a shared

@@ -53,3 +53,103 @@ func parse(_ text: String) throws -> Int {
 func makeCounter(_ label: String) -> Counter { Counter(label: label, start: 100) }
 
 private func hidden() {}
+
+// overloads: Volt tells these apart by their types...
+func describe(_ x: Int) -> String { "int \(x)" }
+func describe(_ x: Double) -> String { "double \(x)" }
+func describe(_ s: String) -> String { "text \(s)" }
+
+// ...and these by their labels alone: move_by and move_to
+func move(by k: Int) -> Int { k + 1 }
+func move(to k: Int) -> Int { k * 10 }
+
+// a getter that throws, and one that's async
+struct Gauge {
+    var level: Int = 3
+
+    var checked: Int {
+        get throws {
+            if level < 0 { throw ParseError.notANumber("level") }
+            return level * 2
+        }
+    }
+
+    var slow: Int {
+        get async {
+            await Task.yield()
+            return level + 100
+        }
+    }
+}
+
+func later(_ n: Int) async -> Int {
+    await Task.yield()
+    return n * 2
+}
+
+func laterOrFail(_ n: Int) async throws -> Int {
+    await Task.yield()
+    if n < 0 { throw ParseError.notANumber("negative") }
+    return n
+}
+
+// an actor: what it isolates is reached through await
+actor Tally {
+    var n = 0
+
+    func add(_ k: Int) -> Int {
+        n += k
+        return n
+    }
+
+    nonisolated func name() -> String { "tally" }
+}
+
+// the main actor's: called from the main thread
+@MainActor func onMain() -> Int { 7 }
+
+@MainActor func onMainLater() async -> Int {
+    await Task.yield()
+    return 9
+}
+
+// the main actor's types: a struct (a handle: its fields are the actor's), an extension's
+// members, a subclass of such a class
+@MainActor struct Badge {
+    var n: Int
+
+    func doubled() -> Int { n * 2 }
+}
+
+@MainActor extension Gauge {
+    func onMainLevel() -> Int { level * 10 }
+}
+
+@MainActor class Screen {
+    func draw() -> Int { 1 }
+}
+
+final class Panel: Screen {
+    func size() -> Int { 4 }
+}
+
+@MainActor func makePanel() -> Panel { Panel() }
+
+// #if: the branch that holds for this swiftc
+#if os(Linux) || os(macOS) || os(Windows)
+func platformKnown() -> Bool { true }
+#else
+func platformKnown() -> Bool { false }
+#endif
+
+#if os(Windows) && !os(Windows)
+func chain() -> Int { 1 }
+#elseif compiler(>=5.0) && (arch(x86_64) || arch(arm64))
+func chain() -> Int { 2 }
+#else
+func chain() -> Int { 3 }
+#endif
+
+#if canImport(NoSuchModuleHere)
+func impossible() -> Int { 0 }
+#endif

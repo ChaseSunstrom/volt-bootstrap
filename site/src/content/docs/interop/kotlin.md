@@ -54,11 +54,18 @@ result and redoes it when a file (or the compiler) changes. It works the same wi
 | an `object`'s or a `companion object`'s `fun` | `T::f(...)` |
 | a property (`val`, `var`, or a constructor's `val`) | a method without arguments: `t.total()` |
 | a top-level `const val` or `val` of a number, `Boolean` or string | a `val` |
+| overloads (`describe(x: Int)`, `describe(x: Double)`) | Volt overloads (ones Volt can't tell apart, two Kotlin types it names alike, are left out) |
+| `vararg xs: T`, the last parameter, of numbers or strings | `xs: T[..]`, spread into the call |
+| `typealias Meters = Double` | its type, and a Volt alias: `geo::Meters` |
+| `fun Point.shifted(...)`, an extension of one of the files' types | a method of it |
+| `fun String.exclaim()`, `fun Int.squared()` | an attach fn on `str`, `i32`: `"hey".exclaim()` |
+| a nested class, `enum class` or `object` (`Garage.Car`, a companion object's too) | `Garage_Car`, as nested C++ types are named; an `inner class` is left out |
+| a `suspend fun` | what it gives, when it finishes without suspending; one that suspends throws (nothing would resume it): the plain form stops the program, `try_f` gives `PANIC` |
 
-Generic, `suspend` and extension functions, `vararg` parameters, interfaces, nested types,
-typealiases, a function whose result type isn't written (`fun f() = ...`) and a second function of
-the same name (an overload) aren't callable from Volt; they're left out, listed in a comment of the
-generated declarations (`VOLT_SHOW_IMPORT=1 voltc check main.volt` prints them). Each Volt fn has
+Generic functions, interfaces, a function whose result type isn't written (`fun f() = ...`), an
+extension of a type Volt can't attach to (a nullable or generic one), an extension property and a
+`vararg` that isn't last aren't callable from Volt; they're left out, listed in a comment of the generated declarations
+(`VOLT_SHOW_IMPORT=1 voltc check main.volt` prints them). Each Volt fn has
 the Kotlin declaration it calls in a comment above it (`// Kotlin: fun scaled(k: Double): Point`),
 which an editor's hover shows. A Kotlin name that is a Volt keyword gets a `_` after it (`move` is
 `move_`). The program links the archive from bolt's cache with `-lpthread -ldl -lm -lstdc++`; two Kotlin imports in one program share one

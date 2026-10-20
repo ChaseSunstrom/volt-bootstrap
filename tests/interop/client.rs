@@ -108,4 +108,6 @@ fn main() {
     let bk = ml_labels_back(&mut shelf.labels);
     let pair_n = ml_pair_len(ml_pair { names: [VoltStr::from("ab"), VoltStr::from("cde")], n: 1 });
     println!("pair {} {} {} shelf {} back {} {}", pair_n, unsafe { po.names[0].as_str() }, unsafe { po.names[1].as_str() }, shelf_n, bk.len, unsafe { (*bk.ptr).name.as_str() });
+    let vr = ml_vadd([1.0, 2.0, 3.0, 4.0], [5.0, 6.0, 7.0, 8.0]);
+    println!("vector {} {} {} {} {}", vr[0] as i32, vr[1] as i32, vr[2] as i32, vr[3] as i32, ml_vsum8([1, 2, 3, 4, 5, 6, 7, 8]));
 }

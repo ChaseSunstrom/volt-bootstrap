@@ -8421,6 +8421,7 @@ attach fn cpp_text_template(this: checker&, r: u32, gargs: std::vec<garg>&, args
     var places = false;
     var texts = false;
     var fixed: std::vec<tval> = {}; // each string Volt can't change: where it is (text_written)
+    var placed: std::vec<tval> = {}; // each it may change: where it is (ref_written)
     var es: std::vec<expr> = {};
     for (i) in 1..args.len {
         val e = try this.garg_value(args.at(i));
@@ -8466,15 +8467,16 @@ attach fn cpp_text_template(this: checker&, r: u32, gargs: std::vec<garg>&, args
             put(&mpre, vnew(rt, c));
             put(&ctys, STR);
             put(&cpre, vnew(STR, this.call_fn(this.fi(hf).ir, nodes(c), STR)));
+            var w = vnew(rt, c);
+            w.via = via;
+            w.root = v.root;
             if (place) {
                 places = true;
+                put(&placed, w);
                 put(&xtys, rt);
                 put(&xpre, vnew(rt, c));
             } else {
                 texts = true;
-                var w = vnew(rt, c);
-                w.via = via;
-                w.root = v.root;
                 put(&fixed, w);
                 put(&xtys, STR);
                 put(&xpre, vnew(STR, this.call_fn(this.fi(hf).ir, nodes(c), STR)));
@@ -8525,6 +8527,7 @@ attach fn cpp_text_template(this: checker&, r: u32, gargs: std::vec<garg>&, args
             return this.pick_call("@cpp", &cands, null, null, &none, &cpre, &es, null, span);
         };
         put(&cands, first);
+        this.ref_written(k, text.as_str(), &ctys, value, &placed, span);
         return this.pick_call("@cpp", &cands, null, null, &none, &xpre, &es, null, span);
     }
     val made = this.cpp_instance(k, text.as_str(), &ctys, false, value, span) catch |e| {
@@ -8543,13 +8546,8 @@ attach fn cpp_text_template(this: checker&, r: u32, gargs: std::vec<garg>&, args
 // ponytail: each such string counts as written, though C++ may take only one of several as S&
 attach fn text_written(this: checker&, fixed: std::vec<tval>&, span: span) -> compile_error!void {
     for (w&) in fixed.items() {
-        val wv = w.via;
-        if (wv) {
-            val b = this.via_body(wv.k);
-            if (b != null && wv.off >= 0 && wv.off < 64) {
-                this.mark(b ?? 0, via_param(wv.k), @cast<u64>(1) << @cast<u32>(wv.off));
-                continue;
-            }
+        if (this.write_via(w)) {
+            continue;
         }
         val root = w.root ?? return fails(span, "C++ would change a temporary std::string here (the template takes it as S&): make it a var first");
         var what = "a val";
@@ -8561,6 +8559,42 @@ attach fn text_written(this: checker&, fixed: std::vec<tval>&, span: span) -> co
         }
         return this.var_fix(fail(span, fmt2("'{}' is {}, and C++ would change it: declare it with var", S(root), S(what))), root, span);
     }
+}
+
+// a call C++ took with the strings Volt may change (placed) as references: when it won't take them
+// all as text (ctys: const S& and S do), one is an S&, so each a parameter reaches is a write through
+// that parameter, and a caller lending that parameter a val is refused (fill(S&) yes, look(const S&) no)
+// ponytail: one more probe per such call (cached by its text), and each place counts as written though
+// C++ may take only one of several as S&; probe each alone if that flags a call that only reads
+attach fn ref_written(this: checker&, k: usize, text: str, ctys: std::vec<u32>&, value: bool, placed: std::vec<tval>&, span: span) -> void {
+    var any = false;
+    for (w&) in placed.items() {
+        if (w.via != null) {
+            any = true;
+        }
+    }
+    if (!any) {
+        return;
+    }
+    val reads = this.cpp_instance(k, text, ctys, false, value, span) catch |e| {
+        for (w&) in placed.items() {
+            this.write_via(w);
+        }
+        return;
+    };
+}
+
+// a write through the parameter w is reached through, if it is one; whether it is
+attach fn write_via(this: checker&, w: tval&) -> bool {
+    val wv = w.via;
+    if (wv) {
+        val b = this.via_body(wv.k);
+        if (b != null && wv.off >= 0 && wv.off < 64) {
+            this.mark(b ?? 0, via_param(wv.k), @cast<u64>(1) << @cast<u32>(wv.off));
+            return true;
+        }
+    }
+    return false;
 }
 
 fn hole_index(s: str) -> usize? {
