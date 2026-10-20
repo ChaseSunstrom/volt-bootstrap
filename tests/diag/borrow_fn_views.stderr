@@ -13,3 +13,27 @@ warning: 'w' looks into 'grow', whose items may have moved or been freed since: 
    │     --------------------------------- grow.push may move or free them here
 71 │     std::println(w.len);
    │                  ^
+
+warning: 'count' uses 'tg', which looks into 'names', deleted since at the end of its block
+   ┌─ tests/diag/borrow_fn_views.volt:89:18
+   │
+88 │     }
+   │     - names is deleted here
+89 │     std::println(count());
+   │                  ^^^^^
+
+warning: 'tl' looks into 'names', which was deleted at the end of its block: keep 'names' as long as 'tl' (declare it outside the block)
+   ┌─ tests/diag/borrow_fn_views.volt:98:18
+   │
+97 │     }
+   │     - names is deleted here
+98 │     std::println(tl.len);
+   │                  ^^
+
+warning: 'te' looks into 'names', which was deleted at the end of its block: keep 'names' as long as 'te' (declare it outside the block)
+    ┌─ tests/diag/borrow_fn_views.volt:105:18
+    │
+104 │     }
+    │     - names is deleted here
+105 │     std::println(te.len);
+    │                  ^^

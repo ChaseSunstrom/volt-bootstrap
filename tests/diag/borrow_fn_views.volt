@@ -78,4 +78,52 @@ fn run(on: bool) -> void {
         keep.push(names) catch @panic("out of memory");
     }
     std::println(tm.len);
+    // a closure using a view whose owner's block ended
+    val first_kept = names_of(1);
+    var tg = str_views(&first_kept);
+    val count = |tg&| () -> usize { return tg.len; };
+    if (on) {
+        val names = names_of(2);
+        tg = str_views(&names);
+    }
+    std::println(count());
+    // the owner a loop's body holds, deleted at the end of each pass
+    var tl: std::vec<str> = {};
+    var n: usize = 0;
+    while (n < 2) {
+        val names = names_of(n);
+        tl = str_views(&names);
+        n += 1;
+    }
+    std::println(tl.len);
+    // a result that may fail, unwrapped by catch
+    var te: std::vec<str> = {};
+    if (on) {
+        val names = names_of(2);
+        te = try_views(&names) catch @panic("out of memory");
+    }
+    std::println(te.len);
+    // only the first reference parameter lends the result: when its argument isn't a local, a
+    // later one isn't followed instead
+    var lists: std::vec<std::vec<std::string>> = {};
+    lists.push(names_of(1)) catch @panic("out of memory");
+    var t2: std::vec<str> = {};
+    if (on) {
+        val names = names_of(2);
+        t2 = views_of_second(first_list(&lists), &names);
+    }
+    std::println(t2.len);
+}
+fn try_views(xs: std::vec<std::string>&) -> std::mem::mem_error!std::vec<str> {
+    var out: std::vec<str> = {};
+    for (s&) in xs.items() {
+        try out.push(s.as_str());
+    }
+    return out;
+}
+fn first_list(ls: std::vec<std::vec<std::string>>&) -> std::vec<std::string>& {
+    return ls.at(0);
+}
+fn views_of_second(a: std::vec<std::string>&, b: std::vec<std::string>&) -> std::vec<str> {
+    return str_views(b);
 }

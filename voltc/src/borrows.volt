@@ -445,6 +445,16 @@ attach fn lent_by(this: checker&, v: tval, inst: u32, owner: place_at?) -> tval 
 // owned generic container whose type arguments, declared outside the fn's generic parameters, are
 // such (std::vec<str>, not std::vec<T> with T = str, which holds values whatever they are)
 attach fn gives_views(this: checker&, t: u32, a: ty&, env: u32) -> bool {
+    // a result that may fail (E!T): its payload's (try and catch carry the loan on to it)
+    match (*this.t.get(t)) {
+        .ERR_UNION(e, x) => {
+            match (a.kind) {
+                .ERROR_UNION(ea, xa) => { return this.gives_views(x, xa, env); },
+                default => { return false; },
+            }
+        },
+        default => {},
+    }
     if (this.is_view(t)) {
         return this.view_type_ast(a, env);
     }
@@ -485,6 +495,13 @@ attach fn gives_views(this: checker&, t: u32, a: ty&, env: u32) -> bool {
         default => {},
     }
     return false;
+}
+
+// r, unwrapped from v (try, catch): a view of what v's loan is on
+fn with_loan(r: tval, v: tval&) -> tval {
+    var out = r;
+    out.loan = v.loan;
+    return out;
 }
 
 // the place a reference argument points at: what `&e` takes, or the reference local (or field chain
