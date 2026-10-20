@@ -2506,6 +2506,11 @@ attach fn global_text(this: cgen&, out: std::string&, g: u32) -> void {
     if (gl.keep) {
         out.append("__attribute__((used)) ");
     }
+    if (gl.section != null && gl.link != linkage::EXTERNAL) {
+        out.append("__attribute__((section(");
+        put_c_str(out, gl.section ?? "");
+        out.append("))) ");
+    }
     if (gl.tls) {
         out.append("_Thread_local ");
     }

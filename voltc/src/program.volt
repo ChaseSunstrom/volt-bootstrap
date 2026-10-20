@@ -123,6 +123,28 @@ attach fn program(this: checker&) -> compile_error!void {
             }
         }
     }
+    // a global placed in a section is a root, read or not: a linker script puts it where something
+    // else reads it (a vector table the CPU does)
+    for (di) in 0..this.decls.len {
+        val d = @cast<u32>(di);
+        match (this.item_of(d).kind) {
+            .GLOBAL(l) => {
+                var placed = false;
+                for (a&) in this.item_of(d).attrs.items() {
+                    placed = placed || attr_named(a, "section");
+                }
+                val pkg = this.pkg_of(d);
+                val mine = (lib == null && pkg == null) || (lib != null && pkg != null && (pkg ?? "") == (lib ?? ""));
+                if (placed && mine) {
+                    this.global(d, this.item_of(d).span) catch |e| {
+                        put(&this.errors, err_diag(&e));
+                        continue;
+                    };
+                }
+            },
+            default => {},
+        }
+    }
     this.check_traits();
     // an error stops only its own function: the others are still checked, so one run finds
     // every independent error (--error-limit picks how many are shown)

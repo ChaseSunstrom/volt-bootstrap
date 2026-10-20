@@ -25,7 +25,7 @@ export fn on_device_irq() -> void {
 // the device interrupts, IRQ 0 first (the NVIC's numbers; IRQ 0 is the LM3S6965's GPIO port A and
 // the nRF51's POWER_CLOCK): the linker script keeps this section right after the system entries
 @attributes([@section(".vector_table.irq")])
-export val IRQS: (extern "C" fn() -> void)[1] = { on_device_irq };
+val IRQS: (extern "C" fn() -> void)[1] = { on_device_irq };
 
 // the start code's: raises SVCall
 extern "C" fn volt_svc() -> void;

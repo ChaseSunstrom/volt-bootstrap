@@ -1219,13 +1219,74 @@ attach fn global(this: checker&, d: u32, span: span) -> compile_error!global_ref
         }
     }
     var tls = false;
+    var section: str? = null;
     for (a&) in this.item_of(d).attrs.items() {
         tls = tls || attr_named(a, "thread_local");
+        if (attr_named(a, "section")) {
+            section = attr_str(a);
+        }
     }
-    put(&this.ir.globals, { name: c, ty: gv.ty, init: init, mutable: l.mutable, link: link, origin: span, tls: tls });
+    // a global in a section is data the image carries (a vector table read before anything runs):
+    // its initializer can't wait for a constructor (reported here once; the global still resolves,
+    // so each use doesn't report it again)
+    if (section != null && init != null && !this.const_data(init ?? 0)) {
+        var e = fail(span, fmt("'{}' is in a section, so it's data the image holds as it is: its initializer has to be constants (numbers, literals, fn names, addresses of globals), not something run at startup", S(name)));
+        put(&this.errors, err_diag(&e));
+    }
+    put(&this.ir.globals, { name: c, ty: gv.ty, init: init, mutable: l.mutable, link: link, origin: span, tls: tls, section: section, keep: section != null });
     val g: global_ref = { c: this.ir.node(ir_kind::GLOBAL(@cast<u32>(this.ir.globals.len - 1)), gv.ty), ty: gv.ty, mutable: l.mutable };
     this.global_c.put(d, g);
     return g;
+}
+
+// is IR node n a value the object file holds as it is: numbers, literals, a fn's address, and
+// aggregates and arrays of them
+attach fn const_data(this: checker&, n: u32) -> bool {
+    match (this.ir.at(n).kind) {
+        .INT(x) => { return true; },
+        .FLOAT(x) => { return true; },
+        .QUAD(x) => { return true; },
+        .BOOL(x) => { return true; },
+        .STR(x) => { return true; },
+        .CSTR(x) => { return true; },
+        .FN(f) => { return true; },
+        .ZERO => { return true; },
+        .NULLPTR => { return true; },
+        .ADDR(p) => { return this.const_place(p); },
+        .AGG(inits&) => {
+            for (fi&) in inits.items() {
+                if (!this.const_data(fi.value)) {
+                    return false;
+                }
+            }
+            return true;
+        },
+        .ARRAY_LIT(xs&) => {
+            for (x&) in xs.items() {
+                if (!this.const_data(*x)) {
+                    return false;
+                }
+            }
+            return true;
+        },
+        default => { return false; },
+    }
+}
+
+// is IR node p a place whose address the object file can hold: a global, or a field or constant
+// index of one
+attach fn const_place(this: checker&, p: u32) -> bool {
+    match (this.ir.at(p).kind) {
+        .GLOBAL(g) => { return true; },
+        .FIELD(b, i) => { return this.const_place(b); },
+        .INDEX(b, i) => {
+            match (this.ir.at(i).kind) {
+                .INT(v) => { return this.const_place(b); },
+                default => { return false; },
+            }
+        },
+        default => { return false; },
+    }
 }
 
 // A linked package with a global whose type holds a trait union is built from source instead: the

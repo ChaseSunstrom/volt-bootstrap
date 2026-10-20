@@ -1146,6 +1146,9 @@ attach fn decl_global(this: lg&, g: u32) -> llvm::LLVMOpaqueValue* {
             if (gl.link == linkage::STATIC) {
                 llvm::LLVMSetLinkage(gv, llvm::LLVMInternalLinkage);
             }
+            if (gl.section) {
+                llvm::LLVMSetSection(gv, this.z(gl.section));
+            }
         }
     }
     val r = v ?? @panic("global");
@@ -2951,6 +2954,13 @@ attach fn llvm_build(this: checker&, g: lg&) -> std::string {
             llvm::LLVMInitializeWebAssemblyTargetMC();
             llvm::LLVMInitializeWebAssemblyAsmPrinter();
             g.cc = callconv::WASM;
+        } else if (bare.arch == "aarch64") {
+            llvm::LLVMInitializeAArch64TargetInfo();
+            llvm::LLVMInitializeAArch64Target();
+            llvm::LLVMInitializeAArch64TargetMC();
+            llvm::LLVMInitializeAArch64AsmPrinter();
+            llvm::LLVMInitializeAArch64AsmParser();
+            g.cc = callconv::AAPCS64;
         } else if (bare.arch == "arm") {
             llvm::LLVMInitializeARMTargetInfo();
             llvm::LLVMInitializeARMTarget();
@@ -3058,7 +3068,13 @@ attach fn llvm_build(this: checker&, g: lg&) -> std::string {
         g.wasm_runtime(wasi);
     } else if (bare) {
         // the start code, and the hooks the program leaves to the defaults
-        var start = start_asm(bare);
+        var taken: std::vec<str> = {};
+        for (n) in CORTEX_HANDLERS {
+            if (defines(g.m, n)) {
+                put(&taken, n);
+            }
+        }
+        var start = start_asm(bare, &taken);
         start.append(hook_defaults_asm(bare, !defines(g.m, "volt_exit"), !defines(g.m, "volt_console_write")).as_str());
         llvm::LLVMSetModuleInlineAsm2(g.m, start.c_str(), start.len());
     }

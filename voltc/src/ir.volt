@@ -140,6 +140,7 @@ struct ir_global {
     keep: bool = false;   // must stay in the object even if unused (guard references)
     origin: span? = null; // the Volt declaring it (none for generated ones)
     tls: bool = false;    // @thread_local: each thread has its own
+    section: str? = null; // @section("name"): in that linker section (kept, unread or not)
 }
 
 // the IR for a whole unit; nodes, fns and globals refer to each other by index

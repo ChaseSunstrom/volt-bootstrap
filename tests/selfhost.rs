@@ -193,7 +193,8 @@ fn bare_metal(voltc: &Path, std_dir: &Path) {
 fn irq_table_follows(elf: &Path, board: &str, target: &str) {
     let Ok(o) = Command::new("llvm-nm").arg(elf).output() else { return }; // no llvm-nm: nothing to check with
     let syms = String::from_utf8_lossy(&o.stdout);
-    let at = syms.lines().find_map(|l| l.strip_suffix(" IRQS").and_then(|a| a.split_whitespace().next()).map(String::from));
+    // (the global's symbol is its C name, vg_IRQS)
+    let at = syms.lines().find(|l| l.split_whitespace().last().is_some_and(|n| n.ends_with("IRQS"))).and_then(|l| l.split_whitespace().next()).map(String::from);
     assert_eq!(at.as_deref(), Some("00000040"), "{board} {target}: IRQS isn't at 0x40, after the system entries:\n{syms}");
 }
 

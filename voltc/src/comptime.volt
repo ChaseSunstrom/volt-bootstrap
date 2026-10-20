@@ -4416,7 +4416,7 @@ fn attr_defs() -> std::vec<attr_def> {
     put(&v, { name: "unchecked", args: 0, sig: "@unchecked", doc: "no bounds checks in this fn's body (for code that proves its own indices)" });
     put(&v, { name: "invalidates", args: 0, sig: "@invalidates", doc: "a method that may move or free its receiver's storage: borrows into it end at the call" });
     put(&v, { name: "opt", args: 1, sig: "@opt(level)", doc: "this fn's optimization level" });
-    put(&v, { name: "section", args: 1, sig: "@section(\"name\")", doc: "put this fn in a linker section" });
+    put(&v, { name: "section", args: 1, sig: "@section(\"name\")", doc: "put this fn or global in a linker section" });
     put(&v, { name: "align", args: 1, sig: "@align(n)", doc: "this fn's code alignment, in bytes" });
     put(&v, { name: "deprecated", args: 1, sig: "@deprecated(\"why\")", doc: "calling this fn warns with this message" });
     put(&v, { name: "owns", args: 1, sig: "@owns(\"field\")", doc: "the struct owns what this pointer field points to (for borrow checking)" });

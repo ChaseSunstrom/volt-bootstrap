@@ -25,6 +25,7 @@ voltc build blinky.volt board.volt --target thumbv7m-none --link-script lm3s6965
 | `thumbv6m-none` | Cortex-M0 | `arm` | `32` |
 | `thumbv7m-none` | Cortex-M3 | `arm` | `32` |
 | `thumbv7em-none` | Cortex-M4 | `arm` | `32` |
+| `aarch64-none` | Cortex-A53 (64-bit ARM, at EL1 with the MMU off) | `aarch64` | `64` |
 
 In every one `@cfg("os")` is `none`, `@cfg("target")` is the `--target` name and `@cfg("hosted")` is
 false, so a library can tell. `usize` and `isize` are as wide as a pointer: 32 bits where
@@ -38,7 +39,9 @@ under qemu.
 - **The start code**, from voltc. It sets the stack pointer, copies `.data` from where it's loaded to
   where it runs, zeroes `.bss`, runs the constructors in `.init_array`, calls `main`, and passes
   what `main` returns to `volt_exit`. On a Cortex-M it's also the vector table: the stack top, the
-  reset entry, and the fault entries. On a Cortex-M4 and on `riscv64-none` it turns the FPU on.
+  reset entry, and the system exceptions (see [Interrupts](#interrupts)). On `aarch64-none` it
+  points the exception vectors (`VBAR_EL1`) at entries that each go to `volt_fault`. On a Cortex-M4,
+  `riscv64-none` and `aarch64-none` it turns the FPU on.
 - **std**, in Volt. Printing, `box`, `vec`, `map`, `string` and the other collections, `std::math`
   (as [`std::math::portable`](/volt-bootstrap/std/math-functions/#in-volt-stdmathportable)), and panics all
   work. Memory comes from a heap between two addresses the linker script gives. What
@@ -74,7 +77,7 @@ default is used.
 | Function | Does | Default |
 | --- | --- | --- |
 | `export fn volt_console_write(p: u8*, n: usize) -> void` | where printing and panic messages go | drops the text |
-| `export fn volt_exit(code: i32) -> never` | ends the program: `main`'s result, or 101 after a panic | stops the CPU; on a Cortex-M, leaves through ARM semihosting (qemu with `-semihosting`, or a debugger) |
+| `export fn volt_exit(code: i32) -> never` | ends the program: `main`'s result, or 101 after a panic | stops the CPU; on a Cortex-M and on `aarch64-none`, leaves through ARM semihosting (qemu with `-semihosting`, or a debugger) |
 
 Hardware registers are memory: `@volatile_read(p)` and `@volatile_write(p, v)` read and write them,
 and the compiler keeps every access, in order. This is a UART's console on qemu's RISC-V board:
@@ -89,11 +92,57 @@ export fn volt_console_write(p: u8*, n: usize) -> void {
 }
 ```
 
+## Interrupts
+
+On a Cortex-M the start code's vector table names each system exception by a weak symbol. A Volt
+`export fn` of that name handles it; any the program doesn't define go to `volt_fault`, which stops
+the CPU (define `volt_fault` to do something else):
+
+| Exception | Handler |
+| --- | --- |
+| NMI | `volt_nmi` |
+| HardFault | `volt_hard_fault` |
+| MemManage, BusFault, UsageFault | `volt_mem_manage`, `volt_bus_fault`, `volt_usage_fault` |
+| SVCall | `volt_svcall` (`extern "C" fn volt_svc() -> void;` raises it: the start code's `svc #0`) |
+| DebugMonitor | `volt_debug_mon` |
+| PendSV | `volt_pendsv` |
+| SysTick | `volt_systick` |
+
+The device interrupts come right after, in the order the chip numbers them: a Volt table of
+handlers, placed with `@section(".vector_table.irq")`. Each entry is an `extern "C" fn` name, so the
+table is constant data in flash, read by the CPU before any of the program runs (a global in a
+section must have a constant initializer: a call or another global's value is an error):
+
+```volt ignore
+var ticks: u32 = 0;
+
+export fn volt_systick() -> void {
+    ticks += 1;
+}
+
+export fn on_uart() -> void {
+    // ...
+}
+
+export fn on_timer() -> void {
+    // ...
+}
+
+// IRQ 0 and IRQ 1 on this chip
+@attributes([@section(".vector_table.irq")])
+val IRQS: (extern "C" fn() -> void)[2] = { on_uart, on_timer };
+```
+
+A handler is an ordinary function: the core saves the registers a call would clobber, so it needs no
+special attribute. The interrupt still has to be enabled where the chip says (the NVIC's `ISER`, or
+SysTick's control register).
+
 ## The linker script
 
-`--link-script` says where memory is. It must put the start code where the CPU begins (on RISC-V,
-the `.text.volt_start` section at the reset address; on a Cortex-M, `.vector_table` at the start of
-flash) and define the symbols the start code and the heap read:
+`--link-script` says where memory is. It must put the start code where the CPU begins (on RISC-V and
+`aarch64-none`, the `.text.volt_start` section at the reset or load address; on a Cortex-M,
+`.vector_table` at the start of flash, with `.vector_table.irq`, the program's device interrupts,
+right after it: `KEEP(*(.vector_table)) KEEP(*(.vector_table.irq))`) and define the symbols the start code and the heap read:
 
 | Symbol | Is |
 | --- | --- |
@@ -107,11 +156,13 @@ flash) and define the symbols the start code and the heap read:
 ## Examples
 
 [examples/bare-metal](https://github.com/ChaseSunstrom/volt-bootstrap/tree/main/examples/bare-metal)
-has blinky for three boards qemu emulates: its RISC-V `virt` board, the LM3S6965 (a Cortex-M3) and
-the BBC micro:bit (an nRF51822, a Cortex-M0 with 16 KB of RAM).
+has blinky for four boards qemu emulates: its RISC-V `virt` board, its AArch64 `virt` board, the
+LM3S6965 (a Cortex-M3) and the BBC micro:bit (an nRF51822, a Cortex-M0 with 16 KB of RAM), and on
+the two Cortex-M boards an interrupts program that handles PendSV, SVCall and a device interrupt.
 Each has its `board.volt`, its linker script and a `run.sh` that builds it and runs it under qemu.
 The test suite runs each, in debug and release builds, with the C compiler set to `false`.
 
 ## Not yet
 
-- Interrupt handlers past the reset and fault entries, and other CPUs (AArch64, x86-64).
+- Interrupt handlers on RISC-V (its trap vector) and on `aarch64-none` (exception handlers past the
+  default, and the GIC's device interrupts), and x86-64.
