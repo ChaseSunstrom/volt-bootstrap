@@ -115,6 +115,12 @@ int main(void) {
     mathlib_math_error_or_i64 k = counter_take(c, 9);
     printf("take %s\n", k.error == MATHLIB_MATH_ERROR_NEGATIVE ? "negative" : "?");
     counter_free(c);
+    // parameters named like the shim's helpers: a counter given away, a string, a slice of text
+    mathlib_counter *c2 = counter_new((volt_str){(const uint8_t *)"named", 5});
+    counter_add(c2, 4);
+    volt_str words[2] = {{(const uint8_t *)"a", 1}, {(const uint8_t *)"b", 1}};
+    long long named = (long long)ml_named(c2, (volt_str){(const uint8_t *)"abc", 3}, 5, (mathlib_slice_str){words, 2});
+    if (named != 14) printf("named %lld (want 14)\n", named);
     // structs with text, an array and a struct in them (in, out, in a slice, from a callback), one
     // with a pointer, E!T as a parameter
     mathlib_ml_label la = {{(const uint8_t *)"ab", 2}, {1, 2, 3}, {7, 0}};

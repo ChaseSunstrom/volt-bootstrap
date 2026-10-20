@@ -348,6 +348,12 @@ export fn counter_name(c: counter&) -> str {
     return c.name.as_str();
 }
 
+// parameters named like the shim's helpers (take_0 for a counter taken, untext_0 for a string,
+// own_0, texts_in_0): the shim renames them, so its calls still reach the helpers
+export fn ml_named(take_0: counter, untext_0: std::string, own_0: i32, texts_in_0: str[..]) -> i64 {
+    return take_0.count + @cast<i64>(untext_0.len()) + @cast<i64>(own_0) + @cast<i64>(texts_in_0.len);
+}
+
 // arrays by value through a trait other languages implement: Volt passes one and takes one back
 public trait ml_turner {
     fn turn(this, a: i32[3]) -> i32[3];
