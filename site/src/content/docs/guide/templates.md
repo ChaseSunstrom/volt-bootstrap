@@ -75,7 +75,9 @@ fn main() -> void {
 ## Constant parameters
 
 A generic parameter can be a value known at compile time instead of a type: `N: usize`,
-`C: i32 = 3`, `S: str`. Array lengths are the usual use. A parameter marked `comptime` among a
+`C: i32 = 3`, `S: str`, `B: bool`. Array lengths are the usual use. Used as a value, the parameter
+is one of its declared type: with `<N: usize>`, `val x = N;` is a `usize`, and with `<B: bool>`,
+`if (B)` tests a `bool`. A parameter marked `comptime` among a
 function's ordinary ones, `fn repeat(comptime n: i32, c: str)`, works the same way (see
 [Comptime](/volt-bootstrap/guide/comptime/#compile-time-values-and-parameters)).
 
