@@ -270,6 +270,7 @@ struct lsp_walk {
     decl: u32 = 0;           // the fn walked (its generic params' bounds)
     recv: ty* = null;        // its attach block's target: what an untyped `this` is
     scrut: u32? = null;      // the enum the match arm being walked is over (its .VARIANT patterns)
+    env: u32? = null;        // the fn's namespace as an env, for resolve_type (made when first needed)
     traits: std::map<u32, std::vec<u32>>* = null; // each trait's fns
 }
 
@@ -499,7 +500,9 @@ attach fn lsp_walk_expr(this: checker&, w: lsp_walk&, e: expr&) -> void {
                         val ga = gp;
                         this.lsp_walk_gargs(w, ga);
                     }
-                    if (!this.lsp_walk_method(w, x, n, f.span) && !this.lsp_walk_field(w, x, n, f.span)) {
+                    // the name after the receiver (norm.norm()'s second norm)
+                    val after: span = { lo: x.span.hi, hi: f.span.hi, file: f.span.file };
+                    if (!this.lsp_walk_method(w, x, n, after) && !this.lsp_walk_field(w, x, n, after)) {
                         this.lsp_member_names.put(n, true);
                     }
                     done = true;
@@ -516,7 +519,8 @@ attach fn lsp_walk_expr(this: checker&, w: lsp_walk&, e: expr&) -> void {
         },
         .FIELD(x, n, g&) => {
             this.lsp_walk_expr(w, x);
-            if (!this.lsp_walk_field(w, x, n, e.span)) {
+            val after: span = { lo: x.span.hi, hi: e.span.hi, file: e.span.file };
+            if (!this.lsp_walk_field(w, x, n, after)) {
                 this.lsp_member_names.put(n, true);
             }
             val gp = ptr_of(g);
@@ -689,7 +693,9 @@ attach fn lsp_walk_pat(this: checker&, w: lsp_walk&, p: pat&) -> void {
                     }
                 },
                 .DOT(n) => {
-                    if (w.scrut == null || !this.lsp_walk_variant(w.scrut ?? 0, n, p.span)) {
+                    // the name right after the dot, not a payload binding of that name
+                    val at: span = { lo: p.span.lo, hi: p.span.lo + 1 + @cast<u32>(n.len), file: p.span.file };
+                    if (w.scrut == null || !this.lsp_walk_variant(w.scrut ?? 0, n, at)) {
                         this.lsp_member_names.put(n, true);
                     }
                 },
@@ -887,8 +893,10 @@ attach fn lsp_walk_member_path(this: checker&, w: lsp_walk&, p: path&) -> void {
                             count += 1;
                         }
                     }
-                    if (count == 1) {
-                        this.lsp_fn_use(only ?? 0, null, p.span);
+                    // the last segment's name (a type and its fn may share it)
+                    if (count == 1 && p.segs.at(p.segs.len - 1).args == null) {
+                        val at: span = { lo: p.span.hi - @cast<u32>(name.len), hi: p.span.hi, file: p.span.file };
+                        this.lsp_fn_use(only ?? 0, null, at);
                     }
                 },
                 default => {},
@@ -947,17 +955,20 @@ attach fn lsp_walk_named(this: checker&, w: lsp_walk&, t: ty*) -> u32? {
 // a written type without its & and *, resolved (null: it doesn't resolve on its own, a generic
 // param's say)
 attach fn lsp_walk_type_id(this: checker&, w: lsp_walk&, t: ty*) -> u32? {
+    if (t == null) {
+        return null;
+    }
     match (t->kind) {
         .REF(x) => { return this.lsp_walk_type_id(w, x.ptr); },
         .PTR(x) => { return this.lsp_walk_type_id(w, x.ptr); },
         default => {},
     }
-    if (t == null) {
-        return null;
-    }
     val tr = t;
     val refs = this.lsp_refs.len;
-    val genv = this.new_env({ ns: w.ns });
+    if (w.env == null) {
+        w.env = this.new_env({ ns: w.ns });
+    }
+    val genv = w.env ?? 0;
     val r = this.resolve_type(&*tr, genv) catch |e| {
         while (this.lsp_refs.len > refs) {
             this.lsp_refs.pop();
@@ -1197,6 +1208,14 @@ attach fn lsp_walk_overload(this: checker&, w: lsp_walk&, p: path&, args: std::v
     if (cands.len < 2) {
         return false; // one: lsp_walk_path records it
     }
+    for (c) in cands.items() {
+        val fd = this.fn_decl_of(c) ?? return false;
+        for (pp&) in fd.params.items() {
+            if (pp.ty == null || !is_prim_name(this.span_text(pp.ty.value.span).as_str())) {
+                return false;
+            }
+        }
+    }
     var only: u32? = null;
     var count = 0;
     for (c) in cands.items() {
@@ -1244,6 +1263,10 @@ attach fn lsp_walk_args_fit(this: checker&, w: lsp_walk&, d: u32, args: std::vec
         }
     }
     return true;
+}
+
+fn is_prim_name(n: str) -> bool {
+    return is_int_name(n) || n == "f16" || n == "f32" || n == "f64" || n == "f128" || n == "str" || n == "bool" || n == "char";
 }
 
 fn is_int_name(n: str) -> bool {

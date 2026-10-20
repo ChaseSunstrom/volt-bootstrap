@@ -816,6 +816,11 @@ enum shade {
     DARK,
 }
 
+enum mark {
+    tag: i32,
+    blank,
+}
+
 trait shape {
     fn area(this) -> i32;
 }
@@ -840,7 +845,7 @@ fn pick(x: str) -> i32 {
 }
 
 <T: shape>
-fn members(p: point, q: pair<T>, s: shade, t: T) -> i32 {
+fn members(p: point, q: pair<T>, s: shade, t: T, k: mark) -> i32 {
     val r: point = { x: 1, y: 2 }; // [x] [y]
     val o = point::origin(); // [origin]
     var n = p.x + q.b + r.norm(); // [x] [b] [norm]
@@ -852,6 +857,12 @@ fn members(p: point, q: pair<T>, s: shade, t: T) -> i32 {
         .DARK => { n += 1; }, // [DARK]
         default => {},
     }
+    match (k) {
+        .tag(tag) => { n += tag; }, // [tag]
+        default => {},
+    }
+    val norm: point = r;
+    n += norm.norm(); // [norm]
     return n + t.area(); // [area]
 }
 
@@ -881,11 +892,19 @@ fn generic_body_members() {
         let l = lines.iter().position(|l| l.contains(pat)).unwrap_or_else(|| panic!("no {pat}"));
         format!("{{\"textDocument\":{{\"uri\":\"{uri}\"}},\"position\":{{\"line\":{l},\"character\":{}}}", lines[l].find(name).unwrap())
     };
-    for (pat, name) in [("    x: i32;", "x"), ("    y: i32;", "y"), ("    a: T;", "a"), ("    b: i32;", "b"), ("fn norm(", "norm"), ("fn origin(", "origin"), ("    LIGHT,", "LIGHT"), ("    DARK,", "DARK"), ("fn pick(x: i32)", "pick"), ("    fn area(this) -> i32;", "area")] {
+    for (pat, name) in [("    x: i32;", "x"), ("    y: i32;", "y"), ("    a: T;", "a"), ("    b: i32;", "b"), ("fn norm(", "norm"), ("fn origin(", "origin"), ("    LIGHT,", "LIGHT"), ("    DARK,", "DARK"), ("fn pick(x: i32)", "pick"), ("    fn area(this) -> i32;", "area"), ("    tag: i32,", "tag")] {
         let marker = format!("[{name}]");
         let want: Vec<usize> = lines.iter().enumerate().flat_map(|(i, l)| std::iter::repeat_n(i, l.matches(marker.as_str()).count())).collect();
         let r = s.request("textDocument/references", &format!("{},\"context\":{{\"includeDeclaration\":false}}}}", pos(pat, name)));
         assert_eq!(start_lines(&r), want, "references of {name}: {r}");
+    }
+    // where a name is also the receiver's or the payload's, the use is the member: norm.norm()'s
+    // second norm, .tag(tag)'s first tag
+    for (decl, name, at) in [("fn norm(", "norm", "norm.norm()"), ("    tag: i32,", "tag", ".tag(tag)")] {
+        let l = lines.iter().position(|l| l.contains(at)).unwrap();
+        let col = lines[l].find(at).unwrap() + at.find(&format!(".{name}")).unwrap() + 1;
+        let r = s.request("textDocument/references", &format!("{},\"context\":{{\"includeDeclaration\":false}}}}", pos(decl, name)));
+        assert!(r.contains(&format!("\"start\":{{\"line\":{l},\"character\":{col}}}")), "{name}'s use in {at} at {l}:{col}: {r}");
     }
     // definition from a member use in a body nothing instantiates
     let r = s.request("textDocument/definition", &format!("{}}}", pos("var n = p.x + q.b", "b;")));
