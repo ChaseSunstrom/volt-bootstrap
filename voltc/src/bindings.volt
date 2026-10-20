@@ -10419,7 +10419,7 @@ attach fn go_c_helpers(this: bind&) -> std::string {
         out.append(this.go_c_call(fmt2("{}_go_closure{}", copy p, unum(@cast<u64>(i))).as_str(), fmt("{} c", this.c_out(ct, false)).as_str(), "c.call(c.self", &ps, r).as_str());
     }
     if (this.traits.len > 0) {
-        out.append(fmt("extern void {}GoDrop(void *self);\n", copy p).as_str());
+        out.append(fmt("extern VOLT_GO_EXPORT void {}GoDrop(void *self);\n", copy p).as_str());
     }
     for (t&) in this.traits.items() {
         val sh = this.short(*t);
@@ -10435,7 +10435,7 @@ attach fn go_c_helpers(this: bind&) -> std::string {
                 params.append(fmt2(", {}a{}", spaced(this.c_in(*f.params.at(k), false)), unum(@cast<u64>(k))).as_str());
             }
             val gn = fmt3("{}{}{}", copy p, copy tn, this.trait_member(*t, f.name, go_name, GO_MEMBERS, false));
-            out.append(fmt3("extern {}{}({});\n", spaced(this.c_out(f.ret, false)), copy gn, move params).as_str());
+            out.append(fmt3("extern VOLT_GO_EXPORT {}{}({});\n", spaced(this.c_out(f.ret, false)), copy gn, move params).as_str());
             if (names.len() > 0) {
                 names.append(", ");
             }
@@ -10571,6 +10571,9 @@ attach fn go_text(this: bind&) -> std::string {
     out.append(fmt("// lib{} (set CGO_LDFLAGS=-L<dir> for where it is). Errors come back as *Error values.\n", S(p)).as_str());
     out.append(fmt("package {}\n\n/*\n", S(p)).as_str());
     out.append(fmt("#cgo LDFLAGS: -l{}\n#include <stdlib.h>\n", S(p)).as_str());
+    // the Go functions C calls, declared as cgo's export header declares them (dllexport on
+    // Windows: a declaration without it, used before that header, is an error there)
+    out.append("#ifdef _WIN32\n#define VOLT_GO_EXPORT __declspec(dllexport)\n#else\n#define VOLT_GO_EXPORT\n#endif\n");
     // only declarations here (and static inline helpers): this file exports Go functions to C, and
     // cgo allows no C definitions next to //export
     var hdr = this.c_text();
@@ -10583,7 +10586,7 @@ attach fn go_text(this: bind&) -> std::string {
         for (k) in 0..ps.len {
             params.append(fmt2(", {}a{}", spaced(this.c_in(*ps.at(k), false)), unum(@cast<u64>(k))).as_str());
         }
-        out.append(fmt4("extern {}{}cb{}({});\n", spaced(this.c_val(r, false)), S(p), unum(@cast<u64>(i)), move params).as_str());
+        out.append(fmt4("extern VOLT_GO_EXPORT {}{}cb{}({});\n", spaced(this.c_val(r, false)), S(p), unum(@cast<u64>(i)), move params).as_str());
     }
     out.append(this.go_c_helpers().as_str());
     // an export fn named like a Go keyword: cgo reaches it by another name

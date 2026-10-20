@@ -19,7 +19,9 @@ pub fn find_voltc() -> PathBuf {
     let here = std::env::current_exe().ok().and_then(|e| e.parent().map(Path::to_path_buf));
     let near = |name: &str| here.as_ref().map(|d| d.join(name)).filter(|p| p.is_file());
     let on_path = |name: &str| std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()).map(|d| d.join(name)).find(|p| p.is_file());
-    near("voltc").or_else(|| on_path("voltc")).or_else(|| near("voltc-bootstrap")).unwrap_or_else(|| PathBuf::from("voltc"))
+    // (voltc.exe on Windows)
+    let exe = |name: &str| format!("{name}{}", std::env::consts::EXE_SUFFIX);
+    near(&exe("voltc")).or_else(|| on_path(&exe("voltc"))).or_else(|| near(&exe("voltc-bootstrap"))).unwrap_or_else(|| PathBuf::from("voltc"))
 }
 
 /// every .volt file under `p` (or `p` itself), sorted

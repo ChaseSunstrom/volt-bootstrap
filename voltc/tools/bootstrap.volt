@@ -213,6 +213,42 @@ fn linked(stage: str, std_dir: str, dir: str, lib_backend: str, prog_backend: st
     std::println("stage2 lib: {} libraries in a {} program ok", lib_backend, prog_backend);
 }
 
+// Windows ends a crashed program with an NTSTATUS: the code a signal gives elsewhere (as
+// tests/golden.rs maps them)
+fn signal_code(code: i32) -> i32 {
+    val u = @cast<u32>(code);
+    if (u == 0xC000001D) {
+        return 132; // an illegal instruction (a trap): SIGILL
+    }
+    if (u == 0x80000003) {
+        return 133; // a breakpoint: SIGTRAP
+    }
+    if (u == 0xC0000409) {
+        return 134; // __fastfail, which abort is: SIGABRT
+    }
+    if (u == 0xC0000005) {
+        return 139; // an access violation: SIGSEGV
+    }
+    return code;
+}
+
+// does src have a line starting with prefix
+fn has_line(src: str, prefix: str) -> bool {
+    var at: usize = 0;
+    while (at <= src.len) {
+        var end = at;
+        while (end < src.len && src[end] != 10) {
+            end += 1;
+        }
+        val line = src[at..end];
+        if (line.len >= prefix.len && line[0..prefix.len] == prefix) {
+            return true;
+        }
+        at = end + 1;
+    }
+    return false;
+}
+
 // run every golden test with stage and a backend; the failures
 fn golden(stage: str, std_dir: str, backend: str) -> i32 {
     var files = volt_files("tests/run");
@@ -220,8 +256,14 @@ fn golden(stage: str, std_dir: str, backend: str) -> i32 {
         files.push(copy *f) catch @panic("out of memory");
     }
     var failed: i32 = 0;
+    var skipped: i32 = 0;
     for (f&) in files.items() {
         val src = std::fs::read_file(f.as_str()) catch |e| die(std::string::from("can't read a test"));
+        // `// unix-only`: its oracle is Unix's (glibc's or Apple's libm, sh's kill), as tests/golden.rs has it
+        if (@cfg("os", "windows") && has_line(src.as_str(), "// unix-only")) {
+            skipped += 1;
+            continue;
+        }
         val want = expected(src.as_str());
         var exits: std::vec<str> = {};
         directives(src.as_str(), "exit", &exits);
@@ -267,18 +309,19 @@ fn golden(stage: str, std_dir: str, backend: str) -> i32 {
             }
         }
         val r = std::process::capture(argv.items(), "") catch |e| die(std::string::from("can't run a test"));
+        val code = signal_code(r.code);
         var code_ok = false;
         for (c) in want_codes.items() {
-            if (c == r.code) {
+            if (c == code) {
                 code_ok = true;
             }
         }
         if (trim_end(r.out.as_str()) != trim_end(want.as_str()) || !code_ok) {
-            std::eprintln("FAIL {}: exit {} (want {})\n--- want\n{}\n--- got\n{}\n--- stderr\n{}", f, r.code, want_text, want, r.out, r.err);
+            std::eprintln("FAIL {}: exit {} (want {})\n--- want\n{}\n--- got\n{}\n--- stderr\n{}", f.as_str(), code, want_text, want, r.out, r.err);
             failed += 1;
         }
     }
-    std::println("golden: {} of {} passed with stage2 ({})", @cast<i32>(files.len) - failed, files.len, backend);
+    std::println("golden: {} of {} passed with stage2 ({})", @cast<i32>(files.len) - skipped - failed, @cast<i32>(files.len) - skipped, backend);
     return failed;
 }
 

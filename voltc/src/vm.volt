@@ -120,6 +120,25 @@ export fn volt_vm_define(v: volt_vm&, name: str, address: usize) -> vm_error!voi
 // calls util::f); loading that name again replaces it, unless a script loaded since uses it. Scripts
 // loaded later can't redefine an export fn
 export fn volt_vm_load(v: volt_vm&, name: str, source: str) -> vm_error!void {
+    comptime if (@cfg("os", "windows")) {
+        // a Windows thread has the stack its exe asks for, 1 MB unless it says more, and compiling
+        // takes more: on a thread of its own (a Volt thread reserves 8 MB)
+        var failed: vm_error? = null;
+        var t = std::thread::spawn(|v, name, source, failed&| () {
+            load_here(v, name, source) catch |e| {
+                failed = e;
+            };
+        }) catch return v.fail(vm_error::COMPILE, "can't start a thread to compile on");
+        t.join();
+        if (failed) {
+            return failed;
+        }
+        return;
+    }
+    return load_here(v, name, source);
+}
+
+fn load_here(v: volt_vm&, name: str, source: str) -> vm_error!void {
     val j = v.jit ?? return v.no_jit();
     val pkg = S(script_pkg(name));
     if (pkg.as_str() == "std") {

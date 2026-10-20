@@ -277,6 +277,9 @@ jobs:
         timeout-minutes: 320
         run: |
           set -o pipefail
+          # Git Bash puts its own MinGW prefix first (on arm64, /clangarm64, with an older libc++.dll
+          # than the one llvm-mingw links against: a C++ program ends with an entry point not found)
+          export PATH="/c/llvm-mingw-$LLVM_MINGW-ucrt-${{ matrix.mingw }}/bin:$PATH"
           cargo test --no-fail-fast 2>&1 | tee test.log
       - name: Report
         if: always()
@@ -294,7 +297,7 @@ jobs:
         if: failure()
         run: |
           set +e
-          V=$(ls -t target/tmp/voltc-stage1-*.exe 2>/dev/null | head -1)
+          V=$(ls -t "$PWD"/target/tmp/voltc-stage1-*.exe 2>/dev/null | head -1)
           [ -n "$V" ] || { echo "no stage-1 voltc under target/tmp"; exit 0; }
           cd tests/interop
           VOLT_STD=../../std "$V" build cpp_errors.volt --cc -Wl,--disable-dynamicbase -o ce.exe || exit 0

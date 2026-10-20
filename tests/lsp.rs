@@ -625,7 +625,7 @@ fn other() -> i32 {
     let doc = format!("{{\"uri\":\"{uri}\"}}");
     let at = |line: u32, ch: u32| format!("{{\"textDocument\":{doc},\"position\":{{\"line\":{line},\"character\":{ch}}}}}");
     s.notify("textDocument/didOpen", &format!("{{\"textDocument\":{{\"uri\":\"{uri}\",\"languageId\":\"volt\",\"version\":1,\"text\":{}}}}}", js(src)));
-    let _ = s.diagnostics_for(&uri);
+    let diags = s.diagnostics_for(&uri);
     let h = s.request("textDocument/hover", &at(22, 12));
     assert!(h.contains("// size 24, align 8\\nstruct tagged {\\n    tag: u8; // offset 0, size 1\\n    // 7 bytes padding\\n    x: f64; // offset 8, size 8\\n    y: i32; // offset 16, size 4\\n    // 4 bytes padding\\n}"), "hover tagged: {h}");
     assert!(h.contains("a point with a tag in front"), "hover tagged's doc: {h}");
@@ -638,7 +638,7 @@ fn other() -> i32 {
     let h = s.request("textDocument/hover", &at(25, 52));
     assert!(h.contains("C++: double geo::scale(double x, int k)"), "hover scale: {h}");
     let h = s.request("textDocument/hover", &at(25, 78));
-    assert!(h.contains("fn sum(a0: i32, a1: f64) -> f64") && h.contains("C++: geo::sum(int32_t, double) -> double, as clang resolves it"), "hover sum: {h}");
+    assert!(h.contains("fn sum(a0: i32, a1: f64) -> f64") && h.contains("C++: geo::sum(int32_t, double) -> double, as clang resolves it"), "hover sum: {h}\n--- the file's diagnostics: {diags}\n--- the server's stderr: {}", s.errors.lock().unwrap());
     let h = s.request("textDocument/hover", &at(30, 18));
     assert!(h.contains("abs") && !h.contains("not abs's doc"), "a C fn's hover has no doc of the use's: {h}");
     let _ = std::fs::remove_dir_all(&s.dir);
