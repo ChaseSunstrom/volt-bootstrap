@@ -155,6 +155,30 @@ fn bare_metal_boards() {
     bare_metal(&common::voltc(), &std_dir);
 }
 
+/// an @align ARM's data layout can't carry (it aligns a 16-byte vector to 8): refused by name, not
+/// laid out unlike the checker's layout; 32 it can
+#[test]
+fn bare_metal_align() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("bare-align-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    for (n, refused) in [(16, true), (32, false)] {
+        let src = dir.join(format!("a{n}.volt"));
+        std::fs::write(&src, format!("@attributes([@align({n})])\nstruct s {{ x: u8; }}\nvar g: s = {{ x: 1 }};\nfn main() -> i32 {{ return @cast<i32>(g.x); }}\n")).unwrap();
+        let out = Command::new(common::voltc())
+            .args(["emit-llvm"]).arg(&src)
+            .arg("--std").arg(root.join("std"))
+            .args(["--target", "thumbv7m-none"])
+            .output().unwrap();
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(!out.status.success(), refused, "@align({n}) on thumbv7m-none: {err}");
+        if refused {
+            assert!(err.contains("can't align 's' to 16 bytes on this target"), "{err}");
+        }
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// the bare-metal examples with that voltc: each board's blinky (for each of the board's targets),
 /// debug and release, built with no C compiler at all ($CC is false) and run under qemu, prints its
 /// expected.txt and exits 0. A board whose qemu (or ld.lld) isn't installed is skipped: its run.sh
