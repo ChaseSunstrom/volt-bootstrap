@@ -354,6 +354,12 @@ attach fn spec_code(this: checker&, code: std::vec<u32>&, sink: u32, c: u32, t: 
         },
         default => {},
     }
+    // an array's elements and a vector's lanes, each with the spec
+    match (*this.t.get(t)) {
+        .ARRAY(et, n) => { return this.print_lanes(code, sink, c, et, n, sp, span); },
+        .VECTOR(et, n) => { return this.print_lanes(code, sink, c, et, n, sp, span); },
+        default => {},
+    }
     var f: str? = null;
     match (*this.t.get(t)) {
         .BOOL => {
@@ -591,6 +597,7 @@ attach fn print_code(this: checker&, code: std::vec<u32>&, sink: u32, c: u32, t:
             put(code, this.ir.if_(p.has, this.ir.block(move some), this.out_s(sink, "null")));
         },
         .ARRAY(et, n) => { try this.print_elems(code, sink, c, et, this.ir.int(@cast<i128>(n), USIZE), false, span); },
+        .VECTOR(et, n) => { try this.print_lanes(code, sink, c, et, n, null, span); },
         .SLICE(et) => { try this.print_elems(code, sink, c, et, this.ir.field(c, 1, USIZE), true, span); },
         .TUPLE(ts, names) => {
             val xs = copy ts;
@@ -708,6 +715,25 @@ attach fn print_elems(this: checker&, code: std::vec<u32>&, sink: u32, c: u32, e
     try this.print_code(&body, sink, this.ir.deref(e.c, et), et, span);
     put(code, this.out_s(sink, "{ "));
     for (s&) in this.counted_loop(i, n, this.ir.block(move body)).items() {
+        put(code, *s);
+    }
+    put(code, this.out_s(sink, " }"));
+}
+
+// { a, b, ... }: the n elements of array or vector c (a value read once per element), each printed
+// with spec sp when there's one (a vector's lane is read by value: it has no address)
+attach fn print_lanes(this: checker&, code: std::vec<u32>&, sink: u32, c: u32, et: u32, n: u64, sp: fspec?, span: span) -> compile_error!void {
+    val i = this.tmp_local("i", USIZE);
+    val not_first = this.ir.binary(binop_ir::NE, i.c, this.ir.int(0, USIZE), BOOL);
+    var body = nodes(this.ir.if_(not_first, this.out_s(sink, ", "), null));
+    val lane = this.ir.index(c, i.c, et);
+    if (sp) {
+        try this.spec_code(&body, sink, lane, et, sp, span);
+    } else {
+        try this.print_code(&body, sink, lane, et, span);
+    }
+    put(code, this.out_s(sink, "{ "));
+    for (s&) in this.counted_loop(i, this.ir.int(@cast<i128>(n), USIZE), this.ir.block(move body)).items() {
         put(code, *s);
     }
     put(code, this.out_s(sink, " }"));

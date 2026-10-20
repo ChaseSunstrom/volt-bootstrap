@@ -467,11 +467,30 @@ attach fn is_vector(this: checker&, t: u32) -> bool {
 }
 
 // a op b lane by lane, for two vectors of one type: + - * / on float lanes; + - * (wrapping, as SIMD
-// does) and & | ^ on int lanes. Int / and % and shifts are left out: a 0 lane or a count past the
-// lane's bits would be undefined in both backends. Comparisons aren't lane by lane yet.
+// does) and & | ^ on int lanes, and shifts (vector_shift). Int / and % are left out: a 0 lane would
+// be undefined in both backends. == is true when every lane is equal (a NaN lane isn't, as a NaN
+// float isn't), != is its negation: one bool, as every == gives (std::simd::lanes_eq has each lane's)
 attach fn vector_binary(this: checker&, op: binop, a: tval, b: tval, span: span) -> compile_error!tval {
+    if ((op == binop::SHL || op == binop::SHR) && this.is_vector(a.ty)) {
+        return this.vector_shift(op, a, b, span);
+    }
     if (a.ty != b.ty) {
         return fail(span, fmt3("{} needs two values of one vector type: {} and {}", S(binop_text(op)), this.ty_name(a.ty), this.ty_name(b.ty)));
+    }
+    if (op == binop::EQ || op == binop::NE) {
+        // (from temporaries: the C backend reads each lane of both)
+        val ta = this.tmp_local("va", a.ty);
+        val tb = this.tmp_local("vb", b.ty);
+        var stmts: std::vec<u32> = {};
+        put(&stmts, this.ir.decl(ta.id, a.c));
+        put(&stmts, this.ir.decl(tb.id, b.c));
+        var o = binop_ir::EQ;
+        if (op == binop::NE) {
+            o = binop_ir::NE;
+        }
+        var r = vnew(BOOL, this.ir.seq(move stmts, this.ir.binary(o, ta.c, tb.c, BOOL), BOOL));
+        r.pure = a.pure && b.pure;
+        return r;
     }
     var float = false;
     match (*this.t.get(a.ty)) {
@@ -517,6 +536,82 @@ attach fn vector_binary(this: checker&, op: binop, a: tval, b: tval, span: span)
     var r = vnew(t, this.wrap_pre(move pre, this.ir.binary(oo, pair.at(0).c, pair.at(1).c, t), t));
     r.pure = pair.at(0).pure && pair.at(1).pure;
     return r;
+}
+
+// v << n and v >> n on int lanes, lane by lane: n a vector of v's type (each lane's amount) or an
+// integer (every lane's); >> is arithmetic on signed lanes. As a scalar shift: --release takes each
+// amount modulo the width, and a debug build stops on one at least the width (or negative), naming
+// the lane, before any lane is shifted
+attach fn vector_shift(this: checker&, op: binop, a: tval, b: tval, span: span) -> compile_error!tval {
+    var et: u32 = 0;
+    var n: u64 = 0;
+    match (*this.t.get(a.ty)) {
+        .VECTOR(e, k) => {
+            et = e;
+            n = k;
+        },
+        default => {},
+    }
+    val k = this.t.int_of(et) ?? return fail(span, fmt("can't shift a {}", this.ty_name(a.ty)));
+    val width = @cast<i128>(k.bits());
+    var o = binop_ir::SHL;
+    if (op == binop::SHR) {
+        o = binop_ir::SHR;
+    }
+    val ta = this.tmp_local("a", a.ty);
+    var stmts: std::vec<u32> = {};
+    put(&stmts, this.ir.decl(ta.id, a.c));
+    val u64t = int_id(int_ty::U64);
+    var amt: u32 = 0;
+    if (b.ty == a.ty) {
+        val tb = this.tmp_local("s", a.ty);
+        put(&stmts, this.ir.decl(tb.id, b.c));
+        if (this.opts.release) {
+            amt = this.ir.binary(binop_ir::BITAND, tb.c, this.splat(this.ir.int(width - 1, et), n, a.ty), a.ty);
+        } else {
+            for (i) in 0..n {
+                val lane = this.ir.conv(this.ir.index(tb.c, this.ir.int(@cast<i128>(i), USIZE), et), u64t);
+                var msg = S("shift amount too large (lane ");
+                msg.append_uint(i);
+                msg.push(')');
+                put(&stmts, this.ir.if_(this.ir.binary(binop_ir::GE, lane, this.ir.int(width, u64t), BOOL), this.ir.panic(this.intern(move msg), this.loc(span)), null));
+            }
+            amt = tb.c;
+        }
+    } else {
+        // one amount for every lane
+        if (this.is_vector(b.ty)) {
+            return fail(span, fmt2("{} shifts a vector by a vector of its own type or by an integer, not {}", S(binop_text(op)), this.ty_name(b.ty)));
+        }
+        var bb = b;
+        if (b.lit != null) {
+            bb = try this.coerce(b, U32, span);
+        }
+        if (this.t.int_of(bb.ty) == null) {
+            return fails(span, "shift amount must be an integer");
+        }
+        val ts = this.tmp_local("s", u64t);
+        put(&stmts, this.ir.decl(ts.id, this.ir.conv(bb.c, u64t)));
+        var each = ts.c;
+        if (this.opts.release) {
+            each = this.ir.binary(binop_ir::BITAND, ts.c, this.ir.int(width - 1, u64t), u64t);
+        } else {
+            put(&stmts, this.ir.if_(this.ir.binary(binop_ir::GE, ts.c, this.ir.int(width, u64t), BOOL), this.ir.panic("shift amount too large", this.loc(span)), null));
+        }
+        val te = this.tmp_local("e", et);
+        put(&stmts, this.ir.decl(te.id, this.ir.conv(each, et)));
+        amt = this.splat(te.c, n, a.ty);
+    }
+    return vnew(a.ty, this.ir.seq(move stmts, this.ir.binary(o, ta.c, amt, a.ty), a.ty));
+}
+
+// the vector of type vt with x (a node read once per lane) in each of its n lanes
+attach fn splat(this: checker&, x: u32, n: u64, vt: u32) -> u32 {
+    var cs: std::vec<u32> = {};
+    for (i) in 0..n {
+        put(&cs, x);
+    }
+    return this.ir.node(ir_kind::ARRAY_LIT(move cs), vt);
 }
 
 // p + n, p - n (scaled by the element size, like C) and p - q; other arithmetic on pointers is an error
