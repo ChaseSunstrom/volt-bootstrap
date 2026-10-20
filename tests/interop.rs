@@ -2259,7 +2259,10 @@ fn cpp_params_refused() {
     // a fn with a reference or a C++ class in its signature, as a function pointer to a call worked
     // out per use (plain, @cpp<R>'s {i} and {&i}, an operator's operand): no T* or by-name spelling,
     // an error naming both
-    let err = check("cpp_params_fnref.volt");
+    // (one line per diagnostic, its location first: each message is checked at its own line)
+    let o = e.voltc(&["check", "cpp_params_fnref.volt", "--message-format", "short"]);
+    assert!(!o.status.success(), "cpp_params_fnref.volt checks");
+    let err = String::from_utf8_lossy(&o.stderr).to_string();
     for (line, why) in [
         (8, "'by_ref' takes a i32&, which has no C function-pointer form"),
         (9, "'by_point' takes a cpp::pr::point, which has no C function-pointer form"),
@@ -2268,7 +2271,7 @@ fn cpp_params_refused() {
         (12, "'by_ref' takes a i32&, which has no C function-pointer form"),
         (13, "'by_ref' takes a i32&, which has no C function-pointer form"),
     ] {
-        assert!(err.contains(&format!("cpp_params_fnref.volt:{line}")) && err.contains(why), "line {line}, {why}: {err}");
+        assert!(err.lines().any(|l| l.contains(&format!("cpp_params_fnref.volt:{line}:")) && l.contains(why)), "line {line}, {why}: {err}");
     }
     let err = check("cpp_params_view.volt");
     assert!(err.contains("its result would point into a copy (of a string, a vector or a map) that's gone once the call returns") && err.contains("cpp_params_view.volt:7"), "a view into the copy, per use: {err}");
