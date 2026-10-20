@@ -266,11 +266,34 @@ struct lsp_walk {
     ns: u32;
     names: std::vec<str> = {};
     types: std::vec<bool> = {};
+    tys: std::vec<ty*> = {}; // each name's type as written (null: none written)
+    decl: u32 = 0;           // the fn walked (its generic params' bounds)
+    recv: ty* = null;        // its attach block's target: what an untyped `this` is
+    scrut: u32? = null;      // the enum the match arm being walked is over (its .VARIANT patterns)
+    traits: std::map<u32, std::vec<u32>>* = null; // each trait's fns
 }
 
 fn walk_add(w: lsp_walk&, name: str, types: bool) -> void {
+    walk_add_ty(w, name, types, null);
+}
+
+fn walk_add_ty(w: lsp_walk&, name: str, types: bool, t: ty*) -> void {
     put(&w.names, name);
     put(&w.types, types);
+    put(&w.tys, t);
+}
+
+// the type written for name, the innermost local or param of that name (null: none written, or
+// no such local)
+fn walk_ty_of(w: lsp_walk&, name: str) -> ty* {
+    var i = w.names.len;
+    while (i > 0) {
+        i -= 1;
+        if (*w.names.at(i) == name) {
+            return *w.tys.at(i);
+        }
+    }
+    return null;
 }
 
 fn walk_shadows(w: lsp_walk&, name: str, types_only: bool) -> bool {
@@ -287,6 +310,7 @@ fn walk_leave(w: lsp_walk&, mark: usize) -> void {
     while (w.names.len > mark) {
         w.names.pop();
         w.types.pop();
+        w.tys.pop();
     }
 }
 
@@ -299,6 +323,25 @@ fn ptr_box_ty(o: std::box<ty>?&) -> ty* {
 
 // index the uses in every generic fn body no checked instance covers (call after checking)
 attach fn lsp_generic_bodies(this: checker&) -> void {
+    // each trait's fns, for a member on a T its bound names
+    var traits: std::map<u32, std::vec<u32>> = {};
+    for (di) in 0..this.decls.len {
+        val d = @cast<u32>(di);
+        val p = this.dl(d).parent ?? continue;
+        match (this.item_of(p).kind) {
+            .TRAIT(n, fs) => {
+                val have = traits.get(p);
+                if (have) {
+                    put(have, d);
+                } else {
+                    var v: std::vec<u32> = {};
+                    put(&v, d);
+                    traits.put(p, move v);
+                }
+            },
+            default => {},
+        }
+    }
     var checked: std::map<u32, bool> = {};
     for (i) in 0..this.fns.len {
         if (i < this.used.len && *this.used.at(i)) {
@@ -322,7 +365,13 @@ attach fn lsp_generic_bodies(this: checker&) -> void {
         if (in_trait || this.fn_generics(d).len == 0) {
             continue;
         }
-        var w: lsp_walk = { ns: this.dl(d).ns };
+        var w: lsp_walk = { ns: this.dl(d).ns, decl: d, traits: &traits };
+        if (parent) {
+            match (this.item_of(parent).kind) {
+                .ATTACH(tr, tg&, fs) => { w.recv = tg; },
+                default => {},
+            }
+        }
         for (g&) in this.fn_generics(d).items() {
             walk_add(&w, g.name, true);
         }
@@ -332,10 +381,12 @@ attach fn lsp_generic_bodies(this: checker&) -> void {
             }
         }
         for (p&) in f.params.items() {
+            var pt: ty* = null;
             if (p.ty) {
                 this.lsp_walk_ty(&w, &p.ty);
+                pt = &p.ty;
             }
-            walk_add(&w, p.name, p.is_comptime);
+            walk_add_ty(&w, p.name, p.is_comptime, pt);
         }
         if (f.ret) {
             this.lsp_walk_ty(&w, &f.ret);
@@ -370,14 +421,24 @@ attach fn lsp_walk_opt(this: checker&, w: lsp_walk&, e: expr*) -> void {
 }
 
 attach fn lsp_walk_let(this: checker&, w: lsp_walk&, l: let_stmt&) -> void {
+    var lt: ty* = null;
     if (l.ty) {
         this.lsp_walk_ty(w, &l.ty);
+        lt = &l.ty;
     }
     if (l.init) {
-        this.lsp_walk_expr(w, &l.init);
+        if (!this.lsp_walk_wanted(w, &l.init, lt)) {
+            this.lsp_walk_expr(w, &l.init);
+        }
     }
     val mark = w.names.len;
     this.lsp_walk_pat(w, &l.pat); // its names shadow from the next statement on
+    if (lt != null && w.names.len == mark + 1) {
+        match (l.pat.kind) {
+            .BIND(n) => { *w.tys.at(mark) = lt; },
+            default => {},
+        }
+    }
     if (l.is_comptime) {
         for (i) in mark..w.names.len {
             *w.types.at(i) = true; // a comptime local can name a type
@@ -404,12 +465,19 @@ attach fn lsp_walk_expr(this: checker&, w: lsp_walk&, e: expr&) -> void {
         .DOT_VARIANT(n) => { this.lsp_member_names.put(n, true); },
         .UNARY(op, x) => { this.lsp_walk_expr(w, x); },
         .BINARY(op, a, b) => {
-            this.lsp_walk_expr(w, a);
-            this.lsp_walk_expr(w, b);
+            // s == .LIGHT: a variant of the other side's enum
+            if (!this.lsp_walk_wanted(w, a, this.lsp_walk_recv(w, b))) {
+                this.lsp_walk_expr(w, a);
+            }
+            if (!this.lsp_walk_wanted(w, b, this.lsp_walk_recv(w, a))) {
+                this.lsp_walk_expr(w, b);
+            }
         },
         .ASSIGN(op, a, b) => {
             this.lsp_walk_expr(w, a);
-            this.lsp_walk_expr(w, b);
+            if (!this.lsp_walk_wanted(w, b, this.lsp_walk_recv(w, a))) {
+                this.lsp_walk_expr(w, b);
+            }
         },
         .INC_DEC(x, inc) => { this.lsp_walk_expr(w, x); },
         .CAST(x, t&) => {
@@ -421,14 +489,36 @@ attach fn lsp_walk_expr(this: checker&, w: lsp_walk&, e: expr&) -> void {
             this.lsp_walk_opt(w, ptr_box(b));
         },
         .CALL(f, args&) => {
-            this.lsp_walk_expr(w, f);
+            var done = false;
+            match (f.kind) {
+                .FIELD(x, n, g&) => {
+                    // x.n(...): a method (or a field holding a fn) of x's type
+                    this.lsp_walk_expr(w, x);
+                    val gp = ptr_of(g);
+                    if (gp) {
+                        val ga = gp;
+                        this.lsp_walk_gargs(w, ga);
+                    }
+                    if (!this.lsp_walk_method(w, x, n, f.span) && !this.lsp_walk_field(w, x, n, f.span)) {
+                        this.lsp_member_names.put(n, true);
+                    }
+                    done = true;
+                },
+                .PATH(p&) => { done = this.lsp_walk_overload(w, p, args); },
+                default => {},
+            }
+            if (!done) {
+                this.lsp_walk_expr(w, f);
+            }
             for (a&) in args.items() {
                 this.lsp_walk_expr(w, a);
             }
         },
         .FIELD(x, n, g&) => {
             this.lsp_walk_expr(w, x);
-            this.lsp_member_names.put(n, true);
+            if (!this.lsp_walk_field(w, x, n, e.span)) {
+                this.lsp_member_names.put(n, true);
+            }
             val gp = ptr_of(g);
             if (gp) {
                 val ga = gp;
@@ -541,9 +631,18 @@ attach fn lsp_walk_expr(this: checker&, w: lsp_walk&, e: expr&) -> void {
         },
         .MATCH(m&) => {
             this.lsp_walk_expr(w, m.scrut);
+            // .VARIANT patterns: the scrutinee's enum, when its type is written
+            var over: u32? = null;
+            val st = this.lsp_walk_recv(w, m.scrut);
+            if (st) {
+                over = this.lsp_walk_named(w, st);
+            }
             for (a&) in m.arms.items() {
                 val mark = w.names.len;
+                val outer = w.scrut;
+                w.scrut = over;
                 this.lsp_walk_pat(w, &a.pat);
+                w.scrut = outer;
                 if (a.guard) {
                     this.lsp_walk_expr(w, &a.guard);
                 }
@@ -581,19 +680,30 @@ attach fn lsp_walk_pat(this: checker&, w: lsp_walk&, p: pat&) -> void {
                 .PATH(cp&) => {
                     if (cp.segs.len == 1) {
                         // circle(c): a variant of the scrutinee's enum (ctor_pat), whatever else is named so
-                        this.lsp_member_names.put(cp.segs.at(0).name, true);
+                        val n = cp.segs.at(0).name;
+                        if (w.scrut == null || !this.lsp_walk_variant(w.scrut ?? 0, n, cp.span)) {
+                            this.lsp_member_names.put(n, true);
+                        }
                     } else {
                         this.lsp_walk_path(w, cp, false);
                     }
                 },
-                .DOT(n) => { this.lsp_member_names.put(n, true); },
+                .DOT(n) => {
+                    if (w.scrut == null || !this.lsp_walk_variant(w.scrut ?? 0, n, p.span)) {
+                        this.lsp_member_names.put(n, true);
+                    }
+                },
             }
+            // a payload's patterns aren't over the scrutinee's enum
+            val outer = w.scrut;
+            w.scrut = null;
             val sp = ptr_of(subs);
             if (sp) {
                 for (s&) in sp->items() {
                     this.lsp_walk_pat(w, s);
                 }
             }
+            w.scrut = outer;
         },
         .TUPLE(subs&) => {
             for (s&) in subs.items() {
@@ -762,11 +872,388 @@ attach fn lsp_walk_member_path(this: checker&, w: lsp_walk&, p: path&) -> void {
                         }
                     }
                 },
+                .STRUCT(s) => {
+                    // a static fn attached to a struct that isn't generic: the one of that name
+                    if (this.item_of(d).generics.len > 0) {
+                        return;
+                    }
+                    val pt: ty = { kind: type_kind::PATH(copy prefix), span: prefix.span };
+                    val t = this.lsp_walk_type_id(w, &pt) ?? return;
+                    var only: u32? = null;
+                    var count = 0;
+                    for (m) in this.named(&this.attached, name).items() {
+                        if (static_fits_lsp(this, m, t)) {
+                            only = m;
+                            count += 1;
+                        }
+                    }
+                    if (count == 1) {
+                        this.lsp_fn_use(only ?? 0, null, p.span);
+                    }
+                },
                 default => {},
             }
         },
         default => {},
     }
+}
+
+fn static_fits_lsp(c: checker&, d: u32, t: u32) -> bool {
+    return !c.catch_all(d) && c.static_fits(d, t);
+}
+
+// the struct or enum a written type names (through & and *), when the walk can tell: not one of
+// the body's generic params or comptime locals
+attach fn lsp_walk_named(this: checker&, w: lsp_walk&, t: ty*) -> u32? {
+    match (t->kind) {
+        .REF(x) => { return this.lsp_walk_named(w, x.ptr); },
+        .PTR(x) => { return this.lsp_walk_named(w, x.ptr); },
+        .PATH(p&) => {
+            if (walk_shadows(w, p.segs.at(0).name, true)) {
+                return null;
+            }
+            val refs = this.lsp_refs.len;
+            var f: found? = null;
+            if (p.segs.len == 1) {
+                f = this.lookup(w.ns, p.segs.at(0).name);
+            } else {
+                f = this.lookup_path_ns(w.ns, p);
+            }
+            while (this.lsp_refs.len > refs) {
+                this.lsp_refs.pop(); // the type's own uses are recorded where it's written
+            }
+            match (f ?? return null) {
+                .DECLS(l) => {
+                    for (d&) in this.list(l).items() {
+                        match (this.item_of(*d).kind) {
+                            .STRUCT(s) => {
+                                if (s.spec == null) {
+                                    return *d;
+                                }
+                            },
+                            .ENUM(e) => { return *d; },
+                            default => {},
+                        }
+                    }
+                },
+                default => {},
+            }
+            return null;
+        },
+        default => { return null; },
+    }
+}
+
+// a written type without its & and *, resolved (null: it doesn't resolve on its own, a generic
+// param's say)
+attach fn lsp_walk_type_id(this: checker&, w: lsp_walk&, t: ty*) -> u32? {
+    match (t->kind) {
+        .REF(x) => { return this.lsp_walk_type_id(w, x.ptr); },
+        .PTR(x) => { return this.lsp_walk_type_id(w, x.ptr); },
+        default => {},
+    }
+    if (t == null) {
+        return null;
+    }
+    val tr = t;
+    val refs = this.lsp_refs.len;
+    val genv = this.new_env({ ns: w.ns });
+    val r = this.resolve_type(&*tr, genv) catch |e| {
+        while (this.lsp_refs.len > refs) {
+            this.lsp_refs.pop();
+        }
+        return null;
+    };
+    while (this.lsp_refs.len > refs) {
+        this.lsp_refs.pop();
+    }
+    return r;
+}
+
+// the type written for receiver x: a local's or param's, or an untyped `this`'s (its attach
+// block's target); null when the walk can't tell
+attach fn lsp_walk_recv(this: checker&, w: lsp_walk&, x: expr&) -> ty* {
+    match (x.kind) {
+        .PATH(p&) => {
+            if (!p.is_single()) {
+                return null;
+            }
+            return walk_ty_of(w, p.segs.at(0).name);
+        },
+        .THIS => {
+            val t = walk_ty_of(w, "this");
+            if (t == null && walk_shadows(w, "this", false)) {
+                return w.recv;
+            }
+            return t;
+        },
+        default => { return null; },
+    }
+}
+
+// x.n where x's type is written and names a struct with a field n: recorded
+attach fn lsp_walk_field(this: checker&, w: lsp_walk&, x: expr&, n: str, span: span) -> bool {
+    val t = this.lsp_walk_recv(w, x);
+    if (t == null) {
+        return false;
+    }
+    val d = this.lsp_walk_named(w, t) ?? return false;
+    val at = this.lsp_word(span, n, true) ?? return false;
+    return this.lsp_struct_field(d, n, at);
+}
+
+// field n of struct decl d, used at `at`: recorded when d has it
+attach fn lsp_struct_field(this: checker&, d: u32, n: str, at: span) -> bool {
+    match (this.item_of(d).kind) {
+        .STRUCT(sd&) => {
+            for (f&) in sd.fields.items() {
+                if (f.name == n) {
+                    put(&this.lsp_refs, { at: at, def: this.name_span(f.span, n), kind: LK_PROPERTY, label: fmt2("{}: {}", S(n), this.span_text(f.ty.span)) });
+                    return true;
+                }
+            }
+        },
+        default => {},
+    }
+    return false;
+}
+
+// .n as a variant of enum decl d, at the end of span: recorded when d has it
+attach fn lsp_walk_variant(this: checker&, d: u32, n: str, span: span) -> bool {
+    match (this.item_of(d).kind) {
+        .ENUM(e&) => {
+            for (v&) in e.variants.items() {
+                if (v.name == n) {
+                    val at = this.lsp_word(span, n, true) ?? return false;
+                    put(&this.lsp_refs, { at: at, def: this.name_span(v.span, n), label: fmt2("{}::{}", S(e.name), S(n)), kind: LK_ENUM_MEMBER });
+                    return true;
+                }
+            }
+        },
+        default => {},
+    }
+    return false;
+}
+
+// e where a value of the written type t is wanted: a .VARIANT of t's enum, or a literal of t's
+// struct (its field names). True when e was walked here
+attach fn lsp_walk_wanted(this: checker&, w: lsp_walk&, e: expr&, t: ty*) -> bool {
+    if (t == null) {
+        return false;
+    }
+    match (e.kind) {
+        .DOT_VARIANT(n) => {
+            val d = this.lsp_walk_named(w, t) ?? return false;
+            return this.lsp_walk_variant(d, n, e.span);
+        },
+        .LITERAL(fs&) => {
+            val d = this.lsp_walk_named(w, t) ?? return false;
+            var lo = e.span.lo;
+            for (f&) in fs.items() {
+                val fname = f.name;
+                if (fname) {
+                    // the name is the last of it before its value
+                    val before: span = { lo: lo, hi: f.value.span.lo, file: e.span.file };
+                    val at = this.lsp_word(before, fname, true);
+                    if (at == null || !this.lsp_struct_field(d, fname, at ?? before)) {
+                        this.lsp_member_names.put(fname, true);
+                    }
+                }
+                this.lsp_walk_expr(w, &f.value);
+                lo = f.value.span.hi;
+            }
+            return true;
+        },
+        default => { return false; },
+    }
+}
+
+// x.n(...) where x's type is written: the one method n of a struct or enum the program names (not
+// a generic one: its methods depend on its args), or of a generic param through its bounds (one
+// bound trait has an n). True when recorded
+attach fn lsp_walk_method(this: checker&, w: lsp_walk&, x: expr&, n: str, span: span) -> bool {
+    val t = this.lsp_walk_recv(w, x);
+    if (t == null) {
+        return false;
+    }
+    var only: u32? = null;
+    var count = 0;
+    val bounds = this.lsp_walk_bounds(w, t);
+    if (bounds) {
+        for (tr) in bounds.items() {
+            val fs = w.traits->get(tr) ?? continue;
+            for (m) in fs.items() {
+                val fd = this.fn_decl_of(m) ?? continue;
+                if (fd.name == n) {
+                    only = m;
+                    count += 1;
+                }
+            }
+        }
+    } else {
+        val d = this.lsp_walk_named(w, t) ?? return false;
+        if (this.item_of(d).generics.len > 0) {
+            return false;
+        }
+        val tid = this.lsp_walk_type_id(w, t) ?? return false;
+        for (m) in this.named(&this.attached, n).items() {
+            if (!this.catch_all(m) && this.takes_this(m, tid)) {
+                only = m;
+                count += 1;
+            }
+        }
+    }
+    if (count != 1) {
+        return false;
+    }
+    this.lsp_fn_use(only ?? 0, null, span);
+    return true;
+}
+
+// the traits a generic param's bounds name, when written type t is one of the walked fn's
+// generic params (through & and *); null when it isn't
+attach fn lsp_walk_bounds(this: checker&, w: lsp_walk&, t: ty*) -> std::vec<u32>? {
+    match (t->kind) {
+        .REF(x) => { return this.lsp_walk_bounds(w, x.ptr); },
+        .PTR(x) => { return this.lsp_walk_bounds(w, x.ptr); },
+        .PATH(p&) => {
+            if (!p.is_single() || p.segs.at(0).args != null) {
+                return null;
+            }
+            val n = p.segs.at(0).name;
+            for (g&) in this.fn_generics(w.decl).items() {
+                if (g.name != n) {
+                    continue;
+                }
+                var out: std::vec<u32> = {};
+                for (b) in g.bounds.items() {
+                    val bt = b ?? continue;
+                    val tr = this.lsp_walk_trait(w, bt) ?? continue;
+                    put(&out, tr);
+                }
+                return out;
+            }
+            return null;
+        },
+        default => { return null; },
+    }
+}
+
+// the trait a bound names
+attach fn lsp_walk_trait(this: checker&, w: lsp_walk&, t: ty*) -> u32? {
+    match (t->kind) {
+        .PATH(p&) => {
+            val refs = this.lsp_refs.len;
+            var f: found? = null;
+            if (p.segs.len == 1) {
+                f = this.lookup(w.ns, p.segs.at(0).name);
+            } else {
+                f = this.lookup_path_ns(w.ns, p);
+            }
+            while (this.lsp_refs.len > refs) {
+                this.lsp_refs.pop();
+            }
+            match (f ?? return null) {
+                .DECLS(l) => {
+                    for (d&) in this.list(l).items() {
+                        match (this.item_of(*d).kind) {
+                            .TRAIT(tn, fs) => { return *d; },
+                            default => {},
+                        }
+                    }
+                },
+                default => {},
+            }
+            return null;
+        },
+        default => { return null; },
+    }
+}
+
+// a call to an overloaded fn by name (pick(3)): the one overload whose params take the args as
+// written (a number literal any number type of that kind, a string literal str, a bool literal
+// bool, a local whose type is written that type, as written). True when recorded
+attach fn lsp_walk_overload(this: checker&, w: lsp_walk&, p: path&, args: std::vec<expr>&) -> bool {
+    if (!p.is_single() || p.segs.at(0).args != null || walk_shadows(w, p.segs.at(0).name, false)) {
+        return false;
+    }
+    val refs = this.lsp_refs.len;
+    val f = this.lookup(w.ns, p.segs.at(0).name);
+    while (this.lsp_refs.len > refs) {
+        this.lsp_refs.pop();
+    }
+    var cands: std::vec<u32> = {};
+    match (f ?? return false) {
+        .DECLS(l) => {
+            for (d&) in this.list(l).items() {
+                val fd = this.fn_decl_of(*d) ?? continue;
+                if (fd.params.len == args.len && (fd.params.len == 0 || fd.params.at(0).name != "this") && this.fn_generics(*d).len == 0) {
+                    put(&cands, *d);
+                }
+            }
+        },
+        default => { return false; },
+    }
+    if (cands.len < 2) {
+        return false; // one: lsp_walk_path records it
+    }
+    var only: u32? = null;
+    var count = 0;
+    for (c) in cands.items() {
+        if (this.lsp_walk_args_fit(w, c, args)) {
+            only = c;
+            count += 1;
+        }
+    }
+    if (count != 1) {
+        return false;
+    }
+    this.lsp_fn_use(only ?? 0, null, p.span);
+    // the args are walked by the caller; the path's own segments have no generic args
+    return true;
+}
+
+// do fn d's params take args, as written
+attach fn lsp_walk_args_fit(this: checker&, w: lsp_walk&, d: u32, args: std::vec<expr>&) -> bool {
+    val fd = this.fn_decl_of(d) ?? return false;
+    for (i) in 0..args.len {
+        val pp = fd.params.at(i);
+        if (pp.ty == null) {
+            return false;
+        }
+        val want = this.span_text(pp.ty.value.span);
+        val w2 = want.as_str();
+        var fits = false;
+        match (args.at(i).kind) {
+            .INT(x) => { fits = is_int_name(w2); },
+            .FLOAT(x, q) => { fits = w2 == "f16" || w2 == "f32" || w2 == "f64" || w2 == "f128"; },
+            .STR(x&) => { fits = w2 == "str"; },
+            .BOOL(x) => { fits = w2 == "bool"; },
+            .PATH(ap&) => {
+                if (ap.is_single()) {
+                    val lt = walk_ty_of(w, ap.segs.at(0).name);
+                    if (lt) {
+                        fits = this.span_text(lt->span).as_str() == w2;
+                    }
+                }
+            },
+            default => {},
+        }
+        if (!fits) {
+            return false;
+        }
+    }
+    return true;
+}
+
+fn is_int_name(n: str) -> bool {
+    val names: str[] = { "i8", "i16", "i32", "i64", "i128", "u8", "u16", "u32", "u64", "u128", "isize", "usize" };
+    for (x) in names {
+        if (x == n) {
+            return true;
+        }
+    }
+    return false;
 }
 
 // what hover says about global d, named `name`, without checking it: its type once checked, else

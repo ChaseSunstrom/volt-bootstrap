@@ -51,10 +51,14 @@ std's generic helpers, seen from a std file) isn't checked at all. Go to definit
 rename still reach the names used in it that don't need types to tell: functions called by name,
 types, globals and constants, namespaces and enum variants written with their type (`color::RED`),
 leaving out the body's own parameters, locals and generic parameters that share a name with them.
-Members do need types (`x.name`, `.RED`, a pattern's `circle(c)`, a literal's `{ name: ... }`, the
-field `@offsetof` names), so those uses aren't covered,
-nor are calls to an overloaded function; renaming a field, method or variant that such a body names
-as a member says so.
+Members need types, so they're found where the type is written: `x.name` and `x.method()` where `x`
+is a parameter, `this` or an annotated local of a struct or enum the program names (a generic
+struct's fields too, not its methods), `Type::static_fn()`, a literal's field names where its type
+is written (`val p: point = { x: 1 }`), `.RED` compared with or assigned to such a value or in a
+`match` over one, `t.area()` where `T`'s bounds have one `area`, and a call to an overloaded
+function whose arguments' types are written (a literal, an annotated local). Other member uses
+(through an inferred local, a `T` whose bounds share the name, the field `@offsetof` names) aren't
+covered; renaming a field, method or variant that such a body names that way says so.
 
 The server runs in one process. If it ever crashes, VS Code starts it again (up to four times in
 three minutes); other editors have their own setting for that.
