@@ -43,7 +43,10 @@ struct Server {
 
 impl Server {
     fn start() -> Server {
-        let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("lsp-{}", std::process::id()));
+        // one directory per server: the tests run at once, and each clears its own at the start
+        static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("lsp-{}-{n}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         // bolt on PATH: the server asks it for a package's dependencies
@@ -907,7 +910,7 @@ fn generic_body_members() {
         assert!(r.contains(&format!("\"start\":{{\"line\":{l},\"character\":{col}}}")), "{name}'s use in {at} at {l}:{col}: {r}");
     }
     // definition from a member use in a body nothing instantiates
-    let r = s.request("textDocument/definition", &format!("{}}}", pos("var n = p.x + q.b", "b;")));
+    let r = s.request("textDocument/definition", &format!("{}}}", pos("var n = p.x + q.b", "b + r")));
     let b_line = lines.iter().position(|l| l.contains("    b: i32;")).unwrap();
     assert!(r.contains(&format!("\"start\":{{\"line\":{b_line},")), "definition of q.b: {r}");
     // every use of x is certain: rename edits them all and doesn't warn
