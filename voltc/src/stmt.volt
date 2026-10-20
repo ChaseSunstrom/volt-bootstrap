@@ -87,6 +87,9 @@ attach fn block_scoped(this: checker&, b: block&) -> compile_error!code {
         for (x&) in (try this.scope_exit_code(sc, sc, false)).items() {
             put(&stmts, *x);
         }
+        if (b.span.hi > b.span.lo) {
+            this.scope_ended(sc, { file: b.span.file, lo: b.span.hi - 1, hi: b.span.hi });
+        }
     }
     return { c: this.ir.block(move stmts), div: div };
 }

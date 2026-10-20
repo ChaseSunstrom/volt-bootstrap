@@ -104,7 +104,7 @@ attach fn try_expr(this: checker&, x: expr&, span: span) -> compile_error!tval {
     if (t == VOID) {
         return vnew(t, this.ir.seq(move stmts, null, t));
     }
-    return with_prov(vnew(t, this.ir.seq(move stmts, this.ir.field(tmp.c, 1, t), t)), &v);
+    return with_loan(with_prov(vnew(t, this.ir.seq(move stmts, this.ir.field(tmp.c, 1, t), t)), &v), &v);
 }
 
 // `x catch |e| handler`: the payload, or the handler's value on error. The handler may leave
@@ -183,7 +183,7 @@ attach fn catch_inner(this: checker&, v: tval, e: u32, t: u32, cap: catch_cap*, 
         if (t == VOID) {
             return vnew(t, this.ir.seq(move stmts, null, t));
         }
-        return with_prov(vnew(t, this.ir.seq(move stmts, this.ir.field(tmp.c, 1, t), t)), &v);
+        return with_loan(with_prov(vnew(t, this.ir.seq(move stmts, this.ir.field(tmp.c, 1, t), t)), &v), &v);
     }
     if (h.ty == VOID) {
         return fails(handler.span, "catch needs a value here, or a block that leaves (return/break)");
@@ -199,7 +199,8 @@ attach fn catch_inner(this: checker&, v: tval, e: u32, t: u32, cap: catch_cap*, 
     put(&both, v);
     put(&both, hv);
     this.merge_held(&out, &both);
-    return out;
+    // the payload's loan (the handler's value is followed no further)
+    return with_loan(out, &v);
 }
 
 // an optional's present test and payload, as IR nodes (see opt_parts)
