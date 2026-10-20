@@ -460,8 +460,9 @@ attach fn scope_exit_code(this: checker&, from: usize, to: usize, is_err: bool) 
     this.cx.in_exit -= 1;
     var out = try r;
     // an async fn cancelled while a defer here paused carries on after these exits: rather than go back
-    // into the body, it runs the exits of the scopes around them and finishes
-    if (this.cx.frame != null && to > 0 && this.has_suspend(&out)) {
+    // into the body, it runs the exits of the scopes around them and finishes (exits inside exit code,
+    // a defer's own block, carry on with that exit code, which finishes)
+    if (this.cx.frame != null && to > 0 && this.cx.in_exit == 0 && this.has_suspend(&out)) {
         var rest = try this.scope_exit_code(to - 1, 0, false);
         val obj = this.frame_obj();
         put(&rest, this.ir.assign(this.ir.field(obj, 0, U32), this.ir.int(VOLT_TAKEN, U32)));
@@ -1460,6 +1461,13 @@ attach fn for_body(this: checker&, f: for_loop&, elem_ty: u32, elem: u32, index:
             x.ro = ep.ro;
             x.via = ep.via;
             x.root = ep.root;
+        }
+        if (this.local_array(&f.iter)) {
+            // (x&) over a local array points into the local
+            val n = this.frame_root(&f.iter);
+            if (n) {
+                this.cx.ref_holders.put(c, n);
+            }
         }
         put(&out, this.decl_at(c, this.ir.addr(elem, rt)));
     } else if (owns) {

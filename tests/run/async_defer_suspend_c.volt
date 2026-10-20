@@ -84,6 +84,22 @@ async fn loop_cancel() -> void {
     std::println("after the loop");
 }
 
+// a defer holding a block with a suspending defer of its own
+async fn inner_block(name: str) -> void {
+    defer {
+        {
+            defer {
+                std::println("{} inner closing", name);
+                suspend;
+                std::println("{} inner closed", name);
+            }
+            std::println("{} block", name);
+        }
+        std::println("{} outer done", name);
+    }
+    std::println("{} body", name);
+}
+
 fn main() -> void {
     val a = async by_return("ret");
     std::println("paused");
@@ -105,6 +121,11 @@ fn main() -> void {
     }
     {
         val g = async loop_cancel();
+    }
+    val ib = async inner_block("ib");
+    resume ib;
+    {
+        val ic = async inner_block("ic");
     }
 }
 // expect: ret closing
@@ -133,4 +154,14 @@ fn main() -> void {
 // expect: pass 0 ending
 // expect: pass 0 ended
 // expect: outer defer
+// expect: ib body
+// expect: ib block
+// expect: ib inner closing
+// expect: ib inner closed
+// expect: ib outer done
+// expect: ic body
+// expect: ic block
+// expect: ic inner closing
+// expect: ic inner closed
+// expect: ic outer done
 // expect: drop 1
