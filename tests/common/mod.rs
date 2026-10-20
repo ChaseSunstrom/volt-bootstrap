@@ -182,8 +182,8 @@ pub fn llvm_cc_args() -> Vec<String> {
 /// $PATH with dir in front: where Windows looks for a program's DLLs, having no rpath (elsewhere it's
 /// only searched for programs, so it changes nothing)
 #[allow(dead_code)]
-pub fn path_with(dir: &std::path::Path) -> std::ffi::OsString {
-    let mut dirs = vec![dir.to_path_buf()];
+pub fn path_with(dir: impl AsRef<std::path::Path>) -> std::ffi::OsString {
+    let mut dirs = vec![dir.as_ref().to_path_buf()];
     dirs.extend(std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()));
     std::env::join_paths(dirs).unwrap()
 }
