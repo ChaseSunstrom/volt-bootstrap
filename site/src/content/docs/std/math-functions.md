@@ -90,7 +90,14 @@ fn main() -> void {
 `f64x2`, `f64x4`, `i32x4`, `i32x8`, `i64x2` and `u8x16`, or `vec(T, n)` for any other (ints of up to
 64 bits or `f32`/`f64`, a power of two lanes, 64 bytes at most). Two vectors of one type add,
 subtract and multiply (int lanes wrap), float lanes divide too and int lanes take `&`, `|` and `^`;
-`-v` negates every lane and `v[i]` reads or writes one (checked, as an array's index is). A `{ }`
+`-v` negates every lane and `v[i]` reads or writes one (checked, as an array's index is). Int lanes
+shift, `v << n` and `v >> n`, by a vector of amounts (lane by lane) or one amount for every lane;
+`>>` is arithmetic on signed lanes. As a scalar shift, an amount past the lanes' width stops a
+debug build (`shift amount too large (lane 2)`, before any lane is shifted) and `--release` takes
+it modulo the width. `a == b` is whether every lane is equal, one `bool` as every `==` gives (a NaN
+lane makes it false, as a NaN float does), `!=` its opposite, and `lanes_eq(a, b)` the lanes'
+answers one by one, a `bool[n]`. A vector prints as its lanes do, `{ 1, 2, 3, 4 }`, a format spec
+applying to each (`{:.2}`; an array's elements take one too). A `{ }`
 literal lists the lanes (`{}` is every lane 0), `splat<V>(x)` puts `x` in every lane, `sum(v)` adds
 them up, and `load<V>(xs)` and `store(v, xs)` move a slice's first lanes in and out; `lanes(V)` and
 `lane(V)` are a vector type's lane count and lane type. A vector can be a struct's field (aligned
@@ -128,9 +135,14 @@ fn main() -> void {
 // expect: 27
 ```
 
-Vectors stay inside Volt for now: bindings refuse an export fn that takes one (it has no C form), a
-comptime function can't make one, they don't compare with `==` or shift, and `println` doesn't print
-one (print its lanes).
+Compile-time code makes and works on vectors too, by the same rules (a shift past the width is a
+compile error naming the lane), and a `comptime val` vector is a constant one.
+
+An `export fn` takes and gives vectors: to C and every language with bindings, a vector is the
+array of its lanes (`f32x4` is `mathlib_array_f32_4`, `float[4]` in C#, `[f32; 4]` in Rust),
+because C has no vector type every language shares and a vector's alignment is its whole size.
+`voltc lib` puts a shim in front of such an export fn, copying the lanes between the array and the
+vector.
 
 ## Random numbers
 

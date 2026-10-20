@@ -260,7 +260,9 @@ Python's on
   in C, `std::array<T, N>` in C++, `[T; N]` in Rust, `[N]T` in Zig and Go, a list in Python and
   Dart, `long[]` (and the like) in Java and C#, an array in JavaScript, Ruby and Swift, a
   `LongArray` (and the like) in Kotlin and a table in Lua: a callback `fn(i32[3]) -> i32[3]` takes
-  and returns those. One of the wrong length is refused.
+  and returns those. One of the wrong length is refused. An export fn's SIMD vector
+  (`std::simd::f32x4`) crosses as the array of its lanes (`PKG_array_f32_4`); `voltc lib`'s shim
+  copies the lanes between the two.
 - **`extern "C"` fn types.** A parameter or result of one is the C function pointer. C, C++, Rust
   and Zig write their own (an array in it crosses as above); every language passes one Volt gave
   out back to Volt, as its function type where it has one (Python, Swift, Kotlin) and as an opaque
