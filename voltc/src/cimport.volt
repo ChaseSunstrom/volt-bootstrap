@@ -303,6 +303,15 @@ fn is_p(t: ctok*, p: str) -> bool {
     }
 }
 
+// is t the identifier n?
+fn is_id(t: ctok*, n: str) -> bool {
+    val x = t ?? return false;
+    match (*x) {
+        .ID(q) => { return q == n; },
+        default => { return false; },
+    }
+}
+
 attach fn peek(this: ceval&) -> ctok* {
     if (this.i < this.t.len) {
         return &this.t[this.i];
@@ -510,6 +519,7 @@ enum ctype {
     LDOUBLE,      // long double: an f64 through a wrapper
     COMPLEX: str, // _Complex of its real type's C name (float, double, long double): through a wrapper
     VA_LIST,      // va_list: a function taking one last is called with varargs (va_wrapper)
+    VECTOR: (std::box<ctype>, u64), // __attribute__((vector_size(N))): its element type and N bytes
     BAD,          // _Float16...: can't be used by value
 }
 
@@ -586,6 +596,7 @@ struct cdecls {
     last_params: std::vec<str?> = {}; // names in the param list read last (the declared fn's own)
     kr: bool = false;                    // ...which was a K&R identifier list
     label: str? = null;                  // the asm label read last (the declared fn's)
+    vsize: u64? = null;                  // a vector_size(N) read last (the declarator's)
     names: std::vec<std::string> = {}; // made-up names (anonymous tags) the others point into
     anon_in: std::map<str, anon_field> = {}; // anonymous tag -> the named field it types
     fn_macros: std::vec<str> = {};     // function-like #defines (MAX(a, b)): called per use
@@ -735,6 +746,44 @@ attach fn skip_noise(this: cparser&) -> bool? {
             put(&this.d.names, move label);
             this.d.label = this.d.names.at(this.d.names.len - 1).as_str();
         }
+        // vector_size(N): the type is a vector of N bytes (0: a size voltc can't read, 4 * sizeof(T):
+        // the type is one only C knows)
+        val g = this.t[start..this.i];
+        for (k) in 0..g.len {
+            if ((is_id(&g[k], "vector_size") || is_id(&g[k], "__vector_size__")) && k + 1 < g.len && is_p(&g[k + 1], "(")) {
+                var depth: usize = 0;
+                var nums: usize = 0;
+                var other = false;
+                var size: u64 = 0;
+                var j = k + 1;
+                while (j < g.len) {
+                    if (is_p(&g[j], "(")) {
+                        depth += 1;
+                    } else if (is_p(&g[j], ")")) {
+                        depth -= 1;
+                        if (depth == 0) {
+                            break;
+                        }
+                    } else {
+                        match (g[j]) {
+                            .NUM(x) => {
+                                nums += 1;
+                                val v = parse_cnum(x) ?? cfloat(0.0);
+                                if (!v.is_float && v.v > 0) {
+                                    size = @cast<u64>(v.v);
+                                }
+                            },
+                            default => { other = true; },
+                        }
+                    }
+                    j += 1;
+                }
+                this.d.vsize = size;
+                if (other || nums != 1) {
+                    this.d.vsize = 0;
+                }
+            }
+        }
         return true;
     }
     if (is_noise_word(n)) {
@@ -764,6 +813,22 @@ fn known_typedef(n: str) -> str? {
 
 // declaration specifiers -> base type; sets `stat` for static/thread-local storage
 attach fn specs(this: cparser&, stat: bool&) -> ctype? {
+    this.d.vsize = null; // (none left over from the declaration before)
+    val t = this.specs_in(stat) ?? return null;
+    val vs = this.d.vsize ?? return t;
+    this.d.vsize = null;
+    return vector_of(move t, vs);
+}
+
+// a vector of `bytes` bytes of t (0 bytes: a size voltc couldn't read)
+fn vector_of(t: ctype, bytes: u64) -> ctype {
+    if (bytes == 0) {
+        return ctype::BAD;
+    }
+    return ctype::VECTOR(bx(move t), bytes);
+}
+
+attach fn specs_in(this: cparser&, stat: bool&) -> ctype? {
     var signed = false;
     var unsigned = false;
     var short = false;
@@ -1096,7 +1161,15 @@ attach fn declarator(this: cparser&, base: ctype) -> cdecl? {
         this.i += 1;
     }
     while (this.skip_noise() ?? return null) {}
+    // (a vector_size attribute after the name: this declarator's; one among the specifiers made the
+    // base type the vector already)
+    val vs = this.d.vsize;
+    this.d.vsize = null;
+    if (vs) {
+        ty = vector_of(move ty, vs);
+    }
     val t = this.suffixes(move ty) ?? return null;
+    this.d.vsize = null; // (one after a function's parameters isn't the next declaration's)
     return { name: name, ty: move t };
 }
 
@@ -1617,8 +1690,50 @@ attach fn ty_of(this: cmapper&, t0: ctype&) -> ty? {
             val it = this.ty_of(inner) ?? return null;
             return this.wrap(type_kind::ARRAY(bx(move it), bx(move len)));
         },
+        .VECTOR(inner, bytes) => {
+            // @vector(T, N / sizeof T), of a number type only
+            val r = this.resolve(inner, 0) ?? return null;
+            var es: u64 = 0;
+            match (*r) {
+                .CHAR => { es = 1; },
+                .PRIM(p) => { es = prim_bytes(p); },
+                .NAMED(n) => { es = prim_bytes(known_typedef(n) ?? ""); },
+                default => {},
+            }
+            if (es == 0 || bytes % es != 0) {
+                return null;
+            }
+            if (this.in_fn && bytes != 16) {
+                // a function's: 16 bytes (an SSE or NEON register's) cross as C passes them; other
+                // sizes aren't taken (C passes them in ways LLVM's vector types don't follow)
+                return null;
+            }
+            val it = this.ty_of(r) ?? return null;
+            var args: std::vec<garg> = {};
+            put(&args, garg::TYPE(move it));
+            put(&args, garg::EXPR({ kind: expr_kind::INT(@cast<u128>(bytes / es)), span: this.span }));
+            val e: expr = { kind: expr_kind::BUILTIN("vector", {}, move args), span: this.span };
+            return this.wrap(type_kind::EXPR(bx(move e)));
+        },
         default => { return null; },
     }
+}
+
+// the size of a Volt number type a vector can hold (0: none)
+fn prim_bytes(p: str) -> u64 {
+    if (p == "i8" || p == "u8") {
+        return 1;
+    }
+    if (p == "i16" || p == "u16" || p == "f16") {
+        return 2;
+    }
+    if (p == "i32" || p == "u32" || p == "f32") {
+        return 4;
+    }
+    if (p == "i64" || p == "u64" || p == "f64") {
+        return 8;
+    }
+    return 0;
 }
 
 // does a function taking or giving t by value need a wrapper (a long double, a _Complex)?
@@ -1647,6 +1762,7 @@ attach fn c_class(this: cmapper&, t: ctype&, depth: u32) -> u8 {
         .STRUCT(tag) => { return this.struct_class(tag, depth + 1); },
         .LDOUBLE => { return 2; },
         .COMPLEX(e) => { return 2; },
+        .VECTOR(e, n) => { return 2; },
         .BAD => { return 2; },
         .VA_LIST => { return 2; },
         default => { return 0; },

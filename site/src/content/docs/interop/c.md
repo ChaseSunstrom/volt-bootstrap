@@ -54,6 +54,7 @@ How C's types come in:
 | `void *` | `void*` |
 | a function pointer | `extern "C" fn(...) -> R`, optional (it may be null) |
 | `T[N]` | `T[N]` (a parameter's is a `T*`, as in C) |
+| `T __attribute__((vector_size(N)))` (a member or a typedef) | `@vector(T, N / sizeof T)`, with C's layout |
 | `struct`, `union` | the same, with C's layout |
 | a named `enum` | a Volt enum of the same values and integer type, which converts to and from integers |
 | an anonymous `enum` | a constant per enumerator, of its integer type |
