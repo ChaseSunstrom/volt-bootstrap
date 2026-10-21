@@ -336,6 +336,12 @@ static void std_kept(voltvm_volt_vm *vm, const char *dir) {
 
 int main(int argc, char **argv) {
     volt_str std_dir = S(argv[1]);
+    // the tests' directory goes in Volt string literals: forward slashes (Windows gives backslashes)
+    for (char *p = argv[2]; *p; p++) {
+        if (*p == '\\') {
+            *p = '/';
+        }
+    }
     char script[2048];
     snprintf(script, sizeof script,
              "use { \"%s/vmhost.h\" } as h;\n"

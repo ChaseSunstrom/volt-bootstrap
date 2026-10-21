@@ -1976,7 +1976,7 @@ fn cpp_derive4() {
     // a reference to a class held by handle, given back from an empty handle, stops the program
     // saying so
     let hpp = Path::new(ROOT).join("tests/interop/derive4.hpp");
-    let src = format!("use {{ \"{}\" }} as cpp;\nstruct held {{ it: cpp::d4::Item; }}\nattach cpp::d4::Q -> held {{\n    fn pick(this, self: cpp::d4::Q&) -> cpp::d4::Item& {{ return &this.it; }}\n}}\nfn main() -> void {{\n    val h: held = {{ it: {{ cpp: null, borrowed: true }} }};\n    var q = cpp::d4::Q::derive(move h);\n    val n = cpp::d4::use_pick(&q);\n}}\n", hpp.display());
+    let src = format!("use {{ \"{}\" }} as cpp;\nstruct held {{ it: cpp::d4::Item; }}\nattach cpp::d4::Q -> held {{\n    fn pick(this, self: cpp::d4::Q&) -> cpp::d4::Item& {{ return &this.it; }}\n}}\nfn main() -> void {{\n    val h: held = {{ it: {{ cpp: null, borrowed: true }} }};\n    var q = cpp::d4::Q::derive(move h);\n    val n = cpp::d4::use_pick(&q);\n}}\n", hpp.display().to_string().replace('\\', "/"));
     std::fs::write(e.dir.join("cpp_derive_empty.volt"), src).unwrap();
     let o = e.voltc(&["run", &e.path("cpp_derive_empty.volt")]);
     let err = String::from_utf8_lossy(&o.stderr);
