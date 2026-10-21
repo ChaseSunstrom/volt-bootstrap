@@ -2356,6 +2356,18 @@ fn cpp_peruse3() {
 }
 
 #[test]
+fn cpp_peruse4() {
+    // a call made per use whose result is a mirror (a Volt struct, a tuple, an enum with payloads),
+    // deduced, with the template argument given, named only in the result (zero<point>()) or
+    // pointed to: that Volt value back
+    let e = Env::new("cpp-peruse4");
+    let want = "struct 3 2.5 3 2.5\ntuple (4, 0.5) (4, 0.5)\nenum 1.25 7\nzero 0 0 (0, 0) 0\naddr 6 1.5 true\n";
+    for backend in ["c", "llvm"] {
+        assert_eq!(ok(e.voltc(&["run", "cpp_peruse4.volt", "--backend", backend]), "voltc run cpp_peruse4.volt"), want, "mirrored results ({backend})");
+    }
+}
+
+#[test]
 fn cpp_twin() {
     // a template pair f(T&) / f(T) (and const T& / T): with T explicit both overloads take the
     // argument, so each wrapper names its own; f(&m) changes m, f_value(5) a copy; T a pointer, a
