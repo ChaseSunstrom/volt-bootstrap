@@ -58,7 +58,10 @@ fn main() -> void {
     m = 1;
     val sp = cpp::pu2::echo(&p);
     *cpp::pu2::same(&m) = 5;
-    std::println("ref {} {} {} {}", r, sp.y, m, pass_on(&m));
+    // and with T given: echo<i32>(&m) copies too
+    val ri = cpp::pu2::echo<i32>(&m);
+    m = 3;
+    std::println("ref {} {} {} {} {}", r, sp.y, ri, m, pass_on(&m));
 }
 
 // a reference parameter passed on to a by-value deduced T: its value too
@@ -77,4 +80,4 @@ fn pass_on(n: i32&) -> i32 {
 // expect: fnptr 5 10
 // expect: array 50 6
 // expect: same 70
-// expect: ref 41 2.5 5 6
+// expect: ref 41 2.5 5 3 4

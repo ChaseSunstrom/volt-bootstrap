@@ -898,7 +898,7 @@ attach fn cpp_value_arg_ty(this: checker&, t: u32) -> u32 {
 // imported C++ template (template <class F> int apply(F f)), a plain fn is its C function pointer
 // (C++ calls it as one; a fn value has no C++ form); else v's own type
 attach fn cpp_fn_arg_ty(this: checker&, ns: u32, v: tval) -> u32 {
-    if (this.cpp_ctx_of(ns) == null || !this.plain_fn_value(v)) {
+    if (!this.in_cpp_import(ns) || !this.plain_fn_value(v)) {
         return v.ty;
     }
     match (*this.t.get(v.ty)) {
@@ -916,7 +916,7 @@ attach fn cpp_fn_arg(this: checker&, d: u32, v: tval, pt: u32) -> bool {
 // does C++ template d's by-value parameter pn (x: T, not a var) of type pt take v, a Volt reference
 // to a pt: the object it names, read through and copied, as C++ deduces T (cpp_value_arg_ty)
 attach fn cpp_ref_arg(this: checker&, d: u32, pn: str, v: tval, pt: u32) -> bool {
-    if (v.ty == pt || this.cpp_ctx_of(this.dl(d).ns) == null || this.cpp_value_arg_ty(v.ty) != pt) {
+    if (v.ty == pt || !this.in_cpp_import(this.dl(d).ns) || this.cpp_value_arg_ty(v.ty) != pt) {
         return false;
     }
     val fd = this.fn_decl_of(d) ?? return false;
@@ -1072,7 +1072,7 @@ attach fn bind_cand(this: checker&, d: u32, rv: tval*, static_ty: u32?, explicit
         }
         if (p.ty != null && av != null) {
             var at = this.cpp_fn_arg_ty(ns, av ?? vnew(0, 0));
-            if (!p.mutable && this.cpp_ctx_of(ns) != null && is_gparam_ty(&p.ty.value, gps)) {
+            if (!p.mutable && this.in_cpp_import(ns) && is_gparam_ty(&p.ty.value, gps)) {
                 at = this.cpp_value_arg_ty(at);
             }
             this.infer(&p.ty.value, at, gps, &binds, ns);

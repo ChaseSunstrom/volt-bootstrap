@@ -6837,7 +6837,7 @@ attach fn import_cpp(this: checker&, headers: std::vec<std::string>&, alias: str
     put(&this.c_texts, copy g.out);
     g.out = {};
     // kept for the calls made per use (cpp_dyn_call)
-    put(&this.cpp_ctxs, { ns: n, src: copy src, args: copy args, gen: move g, tu: move tu, unit: unit });
+    put(&this.cpp_ctxs, { ns: n, src: copy src, args: copy args, gen: move g, tu: move tu, unit: unit, imported: true });
     val text = this.c_texts.at(this.c_texts.len - 1).as_str();
     put(this.files, { name: this.intern(move fname), text: text });
     val file = @cast<u32>(this.files.len - 1);
@@ -7080,6 +7080,9 @@ struct cpp_import_ctx {
     tu: clang_tu;
     probe: clang_tu = { index: null, tu: null };
     unit: u32 = 0; // its C++ unit (cpp_units: the standard it's compiled under)
+    // a use { "x.hpp" } as cpp import's, whose namespace the importer writes; not the one a
+    // clang-typed @cpp makes in the user's own namespace (cpp_typed_by_clang)
+    imported: bool = false;
 }
 
 // what a call per use declares in C++ besides the headers: the types an argument may come as, and
@@ -7108,6 +7111,12 @@ attach fn cpp_ctx_of(this: checker&, ns: u32) -> usize? {
         at = this.ns(n).parent;
     }
     return null;
+}
+
+// is ns (or one it's in) a C++ import's, so its generics are C++ templates the importer wrote
+attach fn in_cpp_import(this: checker&, ns: u32) -> bool {
+    val k = this.cpp_ctx_of(ns) ?? return false;
+    return this.cpp_ctxs.at(k).imported;
 }
 
 // why @cpp can't spell type t for C++: a fn value or closure whose signature has no std::function form
