@@ -100,7 +100,7 @@ fn normalize(part: &str, types: &HashMap<String, String>) -> String {
         };
         rest = rest[next..].trim_start();
         let bare = word.split('(').next().unwrap();
-        if word.starts_with('%') || word.starts_with('#') || matches!(bare, "noundef" | "dso_local" | "dead_on_unwind" | "writable" | "dead_on_return" | "nonnull" | "noalias" | "nocapture" | "readonly" | "writeonly" | "local_unnamed_addr" | "captures" | "dereferenceable" | "range" | "nofpclass") {
+        if word.starts_with('%') || word.starts_with('#') || matches!(bare, "noundef" | "dso_local" | "dead_on_unwind" | "writable" | "dead_on_return" | "nonnull" | "noalias" | "nocapture" | "readonly" | "writeonly" | "local_unnamed_addr" | "captures" | "dereferenceable" | "range" | "nofpclass" | "hidden") {
             continue;
         }
         if bare == "align" {
@@ -159,9 +159,17 @@ fn signatures_match_clang() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let voltc = common::voltc();
     let mut bad = Vec::new();
-    for host in HOSTS {
-        let c_ir = run(Command::new("clang").arg(format!("--target={host}")).args(["-ffreestanding", "-O0", "-S", "-emit-llvm", "-o", "-"]).arg(root.join("tests/abi/sigs.c")), "clang");
-        let volt_ir = run(Command::new(&voltc).arg("emit-llvm").arg(root.join("tests/abi/sigs.volt")).arg("--std").arg(root.join("std")).env("VOLT_TRIPLE", host), "voltc emit-llvm");
+    // each host by its triple, and WebAssembly by Volt's --target (clang's triple beside it)
+    let hosts = HOSTS.iter().map(|h| (*h, *h, None)).chain([("wasm32-none", "wasm32-unknown-unknown", Some("wasm32-none"))]);
+    for (host, triple, target) in hosts {
+        let c_ir = run(Command::new("clang").arg(format!("--target={triple}")).args(["-ffreestanding", "-O0", "-S", "-emit-llvm", "-o", "-"]).arg(root.join("tests/abi/sigs.c")), "clang");
+        let mut volt = Command::new(&voltc);
+        volt.arg("emit-llvm").arg(root.join("tests/abi/sigs.volt")).arg("--std").arg(root.join("std"));
+        match target {
+            Some(t) => volt.args(["--target", t]),
+            None => volt.env("VOLT_TRIPLE", host),
+        };
+        let volt_ir = run(&mut volt, "voltc emit-llvm");
         let want = signatures(&c_ir);
         let got = signatures(&volt_ir);
         assert!(want.len() >= 20, "{host}: clang defined only {want:?}");

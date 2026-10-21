@@ -7,3 +7,7 @@ typedef union { float f; double d; } ufd;
 typedef union { float f; int i; } ufi;
 typedef struct { uf u; float y; } sfu;
 typedef struct { float y; uf u; } sfu2;
+/* one member: the member itself where an ABI takes one scalar (clang's WebAssembly) */
+typedef union { float f; } u1f;
+typedef union { double d; } u1d;
+typedef struct { u1f x; } su1;
