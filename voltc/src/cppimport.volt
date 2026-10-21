@@ -5212,7 +5212,8 @@ fn canon(t: clang::CXType) -> std::string {
     return type_spelling(clang::clang_getCanonicalType(t));
 }
 
-// what tells two virtual methods apart: the name, the parameters' types and const
+// what tells two virtual methods apart: the name, the parameters' types, const and the
+// ref-qualifier (g() && and g() & are two, as C++'s override rule has it)
 fn virt_key(m: clang::CXCursor) -> std::string {
     var k = cursor_name(m);
     k.push('(');
@@ -5223,6 +5224,12 @@ fn virt_key(m: clang::CXCursor) -> std::string {
     k.push(')');
     if (clang::clang_CXXMethod_isConst(m) != 0) {
         k.append("const");
+    }
+    val rq = clang::clang_Type_getCXXRefQualifier(clang::clang_getCursorType(m));
+    if (rq == clang::CXRefQualifier_LValue) {
+        k.push('&');
+    } else if (rq == clang::CXRefQualifier_RValue) {
+        k.append("&&");
     }
     return k;
 }
@@ -6967,7 +6974,7 @@ attach fn import_cpp(this: checker&, headers: std::vec<std::string>&, alias: str
     put(&this.c_texts, copy g.out);
     g.out = {};
     // kept for the calls made per use (cpp_dyn_call)
-    put(&this.cpp_ctxs, { ns: n, src: copy src, args: copy args, gen: move g, tu: move tu, unit: unit });
+    put(&this.cpp_ctxs, { ns: n, src: copy src, args: copy args, gen: move g, tu: move tu, unit: unit, imported: true });
     val text = this.c_texts.at(this.c_texts.len - 1).as_str();
     put(this.files, { name: this.intern(move fname), text: text });
     val file = @cast<u32>(this.files.len - 1);
@@ -7210,6 +7217,9 @@ struct cpp_import_ctx {
     tu: clang_tu;
     probe: clang_tu = { index: null, tu: null };
     unit: u32 = 0; // its C++ unit (cpp_units: the standard it's compiled under)
+    // a use { "x.hpp" } as cpp import's, whose namespace the importer writes; not the one a
+    // clang-typed @cpp makes in the user's own namespace (cpp_typed_by_clang)
+    imported: bool = false;
 }
 
 // what a call per use declares in C++ besides the headers: the types an argument may come as, and
@@ -7238,6 +7248,12 @@ attach fn cpp_ctx_of(this: checker&, ns: u32) -> usize? {
         at = this.ns(n).parent;
     }
     return null;
+}
+
+// is ns (or one it's in) a C++ import's, so its generics are C++ templates the importer wrote
+attach fn in_cpp_import(this: checker&, ns: u32) -> bool {
+    val k = this.cpp_ctx_of(ns) ?? return false;
+    return this.cpp_ctxs.at(k).imported;
 }
 
 // why @cpp can't spell type t for C++: a fn value or closure whose signature has no std::function form
@@ -7950,7 +7966,7 @@ attach fn cpp_use_call(this: checker&, k: usize, callee: str, macro: bool, tried
             match (*explicit.at(j)) {
                 .TYPE(t&) => {
                     val ty = try this.garg_type(explicit.at(j));
-                    targs.append((this.cpp_spell(ty) ?? return fail(t.span, fmt("{} has no C++ spelling", this.ty_name(ty)))).as_str());
+                    targs.append((this.cpp_spell_m(ty) ?? return fail(t.span, this.no_cpp_spelling(ty))).as_str());
                 },
                 .EXPR(e&) => {
                     match (try this.ct_eval(e, null)) {
@@ -7962,7 +7978,7 @@ attach fn cpp_use_call(this: checker&, k: usize, callee: str, macro: bool, tried
                                 targs.append("false");
                             }
                         },
-                        .TYPE(ty) => { targs.append((this.cpp_spell(ty) ?? return fail(e.span, fmt("{} has no C++ spelling", this.ty_name(ty)))).as_str()); },
+                        .TYPE(ty) => { targs.append((this.cpp_spell_m(ty) ?? return fail(e.span, this.no_cpp_spelling(ty))).as_str()); },
                         default => { return fails(e.span, "a C++ template argument is a type, an integer or a bool"); },
                     }
                 },

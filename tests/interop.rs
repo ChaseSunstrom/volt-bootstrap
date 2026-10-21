@@ -1901,6 +1901,32 @@ fn cpp_derive3() {
 }
 
 #[test]
+fn cpp_derive4() {
+    // a Volt subclass overriding the & twin of a virtual method declared after its && one, the
+    // later of two overloads differing only in const by its _const or _nonconst name, and the
+    // virtual d_double beside a d(double) whose suffixed name that is (it stays C++'s, saying
+    // why); built by the default $CXX and by clang++
+    let e = Env::new("cpp-derive4");
+    let want = "70 2030 4050 61072 810290 8\n10 203 405 1003 10204 5\n";
+    for backend in ["c", "llvm"] {
+        assert_eq!(ok(e.voltc(&["run", "cpp_derive4.volt", "--backend", backend]), "voltc run cpp_derive4.volt"), want, "C++ derive, twins ({backend})");
+    }
+    assert_eq!(ok(e.voltc_cxx(&["run", "cpp_derive4.volt"], Some("clang++")), "voltc run cpp_derive4.volt (clang++)"), want, "C++ derive, twins, by clang++");
+    let shown = Command::new(&e.voltc).args(["check", "cpp_derive4.volt", "--std"]).arg(Path::new(ROOT).join("std")).current_dir(Path::new(ROOT).join("tests/interop")).env("VOLT_SHOW_CPP", "1").output().unwrap();
+    let src = String::from_utf8_lossy(&shown.stderr);
+    assert!(src.contains("// (d4::Q::d is C++'s own in a Volt type deriving from it: an overload, and d_double is taken)"), "a taken suffixed name: {src}");
+    assert!(src.contains("// (d4::Q::g is C++'s own in a Volt type deriving from it: an && method)"), "the && twin: {src}");
+    // a reference to a class held by handle, given back from an empty handle, stops the program
+    // saying so
+    let hpp = Path::new(ROOT).join("tests/interop/derive4.hpp");
+    let src = format!("use {{ \"{}\" }} as cpp;\nstruct held {{ it: cpp::d4::Item; }}\nattach cpp::d4::Q -> held {{\n    fn pick(this, self: cpp::d4::Q&) -> cpp::d4::Item& {{ return &this.it; }}\n}}\nfn main() -> void {{\n    val h: held = {{ it: {{ cpp: null, borrowed: true }} }};\n    var q = cpp::d4::Q::derive(move h);\n    val n = cpp::d4::use_pick(&q);\n}}\n", hpp.display());
+    std::fs::write(e.dir.join("cpp_derive_empty.volt"), src).unwrap();
+    let o = e.voltc(&["run", &e.path("cpp_derive_empty.volt")]);
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(o.status.code() == Some(101) && err.contains("a C++ object Volt holds by handle was never made (its handle is empty)"), "an empty handle's reference: {:?} {err}", o.status);
+}
+
+#[test]
 fn cpp_module() {
     // a C++20 named module (its interface imports std) and a header doing `import std;`: read by
     // libclang from clang-precompiled modules, built by $CXX its own way (g++'s module mapper,
@@ -2246,7 +2272,7 @@ fn cpp_peruse2() {
     // a mirror of their bytes; a closure and a fn value: a std::function) through C++ templates and
     // back unchanged; a function pointer result as a Volt fn, an array reference result as a T[N]&
     let e = Env::new("cpp-peruse2");
-    let want = "struct 3 2.5\nopt 7 null\nenum 1.25\ntuple (4, 0.5)\nclosure 40 21\nowned 23 23 46\nfloat true 1.5\ncount 5\ntry 2 2.5\nfnptr 5 10\narray 50 6\nsame 70\n";
+    let want = "struct 3 2.5\nopt 7 null\nenum 1.25\ntuple (4, 0.5)\nclosure 40 21\nowned 23 23 46\nfloat true 1.5\ncount 5\ntry 2 2.5\nfnptr 5 10\narray 50 6\nsame 70\nref 41 2.5 5 3 4\n";
     for backend in ["c", "llvm"] {
         assert_eq!(ok(e.voltc(&["run", "cpp_peruse2.volt", "--backend", backend]), "voltc run cpp_peruse2.volt"), want, "per-use calls with every Volt type ({backend})");
     }
@@ -2254,15 +2280,17 @@ fn cpp_peruse2() {
 
 #[test]
 fn cpp_peruse_layout() {
-    // mirrors of Volt types holding i64 and f64 check their size and alignment against the target's C
-    // layout of the type (a static_assert in the C++ unit): they pass here, and on i386 (c++ -m32),
-    // where C aligns i64 and f64 to 4, the C++ step fails at the mirror instead of a run copying the
-    // wrong bytes
+    // mirrors of Volt types holding i64 and f64 (an @align(16) struct, an array member, a tuple holding
+    // an extern "C" fn, whose name has quotes) check their size and alignment against the target's C
+    // layout of the type (a static_assert in the C++ unit; under C++98 an array of -1 chars): they
+    // pass here, and on i386 (c++ -m32), where C aligns i64 and f64 to 4, the C++ step fails at the
+    // mirror instead of a run copying the wrong bytes
     let e = Env::new("cpp-peruse-layout");
-    let want = "point 3 2.5\nspan 7 1099511627776 (-2, 0.25)\nshape 2.5\nopt 1.5\n";
+    let want = "point 3 2.5\nspan 7 1099511627776 (-2, 0.25)\nshape 2.5\nopt 1.5\nwide 9 16\ntrio 2.5 2.5 2.5 5\nfnptr 5 6\n";
     for backend in ["c", "llvm"] {
         assert_eq!(ok(e.voltc(&["run", "cpp_peruse_layout.volt", "--backend", backend]), "voltc run cpp_peruse_layout.volt"), want, "mirrors with i64 and f64 ({backend})");
     }
+    assert_eq!(ok(e.voltc(&["run", "cpp_peruse_layout.volt", "--cc", "-std=c++98"]), "voltc run cpp_peruse_layout.volt (C++98)"), want, "mirrors' check under C++98");
     let probe = e.path("m32.cpp");
     std::fs::write(&probe, "#include <functional>\n#include <string>\n#include <vector>\n").unwrap();
     let m32 = Command::new("c++").args(["-m32", "-fsyntax-only", &probe]).output().is_ok_and(|o| o.status.success());
@@ -2273,6 +2301,28 @@ fn cpp_peruse_layout() {
     let o = e.voltc_cxx(&["build", "cpp_peruse_layout.volt", "-o", &e.path("layout32")], Some("c++ -m32"));
     let err = String::from_utf8_lossy(&o.stderr);
     assert!(!o.status.success() && err.contains("Volt's point: the mirror's size or alignment isn't the type's C layout on this target"), "i386's 4-aligned f64: {err}");
+}
+
+#[test]
+fn cpp_clang_root() {
+    // a clang-typed @cpp with no C++ import leaves this file's own generics Volt's: a reference
+    // deduced as one (it writes through), a plain fn's name a fn value
+    let e = Env::new("cpp-clang-root");
+    for backend in ["c", "llvm"] {
+        assert_eq!(ok(e.voltc(&["run", "cpp_clang_root.volt", "--backend", backend]), "voltc run cpp_clang_root.volt"), "root 2 9 fn(i32) -> i32\n", "Volt generics beside a clang-typed @cpp ({backend})");
+    }
+}
+
+#[test]
+fn cpp_peruse3() {
+    // an explicit template argument naming a Volt struct, a tuple or an enum with payloads in a call
+    // made per use (same<cell>(a, b), size_of<shape>() with nothing to deduce T from): its mirror, as
+    // for a deduced one
+    let e = Env::new("cpp-peruse3");
+    let want = "struct true false\ntuple true false\nsize true true true\n";
+    for backend in ["c", "llvm"] {
+        assert_eq!(ok(e.voltc(&["run", "cpp_peruse3.volt", "--backend", backend]), "voltc run cpp_peruse3.volt"), want, "explicit template arguments of Volt types ({backend})");
+    }
 }
 
 #[test]
