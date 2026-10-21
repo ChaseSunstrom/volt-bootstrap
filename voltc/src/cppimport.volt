@@ -680,7 +680,7 @@ attach fn instance(this: cpp_gen&, qt: clang::CXType) -> str? {
     // cursor is the one clang gave)
     var saved: std::string = {};
     swap(&this.out, &saved);
-    this.casts(bases_cursor(decl), *(this.instances.get(key) ?? return null), ck, "", "");
+    this.casts(bases_cursor(decl), *(this.instances.get(key) ?? return null), ck, "", "", false);
     swap(&this.out, &saved);
     if (saved.len() > 0) {
         this.inst_casts.put(key, move saved);
@@ -1423,7 +1423,7 @@ attach fn handle_struct(this: cpp_gen&, c: clang::CXCursor, path: str, fields: b
     this.line(fmt3("    return {{ cpp: @cpp<void*{}>(\"new {}(*({} *){{0}})\", this.cpp) }};", copy extra, copy inst, copy inst).as_str());
     this.line("}");
     // as_Base() for each public base, as a plain class's handle has
-    this.casts(c, self_ty.as_str(), inst.as_str(), gen.as_str(), extra.as_str());
+    this.casts(c, self_ty.as_str(), inst.as_str(), gen.as_str(), extra.as_str(), false);
     // its own public fields (of a type Volt has: a T, a number): getters and set_ methods
     if (!fields || !this.own_type(c)) {
         return;
@@ -4310,7 +4310,7 @@ attach fn handle_class(this: cpp_gen&, c: clang::CXCursor, vn: str, q: str) -> v
             this.field_accessors(*f, vn, fmt2("{}.{}", copy obj, cursor_name(*f)).as_str(), "this.cpp", "", "", &none);
         }
     }
-    this.casts(c, vn, q, "", "");
+    this.casts(c, vn, q, "", "", true);
     if (!tr.destructible) {
         return;
     }
@@ -4382,7 +4382,7 @@ fn bases_via(c: clang::CXCursor, public_: bool, out: std::vec<base_path>&, depth
 // class c's casts: as_B for each public base B (a handle borrowing the object, or a B& for a class
 // Volt holds by value), and on each base with virtual methods as_C (dynamic_cast: null when the
 // object isn't a C)
-attach fn casts(this: cpp_gen&, c: clang::CXCursor, vn: str, q: str, gen: str, extra: str) -> void {
+attach fn casts(this: cpp_gen&, c: clang::CXCursor, vn: str, q: str, gen: str, extra: str, down: bool) -> void {
     var bases: std::vec<base_path> = {};
     all_bases(c, true, &bases, 0);
     var done: std::map<str, bool> = {};
@@ -4428,9 +4428,7 @@ attach fn casts(this: cpp_gen&, c: clang::CXCursor, vn: str, q: str, gen: str, e
                 }
                 obj = fmt2("static_cast< ::{} *>({})", copy bq, move obj);
                 if (gen.len > 0) {
-                    if (gen.len > 0) {
-            this.line(gen);
-        }
+                    this.line(gen);
                 }
                 if (btr->trivial) {
                     this.line(fmt3("attach fn as_{}(this: {}&) -> {}& {{", copy pn, S(vn), copy bvt).as_str());
@@ -4459,8 +4457,9 @@ attach fn casts(this: cpp_gen&, c: clang::CXCursor, vn: str, q: str, gen: str, e
         this.line(fmt3("attach fn as_{}(this: {}&) -> {} {{", copy bn, S(vn), copy bvt).as_str());
         this.line(fmt3("    return {{ cpp: @cpp<void*{}>(\"static_cast< ::{} *>(&volt_cpp_obj< ::{} >({{0}}))\", this.cpp), borrowed: true }};", S(extra), copy bq, S(q)).as_str());
         this.line("}");
-        // (and the base's downcast to it: not to a template's instance, which it can't name)
-        if (gen.len == 0 && btr->polymorphic && this.first_time(fmt2("attach fn as_{}(this: {}&", vname(cursor_name(c).as_str()), copy bvt).as_str(), "")) {
+        // (and the base's downcast to it: a plain class's only, not a template's or an instance's,
+        // which another instance of the template would want too)
+        if (down && btr->polymorphic && this.first_time(fmt2("attach fn as_{}(this: {}&", vname(cursor_name(c).as_str()), copy bvt).as_str(), "")) {
             this.line(fmt3("attach fn as_{}(this: {}&) -> {}? {{", vname(cursor_name(c).as_str()), copy bvt, S(vn)).as_str());
             this.line(fmt2("    val p = @cpp<void*>(\"volt_cpp_down< ::{} >(&volt_cpp_obj< ::{} >({{0}}))\", this.cpp);", S(q), copy bq).as_str());
             this.line("    if (p == null) {");
@@ -4503,9 +4502,7 @@ attach fn field_accessors(this: cpp_gen&, f: clang::CXCursor, vn: str, at: str, 
     }
     if (this.first_time(fmt2("attach fn set_{}(this: {}&", copy fv, S(vn)).as_str(), fmt(",{}", copy a.vty).as_str())) {
         if (gen.len > 0) {
-            if (gen.len > 0) {
             this.line(gen);
-        }
         }
         this.line(fmt3("attach fn set_{}(this: {}&, v: {}) -> void {{", copy fv, S(vn), copy a.vty).as_str());
         this.line(fmt5("    @cpp<void{}>(\"{} = {}\", {}, {});", S(extra), S(at), copy a.cpp, S(self), copy a.pass).as_str());
