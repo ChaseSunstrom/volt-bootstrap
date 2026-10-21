@@ -2336,6 +2336,11 @@ fn cpp_clang_root() {
     for backend in ["c", "llvm"] {
         assert_eq!(ok(e.voltc(&["run", "cpp_clang_root.volt", "--backend", backend]), "voltc run cpp_clang_root.volt"), "root 2 9 fn(i32) -> i32\n", "Volt generics beside a clang-typed @cpp ({backend})");
     }
+    // ...nor its own cpp_error a C++ import's, nor its generic lent a val's std::string a C++
+    // template's (no second error, in the generic's body)
+    let o = e.voltc(&["check", "cpp_clang_root_errors.volt"]);
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(!o.status.success() && err.contains("E is a C++ import's cpp_error, not cpp_error") && err.contains("'s' is a val, and grow changes it") && !err.contains("parameter without var"), "a clang-typed @cpp's file is no C++ import: {err}");
 }
 
 #[test]
