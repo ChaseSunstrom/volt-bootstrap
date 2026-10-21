@@ -8200,8 +8200,144 @@ attach fn cpp_mirror(this: checker&, t: u32) -> std::string? {
         }
     }
     put(&this.cpp_decl_names, copy name);
-    put(&this.cpp_decls, fmt4("// Volt's {}, as its bytes\nstruct __attribute__((aligned({}))) {} {{\n    unsigned char b[{}];\n}};\n", this.ty_name(t), unum(l.align), copy name, unum(l.size)));
+    var d = fmt4("// Volt's {}, as its bytes\nstruct __attribute__((aligned({}))) {} {{\n    unsigned char b[{}];\n}};\n", this.ty_name(t), unum(l.align), copy name, unum(l.size));
+    // its size and alignment are layout()'s model (i64 and f64 8-aligned): checked against the type
+    // laid out by the target's C compiler, as the backends lay it out (i386 aligns them to 4), so a
+    // mismatch fails the C++ step instead of a by-value pass copying the wrong bytes
+    val c = this.cpp_c_member(t, S("v"));
+    if (c) {
+        d.append(fmt2("struct volt_c_{} {{\n    {};\n}};\n", unum(@cast<u64>(t)), copy c).as_str());
+        // (C++98 has no static_assert or alignof: an array of -1 chars, and GNU's __alignof__)
+        val n = unum(@cast<u64>(t));
+        d.append(fmt5("#if __cplusplus >= 201103L\nstatic_assert(sizeof({}) == sizeof(volt_c_{}) && alignof({}) == alignof(volt_c_{}), \"Volt's {}: the mirror's size or alignment isn't the type's C layout on this target\");\n#else\n", copy name, copy n, copy name, copy n, this.ty_name(t)).as_str());
+        d.append(fmt5("typedef char {}_layout_isnt_c[sizeof({}) == sizeof(volt_c_{}) && __alignof__({}) == __alignof__(volt_c_{}) ? 1 : -1];\n#endif\n", copy name, copy name, copy n, copy name, copy n).as_str());
+    }
+    put(&this.cpp_decls, move d);
     return name;
+}
+
+// a member `name` of Volt type t as the target's C compiler lays it out (cgen's C struct; lgen's LLVM
+// type under the target's data layout): numbers, bools and pointers as C's own, aggregates as C
+// structs and unions of them, for cpp_mirror's check of layout()'s model. What C++ has no portable
+// type for (f16, f128, i128, vectors) is the model's bytes. None for a type with no layout
+attach fn cpp_c_member(this: checker&, t: u32, name: std::string) -> std::string? {
+    val l = this.layout_opt(t, {}) ?? return null;
+    if (l.size == 0) {
+        // C++ gives an empty struct a byte; a zero-length array (GNU C++) keeps size 0
+        return fmt2("struct __attribute__((aligned({}))) {{ char b[0]; }} {}", unum(l.align), move name);
+    }
+    var leaf = S("");
+    var parts: std::vec<u32> = {};
+    var tag: u32? = null; // a tag, then a union of parts (an enum's payloads, a trait union's members)
+    match (*this.t.get(t)) {
+        .STRUCT(s) => {
+            val fs = this.struct_fields(s, {}) catch |e| {
+                return null;
+            };
+            for (f&) in fs.items() {
+                put(&parts, f.ty);
+            }
+        },
+        .BOOL => { leaf = S("bool"); },
+        .INT(k) => {
+            match (k) {
+                .I8 => { leaf = S("signed char"); },
+                .U8 => { leaf = S("signed char"); },
+                .I16 => { leaf = S("short"); },
+                .U16 => { leaf = S("short"); },
+                .I32 => { leaf = S("int"); },
+                .U32 => { leaf = S("int"); },
+                .I64 => { leaf = S("long long"); },
+                .U64 => { leaf = S("long long"); },
+                .ISIZE => { leaf = S("void *"); },
+                .USIZE => { leaf = S("void *"); },
+                default => {},
+            }
+        },
+        .FLOAT(b) => {
+            if (b == 32) {
+                leaf = S("float");
+            } else if (b == 64) {
+                leaf = S("double");
+            }
+        },
+        .REF(x) => { leaf = S("void *"); },
+        .PTR(x) => { leaf = S("void *"); },
+        .VOIDPTR => { leaf = S("void *"); },
+        .CSTR => { leaf = S("void *"); },
+        .NULL => { leaf = S("void *"); },
+        .FN_PTR(ps, r, va) => { leaf = S("void *"); },
+        .ANYERR => { leaf = S("unsigned int"); },
+        .STR => { return fmt("void *{}[2]", move name); },
+        .SLICE(x) => { return fmt("void *{}[2]", move name); },
+        .FN_VAL(ps, r) => { return fmt("void *{}[2]", move name); },
+        .OPT(i) => {
+            if (this.t.is_niche(i)) {
+                leaf = S("void *");
+            } else if (this.niche_field(i) != null) {
+                return this.cpp_c_member(i, move name);
+            } else {
+                parts = nodes2(i, BOOL);
+            }
+        },
+        .ARRAY(e, n) => {
+            return this.cpp_c_member(e, fmt2("{}[{}]", move name, unum(n)));
+        },
+        .TUPLE(ts, names) => { parts = copy ts; },
+        .RANGE(e) => { parts = nodes2(e, e); },
+        .ERR_UNION(e, p) => { parts = nodes2(e, p); },
+        .CLOSURE(c) => {
+            for (x&) in this.ci(c).caps.items() {
+                put(&parts, x.ty);
+            }
+        },
+        .ENUM(e) => {
+            if (!this.ei(e).has_payload) {
+                return this.cpp_c_member(int_id(this.ei(e).tag), move name);
+            }
+            tag = int_id(this.ei(e).tag);
+            val ps = this.enum_payloads(e, {}) catch |x| {
+                return null;
+            };
+            for (p&) in ps.items() {
+                if (*p) {
+                    put(&parts, *p ?? 0);
+                }
+            }
+        },
+        .TRAIT_UNION(u) => {
+            tag = int_id(int_ty::U16);
+            parts = copy this.ui(u).members;
+        },
+        default => {},
+    }
+    if (leaf.len() > 0) {
+        return fmt2("{} {}", move leaf, move name);
+    }
+    if (parts.len == 0) {
+        // VECTOR, f16, f128, i128 (and a closure capturing nothing): the model's bytes
+        return fmt3("struct __attribute__((aligned({}))) {{ unsigned char b[{}]; }} {}", unum(l.align), unum(l.size), move name);
+    }
+    var body = S("");
+    for (i) in 0..parts.len {
+        val m = this.cpp_c_member(*parts.at(i), fmt("f{}", unum(@cast<u64>(i)))) ?? return null;
+        body.append(m.as_str());
+        body.append("; ");
+    }
+    if (tag) {
+        val tm = this.cpp_c_member(tag, S("t")) ?? return null;
+        body = fmt2("{}; union {{ {}}} u; ", move tm, move body);
+    }
+    var al = S("");
+    match (*this.t.get(t)) {
+        .STRUCT(s) => {
+            if (this.si(s).align > 1) {
+                al = fmt("__attribute__((aligned({}))) ", unum(this.si(s).align));
+            }
+        },
+        default => {},
+    }
+    return fmt3("struct {}{{ {}}} {}", move al, move body, move name);
 }
 
 // cpp_spell, else the mirror
