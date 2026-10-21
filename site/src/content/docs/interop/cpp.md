@@ -423,9 +423,15 @@ fn main() -> void {
   compile error naming it, and so is a function in the block that isn't one of `C`'s virtual
   methods, or that takes other types (a `self` of another class).
 - Inherited virtual methods count (a `Button` block can override the `describe` it inherits from
-  `Widget`), and so do private ones that are pure. A private one that isn't pure (or one inherited
-  through a base that isn't public) stays `C`'s: the subclass couldn't call `C`'s own when the
-  struct doesn't override it.
+  `Widget`), and so do private ones (or ones inherited through a base that isn't public): a struct
+  that doesn't override a private one that isn't pure leaves `C`'s own in place (its subclass has no
+  override of it then, as C++ couldn't call `C`'s own), and it has no `base_` method.
+- Overloads of a virtual method are overridden by their own names: the first declared keeps the
+  name, the later ones get their parameters' C++ types as words, as other overloads Volt can't
+  tell apart do (`draw(int)` and `draw(double)` are `draw` and `draw_double`; a `const` one gets
+  `_const` too). One whose name that makes is a virtual method's already stays `C`'s. A method
+  qualified `&` is overridden as any other; one qualified `&&` stays `C`'s (its object is the one
+  the Volt type subclasses).
 - What crosses into an override is what the import makes of each type anywhere else: numbers,
   `bool`, enums and pointers as they are (a reference for a non-const `T&`), strings as `str` (a view
   for the call), a class Volt holds by value (a copy, or a reference for `T&`), a class held by
@@ -433,9 +439,14 @@ fn main() -> void {
   `stdcxx::map<i32, i32>&`), and the rest in their Volt forms (a `std::function` is a
   `stdcxx::function`, a `std::optional<int>` an `i32?`). A `T&&` comes as a `const T&` does. What
   comes back is any of those too, made into C++'s result type (a `std::vector<int>` from an
-  `i32[..]`, a `std::map` the override made). A virtual method only C++ can override stays `C`'s
-  (a comment in the generated source says so): one taking a non-const reference to text, as
-  anywhere in an import ([limits](#limits)), or giving back a reference.
+  `i32[..]`, a `std::map` the override made). A `std::string&` is a Volt `std::string&` holding a
+  copy, which goes back into C++'s string once the override returns. A reference result (`int&`, a
+  laid-out class's `Pt&`) is a Volt reference the override gives back (`return &this.n;`), and for
+  a class held by handle a reference to a handle (`return &this.item;`), whose object C++ gets; as
+  C++'s own rule is, it has to refer to something that outlives the call (the Volt value, the C++
+  object). A virtual method whose types have no Volt form here (a reference to a `std::string`
+  result, a non-const reference to another class held by neither) stays `C`'s, and a comment in
+  the generated source says so; when it's pure, Volt types can't derive from `C`.
 - `derive` is there for a class with a virtual method that isn't `final`; its destructor needn't be
   virtual. Volt deletes a derived object as what it is, its Volt value with it; C++ deleting one
   through a `C*` whose destructor isn't virtual is C++'s own undefined behavior, as for any
@@ -478,6 +489,10 @@ object `derive` didn't make; without RTTI, either stops the program saying so.
 - A `std::string&` parameter is a copy C++ changes and Volt copies back once the call returns:
   given the same string twice in one call (which Volt warns of, two mutable borrows), each copy
   comes back in turn, the first parameter's last.
+- A Volt type deriving from a C++ class can't override its variadic virtual methods (`...`), its
+  `&&`-qualified ones or its operators: they stay C++'s (and when one of them is pure, Volt types
+  can't derive from the class). An override's `std::string&` is a copy too, which C++'s string
+  gets once the override returns.
 - A loop over a C++ range whose iterators are aligned past 8 needs its import under C++17 or newer
   (C++ holds them, with an aligned `new`). Iterators that are trivially copyable and destructible
   (the standard library's and the views' are) live in the loop's own words; the others (one holding
