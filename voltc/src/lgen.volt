@@ -644,7 +644,11 @@ attach fn aapcs_part(this: lg&, t: u32, size: u64, ret: bool) -> abi_part {
                 cty = l;
                 var lls: std::vec<llvm::LLVMOpaqueType*> = {};
                 scalar_leaves(l, &lls);
-                if (lls.len != leaves.len || *lls.at(0) != e) {
+                var same = lls.len == leaves.len;
+                for (j) in 0..lls.len {
+                    same = same && *lls.at(j) == e;
+                }
+                if (!same) {
                     cty = struct_ty(this.ctx, &leaves, false);
                 }
             }
@@ -678,6 +682,7 @@ attach fn c_leaves(this: lg&, t: u32, out: std::vec<llvm::LLVMOpaqueType*>&) -> 
     if (this.c_union(t)) {
         var e: llvm::LLVMOpaqueType* = null;
         var mixed = false;
+        var most: usize = 0; // the most floats one member has: one must fill the union (no padding)
         for (i) in 0..this.member_count(t) {
             val mt = this.member_ty(t, @cast<u32>(i));
             if (this.is_void(mt)) {
@@ -692,9 +697,12 @@ attach fn c_leaves(this: lg&, t: u32, out: std::vec<llvm::LLVMOpaqueType*>&) -> 
                     mixed = true;
                 }
             }
+            if (ms.len > most) {
+                most = ms.len;
+            }
         }
         val size = this.size_of(this.lt(t));
-        if (e == null || mixed || size % this.size_of(e) != 0) {
+        if (e == null || mixed || this.size_of(e) == 0 || this.size_of(e) * @cast<u64>(most) != size) {
             put(out, this.lt(t));
             return;
         }
@@ -708,7 +716,7 @@ attach fn c_leaves(this: lg&, t: u32, out: std::vec<llvm::LLVMOpaqueType*>&) -> 
     }
     match (*this.c.t.get(t)) {
         .STRUCT(s) => {
-            if (!this.is_union(t) && this.overlay(t).0 == 0 && this.over_align(t) == 0) {
+            if (this.overlay(t).0 == 0 && this.over_align(t) == 0) {
                 for (i) in 0..this.member_count(t) {
                     val mt = this.member_ty(t, @cast<u32>(i));
                     if (out.len > 4) {

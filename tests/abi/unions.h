@@ -6,3 +6,4 @@ typedef union { struct { float x, y; } p; float a[2]; } uf2;
 typedef union { float f; double d; } ufd;
 typedef union { float f; int i; } ufi;
 typedef struct { uf u; float y; } sfu;
+typedef struct { float y; uf u; } sfu2;

@@ -85,3 +85,4 @@ uf2 fuf2(uf2 x) { return x; }
 ufd fufd(ufd x) { return x; }
 ufi fufi(ufi x) { return x; }
 sfu fsfu(sfu x) { return x; }
+sfu2 fsfu2(sfu2 x) { return x; }
