@@ -353,6 +353,31 @@ attach fn record_type(this: clang_tu&, c_name: str) -> clang::CXType? {
     return null;
 }
 
+// the size of field `name`'s vector (of record rt, or of an anonymous member), or of its array's
+// vectors (vector_size, ext_vector_type); 0 when it isn't one
+fn field_vector(rt: clang::CXType, name: str) -> i64 {
+    for (c&) in children(clang::clang_getTypeDeclaration(rt)).items() {
+        val k = clang::clang_getCursorKind(*c);
+        if (k == clang::CXCursor_FieldDecl && cursor_name(*c).as_str() == name) {
+            var t = clang::clang_getCanonicalType(clang::clang_getCursorType(*c));
+            while (t.kind == clang::CXType_ConstantArray) {
+                t = clang::clang_getCanonicalType(clang::clang_getArrayElementType(t));
+            }
+            if (t.kind == clang::CXType_Vector || t.kind == clang::CXType_ExtVector) {
+                return clang::clang_Type_getSizeOf(t);
+            }
+            return 0;
+        }
+        if ((k == clang::CXCursor_StructDecl || k == clang::CXCursor_UnionDecl) && clang::clang_Cursor_isAnonymousRecordDecl(*c) != 0) {
+            val n = field_vector(clang::clang_getCursorType(*c), name);
+            if (n > 0) {
+                return n;
+            }
+        }
+    }
+    return 0;
+}
+
 // the size and alignment of record type rt's field `name` (0s when it has none)
 fn field_layout(rt: clang::CXType, name: str) -> (i64, i64) {
     for (c&) in children(clang::clang_getTypeDeclaration(rt)).items() {
