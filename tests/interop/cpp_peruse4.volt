@@ -25,6 +25,9 @@ fn main() -> void {
     std::println("enum {} {}", size(cpp::pu4::echo(shape::BOX(1.25))), size(cpp::pu4::echo<shape>(shape::LINE(7))));
     val z = cpp::pu4::zero<point>();
     std::println("zero {} {} {} {}", z.x, z.y, cpp::pu4::zero<(i32, f64)>(), size(cpp::pu4::zero<shape>()));
+    // its try_ form, whose call of the plain one binds the mirror the same way
+    val tz = cpp::pu4::try_zero<point>() catch p;
+    std::println("try {}", tz.x);
     var m: point = { x: 5, y: 1.5 };
     val q = cpp::pu4::addr(&m);
     q->x = 6;
@@ -35,4 +38,5 @@ fn main() -> void {
 // expect: tuple (4, 0.5) (4, 0.5)
 // expect: enum 1.25 7
 // expect: zero 0 0 (0, 0) 0
+// expect: try 0
 // expect: addr 6 1.5 true
