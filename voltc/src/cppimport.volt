@@ -96,6 +96,7 @@ struct cpp_gen {
     instances: std::map<str, str> = {};
     inst_cpp: std::map<str, str> = {};
     inst_new: std::vec<str> = {};
+    inst_casts: std::map<str, std::string> = {}; // an instance's as_Base() methods, written with it
     inst_count: u32 = 0;
     instancing: bool = false;
     unnamed_as: std::string = {}; // a call made per use: its result's type as the wrappers spell it
@@ -675,6 +676,15 @@ attach fn instance(this: cpp_gen&, qt: clang::CXType) -> str? {
         this.traits.put(ck, this.inst_traits(ck));
     }
     put(&this.inst_new, key);
+    // its as_Base() methods, as a plain class's handle has (worked out now, while its declaration's
+    // cursor is the one clang gave)
+    var saved: std::string = {};
+    swap(&this.out, &saved);
+    this.casts(bases_cursor(decl), *(this.instances.get(key) ?? return null), ck, "", "");
+    swap(&this.out, &saved);
+    if (saved.len() > 0) {
+        this.inst_casts.put(key, move saved);
+    }
     return *(this.instances.get(key) ?? return null);
 }
 
@@ -1412,6 +1422,8 @@ attach fn handle_struct(this: cpp_gen&, c: clang::CXCursor, path: str, fields: b
     this.line("    }");
     this.line(fmt3("    return {{ cpp: @cpp<void*{}>(\"new {}(*({} *){{0}})\", this.cpp) }};", copy extra, copy inst, copy inst).as_str());
     this.line("}");
+    // as_Base() for each public base, as a plain class's handle has
+    this.casts(c, self_ty.as_str(), inst.as_str(), gen.as_str(), extra.as_str());
     // its own public fields (of a type Volt has: a T, a number): getters and set_ methods
     if (!fields || !this.own_type(c)) {
         return;
@@ -1605,6 +1617,10 @@ attach fn flush_instances(this: cpp_gen&) -> void {
             this.line("    }");
             this.line(fmt2("    return {{ cpp: @cpp<void*>(\"new {}(*({} *){{0}})\", this.cpp) }};", escape_str(cpp), escape_str(cpp)).as_str());
             this.line("}");
+        }
+        val casts = this.inst_casts.get(key);
+        if (casts) {
+            this.out.append(casts.as_str());
         }
     }
     this.inst_new = {};
@@ -4304,7 +4320,7 @@ attach fn handle_class(this: cpp_gen&, c: clang::CXCursor, vn: str, q: str) -> v
             this.field_accessors(*f, vn, fmt2("{}.{}", copy obj, cursor_name(*f)).as_str(), "this.cpp", "", "", &none);
         }
     }
-    this.casts(c, vn, q);
+    this.casts(c, vn, q, "", "");
     if (!tr.destructible) {
         return;
     }
@@ -4331,6 +4347,21 @@ struct base_path {
     virtual_: bool;
     via: std::string = {};   // the bases it's reached through, as an as_ name's start (B1_)
     chain: std::vec<std::string> = {}; // ...as C++ names, outermost first
+}
+
+// the cursor whose children name d's bases: d's own, or for an instance made from a template (which
+// libclang shows no children of), the template's
+fn bases_cursor(d: clang::CXCursor) -> clang::CXCursor {
+    for (ch&) in children(d).items() {
+        if (clang::clang_getCursorKind(*ch) == clang::CXCursor_CXXBaseSpecifier) {
+            return d;
+        }
+    }
+    val tc = clang::clang_getSpecializedCursorTemplate(d);
+    if (clang::clang_Cursor_isNull(tc) != 0) {
+        return d;
+    }
+    return tc;
 }
 
 fn all_bases(c: clang::CXCursor, public_: bool, out: std::vec<base_path>&, depth: u32) -> void {
@@ -4361,7 +4392,7 @@ fn bases_via(c: clang::CXCursor, public_: bool, out: std::vec<base_path>&, depth
 // class c's casts: as_B for each public base B (a handle borrowing the object, or a B& for a class
 // Volt holds by value), and on each base with virtual methods as_C (dynamic_cast: null when the
 // object isn't a C)
-attach fn casts(this: cpp_gen&, c: clang::CXCursor, vn: str, q: str) -> void {
+attach fn casts(this: cpp_gen&, c: clang::CXCursor, vn: str, q: str, gen: str, extra: str) -> void {
     var bases: std::vec<base_path> = {};
     all_bases(c, true, &bases, 0);
     var done: std::map<str, bool> = {};
@@ -4406,12 +4437,17 @@ attach fn casts(this: cpp_gen&, c: clang::CXCursor, vn: str, q: str) -> void {
                     obj = fmt2("static_cast< ::{} *>({})", copy *k, move obj);
                 }
                 obj = fmt2("static_cast< ::{} *>({})", copy bq, move obj);
+                if (gen.len > 0) {
+                    if (gen.len > 0) {
+            this.line(gen);
+        }
+                }
                 if (btr->trivial) {
                     this.line(fmt3("attach fn as_{}(this: {}&) -> {}& {{", copy pn, S(vn), copy bvt).as_str());
-                    this.line(fmt2("    return @cpp<{}&>(\"*{}\", this.cpp);", copy bvt, move obj).as_str());
+                    this.line(fmt3("    return @cpp<{}&{}>(\"*{}\", this.cpp);", copy bvt, S(extra), move obj).as_str());
                 } else {
                     this.line(fmt3("attach fn as_{}(this: {}&) -> {} {{", copy pn, S(vn), copy bvt).as_str());
-                    this.line(fmt("    return {{ cpp: @cpp<void*>(\"{}\", this.cpp), borrowed: true }};", move obj).as_str());
+                    this.line(fmt2("    return {{ cpp: @cpp<void*{}>(\"{}\", this.cpp), borrowed: true }};", S(extra), move obj).as_str());
                 }
                 this.line("}");
             }
@@ -4421,16 +4457,20 @@ attach fn casts(this: cpp_gen&, c: clang::CXCursor, vn: str, q: str) -> void {
             this.line(fmt3("// (no {}::as_{} for {}: the name is taken)", S(q), copy bn, copy bq).as_str());
             continue;
         }
+        if (gen.len > 0) {
+            this.line(gen);
+        }
         if (btr->trivial) {
             this.line(fmt3("attach fn as_{}(this: {}&) -> {}& {{", copy bn, S(vn), copy bvt).as_str());
-            this.line(fmt4("    return @cpp<{}&>(\"static_cast< ::{} &>(volt_cpp_obj< ::{} >({{0}}))\", this.cpp);", copy bvt, copy bq, S(q), S("")).as_str());
+            this.line(fmt4("    return @cpp<{}&{}>(\"static_cast< ::{} &>(volt_cpp_obj< ::{} >({{0}}))\", this.cpp);", copy bvt, S(extra), copy bq, S(q)).as_str());
             this.line("}");
             continue;
         }
         this.line(fmt3("attach fn as_{}(this: {}&) -> {} {{", copy bn, S(vn), copy bvt).as_str());
-        this.line(fmt3("    return {{ cpp: @cpp<void*>(\"static_cast< ::{} *>(&volt_cpp_obj< ::{} >({{0}}))\", this.cpp), borrowed: true }};", copy bq, S(q), S("")).as_str());
+        this.line(fmt3("    return {{ cpp: @cpp<void*{}>(\"static_cast< ::{} *>(&volt_cpp_obj< ::{} >({{0}}))\", this.cpp), borrowed: true }};", S(extra), copy bq, S(q)).as_str());
         this.line("}");
-        if (btr->polymorphic && this.first_time(fmt2("attach fn as_{}(this: {}&", vname(cursor_name(c).as_str()), copy bvt).as_str(), "")) {
+        // (and the base's downcast to it: not to a template's instance, which it can't name)
+        if (gen.len == 0 && btr->polymorphic && this.first_time(fmt2("attach fn as_{}(this: {}&", vname(cursor_name(c).as_str()), copy bvt).as_str(), "")) {
             this.line(fmt3("attach fn as_{}(this: {}&) -> {}? {{", vname(cursor_name(c).as_str()), copy bvt, S(vn)).as_str());
             this.line(fmt2("    val p = @cpp<void*>(\"volt_cpp_down< ::{} >(&volt_cpp_obj< ::{} >({{0}}))\", this.cpp);", S(q), copy bq).as_str());
             this.line("    if (p == null) {");
@@ -4473,7 +4513,9 @@ attach fn field_accessors(this: cpp_gen&, f: clang::CXCursor, vn: str, at: str, 
     }
     if (this.first_time(fmt2("attach fn set_{}(this: {}&", copy fv, S(vn)).as_str(), fmt(",{}", copy a.vty).as_str())) {
         if (gen.len > 0) {
+            if (gen.len > 0) {
             this.line(gen);
+        }
         }
         this.line(fmt3("attach fn set_{}(this: {}&, v: {}) -> void {{", copy fv, S(vn), copy a.vty).as_str());
         this.line(fmt5("    @cpp<void{}>(\"{} = {}\", {}, {});", S(extra), S(at), copy a.cpp, S(self), copy a.pass).as_str());
@@ -5565,7 +5607,7 @@ attach fn director(this: cpp_gen&, c: clang::CXCursor, vn: str, q: str, maps: st
     text.append(fmt2("struct {} : ::{} {{\n", copy bn, S(q)).as_str());
     text.append("    void *volt_d; // the Volt side: its subclass's ops, the Volt value and its type's id\n");
     text.append("    static inline char volt_tag = 0; // (its subclasses' ops have it)\n");
-    text.append(fmt3("    template <class... A>\n    explicit {}(void *d, A &&...a) : ::{}(std::forward<A>(a)...), volt_d(d) {{ volt_dir_put(volt_self(), *(const volt_dir_ops *const *)d); }}\n", copy bn, S(q), S("")).as_str());
+    text.append(fmt2("    template <class... A>\n    explicit {}(void *d, A &&...a) : ::{}(std::forward<A>(a)...), volt_d(d) {{ volt_dir_put(volt_self(), *(const volt_dir_ops *const *)d); }}\n", copy bn, S(q)).as_str());
     text.append(fmt("    virtual ~{}() {{ volt_dir_put(volt_self(), 0); }}\n", copy bn).as_str());
     text.append(fmt("    void *volt_self() const {{ return (void *)static_cast<const ::{} *>(this); }}\n", S(q)).as_str());
     text.append(cpp.as_str());
@@ -7475,7 +7517,7 @@ attach fn cpp_range(this: checker&, t: u32, span: span) -> compile_error!bool {
         out.append(fmt("    return {}(@cast<void*>(&this.it));\n}}\n", S(fd->name)).as_str());
         out.append(fmt2("attach fn volt_range(this: {}&) -> {} {{\n", this.ty_name(t), copy vn).as_str());
         out.append(fmt("    var out: {};\n", copy vn).as_str());
-        out.append(fmt2("    @cpp<void>(\"volt_range_start(volt_cpp_obj<{} >({{0}}), {{1}}, {{2}})\", this.cpp, @cast<void*>(&out.it), @cast<void*>(&out.end));\n    return out;\n}}\n", S(q), S("")).as_str());
+        out.append(fmt("    @cpp<void>(\"volt_range_start(volt_cpp_obj<{} >({{0}}), {{1}}, {{2}})\", this.cpp, @cast<void*>(&out.it), @cast<void*>(&out.end));\n    return out;\n}}\n", S(q)).as_str());
     } else {
         // the loop keeps it as a temporary of its own, so each way out of it deletes it (stmt.volt)
         out.append(fmt("// C++'s {} looped over: its begin and end iterators, on C++'s heap\n", S(q)).as_str());

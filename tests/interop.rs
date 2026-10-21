@@ -2001,7 +2001,7 @@ fn cpp_templates() {
     // what Volt's generics can't declare (variadic and non-type templates, auto results, constrained
     // templates, function-like macros, method templates), called per use: clang types each call
     let e = Env::new("cpp-templates");
-    let want = "6.5 4\n12\n42 2.5\n3 6\n40\n25 2\n6 18\n9 12\n10 8\n-4 3 -6\n9\n6\n";
+    let want = "6.5 4\n12\n42 2.5\n3 6\n40\n25 2\n6 18\n9 12\n10 8\n-4 3 -6\n9\n6\n3 7\n";
     for backend in ["c", "llvm"] {
         assert_eq!(ok(e.voltc(&["run", "cpp_templates.volt", "--backend", backend]), "voltc run cpp_templates.volt"), want, "C++ templates ({backend})");
     }
