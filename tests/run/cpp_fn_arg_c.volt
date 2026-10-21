@@ -14,5 +14,7 @@ fn twice(x: i32) -> i32 {
 
 fn main() -> void {
     std::println("{} {}", cpp::apply(seven), cpp::apply1(twice, 4));
+    std::println("{} {}", cpp::pick(seven), cpp::pick(twice));
 }
 // expect: 7 8
+// expect: 7 102

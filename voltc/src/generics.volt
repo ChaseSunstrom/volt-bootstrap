@@ -869,6 +869,12 @@ attach fn cpp_fn_arg_ty(this: checker&, ns: u32, v: tval) -> u32 {
     }
 }
 
+// does C++ function d's C function pointer parameter pt take v: a plain fn of pt's signature
+// (cpp_fn_arg_ty's FN_PTR form of it is pt itself)
+attach fn cpp_fn_arg(this: checker&, d: u32, v: tval, pt: u32) -> bool {
+    return v.ty != pt && this.is_c_fn_ptr(pt) && this.cpp_fn_arg_ty(this.dl(d).ns, v) == pt;
+}
+
 attach fn is_c_fn_ptr(this: checker&, t: u32) -> bool {
     match (*this.t.get(t)) {
         .FN_PTR(a, b, c) => { return true; },
@@ -1509,7 +1515,7 @@ attach fn pick_call(this: checker&, name: str, cands: std::vec<u32>&, rp: tval*,
                     if (this.t.int_of(vv.ty) != null && this.t.is_float(pt)) {
                         score -= 1;
                     }
-                } else if (this.is_c_fn_ptr(pt) && this.plain_fn_value(vv)) {
+                } else if (this.cpp_fn_arg(d, vv, pt)) {
                     score += 2; // a plain fn a C++ template takes as its function pointer (emit_call)
                 } else {
                     ok = false;
@@ -1693,7 +1699,7 @@ attach fn emit_call(this: checker&, made: u32, a: adj, rv: tval?, pre: std::vec<
             var v = *pre.at(i) ?? vnew(0, 0);
             if (*pre.at(i) == null) {
                 v = try this.expr(args.at(i), p.ty);
-            } else if (this.is_c_fn_ptr(p.ty) && this.plain_fn_value(v)) {
+            } else if (this.cpp_fn_arg(this.fi(made).decl, v, p.ty)) {
                 // a plain fn a C++ template took as its C function pointer (cpp_fn_arg_ty)
                 v = try this.expr(args.at(i), p.ty);
             }
