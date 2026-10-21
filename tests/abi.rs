@@ -57,10 +57,34 @@ fn resolve(s: &str, types: &HashMap<String, String>) -> String {
     out
 }
 
-/// one param's or the result's lowering, without what the ABI doesn't decide: value names, and the
-/// attributes clang adds for its optimizer (noundef, align, dead_on_return, ...)
+/// s with each struct directly inside a struct opened out ({ { float }, float } is { float, float }):
+/// LLVM passes a struct by its scalars, so the nesting decides nothing (clang's union is a struct of
+/// its largest member, voltc's HFA result one of its floats)
+fn flatten(s: &str) -> String {
+    let mut out = String::new();
+    let mut open = Vec::new(); // each bracket open, and whether it was dropped
+    for c in s.chars() {
+        match c {
+            '{' if open.last().is_some_and(|&(b, _)| b == '{') => open.push(('{', true)),
+            '(' | '{' | '[' | '<' => {
+                open.push((c, false));
+                out.push(c);
+            }
+            ')' | '}' | ']' | '>' => {
+                if !open.pop().is_some_and(|(_, dropped)| dropped) {
+                    out.push(c);
+                }
+            }
+            _ => out.push(c),
+        }
+    }
+    out.split_whitespace().collect::<Vec<_>>().join(" ").replace(" ,", ",")
+}
+
+/// one param's or the result's lowering, without what the ABI doesn't decide: value names, the
+/// attributes clang adds for its optimizer (noundef, align, dead_on_return, ...), and how structs nest
 fn normalize(part: &str, types: &HashMap<String, String>) -> String {
-    let s = resolve(part, types);
+    let s = flatten(&resolve(part, types));
     let mut words = Vec::new();
     let mut rest = s.trim();
     while !rest.is_empty() {
