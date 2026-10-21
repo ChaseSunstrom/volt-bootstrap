@@ -139,6 +139,9 @@ jobs:
           echo "LLVM_CONFIG=$prefix/bin/llvm-config" >> "$GITHUB_ENV"
           echo "C_INCLUDE_PATH=$prefix/include" >> "$GITHUB_ENV"
           echo "$(brew --prefix lld)/bin" >> "$GITHUB_PATH"
+          # where import std; looks for libc++'s modules manifest (T-0381)
+          "$prefix/bin/clang++" -print-file-name=libc++.modules.json
+          ls "$("$prefix/bin/clang++" -print-resource-dir)/../../c++" || true
       - name: Install Node's types
         run: npm install --no-save --no-package-lock --no-audit --no-fund @types/node
       - name: Build (no warnings)
