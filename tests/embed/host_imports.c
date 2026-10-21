@@ -174,6 +174,38 @@ static void header_fn_changes(voltvm_volt_vm *vm, const char *what) {
     rmdir(dir);
 }
 
+// a C++ header's inline function (external linkage: each load's library has its own copy, a weak
+// symbol) changed between two scripts' loads: each calls its own copy, not the first library's
+static void header_inline_changes(voltvm_volt_vm *vm, const char *what) {
+    char dir[] = "/tmp/voltvm-test-XXXXXX";
+    if (!mkdtemp(dir)) {
+        printf("%s: no temporary directory\n", what);
+        return;
+    }
+    char h[64], src[512];
+    snprintf(h, sizeof h, "%s/hx.hpp", dir);
+    int got[2] = { -1, -1 };
+    for (int i = 0; i < 2; i++) {
+        char name[16], fn[16];
+        snprintf(name, sizeof name, "hx%d.volt", i + 1);
+        snprintf(fn, sizeof fn, "hx%d", i + 1);
+        snprintf(src, sizeof src, "use { \"%s\" } as r;\nexport fn %s() -> i32 { return r::hx::hf(); }\n", h, fn);
+        FILE *f = fopen(h, "w");
+        if (f) {
+            fprintf(f, "namespace hx { inline int hf() { return %d; } }\n", 10 * (i + 1));
+            fclose(f);
+        }
+        if (!f || volt_vm_load(vm, S(name), S(src)).error) {
+            say_error(vm, what);
+            break;
+        }
+        got[i] = ((int (*)(void))volt_vm_find(vm, S(fn)))();
+    }
+    printf("%s %d %d\n", what, got[0], got[1]);
+    remove(h);
+    rmdir(dir);
+}
+
 // a compiler wrapper at path: it notes in log when it's given --precompile or the C++ library's std
 // module source, then runs real (with PATH as it was)
 static int wrapper(const char *path, const char *log, const char *real) {
@@ -273,6 +305,10 @@ int main(int argc, char **argv) {
     voltvm_volt_vm *hv = volt_vm_new(std_dir);
     header_fn_changes(hv, "header fn");
     volt_vm_free(hv);
+    // (and another: header_fn_changes removed hf.h, which a later load reads again, T-0599)
+    voltvm_volt_vm *xv = volt_vm_new(std_dir);
+    header_inline_changes(xv, "header inline");
+    volt_vm_free(xv);
 #if defined(__linux__)
     if (argc < 4) {
         return 0;
