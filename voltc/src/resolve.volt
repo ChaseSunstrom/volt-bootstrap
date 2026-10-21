@@ -963,8 +963,10 @@ attach fn fn_inst(this: checker&, d: u32, args: std::vec<gval>, span: span) -> c
         c_name = this.intern(move n);
     } else if (f.is_export && f.c_name == null) {
         c_name = this.export_c_name(d, f.name, f.is_attach, &params, &args);
+        this.used_c_names.put(c_name, 1); // fixed: a generated name goes around it
     } else if (f.extern_abi != null || f.is_export) {
         c_name = f.c_name ?? f.name;
+        this.used_c_names.put(c_name, 1);
     } else if (f.name == "main" && path.len() == 0 && args.len == 0) {
         c_name = "v_main";
     } else if (this.pkg_of(d) != null && args.len == 0) {

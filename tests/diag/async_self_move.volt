@@ -55,8 +55,15 @@ fn main() -> void {
     val fs2 = fs;
     val lp = async looped(&counter);
     val lp2 = lp;
-    val q = async quiet(&counter, quiet_ys[..]);
+    val qv: viewer = { xs: quiet_ys[..] };
+    val q = async quiet(&counter, quiet_ys[..], &qv);
     val q2 = q;
+    val cb = async cont_before(&counter);
+    val cb2 = cb;
+    val ca = async cont_after(&counter);
+    val ca2 = ca;
+    val qc = async quiet_cont(&counter);
+    val qc2 = qc;
     std::println("{}", await f);
 }
 
@@ -84,13 +91,48 @@ async fn looped(q: i32&) -> i32 {
     return *p;
 }
 
-struct viewer { xs: i32[..]; }
+// p = &n before a continue that comes before the suspend: held at it on the next pass
+async fn cont_before(q: i32&) -> i32 {
+    var n = 5;
+    var p = q;
+    for (i) in 0..2 {
+        if (i == 0) {
+            p = &n;
+            continue;
+        }
+        suspend;
+    }
+    return *p;
+}
 
-// moves silently: a slice field's slice points where the field does, and a local of the loop's
-// own body is made again on each pass
-async fn quiet(q: i32&, ys: i32[..]) -> i32 {
+// p = &n before a continue after the suspend: the continue goes around holding it, though the
+// body's end gives p another value
+async fn cont_after(q: i32&) -> i32 {
+    var n = 5;
+    var p = q;
+    for (i) in 0..2 {
+        suspend;
+        if (i == 0) {
+            p = &n;
+            continue;
+        }
+        p = q;
+    }
+    return *p;
+}
+
+struct viewer { xs: i32[..]; }
+struct wrap { r: viewer&; }
+
+// moves silently: a slice field's slice points where the field does (so does an element of it),
+// a reference field's field is where the reference points, and a local of the loop's own body is
+// made again on each pass
+async fn quiet(q: i32&, ys: i32[..], vr: viewer&) -> i32 {
     val v: viewer = { xs: ys };
     val s = v.xs[..];
+    val e = &v.xs[0];
+    val w: wrap = { r: vr };
+    val x = &w.r.xs;
     var total = 0;
     for (i) in 0..2 {
         var p = q;
@@ -99,5 +141,19 @@ async fn quiet(q: i32&, ys: i32[..]) -> i32 {
         p = &n;
         total += *p;
     }
-    return total + s[0];
+    return total + s[0] + *e + @cast<i32>(x.len);
+}
+
+// a continue from inside the body, holding a body local's reference: made again next pass
+async fn quiet_cont(q: i32&) -> i32 {
+    var n = 5;
+    for (i) in 0..2 {
+        var p = q;
+        suspend;
+        if (i == 0) {
+            p = &n;
+            continue;
+        }
+    }
+    return n;
 }

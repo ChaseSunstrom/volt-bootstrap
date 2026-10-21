@@ -614,28 +614,44 @@ attach fn frame_root(this: checker&, x: expr&) -> str? {
             }
             val name = p.segs.at(0).name;
             val l = this.lookup_local(name) ?? return null;
-            if (l.own == null) {
+            if (l.own == null || this.points_away(l.ty)) {
                 return null;
             }
-            match (*this.t.get(l.ty)) {
-                .REF(t) => { return null; },
-                .PTR(t) => { return null; },
-                .SLICE(t) => { return null; },
-                .VOIDPTR => { return null; },
-                .CSTR => { return null; },
-                .STR => { return null; },
-                default => { return name; },
-            }
+            return name;
         },
         .FIELD(b, n, g) => {
-            if (g != null) {
+            if (g != null || this.through_view(b)) {
                 return null;
             }
             return this.frame_root(b);
         },
-        .INDEX(b, i) => { return this.frame_root(b); },
+        .INDEX(b, i) => {
+            if (this.through_view(b)) {
+                return null; // an element of a slice field is where the slice points
+            }
+            return this.frame_root(b);
+        },
         default => { return null; },
     }
+}
+
+// is a t a view of memory held somewhere else (a reference, pointer, slice or string)?
+attach fn points_away(this: checker&, t: u32) -> bool {
+    match (*this.t.get(t)) {
+        .REF(x) => { return true; },
+        .PTR(x) => { return true; },
+        .SLICE(x) => { return true; },
+        .VOIDPTR => { return true; },
+        .CSTR => { return true; },
+        .STR => { return true; },
+        default => { return false; },
+    }
+}
+
+// is b, a part of a local, a view (a slice or reference field), so its parts aren't the local's?
+attach fn through_view(this: checker&, b: expr&) -> bool {
+    val t = this.local_part_ty(b) ?? return false;
+    return this.points_away(t);
 }
 
 // `return`: the value moves out, then every scope's exits run (errdefers too when an error union

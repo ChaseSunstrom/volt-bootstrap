@@ -33,3 +33,15 @@ warning: moving this frame of 'looped' leaves it pointing into the old frame ('p
    │
 57 │     val lp2 = lp;
    │               ^^
+
+warning: moving this frame of 'cont_before' leaves it pointing into the old frame ('p' holds a reference to 'n' across a suspend): resume or await it where it is
+   ┌─ tests/diag/async_self_move.volt:62:15
+   │
+62 │     val cb2 = cb;
+   │               ^^
+
+warning: moving this frame of 'cont_after' leaves it pointing into the old frame ('p' holds a reference to 'n' across a suspend): resume or await it where it is
+   ┌─ tests/diag/async_self_move.volt:64:15
+   │
+64 │     val ca2 = ca;
+   │               ^^
