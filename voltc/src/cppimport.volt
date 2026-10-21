@@ -40,7 +40,8 @@ struct cpp_traits {
     base_copy: bool = false;    // a subclass's copy can copy it (its copy constructor, public or
                                 // protected; an abstract class's too): a derived object copies
     newable: bool = false;      // C++'s new aligns it (past 8 that's C++17's aligned new): a layout
-                                // Volt can't copy (alignas members) is held by handle instead
+                                // Volt can't copy (alignas members, an aligned typedef's or a
+                                // packed field) is held by handle instead
     aligned: bool = false;      // held by handle for that (prune), though trivially copyable
 }
 
@@ -4440,7 +4441,7 @@ attach fn handle_class(this: cpp_gen&, c: clang::CXCursor, vn: str, q: str) -> v
         maps = this.virt_maps(c, q, &vs);
     }
     if (tr.aligned) {
-        this.line(fmt("// C++'s {}: its alignment comes from members Volt can't show, so Volt holds it by handle (C++'s new aligns it)", S(q)).as_str());
+        this.line(fmt("// C++'s {}: its layout or alignment comes from members Volt can't show, so Volt holds it by handle (C++'s new aligns it)", S(q)).as_str());
     } else {
         this.line(fmt("// C++'s {}: it isn't trivially copyable, so Volt holds it by handle (C++ allocates it)", S(q)).as_str());
     }
