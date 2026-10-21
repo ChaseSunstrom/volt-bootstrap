@@ -292,7 +292,7 @@ jobs:
         if: failure()
         run: sh .github/report-failures.sh test.log failure detail 2
       # (T-0381: cpp_errors, an exception thrown in a Volt callback, ends in libunwind's "pc not in
-      # table": the functions at those addresses, from the program rebuilt at a fixed base)
+      # table": each backend's build run, and how many functions it gives unwind entries)
       - name: C++ unwind facts
         if: failure()
         run: |
@@ -300,15 +300,13 @@ jobs:
           V=$(ls -t "$PWD"/target/tmp/voltc-stage1-*.exe 2>/dev/null | head -1)
           [ -n "$V" ] || { echo "no stage-1 voltc under target/tmp"; exit 0; }
           cd tests/interop
-          # r21: built with --disable-dynamicbase it ran clean. Now each way: ASLR as linked by default, none,
-          # and ASLR below 4 GB (no high-entropy VA): which fails says whether addresses past 4 GB are cut
-          for how in default -Wl,--disable-dynamicbase -Wl,--no-high-entropy-va; do
-            flags=""; [ "$how" = default ] || flags="--cc $how"
-            VOLT_STD=../../std "$V" build cpp_errors.volt $flags -o ce.exe || { echo "$how: build failed"; continue; }
-            ./ce.exe > ce.out 2> ce.err; echo "::warning::unwind ($how): exit $? / $(tail -1 ce.out) / $(head -2 ce.err | tr '\n' ' ')"
-            llvm-readobj --file-headers ce.exe | grep -E "ImageBase|IMAGE_DLL_CHARACTERISTICS_(DYNAMIC_BASE|HIGH_ENTROPY_VA)" | tr -s ' ' | tr '\n' ' '; echo
+          # r22: the link mode changed nothing (the C backend's build ran clean each way); the test
+          # also runs --backend llvm, whose Volt functions had no unwind tables (.pdata) until round 23
+          for be in c llvm; do
+            VOLT_STD=../../std "$V" build cpp_errors.volt --backend $be -o ce.exe || { echo "$be: build failed"; continue; }
+            ./ce.exe > ce.out 2> ce.err; echo "::warning::unwind ($be): exit $? / $(tail -1 ce.out) / $(head -2 ce.err | tr '\n' ' ')"
+            llvm-readobj --unwind ce.exe | grep -c "RuntimeFunction {" | sed "s/^/$be: .pdata entries: /"
           done
-          llvm-readobj --sections ce.exe | grep -E "Name: \.(pdata|xdata|eh_frame|reloc)"
           rm -f ce.exe ce.out ce.err
           # T-0548: import std's module source, as $CXX and libclang's clang++ find it, and what
           # libclang says when it reads cpp_module.volt

@@ -932,9 +932,9 @@ fn main() -> void {
 #[test]
 fn generic_body_members() {
     let mut s = Server::start();
-    s.request("initialize", &format!("{{\"processId\":null,\"rootUri\":\"file://{}\",\"capabilities\":{{}}}}", s.dir.display()));
+    s.request("initialize", &format!("{{\"processId\":null,\"rootUri\":\"{}\",\"capabilities\":{{}}}}", file_uri(&s.dir)));
     s.notify("initialized", "{}");
-    let uri = format!("file://{}/members.volt", s.dir.display());
+    let uri = file_uri(s.dir.join("members.volt"));
     s.notify("textDocument/didOpen", &format!("{{\"textDocument\":{{\"uri\":\"{uri}\",\"languageId\":\"volt\",\"version\":1,\"text\":{}}}}}", js(MEMBERS)));
     let d = s.diagnostics_for(&uri);
     assert!(!d.contains("\"severity\":1"), "{d}");

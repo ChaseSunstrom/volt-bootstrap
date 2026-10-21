@@ -1064,6 +1064,12 @@ attach fn decl_fn(this: lg&, i: u32) -> llvm::LLVMOpaqueValue* {
             // Volt code never unwinds (a panic ends the program), as the C backend's C, which clang
             // marks nounwind: calls need no unwind paths, and LLVM moves code around them freely
             llvm::LLVMAddAttributeAtIndex(fv, 4294967295, this.attr("nounwind"));
+            if (this.c.opts.target == null) {
+                // unwind tables all the same, as clang gives every function on a hosted target:
+                // a C++ exception or a backtrace walks through Volt's frames (without them, Windows
+                // has no .pdata for a Volt function and libunwind stops there: "pc not in table")
+                llvm::LLVMAddAttributeAtIndex(fv, 4294967295, llvm::LLVMCreateEnumAttribute(this.ctx, llvm::LLVMGetEnumAttributeKindForName("uwtable", 7), 2));
+            }
         }
         if (this.c.opts.target != null) {
             // bare metal has no C library: loops stay loops, not calls to strlen or memcpy (which

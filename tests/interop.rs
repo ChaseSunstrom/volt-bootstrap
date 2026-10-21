@@ -107,12 +107,22 @@ fn lua_include() -> Option<&'static str> {
     ["/usr/include", "/usr/include/lua5.5", "/usr/include/lua5.4", "/usr/local/include"].into_iter().find(|d| Path::new(d).join("lua.h").is_file())
 }
 
-/// ruby, and the directories of its headers (ruby.h and its config.h), when both are installed
+/// ruby, and the directories of its headers (ruby.h and its config.h), when both are installed. On
+/// Windows the flags an extension also needs follow them: a DLL links Ruby's own (no symbol is left
+/// for the host to define), and Ruby's math declarations add a dllimport clang warns of
 fn ruby_headers() -> Option<(PathBuf, Vec<String>)> {
     let ruby = local_tool("ruby", "-v")?;
     let o = Command::new(&ruby).args(["-e", "print RbConfig::CONFIG['rubyhdrdir'], ' ', RbConfig::CONFIG['rubyarchhdrdir']"]).output().ok()?;
-    let dirs: Vec<String> = String::from_utf8_lossy(&o.stdout).split_whitespace().map(String::from).collect();
-    (dirs.len() == 2 && Path::new(&dirs[0]).join("ruby.h").is_file()).then_some((ruby, dirs))
+    let mut dirs: Vec<String> = String::from_utf8_lossy(&o.stdout).split_whitespace().map(String::from).collect();
+    if dirs.len() != 2 || !Path::new(&dirs[0]).join("ruby.h").is_file() {
+        return None;
+    }
+    if cfg!(windows) {
+        let o = Command::new(&ruby).args(["-e", "print '-L', RbConfig::CONFIG['libdir'], ' ', RbConfig::CONFIG['LIBRUBYARG_SHARED']"]).output().ok()?;
+        dirs.extend(String::from_utf8_lossy(&o.stdout).split_whitespace().map(String::from));
+        dirs.push("-Wno-dll-attribute-on-redeclaration".into());
+    }
+    Some((ruby, dirs))
 }
 
 /// cc building Ruby extension src against library lib (in lib_dir), with the leak report linked in
@@ -121,7 +131,7 @@ fn ruby_ext(hdrs: &[String], src: &Path, lib_dir: &str, lib: &str) -> Command {
     let mut cc = Command::new("cc");
     cc.args(["-shared", "-fPIC", "-Wall", "-Wextra", "-Wno-unused-parameter", "-Werror"]).args(MODULE_FLAGS);
     for h in hdrs {
-        cc.arg("-I").arg(h);
+        if h.starts_with('-') { cc.arg(h) } else { cc.arg("-I").arg(h) };
     }
     cc.arg(src).args(["leak_report.c", "-L", lib_dir, &format!("-l{lib}"), &format!("-Wl,-rpath,{lib_dir}"), "-o"]);
     cc
@@ -354,7 +364,7 @@ fn bindings_round_trip() {
                 let mut cc = Command::new("cc");
                 cc.args(["-shared", "-fPIC", "-Wall", "-Wextra", "-Wno-unused-parameter", "-Werror"]).args(MODULE_FLAGS);
                 for h in &hdrs {
-                    cc.arg("-I").arg(h);
+                    if h.starts_with('-') { cc.arg(h) } else { cc.arg("-I").arg(h) };
                 }
                 ok(run(cc.arg(e.dir.join("mathlib_ruby.c")).args(["-I", &e.path(""), "-L", &lib_dir, "-lmathlib", &rpath, "-o"]).arg(rdir.join(ruby_module("mathlib")))), "cc mathlib_ruby.c");
                 let o = Command::new(&ruby).arg("-I").arg(&rdir).arg(Path::new(ROOT).join("tests/interop/client.rb")).output().unwrap();
@@ -601,7 +611,7 @@ fn bindings_shapes() {
             assert_eq!(unformatted, "", "gofmt would change these ({backend})");
             ok(go(&["vet", "./..."]), "go vet (shapes)");
             ok(go(&["build", "-o", "client", "."]), "go build (shapes)");
-            let o = Command::new(gdir.join("client")).output().unwrap();
+            let o = Command::new(gdir.join("client")).env("PATH", common::path_with(&lib)).output().unwrap();
             assert_eq!(String::from_utf8_lossy(&o.stderr).replace("\r\n", "\n"), "volt live: 0\n", "client_shapes.go ({backend}): the library's allocations at exit");
             assert_eq!(ok(o, "client_shapes.go"), format!("checked true OVERDRAWN\nlimit true OVERDRAWN\nsign positive not positive\n{SHAPES_OUT}"), "client_shapes.go ({backend})");
         } else {

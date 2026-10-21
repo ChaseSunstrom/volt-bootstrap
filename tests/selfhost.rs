@@ -125,7 +125,8 @@ fn release_voltc_works() {
     for (file, backend, release) in &runs {
         let text = std::fs::read_to_string(file).unwrap();
         let want: Vec<&str> = text.lines().filter_map(|l| l.strip_prefix("// expect: ")).map(|l| l.trim_end()).collect();
-        if want.is_empty() {
+        // (`// unix-only`: its oracle is Unix's, as golden.rs skips it)
+        if want.is_empty() || (cfg!(windows) && text.lines().any(|l| l.starts_with("// unix-only"))) {
             continue;
         }
         let flags: Vec<&str> = text.lines().find_map(|l| l.strip_prefix("// flags:")).map(|f| f.split_whitespace().collect()).unwrap_or_default();
