@@ -64,6 +64,27 @@ static const char *SHAPES =
     "    return h.area();\n"
     "}\n";
 
+static const char *HOLDERS =
+    "public trait boxy {\n"
+    "    fn v(this) -> i32;\n"
+    "}\n"
+    "public trait fieldy {\n"
+    "    fn v(this) -> i32;\n"
+    "}\n"
+    "struct one { n: i32; }\n"
+    "attach boxy -> one {\n"
+    "    fn v(this) -> i32 { return this.n; }\n"
+    "}\n"
+    "attach fieldy -> one {\n"
+    "    fn v(this) -> i32 { return this.n; }\n"
+    "}\n"
+    "public var two: boxy?[2] = { null, null };\n"
+    "public struct slot {\n"
+    "    f: fieldy?;\n"
+    "    n: i32;\n"
+    "}\n"
+    "public var held_slot: slot = { f: null, n: 0 };\n";
+
 int main(int argc, char **argv) {
     volt_str std_dir = S(argv[1]);
     for (int box = 0; box < 2; box++) {
@@ -165,6 +186,27 @@ int main(int argc, char **argv) {
         return 1;
     }
     printf("held %d\n", ((int (*)(void))volt_vm_find(vm, S("set_held")))());
+    // attaching a trait no global holds loads
+    if (volt_vm_load(vm, S("named.volt"), S("public trait named {\n    fn len(this) -> i32;\n}\nstruct tag { n: i32; }\nattach named -> tag {\n    fn len(this) -> i32 { return this.n; }\n}\nexport fn named_len() -> i32 {\n    val t: tag = { n: 3 };\n    return t.len();\n}\n")).error) {
+        say_error(vm, "named");
+        return 1;
+    }
+    printf("named %d\n", ((int (*)(void))volt_vm_find(vm, S("named_len")))());
+    // a union in an array, or in a struct's field, is held too
+    if (volt_vm_load(vm, S("holders.volt"), S(HOLDERS)).error) {
+        say_error(vm, "holders");
+        return 1;
+    }
+    const char *attach[] = { "boxy", "fieldy" };
+    for (int i = 0; i < 2; i++) {
+        char src[256];
+        snprintf(src, sizeof src, "struct more { n: i64; }\nattach holders::%s -> more {\n    fn v(this) -> i32 { return 0; }\n}\nexport fn more_%s() -> i32 { return 0; }\n", attach[i], attach[i]);
+        if (volt_vm_load(vm, S("more.volt"), S(src)).error) {
+            say_error(vm, attach[i]);
+        } else {
+            printf("%s: loaded\n", attach[i]);
+        }
+    }
     volt_vm_free(vm);
     return 0;
 }

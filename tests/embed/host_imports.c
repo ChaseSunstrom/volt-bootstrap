@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 #include "voltvm.h"
 
 static volt_str S(const char *s) { return (volt_str){ (const uint8_t *)s, strlen(s) }; }
@@ -56,6 +57,46 @@ static long long user_of(voltvm_volt_vm *vm, const char *what) {
     return ((long long (*)(void))volt_vm_find(vm, S("user")))();
 }
 
+// a script calling a static inline function of vmhost.h that imports.volt doesn't: its own C is
+// built for it (with the compilers); its value, else -1
+static long long thrice_of(voltvm_volt_vm *vm, const char *dir, const char *what) {
+    char src[512];
+    snprintf(src, sizeof src, "use { \"%s/vmhost.h\" } as h;\nexport fn thrice() -> i32 { return h::h_thrice(5); }\n", dir);
+    if (volt_vm_load(vm, S("thrice.volt"), S(src)).error) {
+        say_error(vm, what);
+        return -1;
+    }
+    return ((int (*)(void))volt_vm_find(vm, S("thrice")))();
+}
+
+// a header the script imports changed on disk and the script loaded again: it reads the new one
+static void header_changes(voltvm_volt_vm *vm) {
+    char dir[] = "/tmp/voltvm-test-XXXXXX";
+    if (!mkdtemp(dir)) {
+        printf("reload: no temporary directory\n");
+        return;
+    }
+    char h[64], src[256];
+    snprintf(h, sizeof h, "%s/rh.h", dir);
+    snprintf(src, sizeof src, "use { \"%s\" } as r;\nexport fn hv() -> i32 { return r::HV; }\n", h);
+    for (int v = 1; v <= 2; v++) {
+        FILE *f = fopen(h, "w");
+        if (!f) {
+            printf("reload: can't write %s\n", h);
+            break;
+        }
+        fprintf(f, "#define HV %d\n", v * 10);
+        fclose(f);
+        if (volt_vm_load(vm, S("reload.volt"), S(src)).error) {
+            say_error(vm, "reload");
+            break;
+        }
+        printf("reload hv %d\n", ((int (*)(void))volt_vm_find(vm, S("hv")))());
+    }
+    remove(h);
+    rmdir(dir);
+}
+
 int main(int argc, char **argv) {
     volt_str std_dir = S(argv[1]);
     char script[2048];
@@ -79,6 +120,8 @@ int main(int argc, char **argv) {
     }
     printf("run %lld\n", ((long long (*)(void))volt_vm_find(vm, S("run")))());
     printf("user %lld\n", user_of(vm, "user"));
+    printf("thrice %lld\n", thrice_of(vm, argv[2], "thrice"));
+    header_changes(vm);
     volt_vm_free(vm);
 #if defined(__linux__)
     if (argc < 4) {
@@ -99,6 +142,7 @@ int main(int argc, char **argv) {
     }
     printf("box run %lld\n", ((long long (*)(void))volt_vm_find(box, S("run")))());
     printf("box imports user %lld\n", user_of(box, "box imports user"));
+    printf("box thrice %lld\n", thrice_of(box, argv[2], "box thrice"));
     const char *c = "use { \"string.h\" } as c;\npublic fn four() -> usize { return c::strlen(\"four\"); }\nexport fn n() -> usize { return four(); }\n";
     if (volt_vm_load(box, S("box_c.volt"), S(c)).error) {
         say_error(box, "box_c");
