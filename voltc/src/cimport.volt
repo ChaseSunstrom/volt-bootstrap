@@ -2596,6 +2596,9 @@ attach fn c_items(this: checker&, d: cdecls&, res: c_imported&, span: span) -> v
     for (dv&) in d.vars.items() {
         declared.put(dv.name, 1);
     }
+    for (dm) in d.fn_macros.items() {
+        declared.put(dm, 1); // (a function-like #define would expand inside the accessor)
+    }
     var protos = S("");
     for (s&) in d.structs.items() {
         val name = m.names.get(s.tag) ?? continue;
