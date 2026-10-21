@@ -2762,10 +2762,6 @@ fn reachable(c: checker&) -> std::map<u32, bool> {
             if (f.body) {
                 put(&nodes_todo, f.body);
             }
-            val a = f.async_of;
-            if (a) {
-                put(&todo, a);
-            }
         }
         if (nodes_todo.len == 0) {
             break;

@@ -36,3 +36,9 @@ public fn tally(x: T) -> i64 {
 export fn geo_doubled(x: i32) -> i32 {
     return x * 2;
 }
+
+// an export async fn: its C symbol runs the frame to its end; Volt code still steps it
+export async fn geo_tripled(x: i32) -> i32 {
+    suspend;
+    return x * 3;
+}

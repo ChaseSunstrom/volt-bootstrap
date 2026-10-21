@@ -539,7 +539,12 @@ attach fn local_at(this: checker&, c: u32) -> str {
 
 // the name of the local at place c, when it's in scope
 attach fn local_in_scope(this: checker&, c: u32) -> str? {
-    var i = this.cx.scopes.len;
+    return this.local_in_scopes(c, this.cx.scopes.len);
+}
+
+// the same, among the outer `depth` scopes only
+attach fn local_in_scopes(this: checker&, c: u32, depth: usize) -> str? {
+    var i = depth;
     while (i > 0) {
         i -= 1;
         for (e) in this.cx.scopes.at(i).vars.iter() {
@@ -605,21 +610,58 @@ attach fn held_ref(this: checker&, e: expr&) -> str? {
     return null;
 }
 
-// is e a local fixed-size array (whose elements are the local's own memory)?
+// is e a fixed-size array in a local's own memory (xs, s.arr, s.rows[0])?
 attach fn local_array(this: checker&, e: expr&) -> bool {
+    val t = this.local_part_ty(e) ?? return false;
+    match (*this.t.get(t)) {
+        .ARRAY(x, n) => { return true; },
+        default => { return false; },
+    }
+}
+
+// the type of e when it is a local or a part of one held in place (a struct field, an array
+// element), not reached through a reference or pointer
+attach fn local_part_ty(this: checker&, e: expr&) -> u32? {
     match (e.kind) {
         .PATH(p&) => {
             if (p.is_single()) {
-                val l = this.lookup_local(p.segs.at(0).name) ?? return false;
-                match (*this.t.get(l.ty)) {
-                    .ARRAY(x, n) => { return true; },
-                    default => {},
-                }
+                val l = this.lookup_local(p.segs.at(0).name) ?? return null;
+                return l.ty;
+            }
+        },
+        .FIELD(b, n, g) => {
+            if (g != null) {
+                return null;
+            }
+            val bt = this.local_part_ty(b) ?? return null;
+            match (*this.t.get(bt)) {
+                .STRUCT(sid) => {
+                    val info = this.si(sid);
+                    if (info.has_fields) {
+                        for (fd&) in info.fields.items() {
+                            if (fd.name == n) {
+                                return fd.ty;
+                            }
+                        }
+                    }
+                },
+                default => {},
+            }
+        },
+        .INDEX(b, i) => {
+            match (i.kind) {
+                .RANGE(lo, hi, incl) => { return null; },
+                default => {},
+            }
+            val bt = this.local_part_ty(b) ?? return null;
+            match (*this.t.get(bt)) {
+                .ARRAY(x, n) => { return x; },
+                default => {},
             }
         },
         default => {},
     }
-    return false;
+    return null;
 }
 
 // the local at place c (of type t) was given e (all of it when whole, else a part): remember the
