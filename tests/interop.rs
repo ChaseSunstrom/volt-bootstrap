@@ -2181,18 +2181,18 @@ fn cpp_params() {
         assert!(src.contains(why), "{why}: {src}");
     }
     // std::map / std::unordered_map by value, const& or && (an alias too) take a Volt std::map&,
-    // beside the stdcxx handle form when there is one; a mutable one keeps its handle form only (or
-    // stays per use), and one of std::vector<bool> stays per use
-    for decl in ["fn dump(m: std::map<i32, i32>&)", "fn dump(m: stdcxx::map<i32, i32>&)", "fn try_dump(m: std::map<i32, i32>&)", "fn dump_u(m: std::map<i32, f64>&)", "fn dump_u(m: stdcxx::unordered_map<i32, f64>)", "fn dump_s(m: std::map<std::string, i32>&)", "fn dump_ss(m: std::map<std::string, std::string>&)", "fn dump_v(m: std::map<i32, std::vec<i32>>&)", "fn dump_rv(m: std::map<i32, i32>&)", "fn dump_a(m: std::map<i32, i32>&)", "fn put_in(m: stdcxx::map<i32, i32>&)", "fn put_s() -> void {}", "fn bits() -> void {}", "(worked out per use: const std::map<int, std::vector<bool>> & has no Volt form)"] {
+    // beside the handle form: stdcxx's, or (no stdcxx form: a std::string key, std::vector<bool>
+    // values) a handle of the instance's own; a mutable one keeps its handle form only
+    for decl in ["fn dump(m: std::map<i32, i32>&)", "fn dump(m: stdcxx::map<i32, i32>&)", "fn try_dump(m: std::map<i32, i32>&)", "fn dump_u(m: std::map<i32, f64>&)", "fn dump_u(m: stdcxx::unordered_map<i32, f64>)", "fn dump_s(m: std::map<std::string, i32>&)", "fn dump_ss(m: std::map<std::string, std::string>&)", "fn dump_v(m: std::map<i32, std::vec<i32>>&)", "fn dump_rv(m: std::map<i32, i32>&)", "fn dump_a(m: std::map<i32, i32>&)", "fn put_in(m: stdcxx::map<i32, i32>&)", "fn put_s(m: map_", "fn bits(m: map_", "fn dump_s(m: map_"] {
         assert!(src.contains(decl), "{decl}: {src}");
     }
-    assert!(!src.contains("fn put_in(m: std::map<"), "a mutable map& has no Volt map form: {src}");
+    assert!(!src.contains("fn put_in(m: std::map<") && !src.contains("fn put_s(m: std::map<"), "a mutable map& has no Volt map form: {src}");
     // const& beside &&: the twin pass's second one an alias; a result pointing into the map's copy
     // (a pointer, a view) isn't declared with a Volt std::map& (a copied-out vector is)
     for decl in ["fn both(a0: std::map<i32, i32>&) -> i32", "fn both(a0: stdcxx::map<i32, i32>) -> i32", "fn both_std_map_int_int_rref(a0: std::map<i32, i32>&) -> i32", "fn find(m: stdcxx::map<i32, i32>&, k: i32) -> i32*", "fn row0(m: std::map<i32, std::vec<i32>>&)"] {
         assert!(src.contains(decl), "{decl}: {src}");
     }
-    assert!(!src.contains("fn find(m: std::map<") && !src.contains("fn key0("), "results into the map's copy: {src}");
+    assert!(!src.contains("fn find(m: std::map<") && !src.contains("fn key0(m: std::map<") && src.contains("fn key0(m: map_"), "results into the map's copy (a handle's view points into C++'s own map): {src}");
     // a variadic function pointer with no fixed parameter has no Volt form (C before C23 has none)
     assert!(src.contains("(worked out per use: int (*)(...) has no Volt form)") && !src.contains("fn(...)"), "R(*)(...): {src}");
     // a per-use name's try_ stub beside its own, unless the header declares that name (then a
@@ -2205,6 +2205,11 @@ fn cpp_params() {
     let o = e.voltc(&["check", "cpp_params_no_member.volt"]);
     let err = String::from_utf8_lossy(&o.stderr);
     assert!(!o.status.success() && err.contains("no member named 'nothing'") && err.contains("cpp_params_no_member.volt:5"), "neither m nor try_m: {err}");
+    // a std::map with no stdcxx form (a std::string key) that C++ made goes back to C++ by its handle,
+    // and a Volt std::map to the same function as a copy, under C++17 and C++11
+    for std in ["-std=c++17", "-std=c++11"] {
+        assert_eq!(ok(e.voltc(&["run", "cpp_map_back.volt", "--cc", std]), "voltc run cpp_map_back.volt"), "total 3 5\n", "cpp_map_back under {std}");
+    }
 }
 
 #[test]
@@ -2328,11 +2333,10 @@ fn cpp_params_refused() {
     assert!(src.contains("// C++: int pr::nv::flags(const std::vector<std::vector<bool>> & v) (worked out per use: const std::vector<std::vector<bool>> & has no Volt form)") && src.contains("fn flags() -> void {}"), "the stub says why: {src}");
     let err = check("cpp_params_unmapped.volt");
     assert!(err.contains("std::vector<std::vector<bool>>") && err.contains("cpp_params_unmapped.volt:6"), "a wrong argument per use: {err}");
-    // a mutable std::map& with no handle form: its stub says why, and a call with a Volt map names
-    // the type
-    assert!(src.contains("(worked out per use: std::map<std::string, int> & has no Volt form)"), "a mutable map's stub says why: {src}");
+    // a mutable std::map& with no stdcxx form takes the instance's handle only: a call with a Volt
+    // map (which C++ would change a copy of) is refused, naming both types
     let err = check("cpp_params_map.volt");
-    assert!(err.contains("C++ can't be handed std::map<std::string") && err.contains("cpp_params_map.volt:7"), "a mutable map per use: {err}");
+    assert!(err.contains("but 'put_s' wants a cpp::map_") && err.contains("std::map<std::string") && err.contains("cpp_params_map.volt:7"), "a mutable map takes its handle: {err}");
     // Volt references per use, one wanting an int& and another an int*: the lvalue reading's error
     let err = check("cpp_params_mixed.volt");
     assert!(err.contains("cannot initialize a parameter of type 'int *' with an lvalue of type 'int'") && err.contains("cpp_params_mixed.volt:8"), "an lvalue and an address in one call: {err}");

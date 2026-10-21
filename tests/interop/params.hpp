@@ -157,8 +157,8 @@ template <class T> std::string rows_t(const std::vector<std::vector<T> > &v) { r
 template <class T> T deep_t(std::vector<std::vector<std::vector<T> > > v) { T s = 0; for (std::size_t i = 0; i < v.size(); i++) for (std::size_t j = 0; j < v[i].size(); j++) for (std::size_t k = 0; k < v[i][j].size(); k++) s += v[i][j][k] * (T)(i + 1); return s; }
 }
 // std::map / std::unordered_map parameters take a Volt std::map&: each prints C++'s own order (the
-// unordered one copied into a std::map first), beside a stdcxx handle form when there is one; a
-// mutable one keeps its handle form (or stays per use), and one of bools stays per use
+// unordered one copied into a std::map first), beside a handle form (stdcxx's, or the instance's own); a
+// mutable one, and one of bools, keep the handle form only
 namespace mp {
 template <class M, class F> std::string show(const M &m, F val) { std::string s = "{"; for (auto &kv : m) s += (s.size() > 1 ? "," : "") + kv.first + ":" + val(kv.second); return s + "}"; }
 inline std::string num(int x) { return std::to_string(x); }

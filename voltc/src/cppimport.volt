@@ -636,7 +636,11 @@ attach fn instance(this: cpp_gen&, qt: clang::CXType) -> str? {
     // through calls made per use)
     val decl = clang::clang_getTypeDeclaration(ct);
     if (!this.inst_any) {
-        if (!this.own_type(decl)) {
+        // ...and a std::map with no stdcxx form (a std::string key), so one C++ makes is declared
+        // and goes back to C++ by its handle (a const& parameter's Volt std::map& form beside it)
+        val st = std_template(ct) ?? S("");
+        val std_map = st.as_str() == "map" || st.as_str() == "unordered_map";
+        if (!std_map && !this.own_type(decl)) {
             return null;
         }
         // a template Volt declares a generic for isn't one: an instance of it that has no Volt form
@@ -1957,6 +1961,8 @@ fn param_words(parms: std::vec<clang::CXCursor>&, count: usize) -> std::string {
             sfx.append("const_ref");
         } else if (form == 2) {
             sfx.append("ref");
+        } else if (form == 1 && ends_with(c.as_str(), " &&") && starts_with(c.as_str(), "const ")) {
+            sfx.append("const_rref");
         } else if (form == 1 && ends_with(c.as_str(), " &&")) {
             sfx.append("rref");
         } else if (form == 1) {
@@ -2059,6 +2065,9 @@ attach fn param(this: cpp_gen&, t: clang::CXType, name: str, i: usize, tparams: 
                 // a std::vector of std::vectors: a Volt slice of slices, each level copied
                 val inner = this.nested_vec(et, tparams) ?? return null;
                 return { vty: fmt("{}[..]", move inner), pass: S(name), cpp: fmt2("volt_cpp_vec<{} >({})", move vec, copy slot), text_ref: true, map_copy: true };
+            }
+            if (this.handle_of(et) != null) {
+                return null; // a class held by handle: a Volt slice of handles isn't its objects (per use)
             }
             val elem = this.vtype(et, tparams) ?? return null;
             return { vty: fmt("{}[..]", move elem), pass: S(name), cpp: fmt4("{}({}.ptr, {}.ptr + {}.len)", move vec, copy slot, copy slot, copy slot), text_ref: true, map_copy: true };
@@ -2387,7 +2396,11 @@ attach fn result(this: cpp_gen&, t: clang::CXType, tparams: std::vec<str>&) -> c
         }
         val st = std_template(base) ?? S("");
         if (st.as_str() == "vector") {
-            val elem = this.vtype(clang::clang_Type_getTemplateArgumentAsType(clang::clang_getCanonicalType(base), 0), tparams) ?? return null;
+            val et = clang::clang_Type_getTemplateArgumentAsType(clang::clang_getCanonicalType(base), 0);
+            if (this.handle_of(et) != null) {
+                return null; // copied out element by element, which a class held by handle isn't
+            }
+            val elem = this.vtype(et, tparams) ?? return null;
             return { vty: fmt("std::vec<{}>", copy elem), way: ret_way::VECTOR, elem: move elem };
         }
         if (st.as_str() == "function") {
