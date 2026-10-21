@@ -20,6 +20,12 @@ struct lanes {
     v: std::simd::f32x4;
 }
 
+// 16-aligned where 32-bit ARM aligns no vector that way (lgen's aligner: an f128)
+@attributes([@align(16)])
+struct cell {
+    a: u8;
+}
+
 enum shape {
     WIDE: wide,
     DBL: dbl,
@@ -31,7 +37,8 @@ fn main() -> i32 {
     val w: wide = { a: 1, b: 2 };
     val d: dbl = { a: 1, b: 2.0, c: 3, q: 1.0 };
     val l: lanes = { a: 1, v: {} };
-    val t = (w, d, l, @cast<u128>(5));
+    val c: cell = { a: 2 };
+    val t = (w, d, l, @cast<u128>(5), c);
     val s = shape::DBL(d);
     var o: dbl? = d;
     o = null;
