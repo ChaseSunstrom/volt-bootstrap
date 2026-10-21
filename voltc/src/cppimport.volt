@@ -7235,7 +7235,9 @@ val CPP_FORM_HEAD: str = "\n#if __cplusplus >= 201703L && defined(__has_include)
 // ...and the rest, of type x with its type arguments a0, a1...: optional-like, contiguous
 val CPP_FORM_PROBE: str = "template <class U> char (&opt(typename volt_form::when<__is_same(__decay(__decltype(*volt_lv<U>())), a0) && __is_constructible(U, const a0 &) && __is_constructible(U)>::type *, char (*)[sizeof(volt_lv<U>() ? 1 : 0)]))[2];\ntemplate <class U> char opt(...);\ntemplate <class U> char (&seq(typename volt_form::when<__is_same(__remove_cv(__remove_pointer(__decltype(volt_lv<U>().data()))), __remove_cv(a0))>::type *, char (*)[sizeof(volt_lv<U>().size())]))[2];\ntemplate <class U> char seq(...);\nenum {\n    o = sizeof(opt<x>(0, 0)) == 2,\n    s = sizeof(seq<x>(0, 0)) == 2,\n    v = __is_trivially_copyable(x) && sizeof(x) <= 2 * sizeof(void *),\n    fl = __is_constructible(x, __remove_cv(a0) *, __SIZE_TYPE__),\n    fr = __is_constructible(x, __remove_cv(a0) *, __remove_cv(a0) *),\n    t = volt_form::tsize<x>::v,\n    w = volt_form::vsize<x>::v,\n";
 
-// the import namespace ns is in (or under), by its context's index
+// the C++ context namespace ns (or one it's in) has, by its index: its import's, or the one a
+// clang-typed @cpp made for its own namespace when there was no import (cpp_typed_by_clang). So
+// it says only that clang can work things out here; whether ns is an import's is in_cpp_import
 attach fn cpp_ctx_of(this: checker&, ns: u32) -> usize? {
     var at: u32? = ns;
     while (at) {
@@ -8579,7 +8581,7 @@ attach fn cpp_error_ns(this: checker&, e: u32) -> u32? {
     val eid = this.enum_of(e) ?? return null;
     val info = this.ei(eid);
     val ns = this.decls.at(@cast<usize>(info.decl)).ns;
-    if (!info.is_error || !(info.name == "cpp_error" || ends_with(info.name, "::cpp_error")) || this.cpp_ctx_of(ns) == null) {
+    if (!info.is_error || !(info.name == "cpp_error" || ends_with(info.name, "::cpp_error")) || !this.in_cpp_import(ns)) {
         return null;
     }
     return ns;

@@ -1072,7 +1072,7 @@ attach fn fn_inst(this: checker&, d: u32, args: std::vec<gval>, span: span) -> c
 // which the caller's lend check refuses (cpp_text_template)
 attach fn ro_text_inst(this: checker&, inst: u32, off: usize, pre: std::vec<tval?>&) -> u32 {
     val f = this.fi(inst);
-    if (f.env == 0 || this.env_at(f.env).generics.len == 0 || this.cpp_ctx_of(this.dl(f.decl).ns) == null) {
+    if (f.env == 0 || this.env_at(f.env).generics.len == 0 || !this.in_cpp_import(this.dl(f.decl).ns)) {
         return inst;
     }
     var mask: u64 = 0;
