@@ -3,3 +3,4 @@
 // expect: 8 105
 // expect: 12 -7
 // expect: 6
+// expect: 42
