@@ -2428,8 +2428,9 @@ attach fn over_aligned(this: cgen&, t: u32) -> bool {
                 if (this.c.overlay_size(s).1 > 16 || this.c.si(s).align > 16) {
                     return true;
                 }
-                val fs = copy this.c.si(s).fields;
-                for (f&) in fs.items() {
+                val fs = this.c.struct_fields(s, {}) catch |e| { return false; };
+                val xs = copy *fs;
+                for (f&) in xs.items() {
                     if (this.over_aligned(f.ty)) {
                         return true;
                     }

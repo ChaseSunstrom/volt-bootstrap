@@ -656,6 +656,16 @@ attach fn trait_of(this: bind&, t: u32) -> u32 {
 
 attach fn pointer(this: bind&, x: u32) -> shape? {
     if (x != VOID) {
+        // a header struct the bindings can't declare (foreign_layout): the foreign side holds it
+        // as an opaque void *
+        match (*this.c.t.get(x)) {
+            .STRUCT(fs) => {
+                if (this.foreign_layout(fs)) {
+                    return shape::PTR(VOID);
+                }
+            },
+            default => {},
+        }
         // a pointer to an export struct is a lent handle
         val s = this.shape_of(x) ?? return null;
         match (s) {
