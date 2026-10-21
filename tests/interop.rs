@@ -2301,6 +2301,7 @@ fn cpp_peruse_layout() {
     let o = e.voltc_cxx(&["build", "cpp_peruse_layout.volt", "-o", &e.path("layout32")], Some("c++ -m32"));
     let err = String::from_utf8_lossy(&o.stderr);
     assert!(!o.status.success() && err.contains("Volt's point: the mirror's size or alignment isn't the type's C layout on this target"), "i386's 4-aligned f64: {err}");
+    assert!(err.contains("Volt's (extern \"C\" fn(i32) -> i32, i64): the mirror's size"), "i386's 4-aligned i64, the type's name quoted: {err}");
 }
 
 #[test]

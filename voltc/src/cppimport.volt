@@ -8225,7 +8225,7 @@ attach fn cpp_mirror(this: checker&, t: u32) -> std::string? {
         d.append(fmt2("struct volt_c_{} {{\n    {};\n}};\n", unum(@cast<u64>(t)), copy c).as_str());
         // (C++98 has no static_assert or alignof: an array of -1 chars, and GNU's __alignof__)
         val n = unum(@cast<u64>(t));
-        d.append(fmt5("#if __cplusplus >= 201103L\nstatic_assert(sizeof({}) == sizeof(volt_c_{}) && alignof({}) == alignof(volt_c_{}), \"Volt's {}: the mirror's size or alignment isn't the type's C layout on this target\");\n#else\n", copy name, copy n, copy name, copy n, this.ty_name(t)).as_str());
+        d.append(fmt5("#if __cplusplus >= 201103L\nstatic_assert(sizeof({}) == sizeof(volt_c_{}) && alignof({}) == alignof(volt_c_{}), \"Volt's {}: the mirror's size or alignment isn't the type's C layout on this target\");\n#else\n", copy name, copy n, copy name, copy n, escape_str(this.ty_name(t).as_str())).as_str());
         d.append(fmt5("typedef char {}_layout_isnt_c[sizeof({}) == sizeof(volt_c_{}) && __alignof__({}) == __alignof__(volt_c_{}) ? 1 : -1];\n#endif\n", copy name, copy name, copy n, copy name, copy n).as_str());
     }
     put(&this.cpp_decls, move d);
