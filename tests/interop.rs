@@ -2329,11 +2329,20 @@ fn cpp_peruse3() {
 #[test]
 fn cpp_twin() {
     // a template pair f(T&) / f(T) (and const T& / T): with T explicit both overloads take the
-    // argument, so each wrapper names its own; f(&m) changes m, f_value(5) a copy; T a pointer
+    // argument, so each wrapper names its own; f(&m) changes m, f_value(5) a copy; T a pointer, a
+    // defaulted trailing argument (given), a class's static methods
     let e = Env::new("cpp-twin");
-    let want = "ref 1 6\nvalue 2\npeek 13 24\nderef 36 46\n";
+    let want = "ref 1 6\nvalue 2\npeek 13 24\nderef 36 46\ndflt 50 5 62\nbox 70 12 83\n";
     for backend in ["c", "llvm"] {
         assert_eq!(ok(e.voltc(&["run", "cpp_twin.volt", "--backend", backend]), "voltc run cpp_twin.volt"), want, "a reference / value template pair ({backend})");
+    }
+    assert_eq!(ok(e.voltc(&["run", "cpp_twin.volt", "--cc", "-std=c++98"]), "voltc run cpp_twin.volt (C++98)"), want, "a reference / value template pair under C++98");
+    // the pointer takes every argument: a pair has no forms without its defaulted one
+    let shown = Command::new(&e.voltc).args(["check", "cpp_twin.volt", "--std"]).arg(Path::new(ROOT).join("std")).current_dir(Path::new(ROOT).join("tests/interop")).env("VOLT_SHOW_CPP", "1").output().unwrap();
+    let src = String::from_utf8_lossy(&shown.stderr);
+    assert!(src.contains("fn dflt(x: T&, k: i32) -> i32") && src.contains("fn dflt_value_int(x: T, k: i32) -> i32"), "the full forms: {src}");
+    for none in ["fn dflt(x: T&) -> i32", "fn dflt_value_int(x: T) -> i32"] {
+        assert!(!src.contains(none), "{none} can't pick its overload: {src}");
     }
 }
 

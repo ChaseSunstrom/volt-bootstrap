@@ -12,4 +12,12 @@ template <class T> int peek(const T &x) { return 10 + (int)x; }
 // T a pointer: const T& is T const & (a const pointer), not a pointer to const
 template <class T> int deref(const T &p) { return 30 + *p; }
 template <class T> int deref(T p) { return 40 + *p; }
+// a defaulted trailing argument: only the full forms (a pointer to the function takes every one)
+template <class T> int dflt(T &x, int k = 1) { x += k; return 50; }
+template <class T> int dflt(T x, int k = 1) { return 60 + k; }
+// a static method pair of a class
+struct Box {
+    template <class T> static int pair(T &x) { x += 10; return 70; }
+    template <class T> static int pair(T x) { return 80 + (int)x; }
+};
 }

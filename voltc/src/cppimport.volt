@@ -1993,6 +1993,10 @@ fn pick_twin(c: clang::CXCursor, call: str, n: usize) -> std::string? {
         return null;
     }
     var ty = canon(clang::clang_getCursorResultType(c));
+    if (contains(ty.as_str(), "(")) {
+        // a function pointer or an array reference: R(*)(...) can't wrap it
+        return null;
+    }
     ty.append("(*)(");
     val ps = params_of(c);
     for (i) in 0..ps.len {
@@ -3296,10 +3300,14 @@ attach fn callable_of(this: cpp_gen&, generics: str, head: str, has_params: bool
         val vn = my_head.as_str()[10..paren];
         pin = fmt3("if (this.borrowed) {{ @panic(\"can't call {}::{} (an && method) through a borrowed handle: {} can't be copied\"); }}", copy this.pinned, S(vn), copy this.pinned);
     }
-    // one of a template pair f(S&) / f(S): through a pointer of its own type (every argument given)
+    // one of a template pair f(S&) / f(S): through a pointer of its own type, which takes every
+    // argument, so it has no forms without its defaulted ones (C++ couldn't pick one for them)
     var pick: std::string? = null;
     if (self_arg == null) {
         pick = pick_twin(fn_cursor, call, tparams.len);
+        if (pick != null) {
+            optional = 0;
+        }
     }
     var aliased = false;
     // every count of trailing default arguments, most first
@@ -3391,9 +3399,7 @@ attach fn callable_of(this: cpp_gen&, generics: str, head: str, has_params: bool
         // the C++ call, and what @cpp passes it
         var cpp = copy my_call;
         if (pick) {
-            if (count == parms.len) {
-                cpp = copy pick;
-            }
+            cpp = copy pick;
         }
         cpp.append(call_args.as_str());
         cpp.push(')');
