@@ -888,6 +888,8 @@ fn generate(alias: &str, classes: &[Class], mut left: Vec<String>, cp: &[String]
                     let _ = write!(decls, "\n// as a {}: the same object\nattach fn as_{sv}(this: {cv}&) -> {sv} {{\n    return {{ o: copy this.o }};\n}}\n", s.replace('/', "."));
                 }
             }
+            // as an Object (equals(Object), an Object parameter): the same object
+            let _ = write!(decls, "\n// as a java_object (an Object): the same object\nattach fn as_java_object(this: {cv}&) -> java_object {{\n    return {{ o: copy this.o }};\n}}\n");
         }
         let mut seen = BTreeSet::new();
         let mut taken: BTreeSet<String> = c.methods.iter().filter(|m| split_desc(&m.sig).is_some_and(|(p, _)| p.is_empty())).map(|m| volt_name(&m.name)).collect();
