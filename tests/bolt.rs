@@ -426,3 +426,30 @@ fn targets_and_commands() {
     assert!(e.fails(&other, &["build", "--offline"]).contains("offline"));
     assert!(e.fails(&other, &["build", "--frozen"]).contains("offline"));
 }
+
+/// a dependency's export fn taking a trait union: its prebuilt library switches on the tags it saw,
+/// so a program attaching another type builds the package from source instead, and says why (T-0601)
+#[test]
+fn export_fn_union_builds_from_source() {
+    let e = Env::new("union");
+    let lib = e.tmp.join("takers");
+    write(&lib.join("bolt.toml"), "[package]\nname = \"takers\"\nversion = \"0.1.0\"\n");
+    write(
+        &lib.join("lib/takers.volt"),
+        "public trait spin {\n    fn turn(this) -> i32;\n}\npublic struct one { }\nattach spin -> one {\n    fn turn(this) -> i32 { return 1; }\n}\nexport fn spun(x: spin) -> i32 {\n    return x.turn() * 10;\n}\npublic fn plain() -> i32 { return 5; }\n",
+    );
+    // a dependency naming takers: its library refers to takers's symbols, so it's built from source too
+    let users = e.tmp.join("users");
+    write(&users.join("bolt.toml"), "[package]\nname = \"users\"\nversion = \"0.1.0\"\n\n[dependencies]\ntakers = { path = \"../takers\" }\n");
+    write(&users.join("lib/users.volt"), "public fn more() -> i32 { return takers::plain() + 1; }\n");
+    let app = e.tmp.join("app");
+    write(&app.join("bolt.toml"), "[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies]\ntakers = { path = \"../takers\" }\nusers = { path = \"../users\" }\n");
+    write(
+        &app.join("src/main.volt"),
+        "use std::io;\nstruct big {\n    a: i64;\n    b: i64;\n    c: i64;\n}\nattach takers::spin -> big {\n    fn turn(this) -> i32 { return @cast<i32>(this.a + this.b + this.c); }\n}\nfn main() -> void {\n    val b: big = { a: 1, b: 2, c: 4 };\n    val o: takers::one = {};\n    std::println(\"spun {} {} {} {}\", takers::spun(b), takers::spun(o), takers::plain(), users::more());\n}\n",
+    );
+    let out = e.ok(&app, &["run"]);
+    assert!(out.contains("spun 70 10 5 6"), "{out}");
+    assert!(out.contains("takers's library isn't used: its export fn 'spun' takes or gives a trait union"), "{out}");
+    assert!(out.contains("users's library isn't used: it uses takers, which is built from source"), "{out}");
+}

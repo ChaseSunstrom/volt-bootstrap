@@ -855,12 +855,50 @@ fn is_pack_param(p: param&) -> bool {
     }
 }
 
+// is pattern t a generic parameter itself (x: T)
+fn is_gparam_ty(t: ty&, gps: std::vec<gparam>&) -> bool {
+    match (t.kind) {
+        .PATH(p&) => { return p.is_single() && gparam_index(gps, p.segs.at(0).name) != null; },
+        default => { return false; },
+    }
+}
+
+// the type an imported C++ template's by-value T (template <class T> T echo(T x); not an S&&, a var)
+// deduces from an argument of type t: a Volt reference is the object it names, as C++ deduces T
+// from an lvalue and copies it (echo(&n): T = int); a reference to what owns memory or a closure
+// stays one, lent (C++ would copy what it owns; a closure is lent as a fn value is)
+attach fn cpp_value_arg_ty(this: checker&, t: u32) -> u32 {
+    var x = t;
+    var refs = false;
+    while (true) {
+        match (*this.t.get(x)) {
+            .REF(y) => {
+                x = y;
+                refs = true;
+            },
+            default => { break; },
+        }
+    }
+    if (!refs) {
+        return t;
+    }
+    match (*this.t.get(x)) {
+        .CLOSURE(c) => { return t; },
+        .FN_VAL(ps, r) => { return t; },
+        default => {},
+    }
+    if (this.needs_drop(x) catch true) {
+        return t;
+    }
+    return x;
+}
+
 // Bind a candidate's generics for a call; NO(reason) when it doesn't fit.
 // the type a generic parameter deduces from argument v of a call to a fn in namespace ns: for an
 // imported C++ template (template <class F> int apply(F f)), a plain fn is its C function pointer
 // (C++ calls it as one; a fn value has no C++ form); else v's own type
 attach fn cpp_fn_arg_ty(this: checker&, ns: u32, v: tval) -> u32 {
-    if (this.cpp_ctx_of(ns) == null || !this.plain_fn_value(v)) {
+    if (!this.in_cpp_import(ns) || !this.plain_fn_value(v)) {
         return v.ty;
     }
     match (*this.t.get(v.ty)) {
@@ -873,6 +911,21 @@ attach fn cpp_fn_arg_ty(this: checker&, ns: u32, v: tval) -> u32 {
 // (cpp_fn_arg_ty's FN_PTR form of it is pt itself)
 attach fn cpp_fn_arg(this: checker&, d: u32, v: tval, pt: u32) -> bool {
     return v.ty != pt && this.is_c_fn_ptr(pt) && this.cpp_fn_arg_ty(this.dl(d).ns, v) == pt;
+}
+
+// does C++ template d's by-value parameter pn (x: T, not a var) of type pt take v, a Volt reference
+// to a pt: the object it names, read through and copied, as C++ deduces T (cpp_value_arg_ty)
+attach fn cpp_ref_arg(this: checker&, d: u32, pn: str, v: tval, pt: u32) -> bool {
+    if (v.ty == pt || !this.in_cpp_import(this.dl(d).ns) || this.cpp_value_arg_ty(v.ty) != pt) {
+        return false;
+    }
+    val fd = this.fn_decl_of(d) ?? return false;
+    for (p&) in fd.params.items() {
+        if (p.name == pn) {
+            return !p.mutable && p.ty != null && is_gparam_ty(&p.ty.value, this.fn_generics(d));
+        }
+    }
+    return false;
 }
 
 attach fn is_c_fn_ptr(this: checker&, t: u32) -> bool {
@@ -1018,7 +1071,11 @@ attach fn bind_cand(this: checker&, d: u32, rv: tval*, static_ty: u32?, explicit
             continue;
         }
         if (p.ty != null && av != null) {
-            this.infer(&p.ty.value, this.cpp_fn_arg_ty(ns, av ?? vnew(0, 0)), gps, &binds, ns);
+            var at = this.cpp_fn_arg_ty(ns, av ?? vnew(0, 0));
+            if (!p.mutable && this.in_cpp_import(ns) && is_gparam_ty(&p.ty.value, gps)) {
+                at = this.cpp_value_arg_ty(at);
+            }
+            this.infer(&p.ty.value, at, gps, &binds, ns);
         }
     }
     // a pack binds to the types of all the remaining arguments
@@ -1517,6 +1574,8 @@ attach fn pick_call(this: checker&, name: str, cands: std::vec<u32>&, rp: tval*,
                     }
                 } else if (this.cpp_fn_arg(d, vv, pt)) {
                     score += 2; // a plain fn a C++ template takes as its function pointer (emit_call)
+                } else if (this.cpp_ref_arg(d, f.params.at(i + offset).name, vv, pt)) {
+                    score += 2; // a reference a C++ template's T takes as what it names (emit_call)
                 } else {
                     ok = false;
                     var m = fmt3("argument {} is a {}, but '{}' wants a ", unum(@cast<u64>(i + 1)), this.ty_name(vv.ty), S(name));
@@ -1702,6 +1761,15 @@ attach fn emit_call(this: checker&, made: u32, a: adj, rv: tval?, pre: std::vec<
             } else if (this.cpp_fn_arg(this.fi(made).decl, v, p.ty)) {
                 // a plain fn a C++ template took as its C function pointer (cpp_fn_arg_ty)
                 v = try this.expr(args.at(i), p.ty);
+            } else if (this.cpp_ref_arg(this.fi(made).decl, p.name, v, p.ty)) {
+                // a reference a C++ template's T took as what it names (cpp_value_arg_ty): read
+                // through, so the parameter gets a copy
+                while (v.ty != p.ty) {
+                    val d = this.t.ref_inner(v.ty) ?? break;
+                    v.c = this.ir.deref(v.c, d);
+                    v.ty = d;
+                    v.lv = true;
+                }
             }
             val tv = try this.take_into(v, p.ty, args.at(i).span);
             if (rv == null && !ref_seen && this.reaches(p.ty)) {

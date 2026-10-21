@@ -420,7 +420,7 @@ fn held_unions(chk: checker&, pkg: str) -> std::vec<held_union> {
     var out: std::vec<held_union> = {};
     var from: u32 = 0;
     loop {
-        val w = chk.union_global(pkg, from, true) ?? return out;
+        val w = chk.union_global(pkg, from) ?? return out;
         from = w.decl + 1;
         for (u) in 0..chk.unions.len {
             var seen: idset = {};
@@ -542,6 +542,21 @@ fn vm_native(chk: checker&, hdr: std::vec<str>&, n: u64, triple: str?, keep: str
     return so;
 }
 
+// C text without its #include lines of headers named by an absolute path that's gone: one an earlier
+// script imported, removed since (its load built what that script's code calls, and the pp_memo
+// keeps its last read for the checks: T-0599)
+fn present_includes(text: str) -> std::string {
+    var out = S("");
+    for (l) in text.lines().items() {
+        if (starts_with(l, "#include ") && l.len > 11 && l[10] == '/' && !std::fs::is_file(l[10..l.len - 1])) {
+            continue;
+        }
+        out.append(l);
+        out.push('\n');
+    }
+    return out;
+}
+
 // vm_native's work in dir (the std module kept in keep, when it isn't "")
 fn vm_build(chk: checker&, hdr: std::vec<str>&, dir: str, n: u64, triple: str?, keep: str, bcs: std::vec<std::string>&, err: std::string&) -> std::string? {
     // bitcode: what the compilers are given, and what they write
@@ -557,7 +572,7 @@ fn vm_build(chk: checker&, hdr: std::vec<str>&, dir: str, n: u64, triple: str?, 
     // C: Volt's own (the headers, the functions' pointers), and each kept unit
     var cs: std::vec<std::string> = {};
     var stds: std::vec<str> = {};
-    put(&cs, llvm_runtime_c(chk, hdr, false));
+    put(&cs, present_includes(llvm_runtime_c(chk, hdr, false).as_str()));
     put(&stds, chk.c_own_std());
     for (u) in 0..chk.c_units.len {
         var text = copy *chk.c_unit_text.at(u);
@@ -566,7 +581,7 @@ fn vm_build(chk: checker&, hdr: std::vec<str>&, dir: str, n: u64, triple: str?, 
             text.append(chk.c_unit_weak.at(u).as_str());
             text.append("}\n");
         }
-        put(&cs, move text);
+        put(&cs, present_includes(text.as_str()));
         put(&stds, *chk.c_units.at(u));
     }
     for (i) in 0..cs.len {
@@ -675,6 +690,12 @@ fn vm_build(chk: checker&, hdr: std::vec<str>&, dir: str, n: u64, triple: str?, 
         link = c_command(&argv);
     }
     put(&argv, "-shared");
+    // its calls bind to its own functions: the JIT opens it RTLD_GLOBAL, so its C++ inline and
+    // template functions (weak) would otherwise be an earlier load's copies, built from that load's
+    // headers (functions only: typeinfo and data stay shared, as C++ needs)
+    comptime if (@cfg("os", "linux")) {
+        put(&argv, "-Wl,-Bsymbolic-functions");
+    }
     put(&argv, "-o");
     put(&argv, so.as_str());
     for (o&) in objs.items() {

@@ -68,7 +68,7 @@ fn main() -> void {
 | methods, static methods | attached functions, overloads kept |
 | overloads Volt can't tell apart (`long` and `long long` are both `i64` where `long` is 64 bits (not on Windows), `char` is `signed char`'s or `unsigned char`'s twin depending on the target (signed on x86-64, unsigned on arm64 Linux), so which overload collides depends on the target, a `const` method's `this` is a non-`const` one's) | the first declared keeps the name; each other one is named for its parameters' C++ types, after the namespace's own names: `which_long_long(x)`, `letter_char(c)` (when `char` comes after the other two), `T::new_long_long(n)`, `get_const()` (words joined by `_`, `*` as `ptr`, `&` as `ref`, `&&` as `rref`; when only its qualifiers differ, `const`, `lref`, `rref` or `nonconst` instead: `get_nonconst()` after a `get() const`), its default-argument forms too, and calls exactly that overload. A name a real declaration (or another such name) has is a `// left out:` comment instead, and so is a real declaration in a later block of the namespace whose name an alias has |
 | a method qualified `&&` on a class held by handle | an attached function taking `this` by value: the handle is consumed (using it afterwards is a use after move), and C++ moves from the object, or from a copy of it when the handle only borrows it (`as_Base()`). A class that can be neither copied nor moved has no copy to make: an owned handle's object runs the method, and a borrowed handle stops the program with `can't call Q::m (an && method) through a borrowed handle: Q can't be copied`; an inherited `&&` method (worked out per use) the same, its borrowed-handle stop saying `can't call an && method through a borrowed handle: Q can't be copied`; its `const &&` methods, and an abstract class's `&&` ones, run in place on the object, borrowed or not, the handle kept. On a class template's instance (worked out per use) the same, for a method only an rvalue can call (when `&` and `&&` overloads share the name, the call is the `&` one's), and `derive`'s `base_m()` and protected forms leave it out with a comment: their object is the Volt subclass's |
-| functions, function templates | functions, generic functions: `ns::biggest<i32>(a, b)`. A template's `S&` or `const S&` parameter (`S` one of its type parameters) is a Volt reference, `s: S&`: `ns::wrap(&x)` lends `x` to the call and deduces `S` as what it names, and `ns::wrap(x)` is an error (it would move `x` in). `S` and `S&&` take a value: `ns::take(move x)`, or `ns::take(copy x)` to keep `x`; an `S&&` given a reference (`ns::take(&x)`, or a reference parameter passed on) is an error, since C++ would move from the caller's value. Beside an `S&` or `const S&` overload, `f(&x)` calls that one, and the `S` or `S&&` overload is named for its parameters' forms (`ns::f_rref(move x)`; a `const S&` beside an `S&` is `ns::f_const_ref(&x)`). A plain Volt fn's name passed where a template deduces its parameter (`template <class F> int apply(F f)`) is its C function pointer: `ns::apply(seven)` instantiates `apply<int32_t (*)(void)>`; a fn value held in a variable or a closure has no C++ form, and the error says to pass a plain fn's name. A class template's member is different: its `T&` parameter is a Volt reference, `x: T&` (`k.bump(&n)` lends `n` and C++'s write to it is seen; `k.bump(n)` is an error naming the parameter), and its `const T&` takes a value, `x: T`, which C++ only reads (`Vec2<f32>::new(1.0, 2.0)` for `Vec2(const T&, const T&)`). A generic handle's member, [worked out per use](#calls-worked-out-per-use), takes `&n` for its `T&` the same way |
+| functions, function templates | functions, generic functions: `ns::biggest<i32>(a, b)`. A template's `S&` or `const S&` parameter (`S` one of its type parameters) is a Volt reference, `s: S&`: `ns::wrap(&x)` lends `x` to the call and deduces `S` as what it names, and `ns::wrap(x)` is an error (it would move `x` in). `S` and `S&&` take a value: `ns::take(move x)`, or `ns::take(copy x)` to keep `x`; an `S` given a reference to a value that owns no memory (`ns::echo(&n)`, or a reference parameter passed on) deduces `S` as what it names and takes a copy, as C++'s `echo(n)` does (a reference to a closure is lent); an `S&&` given a reference (`ns::take(&x)`, or a reference parameter passed on) is an error, since C++ would move from the caller's value. Beside an `S&` or `const S&` overload, `f(&x)` calls that one, and the `S` or `S&&` overload is named for its parameters' forms (`ns::f_rref(move x)`; a `const S&` beside an `S&` is `ns::f_const_ref(&x)`). A plain Volt fn's name passed where a template deduces its parameter (`template <class F> int apply(F f)`) is its C function pointer: `ns::apply(seven)` instantiates `apply<int32_t (*)(void)>`; a fn value held in a variable or a closure has no C++ form, and the error says to pass a plain fn's name. A class template's member is different: its `T&` parameter is a Volt reference, `x: T&` (`k.bump(&n)` lends `n` and C++'s write to it is seen; `k.bump(n)` is an error naming the parameter), and its `const T&` takes a value, `x: T`, which C++ only reads (`Vec2<f32>::new(1.0, 2.0)` for `Vec2(const T&, const T&)`). A generic handle's member, [worked out per use](#calls-worked-out-per-use), takes `&n` for its `T&` the same way |
 | a Volt `std::string` for a function template's parameter (`template <class S> void wrap(S&)`) | a C++ `std::string`: `ns::wrap(&text)` instantiates `wrap<std::string>`. For `S&` C++ changes a copy, which the Volt string gets once the call returns (not when it throws: a `try_` form leaves it as it was); for `const S&` and `S` the copy is made from the text and nothing comes back. Overloads resolve as C++'s for `f(s)`: a string Volt may change (a `var`, or a reference to one) runs `S&` over `const S&`, and a forwarding `S&&` changes it; a `val` or a `str` runs `const S&`, in `@cpp` and through the template's Volt generic alike. A function passing its own reference parameter on through `@cpp` changes what it was lent when C++ takes it by a non-const reference (the `S&` of an `S&` / `const S&` pair, a deduced `S`) or calls a non-const method on it (`{0}.append("!")`, `{0} += 'x'`), so lending that function a `val` is an error; a `const S&` or `std::string_view` parameter only reads. C++ never writes into a string Volt can't change: a `val` (or a temporary) for a template that takes only `S&` is an error, as C++ refuses it (`'k' is a val, and wrap changes it`). Only `S` itself takes one: `S` in another type (`S*`, `std::vector<S>&`) or as the result is an error |
 | class templates | generic structs: `ns::Box<f64>`; one with private fields, bases, virtual methods or a field with no Volt form is a generic handle (`ns::box<i32>`), its public fields getters and `set_` methods, its other members worked out per use. A number parameter (`int`, `unsigned`, `long`, `std::size_t`, `bool`) is a generic value: `template <class T, int N> struct fixed` is `fixed<T, N: i32>`, used as `ns::fixed<i32, 3>`, its `T data[N]` a `T[N]`. An instance one of the template's specializations makes (`template <> struct box<void>`, a partial `box<T*>`), as clang picks it, is a handle instead (`ns::box<void>::new(1.5)`), its members worked out per use (`b.scale` reads a copy of the field) |
 | enum, enum class | enums with the same values and tag type (an unscoped enum's names are also constants beside it: `ns::ONE`) |
@@ -437,9 +437,16 @@ fn main() -> void {
   compile error naming it, and so is a function in the block that isn't one of `C`'s virtual
   methods, or that takes other types (a `self` of another class).
 - Inherited virtual methods count (a `Button` block can override the `describe` it inherits from
-  `Widget`), and so do private ones that are pure. A private one that isn't pure (or one inherited
-  through a base that isn't public) stays `C`'s: the subclass couldn't call `C`'s own when the
-  struct doesn't override it.
+  `Widget`), and so do private ones (or ones inherited through a base that isn't public): a struct
+  that doesn't override a private one that isn't pure leaves `C`'s own in place (its subclass has no
+  override of it then, as C++ couldn't call `C`'s own), and it has no `base_` method.
+- Overloads of a virtual method are overridden by their own names: the first found (the class's own
+  first, then its bases') keeps the name, the later ones get their parameters' C++ types as words, as other overloads Volt can't
+  tell apart do (`draw(int)` and `draw(double)` are `draw` and `draw_double`; a `const` one gets
+  `_const` too, and a non-`const` twin of a `const` one with no parameters is `_nonconst`). One
+  whose name that makes is a virtual method's already stays `C`'s. A method qualified `&` is
+  overridden as any other, beside an `&&` twin too; one qualified `&&` stays `C`'s (its object is
+  the one the Volt type subclasses).
 - What crosses into an override is what the import makes of each type anywhere else: numbers,
   `bool`, enums and pointers as they are (a reference for a non-const `T&`), strings as `str` (a view
   for the call), a class Volt holds by value (a copy, or a reference for `T&`), a class held by
@@ -447,9 +454,14 @@ fn main() -> void {
   `stdcxx::map<i32, i32>&`), and the rest in their Volt forms (a `std::function` is a
   `stdcxx::function`, a `std::optional<int>` an `i32?`). A `T&&` comes as a `const T&` does. What
   comes back is any of those too, made into C++'s result type (a `std::vector<int>` from an
-  `i32[..]`, a `std::map` the override made). A virtual method only C++ can override stays `C`'s
-  (a comment in the generated source says so): one taking a non-const reference to text, as
-  anywhere in an import ([limits](#limits)), or giving back a reference.
+  `i32[..]`, a `std::map` the override made). A `std::string&` is a Volt `std::string&` holding a
+  copy, which goes back into C++'s string once the override returns. A reference result (`int&`, a
+  laid-out class's `Pt&`) is a Volt reference the override gives back (`return &this.n;`), and for
+  a class held by handle a reference to a handle (`return &this.item;`), whose object C++ gets; as
+  C++'s own rule is, it has to refer to something that outlives the call (the Volt value, the C++
+  object). A virtual method whose types have no Volt form here (a reference to a `std::string`
+  result, a non-const reference to another class held by neither) stays `C`'s, and a comment in
+  the generated source says so; when it's pure, Volt types can't derive from `C`.
 - `derive` is there for a class with a virtual method that isn't `final`; its destructor needn't be
   virtual. Volt deletes a derived object as what it is, its Volt value with it; C++ deleting one
   through a `C*` whose destructor isn't virtual is C++'s own undefined behavior, as for any
@@ -496,6 +508,10 @@ object `derive` didn't make; without RTTI, either stops the program saying so.
 - A `std::string&` parameter is a copy C++ changes and Volt copies back once the call returns:
   given the same string twice in one call (which Volt warns of, two mutable borrows), each copy
   comes back in turn, the first parameter's last.
+- A Volt type deriving from a C++ class can't override its variadic virtual methods (`...`), its
+  `&&`-qualified ones or its operators: they stay C++'s (and when one of them is pure, Volt types
+  can't derive from the class). An override's `std::string&` is a copy too, which C++'s string
+  gets once the override returns.
 - A loop over a C++ range whose iterators are aligned past 8 needs its import under C++17 or newer
   (C++ holds them, with an aligned `new`). Iterators that are trivially copyable and destructible
   (the standard library's and the views' are) live in the loop's own words; the others (one holding
@@ -533,9 +549,11 @@ object `derive` didn't make; without RTTI, either stops the program saying so.
 - Volt moves values by copying their bytes, which a C++ object that points into itself (as
   libstdc++'s `std::string` does) doesn't survive. So a class clang says isn't trivially copyable
   (`__is_trivially_copyable`, asked of the imported headers) is held by handle: moving it moves the
-  pointer, and the object stays where C++ made it. A handle is never empty: `{}` makes the object
-  with its default constructor (`new T()`), and for a class that can't be made from nothing `{}` is
-  a compile error that says to use `T::new(...)`.
+  pointer, and the object stays where C++ made it. A handle made by `{}` or `T::new(...)` is never
+  empty: `{}` makes the object with its default constructor (`new T()`), and for a class that can't
+  be made from nothing `{}` is a compile error that says to use `T::new(...)`. (Its `cpp` and
+  `borrowed` fields are the importer's: set by hand, as `{ cpp: null, borrowed: true }`, they make
+  an empty handle, and using one stops the program.)
 - A class clang says can be copied but whose copy doesn't compile (one holding a
   `std::vector<std::unique_ptr<T>>`: the vector's copy constructor is declared for any element)
   has no `copy`: the import tries each class's copy, and one that fails isn't copyable.

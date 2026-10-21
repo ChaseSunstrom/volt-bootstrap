@@ -365,6 +365,11 @@ attach fn struct_inst(this: checker&, d: u32, args: std::vec<gval>, span: span) 
     val id = @cast<u32>(this.structs.len);
     put(&this.structs, bx<struct_info>({ decl: use_decl, family: d, args: move args, env: env, name: name, c_name: c_name }));
     this.struct_ids.put(this.intern(move key), id);
+    // a header struct C aligns past its fields with Volt's own offsets (an aligned attribute): that
+    // alignment, as @align gives one (cimport's lay_out_partial)
+    if (s.c_name != null && s.c_offsets == null && !s.c_partial && !s.c_union && s.c_align > 0) {
+        this.si(id).align = s.c_align;
+    }
     // @attributes([@align(n)]): every value of the struct starts at a multiple of n (struct_fields
     // checks that n is at least what its fields need)
     for (a&) in this.item_of(use_decl).attrs.items() {
@@ -1385,7 +1390,9 @@ attach fn const_place(this: checker&, p: u32) -> bool {
 
 // A linked package with a global whose type holds a trait union is built from source instead: the
 // union's layout comes from the types the program attaches, and the library's code that touches the
-// global was built with the members the library saw. A warning names the global.
+// global was built with the members the library saw. A warning names the global. So is one with an
+// export fn whose signature holds one: the library defines that fn (fn_linkage's EXTERNAL), and its
+// switch on the union's tags knows only the members the library saw.
 // ponytail: the whole package loses its library; define just the global (and rebuild the fns whose
 // bodies touch it) when a real package needs both.
 // So is a linked package that uses one built from source (transitively): its library refers to the
@@ -1413,8 +1420,12 @@ attach fn unlink_union_globals(this: checker&) -> void {
             this.running_union_globals(pkg);
             continue;
         }
-        val w = this.union_global(pkg, 0, false) ?? continue;
-        var d: diag = { span: w.span, msg: fmt2("{}'s library isn't used: its global '{}' holds a trait union", S(pkg), S(w.name)), warning: true };
+        val w = this.union_global(pkg, 0) ?? continue;
+        var what = fmt("its global '{}' holds a trait union", S(w.name));
+        if (w.is_fn) {
+            what = fmt("its export fn '{}' takes or gives a trait union", S(w.name));
+        }
+        var d: diag = { span: w.span, msg: fmt2("{}'s library isn't used: {}", S(pkg), S(what.as_str())), warning: true };
         put(&d.notes, S("the union's layout depends on the types this program attaches, so the package is built from source"));
         put(&this.warnings, move d);
         put(&gone, pkg);
@@ -1490,10 +1501,10 @@ fn names_pkg(text: str, pkg: str) -> bool {
     return false;
 }
 
-// the first global of package pkg (from decl `from` on) whose type holds a trait union, or with fns
-// an export fn whose signature does (its library's code, fn_linkage's EXTERNAL, built for the
-// union's members then)
-attach fn union_global(this: checker&, pkg: str, from: u32, fns: bool) -> global_why? {
+// the first global of package pkg (from decl `from` on) whose type holds a trait union, or export fn
+// whose signature does (its library's code, fn_linkage's EXTERNAL, built for the union's members
+// then)
+attach fn union_global(this: checker&, pkg: str, from: u32) -> global_why? {
     for (di) in @cast<usize>(from)..this.decls.len {
         val d = @cast<u32>(di);
         if ((this.pkg_of(d) ?? "") != pkg) {
@@ -1533,7 +1544,7 @@ attach fn union_global(this: checker&, pkg: str, from: u32, fns: bool) -> global
                 }
             },
             .FN(f&) => {
-                if (!fns || !f.is_export || f.body == null || this.fn_generics(d).len > 0) {
+                if (!f.is_export || f.body == null || this.fn_generics(d).len > 0) {
                     continue;
                 }
                 val env = this.new_env({ ns: this.dl(d).ns });
@@ -1609,7 +1620,7 @@ attach fn running_union_globals(this: checker&, pkg: str) -> void {
     }
     var from: u32 = 0;
     loop {
-        val w = this.union_global(pkg, from, true) ?? return;
+        val w = this.union_global(pkg, from) ?? return;
         from = w.decl + 1;
         for (b&) in blocks.items() {
             if ((this.pkg_of(*b) ?? "") != lib || this.item_of(*b).generics.len > 0) {
