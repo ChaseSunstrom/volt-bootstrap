@@ -4,4 +4,6 @@
 // expect: pk read 285 70
 // expect: su true true 5
 // expect: vv true 32 4
-// expect: a32 5
+// expect: a32 5 true
+// expect: attrs true true true true
+// expect: attrs 54926

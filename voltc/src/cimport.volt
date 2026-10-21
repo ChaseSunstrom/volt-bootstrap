@@ -2337,13 +2337,28 @@ attach fn lay_out_partial(this: checker&, res: c_imported&, items: std::vec<usiz
                 }
                 if (sd.c_union) {
                     // its members all sit at 0: one padding member as big and as aligned as C's
-                    // union stands for the ones Volt can't read
+                    // union stands for the ones Volt can't read, or makes it as big and aligned as
+                    // an attribute makes C's
                     val align = clang::clang_Type_getAlignOf(rt);
                     if (align <= 0 || align > 16 || size % align != 0) {
                         continue;
                     }
+                    if (!sd.c_partial) {
+                        var big: i64 = 0;
+                        var most: i64 = 1;
+                        for (f&) in sd.fields.items() {
+                            val (fsize, falign) = field_layout(rt, f.name);
+                            big = if (fsize > big) fsize else big;
+                            most = if (falign > most) falign else most;
+                        }
+                        if (most == align && (big + most - 1) / most * most == size) {
+                            continue; // Volt's own layout is C's
+                        }
+                    }
                     var pads: u32 = 0;
                     put(&sd.fields, this.pad_field(&pads, @cast<u64>(align), @cast<u64>(size / align), span));
+                    // (aligned as C aligns it: a member's LLVM alignment may be more, union_lt)
+                    sd.c_align = @cast<u64>(align);
                     sd.c_partial = false;
                     continue;
                 }
@@ -2361,6 +2376,8 @@ attach fn lay_out_partial(this: checker&, res: c_imported&, items: std::vec<usiz
                 var natural = true;
                 var most: i64 = 1;
                 var end: u64 = 0;
+                var same = true; // Volt's own offsets (each field at the next multiple of its alignment)
+                var own_end: u64 = 0;
                 for (f&) in sd.fields.items() {
                     var n = S(f.name);
                     val bits = clang::clang_Type_getOffsetOf(rt, n.c_str());
@@ -2379,13 +2396,25 @@ attach fn lay_out_partial(this: checker&, res: c_imported&, items: std::vec<usiz
                         most = falign;
                     }
                     end = off + @cast<u64>(fsize);
+                    val own = (own_end + @cast<u64>(falign) - 1) / @cast<u64>(falign) * @cast<u64>(falign);
+                    same = same && own == off;
+                    own_end = own + @cast<u64>(fsize);
                     put(&offs, off);
                     put(&sizes, @cast<u64>(fsize));
                 }
                 if (!known) {
                     continue;
                 }
-                if (overlap || !natural || most != align) {
+                // all its fields readable and Volt's own layout C's: nothing to do
+                val m = @cast<u64>(most);
+                if (!sd.c_partial && same && most == align && (own_end + m - 1) / m * m == @cast<u64>(size)) {
+                    continue;
+                }
+                if (natural && !overlap && align > 16 && most < align) {
+                    // aligned past 16 (an attribute), its fields where Volt's layout puts them:
+                    // padding fields, and C's alignment as @align gives one (resolve)
+                    sd.c_align = @cast<u64>(align);
+                } else if (overlap || !natural || most != align) {
                     // fields that share bytes (an anonymous union member), or a layout Volt's own
                     // wouldn't give them: the LLVM backend places each at its offset in a block of
                     // C's size and alignment (an integer as wide as that alignment leads it, so up
@@ -2869,7 +2898,8 @@ attach fn c_items(this: checker&, d: cdecls&, res: c_imported&, span: span) -> v
         put(&res.items, m.citem(item_kind::STRUCT({ name: *name, spec: null, fields: move fields, is_extern: true, is_comptime: false, c_name: *c, c_partial: partial || wide, c_union: s.is_union })));
         put(&struct_items, res.items.len - 1);
         put(&struct_tags, s.tag);
-        if ((partial || wide) && s.fields != null) {
+        // (every one: an attribute or #pragma pack can give any struct a layout Volt's own isn't)
+        if (s.fields != null) {
             put(&partial_items, res.items.len - 1);
         }
         if (wide && !partial) {

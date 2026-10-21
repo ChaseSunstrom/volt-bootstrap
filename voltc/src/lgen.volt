@@ -349,6 +349,11 @@ attach fn union_lt(this: lg&, t: u32, from: usize) -> llvm::LLVMOpaqueType* {
             align = a;
         }
     }
+    // a header union C aligns below a member's LLVM alignment (AArch64 aligns a 32-byte vector to
+    // 16): C's alignment
+    if (from == 0 && this.overlay(t).1 > 0) {
+        align = @cast<u32>(this.overlay(t).1);
+    }
     return this.blob_lt(size, align);
 }
 
@@ -1676,7 +1681,9 @@ attach fn field_ptr(this: lg&, agg: u32, p: llvm::LLVMOpaqueValue*, i: u32) -> l
         return q;
     }
     val q = llvm::LLVMBuildStructGEP2(this.b, this.lt(agg), p, this.elem(agg, i), "");
-    if (this.low_align.len > 0 && this.low_align.get(@cast<usize>(p)) != null && q != p) {
+    if (this.c_union(agg) && this.overlay(agg).1 > 0 && q != p) {
+        this.step_align(q, p, @cast<u32>(this.overlay(agg).1), 0, this.lt(this.member_ty(agg, i)));
+    } else if (this.low_align.len > 0 && this.low_align.get(@cast<usize>(p)) != null && q != p) {
         this.step_align(q, p, this.align_of(this.lt(agg)), this.offset_of(agg, i), this.lt(this.member_ty(agg, i)));
     }
     return q;

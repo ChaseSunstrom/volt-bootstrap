@@ -365,6 +365,11 @@ attach fn struct_inst(this: checker&, d: u32, args: std::vec<gval>, span: span) 
     val id = @cast<u32>(this.structs.len);
     put(&this.structs, bx<struct_info>({ decl: use_decl, family: d, args: move args, env: env, name: name, c_name: c_name }));
     this.struct_ids.put(this.intern(move key), id);
+    // a header struct C aligns past its fields with Volt's own offsets (an aligned attribute): that
+    // alignment, as @align gives one (cimport's lay_out_partial)
+    if (s.c_name != null && s.c_offsets == null && !s.c_partial && !s.c_union && s.c_align > 0) {
+        this.si(id).align = s.c_align;
+    }
     // @attributes([@align(n)]): every value of the struct starts at a multiple of n (struct_fields
     // checks that n is at least what its fields need)
     for (a&) in this.item_of(use_decl).attrs.items() {

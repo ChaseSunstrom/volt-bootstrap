@@ -28,3 +28,18 @@ static inline size_t su_size(void) { return sizeof(struct su); }
 static inline int su_get(const struct su *s) { return s->u.v[7]; }
 /* a header struct aligned past 16, taken by value by a Volt fn */
 struct __attribute__((aligned(32))) a32 { int x[5]; };
+static inline size_t a32_size(void) { return sizeof(struct a32); }
+/* attributes and #pragma pack: C's sizes and offsets, not Volt's own layout of the fields */
+struct __attribute__((packed)) p1 { char c; int x; };
+struct __attribute__((aligned(8))) a8 { int x; };
+struct m1 { char c; int x __attribute__((aligned(16))); };
+#pragma pack(push, 1)
+struct pp { char c; int x; short y; };
+#pragma pack(pop)
+static inline size_t p1_size(void) { return sizeof(struct p1); }
+static inline size_t a8_size(void) { return sizeof(struct a8); }
+static inline size_t m1_size(void) { return sizeof(struct m1); }
+static inline size_t pp_size(void) { return sizeof(struct pp); }
+static inline int attr_sum(const struct p1 *a, const struct a8 *b, const struct m1 *m, const struct pp *p) {
+    return a->c + a->x + b->x + m->c + m->x + p->c + p->x + p->y;
+}
