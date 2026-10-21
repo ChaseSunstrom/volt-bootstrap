@@ -104,7 +104,8 @@ More need converting at the edge. `voltc lib` adds that code when it builds the 
   `@attributes([@export_text("method")])`. The caller gets the text and frees it when it's done.
 - **Classes.** Other languages hold an `export struct` by a handle and never see its fields, and so
   is any struct C can't hold by value: one that owns something (it has a `delete`, or a field
-  does, like a `std::string`) or has a field without a C form. An export fn that returns one by
+  does, like a `std::string`) or has a field without a C form (an `E!T` of an `export struct`, in a
+  field or element, among them). An export fn that returns one by
   value makes one, and the caller owns it. Its methods are the `export attach fn`s on it, and
   export fns named `NAME_method` that take it as `NAME&` first. voltc adds `NAME_free`, which runs
   its `delete` (an export fn of that name is an error).

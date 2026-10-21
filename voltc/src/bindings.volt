@@ -1356,6 +1356,23 @@ attach fn copied(this: bind&, f: u32, list: u32, call: std::string) -> std::stri
     return b;
 }
 
+// is n a name the shims give their helpers: a helper's prefix, then digits (own_0, texts_in_2)
+fn helper_named(n: str) -> bool {
+    val prefixes: str[] = { "own_", "opt_own_", "take_", "opt_take_", "box_", "give_", "give_list_", "give_opt_text_", "text_", "untext_", "opt_text_", "texts_in_", "texts_done_", "handles_in_", "handles_done_", "drop_text_", "drop_none_", "list_", "unlist_", "drop_list_", "slice_", "opt_in_" };
+    for (p) in prefixes {
+        if (n.len > p.len && n[0..p.len] == p) {
+            var digits = true;
+            for (b) in n[p.len..n.len] {
+                digits = digits && b >= 48 && b <= 57;
+            }
+            if (digits) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 attach fn shim_fn(this: bind&, f: u32, out: std::string&) -> void {
     val info = this.c.fi(f);
     val is_attach = this.c.fn_decl_of(info.decl)->is_attach;
@@ -1369,6 +1386,9 @@ attach fn shim_fn(this: bind&, f: u32, out: std::string&) -> void {
         var pn = S(p.name);
         if (p.name == "this") {
             pn = this.temp_name(f, "this_");
+        } else if (helper_named(p.name)) {
+            // named like one of the shim's helpers (take_0, untext_0...), which it would hide
+            pn = this.temp_name(f, fmt("{}_", S(p.name)).as_str());
         }
         match (this.shape_of(p.ty) ?? shape::VOID) {
             .CLOSURE(c) => {
