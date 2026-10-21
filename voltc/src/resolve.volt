@@ -1594,6 +1594,16 @@ fn union_why(w: global_why&, pkg: str, tr: str) -> std::string {
 attach fn running_union_globals(this: checker&, pkg: str) -> void {
     val lib = this.opts.lib ?? return;
     val blocks = copy this.attach_blocks;
+    // (a script attaching nothing changes no union: skip resolving pkg's export fns' types)
+    var attaches = false;
+    for (b&) in blocks.items() {
+        if ((this.pkg_of(*b) ?? "") == lib && this.item_of(*b).generics.len == 0) {
+            attaches = true;
+        }
+    }
+    if (!attaches) {
+        return;
+    }
     var from: u32 = 0;
     loop {
         val w = this.union_global(pkg, from, true) ?? return;
