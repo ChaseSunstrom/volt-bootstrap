@@ -61,6 +61,11 @@ fn embedded_volt() {
         let clang = bindir.filter(|b| cfg!(target_os = "linux") && b.join("clang").is_file() && b.join("clang++").is_file());
         let mut c = Command::new(&imports);
         c.arg(&std_dir).arg(Path::new(ROOT).join("tests/embed"));
+        // Apple's clang++ has no std module (no libc++ modules manifest): on macOS, the clang++ of
+        // the LLVM voltc uses, as cpp_module has it
+        if cfg!(target_os = "macos") {
+            c.env("CXX", common::llvm_tool("clang++"));
+        }
         if let Some(b) = &clang {
             c.arg("box").env("CC", b.join("clang")).env("CXX", b.join("clang++"));
         }
