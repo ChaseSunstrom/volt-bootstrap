@@ -104,7 +104,13 @@ fn embedded_volt() {
         std::fs::copy(Path::new(ROOT).join("tests/embed/host.rs"), src.join("main.rs")).unwrap();
         std::fs::copy(bindings.join("voltvm.rs"), src.join("voltvm.rs")).unwrap();
         let exe = src.join("host");
-        ok(Command::new("rustc").args(["--edition", "2021", "-o"]).arg(&exe).arg(src.join("main.rs")).arg("-L").arg(&lib_dir).args(["-l", "voltvm", "-C"]).arg(format!("link-args=-Wl,-rpath,{}", lib_dir.display())).env("RUSTUP_TOOLCHAIN", std::env::var("RUSTUP_TOOLCHAIN").unwrap_or_else(|_| "stable".into())).output().unwrap(), "rustc host.rs");
+        let mut rc = Command::new("rustc");
+        rc.args(["--edition", "2021", "-o"]).arg(&exe).arg(src.join("main.rs")).arg("-L").arg(&lib_dir).args(["-l", "voltvm"]);
+        if cfg!(unix) {
+            // (Windows has no rpath, and MSVC's link.exe would take the flag for a file)
+            rc.arg("-C").arg(format!("link-args=-Wl,-rpath,{}", lib_dir.display()));
+        }
+        ok(rc.env("RUSTUP_TOOLCHAIN", std::env::var("RUSTUP_TOOLCHAIN").unwrap_or_else(|_| "stable".into())).output().unwrap(), "rustc host.rs");
         assert_eq!(ok(Command::new(&exe).arg(&std_dir).env("PATH", common::path_with(&lib_dir)).output().unwrap(), "host.rs"), RS_OUT);
     }
     let _ = std::fs::remove_dir_all(&dir);

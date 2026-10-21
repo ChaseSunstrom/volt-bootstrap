@@ -6877,7 +6877,9 @@ attach fn import_cpp(this: checker&, headers: std::vec<std::string>&, alias: str
     var mod_text = S("");
     for (h&) in headers.items() {
         var local: std::string? = null;
-        if (h.len() > 0 && h.as_str()[0] == '/') {
+        val hs = h.as_str();
+        // (absolute: /..., or a Windows drive's D:/... or D:\...)
+        if ((hs.len > 0 && hs[0] == '/') || (hs.len > 2 && hs[1] == ':' && (hs[2] == '/' || hs[2] == '\\'))) {
             local = real_file(h.as_str());
         } else if (dir) {
             var p = S(dir);

@@ -1601,6 +1601,7 @@ fn on_path(name: str) -> bool {
 
 // run the C compiler on these inputs (C files, objects): an executable, or with `object` a .o
 fn cc_run(inputs: std::vec<str>&, out: str, c: cli&, object: bool) -> void {
+    var implib: std::string = {}; // (a flag argv holds while it runs)
     // imported headers' prototypes are C's own: a Volt void*/cstr for their const void*/char* is fine
     var argv: std::vec<str> = {};
     var lib_flags: std::vec<std::string> = {}; // the linked libraries' LIB.a.flags lines, which argv points into
@@ -1684,6 +1685,12 @@ fn cc_run(inputs: std::vec<str>&, out: str, c: cli&, object: bool) -> void {
         }
         if (c.shared) {
             put(&argv, "-shared");
+            // and its import library beside it (NAME.lib), which MSVC's link.exe needs to link
+            // against the DLL (MinGW's links the DLL itself)
+            if (std::process::os() == "windows" && ends_with(out, ".dll")) {
+                implib = fmt("-Wl,--out-implib,{}.lib", S(out[0..out.len - 4]));
+                put(&argv, implib.as_str());
+            }
         }
     }
     if (c.shared || c.standalone) {
