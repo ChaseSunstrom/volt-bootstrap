@@ -696,6 +696,12 @@ fn vm_build(chk: checker&, hdr: std::vec<str>&, dir: str, n: u64, triple: str?, 
     comptime if (@cfg("os", "linux")) {
         put(&argv, "-Wl,-Bsymbolic-functions");
     }
+    // (macOS: dyld coalesces exported weak definitions across images, so its mangled C++ isn't
+    // exported at all; the extern "C" volt_ shims and C functions the JIT calls stay exported, and
+    // std's typeinfo is libc++abi's, which it only refers to)
+    comptime if (@cfg("os", "macos")) {
+        put(&argv, "-Wl,-unexported_symbol,__Z*");
+    }
     put(&argv, "-o");
     put(&argv, so.as_str());
     for (o&) in objs.items() {
