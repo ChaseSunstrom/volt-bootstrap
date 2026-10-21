@@ -153,6 +153,18 @@ fn main() -> void {
     val t2 = ty.op_add(&tz);
     val t3 = ty.spend(&tz);
     std::println("twice {} tally {} {} {} {}", rt, t1, t2, t3, tz);
+    // a class template's T& a Volt T& (laid out; held by handle, per use): &kn lends kn and C++'s
+    // write is seen; a laid-out one's const T& takes a value (literals for a constructor's); per use
+    // a value runs which(const T&), &kn which(T&)
+    var kp: cpp::pr::ct::keep<i32> = { v: 3 };
+    var kn: i32 = 1;
+    kp.bump(&kn);
+    val hd = cpp::pr::ct::held<i32>::new(4);
+    hd.bump(&kn);
+    std::println("keep {} {} {}", kn, kp.peek(kn), hd.peek(&kn));
+    val du = cpp::pr::ct::duo<f64>::new(1.5, 2.75);
+    val half: f64 = 0.5;
+    std::println("duo {} which {} {}", du.sum(half), hd.which(kn), hd.which(&kn));
 }
 // a Volt reference parameter read as its address, in a try_ form
 fn checked_at(r: i32&) -> void {
