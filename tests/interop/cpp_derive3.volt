@@ -19,6 +19,22 @@ struct sink {
     seen: i32;
 }
 
+struct only_a {
+    v: i32;
+}
+
+struct only_b {
+    v: i32;
+}
+
+struct pair {
+    v: i32;
+}
+
+struct shy_b {
+    v: i32;
+}
+
 attach cpp::d3::Base -> full {
     fn fill(this, self: cpp::d3::Base&, s: std::string&) -> void {
         s.append("-volt");
@@ -47,6 +63,26 @@ attach cpp::d3::Sink -> sink {
     fn secret(this, self: cpp::d3::Sink&) -> i32 { return this.seen; }
 }
 
+// Two's private virtual methods: one, the other, both (two own layers) or neither
+attach cpp::d3::Two -> only_a {
+    fn a(this, self: cpp::d3::Two&) -> i32 { return this.v; }
+}
+
+attach cpp::d3::Two -> only_b {
+    fn b(this, self: cpp::d3::Two&) -> i32 { return this.v; }
+}
+
+attach cpp::d3::Two -> pair {
+    fn a(this, self: cpp::d3::Two&) -> i32 { return this.v; }
+
+    fn b(this, self: cpp::d3::Two&) -> i32 { return this.v + 1; }
+}
+
+// a private virtual Shy inherits through its protected base
+attach cpp::d3::Shy -> shy_b {
+    fn b(this, self: cpp::d3::Shy&) -> i32 { return this.v; }
+}
+
 fn main() -> void {
     val f: full = { n: 10, pt: { x: 1, y: 2 }, it: cpp::d3::Item::new(7) };
     var b = cpp::d3::Base::derive(move f);
@@ -62,6 +98,18 @@ fn main() -> void {
     val m = cpp::d3::Mid::derive(move e2);
     val mb = m.as_Base();
     std::println("mid {}", cpp::d3::use_draw(&mb));
+    val p1: only_a = { v: 5 };
+    var t1 = cpp::d3::Two::derive(move p1);
+    val p2: only_b = { v: 6 };
+    var t2 = cpp::d3::Two::derive(move p2);
+    val p3: pair = { v: 7 };
+    var t3 = cpp::d3::Two::derive(move p3);
+    val p4: bare = { k: 3 };
+    var t4 = cpp::d3::Two::derive(move p4);
+    std::println("two {} {} {} {}", cpp::d3::use_both(&t1), cpp::d3::use_both(&t2), cpp::d3::use_both(&t3), cpp::d3::use_both(&t4));
+    val p5: shy_b = { v: 9 };
+    var s5 = cpp::d3::Shy::derive(move p5);
+    std::println("shy {}", cpp::d3::use_all(&s5));
     val s: sink = { seen: 42 };
     var k = cpp::d3::Sink::derive(move s);
     std::println("{}", cpp::d3::use_put(&k));

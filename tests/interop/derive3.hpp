@@ -57,6 +57,23 @@ class Sink {
     virtual int secret() = 0;
 };
 
+// two private virtual methods with C++'s own: a Volt type overrides either, both or neither
+class Two {
+  public:
+    virtual ~Two() = default;
+    int both() { return a() * 10 + b(); }
+
+  private:
+    virtual int a() { return 1; }
+    virtual int b() { return 2; }
+};
+
+// Two's private virtual methods, inherited through a base that isn't public
+class Shy : protected Two {
+  public:
+    int all() { return both(); }
+};
+
 inline std::string use_fill(Base &b) {
     std::string s = "x";
     b.fill(s);
@@ -74,6 +91,8 @@ inline int use_pick(const Base &b) { return b.pick().v(); }
 inline int use_draw(Base &b) { return b.draw(2) * 1000 + b.draw(3.9); }
 inline int use_tag(const Base &b) { return b.tag(); }
 inline int use_run(Base &b) { return b.run(); }
+inline int use_both(Two &t) { return t.both(); }
+inline int use_all(Shy &s) { return s.all(); }
 inline std::string use_put(Sink &k) {
     std::string s = "in";
     k.put(s);

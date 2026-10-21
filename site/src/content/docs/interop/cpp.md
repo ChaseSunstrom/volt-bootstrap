@@ -426,8 +426,8 @@ fn main() -> void {
   `Widget`), and so do private ones (or ones inherited through a base that isn't public): a struct
   that doesn't override a private one that isn't pure leaves `C`'s own in place (its subclass has no
   override of it then, as C++ couldn't call `C`'s own), and it has no `base_` method.
-- Overloads of a virtual method are overridden by their own names: the first declared keeps the
-  name, the later ones get their parameters' C++ types as words, as other overloads Volt can't
+- Overloads of a virtual method are overridden by their own names: the first found (the class's own
+  first, then its bases') keeps the name, the later ones get their parameters' C++ types as words, as other overloads Volt can't
   tell apart do (`draw(int)` and `draw(double)` are `draw` and `draw_double`; a `const` one gets
   `_const` too). One whose name that makes is a virtual method's already stays `C`'s. A method
   qualified `&` is overridden as any other; one qualified `&&` stays `C`'s (its object is the one

@@ -1889,7 +1889,7 @@ fn cpp_derive3() {
     // none keeps C++'s own (the private one too); a class whose pure virtual methods take a
     // std::string& or are private can be derived from; with or without RTTI
     let e = Env::new("cpp-derive3");
-    let want = "x-volt 15 202 7\n3007 2 190 n 15\nx-base 5 100 3\n2003 1 10\nmid 6003\nin-sunk/42\n";
+    let want = "x-volt 15 202 7\n3007 2 190 n 15\nx-base 5 100 3\n2003 1 10\nmid 6003\ntwo 52 16 78 12\nshy 19\nin-sunk/42\n";
     for backend in ["c", "llvm"] {
         assert_eq!(ok(e.voltc(&["run", "cpp_derive3.volt", "--backend", backend]), "voltc run cpp_derive3.volt"), want, "C++ derive, references ({backend})");
     }
