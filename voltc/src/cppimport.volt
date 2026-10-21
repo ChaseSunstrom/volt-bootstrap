@@ -2119,7 +2119,13 @@ attach fn param(this: cpp_gen&, t: clang::CXType, name: str, i: usize, tparams: 
     if (hc) {
         val vt = this.vtype(base, tparams) ?? return null;
         if (k == clang::CXType_LValueReference) {
-            return { vty: fmt("{}&", move vt), pass: fmt("{}.cpp", S(name)), cpp: fmt2("volt_cpp_obj<{} >({})", copy hc, copy slot) };
+            var obj = fmt2("volt_cpp_obj<{} >({})", copy hc, copy slot);
+            if (clang::clang_isConstQualifiedType(clang::clang_getCanonicalType(base)) != 0 && !starts_with(hc.as_str(), "const ")) {
+                // const X and X share a handle: a const X& (through an alias too) is passed as
+                // one, so C++ picks f(const X&) beside an f(X&) (a handle spelled const already is)
+                obj = fmt2("static_cast<const {} &>({})", copy hc, move obj);
+            }
+            return { vty: fmt("{}&", move vt), pass: fmt("{}.cpp", S(name)), cpp: move obj };
         }
         // by value or T&&: moved from when the handle owns the object, copied when it only borrows
         // it (volt_cpp_take); a T&& of a class that can be neither binds the object itself

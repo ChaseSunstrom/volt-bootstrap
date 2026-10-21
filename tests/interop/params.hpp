@@ -333,3 +333,15 @@ inline std::vector<int> twice_of(const std::vector<int> &v) { std::vector<int> r
 inline std::size_t len_of(const std::string &s) { return s.size(); }
 template <class T> const T *ptr_t(const std::vector<T> &v) { return v.data(); }
 }
+// a class held by handle, const Item& declared before Item&: the plain name is the const overload,
+// which C++ must be given a const Item (one handle serves Item and const Item); the alias Item&
+namespace cq {
+struct Item { std::string s; };
+inline Item make_item(const char *s) { return Item{s}; }
+struct Picker {
+    int f(const Item &) const { return 2; }
+    int f(Item &) const { return 1; }
+};
+inline int pick(const Item &) { return 2; }
+inline int pick(Item &) { return 1; }
+}

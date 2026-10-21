@@ -165,6 +165,10 @@ fn main() -> void {
     val du = cpp::pr::ct::duo<f64>::new(1.5, 2.75);
     val half: f64 = 0.5;
     std::println("duo {} which {} {}", du.sum(half), hd.which(kn), hd.which(&kn));
+    // const Item& before Item&: the plain names run the const overloads, the aliases Item&
+    var it = cpp::cq::make_item("a");
+    var pk: cpp::cq::Picker = {};
+    std::println("const pick {} {} {} {}", cpp::cq::pick(&it), pk.f(&it), cpp::cq::pick_cq_Item_ref(&it), pk.f_cq_Item_ref(&it));
 }
 // a Volt reference parameter read as its address, in a try_ form
 fn checked_at(r: i32&) -> void {
