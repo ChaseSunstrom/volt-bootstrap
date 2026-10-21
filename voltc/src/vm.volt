@@ -662,7 +662,11 @@ fn vm_build(chk: checker&, hdr: std::vec<str>&, dir: str, n: u64, triple: str?, 
         return S(dir);
     }
     // linked as a shared library (by the C++ compiler when there's C++: its runtime)
-    val so = std::fmt::format("{}/script{}.so", dir, n);
+    var ext = ".so";
+    comptime if (@cfg("os", "windows")) {
+        ext = ".dll";
+    }
+    val so = std::fmt::format("{}/script{}{}", dir, n, ext);
     var argv: std::vec<str> = {};
     var link = "";
     if (any_cpp) {
