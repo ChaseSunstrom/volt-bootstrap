@@ -112,7 +112,9 @@ More need converting at the edge. `voltc lib` adds that code when it builds the 
 - **Callbacks.** A closure parameter `fn(A) -> R` takes a function from the other language. In C,
   that's a function pointer that gets the caller's data first, and then the data itself.
 
-A type with no C form at all, a tuple say, is an error naming the fn and the type.
+A type with no C form at all, a tuple say, is an error naming the fn and the type. So is a struct
+from a C header whose layout Volt's fields don't spell (packed, an aligned member, a union, members
+Volt can't read): the bindings would declare it from those fields.
 
 ```volt
 use std::string;

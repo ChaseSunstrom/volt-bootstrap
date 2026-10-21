@@ -100,6 +100,25 @@ attach fn lanes_array(this: bind&, t: u32) -> u32 {
     }
 }
 
+// a header struct whose Volt fields aren't its C layout (cimport's lay_out_partial placed them
+// by C's offsets, padded them, aligned it, or a member is one Volt can't read; or it's a union, or
+// one C passes by value as its fields can't tell): a binding's own declaration of it, from those
+// fields, would be laid out or passed differently
+attach fn foreign_layout(this: bind&, s: u32) -> bool {
+    if (!this.c.header_struct(s)) {
+        return false;
+    }
+    if (this.c.partial_struct(s) || this.c.union_struct(s) || this.c.opaque_struct(s) || this.c.overlay_size(s).1 > 0) {
+        return true;
+    }
+    for (f&) in this.c.si(s).fields.items() {
+        if (starts_with(f.name, "@")) {
+            return true; // a padding field
+        }
+    }
+    return false;
+}
+
 attach fn no_form(this: bind&, t: u32) -> shape? {
     this.bad = t;
     return null;
@@ -429,6 +448,9 @@ attach fn shape_of(this: bind&, t: u32) -> shape? {
             }
             if (has_u32(&this.structs, s) || has_u32(&this.visiting, s)) {
                 return shape::STRUCT(s);
+            }
+            if (this.foreign_layout(s)) {
+                return this.no_form(t);
             }
             // its fields' structs are declared first (C needs them complete)
             put(&this.visiting, s);

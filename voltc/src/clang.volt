@@ -388,12 +388,13 @@ fn field_vector(rt: clang::CXType, name: str) -> i64 {
     return 0;
 }
 
-// the size and alignment of record type rt's field `name` (0s when it has none)
+// the size and alignment of record type rt's field `name` (0s when it has none): its canonical
+// type's, which is what Volt maps it to (an aligned typedef of int is an i32, at 4)
 fn field_layout(rt: clang::CXType, name: str) -> (i64, i64) {
     for (c&) in children(clang::clang_getTypeDeclaration(rt)).items() {
         val k = clang::clang_getCursorKind(*c);
         if (k == clang::CXCursor_FieldDecl && cursor_name(*c).as_str() == name) {
-            val t = clang::clang_getCursorType(*c);
+            val t = clang::clang_getCanonicalType(clang::clang_getCursorType(*c));
             return (clang::clang_Type_getSizeOf(t), clang::clang_Type_getAlignOf(t));
         }
         // an anonymous struct or union member: its fields are the outer one's
