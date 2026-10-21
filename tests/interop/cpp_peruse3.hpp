@@ -3,16 +3,18 @@
 // deduced one does
 #pragma once
 #include <cstddef>
+#include <cstring>
 
 namespace pu3 {
-template <class T>
-auto echo(T x) {
-    return x;
-}
-
 // T only explicit: nothing to deduce it from
 template <class T>
 auto size_of() {
     return sizeof(T);
+}
+
+// the bytes C++ was given, compared
+template <class T>
+auto same(T a, T b) {
+    return std::memcmp(&a, &b, sizeof(T)) == 0;
 }
 }

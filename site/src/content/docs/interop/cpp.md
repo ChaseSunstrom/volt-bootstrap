@@ -226,7 +226,7 @@ T echo(T)`, `template <class... A>`, a declared generic's `T` too):
 
 | Volt | in C++ |
 |---|---|
-| a Volt struct, a tuple, `T?` (not a pointer's), an enum with payloads, `f16`, `f128` | a struct of its bytes, `volt_m_N` (its size and alignment): C++ copies it and gives it back (`echo(p)` is `p`, `echo<point>(p)` too: an explicit template argument is the same struct), but can't read its fields or do arithmetic on it. One with a `delete` (a `std::vec`, a `std::string` inside) is an error: C++ would copy what it owns |
+| a Volt struct, a tuple, `T?` (not a pointer's), an enum with payloads, `f16`, `f128` | a struct of its bytes, `volt_m_N` (its size and alignment): C++ copies it and gives it back (`echo(p)` is `p`; an explicit template argument, `size_of<point>()`, is the same struct), but can't read its fields or do arithmetic on it. One with a `delete` (a `std::vec`, a `std::string` inside) is an error: C++ would copy what it owns |
 | a closure, a `fn(A...) -> R` value | `std::function<R(A...)>` calling it (good while the call is: C++ mustn't keep it), `A` and `R` numbers, `bool`, pointers or enums; `@cpp` text lends it, and a template's per-use fn takes it as any Volt fn does (a closure owning what it captured moves there: pass `&c` to keep it) |
 | a pointer to one of those | `volt_m_N *` (a slice of them has no form per use yet) |
 
