@@ -41,21 +41,34 @@ extern "C" async fn tripled_c(n: i32) -> i32 {
     return 3 * n;
 }
 
+// an attach fn exported under the name y's step function would take (struct v's y_step is
+// v_y_step in C), declared after y: the helper takes another
+async fn y(n: i32) -> i32 {
+    suspend;
+    return n + 3;
+}
+
+struct v { k: i32; }
+export attach fn y_step(this: v&) -> i32 { return this.k * 900; }
+
 namespace c_side {
     extern "C" fn tripled_c(n: i32) -> i32;
 }
 
 fn main() -> void {
-    val v: fn(i32) -> i32 = x;
-    std::println("{} {} {} {} {} {}", v(1), x_entry(1), x_step(1), x_await(1), x_run(1), x_tramp(1));
+    val vf: fn(i32) -> i32 = x;
+    std::println("{} {} {} {} {} {}", vf(1), x_entry(1), x_step(1), x_await(1), x_run(1), x_tramp(1));
     std::println("{} {} {}", x(5), apply(x_entry, 2), apply(x_tramp, 2));
     std::println("{} {} {} {}", ex(1), ex_frame(1), ex_step(1), v_x_step(1));
     val d = doubled<i32>;
     std::println("{} {} {}", d(21), apply(doubled<i32>, 4), doubled(1.5));
     std::println("{}", c_side::tripled_c(7));
+    val vv: v = { k: 1 };
+    std::println("{} {}", y(1), vv.y_step());
 }
 // expect: 2 100 200 300 400 500
 // expect: 6 200 1000
 // expect: 3 600 700 800
 // expect: 42 8 3
 // expect: 21
+// expect: 4 900
