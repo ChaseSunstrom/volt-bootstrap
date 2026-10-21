@@ -6856,6 +6856,11 @@ attach fn import_cpp(this: checker&, headers: std::vec<std::string>&, alias: str
         var local: std::string? = null;
         if (h.len() > 0 && h.as_str()[0] == '/') {
             local = real_file(h.as_str());
+            // (an earlier script's, removed since: a copy of its last text)
+            val kept = this.kept_header(h.as_str(), span);
+            if (kept) {
+                local = S(kept.as_str());
+            }
         } else if (dir) {
             var p = S(dir);
             p.push('/');
