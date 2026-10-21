@@ -1,6 +1,7 @@
 // a per-use @cpp (a template taking a Volt std::string, and a clang-typed one) in a nested user
 // namespace, declared before the imports, the one it needs second: its C++ context is the import
-// whose headers it names, not the first one
+// whose headers it names, not the first one, and its wrapper is compiled in that import's C++ unit
+// (the first is read under C++98, where params.hpp doesn't compile)
 use std::io;
 
 namespace app::inner {
@@ -12,6 +13,7 @@ namespace app::inner {
     }
 }
 
+@attributes([@standard("c++98")])
 use { "cpp_twin.hpp" } as tw;
 use { "params.hpp" } as cpp;
 
