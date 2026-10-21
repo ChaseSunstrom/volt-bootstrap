@@ -38,6 +38,7 @@ enum gval {
 struct gbind {
     name: str;
     g: gval;
+    ty: ty* = null; // a value parameter's declared type (<N: usize>'s usize), for N as a value
 }
 
 // what a template body sees: its namespace and the generic params bound so far (searched from the end)
@@ -206,6 +207,7 @@ struct loop_cx {
     fresh_views: idset = {};    // views given a new value in it so far
     can_value: bool = false;    // a break may give a value (loop, labeled block)
     result_id: u32 = 0;         // the local holding it
+    suspends: usize = 0;        // suspends in the fn before the loop began (an async fn's)
 }
 
 // the state of the fn instance being checked; replaced for each instance (and swapped out while a
@@ -396,6 +398,12 @@ struct opts {
     pkg_files: std::vec<pkg_file> = {}; // file -> its package
     lib: str? = null;                   // building this package into a library, no main
     linked: std::vec<str> = {};         // packages whose non-generic code comes from a prebuilt library
+    // the linked packages are running (an embedded VM's earlier scripts): their globals' layouts and
+    // their code are fixed, so a trait union one of their globals holds takes no new member
+    running: bool = false;
+    // the C preprocessor's output by its input (cimport's preprocess): a VM keeps it across loads, so
+    // a later script reads an earlier one's headers without running the C compiler again
+    pp_memo: std::map<std::string, std::string> = {};
     guards: std::vec<guard> = {};       // package -> guard symbol
     cfg: std::vec<cfg_arg> = {};        // --cfg, for @cfg
     pp_flags: std::vec<str> = {};       // the --cc flags the C preprocessor needs (-I, -D...)

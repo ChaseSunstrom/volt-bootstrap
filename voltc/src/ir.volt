@@ -123,7 +123,6 @@ struct ir_fn {
     noreturn: bool = false;
     prelude: bool = false;   // provided by the runtime prelude (a volt_ intrinsic)
     used: bool = false;      // declared in this unit
-    async_of: u32? = null;   // an async fn: its step/await/run helpers follow (C backend)
     // the Volt it comes from (a fn, closure or async fn; none for generated helpers) and, for a fn
     // instance, its name as Volt writes it (std::vec<u8>::push): the C backend files and labels it
     origin: span? = null;

@@ -18,9 +18,20 @@ fn wrap(x: i32) -> i32 {
     return s.get() + 1;
 }
 
+// B as a value: a bool
+<B: bool>
+fn flag() -> str {
+    if (B) {
+        return "on";
+    }
+    return "off";
+}
+
 fn main() -> void {
     val a: sg<i32, true> = { v: 4 };
     val b: sg<i32, false> = { v: 6 };
     std::println("{} {} {} {}", a.get(), b.get(), wrap<true>(5), wrap<false>(7));
+    std::println("{} {}", flag<true>(), flag<false>());
 }
 // expect: 4 6 6 8
+// expect: on off

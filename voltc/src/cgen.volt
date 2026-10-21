@@ -2308,6 +2308,9 @@ attach fn fn_header(this: cgen&, out: std::string&, i: u32, named: bool) -> void
         out.append(this.ty(l.ty));
         if (named) {
             out.push(' ');
+            if (this.over_aligned(l.ty)) {
+                out.append("volt_in_"); // copied to an aligned local (fn_body)
+            }
             out.append(*this.locals.at(@cast<usize>(*p)));
         }
     }
@@ -2411,6 +2414,14 @@ attach fn name_locals(this: cgen&, i: u32) -> void {
     }
 }
 
+// is a by-value parameter of type t aligned past 16? GCC's AArch64 code passes one (a struct over
+// 16 bytes, by reference to the caller's copy) in a copy it doesn't align, which the callee uses in
+// place (clang aligns it), so the fn copies it to an aligned local first
+attach fn over_aligned(this: cgen&, t: u32) -> bool {
+    val l = this.c.layout(t, {}) catch return false;
+    return l.align > 16;
+}
+
 // fn i's C definition: every local except params declared up front, then the body
 attach fn fn_body(this: cgen&, out: std::string&, i: u32) -> void {
     this.fn_idx = i;
@@ -2423,6 +2434,17 @@ attach fn fn_body(this: cgen&, out: std::string&, i: u32) -> void {
     var is_param: std::map<u32, bool> = {};
     for (p&) in f.params.items() {
         is_param.put(*p, true);
+        val pt = f.locals.at(@cast<usize>(*p)).ty;
+        if (pt != VOID && this.over_aligned(pt)) {
+            val n = *this.locals.at(@cast<usize>(*p));
+            out.append("\n    ");
+            out.append(this.ty(pt));
+            out.push(' ');
+            out.append(n);
+            out.append(" = volt_in_");
+            out.append(n);
+            out.push(';');
+        }
     }
     this.depth = 1;
     this.inline = 0;
@@ -2763,10 +2785,6 @@ fn reachable(c: checker&) -> std::map<u32, bool> {
             val f = c.ir.fn_at(i);
             if (f.body) {
                 put(&nodes_todo, f.body);
-            }
-            val a = f.async_of;
-            if (a) {
-                put(&todo, a);
             }
         }
         if (nodes_todo.len == 0) {

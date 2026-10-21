@@ -122,7 +122,7 @@ template <class S> int count_all(const std::vector<S> &v) { return (int)v.size()
 template <class S> int deref(S *p) { return (int)p->size(); }
 template <class S> S echo(const S &s) { return s; }
 // an S& / const S& pair: C++ runs S& for a string Volt can change, const S& for one it can't; a
-// forwarding S&& changes it
+// forwarding S&& takes a value (a copy changed)
 template <class S> int which(S &s) { s += "&"; return 1; }
 template <class S> int which(const S &) { return 2; }
 template <class S> int fwd(S &&s) { s += "&&"; return (int)s.size(); }
@@ -290,6 +290,31 @@ template <class T> class Tally {
     T operator|(T (*f)(T)) const { return f(v_); }
 };
 }
+// a class template's T& members, laid out (a generic struct) and held by handle (its members
+// worked out per use): a Volt reference, C++'s write seen; a laid-out one's const T& takes a value
+// (a constructor's too, so literals do); per use, a Volt value runs const T& beside T&
+namespace ct {
+template <class T> struct keep {
+    T v;
+    void bump(T &x) { x += v; }
+    T peek(const T &x) const { return x + v; }
+};
+template <class T> struct duo {
+    T a;
+    T b;
+    duo(const T &x, const T &y) : a(x), b(y) {}
+    T sum(const T &k) const { return a + b + k; }
+};
+template <class T> class held {
+    T v_;
+  public:
+    held(T v) : v_(v) {}
+    void bump(T &x) { x += v_; }
+    T peek(const T &x) const { return x + v_; }
+    int which(T &) { return 1; }
+    int which(const T &) { return 2; }
+};
+}
 }
 // pr::pu opened again: a try_ name declared in a later block of the namespace is still beside lone
 namespace pr {
@@ -307,4 +332,16 @@ inline int sum_of(const std::vector<int> &v) { int s = 0; for (std::size_t i = 0
 inline std::vector<int> twice_of(const std::vector<int> &v) { std::vector<int> r(v); for (std::size_t i = 0; i < r.size(); i++) r[i] *= 2; return r; }
 inline std::size_t len_of(const std::string &s) { return s.size(); }
 template <class T> const T *ptr_t(const std::vector<T> &v) { return v.data(); }
+}
+// a class held by handle, const Item& declared before Item&: the plain name is the const overload,
+// which C++ must be given a const Item (one handle serves Item and const Item); the alias Item&
+namespace cq {
+struct Item { std::string s; };
+inline Item make_item(const char *s) { return Item{s}; }
+struct Picker {
+    int f(const Item &) const { return 2; }
+    int f(Item &) const { return 1; }
+};
+inline int pick(const Item &) { return 2; }
+inline int pick(Item &) { return 1; }
 }

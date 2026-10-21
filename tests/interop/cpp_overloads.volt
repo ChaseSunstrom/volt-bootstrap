@@ -85,6 +85,8 @@ fn main() -> void {
     // the object deleted once); a const && method in place, a borrowed handle's too
     std::println("pinned {}", cpp::ov::Pinned::new(3).take());
     std::println("pinned {} {}", cpp::ov::Pinned::new(3).take_const_rref(), cpp::ov::pinned_shelf().take_const_rref());
+    // an && method it inherits (worked out per use) the same: its own object, the handle consumed
+    std::println("crate {}", cpp::ov::PinnedCrate::new(5).take());
     std::println("dropped {}", cpp::ov::Pinned::dropped());
     // an abstract class's && method runs in place, through as_Base() too
     std::println("spend {}", cpp::ov::Square::new(4).as_Shape().spend());

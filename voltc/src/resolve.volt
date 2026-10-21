@@ -105,6 +105,27 @@ fn is_type_body(t: ty&) -> bool {
 }
 
 // the generic bound to name in an env (innermost first)
+// a generic value parameter's declared type (<N: usize>'s usize): its one bound
+fn param_ty(gp: gparam&) -> ty* {
+    if (gp.bounds.len == 1) {
+        return *gp.bounds.at(0);
+    }
+    return null;
+}
+
+// the declared type of generic param `name` bound in env e (null: none, or not a value parameter)
+attach fn env_generic_ty(this: checker&, e: u32, name: str) -> ty* {
+    val gs = &this.env_at(e).generics;
+    var i = gs.len;
+    while (i > 0) {
+        i -= 1;
+        if (gs.at(i).name == name) {
+            return gs.at(i).ty;
+        }
+    }
+    return null;
+}
+
 attach fn env_generic(this: checker&, e: u32, name: str) -> gval? {
     val gs = &this.env_at(e).generics;
     var i = gs.len;
@@ -213,7 +234,8 @@ attach fn resolve_type_path(this: checker&, p: path&, e: u32) -> compile_error!u
                         }
                         val gps = &this.item_of(d).generics;
                         for (i) in 0..gps.len {
-                            put(&binds, { name: gps.at(i).name, g: copy *gargs.at(i) });
+                            val gp = gparam_of(gps.at(i));
+                            put(&binds, { name: gps.at(i).name, g: copy *gargs.at(i), ty: param_ty(&gp) });
                         }
                     }
                     val ae = this.new_env({ ns: this.decls.at(@cast<usize>(d)).ns, generics: move binds });
@@ -680,7 +702,7 @@ attach fn inst_env(this: checker&, ns: u32, params: std::vec<gparam>&, args: std
     var e: env = { ns: ns };
     for (i) in 0..params.len {
         if (i < args.len) {
-            put(&e.generics, { name: params.at(i).name, g: *args.at(i) });
+            put(&e.generics, { name: params.at(i).name, g: *args.at(i), ty: param_ty(params.at(i)) });
         }
     }
     return this.new_env(move e);
@@ -941,8 +963,10 @@ attach fn fn_inst(this: checker&, d: u32, args: std::vec<gval>, span: span) -> c
         c_name = this.intern(move n);
     } else if (f.is_export && f.c_name == null) {
         c_name = this.export_c_name(d, f.name, f.is_attach, &params, &args);
+        this.used_c_names.put(c_name, 1); // fixed: a generated name goes around it
     } else if (f.extern_abi != null || f.is_export) {
         c_name = f.c_name ?? f.name;
+        this.used_c_names.put(c_name, 1);
     } else if (f.name == "main" && path.len() == 0 && args.len == 0) {
         c_name = "v_main";
     } else if (this.pkg_of(d) != null && args.len == 0) {
@@ -1154,12 +1178,22 @@ attach fn fn_linkage(this: checker&, idx: u32) -> linkage {
 
 // does a value of this type hold a trait union somewhere?
 attach fn has_union(this: checker&, t: u32, seen: idset&) -> bool {
+    return this.holds_union(t, null, seen);
+}
+
+// does a value of this type hold trait union `want` (any, when none) somewhere?
+attach fn holds_union(this: checker&, t: u32, want: u32?, seen: idset&) -> bool {
     if (!seen.add(t)) {
         return false;
     }
     var inner: std::vec<u32> = {};
     match (*this.t.get(t)) {
-        .TRAIT_UNION(u) => { return true; },
+        .TRAIT_UNION(u) => {
+            if (want == null || (want ?? 0) == u) {
+                return true;
+            }
+            inner = copy this.ui(u).members; // (laid out in it)
+        },
         .REF(x) => { put(&inner, x); },
         .PTR(x) => { put(&inner, x); },
         .OPT(x) => { put(&inner, x); },
@@ -1198,7 +1232,7 @@ attach fn has_union(this: checker&, t: u32, seen: idset&) -> bool {
         default => {},
     }
     for (x&) in inner.items() {
-        if (this.has_union(*x, seen)) {
+        if (this.holds_union(*x, want, seen)) {
             return true;
         }
     }
@@ -1356,9 +1390,11 @@ attach fn const_place(this: checker&, p: u32) -> bool {
 // bodies touch it) when a real package needs both.
 // So is a linked package that uses one built from source (transitively): its library refers to the
 // other's symbols, which the program now defines privately. A library build unlinks nothing: its
-// references to the packages it links stay, and the program linking it decides.
+// references to the packages it links stay, and the program linking it decides. But the linked
+// packages of an embedded VM's script are running (opts.running): nothing is rebuilt, and a trait
+// union their globals hold takes no member from this one (running_union_globals).
 attach fn unlink_union_globals(this: checker&) -> void {
-    if (this.opts.lib != null) {
+    if (this.opts.lib != null && !this.opts.running) {
         return;
     }
     // the scan's global() calls are undone after it, and use_fn does nothing during it: a global or
@@ -1373,7 +1409,11 @@ attach fn unlink_union_globals(this: checker&) -> void {
         if (has_name(&gone, pkg)) {
             continue; // linked twice
         }
-        val w = this.union_global(pkg) ?? continue;
+        if (this.opts.running) {
+            this.running_union_globals(pkg);
+            continue;
+        }
+        val w = this.union_global(pkg, 0) ?? continue;
         var d: diag = { span: w.span, msg: fmt2("{}'s library isn't used: its global '{}' holds a trait union", S(pkg), S(w.name)), warning: true };
         put(&d.notes, S("the union's layout depends on the types this program attaches, so the package is built from source"));
         put(&this.warnings, move d);
@@ -1450,9 +1490,9 @@ fn names_pkg(text: str, pkg: str) -> bool {
     return false;
 }
 
-// the first global of package pkg whose type holds a trait union
-attach fn union_global(this: checker&, pkg: str) -> global_why? {
-    for (di) in 0..this.decls.len {
+// the first global of package pkg (from decl `from` on) whose type holds a trait union
+attach fn union_global(this: checker&, pkg: str, from: u32) -> global_why? {
+    for (di) in @cast<usize>(from)..this.decls.len {
         val d = @cast<u32>(di);
         if ((this.pkg_of(d) ?? "") != pkg) {
             continue;
@@ -1487,7 +1527,7 @@ attach fn union_global(this: checker&, pkg: str) -> global_why? {
                 swap(&this.cx, &saved);
                 var seen: idset = {};
                 if (this.has_union(ty, &seen)) {
-                    return { name: name, span: this.item_of(d).span };
+                    return { name: name, span: this.item_of(d).span, decl: d, ty: ty };
                 }
             },
             default => {},
@@ -1499,6 +1539,39 @@ attach fn union_global(this: checker&, pkg: str) -> global_why? {
 struct global_why {
     name: str;
     span: span;
+    decl: u32;
+    ty: u32;
+}
+
+// running linked package pkg (opts.running): an attach block of this package's for a trait whose union
+// one of pkg's globals holds is an error naming the trait and the global. The global was laid out for
+// the members its load saw, and pkg's code reading it switches on those alone: a new one could
+// overflow it, or reach that switch's unreachable default
+attach fn running_union_globals(this: checker&, pkg: str) -> void {
+    val lib = this.opts.lib ?? return;
+    val blocks = copy this.attach_blocks;
+    var from: u32 = 0;
+    loop {
+        val w = this.union_global(pkg, from) ?? return;
+        from = w.decl + 1;
+        for (b&) in blocks.items() {
+            if ((this.pkg_of(*b) ?? "") != lib || this.item_of(*b).generics.len > 0) {
+                continue;
+            }
+            val bt = this.block_trait(*b) ?? continue;
+            val u = this.union_ids.get(bt.decl);
+            var seen: idset = {};
+            if (u == null || !this.holds_union(w.ty, *u, &seen)) {
+                continue;
+            }
+            val name = S(this.decl_name(bt.decl));
+            var msg = fmt3("the global {}::{} holds {}'s union, laid out (and ", S(pkg), S(w.name), copy name);
+            msg.append(fmt2("{}'s code built) for the types attached when {} loaded: ", S(pkg), S(pkg)).as_str());
+            msg.append(fmt("a later script can't attach {} to another type", move name).as_str());
+            put(&this.errors, { span: this.item_of(*b).span, msg: move msg });
+            return;
+        }
+    }
 }
 
 // a constant expression worked out now, or none when it can't be (it stays as it is); arithmetic

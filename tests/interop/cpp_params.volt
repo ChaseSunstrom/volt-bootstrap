@@ -65,14 +65,14 @@ fn main() -> void {
     var ln: i32 = 5;
     var ls = std::string::from("q");
     std::println("lend {} {} {} {}", cpp::pr::gs::lend(&ln), cpp::pr::gs::give(&ln), cpp::pr::gs::lend(&ls), cpp::pr::gs::give(&ls));
-    std::println("lend moved {} {}", cpp::pr::gs::lend_type_parameter_0_0_rref(copy ln), cpp::pr::gs::give_type_parameter_0_0_rref(move ls));
+    std::println("lend moved {} {}", cpp::pr::gs::lend_rref(copy ln), cpp::pr::gs::give_rref(move ls));
     val padded = cpp::pr::gs::pad(&w, 2);
     std::println("pad {} {}", padded, w);
     grown_t(&w, 1);
     grown_t(&w, -1);
     // of an S& / const S& pair, a var runs S& (and is changed), a val and a str const S&, as C++
-    // picks, through the template's Volt generic too; a forwarding S&& changes a var; a const
-    // S&-only one takes both
+    // picks, through the template's Volt generic too; a forwarding S&& takes a value (copy m keeps
+    // m; &m is an error: cpp_rref_lent); a const S&-only one takes both
     var m = std::string::from("ab");
     val k = std::string::from("cd");
     val w1 = cpp::pr::gs::which(&m);
@@ -81,7 +81,7 @@ fn main() -> void {
     val w4 = @cpp<i32, std::string>("pr::gs::which<{t0}>({0})", &m);
     val w5 = cpp::pr::gs::which(&k);
     std::println("which {} {} {} {} {} {} {}", w1, w2, w3, w4, w5, m, k);
-    val f1 = cpp::pr::gs::fwd(&m);
+    val f1 = cpp::pr::gs::fwd(copy m);
     std::println("fwd {} {} len {} {}", f1, m, cpp::pr::gs::len(&k), cpp::pr::gs::len(&m));
     // nested std::vectors take nested Volt slices, each level copied (an empty inner one, three deep)
     var r0: i32[2] = { 1, 2 };
@@ -153,6 +153,22 @@ fn main() -> void {
     val t2 = ty.op_add(&tz);
     val t3 = ty.spend(&tz);
     std::println("twice {} tally {} {} {} {}", rt, t1, t2, t3, tz);
+    // a class template's T& a Volt T& (laid out; held by handle, per use): &kn lends kn and C++'s
+    // write is seen; a laid-out one's const T& takes a value (literals for a constructor's); per use
+    // a value runs which(const T&), &kn which(T&)
+    var kp: cpp::pr::ct::keep<i32> = { v: 3 };
+    var kn: i32 = 1;
+    kp.bump(&kn);
+    val hd = cpp::pr::ct::held<i32>::new(4);
+    hd.bump(&kn);
+    std::println("keep {} {} {}", kn, kp.peek(kn), hd.peek(&kn));
+    val du = cpp::pr::ct::duo<f64>::new(1.5, 2.75);
+    val half: f64 = 0.5;
+    std::println("duo {} which {} {}", du.sum(half), hd.which(kn), hd.which(&kn));
+    // const Item& before Item&: the plain names run the const overloads, the aliases Item&
+    var it = cpp::cq::make_item("a");
+    var pk: cpp::cq::Picker = {};
+    std::println("const pick {} {} {} {}", cpp::cq::pick(&it), pk.f(&it), cpp::cq::pick_cq_Item_ref(&it), pk.f_cq_Item_ref(&it));
 }
 // a Volt reference parameter read as its address, in a try_ form
 fn checked_at(r: i32&) -> void {

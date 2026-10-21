@@ -21,3 +21,27 @@ warning: moving this frame of 'walking' leaves it pointing into the old frame ('
    │
 53 │     val w2 = w;
    │              ^
+
+warning: moving this frame of 'field_sliced' leaves it pointing into the old frame ('s' holds a reference to 'h' across a suspend): resume or await it where it is
+   ┌─ tests/diag/async_self_move.volt:55:15
+   │
+55 │     val fs2 = fs;
+   │               ^^
+
+warning: moving this frame of 'looped' leaves it pointing into the old frame ('p' holds a reference to 'n' across a suspend): resume or await it where it is
+   ┌─ tests/diag/async_self_move.volt:57:15
+   │
+57 │     val lp2 = lp;
+   │               ^^
+
+warning: moving this frame of 'cont_before' leaves it pointing into the old frame ('p' holds a reference to 'n' across a suspend): resume or await it where it is
+   ┌─ tests/diag/async_self_move.volt:62:15
+   │
+62 │     val cb2 = cb;
+   │               ^^
+
+warning: moving this frame of 'cont_after' leaves it pointing into the old frame ('p' holds a reference to 'n' across a suspend): resume or await it where it is
+   ┌─ tests/diag/async_self_move.volt:64:15
+   │
+64 │     val ca2 = ca;
+   │               ^^

@@ -35,6 +35,9 @@ fn main() -> void {
     std::println("{}", cpp::tpl::total(&t));
     // @cpp with its result type worked out by clang
     std::println("{}", @cpp("{0} * {1}", 4, 1.5));
+    // a class template instance held by handle, through its base
+    var ta = cpp::tpl::tally<3>::new();
+    std::println("{} {}", ta.get(), ta.as_named().tag());
 }
 // expect: 6.5 4
 // expect: 12
@@ -48,3 +51,4 @@ fn main() -> void {
 // expect: -4 3 -6
 // expect: 9
 // expect: 6
+// expect: 3 7

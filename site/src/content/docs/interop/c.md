@@ -57,6 +57,7 @@ How C's types come in:
 | `void *` | `void*` |
 | a function pointer | `extern "C" fn(...) -> R`, optional (it may be null) |
 | `T[N]` | `T[N]` (a parameter's is a `T*`, as in C) |
+| `T __attribute__((vector_size(N)))` (a member or a typedef) | `@vector(T, N / sizeof T)`, with C's layout |
 | `struct`, `union` | the same, with C's layout |
 | a named `enum` | a Volt enum of the same values and integer type, which converts to and from integers |
 | an anonymous `enum` | a constant per enumerator, of its integer type |
@@ -73,7 +74,8 @@ A union is a struct whose fields share their memory: `u.word = 1` writes it, `u.
 back, and a literal sets one member. An anonymous struct or union member's fields are the outer
 struct's, as in C, and an anonymous struct that types a named field is `OUTER_FIELD`. A bitfield
 has no address, so C reads and writes it: each one gets `STRUCT_get_FIELD(&s)` and
-`STRUCT_set_FIELD(&s, v)`.
+`STRUCT_set_FIELD(&s, v)`, unless the header declares that name itself: then the name is the
+header's.
 
 ```c
 /* packet.h */

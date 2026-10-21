@@ -894,7 +894,23 @@ attach fn path_expr(this: checker&, p: path&, want: u32?, span: span) -> compile
         val g = this.env_generic(this.cx.env, name);
         if (g) {
             match (g) {
-                .INT(v) => { return this.int_lit(v, want); },
+                .INT(v) => {
+                    // a value of its declared type: <B: bool> a bool, <N: usize> a usize
+                    val dt = this.env_generic_ty(this.cx.env, name);
+                    if (dt) {
+                        val t = this.resolve_type(&*dt, this.cx.env) catch |e| {
+                            return this.int_lit(v, want);
+                        };
+                        if (t == BOOL) {
+                            return vpure(BOOL, this.ir.boolean(v != 0));
+                        }
+                        match (*this.t.get(t)) {
+                            .INT(k) => { return this.int_lit(v, t); },
+                            default => {},
+                        }
+                    }
+                    return this.int_lit(v, want);
+                },
                 .VAL(i) => { return this.ct_to_val(copy *this.ct_consts.at(@cast<usize>(i)), want, span); },
                 .STR(s) => {
                     val v = this.str_val(s);

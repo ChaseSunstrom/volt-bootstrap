@@ -548,10 +548,9 @@ attach fn part(this: lg&, t: u32, ret: bool) -> abi_part {
     if (this.cc == callconv::WASM) {
         // WebAssembly (as clang has it): an aggregate of one scalar crosses as that scalar; any other
         // by a pointer to a copy (byval), or returned through a pointer the caller gives (sret)
-        var leaves: std::vec<llvm::LLVMOpaqueType*> = {};
-        scalar_leaves(l, &leaves);
-        if (leaves.len == 1 && this.size_of(*leaves.at(0)) == size) {
-            return { how: pass::COERCE, ty: t, cty: *leaves.at(0) };
+        val one = this.wasm_one(t);
+        if (one != null && this.size_of(one) == size) {
+            return { how: pass::COERCE, ty: t, cty: one };
         }
         return { how: pass::MEMORY, ty: t };
     }
@@ -599,7 +598,8 @@ attach fn part(this: lg&, t: u32, ret: bool) -> abi_part {
                 } else {
                     put(&r.pieces, h);
                 }
-            } else if (e.floats >= 2) {
+            } else if (e.far > 0) {
+                // (a float in the eightbyte's upper half; a C union's floats overlapping at 0 are one)
                 put(&r.pieces, llvm::LLVMVectorType(llvm::LLVMFloatTypeInContext(this.ctx), 2));
             } else {
                 put(&r.pieces, llvm::LLVMFloatTypeInContext(this.ctx));
@@ -619,6 +619,39 @@ fn int_bits(l: llvm::LLVMOpaqueType*) -> u32 {
     return llvm::LLVMGetIntTypeWidth(l);
 }
 
+// the one scalar aggregate t is, as clang's WebAssembly ABI finds it (a struct or C union of one
+// member is that member's; a C union of more is none, its blob notwithstanding), or null
+attach fn wasm_one(this: lg&, t: u32) -> llvm::LLVMOpaqueType* {
+    var by_member = this.c_union(t);
+    match (*this.c.t.get(t)) {
+        .STRUCT(s) => { by_member = by_member || (this.overlay(t).0 == 0 && this.over_align(t) == 0); },
+        default => {},
+    }
+    if (by_member) {
+        var one: u32? = null;
+        var n: usize = 0;
+        for (i) in 0..this.member_count(t) {
+            val mt = this.member_ty(t, @cast<u32>(i));
+            // (an empty member, a GNU empty struct or a zero-length array, counts for nothing, as
+            // clang's isSingleElementStruct has it)
+            if (!this.is_void(mt) && this.size_of(this.lt(mt)) > 0) {
+                n += 1;
+                one = mt;
+            }
+        }
+        if (n != 1) {
+            return null;
+        }
+        return this.wasm_one(one ?? return null);
+    }
+    var leaves: std::vec<llvm::LLVMOpaqueType*> = {};
+    scalar_leaves(this.lt(t), &leaves);
+    if (leaves.len != 1) {
+        return null;
+    }
+    return *leaves.at(0);
+}
+
 // AAPCS64's aggregates: an HFA (one to four of the same float type, nested or not) in FP registers;
 // up to 16 bytes in one or two x registers (a pair as an i128 when it's 16-byte aligned); anything
 // bigger by a pointer to a copy, or returned through x8. hfa: whether HFAs are (not for Windows on
@@ -626,7 +659,7 @@ fn int_bits(l: llvm::LLVMOpaqueType*) -> u32 {
 attach fn aapcs_part(this: lg&, t: u32, size: u64, ret: bool, hfa: bool) -> abi_part {
     val l = this.lt(t);
     var leaves: std::vec<llvm::LLVMOpaqueType*> = {};
-    scalar_leaves(l, &leaves);
+    this.c_leaves(t, &leaves);
     if (hfa && leaves.len >= 1 && leaves.len <= 4) {
         val e = *leaves.at(0);
         val ek = llvm::LLVMGetTypeKind(e);
@@ -642,7 +675,17 @@ attach fn aapcs_part(this: lg&, t: u32, size: u64, ret: bool, hfa: bool) -> abi_
             // as clang has it: a param is an array of them, a result the aggregate itself
             var cty = llvm::LLVMArrayType2(e, @cast<u64>(leaves.len));
             if (ret) {
+                // the aggregate itself, but a C union's blob as its floats (which LLVM puts in s/d registers)
                 cty = l;
+                var lls: std::vec<llvm::LLVMOpaqueType*> = {};
+                scalar_leaves(l, &lls);
+                var same = lls.len == leaves.len;
+                for (j) in 0..lls.len {
+                    same = same && *lls.at(j) == e;
+                }
+                if (!same) {
+                    cty = struct_ty(this.ctx, &leaves, false);
+                }
             }
             return { how: pass::COERCE, ty: t, cty: cty, hfa: true };
         }
@@ -665,6 +708,80 @@ attach fn aapcs_part(this: lg&, t: u32, size: u64, ret: bool, hfa: bool) -> abi_
         cty = llvm::LLVMIntTypeInContext(this.ctx, @cast<u32>(size * 8));
     }
     return { how: pass::COERCE, ty: t, cty: cty };
+}
+
+// the scalars aggregate t is made of as AAPCS64 counts them: a C union's members overlap, so one of
+// a single float type is as many of it as fill its size (the union itself, no float, when they
+// differ); it stops past 5 (more than an HFA can have)
+attach fn c_leaves(this: lg&, t: u32, out: std::vec<llvm::LLVMOpaqueType*>&) -> void {
+    if (this.c_union(t)) {
+        var e: llvm::LLVMOpaqueType* = null;
+        var mixed = false;
+        var most: usize = 0; // the most floats one member has: one must fill the union (no padding)
+        for (i) in 0..this.member_count(t) {
+            val mt = this.member_ty(t, @cast<u32>(i));
+            if (this.is_void(mt)) {
+                continue;
+            }
+            var ms: std::vec<llvm::LLVMOpaqueType*> = {};
+            this.c_leaves(mt, &ms);
+            for (x) in ms.items() {
+                if (e == null) {
+                    e = x;
+                } else if (e != x) {
+                    mixed = true;
+                }
+            }
+            if (ms.len > most) {
+                most = ms.len;
+            }
+        }
+        val size = this.size_of(this.lt(t));
+        if (e == null || mixed || this.size_of(e) == 0 || this.size_of(e) * @cast<u64>(most) != size) {
+            put(out, this.lt(t));
+            return;
+        }
+        for (j) in 0..size / this.size_of(e) {
+            if (out.len > 4) {
+                return;
+            }
+            put(out, e);
+        }
+        return;
+    }
+    match (*this.c.t.get(t)) {
+        .STRUCT(s) => {
+            if (this.overlay(t).0 == 0 && this.over_align(t) == 0) {
+                for (i) in 0..this.member_count(t) {
+                    val mt = this.member_ty(t, @cast<u32>(i));
+                    if (out.len > 4) {
+                        return;
+                    }
+                    if (!this.is_void(mt)) {
+                        this.c_leaves(mt, out);
+                    }
+                }
+                return;
+            }
+        },
+        .ARRAY(x, n) => {
+            if (n == 0) {
+                // a zero-length array makes no HFA (clang: AAPCS64's isHomogeneousAggregate refuses
+                // one), so it counts as a leaf that isn't a float
+                put(out, this.lt(t));
+                return;
+            }
+            for (j) in 0..n {
+                if (out.len > 4) {
+                    return;
+                }
+                this.c_leaves(x, out);
+            }
+            return;
+        },
+        default => {},
+    }
+    scalar_leaves(this.lt(t), out);
 }
 
 // the scalars l is made of, in order; it stops past 5 (more than an HFA can have)

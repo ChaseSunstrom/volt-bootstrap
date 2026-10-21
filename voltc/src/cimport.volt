@@ -303,6 +303,15 @@ fn is_p(t: ctok*, p: str) -> bool {
     }
 }
 
+// is t the identifier n?
+fn is_id(t: ctok*, n: str) -> bool {
+    val x = t ?? return false;
+    match (*x) {
+        .ID(q) => { return q == n; },
+        default => { return false; },
+    }
+}
+
 attach fn peek(this: ceval&) -> ctok* {
     if (this.i < this.t.len) {
         return &this.t[this.i];
@@ -510,6 +519,7 @@ enum ctype {
     LDOUBLE,      // long double: an f64 through a wrapper
     COMPLEX: str, // _Complex of its real type's C name (float, double, long double): through a wrapper
     VA_LIST,      // va_list: a function taking one last is called with varargs (va_wrapper)
+    VECTOR: (std::box<ctype>, u64), // __attribute__((vector_size(N))): its element type and N bytes
     BAD,          // _Float16...: can't be used by value
 }
 
@@ -587,6 +597,7 @@ struct cdecls {
     kr: bool = false;                    // ...which was a K&R identifier list
     long32: bool = false;                // long is 32 bits (Windows' LLP64: __SIZEOF_LONG__ 4)
     label: str? = null;                  // the asm label read last (the declared fn's)
+    vsize: u64? = null;                  // a vector_size(N) read last (the declarator's)
     names: std::vec<std::string> = {}; // made-up names (anonymous tags) the others point into
     anon_in: std::map<str, anon_field> = {}; // anonymous tag -> the named field it types
     fn_macros: std::vec<str> = {};     // function-like #defines (MAX(a, b)): called per use
@@ -740,6 +751,44 @@ attach fn skip_noise(this: cparser&) -> bool? {
             put(&this.d.names, move label);
             this.d.label = this.d.names.at(this.d.names.len - 1).as_str();
         }
+        // vector_size(N): the type is a vector of N bytes (0: a size voltc can't read, 4 * sizeof(T):
+        // the type is one only C knows)
+        val g = this.t[start..this.i];
+        for (k) in 0..g.len {
+            if ((is_id(&g[k], "vector_size") || is_id(&g[k], "__vector_size__")) && k + 1 < g.len && is_p(&g[k + 1], "(")) {
+                var depth: usize = 0;
+                var nums: usize = 0;
+                var other = false;
+                var size: u64 = 0;
+                var j = k + 1;
+                while (j < g.len) {
+                    if (is_p(&g[j], "(")) {
+                        depth += 1;
+                    } else if (is_p(&g[j], ")")) {
+                        depth -= 1;
+                        if (depth == 0) {
+                            break;
+                        }
+                    } else {
+                        match (g[j]) {
+                            .NUM(x) => {
+                                nums += 1;
+                                val v = parse_cnum(x) ?? cfloat(0.0);
+                                if (!v.is_float && v.v > 0) {
+                                    size = @cast<u64>(v.v);
+                                }
+                            },
+                            default => { other = true; },
+                        }
+                    }
+                    j += 1;
+                }
+                this.d.vsize = size;
+                if (other || nums != 1) {
+                    this.d.vsize = 0;
+                }
+            }
+        }
         return true;
     }
     if (is_noise_word(n)) {
@@ -769,6 +818,22 @@ fn known_typedef(n: str) -> str? {
 
 // declaration specifiers -> base type; sets `stat` for static/thread-local storage
 attach fn specs(this: cparser&, stat: bool&) -> ctype? {
+    this.d.vsize = null; // (none left over from the declaration before)
+    val t = this.specs_in(stat) ?? return null;
+    val vs = this.d.vsize ?? return t;
+    this.d.vsize = null;
+    return vector_of(move t, vs);
+}
+
+// a vector of `bytes` bytes of t (0 bytes: a size voltc couldn't read)
+fn vector_of(t: ctype, bytes: u64) -> ctype {
+    if (bytes == 0) {
+        return ctype::BAD;
+    }
+    return ctype::VECTOR(bx(move t), bytes);
+}
+
+attach fn specs_in(this: cparser&, stat: bool&) -> ctype? {
     var signed = false;
     var unsigned = false;
     var short = false;
@@ -1103,7 +1168,15 @@ attach fn declarator(this: cparser&, base: ctype) -> cdecl? {
         this.i += 1;
     }
     while (this.skip_noise() ?? return null) {}
+    // (a vector_size attribute after the name: this declarator's; one among the specifiers made the
+    // base type the vector already)
+    val vs = this.d.vsize;
+    this.d.vsize = null;
+    if (vs) {
+        ty = vector_of(move ty, vs);
+    }
     val t = this.suffixes(move ty) ?? return null;
+    this.d.vsize = null; // (one after a function's parameters isn't the next declaration's)
     return { name: name, ty: move t };
 }
 
@@ -1638,8 +1711,50 @@ attach fn ty_of(this: cmapper&, t0: ctype&) -> ty? {
             val it = this.ty_of(inner) ?? return null;
             return this.wrap(type_kind::ARRAY(bx(move it), bx(move len)));
         },
+        .VECTOR(inner, bytes) => {
+            // @vector(T, N / sizeof T), of a number type only
+            val r = this.resolve(inner, 0) ?? return null;
+            var es: u64 = 0;
+            match (*r) {
+                .CHAR => { es = 1; },
+                .PRIM(p) => { es = prim_bytes(p); },
+                .NAMED(n) => { es = prim_bytes(known_typedef(n) ?? ""); },
+                default => {},
+            }
+            if (es == 0 || bytes % es != 0) {
+                return null;
+            }
+            if (this.in_fn && bytes != 16) {
+                // a function's: 16 bytes (an SSE or NEON register's) cross as C passes them; other
+                // sizes aren't taken (C passes them in ways LLVM's vector types don't follow)
+                return null;
+            }
+            val it = this.ty_of(r) ?? return null;
+            var args: std::vec<garg> = {};
+            put(&args, garg::TYPE(move it));
+            put(&args, garg::EXPR({ kind: expr_kind::INT(@cast<u128>(bytes / es)), span: this.span }));
+            val e: expr = { kind: expr_kind::BUILTIN("vector", {}, move args), span: this.span };
+            return this.wrap(type_kind::EXPR(bx(move e)));
+        },
         default => { return null; },
     }
+}
+
+// the size of a Volt number type a vector can hold (0: none)
+fn prim_bytes(p: str) -> u64 {
+    if (p == "i8" || p == "u8") {
+        return 1;
+    }
+    if (p == "i16" || p == "u16" || p == "f16") {
+        return 2;
+    }
+    if (p == "i32" || p == "u32" || p == "f32") {
+        return 4;
+    }
+    if (p == "i64" || p == "u64" || p == "f64") {
+        return 8;
+    }
+    return 0;
 }
 
 // does a function taking or giving t by value need a wrapper (a long double, a _Complex)?
@@ -1668,6 +1783,7 @@ attach fn c_class(this: cmapper&, t: ctype&, depth: u32) -> u8 {
         .STRUCT(tag) => { return this.struct_class(tag, depth + 1); },
         .LDOUBLE => { return 2; },
         .COMPLEX(e) => { return 2; },
+        .VECTOR(e, n) => { return 2; },
         .BAD => { return 2; },
         .VA_LIST => { return 2; },
         default => { return 0; },
@@ -2299,10 +2415,15 @@ attach fn lay_out_partial(this: checker&, res: c_imported&, items: std::vec<usiz
     }
 }
 
-// run the C preprocessor over the includes; its output, or a message
+// run the C preprocessor over the includes; its output, or a message. An embedded VM (opts.running)
+// runs it once per input (opts.pp_memo: the flags, the #include lines and the local headers' text,
+// whichever compiler, so a later script with no compiler at hand reads an earlier one's headers), and
+// a local header that changed is read again. ponytail: what a local header includes isn't in the
+// key; record the files the preprocessor read (-MD) if a reload misses an edit there
 attach fn preprocess(this: checker&, src: str, extra: str, span: span) -> compile_error!std::string {
     var args: std::vec<str> = {};
     val cc = c_command(&args);
+    val words = args.len;
     for (f&) in this.opts.pp_flags.items() {
         put(&args, *f);
     }
@@ -2311,11 +2432,36 @@ attach fn preprocess(this: checker&, src: str, extra: str, span: span) -> compil
     for (a) in rest {
         put(&args, a);
     }
+    var key = S("");
+    if (this.opts.running) {
+        for (i) in words..args.len {
+            key.append(*args.at(i));
+            key.push(0);
+        }
+        key.append(src);
+        // (a local header is "its full path"; one named by a full path is <that path>)
+        for (l) in src.lines().items() {
+            val p = l.strip_prefix("#include ") ?? continue;
+            if (p.len < 3 || !(p[0] == '"' || (p[0] == '<' && p[1] == '/'))) {
+                continue;
+            }
+            key.push(0);
+            val text = std::fs::read_file(p[1..p.len - 1]) catch |e| { continue; };
+            key.append(text.as_str());
+        }
+        val have = this.opts.pp_memo.get(copy key);
+        if (have) {
+            return copy *have;
+        }
+    }
     val r = std::process::capture(args.items(), src) catch |e| {
         return fail(span, fmt("can't run the C compiler '{}' to read the headers", S(cc)));
     };
     if (r.code != 0) {
         return fail(span, fmt("the C compiler couldn't read these headers: {}", S(first_error(r.err.as_str()))));
+    }
+    if (this.opts.running) {
+        this.opts.pp_memo.put(move key, copy r.out);
     }
     return copy r.out;
 }
@@ -2646,7 +2792,18 @@ attach fn c_items(this: checker&, d: cdecls&, res: c_imported&, span: span) -> v
             put(&res.items, m.citem(item_kind::GLOBAL({ mutable: false, is_comptime: false, is_static: false, pat: pt, ty: m.path_ty(name), init: move init, span: span, c_name: null })));
         }
     }
-    // each bitfield's accessors: C reads and writes it, so neither backend needs its bits
+    // each bitfield's accessors: C reads and writes it, so neither backend needs its bits (but a
+    // name the header declares itself, its own accessor often, stays the header's)
+    var declared: std::map<str, u8> = {};
+    for (df&) in d.fns.items() {
+        declared.put(df.name, 1);
+    }
+    for (dv&) in d.vars.items() {
+        declared.put(dv.name, 1);
+    }
+    for (dm) in d.fn_macros.items() {
+        declared.put(dm, 1); // (a function-like #define would expand inside the accessor)
+    }
     var protos = S("");
     for (s&) in d.structs.items() {
         val name = m.names.get(s.tag) ?? continue;
@@ -2654,36 +2811,26 @@ attach fn c_items(this: checker&, d: cdecls&, res: c_imported&, span: span) -> v
         if (s.fields) {
             for (f&) in s.fields.items() {
                 val ty = f.bits ?? continue;
-                var get = S("static inline ");
-                get.append(ty);
-                get.push(' ');
-                get.append(*name);
-                get.append("_get_");
-                get.append(f.bit_name);
-                get.append("(const ");
-                get.append(*c);
-                get.append(" *s)");
-                var set = S("static inline void ");
-                set.append(*name);
-                set.append("_set_");
-                set.append(f.bit_name);
-                set.push('(');
-                set.append(*c);
-                set.append(" *s, ");
-                set.append(ty);
-                set.append(" v)");
-                protos.append(get.as_str());
-                protos.append(";\n");
-                protos.append(set.as_str());
-                protos.append(";\n");
-                get.append(" { return s->");
-                get.append(f.bit_name);
-                get.append("; }");
-                set.append(" { s->");
-                set.append(f.bit_name);
-                set.append(" = v; }");
-                put(&res.includes, move get);
-                put(&res.includes, move set);
+                var gname = S(*name);
+                gname.append("_get_");
+                gname.append(f.bit_name);
+                var sname = S(*name);
+                sname.append("_set_");
+                sname.append(f.bit_name);
+                if (declared.get(gname.as_str()) == null && d.env.get(gname.as_str()) == null) {
+                    var get = fmt3("static inline {} {}(const {} *s)", S(ty), copy gname, S(*c));
+                    protos.append(get.as_str());
+                    protos.append(";\n");
+                    get.append(fmt(" {{ return s->{}; }}", S(f.bit_name)).as_str());
+                    put(&res.includes, move get);
+                }
+                if (declared.get(sname.as_str()) == null && d.env.get(sname.as_str()) == null) {
+                    var set = fmt3("static inline void {}({} *s, {} v)", copy sname, S(*c), S(ty));
+                    protos.append(set.as_str());
+                    protos.append(";\n");
+                    set.append(fmt(" {{ s->{} = v; }}", S(f.bit_name)).as_str());
+                    put(&res.includes, move set);
+                }
             }
         }
     }

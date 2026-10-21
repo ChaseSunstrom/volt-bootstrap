@@ -71,6 +71,16 @@ template <class T, bool Neg> struct sign {
     T get() const { return Neg ? -v : v; }
 };
 template <bool B> int pick_if(int a, int b) { return B ? a : b; }
+// a class template deriving from a base, held by handle (it has a private member): its as_named()
+// gives the base, as a plain class's handle does
+struct named {
+    int tag() const { return 7; }
+};
+template <int N> class tally : public named {
+    int n_ = N;
+  public:
+    int get() const { return n_; }
+};
 inline int total(const fixed<int, 3> &f) { return f.sum(); }
 inline fixed<int, 3> threes() { return fixed<int, 3>{{3, 3, 3}}; }
 

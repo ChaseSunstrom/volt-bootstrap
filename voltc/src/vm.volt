@@ -33,6 +33,8 @@ export struct volt_vm {
     runtime: std::map<str, bool> = {}; // the runtime's names, for a sandbox (runtime_names)
     prefix: u8 = 0;                   // the JIT's global prefix on C names (Mach-O's _), for the filters
     scripts: std::vec<vm_script> = {}; // what's loaded, each a package to the scripts after it
+    pp_memo: std::map<std::string, std::string> = {}; // the headers its scripts read (opts.pp_memo)
+    link_flags: std::vec<std::string> = {}; // what the libraries its loads built link (use LANG's)
 }
 
 // a loaded script: the package its file names, its source (a later script is checked with it, and
@@ -184,7 +186,7 @@ fn load_here(v: volt_vm&, name: str, source: str) -> vm_error!void {
     }
     v.loads += 1;
     var s: sources = {};
-    var o: opts = { release: v.release, runtime: false, lib: null, line_info: false };
+    var o: opts = { release: v.release, runtime: false, lib: null, line_info: false, running: true };
     if (v.std_dir.len() > 0) {
         for (f&) in volt_files(v.std_dir.as_str()).items() {
             val text = std::fs::read_file(f.as_str()) catch |e| {
@@ -222,7 +224,9 @@ fn load_here(v: volt_vm&, name: str, source: str) -> vm_error!void {
             put(&o.pkg_files, { file: u.file, pkg: u.pkg });
         }
     }
+    swap(&o.pp_memo, &v.pp_memo);
     val chk = compile_rounds(&s.files, &s.asts, move o);
+    v.pp_memo = copy chk.opts.pp_memo;
     if (chk.errors.len > 0) {
         val diags = all_diags(&*chk);
         return v.fail(vm_error::COMPILE, report(&s.files, &diags, 0, false, 20).as_str());
@@ -238,10 +242,11 @@ fn load_here(v: volt_vm&, name: str, source: str) -> vm_error!void {
     // what its C and C++ imports need, built by the C and C++ compilers into a library the JIT
     // finds their symbols in; in a sandbox, by clang into LLVM bitcode linked into the script's own
     // module, so the JIT runs it and what it reaches goes through the sandbox's filter (a library's
-    // code would reach past it)
+    // code would reach past it). Only when its module needs it (needs_native): an earlier script's
+    // imports, which a later one reaches through that script's code, are built by its own load
     var native: std::string? = null;
     var ctors: std::vec<std::string> = {};
-    if (g.hdr.len > 0 || chk.c_includes.len > 0 || chk.c_units.len > 0 || chk.cpp_units.len > 0 || chk.link_flags.len > 0) {
+    if (v.needs_native(&*chk, &g)) {
         var err = S("");
         var bcs: std::vec<std::string> = {};
         if (v.sandbox) {
@@ -323,6 +328,11 @@ fn load_here(v: volt_vm&, name: str, source: str) -> vm_error!void {
             return v.fail(vm_error::JIT, jit_error(le).as_str());
         }
         llvm::LLVMOrcJITDylibAddGenerator(v.jd, lib_gen);
+        for (f&) in chk.link_flags.items() {
+            if (!v.links(f.as_str())) {
+                put(&v.link_flags, copy *f);
+            }
+        }
     }
     // the module and its context go to the JIT (so ask it what it has first); the rest of the
     // backend's state goes now
@@ -414,6 +424,44 @@ fn drop_tracker(rt: llvm::LLVMOrcOpaqueResourceTracker*) -> void {
         llvm::LLVMConsumeError(e);
     }
     llvm::LLVMOrcReleaseResourceTracker(rt);
+}
+
+// does the script's module need its imports' code built: a header function's pointer (volt_c_NAME,
+// lgen's header_ptr) or a C++ wrapper it calls, or (natively) a library no load has linked yet? An
+// earlier script's imports that only its own code reaches were built by its load
+attach fn needs_native(this: volt_vm&, chk: checker&, g: lg&) -> bool {
+    var x = llvm::LLVMGetFirstGlobal(g.m);
+    while (x != null) {
+        if (llvm::LLVMIsDeclaration(x) != 0 && starts_with(value_name(x), "volt_c_")) {
+            return true;
+        }
+        x = llvm::LLVMGetNextGlobal(x);
+    }
+    for (f) in chk.cpp_shim_fns.items() {
+        var n = S(g.symbol(chk.ir.fn_at(f)));
+        if (llvm::LLVMGetNamedFunction(g.m, n.c_str()) != null) {
+            return true;
+        }
+    }
+    // (a sandbox links no library: its imports' code is bitcode in the script's module)
+    if (!this.sandbox) {
+        for (f&) in chk.link_flags.items() {
+            if (!this.links(f.as_str())) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+// has a library a load built linked with flag?
+attach fn links(this: volt_vm&, flag: str) -> bool {
+    for (f&) in this.link_flags.items() {
+        if (f.as_str() == flag) {
+            return true;
+        }
+    }
+    return false;
 }
 
 // a script's native code (its imports' C: their headers' functions' pointers, a C unit of another

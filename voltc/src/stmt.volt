@@ -614,28 +614,44 @@ attach fn frame_root(this: checker&, x: expr&) -> str? {
             }
             val name = p.segs.at(0).name;
             val l = this.lookup_local(name) ?? return null;
-            if (l.own == null) {
+            if (l.own == null || this.points_away(l.ty)) {
                 return null;
             }
-            match (*this.t.get(l.ty)) {
-                .REF(t) => { return null; },
-                .PTR(t) => { return null; },
-                .SLICE(t) => { return null; },
-                .VOIDPTR => { return null; },
-                .CSTR => { return null; },
-                .STR => { return null; },
-                default => { return name; },
-            }
+            return name;
         },
         .FIELD(b, n, g) => {
-            if (g != null) {
+            if (g != null || this.through_view(b)) {
                 return null;
             }
             return this.frame_root(b);
         },
-        .INDEX(b, i) => { return this.frame_root(b); },
+        .INDEX(b, i) => {
+            if (this.through_view(b)) {
+                return null; // an element of a slice field is where the slice points
+            }
+            return this.frame_root(b);
+        },
         default => { return null; },
     }
+}
+
+// is a t a view of memory held somewhere else (a reference, pointer, slice or string)?
+attach fn points_away(this: checker&, t: u32) -> bool {
+    match (*this.t.get(t)) {
+        .REF(x) => { return true; },
+        .PTR(x) => { return true; },
+        .SLICE(x) => { return true; },
+        .VOIDPTR => { return true; },
+        .CSTR => { return true; },
+        .STR => { return true; },
+        default => { return false; },
+    }
+}
+
+// is b, a part of a local, a view (a slice or reference field), so its parts aren't the local's?
+attach fn through_view(this: checker&, b: expr&) -> bool {
+    val t = this.local_part_ty(b) ?? return false;
+    return this.points_away(t);
 }
 
 // `return`: the value moves out, then every scope's exits run (errdefers too when an error union
@@ -804,6 +820,11 @@ attach fn back_edge(this: checker&, li: usize) -> compile_error!void {
         return;
     }
     this.stale_at_back_edge(li);
+    // a reference a local from outside the loop took after a suspend in it is held at that
+    // suspend on the next pass (p = &n after the suspend)
+    if (this.cx.frame != null && this.cx.suspends.len > this.cx.loops.at(li).suspends) {
+        this.note_self_ref(this.cx.loops.at(li).depth);
+    }
     var outer: usize = 0;
     for (k) in 0..li + 1 {
         if (!this.cx.loops.at(k).is_block) {
@@ -841,7 +862,7 @@ attach fn push_loop(this: checker&, label: str?, is_block: bool, value: bool, wa
     if (value) {
         bt = want;
     }
-    put(&this.cx.loops, { label: label, is_block: is_block, brk: this.ir.label(), cont: cont, result: null, break_ty: bt, can_value: value, depth: this.cx.scopes.len, moved_at_entry: copy this.cx.moved });
+    put(&this.cx.loops, { label: label, is_block: is_block, brk: this.ir.label(), cont: cont, result: null, break_ty: bt, can_value: value, depth: this.cx.scopes.len, moved_at_entry: copy this.cx.moved, suspends: this.cx.suspends.len });
     return this.cx.loops.len - 1;
 }
 

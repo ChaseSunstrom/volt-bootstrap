@@ -90,7 +90,8 @@ fn main() -> void {
 `f64x2`, `f64x4`, `i32x4`, `i32x8`, `i64x2` and `u8x16`, or `vec(T, n)` for any other (ints of up to
 64 bits or `f32`/`f64`, a power of two lanes, 64 bytes at most). Two vectors of one type add,
 subtract and multiply (int lanes wrap), float lanes divide too and int lanes take `&`, `|` and `^`;
-`-v` negates every lane and `v[i]` reads or writes one (checked, as an array's index is). Int lanes
+`-v` negates every lane, `~v` flips an int vector's bits, and `v[i]` reads or writes one lane
+(checked, as an array's index is). Int lanes
 shift, `v << n` and `v >> n`, by a vector of amounts (lane by lane) or one amount for every lane;
 `>>` is arithmetic on signed lanes. As a scalar shift, an amount past the lanes' width stops a
 debug build before any lane is shifted (`shift amount too large (lane 2)`, naming the lane of a

@@ -796,6 +796,34 @@ attach fn ct_expr(this: checker&, e: expr&, want: u32?) -> compile_error!cval {
                         return cval::BOOL(!b);
                     }
                 },
+                .VECTOR(xs&, vt) => {
+                    // lane by lane, as at run time: int lanes wrap (as SIMD does), ~ on int lanes only
+                    val et = this.vector_lane(vt);
+                    val k = this.t.int_of(et);
+                    var out: std::vec<cval> = {};
+                    for (x&) in xs.items() {
+                        match (*x) {
+                            .INT(n, t) => {
+                                val kk = k ?? return fails(span, "this operator doesn't work on that value at compile time");
+                                var r = ~n;
+                                if (op == unop::NEG) {
+                                    r = 0 -% n; // (wrapping: an i128 lane's minimum too)
+                                } else if (op != unop::BITNOT) {
+                                    return fails(span, "this operator doesn't work on that value at compile time");
+                                }
+                                put(&out, cval::INT(wrap_bits(r, kk.bits(), kk.signed()), et));
+                            },
+                            .FLOAT(f, t, q) => {
+                                if (op != unop::NEG) {
+                                    return fails(span, "this operator doesn't work on that value at compile time");
+                                }
+                                put(&out, cval::FLOAT(-f, t, q ^ (@cast<u128>(1) << 127)));
+                            },
+                            default => { return fails(span, "this operator doesn't work on that value at compile time"); },
+                        }
+                    }
+                    return cval::VECTOR(move out, vt);
+                },
                 default => {},
             }
             return fails(span, "this operator doesn't work on that value at compile time");
@@ -827,7 +855,17 @@ attach fn ct_expr(this: checker&, e: expr&, want: u32?) -> compile_error!cval {
                 // a shift is its left side's type (an untyped literal shifted by a typed amount: the
                 // wanted integer type, else i32, as at run time), its amount any integer type; two
                 // literals stay an exact number, fit to the wanted type after (1 << 9 for a u8: 512)
-                val amount = try this.ct_expr(b, null);
+                var amount_want: u32? = null;
+                match (av) {
+                    .VECTOR(xs, vt) => {
+                        match (b.kind) {
+                            .LITERAL(es) => { amount_want = vt; },
+                            default => {},
+                        }
+                    },
+                    default => {},
+                }
+                val amount = try this.ct_expr(b, amount_want);
                 var typed_amount = true;
                 match (amount) {
                     .INT(y, ty) => { typed_amount = ty != VOID; },

@@ -63,6 +63,17 @@ attach fn program(this: checker&) -> compile_error!void {
         this.use_fn(i);
         mi = i;
     }
+    // a plain export fn's C name is fixed: taken before the roots below pick generated names (an
+    // async fn's helpers, helper_c_name), whichever comes first in the source
+    for (di) in 0..this.decls.len {
+        val d = @cast<u32>(di);
+        val f = this.fn_decl_of(d) ?? continue;
+        if (f.is_export && !f.is_attach && this.fn_generics(d).len == 0) {
+            val none: std::vec<param_info> = {};
+            val no_args: std::vec<gval> = {};
+            this.used_c_names.put(f.c_name ?? this.export_c_name(d, f.name, false, &none, &no_args), 1);
+        }
+    }
     // every non-generic fn is a root, used or not, so its body is always checked (templates are
     // checked per instance, like C++); exported fns have to exist for C anyway. A library only
     // roots its own package

@@ -351,7 +351,7 @@ attach fn generic_closure_want(this: checker&, id: u32, i: usize) -> u32? {
             put(&e.generics, copy *b);
         }
         for (gp&) in g.gps.items() {
-            put(&e.generics, { name: gp.name, g: gval::INT(0) });
+            put(&e.generics, { name: gp.name, g: gval::INT(0), ty: param_ty(gp) });
         }
         val ne = this.new_env(move e);
         val t = this.resolve_type(&p.ty, ne) catch |x| { return null; };
@@ -405,7 +405,7 @@ attach fn closure_instance(this: checker&, id: u32, args: std::vec<u32>&, span: 
         put(&e.generics, copy *b);
     }
     for (i) in 0..g.gps.len {
-        put(&e.generics, { name: g.gps.at(i).name, g: *gv.at(i) });
+        put(&e.generics, { name: g.gps.at(i).name, g: *gv.at(i), ty: param_ty(g.gps.at(i)) });
     }
     val ie = this.new_env(move e);
     var ptys: std::vec<u32> = {};
@@ -511,9 +511,7 @@ attach fn fn_value(this: checker&, inst: u32, fv: u32) -> u32 {
     } else {
         val f = this.fi(inst);
         val ret = f.ret;
-        var name = S(f.c_name);
-        name.append("_tramp");
-        var irf: ir_fn = { name: this.intern(move name), params: {}, ret: ret, link: linkage::STATIC, used: true, noreturn: ret == NEVER, origin: this.item_of(f.decl).span, about: f.name };
+        var irf: ir_fn = { name: this.helper_c_name(f.c_name, "_tramp"), params: {}, ret: ret, link: linkage::STATIC, used: true, noreturn: ret == NEVER, origin: this.item_of(f.decl).span, about: f.name };
         put(&irf.locals, { name: "env", ty: VOIDPTR });
         put(&irf.params, 0);
         var args: std::vec<u32> = {};

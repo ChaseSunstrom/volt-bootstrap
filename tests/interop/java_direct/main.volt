@@ -67,6 +67,10 @@ fn run() -> geo::java_error!void {
     val d = geo::Generic::minutes(2);
     val b = geo::Generic::boxed(7);
     std::println("{} {} {} {} {}", d.toString().as_str(), geo::Generic::seconds(&d), b.toString().as_str(), b.equals(&b), d.is_null());
+    // an imported class as a java_object, for equals(Object) and any Object parameter: the same object
+    val p1 = geo::Point::new(1.0, 2.0);
+    val p2 = geo::Point::new(1.0, 2.0).as_java_object();
+    std::println("as object {} {} {}", p1.equals(&p2), p2.toString().as_str(), p2.equals(&b));
 }
 
 fn main() -> !void {
@@ -93,3 +97,4 @@ fn main() -> !void {
 // expect: first 1 b max 9 pear
 // expect: cycle green red first point 3
 // expect: PT2M 120 7 true false
+// expect: as object true (1.0, 2.0) false
