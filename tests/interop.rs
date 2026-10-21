@@ -1901,6 +1901,32 @@ fn cpp_derive3() {
 }
 
 #[test]
+fn cpp_derive4() {
+    // a Volt subclass overriding the & twin of a virtual method declared after its && one, the
+    // later of two overloads differing only in const by its _const or _nonconst name, and the
+    // virtual d_double beside a d(double) whose suffixed name that is (it stays C++'s, saying
+    // why); built by the default $CXX and by clang++
+    let e = Env::new("cpp-derive4");
+    let want = "70 2030 4050 61072 810290 8\n10 203 405 1003 10204 5\n";
+    for backend in ["c", "llvm"] {
+        assert_eq!(ok(e.voltc(&["run", "cpp_derive4.volt", "--backend", backend]), "voltc run cpp_derive4.volt"), want, "C++ derive, twins ({backend})");
+    }
+    assert_eq!(ok(e.voltc_cxx(&["run", "cpp_derive4.volt"], Some("clang++")), "voltc run cpp_derive4.volt (clang++)"), want, "C++ derive, twins, by clang++");
+    let shown = Command::new(&e.voltc).args(["check", "cpp_derive4.volt", "--std"]).arg(Path::new(ROOT).join("std")).current_dir(Path::new(ROOT).join("tests/interop")).env("VOLT_SHOW_CPP", "1").output().unwrap();
+    let src = String::from_utf8_lossy(&shown.stderr);
+    assert!(src.contains("// (d4::Q::d is C++'s own in a Volt type deriving from it: an overload, and d_double is taken)"), "a taken suffixed name: {src}");
+    assert!(src.contains("// (d4::Q::g is C++'s own in a Volt type deriving from it: an && method)"), "the && twin: {src}");
+    // a reference to a class held by handle, given back from an empty handle, stops the program
+    // saying so
+    let hpp = Path::new(ROOT).join("tests/interop/derive4.hpp");
+    let src = format!("use {{ \"{}\" }} as cpp;\nstruct held {{ it: cpp::d4::Item; }}\nattach cpp::d4::Q -> held {{\n    fn pick(this, self: cpp::d4::Q&) -> cpp::d4::Item& {{ return &this.it; }}\n}}\nfn main() -> void {{\n    val h: held = {{ it: {{ cpp: null, borrowed: true }} }};\n    var q = cpp::d4::Q::derive(move h);\n    val n = cpp::d4::use_pick(&q);\n}}\n", hpp.display());
+    std::fs::write(e.dir.join("cpp_derive_empty.volt"), src).unwrap();
+    let o = e.voltc(&["run", &e.path("cpp_derive_empty.volt")]);
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(o.status.code() == Some(101) && err.contains("a C++ object Volt holds by handle was never made (its handle is empty)"), "an empty handle's reference: {:?} {err}", o.status);
+}
+
+#[test]
 fn cpp_module() {
     // a C++20 named module (its interface imports std) and a header doing `import std;`: read by
     // libclang from clang-precompiled modules, built by $CXX its own way (g++'s module mapper,
