@@ -40,7 +40,8 @@ jobs:
           - { arch: x86-64, os: ubuntu-24.04 }
           - { arch: arm64, os: ubuntu-24.04-arm }
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 180
+    # (arm64's selfhost tests alone take 105 minutes)
+    timeout-minutes: 300
     steps:
       - uses: actions/checkout@v5
       # a JDK 22 or later for the Java tests (java_direct, java_package): the runner's javac is 17,
