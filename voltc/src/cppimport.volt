@@ -2031,7 +2031,7 @@ attach fn param(this: cpp_gen&, t: clang::CXType, name: str, i: usize, tparams: 
         if (clang::clang_isConstQualifiedType(et) == 0 && clang::clang_isConstQualifiedType(bc) == 0 && !starts_with(canon(base).as_str(), "const ")) {
             arr.push('&');
         }
-        return { vty: move arr, pass: fmt("@cast<void*>(&{}[0])", S(name)), cpp: fmt2("*(VOLT_ID({}) *)({})", canon(base), move slot) };
+        return { vty: move arr, pass: fmt("@cast<void*>(&{}[0])", S(name)), cpp: fmt2("(*(VOLT_ID({}) *)({}))", canon(base), move slot) };
     }
     // a std::string&: a Volt std::string&. C++ changes a copy of it, which the Volt string gets once
     // the call returns (volt_cpp_text_back: not when it threw, so a try_ form leaves it as it was)
@@ -2044,7 +2044,8 @@ attach fn param(this: cpp_gen&, t: clang::CXType, name: str, i: usize, tparams: 
         pre.append(fmt("if ({} == null) {{ @panic(\"out of memory\"); }}\n", copy h).as_str());
         pre.append(fmt2("defer @cpp<void>(\"delete (VOLT_ID({}) *){{0}}\", {});\n", copy ty, copy h).as_str());
         pre.append(fmt3("defer volt_cpp_text_back({}, @cpp<str>(\"volt_cpp_view(*(VOLT_ID({}) *){{0}})\", {}));", S(name), copy ty, copy h).as_str());
-        return { vty: S("std::string&"), pass: copy h, cpp: fmt2("*(VOLT_ID({}) *)({})", copy ty, move slot), pre: move pre, text_ref: true };
+        // parenthesized, so a member call binds to the string: {0}.push_back('y')
+        return { vty: S("std::string&"), pass: copy h, cpp: fmt2("(*(VOLT_ID({}) *)({}))", copy ty, move slot), pre: move pre, text_ref: true };
     }
     if (!mutable_ref) {
         if (char_text(base, "basic_string")) {
@@ -3494,7 +3495,10 @@ attach fn first_time(this: cpp_gen&, head: str, types: str) -> bool {
 }
 
 // a Volt fn whose body makes the C++ call (sig: its signature up to the result type)
-attach fn fn_text(this: cpp_gen&, generics: str, sig: str, r: cpp_ret&, cpp: str, tail: str, extra: str) -> void {
+attach fn fn_text(this: cpp_gen&, generics: str, sig: str, r: cpp_ret&, cpp_text: str, tail: str, extra: str) -> void {
+    // every use is inside a Volt string literal (@cpp text may have its own: {0}.append("z"))
+    val esc = escape_str(cpp_text);
+    val cpp = esc.as_str();
     this.put_note();
     if (generics.len > 0) {
         this.line(generics);
@@ -8743,8 +8747,8 @@ fn probe_writes(fc: clang::CXCursor, seq: std::vec<usize>&) -> u64 {
     for (call&) in calls.items() {
         val callee = clang::clang_getCursorReferenced(*call);
         val n = clang::clang_Cursor_getNumArguments(*call);
-        if (clang::clang_Cursor_isNull(callee) != 0 || n <= 0) {
-            continue;
+        if (clang::clang_Cursor_isNull(callee) != 0 || n < 0) {
+            continue; // (n is 0 for {0}.clear(): its object can still be written)
         }
         // a member operator's object is clang's argument 0 (rd >> s), not a parameter: only there
         // does argument 0 start where the call does (o.f(a) starts at o, its a after)
@@ -8754,6 +8758,17 @@ fn probe_writes(fc: clang::CXCursor, seq: std::vec<usize>&) -> u64 {
             val (as0, ae0) = extent_offsets(clang::clang_Cursor_getArgument(*call, 0));
             if (as0 == cs) {
                 skip = 1;
+            }
+            // a non-const method can change its object: {0}.append(..), {0} += ..
+            if (clang::clang_CXXMethod_isConst(callee) == 0) {
+                if (skip == 1) {
+                    mask = mask | holes_within(&holes, seq, clang::clang_Cursor_getArgument(*call, 0));
+                } else {
+                    val kids = children(*call);
+                    if (kids.len > 0 && clang::clang_getCursorKind(*kids.at(0)) == clang::CXCursor_MemberRefExpr) {
+                        mask = mask | holes_within(&holes, seq, *kids.at(0));
+                    }
+                }
             }
         }
         for (a) in skip..@cast<u32>(n) {
@@ -8765,13 +8780,20 @@ fn probe_writes(fc: clang::CXCursor, seq: std::vec<usize>&) -> u64 {
             if (pt.kind != clang::CXType_LValueReference || clang::clang_isConstQualifiedType(clang::clang_getPointeeType(pt)) != 0) {
                 continue;
             }
-            val (lo, hi) = extent_offsets(clang::clang_Cursor_getArgument(*call, a));
-            for (j) in 0..holes.len {
-                val at = cursor_offset(*holes.at(j));
-                if (at >= lo && at < hi && j < seq.len && *seq.at(j) < 64) {
-                    mask = mask | (@cast<u64>(1) << @cast<u32>(*seq.at(j)));
-                }
-            }
+            mask = mask | holes_within(&holes, seq, clang::clang_Cursor_getArgument(*call, a));
+        }
+    }
+    return mask;
+}
+
+// the bits (by seq, the holes' indexes in text order) of the holes inside c's text
+fn holes_within(holes: std::vec<clang::CXCursor>&, seq: std::vec<usize>&, c: clang::CXCursor) -> u64 {
+    val (lo, hi) = extent_offsets(c);
+    var mask: u64 = 0;
+    for (j) in 0..holes.len {
+        val at = cursor_offset(*holes.at(j));
+        if (at >= lo && at < hi && j < seq.len && *seq.at(j) < 64) {
+            mask = mask | (@cast<u64>(1) << @cast<u32>(*seq.at(j)));
         }
     }
     return mask;
