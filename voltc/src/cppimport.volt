@@ -8169,8 +8169,41 @@ attach fn cpp_instance_on(this: checker&, k: usize, expr: str, types: std::vec<u
     return made;
 }
 
+// the C++ context of a call made per use from here: the one of the import whose namespace this is
+// in, else none (the program's own code: cpp_instance_from tries each import). With no import at
+// all, one made for the C++ standard library's headers alone, keyed to this namespace
+attach fn cpp_root_ctx(this: checker&) -> usize? {
+    if (this.cpp_ctxs.len == 0) {
+        val newest = this.cpp_newest();
+        var cargs = this.cpp_args(newest);
+        var g: cpp_gen = { c: this, kinds: S("volt_cpp_kinds_none") };
+        val tu = clang_parse("volt_cpp_none.cpp", "", &cargs);
+        put(&this.cpp_ctxs, { ns: this.env_at(this.cx.env).ns, src: {}, args: move cargs, gen: move g, tu: move tu, unit: this.cpp_unit_for(newest) });
+    }
+    return this.cpp_ctx_of(this.env_at(this.cx.env).ns);
+}
+
+// cpp_instance of a call from context k, or from the program's own code (k none): there the first
+// import whose headers make it work (one needing a later import's isn't asked of the first's
+// alone), and when none does, the first's error
+// ponytail: each import that can't make it is another clang parse; pick by the names it uses if
+// programs with many imports make failing calls slow
+attach fn cpp_instance_from(this: checker&, k: usize?, expr: str, types: std::vec<u32>&, value: bool, span: span) -> compile_error!u32 {
+    if (k) {
+        return this.cpp_instance(k, expr, types, false, value, span);
+    }
+    val first = this.cpp_instance(0, expr, types, false, value, span) catch |e| {
+        for (j) in 1..this.cpp_ctxs.len {
+            val made = this.cpp_instance(j, expr, types, false, value, span) catch |e2| { continue; };
+            return made;
+        }
+        return e;
+    };
+    return first;
+}
+
 // @cpp("C++ expression", args...) with no result type: clang works it out, as for a call made per
-// use, in the first C++ import's headers (or none)
+// use, in the headers of the first C++ import that has what it names (or none)
 attach fn cpp_typed_by_clang(this: checker&, args: std::vec<garg>&, span: span) -> compile_error!tval {
     val fe = try this.garg_value(args.at(0));
     var text: std::string = {};
@@ -8192,15 +8225,7 @@ attach fn cpp_typed_by_clang(this: checker&, args: std::vec<garg>&, span: span) 
         put(&pre, v);
         put(&es, copy *e);
     }
-    if (this.cpp_ctxs.len == 0) {
-        // no import: the C++ standard library's headers alone
-        val newest = this.cpp_newest();
-        var cargs = this.cpp_args(newest);
-        var g: cpp_gen = { c: this, kinds: S("volt_cpp_kinds_none") };
-        val tu = clang_parse("volt_cpp_none.cpp", "", &cargs);
-        put(&this.cpp_ctxs, { ns: this.env_at(this.cx.env).ns, src: {}, args: move cargs, gen: move g, tu: move tu, unit: this.cpp_unit_for(newest) });
-    }
-    val made = try this.cpp_instance(0, text.as_str(), &types, false, true, span);
+    val made = try this.cpp_instance_from(this.cpp_root_ctx(), text.as_str(), &types, true, span);
     var cands: std::vec<u32> = {};
     put(&cands, made);
     var none: std::vec<garg> = {};
@@ -9279,7 +9304,7 @@ attach fn cpp_text_template(this: checker&, r: u32, gargs: std::vec<garg>&, args
         put(&cpre, held_v);
         put(&xpre, held_v);
     }
-    val k = this.cpp_ctx_of(this.env_at(this.cx.env).ns) ?? 0;
+    val k = this.cpp_root_ctx();
     var value = true;
     match (*this.t.get(r)) {
         .REF(x) => { value = false; },
@@ -9295,12 +9320,12 @@ attach fn cpp_text_template(this: checker&, r: u32, gargs: std::vec<garg>&, args
     // is probed with it as an address too (cpp_instance_addr): up to six each time a failing call
     // is checked; cache failed probes if that gets slow
     if (places) {
-        val first = this.cpp_instance(k, text.as_str(), &xtys, false, value, span) catch |e| {
-            val made = this.cpp_instance(k, text.as_str(), &ctys, false, value, span) catch |e2| {
+        val first = this.cpp_instance_from(k, text.as_str(), &xtys, value, span) catch |e| {
+            val made = this.cpp_instance_from(k, text.as_str(), &ctys, value, span) catch |e2| {
                 if (!texts) {
                     return e;
                 }
-                put(&cands, this.cpp_instance(k, text.as_str(), &mtys, false, value, span) catch |e3| { return e; });
+                put(&cands, this.cpp_instance_from(k, text.as_str(), &mtys, value, span) catch |e3| { return e; });
                 try this.text_written(&fixed, span);
                 // ...and the placed ones, taken as S& too
                 for (w&) in placed.items() {
@@ -9328,8 +9353,8 @@ attach fn cpp_text_template(this: checker&, r: u32, gargs: std::vec<garg>&, args
         }
         return this.pick_call("@cpp", &cands, null, null, &none, &xpre, &es, null, span);
     }
-    val made = this.cpp_instance(k, text.as_str(), &ctys, false, value, span) catch |e| {
-        put(&cands, try this.cpp_instance(k, text.as_str(), &mtys, false, value, span));
+    val made = this.cpp_instance_from(k, text.as_str(), &ctys, value, span) catch |e| {
+        put(&cands, try this.cpp_instance_from(k, text.as_str(), &mtys, value, span));
         try this.text_written(&fixed, span);
         return this.pick_call("@cpp", &cands, null, null, &none, &mpre, &es, null, span);
     };
