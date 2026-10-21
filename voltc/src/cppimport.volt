@@ -8746,8 +8746,18 @@ fn probe_writes(fc: clang::CXCursor, seq: std::vec<usize>&) -> u64 {
         if (clang::clang_Cursor_isNull(callee) != 0 || n <= 0) {
             continue;
         }
-        for (a) in 0..@cast<u32>(n) {
-            val parm = clang::clang_Cursor_getArgument(callee, a);
+        // a member operator's object is clang's argument 0 (rd >> s), not a parameter: only there
+        // does argument 0 start where the call does (o.f(a) starts at o, its a after)
+        var skip: u32 = 0;
+        if (clang::clang_getCursorKind(callee) == clang::CXCursor_CXXMethod && clang::clang_CXXMethod_isStatic(callee) == 0) {
+            val (cs, ce) = extent_offsets(*call);
+            val (as0, ae0) = extent_offsets(clang::clang_Cursor_getArgument(*call, 0));
+            if (as0 == cs) {
+                skip = 1;
+            }
+        }
+        for (a) in skip..@cast<u32>(n) {
+            val parm = clang::clang_Cursor_getArgument(callee, a - skip);
             if (clang::clang_Cursor_isNull(parm) != 0) {
                 continue; // past a variadic function's parameters
             }
@@ -8755,11 +8765,7 @@ fn probe_writes(fc: clang::CXCursor, seq: std::vec<usize>&) -> u64 {
             if (pt.kind != clang::CXType_LValueReference || clang::clang_isConstQualifiedType(clang::clang_getPointeeType(pt)) != 0) {
                 continue;
             }
-            val r = clang::clang_getCursorExtent(clang::clang_Cursor_getArgument(*call, a));
-            var lo: u32 = 0;
-            var hi: u32 = 0;
-            clang::clang_getExpansionLocation(clang::clang_getRangeStart(r), null, null, null, &lo);
-            clang::clang_getExpansionLocation(clang::clang_getRangeEnd(r), null, null, null, &hi);
+            val (lo, hi) = extent_offsets(clang::clang_Cursor_getArgument(*call, a));
             for (j) in 0..holes.len {
                 val at = cursor_offset(*holes.at(j));
                 if (at >= lo && at < hi && j < seq.len && *seq.at(j) < 64) {

@@ -9,3 +9,7 @@ namespace vw {
 template <typename S> int pick(S &s) { s += "?"; return 1; }
 template <typename S> int pick(const S &) { return 2; }
 }
+// a member operator: clang counts its object as the call's first argument (val_cpp_write_op)
+namespace vw {
+struct rd { void operator>>(std::string &s) { s += "x"; } };
+}
