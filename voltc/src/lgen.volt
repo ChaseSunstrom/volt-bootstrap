@@ -440,6 +440,10 @@ attach fn has_unaligned(this: lg&, t: u32, off: u64) -> bool {
         return false;
     }
     val l = this.lt(t);
+    // (nothing in it: a struct of no LLVM elements has no offsets to ask for, as classify knows)
+    if (this.size_of(l) == 0) {
+        return false;
+    }
     if (llvm::LLVMGetTypeKind(l) == llvm::LLVMStructTypeKind) {
         for (i) in 0..this.member_count(t) {
             val mt = this.member_ty(t, @cast<u32>(i));
