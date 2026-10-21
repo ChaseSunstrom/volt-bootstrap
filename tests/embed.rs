@@ -52,8 +52,6 @@ fn embedded_volt() {
     }
     let out = ok(c.output().unwrap(), "host");
     assert_eq!(out, C_OUT);
-    // (Linux and macOS: on Windows a VM script's C and C++ imports aren't built yet, T-0606)
-    #[cfg(unix)]
     {
         // a script importing a C header and a C++ one, with the compilers on PATH: their code is
         // compiled for it as it loads
@@ -67,10 +65,13 @@ fn embedded_volt() {
             c.arg("box").env("CC", b.join("clang")).env("CXX", b.join("clang++"));
         }
         let out = ok(c.output().unwrap(), "host_imports");
-        let native = "run 53\nuser 54\nthrice 15\nstd 9 13, kept\nreload hv 10\nreload hv 20\nreload inner hv 30\nreload inner hv 40\nheader fn 10 20\nheader fn after a failed load 40\nheader removed, next load 7\nheader removed, a header fn 8\nheader inline 10 20\n";
-        assert_eq!(out, if clang.is_some() { IMPORTS_OUT } else { native });
+        // (Windows: no std module case, which watches $CXX through a sh wrapper)
+        let std_line = if cfg!(windows) { "" } else { "std 9 13, kept\n" };
+        let native = format!("run 53\nuser 54\nthrice 15\n{std_line}reload hv 10\nreload hv 20\nreload inner hv 30\nreload inner hv 40\nheader fn 10 20\nheader fn after a failed load 40\nheader removed, next load 7\nheader removed, a header fn 8\nheader inline 10 20\n");
+        assert_eq!(out, if clang.is_some() { IMPORTS_OUT } else { native.as_str() });
         // a C compiler that rejects -H (tcc does): the headers it read aren't listed, so only those the
         // #include lines name are watched (an edit to one they include isn't seen: inner hv stays 30)
+        #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
             let cc = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()).map(|d| d.join("cc")).find(|p| p.is_file()).expect("cc on PATH");

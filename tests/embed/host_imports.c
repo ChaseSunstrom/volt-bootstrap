@@ -11,8 +11,42 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#ifdef _WIN32
+#include <direct.h>
+#include <windows.h>
+// the POSIX calls this test makes, by Windows' names
+static int setenv(const char *k, const char *v, int o) {
+    (void)o;
+    return _putenv_s(k, v);
+}
+static int unsetenv(const char *k) { return _putenv_s(k, ""); }
+#define rmdir _rmdir
+#else
 #include <unistd.h>
+#endif
 #include "voltvm.h"
+
+// a new directory for the test's files, its path with forward slashes (it goes in Volt string
+// literals): 0 if none could be made
+static int new_dir(char *out, size_t n) {
+#ifdef _WIN32
+    static int k = 0;
+    char base[MAX_PATH];
+    if (!GetTempPathA(sizeof base, base)) {
+        return 0;
+    }
+    snprintf(out, n, "%svoltvm-test-%lu-%d", base, (unsigned long)GetCurrentProcessId(), k++);
+    for (char *p = out; *p; p++) {
+        if (*p == '\\') {
+            *p = '/';
+        }
+    }
+    return _mkdir(out) == 0;
+#else
+    snprintf(out, n, "/tmp/voltvm-test-XXXXXX");
+    return mkdtemp(out) != NULL;
+#endif
+}
 
 static volt_str S(const char *s) { return (volt_str){ (const uint8_t *)s, strlen(s) }; }
 
@@ -75,8 +109,8 @@ static long long thrice_of(voltvm_volt_vm *vm, const char *dir, const char *what
 
 // a header the script imports changed on disk and the script loaded again: it reads the new one
 static void header_changes(voltvm_volt_vm *vm) {
-    char dir[] = "/tmp/voltvm-test-XXXXXX";
-    if (!mkdtemp(dir)) {
+    char dir[512];
+    if (!new_dir(dir, sizeof dir)) {
         printf("reload: no temporary directory\n");
         return;
     }
@@ -144,8 +178,8 @@ static void header_removed(voltvm_volt_vm *vm, const char *what) {
         return;
     }
     printf("%s, next load %d\n", what, ((int (*)(void))volt_vm_find(vm, S("after_hf")))());
-    char dir[] = "/tmp/voltvm-test-XXXXXX";
-    if (!mkdtemp(dir)) {
+    char dir[512];
+    if (!new_dir(dir, sizeof dir)) {
         printf("%s: no temporary directory\n", what);
         return;
     }
@@ -165,8 +199,8 @@ static void header_removed(voltvm_volt_vm *vm, const char *what) {
 // calls its own body. And a load that failed after its library was linked (a symbol nowhere), loaded
 // again with the header changed: the new body, not the failed library's
 static void header_fn_changes(voltvm_volt_vm *vm, const char *what) {
-    char dir[] = "/tmp/voltvm-test-XXXXXX";
-    if (!mkdtemp(dir)) {
+    char dir[512];
+    if (!new_dir(dir, sizeof dir)) {
         printf("%s: no temporary directory\n", what);
         return;
     }
@@ -203,8 +237,8 @@ static void header_fn_changes(voltvm_volt_vm *vm, const char *what) {
 // a C++ header's inline function (external linkage: each load's library has its own copy, a weak
 // symbol) changed between two scripts' loads: each calls its own copy, not the first library's
 static void header_inline_changes(voltvm_volt_vm *vm, const char *what) {
-    char dir[] = "/tmp/voltvm-test-XXXXXX";
-    if (!mkdtemp(dir)) {
+    char dir[512];
+    if (!new_dir(dir, sizeof dir)) {
         printf("%s: no temporary directory\n", what);
         return;
     }
@@ -247,8 +281,8 @@ static int wrapper(const char *path, const char *log, const char *real) {
 // two scripts importing a C++ header that does import std;: the second one's load builds its own
 // C++ (and libclang reads the header again), but the std module the first one's built is kept
 static void std_kept(voltvm_volt_vm *vm, const char *dir) {
-    char tmp[] = "/tmp/voltvm-test-XXXXXX";
-    if (!mkdtemp(tmp)) {
+    char tmp[512];
+    if (!new_dir(tmp, sizeof tmp)) {
         printf("std: no temporary directory\n");
         return;
     }
@@ -324,7 +358,10 @@ int main(int argc, char **argv) {
     printf("run %lld\n", ((long long (*)(void))volt_vm_find(vm, S("run")))());
     printf("user %lld\n", user_of(vm, "user"));
     printf("thrice %lld\n", thrice_of(vm, argv[2], "thrice"));
+#ifndef _WIN32
+    // (a C++ std module's build, watched through a sh wrapper around $CXX)
     std_kept(vm, argv[2]);
+#endif
     header_changes(vm);
     volt_vm_free(vm);
     // (each next test in a VM of its own, so its loads see only its own scripts: a header an
