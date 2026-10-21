@@ -2463,8 +2463,9 @@ attach fn lay_out_partial(this: checker&, res: c_imported&, items: std::vec<usiz
 // run the C preprocessor over the includes; its output, or a message. An embedded VM (opts.running)
 // runs it once per input (opts.pp_memo: the flags and the #include lines, whichever compiler, so a
 // later script with no compiler at hand reads an earlier one's headers), and again when a file it
-// read (-H lists them) changed
-attach fn preprocess(this: checker&, src: str, extra: str, span: span) -> compile_error!std::string {
+// read (-H lists them) changed (a file removed since keeps its last read, but not for the load's
+// own script; what the compiler reads is run, its copies of those: T-0612)
+attach fn preprocess(this: checker&, src: str, run: str, extra: str, span: span) -> compile_error!std::string {
     var args: std::vec<str> = {};
     val cc = c_command(&args);
     val words = args.len;
@@ -2486,13 +2487,13 @@ attach fn preprocess(this: checker&, src: str, extra: str, span: span) -> compil
         key.append(src);
         val have = this.opts.pp_memo.get(copy key);
         if (have) {
-            val out = pp_fresh(have.as_str());
+            val out = pp_fresh(have.as_str(), !this.own_script(span));
             if (out) {
                 return S(out);
             }
         }
     }
-    var r = std::process::capture(args.items(), src) catch |e| {
+    var r = std::process::capture(args.items(), run) catch |e| {
         return fail(span, fmt("can't run the C compiler '{}' to read the headers", S(cc)));
     };
     var lists = this.opts.running;
@@ -2500,7 +2501,7 @@ attach fn preprocess(this: checker&, src: str, extra: str, span: span) -> compil
         // a compiler that doesn't take -H (tcc): the headers read without it
         args.pop();
         lists = false;
-        r = std::process::capture(args.items(), src) catch |e| {
+        r = std::process::capture(args.items(), run) catch |e| {
             return fail(span, fmt("can't run the C compiler '{}' to read the headers", S(cc)));
         };
     }
@@ -2523,11 +2524,19 @@ attach fn preprocess(this: checker&, src: str, extra: str, span: span) -> compil
             listed = memo_file(&memo, l[at + 1..l.len]) || listed;
         }
         if (!listed) {
-            for (l) in src.lines().items() {
+            for (l) in run.lines().items() {
                 // "local" or </absolute> (a header named by its full path)
-                if (starts_with(l, "#include ") && l.len > 11 && (l[9] == '"' || l[10] == '/')) {
-                    listed = memo_file(&memo, l[10..l.len - 1]) || listed;
+                val p = include_path(l) ?? continue;
+                if (l[9] == '"' || is_abs(p)) {
+                    listed = memo_file(&memo, p) || listed;
                 }
+            }
+        }
+        // a removed header read from its copy: when it's back, the entry is stale (no hash is "gone")
+        for (l) in src.lines().items() {
+            val p = include_path(l) ?? continue;
+            if (run != src && is_abs(p) && !std::fs::is_file(p)) {
+                memo.append(fmt("gone {}\n", S(p)).as_str());
             }
         }
         if (listed) {
@@ -2550,13 +2559,16 @@ fn memo_file(memo: std::string&, path: str) -> bool {
 }
 
 // a pp_memo entry's output, when the files it lists still have the text they had. A file that's gone
-// keeps its last read: an earlier script built from it stays loaded, and each later load re-reads
-// that script's imports (T-0599)
-fn pp_fresh(have: str) -> str? {
+// keeps its last read when keep_gone: an earlier script built from it stays loaded, and each later
+// load re-reads that script's imports (T-0599)
+fn pp_fresh(have: str, keep_gone: bool) -> str? {
     val (files, out) = have.split_once("\0") ?? return null;
     for (l) in files.lines().items() {
         val (h, path) = l.split_once(" ") ?? return null;
-        val text = std::fs::read_file(path) catch |e| { continue; };
+        if (keep_gone && !std::fs::is_file(path)) {
+            continue;
+        }
+        val text = std::fs::read_file(path) catch |e| { return null; };
         if (unum(std::digest::fnv1a(text.as_str())).as_str() != h) {
             return null;
         }
@@ -2564,10 +2576,116 @@ fn pp_fresh(have: str) -> str? {
     return out;
 }
 
+// is span in the script an embedded VM is loading (not an earlier one, checked again with it)?
+attach fn own_script(this: checker&, span: span) -> bool {
+    return this.opts.running && this.opts.lib != null && (this.pkg_of_file(span.file) ?? "") == (this.opts.lib ?? "");
+}
+
+// an embedded VM's header named by its full path: its text, kept (opts.hdr_texts); one an earlier
+// script imported, removed since, is read and built from a copy of its last text in the VM's
+// directory (opts.gone_dir): that copy's path. The load's own script finds it gone (T-0612).
+// ponytail: only the named header is kept, not the ones it includes; keep every file -H lists (and
+// copy them under their own paths) if a removed header's own includes go too
+attach fn kept_header(this: checker&, path: str, span: span) -> compile_error!(std::string?) {
+    if (!this.opts.running || !is_abs(path)) {
+        return null;
+    }
+    if (std::fs::is_file(path)) {
+        val text = std::fs::read_file(path) catch |e| { return null; };
+        this.opts.hdr_texts.put(S(path), move text);
+        return null;
+    }
+    if (this.own_script(span)) {
+        return null;
+    }
+    val last = this.opts.hdr_texts.get(S(path)) ?? return null;
+    if (this.opts.gone_dir.len() == 0) {
+        this.opts.gone_dir = new_temp_dir("voltvm") ?? return fail(span, fmt("can't make a temporary directory for a copy of {}, removed since an earlier script imported it", S(path)));
+    }
+    val base = (last_sep(path) ?? 0) + 1;
+    val old_dir = path[0..base];
+    // (its #include "..." lines naming a header next to where it was: that one, by its full path)
+    var text = S("");
+    for (l) in last.as_str().lines().items() {
+        val name = quote_include(l);
+        var near = S(old_dir);
+        near.append(name ?? "");
+        if (name != null && !is_abs(name ?? "") && std::fs::is_file(near.as_str())) {
+            text.append(fmt("#include \"{}\"", move near).as_str());
+        } else {
+            text.append(l);
+        }
+        text.push('\n');
+    }
+    val at = fmt3("{}/{}-{}", copy this.opts.gone_dir, unum(std::digest::fnv1a(path)), S(path[base..path.len]));
+    std::fs::write_file(at.as_str(), text.as_str()) catch |e| {
+        return fail(span, fmt2("can't write {}, a copy of {} (removed since an earlier script imported it)", copy at, S(path)));
+    };
+    return at;
+}
+
+// is path a full one: /..., or a drive's (C:/..., C:\...)?
+fn is_abs(path: str) -> bool {
+    return (path.len > 0 && path[0] == '/') || (path.len > 2 && path[1] == ':' && (path[2] == '/' || path[2] == '\\'));
+}
+
+// where path's last separator ('/', or Windows' '\') is
+fn last_sep(path: str) -> usize? {
+    var at: usize? = null;
+    for (i) in 0..path.len {
+        if (path[i] == '/' || path[i] == '\\') {
+            at = i;
+        }
+    }
+    return at;
+}
+
+// the header a C line's #include "NAME" names (spaces and tabs before and after the #)
+fn quote_include(l: str) -> str? {
+    var i: usize = 0;
+    while (i < l.len && (l[i] == ' ' || l[i] == '\t')) {
+        i += 1;
+    }
+    if (i >= l.len || l[i] != '#') {
+        return null;
+    }
+    i += 1;
+    while (i < l.len && (l[i] == ' ' || l[i] == '\t')) {
+        i += 1;
+    }
+    if (!starts_with(l[i..l.len], "include")) {
+        return null;
+    }
+    i += 7;
+    while (i < l.len && (l[i] == ' ' || l[i] == '\t')) {
+        i += 1;
+    }
+    if (i >= l.len || l[i] != '"') {
+        return null;
+    }
+    var to = i + 1;
+    while (to < l.len && l[to] != '"') {
+        to += 1;
+    }
+    if (to >= l.len) {
+        return null;
+    }
+    return l[i + 1..to];
+}
+
+// the header a generated #include line ("NAME" or <NAME>) names
+fn include_path(l: str) -> str? {
+    if (!starts_with(l, "#include ") || l.len < 12) {
+        return null;
+    }
+    return l[10..l.len - 1];
+}
+
 // read `headers` (local ones next to dir, others from the system) into Volt items
 attach fn import_headers(this: checker&, headers: std::vec<std::string>&, dir: str?, span: span) -> compile_error!c_imported {
     var res: c_imported = {};
     var src: std::string = {};
+    var built: std::string = {}; // the #include lines Volt's C and the per-use probes have (kept_header's copies)
     for (h&) in headers.items() {
         var line: std::string = {};
         var local: std::string? = null;
@@ -2588,10 +2706,16 @@ attach fn import_headers(this: checker&, headers: std::vec<std::string>&, dir: s
         }
         src.append(line.as_str());
         src.push('\n');
+        val kept = try this.kept_header(h.as_str(), span);
+        if (kept) {
+            line = fmt("#include \"{}\"", S(kept.as_str()));
+        }
+        built.append(line.as_str());
+        built.push('\n');
         put(&res.includes, move line);
     }
-    val decls = try this.preprocess(src.as_str(), "-P", span);
-    val macros = try this.preprocess(src.as_str(), "-dM", span);
+    val decls = try this.preprocess(src.as_str(), built.as_str(), "-P", span);
+    val macros = try this.preprocess(src.as_str(), built.as_str(), "-dM", span);
     // the token texts point into these, and so do the items made from them
     put(&this.c_texts, move decls);
     val dtext = this.c_texts.at(this.c_texts.len - 1).as_str();
@@ -2604,7 +2728,7 @@ attach fn import_headers(this: checker&, headers: std::vec<std::string>&, dir: s
     this.c_items(&d, &res, span);
     if (res.per_use.len > 0) {
         // what its per-use calls map types with (import_c says where it is: c_per_use)
-        put(&this.c_ctxs, { ns: 0, src: move src, standard: this.c_import_std, keep: false, kept: 0, d: move d, names: copy res.names, c_names: copy res.c_names, enum_names: copy res.enum_names, enum_ints: copy res.enum_ints, complex: copy res.complex, cf32: res.cf32, cf64: res.cf64 });
+        put(&this.c_ctxs, { ns: 0, src: move built, standard: this.c_import_std, keep: false, kept: 0, d: move d, names: copy res.names, c_names: copy res.c_names, enum_names: copy res.enum_names, enum_ints: copy res.enum_ints, complex: copy res.complex, cf32: res.cf32, cf64: res.cf64 });
         res.ctx = this.c_ctxs.len - 1;
     }
     return res;

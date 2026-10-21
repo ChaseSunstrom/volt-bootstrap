@@ -502,6 +502,30 @@ fn bindings_nested_slices() {
     assert_eq!(ok(Command::new(e.dir.join("main")).output().unwrap(), "main"), "6\n7 7\n");
 }
 
+// a header struct whose Volt fields aren't its C layout (packed, an aligned member: cimport placed
+// them by C's offsets; a union; a bitfield) has no C form in bindings, which declare a struct from
+// those fields; a plain one keeps its form, and a pointer to a refused one is an opaque void *
+#[test]
+fn bindings_header_layouts() {
+    let e = Env::new("hdrlayout");
+    let dir = e.dir.join("hl");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("hl.h"), "struct __attribute__((packed)) p1 { char c; int x; };\nstruct m1 { char c; int x __attribute__((aligned(16))); };\nunion u1 { int x; float f; };\nstruct bf { int a : 3; int x; };\nstruct plain { char c; int x; };\nstruct holder { struct p1 *p; int x; };\n").unwrap();
+    let pkg = format!("hl={}", dir.display());
+    for ty in ["p1", "m1", "u1", "bf"] {
+        std::fs::write(dir.join("hl.volt"), format!("use {{ \"hl.h\" }} as c;\nexport fn take(p: c::{ty}) -> i32 {{ return @cast<i32>(p.x); }}\n")).unwrap();
+        let o = e.voltc(&["bindings", "hl", "--pkg", &pkg, "--lang", "c"]);
+        let err = String::from_utf8_lossy(&o.stderr);
+        assert!(!o.status.success() && err.contains("has no C form") && err.contains(ty), "{ty}: {err}");
+    }
+    std::fs::write(dir.join("hl.volt"), "use { \"hl.h\" } as c;\nexport fn take(p: c::plain) -> i32 { return p.x; }\n").unwrap();
+    ok(e.voltc(&["bindings", "hl", "--pkg", &pkg, "--lang", "c"]), "voltc bindings of a plain header struct");
+    // a plain struct pointing at a packed one stays a by-value struct (not a handle)
+    std::fs::write(dir.join("hl.volt"), "use { \"hl.h\" } as c;\nexport fn take(h: c::holder) -> i32 { return h.x; }\n").unwrap();
+    let h = ok(e.voltc(&["bindings", "hl", "--pkg", &pkg, "--lang", "c"]), "voltc bindings of a struct pointing at a packed one");
+    assert!(h.contains("take(hl_c_holder h)") && h.contains("void *p;"), "{h}");
+}
+
 const SHAPES_OUT: &str = "biggest 9 1.5\naccount bea 300\nvisit 301 get 301\nclosed 301 1\ncircle of area 3\ncircle gone\ngrown 27\nsquare 9 square of area 9\nhey!\ntry 4 OVERDRAWN\nopened 25\nclosed 2\n42 hello, volt\nowners 2 ann bobby\nrichest 9 after 6 10\nopened 2 dee\nroster ann bo ann bo ann! bo!\nor ann! bo! ann! bo! OVERDRAWN OVERDRAWN\nsquares 4 16 sum 30\njoined a-b-c total 3\nhello, ann; hello, nobody\nnick 1 ann 0\nopen_if 1 1\nclose_if 0 -1\nclose_all 2\nsome 2\nrows 6\narrays 12 13 11 2.5 1.5 2 3 4\ntagged 41 5 20 7 8 127\nlists closed 7\ncircle gone\n";
 
 #[test]
@@ -2348,6 +2372,32 @@ fn cpp_peruse2() {
 }
 
 #[test]
+fn cpp_peruse_layout() {
+    // mirrors of Volt types holding i64 and f64 (an @align(16) struct, an array member, a tuple holding
+    // an extern "C" fn, whose name has quotes) check their size and alignment against the target's C
+    // layout of the type (a static_assert in the C++ unit; under C++98 an array of -1 chars): they
+    // pass here, and on i386 (c++ -m32), where C aligns i64 and f64 to 4, the C++ step fails at the
+    // mirror instead of a run copying the wrong bytes
+    let e = Env::new("cpp-peruse-layout");
+    let want = "point 3 2.5\nspan 7 1099511627776 (-2, 0.25)\nshape 2.5\nopt 1.5\nwide 9 16\ntrio 2.5 2.5 2.5 5\nfnptr 5 6\n";
+    for backend in ["c", "llvm"] {
+        assert_eq!(ok(e.voltc(&["run", "cpp_peruse_layout.volt", "--backend", backend]), "voltc run cpp_peruse_layout.volt"), want, "mirrors with i64 and f64 ({backend})");
+    }
+    assert_eq!(ok(e.voltc(&["run", "cpp_peruse_layout.volt", "--cc", "-std=c++98"]), "voltc run cpp_peruse_layout.volt (C++98)"), want, "mirrors' check under C++98");
+    let probe = e.path("m32.cpp");
+    std::fs::write(&probe, "#include <functional>\n#include <string>\n#include <vector>\n").unwrap();
+    let m32 = Command::new("c++").args(["-m32", "-fsyntax-only", &probe]).output().is_ok_and(|o| o.status.success());
+    if !m32 {
+        eprintln!("cpp_peruse_layout: no c++ -m32 here, i386's check not run");
+        return;
+    }
+    let o = e.voltc_cxx(&["build", "cpp_peruse_layout.volt", "-o", &e.path("layout32")], Some("c++ -m32"));
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(!o.status.success() && err.contains("Volt's point: the mirror's size or alignment isn't the type's C layout on this target"), "i386's 4-aligned f64: {err}");
+    assert!(err.contains("Volt's (extern \"C\" fn(i32) -> i32, i64): the mirror's size"), "i386's 4-aligned i64, the type's name quoted: {err}");
+}
+
+#[test]
 fn cpp_clang_root() {
     // a clang-typed @cpp with no C++ import leaves this file's own generics Volt's: a reference
     // deduced as one (it writes through), a plain fn's name a fn value
@@ -2355,6 +2405,11 @@ fn cpp_clang_root() {
     for backend in ["c", "llvm"] {
         assert_eq!(ok(e.voltc(&["run", "cpp_clang_root.volt", "--backend", backend]), "voltc run cpp_clang_root.volt"), "root 2 9 fn(i32) -> i32\n", "Volt generics beside a clang-typed @cpp ({backend})");
     }
+    // ...nor its own cpp_error a C++ import's, nor its generic lent a val's std::string a C++
+    // template's (no second error, in the generic's body)
+    let o = e.voltc(&["check", "cpp_clang_root_errors.volt"]);
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(!o.status.success() && err.contains("E is a C++ import's cpp_error, not cpp_error") && err.contains("'s' is a val, and grow changes it") && !err.contains("parameter without var"), "a clang-typed @cpp's file is no C++ import: {err}");
 }
 
 #[test]
@@ -2366,6 +2421,26 @@ fn cpp_peruse3() {
     let want = "struct true false\ntuple true false\nsize true true true\n";
     for backend in ["c", "llvm"] {
         assert_eq!(ok(e.voltc(&["run", "cpp_peruse3.volt", "--backend", backend]), "voltc run cpp_peruse3.volt"), want, "explicit template arguments of Volt types ({backend})");
+    }
+}
+
+#[test]
+fn cpp_twin() {
+    // a template pair f(T&) / f(T) (and const T& / T): with T explicit both overloads take the
+    // argument, so each wrapper names its own; f(&m) changes m, f_value(5) a copy; T a pointer, a
+    // defaulted trailing argument (given), a class's static methods
+    let e = Env::new("cpp-twin");
+    let want = "ref 1 6\nvalue 2\npeek 13 24\nderef 36 46\ndflt 50 5 62\nbox 70 12 83\n";
+    for backend in ["c", "llvm"] {
+        assert_eq!(ok(e.voltc(&["run", "cpp_twin.volt", "--backend", backend]), "voltc run cpp_twin.volt"), want, "a reference / value template pair ({backend})");
+    }
+    assert_eq!(ok(e.voltc(&["run", "cpp_twin.volt", "--cc", "-std=c++98"]), "voltc run cpp_twin.volt (C++98)"), want, "a reference / value template pair under C++98");
+    // the pointer takes every argument: a pair has no forms without its defaulted one
+    let shown = Command::new(&e.voltc).args(["check", "cpp_twin.volt", "--std"]).arg(Path::new(ROOT).join("std")).current_dir(Path::new(ROOT).join("tests/interop")).env("VOLT_SHOW_CPP", "1").output().unwrap();
+    let src = String::from_utf8_lossy(&shown.stderr);
+    assert!(src.contains("fn dflt(x: T&, k: i32) -> i32") && src.contains("fn dflt_value_int(x: T, k: i32) -> i32"), "the full forms: {src}");
+    for none in ["fn dflt(x: T&) -> i32", "fn dflt_value_int(x: T) -> i32"] {
+        assert!(!src.contains(none), "{none} can't pick its overload: {src}");
     }
 }
 

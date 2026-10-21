@@ -2422,17 +2422,36 @@ attach fn name_locals(this: cgen&, i: u32) -> void {
 // 16 bytes, by reference to the caller's copy) in a copy it doesn't align, which the callee uses in
 // place (clang aligns it), so the fn copies it to an aligned local first
 attach fn over_aligned(this: cgen&, t: u32) -> bool {
-    match (*this.c.t.get(t)) {
-        .STRUCT(s) => {
-            // a header struct has no compile-time layout: the alignment libclang gave it, when that's
-            // past its fields' (an aligned attribute)
-            if (this.c.header_struct(s)) {
-                return this.c.overlay_size(s).1 > 16;
-            }
-        },
-        default => {},
-    }
-    val l = this.c.layout(t, {}) catch return false;
+    val l = this.c.layout(t, {}) catch {
+        // a header struct has no compile-time layout, nor what holds one: the alignment libclang
+        // gave it (an aligned attribute), @align's, or a member's
+        match (*this.c.t.get(t)) {
+            .STRUCT(s) => {
+                if (this.c.overlay_size(s).1 > 16 || this.c.si(s).align > 16) {
+                    return true;
+                }
+                val fs = this.c.struct_fields(s, {}) catch |e| { return false; };
+                val xs = copy *fs;
+                for (f&) in xs.items() {
+                    if (this.over_aligned(f.ty)) {
+                        return true;
+                    }
+                }
+            },
+            .ARRAY(e, n) => { return this.over_aligned(e); },
+            .OPT(x) => { return this.over_aligned(x); },
+            .TUPLE(ts, names) => {
+                for (x&) in ts.items() {
+                    if (this.over_aligned(*x)) {
+                        return true;
+                    }
+                }
+            },
+            // ponytail: an enum's payloads aren't searched (one holding a header struct aligned past 16)
+            default => {},
+        }
+        return false;
+    };
     return l.align > 16;
 }
 

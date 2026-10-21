@@ -106,7 +106,7 @@ fn main() -> void {
 
 Both backends build all of these: the LLVM backend lays out unions, bitfields' neighbours,
 anonymous members and structs whose layout an attribute changes (`packed`, `aligned(N)` on the
-struct or a member, `#pragma pack`) where libclang says C puts them, and passes a struct C classifies by members
+struct, a member or a member's typedef, `#pragma pack`) where libclang says C puts them, and passes a struct C classifies by members
 Volt can't see (a `_Complex`, a bitfield beside a `float`) by value through a small C shim (see
 [backends](/volt-bootstrap/voltc/backends/)).
 
