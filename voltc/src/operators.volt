@@ -66,7 +66,13 @@ attach fn unary(this: checker&, op: unop, x: expr&, want: u32?, span: span) -> c
             if (called) {
                 return called;
             }
-            if (this.t.int_of(v.ty) == null) {
+            // (an int vector: every lane)
+            var lanes = v.ty;
+            match (*this.t.get(v.ty)) {
+                .VECTOR(e, n) => { lanes = e; },
+                default => {},
+            }
+            if (this.t.int_of(lanes) == null) {
                 return fail(span, fmt2("~ needs an integer, found {}{}", this.ty_name(v.ty), this.op_hint(v.ty, "~")));
             }
             var r = vnew(v.ty, this.ir.unary(unop_ir::BITNOT, v.c, v.ty));
@@ -599,7 +605,7 @@ attach fn vector_shift(this: checker&, op: binop, a: tval, b: tval, span: span) 
             return fails(span, "shift amount must be an integer");
         }
         val ts = this.tmp_local("s", u64t);
-        put(&stmts, this.ir.decl(ts.id, this.ir.conv(bb.c, u64t)));
+        put(&stmts, this.ir.decl(ts.id, this.ir.conv(this.wide_amount(bb, width, &stmts, span), u64t)));
         var each = ts.c;
         if (this.opts.release) {
             each = this.ir.binary(binop_ir::BITAND, ts.c, this.ir.int(width - 1, u64t), u64t);
@@ -737,6 +743,21 @@ attach fn int_arith(this: checker&, op: binop, k: int_ty, a: u32, b: u32, span: 
 
 // a << b, a >> b; debug builds trap when b is at least a's bit width, release ones shift by b modulo
 // the width
+// a debug build's shift amount b, ready for its u64 check: one wider than 64 bits (an i128, a u128)
+// is checked against width in its own width first, so 2^64 + 1 stops the program instead of reading
+// as 1 (stmts gets the check; the value is then used once)
+attach fn wide_amount(this: checker&, b: tval, width: i128, stmts: std::vec<u32>&, span: span) -> u32 {
+    val k = this.t.int_of(b.ty) ?? return b.c;
+    if (this.opts.release || k.bits() <= 64) {
+        return b.c; // (a release build wraps the amount to the width instead)
+    }
+    val u128t = int_id(int_ty::U128);
+    val tw = this.tmp_local("w", u128t);
+    put(stmts, this.ir.decl(tw.id, this.ir.conv(b.c, u128t)));
+    put(stmts, this.ir.if_(this.ir.binary(binop_ir::GE, tw.c, this.ir.int(width, u128t), BOOL), this.ir.panic("shift amount too large", this.loc(span)), null));
+    return tw.c;
+}
+
 attach fn shift(this: checker&, op: binop, a: tval, b: tval, span: span) -> compile_error!tval {
     val k = this.t.int_of(a.ty) ?? return fail(span, fmt("can't shift a {}", this.ty_name(a.ty)));
     var bb = b;
@@ -769,7 +790,7 @@ attach fn shift(this: checker&, op: binop, a: tval, b: tval, span: span) -> comp
     val ts = this.tmp_local("s", u64t);
     var stmts: std::vec<u32> = {};
     put(&stmts, this.ir.decl(ta.id, a.c));
-    put(&stmts, this.ir.decl(ts.id, this.ir.conv(bb.c, u64t)));
+    put(&stmts, this.ir.decl(ts.id, this.ir.conv(this.wide_amount(bb, @cast<i128>(k.bits()), &stmts, span), u64t)));
     val big = this.ir.binary(binop_ir::GE, ts.c, this.ir.int(@cast<i128>(k.bits()), u64t), BOOL);
     put(&stmts, this.ir.if_(big, this.ir.panic("shift amount too large", this.loc(span)), null));
     return vnew(a.ty, this.ir.seq(move stmts, this.ir.binary(o, ta.c, ts.c, a.ty), a.ty));
