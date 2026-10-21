@@ -34,5 +34,8 @@ public:
     template <class T> int add(T x) { return 200 + base + (int)x; }
     template <class T> int get(const T &x) const { return 300 + base + (int)x; }
     template <class T> int get(T x) const { return 400 + base + (int)x; }
+    // a volatile pair: the member pointer is volatile too (ref-qualified pairs: cpp_twin_rq.hpp)
+    template <class T> int vol(T &x) volatile { x += 1; return 900; }
+    template <class T> int vol(T x) volatile { return 1000 + (int)x; }
 };
 }

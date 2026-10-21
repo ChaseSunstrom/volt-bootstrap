@@ -1997,11 +1997,9 @@ fn pick_twin(c: clang::CXCursor, call: str, n: usize, dot: usize) -> std::string
         return null;
     }
     val member = dot < call.len;
+    // volatile as clang spells the method's type (no binding says it): "int (int) const volatile &"
     val whole = canon(clang::clang_getCursorType(c));
-    if (member && (contains(whole.as_str(), ") volatile") || contains(whole.as_str(), ") const volatile"))) {
-        // ponytail: a volatile method keeps the plain call (no binding says volatile)
-        return null;
-    }
+    val vol = member && (contains(whole.as_str(), ") volatile") || contains(whole.as_str(), ") const volatile"));
     var ty = canon(clang::clang_getCursorResultType(c));
     if (contains(ty.as_str(), "(")) {
         // a function pointer or an array reference: R(*)(...) can't wrap it
@@ -2034,6 +2032,9 @@ fn pick_twin(c: clang::CXCursor, call: str, n: usize, dot: usize) -> std::string
     ty.push(')');
     if (member && clang::clang_CXXMethod_isConst(c) != 0) {
         ty.append(" const");
+    }
+    if (vol) {
+        ty.append(" volatile");
     }
     val rq = clang::clang_Type_getCXXRefQualifier(clang::clang_getCursorType(c));
     if (member && rq == clang::CXRefQualifier_LValue) {

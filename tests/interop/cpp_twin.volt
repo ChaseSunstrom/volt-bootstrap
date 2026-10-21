@@ -26,6 +26,9 @@ fn main() -> void {
     std::println("acc {} {} {}", ar, x, a.add_value(1));
     val g: i32 = 2;
     std::println("get {} {}", a.get(&g), a.get_value(2));
+    var y: i32 = 1;
+    val vr = a.vol(&y);
+    std::println("vol {} {} {}", vr, y, a.vol_value(5));
 }
 // expect: ref 1 6
 // expect: value 2
@@ -36,3 +39,4 @@ fn main() -> void {
 // expect: static 3 101 96 91
 // expect: acc 100 8 208
 // expect: get 309 409
+// expect: vol 900 2 1005
