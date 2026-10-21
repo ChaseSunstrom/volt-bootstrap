@@ -391,7 +391,7 @@ fn bindings_round_trip() {
     // bolt builds them too: [lib] kind and bindings
     let pkg_dir = e.dir.join("pkg");
     std::fs::create_dir_all(pkg_dir.join("lib")).unwrap();
-    std::fs::write(pkg_dir.join("bolt.toml"), "[package]\nname = \"twice\"\nversion = \"0.1.0\"\n\n[lib]\nkind = [\"volt\", \"shared\", \"static\"]\nbindings = [\"c\", \"python\", \"node\", \"js\", \"ts\", \"lua\", \"ruby\", \"swift\", \"kotlin\"]\n\n[std]\npath = \"STD\"\n".replace("STD", &Path::new(ROOT).join("std").display().to_string())).unwrap();
+    std::fs::write(pkg_dir.join("bolt.toml"), "[package]\nname = \"twice\"\nversion = \"0.1.0\"\n\n[lib]\nkind = [\"volt\", \"shared\", \"static\"]\nbindings = [\"c\", \"python\", \"node\", \"js\", \"ts\", \"lua\", \"ruby\", \"swift\", \"kotlin\"]\n\n[std]\npath = \"STD\"\n".replace("STD", &Path::new(ROOT).join("std").display().to_string().replace('\\', "/"))).unwrap();
     std::fs::write(pkg_dir.join("lib/twice.volt"), "export fn twice(x: i32) -> i32 { return x * 2; }\n").unwrap();
     // ~/.local/bin on the PATH, where a downloaded ruby goes
     let path = std::env::var("PATH").unwrap_or_default();
@@ -419,7 +419,7 @@ fn bindings_round_trip() {
         assert_eq!(ok(o, "lua (bolt's module)"), "42\n", "bolt's Lua module");
     }
     if let Some((ruby, _)) = ruby_headers() {
-        let o = Command::new(ruby).args(["-I", "ruby", "-e", "require 'twice'; puts Twice.twice(21)"]).current_dir(&bindings).output().unwrap();
+        let o = Command::new(ruby).args(["-I", "ruby", "-e", "require 'twice'; puts Twice.twice(21)"]).current_dir(&bindings).env("RUBY_DLL_PATH", pkg_dir.join("target/debug")).output().unwrap();
         assert_eq!(ok(o, "ruby (bolt's extension)"), "42\n", "bolt's Ruby extension");
     }
 
@@ -774,7 +774,7 @@ fn bindings_shapes() {
         let rdir = e.dir.join("ruby-pyopt");
         std::fs::create_dir_all(&rdir).unwrap();
         ok(run(ruby_ext(&hdrs, &e.dir.join("pyopt_ruby.c"), &e.path(""), "pyopt").arg(rdir.join(ruby_module("pyopt")))), "cc pyopt_ruby.c");
-        let o = Command::new(&ruby).arg("-I").arg(&rdir).args(["-e", "require 'pyopt'; puts \"#{Pyopt.count_text(['ab', nil, 'c'])} #{Pyopt.sum_things([Pyopt::Thing.new(2), nil, Pyopt::Thing.new(5)])}\""]).output().unwrap();
+        let o = Command::new(&ruby).arg("-I").arg(&rdir).env("RUBY_DLL_PATH", e.path("")).args(["-e", "require 'pyopt'; puts \"#{Pyopt.count_text(['ab', nil, 'c'])} #{Pyopt.sum_things([Pyopt::Thing.new(2), nil, Pyopt::Thing.new(5)])}\""]).output().unwrap();
         assert_eq!(String::from_utf8_lossy(&o.stderr).replace("\r\n", "\n"), "volt live: 0\n", "Ruby (pyopt): the library's allocations at exit");
         assert_eq!(ok(o, "ruby (pyopt)"), "3 7\n", "Ruby: optionals of text and handles in slices");
         // what shapelib doesn't have: client_moreshapes.rb with moreshapes (a trait object Volt keeps
