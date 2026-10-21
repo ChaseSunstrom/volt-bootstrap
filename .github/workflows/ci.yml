@@ -43,6 +43,12 @@ jobs:
     timeout-minutes: 180
     steps:
       - uses: actions/checkout@v5
+      # a JDK 22 or later for the Java tests (java_direct, java_package): the runner's javac is 17,
+      # which they skip
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
       # LLVM and libclang for voltc's LLVM backend and C imports; clang, llvm-nm and ld.lld for the
       # cross-compile and bare-metal tests; qemu runs the bare-metal boards; g++ 15 (the toolchain
       # PPA's) for the C++ imports' wrappers: the runner's g++ 13 has no C++23 explicit object
@@ -110,6 +116,12 @@ jobs:
     timeout-minutes: 180
     steps:
       - uses: actions/checkout@v5
+      # a JDK 22 or later for the Java tests (java_direct, java_package): the runner's javac is 17,
+      # which they skip
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
       - name: Install LLVM
         run: |
           brew install llvm lld
@@ -150,6 +162,12 @@ jobs:
     timeout-minutes: 350
     steps:
       - uses: actions/checkout@v5
+      # a JDK 22 or later for the Java tests (java_direct, java_package): the runner's javac is 17,
+      # which they skip
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
       - name: Cached LLVM
         id: llvm
         uses: actions/cache/restore@v4

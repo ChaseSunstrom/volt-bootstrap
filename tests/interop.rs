@@ -367,7 +367,8 @@ fn bindings_round_trip() {
                     if h.starts_with('-') { cc.arg(h) } else { cc.arg("-I").arg(h) };
                 }
                 ok(run(cc.arg(e.dir.join("mathlib_ruby.c")).args(["-I", &e.path(""), "-L", &lib_dir, "-lmathlib", &rpath, "-o"]).arg(rdir.join(ruby_module("mathlib")))), "cc mathlib_ruby.c");
-                let o = Command::new(&ruby).arg("-I").arg(&rdir).arg(Path::new(ROOT).join("tests/interop/client.rb")).output().unwrap();
+                // RubyInstaller's ruby looks for an extension's DLLs on RUBY_DLL_PATH, not PATH
+                let o = Command::new(&ruby).arg("-I").arg(&rdir).arg(Path::new(ROOT).join("tests/interop/client.rb")).env("RUBY_DLL_PATH", &lib_dir).output().unwrap();
                 assert_eq!(ok(o, "ruby client.rb"), MATHLIB_OUT, "Ruby ({backend})");
             }
             None => eprintln!("ruby (with its headers) isn't installed: skipping the Ruby client"),
@@ -657,7 +658,7 @@ fn bindings_shapes() {
                 let rdir = e.dir.join(format!("ruby-{backend}"));
                 std::fs::create_dir_all(&rdir).unwrap();
                 ok(run(ruby_ext(&hdrs, &e.dir.join("shapelib_ruby.c"), &lib, "shapelib").arg(rdir.join(ruby_module("shapelib")))), "cc shapelib_ruby.c");
-                let o = Command::new(&ruby).arg("-I").arg(&rdir).arg(Path::new(ROOT).join("tests/interop/client_shapes.rb")).output().unwrap();
+                let o = Command::new(&ruby).arg("-I").arg(&rdir).arg(Path::new(ROOT).join("tests/interop/client_shapes.rb")).env("RUBY_DLL_PATH", &lib).output().unwrap();
                 assert_eq!(String::from_utf8_lossy(&o.stderr).replace("\r\n", "\n"), "volt live: 0\n", "client_shapes.rb ({backend}): the library's allocations at exit");
                 let tail = "raised ArgumentError ArgumentError ArgumentError ArgumentError\nwrong type TypeError TypeError\nrefused RuntimeError ArgumentError ArgumentError\nin use RuntimeError RuntimeError\nkept RuntimeError ann 5\nlent after RuntimeError\nshrinking closed\nclosed anyway ArgumentError\nbreak 7\nfatal 101 true\n";
                 assert_eq!(ok(o, "ruby client_shapes.rb"), format!("checked true OVERDRAWN\nlimit true OVERDRAWN\nsign positive not positive\n{SHAPES_OUT}{tail}"), "client_shapes.rb ({backend})");
