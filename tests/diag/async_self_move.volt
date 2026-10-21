@@ -64,6 +64,8 @@ fn main() -> void {
     val ca2 = ca;
     val qc = async quiet_cont(&counter);
     val qc2 = qc;
+    val hv = async heap_vec();
+    val hv2 = hv;
     std::println("{}", await f);
 }
 
@@ -156,4 +158,14 @@ async fn quiet_cont(q: i32&) -> i32 {
         }
     }
     return n;
+}
+
+// moves silently too: a std::vec's elements are on the heap, so a reference to one held across a
+// suspend doesn't point into the frame
+async fn heap_vec() -> i32 {
+    var v: std::vec<i32> = {};
+    v.push(7) catch |e| { return 0; };
+    val p = &v[0];
+    suspend;
+    return *p;
 }
