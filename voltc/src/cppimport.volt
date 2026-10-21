@@ -2140,8 +2140,17 @@ attach fn param(this: cpp_gen&, t: clang::CXType, name: str, i: usize, tparams: 
         val pt = clang::clang_getPointeeType(t);
         for (p&) in tparams.items() {
             if (strip_const(type_spelling(pt).as_str()) == *p) {
-                // a var: C++ moves from it (a std::string's copy written back into it)
-                return { vty: S(*p), pass: fmt("&{}", S(name)), cpp: fmt("VOLT_MOVE({})", move slot), var_param: true };
+                // a var: C++ moves from it (a std::string's copy written back into it). S deduced as
+                // a reference (&x, or a reference parameter passed on) would let C++ move from the
+                // caller's value: an error
+                var pre = S("comptime match (@typeinfo(");
+                pre.append(*p);
+                pre.append(").kind) {\n    .REFERENCE(_) => { @compile_error(\"'");
+                pre.append(name);
+                pre.append("' is a C++ ");
+                pre.append(*p);
+                pre.append("&&, which moves from what it's given: pass move x, or copy x to keep x\"); },\n    default => {},\n}");
+                return { vty: S(*p), pass: fmt("&{}", S(name)), cpp: fmt("VOLT_MOVE({})", move slot), pre: move pre, var_param: true };
             }
         }
         val inner = this.vtype(pt, tparams) ?? return null;

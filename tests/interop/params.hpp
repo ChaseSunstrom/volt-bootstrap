@@ -122,7 +122,7 @@ template <class S> int count_all(const std::vector<S> &v) { return (int)v.size()
 template <class S> int deref(S *p) { return (int)p->size(); }
 template <class S> S echo(const S &s) { return s; }
 // an S& / const S& pair: C++ runs S& for a string Volt can change, const S& for one it can't; a
-// forwarding S&& changes it
+// forwarding S&& takes a value (a copy changed)
 template <class S> int which(S &s) { s += "&"; return 1; }
 template <class S> int which(const S &) { return 2; }
 template <class S> int fwd(S &&s) { s += "&&"; return (int)s.size(); }
