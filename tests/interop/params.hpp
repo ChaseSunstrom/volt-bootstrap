@@ -290,6 +290,22 @@ template <class T> class Tally {
     T operator|(T (*f)(T)) const { return f(v_); }
 };
 }
+// a class template's T& and const T& members, laid out (a generic struct) and held by handle (its
+// members worked out per use): a Volt reference, C++'s write seen
+namespace ct {
+template <class T> struct keep {
+    T v;
+    void bump(T &x) { x += v; }
+    T peek(const T &x) const { return x + v; }
+};
+template <class T> class held {
+    T v_;
+  public:
+    held(T v) : v_(v) {}
+    void bump(T &x) { x += v_; }
+    T peek(const T &x) const { return x + v_; }
+};
+}
 }
 // pr::pu opened again: a try_ name declared in a later block of the namespace is still beside lone
 namespace pr {

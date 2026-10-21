@@ -153,6 +153,14 @@ fn main() -> void {
     val t2 = ty.op_add(&tz);
     val t3 = ty.spend(&tz);
     std::println("twice {} tally {} {} {} {}", rt, t1, t2, t3, tz);
+    // a class template's T& and const T& a Volt T& (laid out; held by handle, per use): &kn lends kn
+    // and C++'s write is seen
+    var kp: cpp::pr::ct::keep<i32> = { v: 3 };
+    var kn: i32 = 1;
+    kp.bump(&kn);
+    val hd = cpp::pr::ct::held<i32>::new(4);
+    hd.bump(&kn);
+    std::println("keep {} {} {}", kn, kp.peek(&kn), hd.peek(&kn));
 }
 // a Volt reference parameter read as its address, in a try_ form
 fn checked_at(r: i32&) -> void {
