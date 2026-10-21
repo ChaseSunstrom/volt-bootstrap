@@ -267,6 +267,16 @@ fn cursor_offset(c: clang::CXCursor) -> u32 {
     return off;
 }
 
+// the byte offsets in its file where a cursor's text starts and ends (its expansion's)
+fn extent_offsets(c: clang::CXCursor) -> (u32, u32) {
+    val r = clang::clang_getCursorExtent(c);
+    var lo: u32 = 0;
+    var hi: u32 = 0;
+    clang::clang_getExpansionLocation(clang::clang_getRangeStart(r), null, null, null, &lo);
+    clang::clang_getExpansionLocation(clang::clang_getRangeEnd(r), null, null, null, &hi);
+    return (lo, hi);
+}
+
 // whether a parameter has a default argument: a = outside every ( ) [ ] { } and template < > of its
 // own tokens (a template's own = is outside its extent). ponytail: raw tokens, so a default a macro
 // supplies (f(int x DEF), #define DEF = 3) is invisible, and a comparison < directly in a template

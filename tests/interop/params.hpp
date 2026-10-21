@@ -345,3 +345,11 @@ struct Picker {
 inline int pick(const Item &) { return 2; }
 inline int pick(Item &) { return 1; }
 }
+// strings through @cpp (T-0570): a std::string_view parameter only reads; cat2 changes its first
+// string (S&) from its second (const S&), a placed one and a fixed one in one call
+namespace pr {
+namespace sw {
+inline int look_sv(std::string_view v) { return (int)v.size(); }
+template <class S> int cat2(S &a, const S &b) { a += b; return (int)a.size(); }
+}
+}
