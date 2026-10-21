@@ -2404,10 +2404,12 @@ attach fn lay_out_partial(this: checker&, res: c_imported&, items: std::vec<usiz
     }
 }
 
-// run the C preprocessor over the includes; its output, or a message
+// run the C preprocessor over the includes; its output, or a message. Once per input (opts.pp_memo:
+// its flags and text, whichever compiler): an embedded VM's later script doesn't run it again
 attach fn preprocess(this: checker&, src: str, extra: str, span: span) -> compile_error!std::string {
     var args: std::vec<str> = {};
     val cc = c_command(&args);
+    val words = args.len;
     for (f&) in this.opts.pp_flags.items() {
         put(&args, *f);
     }
@@ -2416,12 +2418,23 @@ attach fn preprocess(this: checker&, src: str, extra: str, span: span) -> compil
     for (a) in rest {
         put(&args, a);
     }
+    var key = S("");
+    for (i) in words..args.len {
+        key.append(*args.at(i));
+        key.push(0);
+    }
+    key.append(src);
+    val have = this.opts.pp_memo.get(copy key);
+    if (have) {
+        return copy *have;
+    }
     val r = std::process::capture(args.items(), src) catch |e| {
         return fail(span, fmt("can't run the C compiler '{}' to read the headers", S(cc)));
     };
     if (r.code != 0) {
         return fail(span, fmt("the C compiler couldn't read these headers: {}", S(first_error(r.err.as_str()))));
     }
+    this.opts.pp_memo.put(move key, copy r.out);
     return copy r.out;
 }
 

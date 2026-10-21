@@ -98,6 +98,17 @@ is gone too (its code makes way before the new code is added). A file whose name
 script whose C or C++ imports were built into a library (outside a sandbox) can't be loaded again:
 the library stays loaded, and the new code's symbols would come from it.
 
+A later script that uses an earlier one importing C or C++ runs no compiler for those imports: the
+earlier load built them, and its headers' text is kept. Only what the later script's own code calls
+(a header's function, a C++ wrapper, through its own imports or a generic made for it) is built for
+it.
+
+An earlier script's global holding a trait's values (`public var held: shape? = null;`) was laid out,
+and that script's code built, for the types attached to the trait when it loaded. A later script
+attaching the trait to another type is refused, naming the trait and the global (`the global
+shapes::held holds shape's union, ...: a later script can't attach shape to another type`); one that
+only uses the global loads.
+
 ## Host functions
 
 A script declares a host function as it would a C one, `extern "C" fn name(...) -> R;`, and
