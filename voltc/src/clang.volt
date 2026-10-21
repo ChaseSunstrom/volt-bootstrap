@@ -8,6 +8,7 @@ use std::mem;
 struct clang_tu {
     index: void*;
     tu: clang::CXTranslationUnitImpl*;
+    code: i32 = 0; // libclang's CXErrorCode when it made no unit
 }
 
 attach fn delete(this: clang_tu&) -> void {
@@ -19,7 +20,8 @@ attach fn delete(this: clang_tu&) -> void {
 
 // a clang program (clang, clang++) for libclang's headers and precompiled modules: NAME from PATH,
 // except on macOS, where PATH's is Apple's clang and voltc's libclang is another LLVM's (Homebrew's):
-// that LLVM's, beside the library's real file (LLVM/lib/libclang.dylib → LLVM/bin/NAME)
+// that LLVM's, beside the library's real file (LLVM/lib/libclang.dylib → LLVM/bin/NAME); and on
+// Windows, the one beside libclang.dll (LLVM/bin)
 fn libclang_tool(name: str) -> std::string {
     comptime if (@cfg("os", "macos")) {
         var info: dl_info = {};
@@ -34,6 +36,25 @@ fn libclang_tool(name: str) -> std::string {
             tool.append(name);
             if (std::fs::exists(tool.as_str())) {
                 return tool;
+            }
+        }
+    } else if (@cfg("os", "windows")) {
+        // Windows' loader found libclang.dll in a PATH directory: that LLVM's NAME is beside it.
+        // PATH's first NAME can be another LLVM's (llvm-mingw's), whose precompiled modules
+        // libclang can't read
+        val path = std::process::env("PATH") ?? return S(name);
+        for (dir) in path.split(";").items() {
+            var lib = S(dir);
+            lib.append("/libclang.dll");
+            if (dir.len > 0 && std::fs::exists(lib.as_str())) {
+                var tool = S(dir);
+                tool.append("/");
+                tool.append(name);
+                tool.append(".exe");
+                if (std::fs::exists(tool.as_str())) {
+                    return tool;
+                }
+                return S(name);
             }
         }
     }
@@ -214,8 +235,9 @@ fn clang_parse_opts(name: str, text: str, args: std::vec<str>&, opts: u32) -> cl
     var t = S(text);
     var file: clang::CXUnsavedFile = { Filename: n.c_str(), Contents: t.c_str(), Length: @cast<u32>(t.len()) };
     val index = clang::clang_createIndex(0, 0);
-    val tu = clang::clang_parseTranslationUnit(index, n.c_str(), argv.ptr, @cast<i32>(argv.len), &file, 1, opts);
-    return { index: index, tu: tu };
+    var tu: clang::CXTranslationUnitImpl* = null;
+    val code = clang::clang_parseTranslationUnit2(index, n.c_str(), argv.ptr, @cast<i32>(argv.len), &file, 1, opts, &tu);
+    return { index: index, tu: tu, code: @cast<i32>(code) };
 }
 
 // the unit again with its main file now this text: one made with a precompiled preamble
@@ -331,6 +353,14 @@ fn put_diag_line(out: std::string&, d: clang::CXDiagnostic, main: str) -> void {
 // the first error clang reported (with its place), if any
 attach fn first_error(this: clang_tu&) -> std::string? {
     if (this.tu == null) {
+        // (CXErrorCode: 2 it crashed, 3 bad arguments, 4 a precompiled file it couldn't read)
+        if (this.code == 4) {
+            return S("libclang couldn't parse the headers: it couldn't read a precompiled file (a module or PCH another clang version made?)");
+        } else if (this.code == 2) {
+            return S("libclang couldn't parse the headers: it crashed");
+        } else if (this.code == 3) {
+            return S("libclang couldn't parse the headers: it was given arguments it can't take");
+        }
         return S("libclang couldn't parse the headers");
     }
     val n = clang::clang_getNumDiagnostics(this.tu);

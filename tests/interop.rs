@@ -783,7 +783,7 @@ fn bindings_shapes() {
         ok(e.voltc(&["bindings", "moreshapes", "--pkg", mpkg, "--lang", "ruby", "-o", &e.path("moreshapes_ruby.c")]), "voltc bindings moreshapes --lang ruby");
         ok(e.voltc(&["lib", "moreshapes", "--pkg", mpkg, "--shared", "--leak-check", "-o", &e.path(&dylib("moreshapes"))]), "voltc lib moreshapes --shared");
         ok(run(ruby_ext(&hdrs, &e.dir.join("moreshapes_ruby.c"), &e.path(""), "moreshapes").arg(rdir.join(ruby_module("moreshapes")))), "cc moreshapes_ruby.c");
-        let o = Command::new(&ruby).arg("-I").arg(&rdir).arg(Path::new(ROOT).join("tests/interop/client_moreshapes.rb")).output().unwrap();
+        let o = Command::new(&ruby).arg("-I").arg(&rdir).arg(Path::new(ROOT).join("tests/interop/client_moreshapes.rb")).env("RUBY_DLL_PATH", e.path("")).output().unwrap();
         assert_eq!(String::from_utf8_lossy(&o.stderr).replace("\r\n", "\n"), "volt live: 0\n", "client_moreshapes.rb: the library's allocations at exit");
         let want = "measure 70 tag sizer\nsizer closed\neach 0,1,2 gone 4\nstopped stop gone 7\nlabel pos neg\nslice 6\nresult 5 -1\nmaybe yes nil cstr 5\nlist [1, nil]\ngetter 9 [9]\nbig [5, 7]\nfixed 1020 RuntimeError\nbad ArgumentError TypeError\nclosed meanwhile RuntimeError RuntimeError gone 14\n";
         assert_eq!(ok(o, "ruby client_moreshapes.rb"), want, "client_moreshapes.rb");
