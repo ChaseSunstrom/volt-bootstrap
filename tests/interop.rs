@@ -2228,7 +2228,7 @@ fn cpp_peruse2() {
     // a mirror of their bytes; a closure and a fn value: a std::function) through C++ templates and
     // back unchanged; a function pointer result as a Volt fn, an array reference result as a T[N]&
     let e = Env::new("cpp-peruse2");
-    let want = "struct 3 2.5\nopt 7 null\nenum 1.25\ntuple (4, 0.5)\nclosure 40 21\nowned 23 23 46\nfloat true 1.5\ncount 5\ntry 2 2.5\nfnptr 5 10\narray 50 6\nsame 70\n";
+    let want = "struct 3 2.5\nopt 7 null\nenum 1.25\ntuple (4, 0.5)\nclosure 40 21\nowned 23 23 46\nfloat true 1.5\ncount 5\ntry 2 2.5\nfnptr 5 10\narray 50 6\nsame 70\nref 41 2.5 5\n";
     for backend in ["c", "llvm"] {
         assert_eq!(ok(e.voltc(&["run", "cpp_peruse2.volt", "--backend", backend]), "voltc run cpp_peruse2.volt"), want, "per-use calls with every Volt type ({backend})");
     }

@@ -855,6 +855,44 @@ fn is_pack_param(p: param&) -> bool {
     }
 }
 
+// is pattern t a generic parameter itself (x: T)
+fn is_gparam_ty(t: ty&, gps: std::vec<gparam>&) -> bool {
+    match (t.kind) {
+        .PATH(p&) => { return p.is_single() && gparam_index(gps, p.segs.at(0).name) != null; },
+        default => { return false; },
+    }
+}
+
+// the type an imported C++ template's by-value T (template <class T> T echo(T x); not an S&&, a var)
+// deduces from an argument of type t: a Volt reference is the object it names, as C++ deduces T
+// from an lvalue and copies it (echo(&n): T = int); a reference to what owns memory or a closure
+// stays one, lent (C++ would copy what it owns; a closure is lent as a fn value is)
+attach fn cpp_value_arg_ty(this: checker&, t: u32) -> u32 {
+    var x = t;
+    var refs = false;
+    while (true) {
+        match (*this.t.get(x)) {
+            .REF(y) => {
+                x = y;
+                refs = true;
+            },
+            default => { break; },
+        }
+    }
+    if (!refs) {
+        return t;
+    }
+    match (*this.t.get(x)) {
+        .CLOSURE(c) => { return t; },
+        .FN_VAL(ps, r) => { return t; },
+        default => {},
+    }
+    if (this.needs_drop(x) catch true) {
+        return t;
+    }
+    return x;
+}
+
 // Bind a candidate's generics for a call; NO(reason) when it doesn't fit.
 // the type a generic parameter deduces from argument v of a call to a fn in namespace ns: for an
 // imported C++ template (template <class F> int apply(F f)), a plain fn is its C function pointer
@@ -1018,7 +1056,11 @@ attach fn bind_cand(this: checker&, d: u32, rv: tval*, static_ty: u32?, explicit
             continue;
         }
         if (p.ty != null && av != null) {
-            this.infer(&p.ty.value, this.cpp_fn_arg_ty(ns, av ?? vnew(0, 0)), gps, &binds, ns);
+            var at = this.cpp_fn_arg_ty(ns, av ?? vnew(0, 0));
+            if (!p.mutable && this.cpp_ctx_of(ns) != null && is_gparam_ty(&p.ty.value, gps)) {
+                at = this.cpp_value_arg_ty(at);
+            }
+            this.infer(&p.ty.value, at, gps, &binds, ns);
         }
     }
     // a pack binds to the types of all the remaining arguments
