@@ -7,3 +7,5 @@
 // expect: a32 5 true
 // expect: attrs true true true true
 // expect: attrs 54926
+// expect: by value 21 7 900
+// expect: volatile 9

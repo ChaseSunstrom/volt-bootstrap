@@ -59,6 +59,13 @@ fn main() -> void {
     pp.y = 600;
     std::println("attrs {} {} {} {}", @sizeof(c::p1) == c::p1_size(), @sizeof(c::a8) == c::a8_size(), @sizeof(c::m1) == c::m1_size(), @sizeof(c::pp) == c::pp_size());
     std::println("attrs {}", c::attr_sum(&p1, &a8, &m1, &pp));
+    val back = c::p1_make(900);
+    std::println("by value {} {} {}", c::p1_take(p1), back.c, back.x);
+    // a volatile store into a packed member (the 32-byte vector at offset 1)
+    var lanes: std::simd::i32x8 = {};
+    lanes[0] = 9;
+    @volatile_write(&q.v, lanes);
+    std::println("volatile {}", @volatile_read(&q.v)[0]);
 }
 // expect: pk true true 286
 // expect: pk read 285 70
@@ -67,3 +74,5 @@ fn main() -> void {
 // expect: a32 5 true
 // expect: attrs true true true true
 // expect: attrs 54926
+// expect: by value 21 7 900
+// expect: volatile 9

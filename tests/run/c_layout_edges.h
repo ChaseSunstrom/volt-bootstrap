@@ -40,6 +40,9 @@ static inline size_t p1_size(void) { return sizeof(struct p1); }
 static inline size_t a8_size(void) { return sizeof(struct a8); }
 static inline size_t m1_size(void) { return sizeof(struct m1); }
 static inline size_t pp_size(void) { return sizeof(struct pp); }
+/* a packed struct by value: SysV passes one with an unaligned field in memory */
+static inline int p1_take(struct p1 a) { return a.c + a.x; }
+static inline struct p1 p1_make(int x) { struct p1 a = { 7, x }; return a; }
 static inline int attr_sum(const struct p1 *a, const struct a8 *b, const struct m1 *m, const struct pp *p) {
     return a->c + a->x + b->x + m->c + m->x + p->c + p->x + p->y;
 }

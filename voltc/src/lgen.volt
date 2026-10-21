@@ -434,6 +434,24 @@ attach fn int_signed(this: lg&, t: u32) -> bool {
     }
 }
 
+// does t, placed at byte off, hold a scalar at an offset its alignment doesn't divide?
+attach fn has_unaligned(this: lg&, t: u32, off: u64) -> bool {
+    if (this.is_void(t)) {
+        return false;
+    }
+    val l = this.lt(t);
+    if (llvm::LLVMGetTypeKind(l) == llvm::LLVMStructTypeKind) {
+        for (i) in 0..this.member_count(t) {
+            val mt = this.member_ty(t, @cast<u32>(i));
+            if (this.has_unaligned(mt, off + this.offset_of(t, @cast<u32>(i)))) {
+                return true;
+            }
+        }
+        return false;
+    }
+    return off % @cast<u64>(this.align_of(l)) != 0;
+}
+
 // the class of each eightbyte of t placed at byte `off`
 attach fn classify(this: lg&, t: u32, off: u64, ebs: eightbyte[2]&) -> void {
     if (this.is_void(t)) {
@@ -561,7 +579,8 @@ attach fn part(this: lg&, t: u32, ret: bool) -> abi_part {
     if (this.cc != callconv::SYSV) {
         return this.aapcs_part(t, size, ret);
     }
-    if (size > 16) {
+    if (size > 16 || this.has_unaligned(t, 0)) {
+        // (a field its alignment doesn't place, in a packed C struct: SysV's MEMORY class)
         return { how: pass::MEMORY, ty: t };
     }
     var ebs: eightbyte[2];
@@ -1992,8 +2011,10 @@ attach fn rv(this: lg&, n: u32) -> llvm::LLVMOpaqueValue* {
         },
         .VSTORE(p, x) => {
             val vt = this.c.ir.ty_of(x);
-            val st = llvm::LLVMBuildStore(this.b, this.rv_as(x, vt), this.rv(p));
-            llvm::LLVMSetAlignment(st, this.align_of(this.lt(vt)));
+            val v = this.rv_as(x, vt);
+            val at = this.rv(p);
+            val st = llvm::LLVMBuildStore(this.b, v, at);
+            llvm::LLVMSetAlignment(st, this.access_align(this.lt(vt), at));
             llvm::LLVMSetVolatile(st, 1);
             return null;
         },
