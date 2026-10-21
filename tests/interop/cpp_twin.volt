@@ -9,7 +9,10 @@ fn main() -> void {
     std::println("value {}", cpp::tw::twin_value(5));
     val k: i32 = 3;
     std::println("peek {} {}", cpp::tw::peek(&k), cpp::tw::peek_value(4));
+    val p: i32* = &m;
+    std::println("deref {} {}", cpp::tw::deref(&p), cpp::tw::deref_value(p));
 }
 // expect: ref 1 6
 // expect: value 2
 // expect: peek 13 24
+// expect: deref 36 46

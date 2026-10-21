@@ -9,4 +9,7 @@ template <class T> int twin(T x) { x += 1; return 2; }
 // const T& / T, in the other order
 template <class T> int peek(T x) { return 20 + (int)x; }
 template <class T> int peek(const T &x) { return 10 + (int)x; }
+// T a pointer: const T& is T const & (a const pointer), not a pointer to const
+template <class T> int deref(const T &p) { return 30 + *p; }
+template <class T> int deref(T p) { return 40 + *p; }
 }

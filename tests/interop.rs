@@ -2329,9 +2329,9 @@ fn cpp_peruse3() {
 #[test]
 fn cpp_twin() {
     // a template pair f(T&) / f(T) (and const T& / T): with T explicit both overloads take the
-    // argument, so each wrapper names its own; f(&m) changes m, f_value(5) a copy
+    // argument, so each wrapper names its own; f(&m) changes m, f_value(5) a copy; T a pointer
     let e = Env::new("cpp-twin");
-    let want = "ref 1 6\nvalue 2\npeek 13 24\n";
+    let want = "ref 1 6\nvalue 2\npeek 13 24\nderef 36 46\n";
     for backend in ["c", "llvm"] {
         assert_eq!(ok(e.voltc(&["run", "cpp_twin.volt", "--backend", backend]), "voltc run cpp_twin.volt"), want, "a reference / value template pair ({backend})");
     }
