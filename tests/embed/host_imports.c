@@ -2,10 +2,12 @@
 // with the compilers on PATH): their C and C++ is compiled for the script as it loads. In a sandbox
 // clang compiles it to LLVM bitcode the JIT runs, so it reaches only what the host allows; a C++
 // compiler that isn't clang is refused there (that half runs on Linux, given a third argument: the
-// test passes one when $CC and $CXX are clang of the VM's LLVM).
+// test passes one when $CC and $CXX are clang of the VM's LLVM). A later script using that one runs
+// no compiler: its imports' code is already loaded.
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 #include "voltvm.h"
 
 static volt_str S(const char *s) { return (volt_str){ (const uint8_t *)s, strlen(s) }; }
@@ -20,20 +22,96 @@ static void say_error(voltvm_volt_vm *vm, const char *what) {
     printf("%s: %.*s\n", what, (int)e.len, (const char *)e.ptr);
 }
 
+// $CC and $CXX made `false`, which fails whatever it's given (a load running either fails), and put back
+static char *cc_was, *cxx_was;
+static void no_compilers(void) {
+    cc_was = getenv("CC") ? strdup(getenv("CC")) : NULL;
+    cxx_was = getenv("CXX") ? strdup(getenv("CXX")) : NULL;
+    setenv("CC", "false", 1);
+    setenv("CXX", "false", 1);
+}
+static void compilers_back(void) {
+    if (cc_was) {
+        setenv("CC", cc_was, 1);
+    } else {
+        unsetenv("CC");
+    }
+    if (cxx_was) {
+        setenv("CXX", cxx_was, 1);
+    } else {
+        unsetenv("CXX");
+    }
+    free(cc_was);
+    free(cxx_was);
+}
+
+// a script using imports.volt's sum, loaded with no compiler: its value, else -1
+static long long user_of(voltvm_volt_vm *vm, const char *what) {
+    no_compilers();
+    int bad = volt_vm_load(vm, S("imports_user.volt"), S("export fn user() -> i64 { return imports::sum() + 1; }\n")).error;
+    compilers_back();
+    if (bad) {
+        say_error(vm, what);
+        return -1;
+    }
+    return ((long long (*)(void))volt_vm_find(vm, S("user")))();
+}
+
+// a script calling a static inline function of vmhost.h that imports.volt doesn't: its own C is
+// built for it (with the compilers); its value, else -1
+static long long thrice_of(voltvm_volt_vm *vm, const char *dir, const char *what) {
+    char src[512];
+    snprintf(src, sizeof src, "use { \"%s/vmhost.h\" } as h;\nexport fn thrice() -> i32 { return h::h_thrice(5); }\n", dir);
+    if (volt_vm_load(vm, S("thrice.volt"), S(src)).error) {
+        say_error(vm, what);
+        return -1;
+    }
+    return ((int (*)(void))volt_vm_find(vm, S("thrice")))();
+}
+
+// a header the script imports changed on disk and the script loaded again: it reads the new one
+static void header_changes(voltvm_volt_vm *vm) {
+    char dir[] = "/tmp/voltvm-test-XXXXXX";
+    if (!mkdtemp(dir)) {
+        printf("reload: no temporary directory\n");
+        return;
+    }
+    char h[64], src[256];
+    snprintf(h, sizeof h, "%s/rh.h", dir);
+    snprintf(src, sizeof src, "use { \"%s\" } as r;\nexport fn hv() -> i32 { return r::HV; }\n", h);
+    for (int v = 1; v <= 2; v++) {
+        FILE *f = fopen(h, "w");
+        if (!f) {
+            printf("reload: can't write %s\n", h);
+            break;
+        }
+        fprintf(f, "#define HV %d\n", v * 10);
+        fclose(f);
+        if (volt_vm_load(vm, S("reload.volt"), S(src)).error) {
+            say_error(vm, "reload");
+            break;
+        }
+        printf("reload hv %d\n", ((int (*)(void))volt_vm_find(vm, S("hv")))());
+    }
+    remove(h);
+    rmdir(dir);
+}
+
 int main(int argc, char **argv) {
     volt_str std_dir = S(argv[1]);
     char script[2048];
     snprintf(script, sizeof script,
              "use { \"%s/vmhost.h\" } as h;\n"
              "use { \"%s/vmhost.hpp\" } as hp;\n"
-             "export fn run() -> i64 {\n"
+             "public fn sum() -> i64 {\n"
              "    val a: i32 = 4;\n"
              "    var t = hp::vm::Tally::new();\n"
              "    t.add(10);\n"
              "    t.add(20);\n"
              "    val v: i32[3] = { 1, 2, 3 };\n"
              "    return @cast<i64>(h::h_twice(a) + h::H_MAX(a, 9) + hp::vm::total(v[0..3]) + t.value());\n"
-             "}\n",
+             "}\n"
+             "export fn run() -> i64 { return sum(); }\n",
              argv[2], argv[2]);
     voltvm_volt_vm *vm = volt_vm_new(std_dir);
     if (volt_vm_load(vm, S("imports.volt"), S(script)).error) {
@@ -41,6 +119,9 @@ int main(int argc, char **argv) {
         return 1;
     }
     printf("run %lld\n", ((long long (*)(void))volt_vm_find(vm, S("run")))());
+    printf("user %lld\n", user_of(vm, "user"));
+    printf("thrice %lld\n", thrice_of(vm, argv[2], "thrice"));
+    header_changes(vm);
     volt_vm_free(vm);
 #if defined(__linux__)
     if (argc < 4) {
@@ -60,14 +141,19 @@ int main(int argc, char **argv) {
         return 1;
     }
     printf("box run %lld\n", ((long long (*)(void))volt_vm_find(box, S("run")))());
+    printf("box imports user %lld\n", user_of(box, "box imports user"));
+    printf("box thrice %lld\n", thrice_of(box, argv[2], "box thrice"));
     const char *c = "use { \"string.h\" } as c;\npublic fn four() -> usize { return c::strlen(\"four\"); }\nexport fn n() -> usize { return four(); }\n";
     if (volt_vm_load(box, S("box_c.volt"), S(c)).error) {
         say_error(box, "box_c");
         return 1;
     }
     printf("box strlen %zu\n", ((size_t (*)(void))volt_vm_find(box, S("n")))());
-    // a script using that one (its import's code is its own, so the two don't meet)
-    if (volt_vm_load(box, S("box_user.volt"), S("export fn eight() -> usize { return box_c::four() * 2; }\n")).error) {
+    // a script using that one, with no compiler: four is box_c's code, which its load built
+    no_compilers();
+    int bad = volt_vm_load(box, S("box_user.volt"), S("export fn eight() -> usize { return box_c::four() * 2; }\n")).error;
+    compilers_back();
+    if (bad) {
         say_error(box, "box_user");
         return 1;
     }

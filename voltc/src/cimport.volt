@@ -2404,10 +2404,15 @@ attach fn lay_out_partial(this: checker&, res: c_imported&, items: std::vec<usiz
     }
 }
 
-// run the C preprocessor over the includes; its output, or a message
+// run the C preprocessor over the includes; its output, or a message. An embedded VM (opts.running)
+// runs it once per input (opts.pp_memo: the flags, the #include lines and the local headers' text,
+// whichever compiler, so a later script with no compiler at hand reads an earlier one's headers), and
+// a local header that changed is read again. ponytail: what a local header includes isn't in the
+// key; record the files the preprocessor read (-MD) if a reload misses an edit there
 attach fn preprocess(this: checker&, src: str, extra: str, span: span) -> compile_error!std::string {
     var args: std::vec<str> = {};
     val cc = c_command(&args);
+    val words = args.len;
     for (f&) in this.opts.pp_flags.items() {
         put(&args, *f);
     }
@@ -2416,11 +2421,36 @@ attach fn preprocess(this: checker&, src: str, extra: str, span: span) -> compil
     for (a) in rest {
         put(&args, a);
     }
+    var key = S("");
+    if (this.opts.running) {
+        for (i) in words..args.len {
+            key.append(*args.at(i));
+            key.push(0);
+        }
+        key.append(src);
+        // (a local header is "its full path"; one named by a full path is <that path>)
+        for (l) in src.lines().items() {
+            val p = l.strip_prefix("#include ") ?? continue;
+            if (p.len < 3 || !(p[0] == '"' || (p[0] == '<' && p[1] == '/'))) {
+                continue;
+            }
+            key.push(0);
+            val text = std::fs::read_file(p[1..p.len - 1]) catch |e| { continue; };
+            key.append(text.as_str());
+        }
+        val have = this.opts.pp_memo.get(copy key);
+        if (have) {
+            return copy *have;
+        }
+    }
     val r = std::process::capture(args.items(), src) catch |e| {
         return fail(span, fmt("can't run the C compiler '{}' to read the headers", S(cc)));
     };
     if (r.code != 0) {
         return fail(span, fmt("the C compiler couldn't read these headers: {}", S(first_error(r.err.as_str()))));
+    }
+    if (this.opts.running) {
+        this.opts.pp_memo.put(move key, copy r.out);
     }
     return copy r.out;
 }
