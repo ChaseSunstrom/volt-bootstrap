@@ -93,6 +93,26 @@ fn clang_sysroot() -> std::string? {
 var c_view: std::vec<std::string> = {};
 var cxx_view: std::vec<std::string> = {};
 
+// compiler_view of $CXX (cxx) or $CC, found once a process, on Windows; nothing elsewhere. What
+// libclang parses with, and so what clang++ precompiles a module it reads with (module_pcm)
+fn libclang_view(cxx: bool) -> std::vec<std::string> {
+    var view: std::vec<std::string> = {};
+    comptime if (@cfg("os", "windows")) {
+        if (cxx) {
+            if (cxx_view.len == 0) {
+                cxx_view = compiler_view(true);
+            }
+            view = copy cxx_view;
+        } else {
+            if (c_view.len == 0) {
+                c_view = compiler_view(false);
+            }
+            view = copy c_view;
+        }
+    }
+    return view;
+}
+
 // what libclang adds to see what $CC (or, cxx, $CXX) sees: --target=its triple, its C++ library's
 // directories ahead of libclang's own headers and its C library's after them (its own builtin
 // headers are libclang's to give), the defaults off. Empty when the compiler doesn't answer
@@ -176,26 +196,12 @@ fn clang_parse_opts(name: str, text: str, args: std::vec<str>&, opts: u32) -> cl
         put(&owned, S("-isysroot"));
         put(&owned, copy sdk);
     }
-    comptime if (@cfg("os", "windows")) {
-        var cxx = false;
-        for (a&) in args.items() {
-            cxx = cxx || *a == "c++";
-        }
-        if (cxx) {
-            if (cxx_view.len == 0) {
-                cxx_view = compiler_view(true);
-            }
-            for (v&) in cxx_view.items() {
-                put(&owned, copy *v);
-            }
-        } else {
-            if (c_view.len == 0) {
-                c_view = compiler_view(false);
-            }
-            for (v&) in c_view.items() {
-                put(&owned, copy *v);
-            }
-        }
+    var cxx = false;
+    for (a&) in args.items() {
+        cxx = cxx || *a == "c++" || *a == "c++-module";
+    }
+    for (v&) in libclang_view(cxx).items() {
+        put(&owned, copy *v);
     }
     for (a&) in args.items() {
         put(&owned, S(*a));

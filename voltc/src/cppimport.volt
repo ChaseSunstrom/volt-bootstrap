@@ -6908,11 +6908,11 @@ fn std_module_source(cmd: std::vec<str>&, logical: str) -> std::string? {
             val sp = mods.at(i).get("source-path").as_str() ?? continue;
             // a source that isn't there is passed over: Ubuntu copies libc++'s manifest beside its
             // libraries, where the relative path names nothing
-            if (sp.len > 0 && sp[0] == '/') {
+            if ((sp.len > 0 && sp[0] == '/') || (sp.len > 2 && sp[1] == ':' && (sp[2] == '/' || sp[2] == '\\'))) {
                 return real_file(sp) ?? continue;
             }
             var at = path.len();
-            while (at > 0 && path.as_str()[at - 1] != '/') {
+            while (at > 0 && path.as_str()[at - 1] != '/' && path.as_str()[at - 1] != '\\') {
                 at -= 1;
             }
             var full = S(path.as_str()[0..at]);
@@ -6930,6 +6930,9 @@ attach fn module_pcm(this: checker&, name: str, path: str, args: std::vec<str>&,
         return fail(span, fmt("can't read {}", S(path)));
     };
     var key = copy text;
+    for (v&) in libclang_view(true).items() {
+        key.append(v.as_str());
+    }
     for (a) in args.items() {
         key.append(a);
         key.push(' ');
@@ -6952,6 +6955,11 @@ attach fn module_pcm(this: checker&, name: str, path: str, args: std::vec<str>&,
     var argv: std::vec<str> = {};
     val clangxx = libclang_tool("clang++");
     put(&argv, clangxx.as_str());
+    // the target and headers libclang reads it with (Windows: MinGW's, not clang++'s own MSVC)
+    val view = libclang_view(true);
+    for (v&) in view.items() {
+        put(&argv, v.as_str());
+    }
     for (a) in args.items() {
         if (a != "-x" && a != "c++") {
             put(&argv, a);
@@ -6979,6 +6987,15 @@ attach fn std_modules(this: checker&, args: std::vec<str>&, s: str, u: u32, comp
     var cmd: std::vec<str> = {};
     val clangxx = libclang_tool("clang++");
     put(&cmd, clangxx.as_str());
+    comptime if (@cfg("os", "windows")) {
+        // the program's C++ library's (llvm-mingw's libc++, whose headers libclang_view reads)
+        // first: libclang's own clang++ knows MSVC's
+        var own: std::vec<str> = {};
+        cxx_command(&own);
+        if (std_module_source(&own, "std")) {
+            cmd = move own;
+        }
+    }
     val src = std_module_source(&cmd, "std") ?? return fail(span, fmt("import std; needs the C++ library's std module, and {} finds no modules manifest naming one that's there (libstdc++.modules.json, libc++.modules.json)", copy clangxx));
     var sargs = this.cpp_args(s);
     // macOS: the module is libc++'s of the LLVM whose clang++ found it (Homebrew's), not the SDK's
