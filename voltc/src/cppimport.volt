@@ -8185,7 +8185,9 @@ attach fn cpp_root_ctx(this: checker&) -> usize? {
 
 // cpp_instance of a call from context k, or from the program's own code (k none): there the first
 // import whose headers make it work (one needing a later import's isn't asked of the first's
-// alone), and when none does, the first's error
+// alone), and when none does, the error of the first that has the names it uses (else the
+// first's: a name no import has). A caller trying the arguments in several forms asks this once
+// per form, so the earliest form any import makes wins, even over a later form the first makes
 // ponytail: each import that can't make it is another clang parse; pick by the names it uses if
 // programs with many imports make failing calls slow
 attach fn cpp_instance_from(this: checker&, k: usize?, expr: str, types: std::vec<u32>&, value: bool, span: span) -> compile_error!u32 {
@@ -8193,13 +8195,29 @@ attach fn cpp_instance_from(this: checker&, k: usize?, expr: str, types: std::ve
         return this.cpp_instance(k, expr, types, false, value, span);
     }
     val first = this.cpp_instance(0, expr, types, false, value, span) catch |e| {
+        var named: diag? = null;
         for (j) in 1..this.cpp_ctxs.len {
-            val made = this.cpp_instance(j, expr, types, false, value, span) catch |e2| { continue; };
+            val made = this.cpp_instance(j, expr, types, false, value, span) catch |e2| {
+                if (named == null && !cpp_name_missing(err_msg(&e2))) {
+                    named = err_diag(&e2);
+                }
+                continue;
+            };
             return made;
+        }
+        if (cpp_name_missing(err_msg(&e))) {
+            if (named) {
+                return compile_error::AT(copy named);
+            }
         }
         return e;
     };
     return first;
+}
+
+// is clang's error (an @cpp call's) about a name its headers don't have, rather than the call itself
+fn cpp_name_missing(m: str) -> bool {
+    return contains(m, "undeclared identifier") || contains(m, "no member named") || contains(m, "no template named") || contains(m, "unknown type name");
 }
 
 // @cpp("C++ expression", args...) with no result type: clang works it out, as for a call made per
