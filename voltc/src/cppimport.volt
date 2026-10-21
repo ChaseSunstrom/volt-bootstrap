@@ -8400,6 +8400,12 @@ attach fn cpp_call_as(this: checker&, r: u32, gargs: std::vec<garg>&, args: std:
     } else {
         idx = @cast<u32>(this.cpp_shims.len);
         var name = S("volt_cpp_");
+        // (an embedded VM's loads each build their own, into libraries whose symbols all meet, a
+        // library loaded first standing in for a later one's: so its load's number too)
+        if (this.opts.running) {
+            name.append_uint(this.opts.load);
+            name.push('_');
+        }
         name.append_uint(@cast<u64>(idx));
         var w = copy decls;
         w.append(fmt3("{} {}({}) {{\n", copy rsp, copy name, copy params).as_str());

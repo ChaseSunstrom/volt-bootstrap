@@ -2,7 +2,7 @@
 // the package its file names, so a later one calls util::make. In a plain VM and in a sandbox
 // (whose allowances aren't needed for that), reloading a script others use is refused, reloading
 // one nobody uses replaces it, a load that fails leaves no package, and a file whose name can't be
-// a package's is refused.
+// a package's is refused. Trait unions an earlier script's global holds keep their members and tags.
 #include <stdio.h>
 #include <string.h>
 #include "voltvm.h"
@@ -84,6 +84,19 @@ static const char *HOLDERS =
     "    n: i32;\n"
     "}\n"
     "public var held_slot: slot = { f: null, n: 0 };\n";
+
+static const char *TANK =
+    "public struct rod {\n"
+    "    n: i32;\n"
+    "}\n"
+    "attach solid::solid -> rod {\n"
+    "    fn vol(this) -> i32 { return this.n; }\n"
+    "}\n"
+    "public var held: solid::solid? = null;\n"
+    "public fn held_vol() -> i32 {\n"
+    "    val h = held ?? return 0;\n"
+    "    return h.vol();\n"
+    "}\n";
 
 int main(int argc, char **argv) {
     volt_str std_dir = S(argv[1]);
@@ -207,6 +220,24 @@ int main(int argc, char **argv) {
             printf("%s: loaded\n", attach[i]);
         }
     }
+    // a script whose type is in the union a later script's global holds can't be loaded again: the
+    // global and that script's code have the union's tags as they were, and a reload would change
+    // them. Code of a later load still agrees with them
+    if (volt_vm_load(vm, S("solid.volt"), S("public trait solid {\n    fn vol(this) -> i32;\n}\n")).error ||
+        volt_vm_load(vm, S("cube.volt"), S("struct cube { n: i32; }\nattach solid::solid -> cube {\n    fn vol(this) -> i32 { return this.n * this.n * this.n; }\n}\nexport fn cube_vol() -> i32 {\n    val c: cube = { n: 2 };\n    return c.vol();\n}\n")).error ||
+        volt_vm_load(vm, S("tank.volt"), S(TANK)).error) {
+        say_error(vm, "solid");
+        return 1;
+    }
+    const char *rods = "export fn rod_vol() -> i32 {\n    val r: tank::rod = { n: 5 };\n    tank::held = r;\n    return tank::held_vol();\n}\n";
+    if (volt_vm_load(vm, S("cube.volt"), S(rods)).error) {
+        say_error(vm, "cube again");
+    }
+    if (volt_vm_load(vm, S("rods.volt"), S(rods)).error) {
+        say_error(vm, "rods");
+        return 1;
+    }
+    printf("rod %d cube %d\n", ((int (*)(void))volt_vm_find(vm, S("rod_vol")))(), ((int (*)(void))volt_vm_find(vm, S("cube_vol")))());
     volt_vm_free(vm);
     return 0;
 }

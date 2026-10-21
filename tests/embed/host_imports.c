@@ -3,10 +3,12 @@
 // clang compiles it to LLVM bitcode the JIT runs, so it reaches only what the host allows; a C++
 // compiler that isn't clang is refused there (that half runs on Linux, given a third argument: the
 // test passes one when $CC and $CXX are clang of the VM's LLVM). A later script using that one runs
-// no compiler: its imports' code is already loaded.
+// no compiler: its imports' code is already loaded. A second script whose C++ header does import
+// std; builds no std module again, and a reload reads a header that changed, or one it includes.
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
 #include "voltvm.h"
 
@@ -93,8 +95,99 @@ static void header_changes(voltvm_volt_vm *vm) {
         }
         printf("reload hv %d\n", ((int (*)(void))volt_vm_find(vm, S("hv")))());
     }
+    // and when what changed is a header that one includes
+    char in[64];
+    snprintf(in, sizeof in, "%s/rh_in.h", dir);
+    FILE *f = fopen(h, "w");
+    if (f) {
+        fprintf(f, "#include \"rh_in.h\"\n");
+        fclose(f);
+    }
+    for (int v = 3; f && v <= 4; v++) {
+        FILE *g = fopen(in, "w");
+        if (!g) {
+            printf("reload: can't write %s\n", in);
+            break;
+        }
+        fprintf(g, "#define HV %d\n", v * 10);
+        fclose(g);
+        if (volt_vm_load(vm, S("reload.volt"), S(src)).error) {
+            say_error(vm, "reload inner");
+            break;
+        }
+        printf("reload inner hv %d\n", ((int (*)(void))volt_vm_find(vm, S("hv")))());
+    }
+    remove(in);
     remove(h);
     rmdir(dir);
+}
+
+// a compiler wrapper at path: it notes in log when it's given --precompile or the C++ library's std
+// module source, then runs real (with PATH as it was)
+static int wrapper(const char *path, const char *log, const char *real) {
+    FILE *f = fopen(path, "w");
+    if (!f) {
+        return 0;
+    }
+    fprintf(f, "#!/bin/sh\nfor a in \"$@\"; do case \"$a\" in --precompile|*/std.cc|*/std.cppm) echo \"$a\" >> '%s';; esac; done\nPATH='%s' exec %s \"$@\"\n", log, getenv("PATH"), real);
+    fclose(f);
+    return chmod(path, 0755) == 0;
+}
+
+// two scripts importing a C++ header that does import std;: the second one's load builds its own
+// C++ (and libclang reads the header again), but the std module the first one's built is kept
+static void std_kept(voltvm_volt_vm *vm, const char *dir) {
+    char tmp[] = "/tmp/voltvm-test-XXXXXX";
+    if (!mkdtemp(tmp)) {
+        printf("std: no temporary directory\n");
+        return;
+    }
+    char log[64], cxx[64], clangxx[64], path[4096], real[256];
+    snprintf(log, sizeof log, "%s/log", tmp);
+    snprintf(cxx, sizeof cxx, "%s/cxx", tmp);
+    snprintf(clangxx, sizeof clangxx, "%s/clang++", tmp);
+    snprintf(real, sizeof real, "%s", getenv("CXX") ? getenv("CXX") : "c++");
+    char *path_was = strdup(getenv("PATH") ? getenv("PATH") : "/usr/bin:/bin");
+    char *cxx_was = getenv("CXX") ? strdup(getenv("CXX")) : NULL;
+    if (!wrapper(cxx, log, real) || !wrapper(clangxx, log, "clang++")) {
+        printf("std: can't write the wrappers\n");
+        return;
+    }
+    snprintf(path, sizeof path, "%s:%s", tmp, path_was);
+    setenv("PATH", path, 1);
+    setenv("CXX", cxx, 1);
+    int got[2] = { -1, -1 };
+    int again = 0;
+    for (int i = 0; i < 2; i++) {
+        char name[16], fn[16], src[512];
+        snprintf(name, sizeof name, "std%d.volt", i + 1);
+        snprintf(fn, sizeof fn, "std%d", i + 1);
+        snprintf(src, sizeof src, "use { \"%s/vmstd.hpp\" } as s;\nexport fn %s() -> i32 { return s::vs::big(%d, 9); }\n", dir, fn, 3 + 10 * i);
+        remove(log);
+        if (volt_vm_load(vm, S(name), S(src)).error) {
+            say_error(vm, name);
+            break;
+        }
+        got[i] = ((int (*)(void))volt_vm_find(vm, S(fn)))();
+        FILE *l = fopen(log, "r");
+        if (l) {
+            again = i == 1;
+            fclose(l);
+        }
+    }
+    setenv("PATH", path_was, 1);
+    if (cxx_was) {
+        setenv("CXX", cxx_was, 1);
+    } else {
+        unsetenv("CXX");
+    }
+    free(path_was);
+    free(cxx_was);
+    printf("std %d %d, %s\n", got[0], got[1], again ? "built again" : "kept");
+    remove(log);
+    remove(cxx);
+    remove(clangxx);
+    rmdir(tmp);
 }
 
 int main(int argc, char **argv) {
@@ -121,6 +214,7 @@ int main(int argc, char **argv) {
     printf("run %lld\n", ((long long (*)(void))volt_vm_find(vm, S("run")))());
     printf("user %lld\n", user_of(vm, "user"));
     printf("thrice %lld\n", thrice_of(vm, argv[2], "thrice"));
+    std_kept(vm, argv[2]);
     header_changes(vm);
     volt_vm_free(vm);
 #if defined(__linux__)
