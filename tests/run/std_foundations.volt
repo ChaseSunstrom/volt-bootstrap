@@ -46,10 +46,13 @@ fn main() -> !void {
     std::println("{} {} {}", n.len, r, n.get(7) == null);
 
     // fs and process
+    // (target/ made first: a checkout whose build output is elsewhere has none)
+    try std::fs::create_dir_all("target");
     val path = "target/std_foundations_test.txt";
     try std::fs::write_file(path, "line one\nline two\n");
     val text = try std::fs::read_file(path);
     std::print("{}", text);
+    std::fs::remove_file(path) catch |e| {};
     std::println(std::fs::read_file("/nope/nothing") catch |e| std::string::from("missing"));
     val argv: str[] = { "sh", "-c", "exit 3" };
     std::println("code {}", try std::process::run(argv[..]));

@@ -2416,6 +2416,17 @@ fn cpp_clang_root() {
     let o = e.voltc(&["check", "cpp_clang_root_errors.volt"]);
     let err = String::from_utf8_lossy(&o.stderr);
     assert!(!o.status.success() && err.contains("E is a C++ import's cpp_error, not cpp_error") && err.contains("'s' is a val, and grow changes it") && !err.contains("parameter without var"), "a clang-typed @cpp's file is no C++ import: {err}");
+    // per-use @cpps in a nested namespace declared before two imports, needing the second's headers
+    // (imports are all declared before any body is checked, so no implicit context comes first)
+    for backend in ["c", "llvm"] {
+        assert_eq!(ok(e.voltc(&["run", "cpp_clang_root_later.volt", "--backend", backend]), "voltc run cpp_clang_root_later.volt"), "later 57\n", "a per-use @cpp needing a later import's headers ({backend})");
+    }
+    // ...where no import makes it: the error of the one that has the name, else the first's
+    let o = e.voltc(&["check", "cpp_clang_root_later_errors.volt"]);
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(!o.status.success() && err.contains("no matching function for call to 'grow'") && !err.contains("undeclared identifier 'pr'") && err.contains("undeclared identifier 'nowhere'"), "a per-use @cpp no import makes: {err}");
+    // ...and one with no import at all
+    assert_eq!(ok(e.voltc(&["run", "cpp_clang_root_text.volt"]), "voltc run cpp_clang_root_text.volt"), "text 4\n", "@cpp<R, std::string> with no C++ import");
 }
 
 #[test]
@@ -2431,12 +2442,26 @@ fn cpp_peruse3() {
 }
 
 #[test]
+fn cpp_peruse4() {
+    // a call made per use whose result is a mirror (a Volt struct, a tuple, an enum with payloads),
+    // deduced, with the template argument given, named only in the result (zero<point>(), its try_
+    // form), other than the parameter's (conv<point, shape>(p)) or pointed to: that Volt value back;
+    // a reference result with nothing to be into (global<point>()): a copy
+    let e = Env::new("cpp-peruse4");
+    let want = "struct 3 2.5 3 2.5\ntuple (4, 0.5) (4, 0.5)\nenum 1.25 7\nzero 0 0 (0, 0) 0\ntry 0\nconv 0 global 9 0\naddr 6 1.5 true\n";
+    for backend in ["c", "llvm"] {
+        assert_eq!(ok(e.voltc(&["run", "cpp_peruse4.volt", "--backend", backend]), "voltc run cpp_peruse4.volt"), want, "mirrored results ({backend})");
+    }
+}
+
+#[test]
 fn cpp_twin() {
     // a template pair f(T&) / f(T) (and const T& / T): with T explicit both overloads take the
     // argument, so each wrapper names its own; f(&m) changes m, f_value(5) a copy; T a pointer, a
-    // defaulted trailing argument (given), a class's static methods
+    // defaulted trailing argument (given), a class's static methods (a static twin and solo beside the
+    // free ones: ns::f is the free one), instance method pairs (const and volatile ones)
     let e = Env::new("cpp-twin");
-    let want = "ref 1 6\nvalue 2\npeek 13 24\nderef 36 46\ndflt 50 5 62\nbox 70 12 83\n";
+    let want = "ref 1 6\nvalue 2\npeek 13 24\nderef 36 46\ndflt 50 5 62\nbox 70 12 83\nstatic 3 101 96 91\nacc 100 8 208\nget 309 409\nvol 900 2 1005\n";
     for backend in ["c", "llvm"] {
         assert_eq!(ok(e.voltc(&["run", "cpp_twin.volt", "--backend", backend]), "voltc run cpp_twin.volt"), want, "a reference / value template pair ({backend})");
     }
@@ -2447,6 +2472,15 @@ fn cpp_twin() {
     assert!(src.contains("fn dflt(x: T&, k: i32) -> i32") && src.contains("fn dflt_value_int(x: T, k: i32) -> i32"), "the full forms: {src}");
     for none in ["fn dflt(x: T&) -> i32", "fn dflt_value_int(x: T) -> i32"] {
         assert!(!src.contains(none), "{none} can't pick its overload: {src}");
+    }
+}
+
+#[test]
+fn cpp_twin_rq() {
+    // ref-qualified method template pairs (const &, &&): the member pointer carries the qualifiers
+    let e = Env::new("cpp-twin-rq");
+    for backend in ["c", "llvm"] {
+        assert_eq!(ok(e.voltc(&["run", "cpp_twin_rq.volt", "--backend", backend]), "voltc run cpp_twin_rq.volt"), "cr 709 809\nrr 500 4\nrrv 604\n", "ref-qualified method pairs ({backend})");
     }
 }
 
@@ -2664,6 +2698,26 @@ fn cpp_leftout() {
     let shown = Command::new(&e.voltc).args(["check", "cpp_leftout14.volt", "--std"]).arg(Path::new(ROOT).join("std")).current_dir(Path::new(ROOT).join("tests/interop")).env("VOLT_SHOW_CPP", "1").output().unwrap();
     let err = String::from_utf8_lossy(&shown.stderr);
     assert!(!shown.status.success() && err.contains("left out: class lo::vec8") && err.contains("needs C++17"), "an over-aligned class under C++14: {err}");
+}
+
+#[test]
+fn cpp_aligned_field() {
+    // a class whose field is an aligned typedef's (aligned past its int, or below it) isn't laid out
+    // as Volt lays out the int: held by handle, not a struct with Volt's alignment or offsets
+    let e = Env::new("cpp-aligned-field");
+    for backend in ["c", "llvm"] {
+        assert_eq!(ok(e.voltc(&["run", "cpp_aligned_field.volt", "--backend", backend]), "voltc run cpp_aligned_field.volt"), "cell 7 true true 32\ntight 9 6\nmixed 11 0.5\nsqueezed 13 5\n", "aligned-typedef and packed fields ({backend})");
+    }
+    let shown = Command::new(&e.voltc).args(["check", "cpp_aligned_field.volt", "--std"]).arg(Path::new(ROOT).join("std")).current_dir(Path::new(ROOT).join("tests/interop")).env("VOLT_SHOW_CPP", "1").output().unwrap();
+    let src = String::from_utf8_lossy(&shown.stderr);
+    for c in ["cell", "tight", "mixed", "squeezed"] {
+        assert!(src.contains(&format!("@cpp_handle(\"af::{c}\")")), "af::{c} held by handle: {src}");
+    }
+    // below C++17 the ones aligned to 8 or less are still handles (plain new); cell (16) is left out
+    assert_eq!(ok(e.voltc(&["run", "cpp_aligned_field14.volt", "--cc", "-std=c++14"]), "voltc run cpp_aligned_field14.volt"), "c++14 9 11\n", "handles under C++14");
+    let shown = Command::new(&e.voltc).args(["check", "cpp_aligned_field14.volt", "--cc", "-std=c++14", "--std"]).arg(Path::new(ROOT).join("std")).current_dir(Path::new(ROOT).join("tests/interop")).env("VOLT_SHOW_CPP", "1").output().unwrap();
+    let src = String::from_utf8_lossy(&shown.stderr);
+    assert!(src.contains("@cpp_handle(\"af::tight\")") && src.contains("@cpp_handle(\"af::mixed\")") && src.contains("left out: class af::cell") && src.contains("needs C++17"), "C++14: tight and mixed handles, cell left out: {src}");
 }
 
 /// is a C++ library's header on the usual include paths?

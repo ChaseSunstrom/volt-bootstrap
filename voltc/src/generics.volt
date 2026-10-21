@@ -1116,6 +1116,15 @@ attach fn bind_cand(this: checker&, d: u32, rv: tval*, static_ty: u32?, explicit
         } else if (gp.pack) {
             *binds.at(i) = gval::PACK(this.new_list({}));
         } else {
+            if (this.in_cpp_import(ns)) {
+                // a C++ call's mirror of a Volt type no argument gives (a result zero<point>()
+                // names): the type its name says
+                val mt = this.mirror_type(gp.name);
+                if (mt) {
+                    *binds.at(i) = gval::TY(mt);
+                    continue;
+                }
+            }
             // a T& parameter given a value, which T can't come from: say which
             for (m) in 0..fixed {
                 val p = *vparams.at(m) ?? continue;
@@ -1418,12 +1427,14 @@ attach fn resolve_call(this: checker&, name: str, cands: std::vec<u32>&, rv: tva
         }
     }
     // a call with no receiver: a method of the same name (use std::json makes json's attached
-    // write reachable as std::write) isn't a candidate when a plain function is there
+    // write reachable as std::write), or a static one (a C++ class's static f beside the free f
+    // of its namespace), isn't a candidate when a plain function is there
     if (cands.len > 1 && rv == null && static_ty == null) {
         var plain: std::vec<u32> = {};
         for (d&) in cands.items() {
             match (this.recv_of(*d)) {
                 .VAL(x) => {},
+                .STATIC(x) => {},
                 default => { put(&plain, *d); },
             }
         }

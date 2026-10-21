@@ -40,7 +40,8 @@ struct cpp_traits {
     base_copy: bool = false;    // a subclass's copy can copy it (its copy constructor, public or
                                 // protected; an abstract class's too): a derived object copies
     newable: bool = false;      // C++'s new aligns it (past 8 that's C++17's aligned new): a layout
-                                // Volt can't copy (alignas members) is held by handle instead
+                                // Volt can't copy (alignas members, an aligned typedef's or a
+                                // packed field) is held by handle instead
     aligned: bool = false;      // held by handle for that (prune), though trivially copyable
 }
 
@@ -634,6 +635,10 @@ attach fn instance(this: cpp_gen&, qt: clang::CXType) -> str? {
         return null;
     }
     val sp = type_spelling(ct);
+    if (starts_with(sp.as_str(), "volt_m_") && hole_index(sp.as_str()[7..sp.len()]) != null) {
+        // a mirror of a Volt type (cpp_mirror): that type, a generic of the mirror's name, not a handle
+        return null;
+    }
     val have = this.instances.get(sp.as_str());
     if (have) {
         return *have;
@@ -1987,24 +1992,42 @@ fn value_twin(c: clang::CXCursor) -> bool {
     return false;
 }
 
-// a free function template of a value_twin pair, called through a pointer of its own type so C++
-// takes exactly this one: "static_cast<int(*)(volt_cpp_id<{t0} >::type &) >(&tw::twin<{t0}>)(" for
-// call "tw::twin<{t0}>(" (n: the template's parameters, {t0}..); null when it isn't one, or a type
-// names a parameter that isn't its own
-fn pick_twin(c: clang::CXCursor, call: str, n: usize) -> std::string? {
+// a function template of a value_twin pair, called through a pointer of its own type so C++ takes
+// exactly this one: "static_cast<int(*)(volt_cpp_id<{t0} >::type &) >(&tw::twin<{t0}>)(" for call
+// "tw::twin<{t0}>(" (a static method's too); an instance method's call "OBJ.get<{t0}>(" (dot: the
+// index of its '.', else call.len) through a member pointer with the method's qualifiers,
+// "(OBJ.*static_cast<int(tw::Acc::*)(volt_cpp_id<{t0} >::type) const >(&tw::Acc::get<{t0}>))(" (n:
+// the template's parameters, {t0}..); null when it isn't one, or a type names a parameter that
+// isn't its own
+fn pick_twin(c: clang::CXCursor, call: str, n: usize, dot: usize) -> std::string? {
     if (clang::clang_getCursorKind(c) != clang::CXCursor_FunctionTemplate || !ends_with(call, "(") || !value_twin(c)) {
         return null;
     }
-    val pk = clang::clang_getCursorKind(clang::clang_getCursorSemanticParent(c));
+    val parent = clang::clang_getCursorSemanticParent(c);
+    val pk = clang::clang_getCursorKind(parent);
     if (pk == clang::CXCursor_ClassTemplate || pk == clang::CXCursor_ClassTemplatePartialSpecialization) {
         return null;
     }
+    val member = dot < call.len;
+    // volatile as clang spells the method's type (no binding says it): "int (int) const volatile &"
+    val whole = canon(clang::clang_getCursorType(c));
+    val vol = member && (contains(whole.as_str(), ") volatile") || contains(whole.as_str(), ") const volatile"));
     var ty = canon(clang::clang_getCursorResultType(c));
     if (contains(ty.as_str(), "(")) {
         // a function pointer or an array reference: R(*)(...) can't wrap it
         return null;
     }
-    ty.append("(*)(");
+    var cls: std::string = {};
+    if (member) {
+        cls = canon(clang::clang_getCursorType(parent));
+        if (contains(cls.as_str(), "(")) {
+            // an unnamed class: "(anonymous struct at ...)" names nothing C++ can point into
+            return null;
+        }
+        ty.append(fmt("({}::*)(", copy cls).as_str());
+    } else {
+        ty.append("(*)(");
+    }
     val ps = params_of(c);
     for (i) in 0..ps.len {
         if (i > 0) {
@@ -2019,6 +2042,18 @@ fn pick_twin(c: clang::CXCursor, call: str, n: usize) -> std::string? {
         ty.append("...");
     }
     ty.push(')');
+    if (member && clang::clang_CXXMethod_isConst(c) != 0) {
+        ty.append(" const");
+    }
+    if (vol) {
+        ty.append(" volatile");
+    }
+    val rq = clang::clang_Type_getCXXRefQualifier(clang::clang_getCursorType(c));
+    if (member && rq == clang::CXRefQualifier_LValue) {
+        ty.append(" &");
+    } else if (member && rq == clang::CXRefQualifier_RValue) {
+        ty.append(" &&");
+    }
     // highest first: type-parameter-0-1 is in type-parameter-0-10
     var i = n;
     while (i > 0) {
@@ -2027,6 +2062,9 @@ fn pick_twin(c: clang::CXCursor, call: str, n: usize) -> std::string? {
     }
     if (contains(ty.as_str(), "type-parameter-")) {
         return null;
+    }
+    if (member) {
+        return fmt4("({}.*static_cast<{} >(&{}::{}))(", S(call[0..dot]), move ty, move cls, S(call[dot + 1..call.len - 1]));
     }
     return fmt2("static_cast<{} >(&{})(", move ty, S(call[0..call.len - 1]));
 }
@@ -3307,14 +3345,23 @@ attach fn callable_of(this: cpp_gen&, generics: str, head: str, has_params: bool
         val vn = my_head.as_str()[10..paren];
         pin = fmt3("if (this.borrowed) {{ @panic(\"can't call {}::{} (an && method) through a borrowed handle: {} can't be copied\"); }}", copy this.pinned, S(vn), copy this.pinned);
     }
-    // one of a template pair f(S&) / f(S): through a pointer of its own type, which takes every
-    // argument, so it has no forms without its defaulted ones (C++ couldn't pick one for them)
-    var pick: std::string? = null;
-    if (self_arg == null) {
-        pick = pick_twin(fn_cursor, call, tparams.len);
-        if (pick != null) {
-            optional = 0;
+    // one of a template pair f(S&) / f(S): through a pointer of its own type (a member pointer on
+    // the object, as my_call has it, for a method), which takes every argument, so it has no forms
+    // without its defaulted ones (C++ couldn't pick one for them)
+    var my_dot = my_call.len();
+    if (self_arg != null) {
+        for (i) in 0..my_call.len() {
+            if (my_call.as_str()[i] == '.') {
+                my_dot = i;
+            }
         }
+    }
+    var pick: std::string? = null;
+    if (self_arg == null || my_dot < my_call.len()) {
+        pick = pick_twin(fn_cursor, my_call.as_str(), tparams.len, my_dot);
+    }
+    if (pick != null) {
+        optional = 0;
     }
     var aliased = false;
     // every count of trailing default arguments, most first
@@ -4260,7 +4307,8 @@ attach fn pads(this: cpp_gen&, from: u64, to: u64, big: bool, n: u32&, align: u6
 }
 
 // a class's struct: its public fields at their offsets, padding around them (so Volt's layout is
-// C++'s); false when that can't be done (its alignment comes from something padding can't copy)
+// C++'s); false when that can't be done (its alignment comes from something padding can't copy, or
+// a field sits where Volt's alignment of its type wouldn't put it: an aligned typedef's)
 attach fn class_struct(this: cpp_gen&, c: clang::CXCursor, vname_: str, q: str) -> bool {
     val t = clang::clang_getCursorType(c);
     val size = clang::clang_Type_getSizeOf(t);
@@ -4275,6 +4323,7 @@ attach fn class_struct(this: cpp_gen&, c: clang::CXCursor, vname_: str, q: str) 
     var at: u64 = 0;
     var got: u64 = 1;
     var n: u32 = 0;
+    var placed = true;
     val none: std::vec<str> = {};
     for (f&) in children(c).items() {
         if (clang::clang_getCursorKind(*f) != clang::CXCursor_FieldDecl || !is_public(*f) || clang::clang_Cursor_isBitField(*f) != 0) {
@@ -4287,11 +4336,16 @@ attach fn class_struct(this: cpp_gen&, c: clang::CXCursor, vname_: str, q: str) 
         }
         val vt = this.vtype(ft, &none) ?? continue;
         val bits = clang::clang_Cursor_getOffsetOfField(*f);
-        val fsize = clang::clang_Type_getSizeOf(ft);
-        val falign = clang::clang_Type_getAlignOf(ft);
-        if (bits < 0 || bits % 8 != 0 || fsize <= 0 || @cast<u64>(bits / 8) < at) {
+        // the canonical type's alignment is the one Volt gives the field's type (vtype maps that):
+        // an aligned typedef's, past or below it, isn't (T-0627)
+        val ct = clang::clang_getCanonicalType(ft);
+        val fsize = clang::clang_Type_getSizeOf(ct);
+        val falign = clang::clang_Type_getAlignOf(ct);
+        if (bits < 0 || bits % 8 != 0 || fsize <= 0 || falign <= 0 || @cast<u64>(bits / 8) < at) {
             continue;
         }
+        // (Volt would put it at the next multiple of its alignment, not here)
+        placed = placed && @cast<u64>(bits / 8) % @cast<u64>(falign) == 0;
         this.pads(at, @cast<u64>(bits / 8), align >= 16, &n, &got);
         this.line(fmt2("{}: {};", vname(cursor_name(*f).as_str()), move vt).as_str());
         at = @cast<u64>(bits / 8) + @cast<u64>(fsize);
@@ -4302,11 +4356,11 @@ attach fn class_struct(this: cpp_gen&, c: clang::CXCursor, vname_: str, q: str) 
     this.pads(at, @cast<u64>(size), align >= 16, &n, &got);
     this.depth -= 1;
     this.line("}");
-    if (got != @cast<u64>(align)) {
+    if (got != @cast<u64>(align) || !placed) {
         // take the struct back out
         this.out.bytes.len = start;
         // (one C++'s new aligns is held by handle instead: prune)
-        this.line(fmt2("// left out: class {} (its alignment, {}, comes from members Volt can't show, and holding it by handle needs C++17's aligned new)", S(q), num(@cast<i128>(align))).as_str());
+        this.line(fmt2("// left out: class {} (its layout, aligned to {}, comes from members Volt can't show, and holding it by handle needs C++17's aligned new)", S(q), num(@cast<i128>(align))).as_str());
         return false;
     }
     return true;
@@ -4456,7 +4510,7 @@ attach fn handle_class(this: cpp_gen&, c: clang::CXCursor, vn: str, q: str) -> v
         maps = this.virt_maps(c, q, &vs);
     }
     if (tr.aligned) {
-        this.line(fmt("// C++'s {}: its alignment comes from members Volt can't show, so Volt holds it by handle (C++'s new aligns it)", S(q)).as_str());
+        this.line(fmt("// C++'s {}: its layout or alignment comes from members Volt can't show, so Volt holds it by handle (C++'s new aligns it)", S(q)).as_str());
     } else {
         this.line(fmt("// C++'s {}: it isn't trivially copyable, so Volt holds it by handle (C++ allocates it)", S(q)).as_str());
     }
@@ -7758,15 +7812,18 @@ attach fn cpp_instance_as(this: checker&, k: usize, expr: str, types: std::vec<u
     // the Volt fn, written by the importer from the probe's now concrete signature; a mirror
     // (cpp_mirror) is a generic parameter of its own name, which the Volt type binds
     val g = &this.cpp_ctxs.at(k).gen;
+    // the type itself, not decltype(...) of the probe
+    val rt = clang::clang_getCanonicalType(clang::clang_getCursorResultType(fc));
+    // and the result's, which only an explicit template argument may name (zero<point>()):
+    // bind_cand binds one no argument binds by its name (mirror_type)
     var mnames: std::vec<std::string> = {};
     for (p&) in ptys.items() {
         mirror_names(p.as_str(), &mnames);
     }
+    mirror_names(type_spelling(rt).as_str(), &mnames);
     val none = str_views(&mnames);
     val generics = generics_text(&mnames);
     val fname = fmt("volt_cpp_call_{}", unum(n));
-    // the type itself, not decltype(...) of the probe
-    val rt = clang::clang_getCanonicalType(clang::clang_getCursorResultType(fc));
     if (by_value) {
         g.unnamed_as = fmt("std::decay<decltype({})>::type", copy unit_expr);
     } else {
@@ -8014,6 +8071,12 @@ attach fn cpp_range(this: checker&, t: u32, span: span) -> compile_error!bool {
     val take = try this.cpp_instance(k, fmt2("{}<{} >({{0}})", S(take_fn), S(q)).as_str(), &types, false, true, span);
     val fd = this.fn_decl_of(take) ?? return fails(span, "the range's Volt fn wasn't declared");
     val elem = *(this.cpp_dyn_ret.get(take) ?? return fails(span, "the range's Volt fn has no result"));
+    // (an element that is a mirror is a generic of the take fn's, which next can't name)
+    var em: std::vec<std::string> = {};
+    mirror_names(elem, &em);
+    if (em.len > 0) {
+        return fail(span, fmt("Volt can't take this C++ call yet: its result, {}, has no Volt form yet", S(elem)));
+    }
     val n = unum(@cast<u64>(this.cpp_ranges.len));
     val vn = fmt("volt_range_{}", copy n);
     var out = S("");
@@ -8252,8 +8315,59 @@ attach fn cpp_instance_on(this: checker&, k: usize, expr: str, types: std::vec<u
     return made;
 }
 
+// the C++ context of a call made per use from here: the one of the import whose namespace this is
+// in, else none (the program's own code: cpp_instance_from tries each import). With no import at
+// all, one made for the C++ standard library's headers alone, keyed to this namespace
+attach fn cpp_root_ctx(this: checker&) -> usize? {
+    if (this.cpp_ctxs.len == 0) {
+        val newest = this.cpp_newest();
+        var cargs = this.cpp_args(newest);
+        var g: cpp_gen = { c: this, kinds: S("volt_cpp_kinds_none") };
+        val tu = clang_parse("volt_cpp_none.cpp", "", &cargs);
+        put(&this.cpp_ctxs, { ns: this.env_at(this.cx.env).ns, src: {}, args: move cargs, gen: move g, tu: move tu, unit: this.cpp_unit_for(newest) });
+    }
+    return this.cpp_ctx_of(this.env_at(this.cx.env).ns);
+}
+
+// cpp_instance of a call from context k, or from the program's own code (k none): there the first
+// import whose headers make it work (one needing a later import's isn't asked of the first's
+// alone), and when none does, the error of the first that has the names it uses (else the
+// first's: a name no import has). A caller trying the arguments in several forms asks this once
+// per form, so the earliest form any import makes wins, even over a later form the first makes
+// ponytail: each import that can't make it is another clang parse; pick by the names it uses if
+// programs with many imports make failing calls slow
+attach fn cpp_instance_from(this: checker&, k: usize?, expr: str, types: std::vec<u32>&, value: bool, span: span) -> compile_error!u32 {
+    if (k) {
+        return this.cpp_instance(k, expr, types, false, value, span);
+    }
+    val first = this.cpp_instance(0, expr, types, false, value, span) catch |e| {
+        var named: diag? = null;
+        for (j) in 1..this.cpp_ctxs.len {
+            val made = this.cpp_instance(j, expr, types, false, value, span) catch |e2| {
+                if (named == null && !cpp_name_missing(err_msg(&e2))) {
+                    named = err_diag(&e2);
+                }
+                continue;
+            };
+            return made;
+        }
+        if (cpp_name_missing(err_msg(&e))) {
+            if (named) {
+                return compile_error::AT(copy named);
+            }
+        }
+        return e;
+    };
+    return first;
+}
+
+// is clang's error (an @cpp call's) about a name its headers don't have, rather than the call itself
+fn cpp_name_missing(m: str) -> bool {
+    return contains(m, "undeclared identifier") || contains(m, "no member named") || contains(m, "no template named") || contains(m, "unknown type name");
+}
+
 // @cpp("C++ expression", args...) with no result type: clang works it out, as for a call made per
-// use, in the first C++ import's headers (or none)
+// use, in the headers of the first C++ import that has what it names (or none)
 attach fn cpp_typed_by_clang(this: checker&, args: std::vec<garg>&, span: span) -> compile_error!tval {
     val fe = try this.garg_value(args.at(0));
     var text: std::string = {};
@@ -8275,15 +8389,7 @@ attach fn cpp_typed_by_clang(this: checker&, args: std::vec<garg>&, span: span) 
         put(&pre, v);
         put(&es, copy *e);
     }
-    if (this.cpp_ctxs.len == 0) {
-        // no import: the C++ standard library's headers alone
-        val newest = this.cpp_newest();
-        var cargs = this.cpp_args(newest);
-        var g: cpp_gen = { c: this, kinds: S("volt_cpp_kinds_none") };
-        val tu = clang_parse("volt_cpp_none.cpp", "", &cargs);
-        put(&this.cpp_ctxs, { ns: this.env_at(this.cx.env).ns, src: {}, args: move cargs, gen: move g, tu: move tu, unit: this.cpp_unit_for(newest) });
-    }
-    val made = try this.cpp_instance(0, text.as_str(), &types, false, true, span);
+    val made = try this.cpp_instance_from(this.cpp_root_ctx(), text.as_str(), &types, true, span);
     var cands: std::vec<u32> = {};
     put(&cands, made);
     var none: std::vec<garg> = {};
@@ -9362,7 +9468,7 @@ attach fn cpp_text_template(this: checker&, r: u32, gargs: std::vec<garg>&, args
         put(&cpre, held_v);
         put(&xpre, held_v);
     }
-    val k = this.cpp_ctx_of(this.env_at(this.cx.env).ns) ?? 0;
+    val k = this.cpp_root_ctx();
     var value = true;
     match (*this.t.get(r)) {
         .REF(x) => { value = false; },
@@ -9378,12 +9484,12 @@ attach fn cpp_text_template(this: checker&, r: u32, gargs: std::vec<garg>&, args
     // is probed with it as an address too (cpp_instance_addr): up to six each time a failing call
     // is checked; cache failed probes if that gets slow
     if (places) {
-        val first = this.cpp_instance(k, text.as_str(), &xtys, false, value, span) catch |e| {
-            val made = this.cpp_instance(k, text.as_str(), &ctys, false, value, span) catch |e2| {
+        val first = this.cpp_instance_from(k, text.as_str(), &xtys, value, span) catch |e| {
+            val made = this.cpp_instance_from(k, text.as_str(), &ctys, value, span) catch |e2| {
                 if (!texts) {
                     return e;
                 }
-                put(&cands, this.cpp_instance(k, text.as_str(), &mtys, false, value, span) catch |e3| { return e; });
+                put(&cands, this.cpp_instance_from(k, text.as_str(), &mtys, value, span) catch |e3| { return e; });
                 try this.text_written(&fixed, span);
                 // ...and the placed ones, taken as S& too
                 for (w&) in placed.items() {
@@ -9411,8 +9517,8 @@ attach fn cpp_text_template(this: checker&, r: u32, gargs: std::vec<garg>&, args
         }
         return this.pick_call("@cpp", &cands, null, null, &none, &xpre, &es, null, span);
     }
-    val made = this.cpp_instance(k, text.as_str(), &ctys, false, value, span) catch |e| {
-        put(&cands, try this.cpp_instance(k, text.as_str(), &mtys, false, value, span));
+    val made = this.cpp_instance_from(k, text.as_str(), &ctys, value, span) catch |e| {
+        put(&cands, try this.cpp_instance_from(k, text.as_str(), &mtys, value, span));
         try this.text_written(&fixed, span);
         return this.pick_call("@cpp", &cands, null, null, &none, &mpre, &es, null, span);
     };
@@ -9590,6 +9696,19 @@ fn hole_index(s: str) -> usize? {
         n = n * 10 + @cast<usize>(c - '0');
     }
     return n;
+}
+
+// the Volt type a mirror's name (cpp_mirror's volt_m_<type id>) is of; none for another name
+attach fn mirror_type(this: checker&, name: str) -> u32? {
+    if (!starts_with(name, "volt_m_")) {
+        return null;
+    }
+    for (n&) in this.cpp_decl_names.items() {
+        if (n.as_str() == name) {
+            return @cast<u32>(hole_index(name[7..name.len]) ?? return null);
+        }
+    }
+    return null;
 }
 
 // the mirrors (cpp_mirror's volt_m_N) C++ type text s names, each once into out

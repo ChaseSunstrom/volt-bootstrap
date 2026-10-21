@@ -143,7 +143,8 @@ fn main() -> void {
 ### Static functions
 
 `static this: T` attaches a function to the type rather than to a value: it's called as
-`T::name(...)`, usually to build one.
+`T::name(...)`, usually to build one. A bare `name(...)` calls the plain fn of that name when one is
+in scope, never the static one.
 
 ```volt
 use std::io;
