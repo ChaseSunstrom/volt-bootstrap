@@ -177,6 +177,14 @@ fn main() -> void {
     var gm = std::string::from("x");
     grown(&gm);
     std::println("member {}", gm);
+    // only the object a method runs on is written: {1}, an argument of the inner call, is read
+    var ca = std::string::from("a");
+    val cb = std::string::from("b");
+    chained(&ca, &cb);
+    std::println("chain {} {}", ca, cb);
+}
+fn chained(a: std::string&, b: std::string&) -> void {
+    @cpp<void, std::string, std::string>("{0}.append({1}).push_back('c')", a, b);
 }
 // a string hole as the object of a member call: its methods change the Volt string
 fn grown(s: std::string&) -> void {

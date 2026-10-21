@@ -8759,15 +8759,25 @@ fn probe_writes(fc: clang::CXCursor, seq: std::vec<usize>&) -> u64 {
             if (as0 == cs) {
                 skip = 1;
             }
-            // a non-const method can change its object: {0}.append(..), {0} += ..
+            // a non-const method can change its object: {0}.append(..), {0} += .. (the hole itself,
+            // not one inside it: {0}.append({1}).push_back(..) reads {1}). ponytail: a non-const
+            // overload picked only to read ({0}[0], {0}.begin()) counts as a write too
             if (clang::clang_CXXMethod_isConst(callee) == 0) {
+                var obj = clang::clang_getNullCursor();
                 if (skip == 1) {
-                    mask = mask | holes_within(&holes, seq, clang::clang_Cursor_getArgument(*call, 0));
+                    obj = clang::clang_Cursor_getArgument(*call, 0);
                 } else {
                     val kids = children(*call);
                     if (kids.len > 0 && clang::clang_getCursorKind(*kids.at(0)) == clang::CXCursor_MemberRefExpr) {
-                        mask = mask | holes_within(&holes, seq, *kids.at(0));
+                        val base = children(*kids.at(0));
+                        if (base.len > 0) {
+                            obj = *base.at(0);
+                        }
                     }
+                }
+                val h = hole_of(obj);
+                if (h) {
+                    mask = mask | holes_within(&holes, seq, h);
                 }
             }
         }
@@ -8784,6 +8794,31 @@ fn probe_writes(fc: clang::CXCursor, seq: std::vec<usize>&) -> u64 {
         }
     }
     return mask;
+}
+
+// the hole (a volt_lv or volt_rv call) e is, through parentheses and implicit conversions; null
+// when e is another expression
+fn hole_of(e: clang::CXCursor) -> clang::CXCursor? {
+    var c = e;
+    while (clang::clang_Cursor_isNull(c) == 0) {
+        val k = clang::clang_getCursorKind(c);
+        if (k == clang::CXCursor_CallExpr) {
+            val n = cursor_name(c);
+            if (n.as_str() == "volt_lv" || n.as_str() == "volt_rv") {
+                return c;
+            }
+            return null;
+        }
+        if (k != clang::CXCursor_UnexposedExpr && k != clang::CXCursor_ParenExpr) {
+            return null;
+        }
+        val kids = children(c);
+        if (kids.len != 1) {
+            return null;
+        }
+        c = *kids.at(0);
+    }
+    return null;
 }
 
 // the bits (by seq, the holes' indexes in text order) of the holes inside c's text
