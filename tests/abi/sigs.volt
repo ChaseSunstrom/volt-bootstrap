@@ -82,3 +82,7 @@ export fn fufd(x: u::ufd) -> u::ufd { return x; }
 export fn fufi(x: u::ufi) -> u::ufi { return x; }
 export fn fsfu(x: u::sfu) -> u::sfu { return x; }
 export fn fsfu2(x: u::sfu2) -> u::sfu2 { return x; }
+export fn fu1f(x: u::u1f) -> u::u1f { return x; }
+export fn fu1d(x: u::u1d) -> u::u1d { return x; }
+export fn fsu1(x: u::su1) -> u::su1 { return x; }
+export fn fsz1(x: u::sz1) -> u::sz1 { return x; }
