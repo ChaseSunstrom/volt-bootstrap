@@ -174,7 +174,9 @@ Things to keep in mind:
   program builds it with that program's member list, so a type the program attaches reaches it.
   A package with a global whose type holds a trait union isn't taken from its library at all: the
   program builds it from source (and the linked packages that use it), with a warning naming the
-  global, since the library's code that touches the global was built with the library's member list. A local inside a function compiled
+  global, since the library's code that touches the global was built with the library's member list.
+  So is one with an `export fn` taking or giving trait values: the library defines that function,
+  and its switch knows only the library's members. A local inside a function compiled
   without the trait in its signature still sees the library's member list, none here: keep trait
   values in signatures.
 - `@typeid(v)` of a trait value is the id of the type it holds, the same id `@typeid(circle)` gives;

@@ -1382,7 +1382,9 @@ attach fn const_place(this: checker&, p: u32) -> bool {
 
 // A linked package with a global whose type holds a trait union is built from source instead: the
 // union's layout comes from the types the program attaches, and the library's code that touches the
-// global was built with the members the library saw. A warning names the global.
+// global was built with the members the library saw. A warning names the global. So is one with an
+// export fn whose signature holds one: the library defines that fn (fn_linkage's EXTERNAL), and its
+// switch on the union's tags knows only the members the library saw.
 // ponytail: the whole package loses its library; define just the global (and rebuild the fns whose
 // bodies touch it) when a real package needs both.
 // So is a linked package that uses one built from source (transitively): its library refers to the
@@ -1410,8 +1412,12 @@ attach fn unlink_union_globals(this: checker&) -> void {
             this.running_union_globals(pkg);
             continue;
         }
-        val w = this.union_global(pkg, 0, false) ?? continue;
-        var d: diag = { span: w.span, msg: fmt2("{}'s library isn't used: its global '{}' holds a trait union", S(pkg), S(w.name)), warning: true };
+        val w = this.union_global(pkg, 0, true) ?? continue;
+        var what = fmt("its global '{}' holds a trait union", S(w.name));
+        if (w.is_fn) {
+            what = fmt("its export fn '{}' takes or gives a trait union", S(w.name));
+        }
+        var d: diag = { span: w.span, msg: fmt2("{}'s library isn't used: {}", S(pkg), S(what.as_str())), warning: true };
         put(&d.notes, S("the union's layout depends on the types this program attaches, so the package is built from source"));
         put(&this.warnings, move d);
         put(&gone, pkg);
