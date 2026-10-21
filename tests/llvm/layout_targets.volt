@@ -18,6 +18,8 @@ struct dbl {
 struct lanes {
     a: u8;
     v: std::simd::f32x4;
+    w: std::simd::f32x8;          // 32 bytes: ARM's data layout caps only 16-byte vectors
+    x: std::simd::vec(i32, 16);   // 64 bytes
 }
 
 // 16-aligned where 32-bit ARM aligns no vector that way (lgen's aligner: an f128)
@@ -36,7 +38,7 @@ enum shape {
 fn main() -> i32 {
     val w: wide = { a: 1, b: 2 };
     val d: dbl = { a: 1, b: 2.0, c: 3, q: 1.0 };
-    val l: lanes = { a: 1, v: {} };
+    val l: lanes = { a: 1, v: {}, w: {}, x: {} };
     val c: cell = { a: 2 };
     val t = (w, d, l, @cast<u128>(5), c);
     val s = shape::DBL(d);

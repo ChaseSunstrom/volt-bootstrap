@@ -27,11 +27,19 @@ struct folded {
     f64_align: u8[@alignof(f64)];
 }
 
+// the same at compile time, so emit-c checks it with no C compiler (and fails off i386)
+fn i386_layout() -> void {
+    comptime if (@sizeof(wide) != 12 || @alignof(wide) != 4 || @sizeof(dbl) != 16 || @alignof(dbl) != 4 || @alignof(i64) != 4 || @alignof(f64) != 4) {
+        @compile_error("not i386's C layout");
+    }
+}
+
 fn n(x: usize) -> i32 {
     return @cast<i32>(x);
 }
 
 fn main() -> i32 {
+    i386_layout();
     var f: folded = { wide_size: {}, wide_align: {}, dbl_size: {}, dbl_align: {}, i64_align: {}, f64_align: {} };
     printf("wide %d %d / C %d %d\n", n(f.wide_size.len), n(f.wide_align.len), n(@sizeof(c::c_wide)), n(@alignof(c::c_wide)));
     printf("dbl %d %d / C %d %d\n", n(f.dbl_size.len), n(f.dbl_align.len), n(@sizeof(c::c_dbl)), n(@alignof(c::c_dbl)));

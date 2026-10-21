@@ -107,7 +107,18 @@ fn golden_layout_targets() {
         let o = voltc(&args);
         assert!(o.status.success(), "layout_targets for {target:?}: {}", String::from_utf8_lossy(&o.stderr));
     }
-    let m32 = Command::new("cc").args(["-m32", "-x", "c", "-", "-o", "/dev/null"]).stdin(std::process::Stdio::piped()).spawn().and_then(|mut c| {
+    // i386's layout at compile time, with no C compiler: layout_i386's comptime check passes with
+    // arch=x86 and fails without it
+    let i386 = ["tests/llvm/layout_i386.volt", "--no-std", "--cfg", "arch=x86", "--cfg", "pointer_bits=32"];
+    let o = voltc(&[&["emit-c"][..], &i386].concat());
+    assert!(o.status.success(), "emit-c for i386: {}", String::from_utf8_lossy(&o.stderr));
+    let o = voltc(&["emit-c", "tests/llvm/layout_i386.volt", "--no-std"]);
+    assert!(!o.status.success() && String::from_utf8_lossy(&o.stderr).contains("not i386's C layout"), "x86-64's layout passed i386's check");
+    // the LLVM backend building for this host can't take i386's layout: refused, pointing at C
+    let o = voltc(&[&["emit-llvm"][..], &i386].concat());
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(!o.status.success() && err.contains("lays out 'i64' as size 8, align 8 (the checker: size 8, align 4)") && err.contains("--backend c"), "emit-llvm with --cfg arch=x86: {err}");
+    let m32 =Command::new("cc").args(["-m32", "-x", "c", "-", "-o", "/dev/null"]).stdin(std::process::Stdio::piped()).spawn().and_then(|mut c| {
         use std::io::Write;
         c.stdin.take().unwrap().write_all(b"#include <stdio.h>\nint main(void) { return printf(\"\"); }\n")?;
         c.wait()
