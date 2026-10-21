@@ -330,11 +330,6 @@ export fn volt_vm_load(v: volt_vm&, name: str, source: str) -> vm_error!void {
             return v.fail(vm_error::JIT, jit_error(le).as_str());
         }
         llvm::LLVMOrcJITDylibAddGenerator(v.jd, lib_gen);
-        for (f&) in chk.link_flags.items() {
-            if (!v.links(f.as_str())) {
-                put(&v.link_flags, copy *f);
-            }
-        }
     }
     // the module and its context go to the JIT (so ask it what it has first); the rest of the
     // backend's state goes now
@@ -382,16 +377,26 @@ export fn volt_vm_load(v: volt_vm&, name: str, source: str) -> vm_error!void {
             run();
         }
     }
+    // the libraries its library links, once it's loaded (a failed load's library stays, its symbols
+    // named for that load, but a later one needing those libraries builds its own)
+    if (native) {
+        for (f&) in chk.link_flags.items() {
+            if (!v.links(f.as_str())) {
+                put(&v.link_flags, copy *f);
+            }
+        }
+    }
     put(&v.scripts, { pkg: copy pkg, name: S(name), source: S(source), rt: rt, native: native != null, holds: held_unions(&*chk, pkg.as_str()) });
     return;
 }
 
-// the trait unions package pkg's globals hold, each by every package with a member
+// the trait unions package pkg's globals hold (or its export fns take or give), each by every
+// package with a member
 fn held_unions(chk: checker&, pkg: str) -> std::vec<held_union> {
     var out: std::vec<held_union> = {};
     var from: u32 = 0;
     loop {
-        val w = chk.union_global(pkg, from) ?? return out;
+        val w = chk.union_global(pkg, from, true) ?? return out;
         from = w.decl + 1;
         for (u) in 0..chk.unions.len {
             var seen: idset = {};
@@ -399,8 +404,7 @@ fn held_unions(chk: checker&, pkg: str) -> std::vec<held_union> {
                 continue;
             }
             val tr = chk.ui(@cast<u32>(u)).trait_decl;
-            var why = fmt3("the global {}::{} holds {}'s union, laid out (and ", S(pkg), S(w.name), S(chk.decl_name(tr)));
-            why.append(fmt2("{}'s code built) for the types attached when {} loaded", S(pkg), S(pkg)).as_str());
+            val why = union_why(&w, pkg, chk.decl_name(tr));
             for (b&) in chk.attach_blocks.items() {
                 if (chk.item_of(*b).generics.len > 0) {
                     continue;
@@ -456,13 +460,14 @@ fn drop_tracker(rt: llvm::LLVMOrcOpaqueResourceTracker*) -> void {
     llvm::LLVMOrcReleaseResourceTracker(rt);
 }
 
-// does the script's module need its imports' code built: a header function's pointer (volt_c_NAME,
-// lgen's header_ptr) or a C++ wrapper it calls, or (natively) a library no load has linked yet? An
-// earlier script's imports that only its own code reaches were built by its load
+// does the script's module need its imports' code built: a header function's pointer (c_ptr's
+// volt_cLOAD_NAME, lgen's header_ptr) or a C++ wrapper it calls, or (natively) a library no load has
+// linked yet? An earlier script's imports that only its own code reaches were built by its load
 attach fn needs_native(this: volt_vm&, chk: checker&, g: lg&) -> bool {
+    val ptr = chk.c_ptr("");
     var x = llvm::LLVMGetFirstGlobal(g.m);
     while (x != null) {
-        if (llvm::LLVMIsDeclaration(x) != 0 && starts_with(value_name(x), "volt_c_")) {
+        if (llvm::LLVMIsDeclaration(x) != 0 && starts_with(value_name(x), ptr.as_str())) {
             return true;
         }
         x = llvm::LLVMGetNextGlobal(x);

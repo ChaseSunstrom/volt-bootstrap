@@ -2,7 +2,8 @@
 // the package its file names, so a later one calls util::make. In a plain VM and in a sandbox
 // (whose allowances aren't needed for that), reloading a script others use is refused, reloading
 // one nobody uses replaces it, a load that fails leaves no package, and a file whose name can't be
-// a package's is refused. Trait unions an earlier script's global holds keep their members and tags.
+// a package's is refused. Trait unions an earlier script's global holds, or its export fn takes or gives, keep their members
+// and tags.
 #include <stdio.h>
 #include <string.h>
 #include "voltvm.h"
@@ -84,6 +85,26 @@ static const char *HOLDERS =
     "    n: i32;\n"
     "}\n"
     "public var held_slot: slot = { f: null, n: 0 };\n";
+
+static const char *TAKERS =
+    "public trait spin {\n"
+    "    fn s(this) -> i32;\n"
+    "}\n"
+    "public trait turn {\n"
+    "    fn t(this) -> i32;\n"
+    "}\n"
+    "public struct top { n: i32; }\n"
+    "attach spin -> top {\n"
+    "    fn s(this) -> i32 { return this.n; }\n"
+    "}\n"
+    "attach turn -> top {\n"
+    "    fn t(this) -> i32 { return this.n; }\n"
+    "}\n"
+    "export fn spun(x: spin) -> i32 { return x.s(); }\n"
+    "export fn turned(n: i32) -> turn {\n"
+    "    val t: top = { n: n };\n"
+    "    return t;\n"
+    "}\n";
 
 static const char *TANK =
     "public struct rod {\n"
@@ -220,6 +241,27 @@ int main(int argc, char **argv) {
             printf("%s: loaded\n", attach[i]);
         }
     }
+    // so is one an export fn takes or gives: it's the earlier script's code, built for the tags it saw
+    if (volt_vm_load(vm, S("takers.volt"), S(TAKERS)).error) {
+        say_error(vm, "takers");
+        return 1;
+    }
+    const char *takes[] = { "spin", "turn" };
+    const char *method[] = { "s", "t" };
+    for (int i = 0; i < 2; i++) {
+        char src[256];
+        snprintf(src, sizeof src, "struct big { a: i64; b: i64; c: i64; }\nattach takers::%s -> big {\n    fn %s(this) -> i32 { return 0; }\n}\nexport fn big_%s() -> i32 { return 0; }\n", takes[i], method[i], takes[i]);
+        if (volt_vm_load(vm, S("big.volt"), S(src)).error) {
+            say_error(vm, takes[i]);
+        } else {
+            printf("%s: loaded\n", takes[i]);
+        }
+    }
+    if (volt_vm_load(vm, S("spun_user.volt"), S("export fn spun_top() -> i32 {\n    val t: takers::top = { n: 9 };\n    return takers::spun(t);\n}\n")).error) {
+        say_error(vm, "spun_user");
+        return 1;
+    }
+    printf("spun %d\n", ((int (*)(void))volt_vm_find(vm, S("spun_top")))());
     // a script whose type is in the union a later script's global holds can't be loaded again: the
     // global and that script's code have the union's tags as they were, and a reload would change
     // them. Code of a later load still agrees with them
@@ -238,6 +280,18 @@ int main(int argc, char **argv) {
         return 1;
     }
     printf("rod %d cube %d\n", ((int (*)(void))volt_vm_find(vm, S("rod_vol")))(), ((int (*)(void))volt_vm_find(vm, S("cube_vol")))());
+    // and so is one whose type is in the union a later script's export fn takes
+    if (volt_vm_load(vm, S("fluid.volt"), S("public trait fluid {\n    fn f(this) -> i32;\n}\n")).error ||
+        volt_vm_load(vm, S("drip.volt"), S("struct dr { n: i32; }\nattach fluid::fluid -> dr {\n    fn f(this) -> i32 { return this.n; }\n}\nexport fn drip_f() -> i32 { return 0; }\n")).error ||
+        volt_vm_load(vm, S("pipe.volt"), S("export fn pipe(x: fluid::fluid) -> i32 { return x.f(); }\n")).error) {
+        say_error(vm, "fluid");
+        return 1;
+    }
+    if (volt_vm_load(vm, S("drip.volt"), S("export fn drip_f() -> i32 { return 1; }\n")).error) {
+        say_error(vm, "drip again");
+    } else {
+        printf("drip again: loaded\n");
+    }
     volt_vm_free(vm);
     return 0;
 }
