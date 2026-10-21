@@ -630,7 +630,9 @@ attach fn wasm_one(this: lg&, t: u32) -> llvm::LLVMOpaqueType* {
         var n: usize = 0;
         for (i) in 0..this.member_count(t) {
             val mt = this.member_ty(t, @cast<u32>(i));
-            if (!this.is_void(mt)) {
+            // (an empty member, a GNU empty struct or a zero-length array, counts for nothing, as
+            // clang's isSingleElementStruct has it)
+            if (!this.is_void(mt) && this.size_of(this.lt(mt)) > 0) {
                 n += 1;
                 one = mt;
             }
@@ -760,6 +762,12 @@ attach fn c_leaves(this: lg&, t: u32, out: std::vec<llvm::LLVMOpaqueType*>&) -> 
             }
         },
         .ARRAY(x, n) => {
+            if (n == 0) {
+                // a zero-length array makes no HFA (clang: AAPCS64's isHomogeneousAggregate refuses
+                // one), so it counts as a leaf that isn't a float
+                put(out, this.lt(t));
+                return;
+            }
             for (j) in 0..n {
                 if (out.len > 4) {
                     return;

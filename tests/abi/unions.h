@@ -11,3 +11,4 @@ typedef struct { float y; uf u; } sfu2;
 typedef union { float f; } u1f;
 typedef union { double d; } u1d;
 typedef struct { u1f x; } su1;
+typedef struct { int pad[0]; float f; } sz1;
