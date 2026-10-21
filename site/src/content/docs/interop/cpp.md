@@ -548,9 +548,11 @@ object `derive` didn't make; without RTTI, either stops the program saying so.
 - Volt moves values by copying their bytes, which a C++ object that points into itself (as
   libstdc++'s `std::string` does) doesn't survive. So a class clang says isn't trivially copyable
   (`__is_trivially_copyable`, asked of the imported headers) is held by handle: moving it moves the
-  pointer, and the object stays where C++ made it. A handle is never empty: `{}` makes the object
-  with its default constructor (`new T()`), and for a class that can't be made from nothing `{}` is
-  a compile error that says to use `T::new(...)`.
+  pointer, and the object stays where C++ made it. A handle made by `{}` or `T::new(...)` is never
+  empty: `{}` makes the object with its default constructor (`new T()`), and for a class that can't
+  be made from nothing `{}` is a compile error that says to use `T::new(...)`. (Its `cpp` and
+  `borrowed` fields are the importer's: set by hand, as `{ cpp: null, borrowed: true }`, they make
+  an empty handle, and using one stops the program.)
 - A class clang says can be copied but whose copy doesn't compile (one holding a
   `std::vector<std::unique_ptr<T>>`: the vector's copy constructor is declared for any element)
   has no `copy`: the import tries each class's copy, and one that fails isn't copyable.
