@@ -1,5 +1,6 @@
 /* sigs.volt's export fns in C: tests/abi.rs compares how clang lowers these with how voltc lowers
    those, for each host */
+#include "unions.h"
 typedef struct { unsigned char a; } s1;
 typedef struct { unsigned char a, b, c; } s3;
 typedef struct { short a; unsigned char b; } s4;
@@ -78,3 +79,9 @@ __int128 wide(__int128 a) { return a; }
 float floats(float a, double b) { return a; }
 void edge(long long a, long long b, long long c, __int128 w, s16 x) {}
 void many(long long a, long long b, long long c, long long d, long long e, long long f, long long g, s12 x, double d1, double d2, double d3, double d4, double d5, double d6, double d7, hf3 h, nest n, s24 big) {}
+uf fuf(uf x) { return x; }
+ud fud(ud x) { return x; }
+uf2 fuf2(uf2 x) { return x; }
+ufd fufd(ufd x) { return x; }
+ufi fufi(ufi x) { return x; }
+sfu fsfu(sfu x) { return x; }

@@ -1,5 +1,6 @@
 // each shape the C ABIs pass differently, through an export fn; tests/abi.rs compares how voltc
 // lowers these with how clang lowers sigs.c's, for each host
+use { "unions.h" } as u;
 struct s1 { a: u8; }
 struct s3 { a: u8; b: u8; c: u8; }
 struct s4 { a: i16; b: u8; }
@@ -74,3 +75,9 @@ export fn edge(a: i64, b: i64, c: i64, w: i128, x: s16) -> void {}
 export fn many(a: i64, b: i64, c: i64, d: i64, e: i64, f: i64, g: i64, x: s12, d1: f64, d2: f64, d3: f64, d4: f64, d5: f64, d6: f64, d7: f64, h: hf3, n: nest, big: s24) -> void {}
 
 fn main() -> void {}
+export fn fuf(x: u::uf) -> u::uf { return x; }
+export fn fud(x: u::ud) -> u::ud { return x; }
+export fn fuf2(x: u::uf2) -> u::uf2 { return x; }
+export fn fufd(x: u::ufd) -> u::ufd { return x; }
+export fn fufi(x: u::ufi) -> u::ufi { return x; }
+export fn fsfu(x: u::sfu) -> u::sfu { return x; }

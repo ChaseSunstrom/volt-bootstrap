@@ -597,7 +597,8 @@ attach fn part(this: lg&, t: u32, ret: bool) -> abi_part {
                 } else {
                     put(&r.pieces, h);
                 }
-            } else if (e.floats >= 2) {
+            } else if (e.far > 0) {
+                // (a float in the eightbyte's upper half; a C union's floats overlapping at 0 are one)
                 put(&r.pieces, llvm::LLVMVectorType(llvm::LLVMFloatTypeInContext(this.ctx), 2));
             } else {
                 put(&r.pieces, llvm::LLVMFloatTypeInContext(this.ctx));
@@ -623,7 +624,7 @@ fn int_bits(l: llvm::LLVMOpaqueType*) -> u32 {
 attach fn aapcs_part(this: lg&, t: u32, size: u64, ret: bool) -> abi_part {
     val l = this.lt(t);
     var leaves: std::vec<llvm::LLVMOpaqueType*> = {};
-    scalar_leaves(l, &leaves);
+    this.c_leaves(t, &leaves);
     if (leaves.len >= 1 && leaves.len <= 4) {
         val e = *leaves.at(0);
         val ek = llvm::LLVMGetTypeKind(e);
@@ -639,7 +640,13 @@ attach fn aapcs_part(this: lg&, t: u32, size: u64, ret: bool) -> abi_part {
             // as clang has it: a param is an array of them, a result the aggregate itself
             var cty = llvm::LLVMArrayType2(e, @cast<u64>(leaves.len));
             if (ret) {
+                // the aggregate itself, but a C union's blob as its floats (which LLVM puts in s/d registers)
                 cty = l;
+                var lls: std::vec<llvm::LLVMOpaqueType*> = {};
+                scalar_leaves(l, &lls);
+                if (lls.len != leaves.len || *lls.at(0) != e) {
+                    cty = struct_ty(this.ctx, &leaves, false);
+                }
             }
             return { how: pass::COERCE, ty: t, cty: cty, hfa: true };
         }
@@ -662,6 +669,70 @@ attach fn aapcs_part(this: lg&, t: u32, size: u64, ret: bool) -> abi_part {
         cty = llvm::LLVMIntTypeInContext(this.ctx, @cast<u32>(size * 8));
     }
     return { how: pass::COERCE, ty: t, cty: cty };
+}
+
+// the scalars aggregate t is made of as AAPCS64 counts them: a C union's members overlap, so one of
+// a single float type is as many of it as fill its size (the union itself, no float, when they
+// differ); it stops past 5 (more than an HFA can have)
+attach fn c_leaves(this: lg&, t: u32, out: std::vec<llvm::LLVMOpaqueType*>&) -> void {
+    if (this.c_union(t)) {
+        var e: llvm::LLVMOpaqueType* = null;
+        var mixed = false;
+        for (i) in 0..this.member_count(t) {
+            val mt = this.member_ty(t, @cast<u32>(i));
+            if (this.is_void(mt)) {
+                continue;
+            }
+            var ms: std::vec<llvm::LLVMOpaqueType*> = {};
+            this.c_leaves(mt, &ms);
+            for (x) in ms.items() {
+                if (e == null) {
+                    e = x;
+                } else if (e != x) {
+                    mixed = true;
+                }
+            }
+        }
+        val size = this.size_of(this.lt(t));
+        if (e == null || mixed || size % this.size_of(e) != 0) {
+            put(out, this.lt(t));
+            return;
+        }
+        for (j) in 0..size / this.size_of(e) {
+            if (out.len > 4) {
+                return;
+            }
+            put(out, e);
+        }
+        return;
+    }
+    match (*this.c.t.get(t)) {
+        .STRUCT(s) => {
+            if (!this.is_union(t) && this.overlay(t).0 == 0 && this.over_align(t) == 0) {
+                for (i) in 0..this.member_count(t) {
+                    val mt = this.member_ty(t, @cast<u32>(i));
+                    if (out.len > 4) {
+                        return;
+                    }
+                    if (!this.is_void(mt)) {
+                        this.c_leaves(mt, out);
+                    }
+                }
+                return;
+            }
+        },
+        .ARRAY(x, n) => {
+            for (j) in 0..n {
+                if (out.len > 4) {
+                    return;
+                }
+                this.c_leaves(x, out);
+            }
+            return;
+        },
+        default => {},
+    }
+    scalar_leaves(this.lt(t), out);
 }
 
 // the scalars l is made of, in order; it stops past 5 (more than an HFA can have)
