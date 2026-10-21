@@ -340,13 +340,17 @@ attach fn define(this: cgen&, t: u32) -> void {
     var align: u64 = 0; // a struct's @align
     match (*this.c.t.get(t)) {
         .VECTOR(x, n) => {
-            // GNU C's vector type (gcc and clang): its lanes' type and its size in bytes
+            // GNU C's vector type (gcc and clang): its lanes' type and its size in bytes, aligned
+            // to that size as Volt lays it out (AArch64's C aligns one past 16 bytes to 16)
+            val size = @cast<u64>(this.lane_bits(x)) / 8 * n;
             var d = S("typedef ");
             d.append(this.ty(x));
             d.push(' ');
             d.append(name);
             d.append(" __attribute__((vector_size(");
-            d.append_uint(@cast<u64>(this.lane_bits(x)) / 8 * n);
+            d.append_uint(size);
+            d.append("), aligned(");
+            d.append_uint(size);
             d.append(")));\n");
             this.defs.append(d.as_str());
             return;
@@ -2416,6 +2420,16 @@ attach fn name_locals(this: cgen&, i: u32) -> void {
 // 16 bytes, by reference to the caller's copy) in a copy it doesn't align, which the callee uses in
 // place (clang aligns it), so the fn copies it to an aligned local first
 attach fn over_aligned(this: cgen&, t: u32) -> bool {
+    match (*this.c.t.get(t)) {
+        .STRUCT(s) => {
+            // a header struct has no compile-time layout: the alignment libclang gave it, when that's
+            // past its fields' (an aligned attribute)
+            if (this.c.header_struct(s)) {
+                return this.c.overlay_size(s).1 > 16;
+            }
+        },
+        default => {},
+    }
     val l = this.c.layout(t, {}) catch return false;
     return l.align > 16;
 }

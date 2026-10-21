@@ -51,6 +51,22 @@ fn main() -> void {
     val c = cpp::pu2::same(&b);
     c[0] = 70;
     std::println("same {}", b[0]);
+    // a reference given to a by-value deduced T: C++ deduces T from the value (int) and copies it;
+    // T& still lends
+    var m = 41;
+    val r = cpp::pu2::echo(&m);
+    m = 1;
+    val sp = cpp::pu2::echo(&p);
+    *cpp::pu2::same(&m) = 5;
+    // and with T given: echo<i32>(&m) copies too
+    val ri = cpp::pu2::echo<i32>(&m);
+    m = 3;
+    std::println("ref {} {} {} {} {}", r, sp.y, ri, m, pass_on(&m));
+}
+
+// a reference parameter passed on to a by-value deduced T: its value too
+fn pass_on(n: i32&) -> i32 {
+    return cpp::pu2::echo(n) + 1;
 }
 // expect: struct 3 2.5
 // expect: opt 7 null
@@ -64,3 +80,4 @@ fn main() -> void {
 // expect: fnptr 5 10
 // expect: array 50 6
 // expect: same 70
+// expect: ref 41 2.5 5 3 4
