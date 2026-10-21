@@ -1,7 +1,8 @@
 // layouts where targets differ: a packed C struct's 32-byte vector and scalars, read and written in
 // place (not at their own alignment); a C union holding a 32-byte vector at C's offset in a struct;
-// a Volt vector after an i32 where Volt's layout puts it; a header struct aligned past 16 aligned
-// as a by-value parameter; packed, aligned and #pragma pack structs at C's sizes and offsets
+// a Volt vector after an i32 where Volt's layout puts it; a header struct aligned past 16, and
+// structs holding one, aligned as by-value parameters; packed, aligned and #pragma pack structs and
+// a field of an aligned typedef at C's sizes and offsets
 use std::io;
 use std::simd;
 use { "c_layout_edges.h" } as c;
@@ -17,6 +18,20 @@ struct vv {
 
 fn take(a: c::a32) -> usize {
     return rem(&a, 32) + @cast<usize>(a.x[4]);
+}
+
+// structs holding an a32 (a header one and a Volt one) are aligned past 16 by value too
+fn take_h(h: c::h32) -> usize {
+    return rem(&h, 32) + rem(&h.a, 32) + @cast<usize>(h.a.x[4]);
+}
+
+struct wa {
+    n: i32;
+    a: c::a32;
+}
+
+fn take_w(w: wa) -> usize {
+    return rem(&w, 32) + rem(&w.a, 32) + @cast<usize>(w.a.x[4]);
 }
 
 fn main() -> void {
@@ -45,6 +60,17 @@ fn main() -> void {
     var a: c::a32 = {};
     a.x[4] = 5;
     std::println("a32 {} {}", take(a), @sizeof(c::a32) == c::a32_size());
+    var h: c::h32 = {};
+    h.c = 1;
+    h.a.x[4] = 6;
+    std::println("h32 {} {} {} {}", @sizeof(c::h32) == c::h32_size(), @offsetof(c::h32, a) == c::h32_off_a(), c::h32_get(&h), take_h(h));
+    var wv: wa = { n: 1, a: {} };
+    wv.a.x[4] = 7;
+    std::println("wa {}", take_w(wv));
+    var ta: c::ta = {};
+    ta.c = 1;
+    ta.x = 70;
+    std::println("ta {} {} {}", @sizeof(c::ta) == c::ta_size(), @offsetof(c::ta, x) == c::ta_off_x(), c::ta_get(&ta));
     var p1: c::p1 = {};
     p1.c = 1;
     p1.x = 20;
@@ -72,6 +98,9 @@ fn main() -> void {
 // expect: su true true 5
 // expect: vv true 32 4
 // expect: a32 5 true
+// expect: h32 true true 7 6
+// expect: wa 7
+// expect: ta true true 71
 // expect: attrs true true true true
 // expect: attrs 54926
 // expect: by value 21 7 900

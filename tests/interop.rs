@@ -461,6 +461,30 @@ fn bindings_nested_slices() {
     assert_eq!(ok(Command::new(e.dir.join("main")).output().unwrap(), "main"), "6\n7 7\n");
 }
 
+// a header struct whose Volt fields aren't its C layout (packed, an aligned member: cimport placed
+// them by C's offsets; a union; a bitfield) has no C form in bindings, which declare a struct from
+// those fields; a plain one keeps its form, and a pointer to a refused one is an opaque void *
+#[test]
+fn bindings_header_layouts() {
+    let e = Env::new("hdrlayout");
+    let dir = e.dir.join("hl");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("hl.h"), "struct __attribute__((packed)) p1 { char c; int x; };\nstruct m1 { char c; int x __attribute__((aligned(16))); };\nunion u1 { int x; float f; };\nstruct bf { int a : 3; int x; };\nstruct plain { char c; int x; };\nstruct holder { struct p1 *p; int x; };\n").unwrap();
+    let pkg = format!("hl={}", dir.display());
+    for ty in ["p1", "m1", "u1", "bf"] {
+        std::fs::write(dir.join("hl.volt"), format!("use {{ \"hl.h\" }} as c;\nexport fn take(p: c::{ty}) -> i32 {{ return @cast<i32>(p.x); }}\n")).unwrap();
+        let o = e.voltc(&["bindings", "hl", "--pkg", &pkg, "--lang", "c"]);
+        let err = String::from_utf8_lossy(&o.stderr);
+        assert!(!o.status.success() && err.contains("has no C form") && err.contains(ty), "{ty}: {err}");
+    }
+    std::fs::write(dir.join("hl.volt"), "use { \"hl.h\" } as c;\nexport fn take(p: c::plain) -> i32 { return p.x; }\n").unwrap();
+    ok(e.voltc(&["bindings", "hl", "--pkg", &pkg, "--lang", "c"]), "voltc bindings of a plain header struct");
+    // a plain struct pointing at a packed one stays a by-value struct (not a handle)
+    std::fs::write(dir.join("hl.volt"), "use { \"hl.h\" } as c;\nexport fn take(h: c::holder) -> i32 { return h.x; }\n").unwrap();
+    let h = ok(e.voltc(&["bindings", "hl", "--pkg", &pkg, "--lang", "c"]), "voltc bindings of a struct pointing at a packed one");
+    assert!(h.contains("take(hl_c_holder h)") && h.contains("void *p;"), "{h}");
+}
+
 const SHAPES_OUT: &str = "biggest 9 1.5\naccount bea 300\nvisit 301 get 301\nclosed 301 1\ncircle of area 3\ncircle gone\ngrown 27\nsquare 9 square of area 9\nhey!\ntry 4 OVERDRAWN\nopened 25\nclosed 2\n42 hello, volt\nowners 2 ann bobby\nrichest 9 after 6 10\nopened 2 dee\nroster ann bo ann bo ann! bo!\nor ann! bo! ann! bo! OVERDRAWN OVERDRAWN\nsquares 4 16 sum 30\njoined a-b-c total 3\nhello, ann; hello, nobody\nnick 1 ann 0\nopen_if 1 1\nclose_if 0 -1\nclose_all 2\nsome 2\nrows 6\narrays 12 13 11 2.5 1.5 2 3 4\ntagged 41 5 20 7 8 127\nlists closed 7\ncircle gone\n";
 
 #[test]

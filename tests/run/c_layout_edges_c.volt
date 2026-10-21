@@ -5,6 +5,9 @@
 // expect: su true true 5
 // expect: vv true 32 4
 // expect: a32 5 true
+// expect: h32 true true 7 6
+// expect: wa 7
+// expect: ta true true 71
 // expect: attrs true true true true
 // expect: attrs 54926
 // expect: by value 21 7 900
