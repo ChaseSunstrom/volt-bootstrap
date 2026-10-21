@@ -2383,10 +2383,25 @@ attach fn result(this: cpp_gen&, t: clang::CXType, tparams: std::vec<str>&) -> c
             val v = this.vtype(pt, tparams) ?? return null;
             return { vty: fmt("{}?", move v), way: ret_way::POINTER, object: true, cls: copy phc };
         }
+        if (pt.kind == clang::CXType_FunctionProto) {
+            // a function pointer: a Volt extern "C" fn, as a parameter's is (fn_ptr_param)
+            val fa = this.fn_ptr_param(written_pointee(t) ?? pt, "", "", canon(t)) ?? return null;
+            return { vty: copy fa.vty };
+        }
     }
     var base = t;
     if (t.kind == clang::CXType_LValueReference) {
         base = clang::clang_getPointeeType(t);
+    }
+    // a reference to an array, T(&)[N]: a Volt T[N]& into C++'s array (const or not: Volt has no const)
+    val ab = clang::clang_getCanonicalType(clang::clang_getNonReferenceType(t));
+    if (pk.kind == clang::CXType_LValueReference && ab.kind == clang::CXType_ConstantArray) {
+        val et = clang::clang_getArrayElementType(ab);
+        if (this.handle_of(et) != null || clang::clang_getCanonicalType(et).kind == clang::CXType_Enum || contains(canon(t).as_str(), "type-parameter")) {
+            return null;
+        }
+        var arr = this.vtype(et, tparams) ?? return null;
+        return { vty: fmt2("{}[{}]&", move arr, unum(@cast<u64>(clang::clang_getArraySize(ab)))) };
     }
     if (t.kind != clang::CXType_LValueReference || clang::clang_isConstQualifiedType(base) != 0) {
         if (char_text(base, "basic_string")) {
@@ -2896,7 +2911,7 @@ attach fn cpp_targ_text(this: checker&, g: garg&, span: span) -> compile_error!s
         }
         return num(v);
     };
-    val sp = this.cpp_type_text(t) ?? return fail(span, this.no_cpp_spelling(t));
+    val sp = this.cpp_targ_type(t) ?? return fail(span, this.no_cpp_spelling(t));
     return sp;
 }
 
@@ -2915,6 +2930,29 @@ attach fn cpp_type_text(this: checker&, t: u32) -> std::string? {
         default => {},
     }
     return this.cpp_spell(t);
+}
+
+// cpp_type_text for an @cpp {tN} (a template's argument): also a closure or fn value as a
+// std::function, an array, and a type with no C++ type as its mirror (cpp_mirror)
+attach fn cpp_targ_type(this: checker&, t: u32) -> std::string? {
+    val have = this.cpp_type_text(t);
+    if (have) {
+        return copy have;
+    }
+    var x = t;
+    match (*this.t.get(t)) {
+        .REF(y) => { x = y; },
+        default => {},
+    }
+    match (*this.t.get(x)) {
+        .FN_VAL(a, b) => { return this.cpp_fn_type(x); },
+        .CLOSURE(c) => { return this.cpp_fn_type(x); },
+        .ARRAY(e, n) => {
+            val es = this.cpp_spell(e) ?? return null;
+            return fmt2("__typeof__({}[{}])", move es, unum(n));
+        },
+        default => { return this.cpp_mirror(x); },
+    }
 }
 
 // a method a handle struct's class has that Volt didn't declare (an instance's, or one whose types
@@ -7072,12 +7110,13 @@ attach fn cpp_ctx_of(this: checker&, ns: u32) -> usize? {
     return null;
 }
 
-// why @cpp can't spell type t for C++: a fn value or closure has no C++ form, so the hint is a plain
-// fn's name, which C++ takes as its function pointer; a function pointer says which type has no C form
+// why @cpp can't spell type t for C++: a fn value or closure whose signature has no std::function form
+// (text, a struct), so the hint is a plain fn's name, which C++ takes as its function pointer; a
+// function pointer says which type has no C form
 attach fn no_cpp_spelling(this: checker&, t: u32) -> std::string {
     match (*this.t.get(t)) {
-        .FN_VAL(ps, r) => { return fmt("@cpp: {} has no C++ spelling: a fn value has no C++ form; pass a plain fn's name, which C++ takes as its function pointer", this.ty_name(t)); },
-        .CLOSURE(c) => { return fmt("@cpp: {} has no C++ spelling: a closure has no C++ form; pass a plain fn's name, which C++ takes as its function pointer", this.ty_name(t)); },
+        .FN_VAL(ps, r) => { return fmt("@cpp: {} has no C++ spelling: a fn value is a std::function only of numbers, bools, pointers and enums; pass a plain fn's name, which C++ takes as its function pointer", this.ty_name(t)); },
+        .CLOSURE(c) => { return fmt("@cpp: {} has no C++ spelling: a closure is a std::function only of numbers, bools, pointers and enums; pass a plain fn's name, which C++ takes as its function pointer", this.ty_name(t)); },
         .FN_PTR(ps&, r, va) => {
             // (a reference or a C++ class: fn_ptr_unformed's reason; else the part C++ can't spell)
             var why = this.fn_ptr_unformed(t);
@@ -7092,7 +7131,13 @@ attach fn no_cpp_spelling(this: checker&, t: u32) -> std::string {
             val w = why ?? return fmt("@cpp: {} has no C++ spelling", this.ty_name(t));
             return fmt2("@cpp: {} has no C++ spelling: it {}, which has no C function-pointer form", this.ty_name(t), copy w);
         },
-        default => { return fmt("@cpp: {} has no C++ spelling", this.ty_name(t)); },
+        default => {
+            // (a type owning memory has no mirror: cpp_mirror)
+            if (this.needs_drop(t) catch false) {
+                return fmt("@cpp: {} has no C++ spelling: it has a delete, and C++ would copy what it owns", this.ty_name(t));
+            }
+            return fmt("@cpp: {} has no C++ spelling", this.ty_name(t));
+        },
     }
 }
 
@@ -7122,8 +7167,10 @@ attach fn cpp_probe_type(this: checker&, t: u32) -> std::string? {
             if (q) {
                 return S(q);
             }
-            return this.cpp_spell(t);
+            return this.cpp_spell_m(t);
         },
+        .FN_VAL(ps, r) => { return this.cpp_fn_type(t); },
+        .CLOSURE(c) => { return this.cpp_fn_type(t); },
         .ARRAY(x, n) => {
             // an array as C++'s reference to one (the probe is libclang's: __typeof__ spells it), a
             // const one by value, which a const T(&)[N] parameter takes
@@ -7145,6 +7192,10 @@ attach fn cpp_probe_type(this: checker&, t: u32) -> std::string? {
             var s = this.cpp_probe_type(x) ?? return null;
             if (ends_with(s.as_str(), "&")) {
                 return s;
+            }
+            if (starts_with(s.as_str(), "volt_m_")) {
+                // a mirror by reference: none (the importer's T& is a copy), so it's tried as its address
+                return null;
             }
             s.append(" &");
             return s;
@@ -7176,7 +7227,7 @@ attach fn cpp_probe_type(this: checker&, t: u32) -> std::string? {
             s.push(')');
             return fmt("__typeof__({})", move s);
         },
-        default => { return this.cpp_spell(t); },
+        default => { return this.cpp_spell_m(t); },
     }
 }
 
@@ -7188,7 +7239,14 @@ attach fn probe_elem(this: checker&, x: u32) -> std::string? {
             val e = this.probe_elem(y) ?? return null;
             return fmt("std::vector<{} >", move e);
         },
-        default => { return this.cpp_probe_type(x); },
+        default => {
+            // (not a mirror: the importer has no std::vector of one)
+            val s = this.cpp_probe_type(x) ?? return null;
+            if (starts_with(s.as_str(), "volt_m_")) {
+                return null;
+            }
+            return s;
+        },
     }
 }
 
@@ -7245,6 +7303,9 @@ attach fn cpp_instance_as(this: checker&, k: usize, expr: str, types: std::vec<u
     for (t&) in types.items() {
         if (this.cpp_probe_type(*t) == null && this.text_in(*t)) {
             return fail(span, fmt2("C++ can't be handed {}: {}", this.ty_name(*t), S(TEXT_NESTED)));
+        }
+        if (this.cpp_probe_type(*t) == null && (this.needs_drop(*t) catch false)) {
+            return fail(span, fmt("C++ can't be handed {}: it has a delete, and C++ would copy what it owns", this.ty_name(*t)));
         }
         put(&ptys, this.cpp_probe_type(*t) ?? return fail(span, fmt("C++ can't be handed {}", this.ty_name(*t))));
         match (*this.t.get(*t)) {
@@ -7339,6 +7400,7 @@ attach fn cpp_instance_as(this: checker&, k: usize, expr: str, types: std::vec<u
     val pname = fmt("volt_probe_{}", unum(n));
     var text = copy this.cpp_ctxs.at(k).src;
     text.append(CPP_PROBE_HEAD);
+    text.append(this.cpp_mirror_decls().as_str());
     // clang's __decltype and __decay, which it has in every standard (the probe is only libclang's)
     if (by_value) {
         // a macro's or an expression's lvalue is the wrapper's own parameter: its value comes back
@@ -7366,9 +7428,15 @@ attach fn cpp_instance_as(this: checker&, k: usize, expr: str, types: std::vec<u
     }
     val fc = found ?? return fails(span, "libclang lost the call");
     val writes = probe_writes(fc, &seq);
-    // the Volt fn, written by the importer from the probe's now concrete signature
+    // the Volt fn, written by the importer from the probe's now concrete signature; a mirror
+    // (cpp_mirror) is a generic parameter of its own name, which the Volt type binds
     val g = &this.cpp_ctxs.at(k).gen;
-    val none: std::vec<str> = {};
+    var mnames: std::vec<std::string> = {};
+    for (p&) in ptys.items() {
+        mirror_names(p.as_str(), &mnames);
+    }
+    val none = str_views(&mnames);
+    val generics = generics_text(&mnames);
     val fname = fmt("volt_cpp_call_{}", unum(n));
     // the type itself, not decltype(...) of the probe
     val rt = clang::clang_getCanonicalType(clang::clang_getCursorResultType(fc));
@@ -7480,12 +7548,12 @@ attach fn cpp_instance_as(this: checker&, k: usize, expr: str, types: std::vec<u
     }
     g.note = fmt2("{} -> {}, as clang resolves it", move inst, type_spelling(rt));
     val rp = with_pres(&rr, &args, args.len);
-    g.fn_text("", sig.as_str(), &rp, body.as_str(), tail.as_str(), "");
+    g.fn_text(generics.as_str(), sig.as_str(), &rp, body.as_str(), tail.as_str(), "");
     if (tried) {
         if (!recv) {
             try_head = fmt("fn {}(", copy fname);
         }
-        g.try_text("", try_head.as_str(), try_params.as_str(), &rr, try_args.as_str());
+        g.try_text(generics.as_str(), try_head.as_str(), try_params.as_str(), &rr, try_args.as_str());
     }
     if (g.text_refs) {
         g.text_back_fn();
@@ -7916,7 +7984,7 @@ attach fn cpp_spell(this: checker&, t: u32) -> std::string? {
         .STR => { return S("volt_str"); },
         .SLICE(x) => {
             // a nested one's closers apart: C++98 reads >> as a shift
-            val e = this.cpp_spell(x) ?? return null;
+            val e = this.cpp_spell(x) ?? (this.cpp_mirror(x) ?? return null);
             return fmt("volt_slice<{} >", move e);
         },
         .VOIDPTR => { return S("void *"); },
@@ -7927,12 +7995,20 @@ attach fn cpp_spell(this: checker&, t: u32) -> std::string? {
             return null;
         },
         .PTR(x) => {
-            var s = this.cpp_spell(x) ?? return null;
+            var s = this.cpp_spell(x) ?? (this.cpp_mirror(x) ?? return null);
             s.append(" *");
             return s;
         },
         .REF(x) => {
-            var s = this.cpp_spell(x) ?? return null;
+            // (a reference to an array: a pointer to the C++ array, which the expression reads as one)
+            match (*this.t.get(x)) {
+                .ARRAY(e, n) => {
+                    val es = this.cpp_spell(e) ?? return null;
+                    return fmt2("__typeof__({}[{}]) *", move es, unum(n));
+                },
+                default => {},
+            }
+            var s = this.cpp_spell(x) ?? (this.cpp_mirror(x) ?? return null);
             s.append(" *");
             return s;
         },
@@ -7944,6 +8020,131 @@ attach fn cpp_spell(this: checker&, t: u32) -> std::string? {
         },
         .STRUCT(s) => { return this.cpp_class(s); },
         default => { return null; },
+    }
+}
+
+// a Volt type C++ has no type for (a Volt struct, a tuple, an optional that isn't a pointer, an enum
+// with payloads, f16, f128) as a C++ struct of its size and alignment, volt_m_<type id>, declared once
+// for the C++ units and the probes: C++ copies it (a template's T), but can't read it. Volt hands
+// one over by its address. None for a type with a delete (C++ would copy what it owns) or no layout
+// ponytail: opaque bytes; a field-by-field mirror when C++ needs to read a Volt struct's fields
+attach fn cpp_mirror(this: checker&, t: u32) -> std::string? {
+    match (*this.t.get(t)) {
+        .STRUCT(s) => {
+            if (this.cpp_class(s) != null || this.cpp_handle_of(s) != null) {
+                return null;
+            }
+        },
+        .TUPLE(ts, names) => {},
+        .OPT(x) => {
+            if (this.t.is_niche(x)) {
+                return null;
+            }
+        },
+        .ENUM(e) => {
+            if (!this.ei(e).has_payload) {
+                return null;
+            }
+        },
+        .FLOAT(b) => {
+            if (b == 32 || b == 64) {
+                return null;
+            }
+        },
+        default => { return null; },
+    }
+    val drops = this.needs_drop(t) catch |e| {
+        return null;
+    };
+    if (drops) {
+        return null;
+    }
+    val l = this.layout_opt(t, {}) ?? return null;
+    if (l.size == 0) {
+        return null;
+    }
+    val name = fmt("volt_m_{}", unum(@cast<u64>(t)));
+    for (n&) in this.cpp_decl_names.items() {
+        if (n.as_str() == name.as_str()) {
+            return name;
+        }
+    }
+    put(&this.cpp_decl_names, copy name);
+    put(&this.cpp_decls, fmt4("// Volt's {}, as its bytes\nstruct __attribute__((aligned({}))) {} {{\n    unsigned char b[{}];\n}};\n", this.ty_name(t), unum(l.align), copy name, unum(l.size)));
+    return name;
+}
+
+// cpp_spell, else the mirror
+attach fn cpp_spell_m(this: checker&, t: u32) -> std::string? {
+    val s = this.cpp_spell(t);
+    if (s) {
+        return copy s;
+    }
+    return this.cpp_mirror(t);
+}
+
+// the mirrors cpp_mirror declared, for a probe
+attach fn cpp_mirror_decls(this: checker&) -> std::string {
+    var out: std::string = {};
+    for (i) in 0..this.cpp_decl_names.len {
+        if (starts_with(this.cpp_decl_names.at(i).as_str(), "volt_m_")) {
+            out.append(this.cpp_decls.at(i).as_str());
+        }
+    }
+    return out;
+}
+
+// a closure or fn value as a C++ std::function of its signature (volt_cpp_fn makes one): its
+// parameters and result C++ types Volt passes as they are (numbers, bool, pointers, an enum's tag)
+attach fn cpp_fn_type(this: checker&, t: u32) -> std::string? {
+    val parts = this.cpp_fn_parts(t) ?? return null;
+    var s = copy *parts.at(0);
+    s.push('(');
+    for (i) in 1..parts.len {
+        if (i > 1) {
+            s.append(", ");
+        }
+        s.append(parts.at(i).as_str());
+    }
+    s.push(')');
+    return fmt("std::function<{}>", move s);
+}
+
+// cpp_fn_type's C++ types: the result's, then each parameter's
+attach fn cpp_fn_parts(this: checker&, t: u32) -> std::vec<std::string>? {
+    var ps: std::vec<u32> = {};
+    var r: u32 = VOID;
+    match (*this.t.get(t)) {
+        .FN_VAL(xs, y) => {
+            ps = copy xs;
+            r = y;
+        },
+        .CLOSURE(c) => {
+            if (this.ci(c).gen != null) {
+                return null;
+            }
+            ps = copy this.ci(c).params;
+            r = this.ci(c).ret;
+        },
+        default => { return null; },
+    }
+    var out: std::vec<std::string> = {};
+    put(&out, this.cpp_fn_part(r) ?? return null);
+    for (p&) in ps.items() {
+        put(&out, this.cpp_fn_part(*p) ?? return null);
+    }
+    return out;
+}
+
+// a type in cpp_fn_type's signature (not text, a class or a reference: volt_cpp_fn passes it
+// unconverted, and the importer reads a std::function's signature back the same way, fn_sig)
+attach fn cpp_fn_part(this: checker&, t: u32) -> std::string? {
+    match (*this.t.get(t)) {
+        .STR => { return null; },
+        .SLICE(x) => { return null; },
+        .STRUCT(s) => { return null; },
+        .REF(x) => { return null; },
+        default => { return this.cpp_spell(t); },
     }
 }
 
@@ -8172,11 +8373,21 @@ attach fn cpp_call_as(this: checker&, r: u32, gargs: std::vec<garg>&, args: std:
         .STR(s) => { text = copy s; },
         default => { return fails(span, "@cpp's first argument is the C++ expression, as a string literal"); },
     }
-    val class_ret = this.cpp_is_class(r);
+    // (a class, or a mirror: made in the result's place)
+    val mirror_ret = this.cpp_mirror(r);
+    val class_ret = this.cpp_is_class(r) || mirror_ret != null;
     var rsp = S("void");
     if (!class_ret && r != VOID) {
-        rsp = this.cpp_spell(r) ?? return fail(span, fmt("@cpp: it returns {}, which has no C++ form", this.ty_name(r)));
+        match (*this.t.get(r)) {
+            .FN_PTR(ps, rr, va) => {
+                // a function pointer as the wrapper's result type (a declarator can't be spelled `type name`)
+                val fd = this.cpp_fn_spell(r, "(*)", false) ?? return fail(span, fmt("@cpp: it returns {}, which has no C++ form", this.ty_name(r)));
+                rsp = fmt("VOLT_ID({})", move fd);
+            },
+            default => { rsp = this.cpp_spell(r) ?? return fail(span, fmt("@cpp: it returns {}, which has no C++ form", this.ty_name(r))); },
+        }
     }
+    val rclass = this.cpp_spell(r) ?? (mirror_ret ?? S("void"));
     // which arguments are {&i} and {=i} holes
     var how: std::vec<u8> = {};
     for (i) in 1..args.len {
@@ -8202,7 +8413,7 @@ attach fn cpp_call_as(this: checker&, r: u32, gargs: std::vec<garg>&, args: std:
     var subst: std::vec<std::string> = {};
     var decls: std::string = {};
     if (class_ret) {
-        params.append((this.cpp_spell(r) ?? S("void")).as_str());
+        params.append(rclass.as_str());
         params.append(" *ret");
         put(&ptys, this.t.intern(tyk::PTR(r)));
     }
@@ -8262,9 +8473,68 @@ attach fn cpp_call_as(this: checker&, r: u32, gargs: std::vec<garg>&, args: std:
         }
         // read as a call clang works out reads it: a fn's name is its C function
         var v = try this.cpp_arg_value(try this.garg_value(args.at(i)));
-        v = try this.take(v, span);
+        // (a closure is lent for the call, as a fn(...) value borrows one: take_into)
+        if (this.cpp_fn_parts(v.ty) == null) {
+            v = try this.take(v, span);
+        }
         if (this.cpp_is_class(v.ty)) {
             return fail(span, fmt("@cpp: pass the C++ object {} by reference (&x)", this.ty_name(v.ty)));
+        }
+        if (this.cpp_mirror(v.ty) != null) {
+            return fail(span, fmt("@cpp: pass {} by reference (&x): C++ has it as its bytes", this.ty_name(v.ty)));
+        }
+        // a closure or fn value (or a reference to one): C++ gets a std::function calling it
+        // (volt_cpp_fn), good while the call is; Volt passes the fn value's address
+        // (through each reference: a per-use fn given &c passes &f, a reference to the reference)
+        var fx = v.ty;
+        var fv = v;
+        var refs = true;
+        while (refs) {
+            refs = false;
+            match (*this.t.get(fx)) {
+                .REF(y) => {
+                    fx = y;
+                    fv = { ty: fx, c: this.ir.deref(fv.c, fx), lv: true };
+                    refs = true;
+                },
+                default => {},
+            }
+        }
+        val fparts = this.cpp_fn_parts(fx);
+        if (fparts) {
+            var fvt = fx;
+            match (*this.t.get(fx)) {
+                .CLOSURE(c) => { fvt = this.t.intern(tyk::FN_VAL(copy this.ci(c).params, this.ci(c).ret)); },
+                default => {},
+            }
+            fv = try this.coerce(fv, fvt, span);
+            val held = this.tmp_local("cpp_f", fvt);
+            val at = this.ir.conv(this.ir.addr(held.c, this.t.ref_to(fvt)), VOIDPTR);
+            v = vnew(VOIDPTR, this.ir.seq(nodes(this.ir.decl(held.id, fv.c)), at, VOIDPTR));
+            // std::function<R(A...)>'s R, A... are volt_cpp_fn's
+            var fargs = S("");
+            for (j) in 0..fparts.len {
+                if (j > 0) {
+                    fargs.append(", ");
+                }
+                fargs.append(fparts.at(j).as_str());
+            }
+            if (params.len() > 0) {
+                params.append(", ");
+            }
+            var an = S("a");
+            an.append_uint(@cast<u64>(i - 1));
+            params.append(fmt("void *{}", copy an).as_str());
+            put(&subst, fmt2("volt_cpp_fn<{} >({})", move fargs, copy an));
+            put(&ptys, VOIDPTR);
+            if (catching) {
+                val hv = this.tmp_local("cpp_a", VOIDPTR);
+                put(pre, this.ir.decl(hv.id, v.c));
+                put(&vals, hv.c);
+            } else {
+                put(&vals, v.c);
+            }
+            continue;
         }
         // a function pointer crosses as void * and is cast back to its C++ type in the expression
         // (fn_ptr_param's way: a C++ parameter's declarator can't be spelled as `type name`)
@@ -8368,7 +8638,7 @@ attach fn cpp_call_as(this: checker&, r: u32, gargs: std::vec<garg>&, args: std:
     if (r == VOID) {
         body = fmt("{};", move expr);
     } else if (class_ret) {
-        body = fmt2("new (ret) {}({});", this.cpp_spell(r) ?? S("void"), move expr);
+        body = fmt2("new (ret) {}({});", copy rclass, move expr);
     } else {
         match (*this.t.get(r)) {
             // the reference's address, as the wrapper's pointer type (Volt has no const: a const&
@@ -8524,7 +8794,7 @@ attach fn cpp_text_template(this: checker&, r: u32, gargs: std::vec<garg>&, args
         if (this.text_in(t)) {
             return fails(span, TEXT_NESTED);
         }
-        put(&types, this.cpp_type_text(t) ?? return fail(span, this.no_cpp_spelling(t)));
+        put(&types, this.cpp_targ_type(t) ?? return fail(span, this.no_cpp_spelling(t)));
     }
     val fe = try this.garg_value(args.at(0));
     var text: std::string = {};
@@ -8857,6 +9127,29 @@ fn hole_index(s: str) -> usize? {
         n = n * 10 + @cast<usize>(c - '0');
     }
     return n;
+}
+
+// the mirrors (cpp_mirror's volt_m_N) C++ type text s names, each once into out
+fn mirror_names(s: str, out: std::vec<std::string>&) -> void {
+    var i: usize = 0;
+    while (i + 7 < s.len) {
+        if (s[i..i + 7] == "volt_m_" && (i == 0 || !ident_char(s[i - 1]))) {
+            var e = i + 7;
+            while (e < s.len && s[e] >= '0' && s[e] <= '9') {
+                e += 1;
+            }
+            var seen = false;
+            for (o&) in out.items() {
+                seen = seen || o.as_str() == s[i..e];
+            }
+            if (!seen && e > i + 7) {
+                put(out, S(s[i..e]));
+            }
+            i = e;
+            continue;
+        }
+        i += 1;
+    }
 }
 
 // the start of each C++ unit, before the headers: what it includes, and what its wrappers write

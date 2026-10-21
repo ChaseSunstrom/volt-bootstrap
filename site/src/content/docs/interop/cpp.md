@@ -221,6 +221,18 @@ A Volt value that isn't a class (a number, a `bool`, a pointer, an enum) reaches
 temporary: `const int&`, `int&&` and `int` take it, and an `int&` doesn't, since C++ would change only
 a copy. `f(n)` for an `f(int&)` is an error naming the parameter; pass `&n`.
 
+A Volt type C++ has no type for still goes to a template that takes anything (`template <class T>
+T echo(T)`, `template <class... A>`, a declared generic's `T` too):
+
+| Volt | in C++ |
+|---|---|
+| a Volt struct, a tuple, `T?` (not a pointer's), an enum with payloads, `f16`, `f128` | a struct of its bytes, `volt_m_N` (its size and alignment): C++ copies it and gives it back (`echo(p)` is `p`), but can't read its fields or do arithmetic on it. One with a `delete` (a `std::vec`, a `std::string` inside) is an error: C++ would copy what it owns |
+| a closure, a `fn(A...) -> R` value | `std::function<R(A...)>` calling it (good while the call is: C++ mustn't keep it), `A` and `R` numbers, `bool`, pointers or enums; `@cpp` text lends it, and a template's per-use fn takes it as any Volt fn does (a closure owning what it captured moves there: pass `&c` to keep it) |
+| a pointer to one of those | `volt_m_N *` (a slice of them has no form per use yet) |
+
+A reference to a mirrored value is read as its address (`f(&p)` calls `f(T*)`), since C++'s `T&`
+would change only a copy.
+
 ## The standard library, operators and exceptions
 
 Signatures that use the standard library's strings, vectors and smart pointers map to Volt's:
@@ -278,6 +290,8 @@ fn main() -> void {
 | a `std::vector<T>` result (`T` a plain value) | `std::vec<T>` (a copy) |
 | `std::map<K, V>`, `std::unordered_map<K, V>` parameters (by value, `const&`, `&&`; the default comparator, hash and allocator, written out or not, through an alias too) | `std::map<K, V>&`: C++ gets a copy of the Volt map's entries, the Volt map unchanged; a function whose result could point into that copy (a view, a pointer, a reference) has no such form. `K` and `V` a number, `bool` or `char`, a `std::string` (from a Volt `std::string`) or a `std::vector` of numbers or `char`s (from a `std::vec`). Each takes the map by handle too, an overload beside it: a `stdcxx::map<i32, i32>` for a `std::map<int, int>`, and for a map `stdcxx` can't spell (a `std::string` key, `std::vector<bool>` values) a handle of its own, the one a function returning that map gives, so a map C++ made goes back to C++ (`val m = ns::make();` then `ns::total(&m)`). A mutable `std::map&`, or one with another order (`std::greater<int>`), takes only the handle |
 | a `T(&)[N]` parameter, and `const T(&)[N]` | `T[N]&` (C++ writes into the Volt array), and `T[N]`; `T` a number, `bool`, pointer or a class Volt lays out |
+| a `T(&)[N]` result, `const` or not (`int (&nums())[3]`) | `T[N]&`, into C++'s array (Volt has no const), as a reference result is |
+| a function pointer result, `R(*)(A...)` | `extern "C" fn(A...) -> R`, called as any Volt fn (`cpp::pick()(4)`), its types as a function pointer parameter's |
 | a parameter written as an array, `T a[N]`, `const T a[]` (a default too) | `T*`, as C++ decays it (`&arr[0]`), through an alias too; the pointer carries no length, so `N` isn't checked. A `char` one is `cstr?`, read-only even when C++'s array isn't (as a `char*` is). An array of arrays has no form yet (per use). Per use, a Volt `T*` is C++'s `T *`, and `&x` too when no call takes it as a `T &` ([per use](#calls-worked-out-per-use)) |
 | a function pointer parameter, `R(*)(A...)`, and a C variadic one, `R(*)(A..., ...)` | `extern "C" fn(A...) -> R` and `extern "C" fn(A..., ...) -> R` (a fn's name), its types numbers, `bool` and pointers (a `size_t` a `usize`, a `size_t *` a `usize*`, a `const char *` parameter a `cstr` (a `cstr?` per use too) and a result a `cstr?`; `R(*)(...)`, with no fixed parameter, has no form): C++ calls the Volt fn through a cast to its own pointer type (C and C++ function types differ in the standard, but every compiler Volt builds with gives them one calling convention). A Volt fn with a reference or a C++ class in its signature has no C function pointer form: passing it, declared or [per use](#calls-worked-out-per-use), is an error naming the fn and the type |
 | `std::unique_ptr<T>`, `std::shared_ptr<T>` | `stdcxx::unique_ptr<T>`, `stdcxx::shared_ptr<T>`: `get()`, and `use_count()` for the shared one; deleting one is C++'s destructor, copying a shared one adds an owner |
@@ -475,6 +489,10 @@ object `derive` didn't make; without RTTI, either stops the program saying so.
   `@cpp<i32>("ns::apply({&0}, {1})", inc, 4)`. The stub declared for such a function says why in
   its comment: `// C++: int ns::flags(const std::vector<std::vector<bool>> & v) (worked out per use:
   const std::vector<std::vector<bool>> & has no Volt form)`.
+- A Volt struct, tuple, `T?`, enum with payloads, `f16` or `f128` handed to C++ per use is its
+  bytes: a template can copy it, not read it (`x.f` or `x * 2` on one is clang's error), and a
+  `std::optional`, `std::tuple` or `std::variant` parameter worked out per use doesn't take one
+  (a declared one does).
 - A `std::string&` parameter is a copy C++ changes and Volt copies back once the call returns:
   given the same string twice in one call (which Volt warns of, two mutable borrows), each copy
   comes back in turn, the first parameter's last.
