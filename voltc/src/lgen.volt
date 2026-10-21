@@ -82,6 +82,7 @@ struct lg {
     cc: callconv = callconv::SYSV;
     hdr: std::vec<str> = {}; // C header functions called through the runtime unit's pointers
     err: std::string = {};   // a program this backend can't lower (reported after the module)
+    bug: std::string = {};   // a type laid out unlike the checker's layout (a voltc bug: no fallback)
     at_file: u32 = 0;        // the source line being lowered (the IR's AT marks; else its fn's), for err
     at_line: u32 = 0;
     opaques: std::map<u32, bool> = {}; // c_opaque's answers by type
@@ -150,7 +151,23 @@ attach fn lt(this: lg&, t: u32) -> llvm::LLVMOpaqueType* {
     }
     val r = this.make_lt(t);
     this.tys.put(t, r);
+    this.check_layout(r, t);
     return r;
+}
+
+// the checker's compile-time layout (@sizeof and @alignof at compile time, C++ mirrors) is
+// what this backend lays out: a type where they differ is a voltc bug, refused rather than built
+// with constants that lie (a type with no compile-time layout, such as a header struct, is skipped)
+attach fn check_layout(this: lg&, r: llvm::LLVMOpaqueType*, t: u32) -> void {
+    if (this.is_void(t) || this.bug.len() > 0) {
+        return;
+    }
+    val want = this.c.layout_opt(t, {}) ?? return;
+    val size = this.size_of(r);
+    val align = @cast<u64>(this.align_of(r));
+    if (size != want.size || align != want.align) {
+        this.bug = fmt3("the LLVM backend lays out '{}' as {} (the checker: {}): a voltc bug, unless --cfg arch or pointer_bits names another target than the one built for (build that arch's code with its --target, or --backend c)",this.c.ty_name(t), fmt2("size {}, align {}", unum(size), unum(align)), fmt2("size {}, align {}", unum(want.size), unum(want.align)));
+    }
 }
 
 attach fn int_lt(this: lg&, k: int_ty) -> llvm::LLVMOpaqueType* {
@@ -222,9 +239,9 @@ attach fn make_lt(this: lg&, t: u32) -> llvm::LLVMOpaqueType* {
     } else {
         val al = this.over_align(t);
         if (al > 0) {
-            // a zero-length array of an n-byte vector: alignment n (LLVM aligns a vector to its
-            // size), no bytes. LLVM then rounds the size, and places the struct in what holds it
-            put(&elems, llvm::LLVMArrayType2(llvm::LLVMVectorType(this.i8t(), @cast<u32>(al)), 0));
+            // a zero-length array of an n-aligned type (aligner): alignment n, no bytes. LLVM then
+            // rounds the size, and places the struct in what holds it
+            put(&elems, llvm::LLVMArrayType2(this.aligner(@cast<u32>(al)), 0));
         }
         for (i) in 0..n {
             val mt = this.member_ty(t, @cast<u32>(i));
@@ -357,29 +374,47 @@ attach fn union_lt(this: lg&, t: u32, from: usize) -> llvm::LLVMOpaqueType* {
     return this.blob_lt(size, align);
 }
 
-// size bytes aligned to align: an integer as wide as the alignment, then bytes
+// size bytes aligned to align: an integer as wide as the alignment (when LLVM aligns it so), then
+// bytes
 attach fn blob_lt(this: lg&, size: u64, align: u32) -> llvm::LLVMOpaqueType* {
     var elems: std::vec<llvm::LLVMOpaqueType*> = {};
     if (size == 0) {
         return struct_ty(this.ctx, &elems, false);
     }
     val full = (size + @cast<u64>(align) - 1) / @cast<u64>(align) * @cast<u64>(align);
-    if (align > 16) {
-        // (an @align struct's payload: LLVM aligns no integer past 16 bytes, but a vector to its size)
-        put(&elems, llvm::LLVMArrayType2(llvm::LLVMVectorType(this.i8t(), align), 0));
-        put(&elems, llvm::LLVMArrayType2(this.i8t(), full));
-        val r = struct_ty(this.ctx, &elems, false);
-        if (@cast<u64>(this.align_of(r)) != @cast<u64>(align)) {
-            this.cant(fmt("the LLVM backend can't align a union to {} bytes on this target: its data layout aligns no type that way", unum(@cast<u64>(align))));
+    if (align <= 16) {
+        val lead = llvm::LLVMIntTypeInContext(this.ctx, align * 8);
+        if (this.align_of(lead) == align) {
+            put(&elems, lead);
+            if (full > @cast<u64>(align)) {
+                put(&elems, llvm::LLVMArrayType2(this.i8t(), full - @cast<u64>(align)));
+            }
+            return struct_ty(this.ctx, &elems, false);
         }
-        return r;
     }
-    val lead = llvm::LLVMIntTypeInContext(this.ctx, align * 8);
-    put(&elems, lead);
-    if (full > @cast<u64>(align)) {
-        put(&elems, llvm::LLVMArrayType2(this.i8t(), full - @cast<u64>(align)));
+    // LLVM aligns no integer past 16 bytes (an @align struct's payload), and 32-bit ARM and RISC-V
+    // an i128 to 8: a zero-length array of a type aligned that way, then the bytes
+    put(&elems, llvm::LLVMArrayType2(this.aligner(align), 0));
+    put(&elems, llvm::LLVMArrayType2(this.i8t(), full));
+    val r = struct_ty(this.ctx, &elems, false);
+    if (@cast<u64>(this.align_of(r)) != @cast<u64>(align)) {
+        this.cant(fmt("the LLVM backend can't align a union to {} bytes on this target: its data layout aligns no type that way", unum(@cast<u64>(align))));
     }
-    return struct_ty(this.ctx, &elems, false);
+    return r;
+}
+
+// a type LLVM aligns to n bytes, for a zero-length array that aligns what holds it: an n-byte
+// vector (LLVM aligns one to its size), else f128 for 16 (32-bit ARM aligns vectors to 8, fp128 to
+// 16); none found, the vector (and the caller says it can't align)
+attach fn aligner(this: lg&, n: u32) -> llvm::LLVMOpaqueType* {
+    val v = llvm::LLVMVectorType(this.i8t(), n);
+    if (this.align_of(v) != n && n == 16) {
+        val q = llvm::LLVMFP128TypeInContext(this.ctx);
+        if (this.align_of(q) == 16) {
+            return q;
+        }
+    }
+    return v;
 }
 
 // how many members an aggregate has, and member i's type (ir.volt numbers them)
@@ -3366,9 +3401,13 @@ attach fn llvm_build(this: checker&, g: lg&) -> std::string {
         start.append(hook_defaults_asm(bare, !defines(g.m, "volt_exit"), !defines(g.m, "volt_console_write")).as_str());
         llvm::LLVMSetModuleInlineAsm2(g.m, start.c_str(), start.len());
     }
+    // what the backend can't lower goes through C even when a layout differs too
     if (g.err.len() > 0) {
         this.llvm_cant_lower = true;
         return copy g.err;
+    }
+    if (g.bug.len() > 0) {
+        return copy g.bug;
     }
     if (g.di) {
         llvm::LLVMDIBuilderFinalize(g.di);
