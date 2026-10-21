@@ -1410,7 +1410,7 @@ attach fn unlink_union_globals(this: checker&) -> void {
             this.running_union_globals(pkg);
             continue;
         }
-        val w = this.union_global(pkg, 0) ?? continue;
+        val w = this.union_global(pkg, 0, false) ?? continue;
         var d: diag = { span: w.span, msg: fmt2("{}'s library isn't used: its global '{}' holds a trait union", S(pkg), S(w.name)), warning: true };
         put(&d.notes, S("the union's layout depends on the types this program attaches, so the package is built from source"));
         put(&this.warnings, move d);
@@ -1487,8 +1487,10 @@ fn names_pkg(text: str, pkg: str) -> bool {
     return false;
 }
 
-// the first global of package pkg (from decl `from` on) whose type holds a trait union
-attach fn union_global(this: checker&, pkg: str, from: u32) -> global_why? {
+// the first global of package pkg (from decl `from` on) whose type holds a trait union, or with fns
+// an export fn whose signature does (its library's code, fn_linkage's EXTERNAL, built for the
+// union's members then)
+attach fn union_global(this: checker&, pkg: str, from: u32, fns: bool) -> global_why? {
     for (di) in @cast<usize>(from)..this.decls.len {
         val d = @cast<u32>(di);
         if ((this.pkg_of(d) ?? "") != pkg) {
@@ -1527,17 +1529,62 @@ attach fn union_global(this: checker&, pkg: str, from: u32) -> global_why? {
                     return { name: name, span: this.item_of(d).span, decl: d, ty: ty };
                 }
             },
+            .FN(f&) => {
+                if (!fns || !f.is_export || f.body == null || this.fn_generics(d).len > 0) {
+                    continue;
+                }
+                val env = this.new_env({ ns: this.dl(d).ns });
+                var saved = new_cx(VOID, env, 0);
+                swap(&this.cx, &saved);
+                val sig = this.export_sig(f, env);
+                swap(&this.cx, &saved);
+                val ty = sig ?? continue;
+                var seen: idset = {};
+                if (this.has_union(ty, &seen)) {
+                    return { name: f.name, span: this.item_of(d).span, decl: d, ty: ty, is_fn: true };
+                }
+            },
             default => {},
         }
     }
     return null;
 }
 
+// an export fn's signature as a fn pointer type, or none when a type in it doesn't resolve (that's
+// reported where the fn is checked)
+attach fn export_sig(this: checker&, f: fn_decl&, env: u32) -> u32? {
+    var ps: std::vec<u32> = {};
+    for (p&) in f.params.items() {
+        if (p.ty == null) {
+            return null;
+        }
+        val t = this.resolve_type(&p.ty.value, env) catch |e| { return null; };
+        put(&ps, t);
+    }
+    var ret = VOID;
+    if (f.ret) {
+        ret = this.resolve_type(&f.ret, env) catch |e| { return null; };
+    }
+    return this.t.intern(tyk::FN_PTR(move ps, ret, false));
+}
+
 struct global_why {
     name: str;
     span: span;
     decl: u32;
-    ty: u32;
+    ty: u32; // an export fn's: its signature, as a fn pointer
+    is_fn: bool = false;
+}
+
+// why the trait union w holds can't take a member from a later load: "the global P::N holds T's
+// union, laid out (and P's code built) for the types attached when P loaded"
+fn union_why(w: global_why&, pkg: str, tr: str) -> std::string {
+    var out = fmt3("the global {}::{} holds {}'s union", S(pkg), S(w.name), S(tr));
+    if (w.is_fn) {
+        out = fmt3("the export fn {}::{} takes or gives {}'s union", S(pkg), S(w.name), S(tr));
+    }
+    out.append(fmt2(", laid out (and {}'s code built) for the types attached when {} loaded", S(pkg), S(pkg)).as_str());
+    return out;
 }
 
 // running linked package pkg (opts.running): an attach block of this package's for a trait whose union
@@ -1549,7 +1596,7 @@ attach fn running_union_globals(this: checker&, pkg: str) -> void {
     val blocks = copy this.attach_blocks;
     var from: u32 = 0;
     loop {
-        val w = this.union_global(pkg, from) ?? return;
+        val w = this.union_global(pkg, from, true) ?? return;
         from = w.decl + 1;
         for (b&) in blocks.items() {
             if ((this.pkg_of(*b) ?? "") != lib || this.item_of(*b).generics.len > 0) {
@@ -1561,10 +1608,9 @@ attach fn running_union_globals(this: checker&, pkg: str) -> void {
             if (u == null || !this.holds_union(w.ty, *u, &seen)) {
                 continue;
             }
-            val name = S(this.decl_name(bt.decl));
-            var msg = fmt3("the global {}::{} holds {}'s union, laid out (and ", S(pkg), S(w.name), copy name);
-            msg.append(fmt2("{}'s code built) for the types attached when {} loaded: ", S(pkg), S(pkg)).as_str());
-            msg.append(fmt("a later script can't attach {} to another type", move name).as_str());
+            val name = this.decl_name(bt.decl);
+            var msg = union_why(&w, pkg, name);
+            msg.append(fmt(": a later script can't attach {} to another type", S(name)).as_str());
             put(&this.errors, { span: this.item_of(*b).span, msg: move msg });
             return;
         }

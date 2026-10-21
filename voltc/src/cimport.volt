@@ -3259,11 +3259,25 @@ attach fn keep_out(this: checker&, it: item&, imp: c_imported&, u: u32, span: sp
     if (!stat) {
         text.append(fmt("#pragma weak {}\n", S(name)).as_str());
     }
-    text.append(fmt2("void *volt_c_{} = (void *){};\n", S(name), S(name)).as_str());
+    val ptr = this.c_ptr(name);
+    text.append(fmt2("void *{} = (void *){};\n", copy ptr, S(name)).as_str());
     if (!stat) {
         text.append(fmt2("static void volt_c_no_{}(void) {{\n    volt_c_missing(\"{}\");\n}}\n", S(name), S(name)).as_str());
-        this.c_unit_weak.at(@cast<usize>(u)).append(fmt3("    if (!volt_c_{}) {{\n        volt_c_{} = (void *)volt_c_no_{};\n    }}\n", S(name), S(name), S(name)).as_str());
+        this.c_unit_weak.at(@cast<usize>(u)).append(fmt3("    if (!{}) {{\n        {} = (void *)volt_c_no_{};\n    }}\n", copy ptr, copy ptr, S(name)).as_str());
     }
+}
+
+// the name of C header function sym's pointer: volt_c_NAME, and in an embedded VM's load
+// volt_cLOAD_NAME (each load's library has its own, and the libraries' symbols all meet: one loaded
+// first would stand in for a later one's, as with volt_cpp_ shims)
+attach fn c_ptr(this: checker&, sym: str) -> std::string {
+    var n = S("volt_c");
+    if (this.opts.running) {
+        n.append_uint(this.opts.load);
+    }
+    n.push('_');
+    n.append(sym);
+    return n;
 }
 
 // `use { "a.h", "b.h" } as alias;`: the headers' declarations as namespace alias

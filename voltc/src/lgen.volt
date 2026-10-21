@@ -1104,7 +1104,7 @@ attach fn cant(this: lg&, why: std::string) -> void {
 }
 
 // a C header's function, as a pointer: the runtime's C unit includes the headers and exports
-// `void *volt_c_NAME = (void *)NAME;` (a static inline one has no symbol of its own)
+// `void *volt_c_NAME = (void *)NAME;` (a static inline one has no symbol of its own; c_ptr's name)
 attach fn header_fn(this: lg&, i: u32) -> llvm::LLVMOpaqueValue* {
     return this.header_ptr(this.symbol(this.c.ir.fn_at(i)));
 }
@@ -1122,8 +1122,7 @@ attach fn shim_fn(this: lg&, i: u32, bad: u32) -> llvm::LLVMOpaqueValue* {
 }
 
 attach fn header_ptr(this: lg&, sym: str) -> llvm::LLVMOpaqueValue* {
-    var n = S("volt_c_");
-    n.append(sym);
+    val n = this.c.c_ptr(sym);
     val name = this.z(n.as_str());
     var g = llvm::LLVMGetNamedGlobal(this.m, name);
     if (g == null) {
@@ -3524,8 +3523,8 @@ fn llvm_runtime_c(chk: checker&, hdr: std::vec<str>&, runtime: bool) -> std::str
         out.push('\n');
     }
     for (h) in hdr.items() {
-        out.append("__attribute__((weak)) void *volt_c_");
-        out.append(h);
+        out.append("__attribute__((weak)) void *");
+        out.append(chk.c_ptr(h).as_str());
         out.append(" = (void *)");
         out.append(h);
         out.append(";\n");
