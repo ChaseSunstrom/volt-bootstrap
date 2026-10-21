@@ -135,6 +135,32 @@ static int header_fn(const char *path, const char *name, int v) {
     return 1;
 }
 
+// header_fn_changes removed hf.h, which its scripts imported: later loads (each re-reads earlier
+// scripts' headers, and a library's C includes them) still load, a plain script and one whose
+// header's function needs a library built
+static void header_removed(voltvm_volt_vm *vm, const char *what) {
+    if (volt_vm_load(vm, S("after_hf.volt"), S("export fn after_hf() -> i32 { return 7; }\n")).error) {
+        say_error(vm, what);
+        return;
+    }
+    printf("%s, next load %d\n", what, ((int (*)(void))volt_vm_find(vm, S("after_hf")))());
+    char dir[] = "/tmp/voltvm-test-XXXXXX";
+    if (!mkdtemp(dir)) {
+        printf("%s: no temporary directory\n", what);
+        return;
+    }
+    char h[64], src[512];
+    snprintf(h, sizeof h, "%s/hg.h", dir);
+    snprintf(src, sizeof src, "use { \"%s\" } as g;\nexport fn after_hg() -> i32 { return g::hg(); }\n", h);
+    if (!header_fn(h, "hg", 8) || volt_vm_load(vm, S("after_hg.volt"), S(src)).error) {
+        say_error(vm, what);
+    } else {
+        printf("%s, a header fn %d\n", what, ((int (*)(void))volt_vm_find(vm, S("after_hg")))());
+    }
+    remove(h);
+    rmdir(dir);
+}
+
 // a header's static inline function changed between the loads of two scripts (of other names): each
 // calls its own body. And a load that failed after its library was linked (a symbol nowhere), loaded
 // again with the header changed: the new body, not the failed library's
@@ -272,6 +298,7 @@ int main(int argc, char **argv) {
     // (a VM of its own: a later load reads earlier scripts' headers, and header_changes removed rh.h)
     voltvm_volt_vm *hv = volt_vm_new(std_dir);
     header_fn_changes(hv, "header fn");
+    header_removed(hv, "header removed");
     volt_vm_free(hv);
 #if defined(__linux__)
     if (argc < 4) {

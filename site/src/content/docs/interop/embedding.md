@@ -103,7 +103,8 @@ the library stays loaded, and the new code's symbols would come from it.
 A later script that uses an earlier one importing C or C++ runs no compiler for those imports: the
 earlier load built them, and its headers' text is kept (read again when a file the headers read,
 the ones they include among them, changed on disk; the C compiler lists them with `-H`; with one that
-doesn't, such as tcc, only the headers the imports name are watched, not those they include). Each
+doesn't, such as tcc, only the headers the imports name are watched, not those they include). A C
+header removed since keeps the text it last had, so later loads go on as before. Each
 load's header functions are its own: two scripts importing a header whose `static inline` function
 changed between their loads each call the body they were compiled with. Only what the later script's own code calls
 (a header's function, a C++ wrapper, through its own imports or a generic made for it) is built for

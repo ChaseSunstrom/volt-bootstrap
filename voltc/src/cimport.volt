@@ -2506,12 +2506,14 @@ fn memo_file(memo: std::string&, path: str) -> bool {
     return true;
 }
 
-// a pp_memo entry's output, when the files it lists still have the text they had
+// a pp_memo entry's output, when the files it lists still have the text they had. A file that's gone
+// keeps its last read: an earlier script built from it stays loaded, and each later load re-reads
+// that script's imports (T-0599)
 fn pp_fresh(have: str) -> str? {
     val (files, out) = have.split_once("\0") ?? return null;
     for (l) in files.lines().items() {
         val (h, path) = l.split_once(" ") ?? return null;
-        val text = std::fs::read_file(path) catch |e| { return null; };
+        val text = std::fs::read_file(path) catch |e| { continue; };
         if (unum(std::digest::fnv1a(text.as_str())).as_str() != h) {
             return null;
         }
