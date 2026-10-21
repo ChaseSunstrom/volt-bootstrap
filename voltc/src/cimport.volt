@@ -2587,7 +2587,15 @@ attach fn c_items(this: checker&, d: cdecls&, res: c_imported&, span: span) -> v
             put(&res.items, m.citem(item_kind::GLOBAL({ mutable: false, is_comptime: false, is_static: false, pat: pt, ty: m.path_ty(name), init: move init, span: span, c_name: null })));
         }
     }
-    // each bitfield's accessors: C reads and writes it, so neither backend needs its bits
+    // each bitfield's accessors: C reads and writes it, so neither backend needs its bits (but a
+    // name the header declares itself, its own accessor often, stays the header's)
+    var declared: std::map<str, u8> = {};
+    for (df&) in d.fns.items() {
+        declared.put(df.name, 1);
+    }
+    for (dv&) in d.vars.items() {
+        declared.put(dv.name, 1);
+    }
     var protos = S("");
     for (s&) in d.structs.items() {
         val name = m.names.get(s.tag) ?? continue;
@@ -2595,36 +2603,26 @@ attach fn c_items(this: checker&, d: cdecls&, res: c_imported&, span: span) -> v
         if (s.fields) {
             for (f&) in s.fields.items() {
                 val ty = f.bits ?? continue;
-                var get = S("static inline ");
-                get.append(ty);
-                get.push(' ');
-                get.append(*name);
-                get.append("_get_");
-                get.append(f.bit_name);
-                get.append("(const ");
-                get.append(*c);
-                get.append(" *s)");
-                var set = S("static inline void ");
-                set.append(*name);
-                set.append("_set_");
-                set.append(f.bit_name);
-                set.push('(');
-                set.append(*c);
-                set.append(" *s, ");
-                set.append(ty);
-                set.append(" v)");
-                protos.append(get.as_str());
-                protos.append(";\n");
-                protos.append(set.as_str());
-                protos.append(";\n");
-                get.append(" { return s->");
-                get.append(f.bit_name);
-                get.append("; }");
-                set.append(" { s->");
-                set.append(f.bit_name);
-                set.append(" = v; }");
-                put(&res.includes, move get);
-                put(&res.includes, move set);
+                var gname = S(*name);
+                gname.append("_get_");
+                gname.append(f.bit_name);
+                var sname = S(*name);
+                sname.append("_set_");
+                sname.append(f.bit_name);
+                if (declared.get(gname.as_str()) == null && d.env.get(gname.as_str()) == null) {
+                    var get = fmt3("static inline {} {}(const {} *s)", S(ty), copy gname, S(*c));
+                    protos.append(get.as_str());
+                    protos.append(";\n");
+                    get.append(fmt(" {{ return s->{}; }}", S(f.bit_name)).as_str());
+                    put(&res.includes, move get);
+                }
+                if (declared.get(sname.as_str()) == null && d.env.get(sname.as_str()) == null) {
+                    var set = fmt3("static inline void {}({} *s, {} v)", copy sname, S(*c), S(ty));
+                    protos.append(set.as_str());
+                    protos.append(";\n");
+                    set.append(fmt(" {{ s->{} = v; }}", S(f.bit_name)).as_str());
+                    put(&res.includes, move set);
+                }
             }
         }
     }
