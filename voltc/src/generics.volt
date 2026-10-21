@@ -1918,6 +1918,26 @@ attach fn method_call(this: checker&, r: tval, name: str, gargs: std::vec<garg>&
                 }
             }
         },
+        // a tuple's numbered or named field holding a fn is called, like a struct's: t.0(4)
+        .TUPLE(ts, names) => {
+            val idx = parse_index(name) ?? ts.len;
+            for (i) in 0..ts.len {
+                val n = *names.at(i);
+                if (idx == i || (n != null && (n ?? "") == name)) {
+                    var callable = this.fn_holder(*ts.at(i)) != null;
+                    match (*this.t.get(*ts.at(i))) {
+                        .FN_PTR(ps, rt, va) => { callable = true; },
+                        .FN_VAL(ps, rt) => { callable = true; },
+                        .CLOSURE(c) => { callable = true; },
+                        default => {},
+                    }
+                    if (callable) {
+                        val fv = try this.field(r, name, span);
+                        return this.call_value(fv, args, span);
+                    }
+                }
+            }
+        },
         .TRAIT_UNION(u) => { return this.union_call(r, u, name, gargs, args, want, span); },
         default => {},
     }
