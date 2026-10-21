@@ -55,11 +55,22 @@ attach fn async_fns(this: checker&, idx: u32) -> async_ir {
     return a;
 }
 
+// a generated fn's C name, base+suffix (f_step, f_tramp, ...) under v_ like a program fn's, so it
+// never meets an export or extern fn's fixed C name, and de-duplicated against every other fn's
+// (a user fn called f_step is v_f_step too: whichever comes second gets v_f_step_2)
+attach fn helper_c_name(this: checker&, base: str, suffix: str) -> str {
+    var n = S("");
+    if (!starts_with(base, "v_")) {
+        n.append("v_");
+    }
+    n.append(base);
+    n.append(suffix);
+    return this.fresh_c_name(n.as_str());
+}
+
 // declares helper fn base+suffix(pname: pty) -> ret; gen_async fills in its body
 attach fn async_helper(this: checker&, base: str, suffix: str, ret: u32, pname: str, pty: u32) -> u32 {
-    var n = S(base);
-    n.append(suffix);
-    var irf: ir_fn = { name: this.intern(move n), params: {}, ret: ret, link: linkage::STATIC, used: true };
+    var irf: ir_fn = { name: this.helper_c_name(base, suffix), params: {}, ret: ret, link: linkage::STATIC, used: true };
     put(&irf.locals, { name: pname, ty: pty });
     put(&irf.params, 0);
     put(&this.ir.fns, bx(move irf));
@@ -94,26 +105,25 @@ attach fn async_entry(this: checker&, idx: u32) -> u32 {
     val a = this.async_fns(idx);
     val bf = this.fi(idx).ir;
     val ret = this.fi(idx).ret;
-    var name = S(this.fi(idx).c_name);
+    var name = this.fi(idx).c_name;
     var link = linkage::STATIC;
     var real_name: str? = null;
     var attrs: fn_attrs = {};
     if (this.is_async_entry(idx)) {
         link = this.fn_linkage(idx);
-        var bn = S(this.fi(idx).c_name);
-        bn.append("_frame");
+        val bn = this.helper_c_name(this.fi(idx).c_name, "_frame");
         val b = this.ir.fn_at(bf);
-        b.name = this.intern(move bn);
+        b.name = bn;
         b.link = linkage::STATIC;
         real_name = b.real_name;
         b.real_name = null;
         attrs = b.attrs; // @section and the like belong to the C symbol
         b.attrs = {};
     } else {
-        name.append("_entry");
+        name = this.helper_c_name(name, "_entry");
     }
     val origin = this.item_of(this.fi(idx).decl).span;
-    var irf: ir_fn = { name: this.intern(move name), params: {}, ret: ret, link: link, used: true, origin: origin, about: this.fi(idx).name };
+    var irf: ir_fn = { name: name, params: {}, ret: ret, link: link, used: true, origin: origin, about: this.fi(idx).name };
     irf.real_name = real_name;
     irf.attrs = attrs;
     var args: std::vec<u32> = {};
@@ -228,7 +238,7 @@ attach fn suspend_code(this: checker&, span: span) -> compile_error!u32 {
     if (this.cx.frame == null) {
         return fails(span, "suspend only works inside an async fn");
     }
-    this.note_self_ref();
+    this.note_self_ref(this.cx.scopes.len);
     put(&this.cx.suspends, span);
     val n = this.cx.suspends.len;
     val l = this.ir.label();
@@ -514,14 +524,15 @@ attach fn suspend_below(this: checker&, n: u32) -> bool {
 }
 
 // a local holding a reference to another of the frame's locals, in scope at a suspend: from there on
-// the frame points into itself, so moving it would leave that reference pointing into the old frame
-attach fn note_self_ref(this: checker&) -> void {
+// the frame points into itself, so moving it would leave that reference pointing into the old frame.
+// Only the locals of the outer `depth` scopes count (a loop's back edge: what lives on to its next pass)
+attach fn note_self_ref(this: checker&, depth: usize) -> void {
     if (!this.frame_of(this.cx.frame ?? 0).self_ref.is_empty()) {
         return;
     }
     var best: u32? = null;
     for (e) in this.cx.ref_holders.iter() {
-        if (this.local_in_scope(*e.key) != null && (best == null || *e.key < (best ?? 0))) {
+        if (this.local_in_scopes(*e.key, depth) != null && (best == null || *e.key < (best ?? 0))) {
             best = *e.key;
         }
     }

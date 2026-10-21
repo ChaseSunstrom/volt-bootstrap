@@ -804,6 +804,11 @@ attach fn back_edge(this: checker&, li: usize) -> compile_error!void {
         return;
     }
     this.stale_at_back_edge(li);
+    // a reference a local from outside the loop took after a suspend in it is held at that
+    // suspend on the next pass (p = &n after the suspend)
+    if (this.cx.frame != null && this.cx.suspends.len > this.cx.loops.at(li).suspends) {
+        this.note_self_ref(this.cx.loops.at(li).depth);
+    }
     var outer: usize = 0;
     for (k) in 0..li + 1 {
         if (!this.cx.loops.at(k).is_block) {
@@ -841,7 +846,7 @@ attach fn push_loop(this: checker&, label: str?, is_block: bool, value: bool, wa
     if (value) {
         bt = want;
     }
-    put(&this.cx.loops, { label: label, is_block: is_block, brk: this.ir.label(), cont: cont, result: null, break_ty: bt, can_value: value, depth: this.cx.scopes.len, moved_at_entry: copy this.cx.moved });
+    put(&this.cx.loops, { label: label, is_block: is_block, brk: this.ir.label(), cont: cont, result: null, break_ty: bt, can_value: value, depth: this.cx.scopes.len, moved_at_entry: copy this.cx.moved, suspends: this.cx.suspends.len });
     return this.cx.loops.len - 1;
 }
 

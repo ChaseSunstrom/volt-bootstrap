@@ -41,6 +41,10 @@ fn main() -> void {
     std::println("held {} {} {} {}", hold::fire_held(), hold::held.n, geo2::held_plus(1), hold::spare.n);
     std::println("twice {} {}", hold::cb(5), hold::twice(6));
     std::println("export {}", geo::geo_doubled(21));
+    val tf = async geo::geo_tripled(4);
+    resume tf;
+    val tv: fn(i32) -> i32 = geo::geo_tripled;
+    std::println("export async {} {} {}", geo::geo_tripled(5), await tf, tv(2));
 }
 
 struct tripler { k: i32; }
@@ -59,3 +63,4 @@ attach hold::hook -> tripler {
 // expect: held 21 7 22 1
 // expect: twice 10 12
 // expect: export 42
+// expect: export async 15 12 6

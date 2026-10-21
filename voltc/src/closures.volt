@@ -511,9 +511,7 @@ attach fn fn_value(this: checker&, inst: u32, fv: u32) -> u32 {
     } else {
         val f = this.fi(inst);
         val ret = f.ret;
-        var name = S(f.c_name);
-        name.append("_tramp");
-        var irf: ir_fn = { name: this.intern(move name), params: {}, ret: ret, link: linkage::STATIC, used: true, noreturn: ret == NEVER, origin: this.item_of(f.decl).span, about: f.name };
+        var irf: ir_fn = { name: this.helper_c_name(f.c_name, "_tramp"), params: {}, ret: ret, link: linkage::STATIC, used: true, noreturn: ret == NEVER, origin: this.item_of(f.decl).span, about: f.name };
         put(&irf.locals, { name: "env", ty: VOIDPTR });
         put(&irf.params, 0);
         var args: std::vec<u32> = {};

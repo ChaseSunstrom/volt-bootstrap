@@ -207,6 +207,7 @@ struct loop_cx {
     fresh_views: idset = {};    // views given a new value in it so far
     can_value: bool = false;    // a break may give a value (loop, labeled block)
     result_id: u32 = 0;         // the local holding it
+    suspends: usize = 0;        // suspends in the fn before the loop began (an async fn's)
 }
 
 // the state of the fn instance being checked; replaced for each instance (and swapped out while a
