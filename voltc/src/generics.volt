@@ -1427,12 +1427,14 @@ attach fn resolve_call(this: checker&, name: str, cands: std::vec<u32>&, rv: tva
         }
     }
     // a call with no receiver: a method of the same name (use std::json makes json's attached
-    // write reachable as std::write) isn't a candidate when a plain function is there
+    // write reachable as std::write), or a static one (a C++ class's static f beside the free f
+    // of its namespace), isn't a candidate when a plain function is there
     if (cands.len > 1 && rv == null && static_ty == null) {
         var plain: std::vec<u32> = {};
         for (d&) in cands.items() {
             match (this.recv_of(*d)) {
                 .VAL(x) => {},
+                .STATIC(x) => {},
                 default => { put(&plain, *d); },
             }
         }

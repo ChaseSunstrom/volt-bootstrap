@@ -19,5 +19,23 @@ template <class T> int dflt(T x, int k = 1) { return 60 + k; }
 struct Box {
     template <class T> static int pair(T &x) { x += 10; return 70; }
     template <class T> static int pair(T x) { return 80 + (int)x; }
+    // a static method named as a free function of the namespace: tw::twin is still the free one
+    template <class T> static int twin(T &x) { x += 100; return 3; }
+    static int solo(int x) { return 90 + x; }
+};
+// a free function beside the static Box::solo: tw::solo is this one
+inline int solo(int x) { return 95 + x; }
+// instance method pairs: the object's own method of each name, a const pair too
+class Acc {
+    int base;
+public:
+    Acc(int b) : base(b) {}
+    template <class T> int add(T &x) { x += base; return 100; }
+    template <class T> int add(T x) { return 200 + base + (int)x; }
+    template <class T> int get(const T &x) const { return 300 + base + (int)x; }
+    template <class T> int get(T x) const { return 400 + base + (int)x; }
+    // a volatile pair: the member pointer is volatile too (ref-qualified pairs: cpp_twin_rq.hpp)
+    template <class T> int vol(T &x) volatile { x += 1; return 900; }
+    template <class T> int vol(T x) volatile { return 1000 + (int)x; }
 };
 }
