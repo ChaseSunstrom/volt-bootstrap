@@ -539,7 +539,8 @@ fn make_tmp() -> std::string? {
 fn present_includes(text: str) -> std::string {
     var out = S("");
     for (l) in text.lines().items() {
-        if (starts_with(l, "#include ") && l.len > 11 && l[10] == '/' && !std::fs::is_file(l[10..l.len - 1])) {
+        val p = include_path(l) ?? "";
+        if (is_abs(p) && !std::fs::is_file(p)) {
             continue;
         }
         out.append(l);

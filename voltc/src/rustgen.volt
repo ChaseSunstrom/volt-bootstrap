@@ -194,6 +194,9 @@ fn compile_rounds(files: std::vec<source_file>&, asts: std::vec<std::vec<item>>&
         while (files.len > nfiles) {
             files.pop();
         }
+        // (what a VM's round kept: its headers' texts, and the directory it made for their copies)
+        o.hdr_texts = copy chk.opts.hdr_texts;
+        o.gone_dir = copy chk.opts.gone_dir;
         chk = compile(files, asts, copy o);
     }
     return chk;

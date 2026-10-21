@@ -6854,10 +6854,10 @@ attach fn import_cpp(this: checker&, headers: std::vec<std::string>&, alias: str
     var mod_text = S("");
     for (h&) in headers.items() {
         var local: std::string? = null;
-        if (h.len() > 0 && h.as_str()[0] == '/') {
+        if (is_abs(h.as_str())) {
             local = real_file(h.as_str());
             // (an earlier script's, removed since: a copy of its last text)
-            val kept = this.kept_header(h.as_str(), span);
+            val kept = try this.kept_header(h.as_str(), span);
             if (kept) {
                 local = S(kept.as_str());
             }
