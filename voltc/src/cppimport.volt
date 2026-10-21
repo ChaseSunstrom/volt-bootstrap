@@ -3532,7 +3532,7 @@ attach fn fn_text(this: cpp_gen&, generics: str, sig: str, r: cpp_ret&, cpp_text
             }
             var c = S(cpp);
             if (r.conv.len() > 0) {
-                c = fmt2("{}({})", copy r.conv, move c);
+                c = fmt2("{}({})", escape_str(r.conv.as_str()), move c);
             }
             body.append(fmt4("@cpp<{}{}>(\"{}\"{});", copy r.vty, S(extra), move c, S(tail)).as_str());
             this.line(body.as_str());
@@ -3589,9 +3589,10 @@ attach fn fn_text(this: cpp_gen&, generics: str, sig: str, r: cpp_ret&, cpp_text
             }
         },
         .HANDLE => {
-            var made = fmt2("new {}({})", copy r.cls, S(cpp));
+            // (a class's spelling may have a char literal in it: mark<'"'>)
+            var made = fmt2("new {}({})", escape_str(r.cls.as_str()), S(cpp));
             if (r.up.len() > 0) {
-                made = fmt2("static_cast<{} *>({})", copy r.up, move made);
+                made = fmt2("static_cast<{} *>({})", escape_str(r.up.as_str()), move made);
             }
             var vf = S("");
             if (r.volt.len() > 0) {
@@ -3664,10 +3665,11 @@ attach fn handle_or_none(this: cpp_gen&, at: str, borrowed: bool, extra: str, ta
     }
 }
 
-// the C++ helper turning a result into what @cpp returns: a form's own, or the way's
+// the C++ helper turning a result into what @cpp returns: a form's own, or the way's (escaped for
+// the string literal it goes in)
 fn conv_or(r: cpp_ret&, way: str) -> std::string {
     if (r.conv.len() > 0) {
-        return copy r.conv;
+        return escape_str(r.conv.as_str());
     }
     return S(way);
 }
@@ -4290,6 +4292,9 @@ attach fn class(this: cpp_gen&, c: clang::CXCursor, tps: std::vec<std::string>?)
 // only the pointer and the object never changes place (it may point into itself, as libstdc++'s
 // std::string does)
 attach fn handle_class(this: cpp_gen&, c: clang::CXCursor, vn: str, q: str) -> void {
+    // q in a Volt string literal (a class's spelling may hold a char literal: mark<'"'>)
+    val qe = escape_str(q);
+    val qs = qe.as_str();
     val tr = *(this.traits.get(q) ?? return);
     // the virtual methods a Volt type deriving from it overrides (attach vn -> T stands for their
     // trait)
@@ -4304,19 +4309,19 @@ attach fn handle_class(this: cpp_gen&, c: clang::CXCursor, vn: str, q: str) -> v
         this.line(fmt("// C++'s {}: it isn't trivially copyable, so Volt holds it by handle (C++ allocates it)", S(q)).as_str());
     }
     if (maps) {
-        this.line(fmt2("@attributes([@attach_as(\"{}_virtuals\"), @cpp_handle(\"{}\")])", S(vn), S(q)).as_str());
+        this.line(fmt2("@attributes([@attach_as(\"{}_virtuals\"), @cpp_handle(\"{}\")])", S(vn), S(qs)).as_str());
     } else {
-        this.line(fmt("@attributes([@cpp_handle(\"{}\")])", S(q)).as_str());
+        this.line(fmt("@attributes([@cpp_handle(\"{}\")])", S(qs)).as_str());
     }
     this.line(fmt("struct {} {{", S(vn)).as_str());
     // {} makes the object as C++'s T{} would, or is a compile error: a handle is never empty
     val abstract0 = clang::clang_CXXRecord_isAbstract(c) != 0;
     if (tr.defaults && tr.destructible && !abstract0) {
-        this.line(fmt("    cpp: void* = @cpp<void*>(\"new {}()\"); // the C++ object ({} makes one)", S(q)).as_str());
+        this.line(fmt("    cpp: void* = @cpp<void*>(\"new {}()\"); // the C++ object ({} makes one)", S(qs)).as_str());
     } else if (!tr.destructible) {
-        this.line(fmt("    cpp: void* = @compile_error(\"C++'s {} can't be made by Volt (its destructor isn't public): get one from a function that gives it out\"); // the C++ object", S(q)).as_str());
+        this.line(fmt("    cpp: void* = @compile_error(\"C++'s {} can't be made by Volt (its destructor isn't public): get one from a function that gives it out\"); // the C++ object", S(qs)).as_str());
     } else {
-        this.line(fmt2("    cpp: void* = @compile_error(\"C++'s {} can't be made from nothing: make one with {}::new(...)\"); // the C++ object", S(q), S(vn)).as_str());
+        this.line(fmt2("    cpp: void* = @compile_error(\"C++'s {} can't be made from nothing: make one with {}::new(...)\"); // the C++ object", S(qs), S(vn)).as_str());
     }
     this.line("    borrowed: bool = false; // the object is something else's (as_Base made it): not deleted");
     if (maps) {
@@ -4346,16 +4351,16 @@ attach fn handle_class(this: cpp_gen&, c: clang::CXCursor, vn: str, q: str) -> v
     } else {
         if (!any_ctor && tr.defaults) {
             this.line(fmt2("attach fn new(static this: {}) -> {} {{", S(vn), S(vn)).as_str());
-            this.line(fmt("    return {{ cpp: @cpp<void*>(\"new {}()\") }};", S(q)).as_str());
+            this.line(fmt("    return {{ cpp: @cpp<void*>(\"new {}()\") }};", S(qs)).as_str());
             this.line("}");
         }
         // (an object derive made is deleted and copied as what it is: the Volt side too)
         this.line(fmt("attach fn delete(this: {}&) -> void {{", S(vn)).as_str());
         this.line("    if (this.cpp != null && !this.borrowed) {");
         if (maps) {
-            this.line(fmt("        @cpp<void>(\"volt_dir_delete< ::{} >({{0}}, {{1}})\", this.cpp, this.volt);", S(q)).as_str());
+            this.line(fmt("        @cpp<void>(\"volt_dir_delete< ::{} >({{0}}, {{1}})\", this.cpp, this.volt);", S(qs)).as_str());
         } else {
-            this.line(fmt("        @cpp<void>(\"delete ({} *){{0}}\", this.cpp);", S(q)).as_str());
+            this.line(fmt("        @cpp<void>(\"delete ({} *){{0}}\", this.cpp);", S(qs)).as_str());
         }
         this.line("    }");
         this.line("}");
@@ -4366,10 +4371,10 @@ attach fn handle_class(this: cpp_gen&, c: clang::CXCursor, vn: str, q: str) -> v
             this.line("    }");
             if (maps) {
                 this.line("    var v: void* = null;");
-                this.line(fmt2("    val p = @cpp<void*>(\"volt_dir_copy< ::{}, {}>({{0}}, {{1}}, (void **){{2}})\", this.cpp, this.volt, @cast<void*>(&v));", S(q), S(cpp_bool(tr.copyable))).as_str());
+                this.line(fmt2("    val p = @cpp<void*>(\"volt_dir_copy< ::{}, {}>({{0}}, {{1}}, (void **){{2}})\", this.cpp, this.volt, @cast<void*>(&v));", S(qs), S(cpp_bool(tr.copyable))).as_str());
                 this.line("    return { cpp: p, volt: v };");
             } else {
-                this.line(fmt2("    return {{ cpp: @cpp<void*>(\"new {}(*({} *){{0}})\", this.cpp) }};", S(q), S(q)).as_str());
+                this.line(fmt2("    return {{ cpp: @cpp<void*>(\"new {}(*({} *){{0}})\", this.cpp) }};", S(qs), S(qs)).as_str());
             }
             this.line("}");
         }
