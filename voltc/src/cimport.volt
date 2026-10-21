@@ -2449,34 +2449,61 @@ attach fn preprocess(this: checker&, src: str, extra: str, span: span) -> compil
             }
         }
     }
-    val r = std::process::capture(args.items(), src) catch |e| {
+    var r = std::process::capture(args.items(), src) catch |e| {
         return fail(span, fmt("can't run the C compiler '{}' to read the headers", S(cc)));
     };
+    var lists = this.opts.running;
+    if (r.code != 0 && lists) {
+        // a compiler that doesn't take -H (tcc): the headers read without it
+        args.pop();
+        lists = false;
+        r = std::process::capture(args.items(), src) catch |e| {
+            return fail(span, fmt("can't run the C compiler '{}' to read the headers", S(cc)));
+        };
+    }
     if (r.code != 0) {
         return fail(span, fmt("the C compiler couldn't read these headers: {}", S(first_error(r.err.as_str()))));
     }
     if (this.opts.running) {
-        // each file -H listed ('.' per level, a space, its path) and its text's hash, then the output
+        // each file -H listed ('.' per level, a space, its path) and its text's hash, then the output;
+        // with a compiler that lists none, the headers the #include lines name by path
+        var listed = false;
         var memo = S("");
         for (l) in r.err.as_str().lines().items() {
             var at: usize = 0;
-            while (at < l.len && l[at] == '.') {
+            while (lists && at < l.len && l[at] == '.') {
                 at += 1;
             }
             if (at == 0 || at >= l.len || l[at] != ' ') {
                 continue;
             }
-            val text = std::fs::read_file(l[at + 1..l.len]) catch |e| { continue; };
-            memo.append(unum(std::digest::fnv1a(text.as_str())).as_str());
-            memo.push(' ');
-            memo.append(l[at + 1..l.len]);
-            memo.push('\n');
+            listed = memo_file(&memo, l[at + 1..l.len]) || listed;
         }
-        memo.push(0);
-        memo.append(r.out.as_str());
-        this.opts.pp_memo.put(move key, move memo);
+        if (!listed) {
+            for (l) in src.lines().items() {
+                // "local" or </absolute> (a header named by its full path)
+                if (starts_with(l, "#include ") && l.len > 11 && (l[9] == '"' || l[10] == '/')) {
+                    listed = memo_file(&memo, l[10..l.len - 1]) || listed;
+                }
+            }
+        }
+        if (listed) {
+            memo.push(0);
+            memo.append(r.out.as_str());
+            this.opts.pp_memo.put(move key, move memo);
+        }
     }
     return copy r.out;
+}
+
+// a pp_memo entry's line for the file at path: its text's hash and the path; false when it can't be read
+fn memo_file(memo: std::string&, path: str) -> bool {
+    val text = std::fs::read_file(path) catch |e| { return false; };
+    memo.append(unum(std::digest::fnv1a(text.as_str())).as_str());
+    memo.push(' ');
+    memo.append(path);
+    memo.push('\n');
+    return true;
 }
 
 // a pp_memo entry's output, when the files it lists still have the text they had

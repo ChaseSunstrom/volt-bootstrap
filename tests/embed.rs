@@ -50,7 +50,20 @@ fn embedded_volt() {
         c.arg("box").env("CC", b.join("clang")).env("CXX", b.join("clang++"));
     }
     let out = ok(c.output().unwrap(), "host_imports");
-    assert_eq!(out, if clang.is_some() { IMPORTS_OUT } else { "run 53\nuser 54\nthrice 15\nstd 9 13, kept\nreload hv 10\nreload hv 20\nreload inner hv 30\nreload inner hv 40\n" });
+    let native = "run 53\nuser 54\nthrice 15\nstd 9 13, kept\nreload hv 10\nreload hv 20\nreload inner hv 30\nreload inner hv 40\n";
+    assert_eq!(out, if clang.is_some() { IMPORTS_OUT } else { native });
+    // a C compiler that rejects -H (tcc does): the headers it read aren't listed, so only those the
+    // #include lines name are watched (an edit to one they include isn't seen: inner hv stays 30)
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let cc = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()).map(|d| d.join("cc")).find(|p| p.is_file()).expect("cc on PATH");
+        let wrap = dir.join("cc-no-H");
+        std::fs::write(&wrap, format!("#!/bin/sh\nfor a in \"$@\"; do\n    [ \"$a\" = -H ] && {{ echo 'cc: unknown option -H' >&2; exit 1; }}\ndone\nexec '{}' \"$@\"\n", cc.display())).unwrap();
+        std::fs::set_permissions(&wrap, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let out = ok(Command::new(&imports).arg(&std_dir).arg(Path::new(ROOT).join("tests/embed")).env("CC", &wrap).output().unwrap(), "host_imports (a cc without -H)");
+        assert_eq!(out, native.replace("inner hv 40", "inner hv 30"));
+    }
     // scripts using earlier scripts as packages
     let packages = dir.join("host_packages");
     ok(Command::new("cc").arg("-o").arg(&packages).arg(Path::new(ROOT).join("tests/embed/host_packages.c")).arg("-I").arg(&bindings).arg("-L").arg(&lib_dir).arg("-lvoltvm").arg(format!("-Wl,-rpath,{}", lib_dir.display())).output().unwrap(), "compiling host_packages.c");
