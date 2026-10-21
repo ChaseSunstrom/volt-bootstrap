@@ -2838,7 +2838,7 @@ attach fn cpp_targ_text(this: checker&, g: garg&, span: span) -> compile_error!s
         }
         return num(v);
     };
-    val sp = this.cpp_type_text(t) ?? return fail(span, fmt("@cpp: {} has no C++ spelling", this.ty_name(t)));
+    val sp = this.cpp_type_text(t) ?? return fail(span, this.no_cpp_spelling(t));
     return sp;
 }
 
@@ -2853,6 +2853,7 @@ attach fn cpp_type_text(this: checker&, t: u32) -> std::string? {
             }
         },
         .REF(x) => { return this.cpp_type_text(x); },
+        .FN_PTR(a, b, c) => { return this.cpp_fn_spell(t, "(*)", false); },
         default => {},
     }
     return this.cpp_spell(t);
@@ -7008,6 +7009,30 @@ attach fn cpp_ctx_of(this: checker&, ns: u32) -> usize? {
     return null;
 }
 
+// why @cpp can't spell type t for C++: a fn value or closure has no C++ form, so the hint is a plain
+// fn's name, which C++ takes as its function pointer; a function pointer says which type has no C form
+attach fn no_cpp_spelling(this: checker&, t: u32) -> std::string {
+    match (*this.t.get(t)) {
+        .FN_VAL(ps, r) => { return fmt("@cpp: {} has no C++ spelling: a fn value has no C++ form; pass a plain fn's name, which C++ takes as its function pointer", this.ty_name(t)); },
+        .CLOSURE(c) => { return fmt("@cpp: {} has no C++ spelling: a closure has no C++ form; pass a plain fn's name, which C++ takes as its function pointer", this.ty_name(t)); },
+        .FN_PTR(ps&, r, va) => {
+            // (a reference or a C++ class: fn_ptr_unformed's reason; else the part C++ can't spell)
+            var why = this.fn_ptr_unformed(t);
+            for (p&) in ps.items() {
+                if (why == null && this.cpp_spell(*p) == null) {
+                    why = fmt("takes a {}", this.ty_name(*p));
+                }
+            }
+            if (why == null && this.cpp_spell(r) == null) {
+                why = fmt("returns a {}", this.ty_name(r));
+            }
+            val w = why ?? return fmt("@cpp: {} has no C++ spelling", this.ty_name(t));
+            return fmt2("@cpp: {} has no C++ spelling: it {}, which has no C function-pointer form", this.ty_name(t), copy w);
+        },
+        default => { return fmt("@cpp: {} has no C++ spelling", this.ty_name(t)); },
+    }
+}
+
 // the C++ an @cpp_call declaration names ("ns::f", or ".f" for a method), if d is one
 attach fn cpp_call_attr(this: checker&, d: u32) -> str? {
     for (a&) in this.item_of(d).attrs.items() {
@@ -8158,6 +8183,15 @@ attach fn cpp_call_as(this: checker&, r: u32, gargs: std::vec<garg>&, args: std:
         var sp = S("void *");
         var fp: std::string? = null;
         match (*this.t.get(v.ty)) {
+            .REF(x) => {
+                // a reference to one (a template's &f with F a plain fn's pointer): the pointer itself
+                if (this.is_c_fn_ptr(x)) {
+                    v = vnew(x, this.ir.deref(v.c, x));
+                }
+            },
+            default => {},
+        }
+        match (*this.t.get(v.ty)) {
             .FN_PTR(ps&, ret, va) => { fp = this.cpp_fn_spell(v.ty, "(*)", false); },
             default => {},
         }
@@ -8396,7 +8430,7 @@ attach fn cpp_text_template(this: checker&, r: u32, gargs: std::vec<garg>&, args
         if (this.text_in(t)) {
             return fails(span, TEXT_NESTED);
         }
-        put(&types, this.cpp_type_text(t) ?? return fail(span, fmt("@cpp: {} has no C++ spelling", this.ty_name(t))));
+        put(&types, this.cpp_type_text(t) ?? return fail(span, this.no_cpp_spelling(t)));
     }
     val fe = try this.garg_value(args.at(0));
     var text: std::string = {};

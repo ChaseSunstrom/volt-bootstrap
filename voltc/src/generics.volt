@@ -856,6 +856,49 @@ fn is_pack_param(p: param&) -> bool {
 }
 
 // Bind a candidate's generics for a call; NO(reason) when it doesn't fit.
+// the type a generic parameter deduces from argument v of a call to a fn in namespace ns: for an
+// imported C++ template (template <class F> int apply(F f)), a plain fn is its C function pointer
+// (C++ calls it as one; a fn value has no C++ form); else v's own type
+attach fn cpp_fn_arg_ty(this: checker&, ns: u32, v: tval) -> u32 {
+    if (this.cpp_ctx_of(ns) == null || !this.plain_fn_value(v)) {
+        return v.ty;
+    }
+    match (*this.t.get(v.ty)) {
+        .FN_VAL(ps&, r) => { return this.t.intern(tyk::FN_PTR(copy *ps, r, false)); },
+        default => { return v.ty; },
+    }
+}
+
+attach fn is_c_fn_ptr(this: checker&, t: u32) -> bool {
+    match (*this.t.get(t)) {
+        .FN_PTR(a, b, c) => { return true; },
+        default => { return false; },
+    }
+}
+
+// is v a plain fn as a fn value: fn_value's {trampoline, null}, no environment
+attach fn plain_fn_value(this: checker&, v: tval) -> bool {
+    match (this.ir.at(v.c).kind) {
+        .AGG(inits&) => {
+            if (inits.len != 2) {
+                return false;
+            }
+            var code = false;
+            var none = false;
+            for (fi&) in inits.items() {
+                match (this.ir.at(fi.value).kind) {
+                    .FN(f) => { code = true; },
+                    .NULLPTR => { none = true; },
+                    .ZERO => { none = true; },
+                    default => {},
+                }
+            }
+            return code && none;
+        },
+        default => { return false; },
+    }
+}
+
 attach fn bind_cand(this: checker&, d: u32, rv: tval*, static_ty: u32?, explicit: std::vec<garg>&, args: std::vec<tval?>&) -> compile_error!bound {
     val f = this.fn_decl_of(d) ?? return no(S("not a function"));
     val fname = f.name;
@@ -969,7 +1012,7 @@ attach fn bind_cand(this: checker&, d: u32, rv: tval*, static_ty: u32?, explicit
             continue;
         }
         if (p.ty != null && av != null) {
-            this.infer(&p.ty.value, (av ?? vnew(0, 0)).ty, gps, &binds, ns);
+            this.infer(&p.ty.value, this.cpp_fn_arg_ty(ns, av ?? vnew(0, 0)), gps, &binds, ns);
         }
     }
     // a pack binds to the types of all the remaining arguments
@@ -1466,6 +1509,8 @@ attach fn pick_call(this: checker&, name: str, cands: std::vec<u32>&, rp: tval*,
                     if (this.t.int_of(vv.ty) != null && this.t.is_float(pt)) {
                         score -= 1;
                     }
+                } else if (this.is_c_fn_ptr(pt) && this.plain_fn_value(vv)) {
+                    score += 2; // a plain fn a C++ template takes as its function pointer (emit_call)
                 } else {
                     ok = false;
                     var m = fmt3("argument {} is a {}, but '{}' wants a ", unum(@cast<u64>(i + 1)), this.ty_name(vv.ty), S(name));
@@ -1647,6 +1692,9 @@ attach fn emit_call(this: checker&, made: u32, a: adj, rv: tval?, pre: std::vec<
         if (!p.is_comptime) {
             var v = *pre.at(i) ?? vnew(0, 0);
             if (*pre.at(i) == null) {
+                v = try this.expr(args.at(i), p.ty);
+            } else if (this.is_c_fn_ptr(p.ty) && this.plain_fn_value(v)) {
+                // a plain fn a C++ template took as its C function pointer (cpp_fn_arg_ty)
                 v = try this.expr(args.at(i), p.ty);
             }
             val tv = try this.take_into(v, p.ty, args.at(i).span);
