@@ -1869,11 +1869,12 @@ attach fn map_handle(this: cpp_gen&, t: clang::CXType, tparams: std::vec<str>&) 
     return this.vtype(t, tparams) != null;
 }
 
-// a template's S& or const S& (S one of tparams: a function template's, or the class template's
-// whose member this is): a Volt S&, so a call lends what it passes (C++'s change written back) and
-// S is what the reference names; S and S&& stay by value (param)
-fn tparam_ref(t: clang::CXType, name: str, i: usize, tparams: std::vec<str>&) -> cpp_arg? {
-    if (t.kind != clang::CXType_LValueReference) {
+// a function template's S& or const S& (S its own type parameter, own), or a class template
+// member's T& (T the class's): a Volt S&, so a call lends what it passes (C++'s change written
+// back) and S is what the reference names. S and S&& stay by value (param), and so does a class
+// template's const T&, which C++ only reads (Vec2<f32>::new(1.0, 2.0) for Vec2(const T&, const T&))
+fn tparam_ref(t: clang::CXType, name: str, i: usize, tparams: std::vec<str>&, own: bool) -> cpp_arg? {
+    if (t.kind != clang::CXType_LValueReference || (!own && clang::clang_isConstQualifiedType(clang::clang_getPointeeType(t)) != 0)) {
         return null;
     }
     val pointee = type_spelling(clang::clang_getPointeeType(t));
@@ -1958,7 +1959,8 @@ attach fn param(this: cpp_gen&, t: clang::CXType, name: str, i: usize, tparams: 
     slot.push('}');
     val sp = type_spelling(t);
     for (p&) in tparams.items() {
-        // T, const T&: by reference, so a class argument works too
+        // T, and a class template's const T& (a method's T& is tparam_ref's; a field setter's reaches
+        // here): a value, passed by its place so a class argument works too
         val bare = strip_const(sp.as_str());
         if (bare == *p || (ends_with(bare, "&") && strip_const(bare[0..bare.len - 1]) == *p) || (ends_with(bare, " &") && strip_const(bare[0..bare.len - 2]) == *p)) {
             return { vty: S(*p), pass: fmt("&{}", S(name)), cpp: move slot };
@@ -3051,7 +3053,7 @@ attach fn callable_of(this: cpp_gen&, generics: str, head: str, has_params: bool
         val name = vname(pn.as_str());
         var a: cpp_arg = { vty: {}, pass: {}, cpp: {} };
         val ptype = clang::clang_getCursorType(p);
-        var ao = tparam_ref(ptype, name.as_str(), first + @cast<usize>(i), tparams);
+        var ao = tparam_ref(ptype, name.as_str(), first + @cast<usize>(i), tparams, clang::clang_getCursorKind(fn_cursor) == clang::CXCursor_FunctionTemplate);
         if (ao == null) {
             ao = this.param(ptype, name.as_str(), first + @cast<usize>(i), tparams);
         }

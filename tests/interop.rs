@@ -2124,7 +2124,7 @@ fn cpp_params() {
     // throw through the plain form a stop; a class template's T& and const T& a Volt reference
     // (laid out and held by handle), C++'s write seen
     let e = Env::new("cpp-params");
-    let want = "sum 6\nfill 4 4 4\ntotal 12\ntwice 8 24\nfirst 7 8\napply 5 6 10\n@cpp 42\nshout hi!!\ngrow 2: 7 hi!!~++\ngrow -1: INVALID_ARGUMENT hi!!~++\n@cpp hi!!~++!\nrelay INVALID_ARGUMENT hi!!~++!\nshapes 2 7\npoints 202 45\nspend 15\nasked why??\ncounted 3 7 ab+\narrays 7 4 7 9 4\n@cpp 8 5 1\nalias 8 cells 14\nwrap hey! 4 6\ngauge 40 70 hey!\ntake 5 xyz\ntook 4\nlend 1 1 1 1\nlend moved 2 2\npad 6 hey!##\ntgrow 1: 8 hey!##~+\ntgrow -1: INVALID_ARGUMENT hey!##~+\nwhich 1 2 2 1 2 ab&& cd\nfwd 6 ab&&&& len 2 6\nnested [[1,2],[3],[]] [[1,2],[3]] [[[1,2],[3],[]],[],[[1,2]]] []\nnested per use [[1,2],[3],[]] 15\nnested [[3],[]] 4.75 hi//you\nmap {1:10,2:20,3:30} {} {4:125,5:50} 140 3 3\nmap {a:1,b:2} {:'',k:'v w'} {1:[],2:[4,5]}\nmap {1:10,2:20,3:30} {1:[],2:[4,5]} 2 2 2\nmap 1 {7:7} 1\npick 2: 20\npick 9: OUT_OF_RANGE\nderef 5 5 3 3 7 7\nsum_ptr 7 size 4 4 8 which 1 2\nchecked 5: 5\nchecked -1: INVALID_ARGUMENT\ntwice 42 tally 4 7 10 10\nkeep 8 11 12\n";
+    let want = "sum 6\nfill 4 4 4\ntotal 12\ntwice 8 24\nfirst 7 8\napply 5 6 10\n@cpp 42\nshout hi!!\ngrow 2: 7 hi!!~++\ngrow -1: INVALID_ARGUMENT hi!!~++\n@cpp hi!!~++!\nrelay INVALID_ARGUMENT hi!!~++!\nshapes 2 7\npoints 202 45\nspend 15\nasked why??\ncounted 3 7 ab+\narrays 7 4 7 9 4\n@cpp 8 5 1\nalias 8 cells 14\nwrap hey! 4 6\ngauge 40 70 hey!\ntake 5 xyz\ntook 4\nlend 1 1 1 1\nlend moved 2 2\npad 6 hey!##\ntgrow 1: 8 hey!##~+\ntgrow -1: INVALID_ARGUMENT hey!##~+\nwhich 1 2 2 1 2 ab&& cd\nfwd 6 ab&&&& len 2 6\nnested [[1,2],[3],[]] [[1,2],[3]] [[[1,2],[3],[]],[],[[1,2]]] []\nnested per use [[1,2],[3],[]] 15\nnested [[3],[]] 4.75 hi//you\nmap {1:10,2:20,3:30} {} {4:125,5:50} 140 3 3\nmap {a:1,b:2} {:'',k:'v w'} {1:[],2:[4,5]}\nmap {1:10,2:20,3:30} {1:[],2:[4,5]} 2 2 2\nmap 1 {7:7} 1\npick 2: 20\npick 9: OUT_OF_RANGE\nderef 5 5 3 3 7 7\nsum_ptr 7 size 4 4 8 which 1 2\nchecked 5: 5\nchecked -1: INVALID_ARGUMENT\ntwice 42 tally 4 7 10 10\nkeep 8 11 12\nduo 4.75 which 2 1\n";
     for backend in ["c", "llvm"] {
         assert_eq!(ok(e.voltc(&["run", "cpp_params.volt", "--backend", backend]), "voltc run cpp_params.volt"), want, "C++ parameters ({backend})");
         let o = e.voltc(&["run", "cpp_params_gthrow.volt", "--backend", backend]);
@@ -2159,9 +2159,9 @@ fn cpp_params() {
     for decl in ["fn wrap(s: S&) -> void", "fn len(s: S&) -> u64", "fn gauge(s: S&) -> i32", "fn pad(s: S&, n: T) -> i32", "fn grow(s: S&, n: i32) -> i32", "fn which(s: S&) -> i32", "fn size_of(a0: S&) -> i32", "fn bump(s: S) -> i32", "fn take(var s: S) -> i32", "fn fwd(var s: S) -> i32", "fn size_by(a0: S) -> i32", "fn deref(p: S*) -> i32", "fn lend(a0: S&) -> i32", "fn give(a0: S&) -> i32", "fn lend_type_parameter_0_0_rref(var a0: S) -> i32", "fn give_type_parameter_0_0_rref(var a0: S) -> i32"] {
         assert!(src.contains(decl), "{decl}: {src}");
     }
-    // a class template's T& and const T& (a generic struct's members) a Volt T&, as a function
-    // template's are
-    for decl in ["attach fn bump(this: keep<T>&, x: T&) -> void", "attach fn peek(this: keep<T>&, x: T&) -> T"] {
+    // a class template's T& (a generic struct's member) a Volt T&, as a function template's is; its
+    // const T& a value (a constructor's too)
+    for decl in ["attach fn bump(this: keep<T>&, x: T&) -> void", "attach fn peek(this: keep<T>&, x: T) -> T", "attach fn new(static this: duo<T>, x: T, y: T) -> duo<T>", "attach fn sum(this: duo<T>&, k: T) -> T"] {
         assert!(src.contains(decl), "{decl}: {src}");
     }
     for call in ["pr::gs::wrap<std::string>(std::string &) -> void", "pr::gs::take<std::string>(VOLT_MOVE(std::string &)) -> int"] {

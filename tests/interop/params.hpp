@@ -290,13 +290,20 @@ template <class T> class Tally {
     T operator|(T (*f)(T)) const { return f(v_); }
 };
 }
-// a class template's T& and const T& members, laid out (a generic struct) and held by handle (its
-// members worked out per use): a Volt reference, C++'s write seen
+// a class template's T& members, laid out (a generic struct) and held by handle (its members
+// worked out per use): a Volt reference, C++'s write seen; a laid-out one's const T& takes a value
+// (a constructor's too, so literals do); per use, a Volt value runs const T& beside T&
 namespace ct {
 template <class T> struct keep {
     T v;
     void bump(T &x) { x += v; }
     T peek(const T &x) const { return x + v; }
+};
+template <class T> struct duo {
+    T a;
+    T b;
+    duo(const T &x, const T &y) : a(x), b(y) {}
+    T sum(const T &k) const { return a + b + k; }
 };
 template <class T> class held {
     T v_;
@@ -304,6 +311,8 @@ template <class T> class held {
     held(T v) : v_(v) {}
     void bump(T &x) { x += v_; }
     T peek(const T &x) const { return x + v_; }
+    int which(T &) { return 1; }
+    int which(const T &) { return 2; }
 };
 }
 }
