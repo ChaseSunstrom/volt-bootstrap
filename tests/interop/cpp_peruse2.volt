@@ -29,6 +29,12 @@ fn main() -> void {
     val dbl = |k| (x: i32) -> i32 { return x * k; };
     val inc: fn(i32) -> i32 = next;
     std::println("closure {} {}", cpp::pu2::call(dbl), cpp::pu2::call(inc));
+    // one owning what it captured: lent to a per-use fn with & (by value it moves, as into any Volt
+    // fn), and @cpp text lends it, so it's called again
+    val s = std::string::from("abc");
+    val own = |s| (x: i32) -> i32 { return x + @cast<i32>(s.len()); };
+    val twice = @cpp<i32, i32>("pu2::call({0})", own) + @cpp<i32, i32>("pu2::call({0})", own);
+    std::println("owned {} {} {}", cpp::pu2::call(&own), cpp::pu2::call(&own), twice);
     val f: f128 = 1.0 / 3.0;
     val h: f16 = 1.5;
     std::println("float {} {}", cpp::pu2::echo(f) == f, cpp::pu2::echo(h));
@@ -51,6 +57,7 @@ fn main() -> void {
 // expect: enum 1.25
 // expect: tuple (4, 0.5)
 // expect: closure 40 21
+// expect: owned 23 23 46
 // expect: float true 1.5
 // expect: count 5
 // expect: try 2 2.5

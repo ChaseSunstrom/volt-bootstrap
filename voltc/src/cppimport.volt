@@ -7122,7 +7122,13 @@ attach fn no_cpp_spelling(this: checker&, t: u32) -> std::string {
             val w = why ?? return fmt("@cpp: {} has no C++ spelling", this.ty_name(t));
             return fmt2("@cpp: {} has no C++ spelling: it {}, which has no C function-pointer form", this.ty_name(t), copy w);
         },
-        default => { return fmt("@cpp: {} has no C++ spelling", this.ty_name(t)); },
+        default => {
+            // (a type owning memory has no mirror: cpp_mirror)
+            if (this.needs_drop(t) catch false) {
+                return fmt("@cpp: {} has no C++ spelling: it has a delete, and C++ would copy what it owns", this.ty_name(t));
+            }
+            return fmt("@cpp: {} has no C++ spelling", this.ty_name(t));
+        },
     }
 }
 
@@ -8458,7 +8464,10 @@ attach fn cpp_call_as(this: checker&, r: u32, gargs: std::vec<garg>&, args: std:
         }
         // read as a call clang works out reads it: a fn's name is its C function
         var v = try this.cpp_arg_value(try this.garg_value(args.at(i)));
-        v = try this.take(v, span);
+        // (a closure is lent for the call, as a fn(...) value borrows one: take_into)
+        if (this.cpp_fn_parts(v.ty) == null) {
+            v = try this.take(v, span);
+        }
         if (this.cpp_is_class(v.ty)) {
             return fail(span, fmt("@cpp: pass the C++ object {} by reference (&x)", this.ty_name(v.ty)));
         }
@@ -8467,21 +8476,23 @@ attach fn cpp_call_as(this: checker&, r: u32, gargs: std::vec<garg>&, args: std:
         }
         // a closure or fn value (or a reference to one): C++ gets a std::function calling it
         // (volt_cpp_fn), good while the call is; Volt passes the fn value's address
+        // (through each reference: a per-use fn given &c passes &f, a reference to the reference)
         var fx = v.ty;
-        var fref = false;
-        match (*this.t.get(fx)) {
-            .REF(y) => {
-                fx = y;
-                fref = true;
-            },
-            default => {},
+        var fv = v;
+        var refs = true;
+        while (refs) {
+            refs = false;
+            match (*this.t.get(fx)) {
+                .REF(y) => {
+                    fx = y;
+                    fv = { ty: fx, c: this.ir.deref(fv.c, fx), lv: true };
+                    refs = true;
+                },
+                default => {},
+            }
         }
         val fparts = this.cpp_fn_parts(fx);
         if (fparts) {
-            var fv = v;
-            if (fref) {
-                fv = { ty: fx, c: this.ir.deref(v.c, fx), lv: true };
-            }
             var fvt = fx;
             match (*this.t.get(fx)) {
                 .CLOSURE(c) => { fvt = this.t.intern(tyk::FN_VAL(copy this.ci(c).params, this.ci(c).ret)); },
