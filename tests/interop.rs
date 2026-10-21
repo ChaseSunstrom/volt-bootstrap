@@ -2253,6 +2253,29 @@ fn cpp_peruse2() {
 }
 
 #[test]
+fn cpp_peruse_layout() {
+    // mirrors of Volt types holding i64 and f64 check their size and alignment against the target's C
+    // layout of the type (a static_assert in the C++ unit): they pass here, and on i386 (c++ -m32),
+    // where C aligns i64 and f64 to 4, the C++ step fails at the mirror instead of a run copying the
+    // wrong bytes
+    let e = Env::new("cpp-peruse-layout");
+    let want = "point 3 2.5\nspan 7 1099511627776 (-2, 0.25)\nshape 2.5\nopt 1.5\n";
+    for backend in ["c", "llvm"] {
+        assert_eq!(ok(e.voltc(&["run", "cpp_peruse_layout.volt", "--backend", backend]), "voltc run cpp_peruse_layout.volt"), want, "mirrors with i64 and f64 ({backend})");
+    }
+    let probe = e.path("m32.cpp");
+    std::fs::write(&probe, "#include <functional>\n#include <string>\n#include <vector>\n").unwrap();
+    let m32 = Command::new("c++").args(["-m32", "-fsyntax-only", &probe]).output().is_ok_and(|o| o.status.success());
+    if !m32 {
+        eprintln!("cpp_peruse_layout: no c++ -m32 here, i386's check not run");
+        return;
+    }
+    let o = e.voltc_cxx(&["build", "cpp_peruse_layout.volt", "-o", &e.path("layout32")], Some("c++ -m32"));
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(!o.status.success() && err.contains("Volt's point: the mirror's size or alignment isn't the type's C layout on this target"), "i386's 4-aligned f64: {err}");
+}
+
+#[test]
 fn cpp_try_inst() {
     // a try_ form that appears only while checking (a class template instance held by handle, its
     // methods worked out per use) in an import with no throwing declared function: cpp_error is there
