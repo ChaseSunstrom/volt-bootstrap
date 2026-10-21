@@ -29,6 +29,17 @@ static inline int su_get(const struct su *s) { return s->u.v[7]; }
 /* a header struct aligned past 16, taken by value by a Volt fn */
 struct __attribute__((aligned(32))) a32 { int x[5]; };
 static inline size_t a32_size(void) { return sizeof(struct a32); }
+/* a struct holding one: aligned to 32 too, and so by value */
+struct h32 { char c; struct a32 a; };
+static inline size_t h32_size(void) { return sizeof(struct h32); }
+static inline size_t h32_off_a(void) { return offsetof(struct h32, a); }
+static inline int h32_get(const struct h32 *h) { return h->c + h->a.x[4]; }
+/* a field of an aligned typedef: C places it at 16, where a plain int's alignment wouldn't */
+typedef int aint __attribute__((aligned(16)));
+struct ta { char c; aint x; };
+static inline size_t ta_size(void) { return sizeof(struct ta); }
+static inline size_t ta_off_x(void) { return offsetof(struct ta, x); }
+static inline int ta_get(const struct ta *t) { return t->c + t->x; }
 /* attributes and #pragma pack: C's sizes and offsets, not Volt's own layout of the fields */
 struct __attribute__((packed)) p1 { char c; int x; };
 struct __attribute__((aligned(8))) a8 { int x; };
