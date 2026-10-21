@@ -1318,6 +1318,11 @@ fn go_direct() {
         eprintln!("go isn't installed: skipping use go");
         return;
     };
+    if cfg!(all(windows, target_arch = "aarch64")) {
+        // the program stops at start with an access violation (0xc0000005) and no output: T-0630
+        eprintln!("Windows arm64: a program linking Go's c-archive doesn't start yet (T-0630): skipping use go");
+        return;
+    }
     let e = Env::new("go_direct");
     let dir = e.dir.join("gd");
     copy_dir(&Path::new(ROOT).join("tests/interop/go_direct"), &dir);
