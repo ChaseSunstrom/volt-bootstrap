@@ -627,6 +627,10 @@ attach fn instance(this: cpp_gen&, qt: clang::CXType) -> str? {
         return null;
     }
     val sp = type_spelling(ct);
+    if (starts_with(sp.as_str(), "volt_m_") && hole_index(sp.as_str()[7..sp.len()]) != null) {
+        // a mirror of a Volt type (cpp_mirror): that type, a generic of the mirror's name, not a handle
+        return null;
+    }
     val have = this.instances.get(sp.as_str());
     if (have) {
         return *have;
@@ -7675,15 +7679,18 @@ attach fn cpp_instance_as(this: checker&, k: usize, expr: str, types: std::vec<u
     // the Volt fn, written by the importer from the probe's now concrete signature; a mirror
     // (cpp_mirror) is a generic parameter of its own name, which the Volt type binds
     val g = &this.cpp_ctxs.at(k).gen;
+    // the type itself, not decltype(...) of the probe
+    val rt = clang::clang_getCanonicalType(clang::clang_getCursorResultType(fc));
+    // and the result's, which only an explicit template argument may name (zero<point>()):
+    // bind_cand binds one no argument binds by its name (mirror_type)
     var mnames: std::vec<std::string> = {};
     for (p&) in ptys.items() {
         mirror_names(p.as_str(), &mnames);
     }
+    mirror_names(type_spelling(rt).as_str(), &mnames);
     val none = str_views(&mnames);
     val generics = generics_text(&mnames);
     val fname = fmt("volt_cpp_call_{}", unum(n));
-    // the type itself, not decltype(...) of the probe
-    val rt = clang::clang_getCanonicalType(clang::clang_getCursorResultType(fc));
     if (by_value) {
         g.unnamed_as = fmt("std::decay<decltype({})>::type", copy unit_expr);
     } else {
@@ -9507,6 +9514,19 @@ fn hole_index(s: str) -> usize? {
         n = n * 10 + @cast<usize>(c - '0');
     }
     return n;
+}
+
+// the Volt type a mirror's name (cpp_mirror's volt_m_<type id>) is of; none for another name
+attach fn mirror_type(this: checker&, name: str) -> u32? {
+    if (!starts_with(name, "volt_m_")) {
+        return null;
+    }
+    for (n&) in this.cpp_decl_names.items() {
+        if (n.as_str() == name) {
+            return @cast<u32>(hole_index(name[7..name.len]) ?? return null);
+        }
+    }
+    return null;
 }
 
 // the mirrors (cpp_mirror's volt_m_N) C++ type text s names, each once into out
