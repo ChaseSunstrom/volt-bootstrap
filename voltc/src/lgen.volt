@@ -74,6 +74,7 @@ struct lg {
     f: llvm::LLVMOpaqueValue* = null;
     abi: abi_fn = { ret: { how: pass::NONE } };
     locals: std::vec<llvm::LLVMOpaqueValue*> = {};
+    low_align: std::map<usize, u32> = {}; // addresses less aligned than their type (a packed C struct's members): their access alignment
     labels: std::map<u32, llvm::LLVMOpaqueBasicBlock*> = {};
     // sret: the hidden return-slot param when the current fn returns by memory
     sret: llvm::LLVMOpaqueValue* = null;
@@ -348,6 +349,11 @@ attach fn union_lt(this: lg&, t: u32, from: usize) -> llvm::LLVMOpaqueType* {
             align = a;
         }
     }
+    // a header union C aligns below a member's LLVM alignment (AArch64 aligns a 32-byte vector to
+    // 16): C's alignment
+    if (from == 0 && this.overlay(t).1 > 0) {
+        align = @cast<u32>(this.overlay(t).1);
+    }
     return this.blob_lt(size, align);
 }
 
@@ -426,6 +432,24 @@ attach fn int_signed(this: lg&, t: u32) -> bool {
         .ENUM(e) => { return this.c.ei(e).tag.signed(); },
         default => { return false; },
     }
+}
+
+// does t, placed at byte off, hold a scalar at an offset its alignment doesn't divide?
+attach fn has_unaligned(this: lg&, t: u32, off: u64) -> bool {
+    if (this.is_void(t)) {
+        return false;
+    }
+    val l = this.lt(t);
+    if (llvm::LLVMGetTypeKind(l) == llvm::LLVMStructTypeKind) {
+        for (i) in 0..this.member_count(t) {
+            val mt = this.member_ty(t, @cast<u32>(i));
+            if (this.has_unaligned(mt, off + this.offset_of(t, @cast<u32>(i)))) {
+                return true;
+            }
+        }
+        return false;
+    }
+    return off % @cast<u64>(this.align_of(l)) != 0;
 }
 
 // the class of each eightbyte of t placed at byte `off`
@@ -555,7 +579,8 @@ attach fn part(this: lg&, t: u32, ret: bool) -> abi_part {
     if (this.cc != callconv::SYSV) {
         return this.aapcs_part(t, size, ret);
     }
-    if (size > 16) {
+    if (size > 16 || this.has_unaligned(t, 0)) {
+        // (a field its alignment doesn't place, in a packed C struct: SysV's MEMORY class)
         return { how: pass::MEMORY, ty: t };
     }
     var ebs: eightbyte[2];
@@ -1550,7 +1575,7 @@ attach fn load(this: lg&, t: u32, p: llvm::LLVMOpaqueValue*) -> llvm::LLVMOpaque
     }
     val l = this.lt(t);
     val v = llvm::LLVMBuildLoad2(this.b, l, p, "");
-    llvm::LLVMSetAlignment(v, this.align_of(l));
+    llvm::LLVMSetAlignment(v, this.access_align(l, p));
     return v;
 }
 
@@ -1565,7 +1590,7 @@ attach fn store(this: lg&, v: llvm::LLVMOpaqueValue*, p: llvm::LLVMOpaqueValue*)
     val k = llvm::LLVMGetTypeKind(t);
     if (k == llvm::LLVMArrayTypeKind || k == llvm::LLVMStructTypeKind) {
         if (llvm::LLVMIsNull(v) != 0) {
-            llvm::LLVMBuildMemSet(this.b, p, llvm::LLVMConstInt(this.i8t(), 0, 0), this.i64c(this.size_of(t)), this.align_of(t));
+            llvm::LLVMBuildMemSet(this.b, p, llvm::LLVMConstInt(this.i8t(), 0, 0), this.i64c(this.size_of(t)), this.access_align(t, p));
             return;
         }
         if (llvm::LLVMIsALoadInst(v) != null) {
@@ -1574,7 +1599,41 @@ attach fn store(this: lg&, v: llvm::LLVMOpaqueValue*, p: llvm::LLVMOpaqueValue*)
         }
     }
     val s = llvm::LLVMBuildStore(this.b, v, p);
-    llvm::LLVMSetAlignment(s, this.align_of(t));
+    llvm::LLVMSetAlignment(s, this.access_align(t, p));
+}
+
+// the alignment of an access of type t through p: t's own, or less where p is known to be less
+// aligned (a member of a packed C struct, or a part of one)
+attach fn access_align(this: lg&, t: llvm::LLVMOpaqueType*, p: llvm::LLVMOpaqueValue*) -> u32 {
+    val a = this.align_of(t);
+    if (this.low_align.len > 0) {
+        val low = this.low_align.get(@cast<usize>(p));
+        if (low != null && *low < a) {
+            return *low;
+        }
+    }
+    return a;
+}
+
+// q is p stepped off bytes (p aligned to base, or less where it's known to be): when that leaves q
+// less aligned than its type t, accesses through q use the lower alignment
+attach fn step_align(this: lg&, q: llvm::LLVMOpaqueValue*, p: llvm::LLVMOpaqueValue*, base: u32, off: u64, t: llvm::LLVMOpaqueType*) -> void {
+    var a = base;
+    if (a == 0) {
+        a = 1;
+    }
+    if (this.low_align.len > 0) {
+        val low = this.low_align.get(@cast<usize>(p));
+        if (low != null && *low < a) {
+            a = *low;
+        }
+    }
+    while (a > 1 && off % @cast<u64>(a) != 0) {
+        a /= 2;
+    }
+    if (a < this.align_of(t)) {
+        this.low_align.put(@cast<usize>(q), a);
+    }
 }
 
 // store the aggregate that load ld read, as a memcpy from where it read it. Memory may have changed
@@ -1598,7 +1657,7 @@ attach fn copy_loaded(this: lg&, ld: llvm::LLVMOpaqueValue*, p: llvm::LLVMOpaque
         src = tmp;
         src_align = this.align_of(t);
     }
-    llvm::LLVMBuildMemCpy(this.b, p, this.align_of(t), src, src_align, size);
+    llvm::LLVMBuildMemCpy(this.b, p, this.access_align(t, p), src, src_align, size);
     if (llvm::LLVMGetFirstUse(ld) == null) {
         llvm::LLVMInstructionEraseFromParent(ld);
     }
@@ -1633,9 +1692,31 @@ attach fn inbounds_gep(this: lg&, ty: llvm::LLVMOpaqueType*, p: llvm::LLVMOpaque
 attach fn field_ptr(this: lg&, agg: u32, p: llvm::LLVMOpaqueValue*, i: u32) -> llvm::LLVMOpaqueValue* {
     val off = this.overlay_offset(agg, i);
     if (off) {
-        return this.byte_gep(p, off);
+        // at C's offset, aligned as the struct's C alignment and the offset allow (packed: maybe 1)
+        val q = this.byte_gep(p, off);
+        if (q != p) {
+            this.step_align(q, p, @cast<u32>(this.overlay(agg).1), off, this.lt(this.member_ty(agg, i)));
+        }
+        return q;
     }
-    return llvm::LLVMBuildStructGEP2(this.b, this.lt(agg), p, this.elem(agg, i), "");
+    val q = llvm::LLVMBuildStructGEP2(this.b, this.lt(agg), p, this.elem(agg, i), "");
+    if (this.c_union(agg) && this.overlay(agg).1 > 0 && q != p) {
+        this.step_align(q, p, @cast<u32>(this.overlay(agg).1), 0, this.lt(this.member_ty(agg, i)));
+    } else if (this.low_align.len > 0 && this.low_align.get(@cast<usize>(p)) != null && q != p) {
+        this.step_align(q, p, this.align_of(this.lt(agg)), this.offset_of(agg, i), this.lt(this.member_ty(agg, i)));
+    }
+    return q;
+}
+
+// an element of the aggregate at p, at an index known only at run time: no more aligned than p
+attach fn elem_align(this: lg&, q: llvm::LLVMOpaqueValue*, p: llvm::LLVMOpaqueValue*, elem: llvm::LLVMOpaqueType*) -> llvm::LLVMOpaqueValue* {
+    if (this.low_align.len > 0) {
+        val low = this.low_align.get(@cast<usize>(p));
+        if (low != null && *low < this.align_of(elem)) {
+            this.low_align.put(@cast<usize>(q), *low);
+        }
+    }
+    return q;
 }
 
 // ---------- control flow ----------
@@ -1860,7 +1941,8 @@ attach fn addr(this: lg&, n: u32) -> llvm::LLVMOpaqueValue* {
                 .ARRAY(x, k) => {
                     put(&idx, this.usizec(0));
                     put(&idx, ix);
-                    return this.inbounds_gep(this.lt(bt), this.addr(b), &idx);
+                    val base = this.addr(b);
+                    return this.elem_align(this.inbounds_gep(this.lt(bt), base, &idx), base, this.lt(x));
                 },
                 .CSTR => {
                     put(&idx, ix);
@@ -1869,7 +1951,8 @@ attach fn addr(this: lg&, n: u32) -> llvm::LLVMOpaqueValue* {
                 .VECTOR(x, k) => {
                     // a lane: the vector's address stepped by lanes (its lanes are laid out in order)
                     put(&idx, ix);
-                    return this.inbounds_gep(this.lt(x), this.addr(b), &idx);
+                    val base = this.addr(b);
+                    return this.elem_align(this.inbounds_gep(this.lt(x), base, &idx), base, this.lt(x));
                 },
                 default => {
                     put(&idx, ix);
@@ -1928,8 +2011,10 @@ attach fn rv(this: lg&, n: u32) -> llvm::LLVMOpaqueValue* {
         },
         .VSTORE(p, x) => {
             val vt = this.c.ir.ty_of(x);
-            val st = llvm::LLVMBuildStore(this.b, this.rv_as(x, vt), this.rv(p));
-            llvm::LLVMSetAlignment(st, this.align_of(this.lt(vt)));
+            val v = this.rv_as(x, vt);
+            val at = this.rv(p);
+            val st = llvm::LLVMBuildStore(this.b, v, at);
+            llvm::LLVMSetAlignment(st, this.access_align(this.lt(vt), at));
             llvm::LLVMSetVolatile(st, 1);
             return null;
         },
@@ -2761,6 +2846,7 @@ attach fn fn_body(this: lg&, i: u32) -> void {
     this.abi = this.fn_abi(i);
     this.labels = {};
     this.locals = {};
+    this.low_align.clear();
     val f = this.c.ir.fn_at(i);
     val allocas = this.block();
     val start = this.block();
@@ -3085,6 +3171,7 @@ attach fn ctor(this: lg&) -> void {
     llvm::LLVMPositionBuilderAtEnd(this.eb, allocas);
     this.at_block(start);
     this.locals = {};
+    this.low_align.clear();
     this.labels = {};
     for (g) in this.ctors.items() {
         val gl = this.c.ir.globals.at(@cast<usize>(g));
