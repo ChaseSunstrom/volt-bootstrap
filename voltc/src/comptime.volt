@@ -4093,8 +4093,9 @@ attach fn target_arch(this: checker&) -> str {
 }
 
 // an n-byte integer's (int) or float's alignment on the target, as its C compiler and LLVM data
-// layout have it: n, but i386 aligns 8-byte ones to 4 (long long and double in a struct), and
-// 32-bit ARM and RISC-V 128-bit integers to 8 (f128 stays 16)
+// layout have it: n, but i386 aligns 8-byte ones to 4 (long long and double in a struct: the
+// System V i386 ABI's rule; MSVC's i386 aligns them to 8, which this doesn't model), and 32-bit ARM
+// and RISC-V 128-bit integers to 8 (f128 stays 16)
 attach fn scalar_align(this: checker&, n: u64, int: bool) -> u64 {
     val arch = this.target_arch();
     if (n == 8 && arch == "x86") {
@@ -4171,11 +4172,12 @@ attach fn layout(this: checker&, t: u32, span: span) -> compile_error!lay {
             return { size: l.size * n, align: l.align };
         },
         .VECTOR(e, n) => {
-            // aligned to its whole size, as C's vector_size and LLVM's vectors are; 32-bit ARM's to
-            // at most 8 (AAPCS)
+            // aligned to its whole size, as C's vector_size and LLVM's vectors are; but a 16-byte
+            // one to 8 on 32-bit ARM (its data layout's v128:64, the only vector size it names:
+            // LLVM aligns 32- and 64-byte ones to their size there too)
             val l = try this.layout(e, span);
             var al = l.size * n;
-            if (al > 8 && this.target_arch() == "arm") {
+            if (al == 16 && this.target_arch() == "arm") {
                 al = 8;
             }
             return { size: l.size * n, align: al };

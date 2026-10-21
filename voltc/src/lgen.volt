@@ -166,7 +166,7 @@ attach fn check_layout(this: lg&, r: llvm::LLVMOpaqueType*, t: u32) -> void {
     val size = this.size_of(r);
     val align = @cast<u64>(this.align_of(r));
     if (size != want.size || align != want.align) {
-        this.bug = fmt3("the LLVM backend lays out '{}' as {} (the checker: {}): a voltc bug, unless --cfg arch or pointer_bits names another target than the one built for", this.c.ty_name(t), fmt2("size {}, align {}", unum(size), unum(align)), fmt2("size {}, align {}", unum(want.size), unum(want.align)));
+        this.bug = fmt3("the LLVM backend lays out '{}' as {} (the checker: {}): a voltc bug, unless --cfg arch or pointer_bits names another target than the one built for (build that arch's code with its --target, or --backend c)",this.c.ty_name(t), fmt2("size {}, align {}", unum(size), unum(align)), fmt2("size {}, align {}", unum(want.size), unum(want.align)));
     }
 }
 
@@ -3401,12 +3401,13 @@ attach fn llvm_build(this: checker&, g: lg&) -> std::string {
         start.append(hook_defaults_asm(bare, !defines(g.m, "volt_exit"), !defines(g.m, "volt_console_write")).as_str());
         llvm::LLVMSetModuleInlineAsm2(g.m, start.c_str(), start.len());
     }
-    if (g.bug.len() > 0) {
-        return copy g.bug;
-    }
+    // what the backend can't lower goes through C even when a layout differs too
     if (g.err.len() > 0) {
         this.llvm_cant_lower = true;
         return copy g.err;
+    }
+    if (g.bug.len() > 0) {
+        return copy g.bug;
     }
     if (g.di) {
         llvm::LLVMDIBuilderFinalize(g.di);
