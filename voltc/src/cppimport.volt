@@ -4237,7 +4237,8 @@ attach fn pads(this: cpp_gen&, from: u64, to: u64, big: bool, n: u32&, align: u6
 }
 
 // a class's struct: its public fields at their offsets, padding around them (so Volt's layout is
-// C++'s); false when that can't be done (its alignment comes from something padding can't copy)
+// C++'s); false when that can't be done (its alignment comes from something padding can't copy, or
+// a field sits where Volt's alignment of its type wouldn't put it: an aligned typedef's)
 attach fn class_struct(this: cpp_gen&, c: clang::CXCursor, vname_: str, q: str) -> bool {
     val t = clang::clang_getCursorType(c);
     val size = clang::clang_Type_getSizeOf(t);
@@ -4252,6 +4253,7 @@ attach fn class_struct(this: cpp_gen&, c: clang::CXCursor, vname_: str, q: str) 
     var at: u64 = 0;
     var got: u64 = 1;
     var n: u32 = 0;
+    var placed = true;
     val none: std::vec<str> = {};
     for (f&) in children(c).items() {
         if (clang::clang_getCursorKind(*f) != clang::CXCursor_FieldDecl || !is_public(*f) || clang::clang_Cursor_isBitField(*f) != 0) {
@@ -4264,11 +4266,16 @@ attach fn class_struct(this: cpp_gen&, c: clang::CXCursor, vname_: str, q: str) 
         }
         val vt = this.vtype(ft, &none) ?? continue;
         val bits = clang::clang_Cursor_getOffsetOfField(*f);
-        val fsize = clang::clang_Type_getSizeOf(ft);
-        val falign = clang::clang_Type_getAlignOf(ft);
-        if (bits < 0 || bits % 8 != 0 || fsize <= 0 || @cast<u64>(bits / 8) < at) {
+        // the canonical type's alignment is the one Volt gives the field's type (vtype maps that):
+        // an aligned typedef's, past or below it, isn't (T-0627)
+        val ct = clang::clang_getCanonicalType(ft);
+        val fsize = clang::clang_Type_getSizeOf(ct);
+        val falign = clang::clang_Type_getAlignOf(ct);
+        if (bits < 0 || bits % 8 != 0 || fsize <= 0 || falign <= 0 || @cast<u64>(bits / 8) < at) {
             continue;
         }
+        // (Volt would put it at the next multiple of its alignment, not here)
+        placed = placed && @cast<u64>(bits / 8) % @cast<u64>(falign) == 0;
         this.pads(at, @cast<u64>(bits / 8), align >= 16, &n, &got);
         this.line(fmt2("{}: {};", vname(cursor_name(*f).as_str()), move vt).as_str());
         at = @cast<u64>(bits / 8) + @cast<u64>(fsize);
@@ -4279,11 +4286,11 @@ attach fn class_struct(this: cpp_gen&, c: clang::CXCursor, vname_: str, q: str) 
     this.pads(at, @cast<u64>(size), align >= 16, &n, &got);
     this.depth -= 1;
     this.line("}");
-    if (got != @cast<u64>(align)) {
+    if (got != @cast<u64>(align) || !placed) {
         // take the struct back out
         this.out.bytes.len = start;
         // (one C++'s new aligns is held by handle instead: prune)
-        this.line(fmt2("// left out: class {} (its alignment, {}, comes from members Volt can't show, and holding it by handle needs C++17's aligned new)", S(q), num(@cast<i128>(align))).as_str());
+        this.line(fmt2("// left out: class {} (its layout, aligned to {}, comes from members Volt can't show, and holding it by handle needs C++17's aligned new)", S(q), num(@cast<i128>(align))).as_str());
         return false;
     }
     return true;

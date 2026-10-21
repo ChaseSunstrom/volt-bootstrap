@@ -567,7 +567,8 @@ object `derive` didn't make; without RTTI, either stops the program saying so.
   `delete`. One C++ hands out (a factory's `T*` or `T&` result) is a borrowed handle whose methods
   and fields work as any handle's, and it's freed C++'s way (the class's own `destroy(&s)`), never
   by Volt.
-- A class whose alignment comes from members Volt can't show (`alignas(32)`) is held by handle,
+- A class whose layout comes from members Volt can't show (`alignas(32)`, a field of an aligned
+  typedef that puts it past or below its type's own alignment) is held by handle,
   C++'s aligned `new` and `delete` making and freeing it. That needs its import under C++17 or
   newer when it's aligned past 8; under an older standard it's left out, and its comment says so.
 
