@@ -24,6 +24,12 @@ fn byte() -> u8 {
     return k;
 }
 
+<K: u8 = 3>
+fn defaulted() -> u8 {
+    val k = K;
+    return k * 85;
+}
+
 <M: i8>
 fn small() -> i8 {
     return M;
@@ -43,14 +49,14 @@ fn named(x: T) -> T {
 fn main() -> void {
     std::println("{} {}", pick<true>(), pick<false>());
     std::println("{}", big<3>());
-    std::println("{}", byte<254>());
+    std::println("{} {}", byte<254>(), defaulted());
     std::println("{}", small<-128>());
     std::println("{}", whole<18446744073709551615>());
     std::println("{}", named<i32, "hi">(5));
 }
 // expect: yes no
 // expect: 12000000000
-// expect: 255
+// expect: 255 255
 // expect: -128
 // expect: 18446744073709551615
 // expect: hi
