@@ -2223,6 +2223,18 @@ fn cpp_peruse_errors() {
 }
 
 #[test]
+fn cpp_peruse2() {
+    // Volt types C++ has no type for (a Volt struct, i32?, an enum with payloads, a tuple, f16, f128:
+    // a mirror of their bytes; a closure and a fn value: a std::function) through C++ templates and
+    // back unchanged; a function pointer result as a Volt fn, an array reference result as a T[N]&
+    let e = Env::new("cpp-peruse2");
+    let want = "struct 3 2.5\nopt 7 null\nenum 1.25\ntuple (4, 0.5)\nclosure 40 21\nfloat true 1.5\ncount 5\ntry 2 2.5\nfnptr 5 10\narray 50 6\nsame 70\n";
+    for backend in ["c", "llvm"] {
+        assert_eq!(ok(e.voltc(&["run", "cpp_peruse2.volt", "--backend", backend]), "voltc run cpp_peruse2.volt"), want, "per-use calls with every Volt type ({backend})");
+    }
+}
+
+#[test]
 fn cpp_try_inst() {
     // a try_ form that appears only while checking (a class template instance held by handle, its
     // methods worked out per use) in an import with no throwing declared function: cpp_error is there
