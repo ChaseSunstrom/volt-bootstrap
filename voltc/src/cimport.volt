@@ -2429,10 +2429,9 @@ attach fn lay_out_partial(this: checker&, res: c_imported&, items: std::vec<usiz
 }
 
 // run the C preprocessor over the includes; its output, or a message. An embedded VM (opts.running)
-// runs it once per input (opts.pp_memo: the flags, the #include lines and the local headers' text,
-// whichever compiler, so a later script with no compiler at hand reads an earlier one's headers), and
-// a local header that changed is read again. ponytail: what a local header includes isn't in the
-// key; record the files the preprocessor read (-MD) if a reload misses an edit there
+// runs it once per input (opts.pp_memo: the flags and the #include lines, whichever compiler, so a
+// later script with no compiler at hand reads an earlier one's headers), and again when a file it
+// read (-H lists them) changed
 attach fn preprocess(this: checker&, src: str, extra: str, span: span) -> compile_error!std::string {
     var args: std::vec<str> = {};
     val cc = c_command(&args);
@@ -2447,36 +2446,88 @@ attach fn preprocess(this: checker&, src: str, extra: str, span: span) -> compil
     }
     var key = S("");
     if (this.opts.running) {
+        put(&args, "-H");
         for (i) in words..args.len {
             key.append(*args.at(i));
             key.push(0);
         }
         key.append(src);
-        // (a local header is "its full path"; one named by a full path is <that path>)
-        for (l) in src.lines().items() {
-            val p = l.strip_prefix("#include ") ?? continue;
-            if (p.len < 3 || !(p[0] == '"' || (p[0] == '<' && p[1] == '/'))) {
-                continue;
-            }
-            key.push(0);
-            val text = std::fs::read_file(p[1..p.len - 1]) catch |e| { continue; };
-            key.append(text.as_str());
-        }
         val have = this.opts.pp_memo.get(copy key);
         if (have) {
-            return copy *have;
+            val out = pp_fresh(have.as_str());
+            if (out) {
+                return S(out);
+            }
         }
     }
-    val r = std::process::capture(args.items(), src) catch |e| {
+    var r = std::process::capture(args.items(), src) catch |e| {
         return fail(span, fmt("can't run the C compiler '{}' to read the headers", S(cc)));
     };
+    var lists = this.opts.running;
+    if (r.code != 0 && lists) {
+        // a compiler that doesn't take -H (tcc): the headers read without it
+        args.pop();
+        lists = false;
+        r = std::process::capture(args.items(), src) catch |e| {
+            return fail(span, fmt("can't run the C compiler '{}' to read the headers", S(cc)));
+        };
+    }
     if (r.code != 0) {
         return fail(span, fmt("the C compiler couldn't read these headers: {}", S(first_error(r.err.as_str()))));
     }
     if (this.opts.running) {
-        this.opts.pp_memo.put(move key, copy r.out);
+        // each file -H listed ('.' per level, a space, its path) and its text's hash, then the output;
+        // with a compiler that lists none, the headers the #include lines name by path
+        var listed = false;
+        var memo = S("");
+        for (l) in r.err.as_str().lines().items() {
+            var at: usize = 0;
+            while (lists && at < l.len && l[at] == '.') {
+                at += 1;
+            }
+            if (at == 0 || at >= l.len || l[at] != ' ') {
+                continue;
+            }
+            listed = memo_file(&memo, l[at + 1..l.len]) || listed;
+        }
+        if (!listed) {
+            for (l) in src.lines().items() {
+                // "local" or </absolute> (a header named by its full path)
+                if (starts_with(l, "#include ") && l.len > 11 && (l[9] == '"' || l[10] == '/')) {
+                    listed = memo_file(&memo, l[10..l.len - 1]) || listed;
+                }
+            }
+        }
+        if (listed) {
+            memo.push(0);
+            memo.append(r.out.as_str());
+            this.opts.pp_memo.put(move key, move memo);
+        }
     }
     return copy r.out;
+}
+
+// a pp_memo entry's line for the file at path: its text's hash and the path; false when it can't be read
+fn memo_file(memo: std::string&, path: str) -> bool {
+    val text = std::fs::read_file(path) catch |e| { return false; };
+    memo.append(unum(std::digest::fnv1a(text.as_str())).as_str());
+    memo.push(' ');
+    memo.append(path);
+    memo.push('\n');
+    return true;
+}
+
+// a pp_memo entry's output, when the files it lists still have the text they had
+fn pp_fresh(have: str) -> str? {
+    val (files, out) = have.split_once("\0") ?? return null;
+    for (l) in files.lines().items() {
+        val (h, path) = l.split_once(" ") ?? return null;
+        val text = std::fs::read_file(path) catch |e| { return null; };
+        if (unum(std::digest::fnv1a(text.as_str())).as_str() != h) {
+            return null;
+        }
+    }
+    return out;
 }
 
 // read `headers` (local ones next to dir, others from the system) into Volt items
@@ -3335,11 +3386,25 @@ attach fn keep_out(this: checker&, it: item&, imp: c_imported&, u: u32, span: sp
     if (!stat) {
         text.append(fmt("#pragma weak {}\n", S(name)).as_str());
     }
-    text.append(fmt2("void *volt_c_{} = (void *){};\n", S(name), S(name)).as_str());
+    val ptr = this.c_ptr(name);
+    text.append(fmt2("void *{} = (void *){};\n", copy ptr, S(name)).as_str());
     if (!stat) {
         text.append(fmt2("static void volt_c_no_{}(void) {{\n    volt_c_missing(\"{}\");\n}}\n", S(name), S(name)).as_str());
-        this.c_unit_weak.at(@cast<usize>(u)).append(fmt3("    if (!volt_c_{}) {{\n        volt_c_{} = (void *)volt_c_no_{};\n    }}\n", S(name), S(name), S(name)).as_str());
+        this.c_unit_weak.at(@cast<usize>(u)).append(fmt3("    if (!{}) {{\n        {} = (void *)volt_c_no_{};\n    }}\n", copy ptr, copy ptr, S(name)).as_str());
     }
+}
+
+// the name of C header function sym's pointer: volt_c_NAME, and in an embedded VM's load
+// volt_cLOAD_NAME (each load's library has its own, and the libraries' symbols all meet: one loaded
+// first would stand in for a later one's, as with volt_cpp_ shims)
+attach fn c_ptr(this: checker&, sym: str) -> std::string {
+    var n = S("volt_c");
+    if (this.opts.running) {
+        n.append_uint(this.opts.load);
+    }
+    n.push('_');
+    n.append(sym);
+    return n;
 }
 
 // `use { "a.h", "b.h" } as alias;`: the headers' declarations as namespace alias

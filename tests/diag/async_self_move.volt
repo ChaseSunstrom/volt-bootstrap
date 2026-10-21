@@ -169,3 +169,17 @@ async fn heap_vec() -> i32 {
     suspend;
     return *p;
 }
+
+// and one a tuple holds: its elements are on the heap too
+async fn heap_vec_tuple() -> i32 {
+    var t: (std::vec<i32>, i32) = ({}, 1);
+    t.0.push(7) catch |e| { return 0; };
+    val p = &t.0[0];
+    suspend;
+    return *p;
+}
+
+fn moves_tuple() -> void {
+    val ht = async heap_vec_tuple();
+    val ht2 = ht;
+}

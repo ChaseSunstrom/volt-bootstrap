@@ -174,6 +174,22 @@ fn main() -> void {
     val kv = std::string::from("ab");
     var m2 = std::string::from("x");
     std::println("strings {} {} {}", looked(&kv), @cpp<i32, std::string>("pr::sw::cat2<{t0}>({0}, {1})", &m2, &kv), m2);
+    var gm = std::string::from("x");
+    grown(&gm);
+    std::println("member {}", gm);
+    // only the object a method runs on is written: {1}, an argument of the inner call, is read
+    var ca = std::string::from("a");
+    val cb = std::string::from("b");
+    chained(&ca, &cb);
+    std::println("chain {} {}", ca, cb);
+}
+fn chained(a: std::string&, b: std::string&) -> void {
+    @cpp<void, std::string, std::string>("{0}.append({1}).push_back('c')", a, b);
+}
+// a string hole as the object of a member call: its methods change the Volt string
+fn grown(s: std::string&) -> void {
+    @cpp<void, std::string>("{0}.push_back('y')", s);
+    @cpp<void, std::string>("{0}.append(\"z\")", s);
 }
 // a reference parameter @cpp passes as a std::string_view: read, not written
 fn looked(s: std::string&) -> i32 {

@@ -1080,7 +1080,9 @@ fn api_dir() -> PathBuf {
     }
     let exe = std::env::current_exe().unwrap_or_else(|e| fail(e));
     let dir = exe.parent().unwrap();
-    for cand in [dir.join("api"), dir.join("../../bolt/api"), dir.join("../lib/volt/bolt")] {
+    // last, the source tree bolt was built from: a cargo build whose target directory is elsewhere
+    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("bolt/api");
+    for cand in [dir.join("api"), dir.join("../../bolt/api"), dir.join("../lib/volt/bolt"), src] {
         if cand.is_dir() {
             return cand;
         }

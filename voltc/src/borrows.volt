@@ -619,7 +619,7 @@ attach fn local_array(this: checker&, e: expr&) -> bool {
     }
 }
 
-// the type of e when it is a local or a part of one held in place (a struct field, an array
+// the type of e when it is a local or a part of one held in place (a struct or tuple field, an array
 // element), not reached through a reference or pointer
 attach fn local_part_ty(this: checker&, e: expr&) -> u32? {
     match (e.kind) {
@@ -643,6 +643,19 @@ attach fn local_part_ty(this: checker&, e: expr&) -> u32? {
                                 return fd.ty;
                             }
                         }
+                    }
+                },
+                .TUPLE(ts, names) => {
+                    // t.0, or a named element
+                    var idx = parse_index(n);
+                    for (i) in 0..names.len {
+                        if (idx == null && (*names.at(i) ?? "") == n) {
+                            idx = i;
+                        }
+                    }
+                    val i = idx ?? return null;
+                    if (i < ts.len) {
+                        return *ts.at(i);
                     }
                 },
                 default => {},

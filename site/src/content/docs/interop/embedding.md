@@ -93,21 +93,32 @@ Loading a name again replaces that script, when no script loaded since uses it; 
 load is refused naming it (`can't load util.volt again: main_script uses it`), and the earlier
 script stays. A load that fails to compile changes nothing; one that fails to link (a symbol that
 isn't there) leaves nothing of itself behind, no package and no code, and a script it was replacing
-is gone too (its code makes way before the new code is added). A file whose name can't be a package's (`my-util.volt`, a keyword, or
+is gone too (its code makes way before the new code is added). A load that fails after the library
+its C or C++ imports were built into is linked leaves that library loaded, its symbols named for that
+load, so loading the script again builds and uses its own. A file whose name can't be a package's (`my-util.volt`, a keyword, or
 `std`) is refused, and so is a second file of one name (`b/init.volt` after `a/init.volt`). A
 script whose C or C++ imports were built into a library (outside a sandbox) can't be loaded again:
 the library stays loaded, and the new code's symbols would come from it.
 
 A later script that uses an earlier one importing C or C++ runs no compiler for those imports: the
-earlier load built them, and its headers' text is kept. Only what the later script's own code calls
+earlier load built them, and its headers' text is kept (read again when a file the headers read,
+the ones they include among them, changed on disk; the C compiler lists them with `-H`; with one that
+doesn't, such as tcc, only the headers the imports name are watched, not those they include). Each
+load's header functions are its own: two scripts importing a header whose `static inline` function
+changed between their loads each call the body they were compiled with. Only what the later script's own code calls
 (a header's function, a C++ wrapper, through its own imports or a generic made for it) is built for
-it.
+it. A C++ header doing `import std;` has the C++ library's std module built once, by the first load
+that needs it, for the VM's later loads.
 
 An earlier script's global holding a trait's values (`public var held: shape? = null;`) was laid out,
 and that script's code built, for the types attached to the trait when it loaded. A later script
 attaching the trait to another type is refused, naming the trait and the global (`the global
 shapes::held holds shape's union, ...: a later script can't attach shape to another type`); one that
-only uses the global loads.
+only uses the global loads. So is attaching a trait whose union an earlier script's `export fn` takes
+or gives (`export fn spun(x: spin) -> i32`): that function is the earlier script's code, and switches
+on the tags it saw (`the export fn takers::spun takes or gives spin's union, ...`). For the same reason a script attaching the trait before the global's
+script loaded can't be loaded again (`can't load cube.volt again: the global tank::held holds
+solid's union, ..., cube's among them`): the union's tags would change.
 
 ## Host functions
 
@@ -232,3 +243,11 @@ rustc --edition 2021 main.rs -L target/debug -l voltvm
   process, as it would in a Volt program.
 - A script's code stays until it's loaded again or its VM is freed; a script that others use can't
   be replaced, so a new version of it goes in a new VM. Two scripts' `export fn`s can't share a name.
+- Each load has its own copy of std's globals: std is compiled into every script, so a global of std
+  one script sets isn't the one another script reads.
+- A load's C and C++ build under `/tmp/voltvm-*` is removed once the library is loaded, and a C++
+  std module's directory when the VM is freed; a process killed before then (`SIGKILL`) leaves them
+  behind.
+- A VM isn't thread-safe: load into one VM from one thread at a time, and don't load into two VMs
+  from two threads at once (the load counter they share isn't atomic). Calling scripts' functions
+  from several threads is as safe as the code they run.

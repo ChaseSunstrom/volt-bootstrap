@@ -2035,7 +2035,7 @@ fn cpp_surface() {
 fn cpp_special_class() {
     let e = Env::new("cpp-special-class");
     for backend in ["c", "llvm"] {
-        assert_eq!(ok(e.voltc(&["run", "cpp_special_class.volt", "--backend", backend]), "voltc run cpp_special_class.volt"), "4 7 true\n6 3 1.5\n42 42 2\n42 3\n5 1\n", "C++ class specializations ({backend})");
+        assert_eq!(ok(e.voltc(&["run", "cpp_special_class.volt", "--backend", backend]), "voltc run cpp_special_class.volt"), "4 7 true\n6 3 1.5\n42 42 2\n42 3\n5 1\n34\n", "C++ class specializations ({backend})");
     }
     let hpp = Path::new(ROOT).join("tests/interop/special.hpp").display().to_string().replace('\\', "/");
     std::fs::write(e.dir.join("special_field.volt"), format!("use {{ \"{hpp}\" }} as cpp;\nfn main() -> void {{\n    val s: cpp::sp::box<void> = {{ v: 1, tag: 2 }};\n}}\n")).unwrap();
@@ -2193,7 +2193,7 @@ fn cpp_params() {
     // throw through the plain form a stop; a class template's T& and const T& a Volt reference
     // (laid out and held by handle), C++'s write seen
     let e = Env::new("cpp-params");
-    let want = "sum 6\nfill 4 4 4\ntotal 12\ntwice 8 24\nfirst 7 8\napply 5 6 10\n@cpp 42\nshout hi!!\ngrow 2: 7 hi!!~++\ngrow -1: INVALID_ARGUMENT hi!!~++\n@cpp hi!!~++!\nrelay INVALID_ARGUMENT hi!!~++!\nshapes 2 7\npoints 202 45\nspend 15\nasked why??\ncounted 3 7 ab+\narrays 7 4 7 9 4\n@cpp 8 5 1\nalias 8 cells 14\nwrap hey! 4 6\ngauge 40 70 hey!\ntake 5 xyz\ntook 4\nlend 1 1 1 1\nlend moved 2 2\npad 6 hey!##\ntgrow 1: 8 hey!##~+\ntgrow -1: INVALID_ARGUMENT hey!##~+\nwhich 1 2 2 1 2 ab&& cd\nfwd 6 ab&& len 2 4\nnested [[1,2],[3],[]] [[1,2],[3]] [[[1,2],[3],[]],[],[[1,2]]] []\nnested per use [[1,2],[3],[]] 15\nnested [[3],[]] 4.75 hi//you\nmap {1:10,2:20,3:30} {} {4:125,5:50} 140 3 3\nmap {a:1,b:2} {:'',k:'v w'} {1:[],2:[4,5]}\nmap {1:10,2:20,3:30} {1:[],2:[4,5]} 2 2 2\nmap 1 {7:7} 1\npick 2: 20\npick 9: OUT_OF_RANGE\nderef 5 5 3 3 7 7\nsum_ptr 7 size 4 4 8 which 1 2\nchecked 5: 5\nchecked -1: INVALID_ARGUMENT\ntwice 42 tally 4 7 10 10\nkeep 8 11 12\nduo 4.75 which 2 1\nconst pick 2 2 1 1\nstrings 2 3 xab\n";
+    let want = "sum 6\nfill 4 4 4\ntotal 12\ntwice 8 24\nfirst 7 8\napply 5 6 10\n@cpp 42\nshout hi!!\ngrow 2: 7 hi!!~++\ngrow -1: INVALID_ARGUMENT hi!!~++\n@cpp hi!!~++!\nrelay INVALID_ARGUMENT hi!!~++!\nshapes 2 7\npoints 202 45\nspend 15\nasked why??\ncounted 3 7 ab+\narrays 7 4 7 9 4\n@cpp 8 5 1\nalias 8 cells 14\nwrap hey! 4 6\ngauge 40 70 hey!\ntake 5 xyz\ntook 4\nlend 1 1 1 1\nlend moved 2 2\npad 6 hey!##\ntgrow 1: 8 hey!##~+\ntgrow -1: INVALID_ARGUMENT hey!##~+\nwhich 1 2 2 1 2 ab&& cd\nfwd 6 ab&& len 2 4\nnested [[1,2],[3],[]] [[1,2],[3]] [[[1,2],[3],[]],[],[[1,2]]] []\nnested per use [[1,2],[3],[]] 15\nnested [[3],[]] 4.75 hi//you\nmap {1:10,2:20,3:30} {} {4:125,5:50} 140 3 3\nmap {a:1,b:2} {:'',k:'v w'} {1:[],2:[4,5]}\nmap {1:10,2:20,3:30} {1:[],2:[4,5]} 2 2 2\nmap 1 {7:7} 1\npick 2: 20\npick 9: OUT_OF_RANGE\nderef 5 5 3 3 7 7\nsum_ptr 7 size 4 4 8 which 1 2\nchecked 5: 5\nchecked -1: INVALID_ARGUMENT\ntwice 42 tally 4 7 10 10\nkeep 8 11 12\nduo 4.75 which 2 1\nconst pick 2 2 1 1\nstrings 2 3 xab\nmember xyz\nchain abc b\n";
     for backend in ["c", "llvm"] {
         assert_eq!(ok(e.voltc(&["run", "cpp_params.volt", "--backend", backend]), "voltc run cpp_params.volt"), want, "C++ parameters ({backend})");
         let o = e.voltc(&["run", "cpp_params_gthrow.volt", "--backend", backend]);
@@ -2289,6 +2289,18 @@ fn cpp_peruse_errors() {
     let o = e.voltc(&["check", "cpp_params_bad_call.volt"]);
     let err = String::from_utf8_lossy(&o.stderr);
     assert!(!o.status.success() && err.contains("invalid operands") && err.contains("cpp_params_bad_call.volt:6") && !err.contains("type specifier"), "a per-use call's errors: {err}");
+}
+
+#[test]
+fn cpp_peruse2() {
+    // Volt types C++ has no type for (a Volt struct, i32?, an enum with payloads, a tuple, f16, f128:
+    // a mirror of their bytes; a closure and a fn value: a std::function) through C++ templates and
+    // back unchanged; a function pointer result as a Volt fn, an array reference result as a T[N]&
+    let e = Env::new("cpp-peruse2");
+    let want = "struct 3 2.5\nopt 7 null\nenum 1.25\ntuple (4, 0.5)\nclosure 40 21\nowned 23 23 46\nfloat true 1.5\ncount 5\ntry 2 2.5\nfnptr 5 10\narray 50 6\nsame 70\n";
+    for backend in ["c", "llvm"] {
+        assert_eq!(ok(e.voltc(&["run", "cpp_peruse2.volt", "--backend", backend]), "voltc run cpp_peruse2.volt"), want, "per-use calls with every Volt type ({backend})");
+    }
 }
 
 #[test]

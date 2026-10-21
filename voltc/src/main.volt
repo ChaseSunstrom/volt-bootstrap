@@ -1248,7 +1248,7 @@ fn cpp_object(chk: checker&, c: cli&, dir: str, u: u32, live: std::map<u32, bool
     }
     var merr = S("");
     val pp = preprocessor_flags(&c.cc_args);
-    val mflags = cpp_module_flags(chk, &pp, dir, u, std_flag.as_str(), objs, linked, &merr);
+    val mflags = cpp_module_flags(chk, &pp, dir, "", u, std_flag.as_str(), objs, linked, &merr);
     if (merr.len() > 0) {
         die(move merr);
     }
@@ -1269,8 +1269,9 @@ fn cpp_object(chk: checker&, c: cli&, dir: str, u: u32, live: std::map<u32, bool
 // $CXX its own way into dir, their objects added to objs (a module once, though units of two
 // standards import it: linked names it): g++ through a module mapper file naming each one's
 // compiled interface, clang through --precompile and -fmodule-file. The flags the unit is compiled
-// with to import them; what failed in err
-fn cpp_module_flags(chk: checker&, pp: std::vec<str>&, dir: str, u: u32, std_flag: str, objs: std::vec<std::string>&, linked: std::vec<std::string>&, err: std::string&) -> std::vec<std::string> {
+// with to import them; what failed in err. With a directory in keep (an embedded VM's), the C++
+// library's std modules are built there once, for every load
+fn cpp_module_flags(chk: checker&, pp: std::vec<str>&, dir: str, keep: str, u: u32, std_flag: str, objs: std::vec<std::string>&, linked: std::vec<std::string>&, err: std::string&) -> std::vec<std::string> {
     var flags: std::vec<std::string> = {};
     var names: std::vec<std::string> = {};
     var paths: std::vec<std::string> = {};
@@ -1298,6 +1299,7 @@ fn cpp_module_flags(chk: checker&, pp: std::vec<str>&, dir: str, u: u32, std_fla
             put(&paths, src ?? S(""));
         }
     }
+    val n_std = names.len;
     for (m&) in chk.cpp_modules.items() {
         if (m.unit == u) {
             put(&names, S(m.name));
@@ -1316,7 +1318,26 @@ fn cpp_module_flags(chk: checker&, pp: std::vec<str>&, dir: str, u: u32, std_fla
     };
     clang_ = contains(vr.out.as_str(), "clang");
     var files: std::vec<std::string> = {}; // each module's compiled interface
+    var mobjs: std::vec<std::string> = {}; // and its object
     for (i) in 0..names.len {
+        // a std module in keep, named by what builds it: a later load finds it there
+        var at = S(dir);
+        var tag = unum(@cast<u64>(u));
+        if (keep.len > 0 && i < n_std) {
+            var key = copy vr.out;
+            key.append(std_flag);
+            for (w) in cmd.items() {
+                key.push(0);
+                key.append(w);
+            }
+            for (f&) in pp.items() {
+                key.push(0);
+                key.append(*f);
+            }
+            at = S(keep);
+            tag = unum(std::digest::fnv1a(key.as_str()));
+        }
+        put(&mobjs, fmt3("{}/volt_mod_{}_{}.o", copy at, copy tag, unum(@cast<u64>(i))));
         var safe = S("");
         for (ch) in names.at(i).as_str() {
             if (ch == ':' || ch == '/') {
@@ -1326,9 +1347,9 @@ fn cpp_module_flags(chk: checker&, pp: std::vec<str>&, dir: str, u: u32, std_fla
             }
         }
         if (clang_) {
-            put(&files, fmt3("{}/volt_mod_{}_{}.pcm", S(dir), unum(@cast<u64>(u)), move safe));
+            put(&files, fmt3("{}/volt_mod_{}_{}.pcm", move at, move tag, move safe));
         } else {
-            put(&files, fmt3("{}/volt_mod_{}_{}.gcm", S(dir), unum(@cast<u64>(u)), move safe));
+            put(&files, fmt3("{}/volt_mod_{}_{}.gcm", move at, move tag, move safe));
         }
     }
     if (!clang_) {
@@ -1345,59 +1366,64 @@ fn cpp_module_flags(chk: checker&, pp: std::vec<str>&, dir: str, u: u32, std_fla
         put(&flags, fmt("-fmodule-mapper={}", copy mp));
     }
     for (i) in 0..names.len {
-        val obj = fmt3("{}/volt_mod_{}_{}.o", S(dir), unum(@cast<u64>(u)), unum(@cast<u64>(i)));
-        var argv = copy cmd;
-        val fixed: str[3] = { std_flag, "-fPIC", "-w" };
-        for (f) in fixed {
-            put(&argv, f);
-        }
-        for (f&) in pp.items() {
-            put(&argv, *f);
-        }
-        for (f&) in flags.items() {
-            put(&argv, f.as_str());
-        }
-        if (clang_) {
-            val pre: str[5] = { "-Wno-reserved-module-identifier", "--precompile", "-x", "c++-module", "-o" };
-            for (f) in pre {
+        val obj = copy *mobjs.at(i);
+        val built = keep.len > 0 && i < n_std && std::fs::exists(files.at(i).as_str()) && std::fs::exists(obj.as_str());
+        if (!built) {
+            var argv = copy cmd;
+            val fixed: str[3] = { std_flag, "-fPIC", "-w" };
+            for (f) in fixed {
                 put(&argv, f);
             }
-            put(&argv, files.at(i).as_str());
-        } else {
-            val pre: str[4] = { "-c", "-x", "c++", "-o" };
-            for (f) in pre {
-                put(&argv, f);
-            }
-            put(&argv, obj.as_str());
-        }
-        put(&argv, paths.at(i).as_str());
-        val r = std::process::capture(argv.items(), "") catch |e| {
-            *err = fmt("can't run the C++ compiler '{}'", S(cxx));
-            return flags;
-        };
-        if (r.code != 0) {
-            *err = fmt2("the C++ compiler failed on the module {}:\n{}", copy *names.at(i), copy r.err);
-            return flags;
-        }
-        if (clang_) {
-            // the module's object from its precompiled interface; importers find it by name
-            var oargv = copy cmd;
-            val more: str[5] = { std_flag, "-fPIC", "-c", "-o", obj.as_str() };
-            for (f) in more {
-                put(&oargv, f);
+            for (f&) in pp.items() {
+                put(&argv, *f);
             }
             for (f&) in flags.items() {
-                put(&oargv, f.as_str());
+                put(&argv, f.as_str());
             }
-            put(&oargv, files.at(i).as_str());
-            val o = std::process::capture(oargv.items(), "") catch |e| {
+            if (clang_) {
+                val pre: str[5] = { "-Wno-reserved-module-identifier", "--precompile", "-x", "c++-module", "-o" };
+                for (f) in pre {
+                    put(&argv, f);
+                }
+                put(&argv, files.at(i).as_str());
+            } else {
+                val pre: str[4] = { "-c", "-x", "c++", "-o" };
+                for (f) in pre {
+                    put(&argv, f);
+                }
+                put(&argv, obj.as_str());
+            }
+            put(&argv, paths.at(i).as_str());
+            val r = std::process::capture(argv.items(), "") catch |e| {
                 *err = fmt("can't run the C++ compiler '{}'", S(cxx));
                 return flags;
             };
-            if (o.code != 0) {
-                *err = fmt2("the C++ compiler failed on the module {}:\n{}", copy *names.at(i), copy o.err);
+            if (r.code != 0) {
+                *err = fmt2("the C++ compiler failed on the module {}:\n{}", copy *names.at(i), copy r.err);
                 return flags;
             }
+            if (clang_) {
+                // the module's object from its precompiled interface; importers find it by name
+                var oargv = copy cmd;
+                val more: str[5] = { std_flag, "-fPIC", "-c", "-o", obj.as_str() };
+                for (f) in more {
+                    put(&oargv, f);
+                }
+                for (f&) in flags.items() {
+                    put(&oargv, f.as_str());
+                }
+                put(&oargv, files.at(i).as_str());
+                val o = std::process::capture(oargv.items(), "") catch |e| {
+                    *err = fmt("can't run the C++ compiler '{}'", S(cxx));
+                    return flags;
+                };
+                if (o.code != 0) {
+                    *err = fmt2("the C++ compiler failed on the module {}:\n{}", copy *names.at(i), copy o.err);
+                    return flags;
+                }
+            }
+        }
+        if (clang_) {
             put(&flags, fmt2("-fmodule-file={}={}", copy *names.at(i), copy *files.at(i)));
         }
         var once = true;

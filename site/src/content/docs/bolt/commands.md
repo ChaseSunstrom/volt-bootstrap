@@ -113,5 +113,5 @@ are short for `build`, `check`, `run`, `test` and `remove`.
 | `VOLTC` | the compiler bolt runs |
 | `BOLT_HOME` | where git dependencies are cloned (default `$XDG_CACHE_HOME/bolt`, else `~/.cache/bolt`) |
 | `BOLT_INSTALL_ROOT` | where `install` puts executables (`ROOT/bin`) |
-| `BOLT_API` | the `bolt` package build files use (default: `api/` next to bolt, the checkout's `bolt/api`, or `lib/volt/bolt` beside its `bin/`) |
+| `BOLT_API` | the `bolt` package build files use (default: `api/` next to bolt, the checkout's `bolt/api`, `lib/volt/bolt` beside its `bin/`, or the `bolt/api` of the checkout bolt was built from) |
 | `CARGO`, `ZIG`, `GO`, `CC` | what builds `[foreign]` libraries and the Node, Lua and Ruby modules (defaults `cargo`, `zig`, `go`, `cc`) |
