@@ -746,18 +746,41 @@ attach fn skip_noise(this: cparser&) -> bool? {
             put(&this.d.names, move label);
             this.d.label = this.d.names.at(this.d.names.len - 1).as_str();
         }
-        // vector_size(N): the declarator's type is a vector of N bytes
+        // vector_size(N): the type is a vector of N bytes (0: a size voltc can't read, 4 * sizeof(T):
+        // the type is one only C knows)
         val g = this.t[start..this.i];
         for (k) in 0..g.len {
-            if (k + 3 < g.len && (is_id(&g[k], "vector_size") || is_id(&g[k], "__vector_size__")) && is_p(&g[k + 1], "(") && is_p(&g[k + 3], ")")) {
-                match (g[k + 2]) {
-                    .NUM(x) => {
-                        val v = parse_cnum(x);
-                        if (v != null && !(v ?? cint(0, false, false)).is_float && (v ?? cint(0, false, false)).v > 0) {
-                            this.d.vsize = @cast<u64>((v ?? cint(0, false, false)).v);
+            if ((is_id(&g[k], "vector_size") || is_id(&g[k], "__vector_size__")) && k + 1 < g.len && is_p(&g[k + 1], "(")) {
+                var depth: usize = 0;
+                var nums: usize = 0;
+                var other = false;
+                var size: u64 = 0;
+                var j = k + 1;
+                while (j < g.len) {
+                    if (is_p(&g[j], "(")) {
+                        depth += 1;
+                    } else if (is_p(&g[j], ")")) {
+                        depth -= 1;
+                        if (depth == 0) {
+                            break;
                         }
-                    },
-                    default => {},
+                    } else {
+                        match (g[j]) {
+                            .NUM(x) => {
+                                nums += 1;
+                                val v = parse_cnum(x) ?? cfloat(0.0);
+                                if (!v.is_float && v.v > 0) {
+                                    size = @cast<u64>(v.v);
+                                }
+                            },
+                            default => { other = true; },
+                        }
+                    }
+                    j += 1;
+                }
+                this.d.vsize = size;
+                if (other || nums != 1) {
+                    this.d.vsize = 0;
                 }
             }
         }
@@ -790,6 +813,22 @@ fn known_typedef(n: str) -> str? {
 
 // declaration specifiers -> base type; sets `stat` for static/thread-local storage
 attach fn specs(this: cparser&, stat: bool&) -> ctype? {
+    this.d.vsize = null; // (none left over from the declaration before)
+    val t = this.specs_in(stat) ?? return null;
+    val vs = this.d.vsize ?? return t;
+    this.d.vsize = null;
+    return vector_of(move t, vs);
+}
+
+// a vector of `bytes` bytes of t (0 bytes: a size voltc couldn't read)
+fn vector_of(t: ctype, bytes: u64) -> ctype {
+    if (bytes == 0) {
+        return ctype::BAD;
+    }
+    return ctype::VECTOR(bx(move t), bytes);
+}
+
+attach fn specs_in(this: cparser&, stat: bool&) -> ctype? {
     var signed = false;
     var unsigned = false;
     var short = false;
@@ -1122,13 +1161,15 @@ attach fn declarator(this: cparser&, base: ctype) -> cdecl? {
         this.i += 1;
     }
     while (this.skip_noise() ?? return null) {}
-    // (a vector_size attribute before the specifiers, or here after the name)
+    // (a vector_size attribute after the name: this declarator's; one among the specifiers made the
+    // base type the vector already)
     val vs = this.d.vsize;
     this.d.vsize = null;
     if (vs) {
-        ty = ctype::VECTOR(bx(move ty), vs);
+        ty = vector_of(move ty, vs);
     }
     val t = this.suffixes(move ty) ?? return null;
+    this.d.vsize = null; // (one after a function's parameters isn't the next declaration's)
     return { name: name, ty: move t };
 }
 
@@ -1656,9 +1697,15 @@ attach fn ty_of(this: cmapper&, t0: ctype&) -> ty? {
             match (*r) {
                 .CHAR => { es = 1; },
                 .PRIM(p) => { es = prim_bytes(p); },
+                .NAMED(n) => { es = prim_bytes(known_typedef(n) ?? ""); },
                 default => {},
             }
             if (es == 0 || bytes % es != 0) {
+                return null;
+            }
+            if (this.in_fn && bytes != 16) {
+                // a function's: 16 bytes (an SSE or NEON register's) cross as C passes them; other
+                // sizes aren't taken (C passes them in ways LLVM's vector types don't follow)
                 return null;
             }
             val it = this.ty_of(r) ?? return null;
@@ -1715,6 +1762,7 @@ attach fn c_class(this: cmapper&, t: ctype&, depth: u32) -> u8 {
         .STRUCT(tag) => { return this.struct_class(tag, depth + 1); },
         .LDOUBLE => { return 2; },
         .COMPLEX(e) => { return 2; },
+        .VECTOR(e, n) => { return 2; },
         .BAD => { return 2; },
         .VA_LIST => { return 2; },
         default => { return 0; },

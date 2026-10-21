@@ -3,3 +3,5 @@
 // expect: true true true
 // expect: 31
 // expect: true
+// expect: true true 321
+// expect: 10.5 2.5

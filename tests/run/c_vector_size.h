@@ -20,3 +20,14 @@ static inline int vs_sum(const struct vs *s) {
 typedef __int128 v2q __attribute__((vector_size(16)));
 struct vq { int t; v2q v; };
 static inline size_t vq_size(void) { return sizeof(struct vq); }
+/* the attribute among the specifiers (every declarator's), a size in parens, and one voltc can't
+   read (4 * sizeof(float): the struct is partial, laid out by libclang) */
+struct vm { __attribute__((vector_size(16))) int a, b; float c __attribute__((vector_size((8)))); };
+struct vx { int t; float d __attribute__((vector_size(4 * sizeof(float)))); };
+static inline size_t vm_size(void) { return sizeof(struct vm); }
+static inline size_t vx_size(void) { return sizeof(struct vx); }
+static inline int vm_sum(const struct vm *m) { return m->a[0] + m->b[3] + (int)m->c[1]; }
+/* by value: a 16-byte vector, and a struct holding one (C passes it in a vector register) */
+struct w1 { v4f f; };
+static inline float v4f_sum(v4f x) { return x[0] + x[1] + x[2] + x[3]; }
+static inline float w1_get(struct w1 w) { return w.f[1]; }

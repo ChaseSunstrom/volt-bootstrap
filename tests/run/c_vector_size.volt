@@ -13,7 +13,16 @@ fn main() -> void {
     std::println("{} {} {}", @sizeof(c::vs) == c::vs_size(), @offsetof(c::vs, v) == c::vs_off_v(), @offsetof(c::vs, f) == c::vs_off_f());
     std::println("{}", c::vs_sum(&s));
     std::println("{}", @sizeof(c::vq) == c::vq_size());
+    var m: c::vm = {};
+    m.a[0] = 1;
+    m.b[3] = 20;
+    m.c[1] = 300.0;
+    std::println("{} {} {}", @sizeof(c::vm) == c::vm_size(), @sizeof(c::vx) == c::vx_size(), c::vm_sum(&m));
+    val w: c::w1 = { f: { 1.0, 2.5, 3.0, 4.0 } };
+    std::println("{} {}", c::v4f_sum(w.f), c::w1_get(w));
 }
 // expect: true true true
 // expect: 31
 // expect: true
+// expect: true true 321
+// expect: 10.5 2.5
