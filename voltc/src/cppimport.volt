@@ -2133,10 +2133,17 @@ attach fn param(this: cpp_gen&, t: clang::CXType, name: str, i: usize, tparams: 
         val tr = this.traits.get(hc.as_str());
         if (tr) {
             if (!tr->movable && !tr->copyable) {
-                if (k != clang::CXType_RValueReference) {
+                if (k != clang::CXType_RValueReference && name != "this") {
                     return null;
                 }
-                return { vty: move vt, pass: fmt("@cast<void*>(&{})", S(name)), cpp: fmt2("VOLT_MOVE(volt_cpp_obj<{} >(((volt_handle *)({}))->cpp))", copy hc, copy slot) };
+                var own: cpp_arg = { vty: move vt, pass: fmt("@cast<void*>(&{})", S(name)), cpp: fmt2("VOLT_MOVE(volt_cpp_obj<{} >(((volt_handle *)({}))->cpp))", copy hc, copy slot) };
+                if (name == "this") {
+                    // a receiver by value, worked out per use (an && method the class inherits):
+                    // the object itself, as a declared && method takes it (member_list); a
+                    // borrowed handle has none to give, since it can't be copied
+                    own.pre = fmt("if (this.borrowed) {{ @panic(\"can't call an && method through a borrowed handle: {} can't be copied\"); }}", copy hc);
+                }
+                return own;
             }
         }
         return { vty: move vt, pass: fmt("@cast<void*>(&{})", S(name)), cpp: fmt3("volt_cpp_take<{}, {}>({})", copy hc, S(cpp_bool(tr == null || tr->copyable)), copy slot) };

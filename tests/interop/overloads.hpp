@@ -118,6 +118,11 @@ inline Pinned &pinned_shelf() {
     static Pinned p(41);
     return p;
 }
+// a borrowed PinnedCrate, whose && take() is Pinned's (inherited: worked out per use)
+inline PinnedCrate &crate_shelf() {
+    static PinnedCrate c(9);
+    return c;
+}
 }
 // a real function with the name the alias would take keeps it, though declared after
 namespace taken {
