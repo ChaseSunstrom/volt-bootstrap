@@ -35,6 +35,16 @@ public class Point {
     }
 
     @Override
+    public boolean equals(Object o) {
+        return o instanceof Point q && q.x == x && q.y == y;
+    }
+
+    @Override
+    public int hashCode() {
+        return Double.hashCode(x) * 31 + Double.hashCode(y);
+    }
+
+    @Override
     public String toString() {
         return "(" + x + ", " + y + ")";
     }

@@ -28,7 +28,7 @@ fn main() -> !void {
 
 | Java | Volt |
 | --- | --- |
-| a public class, interface or abstract class | a handle: a reference to the object (a copy refers to the same one); `is_null()` for a `null` one |
+| a public class, interface or abstract class | a handle: a reference to the object (a copy refers to the same one); `is_null()` for a `null` one; `as_java_object()` the same object as a `java_object`, for `equals(Object)` or any `Object` parameter |
 | `new T(...)` | `T::new(...)`, one per public constructor |
 | a public method | a method, or `T::f(...)` for a static one; overloads stay overloads |
 | a public field | `x()` and, unless it's `final`, `set_x(v)`; `T::x()` for a static one |
