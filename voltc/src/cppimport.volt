@@ -643,7 +643,11 @@ attach fn instance(this: cpp_gen&, qt: clang::CXType) -> str? {
     // through calls made per use)
     val decl = clang::clang_getTypeDeclaration(ct);
     if (!this.inst_any) {
-        if (!this.own_type(decl)) {
+        // ...and a std::map with no stdcxx form (a std::string key), so one C++ makes is declared
+        // and goes back to C++ by its handle (a const& parameter's Volt std::map& form beside it)
+        val st = std_template(ct) ?? S("");
+        val std_map = st.as_str() == "map" || st.as_str() == "unordered_map";
+        if (!std_map && !this.own_type(decl)) {
             return null;
         }
         // a template Volt declares a generic for isn't one: an instance of it that has no Volt form
@@ -1964,6 +1968,8 @@ fn param_words(parms: std::vec<clang::CXCursor>&, count: usize) -> std::string {
             sfx.append("const_ref");
         } else if (form == 2) {
             sfx.append("ref");
+        } else if (form == 1 && ends_with(c.as_str(), " &&") && starts_with(c.as_str(), "const ")) {
+            sfx.append("const_rref");
         } else if (form == 1 && ends_with(c.as_str(), " &&")) {
             sfx.append("rref");
         } else if (form == 1) {
@@ -2066,6 +2072,9 @@ attach fn param(this: cpp_gen&, t: clang::CXType, name: str, i: usize, tparams: 
                 // a std::vector of std::vectors: a Volt slice of slices, each level copied
                 val inner = this.nested_vec(et, tparams) ?? return null;
                 return { vty: fmt("{}[..]", move inner), pass: S(name), cpp: fmt2("volt_cpp_vec<{} >({})", move vec, copy slot), text_ref: true, map_copy: true };
+            }
+            if (this.handle_of(et) != null) {
+                return null; // a class held by handle: a Volt slice of handles isn't its objects (per use)
             }
             val elem = this.vtype(et, tparams) ?? return null;
             return { vty: fmt("{}[..]", move elem), pass: S(name), cpp: fmt4("{}({}.ptr, {}.ptr + {}.len)", move vec, copy slot, copy slot, copy slot), text_ref: true, map_copy: true };
@@ -2394,7 +2403,11 @@ attach fn result(this: cpp_gen&, t: clang::CXType, tparams: std::vec<str>&) -> c
         }
         val st = std_template(base) ?? S("");
         if (st.as_str() == "vector") {
-            val elem = this.vtype(clang::clang_Type_getTemplateArgumentAsType(clang::clang_getCanonicalType(base), 0), tparams) ?? return null;
+            val et = clang::clang_Type_getTemplateArgumentAsType(clang::clang_getCanonicalType(base), 0);
+            if (this.handle_of(et) != null) {
+                return null; // copied out element by element, which a class held by handle isn't
+            }
+            val elem = this.vtype(et, tparams) ?? return null;
             return { vty: fmt("std::vec<{}>", copy elem), way: ret_way::VECTOR, elem: move elem };
         }
         if (st.as_str() == "function") {
@@ -7370,6 +7383,7 @@ attach fn cpp_instance_as(this: checker&, k: usize, expr: str, types: std::vec<u
     }
     var probe_expr: std::string = {};
     var unit_expr: std::string = {}; // the same in the wrappers' unit (a lambda's type is decltype of it)
+    var seq: std::vec<usize> = {}; // the holes in the order the probe's text has them (probe_writes)
     var i: usize = 0;
     while (i < expr.len) {
         if (expr[i] == '{') {
@@ -7380,6 +7394,7 @@ attach fn cpp_instance_as(this: checker&, k: usize, expr: str, types: std::vec<u
             val h = hole_index(expr[i + 1..e]);
             if (h != null && (h ?? 0) < ptys.len) {
                 val hi = h ?? 0;
+                put(&seq, hi);
                 if (*reads.at(hi) > 0) {
                     probe_expr.append(fmt("volt_rv<{} >()", copy *ptys.at(hi)).as_str());
                     unit_expr.append(fmt("std::declval<{} >()", copy *ptys.at(hi)).as_str());
@@ -7424,6 +7439,7 @@ attach fn cpp_instance_as(this: checker&, k: usize, expr: str, types: std::vec<u
         }
     }
     val fc = found ?? return fails(span, "libclang lost the call");
+    val writes = probe_writes(fc, &seq);
     // the Volt fn, written by the importer from the probe's now concrete signature
     val g = &this.cpp_ctxs.at(k).gen;
     val none: std::vec<str> = {};
@@ -7575,6 +7591,7 @@ attach fn cpp_instance_as(this: checker&, k: usize, expr: str, types: std::vec<u
     val made = d ?? return fails(span, "the C++ call's Volt fn wasn't declared");
     this.cpp_dyn.put(this.intern(move key), made);
     this.cpp_dyn_ret.put(made, this.intern(copy rr.vty));
+    this.cpp_dyn_writes.put(made, writes);
     return made;
 }
 
@@ -8600,7 +8617,8 @@ attach fn cpp_text_template(this: checker&, r: u32, gargs: std::vec<garg>&, args
     var places = false;
     var texts = false;
     var fixed: std::vec<tval> = {}; // each string Volt can't change: where it is (text_written)
-    var placed: std::vec<tval> = {}; // each it may change: where it is (ref_written)
+    var placed: std::vec<tval> = {}; // each it may change: where it is
+    var placed_at: std::vec<usize> = {}; // ...and its hole
     var es: std::vec<expr> = {};
     for (i) in 1..args.len {
         val e = try this.garg_value(args.at(i));
@@ -8652,6 +8670,7 @@ attach fn cpp_text_template(this: checker&, r: u32, gargs: std::vec<garg>&, args
             if (place) {
                 places = true;
                 put(&placed, w);
+                put(&placed_at, i - 1);
                 put(&xtys, rt);
                 put(&xpre, vnew(rt, c));
             } else {
@@ -8687,8 +8706,9 @@ attach fn cpp_text_template(this: checker&, r: u32, gargs: std::vec<garg>&, args
     var none: std::vec<garg> = {};
     var cands: std::vec<u32> = {};
     // a place Volt may change probed first as an lvalue, as C++ reads f(s): of S& and const S& it
-    // runs S&, and a forwarding S&& deduces S&; then every string as text (const S&, S), then every
-    // one as a reference (S&), which C++ would refuse for one that can't change (text_written)
+    // runs S&, and a forwarding S&& deduces S&, which the probe says (probe_writes); then every
+    // string as text (const S&, S), then every one as a reference (S&), which C++ would refuse for
+    // one that can't change (text_written)
     // ponytail: each failed probe is another clang parse, and with another reference argument each
     // is probed with it as an address too (cpp_instance_addr): up to six each time a failing call
     // is checked; cache failed probes if that gets slow
@@ -8700,13 +8720,30 @@ attach fn cpp_text_template(this: checker&, r: u32, gargs: std::vec<garg>&, args
                 }
                 put(&cands, this.cpp_instance(k, text.as_str(), &mtys, false, value, span) catch |e3| { return e; });
                 try this.text_written(&fixed, span);
+                // ...and the placed ones, taken as S& too
+                for (w&) in placed.items() {
+                    this.write_via(w);
+                }
                 return this.pick_call("@cpp", &cands, null, null, &none, &mpre, &es, null, span);
             };
             put(&cands, made);
             return this.pick_call("@cpp", &cands, null, null, &none, &cpre, &es, null, span);
         };
         put(&cands, first);
-        this.ref_written(k, text.as_str(), &ctys, value, &placed, span);
+        // a placed string C++ takes by a non-const reference is a write through the parameter it's
+        // reached through, so a caller lending that parameter a val is refused (fill(S&) yes,
+        // look(const S&) or a std::string_view no)
+        var wr: u64 = 0;
+        val got = this.cpp_dyn_writes.get(first);
+        if (got) {
+            wr = *got;
+        }
+        for (j) in 0..placed.len {
+            val h = *placed_at.at(j);
+            if (h < 64 && ((wr >> @cast<u32>(h)) & 1) != 0) {
+                this.write_via(placed.at(j));
+            }
+        }
         return this.pick_call("@cpp", &cands, null, null, &none, &xpre, &es, null, span);
     }
     val made = this.cpp_instance(k, text.as_str(), &ctys, false, value, span) catch |e| {
@@ -8740,29 +8777,6 @@ attach fn text_written(this: checker&, fixed: std::vec<tval>&, span: span) -> co
     }
 }
 
-// a call C++ took with the strings Volt may change (placed) as references: when it won't take them
-// all as text (ctys: const S& and S do), one is an S&, so each a parameter reaches is a write through
-// that parameter, and a caller lending that parameter a val is refused (fill(S&) yes, look(const S&) no)
-// ponytail: one more probe per such call (cached by its text), and each place counts as written though
-// C++ may take only one of several as S&; probe each alone if that flags a call that only reads
-attach fn ref_written(this: checker&, k: usize, text: str, ctys: std::vec<u32>&, value: bool, placed: std::vec<tval>&, span: span) -> void {
-    var any = false;
-    for (w&) in placed.items() {
-        if (w.via != null) {
-            any = true;
-        }
-    }
-    if (!any) {
-        return;
-    }
-    val reads = this.cpp_instance(k, text, ctys, false, value, span) catch |e| {
-        for (w&) in placed.items() {
-            this.write_via(w);
-        }
-        return;
-    };
-}
-
 // a write through the parameter w is reached through, if it is one; whether it is
 attach fn write_via(this: checker&, w: tval&) -> bool {
     val wv = w.via;
@@ -8774,6 +8788,76 @@ attach fn write_via(this: checker&, w: tval&) -> bool {
         }
     }
     return false;
+}
+
+// the holes C++ takes by a non-const lvalue reference in probe fc's expression, a bit each: every
+// call in it (f(g({0})) too) by the parameter the callee has for each argument (an S& of an S& /
+// const S& pair, a deduced S, a forwarding S&& given an lvalue), each volt_lv or volt_rv call in an
+// argument standing for a hole: the n-th in the text for seq[n]
+fn probe_writes(fc: clang::CXCursor, seq: std::vec<usize>&) -> u64 {
+    var holes: std::vec<clang::CXCursor> = {};
+    var calls: std::vec<clang::CXCursor> = {};
+    var todo = children(fc);
+    while (todo.len > 0) {
+        val c = todo.pop() ?? break;
+        if (clang::clang_getCursorKind(c) == clang::CXCursor_CallExpr) {
+            val n = cursor_name(c);
+            if (n.as_str() == "volt_lv" || n.as_str() == "volt_rv") {
+                put(&holes, c);
+                continue;
+            }
+            put(&calls, c);
+        }
+        for (k&) in children(c).items() {
+            put(&todo, *k);
+        }
+    }
+    // in the text's order (insertion sort: a call has few)
+    for (x) in 1..holes.len {
+        var j = x;
+        while (j > 0 && cursor_offset(*holes.at(j - 1)) > cursor_offset(*holes.at(j))) {
+            val t = *holes.at(j);
+            *holes.at(j) = *holes.at(j - 1);
+            *holes.at(j - 1) = t;
+            j -= 1;
+        }
+    }
+    var mask: u64 = 0;
+    for (call&) in calls.items() {
+        val callee = clang::clang_getCursorReferenced(*call);
+        val n = clang::clang_Cursor_getNumArguments(*call);
+        if (clang::clang_Cursor_isNull(callee) != 0 || n <= 0) {
+            continue;
+        }
+        // a member operator's object is clang's argument 0 (rd >> s), not a parameter: only there
+        // does argument 0 start where the call does (o.f(a) starts at o, its a after)
+        var skip: u32 = 0;
+        if (clang::clang_getCursorKind(callee) == clang::CXCursor_CXXMethod && clang::clang_CXXMethod_isStatic(callee) == 0) {
+            val (cs, ce) = extent_offsets(*call);
+            val (as0, ae0) = extent_offsets(clang::clang_Cursor_getArgument(*call, 0));
+            if (as0 == cs) {
+                skip = 1;
+            }
+        }
+        for (a) in skip..@cast<u32>(n) {
+            val parm = clang::clang_Cursor_getArgument(callee, a - skip);
+            if (clang::clang_Cursor_isNull(parm) != 0) {
+                continue; // past a variadic function's parameters
+            }
+            val pt = clang::clang_getCanonicalType(clang::clang_getCursorType(parm));
+            if (pt.kind != clang::CXType_LValueReference || clang::clang_isConstQualifiedType(clang::clang_getPointeeType(pt)) != 0) {
+                continue;
+            }
+            val (lo, hi) = extent_offsets(clang::clang_Cursor_getArgument(*call, a));
+            for (j) in 0..holes.len {
+                val at = cursor_offset(*holes.at(j));
+                if (at >= lo && at < hi && j < seq.len && *seq.at(j) < 64) {
+                    mask = mask | (@cast<u64>(1) << @cast<u32>(*seq.at(j)));
+                }
+            }
+        }
+    }
+    return mask;
 }
 
 fn hole_index(s: str) -> usize? {

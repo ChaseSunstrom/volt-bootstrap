@@ -1,5 +1,5 @@
-// a mutable std::map& with no handle form has no Volt form (C++ would change a copy): its function
-// stays per use, and a call with a Volt map names the type
+// a mutable std::map& with no stdcxx form takes only the handle of its own (C++ would change a copy
+// of a Volt map): a call with a Volt map is refused, naming both types
 use std::io;
 use { "params.hpp" } as cpp;
 fn main() -> void {

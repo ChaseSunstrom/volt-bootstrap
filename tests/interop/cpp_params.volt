@@ -169,6 +169,15 @@ fn main() -> void {
     var it = cpp::cq::make_item("a");
     var pk: cpp::cq::Picker = {};
     std::println("const pick {} {} {} {}", cpp::cq::pick(&it), pk.f(&it), cpp::cq::pick_cq_Item_ref(&it), pk.f_cq_Item_ref(&it));
+    // through @cpp: a std::string_view parameter only reads (a val lent on to one is fine); a placed
+    // and a fixed string in one call, the placed one written back
+    val kv = std::string::from("ab");
+    var m2 = std::string::from("x");
+    std::println("strings {} {} {}", looked(&kv), @cpp<i32, std::string>("pr::sw::cat2<{t0}>({0}, {1})", &m2, &kv), m2);
+}
+// a reference parameter @cpp passes as a std::string_view: read, not written
+fn looked(s: std::string&) -> i32 {
+    return @cpp<i32, std::string>("pr::sw::look_sv({0})", s);
 }
 // a Volt reference parameter read as its address, in a try_ form
 fn checked_at(r: i32&) -> void {

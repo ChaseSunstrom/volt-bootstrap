@@ -629,6 +629,14 @@ attach fn frame_root(this: checker&, x: expr&) -> str? {
             if (this.through_view(b)) {
                 return null; // an element of a slice field is where the slice points
             }
+            // only an array's element is in the frame: a std::vec's (an index hook's) is on the heap
+            val bt = this.local_part_ty(b);
+            if (bt) {
+                match (*this.t.get(bt)) {
+                    .ARRAY(x, n) => {},
+                    default => { return null; },
+                }
+            }
             return this.frame_root(b);
         },
         default => { return null; },

@@ -1767,6 +1767,16 @@ attach fn needs_wrap(this: cmapper&, t: ctype&) -> bool {
     }
 }
 
+// a vector wider than 16 bytes, or an array of them (lay_out_partial checks C's alignment of it)
+attach fn wide_vector(this: cmapper&, t: ctype&) -> bool {
+    val r = this.resolve(t, 0) ?? return false;
+    match (*r) {
+        .VECTOR(e, n) => { return n > 16; },
+        .ARRAY(e, n) => { return this.wide_vector(e); },
+        default => { return false; },
+    }
+}
+
 // how C passes a member of type t by value, as far as Volt can tell: 0 as integers, 1 with
 // floating-point bytes too, 2 in a way only C knows (a long double, a _Complex, a vector, a type
 // Volt can't name, or a struct holding one)
@@ -2373,6 +2383,9 @@ attach fn lay_out_partial(this: checker&, res: c_imported&, items: std::vec<usiz
                     val off = @cast<u64>(bits / 8);
                     overlap = overlap || off < end;
                     natural = natural && off % @cast<u64>(falign) == 0;
+                    // a vector C aligns below its size (AArch64 aligns a 32-byte one to 16) is one
+                    // Volt's own layout aligns to its size: C's offsets place the struct
+                    natural = natural && falign >= field_vector(rt, f.name);
                     if (falign > most) {
                         most = falign;
                     }
@@ -2841,11 +2854,13 @@ attach fn c_items(this: checker&, d: cdecls&, res: c_imported&, span: span) -> v
     var partial_items: std::vec<usize> = {};
     var struct_items: std::vec<usize> = {}; // every struct's item, and its tag
     var struct_tags: std::vec<str> = {};
+    var wide_items: std::vec<usize> = {}; // partial only for a wide vector
     for (s&) in d.structs.items() {
         val name = m.names.get(s.tag) ?? continue;
         val c = c_names.get(s.tag) ?? continue;
         var fields: std::vec<field> = {};
         var partial = false;
+        var wide = false;
         if (s.fields) {
             for (f&) in s.fields.items() {
                 val t = m.ty_of(&f.ty);
@@ -2853,14 +2868,20 @@ attach fn c_items(this: checker&, d: cdecls&, res: c_imported&, span: span) -> v
                     partial = true; // a member Volt can't read: only C knows the layout
                     continue;
                 }
+                // a vector wider than 16 bytes: C may align it below its size (AArch64 to 16), so
+                // libclang lays the struct out (lay_out_partial)
+                wide = wide || m.wide_vector(&f.ty);
                 put(&fields, { name: f.name, ty: t ?? @panic("ty"), fallback: null, vis: vis::PUBLIC, span: span });
             }
         }
-        put(&res.items, m.citem(item_kind::STRUCT({ name: *name, spec: null, fields: move fields, is_extern: true, is_comptime: false, c_name: *c, c_partial: partial, c_union: s.is_union })));
+        put(&res.items, m.citem(item_kind::STRUCT({ name: *name, spec: null, fields: move fields, is_extern: true, is_comptime: false, c_name: *c, c_partial: partial || wide, c_union: s.is_union })));
         put(&struct_items, res.items.len - 1);
         put(&struct_tags, s.tag);
-        if (partial && s.fields != null) {
+        if ((partial || wide) && s.fields != null) {
             put(&partial_items, res.items.len - 1);
+        }
+        if (wide && !partial) {
+            put(&wide_items, res.items.len - 1);
         }
     }
     // libclang sees what the C compiler will: the headers, then the typedefs and accessors above
@@ -2870,6 +2891,15 @@ attach fn c_items(this: checker&, d: cdecls&, res: c_imported&, span: span) -> v
         all_c.push('\n');
     }
     this.lay_out_partial(res, &partial_items, all_c.as_str(), span);
+    // libclang gave no layout: Volt's own, which is C's wherever C aligns a vector to its size
+    for (k&) in wide_items.items() {
+        match (res.items.at(*k).kind) {
+            .STRUCT(sd&) => {
+                sd.c_partial = false;
+            },
+            default => {},
+        }
+    }
     // which structs only C can pass by value, now that their layouts are known
     for (k) in 0..struct_items.len {
         match (res.items.at(*struct_items.at(k)).kind) {

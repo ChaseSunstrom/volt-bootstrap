@@ -63,12 +63,20 @@ attach fn program(this: checker&) -> compile_error!void {
         this.use_fn(i);
         mi = i;
     }
-    // a plain export fn's C name is fixed: taken before the roots below pick generated names (an
-    // async fn's helpers, helper_c_name), whichever comes first in the source
+    // an export fn's C name is fixed: taken before the roots below pick generated names (an async
+    // fn's helpers, helper_c_name), whichever comes first in the source; an attach fn's carries its
+    // receiver's type (Type_name), so it's made now, which names it
     for (di) in 0..this.decls.len {
         val d = @cast<u32>(di);
         val f = this.fn_decl_of(d) ?? continue;
-        if (f.is_export && !f.is_attach && this.fn_generics(d).len == 0) {
+        if (f.is_export && this.fn_generics(d).len == 0) {
+            if (f.is_attach) {
+                // (one the roots below make: a library's own package's)
+                if (lib == null || (this.pkg_of(d) ?? "") == (lib ?? "")) {
+                    this.fn_inst(d, {}, this.item_of(d).span) catch |e| { continue; };
+                }
+                continue;
+            }
             val none: std::vec<param_info> = {};
             val no_args: std::vec<gval> = {};
             this.used_c_names.put(f.c_name ?? this.export_c_name(d, f.name, false, &none, &no_args), 1);

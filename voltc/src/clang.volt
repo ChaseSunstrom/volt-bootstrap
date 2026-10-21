@@ -418,6 +418,16 @@ fn cursor_offset(c: clang::CXCursor) -> u32 {
     return off;
 }
 
+// the byte offsets in its file where a cursor's text starts and ends (its expansion's)
+fn extent_offsets(c: clang::CXCursor) -> (u32, u32) {
+    val r = clang::clang_getCursorExtent(c);
+    var lo: u32 = 0;
+    var hi: u32 = 0;
+    clang::clang_getExpansionLocation(clang::clang_getRangeStart(r), null, null, null, &lo);
+    clang::clang_getExpansionLocation(clang::clang_getRangeEnd(r), null, null, null, &hi);
+    return (lo, hi);
+}
+
 // whether a parameter has a default argument: a = outside every ( ) [ ] { } and template < > of its
 // own tokens (a template's own = is outside its extent). ponytail: raw tokens, so a default a macro
 // supplies (f(int x DEF), #define DEF = 3) is invisible, and a comparison < directly in a template
@@ -502,6 +512,31 @@ attach fn record_type(this: clang_tu&, c_name: str) -> clang::CXType? {
         }
     }
     return null;
+}
+
+// the size of field `name`'s vector (of record rt, or of an anonymous member), or of its array's
+// vectors (vector_size, ext_vector_type); 0 when it isn't one
+fn field_vector(rt: clang::CXType, name: str) -> i64 {
+    for (c&) in children(clang::clang_getTypeDeclaration(rt)).items() {
+        val k = clang::clang_getCursorKind(*c);
+        if (k == clang::CXCursor_FieldDecl && cursor_name(*c).as_str() == name) {
+            var t = clang::clang_getCanonicalType(clang::clang_getCursorType(*c));
+            while (t.kind == clang::CXType_ConstantArray) {
+                t = clang::clang_getCanonicalType(clang::clang_getArrayElementType(t));
+            }
+            if (t.kind == clang::CXType_Vector || t.kind == clang::CXType_ExtVector) {
+                return clang::clang_Type_getSizeOf(t);
+            }
+            return 0;
+        }
+        if ((k == clang::CXCursor_StructDecl || k == clang::CXCursor_UnionDecl) && clang::clang_Cursor_isAnonymousRecordDecl(*c) != 0) {
+            val n = field_vector(clang::clang_getCursorType(*c), name);
+            if (n > 0) {
+                return n;
+            }
+        }
+    }
+    return 0;
 }
 
 // the size and alignment of record type rt's field `name` (0s when it has none)
