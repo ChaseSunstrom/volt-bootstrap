@@ -56,7 +56,7 @@ impl Drop for Env {
 /// in \r\n: read as \n)
 fn ok(o: Output, what: &str) -> String {
     let out = String::from_utf8_lossy(&o.stdout).replace("\r\n", "\n");
-    assert!(o.status.success(), "{what} failed\n--- stdout\n{out}\n--- stderr\n{}", String::from_utf8_lossy(&o.stderr));
+    assert!(o.status.success(), "{what} failed ({})\n--- stdout\n{out}\n--- stderr\n{}", o.status, String::from_utf8_lossy(&o.stderr));
     out
 }
 
