@@ -2239,7 +2239,10 @@ fn written_c_type(t: clang::CXType) -> std::string? {
             // libc++'s std::size_t is `using ::size_t`: clang's UsingType, which libclang shows as
             // no kind it names, so by its spelling
             val sp = type_spelling(x);
-            val n = sp.as_str();
+            var n = sp.as_str();
+            if (starts_with(n, "const ")) {
+                n = n[6..n.len]; // (a const std::size_t * parameter's pointee)
+            }
             if (n == "size_t" || n == "std::size_t") {
                 return S("usize");
             }
