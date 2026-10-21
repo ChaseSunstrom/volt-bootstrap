@@ -2341,6 +2341,17 @@ fn cpp_clang_root() {
     let o = e.voltc(&["check", "cpp_clang_root_errors.volt"]);
     let err = String::from_utf8_lossy(&o.stderr);
     assert!(!o.status.success() && err.contains("E is a C++ import's cpp_error, not cpp_error") && err.contains("'s' is a val, and grow changes it") && !err.contains("parameter without var"), "a clang-typed @cpp's file is no C++ import: {err}");
+    // per-use @cpps in a nested namespace declared before two imports, needing the second's headers
+    // (imports are all declared before any body is checked, so no implicit context comes first)
+    for backend in ["c", "llvm"] {
+        assert_eq!(ok(e.voltc(&["run", "cpp_clang_root_later.volt", "--backend", backend]), "voltc run cpp_clang_root_later.volt"), "later 57\n", "a per-use @cpp needing a later import's headers ({backend})");
+    }
+    // ...where no import makes it: the error of the one that has the name, else the first's
+    let o = e.voltc(&["check", "cpp_clang_root_later_errors.volt"]);
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(!o.status.success() && err.contains("no matching function for call to 'grow'") && !err.contains("undeclared identifier 'pr'") && err.contains("undeclared identifier 'nowhere'"), "a per-use @cpp no import makes: {err}");
+    // ...and one with no import at all
+    assert_eq!(ok(e.voltc(&["run", "cpp_clang_root_text.volt"]), "voltc run cpp_clang_root_text.volt"), "text 4\n", "@cpp<R, std::string> with no C++ import");
 }
 
 #[test]
