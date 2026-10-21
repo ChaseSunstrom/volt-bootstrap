@@ -1941,14 +1941,31 @@ fn ref_sibling(c: clang::CXCursor) -> bool {
     return false;
 }
 
-// an alias's suffix: its parameters' C++ types as words (long_long)
+// an alias's suffix: its parameters' C++ types as words (long_long); one of a template's own type by
+// its form (value, ref, const_ref, rref), one inside another type as written (std_vector_S_ref), not
+// clang's type-parameter-0-0
 fn param_words(parms: std::vec<clang::CXCursor>&, count: usize) -> std::string {
     var sfx: std::string = {};
     for (i) in 0..count {
         if (i > 0) {
             sfx.push('_');
         }
-        sfx.append(name_words(canon(clang::clang_getCursorType(*parms.at(i))).as_str()).as_str());
+        val t = clang::clang_getCursorType(*parms.at(i));
+        val c = canon(t);
+        val form = tparam_form(t);
+        if (form == 2 && starts_with(c.as_str(), "const ")) {
+            sfx.append("const_ref");
+        } else if (form == 2) {
+            sfx.append("ref");
+        } else if (form == 1 && ends_with(c.as_str(), " &&")) {
+            sfx.append("rref");
+        } else if (form == 1) {
+            sfx.append("value");
+        } else if (contains(c.as_str(), "type-parameter")) {
+            sfx.append(name_words(type_spelling(t).as_str()).as_str());
+        } else {
+            sfx.append(name_words(c.as_str()).as_str());
+        }
     }
     return sfx;
 }

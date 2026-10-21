@@ -2156,9 +2156,11 @@ fn cpp_params() {
     // a function template's S& and const S& a Volt S& (S what the reference names), S and S&& a
     // value (S&&'s a var, which C++ moves from); S* stays a pointer; beside an S& or const S&
     // overload, the S or S&& one has a suffixed name (both would take a Volt reference)
-    for decl in ["fn wrap(s: S&) -> void", "fn len(s: S&) -> u64", "fn gauge(s: S&) -> i32", "fn pad(s: S&, n: T) -> i32", "fn grow(s: S&, n: i32) -> i32", "fn which(s: S&) -> i32", "fn size_of(a0: S&) -> i32", "fn bump(s: S) -> i32", "fn take(var s: S) -> i32", "fn fwd(var s: S) -> i32", "fn size_by(a0: S) -> i32", "fn deref(p: S*) -> i32", "fn lend(a0: S&) -> i32", "fn give(a0: S&) -> i32", "fn lend_type_parameter_0_0_rref(var a0: S) -> i32", "fn give_type_parameter_0_0_rref(var a0: S) -> i32"] {
+    for decl in ["fn wrap(s: S&) -> void", "fn len(s: S&) -> u64", "fn gauge(s: S&) -> i32", "fn pad(s: S&, n: T) -> i32", "fn grow(s: S&, n: i32) -> i32", "fn which(s: S&) -> i32", "fn size_of(a0: S&) -> i32", "fn bump(s: S) -> i32", "fn take(var s: S) -> i32", "fn fwd(var s: S) -> i32", "fn size_by(a0: S) -> i32", "fn deref(p: S*) -> i32", "fn lend(a0: S&) -> i32", "fn give(a0: S&) -> i32", "fn lend_rref(var a0: S) -> i32", "fn give_rref(var a0: S) -> i32", "fn which_const_ref(a0: S&) -> i32"] {
         assert!(src.contains(decl), "{decl}: {src}");
     }
+    // the overload aliases are named by their parameters' forms, not clang's type-parameter-0-0
+    assert!(!src.contains("type_parameter"), "an alias named from clang's spelling: {src}");
     // a class template's T& (a generic struct's member) a Volt T&, as a function template's is; its
     // const T& a value (a constructor's too)
     for decl in ["attach fn bump(this: keep<T>&, x: T&) -> void", "attach fn peek(this: keep<T>&, x: T) -> T", "attach fn new(static this: duo<T>, x: T, y: T) -> duo<T>", "attach fn sum(this: duo<T>&, k: T) -> T"] {
