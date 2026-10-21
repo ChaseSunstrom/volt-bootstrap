@@ -1980,16 +1980,26 @@ fn value_twin(c: clang::CXCursor) -> bool {
     return false;
 }
 
-// a free function template of a value_twin pair, called through a pointer of its own type so C++
-// takes exactly this one: "static_cast<int(*)(volt_cpp_id<{t0} >::type &) >(&tw::twin<{t0}>)(" for
-// call "tw::twin<{t0}>(" (n: the template's parameters, {t0}..); null when it isn't one, or a type
-// names a parameter that isn't its own
-fn pick_twin(c: clang::CXCursor, call: str, n: usize) -> std::string? {
+// a function template of a value_twin pair, called through a pointer of its own type so C++ takes
+// exactly this one: "static_cast<int(*)(volt_cpp_id<{t0} >::type &) >(&tw::twin<{t0}>)(" for call
+// "tw::twin<{t0}>(" (a static method's too); an instance method's call "OBJ.get<{t0}>(" (dot: the
+// index of its '.', else call.len) through a member pointer with the method's qualifiers,
+// "(OBJ.*static_cast<int(tw::Acc::*)(volt_cpp_id<{t0} >::type) const >(&tw::Acc::get<{t0}>))(" (n:
+// the template's parameters, {t0}..); null when it isn't one, or a type names a parameter that
+// isn't its own
+fn pick_twin(c: clang::CXCursor, call: str, n: usize, dot: usize) -> std::string? {
     if (clang::clang_getCursorKind(c) != clang::CXCursor_FunctionTemplate || !ends_with(call, "(") || !value_twin(c)) {
         return null;
     }
-    val pk = clang::clang_getCursorKind(clang::clang_getCursorSemanticParent(c));
+    val parent = clang::clang_getCursorSemanticParent(c);
+    val pk = clang::clang_getCursorKind(parent);
     if (pk == clang::CXCursor_ClassTemplate || pk == clang::CXCursor_ClassTemplatePartialSpecialization) {
+        return null;
+    }
+    val member = dot < call.len;
+    val whole = canon(clang::clang_getCursorType(c));
+    if (member && (contains(whole.as_str(), ") volatile") || contains(whole.as_str(), ") const volatile"))) {
+        // ponytail: a volatile method keeps the plain call (no binding says volatile)
         return null;
     }
     var ty = canon(clang::clang_getCursorResultType(c));
@@ -1997,7 +2007,17 @@ fn pick_twin(c: clang::CXCursor, call: str, n: usize) -> std::string? {
         // a function pointer or an array reference: R(*)(...) can't wrap it
         return null;
     }
-    ty.append("(*)(");
+    var cls: std::string = {};
+    if (member) {
+        cls = canon(clang::clang_getCursorType(parent));
+        if (contains(cls.as_str(), "(")) {
+            // an unnamed class: "(anonymous struct at ...)" names nothing C++ can point into
+            return null;
+        }
+        ty.append(fmt("({}::*)(", copy cls).as_str());
+    } else {
+        ty.append("(*)(");
+    }
     val ps = params_of(c);
     for (i) in 0..ps.len {
         if (i > 0) {
@@ -2012,6 +2032,15 @@ fn pick_twin(c: clang::CXCursor, call: str, n: usize) -> std::string? {
         ty.append("...");
     }
     ty.push(')');
+    if (member && clang::clang_CXXMethod_isConst(c) != 0) {
+        ty.append(" const");
+    }
+    val rq = clang::clang_Type_getCXXRefQualifier(clang::clang_getCursorType(c));
+    if (member && rq == clang::CXRefQualifier_LValue) {
+        ty.append(" &");
+    } else if (member && rq == clang::CXRefQualifier_RValue) {
+        ty.append(" &&");
+    }
     // highest first: type-parameter-0-1 is in type-parameter-0-10
     var i = n;
     while (i > 0) {
@@ -2020,6 +2049,9 @@ fn pick_twin(c: clang::CXCursor, call: str, n: usize) -> std::string? {
     }
     if (contains(ty.as_str(), "type-parameter-")) {
         return null;
+    }
+    if (member) {
+        return fmt4("({}.*static_cast<{} >(&{}::{}))(", S(call[0..dot]), move ty, move cls, S(call[dot + 1..call.len - 1]));
     }
     return fmt2("static_cast<{} >(&{})(", move ty, S(call[0..call.len - 1]));
 }
@@ -3300,14 +3332,23 @@ attach fn callable_of(this: cpp_gen&, generics: str, head: str, has_params: bool
         val vn = my_head.as_str()[10..paren];
         pin = fmt3("if (this.borrowed) {{ @panic(\"can't call {}::{} (an && method) through a borrowed handle: {} can't be copied\"); }}", copy this.pinned, S(vn), copy this.pinned);
     }
-    // one of a template pair f(S&) / f(S): through a pointer of its own type, which takes every
-    // argument, so it has no forms without its defaulted ones (C++ couldn't pick one for them)
-    var pick: std::string? = null;
-    if (self_arg == null) {
-        pick = pick_twin(fn_cursor, call, tparams.len);
-        if (pick != null) {
-            optional = 0;
+    // one of a template pair f(S&) / f(S): through a pointer of its own type (a member pointer on
+    // the object, as my_call has it, for a method), which takes every argument, so it has no forms
+    // without its defaulted ones (C++ couldn't pick one for them)
+    var my_dot = my_call.len();
+    if (self_arg != null) {
+        for (i) in 0..my_call.len() {
+            if (my_call.as_str()[i] == '.') {
+                my_dot = i;
+            }
         }
+    }
+    var pick: std::string? = null;
+    if (self_arg == null || my_dot < my_call.len()) {
+        pick = pick_twin(fn_cursor, my_call.as_str(), tparams.len, my_dot);
+    }
+    if (pick != null) {
+        optional = 0;
     }
     var aliased = false;
     // every count of trailing default arguments, most first
