@@ -32,6 +32,14 @@ struct box<T*> {
     T deref() { hits += 1; return *p; }
 };
 
+// a class spelled with a quote in it (a char template argument), returned by value: its handle is
+// made in C++ text inside a Volt string literal
+template <char C>
+struct mark {
+    int code() const { return C; }
+};
+inline mark<'"'> quote_mark() { return mark<'"'>(); }
+
 inline int box_int_size() { return int(sizeof(box<int>)); }
 // a specialization in a signature: the import's handle, as Volt's box<void> is; and a partial
 // specialization's instance only signatures name (the import reads no bodies, so nothing makes it

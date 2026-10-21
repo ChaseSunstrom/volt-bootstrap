@@ -17,4 +17,5 @@ fn main() -> void {
     std::println("{} {}", cpp::sp::peek(&p), p.hits);
     val l: cpp::sp::box<i64> = { v: 5, tag: 1 };
     std::println("{} {}", l.v, l.get_tag());
+    std::println("{}", cpp::sp::quote_mark().code());
 }
