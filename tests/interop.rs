@@ -282,7 +282,8 @@ fn bindings_round_trip() {
             std::fs::copy(Path::new(ROOT).join("tests/interop/client.go"), gdir.join("main.go")).unwrap();
             std::fs::write(gdir.join("go.mod"), "module client\n\ngo 1.22\n").unwrap();
             let flags = format!("-L{lib_dir} -Wl,-rpath,{lib_dir}");
-            let go = |args: &[&str]| Command::new("go").args(args).current_dir(&gdir).env("CGO_LDFLAGS", &flags).env("GOFLAGS", "-mod=mod").env("GOPROXY", "off").output().unwrap();
+            // (PATH: Windows finds the library's DLL there, not by rpath)
+            let go = |args: &[&str]| Command::new("go").args(args).current_dir(&gdir).env("CGO_LDFLAGS", &flags).env("GOFLAGS", "-mod=mod").env("GOPROXY", "off").env("PATH", common::path_with(&lib_dir)).output().unwrap();
             ok(go(&["vet", "./..."]), "go vet");
             let unformatted = ok(Command::new("gofmt").args(["-l", "mathlib"]).current_dir(&gdir).output().unwrap(), "gofmt -l");
             assert_eq!(unformatted, "", "gofmt would change the Go bindings ({backend})");
@@ -582,7 +583,8 @@ fn bindings_shapes() {
         // Python: client_shapes.py with shapelib.py, printing the library's leak report itself (and
         // after the rest, what only Python checks: callbacks' exceptions, what Volt can't take)
         let py = Command::new("python3").arg(Path::new(ROOT).join("tests/interop/client_shapes.py")).env("PYTHONPATH", e.path("")).env("VOLT_SHAPELIB_LIB", format!("{lib}/{}", dylib("shapelib"))).output().unwrap();
-        assert_eq!(String::from_utf8_lossy(&py.stderr), "volt live: 0\n", "client_shapes.py ({backend}): the library's allocations at exit");
+        // (Python's stderr is text: \r\n on Windows)
+        assert_eq!(String::from_utf8_lossy(&py.stderr).replace("\r\n", "\n"), "volt live: 0\n", "client_shapes.py ({backend}): the library's allocations at exit");
         let tail = "raised ValueError ValueError ValueError ValueError\nwrong type TypeError\nwrong length ValueError ValueError\nrefused ValueError ValueError ValueError\nkept ValueError ann 5\nfatal 101 True\n";
         assert_eq!(ok(py, "python3 client_shapes.py"), format!("checked true OVERDRAWN\nlimit true OVERDRAWN\nsign positive not positive\n{SHAPES_OUT}{tail}"), "client_shapes.py ({backend})");
         // Go: a module with the generated cgo package; the client prints the leak report to stderr
@@ -594,7 +596,7 @@ fn bindings_shapes() {
             std::fs::copy(Path::new(ROOT).join("tests/interop/client_shapes.go"), gdir.join("main.go")).unwrap();
             std::fs::write(gdir.join("go.mod"), "module client\n\ngo 1.22\n").unwrap();
             let flags = format!("-L{lib} {rpath}");
-            let go = |args: &[&str]| Command::new("go").args(args).current_dir(&gdir).env("CGO_LDFLAGS", &flags).env("GOFLAGS", "-mod=mod").env("GOPROXY", "off").output().unwrap();
+            let go = |args: &[&str]| Command::new("go").args(args).current_dir(&gdir).env("CGO_LDFLAGS", &flags).env("GOFLAGS", "-mod=mod").env("GOPROXY", "off").env("PATH", common::path_with(&lib)).output().unwrap();
             let unformatted = ok(Command::new("gofmt").args(["-l", "."]).current_dir(&gdir).output().unwrap(), "gofmt -l");
             assert_eq!(unformatted, "", "gofmt would change these ({backend})");
             ok(go(&["vet", "./..."]), "go vet (shapes)");

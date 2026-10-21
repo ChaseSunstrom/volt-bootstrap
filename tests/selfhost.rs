@@ -198,7 +198,8 @@ fn bare_metal(voltc: &Path, std_dir: &Path) {
         'program: for program in programs {
             let expected = if *program == "blinky" { "expected.txt".to_string() } else { format!("expected-{program}.txt") };
             for release in ["", "1"] {
-                let o = Command::new(dir.join("run.sh")).env("VOLTC", voltc).env("VOLT_STD", std_dir).env("RELEASE", release).env("TARGET", target).env("PROGRAM", program).env("CC", "false").output().unwrap();
+                // (through sh: Windows runs no script by its #! line)
+                let o = Command::new("sh").arg(dir.join("run.sh")).env("VOLTC", voltc).env("VOLT_STD", std_dir).env("RELEASE", release).env("TARGET", target).env("PROGRAM", program).env("CC", "false").output().unwrap();
                 if o.status.code() == Some(77) {
                     eprintln!("bare metal: skipped {board} {target} (no qemu or ld.lld)");
                     break 'program;
@@ -403,6 +404,11 @@ fn runtime_compiles_for_every_target() {
                 cc.arg("-DVOLT_DEBUG_ALLOC");
             }
             let o = cc.arg("-I").arg(root.join("runtime")).arg(&unit).arg("-o").arg(dir.join(format!("{t}.o"))).output().unwrap();
+            if !o.status.success() && String::from_utf8_lossy(&o.stderr).contains("No available targets are compatible") {
+                // (an LLVM built without that target: Windows' has no RISC-V)
+                eprintln!("runtime: skipped {t} (this clang has no such target)");
+                break;
+            }
             assert!(o.status.success(), "the runtime doesn't compile for {t} (debug {debug}):\n{}", String::from_utf8_lossy(&o.stderr));
             // every print takes a lock that can wait, so what the runtime imports, every program links:
             // on Windows that's kernel32 only (WaitOnAddress is looked up; MinGW won't link it by default)
