@@ -71,7 +71,8 @@ A union is a struct whose fields share their memory: `u.word = 1` writes it, `u.
 back, and a literal sets one member. An anonymous struct or union member's fields are the outer
 struct's, as in C, and an anonymous struct that types a named field is `OUTER_FIELD`. A bitfield
 has no address, so C reads and writes it: each one gets `STRUCT_get_FIELD(&s)` and
-`STRUCT_set_FIELD(&s, v)`.
+`STRUCT_set_FIELD(&s, v)`, unless the header declares that name itself: then the name is the
+header's.
 
 ```c
 /* packet.h */
