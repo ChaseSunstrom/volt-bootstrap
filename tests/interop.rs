@@ -1883,6 +1883,24 @@ fn cpp_derive_any() {
 }
 
 #[test]
+fn cpp_derive3() {
+    // a Volt subclass overriding virtual methods that take a std::string&, give back a reference,
+    // are overloads of one name (draw, draw_double), &-qualified or private; a type overriding
+    // none keeps C++'s own (the private one too); a class whose pure virtual methods take a
+    // std::string& or are private can be derived from; with or without RTTI
+    let e = Env::new("cpp-derive3");
+    let want = "x-volt 15 202 7\n3007 2 190 n 15\nx-base 5 100 3\n2003 1 10\nmid 6003\ntwo 52 16 78 12\nshy 19\nin-sunk/42\n";
+    for backend in ["c", "llvm"] {
+        assert_eq!(ok(e.voltc(&["run", "cpp_derive3.volt", "--backend", backend]), "voltc run cpp_derive3.volt"), want, "C++ derive, references ({backend})");
+    }
+    assert_eq!(ok(e.voltc_cxx(&["run", "cpp_derive3.volt"], Some("c++ -fno-rtti")), "voltc run cpp_derive3.volt (-fno-rtti)"), want, "C++ derive, references, without RTTI");
+    // an && method stays C++'s, saying why
+    let shown = Command::new(&e.voltc).args(["check", "cpp_derive3.volt", "--std"]).arg(Path::new(ROOT).join("std")).current_dir(Path::new(ROOT).join("tests/interop")).env("VOLT_SHOW_CPP", "1").output().unwrap();
+    let src = String::from_utf8_lossy(&shown.stderr);
+    assert!(src.contains("// (d3::Base::gone is C++'s own in a Volt type deriving from it: an && method)"), "an && virtual: {src}");
+}
+
+#[test]
 fn cpp_module() {
     // a C++20 named module (its interface imports std) and a header doing `import std;`: read by
     // libclang from clang-precompiled modules, built by $CXX its own way (g++'s module mapper,
