@@ -47,8 +47,8 @@ The program still reads the package's sources, since templates are instantiated 
 takes its non-generic functions from the library. bolt builds every dependency this way, once per
 profile. The exception is a package with a global whose type holds a trait union, or an `export fn`
 taking or giving one: its layout and tags depend on the types the program attaches, so voltc builds
-that package from source and warns why, and the
-same for every linked package that uses it (a path starting with its name), since their libraries
+that package from source and warns why, whether or not the program attaches anything to that
+trait, and the same for every linked package that uses it (a path starting with its name), since their libraries
 refer to its symbols. `voltc lib` never does this: a library built with `--link` keeps its
 references to the packages it links, and the program linking it decides.
 

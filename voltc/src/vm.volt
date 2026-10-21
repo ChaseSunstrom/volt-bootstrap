@@ -396,7 +396,7 @@ fn held_unions(chk: checker&, pkg: str) -> std::vec<held_union> {
     var out: std::vec<held_union> = {};
     var from: u32 = 0;
     loop {
-        val w = chk.union_global(pkg, from, true) ?? return out;
+        val w = chk.union_global(pkg, from) ?? return out;
         from = w.decl + 1;
         for (u) in 0..chk.unions.len {
             var seen: idset = {};
