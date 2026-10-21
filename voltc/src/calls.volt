@@ -712,7 +712,17 @@ attach fn builtin(this: checker&, name: str, gargs: std::vec<garg>&, args_opt: s
         val loc = this.ir.node(ir_kind::CSTR(this.loc(span)), CSTR);
         return vnew(NEVER, this.ir.rt_call("volt_panic_str", nodes2(v.c, loc), NEVER));
     }
-    return fail(span, fmt("unknown builtin @{}", S(name)));
+    // (an assertion is std::testing's; a typo names the builtin it's close to)
+    if (name == "assert" || name == "assert_eq" || name == "expect") {
+        return fail(span, fmt("unknown builtin @{}: assertions are std::testing's (use std::testing; then try std::testing::assert(cond) in a test block)", S(name)));
+    }
+    var names: std::vec<str> = {};
+    val defs = builtin_defs();
+    for (b&) in defs.items() {
+        put(&names, b.name);
+    }
+    val near = closest(name, &names) ?? return fail(span, fmt("unknown builtin @{}", S(name)));
+    return fail(span, fmt2("unknown builtin @{}: did you mean @{}?", S(name), S(near)));
 }
 
 // what a T& or T* points at
