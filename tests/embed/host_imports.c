@@ -235,17 +235,18 @@ static void header_inline_changes(voltvm_volt_vm *vm, const char *what) {
 
 // a script imported header h (with `use` text attrs before it) calling its fn hk, then h was removed
 // (kin.h, which it includes, stays): a later load in that VM goes on (it re-reads the script's
-// imports), here one whose own header's function needs a library built; a new script importing h is
-// refused, naming it
-static void kept_removed(voltvm_volt_vm *vm, const char *what, const char *file, const char *text, const char *attrs, const char *call) {
+// imports), here one whose own header's function needs a library built, and another after kin.h is
+// edited; a new script importing h is refused, naming it, and loads once h is back (as back)
+static void kept_removed(voltvm_volt_vm *vm, const char *what, const char *file, const char *text, const char *back, const char *attrs, const char *call) {
     char dir[] = "/tmp/voltvm-test-XXXXXX";
     if (!mkdtemp(dir)) {
         printf("%s: no temporary directory\n", what);
         return;
     }
-    char h[64], g[64], in[64], src[512];
+    char h[64], g[64], g2[64], in[64], src[512];
     snprintf(h, sizeof h, "%s/%s", dir, file);
     snprintf(g, sizeof g, "%s/kg.h", dir);
+    snprintf(g2, sizeof g2, "%s/kg2.h", dir);
     snprintf(in, sizeof in, "%s/kin.h", dir);
     snprintf(src, sizeof src, "%suse { \"%s\" } as k;\nexport fn kr() -> i32 { return k::%s(); }\n", attrs, h, call);
     FILE *f = fopen(in, "w");
@@ -267,23 +268,51 @@ static void kept_removed(voltvm_volt_vm *vm, const char *what, const char *file,
         if (!header_fn(g, "kg", 8) || volt_vm_load(vm, S("kg.volt"), S(src)).error) {
             printf("\n");
             say_error(vm, what);
-        } else {
-            printf(", removed, next load %d", ((int (*)(void))volt_vm_find(vm, S("kgv")))());
-            snprintf(src, sizeof src, "%suse { \"%s\" } as k;\nexport fn kn() -> i32 { return k::%s(); }\n", attrs, h, call);
-            int bad = volt_vm_load(vm, S("kn.volt"), S(src)).error;
-            volt_str e = volt_vm_error(vm);
-            char msg[4096];
-            snprintf(msg, sizeof msg, "%.*s", bad ? (int)e.len : 0, (const char *)e.ptr);
-            if (!bad) {
-                printf(", a new importer loaded\n");
-            } else if (strstr(msg, h)) {
-                printf(", a new importer refused naming it\n");
-            } else {
-                printf(", a new importer: %s\n", msg);
-            }
+            goto out;
         }
+        printf(", removed, next load %d", ((int (*)(void))volt_vm_find(vm, S("kgv")))());
+        // kin.h edited in place: the removed header's memo is stale, and its copy is read again
+        f = fopen(in, "w");
+        if (f) {
+            fputs("#define KV 7\n", f);
+            fclose(f);
+        }
+        snprintf(src, sizeof src, "use { \"%s\" } as g;\nexport fn kgw() -> i32 { return g::kg2(); }\n", g2);
+        if (!f || !header_fn(g2, "kg2", 9) || volt_vm_load(vm, S("kg2.volt"), S(src)).error) {
+            printf("\n");
+            say_error(vm, what);
+            goto out;
+        }
+        printf(", kin.h edited, next load %d", ((int (*)(void))volt_vm_find(vm, S("kgw")))());
+        snprintf(src, sizeof src, "%suse { \"%s\" } as k;\nexport fn kn() -> i32 { return k::%s(); }\n", attrs, h, call);
+        int bad = volt_vm_load(vm, S("kn.volt"), S(src)).error;
+        volt_str e = volt_vm_error(vm);
+        char msg[4096];
+        snprintf(msg, sizeof msg, "%.*s", bad ? (int)e.len : 0, (const char *)e.ptr);
+        if (!bad) {
+            printf(", a new importer loaded\n");
+            goto out;
+        } else if (!strstr(msg, h)) {
+            printf(", a new importer: %s\n", msg);
+            goto out;
+        }
+        printf(", a new importer refused naming it");
+        // and h put back, with other text: read again (not its copy's), by that new importer
+        f = fopen(h, "w");
+        if (f) {
+            fputs(back, f);
+            fclose(f);
+        }
+        if (!f || volt_vm_load(vm, S("kn.volt"), S(src)).error) {
+            printf("\n");
+            say_error(vm, what);
+            goto out;
+        }
+        printf(", put back %d\n", ((int (*)(void))volt_vm_find(vm, S("kn")))());
     }
+out:
     remove(g);
+    remove(g2);
     remove(h);
     remove(in);
     rmdir(dir);
@@ -396,10 +425,10 @@ int main(int argc, char **argv) {
     // a C++ header removed (libclang reads it again for each load) and a C header of another
     // standard than Volt's own C's (kept in a unit of its own, built again for each load's library)
     voltvm_volt_vm *cv = volt_vm_new(std_dir);
-    kept_removed(cv, "cpp removed", "ky.hpp", "#include \"kin.h\"\nnamespace ky { inline int hk() { return KV; } }\n", "", "ky::hk");
+    kept_removed(cv, "cpp removed", "ky.hpp", "#include \"kin.h\"\nnamespace ky { inline int hk() { return KV; } }\n", "#include \"kin.h\"\nnamespace ky { inline int hk() { return KV * 10; } }\n", "", "ky::hk");
     volt_vm_free(cv);
     voltvm_volt_vm *kv = volt_vm_new(std_dir);
-    kept_removed(kv, "kept removed", "kk.h", "#include \"kin.h\"\nstatic inline int hk(void) { return KV + 1; }\n", "@attributes([@standard(\"c99\")])\n", "hk");
+    kept_removed(kv, "kept removed", "kk.h", "  #  include\t\"kin.h\"\nstatic inline int hk(void) { return KV + 1; }\n", "#include \"kin.h\"\nstatic inline int hk(void) { return KV * 10 + 1; }\n", "@attributes([@standard(\"c99\")])\n", "hk");
     volt_vm_free(kv);
 #if defined(__linux__)
     if (argc < 4) {
