@@ -405,6 +405,10 @@ struct opts {
     // the C preprocessor's output by its input (cimport's preprocess): a VM keeps it across loads, so
     // a later script reads an earlier one's headers without running the C compiler again
     pp_memo: std::map<std::string, std::string> = {};
+    // the last text of each header an #include names by its full path, and a directory of copies of
+    // those removed since (cimport's kept_header): a VM keeps both across loads
+    hdr_texts: std::map<std::string, std::string> = {};
+    gone_dir: std::string = {};
     guards: std::vec<guard> = {};       // package -> guard symbol
     cfg: std::vec<cfg_arg> = {};        // --cfg, for @cfg
     pp_flags: std::vec<str> = {};       // the --cc flags the C preprocessor needs (-I, -D...)

@@ -33,6 +33,8 @@ export struct volt_vm {
     runtime: std::map<str, bool> = {}; // the runtime's names, for a sandbox (runtime_names)
     scripts: std::vec<vm_script> = {}; // what's loaded, each a package to the scripts after it
     pp_memo: std::map<std::string, std::string> = {}; // the headers its scripts read (opts.pp_memo)
+    hdr_texts: std::map<std::string, std::string> = {}; // their last texts (opts.hdr_texts)
+    gone_dir: std::string = {}; // copies of those removed since (opts.gone_dir)
     link_flags: std::vec<std::string> = {}; // what the libraries its loads built link (use LANG's)
     mod_dir: std::string = {}; // the C++ library's std module, built once for its loads (cpp_module_flags)
 }
@@ -228,8 +230,12 @@ export fn volt_vm_load(v: volt_vm&, name: str, source: str) -> vm_error!void {
         }
     }
     swap(&o.pp_memo, &v.pp_memo);
+    swap(&o.hdr_texts, &v.hdr_texts);
+    o.gone_dir = copy v.gone_dir;
     val chk = compile_rounds(&s.files, &s.asts, move o);
     v.pp_memo = copy chk.opts.pp_memo;
+    v.hdr_texts = copy chk.opts.hdr_texts;
+    v.gone_dir = copy chk.opts.gone_dir;
     if (chk.errors.len > 0) {
         val diags = all_diags(&*chk);
         return v.fail(vm_error::COMPILE, report(&s.files, &diags, 0, false, 20).as_str());
@@ -533,7 +539,8 @@ fn make_tmp() -> std::string? {
 fn present_includes(text: str) -> std::string {
     var out = S("");
     for (l) in text.lines().items() {
-        if (starts_with(l, "#include ") && l.len > 11 && l[10] == '/' && !std::fs::is_file(l[10..l.len - 1])) {
+        val p = include_path(l) ?? "";
+        if (is_abs(p) && !std::fs::is_file(p)) {
             continue;
         }
         out.append(l);
@@ -937,6 +944,9 @@ export fn volt_vm_error(v: volt_vm&) -> str {
 attach fn delete(this: volt_vm&) -> void {
     if (this.mod_dir.len() > 0) {
         vm_clean(this.mod_dir.as_str());
+    }
+    if (this.gone_dir.len() > 0) {
+        vm_clean(this.gone_dir.as_str());
     }
     val j = this.jit ?? return;
     for (sc&) in this.scripts.items() {
