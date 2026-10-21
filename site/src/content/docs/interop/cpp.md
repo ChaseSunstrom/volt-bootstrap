@@ -233,6 +233,11 @@ T echo(T)`, `template <class... A>`, a declared generic's `T` too):
 A reference to a mirrored value is read as its address (`f(&p)` calls `f(T*)`), since C++'s `T&`
 would change only a copy.
 
+Each mirror checks its size and alignment against the type as the target's C compiler lays it out,
+which is how both backends lay it out. Where the two differ (i386 aligns `i64` and `f64` to 4), the
+C++ step fails with `Volt's point: the mirror's size or alignment isn't the type's C layout on this
+target`, rather than the program copying the wrong bytes.
+
 ## The standard library, operators and exceptions
 
 Signatures that use the standard library's strings, vectors and smart pointers map to Volt's:
