@@ -2358,6 +2358,18 @@ fn cpp_clang_root() {
 }
 
 #[test]
+fn cpp_peruse3() {
+    // an explicit template argument naming a Volt struct, a tuple or an enum with payloads in a call
+    // made per use (same<cell>(a, b), size_of<shape>() with nothing to deduce T from): its mirror, as
+    // for a deduced one
+    let e = Env::new("cpp-peruse3");
+    let want = "struct true false\ntuple true false\nsize true true true\n";
+    for backend in ["c", "llvm"] {
+        assert_eq!(ok(e.voltc(&["run", "cpp_peruse3.volt", "--backend", backend]), "voltc run cpp_peruse3.volt"), want, "explicit template arguments of Volt types ({backend})");
+    }
+}
+
+#[test]
 fn cpp_try_inst() {
     // a try_ form that appears only while checking (a class template instance held by handle, its
     // methods worked out per use) in an import with no throwing declared function: cpp_error is there

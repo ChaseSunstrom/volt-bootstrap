@@ -8051,7 +8051,7 @@ attach fn cpp_use_call(this: checker&, k: usize, callee: str, macro: bool, tried
             match (*explicit.at(j)) {
                 .TYPE(t&) => {
                     val ty = try this.garg_type(explicit.at(j));
-                    targs.append((this.cpp_spell(ty) ?? return fail(t.span, fmt("{} has no C++ spelling", this.ty_name(ty)))).as_str());
+                    targs.append((this.cpp_spell_m(ty) ?? return fail(t.span, this.no_cpp_spelling(ty))).as_str());
                 },
                 .EXPR(e&) => {
                     match (try this.ct_eval(e, null)) {
@@ -8063,7 +8063,7 @@ attach fn cpp_use_call(this: checker&, k: usize, callee: str, macro: bool, tried
                                 targs.append("false");
                             }
                         },
-                        .TYPE(ty) => { targs.append((this.cpp_spell(ty) ?? return fail(e.span, fmt("{} has no C++ spelling", this.ty_name(ty)))).as_str()); },
+                        .TYPE(ty) => { targs.append((this.cpp_spell_m(ty) ?? return fail(e.span, this.no_cpp_spelling(ty))).as_str()); },
                         default => { return fails(e.span, "a C++ template argument is a type, an integer or a bool"); },
                     }
                 },
