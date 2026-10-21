@@ -36,5 +36,6 @@ fn main() -> void {
     // a type whose name has quotes: extern "C" fn(i32) -> i32
     val ft: (extern "C" fn(i32) -> i32, i64) = (plus_one, 6);
     val fq = cpp::pul::echo(ft);
-    std::println("fnptr {} {}", fq.0(4), fq.1);
+    val g = fq.0;
+    std::println("fnptr {} {}", g(4), fq.1);
 }
