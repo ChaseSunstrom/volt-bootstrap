@@ -1746,6 +1746,16 @@ attach fn needs_wrap(this: cmapper&, t: ctype&) -> bool {
     }
 }
 
+// a vector wider than 16 bytes, or an array of them (lay_out_partial checks C's alignment of it)
+attach fn wide_vector(this: cmapper&, t: ctype&) -> bool {
+    val r = this.resolve(t, 0) ?? return false;
+    match (*r) {
+        .VECTOR(e, n) => { return n > 16; },
+        .ARRAY(e, n) => { return this.wide_vector(e); },
+        default => { return false; },
+    }
+}
+
 // how C passes a member of type t by value, as far as Volt can tell: 0 as integers, 1 with
 // floating-point bytes too, 2 in a way only C knows (a long double, a _Complex, a vector, a type
 // Volt can't name, or a struct holding one)
@@ -2362,6 +2372,9 @@ attach fn lay_out_partial(this: checker&, res: c_imported&, items: std::vec<usiz
                     val off = @cast<u64>(bits / 8);
                     overlap = overlap || off < end;
                     natural = natural && off % @cast<u64>(falign) == 0;
+                    // a vector C aligns below its size (AArch64 aligns a 32-byte one to 16) is one
+                    // Volt's own layout aligns to its size: C's offsets place the struct
+                    natural = natural && falign >= field_vector(rt, f.name);
                     if (falign > most) {
                         most = falign;
                     }
@@ -2794,6 +2807,9 @@ attach fn c_items(this: checker&, d: cdecls&, res: c_imported&, span: span) -> v
                     partial = true; // a member Volt can't read: only C knows the layout
                     continue;
                 }
+                // a vector wider than 16 bytes: C may align it below its size (AArch64 to 16), so
+                // libclang lays the struct out (lay_out_partial)
+                partial = partial || m.wide_vector(&f.ty);
                 put(&fields, { name: f.name, ty: t ?? @panic("ty"), fallback: null, vis: vis::PUBLIC, span: span });
             }
         }
