@@ -5758,13 +5758,13 @@ attach fn director(this: cpp_gen&, c: clang::CXCursor, vn: str, q: str, maps: st
         text.append(fmt2(", auto F{}, bool O{}", unum(@cast<u64>(k)), unum(@cast<u64>(k))).as_str());
     }
     text.append(">\n");
-    // (a method whose C++ own can't be called is overridden in a base, {dn}_vk, only when the type
+    // (a method whose C++ own can't be called is overridden in a base, {dn}_volt_ownk, only when the type
     // has it: the bases from bn in)
     var chain = copy bn;
     for (k) in 0..maps.len {
         if (maps.at(k).own) {
             val ks = unum(@cast<u64>(k));
-            chain = fmt4("{}_v{}<{}, O{}, ", copy dn, copy ks, copy chain, copy ks);
+            chain = fmt4("{}_volt_own{}<{}, O{}, ", copy dn, copy ks, copy chain, copy ks);
             chain.append(fmt("F{}>", copy ks).as_str());
         }
     }
@@ -5860,7 +5860,7 @@ attach fn director(this: cpp_gen&, c: clang::CXCursor, vn: str, q: str, maps: st
         }
         if (m.own) {
             // a base overriding it when the type has the method, and nothing when it hasn't
-            val ln = fmt2("{}_v{}", copy dn, copy ks);
+            val ln = fmt2("{}_volt_own{}", copy dn, copy ks);
             layers.append(fmt("template <class B, bool O, auto F>\nstruct {} : B {{\n    using B::B;\n}};\n", copy ln).as_str());
             layers.append(fmt("template <class B, auto F>\nstruct {}<B, true, F> : B {{\n    using B::B;\n", copy ln).as_str());
             layers.append(head.as_str());
@@ -5875,8 +5875,16 @@ attach fn director(this: cpp_gen&, c: clang::CXCursor, vn: str, q: str, maps: st
         if (m.pure) {
             text.append(fmt2("            volt_cpp_throw(\"{}::{} is pure virtual, and the Volt type doesn't override it\");\n", S(q), copy m.cname).as_str());
         } else {
-            // (by the class declaring it: a q method of its name could hide a base's overload)
-            text.append(fmt3("            return ::{}::{}({});\n", canon(clang::clang_getCursorType(clang::clang_getCursorSemanticParent(m.m))), copy m.cname, move base).as_str());
+            // (an inherited one by the class declaring it: a q method of its name could hide it)
+            var owner = S(q);
+            val par = clang::clang_getCursorSemanticParent(m.m);
+            if (clang::clang_equalCursors(par, c) == 0) {
+                val pc = canon(clang::clang_getCursorType(par));
+                if (pc.len() > 0 && !contains(pc.as_str(), "type-parameter")) {
+                    owner = copy pc;
+                }
+            }
+            text.append(fmt3("            return ::{}::{}({});\n", move owner, copy m.cname, move base).as_str());
         }
         text.append("        }\n    }\n");
     }
