@@ -401,6 +401,7 @@ struct opts {
     // the linked packages are running (an embedded VM's earlier scripts): their globals' layouts and
     // their code are fixed, so a trait union one of their globals holds takes no new member
     running: bool = false;
+    load: u64 = 0; // and which load this is, numbered across the process (cppimport's shims' names)
     // the C preprocessor's output by its input (cimport's preprocess): a VM keeps it across loads, so
     // a later script reads an earlier one's headers without running the C compiler again
     pp_memo: std::map<std::string, std::string> = {};

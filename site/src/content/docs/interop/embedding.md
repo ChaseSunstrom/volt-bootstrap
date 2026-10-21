@@ -99,15 +99,20 @@ script whose C or C++ imports were built into a library (outside a sandbox) can'
 the library stays loaded, and the new code's symbols would come from it.
 
 A later script that uses an earlier one importing C or C++ runs no compiler for those imports: the
-earlier load built them, and its headers' text is kept. Only what the later script's own code calls
+earlier load built them, and its headers' text is kept (read again when a file the headers read,
+the ones they include among them, changed on disk; the C compiler lists them with `-H`; with one that
+doesn't, such as tcc, only the headers the imports name are watched, not those they include). Only what the later script's own code calls
 (a header's function, a C++ wrapper, through its own imports or a generic made for it) is built for
-it.
+it. A C++ header doing `import std;` has the C++ library's std module built once, by the first load
+that needs it, for the VM's later loads.
 
 An earlier script's global holding a trait's values (`public var held: shape? = null;`) was laid out,
 and that script's code built, for the types attached to the trait when it loaded. A later script
 attaching the trait to another type is refused, naming the trait and the global (`the global
 shapes::held holds shape's union, ...: a later script can't attach shape to another type`); one that
-only uses the global loads.
+only uses the global loads. For the same reason a script attaching the trait before the global's
+script loaded can't be loaded again (`can't load cube.volt again: the global tank::held holds
+solid's union, ..., cube's among them`): the union's tags would change.
 
 ## Host functions
 

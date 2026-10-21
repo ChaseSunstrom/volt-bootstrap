@@ -34,6 +34,7 @@ export struct volt_vm {
     scripts: std::vec<vm_script> = {}; // what's loaded, each a package to the scripts after it
     pp_memo: std::map<std::string, std::string> = {}; // the headers its scripts read (opts.pp_memo)
     link_flags: std::vec<std::string> = {}; // what the libraries its loads built link (use LANG's)
+    mod_dir: std::string = {}; // the C++ library's std module, built once for its loads (cpp_module_flags)
 }
 
 // a loaded script: the package its file names, its source (a later script is checked with it, and
@@ -44,6 +45,18 @@ struct vm_script {
     source: std::string = {};
     rt: llvm::LLVMOrcOpaqueResourceTracker* = null;
     native: bool = false; // its imports' code is a library the VM loaded (which stays)
+    holds: std::vec<held_union> = {}; // the trait unions its globals hold
+}
+
+// the loads of every VM in the process (opts.load). ponytail: not atomic, so VMs loading on two
+// threads at once could share a number; make it atomic if hosts do that
+var all_loads: u64 = 0;
+
+// a trait union a script's global holds, by a package with a member: why that package can't load
+// again (a reload would change the union's tags, which the global and its script's code have)
+struct held_union {
+    pkg: std::string = {};
+    why: std::string = {};
 }
 
 // a VM whose scripts see the std package in std_dir ("" for none: scripts see only the host's
@@ -164,9 +177,19 @@ export fn volt_vm_load(v: volt_vm&, name: str, source: str) -> vm_error!void {
         }
         return v.fail(vm_error::COMPILE, msg.as_str());
     }
+    if (old < v.scripts.len) {
+        for (sc&) in v.scripts.items() {
+            for (h&) in sc.holds.items() {
+                if (h.pkg.as_str() == pkg.as_str() && sc.pkg.as_str() != pkg.as_str()) {
+                    return v.fail(vm_error::COMPILE, fmt3("can't load {} again: {}, {}'s among them", S(name), copy h.why, copy pkg).as_str());
+                }
+            }
+        }
+    }
     v.loads += 1;
+    all_loads += 1;
     var s: sources = {};
-    var o: opts = { release: v.release, runtime: false, lib: null, line_info: false, running: true };
+    var o: opts = { release: v.release, runtime: false, lib: null, line_info: false, running: true, load: all_loads };
     if (v.std_dir.len() > 0) {
         for (f&) in volt_files(v.std_dir.as_str()).items() {
             val text = std::fs::read_file(f.as_str()) catch |e| {
@@ -235,7 +258,7 @@ export fn volt_vm_load(v: volt_vm&, name: str, source: str) -> vm_error!void {
             }
             val triple = S(c_text(llvm::LLVMOrcLLJITGetTripleString(j)));
             if (sandbox_compilers(&*chk, &err)) {
-                val dir = vm_native(&*chk, &g.hdr, v.loads, triple.as_str(), &bcs, &err);
+                val dir = vm_native(&*chk, &g.hdr, v.loads, triple.as_str(), "", &bcs, &err);
                 if (dir) {
                     for (bc&) in bcs.items() {
                         if (err.len() == 0) {
@@ -251,7 +274,10 @@ export fn volt_vm_load(v: volt_vm&, name: str, source: str) -> vm_error!void {
             }
             ctors = glue_ctors(&g, v.loads);
         } else {
-            native = vm_native(&*chk, &g.hdr, v.loads, null, &bcs, &err);
+            if (v.mod_dir.len() == 0 && chk.cpp_std_units.len > 0) {
+                v.mod_dir = make_tmp() ?? S("");
+            }
+            native = vm_native(&*chk, &g.hdr, v.loads, null, v.mod_dir.as_str(), &bcs, &err);
             if (native == null) {
                 drop_backend(&g, true);
                 return v.fail(vm_error::COMPILE, err.as_str());
@@ -356,8 +382,36 @@ export fn volt_vm_load(v: volt_vm&, name: str, source: str) -> vm_error!void {
             run();
         }
     }
-    put(&v.scripts, { pkg: copy pkg, name: S(name), source: S(source), rt: rt, native: native != null });
+    put(&v.scripts, { pkg: copy pkg, name: S(name), source: S(source), rt: rt, native: native != null, holds: held_unions(&*chk, pkg.as_str()) });
     return;
+}
+
+// the trait unions package pkg's globals hold, each by every package with a member
+fn held_unions(chk: checker&, pkg: str) -> std::vec<held_union> {
+    var out: std::vec<held_union> = {};
+    var from: u32 = 0;
+    loop {
+        val w = chk.union_global(pkg, from) ?? return out;
+        from = w.decl + 1;
+        for (u) in 0..chk.unions.len {
+            var seen: idset = {};
+            if (!chk.holds_union(w.ty, @cast<u32>(u), &seen)) {
+                continue;
+            }
+            val tr = chk.ui(@cast<u32>(u)).trait_decl;
+            var why = fmt3("the global {}::{} holds {}'s union, laid out (and ", S(pkg), S(w.name), S(chk.decl_name(tr)));
+            why.append(fmt2("{}'s code built) for the types attached when {} loaded", S(pkg), S(pkg)).as_str());
+            for (b&) in chk.attach_blocks.items() {
+                if (chk.item_of(*b).generics.len > 0) {
+                    continue;
+                }
+                val bt = chk.block_trait(*b) ?? continue;
+                if (bt.decl == tr) {
+                    put(&out, { pkg: S(chk.pkg_of(*b) ?? ""), why: copy why });
+                }
+            }
+        }
+    }
 }
 
 // the package a load's name makes: its file's name without directories or extension
@@ -445,23 +499,31 @@ attach fn links(this: volt_vm&, flag: str) -> bool {
 // library under /tmp: its path, or why not in err. With a triple (a sandbox's), clang and clang++
 // compile it to LLVM bitcode for that target instead, each file's path into bcs: the result is the
 // directory they're in
-fn vm_native(chk: checker&, hdr: std::vec<str>&, n: u64, triple: str?, bcs: std::vec<std::string>&, err: std::string&) -> std::string? {
-    var t = S("/tmp/voltvm-XXXXXX");
-    t.push(0);
-    if (mkdtemp(@cast<u8*>(t.as_str().ptr)) == null) {
+fn vm_native(chk: checker&, hdr: std::vec<str>&, n: u64, triple: str?, keep: str, bcs: std::vec<std::string>&, err: std::string&) -> std::string? {
+    val dir = make_tmp() ?? S("");
+    if (dir.len() == 0) {
         *err = S("can't make a build directory in /tmp for the script's C");
         return null;
     }
-    val dir = S(t.as_str()[0..t.len() - 1]);
-    val so = vm_build(chk, hdr, dir.as_str(), n, triple, bcs, err);
+    val so = vm_build(chk, hdr, dir.as_str(), n, triple, keep, bcs, err);
     if (so == null) {
         vm_clean(dir.as_str());
     }
     return so;
 }
 
-// vm_native's work in dir
-fn vm_build(chk: checker&, hdr: std::vec<str>&, dir: str, n: u64, triple: str?, bcs: std::vec<std::string>&, err: std::string&) -> std::string? {
+// a new directory under /tmp, if one could be made
+fn make_tmp() -> std::string? {
+    var t = S("/tmp/voltvm-XXXXXX");
+    t.push(0);
+    if (mkdtemp(@cast<u8*>(t.as_str().ptr)) == null) {
+        return null;
+    }
+    return S(t.as_str()[0..t.len() - 1]);
+}
+
+// vm_native's work in dir (the std module kept in keep, when it isn't "")
+fn vm_build(chk: checker&, hdr: std::vec<str>&, dir: str, n: u64, triple: str?, keep: str, bcs: std::vec<std::string>&, err: std::string&) -> std::string? {
     // bitcode: what the compilers are given, and what they write
     var bc_flags: std::vec<std::string> = {};
     var ext = ".o";
@@ -543,7 +605,7 @@ fn vm_build(chk: checker&, hdr: std::vec<str>&, dir: str, n: u64, triple: str?, 
                 *err = S("a sandbox's script can't import C++ modules: clang++ compiles its C++ to LLVM bitcode, and a module's interface is native code");
                 return null;
             }
-            val mflags = cpp_module_flags(chk, &chk.opts.pp_flags, dir, @cast<u32>(u), std_flag.as_str(), &objs, &linked, err);
+            val mflags = cpp_module_flags(chk, &chk.opts.pp_flags, dir, keep, @cast<u32>(u), std_flag.as_str(), &objs, &linked, err);
             if (err.len() > 0) {
                 return null;
             }
@@ -847,6 +909,9 @@ export fn volt_vm_error(v: volt_vm&) -> str {
 }
 
 attach fn delete(this: volt_vm&) -> void {
+    if (this.mod_dir.len() > 0) {
+        vm_clean(this.mod_dir.as_str());
+    }
     val j = this.jit ?? return;
     for (sc&) in this.scripts.items() {
         llvm::LLVMOrcReleaseResourceTracker(sc.rt);
