@@ -447,7 +447,8 @@ attach fn has_unaligned(this: lg&, t: u32, off: u64) -> bool {
     if (llvm::LLVMGetTypeKind(l) == llvm::LLVMStructTypeKind) {
         for (i) in 0..this.member_count(t) {
             val mt = this.member_ty(t, @cast<u32>(i));
-            if (this.has_unaligned(mt, off + this.offset_of(t, @cast<u32>(i)))) {
+            // (a void member has no element, so no offset)
+            if (!this.is_void(mt) && this.has_unaligned(mt, off + this.offset_of(t, @cast<u32>(i)))) {
                 return true;
             }
         }
