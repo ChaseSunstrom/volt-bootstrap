@@ -2391,7 +2391,8 @@ fn cpp_peruse_layout() {
     assert_eq!(ok(e.voltc(&["run", "cpp_peruse_layout.volt", "--cc", "-std=c++98"]), "voltc run cpp_peruse_layout.volt (C++98)"), want, "mirrors' check under C++98");
     let probe = e.path("m32.cpp");
     std::fs::write(&probe, "#include <functional>\n#include <string>\n#include <vector>\n").unwrap();
-    let m32 = Command::new("c++").args(["-m32", "-fsyntax-only", &probe]).output().is_ok_and(|o| o.status.success());
+    // (System V's i386, Linux's: MinGW's aligns i64 and f64 to 8 in a struct, as x86-64 does)
+    let m32 = cfg!(target_os = "linux") && Command::new("c++").args(["-m32", "-fsyntax-only", &probe]).output().is_ok_and(|o| o.status.success());
     if !m32 {
         eprintln!("cpp_peruse_layout: no c++ -m32 here, i386's check not run");
         return;

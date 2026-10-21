@@ -709,6 +709,11 @@ fn vm_build(chk: checker&, hdr: std::vec<str>&, dir: str, n: u64, triple: str?, 
     comptime if (@cfg("os", "macos")) {
         put(&argv, "-Wl,-unexported_symbol,__Z*");
     }
+    // (Windows: a DLL exports only what's marked once anything is, and the JIT looks up the
+    // per-load pointers, volt_cN_..., by name: all of it exported)
+    comptime if (@cfg("os", "windows")) {
+        put(&argv, "-Wl,--export-all-symbols");
+    }
     put(&argv, "-o");
     put(&argv, so.as_str());
     for (o&) in objs.items() {
