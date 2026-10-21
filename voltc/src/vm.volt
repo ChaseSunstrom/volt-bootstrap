@@ -656,6 +656,12 @@ fn vm_build(chk: checker&, hdr: std::vec<str>&, dir: str, n: u64, triple: str?, 
         link = c_command(&argv);
     }
     put(&argv, "-shared");
+    // its calls bind to its own functions: the JIT opens it RTLD_GLOBAL, so its C++ inline and
+    // template functions (weak) would otherwise be an earlier load's copies, built from that load's
+    // headers (functions only: typeinfo and data stay shared, as C++ needs)
+    comptime if (@cfg("os", "linux")) {
+        put(&argv, "-Wl,-Bsymbolic-functions");
+    }
     put(&argv, "-o");
     put(&argv, so.as_str());
     for (o&) in objs.items() {

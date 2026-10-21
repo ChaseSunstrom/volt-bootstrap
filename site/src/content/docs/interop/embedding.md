@@ -105,7 +105,8 @@ earlier load built them, and its headers' text is kept (read again when a file t
 the ones they include among them, changed on disk; the C compiler lists them with `-H`; with one that
 doesn't, such as tcc, only the headers the imports name are watched, not those they include). Each
 load's header functions are its own: two scripts importing a header whose `static inline` function
-changed between their loads each call the body they were compiled with. Only what the later script's own code calls
+changed between their loads each call the body they were compiled with, and so do C++ `inline` and
+template functions (a library calls its own copy, not an earlier load's). Only what the later script's own code calls
 (a header's function, a C++ wrapper, through its own imports or a generic made for it) is built for
 it. A C++ header doing `import std;` has the C++ library's std module built once, by the first load
 that needs it, for the VM's later loads.
