@@ -44,6 +44,26 @@ static const char *MAIN =
     "    return p.x * 100 + util::largest<i32>(p.y, 9) * 10 + util::made + q.y - q.x;\n"
     "}\n";
 
+static const char *SHAPES =
+    "public trait shape {\n"
+    "    fn area(this) -> i32;\n"
+    "}\n"
+    "\n"
+    "public struct sq {\n"
+    "    n: i32;\n"
+    "}\n"
+    "\n"
+    "attach shape -> sq {\n"
+    "    fn area(this) -> i32 { return this.n * this.n; }\n"
+    "}\n"
+    "\n"
+    "public var held: shape? = null;\n"
+    "\n"
+    "public fn held_area() -> i32 {\n"
+    "    val h = held ?? return 0;\n"
+    "    return h.area();\n"
+    "}\n";
+
 int main(int argc, char **argv) {
     volt_str std_dir = S(argv[1]);
     for (int box = 0; box < 2; box++) {
@@ -128,6 +148,23 @@ int main(int argc, char **argv) {
         return 1;
     }
     printf("h %d\n", ((int (*)(void))volt_vm_find(vm, S("h")))());
+    // a global holding a trait's union was laid out, and its script's code built, for the types
+    // attached so far: a later script attaching the trait to another type is refused, one using the
+    // global loads
+    if (volt_vm_load(vm, S("shapes.volt"), S(SHAPES)).error) {
+        say_error(vm, "shapes");
+        return 1;
+    }
+    if (volt_vm_load(vm, S("wide.volt"), S("struct wide { a: i64; b: i64; c: i64; }\nattach shapes::shape -> wide {\n    fn area(this) -> i32 { return 1; }\n}\nexport fn w() -> i32 { return 0; }\n")).error) {
+        say_error(vm, "wide");
+    } else {
+        printf("wide: loaded\n");
+    }
+    if (volt_vm_load(vm, S("held_user.volt"), S("export fn set_held() -> i32 {\n    val s: shapes::sq = { n: 6 };\n    shapes::held = s;\n    return shapes::held_area();\n}\n")).error) {
+        say_error(vm, "held_user");
+        return 1;
+    }
+    printf("held %d\n", ((int (*)(void))volt_vm_find(vm, S("set_held")))());
     volt_vm_free(vm);
     return 0;
 }
