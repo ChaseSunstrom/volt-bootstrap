@@ -651,9 +651,9 @@ attach fn aapcs_part(this: lg&, t: u32, size: u64, ret: bool, hfa: bool) -> abi_
         return { how: pass::MEMORY, ty: t };
     }
     // the i128 pair, as clang has it: a param goes by the alignment without the struct's own @align,
-    // a result by the one with it; Apple's arm64 by the one with it both ways
+    // a result by the one with it; Apple's and Windows' arm64 by the one with it both ways
     var al = this.natural_align(t);
-    if (ret || this.cc == callconv::DARWIN64) {
+    if (ret || this.cc == callconv::DARWIN64 || this.cc == callconv::WINARM64) {
         al = this.align_of(l);
     }
     var cty = llvm::LLVMInt64TypeInContext(this.ctx);
