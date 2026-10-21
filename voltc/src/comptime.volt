@@ -807,7 +807,7 @@ attach fn ct_expr(this: checker&, e: expr&, want: u32?) -> compile_error!cval {
                                 val kk = k ?? return fails(span, "this operator doesn't work on that value at compile time");
                                 var r = ~n;
                                 if (op == unop::NEG) {
-                                    r = -n;
+                                    r = 0 -% n; // (wrapping: an i128 lane's minimum too)
                                 } else if (op != unop::BITNOT) {
                                     return fails(span, "this operator doesn't work on that value at compile time");
                                 }
