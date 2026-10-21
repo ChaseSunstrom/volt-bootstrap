@@ -12,8 +12,6 @@ struct cell {
     char c;
     aint x;
     bool aligned() const { return ((std::uintptr_t)this % 16) == 0; }
-    // (a member, not a free fn: below C++17 cell is left out, and a free fn taking a left-out class
-    // breaks the whole import)
     int read_x() const { return x; }
 };
 
@@ -40,5 +38,8 @@ inline int squeezed_size() { return (int)sizeof(squeezed); }
 inline int tight_x(const tight &v) { return v.x; }
 inline int mixed_x(const mixed &v) { return v.x; }
 inline int cell_size() { return (int)sizeof(cell); }
+// (below C++17 cell is left out, and this has no wrapper, only a call per use: the rest of the
+// header still imports)
+inline int cell_x(const cell &v) { return v.x; }
 inline int tight_size() { return (int)sizeof(tight); }
 }

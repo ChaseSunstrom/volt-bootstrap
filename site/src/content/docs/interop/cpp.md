@@ -570,7 +570,8 @@ object `derive` didn't make; without RTTI, either stops the program saying so.
 - A class whose layout comes from members Volt can't show (`alignas(32)`, a field of an aligned
   typedef that puts it past or below its type's own alignment, or a packed field) is held by handle,
   C++'s aligned `new` and `delete` making and freeing it. That needs its import under C++17 or
-  newer when it's aligned past 8; under an older standard it's left out, and its comment says so.
+  newer when it's aligned past 8; under an older standard it's left out, and its comment says so
+  (a function taking one gets no wrapper either; the rest of the header imports).
   So a packed C++ class is a handle (its fields read and written through accessors), unlike a
   packed C struct, which a C import keeps as a value with each field at C's offset.
 

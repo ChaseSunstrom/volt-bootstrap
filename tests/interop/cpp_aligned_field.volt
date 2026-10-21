@@ -7,7 +7,7 @@ fn main() -> void {
     var a: cpp::af::cell = {};
     a.set_x(7);
     val b = copy a;
-    std::println("cell {} {} {} {}", b.read_x(), a.aligned(), b.aligned(), cpp::af::cell_size());
+    std::println("cell {} {} {} {} {}", b.read_x(), cpp::af::cell_x(&b), a.aligned(), b.aligned(), cpp::af::cell_size());
     var t: cpp::af::tight = {};
     t.set_x(9);
     std::println("tight {} {}", cpp::af::tight_x(&t), cpp::af::tight_size());

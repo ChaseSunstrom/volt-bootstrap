@@ -124,6 +124,8 @@ struct cpp_gen {
     inst_args: std::vec<str> = {};
     inst_tu: clang_tu = { index: null, tu: null }; // where they're asked (its preamble the headers)
     classes: std::map<str, str> = {};
+    // the classes prune left out (no Volt layout, no handle): nothing that names one gets a form
+    left_out: std::map<str, bool> = {};
     enums: std::map<str, str> = {};
     templates: std::map<str, str> = {};
     depth: usize = 0;
@@ -640,6 +642,10 @@ attach fn instance(this: cpp_gen&, qt: clang::CXType) -> str? {
     // declarations reach only gets an instance for its own types (std's and other libraries' come
     // through calls made per use)
     val decl = clang::clang_getTypeDeclaration(ct);
+    // (one prune left out isn't held by handle either: a fn taking it is worked out per use, T-0634)
+    if (this.left_out.get(cpp_qual(decl).as_str()) != null) {
+        return null;
+    }
     if (!this.inst_any) {
         // ...and a std::map with no stdcxx form (a std::string key), so one C++ makes is declared
         // and goes back to C++ by its handle (a const& parameter's Volt std::map& form beside it)
@@ -5052,6 +5058,7 @@ attach fn prune(this: cpp_gen&) -> void {
         }
         for (q&) in gone_classes.items() {
             this.classes.remove(*q);
+            this.left_out.put(*q, true);
         }
         if (gone.len == 0 && gone_classes.len == 0 && held.len == 0) {
             break;
