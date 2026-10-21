@@ -234,7 +234,8 @@ attach fn resolve_type_path(this: checker&, p: path&, e: u32) -> compile_error!u
                         }
                         val gps = &this.item_of(d).generics;
                         for (i) in 0..gps.len {
-                            put(&binds, { name: gps.at(i).name, g: copy *gargs.at(i) });
+                            val gp = gparam_of(gps.at(i));
+                            put(&binds, { name: gps.at(i).name, g: copy *gargs.at(i), ty: param_ty(&gp) });
                         }
                     }
                     val ae = this.new_env({ ns: this.decls.at(@cast<usize>(d)).ns, generics: move binds });
