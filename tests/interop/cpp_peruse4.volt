@@ -28,6 +28,9 @@ fn main() -> void {
     // its try_ form, whose call of the plain one binds the mirror the same way
     val tz = cpp::pu4::try_zero<point>() catch p;
     std::println("try {}", tz.x);
+    var g = cpp::pu4::global<point>();
+    g.x = 9;
+    std::println("conv {} global {} {}", size(cpp::pu4::conv<point, shape>(p)), g.x, cpp::pu4::global<point>().x);
     var m: point = { x: 5, y: 1.5 };
     val q = cpp::pu4::addr(&m);
     q->x = 6;
@@ -39,4 +42,5 @@ fn main() -> void {
 // expect: enum 1.25 7
 // expect: zero 0 0 (0, 0) 0
 // expect: try 0
+// expect: conv 0 global 9 0
 // expect: addr 6 1.5 true

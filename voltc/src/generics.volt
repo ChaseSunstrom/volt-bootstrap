@@ -1115,11 +1115,16 @@ attach fn bind_cand(this: checker&, d: u32, rv: tval*, static_ty: u32?, explicit
             *binds.at(i) = try this.garg_gval(gp.fallback, kind, e);
         } else if (gp.pack) {
             *binds.at(i) = gval::PACK(this.new_list({}));
-        } else if (this.in_cpp_import(ns) && this.mirror_type(gp.name) != null) {
-            // a C++ call's mirror of a Volt type no argument gives (a result zero<point>() names):
-            // the type its name says
-            *binds.at(i) = gval::TY(this.mirror_type(gp.name) ?? NO_TY);
         } else {
+            if (this.in_cpp_import(ns)) {
+                // a C++ call's mirror of a Volt type no argument gives (a result zero<point>()
+                // names): the type its name says
+                val mt = this.mirror_type(gp.name);
+                if (mt) {
+                    *binds.at(i) = gval::TY(mt);
+                    continue;
+                }
+            }
             // a T& parameter given a value, which T can't come from: say which
             for (m) in 0..fixed {
                 val p = *vparams.at(m) ?? continue;

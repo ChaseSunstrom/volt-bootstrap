@@ -7938,6 +7938,12 @@ attach fn cpp_range(this: checker&, t: u32, span: span) -> compile_error!bool {
     val take = try this.cpp_instance(k, fmt2("{}<{} >({{0}})", S(take_fn), S(q)).as_str(), &types, false, true, span);
     val fd = this.fn_decl_of(take) ?? return fails(span, "the range's Volt fn wasn't declared");
     val elem = *(this.cpp_dyn_ret.get(take) ?? return fails(span, "the range's Volt fn has no result"));
+    // (an element that is a mirror is a generic of the take fn's, which next can't name)
+    var em: std::vec<std::string> = {};
+    mirror_names(elem, &em);
+    if (em.len > 0) {
+        return fail(span, fmt("Volt can't take this C++ call yet: its result, {}, has no Volt form yet", S(elem)));
+    }
     val n = unum(@cast<u64>(this.cpp_ranges.len));
     val vn = fmt("volt_range_{}", copy n);
     var out = S("");

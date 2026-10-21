@@ -17,6 +17,21 @@ auto zero() {
     return t;
 }
 
+// a result mirror other than the parameter's: U zeroed
+template <class T, class U>
+auto conv(T x) {
+    U u;
+    std::memset(&u, 0, sizeof(U));
+    return u;
+}
+
+// a reference to a mirror, with no receiver or reference argument it could be into: a copy
+template <class T>
+auto& global() {
+    static T t;
+    return t;
+}
+
 // a pointer to the mirror
 template <class T>
 auto addr(T* x) {
