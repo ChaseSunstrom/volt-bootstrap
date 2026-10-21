@@ -2359,9 +2359,10 @@ fn cpp_peruse3() {
 fn cpp_twin() {
     // a template pair f(T&) / f(T) (and const T& / T): with T explicit both overloads take the
     // argument, so each wrapper names its own; f(&m) changes m, f_value(5) a copy; T a pointer, a
-    // defaulted trailing argument (given), a class's static methods
+    // defaulted trailing argument (given), a class's static methods (a static twin and solo beside the
+    // free ones: ns::f is the free one), instance method pairs (const ones too)
     let e = Env::new("cpp-twin");
-    let want = "ref 1 6\nvalue 2\npeek 13 24\nderef 36 46\ndflt 50 5 62\nbox 70 12 83\n";
+    let want = "ref 1 6\nvalue 2\npeek 13 24\nderef 36 46\ndflt 50 5 62\nbox 70 12 83\nstatic 3 101 96 91\nacc 100 8 208\nget 309 409\n";
     for backend in ["c", "llvm"] {
         assert_eq!(ok(e.voltc(&["run", "cpp_twin.volt", "--backend", backend]), "voltc run cpp_twin.volt"), want, "a reference / value template pair ({backend})");
     }
