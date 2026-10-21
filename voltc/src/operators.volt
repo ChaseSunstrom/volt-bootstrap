@@ -741,8 +741,6 @@ attach fn int_arith(this: checker&, op: binop, k: int_ty, a: u32, b: u32, span: 
     return this.ir.binary(o, a, b, t);
 }
 
-// a << b, a >> b; debug builds trap when b is at least a's bit width, release ones shift by b modulo
-// the width
 // a debug build's shift amount b, ready for its u64 check: one wider than 64 bits (an i128, a u128)
 // is checked against width in its own width first, so 2^64 + 1 stops the program instead of reading
 // as 1 (stmts gets the check; the value is then used once)
@@ -758,6 +756,8 @@ attach fn wide_amount(this: checker&, b: tval, width: i128, stmts: std::vec<u32>
     return tw.c;
 }
 
+// a << b, a >> b; debug builds trap when b is at least a's bit width, release ones shift by b modulo
+// the width
 attach fn shift(this: checker&, op: binop, a: tval, b: tval, span: span) -> compile_error!tval {
     val k = this.t.int_of(a.ty) ?? return fail(span, fmt("can't shift a {}", this.ty_name(a.ty)));
     var bb = b;
