@@ -443,9 +443,10 @@ fn main() -> void {
 - Overloads of a virtual method are overridden by their own names: the first found (the class's own
   first, then its bases') keeps the name, the later ones get their parameters' C++ types as words, as other overloads Volt can't
   tell apart do (`draw(int)` and `draw(double)` are `draw` and `draw_double`; a `const` one gets
-  `_const` too). One whose name that makes is a virtual method's already stays `C`'s. A method
-  qualified `&` is overridden as any other; one qualified `&&` stays `C`'s (its object is the one
-  the Volt type subclasses).
+  `_const` too, and a non-`const` twin of a `const` one with no parameters is `_nonconst`). One
+  whose name that makes is a virtual method's already stays `C`'s. A method qualified `&` is
+  overridden as any other, beside an `&&` twin too; one qualified `&&` stays `C`'s (its object is
+  the one the Volt type subclasses).
 - What crosses into an override is what the import makes of each type anywhere else: numbers,
   `bool`, enums and pointers as they are (a reference for a non-const `T&`), strings as `str` (a view
   for the call), a class Volt holds by value (a copy, or a reference for `T&`), a class held by

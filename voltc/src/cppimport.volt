@@ -5212,7 +5212,8 @@ fn canon(t: clang::CXType) -> std::string {
     return type_spelling(clang::clang_getCanonicalType(t));
 }
 
-// what tells two virtual methods apart: the name, the parameters' types and const
+// what tells two virtual methods apart: the name, the parameters' types, const and the
+// ref-qualifier (g() && and g() & are two, as C++'s override rule has it)
 fn virt_key(m: clang::CXCursor) -> std::string {
     var k = cursor_name(m);
     k.push('(');
@@ -5223,6 +5224,12 @@ fn virt_key(m: clang::CXCursor) -> std::string {
     k.push(')');
     if (clang::clang_CXXMethod_isConst(m) != 0) {
         k.append("const");
+    }
+    val rq = clang::clang_Type_getCXXRefQualifier(clang::clang_getCursorType(m));
+    if (rq == clang::CXRefQualifier_LValue) {
+        k.push('&');
+    } else if (rq == clang::CXRefQualifier_RValue) {
+        k.append("&&");
     }
     return k;
 }

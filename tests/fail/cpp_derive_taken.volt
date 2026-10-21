@@ -8,4 +8,4 @@ attach cpp::d4::Q -> t {
     fn d_double(this, self: cpp::d4::Q&, x: f64) -> i32 { return 1; }
 }
 fn main() -> void {}
-// error: TBD
+// error: 'd_double' takes 2 arguments here but 1 argument in 'Q'
