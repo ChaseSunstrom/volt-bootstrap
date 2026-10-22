@@ -216,12 +216,13 @@ use { "modern.h" } as c;     // constexpr, nullptr, [[attributes]]: C23
 Volt's own C (the C backend's output, the LLVM backend's runtime) is compiled under the GNU form of
 the program's standard (`gnu99` at the least), and includes the headers imported under it (or its
 GNU or ISO twin: `c11` and `gnu11` share it). A header imported under another one is compiled in a unit of its own
-standard instead, and Volt calls its functions through pointers that unit defines (on Linux, calling one the
-header declares and nothing defines panics, naming it, one called through a wrapper, a `long
-double`'s or a `va_list`'s, too, but not a variadic one or a macro worked out per use; and as the
-reference is weak, a static library's member that only such a function needs isn't linked: link it
-whole, or under the program's standard. On macOS a header declaring a function nothing defines
-doesn't link, and on Windows one called through a wrapper doesn't); its structs are laid out by Volt (with
+standard instead, and Volt calls its functions through pointers that unit defines (on ELF systems,
+Linux and the BSDs, calling one the header declares and nothing defines panics, naming it, one
+called through a wrapper, a `long double`'s or a `va_list`'s, too, but not a variadic one or a
+macro worked out per use; and as the reference is weak, a static library's member that only such a
+function needs isn't linked: link it whole, or under the program's standard. On Windows one called
+directly panics the same way, but a header declaring one called through a wrapper doesn't link; on
+macOS a header declaring any function nothing defines doesn't link); its structs are laid out by Volt (with
 padding where a bitfield sits), so a union, or a struct with a union member, has to come in under
 the program's standard. A K&R definition's parameters take the types a caller without a prototype passes (`char`
 and `short` as `int`, `float` as `double`).

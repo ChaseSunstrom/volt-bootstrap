@@ -2,7 +2,8 @@
 // panics naming it, as c_kept_undefined.volt's wrapped one does (T-0320)
 // os: linux
 // (only ELF linkers take a weak reference to what nothing defines and leave it null: Mach-O's refuses
-// it, and COFF's wrapper callee is a plain reference)
+// it; on Windows this one alone would panic, but c_kept_undefined.h also declares a wrapped function,
+// whose callee is a plain reference there, so the program doesn't link)
 use std::io;
 @attributes([@standard("c89")])
 use { "c_kept_undefined.h" } as old;
