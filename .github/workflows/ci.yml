@@ -142,7 +142,10 @@ jobs:
           echo "$(brew --prefix lld)/bin" >> "$GITHUB_PATH"
           # where import std; looks for libc++'s modules manifest (T-0381)
           "$prefix/bin/clang++" -print-file-name=libc++.modules.json
-          ls "$("$prefix/bin/clang++" -print-resource-dir)/../../c++" || true
+          "$prefix/bin/clang++" -print-resource-dir
+          manifest="$("$prefix/bin/clang++" -print-resource-dir)/../../c++/libc++.modules.json"
+          head -c 600 "$manifest" || true
+          ls "$prefix/share/libc++/v1" | head -5 || true
       - name: Install Node's types
         run: npm install --no-save --no-package-lock --no-audit --no-fund @types/node
       - name: Build (no warnings)
