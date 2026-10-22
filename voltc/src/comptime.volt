@@ -2737,7 +2737,11 @@ attach fn ct_call(this: checker&, decl: u32, explicit: std::vec<garg>&, args: st
         if (i < args.len) {
             v = copy *args.at(i);
         } else if (q.fallback) {
-            v = try this.ct_eval_in(env, &q.fallback, null);
+            val was = this.default_at;
+            this.default_at = span;
+            val d = this.ct_eval_in(env, &q.fallback, null);
+            this.default_at = was;
+            v = try d;
         } else {
             return fail(span, fmt("missing argument '{}'", S(q.name)));
         }
@@ -3637,6 +3641,10 @@ attach fn ct_builtin(this: checker&, name: str, gargs: std::vec<garg>&, args: st
     if (name == "panic") {
         return fails(span, "@panic reached at compile time");
     }
+    if (name == "location") {
+        // (as at run time: in a parameter's default, the call's place)
+        return cval::STR(S(this.loc(this.default_at ?? span)));
+    }
     return fail(span, fmt("@{} doesn't run at compile time", S(name)));
 }
 
@@ -4523,6 +4531,7 @@ fn builtin_defs() -> std::vec<attr_def> {
     put(&v, { name: "typeid", args: 1, sig: "@typeid(T) -> u64", doc: "a type's id, the same in every build; for a trait value, the id of the type it holds" });
     put(&v, { name: "expand", args: 1, sig: "@expand(expr)", doc: "expr, noting at compile time what it became: a comptime value, or the generic instance a call runs" });
     put(&v, { name: "embed", args: 1, sig: "@embed(\"path\") -> str", doc: "a file's bytes, read at compile time (the path is relative to the source file)" });
+    put(&v, { name: "location", args: 0, sig: "@location() -> str", doc: "where it's written, as FILE:LINE:COL; as a parameter's default, where the call is (std::testing's assertions use it)" });
     put(&v, { name: "vector", args: 2, sig: "@vector(T, n) -> type", doc: "the SIMD vector of n numbers of type T (comptime; std::simd names them)" });
     put(&v, { name: "discriminant", args: 1, sig: "@discriminant(v) -> i64", doc: "which variant an enum value holds" });
     put(&v, { name: "field", args: 2, sig: "@field(v, \"name\")", doc: "v.name, the name a comptime string (or a tuple index): read, assigned, borrowed, or called as a method" });
