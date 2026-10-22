@@ -7,4 +7,4 @@ fn main() -> void {
     val t = cpp::echo(&s);
 }
 // error: a Volt std::string crosses to C++ only as itself (a template's S, S& or const S&), not inside another type or as a result
-// error: echo<std::string<std::mem::default_allocator>&> is instantiated here
+// error: echo<std::string&> is instantiated here

@@ -88,7 +88,7 @@ fn main() -> void {
 // expect: 45 45
 // expect: zero big other
 // expect: 24 24 f64
-// expect: std::mem::box<i32, std::mem::default_allocator>
+// expect: std::mem::box<i32>
 // expect: 1 two 3.5 true 
 // expect: 55
 // expect: 012

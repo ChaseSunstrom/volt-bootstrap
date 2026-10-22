@@ -322,7 +322,7 @@ fn main() -> void {
     std::println(@typeinfo(std::mem::box<i32>).canonical_name);
 }
 // expect: point f64 16
-// expect: std::mem::box<i32, std::mem::default_allocator>
+// expect: std::mem::box<i32>
 ```
 
 `@field(v, "name")` is `v.name` with the name worked out at compile time: read it, assign to it,
