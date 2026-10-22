@@ -336,6 +336,7 @@ attach fn struct_inst(this: checker&, d: u32, args: std::vec<gval>, span: span) 
                 written.append("::");
             }
             written.append(this.decl_name(d));
+            this.si(tid).canon = this.inst_name(written.as_str(), &args);
             this.si(tid).name = this.shown_name(d, written.as_str(), &args);
             this.struct_ids.put(this.intern(move key), tid);
             return t;
@@ -367,6 +368,7 @@ attach fn struct_inst(this: checker&, d: u32, args: std::vec<gval>, span: span) 
     this.struct_ids.put(this.intern(move key), id);
     // (its name leaves out args equal to their defaults, worked out once it's known, so a default
     // that names this instance finds it)
+    this.si(id).canon = name;
     this.si(id).name = this.shown_name(d, full.as_str(), &this.si(id).args);
     // a header struct C aligns past its fields with Volt's own offsets (an aligned attribute): that
     // alignment, as @align gives one (cimport's lay_out_partial)
@@ -838,7 +840,11 @@ attach fn export_c_name(this: checker&, d: u32, name: str, is_attach: bool, para
             .PTR(x) => { t = x; },
             default => {},
         }
-        n = ident_of(strip_pkg(this.ty_name(t).as_str(), pkg));
+        // (the canonical name, every generic arg spelled: export symbols stay as they were)
+        this.canon_names = true;
+        val tn = this.ty_name(t);
+        this.canon_names = false;
+        n = ident_of(strip_pkg(tn.as_str(), pkg));
         n.push('_');
     }
     n.append(name);
@@ -978,8 +984,11 @@ attach fn fn_inst(this: checker&, d: u32, args: std::vec<gval>, span: span) -> c
     } else if (f.name == "main" && path.len() == 0 && args.len == 0) {
         c_name = "v_main";
     } else if (this.pkg_of(d) != null && args.len == 0) {
-        // a package fn gets the same name in every C unit, so a precompiled package links
+        // a package fn gets the same name in every C unit, so a precompiled package links (from
+        // the canonical type names, every generic arg spelled, so the name doesn't change with how
+        // instances are shown)
         var sig: std::string = {};
+        this.canon_names = true;
         for (i) in 0..params.len {
             if (i > 0) {
                 sig.push(',');
@@ -990,6 +999,7 @@ attach fn fn_inst(this: checker&, d: u32, args: std::vec<gval>, span: span) -> c
             sig.push(',');
         }
         this.put_ty(&sig, ret);
+        this.canon_names = false;
         var n = S("vp_");
         n.append(path.as_str());
         n.append("__");

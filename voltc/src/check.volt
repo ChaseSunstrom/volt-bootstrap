@@ -65,6 +65,7 @@ struct struct_info {
     env: u32;
     name: str;
     c_name: str;
+    canon: str = ""; // the name with every generic arg spelled (name leaves out defaults): @typeid hashes it
     fields: std::vec<field_info> = {};
     has_fields: bool = false;
     resolving: bool = false;
@@ -82,6 +83,7 @@ struct enum_info {
     env: u32;
     name: str;
     c_name: str;
+    canon: str = ""; // as struct_info's
     tag: int_ty;
     is_error: bool;
     has_payload: bool;
@@ -467,6 +469,7 @@ struct checker {
     files: std::vec<source_file>&;
     line_starts: std::vec<std::vec<u32>> = {}; // each file's line start offsets, found on first use (line_col)
     reflect_spans: std::vec<span> = {};         // the @field(v, name) calls: reflection sees every field (field_visible)
+    canon_names: bool = false;                  // ty_name spells instances' canonical names (type_id)
     default_at: span? = null;                   // the call whose left-out arguments take their defaults: @location() there is its place
     llvm_cant_lower: bool = false;              // the LLVM backend met something only C can do (lgen's err)
     opts: opts;
@@ -1322,10 +1325,13 @@ fn sort_dedup(v: std::vec<u32>&) -> void {
 // ---------- names ----------
 
 // a type as it's written in Volt, for messages and instance names
-// @typeid(T): the FNV-1a hash of the type's canonical name, so it's the same in every build,
-// library and compiler
+// @typeid(T): the FNV-1a hash of the type's canonical name (every generic arg spelled, defaults
+// too), so it's the same in every build, library and compiler
 attach fn type_id(this: checker&, t: u32) -> u64 {
-    return std::digest::fnv1a(this.ty_name(t).as_str());
+    this.canon_names = true;
+    val n = this.ty_name(t);
+    this.canon_names = false;
+    return std::digest::fnv1a(n.as_str());
 }
 
 attach fn ty_name(this: checker&, id: u32) -> std::string {
@@ -1398,8 +1404,8 @@ attach fn put_ty(this: checker&, s: std::string&, id: u32) -> void {
             this.put_ty(s, t);
             s.push('>');
         },
-        .STRUCT(x) => { s.append(this.si(x).name); },
-        .ENUM(x) => { s.append(this.ei(x).name); },
+        .STRUCT(x) => { s.append(if (this.canon_names && this.si(x).canon.len > 0) this.si(x).canon else this.si(x).name); },
+        .ENUM(x) => { s.append(if (this.canon_names && this.ei(x).canon.len > 0) this.ei(x).canon else this.ei(x).name); },
         .ERR_UNION(e, t) => {
             if (e != ANYERR) {
                 this.put_ty(s, e);

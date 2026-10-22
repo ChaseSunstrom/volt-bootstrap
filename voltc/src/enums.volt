@@ -122,6 +122,7 @@ attach fn enum_inst(this: checker&, d: u32, args: std::vec<gval>, span: span) ->
     val id = @cast<u32>(this.enums.len);
     put(&this.enums, bx<enum_info>({ decl: d, family: d, args: move args, env: env, name: name, c_name: c_name, tag: tag, is_error: e.is_error, has_payload: has_payload, names: move names, values: move values, c_enum: e.c_enum }));
     this.enum_ids.put(this.intern(move key), id);
+    this.ei(id).canon = name;
     this.ei(id).name = this.shown_name(d, full.as_str(), &this.ei(id).args);
     return this.t.intern(tyk::ENUM(id));
 }
