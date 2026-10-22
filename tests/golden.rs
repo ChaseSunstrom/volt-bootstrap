@@ -214,7 +214,7 @@ fn target_linker_missing() {
     for (target, linker) in [("thumbv7m-none", "ld.lld"), ("wasm32-wasi", "wasm-ld")] {
         let o = Command::new(common::voltc()).args(["build"]).arg(&prog).args(["--target", target, "--std"]).arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("std")).arg("-o").arg(tmp.join("out")).env("PATH", "/nonexistent").output().unwrap();
         let err = String::from_utf8_lossy(&o.stderr);
-        assert!(!o.status.success() && err.contains(&format!("{linker} isn't on PATH")), "--target {target} with no {linker}: {err}");
+        assert!(!o.status.success() && err.contains(&format!("couldn't run {linker}: it isn't on PATH?")), "--target {target} with no {linker}: {err}");
     }
     let _ = std::fs::remove_dir_all(&tmp);
 }

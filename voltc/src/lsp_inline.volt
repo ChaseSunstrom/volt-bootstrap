@@ -377,13 +377,9 @@ attach fn read_options(this: lsp_server&, o: std::json::value&) -> void {
     }
 }
 
-// a type as a hint shows it: std's default allocator argument left out
+// a type as a hint shows it (instance names already leave out args equal to their defaults)
 fn hint_type(c: checker&, t: u32) -> std::string {
-    var s = c.ty_name(t);
-    // ponytail: text replacement; a short-name mode in ty_name if more defaults need hiding
-    s = replace_all(s.as_str(), ", std::mem::default_allocator>", ">");
-    s = replace_all(s.as_str(), "<std::mem::default_allocator>", "");
-    return s;
+    return c.ty_name(t);
 }
 
 // whether a type is written right after a declared name (`x: i32`)

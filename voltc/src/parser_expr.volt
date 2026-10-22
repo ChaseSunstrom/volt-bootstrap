@@ -149,7 +149,11 @@ attach fn stmt(this: parser&) -> compile_error!stmt {
     var kind: stmt_kind = stmt_kind::SUSPEND;
     // `let x`, from other languages: Volt's declarations are val and var
     if ((this.is_kw("let") || this.is_kw("const")) && this.is_ident_at(1)) {
-        val name = ident_of(this.tok_at(1)) ?? "x";
+        // (let mut x, const int x: the name is the word after mut or the type)
+        var name = ident_of(this.tok_at(1)) ?? "x";
+        if (this.is_ident_at(2)) {
+            name = ident_of(this.tok_at(2)) ?? name;
+        }
         return fail(start, fmt("Volt declares with val (or var, to change it later): val {} = ...", S(name)));
     }
     if (this.is_kw("var") || this.is_kw("val") || (this.is_kw("static") && !this.is_kw_at(1, "this"))) {
