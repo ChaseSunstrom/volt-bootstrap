@@ -2015,7 +2015,7 @@ attach fn method_call(this: checker&, r: tval, name: str, gargs: std::vec<garg>&
         default => {},
     }
     if (cands.len == 0) {
-        return fail(span, fmt2("{} has no method '{}'", this.ty_name(r.ty), S(name)));
+        return this.no_method(span, r.ty, name);
     }
     return this.resolve_call(name, &cands, r, null, gargs, args, want, span);
 }
