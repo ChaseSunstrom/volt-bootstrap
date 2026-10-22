@@ -1,5 +1,6 @@
 // std::testing: assertions that say what failed, and a runner for a file of tests. An assertion
-// that fails prints both values to stderr and returns FAILED, so `try` ends the test there.
+// that fails prints where it was called (at: the call's FILE:LINE:COL) and both values to stderr,
+// and returns FAILED, so `try` ends the test there.
 // (Part of package std: the package loader wraps every file in `namespace std`.)
 
 namespace testing {
@@ -8,14 +9,14 @@ namespace testing {
     }
 
     // fails unless ok
-    public fn assert(ok: bool, what: str = "") -> test_error!void {
+    public fn assert(ok: bool, what: str = "", at: str = @location()) -> test_error!void {
         if (ok) {
             return;
         }
         if (what.len == 0) {
-            std::io::eprintln("assertion failed");
+            std::io::eprintln("{}: assertion failed", at);
         } else {
-            std::io::eprintln("assertion failed: {}", what);
+            std::io::eprintln("{}: assertion failed: {}", at, what);
         }
         return test_error::FAILED;
     }
@@ -23,14 +24,14 @@ namespace testing {
     // fails unless left equals right (by eq, so a type's own eq counts). Both are taken by value, so
     // an owned value (a std::string) moves in: pass `copy s`, or compare s.as_str()
     <T: type>
-    public fn assert_eq(left: T, right: T, what: str = "") -> test_error!void {
+    public fn assert_eq(left: T, right: T, what: str = "", at: str = @location()) -> test_error!void {
         if (left.eq(&right)) {
             return;
         }
         if (what.len == 0) {
-            std::io::eprintln("assertion failed: left == right");
+            std::io::eprintln("{}: assertion failed: left == right", at);
         } else {
-            std::io::eprintln("assertion failed: {}", what);
+            std::io::eprintln("{}: assertion failed: {}", at, what);
         }
         std::io::eprintln("  left:  {}", left);
         std::io::eprintln("  right: {}", right);
@@ -39,14 +40,14 @@ namespace testing {
 
     // fails if left equals right
     <T: type>
-    public fn assert_ne(left: T, right: T, what: str = "") -> test_error!void {
+    public fn assert_ne(left: T, right: T, what: str = "", at: str = @location()) -> test_error!void {
         if (!left.eq(&right)) {
             return;
         }
         if (what.len == 0) {
-            std::io::eprintln("assertion failed: left != right");
+            std::io::eprintln("{}: assertion failed: left != right", at);
         } else {
-            std::io::eprintln("assertion failed: {}: left != right", what);
+            std::io::eprintln("{}: assertion failed: {}: left != right", at, what);
         }
         std::io::eprintln("  both:  {}", left);
         return test_error::FAILED;
@@ -54,7 +55,7 @@ namespace testing {
 
     // fails unless left and right are at most tolerance (0 or more) apart. Equal infinities are near;
     // NaN is never near anything
-    public fn assert_near(left: f64, right: f64, tolerance: f64, what: str = "") -> test_error!void {
+    public fn assert_near(left: f64, right: f64, tolerance: f64, what: str = "", at: str = @location()) -> test_error!void {
         if (left == right) {
             return;
         }
@@ -63,9 +64,9 @@ namespace testing {
             return;
         }
         if (what.len == 0) {
-            std::io::eprintln("assertion failed: left and right are further apart than {}", tolerance);
+            std::io::eprintln("{}: assertion failed: left and right are further apart than {}", at, tolerance);
         } else {
-            std::io::eprintln("assertion failed: {}: further apart than {}", what, tolerance);
+            std::io::eprintln("{}: assertion failed: {}: further apart than {}", at, what, tolerance);
         }
         std::io::eprintln("  left:  {}", left);
         std::io::eprintln("  right: {}", right);

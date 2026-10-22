@@ -467,6 +467,7 @@ struct checker {
     files: std::vec<source_file>&;
     line_starts: std::vec<std::vec<u32>> = {}; // each file's line start offsets, found on first use (line_col)
     reflect_spans: std::vec<span> = {};         // the @field(v, name) calls: reflection sees every field (field_visible)
+    default_at: span? = null;                   // the call whose left-out arguments take their defaults: @location() there is its place
     llvm_cant_lower: bool = false;              // the LLVM backend met something only C can do (lgen's err)
     opts: opts;
     t: types;

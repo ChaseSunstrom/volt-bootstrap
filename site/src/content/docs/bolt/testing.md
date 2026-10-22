@@ -10,8 +10,10 @@ sidebar:
 Each `.volt` file (or subdirectory) in `tests/` is a program; `bolt test` builds them all with the
 test profile and runs each one in the package's directory. A test passes when it exits with 0.
 
-`std::testing` has assertions that say what went wrong. One that fails prints to stderr why, with
-the values it compared, and returns `FAILED`, so `try` ends the test there:
+`std::testing` has assertions that say what went wrong. One that fails prints to stderr where it
+was called (`tests/math.volt:12:5: assertion failed: opposites`), why, and the values it compared,
+and returns `FAILED`, so `try` ends the test there (the place is a last `at` argument that defaults
+to [`@location()`](/volt-bootstrap/guide/builtins/), the call's):
 - `assert(ok, what)`.
 - `assert_eq(left, right, what)` and `assert_ne(left, right, what)`. These compare with `eq`, so a
   type's own `eq` is used. They take their values by value, so an owned value such as a
