@@ -204,6 +204,21 @@ fn quad_exports() {
     assert!(host.is_empty(), "the host defines {host:?}");
 }
 
+/// --target with its linker (ld.lld, wasm-ld) not on PATH says so and how to get it, not that it failed
+#[test]
+fn target_linker_missing() {
+    let tmp = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("linker-missing-{}", std::process::id()));
+    std::fs::create_dir_all(&tmp).unwrap();
+    let prog = tmp.join("bare.volt");
+    std::fs::write(&prog, "fn main() -> void {\n    var x: u32 = 1;\n    while (x < 100) {\n        x *= 3;\n    }\n}\n").unwrap();
+    for (target, linker) in [("thumbv7m-none", "ld.lld"), ("wasm32-wasi", "wasm-ld")] {
+        let o = Command::new(common::voltc()).args(["build"]).arg(&prog).args(["--target", target, "--std"]).arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("std")).arg("-o").arg(tmp.join("out")).env("PATH", "/nonexistent").output().unwrap();
+        let err = String::from_utf8_lossy(&o.stderr);
+        assert!(!o.status.success() && err.contains(&format!("{linker} isn't on PATH")), "--target {target} with no {linker}: {err}");
+    }
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
 /// a global set from ~ or ! over constants is a constant in the IR, with no constructor to set it
 #[test]
 fn global_fold_has_no_constructor() {
