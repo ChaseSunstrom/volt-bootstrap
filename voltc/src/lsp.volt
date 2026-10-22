@@ -1311,7 +1311,7 @@ attach fn lsp_local_named(this: checker&, file: u32, name: str, at: usize) -> ls
 }
 
 // completion items for a value of type t0: its fields and the methods that take it as this
-attach fn lsp_members(this: checker&, t0: u32, out: std::json::value&) -> void {
+attach fn lsp_members(this: checker&, t0: u32, file: u32, out: std::json::value&) -> void {
     val t = this.t.ref_inner(t0) ?? t0;
     match (*this.t.get(t)) {
         .STRUCT(sid) => {
@@ -1319,7 +1319,9 @@ attach fn lsp_members(this: checker&, t0: u32, out: std::json::value&) -> void {
                 return;
             };
             for (f&) in fs.items() {
-                out.add(lsp_item(f.name, 5.0, this.ty_name(f.ty).as_str()));
+                if (this.field_seen(sid, f, { file: file })) {
+                    out.add(lsp_item(f.name, 5.0, this.ty_name(f.ty).as_str()));
+                }
             }
         },
         default => {},
@@ -1331,7 +1333,7 @@ attach fn lsp_members(this: checker&, t0: u32, out: std::json::value&) -> void {
             continue; // used as an operator, never called by name
         }
         for (d) in this.named(&this.attached, n).items() {
-            if (this.takes_this(d, t)) {
+            if (this.takes_this(d, t) && this.sees(d, file)) {
                 out.add(lsp_item(n, 2.0, this.lsp_decl_text(d).as_str()));
                 break;
             }
@@ -1374,9 +1376,9 @@ attach fn lsp_find(this: checker&, path: str) -> found? {
 
 // completion items for what path (a::b) names: a namespace's members (with those `use a::c;`
 // makes reachable as a::name), or an enum's variants
-attach fn lsp_path_members(this: checker&, path: str, out: std::json::value&) -> void {
+attach fn lsp_path_members(this: checker&, path: str, file: u32, out: std::json::value&) -> void {
     match (this.lsp_find(path) ?? return) {
-        .NS(n) => { this.lsp_ns_items(n, out); },
+        .NS(n) => { this.lsp_ns_items(n, file, out); },
         .DECLS(l) => {
             for (d) in this.list(l).items() {
                 match (this.item_of(d).kind) {
@@ -1405,23 +1407,34 @@ attach fn lsp_path_members(this: checker&, path: str, out: std::json::value&) ->
         }
         if (prefix.as_str() == path) {
             match (this.lsp_find(full.as_str()) ?? continue) {
-                .NS(n) => { this.lsp_ns_items(n, out); },
+                .NS(n) => { this.lsp_ns_items(n, file, out); },
                 default => {},
             }
         }
     }
 }
 
-// completion items for namespace n's names and child namespaces
-attach fn lsp_ns_items(this: checker&, n: u32, out: std::json::value&) -> void {
+// completion items for namespace n's names that file may use, and its child namespaces
+attach fn lsp_ns_items(this: checker&, n: u32, file: u32, out: std::json::value&) -> void {
     var names: std::vec<str> = {};
     map_keys(&this.ns(n).names, &names);
     for (name) in names.items() {
         val l = this.ns(n).names.get(name) ?? continue;
-        val d = *this.list(*l).at(0);
+        var d = *this.list(*l).at(0);
         match (this.recv_of(d)) {
             .NONE => {},
             default => { continue; }, // a method
+        }
+        // (the first overload file may use)
+        var seen = false;
+        for (x) in this.list(*l).items() {
+            if (!seen && this.sees(x, file)) {
+                d = x;
+                seen = true;
+            }
+        }
+        if (!seen) {
+            continue;
         }
         var kind = 6.0; // variable
         var detail: std::string = {};
@@ -2764,7 +2777,7 @@ attach fn complete(this: lsp_server&, params: std::json::value&) -> std::json::v
         }
         val l = c.lsp_local_named(doc.file, text[k..i - 1], at);
         if (l) {
-            c.lsp_members(l->ty, &out);
+            c.lsp_members(l->ty, doc.file, &out);
         }
         return out;
     }
@@ -2773,7 +2786,7 @@ attach fn complete(this: lsp_server&, params: std::json::value&) -> std::json::v
         while (k > 0 && (is_word_byte(text[k - 1]) || text[k - 1] == ':')) {
             k -= 1;
         }
-        c.lsp_path_members(text[k..i - 2], &out);
+        c.lsp_path_members(text[k..i - 2], doc.file, &out);
         return out;
     }
     var seen: std::map<str, bool> = {};
@@ -2783,7 +2796,7 @@ attach fn complete(this: lsp_server&, params: std::json::value&) -> std::json::v
             out.add(lsp_item(l.name, 6.0, c.ty_name(l.ty).as_str()));
         }
     }
-    c.lsp_ns_items(0, &out);
+    c.lsp_ns_items(0, doc.file, &out);
     for (k) in KEYWORDS {
         out.add(lsp_item(k, 14.0, ""));
     }

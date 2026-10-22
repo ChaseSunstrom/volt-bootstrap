@@ -232,6 +232,10 @@ fn scripted_session() {
     assert!(!c.contains("operator"), "completion after p. lists operator fns: {c}");
     let c = s.request("textDocument/completion", &at(19, 11));
     assert!(c.contains("\"label\":\"println\""), "completion after std:: lacks println: {c}");
+    // (only what this file can use: not std's own helpers, which aren't public)
+    for hidden in ["\"label\":\"func_drop\"", "\"label\":\"POW10_128\""] {
+        assert!(!c.contains(hidden), "completion after std:: lists {hidden}, which isn't public: {c}");
+    }
     let c = s.request("textDocument/completion", &at(20, 6));
     for item in ["\"label\":\"total\"", "\"label\":\"add\"", "\"label\":\"return\""] {
         assert!(c.contains(item), "plain completion lacks {item}: {c}");
