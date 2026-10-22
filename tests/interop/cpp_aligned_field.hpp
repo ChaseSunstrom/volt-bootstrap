@@ -48,6 +48,21 @@ struct alignas(32) twide {
 };
 template <class T>
 inline int twide_x(const twide<T> &v) { return (int)v.x + (int)sizeof(twide<T>); }
+// alignas on a field, and a packed class template
+template <class T>
+struct tslot {
+    char c;
+    alignas(16) T x;
+};
+template <class T>
+inline int tslot_x(const tslot<T> &v) { return (int)v.x + (int)sizeof(tslot<T>); }
+template <class T>
+struct __attribute__((packed)) tpacked {
+    char c;
+    T x;
+};
+template <class T>
+inline int tpacked_x(const tpacked<T> &v) { return (int)v.x + (int)sizeof(tpacked<T>); }
 
 inline int squeezed_x(const squeezed &v) { return v.x; }
 inline int squeezed_size() { return (int)sizeof(squeezed); }

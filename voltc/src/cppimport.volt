@@ -4992,7 +4992,10 @@ attach fn template_ok(this: cpp_gen&, c: clang::CXCursor) -> bool {
     val tp = str_views(&names);
     for (ch&) in children(c).items() {
         val k = clang::clang_getCursorKind(*ch);
-        // (and a layout C++ takes from alignas, aligned or packed on the class: T-0632)
+        // (and a layout C++ takes from alignas, aligned or packed on the class, T-0632: any of them,
+        // though an alignas(4) on an int's template is one Volt would match. ponytail: a template
+        // under #pragma pack has no attribute cursor, and a handle's plain new below C++17 doesn't
+        // align past 16: T-0638)
         if (k == clang::CXCursor_CXXBaseSpecifier || (k == clang::CXCursor_CXXMethod && clang::clang_CXXMethod_isVirtual(*ch) != 0) || k == clang::CXCursor_AlignedAttr || k == clang::CXCursor_PackedAttr) {
             return false;
         }

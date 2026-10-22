@@ -8,13 +8,22 @@ fn main() -> void {
     a.set_x(7);
     val b = copy a;
     std::println("cell {} {} {} {} {}", b.read_x(), cpp::af::cell_x(&b), a.aligned(), b.aligned(), cpp::af::cell_size());
-    var t: cpp::af::tight = {};
-    t.set_x(9);
-    std::println("tight {} {}", cpp::af::tight_x(&t), cpp::af::tight_size());
-    var m: cpp::af::mixed = {};
-    m.set_x(11);
-    m.set_d(0.5);
-    std::println("mixed {} {}", cpp::af::mixed_x(&m), m.d());
+    // (Windows: MinGW lays structs out as MSVC does, which doesn't lower a field's alignment by a
+    // typedef, so tight and mixed put x at 4, as Volt does: value structs)
+    comptime if (@cfg("os", "windows")) {
+        val t: cpp::af::tight = { c: 0, x: 9 };
+        std::println("tight {} {}", cpp::af::tight_x(&t), cpp::af::tight_size());
+        val m: cpp::af::mixed = { c: 0, x: 11, d: 0.5 };
+        std::println("mixed {} {}", cpp::af::mixed_x(&m), m.d);
+    } else {
+        var t: cpp::af::tight = {};
+        t.set_x(9);
+        std::println("tight {} {}", cpp::af::tight_x(&t), cpp::af::tight_size());
+        var m: cpp::af::mixed = {};
+        m.set_x(11);
+        m.set_d(0.5);
+        std::println("mixed {} {}", cpp::af::mixed_x(&m), m.d());
+    }
     var s: cpp::af::squeezed = {};
     s.set_x(13);
     std::println("squeezed {} {}", cpp::af::squeezed_x(&s), cpp::af::squeezed_size());
@@ -22,5 +31,9 @@ fn main() -> void {
     tc.set_x(5);
     var tw: cpp::af::twide<i32> = {};
     tw.set_x(2);
-    std::println("templates {} {}", cpp::af::tcell_x(&tc), cpp::af::twide_x(&tw));
+    var ts: cpp::af::tslot<i32> = {};
+    ts.set_x(3);
+    var tp: cpp::af::tpacked<i32> = {};
+    tp.set_x(4);
+    std::println("templates {} {} {} {}", cpp::af::tcell_x(&tc), cpp::af::twide_x(&tw), cpp::af::tslot_x(&ts), cpp::af::tpacked_x(&tp));
 }
