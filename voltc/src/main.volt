@@ -1544,11 +1544,14 @@ fn llvm_exe(chk: checker&, out: str, c: cli&) -> bool {
             put(&wargv, "-o");
             put(&wargv, out);
             put(&wargv, obj.as_str());
-            val wst = std::process::run(wargv.items()) catch |x| 127;
+            val wst = std::process::run(wargv.items()) catch |x| -1;
             unlink_path(obj.as_str());
             rmdir_path(dir.as_str());
+            if (wst == -1) {
+                die(S("wasm-ld isn't on PATH: --target wasm32-... links with it (it ships with LLVM's lld: install lld, or put LLVM's bin directory on PATH)"));
+            }
             if (wst != 0) {
-                die(S("wasm-ld failed (it ships with LLVM's lld; --target wasm32-... links with it)"));
+                die(S("wasm-ld failed (its errors are above)"));
             }
             return true;
         }
@@ -1565,11 +1568,14 @@ fn llvm_exe(chk: checker&, out: str, c: cli&) -> bool {
         put(&argv, "-o");
         put(&argv, out);
         put(&argv, obj.as_str());
-        val st = std::process::run(argv.items()) catch |x| 127;
+        val st = std::process::run(argv.items()) catch |x| -1; // (-1: it couldn't run)
         unlink_path(obj.as_str());
         rmdir_path(dir.as_str());
+        if (st == -1) {
+            die(S("ld.lld isn't on PATH: --target links with it (it ships with LLVM's lld: install lld, or put LLVM's bin directory on PATH)"));
+        }
         if (st != 0) {
-            die(S("ld.lld failed (it ships with LLVM; --target links with it)"));
+            die(S("ld.lld failed (its errors are above)"));
         }
         return true;
     }
