@@ -1442,6 +1442,20 @@ attach fn resolve_call(this: checker&, name: str, cands: std::vec<u32>&, rv: tva
             return this.resolve_call(name, &plain, rv, static_ty, explicit, args, want, span);
         }
     }
+    // ...and one only a type's static fns fit doesn't call one: a static is called through its
+    // type, T::f() (T-0631)
+    if (cands.len > 0 && rv == null && static_ty == null) {
+        var statics = true;
+        for (d&) in cands.items() {
+            match (this.recv_of(*d)) {
+                .STATIC(x) => {},
+                default => { statics = false; },
+            }
+        }
+        if (statics) {
+            return fail(span, fmt2("{} is a static fn: call it through its type, T::{}(...)", S(name), S(name)));
+        }
+    }
     if (cands.len == 1) {
         val intr = intrinsic_of(this.item_of(*cands.at(0)));
         if (intr) {
