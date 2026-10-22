@@ -2737,7 +2737,11 @@ attach fn ct_call(this: checker&, decl: u32, explicit: std::vec<garg>&, args: st
         if (i < args.len) {
             v = copy *args.at(i);
         } else if (q.fallback) {
-            v = try this.ct_eval_in(env, &q.fallback, null);
+            val was = this.default_at;
+            this.default_at = span;
+            val d = this.ct_eval_in(env, &q.fallback, null);
+            this.default_at = was;
+            v = try d;
         } else {
             return fail(span, fmt("missing argument '{}'", S(q.name)));
         }
@@ -3636,6 +3640,10 @@ attach fn ct_builtin(this: checker&, name: str, gargs: std::vec<garg>&, args: st
     }
     if (name == "panic") {
         return fails(span, "@panic reached at compile time");
+    }
+    if (name == "location") {
+        // (as at run time: in a parameter's default, the call's place)
+        return cval::STR(S(this.loc(this.default_at ?? span)));
     }
     return fail(span, fmt("@{} doesn't run at compile time", S(name)));
 }
