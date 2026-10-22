@@ -324,6 +324,22 @@ jobs:
       - name: Report panics 11-20
         if: failure()
         run: sh .github/report-failures.sh test.log failure detail 2
+      # (T-0606: embedded_volt's first load can't find its per-load pointers, volt_c1_..., in its
+      # script DLL: a loaded DLL can't be deleted, so it's still in the temporary directory; its
+      # exports)
+      - name: VM script DLL exports
+        if: failure()
+        run: |
+          set +e
+          for d in $(ls -d "$TEMP"/voltvm-* "$TMP"/voltvm-* 2>/dev/null | head -4); do
+            ls "$d"
+            for f in "$d"/script*.dll; do
+              [ -f "$f" ] || continue
+              echo "== $f"
+              llvm-objdump -p "$f" | grep -A40 "Export Table" | head -50
+              llvm-nm "$f" 2>/dev/null | grep -i "volt_c" | head -20
+            done
+          done
       # (T-0381: cpp_errors, an exception thrown in a Volt callback, ends in libunwind's "pc not in
       # table": each backend's build run, and how many functions it gives unwind entries)
       - name: C++ unwind facts
