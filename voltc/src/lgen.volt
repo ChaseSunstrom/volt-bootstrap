@@ -3723,8 +3723,11 @@ fn llvm_runtime_c(chk: checker&, hdr: std::vec<str>&, runtime: bool) -> std::str
         out.append(*inc);
         out.push('\n');
     }
+    // the header functions' pointers too, but a DLL's: Windows exports no weak definition (lld's
+    // --export-all-symbols passes them over), and an embedded VM's JIT finds a load's by name
+    out.append("#ifdef _WIN32\n#define VOLT_PTR_LINKAGE\n#else\n#define VOLT_PTR_LINKAGE VOLT_RT_LINKAGE\n#endif\n");
     for (h) in hdr.items() {
-        out.append("VOLT_RT_LINKAGE void *");
+        out.append("VOLT_PTR_LINKAGE void *");
         out.append(chk.c_ptr(h).as_str());
         out.append(" = (void *)");
         out.append(h);
