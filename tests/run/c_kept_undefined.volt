@@ -1,6 +1,6 @@
 // a header kept out of Volt's C (its own standard, C89) whose functions nothing defines: the program
 // links and runs, and calling one panics naming it, the one called through a wrapper (a long double)
-// as the one called directly (T-0320)
+// as the one called directly does (c_kept_undefined_plain.volt) (T-0320)
 use std::io;
 @attributes([@standard("c89")])
 use { "c_kept_undefined.h" } as old;
