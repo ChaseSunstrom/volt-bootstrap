@@ -36,6 +36,20 @@ fn main() -> void {
     q->x = 6;
     val w = cpp::pu4::nowhere<point>();
     std::println("addr {} {} {}", m.x, q->y, w == null);
+    var h: cpp::pu4::holder = { n: 1 };
+    val k = h.pick(p);
+    clobber();
+    *h.at_n(0) = 8;
+    std::println("pick {} {} at_n {}", k.x, k.y, h.n);
+}
+
+// a call whose frame takes the stack a dangling result would point into
+fn clobber() -> i64 {
+    var a: i64[16] = {};
+    for (i) in 0..16 {
+        a[i] = 77777;
+    }
+    return a[3];
 }
 // expect: struct 3 2.5 3 2.5
 // expect: tuple (4, 0.5) (4, 0.5)
@@ -44,3 +58,4 @@ fn main() -> void {
 // expect: try 0
 // expect: conv 0 global 9 0
 // expect: addr 6 1.5 true
+// expect: pick 3 2.5 at_n 8

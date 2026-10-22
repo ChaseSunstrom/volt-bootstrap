@@ -43,4 +43,18 @@ template <class T>
 auto nowhere() {
     return (T*)0;
 }
+
+// reference results of a method: pick's is into its argument (a value Volt passed, so the wrapper's
+// own copy: a copy comes back), at_n's into the object (its argument by value: a reference)
+struct holder {
+    int n;
+    template <class T>
+    const auto &pick(const T &v) const {
+        return v;
+    }
+    template <class T>
+    auto &at_n(T) {
+        return n;
+    }
+};
 }
