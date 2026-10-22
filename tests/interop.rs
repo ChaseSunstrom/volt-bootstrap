@@ -2381,6 +2381,18 @@ fn cpp_peruse4() {
 }
 
 #[test]
+fn cpp_twin_ct() {
+    // a class template Volt declares: its method templates (instance, static, deduced and with the
+    // template argument given) worked out per use, under C++98 too (T-0640)
+    let e = Env::new("cpp-twin-ct");
+    let want = "bag 8 9 9 7\nsz 8 2\ntag 11 6\n";
+    for backend in ["c", "llvm"] {
+        assert_eq!(ok(e.voltc(&["run", "cpp_twin_ct.volt", "--backend", backend]), "voltc run cpp_twin_ct.volt"), want, "a class template's method templates ({backend})");
+    }
+    assert_eq!(ok(e.voltc(&["run", "cpp_twin_ct.volt", "--cc", "-std=c++98"]), "voltc run cpp_twin_ct.volt (C++98)"), want, "a class template's method templates under C++98");
+}
+
+#[test]
 fn cpp_twin() {
     // a template pair f(T&) / f(T) (and const T& / T): with T explicit both overloads take the
     // argument, so each wrapper names its own; f(&m) changes m, f_value(5) a copy; T a pointer, a

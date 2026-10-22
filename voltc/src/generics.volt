@@ -1438,7 +1438,7 @@ attach fn resolve_call(this: checker&, name: str, cands: std::vec<u32>&, rv: tva
     // class: clang works out this call
     for (d&) in cands.items() {
         if (this.cpp_call_attr(*d) != null && this.cpp_dyn_fits(*d, rv, static_ty)) {
-            return this.cpp_dyn_call(*d, name, rv, explicit, args, want, span);
+            return this.cpp_dyn_call(*d, name, rv, static_ty, explicit, args, want, span);
         }
     }
     // a call with no receiver: a method of the same name (use std::json makes json's attached

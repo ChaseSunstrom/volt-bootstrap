@@ -4882,12 +4882,13 @@ attach fn member_list(this: cpp_gen&, c: clang::CXCursor, self_ty: str, cpp_self
         }
         var tps: std::vec<std::string> = {};
         if (k == clang::CXCursor_FunctionTemplate) {
-            // a method template (not in a class template: one generic list a fn)
-            if (gen.len > 0 || clang::clang_getTemplateCursorKind(*ch) != clang::CXCursor_CXXMethod) {
+            // a method template: a generic method, but in a class template (a fn has one generic list,
+            // and explicit arguments would have to skip the class's) worked out per use (T-0640)
+            if (clang::clang_getTemplateCursorKind(*ch) != clang::CXCursor_CXXMethod) {
                 continue;
             }
             val got = template_params(*ch, false);
-            if (got == null || constrained(*ch)) {
+            if (got == null || constrained(*ch) || gen.len > 0) {
                 // the Volt name as for any method (operators by their op_ names)
                 val cn = cursor_name(*ch);
                 var pn = vname(cn.as_str());
@@ -6608,7 +6609,9 @@ attach fn per_use(this: cpp_gen&, head: str, call: str, method: bool) -> void {
         return;
     }
     this.put_note();
-    if (method && this.class_gen.len() > 0) {
+    // (a class template's generics, for its methods and its static ones: class_gen is set only while
+    // a class's members are written)
+    if (this.class_gen.len() > 0) {
         this.line(this.class_gen.as_str());
     }
     this.line(fmt("@attributes([@cpp_call(\"{}\")])", copy callee).as_str());
@@ -6618,7 +6621,7 @@ attach fn per_use(this: cpp_gen&, head: str, call: str, method: bool) -> void {
     val th = try_named(head);
     var saved = copy this.out;
     this.out = {};
-    if (method && this.class_gen.len() > 0) {
+    if (this.class_gen.len() > 0) {
         this.line(this.class_gen.as_str());
     }
     this.line(fmt("@attributes([@cpp_call(\"try:{}\")])", move callee).as_str());
@@ -8182,8 +8185,41 @@ attach fn cpp_range(this: checker&, t: u32, span: span) -> compile_error!bool {
 
 // a call of an @cpp_call declaration (d): the C++ it names, with these arguments and explicit
 // template arguments, made per use (cpp_instance) and called like any fn
-attach fn cpp_dyn_call(this: checker&, d: u32, name: str, rv: tval?, explicit: std::vec<garg>&, args: std::vec<expr>&, want: u32?, span: span) -> compile_error!tval {
+attach fn cpp_dyn_call(this: checker&, d: u32, name: str, rv: tval?, static_ty: u32?, explicit: std::vec<garg>&, args: std::vec<expr>&, want: u32?, span: span) -> compile_error!tval {
     var callee = this.cpp_call_attr(d) ?? "";
+    // a class template's static: its class as the type it's called through spells it (Bag<{t0}>::f
+    // through Bag<i32> is Bag<int32_t>::f, T-0640)
+    var filled: std::string = {};
+    val sty = static_ty;
+    if (sty != null && contains(callee, "{t")) {
+        match (*this.t.get(sty ?? 0)) {
+            .STRUCT(sid) => {
+                filled = S(callee);
+                val targs = &this.si(sid).args;
+                for (i) in 0..targs.len {
+                    // (a type as a @cpp type argument's, a number as its literal: negative in parentheses)
+                    var sp: std::string = {};
+                    match (*targs.at(i)) {
+                        .TY(at) => {
+                            sp = this.cpp_targ_type(at) ?? return fail(span, this.no_cpp_spelling(at));
+                        },
+                        .INT(v) => {
+                            sp = num(v);
+                            if (v < 0) {
+                                sp = fmt("({})", move sp);
+                            }
+                        },
+                        default => {
+                            return fails(span, "this class template's argument has no C++ spelling for a call clang works out");
+                        },
+                    }
+                    filled = replace_all(filled.as_str(), fmt("{{t{}}}", unum(@cast<u64>(i))).as_str(), sp.as_str());
+                }
+                callee = this.intern(copy filled);
+            },
+            default => {},
+        }
+    }
     // "c:NAME": a C import's (cuse.volt)
     if (starts_with(callee, "c:")) {
         return this.c_dyn_call(d, callee[2..callee.len], name, explicit, args, want, span);
