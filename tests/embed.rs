@@ -80,7 +80,7 @@ fn embedded_volt() {
         let o = c.output().unwrap();
         // Windows arm64 crashes loading it (T-0654): reported, not failed, until that's fixed
         if cfg!(all(windows, target_arch = "aarch64")) && !o.status.success() {
-            eprintln!("embedded_volt: host_imports failed on Windows arm64 (T-0654: {})\n--- stdout\n{}\n--- stderr\n{}", o.status, String::from_utf8_lossy(&o.stdout), String::from_utf8_lossy(&o.stderr));
+            common::known_failure(&format!("embedded_volt: host_imports failed on Windows arm64 (T-0654: {})", o.status), &format!("--- stdout\n{}\n--- stderr\n{}", String::from_utf8_lossy(&o.stdout), String::from_utf8_lossy(&o.stderr)));
             let _ = std::fs::remove_dir_all(&dir);
             return;
         }

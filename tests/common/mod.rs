@@ -188,6 +188,20 @@ pub fn path_with(dir: impl AsRef<std::path::Path>) -> std::ffi::OsString {
     std::env::join_paths(dirs).unwrap()
 }
 
+/// a known failure a test reports instead of failing (what names its task): on stderr, which cargo
+/// shows only for a failing test, and in the CI job's summary ($GITHUB_STEP_SUMMARY), which shows it
+/// either way
+#[allow(dead_code)]
+pub fn known_failure(what: &str, detail: &str) {
+    eprintln!("{what}\n{detail}");
+    if let Some(p) = std::env::var_os("GITHUB_STEP_SUMMARY") {
+        use std::io::Write;
+        if let Ok(mut f) = std::fs::OpenOptions::new().append(true).create(true).open(p) {
+            let _ = writeln!(f, "**known failure:** {what}\n```\n{}\n```", detail.chars().take(4000).collect::<String>());
+        }
+    }
+}
+
 /// whether a golden program runs on this system: no `// os: ` line, or one naming it ("linux macos")
 #[allow(dead_code)]
 pub fn os_ok(src: &str) -> bool {

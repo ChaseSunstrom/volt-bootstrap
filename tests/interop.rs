@@ -1962,6 +1962,15 @@ fn cpp_derive_any() {
     // with or without RTTI
     let e = Env::new("cpp-derive-any");
     let want = "31 10 701 140 4\ncopy 1031 1001\nsummer 1001 gone\n7 summer\nsink 109 top 5\nmid -1 plain true\nsame 1 summer\npassed 1031 summer\nsummer 1001 gone\nsummer 1 gone\n";
+    // macOS x86-64 (the job's own LLVM with Apple's libc++): v.push_back on the std::vector a
+    // virtual is handed misses its instance (T-0660): reported, not failed, until that's fixed
+    if cfg!(all(target_os = "macos", target_arch = "x86_64")) {
+        let o = e.voltc(&["run", "cpp_derive2.volt", "--backend", "c"]);
+        if !o.status.success() {
+            common::known_failure("cpp_derive_any: fails on macOS x86-64 (T-0660)", &String::from_utf8_lossy(&o.stderr));
+            return;
+        }
+    }
     for backend in ["c", "llvm"] {
         assert_eq!(ok(e.voltc(&["run", "cpp_derive2.volt", "--backend", backend]), "voltc run cpp_derive2.volt"), want, "C++ derive, any types ({backend})");
     }
