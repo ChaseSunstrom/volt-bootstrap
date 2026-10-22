@@ -237,8 +237,19 @@ jobs:
       - name: Report panics 11-20
         if: failure()
         run: sh .github/report-failures.sh test.log failure detail 2
-
-  # Windows: LLVM's release (MSVC ABI), whose LLVM-C.dll and libclang.dll voltc calls into
+      # (T-0381: cpp_derive_any's v.push_back on a std::vector<int>& fails only here, this job's
+      # LLVM with Apple's libc++: the per-use fn and the vector as the import declares them)
+      - name: C++ derive facts
+        if: failure()
+        run: |
+          set +e
+          V=$(ls -t "$PWD"/target/tmp/voltc-stage1-* 2>/dev/null | grep -v '\.c$' | head -1)
+          [ -n "$V" ] || { echo "no stage-1 voltc under target/tmp"; exit 0; }
+          cd tests/interop
+          VOLT_SHOW_CPP=1 VOLT_STD=../../std "$V" check cpp_derive2.volt > derive.out 2>&1
+          grep -n "volt_cpp_call_0\|struct vector\|cpp_type(\"std::vector\|cpp_handle(\"std::vector\|// C++: .*push_back" derive.out | head -30
+          grep -n -B2 -A6 "fn volt_cpp_call_0" derive.out | head -40
+          tail -12 derive.out
   windows:
     name: test (windows ${{ matrix.arch }})
     strategy:

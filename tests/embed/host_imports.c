@@ -451,8 +451,11 @@ int main(int argc, char **argv) {
     printf("user %lld\n", user_of(vm, "user"));
     printf("thrice %lld\n", thrice_of(vm, argv[2], "thrice"));
 #ifndef _WIN32
-    // (a C++ std module's build, watched through a sh wrapper around $CXX)
-    std_kept(vm, argv[2]);
+    // (a C++ std module's build, watched through a sh wrapper around $CXX; not where the C++
+    // library has none: embed.rs says)
+    if (!getenv("VOLT_TEST_NO_STD_MODULE")) {
+        std_kept(vm, argv[2]);
+    }
 #endif
     header_changes(vm);
     volt_vm_free(vm);

@@ -59,19 +59,27 @@ fn embedded_volt() {
         ok(Command::new("cc").arg("-o").arg(&imports).arg(Path::new(ROOT).join("tests/embed/host_imports.c")).arg("-I").arg(&bindings).arg("-L").arg(&lib_dir).arg("-lvoltvm").arg(format!("-Wl,-rpath,{}", lib_dir.display())).output().unwrap(), "compiling host_imports.c");
         // and in a sandbox through clang of the VM's LLVM (llvm-config's), when it's there
         let clang = bindir.filter(|b| cfg!(target_os = "linux") && b.join("clang").is_file() && b.join("clang++").is_file());
-        let mut c = Command::new(&imports);
-        c.arg(&std_dir).arg(Path::new(ROOT).join("tests/embed"));
         // Apple's clang++ has no std module (no libc++ modules manifest): on macOS, the clang++ of
-        // the LLVM voltc uses, as cpp_module has it
-        if cfg!(target_os = "macos") {
-            c.env("CXX", common::llvm_tool("clang++"));
-        }
+        // the LLVM voltc uses, as cpp_module has it, when that LLVM has libc++'s (Homebrew's does;
+        // the Intel job's own build has no libc++ at all, so there's no std module case there)
+        let mac_cxx = common::llvm_tool("clang++");
+        let mac_std = cfg!(target_os = "macos") && Path::new(&mac_cxx).parent().and_then(|b| b.parent()).is_some_and(|p| p.join("lib/c++/libc++.modules.json").is_file());
+        let host = |c: &mut Command| {
+            c.arg(&std_dir).arg(Path::new(ROOT).join("tests/embed"));
+            if mac_std {
+                c.env("CXX", &mac_cxx);
+            } else if cfg!(target_os = "macos") {
+                c.env("VOLT_TEST_NO_STD_MODULE", "1");
+            }
+        };
+        let mut c = Command::new(&imports);
+        host(&mut c);
         if let Some(b) = &clang {
             c.arg("box").env("CC", b.join("clang")).env("CXX", b.join("clang++"));
         }
         let out = ok(c.output().unwrap(), "host_imports");
         // (Windows: no std module case, which watches $CXX through a sh wrapper)
-        let std_line = if cfg!(windows) { "" } else { "std 9 13, kept\n" };
+        let std_line = if cfg!(windows) || (cfg!(target_os = "macos") && !mac_std) { "" } else { "std 9 13, kept\n" };
         let native = format!("run 53\nuser 54\nthrice 15\n{std_line}reload hv 10\nreload hv 20\nreload inner hv 30\nreload inner hv 40\nheader fn 10 20\nheader fn after a failed load 40\nheader removed, next load 7\nheader removed, a header fn 8\nheader inline 10 20\ncpp removed 5, removed, next load 8, kin.h edited, next load 9, a new importer refused naming it, put back 70\nkept removed 6, removed, next load 8, kin.h edited, next load 9, a new importer refused naming it, put back 71\n");
         assert_eq!(out, if clang.is_some() { IMPORTS_OUT } else { native.as_str() });
         // a C compiler that rejects -H (tcc does): the headers it read aren't listed, so only those the
@@ -83,7 +91,11 @@ fn embedded_volt() {
             let wrap = dir.join("cc-no-H");
             std::fs::write(&wrap, format!("#!/bin/sh\nfor a in \"$@\"; do\n    [ \"$a\" = -H ] && {{ echo 'cc: unknown option -H' >&2; exit 1; }}\ndone\nexec '{}' \"$@\"\n", cc.display())).unwrap();
             std::fs::set_permissions(&wrap, std::fs::Permissions::from_mode(0o755)).unwrap();
-            let out = ok(Command::new(&imports).arg(&std_dir).arg(Path::new(ROOT).join("tests/embed")).env("CC", &wrap).output().unwrap(), "host_imports (a cc without -H)");
+            // (macOS: the C++ the first run has)
+            let mut c = Command::new(&imports);
+            host(&mut c);
+            c.env("CC", &wrap);
+            let out = ok(c.output().unwrap(), "host_imports (a cc without -H)");
             assert_eq!(out, native.replace("inner hv 40", "inner hv 30"));
         }
     }
