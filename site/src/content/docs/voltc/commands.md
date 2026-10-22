@@ -40,7 +40,7 @@ newer language features need voltc.
 | `--std DIR`, `--no-std` | the std package (default: `$VOLT_STD`, then a `std/` next to voltc) |
 | `--pkg NAME=DIR` | a package: DIR's `.volt` files, in `namespace NAME` |
 | `--link NAME=LIB.a` | take package NAME's non-generic code from a `voltc lib` build |
-| `--cfg [PKG:]KEY[=VALUE]` | set KEY for `@cfg` in the program's files, or in package PKG's; `os`, `arch` and `pointer_bits` replace the host's in every package, for checking another platform's code ([the target](/volt-bootstrap/guide/comptime/#the-target)) |
+| `--cfg [PKG:]KEY[=VALUE]` | set KEY for `@cfg` in the program's files, or in package PKG's; `os`, `arch` and `pointer_bits` replace the host's in every package, for checking another platform's code ([the target](/volt-bootstrap/guide/comptime/#the-target)); building with another `arch` needs that arch's `--target`, or `--backend c` |
 | `--lib NAME` | with `check`: check package NAME alone, as a library (no `main`) |
 | `--shared`, `--static` | with `lib`: a self-contained `.so` (`.dylib`, `.dll`) or `.a` for other languages |
 | `--lang L` | with `bindings`: `c`, `cpp`, `rust`, `zig`, `python`, `pyi`, `csharp`, `java`, `go`, `lua`, `dart`, `swift`, `kotlin`, `ruby`, `node`, `js`, `ts` or `json` |

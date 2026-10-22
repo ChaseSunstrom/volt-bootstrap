@@ -4068,8 +4068,6 @@ attach fn layout_rec(this: checker&, ts: std::vec<u32>&, span: span) -> compile_
     return { size: (off + al - 1) / al * al, align: al };
 }
 
-// size and alignment as the C compiler lays things out (x86_64 SysV)
-// ponytail: one target's rules; add a target table when voltc cross-compiles
 // the vector of n lanes of t (@vector): ints of up to 64 bits or f32/f64, a power of two lanes
 // from 2 to 64, at most 64 bytes in all (what C's vector_size and every LLVM target take)
 attach fn vector_of(this: checker&, t: u32, n: u64, span: span) -> compile_error!u32 {
@@ -4089,12 +4087,35 @@ attach fn vector_of(this: checker&, t: u32, n: u64, span: span) -> compile_error
     return this.t.intern(tyk::VECTOR(t, n));
 }
 
+// the target's arch, as @cfg sees it
+attach fn target_arch(this: checker&) -> str {
+    return this.cfg_given("arch") ?? std::process::arch();
+}
+
+// an n-byte integer's (int) or float's alignment on the target, as its C compiler and LLVM data
+// layout have it: n, but i386 aligns 8-byte ones to 4 (long long and double in a struct: the
+// System V i386 ABI's rule; MSVC's i386 aligns them to 8, which this doesn't model), and 32-bit ARM
+// and RISC-V 128-bit integers to 8 (f128 stays 16)
+attach fn scalar_align(this: checker&, n: u64, int: bool) -> u64 {
+    val arch = this.target_arch();
+    if (n == 8 && arch == "x86") {
+        return 4;
+    }
+    if (n == 16 && int && (arch == "arm" || arch == "riscv32")) {
+        return 8;
+    }
+    return n;
+}
+
 // n pointers' (or usizes') layout on the target
 fn ptr_lay(n: u64) -> lay {
     val p = @cast<u64>(usize_bits / 8);
     return { size: p * n, align: p };
 }
 
+// size and alignment as the target's C compiler lays things out (and lgen's check_layout holds the
+// LLVM backend to it): SysV's rules, with each target's scalar and vector alignments (scalar_align)
+// ponytail: a table of the archs voltc builds for; an arch it doesn't know gets x86-64's alignments
 attach fn layout(this: checker&, t: u32, span: span) -> compile_error!lay {
     match (*this.t.get(t)) {
         .STRUCT(s) => {
@@ -4119,11 +4140,11 @@ attach fn layout(this: checker&, t: u32, span: span) -> compile_error!lay {
         .BOOL => { return { size: 1, align: 1 }; },
         .INT(k) => {
             val b = @cast<u64>(k.bits() / 8);
-            return { size: b, align: b };
+            return { size: b, align: this.scalar_align(b, true) };
         },
         .FLOAT(b) => {
             val n = @cast<u64>(b / 8);
-            return { size: n, align: n };
+            return { size: n, align: this.scalar_align(n, false) };
         },
         // a pointer is as wide as usize: 4 bytes on a 32-bit target
         .REF(x) => { return ptr_lay(1); },
@@ -4151,9 +4172,15 @@ attach fn layout(this: checker&, t: u32, span: span) -> compile_error!lay {
             return { size: l.size * n, align: l.align };
         },
         .VECTOR(e, n) => {
-            // aligned to its whole size, as C's vector_size and LLVM's vectors are
+            // aligned to its whole size, as C's vector_size and LLVM's vectors are; but a 16-byte
+            // one to 8 on 32-bit ARM (its data layout's v128:64, the only vector size it names:
+            // LLVM aligns 32- and 64-byte ones to their size there too)
             val l = try this.layout(e, span);
-            return { size: l.size * n, align: l.size * n };
+            var al = l.size * n;
+            if (al == 16 && this.target_arch() == "arm") {
+                al = 8;
+            }
+            return { size: l.size * n, align: al };
         },
         .TUPLE(ts, names) => {
             val xs = copy ts;

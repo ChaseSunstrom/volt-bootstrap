@@ -709,7 +709,11 @@ fn main() -> void {
 Without `--target`, the keys describe the host. Passing one with `--cfg`, such as
 `--cfg os=windows`, replaces the host's value for every package. `voltc check --cfg os=windows`
 then checks another platform's branches on this machine. Only checking makes sense this way: a
-build still runs on the host, and `std::process::os()` still reports the host.
+build still runs on the host, and `std::process::os()` still reports the host. `arch` and
+`pointer_bits` also set the compile-time layout (`@sizeof` and `@alignof` at compile time: `x86`
+aligns 8-byte integers and floats to 4), and the LLVM backend, building for the host, refuses a
+type whose layout there differs from the host's: build that arch's code with its `--target`, or
+through C (`--backend c`), whose compiler takes the arch's flags (`--cc -m32`).
 
 ```volt
 use std::io;

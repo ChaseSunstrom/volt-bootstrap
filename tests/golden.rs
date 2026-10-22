@@ -104,6 +104,47 @@ fn llvm_falls_back_to_c() {
     }
 }
 
+/// the checker's compile-time layout is each target's: lgen refuses a type whose LLVM size or
+/// alignment differs from it (a voltc bug), so tests/llvm/layout_targets.volt (128-bit ints, f64,
+/// f128, vectors) builds for the host and every --target; and on i386 (cc -m32 through C, where
+/// 8-byte ints and floats are 4-aligned) @sizeof and @alignof at compile time are the C compiler's
+#[test]
+fn golden_layout_targets() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let voltc = |args: &[&str]| Command::new(common::voltc()).args(args).current_dir(root).output().unwrap();
+    for target in ["", "thumbv6m-none", "thumbv7em-none", "riscv32-none", "riscv64-none", "aarch64-none", "wasm32-none"] {
+        let mut args = vec!["emit-llvm", "tests/llvm/layout_targets.volt"];
+        if !target.is_empty() {
+            args.extend(["--target", target]);
+        }
+        let o = voltc(&args);
+        assert!(o.status.success(), "layout_targets for {target:?}: {}", String::from_utf8_lossy(&o.stderr));
+    }
+    // i386's layout at compile time, with no C compiler: layout_i386's comptime check passes with
+    // arch=x86 and fails without it
+    let i386 = ["tests/llvm/layout_i386.volt", "--no-std", "--cfg", "arch=x86", "--cfg", "pointer_bits=32"];
+    let o = voltc(&[&["emit-c"][..], &i386].concat());
+    assert!(o.status.success(), "emit-c for i386: {}", String::from_utf8_lossy(&o.stderr));
+    let o = voltc(&["emit-c", "tests/llvm/layout_i386.volt", "--no-std"]);
+    assert!(!o.status.success() && String::from_utf8_lossy(&o.stderr).contains("not i386's C layout"), "x86-64's layout passed i386's check");
+    // the LLVM backend building for this host can't take i386's layout: refused, pointing at C
+    let o = voltc(&[&["emit-llvm"][..], &i386].concat());
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(!o.status.success() && err.contains("lays out 'i64' as size 8, align 8 (the checker: size 8, align 4)") && err.contains("--backend c"), "emit-llvm with --cfg arch=x86: {err}");
+    let m32 =Command::new("cc").args(["-m32", "-x", "c", "-", "-o", "/dev/null"]).stdin(std::process::Stdio::piped()).spawn().and_then(|mut c| {
+        use std::io::Write;
+        c.stdin.take().unwrap().write_all(b"#include <stdio.h>\nint main(void) { return printf(\"\"); }\n")?;
+        c.wait()
+    });
+    if !m32.is_ok_and(|s| s.success()) {
+        eprintln!("golden_layout_targets: no cc -m32 here, i386's check not run");
+        return;
+    }
+    let o = voltc(&["run", "tests/llvm/layout_i386.volt", "--no-std", "--backend", "c", "--cc", "-m32", "--cfg", "arch=x86", "--cfg", "pointer_bits=32"]);
+    let got = String::from_utf8_lossy(&o.stdout);
+    assert!(o.status.success() && got == "wide 12 4 / C 12 4\ndbl 16 4 / C 16 4\ni64 4 f64 4\n", "i386's layout:\n{got}{}", String::from_utf8_lossy(&o.stderr));
+}
+
 /// packages precompiled with `voltc lib` and linked: same output as compiling them from source
 #[test]
 fn std_linked() {

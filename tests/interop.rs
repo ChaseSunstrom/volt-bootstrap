@@ -2446,9 +2446,10 @@ fn cpp_peruse4() {
     // a call made per use whose result is a mirror (a Volt struct, a tuple, an enum with payloads),
     // deduced, with the template argument given, named only in the result (zero<point>(), its try_
     // form), other than the parameter's (conv<point, shape>(p)) or pointed to: that Volt value back;
-    // a reference result with nothing to be into (global<point>()): a copy
+    // a reference result with nothing to be into (global<point>()), or into the wrapper's own copy of
+    // an argument (h.pick(p)): a copy; one into the object (h.at_n(0)): a reference (T-0633)
     let e = Env::new("cpp-peruse4");
-    let want = "struct 3 2.5 3 2.5\ntuple (4, 0.5) (4, 0.5)\nenum 1.25 7\nzero 0 0 (0, 0) 0\ntry 0\nconv 0 global 9 0\naddr 6 1.5 true\n";
+    let want = "struct 3 2.5 3 2.5\ntuple (4, 0.5) (4, 0.5)\nenum 1.25 7\nzero 0 0 (0, 0) 0\ntry 0\nconv 0 global 9 0\naddr 6 1.5 true\npick 3 2.5 at_n 8\n";
     for backend in ["c", "llvm"] {
         assert_eq!(ok(e.voltc(&["run", "cpp_peruse4.volt", "--backend", backend]), "voltc run cpp_peruse4.volt"), want, "mirrored results ({backend})");
     }
@@ -2705,19 +2706,24 @@ fn cpp_aligned_field() {
     // a class whose field is an aligned typedef's (aligned past its int, or below it) isn't laid out
     // as Volt lays out the int: held by handle, not a struct with Volt's alignment or offsets
     let e = Env::new("cpp-aligned-field");
+    // (Windows: MinGW's MSVC layout doesn't lower a field's alignment by a typedef, so tight and
+    // mixed are laid out as Volt lays them out, value structs: tight is 8 bytes there)
+    let tight = if cfg!(windows) { "tight 9 8" } else { "tight 9 6" };
     for backend in ["c", "llvm"] {
-        assert_eq!(ok(e.voltc(&["run", "cpp_aligned_field.volt", "--backend", backend]), "voltc run cpp_aligned_field.volt"), "cell 7 true true 32\ntight 9 6\nmixed 11 0.5\nsqueezed 13 5\n", "aligned-typedef and packed fields ({backend})");
+        assert_eq!(ok(e.voltc(&["run", "cpp_aligned_field.volt", "--backend", backend]), "voltc run cpp_aligned_field.volt"), format!("cell 7 7 true true 32\n{tight}\nmixed 11 0.5\nsqueezed 13 5\ntemplates 5 34 35 9\n"), "aligned-typedef and packed fields ({backend})");
     }
     let shown = Command::new(&e.voltc).args(["check", "cpp_aligned_field.volt", "--std"]).arg(Path::new(ROOT).join("std")).current_dir(Path::new(ROOT).join("tests/interop")).env("VOLT_SHOW_CPP", "1").output().unwrap();
     let src = String::from_utf8_lossy(&shown.stderr);
-    for c in ["cell", "tight", "mixed", "squeezed"] {
+    let handles: &[&str] = if cfg!(windows) { &["cell", "squeezed"] } else { &["cell", "tight", "mixed", "squeezed"] };
+    for c in handles {
         assert!(src.contains(&format!("@cpp_handle(\"af::{c}\")")), "af::{c} held by handle: {src}");
     }
-    // below C++17 the ones aligned to 8 or less are still handles (plain new); cell (16) is left out
+    // below C++17 the ones aligned to 8 or less are still handles (plain new); cell (16) is left out,
+    // and cell_x, which takes one, is only worked out per use: the rest of the header imports (T-0634)
     assert_eq!(ok(e.voltc(&["run", "cpp_aligned_field14.volt", "--cc", "-std=c++14"]), "voltc run cpp_aligned_field14.volt"), "c++14 9 11\n", "handles under C++14");
     let shown = Command::new(&e.voltc).args(["check", "cpp_aligned_field14.volt", "--cc", "-std=c++14", "--std"]).arg(Path::new(ROOT).join("std")).current_dir(Path::new(ROOT).join("tests/interop")).env("VOLT_SHOW_CPP", "1").output().unwrap();
     let src = String::from_utf8_lossy(&shown.stderr);
-    assert!(src.contains("@cpp_handle(\"af::tight\")") && src.contains("@cpp_handle(\"af::mixed\")") && src.contains("left out: class af::cell") && src.contains("needs C++17"), "C++14: tight and mixed handles, cell left out: {src}");
+    assert!((cfg!(windows) || (src.contains("@cpp_handle(\"af::tight\")") && src.contains("@cpp_handle(\"af::mixed\")"))) && src.contains("left out: class af::cell") && src.contains("needs C++17") && src.contains("af::cell_x(const cell & v) (worked out per use"), "C++14: tight and mixed handles, cell left out, cell_x per use: {src}");
 }
 
 /// is a C++ library's header on the usual include paths?
