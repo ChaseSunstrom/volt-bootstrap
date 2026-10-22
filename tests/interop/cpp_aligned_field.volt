@@ -36,4 +36,6 @@ fn main() -> void {
     var tp: cpp::af::tpacked<i32> = {};
     tp.set_x(4);
     std::println("templates {} {} {} {}", cpp::af::tcell_x(&tc), cpp::af::twide_x(&tw), cpp::af::tslot_x(&ts), cpp::af::tpacked_x(&tp));
+    var tb: cpp::af::tbox32 = {};
+    std::println("box {}", tb.get());
 }

@@ -68,6 +68,20 @@ template <class T>
 struct tholder {
     twide<T> w;
 };
+// a class template held by handle (a private field) and an alias of its instance on an aligned
+// class: below C++17 new can't make that instance (T-0645)
+struct alignas(32) v32 {
+    float f[8];
+};
+template <class T>
+struct tbox {
+    T t;
+    int get() const { return p; }
+
+  private:
+    int p = 4;
+};
+typedef tbox<v32> tbox32;
 
 inline int squeezed_x(const squeezed &v) { return v.x; }
 inline int squeezed_size() { return (int)sizeof(squeezed); }
