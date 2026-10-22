@@ -124,8 +124,11 @@ struct cpp_gen {
     inst_args: std::vec<str> = {};
     inst_tu: clang_tu = { index: null, tu: null }; // where they're asked (its preamble the headers)
     classes: std::map<str, str> = {};
-    // the classes prune left out (no Volt layout, no handle): nothing that names one gets a form
+    // the classes and class templates prune left out (no Volt layout, no handle): nothing that names
+    // one gets a form
     left_out: std::map<str, bool> = {};
+    // the import's standard is below C++17: new doesn't align past 16 (no aligned new)
+    below17: bool = false;
     enums: std::map<str, str> = {};
     templates: std::map<str, str> = {};
     depth: usize = 0;
@@ -642,8 +645,13 @@ attach fn instance(this: cpp_gen&, qt: clang::CXType) -> str? {
     // declarations reach only gets an instance for its own types (std's and other libraries' come
     // through calls made per use)
     val decl = clang::clang_getTypeDeclaration(ct);
-    // (one prune left out isn't held by handle either: a fn taking it is worked out per use, T-0634)
+    // (one prune left out isn't held by handle either: a fn taking it is worked out per use, T-0634;
+    // nor an instance of a class template it left out, T-0638)
     if (this.left_out.get(cpp_qual(decl).as_str()) != null) {
+        return null;
+    }
+    val of_tmpl = clang::clang_getSpecializedCursorTemplate(decl);
+    if (clang::clang_Cursor_isNull(of_tmpl) == 0 && this.left_out.get(cpp_qual(of_tmpl).as_str()) != null) {
         return null;
     }
     if (!this.inst_any) {
@@ -4994,8 +5002,8 @@ attach fn template_ok(this: cpp_gen&, c: clang::CXCursor) -> bool {
         val k = clang::clang_getCursorKind(*ch);
         // (and a layout C++ takes from alignas, aligned or packed on the class, T-0632: any of them,
         // though an alignas(4) on an int's template is one Volt would match. ponytail: a template
-        // under #pragma pack has no attribute cursor, and a handle's plain new below C++17 doesn't
-        // align past 16: T-0638)
+        // under #pragma pack has no attribute cursor (clang's implicit max-field-alignment), so it
+        // stays a generic struct with Volt's offsets: a sizeof probe of an instance would see it)
         if (k == clang::CXCursor_CXXBaseSpecifier || (k == clang::CXCursor_CXXMethod && clang::clang_CXXMethod_isVirtual(*ch) != 0) || k == clang::CXCursor_AlignedAttr || k == clang::CXCursor_PackedAttr) {
             return false;
         }
@@ -5007,6 +5015,36 @@ attach fn template_ok(this: cpp_gen&, c: clang::CXCursor) -> bool {
         }
     }
     return true;
+}
+
+// is class template c aligned by an attribute (alignas or aligned on it or a field, or a field's
+// typedef aligned past 8), so that holding it by handle needs C++17's aligned new; packed isn't
+fn aligned_template(c: clang::CXCursor) -> bool {
+    for (ch&) in children(c).items() {
+        val k = clang::clang_getCursorKind(*ch);
+        if (k == clang::CXCursor_AlignedAttr) {
+            return true;
+        }
+        if (k != clang::CXCursor_FieldDecl) {
+            continue;
+        }
+        for (a&) in children(*ch).items() {
+            if (clang::clang_getCursorKind(*a) == clang::CXCursor_AlignedAttr) {
+                return true;
+            }
+        }
+        if (clang::clang_Type_getAlignOf(clang::clang_getCursorType(*ch)) > 8) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// is standard s (the import's -std: c++14, gnu++1y) one below C++17
+fn below_cpp17(s: str) -> bool {
+    val at = s.find("++") ?? return false;
+    val v = s[at + 2..s.len];
+    return v == "98" || v == "03" || v == "0x" || v == "11" || v == "1y" || v == "14";
 }
 
 // does C++ place field f by more than its type's own alignment, which a Volt generic struct can't
@@ -5039,8 +5077,14 @@ attach fn prune(this: cpp_gen&) -> void {
         }
         for (q&) in gone.items() {
             // held by handle instead, as a generic struct (its parameters all types, the defaulted
-            // rest C++'s); std's smart pointers and std::function keep their own forms
+            // rest C++'s); std's smart pointers and std::function keep their own forms. Below C++17
+            // one an alignment attribute aligns is left out: plain new doesn't align it (T-0638)
             val c = *(this.cursors.get(*q) ?? continue);
+            if (this.below17 && aligned_template(c)) {
+                this.left_out.put(*q, true);
+                this.templates.remove(*q);
+                continue;
+            }
             val tps = template_params(c, true);
             val path = *(this.templates.get(*q) ?? continue);
             val vn = last_part(path, "");
@@ -6382,6 +6426,8 @@ attach fn emit(this: cpp_gen&, c: clang::CXCursor) -> void {
             }
         } else if (k == clang::CXCursor_ClassTemplate && (clang::clang_isCursorDefinition(*ch) != 0 || clang::clang_Cursor_isNull(clang::clang_getCursorDefinition(*ch)) != 0) && this.tmpl_handles.get(cpp_qual(*ch).as_str()) != null) {
             this.template_handle(*ch);
+        } else if (k == clang::CXCursor_ClassTemplate && clang::clang_isCursorDefinition(*ch) != 0 && this.left_out.get(cpp_qual(*ch).as_str()) != null) {
+            this.line(fmt("// left out: class template {} (an alignment attribute lays it out, and holding it by handle needs C++17's aligned new)", cpp_qual(*ch)).as_str());
         } else if (k == clang::CXCursor_ClassTemplate && clang::clang_isCursorDefinition(*ch) != 0 && this.templates.get(cpp_qual(*ch).as_str()) != null) {
             // one whose parameters all have defaults has nothing for Volt's generics (and one
             // prune left out isn't declared)
@@ -7119,6 +7165,7 @@ attach fn import_cpp(this: checker&, headers: std::vec<std::string>&, alias: str
         return fail(span, fmt("libclang couldn't read these C++ headers: {}", copy bad));
     }
     var g: cpp_gen = { c: this, kinds: fmt("volt_cpp_kinds_{}", unum(@cast<u64>(this.cpp_items.len))) };
+    g.below17 = below_cpp17(std_name);
     g.module_file = move mod_path;
     g.export_from = move exp_from;
     g.export_to = move exp_to;

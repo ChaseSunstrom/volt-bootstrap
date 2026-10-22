@@ -2646,6 +2646,12 @@ fn cpp_aligned_field() {
     let shown = Command::new(&e.voltc).args(["check", "cpp_aligned_field14.volt", "--cc", "-std=c++14", "--std"]).arg(Path::new(ROOT).join("std")).current_dir(Path::new(ROOT).join("tests/interop")).env("VOLT_SHOW_CPP", "1").output().unwrap();
     let src = String::from_utf8_lossy(&shown.stderr);
     assert!((cfg!(windows) || (src.contains("@cpp_handle(\"af::tight\")") && src.contains("@cpp_handle(\"af::mixed\")"))) && src.contains("left out: class af::cell") && src.contains("needs C++17") && src.contains("af::cell_x(const cell & v) (worked out per use"), "C++14: tight and mixed handles, cell left out, cell_x per use: {src}");
+    // and the class templates aligned by alignas or an aligned typedef are left out too; the packed
+    // one, aligned to 1, is still a handle (T-0638)
+    for t in ["tcell", "twide", "tslot"] {
+        assert!(src.contains(&format!("left out: class template af::{t} ")) && !src.contains(&format!("@cpp_handle(\"af::{t}\")")), "C++14: af::{t} left out: {src}");
+    }
+    assert!(src.contains("@cpp_handle(\"af::tpacked\")"), "C++14: af::tpacked a handle: {src}");
 }
 
 /// is a C++ library's header on the usual include paths?
