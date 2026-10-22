@@ -48,12 +48,12 @@ attach fn nop(this: checker&) -> u32 {
     return this.ir.block({});
 }
 
-// a direct call of ir fn f, returning t
 // --backtrace: the call at span is where the fn being built calls from (the stack a panic lists)
 attach fn note_site(this: checker&, span: span) -> u32 {
     return this.ir.rt_call("volt_rt_at", nodes(this.ir.node(ir_kind::CSTR(this.loc(span)), CSTR)), VOID);
 }
 
+// a direct call of ir fn f, returning t
 attach fn call_fn(this: checker&, f: u32, args: std::vec<u32>, t: u32) -> u32 {
     val fnode = this.ir.node(ir_kind::FN(f), VOIDPTR);
     return this.ir.call(fnode, move args, t);

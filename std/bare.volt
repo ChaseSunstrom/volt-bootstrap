@@ -67,6 +67,10 @@ namespace bare {
     @attributes([@cfg("backtrace")])
     export fn volt_rt_leave() -> void {
         trace_depth -= 1;
+        // (the caller's call site is spent)
+        if (trace_depth > 0 && trace_depth <= 32) {
+            trace_ats[trace_depth - 1] = 0;
+        }
     }
 
     @attributes([@cfg("backtrace")])
