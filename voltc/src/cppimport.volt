@@ -7957,7 +7957,9 @@ attach fn cpp_instance_as(this: checker&, k: usize, expr: str, types: std::vec<u
     // struct, tuple or enum passed by value (its mirror) is the wrapper's own copy (&a1), gone once
     // the call returns, so the value comes back (T-0633). ponytail: only mirrors count, so a
     // std::map's at() keeps its reference for a number's, a str's or a handle's key; a
-    // pick(const int&) returning its argument, or a handle moved in, would still dangle (T-0637)
+    // pick(const int&) returning its argument, or a reference to a member of a handle moved in,
+    // would still dangle (a handle's own class comes back as a new handle): only
+    // [[clang::lifetimebound]] would tell these from at()'s, and libraries don't mark it (T-0637)
     if (!by_value) {
         val rk = clang::clang_getCanonicalType(clang::clang_getCursorResultType(fc)).kind;
         if (rk == clang::CXType_LValueReference || rk == clang::CXType_RValueReference) {
