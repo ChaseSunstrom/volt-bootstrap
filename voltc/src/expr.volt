@@ -968,6 +968,13 @@ attach fn path_expr(this: checker&, p: path&, want: u32?, span: span) -> compile
                     if (many) {
                         return fail(span, fmt("'{}' is overloaded, so it can't be used as a value here", S(fd.name)));
                     }
+                    // (a static fn is named through its type, as it's called: T-0631)
+                    match (this.recv_of(d)) {
+                        .STATIC(x) => {
+                            return fail(span, fmt3("{} is a static fn: name it through its type, {}::{}", S(fd.name), this.static_owner(d), S(fd.name)));
+                        },
+                        default => {},
+                    }
                     // f<Args>: that instance (generic args bound as in a call with none to infer from)
                     var binds: std::vec<gval> = {};
                     val last = p.segs.at(p.segs.len - 1);
