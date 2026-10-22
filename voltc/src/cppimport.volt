@@ -7242,26 +7242,38 @@ fn libcxx_dir_file(cmd: std::vec<str>&, name: str) -> std::string? {
     var argv = copy *cmd;
     put(&argv, "-print-resource-dir");
     val r = std::process::capture(argv.items(), "") catch |e| {
+        std_module_tried.append("; -print-resource-dir didn't run");
         return null;
     };
     if (r.code != 0) {
+        std_module_tried.append(fmt("; -print-resource-dir failed: {}", S(r.err.as_str().trim())).as_str());
         return null;
     }
     var p = S(r.out.as_str().trim());
     p.append("/../../c++/");
     p.append(name);
-    return real_file(p.as_str());
+    val f = real_file(p.as_str());
+    if (f == null) {
+        std_module_tried.append(fmt("; no {}", copy p).as_str());
+    }
+    return f;
 }
+
+// what std_module_source last looked at and didn't find, for the error that follows: each manifest
+// path, and a source one names that isn't there
+var std_module_tried: std::string = {};
 
 // the C++ library's module `logical`'s source (std, std.compat), as the compiler cmd finds it: its
 // modules manifest (libstdc++.modules.json, libc++.modules.json) names it
 fn std_module_source(cmd: std::vec<str>&, logical: str) -> std::string? {
+    std_module_tried = {};
     val libs: str[2] = { "libstdc++.modules.json", "libc++.modules.json" };
     for (lib) in libs {
         var argv = copy *cmd;
         val flag = fmt("-print-file-name={}", S(lib));
         put(&argv, flag.as_str());
         val r = std::process::capture(argv.items(), "") catch |e| {
+            std_module_tried.append(fmt("; can't run {}", S(*argv.at(0))).as_str());
             continue;
         };
         var path = S(r.out.as_str().trim());
@@ -7269,21 +7281,30 @@ fn std_module_source(cmd: std::vec<str>&, logical: str) -> std::string? {
             path = libcxx_dir_file(cmd, lib) ?? continue;
         }
         val text = std::fs::read_file(path.as_str()) catch |e| {
+            std_module_tried.append(fmt("; can't read {}", copy path).as_str());
             continue;
         };
         val doc = std::json::parse(text.as_str()) catch |e| {
+            std_module_tried.append(fmt("; {} isn't JSON", copy path).as_str());
             continue;
         };
         val mods = doc.get("modules");
+        var named = false;
         for (i) in 0..mods.len() {
             if ((mods.at(i).get("logical-name").as_str() ?? "") != logical) {
                 continue;
             }
+            named = true;
             val sp = mods.at(i).get("source-path").as_str() ?? continue;
             // a source that isn't there is passed over: Ubuntu copies libc++'s manifest beside its
             // libraries, where the relative path names nothing
             if ((sp.len > 0 && sp[0] == '/') || (sp.len > 2 && sp[1] == ':' && (sp[2] == '/' || sp[2] == '\\'))) {
-                return real_file(sp) ?? continue;
+                val abs = real_file(sp);
+                if (abs == null) {
+                    std_module_tried.append(fmt2("; {} names {}, which isn't there", copy path, S(sp)).as_str());
+                    continue;
+                }
+                return abs;
             }
             var at = path.len();
             while (at > 0 && path.as_str()[at - 1] != '/' && path.as_str()[at - 1] != '\\') {
@@ -7291,7 +7312,15 @@ fn std_module_source(cmd: std::vec<str>&, logical: str) -> std::string? {
             }
             var full = S(path.as_str()[0..at]);
             full.append(sp);
-            return real_file(full.as_str()) ?? continue;
+            val found = real_file(full.as_str());
+            if (found == null) {
+                std_module_tried.append(fmt2("; {} names {}, which isn't there", copy path, copy full).as_str());
+                continue;
+            }
+            return found;
+        }
+        if (!named) {
+            std_module_tried.append(fmt2("; {} names no module {}", copy path, S(logical)).as_str());
         }
     }
     return null;
@@ -7370,7 +7399,7 @@ attach fn std_modules(this: checker&, args: std::vec<str>&, s: str, u: u32, comp
             cmd = move own;
         }
     }
-    val src = std_module_source(&cmd, "std") ?? return fail(span, fmt("import std; needs the C++ library's std module, and {} finds no modules manifest naming one that's there (libstdc++.modules.json, libc++.modules.json)", copy clangxx));
+    val src = std_module_source(&cmd, "std") ?? return fail(span, fmt2("import std; needs the C++ library's std module, and {} finds no modules manifest naming one that's there (libstdc++.modules.json, libc++.modules.json){}", copy clangxx, copy std_module_tried));
     var sargs = this.cpp_args(s);
     // macOS: the module is libc++'s of the LLVM whose clang++ found it (Homebrew's), not the SDK's
     // whose headers libclang reads by default: the module and the C++ importing it read that LLVM's
