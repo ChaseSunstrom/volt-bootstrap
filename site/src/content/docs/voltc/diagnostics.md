@@ -28,7 +28,9 @@ error: point has no field 'z'
   = help: did you mean 'x'?
 ```
 
-A misspelled name gets the closest real one as a suggestion, and an error inside a generic
+A misspelled name gets the closest real one as a suggestion; a name that's right but not in scope
+gets the path where it is (`println` alone: did you mean 'std::io::println'?; `std::assert`: did
+you mean 'std::testing::assert'?). An error inside a generic
 function's instance labels the call that made it (`twice<bool> is instantiated here`). Checking
 doesn't stop at the first error: an error ends the function it's in, and the other functions are
 still checked. Parsing works the same way: a syntax error ends the item it's in (a function, a
