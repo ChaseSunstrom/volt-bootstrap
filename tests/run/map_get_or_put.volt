@@ -15,10 +15,13 @@ fn main() -> void {
     }
     var names: std::map<i32, std::string> = {};
     names.put(1, std::string::from("one"));
-    std::println("{} {}", *names.get_or_put(1, std::string::from("uno")), *names.get_or_put(2, std::string::from("two")));
+    // (one at a time: a reference get_or_put gives lasts until the map changes)
+    std::println("{}", *names.get_or_put(1, std::string::from("uno")));
+    std::println("{}", *names.get_or_put(2, std::string::from("two")));
 }
 // expect: 2 3 1 3
 // expect: a 2
 // expect: b 3
 // expect: c 1
-// expect: one two
+// expect: one
+// expect: two
