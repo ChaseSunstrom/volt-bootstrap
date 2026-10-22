@@ -1442,18 +1442,33 @@ attach fn resolve_call(this: checker&, name: str, cands: std::vec<u32>&, rv: tva
             return this.resolve_call(name, &plain, rv, static_ty, explicit, args, want, span);
         }
     }
-    // ...and one only a type's static fns fit doesn't call one: a static is called through its
-    // type, T::f() (T-0631)
+    // ...and with no plain function there, it doesn't call a type's static one (beside a method of
+    // that name or not): a static is called through its type, T::f() (T-0631)
     if (cands.len > 0 && rv == null && static_ty == null) {
-        var statics = true;
+        var plain = false;
+        var statics = false;
+        var owner: u32? = null; // the first static's type, when its receiver names one
         for (d&) in cands.items() {
             match (this.recv_of(*d)) {
-                .STATIC(x) => {},
-                default => { statics = false; },
+                .STATIC(pat) => {
+                    statics = true;
+                    if (owner == null) {
+                        val p = pat ?? continue;
+                        val gps = this.fn_generics(*d);
+                        var binds = none_binds(gps.len);
+                        owner = this.recv_pat_type(p, gps, &binds, this.decls.at(@cast<usize>(*d)).ns);
+                    }
+                },
+                .VAL(x) => {},
+                default => { plain = true; },
             }
         }
-        if (statics) {
-            return fail(span, fmt2("{} is a static fn: call it through its type, T::{}(...)", S(name), S(name)));
+        if (statics && !plain) {
+            var ty_text = S("T");
+            if (owner) {
+                ty_text = this.ty_name(owner);
+            }
+            return fail(span, fmt3("{} is a static fn: call it through its type, {}::{}(...)", S(name), move ty_text, S(name)));
         }
     }
     if (cands.len == 1) {
