@@ -1650,8 +1650,8 @@ fn path_uri(path: str) -> std::string {
 
 // ---------- the server ----------
 
-// an open document, and the last check of it that parsed: its sources, the checker (with the
-// index) and which of the sources it is
+// an open document, and the last check of it that parsed (before any did, of the items that
+// parsed): its sources, the checker (with the index) and which of the sources it is
 struct lsp_doc {
     uri: std::string;
     text: std::string = {};
@@ -1659,6 +1659,7 @@ struct lsp_doc {
     src: std::box<sources>? = null;
     file: u32 = 0;
     dirty: bool = false; // changed since the last check
+    partial: bool = false; // chk is of the items that parsed (no check of the document parsed yet)
 }
 
 struct lsp_server {
@@ -2160,7 +2161,8 @@ attach fn check_doc(this: lsp_server&, doc: lsp_doc&) -> std::vec<diag> {
     }
     s.test_mode = 2; // test blocks are checked as plain fns
     val bad = parse_sources(s);
-    if (bad.len > 0) {
+    val parsed = bad.len == 0;
+    if (!parsed) {
         for (b&) in bad.items() {
             var d = copy *b;
             if (d.span.file != file) {
@@ -2170,7 +2172,13 @@ attach fn check_doc(this: lsp_server&, doc: lsp_doc&) -> std::vec<diag> {
             }
             put(&diags, move d);
         }
-        return diags;
+        // the last check that parsed stays; a document with none (opened mid-edit) is checked as far
+        // as it parses (the parser picks up at the next item), again at each edit until it parses,
+        // for hover and the rest, reporting only the parse errors: the others may come from what was
+        // left out
+        if (doc.chk != null && !doc.partial) {
+            return diags;
+        }
     }
     var o: opts = { lsp: true };
     for (u&) in s.units.items() {
@@ -2181,13 +2189,14 @@ attach fn check_doc(this: lsp_server&, doc: lsp_doc&) -> std::vec<diag> {
     var chk = compile_rounds(&s.files, &s.asts, move o);
     chk.lsp_generic_bodies();
     for (d&) in all_diags(&*chk).items() {
-        if (d.span.file == file) {
+        if (parsed && d.span.file == file) {
             put(&diags, copy *d);
         }
     }
     doc.file = file;
     doc.chk = move chk;
     doc.src = move sb;
+    doc.partial = !parsed;
     return diags;
 }
 
@@ -2217,13 +2226,12 @@ fn parse_sources(s: sources&) -> std::vec<diag> {
             continue;
         }
         var p: parser = { src: s.files.at(i).text, toks: s.toks.at(i), pos: 0, generics: &names };
-        val items = p.parse_file() catch |e| {
-            for (d&) in p.errors.items() {
-                put(&errors, copy *d);
-            }
-            put(&s.asts, {});
-            continue;
-        };
+        // (a file with errors keeps the items that parsed, which the language server checks when no
+        // check of the document parsed before)
+        val items = p.items(false);
+        for (d&) in p.errors.items() {
+            put(&errors, copy *d);
+        }
         val u = s.units.at(i);
         if (u.pkg) {
             var wrapped: std::vec<item> = {};

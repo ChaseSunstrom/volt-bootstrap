@@ -532,6 +532,18 @@ fn builtins_and_std_files() {
     }
     // std's own: not offered in a program
     assert!(!c.contains("\"label\":\"intrinsic\""), "a program is offered @intrinsic: {c}");
+
+    // a document whose first version doesn't parse (opened mid-edit): the items that parsed are
+    // checked, for hover, and only the parse error is reported
+    let curi = format!("file://{}/c.volt", s.dir.display());
+    let cdoc = format!("{{\"uri\":\"{curi}\"}}");
+    let cat = |line: u32, ch: u32| format!("{{\"textDocument\":{cdoc},\"position\":{{\"line\":{line},\"character\":{ch}}}}}");
+    let broken = "fn twice(x: i32) -> i32 {\n    return x * 2;\n}\n\nfn broken() -> void {\n    val y = ;\n}\n\nfn main() -> void {\n    val n = twice(4);\n}\n";
+    s.notify("textDocument/didOpen", &format!("{{\"textDocument\":{{\"uri\":\"{curi}\",\"languageId\":\"volt\",\"version\":1,\"text\":{}}}}}", js(broken)));
+    let d = s.diagnostics_for(&curi);
+    assert_eq!(d.matches("\"message\"").count(), 1, "a document opened mid-edit reports more than its parse error: {d}");
+    let h = s.request("textDocument/hover", &cat(9, 13));
+    assert!(h.contains("fn twice(x: i32) -> i32"), "hover in a document opened mid-edit: {h}");
 }
 
 /// hover tells what clangd tells for C++: a type's generics, size, alignment, each field's offset and
