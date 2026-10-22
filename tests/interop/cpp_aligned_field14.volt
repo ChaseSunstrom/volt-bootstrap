@@ -16,4 +16,8 @@ fn main() -> void {
         m.set_x(11);
         std::println("c++14 {} {}", cpp::af::tight_x(&t), cpp::af::mixed_x(&m));
     }
+    // the packed class template, aligned to 1, is still a handle below C++17 (T-0638)
+    var tp: cpp::af::tpacked<i32> = {};
+    tp.set_x(4);
+    std::println("packed {}", cpp::af::tpacked_x(&tp));
 }

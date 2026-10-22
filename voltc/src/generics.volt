@@ -774,6 +774,21 @@ attach fn cpp_dyn_fits(this: checker&, d: u32, rv: tval?, static_ty: u32?) -> bo
     }
 }
 
+// the type static fn d is attached to, as its receiver names it ("T" when that's generic), for an
+// error saying to call it through its type (T-0631)
+attach fn static_owner(this: checker&, d: u32) -> std::string {
+    match (this.recv_of(d)) {
+        .STATIC(pat) => {
+            val p = pat ?? return S("T");
+            val gps = this.fn_generics(d);
+            var binds = none_binds(gps.len);
+            val t = this.recv_pat_type(p, gps, &binds, this.decls.at(@cast<usize>(d)).ns) ?? return S("T");
+            return this.ty_name(t);
+        },
+        default => { return S("T"); },
+    }
+}
+
 // a receiver pattern's type; `this: T*` takes its receiver like `this: T&`
 attach fn recv_pat_type(this: checker&, pat: ty&, gps: std::vec<gparam>&, binds: std::vec<gval?>&, ns: u32) -> u32? {
     val t = this.resolve_partial(pat, gps, binds, ns) ?? return null;
@@ -1440,6 +1455,26 @@ attach fn resolve_call(this: checker&, name: str, cands: std::vec<u32>&, rv: tva
         }
         if (plain.len > 0 && plain.len < cands.len) {
             return this.resolve_call(name, &plain, rv, static_ty, explicit, args, want, span);
+        }
+    }
+    // ...and with no plain function there, it doesn't call a type's static one (beside a method of
+    // that name or not): a static is called through its type, T::f() (T-0631)
+    if (cands.len > 0 && rv == null && static_ty == null) {
+        var plain = false;
+        var first_static: u32? = null;
+        for (d&) in cands.items() {
+            match (this.recv_of(*d)) {
+                .STATIC(x) => {
+                    if (first_static == null) {
+                        first_static = *d;
+                    }
+                },
+                .VAL(x) => {},
+                default => { plain = true; },
+            }
+        }
+        if (first_static != null && !plain) {
+            return fail(span, fmt3("{} is a static fn: call it through its type, {}::{}(...)", S(name), this.static_owner(first_static ?? 0), S(name)));
         }
     }
     if (cands.len == 1) {
