@@ -2371,9 +2371,10 @@ fn cpp_peruse4() {
     // a call made per use whose result is a mirror (a Volt struct, a tuple, an enum with payloads),
     // deduced, with the template argument given, named only in the result (zero<point>(), its try_
     // form), other than the parameter's (conv<point, shape>(p)) or pointed to: that Volt value back;
-    // a reference result with nothing to be into (global<point>()): a copy
+    // a reference result with nothing to be into (global<point>()), or into the wrapper's own copy of
+    // an argument (h.pick(p)): a copy; one into the object (h.at_n(0)): a reference (T-0633)
     let e = Env::new("cpp-peruse4");
-    let want = "struct 3 2.5 3 2.5\ntuple (4, 0.5) (4, 0.5)\nenum 1.25 7\nzero 0 0 (0, 0) 0\ntry 0\nconv 0 global 9 0\naddr 6 1.5 true\n";
+    let want = "struct 3 2.5 3 2.5\ntuple (4, 0.5) (4, 0.5)\nenum 1.25 7\nzero 0 0 (0, 0) 0\ntry 0\nconv 0 global 9 0\naddr 6 1.5 true\npick 3 2.5 at_n 8\n";
     for backend in ["c", "llvm"] {
         assert_eq!(ok(e.voltc(&["run", "cpp_peruse4.volt", "--backend", backend]), "voltc run cpp_peruse4.volt"), want, "mirrored results ({backend})");
     }

@@ -7733,6 +7733,27 @@ attach fn cpp_instance_as(this: checker&, k: usize, expr: str, types: std::vec<u
     }
     val fc = found ?? return fails(span, "libclang lost the call");
     val writes = probe_writes(fc, &seq);
+    // a reference result may be into an argument C++ binds a reference parameter to: a Volt
+    // struct, tuple or enum passed by value is the wrapper's own copy (&a1), gone once the call
+    // returns, so the value comes back (T-0633). ponytail: a number's temporary bound to a const
+    // int& isn't counted (std::map<int, V>::at's result is the map's); a pick(const int&) returning
+    // its argument would still dangle
+    if (!by_value) {
+        val rk = clang::clang_getCanonicalType(clang::clang_getCursorResultType(fc)).kind;
+        if (rk == clang::CXType_LValueReference || rk == clang::CXType_RValueReference) {
+            val refs = probe_refs(fc, &seq);
+            for (j) in 0..types.len {
+                var lent = *reads.at(j) != 0;
+                match (*this.t.get(*types.at(j))) {
+                    .REF(x) => { lent = true; },
+                    default => {},
+                }
+                if (!lent && j < 64 && ((refs >> @cast<u32>(j)) & 1) != 0) {
+                    return this.cpp_instance_as(k, expr, types, recv, true, tried, span);
+                }
+            }
+        }
+    }
     // the Volt fn, written by the importer from the probe's now concrete signature; a mirror
     // (cpp_mirror) is a generic parameter of its own name, which the Volt type binds
     val g = &this.cpp_ctxs.at(k).gen;
@@ -9492,31 +9513,7 @@ attach fn write_via(this: checker&, w: tval&) -> bool {
 fn probe_writes(fc: clang::CXCursor, seq: std::vec<usize>&) -> u64 {
     var holes: std::vec<clang::CXCursor> = {};
     var calls: std::vec<clang::CXCursor> = {};
-    var todo = children(fc);
-    while (todo.len > 0) {
-        val c = todo.pop() ?? break;
-        if (clang::clang_getCursorKind(c) == clang::CXCursor_CallExpr) {
-            val n = cursor_name(c);
-            if (n.as_str() == "volt_lv" || n.as_str() == "volt_rv") {
-                put(&holes, c);
-                continue;
-            }
-            put(&calls, c);
-        }
-        for (k&) in children(c).items() {
-            put(&todo, *k);
-        }
-    }
-    // in the text's order (insertion sort: a call has few)
-    for (x) in 1..holes.len {
-        var j = x;
-        while (j > 0 && cursor_offset(*holes.at(j - 1)) > cursor_offset(*holes.at(j))) {
-            val t = *holes.at(j);
-            *holes.at(j) = *holes.at(j - 1);
-            *holes.at(j - 1) = t;
-            j -= 1;
-        }
-    }
+    probe_holes(fc, &holes, &calls);
     var mask: u64 = 0;
     for (call&) in calls.items() {
         val callee = clang::clang_getCursorReferenced(*call);
@@ -9526,33 +9523,26 @@ fn probe_writes(fc: clang::CXCursor, seq: std::vec<usize>&) -> u64 {
         }
         // a member operator's object is clang's argument 0 (rd >> s), not a parameter: only there
         // does argument 0 start where the call does (o.f(a) starts at o, its a after)
-        var skip: u32 = 0;
-        if (clang::clang_getCursorKind(callee) == clang::CXCursor_CXXMethod && clang::clang_CXXMethod_isStatic(callee) == 0) {
-            val (cs, ce) = extent_offsets(*call);
-            val (as0, ae0) = extent_offsets(clang::clang_Cursor_getArgument(*call, 0));
-            if (as0 == cs) {
-                skip = 1;
-            }
-            // a non-const method can change its object: {0}.append(..), {0} += .. (the hole itself,
-            // not one inside it: {0}.append({1}).push_back(..) reads {1}). ponytail: a non-const
-            // overload picked only to read ({0}[0], {0}.begin()) counts as a write too
-            if (clang::clang_CXXMethod_isConst(callee) == 0) {
-                var obj = clang::clang_getNullCursor();
-                if (skip == 1) {
-                    obj = clang::clang_Cursor_getArgument(*call, 0);
-                } else {
-                    val kids = children(*call);
-                    if (kids.len > 0 && clang::clang_getCursorKind(*kids.at(0)) == clang::CXCursor_MemberRefExpr) {
-                        val base = children(*kids.at(0));
-                        if (base.len > 0) {
-                            obj = *base.at(0);
-                        }
+        val skip = object_args(*call, callee);
+        // a non-const method can change its object: {0}.append(..), {0} += .. (the hole itself,
+        // not one inside it: {0}.append({1}).push_back(..) reads {1}). ponytail: a non-const
+        // overload picked only to read ({0}[0], {0}.begin()) counts as a write too
+        if (clang::clang_getCursorKind(callee) == clang::CXCursor_CXXMethod && clang::clang_CXXMethod_isStatic(callee) == 0 && clang::clang_CXXMethod_isConst(callee) == 0) {
+            var obj = clang::clang_getNullCursor();
+            if (skip == 1) {
+                obj = clang::clang_Cursor_getArgument(*call, 0);
+            } else {
+                val kids = children(*call);
+                if (kids.len > 0 && clang::clang_getCursorKind(*kids.at(0)) == clang::CXCursor_MemberRefExpr) {
+                    val base = children(*kids.at(0));
+                    if (base.len > 0) {
+                        obj = *base.at(0);
                     }
                 }
-                val h = hole_of(obj);
-                if (h) {
-                    mask = mask | holes_within(&holes, seq, h);
-                }
+            }
+            val h = hole_of(obj);
+            if (h) {
+                mask = mask | holes_within(&holes, seq, h);
             }
         }
         for (a) in skip..@cast<u32>(n) {
@@ -9568,6 +9558,77 @@ fn probe_writes(fc: clang::CXCursor, seq: std::vec<usize>&) -> u64 {
         }
     }
     return mask;
+}
+
+// the holes a call in probe fc's expression binds a reference parameter to (T&, const T&, T&&), a
+// bit each by seq, as probe_writes finds them: a reference result may be into one (T-0633)
+fn probe_refs(fc: clang::CXCursor, seq: std::vec<usize>&) -> u64 {
+    var holes: std::vec<clang::CXCursor> = {};
+    var calls: std::vec<clang::CXCursor> = {};
+    probe_holes(fc, &holes, &calls);
+    var mask: u64 = 0;
+    for (call&) in calls.items() {
+        val callee = clang::clang_getCursorReferenced(*call);
+        val n = clang::clang_Cursor_getNumArguments(*call);
+        if (clang::clang_Cursor_isNull(callee) != 0 || n < 0) {
+            continue;
+        }
+        val skip = object_args(*call, callee);
+        for (a) in skip..@cast<u32>(n) {
+            val parm = clang::clang_Cursor_getArgument(callee, a - skip);
+            if (clang::clang_Cursor_isNull(parm) != 0) {
+                continue;
+            }
+            val pk = clang::clang_getCanonicalType(clang::clang_getCursorType(parm)).kind;
+            if (pk == clang::CXType_LValueReference || pk == clang::CXType_RValueReference) {
+                mask = mask | holes_within(&holes, seq, clang::clang_Cursor_getArgument(*call, a));
+            }
+        }
+    }
+    return mask;
+}
+
+// 1 when call's argument 0 is its callee's object (a member operator's: rd >> s), not a parameter:
+// only there does argument 0 start where the call does (o.f(a) starts at o, its a after); else 0
+fn object_args(call: clang::CXCursor, callee: clang::CXCursor) -> u32 {
+    if (clang::clang_getCursorKind(callee) != clang::CXCursor_CXXMethod || clang::clang_CXXMethod_isStatic(callee) != 0) {
+        return 0;
+    }
+    val (cs, ce) = extent_offsets(call);
+    val (as0, ae0) = extent_offsets(clang::clang_Cursor_getArgument(call, 0));
+    if (as0 == cs) {
+        return 1;
+    }
+    return 0;
+}
+
+// probe fc's holes (volt_lv and volt_rv calls) in the text's order, and its other calls
+fn probe_holes(fc: clang::CXCursor, holes: std::vec<clang::CXCursor>&, calls: std::vec<clang::CXCursor>&) -> void {
+    var todo = children(fc);
+    while (todo.len > 0) {
+        val c = todo.pop() ?? break;
+        if (clang::clang_getCursorKind(c) == clang::CXCursor_CallExpr) {
+            val n = cursor_name(c);
+            if (n.as_str() == "volt_lv" || n.as_str() == "volt_rv") {
+                put(holes, c);
+                continue;
+            }
+            put(calls, c);
+        }
+        for (k&) in children(c).items() {
+            put(&todo, *k);
+        }
+    }
+    // in the text's order (insertion sort: a call has few)
+    for (x) in 1..holes.len {
+        var j = x;
+        while (j > 0 && cursor_offset(*holes.at(j - 1)) > cursor_offset(*holes.at(j))) {
+            val t = *holes.at(j);
+            *holes.at(j) = *holes.at(j - 1);
+            *holes.at(j - 1) = t;
+            j -= 1;
+        }
+    }
 }
 
 // the hole (a volt_lv or volt_rv call) e is, through parentheses and implicit conversions; null
