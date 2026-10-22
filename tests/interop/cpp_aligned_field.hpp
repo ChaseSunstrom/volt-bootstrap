@@ -33,6 +33,22 @@ struct __attribute__((packed)) squeezed {
     int x;
 };
 
+// class templates laid out by an aligned typedef's field and by alignas on the class: held by
+// handle too, not Volt generic structs (T-0632)
+template <class T>
+struct tcell {
+    T c;
+    aint x;
+};
+template <class T>
+inline int tcell_x(const tcell<T> &v) { return v.x; }
+template <class T>
+struct alignas(32) twide {
+    T x;
+};
+template <class T>
+inline int twide_x(const twide<T> &v) { return (int)v.x + (int)sizeof(twide<T>); }
+
 inline int squeezed_x(const squeezed &v) { return v.x; }
 inline int squeezed_size() { return (int)sizeof(squeezed); }
 inline int tight_x(const tight &v) { return v.x; }

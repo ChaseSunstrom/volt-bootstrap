@@ -4992,17 +4992,34 @@ attach fn template_ok(this: cpp_gen&, c: clang::CXCursor) -> bool {
     val tp = str_views(&names);
     for (ch&) in children(c).items() {
         val k = clang::clang_getCursorKind(*ch);
-        if (k == clang::CXCursor_CXXBaseSpecifier || (k == clang::CXCursor_CXXMethod && clang::clang_CXXMethod_isVirtual(*ch) != 0)) {
+        // (and a layout C++ takes from alignas, aligned or packed on the class: T-0632)
+        if (k == clang::CXCursor_CXXBaseSpecifier || (k == clang::CXCursor_CXXMethod && clang::clang_CXXMethod_isVirtual(*ch) != 0) || k == clang::CXCursor_AlignedAttr || k == clang::CXCursor_PackedAttr) {
             return false;
         }
         if (k == clang::CXCursor_FieldDecl) {
             val ft = clang::clang_getCursorType(*ch);
-            if (!is_public(*ch) || this.handle_of(ft) != null || this.vtype(ft, &tp) == null) {
+            if (!is_public(*ch) || this.handle_of(ft) != null || this.vtype(ft, &tp) == null || layout_attr_field(*ch)) {
                 return false;
             }
         }
     }
     return true;
+}
+
+// does C++ place field f by more than its type's own alignment, which a Volt generic struct can't
+// follow: alignas or aligned on it, or a type an aligned typedef names (its alignment past or below
+// the canonical type's, which is the one Volt gives it)
+fn layout_attr_field(f: clang::CXCursor) -> bool {
+    for (a&) in children(f).items() {
+        if (clang::clang_getCursorKind(*a) == clang::CXCursor_AlignedAttr) {
+            return true;
+        }
+    }
+    val ft = clang::clang_getCursorType(f);
+    val written = clang::clang_Type_getAlignOf(ft);
+    val canonical = clang::clang_Type_getAlignOf(clang::clang_getCanonicalType(ft));
+    // (a T's is unknown until it's an instance: negative)
+    return written > 0 && canonical > 0 && written != canonical;
 }
 
 // leave out (of classes and templates) what can't be declared, before anything refers to it: a

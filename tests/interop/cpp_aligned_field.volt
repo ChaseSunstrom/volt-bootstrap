@@ -18,4 +18,9 @@ fn main() -> void {
     var s: cpp::af::squeezed = {};
     s.set_x(13);
     std::println("squeezed {} {}", cpp::af::squeezed_x(&s), cpp::af::squeezed_size());
+    var tc: cpp::af::tcell<i8> = {};
+    tc.set_x(5);
+    var tw: cpp::af::twide<i32> = {};
+    tw.set_x(2);
+    std::println("templates {} {}", cpp::af::tcell_x(&tc), cpp::af::twide_x(&tw));
 }

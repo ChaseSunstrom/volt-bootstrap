@@ -2629,7 +2629,7 @@ fn cpp_aligned_field() {
     // as Volt lays out the int: held by handle, not a struct with Volt's alignment or offsets
     let e = Env::new("cpp-aligned-field");
     for backend in ["c", "llvm"] {
-        assert_eq!(ok(e.voltc(&["run", "cpp_aligned_field.volt", "--backend", backend]), "voltc run cpp_aligned_field.volt"), "cell 7 7 true true 32\ntight 9 6\nmixed 11 0.5\nsqueezed 13 5\n", "aligned-typedef and packed fields ({backend})");
+        assert_eq!(ok(e.voltc(&["run", "cpp_aligned_field.volt", "--backend", backend]), "voltc run cpp_aligned_field.volt"), "cell 7 7 true true 32\ntight 9 6\nmixed 11 0.5\nsqueezed 13 5\ntemplates 5 34\n", "aligned-typedef and packed fields ({backend})");
     }
     let shown = Command::new(&e.voltc).args(["check", "cpp_aligned_field.volt", "--std"]).arg(Path::new(ROOT).join("std")).current_dir(Path::new(ROOT).join("tests/interop")).env("VOLT_SHOW_CPP", "1").output().unwrap();
     let src = String::from_utf8_lossy(&shown.stderr);
