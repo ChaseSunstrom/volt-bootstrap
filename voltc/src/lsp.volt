@@ -1381,6 +1381,9 @@ attach fn lsp_path_members(this: checker&, path: str, file: u32, out: std::json:
         .NS(n) => { this.lsp_ns_items(n, file, out); },
         .DECLS(l) => {
             for (d) in this.list(l).items() {
+                if (!this.sees(d, file)) {
+                    continue;
+                }
                 match (this.item_of(d).kind) {
                     .ENUM(e&) => {
                         for (v&) in e.variants.items() {
@@ -1428,9 +1431,10 @@ attach fn lsp_ns_items(this: checker&, n: u32, file: u32, out: std::json::value&
         // (the first overload file may use)
         var seen = false;
         for (x) in this.list(*l).items() {
-            if (!seen && this.sees(x, file)) {
+            if (this.sees(x, file)) {
                 d = x;
                 seen = true;
+                break;
             }
         }
         if (!seen) {
@@ -2858,6 +2862,9 @@ attach fn signature(this: lsp_server&, params: std::json::value&) -> std::json::
     }
     var sigs = std::json::array();
     for (d) in c.lsp_callees(text[k..o], method).items() {
+        if (!c.sees(d, doc.file)) {
+            continue; // (an overload this file can't call)
+        }
         if (recv) {
             val rt = c.t.ref_inner(recv->ty) ?? recv->ty;
             if (!c.takes_this(d, rt)) {

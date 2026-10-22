@@ -1,6 +1,6 @@
 // Golden tests. tests/run/*.volt and examples/*.volt: compiled and run, stdout must equal the `// expect: ` lines
 // (and exit code the `// exit: N` line, default 0, or one of `// exit: N|M`; `// flags: --release` passes flags; each `// expect-stderr: ` line must be
-// in stderr, each `// reject-stderr: ` line must not; `// os: linux` runs it only on the systems named). tests/fail/*.volt: `voltc check` must fail with every `// error: ` substring in its stderr.
+// in stderr, each `// reject-stderr: ` line must not; `// os: linux` runs it only on the systems named). tests/fail/*.volt: `voltc check` must fail with every `// error: ` substring in its stderr (and no `// reject-stderr: ` one).
 // voltc is stage 1: voltc/src built by the bootstrap compiler.
 mod common;
 use std::path::Path;
@@ -62,7 +62,9 @@ fn golden() {
         let out = Command::new(&bin).arg("check").arg(&f).args(&flags).output().unwrap();
         let stderr = String::from_utf8_lossy(&out.stderr);
         let wants = directives(&src, "error");
-        if out.status.success() || wants.is_empty() || wants.iter().any(|w| !stderr.contains(w.as_str())) {
+        // (and no `// reject-stderr: ` text)
+        let rejected = directives(&src, "reject-stderr").iter().any(|w| stderr.contains(w.as_str()));
+        if out.status.success() || wants.is_empty() || wants.iter().any(|w| !stderr.contains(w.as_str())) || rejected {
             failures.push(format!("{}: want errors {wants:?}\n--- stderr\n{stderr}", f.display()));
         }
     }
