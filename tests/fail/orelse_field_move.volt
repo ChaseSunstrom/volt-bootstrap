@@ -13,4 +13,4 @@ fn main() -> void {
     val b: box = { name: std::string::from("held by a struct") };
     val c = find() ?? b.name;
 }
-// error: can't move a std::string<std::mem::default_allocator> out of a field, element or reference; copy it instead: copy x
+// error: can't move a std::string out of a field, element or reference; copy it instead: copy x

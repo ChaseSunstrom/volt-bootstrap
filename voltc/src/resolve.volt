@@ -336,7 +336,7 @@ attach fn struct_inst(this: checker&, d: u32, args: std::vec<gval>, span: span) 
                 written.append("::");
             }
             written.append(this.decl_name(d));
-            this.si(tid).name = this.inst_name(written.as_str(), &args);
+            this.si(tid).name = this.shown_name(d, written.as_str(), &args);
             this.struct_ids.put(this.intern(move key), tid);
             return t;
         }
@@ -365,6 +365,9 @@ attach fn struct_inst(this: checker&, d: u32, args: std::vec<gval>, span: span) 
     val id = @cast<u32>(this.structs.len);
     put(&this.structs, bx<struct_info>({ decl: use_decl, family: d, args: move args, env: env, name: name, c_name: c_name }));
     this.struct_ids.put(this.intern(move key), id);
+    // (its name leaves out args equal to their defaults, worked out once it's known, so a default
+    // that names this instance finds it)
+    this.si(id).name = this.shown_name(d, full.as_str(), &this.si(id).args);
     // a header struct C aligns past its fields with Volt's own offsets (an aligned attribute): that
     // alignment, as @align gives one (cimport's lay_out_partial)
     if (s.c_name != null && s.c_offsets == null && !s.c_partial && !s.c_union && s.c_align > 0) {
@@ -1004,7 +1007,7 @@ attach fn fn_inst(this: checker&, d: u32, args: std::vec<gval>, span: span) -> c
         n.append(c_word(f.name));
         c_name = this.fresh_c_name(n.as_str());
     }
-    val name = this.inst_name(f.name, &args);
+    val name = this.shown_name(d, f.name, &args);
     if (intrinsic == null && f.body == null && f.extern_abi == null) {
         return fail(it.span, fmt("function '{}' needs a body (only extern fns can leave it off)", S(f.name)));
     }

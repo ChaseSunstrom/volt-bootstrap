@@ -2515,7 +2515,7 @@ fn cpp_params_refused() {
     // a std::string without & for a template's S& or const S&: an error naming the parameter
     let err = check("cpp_params_gbare.volt");
     for (line, f) in [(7, "wrap"), (11, "len")] {
-        assert!(err.contains(&format!("cpp_params_gbare.volt:{line}")) && err.contains(&format!("argument 1 has type std::string<std::mem::default_allocator>, but '{f}' wants a reference (S&) for s: pass one (&arg)")), "{f} without &: {err}");
+        assert!(err.contains(&format!("cpp_params_gbare.volt:{line}")) && err.contains(&format!("argument 1 has type std::string, but '{f}' wants a reference (S&) for s: pass one (&arg)")), "{f} without &: {err}");
     }
     // an i32 without & for a class template's T&: an error naming the parameter, as a generic
     // struct's member and as a generic handle's worked out per use (a Volt number is an rvalue there)

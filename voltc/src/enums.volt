@@ -24,7 +24,7 @@ attach fn enum_inst(this: checker&, d: u32, args: std::vec<gval>, span: span) ->
         full.append("::");
     }
     full.append(e.name);
-    val name = this.inst_name(full.as_str(), &args);
+    val name = this.shown_name(d, full.as_str(), &args);
     var base = S("v_");
     base.append(e.name);
     val c_name = this.fresh_c_name(base.as_str());

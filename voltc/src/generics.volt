@@ -380,6 +380,49 @@ fn none_binds(n: usize) -> std::vec<gval?> {
     return v;
 }
 
+// an instance's name with its trailing generic args equal to their defaults left out (std::string,
+// not std::string<std::mem::default_allocator>)
+attach fn shown_name(this: checker&, d: u32, base: str, args: std::vec<gval>&) -> str {
+    var n = args.len;
+    if (this.gparams_of(d).len == args.len) {
+        while (n > 0 && this.is_default_arg(d, args, n - 1)) {
+            n -= 1;
+        }
+    }
+    var shown: std::vec<gval> = {};
+    for (i) in 0..n {
+        put(&shown, copy *args.at(i));
+    }
+    return this.inst_name(base, &shown);
+}
+
+// whether arg i of d's instance is its parameter's default, worked out as gargs_for does (the args
+// before it bound)
+attach fn is_default_arg(this: checker&, d: u32, args: std::vec<gval>&, i: usize) -> bool {
+    val gps = this.gparams_of(d);
+    val gp = gps.at(i);
+    if (gp.fallback) {
+        var binds = none_binds(gps.len);
+        for (k) in 0..i {
+            *binds.at(k) = copy *args.at(k);
+        }
+        val e = this.partial_env(this.dl(d).ns, gps, &binds);
+        val kind = this.param_kind(gp, e) catch |x| {
+            return false;
+        };
+        val v = this.garg_gval(gp.fallback, kind, e) catch |x| {
+            return false;
+        };
+        var a: std::vec<gval> = {};
+        put(&a, v);
+        var b: std::vec<gval> = {};
+        put(&b, copy *args.at(i));
+        val ka = this.inst_key(d, &a);
+        return ka == this.inst_key(d, &b);
+    }
+    return false;
+}
+
 // generic args for a generic type: given ones, then defaults
 attach fn gargs_for(this: checker&, d: u32, given: std::vec<garg>&, caller: u32, span: span) -> compile_error!std::vec<gval> {
     val gps = this.gparams_of(d);
