@@ -3645,6 +3645,11 @@ fn llvm_runtime_c(chk: checker&, hdr: std::vec<str>&, runtime: bool) -> std::str
     if (!chk.opts.release) {
         out.append("#define VOLT_DEBUG_ALLOC 1\n");
     }
+    if (chk.opts.backtrace) {
+        out.append("#define VOLT_BACKTRACE 1\n");
+    } else if (!chk.opts.release) {
+        out.append("#define VOLT_PANIC_NOTE 1\n");
+    }
     out.append(PRELUDE_H);
     if (runtime) {
         out.append(RUNTIME_H);

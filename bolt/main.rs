@@ -55,6 +55,7 @@ options:
   -p, --package NAME      work on this package (default: the one here, or the workspace's defaults)
   --workspace             work on every package in the workspace
   -r, --release           use the release profile (optimized)
+  --backtrace             a panic lists the calls that led to it (voltc --backtrace)
   --profile NAME          use a profile: dev, release, test, bench or one from [profile.NAME]
   -F, --features LIST     turn on features (FEATURE, PACKAGE/FEATURE, DEPENDENCY/FEATURE)
   --all-features          turn on every feature of the selected packages
@@ -165,6 +166,7 @@ pub struct Opts {
     pub message_format: Option<String>,
     pub color: Option<String>,
     pub error_limit: Option<String>,
+    pub backtrace: bool,
     pub backend: Option<String>,
     pub path: Option<String>,
     pub git: Option<String>,
@@ -217,6 +219,7 @@ fn parse(args: Vec<String>) -> Opts {
             "-j" | "--jobs" => o.jobs = Some(val().parse().ok().filter(|n| *n > 0).unwrap_or_else(|| fail("-j takes a number of jobs"))),
             "--locked" => o.locked = true,
             "--offline" => o.offline = true,
+            "--backtrace" => o.backtrace = true,
             "--frozen" => (o.locked, o.offline) = (true, true),
             "--manifest-path" => o.manifest_path = Some(val().into()),
             "--message-format" => o.message_format = Some(val()),

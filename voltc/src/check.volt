@@ -175,6 +175,7 @@ struct local {
 enum exit {
     DEFER: (expr&, bool), // expr, errdefer only
     DROP: (u32, u32, u32), // place, drop fn (ir fn), flag place
+    LEAVE,                 // --backtrace: the fn leaves the call stack a panic lists
 }
 
 // a comptime var/val in a scope: its current value
@@ -216,6 +217,7 @@ struct fn_cx {
     ret: u32;
     env: u32;
     irf: u32; // the ir_fn being built (its locals)
+    traced: bool = false; // --backtrace: this fn is on the call stack a panic lists (its calls note their sites)
     scopes: std::vec<scope> = {};
     loops: std::vec<loop_cx> = {};
     next_id: u32 = 0;
@@ -417,6 +419,7 @@ struct opts {
     lsp: bool = false;                  // record names for the language server (lsp.volt)
     expand: bool = false;               // record what comptime code became (voltc expand, the LSP)
     line_info: bool = false;            // mark each statement's source line in the IR (--profiler)
+    backtrace: bool = false;            // --backtrace: a call stack a panic lists (gen_fn, emit_call)
     target: str? = null;                // --target (target.volt): bare metal, through LLVM
     triple: str? = null;                // emit-llvm: $VOLT_TRIPLE, the host to lower for (tests/abi.rs)
 }
