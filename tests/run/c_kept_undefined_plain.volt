@@ -1,5 +1,8 @@
 // a header kept out of Volt's C whose functions nothing defines: the one called directly (no wrapper)
 // panics naming it, as c_kept_undefined.volt's wrapped one does (T-0320)
+// os: linux
+// (only ELF linkers take a weak reference to what nothing defines and leave it null: Mach-O's refuses
+// it, and COFF's wrapper callee is a plain reference)
 use std::io;
 @attributes([@standard("c89")])
 use { "c_kept_undefined.h" } as old;

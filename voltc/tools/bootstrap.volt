@@ -218,6 +218,25 @@ fn linked(stage: str, std_dir: str, dir: str, lib_backend: str, prog_backend: st
     std::println("stage2 lib: {} libraries in a {} program ok", lib_backend, prog_backend);
 }
 
+// whether space-separated words holds w
+fn has_word(words: str, w: str) -> bool {
+    var i: usize = 0;
+    while (i < words.len) {
+        while (i < words.len && words[i] == 32) {
+            i += 1;
+        }
+        var e = i;
+        while (e < words.len && words[e] != 32) {
+            e += 1;
+        }
+        if (e > i && words[i..e] == w) {
+            return true;
+        }
+        i = e;
+    }
+    return false;
+}
+
 // run every golden test with stage and a backend; the failures
 fn golden(stage: str, std_dir: str, backend: str) -> i32 {
     var files = volt_files("tests/run");
@@ -227,6 +246,12 @@ fn golden(stage: str, std_dir: str, backend: str) -> i32 {
     var failed: i32 = 0;
     for (f&) in files.items() {
         val src = std::fs::read_file(f.as_str()) catch |e| die(std::string::from("can't read a test"));
+        // `// os: linux macos`: run only on the systems named
+        var oses: std::vec<str> = {};
+        directives(src.as_str(), "os", &oses);
+        if (oses.len > 0 && !has_word(*oses.at(0), std::process::os())) {
+            continue;
+        }
         val want = expected(src.as_str());
         var exits: std::vec<str> = {};
         directives(src.as_str(), "exit", &exits);

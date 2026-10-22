@@ -121,7 +121,7 @@ fn release_voltc_works() {
     for (file, backend, release) in &runs {
         let text = std::fs::read_to_string(file).unwrap();
         let want: Vec<&str> = text.lines().filter_map(|l| l.strip_prefix("// expect: ")).map(|l| l.trim_end()).collect();
-        if want.is_empty() {
+        if want.is_empty() || !common::os_ok(&text) {
             continue;
         }
         let flags: Vec<&str> = text.lines().find_map(|l| l.strip_prefix("// flags:")).map(|f| f.split_whitespace().collect()).unwrap_or_default();
