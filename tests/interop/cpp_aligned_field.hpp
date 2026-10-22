@@ -63,6 +63,11 @@ struct __attribute__((packed)) tpacked {
 };
 template <class T>
 inline int tpacked_x(const tpacked<T> &v) { return (int)v.x + (int)sizeof(tpacked<T>); }
+// one holding an aligned template: below C++17 left out with it (T-0638)
+template <class T>
+struct tholder {
+    twide<T> w;
+};
 
 inline int squeezed_x(const squeezed &v) { return v.x; }
 inline int squeezed_size() { return (int)sizeof(squeezed); }

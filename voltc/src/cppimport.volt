@@ -5017,23 +5017,44 @@ attach fn template_ok(this: cpp_gen&, c: clang::CXCursor) -> bool {
     return true;
 }
 
-// is class template c aligned by an attribute (alignas or aligned on it or a field, or a field's
-// typedef aligned past 8), so that holding it by handle needs C++17's aligned new; packed isn't
-fn aligned_template(c: clang::CXCursor) -> bool {
+// is class template c aligned past what plain new aligns, so that holding it by handle needs
+// C++17's aligned new: alignas or aligned on it or a field (whatever the value: libclang doesn't
+// say it), a field's type aligned past 8 (an aligned typedef; 8 as for a plain class), or a field
+// or base naming a type left out; packed isn't
+attach fn aligned_template(this: cpp_gen&, c: clang::CXCursor) -> bool {
     for (ch&) in children(c).items() {
         val k = clang::clang_getCursorKind(*ch);
         if (k == clang::CXCursor_AlignedAttr) {
             return true;
         }
-        if (k != clang::CXCursor_FieldDecl) {
-            continue;
+        if (k == clang::CXCursor_CXXBaseSpecifier && this.names_left_out(*ch)) {
+            return true;
         }
-        for (a&) in children(*ch).items() {
-            if (clang::clang_getCursorKind(*a) == clang::CXCursor_AlignedAttr) {
+        if (k == clang::CXCursor_FieldDecl && (has_aligned_attr(*ch) || clang::clang_Type_getAlignOf(clang::clang_getCursorType(*ch)) > 8 || this.names_left_out(*ch))) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// does c (a field, a base) name a type prune left out: a type or template reference in it
+attach fn names_left_out(this: cpp_gen&, c: clang::CXCursor) -> bool {
+    for (r&) in children(c).items() {
+        val k = clang::clang_getCursorKind(*r);
+        if (k == clang::CXCursor_TypeRef || k == clang::CXCursor_TemplateRef) {
+            val d = clang::clang_getCursorReferenced(*r);
+            if (clang::clang_Cursor_isNull(d) == 0 && this.left_out.get(cpp_qual(d).as_str()) != null) {
                 return true;
             }
         }
-        if (clang::clang_Type_getAlignOf(clang::clang_getCursorType(*ch)) > 8) {
+    }
+    return false;
+}
+
+// does declaration c have alignas or aligned on it
+fn has_aligned_attr(c: clang::CXCursor) -> bool {
+    for (a&) in children(c).items() {
+        if (clang::clang_getCursorKind(*a) == clang::CXCursor_AlignedAttr) {
             return true;
         }
     }
@@ -5051,10 +5072,8 @@ fn below_cpp17(s: str) -> bool {
 // follow: alignas or aligned on it, or a type an aligned typedef names (its alignment past or below
 // the canonical type's, which is the one Volt gives it)
 fn layout_attr_field(f: clang::CXCursor) -> bool {
-    for (a&) in children(f).items() {
-        if (clang::clang_getCursorKind(*a) == clang::CXCursor_AlignedAttr) {
-            return true;
-        }
+    if (has_aligned_attr(f)) {
+        return true;
     }
     val ft = clang::clang_getCursorType(f);
     val written = clang::clang_Type_getAlignOf(ft);
@@ -5075,13 +5094,35 @@ attach fn prune(this: cpp_gen&) -> void {
                 put(&gone, *e.key);
             }
         }
+        // below C++17 one an alignment attribute aligns is left out, plain new not aligning it, and
+        // so is one holding or deriving from a type left out, a handle already too: until no more
+        // go (T-0638)
+        if (this.below17) {
+            var cands: std::vec<str> = copy gone;
+            for (e) in this.tmpl_handles.iter() {
+                put(&cands, *e.key);
+            }
+            var more = true;
+            while (more) {
+                more = false;
+                for (q&) in cands.items() {
+                    if (this.left_out.get(*q) != null) {
+                        continue;
+                    }
+                    val c = *(this.cursors.get(*q) ?? continue);
+                    if (this.aligned_template(c)) {
+                        this.left_out.put(*q, true);
+                        this.tmpl_handles.remove(*q);
+                        more = true;
+                    }
+                }
+            }
+        }
         for (q&) in gone.items() {
             // held by handle instead, as a generic struct (its parameters all types, the defaulted
-            // rest C++'s); std's smart pointers and std::function keep their own forms. Below C++17
-            // one an alignment attribute aligns is left out: plain new doesn't align it (T-0638)
+            // rest C++'s); std's smart pointers and std::function keep their own forms
             val c = *(this.cursors.get(*q) ?? continue);
-            if (this.below17 && aligned_template(c)) {
-                this.left_out.put(*q, true);
+            if (this.left_out.get(*q) != null) {
                 this.templates.remove(*q);
                 continue;
             }
