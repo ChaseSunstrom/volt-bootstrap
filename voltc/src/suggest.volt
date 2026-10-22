@@ -162,9 +162,84 @@ val PRIMITIVES: str[23] = {
     "i8", "i16", "i32", "i64", "i128", "isize", "u8", "u16", "u32", "u64", "u128", "usize",
 };
 
-// `unknown name 'x'` / `unknown type 'x'`, with a did-you-mean when a close name exists
+// the path of a namespace, or of an item file may use (not a method; with types, a type), named
+// exactly name in a namespace below n: the shallowest (std::io::println for println,
+// std::testing::assert for std::assert)
+attach fn path_below(this: checker&, n: u32, name: str, file: u32, types: bool) -> std::string? {
+    var queue: std::vec<u32> = {};
+    put(&queue, n);
+    var i: usize = 0;
+    while (i < queue.len) {
+        val m = *queue.at(i);
+        if (i > 0) {
+            var here = this.ns(m).children.get(name) != null;
+            val l = this.ns(m).names.get(name);
+            if (l) {
+                for (d) in this.list(*l).items() {
+                    var fits = !types;
+                    match (this.item_of(d).kind) {
+                        .STRUCT(s&) => { fits = true; },
+                        .ENUM(e&) => { fits = true; },
+                        .TRAIT(a, b) => { fits = true; },
+                        .ALIAS(a, t) => { fits = true; },
+                        default => {},
+                    }
+                    match (this.recv_of(d)) {
+                        .NONE => {
+                            if (fits && this.sees(d, file)) {
+                                here = true;
+                            }
+                        },
+                        default => {},
+                    }
+                }
+            }
+            if (here) {
+                return fmt2("{}::{}", this.ns_path(m, "::"), S(name));
+            }
+        }
+        for (e) in this.ns(m).children.iter() {
+            put(&queue, *e.value);
+        }
+        i += 1;
+    }
+    return null;
+}
+
+// `unknown name 'x'` / `unknown type 'x'`, with a did-you-mean: the path of that exact name in a
+// namespace below the one the path names (the root, for a lone name), else a close spelling
 attach fn unknown(this: checker&, span: span, what: str, ns: u32, p: path&, locals: bool) -> compile_error {
     val missing = this.missing_part(ns, p);
+    var from: u32? = null;
+    if (p.segs.len == 1 || this.lookup(ns, p.segs.at(0).name) == null) {
+        from = 0;
+    } else {
+        var prefix: path = { segs: {}, span: p.span };
+        for (i) in 0..p.segs.len - 1 {
+            put(&prefix.segs, copy *p.segs.at(i));
+        }
+        val pf = this.lookup_path_ns(ns, &prefix);
+        if (pf) {
+            match (pf) {
+                .NS(n) => { from = n; },
+                default => {},
+            }
+        }
+    }
+    if (from) {
+        val below = this.path_below(from, missing, span.file, what != "name");
+        if (below) {
+            val e = fail(span, fmt2("unknown {} '{}'", S(what), S(missing)));
+            val helped = with_help(move e, fmt("did you mean '{}'?", copy below));
+            if (!this.opts.lsp) {
+                return helped;
+            }
+            // (the fix rewrites the path up to the name: std::assert, or println; a name first in
+            // the path is its first match, so a type argument after it isn't taken)
+            val at = this.lsp_word(span, missing, from != 0) ?? return helped;
+            return with_fix(helped, fmt("change to '{}'", copy below), { file: span.file, lo: span.lo, hi: at.hi }, copy below);
+        }
+    }
     var cands = this.path_candidates(ns, p, locals);
     if (what == "type" && p.segs.len == 1) {
         for (k) in PRIMITIVES {

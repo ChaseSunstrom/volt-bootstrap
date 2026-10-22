@@ -467,6 +467,7 @@ struct checker {
     files: std::vec<source_file>&;
     line_starts: std::vec<std::vec<u32>> = {}; // each file's line start offsets, found on first use (line_col)
     reflect_spans: std::vec<span> = {};         // the @field(v, name) calls: reflection sees every field (field_visible)
+    default_at: span? = null;                   // the call whose left-out arguments take their defaults: @location() there is its place
     llvm_cant_lower: bool = false;              // the LLVM backend met something only C can do (lgen's err)
     opts: opts;
     t: types;
@@ -1665,14 +1666,11 @@ fn same_pkg(a: str?, b: str?) -> bool {
 // files, for the program's). A package's items are internal unless marked public; the program's are
 // public unless marked internal. A template's body is judged by the file it's written in.
 attach fn visible(this: checker&, d: u32, span: span) -> compile_error!void {
+    if (this.sees(d, span.file)) {
+        return;
+    }
     val owner = this.pkg_of(d);
     val v = this.item_of(d).vis;
-    if (v == vis::PUBLIC || (v == vis::DEFAULT && owner == null)) {
-        return;
-    }
-    if (same_pkg(owner, this.pkg_of_file(span.file))) {
-        return;
-    }
     if (owner) {
         if (v == vis::DEFAULT) {
             return fail(span, fmt2("'{}' isn't public in package {}", S(this.decl_name(d)), S(owner)));
@@ -1680,6 +1678,13 @@ attach fn visible(this: checker&, d: u32, span: span) -> compile_error!void {
         return fail(span, fmt2("'{}' is internal to {}", S(this.decl_name(d)), fmt("package {}", S(owner))));
     }
     return fail(span, fmt2("'{}' is internal to {}", S(this.decl_name(d)), S("the program")));
+}
+
+// whether file may use item d (visible's rule; the language server's completion asks too)
+attach fn sees(this: checker&, d: u32, file: u32) -> bool {
+    val owner = this.pkg_of(d);
+    val v = this.item_of(d).vis;
+    return v == vis::PUBLIC || (v == vis::DEFAULT && owner == null) || same_pkg(owner, this.pkg_of_file(file));
 }
 
 // An internal field belongs to its struct's package (the program's files, for the program's);

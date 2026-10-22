@@ -1866,7 +1866,12 @@ attach fn emit_call(this: checker&, made: u32, a: adj, rv: tval?, pre: std::vec<
             continue;
         }
         val d = p.fallback ?? return fail(span, fmt("missing argument '{}'", S(p.name)));
-        put(&vals, try this.in_env_expr_as(fenv, d, p.ty));
+        // (@location() in a default is the call's place)
+        val was = this.default_at;
+        this.default_at = span;
+        val v = this.in_env_expr_as(fenv, d, p.ty);
+        this.default_at = was;
+        put(&vals, try v);
     }
     this.use_fn(inst);
     this.warn_deprecated(inst, span);

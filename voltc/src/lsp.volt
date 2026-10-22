@@ -1311,7 +1311,7 @@ attach fn lsp_local_named(this: checker&, file: u32, name: str, at: usize) -> ls
 }
 
 // completion items for a value of type t0: its fields and the methods that take it as this
-attach fn lsp_members(this: checker&, t0: u32, out: std::json::value&) -> void {
+attach fn lsp_members(this: checker&, t0: u32, file: u32, out: std::json::value&) -> void {
     val t = this.t.ref_inner(t0) ?? t0;
     match (*this.t.get(t)) {
         .STRUCT(sid) => {
@@ -1319,7 +1319,9 @@ attach fn lsp_members(this: checker&, t0: u32, out: std::json::value&) -> void {
                 return;
             };
             for (f&) in fs.items() {
-                out.add(lsp_item(f.name, 5.0, this.ty_name(f.ty).as_str()));
+                if (this.field_seen(sid, f, { file: file })) {
+                    out.add(lsp_item(f.name, 5.0, this.ty_name(f.ty).as_str()));
+                }
             }
         },
         default => {},
@@ -1331,7 +1333,7 @@ attach fn lsp_members(this: checker&, t0: u32, out: std::json::value&) -> void {
             continue; // used as an operator, never called by name
         }
         for (d) in this.named(&this.attached, n).items() {
-            if (this.takes_this(d, t)) {
+            if (this.takes_this(d, t) && this.sees(d, file)) {
                 out.add(lsp_item(n, 2.0, this.lsp_decl_text(d).as_str()));
                 break;
             }
@@ -1374,11 +1376,14 @@ attach fn lsp_find(this: checker&, path: str) -> found? {
 
 // completion items for what path (a::b) names: a namespace's members (with those `use a::c;`
 // makes reachable as a::name), or an enum's variants
-attach fn lsp_path_members(this: checker&, path: str, out: std::json::value&) -> void {
+attach fn lsp_path_members(this: checker&, path: str, file: u32, out: std::json::value&) -> void {
     match (this.lsp_find(path) ?? return) {
-        .NS(n) => { this.lsp_ns_items(n, out); },
+        .NS(n) => { this.lsp_ns_items(n, file, out); },
         .DECLS(l) => {
             for (d) in this.list(l).items() {
+                if (!this.sees(d, file)) {
+                    continue;
+                }
                 match (this.item_of(d).kind) {
                     .ENUM(e&) => {
                         for (v&) in e.variants.items() {
@@ -1405,23 +1410,35 @@ attach fn lsp_path_members(this: checker&, path: str, out: std::json::value&) ->
         }
         if (prefix.as_str() == path) {
             match (this.lsp_find(full.as_str()) ?? continue) {
-                .NS(n) => { this.lsp_ns_items(n, out); },
+                .NS(n) => { this.lsp_ns_items(n, file, out); },
                 default => {},
             }
         }
     }
 }
 
-// completion items for namespace n's names and child namespaces
-attach fn lsp_ns_items(this: checker&, n: u32, out: std::json::value&) -> void {
+// completion items for namespace n's names that file may use, and its child namespaces
+attach fn lsp_ns_items(this: checker&, n: u32, file: u32, out: std::json::value&) -> void {
     var names: std::vec<str> = {};
     map_keys(&this.ns(n).names, &names);
     for (name) in names.items() {
         val l = this.ns(n).names.get(name) ?? continue;
-        val d = *this.list(*l).at(0);
+        var d = *this.list(*l).at(0);
         match (this.recv_of(d)) {
             .NONE => {},
             default => { continue; }, // a method
+        }
+        // (the first overload file may use)
+        var seen = false;
+        for (x) in this.list(*l).items() {
+            if (this.sees(x, file)) {
+                d = x;
+                seen = true;
+                break;
+            }
+        }
+        if (!seen) {
+            continue;
         }
         var kind = 6.0; // variable
         var detail: std::string = {};
@@ -1660,8 +1677,8 @@ fn path_uri(path: str) -> std::string {
 
 // ---------- the server ----------
 
-// an open document, and the last check of it that parsed: its sources, the checker (with the
-// index) and which of the sources it is
+// an open document, and the last check of it that parsed (before any did, of the items that
+// parsed): its sources, the checker (with the index) and which of the sources it is
 struct lsp_doc {
     uri: std::string;
     text: std::string = {};
@@ -1669,6 +1686,7 @@ struct lsp_doc {
     src: std::box<sources>? = null;
     file: u32 = 0;
     dirty: bool = false; // changed since the last check
+    partial: bool = false; // chk is of the items that parsed (no check of the document parsed yet)
 }
 
 struct lsp_server {
@@ -2184,7 +2202,8 @@ attach fn check_doc(this: lsp_server&, doc: lsp_doc&) -> std::vec<diag> {
     }
     s.test_mode = 2; // test blocks are checked as plain fns
     val bad = parse_sources(s);
-    if (bad.len > 0) {
+    val parsed = bad.len == 0;
+    if (!parsed) {
         for (b&) in bad.items() {
             var d = copy *b;
             if (d.span.file != file) {
@@ -2194,7 +2213,13 @@ attach fn check_doc(this: lsp_server&, doc: lsp_doc&) -> std::vec<diag> {
             }
             put(&diags, move d);
         }
-        return diags;
+        // the last check that parsed stays; a document with none (opened mid-edit) is checked as far
+        // as it parses (the parser picks up at the next item), again at each edit until it parses,
+        // for hover and the rest, reporting only the parse errors: the others may come from what was
+        // left out
+        if (doc.chk != null && !doc.partial) {
+            return diags;
+        }
     }
     var o: opts = { lsp: true };
     for (u&) in s.units.items() {
@@ -2205,13 +2230,14 @@ attach fn check_doc(this: lsp_server&, doc: lsp_doc&) -> std::vec<diag> {
     var chk = compile_rounds(&s.files, &s.asts, move o);
     chk.lsp_generic_bodies();
     for (d&) in all_diags(&*chk).items() {
-        if (d.span.file == file) {
+        if (parsed && d.span.file == file) {
             put(&diags, copy *d);
         }
     }
     doc.file = file;
     doc.chk = move chk;
     doc.src = move sb;
+    doc.partial = !parsed;
     return diags;
 }
 
@@ -2241,13 +2267,12 @@ fn parse_sources(s: sources&) -> std::vec<diag> {
             continue;
         }
         var p: parser = { src: s.files.at(i).text, toks: s.toks.at(i), pos: 0, generics: &names };
-        val items = p.parse_file() catch |e| {
-            for (d&) in p.errors.items() {
-                put(&errors, copy *d);
-            }
-            put(&s.asts, {});
-            continue;
-        };
+        // (a file with errors keeps the items that parsed, which the language server checks when no
+        // check of the document parsed before)
+        val items = p.items(false);
+        for (d&) in p.errors.items() {
+            put(&errors, copy *d);
+        }
         val u = s.units.at(i);
         if (u.pkg) {
             var wrapped: std::vec<item> = {};
@@ -2788,7 +2813,7 @@ attach fn complete(this: lsp_server&, params: std::json::value&) -> std::json::v
         }
         val l = c.lsp_local_named(doc.file, text[k..i - 1], at);
         if (l) {
-            c.lsp_members(l->ty, &out);
+            c.lsp_members(l->ty, doc.file, &out);
         }
         return out;
     }
@@ -2797,7 +2822,7 @@ attach fn complete(this: lsp_server&, params: std::json::value&) -> std::json::v
         while (k > 0 && (is_word_byte(text[k - 1]) || text[k - 1] == ':')) {
             k -= 1;
         }
-        c.lsp_path_members(text[k..i - 2], &out);
+        c.lsp_path_members(text[k..i - 2], doc.file, &out);
         return out;
     }
     var seen: std::map<str, bool> = {};
@@ -2807,7 +2832,7 @@ attach fn complete(this: lsp_server&, params: std::json::value&) -> std::json::v
             out.add(lsp_item(l.name, 6.0, c.ty_name(l.ty).as_str()));
         }
     }
-    c.lsp_ns_items(0, &out);
+    c.lsp_ns_items(0, doc.file, &out);
     for (k) in KEYWORDS {
         out.add(lsp_item(k, 14.0, ""));
     }
@@ -2869,6 +2894,9 @@ attach fn signature(this: lsp_server&, params: std::json::value&) -> std::json::
     }
     var sigs = std::json::array();
     for (d) in c.lsp_callees(text[k..o], method).items() {
+        if (!c.sees(d, doc.file)) {
+            continue; // (an overload this file can't call)
+        }
         if (recv) {
             val rt = c.t.ref_inner(recv->ty) ?? recv->ty;
             if (!c.takes_this(d, rt)) {

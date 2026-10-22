@@ -712,6 +712,13 @@ attach fn builtin(this: checker&, name: str, gargs: std::vec<garg>&, args_opt: s
         val loc = this.ir.node(ir_kind::CSTR(this.loc(span)), CSTR);
         return vnew(NEVER, this.ir.rt_call("volt_panic_str", nodes2(v.c, loc), NEVER));
     }
+    if (name == "location") {
+        // where it's written as FILE:LINE:COL, a panic's place; in a parameter's default, the call's
+        if (args.len != 0) {
+            return fails(span, "@location takes no arguments: @location()");
+        }
+        return vpure(STR, this.ir.node(ir_kind::STR(this.loc(this.default_at ?? span)), STR));
+    }
     // (an assertion is std::testing's; a typo names the builtin it's close to)
     if (name == "assert" || name == "assert_eq" || name == "expect") {
         return fail(span, fmt("unknown builtin @{}: assertions are std::testing's (use std::testing; then try std::testing::assert(cond) in a test block)", S(name)));

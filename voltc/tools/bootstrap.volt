@@ -232,15 +232,15 @@ fn signal_code(code: i32) -> i32 {
     return code;
 }
 
-// whether space-separated words holds w
+// whether words (separated by spaces, tabs or a CR) holds w
 fn has_word(words: str, w: str) -> bool {
     var i: usize = 0;
     while (i < words.len) {
-        while (i < words.len && words[i] == 32) {
+        while (i < words.len && (words[i] == 32 || words[i] == 9 || words[i] == 13)) {
             i += 1;
         }
         var e = i;
-        while (e < words.len && words[e] != 32) {
+        while (e < words.len && words[e] != 32 && words[e] != 9 && words[e] != 13) {
             e += 1;
         }
         if (e > i && words[i..e] == w) {
