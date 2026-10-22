@@ -2456,6 +2456,18 @@ fn cpp_peruse4() {
 }
 
 #[test]
+fn cpp_twin_ct() {
+    // a class template Volt declares: its method templates (instance, static, deduced and with the
+    // template argument given) worked out per use, under C++98 too (T-0640)
+    let e = Env::new("cpp-twin-ct");
+    let want = "bag 8 9 9 7\nsz 8 2\ntag 11 6\n";
+    for backend in ["c", "llvm"] {
+        assert_eq!(ok(e.voltc(&["run", "cpp_twin_ct.volt", "--backend", backend]), "voltc run cpp_twin_ct.volt"), want, "a class template's method templates ({backend})");
+    }
+    assert_eq!(ok(e.voltc(&["run", "cpp_twin_ct.volt", "--cc", "-std=c++98"]), "voltc run cpp_twin_ct.volt (C++98)"), want, "a class template's method templates under C++98");
+}
+
+#[test]
 fn cpp_twin() {
     // a template pair f(T&) / f(T) (and const T& / T): with T explicit both overloads take the
     // argument, so each wrapper names its own; f(&m) changes m, f_value(5) a copy; T a pointer, a
@@ -2710,7 +2722,7 @@ fn cpp_aligned_field() {
     // mixed are laid out as Volt lays them out, value structs: tight is 8 bytes there)
     let tight = if cfg!(windows) { "tight 9 8" } else { "tight 9 6" };
     for backend in ["c", "llvm"] {
-        assert_eq!(ok(e.voltc(&["run", "cpp_aligned_field.volt", "--backend", backend]), "voltc run cpp_aligned_field.volt"), format!("cell 7 7 true true 32\n{tight}\nmixed 11 0.5\nsqueezed 13 5\ntemplates 5 34 35 9\n"), "aligned-typedef and packed fields ({backend})");
+        assert_eq!(ok(e.voltc(&["run", "cpp_aligned_field.volt", "--backend", backend]), "voltc run cpp_aligned_field.volt"), format!("cell 7 7 true true 32\n{tight}\nmixed 11 0.5\nsqueezed 13 5\ntemplates 5 34 35 9\nbox 4 4 4 64\n"), "aligned-typedef and packed fields ({backend})");
     }
     let shown = Command::new(&e.voltc).args(["check", "cpp_aligned_field.volt", "--std"]).arg(Path::new(ROOT).join("std")).current_dir(Path::new(ROOT).join("tests/interop")).env("VOLT_SHOW_CPP", "1").output().unwrap();
     let src = String::from_utf8_lossy(&shown.stderr);
@@ -2731,6 +2743,14 @@ fn cpp_aligned_field() {
         assert!(src.contains(&format!("left out: class template af::{t} ")) && !src.contains(&format!("@cpp_handle(\"af::{t}\")")), "C++14: af::{t} left out: {src}");
     }
     assert!(src.contains("@cpp_handle(\"af::tpacked\")"), "C++14: af::tpacked a handle: {src}");
+    // an instance of a template handle on a 32-aligned class (tbox<v32>): below C++17 plain new
+    // doesn't align it, so it doesn't build (T-0645)
+    // (and as a function's result, and a class held by handle aligned to 32: nbig)
+    for f in ["cpp_aligned_field14_new.volt", "cpp_aligned_field14_result.volt", "cpp_aligned_field14_class.volt"] {
+        let o = e.voltc(&["run", f, "--cc", "-std=c++14"]);
+        let err = String::from_utf8_lossy(&o.stderr);
+        assert!(!o.status.success() && err.contains("volt_cpp_needs_cxx17_aligned_new"), "C++14: {f} made by plain new: {err}");
+    }
 }
 
 /// is a C++ library's header on the usual include paths?

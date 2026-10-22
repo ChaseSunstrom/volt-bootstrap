@@ -116,7 +116,7 @@ fn release_voltc_works() {
         let text = std::fs::read_to_string(&p).unwrap_or_default();
         // (and those marked `// debug-only`: what they check is the debug allocator's, which an optimized
         // build doesn't have)
-        if p.extension().is_some_and(|x| x == "volt") && !text.contains("// exit:") && !text.contains(".h\"") && !text.contains("// debug-only") && !(cfg!(windows) && text.lines().any(|l| l.starts_with("// unix-only"))) {
+        if p.extension().is_some_and(|x| x == "volt") && !text.contains("// exit:") && !text.contains(".h\"") && !text.contains("// debug-only") && common::os_ok(&text) {
             runs.push((p, "llvm", true));
         }
     }
@@ -125,8 +125,7 @@ fn release_voltc_works() {
     for (file, backend, release) in &runs {
         let text = std::fs::read_to_string(file).unwrap();
         let want: Vec<&str> = text.lines().filter_map(|l| l.strip_prefix("// expect: ")).map(|l| l.trim_end()).collect();
-        // (`// unix-only`: its oracle is Unix's, as golden.rs skips it)
-        if want.is_empty() || (cfg!(windows) && text.lines().any(|l| l.starts_with("// unix-only"))) {
+        if want.is_empty() || !common::os_ok(&text) {
             continue;
         }
         let flags: Vec<&str> = text.lines().find_map(|l| l.strip_prefix("// flags:")).map(|f| f.split_whitespace().collect()).unwrap_or_default();

@@ -232,19 +232,21 @@ fn signal_code(code: i32) -> i32 {
     return code;
 }
 
-// does src have a line starting with prefix
-fn has_line(src: str, prefix: str) -> bool {
-    var at: usize = 0;
-    while (at <= src.len) {
-        var end = at;
-        while (end < src.len && src[end] != 10) {
-            end += 1;
+// whether space-separated words holds w
+fn has_word(words: str, w: str) -> bool {
+    var i: usize = 0;
+    while (i < words.len) {
+        while (i < words.len && words[i] == 32) {
+            i += 1;
         }
-        val line = src[at..end];
-        if (line.len >= prefix.len && line[0..prefix.len] == prefix) {
+        var e = i;
+        while (e < words.len && words[e] != 32) {
+            e += 1;
+        }
+        if (e > i && words[i..e] == w) {
             return true;
         }
-        at = end + 1;
+        i = e;
     }
     return false;
 }
@@ -259,8 +261,10 @@ fn golden(stage: str, std_dir: str, backend: str) -> i32 {
     var skipped: i32 = 0;
     for (f&) in files.items() {
         val src = std::fs::read_file(f.as_str()) catch |e| die(std::string::from("can't read a test"));
-        // `// unix-only`: its oracle is Unix's (glibc's or Apple's libm, sh's kill), as tests/golden.rs has it
-        if (@cfg("os", "windows") && has_line(src.as_str(), "// unix-only")) {
+        // `// os: linux macos`: run only on the systems named
+        var oses: std::vec<str> = {};
+        directives(src.as_str(), "os", &oses);
+        if (oses.len > 0 && !has_word(*oses.at(0), std::process::os())) {
             skipped += 1;
             continue;
         }

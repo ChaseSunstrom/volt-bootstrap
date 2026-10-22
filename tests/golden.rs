@@ -1,6 +1,6 @@
 // Golden tests. tests/run/*.volt and examples/*.volt: compiled and run, stdout must equal the `// expect: ` lines
 // (and exit code the `// exit: N` line, default 0, or one of `// exit: N|M`; `// flags: --release` passes flags; each `// expect-stderr: ` line must be
-// in stderr, each `// reject-stderr: ` line must not). tests/fail/*.volt: `voltc check` must fail with every `// error: ` substring in its stderr.
+// in stderr, each `// reject-stderr: ` line must not; `// os: linux` runs it only on the systems named). tests/fail/*.volt: `voltc check` must fail with every `// error: ` substring in its stderr.
 // voltc is stage 1: voltc/src built by the bootstrap compiler.
 mod common;
 use std::path::Path;
@@ -30,12 +30,11 @@ fn golden() {
     let mut count = 0;
     // programs: run, then compare stdout and the exit code
     for f in files("tests/run").into_iter().chain(files("examples")) {
-        count += 1;
         let src = std::fs::read_to_string(&f).unwrap();
-        // `// unix-only`: its oracle is Unix's (glibc's or Apple's libm, sh's kill)
-        if cfg!(windows) && src.lines().any(|l| l.starts_with("// unix-only")) {
+        if !common::os_ok(&src) {
             continue;
         }
+        count += 1;
         let want = directives(&src, "expect").join("\n");
         // `// exit: 132|133`: any of them (a trap is SIGILL on x86-64, SIGTRAP on arm64)
         let want_codes: Vec<i32> = directives(&src, "exit").first().map(|s| s.split('|').map(|c| c.trim().parse().unwrap()).collect()).unwrap_or(vec![0]);

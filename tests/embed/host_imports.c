@@ -445,10 +445,13 @@ int main(int argc, char **argv) {
              "export fn run() -> i64 { return sum(); }\n",
              argv[2], argv[2]);
     voltvm_volt_vm *vm = volt_vm_new(std_dir);
+    // (stderr: where a crash came, which the test shows when it fails; T-0654)
+    fprintf(stderr, "host_imports: vm made\n");
     if (volt_vm_load(vm, S("imports.volt"), S(script)).error) {
         say_error(vm, "load");
         return 1;
     }
+    fprintf(stderr, "host_imports: loaded\n");
     printf("run %lld\n", ((long long (*)(void))volt_vm_find(vm, S("run")))());
     printf("user %lld\n", user_of(vm, "user"));
     printf("thrice %lld\n", thrice_of(vm, argv[2], "thrice"));

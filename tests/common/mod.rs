@@ -188,6 +188,12 @@ pub fn path_with(dir: impl AsRef<std::path::Path>) -> std::ffi::OsString {
     std::env::join_paths(dirs).unwrap()
 }
 
+/// whether a golden program runs on this system: no `// os: ` line, or one naming it ("linux macos")
+#[allow(dead_code)]
+pub fn os_ok(src: &str) -> bool {
+    src.lines().find_map(|l| l.trim_start().strip_prefix("// os:")).is_none_or(|l| l.split_whitespace().any(|o| o == std::env::consts::OS))
+}
+
 /// voltc/src built by the bootstrap compiler (stage 0), debug: the compiler the tests run. Built once
 /// for a state of voltc/src, std and the bootstrap binary, whichever test binary gets there first (the
 /// others wait on a lock file), and kept in CARGO_TARGET_TMPDIR for the next run

@@ -1,5 +1,6 @@
 // voltc run of a program a signal ends says which signal, and exits 128 + its number as the shell does
-// unix-only (abort on Windows is a fail-fast exit, 0xC0000409)
+// os: linux macos freebsd
+// (abort on Windows is a fail-fast exit, 0xC0000409)
 extern "C" fn abort() -> never;
 
 fn main() -> i32 {
