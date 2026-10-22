@@ -7734,22 +7734,26 @@ attach fn cpp_instance_as(this: checker&, k: usize, expr: str, types: std::vec<u
     val fc = found ?? return fails(span, "libclang lost the call");
     val writes = probe_writes(fc, &seq);
     // a reference result may be into an argument C++ binds a reference parameter to: a Volt
-    // struct, tuple or enum passed by value is the wrapper's own copy (&a1), gone once the call
-    // returns, so the value comes back (T-0633). ponytail: a number's temporary bound to a const
-    // int& isn't counted (std::map<int, V>::at's result is the map's); a pick(const int&) returning
-    // its argument would still dangle
+    // struct, tuple or enum passed by value (its mirror) is the wrapper's own copy (&a1), gone once
+    // the call returns, so the value comes back (T-0633). ponytail: only mirrors count, so a
+    // std::map's at() keeps its reference for a number's, a str's or a handle's key; a
+    // pick(const int&) returning its argument, or a handle moved in, would still dangle (T-0637)
     if (!by_value) {
         val rk = clang::clang_getCanonicalType(clang::clang_getCursorResultType(fc)).kind;
         if (rk == clang::CXType_LValueReference || rk == clang::CXType_RValueReference) {
             val refs = probe_refs(fc, &seq);
             for (j) in 0..types.len {
-                var lent = *reads.at(j) != 0;
+                // (by value: not a Volt reference, which lends the caller's, nor a pointer)
+                var by_val = *reads.at(j) == 0;
                 match (*this.t.get(*types.at(j))) {
-                    .REF(x) => { lent = true; },
+                    .REF(x) => { by_val = false; },
                     default => {},
                 }
-                if (!lent && j < 64 && ((refs >> @cast<u32>(j)) & 1) != 0) {
-                    return this.cpp_instance_as(k, expr, types, recv, true, tried, span);
+                if (by_val && j < 64 && ((refs >> @cast<u32>(j)) & 1) != 0 && starts_with(ptys.at(j).as_str(), "volt_m_")) {
+                    // (this call's key gets the copy's fn too: one probe, not two, the next time)
+                    val made = try this.cpp_instance_as(k, expr, types, recv, true, tried, span);
+                    this.cpp_dyn.put(this.intern(move key), made);
+                    return made;
                 }
             }
         }
