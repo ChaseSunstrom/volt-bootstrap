@@ -123,7 +123,7 @@ use std::io;
 fn main() -> void {
     std::println("{} and {}", 1);
 }
-// error: format string has 2 {} but 1 values were given
+// error: format string has 2 {} but 1 value was given
 ```
 
 A name between the braces prints that value without passing it: a local (`{count}`), a global or
