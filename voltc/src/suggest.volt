@@ -259,9 +259,56 @@ attach fn unknown(this: checker&, span: span, what: str, ns: u32, p: path&, loca
     return e;
 }
 
-// `T has no field 'x'`, with a did-you-mean from the fields that exist
+// what an error union's value needs before a field or method is used on it
+val UNWRAP_HELP: str = "it's an error union: unwrap it with try (or catch) first, then use its value";
+
+// a candidate at least 3 letters long whose name begins the wanted one, or that begins with it
+// (len for length)
+fn prefix_match(want: str, cands: std::vec<str>&) -> str? {
+    for (c) in cands.items() {
+        val n = if (c.len < want.len) c.len else want.len;
+        if (n >= 3 && c[0..n] == want[0..n]) {
+            return c;
+        }
+    }
+    return null;
+}
+
+// `T has no method 'x'`: on an error union, that its value needs unwrapping first; else a
+// did-you-mean from T's own methods (a close spelling, or one whose name begins the wanted one)
+attach fn no_method(this: checker&, span: span, t: u32, name: str) -> compile_error {
+    val e = fail(span, fmt2("{} has no method '{}'", this.ty_name(t), S(name)));
+    val base = this.t.ref_inner(t) ?? t;
+    match (*this.t.get(base)) {
+        .ERR_UNION(x, y) => { return with_help(move e, S(UNWRAP_HELP)); },
+        default => {},
+    }
+    var all: std::vec<str> = {};
+    map_keys(&this.attached, &all);
+    var names: std::vec<str> = {};
+    for (n) in all.items() {
+        if (is_operator_fn(n)) {
+            continue;
+        }
+        for (d) in this.named(&this.attached, n).items() {
+            if (this.takes_this(d, base)) {
+                put(&names, n);
+                break;
+            }
+        }
+    }
+    val c = closest(name, &names) ?? prefix_match(name, &names) ?? return e;
+    return with_help(move e, fmt("did you mean '{}'?", S(c)));
+}
+
+// `T has no field 'x'`, with a did-you-mean from the fields that exist (on an error union: unwrap
+// it first)
 attach fn no_field(this: checker&, span: span, t: u32, name: str, fields: std::vec<str>&) -> compile_error {
     val e = fail(span, fmt2("{} has no field '{}'", this.ty_name(t), S(name)));
+    match (*this.t.get(this.t.ref_inner(t) ?? t)) {
+        .ERR_UNION(x, y) => { return with_help(move e, S(UNWRAP_HELP)); },
+        default => {},
+    }
     val c = closest(name, fields);
     if (c) {
         val helped = with_help(move e, fmt("did you mean '{}'?", S(c)));

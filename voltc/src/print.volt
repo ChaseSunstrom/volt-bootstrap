@@ -172,7 +172,7 @@ attach fn intrinsic(this: checker&, name: str, all_args: std::vec<expr>&, ret: u
             m.append_uint(@cast<u64>(next));
             m.append(" {} but ");
             m.append_uint(@cast<u64>(nargs - 1));
-            m.append(" values were given");
+            m.append(if (nargs - 1 == 1) " value was given" else " values were given");
             return fail(span, move m);
         }
         first_value = first + 1;
