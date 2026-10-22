@@ -421,6 +421,8 @@ static void std_kept(voltvm_volt_vm *vm, const char *dir) {
 }
 
 int main(int argc, char **argv) {
+    // (unbuffered: a crash leaves what came before it, which a pipe's buffer would lose)
+    setvbuf(stdout, NULL, _IONBF, 0);
     volt_str std_dir = S(argv[1]);
     // the tests' directory goes in Volt string literals: forward slashes (Windows gives backslashes)
     for (char *p = argv[2]; *p; p++) {
