@@ -37,5 +37,8 @@ fn main() -> void {
     tp.set_x(4);
     std::println("templates {} {} {} {}", cpp::af::tcell_x(&tc), cpp::af::twide_x(&tw), cpp::af::tslot_x(&ts), cpp::af::tpacked_x(&tp));
     var tb: cpp::af::tbox32 = {};
-    std::println("box {}", tb.get());
+    val tc2 = copy tb;
+    val made = cpp::af::make_box32();
+    var nb: cpp::af::nbig = {};
+    std::println("box {} {} {} {}", tb.get(), tc2.get(), made.get(), nb.size());
 }

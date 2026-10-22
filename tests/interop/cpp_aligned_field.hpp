@@ -3,6 +3,7 @@
 // give any of these layouts
 #pragma once
 #include <cstdint>
+#include <string>
 
 namespace af {
 typedef int aint __attribute__((aligned(16)));
@@ -82,6 +83,14 @@ struct tbox {
     int p = 4;
 };
 typedef tbox<v32> tbox32;
+inline tbox32 make_box32() { return tbox32(); }
+// held by handle for its std::string (not trivially copyable), aligned to 32: below C++17 new can't
+// make it either
+struct alignas(32) nbig {
+    std::string s;
+    float f[8];
+    int size() const { return (int)sizeof(nbig); }
+};
 
 inline int squeezed_x(const squeezed &v) { return v.x; }
 inline int squeezed_size() { return (int)sizeof(squeezed); }
