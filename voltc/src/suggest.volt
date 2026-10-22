@@ -75,7 +75,7 @@ fn closest(name: str, cands: std::vec<str>&) -> str? {
     return best;
 }
 
-// the keys of a map (in no particular order: callers only take the closest, so order doesn't matter)
+// the keys of a map (in no particular order, a hash's: deterministic, but arbitrary among equals)
 <V: type>
 fn map_keys(m: std::map<str, V>&, out: std::vec<str>&) -> void {
     for (e) in m.iter() {
