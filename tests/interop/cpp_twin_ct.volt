@@ -6,6 +6,8 @@ fn main() -> void {
     var a: cpp::twc::Bag<i32> = { base: 7 };
     std::println("bag {} {} {} {}", a.plain(1), a.one(2), a.one(2.5), a.cast_to<f64>());
     std::println("sz {} {}", cpp::twc::Bag<i32>::sz(1.5), cpp::twc::Bag<i32>::sz(@cast<i16>(1)));
+    std::println("tag {} {}", cpp::twc::Tag<i32, 3>::sz(1.5), cpp::twc::Tag<i32, -2>::sz(1.5));
 }
 // expect: bag 8 9 9 7
 // expect: sz 8 2
+// expect: tag 11 6

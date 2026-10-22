@@ -11,4 +11,10 @@ struct Bag {
     template <class T> T cast_to() const { return (T)base; }
     template <class T> static int sz(T) { return (int)sizeof(T); }
 };
+// with a value parameter: its static's class spelled with the number
+template <class T, int N>
+struct Tag {
+    T base;
+    template <class U> static int sz(U) { return (int)sizeof(U) + N; }
+};
 }

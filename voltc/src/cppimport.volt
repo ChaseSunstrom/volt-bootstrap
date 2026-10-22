@@ -8197,13 +8197,23 @@ attach fn cpp_dyn_call(this: checker&, d: u32, name: str, rv: tval?, static_ty: 
                 filled = S(callee);
                 val targs = &this.si(sid).args;
                 for (i) in 0..targs.len {
+                    // (a type as a @cpp type argument's, a number as its literal: negative in parentheses)
+                    var sp: std::string = {};
                     match (*targs.at(i)) {
                         .TY(at) => {
-                            val sp = this.cpp_spell(at) ?? return fail(span, fmt("C++ has no type for {}", this.ty_name(at)));
-                            filled = replace_all(filled.as_str(), fmt("{{t{}}}", unum(@cast<u64>(i))).as_str(), sp.as_str());
+                            sp = this.cpp_targ_type(at) ?? return fail(span, this.no_cpp_spelling(at));
                         },
-                        default => {},
+                        .INT(v) => {
+                            sp = num(v);
+                            if (v < 0) {
+                                sp = fmt("({})", move sp);
+                            }
+                        },
+                        default => {
+                            return fails(span, "this class template's argument has no C++ spelling for a call clang works out");
+                        },
                     }
+                    filled = replace_all(filled.as_str(), fmt("{{t{}}}", unum(@cast<u64>(i))).as_str(), sp.as_str());
                 }
                 callee = this.intern(copy filled);
             },
