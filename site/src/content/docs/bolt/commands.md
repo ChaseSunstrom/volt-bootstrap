@@ -90,6 +90,7 @@ name the package after its directory (lowercased, `-` as `_`) unless `--name NAM
 | `-p, --package NAME` | work on this package (default: the one here, or the workspace's default members) |
 | `--workspace`, `--all` | every package in the workspace |
 | `-r, --release` | the release profile |
+| `--backtrace` | a panic lists the calls that led to it ([`voltc --backtrace`](/volt-bootstrap/voltc/commands/)) |
 | `--profile NAME` | any profile |
 | `-F, --features LIST` | turn on features: `NAME`, `PACKAGE/NAME`, `DEPENDENCY/NAME` |
 | `--all-features`, `--no-default-features` | |

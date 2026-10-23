@@ -3761,7 +3761,14 @@ attach fn typeinfo(this: checker&, t: u32, span: span) -> compile_error!cval {
                 put(&fields, cf("name", cval::STR(S(f.name))));
                 put(&fields, cf("field_type", cval::TYPE(f.ty)));
                 put(&fields, cf("offset", this.opt_usize(off)));
-                put(&fields, cf("default_expr", cval::OPT(this.t.opt_of(STR), null)));
+                // the default's text, as written (null when there's none)
+                var dflt = cval::OPT(this.t.opt_of(STR), null);
+                if (f.fallback) {
+                    val ds = (*f.fallback).span;
+                    val src = this.files.at(@cast<usize>(ds.file)).text;
+                    dflt = cval::OPT(this.t.opt_of(STR), some_c(cval::STR(S(src[@cast<usize>(ds.lo)..@cast<usize>(ds.hi)]))));
+                }
+                put(&fields, cf("default_expr", move dflt));
                 put(&fields, cf("visibility", kind_of("PUBLIC", null)));
                 put(&fields, cf("attributes", try this.field_attrs(sid, f.name)));
                 put(&out, rec1(move fields));
@@ -4536,6 +4543,7 @@ fn builtin_defs() -> std::vec<attr_def> {
     put(&v, { name: "discriminant", args: 1, sig: "@discriminant(v) -> i64", doc: "which variant an enum value holds" });
     put(&v, { name: "field", args: 2, sig: "@field(v, \"name\")", doc: "v.name, the name a comptime string (or a tuple index): read, assigned, borrowed, or called as a method" });
     put(&v, { name: "has_field", args: 2, sig: "@has_field(T, \"name\") -> bool", doc: "is T a struct with that field (comptime)" });
+    put(&v, { name: "field_default", args: 2, sig: "@field_default(T, \"name\")", doc: "the value a literal of struct T that leaves the field out gives it (the name a comptime string)" });
     put(&v, { name: "has_method", args: 2, sig: "@has_method(T, \"name\", A...) -> bool", doc: "does T have a method of that name, taking A... first (comptime)" });
     put(&v, { name: "attaches", args: 2, sig: "@attaches(T, trait) -> bool", doc: "does T attach the trait, as a <T: trait> bound asks (comptime)" });
     put(&v, { name: "panic", args: 1, sig: "@panic(\"msg\") -> never", doc: "stops the program with a message (exit code 101)" });

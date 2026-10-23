@@ -1955,6 +1955,9 @@ attach fn emit_call(this: checker&, made: u32, a: adj, rv: tval?, pre: std::vec<
     for (s&) in seq.items() {
         put(&prefix, *s);
     }
+    if (this.cx.traced) {
+        put(&prefix, this.note_site(span)); // (after the arguments, which may make calls of their own)
+    }
     if (post) {
         if (ac.ty == VOID || ac.ty == NEVER) {
             put(&prefix, ac.c);

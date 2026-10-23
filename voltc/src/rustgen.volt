@@ -49,7 +49,10 @@ attach fn rust_made(this: checker&, d: u32, base: str, path: str, args: std::vec
     for (k) in 0..args.len {
         match (*args.at(k)) {
             .TY(t) => {
+                // the canonical name (every generic arg spelled), as bolt named what it made
+                this.canon_names = true;
                 val tn = this.ty_name(t);
+                this.canon_names = false;
                 if (k > 0) {
                     name.push('_');
                 }

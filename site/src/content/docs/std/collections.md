@@ -120,12 +120,7 @@ fn main() -> void {
     var counts: std::map<std::string, i32> = {};
     val words = "to be or not to be".words();
     for (w) in words.items() {
-        val slot = counts.get(std::string::from(w));
-        if (slot) {
-            *slot += 1;
-        } else {
-            counts.put(std::string::from(w), 1);
-        }
+        *counts.get_or_put(std::string::from(w), 0) += 1;
     }
     var total = 0;
     for (e) in counts.iter() {
@@ -141,7 +136,9 @@ fn main() -> void {
 
 `iter()` gives each entry as `e.key` and `e.value`, references into the map (so `*e.value += 1`
 changes it). A map walks in no particular order; a `sorted_map` walks in key order. Don't add or
-remove entries while walking, and don't change a key through `e.key`. `contains(key)` asks whether
+remove entries while walking, and don't change a key through `e.key`. `get(key)` gives a pointer to
+the value (null when there's none), and `get_or_put(key, value)` a reference to it, put there first
+when the key is new (counting is `*m.get_or_put(w, 0) += 1`). `contains(key)` asks whether
 a key is there, and `remove(key)` takes its entry out, giving its value (null when there was none).
 A set has `contains` and `remove` too, and its `iter()` gives each value.
 

@@ -12,7 +12,8 @@ Volt speaks C's ABI in both directions, and reads real C headers. Runnable examp
 
 `use { "header.h", ... } as ns;` runs the C preprocessor over the headers and imports what they
 declare into namespace `ns`: functions, structs and unions, enums and their constants, `typedef`s,
-numeric `#define`s, and global variables. A header is looked for next to the importing file first,
+numeric and string `#define`s (a string one is a `str`: adjacent literals joined, escapes decoded),
+and global variables. A header is looked for next to the importing file first,
 then where `#include <...>` looks (the system's directories and `-I`'s).
 
 ```c

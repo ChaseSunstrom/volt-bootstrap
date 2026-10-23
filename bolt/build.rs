@@ -287,6 +287,9 @@ impl Build {
         if let Some(n) = &o.error_limit {
             extra.extend(["--error-limit".to_string(), n.clone()]);
         }
+        if o.backtrace {
+            extra.push("--backtrace".to_string());
+        }
         let backend = o.backend.clone().or(profile.backend.clone());
         Build {
             g,

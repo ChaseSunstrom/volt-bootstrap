@@ -1,7 +1,9 @@
 // Volt types holding i64 and f64 (8-aligned on x86-64, 4-aligned in i386's C) mirrored for a C++
 // template: each mirror checks its size and alignment against the target's C layout of the type
-// (an @align(16) struct, an array member, and a tuple whose type name has quotes among them)
+// (an @align(16) struct, an array member, and a tuple whose type name has quotes among them), and
+// one of i128, u128, f16, f128 and a vector, checked as the C compiler's own types (T-0688)
 use std::io;
+use std::simd;
 use { "cpp_peruse_layout.hpp" } as cpp;
 
 struct point { x: i32; y: f64; }
@@ -10,6 +12,7 @@ enum shape { DOT, LINE: i64, BOX: point }
 @attributes([@align(16)])
 struct wide { a: i32; }
 struct trio { ps: point[3]; n: i64; }
+struct wide_nums { a: i128; b: u128; h: f16; q: f128; v: std::simd::f32x4; vs: std::simd::f32x4[2]; }
 
 extern "C" fn plus_one(x: i32) -> i32 {
     return x + 1;
@@ -38,4 +41,7 @@ fn main() -> void {
     val fq = cpp::pul::echo(ft);
     val g = fq.0;
     std::println("fnptr {} {}", g(4), fq.1);
+    val wn: wide_nums = { a: -(1 << 100), b: 1 << 127, h: 1.5, q: 2.25, v: { 1.0, 2.0, 3.0, 4.0 }, vs: { { 5.0, 6.0, 7.0, 8.0 }, { 9.0, 10.0, 11.0, 12.0 } } };
+    val wq = cpp::pul::echo(wn);
+    std::println("nums {} {} {} {} {} {}", wq.a == wn.a, wq.b == wn.b, wq.h, wq.q, wq.v[3], wq.vs[1][2]);
 }

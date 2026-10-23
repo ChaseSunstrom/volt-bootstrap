@@ -133,7 +133,7 @@ use { "test.h", "test2.h" } as c;
         name: str;
         field_type: type;        // size/align come from its typeinfo
         offset: usize?;          // offset in bytes
-        default_expr: str?;      // null for now
+        default_expr: str?;      // the default as written; null when there's none
         visibility: visibility;  // PUBLIC for now
         attributes: (...);       // a library's attribute values, a tuple (as on the type)
     }
