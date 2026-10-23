@@ -236,8 +236,9 @@ would change only a copy.
 Each mirror checks its size and alignment against the type as the target's C compiler lays it out,
 which is how both backends lay it out. Where the two differ (i386 aligns `i64` and `f64` to 4), the
 C++ step fails with `Volt's point: the mirror's size or alignment isn't the type's C layout on this
-target`, rather than the program copying the wrong bytes. The check reads `f16`, `f128`, `i128`
-and vectors as their bytes too, so a mirror made only of those isn't checked.
+target`, rather than the program copying the wrong bytes. `f16`, `f128`, `i128` and vectors are
+checked as the C compiler's own types (`_Float16`, `__float128` or a binary128 `long double`,
+`__int128`, GNU C's vectors); where it has none (no `__int128` on i386), as their bytes.
 
 ## The standard library, operators and exceptions
 
