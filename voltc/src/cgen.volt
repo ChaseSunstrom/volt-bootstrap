@@ -76,6 +76,32 @@ fn c_member(n: str) -> str {
 }
 
 // n as a C member name, renamed volt_kw_n when it is a C keyword
+// the real type of C's complex when t is the import's cf32 or cf64 (volt_cf32, volt_cf64): a header
+// struct's member of that type is C's _Complex, laid out alike
+attach fn c_complex_of(this: cgen&, t: u32) -> str? {
+    match (*this.c.t.get(t)) {
+        .STRUCT(s) => {
+            val n = this.c.si(s).c_name;
+            if (n == "volt_cf64") {
+                return "double";
+            }
+            if (n == "volt_cf32") {
+                return "float";
+            }
+        },
+        default => {},
+    }
+    return null;
+}
+
+// is member type mt of struct t C's _Complex (a header struct's, of the import's cf32/cf64)?
+attach fn complex_member(this: cgen&, t: u32, mt: u32) -> bool {
+    match (*this.c.t.get(t)) {
+        .STRUCT(s) => { return this.c.header_struct(s) && this.c_complex_of(mt) != null; },
+        default => { return false; },
+    }
+}
+
 attach fn put_member(this: cgen&, out: std::string&, n: str) -> void {
     if (n.len > 0 && n[0] == '@') {
         // padding in Volt's copy of a C struct (clang.volt's pad_fields): @pad0 is volt_pad0
@@ -1220,14 +1246,15 @@ attach fn expr(this: cgen&, out: std::string&, n: u32) -> void {
         .RT(name) => { out.append(name); },
         .FIELD(b, i) => {
             val bt = this.c.ir.ty_of(b);
-            // a header struct's array field is a bare C array: view it as our array wrapper (same layout)
+            // a header struct's array field is a bare C array, and a complex one C's _Complex: view
+            // it as our array wrapper or cf32/cf64 struct (same layout)
             var wrap = false;
             match (*this.c.t.get(bt)) {
                 .STRUCT(s) => {
                     if (this.c.header_struct(s)) {
                         match (*this.c.t.get(t)) {
                             .ARRAY(x, n2) => { wrap = true; },
-                            default => {},
+                            default => { wrap = this.c_complex_of(t) != null; },
                         }
                     }
                 },
@@ -1455,6 +1482,15 @@ attach fn expr(this: cgen&, out: std::string&, n: u32) -> void {
                     }
                     out.push(')');
                     this.expr(out, fi.value);
+                } else if (this.complex_member(t, mt)) {
+                    // a header struct's complex member: C's _Complex, from our cf32/cf64 by a union
+                    out.append("((union { ");
+                    out.append(this.ty(mt));
+                    out.append(" v; ");
+                    out.append(this.c_complex_of(mt) ?? "double");
+                    out.append(" _Complex c; }){ .v = ");
+                    this.full_as(out, fi.value, mt);
+                    out.append(" }).c");
                 } else {
                     this.full_as(out, fi.value, mt);
                 }

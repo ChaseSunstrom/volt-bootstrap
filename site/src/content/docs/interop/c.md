@@ -49,7 +49,7 @@ How C's types come in:
 | `int`, `long`, `size_t`, `uint8_t`... | the integer type of the same size and sign (`char` is `i8`) |
 | `double`, `float` | `f64`, `f32` |
 | `long double` | `f64`, through a C wrapper (below) |
-| `float _Complex`, `double _Complex` | the struct `ns::cf32` or `ns::cf64`, `{ re, im }`, through a C wrapper |
+| `float _Complex`, `double _Complex` | the struct `ns::cf32` or `ns::cf64`, `{ re, im }`: by value through a C wrapper, as a struct member or pointee directly (the same layout) |
 | `T *` | `T*`, which may be null |
 | `char *`, `const char *` | `cstr?` (string literals convert to `cstr`) |
 | `void *` | `void*` |
@@ -122,8 +122,10 @@ function written against the numbers passes as a callback.
 through a small C wrapper that converts it: a `long double` is an `f64` (what it holds past an
 `f64`'s precision is lost), and a complex is the struct `cf32` (for `float _Complex`) or `cf64`
 `{ re, im }` of the import's namespace (`cf64_` when the header has a type named `cf64`, and so on
-for `cf32`). A struct member of either type is C's to read and write, as
-a member Volt can't read is, and a pointer to one is a `void*`.
+for `cf32`). A struct member or pointee of a `float` or `double` complex is that struct too, which
+C11 lays out as the complex (`s.z.re = 1.0`; a `double _Complex*` parameter is a `cf64*`); a
+`long double` one, and a struct member that is a `long double`, are C's to read and write, as a
+member Volt can't read is, and a pointer to one is a `void*`.
 
 ```c
 /* levels.h */

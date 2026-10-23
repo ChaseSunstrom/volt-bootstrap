@@ -1773,6 +1773,15 @@ attach fn ty_of(this: cmapper&, t0: ctype&) -> ty? {
             val e: expr = { kind: expr_kind::BUILTIN("vector", {}, move args), span: this.span };
             return this.wrap(type_kind::EXPR(bx(move e)));
         },
+        // a float or double complex (a member, a pointee): its struct, cf32 or cf64, laid out as C11
+        // lays out a complex (two of its reals); by value a function still takes it through a
+        // wrapper (needs_wrap), as ABIs pass the two differently
+        .COMPLEX(e) => {
+            if (e == "long double") {
+                return null;
+            }
+            return this.wrap_ty(t);
+        },
         default => { return null; },
     }
 }
