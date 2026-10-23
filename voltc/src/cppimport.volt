@@ -129,6 +129,8 @@ struct cpp_gen {
     left_out: std::map<str, bool> = {};
     // the import's standard is below C++17: new doesn't align past 16 (no aligned new)
     below17: bool = false;
+    // ...below C++11: std::vector's push_back assigns its elements too (array_copy)
+    below11: bool = false;
     enums: std::map<str, str> = {};
     templates: std::map<str, str> = {};
     depth: usize = 0;
@@ -2369,7 +2371,9 @@ attach fn enum_fits(this: cpp_gen&, t: clang::CXType) -> bool {
 // copies the elements into a C++ std::vector<T> it makes (volt_cpp_made: no call with part of it),
 // whose elements C++ gets as the T[N]; a non-const one's go back into the Volt elements once the
 // call returns (moved; not when it threw, so a try_ form leaves them as they were; a string's as
-// volt_cpp_text_back has it). None when T can't be copied in, or assigned back
+// volt_cpp_text_back has it). Elements are copied apart: one object's handle twice (or one array
+// given to two parameters) is two C++ copies, the last copy-back winning. None when T can't be
+// copied in, or assigned back (below C++11, assigned at all)
 attach fn array_copy(this: cpp_gen&, base: clang::CXType, et: clang::CXType, name: str, slot: str, i: usize, konst: bool, tparams: std::vec<str>&) -> cpp_arg? {
     val n = clang::clang_getArraySize(clang::clang_getCanonicalType(base));
     if (n <= 0) {
@@ -2378,15 +2382,17 @@ attach fn array_copy(this: cpp_gen&, base: clang::CXType, et: clang::CXType, nam
     val ut = clang::clang_getUnqualifiedType(clang::clang_getCanonicalType(et));
     val vec = fmt("std::vector<VOLT_ID({}) >", canon(ut));
     val h = fmt("try_v{}", unum(@cast<u64>(i)));
-    // element try_j, as @cpp's {1}, and its C++ copy
+    // element try_j, as @cpp's {1}, and its C++ copy (a string of the parameter's own type: a
+    // std::pmr::string's allocator)
     var elem = fmt("{}[try_j]", S(name));
-    var made = S("std::string((const char *){1}.ptr, {1}.len)");
+    var made = fmt("VOLT_ID({})((const char *){{1}}.ptr, {{1}}.len)", canon(ut));
     var vty = S("str");
     val hc = this.handle_of(et) ?? S("");
     if (hc.len() > 0) {
         this.ensure_traits(hc.as_str());
         val tr = this.traits.get(hc.as_str()) ?? return null;
-        if (!tr->copyable || (!konst && !tr->assignable)) {
+        // (a const one too below C++11, where push_back assigns)
+        if (!tr->copyable || ((!konst || this.below11) && !tr->assignable)) {
             return null;
         }
         vty = this.vtype(ut, tparams) ?? return null;
@@ -7297,6 +7303,7 @@ attach fn import_cpp(this: checker&, headers: std::vec<std::string>&, alias: str
     }
     var g: cpp_gen = { c: this, kinds: fmt("volt_cpp_kinds_{}", unum(@cast<u64>(this.cpp_items.len))) };
     g.below17 = below_cpp17(std_name);
+    g.below11 = ends_with(std_name, "++98") || ends_with(std_name, "++03");
     g.module_file = move mod_path;
     g.export_from = move exp_from;
     g.export_to = move exp_to;

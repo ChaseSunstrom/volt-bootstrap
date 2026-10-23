@@ -2355,6 +2355,17 @@ fn cpp_array_ref_handle() {
         let ty = &t[..t.len() - 2];
         assert!(src.contains(&format!("// C++: {f}({t}) (worked out per use: {ty} has no Volt form)")), "{f}: {src}");
     }
+    // under C++98 too, where std::vector's push_back may assign: a const one of a class that's
+    // copied but not assigned has no Volt form there, and has one from C++11 on
+    for std in ["-std=c++98", "-std=c++17"] {
+        for backend in ["c", "llvm"] {
+            assert_eq!(ok(e.voltc(&["run", "cpp_array_ref98.volt", "--backend", backend, "--cc", std]), "voltc run cpp_array_ref98.volt"), "total 3\ngrow 11 23\nstrings abx cx 5\n", "handle and string arrays ({std}, {backend})");
+        }
+        let shown = Command::new(&e.voltc).args(["check", "cpp_array_ref98.volt", "--cc", std, "--std"]).arg(Path::new(ROOT).join("std")).current_dir(Path::new(ROOT).join("tests/interop")).env("VOLT_SHOW_CPP", "1").output().unwrap();
+        let src = String::from_utf8_lossy(&shown.stderr);
+        let left = src.contains("// C++: int ar98::pin_sum(const Pin (&)[2] p) (worked out per use: const Pin (&)[2] has no Volt form)");
+        assert!(src.contains("fn total(b: ar98::Box[2]&) -> i32") && left == (std == "-std=c++98") && (left || src.contains("fn pin_sum(p: ar98::Pin[2]&) -> i32")), "{std}: {src}");
+    }
 }
 
 #[test]
