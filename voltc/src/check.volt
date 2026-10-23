@@ -583,6 +583,7 @@ struct checker {
     cpp_dyn_ret: std::map<u32, str> = {}; // each one's result, as its Volt source spells it
     cpp_dyn_writes: std::map<u32, u64> = {}; // each one's holes C++ takes by a non-const reference (probe_writes)
     cpp_ranges: std::map<str, bool> = {}; // the C++ ranges a loop went over (cpp_range)
+    cpp_enum_targs: std::map<str, str> = {}; // "q#i": class template q's enum value parameter i's C++ type (cpp_value_text)
     // C++ declarations of the imports' own (Volt's subclasses of C++ classes, what each import's
     // exceptions are): each one's name and text, in the C++ unit when a wrapper names it
     cpp_decl_names: std::vec<std::string> = {};

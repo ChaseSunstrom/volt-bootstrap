@@ -2410,6 +2410,18 @@ fn cpp_array_ref2() {
 }
 
 #[test]
+fn cpp_value_params() {
+    // class templates over an enum or a char value are Volt generics over the enum's integer type
+    // (C++ getting static_cast<E>(n)) or char's, laid out or held by handle, under C++98 too
+    let e = Env::new("cpp-value-params");
+    let want = "tag 10 20\nchar 65 98\nscale 4.5\nnamed 8\n";
+    for backend in ["c", "llvm"] {
+        assert_eq!(ok(e.voltc(&["run", "cpp_value_params.volt", "--backend", backend]), "voltc run cpp_value_params.volt"), want, "enum and char value parameters ({backend})");
+    }
+    assert_eq!(ok(e.voltc(&["run", "cpp_value_params.volt", "--cc", "-std=c++98"]), "voltc run cpp_value_params.volt (C++98)"), want, "enum and char value parameters under C++98");
+}
+
+#[test]
 fn cpp_assign98() {
     // under C++98 a class with a const or reference member (or a member or base with one) declares an
     // assignment it can't define: no set_ for such a field and no Volt form for such a mutable T(&)[N],
