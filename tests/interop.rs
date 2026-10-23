@@ -2400,6 +2400,16 @@ fn cpp_array_ref_handle() {
 }
 
 #[test]
+fn cpp_array_ref2() {
+    // a const std::string_view(&)[N] parameter takes a Volt str[N]; a T(&)[N] result of an enum is a
+    // Volt T[N]& into C++'s array, of a class held by handle a T[N] of handles borrowing its elements
+    let e = Env::new("cpp-array-ref2");
+    for backend in ["c", "llvm"] {
+        assert_eq!(ok(e.voltc(&["run", "cpp_array_ref2.volt", "--backend", backend]), "voltc run cpp_array_ref2.volt"), "views 5 abc+de\nmodes 2 1 2\nwidgets 1 20 20\n", "string views and array results ({backend})");
+    }
+}
+
+#[test]
 fn cpp_assign98() {
     // under C++98 a class with a const or reference member (or a member or base with one) declares an
     // assignment it can't define: no set_ for such a field and no Volt form for such a mutable T(&)[N],

@@ -1772,6 +1772,7 @@ fn into_copy(r: cpp_ret&, rt: clang::CXType, args: std::vec<cpp_arg>&, count: us
     match (r.way) {
         .VIEW => { return true; },
         .BORROWED => { return maps; },
+        .BORROWS => { return maps; },
         .POINTER => { return maps; },
         default => {},
     }
@@ -2211,6 +2212,14 @@ attach fn param(this: cpp_gen&, t: clang::CXType, name: str, i: usize, tparams: 
         if (this.handle_of(et) != null || char_text(et, "basic_string")) {
             return this.array_copy(base, et, name, slot.as_str(), i, konst, tparams);
         }
+        // a const std::string_view(&)[N]: a str[N], C++ viewing the Volt strings for the call (a
+        // mutable one could leave views of C++'s text in it)
+        if (char_text(et, "basic_string_view")) {
+            if (!konst) {
+                return null;
+            }
+            return this.array_copy(base, et, name, slot.as_str(), i, konst, tparams);
+        }
         if (clang::clang_getCanonicalType(et).kind == clang::CXType_Enum && !this.enum_fits(et)) {
             return null;
         }
@@ -2619,6 +2628,7 @@ enum ret_way {
     VECTOR,
     HANDLE, // a class Volt holds by handle: new T(result)
     BORROWED, // a reference into C++'s object: a handle borrowing it
+    BORROWS,  // a T(&)[N] of a class held by handle: a T[N] of handles borrowing its elements
     POINTER,  // a T*: a borrowed handle, or none
     OWNER,    // a std::unique_ptr: an owning handle, or none
     OPTIONAL, // the forms (form_result): copied into Volt locals
@@ -2638,6 +2648,7 @@ struct cpp_ret {
     volt: std::string = {}; // HANDLE: the handle's volt field (derive's: the Volt side)
     elems: std::vec<std::string> = {}; // a form's element types
     conv: std::string = {};            // the C++ helper making what @cpp returns (else the way's own)
+    n: u64 = 0;                        // BORROWS: the array's length
 }
 
 // the Volt return type of a C++ one (a reference to a class stays one; to a const number, a copy)
@@ -2677,15 +2688,22 @@ attach fn result(this: cpp_gen&, t: clang::CXType, tparams: std::vec<str>&) -> c
     if (t.kind == clang::CXType_LValueReference) {
         base = clang::clang_getPointeeType(t);
     }
-    // a reference to an array, T(&)[N]: a Volt T[N]& into C++'s array (const or not: Volt has no const)
+    // a reference to an array, T(&)[N]: a Volt T[N]& into C++'s array (const or not: Volt has no
+    // const; an enum's when the Volt enum has its size); of a class Volt holds by handle, a T[N] of
+    // handles borrowing C++'s elements, as a reference result's handle does
     val ab = clang::clang_getCanonicalType(clang::clang_getNonReferenceType(t));
     if (pk.kind == clang::CXType_LValueReference && ab.kind == clang::CXType_ConstantArray) {
         val et = clang::clang_getArrayElementType(ab);
-        if (this.handle_of(et) != null || clang::clang_getCanonicalType(et).kind == clang::CXType_Enum || contains(canon(t).as_str(), "type-parameter")) {
+        if ((clang::clang_getCanonicalType(et).kind == clang::CXType_Enum && !this.enum_fits(et)) || contains(canon(t).as_str(), "type-parameter")) {
             return null;
         }
         var arr = this.vtype(et, tparams) ?? return null;
-        return { vty: fmt2("{}[{}]&", move arr, unum(@cast<u64>(clang::clang_getArraySize(ab)))) };
+        val n = @cast<u64>(clang::clang_getArraySize(ab));
+        val hc = this.handle_of(et);
+        if (hc) {
+            return { vty: fmt2("{}[{}]", move arr, unum(n)), way: ret_way::BORROWS, object: true, cls: copy hc, n: n };
+        }
+        return { vty: fmt2("{}[{}]&", move arr, unum(n)) };
     }
     if (t.kind != clang::CXType_LValueReference || clang::clang_isConstQualifiedType(base) != 0) {
         if (char_text(base, "basic_string")) {
@@ -3941,6 +3959,18 @@ attach fn fn_text(this: cpp_gen&, generics: str, sig: str, r: cpp_ret&, cpp_text
         },
         .VIEW => { this.line(fmt4("return @cpp<str{}>(\"{}({})\"{});", S(extra), conv_or(r, "volt_cpp_view"), S(cpp), S(tail)).as_str()); },
         .BORROWED => { this.line(fmt3("return {{ cpp: @cpp<void*{}>(\"volt_cpp_addr({})\"{}), borrowed: true }};", S(extra), S(cpp), S(tail)).as_str()); },
+        .BORROWS => {
+            this.line(fmt3("val try_a = @cpp<void*{}>(\"(void *)({})\"{});", S(extra), S(cpp), S(tail)).as_str());
+            var all: std::string = {};
+            for (j) in 0..r.n {
+                if (j > 0) {
+                    all.append(", ");
+                }
+                all.append(fmt2("{{ cpp: @cpp<void*>(\"(void *)((VOLT_ID({}) *){{0}} + {})\", try_a), borrowed: true }}", copy r.cls, unum(j)).as_str());
+            }
+            this.line(fmt2("val try_r: {} = {{ {} }};", copy r.vty, move all).as_str());
+            this.line("return try_r;");
+        },
         .POINTER => { this.handle_or_none(fmt("(void *)({})", S(cpp)).as_str(), true, extra, tail); },
         .OWNER => { this.handle_or_none(fmt("(void *)({}).release()", S(cpp)).as_str(), false, extra, tail); },
         .OPTIONAL => {
