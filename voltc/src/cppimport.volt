@@ -1428,7 +1428,7 @@ attach fn handle_struct(this: cpp_gen&, c: clang::CXCursor, path: str, fields: b
     val vn = last_part(path, "");
     val gen = generics_text(&tps);
     val extra = extra_types(&names);
-    val inst = cpp_template_ref(q.as_str(), tps.len);
+    val inst = this.class_ref(q.as_str(), tps.len);
     var self_ty = copy vn;
     self_ty.push('<');
     for (i) in 0..names.len {
@@ -3134,12 +3134,23 @@ attach fn cpp_inst_text(this: checker&, q: str, args: std::vec<gval>&) -> str? {
         }
         match (*args.at(i)) {
             .TY(t) => { out.append((this.cpp_type_text(t) ?? return null).as_str()); },
-            .INT(v) => { out.append(num(v).as_str()); },
+            .INT(v) => { out.append(this.cpp_value_text(q, i, v).as_str()); },
             default => { return null; },
         }
     }
     out.append(" >");
     return this.intern(move out);
+}
+
+// value argument i of C++ class template q's instance as C++ spells it: an enum parameter's
+// static_cast<E>(n), the rest the number
+attach fn cpp_value_text(this: checker&, q: str, i: usize, v: i128) -> std::string {
+    val key = fmt2("{}#{}", S(q), unum(@cast<u64>(i)));
+    val e = this.cpp_enum_targs.get(key.as_str());
+    if (e) {
+        return fmt2("static_cast<{} >({})", S(*e), num(v));
+    }
+    return num(v);
 }
 
 // the twin held by handle (special_twin) that C++ class template d's instance with these arguments
@@ -4388,7 +4399,41 @@ fn value_param_type(t: clang::CXType) -> str? {
     if (k == clang::CXType_Bool) {
         return "bool";
     }
+    if (k == clang::CXType_Short) {
+        return "i16";
+    }
+    if (k == clang::CXType_UShort) {
+        return "u16";
+    }
+    // char as the target's (signed or not), an enum as its integer type (an instance spells it
+    // static_cast<E>(n): cpp_value_text)
+    if (k == clang::CXType_Char_S || k == clang::CXType_SChar) {
+        return "i8";
+    }
+    if (k == clang::CXType_Char_U || k == clang::CXType_UChar) {
+        return "u8";
+    }
+    if (k == clang::CXType_Enum) {
+        return value_param_type(clang::clang_getEnumDeclIntegerType(clang::clang_getTypeDeclaration(clang::clang_getCanonicalType(t))));
+    }
     return null;
+}
+
+// class template c's enum value parameters ("q#i": the C++ enum), for an instance's spelling
+attach fn note_enum_params(this: cpp_gen&, c: clang::CXCursor, q: str) -> void {
+    var i: usize = 0;
+    for (ch&) in children(c).items() {
+        val k = clang::clang_getCursorKind(*ch);
+        if (k == clang::CXCursor_NonTypeTemplateParameter) {
+            val t = clang::clang_getCanonicalType(clang::clang_getCursorType(*ch));
+            if (t.kind == clang::CXType_Enum) {
+                this.c.cpp_enum_targs.put(this.c.intern(fmt2("{}#{}", S(q), unum(@cast<u64>(i)))), this.c.intern(canon(t)));
+            }
+        }
+        if (k == clang::CXCursor_TemplateTypeParameter || k == clang::CXCursor_NonTypeTemplateParameter || k == clang::CXCursor_TemplateTemplateParameter) {
+            i += 1;
+        }
+    }
 }
 
 // a template's parameter names (template_params gives a value one as "N: i32")
@@ -4442,6 +4487,28 @@ fn cpp_template_ref(q: str, n: usize) -> std::string {
             s.append(", ");
         }
         s.append(fmt("{t{}}", unum(@cast<u64>(i))).as_str());
+    }
+    s.push('>');
+    return s;
+}
+
+// cpp_template_ref for class template q: an enum value parameter's hole cast to the enum
+// (cpp_enum_targs), "ns::Tag<static_cast<ns::Mode >({t0})>"
+attach fn class_ref(this: cpp_gen&, q: str, n: usize) -> std::string {
+    var s = S(q);
+    s.push('<');
+    for (i) in 0..n {
+        if (i > 0) {
+            s.append(", ");
+        }
+        val hole = fmt("{t{}}", unum(@cast<u64>(i)));
+        val key = fmt2("{}#{}", S(q), unum(@cast<u64>(i)));
+        val e = this.c.cpp_enum_targs.get(key.as_str());
+        if (e) {
+            s.append(fmt2("static_cast<{} >({})", S(*e), copy hole).as_str());
+        } else {
+            s.append(hole.as_str());
+        }
     }
     s.push('>');
     return s;
@@ -4669,7 +4736,7 @@ attach fn class(this: cpp_gen&, c: clang::CXCursor, tps: std::vec<std::string>?)
             self_ty.append(names.at(i).as_str());
         }
         self_ty.push('>');
-        cpp_self = cpp_template_ref(q.as_str(), tps.len);
+        cpp_self = this.class_ref(q.as_str(), tps.len);
         extra = extra_types(&names);
         this.line(gen.as_str());
         this.line(fmt("@attributes([@cpp_type(\"{}\")])", copy q).as_str());
@@ -6682,6 +6749,7 @@ attach fn scan(this: cpp_gen&, c: clang::CXCursor, vpath: str) -> void {
             // its definition (a forward declaration has no fields or bases to tell by)
             this.templates.put(q, this.c.intern(move p));
             this.cursors.put(q, *ch);
+            this.note_enum_params(*ch, q);
         } else if (k == clang::CXCursor_ClassTemplate && clang::clang_Cursor_isNull(clang::clang_getCursorDefinition(*ch)) != 0 && template_params(*ch, false) == null && template_params(*ch, true) != null) {
             // a primary with a value parameter that's only declared (glm's vec<L, T, Q>: each
             // partial specialization is a definition): held by handle, members per use (prune).
@@ -6689,6 +6757,7 @@ attach fn scan(this: cpp_gen&, c: clang::CXCursor, vpath: str) -> void {
             // the first parse's, which prune would visit after it's gone
             this.templates.put(q, this.c.intern(move p));
             this.cursors.put(q, *ch);
+            this.note_enum_params(*ch, q);
         } else if (k == clang::CXCursor_EnumDecl) {
             this.enums.put(q, this.c.intern(move p));
         }
@@ -9233,7 +9302,8 @@ attach fn cpp_class(this: checker&, s: u32) -> std::string? {
                 if (n != "cpp_type") {
                     continue;
                 }
-                var out = S(attr_str(a) ?? return null);
+                val q = attr_str(a) ?? return null;
+                var out = S(q);
                 if (info.args.len > 0) {
                     out.push('<');
                     for (i) in 0..info.args.len {
@@ -9245,7 +9315,7 @@ attach fn cpp_class(this: checker&, s: u32) -> std::string? {
                                 val sp = this.cpp_spell(t) ?? return null;
                                 out.append(sp.as_str());
                             },
-                            .INT(v) => { out.append(num(v).as_str()); },
+                            .INT(v) => { out.append(this.cpp_value_text(q, i, v).as_str()); },
                             default => { return null; },
                         }
                     }
