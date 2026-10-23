@@ -2344,7 +2344,7 @@ attach fn param(this: cpp_gen&, t: clang::CXType, name: str, i: usize, tparams: 
     if (pk.kind == clang::CXType_Pointer) {
         val pt = clang::clang_getPointeeType(pk);
         if (pt.kind == clang::CXType_FunctionProto) {
-            return this.fn_ptr_param(written_pointee(t) ?? pt, name, slot.as_str(), canon(t));
+            return this.fn_ptr_param(written_pointee(t) ?? pt, name, slot.as_str(), canon(t), true);
         }
         val phc = this.handle_of(pt);
         if (phc) {
@@ -2513,7 +2513,7 @@ attach fn array_copy(this: cpp_gen&, base: clang::CXType, et: clang::CXType, nam
 // pointer does) of one of those or of a class Volt lays out, and such a class by value when it's
 // POD (passed as C passes it); R(*)(A..., ...): a Volt extern "C" fn(A..., ...) -> R
 // (not R(*)(...), which C before C23 has no type for). f as written, so its size_t is a usize
-attach fn fn_ptr_param(this: cpp_gen&, f: clang::CXType, name: str, slot: str, cty: std::string) -> cpp_arg? {
+attach fn fn_ptr_param(this: cpp_gen&, f: clang::CXType, name: str, slot: str, cty: std::string, wide: bool) -> cpp_arg? {
     val n = clang::clang_getNumArgTypes(f);
     if (n < 0 || (n == 0 && clang::clang_isFunctionTypeVariadic(f) != 0)) {
         return null;
@@ -2523,7 +2523,7 @@ attach fn fn_ptr_param(this: cpp_gen&, f: clang::CXType, name: str, slot: str, c
         if (i > 0) {
             ps.append(", ");
         }
-        val p = this.c_abi_type(clang::clang_getArgType(f, i), false) ?? return null;
+        val p = this.c_abi_type(clang::clang_getArgType(f, i), false, wide) ?? return null;
         ps.append(p.as_str());
     }
     if (clang::clang_isFunctionTypeVariadic(f) != 0) {
@@ -2532,7 +2532,7 @@ attach fn fn_ptr_param(this: cpp_gen&, f: clang::CXType, name: str, slot: str, c
         }
         ps.append("...");
     }
-    val r = this.c_abi_type(clang::clang_getResultType(f), true) ?? return null;
+    val r = this.c_abi_type(clang::clang_getResultType(f), true, wide) ?? return null;
     return { vty: fmt2("extern \"C\" fn({}) -> {}", move ps, copy r), pass: fmt("@cast<void*>({})", S(name)), cpp: fmt2("(VOLT_ID({}))({})", move cty, S(slot)) };
 }
 
@@ -2540,12 +2540,13 @@ attach fn fn_ptr_param(this: cpp_gen&, f: clang::CXType, name: str, slot: str, c
 // size_t a usize (written_c_type), a const char * parameter a cstr (a result stays a cstr?, which
 // may be null; libclang shows no _Nullable), an enum the Volt enum, a T& a Volt T& (none for a
 // class Volt holds by handle, whose Volt value isn't the object, or a T&&), a class Volt lays out
-// by value only when it's POD
-attach fn c_abi_type(this: cpp_gen&, t: clang::CXType, result: bool) -> std::string? {
+// by value only when it's POD; wide false: none of those (a function pointer result's, which
+// @cpp<R> spells as a C function pointer)
+attach fn c_abi_type(this: cpp_gen&, t: clang::CXType, result: bool, wide: bool) -> std::string? {
     val none: std::vec<str> = {};
     val ct = clang::clang_getCanonicalType(t);
     val k = ct.kind;
-    if (k == clang::CXType_RValueReference) {
+    if (k == clang::CXType_RValueReference || (!wide && (k == clang::CXType_LValueReference || k == clang::CXType_Record || k == clang::CXType_Enum))) {
         return null;
     }
     if (k == clang::CXType_LValueReference) {
@@ -2556,7 +2557,7 @@ attach fn c_abi_type(this: cpp_gen&, t: clang::CXType, result: bool) -> std::str
         if (b.kind == clang::CXType_Record) {
             return fmt("{}&", this.vtype(b, &none) ?? return null);
         }
-        return fmt("{}&", this.c_abi_type(clang::clang_getPointeeType(t), true) ?? return null);
+        return fmt("{}&", this.c_abi_type(clang::clang_getPointeeType(t), true, true) ?? return null);
     }
     if (k == clang::CXType_Record) {
         if (this.handle_of(ct) != null || clang::clang_isPODType(ct) == 0) {
@@ -2707,7 +2708,8 @@ attach fn result(this: cpp_gen&, t: clang::CXType, tparams: std::vec<str>&) -> c
         }
         if (pt.kind == clang::CXType_FunctionProto) {
             // a function pointer: a Volt extern "C" fn, as a parameter's is (fn_ptr_param)
-            val fa = this.fn_ptr_param(written_pointee(t) ?? pt, "", "", canon(t)) ?? return null;
+            // (the narrow types: @cpp<R> spells R's, so no reference, enum or class)
+            val fa = this.fn_ptr_param(written_pointee(t) ?? pt, "", "", canon(t), false) ?? return null;
             return { vty: copy fa.vty };
         }
     }
