@@ -2537,9 +2537,20 @@ fn cpp_params_refused() {
     // map (which C++ would change a copy of) is refused, naming both types
     let err = check("cpp_params_map.volt");
     assert!(err.contains("but 'put_s' wants a cpp::map_") && err.contains("std::map<std::string") && err.contains("cpp_params_map.volt:7"), "a mutable map takes its handle: {err}");
-    // Volt references per use, one wanting an int& and another an int*: the lvalue reading's error
+    // Volt references per use, one wanting an int& and another an int*, none fitting: the lvalue reading's error
     let err = check("cpp_params_mixed.volt");
-    assert!(err.contains("cannot initialize a parameter of type 'int *' with an lvalue of type 'int'") && err.contains("cpp_params_mixed.volt:8"), "an lvalue and an address in one call: {err}");
+    assert!(err.contains("cannot initialize a parameter of type 'int *' with an lvalue of type 'double'") && err.contains("cpp_params_mixed.volt:8"), "an lvalue and an address in one call: {err}");
+}
+
+#[test]
+fn cpp_ref_mix() {
+    // an int& and an int* parameter in one per-use call take each Volt reference as it wants it;
+    // f(T&) beside f(T*) still gets f(&x) as f(T&) (T-0694)
+    let e = Env::new("cpp-ref-mix");
+    let want = "mix 11 22\nmix 1.5 3.5\nswap 22 11\npick 1 3\n";
+    for backend in ["c", "llvm"] {
+        assert_eq!(ok(e.voltc(&["run", "cpp_ref_mix.volt", "--backend", backend]), "voltc run cpp_ref_mix.volt"), want, "int& and int* in one call ({backend})");
+    }
 }
 
 #[test]
