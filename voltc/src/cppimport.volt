@@ -2156,19 +2156,27 @@ attach fn param(this: cpp_gen&, t: clang::CXType, name: str, i: usize, tparams: 
         mutable_ref = k == clang::CXType_LValueReference && clang::clang_isConstQualifiedType(base) == 0;
     }
     // a reference to an array, T(&)[N]: a Volt T[N]& (C++ writes into the Volt array); a const one,
-    // a T[N] (by value). Either way C++ gets the Volt array's place; N is the Volt type's, so another
-    // size is a type error
+    // a T[N] (by value). Either way C++ gets the Volt array's place (an enum's when the Volt enum
+    // has its size); N is the Volt type's, so another size is a type error. A class Volt holds by
+    // handle and a std::string aren't laid out as C++'s: array_copy
     val bc = clang::clang_getCanonicalType(base);
     if (k == clang::CXType_LValueReference && bc.kind == clang::CXType_ConstantArray) {
         val et = clang::clang_getArrayElementType(bc);
-        if (this.handle_of(et) != null || clang::clang_getCanonicalType(et).kind == clang::CXType_Enum || contains(canon(base).as_str(), "type-parameter")) {
+        if (contains(canon(base).as_str(), "type-parameter")) {
+            return null;
+        }
+        val konst = clang::clang_isConstQualifiedType(et) != 0 || clang::clang_isConstQualifiedType(bc) != 0 || starts_with(canon(base).as_str(), "const ");
+        if (this.handle_of(et) != null || char_text(et, "basic_string")) {
+            return this.array_copy(base, et, name, slot.as_str(), i, konst, tparams);
+        }
+        if (clang::clang_getCanonicalType(et).kind == clang::CXType_Enum && !this.enum_fits(et)) {
             return null;
         }
         var arr = this.vtype(et, tparams) ?? return null;
         arr.push('[');
         arr.append_uint(@cast<u64>(clang::clang_getArraySize(bc)));
         arr.push(']');
-        if (clang::clang_isConstQualifiedType(et) == 0 && clang::clang_isConstQualifiedType(bc) == 0 && !starts_with(canon(base).as_str(), "const ")) {
+        if (!konst) {
             arr.push('&');
         }
         return { vty: move arr, pass: fmt("@cast<void*>(&{}[0])", S(name)), cpp: fmt2("(*(VOLT_ID({}) *)({}))", canon(base), move slot) };
@@ -2344,6 +2352,73 @@ attach fn param(this: cpp_gen&, t: clang::CXType, name: str, i: usize, tparams: 
         return { vty: move v, pass: S(name), cpp: fmt2("(VOLT_ID({}))({})", canon(t), move slot) };
     }
     return { vty: move v, pass: S(name), cpp: move slot };
+}
+
+// is enum type t the size of the Volt enum enum_decl declares for it (its tag: i32 when the C++ one
+// has no Volt type, i64 for a long that's 4 bytes on the target), so an array of it is laid out as
+// C++'s?
+attach fn enum_fits(this: cpp_gen&, t: clang::CXType) -> bool {
+    val none: std::vec<str> = {};
+    val ct = clang::clang_getCanonicalType(t);
+    val tag = this.vtype(clang::clang_getEnumDeclIntegerType(clang::clang_getTypeDeclaration(ct)), &none) ?? S("i32");
+    return tag.len() > 1 && tag.as_str()[1..tag.len()] == num(@cast<i128>(clang::clang_Type_getSizeOf(ct)) * 8).as_str();
+}
+
+// a T(&)[N] of a class Volt holds by handle or of std::strings, which a Volt array doesn't lay out as
+// C++'s (base: the T[N]): a Volt T[N]& (a std::string[N]&, a str[N] for a const one). The Volt fn
+// copies the elements into a C++ std::vector<T> it makes (volt_cpp_made: no call with part of it),
+// whose elements C++ gets as the T[N]; a non-const one's go back into the Volt elements once the
+// call returns (moved; not when it threw, so a try_ form leaves them as they were; a string's as
+// volt_cpp_text_back has it). None when T can't be copied in, or assigned back
+attach fn array_copy(this: cpp_gen&, base: clang::CXType, et: clang::CXType, name: str, slot: str, i: usize, konst: bool, tparams: std::vec<str>&) -> cpp_arg? {
+    val n = clang::clang_getArraySize(clang::clang_getCanonicalType(base));
+    if (n <= 0) {
+        return null;
+    }
+    val ut = clang::clang_getUnqualifiedType(clang::clang_getCanonicalType(et));
+    val vec = fmt("std::vector<VOLT_ID({}) >", canon(ut));
+    val h = fmt("try_v{}", unum(@cast<u64>(i)));
+    // element try_j, as @cpp's {1}, and its C++ copy
+    var elem = fmt("{}[try_j]", S(name));
+    var made = S("std::string((const char *){1}.ptr, {1}.len)");
+    var vty = S("str");
+    val hc = this.handle_of(et) ?? S("");
+    if (hc.len() > 0) {
+        this.ensure_traits(hc.as_str());
+        val tr = this.traits.get(hc.as_str()) ?? return null;
+        if (!tr->copyable || (!konst && !tr->assignable)) {
+            return null;
+        }
+        vty = this.vtype(ut, tparams) ?? return null;
+        elem.append(".cpp");
+        made = fmt("volt_cpp_obj<{} >({{1}})", copy hc);
+    } else if (!konst) {
+        vty = S("std::string");
+        elem.append(".as_str()");
+    }
+    vty = fmt2("{}[{}]", move vty, num(@cast<i128>(n)));
+    if (hc.len() > 0 || !konst) {
+        vty.push('&');
+    }
+    var pre = fmt2("val {} = @cpp<void*>(\"new {}()\");\n", copy h, copy vec);
+    // (null when the allocation threw in a try_ form's call: its catch gives a zero)
+    pre.append(fmt("if ({} == null) {{ @panic(\"out of memory\"); }}\n", copy h).as_str());
+    pre.append(fmt2("defer @cpp<void>(\"delete ({} *){{0}}\", {});\n", copy vec, copy h).as_str());
+    pre.append(fmt("for (try_j) in 0..{} {{\n", num(@cast<i128>(n))).as_str());
+    pre.append(fmt4("    @cpp<void>(\"(({} *){{0}})->push_back({})\", {}, {});\n}", copy vec, move made, copy h, copy elem).as_str());
+    if (!konst) {
+        // (each only while nothing threw: the vector is short when a copy into it did)
+        var back = fmt3("volt_cpp_text_back(&{}[try_j], @cpp<str>(\"volt_cpp_view((*({} *){{0}})[{{1}}])\", {}, try_j));", S(name), copy vec, copy h);
+        if (hc.len() > 0) {
+            back = fmt4("@cpp<void>(\"volt_cpp_obj<{} >({{0}}) = VOLT_MOVE((*({} *){{1}})[{{2}}])\", {}, {}, try_j);", copy hc, copy vec, move elem, copy h);
+        } else {
+            this.text_refs = true;
+        }
+        pre.append(fmt("\ndefer {{\n    for (try_j) in 0..{} {{\n        if (@cpp<i32>(\"volt_cpp_st.kind\") == 0) {{\n", num(@cast<i128>(n))).as_str());
+        pre.append(fmt("            {}\n        }}\n    }}\n}}", move back).as_str());
+    }
+    val cpp = fmt3("(*(VOLT_ID({}) *)volt_cpp_addr(volt_cpp_made(*({} *)({}))[0]))", canon(base), copy vec, S(slot));
+    return { vty: move vty, pass: copy h, cpp: move cpp, pre: move pre, text_ref: true, map_copy: true };
 }
 
 // a function pointer parameter, R(*)(A...): a Volt extern "C" fn(A...) -> R, C++ calling the Volt
