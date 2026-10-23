@@ -158,9 +158,8 @@ fn parse_radix(s: str, radix: u32) -> i128? {
     return v;
 }
 
-// the value of a character literal's body (the text between the quotes)
-// a C string literal's text with its escapes decoded: \n \t \r \a \b \f \v, \x41, \101, and
-// \\ \" \' \? as themselves; null for \u and \U (a universal character name, not decoded)
+// a C string literal's text with its escapes decoded: \n \t \r \a \b \f \v, GNU's \e, \x41, \101,
+// and \\ \" \' \? as themselves; null for \u and \U (a universal character name, not decoded)
 fn c_unescape(body: str) -> std::string? {
     var out: std::string = {};
     var i: usize = 0;
@@ -176,7 +175,8 @@ fn c_unescape(body: str) -> std::string? {
         if (e == 'x') {
             var v: u32 = 0;
             while (i < body.len && parse_radix(body[i..i + 1], 16) != null) {
-                v = v * 16 + @cast<u32>(parse_radix(body[i..i + 1], 16) ?? 0);
+                // (a byte: C keeps the low bits of a long \x run, so only those are kept)
+                v = (v * 16 + @cast<u32>(parse_radix(body[i..i + 1], 16) ?? 0)) & 255;
                 i += 1;
             }
             out.push(@cast<u8>(v & 255));
@@ -205,6 +205,8 @@ fn c_unescape(body: str) -> std::string? {
             out.push(12);
         } else if (e == 'v') {
             out.push(11);
+        } else if (e == 'e') {
+            out.push(27);
         } else {
             out.push(e);
         }
@@ -212,6 +214,7 @@ fn c_unescape(body: str) -> std::string? {
     return out;
 }
 
+// the value of a character literal's body (the text between the quotes)
 fn char_value(body: str) -> u32 {
     if (body.len == 0) {
         return 0;
@@ -2822,13 +2825,13 @@ fn parse_decls(text: str, d: cdecls&) -> void {
     }
 }
 
-// an object-like #define: its name and body tokens
 // a string #define: its name and its text, escapes decoded
 struct cstr_const {
     name: str;
     text: str;
 }
 
+// an object-like #define: its name and body tokens
 struct cdefine {
     name: str;
     body: std::vec<ctok>;
@@ -2894,36 +2897,34 @@ attach fn c_macros(this: checker&, d: cdecls&, macros: str) -> compile_error!voi
             if (t.len == 0 || known.get(df.name) != null || texts.get(df.name) != null) {
                 continue;
             }
+            // literals and the names of string #defines read already, joined (PRId64 is
+            // __PRI64_PREFIX "d")
             var text: str? = null;
-            match (t[0]) {
-                .ID(n) => {
-                    if (t.len == 1) {
+            var s: std::string = {};
+            var all = true;
+            for (tk&) in t {
+                match (*tk) {
+                    .STR(b) => {
+                        val u = c_unescape(b);
+                        if (u) {
+                            s.append(u.as_str());
+                        } else {
+                            all = false;
+                        }
+                    },
+                    .ID(n) => {
                         val other = texts.get(n);
                         if (other) {
-                            text = *other;
+                            s.append(*other);
+                        } else {
+                            all = false;
                         }
-                    }
-                },
-                default => {
-                    var s: std::string = {};
-                    var all = true;
-                    for (tk&) in t {
-                        match (*tk) {
-                            .STR(b) => {
-                                val u = c_unescape(b);
-                                if (u) {
-                                    s.append(u.as_str());
-                                } else {
-                                    all = false;
-                                }
-                            },
-                            default => { all = false; },
-                        }
-                    }
-                    if (all) {
-                        text = this.intern(move s);
-                    }
-                },
+                    },
+                    default => { all = false; },
+                }
+            }
+            if (all) {
+                text = this.intern(move s);
             }
             if (text) {
                 texts.put(df.name, text);
