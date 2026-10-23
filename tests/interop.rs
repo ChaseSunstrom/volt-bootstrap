@@ -2310,7 +2310,7 @@ fn cpp_peruse_layout() {
     // pass here, and on i386 (c++ -m32), where C aligns i64 and f64 to 4, the C++ step fails at the
     // mirror instead of a run copying the wrong bytes
     let e = Env::new("cpp-peruse-layout");
-    let want = "point 3 2.5\nspan 7 1099511627776 (-2, 0.25)\nshape 2.5\nopt 1.5\nwide 9 16\ntrio 2.5 2.5 2.5 5\nfnptr 5 6\nnums true true 1.5 2.25 4\n";
+    let want = "point 3 2.5\nspan 7 1099511627776 (-2, 0.25)\nshape 2.5\nopt 1.5\nwide 9 16\ntrio 2.5 2.5 2.5 5\nfnptr 5 6\nnums true true 1.5 2.25 4 11\n";
     for backend in ["c", "llvm"] {
         assert_eq!(ok(e.voltc(&["run", "cpp_peruse_layout.volt", "--backend", backend]), "voltc run cpp_peruse_layout.volt"), want, "mirrors with i64 and f64 ({backend})");
     }
