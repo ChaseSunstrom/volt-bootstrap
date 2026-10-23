@@ -26,7 +26,9 @@ attach fn enum_inst(this: checker&, d: u32, args: std::vec<gval>, span: span) ->
     full.append(e.name);
     // (the full name, all args spelled, keys the error codes; the name shown leaves out args equal
     // to their defaults, worked out once the enum is registered, as struct_inst does)
+    this.canon_names = true;
     val name = this.inst_name(full.as_str(), &args);
+    this.canon_names = false;
     var base = S("v_");
     base.append(e.name);
     val c_name = this.fresh_c_name(base.as_str());
