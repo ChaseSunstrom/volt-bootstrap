@@ -586,12 +586,10 @@ fn builtins_and_std_files() {
     assert!(!c.contains("\"label\":\"intrinsic\""), "a program is offered @intrinsic: {c}");
 
     // a document whose first version doesn't parse (opened mid-edit): the items that parsed are
-    // checked, for hover, and only the parse error is reported (not yet on Windows, where the
-    // server goes quiet after this didOpen: T-0673)
-    if cfg!(windows) {
-        return;
-    }
-    let curi = format!("file://{}/c.volt", s.dir.display());
+    // checked, for hover, and only the parse error is reported. (Its URI is file_uri's, as the
+    // others': file:// + the path as Windows spells it, backslashes, is no URI, and the server went
+    // quiet on it there: T-0673)
+    let curi = file_uri(s.dir.join("c.volt"));
     let cdoc = format!("{{\"uri\":\"{curi}\"}}");
     let cat = |line: u32, ch: u32| format!("{{\"textDocument\":{cdoc},\"position\":{{\"line\":{line},\"character\":{ch}}}}}");
     let broken = "fn twice(x: i32) -> i32 {\n    return x * 2;\n}\n\nfn broken() -> void {\n    val y = ;\n}\n\nfn main() -> void {\n    val n = twice(4);\n}\n";
