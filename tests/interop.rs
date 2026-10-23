@@ -2555,8 +2555,8 @@ fn cpp_overloads() {
     }
     let shown = Command::new(&e.voltc).args(["check", "cpp_overloads.volt", "--std"]).arg(Path::new(ROOT).join("std")).current_dir(Path::new(ROOT).join("tests/interop")).env("VOLT_SHOW_CPP", "1").output().unwrap();
     let src = String::from_utf8_lossy(&shown.stderr);
-    assert!(src.contains("// left out: int taken::which(long long) (Volt can't tell it from an overload declared before it)"), "the alias a real declaration took: {src}");
-    assert!(src.contains("// left out: int again::which_long_long(long long) (an alias for an overload Volt can't tell apart has its name)"), "a real declaration in a later block: {src}");
+    assert!(src.contains("fn which_long_long_2("), "the alias a real declaration took gets a counter: {src}");
+    assert!(!src.contains("// left out: int taken::") && !src.contains("// left out: int again::"), "no overload left out: {src}");
     assert!(src.contains("// C++: int ov::h(long long x, int a, int b)\n    fn h(x: i64, a: i32) -> i32"), "a form after its alias keeps the C++ comment: {src}");
     // an && method of a template's instance, worked out per use, consumes the handle too
     let o = e.voltc(&["check", "cpp_overloads_holder.volt"]);
@@ -2578,6 +2578,20 @@ fn cpp_overloads() {
             assert!(o.status.code() == Some(101) && out == before && err.contains(says), "{prog} ({backend}): {:?} {out} {err}", o.status);
         }
     }
+}
+
+#[test]
+fn cpp_overload_twice() {
+    // overloads whose names collide again after the rename (a real function with the name, a second
+    // alias with it, a const twin's name taken) take the first free one: the words, then _2
+    let e = Env::new("cpp-overload-twice");
+    let want = "f 1 3 2\ng 1 3 2\nm 1 2 3\npeek 4 6 5\n";
+    for backend in ["c", "llvm"] {
+        assert_eq!(ok(e.voltc(&["run", "cpp_overload_twice.volt", "--backend", backend]), "voltc run cpp_overload_twice.volt"), want, "overloads colliding twice ({backend})");
+    }
+    let shown = Command::new(&e.voltc).args(["check", "cpp_overload_twice.volt", "--std"]).arg(Path::new(ROOT).join("std")).current_dir(Path::new(ROOT).join("tests/interop")).env("VOLT_SHOW_CPP", "1").output().unwrap();
+    let src = String::from_utf8_lossy(&shown.stderr);
+    assert!(!src.contains("// left out: int tw::") && !src.contains("// left out: int tw::Twice"), "no overload left out: {src}");
 }
 
 #[test]
