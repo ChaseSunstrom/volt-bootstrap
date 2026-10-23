@@ -2350,6 +2350,16 @@ fn cpp_enum_unsigned() {
 }
 
 #[test]
+fn cpp_template_conv() {
+    // a class template's operator T() is to_T() and its explicit operator bool() to_bool(), on
+    // Box<int> and Box<double> alike
+    let e = Env::new("cpp-template-conv");
+    for backend in ["c", "llvm"] {
+        assert_eq!(ok(e.voltc(&["run", "cpp_template_conv.volt", "--backend", backend]), "voltc run cpp_template_conv.volt"), "int 7 true false\ndouble 2.5 true\n", "template conversions ({backend})");
+    }
+}
+
+#[test]
 fn cpp_array_ref_handle() {
     // a T(&)[N] of a class Volt holds by handle: a C++ array copied from the handles' objects, and
     // back into them once the call returns (not when it threw); const, one copied but not assigned

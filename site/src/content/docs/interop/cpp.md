@@ -308,7 +308,7 @@ fn main() -> void {
 | a `const` or `constexpr` constant (a number, `bool`, enum or text) in a namespace | a `val` of its value |
 | a static data member `m` | `T::m()` (a copy) and `T::set_m(v)` when it can be assigned |
 | a class or enum inside a class (`Outer::Inner`) | `Outer_Inner`, beside `Outer` (an unscoped enum's names stay in it: `Outer_Mode::Low`) |
-| `operator T()` (explicit or not; not in a class template) | `to_T()`: `to_bool()`, `to_i32()`, `to_string()` |
+| `operator T()` (explicit or not) | `to_T()`: `to_bool()`, `to_i32()`, `to_string()`; in a class template the name follows the template's spelling, so `template <class T> struct Box { operator T() const; }` gives `to_T()` on every instance |
 | `operator=` | `assign(v)` |
 | a method template | a generic method: `c.cast_to<f64>()`; a class template's (`Bag<T>::one<U>`) is worked out per use, each call's template arguments deduced or given |
 | a `std::function<R(A...)>` parameter | `fn(A...) -> R`: a closure or function; C++ calls it while the call lasts (it mustn't keep it). A class in `A...` (by value or `const&`) arrives as a borrowed handle of C++'s object (a move-only one too), good while the callback runs, or, for one Volt lays out, a copy of its struct; `R` may be a class Volt lays out |

@@ -4197,6 +4197,35 @@ fn ident_char(c: u8) -> bool {
     return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_';
 }
 
+// a class template's C++ spelling of a type with its parameters as the {tN} holes its @cpp calls
+// fill in per instance ("const T &" -> "const {t0} &")
+fn tp_holes(spelling: str, tp: std::vec<str>&) -> std::string {
+    var out: std::string = {};
+    var i: usize = 0;
+    while (i < spelling.len) {
+        if (!ident_char(spelling[i])) {
+            out.push(spelling[i]);
+            i += 1;
+            continue;
+        }
+        var j = i;
+        while (j < spelling.len && ident_char(spelling[j])) {
+            j += 1;
+        }
+        val w = spelling[i..j];
+        var hole: std::string? = null;
+        for (n) in 0..tp.len {
+            if (*tp.at(n) == w) {
+                hole = fmt("{{t{}}}", unum(@cast<u64>(n)));
+                break;
+            }
+        }
+        out.append((hole ?? S(w)).as_str());
+        i = j;
+    }
+    return out;
+}
+
 // a template's parameters, the ones Volt passes: up to the first with a default, which C++ fills
 // in (typename = std::enable_if_t<...>); none when one Volt can't pass comes first (a template
 // parameter, an unnamed one without a default, a value one unless `values`). With `values` (a class
@@ -5060,17 +5089,19 @@ attach fn member_list(this: cpp_gen&, c: clang::CXCursor, self_ty: str, cpp_self
         }
         var ret = this.result(clang::clang_getCursorResultType(*ch), &my_tp);
         if (k == clang::CXCursor_ConversionFunction) {
-            // operator T(): to_T(), called by its name (an explicit one too); not in a class
-            // template, where its type is the template's
-            if (gen.len > 0) {
-                continue;
-            }
+            // operator T(): to_T(), called by its name (an explicit one too). In a class template
+            // the name and the call take the type as the template spells it, so operator T() is
+            // to_T() on every instance
             if (ret) {
                 vn_m = fmt("to_{}", type_word(ret.vty.as_str()));
             } else {
                 continue;
             }
-            callee = fmt("operator {}", canon(clang::clang_getCursorResultType(*ch)));
+            if (gen.len > 0) {
+                callee = fmt("operator {}", tp_holes(type_spelling(clang::clang_getCursorResultType(*ch)).as_str(), tp));
+            } else {
+                callee = fmt("operator {}", canon(clang::clang_getCursorResultType(*ch)));
+            }
         } else if (starts_with(mn.as_str(), "operator")) {
             if (is_static) {
                 continue;

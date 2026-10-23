@@ -27,7 +27,7 @@ struct Fan {
     Mode mode = Slow;
 };
 
-// a conversion in a class template: left out (its type is the template's)
+// a conversion in a class template: to_T() on every instance (cpp_template_conv.volt calls one)
 template <class T>
 struct Wrap {
     T v;
