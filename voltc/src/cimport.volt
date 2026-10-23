@@ -159,6 +159,59 @@ fn parse_radix(s: str, radix: u32) -> i128? {
 }
 
 // the value of a character literal's body (the text between the quotes)
+// a C string literal's text with its escapes decoded: \n \t \r \a \b \f \v, \x41, \101, and
+// \\ \" \' \? as themselves; null for \u and \U (a universal character name, not decoded)
+fn c_unescape(body: str) -> std::string? {
+    var out: std::string = {};
+    var i: usize = 0;
+    while (i < body.len) {
+        val c = body[i];
+        if (c != '\\' || i + 1 >= body.len) {
+            out.push(c);
+            i += 1;
+            continue;
+        }
+        val e = body[i + 1];
+        i += 2;
+        if (e == 'x') {
+            var v: u32 = 0;
+            while (i < body.len && parse_radix(body[i..i + 1], 16) != null) {
+                v = v * 16 + @cast<u32>(parse_radix(body[i..i + 1], 16) ?? 0);
+                i += 1;
+            }
+            out.push(@cast<u8>(v & 255));
+        } else if (e >= '0' && e <= '7') {
+            var v: u32 = @cast<u32>(e - '0');
+            var k = 1;
+            while (k < 3 && i < body.len && body[i] >= '0' && body[i] <= '7') {
+                v = v * 8 + @cast<u32>(body[i] - '0');
+                i += 1;
+                k += 1;
+            }
+            out.push(@cast<u8>(v & 255));
+        } else if (e == 'u' || e == 'U') {
+            return null;
+        } else if (e == 'n') {
+            out.push(10);
+        } else if (e == 't') {
+            out.push(9);
+        } else if (e == 'r') {
+            out.push(13);
+        } else if (e == 'a') {
+            out.push(7);
+        } else if (e == 'b') {
+            out.push(8);
+        } else if (e == 'f') {
+            out.push(12);
+        } else if (e == 'v') {
+            out.push(11);
+        } else {
+            out.push(e);
+        }
+    }
+    return out;
+}
+
 fn char_value(body: str) -> u32 {
     if (body.len == 0) {
         return 0;
@@ -586,6 +639,7 @@ struct cdecls {
     // consts: enum constants and numeric #defines, in order; env: every constant by name, for
     // evaluating later ones
     consts: std::vec<cconst> = {};
+    str_consts: std::vec<cstr_const> = {}; // string #defines
     env: std::map<str, cnum> = {};
     enums: std::vec<cenum> = {};
     enum_typedef_of: std::map<str, str> = {}; // enum tag -> first typedef naming it
@@ -2769,13 +2823,20 @@ fn parse_decls(text: str, d: cdecls&) -> void {
 }
 
 // an object-like #define: its name and body tokens
+// a string #define: its name and its text, escapes decoded
+struct cstr_const {
+    name: str;
+    text: str;
+}
+
 struct cdefine {
     name: str;
     body: std::vec<ctok>;
 }
 
 // numeric object-like #defines (EOF, SEEK_SET, RAND_MAX, M_PI...). They may use macros defined
-// after them (INT_MAX is __INT_MAX__), so repeat until nothing new resolves; _names stay hidden
+// after them (INT_MAX is __INT_MAX__), so repeat until nothing new resolves; _names stay hidden.
+// Then string ones: string literals (C joins adjacent ones) or the name of one already read
 attach fn c_macros(this: checker&, d: cdecls&, macros: str) -> compile_error!void {
     var defs: std::vec<cdefine> = {};
     var i: usize = 0;
@@ -2816,6 +2877,58 @@ attach fn c_macros(this: checker&, d: cdecls&, macros: str) -> compile_error!voi
                 d.env.put(df.name, v);
                 if (!starts_with(df.name, "_")) {
                     put(&d.consts, { name: df.name, v: v });
+                }
+                progress = true;
+            }
+        }
+        if (!progress) {
+            break;
+        }
+    }
+    // (L"..", u"..", U"..", u8".." lex as a name then a literal: they aren't bytes, so stay out)
+    var texts: std::map<str, str> = {};
+    loop {
+        var progress = false;
+        for (df&) in defs.items() {
+            val t = df.body.items();
+            if (t.len == 0 || known.get(df.name) != null || texts.get(df.name) != null) {
+                continue;
+            }
+            var text: str? = null;
+            match (t[0]) {
+                .ID(n) => {
+                    if (t.len == 1) {
+                        val other = texts.get(n);
+                        if (other) {
+                            text = *other;
+                        }
+                    }
+                },
+                default => {
+                    var s: std::string = {};
+                    var all = true;
+                    for (tk&) in t {
+                        match (*tk) {
+                            .STR(b) => {
+                                val u = c_unescape(b);
+                                if (u) {
+                                    s.append(u.as_str());
+                                } else {
+                                    all = false;
+                                }
+                            },
+                            default => { all = false; },
+                        }
+                    }
+                    if (all) {
+                        text = this.intern(move s);
+                    }
+                },
+            }
+            if (text) {
+                texts.put(df.name, text);
+                if (!starts_with(df.name, "_")) {
+                    put(&d.str_consts, { name: df.name, text: text });
                 }
                 progress = true;
             }
@@ -3243,6 +3356,12 @@ attach fn c_items(this: checker&, d: cdecls&, res: c_imported&, span: span) -> v
         }
         val pt: pat = { kind: pat_kind::BIND(k.name), span: span };
         put(&res.items, m.citem(item_kind::GLOBAL({ mutable: false, is_comptime: false, is_static: false, pat: pt, ty: m.path_ty(tn), init: move init, span: span, c_name: null })));
+    }
+    // string #defines: str constants
+    for (k&) in d.str_consts.items() {
+        val pt: pat = { kind: pat_kind::BIND(k.name), span: span };
+        val init: expr = { kind: expr_kind::STR(S(k.text)), span: span };
+        put(&res.items, m.citem(item_kind::GLOBAL({ mutable: false, is_comptime: false, is_static: false, pat: pt, ty: m.path_ty("str"), init: init, span: span, c_name: null })));
     }
     // what a call made per use maps its types with
     res.names = copy m.names;
