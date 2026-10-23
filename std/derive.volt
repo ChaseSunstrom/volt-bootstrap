@@ -98,6 +98,24 @@ namespace derive {
         }
     }
 
+    // text from the input for an error message: at most 40 bytes, control characters as ?
+    public fn brief(s: str) -> std::string {
+        var out: std::string = {};
+        for (i) in 0..s.len {
+            if (i == 40) {
+                out.append("...");
+                break;
+            }
+            val c = s[i];
+            if (c < 32 || c == 127) {
+                out.push('?');
+            } else {
+                out.push(c);
+            }
+        }
+        return out;
+    }
+
     // an integer of type T: a whole number in T's range
     <T: type, A: std::mem::allocator>
     public fn whole(v: std::json::value<A>&, what: str) -> std::json::decode_error!T {
@@ -112,6 +130,17 @@ namespace derive {
                 if (k.0) {
                     hi /= 2.0;
                     lo = -hi;
+                }
+                // a 64-bit type's largest values print as the f64 nearest them, 2^63 (2^64 unsigned),
+                // which reads back as the largest
+                comptime if (k.1 == 64) {
+                    if (x == hi) {
+                        comptime if (k.0) {
+                            return 9223372036854775807;
+                        } else {
+                            return 18446744073709551615;
+                        }
+                    }
                 }
             },
             default => { @compile_error("std::derive::whole is for integer types"); },
@@ -331,7 +360,7 @@ public attach fn from_json(static this: T, v: std::json::value<A>&) -> std::json
                             }
                         }
                     }
-                    return std::json::decode_error::INVALID(std::fmt::format("{} has no variant {}", @typeinfo(T).short_name, name.as_str()));
+                    return std::json::decode_error::INVALID(std::fmt::format("{} has no variant {}", @typeinfo(T).short_name, std::derive::brief(name.as_str()).as_str()));
                 },
                 .OBJ(ms&) => {
                     if (ms.len == 1) {
@@ -348,7 +377,7 @@ public attach fn from_json(static this: T, v: std::json::value<A>&) -> std::json
                                 }
                             }
                         }
-                        return std::json::decode_error::INVALID(std::fmt::format("{} has no variant {}", @typeinfo(T).short_name, name));
+                        return std::json::decode_error::INVALID(std::fmt::format("{} has no variant {}", @typeinfo(T).short_name, std::derive::brief(name).as_str()));
                     }
                 },
                 default => {},
@@ -424,7 +453,7 @@ public attach fn from_json(static this: usize, v: std::json::value<A>&) -> std::
 <A: std::mem::allocator>
 public attach fn from_json(static this: f32, v: std::json::value<A>&) -> std::json::decode_error!f32 {
     val x = v.as_num() ?? return std::derive::mismatch("an f32", v);
-    if (x > 3.4028234663852886e38 || x < -3.4028234663852886e38) {
+    if (x >= 3.4028235677973366e38 || x <= -3.4028235677973366e38) {
         return std::derive::mismatch("an f32", v);
     }
     return @cast<f32>(x);

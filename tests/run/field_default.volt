@@ -3,7 +3,7 @@
 use std::io;
 
 struct opts {
-    width: i64 = 40 * 2;
+    width: i64 = 40  *  2;
     title: std::string = std::string::from("untitled");
     tag: str?;
     id: u32;
@@ -16,7 +16,7 @@ fn main() -> void {
     }
 }
 // expect: 80 untitled null
-// expect: width 40 * 2
+// expect: width 40  *  2
 // expect: title std::string::from("untitled")
 // expect: tag none
 // expect: id none

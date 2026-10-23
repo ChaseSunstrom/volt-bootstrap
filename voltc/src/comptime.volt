@@ -3764,7 +3764,9 @@ attach fn typeinfo(this: checker&, t: u32, span: span) -> compile_error!cval {
                 // the default's text, as written (null when there's none)
                 var dflt = cval::OPT(this.t.opt_of(STR), null);
                 if (f.fallback) {
-                    dflt = cval::OPT(this.t.opt_of(STR), some_c(cval::STR(this.span_text((*f.fallback).span))));
+                    val ds = (*f.fallback).span;
+                    val src = this.files.at(@cast<usize>(ds.file)).text;
+                    dflt = cval::OPT(this.t.opt_of(STR), some_c(cval::STR(S(src[@cast<usize>(ds.lo)..@cast<usize>(ds.hi)]))));
                 }
                 put(&fields, cf("default_expr", move dflt));
                 put(&fields, cf("visibility", kind_of("PUBLIC", null)));

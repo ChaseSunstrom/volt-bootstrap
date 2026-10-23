@@ -70,6 +70,17 @@ fn main() -> void {
     val xs = std::vec<u16>::from_json(&n) catch @panic("bad");
     val big = std::json::number(256.0);
     std::println("{} {}", xs.len, u8::from_json(&big));
+
+    // a 64-bit type's largest value reads back from the f64 to_json wrote; FLT_MAX's literal fits an
+    // f32; an unknown variant's name is cut short in the message
+    val imax: i64 = 9223372036854775807;
+    val umax64: u64 = 18446744073709551615;
+    val top = imax.to_json();
+    val umax = umax64.to_json();
+    val fmax = std::json::parse("3.4028235e38") catch @panic("bad");
+    std::println("{} {} {}", i64::from_json(&top), u64::from_json(&umax), f32::from_json(&fmax));
+    val odd = std::json::parse("\"VARIANT_NAME_LONGER_THAN_FORTY_BYTES_FROM_SOMEWHERE\"") catch @panic("bad");
+    std::println("{}", shape::from_json(&odd));
 }
 // flags: --leak-check
 // expect: {"id":7,"items":[{"name":"tea","count":2},{"name":"cake","count":1}],"note":null,"shapes":["NONE",{"CIRCLE":1.5},{"RECT":[2,3]}],"rush":false}
@@ -91,3 +102,5 @@ fn main() -> void {
 // expect: INVALID(.shapes[0]: expected a variant of shape, got 5)
 // expect: 3 pie RECT(5, 6)
 // expect: 3 error.INVALID(expected a u8, got 256)
+// expect: 9223372036854775807 18446744073709551615 3.4028235e+38
+// expect: error.INVALID(shape has no variant VARIANT_NAME_LONGER_THAN_FORTY_BYTES_FRO...)
