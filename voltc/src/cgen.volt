@@ -2712,6 +2712,12 @@ attach fn c_files(this: checker&) -> std::vec<c_file> {
     if (!this.opts.release) {
         h.append("#define VOLT_DEBUG_ALLOC 1\n");
     }
+    // --backtrace: the call stack a panic lists; without it, a debug panic says how to get one
+    if (this.opts.backtrace) {
+        h.append("#define VOLT_BACKTRACE 1\n");
+    } else if (!this.opts.release) {
+        h.append("#define VOLT_PANIC_NOTE 1\n");
+    }
     h.append(PRELUDE_H);
     h.push('\n');
     for (inc&) in this.c_includes.items() {

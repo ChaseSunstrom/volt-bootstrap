@@ -219,7 +219,10 @@ attach fn call_value(this: checker&, f0: tval, args: std::vec<expr>&, span: span
             put(&vals, try this.vararg_val(v, a.span));
         }
     }
-    val pre = this.seq_vals(&vals);
+    var pre = this.seq_vals(&vals);
+    if (this.cx.traced) {
+        put(&pre, this.note_site(span)); // --backtrace (after the arguments)
+    }
     var cs: std::vec<u32> = {};
     for (i) in 1..vals.len {
         put(&cs, vals.at(i).c);

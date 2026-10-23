@@ -526,6 +526,9 @@ attach fn run_exits(this: checker&, exits: std::vec<exit>&, is_err: bool, out: s
                 val pt = this.t.ref_to(this.ir.ty_of(c));
                 put(out, this.ir.if_(flag, this.call_fn(d, nodes(this.ir.addr(c, pt)), VOID), null));
             },
+            .LEAVE => {
+                put(out, this.ir.rt_call("volt_rt_leave", {}, VOID));
+            },
         }
     }
 }
