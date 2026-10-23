@@ -2795,6 +2795,10 @@ fn cpp_overloads() {
 fn cpp_overload_twice() {
     // overloads whose names collide again after the rename (a real function with the name, a second
     // alias with it, a const twin's name taken) take the first free one: the words, then _2
+    // (where long is 64 bits: on Windows long and long long don't collide, so nothing is renamed)
+    if cfg!(windows) {
+        return;
+    }
     let e = Env::new("cpp-overload-twice");
     let want = "f 1 3 2\ng 1 3 2\nd 1 1 3 2 2\nm 1 2 3\npeek 4 6 5\n";
     for backend in ["c", "llvm"] {
