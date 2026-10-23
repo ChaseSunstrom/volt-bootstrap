@@ -1,3 +1,9 @@
+#ifdef VOLT_BACKTRACE
+/* --backtrace's call stack (prelude.h) */
+_Thread_local const char *volt_trace_fn[VOLT_TRACE_MAX];
+_Thread_local const char *volt_trace_at[VOLT_TRACE_MAX];
+_Thread_local unsigned volt_trace_depth;
+#endif
 /* Volt runtime definitions: emitted in exactly one C unit per program (see prelude.h). */
 /* Threads, one OS layer per platform. volt_rt_thread_start runs job's first word, a void (*)(void *job),
    on a new thread, and volt_rt_thread_join waits for it to finish. volt_rt_wait sleeps while *word ==
