@@ -187,11 +187,13 @@ fn main() -> void {
 A macro sees its arguments as C would: a variable or field (any place) is the place itself, so
 `INC(n)` for `#define INC(x) (++(x))` changes `n` (a `val` is `const` to C: changing one is C's
 error), and a string or integer literal is written into the call as it is (`sizeof` of `"abc"` is
-4, `#x` of `5` is `"5"`). Any other argument is its value. An argument needs a type of its own
-(`null` or `{...}` alone doesn't have one: give it one with a typed `val`), and one C has: a number,
-`bool`, a pointer or reference (C's pointer), a C string (`cstr`), or a struct or enum of a C
-import. A call C rejects is a compile error with C's message, as is a result Volt has no type for
-(an anonymous struct by value); a string result (`#x`) is a `cstr`. A `va_list` function needs a
+4, `#x` of `5` is `"5"`), as is a bare `null`, C's `((void *)0)`. Any other argument is its
+value. An argument needs a type of its own (`{...}` alone doesn't have one, since C gives a braced
+list a type only where it initializes something: give it one with a typed `val`), and one C has: a
+number, `bool`, a pointer or reference (C's pointer), a C string (`cstr`), or a struct or enum of a
+C import. A call C rejects is a compile error with C's message. A result that's an anonymous struct
+(`#define PAIR(a, b) ((struct { int x; int y; }){ a, b })`) is a struct of its fields named for the
+macro, `c::PAIR_result`; a string result (`#x`) is a `cstr`. A `va_list` function needs a
 parameter before the `va_list` (C's `va_start` does, before C23).
 
 Every `typedef` is a type name you can write: `c::size_t`, `c::pthread_t`, a pointer typedef like

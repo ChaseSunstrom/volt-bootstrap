@@ -576,6 +576,7 @@ struct checker {
     cpp_ctxs: std::vec<cpp_import_ctx> = {};
     c_ctxs: std::vec<c_ctx> = {}; // C imports' per-use calls (cuse.volt)
     c_used: u32 = 0;              // C functions made for them
+    c_anon: std::map<str, str> = {}; // an anonymous struct result's Volt struct per import, macro and fields (c_anon_result)
     cpp_dyn: std::map<str, u32> = {};
     cpp_dyn_n: u32 = 0;
     // the arguments (a bit each) a per-use call hands C++ as volt_cpp_either: an int& or an int*

@@ -90,6 +90,8 @@ fn c_literal(e: expr&) -> std::string? {
             return out;
         },
         .INT(v) => { return unum(@cast<u64>(v)); },
+        // a bare null: C's NULL
+        .NULL => { return S("((void *)0)"); },
         default => { return null; },
     }
 }
@@ -116,6 +118,8 @@ attach fn c_dyn_call(this: checker&, d: u32, callee: str, name: str, explicit: s
         if (lit) {
             if (starts_with(lit.as_str(), "\"")) {
                 want_a = CSTR; // (a C string to C)
+            } else if (starts_with(lit.as_str(), "((void")) {
+                want_a = VOIDPTR;
             }
         }
         var v = try this.expr(a, want_a);
@@ -123,6 +127,10 @@ attach fn c_dyn_call(this: checker&, d: u32, callee: str, name: str, explicit: s
         if (lit) {
             arg.mode = 3;
             arg.lit = copy lit;
+            if (starts_with(arg.lit.as_str(), "((void")) {
+                arg.ty = VOIDPTR;
+                arg.base = VOIDPTR;
+            }
             put(&nargs, copy *a);
         } else if (v.lv) {
             arg.mode = 2;
@@ -403,7 +411,6 @@ attach fn c_instance(this: checker&, k: usize, callee: str, cargs: std::vec<c_ar
         break;
     }
     val r = rt ?? return fails(span, "clang gave no type for the C call");
-    val rc = this.cx_ctype(r, 0) ?? return fail(span, fmt2("{} gives a {}, which Volt has no type for", copy shown, type_spelling(clang::clang_getCanonicalType(r))));
     // its Volt and C result, through the import's names
     var m: cmapper = { d: &x.d, span: span };
     m.names = copy x.names;
@@ -412,7 +419,20 @@ attach fn c_instance(this: checker&, k: usize, callee: str, cargs: std::vec<c_ar
     m.complex = copy x.complex;
     m.cf32 = x.cf32;
     m.cf64 = x.cf64;
-    val vret = m.wrap_ty(&rc) ?? return fail(span, fmt2("{} gives a {}, which Volt has no type for", copy shown, type_spelling(clang::clang_getCanonicalType(r))));
+    // an anonymous struct (a macro's compound literal): copied into a struct of its fields
+    // (c_anon_result)
+    var anon: std::string? = null;
+    var rc = ctype::VOID;
+    var vret = m.path_ty("void");
+    val rcan = clang::clang_getCanonicalType(r);
+    if (rcan.kind == clang::CXType_Record && clang::clang_Cursor_isAnonymous(clang::clang_getTypeDeclaration(rcan)) != 0) {
+        val made = try this.c_anon_result(k, &m, rcan, callee, shown.as_str(), span);
+        anon = copy made.0;
+        vret = m.path_ty(made.1);
+    } else {
+        rc = this.cx_ctype(r, 0) ?? return fail(span, fmt2("{} gives a {}, which Volt has no type for", copy shown, type_spelling(clang::clang_getCanonicalType(r))));
+        vret = m.wrap_ty(&rc) ?? return fail(span, fmt2("{} gives a {}, which Volt has no type for", copy shown, type_spelling(clang::clang_getCanonicalType(r))));
+    }
     // the C function's parameters, and the call in it (a place through its address)
     var params = S("");
     var call = fmt("{}(", S(callee));
@@ -466,6 +486,12 @@ attach fn c_instance(this: checker&, k: usize, callee: str, cargs: std::vec<c_ar
             }
         },
     }
+    if (anon) {
+        ret = copy anon;
+        // (__auto_type: each expansion of struct { ... } is a type of its own, so __typeof__ of the
+        // call wouldn't take the call's value)
+        body = fmt2("__auto_type volt_t = {}; {} volt_o; __builtin_memcpy(&volt_o, &volt_t, sizeof volt_o); return volt_o;", copy call, copy ret);
+    }
     // a complex struct the import hadn't declared yet
     for (n) in m.complex.items() {
         var have = false;
@@ -507,6 +533,46 @@ attach fn c_instance(this: checker&, k: usize, callee: str, cargs: std::vec<c_ar
 
 // an item made for import k, declared in its namespace as its header's are (kept out of Volt's C
 // with them)
+// a C call giving an anonymous struct (a macro's compound literal), t: a C typedef of its fields and
+// a Volt struct bound to it, {macro}_result (a later macro instance giving other fields: a fresh
+// name), made once per import, macro and fields. The typedef's name and the Volt struct's
+attach fn c_anon_result(this: checker&, k: usize, m: cmapper&, t: clang::CXType, callee: str, shown: str, span: span) -> compile_error!(std::string, str) {
+    var text = S("");
+    var fields: std::vec<field> = {};
+    for (f&) in children(clang::clang_getTypeDeclaration(t)).items() {
+        if (clang::clang_getCursorKind(*f) != clang::CXCursor_FieldDecl) {
+            continue;
+        }
+        val name = cursor_name(*f);
+        val ft = clang::clang_getCursorType(*f);
+        if (name.len() == 0 || clang::clang_Cursor_isBitField(*f) != 0) {
+            return fail(span, fmt2("{} gives a struct with a field Volt has no type for ({})", S(shown), type_spelling(ft)));
+        }
+        val fc = this.cx_ctype(ft, 0) ?? return fail(span, fmt2("{} gives a struct with a field Volt has no type for ({})", S(shown), type_spelling(ft)));
+        val vt = m.ty_of(&fc) ?? return fail(span, fmt2("{} gives a struct with a field Volt has no type for ({})", S(shown), type_spelling(ft)));
+        text.append(fmt2("__typeof__({}) {}; ", type_spelling(ft), copy name).as_str());
+        put(&fields, { name: this.intern(move name), ty: vt, fallback: null, vis: vis::PUBLIC, span: span });
+    }
+    val key = fmt3("{}|{}|{}", unum(@cast<u64>(k)), S(callee), copy text);
+    val have = this.c_anon.get(key.as_str());
+    if (have) {
+        return (fmt2("volt_cr{}_{}", unum(@cast<u64>(k)), S(*have)), *have);
+    }
+    var vname = fmt("{}_result", S(callee));
+    if (this.c_anon.get(fmt2("{}|{}", unum(@cast<u64>(k)), copy vname).as_str()) != null) {
+        vname.append_uint(@cast<u64>(this.c_used));
+    }
+    val vn = this.intern(move vname);
+    this.c_anon.put(this.intern(copy key), vn);
+    this.c_anon.put(this.intern(fmt2("{}|{}", unum(@cast<u64>(k)), S(vn))), vn);
+    val cname = fmt2("volt_cr{}_{}", unum(@cast<u64>(k)), S(vn));
+    // (laid out as clang lays out the anonymous one, or C refuses the unit)
+    this.c_put_text(k, fmt3("typedef struct {{ {}}} {}; _Static_assert(sizeof({}) == ", move text, copy cname, copy cname));
+    this.c_put_text(k, fmt2("{}, \"{} lays out as its anonymous struct\");", unum(@cast<u64>(clang::clang_Type_getSizeOf(t))), copy cname));
+    try this.c_declare(k, m.citem(item_kind::STRUCT({ name: vn, spec: null, fields: move fields, is_extern: true, is_comptime: false, c_name: this.intern(copy cname) })), span);
+    return (move cname, vn);
+}
+
 attach fn c_declare(this: checker&, k: usize, it: item, span: span) -> compile_error!void {
     var mine = move it;
     val x = this.c_ctxs.at(k);
