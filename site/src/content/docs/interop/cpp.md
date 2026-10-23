@@ -512,9 +512,9 @@ object `derive` didn't make; without RTTI, either stops the program saying so.
   bytes: a template can copy it, not read it (`x.f` or `x * 2` on one is clang's error), and a
   `std::optional`, `std::tuple` or `std::variant` parameter worked out per use doesn't take one
   (a declared one does).
-- A `std::string&` parameter is a copy C++ changes and Volt copies back once the call returns:
-  given the same string twice in one call (which Volt warns of, two mutable borrows), each copy
-  comes back in turn, the first parameter's last.
+- A `std::string&` parameter is a copy C++ changes and Volt copies back once the call returns.
+  The same Volt string given to two of them in one call is one C++ copy, so C++ sees one string,
+  as it would (`both(&s, &s)` with `a += "x"; b += "y";` leaves `s` ending in `xy`).
 - A Volt type deriving from a C++ class can't override its variadic virtual methods (`...`), its
   `&&`-qualified ones or its operators: they stay C++'s (and when one of them is pure, Volt types
   can't derive from the class). An override's `std::string&` is a copy too, which C++'s string

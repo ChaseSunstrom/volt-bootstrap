@@ -153,6 +153,10 @@ struct cpp_gen {
     // a std::string& parameter was written (so volt_cpp_text_back is needed), and it was
     text_refs: bool = false;
     text_back: bool = false;
+    // the std::string& parameters callable_of has given so far, "name handle": a later argument
+    // that is the same Volt string takes that copy, so C++ sees one string, as it would
+    str_refs: std::vec<std::string> = {};
+    str_refs_on: bool = false; // (only in callable_of's parameter loop)
     // param gives a std::map parameter that has a stdcxx handle form its Volt std::map& form
     // instead (callable_of's second overload)
     volt_maps: bool = false;
@@ -2191,11 +2195,34 @@ attach fn param(this: cpp_gen&, t: clang::CXType, name: str, i: usize, tparams: 
         this.text_refs = true;
         val ty = canon(base);
         val h = fmt("try_s{}", unum(@cast<u64>(i)));
-        var pre = fmt3("val {} = @cpp<void*>(\"new VOLT_ID({})((const char *){{0}}.ptr, {{0}}.len)\", {}.as_str());\n", copy h, copy ty, S(name));
-        // (null when the allocation threw in a try_ form's call: its catch gives a zero)
-        pre.append(fmt("if ({} == null) {{ @panic(\"out of memory\"); }}\n", copy h).as_str());
-        pre.append(fmt2("defer @cpp<void>(\"delete (VOLT_ID({}) *){{0}}\", {});\n", copy ty, copy h).as_str());
-        pre.append(fmt3("defer volt_cpp_text_back({}, @cpp<str>(\"volt_cpp_view(*(VOLT_ID({}) *){{0}})\", {}));", S(name), copy ty, copy h).as_str());
+        var pre: std::string = {};
+        if (this.str_refs.len == 0 || !this.str_refs_on) {
+            pre = fmt3("val {} = @cpp<void*>(\"new VOLT_ID({})((const char *){{0}}.ptr, {{0}}.len)\", {}.as_str());\n", copy h, copy ty, S(name));
+            // (null when the allocation threw in a try_ form's call: its catch gives a zero)
+            pre.append(fmt("if ({} == null) {{ @panic(\"out of memory\"); }}\n", copy h).as_str());
+            pre.append(fmt2("defer @cpp<void>(\"delete (VOLT_ID({}) *){{0}}\", {});\n", copy ty, copy h).as_str());
+            pre.append(fmt3("defer volt_cpp_text_back({}, @cpp<str>(\"volt_cpp_view(*(VOLT_ID({}) *){{0}})\", {}));", S(name), copy ty, copy h).as_str());
+        } else {
+            // the same Volt string as an earlier std::string& argument: its copy, one C++ string
+            // (copied back once, by the parameter that made it)
+            val own = fmt("try_own{}", unum(@cast<u64>(i)));
+            pre = fmt("var {}: void* = null;\n", copy h);
+            pre.append(fmt("var {} = true;\n", copy own).as_str());
+            for (e&) in this.str_refs.items() {
+                val sp = e.as_str().find(" ") ?? continue;
+                val en = e.as_str()[0..sp];
+                val eh = e.as_str()[sp + 1..e.len()];
+                pre.append(fmt4("if ({} && @cast<void*>(&*{}) == @cast<void*>(&*{})) {{ {} = ", copy own, S(name), S(en), copy h).as_str());
+                pre.append(fmt2("{}; {} = false; }}\n", S(eh), copy own).as_str());
+            }
+            pre.append(fmt4("if ({}) {{ {} = @cpp<void*>(\"new VOLT_ID({})((const char *){{0}}.ptr, {{0}}.len)\", {}.as_str()); }}\n", copy own, copy h, copy ty, S(name)).as_str());
+            pre.append(fmt("if ({} == null) {{ @panic(\"out of memory\"); }}\n", copy h).as_str());
+            pre.append(fmt4("defer {{ if ({}) {{ volt_cpp_text_back({}, @cpp<str>(\"volt_cpp_view(*(VOLT_ID({}) *){{0}})\", {})); ", copy own, S(name), copy ty, copy h).as_str());
+            pre.append(fmt2("@cpp<void>(\"delete (VOLT_ID({}) *){{0}}\", {}); }} }}", copy ty, copy h).as_str());
+        }
+        if (this.str_refs_on) {
+            put(&this.str_refs, fmt2("{} {}", S(name), copy h));
+        }
         // parenthesized, so a member call binds to the string: {0}.push_back('y')
         return { vty: S("std::string&"), pass: copy h, cpp: fmt2("(*(VOLT_ID({}) *)({}))", copy ty, move slot), pre: move pre, text_ref: true };
     }
@@ -3356,6 +3383,8 @@ attach fn callable_of(this: cpp_gen&, generics: str, head: str, has_params: bool
     var args: std::vec<cpp_arg> = {};
     var names: std::vec<std::string> = {};
     var optional: usize = 0;
+    this.str_refs = {};
+    this.str_refs_on = true;
     // the arguments before the parameters' (self_arg: one or more)
     val first = args_in(self_arg ?? "");
     for (i) in 0..parms.len {
@@ -3386,6 +3415,8 @@ attach fn callable_of(this: cpp_gen&, generics: str, head: str, has_params: bool
                 why = S("depends on the template's parameters");
             }
             this.note.append(fmt2(" (worked out per use: {} {})", type_spelling(pt), move why).as_str());
+            this.str_refs = {};
+            this.str_refs_on = false;
             this.per_use(head, call, self_arg != null);
             this.note = {};
             return;
@@ -3399,6 +3430,8 @@ attach fn callable_of(this: cpp_gen&, generics: str, head: str, has_params: bool
         put(&args, move a);
         put(&names, move name);
     }
+    this.str_refs = {};
+    this.str_refs_on = false;
     if (into_copy(&r, clang::clang_getCursorResultType(fn_cursor), &args, args.len)) {
         this.put_note();
         this.line(fmt("// (not declared: {})", S(INTO_COPY)).as_str());

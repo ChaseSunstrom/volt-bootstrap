@@ -2360,6 +2360,16 @@ fn cpp_template_conv() {
 }
 
 #[test]
+fn cpp_string_twice() {
+    // one Volt string given to two std::string& parameters is one C++ string (both writes land, in
+    // C++'s order, copied back once); two strings each get their own
+    let e = Env::new("cpp-string-twice");
+    for backend in ["c", "llvm"] {
+        assert_eq!(ok(e.voltc(&["run", "cpp_string_twice.volt", "--backend", backend]), "voltc run cpp_string_twice.volt"), "sxy ax by\nt13 u2 13\n", "one string twice ({backend})");
+    }
+}
+
+#[test]
 fn cpp_array_ref_handle() {
     // a T(&)[N] of a class Volt holds by handle: a C++ array copied from the handles' objects, and
     // back into them once the call returns (not when it threw); const, one copied but not assigned
