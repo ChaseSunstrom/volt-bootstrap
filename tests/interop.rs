@@ -2506,6 +2506,18 @@ fn cpp_value_params() {
 }
 
 #[test]
+fn cpp_fn_refs() {
+    // a closure for a std::function taking a std::string& (its changes go back), a non-const T& of a
+    // number or of a class Volt lays out, a class held by handle by & or const&, a T&&, or giving
+    // back a class held by handle (made in C++'s storage)
+    let e = Env::new("cpp-fn-refs");
+    let want = "shout hi!\nmeasure 10\nmade tri:16\ntwice 25\nrenamed b\nmoved 72\ntaken 4\n";
+    for backend in ["c", "llvm"] {
+        assert_eq!(ok(e.voltc(&["run", "cpp_fn_refs.volt", "--backend", backend]), "voltc run cpp_fn_refs.volt"), want, "std::functions over references and handle classes ({backend})");
+    }
+}
+
+#[test]
 fn cpp_fnptr_types() {
     // function pointer parameters whose signature has a class Volt lays out (by reference), an enum
     // or a reference to a number take a named Volt fn: declared ones as a Volt extern "C" fn of that

@@ -314,7 +314,7 @@ fn main() -> void {
 | `operator T()` (explicit or not) | `to_T()`: `to_bool()`, `to_i32()`, `to_string()`; in a class template the name follows the template's spelling, so `template <class T> struct Box { operator T() const; }` gives `to_T()` on every instance |
 | `operator=` | `assign(v)` |
 | a method template | a generic method: `c.cast_to<f64>()`; a class template's (`Bag<T>::one<U>`) is worked out per use, each call's template arguments deduced or given |
-| a `std::function<R(A...)>` parameter | `fn(A...) -> R`: a closure or function; C++ calls it while the call lasts (it mustn't keep it). A class in `A...` (by value or `const&`) arrives as a borrowed handle of C++'s object (a move-only one too), good while the callback runs, or, for one Volt lays out, a copy of its struct; `R` may be a class Volt lays out |
+| a `std::function<R(A...)>` parameter | `fn(A...) -> R`: a closure or function; C++ calls it while the call lasts (it mustn't keep it). A class in `A...` (by value, `&`, `const&` or `&&`) arrives as a borrowed handle of C++'s object (a move-only one too), good while the callback runs, or, for one Volt lays out, a copy of its struct (by `&`, a Volt `T&` to C++'s object). A `std::string&` is a Volt `std::string&` holding a copy, which goes back into C++'s string once the closure returns (`ns::shout("hi", \|\| (s: std::string&) -> void { s.append("!"); })`); a non-const `T&` of a number, enum or pointer is a Volt `T&` to C++'s; a `T&&` is read as a `const T&` is. `R` may be a class Volt lays out, or one it holds by handle: the closure's handle (`\|\| (k: i32) -> cpp::Shape { return cpp::Shape::new("tri", k); }`) is moved into the object C++ gets, or copied when it only borrows one; a reference result has no form |
 | a `std::function` result | `stdcxx::function`: `call(...)` runs it, taking its arguments as any call's parameters (a `std::string&` too), and it's deleted with the Volt value |
 | a `std::function` field | a getter, and `set_f(closure)`: the closure moves into the field, which keeps it (and deletes it once C++ is done with every copy); one capturing by reference (`\|x&\|`) is a compile error |
 | a bit-field | `f()` and `set_f(v)`, on a class held by value or by handle (C++ does the bit work) |
@@ -503,8 +503,8 @@ object `derive` didn't make; without RTTI, either stops the program saying so.
 - What doesn't map gets a comment in the generated source. A function whose parameters or result
   only a call settles is [called per use](#calls-worked-out-per-use) instead, and so is one with a
   parameter Volt has no form for, where a call is an error (C++ can't be handed a Volt value for
-  it): a `std::function` whose signature has a non-const reference in it or gives back a class
-  Volt holds by handle (a `std::function` field: one taking such a class), a function pointer
+  it): a `std::function` giving back a reference (a `std::function` field: one taking a class
+  Volt holds by handle or a `std::string&`, or giving back such a class), a function pointer
   whose signature has a class Volt holds by handle or a `T&&` in it (or `...`), a reference to an array of
   enums or of a class Volt holds by handle, a nested `std::vector` of `bool`s or of a class. For a
   function pointer or a `std::function`, `@cpp`'s `{&i}` passes a Volt function:
