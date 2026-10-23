@@ -5,3 +5,7 @@
 #define ALIAS GREETING
 #define WIDE L"wide"
 #define NUMBER 7
+#define PREFIX "l"
+#define FORMAT_D PREFIX "d"
+#define ESC "\e[1m"
+#define LONGX "\x00000041"

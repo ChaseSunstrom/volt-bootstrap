@@ -8,8 +8,11 @@ fn main() -> void {
     std::println("{}", h::ESCAPED);
     val n: usize = h::GREETING.len;
     std::println("{}", n);
+    // a define's name among the literals (inttypes.h's PRId64), GNU's \e, a long \x run's low byte
+    std::println("{} {} {}", h::FORMAT_D, h::ESC.ptr[0], h::LONGX);
 }
 // expect: hello concat hello 7
 // expect: line
 // expect: "q" \ AB
 // expect: 5
+// expect: ld 27 A
