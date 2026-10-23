@@ -14,6 +14,12 @@ namespace tw {
 inline int g_long(long) { return 3; }
 }
 namespace tw {
+// defaulted parameters: two arities each, whose names must all differ (d_long_long_2 is one arity's name, free there)
+inline int d(long long, int = 0) { return 1; }
+inline int d(long, int = 0) { return 2; }
+inline int d_long_int(long) { return 3; }  // one arity of the name d(long, int = 0) would take
+}
+namespace tw {
 // m(long) const and m(long) are both m_long (and not m, which m(long long) has): the second is m_long_2;
 // peek() const has the name, peek() would be peek_nonconst, which a real method has: peek_nonconst_2
 struct Twice {

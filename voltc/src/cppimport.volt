@@ -75,6 +75,8 @@ struct cpp_alias {
     // a per-use name's try_ stub (per_use): the name's key in written (any parameters), which the
     // header taking leaves the stub out
     taken: std::string = {};
+    // the function's name alone (fn_key with #name), for an ordinary alias
+    name: std::string = {};
 }
 
 // the Volt source being written for one import: the classes, enums and class templates it declares
@@ -3507,7 +3509,7 @@ attach fn callable_of(this: cpp_gen&, generics: str, head: str, has_params: bool
             this.try_text(generics, my_head.as_str(), params.as_str(), &r, call_names.as_str());
         }
         if (suffix) {
-            put(&this.aliases, { key: move key, text: copy this.out, decl: cpp_decl_text(fn_cursor) });
+            put(&this.aliases, { key: move key, text: copy this.out, decl: cpp_decl_text(fn_cursor), name: this.fn_key(my_head.as_str(), "#name") });
             this.out = move saved;
         }
         drop += 1;
@@ -3553,10 +3555,12 @@ attach fn free_suffix(this: cpp_gen&, c: clang::CXCursor, head: str, types: str,
             cand.append(num(n).as_str());
         }
         val h = renamed(head, cand.as_str());
-        val key = this.fn_key(h.as_str(), types);
+        // the name alone, at every arity: the alias writes each default-argument form under it
+        val key = this.fn_key(h.as_str(), "#name");
+        val pre = this.fn_key(h.as_str(), "");
         var free = this.written.get(key.as_str()) == null;
         for (a&) in this.aliases.items() {
-            if (a.key.as_str() == key.as_str()) {
+            if (starts_with(a.key.as_str(), pre.as_str())) {
                 free = false;
             }
         }
@@ -3706,6 +3710,7 @@ attach fn flush_aliases(this: cpp_gen&, from: usize) -> void {
         if (this.written.get(a.key.as_str()) == null) {
             this.written.put(this.c.intern(copy a.key), true);
             this.sigs.put(this.c.intern(copy a.key), "#alias");
+            this.written.put(this.c.intern(copy a.name), true);
             this.out.append(a.text.as_str());
         } else if (left.as_str() != a.decl.as_str()) {
             left = copy a.decl;
