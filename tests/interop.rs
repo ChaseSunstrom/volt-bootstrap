@@ -2323,12 +2323,12 @@ fn cpp_params() {
     for decl in ["fn sum3(a: i32*) -> i32", "fn total(a: i32*, n: i32) -> i32", "fn tail(a: i32*) -> i32", "fn tail() -> i32", "fn sum_alias(a: i32*) -> i32", "fn first_char(s: cstr?) -> i32", "fn byte0(buf: u8*) -> i32", "fn argc_of(argv: cstr?*) -> i32", "fn cells(a: pr::ap::cell*, n: i32) -> i32", "fn grid() -> void {}"] {
         assert!(src.contains(decl), "{decl}: {src}");
     }
-    // nested std::vectors by value or const& are nested slices; a mutable one, of bools and of a
-    // class stay per use, each stub's comment saying why
-    for decl in ["fn shape(v: i32[..][..])", "fn shape_ref(v: i32[..][..])", "fn shape3(v: i32[..][..][..])", "fn shape_rv(v: i32[..][..])", "fn weigh(v: f64[..][..])", "fn spell(v: i8[..][..])","fn widen() -> void {}", "fn flags() -> void {}", "fn boxes() -> void {}"] {
+    // nested std::vectors by value or const& are nested slices (of bools too); a mutable one and one
+    // of a class held by handle stay per use, each stub's comment saying why
+    for decl in ["fn shape(v: i32[..][..])", "fn shape_ref(v: i32[..][..])", "fn shape3(v: i32[..][..][..])", "fn shape_rv(v: i32[..][..])", "fn weigh(v: f64[..][..])", "fn spell(v: i8[..][..])","fn widen() -> void {}", "fn flags(v: bool[..][..])", "fn boxes() -> void {}"] {
         assert!(src.contains(decl), "{decl}: {src}");
     }
-    for why in ["std::vector<std::vector<int>> & v) (worked out per use: std::vector<std::vector<int>> & has no Volt form)", "(worked out per use: const std::vector<std::vector<bool>> & has no Volt form)", "(worked out per use: const std::vector<std::vector<Shape>> & has no Volt form)", "(worked out per use: const std::vector<S> & depends on the template's parameters)"] {
+    for why in ["std::vector<std::vector<int>> & v) (worked out per use: std::vector<std::vector<int>> & has no Volt form)", "(worked out per use: const std::vector<std::vector<Shape>> & has no Volt form)", "(worked out per use: const std::vector<S> & depends on the template's parameters)"] {
         assert!(src.contains(why), "{why}: {src}");
     }
     // std::map / std::unordered_map by value, const& or && (an alias too) take a Volt std::map&,
@@ -2612,6 +2612,20 @@ fn cpp_peruse3() {
 }
 
 #[test]
+fn cpp_peruse5() {
+    // calls made per use taking T(&)[N] of an imported enum (the probe names the enum) or of a class
+    // held by handle (its objects copied in and back), nested bool slices, a slice of handles (their
+    // objects copied into the std::vector), T(&)[M][N] (a Volt T[N][M]), a pointer to a Volt struct's
+    // mirrors, and giving back a std::vector of a class held by handle (owning handles), with a class
+    // held by handle as an explicit template argument (T-0686)
+    let e = Env::new("cpp-peruse5");
+    let want = "modes 12 2\nwidgets xy z\nbits 3\nnames xz\ngrid 21 9\nlast 3 4\nmade 2 ab\n";
+    for backend in ["c", "llvm"] {
+        assert_eq!(ok(e.voltc(&["run", "cpp_peruse5.volt", "--backend", backend]), "voltc run cpp_peruse5.volt"), want, "per-use arrays and vectors ({backend})");
+    }
+}
+
+#[test]
 fn cpp_peruse4() {
     // a call made per use whose result is a mirror (a Volt struct, a tuple, an enum with payloads),
     // deduced, with the template argument given, named only in the result (zero<point>(), its try_
@@ -2776,9 +2790,9 @@ fn cpp_params_refused() {
     assert!(err.contains("C++ would change a temporary std::string here (the template takes it as S&)") && err.contains("cpp_params_gval.volt:12"), "a temporary in @cpp: {err}");
     // a parameter with no Volt form: a per-use stub whose comment shows the C++ declaration and
     // names the type; a call with a slice names it too
-    assert!(src.contains("// C++: int pr::nv::flags(const std::vector<std::vector<bool>> & v) (worked out per use: const std::vector<std::vector<bool>> & has no Volt form)") && src.contains("fn flags() -> void {}"), "the stub says why: {src}");
+    assert!(src.contains("// C++: int pr::nv::boxes(const std::vector<std::vector<Shape>> & v) (worked out per use: const std::vector<std::vector<Shape>> & has no Volt form)") && src.contains("fn boxes() -> void {}"), "the stub says why: {src}");
     let err = check("cpp_params_unmapped.volt");
-    assert!(err.contains("std::vector<std::vector<bool>>") && err.contains("cpp_params_unmapped.volt:6"), "a wrong argument per use: {err}");
+    assert!(err.contains("std::vector<std::vector<Shape>>") && err.contains("cpp_params_unmapped.volt:6"), "a wrong argument per use: {err}");
     // a mutable std::map& with no stdcxx form takes the instance's handle only: a call with a Volt
     // map (which C++ would change a copy of) is refused, naming both types
     let err = check("cpp_params_map.volt");

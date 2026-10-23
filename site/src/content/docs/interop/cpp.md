@@ -295,8 +295,8 @@ fn main() -> void {
 | a `std::string&` parameter | `std::string&`: C++ changes a copy, which the Volt string gets once the call returns (not when it throws: a `try_` form leaves the string as it was). A function whose result could point into that copy (a view, a pointer, a reference) isn't declared, and a call of it per use is an error |
 | a `std::string` result | `std::string` (a copy) |
 | a `std::string_view` result | `str` (the same bytes, alive as long as C++ keeps them) |
-| `std::vector<T>` parameters (by value, `const&`) | `T[..]`: C++ gets a temporary vector copied from the slice, so a function whose result could point into it (`const int *data_of(const std::vector<int> &)`, a reference to an element) isn't declared, and a call of it per use is an error |
-| nested `std::vector` parameters (by value, `const&`), `std::vector<std::vector<int>>` | `i32[..][..]`, to any depth, each level copied; the innermost element a number or a `char` (one of `bool`s or of a class is [per use](#calls-worked-out-per-use)) |
+| `std::vector<T>` parameters (by value, `const&`) | `T[..]`: C++ gets a temporary vector copied from the slice (of a class Volt holds by handle, a slice of handles whose objects are copied in), so a function whose result could point into it (`const int *data_of(const std::vector<int> &)`, a reference to an element) isn't declared, and a call of it per use is an error |
+| nested `std::vector` parameters (by value, `const&`), `std::vector<std::vector<int>>` | `i32[..][..]`, to any depth, each level copied; the innermost element a number, a `bool`, a `char` or a POD class Volt lays out (one of enums, pointers or a class held by handle is [per use](#calls-worked-out-per-use)) |
 | a `std::vector<T>` result (`T` a plain value) | `std::vec<T>` (a copy) |
 | `std::map<K, V>`, `std::unordered_map<K, V>` parameters (by value, `const&`, `&&`; the default comparator, hash and allocator, written out or not, through an alias too) | `std::map<K, V>&`: C++ gets a copy of the Volt map's entries, the Volt map unchanged; a function whose result could point into that copy (a view, a pointer, a reference) has no such form. `K` and `V` a number, `bool` or `char`, a `std::string` (from a Volt `std::string`) or a `std::vector` of numbers or `char`s (from a `std::vec`). Each takes the map by handle too, an overload beside it: a `stdcxx::map<i32, i32>` for a `std::map<int, int>`, and for a map `stdcxx` can't spell (a `std::string` key, `std::vector<bool>` values) a handle of its own, the one a function returning that map gives, so a map C++ made goes back to C++ (`val m = ns::make();` then `ns::total(&m)`). A mutable `std::map&`, or one with another order (`std::greater<int>`), takes only the handle |
 | a `T(&)[N]` parameter, and `const T(&)[N]` | `T[N]&` (C++ writes into the Volt array), and `T[N]`; `T` a number, `bool`, pointer, enum (one whose Volt enum has its C++ size) or a class Volt lays out. `T` a class Volt holds by handle: `T[N]&` either way; `T` a `std::string`: `std::string[N]&`, and `str[N]`; a `const std::string_view(&)[N]`: `str[N]` (C++ views the Volt strings for the call). Those C++ gets as an array copied from the Volt elements, which a non-`const` one's changes go back into once the call returns (not when it throws: a `try_` form leaves them as they were). Each element is its own copy: an array holding one object's handle twice, or one array given to two parameters, gets separate C++ copies, the last copy back winning. A class that can't be copied (or, for a non-`const` one, assigned; below C++11, for a `const` one too) has no such form. `N` is the Volt array type's, so another length is a type error |
@@ -506,11 +506,12 @@ object `derive` didn't make; without RTTI, either stops the program saying so.
   it): a `std::function` giving back a reference (a `std::function` field: one taking a class
   Volt holds by handle or a `std::string&`, or giving back such a class), a function pointer
   whose signature has a class Volt holds by handle or a `T&&` in it (or `...`), a reference to an array of
-  enums or of a class Volt holds by handle, a nested `std::vector` of `bool`s or of a class. For a
+  an enum whose Volt enum has another size, a nested `std::vector` of enums, pointers or a class
+  held by handle. For a
   function pointer or a `std::function`, `@cpp`'s `{&i}` passes a Volt function:
   `@cpp<i32>("ns::apply({&0}, {1})", inc, 4)`. The stub declared for such a function says why in
-  its comment: `// C++: int ns::flags(const std::vector<std::vector<bool>> & v) (worked out per use:
-  const std::vector<std::vector<bool>> & has no Volt form)`.
+  its comment: `// C++: int ns::flags(const std::vector<std::vector<Mode>> & v) (worked out per use:
+  const std::vector<std::vector<Mode>> & has no Volt form)`.
 - A Volt struct, tuple, `T?`, enum with payloads, `f16` or `f128` handed to C++ per use is its
   bytes: a template can copy it, not read it (`x.f` or `x * 2` on one is clang's error), and a
   `std::optional`, `std::tuple` or `std::variant` parameter worked out per use doesn't take one
