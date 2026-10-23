@@ -128,6 +128,9 @@ voltc compiles the wrappers in one C++ unit per standard, each including only it
 so everything above works under C++98 through C++26: functions, classes and their handles, `try_`
 forms, exceptions, and calls worked out per use (which under C++98 give their result by value).
 A `std::pair` reads as a tuple under C++98 too (a `std::map`'s entries `kv.0` and `kv.1`).
+A class C++98 declares an assignment for that can't be defined (a `const` or reference field, or a
+field or base with one) can't be assigned there either, as from C++11 on: no `set_` for a field of
+it, no `T(&)[N]` form that assigns it.
 An exception going back through Volt code to the C++ that called it needs C++11 (it travels as a
 `std::exception_ptr`); under C++98 it stops the program.
 Subclassing a C++ class (`derive`, below) needs its import under C++17 or newer.
@@ -212,9 +215,9 @@ A Volt reference (`&x`, `&arr[0]`, `&s.f`, a `T&` parameter) reaches clang as th
 as C++'s `f(x)` would: an `int&` parameter binds it, and a template's `S` (`S&` or `S`) deduces
 `int`, not `int *`. Only when no call takes it that way is it read as its address, as `f(&x)`:
 an `int*` parameter, or `template <class T> T deref(T* p)` deducing `T = int`, gets the address the
-reference holds, so C++ writes through to the Volt object. A call reads all its reference arguments
-one way: one wanting an `int&` beside another wanting an `int*` isn't taken, and the error is the
-first reading's. So when a name has both `f(T&)` and `f(T*)`, `f(&x)` calls `f(T&)`; pass a Volt
+reference holds, so C++ writes through to the Volt object. A call first reads all its reference
+arguments one way; when that fails, each is handed over as something that converts to both `T&` and
+`T*`, so one wanting an `int&` beside another wanting an `int*` works. So when a name has both `f(T&)` and `f(T*)`, `f(&x)` calls `f(T&)`; pass a Volt
 `T*` (`val p: i32* = &x;`) to call `f(T*)`.
 
 A Volt value that isn't a class (a number, a `bool`, a pointer, an enum) reaches clang as a
@@ -296,8 +299,8 @@ fn main() -> void {
 | nested `std::vector` parameters (by value, `const&`), `std::vector<std::vector<int>>` | `i32[..][..]`, to any depth, each level copied; the innermost element a number or a `char` (one of `bool`s or of a class is [per use](#calls-worked-out-per-use)) |
 | a `std::vector<T>` result (`T` a plain value) | `std::vec<T>` (a copy) |
 | `std::map<K, V>`, `std::unordered_map<K, V>` parameters (by value, `const&`, `&&`; the default comparator, hash and allocator, written out or not, through an alias too) | `std::map<K, V>&`: C++ gets a copy of the Volt map's entries, the Volt map unchanged; a function whose result could point into that copy (a view, a pointer, a reference) has no such form. `K` and `V` a number, `bool` or `char`, a `std::string` (from a Volt `std::string`) or a `std::vector` of numbers or `char`s (from a `std::vec`). Each takes the map by handle too, an overload beside it: a `stdcxx::map<i32, i32>` for a `std::map<int, int>`, and for a map `stdcxx` can't spell (a `std::string` key, `std::vector<bool>` values) a handle of its own, the one a function returning that map gives, so a map C++ made goes back to C++ (`val m = ns::make();` then `ns::total(&m)`). A mutable `std::map&`, or one with another order (`std::greater<int>`), takes only the handle |
-| a `T(&)[N]` parameter, and `const T(&)[N]` | `T[N]&` (C++ writes into the Volt array), and `T[N]`; `T` a number, `bool`, pointer, enum (one whose Volt enum has its C++ size) or a class Volt lays out. `T` a class Volt holds by handle: `T[N]&` either way; `T` a `std::string`: `std::string[N]&`, and `str[N]`. Those C++ gets as an array copied from the Volt elements, which a non-`const` one's changes go back into once the call returns (not when it throws: a `try_` form leaves them as they were). Each element is its own copy: an array holding one object's handle twice, or one array given to two parameters, gets separate C++ copies, the last copy back winning. A class that can't be copied (or, for a non-`const` one, assigned; below C++11, for a `const` one too) has no such form. `N` is the Volt array type's, so another length is a type error |
-| a `T(&)[N]` result, `const` or not (`int (&nums())[3]`) | `T[N]&`, into C++'s array (Volt has no const), as a reference result is |
+| a `T(&)[N]` parameter, and `const T(&)[N]` | `T[N]&` (C++ writes into the Volt array), and `T[N]`; `T` a number, `bool`, pointer, enum (one whose Volt enum has its C++ size) or a class Volt lays out. `T` a class Volt holds by handle: `T[N]&` either way; `T` a `std::string`: `std::string[N]&`, and `str[N]`; a `const std::string_view(&)[N]`: `str[N]` (C++ views the Volt strings for the call). Those C++ gets as an array copied from the Volt elements, which a non-`const` one's changes go back into once the call returns (not when it throws: a `try_` form leaves them as they were). Each element is its own copy: an array holding one object's handle twice, or one array given to two parameters, gets separate C++ copies, the last copy back winning. A class that can't be copied (or, for a non-`const` one, assigned; below C++11, for a `const` one too) has no such form. `N` is the Volt array type's, so another length is a type error |
+| a `T(&)[N]` result, `const` or not (`int (&nums())[3]`) | `T[N]&`, into C++'s array (Volt has no const), as a reference result is; `T` an enum whose Volt enum has its C++ size too. `T` a class Volt holds by handle: `T[N]`, handles borrowing C++'s elements (good while the array is) |
 | a function pointer result, `R(*)(A...)` | `extern "C" fn(A...) -> R`, called as any Volt fn (`cpp::pick()(4)`), its types as a function pointer parameter's |
 | a parameter written as an array, `T a[N]`, `const T a[]` (a default too) | `T*`, as C++ decays it (`&arr[0]`), through an alias too; the pointer carries no length, so `N` isn't checked. A `char` one is `cstr?`, read-only even when C++'s array isn't (as a `char*` is). An array of arrays has no form yet (per use). Per use, a Volt `T*` is C++'s `T *`, and `&x` too when no call takes it as a `T &` ([per use](#calls-worked-out-per-use)) |
 | a function pointer parameter, `R(*)(A...)`, and a C variadic one, `R(*)(A..., ...)` | `extern "C" fn(A...) -> R` and `extern "C" fn(A..., ...) -> R` (a fn's name), its types numbers, `bool` and pointers (a `size_t` a `usize`, a `size_t *` a `usize*`, a `const char *` parameter a `cstr` (a `cstr?` per use too) and a result a `cstr?`; `R(*)(...)`, with no fixed parameter, has no form): C++ calls the Volt fn through a cast to its own pointer type (C and C++ function types differ in the standard, but every compiler Volt builds with gives them one calling convention). A Volt fn with a reference or a C++ class in its signature has no C function pointer form: passing it, declared or [per use](#calls-worked-out-per-use), is an error naming the fn and the type |
@@ -308,7 +311,7 @@ fn main() -> void {
 | a `const` or `constexpr` constant (a number, `bool`, enum or text) in a namespace | a `val` of its value |
 | a static data member `m` | `T::m()` (a copy) and `T::set_m(v)` when it can be assigned |
 | a class or enum inside a class (`Outer::Inner`) | `Outer_Inner`, beside `Outer` (an unscoped enum's names stay in it: `Outer_Mode::Low`) |
-| `operator T()` (explicit or not; not in a class template) | `to_T()`: `to_bool()`, `to_i32()`, `to_string()` |
+| `operator T()` (explicit or not) | `to_T()`: `to_bool()`, `to_i32()`, `to_string()`; in a class template the name follows the template's spelling, so `template <class T> struct Box { operator T() const; }` gives `to_T()` on every instance |
 | `operator=` | `assign(v)` |
 | a method template | a generic method: `c.cast_to<f64>()`; a class template's (`Bag<T>::one<U>`) is worked out per use, each call's template arguments deduced or given |
 | a `std::function<R(A...)>` parameter | `fn(A...) -> R`: a closure or function; C++ calls it while the call lasts (it mustn't keep it). A class in `A...` (by value or `const&`) arrives as a borrowed handle of C++'s object (a move-only one too), good while the callback runs, or, for one Volt lays out, a copy of its struct; `R` may be a class Volt lays out |
@@ -512,9 +515,9 @@ object `derive` didn't make; without RTTI, either stops the program saying so.
   bytes: a template can copy it, not read it (`x.f` or `x * 2` on one is clang's error), and a
   `std::optional`, `std::tuple` or `std::variant` parameter worked out per use doesn't take one
   (a declared one does).
-- A `std::string&` parameter is a copy C++ changes and Volt copies back once the call returns:
-  given the same string twice in one call (which Volt warns of, two mutable borrows), each copy
-  comes back in turn, the first parameter's last.
+- A `std::string&` parameter is a copy C++ changes and Volt copies back once the call returns.
+  The same Volt string given to two of them in one call is one C++ copy, so C++ sees one string,
+  as it would (`both(&s, &s)` with `a += "x"; b += "y";` leaves `s` ending in `xy`).
 - A Volt type deriving from a C++ class can't override its variadic virtual methods (`...`), its
   `&&`-qualified ones or its operators: they stay C++'s (and when one of them is pure, Volt types
   can't derive from the class). An override's `std::string&` is a copy too, which C++'s string
