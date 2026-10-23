@@ -2506,6 +2506,18 @@ fn cpp_value_params() {
 }
 
 #[test]
+fn cpp_fn_kept() {
+    // a closure given to a std::function parameter taken by value moves in: C++ keeps and calls it
+    // after the scope that made it is gone, and its captures are deleted with the last copy (leak
+    // checked); a plain fn and a fn value are lent
+    let e = Env::new("cpp-fn-kept");
+    let want = "click 10\nclick 16\ncleared -1\nscope done\ndropped 7\nkept 22\nplain 10\nvalue 12\n";
+    for backend in ["c", "llvm"] {
+        assert_eq!(ok(e.voltc(&["run", "cpp_fn_kept.volt", "--backend", backend, "--leak-check"]), "voltc run cpp_fn_kept.volt"), want, "a kept closure ({backend})");
+    }
+}
+
+#[test]
 fn cpp_fn_refs() {
     // a closure for a std::function taking a std::string& (its changes go back), a non-const T& of a
     // number or of a class Volt lays out, a class held by handle by & or const&, a T&&, or giving
