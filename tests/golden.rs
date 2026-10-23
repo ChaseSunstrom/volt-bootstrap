@@ -207,7 +207,12 @@ fn quad_exports() {
 /// --target with its linker (ld.lld, wasm-ld) not on PATH says so and how to get it, not that it failed
 #[test]
 fn target_linker_missing() {
-    let tmp = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("linker-missing-{}", std::process::id()));
+    // (Windows finds voltc.exe's DLLs through PATH, and LLVM's bin holds them beside ld.lld: a PATH
+    // without the linker is one voltc can't start from. The message's code is the same everywhere)
+    if cfg!(windows) {
+        return;
+    }
+    let tmp =Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("linker-missing-{}", std::process::id()));
     std::fs::create_dir_all(&tmp).unwrap();
     let prog = tmp.join("bare.volt");
     std::fs::write(&prog, "fn main() -> void {\n    var x: u32 = 1;\n    while (x < 100) {\n        x *= 3;\n    }\n}\n").unwrap();
