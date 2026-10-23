@@ -2393,7 +2393,7 @@ fn cpp_peruse_layout() {
     // pass here, and on i386 (c++ -m32), where C aligns i64 and f64 to 4, the C++ step fails at the
     // mirror instead of a run copying the wrong bytes
     let e = Env::new("cpp-peruse-layout");
-    let want = "point 3 2.5\nspan 7 1099511627776 (-2, 0.25)\nshape 2.5\nopt 1.5\nwide 9 16\ntrio 2.5 2.5 2.5 5\nfnptr 5 6\n";
+    let want = "point 3 2.5\nspan 7 1099511627776 (-2, 0.25)\nshape 2.5\nopt 1.5\nwide 9 16\ntrio 2.5 2.5 2.5 5\nfnptr 5 6\nnums true true 1.5 2.25 4 11\n";
     for backend in ["c", "llvm"] {
         assert_eq!(ok(e.voltc(&["run", "cpp_peruse_layout.volt", "--backend", backend]), "voltc run cpp_peruse_layout.volt"), want, "mirrors with i64 and f64 ({backend})");
     }
@@ -2410,6 +2410,119 @@ fn cpp_peruse_layout() {
     let err = String::from_utf8_lossy(&o.stderr);
     assert!(!o.status.success() && err.contains("Volt's point: the mirror's size or alignment isn't the type's C layout on this target"), "i386's 4-aligned f64: {err}");
     assert!(err.contains("Volt's (extern \"C\" fn(i32) -> i32, i64): the mirror's size"), "i386's 4-aligned i64, the type's name quoted: {err}");
+}
+
+#[test]
+fn cpp_array_ref_enum() {
+    // a C++ enum's T(&)[N], an enum class : uint8_t's too: the Volt enum array's address, C++'s
+    // writes seen in it
+    let e = Env::new("cpp-array-ref-enum");
+    for backend in ["c", "llvm"] {
+        assert_eq!(ok(e.voltc(&["run", "cpp_array_ref_enum.volt", "--backend", backend]), "voltc run cpp_array_ref_enum.volt"), "rotate 1 2 0\nsum 8\nraise 100 7 107\n", "enum arrays ({backend})");
+    }
+}
+
+#[test]
+fn cpp_enum_unsigned() {
+    // an unsigned-backed enum's values past its width's signed range (200 in a uint8_t enum, 2^64 - 1
+    // in an unsigned long long one) are read unsigned: as enumerators, through C++, as constants
+    let e = Env::new("cpp-enum-unsigned");
+    let want = "values 200 18446744073709551615\nup 200 200\nflip 18446744073709551615 1\nconsts 200 18446744073709551615\n";
+    for backend in ["c", "llvm"] {
+        assert_eq!(ok(e.voltc(&["run", "cpp_enum_unsigned.volt", "--backend", backend]), "voltc run cpp_enum_unsigned.volt"), want, "unsigned enums ({backend})");
+    }
+}
+
+#[test]
+fn cpp_template_conv() {
+    // a class template's operator T() is to_T() and its explicit operator bool() to_bool(), on
+    // Box<int> and Box<double> alike
+    let e = Env::new("cpp-template-conv");
+    for backend in ["c", "llvm"] {
+        assert_eq!(ok(e.voltc(&["run", "cpp_template_conv.volt", "--backend", backend]), "voltc run cpp_template_conv.volt"), "int 7 true false\ndouble 2.5 true\n", "template conversions ({backend})");
+    }
+}
+
+#[test]
+fn cpp_string_twice() {
+    // one Volt string given to two std::string& parameters is one C++ string (both writes land, in
+    // C++'s order, copied back once); two strings each get their own
+    let e = Env::new("cpp-string-twice");
+    for backend in ["c", "llvm"] {
+        assert_eq!(ok(e.voltc(&["run", "cpp_string_twice.volt", "--backend", backend]), "voltc run cpp_string_twice.volt"), "sxy ax by\nt13 u2 13\n", "one string twice ({backend})");
+    }
+}
+
+#[test]
+fn cpp_array_ref_handle() {
+    // a T(&)[N] of a class Volt holds by handle: a C++ array copied from the handles' objects, and
+    // back into them once the call returns (not when it threw); const, one copied but not assigned
+    let e = Env::new("cpp-array-ref-handle");
+    let want = "total 3\ngrow a+ 11 b+ 12\ntotal 23\nthrew INVALID_ARGUMENT negative\nkept a+ 11 b+ 12\ntried a++ 12 b++ 13\npins 7\n";
+    for backend in ["c", "llvm"] {
+        assert_eq!(ok(e.voltc(&["run", "cpp_array_ref_handle.volt", "--backend", backend]), "voltc run cpp_array_ref_handle.volt"), want, "handle arrays ({backend})");
+    }
+    // a class that can't be copied in (or, for a T(&)[N], assigned back) has no Volt form for it
+    let shown = Command::new(&e.voltc).args(["check", "cpp_array_ref_handle.volt", "--std"]).arg(Path::new(ROOT).join("std")).current_dir(Path::new(ROOT).join("tests/interop")).env("VOLT_SHOW_CPP", "1").output().unwrap();
+    let src = String::from_utf8_lossy(&shown.stderr);
+    assert!(src.contains("fn pin_sum(p: ar::Pin[2]&) -> i32") && src.contains("fn total(w: ar::Widget[2]&) -> i32") && src.contains("fn grow(w: ar::Widget[2]&, by: i32) -> void"), "copyable handle classes' arrays: {src}");
+    for (f, t) in [("void ar::pin_touch", "Pin (&)[2] p"), ("int ar::lock_sum", "const Lock (&)[2] l"), ("void ar::lock_touch", "Lock (&)[2] l")] {
+        let ty = &t[..t.len() - 2];
+        assert!(src.contains(&format!("// C++: {f}({t}) (worked out per use: {ty} has no Volt form)")), "{f}: {src}");
+    }
+    // under C++98 too, where std::vector's push_back may assign: a const one of a class that's
+    // copied but not assigned has no Volt form there, and has one from C++11 on
+    for std in ["-std=c++98", "-std=c++17"] {
+        for backend in ["c", "llvm"] {
+            assert_eq!(ok(e.voltc(&["run", "cpp_array_ref98.volt", "--backend", backend, "--cc", std]), "voltc run cpp_array_ref98.volt"), "total 3\ngrow 11 23\nstrings abx cx 5\n", "handle and string arrays ({std}, {backend})");
+        }
+        let shown = Command::new(&e.voltc).args(["check", "cpp_array_ref98.volt", "--cc", std, "--std"]).arg(Path::new(ROOT).join("std")).current_dir(Path::new(ROOT).join("tests/interop")).env("VOLT_SHOW_CPP", "1").output().unwrap();
+        let src = String::from_utf8_lossy(&shown.stderr);
+        let left = src.contains("// C++: int ar98::pin_sum(const Pin (&)[2] p) (worked out per use: const Pin (&)[2] has no Volt form)");
+        assert!(src.contains("fn total(b: ar98::Box[2]&) -> i32") && left == (std == "-std=c++98") && (left || src.contains("fn pin_sum(p: ar98::Pin[2]&) -> i32")), "{std}: {src}");
+    }
+}
+
+#[test]
+fn cpp_array_ref2() {
+    // a const std::string_view(&)[N] parameter takes a Volt str[N]; a T(&)[N] result of an enum is a
+    // Volt T[N]& into C++'s array, of a class held by handle a T[N] of handles borrowing its elements
+    let e = Env::new("cpp-array-ref2");
+    for backend in ["c", "llvm"] {
+        assert_eq!(ok(e.voltc(&["run", "cpp_array_ref2.volt", "--backend", backend]), "voltc run cpp_array_ref2.volt"), "views 5 abc+de\nmodes 2 1 2\nwidgets 1 20 20\n", "string views and array results ({backend})");
+    }
+}
+
+#[test]
+fn cpp_assign98() {
+    // under C++98 a class with a const or reference member (or a member or base with one) declares an
+    // assignment it can't define: no set_ for such a field and no Volt form for such a mutable T(&)[N],
+    // as from C++11 on; a class with its own assignment keeps its setter
+    let e = Env::new("cpp-assign98");
+    for std in ["-std=c++98", "-std=c++17"] {
+        for backend in ["c", "llvm"] {
+            assert_eq!(ok(e.voltc(&["run", "cpp_assign98.volt", "--backend", backend, "--cc", std]), "voltc run cpp_assign98.volt"), "bag 5 1\nref 7\n", "{std}, {backend}");
+        }
+        let shown = Command::new(&e.voltc).args(["check", "cpp_assign98.volt", "--cc", std, "--std"]).arg(Path::new(ROOT).join("std")).current_dir(Path::new(ROOT).join("tests/interop")).env("VOLT_SHOW_CPP", "1").output().unwrap();
+        let src = String::from_utf8_lossy(&shown.stderr);
+        assert!(!src.contains("fn set_p(") && !src.contains("fn set_d(") && src.contains("// C++: void as98::pin_touch(Pin (&)[2] p) (worked out per use: Pin (&)[2] has no Volt form)"), "{std}: {src}");
+        assert!(src.contains("fn set_o(this: Bag&") && src.contains("fn set_n(this: Bag&") && src.contains("fn set_tag(this: Pin&"), "{std}: {src}");
+    }
+}
+
+#[test]
+fn cpp_array_ref_string() {
+    // a std::string(&)[N]: a Volt std::string[N]&, C++'s changes copied back once the call returns
+    // (not when it threw); a const one a str[N]
+    let e = Env::new("cpp-array-ref-string");
+    let want = "append abxy cxy\nthrew INVALID_ARGUMENT negative\nkept abxy cxy\ntried abxy! cxy!\nlengths 8\n";
+    for backend in ["c", "llvm"] {
+        assert_eq!(ok(e.voltc(&["run", "cpp_array_ref_string.volt", "--backend", backend]), "voltc run cpp_array_ref_string.volt"), want, "string arrays ({backend})");
+    }
+    // N is the Volt array type's: another length is a type error
+    let o = e.voltc(&["check", "cpp_array_ref_size.volt"]);
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(!o.status.success() && err.contains("argument 1 is a std::string[3]&, but 'append' wants a std::string[2]&"), "another length: {err}");
 }
 
 #[test]
@@ -2621,9 +2734,20 @@ fn cpp_params_refused() {
     // map (which C++ would change a copy of) is refused, naming both types
     let err = check("cpp_params_map.volt");
     assert!(err.contains("but 'put_s' wants a cpp::map_") && err.contains("std::map<std::string") && err.contains("cpp_params_map.volt:7"), "a mutable map takes its handle: {err}");
-    // Volt references per use, one wanting an int& and another an int*: the lvalue reading's error
+    // Volt references per use, one wanting an int& and another an int*, none fitting: the lvalue reading's error
     let err = check("cpp_params_mixed.volt");
-    assert!(err.contains("cannot initialize a parameter of type 'int *' with an lvalue of type 'int'") && err.contains("cpp_params_mixed.volt:8"), "an lvalue and an address in one call: {err}");
+    assert!(err.contains("cannot initialize a parameter of type 'int *' with an lvalue of type 'double'") && err.contains("cpp_params_mixed.volt:8"), "an lvalue and an address in one call: {err}");
+}
+
+#[test]
+fn cpp_ref_mix() {
+    // an int& and an int* parameter in one per-use call take each Volt reference as it wants it;
+    // f(T&) beside f(T*) still gets f(&x) as f(T&) (T-0694)
+    let e = Env::new("cpp-ref-mix");
+    let want = "mix 11 22\nmix 1.5 3.5\nswap 22 11\npick 1 3\n";
+    for backend in ["c", "llvm"] {
+        assert_eq!(ok(e.voltc(&["run", "cpp_ref_mix.volt", "--backend", backend]), "voltc run cpp_ref_mix.volt"), want, "int& and int* in one call ({backend})");
+    }
 }
 
 #[test]
@@ -2641,10 +2765,10 @@ fn cpp_overloads() {
     let src = String::from_utf8_lossy(&shown.stderr);
     // (where long is 64 bits: on Windows long and long long don't collide)
     if !cfg!(windows) {
-        assert!(src.contains("// left out: int taken::which(long long) (Volt can't tell it from an overload declared before it)"), "the alias a real declaration took: {src}");
-        assert!(src.contains("// left out: int again::which_long_long(long long) (an alias for an overload Volt can't tell apart has its name)"), "a real declaration in a later block: {src}");
+        assert!(src.contains("fn which_long_long_2("), "the alias a real declaration took gets a counter: {src}");
         assert!(src.contains("// C++: int ov::h(long long x, int a, int b)\n    fn h(x: i64, a: i32) -> i32"), "a form after its alias keeps the C++ comment: {src}");
     }
+    assert!(!src.contains("// left out: int taken::") && !src.contains("// left out: int again::"), "no overload left out: {src}");
     // an && method of a template's instance, worked out per use, consumes the handle too
     let o = e.voltc(&["check", "cpp_overloads_holder.volt"]);
     let err = String::from_utf8_lossy(&o.stderr);
@@ -2665,6 +2789,20 @@ fn cpp_overloads() {
             assert!(o.status.code() == Some(101) && out == before && err.contains(says), "{prog} ({backend}): {:?} {out} {err}", o.status);
         }
     }
+}
+
+#[test]
+fn cpp_overload_twice() {
+    // overloads whose names collide again after the rename (a real function with the name, a second
+    // alias with it, a const twin's name taken) take the first free one: the words, then _2
+    let e = Env::new("cpp-overload-twice");
+    let want = "f 1 3 2\ng 1 3 2\nd 1 1 3 2 2\nm 1 2 3\npeek 4 6 5\n";
+    for backend in ["c", "llvm"] {
+        assert_eq!(ok(e.voltc(&["run", "cpp_overload_twice.volt", "--backend", backend]), "voltc run cpp_overload_twice.volt"), want, "overloads colliding twice ({backend})");
+    }
+    let shown = Command::new(&e.voltc).args(["check", "cpp_overload_twice.volt", "--std"]).arg(Path::new(ROOT).join("std")).current_dir(Path::new(ROOT).join("tests/interop")).env("VOLT_SHOW_CPP", "1").output().unwrap();
+    let src = String::from_utf8_lossy(&shown.stderr);
+    assert!(!src.contains("// left out: int tw::") && !src.contains("// left out: int tw::Twice"), "no overload left out: {src}");
 }
 
 #[test]

@@ -334,6 +334,18 @@ attach fn instantiation_chain(this: checker&, idx: u32, e: compile_error) -> com
     return d;
 }
 
+// --backtrace: whether fn decl goes on the call stack a panic lists: not an async fn (v1), nor the
+// runtime's own (std's export fns, std::bare's printing, which a panic runs)
+attach fn traced_fn(this: checker&, decl: u32, f: fn_decl&) -> bool {
+    if (f.is_async) {
+        return false;
+    }
+    if ((this.pkg_of(decl) ?? "") != "std") {
+        return true;
+    }
+    return !f.is_export && this.ns_path(this.dl(decl).ns, "::").as_str() != "std::bare";
+}
+
 attach fn gen_fn(this: checker&, idx: u32) -> compile_error!void {
     val inst = this.fi(idx);
     val decl = inst.decl;
@@ -358,6 +370,13 @@ attach fn gen_fn(this: checker&, idx: u32) -> compile_error!void {
         this.frame_of(idx); // it has a frame, even with nothing in it
     }
     var stmts: std::vec<u32> = {};
+    // --backtrace: a non-async fn enters the call stack a panic lists, and leaves it at every exit
+    // (registered first, so it runs after the params' drops); its calls note their sites
+    if (this.opts.backtrace && this.traced_fn(decl, f)) {
+        put(&stmts, this.ir.rt_call("volt_rt_enter", nodes(this.ir.node(ir_kind::CSTR(inst.name), CSTR)), VOID));
+        put(&this.cx.scopes.at(0).exits, exit::LEAVE);
+        this.cx.traced = true;
+    }
     var param_cs: std::vec<u32> = {};
     var k: usize = 0;
     for (i) in 0..inst.params.len {

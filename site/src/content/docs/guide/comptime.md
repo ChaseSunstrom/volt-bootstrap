@@ -294,7 +294,8 @@ type with no name). `@typeinfo(T)` describes a type at compile time: its
 `canonical_name`, `short_name` and `module_path`; its `kind`, a variant per kind of type with what
 it's made of (`.STRUCT`, `.ENUM`, `.POINTER(T)`, `.ARRAY(T, n)`, `.TRAIT_UNION`...); its `size`,
 `align` and `stride` (`usize?`: null for a type with no layout); `is_pod` (nothing to delete) and
-`generic_args`. Its `fields` and `variants` are a struct's fields (`name`, `field_type`, `offset`)
+`generic_args`. Its `fields` and `variants` are a struct's fields (`name`, `field_type`, `offset`,
+and `default_expr`, the default as written: null when there's none, and `@field_default(T, name)` is its value)
 and an enum's variants (`name`, `discriminant`, `payload`), empty for other types, ready for a
 `comptime for`, and its `methods` are the fns attached to the type (any type: `i32`'s too), in the
 order they're declared: each one's `name`, the `trait` it's attached for (`""` when none) and its `params` (their
@@ -442,7 +443,7 @@ template asks which ones a type wrote (see
 `@attributes([@derive(eq, hash, fmt, json)])` on a struct gives it methods written in Volt, in
 `std::derive`: `eq(other)` field by field (and so `==` and `!=`), `hash()` (so it can be a map
 key), `to_string()` (the text `println` prints) and `to_json()` (an object with a member each
-field). Copying needs no derive: `copy x` copies any struct field by field. On an enum, `eq` and
+field), which `T::from_json(v)` reads back (see [JSON](/volt-bootstrap/std/json-data/)). Copying needs no derive: `copy x` copies any struct field by field. On an enum, `eq` and
 `hash` go by the variant and its payload; `to_json` is the variant's name, or for a variant with a
 payload an object with one member, the variant's name: `{"KEY":97}`, a tuple payload as an array
 (`{"CLICK":[10,20]}`). A JSON number is an `f64`, so an integer field past 2^53 loses its low bits

@@ -38,6 +38,23 @@ fn main() -> void {
 
 The message names the place: `app.volt:8:22: panic: index 3 out of bounds (len 3)`.
 
+### The calls that led there
+
+Built with `--backtrace` (`voltc run --backtrace`, `bolt run --backtrace`), a panic also lists
+the calls that led to it, innermost first: each function, and where its caller called it from.
+
+```
+app.volt:7:12: panic: index 7 out of bounds (len 3)
+  in inner, called from app.volt:12:12
+  in middle, called from app.volt:18:24
+  in main
+```
+
+Each call then costs a few stores, so it's off by default, and a debug build's panic ends with a
+note saying to use it. It works on every target, bare metal and WebAssembly too, with no C
+library or debug information. Async functions aren't listed (the calls they make are); past 64
+calls deep (32 on bare metal) the innermost ones are only counted.
+
 ## Release builds
 
 `--release` (bolt: `--release` or a profile with `optimize = true`) builds with optimization and

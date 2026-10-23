@@ -36,6 +36,7 @@ newer language features need voltc.
 | `--leak-check` | debug builds: exit with 102 if any allocation was never freed |
 | `--test` | build the program's test blocks (`test "name" { ... }`) instead of its `main`: they run one by one through `std::testing`, and the program's argument picks them by name (see [Tests](/volt-bootstrap/bolt/testing/#test-blocks)) |
 | `--test-pkg NAME` | with `--test`, package `NAME`'s test blocks too (it implies `--test`; no program files needed) |
+| `--backtrace` | a panic lists, after its own line, the calls that led to it: each function, innermost first, and where it was called from (`  in inner, called from app.volt:12:12`). Each call costs a few stores, so it's off by default; a debug build's panic says to use it. Async fns aren't listed (the calls they make are); 64 calls deep at most (32 on bare metal), deeper ones only counted |
 | `--profiler` | build for [`bolt hot`](/volt-bootstrap/bolt/commands/#finding-the-hot-spots): line information, frame pointers, and a sampler that writes `$VOLT_PROFILE_OUT` when the program exits (Linux on x86-64 and aarch64). Through the C backend it's compiled with clang when that's installed and `$CC` isn't set: gcc leaves frame pointers out of leaf functions, which loses a leaf's caller |
 | `--std DIR`, `--no-std` | the std package (default: `$VOLT_STD`, then a `std/` next to voltc) |
 | `--pkg NAME=DIR` | a package: DIR's `.volt` files, in `namespace NAME` |

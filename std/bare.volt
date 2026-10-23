@@ -45,6 +45,63 @@ namespace bare {
         volt_hook_console_write(&buf[i], 20 - i);
     }
 
+    // ---- --backtrace (voltc sets std's cfg backtrace): the call stack a panic lists, as the C
+    // runtime keeps it (one thread here); past 32 deep, calls are only counted ----
+
+    @attributes([@cfg("backtrace")])
+    public var trace_fns: usize[32] = {};
+    @attributes([@cfg("backtrace")])
+    public var trace_ats: usize[32] = {};
+    @attributes([@cfg("backtrace")])
+    public var trace_depth: usize = 0;
+
+    @attributes([@cfg("backtrace")])
+    export fn volt_rt_enter(f: cstr) -> void {
+        if (trace_depth < 32) {
+            trace_fns[trace_depth] = @cast<usize>(f);
+            trace_ats[trace_depth] = 0;
+        }
+        trace_depth += 1;
+    }
+
+    @attributes([@cfg("backtrace")])
+    export fn volt_rt_leave() -> void {
+        trace_depth -= 1;
+        // (the caller's call site is spent)
+        if (trace_depth > 0 && trace_depth <= 32) {
+            trace_ats[trace_depth - 1] = 0;
+        }
+    }
+
+    @attributes([@cfg("backtrace")])
+    export fn volt_rt_at(at: cstr) -> void {
+        if (trace_depth > 0 && trace_depth <= 32) {
+            trace_ats[trace_depth - 1] = @cast<usize>(at);
+        }
+    }
+
+    // innermost first: each fn, and the site its caller called it from
+    @attributes([@cfg("backtrace")])
+    fn trace_print() -> void {
+        var d = trace_depth;
+        if (d > 32) {
+            put("  (");
+            put_num(@cast<u64>(d - 32));
+            put(" calls deeper aren't listed)\n");
+            d = 32;
+        }
+        while (d > 0) {
+            d -= 1;
+            put("  in ");
+            put_cstr(@cast<cstr>(trace_fns[d]));
+            if (d > 0 && trace_ats[d - 1] != 0) {
+                put(", called from ");
+                put_cstr(@cast<cstr>(trace_ats[d - 1]));
+            }
+            put("\n");
+        }
+    }
+
     // ---- what the compiler's checks call ----
 
     export fn volt_panic(msg: cstr, loc: cstr) -> never {
@@ -52,6 +109,9 @@ namespace bare {
         put(": panic: ");
         put_cstr(msg);
         put("\n");
+        comptime if (@cfg("backtrace")) {
+            trace_print();
+        }
         volt_hook_exit(101);
     }
 
@@ -60,6 +120,9 @@ namespace bare {
         put(": panic: ");
         put(msg);
         put("\n");
+        comptime if (@cfg("backtrace")) {
+            trace_print();
+        }
         volt_hook_exit(101);
     }
 
@@ -70,6 +133,9 @@ namespace bare {
         put(" out of bounds (len ");
         put_num(@cast<u64>(len));
         put(")\n");
+        comptime if (@cfg("backtrace")) {
+            trace_print();
+        }
         volt_hook_exit(101);
     }
 

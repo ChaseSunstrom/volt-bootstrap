@@ -198,16 +198,69 @@ VOLT_RT_LINKAGE void volt_rt_binary_stdio(void) {}
 
 typedef struct { const uint8_t *ptr; size_t len; } volt_str;
 
+#ifdef VOLT_BACKTRACE
+/* --backtrace: the calls a panic lists, per thread. Each Volt fn enters on entry and leaves at every
+   exit, and notes a call's site just before making it; past VOLT_TRACE_MAX deep, calls are only
+   counted (runtime.h defines the stack) */
+#define VOLT_TRACE_MAX 64
+extern _Thread_local const char *volt_trace_fn[VOLT_TRACE_MAX];
+extern _Thread_local const char *volt_trace_at[VOLT_TRACE_MAX];
+extern _Thread_local unsigned volt_trace_depth;
+VOLT_RT_LINKAGE void volt_rt_enter(const char *fn) {
+    unsigned d = volt_trace_depth++;
+    if (d < VOLT_TRACE_MAX) {
+        volt_trace_fn[d] = fn;
+        volt_trace_at[d] = 0;
+    }
+}
+VOLT_RT_LINKAGE void volt_rt_leave(void) {
+    /* the caller's call site is spent: a call it makes without noting one (a drop) shows none */
+    unsigned d = --volt_trace_depth;
+    if (d > 0 && d <= VOLT_TRACE_MAX) {
+        volt_trace_at[d - 1] = 0;
+    }
+}
+VOLT_RT_LINKAGE void volt_rt_at(const char *at) {
+    unsigned d = volt_trace_depth;
+    if (d > 0 && d <= VOLT_TRACE_MAX) {
+        volt_trace_at[d - 1] = at;
+    }
+}
+/* innermost first: each fn, and the site its caller called it from */
+VOLT_RT_LINKAGE void volt_trace_print(void) {
+    unsigned d = volt_trace_depth;
+    if (d > VOLT_TRACE_MAX) {
+        volt_dprintf(2, "  (%u calls deeper aren't listed)\n", d - VOLT_TRACE_MAX);
+        d = VOLT_TRACE_MAX;
+    }
+    while (d > 0) {
+        d--;
+        if (d > 0 && volt_trace_at[d - 1]) {
+            volt_dprintf(2, "  in %s, called from %s\n", volt_trace_fn[d], volt_trace_at[d - 1]);
+        } else {
+            volt_dprintf(2, "  in %s\n", volt_trace_fn[d]);
+        }
+    }
+}
+#define VOLT_TRACE() volt_trace_print()
+#elif defined(VOLT_PANIC_NOTE)
+#define VOLT_TRACE() volt_dprintf(2, "note: build with --backtrace to see the calls that led here\n")
+#else
+#define VOLT_TRACE() ((void)0)
+#endif
 VOLT_RT_LINKAGE _Noreturn void volt_panic(const char *msg, const char *loc) {
     volt_dprintf(2, "%s: panic: %s\n", loc, msg);
+    VOLT_TRACE();
     volt_exit(101);
 }
 VOLT_RT_LINKAGE _Noreturn void volt_panic_str(volt_str msg, const char *loc) {
     volt_dprintf(2, "%s: panic: %.*s\n", loc, (int)msg.len, (const char *)msg.ptr);
+    VOLT_TRACE();
     volt_exit(101);
 }
 VOLT_RT_LINKAGE _Noreturn void volt_bounds(size_t i, size_t len, const char *loc) {
     volt_dprintf(2, "%s: panic: index %zu out of bounds (len %zu)\n", loc, i, len);
+    VOLT_TRACE();
     volt_exit(101);
 }
 

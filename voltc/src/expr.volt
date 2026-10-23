@@ -48,6 +48,11 @@ attach fn nop(this: checker&) -> u32 {
     return this.ir.block({});
 }
 
+// --backtrace: the call at span is where the fn being built calls from (the stack a panic lists)
+attach fn note_site(this: checker&, span: span) -> u32 {
+    return this.ir.rt_call("volt_rt_at", nodes(this.ir.node(ir_kind::CSTR(this.loc(span)), CSTR)), VOID);
+}
+
 // a direct call of ir fn f, returning t
 attach fn call_fn(this: checker&, f: u32, args: std::vec<u32>, t: u32) -> u32 {
     val fnode = this.ir.node(ir_kind::FN(f), VOIDPTR);
@@ -635,7 +640,8 @@ attach fn seq_vals(this: checker&, vals: std::vec<tval>&) -> std::vec<u32> {
         }
     }
     var pre: std::vec<u32> = {};
-    if (impure < 2) {
+    // (--backtrace: a call notes its site after its arguments, so one making a call goes first too)
+    if (impure < 2 && !(this.cx.traced && impure == 1)) {
         return pre;
     }
     for (v&) in vals.items() {

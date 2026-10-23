@@ -405,6 +405,18 @@ fn type_spelling(t: clang::CXType) -> std::string {
     return cx_str(clang::clang_getTypeSpelling(t));
 }
 
+// an enumerator's value, read unsigned when its enum's integer type is unsigned (200 in an
+// enum : uint8_t, which the signed read gives as -56)
+fn enum_value(k: clang::CXCursor) -> i128 {
+    val t = clang::clang_getCanonicalType(clang::clang_getEnumDeclIntegerType(clang::clang_getCursorSemanticParent(k)));
+    // libclang's unsigned kinds run from Bool to UInt128
+    val kind = @cast<i32>(t.kind);
+    if (kind >= @cast<i32>(clang::CXType_Bool) && kind <= @cast<i32>(clang::CXType_UInt128)) {
+        return @cast<i128>(clang::clang_getEnumConstantDeclUnsignedValue(k));
+    }
+    return @cast<i128>(clang::clang_getEnumConstantDeclValue(k));
+}
+
 // the visitor behind children: collects each child into the vec `data` points to
 extern "C" fn volt_clang_collect(c: clang::CXCursor, parent: clang::CXCursor, data: void*) -> i32 {
     val out = @cast<std::vec<clang::CXCursor>*>(data);

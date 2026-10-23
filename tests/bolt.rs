@@ -453,3 +453,17 @@ fn export_fn_union_builds_from_source() {
     assert!(out.contains("takers's library isn't used: its export fn 'spun' takes or gives a trait union"), "{out}");
     assert!(out.contains("users's library isn't used: it uses takers, which is built from source"), "{out}");
 }
+
+/// bolt run --backtrace builds with voltc --backtrace: a panic lists the calls that led to it (and
+/// a plain debug build's panic says how to get them)
+#[test]
+fn run_backtrace() {
+    let e = Env::new("backtrace");
+    let app = e.tmp.join("app");
+    write(&app.join("bolt.toml"), "[package]\nname = \"app\"\nversion = \"0.1.0\"\n");
+    write(&app.join("src/main.volt"), "fn deep(n: i32) -> i32 {\n    if (n == 0) {\n        @panic(\"bottom\");\n    }\n    return deep(n - 1);\n}\nfn main() -> void {\n    deep(2);\n}\n");
+    let plain = e.fails(&app, &["run"]);
+    assert!(plain.contains("panic: bottom") && plain.contains("note: build with --backtrace"), "{plain}");
+    let traced = e.fails(&app, &["run", "--backtrace"]);
+    assert!(traced.contains("panic: bottom") && traced.contains("  in deep, called from") && traced.contains("main.volt:5:12") && traced.contains("main.volt:8:5") && traced.contains("  in main"), "{traced}");
+}

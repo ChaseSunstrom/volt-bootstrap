@@ -940,7 +940,15 @@ attach fn field_default(this: checker&, sid: u32, f: field_info&, span: span) ->
     if (f.name.len > 0 && f.name[0] == '@') {
         return vpure(f.ty, this.ir.zero(f.ty)); // padding (clang.volt's pad_fields) is zero
     }
-    return fail(span, fmt("missing field '{}' (it has no default)", S(f.name)));
+    val e = fail(span, fmt("missing field '{}' (it has no default)", S(f.name)));
+    // a type made by its static new(): the field is its own business, so say how to make one
+    val t = this.t.intern(tyk::STRUCT(sid));
+    for (d&) in this.named(&this.attached, "new").items() {
+        if (this.cpp_dyn_fits(*d, null, t)) {
+            return with_help(move e, fmt("make one with {}::new()", this.ty_name(t)));
+        }
+    }
+    return e;
 }
 
 // check e as t in another env (callee/struct namespace), with the caller's locals hidden

@@ -131,8 +131,8 @@ inline int which(long) { return 1; }
 inline int which(long long) { return 2; }
 inline int which_long_long(long long) { return 3; }
 }
-// ...but not one in a block of the namespace opened again after the alias was written: that one is
-// a left-out comment
+// ...also one in a block of the namespace opened again after the alias was written: the alias is
+// which_long_long_2
 namespace again {
 inline int which(long) { return 1; }
 inline int which(long long) { return 2; }

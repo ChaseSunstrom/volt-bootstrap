@@ -164,6 +164,27 @@ public attach fn put(this: std::map<K, V, A>&, key: K, value: V) -> void {
     @write(&at.value, move value);
 }
 
+// the value for key, put there first when key is new (when it isn't, value is dropped):
+// *m.get_or_put(word, 0) += 1 counts
+<K: type, V: type, A: std::mem::allocator>
+@attributes([@invalidates])
+public attach fn get_or_put(this: std::map<K, V, A>&, key: K, value: V) -> V& {
+    if ((this.len + 1) * 4 > this.cap * 3) {
+        this.grow();
+    }
+    val h = key.hash();
+    val i = this.slot(&key, h);
+    val state = @slice(this.state, this.cap);
+    val at = &(@slice(this.slots, this.cap)[i]);
+    if (state[i] == 0) {
+        state[i] = std::map_tag(h);
+        this.len += 1;
+        @write(&at.key, move key);
+        @write(&at.value, move value);
+    }
+    return &at.value;
+}
+
 // the value for key, if there is one
 <K: type, V: type, A: std::mem::allocator>
 public attach fn get(this: std::map<K, V, A>&, key: K) -> V* {

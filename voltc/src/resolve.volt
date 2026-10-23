@@ -336,7 +336,9 @@ attach fn struct_inst(this: checker&, d: u32, args: std::vec<gval>, span: span) 
                 written.append("::");
             }
             written.append(this.decl_name(d));
+            this.canon_names = true;
             this.si(tid).canon = this.inst_name(written.as_str(), &args);
+            this.canon_names = false;
             this.si(tid).name = this.shown_name(d, written.as_str(), &args);
             this.struct_ids.put(this.intern(move key), tid);
             return t;
@@ -359,7 +361,10 @@ attach fn struct_inst(this: checker&, d: u32, args: std::vec<gval>, span: span) 
         base.append(replace_all(full.as_str(), "::", "__").as_str());
         c_name = this.fresh_c_name(base.as_str());
     }
+    // (the canonical name: nested args spelled in full too, as @typeid and symbols hash it)
+    this.canon_names = true;
     val name = this.inst_name(full.as_str(), &args);
+    this.canon_names = false;
     var pick = try this.pick_specialization(d, &args);
     val use_decl = pick.decl;
     val env = this.inst_env(dns, this.gparams_of(use_decl), &pick.binds);
@@ -848,12 +853,14 @@ attach fn export_c_name(this: checker&, d: u32, name: str, is_attach: bool, para
         n.push('_');
     }
     n.append(name);
+    this.canon_names = true;
     for (a&) in args.items() {
         var g: std::string = {};
         this.gval_name(&g, *a);
         n.push('_');
         n.append(ident_of(strip_pkg(g.as_str(), pkg)).as_str());
     }
+    this.canon_names = false;
     // a name C or C++ can't declare (int, typeof, delete) is exported with a _, so a header can name it
     if (c_word(n.as_str())) {
         n.push('_');
