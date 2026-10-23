@@ -25,6 +25,12 @@ namespace json {
         SYNTAX, // the text isn't JSON
     }
 
+    // why from_json couldn't read a value: where, and what it wanted (.tags[2]: expected a
+    // string, got 5)
+    public error decode_error {
+        INVALID: std::string,
+    }
+
 
     // ---------- reading ----------
 
@@ -380,6 +386,22 @@ namespace json {
             default => {},
         }
         return missing<A>();
+    }
+
+    // does an object have a member called key?
+    <A: std::mem::allocator>
+    public attach fn has(this: value<A>&, key: str) -> bool {
+        match (*this) {
+            .OBJ(ms&) => {
+                for (m&) in ms.items() {
+                    if (m.name.as_str() == key) {
+                        return true;
+                    }
+                }
+            },
+            default => {},
+        }
+        return false;
     }
 
     // how many elements (an array) or members (an object)

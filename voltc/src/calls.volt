@@ -440,6 +440,35 @@ attach fn builtin(this: checker&, name: str, gargs: std::vec<garg>&, args_opt: s
         val fe = try this.field_form(args.at(0), args.at(1), span);
         return this.expr(&fe, want);
     }
+    if (name == "field_default") {
+        // @field_default(T, "name"): what a literal of struct T that leaves the field out gives it
+        if (args.len != 2) {
+            return fails(span, "@field_default(T, \"name\") takes a struct type and a field's name");
+        }
+        val t = try this.garg_type(args.at(0));
+        val n = try this.garg_value(args.at(1));
+        var fname = S("");
+        match (try this.ct_eval(n, null)) {
+            .STR(s) => { fname = copy s; },
+            default => { return fails(n.span, "@field_default(T, \"name\"): the name is a comptime string"); },
+        }
+        match (*this.t.get(t)) {
+            .STRUCT(sid) => {
+                val nf = (try this.struct_fields(sid, span)).len;
+                for (i) in 0..nf {
+                    val f = *(try this.struct_fields(sid, span)).at(i);
+                    if (f.name == fname.as_str()) {
+                        if (f.fallback == null && this.t.opt_inner(f.ty) == null && !this.t.is_ptr(f.ty)) {
+                            return fail(span, fmt2("{}'s field '{}' has no default", this.ty_name(t), move fname));
+                        }
+                        return this.field_default(sid, &f, span);
+                    }
+                }
+            },
+            default => {},
+        }
+        return fail(span, fmt2("{} has no field '{}'", this.ty_name(t), move fname));
+    }
     if (name == "offsetof") {
         if (args.len != 2) {
             return fail(span, fmt("@{} takes 2 argument(s)", S(name)));
