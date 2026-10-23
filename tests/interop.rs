@@ -1098,7 +1098,7 @@ fn rust_direct() {
         let mut c = Command::new(&e.voltc);
         c.args(["run", "--backend", backend, "generics.volt"]).current_dir(&dir).env("VOLT_STD", Path::new(ROOT).join("std"));
         tools(&mut c);
-        assert_eq!(ok(c.output().unwrap(), "voltc run generics.volt"), "largest 9 1.5\nrepeat 3 7 0.5\npick b 1\nscaled 3 6\nstack 2 5 volt 4,5\npoints 1 bigger 8\n", "generics ({backend})");
+        assert_eq!(ok(c.output().unwrap(), "voltc run generics.volt"), "largest 9 1.5\nrepeat 3 7 0.5\npick b 1\nscaled 3 6\nstack 2 5 volt 4,5\npoints 1 bigger 8\nconst 12 <5> <volt>\n", "generics ({backend})");
     }
     // closures and traits both ways: Volt's into Rust (lent, or kept and dropped by Rust once: drops 2, and Rust's squares 2),
     // Rust's back as values Volt calls

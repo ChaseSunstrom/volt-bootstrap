@@ -25,4 +25,6 @@ fn main() -> void {
     val a = 3;
     val b = 8;
     std::println("points {} bigger {}", pts.len(), geom::bigger(&a, &b));
+    val arr: i32[3] = { 4, 5, 6 };
+    std::println("const {} {} {}", geom::lead<3>(arr[..]), geom::show(5), geom::show("volt"));
 }

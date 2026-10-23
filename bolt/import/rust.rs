@@ -327,9 +327,17 @@ fn instances(m: &mut Model, lines: &[String], alias: &str, lib: &str, skip: &BTr
         let mut rust = Vec::new();
         let mut ok = true;
         for (gp, a) in g.generics.iter().zip(&args) {
+            // a const parameter: its value as Rust writes it
+            if gp.contains(':') {
+                rust.push(a.to_string());
+                continue;
+            }
             match volt_ty(a, alias, &types).filter(|t| !matches!(t, Ty::Slice(..))) {
                 Some(t) => {
-                    rust.push(rust_ty(&t, lib, &types));
+                    // (an impl Trait parameter isn't named in the call: Rust infers it)
+                    if !gp.starts_with("impl_") {
+                        rust.push(rust_ty(&t, lib, &types));
+                    }
                     subst.insert(gp.clone(), t);
                 }
                 None => {
@@ -345,7 +353,7 @@ fn instances(m: &mut Model, lines: &[String], alias: &str, lib: &str, skip: &BTr
         s.params = s.params.iter().map(|(n, t)| (n.clone(), t.as_ref().map(|t| substitute(t, &subst)))).collect();
         s.ret = s.ret.as_ref().map(|t| substitute(t, &subst));
         s.generics.clear();
-        s.call = Some(format!("{name}::<{}>", rust.join(", ")));
+        s.call = Some(if rust.is_empty() { name.to_string() } else { format!("{name}::<{}>", rust.join(", ")) });
         s.name = inst;
         s.src = format!("{} [{}]", s.src, g.generics.iter().zip(&args).map(|(p, a)| format!("{p} = {a}")).collect::<Vec<_>>().join(", "));
         match method {
@@ -770,15 +778,20 @@ impl<'a> Doc<'a> {
             }
             let name = p.get("name").and_then(Json::str).unwrap_or("");
             let Some(t) = k.get("type") else {
-                s.skip = Some("it's generic over more than types");
+                // a const parameter of an integer type: a Volt value generic (N: usize), the
+                // instance's value written into the shim's call (first::<3>)
+                match k.get("const").and_then(|c| c.get("type")).and_then(|t| t.get("primitive")).and_then(Json::str).and_then(prim) {
+                    Some(vt) if vt.starts_with('i') || vt.starts_with('u') => s.generics.push(format!("{name}: {vt}")),
+                    _ => s.skip = Some("it's generic over more than types"),
+                }
                 continue;
             };
             if closures.contains_key(name) {
                 continue;
             }
-            if t.get("is_synthetic").and_then(Json::bool) == Some(true) {
-                s.skip = Some("it's generic over more than types");
-            } else {
+            // an impl Trait parameter of a trait Volt has no form for (Display): a type parameter
+            // of its own, named when the parameters are read (impl_x)
+            if t.get("is_synthetic").and_then(Json::bool) != Some(true) {
                 s.generics.push(name.to_string());
             }
         }
@@ -816,7 +829,15 @@ impl<'a> Doc<'a> {
             // a pattern (a tuple, _) is no name
             let named = !pname.is_empty() && pname != "_" && pname.chars().all(|c| c.is_alphanumeric() || c == '_');
             let pname = if named { pname.to_string() } else { format!("a{n}") };
-            s.params.push((pname, self.ty(pt)));
+            let mut ty = self.ty(pt);
+            if ty.is_none() && pt.get("impl_trait").is_some() {
+                // (each call's argument type, rustc checking the bound; the shim's call leaves it
+                // to inference, as Rust names no impl Trait argument)
+                let g = format!("impl_{pname}");
+                s.generics.push(g.clone());
+                ty = Some(Ty::Generic(g));
+            }
+            s.params.push((pname, ty));
         }
         s.ret = match sig.get("output") {
             None | Some(Json::Null) => Some(Ty::Unit),
@@ -1121,9 +1142,14 @@ impl<'a> Doc<'a> {
             }
             return Some(Ty::Tuple(tup.arr().iter().map(|e| self.ty(e).map(|t| (String::new(), t))).collect::<Option<Vec<_>>>()?));
         }
-        // [T; N], N a number (rustdoc writes it as text)
+        // [T; N], N a number (rustdoc writes it as text), or a const parameter's (usize::MAX: the
+        // shim's conversion leaves the length to the call)
         if let Some(a) = t.get("array") {
-            let n = a.get("len").and_then(Json::str).and_then(|l| int_text(l).parse::<usize>().ok())?;
+            let len = a.get("len").and_then(Json::str)?;
+            let n = int_text(len).parse::<usize>().unwrap_or(usize::MAX);
+            if n == usize::MAX && !len.chars().all(|c| c.is_alphanumeric() || c == '_') {
+                return None;
+            }
             return Some(Ty::Array(Box::new(self.ty(a.get("type")?)?), n));
         }
         if let Some(it) = t.get("impl_trait") {
@@ -1877,7 +1903,11 @@ impl Lang for Rust {
             Ty::Array(e, n) if matches!(**e, Ty::Prim(_)) => {
                 let Ty::Prim(x) = **e else { return None };
                 p.params.extend([format!("{a}: *const {x}"), format!("{a}_n: usize")]);
-                p.arg = format!("<[{x}; {n}]>::try_from(sl({a}, {a}_n)).unwrap_or_else(|_| panic!(\"an array of {n} given {{}} elements\", {a}_n))");
+                p.arg = if *n == usize::MAX {
+                    format!("core::convert::TryFrom::try_from(sl({a}, {a}_n)).unwrap_or_else(|_| panic!(\"an array of the instance's length given {{}} elements\", {a}_n))")
+                } else {
+                    format!("<[{x}; {n}]>::try_from(sl({a}, {a}_n)).unwrap_or_else(|_| panic!(\"an array of {n} given {{}} elements\", {a}_n))")
+                };
             }
             // a tuple: its elements, each a parameter of its own
             Ty::Tuple(es) => {

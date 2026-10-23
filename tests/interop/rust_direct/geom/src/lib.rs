@@ -249,6 +249,15 @@ pub fn pick<T>(first: bool, a: T, b: T) -> T {
     }
 }
 
+// a const parameter (a Volt value generic) and an impl Trait one (a type each call infers)
+pub fn lead<const N: usize>(a: [i32; N]) -> i32 {
+    a[0] * N as i32
+}
+
+pub fn show(x: impl std::fmt::Display) -> String {
+    format!("<{x}>")
+}
+
 impl Point {
     pub fn scaled_by<K: Into<f64>>(&self, k: K) -> Point {
         let k = k.into();

@@ -67,7 +67,7 @@ which an editor's hover shows; Zig's and Go's do too.
 | `async fn f() -> T`, or a result of `impl Future<Output = T>` | a Volt `async fn f() -> T`: `await` it, or call it to run it to the end; each poll of Rust's future that finds it not done waits up to a millisecond for its waker, then suspends. A crate that depends on tokio has its futures polled in a tokio runtime |
 | a fieldless enum | a Volt enum with the same values |
 | `pub const` of a number, `bool` or `&str`, however it's computed | a `val` of its value |
-| a generic `fn`, method or type (`largest<T: PartialOrd>`, `Stack<T>`) | a generic `fn` or `struct`: each instance the program uses (`geom::largest(xs)`, `geom::Stack<i32>::new()`) is built for it |
+| a generic `fn`, method or type (`largest<T: PartialOrd>`, `Stack<T>`) | a generic `fn` or `struct`: each instance the program uses (`geom::largest(xs)`, `geom::Stack<i32>::new()`) is built for it. A `fn`'s `const N: usize` is a value generic (`geom::lead<3>(xs)`, its `[i32; N]` a `T[..]` holding N), and an `impl Display` argument a type each call settles (`geom::show(5)`, `geom::show("volt")`) |
 | a parameter of `impl Fn(A) -> R` (or `FnMut`, `FnOnce`), `F: Fn(A) -> R`, `&dyn Fn(A) -> R`, `&mut dyn FnMut(A)`, `Box<dyn Fn(A) -> R>` | a Volt fn value `fn(A) -> R`: lent for the call when Rust borrows it (`&dyn`), otherwise moved to Rust, which drops it when it's done with it |
 | a result of `impl Fn(A) -> R`, `Box<dyn FnMut(A) -> R>`, `impl FnOnce() -> R` | a value called with `f.call(a)`; deleting it drops the closure |
 | `pub trait T` | a Volt trait `T` (a method with a body in Rust is `@optional`); the crate's types implementing it attach it |
