@@ -51,6 +51,18 @@ public attach fn put(this: std::sorted_map<K, V, A>&, key: K, value: V) -> void 
     this.vals.insert(at, move value) catch @panic("out of memory");
 }
 
+// the value for key, put there first when key is new (when it isn't, value is dropped)
+<K: type, V: type, A: std::mem::allocator>
+@attributes([@invalidates])
+public attach fn get_or_put(this: std::sorted_map<K, V, A>&, key: K, value: V) -> V& {
+    val (found, at) = this.place(&key);
+    if (!found) {
+        this.keys.insert(at, move key) catch @panic("out of memory");
+        this.vals.insert(at, move value) catch @panic("out of memory");
+    }
+    return &this.vals[at];
+}
+
 // the value for key, if there is one
 <K: type, V: type, A: std::mem::allocator>
 public attach fn get(this: std::sorted_map<K, V, A>&, key: K) -> V* {
