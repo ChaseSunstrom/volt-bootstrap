@@ -4,8 +4,14 @@
 #include <string>
 
 namespace vp {
+// (C++98 has neither scoped enums nor a fixed underlying type: plain ones there, unsigned int to Volt)
+#if __cplusplus >= 201103L
 enum class Mode : int { A, B, C };
 enum Small : unsigned char { S0, S1, S7 = 7 };
+#else
+enum Mode { A, B, C };
+enum Small { S0, S1, S7 = 7 };
+#endif
 template <Mode M> struct Tag {
     static int id() { return (int)M * 10; }
 };
