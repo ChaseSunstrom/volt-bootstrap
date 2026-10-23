@@ -6393,7 +6393,7 @@ attach fn enum_decl(this: cpp_gen&, c: clang::CXCursor) -> void {
     for (ch&) in children(c).items() {
         if (clang::clang_getCursorKind(*ch) == clang::CXCursor_EnumConstantDecl) {
             val cn = vname(cursor_name(*ch).as_str());
-            this.line(fmt2("{} = {},", copy cn, num(@cast<i128>(clang::clang_getEnumConstantDeclValue(*ch)))).as_str());
+            this.line(fmt2("{} = {},", copy cn, num(enum_value(*ch))).as_str());
             put(&names, move cn);
         }
     }
@@ -6868,13 +6868,16 @@ attach fn constant(this: cpp_gen&, v: clang::CXCursor) -> void {
             text = S("true");
         }
     } else if (kind == clang::CXEval_Int && ct.kind == clang::CXType_Enum) {
-        // the enumerator with that value
-        val n = clang::clang_EvalResult_getAsLongLong(ev);
+        // the enumerator with that value (an unsigned enum's read unsigned on both sides)
+        var n = @cast<i128>(clang::clang_EvalResult_getAsLongLong(ev));
+        if (clang::clang_EvalResult_isUnsignedInt(ev) != 0) {
+            n = @cast<i128>(clang::clang_EvalResult_getAsUnsigned(ev));
+        }
         val e = clang::clang_getTypeDeclaration(ct);
         val ep = this.enums.get(cpp_qual(e).as_str());
         if (ep) {
             for (k&) in children(e).items() {
-                if (clang::clang_getCursorKind(*k) == clang::CXCursor_EnumConstantDecl && clang::clang_getEnumConstantDeclValue(*k) == n) {
+                if (clang::clang_getCursorKind(*k) == clang::CXCursor_EnumConstantDecl && enum_value(*k) == n) {
                     vty = S(*ep);
                     text = fmt2("{}::{}", S(*ep), vname(cursor_name(*k).as_str()));
                     break;

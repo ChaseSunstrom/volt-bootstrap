@@ -2339,6 +2339,17 @@ fn cpp_array_ref_enum() {
 }
 
 #[test]
+fn cpp_enum_unsigned() {
+    // an unsigned-backed enum's values past its width's signed range (200 in a uint8_t enum, 2^64 - 1
+    // in an unsigned long long one) are read unsigned: as enumerators, through C++, as constants
+    let e = Env::new("cpp-enum-unsigned");
+    let want = "values 200 18446744073709551615\nup 200 200\nflip 18446744073709551615 1\nconsts 200 18446744073709551615\n";
+    for backend in ["c", "llvm"] {
+        assert_eq!(ok(e.voltc(&["run", "cpp_enum_unsigned.volt", "--backend", backend]), "voltc run cpp_enum_unsigned.volt"), want, "unsigned enums ({backend})");
+    }
+}
+
+#[test]
 fn cpp_array_ref_handle() {
     // a T(&)[N] of a class Volt holds by handle: a C++ array copied from the handles' objects, and
     // back into them once the call returns (not when it threw); const, one copied but not assigned
