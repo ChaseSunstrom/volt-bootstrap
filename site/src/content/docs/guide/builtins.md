@@ -24,6 +24,7 @@ Builtins start with `@`. They're part of the language, not a library.
 | `@discriminant(v)` | `i64` | which variant an enum value (or a reference to one) holds: its discriminant, as `@typeinfo` lists it |
 | `@field(v, "name")` | the field | `v.name`, the name a comptime string (or a tuple element's index, a comptime integer): read, assigned, borrowed; called, `@field(v, "name")(args)` is the method `v.name(args)` (and `@field(T, "name")(args)` is `T::name(args)`). See [Comptime](/volt-bootstrap/guide/comptime/#reflection-typeinfo-and-typeof) |
 | `@has_field(T, "name")` | `bool` | is `T` a struct with that field (comptime) |
+| `@field_default(T, "name")` | the field's type | the value a literal of struct `T` that leaves the field out gives it: its default, or null for an optional. The name is a comptime string, as a `comptime for` over `@typeinfo(T).fields` gives (each field's `default_expr` is its default as written, null when it has none) |
 | `@has_method(T, "name", A...)` | `bool` | does `T` have a method of that name, taking `A...` first (comptime). See [Comptime](/volt-bootstrap/guide/comptime/#does-a-type-attach-a-trait-attaches) |
 | `@attaches(T, some_trait)` | `bool` | does `T` attach the trait, as a `<T: some_trait>` bound asks (comptime). See [Comptime](/volt-bootstrap/guide/comptime/#does-a-type-attach-a-trait-attaches) |
 | `@panic("msg")` | `never` | stops the program with a message (exit code 101) |

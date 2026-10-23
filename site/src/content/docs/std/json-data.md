@@ -39,7 +39,8 @@ fn main() -> !void {
 // expect: SYNTAX
 ```
 
-`len()` is an array's element count or an object's member count. To walk an object's members,
+`len()` is an array's element count or an object's member count, and `has(key)` says whether an
+object has that member (`get` can't tell a missing member from a null one). To walk an object's members,
 match on the value: `.OBJ(ms&)` gives the `std::vec` of members, each with its `name` and `item`.
 
 ```volt
@@ -90,6 +91,42 @@ fn main() -> void {
 A struct or enum that derives json (`@attributes([@derive(json)])`) builds its own value with
 `to_json()`: a struct is an object with a member for each field (see
 [Derive](/volt-bootstrap/guide/comptime/#derive)).
+
+`T::from_json(v)` reads one back: a struct's fields from the members of the same names (others are
+ignored), where a member that isn't there leaves the field's default (null for an optional), and an
+enum from its variant's name or `{"NAME": payload}`. Numbers have to fit: an integer field takes a
+whole number in its range. Each type `to_json` knows has one too (`i32::from_json(v)`,
+`std::vec<point>::from_json(v)`), except `str`, which would point into the value: a text field read
+from JSON is a `std::string`. A value that doesn't fit fails with `std::json::decode_error::INVALID`,
+whose text says where: `.items[0].count: expected a u8, got 300`.
+
+```volt
+use std::io;
+use std::json;
+
+@attributes([@derive(json)])
+struct item {
+    name: std::string;
+    count: u8 = 1;
+}
+
+@attributes([@derive(json)])
+struct order {
+    id: i64;
+    items: std::vec<item>;
+    note: std::string?;
+}
+
+fn main() -> !void {
+    val v = try std::json::parse("{\"id\": 7, \"items\": [{\"name\": \"tea\"}, {\"name\": \"cake\", \"count\": 2}]}");
+    val o = try order::from_json(&v);
+    std::println("{} {} {} {}", o.id, o.items[0].count, o.items[1].name.as_str(), o.note == null);
+    val bad = try std::json::parse("{\"id\": 7, \"items\": [{\"name\": \"tea\", \"count\": 300}]}");
+    std::println("{}", order::from_json(&bad));
+}
+// expect: 7 1 cake true
+// expect: error.INVALID(.items[0].count: expected a u8, got 300)
+```
 
 A value made from a `std::mem::arena` (`parse(text, arena.allocator())`) puts all of its strings and
 arrays in the arena, which frees them together; see [Allocators](/volt-bootstrap/std/allocators/).
