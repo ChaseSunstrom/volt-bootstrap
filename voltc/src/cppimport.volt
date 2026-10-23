@@ -9525,7 +9525,7 @@ attach fn text_bound(this: checker&, t: u32) -> bool {
         .REF(x) => { return this.text_bound(x); },
         .STRUCT(s) => {
             val n = this.ty_name(t);
-            return n.as_str() == "std::string" || n.as_str() == "std::string<std::mem::default_allocator>";
+            return n.as_str() == "std::string";
         },
         default => { return false; },
     }

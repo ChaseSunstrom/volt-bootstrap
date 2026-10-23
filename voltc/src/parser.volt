@@ -230,6 +230,25 @@ attach fn expect(this: parser&, p: str) -> compile_error!span {
     if (this.is(p)) {
         return this.bump();
     }
+    // a ';' missing at a line's end: said where it goes, after that line's last token
+    if (p == ";" && this.pos > 0) {
+        val prev = this.toks.at(this.pos - 1).span;
+        val gap = this.src[@cast<usize>(prev.hi)..@cast<usize>(this.span().lo)];
+        var newline = false;
+        for (k) in 0..gap.len {
+            if (gap[k] == '\n') {
+                newline = true;
+            }
+        }
+        if (newline) {
+            val after = this.source_of(prev);
+            var msg = S("expected ';' at the end of this line");
+            if (after.len <= 20) {
+                msg = fmt("expected ';' after '{}'", S(after));
+            }
+            return compile_error::AT({ span: { file: prev.file, lo: prev.hi, hi: prev.hi }, msg: move msg });
+        }
+    }
     var what = std::string::from("'");
     what.append(p);
     what.append("'");

@@ -1,4 +1,4 @@
-[1;31merror[0m[1m: expected std::vec<[1;33mi32[0m[1m, std::mem::default_allocator>, found std::vec<[1;33mi64[0m[1m, std::mem::default_allocator>[0m
+[1;31merror[0m[1m: expected std::vec<[1;33mi32[0m[1m>, found std::vec<[1;33mi64[0m[1m>[0m
   [1;34m┌─[0m tests/diag/type_diff.volt:6:12
   [1;34m│[0m
 [1;34m6[0m [1;34m│[0m     return m;

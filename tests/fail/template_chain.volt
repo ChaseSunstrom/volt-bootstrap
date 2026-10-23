@@ -35,4 +35,4 @@ fn main() -> void {
 // error: middle<i32> is instantiated here
 // error: outer<i32> is instantiated here
 // error: can't use < on point; attach operator < to give it one
-// error: sort<point, std::mem::default_allocator> is instantiated here
+// error: sort<point> is instantiated here
