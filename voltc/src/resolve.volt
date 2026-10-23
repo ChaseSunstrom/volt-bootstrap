@@ -1279,6 +1279,9 @@ attach fn global(this: checker&, d: u32, span: span) -> compile_error!global_ref
         default => {},
     }
     val l = gl ?? return fails(span, "not a global");
+    if (l.c_get != null) {
+        return fails(span, "a C macro is read through a call: it has no place");
+    }
     var name = "";
     match (l.pat.kind) {
         .BIND(n) => { name = n; },
@@ -1339,7 +1342,7 @@ attach fn global(this: checker&, d: u32, span: span) -> compile_error!global_ref
     for (a&) in this.item_of(d).attrs.items() {
         tls = tls || attr_named(a, "thread_local");
         if (attr_named(a, "section")) {
-            section = attr_str(a) ?? return fails(a.span, "@section takes the section's name: @section(\".data.table\")");
+            section = this.data_section_name(attr_str(a) ?? return fails(a.span, "@section takes the section's name: @section(\".data.table\")"));
         }
     }
     // a global in a section is data the image carries (a vector table read before anything runs):

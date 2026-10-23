@@ -3,8 +3,14 @@
 
 // llvm-config's answer to one question, or null when that llvm-config isn't there or fails
 fn ask(tool: str, what: str) -> std::string? {
-    val argv: str[3] = { tool, "--link-shared", what };
-    val r = std::process::capture(argv[..], "") catch return null;
+    var argv: str[3] = { tool, "--link-shared", what };
+    var n: usize = 3;
+    comptime if (@cfg("os", "windows")) {
+        // LLVM's Windows release has no shared libLLVM, and llvm-config refuses --link-shared there
+        argv[1] = what;
+        n = 2;
+    }
+    val r = std::process::capture(argv[0..n], "") catch return null;
     if (r.code != 0) {
         return null;
     }
@@ -15,6 +21,18 @@ fn ask(tool: str, what: str) -> std::string? {
 fn use_llvm_config(tool: str) -> bool {
     val inc = ask(tool, "--includedir") ?? return false;
     val lib = ask(tool, "--libdir") ?? return false;
+    comptime if (@cfg("os", "windows")) {
+        // no libLLVM to link whole (llvm-config can't answer --libs): LLVM's C API is LLVM-C.dll's,
+        // and libclang libclang.dll's, through their import libraries (which MinGW's linker reads)
+        bolt::cc_arg(std::fmt::format("-I{}", inc.as_str()).as_str());
+        bolt::cc_arg(std::fmt::format("-L{}", lib.as_str()).as_str());
+        bolt::cc_arg("-l:LLVM-C.lib");
+        bolt::cc_arg("-l:libclang.lib");
+        // the 8 MB stack Linux's main thread has (Windows gives 1 MB, and voltc compiling itself goes
+        // deeper: it would end without a word)
+        bolt::cc_arg("-Wl,--stack,8388608");
+        return true;
+    }
     val libs = ask(tool, "--libs") ?? return false;
     // the default paths need no flags (and -I/usr/include can reorder the system headers)
     if (inc.as_str() != "/usr/include") {

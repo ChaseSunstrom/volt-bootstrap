@@ -15,12 +15,13 @@ fn main() -> void {
         std::process::exit(1);
     };
     // the newest runtime: "Microsoft.NETCore.App 10.0.12 [/opt/dotnet/shared/Microsoft.NETCore.App]"
+    // (Windows' path is C:\Program Files\dotnet\shared\Microsoft.NETCore.App)
     var version = std::string::from("");
     var root = std::string::from("");
     for (line) in r.out.as_str().lines().items() {
         val l = line.trim();
         val tail = " [";
-        if (l.starts_with("Microsoft.NETCore.App ") && l.ends_with("/shared/Microsoft.NETCore.App]")) {
+        if (l.starts_with("Microsoft.NETCore.App ") && (l.ends_with("/shared/Microsoft.NETCore.App]") || l.ends_with("\\shared\\Microsoft.NETCore.App]"))) {
             val at = l.find(tail) ?? continue;
             version = std::string::from(l[22..at]);
             root = std::string::from(l[at + 2..l.len - 30]);

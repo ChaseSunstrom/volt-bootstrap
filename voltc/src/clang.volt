@@ -8,6 +8,7 @@ use std::mem;
 struct clang_tu {
     index: void*;
     tu: clang::CXTranslationUnitImpl*;
+    code: i32 = 0; // libclang's CXErrorCode when it made no unit
 }
 
 attach fn delete(this: clang_tu&) -> void {
@@ -17,14 +18,59 @@ attach fn delete(this: clang_tu&) -> void {
     clang::clang_disposeIndex(this.index);
 }
 
+// a clang program (clang, clang++) for libclang's headers and precompiled modules: NAME from PATH,
+// except on macOS, where PATH's is Apple's clang and voltc's libclang is another LLVM's (Homebrew's):
+// that LLVM's, beside the library's real file (LLVM/lib/libclang.dylib → LLVM/bin/NAME); and on
+// Windows, the one beside libclang.dll (LLVM/bin)
+fn libclang_tool(name: str) -> std::string {
+    comptime if (@cfg("os", "macos")) {
+        var info: dl_info = {};
+        if (dladdr(@cast<void*>(clang::clang_getClangVersion), &info) != 0 && info.fname != null) {
+            val lib = real_file(c_text(info.fname)) ?? return S(name);
+            var at = lib.len();
+            while (at > 0 && lib.as_str()[at - 1] != '/') {
+                at -= 1;
+            }
+            var tool = S(lib.as_str()[0..at]);
+            tool.append("../bin/");
+            tool.append(name);
+            if (std::fs::exists(tool.as_str())) {
+                return tool;
+            }
+        }
+    } else if (@cfg("os", "windows")) {
+        // Windows' loader found libclang.dll in a PATH directory: that LLVM's NAME is beside it.
+        // PATH's first NAME can be another LLVM's (llvm-mingw's), whose precompiled modules
+        // libclang can't read
+        val path = std::process::env("PATH") ?? return S(name);
+        for (dir) in path.split(";").items() {
+            var lib = S(dir);
+            lib.append("/libclang.dll");
+            if (dir.len > 0 && std::fs::exists(lib.as_str())) {
+                var tool = S(dir);
+                tool.append("/");
+                tool.append(name);
+                tool.append(".exe");
+                if (std::fs::exists(tool.as_str())) {
+                    return tool;
+                }
+                return S(name);
+            }
+        }
+    }
+    return S(name);
+}
+
 // where libclang's own headers (stddef.h, stdarg.h...) are: $VOLT_CLANG_RESOURCE_DIR, else what
-// `clang -print-resource-dir` says (libclang doesn't always find them from where it's installed)
+// libclang's clang says with -print-resource-dir (libclang doesn't always find them from where it's
+// installed)
 fn clang_resource_dir() -> std::string? {
     val env = std::process::env("VOLT_CLANG_RESOURCE_DIR");
     if (env) {
         return S(env);
     }
-    val argv: str[2] = { "clang", "-print-resource-dir" };
+    val clang = libclang_tool("clang");
+    val argv: str[2] = { clang.as_str(), "-print-resource-dir" };
     val r = std::process::capture(argv[0..2], "") catch |e| {
         return null;
     };
@@ -36,6 +82,120 @@ fn clang_resource_dir() -> std::string? {
         out.bytes.pop();
     }
     return out;
+}
+
+// macOS: the SDK the system's C and C++ headers are in ($SDKROOT, else what `xcrun --show-sdk-path`
+// says): a libclang that isn't Xcode's own (Homebrew's) doesn't find them by itself
+fn clang_sysroot() -> std::string? {
+    if (std::process::os() != "macos") {
+        return null;
+    }
+    val env = std::process::env("SDKROOT");
+    if (env) {
+        return S(env);
+    }
+    val argv: str[2] = { "xcrun", "--show-sdk-path" };
+    val r = std::process::capture(argv[0..2], "") catch |e| {
+        return null;
+    };
+    if (r.code != 0) {
+        return null;
+    }
+    var out = copy r.out;
+    while (out.len() > 0 && (*out.bytes.at(out.len() - 1) == '\n' || *out.bytes.at(out.len() - 1) == ' ')) {
+        out.bytes.pop();
+    }
+    return out;
+}
+
+// Windows: libclang's own target is MSVC's, with MSVC's headers, but the program's C and C++ are
+// compiled by MinGW's gcc or llvm-mingw's clang (libstdc++ or libc++, the GNU ABI), so libclang
+// parses for that compiler's target, with its include directories; found once a process each
+var c_view: std::vec<std::string> = {};
+var cxx_view: std::vec<std::string> = {};
+
+// compiler_view of $CXX (cxx) or $CC, found once a process, on Windows; nothing elsewhere. What
+// libclang parses with, and so what clang++ precompiles a module it reads with (module_pcm)
+fn libclang_view(cxx: bool) -> std::vec<std::string> {
+    var view: std::vec<std::string> = {};
+    comptime if (@cfg("os", "windows")) {
+        if (cxx) {
+            if (cxx_view.len == 0) {
+                cxx_view = compiler_view(true);
+            }
+            view = copy cxx_view;
+        } else {
+            if (c_view.len == 0) {
+                c_view = compiler_view(false);
+            }
+            view = copy c_view;
+        }
+    }
+    return view;
+}
+
+// what libclang adds to see what $CC (or, cxx, $CXX) sees: --target=its triple, its C++ library's
+// directories ahead of libclang's own headers and its C library's after them (its own builtin
+// headers are libclang's to give), the defaults off. Empty when the compiler doesn't answer
+fn compiler_view(cxx: bool) -> std::vec<std::string> {
+    var view: std::vec<std::string> = {};
+    var argv: std::vec<str> = {};
+    var lang = "c";
+    if (cxx) {
+        cxx_command(&argv);
+        lang = "c++";
+    } else {
+        c_command(&argv);
+    }
+    var ask = copy argv;
+    put(&ask, "-dumpmachine");
+    val m = std::process::capture(ask.items(), "") catch |e| {
+        return view;
+    };
+    if (m.code != 0) {
+        return view;
+    }
+    put(&view, fmt("--target={}", S(m.out.as_str().trim())));
+    put(&view, S("-nostdlibinc"));
+    put(&view, S("-nostdinc++"));
+    // `cc -E -v -x c -` on no input lists the directories between these lines, one a line
+    var list = copy argv;
+    put(&list, "-E");
+    put(&list, "-v");
+    put(&list, "-x");
+    put(&list, lang);
+    put(&list, "-");
+    val r = std::process::capture(list.items(), "") catch |e| {
+        return view;
+    };
+    var inside = false;
+    val lines = r.err.as_str().lines();
+    for (line) in lines.items() {
+        val l = line.trim();
+        if (starts_with(l, "#include <...> search starts here")) {
+            inside = true;
+        } else if (starts_with(l, "End of search list")) {
+            inside = false;
+        } else if (inside) {
+            // MinGW's gcc names its C library's directories through its own
+            // (.../lib/gcc/T/V/../../../../include): ".." taken out first, so only gcc's own are left out
+            var dir = std::path::normalize(l);
+            for (k) in 0..dir.len() {
+                if (*dir.bytes.at(k) == '\\') {
+                    *dir.bytes.at(k) = '/';
+                }
+            }
+            val d = dir.as_str();
+            if (contains(d, "/c++")) {
+                put(&view, S("-isystem"));
+                put(&view, copy dir);
+            } else if (!contains(d, "/lib/gcc/") && !contains(d, "/lib/clang/")) {
+                put(&view, S("-idirafter"));
+                put(&view, copy dir);
+            }
+        }
+    }
+    return view;
 }
 
 // `text` parsed as the file `name`, with args (-x c++, -std=..., -I...); declarations only
@@ -52,6 +212,18 @@ fn clang_parse_opts(name: str, text: str, args: std::vec<str>&, opts: u32) -> cl
         put(&owned, S("-resource-dir"));
         put(&owned, copy res);
     }
+    val sdk = clang_sysroot();
+    if (sdk) {
+        put(&owned, S("-isysroot"));
+        put(&owned, copy sdk);
+    }
+    var cxx = false;
+    for (a&) in args.items() {
+        cxx = cxx || *a == "c++" || *a == "c++-module";
+    }
+    for (v&) in libclang_view(cxx).items() {
+        put(&owned, copy *v);
+    }
     for (a&) in args.items() {
         put(&owned, S(*a));
     }
@@ -61,10 +233,11 @@ fn clang_parse_opts(name: str, text: str, args: std::vec<str>&, opts: u32) -> cl
     }
     var n = S(name);
     var t = S(text);
-    var file: clang::CXUnsavedFile = { Filename: n.c_str(), Contents: t.c_str(), Length: @cast<u64>(t.len()) };
+    var file: clang::CXUnsavedFile = { Filename: n.c_str(), Contents: t.c_str(), Length: @cast<u32>(t.len()) };
     val index = clang::clang_createIndex(0, 0);
-    val tu = clang::clang_parseTranslationUnit(index, n.c_str(), argv.ptr, @cast<i32>(argv.len), &file, 1, opts);
-    return { index: index, tu: tu };
+    var tu: clang::CXTranslationUnitImpl* = null;
+    val code = clang::clang_parseTranslationUnit2(index, n.c_str(), argv.ptr, @cast<i32>(argv.len), &file, 1, opts, &tu);
+    return { index: index, tu: tu, code: @cast<i32>(code) };
 }
 
 // the unit again with its main file now this text: one made with a precompiled preamble
@@ -73,7 +246,7 @@ fn clang_parse_opts(name: str, text: str, args: std::vec<str>&, opts: u32) -> cl
 attach fn reparse(this: clang_tu&, name: str, text: str) -> bool {
     var n = S(name);
     var t = S(text);
-    var file: clang::CXUnsavedFile = { Filename: n.c_str(), Contents: t.c_str(), Length: @cast<u64>(t.len()) };
+    var file: clang::CXUnsavedFile = { Filename: n.c_str(), Contents: t.c_str(), Length: @cast<u32>(t.len()) };
     return clang::clang_reparseTranslationUnit(this.tu, 1, &file, clang::clang_defaultReparseOptions(this.tu)) == 0;
 }
 
@@ -180,6 +353,14 @@ fn put_diag_line(out: std::string&, d: clang::CXDiagnostic, main: str) -> void {
 // the first error clang reported (with its place), if any
 attach fn first_error(this: clang_tu&) -> std::string? {
     if (this.tu == null) {
+        // (CXErrorCode: 2 it crashed, 3 bad arguments, 4 a precompiled file it couldn't read)
+        if (this.code == 4) {
+            return S("libclang couldn't parse the headers: it couldn't read a precompiled file (a module or PCH another clang version made?)");
+        } else if (this.code == 2) {
+            return S("libclang couldn't parse the headers: it crashed");
+        } else if (this.code == 3) {
+            return S("libclang couldn't parse the headers: it was given arguments it can't take");
+        }
         return S("libclang couldn't parse the headers");
     }
     val n = clang::clang_getNumDiagnostics(this.tu);

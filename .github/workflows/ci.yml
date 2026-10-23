@@ -1,15 +1,16 @@
 # Builds and tests Volt on every push to main and every pull request. A job that fails fails the run:
 # nothing here is allowed to fail quietly.
 #
-# Linux (x86-64 and arm64) runs the whole suite: both compilers, std, bolt, the language server, the
-# docs and site, interop, and bare metal under qemu. The suite itself is Linux-only for now (it leans
-# on .so files, sh scripts and GNU ld), so macOS and Windows build the compilers and build and run a
-# few programs through the C backend.
+# Every system runs the whole suite: both compilers, std, bolt, the language server, the docs and
+# site, and interop; bare metal under qemu where qemu is installed (Linux). Linux x86-64 and arm64,
+# macOS arm64 and x86-64, Windows x86-64 and arm64. A failed test shows its name and panic on the
+# run's summary page (report-failures.sh), readable without signing in.
 name: CI
 
 on:
   push:
-    branches: [main]
+    # ci/** branches: work on CI itself (another OS, a new runner) without a pull request
+    branches: [main, 'ci/**']
   pull_request:
   workflow_dispatch:
 
@@ -24,6 +25,10 @@ concurrency:
 env:
   CARGO_TERM_COLOR: never
   LLVM_VERSION: 23
+  # the release Intel macOS builds and Windows downloads
+  LLVM_RELEASE: 23.1.3
+  # llvm-mingw's release: Windows' C and C++ compilers (clang, libc++, the UCRT)
+  LLVM_MINGW: "20260922"
 
 jobs:
   linux:
@@ -35,9 +40,16 @@ jobs:
           - { arch: x86-64, os: ubuntu-24.04 }
           - { arch: arm64, os: ubuntu-24.04-arm }
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 180
+    # (arm64's selfhost tests alone take 105 minutes)
+    timeout-minutes: 300
     steps:
       - uses: actions/checkout@v5
+      # a JDK 22 or later for the Java tests (java_direct, java_package): the runner's javac is 17,
+      # which they skip
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
       # LLVM and libclang for voltc's LLVM backend and C imports; clang, llvm-nm and ld.lld for the
       # cross-compile and bare-metal tests; qemu runs the bare-metal boards; g++ 15 (the toolchain
       # PPA's) for the C++ imports' wrappers: the runner's g++ 13 has no C++23 explicit object
@@ -47,7 +59,15 @@ jobs:
           wget -q https://apt.llvm.org/llvm.sh
           sudo bash llvm.sh "$LLVM_VERSION" all
           sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test
-          sudo apt-get install -y qemu-system-arm qemu-system-misc g++-15
+          # (the PPA's mirror answers 503 for a while at times: a few tries, minutes apart; and with
+          # its index missing apt takes g++-15 for a regex and installs other packages, so a try
+          # counts only once g++-15 is there)
+          for try in 1 2 3 4 5; do
+            sudo apt-get update || true
+            sudo apt-get install -y qemu-system-arm qemu-system-misc g++-15 && command -v g++-15 > /dev/null && break
+            [ "$try" = 5 ] && exit 1
+            sleep 120
+          done
           echo "CXX=g++-15" >> "$GITHUB_ENV"
           echo "/usr/lib/llvm-$LLVM_VERSION/bin" >> "$GITHUB_PATH"
           echo "LLVM_CONFIG=/usr/lib/llvm-$LLVM_VERSION/bin/llvm-config" >> "$GITHUB_ENV"
@@ -62,6 +82,7 @@ jobs:
         run: npm install --no-save --no-package-lock --no-audit --no-fund @types/node
       - name: Build (no warnings)
         run: |
+          set -o pipefail
           cargo build 2>&1 | tee build.log
           ! grep -q '^warning' build.log
       - name: Test
@@ -69,19 +90,16 @@ jobs:
           set -o pipefail
           cargo test --no-fail-fast 2>&1 | tee test.log
       # what failed, as annotations on the run's summary page
-      - name: Report failures
+      - name: Report
+        if: always()
+        run: sh .github/report-failures.sh test.log ${{ job.status }}
+      # the first twenty panics whole, ten a step
+      - name: Report panics 1-10
         if: failure()
-        run: |
-          [ -f test.log ] || exit 0
-          tests=$(grep -E '^test .* \.\.\. FAILED$' test.log | sed 's/^test //; s/ \.\.\. FAILED$//' | head -40 | paste -sd ' ')
-          [ -n "$tests" ] && echo "::error title=failed tests::$tests"
-          golden=$(grep -E '^/.*\.volt: (exit|want errors)' test.log | head -40 | sed ':a;N;$!ba;s/\n/%0A/g')
-          [ -n "$golden" ] && echo "::error title=failed programs::$golden"
-          grep -n 'panicked at' test.log | head -7 | while IFS=: read -r n _; do
-            ctx=$(sed -n "${n},$((n + 12))p" test.log | sed ':a;N;$!ba;s/\n/%0A/g')
-            echo "::error title=panic::$ctx"
-          done
-          exit 0
+        run: sh .github/report-failures.sh test.log failure detail 1
+      - name: Report panics 11-20
+        if: failure()
+        run: sh .github/report-failures.sh test.log failure detail 2
 
   editor:
     name: editor (grammar and extension)
@@ -100,28 +118,269 @@ jobs:
       - run: npm ci
       - run: npm test
 
-  portability:
-    name: build (${{ matrix.name }})
+  # macOS on Apple silicon: Homebrew's llvm (keg-only: off PATH, so cc stays Apple's clang)
+  macos-arm64:
+    name: test (macos arm64)
+    runs-on: macos-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v5
+      # a JDK 22 or later for the Java tests (java_direct, java_package): the runner's javac is 17,
+      # which they skip
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+      - name: Install LLVM
+        run: |
+          brew install llvm lld
+          prefix=$(brew --prefix llvm)
+          version=$("$prefix/bin/llvm-config" --version)
+          [ "${version%%.*}" = "$LLVM_VERSION" ] || { echo "::error::Homebrew's llvm is $version, not LLVM $LLVM_VERSION"; exit 1; }
+          echo "LLVM_CONFIG=$prefix/bin/llvm-config" >> "$GITHUB_ENV"
+          echo "C_INCLUDE_PATH=$prefix/include" >> "$GITHUB_ENV"
+          echo "$(brew --prefix lld)/bin" >> "$GITHUB_PATH"
+          # where import std; looks for libc++'s modules manifest (T-0381)
+          "$prefix/bin/clang++" -print-file-name=libc++.modules.json
+          "$prefix/bin/clang++" -print-resource-dir
+          manifest="$("$prefix/bin/clang++" -print-resource-dir)/../../c++/libc++.modules.json"
+          head -c 600 "$manifest" || true
+          ls "$prefix/share/libc++/v1" | head -5 || true
+      - name: Install Node's types
+        run: npm install --no-save --no-package-lock --no-audit --no-fund @types/node
+      - name: Build (no warnings)
+        run: |
+          set -o pipefail
+          cargo build 2>&1 | tee build.log
+          ! grep -q '^warning' build.log
+      - name: Test
+        run: |
+          set -o pipefail
+          cargo test --no-fail-fast 2>&1 | tee test.log
+      - name: Report
+        if: always()
+        run: sh .github/report-failures.sh test.log ${{ job.status }}
+      # the first twenty panics whole, ten a step
+      - name: Report panics 1-10
+        if: failure()
+        run: sh .github/report-failures.sh test.log failure detail 1
+      - name: Report panics 11-20
+        if: failure()
+        run: sh .github/report-failures.sh test.log failure detail 2
+
+  # Intel macOS: nothing ships LLVM 23 for it (Homebrew bottles llvm only for arm64, and LLVM's
+  # release has no x86-64 macOS asset), so the job builds LLVM, clang (for libclang) and lld itself,
+  # once per release: saved to the cache as soon as it's built, whatever the tests do after
+  macos-x86-64:
+    name: test (macos x86-64)
+    runs-on: macos-15-intel
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v5
+      # a JDK 22 or later for the Java tests (java_direct, java_package): the runner's javac is 17,
+      # which they skip
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+      - name: Cached LLVM
+        id: llvm
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/llvm
+          key: llvm-${{ env.LLVM_RELEASE }}-macos-x86-64
+      - name: Build LLVM (when it isn't cached)
+        if: steps.llvm.outputs.cache-hit != 'true'
+        run: |
+          brew install ninja
+          curl -sSfL "https://github.com/llvm/llvm-project/releases/download/llvmorg-$LLVM_RELEASE/llvm-project-$LLVM_RELEASE.src.tar.xz" | tar -xJ
+          cmake -S "llvm-project-$LLVM_RELEASE.src/llvm" -B llvm-build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="$HOME/llvm" -DLLVM_ENABLE_PROJECTS="clang;lld" \
+            -DLLVM_TARGETS_TO_BUILD="X86;AArch64;ARM;RISCV;WebAssembly" \
+            -DLLVM_BUILD_LLVM_DYLIB=ON -DLLVM_LINK_LLVM_DYLIB=ON \
+            -DLLVM_ENABLE_ZSTD=OFF -DLLVM_ENABLE_LIBXML2=OFF -DLLVM_INCLUDE_TESTS=OFF \
+            -DLLVM_INCLUDE_BENCHMARKS=OFF -DLLVM_INCLUDE_EXAMPLES=OFF -DLLVM_INCLUDE_DOCS=OFF \
+            -DCLANG_INCLUDE_TESTS=OFF -DCLANG_INCLUDE_DOCS=OFF
+          ninja -C llvm-build install
+          rm -rf llvm-build "llvm-project-$LLVM_RELEASE.src"
+      - name: Save LLVM
+        if: steps.llvm.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ~/llvm
+          key: llvm-${{ env.LLVM_RELEASE }}-macos-x86-64
+      # (no DYLD_LIBRARY_PATH: rustc would load this libLLVM for its own; voltc finds it by rpath)
+      - name: Use LLVM
+        run: |
+          echo "LLVM_CONFIG=$HOME/llvm/bin/llvm-config" >> "$GITHUB_ENV"
+          echo "C_INCLUDE_PATH=$HOME/llvm/include" >> "$GITHUB_ENV"
+          mkdir -p "$HOME/lld-bin" && ln -sf "$HOME/llvm/bin/ld.lld" "$HOME/llvm/bin/llvm-nm" "$HOME/lld-bin/"
+          echo "$HOME/lld-bin" >> "$GITHUB_PATH"
+      - name: Install Node's types
+        run: npm install --no-save --no-package-lock --no-audit --no-fund @types/node
+      - name: Build (no warnings)
+        run: |
+          set -o pipefail
+          cargo build 2>&1 | tee build.log
+          ! grep -q '^warning' build.log
+      - name: Test
+        run: |
+          set -o pipefail
+          cargo test --no-fail-fast 2>&1 | tee test.log
+      - name: Report
+        if: always()
+        run: sh .github/report-failures.sh test.log ${{ job.status }}
+      # the first twenty panics whole, ten a step
+      - name: Report panics 1-10
+        if: failure()
+        run: sh .github/report-failures.sh test.log failure detail 1
+      - name: Report panics 11-20
+        if: failure()
+        run: sh .github/report-failures.sh test.log failure detail 2
+      # (T-0381: cpp_derive_any's v.push_back on a std::vector<int>& fails only here, this job's
+      # LLVM with Apple's libc++: the per-use fn and the vector as the import declares them)
+      - name: C++ derive facts
+        if: failure()
+        run: |
+          set +e
+          V=$(ls -t "$PWD"/target/tmp/voltc-stage1-* 2>/dev/null | grep -v '\.c$' | head -1)
+          [ -n "$V" ] || { echo "no stage-1 voltc under target/tmp"; exit 0; }
+          cd tests/interop
+          VOLT_SHOW_CPP=1 VOLT_STD=../../std "$V" check cpp_derive2.volt > derive.out 2>&1
+          grep -n "volt_cpp_call_0\|struct vector\|cpp_type(\"std::vector\|cpp_handle(\"std::vector\|// C++: .*push_back" derive.out | head -30
+          grep -n -B2 -A6 "fn volt_cpp_call_0" derive.out | head -40
+          tail -12 derive.out
+  windows:
+    name: test (windows ${{ matrix.arch }})
     strategy:
       fail-fast: false
       matrix:
         include:
-          - { name: macos arm64, os: macos-latest }
-          - { name: macos x86-64, os: macos-15-intel }
-          - { name: windows x86-64, os: windows-latest }
-          - { name: windows arm64, os: windows-11-arm }
+          - { arch: x86-64, os: windows-latest, triple: x86_64-pc-windows-msvc, mingw: x86_64 }
+          - { arch: arm64, os: windows-11-arm, triple: aarch64-pc-windows-msvc, mingw: aarch64 }
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 60
+    timeout-minutes: 350
+    # the runner's .NET (PATH has PowerShell's own bundled hostfxr before it)
+    env:
+      DOTNET_ROOT: C:\Program Files\dotnet
     defaults:
       run:
         shell: bash
     steps:
+      # the files as they are in the repo (the runner's git would turn LF into CRLF)
+      - run: git config --global core.autocrlf false
       - uses: actions/checkout@v5
-      - name: Build the compilers
-        run: cargo build --release --bins
-      - name: Build and run programs (C backend)
+      # the C and C++ compilers: llvm-mingw's, on both (the runner's MinGW is x86-64 only, its linker
+      # can't read arm64 import libraries; and x86-64's gcc and libstdc++ are a toolchain of their own,
+      # T-0546); added to PATH before LLVM, so PATH's clang stays LLVM's own
+      - name: Install llvm-mingw
         run: |
-          for f in tests/run/operators.volt tests/run/struct_update.volt tests/run/match_slices.volt; do
-            echo "== $f"
-            ./target/release/voltc-bootstrap run "$f"
+          curl -sSfL -o mingw.zip "https://github.com/mstorsjo/llvm-mingw/releases/download/$LLVM_MINGW/llvm-mingw-$LLVM_MINGW-ucrt-${{ matrix.mingw }}.zip"
+          unzip -q mingw.zip -d /c && rm mingw.zip
+          echo "C:/llvm-mingw-$LLVM_MINGW-ucrt-${{ matrix.mingw }}/bin" >> "$GITHUB_PATH"
+          echo "CC=${{ matrix.mingw }}-w64-mingw32-clang" >> "$GITHUB_ENV"
+          echo "CXX=${{ matrix.mingw }}-w64-mingw32-clang++" >> "$GITHUB_ENV"
+      - name: Install LLVM
+        run: |
+          curl -sSfL -o llvm.tar.xz "https://github.com/llvm/llvm-project/releases/download/llvmorg-$LLVM_RELEASE/clang+llvm-$LLVM_RELEASE-${{ matrix.triple }}.tar.xz"
+          mkdir -p /c/llvm
+          tar -xf llvm.tar.xz -C /c/llvm --strip-components=1
+          rm llvm.tar.xz
+          echo "C:/llvm/bin" >> "$GITHUB_PATH"
+          echo "LLVM_CONFIG=C:/llvm/bin/llvm-config.exe" >> "$GITHUB_ENV"
+          echo "C_INCLUDE_PATH=C:/llvm/include" >> "$GITHUB_ENV"
+          ls /c/llvm/lib | grep -iE '^(LLVM-C|libclang)' || echo "::warning::no LLVM-C or libclang import library in LLVM's release"
+      # (T-0381: C++ programs end in libunwind's "pc not in table" and a fail-fast, or with a DLL entry
+      # point not found: which runtime DLLs PATH offers, and whether a C++ throw and catch survives
+      # each way of linking)
+      - name: C++ runtime facts
+        run: |
+          set +e
+          $CXX --version | head -1
+          for l in libstdc++.a libc++.a libc++.dll.a libunwind.a libunwind.dll.a; do echo "$l: $($CC -print-file-name=$l)"; done
+          for d in libc++.dll libunwind.dll libstdc++-6.dll libgcc_s_seh-1.dll; do echo "$d on PATH: $(which -a $d 2>/dev/null | tr '\n' ' ')"; done
+          printf '#include <stdexcept>\nextern "C" int f(int x) { try { if (x) throw std::runtime_error("x"); } catch (std::exception &e) { return 7; } return 0; }\n' > t.cpp
+          printf 'int f(int);\nint printf(const char *, ...);\nint main(void) { printf("caught %%d\\n", f(1)); return 0; }\n' > t.c
+          $CXX -c t.cpp -o t.o
+          $CC t.c t.o -lstdc++ -o t1.exe && ./t1.exe; echo "cc -lstdc++: exit $?"
+          $CXX -x c t.c -x none t.o -o t2.exe && ./t2.exe; echo "c++ driver: exit $?"
+          $CC t.c t.o -lstdc++ -o t3.exe && PATH="$(dirname "$(which $CC)"):$PATH" ./t3.exe; echo "cc -lstdc++, llvm-mingw first on PATH: exit $?"
+          $CXX -static -x c t.c -x none t.o -o t4.exe && ./t4.exe; echo "c++ -static: exit $?"
+          rm -f t.cpp t.c t.o t1.exe t2.exe t3.exe t4.exe
+      - name: Install Node's types
+        run: npm install --no-save --no-package-lock --no-audit --no-fund @types/node
+      # Rust's static libraries for what MinGW links (rustc's host here is MSVC's): bolt's rust_target
+      - name: Add Rust's GNU target
+        run: rustup target add ${{ matrix.mingw }}-pc-windows-gnullvm
+      - name: Build (no warnings)
+        run: |
+          set -o pipefail
+          cargo build 2>&1 | tee build.log
+          ! grep -q '^warning' build.log
+      - name: Test
+        timeout-minutes: 320
+        run: |
+          set -o pipefail
+          # Git Bash puts its own MinGW prefix first (on arm64, /clangarm64, with an older libc++.dll
+          # than the one llvm-mingw links against: a C++ program ends with an entry point not found)
+          export PATH="/c/llvm-mingw-$LLVM_MINGW-ucrt-${{ matrix.mingw }}/bin:$PATH"
+          cargo test --no-fail-fast 2>&1 | tee test.log
+      - name: Report
+        if: always()
+        run: sh .github/report-failures.sh test.log ${{ job.status }}
+      # the first twenty panics whole, ten a step
+      - name: Report panics 1-10
+        if: failure()
+        run: sh .github/report-failures.sh test.log failure detail 1
+      - name: Report panics 11-20
+        if: failure()
+        run: sh .github/report-failures.sh test.log failure detail 2
+      # (T-0673: the language server goes quiet after a document whose first version doesn't parse:
+      # every message it sends then, and its stderr)
+      - name: LSP opened mid-edit
+        if: always()
+        continue-on-error: true
+        timeout-minutes: 5
+        run: |
+          V=$(ls -t "$PWD"/target/tmp/voltc-stage1-* 2>/dev/null | grep -v '\.c$' | head -1)
+          [ -n "$V" ] || { echo "no stage-1 voltc under target/tmp"; exit 0; }
+          python .github/lsp-probe.py "$V" "$PWD/std"
+          echo "== as tests/lsp.rs writes the URI (backslashes) with a rootUri"
+          python .github/lsp-probe.py "$V" "$PWD/std" test
+      # (T-0606: embedded_volt's first load can't find its per-load pointers, volt_c1_..., in its
+      # script DLL: a loaded DLL can't be deleted, so it's still in the temporary directory; its
+      # exports)
+      - name: VM script DLL exports
+        if: failure()
+        run: |
+          set +e
+          for d in $(ls -d "$TEMP"/voltvm-* "$TMP"/voltvm-* 2>/dev/null | head -4); do
+            ls "$d"
+            for f in "$d"/script*.dll; do
+              [ -f "$f" ] || continue
+              echo "== $f"
+              llvm-objdump -p "$f" | grep -A40 "Export Table" | head -50
+              llvm-nm "$f" 2>/dev/null | grep -i "volt_c" | head -20
+            done
           done
+      # (T-0381: cpp_errors, an exception thrown in a Volt callback, ends in libunwind's "pc not in
+      # table": each backend's build run, and how many functions it gives unwind entries)
+      - name: C++ unwind facts
+        if: failure()
+        run: |
+          set +e
+          V=$(ls -t "$PWD"/target/tmp/voltc-stage1-*.exe 2>/dev/null | head -1)
+          [ -n "$V" ] || { echo "no stage-1 voltc under target/tmp"; exit 0; }
+          cd tests/interop
+          # r22: the link mode changed nothing (the C backend's build ran clean each way); the test
+          # also runs --backend llvm, whose Volt functions had no unwind tables (.pdata) until round 23
+          for be in c llvm; do
+            VOLT_STD=../../std "$V" build cpp_errors.volt --backend $be -o ce.exe || { echo "$be: build failed"; continue; }
+            ./ce.exe > ce.out 2> ce.err; echo "::warning::unwind ($be): exit $? / $(tail -1 ce.out) / $(head -2 ce.err | tr '\n' ' ')"
+            llvm-readobj --unwind ce.exe | grep -c "RuntimeFunction {" | sed "s/^/$be: .pdata entries: /"
+          done
+          rm -f ce.exe ce.out ce.err
+          # T-0548: import std's module source, as $CXX and libclang's clang++ find it, and what
+          # libclang says when it reads cpp_module.volt
+          for c in "$CXX" clang++; do m=$($c -print-file-name=libc++.modules.json); echo "::warning::std module ($c): $m: $(grep -o '"source-path": *"[^"]*"' "$m" 2>/dev/null | head -2 | tr '\n' ' ')"; done
+          VOLT_STD=../../std "$V" check cpp_module.volt 2>&1 | head -12

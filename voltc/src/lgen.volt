@@ -12,6 +12,8 @@ enum callconv {
     AAPCS64,  // aarch64 Linux and the like
     DARWIN64, // Apple's arm64: AAPCS64, with small ints extended by the caller
     WIN64,    // Windows x64
+    WINARM64, // Windows on arm64: AAPCS64, but a variadic argument goes in integer registers (LLVM
+              // places them) and an aggregate among them is never an HFA
     WASM,     // WebAssembly: an aggregate of one scalar as that scalar, any other by a pointer to a copy
 }
 
@@ -617,7 +619,7 @@ attach fn part(this: lg&, t: u32, ret: bool) -> abi_part {
         return { how: pass::MEMORY, ty: t };
     }
     if (this.cc != callconv::SYSV) {
-        return this.aapcs_part(t, size, ret);
+        return this.aapcs_part(t, size, ret, true);
     }
     if (size > 16 || this.has_unaligned(t, 0)) {
         // (a field its alignment doesn't place, in a packed C struct: SysV's MEMORY class)
@@ -717,12 +719,13 @@ attach fn wasm_one(this: lg&, t: u32) -> llvm::LLVMOpaqueType* {
 
 // AAPCS64's aggregates: an HFA (one to four of the same float type, nested or not) in FP registers;
 // up to 16 bytes in one or two x registers (a pair as an i128 when it's 16-byte aligned); anything
-// bigger by a pointer to a copy, or returned through x8
-attach fn aapcs_part(this: lg&, t: u32, size: u64, ret: bool) -> abi_part {
+// bigger by a pointer to a copy, or returned through x8. hfa: whether HFAs are (not for Windows on
+// arm64's variadic arguments)
+attach fn aapcs_part(this: lg&, t: u32, size: u64, ret: bool, hfa: bool) -> abi_part {
     val l = this.lt(t);
     var leaves: std::vec<llvm::LLVMOpaqueType*> = {};
     this.c_leaves(t, &leaves);
-    if (leaves.len >= 1 && leaves.len <= 4) {
+    if (hfa && leaves.len >= 1 && leaves.len <= 4) {
         val e = *leaves.at(0);
         val ek = llvm::LLVMGetTypeKind(e);
         var same = ek == llvm::LLVMHalfTypeKind || ek == llvm::LLVMFloatTypeKind || ek == llvm::LLVMDoubleTypeKind || ek == llvm::LLVMFP128TypeKind;
@@ -756,9 +759,9 @@ attach fn aapcs_part(this: lg&, t: u32, size: u64, ret: bool) -> abi_part {
         return { how: pass::MEMORY, ty: t };
     }
     // the i128 pair, as clang has it: a param goes by the alignment without the struct's own @align,
-    // a result by the one with it; Apple's arm64 by the one with it both ways
+    // a result by the one with it; Apple's and Windows' arm64 by the one with it both ways
     var al = this.natural_align(t);
-    if (ret || this.cc == callconv::DARWIN64) {
+    if (ret || this.cc == callconv::DARWIN64 || this.cc == callconv::WINARM64) {
         al = this.align_of(l);
     }
     var cty = llvm::LLVMInt64TypeInContext(this.ctx);
@@ -1242,6 +1245,12 @@ attach fn decl_fn(this: lg&, i: u32) -> llvm::LLVMOpaqueValue* {
             // Volt code never unwinds (a panic ends the program), as the C backend's C, which clang
             // marks nounwind: calls need no unwind paths, and LLVM moves code around them freely
             llvm::LLVMAddAttributeAtIndex(fv, 4294967295, this.attr("nounwind"));
+            if (this.c.opts.target == null) {
+                // unwind tables all the same, as clang gives every function on a hosted target:
+                // a C++ exception or a backtrace walks through Volt's frames (without them, Windows
+                // has no .pdata for a Volt function and libunwind stops there: "pc not in table")
+                llvm::LLVMAddAttributeAtIndex(fv, 4294967295, llvm::LLVMCreateEnumAttribute(this.ctx, llvm::LLVMGetEnumAttributeKindForName("uwtable", 7), 2));
+            }
         }
         if (this.c.opts.target != null) {
             // bare metal has no C library: loops stay loops, not calls to strlen or memcpy (which
@@ -1291,10 +1300,16 @@ fn lg_uint(s: str) -> u64 {
     return v;
 }
 
-// the prelude's C declarations bound to libc symbols: `int volt_printf(...) VOLT_SYM("printf");`
+// the prelude's C declarations bound to libc symbols: `int volt_printf(...) VOLT_SYM("printf");`.
+// Those under #if !defined(_WIN32) (or #if defined(_WIN32)) bind only where that holds: Windows has
+// no dprintf, its runtime unit defines volt_dprintf itself
 attach fn read_aliases(this: lg&) -> void {
+    val win = this.cc == callconv::WIN64 || this.cc == callconv::WINARM64;
     val p = PRELUDE_H;
     var i: usize = 0;
+    // each open #if: whether it's a _WIN32 one, and whether its lines are left out here
+    var win_if: std::vec<bool> = {};
+    var out: std::vec<bool> = {};
     while (i < p.len) {
         var e = i;
         while (e < p.len && p[e] != '\n') {
@@ -1302,6 +1317,31 @@ attach fn read_aliases(this: lg&) -> void {
         }
         val line = p[i..e];
         i = e + 1;
+        if (starts_with(line, "#if")) {
+            val not_win = line == "#if !defined(_WIN32)";
+            val is_win = line == "#if defined(_WIN32)";
+            put(&win_if, not_win || is_win);
+            put(&out, (not_win && win) || (is_win && !win));
+            continue;
+        }
+        if (starts_with(line, "#else") && win_if.len > 0) {
+            if (*win_if.at(win_if.len - 1)) {
+                *out.at(out.len - 1) = !*out.at(out.len - 1);
+            }
+            continue;
+        }
+        if (starts_with(line, "#endif") && win_if.len > 0) {
+            win_if.pop();
+            out.pop();
+            continue;
+        }
+        var skip = false;
+        for (o&) in out.items() {
+            skip = skip || *o;
+        }
+        if (skip) {
+            continue;
+        }
         val at = lg_find(line, "VOLT_SYM(\"") ?? continue;
         val v = lg_find(line, "volt_") ?? continue;
         var ne = v;
@@ -2364,7 +2404,18 @@ attach fn binary(this: lg&, op: binop_ir, a: u32, b: u32, t: u32) -> llvm::LLVMO
             .SUB => { r = llvm::LLVMBuildFSub(this.b, av, bv, ""); },
             .MUL => { r = llvm::LLVMBuildFMul(this.b, av, bv, ""); },
             .DIV => { r = llvm::LLVMBuildFDiv(this.b, av, bv, ""); },
-            default => { r = llvm::LLVMBuildFRem(this.b, av, bv, ""); },
+            default => {
+                if (ak == llvm::LLVMFP128TypeKind) {
+                    // f128 % through f64, as the C backend's: LLVM calls fmodl for it, which is
+                    // binary128 only where long double is (macOS's fmodl takes an f64 or x87 one)
+                    // ponytail: double precision; a binary128 fmod in std::softfloat is T-0474
+                    val d = llvm::LLVMDoubleTypeInContext(this.ctx);
+                    val q = llvm::LLVMBuildFRem(this.b, llvm::LLVMBuildFPTrunc(this.b, av, d, ""), llvm::LLVMBuildFPTrunc(this.b, bv, d, ""), "");
+                    r = llvm::LLVMBuildFPExt(this.b, q, llvm::LLVMTypeOf(av), "");
+                } else {
+                    r = llvm::LLVMBuildFRem(this.b, av, bv, "");
+                }
+            },
         }
         return this.coerce(r, at, t);
     }
@@ -2636,7 +2687,11 @@ attach fn call(this: lg&, f: u32, args: std::vec<u32>&, t: u32) -> llvm::LLVMOpa
                 }
                 at = I32;
             }
-            val p = this.part(at, false);
+            var p = this.part(at, false);
+            if (p.hfa && this.cc == callconv::WINARM64) {
+                // Windows on arm64: a variadic HFA crosses as any other aggregate
+                p = this.aapcs_part(at, this.size_of(this.lt(at)), false, false);
+            }
             this.pass_arg(&p, v, &vals);
             put(&extra, move p);
         }
@@ -3305,6 +3360,12 @@ attach fn llvm_build(this: checker&, g: lg&) -> std::string {
             val host = llvm::LLVMGetDefaultTargetTriple();
             triple.append(c_text(host));
             llvm::LLVMDisposeMessage(host);
+            // Windows: LLVM's release names MSVC's ABI, but $CC (MinGW's gcc or llvm-mingw's clang)
+            // links the program with the GNU runtime: the object is built for that (an MSVC one
+            // wants MSVC's _fltused and the like)
+            if (triple.as_str().ends_with("-pc-windows-msvc")) {
+                triple = replace_all(triple.as_str(), "-pc-windows-msvc", "-w64-windows-gnu");
+            }
         }
         val ts = triple.as_str();
         if (ts.starts_with("x86_64")) {
@@ -3315,7 +3376,7 @@ attach fn llvm_build(this: checker&, g: lg&) -> std::string {
             if (ts.contains("windows") || ts.contains("mingw") || ts.contains("cygwin") || ts.contains("win32")) {
                 g.cc = callconv::WIN64;
             }
-        } else if ((ts.starts_with("aarch64") || ts.starts_with("arm64")) && !ts.contains("windows")) {
+        } else if (ts.starts_with("aarch64") || ts.starts_with("arm64")) {
             llvm::LLVMInitializeAArch64TargetInfo();
             llvm::LLVMInitializeAArch64Target();
             llvm::LLVMInitializeAArch64TargetMC();
@@ -3323,9 +3384,11 @@ attach fn llvm_build(this: checker&, g: lg&) -> std::string {
             g.cc = callconv::AAPCS64;
             if (ts.contains("apple") || ts.contains("darwin")) {
                 g.cc = callconv::DARWIN64;
+            } else if (ts.contains("windows") || ts.contains("mingw")) {
+                g.cc = callconv::WINARM64;
             }
         } else {
-            return fmt("the LLVM backend builds for x86-64 and aarch64 hosts but Windows on ARM (for now), not {}; use --backend c", copy triple);
+            return fmt("the LLVM backend builds for x86-64 and aarch64 hosts, not {}; use --backend c", copy triple);
         }
     }
     var target: llvm::LLVMTarget* = null;
@@ -3347,7 +3410,7 @@ attach fn llvm_build(this: checker&, g: lg&) -> std::string {
         var cpu = S("x86-64");
         if (g.cc == callconv::DARWIN64) {
             cpu = S("apple-m1");
-        } else if (g.cc == callconv::AAPCS64) {
+        } else if (g.cc == callconv::AAPCS64 || g.cc == callconv::WINARM64) {
             cpu = S("generic");
         }
         g.tm = llvm::LLVMCreateTargetMachine(target, triple.c_str(), cpu.c_str(), "", level, llvm::LLVMRelocPIC, llvm::LLVMCodeModelDefault);
@@ -3639,9 +3702,16 @@ attach fn llvm_jit_module(this: checker&, g: lg&, init: str) -> std::string {
 }
 
 // the runtime as a C unit for an LLVM-built program (or, with `runtime` off, a library): the
-// prelude's helpers as weak definitions, so any mix of LLVM and C-backend units links
+// prelude's helpers as weak definitions, so any mix of LLVM and C-backend units links. A program's
+// own runtime is strong on Windows: GNU ld for PE leaves the program object's references to another
+// object's weak definitions undefined (lld resolves them)
 fn llvm_runtime_c(chk: checker&, hdr: std::vec<str>&, runtime: bool) -> std::string {
-    var out = S("#define VOLT_RT_LINKAGE __attribute__((weak))\n");
+    var out = S("");
+    if (runtime) {
+        out.append("#ifdef _WIN32\n#define VOLT_RT_LINKAGE\n#else\n#define VOLT_RT_LINKAGE __attribute__((weak))\n#endif\n");
+    } else {
+        out.append("#define VOLT_RT_LINKAGE __attribute__((weak))\n");
+    }
     if (!chk.opts.release) {
         out.append("#define VOLT_DEBUG_ALLOC 1\n");
     }
@@ -3658,8 +3728,11 @@ fn llvm_runtime_c(chk: checker&, hdr: std::vec<str>&, runtime: bool) -> std::str
         out.append(*inc);
         out.push('\n');
     }
+    // the header functions' pointers too, but a DLL's: Windows exports no weak definition (lld's
+    // --export-all-symbols passes them over), and an embedded VM's JIT finds a load's by name
+    out.append("#ifdef _WIN32\n#define VOLT_PTR_LINKAGE\n#else\n#define VOLT_PTR_LINKAGE VOLT_RT_LINKAGE\n#endif\n");
     for (h) in hdr.items() {
-        out.append("__attribute__((weak)) void *");
+        out.append("VOLT_PTR_LINKAGE void *");
         out.append(chk.c_ptr(h).as_str());
         out.append(" = (void *)");
         out.append(h);

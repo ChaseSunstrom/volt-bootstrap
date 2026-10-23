@@ -48,7 +48,7 @@ pub fn import(r: &Req) -> Result<(), String> {
     }
     let out = {
         std::fs::create_dir_all(&r.out).map_err(|e| format!("can't make {}: {e}", r.out.display()))?;
-        std::fs::canonicalize(&r.out).unwrap_or_else(|_| r.out.clone())
+        super::canonicalize(&r.out).unwrap_or_else(|_| r.out.clone())
     };
     let sep = if cfg!(windows) { ";" } else { ":" };
     let tool = |n: &str| home.join("bin").join(n);
@@ -103,7 +103,7 @@ fn jdk() -> Result<PathBuf, String> {
     std::env::split_paths(&path)
         .map(|d| d.join("javac"))
         .filter(|j| j.is_file())
-        .filter_map(|j| std::fs::canonicalize(j).ok()?.parent()?.parent().map(Path::to_path_buf))
+        .filter_map(|j| super::canonicalize(j).ok()?.parent()?.parent().map(Path::to_path_buf))
         .find(|h| ok(h))
         .ok_or_else(|| "use java: there's no JDK (javac and its jni.h): set $JAVA_HOME to one".to_string())
 }

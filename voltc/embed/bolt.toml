@@ -12,5 +12,13 @@ bindings = ["c", "cpp", "rust", "python", "pyi"]
 [std]
 path = "../../std"
 
+# a script's JIT links against the runtime this library exports, which the LLVM backend's runtime
+# unit does and the C backend's (static) doesn't: Windows builds with C by default
+[profile.dev]
+backend = "llvm"
+
+[profile.release]
+backend = "llvm"
+
 [build]
 files = ["build.volt"]

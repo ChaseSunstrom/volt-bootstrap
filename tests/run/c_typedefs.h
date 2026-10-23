@@ -7,6 +7,7 @@ struct counter { int n; };
 typedef struct counter tally;           /* the struct's name in Volt */
 typedef struct counter *counter_ref;    /* a pointer typedef */
 typedef struct { binop op; big scale; } calc;
+__extension__ typedef unsigned long long ext_big; /* MinGW's size_t is written so */
 
 static inline int add2(int a, int b) { return a + b; }
 static inline binop pick(int which) { return which ? add2 : 0; }

@@ -1,0 +1,3 @@
+# text checks out with LF on every system (Windows too): the tests compare generated text, the docs
+# blocks and the snapshots byte for byte
+* text=auto eol=lf

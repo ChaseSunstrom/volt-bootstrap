@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::process::Command;
 
-const HOSTS: [&str; 4] = ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu", "arm64-apple-macosx14.0.0", "x86_64-pc-windows-msvc"];
+const HOSTS: [&str; 5] = ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu", "arm64-apple-macosx14.0.0", "x86_64-pc-windows-msvc", "aarch64-pc-windows-msvc"];
 
 fn run(cmd: &mut Command, what: &str) -> String {
     let o = cmd.output().unwrap_or_else(|e| panic!("{what}: {e}"));
@@ -152,7 +152,9 @@ fn signatures(ir: &str) -> HashMap<String, Vec<String>> {
 
 #[test]
 fn signatures_match_clang() {
-    if !have("clang") {
+    // the clang of voltc's LLVM: lowerings change between versions (i128 on x86-64 since LLVM 20)
+    let clang = common::llvm_tool("clang");
+    if !have(&clang) {
         eprintln!("abi: skipped (no clang)");
         return;
     }
@@ -162,7 +164,7 @@ fn signatures_match_clang() {
     // each host by its triple, and WebAssembly by Volt's --target (clang's triple beside it)
     let hosts = HOSTS.iter().map(|h| (*h, *h, None)).chain([("wasm32-none", "wasm32-unknown-unknown", Some("wasm32-none"))]);
     for (host, triple, target) in hosts {
-        let c_ir = run(Command::new("clang").arg(format!("--target={triple}")).args(["-ffreestanding", "-O0", "-S", "-emit-llvm", "-o", "-"]).arg(root.join("tests/abi/sigs.c")), "clang");
+        let c_ir = run(Command::new(&clang).arg(format!("--target={triple}")).args(["-ffreestanding", "-O0", "-S", "-emit-llvm", "-o", "-"]).arg(root.join("tests/abi/sigs.c")), "clang");
         let mut volt = Command::new(&voltc);
         volt.arg("emit-llvm").arg(root.join("tests/abi/sigs.volt")).arg("--std").arg(root.join("std"));
         match target {
@@ -202,4 +204,23 @@ fn aarch64_round_trip() {
     let o = Command::new("qemu-aarch64").arg(dir.join("round")).output().unwrap();
     let out = String::from_utf8_lossy(&o.stdout);
     assert!(o.status.success() && out == "ok\n", "C and Volt disagree on aarch64 (exit {:?}):\n{out}", o.status.code());
+}
+
+/// Windows on arm64 passes C's variadic arguments in integer registers, and an aggregate among them
+/// is never an HFA: two doubles as [2 x i64], four by a pointer to a copy (fixed ones stay HFAs)
+#[test]
+fn win_arm64_varargs() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let ir = run(Command::new(common::voltc()).arg("emit-llvm").arg(root.join("tests/abi/varargs.volt")).arg("--std").arg(root.join("std")).env("VOLT_TRIPLE", "aarch64-pc-windows-msvc"), "voltc emit-llvm");
+    let call = ir.lines().find(|l| l.contains("@va_sink(")  && l.contains("call ")).unwrap_or_else(|| panic!("no call of va_sink:\n{ir}"));
+    let args = &call[call.find("@va_sink(").unwrap()..];
+    let kinds: Vec<&str> = ["[2 x i64]", "ptr", "[2 x i64]", "double", "double"].to_vec();
+    let mut at = 0;
+    for k in &kinds {
+        let i = args[at..].find(k).unwrap_or_else(|| panic!("va_sink's arguments aren't {kinds:?}: {args}"));
+        at += i + k.len();
+    }
+    assert!(!args.contains("x double]") && !args.contains("x float]"), "a variadic HFA on Windows arm64: {args}");
+    let def = ir.lines().find(|l| l.starts_with("define") && l.contains("@call_va(")).unwrap();
+    assert!(def.contains("[2 x double]") && def.contains("[4 x double]") && !def.contains("alignstack"), "call_va's fixed HFAs: {def}");
 }

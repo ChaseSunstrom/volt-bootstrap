@@ -1,0 +1,7 @@
+# Windows gives a program's main thread 1 MB of stack (Linux and macOS give 8 MB), which the
+# bootstrap compiler's recursion over voltc's own sources overflows: reserve 64 MB there
+[target.'cfg(all(windows, target_env = "msvc"))']
+rustflags = ["-C", "link-arg=/STACK:67108864"]
+
+[target.'cfg(all(windows, target_env = "gnu"))']
+rustflags = ["-C", "link-arg=-Wl,--stack,67108864"]

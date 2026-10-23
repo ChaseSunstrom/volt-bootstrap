@@ -130,7 +130,7 @@ attach fn program(this: checker&) -> compile_error!void {
             val d = @cast<u32>(di);
             var is_global = false;
             match (this.item_of(d).kind) {
-                .GLOBAL(l) => { is_global = true; },
+                .GLOBAL(l) => { is_global = l.c_get == null; }, // (a C macro read has no storage)
                 default => {},
             }
             val pkg = this.pkg_of(d);
@@ -271,6 +271,10 @@ attach fn main_wrapper(this: checker&, main: u32, mi: u32) -> compile_error!void
     val argv_g = this.runtime_global("volt_argv", argv_t);
     put(&all, this.ir.assign(argc_g, this.ir.node(ir_kind::LOCAL(0), I32)));
     put(&all, this.ir.assign(argv_g, this.ir.node(ir_kind::LOCAL(1), argv_t)));
+    // Windows: stdin, stdout and stderr in binary mode before anything runs, so bytes are bytes
+    if ((this.cfg_given("os") ?? std::process::os()) == "windows") {
+        put(&all, this.ir.rt_call("volt_rt_binary_stdio", {}, VOID));
+    }
     for (s&) in body.items() {
         put(&all, *s);
     }

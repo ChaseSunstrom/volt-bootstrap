@@ -196,6 +196,9 @@ A `.go` file imports its package (the files of its directory), and a directory w
 imports that module's package. Nothing in the Go code is written for Volt: no `//export`, no cgo.
 bolt asks Go's own type checker what the package exports and writes a cgo shim for it:
 
+(On Windows arm64 a program that links Go this way stops at start for now, T-0630; Go calling
+Volt works there.)
+
 ```volt ignore
 use std::io;
 use { "geom.go" } as geom;       // package geom, from this file's directory

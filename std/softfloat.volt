@@ -3,8 +3,8 @@
 // (std/bare.volt hands these to LLVM under the names it calls, __adddf3 and the rest). The f64 code
 // follows compiler-rt's generic soft-float; the f32 operations go through f64 and round once more,
 // which gives the exact f32 result for +, -, * and / (53 bits is more than twice 24, plus two).
-// The f128 operations are the f64 ones on u128 bits; on aarch64 macOS, whose C runtime has no quad
-// routines, and on os=none, which has no C runtime, they're exported under compiler-rt's names
+// The f128 operations are the f64 ones on u128 bits; on macOS and arm64 Windows, whose C runtimes have
+// no quad routines, and on os=none, which has no C runtime, they're exported under compiler-rt's names
 // (namespace quad_rt, at the end).
 // (Part of package std: the package loader wraps every file in `namespace std`.)
 
@@ -1216,8 +1216,8 @@ namespace softfloat {
     }
 
     // compiler-rt's quad routines (what LLVM calls for f128 arithmetic, compares and conversions) on
-    // targets with no C runtime that has them: Apple's arm64 one (its long double is an f64) and
-    // os=none (bare metal and WebAssembly: no C runtime at all). Elsewhere libgcc or compiler-rt has
+    // targets with no C runtime that has them: Apple's, arm64 and x86-64 (its long double is an f64 or
+    // an x87 one), arm64 Windows', and os=none (bare metal and WebAssembly: no C runtime at all). Elsewhere libgcc or compiler-rt has
     // them. Item @cfg is AND-only, so each gets a namespace with the same list (tests/golden.rs
     // quad_exports checks they match), the bodies these helpers
     namespace quad_rt {
@@ -1246,7 +1246,7 @@ namespace softfloat {
             return 0;
         }
 
-        @attributes([@cfg("os", "macos"), @cfg("arch", "aarch64")])
+        @attributes([@cfg("os", "macos")])
         namespace apple {
             export fn __addtf3(x: f128, y: f128) -> f128 { return q(add128(b(x), b(y))); }
             export fn __subtf3(x: f128, y: f128) -> f128 { return q(sub128(b(x), b(y))); }
@@ -1283,6 +1283,42 @@ namespace softfloat {
         // the same list as apple's
         @attributes([@cfg("os", "none")])
         namespace bare {
+            export fn __addtf3(x: f128, y: f128) -> f128 { return q(add128(b(x), b(y))); }
+            export fn __subtf3(x: f128, y: f128) -> f128 { return q(sub128(b(x), b(y))); }
+            export fn __multf3(x: f128, y: f128) -> f128 { return q(mul128(b(x), b(y))); }
+            export fn __divtf3(x: f128, y: f128) -> f128 { return q(div128(b(x), b(y))); }
+            export fn __negtf2(x: f128) -> f128 { return q(b(x) ^ ~Q_ABS); }
+            export fn __eqtf2(x: f128, y: f128) -> i32 { return le(x, y); }
+            export fn __netf2(x: f128, y: f128) -> i32 { return le(x, y); }
+            export fn __lttf2(x: f128, y: f128) -> i32 { return le(x, y); }
+            export fn __letf2(x: f128, y: f128) -> i32 { return le(x, y); }
+            export fn __getf2(x: f128, y: f128) -> i32 { return ge(x, y); }
+            export fn __gttf2(x: f128, y: f128) -> i32 { return ge(x, y); }
+            export fn __unordtf2(x: f128, y: f128) -> i32 { return unord(x, y); }
+            export fn __extendhftf2(x: f16) -> f128 { return q(f16_to_f128(@bitcast<u16>(x))); }
+            export fn __extendsftf2(x: f32) -> f128 { return q(f32_to_f128(@bitcast<u32>(x))); }
+            export fn __extenddftf2(x: f64) -> f128 { return q(f64_to_f128(@bitcast<u64>(x))); }
+            export fn __trunctfhf2(x: f128) -> f16 { return @bitcast<f16>(f128_to_f16(b(x))); }
+            export fn __trunctfsf2(x: f128) -> f32 { return @bitcast<f32>(f128_to_f32(b(x))); }
+            export fn __trunctfdf2(x: f128) -> f64 { return @bitcast<f64>(f128_to_f64(b(x))); }
+            export fn __fixtfsi(x: f128) -> i32 { return @cast<i32>(f128_to_signed(b(x), 32)); }
+            export fn __fixtfdi(x: f128) -> i64 { return @cast<i64>(f128_to_signed(b(x), 64)); }
+            export fn __fixtfti(x: f128) -> i128 { return f128_to_signed(b(x), 128); }
+            export fn __fixunstfsi(x: f128) -> u32 { return @cast<u32>(f128_to_unsigned(b(x), 32)); }
+            export fn __fixunstfdi(x: f128) -> u64 { return @cast<u64>(f128_to_unsigned(b(x), 64)); }
+            export fn __fixunstfti(x: f128) -> u128 { return f128_to_unsigned(b(x), 128); }
+            export fn __floatsitf(i: i32) -> f128 { return q(i128_to_f128(@cast<i128>(i))); }
+            export fn __floatditf(i: i64) -> f128 { return q(i128_to_f128(@cast<i128>(i))); }
+            export fn __floattitf(i: i128) -> f128 { return q(i128_to_f128(i)); }
+            export fn __floatunsitf(i: u32) -> f128 { return q(u128_to_f128(false, @cast<u128>(i))); }
+            export fn __floatunditf(i: u64) -> f128 { return q(u128_to_f128(false, @cast<u128>(i))); }
+            export fn __floatuntitf(i: u128) -> f128 { return q(u128_to_f128(false, i)); }
+        }
+
+        // the same list again: Windows on arm64 (llvm-mingw's compiler-rt has no quad routines there,
+        // where long double is an f64)
+        @attributes([@cfg("os", "windows"), @cfg("arch", "aarch64")])
+        namespace win_arm {
             export fn __addtf3(x: f128, y: f128) -> f128 { return q(add128(b(x), b(y))); }
             export fn __subtf3(x: f128, y: f128) -> f128 { return q(sub128(b(x), b(y))); }
             export fn __multf3(x: f128, y: f128) -> f128 { return q(mul128(b(x), b(y))); }

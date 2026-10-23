@@ -12,7 +12,7 @@ use { "c_hidden.h" } as plain;
 use { "c_hidden_on.h" } as on;
 
 fn main() -> void {
-    var n: i64 = 40;
+    var n: m::cw_long = 40;
     val sum = m::ld_add(&n, "2");
     val p = m::ld_store(&n, 7.9);
     var w: cstr? = "5";

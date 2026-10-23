@@ -3,8 +3,11 @@
 // symbols, completion (after `.`, after `::`, and plain) and signature help, then shutdown.
 mod common;
 use std::io::{BufRead, BufReader, Read, Write};
+use std::sync::mpsc::{channel, Receiver};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
+use std::process::{Child, ChildStdin, Command, Stdio};
 
 const ROOT: &str = env!("CARGO_MANIFEST_DIR");
 
@@ -31,13 +34,25 @@ fn main() -> void {
 }
 ";
 
+/// a path's file:// URI as an editor sends it (Windows: file:///C:/dir/f.volt, forward slashes: a
+/// backslash in the JSON would be an escape)
+fn file_uri(p: impl AsRef<Path>) -> String {
+    let s = p.as_ref().display().to_string().replace('\\', "/");
+    if s.starts_with('/') { format!("file://{s}") } else { format!("file:///{s}") }
+}
+
 struct Server {
     child: Child,
     input: ChildStdin,
-    output: BufReader<ChildStdout>,
+    /// the server's messages, read on their own thread so its output never fills the pipe
+    output: Receiver<String>,
     next_id: u64,
     /// the messages the last request skipped on its way to its response
     skipped: Vec<String>,
+    /// what the last message sent was (a quiet server's panic names it)
+    last_sent: String,
+    /// the server's stderr so far (read on its own thread; a quiet server's panic shows its end)
+    errors: Arc<Mutex<String>>,
     dir: PathBuf,
 }
 
@@ -59,36 +74,64 @@ impl Server {
             .env("PATH", path)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::inherit())
+            .stderr(Stdio::piped())
             .spawn()
             .unwrap();
         let input = child.stdin.take().unwrap();
-        let output = BufReader::new(child.stdout.take().unwrap());
-        Server { child, input, output, next_id: 1, skipped: Vec::new(), dir }
+        let errors = Arc::new(Mutex::new(String::new()));
+        let (mut err, sink) = (child.stderr.take().unwrap(), errors.clone());
+        std::thread::spawn(move || {
+            let mut buf = [0u8; 4096];
+            while let Ok(n) = err.read(&mut buf) {
+                if n == 0 {
+                    return;
+                }
+                eprint!("{}", String::from_utf8_lossy(&buf[..n]));
+                sink.lock().unwrap().push_str(&String::from_utf8_lossy(&buf[..n]));
+            }
+        });
+        let mut out = BufReader::new(child.stdout.take().unwrap());
+        let (tx, output) = channel();
+        std::thread::spawn(move || loop {
+            let mut len = 0;
+            loop {
+                let mut line = String::new();
+                if out.read_line(&mut line).unwrap_or(0) == 0 {
+                    return; // the server closed its output: recv says so
+                }
+                let line = line.trim_end();
+                if line.is_empty() {
+                    break;
+                }
+                if let Some(n) = line.strip_prefix("Content-Length: ") {
+                    len = n.parse().unwrap();
+                }
+            }
+            let mut body = vec![0; len];
+            if out.read_exact(&mut body).is_err() || tx.send(String::from_utf8(body).unwrap()).is_err() {
+                return;
+            }
+        });
+        Server { child, input, output, next_id: 1, skipped: Vec::new(), last_sent: String::new(), errors, dir }
     }
 
     fn send(&mut self, msg: &str) {
         write!(self.input, "Content-Length: {}\r\n\r\n{msg}", msg.len()).unwrap();
+        self.last_sent = msg.chars().take(160).collect();
         self.input.flush().unwrap();
     }
 
-    /// the next message the server sends
+    /// the next message the server sends (a server that goes quiet fails the test, not the run)
     fn recv(&mut self) -> String {
-        let mut len = 0;
-        loop {
-            let mut line = String::new();
-            assert!(self.output.read_line(&mut line).unwrap() > 0, "the server closed its output");
-            let line = line.trim_end();
-            if line.is_empty() {
-                break;
+        match self.output.recv_timeout(Duration::from_secs(180)) {
+            Ok(m) => m,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                let errors = self.errors.lock().unwrap().clone();
+                let tail: String = errors.chars().rev().take(1500).collect::<Vec<_>>().into_iter().rev().collect();
+                panic!("the server sent nothing for 180 s (skipped so far: {:?}; last sent: {}; its stderr ends: {tail})", self.skipped, self.last_sent)
             }
-            if let Some(n) = line.strip_prefix("Content-Length: ") {
-                len = n.parse().unwrap();
-            }
+            Err(_) => panic!("the server closed its output"),
         }
-        let mut body = vec![0; len];
-        self.output.read_exact(&mut body).unwrap();
-        String::from_utf8(body).unwrap()
     }
 
     /// a request's response (notifications in between are skipped)
@@ -151,23 +194,23 @@ fn js(s: &str) -> String {
 #[test]
 fn scripted_session() {
     let mut s = Server::start();
-    let uri = format!("file://{}/main.volt", s.dir.display());
+    let uri = file_uri(s.dir.join("main.volt"));
     let doc = format!("{{\"uri\":\"{uri}\"}}");
     let at = |line: u32, ch: u32| format!("{{\"textDocument\":{doc},\"position\":{{\"line\":{line},\"character\":{ch}}}}}");
 
-    let init = s.request("initialize", &format!("{{\"processId\":null,\"rootUri\":\"file://{}\",\"capabilities\":{{}}}}", s.dir.display()));
+    let init = s.request("initialize", &format!("{{\"processId\":null,\"rootUri\":\"{}\",\"capabilities\":{{}}}}", file_uri(&s.dir)));
     for cap in ["\"hoverProvider\":true", "\"definitionProvider\":true", "\"referencesProvider\":true", "\"documentSymbolProvider\":true", "\"completionProvider\"", "\"signatureHelpProvider\"", "\"textDocumentSync\""] {
         assert!(init.contains(cap), "initialize lacks {cap}: {init}");
     }
     s.notify("initialized", "{}");
 
     // a URI ending in a cut-off %-escape is read as it is
-    s.notify("textDocument/didOpen", &format!("{{\"textDocument\":{{\"uri\":\"file://{}/odd%1\",\"languageId\":\"volt\",\"version\":1,\"text\":\"fn main() -> void {{}}\\n\"}}}}", s.dir.display()));
+    s.notify("textDocument/didOpen", &format!("{{\"textDocument\":{{\"uri\":\"{}/odd%1\",\"languageId\":\"volt\",\"version\":1,\"text\":\"fn main() -> void {{}}\\n\"}}}}", file_uri(&s.dir)));
     let d = s.diagnostics();
     assert!(d.contains("odd%1") && d.contains("\"diagnostics\":[]"), "{d}");
 
     // test blocks are checked like the rest (kept as plain fns, each its own)
-    let turi = format!("file://{}/tests.volt", s.dir.display());
+    let turi = file_uri(s.dir.join("tests.volt"));
     s.notify("textDocument/didOpen", &format!("{{\"textDocument\":{{\"uri\":\"{turi}\",\"languageId\":\"volt\",\"version\":1,\"text\":{}}}}}", js("fn main() -> void {}\ntest \"one\" {\n    val x = nope;\n}\ntest \"two\" {\n}\n")));
     let d = s.diagnostics_for(&turi);
     assert!(d.contains("unknown name 'nope'") && !d.contains("defined"), "{d}");
@@ -259,17 +302,22 @@ fn scripted_session() {
     // an unreadable file in a library is left out; it doesn't take the server down
     let locked = geo.join("lib/locked.volt");
     std::fs::write(&locked, "fn locked() -> void {}\n").unwrap();
+    #[cfg(unix)]
     std::fs::set_permissions(&locked, std::os::unix::fs::PermissionsExt::from_mode(0o000)).unwrap();
     std::fs::write(app.join("bolt.toml"), "[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies]\ngeo = { path = \"../geo\" }\n").unwrap();
     let main = "use std::io;\n\nfn main() -> void {\n    std::println(\"{}\", geo::area(2, 3));\n}\n";
     std::fs::write(app.join("src/main.volt"), main).unwrap();
-    let app_uri = format!("file://{}", app.join("src/main.volt").display());
+    let app_uri = file_uri(app.join("src/main.volt"));
     s.notify("textDocument/didOpen", &format!("{{\"textDocument\":{{\"uri\":\"{app_uri}\",\"languageId\":\"volt\",\"version\":1,\"text\":{}}}}}", js(main)));
     let d = s.diagnostics_for(&app_uri);
-    assert!(d.contains("\"diagnostics\":[]"), "app using geo: {d}");
+    if !d.contains("\"diagnostics\":[]") {
+        // what the server asked bolt (its dependencies come from there)
+        let m = Command::new(env!("CARGO_BIN_EXE_bolt")).args(["metadata", "--offline", "--quiet", "--manifest-path"]).arg(app.join("bolt.toml")).output().unwrap();
+        panic!("app using geo: {d}\n--- bolt metadata ({}):\n{}\n{}", m.status, String::from_utf8_lossy(&m.stdout), String::from_utf8_lossy(&m.stderr));
+    }
     let h = s.request("textDocument/hover", &format!("{{\"textDocument\":{{\"uri\":\"{app_uri}\"}},\"position\":{{\"line\":3,\"character\":29}}}}"));
     assert!(h.contains("fn area(w: i32, h: i32) -> i32"), "hover geo::area: {h}");
-    let geo_uri = format!("file://{}", geo.join("lib/shapes.volt").display());
+    let geo_uri = file_uri(geo.join("lib/shapes.volt"));
     s.notify("textDocument/didOpen", &format!("{{\"textDocument\":{{\"uri\":\"{geo_uri}\",\"languageId\":\"volt\",\"version\":1,\"text\":{}}}}}", js(shapes)));
     let d = s.diagnostics_for(&geo_uri);
     assert!(d.contains("\"diagnostics\":[]"), "geo's own file: {d}");
@@ -342,7 +390,7 @@ fn joined(c: circle, wide: circle) -> f64 {
 ";
 
 fn inline_features(s: &mut Server) {
-    let uri = format!("file://{}/inline.volt", s.dir.display());
+    let uri = file_uri(s.dir.join("inline.volt"));
     let doc = format!("{{\"uri\":\"{uri}\"}}");
     s.notify("textDocument/didOpen", &format!("{{\"textDocument\":{{\"uri\":\"{uri}\",\"languageId\":\"volt\",\"version\":1,\"text\":{}}}}}", js(INLINE)));
     let d = s.diagnostics_for(&uri);
@@ -439,7 +487,7 @@ fn inline_features(s: &mut Server) {
     }
 
     // quick fixes: diagnostics carry their fixes as data, and codeAction turns them into edits
-    let fix_uri = format!("file://{}/fixes.volt", s.dir.display());
+    let fix_uri = file_uri(s.dir.join("fixes.volt"));
     let fix_src = "fn bump(r: i32&) -> void {\n    *r += 1;\n}\n\nfn main() -> void {\n    val x = 0;\n    bump(&x);\n    var y = 0;\n    y + 1;\n}\n";
     s.notify("textDocument/didOpen", &format!("{{\"textDocument\":{{\"uri\":\"{fix_uri}\",\"languageId\":\"volt\",\"version\":1,\"text\":{}}}}}", js(fix_src)));
     let d = s.diagnostics_for(&fix_uri);
@@ -451,7 +499,7 @@ fn inline_features(s: &mut Server) {
 
     // a closure parameter's type, the end of a long block; and nothing from an older check: when the
     // text no longer parses, tokens and hints say ContentModified and rename refuses
-    let long_uri = format!("file://{}/long.volt", s.dir.display());
+    let long_uri = file_uri(s.dir.join("long.volt"));
     let mut long_src = String::from("fn apply(f: fn(i32) -> i32, x: i32) -> i32 {\n    return f(x);\n}\n\nfn main() -> void {\n    val r0 = apply(|| (n) -> i32 { return n * 2; }, 3);\n");
     for i in 0..25 {
         long_src.push_str(&format!("    val v{i} = r0 + {i};\n"));
@@ -490,11 +538,11 @@ fn builtins_and_std_files() {
     // a std file opened in the editor is checked as std's own (its @intrinsic attributes are fine);
     // every builtin and attribute shows up after `@` with its signature, and on hover
     let mut s = Server::start();
-    let init = s.request("initialize", &format!("{{\"processId\":null,\"rootUri\":\"file://{}\",\"capabilities\":{{}}}}", s.dir.display()));
+    let init = s.request("initialize", &format!("{{\"processId\":null,\"rootUri\":\"{}\",\"capabilities\":{{}}}}", file_uri(&s.dir)));
     assert!(init.contains("\"@\""), "@ isn't a completion trigger: {init}");
     s.notify("initialized", "{}");
     let mem = Path::new(ROOT).join("std/mem.volt");
-    let muri = format!("file://{}", mem.display());
+    let muri = file_uri(&mem);
     let text = std::fs::read_to_string(&mem).unwrap();
     assert!(text.contains("@intrinsic("), "std/mem.volt no longer has an @intrinsic to check");
     s.notify("textDocument/didOpen", &format!("{{\"textDocument\":{{\"uri\":\"{muri}\",\"languageId\":\"volt\",\"version\":1,\"text\":{}}}}}", js(&text)));
@@ -504,7 +552,7 @@ fn builtins_and_std_files() {
     // renaming from std's own file: a helper of std/path.volt, at its declaration and each use there
     // (and only those: a std doc's check doesn't load programs)
     let path = Path::new(ROOT).join("std/path.volt");
-    let puri = format!("file://{}", path.display());
+    let puri = file_uri(&path);
     let ptext = std::fs::read_to_string(&path).unwrap();
     s.notify("textDocument/didOpen", &format!("{{\"textDocument\":{{\"uri\":\"{puri}\",\"languageId\":\"volt\",\"version\":1,\"text\":{}}}}}", js(&ptext)));
     let _ = s.diagnostics_for(&puri);
@@ -520,7 +568,7 @@ fn builtins_and_std_files() {
     }
     assert_eq!(r.matches("file://").count(), 1, "rename last_sep edits another file: {r}");
 
-    let uri = format!("file://{}/b.volt", s.dir.display());
+    let uri = file_uri(s.dir.join("b.volt"));
     let doc = format!("{{\"uri\":\"{uri}\"}}");
     let at = |line: u32, ch: u32| format!("{{\"textDocument\":{doc},\"position\":{{\"line\":{line},\"character\":{ch}}}}}");
     s.notify("textDocument/didOpen", &format!("{{\"textDocument\":{{\"uri\":\"{uri}\",\"languageId\":\"volt\",\"version\":1,\"text\":{}}}}}", js("fn main() -> void {\n    val n = @sizeof(i32);\n}\n")));
@@ -538,8 +586,10 @@ fn builtins_and_std_files() {
     assert!(!c.contains("\"label\":\"intrinsic\""), "a program is offered @intrinsic: {c}");
 
     // a document whose first version doesn't parse (opened mid-edit): the items that parsed are
-    // checked, for hover, and only the parse error is reported
-    let curi = format!("file://{}/c.volt", s.dir.display());
+    // checked, for hover, and only the parse error is reported. (Its URI is file_uri's, as the
+    // others': file:// + the path as Windows spells it, backslashes, is no URI, and the server went
+    // quiet on it there: T-0673)
+    let curi = file_uri(s.dir.join("c.volt"));
     let cdoc = format!("{{\"uri\":\"{curi}\"}}");
     let cat = |line: u32, ch: u32| format!("{{\"textDocument\":{cdoc},\"position\":{{\"line\":{line},\"character\":{ch}}}}}");
     let broken = "fn twice(x: i32) -> i32 {\n    return x * 2;\n}\n\nfn broken() -> void {\n    val y = ;\n}\n\nfn main() -> void {\n    val n = twice(4);\n}\n";
@@ -556,7 +606,7 @@ fn builtins_and_std_files() {
 #[test]
 fn hovers_show_layout_and_foreign_declarations() {
     let mut s = Server::start();
-    s.request("initialize", &format!("{{\"processId\":null,\"rootUri\":\"file://{}\",\"capabilities\":{{}}}}", s.dir.display()));
+    s.request("initialize", &format!("{{\"processId\":null,\"rootUri\":\"{}\",\"capabilities\":{{}}}}", file_uri(&s.dir)));
     s.notify("initialized", "{}");
     std::fs::write(s.dir.join("geo.hpp"), "#pragma once\nnamespace geo {\ninline double scale(double x, int k) { return x * k; }\ntemplate <class... A>\nauto sum(A... a) { return (a + ... + 0); }\n}\n").unwrap();
     let src = "use std::io;
@@ -592,11 +642,11 @@ fn other() -> i32 {
     return libc::abs(-3);
 }
 ";
-    let uri = format!("file://{}/hover.volt", s.dir.display());
+    let uri = file_uri(s.dir.join("hover.volt"));
     let doc = format!("{{\"uri\":\"{uri}\"}}");
     let at = |line: u32, ch: u32| format!("{{\"textDocument\":{doc},\"position\":{{\"line\":{line},\"character\":{ch}}}}}");
     s.notify("textDocument/didOpen", &format!("{{\"textDocument\":{{\"uri\":\"{uri}\",\"languageId\":\"volt\",\"version\":1,\"text\":{}}}}}", js(src)));
-    let _ = s.diagnostics_for(&uri);
+    let diags = s.diagnostics_for(&uri);
     let h = s.request("textDocument/hover", &at(22, 12));
     assert!(h.contains("// size 24, align 8\\nstruct tagged {\\n    tag: u8; // offset 0, size 1\\n    // 7 bytes padding\\n    x: f64; // offset 8, size 8\\n    y: i32; // offset 16, size 4\\n    // 4 bytes padding\\n}"), "hover tagged: {h}");
     assert!(h.contains("a point with a tag in front"), "hover tagged's doc: {h}");
@@ -609,7 +659,7 @@ fn other() -> i32 {
     let h = s.request("textDocument/hover", &at(25, 52));
     assert!(h.contains("C++: double geo::scale(double x, int k)"), "hover scale: {h}");
     let h = s.request("textDocument/hover", &at(25, 78));
-    assert!(h.contains("fn sum(a0: i32, a1: f64) -> f64") && h.contains("C++: geo::sum(int32_t, double) -> double, as clang resolves it"), "hover sum: {h}");
+    assert!(h.contains("fn sum(a0: i32, a1: f64) -> f64") && h.contains("C++: geo::sum(int32_t, double) -> double, as clang resolves it"), "hover sum: {h}\n--- the file's diagnostics: {diags}\n--- the server's stderr: {}", s.errors.lock().unwrap());
     let h = s.request("textDocument/hover", &at(30, 18));
     assert!(h.contains("abs") && !h.contains("not abs's doc"), "a C fn's hover has no doc of the use's: {h}");
     let _ = std::fs::remove_dir_all(&s.dir);
@@ -733,9 +783,9 @@ fn generic_bodies_nothing_instantiates() {
     // a generic fn's body is checked per instance: the uses in one nothing instantiates are indexed
     // from its syntax, so references, rename and go to definition reach them
     let mut s = Server::start();
-    s.request("initialize", &format!("{{\"processId\":null,\"rootUri\":\"file://{}\",\"capabilities\":{{}}}}", s.dir.display()));
+    s.request("initialize", &format!("{{\"processId\":null,\"rootUri\":\"{}\",\"capabilities\":{{}}}}", file_uri(&s.dir)));
     s.notify("initialized", "{}");
-    let uri = format!("file://{}/generics.volt", s.dir.display());
+    let uri = file_uri(s.dir.join("generics.volt"));
     s.notify("textDocument/didOpen", &format!("{{\"textDocument\":{{\"uri\":\"{uri}\",\"languageId\":\"volt\",\"version\":1,\"text\":{}}}}}", js(GENERICS)));
     let d = s.diagnostics_for(&uri);
     assert!(!d.contains("\"severity\":1"), "{d}");
@@ -779,7 +829,7 @@ fn generic_bodies_nothing_instantiates() {
 
     // from std's own file: a helper used only in generic bodies std doesn't instantiate itself
     let map = Path::new(ROOT).join("std/map.volt");
-    let muri = format!("file://{}", map.display());
+    let muri = file_uri(&map);
     let text = std::fs::read_to_string(&map).unwrap();
     let started = std::time::Instant::now();
     s.notify("textDocument/didOpen", &format!("{{\"textDocument\":{{\"uri\":\"{muri}\",\"languageId\":\"volt\",\"version\":1,\"text\":{}}}}}", js(&text)));
@@ -900,9 +950,9 @@ fn main() -> void {
 #[test]
 fn generic_body_members() {
     let mut s = Server::start();
-    s.request("initialize", &format!("{{\"processId\":null,\"rootUri\":\"file://{}\",\"capabilities\":{{}}}}", s.dir.display()));
+    s.request("initialize", &format!("{{\"processId\":null,\"rootUri\":\"{}\",\"capabilities\":{{}}}}", file_uri(&s.dir)));
     s.notify("initialized", "{}");
-    let uri = format!("file://{}/members.volt", s.dir.display());
+    let uri = file_uri(s.dir.join("members.volt"));
     s.notify("textDocument/didOpen", &format!("{{\"textDocument\":{{\"uri\":\"{uri}\",\"languageId\":\"volt\",\"version\":1,\"text\":{}}}}}", js(MEMBERS)));
     let d = s.diagnostics_for(&uri);
     assert!(!d.contains("\"severity\":1"), "{d}");

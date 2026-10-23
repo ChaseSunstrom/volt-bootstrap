@@ -126,13 +126,13 @@ fn checker_survives_mutants() {
                     let f = out.join(format!("m{i}.volt"));
                     std::fs::write(&f, &m).unwrap();
                     // generous: the two tests run at once, each with a thread per CPU
-                    let o = Command::new("timeout").arg("30").arg(voltc).arg("check").arg(&f).arg("--std").arg(std_dir).output().unwrap();
-                    match o.status.code() {
-                        Some(0) | Some(1) => {
+                    let o = common::run_for(Command::new(voltc).arg("check").arg(&f).arg("--std").arg(std_dir), 30);
+                    match o.code {
+                        Some(0) | Some(1) if !o.timed_out => {
                             let _ = std::fs::remove_file(&f);
                         }
                         code => {
-                            let what = if code == Some(124) { "hangs".to_string() } else { format!("exits {code:?}") };
+                            let what = if o.timed_out { "hangs".to_string() } else { format!("exits {code:?}") };
                             let err = String::from_utf8_lossy(&o.stderr);
                             let tail: Vec<&str> = err.lines().rev().take(3).collect();
                             bad.lock().unwrap().push(format!("{} (mutant {i} of {}) {what}: {}", f.display(), from.strip_prefix(ROOT).unwrap_or(from).display(), tail.join(" / ")));
@@ -345,14 +345,15 @@ fn backends_agree() {
                     std::fs::write(&f, &src).unwrap();
                     let mut runs = Vec::new();
                     for (backend, release) in [("c", false), ("llvm", false), ("c", true), ("llvm", true)] {
-                        let mut c = Command::new("timeout");
-                        c.arg("60").arg(voltc).args(["run"]).arg(&f).arg("--std").arg(std_dir).args(["--backend", backend]);
+                        let mut c = Command::new(voltc);
+                        c.args(["run"]).arg(&f).arg("--std").arg(std_dir).args(["--backend", backend]);
                         if release {
                             c.arg("--release");
                         }
-                        let o = c.output().unwrap();
+                        let o = common::run_for(&mut c, 60);
                         let what = format!("{backend}{}", if release { " --release" } else { "" });
-                        let text = if o.status.success() { String::from_utf8_lossy(&o.stdout).trim().to_string() } else { format!("exit {:?}: {}", o.status.code(), String::from_utf8_lossy(&o.stderr).lines().take(3).collect::<Vec<_>>().join(" / ")) };
+                        let code = if o.timed_out { Some(124) } else { o.code };
+                        let text = if o.success() { String::from_utf8_lossy(&o.stdout).trim().to_string() } else { format!("exit {code:?}: {}", String::from_utf8_lossy(&o.stderr).lines().take(3).collect::<Vec<_>>().join(" / ")) };
                         runs.push((what, text));
                     }
                     if runs.iter().any(|r| r.1 != runs[0].1) || runs[0].1.starts_with("exit") {

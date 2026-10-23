@@ -19,7 +19,9 @@ pub fn find_voltc() -> PathBuf {
     let here = std::env::current_exe().ok().and_then(|e| e.parent().map(Path::to_path_buf));
     let near = |name: &str| here.as_ref().map(|d| d.join(name)).filter(|p| p.is_file());
     let on_path = |name: &str| std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()).map(|d| d.join(name)).find(|p| p.is_file());
-    near("voltc").or_else(|| on_path("voltc")).or_else(|| near("voltc-bootstrap")).unwrap_or_else(|| PathBuf::from("voltc"))
+    // (voltc.exe on Windows)
+    let exe = |name: &str| format!("{name}{}", std::env::consts::EXE_SUFFIX);
+    near(&exe("voltc")).or_else(|| on_path(&exe("voltc"))).or_else(|| near(&exe("voltc-bootstrap"))).unwrap_or_else(|| PathBuf::from("voltc"))
 }
 
 /// every .volt file under `p` (or `p` itself), sorted
@@ -256,7 +258,7 @@ impl Build {
         // one std for the whole build: the selected packages have to agree on it
         let std_key = |p: usize| match &g.pkgs[p].m.std {
             StdChoice::Default => String::new(),
-            StdChoice::Path(d) => d.canonicalize().unwrap_or(d.clone()).display().to_string(),
+            StdChoice::Path(d) => crate::manifest::real_path(&d).unwrap_or(d.clone()).display().to_string(),
             StdChoice::None => "none".into(),
         };
         if let Some(&r) = roots.iter().find(|r| std_key(**r) != std_key(roots[0])) {
@@ -504,9 +506,11 @@ impl Build {
 
     /// where an executable goes: target/<profile>/NAME, or examples/, tests/, benches/ under it
     pub fn exe_path(&self, kind: Kind, name: &str) -> PathBuf {
+        // Windows' C compilers write app.exe for -o app (and app.exe is what's there to copy or stamp)
+        let file = format!("{name}{}", std::env::consts::EXE_SUFFIX);
         match kind {
-            Kind::Bin => self.target.join(name),
-            k => self.target.join(k.dir()).join(name),
+            Kind::Bin => self.target.join(file),
+            k => self.target.join(k.dir()).join(file),
         }
     }
 
@@ -641,6 +645,10 @@ impl Build {
                         if self.profile.optimize {
                             c.arg("--release");
                         }
+                        let target = crate::foreign::rust_target();
+                        if let Some(t) = &target {
+                            c.args(["--target", t]);
+                        }
                         c.args(["--", "--print", "native-static-libs"]);
                         crate::verbose(&c);
                         let o = c.output().map_err(|e| format!("can't run cargo for {}: {e}", f.name))?;
@@ -658,7 +666,7 @@ impl Build {
                                 }
                             }
                         }
-                        let lib = base.join("cargo").join(if self.profile.optimize { "release" } else { "debug" }).join(format!("lib{}.a", crate_lib_name(dir)?));
+                        let lib = base.join("cargo").join(target.unwrap_or_default()).join(if self.profile.optimize { "release" } else { "debug" }).join(format!("lib{}.a", crate_lib_name(dir)?));
                         flags.push(lib.display().to_string());
                     }
                     ForeignKind::Zig(file) => {
@@ -810,6 +818,17 @@ impl Build {
                         args.extend(["-I".into(), i]);
                     }
                     args.extend([src.display().to_string(), "-L".into(), self.target.display().to_string(), format!("-l{name}")]);
+                    // Windows: a DLL resolves every name when it's linked, so Ruby's own come from its
+                    // import library (libdir, RUBY_SO_NAME: x64-ucrt-ruby340)
+                    if cfg!(windows) && lang == "ruby" {
+                        let ask = Command::new("ruby").args(["-e", "print RbConfig::CONFIG['libdir'], ' ', RbConfig::CONFIG['RUBY_SO_NAME']"]).output().ok().filter(|o| o.status.success());
+                        if let Some(l) = ask.map(|o| String::from_utf8_lossy(&o.stdout).to_string()) {
+                            let mut it = l.split_whitespace();
+                            if let (Some(d), Some(n)) = (it.next(), it.next()) {
+                                args.extend([format!("-L{d}"), format!("-l{n}")]);
+                            }
+                        }
+                    }
                     if cfg!(target_os = "macos") {
                         args.extend(["-undefined".into(), "dynamic_lookup".into(), format!("-Wl,-rpath,@loader_path/{up}")]);
                     } else {

@@ -1646,15 +1646,25 @@ fn uri_path(uri: str) -> std::string {
         out.push(s[i]);
         i += 1;
     }
+    // Windows: file:///C:/dir (VS Code's file:///c%3A/dir) is the path C:/dir
+    val o = out.as_str();
+    if (o.len >= 3 && o[0] == '/' && o[2] == ':' && ((o[1] >= 'a' && o[1] <= 'z') || (o[1] >= 'A' && o[1] <= 'Z'))) {
+        return S(o[1..o.len]);
+    }
     return out;
 }
 
-// the file:// URI of a path
+// the file:// URI of a path (Windows' C:\dir is file:///C:/dir)
 fn path_uri(path: str) -> std::string {
     var out = S("file://");
+    if (path.len >= 2 && path[1] == ':') {
+        out.push('/');
+    }
     val hex = "0123456789ABCDEF";
     for (b) in path {
-        if (is_alnum(b) || b == '/' || b == '-' || b == '.' || b == '_' || b == '~') {
+        if (b == '\\') {
+            out.push('/');
+        } else if (is_alnum(b) || b == '/' || b == '-' || b == '.' || b == '_' || b == '~' || b == ':') {
             out.push(b);
         } else {
             out.push('%');
@@ -1746,7 +1756,8 @@ fn read_bolt(out: bolt_libs&) -> void {
         val name = p.get("name").as_str() ?? "";
         // a library directory must be inside its package (next to its bolt.toml): a crafted
         // manifest can't send the server walking the disk, or stand in for std
-        val manifest = p.get("manifest_path").as_str() ?? "";
+        val manifest_s = slashes(p.get("manifest_path").as_str() ?? "");
+        val manifest = manifest_s.as_str();
         var home = manifest.len;
         while (home > 0 && manifest[home - 1] != '/') {
             home -= 1;
@@ -1757,12 +1768,23 @@ fn read_bolt(out: bolt_libs&) -> void {
         val ts = p.get("targets");
         for (j) in 0..ts.len() {
             val t = ts.at(j);
-            val dir = t.get("src_path").as_str() ?? "";
+            val dir_s = slashes(t.get("src_path").as_str() ?? "");
+            val dir = dir_s.as_str();
             if ((t.get("kind").as_str() ?? "") == "lib" && starts_with(dir, manifest[0..home]) && !has_dotdot(dir)) {
                 put(&out.names, S(name));
                 put(&out.dirs, S(dir));
             }
         }
+    }
+}
+
+// a path as the server compares them: / between its parts (Windows' C:\dir\f is C:/dir/f, as a
+// document's URI gives it)
+fn slashes(p: str) -> std::string {
+    comptime if (@cfg("os", "windows")) {
+        return p.replace("\\", "/");
+    } else {
+        return S(p);
     }
 }
 
@@ -1799,7 +1821,7 @@ fn package_root(path: str) -> std::string? {
         if (path[i] == '/') {
             var toml = S(path[0..i]);
             toml.append("/bolt.toml");
-            if (sys::access(toml.c_str(), 0) == 0) {
+            if (std::fs::exists(toml.as_str())) {
                 return S(path[0..i]);
             }
         }
@@ -1830,9 +1852,9 @@ attach fn next(this: lsp_reader&) -> std::string? {
             }
         }
         var chunk: u8[65536];
-        var n = sys::read(0, @cast<void*>(&chunk[0]), 65536);
+        var n = read_stdin(&chunk[0], 65536);
         while (n < 0 && std::process::interrupted()) {
-            n = sys::read(0, @cast<void*>(&chunk[0]), 65536);
+            n = read_stdin(&chunk[0], 65536);
         }
         if (n <= 0) {
             return null;
@@ -1846,8 +1868,7 @@ attach fn pending(this: lsp_reader&) -> bool {
     if (this.buf.len() > 0) {
         return true;
     }
-    var p: sys::pollfd = { fd: 0, events: 1, revents: 0 }; // POLLIN
-    return sys::poll(&p, 1, 0) > 0;
+    return stdin_ready();
 }
 
 // the Content-Length in a message's headers
@@ -1881,7 +1902,7 @@ fn lsp_send(msg: std::json::value&) -> void {
     val s = out.as_str();
     var done: usize = 0;
     while (done < s.len) {
-        val n = sys::write(1, @cast<void*>(s[done..s.len].ptr), s.len - done);
+        val n = write_stdout(@cast<u8*>(s[done..s.len].ptr), s.len - done);
         if (n < 0 && std::process::interrupted()) {
             continue;
         }
@@ -1948,7 +1969,10 @@ fn lsp_capabilities() -> std::json::value {
 
 // `voltc lsp`: serve until exit (or the end of the input)
 fn lsp_main(std_dir: std::string?) -> i32 {
-    var srv: lsp_server = { std_dir: move std_dir };
+    var srv: lsp_server = {};
+    if (std_dir) {
+        srv.std_dir = slashes(std_dir.as_str());
+    }
     var r: lsp_reader = {};
     loop {
         val body = r.next() ?? break;
@@ -2432,7 +2456,7 @@ fn package_files(path: str) -> std::vec<std::string> {
         if (path[i] == '/' && path[i - 4..i] == "/src") {
             var toml = S(path[0..i - 4]);
             toml.append("/bolt.toml");
-            if (sys::access(toml.c_str(), 0) == 0) {
+            if (std::fs::exists(toml.as_str())) {
                 return volt_files(path[0..i]);
             }
         }

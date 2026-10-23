@@ -20,9 +20,9 @@ inline std::pair<int, double> split(double x) { return {static_cast<int>(x), x -
 inline std::tuple<int, bool, double> info(int x) { return {x * 2, x > 0, x / 4.0}; }
 inline std::array<int, 3> triple(int x) { return {x, x + 1, x + 2}; }
 inline int sum3(const std::array<int, 3> &a) { return a[0] + a[1] + a[2]; }
-inline long total(std::span<const long> xs) {
-    long t = 0;
-    for (long x : xs) t += x;
+inline long long total(std::span<const long long> xs) {
+    long long t = 0;
+    for (long long x : xs) t += x;
     return t;
 }
 inline std::string_view word(int i) {

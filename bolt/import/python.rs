@@ -41,7 +41,7 @@ pub fn import(r: &Req) -> Result<(), String> {
         return Ok(());
     }
     std::fs::create_dir_all(&r.out).map_err(|e| format!("can't make {}: {e}", r.out.display()))?;
-    let out = std::fs::canonicalize(&r.out).unwrap_or_else(|_| r.out.clone());
+    let out = super::canonicalize(&r.out).unwrap_or_else(|_| r.out.clone());
 
     // Python.h and libpython, as python3-config says ($PYTHON_CONFIG for another)
     let config = std::env::var("PYTHON_CONFIG").unwrap_or_else(|_| format!("{python}-config"));

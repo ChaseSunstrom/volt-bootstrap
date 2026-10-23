@@ -15,12 +15,8 @@ writer, so `std::write` formats straight into it.
 use std::io;
 use std::fmt;
 
-extern "C" fn getpid() -> i32;
-
 fn main() -> !void {
-    var name = std::string::from("/tmp/volt-files-doc-");
-    name.append_int(getpid());
-    val path = name.as_str();
+    val path = "volt-files-doc.txt";
     {
         var log = try std::fs::open(path, "w");
         try log.write("start\n");
@@ -28,13 +24,15 @@ fn main() -> !void {
         try log.flush();
     }
     try std::fs::append_file(path, "done\n");
-    var f = try std::fs::open(path);
-    for (line, i) in f.lines() {
-        std::println("{}: {}", i, line.as_str());
+    {
+        var f = try std::fs::open(path);
+        for (line, i) in f.lines() {
+            std::println("{}: {}", i, line.as_str());
+        }
+        try f.seek(-5, std::fs::seek_from::END);
+        std::println("{} {}", (try f.read_all()).as_str().trim(), try std::fs::size(path));
     }
-    try f.seek(-5, std::fs::seek_from::END);
-    std::println("{} {}", (try f.read_all()).as_str().trim(), try std::fs::size(path));
-    try std::fs::remove_file(path);
+    try std::fs::remove_file(path); // once it's closed: Windows can't remove an open file
 }
 // expect: 0: start
 // expect: 1: 3 items
@@ -109,6 +107,8 @@ fn main() -> void {
 }
 // expect: lib/parser.tar.gz src/../lib/. parser.tar.gz gz
 // expect: notes /home/volt
+// expect-windows: lib\parser.tar.gz src/../lib/. parser.tar.gz gz
+// expect-windows: notes /home\volt
 ```
 
 The working directory and the environment are in `std::process`: `cwd()`, `set_cwd(path)`,

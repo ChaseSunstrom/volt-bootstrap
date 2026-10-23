@@ -1,7 +1,7 @@
 // flags: --pkg plat=tests/pkgs/plat
 use std::io;
-// the target's keys, set for every package: os, arch and pointer_bits (here: the host, 64-bit Linux,
-// whose arch std::process::arch() reports the same), and unix (a POSIX system) and hosted (an OS at
+// the target's keys, set for every package: os, arch and pointer_bits (here: the host, which
+// std::process::os() and arch() report the same), and unix (a POSIX system) and hosted (an OS at
 // all) from os. target (the --target name) is only set on bare metal
 
 fn os_name() -> str {
@@ -10,6 +10,12 @@ fn os_name() -> str {
     }
     comptime if (@cfg("os", "linux")) {
         return "linux";
+    }
+    comptime if (@cfg("os", "macos")) {
+        return "macos";
+    }
+    comptime if (@cfg("os", "freebsd")) {
+        return "freebsd";
     }
     return "other";
 }
@@ -25,10 +31,12 @@ fn arch_name() -> str {
 }
 
 fn main() -> void {
-    std::println("{} {} {} {}", os_name(), arch_name() == std::process::arch(), @cfg("pointer_bits", "64"), @cfg("os", "macos"));
-    std::println("{} {} {} {} {} {}", @cfg("os"), @cfg("arch"), @cfg("nonsense"), @cfg("unix"), @cfg("hosted"), @cfg("target"));
-    std::println("{} {} {} {}", std::process::os(), arch_name() != "other", plat::target_os(), plat::keys_set());
+    val os = os_name();
+    std::println("{} {} {} {}", os == std::process::os(), arch_name() == std::process::arch(), @cfg("pointer_bits", "64"), @cfg("os", "macos") == (os == "macos"));
+    std::println("{} {} {} {} {} {}", @cfg("os"), @cfg("arch"), @cfg("nonsense"), @cfg("unix") == (os != "windows"), @cfg("hosted"), @cfg("target"));
+    val pkg_os = plat::target_os();
+    std::println("{} {} {} {}", os != "other", arch_name() != "other", pkg_os == os || (pkg_os == "elsewhere" && os != "linux" && os != "macos"), plat::keys_set());
 }
-// expect: linux true true false
+// expect: true true true true
 // expect: true true false true true false
-// expect: linux true linux true
+// expect: true true true true

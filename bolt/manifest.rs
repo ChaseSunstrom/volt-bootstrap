@@ -593,7 +593,22 @@ pub fn workspace(start: Option<&Path>) -> Result<Workspace, String> {
 }
 
 fn canon(p: &Path) -> Result<PathBuf, String> {
-    p.canonicalize().map_err(|e| format!("{}: {e}", p.display()))
+    real_path(p).map_err(|e| format!("{}: {e}", p.display()))
+}
+
+/// p's canonical path, on Windows without the \\?\ prefix canonicalize gives a drive path: voltc,
+/// the C compiler and a path with a / added after it all take the plain form (a verbatim path
+/// doesn't let / separate its parts)
+/// the user's home directory: $HOME, or on Windows (where a native program often has no HOME)
+/// %USERPROFILE%
+pub fn home_dir() -> Option<PathBuf> {
+    std::env::var_os("HOME").or_else(|| if cfg!(windows) { std::env::var_os("USERPROFILE") } else { None }).map(PathBuf::from)
+}
+
+pub fn real_path(p: &Path) -> std::io::Result<PathBuf> {
+    let r = p.canonicalize()?;
+    let plain = r.to_str().and_then(|s| s.strip_prefix(r"\\?\")).filter(|rest| rest.as_bytes().get(1) == Some(&b':')).map(PathBuf::from);
+    Ok(plain.unwrap_or(r))
 }
 
 /// the member directories [workspace] lists, minus the excluded ones
@@ -719,7 +734,9 @@ mod tests {
             ForeignKind::Rust(d) => format!("{} rust {}", f.name, d.display()),
             ForeignKind::Zig(d) => format!("{} zig {}", f.name, d.display()),
         }).collect();
-        assert_eq!(kinds, ["g go /p/gomath", "r rust /p/geom", "z zig /p/z.zig"]);
+        // each directory is the package's, joined the system's way (/p\gomath on Windows)
+        let at = |d: &str| Path::new("/p").join(d).display().to_string();
+        assert_eq!(kinds, [format!("g go {}", at("gomath")), format!("r rust {}", at("geom")), format!("z zig {}", at("z.zig"))]);
         let both = m("x = { go = \"a\", rust = \"b\" }").err().unwrap();
         assert!(both.contains("needs one of rust = \"crate dir\", zig = \"file.zig\" or go = \"module dir\""), "{both}");
         assert!(m("x = { python = \"a\" }").is_err());

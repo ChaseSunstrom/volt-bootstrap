@@ -5,4 +5,4 @@ cd "$(dirname "$0")"
 GREET=../greet/target/debug
 (cd ../greet && "${BOLT:-bolt}" build -q)
 cc main.c -I "$GREET/bindings" -L "$GREET" -lgreet -Wl,-rpath,"$PWD/$GREET" -o main
-./main
+PATH="$PWD/$GREET:$PATH" ./main # (Windows finds greet.dll on PATH; elsewhere the rpath finds it)

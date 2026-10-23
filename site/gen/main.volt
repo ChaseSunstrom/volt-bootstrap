@@ -170,8 +170,9 @@ fn write_sitemap(th: theme&, out: str, pages: std::vec<(std::string, std::string
 // a docs file: its frontmatter and body
 fn read_page(docs: str, file: str, section: str) -> !page {
     val text = try std::fs::read_file(file);
-    val rel = file[docs.len + 1..file.len];
-    var p: page = { path: std::string::from(rel[0..rel.len - 3]), file: std::string::from(rel), section: std::string::from(section), title: {}, description: {}, body: {} };
+    // guide/basics.md, with / between its parts on Windows too
+    val rel = file[docs.len + 1..file.len].replace("\\", "/");
+    var p: page = { path: std::string::from(rel.as_str()[0..rel.len() - 3]), file: std::string::from(rel.as_str()), section: std::string::from(section), title: {}, description: {}, body: {} };
     var body = text.as_str();
     if (body.starts_with("---\n")) {
         val (front, rest) = body[4..body.len].split_once("\n---\n") ?? ("", body);
@@ -292,12 +293,12 @@ fn write_page(out: str, path: str, html: str) -> !void {
 fn copy_assets(from: str, out: str) -> !std::vec<std::string> {
     var copied: std::vec<std::string> = {};
     for (f&) in (try std::fs::walk(from)).items() {
-        val rel = f.as_str()[from.len + 1..f.len()];
-        val to = std::format("{}/{}", out, rel);
-        val slash = to.as_str().rfind("/") ?? 0;
-        try std::fs::create_dir_all(to.as_str()[0..slash]);
+        // as links name it: / between its parts (walk joins them with \ on Windows)
+        val rel = f.as_str()[from.len + 1..f.len()].replace("\\", "/");
+        val to = std::format("{}/{}", out, rel.as_str());
+        try std::fs::create_dir_all(std::path::parent(to.as_str()));
         try std::fs::copy_file(f.as_str(), to.as_str());
-        copied.push(std::string::from(rel));
+        copied.push(move rel);
     }
     return copied;
 }

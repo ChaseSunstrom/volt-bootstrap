@@ -51,7 +51,7 @@ pub fn import(r: &Req) -> Result<(), String> {
     }
     let out = {
         std::fs::create_dir_all(&r.out).map_err(|e| format!("can't make {}: {e}", r.out.display()))?;
-        std::fs::canonicalize(&r.out).unwrap_or_else(|_| r.out.clone())
+        super::canonicalize(&r.out).unwrap_or_else(|_| r.out.clone())
     };
     let id: String = out.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default().chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '_' }).collect();
     let (version, root) = runtime(&dotnet)?;
@@ -89,7 +89,7 @@ pub fn import(r: &Req) -> Result<(), String> {
     let proj = format!("<Project Sdk=\"Microsoft.NET.Sdk\">\n  <PropertyGroup>\n    <TargetFramework>{tfm}</TargetFramework>\n    <AssemblyName>{shim_name}</AssemblyName>\n    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>\n    <EnableDynamicLoading>true</EnableDynamicLoading>\n    <Nullable>disable</Nullable>\n  </PropertyGroup>\n  <ItemGroup>\n    <Reference Include=\"{}\">\n      <HintPath>{}</HintPath>\n    </Reference>\n  </ItemGroup>\n</Project>\n", xml(&user_name), xml(&user.display().to_string()));
     let model_with = |lines: &[String], skip: &BTreeMap<String, String>| {
         let (mut model, lang) = read(&desc);
-        let mut lang = Dotnet { asm: dir.join("bin").join(format!("{shim_name}.dll")), asm_name: shim_name.clone(), ..lang };
+        let mut lang = Dotnet { asm: dir.join("bin").join(format!("{shim_name}.dll")), asm_name: shim_name.clone(), root: root.clone(), ..lang };
         let made = instances(&mut model, &mut lang, lines, &r.alias, skip);
         (model, lang, made)
     };
@@ -138,7 +138,8 @@ fn runtime(dotnet: &Path) -> Result<(String, PathBuf), String> {
         .filter_map(|l| {
             let rest = l.trim().strip_prefix("Microsoft.NETCore.App ")?;
             let (v, p) = rest.split_once(" [")?;
-            let root = p.strip_suffix(']')?.strip_suffix("/shared/Microsoft.NETCore.App")?;
+            let p = p.strip_suffix(']')?;
+            let root = p.strip_suffix("/shared/Microsoft.NETCore.App").or_else(|| p.strip_suffix("\\shared\\Microsoft.NETCore.App"))?;
             Some((v.to_string(), PathBuf::from(root)))
         })
         .last()
@@ -684,6 +685,8 @@ struct Dotnet {
     /// the shim's assembly, and its name
     asm: PathBuf,
     asm_name: String,
+    /// the .NET install bolt found, which the program's hostfxr is told
+    root: PathBuf,
 }
 
 /// between call() and function(): a void method whose out parameters are its results is a
@@ -1132,7 +1135,7 @@ impl Lang for Dotnet {
 
     fn loader(&self, _g: &Gen) -> Option<String> {
         let q = |p: &Path| p.display().to_string().replace('\\', "\\\\").replace('"', "\\\"");
-        Some(LOADER.replace("{CONFIG}", &q(&self.asm.with_extension("runtimeconfig.json"))).replace("{ASM}", &q(&self.asm)).replace("{NAME}", &self.asm_name))
+        Some(LOADER.replace("{CONFIG}", &q(&self.asm.with_extension("runtimeconfig.json"))).replace("{ASM}", &q(&self.asm)).replace("{NAME}", &self.asm_name).replace("{ROOT}", &q(&self.root)))
     }
 }
 
@@ -1237,15 +1240,72 @@ const LOADER: &str = r#"    extern "C" fn hostfxr_initialize_for_runtime_config(
     extern "C" fn hostfxr_close(handle: void*) -> i32;
     var load_fp: void* = null;
 
+    // hostfxr_initialize_parameters: its size, the host's path (none) and .NET's root (the install
+    // bolt found: a hostfxr the system finds first, PowerShell's on Windows, would guess another)
+    struct fxr_params {
+        size: usize;
+        host_path: void* = null;
+        dotnet_root: void* = null;
+    }
+
+    fn unit(out: std::vec<u8>&, u: u32) -> void {
+        out.push(@cast<u8>(u & 0xFF)) catch @panic("out of memory");
+        out.push(@cast<u8>(u >> 8)) catch @panic("out of memory");
+    }
+
+    // s as hostfxr's char_t, ending in a zero: UTF-16 on Windows (wchar_t), UTF-8 elsewhere
+    fn char_t(s: str) -> std::vec<u8> {
+        var out: std::vec<u8> = {};
+        comptime if (@cfg("os", "windows")) {
+            var i: usize = 0;
+            while (i < s.len) {
+                val b = @cast<u32>(s[i]);
+                var c = b;
+                var n: usize = 1;
+                if (b >= 0xF0) {
+                    c = b & 0x07;
+                    n = 4;
+                } else if (b >= 0xE0) {
+                    c = b & 0x0F;
+                    n = 3;
+                } else if (b >= 0xC0) {
+                    c = b & 0x1F;
+                    n = 2;
+                }
+                for (k) in 1..n {
+                    if (i + k < s.len) {
+                        c = (c << 6) | (@cast<u32>(s[i + k]) & 0x3F);
+                    }
+                }
+                i += n;
+                if (c >= 0x10000) {
+                    unit(&out, 0xD800 | ((c - 0x10000) >> 10));
+                    unit(&out, 0xDC00 | ((c - 0x10000) & 0x3FF));
+                } else {
+                    unit(&out, c);
+                }
+            }
+            unit(&out, 0);
+        } else {
+            for (i) in 0..s.len {
+                out.push(s[i]) catch @panic("out of memory");
+            }
+            out.push(0) catch @panic("out of memory");
+        }
+        return out;
+    }
+
     // the address of the glue's method name; .NET starts the first time
     fn load(slot: void**, name: str) -> void* {
         if (*slot != null) {
             return *slot;
         }
         if (load_fp == null) {
-            var config = std::string::from("{CONFIG}");
+            val config = char_t("{CONFIG}");
+            val root = char_t("{ROOT}");
+            var params: fxr_params = { size: @sizeof(fxr_params), dotnet_root: @cast<void*>(root.items().ptr) };
             var h: void* = null;
-            val rc = hostfxr_initialize_for_runtime_config(config.c_str(), null, &h);
+            val rc = hostfxr_initialize_for_runtime_config(@cast<cstr>(config.items().ptr), @cast<void*>(&params), &h);
             if (rc < 0 || rc > 2) {
                 @panic(std::fmt::format(".NET didn't start (hostfxr: 0x{:x})", @cast<u32>(rc)).as_str());
             }
@@ -1257,11 +1317,11 @@ const LOADER: &str = r#"    extern "C" fn hostfxr_initialize_for_runtime_config(
             }
         }
         val f = @cast<extern "C" fn(cstr, cstr, cstr, void*, void*, void**) -> i32>(load_fp);
-        var a = std::string::from("{ASM}");
-        var t = std::string::from("VoltShim, {NAME}");
-        var m = std::string::from(name);
+        val a = char_t("{ASM}");
+        val t = char_t("VoltShim, {NAME}");
+        val m = char_t(name);
         // UNMANAGEDCALLERSONLY_METHOD: (const char_t*)-1
-        val rc = f(a.c_str(), t.c_str(), m.c_str(), @cast<void*>(~@cast<usize>(0)), null, slot);
+        val rc = f(@cast<cstr>(a.items().ptr), @cast<cstr>(t.items().ptr), @cast<cstr>(m.items().ptr), @cast<void*>(~@cast<usize>(0)), null, slot);
         if (rc != 0) {
             @panic(std::fmt::format("{} isn't in the .NET glue (0x{:x})", name, @cast<u32>(rc)).as_str());
         }

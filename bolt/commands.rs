@@ -26,7 +26,7 @@ pub fn new_package(o: &Opts, init: bool) {
     if dir.join("bolt.toml").exists() {
         fail(format!("{} already has a bolt.toml", dir.display()));
     }
-    let base = dir.canonicalize().unwrap_or(dir.clone()).file_name().map(|n| n.to_string_lossy().to_lowercase().replace('-', "_")).unwrap_or_default();
+    let base = crate::manifest::real_path(&dir).unwrap_or(dir.clone()).file_name().map(|n| n.to_string_lossy().to_lowercase().replace('-', "_")).unwrap_or_default();
     let name = o.name.clone().unwrap_or(base);
     if !manifest::ident(&name) {
         fail(format!("'{name}' can't be a package name: use lowercase letters, digits and _ (it becomes a namespace); pick one with --name NAME"));
@@ -147,7 +147,7 @@ pub fn add(o: &Opts) {
         let here = std::env::current_dir().or_fail();
         let target = here.join(p);
         // as typed when bolt runs in the package's directory, else absolute
-        let stored = if here.canonicalize().ok() == dir.canonicalize().ok() { p.clone() } else { target.canonicalize().unwrap_or(target.clone()).display().to_string() };
+        let stored = if crate::manifest::real_path(&here).ok() == crate::manifest::real_path(&dir).ok() { p.clone() } else { crate::manifest::real_path(&target).unwrap_or(target.clone()).display().to_string() };
         parts.push(format!("path = {}", toml::quote(&stored)));
         (target, format!("path {stored}"))
     } else if let Some(url) = &o.git {
@@ -367,7 +367,7 @@ pub fn metadata(o: &Opts) {
             .iter()
             .map(|d| {
                 let src = match &d.source {
-                    manifest::Source::Path(x) => format!("path+{}", x.canonicalize().unwrap_or(x.clone()).display()),
+                    manifest::Source::Path(x) => format!("path+{}", crate::manifest::real_path(&x).unwrap_or(x.clone()).display()),
                     manifest::Source::Git { url, at } => format!("git+{url}{}", if at.spec().is_empty() { String::new() } else { format!("?{}", at.spec()) }),
                 };
                 format!(
@@ -428,7 +428,7 @@ fn install_root(o: &Opts) -> PathBuf {
     if let Some(r) = std::env::var_os("BOLT_INSTALL_ROOT") {
         return r.into();
     }
-    PathBuf::from(std::env::var_os("HOME").unwrap_or_else(|| fail("HOME isn't set; pass --root DIR"))).join(".local")
+    crate::manifest::home_dir().unwrap_or_else(|| fail("HOME isn't set; pass --root DIR")).join(".local")
 }
 
 /// what install recorded: ROOT/share/bolt/installs.toml, package -> (source, executables)
@@ -495,7 +495,7 @@ pub fn install(o: &Opts) {
     let (file, mut records) = installs(&root);
     let bin_dir = root.join("bin");
     for e in &exes {
-        let dest = bin_dir.join(&e.name);
+        let dest = bin_dir.join(format!("{}{}", e.name, std::env::consts::EXE_SUFFIX));
         if dest.exists() && !o.force {
             let owner = records.iter().find(|r| r.2.contains(&e.name)).map(|r| r.0.clone());
             fail(match owner {
@@ -508,7 +508,7 @@ pub fn install(o: &Opts) {
     b.finished(start);
     std::fs::create_dir_all(&bin_dir).or_fail();
     for e in &exes {
-        let dest = bin_dir.join(&e.name);
+        let dest = bin_dir.join(format!("{}{}", e.name, std::env::consts::EXE_SUFFIX));
         // copy next to it, then rename: a running copy of the old one keeps working
         let tmp = bin_dir.join(format!(".{}.bolt-tmp", e.name));
         std::fs::copy(&e.out, &tmp).unwrap_or_else(|err| fail(format!("can't copy {} to {}: {err}", e.out.display(), tmp.display())));

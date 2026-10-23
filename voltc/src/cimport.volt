@@ -653,11 +653,16 @@ struct cdecls {
     anon: u32 = 0;
     last_params: std::vec<str?> = {}; // names in the param list read last (the declared fn's own)
     kr: bool = false;                    // ...which was a K&R identifier list
+    long32: bool = false;                // long is 32 bits (Windows' LLP64: __SIZEOF_LONG__ 4)
     label: str? = null;                  // the asm label read last (the declared fn's)
     vsize: u64? = null;                  // a vector_size(N) read last (the declarator's)
     names: std::vec<std::string> = {}; // made-up names (anonymous tags) the others point into
     anon_in: std::map<str, anon_field> = {}; // anonymous tag -> the named field it types
     fn_macros: std::vec<str> = {};     // function-like #defines (MAX(a, b)): called per use
+    var_aliases: std::vec<cdefine> = {}; // #define NAME other_name (macOS's stderr is __stderrp)
+    hidden_vars: std::vec<cvar> = {};    // variables with reserved names, which only an alias reaches
+    hidden_fns: std::vec<cvar> = {};     // functions with reserved names and their result types
+    call_macros: std::vec<cdefine> = {}; // #define NAME (f(args)) (UCRT's stdout): read through C
 }
 
 // a made-up tag for an anonymous struct or enum: prefix and a number
@@ -910,6 +915,8 @@ attach fn specs_in(this: cparser&, stat: bool&) -> ctype? {
             short = true;
         } else if (n == "long") {
             longs += 1;
+        } else if (n == "__int64") {
+            longs = 2; // MSVC's spelling (MinGW defines it as long long, clang -fms-extensions keeps it)
         } else if (n == "int") {
             int = true;
         } else if (n == "char") {
@@ -1017,7 +1024,7 @@ attach fn specs_in(this: cparser&, stat: bool&) -> ctype? {
     var bits = 32;
     if (short) {
         bits = 16;
-    } else if (longs > 0) {
+    } else if (longs > 1 || (longs == 1 && !this.d.long32)) {
         bits = 64;
     }
     if (bits == 16) {
@@ -1487,6 +1494,10 @@ attach fn top(this: cparser&) -> void {
             default => {},
         }
     }
+    // __extension__ typedef ... (MinGW's size_t, glibc's 32-bit __int64_t) is a typedef too
+    while ((this.peek_id() ?? "") == "__extension__") {
+        this.i += 1;
+    }
     val is_typedef = (this.peek_id() ?? "") == "typedef";
     if (is_typedef) {
         this.i += 1;
@@ -1535,7 +1546,17 @@ attach fn top(this: cparser&) -> void {
                 put(&this.d.typedef_order, name);
             }
             this.d.typedefs.put(name, copy dc.ty);
-        } else if (!starts_with(name, "__")) {
+        } else if (starts_with(name, "__")) {
+            // a reserved name isn't imported, but a #define may name it (macOS's stderr is __stderrp)
+            match (dc.ty) {
+                .FUNC(ps, ret, variadic) => { put(&this.d.hidden_fns, { name: name, ty: copy *ret.ptr }); },
+                default => {
+                    if (!stat) {
+                        put(&this.d.hidden_vars, { name: name, ty: copy dc.ty });
+                    }
+                },
+            }
+        } else {
             match (dc.ty) {
                 .FUNC(ps, ret, variadic) => {
                     var names: std::vec<str?> = {};
@@ -2346,18 +2367,8 @@ fn trim(s: str) -> str {
     return s[a..b];
 }
 
-extern "C" fn realpath(path: cstr, resolved: void*) -> cstr?;
 extern "C" fn free(p: void*) -> void;
 extern "C" fn strlen(s: cstr) -> usize;
-
-// the canonical path of an existing file, or none
-fn real_file(path: str) -> std::string? {
-    var p = S(path);
-    val r = realpath(p.c_str(), null) ?? return null;
-    val out = S(@cast<str>(@slice(@cast<u8*>(r), strlen(r))));
-    free(@cast<void*>(r));
-    return out;
-}
 
 // the --cc arguments the preprocessor needs too, to find and read headers: -I, -D, -U (joined to
 // their value or before it) and -isystem, -iquote, -idirafter, -include (and the argument after them)
@@ -2662,9 +2673,7 @@ attach fn kept_header(this: checker&, path: str, span: span) -> compile_error!(s
     }
     val last = this.opts.hdr_texts.get(S(path)) ?? return null;
     if (this.opts.gone_dir.len() == 0) {
-        // ponytail: make_tmp's directory is under /tmp; main has no other temp-directory helper yet
-        // (the CI branch's, GetTempPath's on Windows, when it lands)
-        this.opts.gone_dir = make_tmp() ?? return fail(span, fmt("can't make a directory in /tmp for a copy of {}, removed since an earlier script imported it", S(path)));
+        this.opts.gone_dir = new_temp_dir("voltvm") ?? return fail(span, fmt("can't make a temporary directory for a copy of {}, removed since an earlier script imported it", S(path)));
     }
     val base = (last_sep(path) ?? 0) + 1;
     val old_dir = path[0..base];
@@ -2786,6 +2795,7 @@ attach fn import_headers(this: checker&, headers: std::vec<std::string>&, dir: s
     put(&this.c_texts, move macros);
     val mtext = this.c_texts.at(this.c_texts.len - 1).as_str();
     var d: cdecls = {};
+    d.long32 = contains(mtext, "#define __SIZEOF_LONG__ 4\n");
     parse_decls(dtext, &d);
     try this.c_macros(&d, mtext);
     this.c_items(&d, &res, span);
@@ -2874,7 +2884,18 @@ attach fn c_macros(this: checker&, d: cdecls&, macros: str) -> compile_error!voi
             }
             continue;
         }
-        put(&defs, { name: rest[0..n], body: c_lex(body) });
+        val toks = c_lex(body);
+        if (toks.len == 1 && n > 0 && rest[0] != '_') {
+            match (*toks.at(0)) {
+                .ID(x) => {
+                    if (x != rest[0..n]) {
+                        put(&d.var_aliases, { name: rest[0..n], body: copy toks });
+                    }
+                },
+                default => {},
+            }
+        }
+        put(&defs, { name: rest[0..n], body: move toks });
     }
     var known: std::map<str, bool> = {};
     loop {
@@ -2946,6 +2967,42 @@ attach fn c_macros(this: checker&, d: cdecls&, macros: str) -> compile_error!voi
         if (!progress) {
             break;
         }
+    }
+    // the others that are a call of a function (UCRT's #define stdout (__acrt_iob_func(1))): read
+    // through a C function each (c_items)
+    for (df&) in defs.items() {
+        if (known.get(df.name) == null && !starts_with(df.name, "_") && called_in(df.body.items()) != null) {
+            put(&d.call_macros, copy *df);
+        }
+    }
+}
+
+// the function a macro body calls when the body is that call, maybe parenthesized: f(...) or (f(...))
+fn called_in(t: ctok[..]) -> str? {
+    var a: usize = 0;
+    var b = t.len;
+    if (b >= 2 && is_p(&t[0], "(") && is_p(&t[b - 1], ")")) {
+        a = 1;
+        b -= 1;
+    }
+    if (b < a + 3 || !is_p(&t[a + 1], "(") || !is_p(&t[b - 1], ")")) {
+        return null;
+    }
+    // the call's parentheses close only at its end (not f(x) + g(y))
+    var depth: u32 = 0;
+    for (k) in a + 1..b {
+        if (is_p(&t[k], "(")) {
+            depth += 1;
+        } else if (is_p(&t[k], ")")) {
+            depth -= 1;
+            if (depth == 0 && k != b - 1) {
+                return null;
+            }
+        }
+    }
+    match (t[a]) {
+        .ID(x) => { return x; },
+        default => { return null; },
     }
 }
 
@@ -3321,6 +3378,74 @@ attach fn c_items(this: checker&, d: cdecls&, res: c_imported&, span: span) -> v
         val t = m.ty_of(&v.ty) ?? continue;
         val pt: pat = { kind: pat_kind::BIND(v.name), span: span };
         put(&res.items, m.citem(item_kind::GLOBAL({ mutable: true, is_comptime: false, is_static: false, pat: pt, ty: move t, init: null, span: span, c_name: v.name })));
+    }
+    // a #define naming one of them under another name: that variable by the macro's name (macOS's
+    // stdio.h has #define stderr __stderrp), unless a real variable has the name
+    for (a&) in d.var_aliases.items() {
+        var target: str = "";
+        match (*a.body.at(0)) {
+            .ID(x) => { target = x; },
+            default => { continue; },
+        }
+        var own = false;
+        var of: cvar* = null;
+        for (v&) in d.vars.items() {
+            own = own || v.name == a.name;
+            if (v.name == target) {
+                of = &*v;
+            }
+        }
+        for (v&) in d.hidden_vars.items() {
+            if (v.name == target) {
+                of = &*v;
+            }
+        }
+        if (own || of == null) {
+            continue;
+        }
+        val t = m.ty_of(&of->ty) ?? continue;
+        val pt: pat = { kind: pat_kind::BIND(a.name), span: span };
+        put(&res.items, m.citem(item_kind::GLOBAL({ mutable: true, is_comptime: false, is_static: false, pat: pt, ty: move t, init: null, span: span, c_name: target })));
+    }
+    // a #define that's a call of a function (UCRT's stdout is (__acrt_iob_func(1))): a global of the
+    // function's result type, read by a static C function returning the macro (C expands it there),
+    // unless the header has something by the macro's name
+    for (cm&) in d.call_macros.items() {
+        val callee = called_in(cm.body.items()) ?? continue;
+        var ret: ctype* = null;
+        for (f&) in d.fns.items() {
+            if (f.name == callee) {
+                ret = &f.ret;
+            }
+        }
+        for (f&) in d.hidden_fns.items() {
+            if (f.name == callee) {
+                ret = &f.ty;
+            }
+        }
+        val rt = ret ?? continue;
+        if (seen_fns.get(cm.name) != null || taken.get(cm.name) != null || m.needs_wrap(rt)) {
+            continue;
+        }
+        var own = false;
+        for (v&) in d.vars.items() {
+            own = own || v.name == cm.name;
+        }
+        if (own) {
+            continue;
+        }
+        val t = m.ty_of(rt) ?? continue;
+        val text = m.c_text(rt, &c_names) ?? continue;
+        var read = S(cm.name);
+        if (spelled_ptr(rt)) {
+            read = fmt("(void *)({})", S(cm.name));
+        }
+        val getter = this.intern(fmt("volt_cm_{}", S(cm.name)));
+        put(&res.includes, fmt3("static __inline__ {} {}(void) {{ return {}; }}", copy text, S(getter), move read));
+        put(&res.statics, getter);
+        put(&res.items, m.citem(item_kind::FN({ name: getter, spec: null, params: {}, c_varargs: false, ret: copy t, body: null, is_async: false, is_comptime: false, extern_abi: C_HEADER, is_export: false, is_attach: false, c_name: getter })));
+        val pt: pat = { kind: pat_kind::BIND(cm.name), span: span };
+        put(&res.items, m.citem(item_kind::GLOBAL({ mutable: false, is_comptime: false, is_static: false, pat: pt, ty: move t, init: null, span: span, c_name: null, c_get: getter })));
     }
     // constants: an int gets the first of i32, u32, i64, u64 that its suffixes allow and its value fits,
     // a float f64; a negative value is `-literal`

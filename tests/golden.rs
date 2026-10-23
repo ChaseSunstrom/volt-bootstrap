@@ -40,9 +40,17 @@ fn golden() {
         let want_codes: Vec<i32> = directives(&src, "exit").first().map(|s| s.split('|').map(|c| c.trim().parse().unwrap()).collect()).unwrap_or(vec![0]);
         let flags: Vec<String> = directives(&src, "flags").iter().flat_map(|l| l.split_whitespace().map(String::from).collect::<Vec<_>>()).collect();
         // a program that hangs (a release build reading out of bounds can) fails instead of stopping the run
-        let out = Command::new("timeout").arg("120").arg(&bin).arg("run").arg(&f).args(&flags).output().unwrap();
+        let out = common::run_for(Command::new(&bin).arg("run").arg(&f).args(&flags), 120);
         let got = String::from_utf8_lossy(&out.stdout);
-        let code = out.status.code().unwrap_or(-1);
+        let code = if out.timed_out { 124 } else { out.code.unwrap_or(-1) };
+        // Windows ends a crashed program with an NTSTATUS: the code a signal gives elsewhere
+        let code = match code as u32 {
+            0xC000001D => 132, // an illegal instruction (a trap): SIGILL
+            0x80000003 => 133, // a breakpoint: SIGTRAP
+            0xC0000409 => 134, // __fastfail, which abort is: SIGABRT
+            0xC0000005 => 139, // an access violation: SIGSEGV
+            _ => code,
+        };
         let err = String::from_utf8_lossy(&out.stderr);
         let err_missing = directives(&src, "expect-stderr").iter().any(|w| !err.contains(w.as_str()))
             || directives(&src, "reject-stderr").iter().any(|w| err.contains(w.as_str()));
@@ -91,7 +99,8 @@ fn llvm_falls_back_to_c() {
         let out = Command::new(common::voltc()).arg("run").arg(&f).output().unwrap();
         let (got, err) = (String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
         let want = directives(&src, "expect").join("\n");
-        let notes = directives(&src, "expect-stderr").iter().all(|w| err.contains(w.as_str()));
+        // on Windows C is the default backend, so there's nothing to fall back from and no note
+        let notes = cfg!(windows) || directives(&src, "expect-stderr").iter().all(|w| err.contains(w.as_str()));
         assert!(out.status.success() && got.trim_end() == want.trim_end() && notes, "{}:\n--- want\n{want}\n--- got\n{got}\n--- stderr\n{err}", f.display());
     }
 }
@@ -180,8 +189,8 @@ fn std_linked() {
 }
 
 /// std::softfloat's quad routines under compiler-rt's names (what LLVM calls for f128): defined for
-/// arm64 macOS, whose C runtime has none, and os=none (bare metal, WebAssembly: no C runtime at all),
-/// the same set for both, and nowhere else (they'd clash with libgcc's)
+/// macOS (arm64 and x86-64), whose C runtime has none, and os=none (bare metal, WebAssembly: no C
+/// runtime at all), the same set for each, and nowhere else (they'd clash with libgcc's)
 #[test]
 fn quad_exports() {
     const NAMES: [&str; 30] = ["__addtf3", "__subtf3", "__multf3", "__divtf3", "__negtf2", "__eqtf2", "__netf2", "__lttf2", "__letf2", "__getf2", "__gttf2", "__unordtf2", "__extendhftf2", "__extendsftf2", "__extenddftf2", "__trunctfhf2", "__trunctfsf2", "__trunctfdf2", "__fixtfsi", "__fixtfdi", "__fixtfti", "__fixunstfsi", "__fixunstfdi", "__fixunstfti", "__floatsitf", "__floatditf", "__floattitf", "__floatunsitf", "__floatunditf", "__floatuntitf"];
@@ -195,13 +204,20 @@ fn quad_exports() {
     let quad = |ir: &str| -> std::collections::BTreeSet<String> {
         ir.lines().filter(|l| l.starts_with("define")).filter_map(|l| l.split_once("@__")).map(|(_, r)| format!("__{}", r.split('(').next().unwrap())).filter(|n| n.contains("tf")).collect()
     };
-    let mac = quad(&ir(&["--cfg", "os=macos", "--cfg", "arch=aarch64"]));
     let want: std::collections::BTreeSet<String> = NAMES.iter().map(|n| n.to_string()).collect();
-    assert_eq!(mac, want, "arm64 macOS's quad routines");
+    for arch in ["aarch64", "x86_64"] {
+        assert_eq!(quad(&ir(&["--cfg", "os=macos", "--cfg", &format!("arch={arch}")])), want, "{arch} macOS's quad routines");
+    }
     let none = quad(&ir(&["--cfg", "os=none", "--cfg", "arch=wasm32"]));
-    assert_eq!(none, mac, "os=none's quad routines differ from arm64 macOS's");
-    let host = quad(&ir(&[]));
-    assert!(host.is_empty(), "the host defines {host:?}");
+    assert_eq!(none, want, "os=none's quad routines differ from macOS's");
+    let win_arm = quad(&ir(&["--cfg", "os=windows", "--cfg", "arch=aarch64"]));
+    assert_eq!(win_arm, want, "arm64 Windows' quad routines differ from macOS's");
+    // x86-64 Windows has libgcc's (which pass a __float128 as that ABI does, not as LLVM's fp128)
+    let win_x64 = quad(&ir(&["--cfg", "os=windows", "--cfg", "arch=x86_64"]));
+    assert!(win_x64.is_empty(), "x86-64 Windows defines {win_x64:?}");
+    // (Linux named, not the host: on macOS the host is a target that has them)
+    let linux = quad(&ir(&["--cfg", "os=linux", "--cfg", "arch=x86_64"]));
+    assert!(linux.is_empty(), "Linux defines {linux:?}");
 }
 
 /// --target with its linker (ld.lld, wasm-ld) not on PATH says so and how to get it, not that it failed
@@ -258,7 +274,15 @@ fn f128_soft_c() {
     // f128_ops through both C compilers, natively and soft (golden runs them all through LLVM), and
     // f128_exact's constants (T-0477): a native quad type reads volt_q_hex's text, the soft path its bits
     let runs = [("floats_wide", "cc", true), ("softquad", "cc", true), ("f128_ops", "gcc", true), ("f128_ops", "clang", true), ("f128_ops", "gcc", false), ("f128_ops", "clang", false), ("f128_rem", "gcc", true), ("f128_rem", "clang", false), ("f128_exact", "gcc", false), ("f128_exact", "clang", false), ("f128_exact", "clang", true)];
+    // Windows: PATH's clang is LLVM's own (MSVC's ABI and libraries) and its gcc another MinGW's, so
+    // each runs through $CC, the program's compiler, the way a program builds there: natively on
+    // x86-64 (MinGW's __float128), soft on arm64 (no quad type)
+    let win_cc = std::env::var("CC").unwrap_or_else(|_| "cc".into());
     for (prog, cc, soft) in runs {
+        if cfg!(windows) && cc != "cc" {
+            continue;
+        }
+        let (cc, soft) = if cfg!(windows) { (win_cc.as_str(), cfg!(target_arch = "aarch64")) } else { (cc, soft) };
         let file = format!("tests/run/{prog}.volt");
         let want: Vec<String> = directives(&std::fs::read_to_string(root.join(&file)).unwrap(), "expect");
         let o = voltc_cc(&["run", &file, "--backend", "c", "--cc", if soft { "-DVOLT_SOFT_F128" } else { "-DVOLT_NATIVE" }], cc);
@@ -272,9 +296,9 @@ fn f128_soft_c() {
         assert!(mac.status.success(), "{}", String::from_utf8_lossy(&mac.stderr));
         let (src, obj) = (dir.join(format!("{prog}.c")), dir.join(format!("{prog}.o")));
         std::fs::write(&src, &mac.stdout).unwrap();
-        let cc = Command::new("clang").args(["--target=arm64-apple-macos11", "-ffreestanding", "-w", "-c"]).arg(&src).arg("-o").arg(&obj).output().unwrap();
+        let cc = Command::new(common::llvm_tool("clang")).args(["--target=arm64-apple-macos11", "-ffreestanding", "-w", "-c"]).arg(&src).arg("-o").arg(&obj).output().unwrap();
         assert!(cc.status.success(), "{prog}'s C doesn't compile for arm64 macOS:\n{}", String::from_utf8_lossy(&cc.stderr));
-        let nm = Command::new("llvm-nm").args(["-U", "-j"]).arg(&obj).output().unwrap();
+        let nm = Command::new(common::llvm_tool("llvm-nm")).args(["-U", "-j"]).arg(&obj).output().unwrap();
         let defined = String::from_utf8_lossy(&nm.stdout);
         assert!(["___addtf3", "___multf3", "___lttf2", "___extendhftf2"].iter().all(|n| defined.lines().any(|l| l == *n)), "arm64 macOS's C defines no quad routines:\n{defined}");
     }

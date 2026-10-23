@@ -31,6 +31,7 @@ export struct volt_vm {
     loads: u32 = 0;
     searching: bool = false;          // the process's symbols are reachable (set at the first load)
     runtime: std::map<str, bool> = {}; // the runtime's names, for a sandbox (runtime_names)
+    prefix: u8 = 0;                   // the JIT's global prefix on C names (Mach-O's _), for the filters
     scripts: std::vec<vm_script> = {}; // what's loaded, each a package to the scripts after it
     pp_memo: std::map<std::string, std::string> = {}; // the headers its scripts read (opts.pp_memo)
     hdr_texts: std::map<std::string, std::string> = {}; // their last texts (opts.hdr_texts)
@@ -136,6 +137,25 @@ export fn volt_vm_define(v: volt_vm&, name: str, address: usize) -> vm_error!voi
 // calls util::f); loading that name again replaces it, unless a script loaded since uses it. Scripts
 // loaded later can't redefine an export fn
 export fn volt_vm_load(v: volt_vm&, name: str, source: str) -> vm_error!void {
+    comptime if (@cfg("os", "windows")) {
+        // a Windows thread has the stack its exe asks for, 1 MB unless it says more, and compiling
+        // takes more: on a thread of its own (a Volt thread reserves 8 MB)
+        var failed: vm_error? = null;
+        var t = std::thread::spawn(|v, name, source, failed&| () {
+            load_here(v, name, source) catch |e| {
+                failed = e;
+            };
+        }) catch return v.fail(vm_error::COMPILE, "can't start a thread to compile on");
+        t.join();
+        if (failed) {
+            return failed;
+        }
+        return;
+    }
+    return load_here(v, name, source);
+}
+
+fn load_here(v: volt_vm&, name: str, source: str) -> vm_error!void {
     val j = v.jit ?? return v.no_jit();
     val pkg = S(script_pkg(name));
     if (pkg.as_str() == "std") {
@@ -281,7 +301,7 @@ export fn volt_vm_load(v: volt_vm&, name: str, source: str) -> vm_error!void {
             ctors = glue_ctors(&g, v.loads);
         } else {
             if (v.mod_dir.len() == 0 && chk.cpp_std_units.len > 0) {
-                v.mod_dir = make_tmp() ?? S("");
+                v.mod_dir = new_temp_dir("voltvm") ?? S("");
             }
             native = vm_native(&*chk, &g.hdr, v.loads, null, v.mod_dir.as_str(), &bcs, &err);
             if (native == null) {
@@ -302,6 +322,7 @@ export fn volt_vm_load(v: volt_vm&, name: str, source: str) -> vm_error!void {
         }
         var gen: llvm::LLVMOrcOpaqueDefinitionGenerator* = null;
         var ge: llvm::LLVMOpaqueError* = null;
+        v.prefix = @cast<u8>(llvm::LLVMOrcLLJITGetGlobalPrefix(j));
         if (v.sandbox) {
             ge = llvm::LLVMOrcCreateDynamicLibrarySearchGeneratorForProcess(&gen, llvm::LLVMOrcLLJITGetGlobalPrefix(j), vm_allows, @cast<void*>(&*v));
         } else {
@@ -314,15 +335,18 @@ export fn volt_vm_load(v: volt_vm&, name: str, source: str) -> vm_error!void {
         llvm::LLVMOrcJITDylibAddGenerator(v.jd, gen);
         v.searching = true;
         // and the runtime from this library's own file: a host that loaded it without
-        // RTLD_GLOBAL (Python's ctypes, dlopen's default) keeps its symbols out of the process's
-        var info: dl_info = {};
-        if (dladdr(@cast<void*>(vm_allows), &info) != 0 && info.fname != null) {
-            var lib_gen: llvm::LLVMOrcOpaqueDefinitionGenerator* = null;
-            val le = llvm::LLVMOrcCreateDynamicLibrarySearchGeneratorForPath(&lib_gen, info.fname ?? "", llvm::LLVMOrcLLJITGetGlobalPrefix(j), vm_runtime_only, @cast<void*>(&*v));
-            if (le == null) {
-                llvm::LLVMOrcJITDylibAddGenerator(v.jd, lib_gen);
-            } else {
-                llvm::LLVMConsumeError(le);
+        // RTLD_GLOBAL (Python's ctypes, dlopen's default) keeps its symbols out of the process's.
+        // Windows has no dladdr (nor RTLD_GLOBAL: a DLL's exports are found by its name)
+        comptime if (!@cfg("os", "windows")) {
+            var info: dl_info = {};
+            if (dladdr(@cast<void*>(vm_allows), &info) != 0 && info.fname != null) {
+                var lib_gen: llvm::LLVMOrcOpaqueDefinitionGenerator* = null;
+                val le = llvm::LLVMOrcCreateDynamicLibrarySearchGeneratorForPath(&lib_gen, info.fname ?? "", llvm::LLVMOrcLLJITGetGlobalPrefix(j), vm_runtime_only, @cast<void*>(&*v));
+                if (le == null) {
+                    llvm::LLVMOrcJITDylibAddGenerator(v.jd, lib_gen);
+                } else {
+                    llvm::LLVMConsumeError(le);
+                }
             }
         }
     }
@@ -507,30 +531,21 @@ attach fn links(this: volt_vm&, flag: str) -> bool {
 
 // a script's native code (its imports' C: their headers' functions' pointers, a C unit of another
 // standard; C++ wrappers and modules; the libraries --cc links), built by $CC and $CXX into a shared
-// library under /tmp: its path, or why not in err. With a triple (a sandbox's), clang and clang++
-// compile it to LLVM bitcode for that target instead, each file's path into bcs: the result is the
-// directory they're in
+// library in the temporary directory: its path, or why not in err. With a triple (a sandbox's), clang
+// and clang++ compile it to LLVM bitcode for that target instead, each file's path into bcs: the
+// result is the directory they're in
 fn vm_native(chk: checker&, hdr: std::vec<str>&, n: u64, triple: str?, keep: str, bcs: std::vec<std::string>&, err: std::string&) -> std::string? {
-    val dir = make_tmp() ?? S("");
-    if (dir.len() == 0) {
-        *err = S("can't make a build directory in /tmp for the script's C");
+    val made = new_temp_dir("voltvm");
+    if (made == null) {
+        *err = S("can't make a build directory in the temporary directory for the script's C");
         return null;
     }
+    val dir = made ?? S("");
     val so = vm_build(chk, hdr, dir.as_str(), n, triple, keep, bcs, err);
     if (so == null) {
         vm_clean(dir.as_str());
     }
     return so;
-}
-
-// a new directory under /tmp, if one could be made
-fn make_tmp() -> std::string? {
-    var t = S("/tmp/voltvm-XXXXXX");
-    t.push(0);
-    if (mkdtemp(@cast<u8*>(t.as_str().ptr)) == null) {
-        return null;
-    }
-    return S(t.as_str()[0..t.len() - 1]);
 }
 
 // C text without its #include lines of headers named by an absolute path that's gone: one an earlier
@@ -669,7 +684,11 @@ fn vm_build(chk: checker&, hdr: std::vec<str>&, dir: str, n: u64, triple: str?, 
         return S(dir);
     }
     // linked as a shared library (by the C++ compiler when there's C++: its runtime)
-    val so = std::fmt::format("{}/script{}.so", dir, n);
+    var ext = ".so";
+    comptime if (@cfg("os", "windows")) {
+        ext = ".dll";
+    }
+    val so = std::fmt::format("{}/script{}{}", dir, n, ext);
     var argv: std::vec<str> = {};
     var link = "";
     if (any_cpp) {
@@ -683,6 +702,17 @@ fn vm_build(chk: checker&, hdr: std::vec<str>&, dir: str, n: u64, triple: str?, 
     // headers (functions only: typeinfo and data stay shared, as C++ needs)
     comptime if (@cfg("os", "linux")) {
         put(&argv, "-Wl,-Bsymbolic-functions");
+    }
+    // (macOS: dyld coalesces exported weak definitions across images, so its mangled C++ isn't
+    // exported at all; the extern "C" volt_ shims and C functions the JIT calls stay exported, and
+    // std's typeinfo is libc++abi's, which it only refers to)
+    comptime if (@cfg("os", "macos")) {
+        put(&argv, "-Wl,-unexported_symbol,__Z*");
+    }
+    // (Windows: a DLL exports only what's marked once anything is, and the JIT looks up the
+    // per-load pointers, volt_cN_..., by name: all of it exported)
+    comptime if (@cfg("os", "windows")) {
+        put(&argv, "-Wl,--export-all-symbols");
     }
     put(&argv, "-o");
     put(&argv, so.as_str());
@@ -1068,7 +1098,7 @@ attach fn lookup(this: volt_vm&, name: str) -> u64? {
         // LLVM's own report says which symbol; the lookup's error only which module failed
         this.message = copy r.message;
         if (this.session.len() > 0) {
-            this.message = copy this.session;
+            this.message = unprefixed(this.session.as_str(), this.prefix);
             if (this.sandbox && this.session.as_str().contains("Symbols not found")) {
                 this.message.append(" (this VM is a sandbox: it reaches only the symbols volt_vm_allow gave it)");
             }
@@ -1118,9 +1148,35 @@ extern "C" fn dladdr(addr: void*, info: dl_info*) -> i32;
 // the filter on this library's own symbols: its runtime's (dlsym on a library also searches what it
 // links, the C library among them, which a sandbox mustn't reach this way; and in a sandbox, only the
 // runtime's names, not the rest of what this library exports)
+// LLVM's report naming symbols ("Symbols not found: [ _a, _b ]") with their C names: without the
+// system's global prefix (Mach-O's _, none elsewhere)
+fn unprefixed(msg: str, prefix: u8) -> std::string {
+    var out: std::string = {};
+    var i: usize = 0;
+    while (i < msg.len) {
+        out.push(msg[i]);
+        if (prefix != 0 && (msg[i] == '[' || msg[i] == ',') && i + 2 < msg.len && msg[i + 1] == ' ' && msg[i + 2] == prefix) {
+            out.push(' ');
+            i += 3;
+            continue;
+        }
+        i += 1;
+    }
+    return out;
+}
+
+// a symbol the JIT asks for, as C names it: without the system's global prefix (Mach-O's _)
+fn vm_c_name(v: volt_vm*, sym: llvm::LLVMOrcOpaqueSymbolStringPoolEntry*) -> str {
+    val name = c_text(llvm::LLVMOrcSymbolStringPoolEntryStr(sym));
+    if (v->prefix != 0 && name.len > 0 && name[0] == v->prefix) {
+        return name[1..name.len];
+    }
+    return name;
+}
+
 fn vm_runtime_only(ctx: void*, sym: llvm::LLVMOrcOpaqueSymbolStringPoolEntry*) -> i32 {
     val v = @cast<volt_vm*>(ctx);
-    val name = c_text(llvm::LLVMOrcSymbolStringPoolEntryStr(sym));
+    val name = vm_c_name(v, sym);
     if (v->sandbox) {
         return @cast<i32>(v->runtime_name(name));
     }
@@ -1131,7 +1187,7 @@ fn vm_runtime_only(ctx: void*, sym: llvm::LLVMOrcOpaqueSymbolStringPoolEntry*) -
 // on its own, the C functions the runtime's helpers are bound to, and what the host allowed
 fn vm_allows(ctx: void*, sym: llvm::LLVMOrcOpaqueSymbolStringPoolEntry*) -> i32 {
     val v = @cast<volt_vm*>(ctx);
-    val name = c_text(llvm::LLVMOrcSymbolStringPoolEntryStr(sym));
+    val name = vm_c_name(v, sym);
     if (v->runtime_name(name)) {
         return 1;
     }

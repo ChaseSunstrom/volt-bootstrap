@@ -42,6 +42,11 @@ attach fn c_per_use(this: checker&, imp: c_imported&, n: u32, keep: bool, kept: 
     x.keep = keep;
     x.kept = kept;
     for (name) in imp.per_use.items() {
+        // the same header used twice in one namespace (voltc's clang.volt and cppimport.volt):
+        // one stub (two would be two C definitions of it in a package)
+        if (this.named(&this.ns(n).names, name).len > 0) {
+            continue;
+        }
         var args: std::vec<garg> = {};
         put(&args, garg::EXPR({ kind: expr_kind::STR(fmt("c:{}", S(name))), span: span }));
         var attrs: std::vec<expr> = {};
@@ -589,4 +594,19 @@ attach fn c_declare(this: checker&, k: usize, it: item, span: span) -> compile_e
     val r = this.collect_item(*this.owned_items.at(this.owned_items.len - 1), x.ns, null);
     this.importing_c = false;
     try r;
+}
+
+// a C macro read as a global (UCRT's #define stdout (__acrt_iob_func(1))): a call of the C function
+// cimport made for it, getter, which reads the macro; a value, with no place to assign or point at
+attach fn c_macro_read(this: checker&, d: u32, getter: str, span: span) -> compile_error!tval {
+    val f = this.lookup(this.dl(d).ns, getter) ?? return fails(span, "this C macro's import is gone");
+    match (f) {
+        .DECLS(l) => {
+            val i = try this.fn_inst(*this.list(l).at(0), {}, span);
+            this.use_fn(i);
+            val ret = this.fi(i).ret;
+            return vnew(ret, this.call_fn(this.fi(i).ir, {}, ret));
+        },
+        default => { return fails(span, "this C macro's import is gone"); },
+    }
 }

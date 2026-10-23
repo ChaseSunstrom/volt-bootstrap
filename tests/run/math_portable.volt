@@ -2,6 +2,8 @@ use std::io;
 // std::math::portable (std/math_portable.volt, in Volt) against the C library's libm, in ulps, on
 // edge cases (zeros, subnormals, infinities, NaN, the largest double, near pi/2 and overflow) and
 // random doubles of every size; then the f32 overloads
+// os: linux macos freebsd
+// (MinGW's expm1 is 2 ulps off where glibc's and Apple's are within 1)
 
 extern "C" fn sqrt(x: f64) -> f64;
 extern "C" fn cbrt(x: f64) -> f64;
@@ -168,7 +170,21 @@ fn run(f: usize, x: f64, y: f64) -> void {
     if (d > worst[f]) {
         worst[f] = d;
     }
-    if (d > ALLOW[f]) {
+    var allow = ALLOW[f];
+    // Apple's libm sin, cos and tan are up to 2 ulps from the true value (Volt's are within 1 of
+    // glibc's there): tan on arm64, sin on x86-64. x86-64's tan is 4 ulps off at
+    // 4.79534573318825e21 (glibc's and Volt's are both 1.7304835928040734)
+    comptime if (@cfg("os", "macos")) {
+        if (f == 9 || f == 10 || f == 11) {
+            allow = 3;
+        }
+        comptime if (@cfg("arch", "x86_64")) {
+            if (f == 11) {
+                allow = 4;
+            }
+        }
+    }
+    if (d > allow) {
         bad[f] += 1;
         if (bad[f] <= 3) {
             std::println("BAD {}({:e}, {:e}): libm {:e} volt {:e}, {} ulps", NAMES[f], x, y, want, got, d);

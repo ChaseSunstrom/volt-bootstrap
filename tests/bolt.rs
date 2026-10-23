@@ -18,6 +18,12 @@ fn ok(o: Output, what: &str) -> String {
     out + "\n" + &err
 }
 
+/// a directory as a file:// URL's path: forward slashes, and a drive letter after a slash (file:///C:/x)
+fn file_url_path(p: &std::path::Path) -> String {
+    let s = p.display().to_string().replace('\\', "/");
+    if s.starts_with('/') { s } else { format!("/{s}") }
+}
+
 #[test]
 fn bolt() {
     let tmp = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("bolt-{}", std::process::id()));
@@ -44,7 +50,7 @@ fn bolt() {
     write(&tmp.join("mathx/lib/ops.volt"), &format!("public fn triple(x: i32) -> i32 {{ return x * 3; }}\n{meters}"));
     // a git dependency, which itself depends on mathx by path
     let greet = tmp.join("greet");
-    write(&greet.join("bolt.toml"), &format!("[package]\nname = \"greet\"\nversion = \"1.0.0\"\n\n[dependencies]\nmathx = {{ path = \"{}\" }}\n", tmp.join("mathx").display()));
+    write(&greet.join("bolt.toml"), &format!("[package]\nname = \"greet\"\nversion = \"1.0.0\"\n\n[dependencies]\nmathx = {{ path = '{}' }}\n", tmp.join("mathx").display()));
     write(&greet.join("lib/greet.volt"), "use std::io;\npublic fn hello(who: str) -> void { std::println(\"hello {} x{}\", who, mathx::triple(2)); }\n");
     git(&greet, &["init", "-q"]);
     git(&greet, &["add", "."]);
@@ -56,7 +62,7 @@ fn bolt() {
         &app.join("bolt.toml"),
         &format!(
             "[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies]\nmathx = {{ path = \"../mathx\" }}\ngreet = {{ git = \"file://{}\" }}\n\n[build]\nfiles = [\"build.volt\"]\n",
-            greet.display()
+            file_url_path(&greet)
         ),
     );
     write(
@@ -113,7 +119,7 @@ fn bolt() {
     // a package can bring its own std
     let alt = tmp.join("alt");
     let alt_std = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/std_alt");
-    write(&alt.join("bolt.toml"), &format!("[package]\nname = \"alt\"\nversion = \"0.1.0\"\n\n[std]\npath = \"{}\"\n", alt_std.display()));
+    write(&alt.join("bolt.toml"), &format!("[package]\nname = \"alt\"\nversion = \"0.1.0\"\n\n[std]\npath = '{}'\n", alt_std.display()));
     write(&alt.join("src/main.volt"), "use std::out;\nfn main() -> void { std::say(\"custom std {}\", 1); }\n");
     let out = ok(bolt(&alt, &["run"]), "bolt run (custom std)");
     assert!(out.contains("custom std 1"), "{out}");
@@ -123,7 +129,7 @@ fn bolt() {
     write(&sw.join("bolt.toml"), "[package]\nname = \"sw\"\nversion = \"0.1.0\"\n");
     write(&sw.join("src/main.volt"), "use std::io;\nfn main() -> void { std::println(\"default std\"); }\n");
     assert!(ok(bolt(&sw, &["run"]), "bolt run (default std)").contains("default std"));
-    write(&sw.join("bolt.toml"), &format!("[package]\nname = \"sw\"\nversion = \"0.1.0\"\n\n[std]\npath = \"{}\"\n", alt_std.display()));
+    write(&sw.join("bolt.toml"), &format!("[package]\nname = \"sw\"\nversion = \"0.1.0\"\n\n[std]\npath = '{}'\n", alt_std.display()));
     write(&sw.join("src/main.volt"), "use std::out;\nfn main() -> void { std::say(\"switched\"); }\n");
     assert!(ok(bolt(&sw, &["run"]), "bolt run (switched std)").contains("switched"));
 
@@ -140,7 +146,7 @@ fn bolt() {
     // isn't a directory is named as the problem
     let pinned = tmp.join("pinned");
     let real_std = Path::new(env!("CARGO_MANIFEST_DIR")).join("std");
-    write(&pinned.join("bolt.toml"), &format!("[package]\nname = \"pinned\"\nversion = \"0.1.0\"\n\n[std]\npath = \"{}\"\n\n[build]\nfiles = [\"build.volt\"]\n", real_std.display()));
+    write(&pinned.join("bolt.toml"), &format!("[package]\nname = \"pinned\"\nversion = \"0.1.0\"\n\n[std]\npath = '{}'\n\n[build]\nfiles = [\"build.volt\"]\n", real_std.display()));
     write(&pinned.join("src/main.volt"), "fn main() -> void {}\n");
     write(&pinned.join("build.volt"), "fn main() -> void {}\n");
     let stale = tmp.join("no-such-std");
@@ -155,10 +161,10 @@ fn bolt() {
     let cdep = tmp.join("cdep");
     write(&cdep.join("include/cdep.h"), "static inline int cdep_scale(int x) { return x * CDEP_SCALE; }\n");
     write(&cdep.join("bolt.toml"), "[package]\nname = \"cdep\"\nversion = \"0.1.0\"\n\n[build]\nfiles = [\"build.volt\"]\n");
-    write(&cdep.join("build.volt"), &format!("fn main() -> void {{\n    bolt::cc_arg(\"-I{}\");\n    bolt::cc_arg(\"-DCDEP_SCALE=7\");\n}}\n", cdep.join("include").display()));
+    write(&cdep.join("build.volt"), &format!("fn main() -> void {{\n    bolt::cc_arg(\"-I{}\");\n    bolt::cc_arg(\"-DCDEP_SCALE=7\");\n}}\n", cdep.join("include").display().to_string().replace('\\', "/")));
     write(&cdep.join("lib/cdep.volt"), "use {{ \"cdep.h\" }} as c;\npublic fn scaled(x: i32) -> i32 {{ return c::cdep_scale(x); }}\n".replace("{{", "{").replace("}}", "}").as_str());
     let uses_cdep = tmp.join("uses_cdep");
-    write(&uses_cdep.join("bolt.toml"), &format!("[package]\nname = \"uses_cdep\"\nversion = \"0.1.0\"\n\n[dependencies]\ncdep = {{ path = \"{}\" }}\n", cdep.display()));
+    write(&uses_cdep.join("bolt.toml"), &format!("[package]\nname = \"uses_cdep\"\nversion = \"0.1.0\"\n\n[dependencies]\ncdep = {{ path = '{}' }}\n", cdep.display()));
     write(&uses_cdep.join("src/main.volt"), "use std::io;\nfn main() -> void { std::println(\"scaled {}\", cdep::scaled(6)); }\n");
     let out = ok(bolt(&uses_cdep, &["run"]), "bolt run (a dependency's build-file flags)");
     assert!(out.contains("scaled 42"), "{out}");
@@ -263,7 +269,7 @@ fn workspace_features_profiles() {
     // the root builds every member into one target/
     let out = e.ok(&ws, &["build"]);
     assert!(out.contains("Compiling core v0.1.0") && out.contains("Finished `dev` profile"), "{out}");
-    assert!(ws.join("target/debug/app").is_file() && ws.join("target/debug/quiet").is_file() && !c.join("app/target").exists());
+    assert!(ws.join(format!("target/debug/app{}", std::env::consts::EXE_SUFFIX)).is_file() && ws.join(format!("target/debug/quiet{}", std::env::consts::EXE_SUFFIX)).is_file() && !c.join("app/target").exists());
 
     // each package's features: defaults, a dependency's features, --no-default-features off the dependency
     assert!(e.ok(&ws, &["run", "-p", "app"]).contains("app LOUD helper"));
@@ -279,7 +285,7 @@ fn workspace_features_profiles() {
 
     // profiles: release and a custom one, each in its own directory
     let out = e.ok(&ws, &["build", "-p", "app", "--profile", "fast", "-v"]);
-    assert!(ws.join("target/fast/app").is_file() && out.contains("-DFAST=1") && out.contains("--release"), "{out}");
+    assert!(ws.join(format!("target/fast/app{}", std::env::consts::EXE_SUFFIX)).is_file() && out.contains("-DFAST=1") && out.contains("--release"), "{out}");
     assert!(e.ok(&ws, &["build", "-p", "app", "--release"]).contains("Finished `release` profile [optimized]"));
     let err = e.fails(&ws, &["build", "--profile", "nope"]);
     assert!(err.contains("no profile 'nope'"), "{err}");
@@ -365,9 +371,9 @@ fn targets_and_commands() {
     e.ok(&app, &["test", "--no-run"]);
     // a dev-dependency's features, for the builds that use it
     e.ok(&app, &["test", "--no-run", "--features", "testutil/strict"]);
-    assert!(app.join("target/debug/tests/unit").is_file());
+    assert!(app.join(format!("target/debug/tests/unit{}", std::env::consts::EXE_SUFFIX)).is_file());
     let out = e.ok(&app, &["bench"]);
-    assert!(out.contains("bench speed ... ") && app.join("target/release/benches/speed").is_file(), "{out}");
+    assert!(out.contains("bench speed ... ") && app.join(format!("target/release/benches/speed{}", std::env::consts::EXE_SUFFIX)).is_file(), "{out}");
     write(&app.join("tests/broken.volt"), "fn main() -> i32 { return 3; }\n");
     let o = e.run(&app, &["test"]);
     let out = String::from_utf8_lossy(&o.stdout).to_string();

@@ -40,7 +40,7 @@ inline long long add(long long a, long long b) { return a + b; }
 // trivially copyable: Volt holds it by value, with C++'s layout
 struct Size {
     int w, h;
-    long area;
+    long long area;
 };
 
 // points into itself: a byte copy would leave it pointing at the old place (Volt holds it by handle,

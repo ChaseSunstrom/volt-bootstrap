@@ -63,12 +63,8 @@ fn less(a: str, b: str) -> bool {
 
 // the directory this program is in
 fn self_dir() -> std::string {
-    var buf: u8[4096];
-    val n = sys::readlink("/proc/self/exe", @cast<cstr>(&buf[0]), 4095);
-    if (n <= 0) {
-        die(std::string::from("can't find this program's path"));
-    }
-    val exe = @cast<str>(@slice(&buf[0], @cast<usize>(n)));
+    val path = std::process::exe_path() ?? die(std::string::from("can't find this program's path"));
+    val exe = path.as_str();
     var end = exe.len;
     while (end > 0 && exe[end - 1] != 47) {
         end -= 1;
@@ -81,9 +77,8 @@ fn must(argv: str[..], what: str) -> std::process::output {
     val r = std::process::capture(argv, "") catch |e| die(std::string::from("can't run a compiler"));
     if (r.code != 0) {
         std::eprint("{}{}", r.out, r.err);
-        var m = std::string::from(what);
-        m.append(" failed");
-        die(move m);
+        // the exit code too: a crash (a stack overflow on Windows) prints nothing of its own
+        die(std::fmt::format("{} failed (exit {})", what, r.code));
     }
     return move r;
 }
@@ -218,6 +213,25 @@ fn linked(stage: str, std_dir: str, dir: str, lib_backend: str, prog_backend: st
     std::println("stage2 lib: {} libraries in a {} program ok", lib_backend, prog_backend);
 }
 
+// Windows ends a crashed program with an NTSTATUS: the code a signal gives elsewhere (as
+// tests/golden.rs maps them)
+fn signal_code(code: i32) -> i32 {
+    val u = @cast<u32>(code);
+    if (u == 0xC000001D) {
+        return 132; // an illegal instruction (a trap): SIGILL
+    }
+    if (u == 0x80000003) {
+        return 133; // a breakpoint: SIGTRAP
+    }
+    if (u == 0xC0000409) {
+        return 134; // __fastfail, which abort is: SIGABRT
+    }
+    if (u == 0xC0000005) {
+        return 139; // an access violation: SIGSEGV
+    }
+    return code;
+}
+
 // whether words (separated by spaces, tabs or a CR) holds w
 fn has_word(words: str, w: str) -> bool {
     var i: usize = 0;
@@ -244,12 +258,14 @@ fn golden(stage: str, std_dir: str, backend: str) -> i32 {
         files.push(copy *f) catch @panic("out of memory");
     }
     var failed: i32 = 0;
+    var skipped: i32 = 0;
     for (f&) in files.items() {
         val src = std::fs::read_file(f.as_str()) catch |e| die(std::string::from("can't read a test"));
         // `// os: linux macos`: run only on the systems named
         var oses: std::vec<str> = {};
         directives(src.as_str(), "os", &oses);
         if (oses.len > 0 && !has_word(*oses.at(0), std::process::os())) {
+            skipped += 1;
             continue;
         }
         val want = expected(src.as_str());
@@ -297,18 +313,19 @@ fn golden(stage: str, std_dir: str, backend: str) -> i32 {
             }
         }
         val r = std::process::capture(argv.items(), "") catch |e| die(std::string::from("can't run a test"));
+        val code = signal_code(r.code);
         var code_ok = false;
         for (c) in want_codes.items() {
-            if (c == r.code) {
+            if (c == code) {
                 code_ok = true;
             }
         }
         if (trim_end(r.out.as_str()) != trim_end(want.as_str()) || !code_ok) {
-            std::eprintln("FAIL {}: exit {} (want {})\n--- want\n{}\n--- got\n{}\n--- stderr\n{}", f, r.code, want_text, want, r.out, r.err);
+            std::eprintln("FAIL {}: exit {} (want {})\n--- want\n{}\n--- got\n{}\n--- stderr\n{}", f.as_str(), code, want_text, want, r.out, r.err);
             failed += 1;
         }
     }
-    std::println("golden: {} of {} passed with stage2 ({})", @cast<i32>(files.len) - failed, files.len, backend);
+    std::println("golden: {} of {} passed with stage2 ({})", @cast<i32>(files.len) - skipped - failed, @cast<i32>(files.len) - skipped, backend);
     return failed;
 }
 

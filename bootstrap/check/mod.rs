@@ -1399,10 +1399,11 @@ impl Checker {
         })
     }
 
-    /// "file:line:col" for runtime messages
+    /// "file:line:col" for runtime messages, which go into C string literals: a Windows path's \ as /
+    /// (D:\a\util.volt would read as a \u escape), a " escaped
     pub fn loc(&self, span: Span) -> String {
         let (l, c) = self.sm.line_col(span);
-        let name = &self.sm.files[span.file as usize].0;
+        let name = self.sm.files[span.file as usize].0.replace('\\', "/").replace('"', "\\\"");
         format!("{name}:{l}:{c}")
     }
 

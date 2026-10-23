@@ -25,7 +25,7 @@ static unsigned long __stdcall volt_thread_main(void *job) {
     return 0;
 }
 int volt_rt_thread_start(void *job, uint64_t *handle) {
-    void *h = volt_CreateThread(0, 0, volt_thread_main, job, 0, 0);
+    void *h = volt_CreateThread(0, (size_t)8 << 20, volt_thread_main, job, 0x10000u, 0); /* 8 MB reserved (STACK_SIZE_PARAM_IS_A_RESERVATION), as a Linux thread gets */
     if (!h) return -1;
     *handle = (uint64_t)(uintptr_t)h;
     return 0;

@@ -88,11 +88,21 @@ fn run(r: &Req) -> Result<(), String> {
     }
 }
 
+/// std::fs::canonicalize without Windows' \\?\ prefix, which go, javac, node and the C compilers
+/// don't take (a \\?\UNC\ path keeps it)
+pub fn canonicalize(p: impl AsRef<Path>) -> std::io::Result<PathBuf> {
+    let c = std::fs::canonicalize(p)?;
+    match c.to_str().and_then(|s| s.strip_prefix(r"\\?\")) {
+        Some(rest) if !rest.starts_with("UNC\\") => Ok(PathBuf::from(rest)),
+        _ => Ok(c),
+    }
+}
+
 /// an argument's path: as it is when absolute, else from the importing file's directory
 pub fn arg_path(r: &Req, a: &str) -> PathBuf {
     let p = Path::new(a);
     let p = if p.is_absolute() { p.to_path_buf() } else { r.from.join(p) };
-    std::fs::canonicalize(&p).unwrap_or(p)
+    canonicalize(&p).unwrap_or(p)
 }
 
 /// what the sources are now (each file's path, size and modification time, plus `extra`): an import
@@ -114,7 +124,7 @@ pub fn fresh(r: &Req, st: &str) -> bool {
     std::fs::read_to_string(r.out.join("stamp")).is_ok_and(|s| s == st)
         && ["import.volt", "import.flags", "import.deps"].iter().all(|f| r.out.join(f).is_file())
         // the library the flags start with: gone when its target directory was cleaned
-        && std::fs::read_to_string(r.out.join("import.flags")).is_ok_and(|f| f.lines().next().is_some_and(|l| !l.starts_with('/') || Path::new(l).is_file()))
+        && std::fs::read_to_string(r.out.join("import.flags")).is_ok_and(|f| f.lines().next().is_some_and(|l| !Path::new(l).is_absolute() || Path::new(l).is_file()))
 }
 
 /// writes the results, then the stamp that says they're current

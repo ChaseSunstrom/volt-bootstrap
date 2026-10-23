@@ -1,13 +1,18 @@
 error: the package sees windows
-   ┌─ tests/pkgs/plat/plat.volt:30:9
+   ┌─ tests/pkgs/plat/plat.volt:32:9
    │
-30 │         @compile_error("the package sees windows");
+32 │         @compile_error("the package sees windows");
    │         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   │
+   ┌─ tests/diag/cfg_target_override.volt:5:5
+   │
+ 5 │     plat::windows_check<i32>();
+   │     -------------------------- windows_check<i32> is instantiated here
 
 error: the program sees windows on aarch64, and not the host
-  ┌─ tests/diag/cfg_target_override.volt:6:9
+  ┌─ tests/diag/cfg_target_override.volt:7:9
   │
-6 │         @compile_error("the program sees windows on aarch64, and not the host");
+7 │         @compile_error("the program sees windows on aarch64, and not the host");
   │         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 error: aborting due to 2 errors

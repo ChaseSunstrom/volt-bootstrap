@@ -29,13 +29,14 @@ fn checks_itself_and_emits_readable_c() {
     let mut srcs = Vec::new();
     volt_files(&root.join("voltc/src"), &mut srcs);
     let own = Command::new(&exe).arg("check").args(&srcs).arg("--std").arg(&std_dir).output().unwrap();
-    assert!(own.status.success(), "the self-hosted checker rejects its own sources:\n{}", String::from_utf8_lossy(&own.stderr));
+    assert!(own.status.success(), "the self-hosted checker rejects its own sources ({}):\n{}", own.status, String::from_utf8_lossy(&own.stderr));
     // the readable C: emit-c -o DIR of tests/cgen/point.volt matches the reviewed files in tests/cgen/point
     // (volt.h from its types on: the prelude before them has its own tests), and builds and runs.
     // VOLT_BLESS=1 rewrites them
     let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("cgen-{}", std::process::id()));
     let _ = std::fs::create_dir_all(&dir);
-    let e = Command::new(&exe).args(["emit-c", "tests/cgen/point.volt", "--no-std", "-o"]).arg(&dir).current_dir(root).output().unwrap();
+    // (as Linux's: on Windows main also puts stdio in binary mode)
+    let e = Command::new(&exe).args(["emit-c", "tests/cgen/point.volt", "--no-std", "--cfg", "os=linux", "-o"]).arg(&dir).current_dir(root).output().unwrap();
     assert!(e.status.success(), "emit-c -o: {}", String::from_utf8_lossy(&e.stderr));
     let snap = root.join("tests/cgen/point");
     let mut names: Vec<String> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().to_string()).collect();
@@ -50,14 +51,17 @@ fn checks_itself_and_emits_readable_c() {
             std::fs::write(snap.join(n), &text).unwrap();
         } else {
             let want = std::fs::read_to_string(snap.join(n)).unwrap_or_default();
-            assert!(want == text, "tests/cgen/point/{n} differs from emit-c's:\n{text}");
+            // (the first line that differs first: a long file's report is cut)
+            let first = want.split('\n').zip(text.split('\n')).enumerate().find(|(_, (a, b))| a != b).map(|(i, (a, b))| format!("line {}: snapshot {a:?}, emit-c {b:?}", i + 1)).unwrap_or_else(|| format!("{} lines vs {}", want.lines().count(), text.lines().count()));
+            assert!(want == text, "tests/cgen/point/{n} differs from emit-c's ({first}):\n{text}");
         }
     }
     let prog = dir.join("prog");
     let cc = Command::new("cc").arg("-Wall").arg("-Werror").arg("-o").arg(&prog).arg(dir.join("program.c")).output().unwrap();
     assert!(cc.status.success(), "cc program.c: {}", String::from_utf8_lossy(&cc.stderr));
     let run = Command::new(&prog).output().unwrap();
-    assert_eq!(String::from_utf8_lossy(&run.stdout), "4 6 12 3\n");
+    // (emitted for os=linux, it leaves Windows' stdout in text mode, which writes \r\n)
+    assert_eq!(String::from_utf8_lossy(&run.stdout).replace("\r\n", "\n"), "4 6 12 3\n");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -112,7 +116,7 @@ fn release_voltc_works() {
         let text = std::fs::read_to_string(&p).unwrap_or_default();
         // (and those marked `// debug-only`: what they check is the debug allocator's, which an optimized
         // build doesn't have)
-        if p.extension().is_some_and(|x| x == "volt") && !text.contains("// exit:") && !text.contains(".h\"") && !text.contains("// debug-only") {
+        if p.extension().is_some_and(|x| x == "volt") && !text.contains("// exit:") && !text.contains(".h\"") && !text.contains("// debug-only") && common::os_ok(&text) {
             runs.push((p, "llvm", true));
         }
     }
@@ -125,17 +129,18 @@ fn release_voltc_works() {
             continue;
         }
         let flags: Vec<&str> = text.lines().find_map(|l| l.strip_prefix("// flags:")).map(|f| f.split_whitespace().collect()).unwrap_or_default();
-        // a miscompile can loop forever (std_math did): `timeout` ends the run and the program it started
-        let mut cmd = Command::new("timeout");
-        cmd.arg("300").arg(&second);
-        if clang && *backend == "c" {
+        // a miscompile can loop forever (std_math did): run_for ends the run and the program it started
+        let mut cmd = Command::new(&second);
+        // (not on Windows, where `clang` may be LLVM's release, which targets MSVC's C runtime, and
+        // voltc's C goes through MinGW's cc)
+        if clang && *backend == "c" && !cfg!(windows) {
             cmd.env("CC", "clang");
         }
         cmd.arg("run").arg(file).arg("--std").arg(&std_dir).args(["--backend", backend]).args(&flags);
         if *release {
             cmd.arg("--release");
         }
-        let o = cmd.current_dir(root).output().unwrap();
+        let o = common::run_for(cmd.current_dir(root), 300);
         let out = String::from_utf8_lossy(&o.stdout);
         if out.lines().map(|l| l.trim_end()).collect::<Vec<_>>() != want {
             let how = if *release { " --release" } else { "" };
@@ -192,7 +197,8 @@ fn bare_metal(voltc: &Path, std_dir: &Path) {
         'program: for program in programs {
             let expected = if *program == "blinky" { "expected.txt".to_string() } else { format!("expected-{program}.txt") };
             for release in ["", "1"] {
-                let o = Command::new(dir.join("run.sh")).env("VOLTC", voltc).env("VOLT_STD", std_dir).env("RELEASE", release).env("TARGET", target).env("PROGRAM", program).env("CC", "false").output().unwrap();
+                // (through sh: Windows runs no script by its #! line)
+                let o = Command::new("sh").arg(dir.join("run.sh")).env("VOLTC", voltc).env("VOLT_STD", std_dir).env("RELEASE", release).env("TARGET", target).env("PROGRAM", program).env("CC", "false").output().unwrap();
                 if o.status.code() == Some(77) {
                     eprintln!("bare metal: skipped {board} {target} (no qemu or ld.lld)");
                     break 'program;
@@ -306,7 +312,10 @@ fn toolchain_layout_and_link_errors() {
     let tmp = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("layout-{}", std::process::id()));
     let bin_dir = tmp.join("voltc/target/release");
     std::fs::create_dir_all(&bin_dir).unwrap();
+    #[cfg(unix)]
     std::os::unix::fs::symlink(root.join("std"), tmp.join("std")).unwrap();
+    #[cfg(windows)]
+    std::os::windows::fs::symlink_dir(root.join("std"), tmp.join("std")).unwrap();
     let tiny = tmp.join("tiny.volt");
     std::fs::write(&tiny, "fn main() -> void {}\n").unwrap();
     let stage1 = common::voltc();
@@ -315,7 +324,8 @@ fn toolchain_layout_and_link_errors() {
         std::fs::copy(from, &exe).unwrap();
         let o = Command::new(&exe).arg("std-dir").env_remove("VOLT_STD").output().unwrap();
         let found = String::from_utf8_lossy(&o.stdout).trim().to_string();
-        assert!(o.status.success() && Path::new(&found) == root.join("std").canonicalize().unwrap(), "{name} std-dir: {found} {}", String::from_utf8_lossy(&o.stderr));
+        // (both canonical: the symlink resolved, and Windows' \\?\ form on both sides)
+        assert!(o.status.success() && Path::new(&found).canonicalize().ok() == root.join("std").canonicalize().ok(), "{name} std-dir: {found} {}", String::from_utf8_lossy(&o.stderr));
         let o = Command::new(&exe).arg("build").arg(&tiny).args(["--cc", "-lvolt_no_such_lib", "-o"]).arg(tmp.join("tiny")).output().unwrap();
         let err = String::from_utf8_lossy(&o.stderr);
         assert!(!o.status.success() && err.contains("failed: a library above wasn't found") && !err.contains("voltc bug"), "{name}: {err}");
@@ -387,17 +397,22 @@ fn runtime_compiles_for_every_target() {
     ];
     for t in targets {
         for debug in [true, false] {
-            let mut cc = Command::new("clang");
+            let mut cc = Command::new(common::llvm_tool("clang"));
             cc.args([&format!("--target={t}"), "-ffreestanding", "-std=c11", "-Werror", "-Wall", "-Wno-unused-function", "-c"]);
             if debug {
                 cc.arg("-DVOLT_DEBUG_ALLOC");
             }
             let o = cc.arg("-I").arg(root.join("runtime")).arg(&unit).arg("-o").arg(dir.join(format!("{t}.o"))).output().unwrap();
+            if !o.status.success() && String::from_utf8_lossy(&o.stderr).contains("No available targets are compatible") {
+                // (an LLVM built without that target: Windows' has no RISC-V)
+                eprintln!("runtime: skipped {t} (this clang has no such target)");
+                break;
+            }
             assert!(o.status.success(), "the runtime doesn't compile for {t} (debug {debug}):\n{}", String::from_utf8_lossy(&o.stderr));
             // every print takes a lock that can wait, so what the runtime imports, every program links:
             // on Windows that's kernel32 only (WaitOnAddress is looked up; MinGW won't link it by default)
             if t.contains("windows") {
-                let nm = Command::new("llvm-nm").arg("-u").arg(dir.join(format!("{t}.o"))).output().unwrap();
+                let nm = Command::new(common::llvm_tool("llvm-nm")).arg("-u").arg(dir.join(format!("{t}.o"))).output().unwrap();
                 let undefined = String::from_utf8_lossy(&nm.stdout);
                 assert!(!undefined.contains("WaitOnAddress") && !undefined.contains("WakeByAddress"), "{t}: the runtime links WaitOnAddress:\n{undefined}");
             }
@@ -441,9 +456,9 @@ fn std_compiles_for_other_systems() {
             assert!(o.status.success(), "emit-c {prog} for {os}: {}", String::from_utf8_lossy(&o.stderr));
             std::fs::write(&c, &o.stdout).unwrap();
             let obj = dir.join(format!("{name}.o"));
-            let cc = Command::new("clang").arg(format!("--target={target}")).args(["-ffreestanding", "-w", "-c", "-femit-all-decls"]).arg(&c).arg("-o").arg(&obj).output().unwrap();
+            let cc = Command::new(common::llvm_tool("clang")).arg(format!("--target={target}")).args(["-ffreestanding", "-w", "-c", "-femit-all-decls"]).arg(&c).arg("-o").arg(&obj).output().unwrap();
             assert!(cc.status.success(), "std's {os} code in {prog} doesn't compile for {target}:\n{}", String::from_utf8_lossy(&cc.stderr));
-            let nm = Command::new("llvm-nm").args(["-u", "-j"]).arg(&obj).output().unwrap();
+            let nm = Command::new(common::llvm_tool("llvm-nm")).args(["-u", "-j"]).arg(&obj).output().unwrap();
             // Mach-O puts an underscore before every C name
             let undefined: Vec<String> = String::from_utf8_lossy(&nm.stdout).lines().map(|l| if os == "macos" { l.strip_prefix('_').unwrap_or(l) } else { l }.to_string()).collect();
             let wrong: Vec<&String> = undefined
@@ -463,8 +478,11 @@ fn windows_paths_run() {
     let file = "tests/cross/windows_paths.volt";
     let src = std::fs::read_to_string(root.join(file)).unwrap();
     let want: Vec<&str> = src.lines().filter_map(|l| l.strip_prefix("// expect: ")).collect();
+    // (macOS's linker: names left for load time, which these never reach; on Windows they're there)
+    let unresolved: &[&str] = if cfg!(windows) { &[] } else if cfg!(target_os = "macos") { &["--cc", "-Wl,-undefined,dynamic_lookup"] } else { &["--cc", "-no-pie", "--cc", "-Wl,--unresolved-symbols=ignore-all"] };
     let o = Command::new(common::voltc())
-        .args(["run", file, "--cfg", "os=windows", "--cc", "-no-pie", "--cc", "-Wl,--unresolved-symbols=ignore-all"])
+        .args(["run", file, "--cfg", "os=windows"])
+        .args(unresolved)
         .current_dir(root)
         .output()
         .unwrap();
@@ -486,7 +504,7 @@ fn stage0_links_export_fns() {
     let o = Command::new(stage0).args(["lib", "pk", "-o"]).arg(&lib).arg("--std").arg(&std_dir).args(["--pkg", &pkg]).output().unwrap();
     assert!(o.status.success(), "voltc-bootstrap lib pk: {}", String::from_utf8_lossy(&o.stderr));
     let o = Command::new(stage0).arg("run").arg(dir.join("main.volt")).arg("--std").arg(&std_dir).args(["--pkg", &pkg, "--link"]).arg(format!("pk={}", lib.display())).output().unwrap();
-    assert!(o.status.success() && String::from_utf8_lossy(&o.stdout) == "42\n", "linked against libpk.a: {}", String::from_utf8_lossy(&o.stderr));
+    assert!(o.status.success() && String::from_utf8_lossy(&o.stdout).replace("\r\n", "\n") == "42\n", "linked against libpk.a ({}): {:?} {}", o.status, String::from_utf8_lossy(&o.stdout), String::from_utf8_lossy(&o.stderr));
     let _ = std::fs::remove_dir_all(&dir);
 }
 

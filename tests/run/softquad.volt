@@ -124,7 +124,18 @@ fn arith(a: u128, b: u128) -> void {
     same_q("add", a, b, std::softfloat::add128(a, b), bits(x + y));
     same_q("sub", a, b, std::softfloat::sub128(a, b), bits(x - y));
     same_q("mul", a, b, std::softfloat::mul128(a, b), bits(x * y));
-    same_q("div", a, b, std::softfloat::div128(a, b), bits(x / y));
+    // Windows' quad routines are compiler-rt's (llvm-mingw), whose __divtf3 rounds a subnormal
+    // quotient wrongly (0x2961 0... / 0x69cc f... is exactly 0x4; it gives 0x6; 0x94e6 0... /
+    // 0xd554 f... is just over half the smallest subnormal, so 0x1; it gives 0): those are left out
+    val q = bits(x / y);
+    val s = std::softfloat::div128(a, b);
+    var sub = false;
+    comptime if (@cfg("os", "windows")) {
+        sub = (q & 0x7FFF0000000000000000000000000000) == 0 && (s & 0x7FFF0000000000000000000000000000) == 0 && ((q | s) & FRAC) != 0;
+    }
+    if (!sub) {
+        same_q("div", a, b, s, q);
+    }
     same_i("cmp", a, @cast<u128>(std::softfloat::cmp128(a, b) + 10), @cast<u128>(order(x, y) + 10));
     val c = std::softfloat::cmp128(a, b);
     same_i("eq", a, flag(c == 0), flag(x == y));
