@@ -75,6 +75,8 @@ struct cpp_alias {
     // a per-use name's try_ stub (per_use): the name's key in written (any parameters), which the
     // header taking leaves the stub out
     taken: std::string = {};
+    // the function's name alone (fn_key with #name), for an ordinary alias
+    name: std::string = {};
 }
 
 // the Volt source being written for one import: the classes, enums and class templates it declares
@@ -3516,9 +3518,13 @@ attach fn callable_of(this: cpp_gen&, generics: str, head: str, has_params: bool
             // tell them apart either) left out
             val prev = this.sigs.get(key.as_str());
             if (!aliased && prev != null && *prev == "#alias") {
-                // an alias an earlier block of this namespace wrote has the name
+                // an alias an earlier block of this namespace wrote has the name: this one gets the
+                // first free counter (which_long_long_2)
                 aliased = true;
-                this.line(fmt("// left out: {} (an alias for an overload Volt can't tell apart has its name)", cpp_decl_text(fn_cursor)).as_str());
+                val sfx = this.free_suffix(fn_cursor, my_head.as_str(), types.as_str(), "");
+                val keep = copy this.note;
+                this.callable_of(generics, head, has_params, fn_cursor, copy r, call, self_arg, extra, tparams, what, sfx.as_str());
+                this.note = keep;
             } else if (!aliased && prev != null) {
                 if (*prev != sig.as_str()) {
                     aliased = true;
@@ -3535,7 +3541,8 @@ attach fn callable_of(this: cpp_gen&, generics: str, head: str, has_params: bool
                     }
                     // (the alias takes the C++ declaration's comment: the forms after it keep it)
                     val keep = copy this.note;
-                    this.callable_of(generics, head, has_params, fn_cursor, copy r, call, self_arg, extra, tparams, what, sfx.as_str());
+                    val free = this.free_suffix(fn_cursor, head, types.as_str(), sfx.as_str());
+                    this.callable_of(generics, head, has_params, fn_cursor, copy r, call, self_arg, extra, tparams, what, free.as_str());
                     this.note = keep;
                 }
             }
@@ -3583,7 +3590,7 @@ attach fn callable_of(this: cpp_gen&, generics: str, head: str, has_params: bool
             this.try_text(generics, my_head.as_str(), params.as_str(), &r, call_names.as_str());
         }
         if (suffix) {
-            put(&this.aliases, { key: move key, text: copy this.out, decl: cpp_decl_text(fn_cursor) });
+            put(&this.aliases, { key: move key, text: copy this.out, decl: cpp_decl_text(fn_cursor), name: this.fn_key(my_head.as_str(), "#name") });
             this.out = move saved;
         }
         drop += 1;
@@ -3610,6 +3617,53 @@ attach fn callable_of(this: cpp_gen&, generics: str, head: str, has_params: bool
             this.volt_maps = false;
         }
     }
+}
+
+// the suffix an overload Volt can't tell apart is named by: base (its parameters' words), else
+// base_2, base_3... (just 2, 3... when base is empty): the first whose name isn't written, an alias
+// waiting to be, or declared beside it in the header (a real function keeps its name)
+attach fn free_suffix(this: cpp_gen&, c: clang::CXCursor, head: str, types: str, base: str) -> std::string {
+    var n: i128 = 1;
+    if (base.len == 0) {
+        n = 2;
+    }
+    while (true) {
+        var cand = S(base);
+        if (n > 1) {
+            if (cand.len() > 0) {
+                cand.push('_');
+            }
+            cand.append(num(n).as_str());
+        }
+        val h = renamed(head, cand.as_str());
+        // the name alone, at every arity: the alias writes each default-argument form under it
+        val key = this.fn_key(h.as_str(), "#name");
+        val pre = this.fn_key(h.as_str(), "");
+        var free = this.written.get(key.as_str()) == null;
+        for (a&) in this.aliases.items() {
+            if (starts_with(a.key.as_str(), pre.as_str())) {
+                free = false;
+            }
+        }
+        if (free) {
+            var paren: usize = 0;
+            while (paren < h.len() && h.as_str()[paren] != '(') {
+                paren += 1;
+            }
+            var at: usize = 0;
+            for (i) in 0..paren {
+                if (h.as_str()[i] == ' ') {
+                    at = i + 1;
+                }
+            }
+            free = !this.declares_beside(c, h.as_str()[at..paren]);
+        }
+        if (free) {
+            return cand;
+        }
+        n += 1;
+    }
+    return S("");
 }
 
 // head with a suffix on its name: `fn which(` and long_long give `fn which_long_long(`
@@ -3737,6 +3791,7 @@ attach fn flush_aliases(this: cpp_gen&, from: usize) -> void {
         if (this.written.get(a.key.as_str()) == null) {
             this.written.put(this.c.intern(copy a.key), true);
             this.sigs.put(this.c.intern(copy a.key), "#alias");
+            this.written.put(this.c.intern(copy a.name), true);
             this.out.append(a.text.as_str());
         } else if (left.as_str() != a.decl.as_str()) {
             left = copy a.decl;
