@@ -95,7 +95,8 @@ A struct or enum that derives json (`@attributes([@derive(json)])`) builds its o
 `T::from_json(v)` reads one back: a struct's fields from the members of the same names (others are
 ignored), where a member that isn't there leaves the field's default (null for an optional), and an
 enum from its variant's name or `{"NAME": payload}`. Numbers have to fit: an integer field takes a
-whole number in its range. Each type `to_json` knows has one too (`i32::from_json(v)`,
+whole number in its range. A JSON number is an `f64`, so an integer past 2^53 comes back rounded
+(as `to_json` wrote it), and a 64-bit type's largest values come back as its largest. Each type `to_json` knows has one too (`i32::from_json(v)`,
 `std::vec<point>::from_json(v)`), except `str`, which would point into the value: a text field read
 from JSON is a `std::string`. A value that doesn't fit fails with `std::json::decode_error::INVALID`,
 whose text says where: `.items[0].count: expected a u8, got 300`.
