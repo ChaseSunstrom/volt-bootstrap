@@ -215,9 +215,9 @@ A Volt reference (`&x`, `&arr[0]`, `&s.f`, a `T&` parameter) reaches clang as th
 as C++'s `f(x)` would: an `int&` parameter binds it, and a template's `S` (`S&` or `S`) deduces
 `int`, not `int *`. Only when no call takes it that way is it read as its address, as `f(&x)`:
 an `int*` parameter, or `template <class T> T deref(T* p)` deducing `T = int`, gets the address the
-reference holds, so C++ writes through to the Volt object. A call reads all its reference arguments
-one way: one wanting an `int&` beside another wanting an `int*` isn't taken, and the error is the
-first reading's. So when a name has both `f(T&)` and `f(T*)`, `f(&x)` calls `f(T&)`; pass a Volt
+reference holds, so C++ writes through to the Volt object. A call first reads all its reference
+arguments one way; when that fails, each is handed over as something that converts to both `T&` and
+`T*`, so one wanting an `int&` beside another wanting an `int*` works. So when a name has both `f(T&)` and `f(T*)`, `f(&x)` calls `f(T&)`; pass a Volt
 `T*` (`val p: i32* = &x;`) to call `f(T*)`.
 
 A Volt value that isn't a class (a number, a `bool`, a pointer, an enum) reaches clang as a
