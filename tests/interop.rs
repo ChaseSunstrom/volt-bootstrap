@@ -2506,6 +2506,18 @@ fn cpp_value_params() {
 }
 
 #[test]
+fn cpp_fnptr_types() {
+    // function pointer parameters whose signature has a class Volt lays out (by reference), an enum
+    // or a reference to a number take a named Volt fn: declared ones as a Volt extern "C" fn of that
+    // signature, per-use ones (templates) through volt_fn_as, a deduced F calling it
+    let e = Env::new("cpp-fnptr-types");
+    let want = "each 10\nmode 2\nsmall 90\nnext 1\ngrow 3\nbump 5\nbigger 2\nscale 2\ntwice 6\nsmall_t 13\nwith_ref 5\n";
+    for backend in ["c", "llvm"] {
+        assert_eq!(ok(e.voltc(&["run", "cpp_fnptr_types.volt", "--backend", backend]), "voltc run cpp_fnptr_types.volt"), want, "function pointers with classes, enums and references ({backend})");
+    }
+}
+
+#[test]
 fn cpp_assign98() {
     // under C++98 a class with a const or reference member (or a member or base with one) declares an
     // assignment it can't define: no set_ for such a field and no Volt form for such a mutable T(&)[N],
@@ -2679,14 +2691,15 @@ fn cpp_params_refused() {
     let err = check("cpp_params_closure.volt");
     assert!(err.contains("argument 1 is a closure(i32) -> i32, but 'apply' wants a extern \"C\" fn(i32) -> i32"), "a closure for a function pointer: {err}");
     // a fn with a reference or a C++ class in its signature, as a function pointer to a call worked
-    // out per use (plain, @cpp<R>'s {i} and {&i}, an operator's operand): no T* or by-name spelling,
-    // an error naming both
+    // out per use (plain, @cpp<R>'s {i} and {&i}, an operator's operand) where it can't cross as its
+    // own pointer (a class held by handle, a slice, @cpp's holes, no matching function pointer): an
+    // error naming both
     // (one line per diagnostic, its location first: each message is checked at its own line)
     let o = e.voltc(&["check", "cpp_params_fnref.volt", "--message-format", "short"]);
     assert!(!o.status.success(), "cpp_params_fnref.volt checks");
     let err = String::from_utf8_lossy(&o.stderr).to_string();
     for (line, why) in [
-        (8, "'by_ref' takes a i32&, which has no C function-pointer form"),
+        (8, "'by_shape' takes a cpp::pr::Shape&, which has no C function-pointer form"),
         (9, "'by_point' takes a cpp::pr::point, which has no C function-pointer form"),
         (10, "'first' returns a i32&, which has no C function-pointer form"),
         (11, "'first' returns a i32&, which has no C function-pointer form"),

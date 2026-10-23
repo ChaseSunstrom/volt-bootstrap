@@ -1,11 +1,11 @@
-// a fn whose parameter or result is a reference or a C++ class has no C function-pointer form (a
-// declared function pointer parameter has none either): an error where a C++ call takes it as one
+// a fn with a reference or a C++ class in its signature that can't cross as itself (a class held by
+// handle, a slice; @cpp's {i}, {&i}): an error where a C++ call takes it (cpp_fnptr_types: those that can)
 use std::io;
 use { "params.hpp" } as cpp;
-fn by_ref(x: i32&) -> i32 { return 1; }
+fn by_ref(x: i32&) -> i32 { return 1; } fn by_shape(s: cpp::pr::Shape&) -> i32 { return 2; }
 fn by_point(p: cpp::pr::point) -> i32 { return p.x; }
 fn first(xs: i32[..]) -> i32& { return &xs[0]; }
-fn plain_ref() -> i32 { return cpp::pr::call0(by_ref); }
+fn plain_ref() -> i32 { return cpp::pr::call0(by_shape); }
 fn cpp_class() -> i32 { return @cpp<i32>("pr::call0({0})", by_point); }
 fn cpp_symbol() -> i32 { return @cpp<i32>("pr::call0({&0})", first); }
 fn plain_result() -> i32 { return cpp::pr::call0(first); }

@@ -2508,8 +2508,10 @@ attach fn array_copy(this: cpp_gen&, base: clang::CXType, et: clang::CXType, nam
 
 // a function pointer parameter, R(*)(A...): a Volt extern "C" fn(A...) -> R, C++ calling the Volt
 // fn through a cast to its own pointer type (C and C++ function types differ in the standard, but
-// every compiler Volt builds with gives them one calling convention). A, R: numbers, bool, void or
-// pointers, which C and C++ lay out alike; R(*)(A..., ...): a Volt extern "C" fn(A..., ...) -> R
+// every compiler Volt builds with gives them one calling convention). A, R: numbers, bool, void,
+// pointers and enums, which C and C++ lay out alike, a T& (a Volt T&: a reference passes as a
+// pointer does) of one of those or of a class Volt lays out, and such a class by value when it's
+// POD (passed as C passes it); R(*)(A..., ...): a Volt extern "C" fn(A..., ...) -> R
 // (not R(*)(...), which C before C23 has no type for). f as written, so its size_t is a usize
 attach fn fn_ptr_param(this: cpp_gen&, f: clang::CXType, name: str, slot: str, cty: std::string) -> cpp_arg? {
     val n = clang::clang_getNumArgTypes(f);
@@ -2534,15 +2536,33 @@ attach fn fn_ptr_param(this: cpp_gen&, f: clang::CXType, name: str, slot: str, c
     return { vty: fmt2("extern \"C\" fn({}) -> {}", move ps, copy r), pass: fmt("@cast<void*>({})", S(name)), cpp: fmt2("(VOLT_ID({}))({})", move cty, S(slot)) };
 }
 
-// the Volt type of a type in a function pointer's signature (none for a class, enum or reference),
-// as a Volt extern "C" fn declares it: a size_t a usize (written_c_type), a const char * parameter
-// a cstr (a result stays a cstr?, which may be null; libclang shows no _Nullable)
+// the Volt type of a type in a function pointer's signature, as a Volt extern "C" fn declares it: a
+// size_t a usize (written_c_type), a const char * parameter a cstr (a result stays a cstr?, which
+// may be null; libclang shows no _Nullable), an enum the Volt enum, a T& a Volt T& (none for a
+// class Volt holds by handle, whose Volt value isn't the object, or a T&&), a class Volt lays out
+// by value only when it's POD
 attach fn c_abi_type(this: cpp_gen&, t: clang::CXType, result: bool) -> std::string? {
     val none: std::vec<str> = {};
     val ct = clang::clang_getCanonicalType(t);
     val k = ct.kind;
-    if (k == clang::CXType_Record || k == clang::CXType_Enum || k == clang::CXType_LValueReference || k == clang::CXType_RValueReference) {
+    if (k == clang::CXType_RValueReference) {
         return null;
+    }
+    if (k == clang::CXType_LValueReference) {
+        val b = clang::clang_getPointeeType(ct);
+        if (b.kind == clang::CXType_LValueReference || b.kind == clang::CXType_ConstantArray || b.kind == clang::CXType_FunctionProto || this.handle_of(b) != null) {
+            return null;
+        }
+        if (b.kind == clang::CXType_Record) {
+            return fmt("{}&", this.vtype(b, &none) ?? return null);
+        }
+        return fmt("{}&", this.c_abi_type(clang::clang_getPointeeType(t), true) ?? return null);
+    }
+    if (k == clang::CXType_Record) {
+        if (this.handle_of(ct) != null || clang::clang_isPODType(ct) == 0) {
+            return null;
+        }
+        return this.vtype(t, &none);
     }
     val w = written_c_type(t);
     if (w) {
@@ -3246,7 +3266,16 @@ attach fn cpp_type_text(this: checker&, t: u32) -> std::string? {
             }
         },
         .REF(x) => { return this.cpp_type_text(x); },
-        .FN_PTR(a, b, c) => { return this.cpp_fn_spell(t, "(*)", false); },
+        .FN_PTR(a, b, c) => {
+            // (one with a reference, a class Volt lays out or an enum: volt_fn_cast, which a deduced
+            // F calls as the fn)
+            val fs = this.cpp_fn_spell(t, "(*)", false);
+            if (fs) {
+                return copy fs;
+            }
+            val cs = this.cpp_fn_cast(t) ?? return null;
+            return fmt("volt_fn_cast<{} >", copy cs);
+        },
         default => {},
     }
     return this.cpp_spell(t);
@@ -7967,6 +7996,14 @@ struct cpp_import_ctx {
 // what a call per use declares in C++ besides the headers: the types an argument may come as, and
 // stand-ins for the arguments (an lvalue, or an rvalue for a class moved in) in any standard
 val CPP_PROBE_HEAD: str = "\n#include <cstddef>\n#include <functional>\n#include <stdint.h>\n#include <string>\n#include <utility>\n#include <vector>\n#if __cplusplus >= 201103L\n#include <cstdint>\n#endif\n#if __cplusplus >= 201703L\n#include <string_view>\n#endif\ntemplate <class T> T &volt_lv();\ntemplate <class T> T volt_rv();\ntemplate <class T> struct volt_cpp_either {\n    operator T &() const;\n    operator T *() const;\n};\ntemplate <class T> volt_cpp_either<T> volt_either(T *);\ntypedef const char *volt_cstr;\ntypedef const char *volt_cstr_opt;\n\n// (as CPP_PRELUDE has them, for the mirrors a probe declares) f16, f128 and i128 as cpp_mirror's layout check spells them: the type the C backend's prelude\n// picks where the compiler has one, else Volt's bytes (nothing to check against)\n#if defined(__SIZEOF_INT128__)\n__extension__ typedef __int128 volt_c_i128;\n#else\ntypedef struct __attribute__((aligned(16))) { unsigned char b[16]; } volt_c_i128;\n#endif\n#if defined(__FLT16_MAX__)\n__extension__ typedef _Float16 volt_c_f16;\n#else\ntypedef struct __attribute__((aligned(2))) { unsigned char b[2]; } volt_c_f16;\n#endif\n#if defined(__LDBL_MANT_DIG__) && __LDBL_MANT_DIG__ == 113\n__extension__ typedef long double volt_c_f128;\n#elif defined(__SIZEOF_FLOAT128__)\n__extension__ typedef __float128 volt_c_f128;\n#else\ntypedef struct __attribute__((aligned(16))) { unsigned char b[16]; } volt_c_f128;\n#endif\n\n#if __cplusplus >= 201103L\n#define VOLT_MOVE(...) std::move(__VA_ARGS__)\n#else\n#define VOLT_MOVE(...) (__VA_ARGS__)\n#endif\n#include <iterator>\n#include <new>\n#if __cplusplus >= 201103L\n#include <type_traits>\n#endif\n\n#if __cplusplus >= 201103L\n// a range Volt loops over (for (x) in r): what begin(r) and end(r) give (end's may be a sentinel), and\n// *it++ by value\nnamespace volt_rng {\nusing std::begin;\nusing std::end;\ntemplate <class R>\nauto b(R &r) -> decltype(begin(r)) {\n    return begin(r);\n}\ntemplate <class R>\nauto e(R &r) -> decltype(end(r)) {\n    return end(r);\n}\n}\ntemplate <class R>\nstruct volt_range_of {\n    typedef decltype(volt_rng::b(std::declval<R &>())) it;\n    typedef decltype(volt_rng::e(std::declval<R &>())) end;\n    typedef typename std::decay<decltype(*std::declval<it &>())>::type elem;\n};\n#else\n// before C++11 (no decltype or std::begin): R::iterator, or R::const_iterator for a const R, from\n// r.begin() and r.end(), and the element its value_type\ntemplate <class R>\nstruct volt_range_of {\n    typedef typename R::iterator it;\n    typedef typename R::iterator end;\n    typedef typename std::iterator_traits<it>::value_type elem;\n};\ntemplate <class R>\nstruct volt_range_of<const R> {\n    typedef typename R::const_iterator it;\n    typedef typename R::const_iterator end;\n    typedef typename std::iterator_traits<it>::value_type elem;\n};\nnamespace volt_rng {\ntemplate <class R>\ntypename volt_range_of<R>::it b(R &r) {\n    return r.begin();\n}\ntemplate <class R>\ntypename volt_range_of<R>::end e(R &r) {\n    return r.end();\n}\n}\n#endif\ntemplate <class R>\nstatic void volt_range_start(R &r, void *it, void *end) {\n    new (it) typename volt_range_of<R>::it(volt_rng::b(r));\n    new (end) typename volt_range_of<R>::end(volt_rng::e(r));\n}\ntemplate <class R>\nstatic bool volt_range_done(void *it, void *end) {\n    return *(typename volt_range_of<R>::it *)it == *(typename volt_range_of<R>::end *)end;\n}\ntemplate <class R>\nstatic typename volt_range_of<R>::elem volt_range_take(void *it) {\n    typename volt_range_of<R>::it &i = *(typename volt_range_of<R>::it *)it;\n    typename volt_range_of<R>::elem v = *i;\n    ++i;\n    return v;\n}\n// the same with the iterators on C++'s heap, for those Volt can't hold in its own words (not\n// trivially copyable or destructible, or aligned past 8): made by volt_range_open, freed by\n// volt_range_close\ntemplate <class R>\nstruct volt_range_box {\n    typename volt_range_of<R>::it i;\n    typename volt_range_of<R>::end e;\n    volt_range_box(R &r) : i(volt_rng::b(r)), e(volt_rng::e(r)) {}\n};\ntemplate <class R>\nstatic void *volt_range_open(R &r) {\n    return new volt_range_box<R>(r);\n}\ntemplate <class R>\nstatic bool volt_range_done_box(void *b) {\n    return ((volt_range_box<R> *)b)->i == ((volt_range_box<R> *)b)->e;\n}\ntemplate <class R>\nstatic typename volt_range_of<R>::elem volt_range_take_box(void *b) {\n    return volt_range_take<R>(&((volt_range_box<R> *)b)->i);\n}\ntemplate <class R>\nstatic void volt_range_close(void *b) {\n    delete (volt_range_box<R> *)b;\n}\n";
+// a Volt fn whose signature has a reference, a class Volt lays out or an enum (cpp_fn_cast), given to
+// C++ as any function pointer of the same signature: V is its Volt one (a reference spelled T &, an
+// enum its integer type). A const T & takes a T &, an enum its integer type, a number another of its
+// size and kind, a class by value only a trivially copyable one (passed as C passes it); the pointer
+// is the Volt fn's own, as a reference and a pointer pass alike. A template's deduced F takes it as
+// it is, its call calling the fn (C++11 on: probe and unit both)
+val CPP_FN_CAST: str = "#if __cplusplus >= 201103L\n#include <type_traits>\ntemplate <class A, bool = std::is_enum<A>::value> struct volt_fn_under { typedef A type; };\ntemplate <class A> struct volt_fn_under<A, true> { typedef typename std::underlying_type<A>::type type; };\ntemplate <class A, class V, class U = typename volt_fn_under<A>::type> struct volt_fn_num : std::integral_constant<bool, std::is_arithmetic<U>::value && std::is_arithmetic<V>::value && sizeof(U) == sizeof(V) && std::is_floating_point<U>::value == std::is_floating_point<V>::value && std::is_signed<U>::value == std::is_signed<V>::value> {};\ntemplate <class A, class V> struct volt_fn_same : std::integral_constant<bool, std::is_same<A, V>::value ? (!std::is_class<A>::value || std::is_trivially_copyable<A>::value) : volt_fn_num<A, V>::value> {};\ntemplate <class A, class V> struct volt_fn_same<A &, V &> : std::integral_constant<bool, std::is_same<A, V>::value || volt_fn_num<A, V>::value> {};\ntemplate <class A, class V> struct volt_fn_same<const A &, V &> : volt_fn_same<A &, V &> {};\ntemplate <bool... B> struct volt_fn_all : std::true_type {};\ntemplate <bool... B> struct volt_fn_all<false, B...> : std::false_type {};\ntemplate <bool... B> struct volt_fn_all<true, B...> : volt_fn_all<B...> {};\ntemplate <class F> struct volt_fn_cast;\ntemplate <class R, class... P> struct volt_fn_cast<R (*)(P...)> {\n    void *f;\n    template <class R2, class... P2> using ptr = R2 (*)(P2...);\n    template <class R2, class... P2, class = typename std::enable_if<volt_fn_all<volt_fn_same<R2, R>::value, volt_fn_same<P2, P>::value...>::value>::type>\n    operator ptr<R2, P2...>() const { return (ptr<R2, P2...>)f; }\n    R operator()(P... a) const { return ((R (*)(P...))f)(a...); }\n};\ntemplate <class F> volt_fn_cast<F> volt_fn_as(void *f) { volt_fn_cast<F> c; c.f = f; return c; }\n#endif\n";
+
 // what the probes ask of a class to say it can be moved (made, or assigned, from a T&&): before
 // C++11, which has no rvalue references, a move is a copy, from a const T& or (a move emulated as
 // std::auto_ptr does, T(T&) and a conversion through a ref wrapper) a T&
@@ -8313,6 +8350,7 @@ attach fn cpp_instance_as(this: checker&, k: usize, expr: str, types: std::vec<u
     val pname = fmt("volt_probe_{}", unum(n));
     var text = copy this.cpp_ctxs.at(k).src;
     text.append(CPP_PROBE_HEAD);
+    text.append(CPP_FN_CAST);
     text.append(this.cpp_mirror_decls().as_str());
     // clang's __decltype and __decay, which it has in every standard (the probe is only libclang's)
     if (by_value) {
@@ -8728,6 +8766,12 @@ attach fn cpp_dyn_call(this: checker&, d: u32, name: str, rv: tval?, static_ty: 
 // an argument of a call clang works out: a fn's name is its C function (a function pointer, which
 // C++ makes a callable from too); a fn value or closure stays one
 attach fn cpp_arg_value(this: checker&, e: expr&) -> compile_error!tval {
+    val v = try this.cpp_arg_raw(e);
+    try this.fn_ptr_form(v.ty, e);
+    return v;
+}
+
+attach fn cpp_arg_raw(this: checker&, e: expr&) -> compile_error!tval {
     var want: u32? = null;
     match (e.kind) {
         .PATH(p&) => {
@@ -8737,9 +8781,114 @@ attach fn cpp_arg_value(this: checker&, e: expr&) -> compile_error!tval {
         },
         default => {},
     }
-    val v = try this.expr(e, want);
+    return this.expr(e, want);
+}
+
+// argument e of a call worked out per use, as hole n: its value and the hole's text. A fn whose
+// signature has a reference, a class Volt lays out or an enum crosses as its pointer, which
+// volt_fn_as gives C++ as the function pointer type the call wants (CPP_FN_CAST)
+struct cpp_hole {
+    v: tval;
+    text: std::string;
+    fty: u32 = 0; // a fn crossing through volt_fn_as: its type
+}
+
+attach fn cpp_hole_arg(this: checker&, e: expr&, n: usize) -> compile_error!cpp_hole {
+    val v = try this.cpp_arg_raw(e);
+    val hole = fmt("{{{}}}", unum(@cast<u64>(n)));
+    val sig = this.cpp_fn_cast(v.ty);
+    if (sig) {
+        return { v: vnew(VOIDPTR, this.ir.node(ir_kind::BITCAST(v.c), VOIDPTR)), text: fmt2("volt_fn_as<{} >({})", copy sig, move hole), fty: v.ty };
+    }
     try this.fn_ptr_form(v.ty, e);
-    return v;
+    return { v: v, text: move hole };
+}
+
+// a per-use call clang refused (e) with a fn crossing through volt_fn_as (args' cast holes): when
+// clang's error is about that fn, fn_ptr_form's error for it (it has no C function-pointer form, nor
+// the signature of one the call takes), else e
+attach fn cpp_cast_failed(this: checker&, e: compile_error, args: std::vec<expr>&, holes: std::vec<cpp_hole>&) -> compile_error {
+    if (!contains(err_msg(&e), "volt_fn")) {
+        return e;
+    }
+    for (j) in 0..holes.len {
+        if (holes.at(j).fty != 0) {
+            val why = this.fn_ptr_unformed(holes.at(j).fty) ?? S("has a signature no function pointer C++ takes here has");
+            var who = S("this function pointer");
+            match (args.at(j).kind) {
+                .PATH(p&) => { who = fmt("'{}'", S(p.last())); },
+                default => {},
+            }
+            return fail(args.at(j).span, fmt2("{} {}, which has no C function-pointer form, and no function pointer this call takes has its signature (a const T& takes a T&, an enum its integer type)", move who, copy why));
+        }
+    }
+    return e;
+}
+
+// the Volt signature volt_fn_as takes for a fn of type t whose signature has a reference, a class
+// Volt lays out or an enum (a reference spelled T &): none for any other (it crosses as its C
+// function pointer), a variadic one, or one with a part C++ has no spelling for (a class Volt holds
+// by handle, an array reference)
+attach fn cpp_fn_cast(this: checker&, t: u32) -> std::string? {
+    match (*this.t.get(t)) {
+        .FN_PTR(ps&, ret, va) => {
+            if (va) {
+                return null;
+            }
+            var any = this.fn_cast_needed(ret);
+            for (p&) in ps.items() {
+                if (this.fn_cast_needed(*p)) {
+                    any = true;
+                }
+            }
+            if (!any) {
+                return null;
+            }
+            var s = this.fn_cast_part(ret) ?? return null;
+            s.append(" (*)(");
+            for (i) in 0..ps.len {
+                if (i > 0) {
+                    s.append(", ");
+                }
+                s.append((this.fn_cast_part(*ps.at(i)) ?? return null).as_str());
+            }
+            s.push(')');
+            return s;
+        },
+        default => { return null; },
+    }
+}
+
+attach fn fn_cast_needed(this: checker&, t: u32) -> bool {
+    match (*this.t.get(t)) {
+        .ENUM(e) => { return true; },
+        default => { return this.no_c_fn_form(t); },
+    }
+}
+
+// (CPP_FN_CAST's: void, numbers, bool, pointers, enums and classes Volt lays out, and references to
+// those but void)
+attach fn fn_cast_part(this: checker&, t: u32) -> std::string? {
+    match (*this.t.get(t)) {
+        .REF(x) => {
+            if (x == VOID) {
+                return null;
+            }
+            var s = this.fn_cast_part(x) ?? return null;
+            s.append(" &");
+            return s;
+        },
+        .VOID => { return S("void"); },
+        .BOOL => { return S("bool"); },
+        .INT(k) => { return this.cpp_spell(t); },
+        .FLOAT(b) => { return this.cpp_spell(t); },
+        .CSTR => { return this.cpp_spell(t); },
+        .VOIDPTR => { return this.cpp_spell(t); },
+        .PTR(x) => { return this.cpp_spell(t); },
+        .ENUM(e) => { return this.cpp_spell(t); },
+        .STRUCT(s) => { return this.cpp_spell(t); },
+        default => { return null; },
+    }
 }
 
 // whether p names a fn (a local, or a generic's value, of that name hides it), as path_expr reads it
@@ -8853,12 +9002,19 @@ attach fn cpp_use_call(this: checker&, k: usize, callee: str, macro: bool, tried
             expr = copy op;
             if (!ends_with(expr.as_str(), "(")) {
                 // a whole expression: its operands are the holes already
+                var hs: std::vec<cpp_hole> = {};
                 for (j) in 0..args.len {
-                    val v = try this.cpp_arg_value(args.at(j));
-                    put(&types, v.ty);
-                    put(&pre, v);
+                    val h = try this.cpp_hole_arg(args.at(j), j + 1);
+                    if (h.fty != 0) {
+                        expr = replace_all(expr.as_str(), fmt("{{{}}}", unum(@cast<u64>(j + 1))).as_str(), h.text.as_str());
+                    }
+                    put(&types, h.v.ty);
+                    put(&pre, h.v);
+                    put(&hs, move h);
                 }
-                val made = try this.cpp_instance_addr(k, expr.as_str(), &types, true, macro, tried, span);
+                val made = this.cpp_instance_addr(k, expr.as_str(), &types, true, macro, tried, span) catch |e| {
+                    return this.cpp_cast_failed(e, args, &hs);
+                };
                 var cands: std::vec<u32> = {};
                 put(&cands, made);
                 var none: std::vec<garg> = {};
@@ -8868,21 +9024,25 @@ attach fn cpp_use_call(this: checker&, k: usize, callee: str, macro: bool, tried
     } else {
         expr = fmt2("{}{}(", S(callee), copy targs);
     }
+    var hs: std::vec<cpp_hole> = {};
     for (j) in 0..args.len {
         val a = args.at(j);
         if (needs_context(a)) {
             return fails(a.span, "C++ works this call out from its arguments' types: give this one a type (a typed val)");
         }
-        val v = try this.cpp_arg_value(a);
-        put(&types, v.ty);
-        put(&pre, v);
+        val h = try this.cpp_hole_arg(a, holes + j);
+        put(&types, h.v.ty);
+        put(&pre, h.v);
         if (j > 0) {
             expr.append(", ");
         }
-        expr.append(fmt("{{{}}}", unum(@cast<u64>(holes + j))).as_str());
+        expr.append(h.text.as_str());
+        put(&hs, move h);
     }
     expr.push(')');
-    val made = try this.cpp_instance_on(k, expr.as_str(), &types, rv != null, macro, tried, by_value, span);
+    val made = this.cpp_instance_on(k, expr.as_str(), &types, rv != null, macro, tried, by_value, span) catch |e| {
+        return this.cpp_cast_failed(e, args, &hs);
+    };
     var cands: std::vec<u32> = {};
     put(&cands, made);
     var none: std::vec<garg> = {};
@@ -9735,11 +9895,18 @@ attach fn cpp_call_as(this: checker&, r: u32, gargs: std::vec<garg>&, args: std:
             },
             default => {},
         }
+        var cast: std::string? = null;
         match (*this.t.get(v.ty)) {
-            .FN_PTR(ps&, ret, va) => { fp = this.cpp_fn_spell(v.ty, "(*)", false); },
+            .FN_PTR(ps&, ret, va) => {
+                fp = this.cpp_fn_spell(v.ty, "(*)", false);
+                if (fp == null) {
+                    // (one with a reference, a class Volt lays out or an enum: through volt_fn_as)
+                    cast = this.cpp_fn_cast(v.ty);
+                }
+            },
             default => {},
         }
-        if (fp == null) {
+        if (fp == null && cast == null) {
             sp = this.cpp_spell(v.ty) ?? return fail(span, fmt2("@cpp: argument {} is {}, which has no C++ form", unum(@cast<u64>(i - 1)), this.ty_name(v.ty)));
         }
         if (params.len() > 0) {
@@ -9766,6 +9933,8 @@ attach fn cpp_call_as(this: checker&, r: u32, gargs: std::vec<garg>&, args: std:
         }
         if (fp) {
             put(&subst, fmt2("(({}){})", copy fp, copy an));
+        } else if (cast) {
+            put(&subst, fmt2("volt_fn_as<{} >({})", copy cast, copy an));
         } else if (stars.len() > 0) {
             put(&subst, fmt2("({}{})", move stars, copy an));
         } else {
@@ -10439,6 +10608,7 @@ attach fn cpp_unit(this: checker&, unit: u32, live: std::map<u32, bool>&) -> std
         }
     }
     out.append(CPP_PRELUDE);
+    out.append(CPP_FN_CAST);
     for (i) in 0..this.cpp_decls.len {
         var used = false;
         for (j) in 0..this.cpp_shims.len {
