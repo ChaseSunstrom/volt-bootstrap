@@ -128,6 +128,9 @@ voltc compiles the wrappers in one C++ unit per standard, each including only it
 so everything above works under C++98 through C++26: functions, classes and their handles, `try_`
 forms, exceptions, and calls worked out per use (which under C++98 give their result by value).
 A `std::pair` reads as a tuple under C++98 too (a `std::map`'s entries `kv.0` and `kv.1`).
+A class C++98 declares an assignment for that can't be defined (a `const` or reference field, or a
+field or base with one) can't be assigned there either, as from C++11 on: no `set_` for a field of
+it, no `T(&)[N]` form that assigns it.
 An exception going back through Volt code to the C++ that called it needs C++11 (it travels as a
 `std::exception_ptr`); under C++98 it stops the program.
 Subclassing a C++ class (`derive`, below) needs its import under C++17 or newer.

@@ -1707,6 +1707,40 @@ attach fn assignable(this: cpp_gen&, t: clang::CXType) -> bool {
     return st.as_str() != "function";
 }
 
+// below C++11 a class's implicit operator= is declared even when it can't be defined (a const or
+// reference member, or a member or base whose own can't be), and clang's trait says yes: may it be?
+// One that declares its own copy assignment is taken at its word
+fn cxx98_assigns(c: clang::CXCursor, depth: i32) -> bool {
+    if (depth > 16) {
+        return true;
+    }
+    for (ch&) in children(c).items() {
+        if (clang::clang_getCursorKind(*ch) == clang::CXCursor_CXXMethod && clang::clang_CXXMethod_isCopyAssignmentOperator(*ch) != 0) {
+            return clang::clang_getCXXAccessSpecifier(*ch) != clang::CX_CXXPrivate;
+        }
+    }
+    for (ch&) in children(c).items() {
+        val k = clang::clang_getCursorKind(*ch);
+        if (k != clang::CXCursor_FieldDecl && k != clang::CXCursor_CXXBaseSpecifier) {
+            continue;
+        }
+        var t = clang::clang_getCanonicalType(clang::clang_getCursorType(*ch));
+        if (t.kind == clang::CXType_LValueReference || t.kind == clang::CXType_RValueReference) {
+            return false;
+        }
+        while (t.kind == clang::CXType_ConstantArray) {
+            t = clang::clang_getCanonicalType(clang::clang_getArrayElementType(t));
+        }
+        if (clang::clang_isConstQualifiedType(t) != 0) {
+            return false;
+        }
+        if (t.kind == clang::CXType_Record && !cxx98_assigns(clang::clang_getTypeDeclaration(t), depth + 1)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 // how one C++ parameter crosses: its Volt type, what the Volt fn passes to @cpp, and the C++
 // expression for it ({i} is @cpp's argument i: a reference or a class arrives as the object itself)
 struct cpp_arg {
@@ -7438,6 +7472,19 @@ attach fn import_cpp(this: checker&, headers: std::vec<std::string>&, alias: str
     }
     // (the probe reparsed it: its cursors are new)
     g.scan(tu.root(), "");
+    if (g.below11) {
+        var cant: std::vec<str> = {};
+        for (e) in g.traits.iter() {
+            val c = *(g.cursors.get(*e.key) ?? continue);
+            if (e.value.assignable && !cxx98_assigns(c, 0)) {
+                put(&cant, *e.key);
+            }
+        }
+        for (q&) in cant.items() {
+            val tr = g.traits.get(*q) ?? continue;
+            tr->assignable = false;
+        }
+    }
     g.prune();
     g.instancing = true;
     g.pre_instances(tu.root());

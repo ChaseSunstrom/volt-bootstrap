@@ -2400,6 +2400,23 @@ fn cpp_array_ref_handle() {
 }
 
 #[test]
+fn cpp_assign98() {
+    // under C++98 a class with a const or reference member (or a member or base with one) declares an
+    // assignment it can't define: no set_ for such a field and no Volt form for such a mutable T(&)[N],
+    // as from C++11 on; a class with its own assignment keeps its setter
+    let e = Env::new("cpp-assign98");
+    for std in ["-std=c++98", "-std=c++17"] {
+        for backend in ["c", "llvm"] {
+            assert_eq!(ok(e.voltc(&["run", "cpp_assign98.volt", "--backend", backend, "--cc", std]), "voltc run cpp_assign98.volt"), "bag 5 1\nref 7\n", "{std}, {backend}");
+        }
+        let shown = Command::new(&e.voltc).args(["check", "cpp_assign98.volt", "--cc", std, "--std"]).arg(Path::new(ROOT).join("std")).current_dir(Path::new(ROOT).join("tests/interop")).env("VOLT_SHOW_CPP", "1").output().unwrap();
+        let src = String::from_utf8_lossy(&shown.stderr);
+        assert!(!src.contains("fn set_p(") && !src.contains("fn set_d(") && src.contains("// C++: void as98::pin_touch(Pin (&)[2] p) (worked out per use: Pin (&)[2] has no Volt form)"), "{std}: {src}");
+        assert!(src.contains("fn set_o(this: Bag&") && src.contains("fn set_n(this: Bag&") && src.contains("fn set_tag(this: Pin&"), "{std}: {src}");
+    }
+}
+
+#[test]
 fn cpp_array_ref_string() {
     // a std::string(&)[N]: a Volt std::string[N]&, C++'s changes copied back once the call returns
     // (not when it threw); a const one a str[N]
