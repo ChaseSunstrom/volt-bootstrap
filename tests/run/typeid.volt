@@ -1,6 +1,7 @@
 // @typeid: a type's stable id (the FNV-1a hash of its canonical name) at compile time and at run
 // time, and for a trait value the id of the type it holds
 use std::io;
+use std::digest;
 
 trait shape {
     fn area(this) -> f64;
@@ -44,6 +45,8 @@ fn make(round: bool) -> shape {
 fn main() -> void {
     std::println("{} {} {}", @typeid(i32), @typeid(u8*), @typeid(std::vec<i32>));
     std::println("{} {}", IDS[0] == @typeid(circle), id_of<square>() == IDS[1]);
+    // the canonical name spells every arg, a nested instance's too (not its shorter shown name)
+    std::println("{}", @typeid(std::vec<std::vec<i32>>) == std::digest::fnv1a("std::vec<std::vec<i32, std::mem::default_allocator>, std::mem::default_allocator>"));
 
     // a value: its type's id, without running it
     val n: i64 = 5;
@@ -81,6 +84,7 @@ fn main() -> void {
 }
 // expect: 3094732814638223685 5565575136109896758 14475034361214193807
 // expect: true true
+// expect: true
 // expect: true
 // expect: circle square true true
 // expect: 2 8
