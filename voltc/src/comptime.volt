@@ -4134,9 +4134,23 @@ fn ptr_lay(n: u64) -> lay {
 attach fn layout(this: checker&, t: u32, span: span) -> compile_error!lay {
     match (*this.t.get(t)) {
         .STRUCT(s) => {
-            // only fields Volt could read were imported, so only C knows the real layout
+            // a header struct: C's size and alignment where libclang placed its fields (c_offsets),
+            // else Volt's own layout, which the importer made C's (lay_out_partial checks it where
+            // an attribute, a bitfield or a wide vector could make them differ). One with members
+            // Volt can't read, or a union, only C lays out
             if (this.header_struct(s)) {
-                return fail(span, fmt("C struct {} has no compile-time layout; @sizeof works on it at runtime", this.ty_name(t)));
+                val cs = this.overlay_size(s);
+                if (cs.0 > 0) {
+                    return { size: cs.0, align: cs.1 };
+                }
+                var is_union = false;
+                match (this.item_of(this.si(s).decl).kind) {
+                    .STRUCT(d) => { is_union = d.c_union; },
+                    default => {},
+                }
+                if (this.partial_struct(s) || is_union) {
+                    return fail(span, fmt("C struct {} has no compile-time layout; @sizeof works on it at runtime", this.ty_name(t)));
+                }
             }
             var fs: std::vec<u32> = {};
             for (f&) in (try this.struct_fields(s, span)).items() {

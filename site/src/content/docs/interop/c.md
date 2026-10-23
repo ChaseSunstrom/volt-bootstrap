@@ -284,8 +284,11 @@ fn main() -> void {
 
 ## Layout
 
-Structs imported from C have C's layout. C works out their size, so `@sizeof` and `@alignof` of one
-are known at run time (and in a global's initializer), not in comptime code or an array's length.
+Structs imported from C have C's layout, and `@sizeof` and `@alignof` of one are compile-time values
+(an array's length, comptime code): C's own numbers, which libclang gives where an attribute, a
+bitfield or an anonymous union places the fields. A union's (and those of a struct with a member
+Volt can't read that libclang can't place either) are known at run time only, and in a global's
+initializer.
 Otherwise an imported struct is a type like any other: fns and traits attach to it
 ([Attaching to any type](/volt-bootstrap/guide/structs/#attaching-to-any-type)), and `@typeinfo`
 reads its fields.
