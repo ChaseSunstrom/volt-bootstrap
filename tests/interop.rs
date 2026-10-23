@@ -2329,6 +2329,61 @@ fn cpp_peruse_layout() {
 }
 
 #[test]
+fn cpp_array_ref_enum() {
+    // a C++ enum's T(&)[N], an enum class : uint8_t's too: the Volt enum array's address, C++'s
+    // writes seen in it
+    let e = Env::new("cpp-array-ref-enum");
+    for backend in ["c", "llvm"] {
+        assert_eq!(ok(e.voltc(&["run", "cpp_array_ref_enum.volt", "--backend", backend]), "voltc run cpp_array_ref_enum.volt"), "rotate 1 2 0\nsum 8\nraise 100 7 107\n", "enum arrays ({backend})");
+    }
+}
+
+#[test]
+fn cpp_array_ref_handle() {
+    // a T(&)[N] of a class Volt holds by handle: a C++ array copied from the handles' objects, and
+    // back into them once the call returns (not when it threw); const, one copied but not assigned
+    let e = Env::new("cpp-array-ref-handle");
+    let want = "total 3\ngrow a+ 11 b+ 12\ntotal 23\nthrew INVALID_ARGUMENT negative\nkept a+ 11 b+ 12\ntried a++ 12 b++ 13\npins 7\n";
+    for backend in ["c", "llvm"] {
+        assert_eq!(ok(e.voltc(&["run", "cpp_array_ref_handle.volt", "--backend", backend]), "voltc run cpp_array_ref_handle.volt"), want, "handle arrays ({backend})");
+    }
+    // a class that can't be copied in (or, for a T(&)[N], assigned back) has no Volt form for it
+    let shown = Command::new(&e.voltc).args(["check", "cpp_array_ref_handle.volt", "--std"]).arg(Path::new(ROOT).join("std")).current_dir(Path::new(ROOT).join("tests/interop")).env("VOLT_SHOW_CPP", "1").output().unwrap();
+    let src = String::from_utf8_lossy(&shown.stderr);
+    assert!(src.contains("fn pin_sum(p: ar::Pin[2]&) -> i32") && src.contains("fn total(w: ar::Widget[2]&) -> i32") && src.contains("fn grow(w: ar::Widget[2]&, by: i32) -> void"), "copyable handle classes' arrays: {src}");
+    for (f, t) in [("void ar::pin_touch", "Pin (&)[2] p"), ("int ar::lock_sum", "const Lock (&)[2] l"), ("void ar::lock_touch", "Lock (&)[2] l")] {
+        let ty = &t[..t.len() - 2];
+        assert!(src.contains(&format!("// C++: {f}({t}) (worked out per use: {ty} has no Volt form)")), "{f}: {src}");
+    }
+    // under C++98 too, where std::vector's push_back may assign: a const one of a class that's
+    // copied but not assigned has no Volt form there, and has one from C++11 on
+    for std in ["-std=c++98", "-std=c++17"] {
+        for backend in ["c", "llvm"] {
+            assert_eq!(ok(e.voltc(&["run", "cpp_array_ref98.volt", "--backend", backend, "--cc", std]), "voltc run cpp_array_ref98.volt"), "total 3\ngrow 11 23\nstrings abx cx 5\n", "handle and string arrays ({std}, {backend})");
+        }
+        let shown = Command::new(&e.voltc).args(["check", "cpp_array_ref98.volt", "--cc", std, "--std"]).arg(Path::new(ROOT).join("std")).current_dir(Path::new(ROOT).join("tests/interop")).env("VOLT_SHOW_CPP", "1").output().unwrap();
+        let src = String::from_utf8_lossy(&shown.stderr);
+        let left = src.contains("// C++: int ar98::pin_sum(const Pin (&)[2] p) (worked out per use: const Pin (&)[2] has no Volt form)");
+        assert!(src.contains("fn total(b: ar98::Box[2]&) -> i32") && left == (std == "-std=c++98") && (left || src.contains("fn pin_sum(p: ar98::Pin[2]&) -> i32")), "{std}: {src}");
+    }
+}
+
+#[test]
+fn cpp_array_ref_string() {
+    // a std::string(&)[N]: a Volt std::string[N]&, C++'s changes copied back once the call returns
+    // (not when it threw); a const one a str[N]
+    let e = Env::new("cpp-array-ref-string");
+    let want = "append abxy cxy\nthrew INVALID_ARGUMENT negative\nkept abxy cxy\ntried abxy! cxy!\nlengths 8\n";
+    for backend in ["c", "llvm"] {
+        assert_eq!(ok(e.voltc(&["run", "cpp_array_ref_string.volt", "--backend", backend]), "voltc run cpp_array_ref_string.volt"), want, "string arrays ({backend})");
+    }
+    // N is the Volt array type's: another length is a type error
+    let o = e.voltc(&["check", "cpp_array_ref_size.volt"]);
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(!o.status.success() && err.contains("argument 1 is a std::string[3]&, but 'append' wants a std::string[2]&"), "another length: {err}");
+}
+
+#[test]
 fn cpp_clang_root() {
     // a clang-typed @cpp with no C++ import leaves this file's own generics Volt's: a reference
     // deduced as one (it writes through), a plain fn's name a fn value
