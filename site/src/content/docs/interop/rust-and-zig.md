@@ -89,7 +89,16 @@ bounds: types that don't meet them are an error at the call, with rustc's reason
 
 Closures and traits cross both ways. Their methods' and closures' types are numbers, `bool`,
 `char`, and text: `&str` and `String` in as `str`, `String` out as `std::string`, and a trait
-method's `&str` result as `str` (lent, as in Rust). A Rust type's own impl of a method with a body
+method's `&str` result as `str` (lent, as in Rust). A Volt closure Rust calls, and a Volt type's
+method of a crate trait, also take the crate's structs (a copy; a `&mut Point` is Volt's to
+change, copied back), fieldless enums, its handle types (one given by value is Volt's to delete; a
+`&Tally` is lent), `&i32` and `&mut i32` (as `i32&`), slices, `Vec`s and arrays of numbers and text
+(lent as `i32[..]` and `str[..]`), and `Option`s of numbers, text, structs and enums (`i32?`); they
+give back structs, enums, handles, `Vec`s and arrays of numbers, `String`s, structs and enums (a
+`std::vec`: Rust checks an array's count), and `Option`s and tuples of any of those
+(`geom::evens(xs[..], || (v: i32[..], by: i32?) -> std::vec<i32> { ... })`). A closure giving a `Result`
+leaves out the function taking it; a trait method giving one keeps Rust's body (one without a body
+leaves the trait out). A Rust type's own impl of a method with a body
 (`Square`'s `describe`) runs on its `dyn_T` and on the type; a Volt type that writes an `@optional`
 one has it called by Rust, while a value of the trait union passes with Rust's body for it (a union
 can't say which of its members wrote one). Rust may hand a Volt value it was given to another

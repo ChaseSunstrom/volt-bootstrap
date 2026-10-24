@@ -285,6 +285,16 @@ pub trait Lang {
     fn cb_types(&self) -> bool {
         false
     }
+    /// whether its shim hands t to a Volt function it calls (a closure's or a trait method's
+    /// parameter) or, out, takes it back as one's result, past numbers, bools, chars and text
+    fn cb_ty(&self, _g: &Gen, _t: &Ty, _out: bool) -> bool {
+        self.cb_types()
+    }
+    /// a reference to one of its handles it hands a Volt function is lent (the value's address,
+    /// never freed by Volt), not a handle of its own the call frees
+    fn cb_lends(&self) -> bool {
+        false
+    }
     /// "rust", "zig": the shim namespace (rust_shim), the error set (rust_error) and symbols
     fn short(&self) -> &'static str;
     /// "Rust", "Zig": in messages
@@ -1483,7 +1493,15 @@ impl<'a> Gen<'a> {
             Ty::Str | Ty::String => ("str".into(), vec![format!("{a}: u8*"), format!("{a}_n: usize")], Vec::new(), format!("@cast<str>(@slice({a}, {a}_n))")),
             Ty::Prim(x) => (x.to_string(), vec![format!("{a}: {x}")], Vec::new(), a),
             Ty::Char => ("u32".into(), vec![format!("{a}: u32")], Vec::new(), a),
-            _ if !self.lang.cb_types() => return None,
+            _ if !self.lang.cb_ty(self, t, false) => return None,
+            // a value or none: whether there's one, then its parameters (read when there is)
+            Ty::Opt(x) if matches!(**x, Ty::Prim(_) | Ty::Char | Ty::Str | Ty::String) || self.info(x).is_some_and(|ti| ti.kind != Kind::Handle) => {
+                let (vt, ext, mut pre, arg) = self.cb_in(x, i)?;
+                let mut e = vec![format!("{a}_has: bool")];
+                e.extend(ext);
+                pre.extend([format!("var {a}_o: {vt}? = null;"), format!("if ({a}_has) {{ {a}_o = {arg}; }}")]);
+                (format!("{vt}?"), e, pre, format!("{a}_o"))
+            }
             // the other side's closure: a Volt fn calling it (its handle, made already by
             // fn_handle, freed with the fn)
             Ty::Fn(ps, r, _, _) => {
@@ -1522,6 +1540,8 @@ impl<'a> Gen<'a> {
                     Kind::Plain if !by_ref => (vp.clone(), vec![format!("{a}: {vp}*")], Vec::new(), format!("*{a}")),
                     // the shim's copy, which it copies back
                     Kind::Plain => (format!("{vp}&"), vec![format!("{a}: {vp}*")], Vec::new(), format!("&*{a}")),
+                    // the shim's value, lent (a reference, where the language lends it)
+                    Kind::Handle if by_ref && self.lang.cb_lends() => (format!("{vp}&"), vec![format!("{a}: void*")], vec![format!("var {a}_h = {ns}::lend_{mg}({a});")], format!("&{a}_h")),
                     // a handle of its own, freed when the call is done
                     Kind::Handle => (format!("{vp}&"), vec![format!("{a}: void*")], vec![format!("var {a}_h = {ns}::own_{mg}({a});")], format!("&{a}_h")),
                     Kind::Enum if !by_ref => (vp, vec![format!("{a}: i64")], Vec::new(), format!("{ns}::of_{mg}({a})")),
@@ -1540,7 +1560,7 @@ impl<'a> Gen<'a> {
             Ty::Prim(x) => x.to_string(),
             Ty::Char => "u32".into(),
             Ty::String => "std::string".into(),
-            _ if !self.lang.cb_types() => return None,
+            _ if !self.lang.cb_ty(self, r, true) => return None,
             Ty::Res(x) => {
                 let t = self.cb_out_ty(x)?;
                 format!("{}::{}_error!{t}", self.alias, self.lang.short())

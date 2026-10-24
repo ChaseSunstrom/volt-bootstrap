@@ -1138,6 +1138,12 @@ fn rust_direct() {
         c.args(["run", "--backend", backend, "more.volt"]).current_dir(&dir).env("VOLT_STD", Path::new(ROOT).join("std"));
         tools(&mut c);
         assert_eq!(ok(c.output().unwrap(), "voltc run more.volt"), expect("more.volt"), "more ({backend})");
+        // Volt closures and a Volt type's trait methods taking and giving structs, enums,
+        // handles, Vec, slices, arrays, Option and tuples
+        let mut c = Command::new(&e.voltc);
+        c.args(["run", "--backend", backend, "callbacks.volt"]).current_dir(&dir).env("VOLT_STD", Path::new(ROOT).join("std"));
+        tools(&mut c);
+        assert_eq!(ok(c.output().unwrap(), "voltc run callbacks.volt"), expect("callbacks.volt"), "callbacks ({backend})");
     }
     let mut c = Command::new(&e.voltc);
     c.args(["check", "more.volt"]).current_dir(&dir).env("VOLT_STD", Path::new(ROOT).join("std")).env("VOLT_SHOW_IMPORT", "1");

@@ -1890,6 +1890,142 @@ impl Rust {
         p.push(t.name.clone());
         format!("::{}", p.join("::"))
     }
+
+    /// a closure's or a trait method's parameter or result type as Rust spells it (cb_arg's and
+    /// cb_ret's types)
+    fn cb_rust_ty(&self, g: &Gen, t: &Ty) -> Option<String> {
+        let m = |x: bool| if x { "mut " } else { "" };
+        Some(match t {
+            Ty::Prim(x) => x.to_string(),
+            Ty::Char => "char".into(),
+            Ty::Str => "&str".into(),
+            Ty::String => "String".into(),
+            Ty::Named(_) => self.path(&g.info(t)?.def),
+            Ty::Ref(x, mutable) => format!("&{}{}", m(*mutable), self.cb_rust_ty(g, x)?),
+            Ty::Vec(e) => format!("Vec<{}>", self.cb_rust_ty(g, e)?),
+            Ty::Slice(e, mutable) => format!("&{}[{}]", m(*mutable), self.cb_rust_ty(g, e)?),
+            Ty::Array(e, n) => format!("[{}; {n}]", self.cb_rust_ty(g, e)?),
+            Ty::Opt(e) => format!("Option<{}>", self.cb_rust_ty(g, e)?),
+            Ty::Tuple(es) => {
+                let a = es.iter().map(|(_, e)| self.cb_rust_ty(g, e)).collect::<Option<Vec<_>>>()?;
+                format!("({}{})", a.join(", "), if a.len() == 1 { "," } else { "" })
+            }
+            _ => return None,
+        })
+    }
+
+    /// a value Rust hands a Volt function (x, a closure's or a trait method's parameter, as Rust
+    /// has it), past numbers, chars and text: the C parameters' types, the lines before the call,
+    /// the arguments, and the lines after it (a &mut struct's copy put back)
+    fn cb_arg(&self, g: &Gen, t: &Ty, x: &str) -> Option<(Vec<String>, Vec<String>, Vec<String>, Vec<String>)> {
+        let one = |c: &str, a: String| Some((vec![c.to_string()], Vec::new(), vec![a], Vec::new()));
+        match t {
+            Ty::Ref(r, mutable) if matches!(**r, Ty::Prim(_)) => {
+                let Ty::Prim(p) = **r else { return None };
+                one(&format!("*mut {p}"), if *mutable { format!("{x} as *mut {p}") } else { format!("{x} as *const {p} as *mut {p}") })
+            }
+            Ty::Named(_) | Ty::Ref(..) => {
+                let (named, by_ref, mutable) = match t {
+                    Ty::Ref(r, m) => (&**r, true, *m),
+                    r => (r, false, false),
+                };
+                let ti = g.info(named)?;
+                let (rp, mg) = (self.path(&ti.def), Gen::mangle(&ti.def));
+                match (ti.kind, by_ref) {
+                    // a copy (Volt's to change: a &mut's put back)
+                    (Kind::Plain, false) => Some((vec![format!("*const V_{mg}")], vec![format!("let {x}_m = to_{mg}(&{x});")], vec![format!("&{x}_m")], Vec::new())),
+                    (Kind::Plain, true) => Some((vec![format!("*mut V_{mg}")], vec![format!("let mut {x}_m = to_{mg}({x});")], vec![format!("&mut {x}_m")], if mutable { vec![format!("*{x} = from_{mg}(&{x}_m);")] } else { Vec::new() })),
+                    (Kind::Enum, false) => one("i64", format!("to_{mg}(&{x})")),
+                    // the value, Volt's to drop; a reference's lent (its address)
+                    (Kind::Handle, false) => one("*mut c_void", format!("Box::into_raw(Box::new({x})) as *mut c_void")),
+                    (Kind::Handle, true) => one("*mut c_void", format!("{x} as *const {rp} as *mut c_void")),
+                    _ => None,
+                }
+            }
+            // the elements, lent for the call: numbers where they are, text as Volt's strs
+            Ty::Vec(e) | Ty::Slice(e, _) | Ty::Array(e, _) => {
+                let ptr = if matches!(t, Ty::Slice(_, true)) { "as_mut_ptr" } else { "as_ptr" };
+                match **e {
+                    Ty::Prim(p) => Some((vec![format!("*const {p}"), "usize".into()], Vec::new(), vec![format!("{x}.{ptr}()"), format!("{x}.len()")], Vec::new())),
+                    Ty::Str | Ty::String => Some((vec!["*const VoltStr".into(), "usize".into()], vec![format!("let {x}_s: Vec<VoltStr> = {x}.iter().map(|w| VoltStr {{ p: w.as_ptr(), n: w.len() }}).collect();")], vec![format!("{x}_s.as_ptr()"), format!("{x}_s.len()")], Vec::new())),
+                    _ => None,
+                }
+            }
+            // whether there's one, then its value's parameters (zeros when there's none)
+            Ty::Opt(inner) => {
+                let has = format!("{x}.is_some()");
+                match &**inner {
+                    Ty::Prim(p) => Some((vec!["bool".into(), p.to_string()], Vec::new(), vec![has, format!("{x}.unwrap_or_default()")], Vec::new())),
+                    Ty::Char => Some((vec!["bool".into(), "u32".into()], Vec::new(), vec![has, format!("{x}.map_or(0, |c| c as u32)")], Vec::new())),
+                    Ty::Str | Ty::String => Some((vec!["bool".into(), "*const u8".into(), "usize".into()], Vec::new(), vec![has, format!("{x}.as_deref().map_or(std::ptr::null(), str::as_ptr)"), format!("{x}.as_deref().map_or(0, str::len)")], Vec::new())),
+                    Ty::Named(_) => {
+                        let ti = g.info(inner)?;
+                        let mg = Gen::mangle(&ti.def);
+                        match ti.kind {
+                            Kind::Plain => Some((vec!["bool".into(), format!("*const V_{mg}")], vec![format!("let {x}_m = {x}.as_ref().map(|v| to_{mg}(v));")], vec![has, format!("{x}_m.as_ref().map_or(std::ptr::null(), |m| m as *const V_{mg})")], Vec::new())),
+                            Kind::Enum => Some((vec!["bool".into(), "i64".into()], Vec::new(), vec![has, format!("{x}.as_ref().map_or(0, |v| to_{mg}(v))")], Vec::new())),
+                            Kind::Handle => None,
+                        }
+                    }
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+
+    /// a Volt function's result Rust takes back (a closure's or a trait method's: a number
+    /// through o too), past numbers, chars and text: the C parameters' types (where Volt puts
+    /// it), the lines before the call, the arguments, and the value after it
+    fn cb_ret(&self, g: &Gen, r: &Ty, o: &str) -> Option<(Vec<String>, Vec<String>, Vec<String>, String)> {
+        let at = |c: &str, init: &str, v: String| Some((vec![format!("*mut {c}")], vec![format!("let mut {o}: {c} = {init};")], vec![format!("&mut {o}")], v));
+        match r {
+            Ty::Prim(p) => at(p, "Default::default()", o.to_string()),
+            Ty::Char => at("u32", "0", format!("char::from_u32({o}).unwrap_or('\\u{{fffd}}')")),
+            // Volt puts (a copy of) its text where o points
+            Ty::String => Some((vec!["*mut c_void".into()], vec![format!("let mut {o} = String::new();")], vec![format!("&mut {o} as *mut String as *mut c_void")], o.to_string())),
+            Ty::Named(_) => {
+                let ti = g.info(r)?;
+                let (rp, mg) = (self.path(&ti.def), Gen::mangle(&ti.def));
+                match ti.kind {
+                    Kind::Plain => Some((vec![format!("*mut V_{mg}")], vec![format!("let mut {o} = std::mem::MaybeUninit::<V_{mg}>::uninit();")], vec![format!("{o}.as_mut_ptr()")], format!("from_{mg}(&{o}.assume_init())"))),
+                    Kind::Enum => at("i64", "0", format!("from_{mg}({o})")),
+                    // the handle Volt gives up
+                    Kind::Handle => at("*mut c_void", "std::ptr::null_mut()", format!("*Box::from_raw({o} as *mut {rp})")),
+                }
+            }
+            // each element pushed onto o's Vec (push_glue); an array's count checked
+            Ty::Vec(e) | Ty::Array(e, _) => {
+                let ev = format!("Vec<{}>", self.cb_rust_ty(g, e)?);
+                let v = match r {
+                    Ty::Array(_, n) => format!("{o}.try_into().unwrap_or_else(|v: {ev}| panic!(\"a Volt function gave {{}} elements where Rust takes {n}\", v.len()))"),
+                    _ => o.to_string(),
+                };
+                Some((vec!["*mut c_void".into()], vec![format!("let mut {o}: {ev} = Vec::new();")], vec![format!("&mut {o} as *mut {ev} as *mut c_void")], v))
+            }
+            // its value's outs, then whether there's one
+            Ty::Opt(x) => {
+                let (mut c, mut pre, mut args, v) = self.cb_ret(g, x, &format!("{o}v"))?;
+                c.push("*mut bool".into());
+                pre.push(format!("let mut {o}: bool = false;"));
+                args.push(format!("&mut {o}"));
+                Some((c, pre, args, format!("if {o} {{ Some({v}) }} else {{ None }}")))
+            }
+            // each element through its own outs
+            Ty::Tuple(es) => {
+                let (mut c, mut pre, mut args, mut vs) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+                for (i, (_, t)) in es.iter().enumerate() {
+                    let (c1, p1, a1, v1) = self.cb_ret(g, t, &format!("{o}{i}"))?;
+                    c.extend(c1);
+                    pre.extend(p1);
+                    args.extend(a1);
+                    vs.push(v1);
+                }
+                Some((c, pre, args, format!("({},)", vs.join(", "))))
+            }
+            _ => None,
+        }
+    }
 }
 
 impl Lang for Rust {
@@ -1927,6 +2063,7 @@ impl Lang for Rust {
                 let mut cps = vec!["*mut c_void".to_string()];
                 let mut binds = Vec::new();
                 let mut args = vec![format!("{a}_env")];
+                let (mut pre, mut post) = (Vec::new(), Vec::new());
                 for (i, t) in ps.iter().enumerate() {
                     match t {
                         Ty::Prim(x) => {
@@ -1944,9 +2081,17 @@ impl Lang for Rust {
                             binds.push(format!("x{i}: {}", if *t == Ty::Str { "&str" } else { "String" }));
                             args.extend([format!("x{i}.as_ptr()"), format!("x{i}.len()")]);
                         }
-                        _ => return None,
+                        t => {
+                            let (c, p1, a1, q) = self.cb_arg(g, t, &format!("x{i}"))?;
+                            binds.push(format!("x{i}: {}", self.cb_rust_ty(g, t)?));
+                            cps.extend(c);
+                            pre.extend(p1);
+                            args.extend(a1);
+                            post.extend(q);
+                        }
                     }
                 }
+                let mut value = None;
                 let (cret, wrap) = match &**r {
                     Ty::Unit => (String::new(), ("", "")),
                     Ty::Prim(x) => (format!(" -> {x}"), ("", "")),
@@ -1957,17 +2102,38 @@ impl Lang for Rust {
                         args.push("&mut o as *mut String as *mut c_void".into());
                         (String::new(), ("{ let mut o = String::new(); ", "; o }"))
                     }
-                    _ => return None,
+                    r => {
+                        let (c, p1, a1, v) = self.cb_ret(g, r, "o")?;
+                        cps.extend(c);
+                        pre.extend(p1);
+                        args.extend(a1);
+                        value = Some(v);
+                        (String::new(), ("", ""))
+                    }
                 };
                 p.params.extend([format!("{a}: extern \"C\" fn({}){cret}", cps.join(", ")), format!("{a}_env: *mut c_void")]);
-                let clo = if matches!(pass, FnPass::Value | FnPass::Boxed) {
+                let owned = matches!(pass, FnPass::Value | FnPass::Boxed);
+                if owned {
+                    args[0] = "g.env".into();
+                }
+                let call = format!("{}{a}({}){}", wrap.0, args.join(", "), wrap.1);
+                // (other types: their conversions around the call, the result's value after it)
+                let body = if pre.is_empty() && post.is_empty() && value.is_none() {
+                    call
+                } else {
+                    let (keep, v) = match value {
+                        Some(v) => (format!("{call};"), v),
+                        None => (format!("let r = {call};"), "r".to_string()),
+                    };
+                    format!("unsafe {{ {} {keep} {} {v} }}", pre.join(" "), post.join(" "))
+                };
+                let clo = if owned {
                     // owned: the closure holds Volt's value (g, whole: not just its env field) and
                     // drops it with itself
                     p.params.push(format!("{a}_drop: Option<unsafe extern \"C\" fn(*mut c_void)>"));
-                    args[0] = "g.env".into();
-                    format!("{{ let g = VoltEnv {{ env: {a}_env, drop: {a}_drop }}; move |{}| {{ let g = &g; {}{a}({}){} }} }}", binds.join(", "), wrap.0, args.join(", "), wrap.1)
+                    format!("{{ let g = VoltEnv {{ env: {a}_env, drop: {a}_drop }}; move |{}| {{ let g = &g; {body} }} }}", binds.join(", "))
                 } else {
-                    format!("move |{}| {}{a}({}){}", binds.join(", "), wrap.0, args.join(", "), wrap.1)
+                    format!("move |{}| {body}", binds.join(", "))
                 };
                 p.arg = match pass {
                     FnPass::Value => clo,
@@ -2285,11 +2451,37 @@ impl Lang for Rust {
         Some(format!("#[no_mangle]\npub unsafe extern \"C\" fn {sym}_call({}) -> u8 {{\n    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {{\n        {get}\n        let v = f({});\n        let _ = &v;\n        {store}\n    }})) {{\n        Ok(()) => 0,\n        Err(p) => {{\n            put_str(panic_text(p), e, e_n);\n            2\n        }}\n    }}\n}}\n\n#[no_mangle]\npub unsafe extern \"C\" fn {sym}_drop(h: *mut c_void) {{\n    drop(Box::from_raw(h as *mut {held}));\n}}\n\n", cps.join(", "), args.join(", ")))
     }
 
+    fn cb_ty(&self, g: &Gen, t: &Ty, out: bool) -> bool {
+        let kind = |x: &Ty| matches!(x, Ty::Named(_)).then(|| g.info(x).map(|ti| ti.kind)).flatten();
+        match t {
+            Ty::Named(_) => kind(t).is_some(),
+            // the shim's value, lent for the call; Rust can't take a reference back
+            Ty::Ref(x, _) => !out && (matches!(**x, Ty::Prim(_)) || kind(x).is_some_and(|k| k != Kind::Enum)),
+            Ty::Vec(e) | Ty::Slice(e, _) | Ty::Array(e, _) if !out => matches!(**e, Ty::Prim(_) | Ty::Str | Ty::String),
+            Ty::Vec(e) | Ty::Array(e, _) => matches!(**e, Ty::Prim(_) | Ty::String) || kind(e).is_some_and(|k| k != Kind::Handle),
+            Ty::Opt(_) => true,
+            Ty::Tuple(_) => out,
+            _ => false,
+        }
+    }
+
+    fn cb_lends(&self) -> bool {
+        true
+    }
+
+    fn push_glue(&self, g: &Gen, sym: &str, e: &Ty) -> Option<String> {
+        let p = self.param(g, e, "a")?;
+        let et = self.cb_rust_ty(g, e)?;
+        let pre: String = p.pre.iter().map(|l| format!("        {l}\n")).collect();
+        let post: String = p.post.iter().map(|l| format!("        {l}\n")).collect();
+        Some(format!("// an element of a Volt function's Vec result, pushed onto the Vec o points at\n#[no_mangle]\npub unsafe extern \"C\" fn {sym}(o: *mut c_void, {}, e: *mut *mut u8, e_n: *mut usize) -> u8 {{\n    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {{\n{pre}        (*(o as *mut Vec<{et}>)).push({});\n{post}    }})) {{\n        Ok(()) => 0,\n        Err(p) => {{\n            put_str(panic_text(p), e, e_n);\n            2\n        }}\n    }}\n}}\n\n", p.params.join(", "), p.arg))
+    }
+
     fn put_glue(&self, sym: &str) -> Option<String> {
         Some(format!("// a String a Volt function gives back, put where o points\n#[no_mangle]\npub unsafe extern \"C\" fn {sym}(o: *mut c_void, p: *const u8, n: usize) {{\n    *(o as *mut String) = s(p, n).to_string();\n}}\n\n"))
     }
 
-    fn trait_glue(&self, _g: &Gen, t: &TraitDef, ms: &[(Sig, bool)]) -> Option<String> {
+    fn trait_glue(&self, g: &Gen, t: &TraitDef, ms: &[(Sig, bool)]) -> Option<String> {
         let (tp, mg) = (self.trait_path(t), Gen::trait_mangle(t));
         let mut out = String::new();
         let mut fields = vec!["    drop: Option<unsafe extern \"C\" fn(*mut c_void)>,".to_string()];
@@ -2302,6 +2494,7 @@ impl Lang for Rust {
             let mut rps = vec![if s.recv == Recv::Mut { "&mut self" } else { "&self" }.to_string()];
             let mut args = vec!["self.env".to_string()];
             let mut names = Vec::new();
+            let (mut ppre, mut post) = (Vec::new(), Vec::new());
             for (i, (_, t)) in s.params.iter().enumerate() {
                 names.push(format!("a{i}"));
                 match t.as_ref()? {
@@ -2320,7 +2513,14 @@ impl Lang for Rust {
                         rps.push(format!("a{i}: {}", if *x == Ty::Str { "&str" } else { "String" }));
                         args.extend([format!("a{i}.as_ptr()"), format!("a{i}.len()")]);
                     }
-                    _ => return None,
+                    t => {
+                        let (c, p1, a1, q) = self.cb_arg(g, t, &format!("a{i}"))?;
+                        rps.push(format!("a{i}: {}", self.cb_rust_ty(g, t)?));
+                        cps.extend(c);
+                        ppre.extend(p1);
+                        args.extend(a1);
+                        post.extend(q);
+                    }
                 }
             }
             let (rret, pre, value) = match s.ret.as_ref()? {
@@ -2345,10 +2545,17 @@ impl Lang for Rust {
                     args.push("&mut o as *mut String as *mut c_void".into());
                     (" -> String".to_string(), "let mut o = String::new(); ".to_string(), " o".to_string())
                 }
-                _ => return None,
+                r => {
+                    let (c, p1, a1, v) = self.cb_ret(g, r, "o")?;
+                    cps.extend(c);
+                    args.extend(a1);
+                    (format!(" -> {}", self.cb_rust_ty(g, r)?), p1.iter().map(|l| format!("{l} ")).collect(), format!(" {v}"))
+                }
             };
             let head = format!("fn {n}({}){rret}", rps.join(", "));
-            let call = |f: &str| format!("unsafe {{ {pre}{f}({});{value} }}", args.join(", "));
+            let pre = ppre.iter().map(|l| format!("{l} ")).collect::<String>() + &pre;
+            let post: String = post.iter().map(|l| format!(" {l}")).collect();
+            let call = |f: &str| format!("unsafe {{ {pre}{f}({});{post}{value} }}", args.join(", "));
             let fty = format!("unsafe extern \"C\" fn({})", cps.join(", "));
             let me = if s.recv == Recv::Mut { "&mut " } else { "&" };
             let mut fwd = vec![format!("{me}self.0")];

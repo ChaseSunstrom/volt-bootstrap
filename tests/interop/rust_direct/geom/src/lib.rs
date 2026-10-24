@@ -964,3 +964,76 @@ pub fn connect(code: i32) -> Result<i32, NetError> {
         n => Ok(n),
     }
 }
+
+// closures and a trait whose signatures carry structs, enums, handles, Vec, slices, arrays and
+// Option: Volt's closures, and a Volt type implementing Visit, run through them
+pub struct Tally {
+    total: i32,
+}
+
+impl Tally {
+    pub fn new(total: i32) -> Tally {
+        Tally { total }
+    }
+
+    pub fn total(&self) -> i32 {
+        self.total
+    }
+}
+
+pub fn map_point(p: Point, f: impl Fn(Point) -> Point) -> Point {
+    f(p)
+}
+
+pub fn nudge(mut p: Point, f: &dyn Fn(&mut Point)) -> Point {
+    f(&mut p);
+    p
+}
+
+pub fn shift_color(c: Color, f: impl Fn(Color, &Point) -> Option<Color>) -> String {
+    match f(c, &Point::new(1.0, 2.0)) {
+        Some(x) => format!("{x:?}"),
+        None => "none".into(),
+    }
+}
+
+pub fn evens(xs: &[i32], f: impl Fn(&[i32], Option<i32>) -> Vec<i32>) -> String {
+    format!("{:?} {:?}", f(xs, Some(2)), f(xs, None))
+}
+
+pub fn words_of(s: &str, f: impl Fn(Vec<String>) -> (usize, Option<String>)) -> String {
+    let (n, last) = f(s.split(' ').map(String::from).collect());
+    format!("{n} {last:?}")
+}
+
+pub fn spend(t: Tally, f: impl FnOnce(Tally, &Tally) -> Tally) -> i32 {
+    let k = Tally::new(100);
+    f(t, &k).total
+}
+
+pub fn spots(f: impl Fn(Option<Point>) -> [i32; 3]) -> String {
+    format!("{:?} {:?}", f(None), f(Some(Point::new(3.0, 4.0))))
+}
+
+pub trait Visit {
+    fn at(&mut self, p: Point, c: Color) -> Option<Point>;
+    fn many(&self, xs: &[i32], label: Option<String>) -> Vec<String>;
+    fn edit(&self, p: &mut Point);
+    fn sized(&self, t: &Tally, c: Option<Color>) -> (i32, Color);
+    fn made(&self) -> Tally;
+    fn flags(&self) -> [bool; 2] {
+        [true, false]
+    }
+}
+
+pub fn run_visit(v: &mut dyn Visit) -> String {
+    let at = v.at(Point::new(1.0, 2.0), Color::Blue);
+    let none = v.at(Point::new(1.0, 2.0), Color::Red);
+    let many = v.many(&[1, 2, 3], Some("xs".into()));
+    let mut p = Point::new(5.0, 6.0);
+    v.edit(&mut p);
+    let t = Tally::new(7);
+    let sized = (v.sized(&t, None), v.sized(&t, Some(Color::Green)));
+    let made = v.made().total();
+    format!("{at:?} {none:?} {many:?} {p:?} {sized:?} {made} {:?}", v.flags())
+}
