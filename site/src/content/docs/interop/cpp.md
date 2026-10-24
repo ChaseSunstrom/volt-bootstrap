@@ -133,7 +133,7 @@ field or base with one) can't be assigned there either, as from C++11 on: no `se
 it, no `T(&)[N]` form that assigns it.
 An exception going back through Volt code to the C++ that called it needs C++11 (it travels as a
 `std::exception_ptr`); under C++98 it stops the program.
-Subclassing a C++ class (`derive`, below) needs its import under C++17 or newer.
+Subclassing a C++ class (`derive`, below) needs its import under C++11 or newer.
 
 ### C++20 modules
 

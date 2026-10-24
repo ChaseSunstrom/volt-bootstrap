@@ -1989,6 +1989,10 @@ fn cpp_derive3() {
         assert_eq!(ok(e.voltc(&["run", "cpp_derive3.volt", "--backend", backend]), "voltc run cpp_derive3.volt"), want, "C++ derive, references ({backend})");
     }
     assert_eq!(ok(e.voltc_cxx(&["run", "cpp_derive3.volt"], Some("c++ -fno-rtti")), "voltc run cpp_derive3.volt (-fno-rtti)"), want, "C++ derive, references, without RTTI");
+    // under C++11 and C++14 imports too
+    for std in ["-std=c++11", "-std=c++14"] {
+        assert_eq!(ok(e.voltc(&["run", "cpp_derive3.volt", "--cc", std]), "voltc run cpp_derive3.volt"), want, "C++ derive, references ({std})");
+    }
     // an && method stays C++'s, saying why
     let shown = Command::new(&e.voltc).args(["check", "cpp_derive3.volt", "--std"]).arg(Path::new(ROOT).join("std")).current_dir(Path::new(ROOT).join("tests/interop")).env("VOLT_SHOW_CPP", "1").output().unwrap();
     let src = String::from_utf8_lossy(&shown.stderr);
