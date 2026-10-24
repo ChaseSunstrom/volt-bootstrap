@@ -134,3 +134,26 @@ fn embedded_volt() {
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn prelude_alone_links() {
+    // a load's C unit (an embedded VM script's, a library's) has the prelude's helpers, weak, but
+    // not runtime.h: they must link with nothing else defined, as macOS and Windows refuse a shared
+    // object's undefined symbols (Linux's --no-undefined does too; T-0748)
+    if cfg!(windows) {
+        return;
+    }
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("prelude-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = dir.join("unit.c");
+    std::fs::write(&src, format!("#define VOLT_RT_LINKAGE __attribute__((weak))\n#include \"{ROOT}/runtime/prelude.h\"\n")).unwrap();
+    let mut cc = Command::new("cc");
+    if cfg!(target_os = "macos") {
+        cc.arg("-dynamiclib");
+    } else {
+        cc.args(["-shared", "-fPIC", "-Wl,--no-undefined"]);
+    }
+    let o = cc.arg("-o").arg(dir.join("unit.so")).arg(&src).output().unwrap();
+    assert!(o.status.success(), "the prelude alone doesn't link:\n{}", String::from_utf8_lossy(&o.stderr));
+    let _ = std::fs::remove_dir_all(&dir);
+}

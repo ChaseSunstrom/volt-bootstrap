@@ -252,31 +252,41 @@ VOLT_RT_LINKAGE void volt_trace_print(void) {
 /* the error return trace, per thread: where the error in flight came from (an error put in an error
    union, which starts it again), then each try that passed it up; a catch handling it clears it, and
    main's error exit prints it. Only the error path runs these. Past VOLT_ERT_MAX sites they're only
-   counted (runtime.h holds the list) */
+   counted. The list is volt_ert()'s, so a unit without runtime.h (an embedded VM's load) has it
+   too; where these are weak the linker keeps one definition, so one list */
 #define VOLT_ERT_MAX 32
-extern _Thread_local const char *volt_ert_at[VOLT_ERT_MAX];
-extern _Thread_local unsigned volt_ert_n;
+typedef struct {
+    const char *at[VOLT_ERT_MAX];
+    unsigned n;
+} volt_ert_list;
+VOLT_RT_LINKAGE volt_ert_list *volt_ert(void) {
+    static _Thread_local volt_ert_list list;
+    return &list;
+}
 VOLT_RT_LINKAGE void volt_ert_origin(const char *at) {
-    volt_ert_at[0] = at;
-    volt_ert_n = 1;
+    volt_ert_list *l = volt_ert();
+    l->at[0] = at;
+    l->n = 1;
 }
 VOLT_RT_LINKAGE void volt_ert_note(const char *at) {
-    unsigned n = volt_ert_n++;
+    volt_ert_list *l = volt_ert();
+    unsigned n = l->n++;
     if (n < VOLT_ERT_MAX) {
-        volt_ert_at[n] = at;
+        l->at[n] = at;
     }
 }
-VOLT_RT_LINKAGE void volt_ert_clear(void) { volt_ert_n = 0; }
+VOLT_RT_LINKAGE void volt_ert_clear(void) { volt_ert()->n = 0; }
 /* main's error exit: error: NAME, from where it came, and each try that passed it up */
 VOLT_RT_LINKAGE void volt_ert_exit(const char *name) {
-    unsigned n = volt_ert_n;
+    volt_ert_list *l = volt_ert();
+    unsigned n = l->n;
     if (n == 0) {
         volt_dprintf(2, "error: %s\n", name);
         return;
     }
-    volt_dprintf(2, "error: %s, from %s\n", name, volt_ert_at[0]);
+    volt_dprintf(2, "error: %s, from %s\n", name, l->at[0]);
     for (unsigned i = 1; i < n && i < VOLT_ERT_MAX; i++) {
-        volt_dprintf(2, "  passed up at %s\n", volt_ert_at[i]);
+        volt_dprintf(2, "  passed up at %s\n", l->at[i]);
     }
     if (n > VOLT_ERT_MAX) {
         volt_dprintf(2, "  (%u more aren't listed)\n", n - VOLT_ERT_MAX);
