@@ -58,6 +58,10 @@ fn main() -> void {
     std::println("circle {} {}", k.area(), k.label());
     var sh: geom::Shape = move c;
     std::println("union {}", geom::area_of(&sh));
+    // a trait union's optional methods: the member it holds wrote describe (the blob) or not (the tri)
+    val ub: geom::Shape = { n: 4 } as blob;
+    val ut: geom::Shape = { b: 2.0, h: 3.0 } as tri;
+    std::println("held {} {}", geom::summarize_it(&ub), geom::summarize_it(&ut));
     {
         var canvas = geom::Canvas::new();
         canvas.add({ b: 2.0, h: 2.0 } as tri);

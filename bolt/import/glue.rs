@@ -1775,24 +1775,35 @@ impl<'a> Gen<'a> {
             }
             let _ = writeln!(decl, "    fn {vn}({}) -> {};", ps.join(", "), self.trait_ret(r).unwrap());
             let call = format!("@cast<T*>(env)->{vn}({})", args.join(", "));
-            let (rt, body) = match r {
+            let (rt, tmpl) = match r {
                 Ty::Str => {
                     tps.extend(["o: u8**".to_string(), "o_n: usize*".to_string()]);
-                    ("void".to_string(), format!("val r = {call};\n        *o = @cast<u8*>(r.ptr);\n        *o_n = r.len;"))
+                    ("void".to_string(), "val r = $c;\n        *o = @cast<u8*>(r.ptr);\n        *o_n = r.len;".to_string())
                 }
                 // (a number through o: the table's functions return nothing but an error's status)
                 x => {
                     let (ext, rt, body) = self.cb_out(x, true, "o").ok_or_else(|| format!("trait {name}"))?;
                     tps.extend(ext);
-                    (rt, body.replace("$c", &call))
+                    (rt, body)
                 }
+            };
+            let body = if *provided {
+                // whether the value wrote it (w): a trait union's member says, so its entry asks the
+                // one it holds (the other side runs its own body when none did)
+                tps.push("w: bool*".into());
+                let held = tmpl.replace("$c", &format!("x.{vn}({})", args.join(", "))).replace("\n        ", "\n                            ");
+                let (done, none) = if rt == "void" { ("\n                            return;", "") } else { ("", "\n            return 0;") };
+                format!("comptime match (@typeinfo(T).kind) {{\n        .TRAIT_UNION(u) => {{\n            val v = @cast<T*>(env);\n            comptime for (M) in u.1 {{\n                comptime if (@has_method(M, \"{vn}\")) {{\n                    if (@typeid(*v) == @typeid(M)) {{\n                        match (*v) {{\n                            M(x&) => {{\n                            *w = true;\n                            {held}{done}\n                            }},\n                            default => {{}},\n                        }}\n                    }}\n                }}\n            }}\n            *w = false;{none}\n        }},\n        default => {{\n            *w = true;\n            {}\n        }},\n    }}", tmpl.replace("$c", &call).replace("\n        ", "\n            "))
+            } else {
+                tmpl.replace("$c", &call)
             };
             let body: String = pre.iter().map(|l| format!("{l}\n        ")).collect::<String>() + &body;
             let _ = write!(h, "\n    <T: {vt}>\n    extern \"C\" fn t_{mg}_{}({}) -> {rt} {{\n        {body}\n    }}\n", s.name, tps.join(", "));
             let _ = writeln!(fields, "        m_{}: void* = null;", s.name);
             let set = format!("t.m_{} = @cast<void*>(t_{mg}_{}<T>);", s.name, s.name);
             if *provided {
-                let _ = writeln!(fill, "        comptime if (@has_method(T, \"{vn}\")) {{\n            {set}\n        }}");
+                // (a trait union's entry is always there: it asks the member it holds)
+                let _ = writeln!(fill, "        comptime match (@typeinfo(T).kind) {{\n            .TRAIT_UNION(u) => {{\n                {set}\n            }},\n            default => {{\n                comptime if (@has_method(T, \"{vn}\")) {{\n                    {set}\n                }}\n            }},\n        }}");
             } else {
                 let _ = writeln!(fill, "        {set}");
             }

@@ -100,8 +100,9 @@ give back structs, enums, handles, `Vec`s and arrays of numbers, `String`s, stru
 leaves out the function taking it; a trait method giving one keeps Rust's body (one without a body
 leaves the trait out). A Rust type's own impl of a method with a body
 (`Square`'s `describe`) runs on its `dyn_T` and on the type; a Volt type that writes an `@optional`
-one has it called by Rust, while a value of the trait union passes with Rust's body for it (a union
-can't say which of its members wrote one). Rust may hand a Volt value it was given to another
+one has it called by Rust, and a value of the trait union has the one the member it holds wrote
+(Rust's body when that member didn't write it); a default body's calls of other methods reach the
+Volt value's own. Rust may hand a Volt value it was given to another
 thread, as C code could: Volt has no `Send`.
 
 ```volt ignore

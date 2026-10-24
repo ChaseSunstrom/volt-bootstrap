@@ -2556,6 +2556,12 @@ impl Lang for Rust {
             let pre = ppre.iter().map(|l| format!("{l} ")).collect::<String>() + &pre;
             let post: String = post.iter().map(|l| format!(" {l}")).collect();
             let call = |f: &str| format!("unsafe {{ {pre}{f}({});{post}{value} }}", args.join(", "));
+            // a provided method's entry says whether the value wrote it (a trait union's member may
+            // not have): the result only when it did
+            if *provided {
+                cps.push("*mut bool".into());
+            }
+            let asked = format!("unsafe {{ {pre}f({}, &mut w); if w {{{post} Some({}) }} else {{ None }} }}", args.join(", "), if value.trim().is_empty() { "()" } else { value.trim() });
             let fty = format!("unsafe extern \"C\" fn({})", cps.join(", "));
             let me = if s.recv == Recv::Mut { "&mut " } else { "&" };
             let mut fwd = vec![format!("{me}self.0")];
@@ -2565,7 +2571,8 @@ impl Lang for Rust {
                 fields.push(format!("    m_{n}: Option<{fty}>,"));
                 let mut d = vec![format!("{me}d")];
                 d.extend(names.iter().cloned());
-                let _ = write!(imp, "    {head} {{\n        match self.t.m_{n} {{\n            Some(f) => {},\n            None => {{\n                let {}d = Def_{mg}_{n}(Volt_{mg} {{ env: self.env, t: VT_{mg} {{ drop: None, ..self.t }} }});\n                {tp}::{n}({})\n            }}\n        }}\n    }}\n", call("f"), if s.recv == Recv::Mut { "mut " } else { "" }, d.join(", "));
+                let default = format!("{{\n                let {}d = Def_{mg}_{n}(Volt_{mg} {{ env: self.env, t: VT_{mg} {{ drop: None, ..self.t }} }});\n                {tp}::{n}({})\n            }}", if s.recv == Recv::Mut { "mut " } else { "" }, d.join(", "));
+                let _ = write!(imp, "    {head} {{\n        match self.t.m_{n} {{\n            Some(f) => {{\n                let mut w = false;\n                match {asked} {{\n                    Some(v) => v,\n                    None => {default},\n                }}\n            }}\n            None => {default}\n        }}\n    }}\n");
             } else {
                 fields.push(format!("    m_{n}: {fty},"));
                 let _ = writeln!(imp, "    {head} {{\n        {}\n    }}", call(&format!("(self.t.m_{n})")));

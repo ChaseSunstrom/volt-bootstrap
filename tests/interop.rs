@@ -1123,7 +1123,7 @@ fn rust_direct() {
         let mut c = Command::new(&e.voltc);
         c.args(["run", "--backend", backend, "traits.volt"]).current_dir(&dir).env("VOLT_STD", Path::new(ROOT).join("std"));
         tools(&mut c);
-        assert_eq!(ok(c.output().unwrap(), "voltc run traits.volt"), "area 6 larger 6\ngrown 15\ntri of area 15 [T]\na blob of its own [B]\n(tri of area 15) (a blob of its own)\nrust 1 a square of side 1 circle 12\ncircle 12 C\nunion 12\ncanvas 18 tri,blob,square\ndrops 2 squares 2\n", "traits ({backend})");
+        assert_eq!(ok(c.output().unwrap(), "voltc run traits.volt"), "area 6 larger 6\ngrown 15\ntri of area 15 [T]\na blob of its own [B]\n(tri of area 15) (a blob of its own)\nrust 1 a square of side 1 circle 12\ncircle 12 C\nunion 12\nheld (a blob of its own) (tri of area 3)\ncanvas 18 tri,blob,square\ndrops 2 squares 2\n", "traits ({backend})");
     }
     // ownership and errors: every self form, references into Rust's data (lent), an error enum's
     // variants matched, panics caught (try_ forms, a closure's try_call), async fns awaited
