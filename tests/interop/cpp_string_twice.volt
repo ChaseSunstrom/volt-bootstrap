@@ -13,4 +13,14 @@ fn main() -> void {
     var u = std::string::from("u");
     val n = cpp::st::three(&t, 10, &u, &t);
     std::println("{} {} {}", t, u, n);
+    // a const std::string& given the same string: that string (a std::string with the same text
+    // isn't it)
+    var v = std::string::from("hi");
+    val r1 = cpp::st::seen(&v, v.as_str());
+    var w = std::string::from("yo");
+    val r2 = cpp::st::seen2(w.as_str(), &w);
+    var x = std::string::from("hi");
+    val y = std::string::from("hi");
+    val r3 = cpp::st::seen(&x, y.as_str());
+    std::println("{} {} {} {} {} {}", r1, v, r2, w, r3, x);
 }

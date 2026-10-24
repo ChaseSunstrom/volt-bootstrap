@@ -167,6 +167,11 @@ struct cpp_gen {
     // that is the same Volt string takes that copy, so C++ sees one string, as it would
     str_refs: std::vec<std::string> = {};
     str_refs_on: bool = false; // (only in callable_of's parameter loop)
+    // the fn has a std::string& and a const std::string& parameter: a const one given the same Volt
+    // string as a std::string& is that one's C++ string (cstr_refs: "name string owned", the const
+    // ones so far)
+    str_alias: bool = false;
+    cstr_refs: std::vec<std::string> = {};
     // param gives a std::map parameter that has a stdcxx handle form its Volt std::map& form
     // instead (callable_of's second overload)
     volt_maps: bool = false;
@@ -2378,7 +2383,7 @@ attach fn param(this: cpp_gen&, t: clang::CXType, name: str, i: usize, tparams: 
         val ty = canon(base);
         val h = fmt("try_s{}", unum(@cast<u64>(i)));
         var pre: std::string = {};
-        if (this.str_refs.len == 0 || !this.str_refs_on) {
+        if ((this.str_refs.len == 0 && this.cstr_refs.len == 0) || !this.str_refs_on) {
             pre = fmt3("val {} = @cpp<void*>(\"new VOLT_ID({})((const char *){{0}}.ptr, {{0}}.len)\", {}.as_str());\n", copy h, copy ty, S(name));
             // (null when the allocation threw in a try_ form's call: its catch gives a zero)
             pre.append(fmt("if ({} == null) {{ @panic(\"out of memory\"); }}\n", copy h).as_str());
@@ -2397,10 +2402,25 @@ attach fn param(this: cpp_gen&, t: clang::CXType, name: str, i: usize, tparams: 
                 pre.append(fmt4("if ({} && @cast<void*>(&*{}) == @cast<void*>(&*{})) {{ {} = ", copy own, S(name), S(en), copy h).as_str());
                 pre.append(fmt2("{}; {} = false; }}\n", S(eh), copy own).as_str());
             }
+            // (an earlier const std::string& given the same string: its C++ string, copied back
+            // here and deleted by that one)
+            val back = fmt("try_back{}", unum(@cast<u64>(i)));
+            pre.append(fmt("var {} = false;\n", copy back).as_str());
+            for (e&) in this.cstr_refs.items() {
+                val sp = e.as_str().find(" ") ?? continue;
+                val cn = e.as_str()[0..sp];
+                val rest = e.as_str()[sp + 1..e.len()];
+                val sp2 = rest.find(" ") ?? continue;
+                val cs = rest[0..sp2];
+                pre.append(fmt4("if ({} && {}.len() > 0 && @cast<void*>({}.as_str().ptr) == @cast<void*>({}.ptr) && ", copy own, S(name), S(name), S(cn)).as_str());
+                pre.append(fmt4("{}.len() == {}.len) {{ {} = {}; ", S(name), S(cn), copy h, S(cs)).as_str());
+                pre.append(fmt2("{} = false; {} = true; }}\n", copy own, copy back).as_str());
+            }
             pre.append(fmt4("if ({}) {{ {} = @cpp<void*>(\"new VOLT_ID({})((const char *){{0}}.ptr, {{0}}.len)\", {}.as_str()); }}\n", copy own, copy h, copy ty, S(name)).as_str());
             pre.append(fmt("if ({} == null) {{ @panic(\"out of memory\"); }}\n", copy h).as_str());
             pre.append(fmt4("defer {{ if ({}) {{ volt_cpp_text_back({}, @cpp<str>(\"volt_cpp_view(*(VOLT_ID({}) *){{0}})\", {})); ", copy own, S(name), copy ty, copy h).as_str());
-            pre.append(fmt2("@cpp<void>(\"delete (VOLT_ID({}) *){{0}}\", {}); }} }}", copy ty, copy h).as_str());
+            pre.append(fmt2("@cpp<void>(\"delete (VOLT_ID({}) *){{0}}\", {}); }} ", copy ty, copy h).as_str());
+            pre.append(fmt4("else if ({}) {{ volt_cpp_text_back({}, @cpp<str>(\"volt_cpp_view(*(VOLT_ID({}) *){{0}})\", {})); }} }}", copy back, S(name), copy ty, copy h).as_str());
         }
         if (this.str_refs_on) {
             put(&this.str_refs, fmt2("{} {}", S(name), copy h));
@@ -2420,6 +2440,28 @@ attach fn param(this: cpp_gen&, t: clang::CXType, name: str, i: usize, tparams: 
         }
     }
     if (!mutable_ref) {
+        // beside a std::string& (str_alias): a std::string the wrapper owns, or the C++ string an
+        // earlier std::string& argument given the whole of the same Volt string made, so C++ sees
+        // one string as it would (a later std::string& given it takes this one: cstr_refs); an
+        // empty one never aliases, as two can't be told apart
+        if (char_text(base, "basic_string") && this.str_alias && this.str_refs_on && k == clang::CXType_LValueReference) {
+            val c = fmt("try_c{}", unum(@cast<u64>(i)));
+            val own = fmt("try_cown{}", unum(@cast<u64>(i)));
+            var pre = fmt2("var {}: void* = null;\nvar {} = true;\n", copy c, copy own);
+            for (e&) in this.str_refs.items() {
+                val sp = e.as_str().find(" ") ?? continue;
+                val en = e.as_str()[0..sp];
+                val eh = e.as_str()[sp + 1..e.len()];
+                pre.append(fmt4("if ({} && {}.len > 0 && @cast<void*>({}.ptr) == @cast<void*>({}.as_str().ptr) && ", copy own, S(name), S(name), S(en)).as_str());
+                pre.append(fmt4("{}.len == {}.len()) {{ {} = {}; ", S(name), S(en), copy c, S(eh)).as_str());
+                pre.append(fmt("{} = false; }}\n", copy own).as_str());
+            }
+            pre.append(fmt3("if ({}) {{ {} = @cpp<void*>(\"new std::string((const char *){{0}}.ptr, {{0}}.len)\", {}); }}\n", copy own, copy c, S(name)).as_str());
+            pre.append(fmt("if ({} == null) {{ @panic(\"out of memory\"); }}\n", copy c).as_str());
+            pre.append(fmt2("defer {{ if ({}) {{ @cpp<void>(\"delete (std::string *){{0}}\", {}); }} }}", copy own, copy c).as_str());
+            put(&this.cstr_refs, fmt3("{} {} {}", S(name), copy c, copy own));
+            return { vty: S("str"), pass: copy c, cpp: fmt("(*(const std::string *)({}))", copy slot), pre: move pre, text_ref: true };
+        }
         if (char_text(base, "basic_string")) {
             return { vty: S("str"), pass: S(name), cpp: fmt2("std::string((const char *){}.ptr, {}.len)", copy slot, copy slot), text_ref: true, copy_cpp: fmt3("volt_cpp_kept_copy<std::string, char>(std::string((const char *){}.ptr, {}.len), {}.ptr).c", copy slot, copy slot, copy slot), copy_elem: S("char") };
         }
@@ -3838,6 +3880,20 @@ attach fn callable_of(this: cpp_gen&, generics: str, head: str, has_params: bool
     var optional: usize = 0;
     this.str_refs = {};
     this.str_refs_on = true;
+    var muts = 0;
+    var consts = 0;
+    for (j) in 0..parms.len {
+        val pt = clang::clang_getCanonicalType(clang::clang_getCursorType(*parms.at(j)));
+        if (pt.kind == clang::CXType_LValueReference && char_text(clang::clang_getPointeeType(pt), "basic_string")) {
+            if (clang::clang_isConstQualifiedType(clang::clang_getPointeeType(pt)) == 0) {
+                muts += 1;
+            } else {
+                consts += 1;
+            }
+        }
+    }
+    this.str_alias = muts > 0 && consts > 0;
+    this.cstr_refs = {};
     // the arguments before the parameters' (self_arg: one or more)
     val first = args_in(self_arg ?? "");
     // (a by-value std::function parameter's generic would make overloads differing only in its
@@ -3874,6 +3930,8 @@ attach fn callable_of(this: cpp_gen&, generics: str, head: str, has_params: bool
             this.kept_ok = false;
             this.str_refs = {};
             this.str_refs_on = false;
+            this.str_alias = false;
+            this.cstr_refs = {};
             this.per_use(head, call, self_arg != null);
             this.note = {};
             return;
@@ -3890,6 +3948,8 @@ attach fn callable_of(this: cpp_gen&, generics: str, head: str, has_params: bool
     this.kept_ok = false;
     this.str_refs = {};
     this.str_refs_on = false;
+    this.str_alias = false;
+    this.cstr_refs = {};
     // (a result into a copy of the same bytes points at the same place in the Volt memory instead)
     var rebase = false;
     if (into_copy(&r, clang::clang_getCursorResultType(fn_cursor), &args, args.len)) {

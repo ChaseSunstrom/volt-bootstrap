@@ -2498,7 +2498,7 @@ fn cpp_string_twice() {
     // C++'s order, copied back once); two strings each get their own
     let e = Env::new("cpp-string-twice");
     for backend in ["c", "llvm"] {
-        assert_eq!(ok(e.voltc(&["run", "cpp_string_twice.volt", "--backend", backend]), "voltc run cpp_string_twice.volt"), "sxy ax by\nt13 u2 13\n", "one string twice ({backend})");
+        assert_eq!(ok(e.voltc(&["run", "cpp_string_twice.volt", "--backend", backend]), "voltc run cpp_string_twice.volt"), "sxy ax by\nt13 u2 13\nhi! hi! yo? yo? hi hi!\n", "one string twice ({backend})");
     }
 }
 
