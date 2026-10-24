@@ -454,9 +454,14 @@ fn main() -> void {
   first, then its bases') keeps the name, the later ones get their parameters' C++ types as words, as other overloads Volt can't
   tell apart do (`draw(int)` and `draw(double)` are `draw` and `draw_double`; a `const` one gets
   `_const` too, and a non-`const` twin of a `const` one with no parameters is `_nonconst`). One
-  whose name that makes is a virtual method's already stays `C`'s. A method qualified `&` is
-  overridden as any other, beside an `&&` twin too; one qualified `&&` stays `C`'s (its object is
-  the one the Volt type subclasses).
+  whose name that makes is a virtual method's already stays `C`'s. A method qualified `&` or `&&`
+  is overridden as any other (an `&&` one beside an `&` or unqualified twin is `name_rvalue`; a type
+  without it gets `C`'s own, called on the object as an rvalue). A virtual operator is overridden by
+  its Volt name (`operator==` by `op_eq`, `operator()` by `op_call`). A C variadic one
+  (`int log(const char *fmt, ...)`) is overridden with a last `va: void*`, the address of the
+  call's `va_list` (read with `@cpp<i32>("va_arg(*(va_list *){0}, int)", va)`); a type without it
+  keeps `C`'s own, which C++ can't hand the arguments to otherwise (one whose last named parameter
+  is a reference, or that has none, stays `C`'s: `va_start` can't start there).
 - What crosses into an override is what the import makes of each type anywhere else: numbers,
   `bool`, enums and pointers as they are (a reference for a non-const `T&`), strings as `str` (a view
   for the call), a class Volt holds by value (a copy, or a reference for `T&`), a class held by

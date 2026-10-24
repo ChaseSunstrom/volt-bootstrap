@@ -1993,10 +1993,22 @@ fn cpp_derive3() {
     for std in ["-std=c++11", "-std=c++14"] {
         assert_eq!(ok(e.voltc(&["run", "cpp_derive3.volt", "--cc", std]), "voltc run cpp_derive3.volt"), want, "C++ derive, references ({std})");
     }
-    // an && method stays C++'s, saying why
+    // an && method is overridable too (cpp_derive6): the type here keeps C++'s own
     let shown = Command::new(&e.voltc).args(["check", "cpp_derive3.volt", "--std"]).arg(Path::new(ROOT).join("std")).current_dir(Path::new(ROOT).join("tests/interop")).env("VOLT_SHOW_CPP", "1").output().unwrap();
     let src = String::from_utf8_lossy(&shown.stderr);
-    assert!(src.contains("// (d3::Base::gone is C++'s own in a Volt type deriving from it: an && method)"), "an && virtual: {src}");
+    assert!(src.contains("fn gone(this, self: Base&) -> i32;"), "an && virtual: {src}");
+}
+
+#[test]
+fn cpp_derive6() {
+    // a Volt subclass overriding virtual operators (op_eq, op_call), an && method and C variadic
+    // virtuals (a void* to the call's va_list); a type overriding only the pure variadic one keeps
+    // C++'s own for the rest
+    let e = Env::new("cpp-derive6");
+    let want = "all 1 30 42 7 6\nfew 0 7 1 -1 3\n";
+    for backend in ["c", "llvm"] {
+        assert_eq!(ok(e.voltc(&["run", "cpp_derive6.volt", "--backend", backend]), "voltc run cpp_derive6.volt"), want, "C++ derive, operators, && and variadic ({backend})");
+    }
 }
 
 #[test]
@@ -2026,7 +2038,7 @@ fn cpp_derive4() {
     let shown = Command::new(&e.voltc).args(["check", "cpp_derive4.volt", "--std"]).arg(Path::new(ROOT).join("std")).current_dir(Path::new(ROOT).join("tests/interop")).env("VOLT_SHOW_CPP", "1").output().unwrap();
     let src = String::from_utf8_lossy(&shown.stderr);
     assert!(src.contains("// (d4::Q::d is C++'s own in a Volt type deriving from it: an overload, and d_double is taken)"), "a taken suffixed name: {src}");
-    assert!(src.contains("// (d4::Q::g is C++'s own in a Volt type deriving from it: an && method)"), "the && twin: {src}");
+    assert!(src.contains("fn g_rvalue(this, self: Q&) -> i32;"), "the && twin, g_rvalue: {src}");
     // a reference to a class held by handle, given back from an empty handle, stops the program
     // saying so
     let hpp = Path::new(ROOT).join("tests/interop/derive4.hpp");
