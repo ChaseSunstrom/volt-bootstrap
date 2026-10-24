@@ -72,6 +72,37 @@ pub fn heldLen(h: *const Held) usize {
     };
 }
 
+pub fn bufLen(b: *const Buf) usize {
+    return b.data.len;
+}
+
+// payloads Volt's makers copy: the union frees the copy when it's dropped (one Zig made, never)
+pub const Note = union(enum) {
+    text: []const u8,
+    nums: []const i32,
+    maybe: ?[]const u8,
+    at: *const Rect,
+    none,
+};
+
+pub fn noteSize(n: *const Note) f32 {
+    return switch (n.*) {
+        .text => |t| @floatFromInt(t.len),
+        .nums => |xs| blk: {
+            var t: i32 = 0;
+            for (xs) |x| t += x;
+            break :blk @floatFromInt(t);
+        },
+        .maybe => |m| if (m) |t| @floatFromInt(t.len) else -1,
+        .at => |r| r.w * r.h,
+        .none => 0,
+    };
+}
+
+pub fn noteOf(text: bool) Note {
+    return if (text) .{ .text = "zig's" } else .none;
+}
+
 // an optional payload that frees what it holds: freed too when it's there
 pub const Kept = union(enum) {
     buf: ?Buf,

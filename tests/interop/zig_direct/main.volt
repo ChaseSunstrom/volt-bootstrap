@@ -25,6 +25,20 @@ fn kinds() -> void {
     val kept = kd::keptOf(5);
     val kept_none = kd::keptOf(0);
     std::println("kept {} {}", kd::keptLen(&kept), kd::keptLen(&kept_none));
+    // a payload that frees what it holds, lent by its as_ read
+    val lb = held.as_buf() ?? @panic("no buf");
+    std::println("lent {} {} {}", kd::bufLen(&lb), kept.as_buf() != null, kept_none.as_buf() == null);
+    // text, a slice, an optional and a pointer: the makers copy them, and the union frees the copy
+    val ns: i32[3] = { 1, 2, 3 };
+    val nr: kd::Rect = { w: 2.0, h: 3.0 };
+    val n1 = kd::Note::text("hello");
+    val n2 = kd::Note::nums(ns[..]);
+    val n3 = kd::Note::maybe("ab");
+    val n4 = kd::Note::maybe(null);
+    val n5 = kd::Note::at(nr);
+    val nz = kd::noteOf(true);
+    val n6 = n1.copy();
+    std::println("note {} {} {} {} {} {} {} {}", kd::noteSize(&n1), kd::noteSize(&n2), kd::noteSize(&n3), kd::noteSize(&n4), kd::noteSize(&n5), n1.as_text() ?? std::string::from("?"), nz.as_text() ?? std::string::from("?"), n6.as_text() ?? std::string::from("?"));
     std::println("area {} {} round {} {}", kd::shapeArea(&s), kd::shapeArea(&r), s.isRound(), r.isRound());
 
     // a bare union: a handle with a reader and a setter per field
