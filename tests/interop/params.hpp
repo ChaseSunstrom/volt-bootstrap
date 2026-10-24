@@ -323,7 +323,8 @@ inline int try_lone(int x) { return -x - 1; }
 }
 }
 // results that may point into a temporary made for a parameter (a Volt slice's std::vector, a str's
-// std::string): not declared, an error per use; the rest are (back_ref's int is copied out in the call)
+// std::string): a pointer to an element points into the slice instead (data_of); a C string isn't
+// declared, an error per use; the rest are (back_ref's int is copied out in the call)
 namespace tc {
 inline const int *data_of(const std::vector<int> &v) { return v.data(); }
 inline const int &back_ref(const std::vector<int> &v) { return v.back(); }

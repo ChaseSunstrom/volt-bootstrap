@@ -2530,6 +2530,17 @@ fn cpp_fn_refs() {
 }
 
 #[test]
+fn cpp_copy_rebase() {
+    // a string_view, a pointer or a reference result into the copy made for a const std::string& (of
+    // a str) or a const std::vector<T>& (of a slice): the same place in the Volt memory
+    let e = Env::new("cpp-copy-rebase");
+    let want = "trim [hello] at 2\nbiggest 9 at 1\nleftmost 2 7 at 1\n";
+    for backend in ["c", "llvm"] {
+        assert_eq!(ok(e.voltc(&["run", "cpp_copy_rebase.volt", "--backend", backend]), "voltc run cpp_copy_rebase.volt"), want, "results into a parameter's copy ({backend})");
+    }
+}
+
+#[test]
 fn cpp_fn_handles() {
     // a named Volt fn for a function pointer taking a class Volt holds by handle (by const&, & or
     // &&) or a std::string&: C++ calls a thunk made for that fn, kept or called at once; a fn value
@@ -2767,12 +2778,13 @@ fn cpp_params_refused() {
     let src = String::from_utf8_lossy(&shown.stderr);
     assert!(src.contains("its result would point into a copy (of a string, a vector or a map) that's gone once the call returns") && !src.contains("fn first_word("), "a view into the copy, declared: {src}");
     assert!(!src.contains("fn first_at(") && !src.contains("fn name_of(") && src.contains("fn count_up("), "structs holding a pointer or a view into the copy, declared: {src}");
-    // into a parameter's temporary (a slice's std::vector, a str's std::string): left out declared,
-    // an error per use; a reference to a number is copied out in the call, so it stays
-    for none in ["fn data_of(", "fn cstr_of("] {
+    // into a parameter's temporary (a slice's std::vector, a str's std::string): a pointer to an
+    // element is moved into the slice (cpp_copy_rebase), a cstr is left out declared (a str has no
+    // NUL after it), an error per use; a reference to a number is copied out in the call, so it stays
+    for none in ["fn cstr_of("] {
         assert!(!src.contains(none), "{none}: {src}");
     }
-    for decl in ["fn sum_of(", "fn twice_of(", "fn len_of(", "fn back_ref(v: i32[..]) -> i32"] {
+    for decl in ["fn sum_of(", "fn twice_of(", "fn len_of(", "fn back_ref(v: i32[..]) -> i32", "fn data_of(v: i32[..]) -> i32*"] {
         assert!(src.contains(decl), "{decl}: {src}");
     }
     let err = check("cpp_params_temp.volt");
