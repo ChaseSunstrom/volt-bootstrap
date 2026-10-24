@@ -248,6 +248,40 @@ VOLT_RT_LINKAGE void volt_trace_print(void) {
 #else
 #define VOLT_TRACE() ((void)0)
 #endif
+
+/* the error return trace, per thread: where the error in flight came from (an error put in an error
+   union, which starts it again), then each try that passed it up; a catch handling it clears it, and
+   main's error exit prints it. Only the error path runs these. Past VOLT_ERT_MAX sites they're only
+   counted (runtime.h holds the list) */
+#define VOLT_ERT_MAX 32
+extern _Thread_local const char *volt_ert_at[VOLT_ERT_MAX];
+extern _Thread_local unsigned volt_ert_n;
+VOLT_RT_LINKAGE void volt_ert_origin(const char *at) {
+    volt_ert_at[0] = at;
+    volt_ert_n = 1;
+}
+VOLT_RT_LINKAGE void volt_ert_note(const char *at) {
+    unsigned n = volt_ert_n++;
+    if (n < VOLT_ERT_MAX) {
+        volt_ert_at[n] = at;
+    }
+}
+VOLT_RT_LINKAGE void volt_ert_clear(void) { volt_ert_n = 0; }
+/* main's error exit: error: NAME, from where it came, and each try that passed it up */
+VOLT_RT_LINKAGE void volt_ert_exit(const char *name) {
+    unsigned n = volt_ert_n;
+    if (n == 0) {
+        volt_dprintf(2, "error: %s\n", name);
+        return;
+    }
+    volt_dprintf(2, "error: %s, from %s\n", name, volt_ert_at[0]);
+    for (unsigned i = 1; i < n && i < VOLT_ERT_MAX; i++) {
+        volt_dprintf(2, "  passed up at %s\n", volt_ert_at[i]);
+    }
+    if (n > VOLT_ERT_MAX) {
+        volt_dprintf(2, "  (%u more aren't listed)\n", n - VOLT_ERT_MAX);
+    }
+}
 VOLT_RT_LINKAGE _Noreturn void volt_panic(const char *msg, const char *loc) {
     volt_dprintf(2, "%s: panic: %s\n", loc, msg);
     VOLT_TRACE();

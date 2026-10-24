@@ -52,12 +52,22 @@ attach fn error_coerce(this: checker&, v: tval, to: u32, span: span) -> compile_
         }
         var inits: std::vec<field_init> = {};
         put(&inits, { field: 0, value: conv });
-        return retyped(&v, to, this.ir.node(ir_kind::AGG(move inits), to));
+        val agg = this.ir.node(ir_kind::AGG(move inits), to);
+        if (this.cx.body != null) {
+            // an error starts here: its return trace begins at this site (volt_ert_origin)
+            return retyped(&v, to, this.ir.seq(nodes(this.ert_call("volt_ert_origin", span)), agg, to));
+        }
+        return retyped(&v, to, agg);
     }
     val inner = try this.coerce(v, t, span);
     var inits: std::vec<field_init> = {};
     put(&inits, { field: 1, value: inner.c });
     return retyped(&inner, to, this.ir.node(ir_kind::AGG(move inits), to));
+}
+
+// a call of the error return trace's runtime fn (volt_ert_origin, volt_ert_note) with span's site
+attach fn ert_call(this: checker&, f: str, span: span) -> u32 {
+    return this.ir.rt_call(f, nodes(this.ir.node(ir_kind::CSTR(this.loc(span)), CSTR)), VOID);
 }
 
 // an error code (or error value) is set: it isn't 0
@@ -100,7 +110,9 @@ attach fn try_expr(this: checker&, x: expr&, span: span) -> compile_error!tval {
     put(&inits, { field: 0, value: conv });
     val out = this.ir.node(ir_kind::AGG(move inits), ret);
     val exit = this.fn_exit(out, move defers, this.ret_slot());
-    val stmts = nodes2(this.ir.decl(tmp.id, v.c), this.ir.if_(this.nonzero(code), exit, null));
+    // (the error passes up through this try: its return trace notes the site)
+    val pass = this.ir.block(nodes2(this.ert_call("volt_ert_note", span), exit));
+    val stmts = nodes2(this.ir.decl(tmp.id, v.c), this.ir.if_(this.nonzero(code), pass, null));
     if (t == VOID) {
         return vnew(t, this.ir.seq(move stmts, null, t));
     }
@@ -144,6 +156,8 @@ attach fn catch_inner(this: checker&, v: tval, e: u32, t: u32, cap: catch_cap*, 
     val tmp = this.tmp_local("t", v.ty);
     val code = this.eu_code(v.ty, tmp.c);
     var arm: std::vec<u32> = {};
+    // the error is handled: its return trace goes (a later one starts afresh)
+    put(&arm, this.ir.rt_call("volt_ert_clear", {}, VOID));
     // the handler owns the error: bound or not, one that needs delete is deleted when the handler
     // ends (or leaves early, through the scope's exits)
     var name: str? = null;

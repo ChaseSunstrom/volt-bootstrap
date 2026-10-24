@@ -102,6 +102,44 @@ namespace bare {
         }
     }
 
+    // the error return trace (the C runtime's volt_ert_*): where the error in flight came from,
+    // then each try that passed it up; a catch clears it, main's error exit prints it
+    var ert_at: usize[32] = {};
+    var ert_n: usize = 0;
+
+    export fn volt_ert_origin(at: cstr) -> void {
+        ert_at[0] = @cast<usize>(at);
+        ert_n = 1;
+    }
+
+    export fn volt_ert_note(at: cstr) -> void {
+        if (ert_n < 32) {
+            ert_at[ert_n] = @cast<usize>(at);
+        }
+        ert_n += 1;
+    }
+
+    export fn volt_ert_clear() -> void {
+        ert_n = 0;
+    }
+
+    export fn volt_ert_exit(name: cstr) -> void {
+        put("error: ");
+        put_cstr(name);
+        if (ert_n > 0) {
+            put(", from ");
+            put_cstr(@cast<cstr>(ert_at[0]));
+        }
+        put("\n");
+        var i: usize = 1;
+        while (i < ert_n && i < 32) {
+            put("  passed up at ");
+            put_cstr(@cast<cstr>(ert_at[i]));
+            put("\n");
+            i += 1;
+        }
+    }
+
     // ---- what the compiler's checks call ----
 
     export fn volt_panic(msg: cstr, loc: cstr) -> never {

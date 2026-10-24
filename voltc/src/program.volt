@@ -254,7 +254,8 @@ attach fn main_wrapper(this: checker&, main: u32, mi: u32) -> compile_error!void
         put(&body, this.ir.decl(r.id, call));
         val ec = this.eu_code(ret, r.c);
         val name = this.call_fn(this.err_name_fn(), nodes(ec), CSTR);
-        val msg = this.ir.rt_call("volt_dprintf", nodes3(this.ir.int(2, I32), this.ir.node(ir_kind::CSTR("error: %s\n"), CSTR), name), I32);
+        // error: NAME, and where it came from and was passed up (the error return trace)
+        val msg = this.ir.rt_call("volt_ert_exit", nodes(name), VOID);
         var good = this.ir.int(0, I32);
         if (t != VOID) {
             good = this.ir.conv(this.ir.field(r.c, 1, t), I32);

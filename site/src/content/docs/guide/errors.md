@@ -74,7 +74,19 @@ fn main() -> void {
 ```
 
 An error that reaches the end of `main` (`fn main() -> !void`) prints `error: NAME` and exits with 1
-(see [main](/volt-bootstrap/guide/functions/#main)).
+(see [main](/volt-bootstrap/guide/functions/#main)), with its error return trace: where the error
+came from (the place it was put in an error union, `return fs_error::NOT_FOUND`), then each `try`
+that passed it up, innermost first:
+
+```text
+error: NOT_FOUND, from wc.volt:8:12
+  passed up at wc.volt:11:14
+  passed up at wc.volt:20:13
+```
+
+Only the error path does this work, so a program that doesn't fail pays nothing for it; a `catch`
+that handles an error clears its trace, so a later one starts afresh. The trace keeps 32 sites per
+thread (past that, it counts them).
 
 ### Any error
 
