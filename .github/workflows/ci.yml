@@ -335,18 +335,6 @@ jobs:
       - name: Report panics 11-20
         if: failure()
         run: sh .github/report-failures.sh test.log failure detail 2
-      # (T-0673: the language server goes quiet after a document whose first version doesn't parse:
-      # every message it sends then, and its stderr)
-      - name: LSP opened mid-edit
-        if: always()
-        continue-on-error: true
-        timeout-minutes: 5
-        run: |
-          V=$(ls -t "$PWD"/target/tmp/voltc-stage1-* 2>/dev/null | grep -v '\.c$' | head -1)
-          [ -n "$V" ] || { echo "no stage-1 voltc under target/tmp"; exit 0; }
-          python .github/lsp-probe.py "$V" "$PWD/std"
-          echo "== as tests/lsp.rs writes the URI (backslashes) with a rootUri"
-          python .github/lsp-probe.py "$V" "$PWD/std" test
       # (T-0606: embedded_volt's first load can't find its per-load pointers, volt_c1_..., in its
       # script DLL: a loaded DLL can't be deleted, so it's still in the temporary directory; its
       # exports)
