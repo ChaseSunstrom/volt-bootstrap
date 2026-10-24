@@ -263,7 +263,7 @@ template <class... A> int pick(A... a) {
 // when no call takes the lvalue: T*, a template's T* deducing T; a declared template's S deduced
 // from a reference is what it names
 namespace rp {
-typedef std::vector<std::vector<bool>> skips;
+typedef std::vector<std::vector<Shape>> skips;
 template <class T, class... A> T deref(T *p, A...) { *p += 1; return *p; }
 inline int sum_ptr(int *p, int n, const skips &s = skips()) { int t = 0; for (int i = 0; i < n; i++) t += p[i]; return t + (int)s.size(); }
 inline int which(int &, const skips & = skips()) { return 1; }
