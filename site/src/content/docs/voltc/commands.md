@@ -43,7 +43,7 @@ newer language features need voltc.
 | `--link NAME=LIB.a` | take package NAME's non-generic code from a `voltc lib` build |
 | `--cfg [PKG:]KEY[=VALUE]` | set KEY for `@cfg` in the program's files, or in package PKG's; `os`, `arch` and `pointer_bits` replace the host's in every package, for checking another platform's code ([the target](/volt-bootstrap/guide/comptime/#the-target)); building with another `arch` needs that arch's `--target`, or `--backend c` |
 | `--lib NAME` | with `check`: check package NAME alone, as a library (no `main`) |
-| `--shared`, `--static` | with `lib`: a self-contained `.so` (`.dylib`, `.dll`) or `.a` for other languages |
+| `--shared`, `--static` | with `lib`: a self-contained `.so` (`.dylib`, `.dll`) or `.a` for other languages (a shared library calling a C function nothing it links defines is refused, on Linux as on macOS and Windows) |
 | `--lang L` | with `bindings`: `c`, `cpp`, `rust`, `zig`, `python`, `pyi`, `csharp`, `java`, `go`, `lua`, `dart`, `swift`, `kotlin`, `ruby`, `node`, `js`, `ts` or `json` |
 | `--cc ARG` | pass ARG to the C compiler: a `.c` file, `-lNAME`, `-I`, `-D`... (repeatable); `-std=c11` or `-std=c++17` is the standard C or C++ imports are read and compiled under instead of the newest (Volt's own C, and `.c` files given here, under its GNU form) |
 | `--backend c\|llvm` | self-hosted voltc: generate C, or native code through LLVM (the default on x86-64 and aarch64 but for Windows) |
