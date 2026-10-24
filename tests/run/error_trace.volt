@@ -20,7 +20,10 @@ fn main() -> !void {
     val n = try read("missing");
 }
 // exit: 1
-// expect-stderr: error: NOT_FOUND, from error_trace.volt:8:12
-// expect-stderr:   passed up at error_trace.volt:11:14
-// expect-stderr:   passed up at error_trace.volt:20:13
+// (the path as voltc was given it, before each site)
+// expect-stderr: error: NOT_FOUND, from
+// expect-stderr: error_trace.volt:8:12
+// expect-stderr:   passed up at
+// expect-stderr: error_trace.volt:11:14
+// expect-stderr: error_trace.volt:20:13
 // reject-stderr: error_trace.volt:6:
