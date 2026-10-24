@@ -257,7 +257,11 @@ after it reads it as a constant, and it can hold what a run-time value can't, su
 `@typeinfo` record. A parameter marked `comptime`, among a function's ordinary ones, takes an
 argument known at compile time (anything else is an error), and each value it's called with gets
 its own copy of the function, as a [constant generic
-parameter](/volt-bootstrap/guide/templates/#constant-parameters) does.
+parameter](/volt-bootstrap/guide/templates/#constant-parameters) does. A fn's name is one too:
+`fn twice(comptime f: fn(i32) -> i32, x: i32)` gets a copy per fn it's called with (`twice(inc, 5)`;
+a fn value held in a variable isn't known at compile time), and a constant generic parameter of a
+fn type takes one the same way: `<F: extern "C" fn(i32) -> i32> fn once(x: i32) -> i32`, called
+as `once<dbl>(4)`.
 
 ```volt
 use std::io;

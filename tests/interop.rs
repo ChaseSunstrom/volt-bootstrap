@@ -2530,6 +2530,21 @@ fn cpp_fn_refs() {
 }
 
 #[test]
+fn cpp_fn_handles() {
+    // a named Volt fn for a function pointer taking a class Volt holds by handle (by const&, & or
+    // &&) or a std::string&: C++ calls a thunk made for that fn, kept or called at once; a fn value
+    // in a variable has no symbol for one: an error naming the parameter
+    let e = Env::new("cpp-fn-handles");
+    let want = "apply 3 13\nmoved 5\nrename bb\nshouted hi!\ncounted 5\nkept 14\n";
+    for backend in ["c", "llvm"] {
+        assert_eq!(ok(e.voltc(&["run", "cpp_fn_handles.volt", "--backend", backend]), "voltc run cpp_fn_handles.volt"), want, "function pointers over handle classes ({backend})");
+    }
+    let o = e.voltc(&["check", "cpp_fn_handles_var.volt"]);
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(!o.status.success() && err.contains("the argument for comptime parameter 'f' must be known at compile time"), "a fn value in a variable: {err}");
+}
+
+#[test]
 fn cpp_fnptr_types() {
     // function pointer parameters whose signature has a class Volt lays out (by reference), an enum
     // or a reference to a number take a named Volt fn: declared ones as a Volt extern "C" fn of that

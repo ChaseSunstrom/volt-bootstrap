@@ -998,49 +998,60 @@ attach fn path_expr(this: checker&, p: path&, want: u32?, span: span) -> compile
                         }
                     }
                     val i = try this.fn_inst(d, move binds, span);
-                    this.use_fn(i);
                     if (this.opts.lsp) {
                         this.lsp_fn_use(d, i, span);
                     }
-                    var ps: std::vec<u32> = {};
-                    for (pi&) in this.fi(i).params.items() {
-                        put(&ps, pi.ty);
-                    }
-                    val ret = this.fi(i).ret;
-                    val va = this.fi(i).c_varargs;
-                    // an optional C fn pointer (a C callback param) wants the thin pointer too
-                    var w = want;
-                    if (w) {
-                        val oi = this.t.opt_inner(w);
-                        if (oi) {
-                            w = oi;
-                        }
-                    }
-                    var wants_ptr = false;
-                    if (w) {
-                        match (*this.t.get(w)) {
-                            .FN_PTR(a, b, c) => { wants_ptr = true; },
-                            .VOIDPTR => { wants_ptr = true; },
-                            .PTR(x) => { wants_ptr = true; },
-                            default => {},
-                        }
-                    }
-                    if (wants_ptr || va) {
-                        // extern "C" fn(...), or a raw pointer (@cast<void*>(f)): a plain C function
-                        // pointer
-                        val t = this.t.intern(tyk::FN_PTR(move ps, ret, va));
-                        this.escape(body_key(BODY_FN, i), t);
-                        return vpure(t, this.ir.node(ir_kind::FN(this.entry_ir(i)), t));
-                    }
-                    val t = this.t.intern(tyk::FN_VAL(move ps, ret));
-                    this.escape(body_key(BODY_FN, i), t);
-                    return vpure(t, this.fn_value(i, t));
+                    return this.fn_inst_val(i, want);
                 },
                 default => { return fail(span, fmt("'{}' is a type, not a value", S(p.last()))); },
             }
         },
         .NS(n) => { return fail(span, fmt("'{}' is a namespace, not a value", S(p.last()))); },
     }
+}
+
+
+// fn instance i as a value: a plain C function pointer where want is one (an extern "C" fn, a
+// void* or another pointer), else a fn value; named_fn says which fn (a comptime argument binds it)
+attach fn fn_inst_val(this: checker&, i: u32, want: u32?) -> tval {
+    this.use_fn(i);
+    var ps: std::vec<u32> = {};
+    for (pi&) in this.fi(i).params.items() {
+        put(&ps, pi.ty);
+    }
+    val ret = this.fi(i).ret;
+    val va = this.fi(i).c_varargs;
+    // an optional C fn pointer (a C callback param) wants the thin pointer too
+    var w = want;
+    if (w) {
+        val oi = this.t.opt_inner(w);
+        if (oi) {
+            w = oi;
+        }
+    }
+    var wants_ptr = false;
+    if (w) {
+        match (*this.t.get(w)) {
+            .FN_PTR(a, b, c) => { wants_ptr = true; },
+            .VOIDPTR => { wants_ptr = true; },
+            .PTR(x) => { wants_ptr = true; },
+            default => {},
+        }
+    }
+    if (wants_ptr || va) {
+        // extern "C" fn(...), or a raw pointer (@cast<void*>(f)): a plain C function
+        // pointer
+        val t = this.t.intern(tyk::FN_PTR(move ps, ret, va));
+        this.escape(body_key(BODY_FN, i), t);
+        var v = vpure(t, this.ir.node(ir_kind::FN(this.entry_ir(i)), t));
+        v.named_fn = i;
+        return v;
+    }
+    val t = this.t.intern(tyk::FN_VAL(move ps, ret));
+    this.escape(body_key(BODY_FN, i), t);
+    var v = vpure(t, this.fn_value(i, t));
+    v.named_fn = i;
+    return v;
 }
 
 // Type::member as a value, or called with args

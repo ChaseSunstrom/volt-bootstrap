@@ -347,9 +347,23 @@ attach fn garg_gval(this: checker&, g: garg&, kind: pkind, e: u32) -> compile_er
                     default => { return fails(x.span, "expected a bool known at compile time"); },
                 }
             }
+            match (*this.t.get(t)) {
+                .FN_PTR(a, b, c) => { return this.fn_gval(x, t, e); },
+                .FN_VAL(a, b) => { return this.fn_gval(x, t, e); },
+                default => {},
+            }
             return gval::INT(try this.const_int(x, e));
         },
         .PACK => { return fails(this.garg_span(g), "pass pack members as ordinary arguments"); },
+    }
+}
+
+// a fn's name as a constant generic argument of fn type t (<F: extern "C" fn(i32) -> i32>)
+attach fn fn_gval(this: checker&, x: expr&, t: u32, e: u32) -> compile_error!gval {
+    val v = try this.ct_eval_in(e, x, t);
+    match (v) {
+        .FN(i) => { return this.cval_gval(&v); },
+        default => { return fail(x.span, fmt("expected a fn's name for a {}", this.ty_name(t))); },
     }
 }
 
@@ -1125,6 +1139,16 @@ attach fn bind_cand(this: checker&, d: u32, rv: tval*, static_ty: u32?, explicit
                     }
                 }
             }
+            if (got == null) {
+                if (av) {
+                    val v = av;
+                    val nf = v.named_fn;
+                    if (nf) {
+                        val fc = cval::FN(nf);
+                        got = this.cval_gval(&fc);
+                    }
+                }
+            }
             *binds.at(j) = got ?? return no(fmt("the argument for comptime parameter '{}' must be known at compile time", S(p.name)));
             continue;
         }
@@ -1254,6 +1278,29 @@ attach fn check_bounds(this: checker&, gps: std::vec<gparam>&, binds: std::vec<g
                             if (!kk.fits(v)) {
                                 return fmt3("{} = {} doesn't fit in {}", S(gp.name), num(v), kk.fit_name());
                             }
+                        }
+                    },
+                    .VAL(x) => {
+                        // a fn's name: its signature is the parameter's
+                        val cv = copy *this.ct_consts.at(@cast<usize>(x));
+                        match (cv) {
+                            .FN(f) => {
+                                val pt = this.ct_type_of(&cv);
+                                var ft = pt;
+                                match (*this.t.get(t)) {
+                                    .FN_VAL(a, r) => {
+                                        match (*this.t.get(pt)) {
+                                            .FN_PTR(ps&, ret, va) => { ft = this.t.intern(tyk::FN_VAL(copy *ps, ret)); },
+                                            default => {},
+                                        }
+                                    },
+                                    default => {},
+                                }
+                                if (ft != t) {
+                                    return fmt3("{} = {} isn't a {}", S(gp.name), S(this.fi(f).name), this.ty_name(t));
+                                }
+                            },
+                            default => { return fmt("'{}' needs a value", S(gp.name)); },
                         }
                     },
                     default => { return fmt("'{}' needs a value", S(gp.name)); },

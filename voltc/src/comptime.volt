@@ -20,6 +20,7 @@ enum cval {
     STRUCT: (u32, std::vec<cfield>),          // VOID = a comptime-only record (typeinfo)
     VARIANT: (u32, str, std::box<cval>?),     // enum value (VOID for typeinfo kinds)
     OPT: (u32, std::box<cval>?),
+    FN: u32,                                  // a named fn: its instance
 }
 
 struct cfield {
@@ -273,6 +274,7 @@ attach fn ct_to_val(this: checker&, v: cval, want: u32?, span: span) -> compile_
             return vpure(NULL_TY, this.ir.node(ir_kind::NULLPTR, NULL_TY));
         },
         .BOOL(b) => { return vpure(BOOL, this.ir.boolean(b)); },
+        .FN(i) => { return this.fn_inst_val(i, want); },
         .INT(x, t) => {
             if (t == VOID) {
                 return this.int_lit(x, want);
@@ -404,6 +406,13 @@ attach fn ct_type_of(this: checker&, v: cval&) -> u32 {
         .VOID => { return VOID; },
         .NULL => { return NULL_TY; },
         .BOOL(b) => { return BOOL; },
+        .FN(i) => {
+            var ps: std::vec<u32> = {};
+            for (pi&) in this.fi(i).params.items() {
+                put(&ps, pi.ty);
+            }
+            return this.t.intern(tyk::FN_PTR(move ps, this.fi(i).ret, this.fi(i).c_varargs));
+        },
         .INT(x, t) => {
             if (t == VOID) {
                 return I32;
@@ -694,6 +703,12 @@ attach fn ct_path(this: checker&, p: path&, want: u32?, span: span) -> compile_e
                     .ENUM(x) => { return cval::TYPE(try this.resolve_type_path(p, env)); },
                     .TRAIT(n, items) => { return cval::TYPE(try this.resolve_type_path(p, env)); },
                     .ALIAS(n, t) => { return cval::TYPE(try this.resolve_type_path(p, env)); },
+                    .FN(fd) => {
+                        if (this.list(l).len > 1) {
+                            return fail(span, fmt("'{}' is overloaded, so it can't be used as a value here", S(p.last())));
+                        }
+                        return cval::FN(try this.fn_inst(d, {}, span));
+                    },
                     default => { return fail(span, fmt("'{}' isn't a compile-time value", S(p.last()))); },
                 }
             }
@@ -1560,6 +1575,12 @@ fn ct_u128_op(op: binop, x: u128, y: u128) -> cval? {
 // structural equality of two compile-time values
 fn cval_eq(a: cval&, b: cval&) -> bool {
     match (*a) {
+        .FN(x) => {
+            match (*b) {
+                .FN(y) => { return x == y; },
+                default => { return false; },
+            }
+        },
         .VOID => {
             match (*b) {
                 .VOID => { return true; },
@@ -3033,6 +3054,20 @@ attach fn ct_declare(this: checker&, it: item&, span: span) -> compile_error!voi
 attach fn cval_gval(this: checker&, v: cval&) -> gval {
     match (*v) {
         .TYPE(t) => { return gval::TY(t); },
+        .FN(i) => {
+            for (k) in 0..this.ct_consts.len {
+                match (*this.ct_consts.at(k)) {
+                    .FN(j) => {
+                        if (j == i) {
+                            return gval::VAL(@cast<u32>(k));
+                        }
+                    },
+                    default => {},
+                }
+            }
+            put(&this.ct_consts, copy *v);
+            return gval::VAL(@cast<u32>(this.ct_consts.len - 1));
+        },
         default => {
             put(&this.ct_consts, copy *v);
             return gval::VAL(@cast<u32>(this.ct_consts.len - 1));
@@ -3913,6 +3948,7 @@ attach fn cval_text(this: checker&, v: cval&) -> std::string {
         .INT(n, k) => { return num(n); },
         .FLOAT(f, k, q) => { return std::format("{}", f); },
         .STR(s) => { return fmt("\"{}\"", copy s); },
+        .FN(i) => { return S(this.fi(i).name); },
         .TYPE(t) => { return this.ty_name(t); },
         .TUPLE(vs) => { return fmt("({})", this.cvals_text(&vs)); },
         .ARRAY(vs, t) => { return fmt("{{ {} }}", this.cvals_text(&vs)); },

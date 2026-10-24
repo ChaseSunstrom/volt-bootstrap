@@ -333,6 +333,7 @@ struct tval {
     pure: bool = false;    // no side effects, safe to evaluate in any order
     lit: lit? = null;
     owner: str? = null;    // set when this is an owned local (so using it by value moves it)
+    named_fn: u32? = null; // a fn's name as a value: its instance (a comptime fn argument binds it)
     // A reference, pointer or slice value: where it points at what can't change (ro, by depth: a
     // val, a parameter without var, or through another such reference), and which of the fn's
     // reference parameters' memory it points at (via). A place: it was reached through a read-only
